@@ -19,10 +19,27 @@
 #   deliberate no-op. It reverses HEXA-CC-ZERO P3/P5/P6 (#2126 / #2134 / #2179 /
 #   #2185), which are withdrawn as a scope change — NOT a regression.
 #
+# WARM-CI BLOCKER (HEXA-C-ZERO C1 — probed 2026-05-30, two upstream REDs)
+#   The warm-install path (download released/edge `hexa` -> `hexa cc --regen`
+#   -> build -> smoke) cannot go green on `ubuntu-latest` (x86_64) yet, for two
+#   INDEPENDENT upstream reasons — neither fixable inside this workflow:
+#     (1) edge release asset gap: the `edge` release currently holds ONLY
+#         `hexa-linux-arm64.tar.gz`; `hexa-linux-x86_64.tar.gz` (and darwin-arm64)
+#         are MISSING because `release.yml`'s x86_64 + darwin jobs are long-RED and
+#         fail before the upload step. So a warm-install on an x86_64 runner has no
+#         matching binary to fetch (handoff 726b8b67).
+#     (2) `hexa cc --regen` is itself broken on clean main: a clean `install.sh`
+#         cannot self-host the transpiler (merged `hexa_cc.c.new` has undeclared
+#         symbols), so even with a binary the regen->build smoke would RED
+#         (handoffs 16afa5bb / e311289a).
+#   Verdict: `.verdicts/hexa-c-zero/C1-WARM-SEED-CI.txt`.
+#
 # RE-ENABLE PATH
-#   When a clean warm CI path exists (e.g. download the released hexa binary from
-#   a green edge tarball, then `hexa cc --regen` + build), restore the matrix to
-#   build FROM THAT BINARY — never from a committed transpiler `.c`.
+#   When BOTH upstream REDs clear — (a) `release.yml` repopulates all 3 edge
+#   tarballs on one main push, and (b) `hexa cc --regen` self-hosts cleanly from a
+#   clean checkout — restore the matrix to: download the released hexa binary from
+#   a green edge tarball, then `hexa cc --regen` + build + smoke, building FROM THAT
+#   BINARY — never from a committed transpiler `.c`. Do NOT re-add `hexa_cc_seed.c`.
 
 name: bootstrap
 

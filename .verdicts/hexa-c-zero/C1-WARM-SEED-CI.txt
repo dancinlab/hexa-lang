@@ -1,0 +1,38 @@
+# C1-WARM-SEED-CI — warm-install bootstrap CI feasibility verdict
+# captured: 2026-05-30T12:12:55Z
+# DECISION: warm-CI path NOT feasible now (upstream-blocked) -> keep DISABLED stub (step 3b). NO fake green.
+
+=== PROBE 1: edge release assets (gh release view edge --json assets) ===
+# ubuntu-latest CI runner = x86_64 -> needs hexa-linux-x86_64.tar.gz
+hexa-linux-arm64.tar.gz
+# -> ONLY hexa-linux-arm64.tar.gz present; x86_64 asset MISSING. A warm-install
+#    on ubuntu-latest would 'gh release download edge' -> no matching asset -> FAIL.
+
+=== PROBE 2: release.yml recent runs (the pipeline that would repopulate the x86_64 asset) ===
+[{"conclusion":"failure","createdAt":"2026-05-30T11:15:29Z","status":"completed"},{"conclusion":"cancelled","createdAt":"2026-05-30T11:11:52Z","status":"completed"},{"conclusion":"failure","createdAt":"2026-05-30T08:58:24Z","status":"completed"},{"conclusion":"failure","createdAt":"2026-05-30T08:53:08Z","status":"completed"},{"conclusion":"cancelled","createdAt":"2026-05-30T08:51:52Z","status":"completed"}]
+# -> long-RED. The missing x86_64 + darwin tarballs will not be repopulated.
+
+=== PROBE 3: open handoffs documenting the upstream blocker ===
+--- 726b8b67 (edge-tarball asset missing — INFRA, not repo-fixable) ---
+"id": "726b8b67", "ts": 1780125316, "from": "agent-afc0a22af8d20f758", "to": "hexa-lang", "kind": "handoff", "text": "INFRA (not repo-fixable): nobaseline-gate.yml LONG-RED — edge release holds ONLY hexa-linux-arm64.tar.gz; hexa-darwin-arm64.tar.gz + hexa-linux-x86_64.tar.gz MISSING, so tool/stage_resolve_runtime_a edge-pull fails 'no assets match the file pattern' for darwin+x86_64. Download logic/asset-name/repo all CORRECT (linux-arm64 asset present, pattern matches). Root cause UPSTREAM: release.yml also long-red; its darwin-arm64 + linux-x86_64 jobs fail before the softprops Upload step, so only linux-arm64 uploads its tarball into the force-moved edge release. RESTORE: fix release.ym
+
+--- e311289a (clean install.sh from main cannot self-host transpiler) ---
+"id": "e311289a", "ts": 1780142275, "from": "anima", "to": "hexa-lang", "kind": "handoff", "text": "STRONGER: a CLEAN install.sh from main (HX_HOME=~/.hx-aura, shallow clone of main) ALSO fails to produce a working toolchain — module_loader build fails during install (\"
+
+
+=== BLOCKER SUMMARY (g5 honest) ===
+Two independent upstream RED conditions make a warm-install CI green INFEASIBLE now:
+  (1) edge release lacks hexa-linux-x86_64.tar.gz (release.yml x86_64 job long-red),
+      so 'hx install' / edge-download on ubuntu-latest cannot fetch a matching binary.
+  (2) even with a binary, 'hexa cc --regen' is currently broken on clean main
+      (handoff 16afa5bb/e311289a: merged hexa_cc.c.new undeclared symbols; clean
+      install.sh cannot self-host) -> the regen->build smoke would RED.
+Both are UPSTREAM (release-pipeline + cc --regen), NOT fixable inside C1 scope.
+-> Keep bootstrap.yml DISABLED stub; document blocker; do NOT fake green.
+
+=== bootstrap.yml STATE = DISABLED stub (no push/PR trigger) ===
+1:# bootstrap.yml — DISABLED (cold-seed removed by user decision 2026-05-30).
+3:# WHY DISABLED
+33:  workflow_dispatch:
+40:    name: bootstrap (DISABLED — cold-seed removed by user decision)
+47:          echo "bootstrap is DISABLED (cold-seed removed by user decision 2026-05-30)."
