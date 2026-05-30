@@ -632,18 +632,56 @@ fn _dft_flag_val(av: [str], start: int, flag: str, default_v: str) -> str {
     return default_v
 }
 
+// _dft_is_bool_flag — flags that take NO value (so the positional scanner must
+// skip 1, not 2). `--bin-pack` is boolean (the opt-in toggle); --validate/--go/
+// --force are the other booleans. Everything else (--query/--walltime-h/…) takes
+// a value. Keep in lockstep with the dft_run flag parse.
+fn _dft_is_bool_flag(t: str) -> int {
+    if t == "--bin-pack" || t == "--validate" || t == "--go" || t == "--force" {
+        return 1
+    }
+    return 0
+}
+
 // first positional arg after `start` that is not a flag / flag value.
 fn _dft_first_positional(av: [str], start: int) -> str {
     let mut i = start
     while i < len(av) {
         let t = av[i]
         if len(t) >= 2 && t.substring(0, 2) == "--" {
-            i = i + 2
+            if _dft_is_bool_flag(t) == 1 {
+                i = i + 1
+            } else {
+                i = i + 2
+            }
         } else {
             return t
         }
     }
     return ""
+}
+
+// _dft_count_positionals — how many positional (deck-dir) args were passed.
+// Used to detect a MULTI-deck invocation so dft-run can refuse a silent
+// bin-pack (default = 1 deck / pod, d_parallel_fire). Boolean flags skip 1,
+// value flags skip 2 (mirrors _dft_first_positional).
+fn _dft_count_positionals(av: [str], start: int) -> int {
+    let mut i = start
+    let mut n = 0
+    while i < len(av) {
+        let t = av[i]
+        if len(t) >= 2 && t.substring(0, 2) == "--" {
+            if _dft_is_bool_flag(t) == 1 {
+                i = i + 1
+            } else {
+                i = i + 2
+            }
+        } else {
+            n = n + 1
+            i = i + 1
+        }
+    }
+    return n
 }
 
 // ── transport (guard ②) ──────────────────────────────────────────────
@@ -842,17 +880,46 @@ fn dft_validate(deck: str) -> int {
 pub fn dft_run(av: [str], start: int) -> int {
     let deck = _dft_first_positional(av, start)
     if len(deck) == 0 {
-        println("[dft-run] usage: hexa cloud dft-run <deck-dir> [--validate] [--go] [--force] [--identity PATH] [--query Q] [--walltime-h N] [--image IMG] [--disk GiB] [--owner TAG]")
+        println("[dft-run] usage: hexa cloud dft-run <deck-dir> [--validate] [--go] [--force] [--bin-pack] [--identity PATH] [--query Q] [--walltime-h N] [--image IMG] [--disk GiB] [--owner TAG]")
         println("           <deck-dir> must contain: (vc-relax.in | relax.in) · ph.in · (scf.in | scf.in.head + scf.in.tail) · pseudo/")
         println("           default = PREVIEW (validate + plan + parse a local relax.out if present, $0).")
         println("           --validate : run the FREE d16 1-iter dry-run + write a `.validated` stamp (required before --go).")
         println("           --go       : rent a billing pod + dispatch (REFUSED unless a fresh `.validated` stamp exists, or --force).")
         println("           --force    : override the stamp gate (expert — rents an unvalidated deck).")
+        println("           --bin-pack : DEFAULT = ONE deck / pod (d_parallel_fire). dft-run dispatches a SINGLE deck per pod;")
+        println("                        passing >1 deck dir without --bin-pack is REFUSED (silent pod overload guard, ysbh6/cabeh8 2026-05-30).")
+        println("                        For genuine multi-deck-on-one-pod packing, generate the deck with spec pack_one_pod=true (fill_plan concurrent-fill).")
         return 2
     }
     let validate_only = _dft_has_flag(av, start, "--validate")
     let go = _dft_has_flag(av, start, "--go")
     let force = _dft_has_flag(av, start, "--force")
+    let bin_pack = _dft_has_flag(av, start, "--bin-pack")
+
+    // DEFAULT = ONE deck / pod (project.tape d_parallel_fire). dft-run dispatches
+    // a SINGLE deck per pod (the relax→scf→el-ph chain below is single-deck). If
+    // the caller passed MORE than one positional deck dir, that is a multi-deck
+    // intent — refuse to silently bin-pack them onto one pod (the 2026-05-30
+    // ysbh6 q2-NaN · cabeh8 _ph0-disk-exhaustion failure class). Multi-deck-on-
+    // one-pod packing is an EXPLICIT opt-in via the deck generator spec
+    // pack_one_pod=true (fill_plan concurrent-fill), NOT a dft-run default.
+    let n_positional = _dft_count_positionals(av, start)
+    if n_positional > 1 {
+        if bin_pack == 0 {
+            println("[dft-run] ✗ REFUSED — " + to_string(n_positional) + " deck dirs passed without --bin-pack.")
+            println("[dft-run]   default = ONE deck / pod (d_parallel_fire). dft-run runs a SINGLE deck per pod;")
+            println("[dft-run]   it does NOT silently pack multiple decks onto one pod (ysbh6 q2 NaN · cabeh8 _ph0 disk exhaustion, 2026-05-30).")
+            println("[dft-run]   → fire each deck on its OWN pod (one `dft-run <deck> --go` per deck, parallel — d17 vast.ai first), OR")
+            println("[dft-run]   → for genuine one-pod-multi-deck packing, generate the deck with spec pack_one_pod=true (fill_plan concurrent-fill).")
+            return 2
+        }
+        // --bin-pack present AND multi-deck → WARN before firing (Part 3).
+        println("⚠ bin-pack: " + to_string(n_positional)
+            + " decks on 1 pod — each el-ph q-point needs 5-18GB _ph0 scratch; "
+            + "ensure free_disk ≥ concurrent_q × 18GB or runs crash "
+            + "(davcio \"No space left\") + thrash. Prefer 1 deck/pod (d_parallel_fire). "
+            + "Proceeding because --bin-pack was set.")
+    }
     let identity = _dft_flag_val(av, start, "--identity", env_var("HOME") + "/.ssh/id_vast_anima")
     let extra_q = _dft_flag_val(av, start, "--query", "")
     let walltime_h = _dft_atoi(_dft_flag_val(av, start, "--walltime-h", "12"))

@@ -63,7 +63,7 @@ fn _cloud_help() {
     println("                                                         COMPOSITE idle = uptime≥thr(min,def 60) AND util≤cap(%,def 5) AND no-compute-proc AND no-workdir — a slow-but-working pod (compute proc present) is NEVER killed")
     println("                                                         also cross-refs ./pods.json budget.cap: on breach → alert + (with --kill) tear down the lowest-value running pod (g64 honor-cap)")
     println("                                                         bare = DRY-RUN table (pod·age·util·has-proc·has-workdir·idle?·action); --kill enforces (needs RUNPOD_API_KEY / vast key)")
-    println("  cloud dft-run   <deck-dir> [--go] [--query Q] [--walltime-h N] [--identity P] [--image I] [--disk G] [--owner T]")
+    println("  cloud dft-run   <deck-dir> [--go] [--bin-pack] [--query Q] [--walltime-h N] [--identity P] [--image I] [--disk G] [--owner T]")
     println("  cloud parallel-audit --physcores N --live-jobs N --ranks-per-job N --queued-decks N  (d_parallel_fire 위반 가드 — VIOLATION→exit1+split 제안)")
     println("                                                         guarded DFT el-ph (QE) dispatch; PREVIEW ($0) unless --go. deck: relax.in·ph.in·scf.in.head·scf.in.tail·pseudo/")
     println("  cloud pods                                              full work table from cwd's ./pods.json (per-project active pod/job manifest)")
