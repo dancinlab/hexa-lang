@@ -57,6 +57,7 @@ fn _cloud_help() {
     println("  cloud reconcile                                        cross-ref registry vs provider: ORPHAN/GHOST/OK")
     println("  cloud reap      [--provider P] [--apply]               M6: orphans alive on provider but absent from M5 registry · bare=dry-run · --apply=destroy")
     println("  cloud adopt     <pod_id> [--purpose TEXT] [--project NAME]  track an untracked (ORPHAN) pod (stamps M5 project/purpose for the down-guard)")
+    println("  cloud attribute <pod_id> --project NAME [--purpose TEXT]     re-stamp project/purpose on an ALREADY-tracked pod (distinct from adopt-for-orphans)")
     println("  cloud forget    <pod_id|ssh-form|ip|alias>             (legacy — use `cloud rm` instead) mark a tracked (GHOST) pod status=closed")
     println("  cloud watchdog  [--threshold-min N] [--util-cap-pct N] [--kill]  idle-pod autokill sweep (DRY-RUN default)")
     println("                                                         COMPOSITE idle = uptime≥thr(min,def 60) AND util≤cap(%,def 5) AND no-compute-proc AND no-workdir — a slow-but-working pod (compute proc present) is NEVER killed")
@@ -1563,7 +1564,7 @@ fn main() {
     while i < len(av) {
         let t = av[i]
         if si < 0 {
-            if t == "rent" || t == "up" || t == "rm" || t == "down" || t == "destroy" || t == "list" || t == "status" || t == "preflight" || t == "watchdog" || t == "run" || t == "exec" || t == "nohup" || t == "fire" || t == "poll" || t == "tail" || t == "watch" || t == "ssh-port" || t == "resolve" || t == "copy-to" || t == "copy-from" || t == "orphans" || t == "reconcile" || t == "reap" || t == "adopt" || t == "forget" || t == "dft-run" || t == "parallel-audit" || t == "pods" || t == "dispatch" || t == "providers" || t == "help" || t == "--help" || t == "-h" || t == "version" || t == "--version" || t == "-v" {
+            if t == "rent" || t == "up" || t == "rm" || t == "down" || t == "destroy" || t == "list" || t == "status" || t == "preflight" || t == "watchdog" || t == "run" || t == "exec" || t == "nohup" || t == "fire" || t == "poll" || t == "tail" || t == "watch" || t == "ssh-port" || t == "resolve" || t == "copy-to" || t == "copy-from" || t == "orphans" || t == "reconcile" || t == "reap" || t == "adopt" || t == "attribute" || t == "forget" || t == "dft-run" || t == "parallel-audit" || t == "pods" || t == "dispatch" || t == "providers" || t == "help" || t == "--help" || t == "-h" || t == "version" || t == "--version" || t == "-v" {
                 si = i
                 sub = t
             }
@@ -2149,6 +2150,52 @@ fn main() {
             exit(0)
         }
         println("[cloud] adopt: empty pod_id")
+        exit(2)
+    }
+    if sub == "attribute" {
+        // Re-stamp project/purpose attribution on an ALREADY-tracked pod for
+        // the M5 cross-project down-guard. Distinct from `adopt`: `adopt` is
+        // for an untracked ORPHAN (registers it); `attribute` REQUIRES the pod
+        // to be tracked and only updates its attribution in place (provider /
+        // created_at / status / ssh are preserved by the pod_registry_add
+        // upsert when ""/unchanged are passed). At least one of --project /
+        // --purpose must be supplied.
+        if si + 1 >= len(av) {
+            println("[cloud] attribute: missing <pod_id> — usage: cloud attribute <pod_id> --project NAME [--purpose TEXT]")
+            exit(2)
+        }
+        let _attr_first = av[si + 1]
+        if _attr_first == "--help" || _attr_first == "-h" {
+            println("usage: cloud attribute <pod_id> --project NAME [--purpose TEXT]")
+            println("  re-stamp project/purpose on an ALREADY-tracked pod (M5 down-guard attribution).")
+            println("  distinct from `adopt`, which registers an untracked ORPHAN.")
+            exit(0)
+        }
+        if len(_attr_first) >= 1 && _attr_first.substring(0, 1) == "-" {
+            println("[cloud] attribute: '" + _attr_first + "' is not a pod-id (starts with '-') — did you mean a flag? usage: cloud attribute <pod_id> --project NAME [--purpose TEXT]")
+            exit(2)
+        }
+        let attr_pod = _attr_first
+        if pod_registry_is_tracked(attr_pod) == 0 {
+            println("[cloud] attribute: '" + attr_pod + "' is not tracked — use `cloud adopt " + attr_pod + " --project NAME` to track an orphan first")
+            exit(2)
+        }
+        // Explicit flags only — no cwd-fallback. attribute is a deliberate
+        // re-stamp, so absent flags mean "leave that field unchanged" ("").
+        let attr_project = _flag_val(av, si + 2, "--project", "")
+        let attr_purpose = _flag_val(av, si + 2, "--purpose", "")
+        if len(attr_project) == 0 && len(attr_purpose) == 0 {
+            println("[cloud] attribute: nothing to set — supply --project NAME and/or --purpose TEXT")
+            exit(2)
+        }
+        // "" leaves the prior value untouched (pod_registry_add upsert rule).
+        let _attr_ok = pod_registry_add(attr_pod, "", attr_project, attr_purpose, "", "", "")
+        if _attr_ok == 1 {
+            let _shown_proj = pod_registry_project_of(attr_pod)
+            println("[cloud] attributed " + attr_pod + " (project=" + _shown_proj + ")")
+            exit(0)
+        }
+        println("[cloud] attribute: failed to update " + attr_pod)
         exit(2)
     }
     if sub == "forget" {
