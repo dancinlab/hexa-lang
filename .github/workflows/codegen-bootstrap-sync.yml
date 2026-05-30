@@ -13,14 +13,13 @@
 # and there is no longer a committed bootstrap C seed to diff codegen.hexa
 # against. The hand-maintained C seed it guarded no longer exists.
 #
-# The successor "is the committed bootstrap artifact fresh?" invariant now
-# attaches to the cold-seed `self/native/hexa_cc_seed.c` (HEXA-CC-ZERO P3/P5 —
-# a self-contained pre-amalgamated TU). The freshness check for THAT artifact
-# is a seed-REFRESH model (re-amalgamate hexa_cc_seed.c from the current SSOT
-# via `hexa cc --regen` + the seed amalgamation, then commit) — a different
-# shape than a string-literal grep diff, tracked as the HEXA-CC-ZERO
-# seed-refresh follow-up. Until that lands, this workflow is a deliberate
-# no-op so it stops false-failing on the removed `hexa_cc.c`.
+# There is no successor committed-artifact freshness invariant: per an explicit
+# user decision (2026-05-30) the repo carries ZERO committed transpiler `.c`.
+# Both `self/native/hexa_cc.c` (gitignored, locally regenerated via
+# `hexa cc --regen`) and the former cold-seed `self/native/hexa_cc_seed.c`
+# (REMOVED — HEXA-CC-ZERO P3/P5/P6 withdrawn, #2126 / #2134 / #2179) are absent
+# from git, so there is nothing to diff codegen.hexa against. This workflow stays
+# a deliberate no-op.
 
 name: codegen-bootstrap-sync
 
@@ -46,6 +45,6 @@ jobs:
           echo "It diffed self/codegen.hexa string-literal direct-calls against the"
           echo "committed bootstrap C seed self/native/hexa_cc.c, which was removed in"
           echo "#2065 (.c=0 graduation) and is now a gitignored build artifact."
-          echo "The successor freshness invariant attaches to the cold-seed"
-          echo "self/native/hexa_cc_seed.c via a seed-REFRESH model (HEXA-CC-ZERO"
-          echo "seed-refresh follow-up), not a string-literal grep diff."
+          echo "Per a user decision (2026-05-30) the repo carries ZERO committed"
+          echo "transpiler .c (the cold-seed hexa_cc_seed.c was removed), so there"
+          echo "is nothing to diff codegen.hexa against — this stays a no-op."

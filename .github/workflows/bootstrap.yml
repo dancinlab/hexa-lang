@@ -1,461 +1,52 @@
-# bootstrap.yml — 3-platform COLD-SEED transpiler bootstrap matrix.
+# bootstrap.yml — DISABLED (cold-seed removed by user decision 2026-05-30).
 #
-# PURPOSE
-#   Prove that a FRESH `.c=0` checkout (the post-#2065 graduation tree, where
-#   the hand-maintained C seeds `self/native/hexa_cc.c` AND `self/runtime.c`
-#   are gitignored + absent) can bootstrap the self-hosted TRANSPILER with NO
-#   pre-installed `hexa` and NO committed C seed — using ONLY the committed,
-#   self-contained cold-seed `self/native/hexa_cc_seed.c` (HEXA-CC-ZERO P3/P5).
+# WHY DISABLED
+#   This matrix proved a FRESH `.c=0` checkout could bootstrap the self-hosted
+#   transpiler with NO pre-installed `hexa` — using ONLY the committed,
+#   self-contained cold-seed `self/native/hexa_cc_seed.c` (HEXA-CC-ZERO P3/P5/P6).
 #
-# WHY THIS CHANGED (HEXA-CC-ZERO P6)
-#   The old matrix ran `$CC -I self self/native/hexa_cc.c self/runtime.c …` at
-#   Stage 0. Both inputs left git in B9 (#2065 — tracked `.c` = 0), so on every
-#   fresh `actions/checkout` Stage 0 died with
-#       fatal error: self/native/hexa_cc.c: No such file or directory
-#   The cold-seed `self/native/hexa_cc_seed.c` (#2126) is a single
-#   pre-amalgamated translation unit (~2.85 MB · ZERO local `#include`) that
-#   inlines `hexa_cc.c` + the full runtime, so `cc hexa_cc_seed.c -o hexa_v2`
-#   builds the transpiler with NO `-I`, NO amalgam sed, NO `runtime.c`. This is
-#   exactly the cold branch `tool/build_hexa_cli.hexa` step 0 takes when
-#   `hexa_cc.c` is absent (#2134 / P5).
+#   Per an explicit user decision (2026-05-30), the committed transpiler cold-seed
+#   `self/native/hexa_cc_seed.c` was REMOVED — the repo now has ZERO committed
+#   transpiler `.c`. Building requires EITHER a pre-existing `hexa` (warm-seed:
+#   `hexa cc --regen` regenerates the gitignored `self/native/hexa_cc.c` locally)
+#   OR a shipped binary (`hx install hexa-lang`). A fresh-checkout SOURCE
+#   bootstrap is therefore IMPOSSIBLE (no hexa on the runner, no committed seed),
+#   and the warm CI path (download released/edge hexa binary then build) is not
+#   wired here yet (the edge-tarball infra is currently RED — handoff 726b8b67).
 #
-# RUNTIME LINK SEAM
-#   The transpiled C (`module_loader.c`, the smoke program) only needs
-#   `runtime.h` at compile time and the runtime SYMBOLS at link time. With
-#   `self/runtime.c` absent we compile the cold-seed a SECOND time with its
-#   `main` renamed away (`-Dmain=__seed_main_unused`) — yielding a pure
-#   runtime+transpiler object `build/runtime_seed.o` that exports every runtime
-#   symbol the seed inlines. Transpiled C links against THAT object instead of
-#   `self/runtime.c`. No edge tarball, no prebuilt runtime.a, no external
-#   network — fully self-contained from the checkout (distinct from the
-#   frozen-dough edge path that nobaseline-gate / release.yml use).
+#   Rather than leave Stage 0 referencing the deleted `hexa_cc_seed.c` (a
+#   dead-ref that would fail every run), this workflow is converted to a
+#   deliberate no-op. It reverses HEXA-CC-ZERO P3/P5/P6 (#2126 / #2134 / #2179 /
+#   #2185), which are withdrawn as a scope change — NOT a regression.
 #
-# SCOPE — TRANSPILER bootstrap + FULL self-host CLI + farr32 codegen smoke
-#   This matrix proves the cold-seed builds a working transpiler + module
-#   loader + end-to-end transpile/compile/run of a hexa program, AND re-builds
-#   the full `self/main.hexa` CLI driver (`./hexa`). The full-CLI cold build was
-#   blocked while the seed was pinned at HEXA-CC-ZERO P3 (#2126, pre-#2159):
-#   `self/main.hexa` referenced 4 runtime symbols (hexa_float_to_bits /
-#   hexa_bits_to_float / hexa_enum_str_v / hexa_os_getuid) the stale seed lacked,
-#   so the link died with 4 undefined references. The seed REFRESH (#2179)
-#   re-amalgamated hexa_cc_seed.c from the current SSOT — those 4 symbols now
-#   have bodies in the seed, so the full-CLI link is clean (proven green on
-#   ubu-2 fresh clone). The CLI's main.c embeds its OWN lexer/parser/codegen, so
-#   it must link against a PURE runtime object (the seed's runtime portion alone,
-#   through the `/* amalgam END runtime.c */` marker) — NOT runtime_seed.o, which
-#   also carries transpiler symbols (parse_*) and would multiple-define.
-#
-#   The farr32 codegen smoke (INBOX #4 — Linux #1187 bare-emit regression at the
-#   C level) is also restored: it runs `hexa build --c-only` (transpile only, no
-#   link) then `cc -fsyntax-only -Werror=implicit-function-declaration`.
-#
-#   NOT restored: the stdlib `--ci-gate` step. It LINKS + RUNS stdlib tests via
-#   `hexa run`, and one curated test (stdlib/deck/fill_emit_test.hexa) FAILS on a
-#   content assertion on current main — a pre-existing stdlib bug, unrelated to
-#   the cold-seed. Re-adding the gate would turn this matrix RED on that bug, so
-#   it stays out until the deck test is fixed (the cold toolchain itself runs the
-#   suite correctly: 30 pass / 1 fail). The full self-host CLI is also exercised
-#   by the release / nobaseline-gate "frozen-dough" path (prebuilt runtime.a +
-#   hexat from the edge tarball).
-#
-# RUNNERS
-#   · macos-latest     — Apple Silicon arm64 (GA)
-#   · ubuntu-latest    — x86_64 (GA)
-#   · ubuntu-24.04-arm — arm64 (GA, main gate).
-#
-# FLAGS NOTE
-#   -Wno-trigraphs : hexa codegen emits `??` byte patterns in C string literals
-#     (regex/pattern literals) — avoid trigraph warnings/errors.
-#   -fbracket-depth=4096 : clang-only — the deeply-nested generated C exceeds
-#     the default bracket-nesting limit. gcc has no such limit (flag omitted).
-#   -D_GNU_SOURCE / -ldl -lm (Linux) : the inlined runtime uses
-#     popen/strdup/dlopen and libm; macOS gets these from libSystem.
-#   The seed is a single-`#include`-free TU, so NO `-I self` at Stage 0.
-#   Stage 1+ DO pass `-I self` because the transpiled C `#include`s runtime.h.
+# RE-ENABLE PATH
+#   When a clean warm CI path exists (e.g. download the released hexa binary from
+#   a green edge tarball, then `hexa cc --regen` + build), restore the matrix to
+#   build FROM THAT BINARY — never from a committed transpiler `.c`.
 
 name: bootstrap
 
+# Disabled: never triggers on push/pull_request (the old matrix required the
+# removed cold-seed). Kept manually dispatchable only so the name + rationale
+# survive in history. No automatic runs.
 on:
-  push:
-    branches: [main]
-  pull_request:
-    branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
-  # ── macOS arm64 (Apple Silicon) ────────────────────────────
-  bootstrap-macos:
-    name: bootstrap (macos-arm64)
-    runs-on: macos-latest
-    timeout-minutes: 20
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Toolchain info
-        shell: bash
-        run: |
-          set -euo pipefail
-          echo "uname : $(uname -a)"
-          echo "cc    : $(clang --version | head -1)"
-
-      - name: Stage 0 — cold-seed bootstrap (cc hexa_cc_seed.c → hexa_v2)
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p build/stage1
-          test -f self/native/hexa_cc_seed.c \
-            || { echo "::error::self/native/hexa_cc_seed.c absent — cold-seed required"; exit 1; }
-          # Self-contained TU: NO -I, NO amalgam sed, NO self/runtime.c. Mirrors
-          # tool/build_hexa_cli.hexa step-0 cold branch (#2134 / HEXA-CC-ZERO P5).
-          clang -O2 -std=c11 -D_GNU_SOURCE -Wno-trigraphs -fbracket-depth=4096 \
-              self/native/hexa_cc_seed.c -o build/hexa_v2
-          file build/hexa_v2
-          ls -la build/hexa_v2
-          # Second compile, main renamed away → a runtime object the transpiled
-          # C links against in place of the absent self/runtime.c. Used for the
-          # module_loader + smoke links (no parser-symbol clash there).
-          clang -O2 -std=c11 -D_GNU_SOURCE -Wno-trigraphs -fbracket-depth=4096 \
-              -Dmain=__seed_main_unused -c self/native/hexa_cc_seed.c -o build/runtime_seed.o
-          ls -la build/runtime_seed.o
-          # PURE runtime object — the seed's runtime portion (through the
-          # `/* amalgam END runtime.c */` marker) compiled alone: runtime symbols
-          # only, NO transpiler symbols. The full CLI's main.c embeds its own
-          # lexer/parser/codegen, so it must link against THIS (runtime_seed.o
-          # would multiple-define on parse_*).
-          sed '/\/\* amalgam END runtime.c \*\//q' self/native/hexa_cc_seed.c > build/stage1/runtime_pure.c
-          clang -O2 -std=c11 -D_GNU_SOURCE -Wno-trigraphs -fbracket-depth=4096 \
-              -c build/stage1/runtime_pure.c -o build/runtime_pure.o
-          ls -la build/runtime_pure.o
-
-      - name: Stage 1 — module_loader cold-builds + flattens self/main.hexa
-        shell: bash
-        run: |
-          set -euo pipefail
-          # module_loader.hexa has zero `use` directives, so hexa_v2 (a
-          # single-file transpiler with no `use` resolution) transpiles it
-          # single-TU. Building + running it proves the cold-seed transpiler
-          # produces a working, runnable binary and the module-flattening path
-          # works end-to-end on a `.c=0` checkout.
-          export HEXA_LANG="$PWD"
-          ./build/hexa_v2 self/module_loader.hexa build/stage1/module_loader.c
-          clang -O2 -std=c11 -D_GNU_SOURCE -Wno-trigraphs -fbracket-depth=4096 \
-              -I self build/stage1/module_loader.c build/runtime_seed.o \
-              -o build/hexa_module_loader
-          ./build/hexa_module_loader self/main.hexa build/stage1/main_expanded.hexa
-          wc -l build/stage1/main_expanded.hexa
-
-      - name: Smoke — end-to-end transpile/compile/run of a hexa program
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p /tmp/hexa_ci
-          cat > /tmp/hexa_ci/hi.hexa <<'HEXA_EOF'
-          fn main() {
-              println("ok")
-          }
-          HEXA_EOF
-          ./build/hexa_v2 /tmp/hexa_ci/hi.hexa /tmp/hexa_ci/hi.c
-          clang -O2 -std=c11 -D_GNU_SOURCE -Wno-trigraphs -fbracket-depth=4096 \
-              -I self /tmp/hexa_ci/hi.c build/runtime_seed.o -o /tmp/hexa_ci/hi
-          OUT="$(/tmp/hexa_ci/hi)"
-          echo "smoke output: $OUT"
-          [[ "$OUT" == "ok" ]] || { echo "::error::smoke failed (got '$OUT')"; exit 1; }
-
-      - name: Stage 2 — compile FULL self-host CLI (./hexa) + version smoke
-        shell: bash
-        run: |
-          set -euo pipefail
-          export HEXA_LANG="$PWD"
-          # Transpile the flattened CLI source → main.c, then link against the
-          # PURE runtime object (NOT runtime_seed.o — main.c embeds its own
-          # lexer/parser/codegen). Resolves the 4 float-pun/getuid symbols the
-          # refreshed seed (#2179) now defines.
-          ./build/hexa_v2 build/stage1/main_expanded.hexa build/stage1/main.c
-          wc -l build/stage1/main.c
-          clang -O2 -std=c11 -D_GNU_SOURCE -Wno-trigraphs -fbracket-depth=4096 \
-              -I self build/stage1/main.c build/runtime_pure.o -o hexa
-          file hexa
-          OUT="$(./hexa version)"
-          echo "hexa version: $OUT"
-          [[ "$OUT" == hexa\ * ]] || { echo "::error::./hexa version failed (got '$OUT')"; exit 1; }
-
-      - name: forge farr32 codegen smoke — hexa build --c-only → cc -fsyntax-only
-        shell: bash
-        run: |
-          set -euo pipefail
-          # INBOX #4: catch a farr32 codegen regression (#1187 bare emit) at the
-          # C level — no GPU, no link, no run. -Werror on implicit decls is the
-          # exact gate (Mac silently accepted; clang -Werror rejects). `hexa build`
-          # JIT-rebuilds the transpiler if build/hexat is absent, hitting the dead
-          # hexa_cc.c regen path — so seed build/hexat from the cold transpiler.
-          cp build/hexa_v2 build/hexat
-          export HEXA_LANG="$PWD"
-          export HEXA_MAC_BUILD_OK=1
-          ./hexa build tool/forge_farr32_codegen_smoke.hexa -o /tmp/farr32_smoke.c --c-only
-          clang -fsyntax-only -std=c11 -D_GNU_SOURCE -Wno-trigraphs -fbracket-depth=4096 \
-            -Werror=implicit-function-declaration -I self /tmp/farr32_smoke.c
-          echo "forge farr32 codegen smoke: OK"
-
-      - name: Tail logs on failure
-        if: failure()
-        shell: bash
-        run: |
-          echo "── build listing ──"
-          ls -la build build/stage1 2>&1 || true
-          echo "── self/native listing ──"
-          ls -la self/native 2>&1 || true
-
-      - name: Upload artifacts
-        if: success()
-        uses: actions/upload-artifact@v7
-        with:
-          name: hexa-macos-arm64
-          path: |
-            build/hexa_v2
-          if-no-files-found: error
-          retention-days: 7
-
-  # ── Linux x86_64 ───────────────────────────────────────────
-  bootstrap-linux-x64:
-    name: bootstrap (linux-x86_64)
+  disabled:
+    name: bootstrap (DISABLED — cold-seed removed by user decision)
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 1
     steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Toolchain info
+      - name: Explain
         shell: bash
         run: |
-          set -euo pipefail
-          echo "uname : $(uname -a)"
-          echo "cc    : $(gcc --version | head -1)"
-
-      - name: Stage 0 — cold-seed bootstrap (cc hexa_cc_seed.c → hexa_v2)
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p build/stage1
-          test -f self/native/hexa_cc_seed.c \
-            || { echo "::error::self/native/hexa_cc_seed.c absent — cold-seed required"; exit 1; }
-          # gcc has no bracket-depth limit (clang-only flag omitted). -ldl -lm
-          # for the inlined runtime's dlopen/libm.
-          gcc -O2 -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs \
-              self/native/hexa_cc_seed.c -o build/hexa_v2 -lm -ldl
-          file build/hexa_v2
-          gcc -O2 -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs \
-              -Dmain=__seed_main_unused -c self/native/hexa_cc_seed.c -o build/runtime_seed.o
-          ls -la build/runtime_seed.o
-          # PURE runtime object (seed's runtime portion through the
-          # `/* amalgam END runtime.c */` marker) — runtime symbols only, no
-          # transpiler symbols. The full CLI's main.c links against THIS.
-          sed '/\/\* amalgam END runtime.c \*\//q' self/native/hexa_cc_seed.c > build/stage1/runtime_pure.c
-          gcc -O2 -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs \
-              -c build/stage1/runtime_pure.c -o build/runtime_pure.o
-          ls -la build/runtime_pure.o
-
-      - name: Stage 1 — module_loader cold-builds + flattens self/main.hexa
-        shell: bash
-        run: |
-          set -euo pipefail
-          export HEXA_LANG="$PWD"
-          ./build/hexa_v2 self/module_loader.hexa build/stage1/module_loader.c
-          gcc -O2 -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs \
-              -I self build/stage1/module_loader.c build/runtime_seed.o \
-              -o build/hexa_module_loader -lm -ldl
-          ./build/hexa_module_loader self/main.hexa build/stage1/main_expanded.hexa
-          wc -l build/stage1/main_expanded.hexa
-
-      - name: Smoke — end-to-end transpile/compile/run of a hexa program
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p /tmp/hexa_ci
-          cat > /tmp/hexa_ci/hi.hexa <<'HEXA_EOF'
-          fn main() {
-              println("ok")
-          }
-          HEXA_EOF
-          ./build/hexa_v2 /tmp/hexa_ci/hi.hexa /tmp/hexa_ci/hi.c
-          gcc -O2 -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs \
-              -I self /tmp/hexa_ci/hi.c build/runtime_seed.o -o /tmp/hexa_ci/hi -lm -ldl
-          OUT="$(/tmp/hexa_ci/hi)"
-          echo "smoke output: $OUT"
-          [[ "$OUT" == "ok" ]] || { echo "::error::smoke failed (got '$OUT')"; exit 1; }
-
-      - name: Stage 2 — compile FULL self-host CLI (./hexa) + version smoke
-        shell: bash
-        run: |
-          set -euo pipefail
-          export HEXA_LANG="$PWD"
-          # Transpile the flattened CLI source → main.c, then link against the
-          # PURE runtime object (NOT runtime_seed.o — main.c embeds its own
-          # lexer/parser/codegen). Resolves the 4 float-pun/getuid symbols the
-          # refreshed seed (#2179) now defines.
-          ./build/hexa_v2 build/stage1/main_expanded.hexa build/stage1/main.c
-          wc -l build/stage1/main.c
-          gcc -O2 -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs \
-              -I self build/stage1/main.c build/runtime_pure.o -o hexa -lm -ldl
-          file hexa
-          OUT="$(./hexa version)"
-          echo "hexa version: $OUT"
-          [[ "$OUT" == hexa\ * ]] || { echo "::error::./hexa version failed (got '$OUT')"; exit 1; }
-
-      - name: forge farr32 codegen smoke — hexa build --c-only → cc -fsyntax-only
-        shell: bash
-        run: |
-          set -euo pipefail
-          # INBOX #4: catch a farr32 codegen regression (#1187 bare emit) at the
-          # C level — no GPU, no link, no run. -Werror on implicit decls is the
-          # exact gate (Mac silently accepted; Linux clang rejects). This compiles
-          # the runtime.h `#else` branch all-Mac dev never exercises. `hexa build`
-          # JIT-rebuilds the transpiler if build/hexat is absent, hitting the dead
-          # hexa_cc.c regen path — so seed build/hexat from the cold transpiler.
-          cp build/hexa_v2 build/hexat
-          export HEXA_LANG="$PWD"
-          export HEXA_MAC_BUILD_OK=1
-          ./hexa build tool/forge_farr32_codegen_smoke.hexa -o /tmp/farr32_smoke.c --c-only
-          gcc -fsyntax-only -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs \
-            -Werror=implicit-function-declaration -I self /tmp/farr32_smoke.c
-          echo "forge farr32 codegen smoke: OK"
-
-      - name: Tail logs on failure
-        if: failure()
-        shell: bash
-        run: |
-          echo "── build listing ──"
-          ls -la build build/stage1 2>&1 || true
-          echo "── self/native listing ──"
-          ls -la self/native 2>&1 || true
-
-      - name: Upload artifacts
-        if: success()
-        uses: actions/upload-artifact@v7
-        with:
-          name: hexa-linux-x86_64
-          path: |
-            build/hexa_v2
-          if-no-files-found: error
-          retention-days: 7
-
-  # ── Linux arm64 (GA) ───────────────────────────────────────
-  bootstrap-linux-arm64:
-    name: bootstrap (linux-arm64)
-    runs-on: ubuntu-24.04-arm
-    timeout-minutes: 25
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Toolchain info
-        shell: bash
-        run: |
-          set -euo pipefail
-          echo "uname : $(uname -a)"
-          echo "cc    : $(gcc --version | head -1)"
-
-      - name: Stage 0 — cold-seed bootstrap (cc hexa_cc_seed.c → hexa_v2)
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p build/stage1
-          test -f self/native/hexa_cc_seed.c \
-            || { echo "::error::self/native/hexa_cc_seed.c absent — cold-seed required"; exit 1; }
-          gcc -O2 -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs \
-              self/native/hexa_cc_seed.c -o build/hexa_v2 -lm -ldl
-          file build/hexa_v2
-          gcc -O2 -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs \
-              -Dmain=__seed_main_unused -c self/native/hexa_cc_seed.c -o build/runtime_seed.o
-          ls -la build/runtime_seed.o
-          # PURE runtime object (seed's runtime portion through the
-          # `/* amalgam END runtime.c */` marker) — runtime symbols only, no
-          # transpiler symbols. The full CLI's main.c links against THIS.
-          sed '/\/\* amalgam END runtime.c \*\//q' self/native/hexa_cc_seed.c > build/stage1/runtime_pure.c
-          gcc -O2 -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs \
-              -c build/stage1/runtime_pure.c -o build/runtime_pure.o
-          ls -la build/runtime_pure.o
-
-      - name: Stage 1 — module_loader cold-builds + flattens self/main.hexa
-        shell: bash
-        run: |
-          set -euo pipefail
-          export HEXA_LANG="$PWD"
-          ./build/hexa_v2 self/module_loader.hexa build/stage1/module_loader.c
-          gcc -O2 -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs \
-              -I self build/stage1/module_loader.c build/runtime_seed.o \
-              -o build/hexa_module_loader -lm -ldl
-          ./build/hexa_module_loader self/main.hexa build/stage1/main_expanded.hexa
-          wc -l build/stage1/main_expanded.hexa
-
-      - name: Smoke — end-to-end transpile/compile/run of a hexa program
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p /tmp/hexa_ci
-          cat > /tmp/hexa_ci/hi.hexa <<'HEXA_EOF'
-          fn main() {
-              println("ok")
-          }
-          HEXA_EOF
-          ./build/hexa_v2 /tmp/hexa_ci/hi.hexa /tmp/hexa_ci/hi.c
-          gcc -O2 -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs \
-              -I self /tmp/hexa_ci/hi.c build/runtime_seed.o -o /tmp/hexa_ci/hi -lm -ldl
-          OUT="$(/tmp/hexa_ci/hi)"
-          echo "smoke output: $OUT"
-          [[ "$OUT" == "ok" ]] || { echo "::error::smoke failed (got '$OUT')"; exit 1; }
-
-      - name: Stage 2 — compile FULL self-host CLI (./hexa) + version smoke
-        shell: bash
-        run: |
-          set -euo pipefail
-          export HEXA_LANG="$PWD"
-          # Transpile the flattened CLI source → main.c, then link against the
-          # PURE runtime object (NOT runtime_seed.o — main.c embeds its own
-          # lexer/parser/codegen). Resolves the 4 float-pun/getuid symbols the
-          # refreshed seed (#2179) now defines.
-          ./build/hexa_v2 build/stage1/main_expanded.hexa build/stage1/main.c
-          wc -l build/stage1/main.c
-          gcc -O2 -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs \
-              -I self build/stage1/main.c build/runtime_pure.o -o hexa -lm -ldl
-          file hexa
-          OUT="$(./hexa version)"
-          echo "hexa version: $OUT"
-          [[ "$OUT" == hexa\ * ]] || { echo "::error::./hexa version failed (got '$OUT')"; exit 1; }
-
-      - name: forge farr32 codegen smoke — hexa build --c-only → cc -fsyntax-only
-        shell: bash
-        run: |
-          set -euo pipefail
-          # INBOX #4: catch a farr32 codegen regression (#1187 bare emit) at the
-          # C level — no GPU, no link, no run. `hexa build` JIT-rebuilds the
-          # transpiler if build/hexat is absent, hitting the dead hexa_cc.c regen
-          # path — so seed build/hexat from the cold transpiler.
-          cp build/hexa_v2 build/hexat
-          export HEXA_LANG="$PWD"
-          export HEXA_MAC_BUILD_OK=1
-          ./hexa build tool/forge_farr32_codegen_smoke.hexa -o /tmp/farr32_smoke.c --c-only
-          gcc -fsyntax-only -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs \
-            -Werror=implicit-function-declaration -I self /tmp/farr32_smoke.c
-          echo "forge farr32 codegen smoke: OK"
-
-      - name: Tail logs on failure
-        if: failure()
-        shell: bash
-        run: |
-          echo "── build listing ──"
-          ls -la build build/stage1 2>&1 || true
-          echo "── self/native listing ──"
-          ls -la self/native 2>&1 || true
-
-      - name: Upload artifacts
-        if: success()
-        uses: actions/upload-artifact@v7
-        with:
-          name: hexa-linux-arm64
-          path: |
-            build/hexa_v2
-          if-no-files-found: warn
-          retention-days: 7
+          echo "bootstrap is DISABLED (cold-seed removed by user decision 2026-05-30)."
+          echo "The committed transpiler cold-seed self/native/hexa_cc_seed.c was"
+          echo "removed — the repo has ZERO committed transpiler .c. A fresh-checkout"
+          echo "SOURCE bootstrap is unsupported; CI must build from a released binary"
+          echo "(hx install hexa-lang) once a clean warm path is wired. This reverses"
+          echo "HEXA-CC-ZERO P3/P5/P6 (#2126 / #2134 / #2179 / #2185) as a scope change."
