@@ -153,8 +153,11 @@ jobs:
           }
           HEXA_EOF
           ./build/hexa_v2 /tmp/hexa_ci/hi.hexa /tmp/hexa_ci/hi.c
+          # Link against the seed's pure runtime object — the transpiled C only
+          # gets prototypes from runtime.h, the bodies come from runtime_pure.o
+          # (self/runtime.c is absent in the `.c=0` tree).
           gcc ${{ env.CFLAGS_COMMON }} -static \
-              -I self /tmp/hexa_ci/hi.c -o /tmp/hexa_ci/hi \
+              -I self /tmp/hexa_ci/hi.c build/runtime_pure.o -o /tmp/hexa_ci/hi \
               -lm -ldl
           OUT="$(/tmp/hexa_ci/hi)"
           [[ "$OUT" == "ok" ]] || { echo "::error::smoke failed (got '$OUT')"; exit 1; }

@@ -115,9 +115,31 @@ gcc -I self build/stage1/main.c build/runtime_seed.o -o hexa_full_A -lm -ldl  �
 → confirms #2179 HONEST NOTE [1]: full CLI must link the PURE runtime.o, not runtime_seed.o.
 
 ──────────────────────────────────────────────────────────────────
-[C] CI GREEN evidence (run ids) — appended post-push (see PR checks)
+[C] CI evidence on main merge commit f25617ad4 (PR #2185, verbatim)
 ──────────────────────────────────────────────────────────────────
-(to be filled after `gh pr checks --watch`: bootstrap 3/3, docker YAML-valid)
+bootstrap (run 26668956927) — conclusion: SUCCESS  ✅ 3/3
+  bootstrap (macos-arm64)  success  (57s)
+  bootstrap (linux-x86_64) success
+  bootstrap (linux-arm64)  success
+  steps GREEN on all 3 platforms incl. the RESTORED:
+    ✓ Stage 2 — compile FULL self-host CLI (./hexa) + version smoke
+    ✓ forge farr32 codegen smoke — hexa build --c-only → cc -fsyntax-only
+  → full-CLI restore + farr32 are CI-GREEN, not just ubu-2-local.
+
+docker-runner-push (run 26668956936) — conclusion: FAILURE (then FIXED, follow-up)
+  build ELFs (x86_64/arm64) failed at the UNEDITED "Smoke — interp can transpile a tiny
+  program" step: it linked hi.c with NO runtime object (`gcc -static -I self hi.c -o hi`),
+  relying on the OLD hexa_cc.c's -I-inlined runtime — now absent. undefined reference to
+  hexa_str / __hexa_fn_arena_enter / hexa_println / hexa_void / __hexa_fn_arena_return /
+  hexa_set_args. (docker-runner-push was ALREADY red on main pre-PR — prior run on 27d4c02
+  also FAILED.) FIX: add build/runtime_pure.o to that smoke link. Verified ubu-2 fresh clone:
+  0 undefined, smoke output "ok" → DOCKER-SMOKE-OK. Shipped as a follow-up commit/PR.
+
+nobaseline-gate (run 26668956960) — conclusion: FAILURE (UNRELATED, file untouched)
+  faithful-nobaseline (linux-arm64) success; darwin-arm64 + linux-x86_64 failed at
+  `stage_resolve_runtime_a: edge download failed (no assets match the file pattern)` — an
+  EDGE-TARBALL availability infra issue, NOT a dead-ref / cold-seed issue. nobaseline-gate.yml
+  was NOT edited by this sweep. Pre-existing; out of scope.
 
 ──────────────────────────────────────────────────────────────────
 [D] HONEST NOTES (g5/g63)
