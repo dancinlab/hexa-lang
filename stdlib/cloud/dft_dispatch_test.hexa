@@ -48,6 +48,21 @@ fn _bool_int(b: bool) -> int {
     return 0
 }
 
+// _lt_index — 1 iff substring `a` first appears strictly before substring `b`
+// in `s` (both must be present). Used to assert command-token ORDERING
+// (scf before ph; the failure-first grep before the JOB DONE grep).
+fn _lt_index(s: str, a: str, b: str) -> int {
+    let ia = s.index_of(a)
+    let ib = s.index_of(b)
+    if ia < 0 || ib < 0 {
+        return 0
+    }
+    if ia < ib {
+        return 1
+    }
+    return 0
+}
+
 fn main() {
     // ── ③ relax → scf coordinate parser ──────────────────────────────
     // alat=1.0 → scale = BOHR_ANGSTROM = 0.52917720859, so the x-axis cell
@@ -163,6 +178,44 @@ fn main() {
     _check("state: absent key → empty", len(_dft_state_field(sdeck, "nope")), 0)
     let _rm = exec("rm -rf '" + sdeck + "'")
     _check("state: missing stamp → empty field", len(_dft_state_field(sdeck, "phase")), 0)
+
+    // ── option α phase-2: --resume scf→ph chain + honest terminal probe ──
+    // the phase-2 launch is the scf→ph CHAIN as ONE detached command: scf first,
+    // ph only on a clean scf (&&). The geometry was spliced LOCALLY into scf.in.
+    let scfph = _dft_scfph_cmd(28, 12)
+    _check("scfph: runs scf.in", _has(scfph, "pw.x -ndiag 1 -in scf.in"), 1)
+    _check("scfph: runs ph.in", _has(scfph, "ph.x -in ph.in"), 1)
+    _check("scfph: scf BEFORE ph (chained &&)", _lt_index(scfph, "scf.in", "ph.in"), 1)
+    _check("scfph: gates ph on clean scf (&&)", _has(scfph, " && "), 1)
+    let phon_argv = _dft_detach_argv(scfph)
+    _check("scfph: wrapped sh -lc for detach", _seq(phon_argv[1], "-lc"), 1)
+    _check("phon remote logfile path", _seq(_dft_remote_logfile("phon"), "/root/deck/.phon.detach.log"), 1)
+
+    // honest terminal probe (the QE JOB DONE checkpoint trap, MEMORY 2026-05-29):
+    // a bare JOB DONE grep is NOT terminal. The probe is FAILURE-FIRST and emits
+    // exactly one of RUNNING / FAILED / DONE; pgrep gates RUNNING before any grep.
+    let rprobe = _dft_stage_probe_cmd("pw.x", "relax.out")
+    _check("probe: pgrep liveness gate first", _has(rprobe, "pgrep -x pw.x"), 1)
+    _check("probe: RUNNING marker", _has(rprobe, "__DFT_RUNNING__"), 1)
+    _check("probe: DONE marker", _has(rprobe, "__DFT_DONE__"), 1)
+    _check("probe: FAILED marker", _has(rprobe, "__DFT_FAILED__"), 1)
+    _check("probe: checks JOB DONE", _has(rprobe, "JOB DONE"), 1)
+    // failure-first ordering — the crash/timeout grep must precede the JOB DONE grep
+    // so a timed-out run (which ALSO prints JOB DONE) classifies as FAILED not DONE.
+    _check("probe: failure signature BEFORE JOB DONE (checkpoint-trap guard)",
+        _lt_index(rprobe, "Maximum CPU time exceeded", "JOB DONE"), 1)
+    _check("probe: STOP [1-9] crash signature", _has(rprobe, "STOP [1-9]"), 1)
+    let pprobe = _dft_stage_probe_cmd("ph.x", "ph.out")
+    _check("probe: ph.x binary + ph.out file", _has(pprobe, "pgrep -x ph.x"), 1)
+
+    // resume terminal-step contract: a missing state stamp → run --detach first.
+    let nodeck = "/tmp/dft_resume_nostate_test"
+    let _rmn = exec("rm -rf '" + nodeck + "' && mkdir -p '" + nodeck + "'")
+    _check("resume: no state stamp → refuse (2)", _dft_resume(nodeck), 2)
+    // a 'done' phase is idempotent — re-resume is a clean no-op (0), no teardown.
+    let _wd = _dft_write_state(nodeck, "done", "777", "h", "p", "id", 8, 12, "vc-relax.in")
+    _check("resume: terminal 'done' → idempotent no-op (0)", _dft_resume(nodeck), 0)
+    let _rmn2 = exec("rm -rf '" + nodeck + "'")
 
     println("dft_dispatch_test PASS")
 }
