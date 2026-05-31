@@ -1,0 +1,19 @@
+F-HEXA-CC-NATIVE-N5PRE-STEP4-ANY -- named:any as dynamic wildcard; CUMULATIVE 181 -> 5
+=========================================================================================
+date: 2026-06-01   host: mini (darwin-arm64)   base: worktree off origin/main c4163e2de
+(main now carries STEP0-3 #2283/2295/2297/2299, so this off-main measure is the TRUE cumulative.)
+
+CHANGE: compiler/check/types.hexa _is_hexaval() now also matches t.kind=="named:any" (the explicit
+any type), not just "named:HexaVal". `any` is a dynamic wildcard compatible with any target type.
+
+BUILD + MEASURE (current-source aprime_cc; smoke exit42 PASS; falsifier PASS):
+  cumulative diagnostics:  STEP3 ~11  ->  STEP4  5
+  HX3001  6 -> 0   (the residual `expected named:any, got i64` cleared)
+  remaining 5: HX2001 `push` x2 (.push member-call binding) + `i64` x1 (type-name-as-value,
+  binder suggests `int`) + HX3004 x2 (`rt_round returns i64, got f64` -- a REAL numeric f64->i64
+  return mismatch, NOT a HexaVal false-positive; needs a targeted source/coercion fix or honest call).
+
+CUMULATIVE N5-pre: 181 -> 5  (-97%). STEP1 as-cast -81, STEP2 intrinsics -9, STEP3 HexaVal -43,
+STEP4 any -6 (+ STEP0 measurement unblock). No regression; only dynamic wildcards tolerated, real
+non-dynamic mismatches still report (the surviving 5 are exactly those real ones). N5 fixpoint not
+reached. live tree untouched.
