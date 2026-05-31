@@ -1,0 +1,106 @@
+// ════════════════════════════════════════════════════════════════════════════
+//  conv_lib.hexa — flame causal-dilated Conv1d (fwd + bwd), hexa-native.
+//
+//  First of the 4 op families flame needs to port anima's CLM (CLMConvMoE)
+//  production trainer (FLAME.tape n_clm_convmoe_port_gap · anima
+//  a_train_flame_forge · CLM/P6_SCALE_LADDER_7B). CLM uses Conv1d in 5 places:
+//    embed_conv (d->d, k=3) · trunk CausalDilatedConv1d (d->d, k=3, dilation) ·
+//    ConvExpert (d->d, k=3) · router (d->E, k=1) · readout (d->V, k=1).
+//
+//  Layout (host farr, RFC 040; device routing = forge Phase 4 carve-out):
+//    X  : [T · Cin]      input  (row-major, time-major)
+//    W  : [Cout · Cin · K] weight
+//    b  : [Cout]         bias
+//    Y  : [T · Cout]     output
+//  Causal: left-pad with zeros (no future leak). Tap index convention:
+//    k = K-1  -> current step   (offset 0)
+//    k = K-2  -> dilation steps back ... k = 0 -> (K-1)*dilation back.
+//    y[t,co] = b[co] + Σ_ci Σ_k W[co,ci,k] · xin(t - dil·(K-1-k), ci)
+//    xin(p,ci) = X[p,ci] if p>=0 else 0.
+//
+//  Verified by F-FLAME-CONV1D-GRAD-EXACT (flame_conv_test.hexa, central-diff).
+//  lib-split mandatory (FLAME.tape): conv lives here, selftest is a separate
+//  entrypoint file. sibling: nn_lib.hexa · tensor_lib.hexa.
+// ════════════════════════════════════════════════════════════════════════════
+
+use "stdlib/flame/tensor_lib"
+
+// Forward. Caller allocates y_out (T·Cout). Causal + dilation.
+pub fn nn_conv1d_fwd(x: int, w: int, b: int, y_out: int,
+                     T: int, Cin: int, Cout: int, K: int, dil: int) {
+    let mut t = 0
+    while t < T {
+        let mut co = 0
+        while co < Cout {
+            let mut acc = t_get(b, co)
+            let mut ci = 0
+            while ci < Cin {
+                let mut k = 0
+                while k < K {
+                    let p = t - dil * (K - 1 - k)
+                    if p >= 0 {
+                        let xv = t_get(x, p * Cin + ci)
+                        let wv = t_get(w, co * Cin * K + ci * K + k)
+                        acc = acc + wv * xv
+                    }
+                    k = k + 1
+                }
+                ci = ci + 1
+            }
+            t_set(y_out, t * Cout + co, acc)
+            co = co + 1
+        }
+        t = t + 1
+    }
+}
+
+// Backward — closed vjp. Caller allocates dW_out [Cout·Cin·K], dX_out [T·Cin],
+// db_out [Cout]; this zeros them then accumulates:
+//   dW[co,ci,k] = Σ_t dY[t,co] · xin(t-dil·(K-1-k), ci)
+//   dX[p,ci]    = Σ_co Σ_k W[co,ci,k] · dY[t,co]   where t = p + dil·(K-1-k)
+//   db[co]      = Σ_t dY[t,co]
+pub fn nn_conv1d_bwd(x: int, w: int, dy: int,
+                     dW_out: int, dX_out: int, db_out: int,
+                     T: int, Cin: int, Cout: int, K: int, dil: int) {
+    let mut iz = 0
+    while iz < Cout * Cin * K {
+        t_set(dW_out, iz, 0.0)
+        iz = iz + 1
+    }
+    let mut ix = 0
+    while ix < T * Cin {
+        t_set(dX_out, ix, 0.0)
+        ix = ix + 1
+    }
+    let mut ib = 0
+    while ib < Cout {
+        t_set(db_out, ib, 0.0)
+        ib = ib + 1
+    }
+    let mut t = 0
+    while t < T {
+        let mut co = 0
+        while co < Cout {
+            let g = t_get(dy, t * Cout + co)
+            t_set(db_out, co, t_get(db_out, co) + g)
+            let mut ci = 0
+            while ci < Cin {
+                let mut k = 0
+                while k < K {
+                    let p = t - dil * (K - 1 - k)
+                    if p >= 0 {
+                        let widx = co * Cin * K + ci * K + k
+                        let xidx = p * Cin + ci
+                        let xv = t_get(x, xidx)
+                        t_set(dW_out, widx, t_get(dW_out, widx) + g * xv)
+                        t_set(dX_out, xidx, t_get(dX_out, xidx) + g * t_get(w, widx))
+                    }
+                    k = k + 1
+                }
+                ci = ci + 1
+            }
+            co = co + 1
+        }
+        t = t + 1
+    }
+}

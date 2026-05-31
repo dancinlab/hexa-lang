@@ -1,0 +1,177 @@
+// ════════════════════════════════════════════════════════════════════════════
+//  flame_conv_test.hexa — selftest for conv_lib (causal-dilated Conv1d).
+//
+//  Falsifiers (pre-registered):
+//    F-FLAME-CONV1D-DET        same inputs -> byte-identical Y (determinism).
+//    F-FLAME-CONV1D-CAUSAL     Y[t] independent of X[t'] for t' > t (no future
+//                              leak) — perturb a future input, Y[t] unchanged.
+//    F-FLAME-CONV1D-GRAD-EXACT analytic nn_conv1d_bwd == central finite-diff
+//                              of L=½ΣY² (dY=Y) at probes spanning W + b,
+//                              max relative deviation < 1e-3 (ε=1e-4 central).
+//
+//  Pattern mirrors flame_block_test (GRAD-EXACT central-diff). Independent
+//  entrypoint (lib-split). Build: HEXA_MAC_BUILD_OK=1 ./hexa build
+//  stdlib/flame/flame_conv_test.hexa -o build/flame_conv && ./build/flame_conv
+// ════════════════════════════════════════════════════════════════════════════
+
+use "stdlib/flame/tensor_lib"
+use "stdlib/flame/conv_lib"
+
+fn _cv_abs(x: float) -> float {
+    if x < 0.0 { return 0.0 - x }
+    return x
+}
+
+// L = ½ Σ Y²  (so dL/dY = Y) — recompute Y fresh and reduce.
+fn _cv_fwd_loss(x: int, w: int, b: int,
+                T: int, Cin: int, Cout: int, K: int, dil: int) -> float {
+    let y = t_zeros(T * Cout)
+    nn_conv1d_fwd(x, w, b, y, T, Cin, Cout, K, dil)
+    let mut acc = 0.0
+    let mut i = 0
+    while i < T * Cout {
+        let v = t_get(y, i)
+        acc = acc + 0.5 * v * v
+        i = i + 1
+    }
+    return acc
+}
+
+// F-FLAME-CONV1D-DET — two fwd passes byte-identical.
+fn check_det(x: int, w: int, b: int,
+             T: int, Cin: int, Cout: int, K: int, dil: int) -> int {
+    let y1 = t_zeros(T * Cout)
+    let y2 = t_zeros(T * Cout)
+    nn_conv1d_fwd(x, w, b, y1, T, Cin, Cout, K, dil)
+    nn_conv1d_fwd(x, w, b, y2, T, Cin, Cout, K, dil)
+    let mut i = 0
+    while i < T * Cout {
+        if t_get(y1, i) != t_get(y2, i) { return 0 }
+        i = i + 1
+    }
+    return 1
+}
+
+// F-FLAME-CONV1D-CAUSAL — perturbing a strictly-future input leaves Y[t=0]
+// unchanged (causal left-pad => Y[0] sees only X[0]).
+fn check_causal(x: int, w: int, b: int,
+                T: int, Cin: int, Cout: int, K: int, dil: int) -> int {
+    let y0 = t_zeros(T * Cout)
+    nn_conv1d_fwd(x, w, b, y0, T, Cin, Cout, K, dil)
+    // snapshot Y[0,*]
+    let base = t_zeros(Cout)
+    let mut c = 0
+    while c < Cout { t_set(base, c, t_get(y0, c)); c = c + 1 }
+    // perturb a future input X[T-1, 0]
+    let fidx = (T - 1) * Cin + 0
+    let orig = t_get(x, fidx)
+    t_set(x, fidx, orig + 3.14)
+    let y1 = t_zeros(T * Cout)
+    nn_conv1d_fwd(x, w, b, y1, T, Cin, Cout, K, dil)
+    t_set(x, fidx, orig)
+    let mut c2 = 0
+    while c2 < Cout {
+        if _cv_abs(t_get(y1, c2) - t_get(base, c2)) > 0.0 { return 0 }
+        c2 = c2 + 1
+    }
+    return 1
+}
+
+// F-FLAME-CONV1D-GRAD-EXACT — analytic vs central finite-diff over W and b.
+fn check_grad_exact() -> int {
+    let T = 5
+    let Cin = 3
+    let Cout = 2
+    let K = 3
+    let dil = 2
+
+    let x = t_zeros(T * Cin);            t_fill_lcg(x, T * Cin, 42, 0.5)
+    let w = t_zeros(Cout * Cin * K);     t_fill_lcg(w, Cout * Cin * K, 1234, 0.3)
+    let b = t_zeros(Cout);               t_fill_lcg(b, Cout, 77, 0.2)
+
+    // analytic: dY = Y (since L = ½ΣY²)
+    let y = t_zeros(T * Cout)
+    nn_conv1d_fwd(x, w, b, y, T, Cin, Cout, K, dil)
+    let dW = t_zeros(Cout * Cin * K)
+    let dX = t_zeros(T * Cin)
+    let db = t_zeros(Cout)
+    nn_conv1d_bwd(x, w, y, dW, dX, db, T, Cin, Cout, K, dil)
+
+    let eps = 0.0001
+    let mut max_rel = 0.0
+
+    // ── probe W: 5 indices spread across the weight tensor ──
+    let wprobes = t_zeros(5)
+    t_set(wprobes, 0, to_float(0))
+    t_set(wprobes, 1, to_float(4))
+    t_set(wprobes, 2, to_float(8))
+    t_set(wprobes, 3, to_float(13))
+    t_set(wprobes, 4, to_float(17))
+    let mut i = 0
+    while i < 5 {
+        let pidx = to_int(t_get(wprobes, i))
+        let analytic = t_get(dW, pidx)
+        let orig = t_get(w, pidx)
+        t_set(w, pidx, orig + eps)
+        let lp = _cv_fwd_loss(x, w, b, T, Cin, Cout, K, dil)
+        t_set(w, pidx, orig - eps)
+        let lm = _cv_fwd_loss(x, w, b, T, Cin, Cout, K, dil)
+        t_set(w, pidx, orig)
+        let fd = (lp - lm) / (2.0 * eps)
+        let denom = if _cv_abs(analytic) > 0.01 { _cv_abs(analytic) } else { 0.01 }
+        let rel = _cv_abs(analytic - fd) / denom
+        if rel > max_rel { max_rel = rel }
+        i = i + 1
+    }
+
+    // ── probe b: both channels ──
+    let mut j = 0
+    while j < Cout {
+        let analytic = t_get(db, j)
+        let orig = t_get(b, j)
+        t_set(b, j, orig + eps)
+        let lp = _cv_fwd_loss(x, w, b, T, Cin, Cout, K, dil)
+        t_set(b, j, orig - eps)
+        let lm = _cv_fwd_loss(x, w, b, T, Cin, Cout, K, dil)
+        t_set(b, j, orig)
+        let fd = (lp - lm) / (2.0 * eps)
+        let denom = if _cv_abs(analytic) > 0.01 { _cv_abs(analytic) } else { 0.01 }
+        let rel = _cv_abs(analytic - fd) / denom
+        if rel > max_rel { max_rel = rel }
+        j = j + 1
+    }
+
+    println("  GRAD-EXACT max_rel = " + to_string(max_rel))
+    if max_rel < 0.001 { return 1 }
+    return 0
+}
+
+fn main() {
+    println("flame_conv_test — causal-dilated Conv1d (conv_lib)")
+
+    let T = 5
+    let Cin = 3
+    let Cout = 2
+    let K = 3
+    let dil = 2
+    let x = t_zeros(T * Cin);        t_fill_lcg(x, T * Cin, 42, 0.5)
+    let w = t_zeros(Cout * Cin * K); t_fill_lcg(w, Cout * Cin * K, 1234, 0.3)
+    let b = t_zeros(Cout);           t_fill_lcg(b, Cout, 77, 0.2)
+
+    let det = check_det(x, w, b, T, Cin, Cout, K, dil)
+    let cau = check_causal(x, w, b, T, Cin, Cout, K, dil)
+    let ge = check_grad_exact()
+
+    println("F-FLAME-CONV1D-DET        = " + to_string(det))
+    println("F-FLAME-CONV1D-CAUSAL     = " + to_string(cau))
+    println("F-FLAME-CONV1D-GRAD-EXACT = " + to_string(ge))
+    if det == 1 {
+        if cau == 1 {
+            if ge == 1 {
+                println("PASS 3/3")
+                return
+            }
+        }
+    }
+    println("FAIL")
+}
