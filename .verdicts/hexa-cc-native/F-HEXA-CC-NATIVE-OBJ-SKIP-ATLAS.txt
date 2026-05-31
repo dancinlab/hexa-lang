@@ -1,0 +1,31 @@
+F-HEXA-CC-NATIVE-OBJ-SKIP-ATLAS -- --emit=obj skips the theorem atlas (−1.85GB RSS base)
+==========================================================================================
+date: 2026-06-01   host: mini (darwin-arm64)   base: worktree off origin/main 376963dec
+
+ROOT CAUSE (measured, 6 hypotheses tested — 5 disproven, this one confirmed):
+native arm64 obj-emit of the full compiler OOM'd at ~5.8GB. The OOM = ~1.85GB FIXED BASE
++ ~3MB/compiled-fn. The base was MEASURED to be the atlas load: `_load_atlas()` eagerly
+parses the 17265-node embedded atlas (compiler/atlas/embedded.gen.hexa) at startup.
+Confirmed via the existing `HEXA_ATLAS_EMBED` env (point at an empty dir → 0 nodes):
+  N=10  : atlas-ON 1.88GB  → atlas-SKIP 16.9MB  (100×)
+  N=400 : atlas-ON 2.57GB  → atlas-SKIP 0.58GB
+.o still a valid Mach-O arm64 object; 0 new diagnostics (cite-free programs). The atlas
+also drives a per-function cost (per-fn @cite lookups): skip slope 1.45MB/fn vs 3.3MB.
+
+FIX: gate the load by emit kind. compiler/main.hexa:606 →
+  `let atlas = if emit_kind == "obj" { empty_atlas() } else { _load_atlas() }`
++ new `pub fn empty_atlas()` in compiler/atlas/static_index.hexa (= _bucket_by_kind([]),
+identical to the embed-absent path). obj-emit produces object code and needs no theorem
+atlas (only citation_check consumes refs; resolve/lower/codegen tolerate an empty index).
+--emit=asm/exec are UNCHANGED (still load the atlas + cite-check).
+
+VERIFY (code-gate, NO env var, fresh-built aprime_sa):
+  --emit=obj N=400 → RSS 582MB (was 2.57GB), NO "atlas: loaded" line, .o = valid Mach-O
+    arm64 (89248 B, same as the env-workaround → consistent).
+  --emit=asm     → "atlas: loaded 17265 nodes" still printed (gate is obj-only). PASS.
+
+SCOPE: this removes the ATLAS half of the obj-emit OOM (the 1.85GB base + ~half the per-fn).
+The full 40k-line compiler obj-emit still OOMs on a SEPARATE per-function codegen-retention
+cost that scales with function size (e.g. the 1209-line _lower_hexpr) — a distinct frontier
+(runtime allocator / codegen retention) tracked next. This PR is a verified standalone
+memory improvement; N5 fixpoint still pending the per-fn fix.
