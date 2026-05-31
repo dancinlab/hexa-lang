@@ -95,9 +95,9 @@ fn clm_forward(tokens: int,
     let iv = t_zeros(1)
     let xh = t_zeros(T * d)
     nn_groupnorm_fwd(y, noG, noB, yn, mn, iv, xh, T, d, 1)
-    // readout (d→V, k1) → [T·V]
+    // readout (d→V, k1) → [T·V]  (Cin=d, Cout=V — NOT transposed)
     let out = t_zeros(T * V)
-    nn_conv1d_fwd(yn, roW, roB, out, T, V, d, 1, 1)
+    nn_conv1d_fwd(yn, roW, roB, out, T, d, V, 1, 1)
     return out
 }
 

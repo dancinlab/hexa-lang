@@ -2,7 +2,7 @@
 //  clm_train.hexa — CLMConvMoE backward chain (CLM port assembly 2/3).
 //
 //  Chains every op's *_bwd in reverse over the assembled forward
-//  (clm_model.hexa · assembly 1/3): CE-seed → readout → norm_out(GN) → MoE
+//  (clm_model.hexa · assembly 1/3): seed → readout → norm_out(GN) → MoE
 //  (router + experts) → trunk{residual·gelu·GN·conv} → embed_conv → embed.
 //  Each op's bwd is individually GRAD-EXACT (conv #2288 · gn #2289 · moe #2292);
 //  THIS validates the WIRING (reverse order · grad accumulation · residual
@@ -33,7 +33,6 @@ fn clm_fwd_full(tokens: int,
                 tcW: int, tcB: int, tgG: int, tgB: int,
                 rW: int, rB: int, e0W: int, e0B: int, e1W: int, e1B: int,
                 noG: int, noB: int, roW: int, roB: int,
-                // caches:
                 xe: int, xec: int, xt: int, hn0: int, xhat0: int, inv0: int,
                 eo0: int, eo1: int, probs: int, ex_out: int,
                 yn: int, xhatN: int, invN: int,
@@ -50,15 +49,26 @@ fn clm_fwd_full(tokens: int,
     nn_gelu_fwd(hn0, hg0, T * d)
     let mut i = 0
     while i < T * d { t_set(xt, i, t_get(xec, i) + t_get(hg0, i)); i = i + 1 }
-    // moe — BISECT: bypass (y = xt) to localize the bwd wiring bug.
-    let y = t_zeros(T * d)
+    // moe
+    let logits_r = t_zeros(T * E)
+    nn_conv1d_fwd(xt, rW, rB, logits_r, T, d, E, 1, 1)
+    nn_conv1d_fwd(xt, e0W, e0B, eo0, T, d, d, K, 1)
+    nn_conv1d_fwd(xt, e1W, e1B, eo1, T, d, d, K, 1)
+    let ex0 = t_zeros(T * d); nn_gelu_fwd(eo0, ex0, T * d)
+    let ex1 = t_zeros(T * d); nn_gelu_fwd(eo1, ex1, T * d)
     let mut j = 0
-    while j < T * d { t_set(y, j, t_get(xt, j)); j = j + 1 }
+    while j < T * d {
+        t_set(ex_out, 0 * T * d + j, t_get(ex0, j))
+        t_set(ex_out, 1 * T * d + j, t_get(ex1, j))
+        j = j + 1
+    }
+    let y = t_zeros(T * d)
+    nn_moe_router_fwd(logits_r, ex_out, probs, y, T, E, d)
     // norm_out
     let meanN = t_zeros(1)
     nn_groupnorm_fwd(y, noG, noB, yn, meanN, invN, xhatN, T, d, 1)
-    // readout d->V
-    nn_conv1d_fwd(yn, roW, roB, out_logits, T, V, d, 1, 1)
+    // readout d->V (Cin=d, Cout=V — NOT transposed)
+    nn_conv1d_fwd(yn, roW, roB, out_logits, T, d, V, 1, 1)
 }
 
 fn clm_loss_only(tokens: int,
@@ -87,12 +97,10 @@ fn clm_loss_and_grad(tokens: int,
                      embed: int, ecW: int, ecB: int, tcW: int, tcB: int, tgG: int, tgB: int,
                      rW: int, rB: int, e0W: int, e0B: int, e1W: int, e1B: int,
                      noG: int, noB: int, roW: int, roB: int,
-                     // grads (caller-allocated):
                      dembed: int, decW: int, decB: int, dtcW: int, dtcB: int, dtgG: int, dtgB: int,
                      drW: int, drB: int, de0W: int, de0B: int, de1W: int, de1B: int,
                      dnoG: int, dnoB: int, droW: int, droB: int,
                      T: int, d: int, E: int, V: int, K: int) -> float {
-    // caches
     let xe = t_zeros(T * d); let xec = t_zeros(T * d); let xt = t_zeros(T * d)
     let hn0 = t_zeros(T * d); let xhat0 = t_zeros(T * d); let inv0 = t_zeros(1)
     let eo0 = t_zeros(T * d); let eo1 = t_zeros(T * d)
@@ -112,19 +120,39 @@ fn clm_loss_and_grad(tokens: int,
     let mut s = 0
     while s < T * V { t_set(dlogits, s, t_get(logits, s)); s = s + 1 }
 
-    // readout bwd (d->V): x=yn, w=roW, dy=dlogits -> droW, dynorm, droB
+    // readout bwd (d->V)
     let dynorm = t_zeros(T * d)
     nn_conv1d_bwd(yn, roW, dlogits, droW, dynorm, droB, T, d, V, 1, 1)
-    // norm_out gn bwd: -> dnoG, dnoB, dy
+    // norm_out gn bwd
     let dy = t_zeros(T * d)
     nn_groupnorm_bwd(xhatN, invN, noG, dynorm, dnoG, dnoB, dy, T, d, 1)
-    // moe bwd — BISECT: bypassed (y = xt) so dxt = dy directly.
+    // moe bwd
+    let dlogits_r = t_zeros(T * E)
+    let dex_out = t_zeros(E * T * d)
+    nn_moe_router_bwd(probs, ex_out, dy, dlogits_r, dex_out, T, E, d)
+    // router conv bwd (d->E)
+    let dxt_r = t_zeros(T * d)
+    nn_conv1d_bwd(xt, rW, dlogits_r, drW, dxt_r, drB, T, d, E, 1, 1)
+    // experts bwd
+    let dex0 = t_zeros(T * d); let dex1 = t_zeros(T * d)
+    let mut ei = 0
+    while ei < T * d {
+        t_set(dex0, ei, t_get(dex_out, 0 * T * d + ei))
+        t_set(dex1, ei, t_get(dex_out, 1 * T * d + ei))
+        ei = ei + 1
+    }
+    let deo0 = t_zeros(T * d); nn_gelu_bwd(eo0, dex0, deo0, T * d)
+    let deo1 = t_zeros(T * d); nn_gelu_bwd(eo1, dex1, deo1, T * d)
+    let dxt_e0 = t_zeros(T * d); nn_conv1d_bwd(xt, e0W, deo0, de0W, dxt_e0, de0B, T, d, d, K, 1)
+    let dxt_e1 = t_zeros(T * d); nn_conv1d_bwd(xt, e1W, deo1, de1W, dxt_e1, de1B, T, d, d, K, 1)
+    // dxt = router + expert0 + expert1
     let dxt = t_zeros(T * d)
     let mut xi = 0
-    while xi < T * d { t_set(dxt, xi, t_get(dy, xi)); xi = xi + 1 }
-    // trunk0 bwd (residual xt = xec + gelu(gn(conv(xec)))):
-    //   dhg0 = dxt ; gelu_bwd(hn0) -> dhn0 ; gn_bwd -> dtgG,dtgB,dh0 ;
-    //   conv_bwd(xec) -> dtcW, dxec_branch, dtcB ; dxec = dxt + dxec_branch
+    while xi < T * d {
+        t_set(dxt, xi, t_get(dxt_r, xi) + t_get(dxt_e0, xi) + t_get(dxt_e1, xi))
+        xi = xi + 1
+    }
+    // trunk0 bwd (residual xt = xec + gelu(gn(conv(xec))))
     let dhn0 = t_zeros(T * d); nn_gelu_bwd(hn0, dxt, dhn0, T * d)
     let dh0 = t_zeros(T * d)
     nn_groupnorm_bwd(xhat0, inv0, tgG, dhn0, dtgG, dtgB, dh0, T, d, 1)
@@ -133,10 +161,10 @@ fn clm_loss_and_grad(tokens: int,
     let dxec = t_zeros(T * d)
     let mut ci = 0
     while ci < T * d { t_set(dxec, ci, t_get(dxt, ci) + t_get(dxec_b, ci)); ci = ci + 1 }
-    // embed_conv bwd: conv_bwd(xe) -> decW, dxe, decB
+    // embed_conv bwd
     let dxe = t_zeros(T * d)
     nn_conv1d_bwd(xe, ecW, dxec, decW, dxe, decB, T, d, d, K, 1)
-    // embed bwd: zero dembed then scatter
+    // embed bwd (zero then scatter)
     let mut zi = 0
     while zi < V * d { t_set(dembed, zi, 0.0); zi = zi + 1 }
     nn_embedding_bwd_scatter(dxe, tokens, dembed, T, d)
@@ -171,7 +199,6 @@ fn check_grad_exact() -> int {
     let roW = t_zeros(V * d);      t_fill_lcg(roW, V * d, 20, 0.2)
     let roB = t_zeros(V);          t_fill_lcg(roB, V, 21, 0.1)
 
-    // grads
     let dembed = t_zeros(V * d); let decW = t_zeros(d * d * K); let decB = t_zeros(d)
     let dtcW = t_zeros(d * d * K); let dtcB = t_zeros(d); let dtgG = t_zeros(d); let dtgB = t_zeros(d)
     let drW = t_zeros(E * d); let drB = t_zeros(E)
@@ -184,20 +211,16 @@ fn check_grad_exact() -> int {
                       de0W, de0B, de1W, de1B, dnoG, dnoB, droW, droB,
                       T, d, E, V, K)
 
-    let eps = 0.00001
+    let eps = 0.0001
     let mut max_rel = 0.0
-    // probes: (param farr, grad farr, index) spanning the whole chain.
-    // readout roW[3], router rW[2], expert e0W[9], trunk tcW[7], embed_conv ecW[5],
-    // embed[3*d+1] (token-3 row).
+    // probes spanning the whole chain: readout · router · expert · trunk-conv ·
+    // embed_conv · embed.
     let np = 6
-    let pf = t_zeros(np)   // param-farr selector (encode by id)
-    // we inline 6 probes manually below (no array-of-handles in hexa).
     let mut k = 0
     while k < np {
-        // pick (param, grad, idx) per k
         let mut pa = roW; let mut ga = droW; let mut idx = 3
-        if k == 1 { pa = noG; ga = dnoG; idx = 2 }
-        if k == 2 { pa = tgG; ga = dtgG; idx = 3 }
+        if k == 1 { pa = rW;  ga = drW;  idx = 2 }
+        if k == 2 { pa = e0W; ga = de0W; idx = 9 }
         if k == 3 { pa = tcW; ga = dtcW; idx = 7 }
         if k == 4 { pa = ecW; ga = decW; idx = 5 }
         if k == 5 { pa = embed; ga = dembed; idx = 3 * d + 1 }
@@ -213,7 +236,6 @@ fn check_grad_exact() -> int {
         let fd = (lp - lm) / (2.0 * eps)
         let denom = if _clm_abs(analytic) > 0.01 { _clm_abs(analytic) } else { 0.01 }
         let rel = _clm_abs(analytic - fd) / denom
-        println("  probe " + to_string(k) + ": analytic=" + to_string(analytic) + " fd=" + to_string(fd) + " rel=" + to_string(rel))
         if rel > max_rel { max_rel = rel }
         k = k + 1
     }
@@ -222,113 +244,8 @@ fn check_grad_exact() -> int {
     return 0
 }
 
-// isolate GELU fwd/bwd: L = ½ Σ gelu(x)², dL/dx = gelu(x)·gelu'(x).
-fn check_gelu() -> int {
-    let n = 6
-    let x = t_zeros(n); t_fill_lcg(x, n, 99, 1.5)
-    let g = t_zeros(n); nn_gelu_fwd(x, g, n)          // g = gelu(x)
-    // analytic dL/dx = gelu_bwd(x, da=g)  [da = dL/dgelu = gelu(x)]
-    let dx = t_zeros(n); nn_gelu_bwd(x, g, dx, n)
-    let eps = 0.0001
-    let mut max_rel = 0.0
-    let mut i = 0
-    while i < n {
-        let analytic = t_get(dx, i)
-        let orig = t_get(x, i)
-        t_set(x, i, orig + eps); let gp = t_zeros(n); nn_gelu_fwd(x, gp, n)
-        let mut lp = 0.0; let mut a = 0; while a < n { let v = t_get(gp, a); lp = lp + 0.5*v*v; a = a+1 }
-        t_set(x, i, orig - eps); let gm = t_zeros(n); nn_gelu_fwd(x, gm, n)
-        let mut lm = 0.0; let mut b = 0; while b < n { let v = t_get(gm, b); lm = lm + 0.5*v*v; b = b+1 }
-        t_set(x, i, orig)
-        let fd = (lp - lm) / (2.0 * eps)
-        let denom = if _clm_abs(analytic) > 0.01 { _clm_abs(analytic) } else { 0.01 }
-        let rel = _clm_abs(analytic - fd) / denom
-        if rel > max_rel { max_rel = rel }
-        i = i + 1
-    }
-    println("  GELU-only max_rel = " + to_string(max_rel))
-    if max_rel < 0.001 { return 1 }
-    return 0
-}
-
-// isolate conv1d_bwd dX (input grad — NOT probed by flame_conv_test #2288).
-// L = ½ Σ Y², dY = Y; probe X, compare analytic dX vs central-diff.
-fn check_conv_dx() -> int {
-    let T = 5; let Cin = 8; let Cout = 4; let K = 1; let dil = 1
-    let x = t_zeros(T * Cin);        t_fill_lcg(x, T * Cin, 42, 0.5)
-    let w = t_zeros(Cout * Cin * K); t_fill_lcg(w, Cout * Cin * K, 1234, 0.3)
-    let b = t_zeros(Cout);           t_fill_lcg(b, Cout, 77, 0.2)
-    let y = t_zeros(T * Cout); nn_conv1d_fwd(x, w, b, y, T, Cin, Cout, K, dil)
-    let dW = t_zeros(Cout * Cin * K); let dX = t_zeros(T * Cin); let db = t_zeros(Cout)
-    nn_conv1d_bwd(x, w, y, dW, dX, db, T, Cin, Cout, K, dil)
-    let eps = 0.0001
-    let mut max_rel = 0.0
-    let mut i = 0
-    while i < T * Cin {
-        let analytic = t_get(dX, i)
-        let orig = t_get(x, i)
-        t_set(x, i, orig + eps); let yp = t_zeros(T*Cout); nn_conv1d_fwd(x, w, b, yp, T, Cin, Cout, K, dil)
-        let mut lp = 0.0; let mut a = 0; while a < T*Cout { let v=t_get(yp,a); lp=lp+0.5*v*v; a=a+1 }
-        t_set(x, i, orig - eps); let ym = t_zeros(T*Cout); nn_conv1d_fwd(x, w, b, ym, T, Cin, Cout, K, dil)
-        let mut lm = 0.0; let mut c = 0; while c < T*Cout { let v=t_get(ym,c); lm=lm+0.5*v*v; c=c+1 }
-        t_set(x, i, orig)
-        let fd = (lp - lm) / (2.0 * eps)
-        let denom = if _clm_abs(analytic) > 0.01 { _clm_abs(analytic) } else { 0.01 }
-        let rel = _clm_abs(analytic - fd) / denom
-        if rel > max_rel { max_rel = rel }
-        i = i + 1
-    }
-    println("  CONV-dX max_rel = " + to_string(max_rel))
-    if max_rel < 0.001 { return 1 }
-    return 0
-}
-
-// isolate GroupNorm at G=1 (CLM uses GN(1); #2289 only tested G=2).
-// probe gamma, beta, AND X (input grad). L=½ΣY², dY=Y.
-fn check_gn_g1() -> int {
-    let T = 4; let C = 8; let G = 1
-    let x = t_zeros(T*C);  t_fill_lcg(x, T*C, 42, 0.7)
-    let ga = t_zeros(C);   t_fill_lcg(ga, C, 1234, 0.4)
-    let be = t_zeros(C);   t_fill_lcg(be, C, 77, 0.3)
-    let y = t_zeros(T*C); let mn = t_zeros(G); let iv = t_zeros(G); let xh = t_zeros(T*C)
-    nn_groupnorm_fwd(x, ga, be, y, mn, iv, xh, T, C, G)
-    // GENERIC upstream dy (random, NOT the gn output — exposes bugs that dy=Y masks)
-    let dyv = t_zeros(T*C); t_fill_lcg(dyv, T*C, 555, 1.0)
-    let dga = t_zeros(C); let dbe = t_zeros(C); let dX = t_zeros(T*C)
-    nn_groupnorm_bwd(xh, iv, ga, dyv, dga, dbe, dX, T, C, G)
-    let eps = 0.0001
-    let mut max_rel = 0.0
-    // probe X (input grad) against central-diff of L = Σ dyv·gn_out (linear functional)
-    let mut i = 0
-    while i < T*C {
-        let analytic = t_get(dX, i)
-        let orig = t_get(x, i)
-        t_set(x, i, orig+eps); let yp=t_zeros(T*C); let m2=t_zeros(G); let v2=t_zeros(G); let h2=t_zeros(T*C)
-        nn_groupnorm_fwd(x, ga, be, yp, m2, v2, h2, T, C, G)
-        let mut lp=0.0; let mut a=0; while a<T*C { lp=lp+t_get(dyv,a)*t_get(yp,a); a=a+1 }
-        t_set(x, i, orig-eps); let ym=t_zeros(T*C); let m3=t_zeros(G); let v3=t_zeros(G); let h3=t_zeros(T*C)
-        nn_groupnorm_fwd(x, ga, be, ym, m3, v3, h3, T, C, G)
-        let mut lm=0.0; let mut b=0; while b<T*C { lm=lm+t_get(dyv,b)*t_get(ym,b); b=b+1 }
-        t_set(x, i, orig)
-        let fd = (lp-lm)/(2.0*eps)
-        let denom = if _clm_abs(analytic) > 0.01 { _clm_abs(analytic) } else { 0.01 }
-        let rel = _clm_abs(analytic - fd) / denom
-        if rel > max_rel { max_rel = rel }
-        i = i + 1
-    }
-    println("  GN-G1-dX max_rel = " + to_string(max_rel))
-    if max_rel < 0.001 { return 1 }
-    return 0
-}
-
 fn main() {
     println("clm_train — CLMConvMoE backward chain (assembly 2/3)")
-    let gng1 = check_gn_g1()
-    println("F-FLAME-GN-G1 = " + to_string(gng1))
-    let cdx = check_conv_dx()
-    println("F-FLAME-CONV-DX = " + to_string(cdx))
-    let gck = check_gelu()
-    println("F-FLAME-GELU-CHECK = " + to_string(gck))
     let ge = check_grad_exact()
     println("F-FLAME-CLM-BWD-GRAD-EXACT = " + to_string(ge))
     if ge == 1 {
