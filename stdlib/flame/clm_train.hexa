@@ -123,12 +123,12 @@ fn clm_loss_and_grad(tokens: int,
     let mut s = 0
     while s < T * V { t_set(dlogits, s, t_get(logits, s)); s = s + 1 }
 
-    // readout bwd (d->V): x=yn, w=roW, dy=dlogits -> droW, dyn, droB
-    let dyn = t_zeros(T * d)
-    nn_conv1d_bwd(yn, roW, dlogits, droW, dyn, droB, T, d, V, 1, 1)
+    // readout bwd (d->V): x=yn, w=roW, dy=dlogits -> droW, dynorm, droB
+    let dynorm = t_zeros(T * d)
+    nn_conv1d_bwd(yn, roW, dlogits, droW, dynorm, droB, T, d, V, 1, 1)
     // norm_out gn bwd: -> dnoG, dnoB, dy
     let dy = t_zeros(T * d)
-    nn_groupnorm_bwd(xhatN, invN, noG, dyn, dnoG, dnoB, dy, T, d, 1)
+    nn_groupnorm_bwd(xhatN, invN, noG, dynorm, dnoG, dnoB, dy, T, d, 1)
     // moe bwd: -> dlogits_r, dex_out
     let dlogits_r = t_zeros(T * E)
     let dex_out = t_zeros(E * T * d)
