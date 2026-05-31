@@ -1,0 +1,27 @@
+=== UNSHADOW escape→stack NON-FLAT (array descriptor) — g5 byte-diff gate ===
+slug=unshadow-escape-stack-nonflat
+method=faithful A/B proxy (clang -O2 + prebuilt runtime.o; B9 self-host wall +
+       pool unreachable + Darwin LOCAL_BUILD gate → same spec-accepted proxy as
+       the flat-struct parent §escape-stack). The arms emit the EXACT strings
+       gen2_stack_alloc_array_lit / the hexa_array_new+push Array arm produce.
+host=mini arm64 · best-of-9 · runs=9
+
+g5 GATE — computed-acc IDENTICAL across heap vs stack arms:
+    a_heap  acc=140000000  md5=6ca934e49da9a8a3923d49622f65db6b
+    b_stack acc=140000000  md5=6ca934e49da9a8a3923d49622f65db6b
+    → byte-diff: IDENTICAL   ✅
+
+The acc half of stdout is identical (the malloc-count half differs BY DESIGN —
+that difference IS the space-axis finding). arr_ptr->items[i] read offsets are
+unchanged between the heap descriptor and the stack descriptor → byte-eq.
+
+NEGATIVE CONTROL — escaping (returned) array MUST stay heap:
+    escaping read result (heap path, live after return): 4   ✅ (no dangling)
+    → proves the decision is escape-driven: the proof fires ONLY for bindings
+      used solely as a[i] / len(a) within the scope.
+
+PRIMARY metrics (space axis):
+    heap-alloc count : a_heap 20,000,000 → b_stack 0   (loop malloc eliminated)
+    peak-RSS (free)  : 18,112 KB → 1,456 KB  (12.4× down)
+    peak-RSS (no-free / GC reclaim-lag shape): 218,720 KB → 1,456 KB (150× down)
+    [secondary] wall : 0.24s → 0.04s (6×)
