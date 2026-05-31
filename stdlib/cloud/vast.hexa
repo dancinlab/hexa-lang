@@ -129,24 +129,89 @@ fn _vast_key_sync() -> int {
 
 // ── vastai detection ─────────────────────────────────────────────────
 
-// _vastai_path — return the vastai binary path if available, else "".
+// _vastai_path — resolve the vastai entrypoint, "" if none resolves.
 // `VASTAI_DISABLE=1` in the env forces the no-CLI path even if vastai is
 // installed (useful when unit-testing the command-string logic). Before
-// handing back the binary it ensures the CLI's config key is in sync with the
-// live secret store (handoff 5bb23201) — this is the single funnel every
+// handing back the entrypoint it ensures the CLI's config key is in sync with
+// the live secret store (handoff 5bb23201) — this is the single funnel every
 // vastai invocation passes through (d4), so the auth path can never 401 on a
 // stale file when a live secret exists.
+//
+// RESOLVER CHAIN (RTSC mini self-provision audit, 2026-05-31):
+// The old chain was `$HOME/bin/vastai` → `command -v vastai`. That broke two
+// ways on a key-holding host: (1) a pip `--user` console script under
+// `~/Library/Python/<v>/bin` (macOS) / `~/.local/bin` (linux) is frequently
+// NOT on PATH, so `rent` died "vastai not found"; (2) WORSE — a system
+// py3.9/LibreSSL `vastai` DOES resolve on PATH but its HTTPS call silently
+// returns "no matching offers" (the urllib3/LibreSSL break), so rent appeared
+// to "work" yet provisioned nothing. The ordered chain below resolves a
+// known-good py3.13 venv (working OpenSSL) BEFORE any bare-PATH binary, so the
+// LibreSSL trap is structurally avoided, and adds an explicit `$VASTAI_BIN`
+// override + a `python3 -m vastai` last resort.
+//
+// The PRECEDENCE itself is factored into the pure `_vastai_resolve` below so it
+// can be unit-tested by injection without a live HOME / PATH / vastai install;
+// `_vastai_path` only gathers the real candidates (env reads + file_exists +
+// PATH probe) and delegates the choice.
 fn _vastai_path() -> str {
     if env_var("VASTAI_DISABLE") == "1" {
         return ""
     }
     let _ = _vast_key_sync()
-    let home_bin = env_var("HOME") + "/bin/vastai"
-    if file_exists(home_bin) {
+    let home = env_var("HOME")
+    // (1) explicit override — CI / operator-pinned entrypoint, wins outright.
+    let mut override_bin = env_var("VASTAI_BIN")
+    if len(override_bin) == 0 || !file_exists(override_bin) {
+        override_bin = ""
+    }
+    // (2) known-good venvs — py3.13 / working OpenSSL. Resolved BEFORE the bare
+    //     PATH so a system py3.9/LibreSSL `vastai` can never win and silently
+    //     return empty offers (@L3).
+    let venv_a = _first_existing(home + "/vastenv/bin/vastai")
+    let venv_b = _first_existing(home + "/.vastai-venv/bin/vastai")
+    // (3) the legacy explicit location (existing behaviour).
+    let home_bin = _first_existing(home + "/bin/vastai")
+    // (4) bare PATH lookup.
+    let on_path = exec("command -v vastai 2>/dev/null").trim()
+    // (5) module-importable probe — `python3 -m vastai` as a last resort.
+    let mod_ok = exec("python3 -c 'import vastai' >/dev/null 2>&1 && echo ok").trim() == "ok"
+    return _vastai_resolve(override_bin, venv_a, venv_b, home_bin, on_path, mod_ok)
+}
+
+// _first_existing — the path if it exists on disk, else "" (gather helper so
+// _vastai_path can pass plain "exists?" candidates into the pure resolver).
+fn _first_existing(p: str) -> str {
+    if file_exists(p) {
+        return p
+    }
+    return ""
+}
+
+// _vastai_resolve — PURE precedence over already-gathered candidates. Each arg
+// is the resolved entrypoint for that rung ("" = that rung yielded nothing):
+//   override → venv_a → venv_b → home_bin → on_path → (mod_ok ⇒ python3 -m).
+// Returns the first non-empty rung, or "" when nothing resolves. No env / disk
+// / network access — deterministic, so the order is unit-testable by injection.
+fn _vastai_resolve(override_bin: str, venv_a: str, venv_b: str, home_bin: str, on_path: str, mod_ok: bool) -> str {
+    if len(override_bin) > 0 {
+        return override_bin
+    }
+    if len(venv_a) > 0 {
+        return venv_a
+    }
+    if len(venv_b) > 0 {
+        return venv_b
+    }
+    if len(home_bin) > 0 {
         return home_bin
     }
-    let on_path = exec("command -v vastai 2>/dev/null").trim()
-    return on_path
+    if len(on_path) > 0 {
+        return on_path
+    }
+    if mod_ok {
+        return "python3 -m vastai"
+    }
+    return ""
 }
 
 // _shq_local now lives canonically in stdlib/cloud/cloud.hexa (pub) — this
@@ -743,6 +808,21 @@ fn vast_build_query_TEST(query: str, verified_only: int) -> str {
 // live vastai.
 fn vast_strip_to_json_TEST(s: str) -> str {
     return _vast_strip_to_json(s)
+}
+
+// vast_vastai_resolve_TEST — public alias for the PURE precedence resolver so
+// the ordered chain (override → venv_a → venv_b → $HOME/bin → PATH → python -m)
+// can be unit-tested by injecting each rung's candidate, with no live HOME /
+// PATH / vastai install (RTSC mini self-provision audit fix).
+fn vast_vastai_resolve_TEST(override_bin: str, venv_a: str, venv_b: str, home_bin: str, on_path: str, mod_ok: bool) -> str {
+    return _vastai_resolve(override_bin, venv_a, venv_b, home_bin, on_path, mod_ok)
+}
+
+// vast_vastai_path_TEST — public alias for the full env/disk-gathering resolver
+// (live integration probe; deterministic ordering is covered by the pure
+// resolver above).
+fn vast_vastai_path_TEST() -> str {
+    return _vastai_path()
 }
 
 // vast_destroy_cmd_TEST — return the exact shell command vast_destroy
