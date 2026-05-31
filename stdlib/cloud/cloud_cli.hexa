@@ -766,6 +766,20 @@ struct ResolvedHost {
 // is the vastai read inside vast_*_endpoint.
 fn _resolve_cloud_host(h: str) -> ResolvedHost {
     if _is_vast_numeric_id(h) == 0 {
+        // #handoff-aad9f4c0: a bare dotted endpoint (direct IP / DNS) with NO
+        // explicit `user@` defaulted to the LOCAL login (e.g. `mini@1.2.3.4`)
+        // → `Permission denied (publickey)` on a rented pod (which is root),
+        // forcing a raw-ssh workaround OUTSIDE `hexa cloud`. Default it to
+        // `root@` — pods are root, matching the resolved-id branches below +
+        // dft_dispatch's `root@ + host_ip` convention. A bare alias (no dot,
+        // e.g. a ~/.ssh/config Host with its own User) is LEFT untouched so the
+        // config's User directive still applies; an explicit `user@` is honored.
+        if h.contains(".") {
+            if h.contains("@") {
+                return ResolvedHost { host: h, port: "", resolved: 0, via: "" }
+            }
+            return ResolvedHost { host: "root@" + h, port: "", resolved: 0, via: "direct-root" }
+        }
         return ResolvedHost { host: h, port: "", resolved: 0, via: "" }
     }
     let proxy = vast_ssh_endpoint(h)

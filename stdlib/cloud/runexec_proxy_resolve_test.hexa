@@ -73,6 +73,13 @@ fn _apply_resolved_port(opts: [str], rh: ResolvedHost) -> [str] {
 // stays network-free while pinning the ORDER (proxy wins over direct).
 fn _resolve_model(h: str, proxy_ok: int, proxy_host: str, proxy_port: str, direct_ok: int, direct_host: str, direct_port: str) -> ResolvedHost {
     if _is_vast_numeric_id(h) == 0 {
+        // #handoff-aad9f4c0: bare dotted endpoint w/o user@ → default root@.
+        if h.contains(".") {
+            if h.contains("@") {
+                return ResolvedHost { host: h, port: "", resolved: 0, via: "" }
+            }
+            return ResolvedHost { host: "root@" + h, port: "", resolved: 0, via: "direct-root" }
+        }
         return ResolvedHost { host: h, port: "", resolved: 0, via: "" }
     }
     if proxy_ok == 1 {
@@ -153,10 +160,22 @@ fn main() {
     _ck_str("unmapped id left as-is", none.host, "38095989")
     _ck("unmapped id resolved=0", none.resolved, 0)
 
-    // ── a real host is never rewritten ─────────────────────────────────────
+    // ── a real host with explicit user@ is never rewritten ─────────────────
     let realh = _resolve_model("root@1.2.3.4", 1, "ssh5.vast.ai", "12345", 0, "", "")
     _ck_str("real host untouched", realh.host, "root@1.2.3.4")
     _ck("real host resolved=0", realh.resolved, 0)
+
+    // ── #handoff-aad9f4c0: bare dotted IP w/o user@ → default root@ ─────────
+    // (was `mini@<ip>` → publickey denied on a root pod; now self-heals)
+    let bareip = _resolve_model("194.14.47.19", 0, "", "", 0, "", "")
+    _ck_str("bare dotted IP gets root@", bareip.host, "root@194.14.47.19")
+    _ck_str("bare dotted IP via=direct-root", bareip.via, "direct-root")
+    _ck("bare dotted IP resolved=0 (no port resolution)", bareip.resolved, 0)
+    let bareuser = _resolve_model("ubuntu@194.14.47.19", 0, "", "", 0, "", "")
+    _ck_str("explicit user@ on dotted IP preserved", bareuser.host, "ubuntu@194.14.47.19")
+    // ── bare alias (no dot) left for ~/.ssh/config User directive ──────────
+    let alias = _resolve_model("mypod", 0, "", "", 0, "", "")
+    _ck_str("bare alias (no dot) untouched", alias.host, "mypod")
 
     // ── port injection: resolved port appended when no explicit --port ─────
     let opts0 = _apply_resolved_port([], both)
