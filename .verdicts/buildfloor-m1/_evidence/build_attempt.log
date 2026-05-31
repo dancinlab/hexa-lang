@@ -1,0 +1,2 @@
+build_hexa_cloud: transpiler not found (tried: /Users/mini/dancinlab/hexa-lang/.claude/worktrees/agent-af16f2dd00cb1ce56/build/hexa_v2 | /Users/mini/dancinlab/hexa-lang/.claude/worktrees/agent-af16f2dd00cb1ce56/self/native/hexa_v2)
+EXIT=1
