@@ -14,6 +14,7 @@ use "compiler/lower/hir_to_mir"
 use "compiler/atlas/static_index"
 use "compiler/ir/mir"
 use "compiler/codegen/nvptx_target"
+use "stdlib/cloud/cloud_commands"
 // ═══════════════════════════════════════════════════════════
 //  self/main.hexa — HEXA CLI 엔트리 (go/cargo 스타일)
 //
@@ -6902,34 +6903,33 @@ if len(av) < 3 {
             println("")
             println("registry: ~/.hx/cloud/active-pods.json (atomic · M5) · also ./pods.json work rows")
             println("")
-            println("pod lifecycle (runpod):")
-            println("  cloud rent      <provider> [--gpu T] [--image IMG] [--disk GiB] [--owner TAG] [--project NAME] [--query Q] [--max-wait-sec N] [--no-register]")
-            println("  cloud list                                               list tracked pods (alias: pods)")
-            println("  cloud pods [--json]                                      list pods (machine-readable with --json)")
-            println("  cloud resolve   <id> [--field host|port|user|key]        resolve a pod id to ssh coordinates")
-            println("  cloud ssh-port  <id>                                     print the ssh port for a pod id")
-            println("  cloud down      <id>                                     destroy a pod (alias: destroy)")
-            println("  cloud rm        <id>                                     remove a pod work row (keeps pod)")
-            println("  cloud adopt     <id> --project P --purpose T             register an orphan pod")
-            println("  cloud reap                                               sweep terminated pods from the registry")
-            println("  cloud watchdog                                           reconcile registry vs provider truth")
-            println("")
-            println("remote exec:")
-            println("  cloud run       <host> [conn] -- <argv...>             run argv, wait, exit with its code")
-            println("  cloud exec      <host> [conn] -- <shell-cmd>           run shell command via ssh (DEFAULT SHELL PARSES IT)")
-            println("  cloud nohup     <host> <logfile> [conn] -- <argv...>   background argv, print remote pid")
-            println("  cloud fire      <host> [--log <path>] [conn] [--env K=V] [--source P] [--early-life-check N] [--register [<jid>]] -- <argv...>   atomic nohup + auto-log + Monitor handle")
-            println("  cloud poll      <host> <pid> [conn]                    exit 0 if remote pid alive, else 1")
-            println("  cloud tail      <host> <logfile> [--follow] [conn]    stream a remote logfile")
-            println("  cloud copy-to   <host> <local> <remote> [conn]         upload local file to host:remote (scp)")
-            println("  cloud copy-from <host> <remote> <local> [conn]         download host:remote file to local (scp)")
-            println("")
-            println("preflight + audit:")
-            println("  cloud preflight <model-bytes> <gpu> [--batch N]        closed-form GPU mem budget (no spinup)")
-            println("  cloud dispatch  <provider> ...                         low-level provider dispatch")
-            println("  cloud parallel-audit --physcores N --live-jobs N --ranks-per-job N --queued-decks N")
-            println("  cloud providers                                          list known providers")
-            println("")
+            // verb roster rendered from the SAME in-source SSOT the binary's
+            // _cloud_help iterates (stdlib/cloud/cloud_commands::cloud_commands).
+            // No hand-typed verb list survives here — a verb added to dispatch
+            // without a COMMANDS row is caught by cloud_help_drift_test.
+            let __cc_groups = ["lifecycle", "manage", "exec", "io", "plan", "meta"]
+            let __cc = cloud_commands()
+            let mut __cgi = 0
+            while __cgi < len(__cc_groups) {
+                let __cg = __cc_groups[__cgi]
+                __cgi = __cgi + 1
+                println(__cg + ":")
+                let mut __cci = 0
+                while __cci < len(__cc) {
+                    let __c = __cc[__cci]
+                    __cci = __cci + 1
+                    if __c.group != __cg {
+                        continue
+                    }
+                    let mut __ch = "  cloud " + __c.name
+                    if len(__c.args) > 0 {
+                        __ch = __ch + " " + __c.args
+                    }
+                    println(__ch)
+                    println("      " + __c.summary)
+                }
+                println("")
+            }
             println("connection flags [conn] (before `--`):")
             println("  --port <n>   ssh to a non-22 port (RunPod / vast.ai)")
             println("  --insecure   accept a changing/unknown host key (ephemeral pods)")
