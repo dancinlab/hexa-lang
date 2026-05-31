@@ -1362,6 +1362,27 @@ fn _builtin_runtime_sym(name: string) -> string {
     if name == "write_file"    { return "rt_write_file" }
     if name == "sha256"        { return "hexa_sha256" }
     if name == "sha256_file"   { return "hexa_sha256_file" }
+    // N5-sym class-B: native obj-emit left these intrinsics unmapped →
+    // fell through to the bare name → undefined at self-host link (the
+    // native compiler object references `_list_dir` while the runtime
+    // exports `_hexa_list_dir`). All 5 are HexaVal-in/HexaVal-out with no
+    // cstring/ret-box shape, so the generic STMT_CALL emit lowers them
+    // verbatim (arg pairs → x0:x1…, bl, x0:x1 → dst) — same as the math
+    // block above. Each target is the AUTHORITATIVE one self/codegen.hexa's
+    // C-string path emits (byte_len→hexa_byte_len · bytes_to_str_raw→
+    // hexa_bytes_to_str_raw · list_dir→hexa_list_dir · mono_ns→hexa_mono_ns ·
+    // keys-method→hexa_map_keys) and is VERIFIED present in self/runtime.c.
+    // `keys` lowers as a method STMT_CALL with the receiver as first arg
+    // (cf. `find` → hexa_find_poly).
+    // DEFERRED (mis-mapped is worse than unmapped — this file's policy):
+    // `get`/`set` need the key hexa_to_cstring'd (map ABI takes const char*),
+    // `mkdir` collides with libc mkdir, `byte_at` resolves via cg_string_sym
+    // (rt_*_v vs hexa_* ambiguous), `sha256_hex` target unconfirmed.
+    if name == "byte_len"      { return "hexa_byte_len" }
+    if name == "bytes_to_str_raw" { return "hexa_bytes_to_str_raw" }
+    if name == "list_dir"      { return "hexa_list_dir" }
+    if name == "mono_ns"       { return "hexa_mono_ns" }
+    if name == "keys"          { return "hexa_map_keys" }
     // Low-level memory / pointer builtins — name -> runtime symbol.
     // Authoritative mapping mirrored from self/codegen_c2.hexa §G5/B3.
     // All take/return HexaVal pairs so the generic STMT_CALL emit path
