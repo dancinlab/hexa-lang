@@ -1,0 +1,6 @@
+0000000    #   !   h   e   x   a       s   t   r   i   c   t  \n   /   /
+0000016        r   u   n   t   i   m   e   _   c   o   r   e   _   e   m
+0000032    i   t   .   h   e   x   a  \n   /   /               B   9   .
+0566816    _   p   a   t   h   )  \n                   e   x   i   t   (
+0566832    0   )  \n   }  \n                                            
+0566837

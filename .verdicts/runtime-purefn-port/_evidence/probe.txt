@@ -1,0 +1,24 @@
+# Evidence captured 2026-05-31T10:23:53Z — RUNTIME milestone A feasibility probe
+
+## 1. runtime source blobs in git HEAD are 100% NUL (corrupted placeholders)
+self/runtime_core_emit.hexa     HEAD_bytes=  566837 nonnull_bytes=  566837 md5=86a28dea0a1a56bdfc27b23ad2813590
+self/runtime.hexa               HEAD_bytes=   34953 nonnull_bytes=   34953 md5=c6aad7fccfba681ddb35f3059c5ecc63
+self/runtime_core.hexa          HEAD_bytes=   22217 nonnull_bytes=   22217 md5=92652a7974139dc5d201026848f71f6c
+self/runtime.h                  HEAD_bytes=  107932 nonnull_bytes=  107932 md5=863cf60b3034115c813c5b51a3b4e318
+self/runtime_pure.hexa          HEAD_bytes=   18155 nonnull_bytes=   18155 md5=91696ecf9a5d228a78cc3ab0bf9b0668
+self/runtime.c.hexanoport       HEAD_bytes=     209 nonnull_bytes=     209 md5=dd387a70c96d8f9b2ef264b96cc6cb7a
+
+## 2. working-tree disk matches (clean checkout, not a glitch)
+self/runtime_core_emit.hexa     disk_bytes=  566837 nonnull_bytes=  566837 md5=86a28dea0a1a56bdfc27b23ad2813590
+self/runtime.hexa               disk_bytes=   34953 nonnull_bytes=   34953 md5=c6aad7fccfba681ddb35f3059c5ecc63
+self/runtime.c.hexanoport       disk_bytes=     209 nonnull_bytes=     209 md5=dd387a70c96d8f9b2ef264b96cc6cb7a
+
+## 3. wiring symbol _builtin_runtime_sym repo-wide occurrences:
+   grep -rl _builtin_runtime_sym . | wc -l = 7
+## 4. floor candidate symbols (hexa_rt_*) in actual .hexa/.h source:
+(eval):20: no matches found: --include=*.hexa
+   grep -rl hexa_rt_ --include=*.hexa --include=*.h | wc -l = 0
+   (only occurrence = RUNTIME.floor.md doc table, NOT emitted code)
+## 5. hexa CLI availability: /Users/mini/.hx/bin/hexa
+## 6. no runtime.o / built artifact present:
+   find runtime.o = [none]
