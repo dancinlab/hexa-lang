@@ -1,0 +1,159 @@
+// ════════════════════════════════════════════════════════════════════════════
+//  gn_lib.hexa — flame GroupNorm (fwd + bwd), hexa-native.
+//
+//  Op 2/4 of the CLM-ConvMoE flame port (FLAME.tape n_clm_convmoe_port_gap ·
+//  anima a_train_flame_forge · CLM/P6_SCALE_LADDER_7B). CLM uses GroupNorm in
+//  the trunk (per CausalDilatedConv1d block) and at norm_out (2·d affine each).
+//
+//  Layout (host farr, time-major to match conv_lib): X : [T · C], affine
+//  gamma/beta : [C], output Y : [T · C]. G groups, Cg = C/G channels each
+//  (C must be divisible by G). PyTorch GroupNorm semantics: per group, mean &
+//  var over the (Cg channels × T positions) of that group; affine per-channel.
+//    mu_g   = mean_{c∈g, t} X[t,c]
+//    var_g  = mean_{c∈g, t} (X[t,c]-mu_g)²
+//    inv_g  = 1/sqrt(var_g + eps)
+//    xhat[t,c] = (X[t,c]-mu_g)·inv_g ; Y[t,c] = gamma[c]·xhat[t,c] + beta[c]
+//
+//  fwd caches mean_out[G], inv_out[G], xhat_out[T·C] for bwd. Verified by
+//  F-FLAME-GN-GRAD-EXACT (flame_gn_test.hexa, central finite-diff).
+//  lib-split. sibling: conv_lib.hexa · nn_lib.hexa · tensor_lib.hexa.
+// ════════════════════════════════════════════════════════════════════════════
+
+use "stdlib/flame/tensor_lib"
+
+fn _gn_sqrt(x: float) -> float {
+    // Newton-Raphson sqrt (matches nn_lib _nn_sqrt discipline; libm-free path
+    // not assumed). x >= 0 by construction (var + eps).
+    if x <= 0.0 { return 0.0 }
+    let mut g = x
+    let mut i = 0
+    while i < 40 {
+        g = 0.5 * (g + x / g)
+        i = i + 1
+    }
+    return g
+}
+
+// Forward. Caller allocates y_out [T·C], mean_out [G], inv_out [G],
+// xhat_out [T·C]. eps = 1e-5 (PyTorch GroupNorm default).
+pub fn nn_groupnorm_fwd(x: int, gamma: int, beta: int,
+                        y_out: int, mean_out: int, inv_out: int, xhat_out: int,
+                        T: int, C: int, G: int) {
+    let eps = 0.00001
+    let cg = C / G
+    let m = to_float(cg * T)
+    let mut g = 0
+    while g < G {
+        let c0 = g * cg
+        // mean over group
+        let mut sum = 0.0
+        let mut t = 0
+        while t < T {
+            let mut c = 0
+            while c < cg {
+                sum = sum + t_get(x, t * C + (c0 + c))
+                c = c + 1
+            }
+            t = t + 1
+        }
+        let mu = sum / m
+        // var over group
+        let mut vs = 0.0
+        let mut t2 = 0
+        while t2 < T {
+            let mut c2 = 0
+            while c2 < cg {
+                let d = t_get(x, t2 * C + (c0 + c2)) - mu
+                vs = vs + d * d
+                c2 = c2 + 1
+            }
+            t2 = t2 + 1
+        }
+        let var = vs / m
+        let inv = 1.0 / _gn_sqrt(var + eps)
+        t_set(mean_out, g, mu)
+        t_set(inv_out, g, inv)
+        // xhat + affine
+        let mut t3 = 0
+        while t3 < T {
+            let mut c3 = 0
+            while c3 < cg {
+                let ch = c0 + c3
+                let xh = (t_get(x, t3 * C + ch) - mu) * inv
+                t_set(xhat_out, t3 * C + ch, xh)
+                t_set(y_out, t3 * C + ch, t_get(gamma, ch) * xh + t_get(beta, ch))
+                c3 = c3 + 1
+            }
+            t3 = t3 + 1
+        }
+        g = g + 1
+    }
+}
+
+// Backward — standard group-norm vjp. Inputs: cached xhat, inv (per group),
+// gamma, and upstream dy. Caller allocates dgamma_out [C], dbeta_out [C],
+// dX_out [T·C]. Reductions:
+//   dgamma[c] = Σ_t dy[t,c]·xhat[t,c]
+//   dbeta[c]  = Σ_t dy[t,c]
+//   within group g (M = cg·T elements), with dxhat = dy·gamma:
+//     s1 = Σ dxhat ; s2 = Σ dxhat·xhat
+//     dX[t,c] = inv_g·(dxhat[t,c] − s1/M − xhat[t,c]·s2/M)
+pub fn nn_groupnorm_bwd(xhat: int, inv: int, gamma: int, dy: int,
+                        dgamma_out: int, dbeta_out: int, dX_out: int,
+                        T: int, C: int, G: int) {
+    let cg = C / G
+    let m = to_float(cg * T)
+    // dgamma, dbeta (per channel)
+    let mut c = 0
+    while c < C {
+        let mut sg = 0.0
+        let mut sb = 0.0
+        let mut t = 0
+        while t < T {
+            let idx = t * C + c
+            let gy = t_get(dy, idx)
+            sg = sg + gy * t_get(xhat, idx)
+            sb = sb + gy
+            t = t + 1
+        }
+        t_set(dgamma_out, c, sg)
+        t_set(dbeta_out, c, sb)
+        c = c + 1
+    }
+    // dX per group
+    let mut g = 0
+    while g < G {
+        let c0 = g * cg
+        let inv_g = t_get(inv, g)
+        // s1 = Σ dxhat ; s2 = Σ dxhat·xhat   over the group
+        let mut s1 = 0.0
+        let mut s2 = 0.0
+        let mut t = 0
+        while t < T {
+            let mut cc = 0
+            while cc < cg {
+                let ch = c0 + cc
+                let idx = t * C + ch
+                let dxh = t_get(dy, idx) * t_get(gamma, ch)
+                s1 = s1 + dxh
+                s2 = s2 + dxh * t_get(xhat, idx)
+                cc = cc + 1
+            }
+            t = t + 1
+        }
+        let mut t2 = 0
+        while t2 < T {
+            let mut cc2 = 0
+            while cc2 < cg {
+                let ch = c0 + cc2
+                let idx = t2 * C + ch
+                let dxh = t_get(dy, idx) * t_get(gamma, ch)
+                let dx = inv_g * (dxh - s1 / m - t_get(xhat, idx) * s2 / m)
+                t_set(dX_out, idx, dx)
+                cc2 = cc2 + 1
+            }
+            t2 = t2 + 1
+        }
+        g = g + 1
+    }
+}
