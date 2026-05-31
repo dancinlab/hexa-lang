@@ -779,6 +779,16 @@ fn _dft_pseudo_cmd() -> str {
         + "miss=0; for upf in $need; do "
         + "[ -s \"pseudo/$upf\" ] || wget -q --tries=3 --timeout=30 -O \"pseudo/$upf\" "
         + "\"https://pseudopotentials.quantum-espresso.org/upf_files/$upf\" 2>/dev/null; "
+        // DISABLE GIPAW reconstruction in every fetched UPF. PSL-1.0.0 pseudos
+        // declare has_gipaw="true" and carry a GIPAW (NMR/EPR) reconstruction
+        // section whose format-version the apt QE UPF-v2 reader chokes on —
+        // pw.x dies on relax with `end of file reached, tag PP_GIPAW_ORBITALS
+        // not found` (exit 2). el-ph / scf / relax / phonon NEVER use GIPAW, so
+        // flipping the header flag makes pw.x skip the section entirely (no read,
+        // no EOF crash). Confirmed: Li2MgH16 @250GPa failed 3× this way (NOT OOM
+        // — the pod had 238 GB free), 2026-05-31. QE-users mail-archive recommends
+        // patching the GIPAW format-version; disabling the unused flag is simpler.
+        + "[ -s \"pseudo/$upf\" ] && sed -i 's/has_gipaw=\"true\"/has_gipaw=\"false\"/' \"pseudo/$upf\"; "
         + "[ -s \"pseudo/$upf\" ] || { echo \"PSEUDO_MISS $upf\"; miss=1; }; done; "
         + "[ \"$miss\" = 0 ] && echo \"PSEUDO OK\" || echo \"PSEUDO FAIL\""
 }
