@@ -1,0 +1,6 @@
+{
+ "build/hexa_v2": 1930080,
+ "build/hexa_module_loader": 490496,
+ "build/self/runtime.c": 629579,
+ "build/self/runtime.h": 100189
+}

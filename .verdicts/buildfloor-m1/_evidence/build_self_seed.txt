@@ -1,0 +1,17 @@
+{
+ "copied_count": 52,
+ "spot_check_present": {
+  "forge/forge_tier_v1.c": 17795,
+  "forge/forge_tier_v1.h": 7412,
+  "native/crypto_blowfish.c": 23097,
+  "native/net.c": 28226,
+  "native/pty.c": 10728,
+  "native/signal_flock.c": 11963,
+  "native/tensor_kernels.c": 12015,
+  "native/thread.c": 10705,
+  "native/wait.c": 2917,
+  "runtime.c": 629579,
+  "runtime.h": 100189,
+  "runtime_core.c": 372517
+ }
+}

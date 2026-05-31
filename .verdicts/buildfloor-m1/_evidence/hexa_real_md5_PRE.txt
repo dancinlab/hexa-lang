@@ -1,1 +1,3 @@
-MD5 (/Users/mini/.hx/bin/hexa.real) = 7493583ecd76b9214b0b9d6d7726ec64
+path=/Users/mini/.hx/bin/hexa.real
+size=1651728
+md5=7493583ecd76b9214b0b9d6d7726ec64

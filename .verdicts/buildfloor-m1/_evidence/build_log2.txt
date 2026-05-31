@@ -1,0 +1,11 @@
+rc=0
+--STDOUT--
+[build_hexa_cloud] src=/Users/mini/dancinlab/hexa-lang/.claude/worktrees/agent-ad2240d8ec720abeb/stdlib/cloud/cloud_cli.hexa
+[build_hexa_cloud] out=/Users/mini/dancinlab/hexa-lang/.claude/worktrees/agent-ad2240d8ec720abeb/bin/hexa-cloud
+[build_hexa_cloud] transpiler=/Users/mini/dancinlab/hexa-lang/.claude/worktrees/agent-ad2240d8ec720abeb/build/hexa_v2
+[build_hexa_cloud] runtime.c=/Users/mini/dancinlab/hexa-lang/.claude/worktrees/agent-ad2240d8ec720abeb/build/self/runtime.c
+[build_hexa_cloud] BUILD OK -> /Users/mini/dancinlab/hexa-lang/.claude/worktrees/agent-ad2240d8ec720abeb/bin/hexa-cloud
+[build_hexa_cloud] (build only — pass `-- --install` to codesign + install to ~/.hx/bin/bin/hexa-cloud)
+
+--STDERR--
+

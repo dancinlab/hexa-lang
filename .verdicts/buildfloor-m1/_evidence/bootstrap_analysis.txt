@@ -1,0 +1,89 @@
+HEXA-BUILDFLOOR M1 build/smoke gate — bootstrap analysis (in-process verified)
+Date: 2026-05-31 (sign window active)
+Worktree: /Users/mini/dancinlab/hexa-lang/.claude/worktrees/agent-ad2240d8ec720abeb
+Branch: worktree-agent-ad2240d8ec720abeb  HEAD: 0a2b8c2f857b5bb486177a36c0be164f3045ef72
+
+== SAFETY PRE (in-process hashlib.md5) ==
+~/.hx/bin/hexa.real  size=1651728  md5=7493583ecd76b9214b0b9d6d7726ec64
+(saved verbatim to hexa_real_md5_PRE.txt)
+
+== M1 code deliverable (the 3 path fixes) — VERIFIED PRESENT on builder ==
+tool/build_hexa_cloud.hexa (md5 7aa0f397ccb10939936ae9e4dcb52d60, 12686 bytes):
+  L192-194  transpiler   = _resolve(... repo+"/build/hexa_v2" , repo+"/self/native/hexa_v2")
+  L201-203  runtime_c    = _resolve(... repo+"/build/self/runtime.c" , repo+"/self/runtime.c")
+  L206      inc_gen      = repo+"/build/self"   (-I build/self for runtime.h)
+  => all 3 fixes are merged; builder is correct. M1 CODE portion DONE.
+
+== Prereq artifacts in THIS worktree (in-process os.path.getsize) — ALL ABSENT ==
+  build/hexa_v2            ABSENT
+  build/hexa_module_loader ABSENT
+  build/self/runtime.c     ABSENT
+  build/self/runtime.h     ABSENT
+  self/runtime.c           ABSENT   (gitignored / generated; only self/runtime.h present, 107932 B)
+  self/runtime_core.c      ABSENT
+  self/runtime_hi_gen.c    ABSENT
+  self/native/hexa_cc.c    ABSENT   (gitignored regen-source)
+  self/native/hexa_v2      ABSENT
+  bin/hexa-cloud           ABSENT
+
+== Canonical bootstrap = tool/build_hexa_cli.hexa (1053 lines) ==
+  - It builds build/hexat (transpiler), build/hexa_module_loader, and copies
+    self/runtime.c -> build/self/runtime.c + runtime.h (Step 4b L962-969).
+  - It does NOT emit build/hexa_v2 (only build/hexat). The cloud builder's
+    primary path wants build/hexa_v2; its fallback wants self/native/hexa_v2.
+  - Step 0 (L623-637): warm bootstrap REQUIRES either pre-built build/hexat
+    OR present self/native/hexa_cc.c. BOTH ABSENT in this worktree.
+  - L613-622 (WARM-SEED ONLY, 2026-05-30): cold-seed self/native/hexa_cc_seed.c
+    was REMOVED by user decision. "Cold-boot from a bare clone is intentionally
+    NOT supported." build_hexa_cli will _die: "no bootstrap hexa on PATH".
+  - Mac gate: _refuse_local_on_mac() requires LOCAL_BUILD=1 (sign window covers).
+
+  => The canonical in-worktree bootstrap CANNOT run from this state: the two
+     required seed inputs (build/hexat, self/native/hexa_cc.c) AND runtime.c
+     are all gitignored/generated and absent. Plus build_hexa_cli emits
+     build/hexat, not the build/hexa_v2 the cloud builder wants.
+
+== Installed toolchain (~/.hx) HAS pre-built artifacts (candidate seed source) ==
+  ~/.hx/bin/hexa_v2                        size=1930080  (Mach-O transpiler)
+  ~/.hx/bin/hexa_module_loader             size=1953968  (Mach-O)
+  ~/.hx/bin/build/hexa_v2                  size=1930080
+  ~/.hx/bin/build/hexa_module_loader       size=1923904
+  ~/.hx/src/self/runtime.c                 size=950662   (real C source)
+  ~/.hx/src/self/runtime.h                 size=107932
+  ~/.hx/src/self/runtime_core.c            size=173934
+  ~/.hx/src/self/runtime_hi_gen.c          size=187931
+  ~/.hx/src/self/native/hexa_cc.c          size=1448327
+  ~/.hx/src/self/native/hexa_v2            size=1925816
+  (NOTE: some sizes above were read while the bash output-trim kernel was
+   actively corrupting stdout — runtime.c size cross-checked from ~/.hx/src
+   via os.path.getsize in a clean call; the binary sizes are consistent
+   across bin/ and bin/build/ and match the transpiler magnitude.)
+
+== STATUS: HONEST-STOP (channel failure) ==
+After establishing the above, the Bash stdout channel went fully silent for
+this turn (no stdout returned for any call) and Read began truncating after
+line 1 and INJECTED a fabricated "[truncated by kernel]" string that the
+producing Python never wrote. Per the anti-fabrication mandate (L2, highest),
+I did NOT run the heavy bootstrap/build/smoke while unable to verify their
+outputs in-process. A fabricated smoke PASS is worse than an honest blocked.
+
+== NEXT (resumable) viable bootstrap path (NOT yet executed/verified) ==
+Seed the 3 artifacts into the worktree build/ from the installed toolchain,
+then run the cloud builder. Concretely (to be run + in-process verified next
+turn when the channel recovers, under LOCAL_BUILD=1 + sign window):
+  1. mkdir -p build build/self
+  2. cp ~/.hx/bin/build/hexa_v2            build/hexa_v2
+     cp ~/.hx/bin/build/hexa_module_loader build/hexa_module_loader
+     cp ~/.hx/src/self/runtime.c           build/self/runtime.c
+     cp ~/.hx/src/self/runtime.h           build/self/runtime.h
+     (codesign -s - the two Mach-O binaries on Darwin to avoid Killed:9)
+  3. In-process getsize all 4 -> artifacts_after_bootstrap.txt
+  4. HEXA_LANG=$PWD NO_SMOKE=1 hexa run tool/build_hexa_cloud.hexa
+  5. In-process getsize bin/hexa-cloud; then bin/hexa-cloud --help -> help_smoke.txt
+  6. SAFETY POST md5 hexa.real; assert == PRE.
+CAVEAT to validate: the installed hexa_v2/module_loader are a DIFFERENT build
+than this worktree's stdlib; transpiler+loader are stdlib-agnostic tools so
+reuse is legitimate, but the cgen they produce from THIS worktree's
+cloud_cli.hexa must still link against build/self/runtime.c. The runtime.c
+ABI must match the transpiler's emitted C — both come from the same installed
+toolchain generation, so this is the consistent pairing to use.
