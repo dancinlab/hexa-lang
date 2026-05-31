@@ -1,0 +1,126 @@
+// self/core_commands.hexa — the SINGLE in-source SSOT for the hexa CORE
+// TOOLCHAIN verb roster (name · group · summary · arg-shape).
+//
+// ARCHITECTURE (mirrors stdlib/cloud/cloud_commands.hexa, the proven pilot):
+// one in-binary hexa array literal `core_commands()` is the truth for the
+// core-toolchain verb roster. The per-verb help renderer (cmd_verb_help in
+// self/main.hexa) iterates THIS array; the top-level dispatch guard's
+// canonical core verb set is bound equal to it by the S5 drift test. There is
+// NO `.tape` file, NO codegen, NO hash guard, and NOTHING is read_file'd at
+// runtime — the registry compiles INTO the binary, so `hx install` users with
+// no repo get correct help.
+//
+// group ∈ { run | build | inspect | infra | format } — render section.
+// `args` is the full signature shown after the verb; the per-verb help body in
+// cmd_verb_help renders `hexa <name> <args>` then the `summary` lines (one per
+// `\n`-split segment). Verbs whose help routes to a sub-CLI subverb table
+// (cache · daemon) carry group "infra"; their rows exist for drift-coverage
+// and the top-level catalog, and their detail lives in cmd_cache / cmd_daemon.
+
+struct Cmd {
+    name:    str,
+    group:   str,
+    summary: str,
+    args:    str
+}
+
+// core_commands — the core-toolchain verb roster. Order within a group is the
+// render order. The `summary` may carry multiple lines, '\n'-separated; the
+// renderer prints each indented under the signature.
+fn core_commands() -> [Cmd] {
+    return [
+        // ── run — execute / launch ───────────────────────────────────────
+        Cmd { name: "run", group: "run",
+            args: "[--no-sentinel] <file> [args...]",
+            summary: "Compile a .hexa script to a native binary, then exec it (interp retired).\nargs...        forwarded to the script as argv\n--no-sentinel  drop the trailing __HEXA_RC=N stdout sentinel (clean pipe)" },
+        Cmd { name: "batch", group: "run",
+            args: "<file1.hexa> [file2.hexa ...]",
+            summary: "Compile-and-run N scripts under ONE dispatcher boot (ω-hexa-batch).\nfiles...       positional .hexa paths (manifest/stdin list deferred)" },
+
+        // ── build — compile / link ───────────────────────────────────────
+        Cmd { name: "build", group: "build",
+            args: "<file> [-o out] [--target=<t>] [--shared] [--c-only]",
+            summary: "Compile a .hexa file to a native binary (RFC-018 5-stage IR; atlas baked in).\n-o out         output path (default build/artifacts/app)\n--target=<t>   cross-compile target triple\n--shared       emit a shared library (.so/.dylib; -fPIC -shared)\n--c-only       stop after C emission (no clang link)" },
+        Cmd { name: "cc", group: "build",
+            args: "[--regen]",
+            summary: "Rebuild the transpiler (hexa_cc — the C-seed compiler, go-tool-compile style).\n--regen        run the full auto-regeneration pipeline" },
+        Cmd { name: "typecheck", group: "build",
+            args: "<file>",
+            summary: "Opt-in type-checker pass over <file> (diagnostics only, no codegen)." },
+
+        // ── inspect — analyze / verify without producing a binary ─────────
+        Cmd { name: "test", group: "inspect",
+            args: "<file> [--filter NAME] [--verbose] [--selftest-only]",
+            summary: "Run the @test fns in <file> via the native test runner.\n--filter NAME  run only @test fns whose name contains NAME\n--verbose      per-test output" },
+        Cmd { name: "parse", group: "inspect",
+            args: "<file>",
+            summary: "Parse-only syntactic check — no codegen, no exec. Exit 0 OK, 1 on error." },
+        Cmd { name: "check", group: "inspect",
+            args: "<file>",
+            summary: "Verify @invariant DSL blocks (AST-based predicate check). Exit 0 OK, else nonzero." },
+        Cmd { name: "bench", group: "inspect",
+            args: "<file> [--runs N] [--json] [--compare <bin>]",
+            summary: "Benchmark wall/RSS/alloc over N runs (default 3).\n--json             machine-readable output\n--compare <bin>    A/B against another binary" },
+        Cmd { name: "status", group: "inspect",
+            args: "",
+            summary: "Print toolchain status (transpiler / installed binaries / repo root)." },
+        Cmd { name: "version", group: "inspect",
+            args: "    (also: --version, -v)",
+            summary: "Print the version string + build hash." },
+
+        // ── infra — toolchain plumbing ───────────────────────────────────
+        Cmd { name: "lsp", group: "infra",
+            args: "",
+            summary: "Start the LSP server (stdin/stdout JSON-RPC) for editor integration." },
+        Cmd { name: "init", group: "infra",
+            args: "<dir> [--name N]",
+            summary: "Scaffold <dir>/project.hexa + main.hexa. Refuses to clobber an existing project.\n--name N       project name (default = basename of <dir>)" },
+        Cmd { name: "cache", group: "infra",
+            args: "<stat|list|verify|clean>",
+            summary: "Manage ~/.hexa-cache/ (go clean -cache parity). `hexa cache --help` for subverbs." },
+        Cmd { name: "daemon", group: "infra",
+            args: "<start|start-bg|stop|status|echo|compile>",
+            summary: "Per-user compile daemon over a unix socket. `hexa daemon --help` for subverbs." },
+
+        // ── format — embedded-format readers / dispatch ──────────────────
+        Cmd { name: "convergence", group: "format",
+            args: "<dump|dump-meta> <file>",
+            summary: "Scan source-embedded @convergence metadata → JSON dump.\ndump <file>        emit the convergence blocks as JSON\ndump-meta <file>   emit only the metadata header" },
+        Cmd { name: "tape", group: "format",
+            args: "<file.tape>",
+            summary: "Native .tape v1.2 reader — dump the parsed directive tree. Exit 0 OK, 2 misuse." },
+        Cmd { name: "hxc", group: "format",
+            args: "<file.hxc>",
+            summary: "Generic HXC v2 wire decoder — dump the decoded record stream. Exit 0 OK, 2 misuse." },
+        Cmd { name: "url", group: "format",
+            args: "<hexa://...>",
+            summary: "Dispatch a hexa:// URL (e.g. 'hexa://run?file=/path/script.hexa&args=foo')." }
+    ]
+}
+
+// core_command_names — the canonical core verb set (render/iteration order).
+fn core_command_names() -> [str] {
+    let cmds = core_commands()
+    let mut out = []
+    let mut i = 0
+    while i < len(cmds) {
+        out.push(cmds[i].name)
+        i = i + 1
+    }
+    return out
+}
+
+// core_command_lookup — return the Cmd row for `verb`, or a sentinel row with
+// name "" if not in the core roster. Used by cmd_verb_help to render a verb's
+// per-verb help from the SSOT row.
+fn core_command_lookup(verb: str) -> Cmd {
+    let cmds = core_commands()
+    let mut i = 0
+    while i < len(cmds) {
+        if cmds[i].name == verb {
+            return cmds[i]
+        }
+        i = i + 1
+    }
+    return Cmd { name: "", group: "", summary: "", args: "" }
+}

@@ -15,6 +15,7 @@ use "compiler/atlas/static_index"
 use "compiler/ir/mir"
 use "compiler/codegen/nvptx_target"
 use "stdlib/cloud/cloud_commands"
+use "self/core_commands"
 // ═══════════════════════════════════════════════════════════
 //  self/main.hexa — HEXA CLI 엔트리 (go/cargo 스타일)
 //
@@ -261,76 +262,29 @@ fn cmd_help() {
 // own a sub-CLI binary (atlas/qrng/qmirror/cloud/loop/gpu/sim-universe) keep
 // delegating --help to their own binary; this covers the core toolchain 11.
 fn cmd_verb_help(verb) {
-    if verb == "run" {
-        println("hexa run [--no-sentinel] <file> [args...]")
-        println("  Compile a .hexa script to a native binary, then exec it (interp retired).")
-        println("  args...        forwarded to the script as argv")
-        println("  --no-sentinel  drop the trailing __HEXA_RC=N stdout sentinel (clean pipe)")
-    } else if verb == "build" {
-        println("hexa build <file> [-o out] [--target=<t>] [--shared] [--c-only]")
-        println("  Compile a .hexa file to a native binary (RFC-018 5-stage IR; atlas baked in).")
-        println("  -o out         output path (default build/artifacts/app)")
-        println("  --target=<t>   cross-compile target triple")
-        println("  --shared       emit a shared library (.so/.dylib; -fPIC -shared)")
-        println("  --c-only       stop after C emission (no clang link)")
-    } else if verb == "test" {
-        println("hexa test <file> [--filter NAME] [--verbose] [--selftest-only]")
-        println("  Run the @test fns in <file> via the native test runner.")
-        println("  --filter NAME  run only @test fns whose name contains NAME")
-        println("  --verbose      per-test output")
-    } else if verb == "parse" {
-        println("hexa parse <file>")
-        println("  Parse-only syntactic check — no codegen, no exec. Exit 0 OK, 1 on error.")
-    } else if verb == "check" {
-        println("hexa check <file>")
-        println("  Verify @invariant DSL blocks (AST-based predicate check). Exit 0 OK, else nonzero.")
-    } else if verb == "typecheck" {
-        println("hexa typecheck <file>")
-        println("  Opt-in type-checker pass over <file> (diagnostics only, no codegen).")
-    } else if verb == "bench" {
-        println("hexa bench <file> [--runs N] [--json] [--compare <bin>]")
-        println("  Benchmark wall/RSS/alloc over N runs (default 3).")
-        println("  --json             machine-readable output")
-        println("  --compare <bin>    A/B against another binary")
-    } else if verb == "cc" {
-        println("hexa cc [--regen]")
-        println("  Rebuild the transpiler (hexa_cc — the C-seed compiler, go-tool-compile style).")
-        println("  --regen        run the full auto-regeneration pipeline")
-    } else if verb == "lsp" {
-        println("hexa lsp")
-        println("  Start the LSP server (stdin/stdout JSON-RPC) for editor integration.")
-    } else if verb == "init" {
-        println("hexa init <dir> [--name N]")
-        println("  Scaffold <dir>/project.hexa + main.hexa. Refuses to clobber an existing project.")
-        println("  --name N       project name (default = basename of <dir>)")
-    } else if verb == "status" {
-        println("hexa status")
-        println("  Print toolchain status (transpiler / installed binaries / repo root).")
-    } else if verb == "version" {
-        println("hexa version    (also: --version, -v)")
-        println("  Print the version string + build hash.")
-    // ─── CANON M11: in-tree TOOLCHAIN drawer verbs (batch/tape/hxc/url/convergence) ───
-    } else if verb == "batch" {
-        println("hexa batch <file1.hexa> [file2.hexa ...]")
-        println("  Compile-and-run N scripts under ONE dispatcher boot (ω-hexa-batch).")
-        println("  files...       positional .hexa paths (manifest/stdin list deferred)")
-    } else if verb == "tape" {
-        println("hexa tape <file.tape>")
-        println("  Native .tape v1.2 reader — dump the parsed directive tree. Exit 0 OK, 2 misuse.")
-    } else if verb == "hxc" {
-        println("hexa hxc <file.hxc>")
-        println("  Generic HXC v2 wire decoder — dump the decoded record stream. Exit 0 OK, 2 misuse.")
-    } else if verb == "url" {
-        println("hexa url <hexa://...>")
-        println("  Dispatch a hexa:// URL (e.g. 'hexa://run?file=/path/script.hexa&args=foo').")
-    } else if verb == "convergence" {
-        println("hexa convergence <dump|dump-meta> <file>")
-        println("  Scan source-embedded @convergence metadata → JSON dump.")
-        println("  dump <file>        emit the convergence blocks as JSON")
-        println("  dump-meta <file>   emit only the metadata header")
-    } else {
+    // CANON M10/M11 — per-verb help is rendered from the in-source SSOT
+    // self/core_commands::core_commands() (compiled in, NOT read_file'd), so
+    // the per-verb signature/summary can never drift from the roster the
+    // top-level catalog and the S5 drift test share. A verb added to dispatch
+    // without a core_commands() row falls through to the full catalog (and
+    // FAILs the drift test). The summary may carry several lines, '\n'-split;
+    // each renders indented under the `hexa <verb> <args>` signature.
+    let row = core_command_lookup(verb)
+    if len(row.name) == 0 {
         // Unknown / sub-CLI verb — fall back to the full catalog.
         cmd_help()
+        return
+    }
+    if len(row.args) > 0 {
+        println("hexa " + row.name + " " + row.args)
+    } else {
+        println("hexa " + row.name)
+    }
+    let lines = row.summary.split("\n")
+    let mut i = 0
+    while i < len(lines) {
+        println("  " + lines[i])
+        i = i + 1
     }
 }
 
