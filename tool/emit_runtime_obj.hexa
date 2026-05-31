@@ -278,9 +278,11 @@ fn macho_obj_wrap_v3(code: [int],
 fn main() {
     println("=== emit_runtime_obj — N3a native runtime .o (_hexa_exit + _hexa_set_args) ===")
 
+    // argv() under `hexa run <script> <OUT>` = [cache_bin, OUT] — the script
+    // path is NOT included, so the output arg is at index 1 (not 2).
     let args = argv()
     let mut out_path = "build/runtime_native.o"
-    if len(args) > 2 { out_path = args[2] }
+    if len(args) > 1 { out_path = args[1] }
 
     // ── Concatenate __text: _hexa_exit (offset 0, 20B) then
     //    _hexa_set_args (offset 20, 4B). Both are leaf/syscall bodies
