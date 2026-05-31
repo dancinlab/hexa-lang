@@ -33,6 +33,7 @@
 # @link <consumer> --uses--> stdlib/<other> # alloc · aura · aws · booksim · bot · brain · cert · ... — provides exist, downstream edges pending
 @domain UNSHADOW := "domains/UNSHADOW.md"
 @domain GPU-ROOFLINE := "domains/GPU-ROOFLINE.md"
+@domain FLAME-PERF := "domains/FLAME-PERF.md"
 @domain HEXA-BUILDFLOOR := "./HEXA-BUILDFLOOR.md"
 @domain HEXA-CC-ZERO := "./HEXA-CC-ZERO.md"
 @domain HEXA-TRAIN-FLOOR := "./HEXA-TRAIN-FLOOR.md"
