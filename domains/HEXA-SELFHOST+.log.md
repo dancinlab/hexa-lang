@@ -37,3 +37,18 @@ drafts/SESSION-HANDOFF-hexa-cc-native.md 참고. 타세션 결과(#2270 N6 phase
   -arch arm64 하드코딩 + hxlcl_* darwin-shim 미배선), darwin 은 사용자 sign 게이트.
 - 수렴: (1)·(4) 같은 뿌리(codegen emit 단) → 3-자식 동시 차단. 레버 = emit 단 1회 개방.
 - 카탈로그 [~] 진전. CC-NATIVE 타세션 중복 진행 → 이 메타로 일원화 완료.
+
+## 2026-05-31 BUILDFLOOR M1 흡수 + 공통-벽 카탈로그 (4)(5) 완성
+
+BUILDFLOOR M1 agent(af16f2dd)는 push 가 reaper 로 전부 취소돼 미착지(PR 0). 그러나
+검증된 발견을 이 커밋이 흡수: build_hexa_cloud.sh = 트리 부재, 이미 hexa-native
+tool/build_hexa_cloud.hexa(PR #2102)로 대체 + 3 fix(build/hexa_v2·build/self/runtime.c·
+-I build/self) 이미 origin/main 에 존재(L31/34/35 검증) = "3경로 수정" 코드 추가 불요.
+
+- M1 [ ]→[~]: 코드 deliverable 검증됨 · build/smoke 는 transpiler 재빌드 sign 게이트로
+  BLOCKED(honest-STOP, @L4 genuine wall). hexa.real md5 PRE==POST 무손상.
+- 공통-벽 카탈로그 [~]: (4) native IO-floor/type-checker (이전 #2271/#2272 string-mismatch
+  로 누락된 것 재착지) + (5) aprime_cc/transpiler 재빌드 = sign/pool 게이트 추가.
+  M1·N5 둘 다 (5) 재빌드 게이트가 공통 블로커임이 드러남.
+- 수렴 확정: 3 codegen honest-STOP(RUNTIME/GPU/CC-NATIVE) + 1 rebuild-gate(BUILDFLOOR)
+  = 메타 4-자식이 2개 공통 벽((1)/(4) emit단 · (5) 재빌드 게이트)으로 수렴.
