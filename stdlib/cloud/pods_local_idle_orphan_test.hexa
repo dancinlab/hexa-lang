@@ -18,6 +18,10 @@ fn _eq_int(case: str, got: int, want: int) {
     if got != want { _fail(case, "got " + str(got) + " want " + str(want)) }
 }
 
+fn _eq_str(case: str, got: str, want: str) {
+    if got != want { _fail(case, "got '" + got + "' want '" + want + "'") }
+}
+
 // _has — 1 iff list contains needle.
 fn _has(xs, needle: str) -> int {
     let mut i = 0
@@ -46,6 +50,33 @@ fn main() {
     _eq_int("c5: no billing pods → 0 orphans", len(pods_local_idle_orphans([], ["v-1"])), 0); n = n + 1
     // c6 — duplicate billing ids must not double-count one orphan.
     _eq_int("c6: dup billing id → 1 orphan (deduped)", len(pods_local_idle_orphans(["v-9", "v-9"], ["v-1"])), 1); n = n + 1
+
+    // ── idle_reap_classify — 3-way liveness classifier ─────────────────
+    // (a) not-active + DEAD (unreachable) → REAP (safe to destroy).
+    _eq_str("c7: not-active+unreachable → REAP", idle_reap_classify(0, -1), "REAP"); n = n + 1
+    // (b) not-active + reachable + idle (zero compute procs) → REAP.
+    _eq_str("c8: not-active+reachable+idle → REAP", idle_reap_classify(1, 0), "REAP"); n = n + 1
+    // (c) not-active + reachable + BUSY (compute proc running) → BUSY_UNMANIFESTED
+    //     (live duplicate — the 38815600 procs=13 case; NEVER reaped).
+    _eq_str("c9: not-active+reachable+busy → BUSY_UNMANIFESTED", idle_reap_classify(1, 1), "BUSY_UNMANIFESTED"); n = n + 1
+    // (d) not-active + reachable + UNKNOWN probe (-1) → BUSY_UNMANIFESTED (fail-safe).
+    _eq_str("c10: not-active+reachable+unknown → BUSY_UNMANIFESTED (failsafe)", idle_reap_classify(1, -1), "BUSY_UNMANIFESTED"); n = n + 1
+
+    // ── deck-state instance_id extraction (active set beyond job.pod) ───
+    let st = "phase=phon\ninstance_id=38815600\nhost=140.150.159.1\nport=29645\n"
+    _eq_str("c11: state instance_id parsed", pods_local_state_instance_id(st), "38815600"); n = n + 1
+    _eq_str("c12: no instance_id line → ''", pods_local_state_instance_id("phase=relax\nhost=x\n"), ""); n = n + 1
+
+    // ── active set membership via state file (job.pod stale, state live) ─
+    // A pod absent from the active job.pod set BUT present as a deck-state
+    // instance_id is in the merged active set → NOT a candidate (set-diff omits it).
+    let merged = pods_local_merge_ids(["v-1"], ["38815600"])
+    _eq_int("c13: merged active includes state id", _has(merged, "38815600"), 1); n = n + 1
+    _eq_int("c14: active-via-state-only omitted from orphans",
+        len(pods_local_idle_orphans(["38815600"], merged)), 0); n = n + 1
+    // and an active-via-job.pod id is likewise omitted.
+    _eq_int("c15: active-via-job.pod omitted from orphans",
+        len(pods_local_idle_orphans(["v-1"], merged)), 0); n = n + 1
 
     println("pods_local_idle_orphan_test PASS — " + str(n) + "/" + str(n) + " cases")
 }

@@ -425,3 +425,98 @@ pub fn pods_local_idle_orphans(billing_ids, active_ids) -> [str] {
     }
     return orphans
 }
+
+// ── deck-state instance ids (LIVE endpoint truth, beyond job.pod) ────────
+// idle-reap's active set used ONLY ./pods.json jobs' `pod` field. But a deck's
+// LIVE endpoint is recorded in <workdir>/.dft_detach.state (`instance_id=`).
+// When job.pod drifts stale (re-fires re-point the real instance), the set-diff
+// false-flags LIVE pods as orphans (19 mis-flagged, 2026-06-01). The active set
+// must ALSO include every instance_id found in the campaign's deck state files.
+
+// pods_local_state_instance_id — PURE: extract the `instance_id=` value from a
+// `.dft_detach.state` blob (KEY=VALUE lines). "" when absent. Network-free so
+// the classifier stays unit-testable; the file read is the caller's concern.
+pub fn pods_local_state_instance_id(raw: str) -> str {
+    let lines = raw.split("\n")
+    let mut i = 0
+    while i < len(lines) {
+        let ln = lines[i]
+        if len(ln) >= 12 && ln.substring(0, 12) == "instance_id=" {
+            return ln.substring(12, len(ln)).trim()
+        }
+        i = i + 1
+    }
+    return ""
+}
+
+// pods_local_state_active_ids — scan jobs' workdir `.dft_detach.state` files PLUS
+// the conventional exports/**/.dft_detach.state tree for live instance_ids. The
+// union with pods_local_active_pod_ids() is the robust active set idle-reap must
+// diff against. Best-effort: a missing/unreadable state file contributes nothing.
+pub fn pods_local_state_active_ids() -> [str] {
+    let mut ids = []
+    // jobs' own workdir state files (dir field → <dir>/.dft_detach.state).
+    let root = _pl_load()
+    let jobs = json_object_get_object(root, "jobs")
+    let job_ids = json_object_keys(jobs)
+    let mut ji = 0
+    while ji < len(job_ids) {
+        let j = json_object_get(jobs, job_ids[ji])
+        let d = json_object_get_str(j, "dir", "")
+        if len(d) > 0 {
+            let sp = d + "/.dft_detach.state"
+            if _pl_path_exists(sp) {
+                let iid = pods_local_state_instance_id(read_file(sp))
+                if len(iid) > 0 && _pl_str_in(ids, iid) == 0 { ids.push(iid) }
+            }
+        }
+        ji = ji + 1
+    }
+    // conventional campaign tree — every exports/**/.dft_detach.state file.
+    let found = exec("find exports -name .dft_detach.state 2>/dev/null").trim()
+    if len(found) > 0 {
+        let paths = found.split("\n")
+        let mut pi = 0
+        while pi < len(paths) {
+            let sp = paths[pi].trim()
+            if len(sp) > 0 && _pl_path_exists(sp) {
+                let iid = pods_local_state_instance_id(read_file(sp))
+                if len(iid) > 0 && _pl_str_in(ids, iid) == 0 { ids.push(iid) }
+            }
+            pi = pi + 1
+        }
+    }
+    return ids
+}
+
+// pods_local_merge_ids — PURE union of two id lists (dedup, order-preserving).
+pub fn pods_local_merge_ids(a, b) -> [str] {
+    let mut out = []
+    let mut i = 0
+    while i < len(a) { if _pl_str_in(out, a[i]) == 0 { out.push(a[i]) } i = i + 1 }
+    let mut j = 0
+    while j < len(b) { if _pl_str_in(out, b[j]) == 0 { out.push(b[j]) } j = j + 1 }
+    return out
+}
+
+// ── idle-reap 3-way classifier (active / idle-dead / busy-unmanifested) ──
+// "idle-reap" never checked idleness — it flagged purely on manifest-absence, so
+// a pod ABSENT from the manifest but BUSY (running pw.x/ph.x) got flagged and
+// --reap would destroy a running DFT job (instance 38815600, procs=13 busy,
+// 2026-06-01). A pod is REAP-eligible ONLY when it is NOT active AND verified
+// idle (unreachable, OR reachable with zero compute procs). A not-active pod
+// that is reachable+busy is a LIVE DUPLICATE — surface separately, NEVER reap.
+//
+// `busy` is the tri-value liveness probe: 1 = reachable+compute-proc-present,
+// 0 = reachable+no-compute-proc (idle), -1 = probe-undetermined (fail safe).
+//
+// Returns "REAP" | "BUSY_UNMANIFESTED". Active pods never reach the classifier.
+pub fn idle_reap_classify(reachable: int, busy: int) -> str {
+    // unreachable → dead/stale billing pod → safe to reclaim.
+    if reachable == 0 { return "REAP" }
+    // reachable but a compute proc is running (or probe undetermined) → live
+    // duplicate, NEVER reap. busy==-1 (probe could not confirm idle) fails safe.
+    if busy != 0 { return "BUSY_UNMANIFESTED" }
+    // reachable AND verified zero compute procs → genuinely idle → reclaim.
+    return "REAP"
+}

@@ -1508,15 +1508,48 @@ fn _cloud_reap(provider_scope: str, apply: int) -> int {
     return 0
 }
 
+// _idle_reap_probe_busy — tri-value liveness for an idle-reap candidate id:
+// 1 = reachable+compute-proc-present (busy) · 0 = reachable+no-compute-proc
+// (idle) · -1 = unreachable / probe-undetermined. Resolves the bare provider id
+// to its live ssh endpoint (proxy-first, per #2318/#2342) then reuses the
+// watchdog's canonical compute-proc probe (_wd_has_compute_proc). No live
+// endpoint / unreachable host → -1, which idle_reap_classify fails safe on.
+fn _idle_reap_probe_busy(id: str) -> int {
+    let rh = _resolve_cloud_host(id)
+    // strip a leading user@ (the watchdog probe re-adds root@ itself).
+    let mut host = rh.host
+    let at = host.index_of("@")
+    if at >= 0 { host = host.substring(at + 1, len(host)) }
+    if len(host) == 0 { return -1 }
+    return _wd_has_compute_proc(host, rh.port)
+}
+
+// _idle_reap_reachable — 1 iff the candidate id resolves to a live ssh endpoint
+// (proxy or direct, OR a real dotted host). 0 = no live endpoint mapped → the
+// pod is gone/stale (billing-but-down), which idle_reap_classify reclaims.
+fn _idle_reap_reachable(id: str) -> int {
+    let rh = _resolve_cloud_host(id)
+    if rh.resolved == 1 { return 1 }
+    if rh.host.contains(".") { return 1 }
+    return 0
+}
+
 // _cloud_idle_reap — complement of `reap`: provider pods that ARE billing but
-// have NO active (verdict=PENDING) job pinned in ./pods.json (the dup-idle-pod
-// leak). The set-diff is the pure pods_local_idle_orphans; this wires provider
-// enumeration + (optional) teardown. REPORT-only by default (apply=0, exit 0);
-// --reap (apply=1) routes each idle-orphan through _cloud_down.
+// are NOT in the active set AND are verified idle/dead. The active set is the
+// UNION of ./pods.json PENDING-job pod ids AND every instance_id recorded in the
+// campaign's deck `.dft_detach.state` files (LIVE endpoint truth — job.pod
+// drifts stale on re-fires). Each not-active billing pod is classified by
+// liveness (idle_reap_classify):
+//   REAP              — unreachable OR reachable+no-compute-proc → safe destroy.
+//   BUSY-UNMANIFESTED — reachable+compute-proc-present → live duplicate, WARN.
+// REPORT-only by default (apply=0, exit 0); --reap (apply=1) destroys ONLY the
+// REAP class. BUSY-UNMANIFESTED is NEVER auto-reaped; an undetermined probe
+// fails safe to BUSY-UNMANIFESTED (no reap on uncertainty).
 fn _cloud_idle_reap(provider_scope: str, apply: int) -> int {
     let do_runpod = provider_scope == "" || provider_scope == "runpod"
     let do_vast = provider_scope == "" || provider_scope == "vast"
-    let active = pods_local_active_pod_ids()
+    // active = PENDING-job pod ids ∪ deck-state instance_ids (live endpoint truth).
+    let active = pods_local_merge_ids(pods_local_active_pod_ids(), pods_local_state_active_ids())
     // (provider-id, provider-name) pairs for billing pods, per scope.
     let mut bill_ids = []
     let mut bill_prov = []
@@ -1538,31 +1571,49 @@ fn _cloud_idle_reap(provider_scope: str, apply: int) -> int {
             while j < len(vl.instance_ids) { bill_ids.push(vl.instance_ids[j]); bill_prov.push("vast"); j = j + 1 }
         }
     }
-    let orphans = pods_local_idle_orphans(bill_ids, active)
-    if len(orphans) == 0 {
-        println("[cloud] idle-reap: 0 idle-orphans · every billing pod has an active (PENDING) job in ./pods.json")
+    // not-active billing pods (the set-diff candidates), then classify each by liveness.
+    let cand = pods_local_idle_orphans(bill_ids, active)
+    if len(cand) == 0 {
+        println("[cloud] idle-reap: 0 candidates · every billing pod is active (PENDING job or live deck-state instance)")
         return 0
     }
-    println("ID                       PROVIDER  ACTION")
+    println("ID                       PROVIDER  CLASS              ACTION")
+    let mut reaped = 0
     let mut failed = 0
+    let mut busy_n = 0
     let mut k = 0
-    while k < len(orphans) {
-        let prov = _idle_prov_of(orphans[k], bill_ids, bill_prov)
-        if apply == 0 {
-            println(_reg_pad(orphans[k], 24) + " " + _reg_pad(prov, 9) + " (report — use --reap to destroy)")
+    while k < len(cand) {
+        let id = cand[k]
+        let prov = _idle_prov_of(id, bill_ids, bill_prov)
+        let reach = _idle_reap_reachable(id)
+        // only probe the proc state when reachable (an unreachable pod is dead → REAP).
+        let mut busy = -1
+        if reach == 1 { busy = _idle_reap_probe_busy(id) }
+        let klass = idle_reap_classify(reach, busy)
+        if klass == "BUSY_UNMANIFESTED" {
+            busy_n = busy_n + 1
+            println(_reg_pad(id, 24) + " " + _reg_pad(prov, 9) + " BUSY-UNMANIFESTED  WARN (live dup — consolidate, never reap)")
         } else {
-            let rc = _cloud_down(orphans[k], prov)
-            let act = if rc == 0 { "DESTROYED" } else { failed = failed + 1; "FAILED" }
-            println(_reg_pad(orphans[k], 24) + " " + _reg_pad(prov, 9) + " " + act)
+            if apply == 0 {
+                println(_reg_pad(id, 24) + " " + _reg_pad(prov, 9) + " REAP               (report — use --reap to destroy)")
+            } else {
+                let rc = _cloud_down(id, prov)
+                let act = if rc == 0 { reaped = reaped + 1; "DESTROYED" } else { failed = failed + 1; "FAILED" }
+                println(_reg_pad(id, 24) + " " + _reg_pad(prov, 9) + " REAP               " + act)
+            }
         }
         k = k + 1
     }
+    let reap_n = len(cand) - busy_n
+    if busy_n > 0 {
+        println("[cloud] idle-reap: ⚠ " + str(busy_n) + " BUSY-UNMANIFESTED (reachable+busy, NOT reaped) — live duplicate(s) needing consolidation")
+    }
     if apply == 0 {
-        println("[cloud] idle-reap: " + str(len(orphans)) + " idle-orphan(s) · read-only report · use --reap to destroy")
+        println("[cloud] idle-reap: " + str(reap_n) + " REAP-eligible · read-only report · use --reap to destroy (BUSY-UNMANIFESTED excluded)")
         return 0
     }
-    println("[cloud] idle-reap: " + str(len(orphans) - failed) + "/" + str(len(orphans))
-        + " destroyed · " + str(failed) + " failed")
+    println("[cloud] idle-reap: " + str(reaped) + "/" + str(reap_n)
+        + " reaped · " + str(failed) + " failed · " + str(busy_n) + " BUSY-UNMANIFESTED spared")
     if failed > 0 { return 1 }
     return 0
 }
