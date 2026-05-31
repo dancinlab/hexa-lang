@@ -17,6 +17,17 @@ METHOD + VERIFICATION (real run, stdout verbatim)
     -> Mach-O executable, exit 42 · .c=0 .a=0 native.o=2 · clang/as/ld fork 0
   (RUN_RC=0)
 
+  DETERMINISM: 5/5 PASS (incl. a cold dispatch-cache run after clearing
+  ~/.hexa-cache for the emit script). ONE earlier cold-first-run FAIL'd at
+  step 2 ("runtime.o is empty (0 B)") — a transient: the emit step is a NESTED
+  `hexa run`, and on a cold cache the first invocation compiles the cached
+  binary, which raced the size check. Hardened with a single retry on step 2
+  (a genuine breakage fails BOTH attempts; a cold-cache flake clears on the
+  warm retry). Post-retry: 5/5 deterministic. The args[2]->args[1] emitter fix
+  (already on main via #2249) is correct — argv() under `hexa run <script>
+  <OUT>` puts OUT at index 1 (empirically confirmed); the emitter writes a
+  315 B runtime.o to the given path (nm -U: _hexa_exit@0, _hexa_set_args@0x14).
+
   The test asserts, in order:
    1. aprime_cc --emit=obj --backend=native trivial.hexa -> user.o:
       Mach-O magic cffaedfe; nm -u == {_hexa_exit, _hexa_set_args}.

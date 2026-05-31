@@ -73,15 +73,24 @@ fn main() {
     }
 
     // ── 2. native runtime .o (N3a) ──
-    let c2 = exec_capture("HEXA_LANG=" + repo + " hexa run "
-        + repo + "/tool/emit_runtime_obj.hexa " + rt_o + " 2>&1")
+    // The emit step is a NESTED `hexa run`; on a cold dispatch cache the first
+    // invocation compiles the cached binary, which can race the size check.
+    // Retry once (a genuine breakage fails BOTH attempts; a cold-cache flake
+    // clears on the warm second run).
+    let emit_cmd = "HEXA_LANG=" + repo + " hexa run "
+        + repo + "/tool/emit_runtime_obj.hexa " + rt_o + " 2>&1"
+    let mut c2 = exec_capture(emit_cmd)
+    let mut rt_sz = to_int(exec_capture("wc -c < " + rt_o + " 2>/dev/null")[0].trim())
+    if to_int(c2[2]) != 0 || rt_sz <= 0 {
+        c2 = exec_capture(emit_cmd)
+        rt_sz = to_int(exec_capture("wc -c < " + rt_o + " 2>/dev/null")[0].trim())
+    }
     if to_int(c2[2]) != 0 {
         eprintln("F-N4 FAIL (2): emit_runtime_obj rc=" + c2[2] + ":\n" + c2[0])
         exit(1)
     }
-    let rt_sz = to_int(exec_capture("wc -c < " + rt_o)[0].trim())
     if rt_sz <= 0 {
-        eprintln("F-N4 FAIL (2): runtime.o is empty (" + to_string(rt_sz) + " B)")
+        eprintln("F-N4 FAIL (2): runtime.o is empty (" + to_string(rt_sz) + " B) after retry")
         exit(1)
     }
     let rtU = exec_capture("nm -U " + rt_o + " 2>/dev/null | tr '\\n' ' '")[0].trim()
