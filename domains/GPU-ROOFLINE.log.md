@@ -266,3 +266,17 @@ MIR(per-tile `gpu_wmma_load_a/b` → `gpu_wmma_mma`(threaded args) → `gpu_wmma
 ### 안전
 - vast RTSC 학습 pod 미접촉. fire = 무료 pool ubu-2 RTX 5070($0). codegen 무변경.
 - `.cu`/`.ptx` 는 /tmp(ubu-2)·archive/fires(repo) 에서만. repo root 손작성 0.
+
+## 2026-05-31 MS#1 1b frontend N-capture LANDED ([~]) — SSOT 정합 flip
+
+PR #2256 이 `self/parser.hexa` (dc49c0048) 의 `[T; N]` N-보존 변경을 main 에 착지시켰으나
+`domains/GPU-ROOFLINE.md` 의 1b 체크박스를 `[ ]`→`[~]` 로 갱신하지 않아 SSOT 가 코드보다
+뒤처졌다(verdict=LANDED, milestone=open 불일치). 이 변경은 그 표기만 정합화한다 — 새 코드/측정
+없음, 이미 main 에 있는 #2256 의 사실을 milestone 에 반영.
+
+- 🟢 frontend N-capture LANDED (#2256 · git 실측): `parse_type_annotation` 의 `[T; N]` 분기가
+  `p_advance().value` 로 size 토큰을 캡처해 `[T; N]` type-string 에 N 운반. plain `[T]` byte-identical.
+  `hexa cc --regen` rc=0 · 4/4 SSOT transpile · merged Δ+209B = 새 분기. verdict 첨부.
+- [~] 잔여: (1c) HIR/MIR N 전파 → codegen · (1d) backend `_nvptx_shared_default_bytes` → N 기반 tile 공식.
+  둘 다 sign 창 + (1c 는 HIR/MIR, 1d 는 nvptx_target.hexa 공유트리) 필요 = 후속 세션.
+- ℹ️ 선행 #2253 정정("syntax 부재"는 오류)이 옳았고, 이 착지가 정정이 지목한 N-폐기를 해소.
