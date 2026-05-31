@@ -1,0 +1,40 @@
+F-HEXA-CC-NATIVE-N5PRE-STEP1-ASCAST -- parse `as` cast in compiler/ frontend; 144 -> 63 diagnostics
+====================================================================================================
+date: 2026-06-01   host: mini (darwin-arm64)   base: worktree off origin/main 70d5dfdc8
+prereq: STEP0 MEASURED (current-source aprime_cc, 181->144). This is the first real source fix.
+
+CHANGE
+------
+compiler/parse/parser.hexa parse_postfix(): added a KwAs branch mirroring the legacy self/parser.hexa
+G10 cast (self/parser.hexa:3778). On `as`, consume the target type ident and build a postfix
+BinOp text="as" (left = casted expr, right = type Ident). Parser-only -- codegen "as" lowering is a
+later N5-link concern (the 181 are codegen-前 typecheck diagnostics, so the parse fix alone clears
+the cascade). compiler/'s codegen does NOT yet lower a BinOp "as" (only "asr"); that is deferred.
+
+BUILD + MEASURE (same proven recipe: hexa_v2 transpiler + regen runtime + .c-only populate)
+-------------------------------------------------------------------------------------------
+build_aprime.sh -v ~/.hx/bin/self/native/hexa_v2 -> /tmp/aprime_s1 1435672 B Mach-O arm64,
+smoke exit(6*7)==42 PASS. Then: flatten compiler/main.hexa (46f/39956L) ->
+`aprime_s1 _drv.hexa --emit=obj --target=arm64-apple-darwin -o ... <flat>` (exit 1).
+
+RESULT (tag-based HexaError count):
+  class  | STEP0 (144) | STEP1 (63) | delta
+  -------+-------------+------------+------
+  HX0011 |     13      |     0      | -13   <- parse `as` errors GONE
+  HX2001 |     80      |    12      | -68   <- `as` x61 + `)` x7 cascade GONE
+  HX3004 |     18      |    18      |   0
+  HX3001 |     17      |    17      |   0
+  HX2003 |     16      |    16      |   0
+  -------+-------------+------------+------
+  TOTAL  |    144      |    63      | -81
+The triage's ~81 as-cast-cascade estimate is CONFIRMED exactly. NO new diagnostics introduced
+(the as-cast resolves cleanly; it did not convert into type errors). No regression.
+
+REMAINING 63 (next steps)
+-------------------------
+- HX2001 x12: bytes_to_str_raw x7 + __arr_alloc_items_zero(_int) x2 (STEP2: bind.hexa allowlist --
+  all have C-level defs: bytes_to_str_raw lowered at self/codegen.hexa:7155, __arr_alloc_items_zero
+  is an s4_flatc_post-injected static helper) + `push` x2 (member-call) + `i64` x1.
+- HX3004 x18 + HX3001 x17 + HX2003 x16 = 51: HexaVal carrier-model gaps (STEP3, compiler/check/types.hexa).
+falsifier (intentional undefined name -> HX2001 + exit1) still PASSES. No milestone flipped (N5
+fixpoint not reached); N5-pre advances 144 -> 63. live tree untouched; /tmp/aprime_s1 disposable.
