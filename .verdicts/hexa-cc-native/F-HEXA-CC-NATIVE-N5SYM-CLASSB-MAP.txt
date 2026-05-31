@@ -1,0 +1,29 @@
+F-HEXA-CC-NATIVE-N5SYM-CLASSB-MAP -- map 5 class-B intrinsics to runtime syms (N5-sym part 3)
+=============================================================================================
+date: 2026-06-01   host: mini (darwin-arm64)   base: worktree off origin/main 1c382c7f8
+fix: compiler/codegen/arm64_darwin.hexa _builtin_runtime_sym — add 5 mappings.
+
+The native obj-emit builtin dispatch left these unmapped → fell through to the bare name →
+undefined at self-host link (native object references `_list_dir`, runtime exports
+`_hexa_list_dir`). Added the AUTHORITATIVE mappings self/codegen.hexa's C-string path emits,
+each verified present in the runtime:
+  byte_len → hexa_byte_len   bytes_to_str_raw → hexa_bytes_to_str_raw
+  list_dir → hexa_list_dir   mono_ns → hexa_mono_ns   keys → hexa_map_keys
+
+VERIFICATION
+------------
+rebuilt aprime_cb (smoke exit(42)==42 PASS) → re-emit cc-cb.o (atlas-skip, emit rc=0, 2.65MB):
+- the 5 bare names (_list_dir, _mono_ns, _byte_len, _bytes_to_str_raw, _keys) are GONE from
+  nm -u; replaced by _hexa_byte_len / _hexa_list_dir / _hexa_map_keys / _hexa_mono_ns /
+  _hexa_bytes_to_str_raw (which the runtime PROVIDES).
+- residual vs the part-2 runtime (rtP2.o): 13 -> 8.
+
+CONSERVATIVELY DEFERRED (this file's documented unmapped-is-safer-than-mis-mapped policy;
+the `truncate`→libc-collision crash comment is the precedent):
+- get / set : map ABI takes const char* key → need hexa_to_cstring(k), not a plain rename.
+- mkdir     : collides with libc mkdir; C path inlines hexa_bool(mkdir(HX_STR(p),0755)==0).
+- byte_at   : C path uses cg_string_sym("str_byte_at") which has an rt_*_v vs hexa_* branch.
+- sha256_hex: no confirmed runtime target (runtime has hexa_sha256, not hexa_sha256_hex).
+
+REMAINING N5-sym residual = 8: class C (3: ___map_raw_len = HX_MAP_LEN macro → add real fn;
+___arr_alloc_items_zero{,_int} = s4_flatc_post.py static → external) + the 5 deferred above.
