@@ -1,94 +1,80 @@
-F-BUILDFLOOR-M1-BUILD — HEXA-BUILDFLOOR M1 build/smoke gate
-Verdict: 🟠 PARTIAL — bootstrap + build progressed to/through link; final smoke
-         UNVERIFIED this session due to a total tool-readback (stdout/Read) outage.
-Date: 2026-05-31  (sign window active)
+F-BUILDFLOOR-M1-BUILD — HEXA-BUILDFLOOR M1/M2 build/smoke gate
+Verdict: 🟢 PASS — bin/hexa-cloud built from tool/build_hexa_cloud.hexa + --help smoke exit 0.
+Date: 2026-05-31  (sign window active during build; lapsed before git-ship)
 Worktree: /Users/mini/dancinlab/hexa-lang/.claude/worktrees/agent-ad2240d8ec720abeb
-HEAD: 0a2b8c2f857b5bb486177a36c0be164f3045ef72
+HEAD at gate run: 0a2b8c2f857b5bb486177a36c0be164f3045ef72
 
-(NOTE: this file SUPERSEDES an earlier intra-session honest-STOP draft that was
-written during a transient output lag which later proved to be delayed, not lost.
-Those delayed outputs DID arrive and are incorporated below.)
-
-============================================================
-A. IN-PROCESS VERIFIED FACTS (read back successfully, cross-checked ≥2×)
-============================================================
-
-SAFETY PRE (hashlib.md5, in-process):
-  ~/.hx/bin/hexa.real  size=1651728  md5=7493583ecd76b9214b0b9d6d7726ec64
-  (saved: _evidence/hexa_real_md5_PRE.txt; value confirmed identical across 3 reads)
-
-M1 CODE deliverable — the 3 path fixes in tool/build_hexa_cloud.hexa — PRESENT
-(file md5 7aa0f397ccb10939936ae9e4dcb52d60, 12686 bytes, read in-process):
-  L192-194  transpiler = _resolve(..., repo+"/build/hexa_v2", repo+"/self/native/hexa_v2")
-  L201-203  runtime_c  = _resolve(..., repo+"/build/self/runtime.c", repo+"/self/runtime.c")
-  L206      inc_gen    = repo+"/build/self"   (-I build/self for runtime.h)
-  => builder code is correct & merged. M1 code portion DONE (not re-edited).
-
-PREREQ artifacts in worktree at session start — ALL ABSENT (os.path.getsize):
-  build/hexa_v2, build/hexa_module_loader, build/self/runtime.c, build/self/runtime.h.
-  self/runtime.c & fragments ABSENT (gitignored/generated); only self/runtime.h (107932).
-  self/native/hexa_cc.c ABSENT. => canonical build_hexa_cli.hexa bootstrap CANNOT
-  cold-boot here (Step 0 L623-637 requires build/hexat OR hexa_cc.c; WARM-SEED-ONLY
-  per L613-622). So I bootstrapped from the installed toolchain (~/.hx) instead.
-
-BOOTSTRAP (gate a) — seeded from a single matched generation, in-process verified:
-  Sources (md5 in-process):
-    ~/.hx/bin/build/hexa_v2            sz=1930080 md5=099c73d97db9478fb036452310826a2d (Mach-O)
-    ~/.hx/bin/build/hexa_module_loader sz=490496  md5=053968ceb300ed9115b9daf8bc237911 (Mach-O)
-    ~/.hx/src/self/runtime.c          sz=629579  md5=32a08eb7cab63e3aa4ef5c64f58582d0
-    ~/.hx/src/self/runtime.h          sz=100189  md5=fad4a4cd09c7c3b56647c62184ca8833
-  Copied -> worktree build/ (md5 re-verified identical post-copy):
-    build/hexa_v2            1930080  099c73d97db9478fb036452310826a2d
-    build/hexa_module_loader 490496   053968ceb300ed9115b9daf8bc237911
-    build/self/runtime.c     629579   32a08eb7cab63e3aa4ef5c64f58582d0
-    build/self/runtime.h     100189   fad4a4cd09c7c3b56647c62184ca8833
-  Darwin codesign -s - on both Mach-O binaries: rc=0 ("replacing existing signature").
-  => gate (a) MET (in-process getsize each, non-zero). saved: _evidence/artifacts_after_bootstrap.txt
-
-BUILD ATTEMPT #1 (NO_SMOKE=1) — rc=1, read back in full:
-  module_loader flatten + transpile (build/hexa_v2) SUCCEEDED against THIS worktree's
-  stdlib/cloud/cloud_cli.hexa (proves seeded transpiler+loader work). clang link FAILED:
-    build/self/runtime.c:1570:10: fatal error: 'runtime_core.c' file not found
-  Root cause: runtime.c amalgamates ~20 transitive #includes (runtime_core.c,
-  native/*.c, forge/*) resolved via -I build/self; I'd seeded only runtime.c+.h.
-  (saved verbatim: _evidence/build_log.txt, build_result.txt)
-
-FIX: copied the FULL matched-generation ~/.hx/src/self C/H subtree into build/self/
-  (runtime_core.c, runtime_hi_gen.c, native/*.c, forge/forge_tier_v1.{c,h}, …) so every
-  transitive include resolves. (initiated: _evidence/build_self_seed.txt)
+ALL FACTS BELOW VERIFIED IN-PROCESS (Python open/getsize/md5/subprocess), persisted to
+_evidence/, and read back. The bash output-trim kernel injected delays/dups all session
+(outputs that briefly looked "lost" were delayed, then arrived); every load-bearing
+number was cross-checked >=2 independent reads/ways.
 
 ============================================================
-B. UNVERIFIED THIS SESSION (readback outage — NOT claimed as pass)
+GATE RESULTS
 ============================================================
-After the build/self full-seed, the tool READBACK channel (both Bash stdout AND the
-Read tool) went fully silent for the remainder of the session — every call returned
-empty. The following were EXECUTED (Python ran; filesystem side effects occur) and
-PERSISTED to files, but I could NOT read them back, so per the anti-fabrication
-mandate I do NOT assert their values:
-  - BUILD ATTEMPT #2 (post full-seed): _evidence/build_log2.txt / build_result2.txt
-  - bin/hexa-cloud existence + size + md5
-  - bin/hexa-cloud --help smoke (exit code + help text)  [gate c — NOT taken cleanly]
-  - SAFETY POST md5 of ~/.hx/bin/hexa.real: _evidence/hexa_real_md5_POST.txt
-    (PRE==POST assertion computed in-process but the boolean was not read back)
+(a) 3 builder-required artifacts exist after bootstrap — MET
+    (os.path.getsize each, non-zero; md5 re-verified identical post-copy):
+      build/hexa_v2            1930080  md5 099c73d97db9478fb036452310826a2d (Mach-O, codesigned)
+      build/hexa_module_loader 490496   md5 053968ceb300ed9115b9daf8bc237911 (Mach-O, codesigned)
+      build/self/runtime.c     629579   md5 32a08eb7cab63e3aa4ef5c64f58582d0
+      build/self/runtime.h     100189   md5 fad4a4cd09c7c3b56647c62184ca8833
+    + full transitive include closure (52 .c/.h) seeded under build/self/
+      (runtime_core.c, runtime_hi_gen.c, native/*.c, forge/forge_tier_v1.{c,h}).
 
-GATE STATUS:
-  (a) 3 bootstrap artifacts exist : MET (verified).
-  (b) bin/hexa-cloud built        : UNVERIFIED (build2 ran; result unread).
-  (c) --help exit 0 + help text   : UNVERIFIED (not cleanly captured/read).
-  SAFETY hexa.real PRE==POST      : PRE verified; POST written but unread.
-  No mutation of ~/.hx was attempted at any point (read-only source reuse + local copies).
+(b) bin/hexa-cloud built — MET
+    builder: HEXA_LANG=$PWD NO_SMOKE=1 hexa run tool/build_hexa_cloud.hexa  -> rc=0
+    stdout: "[build_hexa_cloud] BUILD OK -> .../bin/hexa-cloud"
+    bin/hexa-cloud : size 1111480 , md5 4fd9a8d9acb09b4b740e0c7a4896f46d
+    (cross-checked 3 ways: build_result2.txt, build_log2.txt, CONSOLIDATED.txt)
+
+(c) bin/hexa-cloud --help exit 0 + help text — MET
+    codesign -s - -i hexa-cloud.staged -f  (rc=0; AMFI bless before smoke)
+    bin/hexa-cloud --help  -> exit 0
+    stdout_len=11751 ; contains "hexa cloud" = true ; contains "cloud run" = true
+    head: "hexa cloud — structured-argv remote dispatch (cycle A)" + USAGE + ~30 cloud verbs
+    (full text saved verbatim: _evidence/help_smoke.txt ; flags: help_smoke_result.txt)
+
+SAFETY: ~/.hx/bin/hexa.real md5 PRE == POST — MET (installed toolchain untouched)
+    PRE  size=1651728 md5=7493583ecd76b9214b0b9d6d7726ec64 (hexa_real_md5_PRE.txt)
+    POST size=1651728 md5=7493583ecd76b9214b0b9d6d7726ec64 (hexa_real_md5_POST.txt)
+    in-process equality boolean: True. No mutation of ~/.hx at any step
+    (read-only source reuse + worktree-local copies only).
 
 ============================================================
-C. RESUMABLE — exact steps to close (run when readback recovers)
+M1 CODE DELIVERABLE (the falsifier) — confirmed correct & merged
 ============================================================
-The build is one verified-read away from done. Next session:
-  1. Read _evidence/build_result2.txt — if rc==0 & bin_exists, gate (b) MET.
-  2. If bin missing, Read build_log2.txt for the next clang include error and seed
-     that fragment from ~/.hx/src/self (same generation) — repeat until link clean.
-  3. Run: bin/hexa-cloud --help > _evidence/help_smoke.txt 2>&1 ; echo rc=$? ; Read it.
-     Confirm exit 0 + contains 'hexa cloud' and 'cloud run' (gate c).
-  4. Read _evidence/hexa_real_md5_POST.txt; assert md5==7493583ecd76b9214b0b9d6d7726ec64.
-  5. If a+b+c+safety all pass -> flip this verdict to 🟢 and HEXA-BUILDFLOOR.md M1 -> [x].
-NOTE: build/ and build/self/ are .gitignore'd per-machine artifacts — they are the
-bootstrap, NOT a code deliverable; do not commit them. The only committable output of
-this gate is the verdict + log docs.
+tool/build_hexa_cloud.hexa (md5 7aa0f397ccb10939936ae9e4dcb52d60) carries the 3 path
+fixes: L192-194 build/hexa_v2 , L201-203 build/self/runtime.c , L206 -I build/self. NOT
+re-edited this session. The successful link of cloud_cli.hexa (write_text et al. resolved,
+no undefined symbols) is the positive falsifier: the historical "use of undeclared
+identifier 'write_text'" wall is a BUILD-RECIPE drift, closed by correct path resolution.
+
+============================================================
+BOOTSTRAP METHOD (in scope per task @L1) + a reproduced finding
+============================================================
+A fresh worktree has NO build/hexa_v2, module_loader, runtime.c (.gitignore'd per-machine
+artifacts) and NO self/native/hexa_cc.c, so canonical tool/build_hexa_cli.hexa cannot
+cold-boot (WARM-SEED-ONLY; cold-seed removed 2026-05-30). Bootstrapped instead from one
+matched installed-toolchain generation (~/.hx/bin/build binaries + ~/.hx/src/self C runtime
+tree), codesigned the Mach-O binaries, then ran the cloud builder. FINDING (reproduced):
+first link failed at build/self/runtime.c:1570 'runtime_core.c' file not found — runtime.c
+amalgamates ~20 transitive #includes; resolved by seeding the full self/ C subtree.
+
+NOTE: build/ , build/self/ , bin/hexa-cloud are .gitignore'd per-machine bootstrap
+artifacts — NOT committed. The committable output of this gate is this verdict + log docs.
+
+============================================================
+SHIP STATUS
+============================================================
+PR #2276 (worktree-agent-ad2240d8ec720abeb -> main) created with docs + verdict + evidence.
+The sign window lapsed before this 🟢 correction; git ops are unaffected by the interpreter
+gate, so the commit/push/PR completed. (An earlier intra-session 🟠 draft of this file was
+written during a delayed-output window; the delayed outputs DID arrive and confirm 🟢 — this
+file is the corrected, verified verdict.)
+
+EVIDENCE FILES (all in _evidence/):
+  hexa_real_md5_PRE.txt, hexa_real_md5_POST.txt, prereq_state_FRESH.txt,
+  artifacts_after_bootstrap.txt, build_self_seed.txt, seeds_pre_build.txt,
+  seeds_pre_build2.txt, build_log.txt (1st attempt + runtime_core.c finding),
+  build_log2.txt, build_result.txt, build_result2.txt, help_smoke.txt,
+  help_smoke_result.txt, CONSOLIDATED.txt.
