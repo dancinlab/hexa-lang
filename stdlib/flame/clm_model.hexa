@@ -1,0 +1,199 @@
+// ════════════════════════════════════════════════════════════════════════════
+//  clm_model.hexa — flame assembly of anima's CLMConvMoE forward (hexa-native).
+//
+//  Composes the 4 CLM-port ops (conv_lib · gn_lib · moe_lib · quant_lib) plus
+//  flame's embedding + GELU into the CLMConvMoE forward pass (CLM/model/
+//  model.py), per FLAME.tape n_clm_convmoe_port_gap · anima a_train_flame_forge.
+//  This is assembly step 1/3 (FORWARD); bwd + QAT train-step follow.
+//
+//  Pipeline (time-major [T·C], single sequence B=1):
+//    tokens[T] → embed[V·d] → embed_conv(d→d,k) →
+//      trunk × L { x += gelu(GroupNorm(1)(conv_dilated(x))) } →
+//      MoE { logits = router_conv(d→E,k1); ex_e = gelu(expert_conv_e(x));
+//            y = Σ_e softmax(logits)[e]·ex_e } →
+//      GroupNorm(1)(norm_out) → readout_conv(d→V,k1) → logits[T·V]
+//
+//  Smoke (F-FLAME-CLM-FWD-*): build + forward at tiny config (V=256,d=8,L=2,
+//  E=2,K=3,T=4) → FINITE (no NaN/Inf) · DET (byte-identical re-run) · SHAPE
+//  (T·V logits, argmax ∈ [0,V)). Quantizer (quant_lib) exercised in the QAT
+//  step (assembly 3/3), not this forward smoke. lib-split entrypoint.
+// ════════════════════════════════════════════════════════════════════════════
+
+use "stdlib/flame/tensor_lib"
+use "stdlib/flame/conv_lib"
+use "stdlib/flame/gn_lib"
+use "stdlib/flame/moe_lib"
+use "stdlib/flame/nn_lib"
+
+// trunk layer, in place: x += gelu(GroupNorm(1)(conv_dilated(x))).
+fn clm_trunk_layer(x: int, cW: int, cB: int, gG: int, gB: int,
+                   T: int, d: int, K: int, dil: int) {
+    let h = t_zeros(T * d)
+    nn_conv1d_fwd(x, cW, cB, h, T, d, d, K, dil)
+    let hn = t_zeros(T * d)
+    let mn = t_zeros(1)
+    let iv = t_zeros(1)
+    let xh = t_zeros(T * d)
+    nn_groupnorm_fwd(h, gG, gB, hn, mn, iv, xh, T, d, 1)
+    let hg = t_zeros(T * d)
+    nn_gelu_fwd(hn, hg, T * d)
+    let mut i = 0
+    while i < T * d {
+        t_set(x, i, t_get(x, i) + t_get(hg, i))
+        i = i + 1
+    }
+}
+
+// expert: out[T·d] = gelu(conv_dilated1(x)).
+fn clm_expert(x: int, eW: int, eB: int, out: int, T: int, d: int, K: int) {
+    let eo = t_zeros(T * d)
+    nn_conv1d_fwd(x, eW, eB, eo, T, d, d, K, 1)
+    nn_gelu_fwd(eo, out, T * d)
+}
+
+// Full CLMConvMoE forward (E=2 experts, L=2 trunk). Returns logits [T·V].
+// Params are caller-allocated farrs (random-init by the smoke harness).
+fn clm_forward(tokens: int,
+               embed: int, ecW: int, ecB: int,
+               t0cW: int, t0cB: int, t0gG: int, t0gB: int,
+               t1cW: int, t1cB: int, t1gG: int, t1gB: int,
+               rW: int, rB: int,
+               e0W: int, e0B: int, e1W: int, e1B: int,
+               noG: int, noB: int,
+               roW: int, roB: int,
+               T: int, d: int, E: int, V: int, K: int) -> int {
+    // embed → [T·d]
+    let xe = t_zeros(T * d)
+    nn_embedding_fwd(tokens, embed, xe, T, d)
+    // embed_conv (d→d, k, dil=1)
+    let x = t_zeros(T * d)
+    nn_conv1d_fwd(xe, ecW, ecB, x, T, d, d, K, 1)
+    // trunk × 2 (dilations 1, 2)
+    clm_trunk_layer(x, t0cW, t0cB, t0gG, t0gB, T, d, K, 1)
+    clm_trunk_layer(x, t1cW, t1cB, t1gG, t1gB, T, d, K, 2)
+    // MoE: router logits (d→E, k1)
+    let logits = t_zeros(T * E)
+    nn_conv1d_fwd(x, rW, rB, logits, T, d, E, 1, 1)
+    // experts → ex_out [E·T·d]
+    let ex_out = t_zeros(E * T * d)
+    let e0 = t_zeros(T * d)
+    clm_expert(x, e0W, e0B, e0, T, d, K)
+    let e1 = t_zeros(T * d)
+    clm_expert(x, e1W, e1B, e1, T, d, K)
+    let mut i = 0
+    while i < T * d {
+        t_set(ex_out, 0 * T * d + i, t_get(e0, i))
+        t_set(ex_out, 1 * T * d + i, t_get(e1, i))
+        i = i + 1
+    }
+    let probs = t_zeros(T * E)
+    let y = t_zeros(T * d)
+    nn_moe_router_fwd(logits, ex_out, probs, y, T, E, d)
+    // norm_out GroupNorm(1)
+    let yn = t_zeros(T * d)
+    let mn = t_zeros(1)
+    let iv = t_zeros(1)
+    let xh = t_zeros(T * d)
+    nn_groupnorm_fwd(y, noG, noB, yn, mn, iv, xh, T, d, 1)
+    // readout (d→V, k1) → [T·V]
+    let out = t_zeros(T * V)
+    nn_conv1d_fwd(yn, roW, roB, out, T, V, d, 1, 1)
+    return out
+}
+
+fn _is_finite(x: float) -> int {
+    if x != x { return 0 }                 // NaN
+    if x > 1.0e30 { return 0 }
+    if x < 0.0 - 1.0e30 { return 0 }
+    return 1
+}
+
+fn main() {
+    println("clm_model — CLMConvMoE forward assembly (conv+gn+moe+gelu+embed)")
+    let T = 4
+    let d = 8
+    let E = 2
+    let V = 256
+    let K = 3
+
+    // tokens [T] (byte ids as floats)
+    let tokens = t_zeros(T)
+    t_set(tokens, 0, 3.0)
+    t_set(tokens, 1, 14.0)
+    t_set(tokens, 2, 159.0)
+    t_set(tokens, 3, 26.0)
+
+    // params (random-init)
+    let embed = t_zeros(V * d);     t_fill_lcg(embed, V * d, 1, 0.3)
+    let ecW = t_zeros(d * d * K);   t_fill_lcg(ecW, d * d * K, 2, 0.2)
+    let ecB = t_zeros(d);           t_fill_lcg(ecB, d, 3, 0.1)
+    let t0cW = t_zeros(d * d * K);  t_fill_lcg(t0cW, d * d * K, 4, 0.2)
+    let t0cB = t_zeros(d);          t_fill_lcg(t0cB, d, 5, 0.1)
+    let t0gG = t_zeros(d);          t_fill_lcg(t0gG, d, 6, 0.5)
+    let t0gB = t_zeros(d);          t_fill_lcg(t0gB, d, 7, 0.1)
+    let t1cW = t_zeros(d * d * K);  t_fill_lcg(t1cW, d * d * K, 8, 0.2)
+    let t1cB = t_zeros(d);          t_fill_lcg(t1cB, d, 9, 0.1)
+    let t1gG = t_zeros(d);          t_fill_lcg(t1gG, d, 10, 0.5)
+    let t1gB = t_zeros(d);          t_fill_lcg(t1gB, d, 11, 0.1)
+    let rW = t_zeros(E * d);        t_fill_lcg(rW, E * d, 12, 0.2)   // d→E, k=1
+    let rB = t_zeros(E);            t_fill_lcg(rB, E, 13, 0.1)
+    let e0W = t_zeros(d * d * K);   t_fill_lcg(e0W, d * d * K, 14, 0.2)
+    let e0B = t_zeros(d);           t_fill_lcg(e0B, d, 15, 0.1)
+    let e1W = t_zeros(d * d * K);   t_fill_lcg(e1W, d * d * K, 16, 0.2)
+    let e1B = t_zeros(d);           t_fill_lcg(e1B, d, 17, 0.1)
+    let noG = t_zeros(d);           t_fill_lcg(noG, d, 18, 0.5)
+    let noB = t_zeros(d);           t_fill_lcg(noB, d, 19, 0.1)
+    let roW = t_zeros(V * d);       t_fill_lcg(roW, V * d, 20, 0.2)  // d→V, k=1
+    let roB = t_zeros(V);           t_fill_lcg(roB, V, 21, 0.1)
+
+    let o1 = clm_forward(tokens, embed, ecW, ecB, t0cW, t0cB, t0gG, t0gB,
+                         t1cW, t1cB, t1gG, t1gB, rW, rB, e0W, e0B, e1W, e1B,
+                         noG, noB, roW, roB, T, d, E, V, K)
+
+    // FINITE
+    let mut fin = 1
+    let mut i = 0
+    while i < T * V {
+        if _is_finite(t_get(o1, i)) == 0 { fin = 0 }
+        i = i + 1
+    }
+    // SHAPE / argmax ∈ [0,V) for each position
+    let mut shape_ok = 1
+    let mut t = 0
+    while t < T {
+        let mut best = 0
+        let mut bv = t_get(o1, t * V + 0)
+        let mut v = 1
+        while v < V {
+            let cur = t_get(o1, t * V + v)
+            if cur > bv { bv = cur; best = v }
+            v = v + 1
+        }
+        if best < 0 { shape_ok = 0 }
+        if best >= V { shape_ok = 0 }
+        t = t + 1
+    }
+    // DET (re-run byte-identical)
+    let o2 = clm_forward(tokens, embed, ecW, ecB, t0cW, t0cB, t0gG, t0gB,
+                         t1cW, t1cB, t1gG, t1gB, rW, rB, e0W, e0B, e1W, e1B,
+                         noG, noB, roW, roB, T, d, E, V, K)
+    let mut det = 1
+    let mut j = 0
+    while j < T * V {
+        if t_get(o1, j) != t_get(o2, j) { det = 0 }
+        j = j + 1
+    }
+
+    println("F-FLAME-CLM-FWD-FINITE = " + to_string(fin))
+    println("F-FLAME-CLM-FWD-SHAPE  = " + to_string(shape_ok))
+    println("F-FLAME-CLM-FWD-DET    = " + to_string(det))
+    if fin == 1 {
+        if shape_ok == 1 {
+            if det == 1 {
+                println("PASS 3/3 — CLMConvMoE forward assembled")
+                return
+            }
+        }
+    }
+    println("FAIL")
+}
