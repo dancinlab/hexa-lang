@@ -1,0 +1,152 @@
+// ════════════════════════════════════════════════════════════════════════════
+//  moe_lib.hexa — flame MoE router (softmax gate + weighted combine), fwd+bwd.
+//
+//  Op 3/4 of the CLM-ConvMoE flame port (FLAME.tape n_clm_convmoe_port_gap ·
+//  anima a_train_flame_forge · CLM/P6_SCALE_LADDER_7B). Mirrors CLM
+//  MoEConvLayer (CLM/model/model.py): a per-position softmax router over E
+//  experts, then a gate-weighted combine of the E expert outputs. The router
+//  projection (Conv1d d->E, k=1) and the per-expert convs are conv_lib ops;
+//  THIS op is the softmax-gate + combine that ties them together.
+//
+//    logits : [T · E]        per-position expert logits (= conv_lib router out)
+//    ex_out : [E · T · C]    stacked expert outputs (each = conv_lib ConvExpert)
+//    probs  : [T · E]        softmax(logits) over experts (the gate, variant A)
+//    Y      : [T · C]        Y[t,c] = Σ_e probs[t,e] · ex_out[e,t,c]
+//
+//  Variant A (soft mixture) is the fully-differentiable core — GRAD-EXACT
+//  verified over BOTH logits and ex_out. Variants B/AB (hard top-k) reuse this
+//  combine + bwd with the gate restricted/renormalized to the selected top-k
+//  set (selection held fixed = straight-through; topk(probs) is piecewise-
+//  constant so central-diff is boundary-fragile — not GRAD-EXACT'd here).
+//
+//  Verified by F-FLAME-MOE-GRAD-EXACT (flame_moe_test.hexa). lib-split.
+//  sibling: conv_lib.hexa · gn_lib.hexa · nn_lib.hexa · tensor_lib.hexa.
+// ════════════════════════════════════════════════════════════════════════════
+
+use "stdlib/flame/tensor_lib"
+
+fn _moe_exp(x: float) -> float {
+    // e^x via scaled Taylor with range reduction (libm-free path not assumed;
+    // matches flame discipline of explicit math). x = n·ln2 + r, |r|<=ln2/2.
+    let ln2 = 0.6931471805599453
+    let mut n = 0
+    let mut r = x
+    while r > 0.34657359 { r = r - ln2; n = n + 1 }
+    while r < 0.0 - 0.34657359 { r = r + ln2; n = n - 1 }
+    // Taylor e^r (|r|<=0.347 → ~12 terms machine-exact)
+    let mut term = 1.0
+    let mut sum = 1.0
+    let mut k = 1
+    while k < 14 {
+        term = term * r / to_float(k)
+        sum = sum + term
+        k = k + 1
+    }
+    // multiply by 2^n
+    let mut p = sum
+    if n >= 0 {
+        let mut i = 0
+        while i < n { p = p * 2.0; i = i + 1 }
+    } else {
+        let mut i = 0
+        while i < (0 - n) { p = p / 2.0; i = i + 1 }
+    }
+    return p
+}
+
+// numerically-stable softmax over E experts, per time position.
+pub fn nn_moe_softmax(logits: int, probs_out: int, T: int, E: int) {
+    let mut t = 0
+    while t < T {
+        let base = t * E
+        // max
+        let mut mx = t_get(logits, base)
+        let mut e = 1
+        while e < E {
+            let v = t_get(logits, base + e)
+            if v > mx { mx = v }
+            e = e + 1
+        }
+        // exp + sum
+        let mut s = 0.0
+        let mut e2 = 0
+        while e2 < E {
+            let ev = _moe_exp(t_get(logits, base + e2) - mx)
+            t_set(probs_out, base + e2, ev)
+            s = s + ev
+            e2 = e2 + 1
+        }
+        // normalize
+        let mut e3 = 0
+        while e3 < E {
+            t_set(probs_out, base + e3, t_get(probs_out, base + e3) / s)
+            e3 = e3 + 1
+        }
+        t = t + 1
+    }
+}
+
+// Forward (variant A soft mixture). Caller allocates probs_out [T·E] (cached
+// for bwd) and y_out [T·C].
+pub fn nn_moe_router_fwd(logits: int, ex_out: int,
+                         probs_out: int, y_out: int,
+                         T: int, E: int, C: int) {
+    nn_moe_softmax(logits, probs_out, T, E)
+    let mut t = 0
+    while t < T {
+        let mut c = 0
+        while c < C {
+            let mut acc = 0.0
+            let mut e = 0
+            while e < E {
+                acc = acc + t_get(probs_out, t * E + e) * t_get(ex_out, e * T * C + t * C + c)
+                e = e + 1
+            }
+            t_set(y_out, t * C + c, acc)
+            c = c + 1
+        }
+        t = t + 1
+    }
+}
+
+// Backward. Inputs: cached probs [T·E], ex_out [E·T·C], upstream dy [T·C].
+// Caller allocates dlogits_out [T·E], dex_out [E·T·C]. Closed vjp:
+//   dex_out[e,t,c] = probs[t,e]·dy[t,c]
+//   dgate[t,e]     = Σ_c dy[t,c]·ex_out[e,t,c]            (grad wrt gate=probs)
+//   dlogits[t,e]   = probs[t,e]·(dgate[t,e] − Σ_e' probs[t,e']·dgate[t,e'])
+//                    (softmax Jacobian)
+pub fn nn_moe_router_bwd(probs: int, ex_out: int, dy: int,
+                         dlogits_out: int, dex_out: int,
+                         T: int, E: int, C: int) {
+    let mut t = 0
+    while t < T {
+        // dex_out + dgate
+        // compute dgate[t,e] and fill dex_out
+        let mut dot = 0.0   // Σ_e' probs·dgate accumulated below in 2 passes
+        // pass 1: dgate[e] into dlogits_out (temp) + dex_out
+        let mut e = 0
+        while e < E {
+            let pte = t_get(probs, t * E + e)
+            let mut dg = 0.0
+            let mut c = 0
+            while c < C {
+                let gy = t_get(dy, t * C + c)
+                dg = dg + gy * t_get(ex_out, e * T * C + t * C + c)
+                t_set(dex_out, e * T * C + t * C + c, pte * gy)
+                c = c + 1
+            }
+            t_set(dlogits_out, t * E + e, dg)   // stash dgate temporarily
+            dot = dot + pte * dg
+            e = e + 1
+        }
+        // pass 2: dlogits[e] = probs[e]·(dgate[e] − dot)
+        let mut e2 = 0
+        while e2 < E {
+            let pte = t_get(probs, t * E + e2)
+            let dg = t_get(dlogits_out, t * E + e2)
+            t_set(dlogits_out, t * E + e2, pte * (dg - dot))
+            e2 = e2 + 1
+        }
+        t = t + 1
+    }
+}
