@@ -4,24 +4,30 @@ method=faithful A/B proxy (clang -O2 + prebuilt runtime.o; B9 self-host wall +
        pool unreachable + Darwin LOCAL_BUILD gate → same spec-accepted proxy as
        the flat-struct parent §escape-stack). The arms emit the EXACT strings
        gen2_stack_alloc_array_lit / the hexa_array_new+push Array arm produce.
-host=mini arm64 · best-of-9 · runs=9
+host=mini arm64 · best-of-9 · runs=9 · REAL run (raw stdout = finding.txt)
 
 g5 GATE — computed-acc IDENTICAL across heap vs stack arms:
-    a_heap  acc=140000000  md5=6ca934e49da9a8a3923d49622f65db6b
-    b_stack acc=140000000  md5=6ca934e49da9a8a3923d49622f65db6b
-    → byte-diff: IDENTICAL   ✅
+    a_heap  acc=210000000  md5=250abd1aed19f5395ba84c8cf7c8c331
+    b_stack acc=210000000  md5=250abd1aed19f5395ba84c8cf7c8c331
+    → byte-diff: IDENTICAL   [PASS]
 
 The acc half of stdout is identical (the malloc-count half differs BY DESIGN —
 that difference IS the space-axis finding). arr_ptr->items[i] read offsets are
 unchanged between the heap descriptor and the stack descriptor → byte-eq.
 
 NEGATIVE CONTROL — escaping (returned) array MUST stay heap:
-    escaping read result (heap path, live after return): 4   ✅ (no dangling)
+    escaping read result (heap path, live after return): 4   [PASS] (no dangling)
+    = (12345&7) + ((12345*3)&7) = 1 + 3 = 4, read live after the fn returned.
     → proves the decision is escape-driven: the proof fires ONLY for bindings
       used solely as a[i] / len(a) within the scope.
 
-PRIMARY metrics (space axis):
+PRIMARY metrics (space axis) — REAL measured:
     heap-alloc count : a_heap 20,000,000 → b_stack 0   (loop malloc eliminated)
-    peak-RSS (free)  : 18,112 KB → 1,456 KB  (12.4× down)
-    peak-RSS (no-free / GC reclaim-lag shape): 218,720 KB → 1,456 KB (150× down)
-    [secondary] wall : 0.24s → 0.04s (6×)
+    peak-RSS (free)  : 2,814,416 KB → 1,952 KB  (1442× — the per-iter heap array
+                       is reallocated by push and the OS retains the pages; the
+                       stack arm has no heap traffic at all)
+    peak-RSS (no-free / GC reclaim-lag shape): 564,416 KB → 1,936 KB
+                       = 291× down (551MB → 1.9MB — descriptor+items accumulate
+                       on the heap when not eagerly freed; exceeds the flat-struct
+                       parent's 66× because an array is TWO allocs, not one)
+    [secondary] wall : 0.67s → 0.04s (16×)
