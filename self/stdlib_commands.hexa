@@ -1,0 +1,84 @@
+// self/stdlib_commands.hexa — the SINGLE in-source SSOT for the hexa STDLIB
+// CLI verb roster (name · group · summary · arg-shape).
+//
+// ARCHITECTURE (mirrors self/core_commands.hexa + the cloud pilot): one
+// in-binary hexa array literal `stdlib_commands()` is the truth for the
+// stdlib-CLI verb roster. These verbs each own a sub-CLI binary and SELF-
+// DELEGATE `--help` to it (they do NOT route through cmd_verb_help), so there
+// is no per-verb help body in self/main.hexa to drift — the drift surface here
+// is dispatch coverage, asserted by self/stdlib_help_drift_test.hexa. NO
+// `.tape`, NO codegen, NO hash guard, NO runtime read_file in the help path.
+//
+// `cloud` keeps its own deeper SSOT (stdlib/cloud/cloud_commands::cloud_commands()
+// — the merged pilot) for its 31 sub-verbs; here it is one stdlib-CLI row whose
+// detail lives behind `hexa cloud help`.
+//
+// group ∈ { science | quantum | sim | catalog | engine | gen } — render bucket.
+
+use "self/core_commands"   // reuse the shared `Cmd` struct (name·group·summary·args)
+
+fn stdlib_commands() -> [Cmd] {
+    return [
+        // ── science — verify / calc / atlas ──────────────────────────────
+        Cmd { name: "verify", group: "science",
+            args: "<id> | --expr <fn> <n> <v>",
+            summary: "Verify a claim: atlas lookup + hexa-native calculators → tier (🔵/🟡/🟠/⚪)." },
+        Cmd { name: "calc", group: "science",
+            args: "<engine> [args]",
+            summary: "TECS-L calculators (nstate/vortex/n6/perfect/congruence/gamma0), hexa-native." },
+        Cmd { name: "atlas", group: "science",
+            args: "<hash|stats|lookup|dump|register|export> [args]",
+            summary: "Atlas SSOT surface (compiler/atlas/embedded.gen.hexa, text-parsed). See `hexa atlas --help`." },
+
+        // ── quantum — qrng / qmirror ─────────────────────────────────────
+        Cmd { name: "qrng", group: "quantum",
+            args: "[status|collect|selftest|chain|meta] [--backend N]",
+            summary: "Quantum RNG router (RFC 044) — 9-backend table, tier coverage T0..T3." },
+        Cmd { name: "qmirror", group: "quantum",
+            args: "[status|selftest|chsh|iit|...]",
+            summary: "Quantum mirror substrate (RFC 045) — 38 modules. See `hexa qmirror --help`." },
+
+        // ── sim — virtual universe ───────────────────────────────────────
+        Cmd { name: "sim-universe", group: "sim",
+            args: "[status|selftest|anu|multiverse|...]",
+            summary: "Virtual-universe runtime (RFC 046) — 26 modules. See `hexa sim-universe --help`." },
+
+        // ── catalog — stdlib module index ────────────────────────────────
+        Cmd { name: "stdlib", group: "catalog",
+            args: "[list [--json]]",
+            summary: "stdlib catalog (modules · dirs · tests · docs); purpose harvested from headers." },
+
+        // ── engine — self-growing atlas / remote dispatch ────────────────
+        Cmd { name: "loop", group: "engine",
+            args: "[--once|--budget N|--time D] [--lenses ...] [--dfs ...]",
+            summary: "Self-growing atlas cycle — 8-stage (RFC 065 + 080). See `hexa loop --help`." },
+        Cmd { name: "cloud", group: "engine",
+            args: "<rent|run|nohup|fire|poll|tail|copy-to|copy-from|...>",
+            summary: "GPU pod lifecycle + structured-argv remote dispatch. See `hexa cloud help` (31 sub-verbs)." },
+        Cmd { name: "gpu", group: "engine",
+            args: "<fire|disasm|lint> <kernel.ptx> [args]",
+            summary: "Remote GPU fire harness + PTX static analysis (GPU.md §7c)." },
+
+        // ── gen — 빵틀 generators ────────────────────────────────────────
+        Cmd { name: "dojo", group: "gen",
+            args: "<domain> <slug> '<spec>' [--lang=hexa|py|both]",
+            summary: "Cloud training-job 빵틀 (.hexa+.py+run.sh → exports/<d>/dojo/<slug>/)." },
+        Cmd { name: "easy", group: "gen",
+            args: "scaffold <topic> [--out <p>] | lint <file.md>",
+            summary: "친근(이지) 설명 빵틀 + 측정 축 채점기 (deterministic scoring)." },
+        Cmd { name: "hf", group: "gen",
+            args: "<flags>",
+            summary: "HuggingFace upload wrapper (pure hexa · validate + sha256 + hf CLI)." }
+    ]
+}
+
+fn stdlib_command_names() -> [str] {
+    let cmds = stdlib_commands()
+    let mut out = []
+    let mut i = 0
+    while i < len(cmds) {
+        out.push(cmds[i].name)
+        i = i + 1
+    }
+    return out
+}
