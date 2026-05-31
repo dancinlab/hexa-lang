@@ -209,3 +209,12 @@
 
 @N n_preservation := "물거품 방지 요지" :: note [d=2026-05-16 active]
   text = "사용자 directive 2026-05-16 '지금까지 작업한 것들 물거품 되면 안되니까 옮길 것 옮기고 참조로 해야되면 참조로 기록'. → §X 가 그 보존 인덱스. 단일 최대 risk = 5 hexa-lang branch 미통합 → PLAN Phase 0. 복제 아닌 참조 (g3 drift-avoidance)."
+
+@N n_clm_convmoe_port_gap := "CLM-ConvMoE flame port — 4 missing op families" :: note [d=2026-06-01 active]
+  text = "anima CLM(CLMConvMoE) production trainer를 flame로 .hexa 작성하려면(anima a_train_flame_forge directive · P6_SCALE_LADDER_7B) flame에 4개 연산군 선행 필요. flame 현재 = attention 트랜스포머(rmsnorm·rope·attn_dt·silu_gate·tied-lmhead·CE·AdamW·ag_tape) — CLM은 Conv-MoE라 구조 상이."
+  gap_conv1d = "causal-dilated Conv1d (trunk · embed_conv · ConvExpert · router · readout) fwd+bwd — flame 0 files (2026-06-01 grep). NEEDED."
+  gap_groupnorm = "GroupNorm fwd+bwd — flame 0 files. NEEDED (CLM uses GroupNorm, not rmsnorm)."
+  gap_moe_router = "sparse-MoE router (softmax + top-k expert combine) fwd+bwd — flame has PureField dual-expert only, no top-k routing. NEEDED."
+  gap_int4_ste = "int4-sym[-7,+7] per-output-channel STE fake-quant (QAT envelope · AKIDA rejects -8) fwd+STE-bwd — flame 0 files. NEEDED."
+  discipline = "each op = fwd+bwd + byte-equal/GRAD-EXACT oracle per flame Phase pattern (cf. nn_lib F-RFC043-LAYER-EQ). then assemble train_clm.hexa over forge GPU substrate · GPU-resident verify."
+  scoped_by = "param formula P6 §1: mid d512/L8/E8=13.65M · large d768/L12/E12=44.68M (verified). measurement rung ⊥ deploy (a_scale_honest_scope)."
