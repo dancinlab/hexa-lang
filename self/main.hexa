@@ -17,6 +17,7 @@ use "compiler/codegen/nvptx_target"
 use "stdlib/cloud/cloud_commands"
 use "self/core_commands"
 use "self/discovery_commands"
+use "self/tool_commands"
 // ═══════════════════════════════════════════════════════════
 //  self/main.hexa — HEXA CLI 엔트리 (go/cargo 스타일)
 //
@@ -317,31 +318,43 @@ fn cmd_absorbed_help(verb) {
         }
         return
     }
-    // AUDIT / SCIENCE verifiers (not yet SSOT-migrated — S4 tool drawer).
-    if verb == "honesty"                { println("hexa honesty <file>\n  AUDIT — over-claim / honesty verifier (BT-AI2 audit surface).")
-    } else if verb == "absolute"        { println("hexa absolute <file>\n  AUDIT — absolute-claim verifier (no unfenced superlatives).")
-    } else if verb == "meta-closure"    { println("hexa meta-closure <file>\n  AUDIT — meta-closure verifier (claim-graph terminality).")
-    // SCIENCE absorbed verbs.
-    } else if verb == "lattice"             { println("hexa lattice <verify|axis-table|cross-check>\n  SCIENCE — n=6 lattice math (pure-math axis tables · cross-check).")
-    } else if verb == "atlas-audit"         { println("hexa atlas-audit <external-entity|anchor|all>\n  AUDIT — overlay-corpus atlas audit (hexa-matter doctrine gate).")
-    } else if verb == "atlas-verify"        { println("hexa atlas-verify [--domain D]\n  AUDIT — atlas verdict ledger (Stage 1+2+3 hexa-native).")
-    } else if verb == "repo-audit-taxonomy" { println("hexa repo-audit-taxonomy <catalog.md> <manifest.toml> [<root>]\n  AUDIT — repo taxonomy / catalog-vs-manifest audit.")
-    } else if verb == "akida"               { println("hexa akida [args]\n  EXTERNAL — Akida neuromorphic HW probe.")
-    // EXTERNAL data bridges (compiler/bridges/*) — fetch + verify against a source.
-    } else if verb == "codata" || verb == "oeis" || verb == "arxiv" || verb == "gw" || verb == "horizons"
-           || verb == "cmb" || verb == "nanograv" || verb == "simbad" || verb == "icecube"
-           || verb == "nist-atomic" || verb == "wikipedia" || verb == "openalex" || verb == "gaia"
-           || verb == "lhc" || verb == "pubchem" || verb == "uniprot" {
-        println("hexa " + verb + " <query|id>")
-        println("  EXTERNAL data bridge — fetch from " + verb + " and verify the result against the source.")
-    // ANNOTATOR family (tool/hexa_annot/hexa-<name>) — source-analysis tools.
-    } else if is_absorbed_verb(verb) {
-        println("hexa " + verb + " <file.hexa>")
-        println("  ANNOTATOR — source-analysis tool (see `hexa tool list`).")
-    } else {
-        // Not an absorbed verb — fall back to the per-verb / full catalog.
-        cmd_verb_help(verb)
+    // AUDIT / SCIENCE / EXTERNAL / ANNOTATOR families — rendered from the
+    // in-source SSOT self/tool_commands::tool_commands() (compiled in, NOT
+    // read_file'd). The 53 tool-drawer verbs iterate the same array the drawer
+    // index (cmd_tool_list) + S4 drift test share, so their per-verb help can
+    // never drift from the roster.
+    let _trow = tool_command_lookup(verb)
+    if len(_trow.name) > 0 {
+        if len(_trow.args) > 0 {
+            println("hexa " + _trow.name + " " + _trow.args)
+        } else {
+            println("hexa " + _trow.name)
+        }
+        let _tl = _trow.summary.split("\n")
+        let mut _ti = 0
+        while _ti < len(_tl) {
+            println("  " + _tl[_ti])
+            _ti = _ti + 1
+        }
+        return
     }
+    // Not a tool-drawer verb — fall back to the per-verb / full catalog.
+    cmd_verb_help(verb)
+}
+
+// _tool_group_line — space-join the tool_commands() verb names in one family
+// group, for the `hexa tool` drawer index. Single-sources the drawer's family
+// verb lists from the same SSOT the per-verb help renders from.
+fn _tool_group_line(group) {
+    let names = tool_names_in_group(group)
+    let mut s = ""
+    let mut i = 0
+    while i < len(names) {
+        if i > 0 { s = s + " " }
+        s = s + names[i]
+        i = i + 1
+    }
+    return s
 }
 
 // CANON M4: go-tool-style verb index. The bare `hexa <verb>` dispatch still
@@ -356,14 +369,13 @@ fn cmd_tool_list() {
     println("             · stdlib: module catalog)")
     println("DISCOVERY   drill kick chain omega surge dream swarm reign molt wake forge canon")
     println("            debate revive smash free hyperarithmetic loop")
-    println("EXTERNAL    codata oeis arxiv gw horizons cmb nanograv simbad icecube nist-atomic")
-    println("            wikipedia openalex gaia lhc pubchem uniprot akida")
-    println("ANNOTATOR   pure-check memo-check catalog readme doc codegen-hints distill effect-map")
-    println("            intent-map meta-map phi-map struct-layout self-aware cognitive freedom")
-    println("            infer learn safety antivirus serve tenant eval-run n6-list test-list")
-    println("            schema law-link harness rule gate-register")
-    println("SCIENCE     atlas calc verify atlas-verify atlas-audit lattice repo-audit-taxonomy")
-    println("            honesty absolute meta-closure qrng qmirror sim-universe gpu cloud")
+    // EXTERNAL · ANNOTATOR · SCIENCE/AUDIT verb lines derived from the in-source
+    // SSOT self/tool_commands (no hand-typed family list survives — the drawer
+    // index iterates the same array the per-verb help + S4 drift test share).
+    println("EXTERNAL    " + _tool_group_line("external"))
+    println("ANNOTATOR   " + _tool_group_line("annot"))
+    println("SCIENCE     atlas calc verify qrng qmirror sim-universe gpu cloud (stdlib-CLI) +")
+    println("AUDIT       " + _tool_group_line("audit"))
     println("")
     println("  per-verb detail: `hexa <verb> --help`  ·  full catalog: `hexa --help`")
 }
