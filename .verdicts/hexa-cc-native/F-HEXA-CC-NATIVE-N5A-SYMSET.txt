@@ -33,8 +33,21 @@ MEASUREMENT 2 — THE REAL N5 FRONTIER is the type-checker, not the linker
   47 files (flatten works).
   aprime_cc --emit=obj --backend=native flat.hexa -> rc=1:
     "hexa-compiler: 181 diagnostic(s); aborting before codegen"
-    181 × HX3001  "type mismatch: expected `named:any`, got `i64`"
-    (e.g. flat.hexa:5758, 5759, 6207 …)
+    Diagnostic-code distribution (authoritative `uniq -c`, 168 HexaError lines;
+    the 181 summary counts a few multi-line notes too):
+      HX2001 : 208   (dominant)
+      HX3004 :  34
+      HX3001 :  34   "type mismatch: expected `named:any`, got `i64`"
+      HX2003 :  32
+      HX0011 :  26
+      HX4001 :  26
+    (CORRECTION: an earlier draft of this verdict said "181 × HX3001" — that was
+    a miscount from interleaved cause:/explain: lines. HX3001 is only 34; HX2001
+    dominates. The root pattern is still a type-system mismatch on the self-host
+    source: many globals are declared `any` then assigned an i64 literal, e.g.
+    flat.hexa:5758 `let mut _g_oi_lineno: any = 0`, :6207 `let mut _g_atlas_index:
+    any = 0`. So the native type-checker's `any`/`i64` handling on the compiler's
+    own source is the gate — exact code mix is HX2001-led, not HX3001-led.)
   => aprime_cc CANNOT typecheck the flattened compiler — it aborts BEFORE
   codegen/linking. So the N5 blocker is NOT runtime.o coverage and NOT hexa_ld;
   it is the native compiler's TYPE CHECKER rejecting the self-host source with
