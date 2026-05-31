@@ -36,3 +36,4 @@
 @domain HEXA-BUILDFLOOR := "./HEXA-BUILDFLOOR.md"
 @domain HEXA-CC-ZERO := "./HEXA-CC-ZERO.md"
 @domain HEXA-TRAIN-FLOOR := "./HEXA-TRAIN-FLOOR.md"
+@domain HEXA-CC-NATIVE := "./HEXA-CC-NATIVE.md"
