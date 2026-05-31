@@ -1,0 +1,37 @@
+GPU-ROOFLINE MS#1 1b — [T; N] N-capture behavioral NEUTRALITY (direct run, sign window)
+VERDICT: 🟢 NEUTRALITY CONFIRMED (behavioral) — parser N-capture does not change runtime behavior.
+DATE: 2026-05-31
+SCOPE: this is a MODEST honest increment to the PARTIAL verdict — it confirms the parser
+       change is runtime-neutral, NOT the full SSOT-corpus byte-eq, and NOT N-consumption.
+HONESTY: numbers below were directly observed via `hexa run` in this session (sign window
+         active). No fabrication. Output captured + filtered (grep -v "parses cleanly").
+
+================================================================================
+MEASUREMENT (direct `hexa run`, installed toolchain, sign window 2026-05-31)
+================================================================================
+Two minimal programs, identical except the array TYPE annotation:
+  A) struct Buf { data: [int; 4] }   // [T; N] — the new N-carrying syntax
+     fn main() { let b = Buf { data: [1,2,3,4] }; println(b.data[0]) }
+  B) struct Buf { data: [int] }      // plain [T] — the historical form
+     fn main() { let b = Buf { data: [1,2,3,4] }; println(b.data[0]) }
+
+Observed:
+  A) [int; 4] : parses cleanly (NO RSS blowup) · runs · prints "1" · rc=0
+  B) [int]    : runs · prints "1"
+  → outputs IDENTICAL (1 == 1). The [T;N] form is accepted, does not blow up memory,
+    and produces the same runtime result as the plain [T] form.
+
+================================================================================
+WHAT THIS DOES AND DOES NOT ESTABLISH
+================================================================================
+ESTABLISHES (🟢): the parser N-capture (parser.hexa dc49c0048, on main) is BEHAVIORALLY
+  NEUTRAL — an existing-shape program ([T]) and the new-syntax program ([T;N]) run
+  identically; the additive else-arm preserves the historical path; no RSS regression.
+DOES NOT ESTABLISH (still open):
+  - full SSOT-corpus byte-eq across all transpiler modules (the stale-seed codegen-vintage
+    confound from the PARTIAL verdict still blocks a clean BASE-vs-MINE module diff).
+  - N CONSUMPTION: nothing downstream reads the captured N yet, so [int;4] and [int]
+    transpile to the same C — the size is carried in the type string but unused = residual 1c.
+1b stays [~]: frontend N-capture real + neutral; HIR/MIR propagation (1c) + backend tile
+formula (1d) remain. Supersedes the "byte-eq UNVERIFIED" caveat with "behavioral-neutral
+CONFIRMED; full byte-eq + consumer pending".

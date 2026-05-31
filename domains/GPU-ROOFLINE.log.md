@@ -280,3 +280,16 @@ PR #2256 이 `self/parser.hexa` (dc49c0048) 의 `[T; N]` N-보존 변경을 main
 - [~] 잔여: (1c) HIR/MIR N 전파 → codegen · (1d) backend `_nvptx_shared_default_bytes` → N 기반 tile 공식.
   둘 다 sign 창 + (1c 는 HIR/MIR, 1d 는 nvptx_target.hexa 공유트리) 필요 = 후속 세션.
 - ℹ️ 선행 #2253 정정("syntax 부재"는 오류)이 옳았고, 이 착지가 정정이 지목한 N-폐기를 해소.
+
+## 2026-05-31 MS#1 1b — N-capture behavioral NEUTRALITY 실측 (sign 창)
+
+직전 PARTIAL(#2261)이 "byte-eq UNVERIFIED" 로 남긴 검증 갭을 sign 창에서 직접 run 으로 한 칸 좁힘.
+직접 `hexa run` 실측(installed toolchain): `struct Buf{data:[int;4]}` vs `struct Buf{data:[int]}`
+두 프로그램이 모두 파싱 OK(RSS 폭주 없음)·실행·출력 "1"·rc=0 = IDENTICAL.
+
+- 🟢 behavioral neutrality CONFIRMED: parser N-capture(dc49c0048)는 런타임 동작 무변경.
+  [T;N] additive else-arm 이 historical [T] 경로 보존. 새 문법이 메모리 폭주 없이 동작.
+- 🔴 잔여: ① full SSOT-corpus byte-eq (stale-seed codegen-vintage 오염으로 clean BASE-vs-MINE
+  모듈 diff 차단 — P1 캐비엇) ② N consumption — [int;4]/[int] 가 같은 C 로 transpile(N 미사용)
+  = 1c(HIR/MIR 전파) 필요. 1b 는 [~] 유지(frontend real+neutral · 1c/1d 잔여).
+- verdict=`.verdicts/gpu-roofline-ms1-1b/F-...-N-CAPTURE-NEUTRALITY.txt`.
