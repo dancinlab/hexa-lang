@@ -1,0 +1,11 @@
+# 1b-cons PREMISE evidence — installed transpiler hexa_v2, Sun May 31 18:51:16 KST 2026
+# transpile cmd: hexa_v2 <in.hexa> <out.c>  (the real hexa cc backend = codegen.hexa, HexaVal-boxed structs)
+cmp -s base_tn.c base_plain.c ; echo $? =>
+  exit=0
+md5:
+MD5 (/Users/mini/dancinlab/hexa-lang/.claude/worktrees/agent-a000ef8fca99b6214/.verdicts/gpu-roofline-1b-cons/_evidence/base_tn.c) = 0473da5ccddc02cf04a6d95a119d74f3
+MD5 (/Users/mini/dancinlab/hexa-lang/.claude/worktrees/agent-a000ef8fca99b6214/.verdicts/gpu-roofline-1b-cons/_evidence/base_plain.c) = 0473da5ccddc02cf04a6d95a119d74f3
+sizes:
+     761 /Users/mini/dancinlab/hexa-lang/.claude/worktrees/agent-a000ef8fca99b6214/.verdicts/gpu-roofline-1b-cons/_evidence/base_tn.c
+     761 /Users/mini/dancinlab/hexa-lang/.claude/worktrees/agent-a000ef8fca99b6214/.verdicts/gpu-roofline-1b-cons/_evidence/base_plain.c
+    1522 total

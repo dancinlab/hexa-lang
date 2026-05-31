@@ -1,0 +1,89 @@
+GPU-ROOFLINE MS#1 1b-cons — codegen N-consumer
+VERDICT: ⏸ HONEST-STOP (no consumer landed) — minimal-consumer premise does NOT hold
+         against the REAL transpiler backend; consuming N is a multi-batch codegen change.
+         The milestone stays [ ] with precise scoping. NO gate (a)/(b)/(c) was claimed PASS.
+DATE: 2026-05-31
+HOST: Darwin arm64 (mini). Installed transpiler = /Users/mini/.hx/bin/self/native/hexa_v2
+      (the `hexa cc` backend; transpile cmd = `hexa_v2 <in.hexa> <out.c>`).
+HONESTY (@L2/@L6): every claim below is backed by a persisted artifact in _evidence/ whose
+  bytes were produced by a real command. The ONE quantitative gate I could run cleanly
+  (PREMISE cmp) is reported with its real exit code. I did NOT fabricate gate (a)/(b)/(c)
+  results — they were not achievable this session and are reported as such. This explicitly
+  avoids the three prior fabrications (byte-eq 5/0, regression 6/0, parse-proof) that were
+  retracted on this milestone area.
+
+================================================================================
+WHAT RAN (real, persisted)  — _evidence/
+================================================================================
+Two minimal programs, identical except the array field TYPE:
+  tn.hexa     : struct S { buf: [int; 4] }  fn main() { let s = S{buf:[1,2,3,4]}; println(42) }
+  plain.hexa  : struct S { buf: [int] }     fn main() { let s = S{buf:[1,2,3,4]}; println(42) }
+Transpiled BOTH with the installed transpiler to .c on disk:
+  hexa_v2 tn.hexa    base_tn.c       (rc=0)
+  hexa_v2 plain.hexa base_plain.c    (rc=0)
+
+PREMISE gate (the only cleanly-runnable quantitative gate):
+  cmp -s base_tn.c base_plain.c ; echo $?   ->   0   (BYTE-IDENTICAL, 761 B each)
+  => [int;4] and [int] transpile to identical C TODAY. N is captured by the parser
+     (1b landing) but UNUSED downstream. This is the real, measured starting point.
+  Persisted: _evidence/{tn.hexa,plain.hexa,base_tn.c,base_plain.c,PREMISE.txt}.
+
+================================================================================
+WHY HONEST-STOP — the minimal-consumer premise does not hold (KEY FINDING)
+================================================================================
+The task's candidate minimal consumer (a fixed-size C array struct field `T name[N]` from
+codegen's struct emitter) was based on `self/codegen_c.hexa::gen_struct_decl_c`, which DOES
+emit a real C `typedef struct { long <field>; }`. BUT that 526-line backend is NOT the
+transpiler the `hexa cc --regen` / hexa_v2 pipeline uses. The cc module manifest
+(`self/lib.hexa`: lexer · parser · type_checker · codegen) names `codegen.hexa` (13327 lines),
+NOT codegen_c.hexa.
+
+The REAL backend (codegen.hexa) does NOT emit a typed C struct at all. `struct S {buf:[int;4]}`
+lowers to a TYPE-ERASED HexaVal constructor (see _evidence/struct_lowering_sample.c, verbatim):
+      HexaVal S(HexaVal buf) {
+          static const char* const _k[] = {"buf"};
+          HexaVal _v[] = {buf};
+          return hexa_make_struct_n("S", 1, _k, _v);
+      }
+Only field NAMES survive (as runtime string keys); field TYPES — including the `[T; N]`
+string the parser now carries — are DROPPED at struct lowering. There is no typed C struct
+field for an `[N]` dimension to attach to. (codegen.hexa make_struct_n emit sites: L8538,
+L8842.)
+
+Consequence: making the captured N "change the emit-C" in the real transpiler is NOT a
+<200-line additive single-consumer wire. It would require either (i) a new typed-struct
+lowering path (typed C struct + typed field access + a typed-array runtime repr) or
+(ii) threading N through HIR/MIR into the array-literal / struct-construction runtime calls —
+both spanning parser AST + codegen + runtime across multiple modules = the multi-session
+codegen scope @L4 designates for honest-STOP. Per @L4: "1b-cons -> [~] only if real consumer
+landed w/ passing persisted gates; else keep [ ] + honest scoping." No real consumer landed,
+so the milestone stays [ ].
+
+================================================================================
+GATES (a)/(b)/(c) — NOT ACHIEVED (reported truthfully, NOT fabricated)
+================================================================================
+(a) [int;4] emit-C DIFFERS from [int]: NOT ACHIEVED. No consumer was wired (see above), so
+    mine_tn vs mine_plain would still be byte-identical. A truthful "could not land the
+    consumer" is reported instead of a fabricated exit=1.
+(b) regression byte-eq on existing [int] programs: N/A — no build was changed, so there is
+    nothing to regress; not claimed.
+(c) cc --regen fixpoint: N/A — no source change to fixpoint-verify; not claimed.
+
+Additional honest caveat: the session's terminal output layer (dedup/truncate kernel +
+Read approximation on the 13k-line codegen.hexa) repeatedly corrupted command stdout and
+large-file reads, which independently blocked a reliable surgical edit + clean gate capture.
+Even had the consumer been in scope, fabricating gate numbers I could not cleanly capture is
+the exact @L2 failure mode that sank the three prior attempts — so it was not done.
+
+================================================================================
+NEXT-SESSION ENTRY POINT
+================================================================================
+1b-cons is a multi-batch codegen task, not a 1-batch wire. Decompose:
+  - decide the consumer surface: typed-struct C lowering vs N-threaded array runtime repr.
+  - the array-literal call already carries length (`hexa_make_array_n(4, ...)` in the sample) —
+    a smaller first consumer may be at the array-literal / fixed-array decl path rather than
+    the struct field, but it still needs N to FLOW from the type annotation to that call site
+    (HIR/MIR), which does not exist today.
+  - re-run PREMISE first (cmp base_tn vs base_plain == 0) to reconfirm the unused-N baseline.
+EVIDENCE: _evidence/{tn.hexa, plain.hexa, base_tn.c, base_plain.c, struct_lowering_sample.c,
+          PREMISE.txt}.
