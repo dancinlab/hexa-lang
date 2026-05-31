@@ -239,6 +239,39 @@ fn imm_val(s: string) -> i64 {
     return s.substring(1, n).to_int()
 }
 
+// Parse a MOVZ/MOVK immediate operand that may carry an optional shift:
+// "#imm" or "#imm, lsl #N" (N ∈ {0,16,32,48}, emitted by arm64_darwin.hexa's
+// >16-bit constant materializer). Returns [imm16, hw] where hw = N/16 (the
+// ARM64 MOVZ/MOVK shift field, bits 22:21). Unshifted → hw 0. Without this the
+// `, lsl #N` suffix reached imm_val→to_int ("trailing garbage") AND the shift
+// was dropped from the encoding (wrong halfword for >16-bit constants).
+fn _movw_imm_hw(operand: string) -> [i64] {
+    let n = len(operand)
+    let mut ci = 0 - 1
+    let mut i = 0
+    while i < n {
+        if operand.substring(i, i + 1) == "," { ci = i; i = n } else { i = i + 1 }
+    }
+    if ci < 0 {
+        let mut r0: [i64] = []
+        r0.push(imm_val(operand) & 0xffff)
+        r0.push(0)
+        return r0
+    }
+    let imm = imm_val(operand.substring(0, ci)) & 0xffff
+    let mut hi = 0 - 1
+    let mut j = ci
+    while j < n {
+        if operand.substring(j, j + 1) == "#" { hi = j; j = n } else { j = j + 1 }
+    }
+    let mut hw = 0
+    if hi >= 0 { hw = operand.substring(hi + 1, n).to_int() / 16 }
+    let mut r: [i64] = []
+    r.push(imm)
+    r.push(hw)
+    return r
+}
+
 // fn encode_arm64_insn(op: string, ops: [string]) -> i64
 //
 // Returns the 32-bit arm64 instruction word for `op` + `ops`.
@@ -263,10 +296,15 @@ fn encode_arm64_insn(op: string, ops: [string]) -> i64 {
     // MOVK Xd, #imm16 (keep — OR the immediate, preserves others).
     if (op == "MOVZ" || op == "MOVK") && len(ops) == 2 && ops[1].substring(0, 1) == "#" {
         let rd = xreg_idx(ops[0])
-        let imm = imm_val(ops[1]) & 0xffff
+        // Operand is "#imm" OR the shifted form "#imm, lsl #N" (N∈{0,16,32,48}).
+        // _movw_imm_hw splits off the shift → hw (bits 22:21). The >16-bit
+        // constant materializer (arm64_darwin.hexa) relies on these MOVK shifts.
+        let parsed = _movw_imm_hw(ops[1])
+        let imm = parsed[0]
+        let hw = parsed[1]
         let mut base = 0xd2800000      // MOVZ
         if op == "MOVK" { base = 0xf2800000 }   // MOVK
-        return base | (imm << 5) | rd
+        return base | (hw << 21) | (imm << 5) | rd
     }
     // MOV Xd, #imm16  (legacy alias — `MOV Xd, #imm` is a MOVZ alias
     // when the immediate fits 16 bits with no shift).

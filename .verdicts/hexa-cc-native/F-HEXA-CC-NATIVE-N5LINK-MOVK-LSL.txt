@@ -1,0 +1,26 @@
+F-HEXA-CC-NATIVE-N5LINK-MOVK-LSL -- fix shifted MOVZ/MOVK encoding; obj-emit produces valid arm64 .o
+=====================================================================================================
+date: 2026-06-01   host: mini (darwin-arm64)   base: worktree off origin/main 17b14e43c
+
+BUG: arm64_darwin.hexa's >16-bit constant materializer emits `movk Xd, #h, lsl #N` (N∈{16,32,48})
+with the shift folded into a single operand string "#h, lsl #N". encode_arm64_insn fed that whole
+string to imm_val→to_int → `error: to_int: trailing garbage in "21242, lsl #16"` (abort, no .o).
+AND the encoding never set the hw field (bits 22:21), so a parsed immediate would still write the
+wrong halfword for any >16-bit constant.
+
+FIX (compiler/emit/macho_arm64.hexa): _movw_imm_hw() splits "#imm, lsl #N" → [imm16, hw=N/16];
+the MOVZ/MOVK arm encodes `base | (hw << 21) | (imm << 5) | rd` (ARM ARM C6.2 MOVZ/MOVK). Unshifted
+"#imm" → hw 0 (byte-identical to before). Spec-exact, not a guess.
+
+VERIFICATION (RUNTIME obj-emit, not just diagnostics):
+  - to_int "trailing garbage" error GONE.
+  - tiny.hexa exercising a >32-bit const (4000000000, forces movk lsl#16/#32) + `(3.7 as int)` cast
+    -> `aprime_l2 --emit=obj` => /tmp/tiny.o = **Mach-O 64-bit object arm64, 1016 bytes, exit 0**,
+    zero errors. So the movk/lsl encoding AND the N5-link as-cast lowering work END-TO-END to a real
+    arm64 object on a program using both features.
+
+FULL-COMPILER STATUS: flattened compiler/main.hexa --emit=obj now passes all diagnostics (0 fatal)
+AND reaches arm64 codegen with NO to_int error, but does not finish within 60s (no .o yet) — a
+SCALE/perf matter at ~40k lines (the small program proves correctness), NOT a codegen bug. NEXT
+frontier: obj-emit completion at scale (longer run / codegen perf), then N5-sym (runtime _hexa_*
+symbol set the obj needs), hexa_ld link → gen2≡gen3 byte-eq fixpoint, N6, N7. live tree untouched.
