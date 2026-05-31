@@ -1,0 +1,267 @@
+F-HEXA-CC-NATIVE-N5PRE-TRIAGE
+================================================================
+milestone : N5-pre (TRIAGE stage) — classify why the native compiler
+            cannot emit its own flattened source; produce a decomposition.
+stage     : MEASUREMENT / DOCS ONLY — no compiler/ source edit, no
+            aprime_cc rebuild (locked decision @L1).
+date      : 2026-05-31
+worktree  : /Users/mini/dancinlab/hexa-lang-n5pre @ origin/main a64865afc
+binary    : build/aprime_cc (existing — copied from main repo build/, NOT rebuilt)
+input     : compiler/main.hexa --(build/hexa_module_loader)--> /tmp/flat.hexa
+            40246 lines, 47 files (topo leaves-first). flatten EXIT=0
+            ("map key ... not found" warnings are benign; file still written).
+
+----------------------------------------------------------------
+1. REPRODUCTION (verbatim)
+----------------------------------------------------------------
+cmd:
+  HEXA_LANG=$PWD build/aprime_cc _drv.hexa --target=arm64-apple-darwin \
+      --emit=obj --backend=native -o /tmp/big.o /tmp/flat.hexa
+result:
+  atlas: loaded 17265 nodes from embedded.gen.hexa
+  ... 168 HexaError + 13 HexaWarn lines ...
+  hexa-compiler: 181 diagnostic(s); aborting before codegen
+  EXIT=1
+
+Raw code histogram (grep -oE 'HX[0-9]+' | sort | uniq -c | sort -rn):
+  208 HX2001
+   36 HX3004
+   34 HX3001
+   32 HX2003
+   26 HX4001
+   26 HX0011
+  (matches the cached N5a numbers exactly.)
+
+** DISAMBIGUATION (load-bearing for the decomposition): **
+The raw histogram DOUBLE-COUNTS every diagnostic — each carries the
+`[HXnnnn]` tag line AND an `explain: hexa explain HXnnnn` line, so the
+token count is 2x the diagnostic count. TRUE per-code counts (by
+`[HXnnnn]` tag, split Error vs Warn):
+
+  code    diags  severity      message family
+  ------  -----  ------------  -----------------------------------------
+  HX2001    104  Error         undefined name
+  HX3004     18  Warn          return type mismatch  (NON-FATAL)
+  HX3001     17  Error         type mismatch (expected bool, got HexaVal)
+  HX2003     16  Error         not callable
+  HX4001     13  Warn          int-division narrow   (NON-FATAL)
+  HX0011     13  Error         parse error (expected `{`, found KwAs)
+  ------  -----
+   total    181  = the "181 diagnostic(s)" line (104+18+17+16+13+13)
+
+  HexaError (FATAL) total = 104+17+16+13 = 150
+  HexaWarn  (non-fatal)   =      18+13    =  31  (HX3004 + HX4001)
+
+The codegen-blocking frontier is 150 hard errors across 4 classes
+(HX2001 / HX3001 / HX2003 / HX0011), not 181.
+
+----------------------------------------------------------------
+2. HX2001 DEEP-DIVE  (104 errors — DOMINANT)  + ROOT-CAUSE PIVOT
+----------------------------------------------------------------
+Distinct undefined-name set (grep `cause: undefined name X`, dedupe) —
+18 distinct identifiers, with counts:
+
+  count  name                       family
+  -----  -------------------------  ------------------------------------
+    61   `as`                       NOT a name — parser cascade (= HX0011)
+    10   __raw_code_is              runtime intrinsic
+     7   bytes_to_str_raw           runtime intrinsic
+     7   `)`                        NOT a name — parser cascade token
+     4   __raw_cmp3                 runtime intrinsic
+     2   push                       method-call (.push) mis-resolved
+     2   float_to_bits              runtime intrinsic (float bitcast)
+     1   __raw_imod / __raw_idiv / __raw_fmod / __raw_d2i / __raw_add_f
+     1   bits_to_float              runtime intrinsic
+     1   hexa_str_concat / hexa_str_parse_int   runtime intrinsic (string)
+     1   __arr_alloc_items_zero / __arr_alloc_items_zero_int  array alloc
+     1   i64                        type name used as value (in `as i64`)
+
+Decomposition of the 104:
+  ~68  = parser cascade (`as` x61 + `)` x7) — SAME bug as HX0011: the
+         native parser does not accept the `expr as Type` cast operator,
+         so it mis-tokenizes the rest of the expression and the trailing
+         identifiers / close-parens resolve as "undefined names". NOT
+         genuine missing decls.
+   ~2  = `i64` used as a value — part of the `as i64` cast cascade.
+   ~2  = `.push` member-call mis-resolved as a free ident.
+  ~32  = runtime-intrinsic identifiers (__raw_* / float_to_bits /
+         bits_to_float / bytes_to_str_raw / hexa_str_* /
+         __arr_alloc_items_zero(_int)).
+
+** ROOT-CAUSE PIVOT (verified against source — supersedes the naive
+   "allowlist too small" reading): **
+HX2001 is emitted by compiler/check/types.hexa:431 `_tc_resolve_ident`,
+which gates a name as in-scope iff it is in `_bind_builtin_names()`
+(compiler/check/bind.hexa) OR a local/global/fn OR an atlas symbol:
+    let known = _bind_builtin_names()
+    if _contains_str(known, name) { return ty_any() }
+    ... else emit HX2001 ...
+The CURRENT bind.hexa allowlist (lines 1044-1059) ALREADY CONTAINS most
+of the cited intrinsics — float_to_bits, bits_to_float, __raw_idiv,
+__raw_imod, __raw_fmod, __raw_add_f, __raw_d2i, __raw_cmp3,
+__raw_code_is, hexa_str_concat, hexa_str_parse_int, rt_round, rt_trunc.
+bind.hexa was last touched 2026-05-31 16:32 ("bind builtin reland —
+4th re-land after e8c2dc1c wipe"). Yet the EXISTING aprime_cc binary
+STILL rejects them. Therefore:
+
+  (a) The dominant genuine-missing subset is NOT a current source gap —
+      the names are already registered in the source allowlist. The
+      running aprime_cc binary is STALE (built before this allowlist
+      re-land). ~28 of the ~32 intrinsic HX2001 are STALE-BINARY
+      artifacts that a plain rebuild from current source clears.
+  (b) The genuinely-still-missing names (absent from bind.hexa today,
+      confirmed by grep) are only:  bytes_to_str_raw (x7) +
+      __arr_alloc_items_zero (x1) + __arr_alloc_items_zero_int (x1)
+      = ~9 errors. Adding 3 strings to the bind.hexa allowlist closes
+      these.
+  (c) ~70 are the parser `as`-cast cascade (= HX0011 root, §below).
+  (d) ~2 are `.push` member-call modelling.
+
+So the HX2001 frontier splits: ~70 parser, ~28 stale-binary,
+~9 real-missing-decl, ~2 member-call.
+
+----------------------------------------------------------------
+3. PER-CLASS TRIAGE
+----------------------------------------------------------------
+CLASS HX0011 (13 err) — parse error, expected `{` found KwAs  [FIRST]
+  sites     : flat.hexa:34833 `if (zi as float) == z {...}` (rt_lgamma);
+              34832 `let zi = z as int`; +35058, 35553, 36792.. cluster.
+              ALL are `<expr> as <Type>` casts.
+  root      : the native parser (compiler/parse/parser.hexa) does NOT
+              implement the postfix `as` cast operator (KwAs). The lexer
+              yields KwAs (token exists) but the parser has no production,
+              so it expects a block `{` and aborts, cascading the tail of
+              the expression into HX2001 (`as`/`)`/`i64`).
+  fix locus : compiler/parse/parser.hexa (postfix-expr parse) +
+              a Cast AST node in compiler/parse/ast.hexa that
+              compiler/check/types.hexa + lower/ accept.
+  LOC       : ~15-30 lines.
+  rebuild   : YES (parser compiled into aprime_cc).
+  leverage  : HIGHEST — clears 13 HX0011 + ~70 HX2001 cascade (~83 total).
+
+CLASS HX2001 (104 err) — undefined name  [SECOND]
+  root      : (a) ~28 STALE-BINARY (already in source allowlist; cleared
+              by rebuild); (b) ~9 genuine-missing (bytes_to_str_raw,
+              __arr_alloc_items_zero, __arr_alloc_items_zero_int — add to
+              bind.hexa allowlist); (c) ~70 parser cascade (cleared by
+              HX0011 fix); (d) ~2 `.push` member-call.
+  fix locus : compiler/check/bind.hexa _bind_builtin_names() (add the 3
+              missing intrinsic strings) + the parser fix above.
+              The emit gate is compiler/check/types.hexa:431.
+  LOC       : ~3-10 lines (the 3 strings) — most of the class is
+              downstream of the parser fix + a rebuild.
+  rebuild   : YES.
+
+CLASS HX2003 (16 err) — not callable (type `named:HexaVal` not a fn)
+  sites     : `fn_v` x12, `pred` x3, `key_fn` x1 — all are STRUCT FIELDS /
+              VALUES of opaque type `named:HexaVal` invoked as callees
+              (closures / higher-order callbacks stored in fields).
+  root      : the native type-checker collapses these values to the
+              opaque carrier `named:HexaVal` and does not treat a
+              fn-typed / closure value as callable. A type-checker gap,
+              NOT a missing decl and NOT a source-annotation problem.
+  fix locus : compiler/check/types.hexa (callee typing — allow a value of
+              fn/closure/HexaVal-carrier type to be called).
+  LOC       : ~15-25 lines.
+  rebuild   : YES.
+
+CLASS HX3001 (17 err) — type mismatch (expected bool, got named:HexaVal)
+  detail    : 11 = `expected bool, got named:HexaVal` (if/while conditions
+              on HexaVal-carried values); 6 = `expected named:any, got i64`.
+  root      : front-end inference collapses self-host values to the opaque
+              `named:HexaVal` carrier and cannot refine to bool at a
+              condition (or coerce i64 to `any`). Type-checker gap; the
+              source is correct hexa.
+  fix locus : compiler/check/types.hexa (condition/coercion typing of
+              HexaVal-carried values + i64->any widening).
+  LOC       : ~30-60 lines (depends on HexaVal modelling).
+  rebuild   : YES.
+
+CLASS HX3004 (18 WARN) — return type mismatch  [NON-FATAL]
+  detail    : rt_to_string_scalar/map/array/_repr returns named:HexaVal
+              got string (x6+); rt_round returns i64 got f64; rt_add/sub/
+              mul/div returns named:HexaVal got i64/f64.
+  root      : non-fatal warning. Inferred return type (the HexaVal carrier
+              or i64) differs from the declared type. Downstream of the
+              same HexaVal-modelling gap as HX3001/HX2003.
+  fix locus : compiler/check/types.hexa return-type unification.
+  LOC       : small once HexaVal modelling lands. LOW priority.
+  rebuild   : YES (low priority — does not block codegen).
+
+CLASS HX4001 (13 WARN) — int-division narrowing (real -> int) [NON-FATAL]
+  root      : non-fatal warning ("integer division narrows the real domain;
+              use `//` or cast to f64"). Warning only.
+  fix locus : compiler/check/types.hexa division typing (or source-side
+              explicit float op). LOW priority.
+  rebuild   : YES (low priority — warning).
+
+----------------------------------------------------------------
+4. COLLAPSE ESTIMATE  (labelled ESTIMATE)
+----------------------------------------------------------------
+Ordered fixes and their ESTIMATED clear (cascade-structure inference,
+NOT measured — measuring needs a rebuild, out of scope this stage):
+
+  STEP 0 — REBUILD aprime_cc from CURRENT source (no edit):
+    clears the ~28 STALE-BINARY HX2001 outright (allowlist already has
+    them). ESTIMATE: ~28 HX2001 gone with zero new code. This is the
+    cheapest single lever and MUST precede any measurement of the rest.
+
+  FIX A — parser `as`-cast production (HX0011 + cascade):
+    clears 13 HX0011 + ~70 HX2001 cascade (`as` 61 + `)` 7 + `i64` ~2).
+    ESTIMATE: ~83.
+
+  FIX B — add bytes_to_str_raw + __arr_alloc_items_zero(_int) to
+    bind.hexa (~3 strings): clears ~9 HX2001.
+
+  FIX C — HexaVal callee + condition/coercion typing (types.hexa):
+    clears 16 HX2003 + 17 HX3001 + most of the 18 HX3004 / downstream
+    warns. ESTIMATE: ~33 fatal + ~18 warn.
+
+  After STEP0 + A + B + C the residual ESTIMATE is the ~2 `.push`
+  member-call HX2001 + the 13 HX4001 div-narrow warns. Of the 150 FATAL
+  errors, STEP0+A+B+C ESTIMATE clears ~28+~83+~9+~33 = ~148, i.e. the
+  fatal set effectively goes to ~0-2, leaving warnings (non-blocking).
+
+  ALL FRACTIONS ARE ESTIMATES.
+
+----------------------------------------------------------------
+5. N5-pre EXECUTION ORDER (recommended)
+----------------------------------------------------------------
+  STEP 0. REBUILD aprime_cc from current source FIRST and RE-MEASURE.
+     The dominant intrinsic-HX2001 subset is a STALE-BINARY artifact —
+     the names are already in compiler/check/bind.hexa. A rebuild +
+     re-run is required to separate "already fixed in source" from
+     "genuine gap" before writing any new code. (This is a measurement
+     rebuild, not a feature edit, but it is STILL an aprime_cc rebuild
+     and therefore gated — see REBUILD GATE.)
+  1. parser `as`-cast (HX0011) — compiler/parse/parser.hexa + ast.hexa.
+     Highest leverage (~83), smallest blast radius. Removes the
+     tokenizer cascade that pollutes the HX2001 set.
+  2. bind.hexa allowlist: add bytes_to_str_raw, __arr_alloc_items_zero,
+     __arr_alloc_items_zero_int (~3 strings). Clears the ~9 genuine
+     missing-decl HX2001.
+  3. HexaVal callee + condition/coercion typing — compiler/check/
+     types.hexa. Clears HX2003 (16) + HX3001 (17) + most HX3004 warns.
+     The residual real type-system work; needs care (HexaVal model).
+  4. LAST (low prio): HX4001 div-narrow + `.push` member-call. Warnings
+     / cosmetic; can be deferred past the first self-emit.
+
+  REBUILD GATE: STEP 0 and every one of steps 1-4 edits compiler/ source
+  compiled into aprime_cc (or, for STEP 0, simply rebuilds the existing
+  source), so the NEXT stage WILL require an aprime_cc REBUILD to verify
+  live. That rebuild must NOT run unguarded on the local Mac (kill-storm
+  risk); it must be USER-AUTHORIZED and run on the pool (summer[linux]) /
+  a pod, per the session resource policy. This TRIAGE stage performs NO
+  edit and NO rebuild.
+
+----------------------------------------------------------------
+VERDICT TIER: 🟢 numerical (triage measured). Reproduction is verbatim
+(EXIT=1, 181 diagnostics). Diagnostic counts are de-duplicated and
+verified by `[HXnnnn]`-tag counting. The HX2001 emit site is located to
+an exact source line (compiler/check/types.hexa:431 `_tc_resolve_ident`),
+the allowlist it consults to compiler/check/bind.hexa _bind_builtin_names()
+(verified to ALREADY contain the dominant intrinsics → stale-binary
+finding), and the parser gap to the KwAs `as`-cast (sites cited verbatim
+in flat.hexa, e.g. :34832-34833 rt_lgamma). Collapse fractions are
+explicitly labelled ESTIMATEs (cascade-structure inference — measuring
+them needs the out-of-scope rebuild, hence STEP 0).
