@@ -1465,10 +1465,11 @@ fn _is_float_kind(t: Type) -> bool {
 // literal inference does. Out-of-range fits surface as codegen overflow.
 // HexaVal is the dynamic tagged any-value: at runtime every value is a HexaVal
 // and the runtime dispatches on its tag (the same rationale the existing
-// unit/unknown tolerances already cite). A `named:HexaVal` on either side is
-// therefore compatible with any target type — treating it as a wildcard mirrors
-// the legacy self/ compiler and clears the N5-pre HX3001/HX3004 false-positives.
-fn _is_hexaval(t: Type) -> bool { return t.kind == "named:HexaVal" }
+// unit/unknown tolerances already cite). `named:HexaVal` and the explicit
+// `named:any` are both dynamic wildcards — compatible with any target type on
+// either side. Treating them as wildcards mirrors the legacy self/ compiler and
+// clears the N5-pre HX3001/HX3004 false-positives.
+fn _is_hexaval(t: Type) -> bool { return t.kind == "named:HexaVal" || t.kind == "named:any" }
 
 fn _types_assignable(expected: Type, actual: Type, src: Expr) -> bool {
     if _types_equal(expected, actual) { return true }
