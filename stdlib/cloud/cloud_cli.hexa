@@ -1133,10 +1133,50 @@ fn _cloud_rent_runpod(av: [str], start: int) -> int {
     return 0
 }
 
+// _id_looks_vast — 1 iff `id` is all-digits with length 6-9 (vast.ai
+// instance ids are short ints). Pure/CPU, no provider call. Used as the
+// fallback when an id is untracked in the registry. An empty id, or any
+// non-digit char, fails the test (→ treated as runpod).
+fn _id_looks_vast(id: str) -> int {
+    let n = len(id)
+    if n < 6 || n > 9 {
+        return 0
+    }
+    let mut i = 0
+    while i < n {
+        let cc = char_code(id.substring(i, i + 1))
+        if cc < 48 || cc > 57 {
+            return 0
+        }
+        i = i + 1
+    }
+    return 1
+}
+
+// _provider_for_id — the canonical provider resolver for id-taking
+// lifecycle verbs (down/resolve/ssh-port). Source of truth = the M5 pod
+// registry, which already stamps each pod's provider at rent time. When
+// the id is untracked, fall back to an id-shape heuristic: all-digit,
+// short (len 6-9) → "vast" (vast.ai instance ids); anything else →
+// "runpod" (runpod ids are alphanumeric). Pure/CPU; the only read is the
+// local registry JSONL (no live vastai/runpodctl call). This is what
+// keeps a runpod id from mis-routing to `vastai destroy`.
+fn _provider_for_id(id: str) -> str {
+    let recorded = pod_registry_provider_of(id)
+    if len(recorded) > 0 {
+        return recorded
+    }
+    if _id_looks_vast(id) == 1 {
+        return "vast"
+    }
+    return "runpod"
+}
+
 // _cloud_down — destroy a pod by id, then forget it from the registry.
-// --provider picks the teardown path; defaults to vast (runpod needs an
-// api key). The registry forget runs regardless of the provider verdict
-// so a confirmed-gone pod never lingers as a GHOST row.
+// --provider picks the teardown path; when absent it is resolved from the
+// registry via _provider_for_id (runpod needs an api key). The registry
+// forget runs regardless of the provider verdict so a confirmed-gone pod
+// never lingers as a GHOST row.
 // _down_guard_refuses — cross-project kill-guard (the near-miss fix: anima's
 // RTSC pods were almost destroyed from another project's session). Look up the
 // target pod's stored `project`, derive the cwd project, and REFUSE the
@@ -1732,7 +1772,12 @@ fn main() {
             exit(2)
         }
         let id = av[si + 1]
-        let provider = _flag_val(av, si + 2, "--provider", "vast")
+        // No explicit --provider → resolve from the registry (runpod ids
+        // must NOT default to the vast destroy path). Explicit flag overrides.
+        let mut provider = _flag_val(av, si + 2, "--provider", "")
+        if len(provider) == 0 {
+            provider = _provider_for_id(id)
+        }
         // Cross-project kill-guard — refuse a teardown of a pod owned by a
         // different project unless --force. (The anima RTSC near-miss fix.)
         let force = _has_flag(av, si + 2, "--force")
@@ -2163,7 +2208,12 @@ fn main() {
             exit(2)
         }
         let id = av[si + 1]
-        let provider = _flag_val(av, si + 2, "--provider", "vast")
+        // No explicit --provider → resolve from the registry so a runpod id
+        // hits runpod_get_ssh_port, not the vast endpoint. Flag overrides.
+        let mut provider = _flag_val(av, si + 2, "--provider", "")
+        if len(provider) == 0 {
+            provider = _provider_for_id(id)
+        }
         exit(_cloud_ssh_port(id, provider))
     }
     if sub == "orphans" {

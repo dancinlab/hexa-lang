@@ -1,0 +1,85 @@
+// @ci_gate — pure · network-free · deterministic (stdlib_selftest_aggregate --ci-gate)
+// stdlib/cloud/cloud_provider_routing_test.hexa — falsifier suite for the
+// provider-routing fix: id-taking lifecycle verbs (down/resolve/ssh-port)
+// must route a pod id to ITS recorded provider, not blindly to vast. The
+// source fns are `_`-prefixed and private; this mirrors their PURE logic
+// (the mirror-test pattern matches cloud_rm_test.hexa). NO live
+// vastai/runpodctl call, NO pod destroy — registry precedence is exercised
+// via an injectable lookup, the fallback via the id-shape heuristic only.
+//
+// Falsifiers:
+//   F-CLOUD-PROV-SHAPE-RUNPOD — alnum id (untracked) → "runpod"
+//   F-CLOUD-PROV-SHAPE-VAST   — short all-digit id (untracked) → "vast"
+//   F-CLOUD-PROV-REGISTRY-HIT — recorded provider wins over the heuristic
+//
+// Run:   hexa run stdlib/cloud/cloud_provider_routing_test.hexa
+// PASS:  exits 0, prints "cloud_provider_routing_test PASS".
+
+// Mirror of cloud_cli.hexa:_id_looks_vast (private). 1 iff all-digit, len 6-9.
+fn _id_looks_vast(id: str) -> int {
+    let n = len(id)
+    if n < 6 || n > 9 {
+        return 0
+    }
+    let mut i = 0
+    while i < n {
+        let cc = char_code(id.substring(i, i + 1))
+        if cc < 48 || cc > 57 {
+            return 0
+        }
+        i = i + 1
+    }
+    return 1
+}
+
+// Mirror of cloud_cli.hexa:_provider_for_id (private), with the registry
+// lookup INJECTED (`recorded`) so the test stays pure — the real fn reads
+// the M5 registry, here we pass the recorded value directly. Empty recorded
+// → id-shape fallback. Registry-recorded value wins over the heuristic.
+fn _provider_for_id_pure(recorded: str, id: str) -> str {
+    if len(recorded) > 0 {
+        return recorded
+    }
+    if _id_looks_vast(id) == 1 {
+        return "vast"
+    }
+    return "runpod"
+}
+
+fn _ck_str(name: str, got: str, want: str) {
+    if got != want {
+        println("  FAIL: " + name + " got '" + got + "' want '" + want + "'")
+        exit(1)
+    }
+}
+
+fn _ck(name: str, got: int, want: int) {
+    if got != want {
+        println("  FAIL: " + name + " got " + to_string(got) + " want " + to_string(want))
+        exit(1)
+    }
+}
+
+fn main() {
+    // F-CLOUD-PROV-SHAPE-RUNPOD — the bug repro: a runpod-shaped (alnum) id
+    // that mis-routed to `vastai destroy` must resolve to "runpod".
+    _ck_str("runpod alnum id", _provider_for_id_pure("", "8g5r7jup4lw35e"), "runpod")
+
+    // F-CLOUD-PROV-SHAPE-VAST — a short all-digit vast.ai instance id → "vast".
+    _ck_str("vast digit id", _provider_for_id_pure("", "12345678"), "vast")
+
+    // F-CLOUD-PROV-REGISTRY-HIT — the registry-recorded provider is the
+    // source of truth and OVERRIDES the id-shape heuristic. A digit id
+    // recorded as runpod resolves to runpod (not the vast the shape implies).
+    _ck_str("registry runpod wins", _provider_for_id_pure("runpod", "12345678"), "runpod")
+    _ck_str("registry vast wins",   _provider_for_id_pure("vast", "8g5r7jup4lw35e"), "vast")
+
+    // Heuristic boundary: too-short / too-long all-digit ids are NOT vast.
+    _ck("len 5 not vast",  _id_looks_vast("12345"), 0)
+    _ck("len 6 is vast",   _id_looks_vast("123456"), 1)
+    _ck("len 9 is vast",   _id_looks_vast("123456789"), 1)
+    _ck("len 10 not vast", _id_looks_vast("1234567890"), 0)
+    _ck("non-digit no",    _id_looks_vast("12a456"), 0)
+
+    println("cloud_provider_routing_test PASS")
+}
