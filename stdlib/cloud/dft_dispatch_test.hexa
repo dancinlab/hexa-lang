@@ -219,6 +219,43 @@ fn main() {
     _check("scfph: wrapped sh -lc for detach", _seq(phon_argv[1], "-lc"), 1)
     _check("phon remote logfile path", _seq(_dft_remote_logfile("phon"), "/root/deck/.phon.detach.log"), 1)
 
+    // ── ph.in fildyn/fildvscf abs→relative normalize (RTSC 2026-05-31) ──
+    // The ghost-pulled aiden decks carry, in ph.in's &inputph, a stale ABSOLUTE
+    // `fildyn = '/home/aiden/rtsc_<slug>/<slug>.dyn'` — a path absent on the pod →
+    // ph.x dies in q_points (`cannot open file .../<slug>.dyn0`). The scf-only sed
+    // never touched ph.in. The scfph builder now ALSO normalizes ph.in: outdir →
+    // './out', fildyn/fildvscf → a bare basename (so dyn0 lands in cwd /root/deck).
+    // Command-shape assertions: the builder must carry the ph.in normalize.
+    _check("scfph: normalizes ph.in (sed targets ph.in)", _has(scfph, "ph.in 2>/dev/null"), 1)
+    _check("scfph: ph.in normalize touches fildyn", _has(scfph, "fildyn"), 1)
+    _check("scfph: ph.in normalize touches fildvscf", _has(scfph, "fildvscf"), 1)
+    // ph.in outdir is normalized BEFORE ph.x reads it (so ph finds scf's checkpoint).
+    _check("scfph: ph.in normalize precedes ph.x invocation",
+        _lt_index(scfph, "ph.in 2>/dev/null", "ph.x -in ph.in"), 1)
+
+    // BEHAVIORAL — write a ghost ph.in and run the EXACT same sed PROGRAM against
+    // it (piped, not -i, so the test is BSD/GNU-sed portable), then assert the abs
+    // paths are stripped to bare basenames. This proves the regex actually rewrites
+    // the aiden form (and leaves an already-bare field intact). The sed body is the
+    // SAME three substitutions _dft_scfph_cmd applies to ph.in on the pod.
+    let phdeck = "/tmp/dft_phin_normalize_test"
+    let _rmp = exec("rm -rf '" + phdeck + "' && mkdir -p '" + phdeck + "'")
+    // one field per file → one `sed -e` per assertion → portable across sed flavors.
+    let _wf1 = exec("printf \"  fildyn = '/home/aiden/rtsc_yauh3/yauh3.dyn'\\n\" > '" + phdeck + "/fildyn.txt'")
+    let _wf2 = exec("printf \"  fildvscf = 'yauh3.dvscf'\\n\" > '" + phdeck + "/fildvscf.txt'")
+    let _wf3 = exec("printf \"  outdir = '/home/aiden/rtsc_yauh3/out'\\n\" > '" + phdeck + "/outdir.txt'")
+    let fildyn_sed = "sed \"s|^\\([[:space:]]*fildyn[[:space:]]*=[[:space:]]*'\\).*/\\([^/']*'\\)|\\1\\2|\" '" + phdeck + "/fildyn.txt'"
+    let fildvscf_sed = "sed \"s|^\\([[:space:]]*fildvscf[[:space:]]*=[[:space:]]*'\\).*/\\([^/']*'\\)|\\1\\2|\" '" + phdeck + "/fildvscf.txt'"
+    let outdir_sed = "sed \"s|^[[:space:]]*outdir.*|  outdir = './out'|\" '" + phdeck + "/outdir.txt'"
+    let fildyn_norm = exec(fildyn_sed)
+    let fildvscf_norm = exec(fildvscf_sed)
+    let outdir_norm = exec(outdir_sed)
+    _check("ph.in normalize: fildyn → bare basename", _has(fildyn_norm, "fildyn = 'yauh3.dyn'"), 1)
+    _check("ph.in normalize: aiden abs path GONE from fildyn", _has(fildyn_norm, "/home/aiden/rtsc_yauh3/yauh3.dyn"), 0)
+    _check("ph.in normalize: already-bare fildvscf intact (no /-strip)", _has(fildvscf_norm, "fildvscf = 'yauh3.dvscf'"), 1)
+    _check("ph.in normalize: outdir → ./out", _has(outdir_norm, "outdir = './out'"), 1)
+    let _rmp2 = exec("rm -rf '" + phdeck + "'")
+
     // honest terminal probe (the QE JOB DONE checkpoint trap, MEMORY 2026-05-29):
     // a bare JOB DONE grep is NOT terminal. The probe is FAILURE-FIRST and emits
     // exactly one of RUNNING / FAILED / DONE; pgrep gates RUNNING before any grep.

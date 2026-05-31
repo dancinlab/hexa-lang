@@ -1417,9 +1417,22 @@ fn _dft_detach_argv(stage_cmd: str) -> [str] {
 // would crash pw.x. The pre-relax `_dft_pseudo_cmd` sed ran BEFORE this fresh
 // scf.in existed on the pod, so we re-apply the SAME anchored normalize here so
 // the regenerated scf.in is pod-relative (./out · ./pseudo) before scf reads it.
+//
+// ph.in carries the SAME ghost-pulled stale-absolute disease, but in the &inputph
+// namelist: `outdir = '/home/aiden/rtsc_<slug>/out'` (ph must read scf's outdir)
+// AND `fildyn = '/home/aiden/rtsc_<slug>/<slug>.dyn'` — an aiden-host path absent
+// on the pod. ph.x then dies in q_points: `cannot open file .../<slug>.dyn0`. The
+// scf-only sed above never touched ph.in, so we mirror it: outdir → './out' (so ph
+// reads scf's checkpoint), and fildyn/fildvscf → a BARE basename (strip any leading
+// dir, abs or rel). ph.x runs with cwd /root/deck (_dft_ph_cmd cd's there), so a
+// bare `<slug>.dyn` lands `<slug>.dyn0` in /root/deck — findable by q_points.
 fn _dft_scfph_cmd(np: int, walltime_h: int) -> str {
     let norm = "cd /root/deck && sed -i \"s|^[[:space:]]*outdir.*|  outdir = './out'|; "
         + "s|^[[:space:]]*pseudo_dir.*|  pseudo_dir = './pseudo'|\" scf.in 2>/dev/null"
+        + " && sed -i \"s|^[[:space:]]*outdir.*|  outdir = './out'|; "
+        + "s|^\\([[:space:]]*fildyn[[:space:]]*=[[:space:]]*'\\).*/\\([^/']*'\\)|\\1\\2|; "
+        + "s|^\\([[:space:]]*fildvscf[[:space:]]*=[[:space:]]*'\\).*/\\([^/']*'\\)|\\1\\2|\" "
+        + "ph.in 2>/dev/null"
     return norm + " && " + _dft_scf_cmd(np, walltime_h) + " && " + _dft_ph_cmd(np, walltime_h)
 }
 
