@@ -2,7 +2,16 @@
 
 Append-only history sister of `HEXA-CC-NATIVE.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
-## 2026-06-01 — N5-pre STEP0b R2: recipe gap traversed; runtime drift decomposed (float_to_bits FIXED, __map_raw_len genuine-missing)
+## 2026-06-01 — CORRECTION to R2: __map_raw_len is NOT runtime-missing (retracting overclaim)
+
+- [x] verified __map_raw_len IS a recognized builtin: bind.hexa:1044 allowlist + codegen.hexa:6161 lowers it to HX_MAP_LEN
+- [x] verified HX_MAP_LEN IS defined in runtime: runtime_core.c:1045 + current emit SSOT:1208 — nothing missing
+- [x] real mechanism = bootstrap transpiler self/native/hexat emits literal __map_raw_len (lowers siblings __str/__arr_raw_len but not __map) = transpiler-lowering gap = same stale-bootstrap family as the ~28 STALE-BINARY; NOT a defect on main
+- [x] RETRACTED the R2 "genuine-missing runtime symbol / real defect on main's self-host path" claim (anti-fabrication)
+- [x] float_to_bits round-2 finding (stale runtime_core healed by emit-SSOT regen) STANDS
+- corrected frontier: regenerate the bootstrap chain (hexat/aprime_cc) from current builtins so __map_raw_len lowers
+
+## 2026-06-01 — N5-pre STEP0b R2: recipe gap traversed; runtime drift decomposed (float_to_bits FIXED, __map_raw_len mischaracterized — see CORRECTION above)
 
 - [x] compiler-source parity confirmed: git diff origin/main HEAD -- compiler/ self/ = EMPTY (current-main source)
 - [x] self/ tree populated .c-ONLY (round-1 broke transpile via cp -R of non-.c entries); runtime.c full #include set enumerated (forge/ + 18 native/ + core + hi_gen) -> all includes resolve, clang reaches real C compile of 40k-line ap_post.c

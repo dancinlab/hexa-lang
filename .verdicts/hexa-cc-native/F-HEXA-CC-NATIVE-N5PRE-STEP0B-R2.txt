@@ -52,3 +52,22 @@ N5-pre-rt: add __map_raw_len (+ resolve the :40446 fn/HexaVal mismatch) to the r
 match self/codegen.hexa's emit contract; regen; rebuild aprime_cc; if smoke exit42 PASSES, run the
 181 --emit=obj re-measure (the original STEP0 goal) on the now-current-source binary.
 Falsifier unchanged: an intentional undefined-name source must emit HX2001 + non-zero exit.
+
+==============================================================================================================
+CORRECTION (2026-06-01, same day) -- __map_raw_len was MISCHARACTERIZED above. Retracting the claim.
+--------------------------------------------------------------------------------------------------------------
+The section above called __map_raw_len a "GENUINE-MISSING runtime symbol / a real defect on main's native
+self-host path." That is WRONG. Verified facts:
+  - __map_raw_len IS a recognized builtin: registered in compiler/check/bind.hexa:1044 allowlist (beside
+    __str_raw_len / __arr_raw_len) AND lowered by self/codegen.hexa:6161 to `HX_MAP_LEN(...)`.
+  - HX_MAP_LEN IS defined in the runtime: build/self/runtime_core.c:1045 and current
+    self/runtime_core_emit.hexa:1208 (`#define HX_MAP_LEN(v) ((v).map_ptr->len)`). NOT missing.
+So nothing is missing from the runtime. The clang "undefined identifier __map_raw_len" arises because the
+BOOTSTRAP transpiler used by build_aprime.sh stage-2 (self/native/hexat) emits a LITERAL __map_raw_len(...)
+call instead of lowering it -- it lowers the siblings __str_raw_len/__arr_raw_len (those did NOT error) but
+not __map_raw_len. So the real mechanism is a TRANSPILER-LOWERING GAP in the hexat bootstrap binary, i.e.
+the SAME stale-bootstrap family as the ~28 "STALE-BINARY" HX2001 from the triage -- NOT a runtime defect and
+NOT a fresh bug on main. The "real defect on main's self-host path" wording is retracted.
+Corrected frontier: the bootstrap toolchain (hexat / aprime_cc) is stale vs current builtins; the clean
+unblock is to regenerate the bootstrap chain from current source so __map_raw_len lowers to HX_MAP_LEN.
+(float_to_bits round-2 finding stands: that one WAS a stale runtime_core.c, healed by emit-SSOT regen.)
