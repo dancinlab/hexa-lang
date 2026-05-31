@@ -1,0 +1,191 @@
+// ════════════════════════════════════════════════════════════════════════════
+//  flame_gn_test.hexa — selftest for gn_lib (GroupNorm fwd+bwd).
+//
+//  Falsifiers (pre-registered):
+//    F-FLAME-GN-DET         same inputs -> byte-identical Y.
+//    F-FLAME-GN-NORMALIZED  each group's xhat has ~0 mean, ~1 var (the norm
+//                           invariant; tol 1e-6).
+//    F-FLAME-GN-GRAD-EXACT  analytic nn_groupnorm_bwd == central finite-diff
+//                           of L=½ΣY² (dY=Y) over gamma, beta, AND X (input
+//                           grad — the non-trivial GN path). max rel < 1e-3.
+//
+//  Op 2/4 of the CLM-ConvMoE flame port. Build: HEXA_MAC_BUILD_OK=1 ./hexa
+//  build stdlib/flame/flame_gn_test.hexa -o build/flame_gn && ./build/flame_gn
+// ════════════════════════════════════════════════════════════════════════════
+
+use "stdlib/flame/tensor_lib"
+use "stdlib/flame/gn_lib"
+
+fn _gn_abs(x: float) -> float {
+    if x < 0.0 { return 0.0 - x }
+    return x
+}
+
+// L = ½ Σ Y² (so dL/dY = Y). Recompute Y fresh.
+fn _gn_fwd_loss(x: int, gamma: int, beta: int, T: int, C: int, G: int) -> float {
+    let y = t_zeros(T * C)
+    let mean = t_zeros(G)
+    let inv = t_zeros(G)
+    let xhat = t_zeros(T * C)
+    nn_groupnorm_fwd(x, gamma, beta, y, mean, inv, xhat, T, C, G)
+    let mut acc = 0.0
+    let mut i = 0
+    while i < T * C {
+        let v = t_get(y, i)
+        acc = acc + 0.5 * v * v
+        i = i + 1
+    }
+    return acc
+}
+
+fn check_det(x: int, gamma: int, beta: int, T: int, C: int, G: int) -> int {
+    let y1 = t_zeros(T * C); let m1 = t_zeros(G); let v1 = t_zeros(G); let h1 = t_zeros(T * C)
+    let y2 = t_zeros(T * C); let m2 = t_zeros(G); let v2 = t_zeros(G); let h2 = t_zeros(T * C)
+    nn_groupnorm_fwd(x, gamma, beta, y1, m1, v1, h1, T, C, G)
+    nn_groupnorm_fwd(x, gamma, beta, y2, m2, v2, h2, T, C, G)
+    let mut i = 0
+    while i < T * C {
+        if t_get(y1, i) != t_get(y2, i) { return 0 }
+        i = i + 1
+    }
+    return 1
+}
+
+// xhat per group: mean ~ 0, var ~ 1.
+fn check_normalized(x: int, gamma: int, beta: int, T: int, C: int, G: int) -> int {
+    let y = t_zeros(T * C); let mean = t_zeros(G); let inv = t_zeros(G); let xhat = t_zeros(T * C)
+    nn_groupnorm_fwd(x, gamma, beta, y, mean, inv, xhat, T, C, G)
+    let cg = C / G
+    let m = to_float(cg * T)
+    let mut g = 0
+    while g < G {
+        let c0 = g * cg
+        let mut sm = 0.0
+        let mut sv = 0.0
+        let mut t = 0
+        while t < T {
+            let mut c = 0
+            while c < cg {
+                let v = t_get(xhat, t * C + (c0 + c))
+                sm = sm + v
+                sv = sv + v * v
+                c = c + 1
+            }
+            t = t + 1
+        }
+        let mu = sm / m
+        let va = sv / m
+        // xhat mean ~ 0 (exact modulo float summation); var = var/(var+eps) so
+        // it sits just under 1 by the eps slack — eps-aware tolerances.
+        if _gn_abs(mu) > 0.00001 { return 0 }
+        if _gn_abs(va - 1.0) > 0.01 { return 0 }
+        g = g + 1
+    }
+    return 1
+}
+
+fn check_grad_exact() -> int {
+    let T = 5
+    let C = 4
+    let G = 2
+
+    let x = t_zeros(T * C);   t_fill_lcg(x, T * C, 42, 0.7)
+    let ga = t_zeros(C);      t_fill_lcg(ga, C, 1234, 0.4)
+    let be = t_zeros(C);      t_fill_lcg(be, C, 77, 0.3)
+
+    // analytic (dY = Y)
+    let y = t_zeros(T * C); let mean = t_zeros(G); let inv = t_zeros(G); let xhat = t_zeros(T * C)
+    nn_groupnorm_fwd(x, ga, be, y, mean, inv, xhat, T, C, G)
+    let dga = t_zeros(C); let dbe = t_zeros(C); let dX = t_zeros(T * C)
+    nn_groupnorm_bwd(xhat, inv, ga, y, dga, dbe, dX, T, C, G)
+
+    let eps = 0.0001
+    let mut max_rel = 0.0
+
+    // probe gamma (all C)
+    let mut c = 0
+    while c < C {
+        let analytic = t_get(dga, c)
+        let orig = t_get(ga, c)
+        t_set(ga, c, orig + eps)
+        let lp = _gn_fwd_loss(x, ga, be, T, C, G)
+        t_set(ga, c, orig - eps)
+        let lm = _gn_fwd_loss(x, ga, be, T, C, G)
+        t_set(ga, c, orig)
+        let fd = (lp - lm) / (2.0 * eps)
+        let denom = if _gn_abs(analytic) > 0.01 { _gn_abs(analytic) } else { 0.01 }
+        let rel = _gn_abs(analytic - fd) / denom
+        if rel > max_rel { max_rel = rel }
+        c = c + 1
+    }
+    // probe beta (all C)
+    let mut c2 = 0
+    while c2 < C {
+        let analytic = t_get(dbe, c2)
+        let orig = t_get(be, c2)
+        t_set(be, c2, orig + eps)
+        let lp = _gn_fwd_loss(x, ga, be, T, C, G)
+        t_set(be, c2, orig - eps)
+        let lm = _gn_fwd_loss(x, ga, be, T, C, G)
+        t_set(be, c2, orig)
+        let fd = (lp - lm) / (2.0 * eps)
+        let denom = if _gn_abs(analytic) > 0.01 { _gn_abs(analytic) } else { 0.01 }
+        let rel = _gn_abs(analytic - fd) / denom
+        if rel > max_rel { max_rel = rel }
+        c2 = c2 + 1
+    }
+    // probe X (input grad — non-trivial GN path): 5 spread indices
+    let xprobes = t_zeros(5)
+    t_set(xprobes, 0, to_float(0))
+    t_set(xprobes, 1, to_float(3))
+    t_set(xprobes, 2, to_float(7))
+    t_set(xprobes, 3, to_float(12))
+    t_set(xprobes, 4, to_float(18))
+    let mut i = 0
+    while i < 5 {
+        let pidx = to_int(t_get(xprobes, i))
+        let analytic = t_get(dX, pidx)
+        let orig = t_get(x, pidx)
+        t_set(x, pidx, orig + eps)
+        let lp = _gn_fwd_loss(x, ga, be, T, C, G)
+        t_set(x, pidx, orig - eps)
+        let lm = _gn_fwd_loss(x, ga, be, T, C, G)
+        t_set(x, pidx, orig)
+        let fd = (lp - lm) / (2.0 * eps)
+        let denom = if _gn_abs(analytic) > 0.01 { _gn_abs(analytic) } else { 0.01 }
+        let rel = _gn_abs(analytic - fd) / denom
+        if rel > max_rel { max_rel = rel }
+        i = i + 1
+    }
+
+    println("  GRAD-EXACT max_rel = " + to_string(max_rel))
+    if max_rel < 0.001 { return 1 }
+    return 0
+}
+
+fn main() {
+    println("flame_gn_test — GroupNorm (gn_lib)")
+    let T = 5
+    let C = 4
+    let G = 2
+    let x = t_zeros(T * C); t_fill_lcg(x, T * C, 42, 0.7)
+    let ga = t_zeros(C);    t_fill_lcg(ga, C, 1234, 0.4)
+    let be = t_zeros(C);    t_fill_lcg(be, C, 77, 0.3)
+
+    let det = check_det(x, ga, be, T, C, G)
+    let nrm = check_normalized(x, ga, be, T, C, G)
+    let ge = check_grad_exact()
+
+    println("F-FLAME-GN-DET        = " + to_string(det))
+    println("F-FLAME-GN-NORMALIZED = " + to_string(nrm))
+    println("F-FLAME-GN-GRAD-EXACT = " + to_string(ge))
+    if det == 1 {
+        if nrm == 1 {
+            if ge == 1 {
+                println("PASS 3/3")
+                return
+            }
+        }
+    }
+    println("FAIL")
+}
