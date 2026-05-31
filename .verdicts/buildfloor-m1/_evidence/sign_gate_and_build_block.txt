@@ -1,0 +1,10 @@
+SIGN GATE BLOCKED THE BUILD (captured 2026-05-31):
+Error: local-bound heavy invocation (hexa · python · gcc/g++/clang/cc · sh <script>) on an absolute host path needs a fresh sign-off — the canonical mac fork-storm trigger. USER: run `! sidecar sign local` in the TUI prompt (30min token), then retry.
+
+PRIOR ATTEMPT (before gate, while interpreters still allowed):
+  build_hexa_cloud: transpiler not found (tried: <repo>/build/hexa_v2 | <repo>/self/native/hexa_v2)
+  EXIT=1 BIN_PRESENT=0
+
+ROOT CAUSE: build/hexa_v2 (self-host transpiler) absent in fresh worktree;
+no committed self/native/hexa_v2.c source to bootstrap from; sign gate now
+blocks all heavy hexa/clang invocations until user signs.
