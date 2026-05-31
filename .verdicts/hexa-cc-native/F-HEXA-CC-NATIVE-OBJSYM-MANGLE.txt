@@ -1,0 +1,26 @@
+F-HEXA-CC-NATIVE-OBJSYM-MANGLE -- resolve `_`-prefixed hexa fn calls to def-mangled symbol (N5 link)
+=====================================================================================================
+date: 2026-06-01   host: mini (darwin-arm64)   base: worktree off origin/main dffef72b2
+
+CONTEXT: with atlas-skip (#2315) the full 40k-line compiler obj-emit COMPLETES — /tmp/cc-full.o =
+Mach-O arm64, 2.7MB, exit 0, peak RSS 7.57GB (the machine has the RAM; earlier "OOM" was a
+premature timeout). N5-sym (`nm -u`) then revealed 928 undefined symbols, of which ~220 are the
+compiler's OWN functions (e.g. _arm64_emit_imm_to_reg, _add_edge) — the N5 self-host LINK wall.
+
+ROOT CAUSE: a hexa fn whose name starts with `_` is DEFINED via `_darwin_mangle(name)` = `"_"+name`
+→ `__arm64_emit_imm_to_reg` (double `_`). But the call/reloc resolver (macho_arm64.hexa) used
+`if raw[0] != "_" { mangle }` — passing `_`-prefixed call targets through UNMANGLED (`_arm64_…`,
+single `_`), assuming they were already Mach-O symbols. Result: def `T __arm64_…` vs ref
+`U _arm64_…` → every `_`-named compiler fn UNDEFINED at link.
+
+FIX (both the undef-collection loop and the reloc-resolution loop): try `cand = _darwin_mangle(raw)`
+first; if `cand` is an intra-module fn name (in fn_names) use it → matches the def. Else fall back
+to the prior rule so genuine extern/runtime C symbols already `_`-prefixed (__map_raw_len, _hexa_*)
+still pass through unchanged.
+
+VERIFY (small case, fresh aprime_sm): program with `fn _helper(x){return x*3}` + `_helper(7)` call:
+  obj-emit exit 0; `nm` → `T __helper` (defined); `nm -u` → NO `_helper`/`__helper` undefined.
+  PASS — the `_`-prefixed fn call now resolves to the defined symbol (was undefined before).
+FULL-COMPILER verification: re-emitting /tmp/cc-fix.o with aprime_sm (in progress, ~18min); expect
+the ~220 compiler-fn undefined to drop to ~0, leaving only ~76 runtime externs (provided by
+runtime.o at link). Then: hexa_ld link cc-fix.o + runtime.o → executable → run → gen2≡gen3 byte-eq.
