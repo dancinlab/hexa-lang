@@ -1,0 +1,157 @@
+// ════════════════════════════════════════════════════════════════════════════
+//  flame_moe_test.hexa — selftest for moe_lib (softmax router + combine).
+//
+//  Falsifiers (pre-registered):
+//    F-FLAME-MOE-DET         same inputs -> byte-identical Y.
+//    F-FLAME-MOE-SOFTMAX     per-position gate sums to 1 (tol 1e-6) & >0.
+//    F-FLAME-MOE-GRAD-EXACT  analytic nn_moe_router_bwd == central finite-diff
+//                            of L=½ΣY² (dY=Y) over BOTH logits and ex_out.
+//                            max rel < 1e-3 (variant A soft mixture).
+//
+//  Op 3/4 of the CLM-ConvMoE flame port. Build: HEXA_MAC_BUILD_OK=1 ./hexa
+//  build stdlib/flame/flame_moe_test.hexa -o build/flame_moe && ./build/flame_moe
+// ════════════════════════════════════════════════════════════════════════════
+
+use "stdlib/flame/tensor_lib"
+use "stdlib/flame/moe_lib"
+
+fn _moe_abs(x: float) -> float {
+    if x < 0.0 { return 0.0 - x }
+    return x
+}
+
+fn _moe_fwd_loss(logits: int, ex_out: int, T: int, E: int, C: int) -> float {
+    let probs = t_zeros(T * E)
+    let y = t_zeros(T * C)
+    nn_moe_router_fwd(logits, ex_out, probs, y, T, E, C)
+    let mut acc = 0.0
+    let mut i = 0
+    while i < T * C {
+        let v = t_get(y, i)
+        acc = acc + 0.5 * v * v
+        i = i + 1
+    }
+    return acc
+}
+
+fn check_det(logits: int, ex_out: int, T: int, E: int, C: int) -> int {
+    let p1 = t_zeros(T * E); let y1 = t_zeros(T * C)
+    let p2 = t_zeros(T * E); let y2 = t_zeros(T * C)
+    nn_moe_router_fwd(logits, ex_out, p1, y1, T, E, C)
+    nn_moe_router_fwd(logits, ex_out, p2, y2, T, E, C)
+    let mut i = 0
+    while i < T * C {
+        if t_get(y1, i) != t_get(y2, i) { return 0 }
+        i = i + 1
+    }
+    return 1
+}
+
+fn check_softmax(logits: int, T: int, E: int) -> int {
+    let probs = t_zeros(T * E)
+    nn_moe_softmax(logits, probs, T, E)
+    let mut t = 0
+    while t < T {
+        let mut s = 0.0
+        let mut e = 0
+        while e < E {
+            let p = t_get(probs, t * E + e)
+            if p <= 0.0 { return 0 }
+            s = s + p
+            e = e + 1
+        }
+        if _moe_abs(s - 1.0) > 0.000001 { return 0 }
+        t = t + 1
+    }
+    return 1
+}
+
+fn check_grad_exact() -> int {
+    let T = 4
+    let E = 3
+    let C = 2
+
+    let logits = t_zeros(T * E);     t_fill_lcg(logits, T * E, 42, 1.0)
+    let ex_out = t_zeros(E * T * C); t_fill_lcg(ex_out, E * T * C, 1234, 0.6)
+
+    // analytic (dY = Y)
+    let probs = t_zeros(T * E)
+    let y = t_zeros(T * C)
+    nn_moe_router_fwd(logits, ex_out, probs, y, T, E, C)
+    let dlogits = t_zeros(T * E)
+    let dex = t_zeros(E * T * C)
+    nn_moe_router_bwd(probs, ex_out, y, dlogits, dex, T, E, C)
+
+    let eps = 0.0001
+    let mut max_rel = 0.0
+
+    // probe logits (all T·E)
+    let mut i = 0
+    while i < T * E {
+        let analytic = t_get(dlogits, i)
+        let orig = t_get(logits, i)
+        t_set(logits, i, orig + eps)
+        let lp = _moe_fwd_loss(logits, ex_out, T, E, C)
+        t_set(logits, i, orig - eps)
+        let lm = _moe_fwd_loss(logits, ex_out, T, E, C)
+        t_set(logits, i, orig)
+        let fd = (lp - lm) / (2.0 * eps)
+        let denom = if _moe_abs(analytic) > 0.01 { _moe_abs(analytic) } else { 0.01 }
+        let rel = _moe_abs(analytic - fd) / denom
+        if rel > max_rel { max_rel = rel }
+        i = i + 1
+    }
+    // probe ex_out: 5 spread indices
+    let xprobes = t_zeros(5)
+    t_set(xprobes, 0, to_float(0))
+    t_set(xprobes, 1, to_float(5))
+    t_set(xprobes, 2, to_float(11))
+    t_set(xprobes, 3, to_float(17))
+    t_set(xprobes, 4, to_float(23))
+    let mut j = 0
+    while j < 5 {
+        let pidx = to_int(t_get(xprobes, j))
+        let analytic = t_get(dex, pidx)
+        let orig = t_get(ex_out, pidx)
+        t_set(ex_out, pidx, orig + eps)
+        let lp = _moe_fwd_loss(logits, ex_out, T, E, C)
+        t_set(ex_out, pidx, orig - eps)
+        let lm = _moe_fwd_loss(logits, ex_out, T, E, C)
+        t_set(ex_out, pidx, orig)
+        let fd = (lp - lm) / (2.0 * eps)
+        let denom = if _moe_abs(analytic) > 0.01 { _moe_abs(analytic) } else { 0.01 }
+        let rel = _moe_abs(analytic - fd) / denom
+        if rel > max_rel { max_rel = rel }
+        j = j + 1
+    }
+
+    println("  GRAD-EXACT max_rel = " + to_string(max_rel))
+    if max_rel < 0.001 { return 1 }
+    return 0
+}
+
+fn main() {
+    println("flame_moe_test — softmax router + combine (moe_lib)")
+    let T = 4
+    let E = 3
+    let C = 2
+    let logits = t_zeros(T * E);     t_fill_lcg(logits, T * E, 42, 1.0)
+    let ex_out = t_zeros(E * T * C); t_fill_lcg(ex_out, E * T * C, 1234, 0.6)
+
+    let det = check_det(logits, ex_out, T, E, C)
+    let sm = check_softmax(logits, T, E)
+    let ge = check_grad_exact()
+
+    println("F-FLAME-MOE-DET         = " + to_string(det))
+    println("F-FLAME-MOE-SOFTMAX     = " + to_string(sm))
+    println("F-FLAME-MOE-GRAD-EXACT  = " + to_string(ge))
+    if det == 1 {
+        if sm == 1 {
+            if ge == 1 {
+                println("PASS 3/3")
+                return
+            }
+        }
+    }
+    println("FAIL")
+}
