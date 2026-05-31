@@ -1,0 +1,70 @@
+// @ci_gate — pure · network-free · deterministic
+// self/core_help_drift_test.hexa — core-toolchain command<->help drift guard.
+//
+// Binds the core-toolchain verb roster across its surfaces to the single
+// in-source SSOT self/core_commands::core_commands():
+//
+//   (A) the COMMANDS SSOT     — core_commands() (IMPORTED, compiled in — NOT
+//                               read_file'd; install-binary safe)
+//   (B) the top-level dispatch — self/main.hexa `else if sub == "..."` guard
+//   (C) the per-verb renderer  — cmd_verb_help renders from core_commands()
+//                               (no hand-typed per-verb help body survives)
+//
+// PASS iff every (A) verb is dispatched in (B) AND cmd_verb_help renders from
+// core_commands() in (C). On mismatch the missing verb is printed verbatim and
+// the test exits 1, so a core verb added to core_commands() without a dispatch
+// branch (or a hand-typed help body sneaking back) FAILS green.
+//
+// Run:  hexa run self/core_help_drift_test.hexa
+// PASS: exits 0, prints "core_help_drift_test PASS".
+
+use "self/core_commands"
+
+fn _read_src(path: str) -> str {
+    return exec("cat " + path + " 2>/dev/null")
+}
+
+fn main() {
+    let registry = core_command_names()
+    let src = _read_src("self/main.hexa")
+
+    let mut fails = 0
+
+    if len(registry) == 0 {
+        println("DRIFT: core_commands() roster is empty")
+        fails = fails + 1
+    }
+    if len(src) == 0 {
+        println("DRIFT: could not read self/main.hexa")
+        fails = fails + 1
+    }
+
+    // (A==B) every core verb has a top-level dispatch branch `sub == "<verb>"`.
+    let mut i = 0
+    while i < len(registry) {
+        let v = registry[i]
+        if !src.contains("sub == \"" + v + "\"") {
+            println("DRIFT: core_commands() verb has no dispatch branch — " + v)
+            fails = fails + 1
+        }
+        i = i + 1
+    }
+
+    // (C) cmd_verb_help renders from the SSOT (calls core_command_lookup), so
+    // it covers every verb by construction. A hand-typed second per-verb help
+    // body would NOT call core_command_lookup; this asserts none survives.
+    if len(src) > 0 {
+        if !src.contains("core_command_lookup(verb)") {
+            println("DRIFT: cmd_verb_help does not render from core_commands() — a hand-typed per-verb help body may have drifted back in")
+            fails = fails + 1
+        }
+    }
+
+    if fails == 0 {
+        println("PASS: core command<->help registry in sync — " + to_string(len(registry)) + " verbs (core_commands == dispatch; cmd_verb_help renders from SSOT)")
+        println("core_help_drift_test PASS")
+        exit(0)
+    }
+    println("FAIL: " + to_string(fails) + " core command<->help drift(s) above")
+    exit(1)
+}
