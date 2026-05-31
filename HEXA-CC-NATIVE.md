@@ -1,5 +1,6 @@
 @title: 🪆 HEXA-CC-NATIVE — "C 부산물 0 self-host"
 @goal: hexa 가 자기 자신을 .c·.o·.a 어떤 C 중간물도 만들지 않고 native 백엔드(hexa codegen → machine-code → hexa_ld)만으로 처음부터 끝까지 재빌드하고, 그 native-built hexa 가 다시 자신을 재빌드해 byte-eq fixpoint 에 도달한다 (cross-arch: darwin-arm64 + linux-x86_64). C front(손-작성 .c)은 HEXA-CC-ZERO 가 이미 0 으로 닫음; 이 도메인은 BUILD front(빌드 중 생성되는 C 중간물)를 0 으로 닫는다.
+@policy: COMPLETENESS-FIRST LOOP (사용자 고정 결정 2026-05-31). 다음 마일스톤 선택 시 항상 4축 중 **① 완성도(complete)** 축을 따른다 — 골(C 중간물 0 · full self-host fixpoint)에 가장 직접 다가가는 마일스톤을 우선. 다른 축(단순/안전/표준)은 완성도 안을 막는 blocker(예: 재빌드 위험·CI red)일 때만 선행 우회로로 삽입하고, 해소 즉시 완성도 본선으로 복귀. 진행은 LOOP: 한 마일스톤 종결(verify green + main 머지) → 즉시 다음 완성도 마일스톤 착수, open 마일스톤 0 까지 멈추지 않음. 완성도 본선 순서 = **N5(full-compiler self-host via hexa_ld) → N6(cross-arch) → N7(CI gate)**; N1(x86_64 runtime)·N2(self-as, moot)는 N5/N6 가 요구할 때만 종속 작업으로 끌어온다. 각 마일스톤은 g5/g63 정직 검증(falsifier + verbatim) 필수 — green 없는 flip/머지 금지.
 
 # HEXA-CC-NATIVE — current state
 
