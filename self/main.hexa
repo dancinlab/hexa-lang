@@ -2035,6 +2035,35 @@ fn codesign_if_macos(exe) {
 //   3) $HEXA_LANG/self/native/hexat (개발 fallback — bench 와 동일)
 //   4) /proc/self/exe (Linux container fallback — argv[0] 빈/empty 일 때)
 // 넷 다 없으면 빈 문자열 반환. 호출자가 명시 오류 + exit(1) 처리.
+// _resolve_repo_file — resolve a repo-relative path (e.g. "tool/verify_cli.hexa",
+// "bin/hexa-atlas") to an absolute path, trying in precedence order:
+//   1. install_dir_from_argv0() (binary install carrying sources)
+//   2. $HEXA_LANG            (explicit checkout override)
+//   3. $HOME/core/hexa-lang  (conventional checkout)
+//   4. cwd-relative `rel`    (in-repo dev runs from the root)
+// Returns the first that exists, else "". Mirrors the absorbed-verb dispatch
+// (roots 1-5) so the script-backed verbs (verify/atlas/calc) resolve their
+// tool/*_cli.hexa + bin/* sidecars from ANY cwd, not only the repo root.
+fn _resolve_repo_file(rel) {
+    let inst = install_dir_from_argv0()
+    if len(inst) > 0 {
+        let p1 = inst + "/" + rel
+        if file_exists(p1) { return p1 }
+    }
+    let hl = env_var("HEXA_LANG")
+    if len(hl) > 0 {
+        let p2 = hl + "/" + rel
+        if file_exists(p2) { return p2 }
+    }
+    let home = env_var("HOME")
+    if len(home) > 0 {
+        let p3 = home + "/core/hexa-lang/" + rel
+        if file_exists(p3) { return p3 }
+    }
+    if file_exists(rel) { return rel }
+    return ""
+}
+
 fn install_dir_from_argv0() {
     // args()[0] = 런타임이 삽입한 exec 경로 (상대/절대/심볼릭 모두 가능).
     // realpath 로 심볼릭 링크를 완전 해석한 뒤 dirname 수행.
@@ -6591,21 +6620,13 @@ if len(av) < 3 {
         // compiled bin/hexa-verify binary built by `hexa build
         // tool/verify_cli.hexa`. cross-directory `compiler/atlas/*` use
         // resolved by patched module_loader (cycle 7 ml_canon_path).
-        let __inst_v = install_dir_from_argv0()
         let mut verify_args = []
         let mut vi = 3
         while vi < len(av) {
             verify_args.push(av[vi])
             vi = vi + 1
         }
-        let mut verify_bin = ""
-        if len(__inst_v) > 0 {
-            let inst_bin = __inst_v + "/bin/hexa-verify"
-            if file_exists(inst_bin) { verify_bin = inst_bin }
-        }
-        if len(verify_bin) == 0 && file_exists("bin/hexa-verify") {
-            verify_bin = "bin/hexa-verify"
-        }
+        let mut verify_bin = _resolve_repo_file("bin/hexa-verify")
         if len(verify_bin) > 0 {
             let cli_q = shq(verify_bin)
             let mut cmd = cli_q
@@ -6643,11 +6664,8 @@ if len(av) < 3 {
                 print(out)
             }
         } else {
-            let mut verify_script = "tool/verify_cli.hexa"
-            if len(__inst_v) > 0 {
-                let inst_path_v = __inst_v + "/tool/verify_cli.hexa"
-                if file_exists(inst_path_v) { verify_script = inst_path_v }
-            }
+            let mut verify_script = _resolve_repo_file("tool/verify_cli.hexa")
+            if len(verify_script) == 0 { verify_script = "tool/verify_cli.hexa" }
             cmd_run(verify_script, verify_args)
         }
     } else if sub == "calc" {
@@ -6659,21 +6677,13 @@ if len(av) < 3 {
         // R7 track B (2026-05-18, cycle 9): preferred path = standalone
         // compiled bin/hexa-calc binary. Same as verify (cycle 8) — depends
         // on cycle 7 module_loader patch for cross-directory use flatten.
-        let __inst_c = install_dir_from_argv0()
         let mut calc_args = []
         let mut ci = 3
         while ci < len(av) {
             calc_args.push(av[ci])
             ci = ci + 1
         }
-        let mut calc_bin = ""
-        if len(__inst_c) > 0 {
-            let inst_bin = __inst_c + "/bin/hexa-calc"
-            if file_exists(inst_bin) { calc_bin = inst_bin }
-        }
-        if len(calc_bin) == 0 && file_exists("bin/hexa-calc") {
-            calc_bin = "bin/hexa-calc"
-        }
+        let mut calc_bin = _resolve_repo_file("bin/hexa-calc")
         if len(calc_bin) > 0 {
             let cli_q = shq(calc_bin)
             let mut cmd = cli_q
@@ -6711,11 +6721,8 @@ if len(av) < 3 {
                 print(out)
             }
         } else {
-            let mut calc_script = "tool/calc_cli.hexa"
-            if len(__inst_c) > 0 {
-                let inst_path_c = __inst_c + "/tool/calc_cli.hexa"
-                if file_exists(inst_path_c) { calc_script = inst_path_c }
-            }
+            let mut calc_script = _resolve_repo_file("tool/calc_cli.hexa")
+            if len(calc_script) == 0 { calc_script = "tool/calc_cli.hexa" }
             cmd_run(calc_script, calc_args)
         }
     } else if sub == "atlas" {
@@ -6733,21 +6740,13 @@ if len(av) < 3 {
         // compiler/atlas/merger::load_atlas, PRs #312 + #314.) list_dir
         // codegen mapping completed the build wiring. cmd_run fallback
         // retained when binary absent.
-        let __inst_a = install_dir_from_argv0()
         let mut atlas_args = []
         let mut ai = 3
         while ai < len(av) {
             atlas_args.push(av[ai])
             ai = ai + 1
         }
-        let mut atlas_bin = ""
-        if len(__inst_a) > 0 {
-            let inst_bin = __inst_a + "/bin/hexa-atlas"
-            if file_exists(inst_bin) { atlas_bin = inst_bin }
-        }
-        if len(atlas_bin) == 0 && file_exists("bin/hexa-atlas") {
-            atlas_bin = "bin/hexa-atlas"
-        }
+        let mut atlas_bin = _resolve_repo_file("bin/hexa-atlas")
         if len(atlas_bin) > 0 {
             let cli_q = shq(atlas_bin)
             let mut cmd = cli_q
@@ -6785,11 +6784,8 @@ if len(av) < 3 {
                 print(out)
             }
         } else {
-            let mut atlas_script = "tool/atlas_cli.hexa"
-            if len(__inst_a) > 0 {
-                let inst_path = __inst_a + "/tool/atlas_cli.hexa"
-                if file_exists(inst_path) { atlas_script = inst_path }
-            }
+            let mut atlas_script = _resolve_repo_file("tool/atlas_cli.hexa")
+            if len(atlas_script) == 0 { atlas_script = "tool/atlas_cli.hexa" }
             cmd_run(atlas_script, atlas_args)
         }
     } else if sub == "qrng" {
