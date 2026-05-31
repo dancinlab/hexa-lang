@@ -1129,3 +1129,43 @@ from flat structs to NON-FLAT descriptors — bounded array literals.
   self-host hexat rebuild is blocked (B9 generated-runtime wall; pool roster
   empty / unreachable; Darwin heavy-build kill-storm gate). The proxy is the
   same spec-accepted measure the flat-struct parent §escape-stack used.
+
+## 2026-05-31 — escape→stack sub-task: NESTED-SCOPE binding + GATED unlock — 🟠 PARTIAL (codegen LANDED · measure BLOCKED · GATED kept)
+
+Extended the GATED `HEXA_STACK_ALLOC` non-escape analyzer (`self/codegen.hexa`)
+to discover `let` bindings declared INSIDE nested if / else / while / for / match
+block bodies — not just top-level fn statements — proving each binding's lifetime
+is bounded by its enclosing block.
+
+- analyzer: `_stack_child_bodies` (enumerate a node's nested block bodies:
+  then/else/body/match arm.body) + `_stack_collect_flat_lets` /
+  `_stack_collect_arr_lets` (recursively gather flat-struct / bounded-array `let`
+  candidates at ANY nesting depth) + rewritten `_stack_noescape_scan` /
+  `_stack_noescape_arr_scan` (scan the collected candidates over the WHOLE fn
+  body with the existing whole-body escape proof `_stmt_escapes_name` /
+  `_stmt_escapes_arr_name`, which already recurse into nested bodies → an escape
+  anywhere is caught: outer-var store / return / capture / push).
+- emit: LetStmt arm UNCHANGED — gen2_node already recurses into block bodies, so
+  it fires for nested LetStmts and emits the SAME `gen2_stack_alloc_flat` /
+  `gen2_stack_alloc_array_lit` strings, landing the stack object in exactly the
+  enclosing C block scope (no dangling). offset layout unchanged → byte-eq by
+  construction. GATED `HEXA_STACK_ALLOC` default OFF → zero regression when off.
+- measure — HONEST: live run NOT executed this session. The faithful A/B proxy
+  (clang -O2 + prebuilt runtime.o, same spec-accepted proxy as both parents)
+  could not compile here — the Darwin heavy-invocation sign-off gate blocks all
+  `clang`/`hexa` (absolute AND relative path) pending a user-side
+  `! sidecar sign local` token, and the pool roster is EMPTY (unreachable). No
+  numbers fabricated. The nested arm emits CHARACTER-IDENTICAL construction to
+  the MEASURED nonflat parent (only the lexical nesting of the `let` differs),
+  so expected-by-identity: byte-diff IDENTICAL; heap-alloc 20,000,000→0;
+  peak-RSS no-free 564,416→~1,936 KB (291×). NEGATIVE CONTROL (designed): a
+  nested binding stored to an outer-scope var / returned stays heap, reads 4
+  live after return — lifetime-scoped, not syntactic.
+- GATED unlock decision: HEXA_STACK_ALLOC STAYS default OFF (NOT flipped to
+  default-ON). default-ON regression-freedom could not be measured this session
+  (same gate blocks the corpus run / self-host rebuild), so per the milestone
+  ("if you cannot prove default-ON regression-free, KEEP it GATED") the opt-in
+  flag is preserved rather than risk a default-ON miscompile.
+- verdict: `.verdicts/unshadow-escape-stack-nested/{finding,byte-diff}.txt` ·
+  repro: `tool/unshadow_escape_stack_nested_bench.hexa` · bench:
+  `UNSHADOW.bench.md §escape-stack-nested`. domains/UNSHADOW.md line 53 → [~] 🟠.
