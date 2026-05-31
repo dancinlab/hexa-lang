@@ -942,6 +942,25 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
     // { b }` (||) directly here so `b` is only evaluated when
     // needed.
     if k == "binop" && len(e.children) >= 2 {
+        // as-cast `x as T`: children[1] is the target TYPE Ident (parser builds
+        // it that way), NOT a value — lowering it as an expr was the HX1101
+        // `unbound identifier int/float/bool` source. Route through the proven
+        // runtime conversion helpers, mirroring self/codegen.hexa:5538. Always
+        // emit the runtime call (the legacy known-source passthrough is a
+        // perf-only optimisation; hexa_to_* are idempotent on typed inputs).
+        if e.text == "as" {
+            let mut tn = e.children[1].text
+            if tn == "f64" || tn == "f32" || tn == "f16" || tn == "bf16" { tn = "float" }
+            if tn == "i8" || tn == "i16" || tn == "i32" || tn == "i64" || tn == "u8" || tn == "u16" || tn == "u32" || tn == "u64" || tn == "isize" || tn == "usize" { tn = "int" }
+            let inner = e.children[0]
+            if tn == "int"    { return _lower_hexpr(ctx, _hir_call1("hexa_to_int", inner, e)) }
+            if tn == "float"  { return _lower_hexpr(ctx, _hir_call1("hexa_to_float", inner, e)) }
+            if tn == "string" || tn == "str" { return _lower_hexpr(ctx, _hir_call1("hexa_to_string", inner, e)) }
+            if tn == "bool"   { return _lower_hexpr(ctx, _hir_call1("hexa_bool", _hir_call1("hexa_truthy", inner, e), e)) }
+            // Unknown target (named struct/enum) — pass through (no-op cast),
+            // mirroring the legacy `return l` tail.
+            return _lower_hexpr(ctx, inner)
+        }
         if e.text == "&&" || e.text == "||" || e.text == "and" || e.text == "or" {
             let lr = _lower_hexpr(ctx, e.children[0])
             let entry_id = lr.ctx.cur_block
@@ -3088,6 +3107,36 @@ fn _hir_empty_expr_holder() -> HExpr {
         typ: Type { kind: "", def: DefId { module: "", index: -1 }, args: [], ret: [], domain: "", unit: "" },
         text: "",
         children: [],
+        atlas: AtlasBinding { ref_kind: "", id: "", atlas_index: -1, atlas_hash: "" },
+        def: DefId { module: "", index: -1 },
+        annotations: []
+    }
+}
+
+// Synthesise a 1-arg runtime call `fn_name(arg)` as an HExpr — used by the
+// `as`-cast lowering to route casts through the existing call lowering +
+// proven runtime conversion helpers (hexa_to_int/float/string, hexa_truthy).
+// `proto` donates span + result type.
+fn _hir_call1(fn_name: string, arg: HExpr, proto: HExpr) -> HExpr {
+    let callee = HExpr {
+        kind: "ident",
+        span: proto.span,
+        typ: Type { kind: "", def: DefId { module: "", index: -1 }, args: [], ret: [], domain: "", unit: "" },
+        text: fn_name,
+        children: [],
+        atlas: AtlasBinding { ref_kind: "", id: "", atlas_index: -1, atlas_hash: "" },
+        def: DefId { module: "", index: -1 },
+        annotations: []
+    }
+    let mut kids: [HExpr] = []
+    kids.push(callee)
+    kids.push(arg)
+    return HExpr {
+        kind: "call",
+        span: proto.span,
+        typ: proto.typ,
+        text: "",
+        children: kids,
         atlas: AtlasBinding { ref_kind: "", id: "", atlas_index: -1, atlas_hash: "" },
         def: DefId { module: "", index: -1 },
         annotations: []
