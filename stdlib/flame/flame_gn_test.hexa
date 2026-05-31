@@ -75,8 +75,10 @@ fn check_normalized(x: int, gamma: int, beta: int, T: int, C: int, G: int) -> in
         }
         let mu = sm / m
         let va = sv / m
-        if _gn_abs(mu) > 0.000001 { return 0 }
-        if _gn_abs(va - 1.0) > 0.000001 { return 0 }
+        // xhat mean ~ 0 (exact modulo float summation); var = var/(var+eps) so
+        // it sits just under 1 by the eps slack — eps-aware tolerances.
+        if _gn_abs(mu) > 0.00001 { return 0 }
+        if _gn_abs(va - 1.0) > 0.01 { return 0 }
         g = g + 1
     }
     return 1
