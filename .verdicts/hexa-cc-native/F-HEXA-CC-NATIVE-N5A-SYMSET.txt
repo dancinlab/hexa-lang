@@ -33,34 +33,36 @@ MEASUREMENT 2 — THE REAL N5 FRONTIER is the type-checker, not the linker
   47 files (flatten works).
   aprime_cc --emit=obj --backend=native flat.hexa -> rc=1:
     "hexa-compiler: 181 diagnostic(s); aborting before codegen"
-    Diagnostic-code distribution (authoritative `uniq -c`, 168 HexaError lines;
-    the 181 summary counts a few multi-line notes too):
-      HX2001 : 208   (dominant)
-      HX3004 :  34
-      HX3001 :  34   "type mismatch: expected `named:any`, got `i64`"
-      HX2003 :  32
-      HX0011 :  26
-      HX4001 :  26
-    (CORRECTION: an earlier draft of this verdict said "181 × HX3001" — that was
-    a miscount from interleaved cause:/explain: lines. HX3001 is only 34; HX2001
-    dominates. The root pattern is still a type-system mismatch on the self-host
-    source: many globals are declared `any` then assigned an i64 literal, e.g.
-    flat.hexa:5758 `let mut _g_oi_lineno: any = 0`, :6207 `let mut _g_atlas_index:
-    any = 0`. So the native type-checker's `any`/`i64` handling on the compiler's
-    own source is the gate — exact code mix is HX2001-led, not HX3001-led.)
-  => aprime_cc CANNOT typecheck the flattened compiler — it aborts BEFORE
-  codegen/linking. So the N5 blocker is NOT runtime.o coverage and NOT hexa_ld;
-  it is the native compiler's TYPE CHECKER rejecting the self-host source with
-  181 `named:any` vs `i64` mismatches. The exec-link chain (N3/N4) is proven for
-  programs aprime_cc CAN compile; the whole compiler is not yet one of them.
+    Diagnostic-code distribution (authoritative `uniq -c`; 168 HexaError lines,
+    "181 diagnostic(s)" summary counts a few extra notes). SIX distinct classes,
+    each with one sample cause: (corrects two earlier drafts that wrongly said
+    "181 × HX3001" then "HX3001 = named:any↔i64" — neither was right):
+      HX2001 ×208  undefined name           e.g. `float_to_bits`
+      HX3004 × 36  return type mismatch      e.g. `rt_round` returns i64
+      HX3001 × 34  type mismatch             expected `bool`, got `named:HexaVal`
+      HX2003 × 32  not callable              `key_fn` : type `named:HexaVal`
+      HX4001 × 26  int-division narrowing    real domain → integers
+      HX0011 × 26  parse error               expected `{`, found `KwAs`
+  => aprime_cc CANNOT typecheck/parse the flattened compiler — it aborts BEFORE
+  codegen/linking. The N5 blocker is NOT runtime.o coverage and NOT hexa_ld; it
+  is the native front-end (parser + type-checker) on the compiler's OWN source,
+  and it is NOT a single root cause — at least 6 classes: undefined-name
+  resolution (HX2001, dominant — likely missing builtin/runtime decls like
+  float_to_bits in the native front-end's symbol table), HexaVal vs bool/closure
+  type handling (HX3001/HX2003), return-type inference (HX3004), int-division
+  policy (HX4001), and even a parse-level `as` handling gap (HX0011). The
+  exec-link chain (N3/N4) is proven for programs aprime_cc CAN compile; the whole
+  compiler is not yet one of them.
 
 FINDING (re-scopes N5, honest)
   N5 (full-compiler self-host fixpoint) decomposes into a NEW prerequisite plus
   the originally-planned link work:
-    N5-pre (TYPECHECK): make aprime_cc typecheck the flattened compiler — fix
-      the 181 HX3001 `named:any` vs `i64` mismatches (a type-inference/annotation
-      gap in the native front-end on its own source). This is the true blocker
-      and is substantial (compiler-frontend work), independent of hexa_ld.
+    N5-pre (FRONT-END): make aprime_cc parse + typecheck the flattened compiler —
+      clear the ~181 diagnostics across 6 classes (HX2001 undefined-name ×208
+      dominant, then HX3004/HX3001/HX2003/HX4001/HX0011). NOT one root cause;
+      HX2001 (missing builtin/runtime decls in the native front-end symbol table)
+      is the largest lever — fixing it likely collapses a big fraction. This is
+      substantial compiler-frontend work, independent of hexa_ld.
     N5-sym (RUNTIME SET): extend tool/emit_runtime_obj.hexa to export the full
       _hexa_* set the compiler references, via an explicit _hexa_*→native-bytes
       map (181 rt_* producers exist as raw material).
@@ -71,14 +73,15 @@ FINDING (re-scopes N5, honest)
 
 VERIFY-ENV NOTE (g5/g63)
   - Measured with committed build/aprime_cc (no rebuild). Numbers are from that
-    binary; a different aprime_cc revision may shift the exact HX3001 count.
-  - The 181-diagnostic abort is deterministic across reruns this session.
+    binary; a different aprime_cc revision may shift the exact per-code counts.
+  - The ~181-diagnostic abort is deterministic across reruns this session.
   - Live N5 verification (running a freshly-self-hosted hexac) will require an
     aprime_cc rebuild (tool/build_aprime.sh — Mac kill-storm risk) on a pool
     host / pod, OR the standalone equivalence-chain technique used in N3b/N4.
 
 STATUS: N5a MEASURED (green, read-only) — N5 frontier identified: the native
-        type-checker (181× HX3001 on the flattened compiler) is the gating
-        blocker, ahead of the runtime-symbol set and the hexa_ld link. N5 is
-        re-scoped into N5-pre (typecheck) → N5-sym (full runtime .o) → N5-link
-        (fixpoint). N5 milestone NOT flipped (measurement only).
+        FRONT-END (parser + type-checker) on the flattened compiler aborts with
+        ~181 diagnostics across 6 classes (HX2001 undefined-name ×208 dominant),
+        ahead of the runtime-symbol set and the hexa_ld link. N5 is re-scoped
+        into N5-pre (front-end) → N5-sym (full runtime .o) → N5-link (fixpoint).
+        N5 milestone NOT flipped (measurement only).
