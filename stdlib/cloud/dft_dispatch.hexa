@@ -1050,6 +1050,38 @@ fn _dft_endpoint_resolved(host: str, port: str) -> int {
     return 1
 }
 
+// --detach idempotency action codes (the pre-rent guard verdict). `--detach`
+// USED to ALWAYS rent a fresh pod — re-firing a deck that already had a live
+// detached pod left the old one idle + billing (the ~12 dup-idle-pod leak,
+// 2026-06-01). The guard mirrors `--resume`'s reachability discipline so a
+// re-fire of an ALREADY-LIVE deck is an idempotent no-op (advance with
+// `--resume`), and only a genuinely-dead pod licenses a fresh rent.
+let DFT_DETACH_RENT = 0       // no live pod recorded → rent fresh (today's path)
+let DFT_DETACH_SKIP = 1       // a live pod is reachable → SKIP rent (idempotent no-op)
+let DFT_DETACH_REPLACE = 2    // a recorded pod is unreachable/stale → teardown then rent
+
+// _dft_detach_guard_action — PURE: decide whether `--detach` should rent. Inputs
+// model the impure probe so this is network-free + unit-testable (mirrors the
+// resolve/endpoint tests). `force`=1 ALWAYS rents (expert re-fire, old behavior).
+// `has_state`=1 iff the deck's `.dft_detach.state` records a pod (instance_id +
+// resolved host/port). `reachable`=1 iff a lightweight liveness probe reached it.
+//   - force                       → RENT     (bypass the guard entirely)
+//   - no recorded pod             → RENT     (first detach for this deck)
+//   - recorded pod + reachable    → SKIP     (live — re-fire is a no-op; use --resume)
+//   - recorded pod + unreachable  → REPLACE  (stale billing pod — teardown then rent)
+fn _dft_detach_guard_action(force: int, has_state: int, reachable: int) -> int {
+    if force == 1 {
+        return DFT_DETACH_RENT
+    }
+    if has_state == 0 {
+        return DFT_DETACH_RENT
+    }
+    if reachable == 1 {
+        return DFT_DETACH_SKIP
+    }
+    return DFT_DETACH_REPLACE
+}
+
 // _dft_remote_read_ok — 1 iff a CloudResult represents a remote command that
 // actually reached the pod (ok==1). A transport failure surfaces as ok==0 with
 // exit_code 255 (ssh transport) or -1 (no exit-code marker / dead shell);
@@ -1240,7 +1272,7 @@ pub fn dft_run(av: [str], start: int) -> int {
     // is the explicit `--detach`→`--resume` handoff (option α; replaces the
     // forbidden `( nohup dft-run --go & )` local double-fork).
     if detach == 1 {
-        return _dft_detach(deck, image, disk, owner, query, identity, walltime_h, relax_name)
+        return _dft_detach(deck, image, disk, owner, query, identity, walltime_h, relax_name, force)
     }
 
     return _dft_go(deck, image, disk, owner, query, identity, walltime_h, relax_name)
@@ -1593,8 +1625,55 @@ fn _dft_oom_preflight(deck: str) -> int {
 // Advance with `hexa cloud dft-run <deck> --resume` (phase-2). This replaces the
 // forbidden `( nohup dft-run --go & )` local double-fork — the long work runs on
 // the POD, not in a detached local process, so the Bash cap is never exceeded.
-fn _dft_detach(deck: str, image: str, disk: int, owner: str, query: str, identity: str, walltime_h: int, relax_name: str) -> int {
+fn _dft_detach(deck: str, image: str, disk: int, owner: str, query: str, identity: str, walltime_h: int, relax_name: str, force: int) -> int {
     println("[dft-run] ━ DETACH (phase-1) — rent + provision + launch relax detached on the pod ━")
+
+    // ⓪ IDEMPOTENCY GUARD (the dup-idle-pod recurrence-stopper, 2026-06-01) —
+    // before renting, check whether THIS deck already records a live detached
+    // pod in `.dft_detach.state`. Without this, re-running `--detach` on a deck
+    // that already has a live pod rents a SECOND billing pod and orphans the
+    // first (the ~12 idle dup pods this leak produced). --force bypasses it.
+    let g_iid = _dft_state_field(deck, "instance_id")
+    let g_host = _dft_state_field(deck, "host")
+    let g_port = _dft_state_field(deck, "port")
+    let g_phase = _dft_state_field(deck, "phase")
+    // a recorded pod = stamp present, endpoint resolved, and NOT already torn
+    // down (phase done/failed → the pod is gone, so a re-fire is a legit rent).
+    let alive_phase = if g_phase == "done" { 0 } else if g_phase == "failed" { 0 } else { 1 }
+    let has_state = if len(g_iid) > 0 && _dft_endpoint_resolved(g_host, g_port) == 1 && alive_phase == 1 { 1 } else { 0 }
+    // probe reachability via the CANONICAL transport (the same cloud_exec_opts
+    // the rest of this file uses for both direct-IP and vast-proxy endpoints).
+    let mut reachable = 0
+    if has_state == 1 && force == 0 {
+        let g_identity = _dft_state_field(deck, "identity")
+        let g_sshhost = "root@" + g_host
+        let g_opts = _dft_ssh_opts(g_port, g_identity)
+        let g_probe = cloud_exec_opts(g_sshhost, g_opts, "echo REACHABLE")
+        if g_probe.ok == 1 && g_probe.stdout_.contains("REACHABLE") {
+            reachable = 1
+        }
+    }
+    let action = _dft_detach_guard_action(force, has_state, reachable)
+    if action == DFT_DETACH_SKIP {
+        println("[dft-run] " + deck + " already has a live detached pod " + g_iid + "@" + g_host + ":" + g_port
+            + " (stage `" + g_phase + "`) — NOT renting a second pod.")
+        println("[dft-run]   advance it: hexa cloud dft-run " + deck + " --resume   (or --force to rent a fresh pod anyway)")
+        return 0
+    }
+    if action == DFT_DETACH_REPLACE {
+        println("[dft-run] " + deck + " has a recorded pod " + g_iid + "@" + g_host + ":" + g_port
+            + " that is UNREACHABLE (dead / proxy-only) — re-firing.")
+        // tear the stale billing pod down FIRST (state records the instance id),
+        // so the re-fire never leaves it idle. No id → can't auto-tear-down.
+        if len(g_iid) > 0 {
+            println("[dft-run]   tearing down stale instance " + g_iid + " before renting fresh...")
+            let _td = vast_destroy(g_iid)
+            pod_registry_forget(g_iid)
+        } else {
+            println("[dft-run]   ⚠ no instance_id recorded — cannot auto-tear-down; proceeding to rent (check `hexa cloud pods` for an orphan).")
+        }
+    }
+
     // ⓪ d11 HARD OOM gate (Fix-deck-1) — size the relax BEFORE the paid rent. A
     // 0 verdict means even one rank won't fit the RAM floor → REFUSE (don't rent
     // an OOM-doomed pod). Otherwise clamp -np to the mem-budget sweet-spot AND pin

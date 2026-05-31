@@ -428,5 +428,41 @@ fn main() {
     let no_nl = dft_scf_split("ATOMIC_SPECIES\n  H 1.0 H.UPF\nK_POINTS automatic\n2 2 2 0 0 0\n")
     _check("split: no namelist → ok=0", no_nl.ok, 0)
 
+    // ── GAP 3: --detach idempotency guard (the dup-idle-pod recurrence-stopper) ──
+    // `--detach` used to ALWAYS rent → re-firing an already-live deck orphaned the
+    // first billing pod (the ~12 dup-idle-pod leak, 2026-06-01). The PURE guard
+    // decides the action from (force, has_state, reachable) so the recurrence is
+    // structurally impossible. Four contract cases:
+    //   (a) state-present + reachable        → SKIP-RENT (idempotent no-op)
+    //   (b) state-present + unreachable       → TEARDOWN + RENT (stale re-fire)
+    //   (c) --force                            → RENT (expert bypass, old behavior)
+    //   (d) no-state                           → RENT (first detach for the deck)
+    // action codes are the stable contract — RENT=0 · SKIP=1 · REPLACE=2 (the
+    // module-level `let` constants aren't importable across `use`, so assert the
+    // contract values directly; a code change here is the intended trip-wire).
+    _check("gap3a: state+reachable → SKIP (no second pod)",
+        _dft_detach_guard_action(0, 1, 1), 1)
+    _check("gap3b: state+unreachable → REPLACE (teardown+rent)",
+        _dft_detach_guard_action(0, 1, 0), 2)
+    _check("gap3c: --force → RENT (bypass guard, old behavior preserved)",
+        _dft_detach_guard_action(1, 1, 1), 0)
+    _check("gap3c2: --force RENTs even when unreachable",
+        _dft_detach_guard_action(1, 1, 0), 0)
+    _check("gap3d: no-state → RENT (first detach)",
+        _dft_detach_guard_action(0, 0, 0), 0)
+    // --force dominates: it never SKIPs (1) nor REPLACEs (2) regardless of liveness.
+    _check("gap3: force never SKIPs", _bool_int(_dft_detach_guard_action(1, 1, 1) != 1), 1)
+    _check("gap3: force never REPLACEs", _bool_int(_dft_detach_guard_action(1, 1, 0) != 2), 1)
+    // the state stamp records the instance_id the teardown path needs to target
+    // the stale billing pod (no id ⇒ can't auto-tear-down). Confirm round-trip.
+    let gdeck = "/tmp/dft_detach_guard_state_test"
+    let _gmk = exec("rm -rf '" + gdeck + "' && mkdir -p '" + gdeck + "'")
+    let _gw = _dft_write_state(gdeck, "relax", "42424242", "5.6.7.8", "40099", "id", 16, 12, "vc-relax.in")
+    _check("gap3: stamp carries instance_id for teardown",
+        _seq(_dft_state_field(gdeck, "instance_id"), "42424242"), 1)
+    _check("gap3: stamp endpoint resolved (host+port present)",
+        _dft_endpoint_resolved(_dft_state_field(gdeck, "host"), _dft_state_field(gdeck, "port")), 1)
+    let _grm = exec("rm -rf '" + gdeck + "'")
+
     println("dft_dispatch_test PASS")
 }
