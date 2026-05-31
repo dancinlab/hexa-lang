@@ -1,0 +1,51 @@
+// @ci_gate — pure · network-free · deterministic (stdlib_selftest_aggregate --ci-gate)
+// stdlib/cloud/pods_local_idle_orphan_test.hexa — falsifiers for the idle-orphan
+// set-diff pods_local_idle_orphans (billing_ids − active_ids). `cloud idle-reap`
+// finds provider pods that ARE billing but have NO verdict=PENDING job pinned in
+// ./pods.json — the dup-idle-pod leak (2026-06-01). Hermetic: the active set is
+// supplied directly (no ./pods.json read). Falsifier F-CLOUD-IDLE-REAP-SETDIFF.
+//
+// Run: hexa run stdlib/cloud/pods_local_idle_orphan_test.hexa → ... PASS — N/N cases.
+
+use "stdlib/cloud/pods_local"
+
+fn _fail(case: str, msg: str) {
+    println("FAIL " + case + ": " + msg)
+    exit(1)
+}
+
+fn _eq_int(case: str, got: int, want: int) {
+    if got != want { _fail(case, "got " + str(got) + " want " + str(want)) }
+}
+
+// _has — 1 iff list contains needle.
+fn _has(xs, needle: str) -> int {
+    let mut i = 0
+    while i < len(xs) {
+        if xs[i] == needle { return 1 }
+        i = i + 1
+    }
+    return 0
+}
+
+fn main() {
+    let mut n = 0
+    // c1 — every billing pod has an active job → 0 idle-orphans.
+    _eq_int("c1: all-active → 0 orphans", len(pods_local_idle_orphans(["v-1", "v-2"], ["v-1", "v-2"])), 0); n = n + 1
+    // c2 — v-9 billing but jobless → exactly 1 idle-orphan (the dup-idle-pod leak).
+    let o2 = pods_local_idle_orphans(["v-1", "v-9"], ["v-1"])
+    _eq_int("c2: one jobless billing pod → 1 orphan", len(o2), 1); n = n + 1
+    _eq_int("c2: the orphan is v-9", _has(o2, "v-9"), 1); n = n + 1
+    _eq_int("c2: active pod v-1 NOT orphaned", _has(o2, "v-1"), 0); n = n + 1
+    // c3 — an active job pinned to a no-longer-billing pod (v-7) is NOT reclaimable
+    // (set-diff only emits ids present in the billing set).
+    _eq_int("c3: active-only extra → 0 orphans", len(pods_local_idle_orphans(["v-1"], ["v-1", "v-7"])), 0); n = n + 1
+    // c4 — empty active set → every billing pod is reclaimable.
+    _eq_int("c4: empty active → all 3 orphaned", len(pods_local_idle_orphans(["v-1", "v-2", "v-3"], [])), 3); n = n + 1
+    // c5 — no billing pods → 0 orphans.
+    _eq_int("c5: no billing pods → 0 orphans", len(pods_local_idle_orphans([], ["v-1"])), 0); n = n + 1
+    // c6 — duplicate billing ids must not double-count one orphan.
+    _eq_int("c6: dup billing id → 1 orphan (deduped)", len(pods_local_idle_orphans(["v-9", "v-9"], ["v-1"])), 1); n = n + 1
+
+    println("pods_local_idle_orphan_test PASS — " + str(n) + "/" + str(n) + " cases")
+}

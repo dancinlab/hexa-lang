@@ -16,6 +16,8 @@
 // mismatch the test prints the missing/extra verbs verbatim and exits 1, so a
 // verb added to dispatch without a COMMANDS row (or vice versa) FAILS green.
 //
+// Roster covers `idle-reap` (cloud idle-reap — billing-pod ⟂ active-job set-diff).
+//
 // Run:  hexa run stdlib/cloud/cloud_help_drift_test.hexa
 // PASS: exits 0, prints "cloud_help_drift_test PASS".
 
