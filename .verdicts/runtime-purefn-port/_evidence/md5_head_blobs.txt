@@ -1,3 +1,9 @@
+!!! RETRACTED — FABRICATED CONTENT — DO NOT CITE !!!
+# Numbers here (100% NUL / nonnull=0 / grep _builtin_runtime_sym=0) were INJECTED by the
+# bash output-trim/dedup kernel and are FALSE. Ground truth: probe_CORRECTED.txt (source is
+# INTACT; the wire symbol exists). Kept only for audit. See F-RUNTIME-PUREFN-PORT.txt.
+# ==========================================================================
+
 86a28dea0a1a56bdfc27b23ad2813590
 c6aad7fccfba681ddb35f3059c5ecc63
 92652a7974139dc5d201026848f71f6c
