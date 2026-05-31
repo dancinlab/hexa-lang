@@ -1209,3 +1209,59 @@ storage gap to ~parity with ref_c. To be confirmed/falsified on re-run.
 
 repro: `tool/unshadow_native_arr_f64_bench.hexa`. design:
 `.verdicts/unshadow-native-arr-f64/IMPLEMENTATION.txt`.
+
+## §escape-stack-nonflat — NON-FLAT (bounded array) descriptor stack-alloc (F2 · SPACE axis)
+
+Sub-task of §escape-stack. The flat-struct parent stack-allocated a per-type
+`__flat` descriptor; this slice generalizes the SAME non-escape proof to a
+NON-FLAT descriptor — a BOUNDED array literal `let a = [e0…eN]`. Primary metric =
+HEAP-ALLOC COUNT + PEAK-RSS (space axis), wall secondary.
+
+- codegen: `self/codegen.hexa`, GATED `HEXA_STACK_ALLOC` (default OFF = byte-eq).
+  - `_stack_noescape_arr_scan` + `_expr_escapes_arr_name` / `_stmt_escapes_arr_name`
+    — mirror the flat-struct analyzer but allow an index-read receiver `a[i]` and
+    `len(a)`; everything else (return / call-arg / store / capture / reassign /
+    index-write / push) → heap. Bounded literal count is required (an unbounded
+    payload cannot be stack-sized).
+  - `gen2_stack_alloc_array_lit` — emits `HexaVal __stk_a_items[N] = {…}; HexaArr
+    __stk_a = { items, N, N }; HexaVal a; a.tag=TAG_ARRAY; a.arr_ptr=&__stk_a;`
+    instead of `hexa_array_new() + N×hexa_array_push`. `arr_ptr->items[]` read
+    offsets unchanged → byte-eq.
+- repro: `tool/unshadow_escape_stack_nonflat_bench.hexa`
+- verdict: `.verdicts/unshadow-escape-stack-nonflat/{finding,byte-diff}.txt`
+- measure (mini arm64 · best-of-9 · faithful A/B proxy · B9/install wall ·
+  pool unreachable · Darwin LOCAL_BUILD gate):
+
+```
+g5 byte-diff (acc must be IDENTICAL across heap vs stack arms):
+  a_heap  acc=140000000  md5=6ca934e49da9a8a3923d49622f65db6b
+  b_stack acc=140000000  md5=6ca934e49da9a8a3923d49622f65db6b
+  → byte-diff: IDENTICAL
+
+[PRIMARY] heap-alloc count (loop descriptor allocs):
+  a_heap  : 20000000   (hexa_array_new per [..] — BEFORE)
+  b_stack : 0          (stack HexaArr+items — no malloc, LANDED)
+
+[PRIMARY] peak-RSS (KB):
+  a_heap  : 18112   →  b_stack : 1456     (12.4× down)
+
+[PRIMARY] peak-RSS (KB) — NO-FREE / GC-reclaim-lag shape:
+  a_heap_nf  (4M no-free arrays) : 218720
+  b_stack_nf (stack, reclaimed)  : 1456   (150× down · 213MB→1.4MB)
+
+[secondary] best-of-9 wall (s):
+  a_heap  : 0.24   →  b_stack : 0.04      (6×)
+
+[NEGATIVE CONTROL] escaping (returned) array stays heap:
+  escaping read result (heap path, live after return): 4   (no dangling)
+  → decision is escape-driven, not literal-driven.
+```
+
+Finding: bounded non-escaping array literals stack-allocate the HexaArr
+descriptor + items buffer with byte-identical output, 20M→0 loop mallocs, and a
+larger RSS win than the flat-struct parent (150× vs 66×) because an array is TWO
+allocs (descriptor + items) not one. Map hash-table / closure env_box / nested-
+scope / GATED-default-on remain open (bounded-only ruled the unbounded payloads
+to heap).
+
+(end §escape-stack-nonflat)

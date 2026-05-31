@@ -1101,3 +1101,31 @@ control) is the gate to flip the milestone to [x]; see
 .verdicts/unshadow-native-arr-f64/IMPLEMENTATION.txt +
 tool/unshadow_native_arr_f64_bench.hexa. Expected per the i64 precedent (17.6x
 ceiling, gap->0.83x) but to be confirmed/falsified on re-run.
+
+## 2026-05-31 — escape→stack sub-task: NON-FLAT (bounded array) descriptor stack-alloc — WIN
+
+Extended the GATED `HEXA_STACK_ALLOC` non-escape analyzer (`self/codegen.hexa`)
+from flat structs to NON-FLAT descriptors — bounded array literals.
+
+- analyzer: `_stack_noescape_arr_scan` + `_expr_escapes_arr_name` /
+  `_stmt_escapes_arr_name` (mirror `_expr_escapes_name` but permit index-read
+  `a[i]` + `len(a)`; return / call-arg / store / capture / reassign / index-write
+  / push → heap). Bounded literal count required.
+- emit: `gen2_stack_alloc_array_lit` — stack `HexaVal[N]` items buffer + stack
+  `HexaArr` descriptor + `a.arr_ptr=&__stk_a` instead of `hexa_array_new` + push.
+  `arr_ptr->items[]` layout unchanged → byte-eq. FN-scoped reset.
+- BOUNDED-ONLY: map hash-table / closure env_box / grown arrays stay heap (a
+  stack buffer can't grow) — honest scope reduction; those remain open.
+- measure (mini arm64 · best-of-9 · faithful A/B proxy · B9/install wall · pool
+  unreachable · Darwin LOCAL_BUILD gate): g5 byte-diff IDENTICAL
+  (acc=140000000, md5 6ca934e4…, same value as the flat-struct parent);
+  heap-alloc 20,000,000→0; peak-RSS 18,112→1,456 KB (12.4×); peak-RSS no-free
+  218,720→1,456 KB (150× · 213MB→1.4MB); wall 0.24→0.04s (6×). NEGATIVE CONTROL:
+  escaping (returned) array stays heap, reads 4 live after return (no dangling).
+- verdict: `.verdicts/unshadow-escape-stack-nonflat/` · repro:
+  `tool/unshadow_escape_stack_nonflat_bench.hexa` · bench:
+  `UNSHADOW.bench.md §escape-stack-nonflat`. domains/UNSHADOW.md line 52 → [x].
+- caveat: faithful A/B proxy (the arms emit the EXACT codegen strings) — full
+  self-host hexat rebuild is blocked (B9 generated-runtime wall; pool roster
+  empty / unreachable; Darwin heavy-build kill-storm gate). The proxy is the
+  same spec-accepted measure the flat-struct parent §escape-stack used.
