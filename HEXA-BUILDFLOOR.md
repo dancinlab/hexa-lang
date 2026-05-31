@@ -53,7 +53,7 @@ clang ... cgen build/self/runtime.c -I build/self ... -o /tmp/hexa-cloud-test-bu
 
 ## progress
 
-- [ ] M1 — build_hexa_cloud.sh 3경로 수정 (hexat→hexa_v2 · self/runtime.c→build/self/runtime.c · +`-I build/self`). .sh 편집 차단이면 hexa-native 빌더로 포팅
+- [~] M1 — build_hexa_cloud.sh 3경로 수정 (hexat→hexa_v2 · self/runtime.c→build/self/runtime.c · +`-I build/self`). .sh 편집 차단이면 hexa-native 빌더로 포팅. **🟠 PARTIAL (2026-05-31, 코드 deliverable 검증 · build/smoke honest-STOP)**: `.sh` 는 트리에 없고 이미 hexa-native `tool/build_hexa_cloud.hexa`(220L · PR #2102 포팅 = 밀스톤 명시 허용 fallback)로 대체됨. **3 fix 가 이미 그 .hexa 에 존재** (origin/main 검증: L31 `build/hexa_v2` · L34 `build/self/runtime.c` · L35 `-I build/self`; 죽은 `self/native/hexat`/bare `self/runtime.c` = 0). 따라서 "3경로 수정" 코드 변경은 추가 owed 없음. **build/smoke(gate b/c) = BLOCKED**: build/hexa_v2 transpiler fresh-worktree 부재 + 이번 세션 `! sidecar sign local` 미서명 → heavy-build 게이트(@L4 genuine wall, 합성 아님). SAFETY: `~/.hx/bin/hexa.real` md5 PRE==POST 무손상. 다음: sign 창 → `HEXA_LANG=$PWD NO_SMOKE=1 hexa run tool/build_hexa_cloud.hexa` → bin/hexa-cloud --help 스모크 → [x].
 - [ ] M2 — 수정된 빌더로 bin/hexa-cloud 빌드 + --help 스모크 PASS (live ~/.hx/bin/hexa.real 무손상)
 - [ ] M3 — `hexa cloud adopt --project` 작동 검증 (TEST 레지스트리 복사본, live active-pods.json 무손상)
 - [ ] M4 — 회귀: 기존 hexa selftest가 동일 런타임으로 PASS
