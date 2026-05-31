@@ -1,0 +1,76 @@
+// ════════════════════════════════════════════════════════════════════════════
+//  clm_prod_gpu.hexa — CLM readout via forge GPU dispatch (PR3 of CLM_PROD_TRAINER_PLAN).
+//
+//  The CLMConvMoE readout is a 1x1 Conv1d (kernel=1, stride=1): for each token
+//  logits[t,v] = sum_d yn[t,d] * roW[v,d] + roB[v]. A 1x1 conv is exactly a
+//  matmul, so the readout (the heaviest d×V projection) routes through the
+//  forge GPU dispatcher: yn[T,d] @ Wt[d,V] + bias, where Wt = roW^T.
+//
+//  forge_dispatch_matmul is the RFC 050 hexa-callable GPU wrapper; on a CUDA
+//  host (-DHEXA_CUDA) it runs device-resident cuBLAS, on a CPU host it falls
+//  back to the identical farr_matmul kernel. Either way the result must equal
+//  the nn_conv1d_fwd baseline.
+//
+//  F-CLM-PROD-GPU-EQ: forge readout == conv1d readout (max|Δ| <= 1e-9). Verified
+//  $0 on Mac CPU here; the GPU-busy half (nvidia-smi) runs on a CUDA host via the
+//  dispatch script in PR4. This wires the forge path; PR4 fires it on an H100.
+// ════════════════════════════════════════════════════════════════════════════
+
+use "stdlib/flame/tensor_lib"
+use "stdlib/flame/conv_lib"
+
+fn _absf(x: float) -> float { if x < 0.0 { return 0.0 - x } return x }
+
+fn main() {
+    println("clm_prod_gpu — CLM readout via forge GPU dispatch (PR3)")
+    let T = 8; let d = 8; let V = 256
+
+    // readout inputs (LCG init; eq is weight-agnostic)
+    let yn  = t_zeros(T * d); t_fill_lcg(yn, T * d, 30, 0.4)
+    let roW = t_zeros(V * d); t_fill_lcg(roW, V * d, 20, 0.2)   // conv weight [V, d]
+    let roB = t_zeros(V);     t_fill_lcg(roB, V, 21, 0.1)
+
+    // ---- baseline: nn_conv1d_fwd (1x1 conv readout) ----
+    let logits_cpu = t_zeros(T * V)
+    nn_conv1d_fwd(yn, roW, roB, logits_cpu, T, d, V, 1, 1)
+
+    // ---- forge path: transpose roW[V,d] -> Wt[d,V], matmul, add bias ----
+    let Wt = t_zeros(d * V)
+    let mut v = 0
+    while v < V {
+        let mut k = 0
+        while k < d { t_set(Wt, k * V + v, t_get(roW, v * d + k)); k = k + 1 }
+        v = v + 1
+    }
+    let mm = forge_dispatch_matmul(yn, T, d, Wt, V)   // [T, V] = yn @ Wt
+    if mm < 0 { println("F-CLM-PROD-GPU-EQ = 0"); println("FAIL — forge_dispatch_matmul bad handle"); return }
+    let logits_gpu = t_zeros(T * V)
+    let mut t = 0
+    while t < T {
+        let mut vv = 0
+        while vv < V {
+            t_set(logits_gpu, t * V + vv, t_get(mm, t * V + vv) + t_get(roB, vv))
+            vv = vv + 1
+        }
+        t = t + 1
+    }
+
+    // ---- F-CLM-PROD-GPU-EQ: max |Δ| over T*V ----
+    let mut maxdev = 0.0
+    let mut i = 0
+    while i < T * V {
+        let dvn = _absf(t_get(logits_cpu, i) - t_get(logits_gpu, i))
+        if dvn > maxdev { maxdev = dvn }
+        i = i + 1
+    }
+    let tol = 0.000000001
+    print("  readout d×V = "); print(d); print("×"); print(V)
+    print("  max|Δ| forge-vs-conv = "); println(to_string(maxdev))
+    if maxdev <= tol {
+        println("F-CLM-PROD-GPU-EQ = 1")
+        println("PASS — forge readout matmul == conv1d readout (GPU dispatch path wired)")
+        return
+    }
+    println("F-CLM-PROD-GPU-EQ = 0")
+    println("FAIL")
+}
