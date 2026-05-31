@@ -18,6 +18,13 @@
 //    y[t,co] = b[co] + Σ_ci Σ_k W[co,ci,k] · xin(t - dil·(K-1-k), ci)
 //    xin(p,ci) = X[p,ci] if p>=0 else 0.
 //
+//  FWD = im2col + GEMM (host): unfold the causal-dilated receptive field into
+//  x_col[T·(Cin·K)], one t_matmul (RFC 032 ikj FMA-fused GEMM) → Y, + bias —
+//  replaces the naive O(T·Cout·Cin·K) quad-loop, 38–60× faster at CLM-trunk
+//  shapes (.verdicts/flame-perf-im2col-gemm/roofline.txt). BWD stays the closed
+//  vjp quad-loop (bwd im2col = follow-up). The fwd re-association is a re-order
+//  of the SAME sum → bit-near-identical (max|Δ|≈1e-16; GRAD-EXACT held 5.2e-12).
+//
 //  Verified by F-FLAME-CONV1D-GRAD-EXACT (flame_conv_test.hexa, central-diff).
 //  lib-split mandatory (FLAME.tape): conv lives here, selftest is a separate
 //  entrypoint file. sibling: nn_lib.hexa · tensor_lib.hexa.
@@ -25,33 +32,65 @@
 
 use "stdlib/flame/tensor_lib"
 
-// Forward. Caller allocates y_out (T·Cout). Causal + dilation.
-pub fn nn_conv1d_fwd(x: int, w: int, b: int, y_out: int,
-                     T: int, Cin: int, Cout: int, K: int, dil: int) {
+// im2col host buffer build (offset-capable weight space is irrelevant here —
+// the gather is over activations only). x_col[t, ci·K+k] = xin(p,ci),
+// p = t − dil·(K−1−k), zero where p<0 (causal left-pad). Mirrors the forge
+// im2col in clm_conv_gpu.hexa byte-for-byte (same gather → same re-association).
+fn _conv1d_im2col(x: int, xcol: int, T: int, Cin: int, K: int, dil: int) {
+    let Kdim = Cin * K
+    let mut t = 0
+    while t < T {
+        let mut ci = 0
+        while ci < Cin {
+            let mut k = 0
+            while k < K {
+                let p = t - dil * (K - 1 - k)
+                if p >= 0 { t_set(xcol, t * Kdim + ci * K + k, t_get(x, p * Cin + ci)) }
+                k = k + 1
+            }
+            ci = ci + 1
+        }
+        t = t + 1
+    }
+}
+
+// add bias b[boff+co] into Y[t·Cout+co] in place over the matmul result `mm`.
+fn _conv1d_add_bias(mm: int, b: int, boff: int, y_out: int, T: int, Cout: int) {
     let mut t = 0
     while t < T {
         let mut co = 0
         while co < Cout {
-            let mut acc = t_get(b, co)
-            let mut ci = 0
-            while ci < Cin {
-                let mut k = 0
-                while k < K {
-                    let p = t - dil * (K - 1 - k)
-                    if p >= 0 {
-                        let xv = t_get(x, p * Cin + ci)
-                        let wv = t_get(w, co * Cin * K + ci * K + k)
-                        acc = acc + wv * xv
-                    }
-                    k = k + 1
-                }
-                ci = ci + 1
-            }
-            t_set(y_out, t * Cout + co, acc)
+            t_set(y_out, t * Cout + co, t_get(mm, t * Cout + co) + t_get(b, boff + co))
             co = co + 1
         }
         t = t + 1
     }
+}
+
+// Forward (HOST). im2col + GEMM: unfold the causal-dilated receptive field into
+// x_col[T · (Cin·K)], transpose W[Cout, Cin·K] → Wt[Cin·K, Cout], then ONE
+// t_matmul (RFC 032 ikj FMA-fused GEMM under -O2) → Y[T, Cout], + bias. This
+// replaces the naive O(T·Cout·Cin·K) quad-loop; measured 38–60× faster on host
+// at CLM-trunk shapes (see .verdicts/flame-perf-im2col-gemm/roofline.txt). The
+// re-association is a re-order of the SAME sum → bit-near-identical (max|Δ|≈1e-16,
+// GRAD-EXACT held at max_rel 5.2e-12). Caller allocates y_out (T·Cout).
+pub fn nn_conv1d_fwd(x: int, w: int, b: int, y_out: int,
+                     T: int, Cin: int, Cout: int, K: int, dil: int) {
+    let Kdim = Cin * K
+    let xcol = t_zeros(T * Kdim)
+    _conv1d_im2col(x, xcol, T, Cin, K, dil)
+    let Wt = t_zeros(Kdim * Cout)
+    let mut co = 0
+    while co < Cout {
+        let mut j = 0
+        while j < Kdim { t_set(Wt, j * Cout + co, t_get(w, co * Kdim + j)); j = j + 1 }
+        co = co + 1
+    }
+    let mm = t_matmul(xcol, T, Kdim, Wt, Cout)
+    _conv1d_add_bias(mm, b, 0, y_out, T, Cout)
+    t_free(xcol)
+    t_free(Wt)
+    t_free(mm)
 }
 
 // Forward, offset-capable. Identical to nn_conv1d_fwd except weight reads come
@@ -60,30 +99,22 @@ pub fn nn_conv1d_fwd(x: int, w: int, b: int, y_out: int,
 // woff = n·Cout·Cin·K (boff = n·Cout) — no per-call slice copy into a temp.
 pub fn nn_conv1d_fwd_off(x: int, w: int, woff: int, b: int, boff: int, y_out: int,
                          T: int, Cin: int, Cout: int, K: int, dil: int) {
-    let mut t = 0
-    while t < T {
-        let mut co = 0
-        while co < Cout {
-            let mut acc = t_get(b, boff + co)
-            let mut ci = 0
-            while ci < Cin {
-                let mut k = 0
-                while k < K {
-                    let p = t - dil * (K - 1 - k)
-                    if p >= 0 {
-                        let xv = t_get(x, p * Cin + ci)
-                        let wv = t_get(w, woff + co * Cin * K + ci * K + k)
-                        acc = acc + wv * xv
-                    }
-                    k = k + 1
-                }
-                ci = ci + 1
-            }
-            t_set(y_out, t * Cout + co, acc)
-            co = co + 1
-        }
-        t = t + 1
+    let Kdim = Cin * K
+    let xcol = t_zeros(T * Kdim)
+    _conv1d_im2col(x, xcol, T, Cin, K, dil)
+    // transpose the OFFSET weight slice w[woff + co·Kdim + j] → Wt[j·Cout + co]
+    let Wt = t_zeros(Kdim * Cout)
+    let mut co = 0
+    while co < Cout {
+        let mut j = 0
+        while j < Kdim { t_set(Wt, j * Cout + co, t_get(w, woff + co * Kdim + j)); j = j + 1 }
+        co = co + 1
     }
+    let mm = t_matmul(xcol, T, Kdim, Wt, Cout)
+    _conv1d_add_bias(mm, b, boff, y_out, T, Cout)
+    t_free(xcol)
+    t_free(Wt)
+    t_free(mm)
 }
 
 // Backward — closed vjp. Caller allocates dW_out [Cout·Cin·K], dX_out [T·Cin],

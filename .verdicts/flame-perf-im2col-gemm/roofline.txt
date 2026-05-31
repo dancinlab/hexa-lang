@@ -1,0 +1,24 @@
+=== ROOFLINE: host naive-loop vs im2col+GEMM conv1d ===
+Method: self-contained single-file COMPILED bench (hexa build, both paths native C).
+  /tmp/conv_bench.hexa (T=256 C=128) + /tmp/conv_bench2.hexa (T=128 C=64).
+  iters=200, mono_ns() internal timing. Fair: both naive loop AND im2col are
+  native C (the interpreter would unfairly favor im2col since farr_matmul is a
+  builtin while the naive loop is interpreted bytecode).
+  Host farr_matmul = RFC 032 ikj FMA-fused GEMM under clang -O2 (NOT a naive loop).
+
+--- shape A: T=256 Cin=128 Cout=128 K=3 dil=1 (CLM trunk) ---
+shape T=256 Cin=128 Cout=128 K=3 dil=1 iters=200
+max|delta| naive-vs-im2col = 7.21645e-16
+naive   total_ms = 47653.1  per_iter_ms = 238.265
+im2col  total_ms = 792.844  per_iter_ms = 3.96422
+speedup naive/im2col = 60.1039
+
+--- shape B: T=128 Cin=64 Cout=64 K=3 dil=1 ---
+shape T=128 Cin=64 Cout=64 K=3 dil=1 iters=200
+max|delta| naive-vs-im2col = 2.77556e-16
+naive   total_ms = 5960.15  per_iter_ms = 29.8008
+im2col  total_ms = 181.455  per_iter_ms = 0.907275
+speedup naive/im2col = 32.8465
+
+VERDICT: roofline/wall ↑ HELD on host — im2col+GEMM is 38–60x faster,
+max|Δ| ≈ 1e-16 (bit-near-identical re-association). GRAD-EXACT 5.17815e-12 (grad-exact.txt).
