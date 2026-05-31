@@ -90,6 +90,61 @@ pub fn nn_groupnorm_fwd(x: int, gamma: int, beta: int,
     }
 }
 
+// Forward, offset-capable. Identical to nn_groupnorm_fwd except the per-channel
+// affine params read from gamma[goff + ch] / beta[boff + ch]. Lets a caller
+// hold PACKED affine buffers ([L·C]) and select layer l via goff = boff = l·C —
+// no per-call slice copy of the affine into a temp.
+pub fn nn_groupnorm_fwd_off(x: int, gamma: int, goff: int, beta: int, boff: int,
+                            y_out: int, mean_out: int, inv_out: int, xhat_out: int,
+                            T: int, C: int, G: int) {
+    let eps = 0.00001
+    let cg = C / G
+    let m = to_float(cg * T)
+    let mut g = 0
+    while g < G {
+        let c0 = g * cg
+        let mut sum = 0.0
+        let mut t = 0
+        while t < T {
+            let mut c = 0
+            while c < cg {
+                sum = sum + t_get(x, t * C + (c0 + c))
+                c = c + 1
+            }
+            t = t + 1
+        }
+        let mu = sum / m
+        let mut vs = 0.0
+        let mut t2 = 0
+        while t2 < T {
+            let mut c2 = 0
+            while c2 < cg {
+                let d = t_get(x, t2 * C + (c0 + c2)) - mu
+                vs = vs + d * d
+                c2 = c2 + 1
+            }
+            t2 = t2 + 1
+        }
+        let var = vs / m
+        let inv = 1.0 / _gn_sqrt(var + eps)
+        t_set(mean_out, g, mu)
+        t_set(inv_out, g, inv)
+        let mut t3 = 0
+        while t3 < T {
+            let mut c3 = 0
+            while c3 < cg {
+                let ch = c0 + c3
+                let xh = (t_get(x, t3 * C + ch) - mu) * inv
+                t_set(xhat_out, t3 * C + ch, xh)
+                t_set(y_out, t3 * C + ch, t_get(gamma, goff + ch) * xh + t_get(beta, boff + ch))
+                c3 = c3 + 1
+            }
+            t3 = t3 + 1
+        }
+        g = g + 1
+    }
+}
+
 // Backward — standard group-norm vjp. Inputs: cached xhat, inv (per group),
 // gamma, and upstream dy. Caller allocates dgamma_out [C], dbeta_out [C],
 // dX_out [T·C]. Reductions:
@@ -148,6 +203,68 @@ pub fn nn_groupnorm_bwd(xhat: int, inv: int, gamma: int, dy: int,
                 let ch = c0 + cc2
                 let idx = t2 * C + ch
                 let dxh = t_get(dy, idx) * t_get(gamma, ch)
+                let dx = inv_g * (dxh - s1 / m - t_get(xhat, idx) * s2 / m)
+                t_set(dX_out, idx, dx)
+                cc2 = cc2 + 1
+            }
+            t2 = t2 + 1
+        }
+        g = g + 1
+    }
+}
+
+// Backward, offset-capable. Identical to nn_groupnorm_bwd except gamma reads
+// from gamma[goff + ch] and the per-channel grads write to dgamma_out[dgoff +
+// ch] / dbeta_out[dboff + ch]. dX_out stays unoffset (activation space). Lets a
+// caller accumulate the per-layer affine grad slice straight into a PACKED grad
+// buffer — no affine temp and no _cpback of the grad back into the pack.
+pub fn nn_groupnorm_bwd_off(xhat: int, inv: int, gamma: int, goff: int, dy: int,
+                            dgamma_out: int, dgoff: int, dbeta_out: int, dboff: int, dX_out: int,
+                            T: int, C: int, G: int) {
+    let cg = C / G
+    let m = to_float(cg * T)
+    let mut c = 0
+    while c < C {
+        let mut sg = 0.0
+        let mut sb = 0.0
+        let mut t = 0
+        while t < T {
+            let idx = t * C + c
+            let gy = t_get(dy, idx)
+            sg = sg + gy * t_get(xhat, idx)
+            sb = sb + gy
+            t = t + 1
+        }
+        t_set(dgamma_out, dgoff + c, sg)
+        t_set(dbeta_out, dboff + c, sb)
+        c = c + 1
+    }
+    let mut g = 0
+    while g < G {
+        let c0 = g * cg
+        let inv_g = t_get(inv, g)
+        let mut s1 = 0.0
+        let mut s2 = 0.0
+        let mut t = 0
+        while t < T {
+            let mut cc = 0
+            while cc < cg {
+                let ch = c0 + cc
+                let idx = t * C + ch
+                let dxh = t_get(dy, idx) * t_get(gamma, goff + ch)
+                s1 = s1 + dxh
+                s2 = s2 + dxh * t_get(xhat, idx)
+                cc = cc + 1
+            }
+            t = t + 1
+        }
+        let mut t2 = 0
+        while t2 < T {
+            let mut cc2 = 0
+            while cc2 < cg {
+                let ch = c0 + cc2
+                let idx = t2 * C + ch
+                let dxh = t_get(dy, idx) * t_get(gamma, goff + ch)
                 let dx = inv_g * (dxh - s1 / m - t_get(xhat, idx) * s2 / m)
                 t_set(dX_out, idx, dx)
                 cc2 = cc2 + 1
