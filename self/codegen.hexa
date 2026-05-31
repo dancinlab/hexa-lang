@@ -1879,8 +1879,10 @@ fn gen2_fn_decl(node) {
     // captured / reassigned). Such bindings get a stack-local __flat (no malloc)
     // at the LetStmt arm. GATED (HEXA_STACK_ALLOC) → no-op when the flag is off.
     _stack_noescape_reset()
+    _stack_noescape_arr_reset()
     if _stack_alloc_enabled() {
         _stack_noescape_scan(node.body)
+        _stack_noescape_arr_scan(node.body)
     }
     // UNSHADOW known-int-accum: pre-scan the body for `let mut acc = <known-int>`
     // accumulators whose every write is proven all-int — register them so the
@@ -3126,6 +3128,20 @@ fn _gen2_stmt_inner(node, depth) {
                 if _sa_type != "" {
                     return gen2_stack_alloc_flat(pad, _local_name, _sa_type, _sa_args)
                 }
+            }
+        }
+        // UNSHADOW F2 sub-task (non-flat descriptor): an immutable `let a = [e0,
+        // …,eN]` bounded array literal PROVEN non-escaping (only index reads /
+        // len) gets a stack-local HexaArr descriptor + HexaVal[N] items buffer
+        // instead of the hexa_array_new + push heap path — no descriptor malloc,
+        // no items-buffer heap growth. Same GATE (HEXA_STACK_ALLOC), same
+        // byte-eq guarantee (arr_ptr->items[] read layout unchanged). Bounded-
+        // only: unbounded payloads (maps, grown arrays, closure envs) never
+        // reach here (the scan rejects them) → heap path unchanged.
+        if k == "LetStmt" && _stack_alloc_enabled() && _is_stack_noescape_arr(node.name) && !_gen2_has_decl(node.name) {
+            let _sa_elems = _array_lit_elem_exprs(node.left)
+            if type_of(_sa_elems) != "string" {
+                return gen2_stack_alloc_array_lit(pad, _local_name, _sa_elems)
             }
         }
         // M975: register promotion — if value == "__reg_promote__", emit `register`
@@ -11062,6 +11078,279 @@ fn gen2_stack_alloc_flat(pad, var_name, sname, arg_exprs) {
     let mut out = pad + "/* [escape→stack] no-escape flat-struct " + var_name + " → stack (no malloc) */\n"
     out = out + pad + sname + "__flat " + _stk + " = { " + arg_exprs.join(", ") + " };\n"
     out = out + pad + "HexaVal " + var_name + "; " + var_name + ".tag = TAG_ARRAY; " + var_name + ".vs = (HexaValStruct*)&" + _stk + ";\n"
+    return out
+}
+
+// ═══════════════════════════════════════════════════════════
+//  UNSHADOW F2 sub-task — NON-FLAT descriptor stack-alloc (array)
+//
+//  The flat-struct slice above stack-allocates a per-type __flat descriptor.
+//  This generalizes the SAME non-escape proof to a NON-FLAT descriptor: a
+//  bounded array literal `let a = [e0, …, eN]`. The current path lowers it to
+//  `hexa_array_new()` + N×`hexa_array_push` — one heap descriptor malloc plus
+//  the items-buffer growth, EVERY time the binding is constructed. When the
+//  codegen PROVES `a` is non-escaping (only index reads `a[i]` and `len(a)` —
+//  never returned / call-arg / stored / captured / reassigned / index-written /
+//  pushed) AND the literal is statically BOUNDED (a fixed element count), the
+//  HexaArr descriptor + its HexaVal[N] items buffer are placed on the C STACK:
+//      HexaVal __stk_a_items[N] = { e0, …, eN };
+//      HexaArr __stk_a = { __stk_a_items, N, N };
+//      HexaVal a; a.tag = TAG_ARRAY; a.arr_ptr = &__stk_a;
+//  HexaArr {items,len,cap} + the `arr_ptr` union slot are public in runtime.h,
+//  so the read offset layout is IDENTICAL to the heap path → byte-eq stdout;
+//  __mallocs drops to 0 in the loop; the stack frame reclaims at every pop.
+//
+//  BOUNDED-ONLY: an unbounded payload (a map's hash table, a closure env that
+//  varies, an array grown by push) MUST stay heap — a stack buffer cannot grow.
+//  So map_new / closure env_box / mutated arrays fall through to the heap path
+//  unchanged (no regression). Only the fixed-count, read-only array literal
+//  qualifies — the clean bounded case this sub-task lands.
+//  GATED (HEXA_STACK_ALLOC) — same flag as the flat-struct slice.
+// ═══════════════════════════════════════════════════════════
+
+// Element-count of a BOUNDED array literal node `[e0, …, eN]`, or -1 if the
+// node is not a statically-bounded array literal (Range / comprehension /
+// dynamic / non-array). A bounded count is the precondition for an alloca'd
+// items buffer (an unbounded payload cannot be stack-sized).
+fn _bounded_array_lit_count(node) {
+    if type_of(node) == "string" { return -1 }
+    if node.kind != "Array" { return -1 }
+    if type_of(node.items) == "string" { return -1 }
+    return len(node.items)
+}
+
+// Already-lowered positional element expressions for a bounded array literal,
+// in source order. Returns "" (string) for any non-bounded-array shape so the
+// caller falls back to the heap hexa_array_new + push path.
+fn _array_lit_elem_exprs(node) {
+    if _bounded_array_lit_count(node) < 0 { return "" }
+    let mut out = []
+    let mut i = 0
+    while i < len(node.items) {
+        out.push(gen2_expr(node.items[i]))
+        i = i + 1
+    }
+    return out
+}
+
+// Recursively scan an expression for an ESCAPING use of array binding `name`.
+// Mirrors _expr_escapes_name but ADDITIONALLY permits an Index-READ receiver
+// `name[i]` (the canonical array use) — arrays are consumed by index, not by
+// field. A bare Ident `name` in any non-index-receiver position still escapes
+// (returned / call-arg / stored / captured / pushed-to). The index EXPRESSION
+// itself is still scanned (a `name` used as the index of another array escapes).
+fn _expr_escapes_arr_name(node, name) {
+    if type_of(node) == "string" { return false }
+    let k = node.kind
+    // Index read `recv[idx]`: receiver may be the protected Ident (allowed).
+    // The index sub-expression is still scanned for an embedded escaping `name`.
+    if k == "Index" {
+        let _recv = node.left
+        if type_of(_recv) != "string" && _recv.kind == "Ident" && _recv.name == name {
+            if type_of(node.right) != "string" && _expr_escapes_arr_name(node.right, name) { return true }
+            return false   // a[i] read — the sole allowed array shape
+        }
+        if _expr_escapes_arr_name(_recv, name) { return true }
+        if type_of(node.right) != "string" && _expr_escapes_arr_name(node.right, name) { return true }
+        return false
+    }
+    // `len(a)` is a non-escaping read (returns an int, not the descriptor).
+    // Any OTHER call carrying `name` as an arg escapes (handed to opaque sink).
+    if k == "Call" {
+        if type_of(node.left) != "string" && node.left.kind == "Ident" && node.left.name == "len" {
+            // len(a) — only escapes if an arg OTHER than the bare receiver embeds name
+            if type_of(node.items) != "string" {
+                let mut i = 0
+                while i < len(node.items) {
+                    let _a = node.items[i]
+                    if type_of(_a) != "string" && _a.kind == "Ident" && _a.name == name {
+                        // bare len(a) — allowed
+                    } else if _expr_escapes_arr_name(_a, name) {
+                        return true
+                    }
+                    i = i + 1
+                }
+            }
+            return false
+        }
+    }
+    if k == "Ident" {
+        if node.name == name { return true }
+        return false
+    }
+    if type_of(node.left) != "string" {
+        if _expr_escapes_arr_name(node.left, name) { return true }
+    }
+    if type_of(node.right) != "string" {
+        if _expr_escapes_arr_name(node.right, name) { return true }
+    }
+    if type_of(node.items) != "string" {
+        let mut i = 0
+        while i < len(node.items) {
+            if _expr_escapes_arr_name(node.items[i], name) { return true }
+            i = i + 1
+        }
+    }
+    if type_of(node.fields) != "string" {
+        let mut i = 0
+        while i < len(node.fields) {
+            let _fe = node.fields[i]
+            if type_of(_fe) != "string" && type_of(_fe.left) != "string" {
+                if _expr_escapes_arr_name(_fe.left, name) { return true }
+            }
+            i = i + 1
+        }
+    }
+    if type_of(node.cond) != "string" {
+        if _expr_escapes_arr_name(node.cond, name) { return true }
+    }
+    return false
+}
+
+// Statement-level escape scan for an array binding `name`. As _stmt_escapes_name
+// but routes expression checks through _expr_escapes_arr_name (index-read
+// allowed) and treats an INDEX-WRITE `a[i] = v` as an escape (mutation voids
+// the bounded read-only proof — a stack buffer must not be grown/aliased).
+fn _stmt_escapes_arr_name(node, name) {
+    if type_of(node) == "string" { return false }
+    let sk = node.kind
+    if sk == "LetMutStmt" || sk == "AtomicLet" {
+        if node.name == name { return true }
+    }
+    if sk == "AssignStmt" {
+        let _tgt = node.left
+        // Reassign `a = …` → escape. Index-write `a[i] = …` → escape (mutation).
+        if type_of(_tgt) != "string" && _tgt.kind == "Ident" && _tgt.name == name { return true }
+        if type_of(_tgt) != "string" && _tgt.kind == "Index" {
+            let _ir = _tgt.left
+            if type_of(_ir) != "string" && _ir.kind == "Ident" && _ir.name == name { return true }
+        }
+        if type_of(_tgt) != "string" && _expr_escapes_arr_name(_tgt, name) { return true }
+        if type_of(node.right) != "string" && _expr_escapes_arr_name(node.right, name) { return true }
+        if type_of(node.value) != "string" && _expr_escapes_arr_name(node.value, name) { return true }
+        return false
+    }
+    if sk == "ReturnStmt" {
+        if type_of(node.left) != "string" && _expr_escapes_arr_name(node.left, name) { return true }
+        if type_of(node.value) != "string" && _expr_escapes_arr_name(node.value, name) { return true }
+        return false
+    }
+    if type_of(node.left) != "string" {
+        if _expr_escapes_arr_name(node.left, name) { return true }
+    }
+    if type_of(node.right) != "string" {
+        if _expr_escapes_arr_name(node.right, name) { return true }
+    }
+    if type_of(node.value) != "string" {
+        if _expr_escapes_arr_name(node.value, name) { return true }
+    }
+    if type_of(node.cond) != "string" {
+        if _expr_escapes_arr_name(node.cond, name) { return true }
+    }
+    if type_of(node.then_body) != "string" {
+        if _stmts_escape_arr_name(node.then_body, name) { return true }
+    }
+    if type_of(node.else_body) != "string" {
+        if _stmts_escape_arr_name(node.else_body, name) { return true }
+    }
+    if type_of(node.body) != "string" {
+        if _stmts_escape_arr_name(node.body, name) { return true }
+    }
+    if type_of(node.arms) != "string" {
+        let mut ai = 0
+        while ai < len(node.arms) {
+            let arm = node.arms[ai]
+            if type_of(arm) != "string" && type_of(arm.body) != "string" {
+                if _stmts_escape_arr_name(arm.body, name) { return true }
+            }
+            ai = ai + 1
+        }
+    }
+    return false
+}
+
+fn _stmts_escape_arr_name(stmts, name) {
+    if type_of(stmts) == "string" { return false }
+    let mut i = 0
+    while i < len(stmts) {
+        if _stmt_escapes_arr_name(stmts[i], name) { return true }
+        i = i + 1
+    }
+    return false
+}
+
+// Names of NON-FLAT (bounded array) bindings proven non-escaping in the current
+// fn body — eligible for stack-alloc of the HexaArr descriptor + items buffer.
+let mut _stack_noescape_arr_set = []
+
+fn _stack_noescape_arr_reset() { _stack_noescape_arr_set = [] }
+
+fn _stack_noescape_arr_add(name) {
+    let mut i = 0
+    while i < len(_stack_noescape_arr_set) {
+        if _stack_noescape_arr_set[i] == name { return }
+        i = i + 1
+    }
+    _stack_noescape_arr_set.push(name)
+}
+
+fn _is_stack_noescape_arr(name) {
+    let mut i = 0
+    while i < len(_stack_noescape_arr_set) {
+        if _stack_noescape_arr_set[i] == name { return true }
+        i = i + 1
+    }
+    return false
+}
+
+// Scan a fn body for immutable `let a = [e0,…,eN]` bounded array literals that
+// are proven non-escaping over the whole body, registering each. Mirrors
+// _stack_noescape_scan but for the array-descriptor case (bounded-only).
+fn _stack_noescape_arr_scan(stmts) {
+    if type_of(stmts) == "string" { return }
+    let n = len(stmts)
+    let mut i = 0
+    while i < n {
+        let s = stmts[i]
+        if type_of(s) != "string" && s.kind == "LetStmt" {
+            if _bounded_array_lit_count(s.left) >= 0 {
+                let mut _escapes = false
+                let mut j = 0
+                while j < n {
+                    if j != i {
+                        if _stmt_escapes_arr_name(stmts[j], s.name) { _escapes = true }
+                    }
+                    j = j + 1
+                }
+                if !_escapes {
+                    _stack_noescape_arr_add(s.name)
+                }
+            }
+        }
+        i = i + 1
+    }
+}
+
+// Emit a stack-allocated bounded array descriptor (no malloc). Mirrors
+// gen2_stack_alloc_flat: a stack-local HexaVal items buffer + a stack-local
+// HexaArr descriptor, with the binding's HexaVal pointing at the descriptor via
+// the public `arr_ptr` slot. Read offsets (arr_ptr->items[i], ->len, ->cap) are
+// IDENTICAL to the hexa_array_new path → byte-eq output.
+fn gen2_stack_alloc_array_lit(pad, var_name, elem_exprs) {
+    let _stk = "__stk_" + var_name
+    let _buf = "__stk_" + var_name + "_items"
+    let n = len(elem_exprs)
+    let mut out = pad + "/* [escape→stack] no-escape bounded array " + var_name + " → stack (no malloc) */\n"
+    if n == 0 {
+        // Empty literal: a 1-slot buffer keeps the array type valid (cap can be
+        // 0; the items pointer is never dereferenced for an empty array).
+        out = out + pad + "HexaVal " + _buf + "[1];\n"
+        out = out + pad + "HexaArr " + _stk + " = { " + _buf + ", 0, 0 };\n"
+    } else {
+        out = out + pad + "HexaVal " + _buf + "[" + to_string(n) + "] = { " + elem_exprs.join(", ") + " };\n"
+        out = out + pad + "HexaArr " + _stk + " = { " + _buf + ", " + to_string(n) + ", " + to_string(n) + " };\n"
+    }
+    out = out + pad + "HexaVal " + var_name + "; " + var_name + ".tag = TAG_ARRAY; " + var_name + ".arr_ptr = &" + _stk + ";\n"
     return out
 }
 
