@@ -1034,6 +1034,36 @@ fn _dft_write_state(deck: str, phase: str, iid: str, host: str, port: str,
     return write_text(_dft_state_path(deck), body)
 }
 
+// _dft_endpoint_resolved — PURE: 1 iff BOTH host and port are non-empty (the
+// state-stamp endpoint actually mapped). The `--resume` cost-incident
+// (#38751850) read a stamp whose endpoint was EMPTY (`@ :`), could not reach
+// the pod, and tore it down on a misread. A `--resume` MUST NOT proceed to any
+// teardown decision unless this is 1 — an unresolved endpoint is a transport/
+// transient condition, never a science failure.
+fn _dft_endpoint_resolved(host: str, port: str) -> int {
+    if len(host) == 0 {
+        return 0
+    }
+    if len(port) == 0 {
+        return 0
+    }
+    return 1
+}
+
+// _dft_remote_read_ok — 1 iff a CloudResult represents a remote command that
+// actually reached the pod (ok==1). A transport failure surfaces as ok==0 with
+// exit_code 255 (ssh transport) or -1 (no exit-code marker / dead shell);
+// either way the result carries NO information about the science, so a
+// `--resume` must treat it as transient (abort, no teardown) rather than a
+// confirmed stage failure. Only ok==1 (remote exit 0) licenses reading stdout
+// for __DFT_FAILED__ / coordinate-absence and, if confirmed, tearing down.
+fn _dft_remote_read_ok(r: CloudResult) -> int {
+    if r.ok == 1 {
+        return 1
+    }
+    return 0
+}
+
 // _dft_state_field — read one KEY=VALUE field from the detach state stamp.
 // Returns "" when the stamp or the key is absent (caller decides the fallback).
 fn _dft_state_field(deck: str, key: str) -> str {
@@ -1699,6 +1729,17 @@ fn _dft_resume(deck: str) -> int {
     let relax_name = _dft_state_field(deck, "relax_name")
     let np = _dft_atoi(_dft_state_field(deck, "np"))
     let walltime_h = _dft_atoi(_dft_state_field(deck, "walltime_h"))
+    // TRANSPORT GUARD (cost a real pod — Li2MgH16 #38751850): if the endpoint
+    // never resolved (empty host OR port → the `instance ... @ :` symptom), the
+    // pod is UNREACHABLE, not failed. We cannot read relax.out, so we must NEVER
+    // read that as a science failure and tear the pod down. Abort transiently
+    // and leave the pod intact for a `--resume` retry once the endpoint maps.
+    if _dft_endpoint_resolved(host_ip, port) == 0 {
+        println("[dft-run] --resume: ABORT (no teardown) — endpoint UNRESOLVED in the state stamp (host='" + host_ip + "' port='" + port + "').")
+        println("[dft-run]   the pod may be alive + billing but its host:port is not yet mapped — a TRANSPORT/transient condition, NOT a relax failure.")
+        println("[dft-run]   retry: hexa cloud dft-run " + deck + " --resume   ·   verify: hexa cloud pods / vastai show instance " + iid)
+        return 3
+    }
     let host = "root@" + host_ip
     let ssh_opts = _dft_ssh_opts(port, identity)
     println("[dft-run] --resume: instance " + iid + " @ " + host_ip + ":" + port + " · stage `" + phase + "`")
@@ -1706,14 +1747,36 @@ fn _dft_resume(deck: str) -> int {
     if phase == "relax" {
         // probe relax terminal (honest — pw.x dead AND clean JOB DONE).
         let probe = cloud_exec_opts(host, ssh_opts, _dft_stage_probe_cmd("pw.x", "relax.out"))
+        // TRANSPORT GUARD: a probe that never reached the pod (ssh transport
+        // failure — exit 255, or no exit-code marker exit -1) tells us NOTHING
+        // about the science. Reading an unreachable pod as "relax FAILED" is
+        // exactly what destroyed #38751850. Abort transiently — no teardown.
+        if _dft_remote_read_ok(probe) == 0 {
+            println("[dft-run] --resume: ABORT (no teardown) — relax probe could not reach the pod (" + probe.message + ").")
+            println("[dft-run]   transport error (ssh 255 / no marker) is NOT a relax failure — leaving pod " + iid + " intact for retry.")
+            println("[dft-run]   retry: hexa cloud dft-run " + deck + " --resume   ·   verify: hexa cloud pods / vastai show instance " + iid)
+            return 3
+        }
         if probe.stdout_.contains("__DFT_RUNNING__") {
             println("[dft-run] --resume: relax STILL RUNNING on the pod — re-invoke `--resume` later.")
             println("[dft-run]   monitor: hexa cloud tail " + host + " " + _dft_remote_logfile("relax"))
             return 0
         }
         // harvest relax.out + LOCAL coord parse (@L2 — never hand-parse on the pod).
-        let _hr = cloud_copy_from_opts(host, ssh_opts, "/root/deck/relax.out", deck + "/relax.out")
+        let hr = cloud_copy_from_opts(host, ssh_opts, "/root/deck/relax.out", deck + "/relax.out")
+        // TRANSPORT GUARD: if the relax.out download itself failed (transport
+        // error / file unreadable), `coords` will be empty for a NON-science
+        // reason. Never read a failed read as "relax FAILED → teardown".
+        if hr.ok == 0 {
+            println("[dft-run] --resume: ABORT (no teardown) — could not download relax.out from the pod (" + hr.message + ").")
+            println("[dft-run]   a failed remote read is a TRANSPORT condition, NOT 'relax FAILED' — leaving pod " + iid + " intact for retry.")
+            println("[dft-run]   retry: hexa cloud dft-run " + deck + " --resume   ·   verify: hexa cloud pods / vastai show instance " + iid)
+            return 3
+        }
         let coords = dft_relax_to_scf_coords(read_file(deck + "/relax.out"))
+        // CONFIRMED science failure ONLY now: the pod was reachable, the probe
+        // reported __DFT_FAILED__ OR relax.out is present yet genuinely lacks
+        // final coordinates. Teardown is safe here (no transport ambiguity).
         if probe.stdout_.contains("__DFT_FAILED__") || len(coords) == 0 {
             println("[dft-run] --resume: relax FAILED / no 'Begin final coordinates' — not dispatching scf on stale geometry.")
             let rt = cloud_exec_opts(host, ssh_opts, "tail -40 /root/deck/relax.out 2>/dev/null")
@@ -1751,6 +1814,15 @@ fn _dft_resume(deck: str) -> int {
         // per-invocation checkpoint marker). scf precedes ph in the chain, so a
         // ph.x that ran at all implies scf completed.
         let probe = cloud_exec_opts(host, ssh_opts, _dft_stage_probe_cmd("ph.x", "ph.out"))
+        // TRANSPORT GUARD: an unreachable pod (ssh 255 / no marker) tells us
+        // nothing — never fall through to a verdict (which would teardown) on a
+        // transport failure. Abort transiently, leave the pod intact.
+        if _dft_remote_read_ok(probe) == 0 {
+            println("[dft-run] --resume: ABORT (no teardown) — ph probe could not reach the pod (" + probe.message + ").")
+            println("[dft-run]   transport error (ssh 255 / no marker) is NOT a ph failure — leaving pod " + iid + " intact for retry.")
+            println("[dft-run]   retry: hexa cloud dft-run " + deck + " --resume   ·   verify: hexa cloud pods / vastai show instance " + iid)
+            return 3
+        }
         // scf could still be running (ph.x not yet spawned) — pw.x alive counts as running too.
         let scfprobe = cloud_exec_opts(host, ssh_opts, "pgrep -x pw.x >/dev/null 2>&1 && echo __DFT_RUNNING__ || echo __DFT_IDLE__")
         if probe.stdout_.contains("__DFT_RUNNING__") || scfprobe.stdout_.contains("__DFT_RUNNING__") {
