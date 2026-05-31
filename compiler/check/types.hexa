@@ -2009,6 +2009,13 @@ fn _types_check_call(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type {
         return _types_empty_type()
     }
 
+    // Dynamic HexaVal callee (a fn stored in a HexaVal): its arity and arg
+    // types are unknown at compile time — the runtime dispatches on the tag.
+    // Skip the HX3002/HX3003 arity/arg-type checks; the result is itself a
+    // dynamic value. (Without this, making HexaVal callable above would just
+    // convert the HX2003 into a spurious HX3002 arg-count mismatch.)
+    if _is_hexaval(callee_t) { return _types_empty_type() }
+
     let expected_count = len(callee_t.args)
     if arg_count != expected_count {
         _emit_hx3002(name, expected_count, arg_count, e.span, out)
