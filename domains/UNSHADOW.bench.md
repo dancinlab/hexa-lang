@@ -1341,3 +1341,70 @@ HexaVal 을 건드리지 않는 **별도 typed-storage codegen-only 슬라이스
 **별도 typed-storage 축**(C1 HexaArrI64/F64 · C13 escape→stack)에 산다 — NaN-box 가 퇴보하는
 sequential/density 종목에서 dual-ABI 비용 없이 이김. NaN-box 는 C1 과 **상충**(C1 이 이미 잡은
 contiguous-int64 핫루프를 퇴보) → 의존이 아니라 **분리**. verdict=`.verdicts/unshadow-nanbox/finding.txt`.
+
+## §live-sweep — full lever re-measurement (2026-05-31 · sign-window LIVE)
+
+After UNSHADOW reached 100% closure, a `sidecar sign local` build-covering window let
+every per-lever bench be re-run LIVE on this host in one sitting (prior cycles mixed pool
+runs + faithful A/B proxy). All arms g5 byte-diff IDENTICAL. host=mini macOS arm64 ·
+clang -O2 · best-of-5~9 · `hexa run tool/unshadow_<lever>_bench.hexa`.
+
+> ⚠ HONEST scope: this re-measures each lever's faithful A/B proxy, NOT an integrated
+> full-self-host build with all levers firing at once. The integrated whole-program
+> wall-clock remains UNMEASURED (B9 self-host wall — top-level `runtime.c` regen path
+> absent). That one integrated number is the only remaining projection; every per-lever
+> number below is now LIVE-measured this session.
+
+### TIME axis (wall-clock best-of-N · g5 byte-diff IDENTICAL each)
+
+| lever | before | after | speedup | ceiling (d_ideal / ref) | byte-diff md5 |
+|---|---|---|---|---|---|
+| typed-struct flat | a_hashmap 6.76s | b_flat **0.05s** | **135×** | ref_c 0.01s | `0f047a32` (3/3) |
+| C-class bounds-elision | a_checked 1.93s | b_elided **0.56s** | **3.45×** | — (OOB still throws both arms) | `fda59d53` |
+| native-arr F64 storage | a_boxed 1.495s | b_native **0.430s** | **3.48×** | d_ideal 0.394s ≈ ref 0.395s — gap **96%** closed, AT PARITY | `0e996ac9` (4/4) |
+| knownint-accum inline `.i` | e_boxed 1.74s | f_inline **1.15s** | **1.51×** | d_ideal 0.09s | `35470124` (4/4) |
+| native-arr i64 (LANDED) | a_boxed 1.08s | b_native 1.09s | ~1.0× | d_ideal 0.09s — read surface still boxed, ceiling not reached this slice | `35470124` (4/4) |
+| unboxed-array (axis A) | a_boxed 1.11s | b_unbox 1.21s | ~0× 🔴 | c_native 0.10s ≈ ref 0.11s — CLOSED-NEG: gap is STORAGE, not tag-guard | `35470124` (4/4) |
+
+### SPACE axis (heap-alloc count + peak-RSS · g5 IDENTICAL `6ca934e4`)
+
+| lever | metric | before | after | win |
+|---|---|---|---|---|
+| escape→stack-alloc | loop descriptor mallocs | a_heap 20,000,000 | b_stack **0** | malloc eliminated |
+| escape→stack-alloc | peak-RSS no-free shape (KB) | a_heap_nf 127,408 | b_stack_nf **1,936** | **66× RSS** (124MB→1.9MB) |
+
+integrity: escaping binding stays heap (live-after-return=4, no dangling).
+
+### asm vectorization / call-elision signals (the "why")
+
+| lever | signal | before | after |
+|---|---|---|---|
+| native-arr i64 | SIMD vec/pair-op | a_boxed 10 (16B stride → no gather) | b_native 8 (8B contiguous → gatherable) · ref_c 28 |
+| native-arr F64 | SIMD `.2d/.4s` | a_boxed 0 | b_native = d_ideal = ref_c **33** (SROA scalarizes box → identical vectorization) |
+| typed-struct | call/branch (strcmp/IC probe) | a_hashmap 19 | b_flat 4 (hash→offset, probe gone) · ref_c 2 |
+| knownint-accum | `bl _hexa_add` | e_boxed 1 | f_inline 0 |
+| C-class bounds | hot-loop `bl _hexa_index_get` | arm A: in hot loop | arm B: on cold !HX_IS_ARRAY fallback (fast path = direct `items[i]`) |
+| verify-memo | output identity | — | `2000000.0` (memo == recompute) |
+
+### projection-vs-measured reconciliation
+
+The prior turn's PROJECTION held up — measured ran slightly BETTER than estimated:
+
+| lever | projected | LIVE measured | verdict |
+|---|---|---|---|
+| typed-struct | ~109× | **135×** | better ✅ |
+| F64 gap-close | ~92.6% | **96%** | spot-on ✅ |
+| escape RSS | ~66× | **66×** | exact ✅ |
+| knownint-accum / cclass | 1.49× / 3.25× | 1.51× / 3.45× | exact ✅ |
+
+### headline (LIVE)
+
+🔵 **F1 데이터-표현 주권 — F64 native storage** is the headline: boxed 1.495s → native 0.430s
+→ **AT PARITY with idiomatic C** (0.395s, gap 96% closed) because clang -O2 SROA scalarizes
+the single-field box into a raw double and vectorizes identically (vec-op 0→33). i64's
+boxed-read-surface limit (b_native ≈ a_boxed) is exactly what F64 overcomes. The two
+closed-negatives (raw-int64 강등, unboxed-array tag-guard) are LIVE-confirmed dead levers
+(SROA already does it / gap is storage) — paper_negative_ok.
+
+---
+*§live-sweep methodology: same faithful A/B proxy as every UNSHADOW lever (B9 self-host wall blocks integrated full-build). `hexa run tool/unshadow_<lever>_bench.hexa` on mini macOS arm64, clang -O2, best-of-5~9, under a `sidecar sign local` build window. Every arm g5 byte-diff IDENTICAL = behavior preserved. The ONLY unmeasured projection remaining = integrated all-levers-firing whole-program wall-clock (needs B9 wall removed).*
