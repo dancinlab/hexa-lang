@@ -191,13 +191,17 @@ fn clm_corpus_windows(bytes_arr: int, n_bytes: int, IDS: int, TGT: int,
 fn main() {
     println("clm_prod — CLMConvMoE production corpus loop (PR1)")
     let T = 24; let d = 8; let E = 2; let V = 256; let K = 3
-    let nsamp = 8; let stride = 32
+    let nsamp = 8
     let dd = d * d * K; let ed = E * d; let vd = V * d
 
     // ---- corpus → nsamp windows (in-repo fixture, repo-root relative) ----
     let path = "stdlib/flame/testdata/clm_smoke_corpus.txt"
     let bytes_arr = read_file_bytes(path)
     let n_bytes = len(bytes_arr)
+    // stride spans the WHOLE corpus so the nsamp windows are spread across every
+    // language section (multilingual: en·zh·ru·ja·ko), not just the head.
+    let mut stride = (n_bytes - T - 1) / nsamp
+    if stride < 1 { stride = 1 }
     print("  corpus: "); print(path); print("  ("); print(n_bytes); println(" bytes, V=256)")
     let IDS = t_zeros(nsamp * T)
     let TGT = t_zeros(nsamp * T)
