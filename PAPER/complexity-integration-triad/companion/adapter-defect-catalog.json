@@ -1,0 +1,23 @@
+[
+  {
+    "tool": "texlive (xelatex/pdflatex/pdfinfo/bibtex)",
+    "defect": "absent on the authoring host (macOS); `make`, `make pages`, `make figures` cannot run locally",
+    "impact": "PDF compile, page-count gate (>=10), and figure rasterization are deferred to a texlive host",
+    "workaround": "source kept engine-agnostic; figures are pure pgfplots/TikZ standalones (no Python). Compile on any texlive install: `make` then `make pages`.",
+    "ts": "2026-06-01"
+  },
+  {
+    "tool": "matplotlib (python3)",
+    "defect": "not installed; the template's fig01_example.py would not render",
+    "impact": "removed the matplotlib figure path entirely",
+    "workaround": "rewrote all figures as pgfplots/TikZ .tex standalones so the paper has zero Python dependency",
+    "ts": "2026-06-01"
+  },
+  {
+    "tool": "fal.ai imagine backend (/paper fig)",
+    "defect": "not invoked in-session (no network/imagine backend reachable from the authoring host)",
+    "impact": "the optional cover art (figures/cover.png) is not rendered",
+    "workaround": "cover prompt authored at figures/_prompts/cover.txt, ready for `/paper fig square_hd figures/_prompts/cover.txt figures/cover.png` on a connected host. The three data figures already satisfy the figure requirement.",
+    "ts": "2026-06-01"
+  }
+]

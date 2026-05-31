@@ -1,0 +1,501 @@
+\documentclass[11pt,a4paper]{article}
+
+% ---------- arxiv-style preamble ----------
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{siunitx}
+\usepackage{hyperref}
+\usepackage{xcolor}
+\usepackage[numbers,sort&compress]{natbib}
+\usepackage{tikz}
+\usetikzlibrary{positioning,arrows.meta}
+% pgfplots — shipped by default; the figNN_*.tex standalones use it and the
+% compat line is pinned so axis behaviour is deterministic across texlive years.
+\usepackage{pgfplots}
+\pgfplotsset{compat=1.18}
+\usepackage{caption}
+\usepackage{listings}
+\usepackage{array}
+\captionsetup{font=small,labelfont=bf}
+\hypersetup{
+  colorlinks=true,
+  linkcolor=blue!50!black,
+  citecolor=blue!50!black,
+  urlcolor=blue!50!black
+}
+
+% ---------- emoji tier badges (xelatex-native; pdflatex must use replacement marks) ----------
+\providecommand{\tierBlue}{🔵}
+\providecommand{\tierGreen}{🟢}
+\providecommand{\tierYellow}{🟡}
+\providecommand{\tierOrange}{🟠}
+\providecommand{\tierRed}{🔴}
+
+\title{
+  \textbf{Structure Beyond Density}\\[4pt]
+  \large Closed-form, falsifier-gated evidence that frustration, composition-closure,
+  and cycle topology predict landscape ruggedness and integration ---
+  with two honest negatives
+}
+
+% ---------- author block ----------
+\author{
+  \texttt{hexa-lang} maintainers\\
+  \normalsize\textit{dancinlab}\\[2pt]
+  \normalsize\href{https://github.com/dancinlab/hexa-lang}{\texttt{github.com/dancinlab/hexa-lang}}
+}
+
+\date{\today}
+
+\begin{document}
+
+\maketitle
+
+% =========================================================================
+\begin{abstract}
+A recurring claim across physics, category theory, and network science is
+that \emph{more structured} systems are \emph{more integrated} or have
+\emph{rougher} energy landscapes. Such claims are easy to confound with raw
+edge or bond density: a denser system is trivially both more structured and
+more integrated. We ask the sharper question --- does a structural invariant
+predict a landscape property \emph{after density is held fixed}? --- on three
+independent substrates: a $3{\times}3$ Edwards--Anderson $\pm J$ Ising lattice,
+an $N{=}6$ directed category-graph, and an $N{=}6$ undirected graph. Each
+substrate is measured by exact enumeration (no sampling, no learning, integer
+or rational measures only), under a 5-falsifier protocol frozen before any run
+(post-hoc tuning count $=0$). The headline is the density-controlled falsifier
+F3, which holds on all three substrates: with edge probability pinned at
+$p{=}0.4$, the high-structure half is more integrated / rougher than the
+low-structure half (integration $\Phi=0.958$ vs $0.775$ for composition-closure;
+$0.867$ vs $0.617$ for cycle topology; ruggedness $R$ scales $1.6\times$ with
+frustration). Two pre-registered sub-falsifiers fail and are kept as findings:
+an unfrustrated ferromagnet already has $R{=}32$ single-flip minima (frustration
+\emph{amplifies}, it does not \emph{create} ruggedness), and random morphism
+graphs do not self-organize into composition-closed categories even at
+$p{=}0.6$ ($\bar D = 0.576 < 0.85$; closure needs designed structure, not
+density). All numbers are reproducible bit-for-bit from the deterministic
+harnesses; every verdict is the verbatim \texttt{hexa} run output recorded in
+\texttt{companion/verify-ledger.json}. We claim only the closed-form proxies
+stated; full IIT-$\Phi$ and persistent homology are out of scope.
+\end{abstract}
+
+\section{Introduction}
+\label{sec:intro}
+
+``Complexity begets integration'' is a folk theorem that appears, in different
+vocabularies, in spin-glass physics (frustration roughens the energy
+landscape~\citep{toulouse1977,binderyoung1986}), in the theory of consciousness
+(integrated information rises with causal structure~\citep{tononi2004,oizumi2014}),
+in category theory (composition closure is what makes a graph a genuine
+category~\citep{maclane1971}), and in network science (cyclic, high-genus
+topologies carry more information than trees~\citep{bianconi2021}). The trouble
+with every instance is the same confound: \emph{density}. Add edges and a system
+becomes, all at once, denser, more frustrated, more closed, more cyclic,
+\emph{and} more integrated. A monotone correlation between any structural
+measure and any integration measure is therefore nearly content-free --- it can
+be entirely a density artifact.
+
+The sharper, falsifiable question is the partial one: \textbf{does a structural
+invariant predict integration (or landscape ruggedness) after density is held
+fixed?} If yes, the structure carries a signal that raw edge count does not. If
+no, the folk theorem was density all along.
+
+We answer this question on three deliberately unrelated substrates, each small
+enough to enumerate \emph{exactly} --- no Monte-Carlo, no learned model, no
+floating-point perplexity:
+\begin{itemize}\itemsep0.2em
+  \item a $3{\times}3$ periodic Edwards--Anderson $\pm J$ Ising lattice
+        ($N{=}9$ spins, $2^9 = 512$ configurations enumerated in full), where
+        \emph{frustration} is the structural measure and energy-landscape
+        \emph{ruggedness} (number of single-flip local minima) is the landscape
+        measure;
+  \item an $N{=}6$ directed category-graph (30 possible morphisms), where
+        \emph{composition closure} is the structural measure and
+        transitive-reachability density is the integration proxy;
+  \item an $N{=}6$ undirected graph (15 possible edges), where the
+        \emph{topological invariants} Betti-1 ($b_1 = E-V+C$) and Euler
+        characteristic ($\chi = V-E$) are the structural measures and
+        within-component reachability is the integration proxy.
+\end{itemize}
+
+Each substrate is run under a five-falsifier protocol that is \emph{frozen in
+the harness source before the first run}; the post-hoc tuning count is zero. The
+central falsifier on each substrate is the density-controlled one (F3): fix the
+edge probability, split the instances at the median of the structural measure,
+and ask whether the high-structure half out-integrates the low-structure half.
+
+\medskip
+\noindent\textbf{Contributions.}
+\begin{enumerate}\itemsep0.3em
+\item A single falsifiable formulation --- ``structure beyond density'' --- and
+      its operationalization as a median-split, density-pinned F3 falsifier,
+      applied identically to three substrates (\S\ref{sec:method}).
+\item The positive result: F3 passes on all three substrates
+      (\S\ref{sec:results}, Fig.~\ref{fig:f3spine}). Cycle topology and
+      composition closure predict integration \emph{after} density is fixed;
+      frustration amplifies ruggedness $1.6\times$.
+\item Two pre-registered negatives, kept verbatim rather than deleted: the
+      ferromagnet's $R{=}32$ (F1, H\_906) and the failure of random graphs to
+      reach a closed category (F4, H\_907). Each negative falsifies a
+      \emph{stronger} version of the folk theorem and is itself the finding.
+\item A fully deterministic, $\$0$, CPU-only, bit-reproducible verification
+      pipeline: closed-form \texttt{.hexa} harnesses whose raw stdout \emph{is}
+      the verdict, persisted to \texttt{companion/verify-ledger.json}.
+\end{enumerate}
+
+\section{Background}
+\label{sec:bg}
+
+\paragraph{Frustration and ruggedness.}
+In an Edwards--Anderson Ising model~\citep{edwardsanderson1975} each bond carries
+a fixed sign $J_{ij} \in \{+1,-1\}$ and the energy is
+$E(s) = -\sum_{\langle ij\rangle} J_{ij}\, s_i s_j$ with $s_i\in\{\pm1\}$. A
+plaquette (an elementary square of four bonds) is \emph{frustrated} when the
+product of its bond signs is negative, so no spin assignment satisfies all four
+bonds simultaneously~\citep{toulouse1977}. The frustration fraction $f$ is the
+share of frustrated plaquettes. The folk claim is that frustration roughens the
+landscape; we measure roughness as $R$, the number of \emph{single-flip local
+minima} (configurations no single spin flip can lower).
+
+\paragraph{Integrated information, operationalized.}
+Integrated Information Theory~\citep{tononi2004,oizumi2014} posits a quantity
+$\Phi$ measuring how much a system's whole exceeds its parts. Exact $\Phi$ is
+super-exponential and intractable beyond toy sizes. Following the complexity
+$\leftrightarrow\Phi$ tradition~\citep{lempelziv1976}, we use a tractable,
+exactly-computable \emph{proxy}: reachability density. For a directed substrate,
+$\Phi$ is the fraction of ordered node pairs connected by a path; for an
+undirected substrate, it is the within-connected-component reachability density.
+We are explicit that this is a proxy and claim nothing about full IIT-$\Phi$.
+
+\paragraph{Composition closure.}
+A directed graph is the underlying data of a \emph{category} only if it is closed
+under composition: whenever $A\to B$ and $B\to C$ exist, $A\to C$ must
+exist~\citep{maclane1971}. We measure closure as
+$D = \#\text{present}(A\to C) / \#\text{composable}(A\to B \wedge B\to C)$ over
+all distinct triples. $D{=}1$ is a genuine (composition-closed) category;
+$D \ll 1$ is a mere graph.
+
+\paragraph{Topological invariants of a 1-complex.}
+For a graph viewed as a 1-dimensional simplicial complex, the Euler
+characteristic is $\chi = V - E$ and the first Betti number (independent cycle
+count) is $b_1 = E - V + C$, where $C$ is the number of connected
+components~\citep{hatcher2002}. A tree has $b_1 = 0$ and $\chi = 1$; adding a
+cycle raises $b_1$ and lowers $\chi$. These are exact integer invariants, ideal
+for a closed-form test.
+
+\paragraph{The confound this paper isolates.}
+On every substrate, raising the edge/bond density raises both the structural
+measure and the integration measure. The contribution is not the marginal
+correlation (which we report only as a sanity control, F1/F2) but the
+\emph{partial} one: the density-controlled F3.
+
+% =========================================================================
+\section{Verification pipeline}
+\label{sec:pipeline}
+
+Every claim travels the same path from question to persisted verdict. Each stage
+is tier-tagged under the rubric below; the ``backing record'' is what makes the
+stage independently re-verifiable.
+
+\medskip
+\noindent\fbox{\parbox{0.97\linewidth}{\small\textbf{Tier rubric.}
+\tierBlue\ closed-form (algebraic / exact-enumeration identity) \(\cdot\)
+\tierGreen\ numerical (reproducible harness + persisted output) \(\cdot\)
+\tierYellow\ cited (DOI / arxiv) \(\cdot\)
+\tierOrange\ install- or wet-lab-gated \(\cdot\)
+\tierRed\ falsified (kept as an honest negative, never deleted).}}
+
+\medskip
+\begin{table}[h]
+\centering
+\small
+\begin{tabular}{@{}>{\centering\arraybackslash}m{0.4cm} >{\raggedright\arraybackslash}m{4.2cm} c >{\raggedright\arraybackslash}m{6cm}@{}}
+\toprule
+\textbf{\#} & \textbf{Stage} & \textbf{Tier} & \textbf{Backing record} \\
+\midrule
+\textcircled{\scriptsize 1} & ``Structure beyond density?'' framing & \tierBlue   & \S\ref{sec:intro}; identical F3 on 3 substrates \\
+\textcircled{\scriptsize 2} & Background survey                      & \tierYellow & \texttt{references.bib} \\
+\textcircled{\scriptsize 3} & 5-falsifier freeze (post-tuning 0)     & \tierBlue   & harness source headers, \S\ref{sec:method} \\
+\textcircled{\scriptsize 4} & Exact-enumeration measure              & \tierBlue   & \texttt{UNIVERSE/scan/*.hexa} (anima) \\
+\textcircled{\scriptsize 5} & Numerical verify (24 instances each)   & \tierGreen  & \texttt{companion/verify-ledger.json} \\
+\textcircled{\scriptsize 6} & Falsifier sweep (F1--F5)               & \tierGreen  & \S\ref{sec:verify}, verbatim verdicts \\
+\textcircled{\scriptsize 7} & Full IIT-$\Phi$ / persistent homology  & \tierOrange & deferred --- intractable at scale \\
+\bottomrule
+\end{tabular}
+\caption{Pipeline stages \textcircled{\scriptsize 1}--\textcircled{\scriptsize 7}.
+Stage \textcircled{\scriptsize 7} does \emph{not} graduate to \tierGreen\ without
+an external, intractable computation; the proxies in stages
+\textcircled{\scriptsize 4}--\textcircled{\scriptsize 6} are what we claim.}
+\label{tab:pipeline}
+\end{table}
+
+The closed-form pipeline of Figure~\ref{fig:pipeline} is identical for every
+substrate: a frozen falsifier set, an exact enumeration, and a verdict that is
+the harness's own stdout.
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=0.92\linewidth]{figures/fig03_pipeline.pdf}
+\caption{The closed-form verification pipeline shared by all three substrates.
+Falsifiers are frozen in source \emph{before} the first run (post-tuning $=0$);
+the exact enumeration leaves no sampling noise; the verdict is machine stdout,
+persisted, and (on success) auto-folded to the atlas.}
+\label{fig:pipeline}
+\end{figure}
+
+\section{Method}
+\label{sec:method}
+
+\paragraph{Common protocol.}
+All three harnesses share a skeleton: a deterministic linear-congruential
+generator (LCG, $\text{state} \leftarrow (1103515245\,\text{state} + 12345)
+\bmod 2^{31}$) seeds the bond/edge signs so that every run is bit-identical
+across processes; the substrate is then enumerated \emph{exactly} (no sampling);
+all measures are integer counts or exact rationals (no perplexity, no
+floating-point training). The edge/bond probability $p$ is swept over
+$\{0.2, 0.4, 0.6\}$ with 8 seeds each ($24$ instances), except the spin-glass,
+which sweeps the negative-bond fraction $P_{\text{neg}} \in \{0, 0.25, 0.5\}$.
+Each harness freezes five falsifiers \emph{in its source header before the first
+run}; the verdict map is $5\,\text{PASS}\Rightarrow\tierGreen$ (5/5),
+$4\Rightarrow\tierGreen$ (4/5), $3\Rightarrow\tierYellow$, $\le 2\Rightarrow
+\tierRed$. The post-hoc tuning count across all three substrates is $0$: no
+falsifier was edited after seeing a result.
+
+\subsection{Substrate A --- spin-glass frustration $\to$ ruggedness (H\_906)}
+$3{\times}3$ periodic EA $\pm J$ Ising lattice: $N{=}9$ spins, $18$ bonds
+($9$ horizontal $+ 9$ vertical), $2^9 = 512$ configurations enumerated in full.
+Energy $E(s) = -\sum_{\text{bond}} J\, s_a s_b$ (integer). Frustration
+$f = (\#\text{frustrated plaquettes})/9$. Ruggedness $R = $ number of
+single-flip local minima (configurations with no lower-energy neighbour among
+their 9 single-flip neighbours). Pre-registered falsifiers:
+\begin{itemize}\itemsep0.15em
+  \item \textbf{F1 FERRO-2MIN}: $P_{\text{neg}}{=}0$ (ferromagnet) $\Rightarrow$
+        every instance has $f{=}0 \wedge R{=}2$ (only the two aligned ground
+        states).
+  \item \textbf{F2 FRUST-RUGGED}: $\bar R(P_{\text{neg}}{=}0.5) > \bar R(0)$.
+  \item \textbf{F3 MONOTONE}: $\bar R$ non-decreasing across
+        $P_{\text{neg}}\in\{0,0.25,0.5\}$.
+  \item \textbf{F4 FRUST-PRESENT}: $\exists$ instance with $f>0$ at
+        $P_{\text{neg}}{=}0.5$.
+  \item \textbf{F5 CORR}: high-$f$ ($\ge 0.3$) group $\bar R >$ low-$f$
+        ($<0.3$) group $\bar R$.
+\end{itemize}
+Here F5 plays the density-controlled role (F3 is the monotone control); the
+strong, non-trivial claim is that $f$ separates $R$ within the swept range.
+
+\subsection{Substrate B --- composition closure $\to$ integration (H\_907)}
+$N{=}6$-object directed graph, $30$ possible morphisms (self-loops excluded,
+identities implicit), edges seeded by the LCG. Closure
+$D = \#\text{present}(A{\to}C) / \#\text{composable}(A{\to}B \wedge B{\to}C,\,
+A\!\ne\!B\!\ne\!C)$, computed by exact triple enumeration. Integration
+$\Phi = \#\{(A,B), A\!\ne\!B : A \leadsto B\} / 30$ via boolean transitive
+closure (Floyd). Pre-registered falsifiers:
+\begin{itemize}\itemsep0.15em
+  \item \textbf{F1 CLOSURE-RISES}: $\bar D(p{=}0.6) > \bar D(0.2)$ (control).
+  \item \textbf{F2 INTEG-RISES}: $\bar\Phi(0.6) > \bar\Phi(0.2)$ (control).
+  \item \textbf{F3 CONTROLLED}: at fixed $p{=}0.4$, the high-$D$ half has
+        $\bar\Phi >$ the low-$D$ half --- \emph{the real, non-trivial claim}.
+  \item \textbf{F4 CATEGORY-FORM}: $\exists\, p$ with $\bar D \ge 0.85$
+        (near-closed = an emergent category).
+  \item \textbf{F5 SPARSE-OPEN}: $\bar D(0.2) < 0.6$ (sparse graphs are far
+        from closed).
+\end{itemize}
+
+\subsection{Substrate C --- cycle topology $\to$ integration (H\_908)}
+$N{=}6$ undirected graph, $15$ possible edges, LCG-seeded. Euler
+$\chi = V - E$; Betti-1 $b_1 = E - V + C$ with $C$ the component count from a
+BFS min-label relaxation fixed-point. Integration
+$\Phi = \sum_{\text{comp}} |comp|(|comp|-1) / (N(N-1))$. The sweep adds one
+deterministic path graph $P_6$ for an exact acyclic check. Pre-registered
+falsifiers:
+\begin{itemize}\itemsep0.15em
+  \item \textbf{F1 B1-RISES}: $\bar b_1(0.6) > \bar b_1(0.2)$ (control).
+  \item \textbf{F2 PHI-RISES}: $\bar\Phi(0.6) > \bar\Phi(0.2)$ (control).
+  \item \textbf{F3 CONTROLLED}: at fixed $p{=}0.4$, the high-$b_1$ half has
+        $\bar\Phi >$ the low-$b_1$ half --- \emph{the real, non-trivial claim}.
+  \item \textbf{F4 EULER-NEG}: $\chi$ anti-couples with $\Phi$
+        ($\bar\chi(0.2) > \bar\chi(0.6)$ while $\bar\Phi(0.2) < \bar\Phi(0.6)$).
+  \item \textbf{F5 TREE-EXACT}: the deterministic path $P_6$ gives
+        $b_1 = 0 \wedge \chi = 1$ exactly.
+\end{itemize}
+
+\section{Verify}
+\label{sec:verify}
+
+Each harness prints its own verdict; the raw stdout below \emph{is} the evidence
+(reproduced verbatim from \texttt{companion/verify-ledger.json}, which mirrors
+\texttt{anima:.verdicts/<slug>/run.txt}). No verdict is paraphrased.
+
+\begin{lstlisting}[basicstyle=\ttfamily\scriptsize,frame=single,xleftmargin=0pt]
+UNIVERSE H_906 -- spin-glass frustration <-> landscape ruggedness
+  substrate = 3x3 periodic EA +/-J Ising . N=9 . 512 configs (exact)
+  P_neg=0.00 : mean f=0.0       mean R=32.0
+  P_neg=0.25 :                  mean R=42.0
+  P_neg=0.50 : mean f=0.555556  mean R=54.75
+  low-f(<0.3) mean R=31.8 (n=10) . high-f(>=0.3) mean R=50.8571 (n=14)
+  F1 FERRO-2MIN=0  F2 FRUST-RUGGED=1  F3 MONOTONE=1  F4 FRUST-PRESENT=1  F5 CORR=1
+  PASS = 4/5      VERDICT GREEN SUPPORTED
+\end{lstlisting}
+
+\begin{lstlisting}[basicstyle=\ttfamily\scriptsize,frame=single,xleftmargin=0pt]
+UNIVERSE H_907 -- morphism composition-closure <-> integration
+  substrate = N=6 object directed graph (30 morphisms . exact enum + BFS)
+  p=0.2 : mean D=0.236174 mean Phi=0.3875
+  p=0.4 : mean D=0.321602 (F3 split @ medD=0.321602)
+  p=0.6 : mean D=0.576475 mean Phi=1.0
+  F3 controlled (p=0.4): high-D Phi=0.958333 (n=4) vs low-D Phi=0.775 (n=4)
+  F1=1  F2=1  F3 CONTROLLED=1 (the real claim)  F4 CATEGORY-FORM=0  F5=1
+  PASS = 4/5      VERDICT GREEN SUPPORTED
+\end{lstlisting}
+
+\begin{lstlisting}[basicstyle=\ttfamily\scriptsize,frame=single,xleftmargin=0pt]
+UNIVERSE H_908 -- topological invariant (Betti-1 . Euler chi) <-> integration
+  substrate = undirected graph N=6 (15 edges) . exact b1=E-V+C . chi=V-E
+  p=0.2 : mean b1=0.125 chi=3.75  Phi=0.233333
+  p=0.6 : mean b1=3.875 chi=-2.75 Phi=0.958333
+  F3 controlled (p=0.4): high-b1 Phi=0.866667 (n=4) vs low-b1 Phi=0.616667 (n=4)
+  P6 tree: b1=0 chi=1 (expect b1=0 chi=1)
+  F1=1  F2=1  F3 CONTROLLED=1 (the real claim)  F4 EULER-NEG=1  F5 TREE-EXACT=1
+  PASS = 5/5      VERDICT GREEN SUPPORTED-NUMERICAL
+\end{lstlisting}
+
+\section{Results}
+\label{sec:results}
+
+\paragraph{The spine: F3 holds on all three substrates.}
+Figure~\ref{fig:f3spine} is the paper in one chart. On each substrate, with
+density held fixed and instances median-split on the structural measure, the
+high-structure group out-integrates (or out-roughens) the low-structure group.
+This is the partial effect that density cannot explain.
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=0.78\linewidth]{figures/fig01_f3_spine.pdf}
+\caption{\textbf{Structure beyond density (the F3 spine).} With edge density
+pinned ($p{=}0.4$ for B,C; frustration-split for A), the high-structure half is
+more integrated/rougher than the low-structure half on all three substrates.
+Composition closure: $\Phi = 0.958$ vs $0.775$. Cycle topology:
+$\Phi = 0.867$ vs $0.617$. Frustration: high-$f$ $\bar R = 50.9$ vs low-$f$
+$31.8$ ($1.6\times$, shown rescaled to the $[0,1]$ axis as $R/64$). Every bar is
+an exact enumeration over the instances in that half.}
+\label{fig:f3spine}
+\end{figure}
+
+\paragraph{Monotone controls (F1/F2) and the density sweep.}
+Figure~\ref{fig:sweep} shows the uncontrolled, marginal rise --- the part that
+\emph{is} a density artifact and that we report only as a sanity check. Both the
+structural measure and $\Phi$ climb together with density; this is exactly why
+the marginal correlation is uninformative and the F3 partial test is necessary.
+Table~\ref{tab:results} collects the headline numbers.
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=0.78\linewidth]{figures/fig02_density_sweep.pdf}
+\caption{\textbf{The marginal (confounded) rise.} Integration $\Phi$ versus
+density on substrates B (composition closure) and C (cycle topology). Both climb
+together with edge density --- which is why a marginal correlation proves nothing
+and the density-controlled F3 (Fig.~\ref{fig:f3spine}) is the load-bearing test.}
+\label{fig:sweep}
+\end{figure}
+
+\begin{table}[h]
+\centering
+\small
+\begin{tabular}{llccc}
+\toprule
+\textbf{Substrate} & \textbf{Structural measure} & \textbf{low-struct} & \textbf{high-struct} & \textbf{F3} \\
+\midrule
+A (spin-glass, H\_906) & ruggedness $R$ (by $f$)      & $31.8$  & $50.9$  & \tierGreen\ PASS \\
+B (category, H\_907)   & integration $\Phi$ (by $D$)  & $0.775$ & $0.958$ & \tierGreen\ PASS \\
+C (topology, H\_908)   & integration $\Phi$ (by $b_1$)& $0.617$ & $0.867$ & \tierGreen\ PASS \\
+\bottomrule
+\end{tabular}
+\caption{The density-controlled F3 result. Each row is a median split at fixed
+density; the high-structure half wins on every substrate. $n{=}4$ per half for
+B,C; $n{=}10/14$ (low/high-$f$) for A.}
+\label{tab:results}
+\end{table}
+
+\paragraph{Negative 1 (F1, H\_906): frustration amplifies, it does not create.}
+The pre-registered F1 predicted that an unfrustrated ferromagnet has exactly two
+single-flip minima (the two aligned ground states). It is false: the ferromagnet
+has $R = 32$. Metastable domain configurations exist with \emph{zero}
+frustration. The correct statement is therefore weaker and more interesting than
+the folk theorem --- frustration \emph{amplifies} ruggedness ($R: 32 \to 42 \to
+55$ as $P_{\text{neg}}: 0 \to 0.25 \to 0.5$) rather than \emph{creating} it. We
+keep F1 falsified rather than rewriting it post-hoc.
+
+\paragraph{Negative 2 (F4, H\_907): random density does not make a category.}
+The pre-registered F4 predicted that at some swept density the graph would be
+near-closed ($\bar D \ge 0.85$), i.e. a category would \emph{emerge} from random
+morphisms. It is false: even at $p{=}0.6$, $\bar D = 0.576$. Composition closure
+is not a density phenomenon; it requires designed structure. This sharpens the
+positive F3 result: closure \emph{predicts} integration beyond density (F3 PASS),
+yet closure itself does \emph{not} arise from density (F4 fail). Both halves are
+findings.
+
+\section{Limitations and honest caveats}
+\label{sec:limits}
+
+\begin{itemize}\itemsep0.2em
+\item \textbf{Proxy, not full $\Phi$.} ``Integration'' is reachability density,
+      not IIT-$\Phi$, which is intractable at any non-toy size
+      (stage~\textcircled{\scriptsize 7}, Tab.~\ref{tab:pipeline}, stays
+      \tierOrange). The claim is about the proxy.
+\item \textbf{Small substrates.} $N{=}9$ (spin-glass) and $N{=}6$ (graphs) are
+      chosen for \emph{exact} enumeration. The F3 effect is established within
+      these sizes; scaling behaviour is not swept here.
+\item \textbf{Density range.} Each F3 is controlled at a single density
+      ($p{=}0.4$); we do not claim the partial effect at every density, only at
+      the pre-registered control point.
+\item \textbf{Median split, not regression.} F3 is a two-group comparison, not a
+      partial-correlation coefficient. It answers ``does high-structure beat
+      low-structure at fixed density?'' --- a directional, not an effect-size,
+      claim.
+\item \textbf{$n$ per half is small} ($n{=}4$ for B,C). The effect is exact for
+      these instances but is not a population estimate with error bars.
+\end{itemize}
+
+\section{Reproducibility}
+\label{sec:repro}
+
+Harnesses: \texttt{anima:UNIVERSE/scan/\{spinglass\_frustration, category\_emergence,
+topology\_invariant\_phi\}.hexa}. Verdicts (verbatim stdout):
+\texttt{anima:.verdicts/\{906,907,908\}\_*/run.txt}, mirrored in
+\texttt{companion/verify-ledger.json}. Hypothesis records:
+\texttt{anima:UNIVERSE/H\_90\{6,7,8\}\_*.md}. Each harness is deterministic
+(seeded LCG), CPU-only, $\$0$, and re-runs bit-identically. Build:
+\texttt{make} (xelatex $\times 3$ + bibtex). Figures: \texttt{make figures}
+(pure pgfplots/TikZ --- no Python). Page count: \texttt{make pages}. Lint:
+\texttt{make lint}.
+
+\section{Conclusion}
+\label{sec:conclusion}
+
+Across three substrates that share no physics --- frustrated magnets, small
+categories, and graph topology --- a structural invariant predicts a
+landscape/integration property \emph{after density is held fixed}. The
+density-controlled F3 falsifier passes on all three (Fig.~\ref{fig:f3spine}). The
+two pre-registered negatives are not failures of the program but its sharpest
+output: frustration amplifies rather than creates ruggedness, and closed
+categories do not emerge from random density. The single most important
+follow-up is to replace the reachability proxy with full IIT-$\Phi$ on the same
+exactly-enumerable substrates --- the only stage in Table~\ref{tab:pipeline}
+still tiered \tierOrange.
+
+% =========================================================================
+\paragraph{Acknowledgments.}
+This work used the \texttt{hexa-lang} closed-form verification surface and the
+\texttt{sidecar/paper} scaffold. The findings originate in the
+\texttt{dancinlab/anima} UNIVERSE program (hypotheses H\_906, H\_907, H\_908).
+LLM collaborator: Claude Opus 4.x, used for harness authoring and write-up under
+the project's no-self-judge verify discipline (all verdicts are machine output,
+not model assertions).
+
+% =========================================================================
+\bibliographystyle{plainnat}
+\bibliography{references}
+
+\end{document}

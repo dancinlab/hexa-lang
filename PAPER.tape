@@ -3,3 +3,4 @@
 
 @paper rtsc-ambient-roadmap := "./rtsc-ambient-roadmap"
 @paper bc4-attention-bm32-capstone := "./PAPER/bc4-attention-bm32-capstone"
+@paper complexity-integration-triad := "./PAPER/complexity-integration-triad"
