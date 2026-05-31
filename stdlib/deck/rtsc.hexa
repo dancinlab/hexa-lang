@@ -53,7 +53,7 @@ import "stdlib/cloud/fill_plan.hexa"
 // single edit needed to register a new prototype (alongside its emitter).
 // Keep this list in lockstep with the dispatch branches in `emit_rtsc`.
 pub fn rtsc_prototypes() -> [string] {
-    return ["beh8_clathrate", "perovskite_pm3m", "im3m_group17", "sodalite_im3m_yh10", "a15_ysbh6"]
+    return ["beh8_clathrate", "perovskite_pm3m", "im3m_group17", "sodalite_im3m_yh10", "a15_ysbh6", "li2mgh16"]
 }
 
 // ── pub entry point ──────────────────────────────────────────────────
@@ -105,6 +105,13 @@ pub fn emit_rtsc(spec: DeckSpec) -> [DeckFile] {
         deck_push(files, "RUNBOOK.md",  _rtsc_a15_runbook(spec))
         return files
     }
+    if proto == "li2mgh16" {
+        deck_push(files, "vc-relax.in", _rtsc_li2mgh16_vc_relax(spec))
+        deck_push(files, "scf.in",      _rtsc_li2mgh16_scf(spec))
+        deck_push(files, "ph.in",       _rtsc_li2mgh16_ph(spec))
+        deck_push(files, "RUNBOOK.md",  _rtsc_li2mgh16_runbook(spec))
+        return files
+    }
     // Unreachable: the coverage guard above panics on anything not in the
     // dispatch. Kept as a defensive no-op so the dispatch stays total.
     return files
@@ -153,6 +160,11 @@ fn _rtsc_beh8_vc_relax(spec: DeckSpec) -> string {
     let press_cmt = spec_get(spec, "pressure_comment")  // "10 GPa  (QE press unit = kbar; 10 GPa = 100 kbar)"
     let fb_kb     = spec_get(spec, "fallback_pressure_kbar")  // "500.0"
     let fb_cmt    = spec_get(spec, "fallback_pressure_comment")  // "50 GPa"
+    // @L1 memory-tuning spec params — defaults EQUAL the existing hardcoded
+    // values so /deck output is byte-identical with no new key passed.
+    let ecutwfc   = spec_get_or(spec, "ecutwfc",  "80")
+    let ecutrho   = spec_get_or(spec, "ecutrho",  "800")
+    let k_relax   = spec_get_or(spec, "k_relax",  "12")
 
     let mut s = ""
     s = s + "&CONTROL\n"
@@ -171,8 +183,8 @@ fn _rtsc_beh8_vc_relax(spec: DeckSpec) -> string {
     s = s + "  celldm(1)       = " + celldm + "           ! a_conv = " + a_ang + " A (" + a_sym + " variant, " + contract + "% contraction vs AcBeH8 ~" + a_anchor + " A start guess)\n"
     s = s + "  nat             = 10               ! 1 " + a_sym + " + 1 Be + 8 H (BeH8 clathrate cage, 1 f.u./primitive)\n"
     s = s + "  ntyp            = 3\n"
-    s = s + "  ecutwfc         = 80\n"
-    s = s + "  ecutrho         = 800\n"
+    s = s + "  ecutwfc         = " + ecutwfc + "\n"
+    s = s + "  ecutrho         = " + ecutrho + "\n"
     s = s + "  nosym           = .true.           ! guard — avoids checkallsym crash (cf. sc2be2h6 campaign)\n"
     s = s + "  occupations     = 'smearing'\n"
     s = s + "  smearing        = 'mp'             ! Methfessel-Paxton — metallic hydride (d15)\n"
@@ -216,7 +228,7 @@ fn _rtsc_beh8_vc_relax(spec: DeckSpec) -> string {
     s = s + "  H    0.6200000   0.3800000   0.3800000\n"
     s = s + "\n"
     s = s + "K_POINTS automatic\n"
-    s = s + "  12 12 12  0 0 0\n"
+    s = s + "  " + k_relax + " " + k_relax + " " + k_relax + "  0 0 0\n"
     return s
 }
 
@@ -226,6 +238,10 @@ fn _rtsc_beh8_scf(spec: DeckSpec) -> string {
     let a_sym    = spec_get(spec, "a_site_symbol")
     let a_mass   = spec_get(spec, "a_site_mass")
     let a_upf    = spec_get(spec, "a_site_upf")
+    // @L1 memory-tuning spec params — byte-compat defaults.
+    let ecutwfc  = spec_get_or(spec, "ecutwfc", "80")
+    let ecutrho  = spec_get_or(spec, "ecutrho", "800")
+    let k_scf    = spec_get_or(spec, "k_scf",   "12")
 
     let mut s = ""
     s = s + "&CONTROL\n"
@@ -242,8 +258,8 @@ fn _rtsc_beh8_scf(spec: DeckSpec) -> string {
     s = s + "  celldm(1)       = " + celldm + "           ! REPLACE with relaxed celldm(1) from vc-relax.out (final CELL_PARAMETERS / \"new lattice\")\n"
     s = s + "  nat             = 10               ! 1 " + a_sym + " + 1 Be + 8 H\n"
     s = s + "  ntyp            = 3\n"
-    s = s + "  ecutwfc         = 80\n"
-    s = s + "  ecutrho         = 800\n"
+    s = s + "  ecutwfc         = " + ecutwfc + "\n"
+    s = s + "  ecutrho         = " + ecutrho + "\n"
     s = s + "  nosym           = .true.           ! guard — keep symmetry off through scf->ph for consistency\n"
     s = s + "  occupations     = 'smearing'\n"
     s = s + "  smearing        = 'mp'             ! Methfessel-Paxton — metallic hydride (d15)\n"
@@ -276,7 +292,7 @@ fn _rtsc_beh8_scf(spec: DeckSpec) -> string {
     s = s + "  H    0.6200000   0.3800000   0.3800000\n"
     s = s + "\n"
     s = s + "K_POINTS automatic\n"
-    s = s + "  12 12 12  0 0 0\n"
+    s = s + "  " + k_scf + " " + k_scf + " " + k_scf + "  0 0 0\n"
     return s
 }
 
@@ -677,6 +693,9 @@ fn _rtsc_a15_vc_relax(spec: DeckSpec) -> string {
     let pseudo    = spec_get_or(spec, "pseudo_dir", "./pseudo")
     let mixing    = spec_get_or(spec, "mixing_beta", "0.4")
     let degauss   = spec_get_or(spec, "degauss", "0.02")
+    let ecutwfc   = spec_get_or(spec, "ecutwfc", "80.0")
+    let ecutrho   = spec_get_or(spec, "ecutrho", "640.0")
+    let k_relax   = spec_get_or(spec, "k_relax", "12")
 
     let mut s = ""
     s = s + "&control\n"
@@ -700,8 +719,8 @@ fn _rtsc_a15_vc_relax(spec: DeckSpec) -> string {
     s = s + "  celldm(1) = " + celldm + "\n"
     s = s + "  nat = 8\n"
     s = s + "  ntyp = 3\n"
-    s = s + "  ecutwfc = 80.0\n"
-    s = s + "  ecutrho = 640.0\n"
+    s = s + "  ecutwfc = " + ecutwfc + "\n"
+    s = s + "  ecutrho = " + ecutrho + "\n"
     s = s + "  nosym = .true.\n"
     s = s + "  occupations = 'smearing'\n"
     s = s + "  smearing = 'mp'\n"
@@ -735,7 +754,7 @@ fn _rtsc_a15_vc_relax(spec: DeckSpec) -> string {
     s = s + "  H  0.00 0.50 0.25\n"
     s = s + "  H  0.00 0.50 0.75\n"
     s = s + "K_POINTS automatic\n"
-    s = s + "  12 12 12 0 0 0\n"
+    s = s + "  " + k_relax + " " + k_relax + " " + k_relax + " 0 0 0\n"
     return s
 }
 
@@ -752,6 +771,9 @@ fn _rtsc_a15_scf(spec: DeckSpec) -> string {
     let pseudo    = spec_get_or(spec, "pseudo_dir", "./pseudo")
     let mixing    = spec_get_or(spec, "mixing_beta", "0.4")
     let degauss   = spec_get_or(spec, "degauss", "0.02")
+    let ecutwfc   = spec_get_or(spec, "ecutwfc", "80.0")
+    let ecutrho   = spec_get_or(spec, "ecutrho", "640.0")
+    let k_scf     = spec_get_or(spec, "k_scf", "16")
 
     let mut s = ""
     s = s + "&control\n"
@@ -768,8 +790,8 @@ fn _rtsc_a15_scf(spec: DeckSpec) -> string {
     s = s + "  celldm(1) = " + celldm + "    ! REPLACE with relaxed value from vc-relax.out\n"
     s = s + "  nat = 8\n"
     s = s + "  ntyp = 3\n"
-    s = s + "  ecutwfc = 80.0\n"
-    s = s + "  ecutrho = 640.0\n"
+    s = s + "  ecutwfc = " + ecutwfc + "\n"
+    s = s + "  ecutrho = " + ecutrho + "\n"
     s = s + "  nosym = .true.\n"
     s = s + "  occupations = 'smearing'\n"
     s = s + "  smearing = 'mp'\n"
@@ -795,7 +817,7 @@ fn _rtsc_a15_scf(spec: DeckSpec) -> string {
     s = s + "  H  0.00 0.50 0.25\n"
     s = s + "  H  0.00 0.50 0.75\n"
     s = s + "K_POINTS automatic\n"
-    s = s + "  16 16 16 0 0 0\n"
+    s = s + "  " + k_scf + " " + k_scf + " " + k_scf + " 0 0 0\n"
     return s
 }
 
@@ -839,6 +861,214 @@ fn _rtsc_a15_runbook(spec: DeckSpec) -> string {
     return s
 }
 
+// ── Li2MgH16 prototype (38-atom clathrate · ibrav=0 · CELL_PARAMETERS) ─
+//
+// Li2MgH16-type hydrogen-rich clathrate (Sun et al.; predicted Tc~473K @
+// 250 GPa). ibrav=0 with an explicit CELL_PARAMETERS triplet — 38 atoms
+// (4 Li + 2 Mg + 32 H = ntyp 3). The structure (ATOMIC_SPECIES ·
+// ATOMIC_POSITIONS · CELL_PARAMETERS) is baked VERBATIM from the curated
+// demiurge deck exports/rtsc/decks/Li2MgH16/scf.in. Curated defaults:
+// ecutwfc=60 · ecutrho=480 (LIGHTER than the 80/800 used elsewhere — the
+// memory budget that OOM'd the hand path), k_relax=8 · k_scf=12, nq=2.
+// All remain @L1-overridable for memory tuning via /deck.
+
+// _rtsc_li2mgh16_structure — the ATOMIC_SPECIES + ATOMIC_POSITIONS +
+// CELL_PARAMETERS block, verbatim from the curated deck. Shared between
+// the vc-relax and scf emitters (identical geometry in both).
+fn _rtsc_li2mgh16_structure() -> string {
+    let mut s = ""
+    s = s + "ATOMIC_SPECIES\n"
+    s = s + "  Li 6.941 Li.pbe-s-rrkjus_psl.1.0.0.UPF\n"
+    s = s + "  Mg 24.305 Mg.pbe-spnl-rrkjus_psl.1.0.0.UPF\n"
+    s = s + "  H 1.008 H.pbe-rrkjus_psl.1.0.0.UPF\n"
+    s = s + "ATOMIC_POSITIONS crystal\n"
+    s = s + "  Li 0.6250000000 0.1250000000 0.6250000000\n"
+    s = s + "  Li 0.6250000000 0.6250000000 0.1250000000\n"
+    s = s + "  Li 0.1250000000 0.6250000000 0.6250000000\n"
+    s = s + "  Li 0.6250000000 0.6250000000 0.6250000000\n"
+    s = s + "  Mg 0.0000000000 0.0000000000 0.0000000000\n"
+    s = s + "  Mg 0.2500000000 0.2500000000 0.2500000000\n"
+    s = s + "  H  0.8330600000 0.8330600000 0.5008200000\n"
+    s = s + "  H  0.5008200000 0.8330600000 0.8330600000\n"
+    s = s + "  H  0.8330600000 0.5008200000 0.8330600000\n"
+    s = s + "  H  0.4169400000 0.4169400000 0.7491800000\n"
+    s = s + "  H  0.4169400000 0.7491800000 0.4169400000\n"
+    s = s + "  H  0.7491800000 0.4169400000 0.4169400000\n"
+    s = s + "  H  0.8330600000 0.8330600000 0.8330600000\n"
+    s = s + "  H  0.4169400000 0.4169400000 0.4169400000\n"
+    s = s + "  H  0.8749200000 0.2544000000 0.6162800000\n"
+    s = s + "  H  0.6162800000 0.8749200000 0.2544000000\n"
+    s = s + "  H  0.2544000000 0.6162800000 0.8749200000\n"
+    s = s + "  H  0.9956000000 0.3750800000 0.6337200000\n"
+    s = s + "  H  0.3750800000 0.6337200000 0.9956000000\n"
+    s = s + "  H  0.6337200000 0.9956000000 0.3750800000\n"
+    s = s + "  H  0.3750800000 0.9956000000 0.6337200000\n"
+    s = s + "  H  0.6337200000 0.3750800000 0.9956000000\n"
+    s = s + "  H  0.9956000000 0.6337200000 0.3750800000\n"
+    s = s + "  H  0.2544000000 0.8749200000 0.6162800000\n"
+    s = s + "  H  0.8749200000 0.6162800000 0.2544000000\n"
+    s = s + "  H  0.6162800000 0.2544000000 0.8749200000\n"
+    s = s + "  H  0.2544000000 0.8749200000 0.2544000000\n"
+    s = s + "  H  0.6162800000 0.2544000000 0.2544000000\n"
+    s = s + "  H  0.6337200000 0.9956000000 0.9956000000\n"
+    s = s + "  H  0.9956000000 0.9956000000 0.3750800000\n"
+    s = s + "  H  0.9956000000 0.3750800000 0.9956000000\n"
+    s = s + "  H  0.2544000000 0.2544000000 0.8749200000\n"
+    s = s + "  H  0.2544000000 0.6162800000 0.2544000000\n"
+    s = s + "  H  0.3750800000 0.9956000000 0.9956000000\n"
+    s = s + "  H  0.9956000000 0.6337200000 0.9956000000\n"
+    s = s + "  H  0.8749200000 0.2544000000 0.2544000000\n"
+    s = s + "  H  0.2544000000 0.2544000000 0.6162800000\n"
+    s = s + "  H  0.9956000000 0.9956000000 0.6337200000\n"
+    s = s + "CELL_PARAMETERS angstrom\n"
+    s = s + "  0.0000000000 3.3592565000 3.3592565000\n"
+    s = s + "  3.3592565000 0.0000000000 3.3592565000\n"
+    s = s + "  3.3592565000 3.3592565000 0.0000000000\n"
+    return s
+}
+
+fn _rtsc_li2mgh16_vc_relax(spec: DeckSpec) -> string {
+    let prefix    = spec_get_or(spec, "prefix",      "li2mgh16")
+    let outdir    = spec_get_or(spec, "outdir",      "./out")
+    let pseudo    = spec_get_or(spec, "pseudo_dir",  "./pseudo")
+    let ecutwfc   = spec_get_or(spec, "ecutwfc",     "60.0")
+    let ecutrho   = spec_get_or(spec, "ecutrho",     "480.0")
+    let k_relax   = spec_get_or(spec, "k_relax",     "8")
+    let degauss   = spec_get_or(spec, "degauss",     "0.02")
+    let mixing    = spec_get_or(spec, "mixing_beta", "0.4")
+    let press_kb  = spec_get_or(spec, "pressure_kbar", "2500.0")
+
+    let mut s = ""
+    s = s + "&control\n"
+    s = s + "  calculation = 'vc-relax'\n"
+    s = s + "  prefix = '" + prefix + "'\n"
+    s = s + "  outdir = '" + outdir + "'\n"
+    s = s + "  pseudo_dir = '" + pseudo + "'\n"
+    s = s + "  tprnfor = .true.\n"
+    s = s + "  tstress = .true.\n"
+    s = s + "  forc_conv_thr = 1.0d-4\n"
+    s = s + "  etot_conv_thr = 1.0d-5\n"
+    s = s + "  nstep = 200\n"
+    s = s + "  verbosity = 'low'\n"
+    s = s + "/\n"
+    s = s + "&system\n"
+    s = s + "  ibrav = 0\n"
+    s = s + "  nat = 38\n"
+    s = s + "  ntyp = 3\n"
+    s = s + "  ecutwfc = " + ecutwfc + "\n"
+    s = s + "  ecutrho = " + ecutrho + "\n"
+    s = s + "  nosym = .true.\n"
+    s = s + "  occupations = 'smearing'\n"
+    s = s + "  smearing = 'mp'\n"
+    s = s + "  degauss = " + degauss + "\n"
+    s = s + "/\n"
+    s = s + "&electrons\n"
+    s = s + "  conv_thr = 1.0d-10\n"
+    s = s + "  mixing_beta = " + mixing + "\n"
+    s = s + "  electron_maxstep = 400\n"
+    s = s + "/\n"
+    s = s + "&ions\n"
+    s = s + "  ion_dynamics = 'bfgs'\n"
+    s = s + "/\n"
+    s = s + "&cell\n"
+    s = s + "  cell_dynamics = 'bfgs'\n"
+    s = s + "  press = " + press_kb + "\n"
+    s = s + "  press_conv_thr = 0.5\n"
+    s = s + "/\n"
+    s = s + "\n"
+    s = s + _rtsc_li2mgh16_structure()
+    s = s + "K_POINTS automatic\n"
+    s = s + "  " + k_relax + " " + k_relax + " " + k_relax + " 0 0 0\n"
+    return s
+}
+
+fn _rtsc_li2mgh16_scf(spec: DeckSpec) -> string {
+    let prefix    = spec_get_or(spec, "prefix",      "li2mgh16")
+    let outdir    = spec_get_or(spec, "outdir",      "./out")
+    let pseudo    = spec_get_or(spec, "pseudo_dir",  "./pseudo")
+    let ecutwfc   = spec_get_or(spec, "ecutwfc",     "60.0")
+    let ecutrho   = spec_get_or(spec, "ecutrho",     "480.0")
+    let k_scf     = spec_get_or(spec, "k_scf",       "12")
+    let degauss   = spec_get_or(spec, "degauss",     "0.02")
+    let mixing    = spec_get_or(spec, "mixing_beta", "0.4")
+
+    let mut s = ""
+    s = s + "&control\n"
+    s = s + "  calculation = 'scf'\n"
+    s = s + "  prefix = '" + prefix + "'\n"
+    s = s + "  outdir = '" + outdir + "'\n"
+    s = s + "  pseudo_dir = '" + pseudo + "'\n"
+    s = s + "  tprnfor = .true.\n"
+    s = s + "  tstress = .true.\n"
+    s = s + "  forc_conv_thr = 1.0d-4\n"
+    s = s + "  etot_conv_thr = 1.0d-5\n"
+    s = s + "  nstep = 200\n"
+    s = s + "  verbosity = 'low'\n"
+    s = s + "/\n"
+    s = s + "&system\n"
+    s = s + "  ibrav = 0\n"
+    s = s + "  nat = 38\n"
+    s = s + "  ntyp = 3\n"
+    s = s + "  ecutwfc = " + ecutwfc + "\n"
+    s = s + "  ecutrho = " + ecutrho + "\n"
+    s = s + "  nosym = .true.\n"
+    s = s + "  occupations = 'smearing'\n"
+    s = s + "  smearing = 'mp'\n"
+    s = s + "  degauss = " + degauss + "\n"
+    s = s + "/\n"
+    s = s + "&electrons\n"
+    s = s + "  conv_thr = 1.0d-12\n"
+    s = s + "  mixing_beta = " + mixing + "\n"
+    s = s + "  electron_maxstep = 400\n"
+    s = s + "/\n"
+    s = s + "\n"
+    s = s + _rtsc_li2mgh16_structure()
+    s = s + "K_POINTS automatic\n"
+    s = s + "  " + k_scf + " " + k_scf + " " + k_scf + " 0 0 0\n"
+    return s
+}
+
+fn _rtsc_li2mgh16_ph(spec: DeckSpec) -> string {
+    let prefix = spec_get_or(spec, "prefix", "li2mgh16")
+    let outdir = spec_get_or(spec, "outdir", "./out")
+    let nq     = spec_get_or(spec, "nq",     "2")
+
+    let mut s = ""
+    s = s + "Li2MgH16 el-ph " + nq + "x" + nq + "x" + nq + " q (RTSC clathrate electron_phonon=simple)\n"
+    s = s + "&inputph\n"
+    s = s + "  prefix = '" + prefix + "'\n"
+    s = s + "  outdir = '" + outdir + "'\n"
+    s = s + "  fildyn = './" + prefix + ".dyn'\n"
+    s = s + "  fildvscf = '" + prefix + ".dvscf'\n"
+    s = s + "  ldisp = .true.\n"
+    s = s + "  nq1 = " + nq + ", nq2 = " + nq + ", nq3 = " + nq + "\n"
+    s = s + "  tr2_ph = 1.0d-14\n"
+    s = s + "  recover = .true.\n"
+    s = s + "  electron_phonon = 'simple'\n"
+    s = s + "  el_ph_sigma = 0.005\n"
+    s = s + "  el_ph_nsigma = 10\n"
+    s = s + "/\n"
+    return s
+}
+
+fn _rtsc_li2mgh16_runbook(spec: DeckSpec) -> string {
+    let press   = spec_get_or(spec, "pressure_gpa", "250")
+    let ecutwfc = spec_get_or(spec, "ecutwfc",      "60.0")
+    let ecutrho = spec_get_or(spec, "ecutrho",      "480.0")
+    let k_scf   = spec_get_or(spec, "k_scf",        "12")
+    let nq      = spec_get_or(spec, "nq",           "2")
+    let mut s = ""
+    s = s + "# Li2MgH16 — RTSC 38-atom 클라스레이트 런북 (BUILD 산출물)\n"
+    s = s + "\n"
+    s = s + "> 수소-과잉 클라스레이트 Li2MgH16 (예측 Tc~473K @ 250 GPa, Sun et al.). 압력 " + press + " GPa.\n"
+    s = s + "> ibrav=0 + CELL_PARAMETERS, nat=38 (4 Li + 2 Mg + 32 H), ntyp=3.\n"
+    s = s + "> ⚠ memory: ecutwfc=" + ecutwfc + "/ecutrho=" + ecutrho + " (가벼운 예산 — 80/800 OOM 회피).\n"
+    s = s + "> k/ecut/nq 는 /deck spec 키(k_relax·k_scf·ecutwfc·ecutrho·nq)로 메모리 튜닝 가능.\n"
+    s = s + "\n"
+    s = s + "체인: vc-relax -> scf (" + k_scf + "^3 k) -> ph (el-ph simple, " + nq + "^3 q). recover=.true.\n"
+    return s
+}
+
 fn _rtsc_perovskite_vc_relax(spec: DeckSpec) -> string {
     let prefix    = spec_get(spec, "prefix")               // "caauh3"
     let a_sym     = spec_get(spec, "a_site_symbol")        // "Ca"
@@ -856,6 +1086,9 @@ fn _rtsc_perovskite_vc_relax(spec: DeckSpec) -> string {
     let pseudo    = spec_get_or(spec, "pseudo_dir",        "./pseudo")
     let mixing    = spec_get_or(spec, "mixing_beta",       "0.4")
     let degauss   = spec_get_or(spec, "degauss",           "0.02")
+    let ecutwfc   = spec_get_or(spec, "ecutwfc",           "80.0")
+    let ecutrho   = spec_get_or(spec, "ecutrho",           "640.0")
+    let k_relax   = spec_get_or(spec, "k_relax",           "12")
 
     let mut s = ""
     s = s + "&control\n"
@@ -882,8 +1115,8 @@ fn _rtsc_perovskite_vc_relax(spec: DeckSpec) -> string {
     s = s + "  celldm(1) = " + celldm + "\n"
     s = s + "  nat = 5\n"
     s = s + "  ntyp = 3\n"
-    s = s + "  ecutwfc = 80.0\n"
-    s = s + "  ecutrho = 640.0\n"
+    s = s + "  ecutwfc = " + ecutwfc + "\n"
+    s = s + "  ecutrho = " + ecutrho + "\n"
     s = s + "  nosym = .true.\n"
     s = s + "  occupations = 'smearing'\n"
     s = s + "  smearing = 'mp'\n"
@@ -915,7 +1148,7 @@ fn _rtsc_perovskite_vc_relax(spec: DeckSpec) -> string {
     s = s + "  H  0.0 0.5 0.0\n"
     s = s + "  H  0.0 0.0 0.5\n"
     s = s + "K_POINTS automatic\n"
-    s = s + "  12 12 12 0 0 0\n"
+    s = s + "  " + k_relax + " " + k_relax + " " + k_relax + " 0 0 0\n"
     return s
 }
 
@@ -934,6 +1167,9 @@ fn _rtsc_perovskite_scf(spec: DeckSpec) -> string {
     let pseudo    = spec_get_or(spec, "pseudo_dir",        "./pseudo")
     let mixing    = spec_get_or(spec, "mixing_beta",       "0.4")
     let degauss   = spec_get_or(spec, "degauss",           "0.02")
+    let ecutwfc   = spec_get_or(spec, "ecutwfc",           "80.0")
+    let ecutrho   = spec_get_or(spec, "ecutrho",           "640.0")
+    let k_scf     = spec_get_or(spec, "k_scf",             "12")
 
     let mut s = ""
     s = s + "&control\n"
@@ -950,8 +1186,8 @@ fn _rtsc_perovskite_scf(spec: DeckSpec) -> string {
     s = s + "  celldm(1) = " + celldm + "    ! REPLACE with relaxed value from vc-relax.out\n"
     s = s + "  nat = 5\n"
     s = s + "  ntyp = 3\n"
-    s = s + "  ecutwfc = 80.0\n"
-    s = s + "  ecutrho = 640.0\n"
+    s = s + "  ecutwfc = " + ecutwfc + "\n"
+    s = s + "  ecutrho = " + ecutrho + "\n"
     s = s + "  nosym = .true.\n"
     s = s + "  occupations = 'smearing'\n"
     s = s + "  smearing = 'mp'\n"
@@ -974,7 +1210,7 @@ fn _rtsc_perovskite_scf(spec: DeckSpec) -> string {
     s = s + "  H  0.0 0.5 0.0\n"
     s = s + "  H  0.0 0.0 0.5\n"
     s = s + "K_POINTS automatic\n"
-    s = s + "  12 12 12 0 0 0\n"
+    s = s + "  " + k_scf + " " + k_scf + " " + k_scf + " 0 0 0\n"
     return s
 }
 
@@ -1050,7 +1286,7 @@ fn _rtsc_im3m_vc_relax(spec: DeckSpec) -> string {
     let press_cmt = spec_get_or(spec, "pressure_comment", "200 GPa")
     let ecutwfc   = spec_get_or(spec, "ecutwfc",          "80")
     let ecutrho   = spec_get_or(spec, "ecutrho",          "800")
-    let kgrid     = spec_get_or(spec, "k_grid",           "16 16 16")
+    let kgrid     = _rtsc_kgrid(spec, "k_relax",          "16 16 16")
     let degauss   = spec_get_or(spec, "degauss",          "0.02")
     let mixing    = spec_get_or(spec, "mixing_beta",      "0.3")
 
@@ -1122,7 +1358,7 @@ fn _rtsc_im3m_scf(spec: DeckSpec) -> string {
     let celldm    = spec_get(spec, "celldm_bohr")
     let ecutwfc   = spec_get_or(spec, "ecutwfc",  "80")
     let ecutrho   = spec_get_or(spec, "ecutrho",  "800")
-    let kgrid     = spec_get_or(spec, "k_grid",   "16 16 16")
+    let kgrid     = _rtsc_kgrid(spec, "k_scf",    "16 16 16")
     let degauss   = spec_get_or(spec, "degauss",  "0.02")
     let mixing    = spec_get_or(spec, "mixing_beta", "0.3")
 
@@ -1250,7 +1486,7 @@ fn _rtsc_sodalite_vc_relax(spec: DeckSpec) -> string {
     let press_cmt = spec_get_or(spec, "pressure_comment", "250 GPa")
     let ecutwfc   = spec_get_or(spec, "ecutwfc",          "80")
     let ecutrho   = spec_get_or(spec, "ecutrho",          "800")
-    let kgrid     = spec_get_or(spec, "k_grid",           "12 12 12")
+    let kgrid     = _rtsc_kgrid(spec, "k_relax",          "12 12 12")
     let degauss   = spec_get_or(spec, "degauss",          "0.02")
     let mixing    = spec_get_or(spec, "mixing_beta",      "0.3")
 
@@ -1330,7 +1566,7 @@ fn _rtsc_sodalite_scf(spec: DeckSpec) -> string {
     let h32f_x    = spec_get_or(spec, "h32f_x",   "0.3750000")
     let ecutwfc   = spec_get_or(spec, "ecutwfc",  "80")
     let ecutrho   = spec_get_or(spec, "ecutrho",  "800")
-    let kgrid     = spec_get_or(spec, "k_grid",   "12 12 12")
+    let kgrid     = _rtsc_kgrid(spec, "k_scf",    "12 12 12")
     let degauss   = spec_get_or(spec, "degauss",  "0.02")
     let mixing    = spec_get_or(spec, "mixing_beta", "0.3")
 
@@ -1441,6 +1677,22 @@ fn _rtsc_sodalite_runbook(spec: DeckSpec) -> string {
     s = s + "vc-relax → scf (12^3 k) → ph (el-ph simple, 2^3 q). NP=$(nproc), oversubscribe 금지.\n"
     s = s + "recover=.true. → under-size 여도 0 work loss.\n"
     return s
+}
+
+// ── k-grid resolver (@L1 memory-tuning) ──────────────────────────────
+//
+// _rtsc_kgrid — resolve a per-stage "N N N" k-grid string for the
+// im3m/sodalite prototypes (which emit a full triplet via `"  " + kgrid
+// + "  0 0 0\n"`). PRECEDENCE: an explicit per-stage single-int key
+// (k_relax / k_scf) wins; else the legacy full-triplet `k_grid` key; else
+// the prototype's hardcoded fallback. With NO new key passed the legacy
+// `k_grid` path is taken → byte-identical output (@L3).
+fn _rtsc_kgrid(spec: DeckSpec, stage_key: string, kgrid_fallback: string) -> string {
+    if spec_has(spec, stage_key) {
+        let k = spec_get(spec, stage_key)
+        return k + " " + k + " " + k
+    }
+    return spec_get_or(spec, "k_grid", kgrid_fallback)
 }
 
 // ── numeric helpers (str-side, exact) ────────────────────────────────
