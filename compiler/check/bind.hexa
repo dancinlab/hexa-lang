@@ -1042,6 +1042,10 @@ fn _bind_builtin_names() -> [string] {
         "append_file", "char_code_at", "has_key", "join",
         // Step 5 codegen-inline builtins (4th re-land after e8c2dc1c wipe).
         "__arr_raw_len", "__arr_set_cap", "__fd_write_bytes", "__map_raw_len", "__str_raw_len",
+        // N5-pre STEP2: builtins the compiler source calls but were absent from this allowlist
+        // (HX2001). All have C-level defs: bytes_to_str_raw -> self/codegen.hexa:7155
+        // (hexa_bytes_to_str_raw); __arr_alloc_items_zero[_int] are s4_flatc_post-injected statics.
+        "bytes_to_str_raw", "__arr_alloc_items_zero", "__arr_alloc_items_zero_int",
         // Step 4 .c-none arith: raw integer divide/mod + libm-free float mod
         // + float-add coerce (rt_div/rt_mod/rt_add_slow escapes). hexa_str_concat
         // = the real C string-concat fn rt_add_slow's string branch calls direct.
