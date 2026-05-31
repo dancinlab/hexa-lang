@@ -6,6 +6,7 @@
 // subcommand into self/main.hexa (which needs a compiled bin/hexa-cloud)
 // is a later deploy-adjacent step — see design.md Decision 5.
 
+use "stdlib/cloud/cloud_commands"
 use "stdlib/cloud/cloud"
 use "stdlib/cloud/pod_registry"
 use "stdlib/cloud/preflight"
@@ -18,63 +19,39 @@ use "stdlib/cloud/parallel_audit"
 use "stdlib/cloud/providers_catalog"
 use "stdlib/sys"
 
+// _cloud_help_render_roster — render the verb usage block by ITERATING the
+// in-source SSOT cloud_commands() (grouped by `group`). No hand-typed verb
+// list survives; a verb added to dispatch without a COMMANDS row is caught by
+// stdlib/cloud/cloud_help_drift_test.hexa.
+fn _cloud_help_render_roster() {
+    let groups = ["lifecycle", "manage", "exec", "io", "plan", "meta"]
+    let cmds = cloud_commands()
+    let mut gi = 0
+    while gi < len(groups) {
+        let g = groups[gi]
+        gi = gi + 1
+        let mut i = 0
+        while i < len(cmds) {
+            let c = cmds[i]
+            i = i + 1
+            if c.group != g {
+                continue
+            }
+            let mut head = "  cloud " + c.name
+            if len(c.args) > 0 {
+                head = head + " " + c.args
+            }
+            println(head)
+            println("      " + c.summary)
+        }
+    }
+}
+
 fn _cloud_help() {
     println("hexa cloud — structured-argv remote dispatch (cycle A)")
     println("")
     println("usage:")
-    println("  cloud rent <provider> [--gpu T] [--image IMG] [--disk GiB] [--owner TAG] [--project NAME] [--query Q] [--max-wait-sec N] [--no-register]")
-    println("                                                         provision a GPU pod (vast|runpod), wait ssh-ready, print host:port + id (alias: up)")
-    println("                                                         --project NAME: owning project for the cross-project down-guard (default cwd git-repo basename, else 'unattributed')")
-    println("                                                         --no-register: skip the default ./pods.json row write (rent auto-registers a PENDING work row by default — symmetry with nohup/fire --register; a deck-less rent then shows as a leak candidate)")
-    println("                                                         --max-wait-sec N (default 180): bounded SSH-readiness gate; on timeout the rent auto-tears the billing pod down + exits 2 with verbatim verdict (M5 sigil: SSH-never-ready leak guard)")
-    println("  cloud rm <id> [--provider P] [--force]                 CANONICAL teardown — confirm + destroy + forget (unifies down/destroy/forget). --provider inferred from registry when absent. --force skips confirm prompt. Idempotent: rm of an absent pod exits 0.")
-    println("  cloud down <id> [--provider P] [--force]               (legacy alias of `cloud rm`) destroy a pod + forget it from the registry — REFUSES a cross-project kill (pod.project≠cwd project) unless --force")
-    println("  cloud reboot <id> [--provider P]                       restart a pod's container (preserve disk) to recover a DARK pod — alive+billing but SSH-dropped; re-runs onstart hook → re-injects key. vast only (runpod console). QE jobs resume from .save")
-    println("  cloud list [--provider P]                              list live pods (vast + runpod, or one via --provider)")
-    println("  cloud status [--provider P]                            alias of list")
-    println("  cloud preflight --params N [--gpu KEY] [opts...]        closed-form GPU mem-budget check (no pod/ssh)")
-    println("  cloud preflight --kind dft-phonon --atoms N --nq M [--metallic] [--max-seconds S]  closed-form DFPT walltime sizing")
-    println("  cloud run       <host> [conn] [--max-wall S] [--env K=V] [--source P] -- <argv...> run argv, wait, exit with its code")
-    println("  cloud exec      <host> [conn] -- <shell-cmd>           run shell command via ssh (DEFAULT SHELL PARSES IT)")
-    println("  cloud nohup     <host> <logfile> [conn] [--env K=V] [--source P] [--early-life-check N] [--register [<jid>]] -- <argv...>   background argv, print remote pid")
-    println("                                                         --early-life-check N: after launch, sleep N s + poll once; exit 3 if pid already DIED (silent class-1 launch failure)")
-    println("                                                         --register [<jid>]: auto-write a row to cwd's ./pods.json on success (bare = auto-jid `auto-<ts>-<host-short>`); replaces the advisory line (ghost-pod L2-auto)")
-    println("                                                         on success also prints `__MONITOR_HANDLE__={host,pid,log,tail_cmd}` JSON one-liner (grep '^__MONITOR_HANDLE__=' to extract; Monitor bridge)")
-    println("  cloud fire      <host> [--log <path>] [conn] [--env K=V] [--source P] [--early-life-check N] [--register [<jid>]] -- <argv...>   atomic nohup + auto-log + Monitor handle")
-    println("                                                         like nohup but logfile is OPTIONAL — defaults to /tmp/cloud-<unix_ts>.log on the remote when --log omitted, so caller does not have to invent + thread the path")
-    println("  cloud poll      <host> <pid> [conn]                    exit 0 if remote pid alive, else 1 (DEAD path also flips a PENDING ./pods.json row matching pid → FAIL; ghost-pod teardown auto-verdict)")
-    println("  cloud tail      <host> <logfile> [conn] [--grep RE] [--until RE]   live-stream a remote log (Monitor bridge)")
-    println("                                                         tail -F | sed -u: print --grep lines, terminal-first classify on default; explicit --until RE = legacy single block; follows forever if --until ''")
-    println("                                                         default 3-tier verdict (failure-first): exit 0 = DONE · exit 3 = TIMEOUT-RESUMABLE (Maximum CPU time/max_seconds — RESUME) · exit 4 = CRASHED (non-zero STOP/routine error/segfault/OOM)")
-    println("                                                         exit 255 = ssh transport drop · other = log truncated mid-stream (sed/tail pipe failed)")
-    println("  cloud watch     <host> <pid> [conn] [--interval N] [--max-wait S] [--then-down <id> [--provider P]]")
-    println("                                                         loop poll until pid dies (exit 0) / max-wait (124); optional teardown")
-    println("  cloud ssh-port  <id> [--provider P]                    print live ssh host:port of a pod (vast|runpod)")
-    println("  cloud resolve   <id> [--provider P]                    alias of ssh-port — pod-id → ssh host:port for run/copy-to")
-    println("  cloud copy-to   <host> <local> <remote> [conn] [-r] [--verify-sha]  upload file/dir (scp; -r=tree; sha256 check)")
-    println("  cloud copy-from <host> <remote> <local> [conn] [--resume] [--verify-sha]  download (scp; --resume=rsync; sha256 check)")
-    println("  cloud orphans   [--hours N]                            list tracked pods, flag stale (>N h, default 6)")
-    println("  cloud reconcile                                        cross-ref registry vs provider: ORPHAN/GHOST/OK")
-    println("  cloud reap      [--provider P] [--apply]               M6: orphans alive on provider but absent from M5 registry · bare=dry-run · --apply=destroy")
-    println("  cloud adopt     <pod_id> [--purpose TEXT] [--project NAME]  track an untracked (ORPHAN) pod (stamps M5 project/purpose for the down-guard)")
-    println("  cloud attribute <pod_id> --project NAME [--purpose TEXT]     re-stamp project/purpose on an ALREADY-tracked pod (distinct from adopt-for-orphans)")
-    println("  cloud forget    <pod_id|ssh-form|ip|alias>             (legacy — use `cloud rm` instead) mark a tracked (GHOST) pod status=closed")
-    println("  cloud watchdog  [--threshold-min N] [--util-cap-pct N] [--kill]  idle-pod autokill sweep (DRY-RUN default)")
-    println("                                                         COMPOSITE idle = uptime≥thr(min,def 60) AND util≤cap(%,def 5) AND no-compute-proc AND no-workdir — a slow-but-working pod (compute proc present) is NEVER killed")
-    println("                                                         also cross-refs ./pods.json budget.cap: on breach → alert + (with --kill) tear down the lowest-value running pod (g64 honor-cap)")
-    println("                                                         bare = DRY-RUN table (pod·age·util·has-proc·has-workdir·idle?·action); --kill enforces (needs RUNPOD_API_KEY / vast key)")
-    println("  cloud dft-run   <deck-dir> [--go] [--bin-pack] [--query Q] [--walltime-h N] [--identity P] [--image I] [--disk G] [--owner T]")
-    println("  cloud parallel-audit --physcores N --live-jobs N --ranks-per-job N --queued-decks N  (d_parallel_fire 위반 가드 — VIOLATION→exit1+split 제안)")
-    println("                                                         guarded DFT el-ph (QE) dispatch; PREVIEW ($0) unless --go. deck: relax.in·ph.in·scf.in.head·scf.in.tail·pseudo/")
-    println("  cloud pods                                              full work table from cwd's ./pods.json (per-project active pod/job manifest)")
-    println("  cloud dispatch [tree|active|add|verdict|rm]            manage ./pods.json (update-form): bare = full table")
-    println("    add     <job-id> <pod-id> <dir> [--host=H --provider=P --kind=K --stage=S --pid=N --watcher=W --watcher-output=P --verdict=V]")
-    println("    verdict <job-id> <status>                            rewrite verdict + verdict_utc only (preserve other fields)")
-    println("    rm      <job-id|pod-id>                              delete (refuses pod rm while jobs are still pinned)")
-    println("    active                                               only verdict=PENDING jobs")
-    println("    tree                                                 pod-grouped ASCII (orphan jobs at tail)")
-    println("                                                         (distinct from `cloud orphans` — that scans GLOBAL ~/.hexa-cloud/pods.jsonl billing/orphan registry; `pods`/`dispatch` is the per-project work view)")
-    println("  cloud help | version")
+    _cloud_help_render_roster()
     println("")
     println("connection flags [conn] (before `--`):")
     println("  --port <n>      ssh to a non-22 port (RunPod / vast.ai)")
@@ -1621,7 +1598,7 @@ fn main() {
     while i < len(av) {
         let t = av[i]
         if si < 0 {
-            if t == "rent" || t == "up" || t == "rm" || t == "down" || t == "destroy" || t == "list" || t == "status" || t == "preflight" || t == "watchdog" || t == "run" || t == "exec" || t == "nohup" || t == "fire" || t == "poll" || t == "tail" || t == "watch" || t == "ssh-port" || t == "resolve" || t == "copy-to" || t == "copy-from" || t == "orphans" || t == "reconcile" || t == "reap" || t == "adopt" || t == "attribute" || t == "forget" || t == "dft-run" || t == "parallel-audit" || t == "pods" || t == "dispatch" || t == "providers" || t == "help" || t == "--help" || t == "-h" || t == "version" || t == "--version" || t == "-v" {
+            if t == "rent" || t == "up" || t == "rm" || t == "down" || t == "destroy" || t == "reboot" || t == "list" || t == "status" || t == "preflight" || t == "watchdog" || t == "run" || t == "exec" || t == "nohup" || t == "fire" || t == "poll" || t == "tail" || t == "watch" || t == "ssh-port" || t == "resolve" || t == "copy-to" || t == "copy-from" || t == "orphans" || t == "reconcile" || t == "reap" || t == "adopt" || t == "attribute" || t == "forget" || t == "dft-run" || t == "parallel-audit" || t == "pods" || t == "dispatch" || t == "providers" || t == "help" || t == "--help" || t == "-h" || t == "version" || t == "--version" || t == "-v" {
                 si = i
                 sub = t
             }
