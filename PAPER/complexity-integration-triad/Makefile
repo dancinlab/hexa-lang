@@ -18,7 +18,7 @@
 #   make distclean     also remove the PDF
 
 DOC = main
-LATEX = xelatex -interaction=nonstopmode -halt-on-error
+LATEX = pdflatex -interaction=nonstopmode -halt-on-error
 BIBTEX = bibtex
 PYTHON = python3
 SLUG := $(notdir $(CURDIR))
