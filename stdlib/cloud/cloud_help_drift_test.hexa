@@ -1,0 +1,158 @@
+// @ci_gate — pure · network-free · deterministic
+// stdlib/cloud/cloud_help_drift_test.hexa — command<->help drift guard.
+//
+// Root-fix binding for PR #2317 (bare `hexa cloud` printed a stale help
+// missing lifecycle verbs). Three rosters that historically drifted:
+//   (1) the dispatch SSOT  — cloud_cli.hexa main() guard `if t == "rent" ||…`
+//   (2) the help registry  — cloud_commands.tape (what `cloud help` renders)
+//   (3) the inline safety   — self/main.hexa inline cloud help fallback
+//
+// PASS iff (1) == (2) as sets AND every (1) verb is named in (3). On any
+// mismatch the test prints the missing/extra verbs verbatim and exits 1, so
+// a verb added to dispatch without the registry (or vice versa) FAILS.
+//
+// (1) and (2) are parsed from the LIVE source/registry — not hand-mirrored —
+// so the guard cannot itself silently drift.
+//
+// Run:  hexa run stdlib/cloud/cloud_help_drift_test.hexa
+// PASS: exits 0, prints "cloud_help_drift_test PASS".
+
+fn read_file(path: str) -> str {
+    return exec("cat " + path + " 2>/dev/null")
+}
+
+// Aliases the dispatcher accepts but that are NOT roster verbs (they map onto
+// a canonical verb). Excluded from the dispatch verb set so the comparison is
+// against the canonical roster the help renders.
+fn _is_alias(v: str) -> bool {
+    return v == "up" || v == "status" || v == "destroy"
+        || v == "--help" || v == "-h"
+        || v == "--version" || v == "-v"
+}
+
+// Parse the dispatch guard: the single `if t == "x" || t == "y" || ...` line
+// in cloud_cli.hexa main(). Returns the canonical verb set (aliases dropped).
+fn _dispatch_verbs() -> [str] {
+    let src = read_file("stdlib/cloud/cloud_cli.hexa")
+    let lines = src.split("\n")
+    let mut out = []
+    let mut i = 0
+    while i < len(lines) {
+        let line = lines[i]
+        i = i + 1
+        // the guard line contains many `t == "..."` tokens
+        if !line.contains("if t == \"rent\"") {
+            continue
+        }
+        // split on the `t == "` marker; each tail starts with the verb then `"`
+        let parts = line.split("t == \"")
+        let mut j = 1
+        while j < len(parts) {
+            let seg = parts[j]
+            let close = seg.split("\"")
+            let v = close[0]
+            if len(v) > 0 {
+                if !_is_alias(v) {
+                    out.push(v)
+                }
+            }
+            j = j + 1
+        }
+        return out
+    }
+    return out
+}
+
+// Parse @cmd <name> tokens from cloud_commands.tape (the help registry).
+fn _registry_verbs() -> [str] {
+    let raw = read_file("stdlib/cloud/cloud_commands.tape")
+    let lines = raw.split("\n")
+    let mut out = []
+    let mut i = 0
+    while i < len(lines) {
+        let line = lines[i]
+        i = i + 1
+        if !line.starts_with("@cmd ") {
+            continue
+        }
+        let rest = line.substring(5, len(line))
+        let parts = rest.split(" :=")
+        if len(parts) < 1 {
+            continue
+        }
+        let name = parts[0].trim()
+        if len(name) > 0 {
+            out.push(name)
+        }
+    }
+    return out
+}
+
+fn _has(xs: [str], needle: str) -> bool {
+    let mut i = 0
+    while i < len(xs) {
+        if xs[i] == needle {
+            return true
+        }
+        i = i + 1
+    }
+    return false
+}
+
+fn main() {
+    let dispatch = _dispatch_verbs()
+    let registry = _registry_verbs()
+    let inline = read_file("self/main.hexa")
+
+    let mut fails = 0
+
+    if len(dispatch) == 0 {
+        println("DRIFT: could not parse dispatch guard from cloud_cli.hexa")
+        fails = fails + 1
+    }
+    if len(registry) == 0 {
+        println("DRIFT: could not parse @cmd roster from cloud_commands.tape")
+        fails = fails + 1
+    }
+
+    // (1) every dispatched verb is in the registry
+    let mut i = 0
+    while i < len(dispatch) {
+        let v = dispatch[i]
+        if !_has(registry, v) {
+            println("DRIFT: dispatched verb missing from cloud_commands.tape — " + v)
+            fails = fails + 1
+        }
+        i = i + 1
+    }
+    // (2) every registry verb is dispatched
+    i = 0
+    while i < len(registry) {
+        let v = registry[i]
+        if !_has(dispatch, v) {
+            println("DRIFT: registry verb not in dispatch guard — " + v)
+            fails = fails + 1
+        }
+        i = i + 1
+    }
+    // (3) every dispatched verb is named in the self/main.hexa inline help
+    if len(inline) > 0 {
+        i = 0
+        while i < len(dispatch) {
+            let v = dispatch[i]
+            if !inline.contains(v) {
+                println("DRIFT: dispatched verb absent from self/main.hexa inline help — " + v)
+                fails = fails + 1
+            }
+            i = i + 1
+        }
+    }
+
+    if fails == 0 {
+        println("PASS: cloud command<->help registry in sync — " + to_string(len(dispatch)) + " verbs (dispatch == cloud_commands.tape; all in inline safety-net)")
+        println("cloud_help_drift_test PASS")
+        exit(0)
+    }
+    println("FAIL: " + to_string(fails) + " cloud command<->help drift(s) above")
+    exit(1)
+}
