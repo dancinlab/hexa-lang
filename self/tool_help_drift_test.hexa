@@ -1,0 +1,76 @@
+// @ci_gate — pure · network-free · deterministic
+// self/tool_help_drift_test.hexa — tool-drawer command<->help drift guard.
+//
+// Binds the tool-drawer verb roster across its surfaces to the single in-source
+// SSOT self/tool_commands::tool_commands():
+//
+//   (A) the COMMANDS SSOT     — tool_commands() (IMPORTED, compiled in)
+//   (B) the absorbed dispatch  — self/main.hexa `_absorbed_script` returns a
+//                                non-empty path for the verb (is_absorbed_verb)
+//   (C) the per-verb renderer  — cmd_absorbed_help renders from
+//                                tool_command_lookup (no hand-typed body)
+//   (D) the drawer index       — cmd_tool_list derives EXTERNAL/ANNOTATOR/AUDIT
+//                                family lines from tool_commands (_tool_group_line)
+//
+// PASS iff every (A) verb has an `_absorbed_script` entry in (B), AND
+// cmd_absorbed_help renders from the SSOT in (C), AND cmd_tool_list derives its
+// families from the SSOT in (D). A tool verb added to the SSOT without an
+// _absorbed_script mapping (or a hand-typed help/family list sneaking back)
+// FAILS green.
+//
+// Run:  hexa run self/tool_help_drift_test.hexa
+// PASS: exits 0, prints "tool_help_drift_test PASS".
+
+use "self/tool_commands"
+
+fn _read_src(path: str) -> str {
+    return exec("cat " + path + " 2>/dev/null")
+}
+
+fn main() {
+    let registry = tool_command_names()
+    let src = _read_src("self/main.hexa")
+
+    let mut fails = 0
+
+    if len(registry) == 0 {
+        println("DRIFT: tool_commands() roster is empty")
+        fails = fails + 1
+    }
+    if len(src) == 0 {
+        println("DRIFT: could not read self/main.hexa")
+        fails = fails + 1
+    }
+
+    // (A==B) every tool verb has an _absorbed_script mapping.
+    let mut i = 0
+    while i < len(registry) {
+        let v = registry[i]
+        if !src.contains("verb == \"" + v + "\"") {
+            println("DRIFT: tool_commands() verb has no _absorbed_script mapping — " + v)
+            fails = fails + 1
+        }
+        i = i + 1
+    }
+
+    // (C) cmd_absorbed_help renders from the SSOT (calls tool_command_lookup).
+    if len(src) > 0 {
+        if !src.contains("tool_command_lookup(verb)") {
+            println("DRIFT: cmd_absorbed_help does not render from tool_commands() — a hand-typed tool help body may have drifted back in")
+            fails = fails + 1
+        }
+        // (D) cmd_tool_list derives its families from the SSOT.
+        if !src.contains("_tool_group_line(") {
+            println("DRIFT: cmd_tool_list does not derive its family lines from tool_commands() — a hand-typed family list may have drifted back in")
+            fails = fails + 1
+        }
+    }
+
+    if fails == 0 {
+        println("PASS: tool command<->help registry in sync — " + to_string(len(registry)) + " verbs (tool_commands == _absorbed_script; cmd_absorbed_help + cmd_tool_list render from SSOT)")
+        println("tool_help_drift_test PASS")
+        exit(0)
+    }
+    println("FAIL: " + to_string(fails) + " tool command<->help drift(s) above")
+    exit(1)
+}

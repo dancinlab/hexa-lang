@@ -1,0 +1,129 @@
+// self/tool_commands.hexa — the SINGLE in-source SSOT for the hexa TOOL-DRAWER
+// verb roster (name · group · summary · arg-shape).
+//
+// ARCHITECTURE (mirrors self/core_commands.hexa + the cloud pilot): one
+// in-binary hexa array literal `tool_commands()` is the truth for the absorbed
+// tool-drawer verbs that are NOT core (S1), stdlib-CLI (S2) or discovery (S3).
+// It covers three families:
+//   audit    — Phase-2/science verifiers + atlas audits + HW probe
+//              (honesty·absolute·meta-closure·lattice·atlas-audit·atlas-verify·
+//               repo-audit-taxonomy·akida)
+//   external — δ-pattern data bridges (codata·oeis·arxiv·… — try-live-or-cache)
+//   annot    — the 29 AST-based annotation analyzers (tool/hexa_annot/hexa-<n>)
+//
+// cmd_tool_list (the `hexa tool` drawer index) derives its family verb lines
+// from THIS array; cmd_absorbed_help renders each verb's per-verb help from it.
+// The absorbed dispatch (_absorbed_script) is bound to it by
+// self/tool_help_drift_test.hexa. NO `.tape`, NO codegen, NO hash guard, NO
+// runtime read_file in the help path — compiles INTO the binary.
+
+use "self/core_commands"   // reuse the shared `Cmd` struct (name·group·summary·args)
+
+fn tool_commands() -> [Cmd] {
+    return [
+        // ── audit — verifiers / atlas audits / HW probe ──────────────────
+        Cmd { name: "honesty", group: "audit", args: "<file>",
+            summary: "AUDIT — over-claim / honesty verifier (BT-AI2 audit surface)." },
+        Cmd { name: "absolute", group: "audit", args: "<file>",
+            summary: "AUDIT — absolute-claim verifier (no unfenced superlatives)." },
+        Cmd { name: "meta-closure", group: "audit", args: "<file>",
+            summary: "AUDIT — meta-closure verifier (claim-graph terminality)." },
+        Cmd { name: "lattice", group: "audit", args: "<verify|axis-table|cross-check>",
+            summary: "SCIENCE — n=6 lattice math (pure-math axis tables · cross-check)." },
+        Cmd { name: "atlas-audit", group: "audit", args: "<external-entity|anchor|all>",
+            summary: "AUDIT — overlay-corpus atlas audit (hexa-matter doctrine gate)." },
+        Cmd { name: "atlas-verify", group: "audit", args: "[--domain D]",
+            summary: "AUDIT — atlas verdict ledger (Stage 1+2+3 hexa-native)." },
+        Cmd { name: "repo-audit-taxonomy", group: "audit", args: "<catalog.md> <manifest.toml> [<root>]",
+            summary: "AUDIT — repo taxonomy / catalog-vs-manifest audit." },
+        Cmd { name: "akida", group: "audit", args: "[args]",
+            summary: "EXTERNAL — Akida neuromorphic HW probe." },
+
+        // ── external — δ-pattern data bridges (try-live-or-cache) ─────────
+        Cmd { name: "codata", group: "external", args: "<query|id>", summary: "EXTERNAL data bridge — fetch from codata and verify against the source." },
+        Cmd { name: "oeis", group: "external", args: "<query|id>", summary: "EXTERNAL data bridge — fetch from oeis and verify against the source." },
+        Cmd { name: "arxiv", group: "external", args: "<query|id>", summary: "EXTERNAL data bridge — fetch from arxiv and verify against the source." },
+        Cmd { name: "gw", group: "external", args: "<query|id>", summary: "EXTERNAL data bridge — fetch from gw and verify against the source." },
+        Cmd { name: "horizons", group: "external", args: "<query|id>", summary: "EXTERNAL data bridge — fetch from horizons and verify against the source." },
+        Cmd { name: "cmb", group: "external", args: "<query|id>", summary: "EXTERNAL data bridge — fetch from cmb and verify against the source." },
+        Cmd { name: "nanograv", group: "external", args: "<query|id>", summary: "EXTERNAL data bridge — fetch from nanograv and verify against the source." },
+        Cmd { name: "simbad", group: "external", args: "<query|id>", summary: "EXTERNAL data bridge — fetch from simbad and verify against the source." },
+        Cmd { name: "icecube", group: "external", args: "<query|id>", summary: "EXTERNAL data bridge — fetch from icecube and verify against the source." },
+        Cmd { name: "nist-atomic", group: "external", args: "<query|id>", summary: "EXTERNAL data bridge — fetch from nist-atomic and verify against the source." },
+        Cmd { name: "wikipedia", group: "external", args: "<query|id>", summary: "EXTERNAL data bridge — fetch from wikipedia and verify against the source." },
+        Cmd { name: "openalex", group: "external", args: "<query|id>", summary: "EXTERNAL data bridge — fetch from openalex and verify against the source." },
+        Cmd { name: "gaia", group: "external", args: "<query|id>", summary: "EXTERNAL data bridge — fetch from gaia and verify against the source." },
+        Cmd { name: "lhc", group: "external", args: "<query|id>", summary: "EXTERNAL data bridge — fetch from lhc and verify against the source." },
+        Cmd { name: "pubchem", group: "external", args: "<query|id>", summary: "EXTERNAL data bridge — fetch from pubchem and verify against the source." },
+        Cmd { name: "uniprot", group: "external", args: "<query|id>", summary: "EXTERNAL data bridge — fetch from uniprot and verify against the source." },
+
+        // ── annot — 29 AST-based annotation analyzers ────────────────────
+        Cmd { name: "pure-check", group: "annot", args: "<file.hexa>", summary: "ANNOTATOR — source-analysis tool (see `hexa tool list`)." },
+        Cmd { name: "memo-check", group: "annot", args: "<file.hexa>", summary: "ANNOTATOR — source-analysis tool (see `hexa tool list`)." },
+        Cmd { name: "catalog", group: "annot", args: "<file.hexa>", summary: "ANNOTATOR — source-analysis tool (see `hexa tool list`)." },
+        Cmd { name: "readme", group: "annot", args: "<file.hexa>", summary: "ANNOTATOR — source-analysis tool (see `hexa tool list`)." },
+        Cmd { name: "doc", group: "annot", args: "<file.hexa>", summary: "ANNOTATOR — source-analysis tool (see `hexa tool list`)." },
+        Cmd { name: "codegen-hints", group: "annot", args: "<file.hexa>", summary: "ANNOTATOR — source-analysis tool (see `hexa tool list`)." },
+        Cmd { name: "distill", group: "annot", args: "<file.hexa>", summary: "ANNOTATOR — source-analysis tool (see `hexa tool list`)." },
+        Cmd { name: "effect-map", group: "annot", args: "<file.hexa>", summary: "ANNOTATOR — source-analysis tool (see `hexa tool list`)." },
+        Cmd { name: "intent-map", group: "annot", args: "<file.hexa>", summary: "ANNOTATOR — source-analysis tool (see `hexa tool list`)." },
+        Cmd { name: "meta-map", group: "annot", args: "<file.hexa>", summary: "ANNOTATOR — source-analysis tool (see `hexa tool list`)." },
+        Cmd { name: "phi-map", group: "annot", args: "<file.hexa>", summary: "ANNOTATOR — source-analysis tool (see `hexa tool list`)." },
+        Cmd { name: "struct-layout", group: "annot", args: "<file.hexa>", summary: "ANNOTATOR — source-analysis tool (see `hexa tool list`)." },
+        Cmd { name: "self-aware", group: "annot", args: "<file.hexa>", summary: "ANNOTATOR — source-analysis tool (see `hexa tool list`)." },
+        Cmd { name: "cognitive", group: "annot", args: "<file.hexa>", summary: "ANNOTATOR — source-analysis tool (see `hexa tool list`)." },
+        Cmd { name: "freedom", group: "annot", args: "<file.hexa>", summary: "ANNOTATOR — source-analysis tool (see `hexa tool list`)." },
+        Cmd { name: "infer", group: "annot", args: "<file.hexa>", summary: "ANNOTATOR — source-analysis tool (see `hexa tool list`)." },
+        Cmd { name: "learn", group: "annot", args: "<file.hexa>", summary: "ANNOTATOR — source-analysis tool (see `hexa tool list`)." },
+        Cmd { name: "safety", group: "annot", args: "<file.hexa>", summary: "ANNOTATOR — source-analysis tool (see `hexa tool list`)." },
+        Cmd { name: "antivirus", group: "annot", args: "<file.hexa>", summary: "ANNOTATOR — source-analysis tool (see `hexa tool list`)." },
+        Cmd { name: "serve", group: "annot", args: "<file.hexa>", summary: "ANNOTATOR — source-analysis tool (see `hexa tool list`)." },
+        Cmd { name: "tenant", group: "annot", args: "<file.hexa>", summary: "ANNOTATOR — source-analysis tool (see `hexa tool list`)." },
+        Cmd { name: "eval-run", group: "annot", args: "<file.hexa>", summary: "ANNOTATOR — source-analysis tool (see `hexa tool list`)." },
+        Cmd { name: "n6-list", group: "annot", args: "<file.hexa>", summary: "ANNOTATOR — source-analysis tool (see `hexa tool list`)." },
+        Cmd { name: "test-list", group: "annot", args: "<file.hexa>", summary: "ANNOTATOR — source-analysis tool (see `hexa tool list`)." },
+        Cmd { name: "schema", group: "annot", args: "<file.hexa>", summary: "ANNOTATOR — source-analysis tool (see `hexa tool list`)." },
+        Cmd { name: "law-link", group: "annot", args: "<file.hexa>", summary: "ANNOTATOR — source-analysis tool (see `hexa tool list`)." },
+        Cmd { name: "harness", group: "annot", args: "<file.hexa>", summary: "ANNOTATOR — source-analysis tool (see `hexa tool list`)." },
+        Cmd { name: "rule", group: "annot", args: "<file.hexa>", summary: "ANNOTATOR — source-analysis tool (see `hexa tool list`)." },
+        Cmd { name: "gate-register", group: "annot", args: "<file.hexa>", summary: "ANNOTATOR — source-analysis tool (see `hexa tool list`)." }
+    ]
+}
+
+fn tool_command_names() -> [str] {
+    let cmds = tool_commands()
+    let mut out = []
+    let mut i = 0
+    while i < len(cmds) {
+        out.push(cmds[i].name)
+        i = i + 1
+    }
+    return out
+}
+
+// tool_command_lookup — Cmd row for `verb`, or name "" sentinel if absent.
+fn tool_command_lookup(verb: str) -> Cmd {
+    let cmds = tool_commands()
+    let mut i = 0
+    while i < len(cmds) {
+        if cmds[i].name == verb {
+            return cmds[i]
+        }
+        i = i + 1
+    }
+    return Cmd { name: "", group: "", summary: "", args: "" }
+}
+
+// tool_names_in_group — the verb names in render order for one family group.
+fn tool_names_in_group(group: str) -> [str] {
+    let cmds = tool_commands()
+    let mut out = []
+    let mut i = 0
+    while i < len(cmds) {
+        if cmds[i].group == group {
+            out.push(cmds[i].name)
+        }
+        i = i + 1
+    }
+    return out
+}
