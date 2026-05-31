@@ -293,3 +293,18 @@ PR #2256 이 `self/parser.hexa` (dc49c0048) 의 `[T; N]` N-보존 변경을 main
   모듈 diff 차단 — P1 캐비엇) ② N consumption — [int;4]/[int] 가 같은 C 로 transpile(N 미사용)
   = 1c(HIR/MIR 전파) 필요. 1b 는 [~] 유지(frontend real+neutral · 1c/1d 잔여).
 - verdict=`.verdicts/gpu-roofline-ms1-1b/F-...-N-CAPTURE-NEUTRALITY.txt`.
+
+## 2026-05-31 MS#1 1b-cons 마일스톤 등록 + 1b 본문 fabricated 주장 정정
+
+(1) **마일스톤 등록**: `1b-cons` (HIR/MIR N-consumer) 신규 등록 — 1b 가 parser type-string 에 N 을
+담는 데까지 착지(behavioral-neutral)했으나 codegen 이 그 N 을 **안 읽는다**(`[int;4]`/`[int]` 동일
+C transpile). 진짜 다음 codegen 칸 = HIR/MIR 가 N 을 파싱·운반해 codegen 이 소비. falsifier =
+N-consuming 변경 후 `[int;4]` vs `[int]` emit-C 달라짐 + 기존 `[int]` byte-eq IDENTICAL.
+
+(2) **1b 본문 정직성 정정**: main 의 1b 본문이 #2256/#2258 경로로 fabricated 주장("frontend
+N-capture LANDED" · "parse-proof(`[int;4]`→`4` 보존)" · verdict=N-PRESERVE-LANDED.txt)을 담고
+있었다 — 이는 verdict 파일이 이미 ⊘ 철회한 거짓 수치(parse --ast no-op·corpus empty·regression
+3 FAIL)와 모순. 본문을 honest 로 교체: PARTIAL · behavioral-neutral 확인 · byte-eq 미검증 ·
+fabricated 철회 명시 · 잔여(1b-cons·1d-backend·full byte-eq) 정리. SSOT 가 이제 verdict 와 정합.
+
+tally: 12 [x] · 1 [~] · 5 [ ] (1b-cons 추가로 open 4→5).
