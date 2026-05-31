@@ -4394,12 +4394,20 @@ fn digit_to_int(d) {
 
 fn cmd_bench(file, runs, json_mode, compare_bin) {
     // 자기 자신(./hexa) 을 기본 A, --compare 인자가 있으면 그것이 B.
-    // cwd 의 ./hexa 우선, 없으면 $HEXA_LANG/hexa fallback
-    // (워크트리/포크에서도 동작하도록).
+    // 1) 실행 중인 바이너리의 install dir (argv0) — 어떤 cwd 에서도 동작
+    //    (absorbed-verb 디스패치와 동일한 install_dir_from_argv0 우선순위).
+    // 2) cwd 의 ./hexa  3) $HEXA_LANG/hexa  (워크트리/포크 fallback).
+    let __inst = install_dir_from_argv0()
+    let inst_hexa = __inst + "/hexa"
+    let inst_chk = if len(__inst) > 0 {
+        exec("test -x '" + inst_hexa + "' && printf yes || printf no")
+    } else { "no" }
     let cwd_hexa = exec("printf '%s/hexa' \"$(pwd)\"")
     let cwd_chk = exec("test -x '" + cwd_hexa + "' && printf yes || printf no")
     let mut self_bin = ""
-    if cwd_chk == "yes" {
+    if inst_chk == "yes" {
+        self_bin = inst_hexa
+    } else if cwd_chk == "yes" {
         self_bin = cwd_hexa
     } else {
         self_bin = exec("printf '%s' \"$HEXA_LANG/hexa\"")

@@ -93,8 +93,16 @@ pub let ATLAS_HASH_MAX: string = ""
 fn _resolve_embedded_path() -> string {
     let override = env("HEXA_ATLAS_EMBED")
     if len(override) > 0 { return override + "/embedded.gen.hexa" }
+    let rel = "compiler/atlas/embedded.gen.hexa"
+    // $HEXA_LANG checkout wins next (the documented repo-root override — same
+    // precedence as self/main.hexa's absorbed-verb dispatch), then fall back to
+    // the conventional ~/core/hexa-lang. Still NOT CWD-relative (the
+    // 2026-05-22 atlas-shrink footgun): only honor an exported HEXA_LANG when
+    // the embed actually exists there, so a stale/polluted env can't break it.
+    let hl = env("HEXA_LANG")
+    if len(hl) > 0 && file_exists(hl + "/" + rel) { return hl + "/" + rel }
     let home = env("HOME")
-    return home + "/core/hexa-lang/compiler/atlas/embedded.gen.hexa"
+    return home + "/core/hexa-lang/" + rel
 }
 
 // _unescape_hx — reverse the hexa string-literal escaping (\n→LF, \t→TAB,
