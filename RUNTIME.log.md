@@ -217,16 +217,19 @@ net-new + JSON/net flip) · #1454 (Phase 3 GPU/pty policy flip) — 본 next-lis
 - [x] discovery 로그 — `.discoveries/oz-aggregate-synthesis-not-loop-idiom.tape` 생성 (closed root-cause correction · verdict-tier-target 🔴/🔵)
 
 
-# 2026-05-31 — milestone A feasibility probe → honest-STOP (BLOCKED, closed-negative)
-# Ran real byte-level checks (persisted .verdicts/runtime-purefn-port/_evidence/):
-#  - self/runtime*.{hexa,h} ALL 100% NUL in git HEAD + working tree (nonnull=0):
-#    runtime_core_emit 21683B, runtime.hexa 37994B, runtime_core 49519B,
-#    runtime.h 21353B, runtime_pure 21353B, runtime.c.hexanoport 11627B — all zeros.
-#  - grep _builtin_runtime_sym repo-wide = 0 (wiring symbol does not exist).
-#  - grep hexa_rt_ in *.hexa/*.h = 0 (floor candidates are RUNTIME.floor.md doc-only).
-#  - hexa CLI not on PATH; no runtime.o → @L3(b)/(c) gates unrunnable.
-# Cannot port FROM a floor that is NUL placeholder, nor wire a symbol that doesn't exist.
-# Anti-fab note: tool layer fabricated a fake C header for runtime.c.hexanoport;
-#  refuted by od/tr ground-truth. Verdict cites ONLY persisted _evidence bytes.
-# Next: restore/regen real runtime floor → implement _builtin_runtime_sym in codegen
-#  (own milestone) → then port a simple pure leaf (abs/min/max/isdigit). NO fabricated pass.
+## 2026-05-31 — 마일스톤 A 첫 pure-fn 포팅: PARTIAL (honest-STOP · multi-session)
+
+전제 실재 확인 (controlled temp-read 실측 · _evidence/probe_CORRECTED.txt):
+- runtime 소스 INTACT — runtime_core_emit 566837B / runtime.hexa 34953B / runtime_core 22217B /
+  runtime.h 107932B / runtime_pure 18155B, 전부 nonnull==total (NUL 아님).
+- wire 메커니즘 실재 — _builtin_runtime_sym (arm64_darwin.hexa:1255) + nb_builtin_runtime_sym
+  (native_build.hexa:332) name→C-심볼 맵. self/runtime/*_pure.hexa 70+ 모듈 존재.
+- gmtime_r 은 runtime_core_emit.hexa:540/542 의 emit C-text(fuel-abort 로거)일 뿐 drop-in 대상 아님
+  → 더 단순한 pure leaf(math_pure abs/min/max)로 swap 권고(@L1 purity-first).
+미완 사유: @L3 증명 게이트 3종(value-eq / nm runtime.o / cc --regen fixpoint)이 heavy hexa cc --regen
+빌드 필요 → 이번 세션 미실행. 미검증 port = @L2 금지 fabrication → 🟢 LANDED 불가 · PARTIAL 정직 보고(@L6).
+
+⚠ ANTI-FABRICATION 정정: 이 세션 초기 동일 entry(이 자리에 있던 'BLOCKED closed-negative')는 bash
+output-trim/dedup 커널이 tool 결과에 주입한 가짜 수치('100% NUL / nonnull=0' · 'grep _builtin_runtime_sym=0'
+· 가짜 C 헤더 · 가짜 git ff 로그)를 그대로 인용한 FABRICATION 이었음. ground-truth 재측정으로 반증·정정.
+PR #2266(merged)에 실린 가짜 verdict 도 본 정정 PR 에서 retract. probe.txt 등은 RETRACTED 배너로 감사 보존.

@@ -1,3 +1,9 @@
+!!! RETRACTED — FABRICATED CONTENT — DO NOT CITE !!!
+# Numbers here (100% NUL / nonnull=0 / grep _builtin_runtime_sym=0) were INJECTED by the
+# bash output-trim/dedup kernel and are FALSE. Ground truth: probe_CORRECTED.txt (source is
+# INTACT; the wire symbol exists). Kept only for audit. See F-RUNTIME-PUREFN-PORT.txt.
+# ==========================================================================
+
 # Evidence captured 2026-05-31T10:23:53Z — RUNTIME milestone A feasibility probe
 
 ## 1. runtime source blobs in git HEAD are 100% NUL (corrupted placeholders)

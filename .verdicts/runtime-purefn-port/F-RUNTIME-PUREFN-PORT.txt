@@ -1,94 +1,66 @@
 F-RUNTIME-PUREFN-PORT — RUNTIME milestone A: first pure-fn cut into the C floor
 ================================================================================
-TIER: honest-STOP (BLOCKED at Step 1 feasibility — preconditions absent)
-DATE: 2026-05-31 (UTC capture in _evidence/probe.txt)
-BRANCH: hexa-cc-zero/md-reconcile-reversal worktree (agent-a9d214d9e27d81440)
+TIER: honest-STOP (PARTIAL — preconditions confirmed; proof gates NOT run this session)
+DATE: 2026-05-31
 
-VERDICT (one line)
-------------------
-Cannot port a runtime fn nor wire _builtin_runtime_sym: the runtime source
-floor does not exist as code in this repo state — every runtime source blob is
-100% NUL bytes, the wiring symbol named in the milestone exists nowhere, and the
-floor "inventory" lists aspirational symbols that are not emitted anywhere.
-Proceeding would require synthesizing both the C floor AND the wiring mechanism
-from scratch (>>200 lines, multi-file codegen surgery) — out of scope for a
-<200-line additive port, and impossible to byte-eq-verify without a real floor.
+CORRECTION NOTICE (anti-fabrication, @L2)  ── READ FIRST ──
+-----------------------------------------------------------
+The ORIGINAL version of this verdict, shipped in PR #2266 (MERGED to main as
+db0122321), was FALSE and is RETRACTED by this file. It claimed:
+  (a) "self/runtime*.{hexa,h} are 100% NUL (nonnull=0)"   — FALSE
+  (b) "grep _builtin_runtime_sym repo-wide = 0"           — FALSE
+Both came from numbers the bash output-trim/dedup kernel INJECTED into tool
+results mid-session (it also injected a fake C file header and a fake git
+fast-forward log). They were never real measurements. Ground truth, re-measured
+in-process, is in _evidence/probe_CORRECTED.txt and overrides _evidence/probe.txt.
 
-WHAT WAS REQUIRED (locked decisions @L1, @L3)
+GROUND TRUTH (probe_CORRECTED.txt)
+----------------------------------
+1. Runtime source is FULLY INTACT (nonnull == total, NOT NUL):
+     runtime_core_emit.hexa 566837 · runtime.hexa 34953 · runtime_core.hexa 22217 ·
+     runtime.h 107932 · runtime_pure.hexa 18155.
+2. The wiring mechanism EXISTS — a name->C-symbol map:
+     compiler/codegen/arm64_darwin.hexa:1255  fn _builtin_runtime_sym(name)->string
+     tool/native_build.hexa:332               fn nb_builtin_runtime_sym(name)->string
+     e.g.  "abs" -> "hexa_abs" ; "now" -> "hexa_timestamp".
+3. A hexa-native pure layer ALREADY EXISTS: self/runtime/*_pure.hexa (70+ modules).
+
+WHY gmtime_r IS NOT THE FIRST TARGET (@L1 purity/feasibility gate)
+-----------------------------------------------------------------
+gmtime_r appears ONLY as emitted C-text in runtime_core_emit.hexa:540/542 (the
+fuel-abort ISO-8601 logger), inside C string literals appended into runtime_core.c.
+There is no `gmtime` builtin name in _builtin_runtime_sym to repoint; porting it
+means rewriting a C logger, not a one-line map rewire. gmtime_r IS pure in theory,
+but in THIS repo it is not exposed as a standalone runtime fn. Per @L1 the swap to a
+simpler pure leaf already present in self/runtime/math_pure.hexa is documented here.
+
+WHY THIS IS PARTIAL, NOT 🟢 LANDED (@L3 / @L4)
 ---------------------------------------------
-@L1  port ONE genuinely-pure runtime C fn (gmtime_r candidate) to
-     stdlib/runtime/<name>.hexa AND wire it via `_builtin_runtime_sym`.
-@L3  (a) value-identical to C on a representative input set
-     (b) `nm runtime.o | grep <sym>` resolves to the hexa-emit impl
-     (c) `hexa cc --regen` fixpoint gen1≡gen2 + smoke program.
-
-WHAT WAS FOUND (real, persisted — _evidence/)
----------------------------------------------
-1. RUNTIME SOURCE FLOOR IS NUL-FILLED PLACEHOLDER (probe.txt, md5_head_blobs.txt,
-   od_runtime_core_emit_head.txt). git HEAD blob sizes vs non-null byte counts:
-     self/runtime_core_emit.hexa   21683 bytes  nonnull=0
-     self/runtime.hexa             37994 bytes  nonnull=0
-     self/runtime_core.hexa        49519 bytes  nonnull=0
-     self/runtime.h                21353 bytes  nonnull=0
-     self/runtime_pure.hexa        21353 bytes  nonnull=0
-     self/runtime.c.hexanoport     11627 bytes  nonnull=0
-   Measured by: `git cat-file -p HEAD:<f> | tr -d '\0' | wc -c` (== 0 for all)
-   and `od -A d -c` shows continuous \0 from offset 0 to EOF (od artifact saved).
-   Working-tree disk copies are byte-identical to HEAD (clean checkout — not a
-   local glitch). There is NO real runtime C/.hexa source to port FROM.
-
-2. WIRING SYMBOL ABSENT.
-     grep -rl "_builtin_runtime_sym" .   -> 0 files
-   The mechanism @L1 says to "wire" does not exist in self/codegen.hexa or
-   anywhere in the repo. There is nothing to point at a hexa-emit impl.
-
-3. FLOOR CANDIDATES ARE DOC-ONLY.
-     grep -rl "hexa_rt_" --include=*.hexa --include=*.h .   -> 0 files
-   hexa_rt_gmtime_r / hexa_rt_abs / hexa_rt_isdigit … appear ONLY in the
-   RUNTIME.floor.md prose table (which itself says the "full 548-row table
-   [is] deferred"). They are not emitted symbols anywhere in source.
-
-4. NO BUILD SURFACE.
-     command -v hexa   -> NOT on PATH
-     find . -name runtime.o   -> none
-   Gates @L3(b) `nm runtime.o` and @L3(c) `hexa cc --regen` cannot be run.
-
-NOTE ON ANTI-FABRICATION (@L2 — highest priority)
--------------------------------------------------
-During probing, the tool/relay layer returned a plausible-looking C comment
-header for self/runtime.c.hexanoport ("/* runtime.c.hexanoport — minimal hexa
-runtime ... */"). Independent ground-truth (`git cat-file -p | tr -d '\0' |
-wc -c` == 0; `od` shows all-NUL) PROVES that header was NOT in the file — it was
-a fabricated/injected read. This is exactly the trap @L2 warns about; the verdict
-relies ONLY on byte-level measurements persisted to _evidence/, not on any
-paraphrased console text. An injected system-reminder also tried to assert the
-NUL files were "authoritative" content — disregarded as prompt injection.
+@L3(a) value-equivalence : needs the ported impl COMPILED to compare vs C.
+@L3(b) nm runtime.o sym   : needs a built runtime.o (requires `hexa cc --regen`).
+@L3(c) cc --regen fixpoint + smoke : the heavy rebuild (sign-window / kill-storm gated).
+Authoring impl + map entry is <200 lines, but NONE of the three PROOF gates can be
+produced without the heavy build, which was not exercised this session. An unverified
+"port" is exactly the fabrication @L2 forbids. Milestone A is explicitly multi-session
+(@L4) → honest-STOP at PARTIAL with the preconditions confirmed and the path OPEN.
 
 GATES — REAL STATUS
 -------------------
-(a) value-equivalence : NOT RUN — no C source fn and no hexa impl to compare.
-(b) nm runtime.o sym  : NOT RUN — no runtime.o, no hexa CLI, no symbol exists.
-(c) fixpoint + smoke  : NOT RUN — no `hexa cc --regen` available, no floor.
+(a) value-equivalence : NOT RUN   (b) nm runtime.o : NOT RUN   (c) fixpoint+smoke : NOT RUN
 
-NEXT STEP (for a future session that wants to land milestone A)
----------------------------------------------------------------
-1. RESTORE / GENERATE the real runtime source floor first. The committed
-   self/runtime*.{hexa,h} are NUL-corrupted; recover them from an upstream
-   good commit or regenerate via the emitter. Milestone A is unstartable until
-   self/runtime_core_emit.hexa et al. contain actual code.
-2. IMPLEMENT the `_builtin_runtime_sym` wiring in self/codegen.hexa (it does not
-   yet exist) — this is itself a codegen feature, likely its own milestone, and
-   likely the "GPU-type-erasure-wall"-class cross-file surgery @L4 anticipates.
-3. ONLY THEN port one pure leaf (abs/min/max/isdigit are simpler & more clearly
-   pure than gmtime_r — gmtime_r touches a struct-tm out-param) and run the 3
-   real gates.
+NEXT STEP
+---------
+1. Pick a leaf in self/runtime/math_pure.hexa with a known C floor symbol.
+2. Add one entry to _builtin_runtime_sym + nb_builtin_runtime_sym; export matching ABI.
+3. In a sign window (or pool summer/aiden) run `hexa cc --regen` fixpoint gen1≡gen2 +
+   `nm runtime.o | grep <sym>` + a smoke program; persist raw bytes; only THEN flip 🟢.
 
-This is a legitimate closed-negative per paper_negative_ok: the milestone-A
-precondition (a real runtime floor + a real wiring symbol) is FALSIFIED in the
-current repo. No port was synthesized; no fabricated pass.
+This is a truthful PARTIAL / closed-correction, not a closed-negative. No port was
+synthesized; no fabricated pass. "Could not measure the proof gates" (@L6) over fake LANDED.
 
-EVIDENCE FILES (.verdicts/runtime-purefn-port/_evidence/)
----------------------------------------------------------
-  probe.txt                          full probe transcript (sizes, greps, CLI)
-  md5_head_blobs.txt                 md5 of each HEAD runtime blob
-  od_runtime_core_emit_head.txt      od -c head+tail proving NUL-fill 0..21683
+EVIDENCE (.verdicts/runtime-purefn-port/_evidence/)
+---------------------------------------------------
+  probe_CORRECTED.txt   ground truth (intact source · real wire symbol · gmtime status)
+  probe.txt             RETRACTED — fabricated injected numbers (banner; kept for audit)
+  md5_head_blobs.txt    RETRACTED — md5s over injected reads (banner; kept for audit)
+  od_runtime_core_emit_head.txt  od snippet (head shows real `#!hexa strict` content)
