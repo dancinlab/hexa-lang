@@ -195,6 +195,12 @@ fn main() {
     _check("scfph: runs ph.in", _has(scfph, "ph.x -in ph.in"), 1)
     _check("scfph: scf BEFORE ph (chained &&)", _lt_index(scfph, "scf.in", "ph.in"), 1)
     _check("scfph: gates ph on clean scf (&&)", _has(scfph, " && "), 1)
+    // the uploaded scf.in (source &control verbatim via the split) is path-normalized
+    // BEFORE scf runs — a ghost deck's stale absolute outdir/pseudo_dir would else crash.
+    _check("scfph: normalizes outdir BEFORE scf", _has(scfph, "outdir = './out'"), 1)
+    _check("scfph: normalizes pseudo_dir BEFORE scf", _has(scfph, "pseudo_dir = './pseudo'"), 1)
+    _check("scfph: normalize precedes pw.x scf invocation",
+        _lt_index(scfph, "outdir = './out'", "pw.x -ndiag 1 -in scf.in"), 1)
     let phon_argv = _dft_detach_argv(scfph)
     _check("scfph: wrapped sh -lc for detach", _seq(phon_argv[1], "-lc"), 1)
     _check("phon remote logfile path", _seq(_dft_remote_logfile("phon"), "/root/deck/.phon.detach.log"), 1)
@@ -224,6 +230,114 @@ fn main() {
     let _wd = _dft_write_state(nodeck, "done", "777", "h", "p", "id", 8, 12, "vc-relax.in")
     _check("resume: terminal 'done' → idempotent no-op (0)", _dft_resume(nodeck), 0)
     let _rmn2 = exec("rm -rf '" + nodeck + "'")
+
+    // ── scf.in canonical split/reassembly (layout-robust — RTSC 2026-05-31) ──
+    // A valid pw.x input needs ALL namelists FIRST (each closed with `/`), THEN
+    // the cards (ATOMIC_SPECIES · CELL_PARAMETERS [iff ibrav=0] · ATOMIC_POSITIONS
+    // · K_POINTS). The old positional "split at ATOMIC_POSITIONS" mis-ordered two
+    // non-standard layouts; dft_scf_split now PARSES sections and re-emits canonical.
+    //
+    // relaxed coords — WITH a cell (alat-form relax.out) and WITHOUT (angstrom
+    // relax.out → alat parses to 0 → coords carry NO CELL_PARAMETERS).
+    let cc_cell = dft_relax_to_scf_coords(
+        "Begin final coordinates\nCELL_PARAMETERS (alat=  1.0)\n 1.0 0.0 0.0\n 0.0 1.0 0.0\n 0.0 0.0 1.0\n"
+        + "ATOMIC_POSITIONS (crystal)\nH 0.0 0.0 0.0\nEnd final coordinates\n")
+    let cc_nocell = dft_relax_to_scf_coords(
+        "Begin final coordinates\nCELL_PARAMETERS (angstrom)\n 3.0 0.0 0.0\n 0.0 3.0 0.0\n 0.0 0.0 3.0\n"
+        + "ATOMIC_POSITIONS (crystal)\nH 0.0 0.0 0.0\nEnd final coordinates\n")
+    _check("coords: alat relax → has CELL_PARAMETERS", _has(cc_cell, "CELL_PARAMETERS"), 1)
+    _check("coords: angstrom relax → NO CELL_PARAMETERS (alat=0)", _has(cc_nocell, "CELL_PARAMETERS"), 0)
+
+    // REGRESSION GUARD — a known-good STANDARD-layout, ibrav≠0 deck (the 10 that
+    // already split fine) must stay pw.x-valid: namelists FIRST, cards AFTER, no
+    // card inside a namelist, K_POINTS preserved, ibrav forced to 0 + celldm dropped.
+    let std_scf = "&control\n  calculation = 'scf'\n/\n&system\n  ibrav = 1\n  celldm(1) = 5.0\n  nat = 2\n  ntyp = 1\n/\n&electrons\n  conv_thr = 1.0d-12\n/\n"
+        + "ATOMIC_SPECIES\n  H 1.008 H.UPF\n"
+        + "! REPLACE positions below with relaxed ATOMIC_POSITIONS from vc-relax.out\n"
+        + "ATOMIC_POSITIONS crystal\n  H 0.0 0.0 0.0\n  H 0.5 0.5 0.5\n"
+        + "K_POINTS automatic\n  16 16 16 0 0 0\n"
+    let std_split = dft_scf_split(std_scf)
+    _check("std split: ok", std_split.ok, 1)
+    let std_out = dft_assemble_scf_cell(std_split.head, cc_cell, std_split.tail, std_split.cell)
+    _check("std: namelists present", _has(std_out, "&control"), 1)
+    _check("std: ATOMIC_SPECIES present", _has(std_out, "ATOMIC_SPECIES"), 1)
+    _check("std: relaxed CELL_PARAMETERS present", _has(std_out, "CELL_PARAMETERS"), 1)
+    _check("std: ATOMIC_POSITIONS present", _has(std_out, "ATOMIC_POSITIONS"), 1)
+    _check("std: K_POINTS preserved", _has(std_out, "K_POINTS automatic"), 1)
+    _check("std: ibrav normalized to 0", _has(std_out, "ibrav = 0"), 1)
+    _check("std: celldm dropped", _has(std_out, "celldm"), 0)
+    // CANONICAL ORDER — every namelist close `/` must precede the first card;
+    // no card may sit inside a namelist (the read_namelists crash class).
+    _check("std: &system BEFORE ATOMIC_SPECIES (namelists first)",
+        _lt_index(std_out, "&system", "ATOMIC_SPECIES"), 1)
+    _check("std: ATOMIC_SPECIES BEFORE ATOMIC_POSITIONS",
+        _lt_index(std_out, "ATOMIC_SPECIES", "ATOMIC_POSITIONS"), 1)
+    _check("std: ATOMIC_POSITIONS BEFORE K_POINTS",
+        _lt_index(std_out, "ATOMIC_POSITIONS", "K_POINTS"), 1)
+    _check("std: &electrons close BEFORE ATOMIC_SPECIES (no card in namelist)",
+        _lt_index(std_out, "&electrons", "ATOMIC_SPECIES"), 1)
+
+    // FAILURE 1 — ibrav=0 deck (Li2MgH16 shape): CELL_PARAMETERS comes AFTER
+    // ATOMIC_POSITIONS in the source. The relaxed coords here carry NO cell
+    // (angstrom relax.out) → the SOURCE CELL_PARAMETERS must be preserved, else
+    // ibrav=0 has zero cell → pw.x `cell_base_init (1)`.
+    let ibrav0_scf = "&control\n  calculation = 'scf'\n/\n&system\n  ibrav = 0\n  nat = 2\n  ntyp = 1\n/\n&electrons\n/\n"
+        + "ATOMIC_SPECIES\n  H 1.008 H.UPF\n"
+        + "ATOMIC_POSITIONS crystal\n  H 0.0 0.0 0.0\n  H 0.5 0.5 0.5\n"
+        + "CELL_PARAMETERS angstrom\n  0.0 3.0 3.0\n  3.0 0.0 3.0\n  3.0 3.0 0.0\n"
+        + "K_POINTS automatic\n  12 12 12 0 0 0\n"
+    let ib_split = dft_scf_split(ibrav0_scf)
+    _check("ibrav0 split: ok", ib_split.ok, 1)
+    _check("ibrav0 split: source CELL_PARAMETERS captured in cell", _has(ib_split.cell, "CELL_PARAMETERS"), 1)
+    let ib_out = dft_assemble_scf_cell(ib_split.head, cc_nocell, ib_split.tail, ib_split.cell)
+    _check("ibrav0: CELL_PARAMETERS SURVIVES (cell_base_init guard)", _has(ib_out, "CELL_PARAMETERS"), 1)
+    _check("ibrav0: source cell vector 3.0 preserved", _has(ib_out, "3.0"), 1)
+    _check("ibrav0: ATOMIC_POSITIONS present", _has(ib_out, "ATOMIC_POSITIONS"), 1)
+    _check("ibrav0: K_POINTS preserved", _has(ib_out, "K_POINTS"), 1)
+    // canonical order: namelists first, CELL_PARAMETERS before ATOMIC_POSITIONS.
+    _check("ibrav0: &system BEFORE CELL_PARAMETERS (namelists first)",
+        _lt_index(ib_out, "&system", "CELL_PARAMETERS"), 1)
+    _check("ibrav0: CELL_PARAMETERS BEFORE ATOMIC_POSITIONS",
+        _lt_index(ib_out, "CELL_PARAMETERS", "ATOMIC_POSITIONS"), 1)
+    // when coords DO carry a cell, the relaxed cell wins (no duplicate card).
+    let ib_out2 = dft_assemble_scf_cell(ib_split.head, cc_cell, ib_split.tail, ib_split.cell)
+    _check("ibrav0: relaxed-cell path also has exactly the coords cell",
+        _has(ib_out2, "CELL_PARAMETERS"), 1)
+
+    // FAILURE 2 — ghost deck (aiden host, non-standard order): cards interleaved
+    // BEFORE the namelist key=value lines. The old split put CELL_PARAMETERS +
+    // ATOMIC_POSITIONS INSIDE &control → `read_namelists` crash. The parser now
+    // pulls every namelist out FIRST regardless of source interleave.
+    let ghost_scf = "&control\n  calculation = 'scf'\n  outdir = '/home/aiden/rtsc_sch9/out'\n/\n"
+        + "ATOMIC_POSITIONS crystal\n  Sc 0.0 0.0 0.0\n"
+        + "&system\n  ibrav = 2\n  celldm(1) = 5.0\n  nat = 1\n  ntyp = 1\n/\n&electrons\n/\n"
+        + "ATOMIC_SPECIES\n  Sc 44.9 Sc.UPF\n"
+        + "K_POINTS automatic\n  6 6 6 0 0 0\n"
+    let gh_split = dft_scf_split(ghost_scf)
+    _check("ghost split: ok", gh_split.ok, 1)
+    let gh_out = dft_assemble_scf_cell(gh_split.head, cc_cell, gh_split.tail, gh_split.cell)
+    // EVERY namelist must close before the first card — no card inside &control.
+    _check("ghost: &control BEFORE ATOMIC_SPECIES (namelists first)",
+        _lt_index(gh_out, "&control", "ATOMIC_SPECIES"), 1)
+    _check("ghost: &system BEFORE ATOMIC_SPECIES (pulled out of source interleave)",
+        _lt_index(gh_out, "&system", "ATOMIC_SPECIES"), 1)
+    _check("ghost: &electrons BEFORE ATOMIC_SPECIES (no card inside a namelist)",
+        _lt_index(gh_out, "&electrons", "ATOMIC_SPECIES"), 1)
+    _check("ghost: ATOMIC_SPECIES BEFORE the &-free cards region",
+        _lt_index(gh_out, "ATOMIC_SPECIES", "K_POINTS"), 1)
+    _check("ghost: ATOMIC_POSITIONS present (relaxed coords)", _has(gh_out, "ATOMIC_POSITIONS"), 1)
+    _check("ghost: K_POINTS preserved", _has(gh_out, "K_POINTS"), 1)
+    _check("ghost: outdir path retained for downstream normalize", _has(gh_out, "outdir"), 1)
+    // the namelist-region (head) must contain NO card header — the read_namelists
+    // crash is exactly "a card appears before a namelist closes". Assert the head
+    // up to the first namelist close has no ATOMIC_/CELL_/K_POINTS leak: simplest
+    // proxy — the first '&control' precedes any card keyword in the full output.
+    _check("ghost: first namelist BEFORE any CELL_PARAMETERS",
+        _lt_index(gh_out, "&control", "CELL_PARAMETERS"), 1)
+
+    // no-namelist input → ok=0 (caller FATALs rather than ship garbage).
+    let no_nl = dft_scf_split("ATOMIC_SPECIES\n  H 1.0 H.UPF\nK_POINTS automatic\n2 2 2 0 0 0\n")
+    _check("split: no namelist → ok=0", no_nl.ok, 0)
 
     println("dft_dispatch_test PASS")
 }

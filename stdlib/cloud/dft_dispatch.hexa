@@ -391,6 +391,19 @@ fn _dft_strip_geom_cards(tail: str) -> str {
 // CELL_PARAMETERS) and the tail is stripped of any leftover geometry card so
 // the injected ATOMIC_POSITIONS is the ONLY one (no duplicate-card scf crash).
 pub fn dft_assemble_scf(head: str, coords: str, tail: str) -> str {
+    return dft_assemble_scf_cell(head, coords, tail, "")
+}
+
+// dft_assemble_scf_cell — like dft_assemble_scf, but with the SOURCE deck's
+// CELL_PARAMETERS card as an ibrav=0 fallback. The relaxed `coords` normally
+// carry their own `CELL_PARAMETERS (angstrom)`; but a relax.out whose final cell
+// is NOT in `(alat=X)` units yields coords with NO cell card → an ibrav=0 deck
+// would then have ZERO cell → pw.x `cell_base_init (1)`. When coords lack a cell
+// AND `cell` (the source CELL_PARAMETERS) is present, the source card is injected
+// before the positions so the cell is never silently dropped. Canonical emit
+// order: namelists+ATOMIC_SPECIES (ibrav→0) · CELL_PARAMETERS · ATOMIC_POSITIONS
+// · K_POINTS — every namelist FIRST, every card AFTER (the QE input contract).
+pub fn dft_assemble_scf_cell(head: str, coords: str, tail: str, cell: str) -> str {
     let mut out = _dft_head_ibrav0(head)
     if len(out) > 0 {
         if !out.contains("\n") {
@@ -401,6 +414,11 @@ pub fn dft_assemble_scf(head: str, coords: str, tail: str) -> str {
                 out = out + "\n"
             }
         }
+    }
+    // ibrav=0 fallback: if the relaxed coords carry no CELL_PARAMETERS, keep the
+    // source deck's cell so an ibrav=0 input is never left cell-less.
+    if !coords.contains("CELL_PARAMETERS") && len(cell) > 0 {
+        out = out + cell
     }
     out = out + coords
     if len(tail) > 0 {
@@ -446,66 +464,120 @@ fn _dft_is_coord_row(line: str) -> int {
     return 1
 }
 
-// DftScfSplit — a whole scf.in cut into the part BEFORE ATOMIC_POSITIONS (head)
-// and the part resuming at the first card AFTER the positions block (tail).
-// ok==0 when no ATOMIC_POSITIONS line was found (caller falls back / FATALs).
+// DftScfSplit — a whole scf.in PARSED into canonical QE sections. head = ALL
+// namelists (&control …/ &system …/ …, in source order) + the ATOMIC_SPECIES
+// card; tail = K_POINTS + any other trailing non-geometry card; cell = the
+// SOURCE CELL_PARAMETERS card (kept for the ibrav=0 fallback when the relaxed
+// coords lack a cell). The source ATOMIC_POSITIONS + CELL_PARAMETERS are NOT in
+// head/tail — the relaxed coords replace them. ok==0 when no namelist was found.
 struct DftScfSplit {
     ok:   int,
     head: str,
-    tail: str
+    tail: str,
+    cell: str
 }
 
-// dft_scf_split — split a whole scf.in at its ATOMIC_POSITIONS card. head = all
-// lines before the `ATOMIC_POSITIONS` line (control namelists + ATOMIC_SPECIES
-// + any pre-positions comment). The positions block (the ATOMIC_POSITIONS line
-// itself + the element-led coordinate rows + blank lines) is DROPPED — the
-// relaxed coords replace it. tail = from the first non-blank line that is NOT a
-// coordinate row (the next card, e.g. K_POINTS / CELL_PARAMETERS) onward, so
-// K_POINTS etc. are preserved. Mirrors the head/tail contract of dft_assemble_scf.
+// _dft_card_kind — if a trimmed line OPENS a QE card, return that card keyword
+// (ATOMIC_SPECIES / ATOMIC_POSITIONS / CELL_PARAMETERS / K_POINTS / OCCUPATIONS
+// / CONSTRAINTS / ATOMIC_VELOCITIES / ADDITIONAL_K_POINTS / SOLVENTS / HUBBARD).
+// "" otherwise. The keyword must be the FIRST token (so a comment / coordinate
+// row that merely mentions a card name is not mistaken for a card header).
+fn _dft_card_kind(line: str) -> str {
+    let toks = _dft_tokens(line.trim())
+    if len(toks) == 0 {
+        return ""
+    }
+    let w = toks[0]
+    if w == "ATOMIC_SPECIES" { return "ATOMIC_SPECIES" }
+    if w == "ATOMIC_POSITIONS" { return "ATOMIC_POSITIONS" }
+    if w == "CELL_PARAMETERS" { return "CELL_PARAMETERS" }
+    if w == "K_POINTS" { return "K_POINTS" }
+    if w == "OCCUPATIONS" { return "OCCUPATIONS" }
+    if w == "CONSTRAINTS" { return "CONSTRAINTS" }
+    if w == "ATOMIC_VELOCITIES" { return "ATOMIC_VELOCITIES" }
+    if w == "ADDITIONAL_K_POINTS" { return "ADDITIONAL_K_POINTS" }
+    if w == "SOLVENTS" { return "SOLVENTS" }
+    if w == "HUBBARD" { return "HUBBARD" }
+    return ""
+}
+
+// dft_scf_split — PARSE a whole scf.in into its sections REGARDLESS of source
+// order, then re-emit in canonical QE layout. A valid pw.x input requires every
+// namelist FIRST (each closed with `/`), THEN the cards; a positional "split at
+// ATOMIC_POSITIONS" mis-orders ibrav=0 decks (CELL_PARAMETERS after positions)
+// and ghost decks (cards interleaved before the namelist keys). We instead walk
+// the file: namelist blocks (`&NAME … /`) are concatenated in source order into
+// `head`; the ATOMIC_SPECIES card is appended to `head`; CELL_PARAMETERS is kept
+// aside in `cell`; ATOMIC_POSITIONS is DROPPED (relaxed coords replace it); every
+// other card (K_POINTS, OCCUPATIONS, …) goes to `tail`. dft_assemble_scf then
+// emits head + [cell-or-relaxed] + coords + tail = a layout-robust canonical scf.in.
 pub fn dft_scf_split(whole: str) -> DftScfSplit {
     let lines = whole.split("\n")
     let n = len(lines)
-    let mut pos_at = -1
+    let mut namelists = ""
+    let mut species = ""
+    let mut cell = ""
+    let mut tail = ""
+    let mut saw_namelist = 0
     let mut i = 0
     while i < n {
-        if lines[i].contains("ATOMIC_POSITIONS") {
-            pos_at = i
-            i = n
-        } else {
+        let raw = lines[i]
+        let t = raw.trim()
+        // namelist block: opens with `&NAME`, runs through its closing `/`.
+        if len(t) > 0 && t.substring(0, 1) == "&" {
+            saw_namelist = 1
+            namelists = namelists + raw + "\n"
             i = i + 1
+            while i < n {
+                let nraw = lines[i]
+                namelists = namelists + nraw + "\n"
+                i = i + 1
+                if nraw.trim() == "/" {
+                    break
+                }
+            }
+            continue
         }
-    }
-    if pos_at < 0 {
-        return DftScfSplit { ok: 0, head: "", tail: "" }
-    }
-    // head — everything strictly before the ATOMIC_POSITIONS line, NL-terminated.
-    let mut head = ""
-    let mut h = 0
-    while h < pos_at {
-        head = head + lines[h] + "\n"
-        h = h + 1
-    }
-    // skip the positions block: blank lines + element-led coordinate rows that
-    // follow the ATOMIC_POSITIONS line. Stop at the first card line (a non-blank
-    // line that is not a coordinate row) — that index begins the tail.
-    let mut ts = n
-    let mut s = pos_at + 1
-    while s < n {
-        let t = lines[s].trim()
-        if len(t) == 0 || _dft_is_coord_row(t) == 1 {
-            s = s + 1
-        } else {
-            ts = s
-            s = n
+        let kind = _dft_card_kind(t)
+        if len(kind) > 0 {
+            // gather the card header + its body (every line until the next card
+            // header or namelist start or EOF).
+            let mut body = raw + "\n"
+            i = i + 1
+            while i < n {
+                let braw = lines[i]
+                let bt = braw.trim()
+                if len(bt) > 0 && bt.substring(0, 1) == "&" {
+                    break
+                }
+                if len(_dft_card_kind(bt)) > 0 {
+                    break
+                }
+                body = body + braw + "\n"
+                i = i + 1
+            }
+            if kind == "ATOMIC_SPECIES" {
+                species = species + body
+            } else if kind == "CELL_PARAMETERS" {
+                cell = cell + body
+            } else if kind == "ATOMIC_POSITIONS" {
+                // dropped — the relaxed coords supply the positions.
+            } else {
+                tail = tail + body
+            }
+            continue
         }
+        // a blank / stray comment line OUTSIDE any block: keep it attached to the
+        // namelist region (pre-card whitespace/comments) so head reads naturally.
+        if saw_namelist == 1 && len(species) == 0 && len(cell) == 0 && len(tail) == 0 {
+            namelists = namelists + raw + "\n"
+        }
+        i = i + 1
     }
-    let mut tail = ""
-    let mut q = ts
-    while q < n {
-        tail = tail + lines[q] + "\n"
-        q = q + 1
+    if saw_namelist == 0 {
+        return DftScfSplit { ok: 0, head: "", tail: "", cell: "" }
     }
-    return DftScfSplit { ok: 1, head: head, tail: tail }
+    return DftScfSplit { ok: 1, head: namelists + species, tail: tail, cell: cell }
 }
 
 // dft_relax_input_name — the relax input filename a deck provides: prefer the
@@ -528,13 +600,14 @@ pub fn dft_scf_head_tail(deck: str) -> DftScfSplit {
     if has_head && has_tail {
         return DftScfSplit { ok: 1,
             head: read_file(deck + "/scf.in.head"),
-            tail: read_file(deck + "/scf.in.tail") }
+            tail: read_file(deck + "/scf.in.tail"),
+            cell: "" }
     }
     let has_scf = exec("test -f '" + deck + "/scf.in' && printf yes || printf no") == "yes"
     if has_scf {
         return dft_scf_split(read_file(deck + "/scf.in"))
     }
-    return DftScfSplit { ok: 0, head: "", tail: "" }
+    return DftScfSplit { ok: 0, head: "", tail: "", cell: "" }
 }
 
 // ── ④ stability verdict (guard) ──────────────────────────────────────
@@ -1254,7 +1327,7 @@ fn _dft_go(deck: str, image: str, disk: int, owner: str, query: str, identity: s
         println("[dft-run] ③ FATAL: could not resolve scf head/tail (no scf.in[.head/.tail]).")
         return _dft_teardown(inst.instance_id, 1)
     }
-    let scf_in = dft_assemble_scf(split.head, coords, split.tail)
+    let scf_in = dft_assemble_scf_cell(split.head, coords, split.tail, split.cell)
     write_file(deck + "/scf.in.gen", scf_in)
     let _us = cloud_copy_to_opts(host, ssh_opts, deck + "/scf.in.gen", "/root/deck/scf.in")
 
@@ -1307,8 +1380,17 @@ fn _dft_detach_argv(stage_cmd: str) -> [str] {
 // finish before ph starts, so the two reused guarded commands are joined with
 // `&&` (ph runs only on a clean scf). The relaxed geometry was already spliced
 // into /root/deck/scf.in by --resume (LOCAL parse + upload) before this launch.
+//
+// PATH-NORMALIZE the uploaded scf.in first: it carries the SOURCE deck's &control
+// namelist verbatim (via the split), so a ghost-pulled deck's stale ABSOLUTE
+// outdir/pseudo_dir (e.g. /home/aiden/rtsc_sch9/out — does NOT exist on the pod)
+// would crash pw.x. The pre-relax `_dft_pseudo_cmd` sed ran BEFORE this fresh
+// scf.in existed on the pod, so we re-apply the SAME anchored normalize here so
+// the regenerated scf.in is pod-relative (./out · ./pseudo) before scf reads it.
 fn _dft_scfph_cmd(np: int, walltime_h: int) -> str {
-    return _dft_scf_cmd(np, walltime_h) + " && " + _dft_ph_cmd(np, walltime_h)
+    let norm = "cd /root/deck && sed -i \"s|^[[:space:]]*outdir.*|  outdir = './out'|; "
+        + "s|^[[:space:]]*pseudo_dir.*|  pseudo_dir = './pseudo'|\" scf.in 2>/dev/null"
+    return norm + " && " + _dft_scf_cmd(np, walltime_h) + " && " + _dft_ph_cmd(np, walltime_h)
 }
 
 // _dft_stage_probe_cmd — a remote one-liner that classifies a detached stage
@@ -1646,7 +1728,7 @@ fn _dft_resume(deck: str) -> int {
             println("[dft-run] --resume: FATAL — could not resolve scf head/tail (no scf.in[.head/.tail]).")
             return _dft_teardown(iid, 1)
         }
-        let scf_in = dft_assemble_scf(split.head, coords, split.tail)
+        let scf_in = dft_assemble_scf_cell(split.head, coords, split.tail, split.cell)
         write_file(deck + "/scf.in.gen", scf_in)
         let _us = cloud_copy_to_opts(host, ssh_opts, deck + "/scf.in.gen", "/root/deck/scf.in")
         // launch scf→ph CHAIN detached (one terminal step; ph runs only on clean scf).
