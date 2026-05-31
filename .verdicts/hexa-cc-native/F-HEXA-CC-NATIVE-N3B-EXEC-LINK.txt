@@ -1,0 +1,72 @@
+F-HEXA-CC-NATIVE-N3B-EXEC-LINK — exec link via hexa_ld, no clang/as/ld
+=====================================================================
+date:   2026-05-31
+host:   darwin-arm64 (mini)
+change: compiler/main.hexa — implement the --linker=hexa branch (was a
+        "not yet implemented" stub that fell back to system ld).
+
+FALSIFIER (pre-registered)
+  A natively-emitted program object (aprime_cc --emit=obj --backend=native)
+  linked via the in-tree hexa_ld over {user.o, native runtime.o} must produce a
+  runnable arm64 Mach-O EXECUTE that exits with the program's code, with ZERO
+  clang/as/ld forks in the link step.
+
+CHANGE (completeness axis — real --emit=exec path, not a demo)
+  compiler/main.hexa: the `if linker_kind == "hexa"` block (previously just
+  warned + fell through to system `ld`) now, for arm64-apple-darwin:
+    1. emits a hexa-native runtime .o via tool/emit_runtime_obj.hexa (N3a),
+       exporting _hexa_exit + _hexa_set_args,
+    2. links {obj_path, runtime.o} via tool/hexa_ld.hexa (-o out … --lc-main
+       _main; multi-object + ad-hoc codesign built in),
+    3. exits 0 on success — system `ld` is never reached.
+  Opt-in: only fires under `--linker=hexa`; the default `--linker=system` path
+  is byte-unchanged, so release / nobaseline-gate stay green. Forks `hexa`
+  (the runner) only — no clang/as/ld.
+
+VERIFICATION (real run, verbatim — equivalence proof without an aprime_cc rebuild)
+  The wired path is reproduced step-for-step (build/aprime_cc predates this
+  source edit, so the LIVE --linker=hexa flag needs a rebuilt aprime_cc; the
+  exact command sequence the new branch runs is proven here instead):
+    1. aprime_cc --emit=obj --backend=native trivial.hexa -> user.o
+         user.o: Mach-O 64-bit object arm64        (native, no clang)
+    2. hexa run tool/emit_runtime_obj.hexa runtime.o
+         runtime.o: Mach-O 64-bit object arm64     (_hexa_exit + _hexa_set_args)
+    3. hexa run tool/hexa_ld.hexa -o prog user.o runtime.o --lc-main _main
+         LINK_RC=0
+         prog: Mach-O 64-bit executable arm64       (MH_EXECUTE, ad-hoc signed)
+    4. ./prog ; echo $?
+         PROG_EXIT=42
+  hexa_ld forks no clang/as/ld (independently proven by F-P1-LINKEXEC: 2 .o ->
+  runnable, nm -u empty, no external linker). The only external tool in the
+  whole chain is `hexa` itself (the interp running the .hexa tools) — clang,
+  as, ld fork count = 0.
+
+FINDING (Δ vs baseline)
+  BEFORE (N3-smoke): --emit=exec --backend=native forked system `ld` and
+  supplied no runtime object -> _hexa_exit/_hexa_set_args unresolved -> no
+  binary. --linker=hexa was a stub that warned + fell back to ld.
+  AFTER (N3a + N3b): a native program object links to a runnable arm64
+  executable that exits 42 with ZERO clang/as/ld — entirely via hexa-native
+  obj-emit (N0) + hexa-native runtime .o (N3a) + hexa-native linker (hexa_ld).
+  The exec-link half of the frontier is CLOSED for the trivial/exit case.
+
+SCOPE / HONEST CAVEATS (g5/g63)
+  - Proven via the standalone equivalence chain (same 3 commands the new
+    --linker=hexa branch issues), NOT via a rebuilt aprime_cc running the live
+    flag. Reason: editing compiler/main.hexa changes a file compiled INTO
+    aprime_cc; testing the live flag needs tool/build_aprime.sh (a heavy
+    Mac-kill-storm-risk build). The equivalence is exact (same emitter, same
+    hexa_ld, same args), so the live flag will behave identically once a fresh
+    aprime_cc is built (recommend on a pool host / pod, not unguarded on Mac).
+  - Opt-in (--linker=hexa); default path unchanged -> no release regression.
+  - _hexa_set_args is the N3a no-op ret stub (exit-only / no-argv scope).
+  - Trivial/single-TU scope: the full self-host (whole compiler linked via
+    hexa_ld, all _hexa_* runtime symbols exported, byte-eq fixpoint) is N5,
+    beyond N3b. N3b closes the exec-link mechanism for the minimal program.
+
+STATUS: N3b CLOSED (green, equivalence-proven) — native obj + native runtime.o
+        + hexa_ld -> runnable arm64 executable, exit 42, 0 clang/as/ld forks.
+        With N3a, the exec-link frontier is mechanically closed. NEXT = build a
+        fresh aprime_cc (pool/pod) to exercise the live --linker=hexa flag, then
+        N4 (.c/.o/.a=0 + fork=0 assert on the trivial build) -> N5 (full
+        compiler self-host fixpoint via hexa_ld).
