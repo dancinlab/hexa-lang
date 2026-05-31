@@ -21,9 +21,10 @@ GATE (a) — 3 path fixes present in the builder on origin/main [PASS · VERIFIE
   duplicate copies of line 206; I bypassed it). Then byte-verified the result
   file with `od -c` to defeat a Read-tool injection that fabricated a "FIX4" line.
   Untampered result (artifact: _evidence/origin_main_3fix_grep.txt, od-confirmed):
-    FIX1 build/hexa_v2          → line 194  repo + "/build/hexa_v2",
-    FIX2 build/self/runtime.c   → line 201  repo + "/build/self/runtime.c",
+    FIX1 build/hexa_v2          → line 193  repo + "/build/hexa_v2",
+    FIX2 build/self/runtime.c   → line 202  repo + "/build/self/runtime.c",
     FIX3 -I build/self          → line 206  repo + "/build/self"   (inc_gen)
+    (line 194 = the committed fallback repo + "/self/native/hexa_v2")
     DEAD self/native/hexat (code) = []  (dead path now lives ONLY in a comment)
   i.e. all 3 dead paths (hexat / self/runtime.c / missing -I) are replaced in
   the SHIPPED code on origin/main. blob len = 28867 bytes.

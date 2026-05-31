@@ -53,7 +53,7 @@ clang ... cgen build/self/runtime.c -I build/self ... -o /tmp/hexa-cloud-test-bu
 
 ## progress
 
-- [~] M1 — build_hexa_cloud 3경로 수정. **수정 자체는 origin/main 에 이미 머지됨** (`tool/build_hexa_cloud.hexa`, PR #2102/#2112 — .sh 편집 차단 → hexa-native 포팅). 3 fix `git show origin/main` 로 검증: L194 `build/hexa_v2` · L201 `build/self/runtime.c` · L206 `-I build/self`; 죽은 `self/native/hexat` 는 주석에만. 빌드/스모크 입증(=M2)은 이번 세션 **차단**: build/hexa_v2 부트스트랩 transpiler 부재 + `! sidecar sign local` 미서명(heavy invocation 게이트). hexa.real md5 무손상(7493583e). verdict: `.verdicts/buildfloor-m1/F-BUILDFLOOR-M1.txt` 🟠
+- [~] M1 — build_hexa_cloud 3경로 수정. **수정 자체는 origin/main 에 이미 머지됨** (`tool/build_hexa_cloud.hexa`, PR #2102/#2112 — .sh 편집 차단 → hexa-native 포팅). 3 fix `git show origin/main` 로 검증: L193 `build/hexa_v2` · L202 `build/self/runtime.c` · L206 `-I build/self`; 죽은 `self/native/hexat` 는 주석에만. 빌드/스모크 입증(=M2)은 이번 세션 **차단**: build/hexa_v2 부트스트랩 transpiler 부재 + `! sidecar sign local` 미서명(heavy invocation 게이트). hexa.real md5 무손상(7493583e). verdict: `.verdicts/buildfloor-m1/F-BUILDFLOOR-M1.txt` 🟠
 - [ ] M2 — 수정된 빌더로 bin/hexa-cloud 빌드 + --help 스모크 PASS (live ~/.hx/bin/hexa.real 무손상)
 - [ ] M3 — `hexa cloud adopt --project` 작동 검증 (TEST 레지스트리 복사본, live active-pods.json 무손상)
 - [ ] M4 — 회귀: 기존 hexa selftest가 동일 런타임으로 PASS
