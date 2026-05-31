@@ -13,10 +13,16 @@
 //    · round-robin multi-window loop — one window per step, epochs passes.
 //    · honest descent measure — mean CE over the first epoch vs the last epoch.
 //
+//  PR3 wiring (this revision): the forward conv 6× (embed·trunk·router·2 experts·
+//  readout) now route through conv1d_via_forge (im2col + forge_dispatch_matmul,
+//  byte-eq per F-CLM-CONV-GPU-EQ #2352) instead of host nn_conv1d_fwd — so on a
+//  CUDA host the matmul bulk rides cuBLAS. Backward stays host (Phase-4 bwd-forge
+//  is separate). Corpus switched to the cross-lingual-semantic parallel fixture.
+//
 //  F-CLM-PROD-DESCENT: real-corpus mean CE strictly descends (last_epoch <
-//  first_epoch · finite). Corpus = stdlib/flame/testdata/clm_smoke_corpus.txt
+//  first_epoch · finite). Corpus = stdlib/flame/testdata/clm_semantic_parallel.txt
 //  (in-repo, machine-independent, repo-root relative). Config tiny (d=8) for $0
-//  CPU verify; PR4 fires large d768/12L on H100 with the real anima corpus.
+//  CPU verify; PR4 fires large d768/12L on H100 (forge=cuBLAS) with the real anima corpus.
 // ════════════════════════════════════════════════════════════════════════════
 
 use "stdlib/flame/tensor_lib"
@@ -26,6 +32,48 @@ use "stdlib/flame/moe_lib"
 use "stdlib/flame/nn_lib"
 use "stdlib/flame/quant_lib"
 use "stdlib/flame/optim_lib"
+
+// conv1d (causal dilated) via im2col + forge matmul — inlined from clm_conv_gpu
+// (clm flame files cannot `use` one another). Mirrors nn_conv1d_fwd's gather
+// exactly: p = t − dil·(K−1−k); rows below p<0 are zero (left causal pad). On a
+// CUDA host the matmul rides cuBLAS; on CPU it is the identical farr_matmul, so
+// the routed forward is byte-eq to the host baseline (F-CLM-CONV-GPU-EQ #2352).
+fn conv1d_via_forge(x: int, w: int, b: int, y_out: int,
+                    T: int, Cin: int, Cout: int, K: int, dil: int) {
+    let Kdim = Cin * K
+    let xcol = t_zeros(T * Kdim)
+    let mut t = 0
+    while t < T {
+        let mut ci = 0
+        while ci < Cin {
+            let mut k = 0
+            while k < K {
+                let p = t - dil * (K - 1 - k)
+                if p >= 0 { t_set(xcol, t * Kdim + ci * K + k, t_get(x, p * Cin + ci)) }
+                k = k + 1
+            }
+            ci = ci + 1
+        }
+        t = t + 1
+    }
+    let Wt = t_zeros(Kdim * Cout)
+    let mut co = 0
+    while co < Cout {
+        let mut j = 0
+        while j < Kdim { t_set(Wt, j * Cout + co, t_get(w, co * Kdim + j)); j = j + 1 }
+        co = co + 1
+    }
+    let mm = forge_dispatch_matmul(xcol, T, Kdim, Wt, Cout)
+    let mut t2 = 0
+    while t2 < T {
+        let mut c2 = 0
+        while c2 < Cout {
+            t_set(y_out, t2 * Cout + c2, t_get(mm, t2 * Cout + c2) + t_get(b, c2))
+            c2 = c2 + 1
+        }
+        t2 = t2 + 1
+    }
+}
 
 // fake-quant a weight into wq (caller-allocated) + write the STE mask.
 fn _fq(w: int, wq: int, mask: int, Cout: int, rest: int) {
@@ -51,18 +99,18 @@ fn clm_prod_fwd(tokens: int,
     _fq(roW, roWq, roM, V, d)
 
     nn_embedding_fwd(tokens, embed, xe, T, d)
-    nn_conv1d_fwd(xe, ecWq, ecB, xec, T, d, d, K, 1)
+    conv1d_via_forge(xe, ecWq, ecB, xec, T, d, d, K, 1)
     let h0 = t_zeros(T * d)
-    nn_conv1d_fwd(xec, tcWq, tcB, h0, T, d, d, K, 1)
+    conv1d_via_forge(xec, tcWq, tcB, h0, T, d, d, K, 1)
     let mean0 = t_zeros(1)
     nn_groupnorm_fwd(h0, tgG, tgB, hn0, mean0, inv0, xhat0, T, d, 1)
     let hg0 = t_zeros(T * d); nn_gelu_fwd(hn0, hg0, T * d)
     let mut i = 0
     while i < T * d { t_set(xt, i, t_get(xec, i) + t_get(hg0, i)); i = i + 1 }
     let logits_r = t_zeros(T * E)
-    nn_conv1d_fwd(xt, rWq, rB, logits_r, T, d, E, 1, 1)
-    nn_conv1d_fwd(xt, e0Wq, e0B, eo0, T, d, d, K, 1)
-    nn_conv1d_fwd(xt, e1Wq, e1B, eo1, T, d, d, K, 1)
+    conv1d_via_forge(xt, rWq, rB, logits_r, T, d, E, 1, 1)
+    conv1d_via_forge(xt, e0Wq, e0B, eo0, T, d, d, K, 1)
+    conv1d_via_forge(xt, e1Wq, e1B, eo1, T, d, d, K, 1)
     let ex0 = t_zeros(T * d); nn_gelu_fwd(eo0, ex0, T * d)
     let ex1 = t_zeros(T * d); nn_gelu_fwd(eo1, ex1, T * d)
     let mut j = 0
@@ -75,7 +123,7 @@ fn clm_prod_fwd(tokens: int,
     nn_moe_router_fwd(logits_r, ex_out, probs, y, T, E, d)
     let meanN = t_zeros(1)
     nn_groupnorm_fwd(y, noG, noB, yn, meanN, invN, xhatN, T, d, 1)
-    nn_conv1d_fwd(yn, roWq, roB, out_logits, T, d, V, 1, 1)
+    conv1d_via_forge(yn, roWq, roB, out_logits, T, d, V, 1, 1)
 }
 
 fn clm_ce_grad(logits: int, targets: int, dlogits_out: int, T: int, V: int) {
@@ -195,7 +243,11 @@ fn main() {
     let dd = d * d * K; let ed = E * d; let vd = V * d
 
     // ---- corpus → nsamp windows (in-repo fixture, repo-root relative) ----
-    let path = "stdlib/flame/testdata/clm_smoke_corpus.txt"
+    // cross-lingual-semantic corpus: 5 concept × 5 lang (en·zh·ru·ja·ko) PARALLEL-
+    // aligned (Lab-11 / H_911 semantic-linkage; anima clm_p1.corpus.kosmos mirror).
+    // stride spreads the nsamp windows across all 5 languages so the routed forge
+    // forward learns the cross-lingual MEANING coupling, not a single-language head.
+    let path = "stdlib/flame/testdata/clm_semantic_parallel.txt"
     let bytes_arr = read_file_bytes(path)
     let n_bytes = len(bytes_arr)
     // stride spans the WHOLE corpus so the nsamp windows are spread across every
