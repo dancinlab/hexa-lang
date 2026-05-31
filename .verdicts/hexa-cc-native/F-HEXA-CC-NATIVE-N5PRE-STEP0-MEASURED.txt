@@ -1,0 +1,56 @@
+F-HEXA-CC-NATIVE-N5PRE-STEP0-MEASURED -- 181 re-measured on a CURRENT-SOURCE aprime_cc (STEP0 unblocked)
+========================================================================================================
+date: 2026-06-01   host: mini (darwin-arm64)   base: worktree off origin/main 8face82b6
+prior STEP0 attempts: Linux (summer) BLOCKED, darwin STEP0b BLOCKED (recipe gap), R2 (regen + drift).
+THIS one SUCCEEDS -- a current-source aprime_cc built and the 181 re-measured.
+
+HOW THE BOOTSTRAP CHAIN WAS MADE CURRENT (3 pieces, each verified)
+-----------------------------------------------------------------
+1. TRANSPILER: `hexa cc` rebuilt the installed transpiler -> ~/.hx/bin/self/native/hexa_v2
+   (1925816 B, darwin-arm64). This hexa_v2 LOWERS __map_raw_len (the round-2/correction blocker)
+   -- the stale self/native/hexat did not. Used as build_aprime.sh -v.
+2. RUNTIME: regen current self/runtime_core.c + runtime_hi_gen.c via
+   `hexa run self/runtime_core_emit.hexa <out>` (local, routing-immune). This supplies float_to_bits
+   / bits_to_float (the round-2 stale-runtime symbols). runtime.c + native/*.c + forge/*.c copied
+   .c-ONLY from build/self (not clobbering .hexa sources).
+3. COMPILER SOURCE: clean worktree off origin/main 8face82b6 (current-main compiler/main.hexa closure).
+
+build_aprime.sh result (guarded nice -n 19):
+  [1/5] flatten 39932 L -> [2/5] transpile 43502 L C (hexa_v2) -> [3/5] post -> [4/5] clang
+  /tmp/aprime_fresh 1435712 B Mach-O arm64 -> [5/5] smoke exit(6*7)==42 PASS. build_aprime: OK.
+
+FALSIFIER (measurement-tool honesty gate) -- PASS
+-------------------------------------------------
+`aprime_fresh _drv.hexa --emit=obj --target=arm64-apple-darwin -o /tmp/fal.o /tmp/fal.hexa`
+on a source with an intentional undefined name -> `HexaError [HX2001] undefined name
+`totally_undefined_symbol_zzz`` + exit 1. The tool detects + reports undefined names and exits nonzero.
+
+MEASUREMENT (current-source aprime_cc, flattened compiler/main.hexa --emit=obj, tag-based count)
+------------------------------------------------------------------------------------------------
+  class   | prior triage (stale binary) | CURRENT-source | delta
+  --------+-----------------------------+----------------+------
+  HX2001  |            104              |       80       |  -24   <- stale-binary intrinsics RESOLVED
+  HX4001  |             13              |        0       |  -13   <- fully resolved (bonus)
+  HX0011  |             13              |       13       |    0
+  HX3001  |             17              |       17       |    0
+  HX3004  |             18              |       18       |    0
+  HX2003  |             16              |       16       |    0
+  --------+-----------------------------+----------------+------
+  TOTAL   |            181              |      144       |  -37
+exit=1. evidence: _evidence/n5pre-step0-measure-diag.txt (first 200 of 542 lines; 144 HexaError tags).
+
+The triage's "~28 STALE-BINARY HX2001 resolve on rebuild" prediction is CONFIRMED (24 HX2001 + 13
+HX4001 dropped on the current-source binary). STEP0's goal -- separate stale from genuine on a
+current binary -- is ACHIEVED.
+
+REMAINING 144 (the genuine N5-pre work), HX2001=80 broken down by undefined name:
+  - `as` x61 + `)` x7  = parser as-cast cascade (same root as HX0011 x13) -> ~81, the biggest lever
+  - `bytes_to_str_raw` x7 + `__arr_alloc_items_zero(_int)` x2 = genuine-missing intrinsics (~9)
+  - `push` x2 (member-call), `i64` x1
+  - HX3001 x17 + HX3004 x18 + HX2003 x16 = HexaVal carrier-model gaps (types.hexa)
+
+NEXT (N5-pre STEP1, per triage order): parser as-cast (compiler/parse/parser.hexa + ast.hexa) --
+~81 diagnostics clear in one fix -> rebuild aprime (same chain) -> re-measure -> expect ~144 -> ~63.
+Repro recipe for the current-source aprime_cc is now PROVEN and fast (~15s), so each STEP1..N
+fix can be verified by rebuild+re-measure. No milestone flipped (N5 fixpoint not reached); STEP0
+sub-state advances BLOCKED -> MEASURED. live tree untouched; /tmp/aprime_fresh disposable.

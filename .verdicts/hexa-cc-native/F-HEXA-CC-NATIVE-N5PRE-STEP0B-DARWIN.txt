@@ -1,0 +1,64 @@
+F-HEXA-CC-NATIVE-N5PRE-STEP0B -- darwin-arm64 aprime_cc rebuild for honest 181-diagnostic re-measure
+=====================================================================================================
+date: 2026-06-01   host: mini (darwin-arm64, the policy-designated darwin build host)
+base: isolated worktree off origin/main 9be1ed393 (clean checkout; shared-index hazard avoided)
+guard: nice -n 19 + background (NOT unguarded heavy-build; no kill-storm)
+
+GOAL
+----
+N5-pre STEP0 wants the 181 type-checker diagnostics (aprime_cc compiling flattened
+compiler/main.hexa --emit=obj) RE-MEASURED with a CURRENT-source aprime_cc, so the
+~28 "STALE-BINARY" HX2001 (intrinsics relanded into compiler/check/bind.hexa AFTER
+the on-disk 2026-05-26 binary was built) separate from genuine-missing.
+The on-disk build/aprime_cc is 2026-05-26 (STALE vs parser.hexa/bind.hexa 2026-05-30).
+STEP0 on Linux (summer) already FAILED (-arch arm64 hardcode + glibc malloc.h + hxlcl_* shims).
+This is the darwin attempt.
+
+RESULT: BLOCKED -- build-recipe gap (NOT compute / NOT kill-storm). Same root cause as BUILDFLOOR.
+--------------------------------------------------------------------------------------------------
+tool/build_aprime.sh stages 1-3 SUCCEED fast (~12s, no resource strain):
+  [1/5] flatten     OK  -- 46 files, 39932 lines
+  [2/5] transpile   OK  -- 43366 lines C (hexat)
+  [3/5] post-process OK -- s4_flatc_post + 114 enum #defines + mkdir/free_tree lowering + runtime.c inline
+  [4/5] clang       FAIL chain (each fix exposes the next missing generated artifact):
+        (a) fatal error: 'runtime.c' file not found
+              -- self/runtime.c is NOT tracked (only self/runtime.h is). It is a
+                 GENERATED artifact ("B9 SSOT"); absent from a clean main checkout.
+        (b) after copying 2026-05-26 build/self/runtime.c -> self/runtime.c:
+              self/runtime.c:1644: fatal error: 'runtime_core.c' file not found
+        (c) after copying the consistent 2026-05-26 pair (runtime.c + runtime_core.c
+              + runtime_hi_gen.c + runtime.h):
+              self/runtime.c:12685: fatal error: 'native/tensor_kernels.c' file not found
+              -- runtime.c #includes a whole generated build/self/native/*.c tree (33 .c files).
+        (d) after cp -R build/self/native/* self/native/ :
+              [2/5] transpile FAILED -- generated .c artifacts dumped into the self/native/
+                 SOURCE tree corrupt the flatten/transpile inputs. Frankenstein build.
+
+STOP here per g5/g63: brute-forcing a binary out of a 2026-05-26 stale C-artifact tree
+spliced onto current-2026-06-01 transpiled C would produce a binary of UNKNOWN provenance.
+A diagnostic count measured from it would be FABRICATED, not honest. No binary was kept; no
+flip; worktree reset clean (git checkout . && git clean -fd).
+
+ROOT CAUSE (confirmed, reproducible)
+------------------------------------
+tool/build_aprime.sh is NOT self-contained. It assumes a pre-generated build/self/ C-artifact
+tree (runtime.c -> runtime_core.c -> native/*.c, "B9 generated SSOT" per
+tool/build_hexa_cloud.hexa:199 "build/self/runtime.c (B9 generated SSOT) -> self/runtime.c").
+That tree exists only as the OUTPUT of a prior successful build (on-disk copy = 2026-05-26,
+stale + drifted vs current self/runtime.h 2026-06-01). A clean honest current-source aprime_cc
+rebuild therefore requires a PRIOR B9 runtime-regeneration step that the recipe does not bundle.
+This is the IDENTICAL class of finding as HEXA-BUILDFLOOR (hand-written build recipe drifts /
+not self-contained). darwin's blocker = recipe gap; Linux's blocker = -arch/glibc/shims. Two
+distinct walls, both upstream of the 181-diagnostic measurement.
+
+NEXT (completeness mainline -> N5-pre)
+--------------------------------------
+Unblock requires making aprime_cc reproducible from a clean checkout. Two candidate paths:
+  P1  Bundle B9 runtime regen as build_aprime.sh stage-0 (hexa-native, since .sh edits are
+      governance-blocked) -- regenerate build/self/{runtime,runtime_core,runtime_hi_gen}.c +
+      native/*.c from their hexa SSOTs (self/runtime_core_emit.hexa, self/runtime_hi_gen_emit.hexa,
+      ...) into a build-only dir, then -I that dir (NOT self/, to avoid clobbering sources).
+  P2  Run the existing B9 regen pipeline standalone first (locate its entry), produce a fresh
+      consistent build/self tree, then build_aprime.sh. Lower code change; needs the entry point.
+Either way the falsifier for STEP0 stays: an intentional undefined-name source must emit HX2001
++ non-zero exit from the freshly-built aprime_cc before the 181 re-measure is trusted.

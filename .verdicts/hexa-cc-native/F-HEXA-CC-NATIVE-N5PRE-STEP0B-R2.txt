@@ -1,0 +1,73 @@
+F-HEXA-CC-NATIVE-N5PRE-STEP0B-R2 -- runtime-source drift decomposed (regen works; __map_raw_len genuine-missing)
+==============================================================================================================
+date: 2026-06-01   host: mini (darwin-arm64)   base: worktree off origin/main 9be1ed393
+follow-up to F-HEXA-CC-NATIVE-N5PRE-STEP0B-DARWIN.txt (round 1 = build-recipe gap)
+compiler-source parity: `git diff origin/main HEAD -- compiler/ self/` = EMPTY (current-main source)
+
+PROGRESS THIS ROUND (the recipe gap is now traversable, exposing the real frontier)
+-----------------------------------------------------------------------------------
+Populated the self/ runtime tree with .c-only copies (NEVER clobbering .hexa sources;
+round-1 failure was `cp -R .../*` dumping non-.c entries onto the flatten input):
+  - self/{runtime.c,runtime_core.c,runtime_hi_gen.c,runtime.h}  <- build/self/ (2026-05-26)
+  - self/native/*.c (18 needed, 33 copied)                      <- build/self/native/
+  - self/forge/forge_tier_v1.c                                  <- build/self/forge/
+runtime.c's full local #include set enumerated up front (forge/ + 18 native/ + core + hi_gen).
+=> All #include resolution PASSED; clang reached actual C compilation of the 40k-line ap_post.c.
+
+clang then surfaced UNDEFINED RUNTIME SYMBOLS = current-codegen vs runtime DRIFT:
+  (1) float_to_bits / bits_to_float  -- STALE-runtime. The current self/runtime_core_emit.hexa
+        L1505-1507 EMITS `HexaVal float_to_bits(HexaVal)`, but the 2026-05-26 build/self/runtime_core.c
+        has 0 occurrences. FIXED by regen: `hexa run self/runtime_core_emit.hexa self/runtime_core.c`
+        (ran LOCALLY, routing-immune, wrote 382923 B with float_to_bits x4). Symbol resolved.
+  (2) __map_raw_len  -- GENUINE-MISSING. Referenced ONLY in self/codegen.hexa (an EMITTED call); no
+        definition in ANY runtime source -- not runtime_core_emit (regenerated), not runtime_hi_gen,
+        not the 2026-05-26 runtime.c, nowhere. So current codegen emits a map-length intrinsic call
+        that NO runtime implements. plus a function-to-HexaVal arg type mismatch at ap_post.c:40446.
+
+ROOT CAUSE (refined)
+--------------------
+Between the 2026-05-26 aprime_cc build and current main, self/codegen.hexa gained an emit for
+`__map_raw_len` (and the float_to_bits intrinsic) but the runtime SSOT was only partially updated:
+runtime_core_emit got float_to_bits; the map-length helper was never added. The native self-host
+build of CURRENT main is therefore broken at link/compile on a genuine-missing runtime symbol --
+independent of the type-checker's 181 diagnostics, and UPSTREAM of them (the build can't even
+produce aprime_cc to run the --emit=obj measurement).
+
+This is a real defect on main's native self-host path, not merely a stale artifact:
+  codegen emits __map_raw_len  ==>  runtime defines __map_raw_len   : MISSING.
+
+HONEST STATE
+------------
+- regen mechanism PROVEN (emit SSOT -> .c, local). float_to_bits class auto-heals on regen.
+- __map_raw_len is a genuine runtime gap requiring a real definition added to the runtime SSOT
+  (self/runtime_core_emit.hexa or a native/*.c), implemented to match codegen's calling convention
+  -- NOT guessable safely here without the map-repr contract; deferred to a scoped runtime fix.
+- top runtime.c amalgamation file is untracked with no single regen entry identified (candidates:
+  self/runtime_core.hexa / self/runtime_hi.hexa) -- separate thread.
+- No binary kept; no milestone flipped; live tree untouched; worktree disposable.
+
+NEXT
+----
+N5-pre-rt: add __map_raw_len (+ resolve the :40446 fn/HexaVal mismatch) to the runtime SSOT to
+match self/codegen.hexa's emit contract; regen; rebuild aprime_cc; if smoke exit42 PASSES, run the
+181 --emit=obj re-measure (the original STEP0 goal) on the now-current-source binary.
+Falsifier unchanged: an intentional undefined-name source must emit HX2001 + non-zero exit.
+
+==============================================================================================================
+CORRECTION (2026-06-01, same day) -- __map_raw_len was MISCHARACTERIZED above. Retracting the claim.
+--------------------------------------------------------------------------------------------------------------
+The section above called __map_raw_len a "GENUINE-MISSING runtime symbol / a real defect on main's native
+self-host path." That is WRONG. Verified facts:
+  - __map_raw_len IS a recognized builtin: registered in compiler/check/bind.hexa:1044 allowlist (beside
+    __str_raw_len / __arr_raw_len) AND lowered by self/codegen.hexa:6161 to `HX_MAP_LEN(...)`.
+  - HX_MAP_LEN IS defined in the runtime: build/self/runtime_core.c:1045 and current
+    self/runtime_core_emit.hexa:1208 (`#define HX_MAP_LEN(v) ((v).map_ptr->len)`). NOT missing.
+So nothing is missing from the runtime. The clang "undefined identifier __map_raw_len" arises because the
+BOOTSTRAP transpiler used by build_aprime.sh stage-2 (self/native/hexat) emits a LITERAL __map_raw_len(...)
+call instead of lowering it -- it lowers the siblings __str_raw_len/__arr_raw_len (those did NOT error) but
+not __map_raw_len. So the real mechanism is a TRANSPILER-LOWERING GAP in the hexat bootstrap binary, i.e.
+the SAME stale-bootstrap family as the ~28 "STALE-BINARY" HX2001 from the triage -- NOT a runtime defect and
+NOT a fresh bug on main. The "real defect on main's self-host path" wording is retracted.
+Corrected frontier: the bootstrap toolchain (hexat / aprime_cc) is stale vs current builtins; the clean
+unblock is to regenerate the bootstrap chain from current source so __map_raw_len lowers to HX_MAP_LEN.
+(float_to_bits round-2 finding stands: that one WAS a stale runtime_core.c, healed by emit-SSOT regen.)
