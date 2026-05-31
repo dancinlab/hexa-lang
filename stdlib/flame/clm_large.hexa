@@ -16,6 +16,12 @@
 //  F-FLAME-CLM-GEN-DESCENT: CE strictly descends at a non-trivial config
 //  (d=16, L=3, E=4, V=64) — proves the loops generalize beyond the tiny proof.
 //  int4 QAT (clm_qat #2304) is orthogonal and composes per-conv. lib-split.
+//
+//  PR4 wiring: the forward conv 5× (embed·trunk_dil·router·expert·readout) route
+//  through conv1d_via_forge (im2col + forge_dispatch_matmul, byte-eq F-CLM-CONV-
+//  GPU-EQ #2352) — so the 44.68M LARGE rung's matmul bulk rides cuBLAS on a CUDA
+//  host. Backward stays host (Phase-4 bwd-forge separate). On a `-DHEXA_CUDA` H100
+//  this is the large fire: F-RFC046-GPU-UTILIZATION (nvidia-smi >50% during run).
 // ════════════════════════════════════════════════════════════════════════════
 
 use "stdlib/flame/tensor_lib"
@@ -24,6 +30,49 @@ use "stdlib/flame/gn_lib"
 use "stdlib/flame/moe_lib"
 use "stdlib/flame/nn_lib"
 use "stdlib/flame/optim_lib"
+
+// conv1d (causal dilated) via im2col + forge matmul — inlined from clm_conv_gpu
+// (clm flame files cannot `use` one another). Mirrors nn_conv1d_fwd's gather
+// exactly: p = t − dil·(K−1−k); rows below p<0 are zero (left causal pad). On a
+// CUDA host the matmul rides cuBLAS; on CPU it is the identical farr_matmul, so
+// the routed forward is byte-eq to the host baseline (F-CLM-CONV-GPU-EQ #2352).
+// dilation-general → covers the trunk's _pow2(l) dilated convs unchanged.
+fn conv1d_via_forge(x: int, w: int, b: int, y_out: int,
+                    T: int, Cin: int, Cout: int, K: int, dil: int) {
+    let Kdim = Cin * K
+    let xcol = t_zeros(T * Kdim)
+    let mut t = 0
+    while t < T {
+        let mut ci = 0
+        while ci < Cin {
+            let mut k = 0
+            while k < K {
+                let p = t - dil * (K - 1 - k)
+                if p >= 0 { t_set(xcol, t * Kdim + ci * K + k, t_get(x, p * Cin + ci)) }
+                k = k + 1
+            }
+            ci = ci + 1
+        }
+        t = t + 1
+    }
+    let Wt = t_zeros(Kdim * Cout)
+    let mut co = 0
+    while co < Cout {
+        let mut j = 0
+        while j < Kdim { t_set(Wt, j * Cout + co, t_get(w, co * Kdim + j)); j = j + 1 }
+        co = co + 1
+    }
+    let mm = forge_dispatch_matmul(xcol, T, Kdim, Wt, Cout)
+    let mut t2 = 0
+    while t2 < T {
+        let mut c2 = 0
+        while c2 < Cout {
+            t_set(y_out, t2 * Cout + c2, t_get(mm, t2 * Cout + c2) + t_get(b, c2))
+            c2 = c2 + 1
+        }
+        t2 = t2 + 1
+    }
+}
 
 fn _cp(src: int, soff: int, dst: int, n: int) {
     let mut i = 0
@@ -51,7 +100,7 @@ fn gen_fwd(tokens: int, embed: int, ecW: int, ecB: int,
     let dd = d * d * K
     nn_embedding_fwd(tokens, embed, xe, T, d)
     let x = t_zeros(T * d)
-    nn_conv1d_fwd(xe, ecW, ecB, x, T, d, d, K, 1)   // embed_conv → x (trunk input)
+    conv1d_via_forge(xe, ecW, ecB, x, T, d, d, K, 1)   // embed_conv → x (trunk input)
     let wtmp = t_zeros(dd); let btmp = t_zeros(d); let gtmp = t_zeros(d); let getmp = t_zeros(d)
     let mut l = 0
     while l < L {
@@ -59,7 +108,7 @@ fn gen_fwd(tokens: int, embed: int, ecW: int, ecB: int,
         _cp(trunkW, l * dd, wtmp, dd); _cp(trunkB, l * d, btmp, d)
         _cp(trunkG, l * d, gtmp, d);  _cp(trunkBe, l * d, getmp, d)
         let h = t_zeros(T * d)
-        nn_conv1d_fwd(x, wtmp, btmp, h, T, d, d, K, _pow2(l))
+        conv1d_via_forge(x, wtmp, btmp, h, T, d, d, K, _pow2(l))
         let hnl = t_zeros(T * d); let mean = t_zeros(1); let invl = t_zeros(1); let xhl = t_zeros(T * d)
         nn_groupnorm_fwd(h, gtmp, getmp, hnl, mean, invl, xhl, T, d, 1)
         _cpback(hnl, hn, l * T * d, T * d); _cpback(xhl, xh, l * T * d, T * d)
@@ -75,11 +124,11 @@ fn gen_fwd(tokens: int, embed: int, ecW: int, ecB: int,
     _cpback(x, xtrunk, 0, T * d)                      // trunk output
     // moe
     let logits_r = t_zeros(T * E)
-    nn_conv1d_fwd(x, rW, rB, logits_r, T, d, E, 1, 1)
+    conv1d_via_forge(x, rW, rB, logits_r, T, d, E, 1, 1)
     let mut e = 0
     while e < E {
         _cp(expW, e * dd, wtmp, dd); _cp(expB, e * d, btmp, d)
-        let eol = t_zeros(T * d); nn_conv1d_fwd(x, wtmp, btmp, eol, T, d, d, K, 1)
+        let eol = t_zeros(T * d); conv1d_via_forge(x, wtmp, btmp, eol, T, d, d, K, 1)
         _cpback(eol, eo, e * T * d, T * d)
         let exl = t_zeros(T * d); nn_gelu_fwd(eol, exl, T * d)
         _cpback(exl, ex, e * T * d, T * d)
@@ -89,7 +138,7 @@ fn gen_fwd(tokens: int, embed: int, ecW: int, ecB: int,
     nn_moe_router_fwd(logits_r, ex, probs, y, T, E, d)
     let meanN = t_zeros(1)
     nn_groupnorm_fwd(y, noG, noB, yn, meanN, ivN, xhN, T, d, 1)
-    nn_conv1d_fwd(yn, roW, roB, out_logits, T, d, V, 1, 1)
+    conv1d_via_forge(yn, roW, roB, out_logits, T, d, V, 1, 1)
 }
 
 fn gen_ce_grad(logits: int, targets: int, dlogits: int, T: int, V: int) {
