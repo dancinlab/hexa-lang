@@ -1,0 +1,125 @@
+// ════════════════════════════════════════════════════════════════════════════
+//  flame_quant_test.hexa — selftest for quant_lib (int4-sym[-7,+7] STE).
+//
+//  Falsifiers (pre-registered) — NOT GRAD-EXACT (round() non-differentiable;
+//  STE is a surrogate, P0 §9). Verify the quantizer contract instead:
+//    F-INT4-RANGE        every level q ∈ {-7..+7}; -8 NEVER emitted (AKIDA).
+//    F-INT4-ZERO         W=0 channel -> q=0, Wq=0 (symmetric, zero-preserving).
+//    F-INT4-DEQUANT-ERR  |Wq - W| ≤ s[co]/2 + 1e-12 for in-range elements.
+//    F-INT4-STE-MASK     bwd dW = dY·mask: clamped (out-of-range) entries get 0
+//                        grad, in-range entries pass dY through.
+//    F-INT4-PERCHANNEL   channels of different magnitude get different scales.
+//    F-INT4-DET          same W -> byte-identical Wq.
+//
+//  Op 4/4 (final) of the CLM-ConvMoE flame port. Build: HEXA_MAC_BUILD_OK=1
+//  ./hexa build stdlib/flame/flame_quant_test.hexa -o build/flame_quant && run.
+// ════════════════════════════════════════════════════════════════════════════
+
+use "stdlib/flame/tensor_lib"
+use "stdlib/flame/quant_lib"
+
+fn _qt_abs(x: float) -> float {
+    if x < 0.0 { return 0.0 - x }
+    return x
+}
+
+fn main() {
+    println("flame_quant_test — int4-sym[-7,+7] per-ch STE (quant_lib)")
+
+    let Cout = 3
+    let rest = 6
+    let n = Cout * rest
+
+    // channel 0: large magnitude · channel 1: small · channel 2: includes 0s
+    let w = t_zeros(n)
+    t_fill_lcg(w, n, 1234, 5.0)         // spread values to exercise clamp + round
+    // force channel 2 to all-zero (ZERO falsifier)
+    let mut z = 0
+    while z < rest { t_set(w, 2 * rest + z, 0.0); z = z + 1 }
+    // make channel 0 clearly larger than channel 1
+    let mut a = 0
+    while a < rest { t_set(w, 0 * rest + a, t_get(w, 0 * rest + a) * 4.0); a = a + 1 }
+
+    let wq = t_zeros(n)
+    let scale = t_zeros(Cout)
+    let qlev = t_zeros(n)
+    let mask = t_zeros(n)
+    nn_int4_quant_fwd(w, wq, scale, qlev, mask, Cout, rest)
+
+    // ── F-INT4-RANGE ──
+    let mut range_ok = 1
+    let mut i = 0
+    while i < n {
+        let q = t_get(qlev, i)
+        if q > 7.0 { range_ok = 0 }
+        if q < 0.0 - 7.0 { range_ok = 0 }
+        i = i + 1
+    }
+
+    // ── F-INT4-ZERO (channel 2 all-zero) ──
+    let mut zero_ok = 1
+    let mut z2 = 0
+    while z2 < rest {
+        let idx = 2 * rest + z2
+        if t_get(qlev, idx) != 0.0 { zero_ok = 0 }
+        if t_get(wq, idx) != 0.0 { zero_ok = 0 }
+        z2 = z2 + 1
+    }
+
+    // ── F-INT4-DEQUANT-ERR (in-range: |Wq-W| ≤ s/2) ──
+    let mut err_ok = 1
+    let mut k = 0
+    while k < n {
+        let co = k / rest
+        let s = t_get(scale, co)
+        if t_get(mask, k) > 0.5 {
+            let e = _qt_abs(t_get(wq, k) - t_get(w, k))
+            if e > s / 2.0 + 0.000000000001 { err_ok = 0 }
+        }
+        k = k + 1
+    }
+
+    // ── F-INT4-STE-MASK (dW = dY·mask; dY=ones) ──
+    let dy = t_zeros(n)
+    let mut d = 0
+    while d < n { t_set(dy, d, 1.0); d = d + 1 }
+    let dW = t_zeros(n)
+    nn_int4_quant_bwd(dy, mask, dW, Cout, rest)
+    let mut ste_ok = 1
+    let mut m = 0
+    while m < n {
+        let expect = t_get(mask, m)        // dY=1 so dW should == mask
+        if t_get(dW, m) != expect { ste_ok = 0 }
+        m = m + 1
+    }
+
+    // ── F-INT4-PERCHANNEL (scale[0] != scale[1], both > 0) ──
+    let mut perch_ok = 1
+    if t_get(scale, 0) <= 0.0 { perch_ok = 0 }
+    if t_get(scale, 1) <= 0.0 { perch_ok = 0 }
+    if _qt_abs(t_get(scale, 0) - t_get(scale, 1)) < 0.000001 { perch_ok = 0 }
+
+    // ── F-INT4-DET ──
+    let wq2 = t_zeros(n); let sc2 = t_zeros(Cout); let ql2 = t_zeros(n); let mk2 = t_zeros(n)
+    nn_int4_quant_fwd(w, wq2, sc2, ql2, mk2, Cout, rest)
+    let mut det_ok = 1
+    let mut di = 0
+    while di < n {
+        if t_get(wq, di) != t_get(wq2, di) { det_ok = 0 }
+        di = di + 1
+    }
+
+    println("F-INT4-RANGE       = " + to_string(range_ok))
+    println("F-INT4-ZERO        = " + to_string(zero_ok))
+    println("F-INT4-DEQUANT-ERR = " + to_string(err_ok))
+    println("F-INT4-STE-MASK    = " + to_string(ste_ok))
+    println("F-INT4-PERCHANNEL  = " + to_string(perch_ok))
+    println("F-INT4-DET         = " + to_string(det_ok))
+
+    let sum = range_ok + zero_ok + err_ok + ste_ok + perch_ok + det_ok
+    if sum == 6 {
+        println("PASS 6/6")
+        return
+    }
+    println("FAIL")
+}
