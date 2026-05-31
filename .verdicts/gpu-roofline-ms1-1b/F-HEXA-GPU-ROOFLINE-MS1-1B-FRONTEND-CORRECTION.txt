@@ -1,0 +1,119 @@
+GPU-ROOFLINE MS#1 1b — frontend [T; N] type-surface CORRECTION + verify-gate STOP
+slug: gpu-roofline-ms1-1b (correction addendum to F-HEXA-GPU-ROOFLINE-MS1-1B.txt)
+VERDICT: 🟠 honest-STOP — flip held [ ] · CORRECTS a factual error in the prior 1b verdict
+DATE: 2026-05-31
+POLICY: /sbs auto:complete (complete-weighted, HIGH stop threshold) — STOP per @L4 verify-gate wall
+HONESTY: @L6 — NO fabricated byte-eq (it was NOT run; reason below), NO fabricated line numbers
+         (every line cited was read from `git show origin/main:self/parser.hexa` in-worktree).
+
+================================================================================
+WHY THIS ADDENDUM EXISTS — the prior 1b verdict got the frontend FACTS wrong
+================================================================================
+The prior verdict (#2251, commit 0bfd472c6, same slug) states, verbatim:
+  "No [T; N] fixed-array TYPE syntax carrying a compile-time size N exists."
+  "the HIR [T; N] size surface 1b requires is genuinely absent on the frontend."
+
+That is FALSE for the syntax-parse layer. On origin/main, self/parser.hexa ALREADY
+parses `[T; N]` in type position today — it is NOT rejected and NOT absent. The
+parser's type path detects the `;`, consumes the size token, and emits `[T]`,
+deliberately DISCARDING N. Verbatim (read via `git show origin/main:self/parser.hexa`):
+
+  2255    } else if p_peek_kind() == "LBracket" {
+  2256        p_advance() // consume '['
+  2257        let inner = parse_type_annotation()
+  2258        // [T; N] — Rust-style fixed-size array. hexa has no fixed-size array
+  2259        // as a first-class type; accept the syntax (common in void-style doc
+  2260        // anchor structs) and emit the same AST as dynamic `[T]`. Swallowing
+  2261        // the `; <size>` prefix avoids the runaway recovery that previously
+  2262        // blew up memory (pre HX-parse-leak-fix).
+  2263        if p_peek_kind() == "Semicolon" {
+  2264            p_advance() // consume ';'
+  2265            // Size expr — typically IntLit or Ident; skip a single token.
+  2266            if p_peek_kind() != "RBracket" { p_advance() }
+  2267        }
+  2268        p_expect("RBracket")
+  2269        base = "[" + inner + "]"
+
+So the correct framing of 1b's frontend gap is NOT "syntax absent" but:
+  "the `[T; N]` type syntax PARSES, but the compile-time size N is THROWN AWAY at
+   parser.hexa:2263-2267 — it is not carried into the type-AST string."
+The :795 RSS-blowup the /sbs plan worried about is ALREADY guarded — it was a
+generic parse-error-recovery leak (parser.hexa:793-796 / 837-841 fail-stop), and
+this exact `[T;N]` path was the historical trigger that the swallow-the-size code
+above already neutralizes. No new RSS guard is needed.
+
+================================================================================
+GRAMMAR-CONFLICT AUDIT (Step 1) — additive, no collision
+================================================================================
+`[T; N]` in TYPE position is unambiguous vs expression-context `[expr]` (index) and
+`[a,b,c]` (array literal): they are different productions. The `;` after a parsed
+inner type inside `[]` occurs ONLY in this type branch (the existing slice-type
+grammar has no `;`). TOK "Semicolon" is already lexed and already branched on here,
+so NO lexer change is needed. The surface is PURELY ADDITIVE — confirmed.
+
+================================================================================
+THE EXACT SURGICAL PATCH (carry N instead of discarding it) — ~5 lines, additive
+================================================================================
+Replace the size-swallow body (parser.hexa:2263-2269) with a size-carrying form:
+
+    if p_peek_kind() == "Semicolon" {
+        p_advance()                               // consume ';'
+        let n = ""                                // compile-time size token
+        if p_peek_kind() != "RBracket" { n = p_peek().value; p_advance() }
+        p_expect("RBracket")
+        base = "[" + inner + "; " + n + "]"       // (T, compile-time-N) type-AST node
+    } else {
+        p_expect("RBracket")
+        base = "[" + inner + "]"                  // unchanged dynamic-array path
+    }
+
+This encodes the (T, N) pair in the existing string-typed type-AST channel that
+consumers (parse_type_params etc.) already read — the minimal frontend node that
+1c (HIR/MIR N-propagation) and 1d (backend tile-size) can then thread. The dynamic
+`[T]` path is byte-identical (the `else` arm is the prior behavior verbatim), so the
+new emission fires ONLY on `[T; N]` syntax, which is ABSENT in every existing
+program today => 0 behavior change for the corpus.
+
+================================================================================
+WHY NOT LANDED THIS SESSION — the verify gate is structurally un-runnable here (@L4 wall)
+================================================================================
+@L3/@L6 REQUIRE the byte-eq proof to be REALLY RUN: `hexa cc --regen` -> promote ->
+DIRECT transpile a corpus -> assert byte-IDENTICAL -> fixpoint -> regression. That
+gate cannot be executed in this environment:
+  - `hexa` heavy-build path is SIGN-GATED: the Darwin fork-storm gate fired verbatim
+    ("local-bound heavy invocation (hexa ...) needs a fresh sign-off ... USER: run
+     `! sidecar sign local`"). An agent cannot issue that TUI sign-off.
+  - Pool roster is EMPTY (`sidecar pool list` => "empty roster") — no ubu-2 remote
+    to offload the transpile to (the /sbs plan's escape hatch is unavailable).
+  - No LOCAL_BUILD=1, no sign token on disk (~/.sidecar/signs present but no local token).
+Per @L6, asserting byte-eq without running it is forbidden. A parser edit that
+changes the type-AST string for `[T;N]` WITHOUT a verified byte-eq + fixpoint would
+violate the locked verify discipline (a self-hosting compiler regen with an
+unverified codegen-affecting change is exactly the failure mode the recipe guards).
+Therefore the edit is documented as the exact ready-to-apply patch rather than
+committed blind. Real partial (code-grounded patch + corrected facts) > a blind edit.
+
+================================================================================
+NEXT SURGICAL STEP (for a session WITH sign-off OR a non-empty pool)
+================================================================================
+1. Apply the ~5-line patch above at self/parser.hexa:2263-2269 (size-carry).
+2. (optional, falls out cleanly) self/type_checker.hexa: recognize the "[T; N]"
+   type string; else leave a scoped TODO for 1c — do NOT balloon the diff.
+3. Sign off (`! sidecar sign local`) OR `pool add` an ubu-2 host.
+4. `hexa cc --regen` -> promote -> DIRECT transpile corpus -> byte-eq IDENTICAL
+   (the `[T;N]` arm fires only on the new syntax, absent in the corpus => 0 Δ) ->
+   fixpoint v_n ≡ v_{n+1} -> regression. Add a tiny program using `[i32; 4]` as the
+   parse-proof (parses, no RSS blowup, emits "[i32; 4]" type node).
+5. THEN 1c (HIR/MIR N-propagation) + 1d (backend `_nvptx_shared_default_bytes`
+   tile-size, nvptx_target.hexa:3345 — in the shared tree that HAS the codegen file).
+
+================================================================================
+MILESTONE STATE (Step 4 honesty)
+================================================================================
+GPU-ROOFLINE MS#1 1b stays `[ ]` — NOT flipped. The (T,N) type-AST node did NOT
+land (verify gate un-runnable; @L6 forbids a blind/unverified codegen-affecting
+edit). This addendum's value = (1) correcting the prior verdict's false "syntax
+absent" claim with verbatim parser evidence, (2) the exact ready-to-apply patch,
+(3) the precise blocker (verify gate, not grammar).
+
+byte-eq: NOT RUN — sign-gated local + empty pool. Honestly reported, not fabricated.
