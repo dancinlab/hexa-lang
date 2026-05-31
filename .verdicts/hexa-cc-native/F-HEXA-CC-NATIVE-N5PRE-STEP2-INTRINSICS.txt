@@ -1,0 +1,30 @@
+F-HEXA-CC-NATIVE-N5PRE-STEP2-INTRINSICS -- allowlist 3 builtins; -9 HX2001 (intrinsic class cleared)
+=====================================================================================================
+date: 2026-06-01   host: mini (darwin-arm64)   base: worktree off origin/main bc8d44068
+measured INDEPENDENTLY off main (STEP1 #2295 not yet merged, so the as-cast cascade is still present
+in this build -- that is STEP1's job; this verdict isolates STEP2's own delta).
+
+CHANGE
+------
+compiler/check/bind.hexa _bind_builtin_names(): added "bytes_to_str_raw",
+"__arr_alloc_items_zero", "__arr_alloc_items_zero_int". These free-call builtins are used by the
+compiler source but were absent from the allowlist -> HX2001 undefined-name at typecheck. All have
+C-level definitions (bytes_to_str_raw lowers at self/codegen.hexa:7155 -> hexa_bytes_to_str_raw;
+__arr_alloc_items_zero[_int] are s4_flatc_post.py-injected static helpers), so allowlisting the
+names is the complete fix -- no codegen/runtime change needed.
+
+BUILD + MEASURE (current-source aprime_cc; proven recipe)
+--------------------------------------------------------
+build_aprime.sh -v ~/.hx/bin/self/native/hexa_v2 -> /tmp/aprime_s2, smoke exit42 PASS.
+flatten compiler/main.hexa -> aprime_s2 --emit=obj (exit 1).
+
+  off-main baseline -> STEP2:  HX2001 80 -> 71  (-9)   TOTAL 144 -> 135
+The 9 cleared are exactly bytes_to_str_raw x7 + __arr_alloc_items_zero x1 + __arr_alloc_items_zero_int x1
+(verified GONE from the undefined-name breakdown; remaining HX2001 = `as` x61 + `)` x7 [STEP1's
+cascade] + `push` x2 + `i64` x1). No new diagnostics; no regression.
+
+CUMULATIVE (STEP1 #2295 as-cast -81, STEP2 intrinsics -9): 144 -> 63 -> 54.
+
+REMAINING after STEP1+STEP2 (~54): `push` x2 (member-call, not a free builtin) + `i64` x1 +
+HX3004 x18 + HX3001 x17 + HX2003 x16 (= 51, HexaVal carrier-model gaps, STEP3 compiler/check/types.hexa).
+falsifier PASS. No milestone flipped (N5 fixpoint not reached). live tree untouched.
