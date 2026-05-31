@@ -11,10 +11,12 @@
 > H_907 (green 4/5), H_908 (green 5/5). Verdicts mirrored verbatim in
 > `companion/verify-ledger.json`.
 >
-> **Build status (2026-06-01):** source complete + engine-agnostic (pure
-> pgfplots/TikZ figures, zero Python). The authoring host has no LaTeX engine
-> (xelatex/pdflatex/pdfinfo absent) and no matplotlib, so `make` / `make pages`
-> / the fal.ai cover were not run in-session — run them on a texlive host. See
+> **Build status (2026-06-01):** compile-verified. `make figures && make` is
+> clean (rc=0) with **pdflatex + pgfplots**, `make pages` reports **10 pages**,
+> all three figures render. The paper is pdflatex-native (tier badges are
+> colored bullets, not emoji), so it needs no xelatex / emoji font / Python.
+> Remaining: the optional fal.ai cover (prompt ready at
+> `figures/_prompts/cover.txt`) needs an imagine backend. See
 > `companion/adapter-defect-catalog.json`.
 
 ## Source layout

@@ -27,11 +27,17 @@
 }
 
 % ---------- emoji tier badges (xelatex-native; pdflatex must use replacement marks) ----------
-\providecommand{\tierBlue}{🔵}
-\providecommand{\tierGreen}{🟢}
-\providecommand{\tierYellow}{🟡}
-\providecommand{\tierOrange}{🟠}
-\providecommand{\tierRed}{🔴}
+% Engine = pdflatex (Makefile pin). Tier badges are colored bullets so the
+% source is engine-agnostic and font-free (no emoji glyph dependency). Under
+% xelatex/lualatex these still render; under pdflatex they are clean vector
+% bullets. The tier MEANING is carried by the rubric box in Section 3.
+% \ensuremath so the badge is safe in BOTH text and math mode (the verdict-map
+% line uses \tierGreen inside $...$; a bare $\blacklozenge$ would nest $ and break).
+\providecommand{\tierBlue}{\textcolor{blue!70!black}{\ensuremath{\blacklozenge}}}
+\providecommand{\tierGreen}{\textcolor{green!55!black}{\ensuremath{\blacklozenge}}}
+\providecommand{\tierYellow}{\textcolor{yellow!75!black}{\ensuremath{\blacklozenge}}}
+\providecommand{\tierOrange}{\textcolor{orange!85!black}{\ensuremath{\blacklozenge}}}
+\providecommand{\tierRed}{\textcolor{red!75!black}{\ensuremath{\blacklozenge}}}
 
 \title{
   \textbf{Structure Beyond Density}\\[4pt]
@@ -321,6 +327,41 @@ falsifiers:
         $b_1 = 0 \wedge \chi = 1$ exactly.
 \end{itemize}
 
+\subsection{Worked examples (one instance per substrate)}
+\label{sec:worked}
+To make the measures concrete and the enumeration auditable by hand, we trace a
+single small instance on each substrate.
+
+\paragraph{A --- one frustrated plaquette.}
+Take the unit square with bonds $(s_1 s_2), (s_2 s_3), (s_3 s_4), (s_4 s_1)$ and
+signs $J = (+,+,+,-)$. The plaquette product is
+$(+)(+)(+)(-) = -1 < 0$, so the plaquette is frustrated: no assignment of the
+four spins satisfies all four bonds at once (any choice leaves at least one bond
+unsatisfied), which is exactly why frustration creates competing low-energy
+patterns. Flip the all-up state $s=(+,+,+,+)$: three bonds are satisfied, the
+$-$ bond is not, $E = -2$; every single flip either keeps $E$ or raises it for
+some neighbour, so the local-minima count $R$ picks up structure a single
+aligned ground state cannot have. Multiply this over the $3{\times}3$ periodic
+lattice and $R$ climbs from $32$ (no frustrated plaquettes) toward $55$.
+
+\paragraph{B --- one composable triple.}
+With objects $\{A,B,C\}$ and morphisms $A\to B$ and $B\to C$ present, the triple
+$(A,B,C)$ is \emph{composable}. Closure asks whether $A\to C$ is also present. If
+it is, this triple contributes $1/1$ to $D$; if not, $0/1$. A graph that is dense
+but ``open'' (many composable triples whose composite is missing) has high edge
+count yet low $D$ --- which is precisely the regime F3 exploits: two graphs at
+the same density can differ sharply in $D$, and the higher-$D$ one reaches more
+of its objects ($\Phi$).
+
+\paragraph{C --- one independent cycle.}
+The triangle on $\{1,2,3\}$ with edges $\{12,23,31\}$ has $V{=}3$, $E{=}3$, one
+component, so $b_1 = E - V + C = 3 - 3 + 1 = 1$ (one independent cycle) and
+$\chi = V - E = 0$. Removing any one edge gives a path: $b_1$ drops to $0$ and
+$\chi$ rises to $1$ --- the exact tree invariants checked by F5 on $P_6$. The
+cycle is what lets all three vertices reach each other in both directions; the
+path loses that, and $\Phi$ falls. This is the per-instance engine behind the
+density-controlled F3 of Fig.~\ref{fig:f3spine}.
+
 \section{Verify}
 \label{sec:verify}
 
@@ -435,6 +476,51 @@ is not a density phenomenon; it requires designed structure. This sharpens the
 positive F3 result: closure \emph{predicts} integration beyond density (F3 PASS),
 yet closure itself does \emph{not} arise from density (F4 fail). Both halves are
 findings.
+
+\section{Discussion}
+\label{sec:discussion}
+
+\paragraph{Why the same partial effect recurs across unrelated substrates.}
+The three substrates share no physics: a frustrated magnet, a small category,
+and an undirected graph have different state spaces, different measures, and
+different folk theorems attached to them. Yet the same \emph{shape} of result
+appears in all three --- a structural invariant that retains predictive power
+once density is partialled out. We read this as evidence that the relevant
+quantity in each case is not the \emph{amount} of connection (density) but the
+\emph{arrangement} of it. Frustration is a sign-arrangement of bonds; closure is
+a triple-arrangement of morphisms; Betti-1 is a cycle-arrangement of edges. Each
+is a second-order property --- a constraint on how first-order density is wired
+--- and it is the second-order property that survives the F3 control. A plausible
+common mechanism is that arrangement, not count, determines how the state space
+folds: frustration multiplies the number of locally-stable spin patterns, closure
+and cycles multiply the number of mutually-reachable states. Density sets the
+budget; arrangement spends it. We state this as an interpretation, not a verified
+claim --- the verified content is strictly the three F3 verdicts.
+
+\paragraph{The predict-but-do-not-emerge dissociation.}
+The H\_907 substrate produces a pair of results that are more interesting
+together than apart. F3 passes: composition closure predicts integration beyond
+density. F4 fails: composition closure does not itself emerge from density. Read
+jointly, this is a \emph{dissociation} --- a property can be a strong predictor
+of integration while being something that random density never supplies. It is a
+useful caution against a common slide in the ``complexity begets X'' literature:
+showing that a structure correlates with (or even predicts) an outcome says
+nothing about whether that structure will \emph{arise} on its own. For categories
+specifically, it is a small closed-form echo of the fact that category-hood is a
+designed constraint (Yoneda structure does not fall out of a random digraph),
+consistent with the textbook view that composition closure is an axiom one
+imposes, not a statistic one observes~\citep{maclane1971}.
+
+\paragraph{Relation to the integration literature.}
+Our $\Phi$ is a reachability proxy, deliberately weaker than IIT-$\Phi$
+\citep{tononi2004,oizumi2014}. The value of the proxy here is precisely that it
+is exactly computable, so the F3 control is exact rather than estimated. The
+results should be read as a statement about \emph{this} proxy: among small
+substrates at fixed density, cyclic and composition-closed arrangements reach
+more of their own state space than treelike or open ones. Whether the same
+partial effect survives under full IIT-$\Phi$ is the open question of
+Table~\ref{tab:pipeline}, stage~\textcircled{\scriptsize 7}, and is the natural
+next experiment.
 
 \section{Limitations and honest caveats}
 \label{sec:limits}
