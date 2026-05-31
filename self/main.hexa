@@ -16,6 +16,7 @@ use "compiler/ir/mir"
 use "compiler/codegen/nvptx_target"
 use "stdlib/cloud/cloud_commands"
 use "self/core_commands"
+use "self/discovery_commands"
 // ═══════════════════════════════════════════════════════════
 //  self/main.hexa — HEXA CLI 엔트리 (go/cargo 스타일)
 //
@@ -296,27 +297,28 @@ fn cmd_verb_help(verb) {
 // delegators (atlas/qrng/qmirror/cloud/loop/gpu/sim-universe) self-delegate
 // and are NOT routed here.
 fn cmd_absorbed_help(verb) {
-    // DISCOVERY family (compiler/{drill,chain,...}) — gap-breakthrough engines.
-    if verb == "drill" || verb == "kick" {
-        println("hexa " + verb + " --seed \"<text>\" [--rounds N] [--engine mk9|mk10]")
-        println("  Gap-breakthrough discovery engine (kick ≡ drill apex). Verifies + folds atlas atoms.")
-    } else if verb == "chain"  { println("hexa chain [args]\n  DISCOVERY — chained drill rounds (multi-stage ω-cycle).")
-    } else if verb == "omega"  { println("hexa omega [args]\n  DISCOVERY — ω-cycle apex discovery driver.")
-    } else if verb == "surge"  { println("hexa surge [args]\n  DISCOVERY — burst-mode candidate generation.")
-    } else if verb == "dream"  { println("hexa dream [args]\n  DISCOVERY — speculative candidate exploration.")
-    } else if verb == "swarm"  { println("hexa swarm [args]\n  DISCOVERY — parallel multi-agent candidate sweep.")
-    } else if verb == "reign"  { println("hexa reign [args]\n  DISCOVERY — dominance/selection over candidate pools.")
-    } else if verb == "molt"   { println("hexa molt [args]\n  DISCOVERY — shed/refresh stale candidate state.")
-    } else if verb == "wake"   { println("hexa wake [args]\n  DISCOVERY — resume a suspended discovery cycle.")
-    } else if verb == "forge"  { println("hexa forge [args]\n  DISCOVERY — synthesize new artifacts from verified atoms.")
-    } else if verb == "canon"  { println("hexa canon [args]\n  DISCOVERY — canonicalize discoveries into the atlas.")
-    } else if verb == "debate" { println("hexa debate [args]\n  DISCOVERY — adversarial cross-check of candidate claims.")
-    } else if verb == "revive" { println("hexa revive [args]\n  DISCOVERY — re-run/recover a prior discovery session.")
-    // Phase 2 generators / verifiers.
-    } else if verb == "smash"           { println("hexa smash [args]\n  DISCOVERY — generator: smash a target into sub-claims.")
-    } else if verb == "free"            { println("hexa free [args]\n  DISCOVERY — generator: free-form claim expansion.")
-    } else if verb == "hyperarithmetic" { println("hexa hyperarithmetic [args]\n  DISCOVERY — generator: hyperarithmetic claim ladder.")
-    } else if verb == "honesty"         { println("hexa honesty <file>\n  AUDIT — over-claim / honesty verifier (BT-AI2 audit surface).")
+    // DISCOVERY family — rendered from the in-source SSOT
+    // self/discovery_commands::discovery_commands() (compiled in, NOT
+    // read_file'd). The 17 discovery verbs (drill·kick·chain + 11 variants + 3
+    // generators) iterate the same array the dispatch + S3 drift test share, so
+    // their per-verb help can never drift from the roster.
+    let _drow = discovery_command_lookup(verb)
+    if len(_drow.name) > 0 {
+        if len(_drow.args) > 0 {
+            println("hexa " + _drow.name + " " + _drow.args)
+        } else {
+            println("hexa " + _drow.name)
+        }
+        let _dl = _drow.summary.split("\n")
+        let mut _di = 0
+        while _di < len(_dl) {
+            println("  " + _dl[_di])
+            _di = _di + 1
+        }
+        return
+    }
+    // AUDIT / SCIENCE verifiers (not yet SSOT-migrated — S4 tool drawer).
+    if verb == "honesty"                { println("hexa honesty <file>\n  AUDIT — over-claim / honesty verifier (BT-AI2 audit surface).")
     } else if verb == "absolute"        { println("hexa absolute <file>\n  AUDIT — absolute-claim verifier (no unfenced superlatives).")
     } else if verb == "meta-closure"    { println("hexa meta-closure <file>\n  AUDIT — meta-closure verifier (claim-graph terminality).")
     // SCIENCE absorbed verbs.

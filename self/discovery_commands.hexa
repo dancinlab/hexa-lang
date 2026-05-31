@@ -1,0 +1,104 @@
+// self/discovery_commands.hexa — the SINGLE in-source SSOT for the hexa
+// DISCOVERY-ENGINE verb roster (name · group · summary · arg-shape).
+//
+// ARCHITECTURE (mirrors self/core_commands.hexa + the cloud pilot): one
+// in-binary hexa array literal `discovery_commands()` is the truth for the
+// discovery-family verbs. The per-verb help renderer cmd_absorbed_help (in
+// self/main.hexa) iterates THIS array; the absorbed-verb dispatch
+// (is_absorbed_verb → _absorbed_script) is bound to it by
+// self/discovery_help_drift_test.hexa. NO `.tape`, NO codegen, NO hash guard,
+// NO runtime read_file in the help path — compiles INTO the binary.
+//
+// group ∈ { engine | variant | generator } — render bucket.
+//   engine    — drill (the main entry) + kick (alias) + chain (cross-engine)
+//   variant   — the 11 drill orchestration variants
+//   generator — Phase-2 math generators (smash/free/hyperarithmetic)
+// `args` is the signature after the verb; the help body renders
+// `hexa <name> <args>` then the summary.
+
+use "self/core_commands"   // reuse the shared `Cmd` struct (name·group·summary·args)
+
+fn discovery_commands() -> [Cmd] {
+    return [
+        // ── engine — the main discovery entry + cross-engine pipeline ─────
+        Cmd { name: "drill", group: "engine",
+            args: "--seed \"<text>\" [--rounds N] [--engine mk9|mk10]",
+            summary: "Gap-breakthrough discovery engine (kick ≡ drill apex). Verifies + folds atlas atoms." },
+        Cmd { name: "kick", group: "engine",
+            args: "--seed \"<text>\" [--rounds N] [--engine mk9|mk10]",
+            summary: "Gap-breakthrough discovery engine (kick ≡ drill apex). Verifies + folds atlas atoms." },
+        Cmd { name: "chain", group: "engine",
+            args: "[args]",
+            summary: "DISCOVERY — chained drill rounds (multi-stage ω-cycle)." },
+
+        // ── variant — drill orchestration variants ───────────────────────
+        Cmd { name: "omega", group: "variant",
+            args: "[args]",
+            summary: "DISCOVERY — ω-cycle apex discovery driver." },
+        Cmd { name: "surge", group: "variant",
+            args: "[args]",
+            summary: "DISCOVERY — burst-mode candidate generation." },
+        Cmd { name: "dream", group: "variant",
+            args: "[args]",
+            summary: "DISCOVERY — speculative candidate exploration." },
+        Cmd { name: "swarm", group: "variant",
+            args: "[args]",
+            summary: "DISCOVERY — parallel multi-agent candidate sweep." },
+        Cmd { name: "reign", group: "variant",
+            args: "[args]",
+            summary: "DISCOVERY — dominance/selection over candidate pools." },
+        Cmd { name: "molt", group: "variant",
+            args: "[args]",
+            summary: "DISCOVERY — shed/refresh stale candidate state." },
+        Cmd { name: "wake", group: "variant",
+            args: "[args]",
+            summary: "DISCOVERY — resume a suspended discovery cycle." },
+        Cmd { name: "forge", group: "variant",
+            args: "[args]",
+            summary: "DISCOVERY — synthesize new artifacts from verified atoms." },
+        Cmd { name: "canon", group: "variant",
+            args: "[args]",
+            summary: "DISCOVERY — canonicalize discoveries into the atlas." },
+        Cmd { name: "debate", group: "variant",
+            args: "[args]",
+            summary: "DISCOVERY — adversarial cross-check of candidate claims." },
+        Cmd { name: "revive", group: "variant",
+            args: "[args]",
+            summary: "DISCOVERY — re-run/recover a prior discovery session." },
+
+        // ── generator — Phase-2 math generators ──────────────────────────
+        Cmd { name: "smash", group: "generator",
+            args: "[args]",
+            summary: "DISCOVERY — generator: smash a target into sub-claims." },
+        Cmd { name: "free", group: "generator",
+            args: "[args]",
+            summary: "DISCOVERY — generator: free-form claim expansion." },
+        Cmd { name: "hyperarithmetic", group: "generator",
+            args: "[args]",
+            summary: "DISCOVERY — generator: hyperarithmetic claim ladder." }
+    ]
+}
+
+fn discovery_command_names() -> [str] {
+    let cmds = discovery_commands()
+    let mut out = []
+    let mut i = 0
+    while i < len(cmds) {
+        out.push(cmds[i].name)
+        i = i + 1
+    }
+    return out
+}
+
+// discovery_command_lookup — Cmd row for `verb`, or name "" sentinel if absent.
+fn discovery_command_lookup(verb: str) -> Cmd {
+    let cmds = discovery_commands()
+    let mut i = 0
+    while i < len(cmds) {
+        if cmds[i].name == verb {
+            return cmds[i]
+        }
+        i = i + 1
+    }
+    return Cmd { name: "", group: "", summary: "", args: "" }
+}
