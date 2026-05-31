@@ -2257,16 +2257,23 @@ fn parse_type_annotation() {
         let inner = parse_type_annotation()
         // [T; N] — Rust-style fixed-size array. hexa has no fixed-size array
         // as a first-class type; accept the syntax (common in void-style doc
-        // anchor structs) and emit the same AST as dynamic `[T]`. Swallowing
-        // the `; <size>` prefix avoids the runaway recovery that previously
-        // blew up memory (pre HX-parse-leak-fix).
+        // anchor structs). 1b (GPU-ROOFLINE MS#1): CARRY the compile-time size
+        // N into the type string as `[T; N]` instead of discarding it — the
+        // plain `[T]` (no `;`) path stays byte-identical. The `; <size>` swallow
+        // still avoids the runaway recovery that previously blew up memory
+        // (pre HX-parse-leak-fix); we now capture the size token's text.
+        let mut _size = ""
         if p_peek_kind() == "Semicolon" {
             p_advance() // consume ';'
-            // Size expr — typically IntLit or Ident; skip a single token.
-            if p_peek_kind() != "RBracket" { p_advance() }
+            // Size expr — typically IntLit or Ident; capture a single token.
+            if p_peek_kind() != "RBracket" { _size = p_advance().value }
         }
         p_expect("RBracket")
-        base = "[" + inner + "]"
+        if _size != "" {
+            base = "[" + inner + "; " + _size + "]"
+        } else {
+            base = "[" + inner + "]"
+        }
     } else if p_peek_kind() == "LParen" {
         // G35: Tuple type — (T, U, ...)
         p_advance() // consume '('
