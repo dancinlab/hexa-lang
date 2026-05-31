@@ -1,0 +1,63 @@
+=== UNSHADOW native HexaArrF64 storage bench (HEADLINE / F1 · F64 mirror) ===
+host=arm64 (mini)  cc=Apple clang -O2  runs=9  N=4000 (literal f64 array)  iters=5000000 (outer repeat)
+faithful A/B proxy: the four C arms mirror self/codegen.hexa + self/
+runtime_core_emit.hexa F64 emit shapes VERBATIM (B9 full self-host rebuild is
+blocked -> the emitted-C string is the authoritative codegen surface, same
+discipline as the landed i64 bench .verdicts/unshadow-native-arr/).
+Reproduce: tool/unshadow_native_arr_f64_cbench.hexa
+
+--- C: known-float-array hot-loop sum (4 arms) ---
+  [ref_c   ] built=yes err_lines=0
+  [a_boxed ] built=yes err_lines=0
+  [b_native] built=yes err_lines=0
+  [d_ideal ] built=yes err_lines=0
+
+  g5 byte-diff (program output md5 — ALL FOUR MUST be identical):
+    ref_c    : 0e996ac90eb43ab92cf72486d2c8c5f5
+    a_boxed  : 0e996ac90eb43ab92cf72486d2c8c5f5
+    b_native : 0e996ac90eb43ab92cf72486d2c8c5f5
+    d_ideal  : 0e996ac90eb43ab92cf72486d2c8c5f5
+  -> 4/4 IDENTICAL (unique md5 count = 1, program output = 1010000000000.000000).
+     native HexaArrF64 storage + inline TAG_FLOAT read produces the byte-identical
+     float sum as the boxed HexaArr path and idiomatic C.
+
+  perf best-of-9 wall (s):
+    ref_c    : 0.3947   (idiomatic raw double[] — absolute ceiling reference)
+    a_boxed  : 1.4948   (boxed HexaArr of TAG_FLOAT HexaVal, 16B stride — BEFORE)
+    b_native : 0.4297   (LANDED: HexaArrF64 native double[], INLINE TAG_FLOAT read)
+    d_ideal  : 0.3943   (CEILING: native double[], raw double accumulator)
+
+  derived:
+    a_boxed / b_native = 3.48x   (b_native 71% faster than boxed)
+    b_native / d_ideal = 1.09x   (native nearly AT the ceiling)
+    b_native / ref_c   = 1.09x   (native ~AT PARITY with idiomatic C)
+    gap close: native closes 92.6% of the boxed->ideal span (1.1005s)
+
+  asm SIMD vector-op count (.2d/.4s — auto-vectorization signal):
+    ref_c    : 33
+    a_boxed  : 0    (16B HexaVal stride -> cannot auto-vectorize)
+    b_native : 33   (contiguous double[] -> vectorizes like idiomatic C)
+    d_ideal  : 33
+
+--- INTEGRITY: typed f64 array at a polymorphic boundary ---
+  [bnd_native] built=yes err_lines=0
+  [bnd_boxed ] built=yes err_lines=0
+  boundary g5 (MUST be identical — native storage boxes to the same value):
+    bnd_boxed  : 80a01ea660d8b53e7f1244ddf12ef797
+    bnd_native : 80a01ea660d8b53e7f1244ddf12ef797
+  -> 2/2 IDENTICAL (value 7.500000). hexa_arr_f64_box(v,i) -> real TAG_FLOAT
+     HexaVal == boxed-path value: the native f64 array boxes correctly when it
+     reaches a polymorphic boundary (no value drift).
+
+--- NEGATIVE CONTROL: auto-fire is escape-driven, not name-driven ---
+  codegen static (self/codegen.hexa, real grep on the landed SSOT):
+    _native_arr_autofire_ok call sites = 4 (gates every native construct/read site)
+    leftover combined gate (_native_arr_enabled() &&) = 0 (fully replaced)
+    _native_arr_noescape_scan wired into gen2_fn_decl pre-scan = yes
+  faithful-proxy representation grep:
+    escaping  rep (a_boxed.c)  hexa_arr_f64_new = 0  (stays BOXED -> hexa_arr_new used)
+    nonescape rep (b_native.c) hexa_arr_f64_new = 2  (fires NATIVE storage)
+  -> the decision is escape-driven: an escaping binding keeps the boxed HexaArr
+     (no native helper emitted), a non-escaping binding fires native by default.
+
+=== done ===

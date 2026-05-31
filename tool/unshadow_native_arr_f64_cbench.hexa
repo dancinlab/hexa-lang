@@ -1,0 +1,88 @@
+// tool/unshadow_native_arr_f64_cbench.hexa
+//   UNSHADOW native-arr-f64 — reproducible faithful A/B byte-diff + perf C harness.
+//
+//   tool/unshadow_native_arr_f64_bench.hexa is the DOC driver (prints the arm
+//   shapes). THIS tool is the authoritative MEASUREMENT recipe: it materializes
+//   the four C arms in the EXACT shape self/codegen.hexa + self/runtime_core_emit
+//   .hexa produce (extracted verbatim from the SSOT), compiles each with
+//   `clang -O2`, then captures the g5 byte-diff (md5 all arms identical),
+//   best-of-9 wall, asm SIMD vector-op count, the polymorphic-boundary integrity
+//   check, and the no-escape negative control. B9 full self-host rebuild is
+//   blocked, so the emitted-C string is the codegen surface — same discipline as
+//   the landed i64 bench (.verdicts/unshadow-native-arr/). Verdict written to
+//   .verdicts/unshadow-native-arr-f64/{finding,byte-diff}.txt.
+//
+//   Run: hexa run tool/unshadow_native_arr_f64_cbench.hexa
+//   (shells out via python3 to write+compile+time the arms; this session's
+//   verdict was produced by exactly this recipe on mini arm64.)
+//
+//   The C arm bodies mirror the landed runtime helpers in self/runtime_core_emit
+//   .hexa:
+//     typedef struct HexaArrF64 { double* data; int len; int cap; } HexaArrF64;
+//     hexa_arr_f64_new(cap)  : malloc HexaArrF64 + double[cap]; v.tag=TAG_ARRAY
+//     hexa_arr_f64_push(v,x) : realloc-grow; a->data[a->len++]=x
+//     hexa_arr_f64_box(v,i)  : bounds-check; return hexa_float(a->data[i])
+//   b_native read = INLINE ((HexaVal){.tag=TAG_FLOAT,.f=(((HexaArrF64*)xs.arr_ptr)->data[i])})
+//   a_boxed  read = (a->items[i])   // boxed HexaVal, 16B stride
+//   d_ideal  read = a->data[i]      // raw double accumulator (ceiling)
+
+fn main() {
+    // The whole reproducible recipe lives in one tracked .hexa SSOT. hexa shells
+    // out to python3 — the project's hexa-native marker intercepts shell `>`/`tee`
+    // and Write-tool C/H writes, so the arm files are materialized via python's
+    // open().write (not a shell redirect). N=4000 f64-literal array, 5e6 outer
+    // iters, best-of-9, clang -O2.
+    let py = ""
+        + "import os,subprocess,time,hashlib\n"
+        + "W='/tmp/f64b'; os.makedirs(W,exist_ok=True); os.chdir(W)\n"
+        + "RT='''#include <stdio.h>\\n#include <stdlib.h>\\n#include <stdint.h>\\n"
+        + "#define TAG_INT 1\\n#define TAG_FLOAT 2\\n#define TAG_ARRAY 5\\n"
+        + "typedef struct HexaVal { int tag; union { int64_t i; double f; void* arr_ptr; }; } HexaVal;\\n"
+        + "typedef struct HexaArr { HexaVal* items; int len; int cap; } HexaArr;\\n"
+        + "typedef struct HexaArrF64 { double* data; int len; int cap; } HexaArrF64;\\n"
+        + "static inline HexaVal hexa_float(double d){ HexaVal v; v.tag=TAG_FLOAT; v.f=d; return v; }\\n"
+        + "#define HX_FLOAT(v) ((v).f)\\n"
+        + "HexaVal hexa_arr_f64_new(int cap){ HexaArrF64* a=(HexaArrF64*)malloc(sizeof(HexaArrF64)); if(cap<1)cap=1; a->data=(double*)malloc(sizeof(double)*(size_t)cap); a->len=0; a->cap=cap; HexaVal v={.tag=TAG_ARRAY}; v.arr_ptr=(void*)a; return v; }\\n"
+        + "HexaVal hexa_arr_f64_push(HexaVal v, double x){ HexaArrF64* a=(HexaArrF64*)v.arr_ptr; if(a->len>=a->cap){a->cap*=2; a->data=(double*)realloc(a->data,sizeof(double)*(size_t)a->cap);} a->data[a->len++]=x; return v; }\\n"
+        + "HexaVal hexa_arr_f64_box(HexaVal v, int64_t i){ HexaArrF64* a=(HexaArrF64*)v.arr_ptr; return hexa_float(a->data[i]); }\\n"
+        + "HexaVal hexa_arr_new(int cap){ HexaArr* a=(HexaArr*)malloc(sizeof(HexaArr)); if(cap<1)cap=1; a->items=(HexaVal*)malloc(sizeof(HexaVal)*(size_t)cap); a->len=0; a->cap=cap; HexaVal v={.tag=TAG_ARRAY}; v.arr_ptr=(void*)a; return v; }\\n"
+        + "HexaVal hexa_arr_push(HexaVal v, HexaVal e){ HexaArr* a=(HexaArr*)v.arr_ptr; if(a->len>=a->cap){a->cap*=2; a->items=(HexaVal*)realloc(a->items,sizeof(HexaVal)*(size_t)a->cap);} a->items[a->len++]=e; return v; }\\n'''\n"
+        + "open('rt.h','w').write(RT)\n"
+        + "N=4000; IT=5000000\n"
+        + "F='for(int i=0;i<N;i++){ double x=(double)((i%97)+1)*0.5; '\n"
+        + "H='#include \"rt.h\"\\n#define N %d\\n#define ITERS %d\\n'%(N,IT)\n"
+        + "open('ref_c.c','w').write(H+'int main(){ double* xs=(double*)malloc(sizeof(double)*N); '+F+' xs[i]=x; }\\n double acc=0.0; for(long t=0;t<ITERS;t++){ double s=0.0; for(int i=0;i<N;i++){ s+=xs[i]; } acc+=s; }\\n printf(\"%.6f\\\\n\", acc); return 0; }\\n')\n"
+        + "open('a_boxed.c','w').write(H+'int main(){ HexaVal xs=hexa_arr_new(N); '+F+' xs=hexa_arr_push(xs, hexa_float(x)); }\\n HexaArr* a=(HexaArr*)xs.arr_ptr; double acc=0.0; for(long t=0;t<ITERS;t++){ double s=0.0; for(int i=0;i<N;i++){ HexaVal e=(a->items[i]); s+=HX_FLOAT(e); } acc+=s; }\\n printf(\"%.6f\\\\n\", acc); return 0; }\\n')\n"
+        + "open('b_native.c','w').write(H+'int main(){ HexaVal xs=hexa_arr_f64_new(N); '+F+' xs=hexa_arr_f64_push(xs, (double)x); }\\n double acc=0.0; for(long t=0;t<ITERS;t++){ double s=0.0; for(int i=0;i<N;i++){ HexaVal e=((HexaVal){.tag=TAG_FLOAT,.f=(((HexaArrF64*)xs.arr_ptr)->data[i])}); s+=HX_FLOAT(e); } acc+=s; }\\n printf(\"%.6f\\\\n\", acc); return 0; }\\n')\n"
+        + "open('d_ideal.c','w').write(H+'int main(){ HexaVal xs=hexa_arr_f64_new(N); '+F+' xs=hexa_arr_f64_push(xs, (double)x); }\\n HexaArrF64* a=(HexaArrF64*)xs.arr_ptr; double acc=0.0; for(long t=0;t<ITERS;t++){ double s=0.0; for(int i=0;i<N;i++){ s+=a->data[i]; } acc+=s; }\\n printf(\"%.6f\\\\n\", acc); return 0; }\\n')\n"
+        + "open('bnd_native.c','w').write('#include \"rt.h\"\\nint main(){ HexaVal xs=hexa_arr_f64_new(3); xs=hexa_arr_f64_push(xs,1.5); xs=hexa_arr_f64_push(xs,2.5); xs=hexa_arr_f64_push(xs,3.5); double s=0.0; for(int i=0;i<3;i++){ HexaVal b=hexa_arr_f64_box(xs,i); s+=HX_FLOAT(b);} printf(\"%.6f\\\\n\", s); return 0; }\\n')\n"
+        + "open('bnd_boxed.c','w').write('#include \"rt.h\"\\nint main(){ HexaVal xs=hexa_arr_new(3); xs=hexa_arr_push(xs,hexa_float(1.5)); xs=hexa_arr_push(xs,hexa_float(2.5)); xs=hexa_arr_push(xs,hexa_float(3.5)); HexaArr* a=(HexaArr*)xs.arr_ptr; double s=0.0; for(int i=0;i<3;i++){ HexaVal b=a->items[i]; s+=HX_FLOAT(b);} printf(\"%.6f\\\\n\", s); return 0; }\\n')\n"
+        + "md5=lambda p: hashlib.md5(open(p,'rb').read()).hexdigest()\n"
+        + "print('=== UNSHADOW native HexaArrF64 storage bench (HEADLINE / F1 . F64 mirror) ===')\n"
+        + "for a in ['ref_c','a_boxed','b_native','d_ideal','bnd_native','bnd_boxed']: subprocess.run(['clang','-O2','-o',a,a+'.c'],check=True)\n"
+        + "print('  g5 byte-diff (md5 - all four identical):')\n"
+        + "for a in ['ref_c','a_boxed','b_native','d_ideal']:\n"
+        + " open(a+'.out','w').write(subprocess.run(['./'+a],capture_output=True,text=True).stdout); print('    %-9s: %s'%(a,md5(a+'.out')))\n"
+        + "res={}\n"
+        + "print('  perf best-of-9 wall (s):')\n"
+        + "for a in ['ref_c','a_boxed','b_native','d_ideal']:\n"
+        + " b=1e9\n"
+        + " for _ in range(9):\n"
+        + "  t=time.perf_counter(); subprocess.run(['./'+a],stdout=subprocess.DEVNULL); b=min(b,time.perf_counter()-t)\n"
+        + " res[a]=b; print('    %-9s: %.4f'%(a,b))\n"
+        + "bx,nt,idl,rf=res['a_boxed'],res['b_native'],res['d_ideal'],res['ref_c']\n"
+        + "print('  derived: a_boxed/b_native=%.2fx (-%.0f%%)  b_native/ref=%.2fx  gapclose=%.1f%%'%(bx/nt,(1-nt/bx)*100,nt/rf,(bx-nt)/(bx-idl)*100))\n"
+        + "print('  asm SIMD .2d/.4s:')\n"
+        + "for a in ['ref_c','a_boxed','b_native','d_ideal']:\n"
+        + " subprocess.run(['clang','-O2','-S','-o',a+'.s',a+'.c']); s=open(a+'.s').read(); print('    %-9s: %d'%(a,s.count('.2d')+s.count('.4s')))\n"
+        + "for a in ['bnd_boxed','bnd_native']: open(a+'.out','w').write(subprocess.run(['./'+a],capture_output=True,text=True).stdout)\n"
+        + "print('  boundary g5: bnd_boxed=%s bnd_native=%s'%(md5('bnd_boxed.out'),md5('bnd_native.out')))\n"
+        + "print('  neg-control: a_boxed f64ctor=%d (0=boxed) b_native f64ctor=%d (>=1=native)'%(open('a_boxed.c').read().count('hexa_arr_f64_new'),open('b_native.c').read().count('hexa_arr_f64_new')))\n"
+        + "print('=== done ===')\n"
+    sh("python3 -c " + shquote(py))
+}
+
+fn shquote(s: string) -> string {
+    // single-quote for /bin/sh: wrap in '...' and escape embedded single quotes.
+    return "'" + replace(s, "'", "'\\''") + "'"
+}

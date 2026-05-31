@@ -1,0 +1,53 @@
+// UNSHADOW [HEADLINE] F1 (F64 mirror) — native HexaArrF64 contiguous double[]
+// storage bench + no-escape auto-fire proof harness.
+//
+// Faithful A/B proxy (B9 full self-host rebuild is blocked → the emitted C string
+// is the authoritative codegen surface; this harness documents the four arms in
+// the EXACT shape self/codegen.hexa produces, mirroring the landed i64 bench
+// tool/unshadow_native_arr_bench.hexa).
+//
+// Arms (all four program outputs MUST be byte-identical = g5 gate):
+//   ref_c    : idiomatic C — raw double[] sum (the absolute ceiling reference)
+//   a_boxed  : boxed HexaArr of TAG_FLOAT HexaVal, 16-byte stride (BEFORE)
+//   b_native : HexaArrF64 native contiguous double[] storage, INLINE TAG_FLOAT
+//              read (the LANDED lowering — native storage, boxed read surface)
+//   d_ideal  : native contiguous double[] storage, RAW read into a raw double
+//              accumulator (the CEILING — a known-float accumulator chain)
+//
+// INTEGRITY arm: a typed-f64 array flowing to a polymorphic boundary
+// (hexa_arr_f64_box → real TAG_FLOAT HexaVal) must box to the same value as the
+// boxed path (IDENTICAL both sides).
+//
+// NEGATIVE-CONTROL arm for the no-escape auto-fire: a binding that DOES escape
+// (returned / passed to an opaque fn) must STAY boxed — the codegen emits no
+// hexa_arr_f64_new helper for the escaping binding (grep the emit). This proves
+// the auto-fire decision is escape-driven, not name-driven.
+//
+// Run on pool (arm64), best-of-9, capture raw stdout verbatim to
+// .verdicts/unshadow-native-arr-f64/ (md5s + per-arm wall + asm vec-op count +
+// byte-diff). Per claim_verify NO numbers are committed until measured.
+
+fn main() {
+    println("=== UNSHADOW native HexaArrF64 storage bench (HEADLINE / F1 · F64 mirror) ===")
+    println("A/B-proxy + auto-fire repro harness. The authoritative perf measurement is")
+    println("the real-transpile byte-diff across the four C arms (mirrors the i64 bench);")
+    println("this driver documents the arm shapes + the no-escape negative control.")
+    println("")
+    println("--- arm shapes the codegen emits (self/codegen.hexa) ---")
+    println("a_boxed  let xs = [..f64-lit..]  (escaping OR flag-off): boxed HexaArr,")
+    println("         read = (xs.arr_ptr->items[i])  // 16B-stride HexaVal")
+    println("b_native let xs = [..f64-lit..]  (non-escaping -> AUTO-FIRE): ")
+    println("         xs = ({ HexaVal __nfa = hexa_arr_f64_new(N);")
+    println("                 hexa_arr_f64_push(__nfa, (double)HX_FLOAT(<lit>)); ... __nfa; })")
+    println("         read = ((HexaVal){.tag=TAG_FLOAT,.f=(((HexaArrF64*)xs.arr_ptr)->data[i])})")
+    println("d_ideal  same native storage; surrounding sum extracts raw .f via HX_FLOAT")
+    println("         (a known-float accumulator chain collapses the box -> raw double).")
+    println("")
+    println("--- no-escape NEGATIVE CONTROL ---")
+    println("let xs = [1.0, 2.0, 3.0]; return xs            // ESCAPES -> stays BOXED")
+    println("let xs = [1.0, 2.0, 3.0]; opaque_sink(xs)      // ESCAPES -> stays BOXED")
+    println("let xs = [1.0, 2.0, 3.0]; <only xs[i] reads>   // NO escape -> AUTO-FIRE native")
+    println("grep the emitted user.c: hexa_arr_f64_new present ONLY for the non-escaping")
+    println("binding -> proves the decision is escape-driven, not name-driven.")
+    println("=== done ===")
+}

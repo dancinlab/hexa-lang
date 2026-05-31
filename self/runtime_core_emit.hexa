@@ -960,6 +960,14 @@ fn emit_runtime_core_to(out_path: str) {
     buf = buf + "HexaVal hexa_arr_i64_push(HexaVal v, int64_t x);\n"
     buf = buf + "int     hexa_arr_i64_len(HexaVal v);\n"
     buf = buf + "HexaVal hexa_arr_i64_box(HexaVal v, int64_t i);\n"
+    // UNSHADOW [HEADLINE] F1 (F64 mirror): native-f64 array storage surface. Same
+    // wall-piercing rationale as the i64 form — public in runtime.h so codegen-
+    // emitted user.c can build/read/box a native HexaArrF64 (contiguous double[])
+    // across the runtime.o C-ABI wall (§c-class wall-piercing).
+    buf = buf + "HexaVal hexa_arr_f64_new(int cap);\n"
+    buf = buf + "HexaVal hexa_arr_f64_push(HexaVal v, double x);\n"
+    buf = buf + "int     hexa_arr_f64_len(HexaVal v);\n"
+    buf = buf + "HexaVal hexa_arr_f64_box(HexaVal v, int64_t i);\n"
     buf = buf + "HexaVal hexa_void(void);\n"
     buf = buf + "HexaVal hexa_null_coal(HexaVal a, HexaVal b);\n"
     buf = buf + "int hexa_is_type(HexaVal v, const char* type_name);\n"
@@ -1122,6 +1130,21 @@ fn emit_runtime_core_to(out_path: str) {
     buf = buf + "    int len;\n"
     buf = buf + "    int cap;\n"
     buf = buf + "} HexaArrI64;\n"
+    buf = buf + "\n"
+    // ── UNSHADOW [HEADLINE] F1 (F64 mirror): native unboxed-f64 array storage ──
+    // The double[] analogue of HexaArrI64. The boxed HexaArr is a 16-byte-stride
+    // array of HexaVal (axis-A closed-negative: clang CANNOT SIMD-gather it).
+    // HexaArrF64 is native contiguous double[] (8-byte stride, gatherable) the
+    // codegen emits for a statically-proven monomorphic-f64 array literal. Layout
+    // matches HexaArr/HexaArrI64 (ptr, int len, int cap) so a TAG_ARRAY HexaVal
+    // carries it via the SAME arr_ptr union slot and polymorphic `hexa_len` reads
+    // len at the same offset. data[] is public so codegen emits a direct
+    // `((HexaArrF64*)a.arr_ptr)->data[i]` raw double load through the C-ABI wall.
+    buf = buf + "typedef struct HexaArrF64 {\n"
+    buf = buf + "    double* data;\n"
+    buf = buf + "    int len;\n"
+    buf = buf + "    int cap;\n"
+    buf = buf + "} HexaArrF64;\n"
     buf = buf + "\n"
     buf = buf + "typedef struct HexaMap {\n"
     buf = buf + "    HexaMapTable* tbl;\n"
@@ -2095,6 +2118,42 @@ fn emit_runtime_core_to(out_path: str) {
     buf = buf + "    HexaArrI64* a = (HexaArrI64*)v.arr_ptr;\n"
     buf = buf + "    if (i < 0 || i >= a->len) { hexa_throw(hexa_str(\"index out of bounds\")); }\n"
     buf = buf + "    return hexa_int(a->data[i]);\n"
+    buf = buf + "}\n"
+    buf = buf + "\n"
+    // ── UNSHADOW [HEADLINE] F1 (F64 mirror): native-f64 array storage helpers ──
+    // Native contiguous double[] (8-byte stride), the storage codegen emits for a
+    // statically-proven monomorphic-f64 array. Carried in a HexaVal as TAG_ARRAY
+    // via the arr_ptr union slot (descriptor is HexaArrF64*). data[] is public in
+    // runtime.h so a proven in-range read `((HexaArrF64*)a.arr_ptr)->data[i]` is a
+    // raw native double load through the runtime.o wall (§c-class). The box helper
+    // is used at the dynamic boundary (a typed-f64 array flowing to a polymorphic
+    // site re-boxes each element correctly as a TAG_FLOAT HexaVal).
+    buf = buf + "HexaVal hexa_arr_f64_new(int cap) {\n"
+    buf = buf + "    HexaArrF64* a = (HexaArrF64*)malloc(sizeof(HexaArrF64));\n"
+    buf = buf + "    if (!a) { fprintf(stderr, \"OOM in arr_f64_new\\n\"); exit(1); }\n"
+    buf = buf + "    if (cap < 1) cap = 1;\n"
+    buf = buf + "    a->data = (double*)malloc(sizeof(double) * (size_t)cap);\n"
+    buf = buf + "    if (!a->data) { fprintf(stderr, \"OOM in arr_f64_new data\\n\"); exit(1); }\n"
+    buf = buf + "    a->len = 0; a->cap = cap;\n"
+    buf = buf + "    HexaVal v = {.tag=TAG_ARRAY};\n"
+    buf = buf + "    HX_SET_ARR_PTR(v, (HexaArr*)a);\n"
+    buf = buf + "    return v;\n"
+    buf = buf + "}\n"
+    buf = buf + "HexaVal hexa_arr_f64_push(HexaVal v, double x) {\n"
+    buf = buf + "    HexaArrF64* a = (HexaArrF64*)v.arr_ptr;\n"
+    buf = buf + "    if (a->len >= a->cap) {\n"
+    buf = buf + "        a->cap *= 2;\n"
+    buf = buf + "        a->data = (double*)realloc(a->data, sizeof(double) * (size_t)a->cap);\n"
+    buf = buf + "        if (!a->data) { fprintf(stderr, \"OOM in arr_f64_push\\n\"); exit(1); }\n"
+    buf = buf + "    }\n"
+    buf = buf + "    a->data[a->len++] = x;\n"
+    buf = buf + "    return v;\n"
+    buf = buf + "}\n"
+    buf = buf + "int hexa_arr_f64_len(HexaVal v) { return ((HexaArrF64*)v.arr_ptr)->len; }\n"
+    buf = buf + "HexaVal hexa_arr_f64_box(HexaVal v, int64_t i) {\n"
+    buf = buf + "    HexaArrF64* a = (HexaArrF64*)v.arr_ptr;\n"
+    buf = buf + "    if (i < 0 || i >= a->len) { hexa_throw(hexa_str(\"index out of bounds\")); }\n"
+    buf = buf + "    return hexa_float(a->data[i]);\n"
     buf = buf + "}\n"
     buf = buf + "\n"
     buf = buf + "// ROI #148: shallow-clone a TAG_ARRAY. Gives the caller a fresh HexaArr\n"
