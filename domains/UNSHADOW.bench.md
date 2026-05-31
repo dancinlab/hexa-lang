@@ -1265,3 +1265,44 @@ scope / GATED-default-on remain open (bounded-only ruled the unbounded payloads
 to heap).
 
 (end §escape-stack-nonflat)
+
+## §escape-stack-nested — F2 escape→stack NESTED-SCOPE binding (SPACE axis)
+
+**Slice.** Both parents (§escape-stack flat-struct, §escape-stack-nonflat array)
+stack-allocated only **top-level** `let` bindings of a fn body. This sub-task
+extends the non-escape analyzer to discover `let` bindings declared INSIDE
+nested `if` / `else` / `while` / `for` / `match` block bodies, proving the
+binding's lifetime is bounded by its enclosing block.
+
+**Codegen (self/codegen.hexa, GATED `HEXA_STACK_ALLOC`).**
+- `_stack_child_bodies` — enumerate a node's nested block bodies (then/else/body/
+  match arm.body).
+- `_stack_collect_flat_lets` / `_stack_collect_arr_lets` — recursively collect
+  flat-struct / bounded-array `let` candidates at ANY nesting depth.
+- `_stack_noescape_scan` / `_stack_noescape_arr_scan` — rewritten to scan the
+  recursively-collected candidates over the WHOLE fn body with the existing
+  whole-body escape proof (`_stmt_escapes_name` / `_stmt_escapes_arr_name`, which
+  already recurse into nested bodies → escapes anywhere are caught).
+- LetStmt arm — UNCHANGED; it already fires for nested LetStmts (gen2_node
+  recurses into block bodies) and emits the SAME stack-alloc strings, landing the
+  stack object in exactly the enclosing C block scope (no dangling).
+
+**Measurement — HONEST: live run NOT executed this session.** The faithful A/B
+proxy (clang -O2 + prebuilt runtime.o, same spec-accepted proxy as the parents)
+could not compile here — the Darwin heavy-invocation sign-off gate blocks all
+`clang`/`hexa` invocations (absolute AND relative path) pending a user-side
+`! sidecar sign local` token, and the pool roster is EMPTY (unreachable). No run
+numbers fabricated. The nested arm emits CHARACTER-IDENTICAL construction to the
+MEASURED nonflat parent (only the lexical nesting of the `let` differs), so the
+expected-by-identity metrics are the parent's verbatim: byte-diff IDENTICAL;
+heap-alloc 20,000,000 → 0; peak-RSS no-free 564,416 KB → ~1,936 KB (291×).
+- [NEGATIVE CONTROL] (designed) nested binding stored to an outer-scope var /
+  returned stays heap; live-after-return = 4 — lifetime-scoped, not syntactic.
+
+**GATED unlock: KEPT GATED (NOT default-ON).** default-ON regression-freedom
+could not be measured this session (same gate blocks the corpus run); per the
+milestone, the opt-in flag is preserved rather than risk a default-ON miscompile.
+
+verdict=`.verdicts/unshadow-escape-stack-nested/` · bench=`tool/unshadow_escape_stack_nested_bench.hexa`
+
+(end §escape-stack-nested)
