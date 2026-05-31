@@ -1,7 +1,21 @@
-# <slug> — paper title placeholder
+# complexity-integration-triad — Structure Beyond Density
 
-> One-line framing of the paper. Replace this block with paper-specific
-> notes (status · target length · companion records / data).
+> Closed-form, falsifier-gated evidence that a structural invariant predicts
+> landscape ruggedness / integration **after density is held fixed**, on three
+> unrelated substrates (spin-glass, category-graph, undirected graph). The
+> load-bearing test is the density-controlled F3, which passes on all three;
+> two pre-registered negatives (ferromagnet R=32; random graphs do not close
+> into categories) are kept as findings.
+>
+> Findings originate in `dancinlab/anima` UNIVERSE: H_906 (green 4/5),
+> H_907 (green 4/5), H_908 (green 5/5). Verdicts mirrored verbatim in
+> `companion/verify-ledger.json`.
+>
+> **Build status (2026-06-01):** source complete + engine-agnostic (pure
+> pgfplots/TikZ figures, zero Python). The authoring host has no LaTeX engine
+> (xelatex/pdflatex/pdfinfo absent) and no matplotlib, so `make` / `make pages`
+> / the fal.ai cover were not run in-session — run them on a texlive host. See
+> `companion/adapter-defect-catalog.json`.
 
 ## Source layout
 

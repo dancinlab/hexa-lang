@@ -1,0 +1,9 @@
+A triptych of three abstract scientific lattices side by side: a square grid of
+small magnetic arrows some aligned and some clashing, a directed arrow-graph of
+six nodes with curved composition arcs, and an undirected graph forming closed
+loops. Shown as scientific cover art for a physics-and-mathematics journal.
+Style: clean technical illustration, isometric, thin precise linework.
+Composition: centered triptych on a deep navy-to-charcoal gradient background,
+soft cyan and copper accent lighting from the upper-left, generous empty margin
+across the top third for a title overlay.
+No text, no logos, no watermarks, no hands, no chart axes, no equations.
