@@ -1,0 +1,201 @@
+atlas: loaded 17265 nodes from embedded.gen.hexa
+HexaError [HX0011] /tmp/cc-m2-flat.hexa:34538:16-18
+    cause:   expected opening brace to start a block, found KwAs
+    explain: hexa explain HX0011
+HexaError [HX0011] /tmp/cc-m2-flat.hexa:34763:12-14
+    cause:   expected opening brace to start a block, found KwAs
+    explain: hexa explain HX0011
+HexaError [HX0011] /tmp/cc-m2-flat.hexa:35250:16-18
+    cause:   expected opening brace to start a block, found KwAs
+    explain: hexa explain HX0011
+HexaError [HX0011] /tmp/cc-m2-flat.hexa:36489:33-35
+    cause:   expected opening brace to start a block, found KwAs
+    explain: hexa explain HX0011
+HexaError [HX0011] /tmp/cc-m2-flat.hexa:36494:33-35
+    cause:   expected opening brace to start a block, found KwAs
+    explain: hexa explain HX0011
+HexaError [HX0011] /tmp/cc-m2-flat.hexa:36521:33-35
+    cause:   expected opening brace to start a block, found KwAs
+    explain: hexa explain HX0011
+HexaError [HX0011] /tmp/cc-m2-flat.hexa:36526:33-35
+    cause:   expected opening brace to start a block, found KwAs
+    explain: hexa explain HX0011
+HexaError [HX0011] /tmp/cc-m2-flat.hexa:36559:33-35
+    cause:   expected opening brace to start a block, found KwAs
+    explain: hexa explain HX0011
+HexaError [HX0011] /tmp/cc-m2-flat.hexa:36564:33-35
+    cause:   expected opening brace to start a block, found KwAs
+    explain: hexa explain HX0011
+HexaError [HX0011] /tmp/cc-m2-flat.hexa:36597:33-35
+    cause:   expected opening brace to start a block, found KwAs
+    explain: hexa explain HX0011
+HexaError [HX0011] /tmp/cc-m2-flat.hexa:36602:33-35
+    cause:   expected opening brace to start a block, found KwAs
+    explain: hexa explain HX0011
+HexaError [HX0011] /tmp/cc-m2-flat.hexa:36637:33-35
+    cause:   expected opening brace to start a block, found KwAs
+    explain: hexa explain HX0011
+HexaError [HX0011] /tmp/cc-m2-flat.hexa:36642:33-35
+    cause:   expected opening brace to start a block, found KwAs
+    explain: hexa explain HX0011
+HexaError [HX2001] /tmp/cc-m2-flat.hexa:28995:47-49
+    cause:   undefined name `as`
+    suggest: abs
+    explain: hexa explain HX2001
+HexaError [HX2001] /tmp/cc-m2-flat.hexa:28995:50-53
+    cause:   undefined name `i64`
+    suggest: int
+    explain: hexa explain HX2001
+HexaError [HX2001] /tmp/cc-m2-flat.hexa:33962:52-54
+    cause:   undefined name `as`
+    suggest: abs
+    explain: hexa explain HX2001
+HexaError [HX2001] /tmp/cc-m2-flat.hexa:33962:60-61
+    cause:   undefined name `)`
+    suggest: k
+    explain: hexa explain HX2001
+HexaError [HX2001] /tmp/cc-m2-flat.hexa:33976:62-64
+    cause:   undefined name `as`
+    suggest: abs
+    explain: hexa explain HX2001
+HexaError [HX2001] /tmp/cc-m2-flat.hexa:33976:70-71
+    cause:   undefined name `)`
+    suggest: k
+    explain: hexa explain HX2001
+HexaError [HX2001] /tmp/cc-m2-flat.hexa:34190:12-28
+    cause:   undefined name `bytes_to_str_raw`
+    explain: hexa explain HX2001
+HexaError [HX2001] /tmp/cc-m2-flat.hexa:34203:16-32
+    cause:   undefined name `bytes_to_str_raw`
+    explain: hexa explain HX2001
+HexaError [HX2001] /tmp/cc-m2-flat.hexa:34223:12-28
+    cause:   undefined name `bytes_to_str_raw`
+    explain: hexa explain HX2001
+HexaError [HX2001] /tmp/cc-m2-flat.hexa:34239:12-28
+    cause:   undefined name `bytes_to_str_raw`
+    explain: hexa explain HX2001
+HexaError [HX2001] /tmp/cc-m2-flat.hexa:34422:12-28
+    cause:   undefined name `bytes_to_str_raw`
+    explain: hexa explain HX2001
+HexaError [HX2001] /tmp/cc-m2-flat.hexa:34537:20-22
+    cause:   undefined name `as`
+    suggest: abs
+    explain: hexa explain HX2001
+HexaError [HX2001] /tmp/cc-m2-flat.hexa:34677:24-26
+    cause:   undefined name `as`
+    suggest: abs
+    explain: hexa explain HX2001
+HexaError [HX2001] /tmp/cc-m2-flat.hexa:34677:32-33
+    cause:   undefined name `)`
+    suggest: k
+    explain: hexa explain HX2001
+HexaError [HX2001] /tmp/cc-m2-flat.hexa:34762:16-18
+    cause:   undefined name `as`
+    suggest: abs
+    explain: hexa explain HX2001
+HexaError [HX2001] /tmp/cc-m2-flat.hexa:34788:16-18
+    cause:   undefined name `as`
+    suggest: abs
+    explain: hexa explain HX2001
+HexaError [HX2001] /tmp/cc-m2-flat.hexa:34789:20-22
+    cause:   undefined name `as`
+    suggest: abs
+    explain: hexa explain HX2001
+HexaError [HX2001] /tmp/cc-m2-flat.hexa:34789:28-29
+    cause:   undefined name `)`
+    suggest: k
+    explain: hexa explain HX2001
+HexaError [HX2001] /tmp/cc-m2-flat.hexa:34798:27-29
+    cause:   undefined name `as`
+    suggest: abs
+    explain: hexa explain HX2001
+HexaError [HX2001] /tmp/cc-m2-flat.hexa:34800:27-29
+    cause:   undefined name `as`
+    suggest: abs
+    explain: hexa explain HX2001
+HexaError [HX2001] /tmp/cc-m2-flat.hexa:34802:22-24
+    cause:   undefined name `as`
+    suggest: abs
+    explain: hexa explain HX2001
+HexaError [HX2001] /tmp/cc-m2-flat.hexa:34802:30-31
+    cause:   undefined name `)`
+    suggest: k
+    explain: hexa explain HX2001
+HexaError [HX2001] /tmp/cc-m2-flat.hexa:34852:21-23
+    cause:   undefined name `as`
+    suggest: abs
+    explain: hexa explain HX2001
+HexaError [HX2001] /tmp/cc-m2-flat.hexa:34852:29-30
+    cause:   undefined name `)`
+    suggest: k
+    explain: hexa explain HX2001
+HexaError [HX2001] /tmp/cc-m2-flat.hexa:35056:15-17
+    cause:   undefined name `as`
+    suggest: abs
+    explain: hexa explain HX2001
+HexaError [HX2001] /tmp/cc-m2-flat.hexa:35059:15-17
+    cause:   undefined name `as`
+    suggest: abs
+    explain: hexa explain HX2001
+HexaError [HX2001] /tmp/cc-m2-flat.hexa:35065:15-17
+    cause:   undefined name `as`
+    suggest: abs
+    explain: hexa explain HX2001
+HexaError [HX2001] /tmp/cc-m2-flat.hexa:35067:15-17
+    cause:   undefined name `as`
+    suggest: abs
+    explain: hexa explain HX2001
+HexaError [HX2001] /tmp/cc-m2-flat.hexa:35115:36-38
+    cause:   undefined name `as`
+    suggest: abs
+    explain: hexa explain HX2001
+HexaError [HX2001] /tmp/cc-m2-flat.hexa:35116:22-24
+    cause:   undefined name `as`
+    suggest: abs
+    explain: hexa explain HX2001
+HexaError [HX2001] /tmp/cc-m2-flat.hexa:35220:12-28
+    cause:   undefined name `bytes_to_str_raw`
+    explain: hexa explain HX2001
+HexaError [HX2001] /tmp/cc-m2-flat.hexa:35234:12-28
+    cause:   undefined name `bytes_to_str_raw`
+    explain: hexa explain HX2001
+HexaError [HX2001] /tmp/cc-m2-flat.hexa:35249:24-26
+    cause:   undefined name `as`
+    suggest: abs
+    explain: hexa explain HX2001
+HexaError [HX2001] /tmp/cc-m2-flat.hexa:35291:24-26
+    cause:   undefined name `as`
+    suggest: abs
+    explain: hexa explain HX2001
+HexaError [HX2001] /tmp/cc-m2-flat.hexa:35292:23-25
+    cause:   undefined name `as`
+    suggest: abs
+    explain: hexa explain HX2001
+HexaError [HX2001] /tmp/cc-m2-flat.hexa:35395:33-35
+    cause:   undefined name `as`
+    suggest: abs
+    explain: hexa explain HX2001
+HexaError [HX2001] /tmp/cc-m2-flat.hexa:35396:39-41
+    cause:   undefined name `as`
+    suggest: abs
+    explain: hexa explain HX2001
+HexaError [HX2001] /tmp/cc-m2-flat.hexa:35738:12-34
+    cause:   undefined name `__arr_alloc_items_zero`
+    explain: hexa explain HX2001
+HexaError [HX2001] /tmp/cc-m2-flat.hexa:35743:12-38
+    cause:   undefined name `__arr_alloc_items_zero_int`
+    explain: hexa explain HX2001
+HexaError [HX2001] /tmp/cc-m2-flat.hexa:35905:23-25
+    cause:   undefined name `as`
+    suggest: abs
+    explain: hexa explain HX2001
+HexaError [HX2001] /tmp/cc-m2-flat.hexa:35905:31-32
+    cause:   undefined name `)`
+    suggest: k
+    explain: hexa explain HX2001
+HexaError [HX2001] /tmp/cc-m2-flat.hexa:35996:25-27
+    cause:   undefined name `as`
+    suggest: abs
+    explain: hexa explain HX2001
+HexaError [HX2001] /tmp/cc-m2-flat.hexa:36001:24-26
+... [truncated; full = 542 lines, 144 HexaError tags]

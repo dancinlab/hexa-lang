@@ -2,6 +2,19 @@
 
 Append-only history sister of `HEXA-CC-NATIVE.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
+## 2026-06-01 — N5-pre STEP0 MEASURED 🟢: 181→144 on a current-source aprime_cc (3+ session blocker broken)
+
+- [x] made the bootstrap chain current: (1) `hexa cc` rebuilt transpiler -> ~/.hx/bin/self/native/hexa_v2 (lowers __map_raw_len), (2) `hexa run runtime_core_emit.hexa` regen runtime (float_to_bits), (3) clean worktree off main 8face82b6
+- [x] build_aprime.sh OK: transpile 43502L -> clang 1435712B Mach-O arm64 -> smoke exit(42)==42 PASS
+- [x] falsifier PASS: intentional undefined name -> HX2001 + exit 1 (measurement tool honest)
+- [x] measured (tag-based): HX2001 104->80 (-24, stale intrinsics resolved, ~28 predicted), HX4001 13->0 (-13), HX0011/3001/3004/2003 unchanged; TOTAL 181->144 (-37)
+- [x] STEP0 goal (separate stale from genuine on a current binary) ACHIEVED; triage prediction confirmed
+- [x] remaining 144: as-cast cascade ~81 (`as`x61 + `)`x7 + HX0011x13) | genuine-missing ~9 (bytes_to_str_raw x7, __arr_alloc_items_zero(_int) x2) | HexaVal carrier gaps (3001/3004/2003)
+- [x] repro recipe PROVEN + fast (~15s) -> each STEP1..N fix verifiable by rebuild+re-measure
+- [ ] NEXT STEP1: parser as-cast (compiler/parse/parser.hexa + ast.hexa) -> expect 144 -> ~63
+- N5 not flipped (fixpoint not reached); STEP0 sub-state BLOCKED -> MEASURED
+- verdict: `.verdicts/hexa-cc-native/F-HEXA-CC-NATIVE-N5PRE-STEP0-MEASURED.txt`
+
 ## 2026-06-01 — CORRECTION to R2: __map_raw_len is NOT runtime-missing (retracting overclaim)
 
 - [x] verified __map_raw_len IS a recognized builtin: bind.hexa:1044 allowlist + codegen.hexa:6161 lowers it to HX_MAP_LEN
