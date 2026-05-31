@@ -1,0 +1,28 @@
+# raw evidence — computed in-worktree 2026-05-31T08:50:14Z
+## parse-proof AST dumps (test prog: struct S { buf: [int; 4] })
+OLD_ast:
+  OK: /tmp/tn_test.hexa parses cleanly
+MINE_ast:
+  OK: /tmp/tn_test.hexa parses cleanly
+diff_OLD_MINE:
+## md5 (md5 -q)
+ast_OLD     = 17b335a027b320496bf2327de69fd415
+ast_MINE    = 17b335a027b320496bf2327de69fd415
+## byte-eq corpus (cmp -s, 1=identical)
+corpus[1] identical=1 old_md5=dde72e069395fb521bcb61d10162b011 mine_md5=dde72e069395fb521bcb61d10162b011
+md5: /tmp/beq/old_2.ast: No such file or directory
+md5: /tmp/beq/mine_2.ast: No such file or directory
+corpus[2] identical=0 old_md5= mine_md5=
+md5: /tmp/beq/old_3.ast: No such file or directory
+md5: /tmp/beq/mine_3.ast: No such file or directory
+corpus[3] identical=0 old_md5= mine_md5=
+md5: /tmp/beq/old_4.ast: No such file or directory
+md5: /tmp/beq/mine_4.ast: No such file or directory
+corpus[4] identical=0 old_md5= mine_md5=
+md5: /tmp/beq/old_5.ast: No such file or directory
+md5: /tmp/beq/mine_5.ast: No such file or directory
+corpus[5] identical=0 old_md5= mine_md5=
+## sizes
+merged_hexa_cc.c.new_bytes =  1995869
+regen_parser.c_md5         = 9dedf5e0658ff3a7fb4d476d17b945af
+mine_transpiler_bytes      =  2087160
