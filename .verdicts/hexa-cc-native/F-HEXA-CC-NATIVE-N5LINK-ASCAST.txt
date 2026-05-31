@@ -1,0 +1,29 @@
+F-HEXA-CC-NATIVE-N5LINK-ASCAST -- lower the `as`-cast; diagnostic pipeline (typecheck+lower) → 0
+=================================================================================================
+date: 2026-06-01   host: mini (darwin-arm64)   base: worktree off origin/main b23a40ac0 (= STEP0-6)
+
+CHANGE: compiler/lower/hir_to_mir.hexa — handle `BinOp text=="as"` in the expr lowering. Route
+children[0] through the proven runtime conversion helpers (mirroring self/codegen.hexa:5538):
+  as int    -> hexa_to_int(x)         as float  -> hexa_to_float(x)
+  as str/string -> hexa_to_string(x)  as bool   -> hexa_bool(hexa_truthy(x))
+  (normalize f64/f32/f16/bf16 -> float; i8..u64/isize -> int; unknown target -> passthrough)
+New helper `_hir_call1(fn, arg, proto)` synthesises the 1-arg call HExpr so the existing call
+lowering + runtime symbols are reused. Always emits the runtime call (the legacy known-source
+passthrough is a perf-only optimization; hexa_to_* are idempotent on already-typed inputs).
+
+BUILD + MEASURE (current-source aprime_cc; smoke exit(6*7)==42 PASS):
+  HX1101 (lower as-cast type idents) 74 -> 0. TOTAL fatal HX diagnostics = 0 (only HX4001
+  int-div-narrowing WARNINGS remain, non-fatal). The full typecheck+lower pipeline of flattened
+  compiler/main.hexa is now CLEAN.
+
+VERIFICATION LEVEL (honest): diagnostic (HX1101 cleared, 0 fatal) + smoke. The conversion is a
+FAITHFUL MIRROR of the shipped self/codegen.hexa:5538 semantics (not a guess); runtime byte-eq of
+`(v+0.5) as int`-style truncation is pending the full obj→hexa_ld→fixpoint pipeline.
+
+NEXT FRONTIER (separate, deeper — arm64 backend, NOT as-cast): with all diagnostics cleared,
+`--emit=obj` now advances into native arm64 codegen and fails with
+  `error: to_int: trailing garbage in "21242, lsl #16"`
+— a movk/`lsl #16` large-constant-materialization operand is passed to to_int() which chokes on the
+shift suffix. A genuine arm64-emit bug surfaced by compiling the full compiler. No .o produced yet.
+That + N5-sym (runtime symbol set) + hexa_ld link → gen2≡gen3 byte-eq = the remaining N5 fixpoint.
+N5-pre typecheck + N5-link lower are COMPLETE (0 fatal diagnostics). live tree untouched.
