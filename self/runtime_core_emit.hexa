@@ -3824,7 +3824,7 @@ fn emit_runtime_core_to(out_path: str) {
     buf = buf + "// wiring into env_push_scope/env_pop_scope is a follow-up (requires\n"
     buf = buf + "// hexa_full.hexa edits + interp rebuild, deferred per task description).\n"
     buf = buf + "\n"
-    buf = buf + "#define HEXA_ARENA_BLOCK_SIZE (4 * 1024 * 1024)   // 4MB default block\n"
+    buf = buf + "#define HEXA_ARENA_BLOCK_SIZE (512 * 1024)   // 512KB default block (was 4MB: per-fn arena chains a fresh block; 4MB*N-fns OOM'd self-host obj-emit at ~5.8GB)\n"
     buf = buf + "\n"
     buf = buf + "typedef struct HexaArenaBlock {\n"
     buf = buf + "    struct HexaArenaBlock* next;   // NULL for last block\n"
