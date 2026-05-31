@@ -30,5 +30,5 @@
 
 - [ ] 의존 순서 박제 — BUILDFLOOR(레시피) → RUNTIME(런타임) → CC-NATIVE(컴파일러) 선후를 cross-domain 계약으로 명시. 한 도메인의 frontier 가 다른 도메인 선결을 요구하면 여기에 기록.
 - [ ] 공통-벽 카탈로그 — 세 도메인이 공유하는 차단 요인 추적: (1) codegen type-erasure(HexaVal tagged-union → HX_TAG macro 가 codegen-only) (2) cc --regen sign/pool 의존 (3) stale-seed byte-eq 오염(HEXA-CC-ZERO P1). 어느 자식이든 이 벽에 막히면 여기에 누적 → 한 번에 풀 레버 식별.
-- [ ] 다음-칸 셀렉터 — 매 라운드 "셋 중 가장 grounded·codegen-벽 없는 칸" 1개를 next-list 로 제시(현재 = RUNTIME A 순수-fn 포팅 진행 중). 자식이 honest-STOP 으로 막히면 다음 자식으로 회전.
+- [~] 다음-칸 셀렉터 — 매 라운드 "셋 중 가장 grounded·codegen-벽 없는 칸" 1개를 next-list 로 제시. 자식이 honest-STOP 으로 막히면 다음 자식으로 회전. **회전 이력(2026-05-31)**: RUNTIME A(순수-fn) → codegen type-erasure 벽 honest-STOP · GPU 1b-cons(N-consumer) → 동 벽 · CC-NATIVE native-print(#2270) → IO-floor codegen 벽 honest-STOP. **셋 다 codegen emit 벽으로 수렴** → 현재 칸 = **BUILDFLOOR M1**(.sh 빌드레시피 fix, codegen 벽 無 = 유일 grounded, 진행 중 agent). CC-NATIVE 작업은 이 세션(메타)으로 일원화(drafts/SESSION-HANDOFF-hexa-cc-native.md 흡수) — 타세션 중복 진행 중단됨.
 - [ ] 졸업 게이트 정의 — 메타 100% = 세 자식 모두 100% AND `ls self/*.c self/*.s` 빈 출력 AND 빌드 파이프라인에 cc/as 단계 0 AND gen1≡gen2 fixpoint(RUNTIME.md Final acceptance 3조건 + BUILDFLOOR·CC-NATIVE 졸업). 이 게이트가 참일 때만 메타 flip.
