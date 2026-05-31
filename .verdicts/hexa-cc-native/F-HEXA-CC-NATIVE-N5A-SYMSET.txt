@@ -1,0 +1,71 @@
+F-HEXA-CC-NATIVE-N5A-SYMSET — full self-host scope measurement (N5 de-risk)
+==========================================================================
+date:   2026-05-31
+host:   darwin-arm64 (mini)
+method: drive committed build/aprime_cc directly (installed `hexa` is stale-
+        codegen-broken). READ-ONLY measurement — no rebuild, no flip.
+
+GOAL OF N5a
+  Before implementing N5 (full-compiler self-host via hexa_ld), measure two
+  things empirically: (1) the FULL set of `_hexa_*` runtime symbols a real
+  compile references (N3a only covered trivial.hexa's 2), and (2) whether the
+  native backend can even emit the whole compiler. Both feed the N5 plan.
+
+MEASUREMENT 1 — referenced runtime symbols grow fast with program size
+  aprime_cc --emit=obj --backend=native on each corpus program, nm -u:
+    trivial.hexa : _hexa_exit _hexa_set_args                                   (2)
+    if.hexa      : _hexa_eq _hexa_exit _hexa_set_args _hexa_truthy             (4)
+    while.hexa   : _hexa_add_slow _hexa_cmp_lt _hexa_exit _hexa_set_args
+                   _hexa_truthy                                                (5)
+    fib.hexa     : _hexa_add_slow _hexa_cmp_lt _hexa_exit _hexa_set_args
+                   _hexa_sub _hexa_truthy                                      (6)
+  Corpus union (8): _hexa_exit, _hexa_set_args, _hexa_add_slow, _hexa_sub,
+                    _hexa_cmp_lt, _hexa_truthy, _hexa_eq (+trivial pair).
+  => the N3a emitter (exports 2) must grow to the full _hexa_* set the native
+  backend references; for the whole compiler that set is large (each language
+  feature pulls more runtime ops). self/codegen/runtime_arm64.hexa has 181
+  `fn rt_*` byte-producers, but their names do NOT 1:1 the `_hexa_*` ABI names
+  (e.g. _hexa_set_args/_add_slow/_cmp_lt/_truthy have no direct rt_ match) — so
+  N5 needs an explicit _hexa_*→rt_/adapter map, not a name-mangle.
+
+MEASUREMENT 2 — THE REAL N5 FRONTIER is the type-checker, not the linker
+  flatten compiler/main.hexa (hexa_module_loader) -> flat.hexa: rc=0, 40246 L,
+  47 files (flatten works).
+  aprime_cc --emit=obj --backend=native flat.hexa -> rc=1:
+    "hexa-compiler: 181 diagnostic(s); aborting before codegen"
+    181 × HX3001  "type mismatch: expected `named:any`, got `i64`"
+    (e.g. flat.hexa:5758, 5759, 6207 …)
+  => aprime_cc CANNOT typecheck the flattened compiler — it aborts BEFORE
+  codegen/linking. So the N5 blocker is NOT runtime.o coverage and NOT hexa_ld;
+  it is the native compiler's TYPE CHECKER rejecting the self-host source with
+  181 `named:any` vs `i64` mismatches. The exec-link chain (N3/N4) is proven for
+  programs aprime_cc CAN compile; the whole compiler is not yet one of them.
+
+FINDING (re-scopes N5, honest)
+  N5 (full-compiler self-host fixpoint) decomposes into a NEW prerequisite plus
+  the originally-planned link work:
+    N5-pre (TYPECHECK): make aprime_cc typecheck the flattened compiler — fix
+      the 181 HX3001 `named:any` vs `i64` mismatches (a type-inference/annotation
+      gap in the native front-end on its own source). This is the true blocker
+      and is substantial (compiler-frontend work), independent of hexa_ld.
+    N5-sym (RUNTIME SET): extend tool/emit_runtime_obj.hexa to export the full
+      _hexa_* set the compiler references, via an explicit _hexa_*→native-bytes
+      map (181 rt_* producers exist as raw material).
+    N5-link (FIXPOINT): once the compiler native-emits a .o, link it +
+      runtime.o via hexa_ld (N3b path) -> ./hexac; then hexac re-emits itself ->
+      byte-eq fixpoint.
+  Order is forced: N5-pre gates everything (no .o until typecheck passes).
+
+VERIFY-ENV NOTE (g5/g63)
+  - Measured with committed build/aprime_cc (no rebuild). Numbers are from that
+    binary; a different aprime_cc revision may shift the exact HX3001 count.
+  - The 181-diagnostic abort is deterministic across reruns this session.
+  - Live N5 verification (running a freshly-self-hosted hexac) will require an
+    aprime_cc rebuild (tool/build_aprime.sh — Mac kill-storm risk) on a pool
+    host / pod, OR the standalone equivalence-chain technique used in N3b/N4.
+
+STATUS: N5a MEASURED (green, read-only) — N5 frontier identified: the native
+        type-checker (181× HX3001 on the flattened compiler) is the gating
+        blocker, ahead of the runtime-symbol set and the hexa_ld link. N5 is
+        re-scoped into N5-pre (typecheck) → N5-sym (full runtime .o) → N5-link
+        (fixpoint). N5 milestone NOT flipped (measurement only).
