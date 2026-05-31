@@ -903,6 +903,21 @@ fn _bind_walk_expr(e: Expr, in_sc: BindScope, mod_file: string, out: array) -> B
         return sc
     }
 
+    // `x as T`: children[1] is the target TYPE (an Ident carrying the type
+    // name; STEP1 parses the cast as a BinOp text="as"). The type is NOT a
+    // value reference — name-resolving it raised a spurious HX2001
+    // `undefined name i64` on `len(..) as i64`. Walk only the casted value.
+    let _is_as_cast = match e.kind {
+        ExprKind::BinOp -> e.text == "as",
+        _ -> false
+    }
+    if _is_as_cast {
+        if len(e.children) > 0 {
+            sc = _bind_walk_expr(e.children[0], sc, mod_file, out)
+        }
+        return sc
+    }
+
     // Generic recurse (Call, BinOp, UnOp, If, While, Return, Assign, Index,
     // literals — all delegate to children).
     let mut i = 0
