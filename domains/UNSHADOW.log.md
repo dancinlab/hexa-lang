@@ -2,6 +2,34 @@
 
 Append-only history sister of `UNSHADOW.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
+## 2026-05-31 — 🔴 known-int accumulator → raw int64 local 강등 (§typed-repr accumulator) CLOSED-NEGATIVE
+
+> 문서 reconcile: 측정·verdict·bench tool 은 PR #2221(merged)에서, milestone 체크박스 flip 은
+> PR #2226(merged)에서 착지했으나 `§knownint-rawlocal` bench 절·log 항목이 누락 → 본 항목이 마감.
+
+- [x] **falsifier(pre-registered)**: 증명된 known-int accumulator 를 inline `.i` box(PR #2202)에서
+  raw C `int64_t` local 로 강등(box surface 제거)하면 f_inline_acc→d_ideal Δ(~12.5×, ~0.08s
+  register-pack 천장)를 회수한다 — 살아남은 box surface 가 clang register allocation 을 막으므로.
+- [x] **방법(faithful A/B proxy · B9 self-host rebuild 벽 · 스펙 허용)**: mini arm64 · Apple clang
+  21.0.0 · -O2 · runtime.o ABI 벽 out-of-line 모델링. 4 lowering — e_boxed(`hexa_add` ABI 벽) ·
+  f_inline(`.i` box) · g_raw(`int64_t __acc`, observe 1회 box) · d_ideal(raw int64 register 천장).
+- [x] **[THE 게이트 · g5 byte-diff]** f_inline vs g_raw hot-loop asm **byte-IDENTICAL**(normalized
+  md5 `436ccab8ad7cb96c2dfbf0072ef1fcd8` · `diff` exit 0). hot-loop `bl _hexa_add`: e=1·f=0·g=0.
+  correctness e/f/g 일치(n=5/1e6/3e9 overflow · int64 wrap 동일). hot loop = `add x8,x8,#1`
+  (accumulator register x8 승격).
+- [x] **[FINDING · 🔴 FALSIFIED · paper_negative_ok]**: clang -O2 SROA/mem2reg 가 single-field
+  `{.tag,.i}` box 를 **이미** scalarize(`.tag` dead·`.i`→register) → inline `.i` 슬라이스가 이미
+  raw-int64 register loop 를 emit. raw 강등은 **ZERO 추가 Δ** — box surface 가 -O2 를 못 넘어
+  살아남지 못함(제거할 게 없음). **f_inline IS d_ideal**(asm 레벨).
+- [x] **prior gap 정정**: §knownint-accum 의 "d_ideal 0.08s vs f_inline 1.0s 12.5× gap" 은 e_boxed
+  out-of-line arm 측정 artifact(다른 n/noise)였음. inline `.i` arm 에 살아남은 box 는 없었다.
+- [x] **ruled-out 축**: single-int accumulator 의 source-level box-stripping 은 -O2 하 dead lever.
+  남은 진짜 레버 = SROA 가 scalarize 못 하는 multi-field/escaping/aliased HexaVal 의 e_boxed
+  ABI-벽 tax(`bl _hexa_add`, 1.49×) → F64 경로(다음 sub-task)로 이관.
+- [x] **codegen 무변경**: GATED raw-int64-local 강등은 확정 no-op-at-O2 라 미선적(byte-identical
+  baseline 유지). verdict=`.verdicts/unshadow-knownint-rawlocal/`(finding.txt·byte-diff.txt) ·
+  bench=`§knownint-rawlocal` · 재현=`tool/unshadow_knownint_rawlocal_bench.hexa`.
+
 ## 2026-05-30 — 🔵 검증 memoization (F3 atlas-as-perf-asset / 거울방) WIN (최소 슬라이스)
 
 - [x] **codegen**: `self/codegen.hexa` Call(`lambda_eliashberg`) 처리에 GATED memo 분기 추가.

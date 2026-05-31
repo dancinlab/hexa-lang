@@ -224,7 +224,14 @@ fn _scp_opts(ssh_opts: [str]) -> [str] {
 fn _scp_capture(scp_opts: [str], src: str, dst: str) -> CloudResult {
     // host-key opts mirror _ssh_cmd: a fresh pod's unknown/changed host key
     // would abort scp with exit 255 under BatchMode (the same misread "outage").
-    let mut cmd = "scp -o BatchMode=yes -o ConnectTimeout=8 -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/dev/null"
+    // ServerAlive* also mirrors _ssh_cmd — WITHOUT it scp has ConnectTimeout=8 to
+    // bound the CONNECT but NOTHING to bound a MID-TRANSFER stall: a deck upload
+    // (cloud_copy_to_recursive_opts → here) whose TCP stays open but stops flowing
+    // hangs scp forever, so _dft_detach never reaches its teardown-on-failure and
+    // an external kill leaks the rented pod (the 2026-05-31 12-orphan leak). The
+    // 15s×4 keepalive drops a dead-but-open transfer in ~60s → scp exits non-zero
+    // → caller tears the pod down. (scp forwards -o opts to its underlying ssh.)
+    let mut cmd = "scp -o BatchMode=yes -o ConnectTimeout=8 -o ServerAliveInterval=15 -o ServerAliveCountMax=4 -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/dev/null"
     let mut i = 0
     while i < len(scp_opts) {
         cmd = cmd + " " + _shq(scp_opts[i])

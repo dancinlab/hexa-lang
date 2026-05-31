@@ -1,0 +1,54 @@
+§knownint-rawlocal byte-diff verdict — native-arr sub-task (raw int64 local 강등)
+Generated: 2026-05-31 (arm64 — Apple clang 21.0.0, -O2)
+
+PREMISE: B9 self-host rebuild blocked -> established faithful A/B proxy (the
+same fallback §knownint-accum / §native-arr used). The compiled asm/wall is
+measured on the EXACT C string each accumulator lowering emits; the runtime.o
+C-ABI wall is modeled out-of-line in hexart.c so the boxed arm pays a real
+`bl _hexa_add`. Standalone proxy tree (no repo .c): /tmp/unshadow_rl/.
+
+The four accumulator lowerings measured:
+    e_boxed   HexaVal acc = hexa_int(0);  acc = hexa_add(acc, one);   (ABI wall)
+    f_inline  HexaVal acc = ((HexaVal){.tag=TAG_INT,.i=0});           (PR #2202)
+              acc = ((HexaVal){.tag=TAG_INT,.i=(HX_INT(acc) + 1)});
+    g_raw     int64_t __acc_acc = 0;  __acc_acc += 1;                 (this sub-task)
+              ... box ONCE at observe: ((HexaVal){.tag=TAG_INT,.i=(__acc_acc)})
+    d_ideal   raw int64 local (register-pack ceiling target) == g_raw shape
+
+=== COMPILED-ASM byte-diff (the load-bearing gate) ===
+Each arm compiled `clang -O2 -S`; hot-loop main body normalized (strip .cfi /
+comments / blank lines):
+
+$ md5 normalized hot-loop asm (f_inline vs g_raw):
+    ASM_F (f_inline) = 436ccab8ad7cb96c2dfbf0072ef1fcd8
+    ASM_G (g_raw)    = 436ccab8ad7cb96c2dfbf0072ef1fcd8
+    diff f g exit    = 0   (IDENTICAL)   <- the load-bearing result
+
+$ bl _hexa_add count in hot loop:   e_boxed=1   f_inline=0   g_raw=0
+
+Hot loop (f_inline AND g_raw, the accumulator is promoted to register x8 —
+the single-field {.tag,.i} box is scalarized away by clang SROA/mem2reg):
+        add  x8, x8, #1
+        subs x20, x20, #1
+        b.ne LBB0_5
+
+$ md5 full compiled binary:
+    BIN_E (e_boxed)  = fa19e046754a05eaf56a19a3167f6f11
+    BIN_F (f_inline) = 280afd6c940da101ef19de1e42b44082
+    BIN_G (g_raw)    = e0fd9485f15e54a20f6a89361dc93aae
+    BIN_FG_IDENTICAL = NO   (the FULL binaries differ ONLY at the observe-point:
+      f boxes through a dead .tag-store, g boxes the raw int64 — but the HOT LOOP
+      is byte-identical, which is the whole performance question. The wall is
+      identical: see finding.txt.)
+
+=== correctness arms (outputs must match across e/f/g) ===
+    n=5            -> e=5 f=5 g=5
+    n=1000000      -> e=1000000 f=1000000 g=1000000
+    n=3000000000   -> e=3000000000 f=3000000000 g=3000000000   (large/overflow path)
+All arms agree. int64 wrap semantics identical (HX_INT add == raw int64 add).
+
+VERDICT: f_inline vs g_raw compiled HOT-LOOP asm is byte-IDENTICAL (md5
+436ccab8, diff exit 0) and correctness arms match across e/f/g. The gate
+intent (byte-diff IDENTICAL) holds at the load-bearing site — and THAT identity
+is precisely the closed-negative (see finding.txt): clang -O2 already produces
+the raw-int64 hot loop from the inline `.i` box, so the raw lowering is a no-op.

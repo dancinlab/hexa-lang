@@ -3523,6 +3523,176 @@ fn _daemon_autospawn_path(file) {
     return ""
 }
 
+// ── Import-closure cache key (INBOX cache-import-invalidation) ──────────
+// The `~/.hexa-cache/hexa_run.<key>` AOT artifact was keyed off the
+// ENTRYPOINT bytes only (`sha256_file(file)`), so editing a transitively-
+// imported module (e.g. stdlib/cloud/dft_dispatch.hexa, imported by
+// cloud_cli.hexa) did NOT bust the cache — `hexa run`/`hexa cloud` kept
+// serving the stale binary until `~/.hexa-cache` was hand-`rm -rf`'d. This
+// silently no-op'd merged source fixes (PR #2219). The fix below folds a
+// content-hash of the FULL import closure into the run-cache key so any
+// edit to any imported module forces a cache-miss + recompile.
+//
+// NOTE: this changes ONLY the local `~/.hexa-cache/hexa_run.<key>` artifact
+// key. The release/precompile probe (`_precompile_lookup`) keeps using the
+// entrypoint-only `_base_key` so shipped binaries still HIT.
+
+// Resolve a `use "imp"` / `import "imp"` directive to an on-disk .hexa path
+// using the same root candidates as module_loader's ml_resolve_full, kept
+// deliberately minimal (no $HEXA_PATH / project-root edge cases — those are
+// handled by the build-time flatten; a miss here just omits that file from
+// the hash, which is conservative). caller_dir = dir of the importing file.
+fn _closure_try_variants(base) {
+    if file_exists(base) { return base }
+    let with_ext = base + ".hexa"
+    if file_exists(with_ext) { return with_ext }
+    let mod_path = base + "/mod.hexa"
+    if file_exists(mod_path) { return mod_path }
+    return ""
+}
+
+fn _closure_resolve(imp, caller_dir) {
+    // 1. caller-relative (C-style #include / target-relative).
+    let v1 = _closure_try_variants(caller_dir + "/" + imp)
+    if len(v1) > 0 { return v1 }
+    // 2. stdlib ("stdlib/..." or "self/stdlib/...") via HEXA_LANG / install.
+    let mut roots = []
+    let hl = env_var("HEXA_LANG")
+    if len(hl) > 0 { roots.push(hl) }
+    let inst = install_dir_from_argv0()
+    if len(inst) > 0 { roots.push(inst) }
+    let sr = env_var("HEXA_STDLIB_ROOT")
+    let mut ri = 0
+    while ri < len(roots) {
+        let r = roots[ri]
+        let a = _closure_try_variants(r + "/" + imp)
+        if len(a) > 0 { return a }
+        // top-level stdlib + bootstrap self/stdlib roots.
+        let b = _closure_try_variants(r + "/stdlib/" + imp)
+        if len(b) > 0 { return b }
+        let c = _closure_try_variants(r + "/self/stdlib/" + imp)
+        if len(c) > 0 { return c }
+        ri = ri + 1
+    }
+    if len(sr) > 0 {
+        let d = _closure_try_variants(sr + "/" + imp)
+        if len(d) > 0 { return d }
+    }
+    return ""
+}
+
+// Extract the quoted module name from a `use "X"` / `import "X"` /
+// `pub use "X"` / `from "X" import …` directive line. Returns "" if the
+// line is not an import directive.
+fn _closure_parse_import(line) {
+    // trim leading whitespace
+    let mut s = line
+    let mut sn = len(s)
+    let mut si = 0
+    while si < sn {
+        let ch = s.substring(si, si + 1)
+        if ch == " " || ch == "\t" { si = si + 1 } else { si = sn }
+    }
+    s = line.substring(si, len(line))
+    // strip optional `pub ` prefix
+    if s.starts_with("pub ") { s = s.substring(4, len(s)) }
+    let mut keep = false
+    if s.starts_with("use \"") { keep = true }
+    if s.starts_with("import \"") { keep = true }
+    if s.starts_with("from \"") { keep = true }
+    if !keep { return "" }
+    // first quoted token
+    let n = len(s)
+    let mut i = 0
+    while i < n {
+        if s.substring(i, i + 1) == "\"" {
+            let mut j = i + 1
+            while j < n {
+                if s.substring(j, j + 1) == "\"" { return s.substring(i + 1, j) }
+                j = j + 1
+            }
+            return ""
+        }
+        i = i + 1
+    }
+    return ""
+}
+
+// dir of a file path (everything before the last '/'); "." if none.
+fn _closure_dirname(path) {
+    let n = len(path)
+    let mut i = n - 1
+    while i >= 0 {
+        if path.substring(i, i + 1) == "/" { return path.substring(0, i) }
+        i = i - 1
+    }
+    return "."
+}
+
+// BFS the import closure from `entry` and return a single content-hash of
+// the WHOLE closure (entrypoint + every transitively-imported module). The
+// per-file sha256_file hashes are combined order-independently (sum-fold of
+// each hash) so BFS discovery order never affects the result — only the SET
+// of files and their contents do. Returns "" if the closure walk hits no
+// imports (caller then falls back to the entrypoint-only hash).
+fn _import_closure_hash(entry) {
+    let mut visited = []     // resolved absolute-ish paths already hashed
+    let mut queue = []
+    queue.push(entry)
+    let mut combined = ""    // running fold; each step re-hashed for mixing
+    let mut found_any = false
+    let mut head = 0
+    while head < len(queue) {
+        let cur = queue[head]
+        head = head + 1
+        // dedup
+        let mut seen = false
+        let mut vi = 0
+        while vi < len(visited) {
+            if visited[vi] == cur { seen = true; vi = len(visited) } else { vi = vi + 1 }
+        }
+        if seen { continue }
+        visited.push(cur)
+        let fh = sha256_file(cur)
+        // order-independent fold: prefix the path so identical content at
+        // different paths still distinguishes, then re-hash the running pair.
+        combined = sha256(combined + "\n" + cur + ":" + fh)
+        let src = read_file(cur)
+        if len(src) == 0 { continue }
+        let cdir = _closure_dirname(cur)
+        // scan lines for import directives
+        let lines = src.split("\n")
+        let mut li = 0
+        while li < len(lines) {
+            let imp = _closure_parse_import(lines[li])
+            if len(imp) > 0 {
+                let resolved = _closure_resolve(imp, cdir)
+                if len(resolved) > 0 {
+                    found_any = true
+                    queue.push(resolved)
+                }
+            }
+            li = li + 1
+        }
+    }
+    if !found_any { return "" }
+    return combined
+}
+
+// Compute the run-cache key for `file`: entrypoint-only base key (used for
+// the precompile probe) plus, when the entrypoint pulls in any imports, the
+// import-closure hash folded in so dependency edits bust the cache.
+fn _run_cache_base_key(file) {
+    return sha256_file(file).substring(0, 16) + "_" + version_str()
+}
+
+fn _run_cache_key(file) {
+    let base = _run_cache_base_key(file)
+    let closure = _import_closure_hash(file)
+    if len(closure) == 0 { return base }
+    return base + "_" + closure.substring(0, 16)
+}
+
 // `hexa run <file>` and the `hexa://run` URL action are user-direct
 // invocations; cmd_run_user_direct compiles then executes (the
 // tree-walking interpreter is retired — g_interp_deprecated). The
@@ -3554,13 +3724,16 @@ fn cmd_run_user_direct(file, extra_args) {
     // Identical source → identical binary → cache hit skips clang fork.
     // When hexa is rebuilt without bumping version_str() the cache must
     // be wiped manually (`rm ~/.hexa-cache/hexa_run.*`); regeneratable.
-    let _src_hash = sha256_file(file)
-    let _key = _src_hash.substring(0, 16) + "_" + version_str()
+    // Run-cache key folds the import-closure hash (so editing any imported
+    // module busts the local cache); the precompile probe keeps using the
+    // entrypoint-only base key so shipped binaries still HIT.
+    let _base_key = _run_cache_base_key(file)
+    let _key = _run_cache_key(file)
     let mut tmpbin = _cache_dir + "/hexa_run." + _key
     let mut bout = ""
     let mut brc = 0
     // GO M2 — release/precompile/ probe (shipped binaries skip clang fork).
-    let _pre = _precompile_lookup(_key)
+    let _pre = _precompile_lookup(_base_key)
     if len(_pre) > 0 {
         tmpbin = _pre
         if env_var("HEXA_PRECOMPILE_TRACE") == "1" { eprintln("[precompile] HIT " + _pre) }
@@ -3679,14 +3852,16 @@ fn cmd_run(file, extra_args) {
     let _mk = exec("mkdir -p " + shq(_cache_dir) + " 2>/dev/null")
     // GO M1: lazy GC probe (cap + TTL + tmp orphan sweep).
     _hexa_cache_gc(_cache_dir, _hexa_cache_cap_mb(), _hexa_cache_ttl_days())
-    // Content-addressed cache key — see cmd_run_user_direct above.
-    let _src_hash = sha256_file(file)
-    let _key = _src_hash.substring(0, 16) + "_" + version_str()
+    // Content-addressed cache key — see cmd_run_user_direct above. Folds the
+    // import-closure hash so an absorbed-verb fallback (e.g. `hexa cloud` →
+    // cmd_run) also busts on imported-module edits; precompile uses base key.
+    let _base_key = _run_cache_base_key(file)
+    let _key = _run_cache_key(file)
     let mut tmpbin = _cache_dir + "/hexa_run." + _key
     let mut bout = ""
     let mut brc = 0
     // GO M2 — release/precompile/ probe (see cmd_run_user_direct site).
-    let _pre = _precompile_lookup(_key)
+    let _pre = _precompile_lookup(_base_key)
     if len(_pre) > 0 {
         tmpbin = _pre
         if env_var("HEXA_PRECOMPILE_TRACE") == "1" { eprintln("[precompile] HIT " + _pre) }
@@ -3818,13 +3993,15 @@ fn _batch_run_one(file) {
     // Content-addressed cache (shares the hexa_run.* namespace with
     // cmd_run / cmd_run_user_direct so a `hexa batch` invocation
     // benefits from prior `hexa run` builds of the same source).
-    let _src_hash = sha256_file(file)
-    let _key = _src_hash.substring(0, 16) + "_" + version_str()
+    // Import-closure-folded run-cache key (shared hexa_run.* namespace); the
+    // precompile probe keeps the entrypoint-only base key.
+    let _base_key = _run_cache_base_key(file)
+    let _key = _run_cache_key(file)
     let mut tmpbin = _cache_dir + "/hexa_run." + _key
     let mut bout = ""
     let mut brc = 0
     // GO M2 — release/precompile/ probe (see cmd_run_user_direct site).
-    let _pre = _precompile_lookup(_key)
+    let _pre = _precompile_lookup(_base_key)
     if len(_pre) > 0 {
         tmpbin = _pre
         if env_var("HEXA_PRECOMPILE_TRACE") == "1" { eprintln("[precompile] HIT " + _pre) }

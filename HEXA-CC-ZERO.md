@@ -50,6 +50,7 @@
 > 아래 dated 로그 중 cold-boot "5/5 CLOSED" 서술은 REVERSAL 前 기록(historical) — 이 snapshot 이 정합 SSOT.
 
 - [x] C1 — `native_gate.c` (마지막 hand-written .c) emit+byte_diff gate-1 PROVEN · 🟢 `native_gate_emit.hexa`(1488 C줄 → 문자열 emitter) + `native_gate_byte_diff.hexa`(sha256 oracle) 신설. emit 출력이 orig 와 byte-identical(`b340553c…` 양쪽 일치 · 62038 B) · oracle 3/3 PASS. self/native 의 나머지 60+ native 가 이미 emit+byte_diff 쌍이고 native_gate.c 만 예외였음 — 이걸로 트리 전체가 일관. ⚠ 잔여(deletion gate · gate-1 과 별개): native_gate.c 는 raw#8 allowlist(`airgenome AG10`)라 git rm 의무 아님 — 제거하려면 BUILD 레시피가 `cc -shared` 前 emitter 로 regen 하도록 wire(헤더 BUILD 주석 갱신) 후속. verdict: `.verdicts/hexa-cc-zero/F-HEXA-CC-ZERO-CFRONT-NATIVE-GATE.txt`
+- [x] C2 — `native_gate.c` git rm (emitter SSOT 단독화) · 🟢 CLOSED — `git rm self/native/native_gate.c` 수행 → **self/native 커밋 hand-written `.c` = 0** (마지막 1개 제거). 게이트 재정의(사용자 결정 2026-05-31): Linux `.so` smoke 는 Linux 호스트 부재 + GPU pod 과잉(g0)이라 **byte-identity 를 충분 증명으로 인정** — 원본은 이미 prod `/opt/hexa/native_gate.so` 로 구동 중이고 regen 이 byte-for-byte 동일(sha256 `b340553c…`)이므로 .so·런타임 동작이 결정론적으로 동일. smoke 는 optional 운영재확인으로 강등(harness 잔존). post-deletion oracle 🟢 SKIP exit 0 · 삭제 後에도 emitter byte-identical 재생성 확인. verdict: `.verdicts/hexa-cc-zero/F-HEXA-CC-ZERO-CFRONT-DELETION.txt`
 
 ## 2026-05-30 C1 — native_gate.c emit+byte_diff (C-front · verdict 첨부)
 
@@ -60,6 +61,28 @@ CC front(트랜스파일러 씨앗) 정합화에 이어 C front(손-작성 C 잔
 - 🟢 **gate-1 source-SHA byte-identity PROVEN** — `hexa run native_gate_emit.hexa <out>` 출력이 orig native_gate.c 와 byte-for-byte 동일(sha256 `b340553c9bbf04b9ca5f00b228c3780ddf8f6309cfe309a4799b7a4388c40b0c` 양쪽 · 62038 B). `native_gate_byte_diff.hexa` oracle 3/3 PASS (`__HEXA_LANG_NATIVE_GATE_BYTE_DIFF__ PASS`). emitter 가 SSOT 가 될 자격 입증.
 - ℹ️ **amalgam fragment 아닌 standalone .so** — mount.c 등(runtime.c #include fragment)과 달리 native_gate.c 는 `cc -shared -fPIC` 단독 TU. .so 동등성은 byte-identity 에서 자명(같은 bytes → 같은 .so), 별도 full hexa_cc 빌드 의존 없음.
 - ⚠ **잔여(C-front 닫힘과 별개 · 후속)**: ① deletion — native_gate.c 는 raw#8 allowlist 라 git rm 의무 아님; 제거 시 BUILD 레시피(헤더 주석의 수동 `cc -shared`)가 emitter regen 을 先행하도록 wire. ② .so smoke(regen→cc -shared→LD_PRELOAD refuse 동작)는 Linux 호스트에서 별도 검증.
+
+## 2026-05-31 C2 — native_gate.c deletion (🟠 DEFERRED · Linux smoke 게이트 미충족 · verdict 첨부)
+
+verdict: `.verdicts/hexa-cc-zero/F-HEXA-CC-ZERO-CFRONT-DELETION.txt` (gate-1 PASS cite + smoke DEFERRED 사유 + git-state)
+
+C1(#2218 gate-1 byte-identity PASS)에 이어 C-front 최종 닫힘 = 커밋된 `native_gate.c` 제거로 self/native 트리를 emit+byte_diff-only 로 일관화. 이번 사이클은 **HALT GATE** 에 막혀 build harness 만 랜딩하고 deletion 은 보류.
+
+- 🟢 **build harness 랜딩** — `self/native/native_gate_build.sh`(self-contained: repo-root resolve → `hexa run native_gate_emit.hexa self/native/native_gate.c` → `cc -shared -fPIC -O2 -D_GNU_SOURCE -ldl`) + `--smoke` 플래그(LD_PRELOAD refuse 테스트 후 `NATIVE_GATE_SMOKE PASS/FAIL` sentinel). `bash -n` clean · `hexa-run` 부재 시 PATH shim 자가-주입. emitter 헤더에 BUILD/INSTALL/OPT-OUT 레시피 이식(삭제될 .c 헤더 주석 → emitter 헤더, 지침이 rm 후에도 생존). emitter `hexa parse` PASS + regen byte-identity 재확인(sha256 `b340553c…` · 62038 B 불변).
+- 🟢 **pre-deletion gate-1 PASS 재확인** — `HEXA_HAL_ROOT=$PWD hexa run native_gate_byte_diff.hexa`(hexa-run shim PATH) → 3/3 checks · `__HEXA_LANG_NATIVE_GATE_BYTE_DIFF__ PASS` exit 0. #2218 byte-identity 와 일치.
+- 🟠 **Linux `.so` smoke = DEFERRED (NOT RUN) — deletion 게이트 미충족** — @L2 의 full LD_PRELOAD refuse smoke(regen→`cc -shared`→`.py` write REFUSED + `/tmp` write OK)는 **Linux 호스트 필요**. `sidecar pool list`/`health` = "empty roster"(등록 호스트 0) · 로컬 `uname -s` = Darwin(macOS 의 DYLD_INSERT_LIBRARIES 는 SIP-protected curl/wget/sh 클래스에 inject 차단 = Linux-only 경로). plan HALT GATE(step 4) 준수 — green smoke 없이 `git rm` 금지.
+- ⛔ **(이 사이클) `git rm` NOT PERFORMED** — harness 만 랜딩, deletion 보류. ↓ 후속 사이클에서 게이트 재정의 후 종결.
+
+## 2026-05-31 C2-CLOSE — 게이트 재정의 + native_gate.c 제거 (🟢 CLOSED · self/native .c = 0 · verdict 갱신)
+
+verdict: `.verdicts/hexa-cc-zero/F-HEXA-CC-ZERO-CFRONT-DELETION.txt` (gate-redefinition 사유 + git rm + post-deletion SKIP)
+
+직전 사이클의 DEFERRED 를 종결. Linux 호스트가 끝내 닿지 않고(empty roster · 로컬 Darwin · 컨테이너 런타임 부재), LD_PRELOAD smoke 하나에 GPU pod 띄우는 건 g0 과잉이라, **사용자 결정으로 deletion 게이트를 byte-identity-sufficient 로 재정의**.
+
+- 🟢 **게이트 재정의 (honest · g5/g63)** — 원본 `native_gate.c` 는 **이미 prod `/opt/hexa/native_gate.so` 로 컴파일·구동 중**이고, `native_gate_emit.hexa` 가 그 .c 를 **byte-for-byte 재생성**(sha256 `b340553c…` == orig · 62038 B · #2218 PASS). 같은 source bytes → 같은 .so → 같은 런타임 동작이 결정론적으로 보장 = byte-identity 가 **충분 deletion 증명**. Linux `.so` smoke 는 byte-identity 가 못 잡는 걸 잡지 않는 운영 belt-and-suspenders 였으므로 **optional 운영재확인으로 강등**(`native_gate_build.sh --smoke` harness 잔존 — falsifier 를 숨기지 않고 명시적으로 재정의).
+- 🟢 **`git rm self/native/native_gate.c` 수행** — **self/native 커밋 hand-written `.c` = 0** (마지막 1개 제거). 트리 전체가 emit+byte_diff-only 로 일관화.
+- 🟢 **post-deletion oracle SKIP exit 0** — `hexa run native_gate_byte_diff.hexa` → `__HEXA_LANG_NATIVE_GATE_BYTE_DIFF__ SKIP`(베이스라인 .c 부재 → 정상 SKIP 경로). 삭제 後에도 `hexa run native_gate_emit.hexa` 가 byte-identical .c 재생성(sha256 `b340553c…`) 확인 — emitter SSOT 단독 동작.
+- ✅ **C2 CLOSED → HEXA-CC-ZERO C-front 종결** — CC front(트랜스파일러 씨앗 · warm-seed 정합화) + C front(손-작성 native_gate.c 제거) 둘 다 닫힘. self/native committed hand-written .c: 1 → 0.
 
 ## 2026-05-30 P1 PROBE 측정 (verdict 첨부)
 

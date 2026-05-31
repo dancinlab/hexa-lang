@@ -212,9 +212,17 @@ fn _dft_scale_vec(line: str, scale: float) -> str {
 // vast_search_offers' verified+rentable defaults. reliability>0.97 (low-cost
 // interruptibles preempt in ~13h → lost runs) overrides the default >=0.95
 // via vastai last-wins; physical-core + bandwidth floors keep el-ph viable.
-// `extra` appends caller predicates (e.g. a gpu_name filter).
+//
+// COST CAP (d7) — el-ph (`pw.x` mpirun) is CPU-bound and uses 0% GPU, so the
+// directive-d7 sizing for these small (4–7 atom) RTSC cells is pool/CPU, NOT a
+// GPU node. With no price ceiling the guard grabbed top-tier B200 pods at
+// $4.25–12.13/hr (~4–6× overspend on an idle GPU). `dph_total<2.0` excludes
+// that B200 tier while still admitting cheap CPU/commodity-GPU nodes that meet
+// the cpu_cores/RAM floors. A caller `--query` (via `extra`) is appended AFTER
+// the cap so a big job can raise it (vastai last-wins on a repeated key).
+// `extra` appends caller predicates (e.g. a gpu_name filter, or a dph override).
 pub fn dft_rent_query(extra: str) -> str {
-    let base = "reliability>0.97 cpu_cores_effective>=16 inet_down>=200"
+    let base = "reliability>0.97 cpu_cores_effective>=16 inet_down>=200 dph_total<2.0"
     if len(extra) > 0 {
         return base + " " + extra
     }
@@ -759,6 +767,14 @@ fn _dft_provision_cmd() -> str {
 // Prints `PSEUDO OK` (caller asserts) when all referenced UPFs are present.
 fn _dft_pseudo_cmd() -> str {
     return "cd /root/deck && mkdir -p pseudo && "
+        // NORMALIZE outdir/pseudo_dir to the pod-relative ./out · ./pseudo BEFORE
+        // anything reads them. A deck authored elsewhere can carry a stale ABSOLUTE
+        // path (e.g. a ghost host's /home/<user>/rtsc_<m>/out) that does NOT exist
+        // on a fresh pod → pw.x dies immediately (no outdir to write, no pseudo_dir
+        // to read). Anchored to line-start so QE comment lines (leading `!`) are
+        // never touched. Makes every deck path-robust regardless of where it was
+        // generated (RTSC ghost-pulled perovskite decks hit this, 2026-05-31).
+        + "sed -i \"s|^[[:space:]]*outdir.*|  outdir = './out'|; s|^[[:space:]]*pseudo_dir.*|  pseudo_dir = './pseudo'|\" *.in 2>/dev/null; "
         + "need=$(grep -hoE '[A-Za-z0-9._+-]+[.]UPF' *.in 2>/dev/null | sort -u) && "
         + "miss=0; for upf in $need; do "
         + "[ -s \"pseudo/$upf\" ] || wget -q --tries=3 --timeout=30 -O \"pseudo/$upf\" "
