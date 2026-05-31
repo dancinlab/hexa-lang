@@ -1,0 +1,25 @@
+F-HEXA-CC-NATIVE-N5PRE-STEP5 -- complete as-cast downstream (types+bind); -3 (HX3004 x2 + i64 x1)
+==================================================================================================
+date: 2026-06-01   host: mini (darwin-arm64)   base: worktree off origin/main c4163e2de (= STEP3;
+STEP4 #2300 not merged, so its named:any HX3001 x6 are still present in this base -> isolated here).
+
+CHANGE -- STEP1 added only the `as` PARSE; bind+types didn't handle the BinOp text="as":
+  - compiler/check/types.hexa _types_check_binop: add op=="as" -> return the named target type
+    (_types_lower_type_ref on children[1].text) instead of falling through to `return lt` (the
+    casted value's type). Fixes `(v + 0.5) as int` typed f64 -> HX3004 on rt_round (stdlib/runtime/
+    numeric.hexa:86 `-> int`).
+  - compiler/check/bind.hexa _bind_walk_expr: skip name-resolving children[1] (the type Ident) of
+    an `as` BinOp; walk only the casted value. Fixes spurious HX2001 `undefined name i64` on
+    `len(..) as i64`.
+
+BUILD + MEASURE (current-source aprime_cc; smoke exit42 PASS; falsifier: undefined name -> HX2001):
+  off STEP3-base (11) -> STEP5 (8):
+    HX3004 2 -> 0   (rt_round return now typed int)
+    HX2001 i64 1 -> 0  (type Ident no longer name-resolved)
+    HX3001 6 (STEP4/#2300's named:any -- not in this base), push x2 unchanged.
+  STEP5 own delta = -3. No regression.
+
+CUMULATIVE (disjoint): STEP1 -81, STEP2 -9, STEP3 -43, STEP4 named:any -6 (#2300), STEP5 -3.
+181 -> 2 once #2300 + this merge. Remaining 2 = HX2001 `push` x2 (`.push` member-call binding edge
+where the receiver type is unresolved -> selector treated as a free name; member-method dispatch,
+distinct from as-cast). N5 fixpoint not reached. live tree untouched.
