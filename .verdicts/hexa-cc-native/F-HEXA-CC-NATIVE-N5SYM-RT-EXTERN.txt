@@ -1,0 +1,31 @@
+F-HEXA-CC-NATIVE-N5SYM-RT-EXTERN -- externalize 15 class-A runtime helpers (N5-sym part 2)
+==========================================================================================
+date: 2026-06-01   host: mini (darwin-arm64)   base: worktree off origin/main 0c1e28c13 (#2335 merged)
+fix: self/runtime_core_emit.hexa — 15 `static inline HexaVal __raw_*/__map_*/__vs_ptr_eq`
+     emit sites → plain external `HexaVal …` (drop `static inline`).
+
+PAIRS WITH #2335 (the codegen ABI-underscore fix). #2335 made the native object reference
+these as `___raw_idiv` (3 underscores, ABI-correct); this part makes the runtime EXPORT them
+as real `___raw_idiv` symbols (was static-inline → inlined away, no standalone symbol).
+
+VERIFICATION (no re-emit needed — cc-abi.o from #2335 already has the 3-underscore refs)
+---------------------------------------------------------------------------------------
+1. regen: `hexa run self/runtime_core_emit.hexa self/runtime_core.c` → 15 helpers now emitted
+   as `^HexaVal __raw_idiv(...)` (external), 0 `static inline` remaining.
+2. compile amalgam (build/self wrapper + regenerated core) → runtime.o, clang OK, NO
+   duplicate-symbol (single-TU amalgam includes runtime_core.c once).
+3. nm -jU runtime.o → ___raw_idiv / ___map_get_cstr_v / ___vs_ptr_eq / ___raw_cmp3 … present
+   as external T symbols (were absent before).
+4. link cc-abi.o (the #2335 native compiler object) vs this runtime.o:
+   undefined residual 15 (vs the pre-part2 runtime) → 13. The 15 class-A symbols
+   (___raw_{idiv,imod,fmod,add_f,cmp3,code_is,d2i} ___map_{get,has,set,remove,order_key,order_val,ptr}_* ___vs_ptr_eq)
+   now RESOLVE.
+
+REMAINING residual = 13 (next parts):
+- class B name-mapping (10): _byte_at _byte_len _bytes_to_str_raw _get _set _keys _list_dir
+  _mkdir _mono_ns _sha256_hex — codegen emits bare names; runtime has hexa_*/_fs_*.
+- class C special (3): ___map_raw_len (HX_MAP_LEN macro, not a fn), ___arr_alloc_items_zero{,_int}
+  (s4_flatc_post-injected static).
+
+No regression: single-TU amalgam compiles clean (no dup); the helpers are still inlined at
+their call sites within the TU at -O2, now ALSO emitted as the symbol the native path needs.
