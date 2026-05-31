@@ -712,6 +712,30 @@ fn parse_postfix() -> Expr {
                 children: kids,
                 atlas_ref: empty_atlas()
             }
+        } else if check_kind(TokenKind::KwAs) {
+            // G10 type cast — `x as int` / `x as float` / `x as bool` / `x as string`.
+            // Mirrors legacy self/parser.hexa: a postfix BinOp with text "as",
+            // left = the casted expr, right = the target type as an Ident node.
+            let as_tok = advance()
+            let ty = expect(TokenKind::Ident)
+            let mut as_kids = []
+            as_kids.push(e)
+            as_kids.push(Expr {
+                kind: ExprKind::Ident,
+                span: ty.span,
+                text: ty.text,
+                annotations: [],
+                children: [],
+                atlas_ref: empty_atlas()
+            })
+            e = Expr {
+                kind: ExprKind::BinOp,
+                span: as_tok.span,
+                text: "as",
+                annotations: [],
+                children: as_kids,
+                atlas_ref: empty_atlas()
+            }
         } else {
             go = false
         }
