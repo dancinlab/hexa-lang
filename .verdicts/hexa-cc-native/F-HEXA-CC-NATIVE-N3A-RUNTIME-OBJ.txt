@@ -1,0 +1,92 @@
+F-HEXA-CC-NATIVE-N3A-RUNTIME-OBJ — native runtime .o exporting _hexa_exit + _hexa_set_args
+==========================================================================================
+date:   2026-05-31
+host:   darwin-arm64 (mini)
+tool:   tool/emit_runtime_obj.hexa (new, this PR)
+
+FALSIFIER (pre-registered)
+  A hexa-native-emitted Mach-O .o must EXPORT _hexa_exit AND _hexa_set_args as
+  defined external __text symbols (nm -U) with NO undefined imports (nm -u
+  empty), AND linking it with a natively-emitted consumer object whose only
+  undefined symbols are exactly those two must produce a runnable executable
+  that exits with the program's code. Emission must use NO clang/as in the
+  object-production path.
+
+METHOD + VERIFICATION (real run, stdout verbatim)
+  1. emit the runtime object (runs under the installed interp — the tool uses
+     only arrays/push/write_bytes, no struct field access, so it is NOT blocked
+     by the stale-hexa ParsedObj codegen bug that blocks `hexa run` of the
+     compiler-emit modules):
+       $ HEXA_LANG=$PWD hexa run tool/emit_runtime_obj.hexa
+       _hexa_exit     bytes : 20 (20 expected)
+       _hexa_set_args bytes : 4 (4 expected)
+       total __text    : 24 (24 expected)
+       byte sanity     : mov-prefix + svc@16 + ret@20 OK
+       obj size        : 315 bytes total
+       MH_MAGIC_64     : cf fa ed fe · filetype 1 (MH_OBJECT) OK
+       wrote           : build/runtime_native.o
+       [N3a] EMIT OK
+
+  2. symbol falsifier:
+       $ nm -U build/runtime_native.o
+       0000000000000000 T _hexa_exit
+       0000000000000014 T _hexa_set_args
+       $ nm -u build/runtime_native.o    → (empty)   UNDEFINED_COUNT=0
+
+  3. end-to-end link+run proof (consumer = native trivial.o):
+       $ env -i PATH=/usr/bin:/bin aprime_cc _drv.hexa --target=arm64-apple-darwin \
+             --emit=obj --backend=native -o /tmp/n3a_trivial.o trivial.hexa
+       $ nm -u /tmp/n3a_trivial.o
+         _hexa_exit
+         _hexa_set_args            ← exactly the 2 symbols runtime_native.o exports
+       $ ld -o /tmp/n3a_prog /tmp/n3a_trivial.o build/runtime_native.o \
+             -lSystem -syslibroot <SDK> -arch arm64 -e _main
+       $ /tmp/n3a_prog ; echo $?
+         42                        ← PROG_EXIT=42
+
+FINDING (Δ vs baseline)
+  BEFORE: a natively-emitted program object (trivial.o) had 2 unresolved
+  symbols (_hexa_exit, _hexa_set_args) and no hexa-native object supplied them
+  — so a clang-free link was impossible (N3-smoke: --emit=exec failed
+  "symbol(s) not found").
+  AFTER: tool/emit_runtime_obj.hexa emits a 315-byte hexa-native MH_OBJECT
+  exporting both symbols (no clang/as in emit); linking it with the native
+  trivial.o yields a binary that exits 42. The runtime-object half of the
+  exec-link frontier is CLOSED.
+
+  Symbol bodies (verbatim arm64):
+    _hexa_exit  (offset 0, 20 B) = HexaVal-ABI adapter `mov x0,x1` (payload→code)
+                + rt_exit primitive (stp/mov x29/mov x16,#1/svc #0x80), byte-
+                identical to self/codegen/runtime_arm64.hexa rt_exit (verified
+                16-byte svc trailer) + the proven adapter from
+                test/native_build/emit_hexa_exit_native_o.hexa.
+    _hexa_set_args (offset 20, 4 B) = no-op `ret` (0xD65F03C0). The exit-only
+                corpus never reads argv; the C runtime's hexa_set_args merely
+                stashes argc/argv, so a bare ret is a correct no-op here. The
+                full argv-capture body is a later increment (only needed once a
+                program actually reads command-line args natively).
+
+SCOPE / HONEST CAVEATS (g5/g63)
+  - N3a closes the RUNTIME-OBJECT half only. The LINK in step 3 still used
+    system `ld` as a CONTROL (allowed — N3a is about the object, not the
+    linker). N3b swaps that `ld` for hexa_ld.link() (the linker is already
+    proven by P1_LINKEXEC: 2 .o → runnable exit 42, 0 clang/ld/as). Only after
+    N3b is the exec-link clang/ld/as-fork-free end to end.
+  - _hexa_set_args is a no-op stub valid for the exit-only / no-argv case. A
+    program that reads argv natively needs the real body — tracked as a follow-up.
+  - Larger programs (the full compiler) reference more _hexa_* runtime symbols
+    than these two; N3a's emitter is structured to extend (append more
+    {bytes, name, offset} triples to the same multi-symbol __text). Closing the
+    full self-host (N5) requires exporting the complete _hexa_* set the native
+    backend emits — an iteration on this same tool, not a redesign.
+  - macho_obj_wrap_v3 + push helpers are inlined verbatim from
+    self/codegen/macho.hexa (same convention as the existing
+    test/native_build/poc_multi_sym_emit.hexa + emit_hexa_exit_native_o.hexa)
+    because multi-import drivers fail to link without the compiled
+    module_loader and the installed hexa can't codegen struct-bearing imports.
+
+STATUS: N3a CLOSED (green) — hexa-native runtime .o exports _hexa_exit +
+        _hexa_set_args (nm -U), no undefined (nm -u empty), and a native
+        program links against it and exits 42. Runtime-object half of the
+        exec-link frontier done. NEXT = N3b (switch --emit=exec --backend=native
+        from system ld to hexa_ld.link over {user.o, runtime_native.o}).
