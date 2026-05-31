@@ -41,6 +41,15 @@ VERIFICATION (real run, verbatim — equivalence proof without an aprime_cc rebu
   whole chain is `hexa` itself (the interp running the .hexa tools) — clang,
   as, ld fork count = 0.
 
+  HONEST NOTE (arg-index fix folded into this PR): the first attempt at step 2/3
+  FAILED — tool/emit_runtime_obj.hexa wrote to its default path instead of the
+  arg path, so hexa_ld saw a 0-byte runtime.o ("file too small"). Root cause:
+  under `hexa run <script> <OUT>`, argv() = [cache_bin, OUT] (the script path is
+  NOT included), so the output arg is at index 1, not 2. Fixed (args[1]); the
+  run above is post-fix and genuinely produces exit 42. The fix is part of this
+  PR (tool/emit_runtime_obj.hexa) since the N3b --linker=hexa branch invokes
+  that emitter.
+
 FINDING (Δ vs baseline)
   BEFORE (N3-smoke): --emit=exec --backend=native forked system `ld` and
   supplied no runtime object -> _hexa_exit/_hexa_set_args unresolved -> no
