@@ -1487,6 +1487,38 @@ fn _dft_stage_probe_cmd(procname: str, out: str) -> str {
         + "else echo __DFT_FAILED__; fi"
 }
 
+// _dft_self_resume_wrap — wrap a guarded LONG-RUNNING compute stage in a POD-SIDE
+// self-restart loop so a per-pod walltime kill is followed by an AUTOMATIC
+// recover-relaunch on the SAME pod — no controller `--resume` round-trip.
+//
+// The QE el-ph (ph.x) checkpoints via `recover=.true.` (ph.in deck-gen, rtsc.hexa)
+// and must be RE-LAUNCHED to walk past the ~12h walltime cap. Before this, a
+// single `_dft_scfph_cmd` nohup'd by `--detach`/`--resume` sat IDLE after the
+// first walltime kill until the controller re-issued `--resume`; a session-restart
+// dropped that heartbeat → 13/20 jobs stalled, billing with zero progress.
+//
+// COMPLETION PREDICATE — reuses the EXISTING honest terminal probe
+// (`_dft_stage_probe_cmd`, the QE JOB DONE checkpoint-trap guard): the stage is
+// terminal iff the probe emits `__DFT_DONE__` (process gone AND a clean JOB DONE
+// AND no crash/timeout signature). A walltime kill reads as `__DFT_FAILED__`
+// (Maximum CPU time / max_seconds) — which is PRECISELY the recover case — so the
+// loop condition is "until DONE", NOT "until not-FAILED", and each iteration
+// re-runs the guarded stage (with recover) to advance the next q-points.
+//
+// LOOP BOUND — capped at `max_cycles` walltime windows (a corrupt-recover or a
+// genuine non-walltime crash would otherwise spin), logging each cycle so a tail
+// shows progress. The stage_cmd is the reused guarded builder (mpirun/env/recover
+// untouched) — this only WRAPS it; we never duplicate the compute invocation.
+fn _dft_self_resume_wrap(stage_cmd: str, procname: str, out: str, max_cycles: int) -> str {
+    let probe = _dft_stage_probe_cmd(procname, out)
+    return "n=0; while [ \"$(" + probe + ")\" != __DFT_DONE__ ] && [ $n -lt "
+        + to_string(max_cycles) + " ]; do n=$((n+1)); "
+        + "echo \"[dft-self-resume] cycle $n/" + to_string(max_cycles)
+        + " (recover relaunch) $(date -u +%FT%TZ)\"; "
+        + stage_cmd + "; sleep 5; done; "
+        + "echo \"[dft-self-resume] loop exit after $n cycle(s) — probe=$(" + probe + ")\""
+}
+
 // ── d11 pre-rent OOM gate (Fix-deck-1) ───────────────────────────────
 //
 // The whole RTSC wave3b --detach batch SIGKILL'd at SCF iter#2 (~71s, uniform) —
@@ -1887,8 +1919,12 @@ fn _dft_resume(deck: str) -> int {
         write_file(deck + "/scf.in.gen", scf_in)
         let _us = cloud_copy_to_opts(host, ssh_opts, deck + "/scf.in.gen", "/root/deck/scf.in")
         // launch scf→ph CHAIN detached (one terminal step; ph runs only on clean scf).
+        // SELF-RESUME: wrap the el-ph compute stage in a pod-side recover loop so a
+        // walltime kill auto-relaunches (recover=.true.) on the SAME pod until ph is
+        // terminal — no controller `--resume` round-trip (the 13/20-stalled fix).
         let phon_log = _dft_remote_logfile("phon")
-        let phon_argv = _dft_detach_argv(_dft_scfph_cmd(np, walltime_h))
+        let phon_cmd = _dft_self_resume_wrap(_dft_scfph_cmd(np, walltime_h), "ph.x", "ph.out", 8)
+        let phon_argv = _dft_detach_argv(phon_cmd)
         let launched = cloud_nohup_opts(host, ssh_opts, phon_argv, phon_log)
         if launched.ok == 0 {
             println("[dft-run] --resume: scf→ph detach launch FAILED — " + launched.message)

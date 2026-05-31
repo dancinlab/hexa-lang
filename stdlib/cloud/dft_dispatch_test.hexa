@@ -273,6 +273,39 @@ fn main() {
     let pprobe = _dft_stage_probe_cmd("ph.x", "ph.out")
     _check("probe: ph.x binary + ph.out file", _has(pprobe, "pgrep -x ph.x"), 1)
 
+    // ── pod-side self-resume loop (walltime-kill → auto recover-relaunch) ──
+    // The el-ph compute stage is wrapped in an `until DONE` bash loop so a per-pod
+    // walltime kill is followed by an AUTOMATIC recover-relaunch on the SAME pod —
+    // no controller `--resume` round-trip (the 13/20-stalled fix, 2026-06-01).
+    // Contract: the wrapper (1) contains the EXACT inner guarded stage command (no
+    // duplicated mpirun/recover logic), (2) re-uses the honest DONE probe as the
+    // loop predicate (not a bare JOB DONE), and (3) is bounded by max_cycles.
+    let inner = _dft_scfph_cmd(28, 12)
+    let wrapped = _dft_self_resume_wrap(inner, "ph.x", "ph.out", 8)
+    _check("self-resume: carries the EXACT inner guarded stage cmd (no dup logic)",
+        _has(wrapped, inner), 1)
+    _check("self-resume: inner still has ph.x recover-capable invocation",
+        _has(wrapped, "ph.x -in ph.in"), 1)
+    _check("self-resume: until-guard loops until the stage is terminal",
+        _has(wrapped, "while"), 1)
+    // the loop predicate is the HONEST DONE probe (__DFT_DONE__), NOT a bare JOB DONE —
+    // a walltime kill (Maximum CPU time) reads as FAILED, which is the recover case,
+    // so "until DONE" (not "until not-FAILED") is the correct, recover-safe condition.
+    _check("self-resume: predicate is __DFT_DONE__ (honest, not bare JOB DONE)",
+        _has(wrapped, "__DFT_DONE__"), 1)
+    _check("self-resume: predicate uses the ph.x liveness probe",
+        _has(wrapped, "pgrep -x ph.x"), 1)
+    // bounded: cap at 8 walltime cycles (corrupt-recover / non-walltime crash guard).
+    _check("self-resume: bounded by max_cycles (8)", _has(wrapped, "lt 8"), 1)
+    // the stage command must sit INSIDE the loop body — between the while-do and done.
+    _check("self-resume: stage cmd is inside the loop body (before done)",
+        _lt_index(wrapped, inner, "done"), 1)
+    _check("self-resume: while precedes the inner stage cmd",
+        _lt_index(wrapped, "while", inner), 1)
+    // a different cap value flows through (no hardcoded 8 inside the builder).
+    let wrapped5 = _dft_self_resume_wrap(inner, "ph.x", "ph.out", 5)
+    _check("self-resume: cap is parametric (5 flows through)", _has(wrapped5, "lt 5"), 1)
+
     // resume terminal-step contract: a missing state stamp → run --detach first.
     let nodeck = "/tmp/dft_resume_nostate_test"
     let _rmn = exec("rm -rf '" + nodeck + "' && mkdir -p '" + nodeck + "'")
