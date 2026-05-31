@@ -1,0 +1,56 @@
+// @ci_gate — pure · network-free · deterministic
+// self/stdlib_help_drift_test.hexa — stdlib-CLI command<->dispatch drift guard.
+//
+// Binds the stdlib-CLI verb roster to the single in-source SSOT
+// self/stdlib_commands::stdlib_commands():
+//
+//   (A) the COMMANDS SSOT      — stdlib_commands() (IMPORTED, compiled in)
+//   (B) the top-level dispatch  — self/main.hexa `else if sub == "..."` guard
+//
+// These verbs self-delegate `--help` to their own sub-CLI binaries (no
+// cmd_verb_help body), so the only drift surface is dispatch coverage. PASS
+// iff every (A) verb has a `sub == "<verb>"` branch in (B); a stdlib verb
+// added to the SSOT without a dispatch branch FAILS green.
+//
+// Run:  hexa run self/stdlib_help_drift_test.hexa
+// PASS: exits 0, prints "stdlib_help_drift_test PASS".
+
+use "self/stdlib_commands"
+
+fn _read_src(path: str) -> str {
+    return exec("cat " + path + " 2>/dev/null")
+}
+
+fn main() {
+    let registry = stdlib_command_names()
+    let src = _read_src("self/main.hexa")
+
+    let mut fails = 0
+
+    if len(registry) == 0 {
+        println("DRIFT: stdlib_commands() roster is empty")
+        fails = fails + 1
+    }
+    if len(src) == 0 {
+        println("DRIFT: could not read self/main.hexa")
+        fails = fails + 1
+    }
+
+    let mut i = 0
+    while i < len(registry) {
+        let v = registry[i]
+        if !src.contains("sub == \"" + v + "\"") {
+            println("DRIFT: stdlib_commands() verb has no dispatch branch — " + v)
+            fails = fails + 1
+        }
+        i = i + 1
+    }
+
+    if fails == 0 {
+        println("PASS: stdlib command<->dispatch registry in sync — " + to_string(len(registry)) + " verbs (stdlib_commands == dispatch)")
+        println("stdlib_help_drift_test PASS")
+        exit(0)
+    }
+    println("FAIL: " + to_string(fails) + " stdlib command<->dispatch drift(s) above")
+    exit(1)
+}
