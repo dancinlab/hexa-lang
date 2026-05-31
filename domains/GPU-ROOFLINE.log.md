@@ -1,5 +1,31 @@
 # GPU-ROOFLINE — append-only step log
 
+## 2026-05-31 — MS#1 1b HIR `[T; N]` fixed-array 크기 surface — honest STOP (>1 batch)
+
+scope 결정: 1b 는 단일 <200줄 batch 안에 정직하게 착지 불가 → honest STOP 종결(1a 선례 동일,
+fail 아님). flip 은 `[ ]` 유지, 측정값 날조 없음.
+
+honest 감사 메모(중요): 이 격리 worktree 에는 codegen 파일 `self/nvptx_target.hexa` 가 존재하지
+않는다(디스크·git HEAD 모두 부재 — `git cat-file -e HEAD:self/nvptx_target.hexa` = fatal, 0 lines).
+따라서 이 세션에서 그 파일의 라인을 직접 재-감사할 수 없었고, backend 사실관계는 이 도메인 자신의
+선행 코드-감사(2026-05-30 규모-산정 노트 = GPU-ROOFLINE.md:51-57·70-72)를 권위 출처로 인용한다:
+`_nvptx_shared_default_bytes`(`nvptx_target.hexa:3345-3352`)가 synthetic 고정 2048 B 를 반환하고
+shape 별 SMEM operand-tile 크기 진입점이 없다.
+
+frontend 사실관계(이 worktree 에서 직접 감사): self/parser.hexa 등 frontend 트리는 존재하나
+1b 가 요구하는 `[T; N]` fixed-array 타입(컴파일타임 고정 N 운반) surface 가 없다 — self/* 의 array
+참조는 모두 런타임 dynamic-length 경로(`rt_array_len`/`hexa_array_len`/`rt_array_items`,
+self/runtime_pure.hexa·self/codegen.hexa:8306)뿐. 도메인 노트의 "현재 없음 — codegen 이 직접 명시"와 일치.
+
+scope verdict: 1b 착지 = (a) lexer+parser `[T; N]` 타입 문법, (b) (T,N) 운반 타입-AST 노드,
+(c) HIR/MIR 의 N 전파, (d) backend `_nvptx_shared_default_bytes` 를 tile-size 산출식으로 교체 —
+frontend+backend 전면 변경. 규모-산정 노트의 "frontend(HIR/MIR)+backend(NVPTX) 양쪽 변경 =
+multi-session(1-batch surgical 불가)" 경고와 1:1 일치 → honest STOP 이 유효 종결.
+
+다음 세션 surgical 진입점: HIR `[T; N]` 크기 surface 착지 후 `_nvptx_shared_default_bytes`
+(nvptx_target.hexa:3345)를 tile-size 산출식으로 교체(codegen 파일이 있는 공유 트리에서 수행).
+verdict = .verdicts/gpu-roofline-ms1-1b/F-HEXA-GPU-ROOFLINE-MS1-1B.txt.
+
 ## 2026-05-30 — batch E2 drain: MS#7 멀티디바이스 분모 (A100) (gpu-roofline-batch-e2)
 
 ### MS#7 🟢 공통 — 멀티디바이스 분모: A100 80GB PCIe 행 추가 [PASS, measured]

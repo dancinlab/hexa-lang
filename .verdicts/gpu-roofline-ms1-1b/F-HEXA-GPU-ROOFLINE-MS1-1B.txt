@@ -1,0 +1,55 @@
+GPU-ROOFLINE MS#1 1b — HIR fixed-array [T; N] size surface for shape-param SMEM tile
+VERDICT: 🟠 honest-STOP (>1 batch) — flip held [ ], doc-only, NO fabricated measurement
+DATE: 2026-05-31
+METHOD: code audit (frontend in-worktree) + domain prior-audit citation (backend)
+
+This is a doc-only honest-STOP per the locked /sbs plan (@L2 STOP policy, @L3
+doc-only honest-STOP = no GPU fire, @L5 honesty). The deliverable IS the scoping
+doc; 1b deliberately remains [ ].
+
+=== HONEST SCOPE DISCLOSURE ===
+The codegen backend file self/nvptx_target.hexa is NOT present in this isolated
+worktree (absent on disk AND absent from git HEAD:
+  `git cat-file -e HEAD:self/nvptx_target.hexa` -> fatal: path does not exist
+  `git show HEAD:self/nvptx_target.hexa | wc -l` -> 0
+). Therefore this session could NOT re-derive line numbers in that file directly.
+Backend facts below are cited from this domain's OWN prior code-audit (2026-05-30,
+recorded in domains/GPU-ROOFLINE.md:51-57 and :70-72), treated as the authoritative
+prior finding — not re-measured here, and not fabricated as if freshly inspected.
+
+=== BACKEND (cited from domain prior-audit 2026-05-30) ===
+domains/GPU-ROOFLINE.md:70-72 states:
+  "현 .shared staging 은 synthetic 2048 B 고정 (_nvptx_shared_default_bytes,
+   nvptx_target.hexa:3345-3352). shape 별 SMEM operand-tile 크기를 shape-param
+   으로 emit 하려면 HIR 에 fixed-array 크기 surface 필요 (현재 없음 — codegen 이
+   직접 명시)."
+=> backend has no shape-param entry point; consumer reads only the fixed default.
+
+=== FRONTEND (audited in-worktree, 2026-05-31) ===
+The self/ frontend tree IS present in this worktree (self/parser.hexa etc.).
+- No [T; N] fixed-array TYPE syntax carrying a compile-time size N exists.
+- All array references found in self/*.hexa are runtime dynamic-length paths
+  (rt_array_len / hexa_array_len / rt_array_items — runtime/self/runtime_pure.hexa,
+  self/codegen.hexa:8306), i.e. length-at-runtime, NOT a compile-time fixed-N
+  type surface that codegen could read to size an SMEM operand tile.
+=> the HIR [T; N] size surface 1b requires is genuinely absent on the frontend.
+
+=== SCOPE VERDICT ===
+Landing 1b requires, in order:
+  (a) lexer + parser support for [T; N] fixed-array TYPE syntax (carrying N)
+  (b) a type-AST node carrying (element T, compile-time size N)
+  (c) HIR/MIR propagation of N to the codegen layer
+  (d) backend: replace _nvptx_shared_default_bytes (fixed 2048) with a tile-size
+      formula derived from N  [in the shared tree where nvptx_target.hexa lives]
+(a)-(c) are the whole frontend type pipeline; (d) is backend. This matches the
+domain's own scale estimate verbatim:
+  domains/GPU-ROOFLINE.md:54 "frontend(HIR/MIR) + backend(NVPTX) 양쪽 변경이 필요
+   = multi-session (1-batch surgical 불가)."
+=> decisively >1 logical batch. Same terminal class as the 1a honest-STOP
+   (2026-05-30). A closed honest-STOP is a VALID terminal, not a failure.
+
+=== NEXT-SESSION SURGICAL ENTRY POINT ===
+After the frontend HIR [T; N] size surface lands, replace
+  _nvptx_shared_default_bytes (nvptx_target.hexa:3345)
+with a tile-size formula consuming N. Must be done in the shared working tree
+(the codegen file is not checked into this worktree's path).
