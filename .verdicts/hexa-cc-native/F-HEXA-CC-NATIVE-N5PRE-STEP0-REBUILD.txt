@@ -1,0 +1,166 @@
+F-HEXA-CC-NATIVE-N5PRE-STEP0-REBUILD
+=====================================
+verdict tier: 🔴 BLOCKER (pool rebuild FAILED to produce a Linux aprime_cc; the
+              STEP0 diagnostic re-measurement could NOT be obtained — the
+              canonical toolchain is arm64-darwin-bound by construction)
+date: 2026-05-31
+agent: nbcorr-agent (N5-pre STEP0)
+pool host: summer (summer@192.168.50.60 · Linux summer-B650M-K 6.17.0-29-generic
+           x86_64 · Ubuntu clang 18.1.3 · python 3.12.3)
+repo on summer: /home/summer/core/hexa-lang
+repo SHA built: 00aef842701891792a6a5165cd16b2d2d33ca36a (origin/main, hard-reset
+                from prior detached d67dd371; remote = dancinlab/hexa-lang)
+bootstrap transpiler: build/hexat (2004928 B, present; self/native/hexat absent —
+                       so build invoked with -v build/hexat)
+
+────────────────────────────────────────────────────────────────────────────
+1. GOAL (per N5-pre STEP0)
+────────────────────────────────────────────────────────────────────────────
+Rebuild aprime_cc from CURRENT origin/main on a Linux pool host, re-run the
+native-self-host typecheck diagnostics over the flattened compiler, and confirm
+the N5-pre triage prediction that ~28 HX2001 "undefined name" diagnostics
+(float_to_bits, bits_to_float, __raw_*, hexa_str_concat, hexa_str_parse_int)
+were STALE-binary artifacts that a fresh build clears.
+
+BASELINE (cached, darwin-arm64, OLD build/aprime_cc):
+  flatten compiler/main.hexa → flat.hexa (~40246 L, 47 files); then
+  aprime_cc _drv.hexa --target=arm64-apple-darwin --emit=obj --backend=native
+            -o /tmp/big.o flat.hexa
+  → aborts "181 diagnostic(s); aborting before codegen".
+  TRUE per-tag: HX2001=104, HX3004=18(Warn), HX3001=17, HX2003=16,
+                HX4001=13(Warn), HX0011=13.  FATAL=150, Warn=31.
+
+────────────────────────────────────────────────────────────────────────────
+2. BUILD ATTEMPT A — canonical tool/build_aprime.sh FAILS on Linux (verbatim)
+────────────────────────────────────────────────────────────────────────────
+  cmd: ssh summer → cd /home/summer/core/hexa-lang &&
+       bash tool/build_aprime.sh -o /tmp/aprime_fresh -v build/hexat
+  rc: 1
+  verbatim build log (/tmp/aprime_build.log):
+    === build_aprime: repo=/home/summer/core/hexa-lang  hexat=build/hexat ===
+    HEAD: 00aef842 docs(gpu-roofline): 1b N-capture behavioral NEUTRALITY ... (#2261)
+      [1/5] flatten: 46 files 39932 lines
+    OK: /tmp/aprime_build.xf9fbg/ap.c
+      [2/5] transpile: 43502 lines C
+    post: hoisted 0 enum #defines + mkdir lowering + bind rename + free_tree lowering applied
+      [3/5] post-process: s4_flatc_post + builtin sed + runtime.c inline
+    build_aprime: clang failed
+    clang: error: unsupported option '-arch' for target 'x86_64-pc-linux-gnu'
+
+  ROOT CAUSE: tool/build_aprime.sh stage-4 hardcodes
+  `clang -Oz -arch arm64 ... -Wl,-dead_strip` (Mach-O/arm64-only). Ubuntu
+  clang on x86_64 rejects `-arch`. Stages 1-3 (flatten 46 files / 39932 L →
+  hexat transpile 43502 L C → s4_flatc_post + sed) SUCCEEDED; only the
+  darwin-specific clang invocation fails. No binary produced.
+
+────────────────────────────────────────────────────────────────────────────
+3. BUILD ATTEMPT B — native-x86_64 port also FAILS at clang (verbatim)
+────────────────────────────────────────────────────────────────────────────
+A hand-ported Linux build (/tmp/blx.sh) reproduced stages 1-3 identically
+(same flatten walker, hexat transpile, s4_flatc_post + sed) and replaced the
+stage-4 clang line with native x86_64 flags (dropped `-arch arm64`;
+`-Wl,-dead_strip` → `-Wl,--gc-sections`; kept -Oz / section-gc / builtin
+disables). It ALSO fails at clang:
+
+  verbatim terminal log (/tmp/ablx.log):
+    OK: /tmp/aprime_lin.7CDTW1/ap.c
+      [2/4] transpile: 43502 lines C
+    post: hoisted 0 enum #defines + mkdir lowering + bind rename + free_tree lowering applied
+      [3/4] post-process done
+    clang failed
+    /usr/include/malloc.h:39:14: error: function cannot return function type 'int (size_t)' (aka 'int (unsigned long)')
+    /usr/include/malloc.h:43:14: error: function cannot return function type 'int (size_t)' (aka 'int (unsigned long)')
+    /usr/include/malloc.h:51:14: error: function cannot return function type 'int (void *)'
+    /usr/include/malloc.h:64:13: error: function cannot return function type 'int (void *)'
+    self/runtime_core.c:572:19: error: call to undeclared function 'hxlcl_mkdir'; ISO C99 and later do not support implicit function declarations [-Wimplicit-function-declaration]
+    self/runtime_core.c:2265:37: error: call to undeclared function 'hxlcl_backtrace'; ...
+    self/runtime_core.c:2267:13: error: call to undeclared function 'hxlcl_backtrace_symbols_fd'; ...
+    self/runtime_core.c:6060:9: error: call to undeclared function 'hxlcl_longjmp'; ...
+
+  Direct ssh probe confirms NO binary was produced:
+    ls: '/tmp/aprime_fresh'에 접근할 수 없음: 그런 파일이나 디렉터리가 없습니다
+
+  TWO distinct Linux-port failures, both pre-binary:
+   (a) Glibc <malloc.h> declares hooks (`__malloc_hook` etc.) as function
+       pointers in a form the transpiled-C TU (with its macro #defines from
+       s4_flatc_post / runtime.c inline) mis-parses as "function returning a
+       function type" — a header-collision specific to the single-TU inline
+       build on glibc (Mach-O / darwin libc does not hit this).
+   (b) The `hxlcl_*` libc-shim helpers (hxlcl_mkdir / hxlcl_backtrace /
+       hxlcl_backtrace_symbols_fd / hxlcl_longjmp) referenced by
+       self/runtime_core.c are NOT declared in the Linux build (they are the
+       darwin RUNTIME.md Tier-A shim layer; on Linux the corresponding
+       declarations / hxlcl_linux.c are not wired into this build path).
+  Both are build-harness portability gaps, not compiler-source diagnostics.
+
+────────────────────────────────────────────────────────────────────────────
+4. RE-MEASUREMENT — NOT OBTAINED
+────────────────────────────────────────────────────────────────────────────
+  new "N diagnostic(s)" line:  NONE — no aprime_cc binary exists on the Linux
+                               host; the type-checker was never reached.
+  new HX histogram:            N/A (no binary to run).
+  before/after stale delta:    INDETERMINATE — the ~28 stale-HX2001 prediction
+                               (float_to_bits / bits_to_float / __raw_* /
+                               hexa_str_concat / hexa_str_parse_int already in
+                               compiler/check/bind.hexa _bind_builtin_names() on
+                               current source) could NOT be validated at
+                               runtime. It remains a SOURCE-LEVEL claim only.
+
+  Honest g5/g63: there is NO measured histogram and NO measured FATAL count in
+  this verdict. The clang failures above are the only artifacts. No value is
+  presented as a measurement.
+
+────────────────────────────────────────────────────────────────────────────
+5. BLOCKER — exact statement
+────────────────────────────────────────────────────────────────────────────
+There is NO working way to produce a typechecking aprime_cc on the Linux pool
+host with the current toolchain:
+  • tool/build_aprime.sh is arm64-darwin-bound (hardcoded `-arch arm64`,
+    Mach-O `-dead_strip`, smoke uses --target=arm64-apple-darwin). FAILS at
+    clang on x86_64 (§2).
+  • A native-x86_64 port still fails at clang on glibc <malloc.h> header
+    collisions + missing hxlcl_* Linux shims (§3). No binary produced.
+  • summer's build/ has NO pre-built aprime_cc — only hexat / hexat_real
+    (bootstrap transpilers) + .hexa sources. The cached darwin build/aprime_cc
+    referenced by the baseline is not present on summer.
+  • Per STEP0 env constraints, a local Mac build is FORBIDDEN (kill-storm
+    risk), so the darwin-native re-measure path is also closed in this stage.
+
+Therefore STEP0's diagnostic re-measurement is BLOCKED. The triage's
+stale-vs-true split cannot be re-confirmed by a Linux pool rebuild with the
+current toolchain.
+
+────────────────────────────────────────────────────────────────────────────
+6. SHARPENED NEXT-FIX ORDER (recommendation)
+────────────────────────────────────────────────────────────────────────────
+  N5-pre STEP0b (UNBLOCK the measurement — prerequisite), cheapest first:
+    (i)  Re-measure on an AUTHORIZED arm64-darwin pool/pod host (NOT a local
+         unguarded Mac build). The canonical build then "just works" and the §1
+         baseline command yields the true post-rebuild histogram directly. This
+         is the lowest-risk path and the recommended STEP0b.
+    (ii) OR make tool/build_aprime.sh target-portable: a `uname -s`/`uname -m`
+         gated stage-4 (drop `-arch arm64`, use `--gc-sections`, native target)
+         PLUS the two Linux-specific fixes §3 surfaced — wire the hxlcl_* Linux
+         shim declarations into the build TU, and resolve the glibc <malloc.h>
+         function-pointer-typedef collision (e.g. guard/undef the offending
+         macros before including system headers, or `-D__MALLOC_HOOK_VOLATILE=`
+         / suppress the hook decls). Falsifier for the port: a deliberate
+         undefined-name source MUST emit HX2001 and exit non-zero.
+
+  N5-pre STEP1 (the genuine compiler fix — UNCHANGED by this blocker):
+    Per the triage, the real remaining diagnostic work is dominated by the
+    parser as-cast cascade (~70 + 13). RECOMMENDATION STANDS: tackle the parser
+    as-cast fix in compiler/parse/parser.hexa FIRST, then the +3 missing bind
+    allowlist entries, then the HexaVal typing (~33). This ordering is
+    independent of the measurement blocker and is the highest-leverage source
+    fix. (Per STEP0 directive, the parser fix was deliberately NOT started in
+    this stage.)
+
+────────────────────────────────────────────────────────────────────────────
+EVIDENCE PROVENANCE (raw outputs captured on summer):
+  /tmp/aprime_build.log  — canonical build_aprime.sh failure: `-arch` rejected (§2)
+  /tmp/ablx.log          — portable x86_64 port failure: malloc.h + hxlcl_* (§3)
+  ssh ls /tmp/aprime_fresh → "no such file" (no binary produced, §3)
+  (both build logs captured verbatim via Monitor terminal events + base64 pull)
+Honest g5/g63: §4 is NULL because no binary was produced; this is a 🔴 BLOCKER
+verdict, not a 🟢 measurement. No estimate is presented as a fact.
