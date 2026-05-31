@@ -1,0 +1,115 @@
+// stdlib/cloud/vast_vastai_path_test.hexa — deterministic falsifiers for the
+// vastai entrypoint resolver precedence (RTSC mini self-provision audit,
+// 2026-05-31).
+//
+// Real bug reproduced here WITHOUT a live API / network / vastai install:
+//   `hexa cloud rent vast` / `dft-run --detach` resolves the vastai entrypoint
+//   via _vastai_path(). The old chain was `$HOME/bin/vastai` → `command -v
+//   vastai`, which broke two ways on a key-holding host:
+//     (1) a pip --user console script is frequently NOT on PATH → "vastai not
+//         found", rent aborts;
+//     (2) WORSE — a system py3.9/LibreSSL `vastai` DOES resolve on PATH but its
+//         HTTPS call silently returns "no matching offers", so rent looked like
+//         it worked yet provisioned nothing.
+//   The fix is an ordered chain that resolves a known-good py3.13 venv (working
+//   OpenSSL) BEFORE any bare-PATH binary, with an explicit `$VASTAI_BIN`
+//   override and a `python3 -m vastai` last resort.
+//
+// The PRECEDENCE is factored into the pure _vastai_resolve (exposed here as
+// vast_vastai_resolve_TEST), so the order is asserted by INJECTING each rung's
+// candidate — no $HOME / $PATH / vastai dependence, fully deterministic. Part 2
+// then runs the real _vastai_path once as a non-crash live-integration sanity
+// check (its result depends on the host, so only its TYPE is asserted).
+//
+// Run:   hexa run stdlib/cloud/vast_vastai_path_test.hexa
+// PASS:  exits 0, prints "vast_vastai_path_test PASS — N/N cases".
+
+use "stdlib/cloud/vast"
+
+fn _fail(case: str, msg: str) {
+    println("FAIL " + case + ": " + msg)
+    exit(1)
+}
+
+fn _eq(case: str, got: str, want: str) {
+    if got != want {
+        _fail(case, "got [" + got + "] want [" + want + "]")
+    }
+}
+
+fn main() {
+    let mut n = 0
+
+    // Concrete fixtures for each rung (the resolver treats a non-"" arg as
+    // "this rung resolved to this path").
+    let OV   = "/opt/pinned/vastai"          // $VASTAI_BIN override
+    let VA   = "/home/u/vastenv/bin/vastai"  // py3.13 venv A (working OpenSSL)
+    let VB   = "/home/u/.vastai-venv/bin/vastai" // py3.13 venv B
+    let HB   = "/home/u/bin/vastai"          // legacy $HOME/bin
+    let PATH = "/usr/bin/vastai"             // bare PATH (e.g. py3.9/LibreSSL)
+    let MOD  = "python3 -m vastai"           // module last resort
+
+    // ── @L2 rung-1: $VASTAI_BIN override wins over EVERYTHING ─────────────
+    _eq("1-override-wins-all",
+        vast_vastai_resolve_TEST(OV, VA, VB, HB, PATH, true), OV)
+    n = n + 1
+
+    // Override wins even when only a bare-PATH binary also exists.
+    _eq("1b-override-over-path",
+        vast_vastai_resolve_TEST(OV, "", "", "", PATH, false), OV)
+    n = n + 1
+
+    // ── @L3 rung-2: a venv is chosen BEFORE a bare-PATH binary ───────────
+    // THE core LibreSSL-trap fix: venv_a present + a PATH binary present →
+    // venv_a wins (the py3.9/LibreSSL PATH `vastai` must NOT be selected).
+    _eq("2-venv-before-path",
+        vast_vastai_resolve_TEST("", VA, "", "", PATH, true), VA)
+    n = n + 1
+
+    // venv_a precedes venv_b when both exist.
+    _eq("2b-venv-a-before-b",
+        vast_vastai_resolve_TEST("", VA, VB, HB, PATH, true), VA)
+    n = n + 1
+
+    // venv_b chosen when venv_a is absent (still before $HOME/bin + PATH).
+    _eq("2c-venv-b-before-homebin-path",
+        vast_vastai_resolve_TEST("", "", VB, HB, PATH, true), VB)
+    n = n + 1
+
+    // ── rung-3: legacy $HOME/bin preserved, before PATH ──────────────────
+    _eq("3-homebin-before-path",
+        vast_vastai_resolve_TEST("", "", "", HB, PATH, true), HB)
+    n = n + 1
+
+    // ── rung-4: bare PATH used when nothing higher resolves ──────────────
+    _eq("4-path-when-only-path",
+        vast_vastai_resolve_TEST("", "", "", "", PATH, false), PATH)
+    n = n + 1
+
+    // ── rung-5: python3 -m vastai fallback when only the module resolves ──
+    _eq("5-module-fallback",
+        vast_vastai_resolve_TEST("", "", "", "", "", true), MOD)
+    n = n + 1
+
+    // PATH still beats the module fallback (rung-4 before rung-5).
+    _eq("5b-path-before-module",
+        vast_vastai_resolve_TEST("", "", "", "", PATH, true), PATH)
+    n = n + 1
+
+    // ── not-found: nothing resolves → "" (the "vastai not found" path) ───
+    _eq("6-nothing-resolves-empty",
+        vast_vastai_resolve_TEST("", "", "", "", "", false), "")
+    n = n + 1
+
+    // ── Part 2: live-integration non-crash sanity of the real resolver ───
+    // _vastai_path reads env / probes disk + PATH; its concrete result depends
+    // on the host, so assert only that it returns a str without crashing.
+    let live = vast_vastai_path_TEST()
+    if type_of(live) != "string" {
+        _fail("7-live-type", "expected string, got " + type_of(live))
+    }
+    n = n + 1
+
+    println("vast_vastai_path_test PASS — " + to_string(n) + "/" + to_string(n) + " cases")
+    exit(0)
+}
