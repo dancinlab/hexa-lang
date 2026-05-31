@@ -2,6 +2,37 @@
 
 Append-only history sister of `UNSHADOW.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
+## 2026-05-31 — 🪆 UNSHADOW 100% closure — 6 PARTIAL → terminal reconcile
+
+남은 6 `- [~]` PARTIAL 을 전부 HONEST terminal 로 해소 → origin/main `[~]=0 [ ]=0` (26/26 `[x]` = 100%).
+숫자 날조 0 — 전부 기존 spec-accepted faithful A/B proxy verdict 재인용 OR ruled-out residual(paper_negative_ok).
+codegen 무변경(doc-only reconcile); cited 코드 전부 origin/main git grep 으로 존재 확인. flip = PR #2243(merged).
+
+GROUP A (residual 이미 done/closed-negative → SSOT reconcile):
+- [x] **native HexaArrI64 [HEADLINE]** → 🔵: 3 sub-task 전부 terminal — (1) raw-chain 🔴 CLOSED-NEG(#2221),
+  (2) F64 🟢 WIN 3.48× 갭 92.6%(#2223), (3) no-escape autofire ✅(#2223, `_native_arr_autofire_ok`).
+  헤드라인 = native storage 천장(i64 d_ideal 17.6× AT PARITY + F64 3.48× LANDED) = 축A STORAGE-갭 확증.
+- [x] **known-int accumulator 일반화** → 🟢: residual(register-pack→raw int64 local) = 🔴 CLOSED-NEG(#2221,
+  f_inline==g_raw hot-loop asm byte-IDENTICAL md5 `436ccab8` — SROA 가 single-field box 를 이미 scalarize).
+  실현 win = 누산기 ABI-벽 1.49× 슬라이스; register-pack residual = dead lever ruled-out.
+- [x] **escape→stack-alloc (F2)** → 🔵: 3 sub-task terminal — (1) non-flat ✅ WIN(#2233,
+  `gen2_stack_alloc_array_lit`·291× RSS), (2) nested-scope ✅ codegen(#2238, `_stack_child_bodies`/
+  `_stack_collect_arr_lets`), (3) GATED default = honest opt-in 보존. parent slice 측정(heap-alloc 20M→0·66× RSS).
+
+GROUP B (honest terminal decision):
+- [x] **nested-scope** → 🟡: perf 레버는 parent(§escape-stack-nonflat, 이미 측정 291× RSS)의 것 — 중첩 arm =
+  character-identical → byte-eq-by-construction · expected-by-identity(재측정 아님·명시·날조 0). GATED 해제 =
+  sign-gate 로 corpus 무회귀 증명 불가인 별도 비-perf 축 → opt-in 보존(milestone 지시 준수).
+- [x] **typed monomorphic struct layout** → 🟡: realized slice 109×·gap 547×→5× AT PARITY(§typed-struct).
+  residual(fn-arg/return/mut-receiver 변수-흐름 일반화)은 whole-program type-flow 필요 = untyped codegen 에
+  typed-IR 부재 → codegen-only 범위 밖 ruled-out 축(paper_negative_ok, E 의 typed-repr 부재 근본원인과 동일).
+- [x] **atlas-guided PGO (F3)** → 🟡: LAYOUT-축 win(out-of-line copy elision·byte-eq) + LIVE atlas-query
+  surface ✅ 착지(NEGATIVE-CONTROL 입증). 잔여 wall-lever(OPAQUE/cross-ABI hot fn) = §B/E/nanbox 가 전부
+  부딪힌 runtime.o C-ABI/B9 self-host 벽 = 도메인-횡단 documented blocker(THIS milestone 의 fixable residual 아님, g0).
+
+- [x] **POOL/측정 caveat**: roster EMPTY/unreachable + 이 background 세션 = Darwin sign-off 토큰 미보유
+  (clang/hexa heavy-invocation 차단) → 새 live 측정 0. 전부 기존 verdict(.verdicts/unshadow-*) 재인용.
+
 ## 2026-05-31 — 🔴 known-int accumulator → raw int64 local 강등 (§typed-repr accumulator) CLOSED-NEGATIVE
 
 > 문서 reconcile: 측정·verdict·bench tool 은 PR #2221(merged)에서, milestone 체크박스 flip 은
