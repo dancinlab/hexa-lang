@@ -1,0 +1,12 @@
+{
+  "nonce": "40339d150fcb",
+  "verdict": "cannot-flip (no green selftest)",
+  "hexa_selftest_rc": 0,
+  "hexa_selftest_msg": "error: unknown subcommand 'selftest'",
+  "finding": "No standalone `selftest` verb exists: `hexa selftest` -> 'unknown subcommand selftest'. `hexa test` has a --selftest-only flag but needs a target .hexa with @test fns.",
+  "direct_hexa_run_rc": 0,
+  "direct_hexa_run_ok": true,
+  "unit_test_guard_rc": 2,
+  "unit_test_guard_tail": "usage: hexa test <file.hexa> [--filter NAME] [--verbose] [--selftest-only]",
+  "conclusion": "M4 cannot be flipped [x]: there is no `hexa selftest` regression gate to turn green (unknown subcommand). The toolchain itself runs fine (direct `hexa run` rc=0, prints SELFTEST_OK) and the cloud unit tests pass (guard rc=2), but the LITERAL named gate does not exist. Honest [ ]."
+}
