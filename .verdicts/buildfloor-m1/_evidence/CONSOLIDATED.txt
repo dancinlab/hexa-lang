@@ -1,0 +1,14 @@
+{
+ "build_result2": "{\n \"rc\": 0,\n \"bin_exists\": true,\n \"bin_size\": 1111480,\n \"bin_md5\": \"4fd9a8d9acb09b4b740e0c7a4896f46d\"\n}",
+ "build_log2": "rc=0\n--STDOUT--\n[build_hexa_cloud] src=/Users/mini/dancinlab/hexa-lang/.claude/worktrees/agent-ad2240d8ec720abeb/stdlib/cloud/cloud_cli.hexa\n[build_hexa_cloud] out=/Users/mini/dancinlab/hexa-lang/.claude/worktrees/agent-ad2240d8ec720abeb/bin/hexa-cloud\n[build_hexa_cloud] transpiler=/Users/mini/dancinlab/hexa-lang/.claude/worktrees/agent-ad2240d8ec720abeb/build/hexa_v2\n[build_hexa_cloud] runtime.c=/Users/mini/dancinlab/hexa-lang/.claude/worktrees/agent-ad2240d8ec720abeb/build/self/runtime.c\n[build_hexa_cloud] BUILD OK -> /Users/mini/dancinlab/hexa-lang/.claude/worktrees/agent-ad2240d8ec720abeb/bin/hexa-cloud\n[build_hexa_cloud] (build only \u2014 pass `-- --install` to codesign + install to ~/.hx/bin/bin/hexa-cloud)\n\n--STDERR--\n\n",
+ "bin_hexa_cloud": {
+  "exists": true,
+  "size": 1111480,
+  "md5": "4fd9a8d9acb09b4b740e0c7a4896f46d"
+ },
+ "hexa_real_POST": {
+  "size": 1651728,
+  "md5": "7493583ecd76b9214b0b9d6d7726ec64"
+ },
+ "safety_pre_eq_post": true
+}

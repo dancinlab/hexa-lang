@@ -1,0 +1,8 @@
+{
+ "codesign_rc": 0,
+ "help_exit": 0,
+ "has_hexa_cloud": true,
+ "has_cloud_run": true,
+ "stdout_len": 11751,
+ "first200": "hexa cloud \u2014 structured-argv remote dispatch (cycle A)\n\nusage:\n  cloud rent <provider> [--gpu T] [--image IMG] [--disk GiB] [--owner TAG] [--project NAME] [--query Q] [--max-wait-sec N] [--no-register"
+}

@@ -1,0 +1,120 @@
+exit=0
+--- bin/hexa-cloud --help stdout ---
+hexa cloud — structured-argv remote dispatch (cycle A)
+
+usage:
+  cloud rent <provider> [--gpu T] [--image IMG] [--disk GiB] [--owner TAG] [--project NAME] [--query Q] [--max-wait-sec N] [--no-register]
+                                                         provision a GPU pod (vast|runpod), wait ssh-ready, print host:port + id (alias: up)
+                                                         --project NAME: owning project for the cross-project down-guard (default cwd git-repo basename, else 'unattributed')
+                                                         --no-register: skip the default ./pods.json row write (rent auto-registers a PENDING work row by default — symmetry with nohup/fire --register; a deck-less rent then shows as a leak candidate)
+                                                         --max-wait-sec N (default 180): bounded SSH-readiness gate; on timeout the rent auto-tears the billing pod down + exits 2 with verbatim verdict (M5 sigil: SSH-never-ready leak guard)
+  cloud rm <id> [--provider P] [--force]                 CANONICAL teardown — confirm + destroy + forget (unifies down/destroy/forget). --provider inferred from registry when absent. --force skips confirm prompt. Idempotent: rm of an absent pod exits 0.
+  cloud down <id> [--provider P] [--force]               (legacy alias of `cloud rm`) destroy a pod + forget it from the registry — REFUSES a cross-project kill (pod.project≠cwd project) unless --force
+  cloud reboot <id> [--provider P]                       restart a pod's container (preserve disk) to recover a DARK pod — alive+billing but SSH-dropped; re-runs onstart hook → re-injects key. vast only (runpod console). QE jobs resume from .save
+  cloud list [--provider P]                              list live pods (vast + runpod, or one via --provider)
+  cloud status [--provider P]                            alias of list
+  cloud preflight --params N [--gpu KEY] [opts...]        closed-form GPU mem-budget check (no pod/ssh)
+  cloud preflight --kind dft-phonon --atoms N --nq M [--metallic] [--max-seconds S]  closed-form DFPT walltime sizing
+  cloud run       <host> [conn] [--max-wall S] [--env K=V] [--source P] -- <argv...> run argv, wait, exit with its code
+  cloud exec      <host> [conn] -- <shell-cmd>           run shell command via ssh (DEFAULT SHELL PARSES IT)
+  cloud nohup     <host> <logfile> [conn] [--env K=V] [--source P] [--early-life-check N] [--register [<jid>]] -- <argv...>   background argv, print remote pid
+                                                         --early-life-check N: after launch, sleep N s + poll once; exit 3 if pid already DIED (silent class-1 launch failure)
+                                                         --register [<jid>]: auto-write a row to cwd's ./pods.json on success (bare = auto-jid `auto-<ts>-<host-short>`); replaces the advisory line (ghost-pod L2-auto)
+                                                         on success also prints `__MONITOR_HANDLE__={host,pid,log,tail_cmd}` JSON one-liner (grep '^__MONITOR_HANDLE__=' to extract; Monitor bridge)
+  cloud fire      <host> [--log <path>] [conn] [--env K=V] [--source P] [--early-life-check N] [--register [<jid>]] -- <argv...>   atomic nohup + auto-log + Monitor handle
+                                                         like nohup but logfile is OPTIONAL — defaults to /tmp/cloud-<unix_ts>.log on the remote when --log omitted, so caller does not have to invent + thread the path
+  cloud poll      <host> <pid> [conn]                    exit 0 if remote pid alive, else 1 (DEAD path also flips a PENDING ./pods.json row matching pid → FAIL; ghost-pod teardown auto-verdict)
+  cloud tail      <host> <logfile> [conn] [--grep RE] [--until RE]   live-stream a remote log (Monitor bridge)
+                                                         tail -F | sed -u: print --grep lines, terminal-first classify on default; explicit --until RE = legacy single block; follows forever if --until ''
+                                                         default 3-tier verdict (failure-first): exit 0 = DONE · exit 3 = TIMEOUT-RESUMABLE (Maximum CPU time/max_seconds — RESUME) · exit 4 = CRASHED (non-zero STOP/routine error/segfault/OOM)
+                                                         exit 255 = ssh transport drop · other = log truncated mid-stream (sed/tail pipe failed)
+  cloud watch     <host> <pid> [conn] [--interval N] [--max-wait S] [--then-down <id> [--provider P]]
+                                                         loop poll until pid dies (exit 0) / max-wait (124); optional teardown
+  cloud ssh-port  <id> [--provider P]                    print live ssh host:port of a pod (vast|runpod)
+  cloud resolve   <id> [--provider P]                    alias of ssh-port — pod-id → ssh host:port for run/copy-to
+  cloud copy-to   <host> <local> <remote> [conn] [-r] [--verify-sha]  upload file/dir (scp; -r=tree; sha256 check)
+  cloud copy-from <host> <remote> <local> [conn] [--resume] [--verify-sha]  download (scp; --resume=rsync; sha256 check)
+  cloud orphans   [--hours N]                            list tracked pods, flag stale (>N h, default 6)
+  cloud reconcile                                        cross-ref registry vs provider: ORPHAN/GHOST/OK
+  cloud reap      [--provider P] [--apply]               M6: orphans alive on provider but absent from M5 registry · bare=dry-run · --apply=destroy
+  cloud adopt     <pod_id> [--purpose TEXT] [--project NAME]  track an untracked (ORPHAN) pod (stamps M5 project/purpose for the down-guard)
+  cloud attribute <pod_id> --project NAME [--purpose TEXT]     re-stamp project/purpose on an ALREADY-tracked pod (distinct from adopt-for-orphans)
+  cloud forget    <pod_id|ssh-form|ip|alias>             (legacy — use `cloud rm` instead) mark a tracked (GHOST) pod status=closed
+  cloud watchdog  [--threshold-min N] [--util-cap-pct N] [--kill]  idle-pod autokill sweep (DRY-RUN default)
+                                                         COMPOSITE idle = uptime≥thr(min,def 60) AND util≤cap(%,def 5) AND no-compute-proc AND no-workdir — a slow-but-working pod (compute proc present) is NEVER killed
+                                                         also cross-refs ./pods.json budget.cap: on breach → alert + (with --kill) tear down the lowest-value running pod (g64 honor-cap)
+                                                         bare = DRY-RUN table (pod·age·util·has-proc·has-workdir·idle?·action); --kill enforces (needs RUNPOD_API_KEY / vast key)
+  cloud dft-run   <deck-dir> [--go] [--bin-pack] [--query Q] [--walltime-h N] [--identity P] [--image I] [--disk G] [--owner T]
+  cloud parallel-audit --physcores N --live-jobs N --ranks-per-job N --queued-decks N  (d_parallel_fire 위반 가드 — VIOLATION→exit1+split 제안)
+                                                         guarded DFT el-ph (QE) dispatch; PREVIEW ($0) unless --go. deck: relax.in·ph.in·scf.in.head·scf.in.tail·pseudo/
+  cloud pods                                              full work table from cwd's ./pods.json (per-project active pod/job manifest)
+  cloud dispatch [tree|active|add|verdict|rm]            manage ./pods.json (update-form): bare = full table
+    add     <job-id> <pod-id> <dir> [--host=H --provider=P --kind=K --stage=S --pid=N --watcher=W --watcher-output=P --verdict=V]
+    verdict <job-id> <status>                            rewrite verdict + verdict_utc only (preserve other fields)
+    rm      <job-id|pod-id>                              delete (refuses pod rm while jobs are still pinned)
+    active                                               only verdict=PENDING jobs
+    tree                                                 pod-grouped ASCII (orphan jobs at tail)
+                                                         (distinct from `cloud orphans` — that scans GLOBAL ~/.hexa-cloud/pods.jsonl billing/orphan registry; `pods`/`dispatch` is the per-project work view)
+  cloud help | version
+
+connection flags [conn] (before `--`):
+  --port <n>      ssh to a non-22 port (RunPod / vast.ai)
+  --insecure      accept a changing/unknown host key (ephemeral pods)
+  --identity <p>  present a specific private key (-i p, IdentitiesOnly);
+                  e.g. ~/.ssh/id_vast_anima for a vast-registered key
+                  (#1155: default ~/.ssh/id_ed25519 is publickey-denied)
+  --max-wall <s>  (run only) cap remote wall-clock at <s> seconds;
+                  on expiry the remote command is killed and run
+                  exits 124 (max-wall exceeded)
+  --env <K=V>     (run/nohup) set a remote env var; repeatable.
+                  K=V stays one argv token, so a value with spaces
+                  survives remote word-splitting.
+  --env-file <p>  (run/nohup) read K=V lines from <p> (blank and
+                  #-comment lines skipped); each line acts as --env.
+  --source <p>    (run/nohup/fire) dot-source remote file <p> BEFORE
+                  the argv (repeatable, in order): wraps as
+                  `bash -c '. <p> && exec <argv>'`. ssh runs a NON-
+                  login shell so ~/.bashrc (conda init / module load)
+                  is NOT sourced — without this, mpirun/toolchain are
+                  off PATH and the job dies instantly (exit 127/243).
+                  e.g. --source ~/miniforge3/etc/profile.d/conda.sh
+                  (point at a script that also `conda activate <env>`).
+  --early-life-check <s>  (nohup only) after the detached launch,
+                  sleep <s> s then poll the remote pid once; exit 3 if
+                  it already DIED (a launcher that execs and exits at
+                  once) so the caller can tear the pod down instead of
+                  burning a watchdog timeout on a job that never ran.
+  --register [<jid>]  (nohup/fire) on a successful dispatch, write a
+                  row to cwd's ./pods.json IN-PROCESS (no shell-out).
+                  Bare form auto-generates jid = auto-<ts>-<host-short>;
+                  explicit <jid> uses it as-is. Replaces the advisory
+                  hint line — ghost-pod L2-auto. cwd = git toplevel
+                  when in a repo, else literal pwd. A later `cloud
+                  poll <host> <pid>` that returns DEAD auto-flips this
+                  row's verdict PENDING→FAIL (conservative — bare poll
+                  cannot see remote exit code; call `cloud dispatch
+                  verdict <jid> PASS` to override).
+  --grep <re>     (tail only) stream only lines matching the awk ERE
+                  <re>; empty / absent = every line.
+  --until <re>    (tail only) terminal behaviour. ABSENT = default
+                  3-tier failure-first taxonomy → exit 0 DONE · 3
+                  TIMEOUT-RESUMABLE · 4 CRASHED. An explicit ERE <re>
+                  = legacy single block (print+quit exit 0 on first
+                  match). Pass '' to follow forever (persistent Monitor).
+  --resume        (copy-from) rsync --partial --append-verify; resume
+                  an interrupted large-file pull (needs rsync >= 3.0).
+  --recursive,-r  (copy-to) copy a directory tree (scp -r).
+  --verify-sha    (copy-to/copy-from) after transfer, compare sha256 of
+                  local vs remote; exit 103 mismatch / 104 if no sha tool.
+
+`run` uses structured argv — every token POSIX-quoted before ssh, so
+no remote shell parsing / glob / /* */ comment mis-parse can corrupt
+the command. Use `run` for program dispatch.
+`exec` joins post-`--` tokens with single spaces and sends the result
+to the remote login shell AS-IS — pipes / globs / redirects / shell
+variables all parse on the remote side. Use `exec` for ad-hoc
+inspection (`cd /work && nvidia-smi | head -5`); caller owns quoting.
+`host` is an ssh destination or ~/.ssh/config alias.
+
+--- stderr ---
+

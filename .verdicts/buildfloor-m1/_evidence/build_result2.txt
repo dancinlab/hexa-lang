@@ -1,0 +1,6 @@
+{
+ "rc": 0,
+ "bin_exists": true,
+ "bin_size": 1111480,
+ "bin_md5": "4fd9a8d9acb09b4b740e0c7a4896f46d"
+}

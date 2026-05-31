@@ -1,0 +1,40 @@
+{
+  "hexa.real_path": "/Users/mini/.hx/bin/hexa.real",
+  "hexa.real_exists": true,
+  "hexa.real_md5": "7493583ecd76b9214b0b9d6d7726ec64",
+  "hexa.real_size": 1651728,
+  "prereqs": {
+    "build/hexa_v2": {
+      "exists": false,
+      "size": null
+    },
+    "build/hexa_module_loader": {
+      "exists": false,
+      "size": null
+    },
+    "build/self/runtime.c": {
+      "exists": false,
+      "size": null
+    },
+    "build/self/runtime.h": {
+      "exists": false,
+      "size": null
+    },
+    "build/hexat": {
+      "exists": false,
+      "size": null
+    },
+    "self/native/hexa_v2": {
+      "exists": false,
+      "size": null
+    },
+    "self/native/hexat": {
+      "exists": false,
+      "size": null
+    },
+    "bin/hexa-cloud": {
+      "exists": false,
+      "size": null
+    }
+  }
+}

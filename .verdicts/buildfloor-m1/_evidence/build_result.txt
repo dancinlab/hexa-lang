@@ -1,0 +1,5 @@
+{
+ "rc": 1,
+ "bin_exists": false,
+ "bin_size": null
+}
