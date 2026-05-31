@@ -6893,16 +6893,42 @@ if len(av) < 3 {
         // a safety net for when the binary is absent.
         let cloud_is_help = len(cloud_args) == 0
         if cloud_is_help {
-            println("hexa cloud — structured-argv remote dispatch (cycle A)")
+            // condensed mirror of stdlib/cloud/cloud_cli.hexa::_cloud_help —
+            // this safety-net help had drifted to the cycle-A 6 verbs and hid
+            // the rent/fire/pods/down lifecycle set; re-synced to the full verb
+            // roster (full per-flag detail lives in the binary's _cloud_help,
+            // reachable via `hexa cloud <verb> --help`).
+            println("hexa cloud — structured-argv remote dispatch + pod lifecycle (cycle A + runpod)")
             println("")
-            println("usage:")
+            println("registry: ~/.hx/cloud/active-pods.json (atomic · M5) · also ./pods.json work rows")
+            println("")
+            println("pod lifecycle (runpod):")
+            println("  cloud rent      <provider> [--gpu T] [--image IMG] [--disk GiB] [--owner TAG] [--project NAME] [--query Q] [--max-wait-sec N] [--no-register]")
+            println("  cloud list                                               list tracked pods (alias: pods)")
+            println("  cloud pods [--json]                                      list pods (machine-readable with --json)")
+            println("  cloud resolve   <id> [--field host|port|user|key]        resolve a pod id to ssh coordinates")
+            println("  cloud ssh-port  <id>                                     print the ssh port for a pod id")
+            println("  cloud down      <id>                                     destroy a pod (alias: destroy)")
+            println("  cloud rm        <id>                                     remove a pod work row (keeps pod)")
+            println("  cloud adopt     <id> --project P --purpose T             register an orphan pod")
+            println("  cloud reap                                               sweep terminated pods from the registry")
+            println("  cloud watchdog                                           reconcile registry vs provider truth")
+            println("")
+            println("remote exec:")
             println("  cloud run       <host> [conn] -- <argv...>             run argv, wait, exit with its code")
             println("  cloud exec      <host> [conn] -- <shell-cmd>           run shell command via ssh (DEFAULT SHELL PARSES IT)")
             println("  cloud nohup     <host> <logfile> [conn] -- <argv...>   background argv, print remote pid")
+            println("  cloud fire      <host> [--log <path>] [conn] [--env K=V] [--source P] [--early-life-check N] [--register [<jid>]] -- <argv...>   atomic nohup + auto-log + Monitor handle")
             println("  cloud poll      <host> <pid> [conn]                    exit 0 if remote pid alive, else 1")
+            println("  cloud tail      <host> <logfile> [--follow] [conn]    stream a remote logfile")
             println("  cloud copy-to   <host> <local> <remote> [conn]         upload local file to host:remote (scp)")
             println("  cloud copy-from <host> <remote> <local> [conn]         download host:remote file to local (scp)")
-            println("  cloud help | version")
+            println("")
+            println("preflight + audit:")
+            println("  cloud preflight <model-bytes> <gpu> [--batch N]        closed-form GPU mem budget (no spinup)")
+            println("  cloud dispatch  <provider> ...                         low-level provider dispatch")
+            println("  cloud parallel-audit --physcores N --live-jobs N --ranks-per-job N --queued-decks N")
+            println("  cloud providers                                          list known providers")
             println("")
             println("connection flags [conn] (before `--`):")
             println("  --port <n>   ssh to a non-22 port (RunPod / vast.ai)")
@@ -6916,6 +6942,8 @@ if len(av) < 3 {
             println("variables all parse on the remote side. Use `exec` for ad-hoc")
             println("inspection (`cd /work && nvidia-smi | head -5`); caller owns quoting.")
             println("`host` is an ssh destination or ~/.ssh/config alias.")
+            println("")
+            println("see also: hexa cloud <verb> --help")
             exit(0)
         }
         let mut cloud_bin = ""
