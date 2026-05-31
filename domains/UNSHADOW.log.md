@@ -1169,3 +1169,28 @@ is bounded by its enclosing block.
 - verdict: `.verdicts/unshadow-escape-stack-nested/{finding,byte-diff}.txt` ·
   repro: `tool/unshadow_escape_stack_nested_bench.hexa` · bench:
   `UNSHADOW.bench.md §escape-stack-nested`. domains/UNSHADOW.md line 53 → [~] 🟠.
+
+## 2026-05-31 — 🔵 NaN-boxing HexaVal 표현 → 🔴 CLOSED-NEGATIVE (LAST open milestone TERMINAL)
+
+UNSHADOW 의 마지막 열린 `- [ ]` (L54, F1 데이터-표현 주권 · NaN-boxing) 을 HONEST terminal
+상태로 닫음. 전역 global-flip sub-task 의 잔여를 **🔴 CLOSED-NEGATIVE (축 ruled-out)** 으로 종료.
+
+- **결정**: 전역 whole-HexaVal NaN-box flip 은 이 VM 의 net 승리가 아니다 (falsifier FALSIFIED).
+- **근거 (재측정 안 함 — main 의 best-of-7 `.verdicts/unshadow-nanbox/proxy.txt` 인용)**:
+  - sequential traverse+sum **2.5–2.8× 느림** 🔴 · value-pass **30–36% 느림** 🔴 (register-fit 가설 반증)
+  - random/cache-pressure **7–11% 빠름** 🟢 (유일 승) · 밀도 정확히 2× (16B→8B, "24B/3×" stale)
+- **왜 GATED 슬라이스도 안 했나**: 유일 양의 축(random density)이 8B 표현과 **분리 불가** →
+  C1/C13 식 codegen-only typed-storage 슬라이스가 없음. GATED default-OFF 도 full dual-ABI/B9
+  blast 를 niche 이득에 지불 → 미착지. closed-negative 가 곧 deliverable (paper_negative_ok).
+- **blast radius 실측**: HX_* 매크로 1151 · emitted TAG_* 430 · compound-literal 19 ·
+  dual ABI(runtime.o+user.c 동시 재빌드) = B9 self-host regen 벽 정면 충돌.
+- **correctness 한계**: 모든 float store NaN-canonicalize 必 + raw-bits 관찰 프로그램 결정적 미커버.
+- **C1 의존 정정**: NaN-box 는 C1(contiguous-int64 핫루프)과 **상충** → 의존이 아니라 분리(종목 다름).
+- codegen 무변경 → byte-diff N/A.
+- 산출물: verdict `.verdicts/unshadow-nanbox/finding.txt` · bench `UNSHADOW.bench.md §nanbox` ·
+  설계 `domains/UNSHADOW.nanbox.md` · 측정대 `tool/unshadow_nanbox_bench.hexa`.
+- pool roster EMPTY/unreachable · full self-host rebuild B9-blocked → faithful A/B proxy 가
+  스펙-허용 측정 surface (모든 이전 UNSHADOW milestone 과 동일).
+
+→ UNSHADOW 의 open `- [ ]` milestone = 0. 도메인 진행 완료(typed-repr/escape-stack/atlas-pgo 의
+  `[~]` 부분착지 sub-task 만 잔존 — 별도 frontier).

@@ -1,0 +1,58 @@
+# UNSHADOW §nanbox — TERMINAL FINDING (🔴 CLOSED-NEGATIVE / axis ruled-out)
+# date: 2026-05-31 · mini Apple M4 arm64 · faithful A/B proxy (B9 self-host regen wall · spec-accepted)
+# verdict basis = .verdicts/unshadow-nanbox/proxy.txt (best-of-7, on main, NOT re-measured this session)
+
+## CLAIM (pre-registered falsifier)
+A whole-representation NaN-boxing flip of HexaVal (16B tagged-union -> 8B qNaN-packed)
+is a NET performance win for this VM, justifying the dual-ABI global flip.
+
+## METHOD
+faithful A/B proxy (tool/unshadow_nanbox_bench.hexa -> cc -O2): 16B-box A arm vs 8B-NaN-box B arm,
+identical workloads, three axes (sequential traverse+sum, value-pass register-fit, random/cache-pressure).
+Macro/site census via worktree grep (HexaVal layout-assumption surface).
+No new numbers invented this session — verdict cites the existing best-of-7 proxy.txt on main.
+
+## VERIFICATION (verbatim, proxy.txt)
+- sizeof: 16B-box=16  8B-nanbox=8  -> density EXACTLY 2x (NOT 3x; "24B" was stale)
+- sequential traverse+sum:  A=0.392s  B=1.096s  B/A=2.795  => 2.5-2.8x SLOWER  🔴
+- value-pass register-fit (best-of-7):  B/A=1.27..1.37  => 30-36% SLOWER  🔴
+    (register-fit hypothesis FALSIFIED: box/unbox mask+shift+OR extract cost > 1-reg gain;
+     the early single-run "37% faster" was a measurement artifact)
+- random/cache-pressure (7 runs):  B/A=0.87..0.92  => 7-11% FASTER  🟢  (the ONLY win)
+- checksum match=YES (int round-trip exact, 48-bit sign-extend)
+- real-NaN bits=0x7ff8000000000000 is_boxed()=0 (positive qNaN safe; neg/payload-NaN need canonicalize)
+
+## FINDING — 🔴 CLOSED-NEGATIVE (the global flip axis is deterministically ruled out)
+The claim is FALSIFIED. A whole-representation NaN-box flip REGRESSES the two dominant
+workload classes (sequential 2.5-2.8x, value-pass 30-36%) and wins ONLY the narrow
+memory-bound random-access niche (7-11%). Under g0 (Occam) + g5/g63 this is a net loss:
+
+1. The single surviving win (random-access density) does NOT justify the blast radius.
+   The flip removes the union PHYSICALLY (HexaVal -> bare uint64_t) -> every layout-assuming
+   site must convert simultaneously: HX_* macro uses 1151, emitted TAG_* literals 430,
+   compound-literal ((HexaVal){.tag=..}) constructors 19 (the macro-bypass = single toggle point).
+2. Coexistence of the two representations = a genuine DUAL ABI: runtime.o and user.c share the
+   same HexaVal ABI; a one-sided flip breaks every boundary call. A GATED flip must rebuild
+   runtime + codegen TOGETHER -> head-on collision with the B9 self-host regen wall.
+3. NaN-collision is a HARD correctness limit: every float store needs NaN canonicalization
+   (neg-NaN / signaling-NaN / payload-NaN overlap the 0xFFF8.. box marker), and programs that
+   observe raw f64 bits (bit-cast / serialization / hash-of-double) are NOT safely covered.
+
+## NO CHEAP SAFE GATED SLICE EXISTS (why the closed-negative is the deliverable)
+The only positive axis is random-access DENSITY, which is INSEPARABLE from the 8B representation:
+capturing it requires the global HexaVal width change (and thus the dual-ABI rebuild). There is
+no codegen-only narrow slice (unlike C1 native-arr / C13 escape-stack, which add a SEPARATE typed
+storage path leaving HexaVal intact). The proxy already demonstrates the win cannot be had without
+the representation flip, and the flip is measured-negative on the dominant cases. Therefore a GATED
+default-OFF slice would still carry the full dual-ABI/B9 blast radius for a niche-only gain ->
+NOT landed. The closed-negative IS the terminal deliverable (paper_negative_ok).
+
+## RULED-OUT AXIS (publishable negative)
+"Global whole-HexaVal NaN-box flip as a net VM speedup" is ruled out for this engine.
+The data-representation-sovereignty win for THIS VM lives in the SEPARATE typed-storage axes
+(C1 native HexaArrI64/F64, C13 escape->stack), which beat NaN-box on exactly the sequential/
+density workloads where NaN-box regresses, WITHOUT the dual-ABI cost. NaN-box also CONFLICTS with
+C1 (it regresses the contiguous-int64 hot loop C1 already captured) -> dependency is "separated",
+not "ordered-after". codegen unchanged -> byte-diff N/A (no code path emits NaN-box).
+
+## TERMINAL TIER: 🔴 CLOSED-NEGATIVE

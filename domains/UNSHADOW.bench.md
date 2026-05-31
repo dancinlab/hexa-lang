@@ -1306,3 +1306,38 @@ milestone, the opt-in flag is preserved rather than risk a default-ON miscompile
 verdict=`.verdicts/unshadow-escape-stack-nested/` · bench=`tool/unshadow_escape_stack_nested_bench.hexa`
 
 (end §escape-stack-nested)
+
+## §nanbox — NaN-boxing HexaVal 표현 (🔴 CLOSED-NEGATIVE · 축 ruled-out)
+
+> TERMINAL 2026-05-31 (mini Apple M4 arm64 · faithful A/B proxy · B9 self-host regen 벽·스펙 허용).
+> 측정값 = `.verdicts/unshadow-nanbox/proxy.txt` (best-of-7, main 에 이미 존재 — 이번 세션 재측정 안 함).
+> 결론 = 전역 whole-HexaVal NaN-box flip 은 이 VM 의 net 승리가 아님 = 결정적 배제.
+
+| 워크로드 | A(16B box) | B(8B NaN-box) | B/A | 판정 |
+|---|---|---|---|---|
+| sequential traverse+sum (8M·rep40) | 0.392s | 1.096s | 2.795 = **2.5–2.8× 느림** | 🔴 패배 |
+| value-pass register-fit (noinline·best-of-7) | 0.15–0.17s | 0.20–0.23s | 1.27–1.37 = **30–36% 느림** | 🔴 패배 (가설 falsified) |
+| random / cache-pressure (4M perm-chase) | 0.24–0.26s | 0.21–0.23s | 0.87–0.92 = **7–11% 빠름** | 🟢 유일 승 |
+
+- 밀도 = sizeof 16→8 = **정확히 2×** (3× 기대는 stale 24B 기준 — 사실 정정). N=8M footprint 128MB→64MB.
+- checksum match=YES (int round-trip 정확·48bit sign-extend) · real-NaN `0x7ff8…` is_boxed()=0 (positive qNaN 안전).
+
+### FINDING — 🔴 CLOSED-NEGATIVE
+falsifier(전역 flip = net win) **FALSIFIED**. NaN-box 는 지배적 두 종목(sequential·value-pass)을
+퇴보시키고 memory-bound random 한 종목만 작게 이긴다. 그 유일 승은 **8B 표현과 분리 불가** —
+밀도 이득을 잡으려면 전역 HexaVal 폭 변경(=dual ABI 재빌드)이 必. blast radius 실측:
+HX_* 매크로 use **1151** · emitted `TAG_*` **430** · compound-literal `((HexaVal){.tag=..})` **19**
+(매크로 우회=전역 flip 단일 토글). dual ABI(runtime.o+user.c 동시 재빌드) → **B9 벽 정면 충돌**.
+NaN-collision = 모든 float store canonicalize 必 + raw-bits 관찰 프로그램(bit-cast·직렬화·hash-of-double)
+결정적 미커버 = correctness 한계.
+
+### CHEAP SAFE GATED SLICE 부재 (= closed-negative 가 deliverable)
+유일 양의 축(random density)이 8B 표현과 분리 불가 → C1(native-arr)·C13(escape-stack)처럼
+HexaVal 을 건드리지 않는 **별도 typed-storage codegen-only 슬라이스가 존재하지 않음**. GATED default-OFF
+슬라이스도 여전히 full dual-ABI/B9 blast 를 niche 이득에 지불 → **미착지**. codegen 무변경 → byte-diff N/A.
+
+### RULED-OUT AXIS (publishable negative)
+"전역 whole-HexaVal NaN-box flip = net VM speedup" 배제. 이 VM 의 데이터-표현 주권 승리는
+**별도 typed-storage 축**(C1 HexaArrI64/F64 · C13 escape→stack)에 산다 — NaN-box 가 퇴보하는
+sequential/density 종목에서 dual-ABI 비용 없이 이김. NaN-box 는 C1 과 **상충**(C1 이 이미 잡은
+contiguous-int64 핫루프를 퇴보) → 의존이 아니라 **분리**. verdict=`.verdicts/unshadow-nanbox/finding.txt`.
