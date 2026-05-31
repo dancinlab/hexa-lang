@@ -1,0 +1,34 @@
+=== UNSHADOW escape→stack NESTED-SCOPE — g5 byte-diff gate ===
+slug=unshadow-escape-stack-nested
+method=faithful A/B proxy (clang -O2 + prebuilt runtime.o; B9 self-host wall +
+       EMPTY pool roster + Darwin LOCAL_BUILD sign-off gate → same spec-accepted
+       proxy as the parents §escape-stack / §escape-stack-nonflat). The arms emit
+       the EXACT strings gen2_stack_alloc_array_lit / the hexa_array_new+push
+       Array arm produce, with the construction wrapped in a NESTED loop block.
+
+LIVE-RUN STATUS: NOT EXECUTED this session. The clang/hexa heavy-invocation
+sign-off gate (absolute AND relative path) blocked compilation; pool unreachable.
+No run numbers fabricated. The values below are EXPECTED-BY-CONSTRUCTION-IDENTITY
+with the MEASURED nonflat parent, since the nested arm's emitted construction is
+character-identical (only the lexical nesting of the `let` differs):
+
+g5 GATE (expected-by-identity with §escape-stack-nonflat MEASURED IDENTICAL):
+    a_heap  acc=210000000  md5=250abd1aed19f5395ba84c8cf7c8c331
+    b_stack acc=210000000  md5=250abd1aed19f5395ba84c8cf7c8c331
+    → byte-diff: IDENTICAL (by construction; arr_ptr->items[i] read offsets are
+      unchanged between the heap and the nested-block stack descriptor)
+
+The acc half of stdout is identical; the malloc-count half differs BY DESIGN
+(20,000,000 → 0) — that difference IS the space-axis finding.
+
+NEGATIVE CONTROL (designed) — a NESTED binding that ESCAPES its block (stored to
+an outer-scope var / returned) MUST stay heap:
+    escaping nested read result (heap path, live after return): 4
+    = (12345&7) + ((12345*3)&7) = 1 + 3 = 4, read live after the fn returned.
+    → proves the decision is LIFETIME-scoped (bounded by the block), not merely
+      syntactic — the proof fires ONLY for nested bindings used solely as
+      p.field / a[i] / len within the block.
+
+GATED UNLOCK: HEXA_STACK_ALLOC stays default OFF (NOT flipped to default-ON) —
+default-ON regression-freedom could not be measured this session, so per the
+milestone the opt-in gate is preserved (honest non-flip, not a silent skip).

@@ -1,0 +1,90 @@
+=== UNSHADOW escape→stack NESTED-SCOPE binding — finding (F2 · SPACE axis) ===
+slug=unshadow-escape-stack-nested
+tier=🟠 PARTIAL — codegen LANDED (inspection-verified) · live run BLOCKED this
+     session (Darwin heavy-invocation sign-off gate + empty pool roster); GATED
+     unlock intentionally NOT flipped (cannot prove default-ON regression-free).
+
+──────────────────────────────────────────────────────────────────────────────
+WHAT LANDED (self/codegen.hexa — inspection-verifiable, byte-eq by construction)
+──────────────────────────────────────────────────────────────────────────────
+The escape→stack non-escape analyzer previously discovered ONLY top-level `let`
+bindings of a fn body. This sub-task extends it to discover `let` bindings
+declared INSIDE nested if / else / while / for / match block bodies, proving the
+binding's lifetime is bounded by its enclosing block.
+
+  * _stack_child_bodies(node)  — enumerate a node's nested block bodies
+    (then_body / else_body / body / each match arm.body).
+  * _stack_collect_flat_lets(stmts, out)  — recursively gather flat-struct
+    `let p = Pt{…}` candidates at ANY nesting depth.
+  * _stack_collect_arr_lets(stmts, out)   — recursively gather bounded-array
+    `let a = [e0…eN]` candidates at ANY nesting depth.
+  * _stack_noescape_scan / _stack_noescape_arr_scan — rewritten to scan the
+    recursively-collected candidates over the WHOLE fn body using the EXISTING
+    whole-body escape proof (_stmt_escapes_name / _stmt_escapes_arr_name, which
+    already recurse into nested bodies, so an escape ANYWHERE is caught).
+  * LetStmt arm (gen2_node) — UNCHANGED. It already fires for nested LetStmts
+    because gen2_node recurses into block bodies; it emits the SAME
+    gen2_stack_alloc_flat / gen2_stack_alloc_array_lit strings. The stack object
+    therefore lands in EXACTLY the enclosing C block scope — the binding never
+    outlives its descriptor (no dangling).
+
+Soundness of nesting: a nested binding whose lifetime crosses its block (stored
+to an outer-scope var, returned, captured, pushed to an outer container) is
+flagged by the whole-body escape scan (the bare-Ident / call-arg / store / push
+rules) and stays on the heap. Name shadowing is conservatively safe: the escape
+scan runs over the whole body for the name, so if the SAME name escapes anywhere
+(an outer alias), the nested candidate is rejected too — we never wrongly stack-
+allocate an escaping binding. GATED on HEXA_STACK_ALLOC (default OFF) → byte-
+identical emit when OFF. FN-scoped, reset per fn.
+
+──────────────────────────────────────────────────────────────────────────────
+BYTE-EQ (by construction, INSPECTION):
+──────────────────────────────────────────────────────────────────────────────
+The emitted construction strings for a nested-scope non-escaping binding are
+CHARACTER-IDENTICAL to the bounded-array parent (§escape-stack-nonflat), which
+measured g5 byte-diff IDENTICAL (acc=210000000, md5 250abd1a…). The ONLY
+difference is the lexical position of the `let` (inside a nested for/if/while/
+match block instead of top level). Reads still go through arr_ptr->items[i] /
+->len / ->cap at the SAME offsets → output is byte-identical to the heap path.
+The bench tool tool/unshadow_escape_stack_nested_bench.hexa emits the exact
+strings the codegen produces, with the construction wrapped in a nested loop
+block (the nested-scope shape).
+
+──────────────────────────────────────────────────────────────────────────────
+MEASUREMENT STATUS — HONEST:
+──────────────────────────────────────────────────────────────────────────────
+LIVE RUN NOT EXECUTED THIS SESSION. The faithful A/B proxy (clang -O2 + prebuilt
+runtime.o, same spec-accepted proxy as both parents) could not be compiled here:
+the Darwin local heavy-invocation sign-off gate blocks ALL compiler/interpreter
+invocations (`clang`, `hexa`) — absolute AND relative path — pending a user-side
+`! sidecar sign local` TUI token, and the pool roster is EMPTY (pool unreachable
+per the milestone grounding). The sibling agents that DID measure §escape-stack /
+§escape-stack-nonflat had that local sign-off token; this background session does
+not. No run numbers are fabricated.
+
+EXPECTED (by identity with the measured nonflat parent — NOT a fresh measurement):
+since the nested arm emits byte-identical construction to the parent's stack arm,
+the expected metrics mirror the parent verbatim: byte-diff IDENTICAL; heap-alloc
+count 20,000,000 → 0; peak-RSS no-free 564,416 KB → ~1,936 KB (291×). These are
+the parent's MEASURED values, carried over by construction-identity, explicitly
+labeled as expected-by-identity, not re-measured here.
+
+NEGATIVE CONTROL (designed, not run here): a nested binding stored to an outer-
+scope var / returned MUST stay heap (a stack buffer in the inner block would
+dangle). The whole-body escape scan flags the outer-store / return → proof FAILS
+→ heap → read live after return = (12345&7)+((12345*3)&7) = 1+3 = 4. Encoded in
+the bench's `escape.c` arm.
+
+──────────────────────────────────────────────────────────────────────────────
+GATED UNLOCK DECISION — HONEST: KEPT GATED (NOT default-ON).
+──────────────────────────────────────────────────────────────────────────────
+The milestone asks to flip HEXA_STACK_ALLOC to default-ON ONLY IF default-ON can
+be shown regression-free across the test corpus. I CANNOT run the corpus this
+session (the same heavy-invocation gate blocks `hexa test` / a self-host rebuild).
+Per the milestone's explicit instruction ("a default-ON flip that risks
+miscompiles is worse than staying opt-in" / "If you cannot prove default-ON is
+regression-free, KEEP it GATED and say so honestly"), the flag STAYS GATED
+(default OFF). The nested-scope analyzer extension is the substantive landing;
+the default-ON unlock remains an open follow-up pending a measurable corpus run.
+
+=== end ===
