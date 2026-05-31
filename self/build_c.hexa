@@ -3554,6 +3554,8 @@ fn emit_runtime() {
     rp.push("#include <sys/stat.h>\n")
     rp.push("#include <dirent.h>\n")
     rp.push("#include <errno.h>\n")
+    rp.push("#include <unistd.h>\n")   // read/usleep/STDOUT_FILENO (exec reap-aware drain)
+    rp.push("#include <fcntl.h>\n")    // fcntl/O_NONBLOCK (exec reap-aware drain)
     if needs_omp {
         rp.push("#include <omp.h>\n")
         rp.push("// NOTE: compile with -fopenmp flag (e.g. gcc -fopenmp output.c)\n")
