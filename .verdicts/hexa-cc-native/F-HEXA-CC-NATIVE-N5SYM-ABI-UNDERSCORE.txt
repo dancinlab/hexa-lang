@@ -1,0 +1,47 @@
+F-HEXA-CC-NATIVE-N5SYM-ABI-UNDERSCORE -- native codegen ABI-prefixes _-prefixed runtime refs
+==============================================================================================
+date: 2026-06-01   host: mini (darwin-arm64)   base: worktree off origin/main 64bcb4b71
+fix: compiler/emit/macho_arm64.hexa:1719,1870 — drop the `_`-prefix exemption in the
+     call-target naming guard; ALL non-intra-module externals now get the Mach-O ABI `_`.
+
+ROOT CAUSE (corrects the prior "externalize 29 in runtime SSOT" conclusion, which was WRONG)
+-------------------------------------------------------------------------------------------
+The prior session concluded the N5-sym gap was static-inline runtime helpers eliminated by
+clang, fixable by externalizing them in runtime_core_emit.hexa. DISPROVED this session:
+externalizing the 16 class-A `static inline __raw_*/__map_*/__vs_ptr_eq` makes them appear as
+Mach-O `___raw_idiv` (3 leading underscores = ABI `_` + C name `__raw_idiv`), but
+`nm -u /tmp/cc-fix.o` references `__raw_idiv` (2). Off by exactly one ABI underscore →
+externalize alone closes 0/16. The native obj-emit codegen was NOT applying the platform
+ABI leading-underscore to `_`-prefixed runtime C identifiers (the #2316 guard passed them
+through unchanged, wrongly assuming they were already asm-level names).
+
+THE FIX + VERIFICATION
+----------------------
+macho_arm64.hexa call-target guard: was
+    if _str_in(fn_names, cand) { name = cand }
+    else if len(raw) > 0 && raw.substring(0,1) != "_" { name = _darwin_mangle(raw) }
+now the else-branch ABI-prefixes ALL externals (drop the `!= "_"` condition).
+
+Rebuilt aprime_abi (build_aprime.sh, smoke exit(42)==42 PASS) → re-emit cc-abi.o (atlas-skip):
+- cc-abi.o now references ___raw_idiv / ___map_get_cstr_v / ___vs_ptr_eq (3 underscores) ✓
+  matching the C runtime's Mach-O symbol form (was 2 underscores in cc-fix.o).
+- Linked vs an externalized runtime.o (rtA.o: the 16 class-A helpers de-static-inlined):
+  undefined residual 31 (cc-fix) -> 15 (cc-abi). The 16 class-A symbols
+  (___raw_{idiv,imod,fmod,add_f,cmp3,code_is,d2i} ___map_{get,has,set,remove,order_key,order_val,ptr_eq}_* ___vs_ptr_eq)
+  now RESOLVE against the externalized runtime.
+
+SCOPE / REMAINING (N5-sym is a 3-part codegen campaign, not one runtime edit)
+----------------------------------------------------------------------------
+This PR = part 1 (ABI-underscore). The 16 class-A symbols close once part 2 lands:
+  PART 2 (runtime): externalize the 16 class-A static-inline helpers in runtime_core_emit.hexa
+                    (the SECONDARY half — necessary, but useless without this codegen fix).
+  PART 3 (codegen): class-B name-mapping (10: _list_dir,_mono_ns,_mkdir,_sha256_hex,
+                    _bytes_to_str_raw,_byte_at,_byte_len,_get,_set,_keys → hexa_* runtime fns;
+                    self/codegen.hexa:7088/7211 maps these in the C-string path; the native
+                    obj path does not).
+  PART 4 (special): ___map_raw_len (HX_MAP_LEN macro), ___arr_alloc_items_zero{,_int},
+                    _float_to_bits/_bits_to_float — per-symbol.
+
+No regression: no external symbol currently links (N5 unreached), so ABI-prefixing them is
+purely additive; intra-module fns still resolve via the def-mangled form (#2316). aprime_abi
+smoke PASS confirms the compiler still self-builds + runs.
