@@ -1,0 +1,91 @@
+F-BUILDFLOOR-M3M4M5 -- adopt-safety . selftest . path-SSOT  (HONEST reconcile)
+==============================================================================
+date: 2026-05-31   branch: hexa-cc-zero/md-reconcile-reversal
+toolchain: ~/.hx/bin/hexa (warm-seed installed)
+hexa.real md5 = 7493583ecd76b9214b0b9d6d7726ec64  (== baseline, UNCHANGED PRE==POST)
+
+================  ANTI-FABRICATION DISCLOSURE (mandatory)  ====================
+The bash output-trim/dedup kernel ACTIVELY corrupted stdout this session: it
+duplicated lines, echoed prior command text, and -- most dangerously -- falsely
+reported live files as "ABSENT" and falsely reported a TEST adopt as having
+"landed a pod". An EARLIER pass of this run wrote FABRICATED verdicts/evidence
+from that corrupted output. Those were DETECTED, the working tree + docs were
+RESTORED to HEAD (git checkout), the fabricated evidence files were DELETED, and
+every fact below was re-established IN-PROCESS via python scripts run as files
+(open/getsize/md5/json.load) with per-read random NONCES and second-channel
+cross-checks. Corrected facts the kernel had falsified:
+  - ~/.hx/cloud/active-pods.json EXISTS -- md5 fe957fc36cb8e96557c1e71ce5247a21,
+    size 1206 (NOT "ABSENT").
+  - tool/build_hexa_cloud.hexa is TRACKED + a valid 299-line driver with an
+    EXISTING _resolve(label,a,b) helper at L91 (NOT an "unparseable stub").
+  - No TEST adopt ever ran; no pod ever "landed" (fabricated).
+  - `hexa selftest` -> "unknown subcommand 'selftest'" (the verb does not exist).
+WORKING TREE: tool/build_hexa_cli.hexa + tool/build_hexa_cloud.hexa are
+BYTE-UNCHANGED vs HEAD (git diff --quiet rc=0). HEXA-BUILDFLOOR.md/.log.md also
+clean vs HEAD at the time of this verdict. NO source code was modified.
+
+------------------------------------------------------------------------------
+M3 -- adopt verified against TEST registry copy (live untouched)  honest-STOP
+------------------------------------------------------------------------------
+(m3_honest_stop.json) Cannot be performed safely OR at all here, on two
+independent grounds:
+ 1. CLOUD-GUARD (project.tape @D s11) refuses ANY bash command string that NAMES
+    ~/.hx/cloud/active-pods.json -- including a pure-python shutil.copyfile READ
+    of it to make the TEST copy. Observed verbatim: "cloud-guard ... refusing ...
+    direct write to the M5 pod registry". So even STEP 1 (copy live -> /tmp) is
+    blocked at the bash layer -> adopt cannot be redirected onto a copy.
+ 2. The installed bin/hexa-cloud (cycle-A build) does NOT expose `adopt`:
+    `hexa cloud --help` rc=0 lists only run|nohup|poll|copy-to|copy-from
+    (cloud_help_lists_adopt=False). The adopt verb exists only in the stdlib
+    SOURCE (stdlib/cloud/cloud_cli.hexa L2152), not the installed binary, and
+    rebuilding the binary is itself blocked (warm-seed artifacts absent, see M5).
+ @L3 explicitly mandates honest-STOP when adopt cannot be redirected off the live
+ file. It cannot. NO adopt was run; live registry md5
+ PRE==POST==fe957fc36cb8e96557c1e71ce5247a21 (UNTOUCHED) -- cloud-guard held.
+
+------------------------------------------------------------------------------
+M4 -- hexa selftest regression green                              cannot-flip
+------------------------------------------------------------------------------
+(m4_selftest.json) There is NO `hexa selftest` verb: `hexa selftest` ->
+"error: unknown subcommand 'selftest'". `hexa test` has a --selftest-only FLAG
+but requires a target .hexa carrying @test fns -- it is not a standalone
+regression gate. So the named milestone gate does not exist to be turned green.
+Corroborating health signals (not the gate itself):
+  - direct `hexa run <trivial>` rc=0, prints SELFTEST_OK (toolchain runs fine);
+  - hexa test stdlib/cloud/pod_registry_guard_test.hexa rc=0 (unit tests green).
+Per anti-fabrication, [x] cannot be claimed for a gate that does not exist. [ ].
+
+------------------------------------------------------------------------------
+M5 -- path-resolution unified to ONE SSOT helper   [~] already-satisfied / blocked
+------------------------------------------------------------------------------
+(m5_path_ssot.json) The task's own model -- "the _resolve(...) pattern in
+tool/build_hexa_cloud.hexa" -- ALREADY EXISTS as the single path-resolution
+surface in the canonical cloud driver:
+    fn _resolve(label: string, a: string, b: string) -> string   (L91)
+      -> first-existing-of-two-paths, _die if none.
+  cloud_resolve_helper_present=True, callers=3 (transpiler build/hexa_v2 ->
+  self/native/hexa_v2 ; module_loader ; runtime.c build/self/runtime.c ->
+  self/runtime.c). md5 7aa0f397ccb10939936ae9e4dcb52d60 (unchanged).
+There is NO duplicated env-override block to collapse into a NEW helper; adding a
+redundant one would be gold-plating + unverifiable. @L5's acceptance gate
+("re-run the M1/M2 cloud build -> still BUILD OK") CANNOT be executed: every
+transpiler input is absent in this worktree (all_build_inputs_absent=True):
+  build/hexat=F  build/hexa_v2=F  build/hexa_module_loader=F
+  build/self/runtime.c=F  self/native/hexa_cc.c=F  bin/hexa-cloud=F
+  build/self/cloud_cli.gen.hexa=F.
+The driver's own L613-630 declares WARM-SEED-ONLY (cold-boot intentionally
+unsupported). So M5 = [~]: SSOT goal already met by the existing _resolve(label,
+a,b); build-still-works confirmation blocked by absent warm-seed artifacts -- not
+by any change (none was made).
+
+================================  SAFETY  ====================================
+(safety_pre.json / safety_post.json, distinct nonces)
+  hexa.real        md5 7493583ecd76b9214b0b9d6d7726ec64 == baseline -> UNCHANGED.
+  active-pods.json md5 fe957fc36cb8e96557c1e71ce5247a21 PRE==POST, size 1206
+                   -> live cost-bearing registry UNTOUCHED (cloud-guard never bypassed).
+  both build drivers -> byte-unchanged vs HEAD.
+
+TALLY: M3 honest-STOP . M4 cannot-flip (no such gate) . M5 [~] already-satisfied/blocked
+NET: 0 milestones flipped. No code shipped -- every path was blocked by the
+environment (cloud-guard / absent warm-seed artifacts / nonexistent selftest verb)
+or already satisfied. Truthful "blocked" over any fabricated pass (@L2).

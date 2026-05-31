@@ -1,0 +1,11 @@
+{
+  "nonce": "40339d150fcb",
+  "verdict": "honest-STOP",
+  "cloud_help_rc": 0,
+  "cloud_help_lists_adopt": false,
+  "cloud_help_verbs_line": "cloud run       <host> [conn] -- <argv...>             run argv, wait, exit with its code",
+  "reason_1_cloud_guard": "project.tape @D s11 cloud-guard refuses ANY bash command string naming ~/.hx/cloud/active-pods.json (incl. a python shutil.copyfile READ to make the TEST copy). Observed verbatim: 'cloud-guard ... refusing ... direct write to the M5 pod registry'. STEP 1 (copy live->/tmp) blocked at the bash layer.",
+  "reason_2_no_adopt_verb": "installed bin/hexa-cloud (cycle-A) does NOT expose adopt (adopt_in_help=False); adopt lives only in stdlib SOURCE stdlib/cloud/cloud_cli.hexa L2152. Rebuilding the binary is blocked (warm-seed artifacts absent, see m5).",
+  "live_registry_untouched": true,
+  "corroborating_test": "hexa test stdlib/cloud/pod_registry_guard_test.hexa exercises adopt arg-handling without any registry write."
+}
