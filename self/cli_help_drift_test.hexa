@@ -1,0 +1,165 @@
+// @ci_gate — pure · network-free · deterministic
+// self/cli_help_drift_test.hexa — TOP-LEVEL whole-CLI command<->help drift
+// guard (the S5 capstone of the cli-help-registry-tape migration).
+//
+// Binds the ENTIRE hexa main dispatch verb set to the UNION of the four
+// in-source COMMANDS SSOTs:
+//
+//   core_commands()      (S1) — 19 core-toolchain verbs       (self/core_commands)
+//   stdlib_commands()    (S2) — 13 stdlib-CLI verbs           (self/stdlib_commands)
+//   discovery_commands() (S3) — 17 discovery-engine verbs     (self/discovery_commands)
+//   tool_commands()      (S4) — 53 tool-drawer verbs          (self/tool_commands)
+//
+// Dispatch has two surfaces in self/main.hexa:
+//   (B1) the top-level chain  — `else if sub == "<verb>"`
+//   (B2) the absorbed dispatch — `_absorbed_script` returns `if verb == "<verb>"`
+//
+// PASS iff:
+//   (A→B) every UNION verb is dispatched in (B1) or (B2), and
+//   (B→A) every dispatched verb (minus alias/meta entries) is in the UNION.
+// On mismatch the offending verb is printed verbatim and the test exits 1, so a
+// verb added to dispatch without a *_commands() row — or a roster verb with no
+// dispatch — FAILS green. Drift across the WHOLE CLI is structurally impossible.
+//
+// Run:  hexa run self/cli_help_drift_test.hexa
+// PASS: exits 0, prints "cli_help_drift_test PASS".
+
+use "self/core_commands"
+use "self/stdlib_commands"
+use "self/discovery_commands"
+use "self/tool_commands"
+
+fn _read_src(path: str) -> str {
+    return exec("cat " + path + " 2>/dev/null")
+}
+
+fn _has(xs: [str], needle: str) -> bool {
+    let mut i = 0
+    while i < len(xs) {
+        if xs[i] == needle { return true }
+        i = i + 1
+    }
+    return false
+}
+
+// Alias / meta dispatch entries that are NOT roster verbs (they map onto a
+// canonical verb or are the drawer/help itself). Excluded from the (B→A) check.
+fn _is_alias_or_meta(v: str) -> bool {
+    return v == "help" || v == "--help" || v == "-h"
+        || v == "--version" || v == "-v"
+        || v == "--lsp"      // alias of lsp
+        || v == "tool"       // the `hexa tool` drawer itself (meta-verb)
+}
+
+// The UNION of all four *_commands() name sets, deduplicated.
+fn _union_names() -> [str] {
+    let mut out = []
+    let groups = [core_command_names(), stdlib_command_names(),
+                  discovery_command_names(), tool_command_names()]
+    let mut g = 0
+    while g < len(groups) {
+        let names = groups[g]
+        let mut i = 0
+        while i < len(names) {
+            if !_has(out, names[i]) { out.push(names[i]) }
+            i = i + 1
+        }
+        g = g + 1
+    }
+    return out
+}
+
+// The top-level dispatch verb set: every `sub == "<verb>"` token in
+// self/main.hexa's MAIN dispatch chain. The chain is scoped to the region
+// after the main-dispatch anchor (the LAST `if sub == "help" || sub == "-h" ||
+// sub == "--help"` block — earlier identical blocks are subverb dispatchers
+// inside helper fns whose `sub == "fire"/"stat"/"start"/…` tokens are NOT
+// top-level verbs). Anchoring on the last occurrence isolates the real chain.
+fn _dispatch_top(src: str) -> [str] {
+    let anchor = "if sub == \"help\" || sub == \"-h\" || sub == \"--help\""
+    let chunks = src.split(anchor)
+    // The main dispatch is the final block; take the substring after the last
+    // anchor occurrence.
+    let region = if len(chunks) >= 2 { chunks[len(chunks) - 1] } else { src }
+    let parts = region.split("sub == \"")
+    let mut out = []
+    let mut j = 1
+    while j < len(parts) {
+        let close = parts[j].split("\"")
+        let v = close[0]
+        if len(v) > 0 && !_has(out, v) { out.push(v) }
+        j = j + 1
+    }
+    return out
+}
+
+// The absorbed dispatch verb set: every `verb == "<verb>"` token in
+// _absorbed_script (and the absorbed-help block; both read the same names).
+fn _dispatch_absorbed(src: str) -> [str] {
+    let parts = src.split("verb == \"")
+    let mut out = []
+    let mut j = 1
+    while j < len(parts) {
+        let close = parts[j].split("\"")
+        let v = close[0]
+        if len(v) > 0 && !_has(out, v) { out.push(v) }
+        j = j + 1
+    }
+    return out
+}
+
+fn main() {
+    let src = _read_src("self/main.hexa")
+    let union = _union_names()
+    let top = _dispatch_top(src)
+    let absorbed = _dispatch_absorbed(src)
+
+    let mut fails = 0
+
+    if len(src) == 0 {
+        println("DRIFT: could not read self/main.hexa")
+        fails = fails + 1
+    }
+    if len(union) == 0 {
+        println("DRIFT: union of *_commands() is empty")
+        fails = fails + 1
+    }
+
+    // (A→B) every UNION verb is dispatched somewhere (top-level OR absorbed).
+    let mut i = 0
+    while i < len(union) {
+        let v = union[i]
+        if !_has(top, v) && !_has(absorbed, v) {
+            println("DRIFT: roster verb has no dispatch branch — " + v)
+            fails = fails + 1
+        }
+        i = i + 1
+    }
+
+    // (B→A) every dispatched verb (top-level + absorbed), minus alias/meta, is
+    // in the UNION. Catches a verb wired into dispatch with no *_commands() row.
+    let mut all_disp = []
+    let mut k = 0
+    while k < len(top)      { all_disp.push(top[k]);      k = k + 1 }
+    k = 0
+    while k < len(absorbed) { if !_has(all_disp, absorbed[k]) { all_disp.push(absorbed[k]) }; k = k + 1 }
+    i = 0
+    while i < len(all_disp) {
+        let v = all_disp[i]
+        if !_is_alias_or_meta(v) {
+            if !_has(union, v) {
+                println("DRIFT: dispatched verb missing from all *_commands() rosters — " + v)
+                fails = fails + 1
+            }
+        }
+        i = i + 1
+    }
+
+    if fails == 0 {
+        println("PASS: whole-CLI command<->help registry in sync — " + to_string(len(union)) + " roster verbs (union == dispatch; drift structurally impossible across the CLI)")
+        println("cli_help_drift_test PASS")
+        exit(0)
+    }
+    println("FAIL: " + to_string(fails) + " whole-CLI command<->help drift(s) above")
+    exit(1)
+}
