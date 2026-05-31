@@ -1,0 +1,40 @@
+F-HEXA-CC-NATIVE-N5PRE-STEP3-HEXAVAL -- treat named:HexaVal as the dynamic any-type; -43 (51->8)
+==================================================================================================
+date: 2026-06-01   host: mini (darwin-arm64)   base: worktree off origin/main 9b2c6f11d
+measured INDEPENDENTLY off main (STEP1/STEP2 not merged -> the as-cast cascade + intrinsics are
+still present in this build; this verdict isolates STEP3's own delta on the HexaVal-carrier classes).
+
+CHANGE (compiler/check/types.hexa) -- HexaVal is the runtime's dynamic tagged any-value; every
+value is a HexaVal at runtime and the runtime dispatches on its tag (the exact rationale the
+existing unit/unknown tolerances already cite). Added `_is_hexaval(t)` and tolerated it as a
+wildcard in four sites:
+  1. _types_assignable: HexaVal on either side -> assignable (covers HX3004 return + HX3001 then/else/assign)
+  2. if-condition gate: HexaVal cond -> not a bool-mismatch (HX3001)
+  3. while-condition gate: same
+  4. callee-must-be-fn: HexaVal callee -> callable, no HX2003
+  5. (regression fix) dynamic HexaVal callee -> skip the HX3002/HX3003 arity/arg-type checks
+     (arity unknown; runtime dispatches), return a dynamic (empty) result type.
+
+REGRESSION CAUGHT + FIXED BY THE VERIFY LOOP (honesty):
+the first STEP3 build made HexaVal callable but routed those calls into the arg-count check, where
+a HexaVal callee has 0 declared args -> spurious HX3002 x16 (HX2003 16->0 but HX3002 0->16, net 0).
+Re-measure caught it; added the dynamic-callee arity skip; HX3002 back to 0.
+
+BUILD + MEASURE (current-source aprime_cc; proven recipe; smoke exit42 PASS; falsifier PASS)
+  off-main baseline (~144) -> STEP3 v2 (101):
+  class  | baseline | STEP3 | delta
+  -------+----------+-------+------
+  HX2003 |    16    |   0   | -16   (callable)
+  HX3004 |    18    |   2   | -16   (return coercion)
+  HX3001 |    17    |   6   | -11   (bool context)
+  HX3002 |     0    |   0   |   0   (regression caught & fixed)
+  -------+----------+-------+------
+  HexaVal-carrier classes 51 -> 8 (-43). HX0011 x13 + HX2001 x80 unchanged (= STEP1/STEP2's cascade).
+
+No genuine error masked: the change tolerates only `named:HexaVal` (THE dynamic type) — non-HexaVal
+mismatches still report (the residual HX3001 x6 + HX3004 x2 are real non-HexaVal numeric mismatches,
+e.g. `rt_round returns i64, got f64`).
+
+CUMULATIVE (disjoint classes): STEP1 as-cast -81, STEP2 intrinsics -9, STEP3 HexaVal -43.
+181 -> ~11. Remaining ~11 = HX2001 `push` x2 (member-call) + `i64` x1 + HX3001 x6 + HX3004 x2
+(real numeric/return coercions). N5 not flipped (fixpoint not reached). live tree untouched.
