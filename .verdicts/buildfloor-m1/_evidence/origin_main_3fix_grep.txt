@@ -1,0 +1,5 @@
+BLOB_LEN=12686
+FIX1_build_hexa_v2(code)=[(193, 'repo + "/build/hexa_v2",')]
+FIX2_build_self_runtime_c(code)=[(202, 'repo + "/build/self/runtime.c",')]
+FIX3_inc_build_self(code)=[(206, 'let inc_gen = repo + "/build/self"')]
+DEAD_hexat(code)=[]

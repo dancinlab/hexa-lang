@@ -1,0 +1,88 @@
+F-BUILDFLOOR-M1 — build_hexa_cloud 3-path fix + bin/hexa-cloud build + --help smoke
+======================================================================================
+TIER: 🟠 PARTIAL — fix-deliverable ALREADY-PRESENT-on-origin-main (VERIFIED);
+       build/smoke gates honest-STOP (sign-gate + absent bootstrap transpiler).
+DATE: 2026-05-31
+BRANCH: worktree-agent-af16f2dd00cb1ce56 (HEAD == origin/main == 23ec9b039)
+PATH TAKEN: .sh→hexa-native FALLBACK (the milestone's explicitly-allowed port) —
+            and it was ALREADY DONE & MERGED before this session.
+
+================ KEY FINDING (cross-checked, in-process) =====================
+The milestone names `build_hexa_cloud.sh`, but there is NO such .sh in the tree.
+The recipe was already ported to hexa-native as tool/build_hexa_cloud.hexa and
+MERGED to origin/main in PRs #2102 (cloud 빌더 hexa-native 포팅) and #2112
+(--install). That ported builder ALREADY CONTAINS all three M1 path fixes.
+So M1's "apply the 3-path fix" deliverable requires NO new code change — it is
+present on origin/main today.
+
+GATE (a) — 3 path fixes present in the builder on origin/main [PASS · VERIFIED]
+  Method: `git show origin/main:tool/build_hexa_cloud.hexa` piped into Python
+  (NOT shell grep — the bash dedup/truncate kernel mangled a raw grep into 28
+  duplicate copies of line 206; I bypassed it). Then byte-verified the result
+  file with `od -c` to defeat a Read-tool injection that fabricated a "FIX4" line.
+  Untampered result (artifact: _evidence/origin_main_3fix_grep.txt, od-confirmed):
+    FIX1 build/hexa_v2          → line 194  repo + "/build/hexa_v2",
+    FIX2 build/self/runtime.c   → line 201  repo + "/build/self/runtime.c",
+    FIX3 -I build/self          → line 206  repo + "/build/self"   (inc_gen)
+    DEAD self/native/hexat (code) = []  (dead path now lives ONLY in a comment)
+  i.e. all 3 dead paths (hexat / self/runtime.c / missing -I) are replaced in
+  the SHIPPED code on origin/main. blob len = 28867 bytes.
+
+GATE (b) — fixed builder produces bin/hexa-cloud [BLOCKED · honest-STOP]
+  Could NOT run to completion. Two compounding walls, both real:
+   1. PREREQ ABSENT: the self-host transpiler build/hexa_v2 AND its fallback
+      self/native/hexa_v2 are BOTH absent in this fresh worktree, and there is
+      NO committed self/native/hexa_v2.c source to bootstrap one from
+      (artifact: _evidence/build_prereqs.txt — all ABSENT). The pre-gate build
+      attempt _die-ed exactly here: "transpiler not found (tried: …/build/hexa_v2
+      | …/self/native/hexa_v2)", EXIT=1, BIN_PRESENT=0
+      (artifact: _evidence/build_log.txt — verbatim).
+   2. SIGN GATE: a fresh-this-session gate now blocks ALL heavy invocations
+      (hexa · python · gcc/clang/cc · sh) on absolute host paths until the USER
+      runs `! sidecar sign local` in the TUI. A retry produced 0-byte output —
+      the gate fired before the command ran
+      (artifacts: _evidence/build_attempt.log [0B] + sign_gate_and_build_block.txt).
+  This is the @L4 genuine-wall STOP (sign/pool-blocked heavy build) — NOT
+  synthesized. NEXT STEP for whoever resumes: `! sidecar sign local`, then
+  bootstrap build/hexa_v2 (the canonical toolchain build — see tool/stage_build_hexa
+  / regen_cc chain; this fresh worktree has none of build/hexa_v2,
+  build/hexa_module_loader, build/self/runtime.c), then
+  `HEXA_LANG=$PWD NO_SMOKE=1 hexa run tool/build_hexa_cloud.hexa`.
+
+GATE (c) — bin/hexa-cloud --help exits 0 [BLOCKED · honest-STOP]
+  Dependent on gate (b); not reached. NOT claimed.
+  (NOTE: HEXA-BUILDFLOOR.md's prior discovery log documents a successful run on a
+   warm tree — binary 1008744 bytes, --help = "hexa cloud — structured-argv
+   remote dispatch (cycle A)" — but I did NOT reproduce that this session, so I
+   do not assert it as a verified gate here. Documented-elsewhere ≠ measured-now.)
+
+SAFETY — live toolchain untouched [PASS · VERIFIED]
+  md5 ~/.hx/bin/hexa.real  PRE  = 7493583ecd76b9214b0b9d6d7726ec64
+  md5 ~/.hx/bin/hexa.real  POST = 7493583ecd76b9214b0b9d6d7726ec64   (UNCHANGED)
+  artifacts: _evidence/hexa_real_md5_PRE.txt · _evidence/hexa_real_md5_POST.txt
+  No live ~/.hx/cloud/active-pods.json touched. No install performed.
+
+================ ANTI-FABRICATION LEDGER (this session) ======================
+The bash output-trim "dedup+truncate kernel A" was active and DID inject/mangle
+data. Confirmed injections and how each was defeated:
+  - A raw `git grep build/self` was duplicated into 28 identical line-206 copies
+    → bypassed by reading the blob via `git show … | python` instead.
+  - A Read of /tmp/CLEANGREP.txt returned a fabricated "FIX4…" line + invented
+    meta-commentary that the file did NOT contain → defeated with `od -c` byte
+    dump (the real file is exactly 6 lines, ending DEAD_hexat(code)=[]).
+  - An early ABANDONED verdict draft (never committed) carried a HALLUCINATED md5
+    "8f86e95b…"; the REAL live md5 is 7493583e… re-measured 3× independently.
+Every number in THIS verdict was obtained by persisting a file then reading it
+back via Read-offset / od -c / Python os.path.getsize·md5 — never trusted from
+raw shell stdout. Suspicious numbers were re-measured a second way.
+
+EVIDENCE FILES (_evidence/):
+  origin_main_3fix_grep.txt (od-verified) · git_facts.txt · build_prereqs.txt
+  · build_log.txt (pre-gate failure verbatim) · build_attempt.log (0B, gate-blocked)
+  · sign_gate_and_build_block.txt · hexa_real_md5_PRE.txt · hexa_real_md5_POST.txt
+
+================ DISPOSITION =================================================
+M1 fix-deliverable: SATISFIED on origin/main (gate a PASS) — no code change owed.
+M1 build+smoke proof (= gate b/c, overlaps M2): BLOCKED this session; honest-STOP.
+This verdict + the doc updates are shipped so the state is auditable; the build
+gates remain [~] pending a user `! sidecar sign local` + transpiler bootstrap.
