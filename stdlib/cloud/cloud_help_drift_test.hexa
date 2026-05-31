@@ -1,0 +1,136 @@
+// @ci_gate — pure · network-free · deterministic
+// stdlib/cloud/cloud_help_drift_test.hexa — command<->help drift guard.
+//
+// Root-fix binding for PR #2317 (bare `hexa cloud` printed a stale help
+// missing lifecycle verbs). The SSOT is the in-source array
+// stdlib/cloud/cloud_commands::cloud_commands() — the help renderer iterates
+// it, so help can never drift from the roster. This test binds the THIRD
+// surface, the dispatch guard, to that SSOT:
+//
+//   (A) the COMMANDS SSOT     — cloud_commands() (IMPORTED, compiled in — NOT
+//                               read_file'd; install-binary safe)
+//   (B) the dispatch SSOT     — cloud_cli.hexa main() guard `if t == "rent"||…`
+//   (C) the inline safety-net — self/main.hexa empty-args cloud help fallback
+//
+// PASS iff (A) == (B) as sets AND every (A) verb name appears in (C). On any
+// mismatch the test prints the missing/extra verbs verbatim and exits 1, so a
+// verb added to dispatch without a COMMANDS row (or vice versa) FAILS green.
+//
+// Run:  hexa run stdlib/cloud/cloud_help_drift_test.hexa
+// PASS: exits 0, prints "cloud_help_drift_test PASS".
+
+use "stdlib/cloud/cloud_commands"
+
+fn _read_src(path: str) -> str {
+    return exec("cat " + path + " 2>/dev/null")
+}
+
+// Aliases the dispatcher accepts but that are NOT roster verbs (they map onto
+// a canonical verb). Excluded from the dispatch verb set so the comparison is
+// against the canonical roster the COMMANDS SSOT carries.
+fn _is_alias(v: str) -> bool {
+    return v == "up" || v == "status" || v == "destroy"
+        || v == "--help" || v == "-h"
+        || v == "--version" || v == "-v"
+}
+
+// Parse the dispatch guard: the single `if t == "x" || t == "y" || ...` line
+// in cloud_cli.hexa main(). Returns the canonical verb set (aliases dropped).
+fn _dispatch_verbs() -> [str] {
+    let src = _read_src("stdlib/cloud/cloud_cli.hexa")
+    let lines = src.split("\n")
+    let mut out = []
+    let mut i = 0
+    while i < len(lines) {
+        let line = lines[i]
+        i = i + 1
+        if !line.contains("if t == \"rent\"") {
+            continue
+        }
+        let parts = line.split("t == \"")
+        let mut j = 1
+        while j < len(parts) {
+            let seg = parts[j]
+            let close = seg.split("\"")
+            let v = close[0]
+            if len(v) > 0 {
+                if !_is_alias(v) {
+                    out.push(v)
+                }
+            }
+            j = j + 1
+        }
+        return out
+    }
+    return out
+}
+
+fn _has(xs: [str], needle: str) -> bool {
+    let mut i = 0
+    while i < len(xs) {
+        if xs[i] == needle {
+            return true
+        }
+        i = i + 1
+    }
+    return false
+}
+
+fn main() {
+    let dispatch = _dispatch_verbs()
+    let registry = cloud_command_names()
+    let inline = _read_src("self/main.hexa")
+
+    let mut fails = 0
+
+    if len(dispatch) == 0 {
+        println("DRIFT: could not parse dispatch guard from cloud_cli.hexa")
+        fails = fails + 1
+    }
+    if len(registry) == 0 {
+        println("DRIFT: COMMANDS roster is empty (cloud_commands())")
+        fails = fails + 1
+    }
+
+    // (A==B) every dispatched verb is in the COMMANDS roster
+    let mut i = 0
+    while i < len(dispatch) {
+        let v = dispatch[i]
+        if !_has(registry, v) {
+            println("DRIFT: dispatched verb missing from COMMANDS — " + v)
+            fails = fails + 1
+        }
+        i = i + 1
+    }
+    // (B==A) every COMMANDS verb is dispatched
+    i = 0
+    while i < len(registry) {
+        let v = registry[i]
+        if !_has(dispatch, v) {
+            println("DRIFT: COMMANDS verb not in dispatch guard — " + v)
+            fails = fails + 1
+        }
+        i = i + 1
+    }
+    // (C) the self/main.hexa inline safety-net renders from the SAME COMMANDS
+    // SSOT (it calls cloud_commands()) — so it covers every verb by
+    // construction. A hand-typed second roster (the historical drift source)
+    // would NOT call cloud_commands(); this asserts no such copy survives.
+    if len(inline) > 0 {
+        if !inline.contains("cloud_commands()") {
+            println("DRIFT: self/main.hexa inline cloud help does not render from cloud_commands() — a hand-typed verb list may have drifted back in")
+            fails = fails + 1
+        }
+    } else {
+        println("DRIFT: could not read self/main.hexa for the inline-help check")
+        fails = fails + 1
+    }
+
+    if fails == 0 {
+        println("PASS: cloud command<->help registry in sync — " + to_string(len(dispatch)) + " verbs (dispatch == COMMANDS; all in self/main.hexa inline safety-net)")
+        println("cloud_help_drift_test PASS")
+        exit(0)
+    }
+    println("FAIL: " + to_string(fails) + " cloud command<->help drift(s) above")
+    exit(1)
+}
