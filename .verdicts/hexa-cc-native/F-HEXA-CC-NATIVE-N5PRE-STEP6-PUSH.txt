@@ -1,0 +1,28 @@
+F-HEXA-CC-NATIVE-N5PRE-STEP6 -- allowlist free-call push(); typecheck phase CLEAN; frontier -> lower
+=====================================================================================================
+date: 2026-06-01   host: mini (darwin-arm64)   base: worktree off origin/main c087d066c (= STEP0-5)
+
+CHANGE: compiler/check/bind.hexa _bind_builtin_names() += "push". The compiler's array-concat
+helpers call `push(out, x)` in FREE form (2-arg), a builtin lowered by codegen
+(self/codegen.hexa:6215 -> hexa_array_push), distinct from the `.push` method. It was the last 2
+typecheck HX2001 (`undefined name push`).
+
+RESULT -- typecheck phase is now CLEAN, and that is exactly why the count looks like it rose:
+clearing the last typecheck error let aprime_cc advance PAST typecheck into the LOWER phase
+(HIR->MIR) for the first time on the full flattened compiler/main.hexa. Lower then emits
+HX1101 x74 -- ALL of them `unbound identifier <T> in lower` where <T> is an as-cast TARGET TYPE:
+  float x30, int x29, bool x14, i64 x1
+i.e. hir_to_mir.hexa lowers the `as` BinOp by walking its children[1] (the type Ident) as a value
+identifier -> _mir_lookup fails -> HX1101. The SAME as-cast gap STEP5 fixed in bind+types, now
+surfacing one phase deeper (lower) -- NOT a regression: the typecheck-phase diagnostics (the
+original "N5-pre 181") are gone; the 74 are a different, later phase newly reached.
+
+MEASURE (current-source aprime_cc; smoke exit42 PASS): push×2 HX2001 -> 0. New: HX1101 x74 (lower,
+all as-cast type names). So: typecheck phase 181 -> 0; lower phase frontier opens at 74.
+
+NEXT = N5-link entry (the hard codegen/lower phase): handle `BinOp text=="as"` in
+compiler/lower/hir_to_mir.hexa (lower children[0]; do NOT _mir_lookup children[1]; emit the
+conversion -- int/float truncation/widen, mirroring self/codegen.hexa:5533 `as int/float/string/
+bool`) AND in compiler codegen. This needs REAL conversion semantics (e.g. `(v+0.5) as int` must
+truncate for rt_round) -- deferred to a focused N5-link round, NOT guessed here (g5/g63).
+N5-pre (typecheck) is COMPLETE. live tree untouched.
