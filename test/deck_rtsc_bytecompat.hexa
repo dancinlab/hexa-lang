@@ -1,0 +1,156 @@
+// HEXA Standard Library — deck/rtsc byte-compat harness (@L3)
+//
+// Emits every EXISTING RTSC prototype with NO new spec key and writes the
+// 4 files of each to a target dir. The @L1 k-grid/ecut spec params carry
+// byte-compat defaults equal to the prior hardcoded values, so a diff of
+// this emit (post-change) vs the same emit (pre-change, baseline from git
+// HEAD) MUST be empty for all five existing prototypes.
+//
+// Usage:
+//   hexa run test/deck_rtsc_bytecompat.hexa <out_dir>
+// The five specs are the same fixtures used by test/deck_gen_smoke.hexa.
+
+import "stdlib/deck/gen.hexa"
+import "stdlib/io.hexa"
+
+fn _mgbeh8_spec() -> DeckSpec {
+    let spec = deck_spec_new()
+    spec_set(spec, "prototype",                    "beh8_clathrate")
+    spec_set(spec, "prefix",                       "mgbeh8")
+    spec_set(spec, "celldm_bohr",                  "8.5132")
+    spec_set(spec, "a_conv_ang",                   "4.505")
+    spec_set(spec, "anchor_a_ang",                 "5.30")
+    spec_set(spec, "contraction_pct",              "15")
+    spec_set(spec, "a_site_symbol",                "Mg")
+    spec_set(spec, "a_site_mass",                  "24.305")
+    spec_set(spec, "a_site_upf",                   "Mg.pbe-spnl-rrkjus_psl.1.0.0.UPF")
+    spec_set(spec, "a_site_radius_ang",            "1.60")
+    spec_set(spec, "pressure_kbar",                "100.0")
+    spec_set(spec, "pressure_comment",             "10 GPa  (QE press unit = kbar; 10 GPa = 100 kbar)")
+    spec_set(spec, "pressure_kbar_int",            "100")
+    spec_set(spec, "pressure_gpa",                 "10")
+    spec_set(spec, "fallback_pressure_kbar",       "500.0")
+    spec_set(spec, "fallback_pressure_kbar_int",   "500")
+    spec_set(spec, "fallback_pressure_comment",    "50 GPa")
+    spec_set(spec, "fallback_pressure_gpa",        "50")
+    spec_set(spec, "nq",                           "2")
+    spec_set(spec, "max_seconds",                  "504000")
+    spec_set(spec, "walltime_comment",
+        "140h floor (preflight ×1.5 of 93h est for 2x2x2 metallic)")
+    return spec
+}
+
+fn _caauh3_spec() -> DeckSpec {
+    let spec = deck_spec_new()
+    spec_set(spec, "prototype",       "perovskite_pm3m")
+    spec_set(spec, "prefix",          "caauh3")
+    spec_set(spec, "a_site_symbol",   "Ca")
+    spec_set(spec, "b_site_symbol",   "Au")
+    spec_set(spec, "a_site_mass",     "40.078")
+    spec_set(spec, "b_site_mass",     "196.967")
+    spec_set(spec, "a_site_upf",      "Ca.pbe-spn-rrkjus_psl.1.0.0.UPF")
+    spec_set(spec, "b_site_upf",      "Au.pbe-n-rrkjus_psl.1.0.0.UPF")
+    spec_set(spec, "celldm_bohr",     "6.8361")
+    spec_set(spec, "anchor_a_ang",    "3.828")
+    spec_set(spec, "a_conv_ang",      "3.618")
+    spec_set(spec, "contraction_pct", "5-7")
+    spec_set(spec, "pressure_kbar",   "50.0")
+    spec_set(spec, "pressure_gpa",    "50")
+    spec_set(spec, "outdir",          "/home/aiden/rtsc_caauh3/out")
+    spec_set(spec, "pseudo_dir",      "/home/aiden/rtsc_caauh3/pseudo")
+    spec_set(spec, "mixing_beta",     "0.4")
+    spec_set(spec, "degauss",         "0.02")
+    spec_set(spec, "nq",              "4")
+    return spec
+}
+
+fn _h3cl_spec() -> DeckSpec {
+    let spec = deck_spec_new()
+    spec_set(spec, "prototype",      "im3m_group17")
+    spec_set(spec, "prefix",         "h3cl")
+    spec_set(spec, "x_site_symbol",  "Cl")
+    spec_set(spec, "x_site_mass",    "35.45")
+    spec_set(spec, "x_site_upf",     "Cl.pbe-n-rrkjus_psl.1.0.0.UPF")
+    spec_set(spec, "celldm_bohr",    "5.60")
+    spec_set(spec, "a_conv_ang",     "2.96")
+    spec_set(spec, "pressure_kbar",  "2000.0")
+    spec_set(spec, "pressure_comment", "200 GPa")
+    spec_set(spec, "pressure_gpa",   "200")
+    spec_set(spec, "k_grid",         "16 16 16")
+    spec_set(spec, "nq",             "4")
+    spec_set(spec, "anharmonic",     "true")
+    return spec
+}
+
+fn _yh10_spec() -> DeckSpec {
+    let spec = deck_spec_new()
+    spec_set(spec, "prototype",      "sodalite_im3m_yh10")
+    spec_set(spec, "prefix",         "yh10_250")
+    spec_set(spec, "m_site_symbol",  "Y")
+    spec_set(spec, "m_site_mass",    "88.906")
+    spec_set(spec, "m_site_upf",     "Y.pbe-spn-rrkjus_psl.1.0.0.UPF")
+    spec_set(spec, "celldm_bohr",    "8.975")
+    spec_set(spec, "a_conv_ang",     "4.75")
+    spec_set(spec, "h32f_x",         "0.3750000")
+    spec_set(spec, "pressure_kbar",  "2500.0")
+    spec_set(spec, "pressure_comment", "250 GPa")
+    spec_set(spec, "pressure_gpa",   "250")
+    spec_set(spec, "k_grid",         "12 12 12")
+    spec_set(spec, "nq",             "2")
+    return spec
+}
+
+fn _ysbh6_spec() -> DeckSpec {
+    let spec = deck_spec_new()
+    spec_set(spec, "prototype",      "a15_ysbh6")
+    spec_set(spec, "prefix",         "ysbh6")
+    spec_set(spec, "a_site_symbol",  "Y")
+    spec_set(spec, "b_site_symbol",  "Sb")
+    spec_set(spec, "a_site_mass",    "88.906")
+    spec_set(spec, "b_site_mass",    "121.760")
+    spec_set(spec, "a_site_upf",     "Y.pbe-spn-rrkjus_psl.1.0.0.UPF")
+    spec_set(spec, "b_site_upf",     "Sb.pbe-n-rrkjus_psl.1.0.0.UPF")
+    spec_set(spec, "celldm_bohr",    "8.10")
+    spec_set(spec, "pressure_kbar",  "500.0")
+    spec_set(spec, "pressure_gpa",   "50")
+    spec_set(spec, "nq",             "4")
+    return spec
+}
+
+fn _write_all(files: [DeckFile], dir: string) {
+    let _mk = exec("mkdir -p " + dir)
+    let mut i = 0
+    while i < len(files) {
+        let f = files[i]
+        let _w = write_text(dir + "/" + f.path, f.content)
+        i = i + 1
+    }
+}
+
+fn _li2mgh16_spec() -> DeckSpec {
+    // li2mgh16 needs ONLY the prototype key — every structural field has a
+    // curated-deck default baked into the emitter (38-atom verbatim).
+    let spec = deck_spec_new()
+    spec_set(spec, "prototype", "li2mgh16")
+    return spec
+}
+
+fn _emit(out: string, name: string, spec: DeckSpec) {
+    let files = gen_deck("rtsc", spec)
+    _write_all(files, out + "/" + name)
+    println("  emitted " + name + " (" + str(len(files)) + " files)")
+}
+
+fn main() {
+    let av = args()
+    let mut out = "/tmp/deck_rtsc_bytecompat"
+    if len(av) >= 3 { out = av[2] }
+    println("# deck_rtsc_bytecompat — emit 5 existing prototypes (byte-compat, no new key) + li2mgh16 to " + out)
+    _emit(out, "MgBeH8", _mgbeh8_spec())
+    _emit(out, "CaAuH3", _caauh3_spec())
+    _emit(out, "H3Cl",   _h3cl_spec())
+    _emit(out, "YH10",   _yh10_spec())
+    _emit(out, "YSbH6",  _ysbh6_spec())
+    _emit(out, "Li2MgH16", _li2mgh16_spec())
+    println("__DECK_RTSC_BYTECOMPAT__ DONE")
+}
