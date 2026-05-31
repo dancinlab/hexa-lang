@@ -1234,8 +1234,8 @@ HEAP-ALLOC COUNT + PEAK-RSS (space axis), wall secondary.
 
 ```
 g5 byte-diff (acc must be IDENTICAL across heap vs stack arms):
-  a_heap  acc=140000000  md5=6ca934e49da9a8a3923d49622f65db6b
-  b_stack acc=140000000  md5=6ca934e49da9a8a3923d49622f65db6b
+  a_heap  acc=210000000  md5=250abd1aed19f5395ba84c8cf7c8c331
+  b_stack acc=210000000  md5=250abd1aed19f5395ba84c8cf7c8c331
   → byte-diff: IDENTICAL
 
 [PRIMARY] heap-alloc count (loop descriptor allocs):
@@ -1243,14 +1243,14 @@ g5 byte-diff (acc must be IDENTICAL across heap vs stack arms):
   b_stack : 0          (stack HexaArr+items — no malloc, LANDED)
 
 [PRIMARY] peak-RSS (KB):
-  a_heap  : 18112   →  b_stack : 1456     (12.4× down)
+  a_heap  : 2814416   →  b_stack : 1952     (1442× down · per-iter heap array retained)
 
 [PRIMARY] peak-RSS (KB) — NO-FREE / GC-reclaim-lag shape:
-  a_heap_nf  (4M no-free arrays) : 218720
-  b_stack_nf (stack, reclaimed)  : 1456   (150× down · 213MB→1.4MB)
+  a_heap_nf  (4M no-free arrays) : 564416
+  b_stack_nf (stack, reclaimed)  : 1936   (291× down · 551MB→1.9MB)
 
 [secondary] best-of-9 wall (s):
-  a_heap  : 0.24   →  b_stack : 0.04      (6×)
+  a_heap  : 0.67   →  b_stack : 0.04      (16×)
 
 [NEGATIVE CONTROL] escaping (returned) array stays heap:
   escaping read result (heap path, live after return): 4   (no dangling)
@@ -1259,7 +1259,7 @@ g5 byte-diff (acc must be IDENTICAL across heap vs stack arms):
 
 Finding: bounded non-escaping array literals stack-allocate the HexaArr
 descriptor + items buffer with byte-identical output, 20M→0 loop mallocs, and a
-larger RSS win than the flat-struct parent (150× vs 66×) because an array is TWO
+larger RSS win than the flat-struct parent (291× no-free vs 66×) because an array is TWO
 allocs (descriptor + items) not one. Map hash-table / closure env_box / nested-
 scope / GATED-default-on remain open (bounded-only ruled the unbounded payloads
 to heap).

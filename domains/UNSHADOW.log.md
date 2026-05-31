@@ -1118,9 +1118,9 @@ from flat structs to NON-FLAT descriptors — bounded array literals.
   stack buffer can't grow) — honest scope reduction; those remain open.
 - measure (mini arm64 · best-of-9 · faithful A/B proxy · B9/install wall · pool
   unreachable · Darwin LOCAL_BUILD gate): g5 byte-diff IDENTICAL
-  (acc=140000000, md5 6ca934e4…, same value as the flat-struct parent);
-  heap-alloc 20,000,000→0; peak-RSS 18,112→1,456 KB (12.4×); peak-RSS no-free
-  218,720→1,456 KB (150× · 213MB→1.4MB); wall 0.24→0.04s (6×). NEGATIVE CONTROL:
+  (acc=210000000, md5 250abd1a…);
+  heap-alloc 20,000,000→0; peak-RSS free 2,814,416→1,952 KB (1442×); peak-RSS no-free
+  564,416→1,936 KB (291× · 551MB→1.9MB); wall 0.67→0.04s (16×). NEGATIVE CONTROL:
   escaping (returned) array stays heap, reads 4 live after return (no dangling).
 - verdict: `.verdicts/unshadow-escape-stack-nonflat/` · repro:
   `tool/unshadow_escape_stack_nonflat_bench.hexa` · bench:

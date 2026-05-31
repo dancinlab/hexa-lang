@@ -1,1 +1,39 @@
-nohup: setsid: No such file or directory
+=== UNSHADOW escape->stack NON-FLAT (array descriptor) bench (F2 · SPACE axis) ===
+rt=/Users/mini/.hx/packages/hexa/self  work=/Users/mini/unshadow-escape-stack-nonflat  runs=9
+(primary metric = HEAP-ALLOC COUNT + PEAK-RSS; wall is secondary)
+
+--- C: non-escaping bounded-array hot-loop (2 arms + parity) ---
+  [a_heap ] built=yes err_lines=0
+  [b_stack] built=yes err_lines=0
+
+  g5 byte-diff (computed-acc must be IDENTICAL across arms):
+    a_heap  acc=210000000  md5=250abd1aed19f5395ba84c8cf7c8c331
+    b_stack acc=210000000  md5=250abd1aed19f5395ba84c8cf7c8c331
+    -> byte-diff: IDENTICAL
+
+  [PRIMARY] heap-alloc count (loop descriptor allocs):
+    a_heap  : 20000000   (hexa_array_new per [..] — BEFORE)
+    b_stack : 0   (stack HexaArr+items — no malloc, LANDED)
+
+  [PRIMARY] peak-RSS (KB):
+    a_heap  : 2814416
+    b_stack : 1952
+  [a_heap_nf ] built=yes err_lines=0
+  [b_stack_nf] built=yes err_lines=0
+
+  [PRIMARY] peak-RSS (KB) — NO-FREE shape (descriptor+buffer accumulate;
+            the GC reclaim-lag case where stack-alloc wins on space):
+    a_heap_nf  (4M no-free arrays) : 564416
+    b_stack_nf (stack, reclaimed)  : 1936
+
+  [secondary] best-of-9 wall (s):
+    a_heap  : 0.67
+    b_stack : 0.04
+
+--- NEGATIVE CONTROL: escaping array stays on the heap (no dangling) ---
+  [escape ] built=yes err_lines=0
+  escaping read result (heap path, live after return): 4
+  -> a returned array stays on the heap — the stack-alloc proof fires
+     ONLY for bindings used solely as a[i] / len(a) within the scope.
+
+=== done ===
