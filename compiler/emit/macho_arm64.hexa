@@ -1709,17 +1709,21 @@ pub fn pack_lir(lm: LModule) -> MachoArm64Obj {
     while pi < np {
         let raw = pending_names[pi]
         let mut name = raw
-        // A hexa fn name starting with `_` (e.g. `_arm64_emit_imm_to_reg`) is
-        // DEFINED as `_darwin_mangle(name)` = `__…` (double `_`), but the old
-        // guard passed `_`-prefixed call targets through unmangled (`_…`) → the
-        // def/ref mismatch left every `_`-named compiler fn UNDEFINED at link
-        // (the N5 self-host link wall). Resolve to the def-mangled form when it
-        // names an intra-module fn; else keep the runtime/extern rule (already-
-        // `_`-prefixed C symbols like `__map_raw_len` pass through unchanged).
+        // Every call target is a hexa/C IDENTIFIER that needs the Mach-O ABI
+        // `_` prefix. An intra-module fn is DEFINED as `_darwin_mangle(name)`,
+        // so resolve to that mangled form (handles `_`-prefixed compiler fns
+        // like `_arm64_emit_imm_to_reg` → `__arm64_…`, #2316). EVERY other
+        // (external/runtime) target ALSO needs the ABI `_`, including the
+        // `_`-prefixed runtime C identifiers: `__raw_idiv` is compiled by the C
+        // runtime to the Mach-O symbol `___raw_idiv` (3 underscores), so the
+        // ref must be `_darwin_mangle("__raw_idiv")` too. The old guard skipped
+        // `_`-prefixed externals → off-by-one underscore (`__raw_idiv` ref vs
+        // `___raw_idiv` def) → every `__raw_*`/`__map_*` runtime ref UNDEFINED
+        // at link (the N5-sym wall). Always ABI-prefix.
         let cand = _darwin_mangle(raw)
         if _str_in(fn_names, cand) {
             name = cand
-        } else if len(raw) > 0 && raw.substring(0, 1) != "_" {
+        } else if len(raw) > 0 {
             name = _darwin_mangle(raw)
         }
         // Defined intra-module target? (one of this module's fns)
@@ -1860,17 +1864,21 @@ pub fn pack_lir(lm: LModule) -> MachoArm64Obj {
         let off = pending_offsets[pi]
         let raw = pending_names[pi]
         let mut name = raw
-        // A hexa fn name starting with `_` (e.g. `_arm64_emit_imm_to_reg`) is
-        // DEFINED as `_darwin_mangle(name)` = `__…` (double `_`), but the old
-        // guard passed `_`-prefixed call targets through unmangled (`_…`) → the
-        // def/ref mismatch left every `_`-named compiler fn UNDEFINED at link
-        // (the N5 self-host link wall). Resolve to the def-mangled form when it
-        // names an intra-module fn; else keep the runtime/extern rule (already-
-        // `_`-prefixed C symbols like `__map_raw_len` pass through unchanged).
+        // Every call target is a hexa/C IDENTIFIER that needs the Mach-O ABI
+        // `_` prefix. An intra-module fn is DEFINED as `_darwin_mangle(name)`,
+        // so resolve to that mangled form (handles `_`-prefixed compiler fns
+        // like `_arm64_emit_imm_to_reg` → `__arm64_…`, #2316). EVERY other
+        // (external/runtime) target ALSO needs the ABI `_`, including the
+        // `_`-prefixed runtime C identifiers: `__raw_idiv` is compiled by the C
+        // runtime to the Mach-O symbol `___raw_idiv` (3 underscores), so the
+        // ref must be `_darwin_mangle("__raw_idiv")` too. The old guard skipped
+        // `_`-prefixed externals → off-by-one underscore (`__raw_idiv` ref vs
+        // `___raw_idiv` def) → every `__raw_*`/`__map_*` runtime ref UNDEFINED
+        // at link (the N5-sym wall). Always ABI-prefix.
         let cand = _darwin_mangle(raw)
         if _str_in(fn_names, cand) {
             name = cand
-        } else if len(raw) > 0 && raw.substring(0, 1) != "_" {
+        } else if len(raw) > 0 {
             name = _darwin_mangle(raw)
         }
         let idx = _find_sym_by_name(obj.symbols, obj.strtab, name)
