@@ -1812,9 +1812,20 @@ fn _types_is_compare_op(op: string) -> bool {
 
 fn _types_check_binop(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type {
     if len(e.children) < 2 { return _types_empty_type() }
+    let op = e.text
+
+    // as-cast `x as T`: the expression's type IS the named target type. The
+    // right child is an Ident carrying the type name (STEP1 parses it that way).
+    // Resolve it BEFORE inferring the operands — the type Ident isn't a value,
+    // so _infer_expr on it is meaningless. Without this the BinOp fell through
+    // to the `return lt` tail = the casted value's type, mis-typing
+    // `(v + 0.5) as int` as f64 and false-firing HX3004 (e.g. rt_round).
+    if op == "as" {
+        return _types_lower_type_ref(TypeRef { kind: "named", name: e.children[1].text, args: [], span: e.children[1].span })
+    }
+
     let lt = _infer_expr(e.children[0], env, ctx, out)
     let rt = _infer_expr(e.children[1], env, ctx, out)
-    let op = e.text
 
     // Unknown operand type — local-var typing is a v1 stub, so an Ident
     // operand frequently infers an empty Type. _types_equal already
