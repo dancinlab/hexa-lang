@@ -1061,6 +1061,11 @@ fn _bind_builtin_names() -> [string] {
         // (HX2001). All have C-level defs: bytes_to_str_raw -> self/codegen.hexa:7155
         // (hexa_bytes_to_str_raw); __arr_alloc_items_zero[_int] are s4_flatc_post-injected statics.
         "bytes_to_str_raw", "__arr_alloc_items_zero", "__arr_alloc_items_zero_int",
+        // N5-pre STEP6: free-call `push(arr, elem)` (2-arg) — a builtin array
+        // append lowered by codegen (self/codegen.hexa:6215 -> hexa_array_push),
+        // distinct from the `.push` method. The compiler's array-concat helpers
+        // use the free form, so the name must bind.
+        "push",
         // Step 4 .c-none arith: raw integer divide/mod + libm-free float mod
         // + float-add coerce (rt_div/rt_mod/rt_add_slow escapes). hexa_str_concat
         // = the real C string-concat fn rt_add_slow's string branch calls direct.
