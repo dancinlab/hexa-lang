@@ -373,3 +373,55 @@ pub fn pods_local_dispatch(av, idx: int) -> int {
     println("       cloud dispatch                  # full table (same as `cloud pods`)")
     return 2
 }
+
+// ── idle-orphan reconcile (billing-pod ⟂ manifest-job set-diff) ──────────
+// `cloud reap` finds provider pods ABSENT from the M5 registry. These find the
+// complementary leak: a provider pod that IS billing but has NO ACTIVE
+// (verdict=PENDING) job pinned in ./pods.json — the dup-idle-pod class
+// (re-fired deck orphaned the old pod, 2026-06-01).
+
+// _pl_str_in — PURE: 1 iff `needle` appears in the `[str]` list.
+fn _pl_str_in(xs, needle: str) -> int {
+    let mut i = 0
+    while i < len(xs) {
+        if xs[i] == needle { return 1 }
+        i = i + 1
+    }
+    return 0
+}
+
+// pods_local_active_pod_ids — pod ids with >=1 ACTIVE (verdict=PENDING) job in
+// ./pods.json. A pod whose jobs are all terminal (PASS/FAIL) is NOT active → a
+// reclaim candidate if still billing.
+pub fn pods_local_active_pod_ids() -> [str] {
+    let root = _pl_load()
+    let jobs = json_object_get_object(root, "jobs")
+    let job_ids = json_object_keys(jobs)
+    let mut active = []
+    let mut i = 0
+    while i < len(job_ids) {
+        let j = json_object_get(jobs, job_ids[i])
+        let v = json_object_get_str(j, "verdict", "PENDING")
+        let p = json_object_get_str(j, "pod", "")
+        if v == "PENDING" && len(p) > 0 {
+            if _pl_str_in(active, p) == 0 { active.push(p) }
+        }
+        i = i + 1
+    }
+    return active
+}
+
+// pods_local_idle_orphans — PURE set-difference billing_ids − active_ids: a
+// billing id with NO active job pinned is an idle-orphan (reclaim candidate).
+pub fn pods_local_idle_orphans(billing_ids, active_ids) -> [str] {
+    let mut orphans = []
+    let mut i = 0
+    while i < len(billing_ids) {
+        let id = billing_ids[i]
+        if _pl_str_in(active_ids, id) == 0 {
+            if _pl_str_in(orphans, id) == 0 { orphans.push(id) }
+        }
+        i = i + 1
+    }
+    return orphans
+}
