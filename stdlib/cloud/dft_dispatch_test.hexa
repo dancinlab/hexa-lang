@@ -63,6 +63,20 @@ fn _lt_index(s: str, a: str, b: str) -> int {
     return 0
 }
 
+// _join — space-join a [str] so an opts list can be substring-asserted.
+fn _join(xs: [str]) -> str {
+    let mut s = ""
+    let mut i = 0
+    while i < len(xs) {
+        if i > 0 {
+            s = s + " "
+        }
+        s = s + xs[i]
+        i = i + 1
+    }
+    return s
+}
+
 fn main() {
     // ── ③ relax → scf coordinate parser ──────────────────────────────
     // alat=1.0 → scale = BOHR_ANGSTROM = 0.52917720859, so the x-axis cell
@@ -230,6 +244,44 @@ fn main() {
     let _wd = _dft_write_state(nodeck, "done", "777", "h", "p", "id", 8, 12, "vc-relax.in")
     _check("resume: terminal 'done' → idempotent no-op (0)", _dft_resume(nodeck), 0)
     let _rmn2 = exec("rm -rf '" + nodeck + "'")
+
+    // ── GAP 1: vast_ssh_opts_id threads `-i <path>` only when identity set ──
+    // Without `-i`, the rent SSH-readiness probe + scp offer only the Mac
+    // default key, so a vast-registered non-default key is never presented →
+    // the gate destroys a good pod. The identity MUST appear as `-i <path>`.
+    let optid = _join(vast_ssh_opts_id("40012", "/home/u/.ssh/id_vast_anima"))
+    _check("gap1: opts WITH identity carry -i", _has(optid, "-i /home/u/.ssh/id_vast_anima"), 1)
+    _check("gap1: opts WITH identity carry IdentitiesOnly", _has(optid, "IdentitiesOnly=yes"), 1)
+    _check("gap1: opts WITH identity keep the port", _has(optid, "-p 40012"), 1)
+    let optnone = _join(vast_ssh_opts_id("40012", ""))
+    _check("gap1: opts WITHOUT identity OMIT -i (default unchanged)", _has(optnone, "-i "), 0)
+    _check("gap1: opts WITHOUT identity OMIT IdentitiesOnly", _has(optnone, "IdentitiesOnly"), 0)
+    _check("gap1: opts WITHOUT identity keep the port", _has(optnone, "-p 40012"), 1)
+    // back-compat shim vast_ssh_opts(port) == vast_ssh_opts_id(port, "")
+    _check("gap1: vast_ssh_opts shim == id-less builder", _seq(_join(vast_ssh_opts("40012")), optnone), 1)
+
+    // ── GAP 2: --resume teardown predicate is FALSE on an unresolved endpoint ──
+    // The cost incident (#38751850) read a stamp whose endpoint was EMPTY (`@ :`)
+    // and tore the pod down on a misread. _dft_endpoint_resolved gates the whole
+    // teardown path: it MUST be 0 (abort, no teardown) for any empty host/port.
+    _check("gap2: endpoint resolved when host+port set", _dft_endpoint_resolved("1.2.3.4", "40012"), 1)
+    _check("gap2: endpoint UNRESOLVED when host empty (the `@ :` symptom)", _dft_endpoint_resolved("", "40012"), 0)
+    _check("gap2: endpoint UNRESOLVED when port empty", _dft_endpoint_resolved("1.2.3.4", ""), 0)
+    _check("gap2: endpoint UNRESOLVED when both empty", _dft_endpoint_resolved("", ""), 0)
+    // a transport-failed remote read (ok==0) must NEVER license a teardown:
+    // _dft_remote_read_ok is the second gate — 1 only on a reachable read.
+    let okread = CloudResult { ok: 1, exit_code: 0, pid: 0, stdout_: "__DFT_FAILED__", message: "remote exit 0", logfile: "" }
+    let badread = CloudResult { ok: 0, exit_code: 255, pid: 0, stdout_: "", message: "ssh transport failure (exit 255)", logfile: "" }
+    let nomarker = CloudResult { ok: 0, exit_code: -1, pid: 0, stdout_: "", message: "no exit-code marker", logfile: "" }
+    _check("gap2: reachable read (ok=1) → read allowed", _dft_remote_read_ok(okread), 1)
+    _check("gap2: ssh 255 transport fail → read NOT allowed (no teardown)", _dft_remote_read_ok(badread), 0)
+    _check("gap2: no-marker (-1) transport fail → read NOT allowed", _dft_remote_read_ok(nomarker), 0)
+    // an UNRESOLVED-endpoint resume aborts with rc 3 (transient) — NOT teardown.
+    let rdeck = "/tmp/dft_resume_emptyendpoint_test"
+    let _rmr = exec("rm -rf '" + rdeck + "' && mkdir -p '" + rdeck + "'")
+    let _we = _dft_write_state(rdeck, "relax", "38751850", "", "", "id", 8, 12, "vc-relax.in")
+    _check("gap2: --resume on empty endpoint → ABORT (3), no teardown", _dft_resume(rdeck), 3)
+    let _rmr2 = exec("rm -rf '" + rdeck + "'")
 
     // ── scf.in canonical split/reassembly (layout-robust — RTSC 2026-05-31) ──
     // A valid pw.x input needs ALL namelists FIRST (each closed with `/`), THEN

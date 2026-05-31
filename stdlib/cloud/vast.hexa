@@ -884,25 +884,56 @@ fn vast_ssh_endpoint(iid: str) -> VastSsh {
     return VastSsh { ok: 1, host: host, port: port, message: "ssh endpoint " + host + ":" + port }
 }
 
-// vast_ssh_opts — canonical ssh_opts for an ephemeral vast.ai instance.
-// Mirrors runpod_pod_opts: non-22 port + accept the changing host key +
-// keepalives so an idle ssh is not declared dead by transient noise.
-fn vast_ssh_opts(port: str) -> [str] {
-    return ["-p", port, "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null", "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3"]
+// vast_ssh_opts_id — canonical ssh_opts for an ephemeral vast.ai instance,
+// optionally presenting a SPECIFIC private key. Mirrors runpod_pod_opts:
+// non-22 port + accept the changing host key + keepalives so an idle ssh is
+// not declared dead by transient noise. When `identity` is non-empty it is
+// threaded as `-i <identity>` + IdentitiesOnly=yes — WITHOUT this, the rent
+// SSH-readiness probe (vast_wait_ssh) and any scp built on these opts offer
+// only the Mac default key, so a vast-registered NON-default key (e.g.
+// ~/.ssh/id_vast_anima) is never presented → `Permission denied (publickey)`
+// → the readiness gate declares a perfectly good pod "never ready" and
+// destroys it. Empty identity = legacy behavior (no `-i`, key resolved by
+// ssh_config / agent).
+pub fn vast_ssh_opts_id(port: str, identity: str) -> [str] {
+    let mut opts = ["-p", port]
+    if len(identity) > 0 {
+        opts.push("-i")
+        opts.push(identity)
+        opts.push("-o")
+        opts.push("IdentitiesOnly=yes")
+    }
+    opts.push("-o")
+    opts.push("StrictHostKeyChecking=no")
+    opts.push("-o")
+    opts.push("UserKnownHostsFile=/dev/null")
+    opts.push("-o")
+    opts.push("ServerAliveInterval=15")
+    opts.push("-o")
+    opts.push("ServerAliveCountMax=3")
+    return opts
 }
 
-// vast_wait_ssh — poll the endpoint AND a real `echo` round-trip via ssh
-// until both succeed or the budget elapses. Mirrors runpod_wait_ssh.
-// vast community pods boot in 30s best case, 5-10min worst case (see
-// docs/notes/hexa-cloud-vast-usage-recipe-2026-05-22.md), so callers
-// should pass a generous budget (e.g. 30 tries × 20s = 600s).
-fn vast_wait_ssh(iid: str, max_tries: int, sleep_each_sec: int) -> VastSsh {
+// vast_ssh_opts — back-compat shim: vast_ssh_opts_id with no identity (key
+// resolved by ssh_config / agent). New call sites that know the identity
+// should call vast_ssh_opts_id directly.
+fn vast_ssh_opts(port: str) -> [str] {
+    return vast_ssh_opts_id(port, "")
+}
+
+// vast_wait_ssh_id — poll the endpoint AND a real `echo` round-trip via ssh
+// until both succeed or the budget elapses, presenting `identity` (when set)
+// so the readiness probe actually authenticates with the vast-registered key.
+// Mirrors runpod_wait_ssh. vast community pods boot in 30s best case,
+// 5-10min worst case (see docs/notes/hexa-cloud-vast-usage-recipe-2026-05-22.md),
+// so callers should pass a generous budget (e.g. 30 tries × 20s = 600s).
+fn vast_wait_ssh_id(iid: str, max_tries: int, sleep_each_sec: int, identity: str) -> VastSsh {
     let mut i = 0
     let sleep_cmd = "sleep " + to_string(sleep_each_sec)
     while i < max_tries {
         let e = vast_ssh_endpoint(iid)
         if e.ok == 1 {
-            let probe = cloud_run_opts("root@" + e.host, vast_ssh_opts(e.port), ["echo", "__VAST_UP__"])
+            let probe = cloud_run_opts("root@" + e.host, vast_ssh_opts_id(e.port, identity), ["echo", "__VAST_UP__"])
             if probe.ok == 1 {
                 if probe.stdout_.index_of("__VAST_UP__") >= 0 {
                     return e
@@ -913,6 +944,15 @@ fn vast_wait_ssh(iid: str, max_tries: int, sleep_each_sec: int) -> VastSsh {
         i = i + 1
     }
     return _vast_fail_ssh("wait_ssh: never ready in " + to_string(max_tries * sleep_each_sec) + "s")
+}
+
+// vast_wait_ssh — back-compat shim: vast_wait_ssh_id with no explicit identity
+// (probe key resolved by ssh_config / agent). Callers that hold the identity
+// (e.g. `cloud rent` with --identity / HEXA_VAST_IDENTITY) should call
+// vast_wait_ssh_id so the readiness gate never tears down a good pod merely
+// because its probe could not present the non-default key.
+fn vast_wait_ssh(iid: str, max_tries: int, sleep_each_sec: int) -> VastSsh {
+    return vast_wait_ssh_id(iid, max_tries, sleep_each_sec, "")
 }
 
 // ── direct bare-IP endpoint (DFT-dispatch transport guard ②) ──────────
@@ -1086,7 +1126,7 @@ pub fn vast_ssh_config_splice(existing: str, ip: str, identity: str) -> str {
 // _vast_default_identity — the key to auto-inject: $HEXA_VAST_IDENTITY if set,
 // else the campaign-default ~/.ssh/id_vast_anima IF it exists. "" → caller
 // skips injection (no key to present; graceful no-op).
-fn _vast_default_identity() -> str {
+pub fn _vast_default_identity() -> str {
     let env_id = env_var("HEXA_VAST_IDENTITY")
     if len(env_id) > 0 {
         return env_id

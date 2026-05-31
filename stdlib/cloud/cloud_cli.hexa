@@ -994,7 +994,14 @@ fn _cloud_rent_vast(av: [str], start: int) -> int {
     if bounded == false {
         wait_cadence = 20
     }
-    let ssh = vast_wait_ssh(inst.instance_id, tries, wait_cadence)
+    // Identity for the readiness probe: explicit --identity, else the
+    // campaign-default vast key (HEXA_VAST_IDENTITY / ~/.ssh/id_vast_anima —
+    // the SAME key auto-injected to ~/.ssh/config below). WITHOUT this the
+    // probe ssh offers only the Mac default key, so a vast-registered
+    // non-default key is never presented → `Permission denied (publickey)`
+    // → the bounded gate declares a good pod "never ready" and DESTROYS it.
+    let rent_identity = _flag_val(av, start, "--identity", _vast_default_identity())
+    let ssh = vast_wait_ssh_id(inst.instance_id, tries, wait_cadence, rent_identity)
     if ssh.ok == 0 {
         if bounded {
             // Auto-teardown — the M1 contract. A billing pod whose ssh
