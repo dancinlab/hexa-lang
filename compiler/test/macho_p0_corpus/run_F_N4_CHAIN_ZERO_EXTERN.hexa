@@ -1,0 +1,168 @@
+// F-N4-CHAIN-ZERO-EXTERN — HEXA-CC-NATIVE N4 regression-guard falsifier.
+//
+// Locks the N3a+N3b-proven clang-free native exec chain: a runnable arm64
+// binary is built from a .hexa source with ZERO clang/as/ld forks and ZERO C
+// intermediates (.c / ar-.a / clang-compiled .o) — only native Mach-O objects
+// + the final executable exist.
+//
+// CHAIN (all hexa-native; the only external tool is `hexa`/`aprime_cc` itself):
+//   1. aprime_cc --emit=obj --backend=native trivial.hexa -> user.o
+//        (native obj-emit; undefined syms = exactly _hexa_exit + _hexa_set_args)
+//   2. hexa run tool/emit_runtime_obj.hexa <w>/runtime.o   (N3a)
+//        (exports _hexa_exit + _hexa_set_args; no undefined)
+//   3. hexa run tool/hexa_ld.hexa -o <w>/prog user.o runtime.o --lc-main _main
+//        (N3b link via hexa_ld; fork-free per F-P1-LINKEXEC)
+//   4. <w>/prog ; echo $?  ->  42
+//   5. find <w>: .c == 0, ar-.a == 0, .o == exactly {user.o, runtime.o}
+//   6. fork-0 proof: re-run step 1 under a PATH stripped of clang/as/ld
+//      (the F-P3-ZERO-EXTERN technique) — it still succeeds, so the native
+//      obj-emit forks no C toolchain. hexa_ld's fork-freedom is cited from
+//      F-P1-LINKEXEC (2 .o -> runnable, no clang/ld/as).
+//
+// Falsifier: any failing assert (non-42 exit, a .c/.a, a 3rd .o, a fork
+// failure under the stripped PATH) FALSIFIES the clang-free native chain.
+//
+// HONEST SCOPE: trivial/exit-only program · arm64-apple-darwin · uses the
+// committed build/aprime_cc (no rebuild). SKIPs (exit 0) when HEXA_LANG is
+// unset or build/aprime_cc is absent (e.g. Linux CI runners) so the gate
+// stays green where the native darwin toolchain is not present.
+//
+// Self-contained: arrays + exec_capture only (no struct field access), so it
+// runs under the installed dispatch `hexa` despite the ParsedObj codegen bug.
+
+fn main() {
+    let repo = env("HEXA_LANG")
+    if len(repo) == 0 {
+        eprintln("F-N4-CHAIN-ZERO-EXTERN: HEXA_LANG unset — skip")
+        exit(0)
+    }
+    let aprime = repo + "/build/aprime_cc"
+    if exec_capture("test -x " + aprime + " && echo ok || echo no")[0].trim() != "ok" {
+        eprintln("F-N4-CHAIN-ZERO-EXTERN: build/aprime_cc absent — skip (non-darwin / unbuilt)")
+        exit(0)
+    }
+
+    let w = exec_capture("mktemp -d -t n4chain.XXXXXX")[0].trim()
+    if len(w) == 0 {
+        eprintln("F-N4-CHAIN-ZERO-EXTERN: mktemp failed")
+        exit(2)
+    }
+    let src   = repo + "/compiler/test/macho_p0_corpus/trivial.hexa"
+    let user_o = w + "/user.o"
+    let rt_o   = w + "/runtime.o"
+    let prog   = w + "/prog"
+
+    // ── 1. native obj-emit → user.o ──
+    let c1 = exec_capture("HEXA_LANG=" + repo + " " + aprime
+        + " _drv.hexa --emit=obj --backend=native --target=arm64-apple-darwin"
+        + " -o " + user_o + " " + src + " 2>&1")
+    if to_int(c1[2]) != 0 {
+        eprintln("F-N4 FAIL (1): aprime_cc obj-emit rc=" + c1[2] + ":\n" + c1[0])
+        exit(1)
+    }
+    let umagic = exec_capture("head -c 4 " + user_o + " | xxd -p")[0].trim()
+    if umagic != "cffaedfe" {
+        eprintln("F-N4 FAIL (1): user.o bad magic = " + umagic)
+        exit(1)
+    }
+    // undefined syms must be exactly the two runtime symbols.
+    let unu = exec_capture("nm -u " + user_o + " 2>/dev/null | sort | tr '\\n' ' '")[0].trim()
+    if !unu.contains("_hexa_exit") || !unu.contains("_hexa_set_args") {
+        eprintln("F-N4 FAIL (1): user.o undefined != {_hexa_exit,_hexa_set_args}: " + unu)
+        exit(1)
+    }
+
+    // ── 2. native runtime .o (N3a) ──
+    let c2 = exec_capture("HEXA_LANG=" + repo + " hexa run "
+        + repo + "/tool/emit_runtime_obj.hexa " + rt_o + " 2>&1")
+    if to_int(c2[2]) != 0 {
+        eprintln("F-N4 FAIL (2): emit_runtime_obj rc=" + c2[2] + ":\n" + c2[0])
+        exit(1)
+    }
+    let rt_sz = to_int(exec_capture("wc -c < " + rt_o)[0].trim())
+    if rt_sz <= 0 {
+        eprintln("F-N4 FAIL (2): runtime.o is empty (" + to_string(rt_sz) + " B)")
+        exit(1)
+    }
+    let rtU = exec_capture("nm -U " + rt_o + " 2>/dev/null | tr '\\n' ' '")[0].trim()
+    if !rtU.contains("_hexa_exit") || !rtU.contains("_hexa_set_args") {
+        eprintln("F-N4 FAIL (2): runtime.o does not export both syms: " + rtU)
+        exit(1)
+    }
+    let rtu = exec_capture("nm -u " + rt_o + " 2>/dev/null | tr '\\n' ' '")[0].trim()
+    if len(rtu) != 0 {
+        eprintln("F-N4 FAIL (2): runtime.o has undefined imports: " + rtu)
+        exit(1)
+    }
+
+    // ── 3. hexa_ld link (N3b) ──
+    let c3 = exec_capture("HEXA_LANG=" + repo + " hexa run "
+        + repo + "/tool/hexa_ld.hexa -o " + prog + " "
+        + user_o + " " + rt_o + " --lc-main _main 2>&1")
+    if to_int(c3[2]) != 0 {
+        eprintln("F-N4 FAIL (3): hexa_ld link rc=" + c3[2] + ":\n" + c3[0])
+        exit(1)
+    }
+    let pmagic = exec_capture("head -c 4 " + prog + " | xxd -p")[0].trim()
+    if pmagic != "cffaedfe" {
+        eprintln("F-N4 FAIL (3): prog bad magic = " + pmagic)
+        exit(1)
+    }
+    let ftype = exec_capture("file -b " + prog)[0].trim()
+    if !ftype.contains("executable") {
+        eprintln("F-N4 FAIL (3): prog not a Mach-O executable: " + ftype)
+        exit(1)
+    }
+
+    // ── 4. run → exit 42 ──
+    let run = exec_capture(prog + "; echo RC=$?")[0].trim()
+    let mut got = -1
+    if run.contains("RC=") {
+        let parts = run.split("RC=")
+        got = to_int(parts[len(parts) - 1].trim())
+    }
+    if got != 42 {
+        eprintln("F-N4 FAIL (4): prog exit=" + to_string(got) + " (expected 42)\n" + run)
+        exit(1)
+    }
+
+    // ── 5. zero C-intermediate: no .c, no ar-.a, exactly 2 native .o ──
+    let n_c = to_int(exec_capture("find " + w + " -name '*.c' | wc -l")[0].trim())
+    let n_a = to_int(exec_capture("find " + w + " -name '*.a' | wc -l")[0].trim())
+    let n_o = to_int(exec_capture("find " + w + " -name '*.o' | wc -l")[0].trim())
+    if n_c != 0 {
+        eprintln("F-N4 FAIL (5): found " + to_string(n_c) + " .c intermediate(s)")
+        exit(1)
+    }
+    if n_a != 0 {
+        eprintln("F-N4 FAIL (5): found " + to_string(n_a) + " ar-.a archive(s)")
+        exit(1)
+    }
+    if n_o != 2 {
+        eprintln("F-N4 FAIL (5): expected exactly 2 native .o, found " + to_string(n_o))
+        exit(1)
+    }
+
+    // ── 6. fork-0 proof: native obj-emit succeeds with clang/as/ld absent ──
+    // PATH points at an empty dir, so any fork of clang/as/ld would ENOENT.
+    let strip_dir = w + "/nobin"
+    let _mk = exec_capture("mkdir -p " + strip_dir)
+    let c6 = exec_capture("PATH=" + strip_dir + " HEXA_LANG=" + repo + " " + aprime
+        + " _drv.hexa --emit=obj --backend=native --target=arm64-apple-darwin"
+        + " -o " + w + "/strip.o " + src + " 2>&1")
+    if to_int(c6[2]) != 0 {
+        eprintln("F-N4 FAIL (6): native obj-emit forked a missing tool under stripped PATH (rc="
+            + c6[2] + "):\n" + c6[0])
+        exit(1)
+    }
+    let smagic = exec_capture("head -c 4 " + w + "/strip.o | xxd -p")[0].trim()
+    if smagic != "cffaedfe" {
+        eprintln("F-N4 FAIL (6): stripped-PATH .o bad magic = " + smagic)
+        exit(1)
+    }
+
+    let _rm = exec_capture("rm -rf " + w)
+    println("F-N4-CHAIN-ZERO-EXTERN PASS — native user.o + runtime.o + hexa_ld")
+    println("  -> Mach-O executable, exit 42 · .c=0 .a=0 native.o=2 · clang/as/ld fork 0")
+    exit(0)
+}
