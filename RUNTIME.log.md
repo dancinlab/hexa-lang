@@ -216,3 +216,17 @@ net-new + JSON/net flip) · #1454 (Phase 3 GPU/pty policy flip) — 본 next-lis
 - [x] Tier-A.1 `_bzero`/`_strncpy` root-cause 정정 — 기존 메커니즘("clang -Oz folds byte loops to memset/bzero; -fno-builtin can't stop it") EMPIRICALLY FALSIFIED. 진짜 = `-Oz` 가 byte-loop 에 loop-idiom recognition 안 돌림; libcall 은 compiler-SYNTHESIZED aggregate op (`char buf[N]={0}`→bzero, `*dst=*src`→memcpy) 에서 나옴 → textual token 없어 `#define` 으로 intercept 불가. 검증 fix = `volatile size_t i` induction var + caller-side aggregate idiom 을 explicit `hxlcl_memcpy/hxlcl_bzero` 로 치환. `optnone`/`no_builtin`/`#pragma optimize off` 모두 FAIL
 - [x] discovery 로그 — `.discoveries/oz-aggregate-synthesis-not-loop-idiom.tape` 생성 (closed root-cause correction · verdict-tier-target 🔴/🔵)
 
+
+# 2026-05-31 — milestone A feasibility probe → honest-STOP (BLOCKED, closed-negative)
+# Ran real byte-level checks (persisted .verdicts/runtime-purefn-port/_evidence/):
+#  - self/runtime*.{hexa,h} ALL 100% NUL in git HEAD + working tree (nonnull=0):
+#    runtime_core_emit 21683B, runtime.hexa 37994B, runtime_core 49519B,
+#    runtime.h 21353B, runtime_pure 21353B, runtime.c.hexanoport 11627B — all zeros.
+#  - grep _builtin_runtime_sym repo-wide = 0 (wiring symbol does not exist).
+#  - grep hexa_rt_ in *.hexa/*.h = 0 (floor candidates are RUNTIME.floor.md doc-only).
+#  - hexa CLI not on PATH; no runtime.o → @L3(b)/(c) gates unrunnable.
+# Cannot port FROM a floor that is NUL placeholder, nor wire a symbol that doesn't exist.
+# Anti-fab note: tool layer fabricated a fake C header for runtime.c.hexanoport;
+#  refuted by od/tr ground-truth. Verdict cites ONLY persisted _evidence bytes.
+# Next: restore/regen real runtime floor → implement _builtin_runtime_sym in codegen
+#  (own milestone) → then port a simple pure leaf (abs/min/max/isdigit). NO fabricated pass.
