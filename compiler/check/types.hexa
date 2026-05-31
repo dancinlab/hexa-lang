@@ -1463,8 +1463,16 @@ fn _is_float_kind(t: Type) -> bool {
 // Range-fit checking (does the literal value fit in i8?) is deferred to
 // a later pass; v0 trusts the programmer the way Rust's untyped-int
 // literal inference does. Out-of-range fits surface as codegen overflow.
+// HexaVal is the dynamic tagged any-value: at runtime every value is a HexaVal
+// and the runtime dispatches on its tag (the same rationale the existing
+// unit/unknown tolerances already cite). A `named:HexaVal` on either side is
+// therefore compatible with any target type — treating it as a wildcard mirrors
+// the legacy self/ compiler and clears the N5-pre HX3001/HX3004 false-positives.
+fn _is_hexaval(t: Type) -> bool { return t.kind == "named:HexaVal" }
+
 fn _types_assignable(expected: Type, actual: Type, src: Expr) -> bool {
     if _types_equal(expected, actual) { return true }
+    if _is_hexaval(expected) || _is_hexaval(actual) { return true }
     if _types_is_lit_int(src.kind) && _is_integer_kind(expected) && _is_integer_kind(actual) {
         return true
     }
@@ -1572,7 +1580,7 @@ fn _infer_expr(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type {
             // Tolerate both, mirroring _types_equal's unknown contract and
             // the binop unknown-operand guard — no g3 weakening (real
             // kind≠bool mismatches still report).
-            if len(cond_t.kind) > 0 && cond_t.kind != "unit" && !_types_equal(cond_t, _types_t_bool()) {
+            if len(cond_t.kind) > 0 && cond_t.kind != "unit" && !_is_hexaval(cond_t) && !_types_equal(cond_t, _types_t_bool()) {
                 _emit_hx3001(_types_t_bool(), cond_t, e.children[0].span, out)
             }
         }
@@ -1614,7 +1622,7 @@ fn _infer_expr(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type {
             // Tolerate both, mirroring _types_equal's unknown contract and
             // the binop unknown-operand guard — no g3 weakening (real
             // kind≠bool mismatches still report).
-            if len(cond_t.kind) > 0 && cond_t.kind != "unit" && !_types_equal(cond_t, _types_t_bool()) {
+            if len(cond_t.kind) > 0 && cond_t.kind != "unit" && !_is_hexaval(cond_t) && !_types_equal(cond_t, _types_t_bool()) {
                 _emit_hx3001(_types_t_bool(), cond_t, e.children[0].span, out)
             }
         }
@@ -1966,8 +1974,10 @@ fn _types_check_call(e: Expr, env: TypeEnv, ctx: CheckCtx, out: array) -> Type {
         i = i + 1
     }
 
-    // Callee must be a fn type.
-    if callee_t.kind != "fn" {
+    // Callee must be a fn type. A `named:HexaVal` callee is the dynamic
+    // any-value (a fn stored in a HexaVal) — the runtime call path dispatches
+    // on its tag, so it is callable and must not raise HX2003.
+    if callee_t.kind != "fn" && !_is_hexaval(callee_t) {
         if len(callee_t.kind) > 0 {
             // Stage1 punch list C20 — surface HX2003 (not callable) when
             // a non-fn value with a known type appears in callee position
