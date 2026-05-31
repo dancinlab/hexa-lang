@@ -1,0 +1,105 @@
+// ════════════════════════════════════════════════════════════════════════════
+//  clm_conv_gpu.hexa — CLM conv1d (K=3, causal dilated) via forge GPU dispatch.
+//
+//  PR3 (clm_prod_gpu) routed the readout (a 1x1 conv = pure matmul) through
+//  forge_dispatch_matmul. This extends it to the GENERAL CLMConvMoE conv1d
+//  (K=3 causal dilated, used by embed_conv · trunk · 2 experts) by im2col:
+//  unfold each output position's receptive field into a row, so the conv
+//  becomes one matmul x_col[T, Cin·K] @ Wᵀ[Cin·K, Cout] + b — then that matmul
+//  rides forge (cuBLAS on a CUDA host, identical farr_matmul on CPU).
+//
+//  nn_conv1d_fwd is causal+dilated: y[t,co] = b[co] + Σ_{ci,k, p≥0}
+//  w[co,ci,k]·x[p,ci], p = t − dil·(K−1−k). im2col mirrors that exact gather
+//  (left-pad zeros where p<0), so the forge path must be byte-eq to the baseline.
+//
+//  F-CLM-CONV-GPU-EQ: forge im2col-matmul conv == nn_conv1d_fwd (max|Δ| ≤ 1e-9).
+//  Verified $0 on Mac CPU; the GPU-busy half (nvidia-smi) is the PR4 large fire.
+//  This wires the HEAVY conv path (the bulk of CLM FLOPs) onto forge — the 0%-util
+//  routing gap was exactly these convs staying on host farr_matmul.
+// ════════════════════════════════════════════════════════════════════════════
+
+use "stdlib/flame/tensor_lib"
+use "stdlib/flame/conv_lib"
+
+fn _absf(x: float) -> float { if x < 0.0 { return 0.0 - x } return x }
+
+// conv1d (causal dilated) via im2col + forge matmul. Mirrors nn_conv1d_fwd's
+// gather exactly: p = t − dil·(K−1−k); rows below p<0 are zero (left causal pad).
+fn conv1d_via_forge(x: int, w: int, b: int, y_out: int,
+                    T: int, Cin: int, Cout: int, K: int, dil: int) {
+    let Kdim = Cin * K
+    // im2col: x_col[t, ci*K+k] = (p>=0) ? x[p, ci] : 0
+    let xcol = t_zeros(T * Kdim)
+    let mut t = 0
+    while t < T {
+        let mut ci = 0
+        while ci < Cin {
+            let mut k = 0
+            while k < K {
+                let p = t - dil * (K - 1 - k)
+                if p >= 0 { t_set(xcol, t * Kdim + ci * K + k, t_get(x, p * Cin + ci)) }
+                k = k + 1
+            }
+            ci = ci + 1
+        }
+        t = t + 1
+    }
+    // transpose w[Cout, Cin*K] -> Wt[Cin*K, Cout]
+    let Wt = t_zeros(Kdim * Cout)
+    let mut co = 0
+    while co < Cout {
+        let mut j = 0
+        while j < Kdim { t_set(Wt, j * Cout + co, t_get(w, co * Kdim + j)); j = j + 1 }
+        co = co + 1
+    }
+    // forge matmul: x_col[T, Kdim] @ Wt[Kdim, Cout] = [T, Cout]
+    let mm = forge_dispatch_matmul(xcol, T, Kdim, Wt, Cout)
+    // + bias
+    let mut t2 = 0
+    while t2 < T {
+        let mut c2 = 0
+        while c2 < Cout {
+            t_set(y_out, t2 * Cout + c2, t_get(mm, t2 * Cout + c2) + t_get(b, c2))
+            c2 = c2 + 1
+        }
+        t2 = t2 + 1
+    }
+}
+
+fn main() {
+    println("clm_conv_gpu — CLM conv1d (K=3 causal dilated) via forge im2col matmul")
+    let T = 24; let Cin = 8; let Cout = 8; let K = 3; let dil = 1
+    let dd = Cout * Cin * K
+
+    let x = t_zeros(T * Cin); t_fill_lcg(x, T * Cin, 31, 0.4)
+    let w = t_zeros(dd);      t_fill_lcg(w, dd, 2, 0.2)
+    let b = t_zeros(Cout);    t_fill_lcg(b, Cout, 3, 0.1)
+
+    // baseline: nn_conv1d_fwd (host)
+    let y_cpu = t_zeros(T * Cout)
+    nn_conv1d_fwd(x, w, b, y_cpu, T, Cin, Cout, K, dil)
+
+    // forge path: im2col + dispatch matmul
+    let y_gpu = t_zeros(T * Cout)
+    conv1d_via_forge(x, w, b, y_gpu, T, Cin, Cout, K, dil)
+
+    // F-CLM-CONV-GPU-EQ: max |Δ|
+    let mut maxdev = 0.0
+    let mut i = 0
+    while i < T * Cout {
+        let dvn = _absf(t_get(y_cpu, i) - t_get(y_gpu, i))
+        if dvn > maxdev { maxdev = dvn }
+        i = i + 1
+    }
+    let tol = 0.000000001
+    print("  conv K="); print(K); print(" dil="); print(dil)
+    print("  Cin×Cout="); print(Cin); print("×"); print(Cout); print(" T="); print(T)
+    print("  max|Δ| forge-vs-conv = "); println(to_string(maxdev))
+    if maxdev <= tol {
+        println("F-CLM-CONV-GPU-EQ = 1")
+        println("PASS — im2col+forge conv1d == nn_conv1d_fwd (heavy conv path wired to forge)")
+        return
+    }
+    println("F-CLM-CONV-GPU-EQ = 0")
+    println("FAIL")
+}
