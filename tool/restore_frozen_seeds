@@ -1,0 +1,97 @@
+#!/usr/bin/env bash
+# tool/restore_frozen_seeds — restore the bootstrap C seeds from the authoritative
+# pre-graduation git blob, so a fresh `.c=0` checkout can self-build runtime.a +
+# build/hexat WITHOUT pulling a per-platform edge tarball.
+#
+# ── Why this exists (P7 — edge-seed chicken-egg) ─────────────────────────────
+# At graduation commit 7906951c0 ("tracked .c = 0", #2065) all bootstrap C seeds
+# (self/runtime.c + its 19 #include fragments + self/native/hexa_cc.c) were
+# git-removed. The release pipeline then resolves runtime.a + build/hexat ONLY
+# from a prior `edge` tarball. But the `edge` release ships ONLY
+# hexa-linux-arm64.tar.gz, so linux-x86_64 and darwin-arm64 have NO seed → the
+# edge-pull stages exit 1 → `release` + `nobaseline-gate` go RED on those two
+# platforms. (linux-arm64 self-heals: its job goes green and re-uploads.)
+#
+# self/runtime.c (14663 lines) has no SSOT emitter — only fragments — and the
+# toolchain is read-only, so the only authoritative source for a coherent
+# same-revision runtime is the frozen git blob at 7906951c0^ (= 151c52c82, the
+# parent of the graduation commit). This script restores exactly that seed set
+# into the working tree on demand. The files are NOT committed — they are an
+# ephemeral build input, restored into the checkout, compiled, then discarded
+# (CI checkouts are throwaway; locally the caller restores the tree afterward).
+# This preserves the .hexa-only graduated state in git while keeping every
+# platform self-sufficient for bootstrap.
+#
+# The seed set is IDENTICAL to nobaseline-gate.yml's $SEEDS (23 files) minus
+# self/bootstrap_compiler.c (not a runtime.c #include; not needed for runtime.a
+# or hexat). All paths verified to exist as blobs at the pinned ref.
+#
+# Usage:  bash tool/restore_frozen_seeds            # restore all seeds
+#         FROZEN_SEED_REF=<sha> bash tool/restore_frozen_seeds   # override ref
+# Prints the restored file count. Exits non-zero if any checkout fails.
+set -euo pipefail
+
+# Pinned to the parent of the graduation commit 7906951c0 (#2065) — given as the
+# parent's FULL SHA (151c52c8…), NOT `7906951c0^`, because CI checks out with
+# actions/checkout fetch-depth:1 (shallow) where neither the graduation commit
+# nor its parent is present locally; a full SHA is fetchable on demand whereas a
+# `<sha>^` revision cannot be resolved without the child object. This is the last
+# revision where the bootstrap C seeds were tracked and mutually coherent.
+FROZEN_SEED_REF="${FROZEN_SEED_REF:-151c52c82502e93d01735c58b43b017d102fee63}"
+
+# The frozen seed set: self/runtime.c + the .c fragments it #includes (derived
+# from `git show <ref>:self/runtime.c | grep '#include "'`) + the transpiler
+# seed self/native/hexa_cc.c (needed by stage_prebuild_hexat to build hexat).
+FROZEN_SEEDS=(
+  self/runtime.c
+  self/runtime_core.c
+  self/runtime_hi_gen.c
+  self/native/hexa_cc.c
+  self/native/tensor_kernels.c
+  self/native/net.c
+  self/native/thread.c
+  self/native/pty.c
+  self/native/mount.c
+  self/native/namespace.c
+  self/native/wait.c
+  self/native/crypto_sodium.c
+  self/native/crypto_openssl.c
+  self/native/exec_pipe.c
+  self/native/proc_fork.c
+  self/native/fp_init.c
+  self/native/signal_flock.c
+  self/native/exec_argv_sha256.c
+  self/native/persistent_pipe.c
+  self/native/term_ffi.c
+  self/forge/forge_tier_v1.c
+)
+
+echo "[restore_frozen_seeds] restoring ${#FROZEN_SEEDS[@]} bootstrap seeds from $FROZEN_SEED_REF"
+
+# On a shallow CI checkout (actions/checkout fetch-depth:1) the pinned commit is
+# absent. Fetch just that commit on demand — GitHub allows fetching a reachable
+# SHA directly. No-op when the object is already present (full clones).
+if ! git cat-file -e "${FROZEN_SEED_REF}^{commit}" 2>/dev/null; then
+  echo "[restore_frozen_seeds] $FROZEN_SEED_REF absent (shallow checkout) — fetching on demand"
+  git fetch --depth=1 origin "$FROZEN_SEED_REF" 2>/dev/null \
+    || git fetch origin "$FROZEN_SEED_REF" 2>/dev/null \
+    || { echo "[restore_frozen_seeds] FATAL: cannot fetch $FROZEN_SEED_REF" >&2; exit 1; }
+fi
+
+n=0
+for f in "${FROZEN_SEEDS[@]}"; do
+  # Restore the blob content WITHOUT staging it (--) so the working tree gets the
+  # file but git status still treats it as the graduated (removed) state once the
+  # caller cleans up. `git checkout <ref> -- <file>` does stage it; we follow up
+  # with `git reset` of the path-set so the index stays at HEAD (uncommitted).
+  if git checkout "$FROZEN_SEED_REF" -- "$f" 2>/dev/null; then
+    n=$((n+1))
+  else
+    echo "[restore_frozen_seeds] FATAL: cannot restore $f from $FROZEN_SEED_REF" >&2
+    exit 1
+  fi
+done
+# Unstage everything we just restored so the index reflects the graduated tree;
+# the working-tree files remain as the ephemeral build input.
+git reset -q -- "${FROZEN_SEEDS[@]}" 2>/dev/null || true
+echo "[restore_frozen_seeds] restored $n seeds (working tree only; index unchanged)"

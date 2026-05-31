@@ -14,9 +14,15 @@
 #   SEEDS PRESENT (today, additive no-op): compile build/runtime.a from the
 #     in-tree self/runtime.c (+ its #include seeds) with the SAME CFLAGS.
 #
-#   SEEDS REMOVED (future Phase-3+): self/runtime.c is gone, so download the
+#   SEEDS REMOVED (today, post-graduation): self/runtime.c is gone. Try the
 #     prior edge tarball's bundled build/runtime.a (release.yml Package ships
-#     it) and use THAT. No `git checkout` of a removed file; no warm-regen.
+#     it) first. If that edge asset is MISSING for this platform (P7 edge-seed
+#     chicken-egg — `edge` ships only hexa-linux-arm64.tar.gz, so x86_64/darwin
+#     have no seed), FALL BACK to restoring the frozen bootstrap seeds from the
+#     authoritative pre-graduation git blob (tool/restore_frozen_seeds, pinned
+#     7906951c0^) and building runtime.a from source — the SAME compile the
+#     seeds-present branch runs. The restored seeds are working-tree-only
+#     (never committed); the .hexa-only graduated git state is preserved.
 #
 # On success it leaves build/runtime.a in place and prints the resolved path.
 # Callers then export HEXA_PREBUILT_RUNTIME=build/runtime.a so stage_build_hexa
@@ -33,12 +39,19 @@ ROOT="$PWD"
 RA="$ROOT/build/runtime.a"
 mkdir -p build
 
-if [ -f self/runtime.c ]; then
-    echo "stage_resolve_runtime_a: seeds present — building runtime.a from source"
+# Shared source-compile of runtime.a from the in-tree self/runtime.c (+ its
+# #include seed .c). Used by BOTH the seeds-present branch and the frozen-seed
+# fallback so there is exactly ONE compile recipe (no drift).
+build_runtime_a_from_source() {
     $CC $CFLAGS -I self -c self/runtime.c -o build/runtime.o
     ar rcs "$RA" build/runtime.o
     ls -la "$RA"
     echo "$RA"
+}
+
+if [ -f self/runtime.c ]; then
+    echo "stage_resolve_runtime_a: seeds present — building runtime.a from source"
+    build_runtime_a_from_source
     exit 0
 fi
 
@@ -61,5 +74,18 @@ if gh release download edge --repo "${GITHUB_REPOSITORY:-dancinlab/hexa-lang}" \
 else
     echo "stage_resolve_runtime_a: edge download failed ($(head -1 /tmp/ra_dl.err 2>/dev/null))" >&2
 fi
-echo "stage_resolve_runtime_a: NO runtime.a available (no source, no prior asset)" >&2
+
+# P7 edge-seed chicken-egg fallback: the per-platform edge tarball is missing
+# (e.g. `edge` ships only hexa-linux-arm64.tar.gz, so x86_64/darwin can't pull).
+# Restore the frozen bootstrap seeds from the authoritative pre-graduation blob
+# (pinned 7906951c0^) into the working tree and build runtime.a from source —
+# the SAME compile as the seeds-present branch. Seeds are working-tree-only and
+# never committed, so the .hexa-only graduated git state is preserved.
+echo "stage_resolve_runtime_a: edge asset unavailable — restoring frozen seeds (7906951c0^) and building from source"
+if bash tool/restore_frozen_seeds && [ -f self/runtime.c ]; then
+    build_runtime_a_from_source
+    exit 0
+fi
+
+echo "stage_resolve_runtime_a: NO runtime.a available (no source, no prior asset, frozen-seed restore failed)" >&2
 exit 1

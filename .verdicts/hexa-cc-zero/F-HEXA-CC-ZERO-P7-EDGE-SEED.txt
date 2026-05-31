@@ -1,0 +1,76 @@
+F-HEXA-CC-ZERO-P7-EDGE-SEED — edge-seed chicken-egg frozen-seed fallback
+========================================================================
+date:   2026-05-31
+host:   darwin-arm64 (mini, Apple clang / Xcode 26.5.0)
+branch: unshadow/p7-edge-frozen-seed
+commits:
+  3b247ca18  P7 — frozen-seed fallback for runtime.a on edge-miss (restore_frozen_seeds + stage_resolve_runtime_a)
+  7c0d87bda  P7 — frozen-seed fallback for build/hexat on edge-miss (stage_prebuild_hexat)
+  dddae69fe  P7 — grace_consent uses hexat_linux + frozen-seed runtime.a
+
+FALSIFIER (pre-registered)
+  A fresh `.c=0` checkout (self/runtime.c + self/native/hexa_cc.c absent, the
+  graduated state) on a platform WITHOUT an edge tarball (linux-x86_64 /
+  darwin-arm64 — `edge` ships only hexa-linux-arm64.tar.gz) must reach a working
+  ./hexa via `bash tool/release_build`, with runtime.a + build/hexat resolved
+  from the authoritative pre-graduation frozen git blob (7906951c0^), WITHOUT
+  pulling any edge asset and WITHOUT committing any restored seed.
+
+METHOD
+  In the isolated worktree, force the TRUE graduated state (explicitly rm the 21
+  gitignored frozen seeds so they are ABSENT), then run the full shared release
+  build with the edge asset forced-missing:
+    TARGET=darwin-arm64 CC=clang LIBS="" GH_TOKEN="" \
+    EDGE_ASSET="hexa-FORCE-MISS.tar.gz" bash tool/release_build
+  (EDGE_ASSET points at a non-existent asset so the edge-pull branch fails and
+  the frozen-seed fallback is exercised, exactly as it will on x86_64/darwin in
+  CI where the per-platform tarball genuinely does not exist.)
+
+VERIFICATION (real run · stdout verbatim markers)
+  stage_resolve_runtime_a: self/runtime.c ABSENT — fetching prebuilt runtime.a from prior edge
+  stage_resolve_runtime_a: edge download failed (no assets match the file pattern)
+  stage_resolve_runtime_a: edge asset unavailable — restoring frozen seeds (7906951c0^) and building from source
+  [restore_frozen_seeds] restoring 21 bootstrap seeds from 7906951c0aa7b112694c882a998aa30c9885f795^
+  [restore_frozen_seeds] restored 21 seeds (working tree only; index unchanged)
+  -rw-r--r-- ... 534928 ... build/runtime.a
+  [stage_prebuild_hexat] building build/hexat from hexa_cc.c + runtime.a
+  [stage_prebuild_hexat] build/hexat =  1944312 bytes
+  stage_build_hexa: HEXA_PREBUILT_RUNTIME set — linking prebuilt: .../build/runtime.a
+  [release_build] PASS — ./hexa built (TARGET=darwin-arm64)
+  RELEASE_BUILD_RC=0   ·   FATAL/error count = 0
+  ./hexa --version → hexa 0.1.0-dispatch
+  artifacts: build/runtime.a 534928 B · build/hexat 1944312 B · hexa 2129800 B (Mach-O arm64)
+
+FINDING (Δ vs baseline)
+  BEFORE: on a `.c=0` checkout with no per-platform edge tarball,
+    stage_resolve_runtime_a → exit 1 ("NO runtime.a available")
+    → release / nobaseline-gate RED on linux-x86_64 + darwin-arm64.
+  AFTER:  the edge-miss branch falls back to restoring the 21 frozen bootstrap
+    seeds from the pinned pre-graduation blob 7906951c0^ and builds runtime.a +
+    build/hexat + ./hexa from source — full release_build PASS, rc=0, with the
+    .hexa-only git state preserved (seeds restored to the WORKING TREE only;
+    `git reset` keeps the index at HEAD; nothing committed). runtime.a is
+    byte-size 534928 B, matching the independently-proven recovery value.
+
+  Seed set = nobaseline-gate $SEEDS minus self/bootstrap_compiler.c (not a
+  runtime.c #include; not needed for runtime.a/hexat). All 21 paths verified to
+  exist as blobs at 7906951c0^ before wiring.
+
+SCOPE / HONEST CAVEATS (g5/g63)
+  - This is a LOCAL re-proof on darwin-arm64 (one of the two RED platforms).
+    linux-x86_64 frozen-seed compile is not re-proven on a Linux host this
+    session (no Linux host reachable; empty pool roster). The recipe is
+    arch-neutral C text + the same shared stage scripts, but a Linux CI run is
+    the authoritative cross-platform confirmation.
+  - CI gate (release + nobaseline-gate green on both platforms) was NOT obtained
+    this session due to an ENVIRONMENT constraint: (a) `gh workflow run` →
+    HTTP 403 (token lacks actions:write), so workflow_dispatch is impossible;
+    (b) nobaseline-gate triggers only on push/PR to main, and a project
+    PreToolUse hook auto-appends `gh pr merge --squash --admin` to `gh pr
+    create`, which would squash-merge the PR into main BEFORE CI verifies it —
+    the exact trap that broke the prior attempt (#2228). The CI-green HALT gate
+    therefore cannot be honored via the available tooling without a human
+    merge-after-CI or hook bypass. P7 milestone is consequently NOT flipped;
+    this verdict records the local end-to-end proof only.
+
+STATUS: 🟢 LOCAL E2E PROVEN (darwin-arm64) · ⏸ CI gate DEFERRED (env constraint — human merge-after-CI required)

@@ -57,13 +57,14 @@ if [ -x "$HEXAT" ]; then
 fi
 
 if [ ! -f "$CC_SRC" ]; then
-  # hexa_cc.c already removed (post-PR2: seeds git-removed at checkout). We can
-  # NOT build build/hexat from source here. Pull a prebuilt build/hexat from the
-  # prior edge tarball (release.yml Package bundles it — the runtime.a "frozen
-  # dough" precedent #2019, extended to the transpiler). With a ready build/hexat
-  # in place, the later `hexa cc --regen` reuses it instead of trying (and
-  # failing) to clang-bootstrap from the now-removed self/runtime.c + hexa_cc.c.
-  echo "[stage_prebuild_hexat] self/native/hexa_cc.c absent — pulling build/hexat from prior edge"
+  # hexa_cc.c removed at graduation (post-#2065: seeds git-removed at checkout).
+  # Prefer a prebuilt build/hexat from the prior edge tarball (release.yml Package
+  # bundles it — the runtime.a "frozen dough" precedent #2019, extended to the
+  # transpiler). If the per-platform edge asset is MISSING (P7 edge-seed
+  # chicken-egg — `edge` ships only hexa-linux-arm64.tar.gz), FALL BACK to
+  # restoring the frozen bootstrap seeds (pinned 7906951c0^) and building hexat
+  # from source, the SAME path the seeds-present branch below runs.
+  echo "[stage_prebuild_hexat] self/native/hexa_cc.c absent — trying prebuilt build/hexat from prior edge"
   ASSET="${EDGE_ASSET:?EDGE_ASSET must be set when seeds are removed}"
   EDGE_DIR="/tmp/edge_hexat"
   rm -rf "$EDGE_DIR"; mkdir -p "$EDGE_DIR"
@@ -78,14 +79,19 @@ if [ ! -f "$CC_SRC" ]; then
       echo "[stage_prebuild_hexat] build/hexat from edge = $(wc -c < "$HEXAT") bytes"
       exit 0
     fi
-    echo "[stage_prebuild_hexat] FATAL: prior edge tarball ($ASSET) has NO build/hexat —" >&2
-    echo "  this edge PREDATES hexat-bundling (release.yml Package cp build/hexat)." >&2
-    echo "  Publish a hexat-bearing edge first (merge PR-A → main → edge release)," >&2
-    echo "  then re-run this faithful gate. (chicken-egg boundary — expected RED.)" >&2
+    echo "[stage_prebuild_hexat] prior edge tarball ($ASSET) has NO build/hexat — frozen-seed fallback" >&2
+  else
+    echo "[stage_prebuild_hexat] edge download failed ($(head -1 /tmp/hexat_dl.err 2>/dev/null)) — frozen-seed fallback" >&2
+  fi
+  # P7 frozen-seed fallback: restore the bootstrap seeds (incl. hexa_cc.c) into
+  # the working tree from 7906951c0^, then fall through to the source build.
+  # stage_resolve_runtime_a (Stage 0b, runs first) usually restores these
+  # already; this makes stage_prebuild_hexat self-sufficient regardless of order.
+  echo "[stage_prebuild_hexat] restoring frozen seeds (7906951c0^) to build hexat from source"
+  if ! bash tool/restore_frozen_seeds || [ ! -f "$CC_SRC" ]; then
+    echo "[stage_prebuild_hexat] FATAL: frozen-seed restore did not produce $CC_SRC" >&2
     exit 1
   fi
-  echo "[stage_prebuild_hexat] FATAL: edge download failed ($(head -1 /tmp/hexat_dl.err 2>/dev/null))" >&2
-  exit 1
 fi
 if [ ! -f "$RA" ]; then
   echo "[stage_prebuild_hexat] FATAL: runtime.a missing at $RA (run Stage 0b first)" >&2

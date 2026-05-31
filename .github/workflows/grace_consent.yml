@@ -16,11 +16,12 @@
 #
 # DEPENDENCIES
 #   git, gh (preinstalled on GitHub-hosted runners), clang, and the
-#   committed self-hosted transpiler `build/hexa_v2_linux` (x86_64 ELF).
-#   We transpile tool/check_grace_consent.hexa → C and link against
-#   self/runtime.c to produce a one-shot consent-checker binary. No
-#   external installs. Mirrors bootstrap.yml Stage 0 (single-TU compile;
-#   the script has zero `use` directives so no module_loader is needed).
+#   committed self-hosted transpiler `build/hexat_linux` (x86_64 ELF).
+#   We transpile tool/check_grace_consent.hexa → C and link against the
+#   prebuilt runtime archive `build/runtime.a` (resolved by the shared
+#   tool/stage_resolve_runtime_a — frozen-seed "frozen dough"; self/runtime.c
+#   was removed at .c-graduation #2065) to produce a one-shot consent-checker
+#   binary. No external installs.
 
 name: grace-consent
 
@@ -50,15 +51,23 @@ jobs:
         run: |
           set -euo pipefail
           # Make the committed transpiler executable (some checkout backends
-          # drop the exec bit) and transpile the single-TU consent checker
-          # to C, then link against the committed runtime.
-          chmod +x build/hexa_v2_linux
+          # drop the exec bit) and transpile the single-TU consent checker to C.
+          chmod +x build/hexat_linux
           mkdir -p build/grace_consent
-          ./build/hexa_v2_linux tool/check_grace_consent.hexa \
+          ./build/hexat_linux tool/check_grace_consent.hexa \
               build/grace_consent/check_grace_consent.c
+          # Resolve the prebuilt runtime archive via the SAME shared stage the
+          # release pipeline uses. self/runtime.c was removed at graduation
+          # (#2065), so stage_resolve_runtime_a restores the frozen seeds
+          # (7906951c0^) and builds build/runtime.a from source (edge-miss
+          # fallback) — no edge tarball needed. Link against that archive.
+          CC=clang LIBS="-ldl -lpthread -lm" \
+            CFLAGS_COMMON="-O2 -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs" \
+            EDGE_ASSET="hexa-linux-x86_64.tar.gz" GH_TOKEN="${{ secrets.GITHUB_TOKEN }}" \
+            bash tool/stage_resolve_runtime_a
           clang -O2 -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs \
               -I self \
-              build/grace_consent/check_grace_consent.c self/runtime.c \
+              build/grace_consent/check_grace_consent.c build/runtime.a \
               -ldl -lpthread -lm \
               -o build/grace_consent/check_grace_consent
           file build/grace_consent/check_grace_consent
