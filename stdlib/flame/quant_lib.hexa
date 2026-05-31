@@ -80,3 +80,62 @@ pub fn nn_int4_quant_bwd(dy: int, mask: int, dW_out: int, Cout: int, rest: int) 
         i = i + 1
     }
 }
+
+// ── Packed int4 storage (real 8× weight-memory reduction vs fp32) ─────────
+//
+//  The fwd path above is FAKE-quant: it keeps W as fp32 and simulates int4
+//  by quantize→dequantize, so a deployed model still pays fp32 storage. For
+//  the AKIDA deployment envelope we PACK two int4 codes per byte → 4 bits per
+//  weight = 8× smaller than fp32, 2× smaller than int8.
+//
+//  Code mapping (REUSES the existing quantize math so byte-identity holds):
+//    signed level  q ∈ {-7..+7}  (same _q_round + clamp as nn_int4_quant_fwd)
+//    nibble code   c = q + zero   with zero = 7   → c ∈ {0..14}  (15 forbidden,
+//                  mirrors -8 being forbidden by AKIDA; never emitted here).
+//  Packing: byte b = packed[i/2]; low nibble = even index, high nibble = odd.
+//    dequant(unpack(pack(W))) == q · scale == nn_int4_quant_fwd's Wq EXACTLY
+//    (pure storage transform — H_877 inference byte-identity).
+//
+//  `scale`/`zero` are scalars chosen by the caller; reuse the per-channel
+//  scale from nn_int4_quant_fwd (s = max|W|/7) and zero = 7 to match fwd.
+
+// quantize one fp32 weight to its 4-bit nibble code c ∈ {0..14}.
+fn _q_code(w: float, scale: float, zero: int) -> int {
+    let r = _q_round(w / scale)
+    let mut q = to_int(r)
+    if q > 7 { q = 7 }
+    if q < 0 - 7 { q = 0 - 7 }
+    return q + zero
+}
+
+// Pack n fp32 weights into ceil(n/2) bytes (2× int4 codes per byte).
+// Caller allocates packed_out with at least (n + 1) / 2 slots (one byte each,
+// stored as float-valued integers in the farr — same storage idiom as qlevel).
+pub fn nn_int4_pack(w: int, packed_out: int, n: int, scale: float, zero: int) {
+    let mut i = 0
+    while i < n {
+        let lo = _q_code(t_get(w, i), scale, zero)
+        let mut byte = lo
+        if i + 1 < n {
+            let hi = _q_code(t_get(w, i + 1), scale, zero)
+            byte = byte | (hi << 4)
+        }
+        t_set(packed_out, i / 2, to_float(byte))
+        i = i + 2
+    }
+}
+
+// Unpack n int4 codes from ceil(n/2) bytes → fp32 (dequantize). Reproduces
+// the EXACT fp32 value nn_int4_quant_fwd's Wq holds (q · scale).
+// Caller allocates w_fp32_out [n].
+pub fn nn_int4_unpack(packed: int, w_fp32_out: int, n: int, scale: float, zero: int) {
+    let mut i = 0
+    while i < n {
+        let byte = to_int(t_get(packed, i / 2))
+        let mut code = byte & 15
+        if (i & 1) == 1 { code = (byte >> 4) & 15 }
+        let q = code - zero
+        t_set(w_fp32_out, i, to_float(q) * scale)
+        i = i + 1
+    }
+}
