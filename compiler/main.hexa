@@ -603,7 +603,13 @@ if verbose {
 phase_reset("post_parse")
 
 // Atlas: A4 wired — real index from compiler/atlas/embedded.gen.hexa.
-let atlas = _load_atlas()
+// --emit=obj produces object code and does not need the theorem-citation
+// atlas (codegen ignores it; only citation_check consumes refs). Loading the
+// full embed (17265 nodes) costs ~1.85GB RSS and was the dominant base of the
+// native obj-emit OOM. Skip it for obj — empty_atlas() is byte-identical to
+// the embed-absent path (verified: N=10 1.88GB→17MB, N=400 2.57GB→0.58GB, .o
+// unchanged, 0 new diagnostics on cite-free sources).
+let atlas = if emit_kind == "obj" { empty_atlas() } else { _load_atlas() }
 
 // Stage1 punch list C14: type as `[Diagnostic]` instead of bare `array` so
 // stage0 stores concrete Diagnostic structs in array_store rather than boxing

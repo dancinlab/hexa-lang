@@ -253,6 +253,15 @@ pub fn static_atlas() -> AtlasIndex {
 
 // _bucket_by_kind — partition a flat [AtlasNode] into the 9 per-kind
 // arrays expected by AtlasIndex. Used by the HXC-sidecar fast path.
+// Empty atlas index (zero nodes) — identical to what static_atlas() serves
+// when the embed is absent. Used by --emit=obj, which produces object code
+// and does NOT need the theorem-citation atlas; loading the full embed
+// (17265 nodes) cost ~1.85GB RSS and dominated the native obj-emit OOM.
+pub fn empty_atlas() -> AtlasIndex {
+    let empty: array = []
+    return _bucket_by_kind(empty)
+}
+
 fn _bucket_by_kind(nodes: array) -> AtlasIndex {
     let mut p_nodes = []
     let mut c_nodes = []
