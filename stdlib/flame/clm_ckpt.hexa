@@ -1,0 +1,163 @@
+// ════════════════════════════════════════════════════════════════════════════
+//  clm_ckpt.hexa — .clm checkpoint export/import (PR2 of CLM_PROD_TRAINER_PLAN).
+//
+//  Serializes the CLMConvMoE int4-QAT weights to the anima `.clm` format
+//  (anima:CLM/CLM_FORMAT_SPEC.md §2/§3): per-block int4-sym packed nibbles +
+//  per-output-channel qat_scale (fp32 little-endian), behind a "CLM\x01" magic,
+//  with a whole-file sha256 manifest. Round-trips through write_bytes /
+//  read_file_bytes; floats via the f32_to_bytes_le / bytes_to_f32_le builtins.
+//
+//  Layout (this PR — int4 inference track, the .clm.i 2-track member):
+//    [MAGIC "CLM\x01"] [nblocks u8]
+//    per block: [Cout u32-le][rest u32-le]
+//               [int4 nibbles: ceil(Cout*rest/2) bytes, (q+8) packed 2/byte]
+//               [qat_scale: Cout * 4 bytes fp32-le]
+//    (fp16 shadow track + HEADER/MANIFEST json are layered in a later PR.)
+//
+//  F-CLM-CKPT-ROUNDTRIP: save→load reproduces every block byte-identically —
+//  int4 codes exact (integer) and qat_scale identical at fp32 (f32 byte-equal).
+//  Since loaded (wq, scale) == saved, the dequantized weights and hence the
+//  logits are reproduced (determinism); the gate asserts the (wq, scale) pair.
+// ════════════════════════════════════════════════════════════════════════════
+
+use "stdlib/flame/tensor_lib"
+use "stdlib/flame/quant_lib"
+
+// int4-sym quant: w -> codes (qlevel in [-7,7]) + per-channel scale. The
+// dequantized fake-quant weight (wq_out = code*scale) is a discarded temp here;
+// the checkpoint stores the integer codes + scale (dequant = code*scale on load).
+fn _quant(w: int, codes: int, scale: int, cout: int, rest: int) {
+    let wq = t_zeros(cout * rest); let mask = t_zeros(cout * rest)
+    nn_int4_quant_fwd(w, wq, scale, codes, mask, cout, rest)
+}
+
+fn _push_u32(buf, n: int) {
+    buf.push(n & 0xFF); buf.push((n / 0x100) & 0xFF)
+    buf.push((n / 0x10000) & 0xFF); buf.push((n / 0x1000000) & 0xFF)
+}
+fn _rd_u32(rb, off: int) -> int {
+    return rb[off] + rb[off+1]*0x100 + rb[off+2]*0x10000 + rb[off+3]*0x1000000
+}
+fn _push_f32(buf, f: float) {
+    let b = f32_to_bytes_le(f)
+    let mut i = 0
+    while i < 4 { buf.push(b[i]); i = i + 1 }
+}
+
+// Append one block: dims + int4 nibbles (q+8 packed 2/byte) + fp32-le scales.
+fn save_block(buf, wq: int, scale: int, cout: int, rest: int) {
+    _push_u32(buf, cout); _push_u32(buf, rest)
+    let n = cout * rest
+    let mut i = 0
+    while i < n {
+        let lo = (to_int(t_get(wq, i)) + 8) & 0xF
+        let mut hi = 8
+        if i + 1 < n { hi = (to_int(t_get(wq, i + 1)) + 8) & 0xF }
+        buf.push(lo + hi * 16)
+        i = i + 2
+    }
+    let mut c = 0
+    while c < cout { _push_f32(buf, t_get(scale, c)); c = c + 1 }
+}
+
+// Parse one block from rb starting at off; fill wq_out/scale_out; return new off.
+fn load_block(rb, off: int, wq_out: int, scale_out: int) -> int {
+    let cout = _rd_u32(rb, off); off = off + 4
+    let rest = _rd_u32(rb, off); off = off + 4
+    let n = cout * rest
+    let mut i = 0
+    while i < n {
+        let byte = rb[off]; off = off + 1
+        t_set(wq_out, i, to_float((byte & 0xF) - 8))
+        if i + 1 < n { t_set(wq_out, i + 1, to_float(((byte / 16) & 0xF) - 8)) }
+        i = i + 2
+    }
+    let mut c = 0
+    while c < cout {
+        t_set(scale_out, c, bytes_to_f32_le(rb, off)); off = off + 4; c = c + 1
+    }
+    return off
+}
+
+// Block-equal: int4 codes exact + scale fp32 byte-identical.
+fn block_eq(wqA: int, scA: int, wqB: int, scB: int, cout: int, rest: int) -> int {
+    let n = cout * rest
+    let mut i = 0
+    while i < n {
+        if t_get(wqA, i) != t_get(wqB, i) { return 0 }
+        i = i + 1
+    }
+    let mut c = 0
+    while c < cout {
+        let a = f32_to_bytes_le(t_get(scA, c))
+        let b = f32_to_bytes_le(t_get(scB, c))
+        let mut k = 0
+        while k < 4 { if a[k] != b[k] { return 0 }; k = k + 1 }
+        c = c + 1
+    }
+    return 1
+}
+
+fn main() {
+    println("clm_ckpt — .clm checkpoint export/import (PR2)")
+    let d = 8; let E = 2; let V = 256; let K = 3
+    let dd = d * d * K; let ed = E * d; let vd = V * d
+    let nblocks = 6
+
+    // 6 CLMConvMoE conv weights (LCG init = stand-in for trained weights;
+    // round-trip is weight-agnostic). couts/rests mirror clm_qat/clm_prod.
+    let ecW=t_zeros(dd); t_fill_lcg(ecW, dd, 2, 0.2)
+    let tcW=t_zeros(dd); t_fill_lcg(tcW, dd, 4, 0.2)
+    let e0W=t_zeros(dd); t_fill_lcg(e0W, dd, 14, 0.2)
+    let e1W=t_zeros(dd); t_fill_lcg(e1W, dd, 16, 0.2)
+    let rW=t_zeros(ed);  t_fill_lcg(rW, ed, 12, 0.2)
+    let roW=t_zeros(vd); t_fill_lcg(roW, vd, 20, 0.2)
+    let Ws    = [ecW, tcW, e0W, e1W, rW, roW]
+    let couts = [d, d, d, d, E, V]
+    let rests = [d*K, d*K, d*K, d*K, d, d]
+
+    // quantize each block → wq + scale (kept for the post-load comparison)
+    let WQ = []; let SC = []
+    let mut bi = 0
+    while bi < nblocks {
+        let cout = couts[bi]; let rest = rests[bi]
+        let wq = t_zeros(cout * rest); let sc = t_zeros(cout)
+        _quant(Ws[bi], wq, sc, cout, rest)
+        WQ.push(wq); SC.push(sc)
+        bi = bi + 1
+    }
+
+    // ---- SAVE: assemble .clm buffer ----
+    let buf = []
+    buf.push(67); buf.push(76); buf.push(77); buf.push(1)   // MAGIC "CLM\x01"
+    buf.push(nblocks)
+    let mut si = 0
+    while si < nblocks { save_block(buf, WQ[si], SC[si], couts[si], rests[si]); si = si + 1 }
+    let path = "/tmp/clm_ckpt_smoke.clm"
+    write_bytes(path, buf)
+    print("  wrote "); print(path); print("  ("); print(len(buf)); println(" bytes)")
+
+    // ---- LOAD: parse back ----
+    let rb = read_file_bytes(path)
+    if rb[0] != 67 { println("F-CLM-CKPT-ROUNDTRIP = 0"); println("FAIL — bad magic"); return }
+    let rblocks = rb[4]
+    let mut off = 5
+    let mut allok = 1
+    let mut li = 0
+    while li < rblocks {
+        let cout = couts[li]; let rest = rests[li]
+        let wq2 = t_zeros(cout * rest); let sc2 = t_zeros(cout)
+        off = load_block(rb, off, wq2, sc2)
+        if block_eq(WQ[li], SC[li], wq2, sc2, cout, rest) == 0 { allok = 0 }
+        li = li + 1
+    }
+
+    print("  reload blocks="); print(rblocks); print("/"); println(nblocks)
+    if allok == 1 && rblocks == nblocks {
+        println("F-CLM-CKPT-ROUNDTRIP = 1")
+        println("PASS — .clm save->load reproduces int4 codes + qat_scale byte-identically")
+        return
+    }
+    println("F-CLM-CKPT-ROUNDTRIP = 0")
+    println("FAIL")
+}
