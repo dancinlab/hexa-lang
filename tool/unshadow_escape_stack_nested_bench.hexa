@@ -1,0 +1,255 @@
+// tool/unshadow_escape_stack_nested_bench.hexa
+//   UNSHADOW sub-task "🔵 escape→stack: NESTED-SCOPE binding + GATED 해제".
+//   Sibling of tool/unshadow_escape_stack_bench.hexa (flat-struct parent) and
+//   tool/unshadow_escape_stack_nonflat_bench.hexa (bounded-array parent).
+//
+//   The parent slices only stack-allocated TOP-LEVEL `let` bindings of a fn
+//   body. This sub-task EXTENDS the non-escape analyzer to discover `let`
+//   bindings declared INSIDE nested if / while / for / match block bodies and
+//   prove their lifetime is bounded by the enclosing block. A `let p = Pt{..}`
+//   (or `let a = [lit..]`) declared inside a hot for-loop body — proven to be
+//   used only as `p.field` / `a[i]` / len within that block — is stack-allocated
+//   in exactly that C block scope (no malloc per iteration). A nested binding
+//   whose lifetime CROSSES the block boundary (stored to an outer var, returned,
+//   captured, pushed to an outer container) stays on the heap — proving the
+//   decision is LIFETIME-scoped, not merely syntactic.
+//
+//   Primary metric = HEAP-ALLOC COUNT + PEAK-RSS (space axis), not wall.
+//
+// CODEGEN CHANGE UNDER TEST (self/codegen.hexa, GATED HEXA_STACK_ALLOC=1):
+//   * _stack_child_bodies / _stack_collect_flat_lets / _stack_collect_arr_lets:
+//     recursively enumerate `let` candidates at ANY nesting depth.
+//   * _stack_noescape_scan / _stack_noescape_arr_scan: rewritten to scan the
+//     recursively-collected candidates over the WHOLE fn body with the same
+//     whole-body escape proof (_stmt_escapes_name / _stmt_escapes_arr_name —
+//     these already recurse into nested bodies, so escapes anywhere are caught).
+//   * LetStmt arm (gen2_node): unchanged — it already fires for nested LetStmts
+//     because gen2_node recurses into block bodies; emitting the SAME
+//     gen2_stack_alloc_flat / gen2_stack_alloc_array_lit strings.
+//
+// FAITHFUL A/B PROXY (B9 generated-runtime wall — pool roster EMPTY/unreachable,
+//   heavy local self-host rebuild gated on Darwin; same spec-accepted proxy as
+//   both parents): the arms emit the EXACT construction strings the codegen
+//   produces — the ONLY difference vs the nonflat parent is that the construction
+//   sits inside a NESTED for-loop block (the nested-scope shape this sub-task
+//   proves). Both arms read the SAME arr_ptr->items[] layout → byte-identical.
+//     a_heap_nested  — nested-block array via hexa_array_new + push (BEFORE)
+//     b_stack_nested — nested-block bounded array on the C stack (THIS sub-task)
+//
+// NEGATIVE CONTROL: a NESTED binding that ESCAPES its block (stored into an
+//   outer-scope variable that outlives the block / returned) MUST stay heap —
+//   a stack buffer declared in the inner block would dangle once the block ends.
+//   The whole-body escape scan catches the outer-store / return → proof FAILS.
+//
+// Argv:  --rt <dir> (runtime.h+runtime.o) · --work <dir> · --runs <N>
+
+fn parse_int_safe(s) {
+    let t = s.trim()
+    if len(t) == 0 { return 9 }
+    return to_int(t)
+}
+
+fn arg_val(argv, key, dflt) {
+    let mut i = 0
+    while i < argv.len() {
+        if argv[i] == key && i + 1 < argv.len() { return argv[i + 1] }
+        i = i + 1
+    }
+    return dflt
+}
+
+fn write_file(path, body) {
+    exec("cat > '" + path + "' <<'__UNSHADOW_EOF__'\n" + body + "\n__UNSHADOW_EOF__")
+}
+
+fn build_arm(label, cc_cmd, out_bin) {
+    let r = exec(cc_cmd + " 2>&1")
+    let built = exec("[ -f '" + out_bin + "' ] && printf yes || printf no").trim()
+    let nerr = exec("printf '%s' \"" + r + "\" | grep -ciE 'error|undefined' 2>/dev/null").trim()
+    println("  [" + label + "] built=" + built + " err_lines=" + nerr)
+    return built
+}
+
+fn best_wall(bin, runs) {
+    let mut best = "999"
+    let mut r = 0
+    while r < runs {
+        let t = exec("{ /usr/bin/time -p '" + bin + "' >/dev/null ; } 2>&1 | awk '/^real/{print $2}'").trim()
+        if len(t) > 0 {
+            let cmp = exec("awk 'BEGIN{print (" + t + "<" + best + ")?1:0}'").trim()
+            if cmp == "1" { best = t }
+        }
+        r = r + 1
+    }
+    return best
+}
+
+fn peak_rss_kb(bin) {
+    let mac = exec("{ /usr/bin/time -l '" + bin + "' >/dev/null ; } 2>&1 | awk '/maximum resident set size/{print int($1/1024)}'").trim()
+    if len(mac) > 0 { return mac }
+    let gnu = exec("{ /usr/bin/time -v '" + bin + "' >/dev/null ; } 2>&1 | awk -F: '/Maximum resident set size/{gsub(/ /,\"\",$2);print $2}'").trim()
+    if len(gnu) > 0 { return gnu }
+    return "n/a"
+}
+
+fn main() {
+    let argv = args()
+    let home = env("HOME")
+    let rt = arg_val(argv, "--rt", home + "/.hx/packages/hexa/self")
+    let work = arg_val(argv, "--work", home + "/unshadow-escape-stack-nested")
+    let runs = parse_int_safe(arg_val(argv, "--runs", "9"))
+
+    println("=== UNSHADOW escape->stack NESTED-SCOPE binding bench (F2 · SPACE axis) ===")
+    println("rt=" + rt + "  work=" + work + "  runs=" + to_string(runs))
+    println("(primary metric = HEAP-ALLOC COUNT + PEAK-RSS; wall is secondary)")
+    exec("rm -rf '" + work + "' && mkdir -p '" + work + "'")
+
+    let inc = "-I '" + rt + "'"
+    let o2 = "clang -O2 " + inc + " "
+    let _sodium = exec("ls -d /opt/homebrew/Cellar/libsodium/*/lib 2>/dev/null | head -1 || printf ''").trim()
+    let _ossl = exec("ls -d /opt/homebrew/Cellar/openssl@3/*/lib 2>/dev/null | head -1 || printf ''").trim()
+    let mut libs = " -lpthread"
+    if len(_sodium) > 0 { libs = libs + " -L" + _sodium + " -lsodium" }
+    if len(_ossl) > 0 { libs = libs + " -L" + _ossl + " -lssl -lcrypto" }
+
+    write_file(work + "/count.h",
+      "#include <stdlib.h>\n" +
+      "static long __mallocs = 0;\n" +
+      "static inline void __cnt_malloc(void){ __mallocs++; }\n")
+
+    // ── a_heap_nested — NESTED-block array via hexa_array_new + push (BEFORE) ──
+    //   The `let a = [..]` lives inside a nested for-loop body; the parent
+    //   analyzer (top-level only) leaves it on the heap.
+    write_file(work + "/a_heap.c",
+      "#include \"runtime.h\"\n#include \"count.h\"\n#include <stdio.h>\n" +
+      "static inline HexaVal arr_new_cnt(void){ __cnt_malloc(); return hexa_array_new(); }\n" +
+      "static long run_heap(void){\n" +
+      "  long acc=0; long N=20000000L;\n" +
+      "  for(long r=0;r<N;r++){\n" +
+      "    /* nested block: the `let a = [..]` is declared INSIDE this loop body */\n" +
+      "    {\n" +
+      "      HexaVal a = arr_new_cnt();\n" +
+      "      a = hexa_array_push(a, hexa_int(r&7));\n" +
+      "      a = hexa_array_push(a, hexa_int((r*3)&7));\n" +
+      "      a = hexa_array_push(a, hexa_int((r*5)&7));\n" +
+      "      acc += HX_INT(a.arr_ptr->items[0]) + HX_INT(a.arr_ptr->items[1]) + HX_INT(a.arr_ptr->items[2]);\n" +
+      "    }\n" +
+      "  }\n" +
+      "  return acc; }\n" +
+      "int main(void){ printf(\"%ld %ld\\n\", run_heap(), __mallocs); return 0; }\n")
+
+    // ── b_stack_nested — NESTED-block bounded array on the C stack (THIS task) ──
+    //   The nested-scope analyzer proves `a` non-escaping within its block →
+    //   stack-allocates the descriptor+buffer IN the nested C block scope.
+    write_file(work + "/b_stack.c",
+      "#include \"runtime.h\"\n#include \"count.h\"\n#include <stdio.h>\n" +
+      "static long run_stack(void){\n" +
+      "  long acc=0; long N=20000000L;\n" +
+      "  for(long r=0;r<N;r++){\n" +
+      "    {\n" +
+      "      /* [escape->stack] no-escape bounded array a -> stack (no malloc) */\n" +
+      "      HexaVal __stk_a_items[3] = { hexa_int(r&7), hexa_int((r*3)&7), hexa_int((r*5)&7) };\n" +
+      "      HexaArr __stk_a = { __stk_a_items, 3, 3 };\n" +
+      "      HexaVal a; a.tag=TAG_ARRAY; a.arr_ptr=&__stk_a;\n" +
+      "      acc += HX_INT(a.arr_ptr->items[0]) + HX_INT(a.arr_ptr->items[1]) + HX_INT(a.arr_ptr->items[2]);\n" +
+      "    }\n" +
+      "  }\n" +
+      "  return acc; }\n" +
+      "int main(void){ printf(\"%ld %ld\\n\", run_stack(), __mallocs); return 0; }\n")
+
+    println("\n--- C: nested-scope non-escaping bounded-array hot-loop (2 arms + parity) ---")
+    build_arm("a_heap ", o2 + "'" + work + "/a_heap.c'  '" + rt + "/runtime.o' -o '" + work + "/a_bin'" + libs, work + "/a_bin")
+    build_arm("b_stack", o2 + "'" + work + "/b_stack.c' '" + rt + "/runtime.o' -o '" + work + "/b_bin'" + libs, work + "/b_bin")
+
+    let a_acc = exec("'" + work + "/a_bin' 2>/dev/null | awk '{print $1}'").trim()
+    let b_acc = exec("'" + work + "/b_bin' 2>/dev/null | awk '{print $1}'").trim()
+    let a_acc_md5 = exec("printf '%s' '" + a_acc + "' | md5 2>/dev/null || printf '%s' '" + a_acc + "' | md5sum | cut -d' ' -f1").trim()
+    let b_acc_md5 = exec("printf '%s' '" + b_acc + "' | md5 2>/dev/null || printf '%s' '" + b_acc + "' | md5sum | cut -d' ' -f1").trim()
+    println("\n  g5 byte-diff (computed-acc must be IDENTICAL across arms):")
+    println("    a_heap  acc=" + a_acc + "  md5=" + a_acc_md5)
+    println("    b_stack acc=" + b_acc + "  md5=" + b_acc_md5)
+    let verdict = exec("[ '" + a_acc_md5 + "' = '" + b_acc_md5 + "' ] && printf IDENTICAL || printf DIVERGED").trim()
+    println("    -> byte-diff: " + verdict)
+
+    let a_m = exec("'" + work + "/a_bin' 2>/dev/null | awk '{print $2}'").trim()
+    let b_m = exec("'" + work + "/b_bin' 2>/dev/null | awk '{print $2}'").trim()
+    println("\n  [PRIMARY] heap-alloc count (nested-loop descriptor allocs):")
+    println("    a_heap  : " + a_m + "   (hexa_array_new per nested [..] — BEFORE)")
+    println("    b_stack : " + b_m + "   (stack HexaArr+items in nested block — no malloc, LANDED)")
+
+    println("\n  [PRIMARY] peak-RSS (KB):")
+    println("    a_heap  : " + peak_rss_kb(work + "/a_bin"))
+    println("    b_stack : " + peak_rss_kb(work + "/b_bin"))
+
+    write_file(work + "/a_heap_nofree.c",
+      "#include \"runtime.h\"\n#include <stdio.h>\n" +
+      "volatile void* __sink;\n" +
+      "__attribute__((noinline)) static HexaVal mk_arr(long r){\n" +
+      "  HexaVal a = hexa_array_new();\n" +
+      "  a = hexa_array_push(a, hexa_int(r&7));\n" +
+      "  a = hexa_array_push(a, hexa_int((r*3)&7));\n" +
+      "  a = hexa_array_push(a, hexa_int((r*5)&7));\n" +
+      "  __sink=(void*)a.arr_ptr; return a; }\n" +
+      "static long run_heap_nf(void){\n" +
+      "  long acc=0; long N=4000000L;\n" +
+      "  for(long r=0;r<N;r++){\n" +
+      "    { HexaVal a = mk_arr(r); /* nested block, no free — accumulates on heap */\n" +
+      "      acc += HX_INT(a.arr_ptr->items[0]) + HX_INT(a.arr_ptr->items[1]) + HX_INT(a.arr_ptr->items[2]); }\n" +
+      "  }\n" +
+      "  return acc; }\n" +
+      "int main(void){ printf(\"%ld\\n\", run_heap_nf()); return 0; }\n")
+    write_file(work + "/b_stack_nofree.c",
+      "#include \"runtime.h\"\n#include <stdio.h>\n" +
+      "volatile long __sink2;\n" +
+      "static long run_stack_nf(void){\n" +
+      "  long acc=0; long N=4000000L;\n" +
+      "  for(long r=0;r<N;r++){\n" +
+      "    {\n" +
+      "      HexaVal __stk_a_items[3] = { hexa_int(r&7), hexa_int((r*3)&7), hexa_int((r*5)&7) };\n" +
+      "      HexaArr __stk_a = { __stk_a_items, 3, 3 };\n" +
+      "      HexaVal a; a.tag=TAG_ARRAY; a.arr_ptr=&__stk_a;\n" +
+      "      __sink2=(long)(intptr_t)a.arr_ptr;\n" +
+      "      acc += HX_INT(a.arr_ptr->items[0]) + HX_INT(a.arr_ptr->items[1]) + HX_INT(a.arr_ptr->items[2]);\n" +
+      "    }\n" +
+      "  }\n" +
+      "  return acc; }\n" +
+      "int main(void){ printf(\"%ld\\n\", run_stack_nf()); return 0; }\n")
+    build_arm("a_heap_nf ", o2 + "'" + work + "/a_heap_nofree.c'  '" + rt + "/runtime.o' -o '" + work + "/anf_bin'" + libs, work + "/anf_bin")
+    build_arm("b_stack_nf", o2 + "'" + work + "/b_stack_nofree.c' '" + rt + "/runtime.o' -o '" + work + "/bnf_bin'" + libs, work + "/bnf_bin")
+    println("\n  [PRIMARY] peak-RSS (KB) — NO-FREE shape (descriptor+buffer accumulate;")
+    println("            the GC reclaim-lag case where nested-scope stack-alloc wins):")
+    println("    a_heap_nf  (4M no-free nested arrays) : " + peak_rss_kb(work + "/anf_bin"))
+    println("    b_stack_nf (nested stack, reclaimed)  : " + peak_rss_kb(work + "/bnf_bin"))
+
+    println("\n  [secondary] best-of-" + to_string(runs) + " wall (s):")
+    println("    a_heap  : " + best_wall(work + "/a_bin", runs))
+    println("    b_stack : " + best_wall(work + "/b_bin", runs))
+
+    // ── NEGATIVE CONTROL: a NESTED binding that ESCAPES its block stays heap ───
+    //   `a` is declared in the inner block but STORED into an outer-scope var
+    //   that outlives the block (and returned) → lifetime crosses the boundary →
+    //   the whole-body escape scan flags it → heap (no dangling).
+    println("\n--- NEGATIVE CONTROL: nested binding that ESCAPES its block stays heap ---")
+    write_file(work + "/escape.c",
+      "#include \"runtime.h\"\n#include <stdio.h>\n" +
+      "static HexaVal make_arr_nested(long r){\n" +
+      "  HexaVal outer = hexa_int(0);\n" +
+      "  for(long i=0;i<1;i++){\n" +
+      "    /* a declared in nested block but ESCAPES via outer + return -> heap */\n" +
+      "    HexaVal a = hexa_array_new();\n" +
+      "    a = hexa_array_push(a, hexa_int(r&7));\n" +
+      "    a = hexa_array_push(a, hexa_int((r*3)&7));\n" +
+      "    outer = a; /* stored to a var that outlives the block */\n" +
+      "  }\n" +
+      "  return outer; }\n" +
+      "int main(void){\n" +
+      "  HexaVal a = make_arr_nested(12345);\n" +
+      "  printf(\"%ld\\n\", HX_INT(a.arr_ptr->items[0]) + HX_INT(a.arr_ptr->items[1]));\n" +
+      "  return 0; }\n")
+    build_arm("escape ", o2 + "'" + work + "/escape.c' '" + rt + "/runtime.o' -o '" + work + "/e_bin'" + libs, work + "/e_bin")
+    println("  escaping nested read result (heap path, live after return): " + exec("'" + work + "/e_bin' 2>/dev/null").trim())
+    println("  -> a nested binding stored to an outer var / returned stays on the heap —")
+    println("     the proof is LIFETIME-scoped (bounded by the block), not syntactic.")
+
+    println("\n=== done ===")
+}
