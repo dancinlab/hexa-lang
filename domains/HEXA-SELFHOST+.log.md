@@ -24,3 +24,16 @@ drafts/SESSION-HANDOFF-hexa-cc-native.md 참고. 타세션 결과(#2270 N6 phase
 - 다음-칸 셀렉터: 회전 이력 박제(3 codegen honest-STOP) → 현재 칸 BUILDFLOOR M1
   (.sh fix, codegen 벽 無, agent 진행 중)이 유일 grounded.
 - 메타 milestone 2개([~]): 공통-벽 카탈로그 · 다음-칸 셀렉터 진전.
+
+## 2026-05-31 공통-벽 카탈로그 완성 — N5 type-checker + 재빌드 게이트 흡수 (#2271 누락분)
+
+#2271 이 다음-칸 셀렉터만 갱신하고 공통-벽 카탈로그 Edit 가 string-mismatch 로 누락됨.
+이 커밋이 마저 채움 — CC-NATIVE 핸드오프(drafts/SESSION-HANDOFF-hexa-cc-native.md) 흡수 완료.
+
+- 카탈로그 (4) native backend IO-floor / type-checker: native codegen print/stdout 미지원
+  + native type-checker 150 FATAL(HX2001/HX3001/HX2003/HX0011 = HexaVal carrier 갭, types.hexa)
+  = CC-NATIVE N5 frontier(#2270·STEP0 BLOCKED).
+- 카탈로그 (5) aprime_cc 재빌드 = pool/darwin sign 게이트: linux 빌드 실패(build_aprime.sh
+  -arch arm64 하드코딩 + hxlcl_* darwin-shim 미배선), darwin 은 사용자 sign 게이트.
+- 수렴: (1)·(4) 같은 뿌리(codegen emit 단) → 3-자식 동시 차단. 레버 = emit 단 1회 개방.
+- 카탈로그 [~] 진전. CC-NATIVE 타세션 중복 진행 → 이 메타로 일원화 완료.
