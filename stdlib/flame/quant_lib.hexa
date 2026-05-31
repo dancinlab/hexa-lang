@@ -1,0 +1,82 @@
+// ════════════════════════════════════════════════════════════════════════════
+//  quant_lib.hexa — flame int4-sym[-7,+7] per-output-channel STE fake-quant.
+//
+//  Op 4/4 (final) of the CLM-ConvMoE flame port (FLAME.tape
+//  n_clm_convmoe_port_gap · anima a_train_flame_forge · CLM/P6_SCALE_LADDER_7B
+//  · P0 §9 QAT envelope). Quantization-aware-training fake-quant: forward
+//  quantizes weights to the AKIDA int4 envelope, backward uses the
+//  straight-through estimator (clipped).
+//
+//    weight layout : [Cout · rest]  (rest = Cin·K for conv, Cin for linear)
+//    per-output-channel symmetric scale  s[co] = max_j|W[co,j]| / 7   (s>0;
+//      all-zero channel -> s=1 sentinel). 15 levels: q ∈ {-7..+7}; -8 is
+//      FORBIDDEN (AKIDA NSoC rejects -8 — P0 §9).
+//    fwd:  q   = clamp(round(W/s), -7, +7)            (integer level)
+//          Wq  = q · s                                (dequantized weight)
+//    bwd (clipped STE):  dW = dY · 1[|round(W/s)| ≤ 7]   (pass-through inside
+//          the representable range, 0 where clamped).
+//
+//  NOTE — NOT GRAD-EXACT: round() is piecewise-constant so the TRUE gradient
+//  is 0 a.e.; STE is a deliberate surrogate (P0 §9). Verified instead by
+//  RANGE · DEQUANT-ERR · ZERO · STE-MASK · PER-CHANNEL · DET (flame_quant_test).
+//  lib-split. sibling: conv_lib · gn_lib · moe_lib · tensor_lib.
+// ════════════════════════════════════════════════════════════════════════════
+
+use "stdlib/flame/tensor_lib"
+
+fn _q_abs(x: float) -> float {
+    if x < 0.0 { return 0.0 - x }
+    return x
+}
+
+// symmetric round-half-away-from-zero, returned as float (integer-valued).
+fn _q_round(x: float) -> float {
+    if x >= 0.0 { return to_float(to_int(x + 0.5)) }
+    return 0.0 - to_float(to_int((0.0 - x) + 0.5))
+}
+
+// Forward fake-quant. Caller allocates wq_out [Cout·rest], scale_out [Cout],
+// qlevel_out [Cout·rest] (integer levels as float), mask_out [Cout·rest]
+// (clipped-STE mask: 1.0 in-range else 0.0).
+pub fn nn_int4_quant_fwd(w: int, wq_out: int, scale_out: int,
+                         qlevel_out: int, mask_out: int,
+                         Cout: int, rest: int) {
+    let mut co = 0
+    while co < Cout {
+        // per-channel max|W|
+        let mut mx = 0.0
+        let mut j = 0
+        while j < rest {
+            let a = _q_abs(t_get(w, co * rest + j))
+            if a > mx { mx = a }
+            j = j + 1
+        }
+        let s = if mx > 0.0 { mx / 7.0 } else { 1.0 }
+        t_set(scale_out, co, s)
+        let mut j2 = 0
+        while j2 < rest {
+            let idx = co * rest + j2
+            let r = _q_round(t_get(w, idx) / s)
+            // clamp to [-7, +7]; track whether clamped (mask)
+            let mut q = r
+            let mut inrange = 1.0
+            if q > 7.0 { q = 7.0; inrange = 0.0 }
+            if q < 0.0 - 7.0 { q = 0.0 - 7.0; inrange = 0.0 }
+            t_set(qlevel_out, idx, q)
+            t_set(mask_out, idx, inrange)
+            t_set(wq_out, idx, q * s)
+            j2 = j2 + 1
+        }
+        co = co + 1
+    }
+}
+
+// Backward (clipped straight-through estimator). dW = dY · mask.
+// Caller allocates dW_out [Cout·rest].
+pub fn nn_int4_quant_bwd(dy: int, mask: int, dW_out: int, Cout: int, rest: int) {
+    let mut i = 0
+    while i < Cout * rest {
+        t_set(dW_out, i, t_get(dy, i) * t_get(mask, i))
+        i = i + 1
+    }
+}
