@@ -1,0 +1,83 @@
+F-HEXA-CC-NATIVE-N0-FRONTIER — C-intermediate inventory of the native build path
+================================================================================
+date:   2026-05-31
+host:   darwin-arm64 (mini)
+method: static read of tool/build_hexac.hexa (native build driver) + self/main.hexa
+        (cmd_build dispatch) + compiler/main.hexa (emit=obj native write site) +
+        compiler/emit/macho_arm64.hexa + compiler/link/hexa_ld.hexa +
+        compiler/test/macho_p0_corpus/ + .verdicts/. READ-ONLY (no build run).
+
+SCOPE
+  N0 = measure WHERE the native build path still produces C intermediates
+  (.c/.o/.a) or shells external toolchain (clang/as/ld/ar), to fix the frontier
+  before N>0 removes them.
+
+KEY FINDING — far more native capability already exists than the milestone draft assumed
+  hexa's native backend ALREADY emits Mach-O .o directly with ZERO external
+  forks. The remaining C/toolchain surface is the LINK step only.
+
+  1. `--emit=obj --backend=native --target=arm64-apple-darwin`
+     (compiler/main.hexa:882) writes the Mach-O .o via pack_lir + serialize from
+     compiler/emit/macho_arm64.hexa (1904 L, "IMPLEMENTED P0"). Object code with
+     NO .s->clang-as round-trip, NO clang/as fork.
+     Proven: F-P3-ZERO-EXTERN (build with PATH stripped of clang/as/ld -> valid
+     .o still produced = 0 forks) + F-P0-OBJEQ corpus (native .o byte-checked
+     against `clang -c` oracle: trivial/if/while/fib).
+  2. `--emit=exec` self-link EXISTS but is INCOMPLETE: its built-in ld (hexa_ld)
+     links only the user .o — no runtime.o, no crt — so any program touching a
+     runtime builtin fails "symbol(s) not found" (self/main.hexa:2644). This is
+     the SOLE blocking frontier for a clang-0 executable.
+  3. compiler/link/hexa_ld.hexa v1.7 has pub link()/link_elf()/link_mach_o()/
+     link_shared()/link_incremental() — the linker engine exists; it is not yet
+     wired to pull in the native runtime + startup at exec-link time.
+
+CURRENT DEFAULT BUILD PATH (tool/build_hexac.hexa, 4 stages) — what ships today
+  [1/4] flatten compiler/main.hexa -> flat.hexa          (no C)
+  [2/4] aprime_cc --emit=asm       -> flat.s             (native codegen; asm text, no C)
+  [3/4] write shim.c (list_dir/mono_ns bridge)           <- C INTERMEDIATE #1
+  [4/4] clang assemble+link: flat.s + shim.c + runtime.c -> hexac
+                                                          <- clang as+ld + .o + runtime.c(/.a)
+  i.e. the SHIPPING driver still uses --emit=asm + clang, NOT the native
+  --emit=obj path. The native obj/exec path is opt-in (HEXA_BACKEND=native) and
+  not yet the build_hexac default.
+
+C-INTERMEDIATE / EXTERNAL-TOOLCHAIN INVENTORY (targets for N>0)
+  C1. shim.c (Stage 3) — 3-symbol C bridge (list_dir, mono_ns). -> emit natively.
+  C2. self/runtime.c -> clang-compiled .o each build, OR runtime.a via
+      HEXA_PREBUILT_RUNTIME (ar output). -> link native runtime instead.
+  C3. clang-as over flat.s (Stage 4). -> already solved by --emit=obj native
+      path; just not wired into build_hexac.
+  C4. clang-ld / hexa_ld exec-link (Stage 4). -> hexa_ld exists; needs runtime +
+      crt link integration (the --emit=exec gap, finding #2).
+
+PARTS PRESENT (in-tree, substantial)
+  compiler/emit/macho_arm64.hexa  1904 L  — Mach-O arm64 .o emitter (P0 IMPLEMENTED)
+  compiler/link/hexa_ld.hexa      v1.7    — ELF+Mach-O linker (link/link_mach_o/...)
+  self/codegen/elf.hexa                   — ELF64 emit ("no linker needed")
+  self/codegen/runtime_arm64.hexa         — raw ARM64 runtime ("replaces runtime.c")
+  compiler/test/macho_p0_corpus/          — P0-OBJEQ + P3-ZERO-EXTERN falsifiers
+
+FINDING (frontier, honest · revised)
+  The native path is C-free and fork-free THROUGH object emission (proven P0/P3).
+  The ENTIRE remaining gap to a .c/.o/.a-0 self-hosted build is the EXEC-LINK
+  step: hexa_ld must link {native .o of the compiler} + {native runtime} + {crt}
+  into a runnable Mach-O without clang/ld, and build_hexac must switch Stage 2-4
+  from "--emit=asm + clang" to "--emit=obj native + hexa_ld". The self-assembler
+  question (N2 draft) is largely MOOT — native codegen emits objects directly, so
+  there is no .s to assemble on the native path.
+
+REVISED NEXT ORDER
+  N3 (was) -> now PRIMARY: hexa_ld exec-link integration — link native compiler
+     .o + runtime_arm64 + minimal crt -> runnable hexac, clang/ld fork = 0.
+  C1: emit list_dir/mono_ns bridges natively (drop shim.c).
+  C2: link native runtime (drop runtime.c/.a).
+  build_hexac: add a native-path mode (HEXA_BACKEND=native) = --emit=obj + hexa_ld.
+  N4 (.c/.o/.a=0 + fork=0 assert) -> N5 (fixpoint) -> N6 (x86_64; ELF via elf.hexa)
+  -> N7 (CI gate).
+  N2 (self-assembler) DEMOTED — native obj emit bypasses the .s/as path entirely;
+  keep only if a .s->.o path is ever needed for the asm fallback.
+
+STATUS: N0 MEASURED (green) — native obj-emit is C-free + 0-fork (P0/P3 proven);
+        sole remaining frontier = hexa_ld EXEC-LINK (runtime+crt) + switching
+        build_hexac off the --emit=asm+clang default. shim.c + runtime.c/.a are
+        the residual C intermediates, both removable once exec-link lands.
