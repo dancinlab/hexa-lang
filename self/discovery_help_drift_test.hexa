@@ -1,0 +1,71 @@
+// @ci_gate — pure · network-free · deterministic
+// self/discovery_help_drift_test.hexa — discovery command<->help drift guard.
+//
+// Binds the discovery-engine verb roster across its surfaces to the single
+// in-source SSOT self/discovery_commands::discovery_commands():
+//
+//   (A) the COMMANDS SSOT     — discovery_commands() (IMPORTED, compiled in)
+//   (B) the absorbed dispatch  — self/main.hexa `_absorbed_script` returns a
+//                                non-empty path for the verb (is_absorbed_verb)
+//   (C) the per-verb renderer  — cmd_absorbed_help renders from
+//                                discovery_command_lookup (no hand-typed body)
+//
+// PASS iff every (A) verb has an `_absorbed_script` entry in (B) AND
+// cmd_absorbed_help renders from the SSOT in (C). A discovery verb added to the
+// SSOT without an _absorbed_script mapping (or a hand-typed help body sneaking
+// back) FAILS green.
+//
+// Run:  hexa run self/discovery_help_drift_test.hexa
+// PASS: exits 0, prints "discovery_help_drift_test PASS".
+
+use "self/discovery_commands"
+
+fn _read_src(path: str) -> str {
+    return exec("cat " + path + " 2>/dev/null")
+}
+
+fn main() {
+    let registry = discovery_command_names()
+    let src = _read_src("self/main.hexa")
+
+    let mut fails = 0
+
+    if len(registry) == 0 {
+        println("DRIFT: discovery_commands() roster is empty")
+        fails = fails + 1
+    }
+    if len(src) == 0 {
+        println("DRIFT: could not read self/main.hexa")
+        fails = fails + 1
+    }
+
+    // (A==B) every discovery verb has an _absorbed_script mapping. The resolver
+    // lines read `if verb == "<v>"  { return "compiler/..." }`.
+    let mut i = 0
+    while i < len(registry) {
+        let v = registry[i]
+        if !src.contains("verb == \"" + v + "\"") {
+            println("DRIFT: discovery_commands() verb has no _absorbed_script mapping — " + v)
+            fails = fails + 1
+        }
+        i = i + 1
+    }
+
+    // (C) cmd_absorbed_help renders from the SSOT (calls
+    // discovery_command_lookup). A hand-typed second discovery help body would
+    // NOT call it; this asserts none survives.
+    if len(src) > 0 {
+        if !src.contains("discovery_command_lookup(verb)") {
+            println("DRIFT: cmd_absorbed_help does not render from discovery_commands() — a hand-typed discovery help body may have drifted back in")
+            fails = fails + 1
+        }
+    }
+
+    if fails == 0 {
+        println("PASS: discovery command<->help registry in sync — " + to_string(len(registry)) + " verbs (discovery_commands == _absorbed_script; cmd_absorbed_help renders from SSOT)")
+        println("discovery_help_drift_test PASS")
+        exit(0)
+    }
+    println("FAIL: " + to_string(fails) + " discovery command<->help drift(s) above")
+    exit(1)
+}
