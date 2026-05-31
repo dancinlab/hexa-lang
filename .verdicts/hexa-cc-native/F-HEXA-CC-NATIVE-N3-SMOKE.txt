@@ -1,0 +1,77 @@
+F-HEXA-CC-NATIVE-N3-SMOKE — exec-link frontier measurement
+==========================================================
+date:   2026-05-31
+host:   darwin-arm64 (mini, Apple clang/ld present as oracle/control)
+method: ran the existing RFC-063 P1/P3 corpus + direct build/aprime_cc
+        measurements to locate the EXACT exec-link frontier before
+        committing to full N3. (the "2->1" plan: smoke then full.)
+
+MEASUREMENTS
+  A. hexa run compiler/test/macho_p0_corpus/run_F_P1_LINKEXEC.hexa
+     → PASS: "hexa-native link merged 2 .o → runnable · exit=42 ·
+       BRANCH26 cross-object reloc resolved · nm -u empty".
+     ⇒ the hexa-native LINKER (tool/hexa_ld.hexa) ALREADY produces a
+       runnable MH_EXECUTE from multiple .o with NO clang/ld/as in the
+       link step, for the syscall-only / no-extern case.
+
+  B. build/aprime_cc --emit=obj --backend=native (stripped PATH=/usr/bin:/bin)
+       -o /tmp/n3_trivial.o  compiler/test/macho_p0_corpus/trivial.hexa
+     → /tmp/n3_trivial.o = "Mach-O 64-bit object arm64" (433 B), rc=0.
+       nm -u /tmp/n3_trivial.o → _hexa_exit, _hexa_set_args  (2 undefined)
+     ⇒ object emission is C-free + fork-free (confirms N0). The object's
+       only external needs are the 2 runtime symbols.
+
+  C. build/aprime_cc --emit=exec --backend=native -o /tmp/n3_trivial_exec ...
+     → FAIL. Verbatim:
+         hexa-compiler: linker failed:
+           command: ld -o ... trivial.o -lSystem -syslibroot <SDK> -arch arm64 -e _main
+           Undefined symbols for architecture arm64:
+             "_hexa_exit",     referenced from: _main in trivial.o
+             "_hexa_set_args", referenced from: _main in trivial.o
+           ld: symbol(s) not found for architecture arm64
+       binary NOT produced.
+     ⇒ TWO distinct gaps, both NOT linker-capability gaps:
+        (C1) --emit=exec still FORKS system `ld` (not hexa_ld) — the
+             default exec path in compiler/main.hexa has not been switched
+             to the proven hexa_ld link() path that P1_LINKEXEC exercises.
+        (C2) no runtime object is supplied to the link, so _hexa_exit /
+             _hexa_set_args are unresolved regardless of linker.
+
+  D. hexa run run_F_P3_FULL_RUNEQ.hexa → FAIL, but a RED HERRING:
+     the INSTALLED `hexa` 0.1.0-dispatch (stale) cannot codegen
+     tool/hexa_ld.hexa's struct field access — emits
+     `hexa_codegen_error__missing_field__ParsedObj__data` (+ LinkSym__sect,
+     ParsedObj__sects/data_sect_idx). i.e. the `hexa run` harness path is
+     blocked by a STALE-TOOLCHAIN codegen bug, never reaching the native
+     exec-link under test. (Measure via build/aprime_cc directly, not
+     `hexa run`, to bypass this.)
+
+  E. run_F_P3_ZERO_EXTERN.hexa → SKIP: requires /tmp/aprime_s7 (separate
+     `bash tool/build_aprime.sh -o /tmp/aprime_s7`; heavy Mac build, not run
+     this pass).
+
+BUILDING BLOCK PRESENT
+  self/codegen/runtime_arm64.hexa defines rt_exit / rt_exit_value (+ write,
+  mmap) as raw ARM64 instruction-byte producers ("replaces runtime.c"). So
+  the bytes for _hexa_exit exist natively; they are not yet packaged as a
+  linkable MH_OBJECT exporting _hexa_exit / _hexa_set_args.
+
+FINDING — N3 frontier is precisely TWO wiring tasks (not new capability)
+  N3a. RUNTIME OBJECT: emit a native runtime .o (from runtime_arm64.hexa via
+       compiler/emit/macho_arm64.hexa's serializer) that EXPORTS the runtime
+       symbols a compiled program references — minimally _hexa_exit,
+       _hexa_set_args; generally the _hexa_* set the native backend emits.
+  N3b. LINK SWITCH: make --emit=exec --backend=native call hexa_ld.link()
+       over { user.o, runtime.o } instead of forking system `ld`. The linker
+       already merges multi-.o + resolves BRANCH26 (P1_LINKEXEC PASS) and
+       does ad-hoc codesign (hexa_ld v1.2+); it needs the runtime.o as the
+       second input + entry/_start wiring.
+  Then a trivial program (exit 42) links with clang/ld/as fork = 0 and runs
+  → that is the N3 closing falsifier (= a real P3_FULL_RUNEQ via aprime_cc,
+  not `hexa run`).
+
+STATUS: N3-SMOKE MEASURED (green) — linker proven (P1_LINKEXEC); the exec-link
+        gap is exactly {runtime .o not emitted/exported} + {--emit=exec forks
+        system ld instead of hexa_ld}. Both are wiring of existing parts. The
+        `hexa run` harness path is separately blocked by a stale installed-hexa
+        codegen bug (use build/aprime_cc directly to measure the native path).
