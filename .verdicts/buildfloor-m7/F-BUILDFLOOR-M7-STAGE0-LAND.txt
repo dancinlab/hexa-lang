@@ -1,0 +1,71 @@
+BUILDFLOOR M7 — build_aprime.sh STAGE-0 self-contained recipe LANDED
+=====================================================================
+date: 2026-06-01
+worktree: .claude/worktrees/agent-a458f390977698165 (off origin/main, genuinely .c=0)
+verdict tier: 🟢 numerical (real clean-checkout build → clang Mach-O → smoke exit 42)
+
+────────────────────────────────────────────────────────────────────────────
+WHAT LANDED
+────────────────────────────────────────────────────────────────────────────
+tool/build_aprime.sh now carries a STAGE-0 (regen) block making the recipe
+self-contained on a fresh `.c=0` checkout (the .sh edit was governance-blocked
+when M7 was PROVEN at #2421/b2ba448db; the ban is now lifted).
+
+STAGE-0 (idempotent — SKIP when hexat + self/runtime.c are both already fresh):
+  0a  bash tool/restore_frozen_seeds          (21 frozen bootstrap C seeds, pinned 151c52c82)
+  0b  bash tool/stage_resolve_runtime_a       (regen self/runtime_core.c from emitter SSOT
+                                               self/runtime_core_emit.hexa + SSOT reconcile
+                                               + compile build/runtime.a from source)
+  0c  bash tool/stage_prebuild_hexat          (build build/hexat from hexa_cc.c + runtime.a)
+  0d  point HEXA_V2 at build/hexat (gitignored path — leaves NO committable artifact)
+This reuses the EXACT mechanism release.yml / nobaseline-gate.yml verify.
+
+stage-3 rt_fs link-fill (TEMP, clearly commented "remove once B2 emitter fix lands"):
+  appends 3 failure-default stubs (rt_fs_append_atomic/stat/rotate_if_over) ONLY when
+  self/runtime_core.c does not already define them — so a tree carrying the sibling-lane
+  B2 fix is a no-op. The B2 fix is NOT on origin/main (commit c723fba03 set it aside;
+  1d0407e69 documents it un-committable since self/runtime.c is gitignored with no tracked
+  emitter SSOT for the rt_fs section). Therefore the link-fill WAS exercised this build.
+
+────────────────────────────────────────────────────────────────────────────
+VERIFICATION (verbatim, genuinely clean .c=0 worktree → bash tool/build_aprime.sh)
+  self/runtime.c · self/runtime_core.c · self/native/hexat · build/hexat ALL absent pre-run
+────────────────────────────────────────────────────────────────────────────
+  [0/5] regen: clean checkout — restoring seeds + building hexat from SSOT
+[restore_frozen_seeds] restoring 21 bootstrap seeds from 151c52c82502e93d01735c58b43b017d102fee63
+[restore_frozen_seeds] restored 21 seeds (working tree only; index unchanged)
+stage_resolve_runtime_a: seeds present — building runtime.a from source
+[stage_resolve_runtime_a] runtime_core.c REGENERATED from emitter SSOT (    8508 lines)
+[stage_resolve_runtime_a] SSOT reconcile: dropped 4 migrated f64<->bits defs from runtime.c (emitter owns them)
+-rw-r--r--  1 mini  staff  546800 build/runtime.a
+[stage_prebuild_hexat] building build/hexat from hexa_cc.c + runtime.a
+[stage_prebuild_hexat] build/hexat =  1946184 bytes
+  [0/5] regen: runtime.c=   14659L · hexat= 1946184B
+=== build_aprime: repo=<worktree>  hexat=<worktree>/build/hexat ===
+  [1/5] flatten: 46 files 40186 lines
+  [2/5] transpile:    43707 lines C
+post: hoisted 0 enum #defines + mkdir lowering + bind rename + free_tree lowering applied
+  [3/5] rt_fs link-fill: appended 3 B2 failure-default stubs (TEMP)
+  [3/5] post-process: s4_flatc_post + builtin sed + runtime.c inline
+  [4/5] clang: build/aprime_cc (1455016 B, Mach-O 64-bit executable arm64)
+atlas: loaded 17265 nodes from embedded.gen.hexa
+  [5/5] smoke: exit(42)==42 PASS — aprime_cc OK
+build_aprime: OK -> build/aprime_cc
+  (exit 0)
+
+IDEMPOTENT re-run (warm tree):
+  [0/5] regen: SKIP — hexat + self/runtime.c already present (warm tree)
+  [5/5] smoke: exit(42)==42 PASS — aprime_cc OK
+  build_aprime: OK -> build/aprime_cc
+
+NO-POLLUTION CHECK: restored seeds remain working-tree-only + gitignored; the only
+tracked-modified path is tool/build_aprime.sh; no committable self/native/hexat artifact
+is produced (HEXA_V2 points at the gitignored build/hexat).
+
+Numbers MATCH the #2421/b2ba448db M7 proof byte-for-byte:
+  hexat 1946184 B · aprime_cc 1455016 B · smoke exit 42.
+
+────────────────────────────────────────────────────────────────────────────
+RESULT: 🟢 M7 self-contained STAGE-0 recipe is now LANDED in tool/build_aprime.sh
+(no longer merely PROVEN). The rt_fs link-fill remains a clearly-marked TEMP until
+the B2 emitter-SSOT fix merges; it is a conditional no-op on a B2-fixed tree.

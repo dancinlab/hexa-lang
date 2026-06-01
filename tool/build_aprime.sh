@@ -77,11 +77,13 @@ else
     # 0c: build build/hexat (self-hosted transpiler) from hexa_cc.c + runtime.a.
     HEXA_PREBUILT_RUNTIME="$REPO/build/runtime.a" bash tool/stage_prebuild_hexat \
         || { echo "build_aprime: STAGE-0 stage_prebuild_hexat failed" >&2; exit 1; }
-    # 0d: place the transpiler where the default HEXA_V2 resolves it
-    #     (self/native/hexat). build/hexat is the canonical STAGE-0 output.
+    # 0d: point HEXA_V2 at the STAGE-0-built transpiler. Prefer the canonical
+    #     build/hexat (already covered by the `build/` .gitignore) over the
+    #     default self/native/hexat path so STAGE-0 leaves NO un-ignored,
+    #     committable binary artifact in the tree. Only fall back to the
+    #     self/native/hexat default if the caller pre-placed a binary there.
     if [ ! -x "$HEXA_V2" ] && [ -x build/hexat ]; then
-        mkdir -p "$(dirname "$HEXA_V2")"
-        cp build/hexat "$HEXA_V2"; chmod +x "$HEXA_V2"
+        HEXA_V2="$REPO/build/hexat"
     fi
     echo "  [0/5] regen: runtime.c=$( [ -f self/runtime.c ] && wc -l < self/runtime.c || echo MISSING )L · hexat=$( [ -x "$HEXA_V2" ] && wc -c < "$HEXA_V2" || echo MISSING )B"
 fi
