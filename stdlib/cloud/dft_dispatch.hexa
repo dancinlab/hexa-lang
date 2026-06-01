@@ -62,6 +62,7 @@ use "stdlib/cloud/vast"
 use "stdlib/cloud/pod_registry"
 use "stdlib/cloud/preflight_dft"  // tls_dft_mpi_sweet_spot — d11 pre-rent OOM mem-budget gate (Fix-deck-1)
 use "stdlib/io"  // write_text — atomic plaintext write of the .validated stamp (dft_run)
+use "stdlib/qforge/telemetry_report"  // qforge_telemetry_report — #2477 analyzer, terminal auto-wire (@L1, import-only/@L3)
 
 // Bohr radius in angstrom — the QE `alat`→angstrom cell conversion factor
 // the recipe pins (CELL_PARAMETERS (alat=X) vectors × (X·BOHR_ANGSTROM)).
@@ -1172,6 +1173,58 @@ pub fn _dft_telemetry_wrap(stage: str, procname: str, stage_cmd: str) -> str {
         + done + "; exit $_ec"
 }
 
+// ── terminal bottleneck auto-wire (#2477 analyzer → live pipeline, @L1) ──
+//
+// _dft_telemetry_wrap EMITS `.dft_telemetry.jsonl` per stage; the #2477
+// qforge_telemetry_report INGESTS that text into a ranked per-stage bottleneck
+// table. Until now the analyzer was a HAND call. The wire below closes the loop:
+// at the terminal/harvest point (the synchronous `--go` end AND the `--resume`
+// ph-terminal end) the dispatcher reads the deck-local `.dft_telemetry.jsonl`
+// and writes the rendered ranked table to `<deck>/.dft_bottleneck.txt` — so
+// every campaign run self-surfaces its bottleneck with NO manual call.
+//
+// GUARDED (@L2 + d6): if the telemetry file is absent OR empty (a pre-#2474 run,
+// or a chain that never reached a wrapped stage), it writes NOTHING and returns
+// 0 with no error — the dispatch behavior stays byte-identical. It NEVER
+// fabricates a report from missing telemetry. The analyzer (telemetry_report)
+// is IMPORTED, not edited (@L3): 0-diff to the #2477/#2483/#2487 library.
+
+let DFT_BOTTLENECK_NAME = ".dft_bottleneck.txt"
+
+// dft_telemetry_path — the deck-local telemetry JSONL the wrap emits (pulled
+// back from /root/deck on harvest). PURE.
+pub fn dft_telemetry_path(deck: str) -> str {
+    return deck + "/" + DFT_TELEMETRY_NAME
+}
+
+// dft_bottleneck_path — the deck-local ranked-bottleneck report destination. PURE.
+pub fn dft_bottleneck_path(deck: str) -> str {
+    return deck + "/" + DFT_BOTTLENECK_NAME
+}
+
+// _dft_write_bottleneck — IO: read the deck-local `.dft_telemetry.jsonl`, run the
+// #2477 analyzer, write the rendered ranked table to `<deck>/.dft_bottleneck.txt`.
+// Returns 1 iff a report was written; 0 (clean skip, NO error) when the telemetry
+// file is absent OR empty (@L2 guarded skip, d6 — never fabricate). PURE-testable:
+// it reads/writes deck-local files only (no pod, no network), so the selftest
+// drives it with a local JSONL fixture.
+fn _dft_write_bottleneck(deck: str) -> int {
+    let tpath = dft_telemetry_path(deck)
+    if !file_exists(tpath) {
+        return 0
+    }
+    let jsonl = read_file(tpath)
+    if len(jsonl.trim()) == 0 {
+        return 0
+    }
+    let rep = qforge_telemetry_report(jsonl)
+    let rendered = qforge_telemetry_report_render(rep)
+    let _w = write_text(dft_bottleneck_path(deck), rendered)
+    println("[dft-run] ④ PROCESS: bottleneck auto-surfaced → " + dft_bottleneck_path(deck)
+        + " (" + to_string(rep.n_stages) + " stages, total wall_s=" + to_string(rep.total_wall) + ").")
+    return 1
+}
+
 // ── orchestrator ─────────────────────────────────────────────────────
 
 // ── d16 dry-run stamp gate (rent→idle leak guard) ────────────────────
@@ -1773,6 +1826,9 @@ fn _dft_go(deck: str, image: str, disk: int, owner: str, query: str, identity: s
     let ph = cloud_exec_opts(host, ssh_opts,
         _dft_telemetry_wrap("ph", "ph.x", _dft_ph_cmd(np, walltime_h)))
     let _hp = cloud_copy_from_opts(host, ssh_opts, "/root/deck/ph.out", deck + "/ph.out")
+    // harvest the per-stage telemetry (the wrap emitted it on the pod) so the
+    // terminal bottleneck auto-wire below can rank it locally (@L1).
+    let _ht = cloud_copy_from_opts(host, ssh_opts, "/root/deck/" + DFT_TELEMETRY_NAME, dft_telemetry_path(deck))
 
     // ④ stability verdict
     let verdict = dft_phonon_stable(read_file(deck + "/ph.out"))
@@ -1786,6 +1842,9 @@ fn _dft_go(deck: str, image: str, disk: int, owner: str, query: str, identity: s
         }
     }
     println("[dft-run] results harvested to " + deck + "/{relax.out,scf.out,ph.out}.")
+    // PROCESS auto-wire (@L1): rank the per-stage telemetry → .dft_bottleneck.txt
+    // (guarded clean skip when no telemetry was harvested — @L2/d6).
+    let _bn = _dft_write_bottleneck(deck)
     return _dft_teardown(inst.instance_id, 0)
 }
 
@@ -2525,9 +2584,11 @@ fn _dft_resume(deck: str) -> int {
             println("[dft-run]   monitor: hexa cloud tail " + host + " " + _dft_remote_logfile("phon"))
             return 0
         }
-        // harvest scf.out + ph.out.
+        // harvest scf.out + ph.out + the per-stage telemetry (for the terminal
+        // bottleneck auto-wire below — @L1; the wrap emitted it on the pod).
         let _hs = cloud_copy_from_opts(host, ssh_opts, "/root/deck/scf.out", deck + "/scf.out")
         let _hp = cloud_copy_from_opts(host, ssh_opts, "/root/deck/ph.out", deck + "/ph.out")
+        let _ht = cloud_copy_from_opts(host, ssh_opts, "/root/deck/" + DFT_TELEMETRY_NAME, dft_telemetry_path(deck))
         if probe.stdout_.contains("__DFT_FAILED__") {
             // WALLTIME-vs-CRASH split (the destructive-teardown fix, 2026-06-01).
             // `__DFT_FAILED__` collapses TWO disjoint conditions: a NORMAL walltime
@@ -2617,6 +2678,9 @@ fn _dft_resume(deck: str) -> int {
             }
         }
         println("[dft-run] results harvested to " + deck + "/{relax.out,scf.out,ph.out}.")
+        // PROCESS auto-wire (@L1): rank the per-stage telemetry → .dft_bottleneck.txt
+        // (guarded clean skip when no telemetry was harvested — @L2/d6).
+        let _bn = _dft_write_bottleneck(deck)
         let _wd = _dft_write_state(deck, "done", iid, host_ip, port, identity, np, walltime_h, relax_name)
         return _dft_teardown(iid, 0)
     }

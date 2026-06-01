@@ -781,5 +781,81 @@ fn main() {
     _check("telem-behavioral: exit code 0 recorded (stub `true`)", _has(jline, "\"exit\":0"), 1)
     let _rmt2 = exec("rm -rf '" + tdeck + "'")
 
+    // ── terminal bottleneck auto-wire (#2477 analyzer → live pipeline, @L1) ──
+    // The terminal/harvest point reads the deck-local `.dft_telemetry.jsonl` (the
+    // wrap emitted it on the pod, harvested next to ph.out) and writes a ranked
+    // `<deck>/.dft_bottleneck.txt`. THREE contract axes:
+    //   (1) terminal WITH telemetry → .dft_bottleneck.txt written, ranked content
+    //   (2) terminal WITHOUT telemetry (absent OR empty) → NO file, no error (@L2/d6)
+    //   (3) the report uses the #2477 analyzer verbatim (ranked DESC, slowest flagged)
+    // _dft_write_bottleneck reads/writes deck-local files only (no pod) so this is
+    // PURE-driveable from a local JSONL fixture.
+
+    // path helpers (PURE) — the deck-local telemetry source + report destination.
+    _check("autowire: telemetry path is deck-local .dft_telemetry.jsonl",
+        _seq(dft_telemetry_path("/decks/LaH10"), "/decks/LaH10/.dft_telemetry.jsonl"), 1)
+    _check("autowire: bottleneck path is deck-local .dft_bottleneck.txt",
+        _seq(dft_bottleneck_path("/decks/LaH10"), "/decks/LaH10/.dft_bottleneck.txt"), 1)
+
+    // (1) terminal WITH telemetry — a realistic 3-stage chain (relax < scf < ph),
+    // ph the slowest. The wire must WRITE the report and rank ph first.
+    let bwdeck = "/tmp/dft_bottleneck_wire_test"
+    let _bwmk = exec("rm -rf '" + bwdeck + "' && mkdir -p '" + bwdeck + "'")
+    let bw_jsonl = "{\"ts\":100,\"stage\":\"relax\",\"event\":\"start\",\"wall_s\":0,\"rss_kb\":null,\"exit\":0}\n"
+        + "{\"ts\":160,\"stage\":\"relax\",\"event\":\"done\",\"wall_s\":60,\"rss_kb\":512000,\"exit\":0}\n"
+        + "{\"ts\":160,\"stage\":\"scf\",\"event\":\"start\",\"wall_s\":0,\"rss_kb\":null,\"exit\":0}\n"
+        + "{\"ts\":280,\"stage\":\"scf\",\"event\":\"done\",\"wall_s\":120,\"rss_kb\":768000,\"exit\":0}\n"
+        + "{\"ts\":280,\"stage\":\"ph\",\"event\":\"start\",\"wall_s\":0,\"rss_kb\":null,\"exit\":0}\n"
+        + "{\"ts\":1180,\"stage\":\"ph\",\"event\":\"done\",\"wall_s\":900,\"rss_kb\":2048000,\"exit\":0}\n"
+    let _bww = write_text(dft_telemetry_path(bwdeck), bw_jsonl)
+    _check("autowire(1): telemetry present → _dft_write_bottleneck WRITES (returns 1)",
+        _dft_write_bottleneck(bwdeck), 1)
+    let bw_exists = exec("test -f '" + dft_bottleneck_path(bwdeck) + "' && printf yes || printf no")
+    _check("autowire(1): .dft_bottleneck.txt file written", _seq(bw_exists, "yes"), 1)
+    let bw_txt = read_file(dft_bottleneck_path(bwdeck))
+    _check("autowire(1): report carries the #2477 header", _has(bw_txt, "QFORGE-PROCESS per-stage bottleneck report"), 1)
+    _check("autowire(1): all three stages present (relax)", _has(bw_txt, "relax"), 1)
+    _check("autowire(1): all three stages present (scf)", _has(bw_txt, "scf"), 1)
+    _check("autowire(1): all three stages present (ph)", _has(bw_txt, "ph"), 1)
+    // RANKED DESC — ph (900s) before scf (120s) before relax (60s); slowest=ph.
+    _check("autowire(1): ranked ph BEFORE scf (wall DESC)", _lt_index(bw_txt, "ph ", "scf"), 1)
+    _check("autowire(1): ranked scf BEFORE relax (wall DESC)", _lt_index(bw_txt, "scf", "relax"), 1)
+    _check("autowire(1): slowest stage (ph) flagged ◄ slowest", _has(bw_txt, "◄ slowest"), 1)
+    _check("autowire(1): total wall_s aggregated (60+120+900=1080)", _has(bw_txt, "total wall_s=1080"), 1)
+    let _bwrm = exec("rm -rf '" + bwdeck + "'")
+
+    // (2a) terminal WITHOUT telemetry — file ABSENT (a pre-#2474 run). The wire
+    // must SKIP cleanly: NO .dft_bottleneck.txt, return 0, no error (@L2/d6).
+    let nbdeck = "/tmp/dft_bottleneck_notelem_test"
+    let _nbmk = exec("rm -rf '" + nbdeck + "' && mkdir -p '" + nbdeck + "'")
+    _check("autowire(2a): telemetry ABSENT → clean skip (returns 0)", _dft_write_bottleneck(nbdeck), 0)
+    let nb_exists = exec("test -f '" + dft_bottleneck_path(nbdeck) + "' && printf yes || printf no")
+    _check("autowire(2a): NO .dft_bottleneck.txt written (no fabrication, d6)", _seq(nb_exists, "no"), 1)
+    let _nbrm = exec("rm -rf '" + nbdeck + "'")
+
+    // (2b) terminal with an EMPTY telemetry file (a chain that never hit a wrapped
+    // stage) — still a clean skip, NO report, no error.
+    let ebdeck = "/tmp/dft_bottleneck_empty_test"
+    let _ebmk = exec("rm -rf '" + ebdeck + "' && mkdir -p '" + ebdeck + "'")
+    let _ebw = write_text(dft_telemetry_path(ebdeck), "\n   \n")
+    _check("autowire(2b): EMPTY telemetry → clean skip (returns 0)", _dft_write_bottleneck(ebdeck), 0)
+    let eb_exists = exec("test -f '" + dft_bottleneck_path(ebdeck) + "' && printf yes || printf no")
+    _check("autowire(2b): NO .dft_bottleneck.txt for an empty telemetry file", _seq(eb_exists, "no"), 1)
+    let _ebrm = exec("rm -rf '" + ebdeck + "'")
+
+    // (3) chain REGRESSION — the auto-wire is ADDITIVE: a deck with telemetry but
+    // a PRE-EXISTING unrelated sibling (.validated) keeps that sibling untouched
+    // (the wire writes ONLY .dft_bottleneck.txt, never mutates the chain's files).
+    let rgdeck = "/tmp/dft_bottleneck_regress_test"
+    let _rgmk = exec("rm -rf '" + rgdeck + "' && mkdir -p '" + rgdeck + "'")
+    let _rgv = write_text(rgdeck + "/.validated", "validated=KEEPME\n")
+    let _rgt = write_text(dft_telemetry_path(rgdeck), "{\"ts\":1,\"stage\":\"relax\",\"event\":\"done\",\"wall_s\":5,\"rss_kb\":1000,\"exit\":0}\n")
+    let _rgw2 = _dft_write_bottleneck(rgdeck)
+    _check("autowire(3): pre-existing .validated sibling UNTOUCHED by the wire",
+        _has(read_file(rgdeck + "/.validated"), "KEEPME"), 1)
+    _check("autowire(3): the telemetry source is NOT mutated (still readable)",
+        _has(read_file(dft_telemetry_path(rgdeck)), "\"stage\":\"relax\""), 1)
+    let _rgrm = exec("rm -rf '" + rgdeck + "'")
+
     println("dft_dispatch_test PASS")
 }
