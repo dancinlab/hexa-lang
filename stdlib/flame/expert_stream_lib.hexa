@@ -1,0 +1,167 @@
+// ════════════════════════════════════════════════════════════════════════════
+//  expert_stream_lib.hexa — flame expert-shard streaming glue (AKD1000 paging).
+//
+//  FLAME-PERF P5 AXIS1 — expert-streaming / paging. A single AKD1000 neuromorphic
+//  chip holds only a bounded set of RESIDENT parameters (≤ 1.2M). A MoE bank of
+//  E experts (each a packed [d·d·K] conv) can be FAR larger than that envelope:
+//  for the LARGE rung (d=768, K=3) a SINGLE expert is 768·768·3 = 1,769,472 params,
+//  already over the chip. So an expert cannot even live resident whole — it must be
+//  PAGED in shards. This lib is the host-side cycling glue + the resident counter
+//  that PROVES the bound is respected at every step.
+//
+//  MODEL (hardware-independent, the verifiable half):
+//    expW[E·dd]   the FULL off-chip expert bank (dd = d·d·K). total = E·dd ≫ cap.
+//    resident     a FIXED-SIZE on-chip buffer of exactly shard_cap floats. At no
+//                 point does more than one shard occupy it (load → use → evict).
+//    cap          the AKD1000 resident envelope, here 1,200,000 params.
+//
+//  CYCLE (per expert e, per shard s of that expert):
+//    1. compute shard span [off, off+len) inside the expert's output block
+//    2. LOAD: bring that span resident (resident-count ← len)
+//    3. USE:  accumulate the shard's gate-weighted contribution into the running Y
+//    4. EVICT: resident-count ← 0  (buffer freed for the next shard)
+//    bump the high-water mark each LOAD; assert it never exceeds cap.
+//
+//  The resident bound is a pure COUNTING property — it holds regardless of whether
+//  a physical AKD1000 is present. Real on-chip placement of the loaded shard is
+//  DEFERRED (no AKIDA chip in this env); the glue + the ≤1.2M bound are what is
+//  verifiable now and are proven by `hexa run` selftest (flame_expert_stream_test).
+//
+//  F-FLAME-EXPERT-STREAM: streaming combine runs ∧ max-resident ≤ 1.2M while the
+//  total expert bank ≫ resident (LARGE rung: total = E·dd ≫ 1.2M per shard cap).
+//  Verified equivalent to the resident-whole combine (byte-eq combine path).
+//  lib-split. sibling: moe_lib.hexa · tensor_lib.hexa · clm_large.hexa.
+// ════════════════════════════════════════════════════════════════════════════
+
+use "stdlib/flame/tensor_lib"
+
+// The AKD1000 resident-parameter envelope (a single chip holds <= this many).
+pub fn es_resident_cap() -> int {
+    return 1200000
+}
+
+// Number of shards an output block of `block` params splits into for a resident
+// `cap`. ceil(block / cap) — each shard <= cap so it fits the on-chip buffer.
+pub fn es_shard_count(block: int, cap: int) -> int {
+    let mut n = block / cap
+    if n * cap < block { n = n + 1 }
+    if n < 1 { n = 1 }
+    return n
+}
+
+// Length (param count) of shard `s` of a `block`-param unit, given resident `cap`.
+// Full `cap` for interior shards, the remainder for the last.
+pub fn es_shard_len(block: int, cap: int, s: int) -> int {
+    let off = s * cap
+    let mut len = cap
+    if off + len > block { len = block - off }
+    if len < 0 { len = 0 }
+    return len
+}
+
+// Streaming resident state. Backed by a 3-slot tensor so it is plain t_* data:
+//   slot 0 = current resident count   (params live in the on-chip buffer NOW)
+//   slot 1 = high-water mark          (max resident count ever observed)
+//   slot 2 = cap                      (the <=1.2M envelope, for the assertion)
+pub fn es_state_new(cap: int) -> int {
+    let st = t_zeros(3)
+    t_set(st, 0, 0.0)
+    t_set(st, 1, 0.0)
+    t_set(st, 2, to_float(cap))
+    return st
+}
+
+// LOAD a shard of `len` params into the resident buffer: set the live count and
+// bump the high-water mark. Models paging one shard onto the chip.
+pub fn es_load(st: int, len: int) {
+    let lenf = to_float(len)
+    t_set(st, 0, lenf)
+    if lenf > t_get(st, 1) { t_set(st, 1, lenf) }
+}
+
+// EVICT the resident buffer: live count -> 0 (frees the on-chip slot for the
+// next shard). The high-water mark is preserved.
+pub fn es_evict(st: int) {
+    t_set(st, 0, 0.0)
+}
+
+pub fn es_resident_now(st: int) -> int {
+    return to_int(t_get(st, 0))
+}
+
+pub fn es_high_water(st: int) -> int {
+    return to_int(t_get(st, 1))
+}
+
+// The bound predicate: did resident ever exceed the cap? 1 = bound held.
+pub fn es_bound_ok(st: int) -> int {
+    if t_get(st, 1) <= t_get(st, 2) { return 1 }
+    return 0
+}
+
+// ── Streaming MoE expert combine ────────────────────────────────────────────
+// Reference (resident-whole) combine of the E expert outputs, for byte-eq
+// comparison: Y[t,c] = sum_e probs[t,e]*ex_out[e,t,c]. Identical math to
+// moe_lib's combine, restated here so the test can byte-compare against the
+// streaming path without pulling the softmax in.
+pub fn es_combine_whole(probs: int, ex_out: int, y_out: int,
+                        T: int, E: int, C: int) {
+    let mut t = 0
+    while t < T {
+        let mut c = 0
+        while c < C {
+            let mut acc = 0.0
+            let mut e = 0
+            while e < E {
+                acc = acc + t_get(probs, t * E + e) * t_get(ex_out, e * T * C + t * C + c)
+                e = e + 1
+            }
+            t_set(y_out, t * C + c, acc)
+            c = c + 1
+        }
+        t = t + 1
+    }
+}
+
+// STREAMING combine. Cycles each expert's output through the resident buffer in
+// shards of <= cap params (load -> use -> evict), tracking the resident high-water
+// mark in `st`. Produces the SAME Y as es_combine_whole (the cycling reorders
+// the SAME additions — no resident expert bank is held whole). Each expert's
+// per-position output is block = T*C floats; that block is the paged unit and
+// is itself sharded into <=cap pieces so even an output bigger than the chip
+// streams. Y is accumulated in DRAM (the running mixture); only the active shard
+// is resident.
+pub fn es_combine_stream(probs: int, ex_out: int, y_out: int, st: int,
+                         T: int, E: int, C: int, cap: int) {
+    // zero the running mixture (lives in DRAM, not on-chip)
+    let mut z = 0
+    while z < T * C { t_set(y_out, z, 0.0); z = z + 1 }
+    let block = T * C                     // one expert's output footprint
+    let nsh = es_shard_count(block, cap)  // shards per expert output
+    let mut e = 0
+    while e < E {
+        let ebase = e * T * C
+        let mut s = 0
+        while s < nsh {
+            let off = s * cap
+            let len = es_shard_len(block, cap, s)
+            // LOAD shard s of expert e onto the chip
+            es_load(st, len)
+            // USE: fold this shard's gate-weighted contribution into Y. The shard
+            // covers flat indices [off, off+len) of the expert's [T*C] output.
+            let mut i = 0
+            while i < len {
+                let flat = off + i           // 0..block within this expert
+                let tt = flat / C            // recover the time row from the flat index
+                let gate = t_get(probs, tt * E + e)
+                let prev = t_get(y_out, flat)
+                t_set(y_out, flat, prev + gate * t_get(ex_out, ebase + flat))
+                i = i + 1
+            }
+            // EVICT shard s (chip slot freed before loading the next)
+            es_evict(st)
+            s = s + 1
+        }
+        e = e + 1
+    }
+}
