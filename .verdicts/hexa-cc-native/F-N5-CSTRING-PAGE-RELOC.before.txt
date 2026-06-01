@@ -1,0 +1,40 @@
+=== BEFORE: PR-A baseline (str1.o, aprime_udf2 @ 811ba1046) ===
+--- otool -l (sections) ---
+  segname 
+  sectname __text
+   segname __TEXT
+      size 0x0000000000000038
+    offset 472
+  sectname __cap
+   segname __HEXA
+      size 0x0000000000000000
+    offset 528
+  sectname __abi
+   segname __HEXA
+      size 0x000000000000000c
+    offset 528
+--- otool -rv (relocs) ---
+/tmp/str1.o:
+Relocation information (__TEXT,__text) 2 entries
+address  pcrel length extern type    scattered symbolnum/value
+0000001c True  long   True   BR26    False     _hexa_println
+00000008 True  long   True   BR26    False     _hexa_set_args
+--- otool -tv (text) ---
+/tmp/str1.o:
+(__TEXT,__text) section
+_main:
+0000000000000000	stp	x29, x30, [sp, #-0x10]!
+0000000000000004	mov	x29, sp
+0000000000000008	bl	0x8
+000000000000000c	sub	sp, sp, #0x10
+__L2c8b_main_bb0:
+0000000000000010	mov	x0, #0x3
+0000000000000014	adrp	x1, 0 ; 0x0
+0000000000000018	.long	0xffff0021
+000000000000001c	bl	0x1c
+0000000000000020	stp	x0, x1, [sp]
+0000000000000024	mov	x0, #0x0
+0000000000000028	mov	x1, #0x0
+000000000000002c	add	sp, sp, #0x10
+0000000000000030	ldp	x29, x30, [sp], #0x10
+0000000000000034	ret
