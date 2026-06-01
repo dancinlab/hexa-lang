@@ -1,0 +1,374 @@
+// HEXA Standard Library — qforge/screening_anderson
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// QFORGE numerical-stability BREAKTHROUGH — Anderson acceleration for the metallic
+// dielectric-screening fixed point (replaces the divergent damped-Picard solver in
+// qforge_screened_dv_columns when the metallic feedback gain > 1).
+//
+// ── THE WALL (d2, exposed by the #2500 composition on a CONVERGED CaH6 cell) ─────
+// The screened ΔV_scr columns are the fixed point of the AFFINE map
+//   T(x) = bare + L·x ,   L = (dielectric feedback) = drho_to_dvscf ∘ χ0(ΔV)
+// where χ0 = the (linear) Sternheimer density-response operator. Damped Picard
+//   x ← (1−β)·x + β·T(x)
+// converges only when the iteration operator M_β = (1−β)I + βL has spectral radius
+// < 1. On a TRULY-CONVERGED metallic ρ the feedback gain ‖L‖ > 1 with components
+// whose (1−β+β·l_i) stays ≥ 1 for ALL β∈(0,1] — so NO Picard β stabilises it; it
+// diverges to NaN at both β=0.3 and β=0.05 (the #2494 finding). The fixed point
+// x* = (I−L)⁻¹·bare nonetheless EXISTS (I−L non-singular ⟺ ε non-singular for a
+// non-resonant metal); the problem is purely the ITERATION, not the solution.
+//
+// ── THE FIX — ANDERSON ACCELERATION (mixing-history, d2 path 1) ───────────────────
+// Anderson acceleration drives a fixed-point map g(x)=T(x) to its root of the
+// residual f(x)=g(x)−x using a short history of past (x, f) pairs. For an AFFINE
+// map g(x)=bare+L·x it is MATHEMATICALLY a (preconditioned) GMRES on (I−L)x=bare and
+// converges to x* in ≤ (Krylov dim) steps EVEN WHEN ‖L‖>1 — it does not require the
+// spectral-radius<1 contraction that Picard does. This is exactly the failure mode
+// here, and Anderson is the standard cure (it is what production DFT SCF mixers use).
+//
+//   step k:  f_k = g(x_k) − x_k
+//            build residual-difference matrix ΔF = [f_k−f_{k-1}, …] over the window m
+//            solve the small (m×m) least-squares  min ‖f_k − ΔF·γ‖  (normal eqns)
+//            x_{k+1} = x_k + β·f_k − (ΔX + β·ΔF)·γ
+//   β here is a *relaxation*, NOT the Picard damping — β=1 is the pure Anderson step
+//   (we default to it; a small β only slows, never destabilises, the affine case).
+//
+// ── d3/d19 REUSE — the per-pass map IS the existing screening physics ─────────────
+// g(x) reuses the SAME Sternheimer Δψ → Δρ → (V_H+f_xc)[Δρ] → rebuild-target chain
+// the Picard solver runs (qforge_sternheimer #2084 + the caller's drho_to_dvscf
+// #2092 kernel). ZERO new physics; the only new code is the Anderson history +
+// the tiny normal-equations solve. The d4 ZERO-kernel limit still returns bare in
+// one pass (f_0 = 0 ⇒ x_1 = x_0 = bare).
+//
+// ── d4 GENERIC ────────────────────────────────────────────────────────────────────
+// H_apply, the bare columns, and drho_to_dvscf are all caller inputs (identical
+// contract to qforge_screened_dv_columns). An EMPTY kernel output (len≠n) is treated
+// as a zero correction (the bare identity limit) — same has_corr guard as the Picard
+// path, so a missing kernel can never inject NaN.
+
+use "stdlib/qforge/sternheimer"
+
+// result bundle — mirror of ScreenedDvResult so callers can swap solvers freely.
+pub struct AndersonDvResult {
+    columns: [[float]],   // nb screened (ΔV_scr ψ_n) columns, each length n
+    scf_iters: int,       // Anderson iterations taken
+    converged: bool,      // ‖f‖<tol reached AND all values finite (no NaN/inf)
+    max_residual: float,  // worst Sternheimer residual over the final pass
+    fixed_point_res: float// final ‖g(x)−x‖ (the dielectric fixed-point residual)
+}
+
+// ── finite guard: detect NaN/inf in a flat bundle (NaN!=NaN; inf via huge mag) ──
+fn ad_all_finite(v: [float], n: int) -> bool {
+    let mut i = 0
+    while i < n {
+        let x = v[i]
+        if x != x { return false }                 // NaN
+        if x > 1.0e300 || x < -1.0e300 { return false }   // inf / overflow
+        i = i + 1
+    }
+    return true
+}
+
+// ── ‖a−b‖₂ over a flat length-N bundle ──────────────────────────────────────────
+fn ad_norm_diff(a: [float], b: [float], n: int) -> float {
+    let mut s = 0.0
+    let mut i = 0
+    while i < n { let d = a[i] - b[i] ; s = s + d * d ; i = i + 1 }
+    return sqrt(s)
+}
+fn ad_norm(a: [float], n: int) -> float {
+    let mut s = 0.0
+    let mut i = 0
+    while i < n { s = s + a[i] * a[i] ; i = i + 1 }
+    return sqrt(s)
+}
+
+// ── ONE fixed-point map pass g(x): Sternheimer Δψ → Δρ → kernel → rebuild target ─
+//   x = current flat screened bundle [nb*n].  Returns the flat g(x) [nb*n] PLUS a
+//   2-element meta tail [.., max_res, all_conv(1/0)] so the caller tracks diagnostics
+//   without a second pass. d3/d19: identical chain to the Picard solver's body.
+fn ad_map(H_apply, states: [[float]], eps: [float], bare: [float],
+          drho_to_dvscf, x: [float], nb: int, n: int,
+          scf_tol: float, st_max_iter: int) -> [float] {
+    // (2) Sternheimer Δψ_n from the CURRENT screened ΔV·ψ columns.
+    let mut dpsi_all = []
+    let mut prep = 0
+    while prep < nb * n { dpsi_all.push(0.0) ; prep = prep + 1 }
+    let mut max_res = 0.0
+    let mut all_conv = 1.0
+    let mut s = 0
+    while s < nb {
+        let mut dvpsi = []
+        let mut k = 0
+        while k < n { dvpsi.push(x[s * n + k]) ; k = k + 1 }
+        let res = qforge_sternheimer(H_apply, eps[s], states[s], states,
+                                     dvpsi, n, scf_tol, st_max_iter)
+        let mut w = 0
+        while w < n { dpsi_all[s * n + w] = res.dpsi[w] ; w = w + 1 }
+        if res.residual > max_res { max_res = res.residual }
+        if res.converged == false { all_conv = 0.0 }
+        s = s + 1
+    }
+    // (3) 1st-order density response Δρ(r) = Σ_occ 2·ψ_n(r)·Δψ_n(r).
+    let mut drho = []
+    let mut r0 = 0
+    while r0 < n { drho.push(0.0) ; r0 = r0 + 1 }
+    let mut nd = 0
+    while nd < nb {
+        let mut i = 0
+        while i < n { drho[i] = drho[i] + 2.0 * states[nd][i] * dpsi_all[nd * n + i] ; i = i + 1 }
+        nd = nd + 1
+    }
+    // (4) screening correction ΔV_corr(r) = (V_H + f_xc)[Δρ].  EMPTY → zero (d4 limit).
+    let dvscr = drho_to_dvscf(drho)
+    let has_corr = (len(dvscr) == n)
+    // (1) rebuild target g(x) = bare + ΔV_corr ⊙ ψ.
+    let mut gx = []
+    let mut nb2 = 0
+    while nb2 < nb {
+        let mut i = 0
+        while i < n {
+            let idx = nb2 * n + i
+            let mut t = bare[idx]
+            if has_corr { t = t + dvscr[i] * states[nb2][i] }
+            gx.push(t)
+            i = i + 1
+        }
+        nb2 = nb2 + 1
+    }
+    gx.push(max_res)
+    gx.push(all_conv)
+    return gx
+}
+
+// ── small dense SPD solve A·γ = b (m×m, m≤window) via Gaussian elimination ──────
+//   A is the Gram matrix ΔFᵀΔF (symmetric, regularised on the diagonal), so a plain
+//   elimination with partial pivoting is robust at this tiny size. Returns γ[m]; on a
+//   singular system returns [] (caller falls back to a plain damped step).
+fn ad_solve(a: [float], b: [float], m: int) -> [float] {
+    // working copies.
+    let mut A = []
+    let mut i = 0
+    while i < m * m { A.push(a[i]) ; i = i + 1 }
+    let mut x = []
+    i = 0
+    while i < m { x.push(b[i]) ; i = i + 1 }
+    // forward elimination with partial pivoting.
+    let mut col = 0
+    while col < m {
+        // pivot = largest |A[r][col]| over r>=col.
+        let mut piv = col
+        let mut pv = A[col * m + col]
+        if pv < 0.0 { pv = -pv }
+        let mut r = col + 1
+        while r < m {
+            let mut v = A[r * m + col]
+            if v < 0.0 { v = -v }
+            if v > pv { pv = v ; piv = r }
+            r = r + 1
+        }
+        if pv < 1.0e-300 { return [] }            // singular
+        if piv != col {
+            let mut c = 0
+            while c < m {
+                let tmp = A[col * m + c] ; A[col * m + c] = A[piv * m + c] ; A[piv * m + c] = tmp
+                c = c + 1
+            }
+            let tmp2 = x[col] ; x[col] = x[piv] ; x[piv] = tmp2
+        }
+        // eliminate below.
+        let mut rr = col + 1
+        while rr < m {
+            let f = A[rr * m + col] / A[col * m + col]
+            let mut c = col
+            while c < m { A[rr * m + c] = A[rr * m + c] - f * A[col * m + c] ; c = c + 1 }
+            x[rr] = x[rr] - f * x[col]
+            rr = rr + 1
+        }
+        col = col + 1
+    }
+    // back substitution.
+    let mut ri = m - 1
+    while ri >= 0 {
+        let mut acc = x[ri]
+        let mut c = ri + 1
+        while c < m { acc = acc - A[ri * m + c] * x[c] ; c = c + 1 }
+        let d = A[ri * m + ri]
+        if d < 1.0e-300 && d > -1.0e-300 { return [] }
+        x[ri] = acc / d
+        ri = ri - 1
+    }
+    return x
+}
+
+// ── public API: Anderson-accelerated screened ΔV_scr·ψ columns (METALLIC-STABLE) ─
+//   Identical I/O contract to qforge_screened_dv_columns EXCEPT `mix` is the Anderson
+//   relaxation β (default behaviour at β=1 is the pure Anderson step) and `mdepth` is
+//   the history window (m≥1; m=1 reduces to damped Picard, m≥2 is the acceleration).
+//   The fixed-point ‖g(x)−x‖<scf_tol AND finiteness (no NaN/inf) gate `converged`.
+pub fn qforge_screened_dv_columns_anderson(H_apply, states: [[float]], eps: [float],
+                                           dv_bare_states: [[float]], drho_to_dvscf,
+                                           scf_tol: float, scf_max_iter: int,
+                                           mix: float, mdepth: int) -> AndersonDvResult {
+    let mut beta = mix
+    if beta <= 0.0 || beta > 1.0 { beta = 1.0 }
+    let mut mwin = mdepth
+    if mwin < 1 { mwin = 5 }
+    let nb = states.len()
+    if nb < 1 || dv_bare_states.len() != nb || len(eps) != nb {
+        return AndersonDvResult { columns: [], scf_iters: 0, converged: false, max_residual: 0.0, fixed_point_res: -1.0 }
+    }
+    let n = len(states[0])
+    if n < 1 {
+        return AndersonDvResult { columns: [], scf_iters: 0, converged: false, max_residual: 0.0, fixed_point_res: -1.0 }
+    }
+    let N = nb * n
+
+    // flat bare bundle + current x (init = bare).
+    let mut bare = []
+    let mut x = []
+    let mut bn = 0
+    while bn < nb {
+        if len(dv_bare_states[bn]) != n {
+            return AndersonDvResult { columns: [], scf_iters: 0, converged: false, max_residual: 0.0, fixed_point_res: -1.0 }
+        }
+        let mut i = 0
+        while i < n { bare.push(dv_bare_states[bn][i]) ; x.push(dv_bare_states[bn][i]) ; i = i + 1 }
+        bn = bn + 1
+    }
+
+    // Anderson history: columns of past x and past residual f = g(x)-x.
+    let mut histx: [[float]] = []      // each entry length N
+    let mut histf: [[float]] = []
+    let mut scf_it = 0
+    let mut max_res = 0.0
+    let mut all_conv = true
+    let mut fp_res = -1.0
+    let mut diverged = false
+
+    while scf_it < scf_max_iter {
+        // g(x) + meta.
+        let gm = ad_map(H_apply, states, eps, bare, drho_to_dvscf, x, nb, n, scf_tol, scf_max_iter)
+        let mut gx = []
+        let mut i = 0
+        while i < N { gx.push(gm[i]) ; i = i + 1 }
+        max_res = gm[N]
+        if gm[N + 1] < 0.5 { all_conv = false }
+
+        // finiteness guard — a NaN/inf in g(x) means the map blew up; stop CLEAN.
+        if !ad_all_finite(gx, N) { diverged = true ; break }
+
+        // residual f = g(x) − x.
+        let mut f = []
+        i = 0
+        while i < N { f.push(gx[i] - x[i]) ; i = i + 1 }
+        fp_res = ad_norm(f, N)
+        if fp_res < scf_tol { x = gx ; scf_it = scf_it + 1 ; break }
+
+        // push current (x, f) into the history window.
+        let mut xc = [] ; let mut fc = []
+        i = 0
+        while i < N { xc.push(x[i]) ; fc.push(f[i]) ; i = i + 1 }
+        histx.push(xc) ; histf.push(fc)
+        // trim to the window: keep the last mwin entries.
+        while histx.len() > mwin {
+            let mut nx: [[float]] = [] ; let mut nf: [[float]] = []
+            let mut j = 1
+            while j < histx.len() { nx.push(histx[j]) ; nf.push(histf[j]) ; j = j + 1 }
+            histx = nx ; histf = nf
+        }
+
+        let mdim = histx.len() - 1     // number of residual differences available
+        let mut x_next = []
+        if mdim < 1 {
+            // first step (or window too small) → plain (Picard-like) relaxed step.
+            i = 0
+            while i < N { x_next.push(x[i] + beta * f[i]) ; i = i + 1 }
+        } else {
+            // build ΔF[k] = histf[last] − histf[last-1-k], ΔX[k] = histx[...] likewise.
+            let last = histx.len() - 1
+            // Gram matrix A = ΔFᵀΔF (mdim×mdim) + small Tikhonov reg; rhs = ΔFᵀ f.
+            let mut A = []
+            let mut z = 0
+            while z < mdim * mdim { A.push(0.0) ; z = z + 1 }
+            let mut rhs = []
+            z = 0
+            while z < mdim { rhs.push(0.0) ; z = z + 1 }
+            // precompute ΔF columns.
+            let mut dF: [[float]] = []
+            let mut dX: [[float]] = []
+            let mut kk = 0
+            while kk < mdim {
+                let idxp = last - 1 - kk
+                let mut dfc = [] ; let mut dxc = []
+                i = 0
+                while i < N {
+                    dfc.push(histf[last][i] - histf[idxp][i])
+                    dxc.push(histx[last][i] - histx[idxp][i])
+                    i = i + 1
+                }
+                dF.push(dfc) ; dX.push(dxc)
+                kk = kk + 1
+            }
+            // A[a][b] = ΔF[a]·ΔF[b], rhs[a] = ΔF[a]·f.
+            let mut a = 0
+            while a < mdim {
+                let mut b = 0
+                while b < mdim {
+                    let mut acc = 0.0
+                    i = 0
+                    while i < N { acc = acc + dF[a][i] * dF[b][i] ; i = i + 1 }
+                    A[a * mdim + b] = acc
+                    b = b + 1
+                }
+                // Tikhonov regularisation on the diagonal for conditioning.
+                A[a * mdim + a] = A[a * mdim + a] * 1.0000001 + 1.0e-12
+                let mut accr = 0.0
+                i = 0
+                while i < N { accr = accr + dF[a][i] * f[i] ; i = i + 1 }
+                rhs[a] = accr
+                a = a + 1
+            }
+            let gamma = ad_solve(A, rhs, mdim)
+            if len(gamma) != mdim {
+                // singular least-squares → fall back to a relaxed step.
+                i = 0
+                while i < N { x_next.push(x[i] + beta * f[i]) ; i = i + 1 }
+            } else {
+                // x_{k+1} = x + β·f − Σ_a γ_a (ΔX[a] + β·ΔF[a]).
+                i = 0
+                while i < N {
+                    let mut v = x[i] + beta * f[i]
+                    let mut a2 = 0
+                    while a2 < mdim {
+                        v = v - gamma[a2] * (dX[a2][i] + beta * dF[a2][i])
+                        a2 = a2 + 1
+                    }
+                    x_next.push(v)
+                    i = i + 1
+                }
+            }
+        }
+        // guard the proposed step — if Anderson produced a non-finite x, stop CLEAN.
+        if !ad_all_finite(x_next, N) { diverged = true ; break }
+        x = x_next
+        scf_it = scf_it + 1
+    }
+
+    // unpack flat → nb columns.
+    let mut cols: [[float]] = []
+    let mut c = 0
+    while c < nb {
+        let mut col: [float] = []
+        let mut i = 0
+        while i < n { col.push(x[c * n + i]) ; i = i + 1 }
+        cols.push(col)
+        c = c + 1
+    }
+    // converged ⟺ a finite fixed point reached ‖f‖<tol AND no divergence AND finite x.
+    let conv = (!diverged) && (fp_res >= 0.0) && (fp_res < scf_tol)
+                && all_conv && (max_res < 1.0) && ad_all_finite(x, N)
+    return AndersonDvResult { columns: cols, scf_iters: scf_it, converged: conv,
+                              max_residual: max_res, fixed_point_res: fp_res }
+}
