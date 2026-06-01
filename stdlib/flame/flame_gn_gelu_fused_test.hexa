@@ -1,0 +1,129 @@
+// ════════════════════════════════════════════════════════════════════════════
+//  flame_gn_gelu_fused_test.hexa — byte-eq selftest for the conv→GN→GELU fusion
+//  (FLAME-PERF milestone ⑤).
+//
+//  Falsifier (pre-registered):
+//    F-FLAME-GN-GELU-FUSED-BYTEEQ  the fused kernel nn_gn_gelu_fused(_off)
+//      produces a GELU output (and a GN-affine output) BYTE-IDENTICAL to the
+//      unfused pair nn_groupnorm_fwd(_off) → nn_gelu_fwd. max_abs_diff target 0.
+//
+//  Path tested = the real CLM trunk block: conv1d → GroupNorm(affine) → GELU.
+//    unfused: nn_conv1d_fwd → nn_groupnorm_fwd → nn_gelu_fwd
+//    fused:   nn_conv1d_fwd → nn_gn_gelu_fused           (GN affine + GELU, 1 pass)
+//  Also exercises the offset variant on a packed affine buffer (trunk idiom).
+//
+//  main-driven (lib-split entrypoint) — run with `hexa run`.
+// ════════════════════════════════════════════════════════════════════════════
+
+use "stdlib/flame/tensor_lib"
+use "stdlib/flame/conv_lib"
+use "stdlib/flame/gn_lib"
+use "stdlib/flame/nn_lib"
+
+fn _gg_abs(x: float) -> float {
+    if x < 0.0 { return 0.0 - x }
+    return x
+}
+
+// max|fused.a - unfused.gelu|  AND  max|fused.y - unfused.gn|  over the path.
+// Returns the larger of the two (single scalar falsifier).
+fn check_path(T: int, C: int, G: int, K: int, dil: int, seed: int) -> float {
+    let Cin = C
+    // conv weights/bias + input
+    let x = t_zeros(T * Cin); t_fill_lcg(x, T * Cin, seed, 0.7)
+    let w = t_zeros(C * Cin * K); t_fill_lcg(w, C * Cin * K, seed + 1, 0.3)
+    let b = t_zeros(C); t_fill_lcg(b, C, seed + 2, 0.2)
+    // GN affine
+    let gamma = t_zeros(C); t_fill_lcg(gamma, C, seed + 3, 0.5)
+    let beta  = t_zeros(C); t_fill_lcg(beta,  C, seed + 4, 0.2)
+
+    // conv → h  (shared front of the path)
+    let h = t_zeros(T * C)
+    nn_conv1d_fwd(x, w, b, h, T, Cin, C, K, dil)
+
+    // unfused: GN(affine) → GELU
+    let y_u = t_zeros(T * C); let mean_u = t_zeros(G); let inv_u = t_zeros(G); let xh_u = t_zeros(T * C)
+    nn_groupnorm_fwd(h, gamma, beta, y_u, mean_u, inv_u, xh_u, T, C, G)
+    let a_u = t_zeros(T * C)
+    nn_gelu_fwd(y_u, a_u, T * C)
+
+    // fused: GN(affine)+GELU in one pass
+    let y_f = t_zeros(T * C); let a_f = t_zeros(T * C)
+    let mean_f = t_zeros(G); let inv_f = t_zeros(G); let xh_f = t_zeros(T * C)
+    nn_gn_gelu_fused(h, gamma, beta, y_f, a_f, mean_f, inv_f, xh_f, T, C, G)
+
+    let mut md = 0.0
+    let mut i = 0
+    while i < T * C {
+        let da = _gg_abs(t_get(a_f, i) - t_get(a_u, i)); if da > md { md = da }
+        let dy = _gg_abs(t_get(y_f, i) - t_get(y_u, i)); if dy > md { md = dy }
+        let dxh = _gg_abs(t_get(xh_f, i) - t_get(xh_u, i)); if dxh > md { md = dxh }
+        i = i + 1
+    }
+    let mut g = 0
+    while g < G {
+        let dm = _gg_abs(t_get(mean_f, g) - t_get(mean_u, g)); if dm > md { md = dm }
+        let dv = _gg_abs(t_get(inv_f, g) - t_get(inv_u, g)); if dv > md { md = dv }
+        g = g + 1
+    }
+    return md
+}
+
+// offset variant: packed affine [L·C], select layer l via goff = boff = l·C.
+fn check_path_off(T: int, C: int, G: int, K: int, dil: int, L: int, l: int, seed: int) -> float {
+    let Cin = C
+    let x = t_zeros(T * Cin); t_fill_lcg(x, T * Cin, seed, 0.7)
+    let w = t_zeros(C * Cin * K); t_fill_lcg(w, C * Cin * K, seed + 1, 0.3)
+    let b = t_zeros(C); t_fill_lcg(b, C, seed + 2, 0.2)
+    let gammaP = t_zeros(L * C); t_fill_lcg(gammaP, L * C, seed + 3, 0.5)
+    let betaP  = t_zeros(L * C); t_fill_lcg(betaP,  L * C, seed + 4, 0.2)
+    let goff = l * C; let boff = l * C
+
+    let h = t_zeros(T * C)
+    nn_conv1d_fwd(x, w, b, h, T, Cin, C, K, dil)
+
+    let y_u = t_zeros(T * C); let mean_u = t_zeros(G); let inv_u = t_zeros(G); let xh_u = t_zeros(T * C)
+    nn_groupnorm_fwd_off(h, gammaP, goff, betaP, boff, y_u, mean_u, inv_u, xh_u, T, C, G)
+    let a_u = t_zeros(T * C)
+    nn_gelu_fwd(y_u, a_u, T * C)
+
+    let y_f = t_zeros(T * C); let a_f = t_zeros(T * C)
+    let mean_f = t_zeros(G); let inv_f = t_zeros(G); let xh_f = t_zeros(T * C)
+    nn_gn_gelu_fused_off(h, gammaP, goff, betaP, boff, y_f, a_f, mean_f, inv_f, xh_f, T, C, G)
+
+    let mut md = 0.0
+    let mut i = 0
+    while i < T * C {
+        let da = _gg_abs(t_get(a_f, i) - t_get(a_u, i)); if da > md { md = da }
+        let dy = _gg_abs(t_get(y_f, i) - t_get(y_u, i)); if dy > md { md = dy }
+        i = i + 1
+    }
+    return md
+}
+
+fn main() {
+    println("flame_gn_gelu_fused_test — conv→GN→GELU fusion byte-eq")
+    // representative CLM-trunk shapes (clm_gen uses G=1; cover G>1 too).
+    let d0 = check_path(128, 64, 1, 3, 1, 11)
+    println("  shape T=128 C=64  G=1 K=3 dil=1  max_abs_diff = " + to_string(d0))
+    let d1 = check_path(256, 128, 1, 3, 2, 23)
+    println("  shape T=256 C=128 G=1 K=3 dil=2  max_abs_diff = " + to_string(d1))
+    let d2 = check_path(128, 64, 8, 3, 1, 37)
+    println("  shape T=128 C=64  G=8 K=3 dil=1  max_abs_diff = " + to_string(d2))
+    // offset (packed affine, trunk idiom): L=3, select l=1.
+    let d3 = check_path_off(128, 64, 1, 3, 2, 3, 1, 41)
+    println("  off   T=128 C=64  G=1 L=3 l=1    max_abs_diff = " + to_string(d3))
+
+    let mut mx = d0
+    if d1 > mx { mx = d1 }
+    if d2 > mx { mx = d2 }
+    if d3 > mx { mx = d3 }
+    println("  OVERALL max_abs_diff = " + to_string(mx))
+    if mx <= 0.0 {
+        println("F-FLAME-GN-GELU-FUSED-BYTEEQ = 1")
+        println("PASS — fused == unfused, byte-identical (max_abs_diff = 0)")
+        return
+    }
+    println("F-FLAME-GN-GELU-FUSED-BYTEEQ = 0")
+    println("FAIL — fused diverges from unfused")
+}

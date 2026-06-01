@@ -68,9 +68,12 @@ fn gen_fwd(tokens: int, embed: int, ecW: int, ecB: int,
         let h = t_zeros(T * d)
         nn_conv1d_fwd_off(x, trunkW, l * dd, trunkB, l * d, h, T, d, d, K, _pow2(l))
         let hnl = t_zeros(T * d); let mean = t_zeros(1); let invl = t_zeros(1); let xhl = t_zeros(T * d)
-        nn_groupnorm_fwd_off(h, trunkG, l * d, trunkBe, l * d, hnl, mean, invl, xhl, T, d, 1)
-        // hn/xh/iv intentionally NOT cached — gen_bwd recomputes them from tin[l].
-        let hg = t_zeros(T * d); nn_gelu_fwd(hnl, hg, T * d)
+        let hg = t_zeros(T * d)
+        // fused GN-affine + GELU — touches the post-conv [T·d] tensor once
+        // (one fewer full read+write round-trip than GN-fwd then GELU-fwd).
+        // hn/xh/iv intentionally NOT cached — gen_bwd recomputes them from tin[l]
+        // (activation-checkpointing #2357 preserved through the fusion).
+        nn_gn_gelu_fused_off(h, trunkG, l * d, trunkBe, l * d, hnl, hg, mean, invl, xhl, T, d, 1)
         let xn = t_zeros(T * d)
         let mut i = 0
         while i < T * d { t_set(xn, i, t_get(x, i) + t_get(hg, i)); i = i + 1 }

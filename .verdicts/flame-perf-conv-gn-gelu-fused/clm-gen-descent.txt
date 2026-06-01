@@ -1,0 +1,7 @@
+clm_gen — GENERAL CLMConvMoE trainer (arbitrary L·E) descent smoke
+  step 1  CE = 4.02517
+  step 13 CE = 0.0218176
+  step 25 CE = 0.00044961
+  loss0 = 4.02517  lossF = 0.00044961
+F-FLAME-CLM-GEN-DESCENT = 1
+PASS — general L·E trainer descends (d=16 L=3 E=4)

@@ -1,0 +1,78 @@
+=== WALL: conv→GN→GELU fusion — unfused (GN-fwd + GELU-fwd, 2 elementwise
+=== passes over [T·C]) vs fused (nn_gn_gelu_fused, 1 pass). COMPILED native.
+
+Falsifier: byte-eq (∧) wall Δ. byte-eq = 0.0 (byte-eq.txt, real stdlib via
+`hexa run`). wall measured below.
+
+Method: self-contained single-file COMPILED bench (`hexa build`, native C, no
+`use` — both paths inlined so the comparison is FAIR; same lesson as ④'s conv
+bench). Times ONLY the GN+GELU region (shared conv front excluded — that is the
+fusion boundary: conv must finish before GN can compute per-group stats, so
+conv→GN cannot stream; the fuseable win is removing the extra post-GN
+read+write pass). G=1 (clm_gen trunk). mono_ns() internal timing, iters=20000.
+
+GELU note (HONEST g63): the SHIPPED kernel (gn_lib _gn_gelu) is the exact libm
+`erf` GELU, byte-identical to nn_lib _nn_gelu — byte-eq PROVEN at max_abs_diff
+= 0.0 in byte-eq.txt (run via `hexa run`, real stdlib). THIS compiled bench
+substitutes a tanh-approx (exp-based) GELU ONLY because the prebuilt AOT binary
+on this host emits a bare `erf` call via the generic fn-pointer path and fails
+to link it (stale erf-AOT; `exp` is a working libm AOT builtin). The wall delta
+targets the eliminated per-element read+write pass over [T·C], which is
+GELU-implementation-INDEPENDENT — both bench paths call the identical _gelu, so
+the only timing difference is the fusion (one sweep vs two). max|delta|=0.0 in
+the bench confirms the two bench paths agree.
+
+────────────────────────────────────────────────────────────────────────────
+RUN 1
+=== conv→GN→GELU fusion wall: unfused (GN+GELU 2 pass) vs fused (1 pass) ===
+Method: self-contained single-file COMPILED bench (hexa build, native C, no use).
+Times ONLY the GN+GELU region (shared conv front excluded). G=1 (clm_gen trunk).
+Inlined GN/GELU/fused == gn_lib/nn_lib math (stdlib byte-eq via flame_gn_gelu_fused_test).
+
+--- shape A: T=256 C=128 (CLM trunk) ---
+shape T=256 C=128 iters=20000
+  max|delta| unfused-vs-fused = 0.0
+  unfused total_ms = 46748.8  per_iter_ms = 2.33744
+  fused   total_ms = 49401.6  per_iter_ms = 2.47008
+  speedup unfused/fused = 0.9463
+
+--- shape B: T=128 C=64 ---
+shape T=128 C=64 iters=20000
+  max|delta| unfused-vs-fused = 0.0
+  unfused total_ms = 12410.9  per_iter_ms = 0.620543
+  fused   total_ms = 12128.6  per_iter_ms = 0.606432
+  speedup unfused/fused = 1.02327
+
+────────────────────────────────────────────────────────────────────────────
+RUN 2 (variance check)
+--- shape A: T=256 C=128 (CLM trunk) ---
+shape T=256 C=128 iters=20000
+  max|delta| unfused-vs-fused = 0.0
+  unfused total_ms = 50596.5  per_iter_ms = 2.52982
+  fused   total_ms = 48233.6  per_iter_ms = 2.41168
+  speedup unfused/fused = 1.04899
+
+--- shape B: T=128 C=64 ---
+shape T=128 C=64 iters=20000
+  max|delta| unfused-vs-fused = 0.0
+  unfused total_ms = 12443.5  per_iter_ms = 0.622174
+  fused   total_ms = 12408.7  per_iter_ms = 0.620437
+  speedup unfused/fused = 1.0028
+
+(additional spot runs observed speedup 0.99–1.08 — same noise band.)
+
+────────────────────────────────────────────────────────────────────────────
+VERDICT: HONEST-NEGATIVE WALL (host) · byte-eq HELD.
+  byte-eq:  max_abs_diff = 0.0 (fused == unfused, bit-identical) — byte-eq.txt.
+  wall:     speedup unfused/fused oscillates 0.946–1.084x across runs, centered
+            on ~1.0x — i.e. the host fusion wall Δ is NEGLIGIBLE / inside
+            run-to-run noise. The GELU region is COMPUTE-bound (one libm
+            transcendental per element dominates), so eliminating one [T·C]
+            read+write pass is lost in the transcendental cost on host CPU.
+
+The conv→GN→GELU fusion win is a MEMORY-BANDWIDTH (HBM-round-trip) property —
+largest on GPU, where the post-GN tensor would otherwise round-trip through
+HBM; on host CPU it is cache-locality only and here is noise-dominated. The
+fused kernel is landed because byte-eq HOLDS and it strictly removes a buffer
+round-trip (a structural improvement + the GPU-fused-kernel substrate); the
+measured host wall ↓ is HONEST-DEFERRED to the forge fused GPU kernel.
