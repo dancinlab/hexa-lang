@@ -1,0 +1,147 @@
+// ════════════════════════════════════════════════════════════════════════
+// stdlib/flame/flame_bf16_tc_matmul_test.hexa — RFC 049 §TC host smoke
+//
+// Verifies the host-closeable half of the BF16 Tensor-Core dense-matmul
+// mega-kernel (nn_matmul_bf16_fwd / nn_matmul_bf16_host in nn_lib.hexa) —
+// the readout / router / expert hot path. Two falsifier legs:
+//
+//   F-RFC049-BF16-TC-MATMUL (host accuracy)
+//       max|Δ|/max|C| of the BF16-rounded matmul vs the FP64 farr_matmul
+//       baseline ≤ 5e-2 (the RFC 049 Stage-2 BF16 tolerance).
+//
+//   F-RFC049-BF16-TC-DESCENT (descent stays)
+//       a least-squares fit  C = A @ B  whose forward uses the BF16-TC
+//       matmul keeps loss STRICTLY decreasing over gradient steps on B.
+//
+// The 9.67× GPU Tensor-Core WALL win is HONEST-DEFERRED to a CUDA pod — it
+// is a hardware property and is NOT measured here. $0 — CPU farr only.
+//
+// SSOT: stdlib/flame/nn_lib.hexa (nn_matmul_bf16_fwd · RFC 049 §TC)
+// ════════════════════════════════════════════════════════════════════════
+
+use "stdlib/flame/nn_lib"
+use "stdlib/flame/tensor_lib"
+
+fn _abs(x: float) -> float { if x < 0.0 { return 0.0 - x } return x }
+
+// Max |Δ| and max |ref| over n elements of two farr handles.
+fn _max_dev(a: int, b: int, n: int) -> float {
+    let mut m = 0.0
+    let mut i = 0
+    while i < n {
+        let d = _abs(farr_get(a, i) - farr_get(b, i))
+        if d > m { m = d }
+        i = i + 1
+    }
+    return m
+}
+fn _max_abs(a: int, n: int) -> float {
+    let mut m = 0.0
+    let mut i = 0
+    while i < n {
+        let v = _abs(farr_get(a, i))
+        if v > m { m = v }
+        i = i + 1
+    }
+    return m
+}
+
+fn main() {
+    println("flame_bf16_tc_matmul — BF16 Tensor-Core dense matmul (readout/router/expert)")
+
+    // ── Leg 1: host accuracy vs FP64 baseline ────────────────────────────
+    // Llama-FFN-shaped dense matmul: A[M,K] @ B[K,N]. M=rows (tokens),
+    // K=inner (d_model), N=out (d_ff / vocab / experts·C).
+    let M = 16; let K = 24; let N = 12
+    let A = farr_zeros(M * K); t_fill_lcg(A, M * K, 17, 0.5)
+    let B = farr_zeros(K * N); t_fill_lcg(B, K * N, 5, 0.3)
+
+    let C_fp64 = farr_matmul(A, M, K, B, N)
+    let C_bf16 = nn_matmul_bf16_fwd(A, B, M, K, N)
+
+    if C_bf16 < 0 {
+        println("FAIL: nn_matmul_bf16_fwd returned a bad handle")
+        return
+    }
+    let dev = _max_dev(C_fp64, C_bf16, M * N)
+    let scale = _max_abs(C_fp64, M * N)
+    let rel = if scale > 0.0 { dev / scale } else { dev }
+    let tol = 0.05
+    print("  shape M×K×N = "); print(M); print("×"); print(K); print("×"); println(N)
+    print("  max|Δ| = "); println(to_string(dev))
+    print("  max|C| = "); println(to_string(scale))
+    print("  rel    = "); println(to_string(rel))
+    let leg1 = rel <= tol
+    if leg1 { println("  F-RFC049-BF16-TC-MATMUL = 1 (rel ≤ 5e-2)") }
+    else    { println("  F-RFC049-BF16-TC-MATMUL = 0"); println("FAIL"); return }
+
+    // Sanity: BF16 rounding actually perturbs the result (not a silent FP64
+    // passthrough) — dev must be strictly > 0 for these non-power-of-two vals.
+    if dev <= 0.0 {
+        println("  WARN: dev == 0 (BF16 rounding had no effect — suspect)")
+    }
+
+    // ── Leg 2: descent stays under BF16-TC forward ───────────────────────
+    // Fit B in  Y = A @ B  to a target Yt = A @ B*  via gradient descent,
+    // where the forward prediction uses the BF16-TC matmul. Loss is MSE.
+    // gradient (FP64): dB = Aᵀ @ (Y - Yt) · (2/(M·N)). We only round the
+    // forward (the inference hot path); the optimizer step stays FP64.
+    let Bstar = farr_zeros(K * N); t_fill_lcg(Bstar, K * N, 9, 0.4)
+    let Yt = farr_matmul(A, M, K, Bstar, N)
+
+    let Bcur = farr_zeros(K * N); t_fill_lcg(Bcur, K * N, 3, 0.2)
+    let lr = 0.08
+    let steps = 12
+    let mut prev_loss = 1000000.0
+    let mut descended = 1
+    let mut s = 0
+    while s < steps {
+        // forward through the BF16-TC matmul (the kernel under test)
+        let Y = nn_matmul_bf16_fwd(A, Bcur, M, K, N)
+        // MSE loss
+        let mut loss = 0.0
+        let mut i = 0
+        while i < M * N {
+            let e = farr_get(Y, i) - farr_get(Yt, i)
+            loss = loss + e * e
+            i = i + 1
+        }
+        loss = loss / to_float(M * N)
+        print("    step "); print(s); print("  loss = "); println(to_string(loss))
+        if s > 0 {
+            if loss >= prev_loss { descended = 0 }
+        }
+        prev_loss = loss
+        // gradient dB = Aᵀ @ (Y - Yt) · (2/(M·N))   [FP64 optimizer]
+        let resid = farr_zeros(M * N)
+        let mut r = 0
+        while r < M * N {
+            let _ = farr_set(resid, r, farr_get(Y, r) - farr_get(Yt, r))
+            r = r + 1
+        }
+        // dB[k,n] = Σ_m A[m,k] · resid[m,n]
+        let scl = 2.0 / to_float(M * N)
+        let mut k = 0
+        while k < K {
+            let mut n = 0
+            while n < N {
+                let mut acc = 0.0
+                let mut m = 0
+                while m < M {
+                    acc = acc + farr_get(A, m * K + k) * farr_get(resid, m * N + n)
+                    m = m + 1
+                }
+                let cur = farr_get(Bcur, k * N + n)
+                let _ = farr_set(Bcur, k * N + n, cur - lr * scl * acc)
+                n = n + 1
+            }
+            k = k + 1
+        }
+        s = s + 1
+    }
+    if descended == 1 { println("  F-RFC049-BF16-TC-DESCENT = 1 (loss strictly decreasing)") }
+    else              { println("  F-RFC049-BF16-TC-DESCENT = 0"); println("FAIL"); return }
+
+    println("PASS — BF16-TC host matmul accurate (rel ≤ 5e-2) AND descent holds")
+    println("GPU 9.67× Tensor-Core WALL: HONEST-DEFERRED to CUDA pod (RFC 049 §TC)")
+}

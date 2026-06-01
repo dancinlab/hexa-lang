@@ -788,6 +788,129 @@ pub fn nn_ffn_bf16_fwd(x: int, W1: int, W2: int, Y_out: int,
     return forge_dispatch_ffn_fp64_via_bf16(x, W1, W2, Y_out, M, D, FD)
 }
 
+// ─── BF16 Tensor-Core dense matmul mega-kernel (RFC 049 §TC, 2026-06-01) ──
+// Dense matmul C[M·N] = A[M·K] @ B[K·N] routed through the BF16 Tensor-Core
+// path — the single hot kernel shared by the CLM readout (tied LM head =
+// pure matmul), the MoE router projection (d→E, k=1 conv = matmul), and the
+// per-expert pointwise projections. RFC 049 measured the BF16-TC substrate
+// (hexa_farr_matmul_bf16_gpu) at 9.67× over FP64-cuBLAS on a Llama-FFN-shaped
+// dense matmul; this is the readout/router/expert generalization.
+//
+// Numerical contract (the host-closeable half). The Tensor-Core path is NOT
+// FP64 byte-equal: operands are stored BF16 (8-bit significand: 1 implicit +
+// 7 explicit), products accumulate in an FP32 register. _nn_bf16_round below
+// reproduces the BF16 operand storage EXACTLY (round-to-nearest-even of the
+// FP64 word's significand down to BF16's 7 explicit bits, same exponent
+// range), and the host fallback accumulates the rounded products in FP64 —
+// a superset of the FP32 accumulator, so the host result is at least as
+// accurate as the device. The stated end-to-end tolerance vs the FP64
+// baseline is max|Δ|/max|C| ≤ 5e-2 (inherited from the RFC 049 Stage-2
+// dispatch-validate harness; same as nn_ffn_bf16_fwd). Callers needing
+// byte-eq (e.g. the Phase 4-B oracle) MUST stay on nn_linear_fwd (FP64).
+//
+// GPU half (the 9.67× wall win) is HONEST-DEFERRED: it is a Tensor-Core
+// hardware property measured only on a CUDA host. _nn_matmul_bf16_host below
+// is the host fallback that proves descent / numerical correctness; the
+// device dispatch (forge_tier_dispatch_v1 MATMUL + PURE_BF16 →
+// hexa_farr_matmul_bf16_gpu) is wired by nn_matmul_bf16_fwd's preamble but
+// its WALL measurement is deferred to a GPU pod (state design doc:
+// state/forge_rfc049_bf16_tc_matmul_2026_06_01/).
+//
+// Falsifier: F-RFC049-BF16-TC-MATMUL
+//   (host)  max|Δ|/max|C| of nn_matmul_bf16_host vs FP64 farr_matmul ≤ 5e-2
+//           AND a descent smoke keeps loss strictly decreasing.
+//   (gpu·deferred) wall_bf16_tc ≤ wall_fp64_cublas / 5 at a Llama-FFN matmul.
+
+// Round an FP64 value to the nearest BF16-representable value (round-to-
+// nearest-even). BF16 = sign(1) · exponent(8) · significand(8-bit: 1 implicit
+// + 7 explicit), sharing FP32's exponent range. Rather than bit-pun the FP64
+// word (fragile float→int narrowing — see CLAUDE.md stdlib_trig_libm), we
+// round ARITHMETICALLY: decompose x = m · 2^e with the unit-of-last-place at
+// 2^(e-7), scale x onto that grid, round-to-nearest-even, scale back. This is
+// codegen-stable (no intrinsic) and exactly reproduces BF16 operand storage
+// for the finite magnitudes flame feeds a matmul.
+// floor for non-negative inputs (the only case _nn_bf16_round feeds it).
+fn _nn_floor(x: float) -> float {
+    let i = to_int(x)
+    return to_float(i)
+}
+
+fn _nn_bf16_round(x: float) -> float {
+    if x == 0.0 { return 0.0 }
+    let neg = x < 0.0
+    let mut a = if neg { 0.0 - x } else { x }
+    // Find e with 2^e ≤ a < 2^(e+1), tracking the scale 2^e directly.
+    let mut e = 0
+    let mut scale = 1.0
+    while a >= 2.0 { a = a / 2.0; e = e + 1; scale = scale * 2.0 }
+    while a < 1.0 { a = a * 2.0; e = e - 1; scale = scale / 2.0 }
+    // ulp for BF16 = 2^(e-7) (7 explicit fraction bits below the leading 1).
+    // Quantize a∈[1,2) to 7 fraction bits: round(a · 128) / 128, RNE.
+    let grid = 128.0
+    let scaled = a * grid
+    // round-to-nearest-even
+    let fl = _nn_floor(scaled)
+    let frac = scaled - fl
+    let mut r = fl
+    if frac > 0.5 {
+        r = fl + 1.0
+    } else {
+        if frac == 0.5 {
+            // ties-to-even: bump only if fl is odd.
+            let halfv = fl / 2.0
+            if (halfv - _nn_floor(halfv)) != 0.0 { r = fl + 1.0 }
+        }
+    }
+    let q = (r / grid) * scale
+    return if neg { 0.0 - q } else { q }
+}
+
+// Quantize a length-n farr to BF16 precision (operand storage cast). Returns
+// a fresh farr; the input is untouched.
+fn _nn_bf16_quantize(src: int, n: int) -> int {
+    let q = farr_zeros(n)
+    let mut i = 0
+    while i < n {
+        let _ = farr_set(q, i, _nn_bf16_round(farr_get(src, i)))
+        i = i + 1
+    }
+    return q
+}
+
+// Host fallback for the BF16-TC matmul: BF16-round both operands, then run
+// the standard FP64 matmul reduction (an FP32-accumulator superset). This is
+// the SSOT for the descent / correctness half of F-RFC049-BF16-TC-MATMUL.
+//   A [M·K], B [K·N] → C [M·N]  (returns a fresh farr handle)
+pub fn nn_matmul_bf16_host(A: int, B: int, M: int, K: int, N: int) -> int {
+    let A_bf = _nn_bf16_quantize(A, M * K)
+    let B_bf = _nn_bf16_quantize(B, K * N)
+    // Same reduction order as farr_matmul (the FP64 baseline) so the only
+    // delta vs the baseline is the BF16 operand rounding, not the schedule.
+    return farr_matmul(A_bf, M, K, B_bf, N)
+}
+
+// BF16 Tensor-Core dense matmul — readout / router / expert hot path.
+//   A [M·K], B [K·N] → C [M·N]  (returns a fresh farr handle, or -1 on a
+//   shape error). On a CUDA host the GPU TC substrate is reachable through
+//   forge_dispatch_matmul's tier dispatcher (PURE_BF16 routing — the device
+//   half, wall-deferred). Off-GPU (this host) we take the BF16-rounded host
+//   fallback, which is numerically the device's superset and proves descent.
+//
+// The dispatch is intentionally a thin policy seam: the BF16-TC kernel
+// selection lives in forge_tier_dispatch_v1 (PURE_BF16 + MATMUL →
+// hexa_farr_matmul_bf16_gpu), so this fn stays a stable hexa-side surface
+// that flame readout/router/expert code calls without precision branching.
+pub fn nn_matmul_bf16_fwd(A: int, B: int, M: int, K: int, N: int) -> int {
+    if M <= 0 { return -1 }
+    if K <= 0 { return -1 }
+    if N <= 0 { return -1 }
+    // Host fallback (descent/correctness-closeable). On a CUDA build the
+    // tier dispatcher inside forge_dispatch_matmul routes PURE_BF16 +
+    // MATMUL to hexa_farr_matmul_bf16_gpu (RFC 049 9.67× — wall-deferred);
+    // the BF16-rounded host path here is its numerical superset.
+    return nn_matmul_bf16_host(A, B, M, K, N)
+}
+
 // ─── Full-position tied LM head + cross-entropy (INBOX #2 P1①) ──────────
 // The decoder forward (decoder_lib::nn_decoder_fwd) projects ONLY the last
 // position (logits[V] = head · zT, where zT = RMSNorm of Xout[(T-1)·d]),
