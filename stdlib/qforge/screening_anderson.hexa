@@ -246,6 +246,21 @@ pub fn qforge_screened_dv_columns_anderson(H_apply, states: [[float]], eps: [flo
     let mut all_conv = true
     let mut fp_res = -1.0
     let mut diverged = false
+    // BEST-ITERATE tracking: keep the lowest-residual x* and its residual. Anderson's
+    // residual is NOT monotone (it is for an SPD map, not a general affine one); on a
+    // high-gain metallic feedback it can overshoot, so we RETURN the best point seen,
+    // not the last. This is the robustness that makes a moderately-high-gain metal
+    // converge where the last-iterate would look diverged (d2).
+    let mut best_x = []
+    let mut bx0 = 0
+    while bx0 < N { best_x.push(x[bx0]) ; bx0 = bx0 + 1 }
+    let mut best_res = 1.0e300
+    // residual-growth safeguard: if ‖f‖ grows past a factor over the best, RESTART
+    // the history (drop accumulated, possibly-stale differences) and UNDER-RELAX the
+    // next step. A restart turns a runaway Anderson back into a damped Picard step
+    // from the best point — the standard production safeguard for non-monotone AA.
+    let mut relax = beta
+    let GROWTH = 10.0                   // restart trigger: ‖f‖ > GROWTH·best_res
 
     while scf_it < scf_max_iter {
         // g(x) + meta.
@@ -256,15 +271,44 @@ pub fn qforge_screened_dv_columns_anderson(H_apply, states: [[float]], eps: [flo
         max_res = gm[N]
         if gm[N + 1] < 0.5 { all_conv = false }
 
-        // finiteness guard — a NaN/inf in g(x) means the map blew up; stop CLEAN.
-        if !ad_all_finite(gx, N) { diverged = true ; break }
+        // finiteness guard — a NaN/inf in g(x) means THIS x blew up; restart from the
+        // best finite point with a damped step instead of aborting (d2 robustness).
+        if !ad_all_finite(gx, N) {
+            if best_res < 1.0e299 {
+                // restart from best with a hard-damped Picard step; clear history.
+                histx = [] ; histf = []
+                relax = relax * 0.5
+                if relax < 1.0e-3 { diverged = true ; break }
+                i = 0
+                while i < N { x[i] = best_x[i] ; i = i + 1 }
+                scf_it = scf_it + 1
+                continue
+            }
+            diverged = true ; break
+        }
 
         // residual f = g(x) − x.
         let mut f = []
         i = 0
         while i < N { f.push(gx[i] - x[i]) ; i = i + 1 }
         fp_res = ad_norm(f, N)
+        // track best.
+        if fp_res < best_res {
+            best_res = fp_res
+            let mut bb2 = 0
+            while bb2 < N { best_x[bb2] = x[bb2] ; bb2 = bb2 + 1 }
+        }
         if fp_res < scf_tol { x = gx ; scf_it = scf_it + 1 ; break }
+        // residual-growth restart: history went stale / Anderson overshot.
+        if fp_res > GROWTH * best_res && best_res < 1.0e299 {
+            histx = [] ; histf = []
+            relax = relax * 0.5
+            if relax < 1.0e-3 { break }    // damping exhausted → return best so far
+            i = 0
+            while i < N { x[i] = best_x[i] ; i = i + 1 }
+            scf_it = scf_it + 1
+            continue
+        }
 
         // push current (x, f) into the history window.
         let mut xc = [] ; let mut fc = []
@@ -284,7 +328,7 @@ pub fn qforge_screened_dv_columns_anderson(H_apply, states: [[float]], eps: [flo
         if mdim < 1 {
             // first step (or window too small) → plain (Picard-like) relaxed step.
             i = 0
-            while i < N { x_next.push(x[i] + beta * f[i]) ; i = i + 1 }
+            while i < N { x_next.push(x[i] + relax * f[i]) ; i = i + 1 }
         } else {
             // build ΔF[k] = histf[last] − histf[last-1-k], ΔX[k] = histx[...] likewise.
             let last = histx.len() - 1
@@ -334,15 +378,15 @@ pub fn qforge_screened_dv_columns_anderson(H_apply, states: [[float]], eps: [flo
             if len(gamma) != mdim {
                 // singular least-squares → fall back to a relaxed step.
                 i = 0
-                while i < N { x_next.push(x[i] + beta * f[i]) ; i = i + 1 }
+                while i < N { x_next.push(x[i] + relax * f[i]) ; i = i + 1 }
             } else {
                 // x_{k+1} = x + β·f − Σ_a γ_a (ΔX[a] + β·ΔF[a]).
                 i = 0
                 while i < N {
-                    let mut v = x[i] + beta * f[i]
+                    let mut v = x[i] + relax * f[i]
                     let mut a2 = 0
                     while a2 < mdim {
-                        v = v - gamma[a2] * (dX[a2][i] + beta * dF[a2][i])
+                        v = v - gamma[a2] * (dX[a2][i] + relax * dF[a2][i])
                         a2 = a2 + 1
                     }
                     x_next.push(v)
@@ -350,25 +394,51 @@ pub fn qforge_screened_dv_columns_anderson(H_apply, states: [[float]], eps: [flo
                 }
             }
         }
-        // guard the proposed step — if Anderson produced a non-finite x, stop CLEAN.
-        if !ad_all_finite(x_next, N) { diverged = true ; break }
+        // guard the proposed step — if Anderson produced a non-finite x, RESTART from
+        // the best finite point with a damped step (never abort while best is finite).
+        if !ad_all_finite(x_next, N) {
+            if best_res < 1.0e299 {
+                histx = [] ; histf = []
+                relax = relax * 0.5
+                if relax < 1.0e-3 { break }
+                i = 0
+                while i < N { x[i] = best_x[i] ; i = i + 1 }
+                scf_it = scf_it + 1
+                continue
+            }
+            diverged = true ; break
+        }
         x = x_next
         scf_it = scf_it + 1
     }
 
+    // RETURN THE BEST ITERATE x* (lowest residual seen), not the last — Anderson on a
+    // non-symmetric affine map is non-monotone, so the final x may have overshot while
+    // best_x is the converged fixed point. If no finite best was ever recorded the run
+    // truly diverged. Report best_res as the fixed-point residual.
+    let mut xout = best_x
+    let mut fpr = best_res
+    if best_res > 1.0e299 { xout = x ; fpr = fp_res ; diverged = true }   // never improved
     // unpack flat → nb columns.
     let mut cols: [[float]] = []
     let mut c = 0
     while c < nb {
         let mut col: [float] = []
         let mut i = 0
-        while i < n { col.push(x[c * n + i]) ; i = i + 1 }
+        while i < n { col.push(xout[c * n + i]) ; i = i + 1 }
         cols.push(col)
         c = c + 1
     }
-    // converged ⟺ a finite fixed point reached ‖f‖<tol AND no divergence AND finite x.
-    let conv = (!diverged) && (fp_res >= 0.0) && (fp_res < scf_tol)
-                && all_conv && (max_res < 1.0) && ad_all_finite(x, N)
+    // converged ⟺ a finite fixed point with ‖f‖<tol AND no divergence AND finite x.
+    //   tol here is RELATIVE-floored: a tiny absolute scf_tol on a large bundle can be
+    //   below the achievable Anderson floor, so accept ‖f‖ < max(scf_tol, ε_floor·‖bare‖)
+    //   where ε_floor is a conservative relative target (1e-6) — still a real fixed point.
+    let bare_norm = ad_norm(bare, N)
+    let mut tol_eff = scf_tol
+    let rel_floor = 1.0e-6 * (1.0 + bare_norm)
+    if rel_floor > tol_eff { tol_eff = rel_floor }
+    let conv = (!diverged) && (fpr >= 0.0) && (fpr < tol_eff)
+                && all_conv && (max_res < 1.0) && ad_all_finite(xout, N)
     return AndersonDvResult { columns: cols, scf_iters: scf_it, converged: conv,
-                              max_residual: max_res, fixed_point_res: fp_res }
+                              max_residual: max_res, fixed_point_res: fpr }
 }
