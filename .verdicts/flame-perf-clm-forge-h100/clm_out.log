@@ -1,0 +1,7 @@
+clm_large — CLMConvMoE LARGE rung d768/L12/E12 = 44.68M (real config run)
+  n_params = 44678668 (expect 44,678,668 for d768/L12/E12)
+  step 1  CE = 4.81414
+  step 4 CE = 0.0132543
+  loss0 = 4.81414  lossF = 0.0132543
+F-FLAME-CLM-LARGE-RUN = 1
+PASS — LARGE rung (44.68M) builds + trains + descends on hexa-native stack
