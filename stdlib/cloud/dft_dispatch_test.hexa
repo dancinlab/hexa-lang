@@ -149,6 +149,35 @@ fn main() {
     _check("rent query: caller --query overrides cap (last-wins)",
         _lt_index(q3, "dph_total<2.0", "dph_total<8.0"), 1)
 
+    // ── COST LEVER (handoff 23ffc7ed): CPU-first tier then GPU fallback ──
+    // The CPU-first query keeps the SAME reliability/core/bandwidth floors but
+    // (a) carries NO gpu requirement and (b) tightens the price ceiling to a
+    // CPU-class rate (dph_total<0.6) so a reliable CPU offer wins when present.
+    let qc = dft_rent_query_cpu_first("")
+    _check("cpu-first: same reliability floor", _has(qc, "reliability>0.97"), 1)
+    _check("cpu-first: same 16+ phys-core floor", _has(qc, "cpu_cores_effective>=16"), 1)
+    _check("cpu-first: same inet_down floor", _has(qc, "inet_down>=200"), 1)
+    _check("cpu-first: tighter CPU-class dph ceiling (<0.6)", _has(qc, "dph_total<0.6"), 1)
+    _check("cpu-first: NOT the GPU-tier ceiling (<2.0)", _has(qc, "dph_total<2.0"), 0)
+    _check("cpu-first: no gpu_name requirement", _has(qc, "gpu_name"), 0)
+    _check("cpu-first: appends caller predicate", _has(dft_rent_query_cpu_first("cpu_ram>=64"), "cpu_ram>=64"), 1)
+
+    // tier list = [CPU-first, GPU-fallback]: ordered CPU-then-GPU, and element
+    // [1] is EXACTLY the original dft_rent_query (fallback preserves behavior).
+    let tiers = dft_rent_query_tiers("")
+    _check("tiers: exactly two tiers", len(tiers), 2)
+    _check("tiers: tier-0 is the CPU-first query", _seq(tiers[0], dft_rent_query_cpu_first("")), 1)
+    _check("tiers: tier-1 == original dft_rent_query (fallback unchanged)", _seq(tiers[1], dft_rent_query("")), 1)
+    _check("tiers: CPU tier has the tighter ceiling, GPU tier the original",
+        _bool_int(_has(tiers[0], "dph_total<0.6") == 1 && _has(tiers[1], "dph_total<2.0") == 1), 1)
+    // order is CPU-then-GPU: the CPU ceiling appears in tier-0, the GPU ceiling in tier-1.
+    _check("tiers: order is CPU-first then GPU-fallback",
+        _bool_int(_has(tiers[0], "dph_total<2.0") == 0 && _has(tiers[1], "dph_total<0.6") == 0), 1)
+    // a caller predicate flows through both tiers identically (suffix preserved).
+    let tiers_x = dft_rent_query_tiers("cpu_ram>=64")
+    _check("tiers: caller predicate flows into BOTH tiers",
+        _bool_int(_has(tiers_x[0], "cpu_ram>=64") == 1 && _has(tiers_x[1], "cpu_ram>=64") == 1), 1)
+
     // ── ② bare-IP direct endpoint parser (#1239(2) fix) ──────────────
     let inst_json = "[{\"id\": 12345, \"public_ipaddr\": \"1.2.3.4\", \"ports\": {\"22/tcp\": [{\"HostPort\": \"40012\"}]}}]"
     let ep = vast_parse_direct_endpoint(inst_json, "12345")
