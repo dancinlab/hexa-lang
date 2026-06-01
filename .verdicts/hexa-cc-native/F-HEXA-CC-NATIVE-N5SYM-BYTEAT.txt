@@ -1,0 +1,20 @@
+F-HEXA-CC-NATIVE-N5SYM-BYTEAT — byte_at → hexa_str_byte_at (N5-sym pt4)
+falsifier: after mapping, bare `_byte_at` must vanish from cc-cb2.o undefined set.
+
+method: rebuild aprime (transpiler=hexa_v2, hexat was cleaned from shared tree)
+with the byte_at-only edit → re-emit cc-cb2.o (atlas-skip) → nm -u.
+
+verbatim:
+  [5/5] smoke: exit(42)==42 PASS — aprime_cb2 OK
+  build OK: 2647928B
+  emit rc=0 .o=2651416B
+  OK: _byte_at 사라짐
+
+verdict: 🟢 SUPPORTED-NUMERICAL — _byte_at collapsed onto _hexa_str_byte_at
+(HexaVal s, HexaVal idx — signature matches the generic STMT_CALL emit).
+
+NOTE (honest): get/set were investigated this round and DEFERRED, not mapped.
+Runtime ABI is hexa_map_get(HexaVal m, const char* key) — a bare rename would
+pass a raw HexaVal where const char* is expected (links clean, miscompiles at
+runtime; nm cannot catch a calling-convention mismatch). Needs a dedicated
+hexa_to_cstring(key) coercion branch. Residual N5-sym 8 → 7.
