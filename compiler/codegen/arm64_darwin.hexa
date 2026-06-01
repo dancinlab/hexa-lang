@@ -1374,15 +1374,29 @@ fn _builtin_runtime_sym(name: string) -> string {
     // keys-method→hexa_map_keys) and is VERIFIED present in self/runtime.c.
     // `keys` lowers as a method STMT_CALL with the receiver as first arg
     // (cf. `find` → hexa_find_poly).
-    // DEFERRED (mis-mapped is worse than unmapped — this file's policy):
-    // `get`/`set` need the key hexa_to_cstring'd (map ABI takes const char*),
-    // `mkdir` collides with libc mkdir, `byte_at` resolves via cg_string_sym
-    // (rt_*_v vs hexa_* ambiguous), `sha256_hex` target unconfirmed.
     if name == "byte_len"      { return "hexa_byte_len" }
     if name == "bytes_to_str_raw" { return "hexa_bytes_to_str_raw" }
     if name == "list_dir"      { return "hexa_list_dir" }
     if name == "mono_ns"       { return "hexa_mono_ns" }
     if name == "keys"          { return "hexa_map_keys" }
+    // N5-sym class-B2: the string `byte_at` also fell through to a bare name.
+    // Its target hexa_str_byte_at(HexaVal s, HexaVal idx) (runtime_core.c:5393,
+    // cg_string_sym:66 single branch) takes both args as raw HexaVal, so the
+    // generic STMT_CALL emit (raw HexaVal pairs) is calling-convention-correct.
+    // VERIFIED present in the runtime; the obj already references it from
+    // correctly-lowered sites, so this collapses the bare ref onto an
+    // already-resolved symbol (0 new symbols, 0 miscompile risk).
+    if name == "byte_at"       { return "hexa_str_byte_at" }
+    // STILL DEFERRED (unmapped-is-safer-than-mis-mapped — this file's policy):
+    // `get`/`set` map-methods CANNOT be a bare rename: the runtime ABI is
+    // hexa_map_get(HexaVal m, const char* key) — the key is a C STRING, and
+    // the C-path emits hexa_map_get(m, hexa_to_cstring(k)) to coerce it. A
+    // bare rename would pass the raw HexaVal key where a const char* is
+    // expected → links clean but miscompiles at runtime (HexaVal bits read as
+    // a pointer). Needs a dedicated lowering that wraps the key in
+    // hexa_to_cstring (cf. the index_of branch), deferred to its own change.
+    // `mkdir` collides with libc mkdir (needs a hexa_mkdir wrapper),
+    // `sha256_hex` target unconfirmed.
     // Low-level memory / pointer builtins — name -> runtime symbol.
     // Authoritative mapping mirrored from self/codegen_c2.hexa §G5/B3.
     // All take/return HexaVal pairs so the generic STMT_CALL emit path
