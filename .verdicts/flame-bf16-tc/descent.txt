@@ -1,0 +1,21 @@
+flame_bf16_tc_matmul — BF16 Tensor-Core dense matmul (readout/router/expert)
+  shape M×K×N = 16×24×12
+  max|Δ| = 0.0017881
+  max|C| = 0.836972
+  rel    = 0.00213639
+  F-RFC049-BF16-TC-MATMUL = 1 (rel ≤ 5e-2)
+    step 0  loss = 0.113261
+    step 1  loss = 0.112729
+    step 2  loss = 0.112146
+    step 3  loss = 0.111575
+    step 4  loss = 0.111032
+    step 5  loss = 0.110517
+    step 6  loss = 0.109947
+    step 7  loss = 0.109376
+    step 8  loss = 0.108847
+    step 9  loss = 0.10833
+    step 10  loss = 0.107784
+    step 11  loss = 0.107267
+  F-RFC049-BF16-TC-DESCENT = 1 (loss strictly decreasing)
+PASS — BF16-TC host matmul accurate (rel ≤ 5e-2) AND descent holds
+GPU 9.67× Tensor-Core WALL: HONEST-DEFERRED to CUDA pod (RFC 049 §TC)
