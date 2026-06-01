@@ -1276,7 +1276,12 @@ fn cuda_link_decision(self_dir, c_file) {
     }
     // Resolve the device compute-capability (sm_XX) from the live GPU; fall
     // back to sm_90 (Hopper/H100, the d768 target) when nvidia-smi is absent.
-    let mut dev_cc = exec("nvidia-smi --query-gpu=compute_cap --format=csv,noheader 2>/dev/null | head -1 | tr -d '. \\n'").trim()
+    // HEXA_CUDA_ARCH env overrides the auto-detected cc — REQUIRED when the live
+    // GPU is newer than the installed CUDA toolkit (e.g. a B200 reports sm_100
+    // but a CUDA-12.4 nvcc only targets up to sm_90; sm_90 PTX runs on the B200
+    // via driver JIT, so HEXA_CUDA_ARCH=90 keeps the forge cuBLAS path alive).
+    let _arch_env = env("HEXA_CUDA_ARCH")
+    let mut dev_cc = if _arch_env != "" { _arch_env } else { exec("nvidia-smi --query-gpu=compute_cap --format=csv,noheader 2>/dev/null | head -1 | tr -d '. \\n'").trim() }
     if len(dev_cc) == 0 { dev_cc = "90" }
     // Ensure the runtime_cuda.c seed exists (gitignored — emit on demand).
     let cuda_c = self_dir + "/cuda/runtime_cuda.c"
