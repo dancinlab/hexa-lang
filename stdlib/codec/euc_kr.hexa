@@ -1,0 +1,91 @@
+// HEXA Standard Library — codec/euc_kr (EUC-KR / KS X 1001)
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// EUC-KR (KS X 1001) byte<->string codec. ASCII (<0x80) is single-byte
+// passthrough; the 8226 two-byte KS X 1001 glyphs come from the
+// CPython-`euc-kr`-generated table (euc_kr_table.gen.hexa).
+//
+// SCOPE (honest): only the two-byte KS X 1001 set is supported. Hangul
+// syllables OUTSIDE the 2350 precomposed set (which CPython encodes via the
+// 8-byte 0xA4 Hangul-fill composition) are NOT representable here ->
+// euc_kr_encode returns [] for any such input. This covers the common-text
+// subset; full 8-byte composition is a documented follow-up.
+
+use "stdlib/codec/euc_kr_table.gen"
+use "stdlib/codec/utf8"
+
+let mut _EK_ENC: map = {}
+let mut _EK_DEC: map = {}
+let mut _EK_INIT = false
+
+fn _ek_hv(c: int) -> int {
+    if c >= 48 && c <= 57 { return c - 48 }      // '0'-'9'
+    if c >= 97 && c <= 102 { return c - 87 }     // 'a'-'f'
+    return 0
+}
+
+fn _ek_ensure() {
+    if _EK_INIT { return }
+    let n = EUCKR_BLOB.len()
+    let mut i = 0
+    while i + 8 <= n {
+        let cp = _ek_hv(EUCKR_BLOB.byte_at(i)) * 4096
+            + _ek_hv(EUCKR_BLOB.byte_at(i + 1)) * 256
+            + _ek_hv(EUCKR_BLOB.byte_at(i + 2)) * 16
+            + _ek_hv(EUCKR_BLOB.byte_at(i + 3))
+        let b0 = _ek_hv(EUCKR_BLOB.byte_at(i + 4)) * 16 + _ek_hv(EUCKR_BLOB.byte_at(i + 5))
+        let b1 = _ek_hv(EUCKR_BLOB.byte_at(i + 6)) * 16 + _ek_hv(EUCKR_BLOB.byte_at(i + 7))
+        let packed = b0 * 256 + b1
+        _EK_ENC[str(cp)] = packed
+        _EK_DEC[str(packed)] = cp
+        i = i + 8
+    }
+    _EK_INIT = true
+}
+
+// Encode a string to EUC-KR bytes. Returns [] if any char is not in the
+// two-byte KS X 1001 set (and not ASCII).
+pub fn euc_kr_encode(s: string) -> [int] {
+    _ek_ensure()
+    let cps = utf8_codepoints(s)
+    let mut out: [int] = []
+    let mut i = 0
+    while i < len(cps) {
+        let cp = cps[i]
+        i = i + 1
+        if cp < 0x80 {
+            out = out + [cp]
+        } else {
+            let k = str(cp)
+            if !_EK_ENC.has(k) { return [] }
+            let packed = _EK_ENC[k]
+            out = out + [(packed >> 8) & 0xFF, packed & 0xFF]
+        }
+    }
+    return out
+}
+
+// Decode EUC-KR bytes to a string. Returns "" on a malformed lead/trail pair.
+pub fn euc_kr_decode(b: [int]) -> string {
+    _ek_ensure()
+    let mut cps: [int] = []
+    let mut i = 0
+    let n = len(b)
+    while i < n {
+        let lead = b[i] & 0xFF
+        if lead < 0x80 {
+            cps = cps + [lead]
+            i = i + 1
+        } else {
+            if i + 1 >= n { return "" }
+            let trail = b[i + 1] & 0xFF
+            let k = str(lead * 256 + trail)
+            if !_EK_DEC.has(k) { return "" }
+            cps = cps + [_EK_DEC[k]]
+            i = i + 2
+        }
+    }
+    return utf8_from_codepoints(cps)
+}
