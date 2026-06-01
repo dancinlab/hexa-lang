@@ -1,0 +1,134 @@
+// @ci_gate — deterministic · network-free · pure JSONL-text rollup g5 gate
+//
+// qforge_telemetry_rollup_selftest.hexa — QFORGE-PROCESS campaign telemetry
+//   rollup (qforge_telemetry_rollup, stdlib/qforge/telemetry_rollup.hexa) g5
+//   gate. The rollup INGESTS a LIST of (deck_name, `.dft_telemetry.jsonl`
+//   text) — each deck's JSONL is the 6-key emit from PR#2474 — and via
+//   qforge_telemetry_report (#2477, d3/d19 reuse) per deck produces a
+//   CAMPAIGN dashboard: (1) stage-CLASS rollup (relax·scf·ph·lambda, ph:qN
+//   collapsed) ranked wall DESC with %-of-campaign + dominant flagged, and
+//   (2) per-DECK rollup ranked wall DESC with slowest flagged.
+//
+// 검증 케이스 (all on fixture JSONL strings — NO pod, NO file, pure text):
+//  🔵 (A) STAGE-CLASS rollup SUM + collapse + rank + dominant: 3 decks whose
+//         per-stage walls sum, per class, across decks; ph:q1+ph:q2 collapse
+//         into class `ph`; classes ranked wall DESC; %camp = 100·wall/grand;
+//         the single max-wall class flagged dominant, others not.
+//  🔵 (B) PER-DECK rollup + slowest: each deck's wall = its Report.total_wall;
+//         decks ranked DESC; the single max-wall deck flagged slowest.
+//  🔵 (C) MALFORMED/empty deck SKIPPED + COUNTED: a deck of pure garbage and a
+//         deck of "" → skipped_decks counts them, n_decks excludes them, no
+//         crash, no phantom row. rss-null PASSTHROUGH (d6): a class/deck with
+//         no measured rss renders `null`, never a fabricated 0.
+//  🔵 (D) EMPTY LIST → 0 rows / 0 grand / 0 decks / 0 skipped.
+//
+// Run (point HEXA_STDLIB_ROOT at THIS worktree's stdlib):
+//   HEXA_STDLIB_ROOT="$PWD/stdlib" hexa run --no-sentinel \
+//     stdlib/qforge/qforge_telemetry_rollup_selftest.hexa
+// PASS: "qforge_telemetry_rollup_selftest PASS".
+use "stdlib/qforge/telemetry_rollup"
+
+fn _ck(name: str, ok: bool) -> int {
+    if ok { println("PASS " + name) ; return 0 }
+    println("FAIL " + name) ; return 1
+}
+// stage-class row lookup by label
+fn _scr(rep: RollupReport, cls: str) -> StageClassRow {
+    let mut i = 0
+    while i < len(rep.stage_rows) {
+        if rep.stage_rows[i].stage_class == cls { return rep.stage_rows[i] }
+        i = i + 1
+    }
+    return StageClassRow { stage_class: "", wall_s: -1, rss_kb: -1, has_rss: false, pct: -1, dominant: false }
+}
+// deck row lookup by name
+fn _dkr(rep: RollupReport, deck: str) -> DeckRow {
+    let mut i = 0
+    while i < len(rep.deck_rows) {
+        if rep.deck_rows[i].deck == deck { return rep.deck_rows[i] }
+        i = i + 1
+    }
+    return DeckRow { deck: "", wall_s: -1, rss_kb: -1, has_rss: false, n_stages: -1, pct: -1, slowest: false }
+}
+
+fn main() {
+    let mut fails = 0
+
+    // ── 3-deck campaign fixture (small — paired done lines, 6 keys) ─────────
+    //   LaH10:  scf 300/900000 · ph:q1 200/700000 · ph:q2 180/null   (total 680)
+    //   CaH6:   scf 100/200000 · ph:q1 400/800000                    (total 500)
+    //   Li2MgH16: relax 50/100000 · scf 60/150000 · lambda 10/20000  (total 120)
+    //   grand = 680+500+120 = 1300.
+    //   stage CLASS sums: ph = 200+180+400 = 780 (dominant) ·
+    //     scf = 300+100+60 = 460 · relax = 50 · lambda = 10.
+    let lah10 = "{\"ts\":1,\"stage\":\"scf\",\"event\":\"done\",\"wall_s\":300,\"rss_kb\":900000,\"exit\":0}\n{\"ts\":2,\"stage\":\"ph:q1\",\"event\":\"done\",\"wall_s\":200,\"rss_kb\":700000,\"exit\":0}\n{\"ts\":3,\"stage\":\"ph:q2\",\"event\":\"done\",\"wall_s\":180,\"rss_kb\":null,\"exit\":0}\n"
+    let cah6 = "{\"ts\":1,\"stage\":\"scf\",\"event\":\"done\",\"wall_s\":100,\"rss_kb\":200000,\"exit\":0}\n{\"ts\":2,\"stage\":\"ph:q1\",\"event\":\"done\",\"wall_s\":400,\"rss_kb\":800000,\"exit\":0}\n"
+    let li2mgh16 = "{\"ts\":1,\"stage\":\"relax\",\"event\":\"done\",\"wall_s\":50,\"rss_kb\":100000,\"exit\":0}\n{\"ts\":2,\"stage\":\"scf\",\"event\":\"done\",\"wall_s\":60,\"rss_kb\":150000,\"exit\":0}\n{\"ts\":3,\"stage\":\"lambda\",\"event\":\"done\",\"wall_s\":10,\"rss_kb\":20000,\"exit\":0}\n"
+
+    let mut decks = []
+    decks.push(("LaH10", lah10))
+    decks.push(("CaH6", cah6))
+    decks.push(("Li2MgH16", li2mgh16))
+    let rep = qforge_telemetry_rollup(decks)
+
+    // ── (A) stage-class rollup: sum + ph collapse + rank + %camp + dominant ──
+    fails = fails + _ck("(A) grand_wall=1300", rep.grand_wall == 1300)
+    fails = fails + _ck("(A) n_decks=3 skipped=0", rep.n_decks == 3 && rep.skipped_decks == 0)
+    fails = fails + _ck("(A) ph class wall=780 (200+180+400, ph:qN collapsed)", _scr(rep, "ph").wall_s == 780)
+    fails = fails + _ck("(A) scf class wall=460 (300+100+60)", _scr(rep, "scf").wall_s == 460)
+    fails = fails + _ck("(A) relax class wall=50", _scr(rep, "relax").wall_s == 50)
+    fails = fails + _ck("(A) lambda class wall=10", _scr(rep, "lambda").wall_s == 10)
+    fails = fails + _ck("(A) 4 stage classes total", len(rep.stage_rows) == 4)
+    // ranked wall DESC: ph 780 > scf 460 > relax 50 > lambda 10
+    fails = fails + _ck("(A) rank desc ph>scf>relax>lambda",
+        rep.stage_rows[0].stage_class == "ph" && rep.stage_rows[1].stage_class == "scf"
+        && rep.stage_rows[2].stage_class == "relax" && rep.stage_rows[3].stage_class == "lambda")
+    fails = fails + _ck("(A) ph pct=60 (100·780/1300)", _scr(rep, "ph").pct == 60)
+    // (A) dominant = max-wall class flagged; others not
+    fails = fails + _ck("(A) ph dominant; scf NOT dominant",
+        _scr(rep, "ph").dominant && _scr(rep, "scf").dominant == false)
+
+    // ── (B) per-deck rollup: total wall + rank + slowest ──────────────────
+    fails = fails + _ck("(B) LaH10 wall=680", _dkr(rep, "LaH10").wall_s == 680)
+    fails = fails + _ck("(B) CaH6 wall=500", _dkr(rep, "CaH6").wall_s == 500)
+    fails = fails + _ck("(B) Li2MgH16 wall=120 n_stages=3", _dkr(rep, "Li2MgH16").wall_s == 120 && _dkr(rep, "Li2MgH16").n_stages == 3)
+    // ranked DESC: LaH10 680 > CaH6 500 > Li2MgH16 120
+    fails = fails + _ck("(B) deck rank desc LaH10>CaH6>Li2MgH16",
+        rep.deck_rows[0].deck == "LaH10" && rep.deck_rows[1].deck == "CaH6"
+        && rep.deck_rows[2].deck == "Li2MgH16")
+    fails = fails + _ck("(B) LaH10 slowest; CaH6 NOT slowest",
+        rep.deck_rows[0].slowest && _dkr(rep, "CaH6").slowest == false)
+
+    // rss aggregated where present (d6); LaH10 ph:q2 null does NOT fabricate —
+    // LaH10 deck rss = scf 900000 + ph:q1 700000 = 1600000 (ph:q2 skipped).
+    fails = fails + _ck("(B) LaH10 sum_rss=1600000 (ph:q2 null skipped, d6)",
+        _dkr(rep, "LaH10").has_rss && _dkr(rep, "LaH10").rss_kb == 1600000)
+    let rendered = qforge_telemetry_rollup_render(rep)
+    fails = fails + _ck("(B) render flags dominant + slowest",
+        rendered.contains("dominant") && rendered.contains("slowest"))
+
+    // ── (C) malformed/empty deck SKIPPED + counted + rss-null passthrough ──
+    //   one good deck (scf only, rss null) · one garbage deck · one "" deck.
+    let mut decks2 = []
+    decks2.push(("Good", "{\"ts\":1,\"stage\":\"scf\",\"event\":\"done\",\"wall_s\":42,\"rss_kb\":null,\"exit\":0}\n"))
+    decks2.push(("Garbage", "not json at all\nmore noise\n"))
+    decks2.push(("Empty", ""))
+    let rep2 = qforge_telemetry_rollup(decks2)
+    fails = fails + _ck("(C) skipped=2 n_decks=1 (garbage+empty skipped)",
+        rep2.skipped_decks == 2 && rep2.n_decks == 1)
+    fails = fails + _ck("(C) Good deck wall=42 present", _dkr(rep2, "Good").wall_s == 42)
+    // d6: scf class had only a null rss → has_rss=false → render `null`
+    fails = fails + _ck("(C) scf class rss-null → has_rss=false", _scr(rep2, "scf").has_rss == false)
+    let rendered2 = qforge_telemetry_rollup_render(rep2)
+    fails = fails + _ck("(C) render shows 'null' (d6, no fabricated 0)", rendered2.contains("null"))
+
+    // ── (D) empty deck list → all-zero report ─────────────────────────────
+    let empty = []
+    let rep3 = qforge_telemetry_rollup(empty)
+    fails = fails + _ck("(D) empty list → 0 rows / 0 grand / 0 decks / 0 skipped",
+        len(rep3.stage_rows) == 0 && len(rep3.deck_rows) == 0
+        && rep3.grand_wall == 0 && rep3.n_decks == 0 && rep3.skipped_decks == 0)
+
+    if fails == 0 { println("qforge_telemetry_rollup_selftest PASS") }
+    else { println("qforge_telemetry_rollup_selftest FAIL — " + to_string(fails) + " case(s)") }
+}
