@@ -142,6 +142,13 @@ struct MachoArm64Obj {
     // directives the LIR carries; see compiler/emit/asm.hexa for the
     // line-table builder this scaffold reuses).
     dwarf_line: [u8],
+    // `__TEXT,__cstring` literal-pool bytes — the concatenated NUL-
+    // terminated payloads of every `.LCstrN` rodata section. Each
+    // string's start offset within this buffer is the N_SECT value of
+    // its `.LCstr*` local symbol; the ADRP/ADD `@PAGE`/`@PAGEOFF` reloc
+    // pair resolves against those symbols. Empty when the module has no
+    // string literals (keeps the 3-section layout byte-stable).
+    cstring:  [u8],
 }
 
 struct Arm64Reloc {
@@ -1143,13 +1150,31 @@ fn serialize(obj: MachoArm64Obj) -> [Int] {
     // `_emit_meta_section` output assembled by clang.
     let abi = _hexa_abi_stamp_bytes()
     let abi_len = len(abi)
-    let meta_addr = text_size_aligned          // __cap / __abi vmaddr
-    let nsects = 3
+
+    // ── `__TEXT,__cstring` literal pool (RFC 063 §P0 data-addressing) ──
+    // When the module carries string literals, `pack_lir` fills
+    // `obj.cstring` with the concatenated NUL-terminated payloads and
+    // defines one `.LCstr*` N_SECT local per string (section index 2,
+    // value = byte offset into this pool). The section is inserted in
+    // clang's order: `__text` (1) · `__cstring` (2) · `__cap` (3) ·
+    // `__abi` (4). When the pool is EMPTY we keep the legacy 3-section
+    // layout so the existing byte-eq corpus stays stable.
+    let cstr_len = len(obj.cstring)
+    let has_cstr = cstr_len > 0
+    let mut nsects = 3
+    if has_cstr { nsects = 4 }
+    // `__cstring` sits immediately after `__text`'s 4-aligned bytes;
+    // align 2^0 (clang's __cstring alignment), so no inter-section pad.
+    let cstr_addr = text_size_aligned
+    // `__cap` / `__abi` vmaddr follows __text + __cstring (both align 1).
+    let mut meta_addr = text_size_aligned
+    if has_cstr { meta_addr = text_size_aligned + cstr_len }
     let sizeofcmds = (72 + 80 * nsects) + 24 + 24 + 80  // seg + buildver + symtab + dysymtab
     let data_off = 32 + sizeofcmds
-    // __cap (size 0) and __abi (12 B) sit immediately after __text; both
+    let cstr_off = data_off + text_size_aligned    // __cstring file offset
+    // __cap (size 0) and __abi (12 B) sit after __text + __cstring; all
     // are 1-byte aligned so no inter-section padding.
-    let meta_off = data_off + text_size_aligned   // == __cap.offset == __abi.offset
+    let meta_off = cstr_off + cstr_len             // == __cap.offset == __abi.offset
     // clang aligns the relocation table to an 8-byte file boundary: it
     // pads the section data after __abi up to the next multiple of 8.
     // (Verified: clang reloff is 536/712/616 for the corpus — all %8==0.)
@@ -1202,6 +1227,15 @@ fn serialize(obj: MachoArm64Obj) -> [Int] {
                      data_off, 2,
                      reloff, nreloc,
                      0x80000400)
+    // __cstring — C-string literal pool (flags S_CSTRING_LITERALS = 0x2,
+    // align 2^0). Only when the module produced string literals.
+    if has_cstr {
+        _emit_section_64(out, "__cstring", "__TEXT",
+                         cstr_addr, cstr_len,
+                         cstr_off, 0,
+                         0, 0,
+                         0x00000002)
+    }
     // __cap — empty capability manifest header (size 0, align 1, no reloc).
     _emit_section_64(out, "__cap", "__HEXA",
                      meta_addr, 0,
@@ -1223,6 +1257,12 @@ fn serialize(obj: MachoArm64Obj) -> [Int] {
     let mut i = 0
     while i < text_len { out.push(obj.text[i] & 0xff); i = i + 1 }
     _zero_n(out, text_pad)
+
+    // __cstring bytes (concatenated NUL-terminated string payloads).
+    if has_cstr {
+        let mut ci = 0
+        while ci < cstr_len { out.push(obj.cstring[ci] & 0xff); ci = ci + 1 }
+    }
 
     // __cap is empty (no bytes). __abi: the 12-byte stamp.
     let mut ai = 0
@@ -1861,6 +1901,63 @@ fn _find_sym_by_name(symbols: [MachoSymbol], strtab: [Int], mangled: string) -> 
     return -1
 }
 
+// Decode one lowercase/upper hex nibble char-code to 0..15 (-1 if not
+// a hex digit). `LSection.bytes` is the codegen's hex-encoded payload
+// (see `_str_to_hex_bytes` in arm64_darwin.hexa).
+fn _hex_nibble_val(c: Int) -> Int {
+    if c >= 48 && c <= 57 { return c - 48 }       // '0'..'9'
+    if c >= 97 && c <= 102 { return c - 97 + 10 } // 'a'..'f'
+    if c >= 65 && c <= 70  { return c - 65 + 10 } // 'A'..'F'
+    return -1
+}
+
+// Decode a hex-encoded byte string (`"68656c6c6f00"`) into `out` as
+// raw bytes (0..255), appending. Odd trailing nibble is dropped
+// defensively. Mirrors `asm.hexa::_emit_section_bytes`'s pairing.
+fn _append_hex_bytes(out: [Int], hex: string) {
+    let n = len(hex)
+    let nbytes = n / 2
+    let mut i = 0
+    while i < nbytes {
+        let hi = _hex_nibble_val(char_code(hex, i * 2))
+        let lo = _hex_nibble_val(char_code(hex, i * 2 + 1))
+        if hi >= 0 && lo >= 0 {
+            out.push((hi << 4) | lo)
+        }
+        i = i + 1
+    }
+}
+
+// CstrPool — the `__cstring` literal-pool bytes plus a parallel
+// label→offset map for the `.LCstr*` symbol definitions. `labels[i]`
+// is the rodata section name (`.LCstrN`); `offsets[i]` is its start
+// byte within `bytes`.
+struct CstrPool {
+    bytes:   [Int],
+    labels:  [string],
+    offsets: [Int],
+}
+
+// Build the `__cstring` pool from `lm.rodata`. Each rodata `LSection`
+// is one interned string literal: `sec.name` is the `.LCstrN` label,
+// `sec.bytes` is its hex-encoded NUL-terminated payload. The pool
+// concatenates every payload in rodata (= codegen intern) order, so a
+// `.LCstrN@PAGE`/`@PAGEOFF` ref resolves against the symbol at that
+// pool offset.
+fn _build_cstr_pool(lm: LModule) -> CstrPool {
+    let pool = CstrPool { bytes: [], labels: [], offsets: [] }
+    let n = len(lm.rodata)
+    let mut i = 0
+    while i < n {
+        let sec = lm.rodata[i]
+        pool.labels.push(sec.name)
+        pool.offsets.push(len(pool.bytes))
+        _append_hex_bytes(pool.bytes, sec.bytes)
+        i = i + 1
+    }
+    return pool
+}
+
 // Public entry — walk all LFuncs in `lm`, produce a `MachoArm64Obj`
 // with `text` + `symbols` + `strtab` + `relocs` populated.
 //
@@ -1897,7 +1994,25 @@ pub fn pack_lir(lm: LModule) -> MachoArm64Obj {
         symbols:    [],
         strtab:     [],
         dwarf_line: [],
+        cstring:    [],
     }
+
+    // ── Pass 0: build the `__cstring` literal pool from rodata. ──
+    // The pool bytes become `__TEXT,__cstring`; each `.LCstr*` label is
+    // a local N_SECT symbol (section 2) at its pool offset. When the
+    // pool is empty the 3-section legacy layout is preserved (the
+    // `__cstring` section + symbols are simply not emitted).
+    let cpool = _build_cstr_pool(lm)
+    let has_cstr = len(cpool.bytes) > 0
+    let mut ci = 0
+    while ci < len(cpool.bytes) { obj.cstring.push(cpool.bytes[ci]); ci = ci + 1 }
+    // Section indices: with `__cstring` present the meta sections shift
+    // down one (1 __text · 2 __cstring · 3 __cap · 4 __abi); without it
+    // they keep the legacy (2 __cap · 3 __abi) numbering.
+    let mut sect_cap = 2
+    let mut sect_abi = 3
+    if has_cstr { sect_cap = 3 }
+    if has_cstr { sect_abi = 4 }
 
     // ── Pass 1: walk every LFunc → text bytes + collect symbol inputs ──
     //
@@ -1929,7 +2044,11 @@ pub fn pack_lir(lm: LModule) -> MachoArm64Obj {
     let mut text_pad = 0
     let trem = text_len & 3
     if trem != 0 { text_pad = 4 - trem }
-    let meta_addr = text_len + text_pad     // __cap / __abi vmaddr (== abi value)
+    // __cap / __abi vmaddr = end of __text (4-aligned) + __cstring pool.
+    // Must match `serialize`'s meta_addr so the N_SECT symbol values
+    // (ltmp1/ltmp2/_hexa_cap_manifest/_hexa_abi_stamp) line up.
+    let mut meta_addr = text_len + text_pad
+    if has_cstr { meta_addr = text_len + text_pad + len(cpool.bytes) }
 
     // ── Pass 2: partition extern BL targets into intra-module-defined
     // (pre-patch, no reloc) vs undefined (sorted, get a reloc). ──
@@ -2031,12 +2150,27 @@ pub fn pack_lir(lm: LModule) -> MachoArm64Obj {
         li = li + 1
     }
 
+    // `__cstring` literal-pool symbols — one local N_SECT per `.LCstr*`
+    // (section 2, value = byte offset into the pool). The ADRP/ADD
+    // `@PAGE`/`@PAGEOFF` reloc pair (PR-B) resolves against these. The
+    // label name already carries the `.LCstr` form; the `.s` path
+    // references it verbatim (no `_` mangle — it's a section-local L
+    // symbol, not an ABI symbol). Emit only when the pool is non-empty.
+    if has_cstr {
+        let mut pli = 0
+        while pli < len(cpool.labels) {
+            _push_local_sym(obj, sym_names, cpool.labels[pli], 2, cpool.offsets[pli])
+            pli = pli + 1
+        }
+    }
+
     // __HEXA section local symbols (cap then abi; ltmpN temp precedes
     // the named label in each, matching clang's per-section temp).
-    _push_local_sym(obj, sym_names, "ltmp1",              2, meta_addr)
-    _push_local_sym(obj, sym_names, "_hexa_cap_manifest", 2, meta_addr)
-    _push_local_sym(obj, sym_names, "ltmp2",              3, meta_addr)
-    _push_local_sym(obj, sym_names, "_hexa_abi_stamp",    3, meta_addr)
+    // Section indices shift down one when `__cstring` is present.
+    _push_local_sym(obj, sym_names, "ltmp1",              sect_cap, meta_addr)
+    _push_local_sym(obj, sym_names, "_hexa_cap_manifest", sect_cap, meta_addr)
+    _push_local_sym(obj, sym_names, "ltmp2",              sect_abi, meta_addr)
+    _push_local_sym(obj, sym_names, "_hexa_abi_stamp",    sect_abi, meta_addr)
 
     // Defined externs (functions) — address order, N_PEXT for non-entry.
     let mut fi = 0
