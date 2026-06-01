@@ -69,10 +69,7 @@ fn _classify_runpod(resp_json: str) -> str {
         return "UNKNOWN"
     }
     let data_v = json_object_get(parsed, "data")
-    if type_of(data_v) == "map" {
-        let pv2 = json_object_get(data_v, "pod")
-        if pv2 == null { return "GONE" }
-    }
+    if type_of(data_v) == "map" { return "GONE" }
     return "UNKNOWN"
 }
 
@@ -96,6 +93,16 @@ fn _exit_rank(code: int) -> int {
 fn _probe_state_for_empty_key(key: str) -> str {
     if len(key) == 0 { return "MISSING-CRED" }
     return "(probe-continues)"
+}
+
+// _vast_state_with_list_ok — mirror of the @L4/d6 hardening in
+// alive.hexa:_alive_probe_vast: a GONE ruling is downgraded to UNKNOWN when
+// the instance-list call FAILED (list_ok=0), so a transport outage can never
+// emit a false GONE that tears down a still-billing pod. KEEP IN SYNC.
+fn _vast_state_with_list_ok(detail_json: str, in_list: int, list_ok: int) -> str {
+    let state = _classify_vast(detail_json, in_list)
+    if state == "GONE" && list_ok == 0 { return "UNKNOWN" }
+    return state
 }
 
 fn _ck(name: str, got: str, want: str) {
@@ -129,6 +136,12 @@ fn main() {
     // GONE would tear down real compute — d6).
     _ck("vast empty in-list → UNKNOWN", _classify_vast("", 1), "UNKNOWN")
     _ck("vast weird status in-list → UNKNOWN", _classify_vast("{\"actual_status\":\"frobnicating\"}", 1), "UNKNOWN")
+
+    // not-in-list BUT list call FAILED → UNKNOWN, never GONE (@L4/d6): a
+    // transport outage must not be read as a reclaimed pod.
+    _ck("vast not-in-list + list-FAILED → UNKNOWN", _vast_state_with_list_ok("", 0, 0), "UNKNOWN")
+    _ck("vast not-in-list + list-OK → GONE",        _vast_state_with_list_ok("", 0, 1), "GONE")
+    _ck("vast running + list-FAILED still RUNNING", _vast_state_with_list_ok("{\"actual_status\":\"running\"}", 1, 0), "RUNNING")
 
     // ── runpod classifier (mocked GraphQL pod{ desiredStatus }) ──
     _ck("rp running",  _classify_runpod("{\"data\":{\"pod\":{\"desiredStatus\":\"RUNNING\"}}}"), "RUNNING")

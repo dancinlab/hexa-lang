@@ -96,15 +96,19 @@ fn _alive_classify_runpod(resp_json: str) -> str {
         }
         return "UNKNOWN"
     }
-    // data present but pod == null → the API positively says no such pod.
+    // pod_v is void here. JSON `null` parses to void (same as an absent key),
+    // so distinguish "the API returned data.pod == null" (positive no-such-pod
+    // → GONE) from "no data block at all" (errors[] / transport → UNKNOWN) by
+    // the PRESENCE of the `data` object: a well-formed GraphQL response that
+    // resolved the query always carries `data` (with pod=null when reclaimed),
+    // whereas an auth/transport error carries `errors` and NO `data`.
     let data_v = json_object_get(parsed, "data")
     if type_of(data_v) == "map" {
-        let pv2 = json_object_get(data_v, "pod")
-        if pv2 == null {
-            return "GONE"
-        }
+        // data present, pod absent/null → the API positively says no such pod.
+        return "GONE"
     }
-    // errors[] / malformed → ambiguous, never GONE (a false GONE kills compute).
+    // errors[] / malformed / no data → ambiguous, NEVER GONE (a false GONE
+    // would tear down real compute — d6).
     return "UNKNOWN"
 }
 
@@ -147,7 +151,16 @@ fn _alive_probe_vast(id: str) -> [str] {
         }
     }
     let detail = exec(_shq_local(vc) + " show instance " + _shq_local(id) + " --raw 2>&1")
-    let state = _alive_classify_vast(detail, in_list)
+    let mut state = _alive_classify_vast(detail, in_list)
+    // HONESTY (@L4/d6): a GONE ruling requires a TRUSTWORTHY not-in-list signal.
+    // If the list call itself FAILED (lst.ok != 1) we cannot assert absence —
+    // downgrade a would-be GONE to UNKNOWN so a transport outage never tears
+    // down a real (still-billing) pod. RUNNING/STOPPED come from the detail
+    // object and are unaffected.
+    if state == "GONE" && lst.ok != 1 {
+        state = "UNKNOWN"
+        return [state, "list query failed (lst.ok=0) — cannot confirm absence: " + lst.message]
+    }
     return [state, detail.substring(0, 400)]
 }
 
