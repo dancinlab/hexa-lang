@@ -13,6 +13,7 @@
 //   euc_kr — EUC-KR / KS X 1001 (Korean) byte↔string, 2-byte set
 //   cp949  — CP949 / UHC (Korean) byte↔string, full 11172 Hangul
 //   shift_jis — Shift-JIS (Japanese) byte↔string, 2-byte + 1-byte katakana
+//   gbk    — GBK / GB2312 superset (Chinese simplified) byte↔string, 2-byte
 
 use "stdlib/codec/base64"
 use "stdlib/codec/hex"
@@ -20,3 +21,4 @@ use "stdlib/codec/utf8"
 use "stdlib/codec/euc_kr"
 use "stdlib/codec/cp949"
 use "stdlib/codec/shift_jis"
+use "stdlib/codec/gbk"
