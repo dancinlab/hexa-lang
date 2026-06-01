@@ -1,0 +1,90 @@
+// @ci_gate — pure · network-free · deterministic (stdlib_selftest_aggregate --ci-gate)
+// stdlib/cloud/down_confirm_test.hexa — Bug-5 / @L9: `hexa cloud down <id>`
+// surfaces the target pod's project·purpose + a running-job check and requires
+// confirmation (default N) before destroying — the wrong-pod / lost-job safety
+// add (the cross-project near-miss + a torn-down pod that still had a live job).
+//
+// MIRROR-TEST (the established stdlib/cloud convention): the real
+// _down_confirm_gate reads the LIVE M5 registry + the cwd dispatch ledger, so
+// the PURE decision logic is mirrored VERBATIM here over synthetic inputs.
+// Keep byte-identical to cloud_cli.hexa: _rm_confirm_yes / _down_has_running_job
+// (the active-id membership) / _down_confirm_gate (force-bypass + default-N);
+// a drift makes this test meaningless, so review them together. NO live `down`
+// is ever called (@L9 / @L10).
+//
+// Run:   hexa run stdlib/cloud/down_confirm_test.hexa
+// PASS:  exits 0, prints "down_confirm_test PASS".
+
+// mirror of cloud_cli.hexa:_rm_confirm_yes — KEEP IN SYNC.
+fn _rm_confirm_yes(ans: str) -> int {
+    let t = ans.trim()
+    if len(t) == 0 {
+        return 0
+    }
+    if t == "y" || t == "Y" || t == "yes" || t == "YES" || t == "Yes" {
+        return 1
+    }
+    return 0
+}
+
+// mirror of cloud_cli.hexa:_down_has_running_job (over an explicit active list).
+fn _has_running_job(active: [str], id: str) -> int {
+    let mut i = 0
+    while i < len(active) {
+        if active[i] == id {
+            return 1
+        }
+        i = i + 1
+    }
+    return 0
+}
+
+// mirror of cloud_cli.hexa:_down_confirm_gate force/answer DECISION. The real
+// fn also prints the project·purpose surface (side effect, not asserted here);
+// the gate VALUE under test is: force → proceed; else parse the answer.
+// Returns 1 = proceed, 0 = cancel.
+fn _gate(force: int, ans: str) -> int {
+    if force == 1 {
+        return 1
+    }
+    if _rm_confirm_yes(ans) == 0 {
+        return 0
+    }
+    return 1
+}
+
+fn _ck(name: str, got: int, want: int) {
+    if got != want {
+        println("  FAIL: " + name + " got " + to_string(got) + " want " + to_string(want))
+        exit(1)
+    }
+    println("  ok: " + name)
+}
+
+fn main() {
+    // ── confirm parsing — default N (the safety default) ──
+    _ck("empty → N",      _rm_confirm_yes(""), 0)
+    _ck("n → N",          _rm_confirm_yes("n"), 0)
+    _ck("no → N",         _rm_confirm_yes("no"), 0)
+    _ck("garbage → N",    _rm_confirm_yes("maybe"), 0)
+    _ck("y → Y",          _rm_confirm_yes("y"), 1)
+    _ck("Y → Y",          _rm_confirm_yes("Y"), 1)
+    _ck("yes → Y",        _rm_confirm_yes("yes"), 1)
+    _ck("YES → Y",        _rm_confirm_yes("YES"), 1)
+    _ck("  y  → Y (trim)", _rm_confirm_yes("  y  "), 1)
+
+    // ── running-job check ──
+    let active = ["38961119", "8stiubiaoegfsd"]
+    _ck("38961119 running",     _has_running_job(active, "38961119"), 1)
+    _ck("other pod not running", _has_running_job(active, "38704336"), 0)
+    _ck("empty ledger",          _has_running_job([], "38961119"), 0)
+
+    // ── gate decision: force bypasses; else default N ──
+    _ck("force → proceed (no prompt)", _gate(1, ""), 1)
+    _ck("force + 'n' → proceed",       _gate(1, "n"), 1)
+    _ck("no force + empty → cancel",   _gate(0, ""), 0)
+    _ck("no force + 'n' → cancel",     _gate(0, "n"), 0)
+    _ck("no force + 'y' → proceed",    _gate(0, "y"), 1)
+
+    println("down_confirm_test PASS")
+}
