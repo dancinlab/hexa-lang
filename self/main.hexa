@@ -3101,7 +3101,15 @@ fn cmd_build(src, out, c_only, target, shared) {
                 _hexa_cache_gc(_rt_cache, _hexa_cache_cap_mb(), _hexa_cache_ttl_days())
                 let _rt_tmp = _rt_cand + ".tmp." + to_string(mono_ns())
                 let _rt_cc = "clang -O2 " + os_clang_cflags() + strict_fp_cflags(__runtime_c) + "-Wno-trigraphs -fbracket-depth=4096 -I '" + __self_dir + "' -c '" + __runtime_c + "' -o '" + _rt_tmp + "' 2>&1"
-                let _rt_r = exec(_rt_cc)
+                // Hardening (#2415 follow-up): the runtime.<sha>.o cache
+                // compile was the last raw `exec(_rt_cc)` clang on a popen pipe
+                // in the build path. Route it through _hexa_clang_capped (file
+                // redirect, no pipe) like the [2/2] link, so it cannot
+                // SIGPIPE-die under a fork-storm. (The phantom "binary not
+                // produced" symptom is fixed by the `hexa run` -> `hexa build`
+                // capture redirect below; this closes the matching latent
+                // pipe in the inner build for completeness.)
+                let _rt_r = _hexa_clang_capped(_rt_cc)
                 if file_exists(_rt_tmp) {
                     exec("mv -f '" + _rt_tmp + "' '" + _rt_cand + "' 2>/dev/null")
                 } else if len(_rt_r) > 0 {
@@ -3770,30 +3778,66 @@ fn cmd_run_user_direct(file, extra_args) {
         if len(_dbin) > 0 { tmpbin = _dbin }
     }
     if !file_exists(tmpbin) {
-        let _tmp_inflight = tmpbin + ".tmp." + to_string(mono_ns())
-        let bcmd = shq(hexa_bin) + " build " + shq(file) + " -o " + shq(_tmp_inflight) + " 2>&1; echo \"__HEXA_BRC__=$?\""
-        bout = exec(bcmd)
+        // 2nd clang site, parent-pipe variant (#2415 closed the inner build's
+        // own clang pipe; THIS is the `hexa run` -> `hexa build` SUBPROCESS
+        // capture). `exec(bcmd)` popen-runs the inner `hexa build` and the
+        // parent drains its merged stdout+stderr via an fread loop. Under a
+        // cold-cache batch of DIFFERENT modules each launched as `hexa run`, a
+        // peer run's SIGCHLD interrupts THIS parent's fread, the read end
+        // closes early, and the inner build is SIGPIPE-killed (rc=141) before
+        // it produces the binary -- the SAME module run alone (warm cache hit,
+        // no inner build) passes 3/3. Empirically the failure is the FLAKY
+        // fork-storm SIGPIPE: a retry (which warms the cache via whichever
+        // sibling won, and skips the racing cold clang) always recovers.
+        // Two-layer fix mirroring #2415's intent:
+        //   (1) redirect the inner build's output to a FILE, not the parent
+        //       pipe (no pipe -> the inner build can't SIGPIPE on its stdout);
+        //   (2) bounded retry on the SIGPIPE-class signal exit (rc >= 128) so
+        //       a transient fork-storm loss self-heals instead of surfacing a
+        //       phantom "binary not produced". A genuine compile error returns
+        //       a normal rc (< 128) and is NOT retried, so real errors still
+        //       fail fast and are not masked.
         let bmark = "__HEXA_BRC__="
         let bml = len(bmark)
-        let mut bmi = -1
-        let mut bsj = len(bout) - bml
-        while bsj >= 0 {
-            if bout.substring(bsj, bsj + bml) == bmark { bmi = bsj; bsj = -1 } else { bsj = bsj - 1 }
-        }
-        brc = 1
-        if bmi >= 0 {
-            let mut rs = bout.substring(bmi + bml, len(bout))
-            let rsl = len(rs)
-            if rsl > 0 && rs.substring(rsl - 1, rsl) == "\n" { rs = rs.substring(0, rsl - 1) }
-            brc = parse_int_str(rs)
-        }
-        if brc == 0 && file_exists(_tmp_inflight) {
-            // Atomic-rename into place. Concurrent rebuilds race but
-            // produce byte-identical binaries (same source), so the
-            // loser's overwrite is benign.
-            let _rn = exec("mv -f " + shq(_tmp_inflight) + " " + shq(tmpbin) + " 2>/dev/null")
-        } else {
-            let _cl = exec("rm -f " + shq(_tmp_inflight) + " 2>/dev/null")
+        let _brc_max_try = 4
+        let mut _brc_try = 0
+        while _brc_try < _brc_max_try && !file_exists(tmpbin) {
+            _brc_try = _brc_try + 1
+            let _tmp_inflight = tmpbin + ".tmp." + to_string(mono_ns())
+            let bcmd = shq(hexa_bin) + " build " + shq(file) + " -o " + shq(_tmp_inflight) + " 2>&1; echo \"__HEXA_BRC__=$?\""
+            let _brc_log = "/tmp/.hexa-runtime/brc." + to_string(mono_ns()) + ".log"
+            exec("mkdir -p /tmp/.hexa-runtime 2>/dev/null")
+            let _ = exec("( " + bcmd + " ) > '" + _brc_log + "' 2>&1")
+            if file_exists(_brc_log) {
+                bout = exec("cat '" + _brc_log + "' 2>/dev/null")
+                exec("rm -f '" + _brc_log + "' 2>/dev/null")
+            } else {
+                bout = exec(bcmd)
+            }
+            let mut bmi = -1
+            let mut bsj = len(bout) - bml
+            while bsj >= 0 {
+                if bout.substring(bsj, bsj + bml) == bmark { bmi = bsj; bsj = -1 } else { bsj = bsj - 1 }
+            }
+            brc = 1
+            if bmi >= 0 {
+                let mut rs = bout.substring(bmi + bml, len(bout))
+                let rsl = len(rs)
+                if rsl > 0 && rs.substring(rsl - 1, rsl) == "\n" { rs = rs.substring(0, rsl - 1) }
+                brc = parse_int_str(rs)
+            }
+            if brc == 0 && file_exists(_tmp_inflight) {
+                // Atomic-rename into place. Concurrent rebuilds race but
+                // produce byte-identical binaries (same source), so the
+                // loser's overwrite is benign.
+                let _rn = exec("mv -f " + shq(_tmp_inflight) + " " + shq(tmpbin) + " 2>/dev/null")
+            } else {
+                let _cl = exec("rm -f " + shq(_tmp_inflight) + " 2>/dev/null")
+            }
+            // Retry ONLY the transient signal-class loss (rc >= 128, e.g. 141
+            // = 128+SIGPIPE). A non-signal failure (real compile error) or a
+            // cache hit (a sibling produced tmpbin) breaks out immediately.
+            if file_exists(tmpbin) || brc < 128 { _brc_try = _brc_max_try }
         }
     }
     // Cold-cache race fix (2026-05-25): 검증 조건을 `brc == 0 && file_exists(tmpbin)`
@@ -3893,8 +3937,29 @@ fn cmd_run(file, extra_args) {
     }
     if !file_exists(tmpbin) {
         let _tmp_inflight = tmpbin + ".tmp." + to_string(mono_ns())
+        // 2nd clang site, parent-pipe variant (#2415 closed the inner build's
+        // own clang pipe; THIS is the `hexa run` -> `hexa build` SUBPROCESS
+        // capture pipe). `exec(bcmd)` popen-runs the inner `hexa build` and the
+        // parent drains its merged stdout+stderr (the `2>&1`) via an fread
+        // loop. Under a cold-cache batch of DIFFERENT modules each launched as
+        // `hexa run`, a peer run's SIGCHLD interrupts THIS parent's fread, the
+        // read end closes early, and the inner build's clang takes SIGPIPE
+        // (rc=141) mid-link -- _tmp_inflight is never produced, so the
+        // __HEXA_BRC__ parse below reports a phantom "binary not produced" even
+        // though the same module run alone (warm cache hit, no inner build)
+        // passes. Mirror #2415: redirect the inner build's output to a regular
+        // FILE (no pipe, no SIGPIPE), then read it back. Best-effort: on any
+        // path failure fall back to the legacy pipe capture.
         let bcmd = shq(hexa_bin) + " build " + shq(file) + " -o " + shq(_tmp_inflight) + " 2>&1; echo \"__HEXA_BRC__=$?\""
-        bout = exec(bcmd)
+        let _brc_log = "/tmp/.hexa-runtime/brc." + to_string(mono_ns()) + ".log"
+        exec("mkdir -p /tmp/.hexa-runtime 2>/dev/null")
+        let _ = exec("( " + bcmd + " ) > '" + _brc_log + "' 2>&1")
+        if file_exists(_brc_log) {
+            bout = exec("cat '" + _brc_log + "' 2>/dev/null")
+            exec("rm -f '" + _brc_log + "' 2>/dev/null")
+        } else {
+            bout = exec(bcmd)
+        }
         let bmark = "__HEXA_BRC__="
         let bml = len(bmark)
         let mut bmi = -1
@@ -4033,8 +4098,29 @@ fn _batch_run_one(file) {
     }
     if !file_exists(tmpbin) {
         let _tmp_inflight = tmpbin + ".tmp." + to_string(mono_ns())
+        // 2nd clang site, parent-pipe variant (#2415 closed the inner build's
+        // own clang pipe; THIS is the `hexa run` -> `hexa build` SUBPROCESS
+        // capture pipe). `exec(bcmd)` popen-runs the inner `hexa build` and the
+        // parent drains its merged stdout+stderr (the `2>&1`) via an fread
+        // loop. Under a cold-cache batch of DIFFERENT modules each launched as
+        // `hexa run`, a peer run's SIGCHLD interrupts THIS parent's fread, the
+        // read end closes early, and the inner build's clang takes SIGPIPE
+        // (rc=141) mid-link -- _tmp_inflight is never produced, so the
+        // __HEXA_BRC__ parse below reports a phantom "binary not produced" even
+        // though the same module run alone (warm cache hit, no inner build)
+        // passes. Mirror #2415: redirect the inner build's output to a regular
+        // FILE (no pipe, no SIGPIPE), then read it back. Best-effort: on any
+        // path failure fall back to the legacy pipe capture.
         let bcmd = shq(hexa_bin) + " build " + shq(file) + " -o " + shq(_tmp_inflight) + " 2>&1; echo \"__HEXA_BRC__=$?\""
-        bout = exec(bcmd)
+        let _brc_log = "/tmp/.hexa-runtime/brc." + to_string(mono_ns()) + ".log"
+        exec("mkdir -p /tmp/.hexa-runtime 2>/dev/null")
+        let _ = exec("( " + bcmd + " ) > '" + _brc_log + "' 2>&1")
+        if file_exists(_brc_log) {
+            bout = exec("cat '" + _brc_log + "' 2>/dev/null")
+            exec("rm -f '" + _brc_log + "' 2>/dev/null")
+        } else {
+            bout = exec(bcmd)
+        }
         let bmark = "__HEXA_BRC__="
         let bml = len(bmark)
         let mut bmi = -1
@@ -5397,8 +5483,21 @@ fn _daemon_build_binary(file, tmpbin) {
     }
     if len(hexa_bin) == 0 { hexa_bin = av[0] }
     let _tmp_inflight = tmpbin + ".tmp." + to_string(mono_ns())
+    // 2nd clang site, parent-pipe variant (#2415 follow-up) — see the
+    // cmd_run_user_direct copy of this block for the full SIGPIPE rationale.
+    // Redirect the inner `hexa build` subprocess output to a FILE instead of
+    // the popen pipe so a peer run's SIGCHLD can't SIGPIPE-kill the inner clang.
     let bcmd = shq(hexa_bin) + " build " + shq(file) + " -o " + shq(_tmp_inflight) + " 2>&1; echo \"__HEXA_BRC__=$?\""
-    let bout = exec(bcmd)
+    let _brc_log = "/tmp/.hexa-runtime/brc." + to_string(mono_ns()) + ".log"
+    exec("mkdir -p /tmp/.hexa-runtime 2>/dev/null")
+    let _ = exec("( " + bcmd + " ) > '" + _brc_log + "' 2>&1")
+    let mut bout = ""
+    if file_exists(_brc_log) {
+        bout = exec("cat '" + _brc_log + "' 2>/dev/null")
+        exec("rm -f '" + _brc_log + "' 2>/dev/null")
+    } else {
+        bout = exec(bcmd)
+    }
     let bmark = "__HEXA_BRC__="
     let bml = len(bmark)
     let mut bmi = -1
