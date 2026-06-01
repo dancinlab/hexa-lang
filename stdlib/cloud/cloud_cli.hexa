@@ -530,6 +530,61 @@ fn _collect_after(av: [str], start: int) -> [str] {
     return out
 }
 
+// _copy_is_value_flag — for the copy verbs' positional collector: a flag that
+// CONSUMES the following token as its value (so that value is never mistaken
+// for a positional src/dest). Bug-3 (@L7): `copy-from host remote local --port
+// 11118` placed `--port` where the fixed-index parser read it AS the source →
+// `root@host:--port` scp dest, exit 255. Listing the value-flags lets the
+// collector skip BOTH the flag and its value.
+fn _copy_is_value_flag(t: str) -> int {
+    if t == "--port" { return 1 }
+    if t == "--identity" { return 1 }
+    return 0
+}
+
+// _copy_is_bool_flag — a flag that consumes ONLY itself (no value) for the
+// copy verbs. Anything that is neither a value-flag, a bool-flag, nor `--` is
+// a positional.
+fn _copy_is_bool_flag(t: str) -> int {
+    if t == "--insecure" { return 1 }
+    if t == "--recursive" { return 1 }
+    if t == "-r" { return 1 }
+    if t == "--resume" { return 1 }
+    if t == "--verify-sha" { return 1 }
+    return 0
+}
+
+// _copy_positionals — collect the positional args of a copy verb from av[start..],
+// SKIPPING flags (and a value-flag's value) wherever they appear, so a `--port
+// N` placed before / between / after the src+dest is parsed as a flag and the
+// two real positionals are recovered in order. Stops at a bare `--` (anything
+// after it is positional verbatim — though copy verbs take no trailing argv).
+// d4: one funnel, both copy verbs call it; no per-verb index arithmetic.
+fn _copy_positionals(av: [str], start: int) -> [str] {
+    let mut out = []
+    let mut i = start
+    while i < len(av) {
+        let t = av[i]
+        if t == "--" {
+            i = i + 1
+            while i < len(av) {
+                out.push(av[i])
+                i = i + 1
+            }
+            return out
+        }
+        if _copy_is_value_flag(t) == 1 {
+            i = i + 2   // skip flag + its value
+        } else if _copy_is_bool_flag(t) == 1 {
+            i = i + 1   // skip flag only
+        } else {
+            out.push(t)
+            i = i + 1
+        }
+    }
+    return out
+}
+
 // _env_file_kvs — read a KEY=VALUE-per-line env file into a [str] of
 // "KEY=VALUE" tokens. Blank lines and `#`-comment lines are skipped; a
 // line is kept only if it carries a `=` past column 0. A missing file
@@ -2703,25 +2758,33 @@ fn main() {
         exit(1)
     }
     if sub == "copy-to" {
-        if si + 3 >= len(av) {
+        if si + 1 >= len(av) {
             println("[cloud] copy-to: usage — cloud copy-to <host> <local> <remote> [--port N] [--insecure]")
             exit(2)
         }
         let _rh = _resolve_cloud_host(_checked_host(av[si + 1]))
         let host = _rh.host
         if _rh.resolved == 1 {
-            println("[cloud] copy-to: resolved vast id → " + host + " :" + _rh.port + " (" + _rh.via + ")")
+            println("[cloud] copy-to: resolved pod-id → " + host + " :" + _rh.port + " (" + _rh.via + ")")
         }
-        let local_path = av[si + 2]
-        let remote_path = av[si + 3]
-        let ssh_opts = _apply_resolved_port(_ssh_opts_cli(av, si + 4), _rh)
-        let mut want_recursive = _has_flag(av, si + 4, "--recursive")
-        if _has_flag(av, si + 4, "-r") == 1 {
+        // Bug-3 (@L7): collect <local> <remote> as FLAG-SKIPPING positionals so
+        // a `--port N` anywhere (incl. between the paths) is parsed as a flag,
+        // never read as the source path (the `root@host:--port` exit-255 bug).
+        let _pos = _copy_positionals(av, si + 2)
+        if len(_pos) < 2 {
+            println("[cloud] copy-to: need <local> <remote> — usage: cloud copy-to <host> <local> <remote> [--port N] [--insecure]")
+            exit(2)
+        }
+        let local_path = _pos[0]
+        let remote_path = _pos[1]
+        let ssh_opts = _apply_resolved_port(_ssh_opts_cli(av, si + 2), _rh)
+        let mut want_recursive = _has_flag(av, si + 2, "--recursive")
+        if _has_flag(av, si + 2, "-r") == 1 {
             want_recursive = 1
         }
         let r = _copy_to_run(host, ssh_opts, local_path, remote_path, want_recursive)
         println("[cloud] " + r.message + " · " + local_path + " -> " + host + ":" + remote_path)
-        if r.ok == 1 && _has_flag(av, si + 4, "--verify-sha") == 1 {
+        if r.ok == 1 && _has_flag(av, si + 2, "--verify-sha") == 1 {
             let v = cloud_verify_sha(host, ssh_opts, remote_path, local_path)
             println("[cloud] verify-sha: " + v.message)
             exit(v.exit_code)
@@ -2729,22 +2792,30 @@ fn main() {
         exit(r.exit_code)
     }
     if sub == "copy-from" {
-        if si + 3 >= len(av) {
+        if si + 1 >= len(av) {
             println("[cloud] copy-from: usage — cloud copy-from <host> <remote> <local> [--port N] [--insecure]")
             exit(2)
         }
         let _rh = _resolve_cloud_host(_checked_host(av[si + 1]))
         let host = _rh.host
         if _rh.resolved == 1 {
-            println("[cloud] copy-from: resolved vast id → " + host + " :" + _rh.port + " (" + _rh.via + ")")
+            println("[cloud] copy-from: resolved pod-id → " + host + " :" + _rh.port + " (" + _rh.via + ")")
         }
-        let remote_path = av[si + 2]
-        let local_path = av[si + 3]
-        let ssh_opts = _apply_resolved_port(_ssh_opts_cli(av, si + 4), _rh)
-        let want_resume = _has_flag(av, si + 4, "--resume")
+        // Bug-3 (@L7): collect <remote> <local> as FLAG-SKIPPING positionals so
+        // a `--port N` anywhere is parsed as a flag, never read as the remote
+        // source path (`root@ssh1.vast.ai:--port` scp exit 255 — the live bug).
+        let _pos = _copy_positionals(av, si + 2)
+        if len(_pos) < 2 {
+            println("[cloud] copy-from: need <remote> <local> — usage: cloud copy-from <host> <remote> <local> [--port N] [--insecure]")
+            exit(2)
+        }
+        let remote_path = _pos[0]
+        let local_path = _pos[1]
+        let ssh_opts = _apply_resolved_port(_ssh_opts_cli(av, si + 2), _rh)
+        let want_resume = _has_flag(av, si + 2, "--resume")
         let r = _copy_from_run(host, ssh_opts, remote_path, local_path, want_resume)
         println("[cloud] " + r.message + " · " + host + ":" + remote_path + " -> " + local_path)
-        if r.ok == 1 && _has_flag(av, si + 4, "--verify-sha") == 1 {
+        if r.ok == 1 && _has_flag(av, si + 2, "--verify-sha") == 1 {
             let v = cloud_verify_sha(host, ssh_opts, remote_path, local_path)
             println("[cloud] verify-sha: " + v.message)
             exit(v.exit_code)
