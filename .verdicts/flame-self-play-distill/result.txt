@@ -1,0 +1,12 @@
+clm_self_distill — self-play dispatch-KL self-distillation (lever A · P4 §2)
+  paradigm: NO external teacher · the model distils from its OWN sharper-rung dispatch
+  held-out CE @ init       = 4.77239
+  train CE  baseline       = 0.000150499
+  train CE  self-distill   = 0.000246679
+  held-out CE baseline     = 5.14154
+  held-out CE self-distill = 5.14154
+  held-out delta (base-distill) = -3.70927e-06  (>0 = distill better)
+  external-LLM calls       = 0  (self-play · zero external teacher)
+F-FLAME-SELF-DISTILL = 0
+HONEST-NEGATIVE — external-LLM 0 holds, but NO held-out gain on this toy task
+  ruled-out axis: dispatch-KL self-sharpening does NOT generalize here (identical init, fixed batch)
