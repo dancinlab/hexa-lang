@@ -1,0 +1,7 @@
+$ hexa run stdlib/flame/clm_elementwise_gpu.hexa
+clm_elementwise_gpu — CLM GroupNorm·GELU·MoE-combine via forge dispatch
+  GroupNorm  T=12 C=8 G=2  max|Δ| forge-vs-host = 0.0
+  GELU       h=96  max|Δ| forge-vs-host = 0.0
+  MoE-combine E=3 T=12 C=8  max|Δ| forge-vs-host = 0.0
+F-CLM-ELEMENTWISE-FORGE-EQ = 1
+PASS — GroupNorm·GELU·MoE-combine forge fallbacks == host (byte-eq, elementwise carve-out wired)
