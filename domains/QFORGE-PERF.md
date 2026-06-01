@@ -19,6 +19,20 @@ qforge_h_apply v↦H·v    0.140 GFLOP/s          fp64 139.88 · fp32 279.76  ~1
 - verdict: `.verdicts/qforge-perf-roofline/h-apply-membound.txt` (🟢 SUPPORTED-NUMERICAL).
 - 측정치 평탄(n-독립 GFLOP/s) = memory-bound 지문 — `AI = 2/b` 가 n 독립이라 이론과 일치.
 
+**네 hot loop 전부 grounding 완료** (per-call wall · user_s 기준 · [[QFORGE-PERF.bench]] §7):
+
+```
+hot loop (engine fn)        size sweep         per-call wall (user)   feeds
+─────────────────────       ──────────────     ───────────────────    ──────────────────────
+H_apply (matvec)            n 256/512/1024     0.140 GFLOP/s (평탄)    ⚡ H_apply GPU-GEMM
+FFT-Poisson  vhartree…      nz 256/1024/4096   11.5 / 217 / 4180 ms   ⚡ cuFFT / NVPTX-FFT
+Davidson     qforge_davidson n 128/256/512     15.2 / 54.7 / 169 ms   ⚡ Davidson VᵀHV · 🧮 CheFSI
+Sternheimer  qforge_sternh… n 128/256/512      15.8 / 107 / 1372 ms   ⚡ Sternheimer CG resident
+```
+
+- FFT-Poisson 은 radix-2 FFT(O(N log N))인데 per-call wall 은 ~O(N²) — butterfly 가 아니라 **call 당 O(N) scratch 할당** + 캐시 압박이 원인. cuFFT 이득이 mesh 크기에 따라 log-linear 예측보다 빠르게 커짐. 부차 관측(handoff): 큰 grid 반복 호출 시 메모리 누적 → 부하 하 OOM (stdlib/signal·runtime 영역 · 본 docs-only 도메인 범위 밖).
+- 모든 ⚡/🧮 `🟢bench-needed` 항목이 이제 측정된 분모를 가짐. 구현 항목은 자기 GPU Δ 를 게시할 때 비로소 closed (g6/g63).
+
 ## 전제 — hot loops (선행 grounding, 2026-06-01)
 
 QFORGE el-ph 의 측정된 hot path (재분석 금지, 사용):

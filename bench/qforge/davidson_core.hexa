@@ -1,0 +1,71 @@
+// QFORGE-PERF — CPU baseline CORE for the Davidson eigensolver hot loop.
+//
+// `qforge_davidson_bench(n, nbands, reps)` exercises `qforge_davidson`
+// (stdlib/qforge/davidson.hexa:83) end-to-end — the O(N³)-effective subspace
+// eigensolver whose inner `dv_project` (VᵀHV, davidson.hexa:67) + H_apply matvecs
+// dominate every ground-state SCF step. This is the Δ-baseline DENOMINATOR for the
+// ⚡ Davidson VᵀHV GPU-GEMM item and the 🧮 CheFSI / Lanczos alternatives (which
+// divide by matvec-count, not GFLOP/s).
+//
+// docs-only: `use`s the engine read-only, edits nothing under stdlib/qforge.
+// Uses the engine's matrix-free contract: a named fn `h_apply(v)` over a module
+// -global flat matrix (= davidson_selftest.hexa:43 pattern). No main → per-n
+// wrapper files call this with literals (`hexa bench` does NOT forward `-- argv`).
+use "stdlib/qforge/davidson"
+
+// ── matrix-free operator: global flat n×n symmetric matrix → H_apply(v)=M·v ──
+let mut G_MAT: [float] = []
+let mut G_N = 0
+fn h_apply(v: [float]) -> [float] {
+    let mut out: [float] = []
+    let mut i = 0
+    while i < G_N {
+        let mut s = 0.0
+        let mut j = 0
+        while j < G_N { s = s + G_MAT[i * G_N + j] * v[j] ; j = j + 1 }
+        out.push(s)
+        i = i + 1
+    }
+    return out
+}
+
+// Deterministic real-symmetric, diagonally-dominant H (well-separated low spectrum
+// so Davidson converges in bounded iters): diag 2(a+1) ≫ Σ decaying off-diagonals.
+fn _build_flat(n: int) -> [float] {
+    let mut m: [float] = []
+    let mut a = 0
+    while a < n {
+        let mut b = 0
+        while b < n {
+            if a == b {
+                m.push(2.0 * to_float(a + 1))
+            } else {
+                let d = a - b
+                let ad = if d < 0 { 0 - d } else { d }
+                m.push(1.0 / to_float(ad + 1))
+            }
+            b = b + 1
+        }
+        a = a + 1
+    }
+    return m
+}
+
+pub fn qforge_davidson_bench(n: int, nbands: int, reps: int) -> float {
+    G_MAT = _build_flat(n)
+    G_N = n
+    let mut diag: [float] = []
+    let mut i = 0
+    while i < n { diag.push(G_MAT[i * n + i]) ; i = i + 1 }
+
+    // reps full solves (each = many VᵀHV + matvec inner iters). checksum from the
+    // lowest eigenvalue so the optimiser cannot elide the solve.
+    let mut r = 0
+    let mut checksum = 0.0
+    while r < reps {
+        let res = qforge_davidson(h_apply, diag, n, nbands, 1.0e-8, 100)
+        checksum = checksum + res.evals[0]
+        r = r + 1
+    }
+    return checksum
+}
