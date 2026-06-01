@@ -2,6 +2,10 @@
 
 `.tape` (agent-execution trace grammar) adoption audit. Read-only; no code changes.
 
+> `@D` field grammar (which fields a directive block may carry, kind-aware) is
+> specified at [`docs/tape_d_field_grammar.md`](docs/tape_d_field_grammar.md),
+> executable SSOT [`self/stdlib/tape_grammar.hexa`](self/stdlib/tape_grammar.hexa).
+
 ## A. Audit-class ledgers
 
 Heaviest of the four siblings. Concrete inventory:
