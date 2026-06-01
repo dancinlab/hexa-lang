@@ -560,6 +560,35 @@ fn rt_math_tanh(x) { return __c_tanh(to_float(x)) }
 fn rt_math_sin(x) { return __c_sin(to_float(x)) }
 fn rt_math_cos(x) { return __c_cos(to_float(x)) }
 
+// trunc: PURE — truncate toward zero (integer part). Matches C trunc().
+// to_int() narrows toward zero, so to_float(to_int(x)) IS trunc(x).
+// STATUS: PURE
+fn rt_math_trunc(x) {
+    let f = to_float(x)
+    let i = to_int(f)
+    return to_float(i)
+}
+
+// sign: PURE — signum. +1.0 / -1.0 / 0.0. (signed-zero collapses to 0.0)
+// STATUS: PURE
+fn rt_math_sign(x) {
+    let f = to_float(x)
+    if f > 0.0 { return 1.0 }
+    if f < 0.0 { return 0.0 - 1.0 }
+    return 0.0
+}
+
+// fmod: PURE — floating remainder a - trunc(a/b)*b. Matches C fmod()
+// (truncated-toward-zero quotient → result carries sign of a). b==0 → 0.0.
+// STATUS: PURE
+fn rt_math_fmod(a, b) {
+    let fa = to_float(a)
+    let fb = to_float(b)
+    if fb == 0.0 { return 0.0 }
+    let q = to_int(fa / fb)
+    return fa - (to_float(q) * fb)
+}
+
 // min/max: PURE (no libm needed)
 fn rt_math_min(a, b) {
     let fa = to_float(a)
@@ -646,8 +675,8 @@ fn rt_free_raw(ptr) { __c_free(ptr) }
 //   rt_index_set, rt_array_slice, rt_array_reverse, rt_array_contains,
 //   rt_array_index_of, rt_array_map, rt_array_filter, rt_array_fold
 //
-// PURE (2 functions — math, no libm needed):
-//   rt_math_min, rt_math_max
+// PURE (5 functions — math, no libm needed):
+//   rt_math_min, rt_math_max, rt_math_trunc, rt_math_sign, rt_math_fmod
 //
 // FFI (11 functions — thin libm wrappers):
 //   rt_math_sqrt, rt_math_pow, rt_math_exp, rt_math_log,
@@ -661,7 +690,7 @@ fn rt_free_raw(ptr) { __c_free(ptr) }
 //   rt_read_file, rt_write_file, rt_write_bytes, rt_read_file_bytes,
 //   rt_exec, rt_exec_with_status
 //
-// TOTAL: 53 functions
-//   34 PURE (no C at all)
+// TOTAL: 56 functions
+//   37 PURE (no C at all)
 //   13 FFI  (thin libc/libm wrappers)
 //    6 HYBRID (builtin delegation)
