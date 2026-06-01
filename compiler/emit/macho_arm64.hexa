@@ -735,6 +735,17 @@ fn encode_arm64_insn(op: string, ops: [string]) -> i64 {
         return 0x93400000 | (sh << 16) | (63 << 10) | (rn << 5) | rd
     }
 
+    // ── Indirect branch (register): BLR Xn / BR Xn ──
+    // BLR (call) 0xd63f0000 | (Rn<<5) ; BR (tail/jump) 0xd61f0000.
+    if op == "BLR" && len(ops) == 1 {
+        let rn = xreg_idx(ops[0])
+        if rn >= 0 { return 0xd63f0000 | (rn << 5) }
+    }
+    if op == "BR" && len(ops) == 1 {
+        let rn = xreg_idx(ops[0])
+        if rn >= 0 { return 0xd61f0000 | (rn << 5) }
+    }
+
     // ── Division: SDIV / UDIV Xd, Xn, Xm ──
     // SDIV 0x9ac00c00 | UDIV 0x9ac00800 (Rm<<16, Rn<<5, Rd).
     if op == "SDIV" && len(ops) == 3 {
@@ -1331,6 +1342,8 @@ fn _lir_op_uppercase(op: string) -> string {
     if op == "asrv"  { return "ASRV" }
     if op == "sdiv"  { return "SDIV" }
     if op == "udiv"  { return "UDIV" }
+    if op == "blr"   { return "BLR"  }
+    if op == "br"    { return "BR"   }
     // Conditional branch: `b.eq` -> `B.EQ`. The encoder reads the
     // condition from the suffix; uppercasing the whole token preserves
     // the dot.
