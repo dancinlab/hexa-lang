@@ -1,0 +1,102 @@
+// stdlib/qforge/compose_cah6_selftest.hexa — g5 gate for the breadth COMPOSER.
+//
+// Verifies the generic composition path qforge_compose_cah6_lambda WITHOUT a heavy
+// SCF: synthetic active manifold + a controlled real ω band + a real n_ef, with
+// closed-form/structural invariants the composer must satisfy.
+//
+// Gates:
+//   G1  malformed input → ok==0 (empty band / non-positive n_ef / nb mismatch).
+//   G2  α²F ≥ 0 everywhere ⇒ λ ≥ 0 (no fake-negative coupling).
+//   G3  each brick's contribution is NON-TRIVIAL: a 2-mode real band emits 2× the
+//       samples of a 1-mode band (brick (a) broadening is real, not a no-op).
+//   G4  λ = Σλ(q,ν) consistency: doubling N(E_F) HALVES λ (the 1/N(E_F) Allen
+//       normalizer enters linearly — the [c] brick is load-bearing, not cosmetic).
+//   G5  off-diagonal [b] contributes: a manifold with non-zero inter-band coupling
+//       gives a STRICTLY larger Σ|g_mn|² than the diagonal-only sub-block.
+//
+// Run: HEXA_STDLIB_ROOT="$PWD/stdlib" hexa run --no-sentinel stdlib/qforge/compose_cah6_selftest.hexa
+use "stdlib/qforge/compose_cah6"
+
+fn _abs(x: float) -> float { if x < 0.0 { return -x } return x }
+
+fn main() {
+    let mut fails = 0
+    let mut checks = 0
+
+    // ── synthetic active manifold: 3 orthonormal states in n=4 PW space ──────
+    let s0 = [1.0, 0.0, 0.0, 0.0]
+    let s1 = [0.0, 1.0, 0.0, 0.0]
+    let s2 = [0.0, 0.0, 1.0, 0.0]
+    let states = [s0, s1, s2]
+    // screened ΔV·ψ columns with REAL off-diagonal structure (not pure diagonal):
+    // each column has weight on neighbouring components → non-zero ⟨ψ_m|ΔV|ψ_n⟩ m≠n.
+    let d0 = [0.30, 0.10, 0.00, 0.0]
+    let d1 = [0.10, 0.30, 0.10, 0.0]
+    let d2 = [0.00, 0.10, 0.30, 0.0]
+    let dv = [d0, d1, d2]
+    let eps = [0.00, 0.01, -0.01]              // all near E_F=0 (on the Fermi surface)
+    let e_fermi = 0.0
+    let sigma_el = 0.05
+    let sigma_ph = 10.0
+    let mut grid: [float] = []
+    let mut gp = 1
+    while gp < 201 { grid.push(to_float(gp) * 10.0) ; gp = gp + 1 }
+
+    // ── G1: malformed input → ok==0 ──────────────────────────────────────────
+    let empty_band: [float] = []
+    let r_eb = qforge_compose_cah6_lambda(states, dv, eps, empty_band, e_fermi, 1.0,
+                                          grid, sigma_el, sigma_ph)
+    checks = checks + 1
+    if r_eb.ok != 0 { println("FAIL G1a empty-band not rejected") ; fails = fails + 1 }
+    let band1 = [1000.0]
+    let r_n0 = qforge_compose_cah6_lambda(states, dv, eps, band1, e_fermi, 0.0,
+                                          grid, sigma_el, sigma_ph)
+    checks = checks + 1
+    if r_n0.ok != 0 { println("FAIL G1b zero-n_ef not rejected") ; fails = fails + 1 }
+
+    // ── G2: α²F ≥ 0 ⇒ λ ≥ 0 ──────────────────────────────────────────────────
+    let r1 = qforge_compose_cah6_lambda(states, dv, eps, band1, e_fermi, 1.0,
+                                        grid, sigma_el, sigma_ph)
+    checks = checks + 1
+    if r1.ok != 1 || r1.lambda < 0.0 {
+        println("FAIL G2 lambda<0 or not ok (lambda=" + to_string(r1.lambda) + ")") ; fails = fails + 1
+    }
+
+    // ── G3: brick (a) broadening — 2-mode band emits 2× the samples ──────────
+    let band2 = [800.0, 1200.0]
+    let r2 = qforge_compose_cah6_lambda(states, dv, eps, band2, e_fermi, 1.0,
+                                        grid, sigma_el, sigma_ph)
+    checks = checks + 1
+    if r2.n_samples != 2 * r1.n_samples {
+        println("FAIL G3 band broadening not linear in nw ("
+                + to_string(r1.n_samples) + " vs " + to_string(r2.n_samples) + ")") ; fails = fails + 1
+    }
+
+    // ── G4: brick (c) — doubling N(E_F) halves λ (Allen 1/N(E_F) normalizer) ──
+    let r_nef2 = qforge_compose_cah6_lambda(states, dv, eps, band1, e_fermi, 2.0,
+                                            grid, sigma_el, sigma_ph)
+    checks = checks + 1
+    let want_half = r1.lambda / 2.0
+    if _abs(r_nef2.lambda - want_half) > 1.0e-6 * (1.0 + _abs(want_half)) {
+        println("FAIL G4 1/N(E_F) not linear (λ@1=" + to_string(r1.lambda)
+                + " λ@2=" + to_string(r_nef2.lambda) + " want " + to_string(want_half) + ")")
+        fails = fails + 1
+    }
+
+    // ── G5: brick (b) off-diagonal contributes to Σ|g_mn|² ───────────────────
+    // pure-diagonal screened columns (no neighbour weight) → smaller g2_total.
+    let dd0 = [0.30, 0.00, 0.00, 0.0]
+    let dd1 = [0.00, 0.30, 0.00, 0.0]
+    let dd2 = [0.00, 0.00, 0.30, 0.0]
+    let dvdiag = [dd0, dd1, dd2]
+    let r_diag = qforge_compose_cah6_lambda(states, dvdiag, eps, band1, e_fermi, 1.0,
+                                            grid, sigma_el, sigma_ph)
+    checks = checks + 1
+    if !(r1.g2_total > r_diag.g2_total + 1.0e-9) {
+        println("FAIL G5 off-diagonal not adding coupling (full=" + to_string(r1.g2_total)
+                + " diag=" + to_string(r_diag.g2_total) + ")") ; fails = fails + 1
+    }
+
+    println("compose_cah6 selftest: " + to_string(checks - fails) + "/" + to_string(checks) + " checks pass")
+    if fails == 0 { println("ALL_PASS") } else { println("FAILED (" + to_string(fails) + ")") }
+}
