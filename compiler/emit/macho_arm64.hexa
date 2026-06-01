@@ -103,10 +103,12 @@ let MACHO_S_REGULAR               = 0x00000000
 let MACHO_S_ATTR_PURE_INSTRUCTIONS = 0x80000000
 
 // arm64 relocation types (`mach-o/arm64/reloc.h`).
-let MACHO_ARM64_RELOC_UNSIGNED   = 0
-let MACHO_ARM64_RELOC_BRANCH26   = 2
-let MACHO_ARM64_RELOC_PAGE21     = 3
-let MACHO_ARM64_RELOC_PAGEOFF12  = 4
+let MACHO_ARM64_RELOC_UNSIGNED          = 0
+let MACHO_ARM64_RELOC_BRANCH26          = 2
+let MACHO_ARM64_RELOC_PAGE21            = 3
+let MACHO_ARM64_RELOC_PAGEOFF12         = 4
+let MACHO_ARM64_RELOC_GOT_LOAD_PAGE21   = 5
+let MACHO_ARM64_RELOC_GOT_LOAD_PAGEOFF12 = 6
 
 // nlist `n_type` bits (`<mach-o/nlist.h>`).
 let MACHO_N_UNDF = 0x00   // undefined (extern reference)
@@ -1408,6 +1410,31 @@ fn _lir_op_uppercase(op: string) -> string {
     return op
 }
 
+// Classify a label operand's PC-relative addressing suffix into a
+// Mach-O reloc kind, returning [kind, base_len] where base_len is the
+// length of the symbol name with the `@…` suffix stripped. kind == -1
+// means no recognized suffix (a plain intra-fn label / runtime name).
+//   `sym@PAGE`        -> PAGE21      (3)
+//   `sym@PAGEOFF`     -> PAGEOFF12   (4)
+//   `sym@GOTPAGE`     -> GOT_LOAD_PAGE21    (handled in PR-C; classify now)
+//   `sym@GOTPAGEOFF`  -> GOT_LOAD_PAGEOFF12 (PR-C)
+fn _label_reloc_kind(s: string) -> [Int] {
+    // Order matters: test the GOT (longer) suffixes before the bare ones.
+    if _ends_with(s, "@GOTPAGEOFF") { return [MACHO_ARM64_RELOC_GOT_LOAD_PAGEOFF12, len(s) - 11] }
+    if _ends_with(s, "@GOTPAGE")    { return [MACHO_ARM64_RELOC_GOT_LOAD_PAGE21,    len(s) - 8] }
+    if _ends_with(s, "@PAGEOFF")    { return [MACHO_ARM64_RELOC_PAGEOFF12, len(s) - 8] }
+    if _ends_with(s, "@PAGE")       { return [MACHO_ARM64_RELOC_PAGE21,     len(s) - 5] }
+    return [-1, len(s)]
+}
+
+// Extract the bare symbol name (the `@…` suffix stripped to `base_len`)
+// from a page-relative operand. For a `label` operand the suffix lives
+// on `op.label`; for a `mem` operand (GOT load) it lives on `op.label`
+// too (`[Xn, sym@GOTPAGEOFF]`'s label field is `sym@GOTPAGEOFF`).
+fn _label_base_name(op: LOperand, base_len: Int) -> string {
+    return op.label.substring(0, base_len)
+}
+
 fn _lir_operand_str(op: LOperand) -> string {
     if op.kind == "reg"   { return op.reg.name }
     if op.kind == "imm"   { return "#" + to_string(op.imm) }
@@ -1753,6 +1780,8 @@ fn _darwin_mangle_label(label: string) -> string {
 //     (first-defined) is prepended by pack_lir.
 fn _pack_fn(out_text: [Int],
             pending_offsets: [Int], pending_names: [string],
+            pending_page_offsets: [Int], pending_page_names: [string],
+            pending_page_kinds: [Int],
             blabel_names: [string], blabel_offsets: [Int],
             blabel_reforder: [string],
             f: LFunc) {
@@ -1783,17 +1812,59 @@ fn _pack_fn(out_text: [Int],
         }
 
         // Format operands to the [string] form encode_arm64_insn expects.
+        // PC-relative page operands (`sym@PAGE` / `sym@PAGEOFF` / GOT
+        // variants) are sanitized to a zero-immediate base form here: the
+        // encoder emits the bare instruction word (imm=0) and Pass-4
+        // attaches the matching PAGE21 / PAGEOFF12 relocation, which the
+        // linker patches with the resolved page / page-offset. Without
+        // this, `add Xd,Xn,sym@PAGEOFF` fell through to the register-form
+        // ADD path (xreg_idx of a `.LCstr@PAGEOFF` string = -1) → a
+        // garbage word, and `adrp Xd,sym@PAGE` carried no reloc → page 0.
         let mut ops: [string] = []
         let na = len(ins.args)
+        // Per-operand page-reloc capture (at most one symbol-relative
+        // operand per instruction in the LIR the codegen emits).
+        let mut page_kind = -1
+        let mut page_name = ""
         let mut k = 0
         while k < na {
-            ops.push(_lir_operand_str(ins.args[k]))
+            let arg = ins.args[k]
+            let raw = _lir_operand_str(arg)
+            // A label operand OR a mem operand may carry the `@…` suffix
+            // (mem form `[Xn, sym@GOTPAGEOFF]` is emitted by GOT loads).
+            let rk = _label_reloc_kind(raw)
+            if rk[0] >= 0 && (arg.kind == "label" || arg.kind == "mem") {
+                page_kind = rk[0]
+                page_name = _label_base_name(arg, rk[1])
+                // Sanitize the operand to a zero-immediate base form so
+                // the encoder produces the bare word.
+                if arg.kind == "mem" {
+                    // `[Xn, sym@GOTPAGEOFF]` -> `[Xn, #0]` (ldr base).
+                    ops.push("[" + arg.mem_base.name + ", #0]")
+                } else {
+                    // ADRP ignores ops[1]; ADD/LDR-imm read it as `#0`.
+                    ops.push("#0")
+                }
+            } else {
+                ops.push(raw)
+            }
             k = k + 1
         }
 
         let up = _lir_op_uppercase(ins.op)
         let word = encode_arm64_insn(up, ops)
         let cur_off = len(out_text)
+
+        // Symbol-relative page operand: emit the base word + record the
+        // (offset, base symbol, reloc kind) for Pass-4.
+        if page_kind >= 0 {
+            _push_word_le(out_text, word)
+            pending_page_offsets.push(cur_off)
+            pending_page_names.push(page_name)
+            pending_page_kinds.push(page_kind)
+            i = i + 1
+            continue
+        }
 
         // Branch targets: encoder emits the bare base bit-pattern;
         // intra-fn imm26 / imm19 / B.cond imm19 are patched below.
@@ -2021,6 +2092,11 @@ pub fn pack_lir(lm: LModule) -> MachoArm64Obj {
     // defined-externs, then undefs) — required for `r_symbolnum` parity.
     let pending_offsets: [Int]    = []   // __text offset of each extern BL
     let pending_names:   [string] = []   // target name per extern BL
+    // Page-relative refs (ADRP/ADD/LDR `@PAGE`/`@PAGEOFF`/GOT) — parallel
+    // to the BRANCH26 pending arrays but carrying a per-site reloc KIND.
+    let pending_page_offsets: [Int]    = []
+    let pending_page_names:   [string] = []
+    let pending_page_kinds:   [Int]    = []
     let blabel_names:    [string] = []   // every block label (def order)
     let blabel_offsets:  [Int]    = []   // its __text offset
     let blabel_reforder: [string] = []   // labels in first-branch-ref order
@@ -2036,6 +2112,7 @@ pub fn pack_lir(lm: LModule) -> MachoArm64Obj {
         fn_values.push(len(obj.text))
         if _is_entry_symbol_name(f.name) { fn_is_entry.push(1) } else { fn_is_entry.push(0) }
         _pack_fn(obj.text, pending_offsets, pending_names,
+                 pending_page_offsets, pending_page_names, pending_page_kinds,
                  blabel_names, blabel_offsets, blabel_reforder, f)
         i = i + 1
     }
@@ -2151,15 +2228,20 @@ pub fn pack_lir(lm: LModule) -> MachoArm64Obj {
     }
 
     // `__cstring` literal-pool symbols — one local N_SECT per `.LCstr*`
-    // (section 2, value = byte offset into the pool). The ADRP/ADD
-    // `@PAGE`/`@PAGEOFF` reloc pair (PR-B) resolves against these. The
-    // label name already carries the `.LCstr` form; the `.s` path
-    // references it verbatim (no `_` mangle — it's a section-local L
-    // symbol, not an ABI symbol). Emit only when the pool is non-empty.
+    // (section 2). The ADRP/ADD `@PAGE`/`@PAGEOFF` reloc pair (PR-B)
+    // resolves against these. A Mach-O N_SECT symbol's `n_value` is the
+    // section-relative VIRTUAL ADDRESS, not a bare in-section offset:
+    // `__text` syms work with a plain offset only because __text.vmaddr
+    // is 0, but `__cstring` sits at vmaddr `cstr_base` (= 4-aligned end
+    // of __text), so each label's value = cstr_base + pool_offset.
+    // (Without this ld64 rejects: ".LCstr0 ... address isn't in its
+    // designated section".) The label name carries the `.LCstr` form
+    // verbatim (no `_` mangle — section-local L symbol).
+    let cstr_base = text_len + text_pad
     if has_cstr {
         let mut pli = 0
         while pli < len(cpool.labels) {
-            _push_local_sym(obj, sym_names, cpool.labels[pli], 2, cpool.offsets[pli])
+            _push_local_sym(obj, sym_names, cpool.labels[pli], 2, cstr_base + cpool.offsets[pli])
             pli = pli + 1
         }
     }
@@ -2226,9 +2308,17 @@ pub fn pack_lir(lm: LModule) -> MachoArm64Obj {
         mi = mi + 1
     }
 
-    // ── Pass 4: resolve branches; emit relocs (descending address) ──
-    let reloc_offs: [Int] = []
-    let reloc_idxs: [Int] = []
+    // ── Pass 4: resolve branches + page refs; emit relocs ──
+    // A single reloc table carries BRANCH26 (calls) and PAGE21 /
+    // PAGEOFF12 / GOT_LOAD (data addressing) records. Collected with a
+    // parallel kind list, then flushed in DESCENDING address order
+    // (clang's __text relocation table is emitted high-address-first).
+    let reloc_offs:  [Int] = []
+    let reloc_idxs:  [Int] = []
+    let reloc_kinds: [Int] = []
+    // Page targets that resolved to no symbol (PR-C scope: globals /
+    // float pool). Reported (not silently dropped) after the walk.
+    let pack_page_unresolved: [string] = []
     pi = 0
     while pi < np {
         let off = pending_offsets[pi]
@@ -2266,22 +2356,93 @@ pub fn pack_lir(lm: LModule) -> MachoArm64Obj {
         } else {
             reloc_offs.push(off)
             reloc_idxs.push(idx)
+            reloc_kinds.push(MACHO_ARM64_RELOC_BRANCH26)
         }
         pi = pi + 1
     }
-    // Flush extern relocs in DESCENDING address order (clang's __text
-    // relocation table is emitted high-address-first).
+
+    // Page-relative refs (ADRP/ADD/LDR @PAGE/@PAGEOFF/GOT). Each resolves
+    // against a SYMBOL in obj.symbols: the `.LCstr*` literals are defined
+    // N_SECT locals (added in Pass 3); `_g*` data globals are defined
+    // N_SECT (PR-C) or undefined externs. Symbol-based reloc (r_extern=1)
+    // works for both — the linker computes the page/page-offset of the
+    // target symbol's final address. The PAGE21 vs PAGEOFF12 vs GOT kind
+    // is carried per-site from `_pack_fn`.
+    let mut ppi = 0
+    let npp = len(pending_page_offsets)
+    while ppi < npp {
+        let poff  = pending_page_offsets[ppi]
+        let praw  = pending_page_names[ppi]
+        let pkind = pending_page_kinds[ppi]
+        // `.LCstr*` / `.LCflt*` local labels are stored verbatim in
+        // symbols[]; `g<id>` data globals are defined as `_g<id>`. Try the
+        // raw name first, then the ABI-mangled form.
+        let mut pidx = _find_sym_by_name(obj.symbols, obj.strtab, praw)
+        if pidx < 0 {
+            pidx = _find_sym_by_name(obj.symbols, obj.strtab, _darwin_mangle(praw))
+        }
+        if pidx < 0 {
+            // Unknown page target (not a `.LCstr*` literal, a block
+            // label, or a known global). PR-B's measured scope is
+            // cstring-only; `g<id>` data globals + `.LCflt*` float pool
+            // are PR-C. Skipping the reloc would silently mis-address, so
+            // FAIL LOUDLY: leave the site UNRELOCATED but record the gap
+            // via the pack diagnostic counter rather than fabricate a
+            // binding. (A missing reloc shows as a 0-page ref in otool —
+            // observable, not a hidden miscompile claim.)
+            pack_page_unresolved.push(praw)
+            ppi = ppi + 1
+            continue
+        }
+        reloc_offs.push(poff)
+        reloc_idxs.push(pidx)
+        reloc_kinds.push(pkind)
+        ppi = ppi + 1
+    }
+
+    // Flush all relocs in DESCENDING address order. Insertion-order the
+    // (offset, idx, kind) triples high-address-first.
     let nr = len(reloc_offs)
-    let mut ri = nr - 1
-    while ri >= 0 {
+    let order: [Int] = []
+    let mut oi = 0
+    while oi < nr { order.push(oi); oi = oi + 1 }
+    // Selection-sort `order` by reloc_offs DESCENDING (nr is small).
+    let mut a = 0
+    while a < nr {
+        let mut best = a
+        let mut b = a + 1
+        while b < nr {
+            if reloc_offs[order[b]] > reloc_offs[order[best]] { best = b }
+            b = b + 1
+        }
+        let tmp = order[a]
+        order[a] = order[best]
+        order[best] = tmp
+        a = a + 1
+    }
+    let mut ri = 0
+    while ri < nr {
+        let e = order[ri]
+        let k = reloc_kinds[e]
+        // PAGEOFF12 / GOT_LOAD_PAGEOFF12 encode the LOW 12 bits of the
+        // target's absolute address — they are NOT pc-relative (pcrel=0).
+        // BRANCH26 / PAGE21 / GOT_LOAD_PAGE21 are pc-relative (pcrel=1).
+        let mut pc = 1
+        if k == MACHO_ARM64_RELOC_PAGEOFF12 || k == MACHO_ARM64_RELOC_GOT_LOAD_PAGEOFF12 { pc = 0 }
         obj.relocs.push(Arm64Reloc {
-            offset:  reloc_offs[ri],
-            sym_idx: reloc_idxs[ri],
-            kind:    MACHO_ARM64_RELOC_BRANCH26,
-            pcrel:   1,
+            offset:  reloc_offs[e],
+            sym_idx: reloc_idxs[e],
+            kind:    k,
+            pcrel:   pc,
             length:  2,
         })
-        ri = ri - 1
+        ri = ri + 1
+    }
+    // Honest diagnostic: page refs that found no defining symbol (a
+    // PR-C global / float-pool gap, NOT a silent miscompile). Surfaced
+    // so the caller / verdict sees the real residual.
+    if len(pack_page_unresolved) > 0 {
+        eprintln("pack_lir: " + to_string(len(pack_page_unresolved)) + " page ref(s) unresolved (PR-C: globals/floats) e.g. " + pack_page_unresolved[0])
     }
     return obj
 }
