@@ -1,19 +1,9 @@
-VERIFY-HALT — pool-route blocked, local sign expired (worktree invisible to Linux pool).
-No verdict fabricated (project.tape claim_verify: NO LLM self-judge / paraphrase).
-
-Run AFTER  `! sidecar sign local`  (or register the worktree path with `! sidecar sign paths`
-then `sidecar paths add <wt>`), then re-run locally:
-
-  hexa run /Users/mini/dancinlab/hexa-lang/.claude/worktrees/agent-a45a63d9da4e36efe/stdlib/flame/clm_large.hexa
-
-Expected (GRAD-EXACT / descent bit-identical to pre-ckpt baseline #2357-style):
-  - n_params = 44678668
-  - trunk activation cache (floats): old=147468 new=36864  (L=12 T=4 d=768)
-    [old = 3·L·T·d + L = 3·12·4·768 + 12 = 147468 ; new = L·T·d = 36864 ; ~4.0x trunk cache cut]
-  - ACTIVATION-CKPT: trunk cache 3·[L·T·d]+[L·d] -> [L·T·d]
-  - step 1 CE, step 4 CE with lossF < loss0*0.95
-  - F-FLAME-CLM-LARGE-RUN = 1
-  - PASS — LARGE rung (44.68M) builds + trains + descends on hexa-native stack
-
-CE values MUST be bit-identical to the pre-checkpointing clm_large run (recompute from tin[l]
-via conv1d_via_forge + nn_groupnorm_fwd is bit-identical to the forward, so gradients are exact).
+clm_large — CLMConvMoE LARGE rung d768/L12/E12 = 44.68M (real config run)
+  n_params = 44678668 (expect 44,678,668 for d768/L12/E12)
+  trunk activation cache (floats): old=110604 new=36864 (L=12 T=4 d=768)
+  ACTIVATION-CKPT: trunk cache 3·[L·T·d]+[L·d] -> [L·T·d]  (O(L) hn/xh/iv dropped, recomputed from tin)
+  step 1  CE = 4.81414
+  step 4 CE = 0.0132543
+  loss0 = 4.81414  lossF = 0.0132543
+F-FLAME-CLM-LARGE-RUN = 1
+PASS — LARGE rung (44.68M) builds + trains + descends on hexa-native stack
