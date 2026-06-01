@@ -1,0 +1,99 @@
+PR-C (cc-native/n5-data-const-got) — AFTER measurement
+Branch: cc-native/n5-data-const-got (PR-B + main + PR-C edits)
+File:   compiler/emit/macho_arm64.hexa (+__TEXT,__const float pool, +__DATA,__data global pool)
+aprime: /tmp/aprime_prc (PR-C build) — smoke exit(42)==42 PASS
+Date:   2026-06-01
+
+=== build (tool/build_aprime.sh, warm tree) ===
+  [4/5] clang: /tmp/aprime_prc (1475528 B, Mach-O 64-bit executable arm64)
+  [5/5] smoke: exit(42)==42 PASS — aprime_cc OK
+  BUILD_EXIT=0
+
+=== no-data byte-eq regression (sm42.hexa, no floats/globals) ===
+  emit rc=0 size=864
+  cmp /tmp/sm42_prc.o /tmp/sm42.o  ->  NODATA_BYTE_EQ=IDENTICAL
+  (PR-C is a pure no-op when no float/global pool is present — no regression.)
+
+=== targeted float+global program (/tmp/fg.hexa: 1 mut global + 2 float literals) ===
+  emit rc=0 size=1528, residual eprintln: NO unresolved page refs (residual=0)
+
+  otool -l sections (clang order):
+    __text (__TEXT) · __const (__TEXT) · __data (__DATA) · __cap (__HEXA) · __abi (__HEXA)
+
+  otool -rv __text relocs (excerpt) — clean PAGE21/PAGEOFF12 pairs:
+    000000c8 False PAGOF12 _g0
+    000000c4 True  PAGE21  _g0
+    00000090 False PAGOF12 .LCflt1
+    0000008c True  PAGE21  .LCflt1
+    0000007c False PAGOF12 .LCflt0
+    00000078 True  PAGE21  .LCflt0
+    ... (also _g0 PAGE21/PAGOF12 at the store + load sites)
+
+  nm symbol defs:
+    0000000000000108 s .LCflt0
+    0000000000000110 s .LCflt1
+    0000000000000118 d _g0
+
+  __TEXT,__const bytes (otool -s __TEXT __const):
+    0000000000000108  00000000 40300000  00000000 40100000
+    => .LCflt0 = 0x4030000000000000 = 16.0  (byte-exact IEEE-754, == clang .double 16.0)
+    => .LCflt1 = 0x4010000000000000 = 4.0
+
+  LINK + RUN (ld64 via clang driver):
+    clang -arch arm64 /tmp/fg.o /tmp/rt_am.o -lpthread -lsodium -lcrypto -o /tmp/fg_prog   -> rc=0
+    /tmp/fg_prog ; echo $?   ->  14   (== counter(2)*7; global written+read across calls, floats materialized)
+
+  FIRST native-emitted hexa obj with BOTH module-global data + float-literal
+  pool to link via ld64 and RUN with correct values.
+
+=== full-flat residual drop (cc-l1-flat.hexa re-emit with aprime_prc) ===
+  Command:
+    HEXA_ATLAS_EMBED=/tmp/noatlas /tmp/aprime_prc _drv.hexa --emit=obj \
+      --target=arm64-apple-darwin --ignore-errors -o /tmp/cc-prc2.o /tmp/cc-l1-flat.hexa
+  FLAT_EMIT_EXIT=0 ; /tmp/cc-prc2.o = 3155496 B Mach-O arm64
+
+  BEFORE (PR-B aprime, F-N5-DATA-CONST-GOT.before.txt):
+    pack_lir: 4324 page ref(s) unresolved (PR-C: globals/floats) e.g. g0
+  AFTER (PR-C aprime):
+    grep -c "pack_lir:" /tmp/prc2-emit.log  ->  0
+    >>> RESIDUAL = 0  (the unresolved-ref eprintln NEVER fired) <<<
+
+  otool -l /tmp/cc-prc2.o sections (clang order, all data sections present):
+    __text (__TEXT) · __cstring (__TEXT) · __const (__TEXT) · __data (__DATA)
+    · __cap (__HEXA) · __abi (__HEXA)
+
+  nm data-symbol defs in the full self-emit:
+    g<id>   global data defs (d _g*):  344
+    .LCflt  float-pool   defs (s .LCflt*):  41
+    .LCstr  cstring      defs (s .LCstr*):  3252
+
+  => Every PAGE21/PAGEOFF12 ref in the full compiler self-emit now resolves
+     to a defined N_SECT symbol. The 4324-ref PR-C work-list is CLOSED (0).
+
+
+=== THE PRIZE attempt — full ld64 link of cc-prc2.o (honest result) ===
+  clang -arch arm64 /tmp/cc-prc2.o /tmp/rt_am.o -lpthread -lsodium -lcrypto -o gen2_prc
+  -> FAILS: 21 distinct Undefined symbols, ALL the documented N5-sym /
+     pt5-pt9b runtime set (NOT my data-addressing layer):
+       ___arr_alloc_items_zero{,_int} · ___map_{get,set,has,remove}_cstr_v ·
+       ___map_{order_key_at,order_val_at,ptr_eq,raw_len} · ___raw_{add_f,cmp3,
+       code_is,d2i,fmod,idiv,imod} · ___vs_ptr_eq · _hexa_map_get_v ·
+       _hexa_map_set_v · _hexa_mkdir (+ float/sha leaf targets)
+
+  KEY: ZERO of the undefined are g<id> / .LCflt* / .LCstr* / PAGE21 /
+  PAGEOFF12 — every data-addressing ref PR-C added resolves. The full
+  link is blocked ONLY on the PRE-EXISTING frontier documented in
+  project_cc_native_n5sym memory:
+    (1) N5-sym RUNTIME REGEN — /tmp/rt_am.o is the STALE pre-regen amalgam;
+        the N5-sym fixes (#2397-2400 pt5-pt9b) live in self/runtime_core_emit.hexa
+        and need rt_new.o regenerated from that SSOT (carries __map_raw_len fn,
+        _hexa_arr_zeros_leaf, _hexa_map_get_v/set_v, _hexa_mkdir, etc.).
+    (2) hexa_ld L1 (internal-data-GOT relax) + L2 (COMMON BSS alloc) +
+        stdlib rt_* DEDUP (17 dups) — system ld64 cannot dedup; needs the
+        patched hexa_ld (branch cc-native/n5sym-pt9b, commits a17764beb +
+        b7eb2abd0; the /tmp/hld3_bin binary was wiped, rebuild via
+        hexa_v2+amalgam recipe).
+
+  => gen2 link / run / cmp NOT reached this session (honest). The
+     data-addressing layer (PR-C) is COMPLETE; the remaining blocker is
+     the N5-sym-runtime + hexa_ld frontier, orthogonal to PR-C.
