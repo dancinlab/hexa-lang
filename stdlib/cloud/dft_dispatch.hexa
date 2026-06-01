@@ -229,6 +229,58 @@ pub fn dft_rent_query(extra: str) -> str {
     return base
 }
 
+// COST LEVER (handoff 23ffc7ed) — el-ph is CPU-bound (QE 6.7 CPU-only · ph.x has
+// no GPU path pre-7.2) yet the GPU-inclusive `dft_rent_query` keeps landing on
+// idle RTX-PRO/B200 nodes "rented for their CPUs" (~$1.5/hr, GPU 0% util). The
+// CPU-FIRST tier keeps the SAME reliability/core/bandwidth floors but tightens
+// the price ceiling to a CPU-class rate (`dph_total<0.6`) and adds NO gpu_name
+// requirement — so a cheap reliable CPU offer wins when one exists. The dispatch
+// tries this tier FIRST and only falls back to `dft_rent_query` (current GPU-
+// inclusive behavior, byte-for-byte) when no CPU offer clears the floor.
+pub fn dft_rent_query_cpu_first(extra: str) -> str {
+    let base = "reliability>0.97 cpu_cores_effective>=16 inet_down>=200 dph_total<0.6"
+    if len(extra) > 0 {
+        return base + " " + extra
+    }
+    return base
+}
+
+// dft_rent_query_tiers — the ordered offer-selection tiers: CPU-first, then the
+// GPU-inclusive fallback. The rent path iterates these in order and rents the
+// first tier that yields an offer (see _dft_rent_first_offer). Element [1] is
+// EXACTLY `dft_rent_query(extra)` so the fallback preserves current behavior.
+pub fn dft_rent_query_tiers(extra: str) -> [str] {
+    return [dft_rent_query_cpu_first(extra), dft_rent_query(extra)]
+}
+
+// _dft_query_to_cpu_first — PURE: derive the CPU-first form of an ALREADY-built
+// GPU-inclusive query by retightening the price ceiling to the CPU rate. The
+// only floor that differs between the two tiers is `dph_total`, so swapping that
+// one token turns the GPU query (possibly carrying a runtime suffix such as
+// `cpu_ram>=…`) into its CPU-first sibling without re-threading `extra`.
+fn _dft_query_to_cpu_first(gpu_query: str) -> str {
+    return gpu_query.replace("dph_total<2.0", "dph_total<0.6")
+}
+
+// _dft_rent_first_offer — try the CPU-first tier, then fall back to the supplied
+// GPU-inclusive query (current behavior). Returns the first tier whose search
+// yields a rentable offer; if the CPU tier is empty it transparently retries the
+// GPU query, so a scarce-CPU-offer day still rents exactly as it does today.
+fn _dft_rent_first_offer(gpu_query: str) -> VastOffer {
+    let cpu_query = _dft_query_to_cpu_first(gpu_query)
+    if cpu_query != gpu_query {
+        println("[dft-run] ① RENT tier-1 (CPU-first): `" + cpu_query + "`")
+        let cpu = vast_search_offers(cpu_query, 1)
+        if cpu.ok == 1 {
+            println("[dft-run]   CPU-first offer cleared — renting it (GPU premium avoided).")
+            return cpu
+        }
+        println("[dft-run]   no CPU-first offer cleared the floor — falling back to GPU-inclusive tier.")
+    }
+    println("[dft-run] ① RENT tier-2 (GPU-inclusive fallback): `" + gpu_query + "`")
+    return vast_search_offers(gpu_query, 1)
+}
+
 // ── ③ relax → scf coordinate parser (guard) ──────────────────────────
 
 // dft_relax_to_scf_coords — given a QE pw.x relax stdout, return the
@@ -1285,8 +1337,8 @@ pub fn dft_run(av: [str], start: int) -> int {
 // guarded cloud_exec (timeout-capped), so an outage surfaces as a stage error
 // rather than a silent hang.
 fn _dft_go(deck: str, image: str, disk: int, owner: str, query: str, identity: str, walltime_h: int, relax_name: str) -> int {
-    println("[dft-run] ① RENT — searching verified offers...")
-    let offer = vast_search_offers(query, 1)
+    println("[dft-run] ① RENT — searching verified offers (CPU-first → GPU fallback)...")
+    let offer = _dft_rent_first_offer(query)
     if offer.ok == 0 {
         println("[dft-run] rent: " + offer.message)
         return 1
@@ -1716,8 +1768,8 @@ fn _dft_detach(deck: str, image: str, disk: int, owner: str, query: str, identit
         return 1
     }
     let ram_query = query + " cpu_ram>=" + to_string(DFT_DETACH_RAM_FLOOR)
-    println("[dft-run] ① RENT — searching verified offers...")
-    let offer = vast_search_offers(ram_query, 1)
+    println("[dft-run] ① RENT — searching verified offers (CPU-first → GPU fallback)...")
+    let offer = _dft_rent_first_offer(ram_query)
     if offer.ok == 0 {
         println("[dft-run] rent: " + offer.message)
         return 1
