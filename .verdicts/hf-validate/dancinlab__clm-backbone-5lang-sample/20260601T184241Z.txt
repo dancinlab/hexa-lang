@@ -1,0 +1,18 @@
+[hexa hf validate] DATASET dancinlab/clm-backbone-5lang-sample
+ts_utc: 2026-06-01T18:42:41Z
+type: dataset
+corpus: /tmp/claude-501/_hfval_ds.gE5Mqq/clm_backbone_5lang.corpus.kosmos
+construct: bytes=1748 lines=29 nonascii=0 ok=1 reason=ok
+TIER: 🟢 GREEN
+KEY_METRIC: CE 4.63456->1.5922 (descent=1)
+SCALE: toy CPU rung (d=8, $0) — production-scale transfer DEFERRED (a_toy_scale_recheck; no GPU/chip fire, a_cpu_local_no_waiter)
+METROLOGY: tier derived ONLY from the clm_prod run stdout below (NOT from README/metadata/download-count — g5/a_claim_verify)
+----- VERBATIM clm_prod stdout -----
+clm_prod — CLMConvMoE production corpus loop (PR1)
+  corpus: /tmp/claude-501/_hfval_ds.gE5Mqq/clm_backbone_5lang.corpus.kosmos  (1748 bytes, V=256)
+  windows: 8/8  (T=24 stride=215)
+  epoch-1 mean CE = 4.63456
+  epoch-12 mean CE = 1.5922
+F-CLM-PROD-DESCENT = 1
+PASS — real-corpus mean CE descends under int4 envelope
+----- END VERBATIM -----

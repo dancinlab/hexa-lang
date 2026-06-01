@@ -1,0 +1,581 @@
+// HEXA Standard Library — hf/validate
+//
+// @version 0.1.0
+// @capabilities [cli]
+//
+// HF-ARTIFACT VALIDATION HARNESS — "validate by RUNNING on the core, NOT by
+// trusting metadata" (the METROLOGY principle: g5 · a_claim_verify). The
+// repeated session lesson is that a model/dataset is only VALIDATED once it is
+// pulled onto the core and RUN — README/manifest/download-count inspection is
+// NOT validation. This is the companion to stdlib/hf/upload.hexa: upload SHIPS
+// an artifact, validate PROVES one is real.
+//
+// Mirrors upload.hexa conventions verbatim where shared: token 3-tier
+// resolution (secret get huggingface.token | ~/.cache/huggingface/token |
+// HF_TOKEN), ps-invisible file-backed HF_HOME/token (never --token argv, never
+// inline HF_TOKEN=<value>), `hf` CLI shell-out (raw#9 STRICT, zero .py),
+// sha256/_sh_q helpers, an audit/ledger trail.
+//
+// CLI:
+//   hexa run stdlib/hf/validate.hexa <hf_repo_id> --type {model|dataset}
+//            [--probe <name>] [--selftest] [--dry-run]
+//   hexa run stdlib/hf/validate.hexa --selftest          (no network)
+//   hexa run stdlib/hf/validate.hexa --help
+//
+// DATASET path (FULLY IMPLEMENTED):
+//   pull the HF dataset (hf download --type dataset --local-dir <tmp>) → locate
+//   a .kosmos/corpus/.txt payload → run the REAL on-core probe: feed the slice
+//   to stdlib/flame/clm_prod.hexa via `hexa run` with CLM_PROD_CORPUS set →
+//   capture VERBATIM CE-descent (epoch-1 vs epoch-N, F-CLM-PROD-DESCENT) + basic
+//   construct checks (line count, non-empty, byte size). Tier 🟢 if descent +
+//   checks pass, 🔴 if it fails to descend / is malformed, 🟠 if production scale
+//   is needed for a general claim (always stated — toy CPU run, a_toy_scale_recheck).
+//
+// MODEL path (STUBBED — HONEST DEFERRED):
+//   pulling a .clm ckpt + loading it into a CPU inference/CE-eval runtime needs
+//   machinery that is NOT present in this CPU-local harness (the flame .clm
+//   loader + a held-out eval driver are GPU/fire-track). Rather than fabricate a
+//   number, the model path returns an explicit `🟠 model-load DEFERRED (reason)`
+//   — honest, not faked (g63). The dataset path is the fully-runnable core.
+//
+// HONESTY (g5/g63 · a_toy_scale_recheck · a_cpu_local_no_waiter):
+//   · tier ONLY from the real `hexa run` stdout of clm_prod — NEVER from
+//     metadata/README/download-count.
+//   · CPU-LOCAL only; NO GPU/chip fire. Production-scale validation = DEFERRED
+//     and stated as such (a single toy CPU rung is NOT a production verdict).
+//   · NO fabrication; if a step can't run, 🟠 with the exact reason.
+//
+// OUTPUT:
+//   · verbatim run stdout → .verdicts/hf-validate/<repo_slug>/<ts>.txt
+//   · one row per run → state/hf_validate_ledger.jsonl
+//     (repo · type · tier · key_metric · verdict_path · ts)
+
+let VERSION = "0.1.0"
+let HOME = exec("echo \"$HOME\"").trim()
+
+// ─── shared helpers (mirrored from upload.hexa) ─────────────────────────
+
+fn _sh_q(s: str) -> str {
+    let mut out = "'"
+    let mut i = 0
+    while i < s.len() {
+        let c = s.substring(i, i + 1)
+        if c == "'" { out = out + "'\\''" } else { out = out + c }
+        i = i + 1
+    }
+    out = out + "'"
+    return out
+}
+
+fn _hf_cli() -> str {
+    let override = exec("echo \"$HF_CLI\"").trim()
+    if override.len() > 0 { return override }
+    let legacy = exec("echo \"$ANIMA_HF_CLI\"").trim()
+    if legacy.len() > 0 { return legacy }
+    let cli = exec("command -v hf 2>/dev/null").trim()
+    if cli.len() > 0 { return cli }
+    return "hf"
+}
+
+// Canonical 3-tier token resolution (preserved verbatim from upload.hexa):
+//   1) secret get huggingface.token   2) ~/.cache/huggingface/token   3) HF_TOKEN
+fn _resolve_token() -> str {
+    let s1 = exec("secret get huggingface.token 2>/dev/null").trim()
+    if s1.len() > 0 { return s1 }
+    let p2 = HOME + "/.cache/huggingface/token"
+    let f2 = exec("test -f " + _sh_q(p2) + " && cat " + _sh_q(p2) + " 2>/dev/null").trim()
+    if f2.len() > 0 { return f2 }
+    let env1 = exec("echo \"$HF_TOKEN\"").trim()
+    if env1.len() > 0 { return env1 }
+    return ""
+}
+
+// Token via a private HF_HOME/token file — ps-invisible (only the dir PATH ever
+// hits argv; the token VALUE never lands in argv/`sh -c`/`ps`). Caller MUST
+// rm -rf the returned dir. Returns "" when token is empty.
+fn _hf_token_home_dir(token: str) -> str {
+    if token.len() == 0 { return "" }
+    let dir = exec("umask 077; d=$(mktemp -d \"${TMPDIR:-/tmp}/_hfval_home.XXXXXX\") && printf '%s' " + _sh_q(token) + " > \"$d/token\" && chmod 600 \"$d/token\" && printf '%s' \"$d\"").trim()
+    return dir
+}
+
+fn _hf_token_env_prefix(home_dir: str) -> str {
+    if home_dir.len() == 0 { return "" }
+    return "HF_HOME=" + _sh_q(home_dir) + " "
+}
+
+fn _ts_utc() -> str { return exec("date -u +%Y-%m-%dT%H:%M:%SZ").trim() }
+fn _ts_compact() -> str { return exec("date -u +%Y%m%dT%H%M%SZ").trim() }
+
+fn _repo_slug(repo: str) -> str { return repo.replace("/", "__") }
+
+// ─── output dirs (project-local; env-overridable) ───────────────────────
+
+fn _verdict_dir(repo: str) -> str {
+    let ov = exec("echo \"$HF_VALIDATE_VERDICT_DIR\"").trim()
+    let base = if ov.len() > 0 { ov } else { ".verdicts/hf-validate" }
+    return base + "/" + _repo_slug(repo)
+}
+
+fn _ledger_path() -> str {
+    let ov = exec("echo \"$HF_VALIDATE_LEDGER\"").trim()
+    if ov.len() > 0 { return ov }
+    return "state/hf_validate_ledger.jsonl"
+}
+
+// Write the verbatim run stdout to .verdicts/hf-validate/<slug>/<ts>.txt
+// (a_claim_verify: raw stdout, never paraphrased). Returns the path.
+fn _verdict_write(repo: str, body: str) -> str {
+    let dir = _verdict_dir(repo)
+    let _mk = exec("mkdir -p " + _sh_q(dir))
+    let path = dir + "/" + _ts_compact() + ".txt"
+    write_file(path, body)
+    return path
+}
+
+// Append one row to state/hf_validate_ledger.jsonl.
+fn _ledger_append(repo: str, vtype: str, tier: str, key_metric: str, verdict_path: str) {
+    let entry = json_parse("{}")
+    entry["ts_utc"] = _ts_utc()
+    entry["repo"] = repo
+    entry["type"] = vtype
+    entry["tier"] = tier
+    entry["key_metric"] = key_metric
+    entry["verdict_path"] = verdict_path
+    let line = json_stringify(entry) + "\n"
+    let lp = _ledger_path()
+    let dir = exec("dirname " + _sh_q(lp)).trim()
+    let _r = exec("mkdir -p " + _sh_q(dir) + " && printf '%s' " + _sh_q(line) + " >> " + _sh_q(lp))
+}
+
+// ─── descent-parse logic (the CORE metrology check) ─────────────────────
+// Parse clm_prod's VERBATIM stdout for the F-CLM-PROD-DESCENT verdict + the
+// two CE numbers. This is the deterministic logic the --selftest exercises on a
+// fixture WITHOUT network. Returns a json object:
+//   { descent:int, epoch1_ce:str, epochN_ce:str, fal_line:str, ok:int }
+fn _parse_descent(stdout: str) {
+    let out = json_parse("{}")
+    out["descent"] = -1
+    out["epoch1_ce"] = ""
+    out["epochN_ce"] = ""
+    out["fal_line"] = ""
+    out["ok"] = 0
+    let lines = stdout.split("\n")
+    let mut i = 0
+    while i < lines.len() {
+        let ln = lines[i].trim()
+        if ln.contains("epoch-1 mean CE =") {
+            let parts = ln.split("=")
+            if parts.len() >= 2 { out["epoch1_ce"] = parts[parts.len() - 1].trim() }
+        }
+        // epoch-N line: "epoch-<N> mean CE = <x>" but NOT epoch-1.
+        if ln.contains("mean CE =") && !ln.contains("epoch-1 mean CE =") {
+            let parts = ln.split("=")
+            if parts.len() >= 2 { out["epochN_ce"] = parts[parts.len() - 1].trim() }
+        }
+        if ln.contains("F-CLM-PROD-DESCENT =") {
+            out["fal_line"] = ln
+            if ln.contains("= 1") { out["descent"] = 1 }
+            else if ln.contains("= 0") { out["descent"] = 0 }
+        }
+        i = i + 1
+    }
+    // ok = we found a terminal descent verdict line (1 or 0).
+    if to_int(out["descent"]) == 1 || to_int(out["descent"]) == 0 { out["ok"] = 1 }
+    return out
+}
+
+// Map a parsed-descent result + construct checks to a tier string.
+//   descent==1 + checks ok  → "🟢 GREEN"   (toy-only, prod transfer DEFERRED)
+//   descent==0              → "🔴 RED"      (failed to descend / malformed)
+//   no terminal verdict     → "🟠 AMBER"    (run did not produce a verdict)
+fn _tier_from_descent(parsed, construct_ok: int) -> str {
+    if to_int(parsed["ok"]) != 1 { return "🟠 AMBER" }
+    if to_int(parsed["descent"]) == 1 && construct_ok == 1 { return "🟢 GREEN" }
+    return "🔴 RED"
+}
+
+// ─── construct checks on the pulled corpus ──────────────────────────────
+// Basic well-formedness BEFORE the on-core run: non-empty, line count, byte
+// size, rough language coverage (count of distinct non-ASCII script bands as a
+// proxy for the 5-lang parallel fixture; honest heuristic, reported verbatim).
+fn _construct_checks(corpus_path: str) {
+    let out = json_parse("{}")
+    let exists = exec("test -f " + _sh_q(corpus_path) + " && echo y || echo n").trim()
+    if exists != "y" {
+        out["ok"] = 0
+        out["reason"] = "corpus_not_found"
+        return out
+    }
+    let bsd = exec("stat -f%z " + _sh_q(corpus_path) + " 2>/dev/null").trim()
+    let gnu = exec("stat -c%s " + _sh_q(corpus_path) + " 2>/dev/null").trim()
+    let bytes = if bsd.len() > 0 { to_int(bsd) } else { if gnu.len() > 0 { to_int(gnu) } else { 0 } }
+    let nlines = to_int(exec("wc -l < " + _sh_q(corpus_path) + " 2>/dev/null | awk '{print $1}'").trim())
+    // distinct script bands (UTF-8 multibyte presence) as a coarse lang-coverage
+    // proxy — purely informational, never gates the tier on its own.
+    let has_nonascii = exec("LC_ALL=C grep -qP '[\\x80-\\xff]' " + _sh_q(corpus_path) + " 2>/dev/null && echo y || echo n").trim()
+    out["bytes"] = bytes
+    out["lines"] = nlines
+    out["has_nonascii"] = if has_nonascii == "y" { 1 } else { 0 }
+    // construct ok = non-empty AND enough bytes for >=2 windows (clm_prod needs
+    // n_bytes > T+1; T=24, nsamp=8 → needs comfortably >200 bytes for a real run).
+    let ok = if bytes >= 64 && nlines >= 1 { 1 } else { 0 }
+    out["ok"] = ok
+    out["reason"] = if ok == 1 { "ok" } else { "corpus_too_small (bytes=" + to_string(bytes) + ", lines=" + to_string(nlines) + ")" }
+    return out
+}
+
+// ─── on-core probe: run clm_prod against a corpus, capture verbatim ─────
+// Runs `CLM_PROD_CORPUS=<path> hexa run stdlib/flame/clm_prod.hexa` and returns
+// the full verbatim stdout+stderr. The hexa binary is resolved from PATH (the
+// same toolchain that runs this file). repo-root relative cwd is required so
+// clm_prod's `use` paths resolve.
+fn _hexa_bin() -> str {
+    let ov = exec("echo \"$HEXA_BIN\"").trim()
+    if ov.len() > 0 { return ov }
+    let p = exec("command -v hexa 2>/dev/null").trim()
+    if p.len() > 0 { return p }
+    return HOME + "/.hx/bin/hexa"
+}
+
+fn _run_clm_prod(corpus_path: str) -> str {
+    let hexa = _hexa_bin()
+    // --no-sentinel keeps stdout clean (no __HEXA_RC tail). CLM_PROD_CORPUS is a
+    // path (non-secret) so an inline env prefix is fine here.
+    let cmd = "CLM_PROD_CORPUS=" + _sh_q(corpus_path) + " " + _sh_q(hexa)
+              + " run --no-sentinel stdlib/flame/clm_prod.hexa 2>&1"
+    return exec(cmd)
+}
+
+// ─── DATASET validation path (fully implemented) ────────────────────────
+
+// Pull the HF dataset to a private local dir. Returns the local-dir path on
+// success, "" on failure (with the reason in *err_out). ps-invisible token.
+fn _pull_dataset(repo: str) -> str {
+    let cli = _hf_cli()
+    let avail = exec("command -v " + _sh_q(cli) + " >/dev/null 2>&1 && echo y || echo n").trim()
+    if avail != "y" { return "" }
+    let token = _resolve_token()
+    let tok_home = _hf_token_home_dir(token)
+    let tok_env = _hf_token_env_prefix(tok_home)
+    let ldir = exec("d=$(mktemp -d \"${TMPDIR:-/tmp}/_hfval_ds.XXXXXX\") && printf '%s' \"$d\"").trim()
+    let cmd = tok_env + _sh_q(cli) + " download " + _sh_q(repo)
+              + " --repo-type dataset --local-dir " + _sh_q(ldir) + " 2>&1"
+    let out = exec(cmd)
+    if tok_home.len() > 0 { let _rm = exec("rm -rf " + _sh_q(tok_home)) }
+    // Success = the local dir now holds at least one regular file.
+    let nfiles = to_int(exec("/usr/bin/find " + _sh_q(ldir) + " -mindepth 1 -type f 2>/dev/null | wc -l | awk '{print $1}'").trim())
+    if nfiles < 1 {
+        // surface the hf output tail so the verdict file records WHY.
+        let tail = if out.len() > 400 { out.substring(out.len() - 400, out.len()) } else { out }
+        let _rm2 = exec("rm -rf " + _sh_q(ldir))
+        return "PULL_FAILED:" + tail.trim()
+    }
+    return ldir
+}
+
+// Locate the corpus payload inside a pulled dataset dir. Preference order:
+//   --probe <name> (exact relpath) → *.kosmos → *.txt → *.corpus → largest file.
+fn _locate_corpus(ldir: str, probe: str) -> str {
+    if probe.len() > 0 {
+        let p = ldir + "/" + probe
+        let ex = exec("test -f " + _sh_q(p) + " && echo y || echo n").trim()
+        if ex == "y" { return p }
+    }
+    // by extension, in preference order
+    let exts = [".kosmos", ".txt", ".corpus"]
+    let mut ei = 0
+    while ei < exts.len() {
+        let hit = exec("/usr/bin/find " + _sh_q(ldir) + " -mindepth 1 -type f -name '*" + exts[ei] + "' 2>/dev/null | head -1").trim()
+        if hit.len() > 0 { return hit }
+        ei = ei + 1
+    }
+    // fallback: largest regular file (skip dot-files)
+    let largest = exec("/usr/bin/find " + _sh_q(ldir) + " -mindepth 1 -type f ! -name '.*' 2>/dev/null -exec stat -f '%z %N' {} \\; 2>/dev/null | sort -rn | head -1 | sed 's/^[0-9]* //'").trim()
+    if largest.len() > 0 { return largest }
+    // GNU stat fallback
+    let largest2 = exec("/usr/bin/find " + _sh_q(ldir) + " -mindepth 1 -type f ! -name '.*' 2>/dev/null -printf '%s %p\\n' 2>/dev/null | sort -rn | head -1 | sed 's/^[0-9]* //'").trim()
+    return largest2
+}
+
+// Full dataset validation: pull → locate → construct-check → on-core RUN →
+// parse verbatim → tier → verdict file + ledger. Returns the tier string and
+// prints a human report; the verbatim run stdout is embedded in the verdict.
+fn op_validate_dataset(repo: str, probe: str, dry_run: int) -> str {
+    println("[hexa hf validate] DATASET — " + repo + " (metrology: pull → on-core RUN → verbatim)")
+
+    if dry_run == 1 {
+        println("  [dry-run] would: hf download --repo-type dataset " + repo)
+        println("  [dry-run] would: locate corpus (probe=" + (if probe.len() > 0 { probe } else { "auto" }) + ")")
+        println("  [dry-run] would: CLM_PROD_CORPUS=<corpus> hexa run stdlib/flame/clm_prod.hexa")
+        println("  [dry-run] would: parse F-CLM-PROD-DESCENT + epoch CE → tier → .verdicts + ledger")
+        println("  tier = 🟠 DRY-RUN (no network, no on-core run)")
+        return "🟠 DRY-RUN"
+    }
+
+    // 1) pull
+    println("  pulling dataset (hf download --repo-type dataset) ...")
+    let ldir = _pull_dataset(repo)
+    if ldir.len() == 0 || ldir.starts_with("PULL_FAILED:") {
+        let reason = if ldir.starts_with("PULL_FAILED:") { ldir.substring(12, ldir.len()) } else { "hf CLI unavailable or no token" }
+        let body = "[hexa hf validate] DATASET " + repo + "\nTIER: 🟠 AMBER\nREASON: dataset pull failed\n"
+                   + "DETAIL: " + reason + "\nNOTE: not a science result — the artifact could not be pulled to the core.\n"
+        let vp = _verdict_write(repo, body)
+        _ledger_append(repo, "dataset", "🟠 AMBER", "pull_failed", vp)
+        println("  [F] pull failed: " + reason)
+        println("  verdict = " + vp)
+        println("  tier = 🟠 AMBER (pull failed — NOT validated)")
+        return "🟠 AMBER"
+    }
+    println("  pulled → " + ldir)
+
+    // 2) locate corpus
+    let corpus = _locate_corpus(ldir, probe)
+    if corpus.len() == 0 {
+        let body = "[hexa hf validate] DATASET " + repo + "\nTIER: 🟠 AMBER\nREASON: no corpus payload found in dataset\n"
+                   + "DETAIL: looked for --probe / *.kosmos / *.txt / *.corpus / largest file under " + ldir + "\n"
+        let vp = _verdict_write(repo, body)
+        _ledger_append(repo, "dataset", "🟠 AMBER", "no_corpus", vp)
+        let _rm = exec("rm -rf " + _sh_q(ldir))
+        println("  [F] no corpus payload found")
+        println("  tier = 🟠 AMBER (no runnable corpus)")
+        return "🟠 AMBER"
+    }
+    println("  corpus  = " + corpus)
+
+    // 3) construct checks
+    let cc = _construct_checks(corpus)
+    println("  construct: bytes=" + to_string(if has_key(cc, "bytes") { cc["bytes"] } else { 0 })
+            + " lines=" + to_string(if has_key(cc, "lines") { cc["lines"] } else { 0 })
+            + " nonascii=" + to_string(if has_key(cc, "has_nonascii") { cc["has_nonascii"] } else { 0 })
+            + " ok=" + to_string(cc["ok"]))
+
+    // 4) on-core RUN — the REAL validation (verbatim stdout)
+    println("  on-core run: CLM_PROD_CORPUS=<corpus> hexa run stdlib/flame/clm_prod.hexa ...")
+    let run_out = _run_clm_prod(corpus)
+
+    // 5) parse verbatim → tier
+    let parsed = _parse_descent(run_out)
+    let construct_ok = to_int(cc["ok"])
+    let tier = _tier_from_descent(parsed, construct_ok)
+    let e1 = to_string(parsed["epoch1_ce"])
+    let eN = to_string(parsed["epochN_ce"])
+    let key_metric = "CE " + e1 + "->" + eN + " (descent=" + to_string(parsed["descent"]) + ")"
+
+    // 6) assemble verbatim verdict body
+    let mut body = "[hexa hf validate] DATASET " + repo + "\n"
+    body = body + "ts_utc: " + _ts_utc() + "\n"
+    body = body + "type: dataset\n"
+    body = body + "corpus: " + corpus + "\n"
+    body = body + "construct: bytes=" + to_string(if has_key(cc, "bytes") { cc["bytes"] } else { 0 })
+                + " lines=" + to_string(if has_key(cc, "lines") { cc["lines"] } else { 0 })
+                + " nonascii=" + to_string(if has_key(cc, "has_nonascii") { cc["has_nonascii"] } else { 0 })
+                + " ok=" + to_string(cc["ok"]) + " reason=" + to_string(cc["reason"]) + "\n"
+    body = body + "TIER: " + tier + "\n"
+    body = body + "KEY_METRIC: " + key_metric + "\n"
+    body = body + "SCALE: toy CPU rung (d=8, $0) — production-scale transfer DEFERRED (a_toy_scale_recheck; no GPU/chip fire, a_cpu_local_no_waiter)\n"
+    body = body + "METROLOGY: tier derived ONLY from the clm_prod run stdout below (NOT from README/metadata/download-count — g5/a_claim_verify)\n"
+    body = body + "----- VERBATIM clm_prod stdout -----\n"
+    body = body + run_out
+    if !run_out.ends_with("\n") { body = body + "\n" }
+    body = body + "----- END VERBATIM -----\n"
+
+    let vp = _verdict_write(repo, body)
+    _ledger_append(repo, "dataset", tier, key_metric, vp)
+
+    // cleanup pulled dataset (verdict already persisted)
+    let _rm = exec("rm -rf " + _sh_q(ldir))
+
+    println("  epoch CE   = " + e1 + " -> " + eN + "  (F-CLM-PROD-DESCENT=" + to_string(parsed["descent"]) + ")")
+    println("  verdict    = " + vp)
+    println("  ledger     = " + _ledger_path())
+    println("  tier = " + tier + "  (toy-only; production transfer DEFERRED)")
+    return tier
+}
+
+// ─── MODEL validation path (HONEST DEFERRED stub) ───────────────────────
+// Pulling a .clm ckpt + loading it into a CPU CE-eval runtime is GPU/fire-track
+// machinery NOT present in this CPU-local harness. We do NOT fabricate a number
+// (g63) — we emit an explicit 🟠 model-load DEFERRED with the exact reason, and
+// still persist a verdict + ledger row so the deferral is audited.
+fn op_validate_model(repo: str, probe: str, dry_run: int) -> str {
+    println("[hexa hf validate] MODEL — " + repo)
+    let reason = "model-load DEFERRED — a .clm ckpt CPU loader + held-out CE-eval driver are NOT present in this CPU-local harness (flame .clm loader is GPU/fire-track). NO fabrication (g63): tier MUST come from a real on-core eval, which is unavailable here. CPU-local only; no GPU fire (a_cpu_local_no_waiter)."
+    if dry_run == 1 {
+        println("  [dry-run] model path is a DEFERRED stub — see reason below")
+    }
+    println("  🟠 " + reason)
+    let body = "[hexa hf validate] MODEL " + repo + "\n"
+               + "ts_utc: " + _ts_utc() + "\n"
+               + "type: model\n"
+               + "TIER: 🟠 AMBER (model-load DEFERRED)\n"
+               + "KEY_METRIC: n/a (no on-core eval run)\n"
+               + "REASON: " + reason + "\n"
+               + "NEXT: implement a .clm CPU loader + small held-out CE-eval probe, then RUN it; tier ONLY from that stdout.\n"
+    let vp = _verdict_write(repo, body)
+    _ledger_append(repo, "model", "🟠 AMBER", "model_load_deferred", vp)
+    println("  verdict = " + vp)
+    println("  tier = 🟠 AMBER (model-load DEFERRED — honest, not faked)")
+    return "🟠 AMBER"
+}
+
+// ─── selftest (NO NETWORK) ──────────────────────────────────────────────
+// Exercises the descent-parse + tier logic on a tiny in-repo fixture WITHOUT
+// any network pull. Deterministic PASS/FAIL. This proves the metrology logic
+// (the part that turns a verbatim run into a tier) is correct in isolation.
+fn op_selftest() -> int {
+    println("[hexa hf validate] SELFTEST (no network — descent-parse + tier logic)")
+    let mut all_ok = 1
+
+    // case 1: synthetic GREEN stdout (descent=1)
+    let green = "clm_prod — CLMConvMoE production corpus loop (PR1)\n"
+                + "  corpus: /tmp/x  (1407 bytes, V=256)\n"
+                + "  epoch-1 mean CE = 5.51\n"
+                + "  epoch-12 mean CE = 4.92\n"
+                + "F-CLM-PROD-DESCENT = 1\n"
+                + "PASS — real-corpus mean CE descends under int4 envelope\n"
+    let p1 = _parse_descent(green)
+    let t1 = _tier_from_descent(p1, 1)
+    let ok1 = if to_int(p1["descent"]) == 1 && t1 == "🟢 GREEN"
+                 && to_string(p1["epoch1_ce"]) == "5.51" && to_string(p1["epochN_ce"]) == "4.92" { 1 } else { 0 }
+    println("  [" + (if ok1 == 1 { "P" } else { "F" }) + "] GREEN case: descent="
+            + to_string(p1["descent"]) + " ce=" + to_string(p1["epoch1_ce"]) + "->" + to_string(p1["epochN_ce"]) + " tier=" + t1)
+    if ok1 != 1 { all_ok = 0 }
+
+    // case 2: synthetic RED stdout (descent=0)
+    let red = "clm_prod — ...\n  epoch-1 mean CE = 5.50\n  epoch-12 mean CE = 5.70\nF-CLM-PROD-DESCENT = 0\nFAIL\n"
+    let p2 = _parse_descent(red)
+    let t2 = _tier_from_descent(p2, 1)
+    let ok2 = if to_int(p2["descent"]) == 0 && t2 == "🔴 RED" { 1 } else { 0 }
+    println("  [" + (if ok2 == 1 { "P" } else { "F" }) + "] RED case: descent=" + to_string(p2["descent"]) + " tier=" + t2)
+    if ok2 != 1 { all_ok = 0 }
+
+    // case 3: no terminal verdict → AMBER
+    let amber = "clm_prod — started\n  corpus: /tmp/y (10 bytes)\nFAIL — corpus too short\n"
+    let p3 = _parse_descent(amber)
+    let t3 = _tier_from_descent(p3, 1)
+    let ok3 = if to_int(p3["ok"]) == 0 && t3 == "🟠 AMBER" { 1 } else { 0 }
+    println("  [" + (if ok3 == 1 { "P" } else { "F" }) + "] AMBER case (no verdict line): ok=" + to_string(p3["ok"]) + " tier=" + t3)
+    if ok3 != 1 { all_ok = 0 }
+
+    // case 4: GREEN descent but construct FAIL → must NOT be GREEN (RED)
+    let t4 = _tier_from_descent(p1, 0)
+    let ok4 = if t4 == "🔴 RED" { 1 } else { 0 }
+    println("  [" + (if ok4 == 1 { "P" } else { "F" }) + "] construct-fail gate: descent=1 but construct_ok=0 → tier=" + t4 + " (correctly not GREEN)")
+    if ok4 != 1 { all_ok = 0 }
+
+    // case 5: construct check on a real in-repo fixture (no network).
+    let fix = "stdlib/flame/testdata/clm_semantic_parallel.txt"
+    let fix_exists = exec("test -f " + _sh_q(fix) + " && echo y || echo n").trim()
+    if fix_exists == "y" {
+        let cc = _construct_checks(fix)
+        let ok5 = to_int(cc["ok"])
+        println("  [" + (if ok5 == 1 { "P" } else { "F" }) + "] construct-check on fixture: bytes="
+                + to_string(cc["bytes"]) + " lines=" + to_string(cc["lines"]) + " ok=" + to_string(ok5))
+        if ok5 != 1 { all_ok = 0 }
+    } else {
+        println("  [W] fixture not found (run from repo root) — skipping construct-check case")
+    }
+
+    if all_ok == 1 {
+        println("__HEXA_HF_VALIDATE__ PASS")
+        return 1
+    }
+    println("__HEXA_HF_VALIDATE__ FAIL")
+    return 0
+}
+
+// ─── arg parsing ────────────────────────────────────────────────────────
+
+fn _arg_get(argv: [str], flag: str) -> str {
+    let mut i = 0
+    while i < argv.len() {
+        if argv[i] == flag {
+            if i + 1 < argv.len() { return argv[i + 1] }
+            return ""
+        }
+        i = i + 1
+    }
+    return ""
+}
+
+fn _arg_has(argv: [str], flag: str) -> int {
+    let mut i = 0
+    while i < argv.len() {
+        if argv[i] == flag { return 1 }
+        i = i + 1
+    }
+    return 0
+}
+
+// first non-flag positional after argv[0] (the repo_id).
+fn _first_positional(argv: [str]) -> str {
+    let mut i = 1
+    while i < argv.len() {
+        let a = argv[i]
+        if a.starts_with("--") {
+            // these flags consume a value
+            if a == "--type" || a == "--probe" { i = i + 2 } else { i = i + 1 }
+        } else {
+            return a
+        }
+    }
+    return ""
+}
+
+fn print_help() {
+    println("hexa hf validate v" + VERSION + " — HF-artifact validation harness (pure hexa)")
+    println("  METROLOGY: validate by RUNNING on the core, NOT by trusting metadata (g5 · a_claim_verify)")
+    println("")
+    println("USAGE")
+    println("  hexa run stdlib/hf/validate.hexa <hf_repo_id> --type {model|dataset} [--probe <name>] [--dry-run]")
+    println("  hexa run stdlib/hf/validate.hexa --selftest        (no network; descent-parse + tier logic)")
+    println("  hexa run stdlib/hf/validate.hexa --help")
+    println("")
+    println("DATASET path (fully implemented):")
+    println("  pull (hf download --repo-type dataset) → locate corpus (.kosmos/.txt/.corpus) →")
+    println("  CLM_PROD_CORPUS=<corpus> hexa run stdlib/flame/clm_prod.hexa → parse VERBATIM CE descent")
+    println("  → 🟢 (descent+checks) / 🔴 (no descent / malformed) / 🟠 (could not run). toy-only; prod DEFERRED.")
+    println("")
+    println("MODEL path: 🟠 model-load DEFERRED (CPU .clm loader + held-out eval not present; honest, not faked).")
+    println("")
+    println("OUTPUT")
+    println("  verdict = .verdicts/hf-validate/<repo_slug>/<ts>.txt   (verbatim run stdout)")
+    println("  ledger  = state/hf_validate_ledger.jsonl              (repo·type·tier·key_metric·verdict·ts)")
+    println("")
+    println("ENV: HF_CLI · HEXA_BIN · HF_VALIDATE_VERDICT_DIR · HF_VALIDATE_LEDGER")
+    println("TOKEN (3-tier, ps-invisible): secret get huggingface.token | ~/.cache/huggingface/token | HF_TOKEN")
+}
+
+fn main() {
+    let argv = args()
+    if argv.len() <= 1 { print_help(); return }
+
+    if _arg_has(argv, "--help") == 1 || argv[1] == "-h" { print_help(); return }
+
+    if _arg_has(argv, "--selftest") == 1 {
+        let _r = op_selftest()
+        return
+    }
+
+    let repo = _first_positional(argv)
+    if repo.len() == 0 {
+        println("ERROR: missing <hf_repo_id>")
+        print_help()
+        return
+    }
+    let vtype = _arg_get(argv, "--type")
+    let probe = _arg_get(argv, "--probe")
+    let dry = _arg_has(argv, "--dry-run")
+
+    if vtype == "dataset" {
+        let _t = op_validate_dataset(repo, probe, dry)
+        return
+    }
+    if vtype == "model" {
+        let _t = op_validate_model(repo, probe, dry)
+        return
+    }
+    println("ERROR: --type must be {model|dataset} (got: '" + vtype + "')")
+    print_help()
+}
