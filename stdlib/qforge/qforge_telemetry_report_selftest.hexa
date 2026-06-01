@@ -1,0 +1,102 @@
+// @ci_gate — deterministic · network-free · pure JSONL-text analyzer g5 gate
+//
+// qforge_telemetry_report_selftest.hexa — QFORGE-PROCESS telemetry analyzer
+//   (qforge_telemetry_report, stdlib/qforge/telemetry_report.hexa) g5 gate.
+//   The analyzer INGESTS the `.dft_telemetry.jsonl` text emitted by PR#2474
+//   (stdlib/cloud/dft_dispatch.hexa `_dft_telemetry_line`, 6 keys
+//   ts·stage·event·wall_s·rss_kb·exit) and produces a ranked per-stage
+//   bottleneck report — wall + peak-rss aggregated per stage, sorted by wall
+//   desc with %-of-total, slowest flagged.
+//
+// 검증 케이스 (all on a fixture JSONL string — NO pod, NO file, pure text):
+//  🔵 (A) PARSE + per-stage wall SUM + ranking: a relax·scf·ph:q1·ph:q2·lambda
+//         fixture (paired start/done) → per-stage wall = Σ done wall_s; rows
+//         ranked wall DESC; total_wall = Σ; pct = 100·wall/total.
+//  🔵 (B) BOTTLENECK = max-wall stage: row[0].slowest; a 0-wall stage NOT slowest.
+//  🔵 (C) rss-null PASSTHROUGH (d6): a done line with rss_kb:null → has_rss=false,
+//         render shows "null" — NEVER a fabricated 0; a real rss → peak=max done.
+//  🔵 (D) MALFORMED guard: bad JSON · a 5-key line (missing a key) · an unknown
+//         event → counted in `malformed`, NEVER bucketed; blank lines skipped.
+//  🔵 (E) UNPAIRED guard: a `start` with no `done` → counted in `unpaired`,
+//         contributes 0 wall, surfaced (not dropped). Empty input → empty report.
+//
+// Run (point HEXA_STDLIB_ROOT at THIS worktree's stdlib):
+//   HEXA_STDLIB_ROOT="$PWD/stdlib" hexa run --no-sentinel \
+//     stdlib/qforge/qforge_telemetry_report_selftest.hexa
+// PASS: "qforge_telemetry_report_selftest PASS".
+use "stdlib/qforge/telemetry_report"
+
+fn _ck(name: str, ok: bool) -> int {
+    if ok { println("PASS " + name) ; return 0 }
+    println("FAIL " + name) ; return 1
+}
+// row lookup by stage label
+fn _row(rep: Report, stage: str) -> StageRow {
+    let mut i = 0
+    while i < len(rep.rows) {
+        if rep.rows[i].stage == stage { return rep.rows[i] }
+        i = i + 1
+    }
+    return StageRow { stage: "", wall_s: -1, peak_rss: -1, has_rss: false, exit: -1, pct: -1, slowest: false }
+}
+
+fn main() {
+    let mut fails = 0
+
+    // ── (A)+(B)+(C) a full, well-formed el-ph fixture (paired start/done) ────
+    //   relax 120/500000 · scf 300/900000(slowest) · ph:q1 200/700000 ·
+    //   ph:q2 180/null(rss passthrough) · lambda 10/20000.  total = 810.
+    let fix = "{\"ts\":100,\"stage\":\"relax\",\"event\":\"start\",\"wall_s\":0,\"rss_kb\":null,\"exit\":null}\n{\"ts\":220,\"stage\":\"relax\",\"event\":\"done\",\"wall_s\":120,\"rss_kb\":500000,\"exit\":0}\n{\"ts\":520,\"stage\":\"scf\",\"event\":\"done\",\"wall_s\":300,\"rss_kb\":900000,\"exit\":0}\n{\"ts\":720,\"stage\":\"ph:q1\",\"event\":\"done\",\"wall_s\":200,\"rss_kb\":700000,\"exit\":0}\n{\"ts\":900,\"stage\":\"ph:q2\",\"event\":\"done\",\"wall_s\":180,\"rss_kb\":null,\"exit\":0}\n{\"ts\":910,\"stage\":\"lambda\",\"event\":\"done\",\"wall_s\":10,\"rss_kb\":20000,\"exit\":0}\n"
+    let rep = qforge_telemetry_report(fix)
+
+    // (A) parse + per-stage wall sum + ranking + total + pct
+    fails = fails + _ck("(A) n_stages=5", rep.n_stages == 5)
+    fails = fails + _ck("(A) scf wall=300", _row(rep, "scf").wall_s == 300)
+    fails = fails + _ck("(A) ph:q1 wall=200", _row(rep, "ph:q1").wall_s == 200)
+    fails = fails + _ck("(A) lambda wall=10", _row(rep, "lambda").wall_s == 10)
+    fails = fails + _ck("(A) total_wall=810", rep.total_wall == 810)
+    // ranked wall DESC: scf 300 > ph:q1 200 > ph:q2 180 > relax 120 > lambda 10
+    fails = fails + _ck("(A) rank desc scf>ph:q1>ph:q2>relax>lambda",
+        rep.rows[0].stage == "scf" && rep.rows[1].stage == "ph:q1"
+        && rep.rows[2].stage == "ph:q2" && rep.rows[3].stage == "relax"
+        && rep.rows[4].stage == "lambda")
+    fails = fails + _ck("(A) scf pct=37 (100·300/810)", _row(rep, "scf").pct == 37)
+
+    // (B) bottleneck = max-wall flagged slowest; others not
+    fails = fails + _ck("(B) row[0] slowest=scf", rep.rows[0].slowest && rep.rows[0].stage == "scf")
+    fails = fails + _ck("(B) row[1] NOT slowest", rep.rows[1].slowest == false)
+
+    // (C) rss: real peak vs null passthrough — NEVER fabricate
+    fails = fails + _ck("(C) scf has_rss + peak=900000", _row(rep, "scf").has_rss && _row(rep, "scf").peak_rss == 900000)
+    fails = fails + _ck("(C) ph:q2 rss-null → has_rss=false", _row(rep, "ph:q2").has_rss == false)
+    let rendered = qforge_telemetry_report_render(rep)
+    fails = fails + _ck("(C) render shows 'null' (d6) + flags 'slowest'",
+        rendered.contains("null") && rendered.contains("slowest"))
+
+    // peak-rss = MAX over multiple done lines for one stage
+    let multi = "{\"ts\":1,\"stage\":\"scf\",\"event\":\"done\",\"wall_s\":50,\"rss_kb\":100000,\"exit\":0}\n{\"ts\":2,\"stage\":\"scf\",\"event\":\"done\",\"wall_s\":70,\"rss_kb\":400000,\"exit\":0}\n{\"ts\":3,\"stage\":\"scf\",\"event\":\"done\",\"wall_s\":30,\"rss_kb\":250000,\"exit\":0}\n"
+    let repm = qforge_telemetry_report(multi)
+    fails = fails + _ck("(C) multi-done wall=150 peak=400000",
+        _row(repm, "scf").wall_s == 150 && _row(repm, "scf").peak_rss == 400000)
+
+    // ── (D) MALFORMED guard ─────────────────────────────────────────────────
+    //   valid done · bad JSON · blank(skip) · 5-key(no rss_kb) · unknown event ·
+    //   bare text → malformed=4; only the valid done bucketed (scf wall=42).
+    let bad = "{\"ts\":1,\"stage\":\"scf\",\"event\":\"done\",\"wall_s\":42,\"rss_kb\":1000,\"exit\":0}\n{not valid json\n\n{\"ts\":2,\"stage\":\"scf\",\"event\":\"done\",\"wall_s\":99,\"exit\":0}\n{\"ts\":3,\"stage\":\"scf\",\"event\":\"weird\",\"wall_s\":7,\"rss_kb\":5,\"exit\":0}\nlog noise line\n"
+    let repb = qforge_telemetry_report(bad)
+    fails = fails + _ck("(D) malformed=4 + NOT bucketed (scf wall=42, 1 stage)",
+        repb.malformed == 4 && _row(repb, "scf").wall_s == 42 && repb.n_stages == 1)
+
+    // ── (E) UNPAIRED guard + empty edge ─────────────────────────────────────
+    //   relax start+done(paired,60) · scf start only(unpaired,0 wall).
+    let unp = "{\"ts\":1,\"stage\":\"relax\",\"event\":\"start\",\"wall_s\":0,\"rss_kb\":null,\"exit\":null}\n{\"ts\":2,\"stage\":\"relax\",\"event\":\"done\",\"wall_s\":60,\"rss_kb\":300000,\"exit\":0}\n{\"ts\":2,\"stage\":\"scf\",\"event\":\"start\",\"wall_s\":0,\"rss_kb\":null,\"exit\":null}\n"
+    let repu = qforge_telemetry_report(unp)
+    fails = fails + _ck("(E) unpaired=1 + scf 0-wall not-slowest + relax=60",
+        repu.unpaired == 1 && _row(repu, "scf").wall_s == 0
+        && _row(repu, "scf").slowest == false && _row(repu, "relax").wall_s == 60)
+    let repe = qforge_telemetry_report("")
+    fails = fails + _ck("(E) empty input → 0 stages / 0 total", repe.n_stages == 0 && repe.total_wall == 0)
+
+    if fails == 0 { println("qforge_telemetry_report_selftest PASS") }
+    else { println("qforge_telemetry_report_selftest FAIL — " + to_string(fails) + " case(s)") }
+}

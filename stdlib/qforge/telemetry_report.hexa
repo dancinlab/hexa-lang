@@ -1,0 +1,261 @@
+// telemetry_report.hexa — QFORGE-PROCESS per-stage bottleneck analyzer.
+//
+// PR#2474 made the el-ph dispatcher (stdlib/cloud/dft_dispatch.hexa
+// `_dft_telemetry_line`) EMIT a sibling `.dft_telemetry.jsonl` — one line per
+// stage transition with EXACTLY six keys:
+//
+//   {"ts":N,"stage":"S","event":"start|done","wall_s":N,"rss_kb":N|null,"exit":N}
+//
+// A `start` line stamps the stage entry (wall_s=0, rss_kb=null); the matching
+// `done` line carries the measured wall delta (s) and the stage process peak
+// RSS (kB) — or the literal null when ps was unavailable (d6 HONESTY: the
+// emitter NEVER fabricates an rss, and neither does this analyzer).
+//
+// qforge_telemetry_report INGESTS that JSONL text and produces a ranked
+// per-stage bottleneck report: one row per stage (relax · scf · ph:q1..qN ·
+// lambda), aggregated wall_s and peak rss_kb, sorted by wall descending, each
+// with its %-of-total wall, and the single slowest stage flagged.
+//
+// @L3 READ-only PURE function over the JSONL TEXT — no pod ops, no source
+// mutation, no I/O. d19 reuse: the builtin `json_parse` / `type_of` / `has_key`
+// map surface (same idiom as stdlib/jsonl_pool.hexa `_jp_parse_obj`) does the
+// per-line parse; `null` parses to a `void`-typed value, so the rss-null
+// passthrough is structural — a missing/null rss stays `has_rss=false` and the
+// report renders it as the literal `null`, never a fabricated 0.
+
+// ── per-stage aggregate row ──────────────────────────────────────────────
+//   stage    — the transition label (relax · scf · ph:qN · lambda)
+//   wall_s   — summed wall over every paired done event for this stage
+//   peak_rss — max done rss_kb seen for this stage (kB); valid iff has_rss
+//   has_rss  — false when NO done line for the stage carried a real rss (null
+//              passthrough — render `null`, never 0)
+//   exit     — last done exit code for the stage (0 = clean)
+//   pct      — integer %-of-total wall (filled by qforge_telemetry_report)
+//   slowest  — true for the single max-wall stage
+struct StageRow {
+    stage: str,
+    wall_s: int,
+    peak_rss: int,
+    has_rss: bool,
+    exit: int,
+    pct: int,
+    slowest: bool,
+}
+
+// ── the report ───────────────────────────────────────────────────────────
+//   rows       — StageRow[] ranked by wall_s DESC (slowest first)
+//   total_wall — summed wall over all stages (s)
+//   n_stages   — distinct paired stages
+//   malformed  — count of non-empty lines that failed the 6-key guard
+//   unpaired   — count of `start` events with no matching `done` (still
+//                accounted, but contributing 0 wall — surfaced, never hidden)
+struct Report {
+    rows: [StageRow],
+    total_wall: int,
+    n_stages: int,
+    malformed: int,
+    unpaired: int,
+}
+
+// ── internal: parse one JSONL line into a validated 6-key map, or void ─────
+// Guards the leading '{' + a map result + ALL six required keys present. A line
+// missing any of ts/stage/event/wall_s/rss_kb/exit is malformed (counted, not
+// silently dropped into a stage bucket).
+fn _tr_parse_line(line: str) -> any {
+    let t = line.trim()
+    if len(t) < 2 { return void }
+    if t.substring(0, 1) != "{" { return void }
+    let m = json_parse(t)
+    if type_of(m) != "map" { return void }
+    if !has_key(m, "ts") { return void }
+    if !has_key(m, "stage") { return void }
+    if !has_key(m, "event") { return void }
+    if !has_key(m, "wall_s") { return void }
+    if !has_key(m, "rss_kb") { return void }
+    if !has_key(m, "exit") { return void }
+    return m
+}
+
+// ── internal: int coercion (a JSON number is `int`; null/void → 0) ─────────
+fn _tr_int(v: any) -> int {
+    if type_of(v) == "int" { return v }
+    return 0
+}
+
+// ── internal: index of a stage label in the parallel arrays, or -1 ─────────
+fn _tr_find(stages: [str], stage: str) -> int {
+    let mut i = 0
+    while i < len(stages) {
+        if stages[i] == stage { return i }
+        i = i + 1
+    }
+    return -1
+}
+
+// qforge_telemetry_report — parse the `.dft_telemetry.jsonl` text → ranked
+// per-stage bottleneck Report. Pairs each stage's `done` event (it carries the
+// wall + rss); `start` events with no later `done` for the same stage are
+// counted as `unpaired` (0 wall). Malformed (non-6-key) non-empty lines are
+// counted, never bucketed. Rows are sorted by wall DESC, %-of-total computed,
+// and the single max-wall stage flagged slowest.
+pub fn qforge_telemetry_report(jsonl_text: str) -> Report {
+    let lines = jsonl_text.split("\n")
+    // parallel accumulators keyed by stage label (insertion order)
+    let mut stages = []
+    let mut walls = []
+    let mut rss = []
+    let mut has_rss = []
+    let mut exits = []
+    let mut seen_done = []      // got >=1 done for this stage
+    let mut seen_start = []     // got >=1 start for this stage
+    let mut malformed = 0
+
+    let mut li = 0
+    while li < len(lines) {
+        let raw = lines[li]
+        li = li + 1
+        if len(raw.trim()) == 0 { continue }         // blank line: skip, not malformed
+        let m = _tr_parse_line(raw)
+        if type_of(m) == "void" { malformed = malformed + 1; continue }
+
+        let stage = to_string(m["stage"])
+        let event = to_string(m["event"])
+        let mut idx = _tr_find(stages, stage)
+        if idx < 0 {
+            stages.push(stage)
+            walls.push(0)
+            rss.push(0)
+            has_rss.push(false)
+            exits.push(0)
+            seen_done.push(false)
+            seen_start.push(false)
+            idx = len(stages) - 1
+        }
+
+        if event == "start" {
+            seen_start[idx] = true
+            continue
+        }
+        if event == "done" {
+            seen_done[idx] = true
+            walls[idx] = walls[idx] + _tr_int(m["wall_s"])
+            exits[idx] = _tr_int(m["exit"])
+            // rss-null passthrough (d6): a real int rss updates the peak; a
+            // null/void rss leaves has_rss untouched — NEVER fabricated.
+            if type_of(m["rss_kb"]) == "int" {
+                let r = _tr_int(m["rss_kb"])
+                if !has_rss[idx] || r > rss[idx] { rss[idx] = r }
+                has_rss[idx] = true
+            }
+            continue
+        }
+        // unknown event value on an otherwise-valid 6-key line → malformed
+        malformed = malformed + 1
+    }
+
+    // total wall + unpaired (start seen, no done)
+    let mut total = 0
+    let mut unpaired = 0
+    let mut k = 0
+    while k < len(stages) {
+        total = total + walls[k]
+        if seen_start[k] && !seen_done[k] { unpaired = unpaired + 1 }
+        k = k + 1
+    }
+
+    // build rows + selection-sort by wall DESC (small N: relax·scf·ph:qN·lambda)
+    let mut order = []
+    let mut o = 0
+    while o < len(stages) { order.push(o); o = o + 1 }
+    let mut a = 0
+    while a < len(order) {
+        let mut best = a
+        let mut b = a + 1
+        while b < len(order) {
+            if walls[order[b]] > walls[order[best]] { best = b }
+            b = b + 1
+        }
+        if best != a {
+            let tmp = order[a]
+            order[a] = order[best]
+            order[best] = tmp
+        }
+        a = a + 1
+    }
+
+    let mut rows = []
+    let mut ri = 0
+    while ri < len(order) {
+        let s = order[ri]
+        let mut pct = 0
+        if total > 0 { pct = 100 * walls[s] / total }
+        let row = StageRow {
+            stage: stages[s],
+            wall_s: walls[s],
+            peak_rss: rss[s],
+            has_rss: has_rss[s],
+            exit: exits[s],
+            pct: pct,
+            slowest: ri == 0 && len(order) > 0 && walls[s] > 0,
+        }
+        rows.push(row)
+        ri = ri + 1
+    }
+
+    return Report {
+        rows: rows,
+        total_wall: total,
+        n_stages: len(stages),
+        malformed: malformed,
+        unpaired: unpaired,
+    }
+}
+
+// ── internal: a stage's rss cell as a render string (`null` passthrough) ──
+fn _tr_rss_str(row: StageRow) -> str {
+    if !row.has_rss { return "null" }
+    return to_string(row.peak_rss)
+}
+
+// ── internal: fixed-width pad (right/left). Self-contained — avoids the
+// external string-helper dependency so the report stays a single pure module.
+fn _tr_padr(s: str, w: int) -> str {
+    let mut out = s
+    let mut n = len(s)
+    while n < w { out = out + " " ; n = n + 1 }
+    return out
+}
+fn _tr_padl(s: str, w: int) -> str {
+    let mut pad = ""
+    let mut n = len(s)
+    while n < w { pad = pad + " " ; n = n + 1 }
+    return pad + s
+}
+
+// qforge_telemetry_report_render — a fixed-width text table of the ranked
+// report. Columns: stage · wall_s · %tot · peak_rss_kb · exit · flag. The
+// slowest stage is marked with a trailing `◄ slowest`. Pure (no I/O); the
+// caller prints. rss renders the literal `null` when unmeasured (d6).
+pub fn qforge_telemetry_report_render(rep: Report) -> str {
+    let mut out = "QFORGE-PROCESS per-stage bottleneck report\n"
+    out = out + "stage        wall_s   %tot   peak_rss_kb  exit\n"
+    out = out + "-----------  -------  -----  -----------  ----\n"
+    let mut i = 0
+    while i < len(rep.rows) {
+        let r = rep.rows[i]
+        let mut line = _tr_padr(r.stage, 11) + "  "
+        line = line + _tr_padl(to_string(r.wall_s), 7) + "  "
+        line = line + _tr_padl(to_string(r.pct) + "%", 5) + "  "
+        line = line + _tr_padl(_tr_rss_str(r), 11) + "  "
+        line = line + _tr_padl(to_string(r.exit), 4)
+        if r.slowest { line = line + "  ◄ slowest" }
+        out = out + line + "\n"
+        i = i + 1
+    }
+    out = out + "-----------  -------  -----  -----------  ----\n"
+    out = out + "total wall_s=" + to_string(rep.total_wall)
+    out = out + "  stages=" + to_string(rep.n_stages)
+    out = out + "  malformed=" + to_string(rep.malformed)
+    out = out + "  unpaired=" + to_string(rep.unpaired) + "\n"
+    return out
+}
