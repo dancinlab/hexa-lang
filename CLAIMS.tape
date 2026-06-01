@@ -328,6 +328,22 @@
   src    = "archive-TECS-L math/dfs_dedekind_psi_discrepancy.py (D(n)=σφ−nτ, n=6/28 uniqueness)"
   status = "🔵 SUPPORTED-FORMAL (zeros {1,6}) + 🔴 CLOSED-negative (D≠0 elsewhere in 1..100). terminal · paper-eligible. components cross-checked vs `hexa verify --expr`."
 
+# ───────────────────────────────────────────────────────────────────────
+# FLAME-PERF — flame-onchip-plasticity (slug · group=FLAME-PERF · P6 host half)
+# On-chip non-deterministic plasticity = sole deployment learner (H_679/H_904).
+# HOST micro-falsifier ONLY: a local Hebbian/WTA competitive learner (NO
+# backprop, NO global error) on a toy 3-cluster task must RETAIN prior classes
+# through continual learning AND GAIN above chance on held-out data. The REAL
+# on-chip BOUND needs AKIDA neuromorphic hardware (none available) — HONEST-
+# DEFERRED (g63). 🟢 applies to the host sim ONLY; do NOT cite as on-chip.
+
+@C flame_onchip_plasti_sim := "host sim: local plasticity (no backprop) GAIN=0.917 (chance 0.333) ∧ RETAIN=1.0 after +new-class — hardware BOUND open" :: fixpoint [slug=flame-onchip-plasticity group=FLAME-PERF]
+  method = "fixpoint"
+  cmd    = "hexa run stdlib/flame/plasti_sim_test.hexa"
+  raw    = ".verdicts/flame-onchip-plasticity/F-ONCHIP-PLASTI-SIM.txt"
+  src    = "stdlib/flame/plasti_sim.hexa (host oracle) + stdlib/flame/plasti_sim_test.hexa (micro-falsifier) + .discoveries/flame-onchip-plasticity.tape"
+  status = "🟢 SUPPORTED-NUMERICAL (host sim, deterministic 2× byte-identical) — on-chip hardware BOUND OPEN (🟠 deferred to AKIDA). DESIGN+SIM, NOT a closed hardware falsifier."
+
 # — D(1)=0 : member of {1,6}. components reference existing tecs-l-n6-identity verdicts —
 @C tecs_l_dpsi_n1_zero := "D(1) = σ(1)·φ(1) − 1·τ(1) = 1·1 − 1·1 = 0 (member of {1,6})" :: formula [slug=tecs-l-dedekind-psi-uniqueness group=TECS-L]
   method = "expr"

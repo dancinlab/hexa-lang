@@ -1,0 +1,261 @@
+// @raw117_exempt
+// ════════════════════════════════════════════════════════════════════════
+// stdlib/flame/plasti_sim_test.hexa — PLASTI-SIM micro-falsifier harness
+//
+// FLAME-PERF P6 — host micro-falsifier for the on-chip-plasticity learner.
+// Falsifier (pre-registered): a LOCAL plasticity learner (no backprop) on a
+// toy 3-cluster task must satisfy BOTH:
+//
+//   GAIN    — held-out test accuracy > chance (chance = 1/3 ≈ 0.333).
+//             Target gate: acc >= 0.80 on a fresh test split.
+//   RETAIN  — after CONTINUED learning on a NEW class (class 3) is appended,
+//             accuracy on the ORIGINAL classes (0..2) does NOT collapse.
+//             Target gate: retained-class acc stays >= 0.70 (catastrophic-
+//             forgetting bound; local competitive learning protects unused
+//             prototypes because only the WINNER's row is touched).
+//
+// FALSIFIED if either gate fails. SUPPORTED (🟢 numerical) if both hold —
+// a HOST micro-result: local plasticity RETAINs ∧ GAINs WITHOUT backprop.
+// This is a SIMULATION verdict; the on-chip hardware BOUND stays open
+// (HONEST-DEFERRED to AKIDA — .discoveries/flame-onchip-plasticity.tape).
+//
+// DATA — deterministic, no external file, no RNG state outside the LCG:
+//   D = 8-dim inputs. K clusters; each cluster c has a fixed prototype
+//   center generated from a per-cluster LCG seed, and samples are the
+//   center + bounded LCG jitter. Fully reproducible; byte-identical 2×.
+// ════════════════════════════════════════════════════════════════════════
+
+use "stdlib/flame/tensor_lib"
+use "stdlib/flame/plasti_sim"
+use "stdlib/core/math/rng"
+
+// unit float in [0,1) from an LCG state (lcg_next is the stdlib rng SSOT;
+// g61 — reuse, don't re-implement). The state from lcg_next is in
+// [0, 2^32); reduce modulo 1e6 to a fine-grained unit fraction.
+fn lcg_unit(s: int) -> float {
+    return to_float(s % 1000000) / 1000000.0
+}
+
+// ── build one cluster sample: center_seed defines the prototype; the
+// per-sample seed adds bounded jitter. Writes into x (length D). The
+// center is deterministic per cluster so train/test share the same
+// generative distribution (the GAIN probe is genuine held-out). ─────────
+fn make_sample(x: int, D: int, center_seed: int, sample_seed: int, jitter: float) {
+    let mut cs = center_seed
+    let mut ss = sample_seed
+    let mut j = 0
+    while j < D {
+        cs = lcg_next(cs)
+        ss = lcg_next(ss)
+        let center = lcg_unit(cs)
+        let noise = (lcg_unit(ss) - 0.5) * jitter
+        let mut v = center + noise
+        if v < 0.0 { v = 0.0 }
+        if v > 1.0 { v = 1.0 }
+        t_set(x, j, v)
+        j = j + 1
+    }
+}
+
+// per-cluster center seeds (fixed, well-separated). Index 0..3.
+fn center_seed_for(c: int) -> int {
+    if c == 0 { return 10007 }
+    if c == 1 { return 20011 }
+    if c == 2 { return 30013 }
+    return 40031          // class 3 — the LATER-added class for RETAIN
+}
+
+// ── readout: majority-vote prototype→label map built on a labeled split.
+// vote[win*K + label] counts how often prototype `win` won for `label`;
+// the map[win] = argmax_label vote[win][·]. PURE READOUT — no weight
+// change. Returns a NEW length-N map tensor (caller owns).
+fn build_readout(W: int, N: int, D: int, K: int,
+                 train_per: int, jitter: float, base_sample_seed: int) -> int {
+    let vote = t_zeros(N * K)
+    let mut c = 0
+    let mut ss = base_sample_seed
+    while c < K {
+        let mut t = 0
+        while t < train_per {
+            ss = lcg_next(ss)
+            let x = t_zeros(D)
+            make_sample(x, D, center_seed_for(c), ss, jitter)
+            let win = ps_infer(W, x, N, D)
+            t_set(vote, win * K + c, t_get(vote, win * K + c) + 1.0)
+            let _ = t_free(x)
+            t = t + 1
+        }
+        c = c + 1
+    }
+    // argmax label per prototype
+    let map = t_zeros(N)
+    let mut p = 0
+    while p < N {
+        let mut best = 0
+        let mut bestv = t_get(vote, p * K + 0)
+        let mut l = 1
+        while l < K {
+            let vv = t_get(vote, p * K + l)
+            if vv > bestv { bestv = vv; best = l }
+            l = l + 1
+        }
+        t_set(map, p, to_float(best))
+        p = p + 1
+    }
+    let _ = t_free(vote)
+    return map
+}
+
+// ── evaluate accuracy on classes [lo, hi) using a frozen W + readout map.
+// Held-out: uses a DISTINCT sample-seed base from training. Returns the
+// fraction correct as a float in [0,1].
+fn eval_acc(W: int, map: int, N: int, D: int, K: int,
+            lo: int, hi: int, per: int, jitter: float, base_sample_seed: int) -> float {
+    let mut correct = 0
+    let mut total = 0
+    let mut c = lo
+    let mut ss = base_sample_seed
+    while c < hi {
+        let mut t = 0
+        while t < per {
+            ss = lcg_next(ss)
+            let x = t_zeros(D)
+            make_sample(x, D, center_seed_for(c), ss, jitter)
+            let win = ps_infer(W, x, N, D)
+            let pred = t_get(map, win)
+            if pred == to_float(c) { correct = correct + 1 }
+            total = total + 1
+            let _ = t_free(x)
+            t = t + 1
+        }
+        c = c + 1
+    }
+    if total == 0 { return 0.0 }
+    return to_float(correct) / to_float(total)
+}
+
+// ── plasticity training pass: present `epochs` rounds over classes
+// [lo, hi), each round `per` samples/class, in fixed deterministic order.
+// LOCAL learning ONLY — ps_present touches one winner row per sample, no
+// label, no backprop. ──────────────────────────────────────────────────
+fn train_plastic(W: int, N: int, D: int, lo: int, hi: int,
+                 epochs: int, per: int, jitter: float,
+                 lr: float, w_max: float, tnorm: float, base_sample_seed: int) {
+    let mut e = 0
+    let mut ss = base_sample_seed
+    while e < epochs {
+        let mut c = lo
+        while c < hi {
+            let mut t = 0
+            while t < per {
+                ss = lcg_next(ss)
+                let x = t_zeros(D)
+                make_sample(x, D, center_seed_for(c), ss, jitter)
+                let _w = ps_present(W, x, N, D, lr, w_max, tnorm)
+                let _ = t_free(x)
+                t = t + 1
+            }
+            c = c + 1
+        }
+        e = e + 1
+    }
+}
+
+// ════════════════════════════════════════════════════════════════════════
+// micro-falsifier
+// ════════════════════════════════════════════════════════════════════════
+println("=== PLASTI-SIM micro-falsifier (FLAME-PERF P6, host sim) ===")
+println("learner = local Hebbian/WTA competitive plasticity · NO backprop")
+
+let D = 8                 // input dims
+let N = 15                // output units / prototypes (over-complete, 5/class)
+let K = 4                 // total classes (0..2 first, 3 added for RETAIN)
+let jitter = 0.30         // bounded per-sample noise
+let lr = 0.05             // slow local rate — protects settled prototypes
+let w_max = 1.0
+let tnorm = 0.0           // <= 0.0 → SKIP L1-renorm (distance competition)
+let train_per = 60
+let test_per = 40
+let epochs = 8
+
+// W init: seed each prototype FROM a real sample of the FIRST task
+// (classes 0..2, round-robin). Sample-seeding is the standard fix for the
+// single-winner collapse of competitive learning (a prototype far from the
+// data cloud never wins → never updates → dead). Purely LOCAL: each row is
+// one input vector, no label drives the seeding. NOTE: NO class-3 prototype
+// is seeded — phase 2 must claim a prototype for the new class on its own,
+// which is exactly what stresses the RETAIN (forgetting) bound.
+let W = t_zeros(N * D)
+let mut p = 0
+let mut seed_ss = 31000
+while p < N {
+    seed_ss = lcg_next(seed_ss)
+    let xc = t_zeros(D)
+    make_sample(xc, D, center_seed_for(p % 3), seed_ss, jitter)
+    ps_seed_row(W, xc, p, D)
+    let _ = t_free(xc)
+    p = p + 1
+}
+
+// ── PHASE 1: learn classes 0..2 (3 classes) locally, no backprop ────────
+train_plastic(W, N, D, 0, 3, epochs, train_per, jitter, lr, w_max, tnorm, 5000)
+let map1 = build_readout(W, N, D, K, train_per, jitter, 9000)
+
+// GAIN probe — held-out test set (distinct seed base), classes 0..2.
+let chance3 = 1.0 / 3.0
+let gain_acc = eval_acc(W, map1, N, D, K, 0, 3, test_per, jitter, 70000)
+print("GAIN   classes 0..2 held-out acc = "); print(gain_acc)
+print("   (chance="); print(chance3); println(")")
+
+// snapshot of class-0..2 accuracy BEFORE the new class is learned
+let pre_retain_acc = gain_acc
+
+// ── PHASE 2: CONTINUE learning — add class 3, local plasticity only ─────
+// This is the catastrophic-forgetting probe: keep learning on a NEW class
+// and re-measure the ORIGINAL classes. Backprop on a shared layer would
+// drift the shared weights; local WTA only touches the WINNING row, so
+// unused prototypes for classes 0..2 should be PROTECTED.
+train_plastic(W, N, D, 3, 4, epochs, train_per, jitter, lr, w_max, tnorm, 6000)
+let map2 = build_readout(W, N, D, K, train_per, jitter, 9500)
+
+// RETAIN probe — original classes 0..2 acc AFTER learning class 3.
+let retain_acc = eval_acc(W, map2, N, D, K, 0, 3, test_per, jitter, 71000)
+// also confirm the new class is actually learned (sanity, not a gate)
+let newcls_acc = eval_acc(W, map2, N, D, K, 3, 4, test_per, jitter, 72000)
+print("RETAIN classes 0..2 acc after +class3 = "); print(retain_acc)
+print("   (was "); print(pre_retain_acc); println(")")
+print("       (sanity) new class 3 acc = "); print(newcls_acc); println("")
+
+// ── verdict gates ───────────────────────────────────────────────────────
+let gain_gate = 0.80
+let retain_gate = 0.70
+let mut gain_pass = 0
+let mut retain_pass = 0
+if gain_acc >= gain_gate { gain_pass = 1 }
+if retain_acc >= retain_gate { retain_pass = 1 }
+
+println("")
+if gain_pass == 1 {
+    print("PASS  GAIN    held-out acc "); print(gain_acc); print(" >= gate "); println(gain_gate)
+} else {
+    print("FAIL  GAIN    held-out acc "); print(gain_acc); print(" <  gate "); println(gain_gate)
+}
+if retain_pass == 1 {
+    print("PASS  RETAIN  post-new-class acc "); print(retain_acc); print(" >= gate "); println(retain_gate)
+} else {
+    print("FAIL  RETAIN  post-new-class acc "); print(retain_acc); print(" <  gate "); println(retain_gate)
+}
+
+println("")
+if gain_pass == 1 {
+    if retain_pass == 1 {
+        println("VERDICT 🟢 SUPPORTED (host sim): local plasticity RETAINs ∧ GAINs without backprop")
+        println("        (on-chip hardware BOUND remains OPEN — HONEST-DEFERRED to AKIDA)")
+    } else {
+        println("VERDICT 🔴 FALSIFIED: RETAIN gate failed (catastrophic forgetting)")
+    }
+} else {
+    println("VERDICT 🔴 FALSIFIED: GAIN gate failed (no above-gate generalization)")
+}
+
+let _ = t_free(W); let _ = t_free(map1); let _ = t_free(map2)
