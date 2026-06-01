@@ -1,0 +1,62 @@
+name: no-hardcode-gate
+
+# ── no machine-absolute path in added .hexa source ──────────────────────────
+#
+# Machine-absolute home paths (/Users/<me>/…, /home/<me>/…) hardcoded in .hexa
+# source break every other contributor's host (and headless/CI): the path only
+# exists on the author's machine. This gate fails a PR that ADDS such a path.
+#
+# This is the uncircumventable cross-contributor half of the no-hardcode gate.
+# The local fast pre-check is `tool/no_hardcode_lint.hexa --staged`, wired into
+# .githooks/pre-commit (PR #2468); that .hexa lint is the fuller SSOT (11
+# patterns + per-line @const opt-out). CI cannot run it today — hexa-in-CI /
+# edge-tarball is RED (handoff 726b8b67) — so this gate is a pure-bash diff-grep
+# scoped to the machine-absolute home-path class: the exact "breaks other hosts"
+# subset, narrow enough to hard-fail without false-positiving on legitimate
+# URLs / IPs / /tmp that the broader local lint handles with @const.
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  no-foreign-path:
+    name: no machine-absolute path in added .hexa lines
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Scan PR-added .hexa lines for machine-absolute home paths
+        shell: bash
+        run: |
+          set -euo pipefail
+          base="origin/${{ github.base_ref }}"
+          git fetch --quiet origin "${{ github.base_ref }}"
+          # Added lines (leading '+', excluding the '+++' file header) of .hexa
+          # files in this PR. Flag a machine-absolute home path in a string
+          # literal, unless the line is a // comment or carries an @const mark.
+          hits="$(git diff "$base...HEAD" -U0 -- '*.hexa' \
+            | grep -E '^\+[^+]' \
+            | sed -E 's/^\+//' \
+            | grep -E '"/(Users|home)/' \
+            | grep -v '@const' \
+            | grep -vE '^[[:space:]]*//' || true)"
+          if [ -n "$hits" ]; then
+            echo "🚫 FAIL — this PR adds machine-absolute home path(s) in .hexa source:"
+            echo "------------------------------------------------------------"
+            echo "$hits"
+            echo "------------------------------------------------------------"
+            echo "These break every other contributor's host. Derive the path"
+            echo "from env (\$HOME / \$HEXA_LANG / pwd), or mark the line @const"
+            echo "if the literal is genuinely portable/intentional."
+            echo "Local mirror: hexa run tool/no_hardcode_lint.hexa --staged"
+            exit 1
+          fi
+          echo "✅ PASS — no machine-absolute home path added in .hexa lines"
