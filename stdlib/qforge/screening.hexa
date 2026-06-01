@@ -30,12 +30,14 @@
 //   는 그대로 dfpt_response 의 drho_to_dvscf 클로저로 투입 가능(국소 ΔV(r)).
 //
 // reuse (d19): stdlib/signal/core_fft fft3/ifft3 (#2076) — FFT 재구현 금지.
+// reuse (d19): stdlib/qforge/correlation — LDA 상관(PW92) f_c (PR#2402/PR2).
 use "stdlib/signal/core_fft"
+use "stdlib/qforge/correlation"
 
 // xc_mode 상수.
 //   0 = Hartree-only           (교환·상관 끔)
 //   1 = Hartree + LDA exchange (Slater) — 본 PR 의 실 커널
-//   2 = Hartree + LDA x+c      → unsupported (상관 후속, clean 빈 반환)
+//   2 = Hartree + LDA x+c (Slater 교환 + PW92 상관) — 실 커널 (PR#2402/PR2)
 pub fn qforge_xc_hartree_only() -> int { return 0 }
 pub fn qforge_xc_lda_exchange() -> int { return 1 }
 pub fn qforge_xc_lda_xc() -> int { return 2 }
@@ -130,7 +132,8 @@ pub fn qforge_dvscf_from_drho(drho: [float], rho: [float], nx: int, ny: int, nz:
                               b1: [float], b2: [float], b3: [float], xc_mode: int) -> [float] {
     let ntot = nx * ny * nz
     if len(drho) != ntot { return [] }
-    if xc_mode == 2 { return [] }            // LDA 상관 = 후속(clean unsupported)
+    if xc_mode < 0 { return [] }                  // 미지 mode → clean 빈 반환
+    if xc_mode > 2 { return [] }
     // Hartree 항 (항상 포함).
     let vh = qforge_vhartree_from_drho(drho, nx, ny, nz, b1, b2, b3)
     if len(vh) != ntot { return [] }
@@ -138,9 +141,13 @@ pub fn qforge_dvscf_from_drho(drho: [float], rho: [float], nx: int, ny: int, nz:
     let mut i = 0
     while i < ntot {
         let mut v = vh[i]
-        // LDA 교환 항: ΔV_x(r) = f_x[ρ(r)]·Δρ(r) (mode 1).
-        if xc_mode == 1 {
+        // LDA 교환 항: ΔV_x(r) = f_x[ρ(r)]·Δρ(r) (mode 1·2).
+        if xc_mode >= 1 {
             if len(rho) == ntot { v = v + qforge_fx_lda(rho[i]) * drho[i] }
+        }
+        // LDA 상관 항: ΔV_c(r) = f_c[ρ(r)]·Δρ(r) (PW92, mode 2 만).
+        if xc_mode == 2 {
+            if len(rho) == ntot { v = v + qforge_fc_pw92(rho[i]) * drho[i] }
         }
         out.push(v)
         i = i + 1
