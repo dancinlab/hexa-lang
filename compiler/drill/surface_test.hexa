@@ -1,0 +1,175 @@
+// HEXA Native Compiler — Phase 3 drill: surface-on-skip selftest
+//
+// @version 0.1.0
+// @capabilities [fs_read, fs_write, env_read, stdout]
+//
+// Covers the surface-on-skip behavior (feat/drill-surface-on-skip):
+// when NO verifier is installed (verdict == "skip"), drill emits the
+// top-N ranked discovery candidates as ⚪ proposals instead of silently
+// pooling them into the overlay. Asserts:
+//
+//   1. A skip-path discovery run surfaces N > 0 ⚪ proposals.
+//   2. `--top N` is honored — exactly N proposals emitted when the round
+//      yields ≥ N candidates (default count vs an explicit override).
+//   3. The tier label on every surfaced row is `proposal` (to-validate)
+//      — NEVER a verified verdict (no SUPPORTED / GATE / formal / pass).
+//   4. `--top 0` restores legacy silence (zero proposal lines).
+//
+// We drive the REAL `hexa drill` CLI via exec() and grep its stdout —
+// this exercises the actual end-to-end stdout surfacing path (the one a
+// user sees), not just an internal helper. HOME is relocated to a
+// per-run scratch dir UNDER $HOME (NOT /tmp — the Mac build guard refuses
+// a hexa build whose cache lands under /tmp; see the kernel-panic
+// protection path) so the overlay/checkpoint start clean and isolated.
+//
+// Run:
+//   hexa run compiler/drill/surface_test.hexa
+
+fn _check(label: string, ok: bool, fails: array) {
+    if ok { println("  PASS  " + label) }
+    else { println("  FAIL  " + label); fails.push(label) }
+}
+
+// Count occurrences of `needle` as a substring of `hay` (non-overlapping).
+fn _count_substr(hay: string, needle: string) -> i64 {
+    if len(needle) == 0 { return 0 }
+    let mut n: i64 = 0
+    let mut i = 0
+    while i + len(needle) <= len(hay) {
+        if hay.substring(i, i + len(needle)) == needle {
+            n = n + 1
+            i = i + len(needle)
+        } else {
+            i = i + 1
+        }
+    }
+    return n
+}
+
+fn main() {
+    println("phase-3 drill surface-on-skip selftest")
+
+    // Scratch HOME under $HOME (NOT /tmp — build-guard) for hermetic
+    // overlay/checkpoint state.
+    let home = env("HOME")
+    let scratch = home + "/.hx/scratch/drill_surface_test"
+    exec("rm -rf '" + scratch + "' 2>/dev/null; mkdir -p '" + scratch + "/.hx/data'")
+
+    let seed = "Lithium magnesium hydride Li2MgH16 superconductor candidate ambient"
+    // Drive the real CLI. --fresh ignores any checkpoint; no --verifier-cmd
+    // → verdict == "skip" → surface path engaged. We pin --top explicitly.
+    let base = "HOME='" + scratch + "' hexa drill --seed '" + seed
+        + "' --rounds 1 --depth-smash 2 --depth-free 2 --fresh --quiet"
+
+    let fails = []
+    let mut pass: i64 = 0
+    let mut total: i64 = 0
+
+    // ─── Scenario 1: --top 5 surfaces 5 ⚪ proposals ───
+    println("")
+    println("scenario 1: --top 5 surfaces exactly 5 ⚪ proposals on the skip path")
+    let out5 = exec(base + " --top 5 2>/dev/null")
+    let n5 = _count_substr(out5, "⚪ proposal #")
+    println("  surfaced proposal lines (--top 5): " + to_string(n5))
+
+    total = total + 1
+    if n5 > 0 {
+        pass = pass + 1
+        _check("scenario 1: skip run surfaced N>0 ⚪ proposals", true, fails)
+    } else {
+        _check("scenario 1: skip run surfaced N>0 ⚪ proposals (got " + to_string(n5) + ")", false, fails)
+    }
+
+    total = total + 1
+    if n5 == 5 {
+        pass = pass + 1
+        _check("scenario 1: --top 5 honored (exactly 5 emitted)", true, fails)
+    } else {
+        _check("scenario 1: --top 5 honored (got " + to_string(n5) + ")", false, fails)
+    }
+
+    // ─── Scenario 2: --top 3 emits fewer than --top 5 (top-N is a real cap) ───
+    println("")
+    println("scenario 2: --top 3 honored independently of --top 5")
+    let out3 = exec(base + " --top 3 2>/dev/null")
+    let n3 = _count_substr(out3, "⚪ proposal #")
+    println("  surfaced proposal lines (--top 3): " + to_string(n3))
+    total = total + 1
+    if n3 == 3 {
+        pass = pass + 1
+        _check("scenario 2: --top 3 honored (exactly 3 emitted)", true, fails)
+    } else {
+        _check("scenario 2: --top 3 honored (got " + to_string(n3) + ")", false, fails)
+    }
+
+    // ─── Scenario 3: tier label is `proposal`, never a verified verdict ───
+    println("")
+    println("scenario 3: tier label is ⚪ proposal — NEVER a verified verdict")
+    // Every surfaced row must carry the literal "⚪ proposal" tier.
+    let proposal_tag = _count_substr(out5, "⚪ proposal")
+    // It must NOT carry any verified-tier token.
+    let bad_supported = _count_substr(out5, "SUPPORTED")
+    let bad_gate = _count_substr(out5, "GATE")
+    let bad_formal = _count_substr(out5, "formal")
+    let bad_pass = _count_substr(out5, "verdict=pass")
+    total = total + 1
+    if proposal_tag >= n5 && proposal_tag > 0 {
+        pass = pass + 1
+        _check("scenario 3: every surfaced row tagged ⚪ proposal", true, fails)
+    } else {
+        _check("scenario 3: every surfaced row tagged ⚪ proposal (tags=" + to_string(proposal_tag) + " rows=" + to_string(n5) + ")", false, fails)
+    }
+    total = total + 1
+    let clean = bad_supported == 0 && bad_gate == 0 && bad_formal == 0 && bad_pass == 0
+    if clean {
+        pass = pass + 1
+        _check("scenario 3: NO verified-tier token on surfaced proposals (g6/g63)", true, fails)
+    } else {
+        _check("scenario 3: verified-tier token leaked (SUPPORTED=" + to_string(bad_supported)
+            + " GATE=" + to_string(bad_gate) + " formal=" + to_string(bad_formal)
+            + " pass=" + to_string(bad_pass) + ")", false, fails)
+    }
+
+    // ─── Scenario 4: --top 0 restores legacy silence ───
+    println("")
+    println("scenario 4: --top 0 restores legacy silence (no proposal lines)")
+    let out0 = exec(base + " --top 0 2>/dev/null")
+    let n0 = _count_substr(out0, "⚪ proposal #")
+    println("  surfaced proposal lines (--top 0): " + to_string(n0))
+    total = total + 1
+    if n0 == 0 {
+        pass = pass + 1
+        _check("scenario 4: --top 0 emits zero proposals (back-compat)", true, fails)
+    } else {
+        _check("scenario 4: --top 0 emits zero proposals (got " + to_string(n0) + ")", false, fails)
+    }
+
+    // ─── cleanup ───
+    exec("rm -rf '" + scratch + "' 2>/dev/null")
+
+    println("")
+    println(to_string(pass) + "/" + to_string(total) + " PASS")
+    if len(fails) == 0 {
+        println("RESULT: PASS")
+        exit(0)
+    } else {
+        println("RESULT: FAIL — " + to_string(len(fails)) + " check(s) failed")
+        let mut k = 0
+        while k < len(fails) {
+            println("  - " + to_string(fails[k]))
+            k = k + 1
+        }
+        exit(1)
+    }
+}
+
+// is_main guard
+let _av = argv()
+fn _is_main() -> bool {
+    if len(_av) < 2 { return false }
+    let s = to_string(_av[1])
+    if s.ends_with("/surface_test.hexa") { return true }
+    if s == "surface_test.hexa" { return true }
+    return false
+}
+if _is_main() { main() }

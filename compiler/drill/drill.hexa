@@ -66,7 +66,19 @@ pub struct DrillOpts {
     // EXTERNAL / TENANT code — phanes is expected to sandbox it itself.
     verifier_cmd: string,             // "" = no verifier (default — back-compat)
     verifier_timeout_s: i64,          // 0 = unbounded
-    verifier_authoritative: bool      // true → pass/fail halts loop · false → advisory only
+    verifier_authoritative: bool,     // true → pass/fail halts loop · false → advisory only
+    // ── Surface-on-skip (resolves "candidates silently pooled, never
+    //    emitted" — materials/non-math discovery): when NO verifier is
+    //    installed (verifier_cmd == ""), the per-round verdict is "skip"
+    //    and the chain's discoveries are flushed to the overlay but never
+    //    shown to the user. `surface_top` > 0 emits the top-N ranked
+    //    discovery candidates of each such round to stdout as ⚪ proposals
+    //    (to-validate hypotheses — NEVER a verified verdict). 0 = off
+    //    (legacy byte-identical behavior). Ranking REUSES the existing
+    //    per-candidate `conf` signal (compiler/smash/candidate.hexa); no
+    //    new scorer is introduced. Honesty (g6/g63): a surfaced row is a
+    //    PROPOSAL, not a grading — it carries no pass/fail/formal tier.
+    surface_top: i64                  // 0 = off · N>0 = emit top-N ⚪ proposals on skip (default 8)
 }
 
 pub fn drill_default_opts() -> DrillOpts {
@@ -83,7 +95,8 @@ pub fn drill_default_opts() -> DrillOpts {
         quiet: false,
         verifier_cmd: "",
         verifier_timeout_s: 0,
-        verifier_authoritative: false
+        verifier_authoritative: false,
+        surface_top: 8
     }
 }
 
@@ -227,6 +240,81 @@ fn _verifier_run(opts: DrillOpts, round: i64, seed: string,
     let v = _verifier_parse_verdict(out)
     let r = _verifier_parse_rationale(out)
     return VerifierVerdict { verdict: v, rationale: r, round: round }
+}
+
+// ── Surface-on-skip: emit top-N ⚪ proposals ──────────────────────────
+//
+// When no verifier is installed (verdict == "skip"), the round's
+// discovery candidates are flushed to the overlay but never shown to the
+// user — a materials/non-math seed produces hundreds of ideas that stay
+// invisible. `_surface_proposals` ranks the round's discoveries by the
+// EXISTING per-candidate confidence signal (`conf`, see
+// compiler/smash/candidate.hexa — heuristic confidence in [0,1]) and
+// prints the top-N to stdout, each tagged `⚪ proposal`. This is PURE
+// SURFACING:
+//   • the tier is ALWAYS ⚪ proposal (to-validate) — NEVER pass / fail /
+//     SUPPORTED / GATE / formal. A surfaced row is a hypothesis, not a
+//     verdict (g6/g63 honesty — no fabricated grading).
+//   • ranking REUSES `conf`; no new scorer is invented.
+// Returns the count of proposals actually emitted (≤ top_n, ≤ #cands).
+
+// Selection-rank the discovery candidates by descending `conf` and emit
+// the first `top_n`. We use a bounded selection pass (O(top_n · N)) rather
+// than a full sort — top_n is small (default 8) and N can be large (a
+// round can produce hundreds of candidates), so repeatedly extracting the
+// current max is cheaper than sorting the whole array and keeps the
+// emission order deterministic (highest conf first; axiom breaks a tie so
+// fresh axioms outrank derived corollaries of equal confidence).
+fn _surface_proposals(round: i64, cands: array, top_n: i64, quiet: bool) -> i64 {
+    if top_n <= 0 { return 0 }
+    let n = len(cands)
+    if n == 0 { return 0 }
+    // `picked[i] == true` once candidate i has been emitted.
+    let mut picked: array = []
+    let mut p = 0
+    while p < n { picked.push(false); p = p + 1 }
+
+    let mut emitted: i64 = 0
+    if !quiet {
+        println("  ⚪ proposals (round " + to_string(round)
+            + ", top " + to_string(top_n) + " of " + to_string(n)
+            + " — ranked by conf · to-validate, NOT verified):")
+    }
+    while emitted < top_n {
+        // Find the highest-conf not-yet-picked candidate. Tiebreak:
+        // axiom > derived, then earlier insertion index (deterministic).
+        let mut best: i64 = -1
+        let mut best_conf: f64 = -1.0
+        let mut best_axiom = false
+        let mut i = 0
+        while i < n {
+            if !picked[i] {
+                let c = cands[i]
+                let better_conf = c.conf > best_conf
+                let tie_axiom = c.conf == best_conf && c.axiom && !best_axiom
+                if best < 0 || better_conf || tie_axiom {
+                    best = i
+                    best_conf = c.conf
+                    best_axiom = c.axiom
+                }
+            }
+            i = i + 1
+        }
+        if best < 0 { break }   // nothing left to pick
+        picked[best] = true
+        let c = cands[best]
+        // ⚪ proposal line — tier label is literally "proposal" (to-validate).
+        // Format: rank · id · conf · src · expr (truncated for one line).
+        let mut expr_short = c.expr
+        if len(expr_short) > 72 { expr_short = expr_short.substring(0, 72) + "…" }
+        let line = "    ⚪ proposal #" + to_string(emitted + 1)
+            + " [conf=" + to_string(c.conf) + "]"
+            + " " + c.id
+            + " (" + c.src + "): " + expr_short
+        println(line)
+        emitted = emitted + 1
+    }
+    return emitted
 }
 
 // Minimal POSIX shell single-quote escape — wraps `s` in single quotes
@@ -432,6 +520,16 @@ pub fn drill_run(seed: string, opts: DrillOpts) -> DrillResult {
         let vv = _verifier_run(opts, round, seed, rr.yields, rr.sigma_best)
         _verifier_audit_emit(vv)
         verifier_last_verdict = vv.verdict
+
+        // ── surface-on-skip ──────────────────────────────────────────
+        // No verifier installed (verdict == "skip") → the round's
+        // discoveries would otherwise vanish into the overlay unseen.
+        // Emit the top-N ranked candidates as ⚪ proposals (to-validate
+        // hypotheses, NOT verdicts). Off when surface_top == 0 (legacy).
+        if vv.verdict == "skip" && opts.surface_top > 0 {
+            _surface_proposals(round, rr.discoveries, opts.surface_top, opts.quiet)
+        }
+
         if opts.verifier_authoritative {
             if vv.verdict == "pass" {
                 verifier_stopped = true
@@ -522,7 +620,7 @@ fn main() {
     let args = cli_args()
     let seed = cli_find_flag(args, "--seed", cli_positional(args, 0, ""))
     if len(seed) == 0 {
-        println("usage: hexa drill --seed \"<expr>\" [--rounds N] [--engine mk9|mk10]")
+        println("usage: hexa drill --seed \"<expr>\" [--rounds N] [--engine mk9|mk10] [--top N]")
         return
     }
     let mut opts = drill_default_opts()
@@ -540,6 +638,11 @@ fn main() {
         opts.resume_on = false
     }
     if cli_has_flag(args, "--quiet") { opts.quiet = true }
+
+    // Surface-on-skip control. `--top N` sets how many ⚪ proposals to emit
+    // per skip round (default 8); `--top 0` restores the legacy silent
+    // behavior (candidates flushed to overlay only, nothing on stdout).
+    opts.surface_top = cli_parse_int(cli_find_flag(args, "--top", ""), opts.surface_top)
 
     // Pluggable verifier hook (phanes scope B). When absent, drill behaves
     // identically to the pre-hook surface. `--verifier-cmd` is a shell
