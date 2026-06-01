@@ -1,0 +1,85 @@
+// stdlib/cloud/rent_idempotent_test.hexa — falsifiers for IDEMPOTENT RENT
+// (rent-leak fix). The rent path must NOT provision a second billing pod
+// when a live pod already owns the same (project, purpose) key.
+//
+// Falsifiers:
+//   F-CLOUD-RENT-IDEMPOTENT  — pod_registry_find_by_purpose returns the
+//                              existing live pod id for a repeated same-key
+//                              rent (so the rent fn short-circuits, no new
+//                              pod). Empty / different-key / STOPPING /
+//                              blank-key all return "" (first-rent path).
+//
+// The full CLI-level selftest (with snapshot/restore of the operator's
+// live registry) lives at `hexa cloud rent --selftest` in cloud_cli.hexa;
+// this file is the CI-runnable unit check of the helper in isolation.
+//
+// Run:   hexa run stdlib/cloud/rent_idempotent_test.hexa
+// PASS:  exits 0, prints "rent_idempotent_test PASS".
+
+use "stdlib/cloud/pod_registry"
+
+fn _t_assert(cond: int, label: str) {
+    if cond == 0 {
+        println("FAIL: " + label)
+        exit(1)
+    }
+}
+
+fn _t_sandbox() -> str {
+    let real = env_var("HOME") + "/.hx/cloud/active-pods.json"
+    let _ = exec("mkdir -p " + env_var("HOME") + "/.hx/cloud 2>/dev/null")
+    let sb = exec("mktemp -d /tmp/hexa-rent-idem.XXXXXX 2>/dev/null").trim()
+    let _ = exec("test -f " + real + " && cp -p " + real + " " + sb + "/SAVED.json || true")
+    let _ = exec("rm -f " + real + " 2>/dev/null")
+    return sb
+}
+
+fn _t_restore(sb: str) {
+    let real = env_var("HOME") + "/.hx/cloud/active-pods.json"
+    let _ = exec("rm -f " + real + " 2>/dev/null")
+    let _ = exec("test -f " + sb + "/SAVED.json && cp -p " + sb + "/SAVED.json " + real + " || true")
+    let _ = exec("rm -rf " + sb + " 2>/dev/null")
+}
+
+fn _t_main() {
+    let sb = _t_sandbox()
+
+    // empty registry → no reuse (first rent provisions).
+    _t_assert(pod_registry_find_by_purpose("anima", "d768-recover") == "", "F-RENT-IDEMPOTENT: empty → \"\"")
+
+    // RENTING add → subsequent same-key rent reuses.
+    let _ = pod_registry_add("38977997", "runpod", "anima", "d768-recover", "", "", "RENTING")
+    _t_assert(pod_registry_find_by_purpose("anima", "d768-recover") == "38977997", "F-RENT-IDEMPOTENT: same-key reuse")
+
+    // different purpose → no false reuse.
+    _t_assert(pod_registry_find_by_purpose("anima", "forge-util-fix") == "", "F-RENT-IDEMPOTENT: diff purpose → \"\"")
+
+    // different project, same purpose → no false reuse.
+    _t_assert(pod_registry_find_by_purpose("demiurge", "d768-recover") == "", "F-RENT-IDEMPOTENT: diff project → \"\"")
+
+    // READY pod is reused (live).
+    let _ = pod_registry_add("podREADY1", "runpod", "demiurge", "qforge", "1.2.3.4", "22001", "READY")
+    _t_assert(pod_registry_find_by_purpose("demiurge", "qforge") == "podREADY1", "F-RENT-IDEMPOTENT: READY reuse")
+
+    // STOPPING pod is NOT reused (a fresh rent is correct).
+    let _ = pod_registry_add("podGONE1", "runpod", "anima", "teardown-soon", "", "", "STOPPING")
+    _t_assert(pod_registry_find_by_purpose("anima", "teardown-soon") == "", "F-RENT-IDEMPOTENT: STOPPING not reused")
+
+    // blank project / purpose → dedup disabled.
+    let _ = pod_registry_add("podBLANK1", "runpod", "", "", "", "", "RENTING")
+    _t_assert(pod_registry_find_by_purpose("", "") == "", "F-RENT-IDEMPOTENT: blank key disabled")
+    _t_assert(pod_registry_find_by_purpose("anima", "") == "", "F-RENT-IDEMPOTENT: blank purpose disabled")
+
+    // IDEMPOTENCE — repeated same-key find is stable (3/3 same id).
+    let r1 = pod_registry_find_by_purpose("anima", "d768-recover")
+    let r2 = pod_registry_find_by_purpose("anima", "d768-recover")
+    let r3 = pod_registry_find_by_purpose("anima", "d768-recover")
+    _t_assert(r1 == "38977997" && r2 == "38977997" && r3 == "38977997", "F-RENT-IDEMPOTENT: stable 3/3")
+
+    _t_restore(sb)
+    println("rent_idempotent_test PASS")
+}
+
+fn main() {
+    _t_main()
+}

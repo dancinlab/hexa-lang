@@ -948,6 +948,108 @@ fn _print_fail_tail(out: str, exit_code: int, n: int) {
 // ~/.ssh/*.pub) and records the result in the pod registry; the provider
 // modules own the actual search / create / wait / destroy / list logic.
 
+// _cloud_rent_selftest — DRY-RUN unit test of the IDEMPOTENT-RENT dedup
+// logic (no provider call, no billing). Snapshots the operator's live M5
+// file aside, drives pod_registry_add + pod_registry_find_by_purpose in
+// process, asserts the dedup contract, then restores the live file. Returns
+// 0 on PASS, 1 on the first failed assertion.
+//
+//   1. empty registry           → find returns "" (FIRST rent provisions)
+//   2. after a RENTING add       → find returns that id (SUBSEQUENT reuses)
+//   3. a different purpose        → find returns "" (no false dedup)
+//   4. a READY pod               → still reused (live status)
+//   5. a STOPPING pod            → NOT reused (on its way out)
+//   6. blank project/purpose      → find returns "" (dedup disabled)
+fn _cloud_rent_selftest() -> int {
+    let real = env_var("HOME") + "/.hx/cloud/active-pods.json"
+    let _ = exec("mkdir -p " + env_var("HOME") + "/.hx/cloud 2>/dev/null")
+    let saved = exec("mktemp /tmp/hexa-rent-selftest.XXXXXX 2>/dev/null").trim()
+    let _ = exec("test -f " + real + " && cp -p " + real + " " + saved + " || true")
+    let _ = exec("rm -f " + real + " 2>/dev/null")
+    let mut ok = 1
+
+    // 1. empty registry → no reuse.
+    let f1 = pod_registry_find_by_purpose("anima", "d768-recover")
+    if f1 != "" {
+        println("FAIL 1 empty-registry: expected \"\" got '" + f1 + "'")
+        ok = 0
+    } else {
+        println("PASS 1 empty-registry → first rent provisions (find=\"\")")
+    }
+
+    // 2. RENTING add → subsequent same-key rent reuses.
+    let _ = pod_registry_add("38977997", "runpod", "anima", "d768-recover", "", "", "RENTING")
+    let f2 = pod_registry_find_by_purpose("anima", "d768-recover")
+    if f2 != "38977997" {
+        println("FAIL 2 same-key-reuse: expected '38977997' got '" + f2 + "'")
+        ok = 0
+    } else {
+        println("PASS 2 same-key rent reuses pod 38977997 (no new rent)")
+    }
+
+    // 3. different purpose → no false dedup (a genuinely new purpose rents).
+    let f3 = pod_registry_find_by_purpose("anima", "forge-util-fix")
+    if f3 != "" {
+        println("FAIL 3 diff-purpose: expected \"\" got '" + f3 + "'")
+        ok = 0
+    } else {
+        println("PASS 3 different purpose → no false reuse (find=\"\")")
+    }
+
+    // 4. READY pod is reused (live).
+    let _ = pod_registry_add("podREADY1", "runpod", "demiurge", "qforge", "1.2.3.4", "22001", "READY")
+    let f4 = pod_registry_find_by_purpose("demiurge", "qforge")
+    if f4 != "podREADY1" {
+        println("FAIL 4 ready-reuse: expected 'podREADY1' got '" + f4 + "'")
+        ok = 0
+    } else {
+        println("PASS 4 READY pod reused (live status)")
+    }
+
+    // 5. STOPPING pod is NOT reused (on its way out → a fresh rent is right).
+    let _ = pod_registry_add("podGONE1", "runpod", "anima", "teardown-soon", "", "", "STOPPING")
+    let f5 = pod_registry_find_by_purpose("anima", "teardown-soon")
+    if f5 != "" {
+        println("FAIL 5 stopping-skip: expected \"\" got '" + f5 + "'")
+        ok = 0
+    } else {
+        println("PASS 5 STOPPING pod NOT reused (find=\"\")")
+    }
+
+    // 6. blank project/purpose → dedup disabled (unattributed first-rent path).
+    let _ = pod_registry_add("podBLANK1", "runpod", "", "", "", "", "RENTING")
+    let f6 = pod_registry_find_by_purpose("", "")
+    if f6 != "" {
+        println("FAIL 6 blank-key: expected \"\" got '" + f6 + "'")
+        ok = 0
+    } else {
+        println("PASS 6 blank project/purpose → dedup disabled (find=\"\")")
+    }
+
+    // 7. IDEMPOTENCE: repeated same-key find returns the SAME id every time.
+    let r1 = pod_registry_find_by_purpose("anima", "d768-recover")
+    let r2 = pod_registry_find_by_purpose("anima", "d768-recover")
+    let r3 = pod_registry_find_by_purpose("anima", "d768-recover")
+    if r1 == "38977997" && r2 == "38977997" && r3 == "38977997" {
+        println("PASS 7 repeated same-key rent → SAME pod 3/3 (38977997)")
+    } else {
+        println("FAIL 7 idempotence: got '" + r1 + "' '" + r2 + "' '" + r3 + "'")
+        ok = 0
+    }
+
+    // restore the operator's live registry.
+    let _ = exec("rm -f " + real + " 2>/dev/null")
+    let _ = exec("test -f " + saved + " && cp -p " + saved + " " + real + " || true")
+    let _ = exec("rm -f " + saved + " 2>/dev/null")
+
+    if ok == 1 {
+        println("rent_selftest PASS — idempotent-rent dedup verified (no provider call)")
+        return 0
+    }
+    println("rent_selftest FAIL")
+    return 1
+}
+
 // _cloud_rent_vast — vast.ai provision path: search-offers → create → wait
 // ssh-ready → register. Prints host:port + instance id. Returns the exit
 // code (0 ok, 1 failure). The created instance is registered with the
@@ -971,6 +1073,21 @@ fn _cloud_rent_vast(av: [str], start: int) -> int {
     let mut disk_gb = disk
     if disk_gb <= 0 {
         disk_gb = 30
+    }
+    // IDEMPOTENT RENT (rent-leak fix) — before provisioning a NEW billing
+    // instance, check the M5 registry for a live pod with the SAME
+    // (project, purpose=owner). If found, REUSE it (print its id + exit 0)
+    // rather than leaking another orphan. `--force-new` opts out for the
+    // rare case a genuinely fresh pod is wanted. Disabled when project or
+    // owner is blank (no stable dedup key → legacy first-rent path).
+    if _has_flag(av, start, "--force-new") == 0 {
+        let existing = pod_registry_find_by_purpose(project, owner)
+        if len(existing) > 0 {
+            println("[cloud] rent vast: reusing existing pod " + existing + " for " + project + "/" + owner + " (M5 registry; pass --force-new to override)")
+            println("instance_id=" + existing)
+            println("owner=" + owner)
+            return 0
+        }
     }
     // verified_only=1 → vast.hexa applies the campaign-proven default
     // filters (reliability>=0.95 + verified + rentable). An explicit
@@ -1096,6 +1213,20 @@ fn _cloud_rent_runpod(av: [str], start: int) -> int {
     // ttl: --ttl 30m/90s/3600 → deadman teardown. cost: --max-cost-usd 5.
     let ttl_sec = _ttl_to_sec(_flag_val(av, start, "--ttl", ""))
     let max_cost = _flag_val(av, start, "--max-cost-usd", "")
+    // IDEMPOTENT RENT (rent-leak fix) — reuse a live (project, purpose) pod
+    // from the M5 registry instead of provisioning another orphan. The
+    // 2026-05-31 incident (38977997→38978180→38979746: 3 rents for one
+    // purpose) is exactly this gap. `--force-new` overrides; a blank
+    // project/owner disables dedup (legacy first-rent path).
+    if _has_flag(av, start, "--force-new") == 0 {
+        let existing = pod_registry_find_by_purpose(project, owner)
+        if len(existing) > 0 {
+            println("[cloud] rent runpod: reusing existing pod " + existing + " for " + project + "/" + owner + " (M5 registry; pass --force-new to override)")
+            println("pod_id=" + existing)
+            println("owner=" + owner)
+            return 0
+        }
+    }
     let pod = runpod_create(api_key, gpu, image, pubkey, owner)
     if pod.ok == 0 {
         println("[cloud] rent runpod: " + pod.message)
@@ -1805,10 +1936,17 @@ fn main() {
         return
     }
     if sub == "version" || sub == "--version" || sub == "-v" {
-        println("hexa cloud 0.5.0 — leak-guard: `rent` auto-registers a ./pods.json row by default (--no-register opts out) · `watchdog` COMPOSITE idle classifier (uptime≥thr AND util≤cap AND no-compute-proc AND no-workdir — slow-but-working pod NEVER killed) + ./pods.json budget.cap cross-ref (breach → kill lowest-value pod) · [0.4.1: rent --max-wait-sec bounded SSH gate · 0.4.0: nohup/fire --register · 0.3.x: resolve/ssh-config/identity/registry-guard/dft-run]")
+        println("hexa cloud 0.5.1 — leak-guard: `rent` is IDEMPOTENT per (project,purpose) — a repeated same-key rent REUSES the live M5 pod instead of leaking a new orphan (--force-new overrides; `rent --selftest` checks it offline) · `rent` auto-registers a ./pods.json row by default (--no-register opts out) · `watchdog` COMPOSITE idle classifier (uptime≥thr AND util≤cap AND no-compute-proc AND no-workdir — slow-but-working pod NEVER killed) + ./pods.json budget.cap cross-ref (breach → kill lowest-value pod) · [0.4.1: rent --max-wait-sec bounded SSH gate · 0.4.0: nohup/fire --register · 0.3.x: resolve/ssh-config/identity/registry-guard/dft-run]")
         return
     }
     if sub == "rent" || sub == "up" {
+        // SELFTEST (must be FIRST, before any provider dispatch) — exercises
+        // the IDEMPOTENT-RENT dedup logic against an in-process M5 registry
+        // (snapshot/restore the operator's live file). NO provider call, NO
+        // billing instance. `cloud rent --selftest`.
+        if _has_flag(av, si + 1, "--selftest") == 1 {
+            exit(_cloud_rent_selftest())
+        }
         // Provision a GPU pod. The first post-verb token is the provider
         // (vast|runpod); flags follow. Wires vast.hexa / runpod.hexa
         // lifecycle fns + pod_registry. $-INCURRING — the only verb that
@@ -1819,7 +1957,8 @@ fn main() {
         // RENTED a real pod because -h/--help was just an unparsed trailing
         // token. Print usage and exit 0 — creating NOTHING.
         if _has_flag(av, si + 1, "--help") == 1 || _has_flag(av, si + 1, "-h") == 1 {
-            println("usage: cloud rent <vast|runpod> [--gpu T] [--image IMG] [--disk GiB] [--owner TAG] [--query Q] [--max-wait-sec N] [--no-register]")
+            println("usage: cloud rent <vast|runpod> [--gpu T] [--image IMG] [--disk GiB] [--owner TAG] [--query Q] [--max-wait-sec N] [--no-register] [--force-new]")
+            println("  IDEMPOTENT per (project,owner): a repeated same-key rent REUSES the live M5 pod; --force-new provisions a fresh one. `cloud rent --selftest` checks the dedup offline.")
             return
         }
         if si + 1 >= len(av) {
