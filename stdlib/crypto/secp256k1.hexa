@@ -1,0 +1,284 @@
+// HEXA Standard Library — crypto/secp256k1
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// secp256k1 field + curve — pure hexa. Self-contained fixed 256-bit field over
+// p = 2^256 - 2^32 - 977, sibling of ed25519/x25519/p256. 16×16-bit limbs,
+// little-endian (limb[0] = LSB) so every partial product fits in 64-bit, matching
+// the p256 idiom. Reduction uses the secp256k1 special form 2^256 ≡ 2^32 + 977
+// (0x1000003D1) mod p (libsecp256k1 canonical fold). let-mut (#1506).
+//
+// PR1 surface (field only): add/sub/mul mod p · modular inverse (Fermat). Point
+// add/double (PR2) and k·G + encode (PR3) land on top. Variable-time only —
+// use case is PUBLIC pubkey derivation (no secret to protect); constant-time is
+// out of scope (deferred, documented).
+
+// === Big-int: 16 × 16-bit limbs, little-endian (limb[0] = LSB) ===
+
+@pure
+fn _zeros() -> [int] {
+    let mut o: [int] = []
+    let mut i = 0
+    while i < 16 { o.push(0); i = i + 1 }
+    return o
+}
+
+@pure
+fn _be32_to_limbs(b: [int]) -> [int] {
+    // 32 big-endian bytes → 16 little-endian 16-bit limbs.
+    let mut o = _zeros()
+    let mut i = 0
+    while i < 16 {
+        let hi = b[30 - 2 * i] & 0xFF
+        let lo = b[31 - 2 * i] & 0xFF
+        o[i] = (hi << 8) | lo
+        i = i + 1
+    }
+    return o
+}
+
+@pure
+fn _limbs_to_be32(a: [int]) -> [int] {
+    let mut o: [int] = []
+    let mut i = 0
+    while i < 32 { o.push(0); i = i + 1 }
+    i = 0
+    while i < 16 {
+        o[30 - 2 * i] = (a[i] >> 8) & 0xFF
+        o[31 - 2 * i] = a[i] & 0xFF
+        i = i + 1
+    }
+    return o
+}
+
+@pure
+fn _cmp(a: [int], b: [int]) -> int {
+    let mut i = 15
+    while i >= 0 {
+        if a[i] > b[i] { return 1 }
+        if a[i] < b[i] { return -1 }
+        i = i - 1
+    }
+    return 0
+}
+
+@pure
+fn _is_zero(a: [int]) -> bool {
+    let mut i = 0
+    while i < len(a) { if a[i] != 0 { return false }; i = i + 1 }
+    return true
+}
+
+@pure
+fn _add16(a: [int], b: [int]) -> [int] {
+    // 16-limb add → 17 limbs (last is carry)
+    let mut o: [int] = []
+    let mut c = 0
+    let mut i = 0
+    while i < 16 {
+        let t = a[i] + b[i] + c
+        o.push(t & 0xFFFF)
+        c = (t >> 16) & 1
+        i = i + 1
+    }
+    o.push(c)
+    return o
+}
+
+@pure
+fn _sub16(a: [int], b: [int]) -> [int] {
+    // 16-limb a - b → 17 limbs (last is borrow as -1 if negative, else 0)
+    let mut o: [int] = []
+    let mut br = 0
+    let mut i = 0
+    while i < 16 {
+        let t = a[i] - b[i] - br
+        if t < 0 { o.push((t + 0x10000) & 0xFFFF); br = 1 }
+        else { o.push(t & 0xFFFF); br = 0 }
+        i = i + 1
+    }
+    o.push(0 - br)
+    return o
+}
+
+// 16-limb × 16-limb → 32-limb (schoolbook). Each output limb < 2^32 < 2^63.
+@pure
+fn _mul(a: [int], b: [int]) -> [int] {
+    let mut acc: [int] = []
+    let mut k = 0
+    while k < 32 { acc.push(0); k = k + 1 }
+    let mut i = 0
+    while i < 16 {
+        let mut j = 0
+        let mut carry = 0
+        while j < 16 {
+            let t = acc[i + j] + a[i] * b[j] + carry
+            acc[i + j] = t & 0xFFFF
+            carry = t >> 16
+            j = j + 1
+        }
+        acc[i + 16] = acc[i + 16] + carry
+        i = i + 1
+    }
+    return acc
+}
+
+// === Constants (secp256k1) ===
+
+// p = 2^256 - 2^32 - 977
+//   = ffffffff ffffffff ffffffff ffffffff ffffffff ffffffff fffffffe fffffc2f
+@pure
+fn _P() -> [int] {
+    return _be32_to_limbs([0xff,0xff,0xff,0xff, 0xff,0xff,0xff,0xff, 0xff,0xff,0xff,0xff, 0xff,0xff,0xff,0xff,
+                          0xff,0xff,0xff,0xff, 0xff,0xff,0xff,0xff, 0xff,0xff,0xff,0xfe, 0xff,0xff,0xfc,0x2f])
+}
+// n = group order
+@pure
+fn _N() -> [int] {
+    return _be32_to_limbs([0xff,0xff,0xff,0xff, 0xff,0xff,0xff,0xff, 0xff,0xff,0xff,0xff, 0xff,0xff,0xff,0xfe,
+                          0xba,0xae,0xdc,0xe6, 0xaf,0x48,0xa0,0x3b, 0xbf,0xd2,0x5e,0x8c, 0xd0,0x36,0x41,0x41])
+}
+
+// === secp256k1 special-form fast reduction (2^256 ≡ 2^32 + 977 mod p) ===
+// Input: 32×16-bit-limb product (< 2^512). Output: 16×16-bit limbs in [0, p).
+// Split T = H·2^256 + L; T ≡ L + H·0x1000003D1 (mod p). Fold twice (H shrinks
+// each pass) then conditional-subtract p a few times.
+@pure
+fn _reduce_p(t: [int]) -> [int] {
+    let mut cur: [int] = []
+    let mut i = 0
+    while i < 32 { cur.push(t[i]); i = i + 1 }
+    let mut pass = 0
+    while pass < 2 {
+        // L = cur[0..15], H = cur[16..31]; acc = L + H*0x1000003D1
+        // 0x1000003D1 = 2^32 + 0x3D1 ; fold each high limb into low at +0 and +2 limbs.
+        let mut acc: [int] = []
+        i = 0
+        while i < 33 { acc.push(0); i = i + 1 }
+        i = 0
+        while i < 16 { acc[i] = cur[i]; i = i + 1 }
+        // H * 0x3D1 (low part) added at limb offset 0
+        i = 0
+        while i < 16 {
+            acc[i] = acc[i] + cur[16 + i] * 0x3D1
+            i = i + 1
+        }
+        // H * 2^32 added at limb offset 2
+        i = 0
+        while i < 16 {
+            acc[i + 2] = acc[i + 2] + cur[16 + i]
+            i = i + 1
+        }
+        // carry-normalize to 16-bit limbs
+        let mut carry = 0
+        i = 0
+        while i < 33 { let v = acc[i] + carry; acc[i] = v & 0xFFFF; carry = v >> 16; i = i + 1 }
+        // new cur = 32-limb (may still have a small high part for pass 2)
+        let mut nxt: [int] = []
+        i = 0
+        while i < 32 { nxt.push(acc[i]); i = i + 1 }
+        cur = nxt
+        pass = pass + 1
+    }
+    // now cur < 2^257-ish; take low 16 limbs and conditional-subtract p
+    let mut r: [int] = []
+    i = 0
+    while i < 16 { r.push(cur[i]); i = i + 1 }
+    // fold any residual high limbs (cur[16..]) one more time (tiny)
+    let mut hi = 0
+    i = 16
+    while i < 32 { if cur[i] != 0 { hi = 1 }; i = i + 1 }
+    if hi == 1 {
+        let mut acc2: [int] = []
+        i = 0
+        while i < 18 { acc2.push(0); i = i + 1 }
+        i = 0
+        while i < 16 { acc2[i] = cur[i]; i = i + 1 }
+        i = 16
+        while i < 32 {
+            acc2[i - 16] = acc2[i - 16] + cur[i] * 0x3D1
+            acc2[i - 14] = acc2[i - 14] + cur[i]
+            i = i + 1
+        }
+        let mut c2 = 0
+        i = 0
+        while i < 18 { let v = acc2[i] + c2; acc2[i] = v & 0xFFFF; c2 = v >> 16; i = i + 1 }
+        r = []
+        i = 0
+        while i < 16 { r.push(acc2[i]); i = i + 1 }
+    }
+    let p = _P()
+    let mut guard = 0
+    while guard < 8 {
+        if _cmp(r, p) >= 0 {
+            let s = _sub16(r, p)
+            i = 0
+            while i < 16 { r[i] = s[i]; i = i + 1 }
+            guard = guard + 1
+        } else { guard = 99 }
+    }
+    return r
+}
+
+@pure
+fn _mul_mod_p(a: [int], b: [int]) -> [int] {
+    return _reduce_p(_mul(a, b))
+}
+
+@pure
+fn _add_mod_p(a: [int], b: [int]) -> [int] {
+    let p = _P()
+    let s = _add16(a, b)
+    let mut r: [int] = []
+    let mut i = 0
+    while i < 16 { r.push(s[i]); i = i + 1 }
+    if s[16] != 0 || _cmp(r, p) >= 0 {
+        let d = _sub16(r, p)
+        i = 0
+        while i < 16 { r[i] = d[i]; i = i + 1 }
+    }
+    return r
+}
+
+@pure
+fn _sub_mod_p(a: [int], b: [int]) -> [int] {
+    let p = _P()
+    let s = _sub16(a, b)
+    let mut r: [int] = []
+    let mut i = 0
+    while i < 16 { r.push(s[i]); i = i + 1 }
+    if s[16] != 0 {
+        let d = _add16(r, p)
+        i = 0
+        while i < 16 { r[i] = d[i]; i = i + 1 }
+    }
+    return r
+}
+
+@pure
+fn _pow_mod_p(a: [int], e: [int]) -> [int] {
+    // square-and-multiply, MSB first (e = 16-limb little-endian)
+    let mut result = _zeros()
+    result[0] = 1
+    let mut bit = 255
+    while bit >= 0 {
+        result = _mul_mod_p(result, result)
+        let limb = bit >> 4
+        let off = bit & 15
+        if ((e[limb] >> off) & 1) == 1 { result = _mul_mod_p(result, a) }
+        bit = bit - 1
+    }
+    return result
+}
+
+@pure
+fn _inv_mod_p(a: [int]) -> [int] {
+    // Fermat: a^(p-2) mod p  (p prime). p[0] = 0xFC2F even → decrement low limb by 2.
+    let p = _P()
+    let mut e: [int] = []
+    let mut i = 0
+    while i < 16 { e.push(p[i]); i = i + 1 }
+    e[0] = e[0] - 2
+    return _pow_mod_p(a, e)
+}

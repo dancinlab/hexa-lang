@@ -1,0 +1,68 @@
+// HEXA Standard Library — crypto/secp256k1 self-test (field KAT — PR1)
+// @ci_gate
+use "stdlib/crypto/secp256k1"
+
+fn unhex(s: string) -> [int] {
+    let H = "0123456789abcdef"
+    let mut b: [int] = []
+    let mut i = 0
+    while i < byte_len(s) { b.push(H.index_of(s.substring(i,i+1))*16 + H.index_of(s.substring(i+1,i+2))); i = i + 2 }
+    return b
+}
+fn hx(b: [int]) -> string {
+    let H = "0123456789abcdef"
+    let mut p: [string] = []
+    let mut i = 0
+    while i < len(b) { p.push(H.substring((b[i]>>4)&15,((b[i]>>4)&15)+1)); p.push(H.substring(b[i]&15,(b[i]&15)+1)); i=i+1 }
+    return p.join("")
+}
+// field element from big-endian hex (64 hex chars)
+fn fe(s: string) -> [int] { return _be32_to_limbs(unhex(s)) }
+// field element back to big-endian hex
+fn fehx(a: [int]) -> string { return hx(_limbs_to_be32(a)) }
+
+let mut pass = 0
+let mut total = 0
+fn ck(name: string, got: string, want: string) {
+    total = total + 1
+    if got == want { pass = pass + 1 } else { println("FAIL " + name + " got=" + got) }
+}
+
+fn main() {
+    let a = fe("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
+    let b = fe("fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210")
+
+    // round-trip: hex → limbs → hex (be32 contract)
+    ck("roundtrip_a", fehx(a), "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
+
+    // (p-1) + 1 ≡ 0 mod p
+    let pm1 = fe("fffffffffffffffffffffffffffffffffffffffffffffffffffffffefffffc2e")
+    let one = fe("0000000000000000000000000000000000000000000000000000000000000001")
+    ck("pm1_plus_1", fehx(_add_mod_p(pm1, one)),
+       "0000000000000000000000000000000000000000000000000000000000000000")
+
+    // fixed mul vs python oracle: a*b mod p
+    ck("mul_fixed", fehx(_mul_mod_p(a, b)),
+       "8c644419c8c50984e1e06f7bc8ebdb3c375c9addc912acf38dfac0488d5f655d")
+
+    // gx^2 mod p vs python oracle (reduction stress)
+    let gx = fe("79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798")
+    ck("gx_sq", fehx(_mul_mod_p(gx, gx)),
+       "8550e7d238fcf3086ba9adcf0fb52a9de3652194d06cb5bb38d50229b854fc49")
+
+    // inv(a)·a ≡ 1 mod p
+    ck("inv_mul", fehx(_mul_mod_p(_inv_mod_p(a), a)),
+       "0000000000000000000000000000000000000000000000000000000000000001")
+
+    // inv(a) vs python oracle
+    ck("inv_fixed", fehx(_inv_mod_p(a)),
+       "f37164d6ff61ed527289824f2aac8343ca55b3c9eeabe44cd6379acbc0ba895d")
+
+    // sub wrap: 0 - 1 ≡ p-1 mod p
+    let zero = fe("0000000000000000000000000000000000000000000000000000000000000000")
+    ck("sub_wrap", fehx(_sub_mod_p(zero, one)),
+       "fffffffffffffffffffffffffffffffffffffffffffffffffffffffefffffc2e")
+
+    println("secp256k1 field self-test: " + to_string(pass) + "/" + to_string(total))
+    if pass == total { println("PASS") } else { println("FAILED") }
+}
