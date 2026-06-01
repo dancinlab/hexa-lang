@@ -1,0 +1,107 @@
+// HEXA Standard Library — qforge/vloc
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// QFORGE front-end brick 3/5 — the LOCAL pseudopotential V_loc(G) → V_ext.
+//
+// upf.hexa parses the radial local channel V_loc(r) (Rydberg, on the UPF log
+// mesh r[], with integration weights rab[] = dr/di). This brick Fourier-
+// transforms it into the plane-wave form factor V_loc(G), then the assembler
+// (brick 5) builds V_ext(G) = Σ_species V_loc^s(G) · S_s(G).
+//
+// ── The transform (QE `vloc_of_g`, Rydberg e²=2) ─────────────────────────────
+//
+// The 3D radial Fourier transform (per unit cell volume Ω) of a spherical f(r):
+//   f(G) = (4π/Ω) ∫₀^∞ r² j0(Gr) f(r) dr ,   j0(x)=sin x / x .
+//
+// V_loc(r) has a long-range Coulomb tail V_loc(r→∞) → −2Z/r (Rydberg). Its bare
+// transform diverges as 1/G², so we Coulomb-SUBTRACT: split
+//   V_loc(r) = [V_loc(r) + 2Z/r]   −   (−2Z/r) .
+// The bracket is SHORT-RANGE (→0 as r→∞) so its j0-integral converges, and the
+// analytic transform of −2Z/r is −8πZ/(Ω G²). Hence (G≠0):
+//
+//   V_loc(G) = (4π/Ω) ∫ r² j0(Gr) [V_loc(r) + 2Z/r] dr  −  8πZ/(Ω G²).
+//
+// The −8πZ/(Ω G²) is the Coulomb tail asymptote the selftest checks against.
+//
+// G=0: the bare 1/G² Coulomb piece is cancelled by the compensating uniform
+// background + Hartree (charge-neutral cell). What remains is the short-range
+// integral — the "αZ" term:
+//   V_loc(G=0) = (4π/Ω) ∫ r² [V_loc(r) + 2Z/r] dr.
+//
+// All integrals use the UPF log mesh: ∫ f(r) dr = Σ_i f(r_i) · rab_i.
+//
+// Units: V_loc(r) is RYDBERG (UPF convention); the returned V_loc(G) is in the
+// same energy unit ×(1/Ω) (i.e. Ry per cell-volume — the assembler keeps the
+// unit system consistent; the QFORGE front-end runs Hartree internally and the
+// assembler applies the Ry→Ha ½ factor at composition, d4).
+//
+// d3/d4: element-agnostic — operates on parsed (r, rab, vloc, Z) arrays. No
+// hardcoded species; a new pseudopotential is just data.
+
+let _VLOC_4PI: float = 12.56637061435917295384   // 4π
+let _VLOC_8PI: float = 25.13274122871834590768   // 8π
+
+// j0(x) = sin(x)/x, with the removable singularity j0(0)=1 handled.
+fn _vloc_j0(x: float) -> float {
+    if x < 1.0e-8 && x > -1.0e-8 {
+        // series: 1 − x²/6 + … (keeps accuracy near 0 without 0/0)
+        return 1.0 - x * x / 6.0
+    }
+    return sin(x) / x
+}
+
+// ── Short-range j0 integral  I_sr(G) = ∫ r² j0(Gr) [V_loc(r)+2Z/r] dr ─────────
+//   Log-mesh quadrature with the UPF rab weights. Internal helper.
+fn _vloc_isr(r: [float], rab: [float], vloc: [float], z: float, gmag: float) -> float {
+    let n = len(r)
+    let mut acc = 0.0
+    let mut i = 0
+    while i < n {
+        let ri = r[i]
+        // short-range bracket V_sr(r) = V_loc(r) + 2Z/r  (→0 at large r)
+        let vsr = if ri > 1.0e-12 { vloc[i] + 2.0 * z / ri } else { vloc[i] }
+        acc = acc + ri * ri * _vloc_j0(gmag * ri) * vsr * rab[i]
+        i = i + 1
+    }
+    return acc
+}
+
+// ── V_loc(G) over a list of |G| magnitudes  (per unit volume Ω) ───────────────
+//   r, rab, vloc : parsed UPF radial mesh / weights / local potential (Ry).
+//   z            : Z_valence.
+//   omega        : cell volume Ω (bohr³).
+//   gmags        : list of |G| magnitudes (bohr⁻¹). G=0 is allowed (|G|<tiny).
+// Returns [float] of length nG: V_loc(G) = (4π/Ω) I_sr(G) − 8πZ/(Ω G²) (G≠0),
+//   and (4π/Ω) I_sr(0) for G=0.
+// Malformed (array length mismatch or Ω≤0) → [].
+pub fn qforge_vloc_of_g(r: [float], rab: [float], vloc: [float], z: float,
+                        omega: float, gmags: [float]) -> [float] {
+    let n = len(r)
+    if n == 0 || len(rab) != n || len(vloc) != n || omega <= 0.0 { return [] }
+    let inv_omega = 1.0 / omega
+    let mut out: [float] = []
+    let mut ig = 0
+    let ng = len(gmags)
+    while ig < ng {
+        let gm = gmags[ig]
+        let isr = _vloc_isr(r, rab, vloc, z, gm)
+        let mut vg = _VLOC_4PI * inv_omega * isr
+        if gm > 1.0e-8 {
+            // analytic Coulomb tail of −2Z/r : −8πZ/(Ω G²)
+            vg = vg - _VLOC_8PI * z * inv_omega / (gm * gm)
+        }
+        out.push(vg)
+        ig = ig + 1
+    }
+    return out
+}
+
+// ── Coulomb-tail asymptote helper (the selftest's closed-form anchor) ─────────
+//   For large G the short-range integral I_sr → 0, so V_loc(G) → −8πZ/(Ω G²).
+//   Returns that analytic asymptote at a given |G|. (G=0 → 0.)
+pub fn qforge_vloc_coulomb_tail(z: float, omega: float, gmag: float) -> float {
+    if omega <= 0.0 || gmag <= 1.0e-8 { return 0.0 }
+    return -_VLOC_8PI * z / (omega * gmag * gmag)
+}

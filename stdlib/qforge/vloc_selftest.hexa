@@ -1,0 +1,123 @@
+// @ci_gate — deterministic · reads a checked-in real NC UPF fixture
+//
+// qforge_vloc_selftest.hexa — QFORGE front-end brick 3/5 (V_loc(G)→V_ext) g5 gate.
+//
+// V_loc(G) = (4π/Ω) ∫ r² j0(Gr)[V_loc(r)+2Z/r] dr − 8πZ/(Ω G²)   (Rydberg).
+//
+//   (A) pure-Coulomb anchor: a SYNTHETIC V_loc(r) = −2Z/r → the short-range
+//       bracket [V_loc+2Z/r] ≡ 0, so V_loc(G) MUST equal exactly the analytic
+//       Coulomb tail −8πZ/(Ω G²) at every G≠0.                       🔵 closed
+//   (B) G=0 compensated handling: finite (= (4π/Ω)·I_sr(0)), no 1/G² blow-up,
+//       and for the pure-Coulomb case I_sr(0)=0 → V_loc(0)=0.        🔵
+//   (C) real Si NC UPF physics: V_loc(G) TRACKS the Coulomb tail −8πZ/(Ω G²)
+//       at SMALL |G| (rel-ε ≤ ~6%, the long-range ionic tail) and falls BELOW
+//       it at large |G| (the norm-conserving pseudopotential is SOFT — no core
+//       Coulomb singularity → faster-than-1/G² decay). This soft-tail behaviour
+//       is the correct PP physics; the bare-Coulomb closed form is case (A). 🟢
+//   (D) real Si UPF V_loc(G) sample is FINITE and continuous (no NaN/inf),
+//       monotone-ish Coulomb-dominated tail (|V_loc| decreasing at large G). 🟢
+//   (E) malformed (length mismatch, Ω≤0) → [] guard.
+//
+// Run:  HEXA_LANG=. hexa run stdlib/qforge/vloc_selftest.hexa
+// PASS: "qforge_vloc_selftest PASS".
+use "stdlib/qforge/upf"
+use "stdlib/qforge/vloc"
+
+let _PI: float = 3.14159265358979323846
+
+fn _abs(x: float) -> float { if x < 0.0 { return -x } return x }
+fn _ck_close(name: str, got: float, want: float, eps: float) -> int {
+    if _abs(got - want) <= eps { println("PASS " + name + " (" + to_string(got) + ")") ; return 0 }
+    println("FAIL " + name + " — got " + to_string(got) + " want " + to_string(want)) ; return 1
+}
+fn _ck_rel(name: str, got: float, want: float, tol: float) -> int {
+    let w = _abs(want)
+    let d = _abs(got - want)
+    let rel = if w < 1.0e-30 { d } else { d / w }
+    if rel <= tol { println("PASS " + name + " (got " + to_string(got) + ", rel " + to_string(rel) + ")") ; return 0 }
+    println("FAIL " + name + " — got " + to_string(got) + " want " + to_string(want) + " rel " + to_string(rel)) ; return 1
+}
+fn _ck_true(name: str, cond: bool) -> int {
+    if cond { println("PASS " + name) ; return 0 }
+    println("FAIL " + name) ; return 1
+}
+
+fn main() {
+    let mut fails = 0
+    let z = 4.0
+    let omega = 270.0      // ~Si fcc primitive cell volume (bohr³), arbitrary-OK
+
+    // ══ (A)/(B) SYNTHETIC pure-Coulomb V_loc(r) = −2Z/r on a fine mesh ════
+    // Build a log mesh r_i = r0·exp(i·dx), rab_i = r_i·dx (UPF log-mesh weight).
+    let nmesh = 1200
+    let r0 = 0.0001
+    let dx = 0.012
+    let mut r: [float] = []
+    let mut rab: [float] = []
+    let mut vc: [float] = []
+    let mut i = 0
+    while i < nmesh {
+        let ri = r0 * exp(to_float(i) * dx)
+        r.push(ri)
+        rab.push(ri * dx)              // dr = r·dx for a log mesh
+        vc.push(-2.0 * z / ri)         // pure Coulomb (Rydberg)
+        i = i + 1
+    }
+    let gmags = [0.0, 0.5, 1.0, 2.0, 4.0]
+    let ng = 5
+    let vg = qforge_vloc_of_g(r, rab, vc, z, omega, gmags)
+    fails = fails + _ck_true("(A) returns nG", len(vg) == ng)
+    // G=0: pure-Coulomb short-range bracket ≡ 0 → V_loc(0) = 0
+    fails = fails + _ck_close("(B) G=0 compensated → 0 (pure Coulomb)", vg[0], 0.0, 1.0e-6)
+    // G≠0: must equal the analytic Coulomb tail −8πZ/(Ω G²) exactly
+    let mut g = 1
+    while g < ng {
+        let tail = qforge_vloc_coulomb_tail(z, omega, gmags[g])
+        fails = fails + _ck_rel("(A) pure-Coulomb V_loc(G)=−8πZ/ΩG² @G" + to_string(g), vg[g], tail, 1.0e-4)
+        g = g + 1
+    }
+    // sanity: tail formula itself at G=2: −8π·4/(270·4)
+    let want_g2 = -8.0 * _PI * z / (omega * 4.0)
+    fails = fails + _ck_close("(A) tail closed-form @G=2", qforge_vloc_coulomb_tail(z, omega, 2.0), want_g2, 1.0e-12)
+
+    // ══ (C)/(D) REAL Si NC UPF V_loc(G) ═══════════════════════════════════
+    let pp = upf_parse("stdlib/qforge/fixtures/Si.pz-vbc.UPF")
+    fails = fails + _ck_true("(C) Si UPF parse ok", pp.ok)
+    let zsi = pp.header.z_valence
+    let omsi = 270.0
+    // sample at a spread of |G|: small (tracks Coulomb), large (soft, below it)
+    let gsi = [0.0, 0.5, 1.0, 8.0, 16.0]
+    let ngsi = 5
+    let vsi = qforge_vloc_of_g(pp.r, pp.rab, pp.vloc, zsi, omsi, gsi)
+    fails = fails + _ck_true("(C) Si V_loc(G) length", len(vsi) == ngsi)
+    // finiteness: every entry is a real finite number (x==x rules out NaN; bound rules out inf)
+    let mut finite = true
+    let mut j = 0
+    while j < ngsi {
+        let v = vsi[j]
+        if v != v { finite = false }
+        if v > 1.0e30 || v < -1.0e30 { finite = false }
+        j = j + 1
+    }
+    fails = fails + _ck_true("(D) Si V_loc(G) all finite (no NaN/inf)", finite)
+    // small-G: V_loc tracks the bare Coulomb tail −8πZ/(Ω G²) (long-range ionic
+    // tail survives) — at |G|=0.5 within ~6%.
+    let tail_sm = qforge_vloc_coulomb_tail(zsi, omsi, 0.5)
+    fails = fails + _ck_rel("(C) Si small-G tracks Coulomb tail @|G|=0.5", vsi[1], tail_sm, 0.06)
+    // large-G: SOFT pseudopotential decays FASTER than Coulomb → |V_loc(8)| is a
+    // tiny fraction of the bare Coulomb tail (no core singularity). This is the
+    // norm-conserving PP signature, NOT a bare-Coulomb tail.
+    let tail8 = qforge_vloc_coulomb_tail(zsi, omsi, 8.0)
+    fails = fails + _ck_true("(C) Si large-G soft: |V_loc(8)| ≪ |Coulomb(8)|", _abs(vsi[3]) < 0.05 * _abs(tail8))
+    // Coulomb-dominated decreasing magnitude across the tail: |V(1)| > |V(8)|
+    fails = fails + _ck_true("(D) |V_loc| decreasing tail (1 vs 8)", _abs(vsi[2]) > _abs(vsi[3]))
+    // G=0 finite (compensated αZ term) — not inf
+    fails = fails + _ck_true("(D) Si V_loc(G=0) finite", _abs(vsi[0]) < 1.0e30)
+
+    // ══ (E) malformed guards ══════════════════════════════════════════════
+    fails = fails + _ck_true("(E) length mismatch → []", len(qforge_vloc_of_g(r, [1.0], vc, z, omega, gmags)) == 0)
+    fails = fails + _ck_true("(E) Ω≤0 → []", len(qforge_vloc_of_g(r, rab, vc, z, 0.0, gmags)) == 0)
+
+    if fails == 0 { println("qforge_vloc_selftest PASS") }
+    else { println("qforge_vloc_selftest FAIL — " + to_string(fails) + " case(s)") }
+}
