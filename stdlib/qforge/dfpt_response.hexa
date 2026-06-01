@@ -50,9 +50,20 @@ fn fc_norm_diff(a: [float], b: [float], n: int) -> float {
 // ── 단일 변위방향 β 의 자기무모순 응답: {Δψₙ}_occ 묶음 (평탄 M_occ × n) ────────
 //   반환 끝에 메타 4개 append: [.., max_iters, max_res, conv(1/0), scf_it].
 //   dvb = 방향 b 의 bare ΔV|ψₙ 묶음 (caller 의 dV_bare_provider 산출).
+//   mix = LINEAR MIXING β ∈ (0,1] for the screening fixed point. β=1 = un-damped
+//     Picard (diverges when the dielectric-feedback gain > 1 on a screened metal FC —
+//     d15-class); 0<β<1 damps that feedback. β≤0 or β>1 → clamped to 1.0. The
+//     metallic-wall breakthrough path for a truly-screened FC is Anderson (see
+//     qforge/screening_anderson) but a β knob already lets a caller stabilise the
+//     common moderate-gain case without diverging to NaN (d2 named knob).
+//   EMPTY-KERNEL GUARD: a kernel returning len(dvscr)≠n (e.g. the d4 zero/unsupported
+//     limit) is treated as ZERO correction — the bare fixed point in one pass — never
+//     an out-of-bounds index / NaN injection (the gap brick-(d) flagged here).
 fn fc_scf_response(H_apply, occ_states: [[float]], eps: [float],
                    dvb: [float], drho_to_dvscf,
-                   n: int, m_occ: int, tol: float, max_iter: int) -> [float] {
+                   n: int, m_occ: int, tol: float, max_iter: int, mix: float) -> [float] {
+    let mut beta = mix
+    if beta <= 0.0 || beta > 1.0 { beta = 1.0 }
     // ΔV_scf 묶음 = M_occ × n (상태별 ΔV ψₙ).  초기 = bare.
     let mut dvscf = []
     let mut t = 0
@@ -93,13 +104,19 @@ fn fc_scf_response(H_apply, occ_states: [[float]], eps: [float],
         }
         // (4) 차폐 갱신: 상태별 ΔV ψₙ = (ΔV_bare ψₙ) + (ΔV_scr ⊙ ψₙ).
         //   drho_to_dvscf 가 r-공간 차폐포텐셜 ΔV_H+xc(r)(길이 n)를 돌려준다(국소 곱).
+        //   EMPTY-KERNEL GUARD (has_corr): len(dvscr)≠n → ZERO correction (bare 한계).
+        //   LINEAR MIX: ΔV_scf ← (1−β)·old + β·target — damps the metallic feedback.
         let dvscr = drho_to_dvscf(drho)
+        let has_corr = (len(dvscr) == n)
         let mut new_dvscf = []
         let mut nb = 0
         while nb < m_occ {
             let mut i = 0
             while i < n {
-                new_dvscf.push(dvb[nb * n + i] + dvscr[i] * occ_states[nb][i])
+                let idx = nb * n + i
+                let mut target = dvb[idx]
+                if has_corr { target = target + dvscr[i] * occ_states[nb][i] }
+                new_dvscf.push((1.0 - beta) * dvscf[idx] + beta * target)
                 i = i + 1
             }
             nb = nb + 1
@@ -129,6 +146,21 @@ fn fc_scf_response(H_apply, occ_states: [[float]], eps: [float],
 pub fn qforge_force_constant(H_apply, occ_states: [[float]], eps: [float],
                              dV_bare_provider, drho_to_dvscf,
                              natoms_dim: int, tol: float, max_iter: int) -> ForceConstResult {
+    // backward-compatible β=1 (un-damped Picard). For a screened metal FC use
+    // qforge_force_constant_mixed with 0<β<1 (d4: single generic path; this delegates).
+    return qforge_force_constant_mixed(H_apply, occ_states, eps, dV_bare_provider,
+                                       drho_to_dvscf, natoms_dim, tol, max_iter, 1.0)
+}
+
+// ── β-mixed variant: the SAME force-constant solve with a screening LINEAR-MIXING
+//   knob β ∈ (0,1] passed through to fc_scf_response. A screened metal FC needs β<1
+//   to damp the dielectric-feedback instability (the gap brick-(d) flagged: the bare
+//   qforge_force_constant runs un-damped Picard and NaN's on a screened-metal kernel).
+//   β=1 == qforge_force_constant. The empty-kernel guard in fc_scf_response also
+//   makes a ZERO/unsupported kernel return the bare FC in one pass with no NaN. ──
+pub fn qforge_force_constant_mixed(H_apply, occ_states: [[float]], eps: [float],
+                             dV_bare_provider, drho_to_dvscf,
+                             natoms_dim: int, tol: float, max_iter: int, mix: float) -> ForceConstResult {
     let m_occ = occ_states.len()
     let n = occ_states[0].len()
     let dim = natoms_dim
@@ -148,7 +180,7 @@ pub fn qforge_force_constant(H_apply, occ_states: [[float]], eps: [float],
     let mut bb = 0
     while bb < dim {
         let resp = fc_scf_response(H_apply, occ_states, eps, bare_all[bb],
-                                   drho_to_dvscf, n, m_occ, tol, max_iter)
+                                   drho_to_dvscf, n, m_occ, tol, max_iter, mix)
         // 메타 꼬리 4개 분리: [.. , max_st_iters, max_res, conv, scf_it]
         let total = resp.len()
         let st_it = resp[total - 4]
