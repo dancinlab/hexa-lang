@@ -57,7 +57,11 @@ pub struct DrillOpts {
     // once per round AFTER `_honesty_gate` and BEFORE checkpoint flush,
     // with a single-line JSON payload on stdin describing the round:
     //   {"round":N,"total":T,"smash":..,"free":..,"abs":..,"meta":..,
-    //    "hyper":..,"res":..,"tc":..,"sigma":"...","seed":"..."}
+    //    "hyper":..,"res":..,"tc":..,"sigma":"...","seed":"...",
+    //    "candidates":[{"id":..,"conf":..,"axiom":..,"src":..,"expr":..},..]}
+    // "candidates" carries the round's discovery array (capped by
+    // `verifier_cand_cap`) so the verifier can screen individual proposals
+    // — e.g. a materials verifier feeds each `expr` to a QFORGE λ screen.
     // The command MUST print a single stdout line of the form
     //   verdict=pass|fail|continue [rationale=<inline-text>]
     // Any other output (or non-zero exit) is mapped to verdict=error.
@@ -78,7 +82,17 @@ pub struct DrillOpts {
     //    per-candidate `conf` signal (compiler/smash/candidate.hexa); no
     //    new scorer is introduced. Honesty (g6/g63): a surfaced row is a
     //    PROPOSAL, not a grading — it carries no pass/fail/formal tier.
-    surface_top: i64                  // 0 = off · N>0 = emit top-N ⚪ proposals on skip (default 8)
+    surface_top: i64,                 // 0 = off · N>0 = emit top-N ⚪ proposals on skip (default 8)
+    // ── Verifier candidate-array feed (resolves the drill.hexa:142
+    //    contract: "verifier should consult the discovery candidate
+    //    array"). When a verifier IS installed, the round's discovery
+    //    candidates are serialized under the payload's "candidates" key,
+    //    capped at `verifier_cand_cap` per round to bound the single-line
+    //    payload (a round can produce hundreds; the verifier consults the
+    //    overlay file for the full set). 0 = omit (back-compat — the
+    //    verifier receives "candidates":[]). Intended use: materials →
+    //    QFORGE λ in-silico screen reads `expr` per candidate.
+    verifier_cand_cap: i64            // 0 = omit array · N>0 = feed up to N candidates (default 64)
 }
 
 pub fn drill_default_opts() -> DrillOpts {
@@ -96,7 +110,8 @@ pub fn drill_default_opts() -> DrillOpts {
         verifier_cmd: "",
         verifier_timeout_s: 0,
         verifier_authoritative: false,
-        surface_top: 8
+        surface_top: 8,
+        verifier_cand_cap: 64
     }
 }
 
@@ -149,12 +164,67 @@ fn _resolve_engine(flag: string) -> string {
     return "mk9"
 }
 
-// Build the single-line JSON payload handed to the pluggable verifier
-// on stdin. We keep this minimal — round counter, total + per-stage
-// yields, resonance sigma, seed echo — and intentionally do NOT include
-// the discovery candidate array (verifier should consult the overlay
-// file directly if it needs full per-discovery audit).
-fn _verifier_payload(round: i64, seed: string, y: RoundYields, sigma: string) -> string {
+// Minimal JSON-string escape — backslash, double-quote, and the control
+// chars that would break a single-line JSON payload. Discovery exprs are
+// free-form (s-expression-ish) so they CAN contain quotes; without this
+// the candidate array would emit malformed JSON and the verifier's parse
+// would fail. ASCII-oriented (the payload is single-line by construction).
+fn _json_escape(s: string) -> string {
+    let mut out = ""
+    let mut i = 0
+    while i < len(s) {
+        let c = s.substring(i, i + 1)
+        if c == "\\" { out = out + "\\\\" }
+        else if c == "\"" { out = out + "\\\"" }
+        else if c == "\n" { out = out + "\\n" }
+        else if c == "\r" { out = out + "\\r" }
+        else if c == "\t" { out = out + "\\t" }
+        else { out = out + c }
+        i = i + 1
+    }
+    return out
+}
+
+// Serialize up to `cap` discovery candidates as a JSON array. Each element
+// is {id, conf, axiom, src, expr} — the per-candidate fields a verifier
+// needs to screen the round's proposals (e.g. a materials verifier feeding
+// `expr` into a QFORGE λ in-silico screen). `cap <= 0` → "[]" (the verifier
+// opted out of the array; it may still consult the overlay file). The cap
+// bounds the single-line payload size (a round can produce hundreds of
+// candidates); the verifier consults the overlay file for the full set.
+fn _candidates_json(cands: array, cap: i64) -> string {
+    if cap <= 0 { return "[]" }
+    let n = len(cands)
+    let mut out = "["
+    let mut i = 0
+    let mut emitted = 0
+    while i < n && emitted < cap {
+        let c = cands[i]
+        if len(c.id) > 0 {
+            if emitted > 0 { out = out + "," }
+            out = out + "{\"id\":\"" + _json_escape(c.id) + "\""
+            out = out + ",\"conf\":" + to_string(c.conf)
+            out = out + ",\"axiom\":" + (if c.axiom { "true" } else { "false" })
+            out = out + ",\"src\":\"" + _json_escape(c.src) + "\""
+            out = out + ",\"expr\":\"" + _json_escape(c.expr) + "\"}"
+            emitted = emitted + 1
+        }
+        i = i + 1
+    }
+    out = out + "]"
+    return out
+}
+
+// Build the single-line JSON payload handed to the pluggable verifier on
+// stdin. Carries the round counter, total + per-stage yields, resonance
+// sigma, seed echo — AND (per the drill.hexa:142 contract resolution) the
+// round's discovery candidate array under "candidates", capped by
+// `cand_cap`. A verifier that screens individual proposals (materials →
+// QFORGE λ) reads "candidates"; a verifier that only watches aggregate
+// round shape ignores it. `cand_cap <= 0` emits "candidates":[] (the
+// pre-PR back-compat payload shape, plus an empty array key).
+fn _verifier_payload(round: i64, seed: string, y: RoundYields, sigma: string,
+                     cands: array, cand_cap: i64) -> string {
     let mut s = "{"
     s = s + "\"round\":" + to_string(round)
     s = s + ",\"total\":" + to_string(y.total)
@@ -166,7 +236,8 @@ fn _verifier_payload(round: i64, seed: string, y: RoundYields, sigma: string) ->
     s = s + ",\"res\":" + to_string(y.res_n)
     s = s + ",\"tc\":" + to_string(y.tc_n)
     s = s + ",\"sigma\":\"" + sigma + "\""
-    s = s + ",\"seed\":\"" + seed + "\""
+    s = s + ",\"seed\":\"" + _json_escape(seed) + "\""
+    s = s + ",\"candidates\":" + _candidates_json(cands, cand_cap)
     s = s + "}"
     return s
 }
@@ -216,11 +287,11 @@ fn _verifier_parse_rationale(raw: string) -> string {
 // verdict line. Verifier crash / timeout / malformed output → "error"
 // (NEVER halts — fail-open).
 fn _verifier_run(opts: DrillOpts, round: i64, seed: string,
-                  y: RoundYields, sigma: string) -> VerifierVerdict {
+                  y: RoundYields, sigma: string, cands: array) -> VerifierVerdict {
     if len(opts.verifier_cmd) == 0 {
         return VerifierVerdict { verdict: "skip", rationale: "", round: round }
     }
-    let payload = _verifier_payload(round, seed, y, sigma)
+    let payload = _verifier_payload(round, seed, y, sigma, cands, opts.verifier_cand_cap)
     // Wrap the verifier command with `timeout <N>s` when bounded — best
     // effort, requires the `timeout` utility on PATH (coreutils on
     // Linux, `gtimeout` on macOS Homebrew). When unavailable the call
@@ -517,7 +588,7 @@ pub fn drill_run(seed: string, opts: DrillOpts) -> DrillResult {
         // The verdict is always logged (DRILL_VERIFIER stderr line) and,
         // for pass/fail, emitted as a __BT_AI2__ sentinel so a subsequent
         // bt_ai2_audit observes it alongside the existing BT-AI2 row.
-        let vv = _verifier_run(opts, round, seed, rr.yields, rr.sigma_best)
+        let vv = _verifier_run(opts, round, seed, rr.yields, rr.sigma_best, rr.discoveries)
         _verifier_audit_emit(vv)
         verifier_last_verdict = vv.verdict
 
@@ -645,13 +716,18 @@ fn main() {
     opts.surface_top = cli_parse_int(cli_find_flag(args, "--top", ""), opts.surface_top)
 
     // Pluggable verifier hook (phanes scope B). When absent, drill behaves
-    // identically to the pre-hook surface. `--verifier-cmd` is a shell
-    // string (treated as a single command for sh -c). `--verifier-timeout`
-    // is best-effort via the `timeout` utility prefix. `--verifier-strict`
-    // promotes pass/fail verdicts to authoritative loop control.
-    let vcmd = cli_find_flag(args, "--verifier-cmd", "")
+    // identically to the pre-hook surface. `--verifier <cmd>` (alias
+    // `--verifier-cmd`) is a shell string (treated as a single command for
+    // sh -c) that receives the round payload — including the discovery
+    // candidate array under "candidates" (drill.hexa:142 contract) — on
+    // stdin. `--verifier-timeout` is best-effort via the `timeout` utility
+    // prefix. `--verifier-strict` promotes pass/fail verdicts to
+    // authoritative loop control. `--verifier-cand-cap N` bounds the
+    // candidate array fed per round (default 64; 0 = omit).
+    let vcmd = cli_find_flag(args, "--verifier", cli_find_flag(args, "--verifier-cmd", ""))
     if len(vcmd) > 0 { opts.verifier_cmd = vcmd }
     opts.verifier_timeout_s = cli_parse_int(cli_find_flag(args, "--verifier-timeout", ""), opts.verifier_timeout_s)
+    opts.verifier_cand_cap = cli_parse_int(cli_find_flag(args, "--verifier-cand-cap", ""), opts.verifier_cand_cap)
     if cli_has_flag(args, "--verifier-strict") { opts.verifier_authoritative = true }
 
     let r = drill_run(seed, opts)
