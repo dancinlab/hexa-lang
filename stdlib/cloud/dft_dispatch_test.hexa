@@ -581,5 +581,31 @@ fn main() {
     _check("fix-a: direct FAIL + proxy scp OK but UNRESOLVED guard → FAIL (resolved gate)",
         _seq(_dft_pick_transport(0, 0, 1), ""), 1)
 
+    // ── fix (c): DURABLE offer-blacklist (inbox scp-255 fix c) ───────────
+    // PURE parse: a JSON array of {id,ts}; entries newer than ttl are active.
+    let bl_body = "[{\"id\":\"28919799\",\"ts\":1000},{\"id\":\"38917013\",\"ts\":2000}]"
+    // now=2500, ttl=1000 → 28919799 (age 1500 ≥ ttl) EXPIRED; 38917013 (age 500) active.
+    let act_a = _dft_blacklist_active(bl_body, 2500, 1000)
+    _check("fix-c: active drops the TTL-expired offer", len(act_a), 1)
+    _check("fix-c: the still-fresh offer survives", _dft_blacklist_excluded("38917013", act_a), 1)
+    _check("fix-c: the expired offer is NOT excluded", _dft_blacklist_excluded("28919799", act_a), 0)
+    // now=2500, ttl=10000 → both fresh.
+    let act_b = _dft_blacklist_active(bl_body, 2500, 10000)
+    _check("fix-c: wide TTL keeps both offers active", len(act_b), 2)
+    _check("fix-c: 28919799 excluded under wide TTL (the loop offer)", _dft_blacklist_excluded("28919799", act_b), 1)
+    // now=0 (date unavailable) → fail-safe KEEP (never silently drop).
+    let act_c = _dft_blacklist_active(bl_body, 0, 1)
+    _check("fix-c: now==0 fail-safe keeps all (no silent drop)", len(act_c), 2)
+    // empty / non-array body → empty active set (no crash).
+    _check("fix-c: empty body → empty active", len(_dft_blacklist_active("", 2500, 1000)), 0)
+    _check("fix-c: non-array body → empty active", len(_dft_blacklist_active("{\"id\":\"x\"}", 2500, 1000)), 0)
+    // PURE render → parse round-trip: rendered ids re-parse to the same set.
+    let rendered = _dft_blacklist_render(["28919799", "38917304"], 5000)
+    let rt = _dft_blacklist_active(rendered, 5000, 1000)
+    _check("fix-c: render→parse round-trips 2 ids", len(rt), 2)
+    _check("fix-c: round-trip preserves 28919799", _dft_blacklist_excluded("28919799", rt), 1)
+    _check("fix-c: round-trip preserves 38917304", _dft_blacklist_excluded("38917304", rt), 1)
+    _check("fix-c: empty render → empty parse", len(_dft_blacklist_active(_dft_blacklist_render([], 5000), 5000, 1000)), 0)
+
     println("dft_dispatch_test PASS")
 }

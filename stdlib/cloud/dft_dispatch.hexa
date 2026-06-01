@@ -297,15 +297,168 @@ fn _dft_query_to_cpu_first(gpu_query: str) -> str {
     return gpu_query.replace("dph_total<2.0", "dph_total<0.6")
 }
 
+// ── DURABLE offer-blacklist (inbox scp-255 fix c) ─────────────────────
+// A small TTL'd cross-invocation file (`~/.hx/cloud/offer-blacklist.json`):
+// after a transport-fail teardown the offending offer_id is recorded, and the
+// rent offer-search EXCLUDES blacklisted offers — so a re-fire (steered or not)
+// CANNOT re-pick the same broken offer (the confirmed 28919799 loop). The
+// `--query "direct_port_count>=2"` steer did NOT bypass it because that predicate
+// is ANDed into the search, not a forcing exclusion; this blacklist IS the
+// exclusion. The TTL (DFT_BLACKLIST_TTL_SEC) lets a transiently-bad offer return
+// to the pool eventually so the blacklist never permanently shrinks the market.
+
+let DFT_BLACKLIST_TTL_SEC = 86400   // 24h — a transport-refusing offer stays out a day
+let DFT_BL_MAX_SKIP = 6             // bounded re-search passes when the top pick is blacklisted
+
+// _dft_blacklist_path — durable cross-invocation blacklist file. Under ~/.hx/cloud
+// (NOT a deck dir / NOT /tmp) so it survives reboots + applies across campaigns.
+fn _dft_blacklist_path() -> str {
+    return env_var("HOME") + "/.hx/cloud/offer-blacklist.json"
+}
+
+// _dft_now_sec — current unix epoch seconds (via `date +%s`). 0 if unavailable
+// so TTL comparisons degrade to "keep" (a parse-failure never silently drops).
+fn _dft_now_sec() -> int {
+    let s = exec("date +%s 2>/dev/null").trim()
+    let v = _dft_atoi(s)
+    if v <= 0 {
+        return 0
+    }
+    return v
+}
+
+// _dft_blacklist_active — PURE: parse the blacklist JSON `body` and return the
+// still-fresh offer ids (entries newer than `ttl` seconds). Each entry is
+// `{"id":"<offer>","ts":<epoch>}`. An entry with ts<=0 OR now==0 is KEPT (we
+// cannot age it → fail-safe toward exclusion). A non-array body → empty.
+fn _dft_blacklist_active(body: str, now: int, ttl: int) -> [str] {
+    let mut active = []
+    if len(body) == 0 {
+        return active
+    }
+    let parsed = json_parse(body)
+    if type_of(parsed) != "array" {
+        return active
+    }
+    let mut i = 0
+    while i < len(parsed) {
+        let id_v = json_object_get(parsed[i], "id")
+        let oid = to_string(id_v)
+        let ts_v = json_object_get(parsed[i], "ts")
+        let mut ts = 0
+        if type_of(ts_v) == "int" {
+            ts = ts_v
+        }
+        let fresh = ts <= 0 || now == 0 || (now - ts) < ttl
+        if fresh == true {
+            if len(oid) > 0 {
+                active.push(oid)
+            }
+        }
+        i = i + 1
+    }
+    return active
+}
+
+// _dft_blacklist_excluded — PURE: 1 iff `offer_id` is in the active set.
+fn _dft_blacklist_excluded(offer_id: str, active: [str]) -> int {
+    let mut i = 0
+    while i < len(active) {
+        if active[i] == offer_id {
+            return 1
+        }
+        i = i + 1
+    }
+    return 0
+}
+
+// _dft_blacklist_render — PURE: render an id list + timestamp back to the JSON
+// array body. Used by _dft_blacklist_add to rewrite the GC'd file.
+fn _dft_blacklist_render(ids: [str], now: int) -> str {
+    let mut body = "["
+    let mut i = 0
+    while i < len(ids) {
+        if i > 0 {
+            body = body + ","
+        }
+        body = body + "{\"id\":\"" + ids[i] + "\",\"ts\":" + to_string(now) + "}"
+        i = i + 1
+    }
+    return body + "]"
+}
+
+// _dft_blacklist_load — IO: read the durable file, return the fresh ids.
+fn _dft_blacklist_load() -> [str] {
+    let path = _dft_blacklist_path()
+    if !file_exists(path) {
+        return []
+    }
+    return _dft_blacklist_active(read_file(path), _dft_now_sec(), DFT_BLACKLIST_TTL_SEC)
+}
+
+// _dft_blacklist_add — IO: record `offer_id` as blacklisted (durable, TTL'd).
+// Read-modify-write: load the fresh set, drop a pre-existing entry for this id
+// (so its ts is refreshed), append it, rewrite the GC'd file. Idempotent.
+fn _dft_blacklist_add(offer_id: str) {
+    if len(offer_id) == 0 {
+        return
+    }
+    let _mk = exec("mkdir -p " + _shq_local(env_var("HOME") + "/.hx/cloud") + " 2>/dev/null")
+    let now = _dft_now_sec()
+    let active = _dft_blacklist_load()
+    let mut kept = []
+    let mut i = 0
+    while i < len(active) {
+        if active[i] != offer_id {
+            kept.push(active[i])
+        }
+        i = i + 1
+    }
+    kept.push(offer_id)
+    let _w = write_text(_dft_blacklist_path(), _dft_blacklist_render(kept, now))
+    println("[dft-run] ④ offer " + offer_id + " BLACKLISTED (durable, TTL " + to_string(DFT_BLACKLIST_TTL_SEC) + "s) — a re-fire will not re-pick it.")
+}
+
+// _dft_search_not_blacklisted — search a tier, EXCLUDING durably-blacklisted
+// offers (fix c). vast_search_offers returns the single best (claim-locked) pick;
+// if that pick is blacklisted, CLAIM it (so the in-process claim-lock skips it on
+// the next pass — vast_offer_claim walks past already-claimed ids) and re-search,
+// bounded to DFT_BL_MAX_SKIP passes. This turns the durable blacklist into a hard
+// EXCLUSION at rent time so a re-fire cannot re-pick a known-bad offer (28919799).
+// Returns ok=0 when the tier is empty OR every candidate within the skip budget
+// is blacklisted (the caller then falls through to the next tier / fails clean).
+fn _dft_search_not_blacklisted(query: str, verified_only: int) -> VastOffer {
+    let active = _dft_blacklist_load()
+    let mut tries = 0
+    let mut skipped = []
+    while tries < DFT_BL_MAX_SKIP {
+        let off = vast_search_offers(query, verified_only)
+        if off.ok == 0 {
+            return off
+        }
+        if _dft_blacklist_excluded(off.offer_id, active) == 0 {
+            return off
+        }
+        // blacklisted pick — claim it so the next search skips it, then retry.
+        println("[dft-run] ① RENT: offer " + off.offer_id + " is BLACKLISTED (durable) — skipping, re-searching.")
+        let _c = vast_offer_claim([off.offer_id])
+        skipped.push(off.offer_id)
+        tries = tries + 1
+    }
+    return VastOffer { ok: 0, offer_id: "", dph: "",
+        message: "all offers within the skip budget are blacklisted (" + to_string(len(skipped)) + " skipped)" }
+}
+
 // _dft_rent_first_offer — try the CPU-first tier, then fall back to the supplied
 // GPU-inclusive query (current behavior). Returns the first tier whose search
 // yields a rentable offer; if the CPU tier is empty it transparently retries the
 // GPU query, so a scarce-CPU-offer day still rents exactly as it does today.
+// Both tiers EXCLUDE durably-blacklisted offers (fix c).
 fn _dft_rent_first_offer(gpu_query: str) -> VastOffer {
     let cpu_query = _dft_query_to_cpu_first(gpu_query)
     if cpu_query != gpu_query {
         println("[dft-run] ① RENT tier-1 (CPU-first): `" + cpu_query + "`")
-        let cpu = vast_search_offers(cpu_query, 1)
+        let cpu = _dft_search_not_blacklisted(cpu_query, 1)
         if cpu.ok == 1 {
             println("[dft-run]   CPU-first offer cleared — renting it (GPU premium avoided).")
             return cpu
@@ -313,7 +466,7 @@ fn _dft_rent_first_offer(gpu_query: str) -> VastOffer {
         println("[dft-run]   no CPU-first offer cleared the floor — falling back to GPU-inclusive tier.")
     }
     println("[dft-run] ① RENT tier-2 (GPU-inclusive fallback): `" + gpu_query + "`")
-    return vast_search_offers(gpu_query, 1)
+    return _dft_search_not_blacklisted(gpu_query, 1)
 }
 
 // ── ③ relax → scf coordinate parser (guard) ──────────────────────────
@@ -1491,6 +1644,9 @@ fn _dft_go(deck: str, image: str, disk: int, owner: str, query: str, identity: s
     let up = _dft_upload(inst.instance_id, host, ssh_opts, ep.host, ep.port, identity, deck)
     if up.ok == 0 {
         println("[dft-run] upload: " + up.message)
+        // fix (c): BOTH direct + proxy refused — this offer is transport-broken.
+        // Blacklist it durably so a re-fire cannot re-pick it (the 28919799 loop).
+        _dft_blacklist_add(offer.offer_id)
         return _dft_teardown(inst.instance_id, 1)
     }
     host = up.host
@@ -1954,6 +2110,9 @@ fn _dft_detach(deck: str, image: str, disk: int, owner: str, query: str, identit
     let up = _dft_upload(inst.instance_id, host, ssh_opts, ep.host, ep.port, identity, deck)
     if up.ok == 0 {
         println("[dft-run] upload: " + up.message)
+        // fix (c): BOTH direct + proxy refused — this offer is transport-broken.
+        // Blacklist it durably so a re-fire cannot re-pick it (the 28919799 loop).
+        _dft_blacklist_add(offer.offer_id)
         return _dft_teardown(inst.instance_id, 1)
     }
     host = up.host
