@@ -2507,6 +2507,35 @@ For each Tier-A sub-phase:
 
 ## Log
 
+### 2026-06-01 — `runtime_pure.hexa` math: floor/ceil/round/abs FFI→PURE (4 libm externs dropped)
+
+Ported 4 of the 11 libm FFI math wrappers in `self/runtime_pure.hexa`
+(`rt_math_floor`/`rt_math_ceil`/`rt_math_round`/`rt_math_abs`) from
+`extern fn __c_*` (libm) to **pure hexa exact arithmetic** — no libm, no
+syscall, no HexaVal carrier path (the codegen type-erasure wall the
+SELFHOST+ common-wall flags). These are integer-rounding ops, NOT
+transcendental, so they DON'T trip the `stdlib_trig_libm` ban on
+hand-rolled Taylor series (that ban is scoped to sin/cos/exp/…). The
+remaining 7 (sqrt/pow/exp/log/tanh/sin/cos) stay on libm FFI by that
+directive — irreducible-external interface (correct terminal state).
+
+**Method.** `to_int(float)` truncates toward zero (empirically verified:
+`to_int(3.7)=3`, `to_int(-2.3)=-2`). floor/ceil correct the
+sign-direction fractional case; round() = round-half-away-from-zero (C99
+`round()`). ceil() preserves IEEE sign-of-zero (`ceil(-0.5) = -0.0`)
+via `0.0 * -1.0` (the `-0.0` literal normalizes to `+0.0` in hexa).
+
+**Verify (g5 — verbatim smoke, 17/17 PASS, byte-exact vs C libm).** The
+4 ported bodies were run via `hexa run` against a C-libm `cc -x c -`
+reference (`floor(-2.3)=-3` · `ceil(-0.5)=-0` · `round(-2.5)=-3` ·
+`fabs(-2.3)=2.3` all matched). Parse-error count unchanged at 31 vs
+origin/main (all pre-existing `match`/`new_str` keyword collisions in
+the reference module — none introduced). Full verdict:
+`.verdicts/runtime-pure-math-floor-ceil-round-abs/smoke.txt`.
+
+PORT STATUS SUMMARY in `runtime_pure.hexa` updated: PURE-math 2→6,
+FFI-libm 11→7 (total 53 fns unchanged: 38 PURE / 9 FFI / 6 HYBRID).
+
 ### 2026-05-26 — step-4 assessment: the irreducible-core FLOOR (runtime.c retirement terminal)
 
 scan-B of the post-step-2/3 state (both "frontiers" the user asked to pursue):
@@ -5333,3 +5362,184 @@ runtime hexa-native 화 거리 = ~13,737 lines × 평균 5-10 lines/fn = 잔여 
 frontier 는 OPEN — physical 천장 (runtime hexa-native + zero-libm + zero-libc) 까지 도달 가능 · time-bounded 아님. 본 세션 종료는 cycle pause.
 
 `feedback-closure-is-physical-limit` 적용: closure = approaching limit, not checkbox. 이 세션 = -1.56% · 5 lane closed · next-tier spec'd.
+
+## 2026-06-01 — bucket-B (syscall) / bucket-C (phase-H) reconnaissance — terminal closed-negative map
+
+Loop RUNTIME-lane recon. Bucket A (`self/runtime_pure.hexa` pure-fn) already
+retired at its carrier-path wall (the prior bucket-A addendum). This round audits the
+other two open RUNTIME buckets — **(B) syscall residuals** and **(C) phase-H backend
+flip** — to find any item that is a concrete `.hexa` move needing NEITHER the
+HexaVal carrier/codegen wall NOR a sign/pool gate. Each residual is classified into
+one of four categories:
+
+- **(i) grounded** — a clean `.hexa` move, no carrier wall, no sign gate
+- **(ii) carrier-wall-blocked** — needs the codegen type-erasure / HexaVal carrier path
+- **(iii) phase-H backend flip** — architectural (HEXA_BACKEND=native runtime FLOOR)
+- **(iv) sign/pool-gated** — requires a heavy `cc --regen` rebuild behind `! sidecar sign local`
+
+**Result: ZERO category-(i) items. Both buckets are terminal closed-negative.** No
+port was forced (g5/g63). Cross-ref: `domains/HEXA-SELFHOST+.md` common-wall catalog
+items (1)+(4) = the codegen emit type-erasure wall (HexaVal carrier), (2)+(5) = the
+`cc --regen` sign/pool gate.
+
+### Bucket B — syscall residuals → ALREADY CLOSED (no open syscall-port item)
+
+The framed "~17 residual syscalls" lane resolves to the **Linux self-host arch-gate
+17-fn set** (`read · write · open · close · mkdir · dup2 · lseek · select · poll ·
+nanosleep · wait4 · getpid · getuid · kill · fcntl · ioctl · stat · fstat · mmap ·
+gettimeofday · exit`), tracked in `RUNTIME.log.md` 2026-05-25T13:30Z. That lane was
+**CLOSED 2026-05-27** — every `HXLCL_SYS_*` callsite guarded; both `bootstrap
+(linux-arm64)` and `bootstrap (linux-x86_64)` GitHub Actions SUCCESS (run
+#26470523969). At HEAD, `aprime_cc` measures **0 undefined externs** — every syscall
+is inline `svc #0x80`, not even a stub (north-star MET, #1058/#1059).
+
+The only syscall-touching code that remains FFI is the interpreter-side HYBRID I/O in
+`self/runtime_pure.hexa` (`rt_read_file` / `rt_write_file` / `rt_write_bytes` /
+`rt_read_file_bytes` / `rt_exec` / `rt_exec_with_status`) backed by the minimal-FFI
+block (`__c_popen/pclose/fgets/fopen/fclose/fread/fwrite/fseek/ftell`) — these are the
+bucket-A I/O residuals, classified BLOCKED-(iv)/(iii) (syscall delegation; cannot be
+pure hexa without the carrier/syscall floor). No new syscall is on FFI awaiting a
+pure-hexa port.
+
+| bucket-B item | category | reason |
+|---------------|----------|--------|
+| Linux arch-gate 17-fn (`read`…`exit`) | — CLOSED | guarded + both Linux CI bootstrap SUCCESS (2026-05-27); not reopenable as a port |
+| `aprime_cc` syscall externs | — CLOSED | 0 undefined externs; every syscall inline `svc #0x80` |
+| interp HYBRID I/O 6 fns (`rt_read_file`…`rt_exec_with_status`) | (iii)/(iv) | syscall-backed builtin delegation — irreducible carrier/syscall floor (bucket-A residual) |
+| minimal-FFI block (`__c_popen`…`__c_ftell`) | (iv) | libc stdio behind the HYBRID I/O; raw fd/popen floor |
+
+### Bucket C — phase-H backend flip → all residuals (ii)/(iii)/(iv)
+
+Phase-H splits cleanly into TWO sub-lanes with very different status:
+
+**(C-1) hexa-native LINKER (`tool/hexa_ld.hexa`) — macOS code residual = ZERO.**
+The five increments closed BRANCH26 + PAGE21/PAGEOFF12 (ADD/LDR) + ARM64_RELOC_ADDEND
++ full multi-section layout (`__text`/`__const`/`__cstring`/`__data`/`__bss`) + dyld
+function import (`__stubs`+`__got`+chained-fixups) + dyld DATA import (GOT_LOAD
+PAGE21/PAGEOFF12). The once-planned **multi-dylib ordinal** boss is a documented
+**🔴 CLOSED-NEGATIVE** (2026-05-27): modern macOS re-exports libm/libc through the
+single `libSystem.B.dylib` umbrella (ordinal 1), so the existing single-dylib linker
+already covers all 161 standard undefineds. The doc states it verbatim: phase-H
+linker is "**macOS 기준 코드 잔여 없음**". Future generalizations (multi-dylib for
+3rd-party frameworks, lazy-bind, scattered reloc, TLV thread-locals) are NOT RUNTIME
+blockers — they only matter for a non-libSystem 3rd-party dylib (e.g. Metal/CUDA).
+
+**(C-2) HEXA_BACKEND=native runtime FLOOR — the actual wall.** `HEXA_BACKEND=native`
+is 27/27 sound for USER code; the residual is the runtime FLOOR: the HexaVal
+tagged-union repr + arena + GC (~240 fns, `RUNTIME.floor.md` F1) must be self-emitted
+as machine code (no C struct, no C-source memory primitives). This is exactly the
+codegen type-erasure / HexaVal carrier wall (common-wall catalog (1)+(4)). It is not a
+`.hexa` source move — it is a codegen-emit change, and verifying it requires the heavy
+`cc --regen` fixpoint build behind the sign/pool gate (common-wall (2)+(5)).
+
+| bucket-C item | category | reason |
+|---------------|----------|--------|
+| multi-dylib ordinal mapping | — CLOSED-NEG | macOS re-exports via libSystem umbrella; not a blocker (2026-05-27 falsifier) |
+| linker reloc set (BRANCH26/PAGE21/PAGEOFF12/ADDEND/GOT_LOAD) | — CLOSED | all 5 increments RUN-verified; macOS linker code residual = ZERO |
+| full multi-section layout (`__text`…`__bss`) | — CLOSED | inc3 RUN-verified ("ms ok" exit7) |
+| lazy-bind / scattered reloc / TLV | (iii) | future generalization, not a RUNTIME completion blocker |
+| `hexaval-repr-emit` / `runtime-primitive-emit` (B9.6) | (ii)+(iv) | HexaVal repr/arena/GC self-emit = codegen carrier wall + `cc --regen` sign-gated verify |
+| HEXA_BACKEND flip runtime FLOOR (repr/arena/GC ~240 fn) | (ii)+(iii) | codegen emit wall (carrier) AND architectural (multi-session) |
+| boot `.s` lowering (rp2040/stm32) — RUNTIME.flip B9.1 | (iii) | RFC-063/064 vector-table codegen lowering lane; embedded-target architectural, not in tree |
+
+### Disposition: NO grounded port available; deliverable is the MAP
+
+Every bucket-B item is either already CLOSED (Linux arch-gate, aprime_cc externs) or a
+syscall/carrier floor (HYBRID I/O). Every bucket-C item is either already CLOSED
+(linker reloc + multi-section + multi-dylib-negative) or the HexaVal carrier wall +
+architectural backend flip + sign-gated `cc --regen`. **There is NO category-(i)
+item** — no clean `.hexa` move that avoids both the carrier/codegen wall and the sign
+gate. No marginal port was forced; nothing was marked ported because nothing is
+cleanly portable this round. This is a valid terminal (closed-negative) result.
+
+Falsifier (how to reopen): bucket B reopens if a NEW syscall appears on FFI awaiting a
+pure-hexa/svc-trap port (not delegated to a syscall floor). Bucket C reopens if (a) the
+codegen type-erasure / HexaVal carrier wall is lifted at the emit layer (then
+`hexaval-repr-emit` becomes grounded), OR (b) a 3rd-party non-libSystem dylib enters
+the link (then multi-dylib ordinal reopens as grounded linker `.hexa` work), OR (c) the
+`cc --regen` sign/pool gate is opened in a verification window. Otherwise the next
+RUNTIME unlock is strictly the carrier-path / phase-H backend-flip tier — out of scope
+for any single clean `.hexa` port.
+### 2026-06-01 — `runtime_pure.hexa` PURE-math port: +`trunc`/`sign`/`fmod` (loop r3 RUNTIME lane)
+
+`self/runtime_pure.hexa` 의 PURE-math 셋에 세 함수 추가 — **순수 정수산술**
+(libm FFI 불필요, transcendental 아님, syscall/HexaVal 무관, 사이블링 PR #2418의
+`floor/ceil/round/abs` 와 NON-OVERLAPPING):
+
+- `rt_math_trunc(x)` — `to_float(to_int(x))` (to_int 은 zero-toward narrow → C `trunc`)
+- `rt_math_sign(x)`  — signum +1/-1/0 (signed-zero collapses to 0.0)
+- `rt_math_fmod(a,b)` — `a - trunc(a/b)*b` (truncated quotient → C `fmod` 부호규칙), b==0→0.0
+
+**VERIFY (g5) — byte-exact vs `cc -O2 -lm` C reference**, 19 cases
+(trunc×7 · sign×6 · fmod×6), signed-zero(`-0.0`==`0.0`) 정규화 후:
+
+```
+=== DIFF (empty = byte-exact match) ===
+diff exit=0
+```
+
+PORT STATUS: PURE-math **2 → 5** · 파일 TOTAL **53 → 56** (37 PURE / 13 FFI / 6 HYBRID).
+잔존 FFI-libm 11개(sqrt/pow/exp/log/floor/ceil/round/abs/tanh/sin/cos) 중 7 transcendental
+은 `stdlib_trig_libm` ban 으로 libm 유지가 올바름. parse-error baseline 변화 없음
+(32 → 32 · 사전존재 `match` reserved-keyword 잔재, 본 변경 무관). verdict:
+`.verdicts/runtime-pure-math-trunc-sign-fmod/byte-diff.txt`.
+
+## 2026-06-01 — `self/runtime_pure.hexa` pure-fn (bucket A) lane RETIRED — carrier-path wall reached
+
+Loop round 4, RUNTIME lane. Audited every remaining FFI/HYBRID function in
+`self/runtime_pure.hexa` (the bucket-A "cleanly-portable pure" lane) to find the
+next pure batch portable WITHOUT the HexaVal carrier path (repr + arena + GC),
+WITHOUT syscalls, and WITHOUT hand-rolled transcendentals. **Result: no remaining
+function is cleanly portable. The pure-fn lane has hit its terminal wall.** This is
+a valid terminal (closed-negative) result, not a failure — every residual is blocked
+for a principled, enumerated reason.
+
+Verified state at audit time: `self/runtime_pure.hexa` is byte-identical to
+`origin/main` (the `#2418`/`#2419` floor-family/trunc-sign-fmod ports referenced in
+the loop brief never landed in this repo — `origin/main` HEAD is `#2420`; those
+function bodies are still `__c_floor`/`__c_ceil`/`__c_round`/`__c_fabs` FFI here, and
+`rt_math_trunc`/`rt_math_sign`/`rt_math_fmod` do not exist). Per loop policy these
+floor-family + trunc/sign/fmod functions are CLAIMED by sibling lanes and were left
+untouched (not re-ported), even though they are themselves pure-portable.
+
+### Residual classification — every non-PURE function and why it is blocked
+
+Math FFI (11 fns, lines 551-561):
+| fn | extern | class | why blocked |
+|----|--------|-------|-------------|
+| `rt_math_sqrt` | `__c_sqrt` | transcendental | `stdlib_trig_libm` ban — STAY on libm |
+| `rt_math_pow`  | `__c_pow`  | transcendental | same |
+| `rt_math_exp`  | `__c_exp`  | transcendental | same |
+| `rt_math_log`  | `__c_log`  | transcendental | same |
+| `rt_math_tanh` | `__c_tanh` | transcendental | same |
+| `rt_math_sin`  | `__c_sin`  | transcendental | same |
+| `rt_math_cos`  | `__c_cos`  | transcendental | same |
+| `rt_math_floor`| `__c_floor`| floor-family   | pure-portable BUT claimed by sibling lane (do-not-re-port) |
+| `rt_math_ceil` | `__c_ceil` | floor-family   | same |
+| `rt_math_round`| `__c_round`| floor-family   | same |
+| `rt_math_abs`  | `__c_fabs` | floor-family   | same |
+
+Memory FFI (2 fns, lines 630-631): `rt_alloc_raw → __c_malloc`, `rt_free_raw → __c_free`
+— raw heap allocation. Irreducible carrier/syscall (mmap/brk under libc). Cannot be
+pure hexa. BLOCKED (carrier-path/syscall).
+
+HYBRID I/O (6 fns, lines 584-623): `rt_read_file`, `rt_write_file`, `rt_write_bytes`,
+`rt_read_file_bytes`, `rt_exec`, `rt_exec_with_status` — delegate to interpreter
+builtins backed by syscalls (open/read/write + popen). The minimal-FFI block
+(`__c_popen/pclose/fgets/fopen/fclose/fread/fwrite/fseek/ftell`, lines 19-29) exists
+solely for these. BLOCKED (syscall).
+
+### Disposition: every residual is one of {transcendental-ban, sibling-claimed-floor-family, syscall, raw-malloc}
+
+There is NO function in `runtime_pure.hexa` that is a pure scalar computation AND
+not transcendental AND not in the sibling-claimed floor-family. The bucket already
+holds 34 PURE functions (20 string + 12 array + `rt_math_min`/`rt_math_max`); the
+only pure-computable math residuals are the floor-family explicitly reserved by a
+sibling lane. **No marginal port was forced.** Honesty gate (g5/g63): nothing marked
+ported because nothing was ported — this round is a documented terminal finding.
+
+Falsifier (how to reopen this lane): if a new pure-computation function (non-libm,
+non-syscall, non-malloc) appears in `runtime_pure.hexa` still on FFI, OR if the
+sibling floor-family lane is abandoned, the bucket-A lane reopens. Otherwise the
+next runtime unlock is the carrier-path tier (HexaVal repr + arena + GC) or the
+B-class macho relocation infra spec'd above — both out of scope for the pure-fn lane.
