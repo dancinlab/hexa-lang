@@ -41,6 +41,7 @@ fn _scan_dirs() -> array {
 fn _ban_patterns() -> array {
     return [
         "/Users/",
+        "/home/",
         "/tmp/",
         "/var/",
         "/etc/",
@@ -114,6 +115,49 @@ fn _shell_quote(s: string) -> string {
     return "'" + s + "'"
 }
 
+// --staged mode: scan ONLY the lines a commit ADDS (git diff --cached -U0,
+// '+'-prefixed). Net-new only — never flags pre-existing drift, so no baseline
+// is needed and the gate can block at pre-commit without grandfathering. This
+// is the enforcement surface for "machine-absolute paths must never enter the
+// tree" (/Users/<me>/…, /home/<me>/… break every other contributor's host).
+fn _staged_hexa_files() -> array {
+    let cmd = "git diff --cached --name-only --diff-filter=ACM -- '*.hexa' 2>/dev/null || true"
+    let raw = to_string(exec(cmd))
+    let mut out = []
+    if len(raw) == 0 { return out }
+    for ln in split(raw, "\n") {
+        let l = _rstrip(ln)
+        if len(l) == 0 { continue }
+        out.push(l)
+    }
+    return out
+}
+
+fn _grep_staged_added(path: string, pats: array) -> array {
+    let cmd = "git diff --cached -U0 -- " + _shell_quote(path) + " 2>/dev/null || true"
+    let raw = to_string(exec(cmd))
+    let mut hits = []
+    if len(raw) == 0 { return hits }
+    for ln in split(raw, "\n") {
+        if len(ln) < 1 { continue }
+        // added lines only; skip the `+++ b/<file>` diff header
+        if ln.substring(0, 1) != "+" { continue }
+        if len(ln) >= 3 && ln.substring(0, 3) == "+++" { continue }
+        let text = ln.substring(1, len(ln))
+        // same filters as the dir scan: literal present, not @const opt-out, not a pure // comment
+        if !text.contains("\"") { continue }
+        if text.contains("@const") { continue }
+        let ts = text.trim_start()
+        if len(ts) >= 2 && ts.substring(0, 2) == "//" { continue }
+        for p in pats {
+            if text.contains(p) {
+                hits.push([path, "added", p, path + ":added:" + p])
+            }
+        }
+    }
+    return hits
+}
+
 let _raw_args = args()
 let mut cli = []
 let mut _ai = 2
@@ -128,11 +172,50 @@ let mut list_only = false
 // --warn forces warn-only mode (exit 0 on hit) for debugging/triage.
 let mut block_mode = true
 let mut warn_mode = false
+let mut staged_mode = false
 for a in cli {
     if a == "--bake" { bake = true }
     else if a == "--list" { list_only = true }
     else if a == "--block" { block_mode = true }
     else if a == "--warn" { warn_mode = true; block_mode = false }
+}
+// --staged is the pre-commit gate flag; detect it (and a co-occurring --warn)
+// from the full args() vector so it is robust to the user-arg start offset.
+for a in _raw_args {
+    if a == "--staged" { staged_mode = true }
+    else if a == "--warn" { warn_mode = true }
+}
+
+// --staged: pre-commit enforcement gate. Scans only the added lines of staged
+// .hexa files; blocks (exit 1) when a commit introduces a machine-absolute /
+// hardcoded path. Net-new only → no baseline, never touches existing drift.
+if staged_mode {
+    let pats = _ban_patterns()
+    let files = _staged_hexa_files()
+    let mut staged_hits = []
+    for f in files {
+        let hits = _grep_staged_added(f, pats)
+        for h in hits { staged_hits.push(h) }
+    }
+    println("── no_hardcode_lint --staged ──")
+    println("staged .hexa: " + to_string(len(files)))
+    println("patterns    : " + to_string(len(pats)))
+    println("new hits    : " + to_string(len(staged_hits)))
+    if len(staged_hits) == 0 {
+        println("✅ PASS — no new hardcoded path introduced")
+        exit(0)
+    }
+    for h in staged_hits {
+        eprintln("  " + h[0] + " (added) — " + h[2])
+    }
+    if warn_mode {
+        println("⚠ WARN (--warn) — " + to_string(len(staged_hits)) + " new hardcoded hits")
+        exit(0)
+    }
+    println("🚫 FAIL — " + to_string(len(staged_hits)) + " new hardcoded path(s) staged")
+    println("  machine-absolute paths break every other host. Derive from env ($HOME/$HEXA_LANG/pwd),")
+    println("  or add `@const` on the line if the literal is genuinely portable/intentional.")
+    exit(1)
 }
 
 let root = _pwd()

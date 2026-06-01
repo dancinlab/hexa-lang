@@ -12,6 +12,26 @@
 # the commit-msg gate fires. It never blocks.
 set -euo pipefail
 
+# ── no-hardcode gate (BLOCKING) ──────────────────────────────────────
+# Machine-absolute paths (/Users/<me>/…, /home/<me>/…) break every other
+# contributor's host. Block the commit when a staged .hexa line ADDS one.
+# Net-new only (scans added lines) → no baseline, never flags existing
+# drift. Portable: derive the hexa binary from env/PATH; if it cannot be
+# found, skip the gate rather than fail the commit (s3 — no foreign path,
+# no hard dependency on a fixed install location).
+__hexa_bin="${HEXA:-}"
+[ -x "$__hexa_bin" ] || __hexa_bin="$HOME/.hx/bin/hexa"
+[ -x "$__hexa_bin" ] || __hexa_bin="$(command -v hexa 2>/dev/null || true)"
+if [ -n "$__hexa_bin" ] && [ -x "$__hexa_bin" ] && [ -f tool/no_hardcode_lint.hexa ]; then
+  if ! "$__hexa_bin" run tool/no_hardcode_lint.hexa --staged; then
+    echo "" >&2
+    echo "✗ commit blocked — a staged .hexa line adds a machine-absolute/hardcoded path." >&2
+    echo "  derive it from env (\$HOME / \$HEXA_LANG / pwd), or mark the line @const" >&2
+    echo "  if the literal is genuinely portable/intentional." >&2
+    exit 1
+  fi
+fi
+
 # Paths we guard (matched against `git diff --cached`)
 GUARD_GLOBS=(
   'stdlib/runtime/'
