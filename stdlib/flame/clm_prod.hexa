@@ -331,7 +331,10 @@ fn main() {
     // aligned (Lab-11 / H_911 semantic-linkage; anima clm_p1.corpus.kosmos mirror).
     // stride spreads the nsamp windows across all 5 languages so the routed forge
     // forward learns the cross-lingual MEANING coupling, not a single-language head.
-    let path = "stdlib/flame/testdata/clm_semantic_parallel.txt"
+    // corpus path: env CLM_PROD_CORPUS overrides the in-repo fixture (PR4 real
+    // anima .kosmos corpus); empty env keeps the byte-eq fixture (back-compat).
+    let envp = env("CLM_PROD_CORPUS")
+    let path = if envp == "" { "stdlib/flame/testdata/clm_semantic_parallel.txt" } else { envp }
     let bytes_arr = read_file_bytes(path)
     let n_bytes = len(bytes_arr)
     // stride spans the WHOLE corpus so the nsamp windows are spread across every
