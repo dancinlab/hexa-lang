@@ -5363,6 +5363,30 @@ frontier 는 OPEN — physical 천장 (runtime hexa-native + zero-libm + zero-li
 
 `feedback-closure-is-physical-limit` 적용: closure = approaching limit, not checkbox. 이 세션 = -1.56% · 5 lane closed · next-tier spec'd.
 
+### 2026-06-01 — `runtime_pure.hexa` PURE-math port: +`trunc`/`sign`/`fmod` (loop r3 RUNTIME lane)
+
+`self/runtime_pure.hexa` 의 PURE-math 셋에 세 함수 추가 — **순수 정수산술**
+(libm FFI 불필요, transcendental 아님, syscall/HexaVal 무관, 사이블링 PR #2418의
+`floor/ceil/round/abs` 와 NON-OVERLAPPING):
+
+- `rt_math_trunc(x)` — `to_float(to_int(x))` (to_int 은 zero-toward narrow → C `trunc`)
+- `rt_math_sign(x)`  — signum +1/-1/0 (signed-zero collapses to 0.0)
+- `rt_math_fmod(a,b)` — `a - trunc(a/b)*b` (truncated quotient → C `fmod` 부호규칙), b==0→0.0
+
+**VERIFY (g5) — byte-exact vs `cc -O2 -lm` C reference**, 19 cases
+(trunc×7 · sign×6 · fmod×6), signed-zero(`-0.0`==`0.0`) 정규화 후:
+
+```
+=== DIFF (empty = byte-exact match) ===
+diff exit=0
+```
+
+PORT STATUS: PURE-math **2 → 5** · 파일 TOTAL **53 → 56** (37 PURE / 13 FFI / 6 HYBRID).
+잔존 FFI-libm 11개(sqrt/pow/exp/log/floor/ceil/round/abs/tanh/sin/cos) 중 7 transcendental
+은 `stdlib_trig_libm` ban 으로 libm 유지가 올바름. parse-error baseline 변화 없음
+(32 → 32 · 사전존재 `match` reserved-keyword 잔재, 본 변경 무관). verdict:
+`.verdicts/runtime-pure-math-trunc-sign-fmod/byte-diff.txt`.
+
 ## 2026-06-01 — `self/runtime_pure.hexa` pure-fn (bucket A) lane RETIRED — carrier-path wall reached
 
 Loop round 4, RUNTIME lane. Audited every remaining FFI/HYBRID function in

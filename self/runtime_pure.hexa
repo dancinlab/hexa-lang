@@ -555,6 +555,35 @@ fn rt_math_tanh(x) { return __c_tanh(to_float(x)) }
 fn rt_math_sin(x) { return __c_sin(to_float(x)) }
 fn rt_math_cos(x) { return __c_cos(to_float(x)) }
 
+// trunc: PURE — truncate toward zero (integer part). Matches C trunc().
+// to_int() narrows toward zero, so to_float(to_int(x)) IS trunc(x).
+// STATUS: PURE
+fn rt_math_trunc(x) {
+    let f = to_float(x)
+    let i = to_int(f)
+    return to_float(i)
+}
+
+// sign: PURE — signum. +1.0 / -1.0 / 0.0. (signed-zero collapses to 0.0)
+// STATUS: PURE
+fn rt_math_sign(x) {
+    let f = to_float(x)
+    if f > 0.0 { return 1.0 }
+    if f < 0.0 { return 0.0 - 1.0 }
+    return 0.0
+}
+
+// fmod: PURE — floating remainder a - trunc(a/b)*b. Matches C fmod()
+// (truncated-toward-zero quotient → result carries sign of a). b==0 → 0.0.
+// STATUS: PURE
+fn rt_math_fmod(a, b) {
+    let fa = to_float(a)
+    let fb = to_float(b)
+    if fb == 0.0 { return 0.0 }
+    let q = to_int(fa / fb)
+    return fa - (to_float(q) * fb)
+}
+
 // floor/ceil/round/abs: PURE (exact arithmetic — no libm, no Taylor).
 // These are integer-rounding ops, not transcendental, so they port to
 // pure hexa with byte-exact C-libm parity. `to_int` truncates toward
@@ -676,8 +705,8 @@ fn rt_free_raw(ptr) { __c_free(ptr) }
 //   rt_index_set, rt_array_slice, rt_array_reverse, rt_array_contains,
 //   rt_array_index_of, rt_array_map, rt_array_filter, rt_array_fold
 //
-// PURE (6 functions — math, no libm needed):
-//   rt_math_min, rt_math_max,
+// PURE (9 functions — math, no libm needed):
+//   rt_math_min, rt_math_max, rt_math_trunc, rt_math_sign, rt_math_fmod,
 //   rt_math_floor, rt_math_ceil, rt_math_round, rt_math_abs
 //     (ported 2026-06-01: exact integer-rounding arithmetic, byte-exact
 //      C-libm parity — NOT transcendental, so no forbidden Taylor series)
@@ -693,7 +722,7 @@ fn rt_free_raw(ptr) { __c_free(ptr) }
 //   rt_read_file, rt_write_file, rt_write_bytes, rt_read_file_bytes,
 //   rt_exec, rt_exec_with_status
 //
-// TOTAL: 53 functions
-//   38 PURE (no C at all)
+// TOTAL: 56 functions
+//   41 PURE (no C at all)
 //    9 FFI  (thin libc/libm wrappers)
 //    6 HYBRID (builtin delegation)
