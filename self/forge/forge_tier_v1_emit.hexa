@@ -162,26 +162,55 @@ fn emit_forge_tier_v1_c() -> str {
             "    int64_t c_id = out->farr_ids[0];\n" +
             "    (void)c_id;  /* slot is OUT-only: overwritten with the produced id below */\n" +
             "\n" +
-            "    /* The live MATMUL+FP64 path delegates to hexa_farr_matmul (defined\n" +
-            "     * in runtime.c). That dependency only exists when this TU is\n" +
-            "     * compiled inline by runtime.c (which #defines FORGE_TIER_V1_LIVE\n" +
-            "     * before the #include). Standalone smoke builds skip the live\n" +
-            "     * call so the dispatcher can be unit-tested without linking the\n" +
-            "     * whole runtime.                                                 */\n" +
+            "    /* The live MATMUL+FP64 path delegates to hexa_farr_matmul_gpu\n" +
+            "     * (RFC 040, defined in runtime.c). hexa_farr_matmul_gpu is\n" +
+            "     * ABI-identical to the RFC 032 hexa_farr_matmul but, on a CUDA\n" +
+            "     * host, routes the GEMM through the cuBLAS Dgemm path\n" +
+            "     * (_hx_cuda_farr_matmul_gpu) so the conv->GEMM bulk actually runs\n" +
+            "     * on the GPU; on a no-CUDA host it falls back to the byte-identical\n" +
+            "     * RFC 032 CPU farr_matmul (RFC 040 §Phase A contract). The prior\n" +
+            "     * dispatch delegated to the CPU-only hexa_farr_matmul, which is why\n" +
+            "     * the flame conv path (clm_prod / dojo job.hexa) measured 0% GPU\n" +
+            "     * util on an H100 while CE still descended — every conv GEMM ran on\n" +
+            "     * host scalar code (Lane G F-RFC046, util PEAK=0%). Routing to the\n" +
+            "     * _gpu wrapper here fixes BOTH conv1d_via_forge (forward) and\n" +
+            "     * conv1d_bwd_via_forge (backward) since both ride this one FP64\n" +
+            "     * MATMUL dispatch. FP64 Dgemm is the same math as the CPU FP64\n" +
+            "     * reference (deterministic, byte-eq within the flame 1e-9 conv tol),\n" +
+            "     * so #2352 (fwd) / #2383 (bwd grad-exact) are preserved.\n" +
+            "     *\n" +
+            "     * This dependency only exists when this TU is compiled inline by\n" +
+            "     * runtime.c (which #defines FORGE_TIER_V1_LIVE before the #include).\n" +
+            "     * Standalone smoke builds skip the live call so the dispatcher can\n" +
+            "     * be unit-tested without linking the whole runtime.              */\n" +
             "#ifdef FORGE_TIER_V1_LIVE\n" +
+            "    extern HexaVal hexa_farr_matmul_gpu(HexaVal a_v, HexaVal ar_v,\n" +
+            "                                        HexaVal ac_v, HexaVal b_v,\n" +
+            "                                        HexaVal bc_v);\n" +
             "    extern HexaVal hexa_farr_matmul(HexaVal a_v, HexaVal ar_v, HexaVal ac_v,\n" +
             "                                    HexaVal b_v, HexaVal bc_v);\n" +
             "    extern HexaVal hexa_int(int64_t);\n" +
             "    extern int64_t hexa_as_num(HexaVal v);\n" +
-            "    HexaVal r = hexa_farr_matmul(hexa_int(a_id),\n" +
-            "                                 hexa_int(shape->M),\n" +
-            "                                 hexa_int(shape->K),\n" +
-            "                                 hexa_int(b_id),\n" +
-            "                                 hexa_int(shape->N));\n" +
+            "    HexaVal r = hexa_farr_matmul_gpu(hexa_int(a_id),\n" +
+            "                                     hexa_int(shape->M),\n" +
+            "                                     hexa_int(shape->K),\n" +
+            "                                     hexa_int(b_id),\n" +
+            "                                     hexa_int(shape->N));\n" +
+            "    /* Defensive CPU fallback: if the GPU path returns a negative handle\n" +
+            "     * (e.g. cuBLAS unavailable mid-run, OOM on the device), fall back to\n" +
+            "     * the always-available RFC 032 CPU farr_matmul so the dispatch never\n" +
+            "     * crashes and stays byte-eq (RFC 050 §6.6 no-crash mandate).      */\n" +
+            "    if (hexa_as_num(r) < 0) {\n" +
+            "        r = hexa_farr_matmul(hexa_int(a_id),\n" +
+            "                             hexa_int(shape->M),\n" +
+            "                             hexa_int(shape->K),\n" +
+            "                             hexa_int(b_id),\n" +
+            "                             hexa_int(shape->N));\n" +
+            "    }\n" +
             "    /* Plumb the produced farr id back into the caller-designated out\n" +
-            "     * slot. hexa_farr_matmul returns the farr handle (or hexa_int(-1)\n" +
-            "     * on a bad-args / OOM path); hexa_as_num unwraps it to int64_t. The\n" +
-            "     * caller checks for a negative id to detect failure. */\n" +
+            "     * slot. The matmul returns the farr handle (or a negative value on a\n" +
+            "     * bad-args / OOM path); hexa_as_num unwraps it to int64_t. The caller\n" +
+            "     * checks for a negative id to detect failure. */\n" +
             "    ((ForgeArgs *)out)->farr_ids[0] = hexa_as_num(r);\n" +
             "#else\n" +
             "    (void)a_id; (void)b_id;  /* standalone smoke: ack args, skip live call */\n" +
