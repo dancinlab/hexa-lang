@@ -199,23 +199,24 @@ fn main() {
     let sigma_el = 0.05 ; let sigma_ph = 10.0
 
     // FULL matrix (diagonal + off-diagonal) — the physical inter-band el-ph sum.
-    let s_full = qforge_gmn_samples(states, dv_states, eps_active, omega0, true)
+    let s_full = qforge_gmn_samples(states, dv_states, eps_active, omega0, true, 1.008)  // F1: H mass
     let a2f_full = qforge_a2f_from_elph(s_full[0], s_full[1], s_full[2], s_full[3],
                                         e_fermi, n_ef, grid, 1.0, sigma_el, sigma_ph)
-    let mfull = eliashberg_moments_from_a2f(grid, a2f_full)
+    let mfull = eliashberg_moments_from_a2f_scaled(grid, a2f_full, ha_per_kelvin())  // F2
     let lambda_full = mfull[0] ; let omega_log_full = mfull[1]
 
     // diagonal-only baseline over the SAME active manifold (apples-to-apples Δ).
+    let amp2_diag = qforge_elph_amp2(1.008, omega0)   // F1: H-mass amplitude² at ω₀
     let mut ek: [float] = [] ; let mut g2d: [float] = [] ; let mut wqd: [float] = []
     mm = 0
     while mm < nactive {
         let gnn = gmat[mm * nactive + mm]
-        ek.push(eps_active[mm]) ; g2d.push(gnn * gnn) ; wqd.push(omega0)
+        ek.push(eps_active[mm]) ; g2d.push(gnn * gnn * amp2_diag) ; wqd.push(omega0)  // F1
         mm = mm + 1
     }
     let a2f_diag = qforge_a2f_from_elph(ek, ek, g2d, wqd, e_fermi, n_ef, grid,
                                         1.0, sigma_el, sigma_ph)
-    let mdiag = eliashberg_moments_from_a2f(grid, a2f_diag)
+    let mdiag = eliashberg_moments_from_a2f_scaled(grid, a2f_diag, ha_per_kelvin())  // F2
     let lambda_diag = mdiag[0]
 
     println("── OFF-DIAGONAL CROSS-VAL (d6 VERBATIM, NOT tuned) ──")

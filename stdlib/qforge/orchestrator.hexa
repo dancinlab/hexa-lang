@@ -106,7 +106,10 @@ pub fn qforge_elph_to_tc(eps_k: [float], eps_kq: [float], g2: [float],
     }
 
     // ② α²F → moments [λ, ω_log, ω̄₂]  (verified L2 integrator).
-    let m = eliashberg_moments_from_a2f(omega_grid, a2f)
+    // F2 unit fix: omega_grid is in KELVIN, the QFORGE α²F numerator on a HARTREE
+    // scale — convert the λ-integrand divisor K→Ha (ha_per_kelvin) for unit-
+    // consistency. ω_log/ω̄₂ stay in K (feed the AD Tc form unchanged).
+    let m = eliashberg_moments_from_a2f_scaled(omega_grid, a2f, ha_per_kelvin())
     let lam = m[0]
     let wlog = m[1]
     let wbar2 = m[2]

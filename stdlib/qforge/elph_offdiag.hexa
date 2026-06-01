@@ -51,6 +51,30 @@
 // list ONLY. Zero physics is re-implemented; no λ is hardcoded.
 
 use "stdlib/qforge/elph"
+use "stdlib/material/sim"
+
+// ── F1: the phonon displacement-amplitude factor (textbook el-ph) ────────────
+// g_mn = ⟨ψ_m|∂V/∂u|ψ_n⟩ is the DISPLACEMENT DERIVATIVE of the potential, in
+// Ha/bohr (realcell_phonon, dvloc_du). The TEXTBOOK el-ph matrix element that
+// enters λ is the ENERGY coupling
+//   g̃_mn^ν = g_mn · √( ℏ / (2 M_κ ω_ν) )
+// — the zero-point displacement amplitude of mode ν of atom κ converts the
+// per-unit-displacement derivative into the per-phonon energy coupling
+// (Giustino 2017 RMP Eq. 4; Grimvall 1981 §3.1). Without it the chain squared a
+// bare Ha/bohr derivative as if it were already an energy — the F1 (~10^-1.16)
+// piece of the CaH6 λ gap. In ATOMIC UNITS ℏ=1, M_κ in ELECTRON masses, ω_ν in
+// Ha. This returns the factor for g² (i.e. g̃² = g²·factor):
+//   amp²(M_κ, ω_ν) = ℏ / (2 M_κ ω_ν)
+//   M_κ[m_e] = mass_amu · AMU_PER_ME ,  ω_ν[Ha] = ω_ν[K] · ha_per_kelvin
+// (1 amu = 1822.888486 electron masses, CODATA 2018). Returns 0.0 on a
+// non-positive mass / frequency (no coupling — honest sentinel, not a fake).
+fn _amu_per_me() -> float { return 1822.888486 }
+pub fn qforge_elph_amp2(mass_amu: float, omega_nu_K: float) -> float {
+    if mass_amu <= 0.0 || omega_nu_K <= 0.0 { return 0.0 }
+    let m_e = mass_amu * _amu_per_me()           // nuclear mass in electron masses
+    let w_ha = omega_nu_K * ha_per_kelvin()      // mode frequency in Hartree
+    return 1.0 / (2.0 * m_e * w_ha)              // ℏ/(2 M ω), ℏ=1 (atomic units)
+}
 
 // ── one off-diagonal element g_mn = ⟨ψ_m | ΔV_bare ψ_n⟩ ──────────────────────
 // Pure overlap of state ψ_m (length n) with the pre-applied column (ΔV_bare ψ_n)
@@ -131,12 +155,19 @@ pub fn qforge_gmn_herm_residual(g: [float], nb: int) -> float {
 //   omega_qnu: the phonon ω to tag each sample with (1 mode here — caller can
 //              cycle a real band via brick (a)'s qforge_qmesh_omega_band).
 //   include_diag : keep the m=n diagonal terms too (true = full matrix).
+//   mass_amu : F1 — the displaced atom's mass (amu). > 0 multiplies g² by the
+//              displacement-amplitude factor ℏ/(2 M_κ ω_ν) (qforge_elph_amp2) so
+//              the bare Ha/bohr derivative becomes the textbook ENERGY coupling.
+//              ≤ 0 → BARE g² (legacy / unit-test path, no amplitude).
 pub fn qforge_gmn_samples(states: [[float]], dv_states: [[float]], eps: [float],
-                          omega_qnu: float, include_diag: bool) -> [[float]] {
+                          omega_qnu: float, include_diag: bool,
+                          mass_amu: float) -> [[float]] {
     let nb = states.len()
     if nb < 1 || dv_states.len() != nb || len(eps) != nb { return [] }
     let g = qforge_gmn_matrix(states, dv_states)
     if len(g) != nb * nb { return [] }
+    // F1: per-mode displacement-amplitude² factor (ℏ/2Mω). mass_amu≤0 → 1.0 (bare).
+    let amp2 = if mass_amu > 0.0 { qforge_elph_amp2(mass_amu, omega_qnu) } else { 1.0 }
     let mut eps_k: [float] = []
     let mut eps_kq: [float] = []
     let mut g2: [float] = []
@@ -149,7 +180,7 @@ pub fn qforge_gmn_samples(states: [[float]], dv_states: [[float]], eps: [float],
                 let gmn = g[m * nb + nn]
                 eps_k.push(eps[m])
                 eps_kq.push(eps[nn])
-                g2.push(gmn * gmn)
+                g2.push(gmn * gmn * amp2)        // F1: g̃² = g²·ℏ/(2Mω)
                 wq.push(omega_qnu)
             }
             nn = nn + 1

@@ -110,7 +110,8 @@ fn _analytic_lambda_disperse(grid: MpGrid) -> float {
         let w = _M_W0 * (1.0 + 0.6 * aq)
         let wq = grid.weights[iq]
         let big_d = wq * g2_mode * d0 * d0 / _M_NEF
-        lam = lam + 2.0 * big_d / w
+        // F2: ω divisor in the α²F numerator's ENERGY unit (Ha), not K.
+        lam = lam + 2.0 * big_d / (w * ha_per_kelvin())
         iq = iq + 1
     }
     return lam
@@ -163,8 +164,8 @@ fn main() {
     // MUST differ materially — proving the driver samples the BZ, not just Γ.
     let d0 = 1.0 / (_M_SIGEL * _M_SQRT2PI)
     let g2_mode = _M_G2 * to_float(_M_NK)
-    // Γ-only: total weight (Σw_q=1) on one mode at ω(Γ)=w0.
-    let lam_gamma_only = 2.0 * (1.0 * g2_mode * d0 * d0 / _M_NEF) / _M_W0
+    // Γ-only: total weight (Σw_q=1) on one mode at ω(Γ)=w0. F2: ω in Ha.
+    let lam_gamma_only = 2.0 * (1.0 * g2_mode * d0 * d0 / _M_NEF) / (_M_W0 * ha_per_kelvin())
     println("[Γ-only] single-Einstein λ(Γ) = " + to_string(lam_gamma_only) +
             "   vs multi-q λ = " + to_string(lam_sharp))
     let rel_gap = _abs(lam_sharp - lam_gamma_only) / lam_gamma_only
@@ -213,6 +214,49 @@ fn main() {
                                       _grid(wlo, whi, 100), _M_SIGEL, 1.5)
     fails = fails + _assert("guard bundled bad provider → ok==0",
                             res_bad.ok == 0, "(ok=" + to_string(res_bad.ok) + ")")
+
+    // ── 🔵 F2 DIMENSIONAL-CLOSURE — the assertion that fences the unit bug ─────
+    // This is WHY the ~10^5.5 λ gap survived: every prior λ check was scale-
+    // INVARIANT (ratios, monotone convergence, assembled-vs-analytic with the
+    // SAME K unit on BOTH sides). Add a REAL dimensional assertion that can only
+    // pass with a unit-consistent divisor: assemble the SAME physical Einstein
+    // spectrum on a KELVIN ω-grid and on a HARTREE ω-grid (the phonon ω₀ and the
+    // grid + σ_ph all converted K→Ha together — a genuine change of unit), then
+    // integrate each with the divisor in its OWN grid unit:
+    //   λ_K  = qforge_a2f_lambda(K-grid α²F)    — K grid + the F2 K→Ha divisor
+    //   λ_Ha = scaled(Ha-grid α²F, 1.0)         — Ha grid + Ha divisor (native)
+    // A unit-consistent λ is a PHYSICAL number → INVARIANT to the grid's unit.
+    // The buggy raw-K divisor makes λ_K too small by EXACTLY Ha/K vs the physical
+    // λ_Ha; a synthetic test on a single unit could never catch that. Both must
+    // now agree, and the legacy raw-K path must be off by exactly Ha/K.
+    let w0K = 1000.0
+    let pack = qforge_a2f_einstein_samples(_M_NK, 0.0, _M_G2, w0K)
+    let mut ek: [float] = [] ; let mut ekq: [float] = []
+    let mut gg: [float] = [] ; let mut wq: [float] = []
+    let mut jc = 0
+    while jc < _M_NK { ek.push(pack[jc]) ; ekq.push(pack[_M_NK + jc])
+                       gg.push(pack[2 * _M_NK + jc]) ; wq.push(pack[3 * _M_NK + jc]) ; jc = jc + 1 }
+    // Kelvin assembly (grid + σ_ph in K).
+    let gridK = _grid(200.0, 2400.0, 20001)
+    let a2fK = qforge_a2f_from_elph(ek, ekq, gg, wq, 0.0, _M_NEF, gridK, 1.0, _M_SIGEL, 8.0)
+    let lam_K = qforge_a2f_lambda(gridK, a2fK)
+    // Hartree assembly: the SAME physics, ω₀+grid+σ_ph all scaled K→Ha together.
+    let s = ha_per_kelvin()
+    let mut wqHa: [float] = []
+    jc = 0 ; while jc < _M_NK { wqHa.push(w0K * s) ; jc = jc + 1 }
+    let mut gridHa: [float] = []
+    jc = 0 ; while jc < len(gridK) { gridHa.push(gridK[jc] * s) ; jc = jc + 1 }
+    let a2fHa = qforge_a2f_from_elph(ek, ekq, gg, wqHa, 0.0, _M_NEF, gridHa, 1.0, _M_SIGEL, 8.0 * s)
+    let lam_Ha = eliashberg_moments_from_a2f_scaled(gridHa, a2fHa, 1.0)[0]
+    println("[F2-closure] λ(K-grid,K→Ha)=" + to_string(lam_K)
+            + "  λ(Ha-grid,native)=" + to_string(lam_Ha))
+    fails = fails + _ck("🔵 F2 unit-invariance: K-grid λ = Ha-grid λ (physical)",
+                        lam_K, lam_Ha, 1e-4)
+    // and the OLD buggy raw-K divisor path is too SMALL by EXACTLY Ha/K.
+    let lam_buggy = eliashberg_moments_from_a2f(gridK, a2fK)[0]   // legacy: ω in K
+    let corr = lam_K / lam_buggy
+    fails = fails + _ck("🔵 F2 correction factor vs legacy raw-K path = Ha/K",
+                        corr, kelvin_per_hartree(), 1e-6)
 
     if fails == 0 {
         println("metallic_a2f_selftest PASS")

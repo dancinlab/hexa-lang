@@ -179,7 +179,9 @@ fn main() {
     // analytic: λ₁ = 2 D₁/ω₁ with D₁ = w·nk·g2_1·δ(0)²/N(E_F); λ₂ likewise.
     let big_d1 = wgt * to_float(nk) * g2_1 * d0 * d0 / n_ef
     let big_d2 = wgt * to_float(nk) * g2_2 * d0 * d0 / n_ef
-    let lam_2mode_analytic = 2.0 * big_d1 / w1 + 2.0 * big_d2 / w2
+    // F2: ω divisor in the α²F numerator's ENERGY unit (Ha), matching qforge_a2f_lambda.
+    let lam_2mode_analytic = 2.0 * big_d1 / (w1 * ha_per_kelvin())
+                           + 2.0 * big_d2 / (w2 * ha_per_kelvin())
     println("[2-mode] λ_assembled=" + to_string(lam_2mode) +
             "  λ_analytic=" + to_string(lam_2mode_analytic) +
             "  (λ₁+λ₂, ω₁=150 ω₂=400 K)")
@@ -196,7 +198,10 @@ fn main() {
     let a2f3 = qforge_a2f_from_elph(_slice(packed, nk, 0), _slice(packed, nk, 1),
                                     _slice(packed, nk, 2), _slice(packed, nk, 3),
                                     ef, n_ef, grid3, wgt, sig_el, 1.5)
-    let m = eliashberg_moments_from_a2f(grid3, a2f3)
+    // F2: the QFORGE round-trip λ uses the unit-consistent K→Ha divisor (same as
+    // qforge_a2f_lambda / qforge_einstein_lambda_analytic) so lam_rt matches the
+    // Ha-scale analytic. ω_log stays in K.
+    let m = eliashberg_moments_from_a2f_scaled(grid3, a2f3, ha_per_kelvin())
     let lam_rt = m[0]
     let wlog_rt = m[1]
     println("[round-trip] L2 moments from assembled α²F: λ=" + to_string(lam_rt) +
@@ -205,7 +210,11 @@ fn main() {
     fails = fails + _ck("🟢 round-trip ω_log ≈ ω₀", wlog_rt, w0, 5e-3)
     fails = fails + _ck("🟢 round-trip λ ≈ analytic", lam_rt, lam_analytic, 1e-2)
     let mu = 0.13
-    let tc_from_l3 = qforge_tc_from_a2f(grid3, a2f3, mu)         // L3→L0 chain
+    // F2: the L3→L0 round-trip uses the UNIT-CONSISTENT moments (lam_rt is the
+    // K→Ha-scaled λ, wlog_rt the K ω_log) — NOT the generic qforge_tc_from_a2f
+    // (which is the dimensionless-grid entry, no K→Ha). Both sides now feed the
+    // same Ha-scale λ + K ω_log to the AD engine → cross-layer consistency holds.
+    let tc_from_l3 = qforge_tc_allen_dynes(lam_rt, wlog_rt, mu)  // L3→L2→L0 chain
     let tc_direct = qforge_tc_allen_dynes(lam_analytic, w0, mu)  // direct L0
     println("[round-trip] Tc(L3→L2→L0)=" + to_string(tc_from_l3) +
             "  Tc(direct L0)=" + to_string(tc_direct) + " K")

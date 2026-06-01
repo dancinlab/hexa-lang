@@ -45,18 +45,18 @@ fn main() {
     // ── G1: malformed input → ok==0 ──────────────────────────────────────────
     let empty_band: [float] = []
     let r_eb = qforge_compose_cah6_lambda(states, dv, eps, empty_band, e_fermi, 1.0,
-                                          grid, sigma_el, sigma_ph)
+                                          grid, sigma_el, sigma_ph, 0.0)
     checks = checks + 1
     if r_eb.ok != 0 { println("FAIL G1a empty-band not rejected") ; fails = fails + 1 }
     let band1 = [1000.0]
     let r_n0 = qforge_compose_cah6_lambda(states, dv, eps, band1, e_fermi, 0.0,
-                                          grid, sigma_el, sigma_ph)
+                                          grid, sigma_el, sigma_ph, 0.0)
     checks = checks + 1
     if r_n0.ok != 0 { println("FAIL G1b zero-n_ef not rejected") ; fails = fails + 1 }
 
     // ── G2: α²F ≥ 0 ⇒ λ ≥ 0 ──────────────────────────────────────────────────
     let r1 = qforge_compose_cah6_lambda(states, dv, eps, band1, e_fermi, 1.0,
-                                        grid, sigma_el, sigma_ph)
+                                        grid, sigma_el, sigma_ph, 0.0)
     checks = checks + 1
     if r1.ok != 1 || r1.lambda < 0.0 {
         println("FAIL G2 lambda<0 or not ok (lambda=" + to_string(r1.lambda) + ")") ; fails = fails + 1
@@ -65,7 +65,7 @@ fn main() {
     // ── G3: brick (a) broadening — 2-mode band emits 2× the samples ──────────
     let band2 = [800.0, 1200.0]
     let r2 = qforge_compose_cah6_lambda(states, dv, eps, band2, e_fermi, 1.0,
-                                        grid, sigma_el, sigma_ph)
+                                        grid, sigma_el, sigma_ph, 0.0)
     checks = checks + 1
     if r2.n_samples != 2 * r1.n_samples {
         println("FAIL G3 band broadening not linear in nw ("
@@ -74,7 +74,7 @@ fn main() {
 
     // ── G4: brick (c) — doubling N(E_F) halves λ (Allen 1/N(E_F) normalizer) ──
     let r_nef2 = qforge_compose_cah6_lambda(states, dv, eps, band1, e_fermi, 2.0,
-                                            grid, sigma_el, sigma_ph)
+                                            grid, sigma_el, sigma_ph, 0.0)
     checks = checks + 1
     let want_half = r1.lambda / 2.0
     if _abs(r_nef2.lambda - want_half) > 1.0e-6 * (1.0 + _abs(want_half)) {
@@ -90,7 +90,7 @@ fn main() {
     let dd2 = [0.00, 0.00, 0.30, 0.0]
     let dvdiag = [dd0, dd1, dd2]
     let r_diag = qforge_compose_cah6_lambda(states, dvdiag, eps, band1, e_fermi, 1.0,
-                                            grid, sigma_el, sigma_ph)
+                                            grid, sigma_el, sigma_ph, 0.0)
     checks = checks + 1
     if !(r1.g2_total > r_diag.g2_total + 1.0e-9) {
         println("FAIL G5 off-diagonal not adding coupling (full=" + to_string(r1.g2_total)

@@ -303,8 +303,9 @@ fn main() {
     while gp < 401 { grid.push(to_float(gp) * 7.0) ; gp = gp + 1 }
     let sigma_el = 0.05 ; let sigma_ph = 10.0
 
+    let M_H = 1.008   // F1: displaced atom is H → mass 1.008 amu (displacement amplitude)
     let comp = qforge_compose_cah6_lambda(states, dv_states, eps_active, band,
-                                          e_fermi, n_ef, grid, sigma_el, sigma_ph)
+                                          e_fermi, n_ef, grid, sigma_el, sigma_ph, M_H)
     // NOTE: comp uses the SCREENED columns [d]; if the screening fixed point did not
     //   converge (metallic dielectric-feedback instability under Picard+linear-mix,
     //   see [d screen]), dv_states carries NaN/inf and comp.lambda is non-physical.
@@ -314,14 +315,14 @@ fn main() {
     // ── isolated-brick references (apples-to-apples, single ω₀, n_ef=1.0) ────
     let band_einstein = [1236.4]
     let bare_iso = qforge_compose_cah6_lambda(states, dv_bare, eps_active, band_einstein,
-                                              e_fermi, 1.0, grid, sigma_el, sigma_ph)
+                                              e_fermi, 1.0, grid, sigma_el, sigma_ph, M_H)
     let scr_iso  = qforge_compose_cah6_lambda(states, dv_states, eps_active, band_einstein,
-                                              e_fermi, 1.0, grid, sigma_el, sigma_ph)
+                                              e_fermi, 1.0, grid, sigma_el, sigma_ph, M_H)
     // BARE-COMPOSED: a+b+c on the converged cell with the BARE ΔV (always finite —
     //   independent of the screening-solver stability). real ω band[a] + off-diag[b]
     //   + real N(E_F)[c], bare ΔV. The robust composed number when [d] is unstable.
     let bare_comp = qforge_compose_cah6_lambda(states, dv_bare, eps_active, band,
-                                               e_fermi, n_ef, grid, sigma_el, sigma_ph)
+                                               e_fermi, n_ef, grid, sigma_el, sigma_ph, M_H)
 
     println("── COMPOSED CROSS-VAL (d6 VERBATIM, NOT tuned) ──")
     println("isolated bare      (1 ω₀, n_ef=1, bare ΔV)      λ = " + to_string(bare_iso.lambda))

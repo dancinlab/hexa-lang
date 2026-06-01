@@ -158,7 +158,12 @@ pub fn qforge_a2f_from_elph_impl(eps_k: [float], eps_kq: [float], g2: [float],
 // (propagates the integrator sentinel). d3: no re-implementation of the
 // integral.
 pub fn qforge_a2f_lambda(omega_grid: [float], a2f: [float]) -> float {
-    let m = eliashberg_moments_from_a2f(omega_grid, a2f)
+    // F2 unit fix: the QFORGE α²F numerator is on a HARTREE scale (g² Ha²/bohr²,
+    // δ_σel 1/Ha, eps/σ_el Ha) but omega_grid is in KELVIN. The λ = 2∫α²F/ω
+    // divisor MUST be in the numerator's energy unit, so convert ω K→Ha
+    // (omega_to_energy = ha_per_kelvin). Lifts λ by Ha/K = 315775 vs the legacy
+    // K-divisor path. (d3: reuse the one scaled integrator in material/sim.)
+    let m = eliashberg_moments_from_a2f_scaled(omega_grid, a2f, ha_per_kelvin())
     return m[0]
 }
 
@@ -206,5 +211,7 @@ pub fn qforge_einstein_lambda_analytic(nk: int, g2_const: float, omega0: float,
     if n_ef <= 0.0 || sigma_el <= 0.0 || omega0 <= 0.0 { return -1.0 }
     let d0 = 1.0 / (sigma_el * _ELPH_SQRT2PI)    // δ_σel(0)
     let big_d = weight * to_float(nk) * g2_const * d0 * d0 / n_ef
-    return 2.0 * big_d / omega0
+    // F2 unit fix: λ = 2D/ω₀ with ω₀ in the α²F numerator's ENERGY unit. ω₀ is
+    // supplied in KELVIN (the grid unit), so convert K→Ha to match qforge_a2f_lambda.
+    return 2.0 * big_d / (omega0 * ha_per_kelvin())
 }

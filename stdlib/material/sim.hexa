@@ -160,14 +160,54 @@ pub fn allen_dynes_full(lam: float, omega_log_K: float, omega2_K: float,
 // Returns [λ, ω_log, ω̄₂]; [-1, -1, -1] on malformed input (length mismatch,
 // < 2 points, or a non-positive frequency); [0, 0, 0] when the spectrum
 // integrates to λ ≤ 0 (empty / zero α²F).
+// ── Hartree↔Kelvin energy conversion (CODATA: 1 Ha = 315775.02480398 K) ──────
+// Exposed for the QFORGE el-ph chain to pass omega_to_energy = HA_PER_KELVIN
+// into the unit-consistent λ integrator below (K-grid ω → Ha-scale α²F numerator).
+pub fn kelvin_per_hartree() -> float { return 315775.0 }
+pub fn ha_per_kelvin() -> float { return 1.0 / 315775.0 }
+
 pub fn eliashberg_moments_from_a2f(omega: [float], a2f: [float]) -> [float] {
+    // The unscaled entry = the scaled integrator with omega_to_energy = 1.0
+    // (ω-grid IS already the α²F numerator's energy unit). d3/d4: one generic
+    // path; this is the identity instance. Preserves the dimensionless analytic
+    // contract λ = 2∫α²F/ω all existing callers (sim_test, L1/L3) assert.
+    return eliashberg_moments_from_a2f_scaled(omega, a2f, 1.0)
+}
+
+// ── 4a-units. UNIT-CONSISTENT Eliashberg moments (the F2 dimensional fix) ──
+//
+// The λ = 2∫α²F(ω)/ω dω integrand REQUIRES the 1/ω divisor to be in the SAME
+// energy unit as the α²F numerator. The QFORGE-NC el-ph chain builds α²F on a
+// HARTREE scale (g² in Ha²/bohr², δ_σel in 1/Ha, σ_el=0.05 Ha) but tags the ω
+// grid in KELVIN — so the bare `eliashberg_moments_from_a2f` divided a Ha-scale
+// numerator by a K-scale ω, undercounting λ by exactly Ha/K = 315775 (the ~10^5.5
+// CaH6 λ gap, demiurge 346453673). `omega_to_energy` rescales the ω in the λ
+// integrand's 1/ω divisor (AND dω, which cancels — see below) into the numerator's
+// energy unit; pass HA_PER_KELVIN for a K-grid + Ha-numerator α²F. The DISPLAY
+// moments ω_log and ω̄₂ stay in the ω-grid's OWN unit (K) — only the dimensionless
+// λ integrand is unit-corrected. With omega_to_energy = 1.0 this is bit-identical
+// to the legacy path (the contract the analytic selftests pin).
+//
+// Why dω cancels but 1/ω does not: λ = 2∫α²F/ω dω. Substituting ω_E = s·ω
+// (s = omega_to_energy) gives dω_E = s·dω, so ∫α²F/ω_E dω_E = ∫α²F/(s·ω)·(s·dω)
+// = ∫α²F/ω dω — a pure substitution leaves λ INVARIANT IF α²F is also expressed
+// vs ω_E. The bug is that α²F's NUMERATOR is already on the energy (Ha) scale
+// while the divisor ω is on the K scale: the integrand is α²F_Ha/ω_K, dimensionally
+// (1/E)·(1/K) — mismatched. Scaling ONLY the divisor (1/ω → 1/(s·ω), dω kept in
+// K) makes the divisor energy-consistent with the numerator, lifting λ by 1/s.
+// Returns [λ, ω_log_gridunit, ω̄₂_gridunit]; same sentinels as the unscaled entry.
+pub fn eliashberg_moments_from_a2f_scaled(omega: [float], a2f: [float],
+                                          omega_to_energy: float) -> [float] {
     let n = len(omega)
     if n < 2 || len(a2f) != n {
         return [-1.0, -1.0, -1.0]
     }
-    let mut int_lam = 0.0   // ∫ α²F/ω
-    let mut int_log = 0.0   // ∫ (α²F/ω) ln ω
-    let mut int_w2 = 0.0    // ∫ α²F·ω
+    if omega_to_energy <= 0.0 {
+        return [-1.0, -1.0, -1.0]
+    }
+    let mut int_lam = 0.0   // ∫ α²F/ω_E   (ω_E = energy-unit ω, the λ divisor)
+    let mut int_log = 0.0   // ∫ (α²F/ω_gridunit) ln ω_gridunit   (DISPLAY: K)
+    let mut int_w2 = 0.0    // ∫ α²F·ω_gridunit                   (DISPLAY: K)
     let mut k = 0
     while k < n - 1 {
         let w0 = omega[k]
@@ -176,19 +216,30 @@ pub fn eliashberg_moments_from_a2f(omega: [float], a2f: [float]) -> [float] {
             return [-1.0, -1.0, -1.0]
         }
         let dw = w1 - w0
+        // λ integrand: divisor in the α²F numerator's ENERGY unit (1/s · 1/ω_K).
+        let e0 = w0 * omega_to_energy
+        let e1 = w1 * omega_to_energy
+        int_lam = int_lam + 0.5 * (a2f[k] / e0 + a2f[k + 1] / e1) * dw
+        // ω_log / ω̄₂ moments stay in the ω-grid's own (display, K) unit.
         let g0 = a2f[k] / w0
         let g1 = a2f[k + 1] / w1
-        int_lam = int_lam + 0.5 * (g0 + g1) * dw
         int_log = int_log + 0.5 * (g0 * log(w0) + g1 * log(w1)) * dw
         int_w2 = int_w2 + 0.5 * (a2f[k] * w0 + a2f[k + 1] * w1) * dw
         k = k + 1
     }
+    // λ uses the energy-unit divisor ∫α²F/ω_E. ω_log/ω̄₂ are pure SHAPE moments,
+    // normalized by the grid-unit λ (lam_disp = s·λ = the legacy K-grid 2∫α²F/ω_K)
+    // so they stay numerically in the ω-grid (K) unit, shape-unchanged.
     let lam = 2.0 * int_lam
     if lam <= 0.0 {
         return [0.0, 0.0, 0.0]
     }
-    let omega_log = exp((2.0 / lam) * int_log)
-    let omega_bar2 = sqrt((2.0 / lam) * int_w2)
+    let lam_disp = lam * omega_to_energy             // shape-weight in grid unit
+    if lam_disp <= 0.0 {
+        return [lam, 0.0, 0.0]
+    }
+    let omega_log = exp((2.0 / lam_disp) * int_log)
+    let omega_bar2 = sqrt((2.0 / lam_disp) * int_w2)
     return [lam, omega_log, omega_bar2]
 }
 

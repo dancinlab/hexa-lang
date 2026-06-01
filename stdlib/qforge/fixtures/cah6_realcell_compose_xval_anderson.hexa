@@ -325,7 +325,7 @@ fn main() {
     let sigma_el = 0.05 ; let sigma_ph = 10.0
 
     let comp = qforge_compose_cah6_lambda(states, dv_states, eps_active, band,
-                                          e_fermi, n_ef, grid, sigma_el, sigma_ph)
+                                          e_fermi, n_ef, grid, sigma_el, sigma_ph, 1.008)
     // comp uses the ANDERSON-SCREENED columns [d] — now CONVERGED (finite), so comp.lambda
     //   is the physical all-4 composed result. BARE-COMPOSED a+b+c is kept as a contrast
     //   anchor (and a fallback if Anderson ever fails on a future cell).
@@ -334,14 +334,14 @@ fn main() {
     // ── isolated-brick references (apples-to-apples, single ω₀, n_ef=1.0) ────
     let band_einstein = [1236.4]
     let bare_iso = qforge_compose_cah6_lambda(states, dv_bare, eps_active, band_einstein,
-                                              e_fermi, 1.0, grid, sigma_el, sigma_ph)
+                                              e_fermi, 1.0, grid, sigma_el, sigma_ph, 1.008)
     let scr_iso  = qforge_compose_cah6_lambda(states, dv_states, eps_active, band_einstein,
-                                              e_fermi, 1.0, grid, sigma_el, sigma_ph)
+                                              e_fermi, 1.0, grid, sigma_el, sigma_ph, 1.008)
     // BARE-COMPOSED: a+b+c on the converged cell with the BARE ΔV (always finite —
     //   independent of the screening-solver stability). real ω band[a] + off-diag[b]
     //   + real N(E_F)[c], bare ΔV. The robust composed number when [d] is unstable.
     let bare_comp = qforge_compose_cah6_lambda(states, dv_bare, eps_active, band,
-                                               e_fermi, n_ef, grid, sigma_el, sigma_ph)
+                                               e_fermi, n_ef, grid, sigma_el, sigma_ph, 1.008)
 
     println("── COMPOSED CROSS-VAL (d6 VERBATIM, NOT tuned) ──")
     println("isolated bare      (1 ω₀, n_ef=1, bare ΔV)      λ = " + to_string(bare_iso.lambda))

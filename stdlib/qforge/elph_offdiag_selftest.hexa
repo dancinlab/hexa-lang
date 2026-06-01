@@ -90,8 +90,8 @@ fn main() {
 
     // diagonal-only sample list (include_diag, but we strip off-diag by hand here
     // via the include_diag=false path = pure off-diag; diag = full − off).
-    let s_full = qforge_gmn_samples(states, dv_states, eps, omega0, true)
-    let s_off  = qforge_gmn_samples(states, dv_states, eps, omega0, false)
+    let s_full = qforge_gmn_samples(states, dv_states, eps, omega0, true, 0.0)
+    let s_off  = qforge_gmn_samples(states, dv_states, eps, omega0, false, 0.0)
     fails = fails + _ck_bool("(3a) full sample list has 4 pairs (2×2)", len(s_full[0]) == 4, true)
     fails = fails + _ck_bool("(3a) off-diag sample list has 2 pairs (m≠n)", len(s_off[0]) == 2, true)
 
@@ -118,6 +118,38 @@ fn main() {
     let ratio_got = lambda_full / lambda_diag
     fails = fails + _ck_close("(3) λ_full/λ_diag = 1 + 2c²/(d0²+d1²) (analytic)",
                               ratio_got, ratio_want, 1.0e-6)
+
+    // ── 🔵 F1 FD CROSS-CHECK — the amplitude √(ℏ/2Mω) frozen-phonon convention ──
+    // The textbook el-ph element multiplies the displacement-derivative g [Ha/bohr]
+    // by the zero-point displacement amplitude u = √(ℏ/2 M_κ ω_ν) [bohr] to get an
+    // ENERGY coupling g̃ = g·u [Ha]. qforge_elph_amp2 returns u² = ℏ/(2Mω). Two
+    // independent closed-form checks the synthetic ratio test could NEVER catch
+    // (it cancels any global g²-scale):
+    //  (i) DIMENSIONAL IDENTITY (atomic units ℏ=1): the harmonic zero-point virial
+    //      requires 2·M·ω·u² = ℏ = 1 — i.e. amp2 is EXACTLY the inverse of 2Mω.
+    //  (ii) FD ENERGY-CURVATURE: a harmonic mode E(u)=½ M ω² u² evaluated at the
+    //      zero-point u=√(amp2) gives E = ½ M ω² · ℏ/(2Mω) = ¼ ℏ ω — the quadratic
+    //      curvature ε(u)=g̃²/(…) ties back to ¼ℏω, independent of g. rel-ε small.
+    let M_amu = 1.008
+    let amp2 = qforge_elph_amp2(M_amu, omega0)           // SAME ω the samples use
+    let m_e = M_amu * 1822.888486
+    let w_ha = omega0 * ha_per_kelvin()
+    // (i) 2 M ω amp² = ℏ = 1 (atomic units). M in m_e, ω in Ha. rel-ε.
+    let virial = 2.0 * m_e * w_ha * amp2
+    fails = fails + _ck_close("🔵 F1 zero-point virial 2Mω·u² = ℏ = 1 (atomic units)",
+                              virial, 1.0, 1.0e-6)
+    // (ii) harmonic energy at the zero-point displacement u = √(amp²): E = ¼ℏω.
+    let u_zp = sqrt(amp2)
+    let e_harm = 0.5 * m_e * w_ha * w_ha * u_zp * u_zp   // ½ M ω² u²
+    let e_want = 0.25 * w_ha                              // ¼ ℏ ω, ℏ=1
+    fails = fails + _ck_close("🔵 F1 FD curvature ½Mω²u² = ¼ℏω at zero-point u",
+                              e_harm, e_want, 1.0e-6 * e_want)
+    // (iii) the amplitude MOVES λ (g̃² = g²·amp² is a real, non-unity factor for a
+    //       physical H mode) — guards against amp2 silently collapsing to 1.0.
+    let s_bare = qforge_gmn_samples(states, dv_states, eps, omega0, true, 0.0)
+    let s_amp  = qforge_gmn_samples(states, dv_states, eps, omega0, true, M_amu)
+    fails = fails + _ck_close("🔵 F1 g̃²/g² = amp² = ℏ/(2Mω) (per-mode amplitude applied)",
+                              s_amp[2][0] / s_bare[2][0], amp2, 1.0e-12)
 
     if fails == 0 { println("qforge_elph_offdiag_selftest PASS") }
     else { println("qforge_elph_offdiag_selftest FAIL — " + to_string(fails) + " case(s)") }
