@@ -1,0 +1,11 @@
+clm_conv_gpu — CLM conv1d (K=3 causal dilated) via forge im2col matmul
+  conv K=3 dil=1  Cin×Cout=8×8 T=24  max|Δ| forge-vs-conv = 1.38778e-16
+F-CLM-CONV-GPU-EQ = 1
+PASS — im2col+forge conv1d == nn_conv1d_fwd (heavy conv path wired to forge)
+
+conv1d_bwd_via_forge — col2im+matmul backward (T=24, Cin=Cout=8, K=3)
+  dil=1  max|Δ| dW=1.66533e-16 dX=8.32667e-17 db=0.0
+  dil=2  max|Δ| dW=1.11022e-16 dX=8.32667e-17 db=0.0
+F-CLM-CONV-BWD-FORGE-EQ = 1
+PASS — forge backward (dW/dX/db) == nn_conv1d_bwd byte-eq, dil∈{1,2}
+ALL-PASS — forward + backward conv1d both ride forge, byte-eq to host
