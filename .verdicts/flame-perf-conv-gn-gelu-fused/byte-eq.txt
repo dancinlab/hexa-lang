@@ -1,0 +1,8 @@
+flame_gn_gelu_fused_test — conv→GN→GELU fusion byte-eq
+  shape T=128 C=64  G=1 K=3 dil=1  max_abs_diff = 0.0
+  shape T=256 C=128 G=1 K=3 dil=2  max_abs_diff = 0.0
+  shape T=128 C=64  G=8 K=3 dil=1  max_abs_diff = 0.0
+  off   T=128 C=64  G=1 L=3 l=1    max_abs_diff = 0.0
+  OVERALL max_abs_diff = 0.0
+F-FLAME-GN-GELU-FUSED-BYTEEQ = 1
+PASS — fused == unfused, byte-identical (max_abs_diff = 0)

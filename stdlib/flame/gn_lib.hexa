@@ -274,3 +274,100 @@ pub fn nn_groupnorm_bwd_off(xhat: int, inv: int, gamma: int, goff: int, dy: int,
         g = g + 1
     }
 }
+
+// ─── conv→GN→GELU fusion (FLAME-PERF ⑤) ─────────────────────────────────────
+// The CLM trunk block is conv → GroupNorm → GELU. GroupNorm needs per-group
+// statistics over the FULL conv output, so conv must finish before GN can
+// normalize — conv→GN cannot stream. The realistic fusion boundary is the
+// GN-normalize+affine pass and the GELU pass: unfused these are TWO separate
+// elementwise sweeps over the [T·C] tensor (GN writes Y, then GELU re-reads Y
+// and writes A). Fused, the GN-affine value is GELU'd the instant it is
+// computed, so the post-GN tensor is touched ONCE — eliminating a full
+// read+write round-trip of [T·C] (the memory-bandwidth win; largest on GPU
+// where it removes an HBM round-trip, cache-locality only on host CPU).
+//
+// Byte-eq is structural: the GN math is character-for-character identical to
+// nn_groupnorm_fwd_off (same sum/var reduction order, same _gn_sqrt), and the
+// GELU below reproduces nn_lib _nn_gelu EXACTLY — the same erf-based normal CDF
+//   GELU(x) = x · 0.5·(1 + erf(x·(1/√2)))
+// with the same 1/√2 constant. `erf` is a libm codegen builtin (no hand-rolled
+// Taylor — CLAUDE.md stdlib_trig_libm). Replicated (not cross-imported) because
+// no other flame lib calls a sibling lib's pub fn — the flame libs only `use
+// tensor_lib`, and a cross-lib fn-value reference does not codegen here. The
+// expression is kept identical so the fused output is bit-for-bit equal to the
+// GN-fwd → nn_gelu_fwd pair (asserted by flame_gn_gelu_fused_test). y_out holds
+// the pre-GELU GN output (the bwd needs it for nn_gelu_bwd), a_out holds
+// GELU(y); xhat_out/mean_out/inv_out are the usual bwd caches. Backward is
+// UNCHANGED — the saved hn (= y_out) feeds the existing nn_gelu_bwd →
+// nn_groupnorm_bwd_off chain, so the gradient path is bit-identical and
+// GRAD-EXACT is untouched.
+fn _gn_gelu(x: float) -> float {
+    let inv_sqrt2 = 0.70710678118654752440  // 1/√2 — matches nn_lib _nn_inv_sqrt2
+    return x * (0.5 * (1.0 + erf(x * inv_sqrt2)))
+}
+
+// Offset-capable fused forward (trunk call site). gamma[goff+ch] / beta[boff+ch]
+// affine, as in nn_groupnorm_fwd_off. Writes y_out (= GN affine, pre-GELU,
+// bwd cache) AND a_out (= GELU(y_out)) in a single elementwise pass.
+pub fn nn_gn_gelu_fused_off(x: int, gamma: int, goff: int, beta: int, boff: int,
+                            y_out: int, a_out: int, mean_out: int, inv_out: int, xhat_out: int,
+                            T: int, C: int, G: int) {
+    let eps = 0.00001
+    let cg = C / G
+    let m = to_float(cg * T)
+    let mut g = 0
+    while g < G {
+        let c0 = g * cg
+        let mut sum = 0.0
+        let mut t = 0
+        while t < T {
+            let mut c = 0
+            while c < cg {
+                sum = sum + t_get(x, t * C + (c0 + c))
+                c = c + 1
+            }
+            t = t + 1
+        }
+        let mu = sum / m
+        let mut vs = 0.0
+        let mut t2 = 0
+        while t2 < T {
+            let mut c2 = 0
+            while c2 < cg {
+                let d = t_get(x, t2 * C + (c0 + c2)) - mu
+                vs = vs + d * d
+                c2 = c2 + 1
+            }
+            t2 = t2 + 1
+        }
+        let var = vs / m
+        let inv = 1.0 / _gn_sqrt(var + eps)
+        t_set(mean_out, g, mu)
+        t_set(inv_out, g, inv)
+        // fused affine + GELU: touch the post-GN tensor ONCE.
+        let mut t3 = 0
+        while t3 < T {
+            let mut c3 = 0
+            while c3 < cg {
+                let ch = c0 + c3
+                let idx = t3 * C + ch
+                let xh = (t_get(x, idx) - mu) * inv
+                t_set(xhat_out, idx, xh)
+                let yv = t_get(gamma, goff + ch) * xh + t_get(beta, boff + ch)
+                t_set(y_out, idx, yv)
+                t_set(a_out, idx, _gn_gelu(yv))
+                c3 = c3 + 1
+            }
+            t3 = t3 + 1
+        }
+        g = g + 1
+    }
+}
+
+// Non-offset fused forward (gamma[ch]/beta[ch] direct). Thin wrapper over the
+// offset form with goff = boff = 0 — single SSOT for the fused math.
+pub fn nn_gn_gelu_fused(x: int, gamma: int, beta: int,
+                        y_out: int, a_out: int, mean_out: int, inv_out: int, xhat_out: int,
+                        T: int, C: int, G: int) {
+    nn_gn_gelu_fused_off(x, gamma, 0, beta, 0, y_out, a_out, mean_out, inv_out, xhat_out, T, C, G)
+}
