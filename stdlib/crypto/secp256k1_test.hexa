@@ -1,0 +1,112 @@
+// HEXA Standard Library — crypto/secp256k1 self-test (field + point KAT — PR1/PR2)
+// @ci_gate
+use "stdlib/crypto/secp256k1"
+
+fn unhex(s: string) -> [int] {
+    let H = "0123456789abcdef"
+    let mut b: [int] = []
+    let mut i = 0
+    while i < byte_len(s) { b.push(H.index_of(s.substring(i,i+1))*16 + H.index_of(s.substring(i+1,i+2))); i = i + 2 }
+    return b
+}
+fn hx(b: [int]) -> string {
+    let H = "0123456789abcdef"
+    let mut p: [string] = []
+    let mut i = 0
+    while i < len(b) { p.push(H.substring((b[i]>>4)&15,((b[i]>>4)&15)+1)); p.push(H.substring(b[i]&15,(b[i]&15)+1)); i=i+1 }
+    return p.join("")
+}
+// field element from big-endian hex (64 hex chars)
+fn fe(s: string) -> [int] { return _be32_to_limbs(unhex(s)) }
+// field element back to big-endian hex
+fn fehx(a: [int]) -> string { return hx(_limbs_to_be32(a)) }
+// x-coord of a 32-limb point as big-endian hex
+fn px(pt: [int]) -> string {
+    let mut o: [int] = []; let mut i = 0
+    while i < 16 { o.push(pt[i]); i = i + 1 }
+    return fehx(o)
+}
+// y-coord of a 32-limb point as big-endian hex
+fn py(pt: [int]) -> string {
+    let mut o: [int] = []; let mut i = 0
+    while i < 16 { o.push(pt[16 + i]); i = i + 1 }
+    return fehx(o)
+}
+
+let mut pass = 0
+let mut total = 0
+fn ck(name: string, got: string, want: string) {
+    total = total + 1
+    if got == want { pass = pass + 1 } else { println("FAIL " + name + " got=" + got) }
+}
+
+fn main() {
+    let a = fe("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
+    let b = fe("fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210")
+
+    // round-trip: hex → limbs → hex (be32 contract)
+    ck("roundtrip_a", fehx(a), "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
+
+    // (p-1) + 1 ≡ 0 mod p
+    let pm1 = fe("fffffffffffffffffffffffffffffffffffffffffffffffffffffffefffffc2e")
+    let one = fe("0000000000000000000000000000000000000000000000000000000000000001")
+    ck("pm1_plus_1", fehx(_add_mod_p(pm1, one)),
+       "0000000000000000000000000000000000000000000000000000000000000000")
+
+    // fixed mul vs python oracle: a*b mod p
+    ck("mul_fixed", fehx(_mul_mod_p(a, b)),
+       "8c644419c8c50984e1e06f7bc8ebdb3c375c9addc912acf38dfac0488d5f655d")
+
+    // gx^2 mod p vs python oracle (reduction stress)
+    let gx = fe("79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798")
+    ck("gx_sq", fehx(_mul_mod_p(gx, gx)),
+       "8550e7d238fcf3086ba9adcf0fb52a9de3652194d06cb5bb38d50229b854fc49")
+
+    // inv(a)·a ≡ 1 mod p
+    ck("inv_mul", fehx(_mul_mod_p(_inv_mod_p(a), a)),
+       "0000000000000000000000000000000000000000000000000000000000000001")
+
+    // inv(a) vs python oracle
+    ck("inv_fixed", fehx(_inv_mod_p(a)),
+       "f37164d6ff61ed527289824f2aac8343ca55b3c9eeabe44cd6379acbc0ba895d")
+
+    // sub wrap: 0 - 1 ≡ p-1 mod p
+    let zero = fe("0000000000000000000000000000000000000000000000000000000000000000")
+    ck("sub_wrap", fehx(_sub_mod_p(zero, one)),
+       "fffffffffffffffffffffffffffffffffffffffffffffffffffffffefffffc2e")
+
+    // === PR2: point add / double / on-curve / identity ===
+    let gx = fe("79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798")
+    let gy = fe("483ada7726a3c4655da4fbfc0e1108a8fd17b448a68554199c47d08ffb10d4b8")
+
+    // G is on-curve, a bogus point is not
+    if _on_curve(gx, gy) { pass = pass + 1 } else { println("FAIL g_on_curve") }
+    total = total + 1
+    if !_on_curve(gx, gx) { pass = pass + 1 } else { println("FAIL bogus_off_curve") }
+    total = total + 1
+
+    // double(G) = 2G (published vector)
+    let two_g = _point_double(gx, gy)
+    ck("2G_x", px(two_g), "c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5")
+    ck("2G_y", py(two_g), "1ae168fea63dc339a3c58419466ceaeef7f632653266d0e1236431a950cfe52a")
+
+    // add(2G, G) = 3G (published vector)
+    let g2x = fe(px(two_g))
+    let g2y = fe(py(two_g))
+    let three_g = _point_add(g2x, g2y, gx, gy)
+    ck("3G_x", px(three_g), "f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9")
+    ck("3G_y", py(three_g), "388f7b0f632de8140fe337e62a37f3566500a99934c2231b6cb9fd7584b8e672")
+
+    // G + (-G) = identity (both coords zero)
+    let neg_gy = _sub_mod_p(zero, gy)
+    let id_pt = _point_add(gx, gy, gx, neg_gy)
+    ck("G_plus_negG", px(id_pt) + py(id_pt),
+       "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000")
+
+    // identity + G = G
+    let id_plus_g = _point_add(zero, zero, gx, gy)
+    ck("id_plus_G_x", px(id_plus_g), "79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798")
+
+    println("secp256k1 field+point self-test: " + to_string(pass) + "/" + to_string(total))
+    if pass == total { println("PASS") } else { println("FAILED") }
+}
