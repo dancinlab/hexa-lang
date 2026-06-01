@@ -53,8 +53,11 @@ fn _cli_hx_home() {
     let env_hx = env_var("HX_HOME")
     if env_hx != "" { return env_hx }
     let home = env_var("HOME")
-    if home == "" { return "/Users/ghost/.hx" }
-    return home + "/.hx"
+    if home != "" { return home + "/.hx" }
+    // No $HX_HOME and no $HOME — the install dir is genuinely unresolvable.
+    // Fail-fast with a clear error; NEVER emit a foreign-host literal.
+    eprintln("cli_wrappers: cannot resolve hx-home — set $HX_HOME or $HOME")
+    exit(1)
 }
 
 fn _cli_file_exists(path) {
