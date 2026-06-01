@@ -1,0 +1,170 @@
+// HEXA Standard Library — qforge/projector
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// QFORGE front-end brick 4/5 — the NONLOCAL Kleinman-Bylander projectors.
+//
+// The separable (KB) nonlocal pseudopotential is
+//
+//   V_NL = Σ_{i,j} |β_i⟩ D_ij ⟨β_j| ,
+//
+// where β_i is a radial projector × spherical harmonic Y_lm(Ĝ), and D_ij are
+// the projector couplings (PP_DIJ, parsed by upf.hexa). In the plane-wave basis
+// the projector at reciprocal vector q = k+G is
+//
+//   β_i(q) = 4π/√Ω · (−i)^l · Y_lm(q̂) · ∫₀^∞ r² β_i(r) j_l(q r) dr ,
+//
+// and the nonlocal matrix element between two PW states q, q' is
+//
+//   ⟨q| V_NL |q'⟩ = Σ_ij β_i*(q) D_ij β_j(q').
+//
+// This brick computes (a) the radial Bessel transform β_i(q) form factor, and
+// (b) the V_NL block ⟨q|V_NL|q'⟩ over a supplied q-grid, given the parsed
+// radial β_i(r), their angular momenta l_i, and D_ij. It is built so the
+// assembler (brick 5) composes the KB block into the H_of_rho operator.
+//
+// ── Scope (honest, d6) ───────────────────────────────────────────────────────
+//   For the g5 gate we validate the SEPARABLE-block algebra and the radial
+//   transform on an analytic 1-projector case (a Gaussian β whose j0 transform
+//   is closed-form). The full angular (Y_lm) machinery for l>0 is exercised via
+//   the m-summed angular factor Σ_m Y_lm*(q̂)Y_lm(q̂') = (2l+1)/4π · P_l(q̂·q̂')
+//   (the addition theorem) so the block is angular-momentum-correct without a
+//   per-(l,m) spherical-harmonic table. l=0 (the dominant H/Ca s-channel) is the
+//   exact closed-form anchor; higher l uses the Legendre-P_l addition theorem.
+//
+// d3/d4: element-agnostic — operates on supplied radial β, l, D_ij arrays.
+
+let _PROJ_4PI: float = 12.56637061435917295384   // 4π
+
+// j_l for l=0,1,2 (the channels NC UPFs carry for hydrides: s,p,d).
+//   j0(x)=sin x/x ; j1=sin x/x² − cos x/x ; j2=(3/x²−1)sin x/x − 3cos x/x².
+fn _proj_jl(l: int, x: float) -> float {
+    if x < 1.0e-8 && x > -1.0e-8 {
+        if l == 0 { return 1.0 - x * x / 6.0 }
+        return 0.0                       // j_{l>0}(0) = 0
+    }
+    let s = sin(x)
+    let c = cos(x)
+    if l == 0 { return s / x }
+    if l == 1 { return s / (x * x) - c / x }
+    if l == 2 { return (3.0 / (x * x) - 1.0) * s / x - 3.0 * c / (x * x) }
+    return 0.0                            // l>2 unsupported (clean 0, not faked)
+}
+
+// Legendre polynomial P_l(u) for l=0,1,2 (the addition-theorem angular factor).
+fn _proj_legendre(l: int, u: float) -> float {
+    if l == 0 { return 1.0 }
+    if l == 1 { return u }
+    if l == 2 { return 0.5 * (3.0 * u * u - 1.0) }
+    return 0.0
+}
+
+// ── Radial projector transform  β̃_i(q) = ∫ r² β_i(r) j_l(q r) dr ─────────────
+//   (the scalar radial part; the 4π/√Ω·(−i)^l·Y_lm prefactor is applied in the
+//   block assembly via the addition theorem). Log-mesh quadrature with rab.
+//   beta : radial β_i(r) on mesh r[] ; l : its angular momentum ; q : |k+G|.
+//   Length mismatch → 0.0.
+pub fn qforge_proj_radial(r: [float], rab: [float], beta: [float], l: int, q: float) -> float {
+    let n = len(r)
+    if len(rab) != n || len(beta) != n { return 0.0 }
+    let mut acc = 0.0
+    let mut i = 0
+    while i < n {
+        let ri = r[i]
+        acc = acc + ri * ri * beta[i] * _proj_jl(l, q * ri) * rab[i]
+        i = i + 1
+    }
+    return acc
+}
+
+// ── Nonlocal V_NL block element ⟨q|V_NL|q'⟩ (real, separable KB) ──────────────
+//
+// Using the spherical-harmonic addition theorem Σ_m Y_lm*(q̂)Y_lm(q̂') =
+// (2l+1)/4π · P_l(cosγ), the (diagonal-in-l) KB element is
+//
+//   ⟨q|V_NL|q'⟩ = Σ_ij D_ij (4π/Ω)(2l_i+1)/4π · P_{l_i}(q̂·q̂')
+//                 · β̃_i(q) β̃_j(q')        (i,j share the same l for non-zero)
+//
+// We restrict the angular coupling to same-l projector pairs (D_ij is block-
+// diagonal in l for an NC UPF). qvecs is a flat [3·nq] list of q=k+G vectors;
+// the routine returns the nq×nq V_NL matrix (flat row-major).
+//
+//   r,rab        : radial mesh + weights (shared by all projectors)
+//   betas        : flat [nproj·n] radial projectors (row i = β_i(r))
+//   ls           : [nproj] angular momenta
+//   dij          : flat [nproj·nproj] couplings (Ry; assembler applies ½ Ry→Ha)
+//   omega        : cell volume Ω
+//   qvecs        : flat [3·nq] cartesian q-vectors
+// Returns flat [nq·nq] real V_NL. Malformed → [].
+pub fn qforge_vnl_block(r: [float], rab: [float], betas: [float], ls: [int],
+                        dij: [float], nproj: int, omega: float, qvecs: [float]) -> [float] {
+    let n = len(r)
+    if n == 0 || omega <= 0.0 { return [] }
+    if len(betas) != nproj * n || len(ls) != nproj || len(dij) != nproj * nproj { return [] }
+    let lq = len(qvecs)
+    if lq % 3 != 0 { return [] }
+    let nq = lq / 3
+    let four_pi_om = _PROJ_4PI / omega
+
+    // Precompute q magnitudes, unit vectors, and per-projector radial β̃_i(q).
+    let mut qmag: [float] = []
+    let mut qhat: [float] = []            // flat [3·nq]
+    let mut a = 0
+    while a < nq {
+        let qx = qvecs[a * 3]
+        let qy = qvecs[a * 3 + 1]
+        let qz = qvecs[a * 3 + 2]
+        let m = sqrt(qx * qx + qy * qy + qz * qz)
+        qmag.push(m)
+        if m > 1.0e-12 { qhat.push(qx / m) ; qhat.push(qy / m) ; qhat.push(qz / m) }
+        else { qhat.push(0.0) ; qhat.push(0.0) ; qhat.push(0.0) }
+        a = a + 1
+    }
+    // bt[i*nq + a] = β̃_i(q_a)
+    let mut bt: [float] = []
+    let mut ip = 0
+    while ip < nproj {
+        let mut beta_i: [float] = []
+        let mut t = 0
+        while t < n { beta_i.push(betas[ip * n + t]) ; t = t + 1 }
+        let mut aa = 0
+        while aa < nq {
+            bt.push(qforge_proj_radial(r, rab, beta_i, ls[ip], qmag[aa]))
+            aa = aa + 1
+        }
+        ip = ip + 1
+    }
+
+    // Assemble V_NL[a,b] = Σ_ij D_ij (4π/Ω)(2l+1) P_l(q̂_a·q̂_b) β̃_i(a) β̃_j(b),
+    // for same-l (i,j) pairs (block-diagonal in l).
+    let mut out: [float] = []
+    let mut ra = 0
+    while ra < nq {
+        let mut cb = 0
+        while cb < nq {
+            // angular cosine q̂_a·q̂_b
+            let u = qhat[ra * 3] * qhat[cb * 3]
+                  + qhat[ra * 3 + 1] * qhat[cb * 3 + 1]
+                  + qhat[ra * 3 + 2] * qhat[cb * 3 + 2]
+            let mut v = 0.0
+            let mut i = 0
+            while i < nproj {
+                let mut j = 0
+                while j < nproj {
+                    if ls[i] == ls[j] {
+                        let l = ls[i]
+                        let ang = four_pi_om * to_float(2 * l + 1) * _proj_legendre(l, u)
+                        v = v + dij[i * nproj + j] * ang * bt[i * nq + ra] * bt[j * nq + cb]
+                    }
+                    j = j + 1
+                }
+                i = i + 1
+            }
+            out.push(v)
+            cb = cb + 1
+        }
+        ra = ra + 1
+    }
+    return out
+}
