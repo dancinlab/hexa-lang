@@ -1,0 +1,300 @@
+// ════════════════════════════════════════════════════════════════════════════
+//  clm_optim_shard_test.hexa — FSDP optimizer-state sharding descent verify.
+//
+//  Falsifier (descent-유지 half): the S-sharded AdamW (opt_adamw_step_sharded,
+//  optim_lib.hexa) must reproduce the unsharded AdamW CE descent trajectory
+//  BIT-IDENTICALLY. AdamW is elementwise over the flat param index, so a
+//  contiguous logical partition into S shards + per-shard update + reassemble
+//  is mathematically the SAME update — any divergence falsifies the claim.
+//
+//  Method: run the proven clm_gen CLMConvMoE trainer (d=16·L=3·E=4·V=64) TWICE
+//  over identical init + identical step schedule — once with the unsharded
+//  opt_adamw_step, once with opt_adamw_step_sharded (S=4 shards on EVERY
+//  parameter). Record per-step CE for both. PASS iff every step's CE is
+//  bit-equal (exact float equality) AND the trajectory descends.
+//
+//  F-FLAME-OPTIM-SHARD-DESCENT: sharded CE trajectory == unsharded, step-wise.
+//  Device half (per-device mem across real GPUs) is HONEST-DEFERRED to a pod —
+//  the shard COUNT × per-shard byte math is reported in optim_lib + the verdict.
+// ════════════════════════════════════════════════════════════════════════════
+
+use "stdlib/flame/tensor_lib"
+use "stdlib/flame/conv_lib"
+use "stdlib/flame/gn_lib"
+use "stdlib/flame/moe_lib"
+use "stdlib/flame/nn_lib"
+use "stdlib/flame/optim_lib"
+
+fn _cp(src: int, soff: int, dst: int, n: int) {
+    let mut i = 0
+    while i < n { t_set(dst, i, t_get(src, soff + i)); i = i + 1 }
+}
+fn _cpback(src: int, dst: int, doff: int, n: int) {
+    let mut i = 0
+    while i < n { t_set(dst, doff + i, t_get(src, i)); i = i + 1 }
+}
+fn _pow2(e: int) -> int {
+    let mut p = 1; let mut i = 0
+    while i < e { p = p * 2; i = i + 1 }
+    return p
+}
+
+// (forward / ce-grad / backward — identical math to clm_gen.hexa) ────────────
+fn gen_fwd(tokens: int, embed: int, ecW: int, ecB: int,
+           trunkW: int, trunkB: int, trunkG: int, trunkBe: int,
+           rW: int, rB: int, expW: int, expB: int, noG: int, noB: int, roW: int, roB: int,
+           xe: int, xtrunk: int, tin: int, hn: int, xh: int, iv: int,
+           eo: int, probs: int, ex: int, yn: int, xhN: int, ivN: int,
+           out_logits: int, T: int, d: int, E: int, V: int, K: int, L: int) {
+    let dd = d * d * K
+    nn_embedding_fwd(tokens, embed, xe, T, d)
+    let x = t_zeros(T * d)
+    nn_conv1d_fwd(xe, ecW, ecB, x, T, d, d, K, 1)
+    let wtmp = t_zeros(dd); let btmp = t_zeros(d); let gtmp = t_zeros(d); let getmp = t_zeros(d)
+    let mut l = 0
+    while l < L {
+        _cpback(x, tin, l * T * d, T * d)
+        _cp(trunkW, l * dd, wtmp, dd); _cp(trunkB, l * d, btmp, d)
+        _cp(trunkG, l * d, gtmp, d);  _cp(trunkBe, l * d, getmp, d)
+        let h = t_zeros(T * d)
+        nn_conv1d_fwd(x, wtmp, btmp, h, T, d, d, K, _pow2(l))
+        let hnl = t_zeros(T * d); let mean = t_zeros(1); let invl = t_zeros(1); let xhl = t_zeros(T * d)
+        nn_groupnorm_fwd(h, gtmp, getmp, hnl, mean, invl, xhl, T, d, 1)
+        _cpback(hnl, hn, l * T * d, T * d); _cpback(xhl, xh, l * T * d, T * d)
+        t_set(iv, l, t_get(invl, 0))
+        let hg = t_zeros(T * d); nn_gelu_fwd(hnl, hg, T * d)
+        let xn = t_zeros(T * d)
+        let mut i = 0
+        while i < T * d { t_set(xn, i, t_get(x, i) + t_get(hg, i)); i = i + 1 }
+        let mut c = 0
+        while c < T * d { t_set(x, c, t_get(xn, c)); c = c + 1 }
+        l = l + 1
+    }
+    _cpback(x, xtrunk, 0, T * d)
+    let logits_r = t_zeros(T * E)
+    nn_conv1d_fwd(x, rW, rB, logits_r, T, d, E, 1, 1)
+    let mut e = 0
+    while e < E {
+        _cp(expW, e * dd, wtmp, dd); _cp(expB, e * d, btmp, d)
+        let eol = t_zeros(T * d); nn_conv1d_fwd(x, wtmp, btmp, eol, T, d, d, K, 1)
+        _cpback(eol, eo, e * T * d, T * d)
+        let exl = t_zeros(T * d); nn_gelu_fwd(eol, exl, T * d)
+        _cpback(exl, ex, e * T * d, T * d)
+        e = e + 1
+    }
+    let y = t_zeros(T * d)
+    nn_moe_router_fwd(logits_r, ex, probs, y, T, E, d)
+    let meanN = t_zeros(1)
+    nn_groupnorm_fwd(y, noG, noB, yn, meanN, ivN, xhN, T, d, 1)
+    nn_conv1d_fwd(yn, roW, roB, out_logits, T, d, V, 1, 1)
+}
+
+fn gen_ce_grad(logits: int, targets: int, dlogits: int, T: int, V: int) {
+    let mut t = 0
+    while t < T {
+        let base = t * V
+        let mut mx = t_get(logits, base); let mut i = 1
+        while i < V { let v = t_get(logits, base + i); if v > mx { mx = v }; i = i + 1 }
+        let mut sm = 0.0; let mut i2 = 0
+        while i2 < V { sm = sm + exp(t_get(logits, base + i2) - mx); i2 = i2 + 1 }
+        let invT = 1.0 / to_float(T); let mut v3 = 0
+        while v3 < V { t_set(dlogits, base + v3, exp(t_get(logits, base + v3) - mx) / sm * invT); v3 = v3 + 1 }
+        let tgt = to_int(t_get(targets, t))
+        t_set(dlogits, base + tgt, t_get(dlogits, base + tgt) - invT)
+        t = t + 1
+    }
+}
+
+fn gen_bwd(dlogits: int, tokens: int, embed: int, ecW: int,
+           trunkW: int, trunkG: int, rW: int, expW: int, noG: int, roW: int,
+           xe: int, xtrunk: int, tin: int, hn: int, xh: int, iv: int,
+           eo: int, probs: int, ex: int, yn: int, xhN: int, ivN: int,
+           dembed: int, decW: int, decB: int,
+           dtrunkW: int, dtrunkB: int, dtrunkG: int, dtrunkBe: int,
+           drW: int, drB: int, dexpW: int, dexpB: int, dnoG: int, dnoB: int, droW: int, droB: int,
+           T: int, d: int, E: int, V: int, K: int, L: int) {
+    let dd = d * d * K
+    let dynorm = t_zeros(T * d)
+    nn_conv1d_bwd(yn, roW, dlogits, droW, dynorm, droB, T, d, V, 1, 1)
+    let dy = t_zeros(T * d)
+    nn_groupnorm_bwd(xhN, ivN, noG, dynorm, dnoG, dnoB, dy, T, d, 1)
+    let dlogits_r = t_zeros(T * E); let dex = t_zeros(E * T * d)
+    nn_moe_router_bwd(probs, ex, dy, dlogits_r, dex, T, E, d)
+    let dxr = t_zeros(T * d)
+    nn_conv1d_bwd(xtrunk, rW, dlogits_r, drW, dxr, drB, T, d, E, 1, 1)
+    let dx = t_zeros(T * d)
+    let mut z = 0; while z < T * d { t_set(dx, z, t_get(dxr, z)); z = z + 1 }
+    let wtmp = t_zeros(dd); let dwtmp = t_zeros(dd); let dexpe = t_zeros(T * d)
+    let deo = t_zeros(T * d); let dxe_e = t_zeros(T * d); let dbtmp = t_zeros(d)
+    let mut e = 0
+    while e < E {
+        let mut j = 0; while j < T * d { t_set(dexpe, j, t_get(dex, e * T * d + j)); j = j + 1 }
+        _cp(eo, e * T * d, wtmp, T * d)
+        nn_gelu_bwd(wtmp, dexpe, deo, T * d)
+        _cp(expW, e * dd, wtmp, dd)
+        nn_conv1d_bwd(xtrunk, wtmp, deo, dwtmp, dxe_e, dbtmp, T, d, d, K, 1)
+        _cpback(dwtmp, dexpW, e * dd, dd); _cpback(dbtmp, dexpB, e * d, d)
+        let mut a = 0; while a < T * d { t_set(dx, a, t_get(dx, a) + t_get(dxe_e, a)); a = a + 1 }
+        e = e + 1
+    }
+    let gtmp = t_zeros(d); let dgtmp = t_zeros(d); let dgetmp = t_zeros(d)
+    let dhn = t_zeros(T * d); let dh = t_zeros(T * d); let hnl = t_zeros(T * d)
+    let xhl = t_zeros(T * d); let invl = t_zeros(1); let tinl = t_zeros(T * d); let dconv_in = t_zeros(T * d)
+    let mut l = L - 1
+    while l >= 0 {
+        _cp(hn, l * T * d, hnl, T * d)
+        nn_gelu_bwd(hnl, dx, dhn, T * d)
+        _cp(xh, l * T * d, xhl, T * d); t_set(invl, 0, t_get(iv, l)); _cp(trunkG, l * d, gtmp, d)
+        nn_groupnorm_bwd(xhl, invl, gtmp, dhn, dgtmp, dgetmp, dh, T, d, 1)
+        _cpback(dgtmp, dtrunkG, l * d, d); _cpback(dgetmp, dtrunkBe, l * d, d)
+        _cp(tin, l * T * d, tinl, T * d); _cp(trunkW, l * dd, wtmp, dd)
+        nn_conv1d_bwd(tinl, wtmp, dh, dwtmp, dconv_in, dbtmp, T, d, d, K, _pow2(l))
+        _cpback(dwtmp, dtrunkW, l * dd, dd); _cpback(dbtmp, dtrunkB, l * d, d)
+        let mut a = 0; while a < T * d { t_set(dx, a, t_get(dx, a) + t_get(dconv_in, a)); a = a + 1 }
+        l = l - 1
+    }
+    let dxe = t_zeros(T * d)
+    nn_conv1d_bwd(xe, ecW, dx, decW, dxe, decB, T, d, d, K, 1)
+    let mut zz = 0; while zz < V * d { t_set(dembed, zz, 0.0); zz = zz + 1 }
+    nn_embedding_bwd_scatter(dxe, tokens, dembed, T, d)
+}
+
+// One full training run. shards <= 1 → unsharded path; shards > 1 → sharded.
+// Returns the final CE; writes the per-step CE trajectory into `traj` (length
+// steps). Identical init via fixed LCG seeds so the two runs are comparable.
+fn run_trainer(shards: int, steps: int, traj: int) -> float {
+    let T = 4; let d = 16; let E = 4; let V = 64; let K = 3; let L = 3
+    let dd = d * d * K; let ed = E * d; let vd = V * d
+
+    let tokens = t_zeros(T); t_set(tokens,0,3.0); t_set(tokens,1,14.0); t_set(tokens,2,59.0); t_set(tokens,3,26.0)
+    let targets = t_zeros(T); t_set(targets,0,14.0); t_set(targets,1,59.0); t_set(targets,2,26.0); t_set(targets,3,7.0)
+
+    let embed=t_zeros(vd); t_fill_lcg(embed, vd, 1, 0.3)
+    let ecW=t_zeros(dd); t_fill_lcg(ecW, dd, 2, 0.2); let ecB=t_zeros(d); t_fill_lcg(ecB, d, 3, 0.1)
+    let trunkW=t_zeros(L*dd); t_fill_lcg(trunkW, L*dd, 4, 0.2)
+    let trunkB=t_zeros(L*d); t_fill_lcg(trunkB, L*d, 5, 0.1)
+    let trunkG=t_zeros(L*d); t_fill_lcg(trunkG, L*d, 6, 0.5)
+    let trunkBe=t_zeros(L*d); t_fill_lcg(trunkBe, L*d, 7, 0.1)
+    let rW=t_zeros(ed); t_fill_lcg(rW, ed, 12, 0.2); let rB=t_zeros(E); t_fill_lcg(rB, E, 13, 0.1)
+    let expW=t_zeros(E*dd); t_fill_lcg(expW, E*dd, 14, 0.2); let expB=t_zeros(E*d); t_fill_lcg(expB, E*d, 15, 0.1)
+    let noG=t_zeros(d); t_fill_lcg(noG, d, 18, 0.5); let noB=t_zeros(d); t_fill_lcg(noB, d, 19, 0.1)
+    let roW=t_zeros(vd); t_fill_lcg(roW, vd, 20, 0.2); let roB=t_zeros(V); t_fill_lcg(roB, V, 21, 0.1)
+
+    let dembed=t_zeros(vd); let decW=t_zeros(dd); let decB=t_zeros(d)
+    let dtrunkW=t_zeros(L*dd); let dtrunkB=t_zeros(L*d); let dtrunkG=t_zeros(L*d); let dtrunkBe=t_zeros(L*d)
+    let drW=t_zeros(ed); let drB=t_zeros(E); let dexpW=t_zeros(E*dd); let dexpB=t_zeros(E*d)
+    let dnoG=t_zeros(d); let dnoB=t_zeros(d); let droW=t_zeros(vd); let droB=t_zeros(V)
+
+    let m_embed=t_zeros(vd); let v_embed=t_zeros(vd); let m_ecW=t_zeros(dd); let v_ecW=t_zeros(dd)
+    let m_ecB=t_zeros(d); let v_ecB=t_zeros(d)
+    let m_tW=t_zeros(L*dd); let v_tW=t_zeros(L*dd); let m_tB=t_zeros(L*d); let v_tB=t_zeros(L*d)
+    let m_tG=t_zeros(L*d); let v_tG=t_zeros(L*d); let m_tBe=t_zeros(L*d); let v_tBe=t_zeros(L*d)
+    let m_rW=t_zeros(ed); let v_rW=t_zeros(ed); let m_rB=t_zeros(E); let v_rB=t_zeros(E)
+    let m_eW=t_zeros(E*dd); let v_eW=t_zeros(E*dd); let m_eB=t_zeros(E*d); let v_eB=t_zeros(E*d)
+    let m_noG=t_zeros(d); let v_noG=t_zeros(d); let m_noB=t_zeros(d); let v_noB=t_zeros(d)
+    let m_roW=t_zeros(vd); let v_roW=t_zeros(vd); let m_roB=t_zeros(V); let v_roB=t_zeros(V)
+
+    let xe=t_zeros(T*d); let xtrunk=t_zeros(T*d); let tin=t_zeros(L*T*d); let hn=t_zeros(L*T*d)
+    let xh=t_zeros(L*T*d); let iv=t_zeros(L); let eo=t_zeros(E*T*d); let probs=t_zeros(T*E)
+    let ex=t_zeros(E*T*d); let yn=t_zeros(T*d); let xhN=t_zeros(T*d); let ivN=t_zeros(1)
+    let logits=t_zeros(T*V); let dlogits=t_zeros(T*V)
+
+    let mut lossF = 0.0; let mut step = 1
+    while step <= steps {
+        gen_fwd(tokens, embed, ecW, ecB, trunkW, trunkB, trunkG, trunkBe, rW, rB, expW, expB, noG, noB, roW, roB,
+                xe, xtrunk, tin, hn, xh, iv, eo, probs, ex, yn, xhN, ivN, logits, T, d, E, V, K, L)
+        let loss = nn_ce_loss_allpos(logits, targets, T, V)
+        t_set(traj, step - 1, loss)
+        lossF = loss
+        gen_ce_grad(logits, targets, dlogits, T, V)
+        gen_bwd(dlogits, tokens, embed, ecW, trunkW, trunkG, rW, expW, noG, roW,
+                xe, xtrunk, tin, hn, xh, iv, eo, probs, ex, yn, xhN, ivN,
+                dembed, decW, decB, dtrunkW, dtrunkB, dtrunkG, dtrunkBe, drW, drB, dexpW, dexpB,
+                dnoG, dnoB, droW, droB, T, d, E, V, K, L)
+        // optimizer step — sharded iff shards > 1
+        if shards > 1 {
+            opt_adamw_step_sharded(embed, dembed, m_embed, v_embed, vd, 0.05, 0.9, 0.999, 0.00000001, 0.0, step, shards)
+            opt_adamw_step_sharded(ecW, decW, m_ecW, v_ecW, dd, 0.05, 0.9, 0.999, 0.00000001, 0.0, step, shards)
+            opt_adamw_step_sharded(ecB, decB, m_ecB, v_ecB, d, 0.05, 0.9, 0.999, 0.00000001, 0.0, step, shards)
+            opt_adamw_step_sharded(trunkW, dtrunkW, m_tW, v_tW, L*dd, 0.05, 0.9, 0.999, 0.00000001, 0.0, step, shards)
+            opt_adamw_step_sharded(trunkB, dtrunkB, m_tB, v_tB, L*d, 0.05, 0.9, 0.999, 0.00000001, 0.0, step, shards)
+            opt_adamw_step_sharded(trunkG, dtrunkG, m_tG, v_tG, L*d, 0.05, 0.9, 0.999, 0.00000001, 0.0, step, shards)
+            opt_adamw_step_sharded(trunkBe, dtrunkBe, m_tBe, v_tBe, L*d, 0.05, 0.9, 0.999, 0.00000001, 0.0, step, shards)
+            opt_adamw_step_sharded(rW, drW, m_rW, v_rW, ed, 0.05, 0.9, 0.999, 0.00000001, 0.0, step, shards)
+            opt_adamw_step_sharded(rB, drB, m_rB, v_rB, E, 0.05, 0.9, 0.999, 0.00000001, 0.0, step, shards)
+            opt_adamw_step_sharded(expW, dexpW, m_eW, v_eW, E*dd, 0.05, 0.9, 0.999, 0.00000001, 0.0, step, shards)
+            opt_adamw_step_sharded(expB, dexpB, m_eB, v_eB, E*d, 0.05, 0.9, 0.999, 0.00000001, 0.0, step, shards)
+            opt_adamw_step_sharded(noG, dnoG, m_noG, v_noG, d, 0.05, 0.9, 0.999, 0.00000001, 0.0, step, shards)
+            opt_adamw_step_sharded(noB, dnoB, m_noB, v_noB, d, 0.05, 0.9, 0.999, 0.00000001, 0.0, step, shards)
+            opt_adamw_step_sharded(roW, droW, m_roW, v_roW, vd, 0.05, 0.9, 0.999, 0.00000001, 0.0, step, shards)
+            opt_adamw_step_sharded(roB, droB, m_roB, v_roB, V, 0.05, 0.9, 0.999, 0.00000001, 0.0, step, shards)
+        }
+        if shards <= 1 {
+            opt_adamw_step(embed, dembed, m_embed, v_embed, vd, 0.05, 0.9, 0.999, 0.00000001, 0.0, step)
+            opt_adamw_step(ecW, decW, m_ecW, v_ecW, dd, 0.05, 0.9, 0.999, 0.00000001, 0.0, step)
+            opt_adamw_step(ecB, decB, m_ecB, v_ecB, d, 0.05, 0.9, 0.999, 0.00000001, 0.0, step)
+            opt_adamw_step(trunkW, dtrunkW, m_tW, v_tW, L*dd, 0.05, 0.9, 0.999, 0.00000001, 0.0, step)
+            opt_adamw_step(trunkB, dtrunkB, m_tB, v_tB, L*d, 0.05, 0.9, 0.999, 0.00000001, 0.0, step)
+            opt_adamw_step(trunkG, dtrunkG, m_tG, v_tG, L*d, 0.05, 0.9, 0.999, 0.00000001, 0.0, step)
+            opt_adamw_step(trunkBe, dtrunkBe, m_tBe, v_tBe, L*d, 0.05, 0.9, 0.999, 0.00000001, 0.0, step)
+            opt_adamw_step(rW, drW, m_rW, v_rW, ed, 0.05, 0.9, 0.999, 0.00000001, 0.0, step)
+            opt_adamw_step(rB, drB, m_rB, v_rB, E, 0.05, 0.9, 0.999, 0.00000001, 0.0, step)
+            opt_adamw_step(expW, dexpW, m_eW, v_eW, E*dd, 0.05, 0.9, 0.999, 0.00000001, 0.0, step)
+            opt_adamw_step(expB, dexpB, m_eB, v_eB, E*d, 0.05, 0.9, 0.999, 0.00000001, 0.0, step)
+            opt_adamw_step(noG, dnoG, m_noG, v_noG, d, 0.05, 0.9, 0.999, 0.00000001, 0.0, step)
+            opt_adamw_step(noB, dnoB, m_noB, v_noB, d, 0.05, 0.9, 0.999, 0.00000001, 0.0, step)
+            opt_adamw_step(roW, droW, m_roW, v_roW, vd, 0.05, 0.9, 0.999, 0.00000001, 0.0, step)
+            opt_adamw_step(roB, droB, m_roB, v_roB, V, 0.05, 0.9, 0.999, 0.00000001, 0.0, step)
+        }
+        step = step + 1
+    }
+    return lossF
+}
+
+// Compare a sharded run (S shards) against the unsharded trajectory `traj_u`.
+// Returns 1 iff every step's CE is bit-equal. Prints the per-S summary line.
+fn check_shards(S: int, steps: int, traj_u: int) -> int {
+    let traj_s = t_zeros(steps)
+    let lossF_s = run_trainer(S, steps, traj_s)
+    let mut bit_equal = 1
+    let mut max_abs = 0.0
+    let mut i = 0
+    while i < steps {
+        let du = t_get(traj_u, i); let ds = t_get(traj_s, i)
+        let diff = if du > ds { du - ds } else { ds - du }
+        if diff > max_abs { max_abs = diff }
+        if du != ds { bit_equal = 0 }
+        i = i + 1
+    }
+    println("  sharded(S=" + to_string(S) + ")  lossF = " + to_string(lossF_s)
+            + "  max|ΔCE| = " + to_string(max_abs)
+            + "  biteq = " + to_string(bit_equal))
+    return bit_equal
+}
+
+fn main() {
+    println("clm_optim_shard — FSDP optimizer-state sharding descent verify")
+    let steps = 25
+    let traj_u = t_zeros(steps)
+    let lossF_u = run_trainer(1, steps, traj_u)   // unsharded baseline
+    let loss0_u = t_get(traj_u, 0)
+    println("  unsharded     loss0 = " + to_string(loss0_u) + "  lossF = " + to_string(lossF_u))
+
+    // S ∈ {3 (uneven · remainder-spread), 4 (even), 8 (fine)}.
+    let b3 = check_shards(3, steps, traj_u)
+    let b4 = check_shards(4, steps, traj_u)
+    let b8 = check_shards(8, steps, traj_u)
+    let mut bit_equal = 0
+    if b3 == 1 { if b4 == 1 { if b8 == 1 { bit_equal = 1 } } }
+
+    let descends = if lossF_u < loss0_u * 0.95 { 1 } else { 0 }
+    println("F-FLAME-OPTIM-SHARD-DESCENT-BITEQ = " + to_string(bit_equal))
+    println("F-FLAME-CLM-GEN-DESCENT = " + to_string(descends))
+    if bit_equal == 1 {
+        if descends == 1 {
+            println("PASS — sharded AdamW (S∈{3,4,8}) reproduces unsharded CE descent BIT-IDENTICALLY")
+            return
+        }
+    }
+    println("FAIL")
+}

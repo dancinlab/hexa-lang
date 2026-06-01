@@ -1,0 +1,8 @@
+clm_optim_shard — FSDP optimizer-state sharding descent verify
+  unsharded     loss0 = 4.02517  lossF = 0.00044961
+  sharded(S=3)  lossF = 0.00044961  max|ΔCE| = 0.0  biteq = 1
+  sharded(S=4)  lossF = 0.00044961  max|ΔCE| = 0.0  biteq = 1
+  sharded(S=8)  lossF = 0.00044961  max|ΔCE| = 0.0  biteq = 1
+F-FLAME-OPTIM-SHARD-DESCENT-BITEQ = 1
+F-FLAME-CLM-GEN-DESCENT = 1
+PASS — sharded AdamW (S∈{3,4,8}) reproduces unsharded CE descent BIT-IDENTICALLY
