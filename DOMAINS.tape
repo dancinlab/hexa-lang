@@ -34,6 +34,7 @@
 @domain UNSHADOW := "domains/UNSHADOW.md"
 @domain GPU-ROOFLINE := "domains/GPU-ROOFLINE.md"
 @domain FLAME-PERF := "domains/FLAME-PERF.md"
+@domain QFORGE-PERF := "domains/QFORGE-PERF.md"
 @domain HEXA-BUILDFLOOR := "./HEXA-BUILDFLOOR.md"
 @domain HEXA-CC-ZERO := "./HEXA-CC-ZERO.md"
 @domain HEXA-TRAIN-FLOOR := "./HEXA-TRAIN-FLOOR.md"
