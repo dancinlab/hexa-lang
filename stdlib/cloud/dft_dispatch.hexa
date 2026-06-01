@@ -1834,6 +1834,55 @@ fn _dft_failure_is_walltime(out_text: str) -> int {
     return 0
 }
 
+// _dft_failure_is_corrupt_recover — PURE sub-classifier for a `__DFT_FAILED__`
+// el-ph stage: is the crash a CORRUPT phonon-recover state (SALVAGEABLE on the
+// SAME pod by recomputing only the bad+remaining q with start_q/recover=.false.)
+// rather than a GENUINE numerical/OOM/segfault fault (teardown/defer)?
+//
+// The class: the ORIGINAL run's teardown-kill interrupts ph.x mid-write, leaving
+// a per-q `_ph0/<prefix>.q_<N>/<prefix>.save` XML half-written (no closing tag).
+// A subsequent `recover=.true.` ph.x reads that partial XML and dies:
+//   `Bands found: reading from ./out/_ph0/<prefix>.q_N/` then
+//   `Reading xml data ... <prefix>.save/` → PARSE_ERR / 81 runParser → SIGABRT(6),
+// or `PARTIAL_EL_PHON not found` / `closing tag not found` / `cannot open file`.
+// The EARLIER completed q's (good nonzero `<prefix>.dynN`) are intact — only the
+// in-flight q's per-q `.save` is corrupt — so this is recoverable WITHOUT a fresh
+// SCF (the `<prefix>.save` ground state is valid; only the `_ph0/*.q_*` scratch is).
+//
+// This is DISTINCT from the walltime class (Maximum CPU time / max_seconds →
+// `_dft_failure_is_walltime`) and from a genuine numerical/OOM/segfault crash
+// (Error in routine / STOP [1-9] / NaN / Out of memory / Segmentation), which the
+// caller must STILL teardown/defer. The two FAILED sub-classifiers are mutually
+// ordered by the caller: walltime first (no teardown), then corrupt-recover
+// (salvage, no teardown), else genuine crash (teardown/defer). Returns 1 iff a
+// corrupt-recover signature is present, 0 otherwise. d19 reuse — a pure signature
+// set folded into the SAME `__DFT_FAILED__` taxonomy, no new oracle.
+//
+// GUARD: a walltime kill ALSO leaves a `STOP 1` and could co-occur with a stale
+// `_ph0` line, so walltime takes precedence at the call site (checked first).
+fn _dft_failure_is_corrupt_recover(out_text: str) -> int {
+    if out_text.contains("PARSE_ERR") {
+        return 1
+    }
+    if out_text.contains("runParser") {
+        return 1
+    }
+    if out_text.contains("PARTIAL_EL_PHON not found") {
+        return 1
+    }
+    if out_text.contains("closing tag not found") {
+        return 1
+    }
+    // `cannot open file` is only a corrupt-recover signature when it is reading a
+    // per-q phonon scratch (`_ph0/.../...save`); a bare `cannot open file` on a deck
+    // input (e.g. a missing pseudo) is a different fault, so require the `_ph0`
+    // co-signature to avoid misclassifying an unrelated open failure as salvageable.
+    if out_text.contains("cannot open file") && out_text.contains("_ph0") {
+        return 1
+    }
+    return 0
+}
+
 // _dft_self_resume_wrap — wrap a guarded LONG-RUNNING compute stage in a POD-SIDE
 // self-restart loop so a per-pod walltime kill is followed by an AUTOMATIC
 // recover-relaunch on the SAME pod — no controller `--resume` round-trip.
@@ -1864,6 +1913,119 @@ fn _dft_self_resume_wrap(stage_cmd: str, procname: str, out: str, max_cycles: in
         + " (recover relaunch) $(date -u +%FT%TZ)\"; "
         + stage_cmd + "; sleep 5; done; "
         + "echo \"[dft-self-resume] loop exit after $n cycle(s) — probe=$(" + probe + ")\""
+}
+
+// ── corrupt phonon-recover SALVAGE (the salvage-not-teardown fix, @L2) ──
+//
+// _dft_corrupt_recover_q — PURE: the failing q index parsed from a corrupt-recover
+// ph.out, for the @L3 per-q one-attempt marker. ph.x prints the q it is reading
+// just before it dies, e.g. `reading from ./out/_ph0/lah10.q_4/` → 4. Scans for a
+// `.q_<N>` (or `q_<N>`) token and returns the LAST one (the q ph.x was on when it
+// crashed). Returns 0 if no `.q_<N>` token is present (caller then keys the marker
+// on 0 — still a valid one-attempt guard for an unparseable corrupt-recover).
+fn _dft_corrupt_recover_q(out_text: str) -> int {
+    let lines = out_text.split("\n")
+    let mut found = 0
+    let mut i = 0
+    while i < len(lines) {
+        let ln = lines[i]
+        let j = ln.index_of("q_")
+        if j >= 0 {
+            // collect the digit run immediately after `q_` (stop at first non-digit
+            // so `.q_4/lah10.save` yields 4, not the later digits in `.save`).
+            let tail = ln.substring(j + 2, len(ln))
+            let mut v = 0
+            let mut got = 0
+            let mut k = 0
+            let mut stop = 0
+            while k < len(tail) && stop == 0 {
+                let cc = char_code(tail.substring(k, k + 1))
+                if cc >= 48 && cc <= 57 {
+                    v = v * 10 + (cc - 48)
+                    got = 1
+                    k = k + 1
+                } else {
+                    stop = 1
+                }
+            }
+            if got == 1 {
+                found = v
+            }
+        }
+        i = i + 1
+    }
+    return found
+}
+
+// _dft_salvage_marker — the deck-LOCAL durable marker that records a corrupt-
+// recover salvage was already ATTEMPTED for a given failing q (@L3 one-attempt
+// guard). Keyed by q so a re-`--resume` that hits the SAME failing q again finds
+// the marker and does NOT re-salvage (which would loop forever on a genuinely-bad
+// q); a DIFFERENT failing q later is a fresh attempt. Lives next to the state
+// stamp in the deck dir so it survives a session restart (NOT in /tmp — d_defer_no_delete).
+fn _dft_salvage_marker(deck: str, q: int) -> str {
+    return deck + "/.dft_salvage.q" + to_string(q) + ".done"
+}
+
+// _dft_salvage_already_tried — PURE @L3 guard: 1 iff a salvage was ALREADY
+// attempted for this failing q (the marker file exists). Network-free; the caller
+// computes `q` from the remote probe and tests this before firing a 2nd salvage.
+// A re-PARSE_ERR on a q we already cleanly recomputed is a GENUINE fault → teardown.
+fn _dft_salvage_already_tried(deck: str, q: int) -> int {
+    if file_exists(_dft_salvage_marker(deck, q)) {
+        return 1
+    }
+    return 0
+}
+
+// _dft_salvage_cmd — the pod-side shell that SALVAGES a corrupt phonon-recover
+// state on the SAME pod WITHOUT a teardown (@L2). It is GENERIC (d4 — no slug /
+// prefix hardcoded): every value is derived on the pod from the deck files.
+//
+//   (a) PREFIX + nq_total ← the `*.dyn0` glob. ph.x writes `<prefix>.dyn0` (the
+//       q-mesh header) listing `nqs` = the total q count; `<prefix>` is that
+//       file's basename minus the trailing `0`.
+//   (b) START_Q ← the first q in 1..nq that LACKS a good nonzero `<prefix>.dynN`
+//       (a completed q leaves a non-empty `<prefix>.dynN`). Completed dynN are
+//       PRESERVED — the fresh run only recomputes start_q..nq.
+//   (c) DELETE the corrupt per-q scratch `_ph0/<prefix>.q_<START_Q>/` (the half-
+//       written `.save` XML that PARSE_ERR'd) + the stale top-level recover files
+//       for the range (`_ph0/<prefix>.recover*` / `<prefix>.phsave/recover*`) so a
+//       fresh start_q run never reads the corrupt state. The valid SCF ground
+//       state (`<prefix>.save/`) and completed `<prefix>.dynN` are UNTOUCHED.
+//   (d) WRITE `ph_salvage.in` from `ph.in` with `recover=.false.`, `start_q=START_Q`,
+//       `last_q=nq` injected into &inputph (replace-or-append each key). outdir/
+//       fildyn are already pod-normalized by the earlier `_dft_scfph_cmd` sed.
+//   (e) RELAUNCH ph.x on `ph_salvage.in`, appending to ph.out (so the terminal
+//       harvest/verdict still reads one ph.out across the union of q's).
+//
+// If the `*.dyn0` is absent (no q ever completed — not a salvageable recover) the
+// shell prints `SALVAGE_NODYN0` and exits non-zero so the caller defers instead.
+fn _dft_salvage_cmd(np: int, walltime_h: int) -> str {
+    let relaunch = _dft_mpi_env() + " && setsid timeout " + to_string(walltime_h)
+        + "h mpirun -np " + to_string(np) + " --allow-run-as-root ph.x -in ph_salvage.in >> ph.out 2>&1"
+    return "cd /root/deck && "
+        // (a) prefix + nq_total from the dyn0 header
+        + "d0=$(ls *.dyn0 2>/dev/null | head -1); "
+        + "[ -z \"$d0\" ] && { echo SALVAGE_NODYN0; exit 3; }; "
+        + "pfx=${d0%0}; "
+        + "nq=$(grep -aoE '[0-9]+' \"$d0\" | head -1); "
+        + "[ -z \"$nq\" ] && { echo SALVAGE_NONQ; exit 3; }; "
+        // (b) first q lacking a good nonzero dynN
+        + "sq=0; q=1; while [ $q -le $nq ]; do "
+        + "if [ ! -s \"${pfx}${q}\" ]; then sq=$q; break; fi; q=$((q+1)); done; "
+        + "[ $sq -eq 0 ] && { echo SALVAGE_ALLDONE; exit 0; }; "
+        + "echo \"[dft-salvage] prefix=$pfx nq=$nq start_q=$sq (completed dynN preserved)\"; "
+        // (c) delete the corrupt per-q scratch + stale recover state for the bad q
+        + "rm -rf \"./out/_ph0/${pfx}.q_${sq}\" \"./out/_ph0/${pfx}q_${sq}\" 2>/dev/null; "
+        + "rm -f ./out/_ph0/${pfx}.recover* ./out/${pfx}.save/recover* 2>/dev/null; "
+        // (d) fresh ph_salvage.in: recover=.false. + start_q + last_q (replace-or-append)
+        + "cp ph.in ph_salvage.in; "
+        + "sed -i \"/recover[[:space:]]*=/d; /start_q[[:space:]]*=/d; /last_q[[:space:]]*=/d\" ph_salvage.in; "
+        + "sed -i \"s|^\\([[:space:]]*\\)&inputph|\\1\\&inputph\\n  recover = .false.\\n  start_q = $sq\\n  last_q = $nq|\" ph_salvage.in; "
+        + "echo \"[dft-salvage] relaunching ph.x start_q=$sq last_q=$nq recover=.false.\"; "
+        // (e) relaunch on the salvage input
+        + relaunch
 }
 
 // ── d11 pre-rent OOM gate (Fix-deck-1) ───────────────────────────────
@@ -2346,9 +2508,49 @@ fn _dft_resume(deck: str) -> int {
                 println("[dft-run]   monitor: hexa cloud tail " + host + " " + phon_log + "   ·   advance: hexa cloud dft-run " + deck + " --resume")
                 return 0
             }
+            // CORRUPT phonon-recover (PARSE_ERR / runParser / PARTIAL_EL_PHON not
+            // found / closing tag / cannot open a `_ph0/*.save`): the original run's
+            // teardown-kill left a per-q `.save` XML half-written, so `recover=.true.`
+            // dies reading it — but the COMPLETED q's (good `<prefix>.dynN`) are intact.
+            // SALVAGE on the SAME pod (delete the corrupt q's scratch + relaunch ph.x
+            // with start_q/recover=.false. so only the bad+remaining q recompute) — NO
+            // teardown (the LaH10 q=4 loss). @L3: ONE attempt per failing q (durable
+            // marker), so a re-`--resume` on the SAME re-failing q does NOT loop — that
+            // is a GENUINE fault and falls through to teardown/defer below.
+            if _dft_failure_is_corrupt_recover(read_file(deck + "/ph.out")) == 1 {
+                let badq = _dft_corrupt_recover_q(read_file(deck + "/ph.out"))
+                if _dft_salvage_already_tried(deck, badq) == 1 {
+                    println("[dft-run] --resume: ph CORRUPT-RECOVER on q=" + to_string(badq)
+                        + " AGAIN after a clean recompute — GENUINE fault, no re-salvage (@L3).")
+                    let pt2 = cloud_exec_opts(host, ssh_opts, "tail -40 /root/deck/ph.out 2>/dev/null")
+                    println("[dft-run] ── ph.out tail ──\n" + pt2.stdout_ + "\n[dft-run] ── end ──")
+                    let _wcf = _dft_write_state(deck, "failed", iid, host_ip, port, identity, np, walltime_h, relax_name)
+                    return _dft_teardown(iid, 1)
+                }
+                println("[dft-run] --resume: ph CORRUPT phonon-recover (q=" + to_string(badq)
+                    + ") — half-written `_ph0/*.save` XML, NOT a science crash.")
+                println("[dft-run]   SALVAGING on the SAME pod " + iid
+                    + " (start_q recompute of the bad+remaining q · completed dynN preserved) — NO teardown.")
+                // @L3 durable one-attempt marker BEFORE the relaunch, so a crash
+                // mid-salvage still records the attempt (no infinite re-fire).
+                let _sm = write_text(_dft_salvage_marker(deck, badq), "salvaged q=" + to_string(badq) + "\n")
+                let phon_log = _dft_remote_logfile("phon")
+                let salv_cmd = _dft_salvage_cmd(np, walltime_h)
+                let salv_argv = _dft_detach_argv(salv_cmd)
+                let salvaged = cloud_nohup_opts(host, ssh_opts, salv_argv, phon_log)
+                if salvaged.ok == 0 {
+                    println("[dft-run] --resume: salvage detach FAILED — " + salvaged.message)
+                    println("[dft-run]   leaving pod " + iid + " INTACT (transport fail ≠ science fail) — retry: hexa cloud dft-run " + deck + " --resume")
+                    return 3
+                }
+                let _wsv = _dft_write_state(deck, "phon", iid, host_ip, port, identity, np, walltime_h, relax_name)
+                println("[dft-run] --resume: el-ph SALVAGE-RELAUNCHED detached (pid " + to_string(salvaged.pid) + " · log " + phon_log + ").")
+                println("[dft-run]   monitor: hexa cloud tail " + host + " " + phon_log + "   ·   advance: hexa cloud dft-run " + deck + " --resume")
+                return 0
+            }
             // GENUINE crash (Error in routine / STOP [1-9] / segfault / OOM — not a
-            // walltime cap): the existing teardown/defer behavior is correct.
-            println("[dft-run] --resume: ph (or scf) CRASHED before a clean JOB DONE (non-walltime signature) — closed as failure.")
+            // walltime cap, not a corrupt-recover): the existing teardown/defer is correct.
+            println("[dft-run] --resume: ph (or scf) CRASHED before a clean JOB DONE (non-walltime, non-recover signature) — closed as failure.")
             let pt = cloud_exec_opts(host, ssh_opts, "tail -40 /root/deck/ph.out 2>/dev/null")
             println("[dft-run] ── ph.out tail ──\n" + pt.stdout_ + "\n[dft-run] ── end ──")
             let _wf = _dft_write_state(deck, "failed", iid, host_ip, port, identity, np, walltime_h, relax_name)
