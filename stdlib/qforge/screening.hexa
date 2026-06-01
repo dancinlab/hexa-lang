@@ -120,6 +120,32 @@ pub fn qforge_vhartree_from_drho(drho: [float], nx: int, ny: int, nz: int,
     return out
 }
 
+// ── GROUND-STATE Hartree V_H[ρ](r) : G-space Poisson (closed-form) ────────────
+//   QFORGE M5.7 — the LAST missing SCF primitive. scf_pw.hexa took the ground-
+//   state Hartree `vh_diag` as a caller-supplied input; this builds it from the
+//   ground-state density ρ for an arbitrary aperiodic cell.
+//
+//   ∇²V_H(r) = −4π ρ(r)  →  G-space  V_H(G) = 4π ρ(G)/|G|²  (G≠0),  V_H(G=0)=0.
+//   The Poisson operator is LINEAR, so it is IDENTICALLY the response kernel
+//   `qforge_vhartree_from_drho` — only the meaning of the input differs (the full
+//   ground-state ρ here, the 1st-order response Δρ there). We REUSE that verified
+//   G-space Poisson core verbatim (d19 — no FFT/Poisson re-implementation).
+//
+//   G=0 (neutral-cell gauge): the divergent G=0 self-/average term is dropped to 0,
+//   the standard plane-wave convention. In a CHARGE-NEUTRAL cell (the only physical
+//   case for an SCF) the ionic + Hartree G=0 terms cancel against the compensating
+//   background, so dropping it here is exact for the *electronic* Hartree screening
+//   that enters the KS operator (the constant gauge shift is unobservable). For a
+//   NON-neutral input the returned V_H omits that constant — caller must neutralize.
+//
+//   Returns the real-space V_H(r) on the same nx·ny·nz grid (length N), which the
+//   caller samples onto the PW/site grid as scf_pw's `vh_diag`. malformed → [].
+pub fn qforge_vhartree_from_rho(rho: [float], nx: int, ny: int, nz: int,
+                                b1: [float], b2: [float], b3: [float]) -> [float] {
+    // V_H[ρ] = same linear Poisson operator as the response kernel (d19 reuse).
+    return qforge_vhartree_from_drho(rho, nx, ny, nz, b1, b2, b3)
+}
+
 // ── 공개 API: 실 Hartree+XC 차폐 커널 ΔV_scf(r) = V_H[Δρ] + f_xc[ρ]·Δρ ────────
 //   drho       : 1차 밀도응답 Δρ(r) (실수 flat, 길이 N, fft3 layout).
 //   rho        : 바닥 밀도 ρ(r) (실수 flat, 길이 N) — XC 커널 f_xc[ρ] 평가점.
