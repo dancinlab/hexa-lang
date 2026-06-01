@@ -1,0 +1,149 @@
+// HEXA Standard Library — qforge/screening
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// QFORGE 통합② 후속 — 실 Hartree+XC 차폐 커널 (drho_to_dvscf).
+//   dfpt_response.hexa(#2092)의 `qforge_force_constant` 는 자기무모순 차폐 반복을
+//   generic 하게 구현해 두고, 차폐 커널 ΔV_scf[Δρ] = V_H[Δρ] + f_xc[ρ]·Δρ 를
+//   caller 가 공급(d4)하도록 비워 두었다 — g5 마감은 bare(0 커널) 경로였다.
+//   본 brick 이 그 빈 자리를 채우는 **실 Hartree + LDA-교환 차폐 커널**이다.
+//
+// ── Hartree (closed-form, G-공간 Poisson) ────────────────────────────────────
+//   ∇²ΔV_H(r) = −4π Δρ(r)  →  G-공간에서 ΔV_H(G) = 4π Δρ(G)/|G|²  (G≠0).
+//   G=0 성분은 0 (중성 셀 — 평균전위 게이지). FFT 는 d19 재사용:
+//   stdlib/signal/core_fft fft3/ifft3 (brick 1/5, #2076) — 재구현 안 함.
+//   |G|² 는 caller 가 공급한 역격자 기저 b1,b2,b3 로 물리적으로 계산:
+//     G = h·b1 + k·b2 + l·b3,  (h,k,l) = 부호있는 FFT 주파수 인덱스.
+//   → closed-form 커널 → 🔵 등급(평면파 입력에 대해 정확).
+//
+// ── XC (LDA 교환, Slater/Dirac, closed-form) ─────────────────────────────────
+//   교환 전위   V_x(ρ) = −(3ρ/π)^{1/3}                      (Slater, Hartree 단위)
+//   교환 커널   f_x(ρ) = dV_x/dρ = −(1/3)(3/π)^{1/3} ρ^{−2/3}
+//   단열 LDA 차폐: ΔV_x(r) = f_x[ρ(r)]·Δρ(r)  (국소·실공간).
+//   상관(PZ81/PW92) 항은 본 PR 스코프 밖 — half-impl 회피(g4/d6). xc_mode 로
+//   교환-만 선택; 상관 모드는 clean `unsupported`(빈 반환) — 날조 안 함, 후속.
+//
+// ── d4 generic 계약 ──────────────────────────────────────────────────────────
+//   qforge_dvscf_from_drho(drho, rho, nx,ny,nz, b1,b2,b3, xc_mode) -> dvscf
+//   재료 하드코딩 없음 — caller 가 ρ·Δρ·그리드·역격자를 공급. 반환 dvscf(길이 N)
+//   는 그대로 dfpt_response 의 drho_to_dvscf 클로저로 투입 가능(국소 ΔV(r)).
+//
+// reuse (d19): stdlib/signal/core_fft fft3/ifft3 (#2076) — FFT 재구현 금지.
+use "stdlib/signal/core_fft"
+
+// xc_mode 상수.
+//   0 = Hartree-only           (교환·상관 끔)
+//   1 = Hartree + LDA exchange (Slater) — 본 PR 의 실 커널
+//   2 = Hartree + LDA x+c      → unsupported (상관 후속, clean 빈 반환)
+pub fn qforge_xc_hartree_only() -> int { return 0 }
+pub fn qforge_xc_lda_exchange() -> int { return 1 }
+pub fn qforge_xc_lda_xc() -> int { return 2 }
+
+// ── LDA 교환 전위 V_x(ρ) = −(3ρ/π)^{1/3}  (closed-form, 🔵) ───────────────────
+//   ρ<=0 → 0 (전자 없는 점, 교환 없음).
+pub fn qforge_vx_lda(rho: float) -> float {
+    if rho <= 0.0 { return 0.0 }
+    let third = 1.0 / 3.0
+    return -1.0 * pow(3.0 * rho / 3.14159265358979323846, third)
+}
+
+// ── LDA 교환 커널 f_x(ρ) = dV_x/dρ = −(1/3)(3/π)^{1/3} ρ^{−2/3}  (🔵) ──────────
+//   ΔV_x = f_x·Δρ 의 국소 계수.  ρ<=0 → 0.
+pub fn qforge_fx_lda(rho: float) -> float {
+    if rho <= 0.0 { return 0.0 }
+    let third = 1.0 / 3.0
+    let pref = -1.0 * third * pow(3.0 / 3.14159265358979323846, third)
+    return pref * pow(rho, -2.0 / 3.0)
+}
+
+// ── 부호있는 FFT 주파수 인덱스: 0..n/2 = +, n/2<..<n = 음(k−n) ────────────────
+fn _scr_freq(k: int, n: int) -> int {
+    if k > n / 2 { return k - n }
+    return k
+}
+
+// ── Hartree 차폐 ΔV_H(r) : G-공간 Poisson (closed-form) ───────────────────────
+//   ΔV_H(G) = 4π Δρ(G)/|G|²  (G≠0), G=0 → 0.  반환 = 실공간 ΔV_H(r) (길이 N).
+//   |G|² = |h·b1 + k·b2 + l·b3|² (h,k,l = 부호있는 주파수).  fft3/ifft3 재사용.
+//   malformed(차원 불일치 / 비-pow2) → core_fft 가 [] 반환 → 본 함수도 [] 전파.
+pub fn qforge_vhartree_from_drho(drho: [float], nx: int, ny: int, nz: int,
+                                 b1: [float], b2: [float], b3: [float]) -> [float] {
+    let ntot = nx * ny * nz
+    if len(drho) != ntot { return [] }
+    let four_pi = 4.0 * 3.14159265358979323846
+    // 정방향 FFT: Δρ(r) → Δρ(G) (interleaved [re,im,...], 길이 2N).
+    //   core_fft 는 입력 배열을 in-place 변형(scatter)하므로 caller 의 drho 를
+    //   보호하려 방어적 사본을 넘긴다(d19: core_fft 자체는 0-diff 무수정).
+    let mut drho_cp = []
+    let mut cp = 0
+    while cp < ntot { drho_cp.push(drho[cp]) ; cp = cp + 1 }
+    let spec = fft3_real(drho_cp, nx, ny, nz)
+    if len(spec) != 2 * ntot { return [] }
+    // G-공간에서 4π/|G|² 적용 (G=0 → 0).
+    let mut vre = []
+    let mut vim = []
+    let mut ix = 0
+    while ix < nx {
+        let mut iy = 0
+        while iy < ny {
+            let mut iz = 0
+            while iz < nz {
+                let h = _scr_freq(ix, nx)
+                let k = _scr_freq(iy, ny)
+                let l = _scr_freq(iz, nz)
+                let gx = to_float(h) * b1[0] + to_float(k) * b2[0] + to_float(l) * b3[0]
+                let gy = to_float(h) * b1[1] + to_float(k) * b2[1] + to_float(l) * b3[1]
+                let gz = to_float(h) * b1[2] + to_float(k) * b2[2] + to_float(l) * b3[2]
+                let g2 = gx * gx + gy * gy + gz * gz
+                let lin = (ix * ny + iy) * nz + iz
+                if g2 < 1.0e-12 {
+                    vre.push(0.0) ; vim.push(0.0)            // G=0 게이지: 0
+                } else {
+                    let f = four_pi / g2
+                    vre.push(f * spec[lin * 2]) ; vim.push(f * spec[lin * 2 + 1])
+                }
+                iz = iz + 1
+            }
+            iy = iy + 1
+        }
+        ix = ix + 1
+    }
+    // 역변환 → 실공간 ΔV_H(r). 물리적 ΔV_H 는 실수 → 실부만 취함.
+    let back = ifft3(vre, vim, nx, ny, nz)
+    if len(back) != 2 * ntot { return [] }
+    let mut out = []
+    let mut p = 0
+    while p < ntot { out.push(back[p * 2]) ; p = p + 1 }
+    return out
+}
+
+// ── 공개 API: 실 Hartree+XC 차폐 커널 ΔV_scf(r) = V_H[Δρ] + f_xc[ρ]·Δρ ────────
+//   drho       : 1차 밀도응답 Δρ(r) (실수 flat, 길이 N, fft3 layout).
+//   rho        : 바닥 밀도 ρ(r) (실수 flat, 길이 N) — XC 커널 f_xc[ρ] 평가점.
+//   nx,ny,nz   : 실공간 그리드(각 축 pow2 — fft3 재사용 제약).
+//   b1,b2,b3   : 역격자 기저(각 3 float) — 물리적 |G|².
+//   xc_mode    : 0=Hartree-only · 1=Hartree+LDA교환 · 2=x+c(unsupported→[]).
+//   반환: ΔV_scf(r) (실수 flat, 길이 N). malformed/unsupported → [].
+//   d4: 그대로 dfpt_response.qforge_force_constant 의 drho_to_dvscf 로 투입.
+pub fn qforge_dvscf_from_drho(drho: [float], rho: [float], nx: int, ny: int, nz: int,
+                              b1: [float], b2: [float], b3: [float], xc_mode: int) -> [float] {
+    let ntot = nx * ny * nz
+    if len(drho) != ntot { return [] }
+    if xc_mode == 2 { return [] }            // LDA 상관 = 후속(clean unsupported)
+    // Hartree 항 (항상 포함).
+    let vh = qforge_vhartree_from_drho(drho, nx, ny, nz, b1, b2, b3)
+    if len(vh) != ntot { return [] }
+    let mut out = []
+    let mut i = 0
+    while i < ntot {
+        let mut v = vh[i]
+        // LDA 교환 항: ΔV_x(r) = f_x[ρ(r)]·Δρ(r) (mode 1).
+        if xc_mode == 1 {
+            if len(rho) == ntot { v = v + qforge_fx_lda(rho[i]) * drho[i] }
+        }
+        out.push(v)
+        i = i + 1
+    }
+    return out
+}

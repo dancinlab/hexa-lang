@@ -1,0 +1,6 @@
+flame_quant_pack_test — packed int4 storage (quant_lib)
+F-FLAME-INT4-PACK-BYTEEQ = 1
+max_abs_diff = 0.0
+storage_fp32_bytes = 72
+storage_packed_bytes = 9
+PASS — packed int4 inference byte-identical (H_877)

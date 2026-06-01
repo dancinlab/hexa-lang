@@ -52,16 +52,13 @@ fn gen_fwd(tokens: int, embed: int, ecW: int, ecB: int,
     nn_embedding_fwd(tokens, embed, xe, T, d)
     let x = t_zeros(T * d)
     nn_conv1d_fwd(xe, ecW, ecB, x, T, d, d, K, 1)   // embed_conv → x (trunk input)
-    let wtmp = t_zeros(dd); let btmp = t_zeros(d); let gtmp = t_zeros(d); let getmp = t_zeros(d)
     let mut l = 0
     while l < L {
         _cpback(x, tin, l * T * d, T * d)            // cache trunk input for layer l
-        _cp(trunkW, l * dd, wtmp, dd); _cp(trunkB, l * d, btmp, d)
-        _cp(trunkG, l * d, gtmp, d);  _cp(trunkBe, l * d, getmp, d)
         let h = t_zeros(T * d)
-        nn_conv1d_fwd(x, wtmp, btmp, h, T, d, d, K, _pow2(l))
+        nn_conv1d_fwd_off(x, trunkW, l * dd, trunkB, l * d, h, T, d, d, K, _pow2(l))
         let hnl = t_zeros(T * d); let mean = t_zeros(1); let invl = t_zeros(1); let xhl = t_zeros(T * d)
-        nn_groupnorm_fwd(h, gtmp, getmp, hnl, mean, invl, xhl, T, d, 1)
+        nn_groupnorm_fwd_off(h, trunkG, l * d, trunkBe, l * d, hnl, mean, invl, xhl, T, d, 1)
         _cpback(hnl, hn, l * T * d, T * d); _cpback(xhl, xh, l * T * d, T * d)
         t_set(iv, l, t_get(invl, 0))
         let hg = t_zeros(T * d); nn_gelu_fwd(hnl, hg, T * d)
@@ -78,8 +75,7 @@ fn gen_fwd(tokens: int, embed: int, ecW: int, ecB: int,
     nn_conv1d_fwd(x, rW, rB, logits_r, T, d, E, 1, 1)
     let mut e = 0
     while e < E {
-        _cp(expW, e * dd, wtmp, dd); _cp(expB, e * d, btmp, d)
-        let eol = t_zeros(T * d); nn_conv1d_fwd(x, wtmp, btmp, eol, T, d, d, K, 1)
+        let eol = t_zeros(T * d); nn_conv1d_fwd_off(x, expW, e * dd, expB, e * d, eol, T, d, d, K, 1)
         _cpback(eol, eo, e * T * d, T * d)
         let exl = t_zeros(T * d); nn_gelu_fwd(eol, exl, T * d)
         _cpback(exl, ex, e * T * d, T * d)
@@ -130,34 +126,32 @@ fn gen_bwd(dlogits: int, tokens: int, embed: int, ecW: int,
     // dx (grad wrt trunk output) = router + Σ experts
     let dx = t_zeros(T * d)
     let mut z = 0; while z < T * d { t_set(dx, z, t_get(dxr, z)); z = z + 1 }
-    let wtmp = t_zeros(dd); let dwtmp = t_zeros(dd); let dexpe = t_zeros(T * d)
-    let deo = t_zeros(T * d); let dxe_e = t_zeros(T * d); let dbtmp = t_zeros(d)
+    let dexpe = t_zeros(T * d); let eotmp = t_zeros(T * d)
+    let deo = t_zeros(T * d); let dxe_e = t_zeros(T * d)
     let mut e = 0
     while e < E {
         let mut j = 0; while j < T * d { t_set(dexpe, j, t_get(dex, e * T * d + j)); j = j + 1 }
-        _cp(eo, e * T * d, wtmp, T * d)              // reuse wtmp as eo-slice (size T*d ≤ dd ok? ensure)
-        nn_gelu_bwd(wtmp, dexpe, deo, T * d)
-        _cp(expW, e * dd, wtmp, dd)
-        nn_conv1d_bwd(xtrunk, wtmp, deo, dwtmp, dxe_e, dbtmp, T, d, d, K, 1)
-        _cpback(dwtmp, dexpW, e * dd, dd); _cpback(dbtmp, dexpB, e * d, d)
+        _cp(eo, e * T * d, eotmp, T * d)             // eo-slice (activation cache, not a weight)
+        nn_gelu_bwd(eotmp, dexpe, deo, T * d)
+        // off-variant: read expW slice + write dexpW/dexpB grad slices in place.
+        nn_conv1d_bwd_off(xtrunk, expW, e * dd, deo, dexpW, e * dd, dxe_e, dexpB, e * d, T, d, d, K, 1)
         let mut a = 0; while a < T * d { t_set(dx, a, t_get(dx, a) + t_get(dxe_e, a)); a = a + 1 }
         e = e + 1
     }
     // trunk reverse loop
-    let gtmp = t_zeros(d); let dgtmp = t_zeros(d); let dgetmp = t_zeros(d)
     let dhn = t_zeros(T * d); let dh = t_zeros(T * d); let hnl = t_zeros(T * d)
     let xhl = t_zeros(T * d); let invl = t_zeros(1); let tinl = t_zeros(T * d); let dconv_in = t_zeros(T * d)
     let mut l = L - 1
     while l >= 0 {
         // dhg = dx ; gelu_bwd(hn[l]) ; gn_bwd(xh[l],iv[l],trunkG[l]) ; conv_bwd(tin[l],trunkW[l])
-        _cp(hn, l * T * d, hnl, T * d)
+        _cp(hn, l * T * d, hnl, T * d)               // hn-slice (activation cache)
         nn_gelu_bwd(hnl, dx, dhn, T * d)
-        _cp(xh, l * T * d, xhl, T * d); t_set(invl, 0, t_get(iv, l)); _cp(trunkG, l * d, gtmp, d)
-        nn_groupnorm_bwd(xhl, invl, gtmp, dhn, dgtmp, dgetmp, dh, T, d, 1)
-        _cpback(dgtmp, dtrunkG, l * d, d); _cpback(dgetmp, dtrunkBe, l * d, d)
-        _cp(tin, l * T * d, tinl, T * d); _cp(trunkW, l * dd, wtmp, dd)
-        nn_conv1d_bwd(tinl, wtmp, dh, dwtmp, dconv_in, dbtmp, T, d, d, K, _pow2(l))
-        _cpback(dwtmp, dtrunkW, l * dd, dd); _cpback(dbtmp, dtrunkB, l * d, d)
+        _cp(xh, l * T * d, xhl, T * d); t_set(invl, 0, t_get(iv, l))   // xh-slice (activation cache)
+        // off-variant: read trunkG slice + write dtrunkG/dtrunkBe grad slices in place.
+        nn_groupnorm_bwd_off(xhl, invl, trunkG, l * d, dhn, dtrunkG, l * d, dtrunkBe, l * d, dh, T, d, 1)
+        _cp(tin, l * T * d, tinl, T * d)             // tin-slice (activation cache)
+        // off-variant: read trunkW slice + write dtrunkW/dtrunkB grad slices in place.
+        nn_conv1d_bwd_off(tinl, trunkW, l * dd, dh, dtrunkW, l * dd, dconv_in, dtrunkB, l * d, T, d, d, K, _pow2(l))
         // residual: dx(layer input) = dx(passthrough) + dconv_in
         let mut a = 0; while a < T * d { t_set(dx, a, t_get(dx, a) + t_get(dconv_in, a)); a = a + 1 }
         l = l - 1

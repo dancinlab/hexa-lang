@@ -133,23 +133,13 @@ pub fn whh_hc2_zero(tc_K: float, slope_T_per_K: float) -> float {
 // Caller may pass omega2_K = omega_log_K → f2 = 1 (f1-only correction).
 pub fn allen_dynes_full(lam: float, omega_log_K: float, omega2_K: float,
                         mu_star: float) -> float {
-    let base = mcmillan_tc(omega_log_K, lam, mu_star)
-    if base <= 0.0 { return 0.0 }
-    if omega_log_K <= 0.0 { return 0.0 }
-    // mcmillan_tc uses ω_log/1.45; Allen-Dynes kernel uses ω_log/1.2.
-    // Rescale the base prefactor 1.45/1.2 to recover the AD kernel.
-    let ad_base = base * (1.45 / 1.2)
-
-    let r = omega2_K / omega_log_K
-    let lambda1 = 2.46 * (1.0 + 3.8 * mu_star)
-    let lambda2 = 1.82 * (1.0 + 6.3 * mu_star) * r
-
-    let f1 = pow(1.0 + pow(lam / lambda1, 1.5), 1.0 / 3.0)
-    let f2_num = (lam * lam) * (r - 1.0)
-    let f2_den = (lam * lam) + (lambda2 * lambda2)
-    let f2 = 1.0 + f2_num / f2_den
-
-    return f1 * f2 * ad_base
+    // d19 reuse — delegate to the canonical `allen_dynes_tc` (the QE-cross-
+    // val-pinned form, PR#2362 qforge_qe_xval 12/12). mcmillan_tc ALREADY
+    // carries the correct ω_log/1.2 AD prefactor (§2 above), so there is NO
+    // 1.45→1.2 rescale to apply — the prior `base*(1.45/1.2)` double-rescaled
+    // and inflated Tc by 1.2083× (CaH₆ 416 K vs the QE-validated 344 K).
+    // Same f1·f2 strong-coupling logic, single source of truth, zero fork.
+    return allen_dynes_tc(omega_log_K, lam, mu_star, omega2_K)
 }
 
 // ── 4a-moments. Eliashberg moments from the α²F(ω) spectral function ────

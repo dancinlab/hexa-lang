@@ -1,0 +1,24 @@
+=== hexa run stdlib/flame/flame_conv_test.hexa (GRAD-EXACT falsifier) ===
+flame_conv_test — causal-dilated Conv1d (conv_lib)
+  GRAD-EXACT max_rel = 5.17815e-12
+F-FLAME-CONV1D-DET        = 1
+F-FLAME-CONV1D-CAUSAL     = 1
+F-FLAME-CONV1D-GRAD-EXACT = 1
+PASS 3/3
+
+=== hexa run stdlib/flame/flame_gn_test.hexa (GN GRAD-EXACT) ===
+flame_gn_test — GroupNorm (gn_lib)
+  GRAD-EXACT max_rel = 4.57774e-08
+F-FLAME-GN-DET        = 1
+F-FLAME-GN-NORMALIZED = 1
+F-FLAME-GN-GRAD-EXACT = 1
+PASS 3/3
+
+=== hexa run stdlib/flame/clm_gen.hexa (full fwd/bwd descent via _off variants) ===
+clm_gen — GENERAL CLMConvMoE trainer (arbitrary L·E) descent smoke
+  step 1  CE = 4.02517
+  step 13 CE = 0.0218176
+  step 25 CE = 0.00044961
+  loss0 = 4.02517  lossF = 0.00044961
+F-FLAME-CLM-GEN-DESCENT = 1
+PASS — general L·E trainer descends (d=16 L=3 E=4)
