@@ -2,7 +2,22 @@
 
 @title: 🚀 QFORGE-PERF — "큐포지 가속기" (QFORGE el-ph accelerator backlog)
 
-@goal: hexa-native QFORGE el-ph 엔진(stdlib/qforge · SCF·DFPT·λ·Tc · g5 cross-val vs QE ref, d_qforge_engine)을 **두 개의 벽** 너머로 가속한다 — (1) **하드웨어 벽**: QE ph.x 의 no-GPU DFPT 한계(29-pod CPU teardown 의 원인) · (2) **알고리즘 벽**: O(N³) 대각화 + dense per-q DFPT 의 본질적 스케일링. 세 LANE(⚡hardware · 🧮algorithmic · 🧠paradigm)로 정렬. **각 아이디어는 PROPOSAL** — 실 `hexa bench` roofline + Δ-vs-baseline 으로 닫기 전에는 ⚡/🧮 closed 아님 (g6/g63 정직 scope). 이 보드는 **계획**이지 측정치가 아니다.
+@goal: hexa-native QFORGE el-ph 엔진(stdlib/qforge · SCF·DFPT·λ·Tc · g5 cross-val vs QE ref, d_qforge_engine)을 **두 개의 벽** 너머로 가속한다 — (1) **하드웨어 벽**: QE ph.x 의 no-GPU DFPT 한계(29-pod CPU teardown 의 원인) · (2) **알고리즘 벽**: O(N³) 대각화 + dense per-q DFPT 의 본질적 스케일링. 세 LANE(⚡hardware · 🧮algorithmic · 🧠paradigm)로 정렬. **각 아이디어는 PROPOSAL** — 실 `hexa bench` roofline + Δ-vs-baseline 으로 닫기 전에는 ⚡/🧮 closed 아님 (g6/g63 정직 scope). 이 보드의 *제안*들은 여전히 계획이지만, **CPU-scalar baseline + closed-form roofline 천장은 이제 측정·박제됨** ([[QFORGE-PERF.bench]] · 🟢) — 모든 ⚡/🧮 `🟢bench-needed` 항목의 Δ-baseline 분모가 채워졌다.
+
+## baseline — measured anchor (2026-06-01 · [[QFORGE-PERF.bench]])
+
+모든 ⚡/🧮 speedup 비율의 **분모**. 측정·박제 완료 (mini · Apple M4 · `hexa 0.1.0-dispatch`):
+
+```
+hot-path 커널           CPU-scalar baseline   RTX 5070 메모리 천장      headroom
+────────────────────    ───────────────────   ────────────────────     ──────────
+qforge_h_apply v↦H·v    0.140 GFLOP/s          fp64 139.88 · fp32 279.76  ~1000–2000×
+(assembler.hexa:140)    (n=256/512/1024 평탄)  GFLOP/s (BW·AI)            (memory roof)
+```
+
+- 🟢 **MEMORY-BOUND** (closed-form, verdict 박제): `AI 0.25–0.5 ≪ ridge_fp32 60.96 ≪ ridge_tc 226.1` → 단일 GEMV 는 tensor-core peak(126 TFLOP/s) **도달 불가**. tensor roof 는 matvec 을 GEMM 으로 **batch** 할 때만 열림(Davidson-block 경로). 따라서 ⚡ 현실 천장 = 140–280 GFLOP/s 메모리 roof — 단일 GEMV 에 > ~2000× 주장은 roofline 위배.
+- verdict: `.verdicts/qforge-perf-roofline/h-apply-membound.txt` (🟢 SUPPORTED-NUMERICAL).
+- 측정치 평탄(n-독립 GFLOP/s) = memory-bound 지문 — `AI = 2/b` 가 n 독립이라 이론과 일치.
 
 ## 전제 — hot loops (선행 grounding, 2026-06-01)
 
@@ -39,7 +54,7 @@ seed-from-zero 매 candidate       →    MLIP/Δ-ML pre-screen + transfer acros
 
 > reuse: NVPTX target(compiler/codegen/nvptx_target.hexa · WMMA · RFC 055/071) · cuda_rtc(self/ml/cuda_rtc.hexa · rtc_launch · PTX cache) · `forge_dispatch_matmul`(CPU farr↔cuBLAS byte-eq) · FLAME GPU device-routing 선례([[FLAME-PERF]]) · 측정 roofline [[GPU-ROOFLINE]] (RTX 5070 · A100).
 
-- [ ] **H_apply GPU-GEMM** ⚡hardware-PR 🟢bench-needed — `qforge_h_apply`(assembler.hexa:140) 의 scalar O(n²) matvec → `forge_dispatch_matmul` 경로(CUDA host=cuBLAS, byte-eq 선례). Davidson + 모든 Sternheimer CG iter 의 innermost → 최대 leverage. falsifier: GPU 1-pod λ·Tc == CPU baseline (byte-eq 또는 fp-tol) ∧ wall Δ < 1.
+- [ ] **H_apply GPU-GEMM** ⚡hardware-PR 🟢bench-needed — `qforge_h_apply`(assembler.hexa:140) 의 scalar O(n²) matvec → `forge_dispatch_matmul` 경로(CUDA host=cuBLAS, byte-eq 선례). Davidson + 모든 Sternheimer CG iter 의 innermost → 최대 leverage. **Δ-baseline = 0.140 GFLOP/s · 현실 천장 140–280 GFLOP/s memory roof ([[QFORGE-PERF.bench]])**. falsifier: GPU 1-pod λ·Tc == CPU baseline (byte-eq 또는 fp-tol) ∧ wall Δ < 1.
 - [ ] **Davidson VᵀHV GPU-GEMM** ⚡hardware-PR 🟢bench-needed — `dv_project`(davidson.hexa:67) batched-matvec + GEMM → BF16/TF32 Tensor-Core 경로(FLAME #2372 host-half 선례 · 측정 9.67× Llama-FFN GPU 속성). falsifier: 고유값 스펙트럼 tol 일치 ∧ wall Δ.
 - [ ] **Sternheimer CG GPU-resident** ⚡hardware-PR 🟢bench-needed — per-pert projected CG(H_apply + GS project_out) 를 device-farr resident 로 — m_occ×·max_iter× 호출 = el-ph wall 지배. falsifier: 응답 ψ' tol 일치 ∧ host 왕복 0.
 - [ ] **cuFFT / NVPTX-FFT Poisson V_H** ⚡hardware-PR 🟢bench-needed — screening.hexa 의 CPU `fft3_real`/`ifft3` → cuFFT(arxiv 2412.01695: 큰 mesh 에서 cuFFT > custom device) 또는 NVPTX-FFT. FFT 가 유일한 CPU-only 잔여 경로. falsifier: V_H[ρ] byte-eq(또는 fp-tol) ∧ 매-iter wall Δ. **Vast 발견 시 → hexa-lang inbox(d8)**.
@@ -86,4 +101,4 @@ prior-art 로 정당화된 랭킹:
 
 ## scope — 정직 (g6/g63)
 
-이 보드의 모든 항목은 **PROPOSAL/backlog** 이지 측정된 speedup 이 아니다. ⚡/🧮 closed 표시는 실 `hexa bench` roofline + Δ-vs-baseline 동반 시에만. cross-val gate(d_qforge_engine): QFORGE vs QE λ·Tc 가 LaH10·CaH6·Li2MgH16 에서 g5-일치할 때 full migration. NOVEL kick probe(2026-06-01) verdict = skip(⚪ unverified proposals — g63 정직, fold 된 atom 없음).
+이 보드의 모든 *구현* 항목은 **PROPOSAL/backlog** 이지 측정된 speedup 이 아니다. ⚡/🧮 closed 표시는 실 `hexa bench` roofline + Δ-vs-baseline 동반 시에만. **예외 — 이제 측정·박제된 것**: (1) CPU-scalar baseline 0.140 GFLOP/s (2) closed-form roofline 천장(fp64 139.88 · fp32 279.76 GFLOP/s) (3) 🟢 MEMORY-BOUND verdict — 셋 다 [[QFORGE-PERF.bench]] + `.verdicts/qforge-perf-roofline/`. 이게 모든 ⚡/🧮 항목의 Δ-baseline 분모이며, 구현 항목은 자기 `hexa bench` Δ 를 여기 게시할 때 비로소 closed. cross-val gate(d_qforge_engine): QFORGE vs QE λ·Tc 가 LaH10·CaH6·Li2MgH16 에서 g5-일치할 때 full migration. NOVEL kick probe(2026-06-01) verdict = skip(⚪ unverified proposals — g63 정직, fold 된 atom 없음).

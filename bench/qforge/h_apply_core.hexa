@@ -1,0 +1,68 @@
+// QFORGE-PERF — CPU-scalar baseline roofline CORE for the el-ph hot loop.
+//
+// `qforge_h_apply_bench(n, reps)` exercises the innermost kernel the
+// QFORGE-PERF board cites as the single highest-leverage hot path:
+// `qforge_h_apply` (assembler.hexa:140) — the dense O(n²) real-symmetric matvec
+// v ↦ H·v that Davidson AND every Sternheimer CG iteration call. This is the
+// Δ-baseline DENOMINATOR for every ⚡hardware-PR / 🧮algorithmic item (H_apply
+// GPU-GEMM · Davidson VᵀHV · Sternheimer CG resident · CheFSI matvec-count).
+//
+// docs-only: `use`s the engine read-only, edits nothing under stdlib/qforge.
+// No main → per-n wrapper files (h_apply_n*.hexa) call this with literals so
+// `hexa bench` (the g5 wall surface) measures each n correctly. `hexa bench`
+// does NOT forward `-- argv`, hence hardcoded-literal wrappers instead of flags.
+//
+// FLOPs = reps · 2·n² (one matvec = n² FMA = 2n² flops).
+// Bytes/matvec = (n²+2n)·8 → arithmetic intensity ≈ 0.25 flop/byte
+//   (memory-bound: dense matvec re-streams the full H every call, no reuse).
+// build_ham is O(n²) but ≪ matvec wall at the chosen reps → no anchor subtract.
+use "stdlib/qforge/assembler"
+
+// Deterministic synthetic real-symmetric H (flat n*n) — same dense storage +
+// access pattern as a real assembled PwHam, so the matvec wall is representative.
+fn _build_ham(n: int) -> PwHam {
+    let mut h: [float] = []
+    let mut diag: [float] = []
+    let mut a = 0
+    while a < n {
+        let mut b = 0
+        while b < n {
+            let mut hab = 0.0
+            if a == b {
+                hab = 0.5 * to_float(a + 1)        // kinetic-like diagonal
+            } else {
+                let d = a - b
+                let ad = if d < 0 { 0 - d } else { d }
+                hab = 1.0 / to_float(ad + 1)        // symmetric decaying coupling
+            }
+            h.push(hab)
+            if a == b { diag.push(hab) }
+            b = b + 1
+        }
+        a = a + 1
+    }
+    return PwHam { h: h, diag: diag, n: n }
+}
+
+// Run `reps` matvecs at dimension `n`, feeding each output back as the next
+// input (DCE guard + realistic Davidson/CG iteration coupling), renormalising
+// to stay bounded. Returns a checksum so the optimiser cannot elide the loop.
+pub fn qforge_h_apply_bench(n: int, reps: int) -> float {
+    let ham = _build_ham(n)
+    let mut v: [float] = []
+    let mut i = 0
+    while i < n { v.push(1.0 / to_float(i + 1)) ; i = i + 1 }
+
+    let mut r = 0
+    let mut checksum = 0.0
+    while r < reps {
+        let out = qforge_h_apply(ham, v)
+        let scale = if out[0] != 0.0 { 1.0 / out[0] } else { 1.0 }
+        let mut k = 0
+        v = []
+        while k < n { v.push(out[k] * scale) ; k = k + 1 }
+        checksum = checksum + v[n - 1]
+        r = r + 1
+    }
+    return checksum
+}
