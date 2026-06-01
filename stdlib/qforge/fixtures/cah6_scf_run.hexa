@@ -146,12 +146,20 @@ fn main() {
     let xc_mode = 1                                // Hartree + LDA-exchange
     // |G|-spaced 1-D reciprocal line for the V_H FFT (b·n along the basis index).
     let eb1 = [tpa, 0.0, 0.0] ; let eb2 = [0.0, tpa, 0.0] ; let eb3 = [0.0, 0.0, tpa]
-    println("running qforge_scf_pw_h_multi (mix=0.3, tol=1e-6, max_iter=300) ...")
-    let scf = qforge_scf_pw_h_multi(k0, gvecs, nspec, rs, rabs, vlocs, mlens, zs,
-                                    poss, palens, empty_f, empty_i, empty_f,
-                                    nprojs, blens, dlens, omega, xc_mode,
-                                    1, 1, n, eb1, eb2, eb3,
-                                    nocc + 2, nelec, 0.3, 1.0e-6, 80)
+    // M5.8: drive the SMEARED + ANDERSON SCF. Metallic CaH6 needs FRACTIONAL
+    //   Fermi-Dirac occupation (E_F by bisection) + ANDERSON history mixing — the
+    //   M5.7 integer/linear path limit-cycled (charge-sloshing). nbands extended
+    //   above nocc so the smeared E_F has empty bands to fractionally populate.
+    let sigma = 0.02                               // Fermi-Dirac smearing width (Ha)
+    let nbands = nocc + 4
+    println("running qforge_scf_pw_h_multi_smeared (mix=0.3, σ=" + to_string(sigma)
+            + " Ha, Anderson depth=6, tol=1e-6, max_iter=200) ...")
+    let scf = qforge_scf_pw_h_multi_smeared(k0, gvecs, nspec, rs, rabs, vlocs, mlens, zs,
+                                            poss, palens, empty_f, empty_i, empty_f,
+                                            nprojs, blens, dlens, omega, xc_mode,
+                                            1, 1, n, eb1, eb2, eb3,
+                                            nbands, nelec, 0.3, 1.0e-6, 200,
+                                            sigma, 2.0, 6)
     println("--- SCF RESULT ---")
     println("converged = " + to_string(scf.converged))
     println("iters     = " + to_string(scf.iters))

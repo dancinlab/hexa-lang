@@ -1,0 +1,8 @@
+use "bench/qforge/fft_poisson_core"
+fn main() {
+    // reps bounded to 20: the engine's fft3_real allocates O(N) scratch per call
+    // (drho copy + spec/vre/vim/back), so repeated large-grid calls accumulate
+    // memory and OOM under shared-host load. 20 reps is the stable measurement window.
+    let cs = qforge_fft_poisson_bench(1024, 20, )
+    println("nz1024 checksum=" + to_string(cs))
+}
