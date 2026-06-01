@@ -76,6 +76,12 @@ pub fn qforge_tc_allen_dynes_full(lam: float, omega_log_K: float,
 // λ ≤ 0 from the integrator) — no superconductivity predicted / bad input.
 pub fn qforge_tc_from_a2f(omega: [float], a2f: [float],
                           mu_star: float) -> float {
+    // NOTE (F2): this generic L0 entry takes α²F in WHATEVER unit the caller's
+    // grid/numerator share (it is also the dimensionless analytic-contract entry).
+    // It does NOT assume the K-grid/Ha-numerator QFORGE convention — callers
+    // feeding a real QFORGE α²F (Ha numerator on a K grid) must route the λ
+    // integrand through eliashberg_moments_from_a2f_scaled(.., ha_per_kelvin)
+    // themselves (see qforge_a2f_lambda / qforge_elph_to_tc / metallic_a2f).
     let m = eliashberg_moments_from_a2f(omega, a2f)
     let lam = m[0]
     if lam <= 0.0 { return 0.0 }

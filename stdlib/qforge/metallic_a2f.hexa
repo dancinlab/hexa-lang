@@ -139,7 +139,9 @@ pub fn qforge_metallic_lambda_mesh(grid: MpGrid, provider, nmode_per_q: int,
     let a2f = qforge_metallic_a2f_mesh(grid, provider, nmode_per_q, e_fermi,
                                        n_ef, omega_grid, sigma_el, sigma_ph)
     if len(a2f) < 2 { return -1.0 }
-    let m = eliashberg_moments_from_a2f(omega_grid, a2f)
+    // F2 unit fix: omega_grid in K, α²F numerator on a Ha scale → convert the
+    // λ-integrand divisor K→Ha (ha_per_kelvin). d3: one scaled integrator.
+    let m = eliashberg_moments_from_a2f_scaled(omega_grid, a2f, ha_per_kelvin())
     return m[0]
 }
 
@@ -173,7 +175,8 @@ pub fn qforge_metallic_a2f(grid: MpGrid, provider, nmode_per_q: int,
     if len(a2f) < 2 {
         return _metallic_sentinel("q-mesh assembler returned malformed sentinel")
     }
-    let m = eliashberg_moments_from_a2f(omega_grid, a2f)
+    // F2 unit fix: K-grid ω, Ha-scale α²F numerator → K→Ha divisor (ha_per_kelvin).
+    let m = eliashberg_moments_from_a2f_scaled(omega_grid, a2f, ha_per_kelvin())
     let lam = m[0]
     if lam <= 0.0 {
         return _metallic_sentinel("non-positive lambda from q-mesh a2f")

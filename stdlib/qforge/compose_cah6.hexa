@@ -121,7 +121,10 @@ pub fn qforge_compose_cah6_lambda(states: [[float]], dv_states: [[float]],
     let a2f = qforge_a2f_from_elph(eps_k, eps_kq, g2, wq, e_fermi, n_ef,
                                    omega_grid, 1.0, sigma_el, sigma_ph)
     if len(a2f) < 2 { return _compose_sentinel("L3 assembler sentinel") }
-    let mo = eliashberg_moments_from_a2f(omega_grid, a2f)
+    // F2 unit fix: omega_grid is in KELVIN, the α²F numerator on a HARTREE scale.
+    // Convert the λ-integrand divisor K→Ha (ha_per_kelvin) so it matches the
+    // numerator's energy unit. ω_log/ω̄₂ stay in K. (d3: one scaled integrator.)
+    let mo = eliashberg_moments_from_a2f_scaled(omega_grid, a2f, ha_per_kelvin())
     let lam = mo[0]
     if lam < 0.0 { return _compose_sentinel("non-physical lambda from a2f") }
     return ComposeResult { ok: 1, err: "", lambda: lam, omega_log: mo[1],
