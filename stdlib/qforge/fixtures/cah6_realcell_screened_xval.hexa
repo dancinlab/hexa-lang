@@ -247,17 +247,17 @@ fn main() {
     let sigma_el = 0.05 ; let sigma_ph = 10.0
 
     // FULL matrix (diagonal + off-diagonal) from the SCREENED |g_mn|.
-    let s_full = qforge_gmn_samples(states, dv_states, eps_active, omega0, true)
+    let s_full = qforge_gmn_samples(states, dv_states, eps_active, omega0, true, 1.008)  // F1: H mass
     let a2f_full = qforge_a2f_from_elph(s_full[0], s_full[1], s_full[2], s_full[3],
                                         e_fermi, n_ef, grid, 1.0, sigma_el, sigma_ph)
-    let mfull = eliashberg_moments_from_a2f(grid, a2f_full)
+    let mfull = eliashberg_moments_from_a2f_scaled(grid, a2f_full, ha_per_kelvin())  // F2
     let lambda_full = mfull[0] ; let omega_log_full = mfull[1]
 
     // bare full-matrix baseline (apples-to-apples Δ vs the screened λ).
-    let sb_full = qforge_gmn_samples(states, dv_bare, eps_active, omega0, true)
+    let sb_full = qforge_gmn_samples(states, dv_bare, eps_active, omega0, true, 1.008)  // F1: H mass
     let a2f_bare = qforge_a2f_from_elph(sb_full[0], sb_full[1], sb_full[2], sb_full[3],
                                         e_fermi, n_ef, grid, 1.0, sigma_el, sigma_ph)
-    let mbare = eliashberg_moments_from_a2f(grid, a2f_bare)
+    let mbare = eliashberg_moments_from_a2f_scaled(grid, a2f_bare, ha_per_kelvin())  // F2
     let lambda_bare = mbare[0]
 
     println("── SCREENED CROSS-VAL (d6 VERBATIM, NOT tuned) ──")

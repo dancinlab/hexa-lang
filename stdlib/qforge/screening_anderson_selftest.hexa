@@ -195,7 +195,7 @@ fn main() {
     while gp < 201 { grid.push(to_float(gp) * 10.0) ; gp = gp + 1 }
     let e_fermi = eps_a[0]
     let comp = qforge_compose_cah6_lambda(states, and.columns, eps_a, band,
-                                          e_fermi, 1.0, grid, 0.05, 10.0)
+                                          e_fermi, 1.0, grid, 0.05, 10.0, 0.0)
     fails = fails + _ck_bool("(E) composed result ok", comp.ok == 1, true)
     fails = fails + _ck_bool("(E) composed λ finite", _finite(comp.lambda), true)
     fails = fails + _ck_ge("(E) composed λ >= 0", comp.lambda, 0.0)

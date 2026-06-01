@@ -65,8 +65,13 @@ fn _compose_sentinel(err: str) -> ComposeResult {
 //   omega_grid : α²F frequency grid (K)
 //   sigma_el   : Fermi-surface δ-smearing (eps unit)
 //   sigma_ph   : α²F phonon δ-smearing (K)
+//   mass_amu   : F1 — the displaced atom's mass (amu). > 0 multiplies each (m,n,ν)
+//                |g_mn|² by the displacement-amplitude² ℏ/(2 M_κ ω_ν) (per the
+//                phonon frequency ω_ν of that sample), turning the bare Ha/bohr
+//                derivative into the textbook ENERGY coupling. ≤ 0 → bare g²
+//                (legacy structural-test path).
 // For every screened band pair (m,n) and every real phonon ω_ν in the band, emit
-// one sample (ε_m, ε_n, |g_mn|², ω_ν) with BZ weight 1/nw (each ω equally weights
+// one sample (ε_m, ε_n, g̃_mn², ω_ν) with BZ weight 1/nw (each ω equally weights
 // the pair across the real band — the broadened replacement for the single ω₀).
 // The verified L3 assembler then applies δ_σel(ε_m−E_F)·δ_σel(ε_n−E_F)·δ_σph(ω−ω')
 // with the 1/N(E_F) prefactor. Returns ComposeResult; ok==0 on malformed input.
@@ -74,7 +79,8 @@ pub fn qforge_compose_cah6_lambda(states: [[float]], dv_states: [[float]],
                                   eps: [float], omega_band: [float],
                                   e_fermi: float, n_ef: float,
                                   omega_grid: [float],
-                                  sigma_el: float, sigma_ph: float) -> ComposeResult {
+                                  sigma_el: float, sigma_ph: float,
+                                  mass_amu: float) -> ComposeResult {
     let nb = states.len()
     if nb < 1 || dv_states.len() != nb || len(eps) != nb {
         return _compose_sentinel("malformed manifold (nb / dv / eps mismatch)")
@@ -105,10 +111,13 @@ pub fn qforge_compose_cah6_lambda(states: [[float]], dv_states: [[float]],
             g2_total = g2_total + g2mn
             let mut iw = 0
             while iw < nw {
+                let wnu = omega_band[iw]
+                // F1: per-mode displacement-amplitude² ℏ/(2 M_κ ω_ν). mass_amu≤0 → bare.
+                let amp2 = if mass_amu > 0.0 { qforge_elph_amp2(mass_amu, wnu) } else { 1.0 }
                 eps_k.push(eps[m])
                 eps_kq.push(eps[nn])
-                g2.push(g2mn * inv_nw)        // fold the 1/nw band weight (linear)
-                wq.push(omega_band[iw])
+                g2.push(g2mn * inv_nw * amp2) // 1/nw band weight × F1 amplitude (g̃²)
+                wq.push(wnu)
                 iw = iw + 1
             }
             nn = nn + 1
