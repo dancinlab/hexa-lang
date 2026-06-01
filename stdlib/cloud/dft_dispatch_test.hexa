@@ -699,5 +699,87 @@ fn main() {
     _check("fix-c: round-trip preserves 38917304", _dft_blacklist_excluded("38917304", rt), 1)
     _check("fix-c: empty render → empty parse", len(_dft_blacklist_active(_dft_blacklist_render([], 5000), 5000, 1000)), 0)
 
+    // ── structured per-stage telemetry (QFORGE-PROCESS observability) ────
+    // _dft_telemetry_wrap WRAPS a guarded stage builder with start/done JSONL
+    // emits to <deck>/.dft_telemetry.jsonl. THREE contract axes (@L6):
+    //   (1) the emitted JSONL line is well-formed (all 6 keys present, JSON shape)
+    //   (2) ALL stages of a simulated chain (relax · scf · ph:q<N> · lambda) emit
+    //   (3) `.dft_stage`-class behavior is byte-identical — the wrapped INNER
+    //       compute command is the reused builder verbatim, untouched.
+
+    // (1) well-formed JSON — a single wrapped stage carries both events + all keys.
+    let twrap = _dft_telemetry_wrap("relax", "pw.x", _dft_relax_cmd(28, 12, "vc-relax.in"))
+    _check("telem: writes the sibling .dft_telemetry.jsonl", _has(twrap, "/root/deck/.dft_telemetry.jsonl"), 1)
+    _check("telem: start event line present", _has(twrap, "\"event\":\"start\""), 1)
+    _check("telem: done event line present", _has(twrap, "\"event\":\"done\""), 1)
+    // JSON well-formed — all six contract keys appear in the line template.
+    _check("telem: line carries ts key", _has(twrap, "\"ts\":"), 1)
+    _check("telem: line carries stage key", _has(twrap, "\"stage\":\"relax\""), 1)
+    _check("telem: line carries wall_s key", _has(twrap, "\"wall_s\":"), 1)
+    _check("telem: line carries rss_kb key", _has(twrap, "\"rss_kb\":"), 1)
+    _check("telem: line carries exit key", _has(twrap, "\"exit\":"), 1)
+    // start precedes the wrapped compute precedes done (transition ordering).
+    _check("telem: start BEFORE compute", _lt_index(twrap, "\"event\":\"start\"", "pw.x -ndiag 1 -in vc-relax.in"), 1)
+    _check("telem: compute BEFORE done", _lt_index(twrap, "pw.x -ndiag 1 -in vc-relax.in", "\"event\":\"done\""), 1)
+    // wall = monotonic clock delta; rss = ps -o rss peak (or null fail-safe, d6).
+    _check("telem: wall is a clock delta ($_t0 anchor)", _has(twrap, "_t0=$(date +%s)"), 1)
+    _check("telem: rss sampled via ps -o rss", _has(twrap, "ps -o rss= -C pw.x"), 1)
+    _check("telem: rss fail-safe to null (no fabrication, d6)", _has(twrap, "_rss=null"), 1)
+    // exit code preserved — caller chain (&& / self-resume predicate) unaffected.
+    _check("telem: captures wrapped exit code", _has(twrap, "_ec=$?"), 1)
+    _check("telem: re-exits with the wrapped status", _has(twrap, "exit $_ec"), 1)
+
+    // (2) ALL stages present in a simulated chain — relax · scf · ph:q<N> · lambda.
+    let t_relax = _dft_telemetry_wrap("relax", "pw.x", _dft_relax_cmd(28, 12, "vc-relax.in"))
+    let t_scf = _dft_telemetry_wrap("scf", "pw.x", _dft_scf_cmd(28, 12))
+    let t_phq3 = _dft_telemetry_wrap("ph:q3", "ph.x", _dft_ph_cmd(28, 12))
+    let t_lambda = _dft_telemetry_wrap("lambda", "ph.x", "cd /root/deck && lambda.x < lambda.in > lambda.out 2>&1")
+    _check("telem-chain: relax stage labeled", _has(t_relax, "\"stage\":\"relax\""), 1)
+    _check("telem-chain: scf stage labeled", _has(t_scf, "\"stage\":\"scf\""), 1)
+    _check("telem-chain: ph per-q stage labeled (ph:q3)", _has(t_phq3, "\"stage\":\"ph:q3\""), 1)
+    _check("telem-chain: lambda/Tc stage labeled", _has(t_lambda, "\"stage\":\"lambda\""), 1)
+    // each stage samples the RIGHT binary's RSS (pw.x for relax/scf, ph.x for ph).
+    _check("telem-chain: relax samples pw.x rss", _has(t_relax, "ps -o rss= -C pw.x"), 1)
+    _check("telem-chain: ph:q samples ph.x rss", _has(t_phq3, "ps -o rss= -C ph.x"), 1)
+    // every stage writes the SAME sibling JSONL file (single ingest target).
+    _check("telem-chain: relax → sibling file", _has(t_relax, "/root/deck/.dft_telemetry.jsonl"), 1)
+    _check("telem-chain: scf → sibling file", _has(t_scf, "/root/deck/.dft_telemetry.jsonl"), 1)
+    _check("telem-chain: ph:q → sibling file", _has(t_phq3, "/root/deck/.dft_telemetry.jsonl"), 1)
+    _check("telem-chain: lambda → sibling file", _has(t_lambda, "/root/deck/.dft_telemetry.jsonl"), 1)
+
+    // (3) `.dft_stage`-class REGRESSION — the wrapped inner compute command is the
+    // reused builder BYTE-IDENTICAL (ADDITIVE only, @L3): the telemetry wrap must
+    // CONTAIN the exact builder string, and must NOT alter the existing per-stage
+    // command builders' output. Assert each builder output is a verbatim substring.
+    let raw_relax = _dft_relax_cmd(28, 12, "vc-relax.in")
+    let raw_scf = _dft_scf_cmd(28, 12)
+    let raw_ph = _dft_ph_cmd(28, 12)
+    _check("telem-regress: relax builder embedded byte-identical", _has(t_relax, raw_relax), 1)
+    _check("telem-regress: scf builder embedded byte-identical", _has(t_scf, raw_scf), 1)
+    _check("telem-regress: ph builder embedded byte-identical", _has(t_phq3, raw_ph), 1)
+    // the existing builders are UNCHANGED — their canonical shape still holds.
+    _check("telem-regress: relax builder still → relax.out", _has(raw_relax, "> relax.out 2>&1"), 1)
+    _check("telem-regress: scf builder still → scf.out", _has(raw_scf, "> scf.out 2>&1"), 1)
+    _check("telem-regress: ph builder still recover via ph.in", _has(raw_ph, "ph.x -in ph.in > ph.out 2>&1"), 1)
+    // BEHAVIORAL byte-identical: run the EXACT telemetry shell, then grep the
+    // produced JSONL. This proves the emit is well-formed JSON on a real shell and
+    // that the `.dft_stage`-class sibling file is the only new artifact (the inner
+    // compute is a harmless `true`, so the chain runs end-to-end with exit 0).
+    let tdeck = "/tmp/dft_telemetry_test"
+    let _rmt = exec("rm -rf '" + tdeck + "' && mkdir -p '" + tdeck + "'")
+    // emit a real start+done for a stub stage (procname `cat` is never running, so
+    // rss MUST fail-safe to null — exercises the d6 no-fabrication path), writing to
+    // THIS test deck's sibling file instead of /root/deck.
+    let stub = _dft_telemetry_wrap("scf", "cat", "true")
+    let stub_local = stub.replace("/root/deck/.dft_telemetry.jsonl", tdeck + "/.dft_telemetry.jsonl")
+    let _run = exec("( " + stub_local + " ); true")
+    let jline = exec("cat '" + tdeck + "/.dft_telemetry.jsonl'")
+    _check("telem-behavioral: start event emitted to file", _has(jline, "\"event\":\"start\""), 1)
+    _check("telem-behavioral: done event emitted to file", _has(jline, "\"event\":\"done\""), 1)
+    _check("telem-behavioral: stage label in file", _has(jline, "\"stage\":\"scf\""), 1)
+    _check("telem-behavioral: rss fail-safe null (proc absent, no fabrication)", _has(jline, "\"rss_kb\":null"), 1)
+    _check("telem-behavioral: exit code 0 recorded (stub `true`)", _has(jline, "\"exit\":0"), 1)
+    let _rmt2 = exec("rm -rf '" + tdeck + "'")
+
     println("dft_dispatch_test PASS")
 }

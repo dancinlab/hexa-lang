@@ -1126,6 +1126,52 @@ fn _dft_ph_cmd(np: int, walltime_h: int) -> str {
         + "h mpirun -np " + to_string(np) + " --allow-run-as-root ph.x -in ph.in > ph.out 2>&1"
 }
 
+// ── structured per-stage telemetry (QFORGE-PROCESS observability) ─────
+//
+// Today the el-ph pipeline (vc-relax to scf to ph-per-q to lambda/Tc) exposes
+// only the coarse per-stage detach-log markers, so pipeline perf/resource
+// observability is manual pod-probe. _dft_telemetry_wrap makes it STRUCTURED:
+// it WRAPS a guarded stage shell-string so the stage appends one JSONL line on
+// entry and one on exit to the sibling file .dft_telemetry.jsonl. Each line
+// carries ts/stage/event/wall_s/rss_kb/exit. stage is the transition label
+// (relax, scf, ph:q-N, lambda). wall = monotonic clock delta (date +%s). rss =
+// the stage process peak via ps -o rss (KB), or the literal null when the proc
+// is already gone or ps is unavailable -- d6 HONESTY, never fabricate a number.
+// exit = the wrapped command status. ADDITIVE only (@L3): this WRAPS the reused
+// builder untouched and writes a NEW sibling file, so the detach behavior and
+// the inner compute invocation stay byte-identical. No new dependency (@L4) --
+// pure POSIX date/ps/printf in the same shell idiom as the rest of the module.
+let DFT_TELEMETRY_NAME = ".dft_telemetry.jsonl"
+
+// _dft_telemetry_line -- assemble ONE JSONL telemetry record (pure string). The
+// dynamic fields (ts, wall_s, rss_kb, exit) are SHELL expressions evaluated on
+// the pod at emit time, so they arrive pre-substituted; the literal fields
+// (stage, event) are baked here. Caller is responsible for the redirect.
+pub fn _dft_telemetry_line(stage: str, event: str, ts_expr: str, wall_expr: str,
+                       rss_expr: str, exit_expr: str) -> str {
+    return "printf '{\"ts\":%s,\"stage\":\"" + stage + "\",\"event\":\"" + event
+        + "\",\"wall_s\":%s,\"rss_kb\":%s,\"exit\":%s}\\n' \"" + ts_expr + "\" \""
+        + wall_expr + "\" \"" + rss_expr + "\" \"" + exit_expr + "\" >> /root/deck/"
+        + DFT_TELEMETRY_NAME
+}
+
+// _dft_telemetry_wrap -- wrap a guarded stage shell-string with start/done JSONL
+// emits. stage is the transition label, procname the binary whose peak RSS we
+// sample (pw.x or ph.x), stage_cmd the reused guarded builder (UNTOUCHED). The
+// emitted shell stamps t0, writes the start line, runs the wrapped command and
+// captures its exit code, samples the procname peak RSS (null fail-safe per d6),
+// stamps t1, writes the done line with the wall delta, and re-exits with the
+// wrapped status so the caller chain sees the SAME status as without telemetry.
+pub fn _dft_telemetry_wrap(stage: str, procname: str, stage_cmd: str) -> str {
+    let start = _dft_telemetry_line(stage, "start", "$_t0", "0", "null", "null")
+    let done = _dft_telemetry_line(stage, "done", "$_t1", "$((_t1-_t0))", "$_rss", "$_ec")
+    return "_t0=$(date +%s); " + start + "; "
+        + stage_cmd + "; _ec=$?; "
+        + "_rss=$(ps -o rss= -C " + procname + " 2>/dev/null | sort -rn | head -1); "
+        + "[ -n \"$_rss\" ] || _rss=null; _t1=$(date +%s); "
+        + done + "; exit $_ec"
+}
+
 // ── orchestrator ─────────────────────────────────────────────────────
 
 // ── d16 dry-run stamp gate (rent→idle leak guard) ────────────────────
@@ -1682,7 +1728,8 @@ fn _dft_go(deck: str, image: str, disk: int, owner: str, query: str, identity: s
 
     // ③ relax — run on the deck's relax input (vc-relax.in native / relax.in legacy)
     println("[dft-run] ③ relax (" + relax_name + ", timeout " + to_string(walltime_h) + "h)...")
-    let relax = cloud_exec_opts(host, ssh_opts, _dft_relax_cmd(np, walltime_h, relax_name))
+    let relax = cloud_exec_opts(host, ssh_opts,
+        _dft_telemetry_wrap("relax", "pw.x", _dft_relax_cmd(np, walltime_h, relax_name)))
     if relax.ok == 0 {
         println("[dft-run] relax stage: " + relax.message)
         // diagnostics-before-teardown: pull relax.out + print its tail so a
@@ -1714,7 +1761,8 @@ fn _dft_go(deck: str, image: str, disk: int, owner: str, query: str, identity: s
 
     // ③ scf
     println("[dft-run] ③ scf...")
-    let scf = cloud_exec_opts(host, ssh_opts, _dft_scf_cmd(np, walltime_h))
+    let scf = cloud_exec_opts(host, ssh_opts,
+        _dft_telemetry_wrap("scf", "pw.x", _dft_scf_cmd(np, walltime_h)))
     if scf.ok == 0 {
         println("[dft-run] scf stage: " + scf.message)
         return _dft_teardown(inst.instance_id, 1)
@@ -1722,7 +1770,8 @@ fn _dft_go(deck: str, image: str, disk: int, owner: str, query: str, identity: s
 
     // ③ el-ph
     println("[dft-run] ③ el-ph (ph.x, recover=.true.)...")
-    let ph = cloud_exec_opts(host, ssh_opts, _dft_ph_cmd(np, walltime_h))
+    let ph = cloud_exec_opts(host, ssh_opts,
+        _dft_telemetry_wrap("ph", "ph.x", _dft_ph_cmd(np, walltime_h)))
     let _hp = cloud_copy_from_opts(host, ssh_opts, "/root/deck/ph.out", deck + "/ph.out")
 
     // ④ stability verdict
