@@ -302,6 +302,30 @@ fn main() {
     let pprobe = _dft_stage_probe_cmd("ph.x", "ph.out")
     _check("probe: ph.x binary + ph.out file", _has(pprobe, "pgrep -x ph.x"), 1)
 
+    // ── walltime-vs-crash sub-classifier (the destructive-teardown fix) ──
+    // A `__DFT_FAILED__` phonon stage collapses a NORMAL walltime cap (recover-
+    // relaunchable on the SAME pod) and a GENUINE crash (teardown/defer). The
+    // controller `--resume` MUST split them so a walltime-killed pod is recovered,
+    // not DESTROYED (the live 38709875 loss at 5/8 q-points). _dft_failure_is_walltime
+    // is the PURE testable split — same signature set the self-resume daemon uses.
+    let walltime_out = "     Computing q = 5 of 8\n     Maximum CPU time exceeded\n     STOP 1\n"
+    _check("classify: 'Maximum CPU time exceeded' → walltime (recover, NOT destroy)",
+        _dft_failure_is_walltime(walltime_out), 1)
+    let maxsec_out = "     stopping ... max_seconds reached\n"
+    _check("classify: 'max_seconds' clamp → walltime (recover, NOT destroy)",
+        _dft_failure_is_walltime(maxsec_out), 1)
+    let crash_out = "     Error in routine c_bands (1):\n     too many bands are not converged\n     STOP 1\n"
+    _check("classify: 'Error in routine' crash → NOT walltime (teardown/defer)",
+        _dft_failure_is_walltime(crash_out), 0)
+    let segv_out = "forrtl: severe (174): SIGSEGV, segmentation fault occurred\n"
+    _check("classify: segfault crash → NOT walltime (teardown/defer)",
+        _dft_failure_is_walltime(segv_out), 0)
+    let done_out = "     JOB DONE.\n     This run was terminated on ...\n"
+    _check("classify: clean JOB DONE (no failure line) → NOT walltime (terminal)",
+        _dft_failure_is_walltime(done_out), 0)
+    _check("classify: empty stdout → NOT walltime (no recover signature)",
+        _dft_failure_is_walltime(""), 0)
+
     // ── pod-side self-resume loop (walltime-kill → auto recover-relaunch) ──
     // The el-ph compute stage is wrapped in an `until DONE` bash loop so a per-pod
     // walltime kill is followed by an AUTOMATIC recover-relaunch on the SAME pod —

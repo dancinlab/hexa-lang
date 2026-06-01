@@ -1539,6 +1539,34 @@ fn _dft_stage_probe_cmd(procname: str, out: str) -> str {
         + "else echo __DFT_FAILED__; fi"
 }
 
+// _dft_failure_is_walltime — PURE sub-classifier for a `__DFT_FAILED__` stage:
+// is the failure a NORMAL walltime cap (recover-relaunchable) or a GENUINE crash
+// (teardown/defer)? `out_text` is the harvested stage stdout (ph.out / relax.out).
+//
+// The pod-side self-resume daemon (`_dft_self_resume_wrap`) ALREADY encodes this
+// distinction implicitly: its loop predicate is "until __DFT_DONE__", so any
+// non-DONE — including a `Maximum CPU time exceeded` walltime kill — triggers a
+// recover-relaunch, NOT a teardown. The CONTROLLER `--resume` branch never got
+// that treatment and tore the pod down on ANY `__DFT_FAILED__`, DESTROYING a
+// healthy-but-walltime-killed phonon pod plus its accumulated q-point progress.
+// This makes the SAME walltime-vs-crash split explicit and TESTABLE so the
+// controller can match the daemon (d19 reuse — same signature set, no new oracle).
+//
+// Returns 1 iff a walltime-cap signature is present (QE `Maximum CPU time
+// exceeded` / the `max_seconds` namelist clamp). Returns 0 for a genuine crash
+// (Error in routine / STOP [1-9] / segfault / OOM) or an empty/absent stdout.
+// The walltime set is the SAME pair the probe's failure grep checks; the crash
+// set is everything else that probe folds into `__DFT_FAILED__`.
+fn _dft_failure_is_walltime(out_text: str) -> int {
+    if out_text.contains("Maximum CPU time exceeded") {
+        return 1
+    }
+    if out_text.contains("max_seconds") {
+        return 1
+    }
+    return 0
+}
+
 // _dft_self_resume_wrap — wrap a guarded LONG-RUNNING compute stage in a POD-SIDE
 // self-restart loop so a per-pod walltime kill is followed by an AUTOMATIC
 // recover-relaunch on the SAME pod — no controller `--resume` round-trip.
@@ -2014,7 +2042,37 @@ fn _dft_resume(deck: str) -> int {
         let _hs = cloud_copy_from_opts(host, ssh_opts, "/root/deck/scf.out", deck + "/scf.out")
         let _hp = cloud_copy_from_opts(host, ssh_opts, "/root/deck/ph.out", deck + "/ph.out")
         if probe.stdout_.contains("__DFT_FAILED__") {
-            println("[dft-run] --resume: ph (or scf) FAILED before a clean JOB DONE — closed as failure.")
+            // WALLTIME-vs-CRASH split (the destructive-teardown fix, 2026-06-01).
+            // `__DFT_FAILED__` collapses TWO disjoint conditions: a NORMAL walltime
+            // cap (`Maximum CPU time exceeded` / `max_seconds`) — which is exactly
+            // the recover case the pod-side self-resume daemon walks past — and a
+            // GENUINE crash. Tearing the pod down on the former DESTROYS a healthy
+            // phonon pod plus its accumulated q-point progress (the live 38709875
+            // loss at 5/8 q-points). So: classify on the HARVESTED ph.out, and on a
+            // walltime kill RECOVER-RELAUNCH on the SAME pod (wrapped in the
+            // self-resume loop so it also self-heals going forward) — DO NOT destroy.
+            if _dft_failure_is_walltime(read_file(deck + "/ph.out")) == 1 {
+                println("[dft-run] --resume: ph WALLTIME-KILLED (Maximum CPU time / max_seconds) — NOT a crash.")
+                println("[dft-run]   recover-relaunching el-ph (recover=.true.) on the SAME pod " + iid + " — NO teardown (q-point progress preserved).")
+                let phon_log = _dft_remote_logfile("phon")
+                let phon_cmd = _dft_self_resume_wrap(_dft_scfph_cmd(np, walltime_h), "ph.x", "ph.out", 8)
+                let phon_argv = _dft_detach_argv(phon_cmd)
+                let relaunched = cloud_nohup_opts(host, ssh_opts, phon_argv, phon_log)
+                if relaunched.ok == 0 {
+                    // relaunch transport failure is NOT a science failure — leave the
+                    // pod intact (d_defer_no_delete) for a retry rather than tearing down.
+                    println("[dft-run] --resume: recover-relaunch detach FAILED — " + relaunched.message)
+                    println("[dft-run]   leaving pod " + iid + " INTACT (transport fail ≠ science fail) — retry: hexa cloud dft-run " + deck + " --resume")
+                    return 3
+                }
+                let _wp = _dft_write_state(deck, "phon", iid, host_ip, port, identity, np, walltime_h, relax_name)
+                println("[dft-run] --resume: el-ph RECOVER-RELAUNCHED detached (pid " + to_string(relaunched.pid) + " · log " + phon_log + ").")
+                println("[dft-run]   monitor: hexa cloud tail " + host + " " + phon_log + "   ·   advance: hexa cloud dft-run " + deck + " --resume")
+                return 0
+            }
+            // GENUINE crash (Error in routine / STOP [1-9] / segfault / OOM — not a
+            // walltime cap): the existing teardown/defer behavior is correct.
+            println("[dft-run] --resume: ph (or scf) CRASHED before a clean JOB DONE (non-walltime signature) — closed as failure.")
             let pt = cloud_exec_opts(host, ssh_opts, "tail -40 /root/deck/ph.out 2>/dev/null")
             println("[dft-run] ── ph.out tail ──\n" + pt.stdout_ + "\n[dft-run] ── end ──")
             let _wf = _dft_write_state(deck, "failed", iid, host_ip, port, identity, np, walltime_h, relax_name)
