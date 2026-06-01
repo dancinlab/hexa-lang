@@ -66,6 +66,134 @@ fn conv1d_via_forge(x: int, w: int, b: int, y_out: int,
     }
 }
 
+// conv1d backward (causal dilated) via forge matmul + col2im. Reproduces
+// nn_conv1d_bwd's closed vjp byte-eq, expressing the two heavy gradients as
+// GEMMs routed through forge_dispatch_matmul (cuBLAS on a CUDA host, identical
+// farr_matmul on CPU) so the backward pass stops being a host scalar loop.
+//
+// Layouts mirror the forward path exactly (col index j = ci*K + k):
+//   xcol[t, j]   = (p>=0) ? x[p, ci] : 0,  p = t - dil*(K-1-k)   (im2col)
+//   Wflat[co, j] = w[co*Cin*K + ci*K + k]  == w in its natural layout
+//
+// dW: dW_flat[Kdim, Cout] = xcolᵀ[Kdim,T] @ dy[T,Cout]
+//       → dW_out[co*Cin*K + ci*K + k] = dW_flat[j*Cout + co],  j = ci*K+k
+// dX: dXcol[T, Kdim] = dy[T,Cout] @ Wflat[Cout,Kdim]
+//       → col2im scatter-add: dX_out[p*Cin+ci] += dXcol[t*Kdim + j]  (p>=0)
+//     (the transpose of forward's im2col gather — same index, scatter not gather)
+// db: db_out[co] = Σ_t dy[t,co]  (small host reduction)
+fn conv1d_bwd_via_forge(x: int, w: int, dy: int,
+                        dW_out: int, dX_out: int, db_out: int,
+                        T: int, Cin: int, Cout: int, K: int, dil: int) {
+    let Kdim = Cin * K
+    // ── im2col: build xcolT[Kdim, T] directly (transpose of forward's xcol) ──
+    // xcolT[j, t] = (p>=0) ? x[p, ci] : 0, with j = ci*K+k, p = t - dil*(K-1-k).
+    let xcolT = t_zeros(Kdim * T)
+    let mut t = 0
+    while t < T {
+        let mut ci = 0
+        while ci < Cin {
+            let mut k = 0
+            while k < K {
+                let p = t - dil * (K - 1 - k)
+                if p >= 0 {
+                    let j = ci * K + k
+                    t_set(xcolT, j * T + t, t_get(x, p * Cin + ci))
+                }
+                k = k + 1
+            }
+            ci = ci + 1
+        }
+        t = t + 1
+    }
+    // ── dW: dW_flat[Kdim, Cout] = xcolT[Kdim,T] @ dy[T,Cout] (forge GEMM) ──
+    let dW_flat = forge_dispatch_matmul(xcolT, Kdim, T, dy, Cout)
+    // reshape dW_flat[j*Cout + co] -> dW_out[co*Cin*K + ci*K + k], j = ci*K+k
+    let mut co = 0
+    while co < Cout {
+        let mut j = 0
+        while j < Kdim {
+            t_set(dW_out, co * Kdim + j, t_get(dW_flat, j * Cout + co))
+            j = j + 1
+        }
+        co = co + 1
+    }
+    // ── dX: dXcol[T, Kdim] = dy[T,Cout] @ Wflat[Cout,Kdim] (forge GEMM) ──
+    // Wflat[co, j] = w[co*Kdim + j] is exactly w's natural layout, so pass w.
+    let dXcol = forge_dispatch_matmul(dy, T, Cout, w, Kdim)
+    // col2im scatter-add back to dX_out[T, Cin] using the SAME gather index.
+    let mut iz = 0
+    while iz < T * Cin {
+        t_set(dX_out, iz, 0.0)
+        iz = iz + 1
+    }
+    let mut t2 = 0
+    while t2 < T {
+        let mut ci2 = 0
+        while ci2 < Cin {
+            let mut k2 = 0
+            while k2 < K {
+                let p = t2 - dil * (K - 1 - k2)
+                if p >= 0 {
+                    let j = ci2 * K + k2
+                    let xidx = p * Cin + ci2
+                    t_set(dX_out, xidx, t_get(dX_out, xidx) + t_get(dXcol, t2 * Kdim + j))
+                }
+                k2 = k2 + 1
+            }
+            ci2 = ci2 + 1
+        }
+        t2 = t2 + 1
+    }
+    // ── db: db_out[co] = Σ_t dy[t,co] (host reduction) ──
+    let mut cb = 0
+    while cb < Cout {
+        let mut acc = 0.0
+        let mut tb = 0
+        while tb < T {
+            acc = acc + t_get(dy, tb * Cout + cb)
+            tb = tb + 1
+        }
+        t_set(db_out, cb, acc)
+        cb = cb + 1
+    }
+}
+
+// BWD-FORGE-EQ selftest: conv1d_bwd_via_forge == nn_conv1d_bwd on dW, dX, db.
+fn _bwd_forge_check(T: int, Cin: int, Cout: int, K: int, dil: int) -> int {
+    let dd = Cout * Cin * K
+    let x  = t_zeros(T * Cin);  t_fill_lcg(x, T * Cin, 31, 0.4)
+    let w  = t_zeros(dd);       t_fill_lcg(w, dd, 2, 0.2)
+    let b  = t_zeros(Cout);     t_fill_lcg(b, Cout, 3, 0.1)
+    // upstream grad dy = forward Y (so dy is a representative, nonzero field)
+    let dy = t_zeros(T * Cout)
+    nn_conv1d_fwd(x, w, b, dy, T, Cin, Cout, K, dil)
+
+    // baseline (host closed vjp)
+    let dW0 = t_zeros(dd);      let dX0 = t_zeros(T * Cin);  let db0 = t_zeros(Cout)
+    nn_conv1d_bwd(x, w, dy, dW0, dX0, db0, T, Cin, Cout, K, dil)
+    // forge path
+    let dW1 = t_zeros(dd);      let dX1 = t_zeros(T * Cin);  let db1 = t_zeros(Cout)
+    conv1d_bwd_via_forge(x, w, dy, dW1, dX1, db1, T, Cin, Cout, K, dil)
+
+    let mut mdW = 0.0
+    let mut iW = 0
+    while iW < dd { let d = _absf(t_get(dW0, iW) - t_get(dW1, iW)); if d > mdW { mdW = d }; iW = iW + 1 }
+    let mut mdX = 0.0
+    let mut iX = 0
+    while iX < T * Cin { let d = _absf(t_get(dX0, iX) - t_get(dX1, iX)); if d > mdX { mdX = d }; iX = iX + 1 }
+    let mut mdb = 0.0
+    let mut iB = 0
+    while iB < Cout { let d = _absf(t_get(db0, iB) - t_get(db1, iB)); if d > mdb { mdb = d }; iB = iB + 1 }
+
+    print("  dil="); print(dil)
+    print("  max|Δ| dW="); print(to_string(mdW))
+    print(" dX="); print(to_string(mdX))
+    print(" db="); println(to_string(mdb))
+    let tol = 0.000000001
+    if mdW <= tol { if mdX <= tol { if mdb <= tol { return 1 } } }
+    return 0
+}
+
 fn main() {
     println("clm_conv_gpu — CLM conv1d (K=3 causal dilated) via forge im2col matmul")
     let T = 24; let Cin = 8; let Cout = 8; let K = 3; let dil = 1
@@ -95,11 +223,29 @@ fn main() {
     print("  conv K="); print(K); print(" dil="); print(dil)
     print("  Cin×Cout="); print(Cin); print("×"); print(Cout); print(" T="); print(T)
     print("  max|Δ| forge-vs-conv = "); println(to_string(maxdev))
+    let mut fwd_ok = 0
     if maxdev <= tol {
         println("F-CLM-CONV-GPU-EQ = 1")
         println("PASS — im2col+forge conv1d == nn_conv1d_fwd (heavy conv path wired to forge)")
-        return
+        fwd_ok = 1
+    } else {
+        println("F-CLM-CONV-GPU-EQ = 0")
+        println("FAIL — forward")
     }
-    println("F-CLM-CONV-GPU-EQ = 0")
+
+    // ── F-CLM-CONV-BWD-FORGE-EQ: backward (dW · dX · db) via forge == host vjp ──
+    println("")
+    println("conv1d_bwd_via_forge — col2im+matmul backward (T=24, Cin=Cout=8, K=3)")
+    let b1 = _bwd_forge_check(24, 8, 8, 3, 1)
+    let b2 = _bwd_forge_check(24, 8, 8, 3, 2)
+    if b1 == 1 { if b2 == 1 {
+        println("F-CLM-CONV-BWD-FORGE-EQ = 1")
+        println("PASS — forge backward (dW/dX/db) == nn_conv1d_bwd byte-eq, dil∈{1,2}")
+        if fwd_ok == 1 {
+            println("ALL-PASS — forward + backward conv1d both ride forge, byte-eq to host")
+            return
+        }
+    } }
+    println("F-CLM-CONV-BWD-FORGE-EQ = 0")
     println("FAIL")
 }
