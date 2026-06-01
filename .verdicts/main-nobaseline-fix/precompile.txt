@@ -1,0 +1,57 @@
+nobaseline-gate precompile broken-pipe — root-cause fix verdict (g5)
+date: 2026-06-01T01:11:27Z
+host: darwin-arm64 (local faithful reproduction of the CI build_precompile step)
+command: ./hexa run tool/build_precompile.hexa   (exact tool/stage_precompile_package Stage 3 invocation)
+
+ROOT CAUSE: #2367 (exec drain darwin-grace) removed the seen-gate and measured
+quiet purely as a time delta from start, so hexa_drain_bounded broke the read
+loop after HEXA_EXEC_DRAIN_GRACE_MS (2000ms) of no output while the inner
+`hexa build <tool>.hexa 2>&1; echo "__BRC__=$?"` was still running clang in a
+quiet phase. The caller then pclose()d the read pipe with the writer (/bin/sh
++ the build + the trailing echo) still alive -> SIGPIPE/EPIPE
+(`sh: line 0: echo: write error: Broken pipe`) + the __BRC__ marker lost ->
+build_precompile records rc=1. atlas_cli/verify_cli are the largest tool CLIs
+(longest quiet clang phases) so they trip the 2000ms grace; smaller tools fit.
+
+FIX: gate the grace-quiet break on the DIRECT writer child being reaped
+(non-reaping waitpid WNOHANG peek). A still-running build keeps its child alive
+-> grace never fires -> drain to EOF -> full capture. A leaked grandchild
+(parent shell already exited) is still bounded by grace from the reap instant.
+popen fallback now uses a pid-exposing /bin/sh -c spawn (hexa_popen_sh) so the
+shell-meta path has a writer pid. NO O_NONBLOCK (the #2337/#2346 truncation
+root cause is NOT reintroduced).
+
+============================================================================
+BEFORE FIX — hexa built with origin/main's REGRESSED runtime (#2367)
+  (runtime_core.c regenerated from `git show origin/main:self/runtime_core_emit.hexa`)
+============================================================================
+  FAIL tool/atlas_cli.hexa (rc=1)
+=== Building /Users/mini/dancinlab/hexa-lang/.claude/worktrees/agent-a34a5a4a02f7b3721/tool/atlas_cli.hexa -> /Users/mini/dancinlab/hexa-lang/.claude/worktrees/agent-a34a5a4a02f7b3721/release/precompile.before/hexa_run.d20612258cf08319_0.1.0-dispatch.tmp.1780276306264809000 ===
+error: clang compile failed — binary not produced: /Users/mini/dancinlab/hexa-lang/.claude/worktrees/agent-a34a5a4a02f7b3721/release/precompile.before/hexa_run.d20612258cf08319_0.1.0-dispatch.tmp.1780276306264809000.tmp.90426
+  OK   tool/verify_cli.hexa -> /Users/mini/dancinlab/hexa-lang/.claude/worktrees/agent-a34a5a4a02f7b3721/release/precompile.before/hexa_run.04416d144eedaadc_0.1.0-dispatch
+build_precompile: built=9 skipped=0 failed=1
+BEFORE: `hexa run tool/build_precompile.hexa` exit rc=1
+
+============================================================================
+AFTER FIX — hexa built with the PATCHED runtime (liveness-gated drain)
+============================================================================
+build_precompile: manifest=/Users/mini/dancinlab/hexa-lang/.claude/worktrees/agent-a34a5a4a02f7b3721/tool/precompile.json
+build_precompile: out_dir=/Users/mini/dancinlab/hexa-lang/.claude/worktrees/agent-a34a5a4a02f7b3721/release/precompile
+build_precompile: version=0.1.0-dispatch
+build_precompile: scripts=10
+build_precompile: hexa=/Users/mini/dancinlab/hexa-lang/.claude/worktrees/agent-a34a5a4a02f7b3721/hexa
+  OK   tool/build_hexa_cli.hexa -> /Users/mini/dancinlab/hexa-lang/.claude/worktrees/agent-a34a5a4a02f7b3721/release/precompile/hexa_run.d75923b774312c0b_0.1.0-dispatch
+  OK   tool/atlas_cli.hexa -> /Users/mini/dancinlab/hexa-lang/.claude/worktrees/agent-a34a5a4a02f7b3721/release/precompile/hexa_run.d20612258cf08319_0.1.0-dispatch
+  OK   tool/verify_cli.hexa -> /Users/mini/dancinlab/hexa-lang/.claude/worktrees/agent-a34a5a4a02f7b3721/release/precompile/hexa_run.04416d144eedaadc_0.1.0-dispatch
+  OK   tool/inbox_sync.hexa -> /Users/mini/dancinlab/hexa-lang/.claude/worktrees/agent-a34a5a4a02f7b3721/release/precompile/hexa_run.a1f0160351f23bac_0.1.0-dispatch
+  OK   tool/inbox_promote.hexa -> /Users/mini/dancinlab/hexa-lang/.claude/worktrees/agent-a34a5a4a02f7b3721/release/precompile/hexa_run.483cfd6c69826391_0.1.0-dispatch
+  OK   tool/cli_wrappers.hexa -> /Users/mini/dancinlab/hexa-lang/.claude/worktrees/agent-a34a5a4a02f7b3721/release/precompile/hexa_run.b5a655aa642c9ee4_0.1.0-dispatch
+  OK   tool/audit_forbidden_exts.hexa -> /Users/mini/dancinlab/hexa-lang/.claude/worktrees/agent-a34a5a4a02f7b3721/release/precompile/hexa_run.e53c675c2a691f33_0.1.0-dispatch
+  OK   tool/install_firmware_hook.hexa -> /Users/mini/dancinlab/hexa-lang/.claude/worktrees/agent-a34a5a4a02f7b3721/release/precompile/hexa_run.0bcb53d177424673_0.1.0-dispatch
+  OK   tool/build_hexat_linux.hexa -> /Users/mini/dancinlab/hexa-lang/.claude/worktrees/agent-a34a5a4a02f7b3721/release/precompile/hexa_run.deacc1e4e3213b5d_0.1.0-dispatch
+  OK   tool/build_precompile.hexa -> /Users/mini/dancinlab/hexa-lang/.claude/worktrees/agent-a34a5a4a02f7b3721/release/precompile/hexa_run.474a00bb7c9e1381_0.1.0-dispatch
+build_precompile: built=10 skipped=0 failed=0
+AFTER: `hexa run tool/build_precompile.hexa` exit rc=0
+
+RESULT: BEFORE failed (atlas_cli rc=1, broken pipe / truncated clang capture);
+AFTER built=10 failed=0 (atlas_cli + verify_cli both OK). main goes GREEN.
