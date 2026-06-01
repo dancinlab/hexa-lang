@@ -3286,6 +3286,7 @@
   raw    = ".verdicts/clm-h911/F-CLM-H911-STDP.txt"
   src    = "stdlib/flame/clm_h911_b1_stdp.hexa + clm_h911_bc_mechanisms.hexa (stdp_binding, tau=2)"
   status = "🟢 RECOVERS — paired mean +3.5871, CI [+3.5334, +3.6439]. Rate-Hebbian control gap ~0.0039 (null). Mechanism-level bound on the on-chip negative."
+  adjudication = "[CONSTRUCT-INVALID — byte-proximity artifact, see edu-neuro line] Features were fixed-byte projections (sim≈0.5 const); this measured presentation-ORDER proximity, NOT learned meaning. Superseded by the construct-valid LEARNED-embedding line (slug=clm-kosmos-h911-edu-neuro). Raw verdict kept verbatim (g5); only the interpretation is retracted."
 
 @C h911_neuromod := "Salience/third-factor GATED update RECOVERS parallel>concat binding (paired CI>0) where the ungated control is exactly null (gap 0.0)" :: discovery [slug=clm-h911 group=CLM-KOSMOS]
   method = "hexa run"
@@ -3293,6 +3294,7 @@
   raw    = ".verdicts/clm-h911/F-CLM-H911-NEUROMOD.txt"
   src    = "stdlib/flame/clm_h911_b2_neuromod.hexa + clm_h911_bc_mechanisms.hexa (neuromod_binding, W=4)"
   status = "🟢 RECOVERS — paired mean +9.5769, CI [+9.4478, +9.7060]. Ungated control gap = 0.0 (null). Binding needs the gating AKD1000 plain Hebbian lacks."
+  adjudication = "[CONSTRUCT-INVALID — byte-proximity artifact, see edu-neuro line] Fixed-byte features (sim≈0.5 const) → measured presentation-ORDER proximity, NOT learned meaning. Superseded by the construct-valid LEARNED-embedding line (slug=clm-kosmos-h911-edu-neuro). Raw verdict kept verbatim (g5)."
 
 @C h911_hub := "Φ-proxy measured at a HIDDEN recurrent convergence HUB (not the output layer) RECOVERS parallel>concat binding (paired CI>0) — locus error, not absence" :: discovery [slug=clm-h911 group=CLM-KOSMOS]
   method = "hexa run"
@@ -3300,6 +3302,7 @@
   raw    = ".verdicts/clm-h911/F-CLM-H911-HUB.txt"
   src    = "stdlib/flame/clm_h911_b3_hub.hexa + clm_h911_bc_mechanisms.hexa (hub_binding, lambda=0.5)"
   status = "🟢 RECOVERS — paired mean +2.6475, CI [+2.5586, +2.7425]. AKD1000 learns only the last layer = the wrong locus; the hub integrates."
+  adjudication = "[CONSTRUCT-INVALID — byte-proximity artifact, see edu-neuro line] Fixed-byte features (sim≈0.5 const) → measured presentation-ORDER proximity, NOT learned meaning. Superseded by the construct-valid LEARNED-embedding line (slug=clm-kosmos-h911-edu-neuro). Raw verdict kept verbatim (g5)."
 
 @C h911_replay := "Offline interleaved REPLAY/consolidation (R=64) RECOVERS parallel>concat binding (paired CI>0) — the signal was real but un-consolidated under single-pass" :: discovery [slug=clm-h911 group=CLM-KOSMOS]
   method = "hexa run"
@@ -3307,6 +3310,7 @@
   raw    = ".verdicts/clm-h911/F-CLM-H911-REPLAY.txt"
   src    = "stdlib/flame/clm_h911_b4_replay.hexa + clm_h911_bc_mechanisms.hexa (replay_binding, R=64)"
   status = "🟢 RECOVERS — paired mean +3.7518, CI [+3.6591, +3.8358]. Consolidation tightens per-pass noise to ~0 on concat; parallel block survives."
+  adjudication = "[CONSTRUCT-INVALID — byte-proximity artifact, see edu-neuro line] Fixed-byte features (sim≈0.5 const) → measured presentation-ORDER proximity, NOT learned meaning. Superseded by the construct-valid LEARNED-embedding line (slug=clm-kosmos-h911-edu-neuro). Raw verdict kept verbatim (g5)."
 
 @C h911_sparse := "k-WTA SPARSE readout (k=4) does NOT recover parallel>concat binding — paired CI straddles 0 and the dense control gap (+2.91) is LARGER, so sparsification HURTS the cross-lingual signal" :: discovery [slug=clm-h911 group=CLM-KOSMOS]
   method = "hexa run"
