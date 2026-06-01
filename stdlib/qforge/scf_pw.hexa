@@ -230,3 +230,70 @@ pub fn qforge_scf_pw_h(kvec: [float], gvecs: [float], pos: [float],
     return qforge_scf(qforge_h_of_rho_global, qforge_rho_of_psi, n, nbands, nelec,
                       mix, tol, max_iter)
 }
+
+// ── MULTI-SPECIES in-loop-V_H PW SCF (M5.7 PR3 — real heteroatomic cell) ───────
+//   The single-species qforge_scf_pw_h staging composes V_ext from one channel.
+//   A real hydride (CaH6 = Ca + 6·H) needs Σ_s V_loc^s·S_s — this entry stages a
+//   species list and drives qforge_assemble_h_multi each SCF iteration with the
+//   in-loop ground-state V_H[ρ] (M5.7) active. d4-generic: the species list is
+//   data; CaH6 / LaH10 / Li2MgH16 all traverse this one entry. The slice arrays
+//   (mlens · palens · blens · dlens · nprojs) mirror qforge_assemble_h_multi.
+let mut PWM_KVEC: [float] = []
+let mut PWM_GVECS: [float] = []
+let mut PWM_NSPEC: int = 0
+let mut PWM_RS: [float] = []
+let mut PWM_RABS: [float] = []
+let mut PWM_VLOCS: [float] = []
+let mut PWM_MLENS: [int] = []
+let mut PWM_ZS: [float] = []
+let mut PWM_POSS: [float] = []
+let mut PWM_PALENS: [int] = []
+let mut PWM_BETAS: [float] = []
+let mut PWM_LS: [int] = []
+let mut PWM_DIJ: [float] = []
+let mut PWM_NPROJS: [int] = []
+let mut PWM_BLENS: [int] = []
+let mut PWM_DLENS: [int] = []
+let mut PWM_OMEGA: float = 1.0
+
+pub fn qforge_h_of_rho_multi(rho: [float]) {
+    let mut vh = PW_VH
+    if PW_HGRID_ON {
+        if len(rho) == PW_NX * PW_NY * PW_NZ {
+            vh = qforge_vhartree_from_rho(rho, PW_NX, PW_NY, PW_NZ, PW_B1, PW_B2, PW_B3)
+        }
+    }
+    let vscr = qforge_vscr_diag(rho, vh, PW_XCMODE)
+    let ham = qforge_assemble_h_multi(PWM_KVEC, PWM_GVECS, PWM_NSPEC,
+                                      PWM_RS, PWM_RABS, PWM_VLOCS, PWM_MLENS, PWM_ZS,
+                                      PWM_POSS, PWM_PALENS,
+                                      PWM_BETAS, PWM_LS, PWM_DIJ,
+                                      PWM_NPROJS, PWM_BLENS, PWM_DLENS,
+                                      PWM_OMEGA, vscr)
+    return qforge_pw_apply_global(ham)
+}
+
+pub fn qforge_scf_pw_h_multi(kvec: [float], gvecs: [float], nspec: int,
+                             rs: [float], rabs: [float], vlocs: [float],
+                             mlens: [int], zs: [float],
+                             poss: [float], palens: [int],
+                             betas: [float], ls: [int], dij: [float],
+                             nprojs: [int], blens: [int], dlens: [int],
+                             omega: float, xc_mode: int,
+                             nx: int, ny: int, nz: int,
+                             b1: [float], b2: [float], b3: [float],
+                             nbands: int, nelec: int, mix: float, tol: float,
+                             max_iter: int) -> ScfResult {
+    PWM_KVEC = kvec ; PWM_GVECS = gvecs ; PWM_NSPEC = nspec
+    PWM_RS = rs ; PWM_RABS = rabs ; PWM_VLOCS = vlocs ; PWM_MLENS = mlens ; PWM_ZS = zs
+    PWM_POSS = poss ; PWM_PALENS = palens
+    PWM_BETAS = betas ; PWM_LS = ls ; PWM_DIJ = dij
+    PWM_NPROJS = nprojs ; PWM_BLENS = blens ; PWM_DLENS = dlens
+    PWM_OMEGA = omega
+    let mut empty_f: [float] = []
+    PW_VH = empty_f ; PW_XCMODE = xc_mode
+    qforge_scf_pw_set_hgrid(nx, ny, nz, b1, b2, b3)        // enable in-loop V_H[ρ]
+    let n = len(gvecs) / 3
+    return qforge_scf(qforge_h_of_rho_multi, qforge_rho_of_psi, n, nbands, nelec,
+                      mix, tol, max_iter)
+}
