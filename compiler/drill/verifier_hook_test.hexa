@@ -1,0 +1,178 @@
+// HEXA Native Compiler — Phase 3 drill: verifier candidate-array selftest
+//
+// @version 0.1.0
+// @capabilities [fs_read, fs_write, env_read, stdout]
+//
+// Covers the verifier candidate-array feed (feat/drill-verifier-hook):
+// when a verifier IS installed (`--verifier <cmd>`), drill feeds the
+// round's discovery candidate array to <cmd> on stdin under the payload's
+// "candidates" key (drill.hexa:142 contract resolution), and consults the
+// verdict the command prints. Asserts:
+//
+//   1. The verifier stub is INVOKED (it writes a sentinel file).
+//   2. The stub RECEIVED the candidate array — its captured stdin contains
+//      a non-empty "candidates":[{...}] with per-candidate id/conf/expr.
+//   3. The stub's verdict is PARSED and consulted — with --verifier-strict
+//      a `verdict=pass` halts the loop (verifier_stopped=true in the
+//      summary JSON / VERIFIER_PASS on stdout).
+//   4. Honesty: the verdict drill reports is exactly what the stub printed
+//      (`pass`), not a fabricated grade.
+//
+// HOME is relocated to a per-run scratch dir UNDER $HOME (NOT /tmp — the
+// Mac build guard refuses a hexa build whose cache lands under /tmp).
+//
+// Run:
+//   hexa run compiler/drill/verifier_hook_test.hexa
+
+fn _check(label: string, ok: bool, fails: array) {
+    if ok { println("  PASS  " + label) }
+    else { println("  FAIL  " + label); fails.push(label) }
+}
+
+fn _contains(hay: string, needle: string) -> bool {
+    if len(needle) == 0 { return true }
+    let mut i = 0
+    while i + len(needle) <= len(hay) {
+        if hay.substring(i, i + len(needle)) == needle { return true }
+        i = i + 1
+    }
+    return false
+}
+
+fn main() {
+    println("phase-3 drill verifier candidate-array selftest")
+
+    let home = env("HOME")
+    let scratch = home + "/.hx/scratch/drill_verifier_hook_test"
+    exec("rm -rf '" + scratch + "' 2>/dev/null; mkdir -p '" + scratch + "/.hx/data'")
+
+    // The verifier STUB: a shell command that (a) records that it ran, (b)
+    // captures its entire stdin payload to a file the test reads back, and
+    // (c) prints a single `verdict=pass` line. `cat > FILE` captures the
+    // exact JSON drill piped in (round shape + candidate array).
+    let stdin_capture = scratch + "/verifier_stdin.json"
+    let ran_marker = scratch + "/verifier_ran.flag"
+    // Single sh -c string. Order: mark ran, capture stdin, emit verdict.
+    let stub = "sh -c 'touch " + ran_marker + "; cat > " + stdin_capture + "; printf \"verdict=pass rationale=stub_ok\\n\"'"
+
+    let seed = "Lithium magnesium hydride Li2MgH16 superconductor candidate ambient"
+    let cmd = "HOME='" + scratch + "' hexa drill --seed '" + seed
+        + "' --rounds 1 --depth-smash 2 --depth-free 2 --fresh --quiet --top 0"
+        + " --verifier " + _shq(stub)
+        + " --verifier-strict 2>/dev/null"
+
+    // Warm-up: the FIRST `hexa drill` in a fresh HOME triggers a cold
+    // `hexa build` whose first run does not deliver program stdout to the
+    // pipe (build-harness behavior). One throwaway invocation warms the
+    // cache so the MEASURED run below is deterministic. No verifier here —
+    // we only need the binary built. Output discarded.
+    let _warm = exec("HOME='" + scratch + "' hexa drill --seed '" + seed
+        + "' --rounds 1 --depth-smash 2 --depth-free 2 --fresh --quiet --top 0 2>/dev/null")
+
+    let out = exec(cmd)
+    println("  drill summary line:")
+    println("    " + out.trim())
+
+    let fails = []
+    let mut pass: i64 = 0
+    let mut total: i64 = 0
+
+    // ─── 1: stub invoked ───
+    println("")
+    println("scenario 1: verifier stub was invoked")
+    let ran = file_exists(ran_marker)
+    total = total + 1
+    if ran {
+        pass = pass + 1
+        _check("scenario 1: verifier command was executed (ran-marker present)", true, fails)
+    } else {
+        _check("scenario 1: verifier command was executed (no ran-marker)", false, fails)
+    }
+
+    // ─── 2: stub received the candidate array ───
+    println("")
+    println("scenario 2: stub received the discovery candidate array on stdin")
+    let payload = if file_exists(stdin_capture) { read_file(stdin_capture) } else { "" }
+    let has_key = _contains(payload, "\"candidates\":[")
+    // A populated array (not empty) — at least one {"id":...} element.
+    let has_elem = _contains(payload, "\"candidates\":[{\"id\":")
+    let has_expr = _contains(payload, "\"expr\":")
+    println("  payload bytes captured: " + to_string(len(payload)))
+    total = total + 1
+    if has_key {
+        pass = pass + 1
+        _check("scenario 2: payload carries a \"candidates\" array key", true, fails)
+    } else {
+        _check("scenario 2: payload carries a \"candidates\" array key", false, fails)
+    }
+    total = total + 1
+    if has_elem && has_expr {
+        pass = pass + 1
+        _check("scenario 2: candidate array is POPULATED (id+expr per element)", true, fails)
+    } else {
+        _check("scenario 2: candidate array is POPULATED (id+expr per element)", false, fails)
+    }
+
+    // ─── 3: verdict parsed + consulted (strict pass halts loop) ───
+    println("")
+    println("scenario 3: stub verdict parsed + consulted (strict pass halts loop)")
+    let stopped = _contains(out, "\"verifier_stopped\":true")
+    let verdict_pass = _contains(out, "\"verifier_verdict\":\"pass\"")
+    total = total + 1
+    if stopped {
+        pass = pass + 1
+        _check("scenario 3: --verifier-strict pass halted the loop (verifier_stopped=true)", true, fails)
+    } else {
+        _check("scenario 3: --verifier-strict pass halted the loop (verifier_stopped=true)", false, fails)
+    }
+    total = total + 1
+    if verdict_pass {
+        pass = pass + 1
+        _check("scenario 3: drill reports the stub's exact verdict (pass) — no fabrication", true, fails)
+    } else {
+        _check("scenario 3: drill reports the stub's exact verdict (pass)", false, fails)
+    }
+
+    // ─── cleanup ───
+    exec("rm -rf '" + scratch + "' 2>/dev/null")
+
+    println("")
+    println(to_string(pass) + "/" + to_string(total) + " PASS")
+    if len(fails) == 0 {
+        println("RESULT: PASS")
+        exit(0)
+    } else {
+        println("RESULT: FAIL — " + to_string(len(fails)) + " check(s) failed")
+        let mut k = 0
+        while k < len(fails) {
+            println("  - " + to_string(fails[k]))
+            k = k + 1
+        }
+        exit(1)
+    }
+}
+
+// POSIX single-quote escape for embedding the stub command as one
+// `--verifier` argv token.
+fn _shq(s: string) -> string {
+    let mut out = "'"
+    let mut i = 0
+    while i < len(s) {
+        let c = s.substring(i, i + 1)
+        if c == "'" { out = out + "'\\''" } else { out = out + c }
+        i = i + 1
+    }
+    out = out + "'"
+    return out
+}
+
+// is_main guard
+let _av = argv()
+fn _is_main() -> bool {
+    if len(_av) < 2 { return false }
+    let s = to_string(_av[1])
+    if s.ends_with("/verifier_hook_test.hexa") { return true }
+    if s == "verifier_hook_test.hexa" { return true }
+    return false
+}
+if _is_main() { main() }
