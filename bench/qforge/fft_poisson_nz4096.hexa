@@ -1,0 +1,8 @@
+use "bench/qforge/fft_poisson_core"
+fn main() {
+    // reps bounded to 3: nz=4096 has a large per-call FFT scratch footprint that
+    // accumulates across calls (see nz1024 note) and OOMs at higher rep counts
+    // under shared-host memory pressure. 3 reps is the stable single-shot window.
+    let cs = qforge_fft_poisson_bench(4096, 3, )
+    println("nz4096 checksum=" + to_string(cs))
+}
