@@ -1,0 +1,20 @@
+=== PRE-FIX ENCODE-MISS tally (from /tmp/udf-emit.log, aprime_udf @ ed4eea387+main) ===
+--- unique missing mnemonics (op= field) ---
+20459 adrp
+ 395 eor
+ 248 mvn
+  85 and
+  80 orr
+  55 LSL
+  24 ASR
+  16 blr
+--- total ENCODE-MISS lines ---
+21362
+--- representative operand forms ---
+adrp: ENCODE-MISS: unknown-op op=adrp ops=[ x2 .LCstr1@PAGE ]
+eor(imm): ENCODE-MISS: unknown-op op=eor ops=[ x0 x0 #1 ]
+eor(reg): ENCODE-MISS: unknown-op op=eor ops=[ x1 x1 x3 ]
+mvn: ENCODE-MISS: unknown-op op=mvn ops=[ x1 x1 ]
+and: ENCODE-MISS: unknown-op op=and ops=[ x1 x1 x3 ]
+LSL: ENCODE-MISS: unknown-op op=LSL ops=[ x1 x1 x3 ]
+ASR: ENCODE-MISS: unknown-op op=ASR ops=[ x1 x1 x3 ]
