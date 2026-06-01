@@ -288,20 +288,24 @@ fn main() {
     println("[a phonon] real ω band: " + to_string(len(band)) + " modes, ω_log(band)="
             + to_string(wlog_band) + " K (vs single Einstein 1236.4 K)")
 
-    // ── [c] REAL N(E_F): smeared band-DOS at E_F over the active manifold (Γ) ─
-    //   single-k (Γ) DOS — a REAL number, not the 1.0 placeholder. eps flat = the
-    //   active band energies; sigma in eps units. (denser k-mesh = next knob, d6.)
-    let mut eps_flat: [float] = []
-    bb = 0 ; while bb < nactive { eps_flat.push(eps_active[bb]) ; bb = bb + 1 }
-    let n_ef = qforge_dos_nef_uniform(eps_flat, 1, nactive, e_fermi, 0.02)
-    println("[c N(E_F)] real smeared DOS at E_F (Γ) = " + to_string(n_ef)
-            + "  (vs 1.0 placeholder)")
-
     // ── COMPOSE: screened |g_mn| × real ω band × real N(E_F) → α²F → λ ───────
     let mut grid: [float] = []
     let mut gp = 1
     while gp < 401 { grid.push(to_float(gp) * 7.0) ; gp = gp + 1 }
     let sigma_el = 0.05 ; let sigma_ph = 10.0
+
+    // ── [c] REAL N(E_F): smeared band-DOS at E_F over the active manifold (Γ) ─
+    //   single-k (Γ) DOS — a REAL number, not the 1.0 placeholder. eps flat = the
+    //   active band energies. NC NORMALIZATION-CONVENTION FIX (audit): N(E_F) MUST
+    //   be computed with the SAME σ (sigma_el) and SAME δ_σ kernel as the α²F FS
+    //   double-δ in qforge_compose_cah6_lambda — the dimensional closure that ties
+    //   the 1/N(E_F) prefactor to the sum (was σ=0.02 while the double-δ used 0.05,
+    //   a σ-mismatch). (denser k-mesh = next knob, d6.)
+    let mut eps_flat: [float] = []
+    bb = 0 ; while bb < nactive { eps_flat.push(eps_active[bb]) ; bb = bb + 1 }
+    let n_ef = qforge_dos_nef_uniform(eps_flat, 1, nactive, e_fermi, sigma_el)
+    println("[c N(E_F)] real smeared DOS at E_F (Γ, σ=σ_el) = " + to_string(n_ef)
+            + "  (vs 1.0 placeholder)")
 
     let M_H = 1.008   // F1: displaced atom is H → mass 1.008 amu (displacement amplitude)
     let comp = qforge_compose_cah6_lambda(states, dv_states, eps_active, band,
