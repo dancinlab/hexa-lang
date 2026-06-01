@@ -1,0 +1,140 @@
+// @ci_gate — pure · network-free · deterministic (stdlib_selftest_aggregate --ci-gate)
+// stdlib/cloud/registry_endpoint_resolve_test.hexa — Bug-1 / @L5: a bare pod-id
+// resolves its ssh_host + ssh_port from the M5 registry, so poll/run reach the
+// pod WITHOUT a hand-typed host/port (the edge-genall pod-38961119 root cause:
+// ssh_port "11118" was in the registry, but poll defaulted to :22 → false DEAD
+// → teardown).
+//
+// MIRROR-TEST (the established stdlib/cloud convention — see
+// pod_registry_guard_test.hexa / vast_destroy_verdict_test.hexa /
+// flag_value_validate_test.hexa): pod_registry_resolve_endpoint reads the LIVE
+// $HOME/.hx/cloud/active-pods.json, which carries cost-bearing pods that must
+// NEVER be touched by a test, so the pure record→endpoint logic is mirrored
+// VERBATIM here over synthetic records. Keep byte-identical to
+// pod_registry.hexa:pod_registry_resolve_endpoint + cloud_cli.hexa:
+// _registry_resolved_host; a drift makes this test meaningless, so review the
+// three together.
+//
+// Run:   hexa run stdlib/cloud/registry_endpoint_resolve_test.hexa
+// PASS:  exits 0, prints "registry_endpoint_resolve_test PASS".
+
+// ── synthetic record (the two fields the resolver reads) ──
+struct Rec {
+    id:       str,
+    ssh_host: str,
+    ssh_port: str
+}
+
+struct Endpoint {
+    host:     str,
+    port:     str,
+    resolved: int
+}
+
+struct Resolved {
+    host:     str,
+    port:     str,
+    resolved: int,
+    via:      str
+}
+
+// mirror of pod_registry.hexa:_m5_find (by id)
+fn _find(records: [Rec], pod_id: str) -> int {
+    let mut i = 0
+    while i < len(records) {
+        if records[i].id == pod_id {
+            return i
+        }
+        i = i + 1
+    }
+    return -1
+}
+
+// mirror of pod_registry.hexa:pod_registry_resolve_endpoint — KEEP IN SYNC.
+fn _resolve_endpoint(records: [Rec], pod_id: str) -> Endpoint {
+    if len(pod_id) == 0 {
+        return Endpoint { host: "", port: "", resolved: 0 }
+    }
+    let idx = _find(records, pod_id)
+    if idx < 0 {
+        return Endpoint { host: "", port: "", resolved: 0 }
+    }
+    let r = records[idx]
+    if len(r.ssh_host) == 0 {
+        return Endpoint { host: "", port: "", resolved: 0 }
+    }
+    return Endpoint { host: r.ssh_host, port: r.ssh_port, resolved: 1 }
+}
+
+// mirror of cloud_cli.hexa:_registry_resolved_host — KEEP IN SYNC.
+fn _registry_resolved_host(ep: Endpoint) -> Resolved {
+    let mut host = ep.host
+    if host.contains("@") == false {
+        host = "root@" + host
+    }
+    return Resolved { host: host, port: ep.port, resolved: 1, via: "registry" }
+}
+
+fn _ck_s(name: str, got: str, want: str) {
+    if got != want {
+        println("  FAIL: " + name + " got '" + got + "' want '" + want + "'")
+        exit(1)
+    }
+    println("  ok: " + name)
+}
+
+fn _ck_i(name: str, got: int, want: int) {
+    if got != want {
+        println("  FAIL: " + name + " got " + to_string(got) + " want " + to_string(want))
+        exit(1)
+    }
+    println("  ok: " + name)
+}
+
+fn main() {
+    // Fixture mirrors the live registry shapes: a vast pod (proxy host carries
+    // NO user@), a runpod pod (bare IP, NO user@), and a still-RENTING pod with
+    // an empty ssh_host.
+    let records = [
+        Rec { id: "38961119",       ssh_host: "ssh1.vast.ai",   ssh_port: "11118" },  // edge-genall (the root-cause pod)
+        Rec { id: "8g5r7jup4lw35e", ssh_host: "104.255.9.187",  ssh_port: "11517" },  // runpod bare IP
+        Rec { id: "root@host.tld",  ssh_host: "user@host.tld",  ssh_port: "2222"  },  // already has user@
+        Rec { id: "renting99",      ssh_host: "",               ssh_port: ""      }   // no host yet
+    ]
+
+    // ── @L5: the edge-genall path — pod 38961119 → ssh1.vast.ai:11118 ──
+    let ep1 = _resolve_endpoint(records, "38961119")
+    _ck_i("38961119 resolved",  ep1.resolved, 1)
+    _ck_s("38961119 host",      ep1.host, "ssh1.vast.ai")
+    _ck_s("38961119 port",      ep1.port, "11118")
+    let rh1 = _registry_resolved_host(ep1)
+    _ck_s("38961119 ssh dest",  rh1.host, "root@ssh1.vast.ai")
+    _ck_s("38961119 -p port",   rh1.port, "11118")
+    _ck_s("38961119 via",       rh1.via, "registry")
+
+    // runpod bare-IP id → root@<ip>:<port>
+    let ep2 = _resolve_endpoint(records, "8g5r7jup4lw35e")
+    _ck_i("runpod resolved",    ep2.resolved, 1)
+    let rh2 = _registry_resolved_host(ep2)
+    _ck_s("runpod ssh dest",    rh2.host, "root@104.255.9.187")
+    _ck_s("runpod port",        rh2.port, "11517")
+
+    // an ssh_host already carrying user@ is honored verbatim (no double root@)
+    let ep3 = _resolve_endpoint(records, "root@host.tld")
+    let rh3 = _registry_resolved_host(ep3)
+    _ck_s("user@ honored",      rh3.host, "user@host.tld")
+
+    // a still-RENTING pod (empty ssh_host) does NOT resolve → caller falls back
+    let ep4 = _resolve_endpoint(records, "renting99")
+    _ck_i("empty host unresolved", ep4.resolved, 0)
+
+    // an unknown id does NOT resolve
+    let ep5 = _resolve_endpoint(records, "nonexistent")
+    _ck_i("unknown id unresolved", ep5.resolved, 0)
+
+    // empty id does NOT resolve
+    let ep6 = _resolve_endpoint(records, "")
+    _ck_i("empty id unresolved", ep6.resolved, 0)
+
+    println("registry_endpoint_resolve_test PASS")
+}
