@@ -22,3 +22,10 @@ address  pcrel length extern type    scattered symbolnum/value
 --- RUN /tmp/str1_prog ---
 hello world
 exit=0  (string literal 'hello world' correctly addressed via PAGE21/PAGEOFF12)
+
+=== PR-C SCOPE MEASUREMENT — full-flat re-emit KILLED by env (NOT code) ===
+cmd: aprime_page2 _drv.hexa --emit=obj --ignore-errors -o /tmp/cc-page2.o /tmp/cc-l1-flat.hexa (HEXA_ATLAS_EMBED=/tmp/noatlas)
+ran ~13min @ 96-99% CPU, RSS peak ~8.5GB, then SIGTERM (exit 143) — no obj, no eprintln flushed.
+= environment kill of the heavy long-running native codegen (matches prior sessions' ~15-20min/7-8GB note), NOT a regression.
+The PR-C residual (g<id> globals / .LCflt* float pool page refs) is therefore UNMEASURED this session.
+PR-A + PR-B correctness is proven on the SMALL path (str1: links via ld64 + runs 'hello world'), which does NOT require the full-flat emit.
