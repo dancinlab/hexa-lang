@@ -1,0 +1,195 @@
+// @ci_gate — deterministic · network-free · matrix-free SCF-sourced |g|² g5 gate
+//
+// qforge_elph_scf_selftest.hexa — QFORGE M5.6 (Sternheimer→|g|² from SCF) g5 gate.
+//
+// elph_scf.hexa computes the electron-phonon matrix element g_{mn}=⟨ψ_m|ΔV_scf|ψ_n⟩
+// from the SELF-CONSISTENT SCF state (ψ,ε) — NOT from a QE dvscf boundary. The
+// gate verifies the SCF-sourced |g| against an INDEPENDENT frozen-phonon finite-
+// difference cross-check + internal-consistency anchors (no QE number).
+//
+//   Model: an explicit symmetric 4-level H₀ (the SCF Hamiltonian; ψ,ε from eigh —
+//   the diagonalizer qforge_scf uses). A bare phonon perturbation ΔV (symmetric)
+//   = the displacement derivative of the potential. Occupied = lowest 2 levels.
+//
+// Anchors:
+//  (A) HELLMANN-FEYNMAN / FROZEN-PHONON FD (the independence proof):
+//      g_nn = ⟨ψ_n|ΔV|ψ_n⟩ (diagonal el-ph) must equal dε_n/du computed by a
+//      FINITE-DIFFERENCE of the SCF eigenvalue under ±h·ΔV. A genuinely
+//      independent derivative — this is what makes |g| atoms→ independent.   🟢
+//  (B) BARE LIMIT: with a ZERO screening kernel, g_{mn}=⟨ψ_m|ΔV_bare|ψ_n⟩ — the
+//      independent-particle |g|² (matches the direct contraction).            🔵
+//  (C) SC SCREENING converges: the Sternheimer screening loop converged + small
+//      residual; a non-zero kernel shifts |g|² (real self-consistent response).🟢
+//  (D) HERMITICITY: |g_{mn}|² = |g_{nm}|² (real ΔV at Γ).                      🔵
+//  (E) ACOUSTIC SUM RULE: a UNIFORM (rigid) shift ΔV=c·I → Δρ from the projected
+//      Sternheimer response is 0 (P_c kills a rigid shift) → SC |g| = bare |g|;
+//      the screening adds nothing for the acoustic q→0 rigid mode.            🟢
+//
+// Run:  HEXA_LANG=. hexa run stdlib/qforge/elph_scf_selftest.hexa
+// PASS: "qforge_elph_scf_selftest PASS".
+use "stdlib/qforge/elph_scf"
+use "stdlib/qforge/sternheimer"
+use "stdlib/alloc/math/eigen"
+
+fn _abs(x: float) -> float { if x < 0.0 { return -x } return x }
+fn _ck_close(name: str, got: float, want: float, eps: float) -> int {
+    if _abs(got - want) <= eps { println("PASS " + name + " (" + to_string(got) + ")") ; return 0 }
+    println("FAIL " + name + " — got " + to_string(got) + " want " + to_string(want)) ; return 1
+}
+fn _ck_true(name: str, cond: bool) -> int {
+    if cond { println("PASS " + name) ; return 0 }
+    println("FAIL " + name) ; return 1
+}
+
+// ── matrix-free H_apply over a module-global symmetric matrix (named-fn) ──────
+let mut G_H: [float] = []
+let mut G_N = 0
+fn h_apply(v: [float]) {
+    let mut out = []
+    let mut i = 0
+    while i < G_N {
+        let mut s = 0.0
+        let mut j = 0
+        while j < G_N { s = s + G_H[i * G_N + j] * v[j] ; j = j + 1 }
+        out.push(s)
+        i = i + 1
+    }
+    return out
+}
+// zero screening kernel (independent-particle / bare path).
+fn drho_zero(drho: [float]) -> [float] {
+    let mut out = []
+    let mut i = 0
+    while i < drho.len() { out.push(0.0) ; i = i + 1 }
+    return out
+}
+// a non-trivial local screening kernel ΔV_scr(r) = α·Δρ(r) (toy adiabatic f_xc).
+let mut G_ALPHA = 0.0
+fn drho_alpha(drho: [float]) -> [float] {
+    let mut out = []
+    let mut i = 0
+    while i < drho.len() { out.push(G_ALPHA * drho[i]) ; i = i + 1 }
+    return out
+}
+// apply a symmetric matrix DV to vector psi → DV·psi (length n).
+fn matvec(M: [float], psi: [float], n: int) -> [float] {
+    let mut out = []
+    let mut i = 0
+    while i < n {
+        let mut s = 0.0
+        let mut j = 0
+        while j < n { s = s + M[i * n + j] * psi[j] ; j = j + 1 }
+        out.push(s)
+        i = i + 1
+    }
+    return out
+}
+
+fn main() {
+    let mut fails = 0
+    let N = 4
+    let TOL = 1.0e-12
+    // explicit symmetric SCF Hamiltonian H₀ (well-separated spectrum).
+    let H0 = [ 3.0, 0.2, 0.1, 0.05,
+               0.2, 2.0, 0.15, 0.1,
+               0.1, 0.15, 1.0, 0.2,
+               0.05, 0.1, 0.2, 0.4 ]
+    // bare phonon perturbation ΔV (symmetric — the displacement derivative).
+    let DV = [ 0.0, 0.5, 0.2, 0.1,
+               0.5, 0.0, 0.3, 0.2,
+               0.2, 0.3, 0.0, 0.4,
+               0.1, 0.2, 0.4, 0.0 ]
+    G_H = H0 ; G_N = N
+    // diagonalize the SCF H₀ → ε,ψ (ascending). eigh returns descending blocks.
+    let eg = eigh(H0, N)
+    let vals = eg[0]
+    let vecs = eg[1]
+    let mut eps = []
+    let mut psi = []
+    let mut s0 = 0
+    while s0 < N { eps.push(vals[N - 1 - s0]) ; psi.push(vecs[N - 1 - s0]) ; s0 = s0 + 1 }
+    let M_OCC = 2
+    let mut occ: [[float]] = []
+    occ.push(psi[0]) ; occ.push(psi[1])
+    let mut eps_occ = []
+    eps_occ.push(eps[0]) ; eps_occ.push(eps[1])
+    // ΔV_bare|ψ_n⟩ bundle (flat M_OCC×N).
+    let mut dvb = []
+    let mut nn = 0
+    while nn < M_OCC {
+        let dvp = matvec(DV, occ[nn], N)
+        let mut i = 0
+        while i < N { dvb.push(dvp[i]) ; i = i + 1 }
+        nn = nn + 1
+    }
+
+    // ══ (A) HELLMANN-FEYNMAN / FROZEN-PHONON FINITE-DIFFERENCE ═════════════
+    // g_nn = ⟨ψ_n|ΔV|ψ_n⟩ ; FD: dε_n/du = [ε_n(H₀+hΔV) − ε_n(H₀−hΔV)]/2h.
+    let h_fd = 1.0e-4
+    let mut Hp = []
+    let mut Hm = []
+    let mut p = 0
+    while p < N * N { Hp.push(H0[p] + h_fd * DV[p]) ; Hm.push(H0[p] - h_fd * DV[p]) ; p = p + 1 }
+    let egp = eigh(Hp, N)
+    let egm = eigh(Hm, N)
+    let vp = egp[0]
+    let vm = egm[0]
+    // n=0 (lowest occ = descending index N-1), n=1 (N-2).
+    let de0 = (vp[N - 1] - vm[N - 1]) / (2.0 * h_fd)
+    let de1 = (vp[N - 2] - vm[N - 2]) / (2.0 * h_fd)
+    let dvb0 = matvec(DV, occ[0], N)
+    let dvb1 = matvec(DV, occ[1], N)
+    let g00 = qforge_elph_g_diag(occ[0], dvb0, N)
+    let g11 = qforge_elph_g_diag(occ[1], dvb1, N)
+    fails = fails + _ck_close("(A) g_00 = dε_0/du (frozen-phonon FD)", g00, de0, 1.0e-6)
+    fails = fails + _ck_close("(A) g_11 = dε_1/du (frozen-phonon FD)", g11, de1, 1.0e-6)
+
+    // ══ (B) BARE LIMIT: SC with zero kernel → g = ⟨ψ_m|ΔV_bare|ψ_n⟩ ═════════
+    let er = qforge_elph_g2(h_apply, occ, occ, eps_occ, dvb, drho_zero, N, TOL, 300)
+    // direct bare g_{mn} = ⟨ψ_m|ΔV|ψ_n⟩ for m,n ∈ occ.
+    let g00_dir = qforge_elph_g_diag(occ[0], dvb0, N)
+    let g01_dir = qforge_elph_g_diag(occ[0], dvb1, N)   // ⟨ψ_0|ΔV|ψ_1⟩
+    let g10_dir = qforge_elph_g_diag(occ[1], dvb0, N)   // ⟨ψ_1|ΔV|ψ_0⟩
+    // NOTE bare path: Sternheimer Δψ in conduction space; the SC update with a 0
+    // kernel leaves ΔV_scf = ΔV_bare, so g_{mn}=⟨ψ_m|ΔV_bare|ψ_n⟩ exactly.
+    fails = fails + _ck_close("(B) bare g_00 = direct ⟨ψ0|ΔV|ψ0⟩", er.g[0 * M_OCC + 0], g00_dir, 1.0e-9)
+    fails = fails + _ck_close("(B) bare g_01 = direct ⟨ψ0|ΔV|ψ1⟩", er.g[0 * M_OCC + 1], g01_dir, 1.0e-9)
+    fails = fails + _ck_close("(B) bare |g_01|² = (⟨ψ0|ΔV|ψ1⟩)²", er.g2[0 * M_OCC + 1], g01_dir * g01_dir, 1.0e-9)
+
+    // ══ (C) SC SCREENING converges + shifts |g|² (real self-consistent) ════
+    G_ALPHA = 0.3
+    let erS = qforge_elph_g2(h_apply, occ, occ, eps_occ, dvb, drho_alpha, N, TOL, 300)
+    fails = fails + _ck_true("(C) SC screening response converged", erS.converged)
+    fails = fails + _ck_true("(C) SC max_residual < 1e-6", erS.max_residual < 1.0e-6)
+    // with a non-zero kernel the SC |g| differs from bare (response is real).
+    fails = fails + _ck_true("(C) SC |g_00|² shifts vs bare (real screening)",
+                             _abs(erS.g2[0] - er.g2[0]) > 1.0e-10)
+
+    // ══ (D) HERMITICITY |g_{mn}|² = |g_{nm}|² ══════════════════════════════
+    fails = fails + _ck_close("(D) |g_01|² == |g_10|² (bare)",
+                              er.g2[0 * M_OCC + 1], er.g2[1 * M_OCC + 0], 1.0e-9)
+
+    // ══ (E) ACOUSTIC SUM RULE: rigid shift ΔV=c·I → P_c·ΔV·ψ_n = 0 → Δψ=0 ══
+    // A uniform potential c·I commutes with H₀; its projection onto conduction
+    // space P_c(ΔV ψ_n) = c·P_c ψ_n = 0 (ψ_n occupied). So Sternheimer Δψ=0 →
+    // Δρ=0 → the screening adds nothing: SC g = bare g for the acoustic mode.
+    let c_shift = 0.7
+    let mut dvI = []
+    let mut ni = 0
+    while ni < M_OCC {
+        let mut i = 0
+        while i < N { dvI.push(c_shift * occ[ni][i]) ; i = i + 1 }   // (c·I)ψ_n = c·ψ_n
+        ni = ni + 1
+    }
+    G_ALPHA = 0.5
+    let erA = qforge_elph_g2(h_apply, occ, occ, eps_occ, dvI, drho_alpha, N, TOL, 300)
+    // bare-equivalent for the same rigid shift (zero kernel).
+    let erA0 = qforge_elph_g2(h_apply, occ, occ, eps_occ, dvI, drho_zero, N, TOL, 300)
+    fails = fails + _ck_close("(E) acoustic: SC g_00 == bare g_00 (Δρ=0 rigid)",
+                              erA.g[0], erA0.g[0], 1.0e-7)
+    // and g_nn for a rigid shift = c·⟨ψ_n|ψ_n⟩ = c (normalized).
+    fails = fails + _ck_close("(E) acoustic g_00 = c·⟨ψ0|ψ0⟩ = c", erA.g[0], c_shift, 1.0e-7)
+
+    if fails == 0 { println("qforge_elph_scf_selftest PASS") }
+    else { println("qforge_elph_scf_selftest FAIL — " + to_string(fails) + " case(s)") }
+}
