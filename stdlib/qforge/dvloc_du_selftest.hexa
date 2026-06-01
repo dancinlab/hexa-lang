@@ -1,0 +1,146 @@
+// @ci_gate — deterministic · network-free · pure DFPT bare-potential-derivative g5 gate
+//
+// dvloc_du_selftest.hexa — QFORGE ∂V_loc/∂u_κ(G) (phonon bare-perturbation) g5 gate.
+//
+// 변위 bare-potential 의 analytic G-공간 미분 ∂Ṽ_κ(G)/∂u_d = −i·G_d·V_loc·exp(−iG·τ) 를
+// 닫힌형으로 하드코딩하지 않고, 같은 구조인자 위상으로부터 만든 Ṽ(G;τ) 의 중심
+// 유한차분 (Ṽ[τ+δ]−Ṽ[τ−δ])/(2δ) 와 성분별로 대조한다(L3 강 게이트, rel-ε≤1e-6).
+// dfpt_response_selftest 의 FD-vs-analytic idiom 을 그대로 미러링한다(d4·d19).
+//
+// 검증 케이스:
+//  (A) FD-vs-analytic (강): 각 G·각 성분(re/im)에서 analytic == 중심차분, rel-ε≤1e-6.
+//  (B) G=0 head: ∂Ṽ/∂u(G=0) = 0 (강체 균일변위 = bare 무변화, 음향/병진불변 head).
+//  (C) Hermiticity: ∂Ṽ(−G)/∂u = conj(∂Ṽ(G)/∂u) → 실공간 ΔV_bare(r) 실수.
+//  (D) malformed guard: gvecs 비-3배수 · vloc 길이불일치 · tau≠3 · dir∉{0,1,2} → [].
+//  (E) atom convenience: qforge_dvloc_du_atom(which) == qforge_dvloc_du(τ_which).
+//
+// Run (repo runtime 수동 링크 / HEXA_STDLIB_ROOT 링크):
+//   HEXA_STDLIB_ROOT="$PWD/stdlib" hexa run stdlib/qforge/dvloc_du_selftest.hexa
+// PASS: "qforge_dvloc_du_selftest PASS".
+use "stdlib/qforge/dvloc_du"
+use "stdlib/qforge/vloc"
+
+fn _abs(x: float) -> float { if x < 0.0 { return -x } return x }
+
+// 상대오차: |got−want| / max(|want|, floor). 작은 want 는 절대오차로 평가.
+fn _ck_rel(name: str, got: float, want: float, eps: float) -> int {
+    let denom = if _abs(want) > 1.0e-12 { _abs(want) } else { 1.0 }
+    let rel = _abs(got - want) / denom
+    if rel <= eps { return 0 }
+    println("FAIL " + name + " — got " + to_string(got) + " want " + to_string(want)
+            + " rel " + to_string(rel))
+    return 1
+}
+fn _ck_bool(name: str, got: bool, want: bool) -> int {
+    if got == want { return 0 }
+    println("FAIL " + name + " — got " + to_string(got) + " want " + to_string(want))
+    return 1
+}
+
+// Ṽ(G;τ) = V_loc(|G|)·exp(−iG·τ) 한 G 의 [re,im] (FD anchor 의 평가 단위).
+fn vtilde(gx: float, gy: float, gz: float, vf: float,
+          tx: float, ty: float, tz: float) -> [float] {
+    let p = gx * tx + gy * ty + gz * tz
+    return [vf * cos(p), -vf * sin(p)]    // exp(−iG·τ)
+}
+
+fn main() {
+    let mut fails = 0
+    let EPS = 1.0e-6
+
+    // 작은 명시 G-list (small fixture — SIGKILL 회피, no repeat/pad).
+    // 의도적으로 ±G 짝을 넣어 Hermiticity (C) 를 검사한다.
+    let gvecs = [ 0.0, 0.0, 0.0,        // G0 = Γ (head)
+                  0.3, 0.0, 0.0,        // G1
+                 -0.3, 0.0, 0.0,        // G2 = −G1
+                  0.2, 0.4, 0.1,        // G3
+                 -0.2, -0.4, -0.1 ]     // G4 = −G3
+    let nG = 5
+    // 실수·짝성 form factor V_loc(|G|) (임의 양수, |G| 짝마다 동일하게).
+    let vloc_g = [ 1.5, 0.8, 0.8, 0.55, 0.55 ]
+    let tau = [0.7, -0.4, 0.25]
+    let tx = tau[0]
+    let ty = tau[1]
+    let tz = tau[2]
+
+    // ── (A) FD-vs-analytic — 각 Cartesian dir, 각 G, re/im 성분별 ────────────
+    let DELTA = 1.0e-5
+    let mut dir = 0
+    while dir < 3 {
+        let ana = qforge_dvloc_du(gvecs, vloc_g, tau, dir)
+        let mut ig = 0
+        while ig < nG {
+            let gx = gvecs[ig * 3]
+            let gy = gvecs[ig * 3 + 1]
+            let gz = gvecs[ig * 3 + 2]
+            // τ ± δ ê_dir
+            let mut txp = tx ; let mut typ = ty ; let mut tzp = tz
+            let mut txm = tx ; let mut tym = ty ; let mut tzm = tz
+            if dir == 0 { txp = tx + DELTA ; txm = tx - DELTA }
+            if dir == 1 { typ = ty + DELTA ; tym = ty - DELTA }
+            if dir == 2 { tzp = tz + DELTA ; tzm = tz - DELTA }
+            let vp = vtilde(gx, gy, gz, vloc_g[ig], txp, typ, tzp)
+            let vm = vtilde(gx, gy, gz, vloc_g[ig], txm, tym, tzm)
+            let fd_re = (vp[0] - vm[0]) / (2.0 * DELTA)
+            let fd_im = (vp[1] - vm[1]) / (2.0 * DELTA)
+            fails = fails + _ck_rel("(A) dir" + to_string(dir) + " G" + to_string(ig)
+                                    + " re FD==ana", ana[ig * 2], fd_re, EPS)
+            fails = fails + _ck_rel("(A) dir" + to_string(dir) + " G" + to_string(ig)
+                                    + " im FD==ana", ana[ig * 2 + 1], fd_im, EPS)
+            ig = ig + 1
+        }
+        dir = dir + 1
+    }
+
+    // ── (B) G=0 head: ∂Ṽ/∂u(Γ) = 0 (re+im) 모든 dir ─────────────────────────
+    let mut d2 = 0
+    while d2 < 3 {
+        let a = qforge_dvloc_du(gvecs, vloc_g, tau, d2)
+        fails = fails + _ck_rel("(B) G0 head re=0 dir" + to_string(d2), a[0], 0.0, EPS)
+        fails = fails + _ck_rel("(B) G0 head im=0 dir" + to_string(d2), a[1], 0.0, EPS)
+        d2 = d2 + 1
+    }
+
+    // ── (C) Hermiticity: ∂Ṽ(−G)/∂u = conj(∂Ṽ(G)/∂u) ────────────────────────
+    //   G1↔G2 (idx 1,2) 와 G3↔G4 (idx 3,4) 가 ±G 짝. conj → re 동일, im 부호반전.
+    let ax = qforge_dvloc_du(gvecs, vloc_g, tau, 0)
+    // pair (1,2)
+    fails = fails + _ck_rel("(C) Herm re G1==G2", ax[2], ax[4], EPS)
+    fails = fails + _ck_rel("(C) Herm im G1==-G2", ax[3], -ax[5], EPS)
+    // pair (3,4)
+    fails = fails + _ck_rel("(C) Herm re G3==G4", ax[6], ax[8], EPS)
+    fails = fails + _ck_rel("(C) Herm im G3==-G4", ax[7], -ax[9], EPS)
+
+    // ── (D) malformed guards → [] ────────────────────────────────────────────
+    let bad_g = [0.0, 0.0]                                  // 비-3배수
+    fails = fails + _ck_bool("(D) bad gvecs → []",
+                             qforge_dvloc_du(bad_g, vloc_g, tau, 0).len() == 0, true)
+    let short_v = [1.0, 2.0]                                // 길이불일치
+    fails = fails + _ck_bool("(D) vloc len mismatch → []",
+                             qforge_dvloc_du(gvecs, short_v, tau, 0).len() == 0, true)
+    let bad_tau = [0.1, 0.2]                                // tau≠3
+    fails = fails + _ck_bool("(D) bad tau → []",
+                             qforge_dvloc_du(gvecs, vloc_g, bad_tau, 0).len() == 0, true)
+    fails = fails + _ck_bool("(D) dir=3 → []",
+                             qforge_dvloc_du(gvecs, vloc_g, tau, 3).len() == 0, true)
+    fails = fails + _ck_bool("(D) dir=-1 → []",
+                             qforge_dvloc_du(gvecs, vloc_g, tau, -1).len() == 0, true)
+
+    // ── (E) atom convenience == direct τ form ───────────────────────────────
+    //   2-atom cell, displace atom 1; τ_1 == tau.
+    let pos = [0.1, 0.2, 0.3,  tau[0], tau[1], tau[2]]
+    let viaatom = qforge_dvloc_du_atom(gvecs, vloc_g, pos, 1, 0)
+    let direct = qforge_dvloc_du(gvecs, vloc_g, tau, 0)
+    let mut e = 0
+    while e < 2 * nG {
+        fails = fails + _ck_rel("(E) atom==direct[" + to_string(e) + "]",
+                                viaatom[e], direct[e], EPS)
+        e = e + 1
+    }
+    // atom malformed guard
+    fails = fails + _ck_bool("(E) atom which OOB → []",
+                             qforge_dvloc_du_atom(gvecs, vloc_g, pos, 9, 0).len() == 0, true)
+
+    if fails == 0 { println("qforge_dvloc_du_selftest PASS") }
+    else { println("qforge_dvloc_du_selftest FAIL — " + to_string(fails) + " case(s)") }
+}

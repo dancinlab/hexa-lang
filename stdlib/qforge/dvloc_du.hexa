@@ -1,0 +1,115 @@
+// HEXA Standard Library — qforge/dvloc_du
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// QFORGE DFPT brick — the PHONON bare-potential derivative ∂V_loc/∂u_κ(G).
+//
+// The metallic el-ph wall (demiurge CaH6 cross-val 73e9157) found QFORGE-NC's
+// |g| was a CONSTANT STAND-IN, not real DFPT. The Sternheimer / force-constant
+// path (dfpt_response.hexa) already self-consistently propagates a bare ΔV_bare
+// perturbation — but it had NO real ΔV_bare for an atomic displacement. This
+// brick supplies that missing input: the G-space derivative of the LOCAL ionic
+// potential w.r.t. moving one atom (species κ) along a Cartesian direction.
+//
+// ── The derivative (structure-factor route, d19 reuse of vloc + structure) ────
+//
+// The local part of the external potential from a single atom of species κ at
+// cartesian position τ_κ is (structure.hexa convention S = Σ exp(−iG·τ)):
+//
+//   Ṽ_κ(G) = V_loc^κ(|G|) · exp(−i G·τ_κ)
+//
+// where V_loc^κ(|G|) is the radial form factor `qforge_vloc_of_g` returns (d19 —
+// this brick REUSES it, it does NOT recompute the radial transform). Moving the
+// atom τ_κ → τ_κ + u and differentiating w.r.t. the displacement component u_d
+// (d ∈ {x,y,z}):
+//
+//   ∂Ṽ_κ(G)/∂u_d = V_loc^κ(|G|) · ∂/∂u_d[ exp(−i G·(τ_κ+u)) ]
+//                = −i · G_d · V_loc^κ(|G|) · exp(−i G·τ_κ)
+//
+// i.e. the bare displacement-potential derivative is the local form factor times
+// the structure-factor phase, scaled by (−i G_d). Per G it is a complex number;
+// over a G-list it is the interleaved [re,im,…] ΔV_bare provider the Sternheimer
+// /force-constant consumer (dfpt_response.hexa, dV_bare_provider) builds on.
+//
+// G=0 → exactly 0 (G_d=0): a rigid uniform shift of the lattice produces no bare
+// potential change at the head — the acoustic / translational-invariance head.
+//
+// ── Hermiticity of the assembled ΔV (real-space realness) ────────────────────
+// Because V_loc^κ(|G|) is real and even in G, and the phase obeys
+// exp(−iG·τ) = conj(exp(+iG·τ)), the derivative satisfies
+//   ∂Ṽ_κ(−G)/∂u_d = conj( ∂Ṽ_κ(G)/∂u_d ).
+// So the G↔−G pairs are complex conjugates → the inverse FT (the real-space
+// ΔV_bare(r)) is REAL, as a physical potential must be. The selftest checks this.
+//
+// d3/d4 generic: element- and structure-agnostic. The caller supplies τ_κ and
+// V_loc^κ(|G|) (any species, any cell) — NO hardcoded species. One generic path.
+// d6 HONEST SCOPE: this is brick 1/2 of the metallic unblock. It produces the
+// verified ∂V_loc/∂u kernel. Brick 2 — the real-cell phonon ω(q,ν) driver that
+// drives this ΔV_bare through the self-consistent response over a real q-grid —
+// is STILL the open step; this brick does NOT by itself close the CaH6 cross-val.
+
+// ── ∂Ṽ_κ(G)/∂u_d over a G-list, single direction d ───────────────────────────
+//   gvecs : flat [3·nG] cartesian G-vectors  [Gx0,Gy0,Gz0, Gx1,…]  (bohr⁻¹)
+//   vloc_g: [nG] real radial form factor V_loc^κ(|G|) (qforge_vloc_of_g output)
+//   tau   : [3]  cartesian position τ_κ of the atom (bohr)
+//   dir   : Cartesian component d ∈ {0,1,2} = {x,y,z}
+// Returns interleaved complex [re0,im0, re1,im1, …] (length 2·nG):
+//   −i·G_d·V_loc^κ(|G|)·exp(−iG·τ_κ).
+// Malformed (gvecs not 3·nG · len(vloc_g)≠nG · len(tau)≠3 · dir∉{0,1,2}) → [].
+pub fn qforge_dvloc_du(gvecs: [float], vloc_g: [float], tau: [float],
+                       dir: int) -> [float] {
+    let lg = len(gvecs)
+    if lg % 3 != 0 { return [] }
+    let ng = lg / 3
+    if len(vloc_g) != ng || len(tau) != 3 { return [] }
+    if dir < 0 || dir > 2 { return [] }
+    let tx = tau[0]
+    let ty = tau[1]
+    let tz = tau[2]
+    let mut out: [float] = []
+    let mut ig = 0
+    while ig < ng {
+        let gx = gvecs[ig * 3]
+        let gy = gvecs[ig * 3 + 1]
+        let gz = gvecs[ig * 3 + 2]
+        // G·τ phase; structure-factor convention exp(−iG·τ) = cos(p) − i sin(p).
+        let p = gx * tx + gy * ty + gz * tz
+        let sre = cos(p)
+        let sim = -sin(p)
+        // selected Cartesian component G_d
+        let mut gd = gx
+        if dir == 1 { gd = gy }
+        if dir == 2 { gd = gz }
+        // c = V_loc·exp(−iG·τ) = vf·(sre + i·sim)
+        let vf = vloc_g[ig]
+        let cre = vf * sre
+        let cim = vf * sim
+        // multiply by (−i·G_d): (−i·g)·(cre + i·cim) = (g·cim) + i·(−g·cre)
+        out.push(gd * cim)
+        out.push(-gd * cre)
+        ig = ig + 1
+    }
+    return out
+}
+
+// ── Assemble multi-atom ΔV_bare(G) for displacing ONE atom (index `which`) ────
+// For a cell with atoms at positions `pos` (flat [3·nA]) sharing the SAME species
+// form factor vloc_g, the bare ΔV from displacing atom `which` along `dir` is
+// just qforge_dvloc_du for that atom alone (the other atoms' Ṽ are u-independent).
+// This convenience picks atom `which`'s τ out of `pos` and returns its derivative.
+//   pos   : flat [3·nA] cartesian positions (bohr)
+//   vloc_g: [nG] real form factor (same species as atom `which`)
+//   gvecs : flat [3·nG] cartesian G-vectors
+//   which : atom index to displace
+//   dir   : Cartesian component {0,1,2}
+// Returns interleaved complex [re,im,…] (2·nG). Malformed → [].
+pub fn qforge_dvloc_du_atom(gvecs: [float], vloc_g: [float], pos: [float],
+                            which: int, dir: int) -> [float] {
+    let lp = len(pos)
+    if lp % 3 != 0 { return [] }
+    let na = lp / 3
+    if which < 0 || which >= na { return [] }
+    let tau = [pos[which * 3], pos[which * 3 + 1], pos[which * 3 + 2]]
+    return qforge_dvloc_du(gvecs, vloc_g, tau, dir)
+}
