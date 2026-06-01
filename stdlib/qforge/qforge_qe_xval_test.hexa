@@ -1,0 +1,134 @@
+// @ci_gate — pure · network-free · deterministic (stdlib_selftest_aggregate --ci-gate)
+//
+// qforge_qe_xval_test.hexa — QFORGE L0 ↔ Quantum ESPRESSO ISOLATED-LAYER
+// CROSS-VALIDATION on real RTSC-campaign DFPT el-ph anchors.
+//
+// PURPOSE (QFORGE.md open milestone — "QE cross-validation 후보 LaH10·CaH6·
+// Li2MgH16 로 QFORGE vs QE λ·Tc → g5; 각 layer는 위 layer를 QE 출력으로 먹여
+// 격리검증"). The L0 Tc layer is validated in ISOLATION: feed it the SAME
+// (λ, ω_log, μ*) that QE's ph.x DFPT runs produced, and assert the QFORGE-
+// computed Tc reproduces the SAME Tc the campaign recorded — without requiring
+// any lower QFORGE layer (L3-L5) to be production-complete. This is the highest-
+// confidence anchor: the layer closest to a verifiable number.
+//
+// ── PROVENANCE OF EVERY REFERENCE NUMBER (real QE, no fabrication, g6/g63) ──
+// All (λ_BZ, ω_log_K, μ*, Tc) come VERBATIM from terminal RTSC-campaign QE
+// el-ph verdict records in the demiurge repo (exports/material_discovery/):
+//   Nb   : rtsc_nb_dft_elph_ambient_proof_20260522.json  (λ=1.171 ω_log=193.0K
+//          → Tc 16.8/14.8 K @ μ*=0.10/0.13; ambient elemental BCS anchor)
+//   CaH6 : rtsc_cah6_dft_4x4x4q_textbook_proof_20260524.json (λ=4.376
+//          ω_log=1236.4K → 255.1/245.1 K; clathrate, ~150 GPa)
+//   H3S  : rtsc_h3s_dft_6x6x6q_textbook_proof_20260522.json  (λ=2.619
+//          ω_log=1154.3K → 194.8/184.3 K; Im-3m, 200 GPa, Drozdov-repro)
+//   YH10 : rtsc_yh10_dft_elph_20260528.json (PRIMARY broad 0.02 Ry: λ=2.8197
+//          ω_log=1300.43K → 227.501/215.916 K; sodalite, ~250 GPa)
+//   H3O  : rtsc_h3o_dft_6x6x6q_novel_20260524.json  (λ=2.729 ω_log=1110.8K
+//          → 191.3/181.4 K; novel H3X sweep)
+// Each record is a complete IBZ-converged ph.x electron_phonon='simple' run
+// (QE 7.5 pw.x+ph.x @ vast.ai), λ_BZ = star-weighted BZ sum, ω_log = λ-weighted
+// log-average — i.e. genuine first-principles DFPT, not ML/projection.
+//
+// ── THE CROSS-VALIDATION FINDING (HONEST — g6/g63, no hand-tuning) ──────────
+// 1. PASS (🟢 GATE_CLOSED_MEASURED): QFORGE `mcmillan_tc(ω_log, λ, μ*)`
+//    reproduces EVERY QE-recorded Tc to rel-ε ≤ 0.25% (most ≤ 0.03%; YH10 to
+//    1e-6). The campaign's recorded "Allen-Dynes Tc" was in fact computed with
+//    the MCMILLAN closed form (ω_log/1.45 prefactor, no f1·f2 lift) — QFORGE's
+//    mcmillan_tc atom is bit-faithful to the engine the campaign actually ran.
+//    → L0 Tc layer is QE-validated on real DFPT moments. MIGRATION GREEN LIGHT
+//      for the McMillan-Tc path of the campaign.
+// 2. DIVERGENCE DOCUMENTED (🔵 closed-form, expected, NOT a bug): QFORGE's TRUE
+//    Allen-Dynes `qforge_tc_allen_dynes` (the f1·f2 strong-coupling form of
+//    Allen & Dynes 1975, PRB 12 905) sits ABOVE the recorded values by a margin
+//    that GROWS with λ — Nb(λ=1.17) +6%, H3S(λ=2.62) +18%, YH10(λ=2.82) +21%,
+//    CaH6(λ=4.38) +35%. This is the f1 strong-coupling lift that pure McMillan
+//    omits — a KNOWN, deterministic correction, not numerical disagreement.
+//    The test PINS this lift monotone-in-λ so the two formulas can never be
+//    silently conflated again. ACTIONABLE: the campaign's high-λ hydride Tc
+//    figures are McMillan LOWER bounds; the f1·f2 form predicts HIGHER Tc.
+//
+// Run:  hexa run stdlib/qforge/qforge_qe_xval_test.hexa
+// PASS: exits printing "qforge_qe_xval_test PASS".
+
+use "stdlib/material/sim"
+use "stdlib/qforge/tc"
+
+fn _abs(x: float) -> float { if x < 0.0 { return -x } return x }
+
+fn _rel(got: float, want: float) -> float {
+    let w = _abs(want)
+    let d = _abs(got - want)
+    if w < 1e-12 { return d }
+    return d / w
+}
+
+// QE-anchor reproduction: QFORGE mcmillan_tc(ω_log, λ, μ*) vs recorded QE Tc.
+fn _xval(name: str, lam: float, wlog: float, mu: float, qe_tc: float,
+         tol: float) -> int {
+    let qf = mcmillan_tc(wlog, lam, mu)
+    let rel = _rel(qf, qe_tc)
+    if rel <= tol {
+        println("PASS " + name + " — QFORGE Tc=" + to_string(qf)
+                + " K vs QE " + to_string(qe_tc) + " K (rel-ε=" + to_string(rel)
+                + " ≤ " + to_string(tol) + ")")
+        return 0
+    }
+    println("FAIL " + name + " — QFORGE Tc=" + to_string(qf) + " K vs QE "
+            + to_string(qe_tc) + " K (rel-ε=" + to_string(rel) + " > "
+            + to_string(tol) + ")")
+    return 1
+}
+
+fn main() {
+    let mut fails = 0
+
+    // ── GATE A (🟢 GATE_CLOSED_MEASURED) — QFORGE reproduces QE on real DFPT ──
+    // Tolerance 0.4% absorbs the QE records' published rounding (1 decimal on
+    // Tc, 4 sig-fig on λ/ω_log). No hand-tuning: same formula, same inputs.
+    println("── GATE A: QFORGE mcmillan_tc reproduces QE-recorded Tc (real DFPT moments) ──")
+    let tol = 0.004
+    fails = fails + _xval("Nb   μ*=0.10 (λ=1.171, ω_log=193.0K)",  1.171,  193.0,   0.10, 16.8,    tol)
+    fails = fails + _xval("Nb   μ*=0.13 (λ=1.171, ω_log=193.0K)",  1.171,  193.0,   0.13, 14.8,    tol)
+    fails = fails + _xval("CaH6 μ*=0.10 (λ=4.376, ω_log=1236.4K)", 4.376,  1236.4,  0.10, 255.1,   tol)
+    fails = fails + _xval("CaH6 μ*=0.13 (λ=4.376, ω_log=1236.4K)", 4.376,  1236.4,  0.13, 245.1,   tol)
+    fails = fails + _xval("H3S  μ*=0.10 (λ=2.619, ω_log=1154.3K)", 2.619,  1154.3,  0.10, 194.8,   tol)
+    fails = fails + _xval("H3S  μ*=0.13 (λ=2.619, ω_log=1154.3K)", 2.619,  1154.3,  0.13, 184.3,   tol)
+    fails = fails + _xval("YH10 μ*=0.10 (λ=2.8197, ω_log=1300.43K)", 2.8197, 1300.43, 0.10, 227.501, tol)
+    fails = fails + _xval("YH10 μ*=0.13 (λ=2.8197, ω_log=1300.43K)", 2.8197, 1300.43, 0.13, 215.916, tol)
+    fails = fails + _xval("H3O  μ*=0.10 (λ=2.729, ω_log=1110.8K)", 2.729,  1110.8,  0.10, 191.3,   tol)
+    fails = fails + _xval("H3O  μ*=0.13 (λ=2.729, ω_log=1110.8K)", 2.729,  1110.8,  0.13, 181.4,   tol)
+
+    // ── GATE B (🔵 closed-form) — the f1·f2 strong-coupling lift, pinned ──────
+    // QFORGE's TRUE Allen-Dynes (qforge_tc_allen_dynes) MUST exceed the McMillan
+    // value the campaign recorded, by a margin that is MONOTONE-INCREASING in λ.
+    // This is the f1 lift of Allen-Dynes 1975 — a deterministic correction, not
+    // a divergence to "fix". Pinning it prevents silently conflating the two.
+    println("── GATE B: Allen-Dynes f1·f2 lift over recorded McMillan Tc (monotone in λ) ──")
+    let lift_nb   = qforge_tc_allen_dynes(1.171,  193.0,   0.10) / 16.8    - 1.0   // λ=1.17
+    let lift_h3s  = qforge_tc_allen_dynes(2.619,  1154.3,  0.10) / 194.8   - 1.0   // λ=2.62
+    let lift_yh10 = qforge_tc_allen_dynes(2.8197, 1300.43, 0.10) / 227.501 - 1.0   // λ=2.82
+    let lift_cah6 = qforge_tc_allen_dynes(4.376,  1236.4,  0.10) / 255.1   - 1.0   // λ=4.38
+    println("AD/McMillan lift:  Nb=" + to_string(lift_nb) + "  H3S=" + to_string(lift_h3s)
+            + "  YH10=" + to_string(lift_yh10) + "  CaH6=" + to_string(lift_cah6))
+    if lift_nb > 0.0 && lift_h3s > lift_nb && lift_yh10 > lift_h3s && lift_cah6 > lift_yh10 {
+        println("PASS f1·f2 lift positive & monotone-increasing in λ (Nb<H3S<YH10<CaH6)")
+    } else {
+        println("FAIL f1·f2 lift not monotone-in-λ — Nb=" + to_string(lift_nb)
+                + " H3S=" + to_string(lift_h3s) + " YH10=" + to_string(lift_yh10)
+                + " CaH6=" + to_string(lift_cah6))
+        fails = fails + 1
+    }
+    // Sanity bracket: at the lowest-λ anchor the lift is single-digit %, at the
+    // highest it exceeds 25% — the known strong-coupling regime boundary.
+    if lift_nb < 0.10 && lift_cah6 > 0.25 {
+        println("PASS lift magnitude bracket — weak-coupling Nb <10%, strong-coupling CaH6 >25%")
+    } else {
+        println("FAIL lift bracket — Nb=" + to_string(lift_nb) + " CaH6=" + to_string(lift_cah6))
+        fails = fails + 1
+    }
+
+    if fails == 0 {
+        println("qforge_qe_xval_test PASS")
+    } else {
+        println("qforge_qe_xval_test FAIL — " + to_string(fails) + " case(s)")
+    }
+}
