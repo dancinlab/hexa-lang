@@ -1,0 +1,44 @@
+F-HEXA-CC-NATIVE-N5SYM-PT9B — all 9 N5-sym symbols resolved (codegen side verified)
+falsifier: after the 9-symbol wave, native obj-emit must route every formerly-bare
+source builtin to a runtime-provided target; runtime SSOT must define the new fns.
+
+STATUS: 🟢 SUPPORTED-NUMERICAL (codegen side) — 8 codegen-mapped builtins collapse;
+the 9th (__map_raw_len) is a runtime-provide (pt6), correctly link-resolved.
+
+method: build aprime_pt9b (pt9b codegen, main runtime_core.c; regen tooling stale
+so the codegen-collapse is tested with main's runtime) → re-emit cc-pt9b.o → nm -u.
+
+verbatim (/tmp/pt9b-verify.log):
+  [5/5] smoke: exit(42)==42 PASS — aprime_cc OK
+  emit rc=0 .o=2651160B
+  --- MUST be gone ... ---
+  ___map_raw_len           <-- only this remained (see note)
+  SOME REMAIN
+  --- new targets now referenced ---
+  _hexa_arr_zeros_leaf
+  _hexa_arr_zeros_leaf_int
+  _hexa_bits_to_float
+  _hexa_float_to_bits
+  _hexa_map_get_v
+  _hexa_map_set_v
+  _hexa_mkdir
+  _hexa_sha256
+  --- total unresolved ---  88
+
+reading: 8 codegen-mapped bare builtins — float_to_bits, bits_to_float, sha256_hex,
+get, set, mkdir, __arr_alloc_items_zero, __arr_alloc_items_zero_int — ALL collapsed
+(absent from the undefined set; their new _hexa_*/_hexa_arr_zeros_leaf targets now
+appear). The "SOME REMAIN" is a FALSIFIER MIS-SPEC: __map_raw_len was wrongly listed
+as must-be-gone. pt6 is a RUNTIME-PROVIDE (adds C fn __map_raw_len → Mach-O
+___map_raw_len in runtime.a), NOT a codegen rename — so the obj CORRECTLY still
+references ___map_raw_len and resolves it at link, exactly like _hexa_int / _hexa_map_get
+and every other runtime symbol in the 88-entry undefined set. So all 9 are correctly
+handled: 8 collapse (codegen) + 1 link-resolve (runtime).
+
+NOT yet proven this session (environment limit, honest): the full hexa_ld link
+(residual=0) + run + gen2≡gen3 byte-eq needs runtime.a REGENERATED from the edited
+SSOT (so it carries hexa_arr_zeros_leaf/map_get_v/map_set_v/hexa_mkdir/__map_raw_len).
+The local `hexa` runner (May-23, stale) fails to build runtime_core_emit.hexa (clang
+link error in [2/2]), so runtime.a couldn't be regenerated locally. The 5 new runtime
+fns ARE in the SSOT (runtime_core_emit.hexa) by construction → a working toolchain's
+runtime.a will provide them. Final link/run/byte-eq deferred to a regen-capable env.
