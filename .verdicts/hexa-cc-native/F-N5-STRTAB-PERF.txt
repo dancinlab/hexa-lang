@@ -1,0 +1,60 @@
+F-N5-STRTAB-PERF — O(n) strtab build in _build_merged_strtab (was O(n²))
+========================================================================
+date:   2026-06-01
+branch: cc-native/n5-strtab-perf-main (off origin/main), PR #2458
+file:   compiler/emit/macho_arm64.hexa  (+68 / -25, single file)
+
+STATEMENT (falsifier)
+---------------------
+_build_merged_strtab is O(n²) over ~3600 self-compiler symbols (3252 .LCstr
++ 344 g<id> + 41 .LCflt): _str_in linear dedup + _sort_rev_desc insertion
+sort + _index_of_str linear result lookup ≈ 13M string ops. Full-flat native
+self-emit took ~60min / ~8.85GB RSS → env/OOM-killed before writing the obj;
+same slowness fails linux-arm64 faithful-nobaseline CI (exit 143 SIGTERM).
+FALSIFIER: the rewrite MUST be byte-identical (clang reversed-desc suffix-merge
+ordering) — if small-obj strtab bytes / symbol order differ, it is wrong.
+
+METHOD
+------
+- dedup  → hash-set map (has_key/seen[name]=true)           O(n)
+- sort   → top-down merge sort _msort_rev_desc/_merge_rev_desc
+           reusing the EXACT _rev_str_gt comparator          O(n log n)
+- result → off_of name→offset map (no _index_of_str scan)    O(n)
+Byte-identity: deduped inputs distinct + _rev_str_gt strict total order ⇒
+merge sort == insertion sort output; suffix-merge offset assignment unchanged.
+
+VERIFICATION — BYTE-IDENTICAL SMALL-OBJ PROOF (real cmp)
+-------------------------------------------------------
+Both aprimes built via build_aprime.sh, smoke exit(6*7)==42 PASS.
+  OLD (O(n²)) = /tmp/aprime_fxp2   NEW (O(n log n)) = /tmp/aprime_strtab
+Same source emitted by each, then cmp:
+
+  st_str.hexa  (println ×3, 1 dup)            cmp → BYTE-IDENTICAL ✅
+  st_fg.hexa   (2 float lits + 1 mut global)  cmp → BYTE-IDENTICAL ✅
+  st_many.hexa (10 strings, shared suffixes)  cmp → BYTE-IDENTICAL ✅
+  nm symbol-count parity: old 19 == new 19 (st_many)
+
+otool -X -s __TEXT __cstring on st_many_new.o confirms the reversed-desc
+suffix-merge layout (shared-suffix strings adjacent, longest-tail first).
+
+FINDING
+-------
+1) CI (INDEPENDENT PROOF — the perf fix's double payoff):
+   PR #2458 (base main) — ALL 4 faithful-nobaseline checks PASS:
+     check @grace consent trailers          pass  1m47s
+     faithful-nobaseline (darwin-arm64)      pass  1m48s
+     faithful-nobaseline (linux-x86_64)      pass  3m57s
+     faithful-nobaseline (linux-arm64)       pass  8m27s   ← was exit 143
+                                                            SIGTERM (timeout
+                                                            on the O(n²) strtab)
+   The linux-arm64 job that previously SIGTERM-timed-out now completes in
+   8m27s. This is the strongest evidence the perf fix worked.
+
+2) Algorithmic Δ (byte-identical, proven on small objs):
+   strtab build: dedup O(n²)→O(n), sort O(n²)→O(n log n), result-map
+   O(n²)→O(n). The ~13M-op quadratic blowup over ~3600 syms is removed.
+
+Old-code baseline (this session): /tmp/aprime_fxp2 (O(n²)) full-flat emit
+was at 05:51 elapsed / 7.9GB RSS still in codegen when killed; prior
+session's full run was env-killed at ~60min / ~8.85GB peak.
+[local full-flat cc-prc2.o emit + gen2 link + cmp appended if reached]
