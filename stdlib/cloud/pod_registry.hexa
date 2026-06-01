@@ -943,6 +943,37 @@ fn pod_registry_set_limits(pod_id: str, ttl_sec: int, max_cost_usd: str, cost_pe
     return 1
 }
 
+// pod_registry_find_by_purpose — IDEMPOTENT-RENT lookup. Returns the id of
+// an EXISTING live pod (status RENTING or READY) that already owns the same
+// (project, purpose) key, or "" when none is tracked. This is the core of
+// the rent-leak fix (2026-05-31 orphan incident): a repeated `cloud rent`
+// for the SAME purpose reuses the live pod instead of provisioning another.
+//
+// Match rule: project AND purpose must match EXACTLY (both non-empty), and
+// the record's status must be RENTING|READY (a STOPPING/GONE pod is on its
+// way out and must NOT be reused). A blank project or purpose disables the
+// dedup (returns "") — an unattributed rent has no stable key to dedup on,
+// so it falls through to the FIRST-rent path (preserves legacy behavior).
+//
+// First match wins (the oldest live pod for the key); GONE/STOPPING skipped.
+fn pod_registry_find_by_purpose(project: str, purpose: str) -> str {
+    if len(project) == 0 || len(purpose) == 0 {
+        return ""
+    }
+    let records = pod_registry_load()
+    let mut i = 0
+    while i < len(records) {
+        let r = records[i]
+        if r.project == project && r.purpose == purpose {
+            if r.status == "RENTING" || r.status == "READY" {
+                return r.id
+            }
+        }
+        i = i + 1
+    }
+    return ""
+}
+
 // _usd_cents — parse a USD string ("5" / "5.00" / "0.50") to integer cents.
 // Avoids float; 2-decimal precision is enough for a cost cap. "" / junk → 0.
 fn _usd_cents(s: str) -> int {
