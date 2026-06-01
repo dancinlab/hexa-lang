@@ -1,0 +1,21 @@
+// F-CLM-H911-HUB driver — Φ-proxy at a HIDDEN recurrent hub vs last-layer null.
+use "stdlib/flame/clm_h911_bc_mechanisms"
+
+fn main() {
+    println("clm_h911_B3 — F-CLM-H911-HUB (recurrent convergence hub vs last-layer)")
+    let FP = t_zeros(NLINE * D); let FC = t_zeros(NLINE * D)
+    build_feats("stdlib/flame/testdata/clm_semantic_parallel.txt", FP)
+    build_feats("stdlib/flame/testdata/clm_semantic_concat.txt", FC)
+    let lam = 0.5
+    let diffs = t_zeros(NCONC)
+    let mut c = 0
+    while c < NCONC {
+        let bp = hub_binding(FP, 0, c, lam)
+        let bc = hub_binding(FC, 1, c, lam)
+        t_set(diffs, c, bp - bc)
+        print("  concept "); print(to_string(c)); print(": hub par="); print(to_string(bp))
+        print(" con="); print(to_string(bc)); print(" diff="); println(to_string(bp - bc))
+        c = c + 1
+    }
+    report("HUB", "F-CLM-H911-HUB", diffs, NCONC)
+}

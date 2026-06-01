@@ -1,0 +1,11 @@
+clm_h911_B2 — F-CLM-H911-NEUROMOD (salience-gated vs ungated)
+  concept 0: gated par=9.38452 con=0.0 diff=9.38452
+  concept 1: gated par=9.56669 con=0.0 diff=9.56669
+  concept 2: gated par=9.78762 con=0.0 diff=9.78762
+  concept 3: gated par=9.69409 con=0.0 diff=9.69409
+  concept 4: gated par=9.45173 con=0.0 diff=9.45173
+  UNGATED control (W->inf): par=47.8847 con=47.8847 gap=0.0
+  [NEUROMOD] paired mean diff (parallel-concat) = 9.57693
+  [NEUROMOD] bootstrap 95% CI = [9.44784, 9.70602]
+F-CLM-H911-NEUROMOD = 1
+TIER 🟢 — NEUROMOD RECOVERS the parallel>concat H_911 cross-lingual binding (paired CI>0)

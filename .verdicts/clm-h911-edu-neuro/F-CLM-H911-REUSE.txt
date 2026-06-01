@@ -1,0 +1,7 @@
+=== REUSE (F-CLM-H911-REUSE) ===
+  LEARNED-semantic paired mean (parallel-favoring) = -1.17161
+  LEARNED 95% CI = [-1.38362, -0.99019]
+  NULL (within-concept-shuffle) paired mean = -1.33905
+  NULL 95% CI = [-1.40421, -1.27605]
+F-CLM-H911-REUSE = 0
+TIER 🔴 — closed-negative: parallel>concat does NOT separate on the LEARNED-semantic axis (CI straddles/≤0)

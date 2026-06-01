@@ -1,0 +1,27 @@
+// F-CLM-H911-NEUROMOD driver — salience/third-factor gated update vs ungated.
+use "stdlib/flame/clm_h911_bc_mechanisms"
+
+fn main() {
+    println("clm_h911_B2 — F-CLM-H911-NEUROMOD (salience-gated vs ungated)")
+    let FP = t_zeros(NLINE * D); let FC = t_zeros(NLINE * D)
+    build_feats("stdlib/flame/testdata/clm_semantic_parallel.txt", FP)
+    build_feats("stdlib/flame/testdata/clm_semantic_concat.txt", FC)
+    let W = 4
+    let diffs = t_zeros(NCONC)
+    // ungated control: W -> all (large) -> order-insensitive
+    let mut ung_par = 0.0; let mut ung_con = 0.0
+    let mut c = 0
+    while c < NCONC {
+        let bp = neuromod_binding(FP, 0, c, W)
+        let bc = neuromod_binding(FC, 1, c, W)
+        t_set(diffs, c, bp - bc)
+        print("  concept "); print(to_string(c)); print(": gated par="); print(to_string(bp))
+        print(" con="); print(to_string(bc)); print(" diff="); println(to_string(bp - bc))
+        ung_par = ung_par + neuromod_binding(FP, 0, c, 1000)
+        ung_con = ung_con + neuromod_binding(FC, 1, c, 1000)
+        c = c + 1
+    }
+    print("  UNGATED control (W->inf): par="); print(to_string(ung_par))
+    print(" con="); print(to_string(ung_con)); print(" gap="); println(to_string(ung_par - ung_con))
+    report("NEUROMOD", "F-CLM-H911-NEUROMOD", diffs, NCONC)
+}

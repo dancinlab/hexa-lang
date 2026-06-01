@@ -1,0 +1,10 @@
+clm_h911_B3 — F-CLM-H911-HUB (recurrent convergence hub vs last-layer)
+  concept 0: hub par=2.60493 con=0.102894 diff=2.50203
+  concept 1: hub par=2.75267 con=0.114213 diff=2.63846
+  concept 2: hub par=2.92938 con=0.121618 diff=2.80777
+  concept 3: hub par=2.82884 con=0.115047 diff=2.71379
+  concept 4: hub par=2.68324 con=0.108042 diff=2.5752
+  [HUB] paired mean diff (parallel-concat) = 2.64745
+  [HUB] bootstrap 95% CI = [2.55858, 2.74246]
+F-CLM-H911-HUB = 1
+TIER 🟢 — HUB RECOVERS the parallel>concat H_911 cross-lingual binding (paired CI>0)

@@ -1,0 +1,11 @@
+clm_h911_B4 — F-CLM-H911-REPLAY (offline consolidation vs single-pass)
+  concept 0: replay par=3.61812 con=0.0191172 diff=3.599
+  concept 1: replay par=3.6683 con=-0.116836 diff=3.78514
+  concept 2: replay par=3.85846 con=-0.0409688 diff=3.89943
+  concept 3: replay par=3.80933 con=0.0159219 diff=3.7934
+  concept 4: replay par=3.69053 con=0.00849219 diff=3.68204
+  SINGLE-PASS control (R=1): par=17.619 con=-1.14 gap=18.759
+  [REPLAY] paired mean diff (parallel-concat) = 3.7518
+  [REPLAY] bootstrap 95% CI = [3.65909, 3.83581]
+F-CLM-H911-REPLAY = 1
+TIER 🟢 — REPLAY RECOVERS the parallel>concat H_911 cross-lingual binding (paired CI>0)
