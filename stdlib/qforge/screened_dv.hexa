@@ -1,0 +1,241 @@
+// HEXA Standard Library — qforge/screened_dv
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// QFORGE metallic-wall breadth BRICK (d)/4 — the SCREENED perturbation ΔV_scr.
+//
+// ── WHY THIS EXISTS (the BARE-perturbation wall, d6 honest) ──────────────────
+// The CaH6 real-|g| cross-val (#2485 realcell_phonon + #2490 elph_offdiag) builds
+// the el-ph coupling from the BARE (unscreened) ionic perturbation
+//   (ΔV_bare ψ_n)[a] = Σ_b ∂H[a][b]/∂u · ψ_n[b]      (qforge_dvbare_apply, #2485)
+// — the INDEPENDENT-PARTICLE limit. In a real metal the conduction electrons
+// REARRANGE around the moved ion, and that induced density Δρ generates a
+// Hartree + exchange-correlation potential that ADDS to the bare perturbation:
+//   ΔV_scr = ΔV_bare + (V_H + f_xc)[Δρ] = ε⁻¹ ΔV_bare      (the dielectric response)
+// The screened ΔV_scr is what the PHYSICAL el-ph matrix element ⟨ψ_m|ΔV_scr|ψ_n⟩
+// uses. THIS brick computes ΔV_scr from ΔV_bare via the self-consistent
+// Sternheimer/dielectric density response, composing two already-verified bricks
+// (d3/d19) — it does NOT re-implement the response or the screening kernel.
+//
+// ── THE RPA-LEVEL SELF-CONSISTENT SCREENING (d19 reuse of Sternheimer+screening)─
+// For a fixed bare perturbation, the screened columns are the self-consistent
+// fixed point of:
+//   (1) ΔV_scr ψ_n ← ΔV_bare ψ_n + (ΔV_scr-correction ⊙ ψ_n)     (start: bare)
+//   (2) Sternheimer: (H−ε_n)|Δψ_n⟩ = −P_c ΔV_scr|ψ_n⟩            (#2084, verified)
+//   (3) Δρ(r) = Σ_occ 2·ψ_n(r)·Δψ_n(r)                           (1st-order density)
+//   (4) ΔV_scr-correction(r) = drho_to_dvscf(Δρ) = (V_H + f_xc)[Δρ]  (#2092 kernel)
+//   (5) repeat (1)–(4) to ‖Δ‖<tol — the RPA/dielectric fixed point.
+// This is EXACTLY the self-consistent loop dfpt_response.fc_scf_response already
+// runs to assemble force constants; here we EXTRACT the screened per-state ΔV·ψ
+// columns (the bundle the el-ph |g_mn| overlap consumes) instead of contracting
+// them into Φ. Zero new physics — same Sternheimer, same screening kernel.
+//
+// ── d4 GENERIC — caller supplies the operators + the screening kernel ─────────
+// H_apply (matrix-free H·v), the bare columns, and drho_to_dvscf are ALL caller
+// inputs. A ZERO screening kernel (drho_to_dvscf → 0) converges in one pass and
+// returns the bare columns verbatim — the bare path is the d4 identity limit, so
+// the same generic code serves bare AND screened with no name branch. Add/swap a
+// cell or a kernel = change the inputs.
+//
+// ── HONEST SCOPE (d6 — breadth brick (d)/4) ──────────────────────────────────
+// Screening RPA-level (Hartree + adiabatic-LDA xc, the #2092 kernel). In a metal
+// the long-range Coulomb tail of ΔV_bare is screened OUT (weakened) by the induced
+// Δρ, while the on-site/short-range part can be enhanced — so screening can RAISE
+// or LOWER λ depending on which |g_mn| dominate. This brick reports the screened
+// columns; the CaH6 fixture reports whatever λ they give VERBATIM (d6), within or
+// outside the QE bar. The remaining breadth item (c) real N(E_F)+k-mesh is separate.
+//
+// d3/d19 reuse (compose, don't reinvent — every brick below is verified 🟢/🔵):
+//   - Sternheimer Δψ   : stdlib/qforge/sternheimer (qforge_sternheimer, #2084)
+//   - Hartree+XC kernel: stdlib/qforge/screening   (drho_to_dvscf via #2092)
+// New code here = the SCF screening fixed-point that returns per-state ΔV_scr·ψ
+// columns ONLY. No λ is hardcoded; the zero-kernel limit is the bare identity.
+
+use "stdlib/qforge/sternheimer"
+
+// result bundle: screened per-state ΔV_scr·ψ columns + SCF diagnostics.
+pub struct ScreenedDvResult {
+    columns: [[float]],   // nb screened (ΔV_scr ψ_n) columns, each length n
+    scf_iters: int,       // self-consistent screening passes taken
+    converged: bool,      // ALL Sternheimer solves converged AND ‖Δ‖<tol reached
+    max_residual: float   // worst Sternheimer residual over the final pass
+}
+
+// ── ‖a−b‖ over a flat length-N bundle (SCF screening convergence test) ───────
+fn sdv_norm_diff(a: [float], b: [float], n: int) -> float {
+    let mut s = 0.0
+    let mut i = 0
+    while i < n { let d = a[i] - b[i] ; s = s + d * d ; i = i + 1 }
+    return sqrt(s)
+}
+
+// ── public API: screened ΔV_scr·ψ columns over the active manifold ───────────
+//   H_apply        : matrix-free H·v (Sternheimer/Davidson contract, d4).
+//   states         : nb active eigenvectors ψ_n (rows, each length n) — also the
+//                    P_c occupied subspace defining the projection.
+//   eps            : nb band energies ε_n (same order as states).
+//   dv_bare_states : nb pre-applied BARE columns (ΔV_bare ψ_n), each length n
+//                    (from qforge_dvbare_apply, #2485).
+//   drho_to_dvscf  : Δρ(length n) → screening potential ΔV(length n). A ZERO
+//                    kernel returns the bare columns (d4 identity limit).
+//   scf_tol        : Sternheimer tol AND screening fixed-point ‖Δ‖ threshold.
+//   scf_max_iter   : Sternheimer max-iter AND max screening passes.
+//   mix            : LINEAR MIXING β ∈ (0,1] for the screening fixed point
+//                    ΔV_scr ← (1−β)·ΔV_scr_old + β·(ΔV_bare + V_H+xc[Δρ]). β=1 is
+//                    the un-damped Picard iteration (diverges when the dielectric
+//                    response gain > 1, the metallic-feedback instability — the
+//                    same reason ground-state SCF needs mixing, d15). 0<β<1 damps
+//                    that feedback to a stable fixed point. β≤0 or β>1 → clamped
+//                    to 1.0 (caller passes a small β, e.g. 0.3, for a real metal).
+// Returns ScreenedDvResult; on malformed input → empty columns, converged=false.
+pub fn qforge_screened_dv_columns(H_apply, states: [[float]], eps: [float],
+                                  dv_bare_states: [[float]], drho_to_dvscf,
+                                  scf_tol: float, scf_max_iter: int, mix: float) -> ScreenedDvResult {
+    // clamp the mixing factor to (0,1]; out-of-range → un-damped Picard (β=1).
+    let mut beta = mix
+    if beta <= 0.0 || beta > 1.0 { beta = 1.0 }
+    let nb = states.len()
+    if nb < 1 || dv_bare_states.len() != nb || len(eps) != nb {
+        return ScreenedDvResult { columns: [], scf_iters: 0, converged: false, max_residual: 0.0 }
+    }
+    let n = len(states[0])
+    if n < 1 {
+        return ScreenedDvResult { columns: [], scf_iters: 0, converged: false, max_residual: 0.0 }
+    }
+
+    // flat bare bundle [nb*n] + flat current screened bundle (init = bare).
+    let mut bare = []
+    let mut dvscf = []
+    let mut nn = 0
+    while nn < nb {
+        if len(dv_bare_states[nn]) != n {
+            return ScreenedDvResult { columns: [], scf_iters: 0, converged: false, max_residual: 0.0 }
+        }
+        let mut i = 0
+        while i < n {
+            bare.push(dv_bare_states[nn][i])
+            dvscf.push(dv_bare_states[nn][i])
+            i = i + 1
+        }
+        nn = nn + 1
+    }
+
+    let mut scf_it = 0
+    let mut max_res = 0.0
+    let mut all_conv = true
+
+    // ── self-consistent screening fixed point (RPA/dielectric) ───────────────
+    while scf_it < scf_max_iter {
+        // (2) Sternheimer Δψ_n for every state from the CURRENT screened ΔV·ψ.
+        let mut dpsi_all = []
+        let mut prep = 0
+        while prep < nb * n { dpsi_all.push(0.0) ; prep = prep + 1 }
+        max_res = 0.0
+        let mut s = 0
+        while s < nb {
+            let mut dvpsi = []
+            let mut k = 0
+            while k < n { dvpsi.push(dvscf[s * n + k]) ; k = k + 1 }
+            let res = qforge_sternheimer(H_apply, eps[s], states[s], states,
+                                         dvpsi, n, scf_tol, scf_max_iter)
+            let mut w = 0
+            while w < n { dpsi_all[s * n + w] = res.dpsi[w] ; w = w + 1 }
+            if res.residual > max_res { max_res = res.residual }
+            if res.converged == false { all_conv = false }
+            s = s + 1
+        }
+        // (3) 1st-order density response Δρ(r) = Σ_occ 2·ψ_n(r)·Δψ_n(r).
+        let mut drho = []
+        let mut r0 = 0
+        while r0 < n { drho.push(0.0) ; r0 = r0 + 1 }
+        let mut nd = 0
+        while nd < nb {
+            let mut i = 0
+            while i < n { drho[i] = drho[i] + 2.0 * states[nd][i] * dpsi_all[nd * n + i] ; i = i + 1 }
+            nd = nd + 1
+        }
+        // (4) screening potential ΔV_scr-correction(r) = (V_H + f_xc)[Δρ].
+        let dvscr = drho_to_dvscf(drho)
+        // (1) rebuild the screening TARGET: (ΔV_bare ψ_n) + ΔV_corr ⊙ ψ_n.
+        //   ΔV_corr is local in the electronic-basis convention the #2092 kernel +
+        //   dfpt_response use (length-n local potential ⊙ ψ). A zero/empty kernel
+        //   leaves the target at bare — the d4 identity limit, exactly one pass.
+        //   Then LINEAR MIX: ΔV_scr ← (1−β)·ΔV_scr_old + β·target — the damping
+        //   that tames the metallic dielectric-feedback instability (d15).
+        let mut new_dvscf = []
+        let has_corr = (len(dvscr) == n)
+        let mut nb2 = 0
+        while nb2 < nb {
+            let mut i = 0
+            while i < n {
+                let idx = nb2 * n + i
+                let mut target = bare[idx]
+                if has_corr { target = target + dvscr[i] * states[nb2][i] }
+                new_dvscf.push((1.0 - beta) * dvscf[idx] + beta * target)
+                i = i + 1
+            }
+            nb2 = nb2 + 1
+        }
+        let delta = sdv_norm_diff(new_dvscf, dvscf, nb * n)
+        let mut sw = 0
+        while sw < nb * n { dvscf[sw] = new_dvscf[sw] ; sw = sw + 1 }
+        scf_it = scf_it + 1
+        if delta < scf_tol { break }
+    }
+
+    // unpack the flat bundle back into nb screened columns.
+    let mut cols: [[float]] = []
+    let mut c = 0
+    while c < nb {
+        let mut col: [float] = []
+        let mut i = 0
+        while i < n { col.push(dvscf[c * n + i]) ; i = i + 1 }
+        cols.push(col)
+        c = c + 1
+    }
+    let conv = all_conv && (max_res < 1.0)
+    return ScreenedDvResult { columns: cols, scf_iters: scf_it, converged: conv, max_residual: max_res }
+}
+
+// ── single-shot screened potential ΔV_scr(r) = ΔV_bare(r) + (V_H+f_xc)[Δρ](r) ─
+// The defining dielectric composition for a GIVEN density response Δρ (no self-
+// consistent Sternheimer loop — the linear-response building block). This is the
+// kernel that, with a metal response (Δρ OPPOSING ΔV_bare, the Lindhard χ(q→0)<0
+// limit), WEAKENS the long-range part: ΔV_scr = ΔV_bare + V_H[Δρ], and V_H[Δρ]
+// has the same sign as Δρ (positive Hartree kernel), so an opposing Δρ subtracts.
+//   dv_bare       : ΔV_bare(r) (length n local potential).
+//   drho          : the induced density response Δρ(r) (length n).
+//   drho_to_dvscf : Δρ → screening potential (V_H+f_xc)[Δρ] (length n).
+// Returns ΔV_scr(r) (length n); [] on a length mismatch / malformed kernel out.
+pub fn qforge_screened_potential(dv_bare: [float], drho: [float], drho_to_dvscf) -> [float] {
+    let n = len(dv_bare)
+    if len(drho) != n || n < 1 { return [] }
+    let corr = drho_to_dvscf(drho)
+    if len(corr) != n { return [] }
+    let mut out: [float] = []
+    let mut i = 0
+    while i < n { out.push(dv_bare[i] + corr[i]) ; i = i + 1 }
+    return out
+}
+
+// ── ‖ΔV_scr·ψ‖ / ‖ΔV_bare·ψ‖ ratio over a column (screening witness) ─────────
+// In a metal the induced Δρ OPPOSES the bare perturbation (anti-screening of the
+// long-range Coulomb tail), so the screened column magnitude is SMALLER than the
+// bare one for the long-range part: ‖ΔV_scr ψ‖ ≤ ‖ΔV_bare ψ‖ when the kernel
+// (Hartree, positive-definite at G≠0) dominates. The selftest asserts this metal
+// weakening on a controlled column. Returns -1.0 on a length mismatch / zero bare.
+pub fn qforge_screening_ratio(bare_col: [float], scr_col: [float]) -> float {
+    let n = len(bare_col)
+    if len(scr_col) != n || n < 1 { return -1.0 }
+    let mut sb = 0.0
+    let mut ss = 0.0
+    let mut i = 0
+    while i < n {
+        sb = sb + bare_col[i] * bare_col[i]
+        ss = ss + scr_col[i] * scr_col[i]
+        i = i + 1
+    }
+    if sb <= 0.0 { return -1.0 }
+    return sqrt(ss) / sqrt(sb)
+}
