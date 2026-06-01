@@ -330,10 +330,15 @@ fn _logical_imm64(val: i64) -> i64 {
                 let mut rot = 0
                 let mut found = false
                 while rot < size {
-                    // ROR canon right by `rot` within `size` bits.
-                    let lo = (canon >> rot) & mask
-                    let hi = (canon << (size - rot)) & mask
-                    let rored = (lo | hi) & mask
+                    // ROR canon right by `rot` within `size` bits. rot==0
+                    // is identity (avoids the `<< size` shift-width UB the
+                    // generic branch would hit at size==64).
+                    let mut rored = canon & mask
+                    if rot != 0 {
+                        let lo = (canon >> rot) & mask
+                        let hi = (canon << (size - rot)) & mask
+                        rored = (lo | hi) & mask
+                    }
                     if rored == elem { found = true; rot = size } else { rot = rot + 1 }
                 }
                 if found {
