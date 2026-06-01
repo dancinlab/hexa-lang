@@ -4,6 +4,7 @@
 
 use "stdlib/codec/euc_kr"
 
+// cache-bust: rebuild when euc_kr.hexa changes (entry-hash keyed build).
 let SENT_T = "__HEXA_CODEC_EUCKR__"
 
 fn _hx2b(h: string) -> [int] {
