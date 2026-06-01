@@ -15,6 +15,7 @@
 //   shift_jis — Shift-JIS (Japanese) byte↔string, 2-byte + 1-byte katakana
 //   gbk    — GBK / GB2312 superset (Chinese simplified) byte↔string, 2-byte
 //   big5   — Big5 (Chinese traditional) byte↔string, 2-byte
+//   unicode_normalize — UAX #15 NFC/NFD/NFKC/NFKD normalization
 
 use "stdlib/codec/base64"
 use "stdlib/codec/hex"
@@ -24,3 +25,4 @@ use "stdlib/codec/cp949"
 use "stdlib/codec/shift_jis"
 use "stdlib/codec/gbk"
 use "stdlib/codec/big5"
+use "stdlib/codec/unicode_normalize"
