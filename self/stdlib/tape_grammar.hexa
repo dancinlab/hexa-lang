@@ -1,0 +1,67 @@
+// self/stdlib/tape_grammar.hexa — canonical `.tape` `@D` field grammar SSOT.
+// ─────────────────────────────────────────────────────────────────────────
+// `.tape` is the agent-execution-trace sibling format (SSOT spec:
+// github.com/dancinlab/tape). The `@D` directive block has a KIND-AWARE
+// field grammar, defined here as the upstream allowed-field list.
+//
+//   * `:: governance` `@D` blocks  — STRICT: only `do` / `dont`.
+//   * every OTHER `@D` kind (`:: note`, `:: hypothesis`, `:: identity`,
+//     `:: spec`, `:: workflow`, `:: domain`, `:: config`, …) — may ALSO
+//     carry the documented structured fields below.
+//
+// Rationale: governance directives are imperative do/dont rules and must
+// stay minimal/auditable. But a pre-registered hypothesis, an identity
+// header, or a clarifying note legitimately needs structured metadata
+// (seed · claim · falsifier · axes · target · …) that does not fit a
+// do/dont shape. Folding these into prose destroys the audit surface
+// (cf anima a_claim_manifest — every claim needs an indexable field).
+//
+// The sidecar `tape-lint` PreToolUse hook (_tape_lint.hexa) enforces this
+// grammar; it mirrors `_tape_d_allowed_field` below — keep the two in
+// lockstep (this module is the SSOT, the hook is the enforcer).
+
+// ── allowed structured-field whitelist for NON-governance `@D` blocks ──────
+//
+// Three documented families:
+//   identity/header — version · kind · brief · parent · ssot · siblings
+//   note/reference  — ref · refs · note · clarify · scope · mode · why
+//                     · tool · ex · see
+//   pre-registered  — seed · claim · falsifier · axes · target · honest
+//   hypothesis        (anima a_paper_significance / a_discovery_log shape)
+fn _tape_d_allowed_field(key: string) -> bool {
+    // identity / header family
+    if key == "version"  { return true }
+    if key == "kind"     { return true }
+    if key == "brief"    { return true }
+    if key == "parent"   { return true }
+    if key == "ssot"     { return true }
+    if key == "siblings" { return true }
+    // note / reference family
+    if key == "ref"      { return true }
+    if key == "refs"     { return true }
+    if key == "note"     { return true }
+    if key == "clarify"  { return true }
+    if key == "scope"    { return true }
+    if key == "mode"     { return true }
+    if key == "why"      { return true }
+    if key == "tool"     { return true }
+    if key == "ex"       { return true }
+    if key == "see"      { return true }
+    // pre-registered-hypothesis family (a_discovery_log / a_paper_*)
+    if key == "seed"      { return true }
+    if key == "claim"     { return true }
+    if key == "falsifier" { return true }
+    if key == "axes"      { return true }
+    if key == "target"    { return true }
+    if key == "honest"    { return true }
+    return false
+}
+
+// True iff field `key` is admissible on a `@D` block of kind `kind`.
+//   governance      → only `do` / `dont`.
+//   any other kind  → `do` / `dont` OR a documented structured field.
+fn tape_d_field_allowed(kind: string, key: string) -> bool {
+    if key == "do" || key == "dont" { return true }
+    if kind == "governance" { return false }
+    return _tape_d_allowed_field(key)
+}

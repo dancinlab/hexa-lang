@@ -1,0 +1,62 @@
+// self/test/test_tape_grammar.hexa — `.tape` `@D` field grammar selftest.
+// ─────────────────────────────────────────────────────────────────────────
+// Proves the kind-aware `@D` field grammar (self/stdlib/tape_grammar.hexa):
+//
+//   1. governance `@D` accepts ONLY do / dont (structured fields refused).
+//   2. a `:: hypothesis` `@D` accepts the pre-registered-hypothesis fields
+//      that TAPE_LINT_BLOCK previously wrongly refused (seed · claim ·
+//      falsifier · axes · target · honest · refs).
+//   3. a genuinely-undocumented field is STILL refused on every kind.
+//
+// Run: `hexa run self/test/test_tape_grammar.hexa` (exit 0 = all pass).
+
+use "self/stdlib/tape_grammar"
+
+fn _expect(cond: bool, msg: string) {
+    if !cond {
+        eprintln("FAIL: " + msg)
+        exit(1)
+    }
+    println("PASS: " + msg)
+}
+
+fn test_governance_strict() {
+    // do / dont admitted on governance.
+    _expect(tape_d_field_allowed("governance", "do"), "governance accepts `do`")
+    _expect(tape_d_field_allowed("governance", "dont"), "governance accepts `dont`")
+    // every structured field refused on governance (stays strict).
+    _expect(!tape_d_field_allowed("governance", "seed"), "governance REFUSES `seed`")
+    _expect(!tape_d_field_allowed("governance", "claim"), "governance REFUSES `claim`")
+    _expect(!tape_d_field_allowed("governance", "note"), "governance REFUSES `note`")
+}
+
+fn test_hypothesis_structured() {
+    // the exact fields TAPE_LINT_BLOCK previously refused — now admitted.
+    _expect(tape_d_field_allowed("hypothesis", "seed"), "hypothesis accepts `seed`")
+    _expect(tape_d_field_allowed("hypothesis", "claim"), "hypothesis accepts `claim`")
+    _expect(tape_d_field_allowed("hypothesis", "falsifier"), "hypothesis accepts `falsifier`")
+    _expect(tape_d_field_allowed("hypothesis", "axes"), "hypothesis accepts `axes`")
+    _expect(tape_d_field_allowed("hypothesis", "target"), "hypothesis accepts `target`")
+    _expect(tape_d_field_allowed("hypothesis", "honest"), "hypothesis accepts `honest`")
+    _expect(tape_d_field_allowed("hypothesis", "refs"), "hypothesis accepts `refs`")
+    // do / dont still fine on a non-governance kind too.
+    _expect(tape_d_field_allowed("hypothesis", "do"), "hypothesis accepts `do`")
+    // note-kind identity/reference fields.
+    _expect(tape_d_field_allowed("note", "clarify"), "note accepts `clarify`")
+    _expect(tape_d_field_allowed("identity", "siblings"), "identity accepts `siblings`")
+}
+
+fn test_undocumented_refused() {
+    // a genuinely-malformed / undocumented field is refused on EVERY kind.
+    _expect(!tape_d_field_allowed("hypothesis", "bogusfield"), "hypothesis REFUSES `bogusfield`")
+    _expect(!tape_d_field_allowed("note", "frobnicate"), "note REFUSES `frobnicate`")
+    _expect(!tape_d_field_allowed("governance", "falsifier"), "governance REFUSES `falsifier`")
+}
+
+fn main() {
+    test_governance_strict()
+    test_hypothesis_structured()
+    test_undocumented_refused()
+    println("")
+    println("ALL PASS — tape `@D` field grammar (kind-aware) verified")
+}
