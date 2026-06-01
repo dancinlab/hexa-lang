@@ -131,8 +131,10 @@ terminal 상태       건수   항목
 📊 grounded (분모)    4    H_apply 0.140 GFLOP/s · FFT/Davidson/Sternheimer wall
                             (bench §2/§7 — speedup 비율의 분모, GPU-Δ 게시 시 close)
 ⛔ GATED-GPU         4    H_apply/Davidson/Sternheimer/cuFFT GPU-GEMM
-                            → blocker: GPU pod (전부 STOPPING) · trigger: pod READY
+                            → blocker: 엔진 GPU-GEMM 경로 (stdlib/qforge edit · 타 에이전트 소유)
                             → 닫힌형 CEILING 박제: RIDGE(nb≥122) · AMDAHL(1/(1-p)) (§9)
+                            → RIDGE GPU-실측: pool RTX 5070 GEMV 295 GFLOP/s(memory roof)
+                              · 교차 nb=122~144 ≈ 예측 117.6 (cuBLAS proxy · §10)
 ⛔ GATED-IMPL        5    EPW-Wannier · CheFSI · DIIS-mixing · randomized · adaptive-q
                             → blocker: SCF-context Ritz bound / 연구급 구현 ·
                             trigger: docs-only bench-driver OR 엔진 owner 구현

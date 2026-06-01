@@ -142,3 +142,19 @@ Board: 21/21 → 23/23 terminal (8 closed + 4 grounded + 11 gated). The GATED it
 `- [ ]` (a pod/engine is still needed to MEASURE) but now carry closed-form bounds so
 their eventual GPU Δ is interpretable. bench.md §9 documents all 11. docs-only, 0 engine
 edits, 0 deletions.
+
+## 2026-06-01 — RIDGE corollary GPU-measured on pool RTX 5070 (pool GPU 활용)
+
+The pool (summer/aiden) carries idle RTX 5070s — the same card as GPU-ROOFLINE.bench.md.
+Used summer to empirically validate the RIDGE closed-form corollary via `tool/gpu_qforge_ridge.cu`
+(standalone cuBLAS SGEMM nb-sweep at n=4096, NO stdlib/qforge edit):
+
+- HBM 580 GB/s · FP32 34.11 TFLOP/s · measured ridge 58.81 → predicted nb-crossover 117.6.
+- nb=1 (H_apply GEMV): **295 GFLOP/s, memory-bound** (HBM 101.8%) = the §3 closed-form ceiling
+  (280) confirmed on silicon; ~2100× the CPU-scalar baseline but bandwidth-capped as RIDGE says.
+- regime flip memory→compute at **nb=122–144**, dead-on the closed-form 117.6/121.9.
+- → RIDGE upgraded from closed-form to closed-form + GPU-measured-validated (bench §10).
+
+Honest scope: cuBLAS PROXY, not the engine GPU-GEMM (still gated on the stdlib/qforge edit). It
+grounds the ceiling empirically — does NOT ungate. Board GATED-GPU blocker corrected: the real
+blocker is the ENGINE edit, not pod availability (pool GPU is free). docs-only, 0 engine edits.
