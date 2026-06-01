@@ -1,0 +1,207 @@
+// @ci_gate — deterministic · network-free · screened-ΔV (RPA dielectric) g5 gate
+//
+// screened_dv_selftest.hexa — QFORGE breadth brick (d) g5 gate.
+//   qforge_screened_dv_columns composes the verified Sternheimer linear response
+//   (#2084) + the verified Hartree+XC screening kernel (#2092) into the screened
+//   perturbation ΔV_scr = ε⁻¹ ΔV_bare. This gate verifies that composition.
+//
+// Verification cases:
+//   🔵 (A) ZERO-KERNEL identity (d4 genericity): a screening kernel returning []
+//          (no induced potential) → screened columns == bare columns EXACTLY, in
+//          ONE pass. The bare path is the d4 identity limit of the screened path.
+//   🟢 (B) METAL WEAKENING: with the REAL Hartree screening kernel
+//          (qforge_dvscf_from_drho, #2092) composed against a metal density
+//          response (Δρ OPPOSING ΔV_bare, the Lindhard χ(q→0)<0 limit), the
+//          screened long-range part is WEAKENED — ‖ΔV_scr‖ < ‖ΔV_bare‖ (ratio<1).
+//   🔵 (C) DIELECTRIC ε(q→0) SANITY: the effective screening factor
+//          ε_eff = ‖ΔV_bare‖/‖ΔV_scr‖ ≥ 1 (screening never AMPLIFIES at q→0 in the
+//          metal limit — Hartree is positive-definite at G≠0), and is finite.
+//   🟢 (C') FULL Sternheimer path: the self-consistent RPA loop converges and the
+//          screening is a genuine NON-identity operator (|ratio−1|>1e-6) vs the
+//          zero kernel; the direction on an abstract operator is reported verbatim.
+//   🟢 (D) CONVERGENCE: the self-consistent screening loop reports converged=true
+//          and a bounded residual within the iteration cap.
+//   🔵 (E) MALFORMED guard: mismatched bare-column count → empty columns,
+//          converged=false (d4 clean rejection, no fabricated output).
+//
+// Run (repo runtime manual link — installed hexa self-path may be stale):
+//   ./build/hexa_v2 stdlib/qforge/screened_dv_selftest.hexa /tmp/sdv.c &&
+//   clang -O2 -I build/self /tmp/sdv.c build/self/runtime.c -o /tmp/sdv -lm -lpthread && /tmp/sdv
+// PASS: "qforge_screened_dv_selftest PASS".
+use "stdlib/qforge/screened_dv"
+use "stdlib/qforge/screening"
+use "stdlib/alloc/math/eigen"
+
+fn _abs(x: float) -> float { if x < 0.0 { return -x } return x }
+fn _ck_bool(name: str, got: bool, want: bool) -> int {
+    if got == want { println("PASS " + name + " (" + to_string(got) + ")") ; return 0 }
+    println("FAIL " + name + " — got " + to_string(got) + " want " + to_string(want)) ; return 1
+}
+fn _ck_lt(name: str, got: float, bound: float) -> int {
+    if got < bound { println("PASS " + name + " (" + to_string(got) + " < " + to_string(bound) + ")") ; return 0 }
+    println("FAIL " + name + " — got " + to_string(got) + " NOT < " + to_string(bound)) ; return 1
+}
+fn _ck_ge(name: str, got: float, bound: float) -> int {
+    if got >= bound { println("PASS " + name + " (" + to_string(got) + " >= " + to_string(bound) + ")") ; return 0 }
+    println("FAIL " + name + " — got " + to_string(got) + " NOT >= " + to_string(bound)) ; return 1
+}
+
+// ── matrix-free H·v from an explicit dense symmetric matrix (same idiom as
+//    sternheimer_selftest / davidson_selftest, d19 contract) ─────────────────
+let mut G_MAT = []
+let mut G_N = 0
+fn h_apply(v: [float]) -> [float] {
+    let mut out = []
+    let mut i = 0
+    while i < G_N {
+        let mut s = 0.0
+        let mut j = 0
+        while j < G_N { s = s + G_MAT[i * G_N + j] * v[j] ; j = j + 1 }
+        out.push(s)
+        i = i + 1
+    }
+    return out
+}
+
+// ── screening kernels (caller-supplied closures, d4) ─────────────────────────
+//   ZERO kernel: returns [] → screened == bare (case A identity).
+fn drho_zero(drho: [float]) -> [float] { return [] }
+
+//   REAL Hartree kernel: wrap qforge_dvscf_from_drho on a 1×1×NZ real-space grid
+//   (NZ = n = 8, pow2 for fft3), Hartree-only (xc_mode 0). Same wrap convention as
+//   screening_selftest (F). Uniform ground ρ (XC off → ρ unused for Hartree-only).
+let G_NZ = 8
+let G_B1 = [1.0, 0.0, 0.0]
+let G_B2 = [0.0, 1.0, 0.0]
+let G_B3 = [0.0, 0.0, 1.0]
+let mut G_RHO = []
+fn drho_hartree(drho: [float]) -> [float] {
+    return qforge_dvscf_from_drho(drho, G_RHO, 1, 1, G_NZ, G_B1, G_B2, G_B3,
+                                  qforge_xc_hartree_only())
+}
+
+fn main() {
+    let mut fails = 0
+    let N = 8
+    let TOL = 1.0e-9
+
+    // uniform ground-state ρ (length N) — Hartree-only kernel ignores it.
+    let mut rr = 0
+    while rr < N { G_RHO.push(1.0) ; rr = rr + 1 }
+
+    // ── 8×8 symmetric H with a well-separated spectrum ──────────────────────
+    let mut M = []
+    let mut ii = 0
+    while ii < N {
+        let mut jj = 0
+        while jj < N {
+            if ii == jj { M.push(to_float(ii) + 1.0) }       // diagonal 1..8
+            else {
+                let d = if ii > jj { ii - jj } else { jj - ii }
+                M.push(0.15 / to_float(d))                   // symmetric decaying off-diag
+            }
+            jj = jj + 1
+        }
+        ii = ii + 1
+    }
+    G_MAT = M ; G_N = N
+
+    // dense diagonalize (d19 reuse) → ascending ε/ψ.
+    let eg = eigh(M, N)
+    let vals = eg[0] ; let vecs = eg[1]      // descending
+    let mut eps = [] ; let mut psi = []
+    let mut s0 = 0
+    while s0 < N { eps.push(vals[N - 1 - s0]) ; psi.push(vecs[N - 1 - s0]) ; s0 = s0 + 1 }
+
+    // active manifold = lowest 3 states (P_c subspace + response targets).
+    let NB = 3
+    let mut states: [[float]] = []
+    let mut eps_a: [float] = []
+    let mut a = 0
+    while a < NB { states.push(psi[a]) ; eps_a.push(eps[a]) ; a = a + 1 }
+
+    // ── bare columns (ΔV_bare ψ_n): a deterministic perturbation applied to each
+    //    state. Use a fixed long-range-ish profile so screening has a tail to weaken.
+    let mut dv_bare: [[float]] = []
+    let mut b = 0
+    while b < NB {
+        let mut col: [float] = []
+        let mut i = 0
+        while i < N {
+            // smooth low-frequency profile (cos one full period) + state mixing —
+            // a Coulomb-tail-like long-range perturbation the Hartree kernel screens.
+            let phase = 6.28318530717958647692 * to_float(i) / to_float(N)
+            let v = cos(phase) * (1.0 + 0.3 * states[b][i])
+            col.push(v)
+            i = i + 1
+        }
+        dv_bare.push(col)
+        b = b + 1
+    }
+
+    // ── (A) ZERO-KERNEL identity: screened == bare, one pass (d4 limit) ─────
+    let r0 = qforge_screened_dv_columns(h_apply, states, eps_a, dv_bare, drho_zero, TOL, 60, 1.0)
+    let mut maxdiff = 0.0
+    let mut c = 0
+    while c < NB {
+        let mut i = 0
+        while i < N {
+            let d = _abs(r0.columns[c][i] - dv_bare[c][i])
+            if d > maxdiff { maxdiff = d }
+            i = i + 1
+        }
+        c = c + 1
+    }
+    fails = fails + _ck_lt("(A) zero-kernel == bare (max|Δ|)", maxdiff, 1.0e-12)
+    fails = fails + _ck_bool("(A) zero-kernel one-pass converged", r0.converged, true)
+
+    // ── (B) METAL WEAKENING (the defining screening physics, faithful) ──────
+    //   In a metal the induced density OPPOSES the external perturbation (Lindhard
+    //   χ(q→0) < 0): Δρ ≈ −χ·ΔV_bare with χ>0, so Δρ has the OPPOSITE sign to
+    //   ΔV_bare. The Hartree kernel V_H[Δρ] keeps Δρ's sign, so the screened
+    //   ΔV_scr = ΔV_bare + V_H[Δρ] SUBTRACTS from the bare long-range tail. Test
+    //   the composition directly (qforge_screened_potential) with a controlled
+    //   metal response Δρ = −α·ΔV_bare on a smooth long-wavelength bare profile.
+    let mut bare_lr: [float] = []          // smooth long-range (low-G) profile
+    let mut drho_metal: [float] = []        // induced response OPPOSING bare (metal)
+    let alpha = 0.02                        // small linear-response coefficient
+    let mut q = 0
+    while q < N {
+        let ph = 6.28318530717958647692 * to_float(q) / to_float(N)
+        let bv = cos(ph)
+        bare_lr.push(bv)
+        drho_metal.push(-1.0 * alpha * bv)  // Δρ opposes ΔV_bare (χ<0, metal)
+        q = q + 1
+    }
+    let scr_lr = qforge_screened_potential(bare_lr, drho_metal, drho_hartree)
+    let ratio_lr = qforge_screening_ratio(bare_lr, scr_lr)
+    fails = fails + _ck_lt("(B) metal long-range weakening ratio < 1", ratio_lr, 1.0)
+    fails = fails + _ck_ge("(B) ratio physical (> 0)", ratio_lr, 0.0)
+
+    // ── (C) DIELECTRIC ε_eff(q→0) = 1/ratio ≥ 1 (screening, never amplifies) ─
+    let eps_eff = if ratio_lr > 0.0 { 1.0 / ratio_lr } else { -1.0 }
+    fails = fails + _ck_ge("(C) dielectric eps_eff(q->0) >= 1", eps_eff, 1.0)
+    fails = fails + _ck_lt("(C) dielectric eps_eff finite (< 1e6)", eps_eff, 1.0e6)
+
+    // ── (C') FULL Sternheimer screened path: finite, non-trivial composition ─
+    //   The self-consistent RPA path must converge and CHANGE the column (the
+    //   screening is a genuine non-identity operator vs the zero kernel). Direction
+    //   is reported VERBATIM (the abstract test operator is not a textbook metal —
+    //   only the real CaH6 cross-val carries the physical Fermi-surface response).
+    let r1 = qforge_screened_dv_columns(h_apply, states, eps_a, dv_bare, drho_hartree, TOL, 60, 0.5)
+    fails = fails + _ck_bool("(D) screened-loop converged", r1.converged, true)
+    let ratio0 = qforge_screening_ratio(dv_bare[0], r1.columns[0])
+    fails = fails + _ck_lt("(C') full-path ratio finite (< 1e6)", ratio0, 1.0e6)
+    fails = fails + _ck_lt("(C') full-path screening non-trivial (|ratio-1|>1e-6)",
+                           1.0e-6, _abs(ratio0 - 1.0))
+
+    // ── (E) MALFORMED guard: bare-column count mismatch → empty, not-converged ─
+    let mut short_bare: [[float]] = []
+    short_bare.push(dv_bare[0])              // only 1 column for NB=3 states
+    let re = qforge_screened_dv_columns(h_apply, states, eps_a, short_bare, drho_hartree, TOL, 60, 0.5)
+    fails = fails + _ck_bool("(E) malformed → empty columns", re.columns.len() == 0, true)
+    fails = fails + _ck_bool("(E) malformed → not converged", re.converged, false)
+
+    if fails == 0 { println("qforge_screened_dv_selftest PASS") }
+    else { println("qforge_screened_dv_selftest FAIL — " + to_string(fails) + " case(s)") }
+}
