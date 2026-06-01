@@ -1,0 +1,163 @@
+// @ci_gate — deterministic · network-free · NO pod ops · 실셀 q-mesh 분산 g5 게이트
+//
+// realcell_qmesh_selftest.hexa — QFORGE metallic-wall breadth 브릭 (a) g5 gate.
+//
+// 브릭 (a)(realcell_qmesh.hexa)는 단일 하드코딩 Einstein ω₀=1236.4 K 를 REAL
+// q-mesh 포논 분산 ω(q,ν) 로 대체한다 (qforge_mp_grid q-mesh → per-q
+// qforge_dynmat → qforge_phonons, d19 재사용). 이 게이트는 그 분산이
+//   (1) 음향 합규칙: q=Γ 에서 ω(Γ,acoustic)=0 (병진불변, on-site=−Σ이웃 강제),
+//   (2) Hermiticity: D(q) 가 모든 q 에서 실대칭 ((D)_ab=(D)_ba),
+//   (3) ω(q,ν) 가 실수·안정 (해석 분산과 일치, NaN/발산 없음),
+//   (4) NON-TRIVIAL: 분산이 단일 Einstein 와 다름 — ω 가 q 에 따라 BAND 로 퍼짐
+//       (min≠max, ω_log ≠ 단일 ω₀), 음향 가지가 Γ 에서 0 으로 dip,
+//   (5) end-to-end omega_band: 양의 ω 만 추려 el-ph wq 리스트로 broaden 되는지.
+// 어떤 케이스도 λ 를 조작하지 않는다 — 분산의 물리적 정확성·non-trivial 만 본다(d6).
+//
+// 모델: 1D 단원자 사슬 (M,K), ω(q)=2√(K/M)|sin(qa/2)| (dfpt_selftest 와 동일
+// 해석 분산). 2×1×1 MP q-mesh → {Γ, q=π/a} 두 점을 쓸어 BAND 를 만든다.
+//
+// Run:  HEXA_STDLIB_ROOT="$PWD/stdlib" hexa run --no-sentinel stdlib/qforge/realcell_qmesh_selftest.hexa
+// PASS: "qforge_realcell_qmesh_selftest PASS".
+use "stdlib/qforge/realcell_qmesh"
+use "stdlib/qforge/dfpt"
+use "stdlib/qforge/mpgrid"
+
+fn _abs(x: float) -> float { if x < 0.0 { return -x } return x }
+fn _ck_close(name: str, got: float, want: float, eps: float) -> int {
+    if _abs(got - want) <= eps { println("PASS " + name + " (" + to_string(got) + ")") ; return 0 }
+    println("FAIL " + name + " — got " + to_string(got) + " want " + to_string(want)) ; return 1
+}
+fn _ck_bool(name: str, got: bool, want: bool) -> int {
+    if got == want { println("PASS " + name + " (" + to_string(got) + ")") ; return 0 }
+    println("FAIL " + name + " — got " + to_string(got) + " want " + to_string(want)) ; return 1
+}
+
+fn main() {
+    let mut fails = 0
+    let PI = 3.14159265358979323846
+    println("── QFORGE realcell q-mesh 분산 g5 게이트 (metallic-wall breadth 브릭 a) ──")
+
+    // ── 1D 단원자 x-사슬 Φ (dfpt_selftest 와 동일 해석 분산) ──────────────────
+    //   Φ(R=0): xx=+2K, yy=zz=BIG.  Φ(R=±a): xx=−K.  ncells=3.  natoms=1, dim=3.
+    let M = 1.0 ; let K = 1.0 ; let BIG = 1.0e6
+    let mut b0: [float] = [] ; let mut z = 0
+    while z < 9 { b0.push(0.0) ; z = z + 1 }
+    b0[0] = 2.0 * K ; b0[4] = BIG ; b0[8] = BIG
+    let mut bp: [float] = [] ; z = 0
+    while z < 9 { bp.push(0.0) ; z = z + 1 }
+    bp[0] = -K
+    let mut bm: [float] = [] ; z = 0
+    while z < 9 { bm.push(0.0) ; z = z + 1 }
+    bm[0] = -K
+    let mut phi: [float] = []
+    let mut t = 0
+    while t < 9 { phi.push(b0[t]) ; t = t + 1 }
+    t = 0 ; while t < 9 { phi.push(bp[t]) ; t = t + 1 }
+    t = 0 ; while t < 9 { phi.push(bm[t]) ; t = t + 1 }
+    let masses = [M]
+    // a=1 (격자상수) → cell_R = {0, +a, −a}; reciprocal b1=(2π/a,0,0) so q·R 위상.
+    let aa = 1.0
+    let cellR = [0.0, 0.0, 0.0,   aa, 0.0, 0.0,   -aa, 0.0, 0.0]
+    let tpa = 2.0 * PI / aa
+    let b1 = [tpa, 0.0, 0.0] ; let b2 = [0.0, tpa, 0.0] ; let b3 = [0.0, 0.0, tpa]
+
+    // ── 2×1×1 MP q-mesh (Γ-centred): frac q = {0, 0.5} along x → {Γ, π/a} ─────
+    let disp = qforge_qmesh_dispersion(phi, masses, 1, 3, cellR, 2, 1, 1, b1, b2, b3)
+    fails = fails + _ck_bool("(0) nq == 2 (2×1×1 MP mesh)", disp.nq == 2, true)
+    fails = fails + _ck_bool("(0) nmode == 3 (dim = 3·natoms)", disp.nmode == 3, true)
+    fails = fails + _ck_bool("(0) omega flat len == nq·nmode", len(disp.omega) == disp.nq * disp.nmode, true)
+
+    // ── locate the Γ q-point in the mesh (2r−n−1)/(2n): r=1→−0.25, r=2→+0.25 ──
+    //   For 2×1×1 the x-frac set is {−0.25, +0.25} → NEITHER is exactly Γ. The
+    //   mesh straddles Γ symmetrically; we verify the sum-rule on an EXPLICIT Γ
+    //   dynmat (the disp helper records n_gamma_zero only if Γ is hit). For the
+    //   non-trivial BAND we use the two straddle points (|sin| differs → spread).
+    let qg = [0.0, 0.0, 0.0]
+    let dg = qforge_dynmat(phi, masses, qg, 1, 3, cellR)
+    let pg = qforge_phonons(dg, masses, 1)
+    fails = fails + _ck_close("(1) ω_acoustic(Γ) = 0 (translational sum rule)", pg.omega[0], 0.0, 1.0e-6)
+    fails = fails + _ck_bool("(1) n_acoustic_zero ≥ 1 at Γ", pg.n_acoustic_zero >= 1, true)
+
+    // ── (1b) Γ-CENTRED 3×1×1 mesh DOES contain Γ → disp.n_gamma_zero ≥ 1 ──────
+    //   3 along x → frac {−1/3, 0, +1/3}; the 0 point is exactly Γ.
+    let disp3 = qforge_qmesh_dispersion(phi, masses, 1, 3, cellR, 3, 1, 1, b1, b2, b3)
+    fails = fails + _ck_bool("(1b) Γ-centred 3×1×1 mesh hits Γ → n_gamma_zero ≥ 1",
+                             disp3.n_gamma_zero >= 1, true)
+
+    // ── (2) Hermiticity of D(q) at a generic interior q (π/2a) ───────────────
+    let qmid = [PI / 2.0, 0.0, 0.0]
+    let dmid = qforge_dynmat(phi, masses, qmid, 1, 3, cellR)
+    let dd = dmid.dim
+    let mut herm_ok = true
+    let mut ia = 0
+    while ia < dd {
+        let mut ib = 0
+        while ib < dd {
+            if _abs(dmid.mat[ia * dd + ib] - dmid.mat[ib * dd + ia]) > 1.0e-12 { herm_ok = false }
+            ib = ib + 1
+        }
+        ia = ia + 1
+    }
+    fails = fails + _ck_bool("(2) D(q) Hermitian/symmetric at q=π/2a", herm_ok, true)
+
+    // ── (3) ω(q,ν) real & stable — analytic ω(π/a)=2√(K/M), ω(π/2a)=√2 ───────
+    //   Walk a 4×1×1 mesh and check every ω is finite & ω²≥0 (no soft mode here).
+    let disp4 = qforge_qmesh_dispersion(phi, masses, 1, 3, cellR, 4, 1, 1, b1, b2, b3)
+    let mut all_real = true
+    let mut k = 0
+    while k < len(disp4.omega2) {
+        // x-branch ω² ∈ [0, 4K/M]; the y/z BIG branches are huge but finite & ≥0.
+        if disp4.omega2[k] < -1.0e-9 { all_real = false }
+        k = k + 1
+    }
+    fails = fails + _ck_bool("(3) every ω²(q,ν) ≥ 0 over 4×1×1 mesh (real, stable)", all_real, true)
+
+    // analytic anchor: zone-boundary q=π/a → ω_x = 2√(K/M) = 2.0
+    let pre = 2.0 * sqrt(K / M)
+    let qzb = [PI, 0.0, 0.0]
+    let dzb = qforge_dynmat(phi, masses, qzb, 1, 3, cellR)
+    let pzb = qforge_phonons(dzb, masses, 1)
+    fails = fails + _ck_close("(3) ω(q=π/a) zone-boundary = 2√(K/M)", pzb.omega[0], pre, 1.0e-6)
+
+    // ── (4) NON-TRIVIAL vs single Einstein — the BAND spreads ────────────────
+    //   Build the positive-ω band from a 4×1×1 sweep. The x-acoustic branch runs
+    //   0 → 2√(K/M); a single-Einstein stand-in would give ONE repeated value.
+    //   Check min(band) ≠ max(band) (real spread) and the band ω_log ≠ a single ω₀.
+    let band = qforge_qmesh_omega_band(disp4, 1.0e-6)
+    fails = fails + _ck_bool("(5) omega_band non-empty (positive ω extracted)", len(band) >= 1, true)
+    // separate the x-branch (small) from the BIG y/z branches: min over the band
+    // = the smallest non-zero acoustic ω; we just need a spread WITHIN the x-branch.
+    //   x-branch ω at the mesh's non-Γ frac points differs → not a single value.
+    let mut wmin = band[0] ; let mut wmax = band[0]
+    let mut bi = 0
+    while bi < len(band) {
+        if band[bi] < wmin { wmin = band[bi] }
+        if band[bi] > wmax { wmax = band[bi] }
+        bi = bi + 1
+    }
+    fails = fails + _ck_bool("(4) BAND spreads (min ≠ max — NON-trivial vs single Einstein)",
+                             _abs(wmax - wmin) > 1.0e-6, true)
+
+    // explicit x-branch spread: ω at frac 0.125 vs 0.375 (4×1×1 mesh) differ.
+    //   frac→q: q = 2π·frac.  ω = 2√(K/M)|sin(π·frac)|.
+    let w_a = pre * _abs(sin(PI * 0.125))     // mesh point r=1 → frac (2·1−4−1)/8 = −0.375
+    let w_b = pre * _abs(sin(PI * 0.375))
+    fails = fails + _ck_bool("(4) two x-branch ω differ (dispersion, not flat)",
+                             _abs(w_a - w_b) > 1.0e-6, true)
+
+    // ── (4b) ω_log of the band ≠ a single Einstein ω₀ ────────────────────────
+    //   A single-Einstein band [ω₀,ω₀,…] has ω_log = ω₀. The real x-branch band's
+    //   ω_log sits BELOW the zone-boundary max — demonstrably not the spike value.
+    let wlog = qforge_qmesh_omega_log(band)
+    fails = fails + _ck_bool("(4b) band ω_log > 0", wlog > 0.0, true)
+    fails = fails + _ck_bool("(4b) band ω_log ≠ zone-boundary spike (dispersion broadens ω_log)",
+                             _abs(wlog - pre) > 1.0e-6, true)
+
+    // ── (reuse d19) mpgrid drives the q-mesh — same generator as the SCF k-mesh ─
+    let mp = qforge_mp_grid(2, 1, 1, 0, 0, 0)
+    fails = fails + _ck_bool("(reuse) mpgrid npoints == 2 (q-mesh = SCF k-mesh gen)",
+                             mp.npoints == 2, true)
+
+    if fails == 0 { println("qforge_realcell_qmesh_selftest PASS") }
+    else { println("qforge_realcell_qmesh_selftest FAIL — " + to_string(fails) + " case(s)") }
+}

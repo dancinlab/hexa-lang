@@ -1,0 +1,180 @@
+// HEXA Standard Library — qforge/realcell_qmesh
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// QFORGE metallic-wall breadth BRICK (a)/4 — the REAL q-MESH PHONON DISPERSION.
+//
+// ── WHY THIS EXISTS (the NARROW-sum wall, d6 honest) ─────────────────────────
+// The CaH6 real-ΔV_bare cross-val (#2485, fixtures/cah6_realcell_xval) computes a
+// GENUINE |g_nn| matrix element, yet λ=0.000115 vs QE 4.376 — a ~4·10⁴× miss —
+// because the el-ph PHONON SUM is too NARROW: the fixture pins EVERY occupied
+// state to ONE hardcoded Einstein frequency ω₀=1236.4 K (wq.push(omega0)). A
+// single δ-spike at ω₀ carries no dispersion; λ = 2∫α²F/ω collapses. The real
+// phonon spectrum is a BAND of ω(q,ν) over the Brillouin zone — acoustic branches
+// dipping to 0 at Γ, optical branches spread across a range. THIS brick replaces
+// the single Einstein ω₀ with a REAL q-mesh dispersion ω(q,ν) by sweeping the
+// already-verified DFPT chain over a Monkhorst-Pack q-grid:
+//
+//   qforge_mp_grid(nq,nq,nq) ──┐  (d19 reuse — same generator as the SCF k-mesh)
+//                              │
+//        per-q  qforge_dynmat(Φ, masses, q, …)  →  D(q)   (d19 L4 reuse)
+//                              │
+//        per-q  qforge_phonons(D(q), masses)    →  ω(q,ν) (d19 L4 reuse, eigh)
+//                              │
+//        concat over the q-mesh  ──▶  flat ω(q,ν) dispersion array
+//
+// The real-space force constants Φ come from qforge_force_constant (dfpt_response,
+// driven by the brick-1 dvloc_du → brick-2 qforge_dvbare_psi_bundle bare ΔV) — the
+// CALLER supplies Φ, masses, natoms, ncells, cell_R. No material hardcode (d4).
+//
+// ── d4 GENERIC — caller supplies Φ + the mesh, no name branch ─────────────────
+// The driver knows NOTHING about CaH6 / LaH10. It walks the q-mesh, calls the
+// verified dynmat+phonon solver per q, and concatenates ω(q,ν). Add/swap a cell =
+// change Φ/masses/cell_R; no branch on a material name. ONE path, every cell.
+//
+// ── HONEST SCOPE (d6 — breadth brick (a)/4, NOT a 1% closure) ────────────────
+// This BROADENS the phonon sum from a 1-mode Einstein spike to a real BZ-sampled
+// ω(q,ν) dispersion. That is necessary but NOT sufficient to close λ to QE's 1%.
+// The 3 REMAINING breadth items stay explicit and unfaked:
+//   (b) off-diagonal |g_mn| (inter-band coupling — this fixture uses only g_nn),
+//   (c) real N(E_F) + a converged k-mesh (the fixture uses n_ef=1 stand-in),
+//   (d) screened ΔV_scf (the bare independent-particle |g|, no Hartree+XC kernel).
+// This brick does NOT fabricate a λ — the caller reports whatever the broadened
+// sum gives VERBATIM (within or outside the QE bar).
+//
+// d3/d19 reuse (compose, don't reinvent — every brick below is verified 🟢/🔵):
+//   - q-mesh    : stdlib/qforge/mpgrid  (qforge_mp_grid — the SCF k-mesh gen)
+//   - D(q)      : stdlib/qforge/dfpt    (qforge_dynmat   — L4 mass-weighted cos sum)
+//   - ω(q,ν)    : stdlib/qforge/dfpt    (qforge_phonons  — L4 eigh diagonalize)
+// New code here = the q-mesh WALK + per-q dispersion concat ONLY. Zero physics
+// is re-implemented; no λ/Tc is computed in this file (that stays in the caller).
+
+use "stdlib/qforge/mpgrid"
+use "stdlib/qforge/dfpt"
+
+// ── the q-mesh dispersion result ─────────────────────────────────────────────
+//   omega   : flat [nq · dim] real ω(q,ν), q-major (q0 all ν, then q1 …); dim=3N.
+//             sign-preserving sqrt (ω<0 = soft mode, NOT clamped — d6 honest).
+//   omega2  : flat [nq · dim] ω²(q,ν) in the same layout (negative = unstable).
+//   qcoords : flat [3 · nq] fractional q-points walked (the MP mesh, audit).
+//   nq      : number of q-points.
+//   nmode   : modes per q-point (= dim = 3·natoms).
+//   n_gamma_zero : acoustic zero count summed at the Γ point (sum-rule witness).
+pub struct QmeshDispersion {
+    omega:        [float],
+    omega2:       [float],
+    qcoords:      [float],
+    nq:           int,
+    nmode:        int,
+    n_gamma_zero: int
+}
+
+fn _rqm_is_gamma(qx: float, qy: float, qz: float) -> bool {
+    let e = 1.0e-12
+    let ax = if qx < 0.0 { -qx } else { qx }
+    let ay = if qy < 0.0 { -qy } else { qy }
+    let az = if qz < 0.0 { -qz } else { qz }
+    return ax < e && ay < e && az < e
+}
+
+// ── REAL ω(q,ν) over an MP q-mesh: dynmat → phonons per q, concatenated ───────
+// The fractional MP q-coordinate (qforge_mp_grid out) is mapped to a Cartesian
+// phase q·R by the CALLER-supplied reciprocal vectors b1,b2,b3 (each [3], the
+// SAME 2π/a-scaled vectors the cell uses), so q·R in qforge_dynmat is the true
+// crystal phase. This replaces the single hardcoded Einstein ω₀ with the genuine
+// BZ-sampled dispersion.
+//   phi      : flat [ncells·(3N·3N)] real-space force constants (qforge_dynmat in).
+//   masses   : [natoms] atomic masses.
+//   natoms   : N · ncells : number of real-space cells in phi.
+//   cell_R   : flat [3·ncells] lattice vectors R_c (Cartesian, bohr).
+//   nq1/2/3  : MP q-mesh divisions (keep small, e.g. 2×2×2 — d6 alloc guard).
+//   b1,b2,b3 : [3] reciprocal lattice vectors (frac→Cartesian q mapping).
+// Returns QmeshDispersion; nq==0 / nmode==0 sentinel on a malformed input.
+pub fn qforge_qmesh_dispersion(phi: [float], masses: [float],
+                               natoms: int, ncells: int, cell_R: [float],
+                               nq1: int, nq2: int, nq3: int,
+                               b1: [float], b2: [float], b3: [float]) -> QmeshDispersion {
+    let dim = 3 * natoms
+    if natoms < 1 || ncells < 1 || nq1 < 1 || nq2 < 1 || nq3 < 1 {
+        return QmeshDispersion { omega: [], omega2: [], qcoords: [],
+                                 nq: 0, nmode: 0, n_gamma_zero: 0 }
+    }
+    // Γ-centred MP q-mesh (shift=0 → contains Γ for odd n; for even n we still
+    // sweep the symmetric set — the acoustic sum-rule witness is taken at whatever
+    // point is closest to Γ when present).
+    let grid = qforge_mp_grid(nq1, nq2, nq3, 0, 0, 0)
+    let nq = grid.npoints
+
+    let mut omega: [float] = []
+    let mut omega2: [float] = []
+    let mut qcoords: [float] = []
+    let mut n_gamma_zero = 0
+
+    let mut iq = 0
+    while iq < nq {
+        let fx = grid.coords[3 * iq]
+        let fy = grid.coords[3 * iq + 1]
+        let fz = grid.coords[3 * iq + 2]
+        // fractional → Cartesian q = fx·b1 + fy·b2 + fz·b3
+        let qx = fx * b1[0] + fy * b2[0] + fz * b3[0]
+        let qy = fx * b1[1] + fy * b2[1] + fz * b3[1]
+        let qz = fx * b1[2] + fy * b2[2] + fz * b3[2]
+        qcoords.push(qx) ; qcoords.push(qy) ; qcoords.push(qz)
+
+        let dq = qforge_dynmat(phi, masses, [qx, qy, qz], natoms, ncells, cell_R)
+        let pq = qforge_phonons(dq, masses, natoms)
+
+        let mut m = 0
+        while m < dim {
+            omega.push(pq.omega[m])
+            omega2.push(pq.omega2[m])
+            m = m + 1
+        }
+        if _rqm_is_gamma(qx, qy, qz) { n_gamma_zero = n_gamma_zero + pq.n_acoustic_zero }
+        iq = iq + 1
+    }
+
+    return QmeshDispersion {
+        omega: omega, omega2: omega2, qcoords: qcoords,
+        nq: nq, nmode: dim, n_gamma_zero: n_gamma_zero
+    }
+}
+
+// ── flat POSITIVE ω(q,ν) histogram for the el-ph phonon sum (Einstein→band) ──
+// The CaH6 xval feeds ONE ω per occupied state into qforge_elph_to_tc (the wq
+// list). Brick (a) broadens that: instead of N_occ copies of a single ω₀, supply
+// the REAL spread of phonon energies the dispersion produced. This helper flattens
+// the QmeshDispersion into the list of PHYSICAL (real, ω>tol) phonon frequencies —
+// dropping the q=Γ acoustic zeros (ω≈0 carry no el-ph weight; 2∫α²F/ω would
+// diverge on them) and any soft/imaginary mode (ω<0, honestly excluded, not
+// clamped to a fake positive). Returns the flat [n_phys] frequency list; the
+// caller draws/cycles its per-state wq from this REAL band.
+//   disp  : a QmeshDispersion from qforge_qmesh_dispersion.
+//   tol   : acoustic/soft cutoff (e.g. 1.0e-6) — modes with ω<=tol are dropped.
+pub fn qforge_qmesh_omega_band(disp: QmeshDispersion, tol: float) -> [float] {
+    let mut band: [float] = []
+    let total = len(disp.omega)
+    let mut i = 0
+    while i < total {
+        let w = disp.omega[i]
+        if w > tol { band.push(w) }
+        i = i + 1
+    }
+    return band
+}
+
+// ── λ-weighted log-average of the real band (ω_log proxy, audit/honesty) ─────
+// The geometric ω_log of the broadened band — lets the caller SHOW that the real
+// dispersion's ω_log differs from the single 1236.4 K Einstein stand-in (the
+// NON-TRIVIAL witness). Equal weighting (no α²F yet) → the plain log-average.
+//   band : a positive-ω list from qforge_qmesh_omega_band.
+// Returns exp(mean(ln ω)); 0.0 on an empty band.
+pub fn qforge_qmesh_omega_log(band: [float]) -> float {
+    let nb = len(band)
+    if nb < 1 { return 0.0 }
+    let mut s = 0.0
+    let mut i = 0
+    while i < nb { s = s + log(band[i]) ; i = i + 1 }
+    return exp(s / to_float(nb))
+}
