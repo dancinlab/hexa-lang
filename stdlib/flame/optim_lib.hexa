@@ -27,3 +27,89 @@ pub fn opt_adamw_step(W: int, gW: int, m: int, v: int, n: int,
                      wd: float, t: int) {
     adamw_step(W, gW, m, v, n, lr, b1, b2, eps, wd, t)
 }
+
+// ════════════════════════════════════════════════════════════════════════
+// FSDP-style optimizer-state SHARDING (FLAME-PERF · descent-유지 half)
+//
+// Motivation: Adam's m,v each take 1× param memory, so a 44.68M-param model's
+// optimizer state alone is 2 × 44.68M × 4B ≈ 357 MB (and with fp32 master
+// copies the full state balloons toward ~1.4 GB). FSDP shards that state
+// across S logical shards so each device holds only ~1/S of m,v.
+//
+// KEY OBSERVATION — AdamW is PURELY ELEMENTWISE over the flat parameter
+// index. Each output index i depends ONLY on (W[i], gW[i], m[i], v[i]) and the
+// shared scalars (lr,β₁,β₂,ε,wd,t). Therefore partitioning the index range
+// [0,n) into S contiguous shards and updating each shard independently yields
+// a result BIT-IDENTICAL to the unsharded update — no cross-shard term exists.
+//
+// Host model of a shard: a contiguous [off, off+len) slice of W/gW/m/v copied
+// into per-shard scratch buffers (m_s, v_s — the sharded optimizer state),
+// updated by the SAME `adamw_step` builtin, then reassembled into the full
+// arrays. On a real multi-device deployment the m_s/v_s scratch IS the only
+// optimizer state a device materializes (≈ 1/S of the global m,v) — the host
+// path here proves the numerics; the per-device placement is a pod concern.
+//
+// F-FLAME-OPTIM-SHARD-DESCENT: the S-sharded AdamW reproduces the unsharded
+// CE descent trajectory bit-for-bit (same loss0/lossF). Verified via the
+// clm_gen descent smoke run with S>1 shards on every parameter.
+// ════════════════════════════════════════════════════════════════════════
+
+// Shard-boundary helper: the start index of shard `s` of `S` over `n` items.
+// Remainder is spread over the first `n mod S` shards so |shard| differs by ≤1
+// (the classic balanced FSDP split). off(S)=n closes the range.
+pub fn opt_shard_off(n: int, S: int, s: int) -> int {
+    let base = n / S
+    let rem = n - base * S
+    if s <= rem {
+        return s * (base + 1)
+    }
+    return rem * (base + 1) + (s - rem) * base
+}
+
+// Sharded AdamW step: logically partition (W,gW,m,v) into S contiguous shards
+// and apply the SAME elementwise AdamW update to each shard. Bit-identical to
+// opt_adamw_step(...,n,...) for any S in [1,n]. m,v are updated in place; only
+// the per-shard scratch (W_s,g_s,m_s,v_s of size ⌈n/S⌉) is allocated.
+pub fn opt_adamw_step_sharded(W: int, gW: int, m: int, v: int, n: int,
+                              lr: float, b1: float, b2: float, eps: float,
+                              wd: float, t: int, S: int) {
+    // cap shards at n (empty shards are a no-op but waste a copy)
+    let mut shards = S
+    if shards < 1 { shards = 1 }
+    if shards > n { shards = n }
+    if shards < 1 { return }                          // n == 0 → nothing to do
+
+    let cap = n / shards + 1                           // ⌈n/shards⌉ upper bound
+    let W_s = farr_zeros(cap)
+    let g_s = farr_zeros(cap)
+    let m_s = farr_zeros(cap)
+    let v_s = farr_zeros(cap)
+
+    let mut s = 0
+    while s < shards {
+        let off = opt_shard_off(n, shards, s)
+        let len = opt_shard_off(n, shards, s + 1) - off
+        // gather the shard slice into the per-shard optimizer-state scratch
+        let mut i = 0
+        while i < len {
+            let _ = farr_set(W_s, i, farr_get(W, off + i))
+            let _ = farr_set(g_s, i, farr_get(gW, off + i))
+            let _ = farr_set(m_s, i, farr_get(m, off + i))
+            let _ = farr_set(v_s, i, farr_get(v, off + i))
+            i = i + 1
+        }
+        // per-shard update — identical builtin, identical scalars/step
+        adamw_step(W_s, g_s, m_s, v_s, len, lr, b1, b2, eps, wd, t)
+        // reassemble updated W and sharded state back into the full arrays
+        let mut j = 0
+        while j < len {
+            let _ = farr_set(W, off + j, farr_get(W_s, j))
+            let _ = farr_set(m, off + j, farr_get(m_s, j))
+            let _ = farr_set(v, off + j, farr_get(v_s, j))
+            j = j + 1
+        }
+        s = s + 1
+    }
+    let _ = farr_free(W_s); let _ = farr_free(g_s)
+    let _ = farr_free(m_s); let _ = farr_free(v_s)
+}
