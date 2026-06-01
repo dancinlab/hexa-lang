@@ -26,6 +26,7 @@ use "stdlib/qforge/elph"
 use "stdlib/qforge/elph_scf"
 use "stdlib/qforge/realcell_phonon"
 use "stdlib/qforge/elph_offdiag"
+use "stdlib/qforge/dos_nef"
 use "stdlib/qforge/tc"
 use "stdlib/material/sim"
 
@@ -192,11 +193,23 @@ fn main() {
             + "   Σ|g_mn| m≠n (off-diagonal) = " + to_string(off_sum))
 
     // ── el-ph → λ with the Fermi-surface DOUBLE-δ weight (L3 α²F) ────────────
-    let omega0 = 1236.4 ; let e_fermi = dr.evals[nocc - 1] ; let n_ef = 1.0
+    let omega0 = 1236.4 ; let e_fermi = dr.evals[nocc - 1]
     let mut grid: [float] = []
     let mut gp = 1
     while gp < 401 { grid.push(to_float(gp) * 7.0) ; gp = gp + 1 }
     let sigma_el = 0.05 ; let sigma_ph = 10.0
+    // NC NORMALIZATION-CONVENTION FIX (audit): the mandatory 1/N(E_F) Allen-1972
+    // prefactor MUST use the REAL N(E_F), NOT the n_ef=1.0 placeholder that SKIPS
+    // it (the old value inflated λ by EXACTLY N(E_F) — the ~77× the composed xval
+    // exposed). N(E_F) is computed with the SAME σ (sigma_el) and SAME δ_σ kernel
+    // (qforge_gaussian_delta) as the α²F double-δ below — the dimensional closure
+    // that makes the prefactor and the FS sum share one convention. d4: Γ-only
+    // (nk=1) over the active manifold, identical to the composed fixture's [c].
+    let mut eps_flat: [float] = []
+    mm = 0 ; while mm < nactive { eps_flat.push(eps_active[mm]) ; mm = mm + 1 }
+    let n_ef = qforge_dos_nef_uniform(eps_flat, 1, nactive, e_fermi, sigma_el)
+    println("[c N(E_F)] real smeared DOS at E_F (Γ, σ=σ_el) = " + to_string(n_ef)
+            + " (states/Ha/cell — replaces the n_ef=1.0 placeholder)")
 
     // FULL matrix (diagonal + off-diagonal) — the physical inter-band el-ph sum.
     let s_full = qforge_gmn_samples(states, dv_states, eps_active, omega0, true, 1.008)  // F1: H mass

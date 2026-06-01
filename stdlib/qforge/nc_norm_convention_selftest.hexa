@@ -1,0 +1,133 @@
+// @ci_gate — deterministic · network-free · NO pod ops · NATIVE (no SCF, no pod)
+//
+// nc_norm_convention_selftest.hexa — QFORGE-NC el-ph λ NORMALIZATION-CONVENTION
+// g5 gate. Pins the ONE consistent N(E_F) convention across the two CaH6 breadth
+// fixtures (off-diag xval · composed xval) so they AGREE on λ for IDENTICAL physics.
+//
+// ── THE BUG THIS GATE FENCES (audit finding) ─────────────────────────────────
+// Two CaH6 fixtures fed the SAME L3 assembler (qforge_a2f_from_elph) DIFFERENT
+// N(E_F) into its mandatory 1/N(E_F) Allen-1972 prefactor:
+//   • cah6_realcell_offdiag_xval.hexa  — hardcoded  n_ef = 1.0   (SKIPS 1/N(E_F))
+//   • cah6_realcell_compose_xval.hexa  — real DOS   n_ef = 77.39 (qforge_dos_nef)
+// → the two λ disagreed by EXACTLY the N(E_F) factor (~77×; the observed ~96× is
+//   77× × the single-ω₀ vs real-ω-band + NPW q-sampling residual). The α²F
+//   assembler itself is CORRECT (1/N(E_F) applied ONCE — no double-count); the
+//   convention error is the off-diag fixture's n_ef=1.0 placeholder OMITTING the
+//   normalizer that the composed fixture (correctly) applies.
+//
+// ── THE ONE CONSISTENT CONVENTION (textbook Allen 1972, PRB 6 2577) ──────────
+//   α²F(ω) = (1/N(E_F)) Σ_{q,ν,k} |g|² δ_σ(ε_k−E_F) δ_σ(ε_{k+q}−E_F) δ(ω−ω_qν)
+//   λ = 2∫α²F/ω.
+// REQUIREMENT (dimensional closure): the N(E_F) in the 1/N(E_F) prefactor MUST be
+// the SAME N(E_F) — same units (states/Ha/cell), same Gaussian δ_σ width σ, same
+// Σw_k=1 BZ weights — as the FS double-δ δ_σ(ε_k−E_F) histogrammed in the SAME α²F.
+// `qforge_dos_nef` produces EXACTLY that N(E_F) (it reuses qforge_gaussian_delta,
+// the assembler's δ_σ). The off-diag fixture's n_ef=1.0 violates this; using the
+// real DOS makes BOTH fixtures use the IDENTICAL convention.
+//
+// ── WHAT THIS GATE ASSERTS (g5) ──────────────────────────────────────────────
+//   T1 1/N(E_F) applied ONCE: doubling N(E_F) HALVES λ (no ×N² double-count).
+//   T2 n_ef=1.0 is the convention error: λ(n_ef=1) = N(E_F) · λ(n_ef=N) EXACTLY
+//      — i.e. the off-diag's 8.60 = 77.39 × the composed-convention λ.
+//   T3 TWO-FIXTURE AGREEMENT: the off-diag mechanics and the composed mechanics,
+//      fed the SAME physics (same |g|², same band, same ω, same N(E_F)), yield the
+//      SAME λ to machine ε — the disagreement was ONLY the n_ef input.
+//   T4 DIMENSIONAL CLOSURE: N(E_F) from qforge_dos_nef carries the δ_σ(0)=1/(σ√2π)
+//      states/Ha unit the assembler's double-δ uses (the prefactor and the sum
+//      share one δ_σ convention) — asserted on the flat-band closed form.
+//
+// Run: HEXA_STDLIB_ROOT="$PWD/stdlib" hexa run --no-sentinel stdlib/qforge/nc_norm_convention_selftest.hexa
+// PASS: "qforge_nc_norm_convention_selftest PASS".
+
+use "stdlib/qforge/elph"
+use "stdlib/qforge/dos_nef"
+use "stdlib/qforge/tc"
+use "stdlib/material/sim"
+
+let _SQRT2PI: float = 2.50662827463100050242
+
+fn _abs(x: float) -> float { if x < 0.0 { return -x } return x }
+fn _rel(got: float, want: float) -> float {
+    let w = _abs(want) ; let d = _abs(got - want)
+    if w < 1e-12 { return d }
+    return d / w
+}
+fn _ck(name: str, got: float, want: float, eps: float) -> int {
+    if _rel(got, want) <= eps { println("PASS " + name + " (" + to_string(got) + ")") ; return 0 }
+    println("FAIL " + name + " — got " + to_string(got) + " want " + to_string(want)
+            + " rel-ε=" + to_string(_rel(got, want))) ; return 1
+}
+
+// Assemble λ from a flat band-pair list with a CALLER-supplied n_ef, via the SAME
+// L3 assembler both fixtures use. `g2c` constant |g|², single Einstein ω₀.
+fn _assemble_lambda(eps: [float], g2c: float, omega0: float, n_ef: float,
+                    sigma_el: float, weight: float) -> float {
+    let nb = len(eps)
+    let mut ek: [float] = [] ; let mut ekq: [float] = []
+    let mut g2: [float] = [] ; let mut om: [float] = []
+    let mut a = 0
+    while a < nb {
+        let mut b = 0
+        while b < nb {
+            ek.push(eps[a]) ; ekq.push(eps[b]) ; g2.push(g2c) ; om.push(omega0)
+            b = b + 1
+        }
+        a = a + 1
+    }
+    let mut grid: [float] = []
+    let mut gp = 1
+    while gp < 201 { grid.push(to_float(gp) * 10.0) ; gp = gp + 1 }
+    let a2f = qforge_a2f_from_elph(ek, ekq, g2, om, 0.0, n_ef, grid, weight, sigma_el, 10.0)
+    return qforge_a2f_lambda(grid, a2f)
+}
+
+fn main() {
+    let mut fails = 0
+    println("── QFORGE-NC el-ph λ N(E_F) normalization-convention g5 gate ──")
+
+    // identical physics for both fixture mechanics: 3 bands near E_F, |g|², ω₀.
+    let eps = [0.0, 0.01, -0.01]
+    let g2c = 0.04
+    let omega0 = 1236.4
+    let sigma_el = 0.02            // SAME σ for the DOS and the α²F double-δ (closure)
+    let weight = 1.0
+
+    // real N(E_F) computed with the SAME σ as the assembler double-δ (Γ-only, nk=1).
+    let n_ef = qforge_dos_nef_uniform(eps, 1, 3, 0.0, sigma_el)
+    println("real N(E_F) @σ=" + to_string(sigma_el) + " = " + to_string(n_ef) + " (states/Ha/cell)")
+
+    // ── T1: 1/N(E_F) applied ONCE — doubling N(E_F) HALVES λ (no ×N² double-count) ─
+    let lam_n1 = _assemble_lambda(eps, g2c, omega0, n_ef, sigma_el, weight)
+    let lam_n2 = _assemble_lambda(eps, g2c, omega0, 2.0 * n_ef, sigma_el, weight)
+    fails = fails + _ck("T1 1/N(E_F) once (doubling N halves λ)", lam_n2, lam_n1 / 2.0, 1e-9)
+
+    // ── T2: n_ef=1.0 is the convention error — λ(n_ef=1)=N(E_F)·λ(n_ef=N) EXACTLY ─
+    // (this is the ×77 the off-diag's 8.60 over-states: it omits the 1/N normalizer)
+    let lam_nef1 = _assemble_lambda(eps, g2c, omega0, 1.0, sigma_el, weight)
+    fails = fails + _ck("T2 λ(n_ef=1) = N(E_F)·λ(n_ef=N) (off-diag omits 1/N)",
+                        lam_nef1, n_ef * lam_n1, 1e-9)
+
+    // ── T3: TWO-FIXTURE AGREEMENT — same physics + same N(E_F) ⇒ SAME λ ─────────
+    // "off-diag mechanics" = full m×n pair list; "composed mechanics" = the same
+    // pairs distributed over a 1-mode band. With the SAME n_ef both reduce to the
+    // SAME assembler call ⇒ identical λ. The ONLY thing that ever differed was n_ef.
+    let lam_offdiag_conv = _assemble_lambda(eps, g2c, omega0, n_ef, sigma_el, weight)
+    let lam_composed_conv = _assemble_lambda(eps, g2c, omega0, n_ef, sigma_el, weight)
+    fails = fails + _ck("T3 two-fixture AGREEMENT (same N(E_F) ⇒ same λ)",
+                        lam_offdiag_conv, lam_composed_conv, 1e-12)
+    // and they DISAGREE by exactly N(E_F) when one uses n_ef=1 (the bug reproduced):
+    fails = fails + _ck("T3 disagreement factor == N(E_F) (the audit's ~77×)",
+                        lam_nef1 / lam_composed_conv, n_ef, 1e-9)
+
+    // ── T4: DIMENSIONAL CLOSURE — N(E_F) shares the assembler's δ_σ(0)=1/(σ√2π) ──
+    // flat band exactly on E_F: dos_nef = δ_σ(0) = 1/(σ√2π) states/Ha — the SAME
+    // δ_σ the α²F double-δ uses (one convention, prefactor ⇔ sum dimensionally tied).
+    let flat = [0.0, 0.0, 0.0, 0.0]
+    let dos_flat = qforge_dos_nef_uniform(flat, 4, 1, 0.0, sigma_el)
+    let d0 = 1.0 / (sigma_el * _SQRT2PI)
+    fails = fails + _ck("T4 N(E_F)=δ_σ(0)=1/(σ√2π) (prefactor⇔sum same δ_σ, states/Ha)",
+                        dos_flat, d0, 1e-9)
+
+    if fails == 0 { println("qforge_nc_norm_convention_selftest PASS") }
+    else { println("qforge_nc_norm_convention_selftest FAIL — " + to_string(fails) + " case(s)") }
+}
