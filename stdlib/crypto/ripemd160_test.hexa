@@ -1,0 +1,41 @@
+// HEXA Standard Library — crypto/ripemd160 self-test (RFC-style KAT vectors)
+// @ci_gate
+use "stdlib/crypto/ripemd160"
+
+fn sbytes(s: string) -> [int] {
+    let mut b: [int] = []
+    let mut i = 0
+    while i < byte_len(s) { b = b + [byte_at(s, i)]; i = i + 1 }
+    return b
+}
+
+fn main() {
+    let mut pass = 0
+    let mut total = 0
+    // canonical RIPEMD-160 test vectors (original Dobbertin et al. paper)
+    let cases = [
+        ["", "9c1185a5c5e9fc54612808977ee8f548b2258d31"],
+        ["a", "0bdc9d2d256b3ee9daae347be6f4dc835a467ffe"],
+        ["abc", "8eb208f7e05d987a9b044a8e98c6b087f15a0bfc"],
+        ["message digest", "5d0689ef49d2fae572b881b123a85ffa21595f36"],
+        ["abcdefghijklmnopqrstuvwxyz", "f71c27109c692c1b56bbdceb5b9d2865b3708dbc"],
+        ["abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq", "12a053384a9c0c88e405a06c27dcf49ada62eb2b"]
+    ]
+    let mut i = 0
+    while i < len(cases) {
+        total = total + 1
+        let got = ripemd160_hex(sbytes(cases[i][0]))
+        if got == cases[i][1] { pass = pass + 1 } else { println("FAIL hex[" + cases[i][0] + "] got=" + got + " want=" + cases[i][1]) }
+        i = i + 1
+    }
+    // bytes API length = 20
+    total = total + 1
+    if len(ripemd160_bytes(sbytes("abc"))) == 20 { pass = pass + 1 } else { println("FAIL bytes-len") }
+    // bytes API parity with hex for "abc" (first byte 0x8e)
+    total = total + 1
+    let bb = ripemd160_bytes(sbytes("abc"))
+    if bb[0] == 142 && bb[19] == 252 { pass = pass + 1 } else { println("FAIL bytes-parity") }
+
+    println("[ripemd160_test] KAT: " + str(pass) + "/" + str(total) + " asserts passed")
+    if pass == total { println("__HEXA_RIPEMD160_TEST__ PASS " + str(pass) + "/" + str(total)) } else { println("__HEXA_RIPEMD160_TEST__ FAIL " + str(pass) + "/" + str(total)) }
+}
