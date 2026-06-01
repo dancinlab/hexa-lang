@@ -274,3 +274,41 @@ pub fn qforge_h_apply(ham: PwHam, v: [float]) -> [float] {
     }
     return out
 }
+
+// ── GPU-GEMM apply (v ↦ H·v) routed through forge_dispatch_matmul ──────────────
+//   RFC-050 dispatch seam: marshals the dense H[n,n] and v[n,1] into farr
+//   handles, calls forge_dispatch_matmul(H, n, n, v, 1) → C[n,1] = H·v, then
+//   reads the result back into a native [float]. On a CUDA-built hexa this fires
+//   the cuBLAS GEMM (host-staged); on a no-GPU build it routes to the IDENTICAL
+//   hexa_farr_matmul FP64 baseline (byte-eq to forge_dispatch_matmul's CPU tier,
+//   FLAME F-RFC050-L1-DISPATCH-EQ precedent), which is element-eq to the scalar
+//   qforge_h_apply above (same Σ_j H[i,j]·v[j] in the same FP64 order). Returns
+//   [] on a length mismatch or a bad dispatch handle (caller falls back to the
+//   scalar path). This is the kernel QFORGE-PERF Lane A benches on a GPU pod.
+pub fn qforge_h_apply_forge(ham: PwHam, v: [float]) -> [float] {
+    let n = ham.n
+    if len(v) != n { return [] }
+    if n == 0 { return [] }
+    // Stage H[n,n] (row-major) and v[n,1] into farr handles.
+    let hA = farr_zeros(n * n)
+    let mut i = 0
+    while i < n * n { let _s = farr_set(hA, i, ham.h[i]) ; i = i + 1 }
+    let vB = farr_zeros(n)
+    let mut j = 0
+    while j < n { let _s = farr_set(vB, j, v[j]) ; j = j + 1 }
+    // GPU/CPU dispatch: C[n,1] = H[n,n] @ v[n,1].
+    let cC = forge_dispatch_matmul(hA, n, n, vB, 1)
+    if cC < 0 {
+        let _f1 = farr_free(hA)
+        let _f2 = farr_free(vB)
+        return []
+    }
+    // Read C[n,1] back into a native [float].
+    let mut out: [float] = []
+    let mut k = 0
+    while k < n { out.push(farr_get(cC, k)) ; k = k + 1 }
+    let _f1 = farr_free(hA)
+    let _f2 = farr_free(vB)
+    let _f3 = farr_free(cC)
+    return out
+}
