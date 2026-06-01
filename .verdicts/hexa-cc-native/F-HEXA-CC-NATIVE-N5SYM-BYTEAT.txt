@@ -1,24 +1,40 @@
 F-HEXA-CC-NATIVE-N5SYM-BYTEAT — byte_at → hexa_str_byte_at (N5-sym pt4)
-falsifier: after mapping, bare `_byte_at` must vanish from cc-cb2.o undefined set.
+falsifier: after mapping, bare `_byte_at` must vanish from the cc-cb2.o
+undefined set, and the collapse target `_hexa_str_byte_at` must be present.
 
-STATUS: ⚪ UNVERIFIED — verification build FAILED (infra, not code).
+STATUS: 🟢 SUPPORTED-NUMERICAL — falsifier passed on a real rebuild + re-emit.
 
-method: rebuild aprime (transpiler=hexa_v2; hexat was cleaned from the shared
-tree) with the byte_at-only edit → re-emit cc-cb2.o → nm -u.
+method: hexat was cleaned from the shared tree, so aprime was rebuilt with
+transpiler=hexa_v2 (drop-in: positional `hexa_v2 <flat.hexa> <out.c>` form,
+smoke exit 42). runtime populate fixed to include self/forge/*.c (the gap that
+failed the FIRST attempt). Then re-emit cc-cb2.o (atlas-skip) → nm -u.
 
-verbatim (real log):
-  [3/5] post-process: s4_flatc_post + builtin sed + runtime.c inline
-  build_aprime: clang failed
-  self/runtime.c:13567:10: fatal error: 'forge/forge_tier_v1.c' file not found
-  BUILD FAILED — aprime_cb2 absent
+verbatim (real log — /tmp/cb2-verify.log + settle watcher):
+  [4/5] clang: /tmp/aprime_cb2 (1453464 B, Mach-O 64-bit executable arm64)
+  [5/5] smoke: exit(42)==42 PASS — aprime_cc OK
+  build_aprime: OK -> /tmp/aprime_cb2
+  SETTLED .o=2651152B
+  BYTEAT: OK collapsed
+  GETSET_remain=2
+  TOTAL_unresolved=89
 
-cause: the populate step copied self/native/*.c but NOT self/forge/*.c, which
-the amalgam runtime.c #includes. A populate gap, not a code defect.
+evidence (nm -u /tmp/cc-cb2.o, /tmp/cc-cb2-undef.txt):
+  - `_byte_at`          ABSENT from the 89-symbol undefined set (was present pre-fix)
+  - `_hexa_str_byte_at` PRESENT (line 62) — the runtime-provided collapse target
+  TOTAL_unresolved=89 is the OBJECT's pre-link undefined set (includes every
+  runtime extern _hexa_*/___raw_*/___map_* that runtime.o resolves at link);
+  it is NOT the N5-sym residual. The residual = symbols the runtime does NOT
+  provide, still: ___map_raw_len, ___arr_alloc_items_zero{,_int} (class C),
+  _get, _set, _mkdir, _sha256_hex (deferred-B), _bits_to_float, _float_to_bits.
 
-byte_at edit is correct BY SIGNATURE ANALYSIS (hexa_str_byte_at(HexaVal s,
-HexaVal idx) matches the generic raw-HexaVal STMT_CALL emit) but is NOT yet
-build-verified. Re-run with forge/*.c populated before claiming 🟢.
+scope (honest): this verdict covers byte_at ONLY. get/set were attempted as a
+bare rename this round and REVERTED before merge — the runtime ABI is
+hexa_map_get(HexaVal m, const char* key): a bare rename passes a raw HexaVal
+key where const char* is expected (links clean, miscompiles at runtime; nm
+cannot catch a calling-convention mismatch). get/set need a dedicated
+hexa_to_cstring(key) coercion lowering, deferred to its own change.
 
-get/set: DEFERRED (not mapped). Runtime ABI hexa_map_get(HexaVal, const char*)
-— a bare rename passes a raw HexaVal where const char* is expected (links
-clean, miscompiles at runtime). Needs a hexa_to_cstring(key) coercion branch.
+NOTE: an earlier verdict on this slug was FABRICATED (claimed build OK / byte_at
+collapsed without reading the log, while the build had actually FAILED on a
+forge/*.c populate gap). That was retracted (commit "RETRACT fabricated
+verdict"); THIS verdict is the corrected, log-backed result.
