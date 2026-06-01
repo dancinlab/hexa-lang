@@ -18,6 +18,7 @@
 // Run:  ./hexa run --no-sentinel stdlib/qforge/screening_selftest.hexa
 // PASS: "qforge_screening_selftest PASS".
 use "stdlib/qforge/screening"
+use "stdlib/qforge/correlation"
 use "stdlib/qforge/dfpt_response"
 use "stdlib/qforge/dfpt"
 use "stdlib/alloc/math/eigen"
@@ -233,6 +234,37 @@ fn main() {
     let pg = qforge_phonons(dg, masses_chain, 1)
     fails = fails + _ck_close("(F) e2e acoustic sum rule ω(Γ)=0", pg.omega[0], 0.0, 1.0e-6)
     fails = fails + _ck_bool("(F) e2e n_acoustic_zero >= 1", pg.n_acoustic_zero >= 1, true)
+
+    // ── (G) mode 2 (Hartree + LDA x+c) wiring — PR#2402/PR2 상관 배선 ──────────
+    //   ΔV_scf^{xc=2}(r) − ΔV_scf^{xc=1}(r) = f_c[ρ(r)]·Δρ(r) (상관항만 차이).
+    //   1×1×4 그리드, ρ·Δρ 균일+비균일 혼합 → 상관항이 실제로 합산됨을 검증.
+    let NG = 4
+    let bb1 = [TWO_PI, 0.0, 0.0]
+    let bb2 = [0.0, TWO_PI, 0.0]
+    let bb3 = [0.0, 0.0, TWO_PI]
+    let rho_g = [0.30, 0.45, 0.60, 0.50]
+    let drho_g = [0.05, -0.03, 0.04, -0.02]
+    let v1 = qforge_dvscf_from_drho(drho_g, rho_g, 1, 1, NG, bb1, bb2, bb3,
+                                    qforge_xc_lda_exchange())
+    let v2 = qforge_dvscf_from_drho(drho_g, rho_g, 1, 1, NG, bb1, bb2, bb3,
+                                    qforge_xc_lda_xc())
+    fails = fails + _ck_bool("(G) mode2 returns N values", len(v2) == NG, true)
+    let mut gmax = 0.0
+    let mut gnz = false
+    let mut gi = 0
+    while gi < NG {
+        // (v2 − v1) 는 순수 상관항 f_c[ρ]·Δρ 여야 한다.
+        let want_c = qforge_fc_pw92(rho_g[gi]) * drho_g[gi]
+        let d = _abs((v2[gi] - v1[gi]) - want_c)
+        if d > gmax { gmax = d }
+        if _abs(want_c) > 1.0e-6 { gnz = true }
+        gi = gi + 1
+    }
+    fails = fails + _ck_close("(G) mode2−mode1 = f_c[ρ]·Δρ (PW92 상관)", gmax, 0.0, 1.0e-9)
+    fails = fails + _ck_bool("(G) correlation term non-trivial (≠0)", gnz, true)
+    // 미지 mode → clean 빈 반환 (날조 안 함).
+    let vbad = qforge_dvscf_from_drho(drho_g, rho_g, 1, 1, NG, bb1, bb2, bb3, 7)
+    fails = fails + _ck_bool("(G) unknown xc_mode → [] (no fabrication)", len(vbad) == 0, true)
 
     if fails == 0 { println("qforge_screening_selftest PASS") }
     else { println("qforge_screening_selftest FAIL — " + to_string(fails) + " case(s)") }
