@@ -19,18 +19,17 @@
 
 use "stdlib/codec/euc_kr_table.gen"
 
-let mut _EK_ENC: map = {}
-let mut _EK_DEC: map = {}
-let mut _EK_INIT = false
-
 fn _ek_hv(c: int) -> int {
     if c >= 48 && c <= 57 { return c - 48 }      // '0'-'9'
     if c >= 97 && c <= 102 { return c - 87 }     // 'a'-'f'
     return 0
 }
 
-fn _ek_ensure() {
-    if _EK_INIT { return }
+// Build the encode map (codepoint -> packed 2 bytes) fresh from the blob.
+// NOTE(perf): rebuilt per call — module-level mutable maps do not persist
+// across function boundaries in this build; a cached singleton is a follow-up.
+fn _ek_build_enc() -> map {
+    let mut m: map = {}
     let n = EUCKR_BLOB.len()
     let mut i = 0
     while i + 8 <= n {
@@ -40,12 +39,28 @@ fn _ek_ensure() {
             + _ek_hv(EUCKR_BLOB.byte_at(i + 3))
         let b0 = _ek_hv(EUCKR_BLOB.byte_at(i + 4)) * 16 + _ek_hv(EUCKR_BLOB.byte_at(i + 5))
         let b1 = _ek_hv(EUCKR_BLOB.byte_at(i + 6)) * 16 + _ek_hv(EUCKR_BLOB.byte_at(i + 7))
-        let packed = b0 * 256 + b1
-        _EK_ENC[str(cp)] = packed
-        _EK_DEC[str(packed)] = cp
+        m[str(cp)] = b0 * 256 + b1
         i = i + 8
     }
-    _EK_INIT = true
+    return m
+}
+
+// Build the decode map (packed 2 bytes -> codepoint) fresh from the blob.
+fn _ek_build_dec() -> map {
+    let mut m: map = {}
+    let n = EUCKR_BLOB.len()
+    let mut i = 0
+    while i + 8 <= n {
+        let cp = _ek_hv(EUCKR_BLOB.byte_at(i)) * 4096
+            + _ek_hv(EUCKR_BLOB.byte_at(i + 1)) * 256
+            + _ek_hv(EUCKR_BLOB.byte_at(i + 2)) * 16
+            + _ek_hv(EUCKR_BLOB.byte_at(i + 3))
+        let b0 = _ek_hv(EUCKR_BLOB.byte_at(i + 4)) * 16 + _ek_hv(EUCKR_BLOB.byte_at(i + 5))
+        let b1 = _ek_hv(EUCKR_BLOB.byte_at(i + 6)) * 16 + _ek_hv(EUCKR_BLOB.byte_at(i + 7))
+        m[str(b0 * 256 + b1)] = cp
+        i = i + 8
+    }
+    return m
 }
 
 // --- inlined UTF-8 (self-contained, no stdlib/codec/utf8 dependency) ---
@@ -96,7 +111,7 @@ fn _ek_cps_str(cps: [int]) -> string {
 // Encode a string to EUC-KR bytes. Returns [] if any char is not in the
 // two-byte KS X 1001 set (and not ASCII).
 pub fn euc_kr_encode(s: string) -> [int] {
-    _ek_ensure()
+    let enc = _ek_build_enc()
     let cps = _ek_str_cps(s)
     let mut out: [int] = []
     let mut i = 0
@@ -107,8 +122,8 @@ pub fn euc_kr_encode(s: string) -> [int] {
             out = out + [cp]
         } else {
             let k = str(cp)
-            if !_EK_ENC.has(k) { return [] }
-            let packed = _EK_ENC[k]
+            if !enc.has(k) { return [] }
+            let packed = enc[k]
             out = out + [(packed / 256) & 0xFF, packed & 0xFF]
         }
     }
@@ -117,7 +132,7 @@ pub fn euc_kr_encode(s: string) -> [int] {
 
 // Decode EUC-KR bytes to a string. Returns "" on a malformed lead/trail pair.
 pub fn euc_kr_decode(b: [int]) -> string {
-    _ek_ensure()
+    let dec = _ek_build_dec()
     let mut cps: [int] = []
     let mut i = 0
     let n = len(b)
@@ -130,8 +145,8 @@ pub fn euc_kr_decode(b: [int]) -> string {
             if i + 1 >= n { return "" }
             let trail = b[i + 1] & 0xFF
             let k = str(lead * 256 + trail)
-            if !_EK_DEC.has(k) { return "" }
-            cps = cps + [_EK_DEC[k]]
+            if !dec.has(k) { return "" }
+            cps = cps + [dec[k]]
             i = i + 2
         }
     }
