@@ -47,6 +47,45 @@ done
 cd "$REPO" || { echo "build_aprime: bad repo '$REPO'" >&2; exit 1; }
 [ -f compiler/main.hexa ] || { echo "build_aprime: no compiler/main.hexa under $REPO" >&2; exit 1; }
 [ -z "$HEXA_V2" ] && HEXA_V2="$REPO/self/native/hexat"
+
+# ── stage 0: regen (clean-checkout self-build) ─────────────────────
+# Make this recipe self-contained on a fresh `.c=0` checkout. The two
+# inputs the pipeline assumes — the amalgam self/runtime.c (stage-3 inline
+# + stage-5 smoke link) and the transpiler hexat (stage-2 / HEXA_V2) — are
+# GENERATED, .gitignore'd artifacts (absent on a clean clone). STAGE-0
+# regenerates them from tracked sources using the SAME mechanism the
+# release/nobaseline CI verifies (BUILDFLOOR M7):
+#   restore_frozen_seeds -> stage_resolve_runtime_a (runtime_core.c emitter
+#   regen + SSOT reconcile + build runtime.a) -> stage_prebuild_hexat.
+# IDEMPOTENT: skip entirely when both artifacts are already fresh, so a
+# warm tree (or a re-run) is a no-op and the recipe stays byte-stable.
+if [ -x "$HEXA_V2" ] && [ -f self/runtime.c ]; then
+    echo "  [0/5] regen: SKIP — hexat + self/runtime.c already present (warm tree)"
+else
+    echo "  [0/5] regen: clean checkout — restoring seeds + building hexat from SSOT"
+    # STAGE-0 toolchain env (mirrors release CI Stage 0b contract).
+    export CC="${CC:-clang}"
+    export LIBS="${LIBS:--lm}"
+    export CFLAGS_COMMON="${CFLAGS_COMMON:--O2 -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs}"
+    # 0a: restore frozen bootstrap seeds (self/runtime.c + #include fragments
+    #     + self/native/hexa_cc.c) into the working tree (uncommitted).
+    bash tool/restore_frozen_seeds || { echo "build_aprime: STAGE-0 restore_frozen_seeds failed" >&2; exit 1; }
+    # 0b: resolve build/runtime.a — regenerates self/runtime_core.c from its
+    #     emitter SSOT (self/runtime_core_emit.hexa) + reconciles runtime.c
+    #     SSOT dups, then compiles runtime.a from source (seeds-present path).
+    bash tool/stage_resolve_runtime_a || { echo "build_aprime: STAGE-0 stage_resolve_runtime_a failed" >&2; exit 1; }
+    # 0c: build build/hexat (self-hosted transpiler) from hexa_cc.c + runtime.a.
+    HEXA_PREBUILT_RUNTIME="$REPO/build/runtime.a" bash tool/stage_prebuild_hexat \
+        || { echo "build_aprime: STAGE-0 stage_prebuild_hexat failed" >&2; exit 1; }
+    # 0d: place the transpiler where the default HEXA_V2 resolves it
+    #     (self/native/hexat). build/hexat is the canonical STAGE-0 output.
+    if [ ! -x "$HEXA_V2" ] && [ -x build/hexat ]; then
+        mkdir -p "$(dirname "$HEXA_V2")"
+        cp build/hexat "$HEXA_V2"; chmod +x "$HEXA_V2"
+    fi
+    echo "  [0/5] regen: runtime.c=$( [ -f self/runtime.c ] && wc -l < self/runtime.c || echo MISSING )L · hexat=$( [ -x "$HEXA_V2" ] && wc -c < "$HEXA_V2" || echo MISSING )B"
+fi
+
 [ -x "$HEXA_V2" ] || { echo "build_aprime: hexat missing/not-executable: $HEXA_V2" >&2; exit 1; }
 
 TMP="$(mktemp -d -t aprime_build.XXXXXX)"
@@ -120,6 +159,27 @@ sed -i.bak3 '1i\
 #define HEXA_HAS_HEXA_RT_STDLIB 1
 ' "$APPOST"
 rm -f "$APPOST.bak3"
+# TEMP: remove once B2 emitter fix lands.
+# B2 rt_fs gate bug: with HEXA_HAS_HEXA_RT_STDLIB set (above) the inlined
+# runtime.c hits a `#else` branch that externs rt_fs_append_atomic/stat/
+# rotate_if_over away, but builtin-init still takes their address → clang
+# "Undefined symbols". The proper fix puts the failure-default bodies in
+# the runtime_core.c emitter SSOT (self/runtime_core_emit.hexa); until that
+# lands, the STAGE-0-regenerated runtime_core.c lacks them. Append the 3
+# failure-default stubs (byte-equivalent to the !HEXA_HAS_HEXA_RT_STDLIB
+# bodies) ONLY when runtime_core.c does not already define them — so a tree
+# that already carries the B2 fix is a no-op (no double-definition).
+if ! grep -q 'HexaVal rt_fs_append_atomic(HexaVal path, HexaVal data) {' self/runtime_core.c 2>/dev/null; then
+    cat >> "$APPOST" <<'RTFS'
+/* TEMP B2 link-fill (remove once self/runtime_core_emit.hexa emits these). */
+#ifndef HEXA_RT_SELFEMIT
+HexaVal rt_fs_append_atomic(HexaVal path, HexaVal data) { (void)path; (void)data; return hexa_int(-1); }
+HexaVal rt_fs_stat(HexaVal path) { (void)path; return hexa_void(); }
+HexaVal rt_fs_rotate_if_over(HexaVal path, HexaVal max_bytes, HexaVal keep) { (void)path; (void)max_bytes; (void)keep; return hexa_int(0); }
+#endif
+RTFS
+    echo "  [3/5] rt_fs link-fill: appended 3 B2 failure-default stubs (TEMP)"
+fi
 echo "  [3/5] post-process: s4_flatc_post + builtin sed + runtime.c inline"
 
 # ── stage 4: clang ─────────────────────────────────────────────────
