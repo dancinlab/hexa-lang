@@ -1408,8 +1408,14 @@ fn _builtin_runtime_sym(name: string) -> string {
     // N5-sym pt8: mkdir → hexa_mkdir runtime wrapper (byte-eq w/ C-path inline
     // hexa_bool(mkdir(HX_STR(p),0755)==0)); bare mkdir collides with libc mkdir.
     if name == "mkdir"         { return "hexa_mkdir" }
-    // STILL DEFERRED: `__arr_alloc_items_zero{,_int}` — governance-blocked (the
-    // fix needs a s4_flatc_post.py edit, but this repo bans .py authoring).
+    // N5-sym arr_alloc (.hexa-only): the flat compiler calls __arr_alloc_items_zero
+    // {,_int}, which s4_flatc_post.py injects as `static` into the aprime build only
+    // (invisible to the SEEDS runtime.a the native object links). Editing s4 is .py-
+    // banned, so map to NEW external leaf fns hexa_arr_zeros_leaf{,_int} (added to
+    // runtime_core_emit.hexa — verbatim s4 bodies, in runtime.a). New names → no
+    // conflict with the s4 static in the aprime TU; byte-eq identical bodies.
+    if name == "__arr_alloc_items_zero"     { return "hexa_arr_zeros_leaf" }
+    if name == "__arr_alloc_items_zero_int" { return "hexa_arr_zeros_leaf_int" }
     // Low-level memory / pointer builtins — name -> runtime symbol.
     // Authoritative mapping mirrored from self/codegen_c2.hexa §G5/B3.
     // All take/return HexaVal pairs so the generic STMT_CALL emit path
