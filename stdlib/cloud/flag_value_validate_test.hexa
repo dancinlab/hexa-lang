@@ -18,6 +18,10 @@
 //   provider-valid → `_flag_val --provider vast`         → vast
 //   provider-absent→ `_flag_val` absent                  → default(runpod)
 //   valid-combo    → `--port 22 --insecure --identity k` → full opts, no error
+//   copy-port-trailing → `remote local --port N` (@L7 LIVE bug)  → (remote,local) + -p N
+//   copy-port-between  → `remote --port N local`              → (remote,local) + -p N
+//   copy-port-leading  → `--port N --insecure remote local`   → (remote,local) + opts
+//   copy-no-flags      → `remote local`                       → (remote,local), unchanged
 
 // ── functions under test (VERBATIM from stdlib/cloud/cloud_cli.hexa) ──
 
@@ -83,6 +87,47 @@ fn _flag_val(av: [str], start: int, key: str, dflt: str) -> str {
     return dflt
 }
 
+// ── copy-verb positional collector (VERBATIM from cloud_cli.hexa — @L7) ──
+fn _copy_is_value_flag(t: str) -> int {
+    if t == "--port" { return 1 }
+    if t == "--identity" { return 1 }
+    return 0
+}
+
+fn _copy_is_bool_flag(t: str) -> int {
+    if t == "--insecure" { return 1 }
+    if t == "--recursive" { return 1 }
+    if t == "-r" { return 1 }
+    if t == "--resume" { return 1 }
+    if t == "--verify-sha" { return 1 }
+    return 0
+}
+
+fn _copy_positionals(av: [str], start: int) -> [str] {
+    let mut out = []
+    let mut i = start
+    while i < len(av) {
+        let t = av[i]
+        if t == "--" {
+            i = i + 1
+            while i < len(av) {
+                out.push(av[i])
+                i = i + 1
+            }
+            return out
+        }
+        if _copy_is_value_flag(t) == 1 {
+            i = i + 2
+        } else if _copy_is_bool_flag(t) == 1 {
+            i = i + 1
+        } else {
+            out.push(t)
+            i = i + 1
+        }
+    }
+    return out
+}
+
 // ── harness ──
 
 fn _print_opts(label: str, opts: [str]) {
@@ -144,6 +189,45 @@ fn main() {
         let av = ["--port", "22", "--insecure", "--identity", "/k/id", "--", "echo", "hi"]
         let opts = _ssh_opts_cli(av, 0)
         _print_opts("OK", opts)
+    } else if mode == "copy-port-trailing" {
+        // @L7: `copy-from <remote> <local> --port 11118` — the LIVE bug shape.
+        // Positionals must be (remote, local); --port must NOT be read as src.
+        let av = ["/workspace/result.json", "./result.json", "--port", "11118"]
+        let pos = _copy_positionals(av, 0)
+        if len(pos) == 2 && pos[0] == "/workspace/result.json" && pos[1] == "./result.json" {
+            // --port itself must parse as a flag through the ssh-opts scanner.
+            let opts = _ssh_opts_cli(av, 0)
+            _print_opts("OK", opts)
+        } else {
+            _print_opts("WRONG-positionals", pos)
+        }
+    } else if mode == "copy-port-between" {
+        // --port placed BETWEEN the two positionals — still recovers (remote, local).
+        let av = ["/workspace/r.json", "--port", "11118", "./r.json"]
+        let pos = _copy_positionals(av, 0)
+        if len(pos) == 2 && pos[0] == "/workspace/r.json" && pos[1] == "./r.json" {
+            _print_opts("OK", _ssh_opts_cli(av, 0))
+        } else {
+            _print_opts("WRONG-positionals", pos)
+        }
+    } else if mode == "copy-port-leading" {
+        // --port BEFORE the positionals (after host) — flags-anywhere.
+        let av = ["--port", "11118", "--insecure", "/workspace/r.json", "./r.json"]
+        let pos = _copy_positionals(av, 0)
+        if len(pos) == 2 && pos[0] == "/workspace/r.json" && pos[1] == "./r.json" {
+            _print_opts("OK", _ssh_opts_cli(av, 0))
+        } else {
+            _print_opts("WRONG-positionals", pos)
+        }
+    } else if mode == "copy-no-flags" {
+        // plain positionals, no flags — unchanged behavior.
+        let av = ["./train.py", "/workspace/train.py"]
+        let pos = _copy_positionals(av, 0)
+        if len(pos) == 2 && pos[0] == "./train.py" && pos[1] == "/workspace/train.py" {
+            println("OK no-flags")
+        } else {
+            _print_opts("WRONG-positionals", pos)
+        }
     } else {
         println("unknown case: " + mode)
         exit(1)
