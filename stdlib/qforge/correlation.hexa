@@ -1,0 +1,140 @@
+// HEXA Standard Library — qforge/correlation
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// QFORGE XC 완성 — LDA 상관(correlation) 에너지/전위 (screening.hexa 교환-만 보완).
+//   screening.hexa 는 Hartree + LDA-교환(Slater)만 구현했고 상관항을 후속으로
+//   비워 두었다(migration gate blocker #1, inbox/patches/qforge-correlation-xc.md).
+//   본 brick 이 균질전자가스(HEG, Ceperley-Alder) 상관 에너지의 두 정준
+//   parametrization — PZ81 · PW92 — 를 closed-form 으로 채운다(spin-unpolarized).
+//
+// ── 단위/규약 ────────────────────────────────────────────────────────────────
+//   Hartree 원자단위. 밀도 ρ → Wigner-Seitz 반경 r_s = (3/(4π ρ))^{1/3}.
+//   ε_c(r_s) = 전자당 상관에너지(Ha). 상관전위:
+//     V_c = ε_c − (r_s/3)·(dε_c/dr_s)          (spin-unpolarized, n·dε_c/dn 형)
+//   유도: V_c = d(ρ ε_c)/dρ = ε_c + ρ·dε_c/dρ, 그리고 dρ/dr_s = −3ρ/r_s 이므로
+//         ρ·dε_c/dρ = −(r_s/3)·dε_c/dr_s.
+//
+// ── PZ81 (Perdew-Zunger 1981, Phys. Rev. B 23, 5048) — spin-unpolarized ──────
+//   r_s ≥ 1:  ε_c = γ / (1 + β₁√r_s + β₂ r_s)
+//             V_c = ε_c · (1 + (7/6)β₁√r_s + (4/3)β₂ r_s) / (1 + β₁√r_s + β₂ r_s)
+//             γ=−0.1423, β₁=1.0529, β₂=0.3334  (unpolarized)
+//   r_s < 1:  ε_c = A ln r_s + B + C r_s ln r_s + D r_s
+//             V_c = A ln r_s + (B − A/3) + (2/3)C r_s ln r_s + (1/3)(2D − C) r_s
+//             A=0.0311, B=−0.048, C=0.0020, D=−0.0116  (unpolarized)
+//   (V_c 형은 PZ81 부록의 닫힌형 — 손유도와 일치, 🔵.)
+//
+// ── PW92 (Perdew-Wang 1992, Phys. Rev. B 45, 13244) — spin-unpolarized ───────
+//   G(r_s) = −2A(1+α₁ r_s)·ln(1 + 1/(2A·Q1)),  Q1 = β₁√r_s+β₂ r_s+β₃ r_s^{3/2}+β₄ r_s²
+//   ε_c = G(r_s).  V_c = ε_c − (r_s/3)·dε_c/dr_s,  dε_c/dr_s 는 아래 closed-form.
+//   A=0.031091, α₁=0.21370, β₁=7.5957, β₂=3.5876, β₃=1.6382, β₄=0.49294.
+//
+// reuse (d19): log/sqrt/pow 은 컴파일러 내장(math builtin) — 재구현 금지.
+
+let _CORR_PI = 3.14159265358979323846
+
+// ── r_s(ρ) = (3/(4π ρ))^{1/3} ────────────────────────────────────────────────
+//   ρ<=0 → 0 (상관 없음 — caller 가 0 으로 처리).
+pub fn qforge_rs_from_rho(rho: float) -> float {
+    if rho <= 0.0 { return 0.0 }
+    let third = 1.0 / 3.0
+    return pow(3.0 / (4.0 * _CORR_PI * rho), third)
+}
+
+// ── PZ81 ε_c(r_s) (spin-unpolarized, Ha) ─────────────────────────────────────
+pub fn qforge_ec_pz81(rs: float) -> float {
+    if rs <= 0.0 { return 0.0 }
+    if rs >= 1.0 {
+        let g = -0.1423
+        let b1 = 1.0529
+        let b2 = 0.3334
+        let denom = 1.0 + b1 * sqrt(rs) + b2 * rs
+        return g / denom
+    }
+    // r_s < 1 (high-density log-expansion).
+    let a = 0.0311
+    let b = -0.048
+    let c = 0.0020
+    let d = -0.0116
+    let lr = log(rs)
+    return a * lr + b + c * rs * lr + d * rs
+}
+
+// ── PZ81 상관전위 V_c(r_s) (spin-unpolarized, Ha) ─────────────────────────────
+pub fn qforge_vc_pz81(rs: float) -> float {
+    if rs <= 0.0 { return 0.0 }
+    if rs >= 1.0 {
+        let g = -0.1423
+        let b1 = 1.0529
+        let b2 = 0.3334
+        let srs = sqrt(rs)
+        let denom = 1.0 + b1 * srs + b2 * rs
+        let numer = 1.0 + (7.0 / 6.0) * b1 * srs + (4.0 / 3.0) * b2 * rs
+        let ec = g / denom
+        return ec * numer / denom
+    }
+    let a = 0.0311
+    let b = -0.048
+    let c = 0.0020
+    let d = -0.0116
+    let lr = log(rs)
+    return a * lr + (b - a / 3.0) + (2.0 / 3.0) * c * rs * lr
+         + (1.0 / 3.0) * (2.0 * d - c) * rs
+}
+
+// ── PW92 ε_c(r_s) (spin-unpolarized, Ha) ─────────────────────────────────────
+//   G(r_s) = −2A(1+α₁ r_s)·ln(1 + 1/(2A·Q1)).
+pub fn qforge_ec_pw92(rs: float) -> float {
+    if rs <= 0.0 { return 0.0 }
+    let aa = 0.031091
+    let a1 = 0.21370
+    let b1 = 7.5957
+    let b2 = 3.5876
+    let b3 = 1.6382
+    let b4 = 0.49294
+    let srs = sqrt(rs)
+    let q1 = b1 * srs + b2 * rs + b3 * rs * srs + b4 * rs * rs
+    let arg = 1.0 + 1.0 / (2.0 * aa * q1)
+    return -2.0 * aa * (1.0 + a1 * rs) * log(arg)
+}
+
+// ── PW92 dε_c/dr_s (closed-form analytic derivative) ─────────────────────────
+//   ε_c = −2A(1+α₁ r_s)·L,  L = ln(1 + 1/(2A Q1)).
+//   dε_c/dr_s = −2A α₁ L − 2A(1+α₁ r_s)·dL/dr_s.
+//   dL/dr_s = −(1/(2A Q1²)) / (1 + 1/(2A Q1)) · dQ1/dr_s
+//           = −Q1' / (2A Q1² + Q1)     [정리: 1/(1+1/(2A Q1)) = 2A Q1/(2A Q1+1)]
+//   dQ1/dr_s = β₁/(2√r_s) + β₂ + (3/2)β₃√r_s + 2β₄ r_s.
+pub fn qforge_dec_drs_pw92(rs: float) -> float {
+    if rs <= 0.0 { return 0.0 }
+    let aa = 0.031091
+    let a1 = 0.21370
+    let b1 = 7.5957
+    let b2 = 3.5876
+    let b3 = 1.6382
+    let b4 = 0.49294
+    let srs = sqrt(rs)
+    let q1 = b1 * srs + b2 * rs + b3 * rs * srs + b4 * rs * rs
+    let dq1 = b1 / (2.0 * srs) + b2 + 1.5 * b3 * srs + 2.0 * b4 * rs
+    let arg = 1.0 + 1.0 / (2.0 * aa * q1)
+    let ll = log(arg)
+    // dL/dr_s = −dQ1 / (2A Q1² + Q1)
+    let dl = -1.0 * dq1 / (2.0 * aa * q1 * q1 + q1)
+    return -2.0 * aa * a1 * ll - 2.0 * aa * (1.0 + a1 * rs) * dl
+}
+
+// ── PW92 상관전위 V_c(r_s) = ε_c − (r_s/3)·dε_c/dr_s (spin-unpolarized, Ha) ────
+pub fn qforge_vc_pw92(rs: float) -> float {
+    if rs <= 0.0 { return 0.0 }
+    let ec = qforge_ec_pw92(rs)
+    let dec = qforge_dec_drs_pw92(rs)
+    return ec - (rs / 3.0) * dec
+}
+
+// ── 공개 helper: ρ → (ε_c, V_c) PW92 (front-end 배선용) ───────────────────────
+//   반환 [ε_c, V_c]. ρ<=0 → [0,0].
+pub fn qforge_ec_vc_pw92_from_rho(rho: float) -> [float] {
+    if rho <= 0.0 { return [0.0, 0.0] }
+    let rs = qforge_rs_from_rho(rho)
+    return [qforge_ec_pw92(rs), qforge_vc_pw92(rs)]
+}
