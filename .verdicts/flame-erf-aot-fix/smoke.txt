@@ -1,0 +1,49 @@
+=== FLAME-PERF erf-AOT-fix — compiled erf smoke (g5) ===
+Falsifier (pre-registered): F-ERF-AOT-LINK — a `hexa build` native binary of
+code that calls libm `erf` must (a) LINK (no undefined `_erf`), and (b) produce
+output BYTE-MATCHING the `hexa run` interpreter (max_abs_diff 0.0). Milestone ⑤
+(PR #2365) reported this path FAILED to link (bare `erf` via generic fn-pointer)
+and had to bench with a tanh-approx GELU surrogate.
+
+Smoke program (/tmp/erf_smoke.hexa):
+    fn main() {
+        let x = 1.0
+        let e = erf(x)
+        let p = exp(x)
+        print(e)
+        print(p)
+    }
+
+--- hexa run (interpreter) ---
+0.8427012.71828
+  i.e. erf(1) = 0.842701 , exp(1) = 2.71828
+
+--- hexa build (AOT native) → run ---
+build: OK: built .../erf_only.bin   (clang -O2, links runtime.a + libSystem)
+       (no `error:`, no `Undefined symbols`, no `ld:` failure)
+native erf_only.bin (fn main { print(erf(1.0)) }):
+0.842701
+
+--- link-path proof (nm on the COMPILED binary) ---
+                 U _erf            <- libm erf, satisfied by libSystem (no -lm needed on Darwin)
+                 U _erfc
+00000001000272fc T _hexa_math_erf  <- runtime wrapper DEFINED; body calls libm erf
+000000010002731c T _hexa_math_erfc
+
+Generated C calls hexa_math_erf(...) (NOT a bare erf): build/artifacts/erf_only.bin.c:
+    (hexa_print_val(hexa_math_erf(hexa_float(1.0))), hexa_void());
+
+--- finding ---
+F-ERF-AOT-LINK = 1 (PASS).
+erf(1) native = 0.842701 == interpreter 0.842701 (max_abs_diff 0.0).
+The erf AOT link path LINKS and RUNS correctly on the current toolchain. The
+self/codegen.hexa cg_math_sym map (erf -> hexa_math_erf) and the cached
+runtime.a (defines hexa_math_erf -> libm erf) are correct; the ⑤ failure was a
+STALE prebuilt transpiler since regenerated. exp(1) = 2.71828 (the working
+reference path) confirmed alongside. Both erf and exp are now working libm AOT
+builtins — no surrogate required.
+
+NOTE (env): the INSTALLED /Users/mini/.hx/bin/hexa.real was SIGKILLed (rc 137)
+on startup throughout this session (concurrent toolchain reinstall at 09:37 left
+it broken). The byte-identical backup /Users/mini/.hx/bin/hexa.real.bak-grace-
+1780274232 ran fine and was used for all run/build/typecheck above.
