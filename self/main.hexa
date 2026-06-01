@@ -1202,6 +1202,111 @@ fn os_clang_ldflags() {
     return base
 }
 
+// ── d768 F-RFC046 fix — opt-in CUDA/forge GPU link path ──────
+// ROOT CAUSE (d768 recovery 2026-06-02): `hexa run <flame_program>` linked
+// only `-lm -lpthread`, never `-DHEXA_CUDA` / cuBLAS / the nvcc'd
+// runtime_cuda.o. So PR #2472's forge FP64-conv→cuBLAS dispatch
+// (hexa_farr_matmul_gpu) ALWAYS took the CPU fallback → measured GPU
+// util PEAK=0% MEAN=0%. #2472 is necessary but not sufficient; the
+// host-side link was the real bottleneck.
+//
+// This helper decides whether the native clang build should engage the
+// CUDA path, by 3 rules (most-robust / complete-axis):
+//   1. EXPLICIT OVERRIDE — `--no-cuda` (or env HEXA_NO_CUDA=1) forces OFF;
+//      `--cuda` (or env HEXA_CUDA_LINK=1) forces ON-intent.
+//   2. AUTO-DETECT — when no explicit override, link CUDA iff the
+//      transpiled C uses a forge/flame device op (`forge_dispatch_matmul`
+//      or a `*_matmul_gpu` symbol — present only when the program actually
+//      drives the GPU dispatch).
+//   3. TOOLKIT GATE — even when wanted, fall back to CPU (return "") with
+//      a CLEAR log unless BOTH nvcc and libcublas are present. NEVER
+//      silently CPU-fall back when CUDA was explicitly requested without a
+//      toolkit — log the reason every time.
+//
+// Returns a 3-field record-by-convention via module globals (hexa-v2 has no
+// tuple return in this codepath): sets _cuda_cflags / _cuda_rt_input /
+// _cuda_ldflags and returns "1" when the CUDA path engages, "0" otherwise.
+// On engage it ALSO nvcc-compiles self/cuda/runtime_cuda.c → a cached
+// runtime_cuda.o (emitting the .c first if the gitignored seed is absent).
+let mut _cuda_cflags = ""
+let mut _cuda_rt_input = ""
+let mut _cuda_ldflags = ""
+
+// CUDA toolkit root (honour $CUDA_HOME, else the canonical /usr/local/cuda).
+fn _cuda_home() {
+    let h = env("CUDA_HOME")
+    if len(h) > 0 && file_exists(h + "/bin/nvcc") { return h }
+    if file_exists("/usr/local/cuda/bin/nvcc") { return "/usr/local/cuda" }
+    return ""
+}
+
+// Source-level intent: does the transpiled C drive a forge/flame device op?
+fn _uses_forge_device_op(c_file) {
+    let probe = exec("grep -Eq 'forge_dispatch_matmul|[a-zA-Z_]*matmul_gpu' '" + c_file + "' 2>/dev/null && printf yes || printf no")
+    return probe == "yes"
+}
+
+// Decide + prepare the CUDA link. self_dir = the resolved self/ dir (has
+// runtime.c + cuda/). c_file = the transpiled user C (for auto-detect).
+// Sets the _cuda_* globals; returns "1" if CUDA engages, else "0".
+fn cuda_link_decision(self_dir, c_file) {
+    _cuda_cflags = ""
+    _cuda_rt_input = ""
+    _cuda_ldflags = ""
+    // (1) explicit override
+    let force_off = env_var("HEXA_NO_CUDA") == "1" || env_var("HEXA_RUN_NO_CUDA") == "1"
+    let force_on  = env_var("HEXA_CUDA_LINK") == "1" || env_var("HEXA_RUN_CUDA") == "1"
+    if force_off {
+        return "0"
+    }
+    let mut want = force_on
+    // (2) auto-detect (only when not explicitly forced on)
+    if !want { want = _uses_forge_device_op(c_file) }
+    if !want { return "0" }
+    // (3) toolkit gate — never silently fall back; always log the reason.
+    let cuda_root = _cuda_home()
+    if len(cuda_root) == 0 {
+        println("  [cuda] forge/flame device op detected (or --cuda requested) but no nvcc found (CUDA_HOME / /usr/local/cuda) — building CPU-only.")
+        return "0"
+    }
+    let has_cublas = exec("test -f '" + cuda_root + "/lib64/libcublas.so' -o -f '" + cuda_root + "/lib64/libcublas.dylib' && printf yes || printf no")
+    if has_cublas != "yes" {
+        println("  [cuda] nvcc present but libcublas missing under " + cuda_root + "/lib64 — building CPU-only.")
+        return "0"
+    }
+    // Resolve the device compute-capability (sm_XX) from the live GPU; fall
+    // back to sm_90 (Hopper/H100, the d768 target) when nvidia-smi is absent.
+    let mut dev_cc = exec("nvidia-smi --query-gpu=compute_cap --format=csv,noheader 2>/dev/null | head -1 | tr -d '. \\n'").trim()
+    if len(dev_cc) == 0 { dev_cc = "90" }
+    // Ensure the runtime_cuda.c seed exists (gitignored — emit on demand).
+    let cuda_c = self_dir + "/cuda/runtime_cuda.c"
+    if !file_exists(cuda_c) {
+        println("  [cuda] emitting runtime_cuda.c (seed absent)")
+        exec("hexa run '" + self_dir + "/cuda/runtime_cuda_emit.hexa' '" + cuda_c + "' 2>&1 | tail -2")
+    }
+    if !file_exists(cuda_c) {
+        println("  [cuda] runtime_cuda.c could not be produced — building CPU-only.")
+        return "0"
+    }
+    // nvcc-compile runtime_cuda.c → content-hash-cached runtime_cuda.<sha>.o.
+    let nvcc = cuda_root + "/bin/nvcc"
+    let cuda_o = self_dir + "/cuda/runtime_cuda." + dev_cc + ".o"
+    if !file_exists(cuda_o) {
+        println("  [cuda] nvcc compiling runtime_cuda.c for sm_" + dev_cc + " ...")
+        let nv = exec("'" + nvcc + "' -O2 -std=c++14 -DHEXA_CUDA -gencode arch=compute_" + dev_cc + ",code=sm_" + dev_cc + " -x cu -c '" + cuda_c + "' -o '" + cuda_o + "' 2>&1 | tail -8")
+        if !file_exists(cuda_o) {
+            println("  [cuda] nvcc compile FAILED — building CPU-only:")
+            println(nv)
+            return "0"
+        }
+    }
+    _cuda_cflags = "-DHEXA_CUDA -I '" + cuda_root + "/include' "
+    _cuda_rt_input = " '" + cuda_o + "'"
+    _cuda_ldflags = " -L'" + cuda_root + "/lib64' -lcublas -lcudart -ldl -lrt -lstdc++"
+    println("  [cuda] CUDA link ENGAGED — runtime built -DHEXA_CUDA, linking " + cuda_o + " + cuBLAS (sm_" + dev_cc + ")")
+    return "1"
+}
+
 // ── B20 / roadmap 55 Phase 1 — strict-FP clang flags ─────────
 // codegen emits `/* HEXA_STRICT_FP_TU: 1 */` at the top of generated
 // C when the translation unit contains any @strict_fp fn. Detect the
@@ -3053,6 +3158,16 @@ fn cmd_build(src, out, c_only, target, shared) {
     // as a second TU. Long-term (path 2 of the patch file), ship a precompiled
     // runtime.o and link against it; for now compile-from-source.
     let __runtime_c = __self_dir + "/runtime.c"
+    // d768 F-RFC046 fix: decide the CUDA/forge GPU link path BEFORE the
+    // runtime.o cache compile, so runtime.c's `#ifdef HEXA_CUDA` blocks
+    // compile in and the nvcc'd runtime_cuda.o + cuBLAS are linked.
+    // Native host only (no --shared, no cross --target). Sets _cuda_cflags
+    // / _cuda_rt_input / _cuda_ldflags; "0" = CPU-only (byte-identical to
+    // the legacy link). See cuda_link_decision() for the 3 rules.
+    let mut _cuda_on = "0"
+    if shared != "1" && len(target) == 0 {
+        _cuda_on = cuda_link_decision(__self_dir, c_file)
+    }
     // RFC 070 G7-A: --shared pass-through. `-fPIC -shared` instructs
     // clang to emit a position-independent shared library (ELF ET_DYN on
     // Linux, Mach-O MH_DYLIB on macOS). Falsifier F-A1 (PIC re-load at
@@ -3093,22 +3208,24 @@ fn cmd_build(src, out, c_only, target, shared) {
         let _rt_sha = exec("cat '" + __self_dir + "'/runtime*.c '" + __self_dir + "'/runtime*.h '" + __self_dir + "'/native/*.c '" + __self_dir + "'/native/*.h 2>/dev/null | shasum -a 1 2>/dev/null | cut -d' ' -f1").trim()
         if len(_rt_sha) > 0 {
             let _rt_cache = env("HOME") + "/.hexa-cache"
-            let _rt_cand = _rt_cache + "/runtime." + _rt_sha + ".o"
+            // d768 fix: a CUDA-built runtime.o (with HEXA_CUDA blocks) is a
+            // DIFFERENT object than the CPU one — key it separately so the
+            // two never collide in the content-hash cache.
+            let mut _rt_cuda_tag = ""
+            if _cuda_on == "1" { _rt_cuda_tag = ".cuda" }
+            let _rt_cand = _rt_cache + "/runtime." + _rt_sha + _rt_cuda_tag + ".o"
             if !file_exists(_rt_cand) {
                 exec("mkdir -p '" + _rt_cache + "' 2>/dev/null")
                 // GO M1: lazy GC probe (only triggers on cache miss to
                 // keep the hot `runtime.<sha>.o` hit path zero-cost).
                 _hexa_cache_gc(_rt_cache, _hexa_cache_cap_mb(), _hexa_cache_ttl_days())
                 let _rt_tmp = _rt_cand + ".tmp." + to_string(mono_ns())
-                let _rt_cc = "clang -O2 " + os_clang_cflags() + strict_fp_cflags(__runtime_c) + "-Wno-trigraphs -fbracket-depth=4096 -I '" + __self_dir + "' -c '" + __runtime_c + "' -o '" + _rt_tmp + "' 2>&1"
-                // Hardening (#2415 follow-up): the runtime.<sha>.o cache
-                // compile was the last raw `exec(_rt_cc)` clang on a popen pipe
-                // in the build path. Route it through _hexa_clang_capped (file
-                // redirect, no pipe) like the [2/2] link, so it cannot
-                // SIGPIPE-die under a fork-storm. (The phantom "binary not
-                // produced" symptom is fixed by the `hexa run` -> `hexa build`
-                // capture redirect below; this closes the matching latent
-                // pipe in the inner build for completeness.)
+                // MERGED: origin/main hardening (_hexa_clang_capped, #2415)
+                // + cuda-link branch _cuda_cflags prefix (346d68e8a). The
+                // CUDA runtime.o needs -DHEXA_CUDA + cuda includes (_cuda_cflags),
+                // AND must route through the capped clang so it cannot
+                // SIGPIPE-die under a fork-storm.
+                let _rt_cc = "clang -O2 " + _cuda_cflags + os_clang_cflags() + strict_fp_cflags(__runtime_c) + "-Wno-trigraphs -fbracket-depth=4096 -I '" + __self_dir + "' -c '" + __runtime_c + "' -o '" + _rt_tmp + "' 2>&1"
                 let _rt_r = _hexa_clang_capped(_rt_cc)
                 if file_exists(_rt_tmp) {
                     exec("mv -f '" + _rt_tmp + "' '" + _rt_cand + "' 2>/dev/null")
@@ -3126,7 +3243,12 @@ fn cmd_build(src, out, c_only, target, shared) {
     if _same_tu { _rt_input = "" }
     else if len(_rt_obj) > 0 { _rt_input = "'" + _rt_obj + "'" }
     if len(target) == 0 {
-        compile = "clang -O2 " + _shared_cflags + os_clang_cflags() + _strict + "-Wno-trigraphs -fbracket-depth=4096 -I '" + __self_dir + "' " + c_file + " " + _rt_input + " -o '" + tmp + "'" + os_clang_ldflags() + " 2>&1"
+        // d768 F-RFC046 fix: when CUDA engages, add -DHEXA_CUDA + cuda
+        // includes to the user/runtime compile, append the nvcc'd
+        // runtime_cuda.o, and link cuBLAS. _cuda_* are "" on the CPU path
+        // (byte-identical legacy link). _cuda_cflags also reaches runtime.c
+        // here on the source-fallback path (no runtime.o cache hit).
+        compile = "clang -O2 " + _cuda_cflags + _shared_cflags + os_clang_cflags() + _strict + "-Wno-trigraphs -fbracket-depth=4096 -I '" + __self_dir + "' " + c_file + " " + _rt_input + _cuda_rt_input + " -o '" + tmp + "'" + os_clang_ldflags() + _cuda_ldflags + " 2>&1"
     } else {
         let zt = target_zig_triple(target)
         if len(zt) == 0 {
