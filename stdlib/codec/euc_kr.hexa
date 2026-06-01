@@ -85,23 +85,14 @@ fn _ek_str_cps(s: string) -> [int] {
     return cps
 }
 
-// codepoints -> UTF-8 bytes -> string (local bytes_to_str via from_char_code).
+// codepoints -> string. from_char_code takes a CODEPOINT (not a byte), so
+// emit each codepoint directly — no manual UTF-8 byte assembly.
 fn _ek_cps_str(cps: [int]) -> string {
     let mut out = ""
     let mut i = 0
     while i < len(cps) {
-        let cp = cps[i]
+        out = out + to_string(from_char_code(cps[i]))
         i = i + 1
-        if cp < 0x80 {
-            out = out + to_string(from_char_code(cp & 0xFF))
-        } else if cp < 0x800 {
-            out = out + to_string(from_char_code((0xC0 + (cp / 64)) & 0xFF))
-            out = out + to_string(from_char_code((0x80 + (cp % 64)) & 0xFF))
-        } else {
-            out = out + to_string(from_char_code((0xE0 + (cp / 4096)) & 0xFF))
-            out = out + to_string(from_char_code((0x80 + ((cp / 64) % 64)) & 0xFF))
-            out = out + to_string(from_char_code((0x80 + (cp % 64)) & 0xFF))
-        }
     }
     return out
 }
