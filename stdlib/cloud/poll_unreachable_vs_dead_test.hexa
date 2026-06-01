@@ -1,0 +1,82 @@
+// @ci_gate — pure · network-free · deterministic (stdlib_selftest_aggregate --ci-gate)
+// stdlib/cloud/poll_unreachable_vs_dead_test.hexa — Bug-2 / @L6: cloud_poll
+// must tell a genuinely DEAD pid (ssh connected, kill -0 said no) apart from a
+// TRANSPORT OUTAGE (ssh exit 255 — refused / timeout / publickey / host-key).
+// The edge-genall failure was treating the outage as DEAD → verdict flipped
+// FAIL + pod torn down while it was actually ALIVE + billing.
+//
+// MIRROR-TEST (the established stdlib/cloud convention): cloud_poll_status_opts
+// makes a LIVE ssh call, so the pure classification — given the captured
+// (body, local_rc) — is mirrored VERBATIM here and exercised over synthetic
+// SshCapture-shaped inputs. Keep byte-identical to cloud.hexa:
+// cloud_poll_status_opts (the marker / local_rc decision); a drift makes this
+// test meaningless, so review both together.
+//
+// Run:   hexa run stdlib/cloud/poll_unreachable_vs_dead_test.hexa
+// PASS:  exits 0, prints "poll_unreachable_vs_dead_test PASS".
+
+let CLOUD_POLL_ALIVE = 1
+let CLOUD_POLL_DEAD = 0
+let CLOUD_POLL_UNREACHABLE = -1
+
+// mirror of cloud.hexa:cloud_poll_status_opts decision over (body, local_rc).
+// `pid` is encoded by the caller as >0 for the live-call cases; pid<=0 → DEAD
+// (the early guard) is asserted separately.
+fn _classify(body: str, local_rc: int, pid: int) -> int {
+    if pid <= 0 {
+        return CLOUD_POLL_DEAD
+    }
+    if body.index_of("__CLOUD_ALIVE__") >= 0 {
+        return CLOUD_POLL_ALIVE
+    }
+    if body.index_of("__CLOUD_DEAD__") >= 0 {
+        return CLOUD_POLL_DEAD
+    }
+    if local_rc == 255 {
+        return CLOUD_POLL_UNREACHABLE
+    }
+    return CLOUD_POLL_DEAD
+}
+
+fn _ck(name: str, got: int, want: int) {
+    if got != want {
+        println("  FAIL: " + name + " got " + to_string(got) + " want " + to_string(want))
+        exit(1)
+    }
+    println("  ok: " + name)
+}
+
+fn main() {
+    // ALIVE — ssh connected, kill -0 ok. local_rc 0.
+    _ck("alive marker", _classify("__CLOUD_ALIVE__\n", 0, 1910), CLOUD_POLL_ALIVE)
+
+    // DEAD — ssh connected, kill -0 said no. local_rc 0, DEAD marker present.
+    _ck("dead marker",  _classify("__CLOUD_DEAD__\n", 0, 1910), CLOUD_POLL_DEAD)
+
+    // UNREACHABLE — ssh exit 255, NO marker came back (the edge-genall case:
+    // wrong port → connection refused → false DEAD under the old boolean poll).
+    _ck("255 no marker → unreachable", _classify("", 255, 1910), CLOUD_POLL_UNREACHABLE)
+    // ssh client stderr text but still no marker + 255 → still UNREACHABLE
+    _ck("publickey 255 → unreachable", _classify("Permission denied (publickey).", 255, 1910), CLOUD_POLL_UNREACHABLE)
+    _ck("refused 255 → unreachable",   _classify("ssh: connect to host port: Connection refused", 255, 1910), CLOUD_POLL_UNREACHABLE)
+    _ck("timeout 255 → unreachable",   _classify("ssh: connect to host: Connection timed out", 255, 1910), CLOUD_POLL_UNREACHABLE)
+
+    // A non-255 exit with NO marker is treated DEAD (the shell ran but the pid
+    // probe produced nothing) — conservative, but never an outage misread.
+    _ck("non-255 no marker → dead", _classify("", 1, 1910), CLOUD_POLL_DEAD)
+
+    // CRITICAL: an ALIVE marker WINS even if local_rc looks odd — the remote
+    // shell answered, so the pid is alive regardless of the local code.
+    _ck("alive wins over rc", _classify("noise __CLOUD_ALIVE__ noise", 255, 1910), CLOUD_POLL_ALIVE)
+
+    // pid <= 0 short-circuits to DEAD before any ssh call.
+    _ck("pid 0 → dead",  _classify("__CLOUD_ALIVE__", 0, 0), CLOUD_POLL_DEAD)
+    _ck("pid -1 → dead", _classify("__CLOUD_ALIVE__", 0, -1), CLOUD_POLL_DEAD)
+
+    // The three codes are distinct (so the CLI can branch ALIVE/DEAD/UNREACHABLE).
+    _ck("codes distinct A!=D", CLOUD_POLL_ALIVE == CLOUD_POLL_DEAD, 0)
+    _ck("codes distinct A!=U", CLOUD_POLL_ALIVE == CLOUD_POLL_UNREACHABLE, 0)
+    _ck("codes distinct D!=U", CLOUD_POLL_DEAD == CLOUD_POLL_UNREACHABLE, 0)
+
+    println("poll_unreachable_vs_dead_test PASS")
+}

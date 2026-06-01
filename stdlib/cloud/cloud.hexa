@@ -493,6 +493,51 @@ fn cloud_poll(host: str, pid: int) -> int {
     return cloud_poll_opts(host, [], pid)
 }
 
+// ── 3-state poll (Bug-2 / @L6) ───────────────────────────────────────
+//
+// Poll status codes. The boolean `cloud_poll_opts` above cannot tell a
+// genuinely DEAD pid (ssh connected, `kill -0` said no) apart from a TRANSPORT
+// OUTAGE (ssh never reached the remote shell — exit 255: connection refused /
+// timeout / `Permission denied (publickey)` / changed host key). Treating the
+// outage as DEAD is exactly the edge-genall failure: a live, billing pod that
+// was momentarily unreachable got its verdict flipped FAIL + torn down. These
+// three codes let the CLI hold the verdict on UNREACHABLE.
+let CLOUD_POLL_ALIVE = 1        // ssh connected AND `kill -0` confirmed the pid
+let CLOUD_POLL_DEAD = 0         // ssh connected AND the pid is absent (real death)
+let CLOUD_POLL_UNREACHABLE = -1 // ssh transport never connected (255) — status UNKNOWN
+
+// cloud_poll_status_opts — like cloud_poll_opts but returns the 3-state code.
+// DEAD is reported ONLY when ssh actually connected (a __CLOUD_*__ marker came
+// back) and the pid was absent. A local ssh exit 255 with NO marker is an
+// UNREACHABLE transport outage, NOT a death — the caller must NOT flip a
+// verdict / tear down on it.
+fn cloud_poll_status_opts(host: str, ssh_opts: [str], pid: int) -> int {
+    if pid <= 0 {
+        return CLOUD_POLL_DEAD
+    }
+    let remote = "kill -0 " + str(pid) + " 2>/dev/null && echo __CLOUD_ALIVE__ || echo __CLOUD_DEAD__"
+    let cap = _ssh_capture_status(host, ssh_opts, remote)
+    if cap.body.index_of("__CLOUD_ALIVE__") >= 0 {
+        return CLOUD_POLL_ALIVE
+    }
+    // The remote shell ran and answered DEAD → a real death.
+    if cap.body.index_of("__CLOUD_DEAD__") >= 0 {
+        return CLOUD_POLL_DEAD
+    }
+    // No marker at all. exit 255 = transport never connected → UNREACHABLE.
+    // (A non-255 with no marker is treated DEAD: the shell ran but produced no
+    // marker, which only happens if the pid check itself could not run.)
+    if cap.local_rc == 255 {
+        return CLOUD_POLL_UNREACHABLE
+    }
+    return CLOUD_POLL_DEAD
+}
+
+// cloud_poll_status — cloud_poll_status_opts with no extra ssh flags.
+fn cloud_poll_status(host: str, pid: int) -> int {
+    return cloud_poll_status_opts(host, [], pid)
+}
+
 // ── terminal taxonomy (INBOX gap 1, 2026-05-28) ──────────────────────
 //
 // A terminal-marker match is NOT, by itself, success. A QE ph.x job that
