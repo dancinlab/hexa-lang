@@ -1,0 +1,109 @@
+// @ci_gate — deterministic · network-free · pure JSONL-text cross-run g5 gate
+//
+// qforge_telemetry_regress_selftest.hexa — QFORGE-PROCESS cross-run REGRESSION
+//   detector (qforge_telemetry_regress, stdlib/qforge/telemetry_regress.hexa)
+//   g5 gate. Given a BASELINE run's `.dft_telemetry.jsonl` and a CURRENT run's,
+//   it JOINs per stage and flags any stage whose wall (or peak rss) GREW beyond
+//   a percent threshold as REGRESSED (surfacing IMPROVED too) — the cross-run
+//   "improvement lever" the domain @goal calls for. Reuses qforge_telemetry_report.
+//
+// 검증 케이스 (all on fixture JSONL strings — NO pod, NO file, pure text):
+//  🔵 (A) >threshold stage FLAGGED REGRESSED + sub-threshold stage NOT flagged:
+//         baseline scf 100, current scf 200 (+100% > 30) → REGRESSED; relax
+//         100→110 (+10% < 30) → SAME (not flagged). Δwall% computed both.
+//  🔵 (B) IMPROVED surfaced: a stage that dropped past -threshold (200→100,
+//         -50% < -30) → IMPROVED, counted in n_improved.
+//  🔵 (C) NEW (current-only) + DROPPED (baseline-only): a stage in current with
+//         no baseline → NEW (no finite Δ); a baseline stage absent in current →
+//         DROPPED. Both surfaced, neither divides.
+//  🔵 (D) rss-null SKIP (d6): a stage with rss on one side but null on the other
+//         → has_rss=false, Δrss render shows `null`, NEVER fabricated; wall-Δ
+//         still computed. A stage with rss BOTH sides → real Δrss%.
+//  🔵 (E) ZERO-baseline-wall guard: baseline wall_s=0 for a stage → classified
+//         NEW (no divide-by-zero), never a REGRESSED/∞. + ranking Δ% desc:
+//         worst regression first, NEW/DROPPED sink to tail.
+//
+// Run (point HEXA_STDLIB_ROOT at THIS worktree's stdlib):
+//   HEXA_STDLIB_ROOT="$PWD/stdlib" hexa run --no-sentinel \
+//     stdlib/qforge/qforge_telemetry_regress_selftest.hexa
+// PASS: "qforge_telemetry_regress_selftest PASS".
+use "stdlib/qforge/telemetry_regress"
+
+fn _ck(name: str, ok: bool) -> int {
+    if ok { println("PASS " + name) ; return 0 }
+    println("FAIL " + name) ; return 1
+}
+// row lookup by stage label
+fn _row(rep: RegressReport, stage: str) -> RegressRow {
+    let mut i = 0
+    while i < len(rep.rows) {
+        if rep.rows[i].stage == stage { return rep.rows[i] }
+        i = i + 1
+    }
+    return RegressRow { stage: "", kind: "?", base_wall: -1, cur_wall: -1, dwall_pct: -999, has_dwall: false, base_rss: -1, cur_rss: -1, has_rss: false, drss_pct: -999 }
+}
+
+fn main() {
+    let mut fails = 0
+
+    // ── (A)+(B)+(D) JOIN, flag, improve, real-rss-Δ ─────────────────────────
+    //   baseline: relax 100/200000 · scf 100/400000 · lambda 200/50000
+    //   current : relax 110/210000 · scf 200/800000 · lambda 100/50000
+    //   threshold = 30%.
+    //     relax  +10% wall, +5% rss   → SAME (sub-threshold both)
+    //     scf   +100% wall, +100% rss → REGRESSED
+    //     lambda -50% wall            → IMPROVED
+    let base = "{\"ts\":1,\"stage\":\"relax\",\"event\":\"done\",\"wall_s\":100,\"rss_kb\":200000,\"exit\":0}\n{\"ts\":2,\"stage\":\"scf\",\"event\":\"done\",\"wall_s\":100,\"rss_kb\":400000,\"exit\":0}\n{\"ts\":3,\"stage\":\"lambda\",\"event\":\"done\",\"wall_s\":200,\"rss_kb\":50000,\"exit\":0}\n"
+    let cur = "{\"ts\":1,\"stage\":\"relax\",\"event\":\"done\",\"wall_s\":110,\"rss_kb\":210000,\"exit\":0}\n{\"ts\":2,\"stage\":\"scf\",\"event\":\"done\",\"wall_s\":200,\"rss_kb\":800000,\"exit\":0}\n{\"ts\":3,\"stage\":\"lambda\",\"event\":\"done\",\"wall_s\":100,\"rss_kb\":50000,\"exit\":0}\n"
+    let rep = qforge_telemetry_regress(base, cur, 30)
+
+    // (A) >threshold flagged, sub-threshold not flagged
+    fails = fails + _ck("(A) scf REGRESSED + Δwall=+100%", _row(rep, "scf").kind == "REGRESSED" && _row(rep, "scf").dwall_pct == 100)
+    fails = fails + _ck("(A) relax SAME (sub-threshold +10%)", _row(rep, "relax").kind == "SAME" && _row(rep, "relax").dwall_pct == 10)
+    fails = fails + _ck("(A) n_regressed=1", rep.n_regressed == 1)
+
+    // (B) IMPROVED surfaced
+    fails = fails + _ck("(B) lambda IMPROVED (-50%) + n_improved=1", _row(rep, "lambda").kind == "IMPROVED" && _row(rep, "lambda").dwall_pct == -50 && rep.n_improved == 1)
+
+    // (D) real Δrss% both sides + ranking worst-first
+    fails = fails + _ck("(D) scf has_rss + Δrss=+100%", _row(rep, "scf").has_rss && _row(rep, "scf").drss_pct == 100)
+    fails = fails + _ck("(D) rank: row[0]=scf (worst Δwall)", rep.rows[0].stage == "scf")
+    let rendered = qforge_telemetry_regress_render(rep)
+    fails = fails + _ck("(D) render flags 'REGRESSED'", rendered.contains("REGRESSED"))
+
+    // ── (C) NEW (current-only) + DROPPED (baseline-only) ────────────────────
+    //   baseline: scf 100 · gone 50    current: scf 120 · ph:q1 80
+    let base2 = "{\"ts\":1,\"stage\":\"scf\",\"event\":\"done\",\"wall_s\":100,\"rss_kb\":400000,\"exit\":0}\n{\"ts\":2,\"stage\":\"gone\",\"event\":\"done\",\"wall_s\":50,\"rss_kb\":10000,\"exit\":0}\n"
+    let cur2 = "{\"ts\":1,\"stage\":\"scf\",\"event\":\"done\",\"wall_s\":120,\"rss_kb\":420000,\"exit\":0}\n{\"ts\":2,\"stage\":\"ph:q1\",\"event\":\"done\",\"wall_s\":80,\"rss_kb\":300000,\"exit\":0}\n"
+    let rep2 = qforge_telemetry_regress(base2, cur2, 30)
+    fails = fails + _ck("(C) ph:q1 NEW (no baseline)", _row(rep2, "ph:q1").kind == "NEW" && _row(rep2, "ph:q1").has_dwall == false)
+    fails = fails + _ck("(C) gone DROPPED (no current)", _row(rep2, "gone").kind == "DROPPED" && _row(rep2, "gone").base_wall == 50 && _row(rep2, "gone").cur_wall == 0)
+    fails = fails + _ck("(C) n_new=1 n_dropped=1", rep2.n_new == 1 && rep2.n_dropped == 1)
+    // NEW/DROPPED sink to tail (no finite Δ); scf (finite) ranks ahead
+    fails = fails + _ck("(C) finite-Δ scf ranks before NEW/DROPPED tail", rep2.rows[0].stage == "scf")
+
+    // ── (D2) rss-null SKIP on one side (d6) ─────────────────────────────────
+    //   scf: baseline rss=400000, current rss=null → has_rss=false, render null,
+    //   wall-Δ STILL computed (+50%).
+    let base3 = "{\"ts\":1,\"stage\":\"scf\",\"event\":\"done\",\"wall_s\":100,\"rss_kb\":400000,\"exit\":0}\n"
+    let cur3 = "{\"ts\":1,\"stage\":\"scf\",\"event\":\"done\",\"wall_s\":150,\"rss_kb\":null,\"exit\":0}\n"
+    let rep3 = qforge_telemetry_regress(base3, cur3, 30)
+    fails = fails + _ck("(D2) scf rss-null one side → has_rss=false + Δwall=+50 REGRESSED", _row(rep3, "scf").has_rss == false && _row(rep3, "scf").dwall_pct == 50 && _row(rep3, "scf").kind == "REGRESSED")
+    let rendered3 = qforge_telemetry_regress_render(rep3)
+    fails = fails + _ck("(D2) render Δrss shows 'null' (d6 no fabrication)", rendered3.contains("null"))
+
+    // ── (E) ZERO-baseline-wall guard ────────────────────────────────────────
+    //   baseline scf wall=0 (e.g. a start-only/unpaired stage), current scf=80.
+    //   → NEW (no divide-by-zero), never REGRESSED/∞.
+    let base4 = "{\"ts\":1,\"stage\":\"scf\",\"event\":\"start\",\"wall_s\":0,\"rss_kb\":null,\"exit\":null}\n"
+    let cur4 = "{\"ts\":1,\"stage\":\"scf\",\"event\":\"done\",\"wall_s\":80,\"rss_kb\":300000,\"exit\":0}\n"
+    let rep4 = qforge_telemetry_regress(base4, cur4, 30)
+    fails = fails + _ck("(E) zero-baseline scf → NEW (no div-by-zero)", _row(rep4, "scf").kind == "NEW" && _row(rep4, "scf").has_dwall == false)
+
+    // empty/empty edge → no rows, all counts 0
+    let repe = qforge_telemetry_regress("", "", 30)
+    fails = fails + _ck("(E) empty/empty → 0 rows / 0 regressed", len(repe.rows) == 0 && repe.n_regressed == 0)
+
+    if fails == 0 { println("qforge_telemetry_regress_selftest PASS") }
+    else { println("qforge_telemetry_regress_selftest FAIL — " + to_string(fails) + " case(s)") }
+}
