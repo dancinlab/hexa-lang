@@ -30,6 +30,44 @@
 //   180-220 LoC ceiling. Statistical-significance harness (p50/p95/
 //   stddev/CI) deferred to v1.
 
+// Resolve the `hexa` launcher to spawn each bench under, WITHOUT a
+// foreign-host literal. Order: $PATH `hexa` (headless-canonical) →
+// $HX_HOME/bin/hexa → $HOME/.hx/bin/hexa. The bench fixtures honor the
+// `@resolver-bypass(...)` marker only via the user-stage wrapper, so we
+// prefer the wrapper on PATH before any absolute install path.
+fn _bench_hexa_bin() {
+    let onpath = exec("command -v hexa 2>/dev/null").trim()
+    if len(onpath) > 0 { return onpath }
+    let hx = env("HX_HOME")
+    if len(hx) > 0 { return hx + "/bin/hexa" }
+    let home = env("HOME")
+    if len(home) > 0 { return home + "/.hx/bin/hexa" }
+    // Last resort: bare `hexa`, resolved by the child shell's PATH.
+    return "hexa"
+}
+
+// Resolve the hexa-lang checkout root WITHOUT a foreign-host literal.
+// Order: $HEXA_LANG env → ascend from cwd to a repo sentinel
+// (self/hexa_full.hexa) → cwd. Headless-safe (env -i): the cwd-ascent
+// covers the no-env case; the final cwd fallback is never a foreign path.
+fn _bench_repo_root() {
+    let e = env("HEXA_LANG")
+    if len(e) > 0 { return e }
+    let mut cur = env("PWD")
+    if len(cur) == 0 { cur = exec("pwd").trim() }
+    let start = cur
+    let mut guard = 0
+    while len(cur) > 1 && guard < 64 {
+        let ok = exec("test -f '" + cur + "/self/hexa_full.hexa' && echo y || echo n").trim()
+        if ok == "y" { return cur }
+        let up = exec("dirname '" + cur + "'").trim()
+        if up == cur { break }
+        cur = up
+        guard = guard + 1
+    }
+    return start
+}
+
 fn parse_int_safe(s) {
     let r = to_int(s)
     if r < 0 { return 0 }
@@ -109,7 +147,7 @@ fn run_bench_once(bench_path) {
     // `hexa.real` from a parent under hexa-lang/tool/ gets sandboxed
     // by the watcher and fails with `syntax error: line 1` (popen
     // sees the binary as a script). The wrapper resolves cleanly.
-    let cmd = "/Users/ghost/.hx/bin/hexa run '" + bench_path + "' 2>&1; echo \"___RC=$?\""
+    let cmd = "'" + _bench_hexa_bin() + "' run '" + bench_path + "' 2>&1; echo \"___RC=$?\""
     let out = exec(cmd)
     return extract_rc_marker(out)
 }
@@ -195,8 +233,9 @@ fn main() {
         i = i + 1
     }
     if len(output) == 0 {
-        let mut hl = env_var("HEXA_LANG")
-        if len(hl) == 0 { hl = "/Users/ghost/core/hexa-lang" }
+        // Headless-safe: resolve repo root (env → cwd-ascent → cwd),
+        // NEVER a foreign-host literal.
+        let hl = _bench_repo_root()
         output = hl + "/state/perf/" + today_utc() + "_bench.jsonl"
     }
     let files = discover_bench_files(target, pattern)
