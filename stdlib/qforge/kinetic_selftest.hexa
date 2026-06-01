@@ -1,0 +1,117 @@
+// @ci_gate — deterministic · network-free · PW kinetic energy g5 gate
+//
+// qforge_kinetic_selftest.hexa — QFORGE front-end brick 2/5 (|k+G|²/2) g5 gate.
+//
+// In a plane-wave basis the kinetic operator is diagonal T_G = ½|k+G|² (Hartree).
+// With V≡0 this IS the Hamiltonian, so the exact eigenvalues are the free-
+// electron energies — a closed-form (🔵) anchor.
+//
+//   (A) T_G = ½|k+G|² entrywise vs hand-computed closed form (k=0 and k≠0) 🔵
+//   (B) free-electron: with V=0, H=T diagonal → eigenvalues = ½|k+G|², and the
+//       lowest is at the G closest to −k.                                  🔵
+//   (C) matrix-free apply (T ψ)_G = T_G ψ_G                                🔵
+//   (D) ⟨ψ|T|ψ⟩ = Σ T_G|ψ_G|² for a unit vector = T at that G             🔵
+//   (E) malformed (k≠3, gvecs not ×3, length mismatch) → []/sentinel      guard
+//
+// Run:  HEXA_LANG=. hexa run stdlib/qforge/kinetic_selftest.hexa
+// PASS: "qforge_kinetic_selftest PASS".
+use "stdlib/qforge/kinetic"
+
+fn _abs(x: float) -> float { if x < 0.0 { return -x } return x }
+fn _ck_close(name: str, got: float, want: float, eps: float) -> int {
+    if _abs(got - want) <= eps { println("PASS " + name + " (" + to_string(got) + ")") ; return 0 }
+    println("FAIL " + name + " — got " + to_string(got) + " want " + to_string(want)) ; return 1
+}
+fn _ck_true(name: str, cond: bool) -> int {
+    if cond { println("PASS " + name) ; return 0 }
+    println("FAIL " + name) ; return 1
+}
+
+fn main() {
+    let mut fails = 0
+
+    // G-grid: the 7 smallest cubic G-vectors (Γ and ±x,±y,±z) at spacing b=1.
+    let gvecs = [0.0, 0.0, 0.0,
+                 1.0, 0.0, 0.0,
+                 -1.0, 0.0, 0.0,
+                 0.0, 1.0, 0.0,
+                 0.0, -1.0, 0.0,
+                 0.0, 0.0, 1.0,
+                 0.0, 0.0, -1.0]
+    let ng = 7
+
+    // ══ (A) T_G = ½|k+G|² entrywise, k=0 ══════════════════════════════════
+    let k0 = [0.0, 0.0, 0.0]
+    let t0 = qforge_kinetic_diag(k0, gvecs)
+    fails = fails + _ck_true("(A) T length = nG", len(t0) == ng)
+    fails = fails + _ck_close("(A) T[Γ]=0", t0[0], 0.0, 1.0e-14)
+    fails = fails + _ck_close("(A) T[+x]=0.5", t0[1], 0.5, 1.0e-14)
+    fails = fails + _ck_close("(A) T[-z]=0.5", t0[6], 0.5, 1.0e-14)
+    let mut g = 0
+    while g < ng {
+        let gx = gvecs[g * 3]
+        let gy = gvecs[g * 3 + 1]
+        let gz = gvecs[g * 3 + 2]
+        let want = 0.5 * (gx * gx + gy * gy + gz * gz)
+        fails = fails + _ck_close("(A) T closed-form @G" + to_string(g), t0[g], want, 1.0e-14)
+        g = g + 1
+    }
+
+    // ══ (A') T_G with k≠0 ═════════════════════════════════════════════════
+    let kk = [0.3, -0.2, 0.1]
+    let tk = qforge_kinetic_diag(kk, gvecs)
+    g = 0
+    while g < ng {
+        let qx = kk[0] + gvecs[g * 3]
+        let qy = kk[1] + gvecs[g * 3 + 1]
+        let qz = kk[2] + gvecs[g * 3 + 2]
+        let want = 0.5 * (qx * qx + qy * qy + qz * qz)
+        fails = fails + _ck_close("(A') T[k≠0] @G" + to_string(g), tk[g], want, 1.0e-14)
+        g = g + 1
+    }
+
+    // ══ (B) free-electron: lowest eigenvalue at G closest to −k ═══════════
+    // k=(0.6,0,0): −k=(−0.6,0,0) → closest G is −x = (−1,0,0); |k+G|²=(−0.4)²=0.16
+    let kfe = [0.6, 0.0, 0.0]
+    let tfe = qforge_kinetic_diag(kfe, gvecs)
+    // find min entry index
+    let mut mi = 0
+    let mut mv = tfe[0]
+    let mut idx = 1
+    while idx < ng {
+        if tfe[idx] < mv { mv = tfe[idx] ; mi = idx }
+        idx = idx + 1
+    }
+    fails = fails + _ck_true("(B) lowest free-electron at −x G (idx 2)", mi == 2)
+    fails = fails + _ck_close("(B) lowest ε = ½·0.16 = 0.08", mv, 0.08, 1.0e-14)
+    // and at G=+x: ½(1.6)²=1.28
+    fails = fails + _ck_close("(B) ε(+x) = ½·1.6²", tfe[1], 1.28, 1.0e-14)
+
+    // ══ (C) matrix-free apply (Tψ)_G = T_G ψ_G ═══════════════════════════
+    let psi = [0.1, -0.2, 0.3, 0.0, 0.5, -0.4, 0.2]
+    let tp = qforge_kinetic_apply(t0, psi)
+    g = 0
+    while g < ng {
+        fails = fails + _ck_close("(C) (Tψ)@G" + to_string(g), tp[g], t0[g] * psi[g], 1.0e-14)
+        g = g + 1
+    }
+
+    // ══ (D) ⟨ψ|T|ψ⟩ for unit vector e_1 = T[+x] = 0.5 ═════════════════════
+    let e1 = [0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    let etk = qforge_kinetic_energy(t0, e1)
+    fails = fails + _ck_close("(D) ⟨e1|T|e1⟩ = 0.5", etk, 0.5, 1.0e-14)
+    // and a general vector = Σ T_G ψ_G²
+    let mut esum = 0.0
+    g = 0
+    while g < ng { esum = esum + t0[g] * psi[g] * psi[g] ; g = g + 1 }
+    fails = fails + _ck_close("(D) ⟨ψ|T|ψ⟩ = Σ T_G ψ_G²", qforge_kinetic_energy(t0, psi), esum, 1.0e-14)
+
+    // ══ (E) malformed guards ══════════════════════════════════════════════
+    fails = fails + _ck_true("(E) k≠3 → []", len(qforge_kinetic_diag([1.0, 2.0], gvecs)) == 0)
+    fails = fails + _ck_true("(E) gvecs not ×3 → []", len(qforge_kinetic_diag(k0, [1.0, 2.0])) == 0)
+    fails = fails + _ck_true("(E) apply mismatch → []", len(qforge_kinetic_apply(t0, [1.0, 2.0])) == 0)
+    fails = fails + _ck_true("(E) energy mismatch → -1", qforge_kinetic_energy(t0, [1.0]) == -1.0)
+
+    if fails == 0 { println("qforge_kinetic_selftest PASS") }
+    else { println("qforge_kinetic_selftest FAIL — " + to_string(fails) + " case(s)") }
+}
