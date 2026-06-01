@@ -1387,14 +1387,17 @@ fn _builtin_runtime_sym(name: string) -> string {
     // correctly-lowered sites, so this collapses the bare ref onto an
     // already-resolved symbol (0 new symbols, 0 miscompile risk).
     if name == "byte_at"       { return "hexa_str_byte_at" }
+    // N5-sym get/set: map to the HexaVal-keyed runtime wrappers (added in the
+    // same change to runtime_core_emit.hexa). The C-path lowers `m.get(k)` to
+    // hexa_map_get(m, hexa_to_cstring(k)) — a NESTED call the native obj-emit
+    // can't express, so it leaked bare get/set. hexa_map_get_v/hexa_map_set_v
+    // take HexaVal args (calling-convention-correct for the generic STMT_CALL
+    // emit) and apply hexa_to_cstring INTERNALLY — byte-eq IDENTICAL to the
+    // C-path (NOT __map_*_cstr_v, which uses HX_STR = string-only and would
+    // diverge on non-string keys). get=2-arg, set=3-arg, arities match.
+    if name == "get"           { return "hexa_map_get_v" }
+    if name == "set"           { return "hexa_map_set_v" }
     // STILL DEFERRED (unmapped-is-safer-than-mis-mapped — this file's policy):
-    // `get`/`set` map-methods CANNOT be a bare rename: the runtime ABI is
-    // hexa_map_get(HexaVal m, const char* key) — the key is a C STRING, and
-    // the C-path emits hexa_map_get(m, hexa_to_cstring(k)) to coerce it. A
-    // bare rename would pass the raw HexaVal key where a const char* is
-    // expected → links clean but miscompiles at runtime (HexaVal bits read as
-    // a pointer). Needs a dedicated lowering that wraps the key in
-    // hexa_to_cstring (cf. the index_of branch), deferred to its own change.
     // `mkdir` collides with libc mkdir (needs a hexa_mkdir wrapper),
     // `sha256_hex` target unconfirmed.
     // Low-level memory / pointer builtins — name -> runtime symbol.
