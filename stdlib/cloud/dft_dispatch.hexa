@@ -1834,6 +1834,55 @@ fn _dft_failure_is_walltime(out_text: str) -> int {
     return 0
 }
 
+// _dft_failure_is_corrupt_recover — PURE sub-classifier for a `__DFT_FAILED__`
+// el-ph stage: is the crash a CORRUPT phonon-recover state (SALVAGEABLE on the
+// SAME pod by recomputing only the bad+remaining q with start_q/recover=.false.)
+// rather than a GENUINE numerical/OOM/segfault fault (teardown/defer)?
+//
+// The class: the ORIGINAL run's teardown-kill interrupts ph.x mid-write, leaving
+// a per-q `_ph0/<prefix>.q_<N>/<prefix>.save` XML half-written (no closing tag).
+// A subsequent `recover=.true.` ph.x reads that partial XML and dies:
+//   `Bands found: reading from ./out/_ph0/<prefix>.q_N/` then
+//   `Reading xml data ... <prefix>.save/` → PARSE_ERR / 81 runParser → SIGABRT(6),
+// or `PARTIAL_EL_PHON not found` / `closing tag not found` / `cannot open file`.
+// The EARLIER completed q's (good nonzero `<prefix>.dynN`) are intact — only the
+// in-flight q's per-q `.save` is corrupt — so this is recoverable WITHOUT a fresh
+// SCF (the `<prefix>.save` ground state is valid; only the `_ph0/*.q_*` scratch is).
+//
+// This is DISTINCT from the walltime class (Maximum CPU time / max_seconds →
+// `_dft_failure_is_walltime`) and from a genuine numerical/OOM/segfault crash
+// (Error in routine / STOP [1-9] / NaN / Out of memory / Segmentation), which the
+// caller must STILL teardown/defer. The two FAILED sub-classifiers are mutually
+// ordered by the caller: walltime first (no teardown), then corrupt-recover
+// (salvage, no teardown), else genuine crash (teardown/defer). Returns 1 iff a
+// corrupt-recover signature is present, 0 otherwise. d19 reuse — a pure signature
+// set folded into the SAME `__DFT_FAILED__` taxonomy, no new oracle.
+//
+// GUARD: a walltime kill ALSO leaves a `STOP 1` and could co-occur with a stale
+// `_ph0` line, so walltime takes precedence at the call site (checked first).
+fn _dft_failure_is_corrupt_recover(out_text: str) -> int {
+    if out_text.contains("PARSE_ERR") {
+        return 1
+    }
+    if out_text.contains("runParser") {
+        return 1
+    }
+    if out_text.contains("PARTIAL_EL_PHON not found") {
+        return 1
+    }
+    if out_text.contains("closing tag not found") {
+        return 1
+    }
+    // `cannot open file` is only a corrupt-recover signature when it is reading a
+    // per-q phonon scratch (`_ph0/.../...save`); a bare `cannot open file` on a deck
+    // input (e.g. a missing pseudo) is a different fault, so require the `_ph0`
+    // co-signature to avoid misclassifying an unrelated open failure as salvageable.
+    if out_text.contains("cannot open file") && out_text.contains("_ph0") {
+        return 1
+    }
+    return 0
+}
+
 // _dft_self_resume_wrap — wrap a guarded LONG-RUNNING compute stage in a POD-SIDE
 // self-restart loop so a per-pod walltime kill is followed by an AUTOMATIC
 // recover-relaunch on the SAME pod — no controller `--resume` round-trip.

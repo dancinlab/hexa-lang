@@ -337,6 +337,49 @@ fn main() {
     _check("classify: empty stdout → NOT walltime (no recover signature)",
         _dft_failure_is_walltime(""), 0)
 
+    // ── corrupt phonon-recover sub-classifier (the salvage-not-teardown fix) ──
+    // A `__DFT_FAILED__` el-ph stage may be a CORRUPT recover state: the original
+    // run's teardown-kill left a per-q `_ph0/<prefix>.q_N/<prefix>.save` XML half-
+    // written, so a `recover=.true.` ph.x dies in PARSE_ERR/runParser/PARTIAL_EL_PHON/
+    // closing-tag. The completed q's (good `<prefix>.dynN`) are intact, so this is
+    // SALVAGEABLE on the same pod (start_q recompute) — distinct from walltime and
+    // from a genuine numerical/OOM/segfault crash (those still teardown/defer).
+    // _dft_failure_is_corrupt_recover MUST classify this class apart from BOTH.
+    let parse_err_out = "     Bands found: reading from ./out/_ph0/lah10.q_4/\n     Reading xml data from directory: ./out/_ph0/lah10.q_4/lah10.save/\n%%%%%%%%%%%%\nError in routine qexsd_readschema (1):\nPARSE_ERR\n%%%%%%%%%%%%\n    81 runParser\n"
+    _check("classify: PARSE_ERR/runParser (half-written .save) → corrupt-recover (SALVAGE)",
+        _dft_failure_is_corrupt_recover(parse_err_out), 1)
+    let partial_out = "     Calculation of q =    4\n     PARTIAL_EL_PHON not found\n     STOP 1\n"
+    _check("classify: 'PARTIAL_EL_PHON not found' → corrupt-recover (SALVAGE)",
+        _dft_failure_is_corrupt_recover(partial_out), 1)
+    let closing_out = "     reading ./out/_ph0/lah10.q_4/lah10.save/\n     closing tag not found\n"
+    _check("classify: 'closing tag not found' → corrupt-recover (SALVAGE)",
+        _dft_failure_is_corrupt_recover(closing_out), 1)
+    let cannot_open_phsave = "     cannot open file ./out/_ph0/lah10.q_4/lah10.save/data-file-schema.xml\n"
+    _check("classify: 'cannot open file' on a _ph0/*.save → corrupt-recover (SALVAGE)",
+        _dft_failure_is_corrupt_recover(cannot_open_phsave), 1)
+    // a bare 'cannot open file' WITHOUT a _ph0 co-signature is a different fault
+    // (e.g. a missing pseudopotential) — must NOT be misread as a salvageable recover.
+    let cannot_open_pseudo = "     cannot open file ./pseudo/La.upf\n     STOP 1\n"
+    _check("classify: 'cannot open file' on a deck input (no _ph0) → NOT corrupt-recover",
+        _dft_failure_is_corrupt_recover(cannot_open_pseudo), 0)
+    // the three OTHER FAILED classes (walltime / numerical / OOM / segfault) are NOT
+    // corrupt-recover — the salvage path must not steal them from teardown/defer.
+    _check("classify: walltime kill → NOT corrupt-recover (walltime path owns it)",
+        _dft_failure_is_corrupt_recover(walltime_out), 0)
+    _check("classify: 'Error in routine c_bands' numerical → NOT corrupt-recover (teardown/defer)",
+        _dft_failure_is_corrupt_recover(crash_out), 0)
+    let nan_out = "     Computing q = 2 of 8\n     stopping ...\n     NaN in the dynamical matrix\n"
+    _check("classify: NaN dynamical matrix → NOT corrupt-recover (numerical, teardown/defer)",
+        _dft_failure_is_corrupt_recover(nan_out), 0)
+    _check("classify: segfault → NOT corrupt-recover (teardown/defer)",
+        _dft_failure_is_corrupt_recover(segv_out), 0)
+    _check("classify: empty stdout → NOT corrupt-recover (no signature)",
+        _dft_failure_is_corrupt_recover(""), 0)
+    // disjointness: the corrupt-recover sample is NOT walltime, and the walltime
+    // sample is NOT corrupt-recover — the two FAILED sub-classes never both fire.
+    _check("disjoint: corrupt-recover sample is NOT walltime",
+        _dft_failure_is_walltime(parse_err_out), 0)
+
     // ── pod-side self-resume loop (walltime-kill → auto recover-relaunch) ──
     // The el-ph compute stage is wrapped in an `until DONE` bash loop so a per-pod
     // walltime kill is followed by an AUTOMATIC recover-relaunch on the SAME pod —
