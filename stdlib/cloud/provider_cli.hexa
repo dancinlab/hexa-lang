@@ -1,0 +1,167 @@
+// stdlib/cloud/provider_cli.hexa — `hexa cloud provider-cli <provider> -- <args...>`.
+//
+// THE PROBLEM THIS CLOSES: cloud-guard (commons g8) blocks the raw `vastai`
+// CLI so every provider op flows through `hexa cloud`. CLI-only conveniences
+// the REST `api` verb does not cover (interactive subcommands, provider
+// helpers) would then be unreachable WITHOUT an un-guarded raw `vastai`. This
+// verb proxies the provider's OWN cli (vastai / runpodctl) THROUGH the guarded
+// path, with the resolved credential injected, so the guard stays complete.
+//
+// REUSE (d19/d3 — no new binary discovery, no new cred path):
+//   binary — vast: _vastai_path() (the canonical resolver that also syncs the
+//            live key into the vastai config) · runpod: _runpodctl_path().
+//   key    — vast: the _vastai_path sync already authenticates the CLI from the
+//            live secret · runpod: RUNPOD_API_KEY exported into the child env
+//            from cloud_runpod_api_key() so runpodctl auths the same way.
+//
+// SAFETY (@L4 — the reason the guard exists): a registry-MUTATING subcommand
+// (create / destroy / remove / rm) must NOT silently drift the M5 registry.
+// Default = REFUSE + redirect to the registry-aware verb (rent / rm); the
+// raw mutating proxy runs only with --allow-mutate, after which `cloud
+// reconcile` re-syncs M5. Read subcommands (show / list / search / get …) run
+// freely. The mutating classifier (_pcli_is_mutating) is PURE for the selftest.
+//
+// HONESTY (@L2/d6): a MISSING binary is reported as MISSING-CLI (exit 127),
+// never faked. The child's exit code is propagated verbatim.
+
+use "stdlib/cloud/cloud"
+use "stdlib/cloud/vast"
+use "stdlib/cloud/runpod"
+
+// ── pure helpers (testable, no exec) ──────────────────────────────────
+
+// _pcli_known_provider — 1 iff vast|runpod. PURE.
+fn _pcli_known_provider(provider: str) -> int {
+    if provider == "vast" || provider == "runpod" { return 1 }
+    return 0
+}
+
+// _pcli_is_mutating — does this provider-cli argv MUTATE the pod set in a way
+// that would drift the M5 registry (@L4)? PURE. Looks at the FIRST non-flag
+// tokens for a known mutating verb. CONSERVATIVE — an unrecognized verb is
+// treated as read-only (it cannot create/destroy a tracked pod by our naming),
+// while the explicit create/destroy family is caught.
+//   vast    : create instance · destroy instance · stop/start instance · label
+//   runpod  : create pod · remove pod · rm · stop pod · start pod
+fn _pcli_is_mutating(args: [str]) -> int {
+    // collect the lower-cased non-flag tokens (the subcommand path).
+    let mut verbs = []
+    let mut i = 0
+    while i < len(args) {
+        let a = args[i]
+        if len(a) > 0 && a.substring(0, 1) != "-" {
+            verbs.push(a.to_lower())
+        }
+        i = i + 1
+    }
+    let mut j = 0
+    while j < len(verbs) {
+        let v = verbs[j]
+        if v == "create" || v == "destroy" || v == "remove" || v == "rm"
+            || v == "stop" || v == "start" || v == "reboot" || v == "recreate"
+            || v == "terminate" {
+            return 1
+        }
+        j = j + 1
+    }
+    return 0
+}
+
+// _pcli_shq — single-quote shell escape (mirror of cloud _shq_local contract).
+fn _pcli_shq(s: str) -> str {
+    return "'" + s.replace("'", "'\\''") + "'"
+}
+
+// _pcli_join_args — POSIX-quote and join an argv into a command tail. PURE.
+fn _pcli_join_args(args: [str]) -> str {
+    let mut out = ""
+    let mut i = 0
+    while i < len(args) {
+        if len(out) > 0 { out = out + " " }
+        out = out + _pcli_shq(args[i])
+        i = i + 1
+    }
+    return out
+}
+
+// ── binary resolution (reused resolvers) ──────────────────────────────
+
+// _pcli_binary — the provider CLI entrypoint, "" if none resolves.
+fn _pcli_binary(provider: str) -> str {
+    if provider == "runpod" { return _runpodctl_path() }
+    return _vastai_path()
+}
+
+// ── verb body ─────────────────────────────────────────────────────────
+
+// provider_cli_run — `cloud provider-cli <provider> -- <args...>`.
+// `allow_mutate` = the --allow-mutate flag (parsed by the dispatcher BEFORE
+// the `--` separator). Returns the process exit code (child code propagated).
+fn provider_cli_run(provider: str, args: [str], allow_mutate: int) -> int {
+    if _pcli_known_provider(provider) == 0 {
+        println("[cloud] provider-cli: unknown provider '" + provider + "' — expected vast|runpod")
+        return 2
+    }
+    if len(args) == 0 {
+        println("[cloud] provider-cli: missing argv — usage: cloud provider-cli " + provider + " [--allow-mutate] -- <args...>")
+        return 2
+    }
+
+    // @L4 SAFETY: refuse a registry-mutating subcommand unless --allow-mutate.
+    let mutating = _pcli_is_mutating(args)
+    if mutating == 1 && allow_mutate == 0 {
+        println("[cloud] provider-cli: REFUSED — '" + args[0] + " " + (if len(args) > 1 { args[1] } else { "" }) + "' looks registry-MUTATING.")
+        println("[cloud]   A raw create/destroy here would drift the M5 pod registry (orphan/ghost).")
+        println("[cloud]   Use the registry-aware verb instead:  cloud rent  (create) ·  cloud rm <id>  (destroy)")
+        println("[cloud]   To force the raw call anyway:  add --allow-mutate  (auto-runs `cloud reconcile` after).")
+        return 3
+    }
+
+    // binary resolution — MISSING-CLI is honest (@L2/d6), never faked.
+    let bin = _pcli_binary(provider)
+    if len(bin) == 0 {
+        if provider == "runpod" {
+            println("[cloud] provider-cli: MISSING-CLI — runpodctl not found (install: https://docs.runpod.io/cli/install-runpodctl)")
+        } else {
+            println("[cloud] provider-cli: MISSING-CLI — vastai not found (install: pip install --user vastai)")
+        }
+        return 127
+    }
+
+    // credential injection (@L2/@L3). vast: _vastai_path already synced the live
+    // key into the CLI config. runpod: export RUNPOD_API_KEY into the child env.
+    let mut env_prefix = ""
+    if provider == "runpod" {
+        let key = cloud_runpod_api_key()
+        if len(key) == 0 {
+            println("[cloud] provider-cli: MISSING-CRED — no runpod.api_key (set: secret set runpod.api_key <KEY>)")
+            return 255
+        }
+        env_prefix = "RUNPOD_API_KEY=" + _pcli_shq(key) + " "
+    } else {
+        if len(_vast_api_key()) == 0 {
+            println("[cloud] provider-cli: MISSING-CRED — no vast.api_key (set: secret set vast.api_key <KEY>)")
+            return 255
+        }
+    }
+
+    // exec_capture returns [stdout, stderr, local_exit_code] — the canonical
+    // local-exec-with-status idiom (mirror cloud.hexa:_ssh_capture_status).
+    // Print both streams so the proxied CLI's output reaches the user, then
+    // propagate the child's exit code VERBATIM (@L2/d6 — never faked).
+    let cmd = env_prefix + _pcli_shq(bin) + " " + _pcli_join_args(args)
+    let res = exec_capture(cmd)
+    let out = res[0]
+    let err = res[1]
+    let code = res[2]
+    if len(out) > 0 { println(out) }
+    if len(err) > 0 { eprintln(err) }
+
+    // @L4: re-sync M5 after a forced mutating proxy that succeeded.
+    if mutating == 1 && allow_mutate == 1 && code == 0 {
+        println("[cloud] provider-cli: --allow-mutate → running `cloud reconcile` to re-sync the M5 registry…")
+        let _ = exec("hexa cloud reconcile 2>&1 || true")
+    }
+
+    return code
+}

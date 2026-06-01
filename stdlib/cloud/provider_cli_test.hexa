@@ -1,0 +1,108 @@
+// @ci_gate — pure · network-free · deterministic (stdlib_selftest_aggregate --ci-gate)
+// stdlib/cloud/provider_cli_test.hexa — falsifier suite for `hexa cloud provider-cli`.
+//
+// The helpers in provider_cli.hexa (_pcli_known_provider / _pcli_is_mutating /
+// _pcli_join_args) are `_`-prefixed and private, so this MIRRORS the pure logic
+// (mirror-test pattern — see api_test.hexa / alive_test.hexa). KEEP IN SYNC.
+// Every assertion is a pure string/int transform — no exec, no creds, no
+// vastai/runpodctl binary.
+//
+// Falsifiers (@L5/@L2):
+//   F-PCLI-PROVIDER     — vast|runpod known, anything else unknown
+//   F-PCLI-MUTATE-READ  — show/list/search/get are read-only (run freely)
+//   F-PCLI-MUTATE-CREATE— create/destroy/remove/rm/stop/start are MUTATING
+//   F-PCLI-MUTATE-FLAGS — leading flags don't hide the mutating verb
+//   F-PCLI-QUOTE        — argv is POSIX-quoted (injection-safe join)
+//
+// The MISSING-CLI (binary absent → 127) and MISSING-CRED (empty key → 255)
+// RUNTIME paths are exercised by the live provider_cli_run flow; here we assert
+// the PURE classifier those paths gate on.
+//
+// Run:  hexa run stdlib/cloud/provider_cli_test.hexa
+// PASS: exits 0, prints "provider_cli_test PASS".
+
+// ── mirrors of provider_cli.hexa pure helpers — KEEP IN SYNC ──
+
+fn _known_provider(provider: str) -> int {
+    if provider == "vast" || provider == "runpod" { return 1 }
+    return 0
+}
+
+fn _is_mutating(args: [str]) -> int {
+    let mut verbs = []
+    let mut i = 0
+    while i < len(args) {
+        let a = args[i]
+        if len(a) > 0 && a.substring(0, 1) != "-" {
+            verbs.push(a.to_lower())
+        }
+        i = i + 1
+    }
+    let mut j = 0
+    while j < len(verbs) {
+        let v = verbs[j]
+        if v == "create" || v == "destroy" || v == "remove" || v == "rm"
+            || v == "stop" || v == "start" || v == "reboot" || v == "recreate"
+            || v == "terminate" {
+            return 1
+        }
+        j = j + 1
+    }
+    return 0
+}
+
+fn _shq(s: str) -> str {
+    return "'" + s.replace("'", "'\\''") + "'"
+}
+fn _join_args(args: [str]) -> str {
+    let mut out = ""
+    let mut i = 0
+    while i < len(args) {
+        if len(out) > 0 { out = out + " " }
+        out = out + _shq(args[i])
+        i = i + 1
+    }
+    return out
+}
+
+fn _cki(name: str, got: int, want: int) {
+    if got != want {
+        println("  FAIL: " + name + " got " + to_string(got) + " want " + to_string(want))
+        exit(1)
+    }
+}
+fn _ck(name: str, got: str, want: str) {
+    if got != want {
+        println("  FAIL: " + name + " got '" + got + "' want '" + want + "'")
+        exit(1)
+    }
+}
+
+fn main() {
+    // ── provider recognition ──
+    _cki("vast known",   _known_provider("vast"),   1)
+    _cki("runpod known", _known_provider("runpod"), 1)
+    _cki("aws unknown",  _known_provider("aws"),    0)
+
+    // ── @L4/@L2 mutating classification ──
+    _cki("show read-only",   _is_mutating(["show", "instances"]),       0)
+    _cki("list read-only",   _is_mutating(["list", "machines"]),        0)
+    _cki("search read-only", _is_mutating(["search", "offers", "gpu_name=RTX_3090"]), 0)
+    _cki("get read-only",    _is_mutating(["pod", "get"]),              0)
+    _cki("create MUTATING",  _is_mutating(["create", "instance"]),      1)
+    _cki("destroy MUTATING", _is_mutating(["destroy", "instance", "123"]), 1)
+    _cki("remove MUTATING",  _is_mutating(["remove", "pod", "abc"]),    1)
+    _cki("rm MUTATING",      _is_mutating(["rm", "abc"]),               1)
+    _cki("stop MUTATING",    _is_mutating(["stop", "instance", "5"]),   1)
+    _cki("terminate MUTATING", _is_mutating(["terminate", "5"]),        1)
+    // leading flags must NOT hide the mutating verb.
+    _cki("flag then destroy", _is_mutating(["--raw", "destroy", "9"]),  1)
+    _cki("flag then show",    _is_mutating(["--raw", "show", "9"]),     0)
+
+    // ── @L2 POSIX-quote join (injection-safe) ──
+    _ck("simple join",  _join_args(["show", "instances"]),  "'show' 'instances'")
+    _ck("quote escape", _join_args(["a'b"]),                "'a'\\''b'")
+    _ck("empty argv",   _join_args([]),                      "")
+
+    println("provider_cli_test PASS")
+}

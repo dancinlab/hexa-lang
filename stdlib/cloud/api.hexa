@@ -1,0 +1,263 @@
+// stdlib/cloud/api.hexa — `hexa cloud api <provider> <METHOD> <endpoint>`.
+//
+// THE PROBLEM THIS CLOSES: cloud-guard (commons g8) blocks the raw `vastai`
+// CLI and forces every provider operation through `hexa cloud`. But the cloud
+// verb roster is finite — any provider op NOT yet wrapped (e.g. a brand-new
+// REST endpoint) is then UNREACHABLE. This verb is a UNIVERSAL authenticated
+// REST passthrough: it expresses ANY provider API call (list/show/create/…)
+// through the guarded path, so a missing wrapper-verb never strands an op
+// again. Read calls flow freely; a registry-MUTATING call is REFUSED + the
+// user is redirected to the registry-aware verb (rent/rm) unless they pass
+// `--allow-mutate`, in which case `cloud reconcile` re-syncs the M5 registry
+// right after (@L4).
+//
+// REUSE (d19/d3 — no new HTTP stack, no new key resolution):
+//   key    — vast: _vast_api_key()      runpod: cloud_runpod_api_key()
+//   http   — stdlib/http http_*_with_headers_status (status-aware, recovers a
+//            non-2xx body verbatim). PUT/DELETE not in that module, so the
+//            generic method dispatch (_api_request) adds them with the SAME
+//            curl shell-escape contract (see _api_method_curl) — no new HTTP
+//            stack, just the missing verbs of the existing one.
+//
+// AUTH (@L3): both providers use `Authorization: Bearer <key>`.
+//   vast.ai  REST base = https://console.vast.ai/api/v0
+//   runpod   REST base = https://rest.runpod.io/v1
+//   An empty resolved key → MISSING-CRED + exit 255 (NEVER a guessed call).
+//
+// HONESTY (@L5/d6): a non-2xx response is surfaced VERBATIM (status + body),
+// never swallowed or faked into a success. Exit reflects the HTTP class:
+//   0 = 2xx · 255 = transport/cred failure · the HTTP status otherwise mapped
+//   to a non-zero (4 for 4xx, 5 for 5xx) so a script sees the failure.
+//
+// The classifiers (_api_is_mutating / _api_resolve_url / _api_exit_for_status)
+// are PURE so the selftest (stdlib/cloud/api_test.hexa) exercises them with no
+// network and no creds.
+
+use "stdlib/http"
+use "stdlib/cloud/cloud"
+use "stdlib/cloud/vast"
+use "stdlib/cloud/runpod"
+
+// ── pure helpers (testable, no network) ───────────────────────────────
+
+// _api_base — provider REST base URL. "" for an unknown provider.
+fn _api_base(provider: str) -> str {
+    if provider == "vast" { return "https://console.vast.ai/api/v0" }
+    if provider == "runpod" { return "https://rest.runpod.io/v1" }
+    return ""
+}
+
+// _api_resolve_url — join base + endpoint. The endpoint may be given with or
+// without a leading "/", and may even be a full https:// URL (passed through
+// verbatim — lets a user hit a versioned host the base does not cover). PURE.
+fn _api_resolve_url(provider: str, endpoint: str) -> str {
+    if endpoint.index_of("http://") == 0 || endpoint.index_of("https://") == 0 {
+        return endpoint
+    }
+    let base = _api_base(provider)
+    if len(base) == 0 { return "" }
+    let mut ep = endpoint
+    if len(ep) == 0 { return base }
+    if ep.substring(0, 1) != "/" { ep = "/" + ep }
+    return base + ep
+}
+
+// _api_norm_method — upper-case + validate the HTTP method. Returns "" for an
+// unsupported method. PURE.
+fn _api_norm_method(m: str) -> str {
+    let u = m.to_upper()
+    if u == "GET" || u == "POST" || u == "PUT" || u == "DELETE" { return u }
+    return ""
+}
+
+// _api_is_mutating — does this (method, endpoint) MUTATE the provider's pod
+// set in a way that would drift the M5 registry (@L4)? PURE.
+//
+// Rule: any non-GET method is treated as potentially mutating EXCEPT a POST
+// to a search/query endpoint (vast's `bundles`/`search` are POST-but-read).
+// A GET is always read-only. This is intentionally CONSERVATIVE — a false
+// "mutating" only forces an explicit --allow-mutate, whereas a false
+// "read-only" could silently leak a registry-drifting create/destroy.
+fn _api_is_mutating(method: str, endpoint: str) -> int {
+    let m = _api_norm_method(method)
+    if m == "GET" { return 0 }
+    // vast.ai search endpoints are POST but purely read (no instance change).
+    let ep = endpoint.to_lower()
+    if m == "POST" {
+        if ep.index_of("bundles") >= 0 || ep.index_of("search") >= 0 {
+            return 0
+        }
+    }
+    return 1
+}
+
+// _api_exit_for_status — map an HTTP status to a process exit code (@L5).
+//   2xx → 0 · 4xx → 4 · 5xx → 5 · 0/other → 255 (transport/cred class).
+// PURE.
+fn _api_exit_for_status(status: int) -> int {
+    if status >= 200 && status < 300 { return 0 }
+    if status >= 400 && status < 500 { return 4 }
+    if status >= 500 && status < 600 { return 5 }
+    return 255
+}
+
+// _api_json_escape — minimal JSON string escaper (mirrors alive.hexa).
+fn _api_json_escape(s: str) -> str {
+    let mut out = ""
+    let mut i = 0
+    while i < len(s) {
+        let c = s.substring(i, i + 1)
+        if c == "\"" { out = out + "\\\"" }
+        else { if c == "\\" { out = out + "\\\\" }
+        else { if c == "\n" { out = out + "\\n" }
+        else { if c == "\r" { out = out + "\\r" }
+        else { if c == "\t" { out = out + "\\t" }
+        else { out = out + c } } } } }
+        i = i + 1
+    }
+    return out
+}
+
+// ── transport (reuses the existing curl/http contract) ────────────────
+
+// _api_key_for — resolve the provider key via the EXISTING resolvers (d19/d3).
+fn _api_key_for(provider: str) -> str {
+    if provider == "runpod" { return cloud_runpod_api_key() }
+    return _vast_api_key()
+}
+
+// _api_method_curl — PUT/DELETE (and a status-aware GET/POST) via the SAME
+// curl shell-escape contract stdlib/http uses. Returns {status, body, ok}.
+// stdlib/http only ships GET/POST status variants; rather than fork a new HTTP
+// stack we add the two missing methods here with -X <METHOD>, the identical
+// `-w '\n%{http_code}'` status sentinel, and the same _http_shell_escape via
+// http_build_header_flags for headers. Body is single-quote escaped inline.
+fn _api_method_curl(method: str, url: string, headers, body: string, timeout_sec: int) {
+    let result = #{}
+    result["status"] = 0
+    result["body"] = ""
+    result["ok"] = false
+    if len(url) == 0 { return result }
+    let t = if timeout_sec > 0 { timeout_sec } else { 30 }
+    let hflags = http_build_header_flags(headers)
+    let mut datapart = ""
+    if len(body) > 0 {
+        datapart = " --data-binary '" + body.replace("'", "'\\''") + "'"
+    }
+    let cmd = "curl -sSL -X " + method + " --max-time " + to_string(t)
+            + hflags + datapart
+            + " -w '\\n%{http_code}' '" + url.replace("'", "'\\''") + "' 2>/dev/null"
+    let raw = to_string(exec(cmd))
+    if len(raw) == 0 { return result }
+    let nl = _api_last_nl(raw)
+    if nl < 0 { return result }
+    let rbody = raw.substring(0, nl)
+    let status_str = raw.substring(nl + 1, len(raw)).trim()
+    let status = to_int(status_str)
+    result["status"] = status
+    result["body"] = rbody
+    result["ok"] = status >= 200 && status < 300
+    return result
+}
+
+// _api_last_nl — reverse index of the last "\n" (peel the status sentinel).
+fn _api_last_nl(s: str) -> int {
+    let mut i = len(s) - 1
+    while i >= 0 {
+        if s.substring(i, i + 1) == "\n" { return i }
+        i = i - 1
+    }
+    return -1
+}
+
+// _api_request — issue the authenticated request. Routes GET/POST through the
+// reused stdlib/http status variants and PUT/DELETE through _api_method_curl.
+// Returns {status, body, ok}. The Bearer header carries the resolved key.
+fn _api_request(provider: str, method: str, url: string, body: string) {
+    let key = _api_key_for(provider)
+    let h = #{"Authorization": "Bearer " + key, "Content-Type": "application/json", "Accept": "application/json"}
+    if method == "GET" {
+        return http_get_with_headers_status(url, h, 60)
+    }
+    if method == "POST" {
+        return http_post_with_headers_status(url, h, body, 60)
+    }
+    return _api_method_curl(method, url, h, body, 60)
+}
+
+// ── verb body ─────────────────────────────────────────────────────────
+
+// api_run — `cloud api <provider> <METHOD> <endpoint> [--data JSON] [--json]
+// [--allow-mutate]`. Returns the process exit code.
+fn api_run(provider: str, method_in: str, endpoint: str, data: str, as_json: int, allow_mutate: int) -> int {
+    // provider validation
+    if len(_api_base(provider)) == 0 {
+        println("[cloud] api: unknown provider '" + provider + "' — expected vast|runpod")
+        return 2
+    }
+    // method validation
+    let method = _api_norm_method(method_in)
+    if len(method) == 0 {
+        println("[cloud] api: unsupported method '" + method_in + "' — expected GET|POST|PUT|DELETE")
+        return 2
+    }
+    if len(endpoint) == 0 {
+        println("[cloud] api: missing <endpoint> — usage: cloud api " + provider + " " + method + " /endpoint [--data JSON] [--json]")
+        return 2
+    }
+
+    // @L4 SAFETY: a registry-MUTATING call must NOT silently drift M5. Default
+    // is REFUSE + redirect to the registry-aware verb; --allow-mutate overrides
+    // and triggers a post-call `cloud reconcile` so M5 re-syncs.
+    let mutating = _api_is_mutating(method, endpoint)
+    if mutating == 1 && allow_mutate == 0 {
+        println("[cloud] api: REFUSED — " + method + " " + endpoint + " is a registry-MUTATING call.")
+        println("[cloud]   A raw create/destroy here would drift the M5 pod registry (orphan/ghost).")
+        println("[cloud]   Use the registry-aware verb instead:  cloud rent  (create) ·  cloud rm <id>  (destroy)")
+        println("[cloud]   To force the raw call anyway:  add --allow-mutate  (auto-runs `cloud reconcile` after).")
+        return 3
+    }
+
+    // @L3 auth: resolve the key via the EXISTING resolver; empty → MISSING-CRED.
+    let key = _api_key_for(provider)
+    if len(key) == 0 {
+        if provider == "runpod" {
+            println("[cloud] api: MISSING-CRED — no runpod.api_key (set: secret set runpod.api_key <KEY>)")
+        } else {
+            println("[cloud] api: MISSING-CRED — no vast.api_key (set: secret set vast.api_key <KEY>)")
+        }
+        return 255
+    }
+
+    let url = _api_resolve_url(provider, endpoint)
+    let res = _api_request(provider, method, url, data)
+    let status = res["status"]
+    let rbody = to_string(res["body"])
+    let exit_code = _api_exit_for_status(status)
+
+    if as_json == 1 {
+        println("{\"provider\":\"" + provider + "\",\"method\":\"" + method
+            + "\",\"endpoint\":\"" + _api_json_escape(endpoint) + "\",\"status\":" + to_string(status)
+            + ",\"ok\":" + (if exit_code == 0 { "true" } else { "false" })
+            + ",\"body\":\"" + _api_json_escape(rbody) + "\"}")
+    } else {
+        if exit_code != 0 {
+            // @L5/d6: surface the failure VERBATIM, never fake a success.
+            if status == 0 {
+                println("[cloud] api: TRANSPORT-FAIL (status 0) — no/empty response from " + url)
+            } else {
+                println("[cloud] api: HTTP " + to_string(status) + " (non-2xx, surfaced verbatim):")
+            }
+        }
+        println(rbody)
+    }
+
+    // @L4: post-mutation reconcile so the M5 registry re-syncs after a forced
+    // mutating call (only when the call actually went through with --allow-mutate).
+    if mutating == 1 && allow_mutate == 1 && exit_code == 0 {
+        println("[cloud] api: --allow-mutate → running `cloud reconcile` to re-sync the M5 registry…")
+        let _ = exec("hexa cloud reconcile 2>&1 || true")
+    }
+
+    return exit_code
+}
