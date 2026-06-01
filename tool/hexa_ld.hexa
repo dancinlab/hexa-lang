@@ -626,6 +626,14 @@ fn link_macho_arm64(objs: [ParsedObj], out_path: string, entry: string, _is_stat
     let slot2_bytes: [Int] = []
     let slot3_bytes: [Int] = []
     let mut slot4_size = 0                            // __bss virtual size
+    // A-3: __mod_init_func (C constructors). dyld calls these ptrs at load
+    // iff they live in an S_MOD_INIT_FUNC_POINTERS section (flag 0x9). They
+    // route into slot3 (__DATA RW) so their UNSIGNED relocs become chained
+    // rebases (the slot3 rebase pass), but we track the contiguous slot3
+    // byte-range so a SEPARATE section_64 header (flag 0x9) can describe it
+    // (shrinking __data's header to exclude the tail — non-overlapping).
+    let mut mod_init_start = -1                       // slot3-relative byte start
+    let mut mod_init_end   = 0                        // slot3-relative byte end
 
     // Per-obj, per-slot base offset within the slot. Stored as a flat
     // array indexed [oi * N_SLOTS + slot]. -1 = this obj contributed
@@ -738,6 +746,17 @@ fn link_macho_arm64(objs: [ParsedObj], out_path: string, entry: string, _is_stat
                 usect_slot.push(SLOT_DATA); usect_base.push(len(slot3_bytes))
                 let mut k = 0
                 while k < len(sc.bytes) { slot3_bytes.push(sc.bytes[k] & 0xff); k = k + 1 }
+            } else if sc.sectname == "__mod_init_func" {
+                // Route into slot3 (__DATA RW) so the UNSIGNED ctor-ptr relocs
+                // become chained rebases; track the contiguous slot3 range so a
+                // dedicated S_MOD_INIT_FUNC_POINTERS header can cover it.
+                usect_oi.push(oi); usect_idx.push(sc.index)
+                usect_slot.push(SLOT_DATA); usect_base.push(len(slot3_bytes))
+                let mi_b = len(slot3_bytes)
+                if mod_init_start < 0 { mod_init_start = mi_b }
+                let mut k = 0
+                while k < len(sc.bytes) { slot3_bytes.push(sc.bytes[k] & 0xff); k = k + 1 }
+                mod_init_end = len(slot3_bytes)
             } else if sc.sectname == "__bss" || sc.sectname == "__common" {
                 usect_oi.push(oi); usect_idx.push(sc.index)
                 usect_slot.push(SLOT_BSS); usect_base.push(slot4_size)
@@ -1044,10 +1063,15 @@ fn link_macho_arm64(objs: [ParsedObj], out_path: string, entry: string, _is_stat
     // __got = 8-byte pointer slot per import (function + data, both
     // chained-fixups bound).
     let got_size = 8 * nimports
+    // A-3: __mod_init_func size/base (slot3-relative range tracked in the
+    // slot-build loop). A nonzero range → emit a dedicated section header.
+    let mod_init_size = mod_init_end - mod_init_start
+    let has_mod_init  = mod_init_start >= 0 && mod_init_size > 0
     let mut data_nsects = 0
-    if has_data    { data_nsects = data_nsects + 1 }
-    if has_imports { data_nsects = data_nsects + 1 }  // __got
-    if has_bss     { data_nsects = data_nsects + 1 }
+    if has_data     { data_nsects = data_nsects + 1 }
+    if has_mod_init { data_nsects = data_nsects + 1 }  // __mod_init_func
+    if has_imports  { data_nsects = data_nsects + 1 }  // __got
+    if has_bss      { data_nsects = data_nsects + 1 }
     let has_data_seg = data_nsects > 0
 
     // ── Cycle 4: build symbol table + string table from inputs ────
@@ -1081,15 +1105,17 @@ fn link_macho_arm64(objs: [ParsedObj], out_path: string, entry: string, _is_stat
     let mut osect_const   = 0
     let mut osect_cstring = 0
     let mut osect_stubs   = 0
-    let mut osect_data    = 0
-    let mut osect_got     = 0
-    let mut osect_bss     = 0
+    let mut osect_data     = 0
+    let mut osect_mod_init = 0
+    let mut osect_got      = 0
+    let mut osect_bss      = 0
     if has_const   { nx = nx + 1; osect_const   = nx }
     if has_cstring { nx = nx + 1; osect_cstring = nx }
     if has_stubs   { nx = nx + 1; osect_stubs   = nx }
-    if has_data    { nx = nx + 1; osect_data    = nx }
-    if has_imports { nx = nx + 1; osect_got     = nx }
-    if has_bss     { nx = nx + 1; osect_bss     = nx }
+    if has_data     { nx = nx + 1; osect_data     = nx }
+    if has_mod_init { nx = nx + 1; osect_mod_init = nx }
+    if has_imports  { nx = nx + 1; osect_got      = nx }
+    if has_bss      { nx = nx + 1; osect_bss      = nx }
     // Map a slot id → output 1-based section index.
     // (used in the symtab pass + the nlist VM-addr fix-up below)
 
@@ -1327,6 +1353,18 @@ fn link_macho_arm64(objs: [ParsedObj], out_path: string, entry: string, _is_stat
     // __data section at the very start of __DATA's file region.
     let data_fileoff      = data_seg_fileoff
     let data_section_addr = data_seg_vmaddr
+    // A-3: __mod_init_func is the contiguous slot3 tail [mod_init_start,
+    // data_size). Its header covers that range; the __data header is shrunk
+    // to [0, mod_init_start) so the two sections do not overlap. Both share
+    // the single slot3 byte stream written in the __DATA payload pass.
+    let mut data_visible_size   = data_size
+    let mut mod_init_section_addr = 0
+    let mut mod_init_fileoff      = 0
+    if has_mod_init {
+        data_visible_size     = mod_init_start
+        mod_init_section_addr = data_section_addr + mod_init_start
+        mod_init_fileoff      = data_fileoff + mod_init_start
+    }
     // __got follows __data, 8-aligned (pointer-sized).
     let got_pad = (8 - (data_size & 7)) & 7
     let got_fileoff      = data_fileoff + data_size + got_pad
@@ -1820,12 +1858,28 @@ fn link_macho_arm64(objs: [ParsedObj], out_path: string, entry: string, _is_stat
             _w_name_fixed(out, "__data", 16)
             _w_name_fixed(out, "__DATA", 16)
             _w_u64(out, data_section_addr)
-            _w_u64(out, data_size)
+            _w_u64(out, data_visible_size)           // excludes __mod_init_func tail
             _w_u32(out, data_fileoff)
             _w_u32(out, 3)                           // align log2(8)
             _w_u32(out, 0)
             _w_u32(out, 0)
             _w_u32(out, 0)                           // flags = S_REGULAR
+            _w_u32(out, 0); _w_u32(out, 0); _w_u32(out, 0)
+        }
+        // A-3: section_64 __mod_init_func — S_MOD_INIT_FUNC_POINTERS (0x9).
+        // dyld calls each 8-byte ptr at load. Bytes live in the slot3 stream
+        // (the __data payload pass writes them); the ctor-ptr UNSIGNED relocs
+        // were collected as chained rebases by the slot3 rebase pass.
+        if has_mod_init {
+            _w_name_fixed(out, "__mod_init_func", 16)
+            _w_name_fixed(out, "__DATA", 16)
+            _w_u64(out, mod_init_section_addr)
+            _w_u64(out, mod_init_size)
+            _w_u32(out, mod_init_fileoff)
+            _w_u32(out, 3)                           // align log2(8)
+            _w_u32(out, 0)                           // reloff
+            _w_u32(out, 0)                           // nreloc
+            _w_u32(out, 0x09)                        // S_MOD_INIT_FUNC_POINTERS
             _w_u32(out, 0); _w_u32(out, 0); _w_u32(out, 0)
         }
         // section_64 __got (inc4) — pointer slots for dyld imports.
