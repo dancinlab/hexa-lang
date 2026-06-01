@@ -1,0 +1,9 @@
+clm_gen — GENERAL CLMConvMoE trainer (arbitrary L·E) descent smoke
+  trunk activation cache (floats): old=579 new=192 (L=3 T=4 d=16)
+  ACTIVATION-CKPT: trunk cache 3·[L·T·d]+[L·d] -> [L·T·d]  (O(L) hn/xh/iv dropped, recomputed from tin)
+  step 1  CE = 4.02517
+  step 13 CE = 0.0218176
+  step 25 CE = 0.00044961
+  loss0 = 4.02517  lossF = 0.00044961
+F-FLAME-CLM-GEN-DESCENT = 1
+PASS — general L·E trainer descends (d=16 L=3 E=4)
