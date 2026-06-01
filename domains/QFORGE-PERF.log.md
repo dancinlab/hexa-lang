@@ -120,3 +120,25 @@ Davidson 비교" (🧮 LANE B · ⚪speculative).
 - 남은 GATED-IMPL (5): EPW-Wannier(연구급) · CheFSI(SCF-context Ritz bound 필요) ·
   DIIS-mixing(SCF loop 필요) · randomized(lowest-eig 비표준) · adaptive-q(el-ph 파이프
   필요) — 각 honest blocker. GATED-GPU 4 + GATED-RESEARCH 6 동일.
+
+## 2026-06-01 — 2nd-gen closed-form corollaries (brainstorm-depletion → 완성도 모두 진행)
+
+Brainstorm(6 rounds, depletion) surfaced 28 new ideas beyond the 21 board items;
+the closeable-from-docs-only subset (11) was implemented as a second corollary driver
+`bench/qforge/accel_corollaries.hexa` (no GPU, engine read-only). All 11 🟢
+SUPPORTED-NUMERICAL, verdicts under `.verdicts/qforge-perf-roofline/`:
+
+- RIDGE (nb≥121.9 fp32 / 452.2 tensor to leave memory roof) + AMDAHL (matvec-only GPU
+  capped at 1/(1-p)) → closed-form CEILINGS on the 4 GATED-GPU items.
+- TCPREC (d ln Tc/d ln λ=0.685, fp32→8e-8) + FP16 (relerr 7e-4 ≪ budget 0.146) →
+  precision is Tc-safe (deepens mixedprec); GAMMA (q=0 real → 2×/4×) deepens symmetry-48.
+- DIAGCROSS (dense beats Davidson only past M=5N; measured 168≪2560) → iterative favored.
+- WANNIER (27× for 12³/4³) · DIIS (√κ=7.07×) · QMC (N_q≥(CV/ε)²=400) → closed-form
+  grounding numbers on gated EPW / DIIS / adaptive-q.
+- NEW terminal closed items: ECUT (matvec cost ∝ E_cut³ → 10% cut = 27.1%) +
+  ADCORR (Allen-Dynes f1·f2 wall fraction ~1.3e-7 → 🔴 optimizing pointless).
+
+Board: 21/21 → 23/23 terminal (8 closed + 4 grounded + 11 gated). The GATED items keep
+`- [ ]` (a pod/engine is still needed to MEASURE) but now carry closed-form bounds so
+their eventual GPU Δ is interpretable. bench.md §9 documents all 11. docs-only, 0 engine
+edits, 0 deletions.

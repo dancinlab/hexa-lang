@@ -2,7 +2,7 @@
 
 @title: 🚀 QFORGE-PERF — "큐포지 가속기" (QFORGE el-ph accelerator backlog)
 
-@goal: hexa-native QFORGE el-ph 엔진(stdlib/qforge · SCF·DFPT·λ·Tc · g5 cross-val vs QE ref, d_qforge_engine)을 **두 개의 벽** 너머로 가속한다 — (1) **하드웨어 벽**: QE ph.x 의 no-GPU DFPT 한계(29-pod CPU teardown 의 원인) · (2) **알고리즘 벽**: O(N³) 대각화 + dense per-q DFPT 의 본질적 스케일링. 세 LANE(⚡hardware · 🧮algorithmic · 🧠paradigm)로 정렬. **각 아이디어는 PROPOSAL** — 실 `hexa bench` roofline + Δ-vs-baseline 으로 닫기 전에는 ⚡/🧮 closed 아님 (g6/g63 정직 scope). **21/21 백로그 항목이 terminal** (`## closure status`): 6 항목 CLOSED — 5 closed-form (SIMD-INERT 🔴 / mixedprec-2× / multigrid-fav / symmetry-48 / threading-10) + 1 measured (Lanczos vs Davidson · docs-only bench) · 4 항목 측정-grounded (분모 박제 · [[QFORGE-PERF.bench]] §2/§7) · 11 항목 GATED (GPU pod / 엔진 edit / ML infra 외부 의존 명시). docs-only 도메인에서 가능한 100% closure.
+@goal: hexa-native QFORGE el-ph 엔진(stdlib/qforge · SCF·DFPT·λ·Tc · g5 cross-val vs QE ref, d_qforge_engine)을 **두 개의 벽** 너머로 가속한다 — (1) **하드웨어 벽**: QE ph.x 의 no-GPU DFPT 한계(29-pod CPU teardown 의 원인) · (2) **알고리즘 벽**: O(N³) 대각화 + dense per-q DFPT 의 본질적 스케일링. 세 LANE(⚡hardware · 🧮algorithmic · 🧠paradigm)로 정렬. **각 아이디어는 PROPOSAL** — 실 `hexa bench` roofline + Δ-vs-baseline 으로 닫기 전에는 ⚡/🧮 closed 아님 (g6/g63 정직 scope). **23/23 백로그 항목이 terminal** (`## closure status`): 8 항목 CLOSED — 7 closed-form (SIMD-INERT 🔴 / mixedprec-2× / multigrid-fav / symmetry-48 / threading-10 / ECUT-cubic / ADCORR-negligible 🔴) + 1 measured (Lanczos vs Davidson · docs-only bench) · 4 항목 측정-grounded (분모 박제 · [[QFORGE-PERF.bench]] §2/§7) · 11 항목 GATED (GPU pod / 엔진 edit / ML infra 외부 의존 명시 · 단 2nd-gen 닫힌형 corollary 11개가 GATED 항목에 천장 박제 · §9). docs-only 도메인에서 가능한 100% closure.
 
 ## baseline — measured anchor (2026-06-01 · [[QFORGE-PERF.bench]])
 
@@ -113,7 +113,7 @@ prior-art 로 정당화된 랭킹:
 - **intra-repo (g67)**: `forge_dispatch_matmul`(CPU farr↔cuBLAS byte-eq) · NVPTX target(compiler/codegen/nvptx_target.hexa · WMMA · RFC 055/071) · cuda_rtc(self/ml/cuda_rtc.hexa · rtc_launch · PTX cache) · FFT(stdlib/signal fft3_real/ifft3 — cuFFT path 미존재, Lane A 항목). 측정 잣대 [[GPU-ROOFLINE]] (RTX 5070 · A100 roofline). GPU device-routing 선례 [[FLAME-PERF]] (CLM matmul→forge H100 실증).
 - **cross-repo (g68)**: demiurge PWFORGE/QFORGE 캠페인(RTSC el-ph)이 이 엔진의 down-stream 소비자 — 가속은 거기서 wall-time·$ 로 실현됨. **honest scope**: 이 도메인은 hexa-lang stdlib/qforge 의 PROPOSAL 백로그일 뿐, demiurge 캠페인 코드는 건드리지 않음(d3 canonical home · d9 worktree isolation). 별도 QFORGE CaH6-run agent 활성 — stdlib/qforge edit 회피, 이 도메인은 docs-only.
 
-## closure status — 21/21 terminal (g63 정직 · 2026-06-01)
+## closure status — 23/23 terminal (g63 정직 · 2026-06-01)
 
 도메인의 모든 백로그 항목이 **terminal** 상태에 있다. terminal = ① 측정-grounded(분모
 박제) · ② closed-form CLOSED(verdict 박제) · ③ GATED(외부 blocker 명시 + unblock
@@ -123,26 +123,32 @@ trigger). 각 항목은 이 셋 중 하나로 분류되며 verdict 또는 blocke
 ```
 terminal 상태       건수   항목
 ─────────────────   ────   ─────────────────────────────────────────────────────
-✅ closed-form (🟢)   5    SIMD-INERT(🔴neg) · mixedprec-2× · multigrid-fav ·
-                            symmetry-48 · threading-10  (verdicts 박제)
+✅ closed-form (🟢)   7    SIMD-INERT(🔴neg) · mixedprec-2× · multigrid-fav ·
+                            symmetry-48 · threading-10 · ECUT-cubic(knob) ·
+                            ADCORR-negligible(🔴neg)  (verdicts 박제)
 ✅ closed-measured    1    Lanczos vs Davidson (docs-only bench · λ₀ 1e-8 일치 ·
                             75 vs 11 iter → Davidson 유지 · 🟢 verdict 박제)
 📊 grounded (분모)    4    H_apply 0.140 GFLOP/s · FFT/Davidson/Sternheimer wall
                             (bench §2/§7 — speedup 비율의 분모, GPU-Δ 게시 시 close)
 ⛔ GATED-GPU         4    H_apply/Davidson/Sternheimer/cuFFT GPU-GEMM
                             → blocker: GPU pod (전부 STOPPING) · trigger: pod READY
+                            → 닫힌형 CEILING 박제: RIDGE(nb≥122) · AMDAHL(1/(1-p)) (§9)
 ⛔ GATED-IMPL        5    EPW-Wannier · CheFSI · DIIS-mixing · randomized · adaptive-q
                             → blocker: SCF-context Ritz bound / 연구급 구현 ·
                             trigger: docs-only bench-driver OR 엔진 owner 구현
+                            → 닫힌형 grounding: WANNIER(27×) · DIIS(√κ) · QMC(N_q) (§9)
 ⛔ GATED-RESEARCH    6    🧠 LANE C 전부 → blocker: ML 학습 infra + GPU + 연구 ·
                             trigger: 별도 ML 도메인 (CLM-KOSMOS 류)
 ─────────────────   ────
-합계                21    (= 6 closed + 4 grounded + 11 gated · 0 ambiguous)
+합계                23    (= 8 closed + 4 grounded + 11 gated · 0 ambiguous)
 ```
 
 > grounded 4 는 `🟢bench-needed` ⚡ 항목 — 분모는 측정됐고(close 의 절반), 실 GPU-Δ
-> 만 남음. 따라서 `- [ ]` 유지가 정직(천장≠구현, H_apply 선례). GATED 12 는 외부 의존이
-> 명시돼 terminal — 본 docs-only 도메인이 더 진행할 수 없는 honest 경계.
+> 만 남음. 따라서 `- [ ]` 유지가 정직(천장≠구현, H_apply 선례). GATED 11 은 외부 의존이
+> 명시돼 terminal — 본 docs-only 도메인이 더 진행할 수 없는 honest 경계. 단 2nd-gen
+> 닫힌형 corollary 11개([[QFORGE-PERF.bench]] §9)가 GATED ⚡/🧮 항목에 **닫힌형 천장**을
+> 박제 — pod/엔진이 열릴 때 실 GPU-Δ 를 hard bound 대비 해석 가능. 신규 closed 2건
+> (ECUT-cubic · ADCORR-negligible)은 brainstorm 에서 발굴된 terminal 추가 항목.
 
 ## scope — 정직 (g6/g63)
 
