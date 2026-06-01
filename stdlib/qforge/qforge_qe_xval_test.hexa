@@ -78,6 +78,23 @@ fn _xval(name: str, lam: float, wlog: float, mu: float, qe_tc: float,
     return 1
 }
 
+// Equivalence: allen_dynes_full(λ,ω_log,ω̄₂=ω_log,μ*) ≡ qforge_tc_allen_dynes.
+fn _xval_eq(name: str, lam: float, wlog: float, mu: float, tol: float) -> int {
+    let full = allen_dynes_full(lam, wlog, wlog, mu)
+    let ref = qforge_tc_allen_dynes(lam, wlog, mu)
+    let rel = _rel(full, ref)
+    if rel <= tol {
+        println("PASS " + name + " — allen_dynes_full=" + to_string(full)
+                + " K ≡ qforge_tc_allen_dynes=" + to_string(ref)
+                + " K (rel-ε=" + to_string(rel) + ")")
+        return 0
+    }
+    println("FAIL " + name + " — allen_dynes_full=" + to_string(full)
+            + " K ≠ qforge_tc_allen_dynes=" + to_string(ref) + " K (rel-ε="
+            + to_string(rel) + " > " + to_string(tol) + ")")
+    return 1
+}
+
 fn main() {
     let mut fails = 0
 
@@ -123,6 +140,27 @@ fn main() {
         println("PASS lift magnitude bracket — weak-coupling Nb <10%, strong-coupling CaH6 >25%")
     } else {
         println("FAIL lift bracket — Nb=" + to_string(lift_nb) + " CaH6=" + to_string(lift_cah6))
+        fails = fails + 1
+    }
+
+    // ── GATE C (🟢 regression) — allen_dynes_full ≡ qforge_tc_allen_dynes ─────
+    // The two Allen-Dynes entries MUST agree bit-for-bit on identical (λ,ω_log,
+    // μ*) — they are the SAME closed form (f1·f2 · ω_log/1.2). A prior defect
+    // in allen_dynes_full applied a spurious ×(1.45/1.2)≈1.208 rescale (CaH₆
+    // 416 K vs the QE-validated 344 K). This gate pins the fix: allen_dynes_full
+    // (ω̄₂=ω_log → f2=1) now reproduces qforge_tc_allen_dynes exactly. It also
+    // asserts the QE-pinned CaH6 value ≈ 344 K (NOT the old defective 416 K).
+    println("── GATE C: allen_dynes_full ≡ qforge_tc_allen_dynes (defect-regression) ──")
+    let eqtol = 1e-9
+    fails = fails + _xval_eq("Nb   (λ=1.171, ω_log=193.0K)",   1.171,  193.0,   0.10, eqtol)
+    fails = fails + _xval_eq("CaH6 (λ=4.376, ω_log=1236.4K)",  4.376,  1236.4,  0.10, eqtol)
+    fails = fails + _xval_eq("H3S  (λ=2.619, ω_log=1154.3K)",  2.619,  1154.3,  0.10, eqtol)
+    // QE-validated CaH6 ≈ 344 K (the canonical f1·f2 form) — NOT the old 416 K.
+    let cah6 = allen_dynes_full(4.376, 1236.4, 1236.4, 0.10)
+    if cah6 > 340.0 && cah6 < 348.0 {
+        println("PASS CaH6 allen_dynes_full=" + to_string(cah6) + " K ≈ 344 K (QE-validated, not 416 K)")
+    } else {
+        println("FAIL CaH6 allen_dynes_full=" + to_string(cah6) + " K — expected ≈344 K (defect would give 416 K)")
         fails = fails + 1
     }
 
