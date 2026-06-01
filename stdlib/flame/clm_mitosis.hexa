@@ -1,0 +1,369 @@
+// ════════════════════════════════════════════════════════════════════════════
+//  clm_mitosis.hexa — MITOSIS structural growth for CLMConvMoE (cell division).
+//
+//  Instead of a fixed (L · E) architecture, the model GROWS mid-training by
+//  CELL DIVISION: one expert splits into two (E → E+1). The split is a
+//  weight-copy of the parent expert's packed conv slot into a fresh slot plus a
+//  tiny deterministic perturbation, and a matching split of the router row so
+//  the TWO children jointly reproduce the parent's gate mass.
+//
+//  Continuity-preserving split (the crux of the BOUND falsifier):
+//    Router is softmax over per-position logits. If parent expert s carries
+//    logit z_s and gate prob p_s, we set BOTH children's logits to
+//    z_s - ln(2). Then each child's softmax mass becomes ≈ p_s / 2 (the other
+//    experts' masses are unchanged because the split conserves Σ exp(z) — the
+//    two new exp(z_s - ln2) sum to exp(z_s)). With the child expert weights
+//    ≈ parent (tiny perturbation), the combined contribution
+//        p_s/2 · expert_s + p_s/2 · expert_s' ≈ p_s · expert_s
+//    so the forward output is NEAR-CONTINUOUS across the division — no jump,
+//    no blow-up. After the split the (E+1)-expert model keeps descending.
+//
+//  FALSIFIER (분열 후 BOUND 유지): after a division the model must stay BOUNDED
+//  and STABLE — (1) forward FINITE post-split (no NaN/Inf), (2) NEAR-CONTINUOUS
+//  (|CE_after − CE_before| small at the split step), (3) loss CONTINUES TO
+//  DESCEND on the grown architecture. If division inherently destabilizes, the
+//  falsifier fails (a valid closed-negative).
+//
+//  Reuses the proven gen_fwd / gen_bwd / gen_ce_grad packed-weight trainer
+//  (clm_gen.hexa lineage). All expert / router / cache arrays are allocated at
+//  post-split capacity Emax = E0 + 1 so the new slot is simply the next
+//  contiguous packed slot — division writes into already-owned memory.
+// ════════════════════════════════════════════════════════════════════════════
+
+use "stdlib/flame/tensor_lib"
+use "stdlib/flame/conv_lib"
+use "stdlib/flame/gn_lib"
+use "stdlib/flame/moe_lib"
+use "stdlib/flame/nn_lib"
+use "stdlib/flame/optim_lib"
+
+fn _cp(src: int, soff: int, dst: int, n: int) {
+    let mut i = 0
+    while i < n { t_set(dst, i, t_get(src, soff + i)); i = i + 1 }
+}
+fn _cpback(src: int, dst: int, doff: int, n: int) {
+    let mut i = 0
+    while i < n { t_set(dst, doff + i, t_get(src, i)); i = i + 1 }
+}
+fn _pow2(e: int) -> int {
+    let mut p = 1; let mut i = 0
+    while i < e { p = p * 2; i = i + 1 }
+    return p
+}
+
+// Forward — identical structure to clm_gen.gen_fwd but with a runtime expert
+// count E (the active number of experts; arrays sized for Emax).
+fn gen_fwd(tokens: int, embed: int, ecW: int, ecB: int,
+           trunkW: int, trunkB: int, trunkG: int, trunkBe: int,
+           rW: int, rB: int, expW: int, expB: int, noG: int, noB: int, roW: int, roB: int,
+           xe: int, xtrunk: int, tin: int, hn: int, xh: int, iv: int,
+           eo: int, probs: int, ex: int, yn: int, xhN: int, ivN: int,
+           out_logits: int, T: int, d: int, E: int, V: int, K: int, L: int) {
+    let dd = d * d * K
+    nn_embedding_fwd(tokens, embed, xe, T, d)
+    let x = t_zeros(T * d)
+    nn_conv1d_fwd(xe, ecW, ecB, x, T, d, d, K, 1)
+    let wtmp = t_zeros(dd); let btmp = t_zeros(d); let gtmp = t_zeros(d); let getmp = t_zeros(d)
+    let mut l = 0
+    while l < L {
+        _cpback(x, tin, l * T * d, T * d)
+        _cp(trunkW, l * dd, wtmp, dd); _cp(trunkB, l * d, btmp, d)
+        _cp(trunkG, l * d, gtmp, d);  _cp(trunkBe, l * d, getmp, d)
+        let h = t_zeros(T * d)
+        nn_conv1d_fwd(x, wtmp, btmp, h, T, d, d, K, _pow2(l))
+        let hnl = t_zeros(T * d); let mean = t_zeros(1); let invl = t_zeros(1); let xhl = t_zeros(T * d)
+        nn_groupnorm_fwd(h, gtmp, getmp, hnl, mean, invl, xhl, T, d, 1)
+        _cpback(hnl, hn, l * T * d, T * d); _cpback(xhl, xh, l * T * d, T * d)
+        t_set(iv, l, t_get(invl, 0))
+        let hg = t_zeros(T * d); nn_gelu_fwd(hnl, hg, T * d)
+        let xn = t_zeros(T * d)
+        let mut i = 0
+        while i < T * d { t_set(xn, i, t_get(x, i) + t_get(hg, i)); i = i + 1 }
+        let mut c = 0
+        while c < T * d { t_set(x, c, t_get(xn, c)); c = c + 1 }
+        l = l + 1
+    }
+    _cpback(x, xtrunk, 0, T * d)
+    // moe — router conv produces E logits; arrays carry Emax columns but only
+    // the first E are written/read so the active expert count is E.
+    let logits_r = t_zeros(T * E)
+    nn_conv1d_fwd(x, rW, rB, logits_r, T, d, E, 1, 1)
+    let mut e = 0
+    while e < E {
+        _cp(expW, e * dd, wtmp, dd); _cp(expB, e * d, btmp, d)
+        let eol = t_zeros(T * d); nn_conv1d_fwd(x, wtmp, btmp, eol, T, d, d, K, 1)
+        _cpback(eol, eo, e * T * d, T * d)
+        let exl = t_zeros(T * d); nn_gelu_fwd(eol, exl, T * d)
+        _cpback(exl, ex, e * T * d, T * d)
+        e = e + 1
+    }
+    let y = t_zeros(T * d)
+    nn_moe_router_fwd(logits_r, ex, probs, y, T, E, d)
+    let meanN = t_zeros(1)
+    nn_groupnorm_fwd(y, noG, noB, yn, meanN, ivN, xhN, T, d, 1)
+    nn_conv1d_fwd(yn, roW, roB, out_logits, T, d, V, 1, 1)
+}
+
+fn gen_ce_grad(logits: int, targets: int, dlogits: int, T: int, V: int) {
+    let mut t = 0
+    while t < T {
+        let base = t * V
+        let mut mx = t_get(logits, base); let mut i = 1
+        while i < V { let v = t_get(logits, base + i); if v > mx { mx = v }; i = i + 1 }
+        let mut sm = 0.0; let mut i2 = 0
+        while i2 < V { sm = sm + exp(t_get(logits, base + i2) - mx); i2 = i2 + 1 }
+        let invT = 1.0 / to_float(T); let mut v3 = 0
+        while v3 < V { t_set(dlogits, base + v3, exp(t_get(logits, base + v3) - mx) / sm * invT); v3 = v3 + 1 }
+        let tgt = to_int(t_get(targets, t))
+        t_set(dlogits, base + tgt, t_get(dlogits, base + tgt) - invT)
+        t = t + 1
+    }
+}
+
+fn gen_bwd(dlogits: int, tokens: int, embed: int, ecW: int,
+           trunkW: int, trunkG: int, rW: int, expW: int, noG: int, roW: int,
+           xe: int, xtrunk: int, tin: int, hn: int, xh: int, iv: int,
+           eo: int, probs: int, ex: int, yn: int, xhN: int, ivN: int,
+           dembed: int, decW: int, decB: int,
+           dtrunkW: int, dtrunkB: int, dtrunkG: int, dtrunkBe: int,
+           drW: int, drB: int, dexpW: int, dexpB: int, dnoG: int, dnoB: int, droW: int, droB: int,
+           T: int, d: int, E: int, V: int, K: int, L: int) {
+    let dd = d * d * K
+    let dynorm = t_zeros(T * d)
+    nn_conv1d_bwd(yn, roW, dlogits, droW, dynorm, droB, T, d, V, 1, 1)
+    let dy = t_zeros(T * d)
+    nn_groupnorm_bwd(xhN, ivN, noG, dynorm, dnoG, dnoB, dy, T, d, 1)
+    let dlogits_r = t_zeros(T * E); let dex = t_zeros(E * T * d)
+    nn_moe_router_bwd(probs, ex, dy, dlogits_r, dex, T, E, d)
+    let dxr = t_zeros(T * d)
+    nn_conv1d_bwd(xtrunk, rW, dlogits_r, drW, dxr, drB, T, d, E, 1, 1)
+    let dx = t_zeros(T * d)
+    let mut z = 0; while z < T * d { t_set(dx, z, t_get(dxr, z)); z = z + 1 }
+    let wtmp = t_zeros(dd); let dwtmp = t_zeros(dd); let dexpe = t_zeros(T * d)
+    let deo = t_zeros(T * d); let dxe_e = t_zeros(T * d); let dbtmp = t_zeros(d)
+    let mut e = 0
+    while e < E {
+        let mut j = 0; while j < T * d { t_set(dexpe, j, t_get(dex, e * T * d + j)); j = j + 1 }
+        _cp(eo, e * T * d, wtmp, T * d)
+        nn_gelu_bwd(wtmp, dexpe, deo, T * d)
+        _cp(expW, e * dd, wtmp, dd)
+        nn_conv1d_bwd(xtrunk, wtmp, deo, dwtmp, dxe_e, dbtmp, T, d, d, K, 1)
+        _cpback(dwtmp, dexpW, e * dd, dd); _cpback(dbtmp, dexpB, e * d, d)
+        let mut a = 0; while a < T * d { t_set(dx, a, t_get(dx, a) + t_get(dxe_e, a)); a = a + 1 }
+        e = e + 1
+    }
+    let gtmp = t_zeros(d); let dgtmp = t_zeros(d); let dgetmp = t_zeros(d)
+    let dhn = t_zeros(T * d); let dh = t_zeros(T * d); let hnl = t_zeros(T * d)
+    let xhl = t_zeros(T * d); let invl = t_zeros(1); let tinl = t_zeros(T * d); let dconv_in = t_zeros(T * d)
+    let mut l = L - 1
+    while l >= 0 {
+        _cp(hn, l * T * d, hnl, T * d)
+        nn_gelu_bwd(hnl, dx, dhn, T * d)
+        _cp(xh, l * T * d, xhl, T * d); t_set(invl, 0, t_get(iv, l)); _cp(trunkG, l * d, gtmp, d)
+        nn_groupnorm_bwd(xhl, invl, gtmp, dhn, dgtmp, dgetmp, dh, T, d, 1)
+        _cpback(dgtmp, dtrunkG, l * d, d); _cpback(dgetmp, dtrunkBe, l * d, d)
+        _cp(tin, l * T * d, tinl, T * d); _cp(trunkW, l * dd, wtmp, dd)
+        nn_conv1d_bwd(tinl, wtmp, dh, dwtmp, dconv_in, dbtmp, T, d, d, K, _pow2(l))
+        _cpback(dwtmp, dtrunkW, l * dd, dd); _cpback(dbtmp, dtrunkB, l * d, d)
+        let mut a = 0; while a < T * d { t_set(dx, a, t_get(dx, a) + t_get(dconv_in, a)); a = a + 1 }
+        l = l - 1
+    }
+    let dxe = t_zeros(T * d)
+    nn_conv1d_bwd(xe, ecW, dx, decW, dxe, decB, T, d, d, K, 1)
+    let mut zz = 0; while zz < V * d { t_set(dembed, zz, 0.0); zz = zz + 1 }
+    nn_embedding_bwd_scatter(dxe, tokens, dembed, T, d)
+}
+
+fn _adam(W: int, gW: int, m: int, v: int, n: int, t: int) {
+    opt_adamw_step(W, gW, m, v, n, 0.05, 0.9, 0.999, 0.00000001, 0.0, t)
+}
+
+// ── MITOSIS: split expert `s` (0-based, < E) into a new expert at slot E. ─────
+//  Grows the active expert count by 1. Packed expert weights expW[Emax·dd],
+//  expB[Emax·d]; router rW[Emax·d] (K=1 conv weight, row-major by output e),
+//  rB[Emax]. Adam moment buffers for the parent row and the new child row are
+//  reset (fresh statistics for the divided cell).
+//
+//  Continuity: both child router logit rows = parent row, but child BIASES are
+//  set to (parent_bias - ln2) so softmax mass of each child ≈ p_parent / 2 and
+//  Σ exp(logit) is conserved across the split (other experts' gates unchanged).
+//  Child expert conv weights = parent + tiny deterministic perturbation
+//  (symmetry-breaking so the two children can specialize after the split).
+fn mitosis_split(s: int, E: int, d: int, dd: int,
+                 expW: int, expB: int, rW: int, rB: int,
+                 m_eW: int, v_eW: int, m_eB: int, v_eB: int,
+                 m_rW: int, v_rW: int, m_rB: int, v_rB: int) {
+    let ln2 = 0.6931471805599453
+    let child = E                       // new expert lands at the next slot
+    // expert conv weight: copy parent → child, add tiny perturbation
+    let mut i = 0
+    while i < dd {
+        let pw = t_get(expW, s * dd + i)
+        // deterministic ±eps perturbation; even/odd index alternation
+        let mut eps = 0.0001
+        if i - (i / 2) * 2 == 1 { eps = 0.0 - 0.0001 }
+        t_set(expW, child * dd + i, pw + eps)
+        i = i + 1
+    }
+    // expert bias: copy parent → child (no perturb needed)
+    let mut j = 0
+    while j < d {
+        t_set(expB, child * d + j, t_get(expB, s * d + j))
+        j = j + 1
+    }
+    // router weight row (d entries, K=1): child row = parent row (same logit
+    // slope); the bias carries the ln2 split so the gate mass halves.
+    let mut c = 0
+    while c < d {
+        t_set(rW, child * d + c, t_get(rW, s * d + c))
+        c = c + 1
+    }
+    // router bias: parent and child both -= ln2 → exp halves, sum conserved.
+    let pb = t_get(rB, s)
+    t_set(rB, s, pb - ln2)
+    t_set(rB, child, pb - ln2)
+    // reset Adam moments for the two divided cells (parent + child) — the
+    // freshly-grown structure starts with clean optimizer statistics.
+    let mut k = 0
+    while k < dd {
+        t_set(m_eW, s * dd + k, 0.0); t_set(v_eW, s * dd + k, 0.0)
+        t_set(m_eW, child * dd + k, 0.0); t_set(v_eW, child * dd + k, 0.0)
+        k = k + 1
+    }
+    let mut b = 0
+    while b < d {
+        t_set(m_eB, s * d + b, 0.0); t_set(v_eB, s * d + b, 0.0)
+        t_set(m_eB, child * d + b, 0.0); t_set(v_eB, child * d + b, 0.0)
+        t_set(m_rW, s * d + b, 0.0); t_set(v_rW, s * d + b, 0.0)
+        t_set(m_rW, child * d + b, 0.0); t_set(v_rW, child * d + b, 0.0)
+        b = b + 1
+    }
+    t_set(m_rB, s, 0.0); t_set(v_rB, s, 0.0)
+    t_set(m_rB, child, 0.0); t_set(v_rB, child, 0.0)
+}
+
+fn _abs(x: float) -> float { if x < 0.0 { return 0.0 - x }; return x }
+
+fn _is_finite(x: float) -> int {
+    if x != x { return 0 }
+    if x > 1.0e30 { return 0 }
+    if x < 0.0 - 1.0e30 { return 0 }
+    return 1
+}
+
+fn main() {
+    println("clm_mitosis — MITOSIS structural growth (expert cell division) BOUND smoke")
+    let T = 4; let d = 16; let V = 64; let K = 3; let L = 3
+    let E0 = 4                          // pre-split expert count
+    let Emax = E0 + 1                   // post-split capacity (one division)
+    let dd = d * d * K; let vd = V * d
+    let edMax = Emax * d                // router weight/bias capacity (K=1)
+
+    let tokens = t_zeros(T); t_set(tokens,0,3.0); t_set(tokens,1,14.0); t_set(tokens,2,59.0); t_set(tokens,3,26.0)
+    let targets = t_zeros(T); t_set(targets,0,14.0); t_set(targets,1,59.0); t_set(targets,2,26.0); t_set(targets,3,7.0)
+
+    let embed=t_zeros(vd); t_fill_lcg(embed, vd, 1, 0.3)
+    let ecW=t_zeros(dd); t_fill_lcg(ecW, dd, 2, 0.2); let ecB=t_zeros(d); t_fill_lcg(ecB, d, 3, 0.1)
+    let trunkW=t_zeros(L*dd); t_fill_lcg(trunkW, L*dd, 4, 0.2)
+    let trunkB=t_zeros(L*d); t_fill_lcg(trunkB, L*d, 5, 0.1)
+    let trunkG=t_zeros(L*d); t_fill_lcg(trunkG, L*d, 6, 0.5)
+    let trunkBe=t_zeros(L*d); t_fill_lcg(trunkBe, L*d, 7, 0.1)
+    // router/expert arrays sized at Emax so the post-split slot is owned memory.
+    let rW=t_zeros(edMax); t_fill_lcg(rW, E0*d, 12, 0.2); let rB=t_zeros(Emax); t_fill_lcg(rB, E0, 13, 0.1)
+    let expW=t_zeros(Emax*dd); t_fill_lcg(expW, E0*dd, 14, 0.2); let expB=t_zeros(Emax*d); t_fill_lcg(expB, E0*d, 15, 0.1)
+    let noG=t_zeros(d); t_fill_lcg(noG, d, 18, 0.5); let noB=t_zeros(d); t_fill_lcg(noB, d, 19, 0.1)
+    let roW=t_zeros(vd); t_fill_lcg(roW, vd, 20, 0.2); let roB=t_zeros(V); t_fill_lcg(roB, V, 21, 0.1)
+
+    // grads (sized at Emax)
+    let dembed=t_zeros(vd); let decW=t_zeros(dd); let decB=t_zeros(d)
+    let dtrunkW=t_zeros(L*dd); let dtrunkB=t_zeros(L*d); let dtrunkG=t_zeros(L*d); let dtrunkBe=t_zeros(L*d)
+    let drW=t_zeros(edMax); let drB=t_zeros(Emax); let dexpW=t_zeros(Emax*dd); let dexpB=t_zeros(Emax*d)
+    let dnoG=t_zeros(d); let dnoB=t_zeros(d); let droW=t_zeros(vd); let droB=t_zeros(V)
+    // adam state (sized at Emax)
+    let m_embed=t_zeros(vd); let v_embed=t_zeros(vd); let m_ecW=t_zeros(dd); let v_ecW=t_zeros(dd)
+    let m_ecB=t_zeros(d); let v_ecB=t_zeros(d)
+    let m_tW=t_zeros(L*dd); let v_tW=t_zeros(L*dd); let m_tB=t_zeros(L*d); let v_tB=t_zeros(L*d)
+    let m_tG=t_zeros(L*d); let v_tG=t_zeros(L*d); let m_tBe=t_zeros(L*d); let v_tBe=t_zeros(L*d)
+    let m_rW=t_zeros(edMax); let v_rW=t_zeros(edMax); let m_rB=t_zeros(Emax); let v_rB=t_zeros(Emax)
+    let m_eW=t_zeros(Emax*dd); let v_eW=t_zeros(Emax*dd); let m_eB=t_zeros(Emax*d); let v_eB=t_zeros(Emax*d)
+    let m_noG=t_zeros(d); let v_noG=t_zeros(d); let m_noB=t_zeros(d); let v_noB=t_zeros(d)
+    let m_roW=t_zeros(vd); let v_roW=t_zeros(vd); let m_roB=t_zeros(V); let v_roB=t_zeros(V)
+    // caches (sized at Emax expert capacity)
+    let xe=t_zeros(T*d); let xtrunk=t_zeros(T*d); let tin=t_zeros(L*T*d); let hn=t_zeros(L*T*d)
+    let xh=t_zeros(L*T*d); let iv=t_zeros(L); let eo=t_zeros(Emax*T*d); let probs=t_zeros(T*Emax)
+    let ex=t_zeros(Emax*T*d); let yn=t_zeros(T*d); let xhN=t_zeros(T*d); let ivN=t_zeros(1)
+    let logits=t_zeros(T*V); let dlogits=t_zeros(T*V)
+
+    let split_at = 13                   // perform mitosis at this step
+    let steps = 25
+    let mut E = E0                      // active expert count (grows at split)
+    let mut loss0 = 0.0; let mut lossF = 0.0
+    let mut ce_pre = 0.0; let mut ce_post = 0.0
+    let mut fin_post = 1
+    let mut step = 1
+    while step <= steps {
+        // MITOSIS at the split step: divide expert 0 → expert E0, then E := E+1.
+        if step == split_at {
+            // forward at pre-split E to capture CE immediately BEFORE division
+            gen_fwd(tokens, embed, ecW, ecB, trunkW, trunkB, trunkG, trunkBe, rW, rB, expW, expB, noG, noB, roW, roB,
+                    xe, xtrunk, tin, hn, xh, iv, eo, probs, ex, yn, xhN, ivN, logits, T, d, E, V, K, L)
+            ce_pre = nn_ce_loss_allpos(logits, targets, T, V)
+            mitosis_split(0, E, d, dd, expW, expB, rW, rB,
+                          m_eW, v_eW, m_eB, v_eB, m_rW, v_rW, m_rB, v_rB)
+            E = E + 1                   // structural growth: E0 → E0+1
+            println("  -- MITOSIS at step " + to_string(step) + ": expert 0 split, E " + to_string(E0) + " -> " + to_string(E))
+            // forward at post-split E to capture CE immediately AFTER division
+            gen_fwd(tokens, embed, ecW, ecB, trunkW, trunkB, trunkG, trunkBe, rW, rB, expW, expB, noG, noB, roW, roB,
+                    xe, xtrunk, tin, hn, xh, iv, eo, probs, ex, yn, xhN, ivN, logits, T, d, E, V, K, L)
+            ce_post = nn_ce_loss_allpos(logits, targets, T, V)
+            // FINITE check on post-split logits
+            let mut q = 0
+            while q < T * V { if _is_finite(t_get(logits, q)) == 0 { fin_post = 0 }; q = q + 1 }
+            println("  CE_pre_split  = " + to_string(ce_pre))
+            println("  CE_post_split = " + to_string(ce_post))
+        }
+        gen_fwd(tokens, embed, ecW, ecB, trunkW, trunkB, trunkG, trunkBe, rW, rB, expW, expB, noG, noB, roW, roB,
+                xe, xtrunk, tin, hn, xh, iv, eo, probs, ex, yn, xhN, ivN, logits, T, d, E, V, K, L)
+        let loss = nn_ce_loss_allpos(logits, targets, T, V)
+        if step == 1 { loss0 = loss; println("  step 1  CE = " + to_string(loss)) }
+        lossF = loss
+        gen_ce_grad(logits, targets, dlogits, T, V)
+        gen_bwd(dlogits, tokens, embed, ecW, trunkW, trunkG, rW, expW, noG, roW,
+                xe, xtrunk, tin, hn, xh, iv, eo, probs, ex, yn, xhN, ivN,
+                dembed, decW, decB, dtrunkW, dtrunkB, dtrunkG, dtrunkBe, drW, drB, dexpW, dexpB,
+                dnoG, dnoB, droW, droB, T, d, E, V, K, L)
+        _adam(embed, dembed, m_embed, v_embed, vd, step)
+        _adam(ecW, decW, m_ecW, v_ecW, dd, step); _adam(ecB, decB, m_ecB, v_ecB, d, step)
+        _adam(trunkW, dtrunkW, m_tW, v_tW, L*dd, step); _adam(trunkB, dtrunkB, m_tB, v_tB, L*d, step)
+        _adam(trunkG, dtrunkG, m_tG, v_tG, L*d, step); _adam(trunkBe, dtrunkBe, m_tBe, v_tBe, L*d, step)
+        _adam(rW, drW, m_rW, v_rW, E*d, step); _adam(rB, drB, m_rB, v_rB, E, step)
+        _adam(expW, dexpW, m_eW, v_eW, E*dd, step); _adam(expB, dexpB, m_eB, v_eB, E*d, step)
+        _adam(noG, dnoG, m_noG, v_noG, d, step); _adam(noB, dnoB, m_noB, v_noB, d, step)
+        _adam(roW, droW, m_roW, v_roW, vd, step); _adam(roB, droB, m_roB, v_roB, V, step)
+        step = step + 1
+    }
+    println("  step " + to_string(steps) + " CE = " + to_string(lossF))
+    println("  loss0 = " + to_string(loss0) + "  lossF = " + to_string(lossF))
+
+    // ── BOUND verdict (분열 후 BOUND 유지) ────────────────────────────────────
+    //  (1) FINITE   : post-split forward is finite (no NaN/Inf).
+    //  (2) CONTINUOUS: |CE_post - CE_pre| small (split preserves output).
+    //  (3) DESCEND  : final loss continues below the initial loss.
+    let jump = _abs(ce_post - ce_pre)
+    let cont_ok = if jump < 0.05 { 1 } else { 0 }
+    let descend_ok = if lossF < loss0 * 0.95 { 1 } else { 0 }
+    println("  F-FLAME-MITOSIS-FINITE     = " + to_string(fin_post))
+    println("  F-FLAME-MITOSIS-CONTINUOUS = " + to_string(cont_ok) + "  (|jump| = " + to_string(jump) + ")")
+    println("  F-FLAME-MITOSIS-DESCEND    = " + to_string(descend_ok))
+    if fin_post == 1 {
+        if cont_ok == 1 {
+            if descend_ok == 1 {
+                println("F-FLAME-MITOSIS-BOUND = 1")
+                println("PASS — model stays BOUNDED + stable after expert cell division (E " + to_string(E0) + " -> " + to_string(E) + ")")
+                return
+            }
+        }
+    }
+    println("F-FLAME-MITOSIS-BOUND = 0")
+    println("FAIL")
+}
