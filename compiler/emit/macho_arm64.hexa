@@ -433,6 +433,16 @@ fn encode_arm64_insn(op: string, ops: [string]) -> i64 {
         let rd = xreg_idx(ops[0])
         let rn = xreg_idx(ops[1])
         let rm = xreg_idx(ops[2])
+        // SHIFTED-register form (0x8b000000) encodes reg 31 as XZR, so it
+        // CANNOT name SP. When Rd or Rn is SP, emit the EXTENDED-register
+        // form (0x8b206000, option=UXTX=011 at bits 15:13, imm3=0) where
+        // reg 31 = SP. (Rm=31 stays XZR in both forms — correct for the
+        // `add x15, sp, x15` frame-base materializer in arm64_darwin.hexa.)
+        let add_dst_sp = ops[0] == "sp" || ops[0] == "SP"
+        let add_src_sp = ops[1] == "sp" || ops[1] == "SP"
+        if add_dst_sp || add_src_sp {
+            return 0x8b206000 | (rm << 16) | (rn << 5) | rd
+        }
         return 0x8b000000 | (rm << 16) | (rn << 5) | rd
     }
     // ADD Xd, Xn, #imm12
@@ -447,6 +457,13 @@ fn encode_arm64_insn(op: string, ops: [string]) -> i64 {
         let rd = xreg_idx(ops[0])
         let rn = xreg_idx(ops[1])
         let rm = xreg_idx(ops[2])
+        // Same SP-vs-XZR rule as ADD: SUB extended-register (0xcb206000,
+        // UXTX, imm3=0) when Rd or Rn is SP, else shifted-register.
+        let sub_dst_sp = ops[0] == "sp" || ops[0] == "SP"
+        let sub_src_sp = ops[1] == "sp" || ops[1] == "SP"
+        if sub_dst_sp || sub_src_sp {
+            return 0xcb206000 | (rm << 16) | (rn << 5) | rd
+        }
         return 0xcb000000 | (rm << 16) | (rn << 5) | rd
     }
     // SUB Xd, Xn, #imm12
