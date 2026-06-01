@@ -1,0 +1,160 @@
+// HEXA Standard Library — qforge/elph_offdiag
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// QFORGE metallic-wall breadth BRICK (b)/4 — the OFF-DIAGONAL inter-band |g_mn|.
+//
+// ── WHY THIS EXISTS (the DIAGONAL-only wall, d6 honest) ──────────────────────
+// The CaH6 real-ΔV_bare cross-val (#2485 fixtures/cah6_realcell_xval, brick (a)
+// #2488 broadened ω) computes the el-ph coupling from ONLY the DIAGONAL element
+//   g_nn = ⟨ψ_n | ΔV_bare | ψ_n⟩      (qforge_realcell_g_diag, m=n only)
+// — the first-order eigenvalue shift dε_n/du. That throws away every INTER-BAND
+// matrix element g_mn = ⟨ψ_m | ΔV_bare | ψ_n⟩ with m≠n. In hydrides the
+// off-diagonal terms DOMINATE: the strong H-derived bands at E_F are mixed hard
+// by the H-displacement ΔV_bare, so the inter-band |g_mn|² carries most of the
+// Fermi-surface el-ph weight. A diagonal-only sum is structurally too NARROW.
+// THIS brick adds the full m×n matrix |g_mn| over the active manifold, folded
+// into λ with the correct Fermi-surface DOUBLE-DELTA weight δ(ε_m−E_F)·δ(ε_n−E_F)
+// (reusing qforge_gaussian_delta / the L3 α²F assembler) — d3/d19, 0-diff to the
+// merged realcell_phonon.hexa (#2485) and realcell_qmesh.hexa (#2488).
+//
+// ── THE FULL m×n COUPLING MATRIX (d19 reuse of qforge_dvbare_apply) ──────────
+// Brick 2/2 (#2485) already gives the bundle (ΔV_bare ψ_n)[a] for every occupied
+// ψ_n via qforge_dvbare_apply. The off-diagonal element is then just the overlap
+//   g_mn = ⟨ψ_m | ΔV_bare | ψ_n⟩ = Σ_a ψ_m[a] · (ΔV_bare ψ_n)[a].
+// At Γ the operator is real-symmetric (#2485 selftest case (3)), so g_mn = g_nm
+// — the el-ph matrix is HERMITIAN. We build the full nb×nb matrix from the
+// active states + their pre-applied ΔV_bare columns; m=n recovers exactly the
+// existing qforge_realcell_g_diag (a strict superset of brick 2/2, no regression).
+//
+// ── d4 GENERIC — caller supplies the states + the applied ΔV, no name branch ──
+// The state rows ψ and the per-state (ΔV_bare ψ) columns are ALL caller inputs
+// (from the SCF + qforge_dvbare_apply). Add/swap a cell = change the inputs; no
+// branch on a material name. The same path serves CaH6 / LaH10 / any cell.
+//
+// ── HONEST SCOPE (d6 — breadth brick (b)/4, NOT a 1% closure) ────────────────
+// Adding inter-band coupling BROADENS the el-ph sum (diagonal-only → full m×n).
+// That is progress but NOT sufficient to close λ to QE's 1%. The 2 REMAINING
+// breadth items stay explicit and unfaked:
+//   (c) real N(E_F) + a converged k-mesh (the fixture uses n_ef=1 / Γ-only),
+//   (d) screened ΔV_scf (the bare independent-particle |g|, no Hartree+XC kernel).
+// This brick does NOT fabricate a λ — the caller reports whatever the broadened
+// off-diagonal sum gives VERBATIM (within or outside the QE bar).
+//
+// d3/d19 reuse (compose, don't reinvent — every brick below is verified 🟢/🔵):
+//   - ΔV_bare ψ     : stdlib/qforge/realcell_phonon (qforge_dvbare_apply, #2485)
+//   - Gaussian δ    : stdlib/qforge/elph            (qforge_gaussian_delta)
+//   - α²F assembler : stdlib/qforge/tc              (qforge_a2f_from_elph, L3 δ·δ)
+//   - λ, ω_log      : stdlib/material/sim           (eliashberg_moments_from_a2f)
+// New code here = the full m×n overlap + the double-delta-weighted (m,n) sample
+// list ONLY. Zero physics is re-implemented; no λ is hardcoded.
+
+use "stdlib/qforge/elph"
+
+// ── one off-diagonal element g_mn = ⟨ψ_m | ΔV_bare ψ_n⟩ ──────────────────────
+// Pure overlap of state ψ_m (length n) with the pre-applied column (ΔV_bare ψ_n)
+// (length n, from qforge_dvbare_apply). m=n recovers qforge_realcell_g_diag.
+//   psi_m       : ψ_m (length n PW coefficients).
+//   dvbare_psi_n: (ΔV_bare ψ_n) (length n) from qforge_dvbare_apply.
+// Returns the real scalar g_mn; 0.0 on a length mismatch.
+pub fn qforge_realcell_g_offdiag(psi_m: [float], dvbare_psi_n: [float]) -> float {
+    let n = len(psi_m)
+    if len(dvbare_psi_n) != n { return 0.0 }
+    let mut s = 0.0
+    let mut i = 0
+    while i < n { s = s + psi_m[i] * dvbare_psi_n[i] ; i = i + 1 }
+    return s
+}
+
+// ── the FULL nb×nb el-ph coupling matrix g_mn over the active manifold ───────
+// Build every g_mn = ⟨ψ_m | ΔV_bare | ψ_n⟩ from the active state rows and their
+// pre-applied ΔV_bare columns. Returns the flat [nb*nb] matrix, row-major
+// (g[m*nb+n]). At Γ this is real-symmetric (g_mn = g_nm), so the caller can
+// Hermiticity-check it directly. Malformed (row/col count or width mismatch) → [].
+//   states   : nb active states, each length n (ψ_m rows).
+//   dv_states: nb pre-applied columns (ΔV_bare ψ_n), each length n.
+pub fn qforge_gmn_matrix(states: [[float]], dv_states: [[float]]) -> [float] {
+    let nb = states.len()
+    if nb < 1 || dv_states.len() != nb { return [] }
+    let n = len(states[0])
+    let mut g: [float] = []
+    let mut m = 0
+    while m < nb {
+        if len(states[m]) != n { return [] }
+        let mut nn = 0
+        while nn < nb {
+            if len(dv_states[nn]) != n { return [] }
+            g.push(qforge_realcell_g_offdiag(states[m], dv_states[nn]))
+            nn = nn + 1
+        }
+        m = m + 1
+    }
+    return g
+}
+
+// ── Hermiticity residual of the gmn matrix (Σ|g_mn − g_nm|) ──────────────────
+// The g5 witness that the assembled matrix is Hermitian (real-symmetric at Γ).
+// Returns the summed asymmetry; 0.0 for a perfectly Hermitian matrix, and -1.0
+// on a malformed (non-square) input.
+pub fn qforge_gmn_herm_residual(g: [float], nb: int) -> float {
+    if nb < 1 || len(g) != nb * nb { return -1.0 }
+    let mut r = 0.0
+    let mut m = 0
+    while m < nb {
+        let mut nn = 0
+        while nn < nb {
+            let d = g[m * nb + nn] - g[nn * nb + m]
+            r = r + (if d < 0.0 { -d } else { d })
+            nn = nn + 1
+        }
+        m = m + 1
+    }
+    return r
+}
+
+// ── assemble the (m,n) el-ph sample list with the double-delta weight ────────
+// Walk the full m×n active manifold and emit, for every band pair (m,n), an
+// el-ph sample for the L3 α²F assembler:
+//   eps_k  = ε_m ,  eps_kq = ε_n ,  g2 = g_mn² ,  omega = ω(this mode).
+// The L3 assembler then applies the Fermi-surface DOUBLE delta
+//   δ_σel(ε_m − E_F) · δ_σel(ε_n − E_F)
+// so each off-diagonal pair contributes only when BOTH bands sit near E_F — the
+// correct inter-band Fermi-surface weight. With `include_diag=false` the m=n
+// terms are skipped (PURE off-diagonal contribution, to isolate the inter-band
+// lift); `include_diag=true` gives the FULL matrix (diagonal + off-diagonal),
+// the physical el-ph sum. Returns flat blocks [eps_k…, eps_kq…, g2…, omega…]
+// (each length = the number of emitted samples), or [] on malformed input.
+//   states   : nb active ψ_m rows (length n each).
+//   dv_states: nb pre-applied (ΔV_bare ψ_n) columns (length n each).
+//   eps      : [nb] band energies ε of the active manifold.
+//   omega_qnu: the phonon ω to tag each sample with (1 mode here — caller can
+//              cycle a real band via brick (a)'s qforge_qmesh_omega_band).
+//   include_diag : keep the m=n diagonal terms too (true = full matrix).
+pub fn qforge_gmn_samples(states: [[float]], dv_states: [[float]], eps: [float],
+                          omega_qnu: float, include_diag: bool) -> [[float]] {
+    let nb = states.len()
+    if nb < 1 || dv_states.len() != nb || len(eps) != nb { return [] }
+    let g = qforge_gmn_matrix(states, dv_states)
+    if len(g) != nb * nb { return [] }
+    let mut eps_k: [float] = []
+    let mut eps_kq: [float] = []
+    let mut g2: [float] = []
+    let mut wq: [float] = []
+    let mut m = 0
+    while m < nb {
+        let mut nn = 0
+        while nn < nb {
+            if include_diag || m != nn {
+                let gmn = g[m * nb + nn]
+                eps_k.push(eps[m])
+                eps_kq.push(eps[nn])
+                g2.push(gmn * gmn)
+                wq.push(omega_qnu)
+            }
+            nn = nn + 1
+        }
+        m = m + 1
+    }
+    return [eps_k, eps_kq, g2, wq]
+}
