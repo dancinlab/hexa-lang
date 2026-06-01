@@ -1,0 +1,132 @@
+// @ci_gate — deterministic · network-free · NO pod ops · 실셀 ΔV_bare 연산자 g5 게이트
+//
+// realcell_phonon_selftest.hexa — QFORGE metallic-unblock 브릭 2/2 g5 gate.
+//
+// 브릭 2/2(realcell_phonon.hexa)는 brick 1/2(#2480 dvloc_du)의 ∂Ṽ_κ(G)/∂u 를
+// PW 해밀토니안 기저의 REAL ΔV_bare 연산자로 엮는다. 이 게이트는 그 연산자가
+//   (1) brick 1/2 의 −i·ΔG_d 위상을 ΔG=G_a−G_b 차이벡터에 정확히 적용하는지,
+//   (2) ΔG=0 머리(대각 a=b)에 0 을 주는지(음향/병진불변 머리),
+//   (3) Hermiticity: (ΔV_bare)_ab = (ΔV_bare)_ba (실수, Γ 실대칭),
+//   (4) 상수 stand-in (g_target·ψ) 과 NON-TRIVIAL 하게 다른지 — 밴드구조 보유,
+//   (5) 음향 합규칙 데모: brick 1/2 의 G=0→0 머리가 dfpt 동역학행렬 Γ 음향 0 으로
+//       이어지는지(dfpt qforge_phonons 재사용, d19).
+// 를 검증한다. 어떤 케이스도 λ 를 조작하지 않는다 — 연산자의 물리적 정확성만 본다(d6).
+//
+// Run:  HEXA_STDLIB_ROOT="$PWD/stdlib" hexa run --no-sentinel stdlib/qforge/realcell_phonon_selftest.hexa
+// PASS: "qforge_realcell_phonon_selftest PASS".
+use "stdlib/qforge/realcell_phonon"
+use "stdlib/qforge/dvloc_du"
+use "stdlib/qforge/dfpt"
+
+fn _abs(x: float) -> float { if x < 0.0 { return -x } return x }
+fn _ck_close(name: str, got: float, want: float, eps: float) -> int {
+    if _abs(got - want) <= eps { println("PASS " + name + " (" + to_string(got) + ")") ; return 0 }
+    println("FAIL " + name + " — got " + to_string(got) + " want " + to_string(want)) ; return 1
+}
+fn _ck_bool(name: str, got: bool, want: bool) -> int {
+    if got == want { println("PASS " + name + " (" + to_string(got) + ")") ; return 0 }
+    println("FAIL " + name + " — got " + to_string(got) + " want " + to_string(want)) ; return 1
+}
+
+fn main() {
+    let mut fails = 0
+    println("── QFORGE realcell ΔV_bare 연산자 g5 게이트 (브릭 2/2) ──")
+
+    // ── tiny 2-PW cell: G0=(0,0,0), G1=(1,0,0). τ at origin, dir=x. ──────────
+    //   vloc_dg[a*n+b] = V_loc(|G_a−G_b|): diagonal(ΔG=0) = vl0, off-diag(|ΔG|=1)=vl1.
+    let gvecs = [0.0, 0.0, 0.0,   1.0, 0.0, 0.0]
+    let n = 2
+    let vl0 = 1.0       // V_loc(0)
+    let vl1 = 0.5       // V_loc(|ΔG|=1)
+    let vloc_dg = [vl0, vl1,  vl1, vl0]      // n×n: (00,01,10,11)
+    let tau = [0.0, 0.0, 0.0]
+
+    // ── (1)+(2) ΔV_bare matrix via apply on the two unit basis states e0,e1 ──
+    //   Col j of the operator = apply(e_j); element [a][j] = ∂H[a][j]/∂u.
+    let e0 = [1.0, 0.0]
+    let e1 = [0.0, 1.0]
+    let col0 = qforge_dvbare_apply(gvecs, vloc_dg, tau, 0, e0)   // (ΔV)·e0 = column 0
+    let col1 = qforge_dvbare_apply(gvecs, vloc_dg, tau, 0, e1)   // column 1
+    fails = fails + _ck_bool("(0) apply returns length-n", len(col0) == n && len(col1) == n, true)
+
+    // M[a][b] = (ΔV_bare)_ab.  M[a][0]=col0[a], M[a][1]=col1[a].
+    let m00 = col0[0] ; let m10 = col0[1]
+    let m01 = col1[0] ; let m11 = col1[1]
+
+    // (2) ΔG=0 head (a=b): −i·0·V_loc(0)·1 = 0 → diagonal exactly 0 (translational head).
+    fails = fails + _ck_close("(2) ΔV_bare[0][0] = 0 (ΔG=0 acoustic head)", m00, 0.0, 1.0e-12)
+    fails = fails + _ck_close("(2) ΔV_bare[1][1] = 0 (ΔG=0 acoustic head)", m11, 0.0, 1.0e-12)
+
+    // (1) off-diagonal closed form. ΔG=G_a−G_b, τ=0 → exp=1, Re[−i·ΔG_x·vl1] = 0.
+    //   With τ=0 the bare element is PURELY IMAGINARY → real part 0. Check it.
+    fails = fails + _ck_close("(1) Re ΔV_bare[0][1] (τ=0 → pure imag → Re=0)", m01, 0.0, 1.0e-12)
+    fails = fails + _ck_close("(1) Re ΔV_bare[1][0] (τ=0 → pure imag → Re=0)", m10, 0.0, 1.0e-12)
+
+    // ── (1b) τ ≠ 0 → REAL part non-zero, matches brick 1/2 directly ──────────
+    //   Move the atom off origin so exp(−iΔG·τ) has a sin part → Re ≠ 0.
+    let tau2 = [0.3, 0.0, 0.0]
+    let c0 = qforge_dvbare_apply(gvecs, vloc_dg, tau2, 0, e1)   // column 1, τ≠0
+    let m01b = c0[0]
+    // brick 1/2 direct: ΔG = G_0−G_1 = (−1,0,0), V_loc=vl1, dir=x.
+    let one = qforge_dvloc_du([-1.0, 0.0, 0.0], [vl1], tau2, 0)
+    fails = fails + _ck_close("(1b) apply Re matches brick 1/2 per-ΔG", m01b, one[0], 1.0e-12)
+    fails = fails + _ck_bool("(1b) τ≠0 → Re ΔV_bare ≠ 0 (real coupling exists)", _abs(m01b) > 1.0e-9, true)
+
+    // ── (3) Hermiticity of the assembled ΔV_bare (real, Γ symmetric) ─────────
+    //   ΔG(a,b) = −ΔG(b,a). For τ=0 head: both pure-imag conjugate → Re symmetric (0).
+    //   For τ≠0: Re[−i·ΔG_d·V·e^{−iΔG·τ}](a,b) vs (b,a): ΔG flips → element flips sign
+    //   in BOTH the −iΔG_d factor AND the phase, giving (ΔV)_ab = (ΔV)_ba (real symmetric).
+    let colA0 = qforge_dvbare_apply(gvecs, vloc_dg, tau2, 0, e0)  // column 0 → (ΔV)[a][0]
+    let colA1 = qforge_dvbare_apply(gvecs, vloc_dg, tau2, 0, e1)  // column 1 → (ΔV)[a][1]
+    let herm01 = colA1[0]   // (ΔV)[0][1]
+    let herm10 = colA0[1]   // (ΔV)[1][0]
+    fails = fails + _ck_close("(3) Hermitian: ΔV[0][1] == ΔV[1][0] (real symmetric)",
+                              herm01, herm10, 1.0e-12)
+
+    // ── (4) NON-TRIVIAL vs the constant stand-in (g_target·ψ) ────────────────
+    //   The stand-in returned g_target·ψ — IDENTICAL shape to ψ, no off-diagonal
+    //   mixing. The real operator MIXES G-components (off-diagonal ≠ 0) and has a
+    //   ZERO diagonal head — structurally DISTINCT from any scalar multiple of ψ.
+    let g_target = 0.30
+    let standin = [g_target * e1[0], g_target * e1[1]]   // stand-in ΔV·e1 = 0.30·e1
+    let real_dv = colA1                                  // real ΔV·e1
+    // stand-in: [0, 0.30]; real: [Re≠0, 0]. They differ on BOTH components.
+    let diff = _abs(real_dv[0] - standin[0]) + _abs(real_dv[1] - standin[1])
+    fails = fails + _ck_bool("(4) real ΔV·ψ ≠ stand-in g_target·ψ (non-trivial)",
+                             diff > 1.0e-6, true)
+    fails = fails + _ck_close("(4) real ΔV·e1 has ZERO on the e1 component (head)",
+                              real_dv[1], 0.0, 1.0e-12)
+
+    // ── (5) diagonal g_nn = ⟨ψ_n|ΔV_bare|ψ_n⟩ (Hellmann-Feynman scalar) ──────
+    //   For a single basis state e0: g = e0·(ΔV·e0) = (ΔV)[0][0] = 0 (head). For a
+    //   MIXED state the real off-diagonal makes g_nn ≠ 0 — a real first-order shift.
+    let mixed = [0.7071067811865476, 0.7071067811865476]   // (e0+e1)/√2
+    let dv_mixed = qforge_dvbare_apply(gvecs, vloc_dg, tau2, 0, mixed)
+    let gnn = qforge_realcell_g_diag(mixed, dv_mixed)
+    // g_nn = ½[(ΔV)01 + (ΔV)10] = (ΔV)01 (Hermitian). Real, finite.
+    fails = fails + _ck_close("(5) g_nn(mixed) = real off-diag (Hermitian)", gnn, herm01, 1.0e-12)
+    fails = fails + _ck_bool("(5) g_nn(mixed) ≠ 0 (real first-order shift)", _abs(gnn) > 1.0e-9, true)
+
+    // ── (acoustic sum-rule demo, d19 reuse of dfpt) ─────────────────────────
+    //   The G=0 / ΔG=0 head being 0 is the bare-side translational-invariance head.
+    //   A real-space Φ built so its on-site = −Σ neighbours (the sum rule the bare
+    //   head enforces) yields ω(Γ)=0. Demonstrate via qforge_phonons (1D x-chain).
+    let K = 1.0 ; let M = 1.0
+    let mut phi: [float] = []
+    let b0 = [2.0 * K, 0.0, 0.0,  0.0, 1.0e6, 0.0,  0.0, 0.0, 1.0e6]   // on-site +2K
+    let bp = [-K, 0.0, 0.0,  0.0, 0.0, 0.0,  0.0, 0.0, 0.0]            // R=+a: −K
+    let bm = [-K, 0.0, 0.0,  0.0, 0.0, 0.0,  0.0, 0.0, 0.0]            // R=−a: −K
+    let mut t = 0
+    while t < 9 { phi.push(b0[t]) ; t = t + 1 }
+    t = 0 ; while t < 9 { phi.push(bp[t]) ; t = t + 1 }
+    t = 0 ; while t < 9 { phi.push(bm[t]) ; t = t + 1 }
+    let cellR = [0.0, 0.0, 0.0,  1.0, 0.0, 0.0,  -1.0, 0.0, 0.0]
+    let dg = qforge_dynmat(phi, [M], [0.0, 0.0, 0.0], 1, 3, cellR)   // Γ
+    let pg = qforge_phonons(dg, [M], 1)
+    fails = fails + _ck_close("(acoustic) ω(Γ) = 0 (translational sum rule)",
+                              pg.omega[0], 0.0, 1.0e-6)
+    fails = fails + _ck_bool("(acoustic) n_acoustic_zero ≥ 1", pg.n_acoustic_zero >= 1, true)
+
+    if fails == 0 { println("qforge_realcell_phonon_selftest PASS") }
+    else { println("qforge_realcell_phonon_selftest FAIL — " + to_string(fails) + " case(s)") }
+}

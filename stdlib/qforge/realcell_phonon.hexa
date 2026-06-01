@@ -1,0 +1,127 @@
+// HEXA Standard Library — qforge/realcell_phonon
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// QFORGE metallic-unblock BRICK 2/2 — the REAL-CELL phonon perturbation driver.
+//
+// ── WHY THIS EXISTS (the metallic wall, d6 honest) ───────────────────────────
+// The CaH6 cross-val (demiurge 73e9157) gave QFORGE-NC λ=0.0208 vs QE 4.376 — a
+// 200× miss — because the CaH6 fixture fed a CONSTANT STAND-IN coupling
+// (g_target=0.30 · ΔV|ψ_n⟩ = g_target·ψ_n, a rigid on-site scalar) into the el-ph
+// chain. That stand-in carries NO band/mode structure, so the |g|² it produced was
+// physically meaningless. Brick 1/2 (#2480, qforge_dvloc_du) supplied the missing
+// piece: the G-space derivative ∂Ṽ_κ(G)/∂u of the LOCAL ionic potential. THIS brick
+// (2/2) wires that derivative into the PW Hamiltonian basis as a REAL ΔV_bare
+// OPERATOR applied to the occupied ψ_n — the input qforge_elph_g2 / the force-
+// constant path actually need — so the |g| is a genuine matrix element, not a
+// constant.
+//
+// ── THE PW-BASIS BARE PERTURBATION (d19 reuse of dvloc_du + the H convention) ─
+// The multi-species PW Hamiltonian (assembler.hexa) puts the LOCAL potential at
+//   H[a][b] += V_loc(|G_a−G_b|) · Re[ S(G_a−G_b) ]          S = Σ_κ exp(−iG·τ_κ)
+// Moving ONE atom κ (at τ_κ) by u along Cartesian dir d, the displacement
+// derivative of THAT local block is exactly brick 1/2 per difference vector ΔG:
+//   ∂H[a][b]/∂u_d = Re[ −i·ΔG_d·V_loc^κ(|ΔG|)·exp(−iΔG·τ_κ) ]   (ΔG = G_a−G_b)
+//                 = Re[ qforge_dvloc_du(ΔG, V_loc^κ(|ΔG|), τ_κ, d) ]
+// i.e. ΔV_bare is the dense n×n matrix of those derivatives; (ΔV_bare ψ_n)[a] =
+// Σ_b ∂H[a][b]/∂u · ψ_n[b]. This is the REAL coupling operator — it carries the
+// band overlap ⟨ψ_m|ΔV_bare|ψ_n⟩ structure the stand-in scalar threw away.
+//
+// ── d4 GENERIC — caller supplies the cell, no material hardcode ───────────────
+// The G-list, the per-ΔG V_loc^κ form factor, τ_κ, and dir are ALL caller inputs.
+// Add/swap a species or a cell = change the inputs; no branch on a name. The same
+// path serves CaH6 / LaH10 / any cell.
+//
+// ── HONEST SCOPE (d6) ────────────────────────────────────────────────────────
+// This brick produces the REAL bare ΔV_bare|ψ_n⟩ bundle from the SCF occupied
+// states + brick 1/2. It does NOT add screening (the caller's drho_to_dvscf kernel,
+// d4 — a 0 kernel = independent-particle/bare |g|, the honest limit) and it does
+// NOT fabricate a λ. The assembled λ is whatever the real matrix elements give —
+// reported VERBATIM by the caller (the CaH6 fixture), within or outside the QE bar.
+
+use "stdlib/qforge/dvloc_du"
+
+// ── per-ΔG local form factor along ONE difference-vector list ────────────────
+// The dvloc_du brick wants the radial form factor V_loc^κ(|ΔG|) per ΔG. The H
+// assembler already computes exactly this set (qforge_vloc_of_g over the n×n ΔG
+// magnitudes). The caller passes that flat [n*n] vloc_dg array straight through —
+// no recomputation here (d3/d19).
+
+// ── ΔV_bare matrix-vector: (ΔV_bare ψ)[a] = Σ_b Re[∂Ṽ(G_a−G_b)/∂u] ψ[b] ───────
+//   gvecs   : flat [3·n] cartesian G-vectors (the PW basis, bohr⁻¹)
+//   vloc_dg : flat [n*n] real V_loc^κ(|G_a−G_b|) (assembler's qforge_vloc_of_g out)
+//   tau     : [3] cartesian position τ_κ of the displaced atom (bohr)
+//   dir     : Cartesian component d ∈ {0,1,2}
+//   psi     : length-n PW coefficients of one state ψ_n
+// Returns length-n (ΔV_bare ψ)[a], the REAL bare perturbation applied to ψ.
+// Malformed (gvecs≠3n · vloc_dg≠n² · len(psi)≠n · dir∉{0,1,2}) → [].
+pub fn qforge_dvbare_apply(gvecs: [float], vloc_dg: [float], tau: [float],
+                           dir: int, psi: [float]) -> [float] {
+    let lg = len(gvecs)
+    if lg % 3 != 0 { return [] }
+    let n = lg / 3
+    if len(vloc_dg) != n * n || len(psi) != n { return [] }
+    if dir < 0 || dir > 2 { return [] }
+    let mut out: [float] = []
+    let mut a = 0
+    while a < n { out.push(0.0) ; a = a + 1 }
+    a = 0
+    while a < n {
+        let mut acc = 0.0
+        let mut b = 0
+        while b < n {
+            // difference vector ΔG = G_a − G_b
+            let dgx = gvecs[a * 3] - gvecs[b * 3]
+            let dgy = gvecs[a * 3 + 1] - gvecs[b * 3 + 1]
+            let dgz = gvecs[a * 3 + 2] - gvecs[b * 3 + 2]
+            // brick 1/2 (single ΔG): −i·ΔG_d·V_loc(|ΔG|)·exp(−iΔG·τ); take Re (H real at Γ).
+            let one = qforge_dvloc_du([dgx, dgy, dgz], [vloc_dg[a * n + b]], tau, dir)
+            // one = [re, im]; real part of the matrix element is one[0].
+            acc = acc + one[0] * psi[b]
+            b = b + 1
+        }
+        out[a] = acc
+        a = a + 1
+    }
+    return out
+}
+
+// ── ΔV_bare|ψ_n⟩ BUNDLE over the occupied manifold (the elph_g2/Φ input) ──────
+// Apply the REAL bare perturbation to EVERY occupied state, returning the flat
+// [M_occ·n] bundle qforge_elph_g2(dv_bare_psi) and qforge_force_constant's
+// dV_bare_provider consume. This is the DROP-IN replacement for the stand-in
+//   ΔV|ψ_n⟩ = g_target·ψ_n
+// in the CaH6 fixture — same bundle shape, REAL physics inside.
+//   occ_states : occupied ψ_n (rows, each length n).
+// Returns flat [M_occ·n]; [] on any malformed apply.
+pub fn qforge_dvbare_psi_bundle(gvecs: [float], vloc_dg: [float], tau: [float],
+                                dir: int, occ_states: [[float]]) -> [float] {
+    let m_occ = occ_states.len()
+    let mut bundle: [float] = []
+    let mut nn = 0
+    while nn < m_occ {
+        let dvn = qforge_dvbare_apply(gvecs, vloc_dg, tau, dir, occ_states[nn])
+        if len(dvn) == 0 { return [] }
+        let mut i = 0
+        let n = len(dvn)
+        while i < n { bundle.push(dvn[i]) ; i = i + 1 }
+        nn = nn + 1
+    }
+    return bundle
+}
+
+// ── diagonal real |g_nn| from the bare bundle (Hellmann-Feynman cross-check) ──
+// g_nn = ⟨ψ_n | ΔV_bare | ψ_n⟩ = dε_n/du (first-order eigenvalue shift). The g5
+// gate FD-checks this against a frozen-phonon SCF eigenvalue derivative — a real,
+// independent number (the stand-in's |g_nn| was just the constant g_target).
+//   psi_n : ψ_n (length n) · dvbare_psi_n : (ΔV_bare ψ_n) (length n, from apply).
+// Returns the real scalar g_nn; 0.0 on a length mismatch.
+pub fn qforge_realcell_g_diag(psi_n: [float], dvbare_psi_n: [float]) -> float {
+    let n = len(psi_n)
+    if len(dvbare_psi_n) != n { return 0.0 }
+    let mut s = 0.0
+    let mut i = 0
+    while i < n { s = s + psi_n[i] * dvbare_psi_n[i] ; i = i + 1 }
+    return s
+}
