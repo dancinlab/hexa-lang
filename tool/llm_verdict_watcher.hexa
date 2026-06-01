@@ -36,8 +36,23 @@ fn _root() -> string {
 
 fn _hx_lang_root() -> string {
     let mut r = env("HEXA_LANG_ROOT")
-    if r == "" { r = "/Users/ghost/core/hexa-lang" }
-    return r
+    if r != "" { return r }
+    r = env("HEXA_LANG")
+    if r != "" { return r }
+    // Headless-safe: ascend from cwd to the repo sentinel, NEVER a foreign
+    // literal. Falls back to cwd (guard tool path then resolves cwd-relative).
+    let mut cur = env("PWD")
+    if cur == "" { cur = to_string(exec("pwd")).trim() }
+    let start = cur
+    let mut guard = 0
+    while len(cur) > 1 && guard < 64 {
+        if to_string(exec("test -f '" + cur + "/self/module_loader.hexa' && echo y || echo n")).trim() == "y" { return cur }
+        let up = to_string(exec("dirname '" + cur + "'")).trim()
+        if up == cur { break }
+        cur = up
+        guard = guard + 1
+    }
+    return start
 }
 
 fn _queue_path() -> string { return _root() + "/.hook-verdict-queue.jsonl" }

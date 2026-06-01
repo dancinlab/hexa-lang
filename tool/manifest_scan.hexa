@@ -1,8 +1,8 @@
 // tool/manifest_scan.hexa — extract @tool/@usage/@example/@exit_codes from tool/*.hexa
 //
 // @tool(slug="manifest_scan", desc="extract @tool annotations from tool/*.hexa, emit hive HEXA_TOOLS manifest JSON")
-// @usage(hexa /Users/ghost/core/hexa-lang/tool/manifest_scan.hexa [--write])
-// @example(generate ~/core/hexa-lang/tool/manifest.json so hive HEXA_TOOLS no longer needs hand-maintenance)
+// @usage(hexa tool/manifest_scan.hexa [--write]    — run from the hexa-lang repo root)
+// @example(generate <repo>/tool/manifest.json so hive HEXA_TOOLS no longer needs hand-maintenance)
 // @exit_codes(0=PASS / manifest emitted, 1=FAIL (read error, write error, no annotated tools found))
 //
 // PURPOSE
@@ -15,7 +15,7 @@
 //
 // MODES
 //   default          — emit manifest JSON to stdout
-//   --write          — emit to /Users/ghost/core/hexa-lang/tool/manifest.json
+//   --write          — emit to <repo>/tool/manifest.json (repo root resolved at runtime)
 //
 // FALLBACK NOTE
 //   The hexa parser does not currently enforce these attrs at parse time;
@@ -40,10 +40,9 @@ fn _pwd() -> string {
 // AOT). So we try, in order:
 //   1. $HEXA_LANG_ROOT env var override (for non-default checkouts)
 //   2. $PWD/tool — when invoked from the hexa-lang repo root
-//   3. /Users/ghost/core/hexa-lang/tool — canonical install (BASELINE
-//      no_hardcoded_refs: this fallback is the documented canonical path
-//      and also matches the existing hive HEXA_TOOLS hard-coded entries
-//      in raw-rules.ts; it is the SSOT location, not a magic constant).
+//   3. cwd-ascent — climb from $PWD to the first dir holding the repo
+//      sentinel (self/attrs/_registry.hexa) and use its tool/. Headless-safe
+//      (env -i): NEVER a foreign-host literal. Final fallback is cwd/tool.
 fn _tool_dir() -> string {
     let mut env_root = ""
     try { env_root = env_var("HEXA_LANG_ROOT") } catch e { env_root = "" }
@@ -53,15 +52,18 @@ fn _tool_dir() -> string {
         if ok == "y" { return cand }
     }
     let pwd = _pwd()
-    let pwd_cand = pwd + "/tool"
-    let pwd_ok = to_string(exec("test -d '" + pwd_cand + "' && echo y || echo n")).trim()
-    if pwd_ok == "y" {
-        // Confirm this is the hexa-lang repo (look for self/attrs/_registry.hexa).
-        let marker = pwd + "/self/attrs/_registry.hexa"
-        let marker_ok = to_string(exec("test -f '" + marker + "' && echo y || echo n")).trim()
-        if marker_ok == "y" { return pwd_cand }
+    // Ascend until the repo sentinel is found; return that dir's tool/.
+    let mut cur = pwd
+    let mut guard = 0
+    while len(cur) > 1 && guard < 64 {
+        let marker_ok = to_string(exec("test -f '" + cur + "/self/attrs/_registry.hexa' && echo y || echo n")).trim()
+        if marker_ok == "y" { return cur + "/tool" }
+        let up = to_string(exec("dirname '" + cur + "'")).trim()
+        if up == cur { break }
+        cur = up
+        guard = guard + 1
     }
-    return "/Users/ghost/core/hexa-lang/tool"
+    return pwd + "/tool"
 }
 
 // list `tool/*.hexa` (top-level only — no recursion into tool/_init/ etc.)
@@ -69,7 +71,7 @@ fn _list_tool_files(tool_dir: string) -> array {
     let exists = to_string(exec("test -d '" + tool_dir + "' && echo y || echo n")).trim()
     if exists != "y" {
         eprintln("manifest_scan: tool directory not found — " + tool_dir +
-                 " — try: run from /Users/ghost/core/hexa-lang or pass via absolute path")
+                 " — try: run from the hexa-lang repo root or set $HEXA_LANG_ROOT")
         return []
     }
     let cmd = "find '" + tool_dir + "' -maxdepth 1 -type f -name '*.hexa' 2>/dev/null | sort"
@@ -263,7 +265,7 @@ let tool_dir = _tool_dir()
 let files = _list_tool_files(tool_dir)
 if len(files) == 0 {
     eprintln("manifest_scan: no tool/*.hexa files found under " + tool_dir +
-             " — try: invoke as `hexa /Users/ghost/core/hexa-lang/tool/manifest_scan.hexa`")
+             " — try: run from the hexa-lang repo root, or set $HEXA_LANG_ROOT")
     exit(1)
 }
 

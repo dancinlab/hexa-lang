@@ -25,10 +25,21 @@ let mut _verbose = 0
 
 fn _hexa_dir() -> string {
     let p = exec("pwd").trim()
-    if file_exists(p + "/self/hexa_full.hexa") { return p }
+    if file_exists(p + "/self/module_loader.hexa") { return p }
     let h = env("HEXA_LANG")
     if h != "" { return h }
-    return "/Users/ghost/core/hexa-lang"
+    // Headless-safe: ascend from cwd to the repo sentinel, NEVER a foreign
+    // literal. Falls back to cwd (caller's checks then resolve cwd-relative).
+    let mut cur = p
+    let mut guard = 0
+    while len(cur) > 1 && guard < 64 {
+        if file_exists(cur + "/self/module_loader.hexa") { return cur }
+        let up = exec("dirname '" + cur + "'").trim()
+        if up == cur { break }
+        cur = up
+        guard = guard + 1
+    }
+    return p
 }
 
 fn _expect(label: string, cond: bool, detail: string) {

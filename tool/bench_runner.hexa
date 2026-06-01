@@ -48,7 +48,7 @@ fn _bench_hexa_bin() {
 
 // Resolve the hexa-lang checkout root WITHOUT a foreign-host literal.
 // Order: $HEXA_LANG env → ascend from cwd to a repo sentinel
-// (self/hexa_full.hexa) → cwd. Headless-safe (env -i): the cwd-ascent
+// (self/module_loader.hexa) → cwd. Headless-safe (env -i): the cwd-ascent
 // covers the no-env case; the final cwd fallback is never a foreign path.
 fn _bench_repo_root() {
     let e = env("HEXA_LANG")
@@ -58,7 +58,7 @@ fn _bench_repo_root() {
     let start = cur
     let mut guard = 0
     while len(cur) > 1 && guard < 64 {
-        let ok = exec("test -f '" + cur + "/self/hexa_full.hexa' && echo y || echo n").trim()
+        let ok = exec("test -f '" + cur + "/self/module_loader.hexa' && echo y || echo n").trim()
         if ok == "y" { return cur }
         let up = exec("dirname '" + cur + "'").trim()
         if up == cur { break }

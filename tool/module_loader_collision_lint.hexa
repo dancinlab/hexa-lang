@@ -47,11 +47,11 @@
 //   1 — one or more violations
 //   2 — bad usage
 //
-// REFERENCES
-//   /Users/ghost/core/hexa-lang/self/module_loader.hexa  (concat semantics)
-//   /Users/ghost/core/hexa-lang/self/stdlib/shell_escape.hexa  (workaround pattern)
-//   /Users/ghost/core/hexa-lang/self/stdlib/flags.hexa         (workaround pattern)
-//   /Users/ghost/core/anima/docs/hexa_lang_module_loader_collision_20260427_landing.md
+// REFERENCES (paths relative to $HEXA_LANG / repo root)
+//   self/module_loader.hexa        (concat semantics)
+//   self/stdlib/shell_escape.hexa  (workaround pattern)
+//   self/stdlib/flags.hexa         (workaround pattern)
+//   anima docs: hexa_lang_module_loader_collision_20260427_landing.md
 
 use "self/stdlib/argv_skip"
 
@@ -84,12 +84,24 @@ fn _strip_ext(name: string) -> string {
     return name
 }
 
-// Locate hexa-lang root. HEXA_LANG env wins; fallback to a hardcoded
-// canonical path matching nexus/scripts/bin/hexa_remote convention.
+// Locate hexa-lang root. HEXA_LANG env wins; else ascend from cwd to the
+// repo sentinel (self/module_loader.hexa). Headless-safe (env -i): NEVER a
+// foreign-host literal. Falls back to cwd as the last resort.
 fn _hexa_lang_root() -> string {
     let hl = env("HEXA_LANG")
     if len(hl) > 0 { return hl }
-    return "/Users/ghost/core/hexa-lang"
+    let mut cur = env("PWD")
+    if len(cur) == 0 { cur = exec("pwd").trim() }
+    let start = cur
+    let mut guard = 0
+    while len(cur) > 1 && guard < 64 {
+        if exec("test -f '" + cur + "/self/module_loader.hexa' && echo y || echo n").trim() == "y" { return cur }
+        let up = exec("dirname '" + cur + "'").trim()
+        if up == cur { break }
+        cur = up
+        guard = guard + 1
+    }
+    return start
 }
 
 // Read entire file or return "".

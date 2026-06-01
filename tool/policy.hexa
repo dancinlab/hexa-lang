@@ -19,7 +19,22 @@
 fn hexa_lang_root() -> string {
     let raw = env("HEXA_LANG")
     if raw != "" { return raw }
-    return "/Users/ghost/Dev/hexa-lang"
+    // Headless-safe: ascend from cwd to the self/attrs sentinel, NEVER a
+    // foreign-host literal. policy.hexa reads $root/self/attrs, so a wrong
+    // root just yields an empty rule list — but cwd-ascent finds the repo
+    // when invoked from anywhere inside it (env -i safe).
+    let mut cur = env("PWD")
+    if cur == "" { cur = exec("pwd").trim() }
+    let start = cur
+    let mut guard = 0
+    while len(cur) > 1 && guard < 64 {
+        if exec("test -d '" + cur + "/self/attrs' && echo y || echo n").trim() == "y" { return cur }
+        let up = exec("dirname '" + cur + "'").trim()
+        if up == cur { break }
+        cur = up
+        guard = guard + 1
+    }
+    return start
 }
 
 fn list_attr_files() -> [string] {
