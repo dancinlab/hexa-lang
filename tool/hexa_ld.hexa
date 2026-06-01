@@ -129,7 +129,7 @@ struct ParsedReloc {
     kind:    i64,       // ARM64_RELOC_* (mirrors macho_arm64.hexa)
     pcrel:   i64,
     length:  i64,
-    // Phase-H inc3: ARM64_RELOC_ADDEND (kind 1) is a scattered-pair
+    // Phase-H inc3: ARM64_RELOC_ADDEND (kind 10) is a scattered-pair
     // prefix reloc — it carries a 24-bit signed addend in r_symbolnum
     // that applies to the NEXT reloc's target. We fold that addend
     // INTO this following reloc's `addend` field at parse time so the
@@ -195,7 +195,7 @@ fn _r_cstr(buf: [Int], base: Int, strx: Int) -> string {
 }
 
 // Phase-H inc3: read one section's relocation table into ParsedReloc[].
-// Handles ARM64_RELOC_ADDEND (kind 1): the addend reloc is a PREFIX
+// Handles ARM64_RELOC_ADDEND (kind 10): the addend reloc is a PREFIX
 // pair — its r_symbolnum holds a 24-bit signed addend that applies to
 // the NEXT reloc's target. We fold it into the following reloc's
 // `addend` field and DROP the standalone addend reloc, so the link pass
@@ -215,7 +215,7 @@ fn _read_sect_relocs(buf: [Int], reloff: Int, nreloc: Int,
         let r_length    = (bits >> 25) & 0x3
         let r_extern    = (bits >> 27) & 0x1
         let r_type      = (bits >> 28) & 0xf
-        if r_type == 1 {                              // ARM64_RELOC_ADDEND
+        if r_type == 10 {                             // ARM64_RELOC_ADDEND (kind 10, NOT 1=SUBTRACTOR)
             // r_symbolnum is a 24-bit value = the addend. Sign-extend
             // from bit 23.
             let mut a = r_symbolnum
