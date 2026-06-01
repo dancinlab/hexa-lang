@@ -1,0 +1,5 @@
+use "bench/qforge/sternheimer_core"
+fn main() {
+    let cs = qforge_sternheimer_bench(128, 350, )
+    println("n128 checksum=" + to_string(cs))
+}
