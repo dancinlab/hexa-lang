@@ -18,3 +18,8 @@ mvn: ENCODE-MISS: unknown-op op=mvn ops=[ x1 x1 ]
 and: ENCODE-MISS: unknown-op op=and ops=[ x1 x1 x3 ]
 LSL: ENCODE-MISS: unknown-op op=LSL ops=[ x1 x1 x3 ]
 ASR: ENCODE-MISS: unknown-op op=ASR ops=[ x1 x1 x3 ]
+
+=== POST-FIX re-emit (aprime_udf2, batch-1 encodings; blr fixed afterward) ===
+--- /tmp/udf-emit2.log unknown-op tally ---
+  16 blr
+(adrp/eor/mvn/and/orr/LSL/ASR ALL ELIMINATED; only blr x13 remains, fixed in commit 4)
