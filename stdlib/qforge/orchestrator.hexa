@@ -1,0 +1,128 @@
+// HEXA Standard Library — qforge/orchestrator
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// QFORGE PRODUCTION ORCHESTRATOR — the end-to-end el-ph→Tc chain that binds the
+// already-verified QFORGE bricks (DFPT phonons · α²F assembler · Eliashberg
+// moments · Allen-Dynes / Eliashberg Tc) into ONE production pipeline so a real
+// RTSC-campaign cell traverses QFORGE from electron-phonon coupling to Tc with
+// NO Quantum ESPRESSO in the Tc-producing loop.
+//
+// ── WHAT THIS COMPOSES (no new physics — d3) ────────────────────────────────
+//   per-mode el-ph dataset ──qforge_a2f_from_elph_impl──▶ α²F(ω)
+//                                   │
+//                       eliashberg_moments_from_a2f
+//                                   ▼
+//                            [λ, ω_log, ω̄₂]
+//                            ╱            ╲
+//             qforge_tc_allen_dynes_full   eliashberg_tc_from_lambda
+//                       ▼                          ▼
+//                  Tc_AD (f1·f2)              Tc_ME (Matsubara)
+//
+// Every brick it calls is independently QE-cross-validated in ISOLATION:
+//   • α²F assembler  → qforge_l3_qe_xval_test (λ rel-ε ≤ 1.1e-4 on YH10 QE bytes)
+//   • Tc-from-moments → qforge_qe_xval_test  (12/12 QE anchors, rel-ε ≤ 2.5e-3)
+// This module chains them on the SAME data-flow QE's pw.x+ph.x produce, so the
+// production output (λ, ω_log, Tc) is reproducible end-to-end through QFORGE.
+//
+// ── PRODUCTION INPUT CONTRACT (d4 generic — no material hardcode) ────────────
+// The caller supplies the per-mode electron-phonon dataset — index-aligned
+// arrays over the (q,ν) sample set, plus the ω grid and smearings. This is
+// EXACTLY the data a DFPT el-ph run emits (one row per irreducible (q,ν), with
+// its BZ star weight already folded into `weight`). The orchestrator does NOT
+// know about CaH6 vs LaH10 — it forwards whatever coupling it is handed.
+//
+// ── HONEST SCOPE (g6/d6 — the plane-wave front-end gap is NOT hidden) ────────
+// QFORGE's `qforge_scf` / `qforge_dynmat` are GENERIC drivers: the cell→plane-
+// wave Hamiltonian + pseudopotential evaluation that turns raw atomic positions
+// into the per-mode |g|² is supplied to them as caller closures (d4) and is NOT
+// yet wired to a production UPF/plane-wave front-end in-repo (screening.hexa is
+// Hartree+LDA-exchange only — correlation XC deferred). So this orchestrator's
+// production entry point starts from the el-ph |g|² dataset (the DFPT output),
+// the same boundary every QFORGE QE-cross-val test starts from. The cell→|g|²
+// front-end is the remaining migration blocker, surfaced in the selftest and the
+// migration gate — not papered over.
+
+use "stdlib/qforge/elph"
+use "stdlib/qforge/eliashberg"
+use "stdlib/qforge/tc"
+use "stdlib/material/sim"
+
+// QforgeElphResult — the production triple a QFORGE el-ph→Tc run yields, plus
+// the moments and the per-grid α²F so a caller can audit / cross-validate any
+// intermediate against a QE reference. ok==0 (with err set) on a malformed
+// dataset; the λ/ω_log/Tc fields are then sentinel (-1.0).
+pub struct QforgeElphResult {
+    ok:         int,
+    err:        str,
+    lambda:     float,   // λ = 2∫α²F/ω  (BZ-summed electron-phonon coupling)
+    omega_log:  float,   // ω_log (same units as the ω grid the caller supplied)
+    omega_bar2: float,   // ω̄₂ (second-moment frequency, for the AD f2 factor)
+    tc_ad:      float,   // Allen-Dynes f1·f2 Tc (strong-coupling form)
+    tc_me:      float,   // Migdal-Eliashberg Tc (Matsubara ρ_max=1 solve)
+    a2f:        [float]  // the assembled α²F(ω) on the caller's ω grid
+}
+
+fn _orc_sentinel(err: str) -> QforgeElphResult {
+    return QforgeElphResult {
+        ok: 0, err: err,
+        lambda: -1.0, omega_log: -1.0, omega_bar2: -1.0,
+        tc_ad: -1.0, tc_me: -1.0, a2f: []
+    }
+}
+
+// ── production entry point: el-ph dataset → (λ, ω_log, Tc) ───────────────────
+//
+// qforge_elph_to_tc — run the QFORGE production chain on a per-mode el-ph
+// dataset and return the (λ, ω_log, Tc_AD, Tc_ME) production triple.
+//
+// INPUTS (index-aligned over the (q,ν) sample set, length = ns):
+//   eps_k, eps_kq : the electron eigenvalues at k and k+q (same unit as e_fermi)
+//   g2            : |g(q,ν)|² electron-phonon matrix element (squared)
+//   omega_qnu     : the phonon frequency ω(q,ν) — MUST be in the SAME unit as
+//                   `omega_grid` (e.g. Kelvin) so the moments come out in K.
+//   e_fermi, n_ef : Fermi level + DOS at E_F  (n_ef > 0)
+//   omega_grid    : the uniform ω grid the α²F is histogrammed onto (≥2 pts, >0)
+//   weight        : the uniform BZ-sample weight folded with the star weight
+//   sigma_el      : electron Gaussian smearing (Fermi-surface double delta)
+//   sigma_ph      : phonon Gaussian smearing (ω histogram kernel)
+//   mu_star       : the Coulomb pseudopotential μ* for the Tc formulas
+//   n_mats        : Matsubara cutoff for the Eliashberg Tc solve (e.g. 256)
+//
+// Returns a QforgeElphResult; ok==0 on a malformed dataset (the assembler
+// sentinel α²F=[-1.0] or a non-positive λ is surfaced, not silently zeroed).
+pub fn qforge_elph_to_tc(eps_k: [float], eps_kq: [float], g2: [float],
+                         omega_qnu: [float], e_fermi: float, n_ef: float,
+                         omega_grid: [float], weight: float,
+                         sigma_el: float, sigma_ph: float,
+                         mu_star: float, n_mats: int) -> QforgeElphResult {
+    // ① el-ph → α²F  (QFORGE L3 assembler — QE-cross-validated in isolation).
+    let a2f = qforge_a2f_from_elph_impl(eps_k, eps_kq, g2, omega_qnu,
+                                        e_fermi, n_ef, omega_grid,
+                                        weight, sigma_el, sigma_ph)
+    if len(a2f) < 2 {
+        return _orc_sentinel("a2f assembler returned malformed-input sentinel")
+    }
+
+    // ② α²F → moments [λ, ω_log, ω̄₂]  (verified L2 integrator).
+    let m = eliashberg_moments_from_a2f(omega_grid, a2f)
+    let lam = m[0]
+    let wlog = m[1]
+    let wbar2 = m[2]
+    if lam <= 0.0 {
+        return _orc_sentinel("non-positive lambda from assembled a2f")
+    }
+
+    // ③ moments → Tc.  TWO production estimators (both QFORGE bricks):
+    //    Tc_AD = Allen-Dynes f1·f2 strong-coupling form (the true high-λ form).
+    //    Tc_ME = Migdal-Eliashberg Matsubara ρ_max(Tc)=1 solve (the form AD fits).
+    let tc_ad = qforge_tc_allen_dynes_full(lam, wlog, wbar2, mu_star)
+    let tc_me = eliashberg_tc_from_lambda(lam, wlog, mu_star, n_mats)
+
+    return QforgeElphResult {
+        ok: 1, err: "",
+        lambda: lam, omega_log: wlog, omega_bar2: wbar2,
+        tc_ad: tc_ad, tc_me: tc_me, a2f: a2f
+    }
+}
