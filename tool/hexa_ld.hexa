@@ -393,7 +393,20 @@ pub fn parse_macho_obj(path: string) -> ParsedObj {
         // section-relative offset (section addr is 0). We record n_sect
         // so the link pass can route __text vs data symbols.
         let sym = LinkSym { name: name, offset: n_value, scope: scope_v, sect: n_sect }
-        if n_sect == 0 { extern_refs.push(sym) } else { defined.push(sym) }
+        if n_sect == 0 {
+            // COMMON (tentative definition): Mach-O encodes it as N_UNDF
+            // (n_sect==0) with n_value = SIZE (nonzero) and external. hexa_ld
+            // previously bucketed it as an undefined extern → libSystem import
+            // → dyld crash (e.g. the 112 runtime fn-ptr-table globals like
+            // __builtin_time_now, net_*, farr_*_gpu). Tag it sect=255 so the
+            // common-allocation pass (after section layout) places it in __bss
+            // (zero-init), making references resolve internally.
+            if n_value != 0 && n_ext != 0 {
+                defined.push(LinkSym { name: name, offset: n_value, scope: scope_v, sect: 255 })
+            } else {
+                extern_refs.push(sym)
+            }
+        } else { defined.push(sym) }
         si = si + 1
     }
 
@@ -731,6 +744,38 @@ fn link_macho_arm64(objs: [ParsedObj], out_path: string, entry: string, _is_stat
             di = di + 1
         }
         oi = oi + 1
+    }
+
+    // ── COMMON symbol allocation (N5-link) ───────────────────────────
+    // Tentative defs (sect==255, tagged at parse; .offset = byte SIZE) get
+    // zero-init space APPENDED to the merged __bss, so their references
+    // resolve internally instead of becoming libSystem imports (dyld crash).
+    // Dedup by name (a strong section def or an earlier common wins). bss_size
+    // is captured from slot4_size AFTER this pass, so growth is picked up.
+    let mut coi = 0
+    while coi < len(objs) {
+        let cdefs = objs[coi].defined
+        let mut cci = 0
+        while cci < len(cdefs) {
+            let cs = cdefs[cci]
+            if cs.sect == 255 {
+                let mut seen = false
+                let mut csk = 0
+                while csk < len(dsym_names) {
+                    if dsym_names[csk] == cs.name { seen = true; break }
+                    csk = csk + 1
+                }
+                if !seen {
+                    let aligned = (slot4_size + 7) & (0 - 8)   // 8-align
+                    dsym_names.push(cs.name)
+                    dsym_slot.push(SLOT_BSS)
+                    dsym_offset.push(aligned)
+                    slot4_size = aligned + cs.offset            // cs.offset = size
+                }
+            }
+            cci = cci + 1
+        }
+        coi = coi + 1
     }
 
     // ── Compatibility aliases so the downstream reloc + symtab passes
