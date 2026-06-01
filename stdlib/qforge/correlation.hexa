@@ -131,10 +131,79 @@ pub fn qforge_vc_pw92(rs: float) -> float {
     return ec - (rs / 3.0) * dec
 }
 
+// ── 공개 helper: ρ → V_c PW92 (front-end 배선용) ──────────────────────────────
+//   ρ<=0 → 0.  screening.hexa 가 ΔV_c=f_c·Δρ 의 V_c 항을 평가하는 진입점.
+pub fn qforge_vc_pw92_from_rho(rho: float) -> float {
+    if rho <= 0.0 { return 0.0 }
+    return qforge_vc_pw92(qforge_rs_from_rho(rho))
+}
+
 // ── 공개 helper: ρ → (ε_c, V_c) PW92 (front-end 배선용) ───────────────────────
 //   반환 [ε_c, V_c]. ρ<=0 → [0,0].
 pub fn qforge_ec_vc_pw92_from_rho(rho: float) -> [float] {
     if rho <= 0.0 { return [0.0, 0.0] }
     let rs = qforge_rs_from_rho(rho)
     return [qforge_ec_pw92(rs), qforge_vc_pw92(rs)]
+}
+
+// ── LDA 상관 커널 f_c(ρ) = dV_c/dρ (PW92) — adiabatic 차폐 계수 ────────────────
+//   ΔV_c(r) = f_c[ρ(r)]·Δρ(r) (screening.hexa mode 2).  V_c(ρ)=V_c(r_s(ρ)) 의
+//   ρ-미분 — chain-rule 닫힌형이 길어 중심차분으로 robust 하게(상대 ε~1e-7).
+//   ρ<=0 → 0.  ρ 스케일에 맞춘 상대 스텝(h=ρ·1e-5, 최소 1e-12).
+pub fn qforge_fc_pw92(rho: float) -> float {
+    if rho <= 0.0 { return 0.0 }
+    let mut h = rho * 1.0e-5
+    if h < 1.0e-12 { h = 1.0e-12 }
+    let vp = qforge_vc_pw92_from_rho(rho + h)
+    let vm = qforge_vc_pw92_from_rho(rho - h)
+    return (vp - vm) / (2.0 * h)
+}
+
+// ── PBE GGA 상관 (Perdew-Burke-Ernzerhof 1996, PRL 77, 3865) ──────────────────
+//   ε_c^PBE(r_s,ζ,t) = ε_c^LDA(r_s,ζ) + H(r_s,ζ,t)   (per-electron, Ha)
+//   spin-unpolarized(ζ=0 → φ=1):
+//     H = γ·ln(1 + (β/γ)·t²·(1 + A t²)/(1 + A t² + A² t⁴))
+//     A = (β/γ) / (exp(−ε_c^LDA/γ) − 1)
+//     γ = (1−ln2)/π² ≈ 0.0310907, β = 0.06672455 (PBE 표준값)
+//   t = reduced density gradient = |∇n| / (2 k_s n),  k_s = √(4 k_F/π),
+//     k_F = (3π²n)^{1/3}.  → t = caller-공급(아래 helper 가 |∇n|,n 에서 계산).
+//   gradient→0 (t→0): H→0 → ε_c^PBE → ε_c^LDA(PW92).  (reduction 보장.)
+let _PBE_GAMMA = 0.031090690869654895    // (1−ln2)/π²
+let _PBE_BETA = 0.06672455060314922      // PBE 표준 β
+
+// ── PBE 상관 gradient correction H(r_s, t) (spin-unpolarized) ─────────────────
+//   ε_lda = ε_c^LDA(r_s) = PW92.  t = 환원밀도기울기.
+pub fn qforge_h_pbe(rs: float, t: float) -> float {
+    if rs <= 0.0 { return 0.0 }
+    if t <= 0.0 { return 0.0 }                       // ∇n=0 → H=0 (LDA 환원)
+    let g = _PBE_GAMMA
+    let b = _PBE_BETA
+    let ec_lda = qforge_ec_pw92(rs)
+    let bg = b / g
+    // A = (β/γ) / (exp(−ε_lda/γ) − 1).  ε_lda<0 → exp>1 → denom>0.
+    let ex = exp(-1.0 * ec_lda / g)
+    let aa = bg / (ex - 1.0)
+    let t2 = t * t
+    let t4 = t2 * t2
+    let num = 1.0 + aa * t2
+    let den = 1.0 + aa * t2 + aa * aa * t4
+    let inner = 1.0 + bg * t2 * num / den
+    return g * log(inner)
+}
+
+// ── PBE 상관 per-electron 에너지 ε_c^PBE(r_s, t) = ε_c^LDA + H ─────────────────
+pub fn qforge_ec_pbe(rs: float, t: float) -> float {
+    if rs <= 0.0 { return 0.0 }
+    return qforge_ec_pw92(rs) + qforge_h_pbe(rs, t)
+}
+
+// ── 공개 helper: (ρ, |∇ρ|) → ε_c^PBE (front-end 배선용, spin-unpolarized) ──────
+//   t = |∇ρ| / (2 k_s ρ),  k_s=√(4 k_F/π),  k_F=(3π²ρ)^{1/3}.  ρ<=0 → 0.
+pub fn qforge_ec_pbe_from_rho(rho: float, grad_rho: float) -> float {
+    if rho <= 0.0 { return 0.0 }
+    let rs = qforge_rs_from_rho(rho)
+    let kf = pow(3.0 * _CORR_PI * _CORR_PI * rho, 1.0 / 3.0)
+    let ks = sqrt(4.0 * kf / _CORR_PI)
+    let t = grad_rho / (2.0 * ks * rho)
+    return qforge_ec_pbe(rs, t)
 }
