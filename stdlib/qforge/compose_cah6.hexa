@@ -1,0 +1,129 @@
+// HEXA Standard Library — qforge/compose_cah6
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// QFORGE metallic-wall breadth COMPOSITION — assemble the FOUR verified breadth
+// bricks into ONE α²F → λ on a single converged real cell.
+//
+// ── WHY THIS EXISTS (the COMPOSITION gap, d6 honest) ─────────────────────────
+// The four metallic-breadth bricks were each g5-verified on a DIFFERENT, partly-
+// unconverged fixture:
+//   (a) real q-mesh ω(q,ν)        — realcell_qmesh   (#2488, synthetic Φ fixture)
+//   (b) off-diagonal |g_mn|        — elph_offdiag     (#2490, bare ΔV, NPW=16)
+//   (c) real N(E_F) over a k-mesh  — dos_nef          (#2491, n_ef placeholder cell)
+//   (d) Sternheimer-screened ΔV    — screened_dv      (#2494, NPW=64 unconverged)
+// NO run composed ALL FOUR on ONE converged SCF cell. This module is the generic
+// COMPOSER: given the screened |g_mn| matrix [b+d], a REAL phonon ω band [a], and
+// the REAL N(E_F) [c], it distributes every screened band-pair coupling across the
+// real phonon band and hands the index-aligned (ε_m, ε_n, g², ω) sample list to the
+// verified L3 BZ double-δ α²F assembler → L2 moments (λ, ω_log). Zero new physics:
+// every brick is reused 0-diff (d3/d19); this file only WALKS + CONCATENATES.
+//
+// ── d4 GENERIC — caller supplies the screened matrix, the band, and N(E_F) ───
+// The composer knows NOTHING about CaH6 / LaH10. The active manifold ψ_m, the
+// screened columns ΔV_scr·ψ_n, the band energies ε, the real ω band, and n_ef are
+// all caller inputs. Add/swap a cell = change the inputs; no name branch.
+//
+// d3/d19 reuse (compose, don't reinvent — every brick below is verified 🟢/🔵):
+//   - |g_mn| matrix : stdlib/qforge/elph_offdiag (qforge_gmn_matrix, brick b)
+//   - α²F assembler : stdlib/qforge/tc           (qforge_a2f_from_elph, L3 BZ δδ)
+//   - λ, ω_log      : stdlib/material/sim         (eliashberg_moments_from_a2f, L2)
+// The real ω band [a] + screened columns [d] + n_ef [c] are produced by the caller
+// from their own (verified) bricks and passed straight in.
+
+use "stdlib/qforge/elph_offdiag"
+use "stdlib/qforge/tc"
+use "stdlib/material/sim"
+
+// the composed result bundle.
+pub struct ComposeResult {
+    ok:        int,
+    err:       str,
+    lambda:    float,   // composed QFORGE-NC λ = 2∫α²F/ω
+    omega_log: float,   // ω_log of the composed spectrum (K)
+    n_pairs:   int,     // band pairs in the |g_mn| matrix (nb²)
+    n_samples: int,     // total (q,ν)-distributed el-ph samples emitted
+    g2_total:  float    // Σ|g_mn|² over the matrix (coupling-mass witness)
+}
+
+fn _compose_sentinel(err: str) -> ComposeResult {
+    return ComposeResult { ok: 0, err: err, lambda: -1.0, omega_log: -1.0,
+                           n_pairs: 0, n_samples: 0, g2_total: 0.0 }
+}
+
+// ── COMPOSE: screened |g_mn| × real ω-band × real N(E_F) → α²F → λ ───────────
+//   states     : nb active ψ_m rows (length n each)            [b]
+//   dv_states  : nb SCREENED (ΔV_scr ψ_n) columns (length n)   [d]
+//   eps        : [nb] active band energies ε                   (SCF)
+//   omega_band : [nw] REAL POSITIVE phonon frequencies ω (K)   [a]
+//                (from qforge_qmesh_omega_band — the broadened spectrum, NOT a
+//                 single Einstein ω₀; each ω weights the band-pair couplings).
+//   e_fermi    : Fermi level (same unit as eps)
+//   n_ef       : REAL N(E_F) (states/Ry/cell) — the Allen normalizer 1/N(E_F) [c]
+//                (from qforge_dos_nef — NOT the 1.0 placeholder).
+//   omega_grid : α²F frequency grid (K)
+//   sigma_el   : Fermi-surface δ-smearing (eps unit)
+//   sigma_ph   : α²F phonon δ-smearing (K)
+// For every screened band pair (m,n) and every real phonon ω_ν in the band, emit
+// one sample (ε_m, ε_n, |g_mn|², ω_ν) with BZ weight 1/nw (each ω equally weights
+// the pair across the real band — the broadened replacement for the single ω₀).
+// The verified L3 assembler then applies δ_σel(ε_m−E_F)·δ_σel(ε_n−E_F)·δ_σph(ω−ω')
+// with the 1/N(E_F) prefactor. Returns ComposeResult; ok==0 on malformed input.
+pub fn qforge_compose_cah6_lambda(states: [[float]], dv_states: [[float]],
+                                  eps: [float], omega_band: [float],
+                                  e_fermi: float, n_ef: float,
+                                  omega_grid: [float],
+                                  sigma_el: float, sigma_ph: float) -> ComposeResult {
+    let nb = states.len()
+    if nb < 1 || dv_states.len() != nb || len(eps) != nb {
+        return _compose_sentinel("malformed manifold (nb / dv / eps mismatch)")
+    }
+    let nw = len(omega_band)
+    if nw < 1 { return _compose_sentinel("empty real phonon band [a]") }
+    if n_ef <= 0.0 { return _compose_sentinel("non-positive N(E_F) [c]") }
+
+    // screened |g_mn| matrix [b+d] — reused 0-diff.
+    let g = qforge_gmn_matrix(states, dv_states)
+    if len(g) != nb * nb { return _compose_sentinel("gmn matrix malformed") }
+
+    // distribute every band pair's |g_mn|² across the REAL ω band [a].
+    // BZ weight 1/nw folded into g² (linear in the assembler) so each ω carries
+    // an equal slice of the pair's coupling across the broadened spectrum.
+    let inv_nw = 1.0 / to_float(nw)
+    let mut eps_k: [float] = []
+    let mut eps_kq: [float] = []
+    let mut g2: [float] = []
+    let mut wq: [float] = []
+    let mut g2_total = 0.0
+    let mut m = 0
+    while m < nb {
+        let mut nn = 0
+        while nn < nb {
+            let gmn = g[m * nb + nn]
+            let g2mn = gmn * gmn
+            g2_total = g2_total + g2mn
+            let mut iw = 0
+            while iw < nw {
+                eps_k.push(eps[m])
+                eps_kq.push(eps[nn])
+                g2.push(g2mn * inv_nw)        // fold the 1/nw band weight (linear)
+                wq.push(omega_band[iw])
+                iw = iw + 1
+            }
+            nn = nn + 1
+        }
+        m = m + 1
+    }
+    let n_samples = len(g2)
+
+    // L3 BZ double-δ assembler with the REAL n_ef [c]; weight=1.0 (folded above).
+    let a2f = qforge_a2f_from_elph(eps_k, eps_kq, g2, wq, e_fermi, n_ef,
+                                   omega_grid, 1.0, sigma_el, sigma_ph)
+    if len(a2f) < 2 { return _compose_sentinel("L3 assembler sentinel") }
+    let mo = eliashberg_moments_from_a2f(omega_grid, a2f)
+    let lam = mo[0]
+    if lam < 0.0 { return _compose_sentinel("non-physical lambda from a2f") }
+    return ComposeResult { ok: 1, err: "", lambda: lam, omega_log: mo[1],
+                           n_pairs: nb * nb, n_samples: n_samples, g2_total: g2_total }
+}
