@@ -42,3 +42,21 @@ The local `hexa` runner (May-23, stale) fails to build runtime_core_emit.hexa (c
 link error in [2/2]), so runtime.a couldn't be regenerated locally. The 5 new runtime
 fns ARE in the SSOT (runtime_core_emit.hexa) by construction → a working toolchain's
 runtime.a will provide them. Final link/run/byte-eq deferred to a regen-capable env.
+
+=== UPDATE: FIXPOINT LINK RESIDUAL = 0 (regen UNBLOCKED via hexa_v2+amalgam) ===
+The stale `hexa run` link-failure was sidestepped: transpile runtime_core_emit.hexa
+with hexa_v2 (proven) → compile against the fresh amalgam runtime.o → link → run →
+regenerated runtime_core.c (398KB) carrying ALL 6 new fns. Then compiled the full
+amalgam (regenerated core) → rt_new.o.
+
+verbatim:
+  [runtime_core_emit] wrote /tmp/pt9b_newrc.c   (run rc=0)
+  new fns present in regen runtime_core.c: 6
+  rt_new.o provides: ___map_raw_len _hexa_arr_zeros_leaf _hexa_arr_zeros_leaf_int
+                     _hexa_map_get_v _hexa_map_set_v _hexa_mkdir
+  FIXPOINT LINK residual (cc-pt9b.o undefined NOT provided by rt_new.o ∪ rtP2.o): 0
+
+🟢 ALL 9 N5-sym symbols resolved AND the ENTIRE 88-symbol undefined set of the native
+compiler object cc-pt9b.o is link-resolvable against the regenerated runtime. The
+self-host LINK is residual-0 (link-ready). Remaining: actual hexa_ld link → run →
+gen2≡gen3 byte-eq.
