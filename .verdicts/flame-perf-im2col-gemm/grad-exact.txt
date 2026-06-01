@@ -1,0 +1,6 @@
+flame_conv_test — causal-dilated Conv1d (conv_lib)
+  GRAD-EXACT max_rel = 5.17815e-12
+F-FLAME-CONV1D-DET        = 1
+F-FLAME-CONV1D-CAUSAL     = 1
+F-FLAME-CONV1D-GRAD-EXACT = 1
+PASS 3/3
