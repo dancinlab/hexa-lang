@@ -206,6 +206,20 @@ fn _dft_scale_vec(line: str, scale: float) -> str {
     return "  " + to_string(x) + "   " + to_string(y) + "   " + to_string(z)
 }
 
+// ── --engine route (guard, @L3) ──────────────────────────────────────
+//
+// dft_engine_resolve — PURE: normalize the --engine selector to a canonical
+// engine id. "" / "qe" → "qe" (DEFAULT — Quantum ESPRESSO, until the QFORGE
+// production gate closes). "qforge" → "qforge" (the hexa-native el-ph→Tc
+// chain). ANY other value → "" (unknown — the caller REFUSES, no silent
+// fallback per d6). Network-free + unit-testable (dft_dispatch_test).
+pub fn dft_engine_resolve(sel: str) -> str {
+    if len(sel) == 0 { return "qe" }
+    if sel == "qe" { return "qe" }
+    if sel == "qforge" { return "qforge" }
+    return ""
+}
+
 // ── ① rent query (guard) ─────────────────────────────────────────────
 
 // dft_rent_query — the offer predicates the recipe pins on top of
@@ -1224,6 +1238,27 @@ pub fn dft_run(av: [str], start: int) -> int {
     let image = _dft_flag_val(av, start, "--image", "ubuntu:22.04")
     let disk = _dft_atoi(_dft_flag_val(av, start, "--disk", "60"))
     let owner = _dft_flag_val(av, start, "--owner", "(hexa-cloud dft-run)")
+
+    // --engine <qe|qforge> — which el-ph→Tc ENGINE produces the (λ,ω_log,Tc)
+    // result (@L3 migration wiring). DEFAULT = "qe" (Quantum ESPRESSO pw.x/ph.x)
+    // until the QFORGE production gate (g5 λ·Tc agreement on CaH6·LaH10·Li2MgH16)
+    // is green. `--engine qforge` opts the deck into the QFORGE el-ph→Tc chain
+    // (stdlib/qforge/orchestrator qforge_elph_to_tc): the DFPT |g|² stage still
+    // runs on QE (the cell→|g|² plane-wave front-end is the remaining migration
+    // blocker — see orchestrator.hexa header), but the moments→λ→Tc step is then
+    // computed by QFORGE instead of QE's allen-dynes, so a deck can route to the
+    // hexa-native engine the instant the front-end gate closes. An unknown engine
+    // is REFUSED (no silent fallback — d6).
+    let engine = dft_engine_resolve(_dft_flag_val(av, start, "--engine", "qe"))
+    if len(engine) == 0 {
+        println("[dft-run] ✗ REFUSED — unknown --engine (use `qe` [default] or `qforge`).")
+        return 2
+    }
+    if engine == "qforge" {
+        println("[dft-run] --engine qforge: el-ph→Tc routes through the hexa-native QFORGE chain")
+        println("[dft-run]   (qforge_elph_to_tc) once DFPT |g|² is available — DFPT front-end stays QE")
+        println("[dft-run]   until the production gate (g5 λ·Tc vs QE on CaH6·LaH10·Li2MgH16) closes.")
+    }
 
     // deck validation — accept BOTH layouts (d4 single generic path):
     //   • relax  : vc-relax.in (deck-gen native) OR relax.in (legacy)

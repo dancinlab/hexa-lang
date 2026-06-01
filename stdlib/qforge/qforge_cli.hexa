@@ -1,0 +1,143 @@
+// stdlib/qforge/qforge_cli.hexa — `hexa qforge <run|selftest|help>` (@L2).
+//
+// The CLI surface of QFORGE, the hexa-native first-principles el-ph→Tc engine.
+// It drives the production orchestrator (qforge_elph_to_tc) so a deck routes to
+// the hexa-native engine from the command line — `hexa qforge run <deck>`.
+//
+// SUBCOMMANDS:
+//   run <deck>   run the QFORGE el-ph→Tc chain on a deck. The chain consumes the
+//                per-mode DFPT el-ph dataset (|g|², ω(q,ν), ε_k, N(E_F)). When a
+//                deck has NO harvested el-ph dataset yet, this REPORTS the
+//                cell→|g|² plane-wave front-end gap (the remaining migration
+//                blocker — orchestrator.hexa header) instead of fabricating a Tc
+//                (d6). The DFPT front-end currently runs on QE (`hexa cloud
+//                dft-run <deck>`); QFORGE then computes moments→λ→Tc.
+//   selftest     run the orchestrator selftest (the el-ph→Tc chain gate).
+//   help         this text.
+//
+// d4 generic — no per-material branch; the orchestrator forwards whatever
+// el-ph dataset it is handed. This CLI is the thin argv front-end.
+
+use "stdlib/qforge/orchestrator"
+
+fn _qf_help() {
+    println("hexa qforge — hexa-native first-principles electron-phonon → Tc engine")
+    println("")
+    println("usage:")
+    println("  hexa qforge run <deck>   run the QFORGE el-ph→Tc chain on a deck")
+    println("  hexa qforge selftest     run the orchestrator (el-ph→Tc chain) gate")
+    println("  hexa qforge help         this text")
+    println("")
+    println("engine: SCF·DFPT·elph·Eliashberg·Tc bricks (stdlib/qforge), composed by")
+    println("  qforge_elph_to_tc (stdlib/qforge/orchestrator). Each brick is QE-cross-")
+    println("  validated in isolation (qforge_qe_xval_test · qforge_l3_qe_xval_test).")
+    println("")
+    println("migration status: the cell→|g|² plane-wave front-end is not yet wired in-")
+    println("  repo (screening.hexa = Hartree+LDA-exchange; correlation XC deferred), so")
+    println("  the DFPT |g|² stage runs on QE (`hexa cloud dft-run <deck>`) and QFORGE")
+    println("  computes moments→λ→Tc. Default dispatch engine stays QE until the gate")
+    println("  (g5 λ·Tc agreement on CaH6·LaH10·Li2MgH16) closes.")
+}
+
+// _qf_run — `hexa qforge run <deck>`. Looks for a harvested per-mode el-ph
+// dataset under the deck (the DFPT output the chain consumes). Absent → report
+// the front-end gap honestly (d6 — no fabricated Tc); present → (future) parse
+// + drive qforge_elph_to_tc. The dataset parser is the next migration step; this
+// CLI establishes the verb + the honest gap report today.
+fn _qf_run(deck: str) -> int {
+    if len(deck) == 0 {
+        println("[qforge] usage: hexa qforge run <deck>")
+        return 2
+    }
+    let has_ph = exec("test -f '" + deck + "/ph.out' && printf yes || printf no") == "yes"
+    println("[qforge] run: deck " + deck)
+    if !has_ph {
+        println("[qforge] no harvested DFPT el-ph dataset (ph.out) under the deck.")
+        println("[qforge] the QFORGE el-ph→Tc chain consumes the per-mode |g|²/ω(q,ν) DFPT output.")
+        println("[qforge] BLOCKER (honest, d6): the cell→|g|² plane-wave front-end is not yet wired")
+        println("[qforge]   in-repo (screening.hexa = Hartree+LDA-exch; correlation XC deferred).")
+        println("[qforge] → run the DFPT stage on QE first:  hexa cloud dft-run " + deck + " --go")
+        println("[qforge]   then QFORGE computes moments→λ→Tc (the cross-validated chain).")
+        return 1
+    }
+    println("[qforge] ph.out present — the el-ph dataset parser (ph.out → per-mode |g|²/ω) is")
+    println("[qforge] the next migration step; the chain qforge_elph_to_tc is selftest-green")
+    println("[qforge] (hexa qforge selftest). DFPT→QFORGE dataset wiring lands in a follow-up PR.")
+    return 0
+}
+
+// _qf_selftest — run the orchestrator selftest in-process by re-running its
+// chain on the Einstein + CaH6 anchors. Rather than duplicate the gate logic, it
+// drives the production entry on the CaH6-tuned Einstein dataset and asserts the
+// (λ, Tc) land on the QE-validated values — a smoke gate the CLI can run anywhere.
+fn _qf_selftest() -> int {
+    let nk = 64
+    let ef = 0.0
+    let n_ef = 1.0
+    let wgt = 1.0 / to_float(nk)
+    let sig_el = 0.05
+    let sig_ph = 1.5
+    let w0 = 1236.4
+    let g2c = 42.499   // assembled λ ≈ CaH6 4.376
+    let mu = 0.10
+    let n_mats = 256
+    // build the CaH6-tuned Einstein el-ph dataset (on-shell e⁻, single ω₀).
+    let mut ek: [float] = []
+    let mut ekq: [float] = []
+    let mut g2: [float] = []
+    let mut wq: [float] = []
+    let mut i = 0
+    while i < nk { ek.push(ef); ekq.push(ef); g2.push(g2c); wq.push(w0); i = i + 1 }
+    let mut grid: [float] = []
+    let lo = 60.0
+    let hi = 2472.0
+    let ng = 24001
+    let step = (hi - lo) / to_float(ng - 1)
+    let mut j = 0
+    while j < ng { grid.push(lo + step * to_float(j)); j = j + 1 }
+    let res = qforge_elph_to_tc(ek, ekq, g2, wq, ef, n_ef, grid, wgt,
+                               sig_el, sig_ph, mu, n_mats)
+    if res.ok == 0 {
+        println("[qforge] selftest FAIL — chain ok==0: " + res.err)
+        return 1
+    }
+    println("[qforge] CaH6-anchor chain: λ=" + to_string(res.lambda)
+            + " ω_log=" + to_string(res.omega_log) + " K Tc_AD=" + to_string(res.tc_ad)
+            + " K Tc_ME=" + to_string(res.tc_me) + " K")
+    // QE-validated CaH6: λ≈4.376, Allen-Dynes f1·f2 Tc≈344.5 K.
+    let lam_ok = res.lambda > 4.30 && res.lambda < 4.45
+    let tc_ok = res.tc_ad > 340.0 && res.tc_ad < 349.0
+    if lam_ok && tc_ok {
+        println("[qforge] selftest PASS — chain reproduces QE CaH6 (λ≈4.376, AD Tc≈344.5 K)")
+        return 0
+    }
+    println("[qforge] selftest FAIL — λ or Tc_AD outside the QE CaH6 band")
+    return 1
+}
+
+fn main() {
+    let av = args()
+    // av = [<script>, <sub>, ...] when invoked via cmd_run(qf_script, qf_args);
+    // qf_args already excludes the verb, so av[1] is the subcommand.
+    if len(av) < 2 {
+        _qf_help()
+        return
+    }
+    let sub = av[1]
+    if sub == "help" || sub == "--help" || sub == "-h" {
+        _qf_help()
+        return
+    }
+    if sub == "selftest" {
+        let rc = _qf_selftest()
+        exit(rc)
+    }
+    if sub == "run" {
+        let mut deck = ""
+        if len(av) >= 3 { deck = av[2] }
+        let rc = _qf_run(deck)
+        exit(rc)
+    }
+    println("[qforge] unknown subcommand '" + sub + "' — try `hexa qforge help`")
+    exit(2)
+}

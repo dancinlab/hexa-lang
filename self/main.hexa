@@ -7253,6 +7253,23 @@ if len(av) < 3 {
             gpi = gpi + 1
         }
         cmd_gpu(gpu_args)
+    } else if sub == "qforge" {
+        // QFORGE — the hexa-native first-principles el-ph→Tc engine (@L2). The
+        // verb dispatches to stdlib/qforge/qforge_cli.hexa, which parses the
+        // subcommand (run <deck> | selftest | help) and drives the production
+        // orchestrator (qforge_elph_to_tc). Library bricks (scf/dfpt/elph/
+        // eliashberg/tc) stay `use`-able by the selftests without auto-firing a
+        // top-level main. Same install-dir-resolve + cmd_run pattern as `deck`.
+        let __inst_q = install_dir_from_argv0()
+        let mut qf_args = []
+        let mut qi = 3
+        while qi < len(av) { qf_args.push(av[qi]); qi = qi + 1 }
+        let mut qf_script = "stdlib/qforge/qforge_cli.hexa"
+        if len(__inst_q) > 0 {
+            let inst_path = __inst_q + "/stdlib/qforge/qforge_cli.hexa"
+            if file_exists(inst_path) { qf_script = inst_path }
+        }
+        cmd_run(qf_script, qf_args)
     } else if sub == "tool" {
         // CANON M4: go-tool-style drawer. `hexa tool [list]` indexes the
         // specialized verbs by family; `hexa tool <verb> [args]` re-dispatches
