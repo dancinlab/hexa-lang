@@ -1813,6 +1813,15 @@ fn main() {
         // (vast|runpod); flags follow. Wires vast.hexa / runpod.hexa
         // lifecycle fns + pod_registry. $-INCURRING — the only verb that
         // creates a billing instance.
+        //
+        // FOOTGUN GUARD (must be FIRST, before any offer-pick / instance
+        // create): `cloud rent vast --help` previously fell through and
+        // RENTED a real pod because -h/--help was just an unparsed trailing
+        // token. Print usage and exit 0 — creating NOTHING.
+        if _has_flag(av, si + 1, "--help") == 1 || _has_flag(av, si + 1, "-h") == 1 {
+            println("usage: cloud rent <vast|runpod> [--gpu T] [--image IMG] [--disk GiB] [--owner TAG] [--query Q] [--max-wait-sec N] [--no-register]")
+            return
+        }
         if si + 1 >= len(av) {
             println("[cloud] rent: missing <provider> — usage: cloud rent <vast|runpod> [--gpu T] [--image IMG] [--disk GiB] [--owner TAG] [--query Q] [--max-wait-sec N]")
             exit(2)
