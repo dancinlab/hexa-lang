@@ -1,0 +1,47 @@
+// stdlib/qforge/fixtures/migration_gate_anchors.hexa — QFORGE migration-gate
+// 3-anchor cross-validation FIXTURE (CaH6 · LaH10 · Li2MgH16).
+//
+// ── ROLE ─────────────────────────────────────────────────────────────────────
+// The QFORGE→QE migration default-flip (d_qforge_engine) is gated on a 3-anchor
+// {λ, Tc} cross-validation matrix: for each high-Tc hydride anchor, QFORGE-NC's
+// computed (λ, Tc) must reproduce the terminal QE-DFPT (λ, Tc) to the same g5
+// rel-ε bar the L3 YH10 xval uses (≤ 1%). This fixture is the DURABLE machinery:
+// it carries the per-anchor QE-reference moments (verbatim from terminal RTSC-
+// campaign JSON) plus a `status` flag. `qforge_migration_gate_test.hexa` ingests
+// this, computes the QFORGE-NC side live, and emits per-anchor PASS/FAIL +
+// aggregate ALL_PASS / HELD.
+//
+// ── HONESTY (d6/@L4·@L6) — zero fabricated λ·Tc ──────────────────────────────
+// Only an anchor whose QE-reference {λ, Tc} is a REAL terminal record is marked
+// "terminal". CaH6 is terminal (rtsc_cah6_dft_4x4x4q_textbook_proof_20260524.json,
+// the same anchor the L0 Tc xval qforge_qe_xval_test.hexa consumes). LaH10 and
+// Li2MgH16 are EXPLICIT "pending" placeholders — their QE-DFPT λ·Tc have NOT yet
+// landed (their gate pods 38943553·38922322 are still computing; READ-ONLY, never
+// touched here). Their numeric fields are 0.0 sentinels and are NEVER compared;
+// they keep the aggregate HELD until the real λ·Tc are folded in. No fabrication.
+//
+// ── PROVENANCE (CaH6, verbatim) ──────────────────────────────────────────────
+//   CaH6 : rtsc_cah6_dft_4x4x4q_textbook_proof_20260524.json
+//          λ_BZ = 4.376 · ω_log = 1236.4 K · μ* = 0.10 · Tc(McMillan) = 255.1 K.
+//   (QE 7.5 pw.x+ph.x @ vast.ai; the SAME moments qforge_qe_xval_test.hexa pins.)
+//
+// A "record" is a flat [status, λ_QE, ω_log_K, μ_star, Tc_QE_K]. status:
+//   1.0 = terminal (real QE {λ,Tc}; compared)   0.0 = pending (placeholder; HELD)
+
+// CaH6 — TERMINAL (real QE-DFPT moments).
+pub fn mga_cah6() -> [float] {
+    // [status, λ_QE, ω_log_K, μ*, Tc_QE_K]
+    return [1.0, 4.376, 1236.4, 0.10, 255.1]
+}
+
+// LaH10 — PENDING (QE-DFPT λ·Tc not yet landed; gate pod 38943553 computing).
+pub fn mga_lah10() -> [float] {
+    // status=0.0 → placeholder; numerics are 0.0 sentinels (never compared).
+    return [0.0, 0.0, 0.0, 0.10, 0.0]
+}
+
+// Li2MgH16 — PENDING (QE-DFPT λ·Tc not yet landed; gate pod 38922322 computing).
+pub fn mga_li2mgh16() -> [float] {
+    // status=0.0 → placeholder; numerics are 0.0 sentinels (never compared).
+    return [0.0, 0.0, 0.0, 0.10, 0.0]
+}
