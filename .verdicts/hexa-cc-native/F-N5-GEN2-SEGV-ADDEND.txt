@@ -1,0 +1,77 @@
+F-N5-GEN2-SEGV-ADDEND — gen2 startup SIGSEGV root cause + fix verdict
+=====================================================================
+Branch: cc-native/n5-gen2-segv-addend-fix
+Date:   2026-06-02
+Lane:   n5-gen2-segv (CRITICAL-PATH self-host byte-eq blocker)
+
+RESULT: 🟢 FIXED — gen2 startup SIGSEGV eliminated; gen2 now RUNS.
+
+═══ FAULTING INSTRUCTION ═══
+  PC = _hexa_str + 152 (0x1001654b8):
+      ldr  x0, [x21, w26, uxtw #3]      ; x21 = NULL → EXC_BAD_ACCESS
+  Backtrace: start → main → _normalize_argv → hexa_args → hexa_str
+             (first hexa_intern() of the first CLI arg).
+  x21 = __hexa_intern.buckets = NULL (the hash-table bucket array).
+  (.ips reported @0x20-class near-null; lldb pins exact FAR=0x0, x21=0.)
+
+═══ NULL POINTER ═══
+  __hexa_intern.buckets (clang merges runtime file-scope statics into
+  __MergedGlobals; __hexa_intern struct = __MergedGlobals+0x10, buckets
+  field at struct+0x118 = __MergedGlobals+0x128).
+
+═══ ROOT CAUSE ═══
+  tool/hexa_ld.hexa:218 tested  `if r_type == 1`  for ARM64_RELOC_ADDEND.
+  But kind 1 = ARM64_RELOC_SUBTRACTOR; ARM64_RELOC_ADDEND = kind 10
+  (mach-o/arm64/reloc.h enum). The prefix ADDEND reloc was therefore never
+  recognized, so EVERY PAGE21/PAGEOFF12 reloc against an extern-with-addend
+  symbol lost its addend (have_addend never set → this_addend = 0).
+
+  Effect on __hexa_intern (clang emits 3 distinct addends):
+      init-check &buckets   addend 0x128   (folds to base+0x118)
+      loop struct base      addend 0x010
+      hashes ptr            addend 0x130
+  All three COLLAPSED to one offset in linked gen2 (verified via otool):
+      NO-FIX gen2:  init=[+0xb38]  base=+0xb38  hashes=[+0xb38]   (all same)
+      FIXED  gen2:  init=[+0xc60]  base=+0xb48  hashes=[+0xc68]   (distinct ✓)
+                    (base+0x118 = 0xb48+0x118 = 0xc60 = init ✓ consistent)
+
+  Runtime consequence: lazy-init guard `if (!__hexa_intern.buckets)` read the
+  WRONG word (struct[0]=count, nonzero) → skipped calloc → buckets stayed NULL
+  → bucket probe dereferenced NULL → SIGSEGV at startup (any invocation incl
+  --version/--help, before any compile work).
+
+═══ FIX ═══
+  tool/hexa_ld.hexa:218   `if r_type == 1`  →  `if r_type == 10`
+  (+ 2 stale "kind 1" comments corrected to "kind 10"). 1-line logic change.
+
+═══ VALIDATION (REAL exit codes, no pipe-masking) ═══
+  hld rebuilt = byte-eq-branch hexa_ld (L1/L2 COMMON→bss prereqs) + ADDEND fix,
+  transpiled via hexat + clang-linked vs the cached runtime (same recipe as the
+  original /tmp/hld_bin). Relinked gen2 from the SAME /tmp/cc-prc2.o + rt_new.o.
+    undefined-sym count: 54  (== original hld_bin; COMMON resolved by L2) ✓
+    gen2 --version  > /tmp/o 2>&1; echo $?  →  EXIT 2   (was 139)   5/5 runs ✓
+    gen2 --help                              →  EXIT 2   (was 139)            ✓
+    output BYTE-IDENTICAL to /tmp/aprime_fxp control (diff empty)             ✓
+  A/B CONTROL: no-fix C-hld relink → still 139-equivalent (collapsed offsets);
+  proves the running gen2 is due to the ADDEND fix, not the rebuild.
+
+═══ DISASSEMBLY PROOF (clang rt_new.o = source of truth) ═══
+  otool -rv rt_new.o @ _hexa_str:
+    0x1938/3c PAGE21+PAGEOFF12 __MergedGlobals, preceded by ADDEND addend=0x128
+    0x1978/7c                  __MergedGlobals, ADDEND addend=0x010
+    0x1998/9c                  __MergedGlobals, ADDEND addend=0x130
+  Raw record types: the "ADDEND" records have r_type=10 (0xa), NOT 1.
+
+═══ DOWNSTREAM (out of scope — NEW, distinct from startup blocker) ═══
+  With the fix, gen2 now runs the CLI + arg-parse + reaches real codegen. A
+  genuine compile (gen2 emit sm42 → .o) NOW fails further in with EXIT 139 +
+  `ENCODE-MISS: STP mem-parse-fail mem=#0` — a SEPARATE encoder bug in the
+  STP mem-operand path, reached only because the startup crash is gone. This
+  is the next frontier for the byte-eq fixpoint, NOT the @0x20 startup fault.
+
+  SECONDARY (pre-known): hld_bin LINKEDIT-tail nondeterminism still open.
+
+VERDICT: 🟢 The @0x20 / near-null startup SIGSEGV is ROOT-CAUSED and FIXED
+  (ARM64_RELOC_ADDEND kind 10≠1 in hexa_ld). gen2 starts cleanly + matches the
+  aprime control byte-for-byte on CLI paths. Self-host emit fixpoint remains
+  blocked on the newly-exposed STP encoder miss (separate lane).
