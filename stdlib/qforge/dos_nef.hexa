@@ -1,0 +1,101 @@
+// HEXA Standard Library — qforge/dos_nef
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// QFORGE metallic-wall breadth brick (c) — the REAL Fermi-level density of
+// states N(E_F) from a band-energy sum over a Monkhorst-Pack k-mesh.
+//
+// The CaH6 real-|g| λ path (orchestrator_pw → elph → eliashberg) consumes a
+// scalar `n_ef` (the el-ph spectral function normalizer 1/N(E_F), Allen 1972
+// eq. 38). The independent atoms→Tc chain so far fed a PLACEHOLDER n_ef = 1.0
+// and sampled the electronic structure at Γ ONLY (a single k-point). That makes
+// the α²F normalization and the Fermi-surface double-delta unphysical — N(E_F)
+// is a BZ integral, not a single-point evaluation. This brick closes that gap:
+// it computes N(E_F) as the smeared band-DOS at the Fermi level summed over a
+// real MP k-mesh.
+//
+//   N(E_F) = Σ_k w_k Σ_b δ_σ(ε_{k,b} − E_F)                 (states / energy / cell)
+//
+// On a finite k-mesh each Dirac δ(ε−E_F) is the SAME normalized Gaussian the
+// el-ph assembler uses for the Fermi-surface deltas (qforge_gaussian_delta,
+// δ_σ(x)=exp(−x²/2σ²)/(σ√2π), ∫δ_σ=1) — so the N(E_F) this brick produces is
+// consistent with the δ(ε_k−E_F)·δ(ε_{k+q}−E_F) the α²F sum histograms, and the
+// 1/N(E_F) prefactor cancels the right double-counting. The k-mesh weights w_k
+// are the uniform MP weights from qforge_mp_grid (sum = 1 over the full BZ), so
+// N(E_F) is the per-cell DOS (states · Ry⁻¹ · cell⁻¹, the QE `dos(E_F)` unit).
+//
+// ── d4 generic contract ──────────────────────────────────────────────────────
+//   The band energies arrive as a FLAT array eps[k*nbands + b] (k-major, band-
+//   minor) plus the per-k weights w_k. No material is hardcoded; CaH6, LaH10,
+//   Li2MgH16 all produce eps by running qforge_scf_pw at each MP k-point and
+//   traverse this one sum. The mesh density (nk) and band count (nbands) are
+//   pure parameters — a 1-k Γ-only call and a 4×4×4 mesh use the identical code.
+//
+// ── d19 reuse (compose, don't reinvent) ──────────────────────────────────────
+//   δ_σ(ε−E_F)        : qforge_gaussian_delta (stdlib/qforge/elph) — verified.
+//   k-mesh + weights  : qforge_mp_grid        (stdlib/qforge/mpgrid) — verified.
+//   The new code is ONLY the weighted band-energy double sum at E_F.
+//
+// ── Honest scope (d6) ─────────────────────────────────────────────────────────
+//   This computes N(E_F) from band energies SUPPLIED on the mesh (the caller
+//   runs the per-k SCF / band solve and hands the eigenvalues in). It does NOT
+//   re-run the SCF; it is the BZ-integration brick that replaces n_ef=1.0 and
+//   the Γ-only sample. The constant-DOS / single-flat-band limit is asserted in
+//   the selftest so the d4 generic path provably reduces to the old placeholder.
+//
+// Surface (pure functions, no syscall):
+//   pub fn qforge_dos_nef(eps, weights, nk, nbands, e_fermi, sigma) -> float
+//   pub fn qforge_dos_nef_uniform(eps, nk, nbands, e_fermi, sigma) -> float
+
+use "stdlib/qforge/elph"      // qforge_gaussian_delta (the shared δ_σ convention)
+
+// ── N(E_F) over an explicitly-weighted k-mesh ────────────────────────────────
+//
+//   eps      : flat band energies, eps[k*nbands + b]  (k-major, length nk*nbands)
+//   weights  : per-k BZ weight w_k  (length nk; uniform MP weights sum to 1)
+//   nk       : number of k-points on the mesh  (1 = Γ-only, the old placeholder)
+//   nbands   : bands per k-point
+//   e_fermi  : Fermi level  (same energy unit as eps)
+//   sigma    : Gaussian smearing width  (>0; same unit as eps)
+//
+//   Returns N(E_F) = Σ_k w_k Σ_b δ_σ(ε_{k,b} − E_F)  ≥ 0.
+//   Guard: malformed input (length mismatch / nk≤0 / nbands≤0 / σ≤0) → -1.0.
+pub fn qforge_dos_nef(eps: [float], weights: [float], nk: int, nbands: int,
+                      e_fermi: float, sigma: float) -> float {
+    if nk <= 0 || nbands <= 0 || sigma <= 0.0 { return -1.0 }
+    if len(eps) != nk * nbands { return -1.0 }
+    if len(weights) != nk { return -1.0 }
+    let mut nef = 0.0
+    let mut k = 0
+    while k < nk {
+        let wk = weights[k]
+        let mut acc = 0.0
+        let mut b = 0
+        while b < nbands {
+            acc = acc + qforge_gaussian_delta(eps[k * nbands + b] - e_fermi, sigma)
+            b = b + 1
+        }
+        nef = nef + wk * acc
+        k = k + 1
+    }
+    return nef
+}
+
+// ── N(E_F) with implicit uniform MP weights (w_k = 1/nk) ──────────────────────
+//
+//   Convenience for a full (unreduced) MP mesh where every k-point carries the
+//   uniform weight 1/nk (exactly qforge_mp_grid's weight). Same sum, weights
+//   synthesized — so a caller that built the mesh with qforge_mp_grid need not
+//   re-thread the weight array. d4: no branch on mesh size; nk=1 → w=1 → the
+//   Γ-only single-k value (still a real DOS, not the 1.0 placeholder).
+pub fn qforge_dos_nef_uniform(eps: [float], nk: int, nbands: int,
+                              e_fermi: float, sigma: float) -> float {
+    if nk <= 0 || nbands <= 0 || sigma <= 0.0 { return -1.0 }
+    if len(eps) != nk * nbands { return -1.0 }
+    let w = 1.0 / to_float(nk)
+    let mut weights: [float] = []
+    let mut k = 0
+    while k < nk { weights.push(w) ; k = k + 1 }
+    return qforge_dos_nef(eps, weights, nk, nbands, e_fermi, sigma)
+}

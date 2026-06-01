@@ -1,0 +1,122 @@
+// @ci_gate — deterministic · closed-form N(E_F) DOS asserts
+//
+// qforge_dos_nef_selftest.hexa — QFORGE metallic-wall breadth brick (c) g5 gate.
+//
+// Closes the Fermi-level DOS brick. Asserts the physical invariants of
+//   N(E_F) = Σ_k w_k Σ_b δ_σ(ε_{k,b} − E_F):
+//
+//   (1) POSITIVITY: a metallic mesh (a band crossing E_F) gives N(E_F) > 0.
+//   (2) CONSTANT-DOS / flat-band LIMIT (d4 genericity): a SINGLE band sitting
+//       exactly at E_F over an N-point mesh gives N(E_F) = δ_σ(0) =
+//       1/(σ√2π) EXACTLY — independent of nk (the BZ weights sum to 1). This is
+//       the deterministic reduction that the old placeholder approximated: pick
+//       σ so δ_σ(0)=1 and N(E_F)=1.0 reproduces the n_ef=1.0 placeholder.
+//   (3) k-MESH CONVERGENCE (monotone): for a dispersive linear band ε(k)=v·k on
+//       a 1-D mesh, the exact per-cell DOS at E_F=0 is the constant 1/v (states
+//       per unit reciprocal length, band crossing once). Refining the mesh
+//       (nk: 4→8→16→32) drives the smeared discrete estimate's error toward 0
+//       MONOTONICALLY — each refinement strictly reduces |N_est − 1/v|.
+//   (4) WEIGHT EQUIVALENCE (d4): qforge_dos_nef_uniform == qforge_dos_nef fed
+//       explicit uniform weights 1/nk (the _uniform convenience is a pure alias).
+//   (5) GUARD: malformed input (length mismatch / nk≤0 / σ≤0) → -1.0 sentinel.
+//
+// Run:  hexa run stdlib/qforge/dos_nef_selftest.hexa
+// PASS: exits printing "qforge_dos_nef_selftest PASS".
+use "stdlib/qforge/dos_nef"
+use "stdlib/qforge/elph"      // qforge_gaussian_delta (for the closed-form ref)
+
+let _PI: float = 3.14159265358979323846
+let _SQRT2PI: float = 2.50662827463100050242
+
+fn _abs(x: float) -> float { if x < 0.0 { return -x } return x }
+
+fn _ck_true(name: str, cond: bool) -> int {
+    if cond { println("PASS " + name) ; return 0 }
+    println("FAIL " + name)
+    return 1
+}
+fn _ck_eq(name: str, got: float, want: float, tol: float) -> int {
+    if _abs(got - want) <= tol {
+        println("PASS " + name + " (" + to_string(got) + ")")
+        return 0
+    }
+    println("FAIL " + name + " — got " + to_string(got) + " want " + to_string(want))
+    return 1
+}
+
+// build a flat eps[k*nbands+b] for a single linear band ε(k)=v·k over a uniform
+// 1-D mesh k_j ∈ {(2j−n−1)/(2n) : j=1..n} (the MP coords) scaled to [-0.5,0.5).
+fn _linear_band(nk: int, v: float) -> [float] {
+    let mut eps: [float] = []
+    let two_n = 2.0 * to_float(nk)
+    let mut j = 1
+    while j <= nk {
+        let kf = (2.0 * to_float(j) - to_float(nk) - 1.0) / two_n   // ∈ (−0.5, 0.5)
+        eps.push(v * kf)
+        j = j + 1
+    }
+    return eps
+}
+
+fn main() {
+    let mut fails = 0
+
+    // ── (1) POSITIVITY: a metallic band crossing E_F → N(E_F) > 0 ──────────────
+    // 4-k mesh, 2 bands; one band straddles E_F=0.
+    let eps_metal = [-0.3, 0.4,  -0.1, 0.2,  0.1, 0.5,  0.3, 0.8]   // 4k × 2b
+    let nef_metal = qforge_dos_nef_uniform(eps_metal, 4, 2, 0.0, 0.05)
+    fails = fails + _ck_true("(1) metallic N(E_F) > 0", nef_metal > 0.0)
+
+    // ── (2) CONSTANT-DOS / flat-band LIMIT — N(E_F)=δ_σ(0), nk-independent ──────
+    // single band exactly at E_F over N points; every point contributes δ_σ(0),
+    // weights sum to 1 → N(E_F) = δ_σ(0) = 1/(σ√2π), independent of nk.
+    let sig = 0.07
+    let d0 = 1.0 / (sig * _SQRT2PI)                 // δ_σ(0)
+    let flat4 = [0.0, 0.0, 0.0, 0.0]                // 4k × 1b, all at E_F
+    let flat9 = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]   // 9k × 1b
+    let nef_flat4 = qforge_dos_nef_uniform(flat4, 4, 1, 0.0, sig)
+    let nef_flat9 = qforge_dos_nef_uniform(flat9, 9, 1, 0.0, sig)
+    fails = fails + _ck_eq("(2) flat band N(E_F)=δ_σ(0), nk=4", nef_flat4, d0, 1e-9)
+    fails = fails + _ck_eq("(2) flat band N(E_F)=δ_σ(0), nk=9 (nk-indep)", nef_flat9, d0, 1e-9)
+    // placeholder reduction: choose σ so δ_σ(0)=1 → N(E_F)=1.0 (the old n_ef).
+    let sig1 = 1.0 / _SQRT2PI                        // makes 1/(σ√2π)=1
+    let nef_unit = qforge_dos_nef_uniform([0.0, 0.0, 0.0, 0.0], 4, 1, 0.0, sig1)
+    fails = fails + _ck_eq("(2) placeholder reduction N(E_F)=1.0", nef_unit, 1.0, 1e-9)
+
+    // ── (3) k-MESH CONVERGENCE (monotone) — linear band ε=v·k, E_F=0 ───────────
+    // exact per-cell DOS = (#crossings)/v = 1/v over the unit BZ length.
+    // Refining the mesh strictly reduces |N_est − 1/v|.
+    let v = 2.0
+    let exact = 1.0 / v
+    let sigc = 0.06
+    let n4  = qforge_dos_nef_uniform(_linear_band(4,  v), 4,  1, 0.0, sigc)
+    let n8  = qforge_dos_nef_uniform(_linear_band(8,  v), 8,  1, 0.0, sigc)
+    let n16 = qforge_dos_nef_uniform(_linear_band(16, v), 16, 1, 0.0, sigc)
+    let n32 = qforge_dos_nef_uniform(_linear_band(32, v), 32, 1, 0.0, sigc)
+    let e4  = _abs(n4  - exact)
+    let e8  = _abs(n8  - exact)
+    let e16 = _abs(n16 - exact)
+    let e32 = _abs(n32 - exact)
+    println("convergence |N_est−1/v|:  n4=" + to_string(e4) + "  n8=" + to_string(e8)
+            + "  n16=" + to_string(e16) + "  n32=" + to_string(e32))
+    fails = fails + _ck_true("(3) refine 4→8 reduces error",  e8  < e4)
+    fails = fails + _ck_true("(3) refine 8→16 reduces error", e16 < e8)
+    fails = fails + _ck_true("(3) refine 16→32 reduces error", e32 < e16)
+    fails = fails + _ck_true("(3) n32 within 1% of exact 1/v", e32 / exact < 0.01)
+
+    // ── (4) WEIGHT EQUIVALENCE (d4): _uniform ≡ explicit 1/nk weights ──────────
+    let wexp = [0.25, 0.25, 0.25, 0.25]
+    let nef_exp = qforge_dos_nef(eps_metal, wexp, 4, 2, 0.0, 0.05)
+    fails = fails + _ck_eq("(4) _uniform ≡ explicit uniform weights", nef_metal, nef_exp, 1e-12)
+
+    // ── (5) GUARD: malformed input → -1.0 sentinel ─────────────────────────────
+    fails = fails + _ck_eq("(5) len mismatch → -1", qforge_dos_nef_uniform([0.0, 0.0], 4, 1, 0.0, 0.05), -1.0, 1e-12)
+    fails = fails + _ck_eq("(5) nk≤0 → -1",        qforge_dos_nef_uniform([], 0, 1, 0.0, 0.05),        -1.0, 1e-12)
+    fails = fails + _ck_eq("(5) σ≤0 → -1",         qforge_dos_nef_uniform(flat4, 4, 1, 0.0, 0.0),      -1.0, 1e-12)
+
+    if fails == 0 {
+        println("qforge_dos_nef_selftest PASS")
+    } else {
+        println("qforge_dos_nef_selftest FAIL — " + to_string(fails) + " case(s)")
+    }
+}
