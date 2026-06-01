@@ -10,7 +10,9 @@
 //   base64 — RFC 4648 base64 encode/decode
 //   hex    — base16 (hex) encode/decode (lowercase + uppercase)
 //   utf8   — UTF-8 validation, codepoint iteration, codepoint↔bytes
+//   euc_kr — EUC-KR / KS X 1001 (Korean) byte↔string, 2-byte set
 
 use "stdlib/codec/base64"
 use "stdlib/codec/hex"
 use "stdlib/codec/utf8"
+use "stdlib/codec/euc_kr"
