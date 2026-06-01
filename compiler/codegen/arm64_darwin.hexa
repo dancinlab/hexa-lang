@@ -1387,15 +1387,13 @@ fn _builtin_runtime_sym(name: string) -> string {
     // correctly-lowered sites, so this collapses the bare ref onto an
     // already-resolved symbol (0 new symbols, 0 miscompile risk).
     if name == "byte_at"       { return "hexa_str_byte_at" }
+    // N5-sym: `mkdir` leaked bare (collides with libc mkdir(const char*,mode_t),
+    // wrong ABI for a HexaVal arg). The C-path INLINES hexa_bool(mkdir(HX_STR(p),
+    // 0755)==0) (codegen.hexa:6446); map to the runtime wrapper hexa_mkdir (added
+    // in the same change) which is the byte-eq-identical native-object form.
+    if name == "mkdir"         { return "hexa_mkdir" }
     // STILL DEFERRED (unmapped-is-safer-than-mis-mapped — this file's policy):
-    // `get`/`set` map-methods CANNOT be a bare rename: the runtime ABI is
-    // hexa_map_get(HexaVal m, const char* key) — the key is a C STRING, and
-    // the C-path emits hexa_map_get(m, hexa_to_cstring(k)) to coerce it. A
-    // bare rename would pass the raw HexaVal key where a const char* is
-    // expected → links clean but miscompiles at runtime (HexaVal bits read as
-    // a pointer). Needs a dedicated lowering that wraps the key in
-    // hexa_to_cstring (cf. the index_of branch), deferred to its own change.
-    // `mkdir` collides with libc mkdir (needs a hexa_mkdir wrapper),
+    // `get`/`set` map-methods need a hexa_to_cstring(key) coercion wrapper,
     // `sha256_hex` target unconfirmed.
     // Low-level memory / pointer builtins — name -> runtime symbol.
     // Authoritative mapping mirrored from self/codegen_c2.hexa §G5/B3.
