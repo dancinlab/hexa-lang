@@ -1,4 +1,4 @@
-// HEXA Standard Library — crypto/secp256k1 self-test (field + point KAT — PR1/PR2)
+// HEXA Standard Library — crypto/secp256k1 self-test (field + point + scalar KAT — PR1/PR2/PR3)
 // @ci_gate
 use "stdlib/crypto/secp256k1"
 
@@ -107,6 +107,32 @@ fn main() {
     let id_plus_g = _point_add(zero, zero, gx, gy)
     ck("id_plus_G_x", px(id_plus_g), "79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798")
 
-    println("secp256k1 field+point self-test: " + to_string(pass) + "/" + to_string(total))
+    // === PR3: k·G scalar mult + SEC1 encode ===
+    // 1·G
+    let k1 = unhex("0000000000000000000000000000000000000000000000000000000000000001")
+    let p1 = secp256k1_pubkey(k1)
+    ck("1G_x", px(p1), "79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798")
+    ck("1G_y", py(p1), "483ada7726a3c4655da4fbfc0e1108a8fd17b448a68554199c47d08ffb10d4b8")
+    // 2·G
+    let k2 = unhex("0000000000000000000000000000000000000000000000000000000000000002")
+    let p2 = secp256k1_pubkey(k2)
+    ck("2G_x_smul", px(p2), "c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5")
+    ck("2G_y_smul", py(p2), "1ae168fea63dc339a3c58419466ceaeef7f632653266d0e1236431a950cfe52a")
+    // 3·G
+    let k3 = unhex("0000000000000000000000000000000000000000000000000000000000000003")
+    let p3 = secp256k1_pubkey(k3)
+    ck("3G_x_smul", px(p3), "f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9")
+    ck("3G_y_smul", py(p3), "388f7b0f632de8140fe337e62a37f3566500a99934c2231b6cb9fd7584b8e672")
+
+    // SEC1 encode of 1·G (compressed 02|x · uncompressed 04|x|y)
+    ck("1G_compressed", hx(secp256k1_compress(p1)),
+       "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798")
+    ck("1G_uncompressed", hx(secp256k1_uncompress(p1)),
+       "0479be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798483ada7726a3c4655da4fbfc0e1108a8fd17b448a68554199c47d08ffb10d4b8")
+    // 2·G compressed prefix is 0x02 (y even)
+    ck("2G_compressed", hx(secp256k1_compress(p2)),
+       "02c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5")
+
+    println("secp256k1 field+point+scalar self-test: " + to_string(pass) + "/" + to_string(total))
     if pass == total { println("PASS") } else { println("FAILED") }
 }

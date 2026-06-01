@@ -365,3 +365,90 @@ fn _point_add(x1: [int], y1: [int], x2: [int], y2: [int]) -> [int] {
     while i < 16 { out.push(y3[i]); i = i + 1 }
     return out
 }
+
+// === Scalar mult + pubkey + SEC1 encode (PR3) ===
+// Generator G
+@pure
+fn _Gx() -> [int] {
+    return _be32_to_limbs([0x79,0xbe,0x66,0x7e, 0xf9,0xdc,0xbb,0xac, 0x55,0xa0,0x62,0x95, 0xce,0x87,0x0b,0x07,
+                          0x02,0x9b,0xfc,0xdb, 0x2d,0xce,0x28,0xd9, 0x59,0xf2,0x81,0x5b, 0x16,0xf8,0x17,0x98])
+}
+@pure
+fn _Gy() -> [int] {
+    return _be32_to_limbs([0x48,0x3a,0xda,0x77, 0x26,0xa3,0xc4,0x65, 0x5d,0xa4,0xfb,0xfc, 0x0e,0x11,0x08,0xa8,
+                          0xfd,0x17,0xb4,0x48, 0xa6,0x85,0x54,0x19, 0x9c,0x47,0xd0,0x8f, 0xfb,0x10,0xd4,0xb8])
+}
+
+// k·P via variable-time double-and-add (MSB first). k = 16-limb little-endian.
+// VARIABLE-TIME: use case is PUBLIC pubkey derivation (no secret to protect).
+@pure
+fn _scalar_mult(k: [int], px: [int], py: [int]) -> [int] {
+    let mut rx = _zeros()
+    let mut ry = _zeros()
+    let mut bit = 255
+    while bit >= 0 {
+        let dbl = _point_double(rx, ry)
+        let mut i = 0
+        while i < 16 { rx[i] = dbl[i]; i = i + 1 }
+        i = 0
+        while i < 16 { ry[i] = dbl[16 + i]; i = i + 1 }
+        let limb = bit >> 4
+        let off = bit & 15
+        if ((k[limb] >> off) & 1) == 1 {
+            let sum = _point_add(rx, ry, px, py)
+            i = 0
+            while i < 16 { rx[i] = sum[i]; i = i + 1 }
+            i = 0
+            while i < 16 { ry[i] = sum[16 + i]; i = i + 1 }
+        }
+        bit = bit - 1
+    }
+    let mut out: [int] = []
+    let mut i = 0
+    while i < 16 { out.push(rx[i]); i = i + 1 }
+    i = 0
+    while i < 16 { out.push(ry[i]); i = i + 1 }
+    return out
+}
+
+// pub: derive pubkey point k·G. k_be = 32 big-endian scalar bytes. → 32-limb point.
+@pure
+pub fn secp256k1_pubkey(k_be: [int]) -> [int] {
+    let k = _be32_to_limbs(k_be)
+    return _scalar_mult(k, _Gx(), _Gy())
+}
+
+// pub: compressed SEC1 encode (0x02/0x03 || x32) from a 32-limb point.
+@pure
+pub fn secp256k1_compress(pt: [int]) -> [int] {
+    let mut x: [int] = []; let mut y: [int] = []
+    let mut i = 0
+    while i < 16 { x.push(pt[i]); i = i + 1 }
+    i = 0
+    while i < 16 { y.push(pt[16 + i]); i = i + 1 }
+    let mut o: [int] = []
+    if (y[0] & 1) == 0 { o.push(0x02) } else { o.push(0x03) }
+    let xb = _limbs_to_be32(x)
+    i = 0
+    while i < 32 { o.push(xb[i]); i = i + 1 }
+    return o
+}
+
+// pub: uncompressed SEC1 encode (0x04 || x32 || y32) from a 32-limb point.
+@pure
+pub fn secp256k1_uncompress(pt: [int]) -> [int] {
+    let mut x: [int] = []; let mut y: [int] = []
+    let mut i = 0
+    while i < 16 { x.push(pt[i]); i = i + 1 }
+    i = 0
+    while i < 16 { y.push(pt[16 + i]); i = i + 1 }
+    let mut o: [int] = []
+    o.push(0x04)
+    let xb = _limbs_to_be32(x)
+    i = 0
+    while i < 32 { o.push(xb[i]); i = i + 1 }
+    let yb = _limbs_to_be32(y)
+    i = 0
+    while i < 32 { o.push(yb[i]); i = i + 1 }
+    return o
+}
