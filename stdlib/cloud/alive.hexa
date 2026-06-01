@@ -1,0 +1,254 @@
+// stdlib/cloud/alive.hexa — `hexa cloud alive <id...>` (alias `probe`).
+//
+// THE PROBLEM THIS CLOSES: when a pod goes SSH-unreachable we cannot tell
+// "provider transport outage, pod still ALIVE + billing" from "pod
+// reclaimed/DEAD" by ssh alone. This verb asks the PROVIDER API directly
+// (NOT ssh) for each id and classifies it. No teardown, no rent, read-only.
+//
+// REUSE (d19/d3 — no new HTTP stack, no new key resolution):
+//   vast   — _vast_api_key + `vastai show instance <id> --raw` (actual_status)
+//            + vast_list_instances (the not-in-list → GONE cross-check).
+//   runpod — cloud_runpod_api_key + _runpod_post GraphQL `pod{ desiredStatus }`
+//            (data.pod == null → GONE).
+//
+// STATES → {RUNNING, STOPPED, GONE, UNKNOWN, MISSING-CRED}.
+//   GONE        = id absent from the provider instance list (reclaimed).
+//   UNKNOWN     = api reachable but state ambiguous / a transient API error.
+//   MISSING-CRED= no api key resolved (NEVER a guessed RUNNING).
+// EXIT CODE (script/API consumers): 0=RUNNING · 3=STOPPED · 4=GONE ·
+//   255=API/cred failure (UNKNOWN + MISSING-CRED both map here). With many
+//   ids the exit reflects the WORST/most-actionable code by this rank:
+//   255 (cred/unknown — act first) > 4 (gone) > 3 (stopped) > 0 (running).
+//
+// HONESTY (@L4, d6): classification reads ONLY the live provider API. It
+// NEVER consults a cached pods.json or an ssh probe; a missing key is
+// MISSING-CRED (not RUNNING), and an API error is UNKNOWN (not GONE — a
+// false GONE would tear down real compute downstream).
+//
+// The classifiers (_alive_classify_vast / _alive_classify_runpod) are PURE:
+// they take raw provider JSON strings so the selftest injects fixtures with
+// no network (stdlib/cloud/alive_test.hexa).
+
+use "stdlib/http"
+use "stdlib/alloc/json_object"
+use "stdlib/cloud/cloud"
+use "stdlib/cloud/vast"
+use "stdlib/cloud/runpod"
+
+// ── pure classifiers (testable on raw JSON) ───────────────────────────
+
+// _alive_classify_vast — PURE. Map a `vastai show instance <id> --raw`
+// JSON object (already stripped to JSON) to a state, given whether the id
+// appears in the live instance list. `in_list`: 1 = present, 0 = absent.
+//   not an object AND not in list      → "GONE"   (reclaimed/destroyed)
+//   not an object BUT in list          → "UNKNOWN"(list ok, detail flaked)
+//   actual/intended running|loading|starting → "RUNNING"
+//   exited|stopped|created|offline     → "STOPPED"
+//   anything else                      → "UNKNOWN"
+fn _alive_classify_vast(detail_json: str, in_list: int) -> str {
+    let parsed = json_parse(_vast_strip_to_json(detail_json))
+    if type_of(parsed) != "map" {
+        if in_list == 0 {
+            return "GONE"
+        }
+        return "UNKNOWN"
+    }
+    let st = json_object_get_str(parsed, "actual_status", "")
+    let ist = json_object_get_str(parsed, "intended_status", "")
+    if st == "running" || st == "loading" || st == "starting" {
+        return "RUNNING"
+    }
+    if ist == "running" && (st == "" || st == "loading" || st == "starting") {
+        return "RUNNING"
+    }
+    if st == "exited" || st == "stopped" || st == "created" || st == "offline" {
+        return "STOPPED"
+    }
+    if len(st) == 0 && len(ist) == 0 {
+        if in_list == 0 {
+            return "GONE"
+        }
+        return "UNKNOWN"
+    }
+    return "UNKNOWN"
+}
+
+// _alive_classify_runpod — PURE. Map a RunPod GraphQL `pod{ desiredStatus }`
+// response body to a state.
+//   data.pod == null                   → "GONE" (no such pod / reclaimed)
+//   errors[] present (no pod)          → "UNKNOWN" (api error, NOT gone)
+//   desiredStatus RUNNING              → "RUNNING"
+//   EXITED|STOPPED|TERMINATED|PAUSED   → "STOPPED"
+//   anything else                      → "UNKNOWN"
+fn _alive_classify_runpod(resp_json: str) -> str {
+    let parsed = json_parse(resp_json)
+    if type_of(parsed) != "map" {
+        return "UNKNOWN"
+    }
+    let pod_v = json_object_get_path(parsed, "data.pod")
+    if type_of(pod_v) == "map" {
+        let ds = json_object_get_str(pod_v, "desiredStatus", "")
+        if ds == "RUNNING" {
+            return "RUNNING"
+        }
+        if ds == "EXITED" || ds == "STOPPED" || ds == "TERMINATED" || ds == "PAUSED" {
+            return "STOPPED"
+        }
+        return "UNKNOWN"
+    }
+    // pod_v is void here. JSON `null` parses to void (same as an absent key),
+    // so distinguish "the API returned data.pod == null" (positive no-such-pod
+    // → GONE) from "no data block at all" (errors[] / transport → UNKNOWN) by
+    // the PRESENCE of the `data` object: a well-formed GraphQL response that
+    // resolved the query always carries `data` (with pod=null when reclaimed),
+    // whereas an auth/transport error carries `errors` and NO `data`.
+    let data_v = json_object_get(parsed, "data")
+    if type_of(data_v) == "map" {
+        // data present, pod absent/null → the API positively says no such pod.
+        return "GONE"
+    }
+    // errors[] / malformed / no data → ambiguous, NEVER GONE (a false GONE
+    // would tear down real compute — d6).
+    return "UNKNOWN"
+}
+
+// _alive_state_to_exit — the per-state exit code (@L3).
+fn _alive_state_to_exit(state: str) -> int {
+    if state == "RUNNING" { return 0 }
+    if state == "STOPPED" { return 3 }
+    if state == "GONE" { return 4 }
+    return 255   // UNKNOWN | MISSING-CRED — cred/ambiguous failure class
+}
+
+// _alive_exit_rank — worst-first ordering for the multi-id roll-up. Higher
+// rank = more actionable / wins the aggregate exit. 255 > 4 > 3 > 0.
+fn _alive_exit_rank(code: int) -> int {
+    if code == 255 { return 3 }
+    if code == 4 { return 2 }
+    if code == 3 { return 1 }
+    return 0
+}
+
+// ── live provider probes (thin I/O wrappers over the reused clients) ───
+
+// _alive_probe_vast — live: resolve key, list instances (GONE cross-check),
+// then `show instance <id> --raw` for the detail. Returns {state, raw}.
+fn _alive_probe_vast(id: str) -> [str] {
+    if len(_vast_api_key()) == 0 {
+        return ["MISSING-CRED", "no vast.api_key (set: secret set vast.api_key <KEY>)"]
+    }
+    let vc = _vastai_path()
+    if len(vc) == 0 {
+        return ["UNKNOWN", "vastai entrypoint not found (transport)"]
+    }
+    let lst = vast_list_instances()
+    let mut in_list = 0
+    if lst.ok == 1 {
+        let mut i = 0
+        while i < len(lst.instance_ids) {
+            if lst.instance_ids[i] == id { in_list = 1 }
+            i = i + 1
+        }
+    }
+    let detail = exec(_shq_local(vc) + " show instance " + _shq_local(id) + " --raw 2>&1")
+    let mut state = _alive_classify_vast(detail, in_list)
+    // HONESTY (@L4/d6): a GONE ruling requires a TRUSTWORTHY not-in-list signal.
+    // If the list call itself FAILED (lst.ok != 1) we cannot assert absence —
+    // downgrade a would-be GONE to UNKNOWN so a transport outage never tears
+    // down a real (still-billing) pod. RUNNING/STOPPED come from the detail
+    // object and are unaffected.
+    if state == "GONE" && lst.ok != 1 {
+        state = "UNKNOWN"
+        return [state, "list query failed (lst.ok=0) — cannot confirm absence: " + lst.message]
+    }
+    return [state, detail.substring(0, 400)]
+}
+
+// _alive_probe_runpod — live: resolve key, GraphQL pod{ desiredStatus }.
+fn _alive_probe_runpod(id: str) -> [str] {
+    let key = cloud_runpod_api_key()
+    if len(key) == 0 {
+        return ["MISSING-CRED", "no runpod.api_key (set: secret set runpod.api_key <KEY>)"]
+    }
+    let body = "{\"query\":\"query { pod(input:{podId:\\\"" + id + "\\\"}) { desiredStatus } }\"}"
+    let resp = _runpod_post(key, body, 30)
+    if len(resp) == 0 {
+        return ["UNKNOWN", "empty runpod api response (transport)"]
+    }
+    let state = _alive_classify_runpod(resp)
+    return [state, resp.substring(0, 400)]
+}
+
+// _alive_probe — route one id to its provider probe.
+fn _alive_probe(id: str, provider: str) -> [str] {
+    if provider == "runpod" {
+        return _alive_probe_runpod(id)
+    }
+    return _alive_probe_vast(id)
+}
+
+// _alive_json_escape — minimal JSON string escaper for the raw field.
+fn _alive_json_escape(s: str) -> str {
+    let mut out = ""
+    let mut i = 0
+    while i < len(s) {
+        let c = s.substring(i, i + 1)
+        if c == "\"" { out = out + "\\\"" }
+        else { if c == "\\" { out = out + "\\\\" }
+        else { if c == "\n" { out = out + "\\n" }
+        else { if c == "\r" { out = out + "\\r" }
+        else { if c == "\t" { out = out + "\\t" }
+        else { out = out + c } } } } }
+        i = i + 1
+    }
+    return out
+}
+
+// alive_run — the verb body. `ids` = pod ids; `provider_flag` = explicit
+// --provider ("" → resolve per id); `as_json` = --json machine surface.
+// Returns the aggregate exit code (worst-first @L3).
+fn alive_run(ids: [str], provider_flag: str, as_json: int) -> int {
+    if len(ids) == 0 {
+        println("[cloud] alive: missing <id> — usage: cloud alive <id...> [--provider vast|runpod] [--json]")
+        return 2
+    }
+    let mut worst = 0
+    let mut json_rows = ""
+    let mut idx = 0
+    while idx < len(ids) {
+        let id = ids[idx]
+        let mut provider = provider_flag
+        if len(provider) == 0 {
+            provider = _provider_for_id(id)
+        }
+        let res = _alive_probe(id, provider)
+        let state = res[0]
+        let raw = res[1]
+        let code = _alive_state_to_exit(state)
+        if _alive_exit_rank(code) > _alive_exit_rank(worst) {
+            worst = code
+        }
+        if as_json == 1 {
+            if len(json_rows) > 0 { json_rows = json_rows + "," }
+            json_rows = json_rows + "{\"id\":\"" + id + "\",\"provider\":\"" + provider
+                + "\",\"state\":\"" + state + "\",\"exit\":" + to_string(code)
+                + ",\"raw\":\"" + _alive_json_escape(raw) + "\"}"
+        } else {
+            println(_alive_pad(id, 14) + " " + _alive_pad(provider, 8) + " " + state)
+        }
+        idx = idx + 1
+    }
+    if as_json == 1 {
+        println("[" + json_rows + "]")
+    }
+    return worst
+}
+
+// _alive_pad — right-pad `s` to width `w` (table columns).
+fn _alive_pad(s: str, w: int) -> str {
+    let mut out = s
+    while len(out) < w {
+        out = out + " "
+    }
+    return out
+}

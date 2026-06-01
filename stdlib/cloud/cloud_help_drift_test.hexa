@@ -32,6 +32,7 @@ fn _read_src(path: str) -> str {
 // against the canonical roster the COMMANDS SSOT carries.
 fn _is_alias(v: str) -> bool {
     return v == "up" || v == "status" || v == "destroy"
+        || v == "probe"
         || v == "--help" || v == "-h"
         || v == "--version" || v == "-v"
 }

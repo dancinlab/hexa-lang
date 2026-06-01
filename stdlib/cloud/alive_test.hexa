@@ -1,0 +1,175 @@
+// @ci_gate — pure · network-free · deterministic (stdlib_selftest_aggregate --ci-gate)
+// stdlib/cloud/alive_test.hexa — falsifier suite for `hexa cloud alive`.
+//
+// The classifiers in alive.hexa (_alive_classify_vast / _alive_classify_runpod
+// / _alive_state_to_exit / _alive_exit_rank) are `_`-prefixed and private, so
+// this MIRRORS the pure logic (mirror-test pattern — see
+// vast_destroy_verdict_test.hexa / cloud_rm_test.hexa). KEEP IN SYNC with
+// alive.hexa. Every assertion uses a MOCKED provider-list/detail JSON string —
+// no network, no creds, no vastai/runpodctl binary.
+//
+// Falsifiers (@L5):
+//   F-ALIVE-VAST-RUNNING   — actual_status running → RUNNING
+//   F-ALIVE-VAST-LOADING   — actual_status loading/starting → RUNNING
+//   F-ALIVE-VAST-STOPPED   — actual_status exited/stopped → STOPPED
+//   F-ALIVE-VAST-GONE      — empty detail + NOT in list → GONE (reclaimed)
+//   F-ALIVE-VAST-NOTGONE   — empty detail BUT in list → UNKNOWN (never a false GONE)
+//   F-ALIVE-RP-RUNNING     — desiredStatus RUNNING → RUNNING
+//   F-ALIVE-RP-STOPPED     — desiredStatus EXITED/TERMINATED → STOPPED
+//   F-ALIVE-RP-GONE        — data.pod == null → GONE
+//   F-ALIVE-RP-APIERR      — errors[] / malformed → UNKNOWN (NOT GONE — d6)
+//   F-ALIVE-MISSING-CRED   — empty key → MISSING-CRED (NOT a guessed RUNNING)
+//   F-ALIVE-EXIT-MAP       — state → exit-code map (0/3/4/255)
+//   F-ALIVE-EXIT-RANK      — multi-id roll-up picks the worst/most-actionable
+//
+// Run:  hexa run stdlib/cloud/alive_test.hexa
+// PASS: exits 0, prints "alive_test PASS".
+
+use "stdlib/alloc/json_object"
+
+// _vast_strip_to_json mirror — slice from the first JSON opener (the real one
+// drops a leading non-JSON banner). The fixtures here are already clean JSON.
+fn _strip(s: str) -> str {
+    let lb = s.index_of("[")
+    let ob = s.index_of("{")
+    let mut start = lb
+    if ob >= 0 && (start < 0 || ob < start) { start = ob }
+    if start < 0 { return s }
+    return s.substring(start, len(s))
+}
+
+// Mirror of alive.hexa:_alive_classify_vast — KEEP IN SYNC.
+fn _classify_vast(detail_json: str, in_list: int) -> str {
+    let parsed = json_parse(_strip(detail_json))
+    if type_of(parsed) != "map" {
+        if in_list == 0 { return "GONE" }
+        return "UNKNOWN"
+    }
+    let st = json_object_get_str(parsed, "actual_status", "")
+    let ist = json_object_get_str(parsed, "intended_status", "")
+    if st == "running" || st == "loading" || st == "starting" { return "RUNNING" }
+    if ist == "running" && (st == "" || st == "loading" || st == "starting") { return "RUNNING" }
+    if st == "exited" || st == "stopped" || st == "created" || st == "offline" { return "STOPPED" }
+    if len(st) == 0 && len(ist) == 0 {
+        if in_list == 0 { return "GONE" }
+        return "UNKNOWN"
+    }
+    return "UNKNOWN"
+}
+
+// Mirror of alive.hexa:_alive_classify_runpod — KEEP IN SYNC.
+fn _classify_runpod(resp_json: str) -> str {
+    let parsed = json_parse(resp_json)
+    if type_of(parsed) != "map" { return "UNKNOWN" }
+    let pod_v = json_object_get_path(parsed, "data.pod")
+    if type_of(pod_v) == "map" {
+        let ds = json_object_get_str(pod_v, "desiredStatus", "")
+        if ds == "RUNNING" { return "RUNNING" }
+        if ds == "EXITED" || ds == "STOPPED" || ds == "TERMINATED" || ds == "PAUSED" { return "STOPPED" }
+        return "UNKNOWN"
+    }
+    let data_v = json_object_get(parsed, "data")
+    if type_of(data_v) == "map" { return "GONE" }
+    return "UNKNOWN"
+}
+
+// Mirror of alive.hexa:_alive_state_to_exit / _alive_exit_rank — KEEP IN SYNC.
+fn _state_to_exit(state: str) -> int {
+    if state == "RUNNING" { return 0 }
+    if state == "STOPPED" { return 3 }
+    if state == "GONE" { return 4 }
+    return 255
+}
+fn _exit_rank(code: int) -> int {
+    if code == 255 { return 3 }
+    if code == 4 { return 2 }
+    if code == 3 { return 1 }
+    return 0
+}
+
+// _probe_state_for_empty_key — mirror of the empty-key guard at the top of
+// _alive_probe_vast / _alive_probe_runpod: an empty resolved key → MISSING-CRED
+// (NEVER a guessed RUNNING; @L4/d6). `key` is the resolved api key string.
+fn _probe_state_for_empty_key(key: str) -> str {
+    if len(key) == 0 { return "MISSING-CRED" }
+    return "(probe-continues)"
+}
+
+// _vast_state_with_list_ok — mirror of the @L4/d6 hardening in
+// alive.hexa:_alive_probe_vast: a GONE ruling is downgraded to UNKNOWN when
+// the instance-list call FAILED (list_ok=0), so a transport outage can never
+// emit a false GONE that tears down a still-billing pod. KEEP IN SYNC.
+fn _vast_state_with_list_ok(detail_json: str, in_list: int, list_ok: int) -> str {
+    let state = _classify_vast(detail_json, in_list)
+    if state == "GONE" && list_ok == 0 { return "UNKNOWN" }
+    return state
+}
+
+fn _ck(name: str, got: str, want: str) {
+    if got != want {
+        println("  FAIL: " + name + " got '" + got + "' want '" + want + "'")
+        exit(1)
+    }
+}
+fn _cki(name: str, got: int, want: int) {
+    if got != want {
+        println("  FAIL: " + name + " got " + to_string(got) + " want " + to_string(want))
+        exit(1)
+    }
+}
+
+fn main() {
+    // ── vast classifier (mocked `show instance --raw` detail) ──
+    _ck("vast running",  _classify_vast("{\"id\":38704336,\"actual_status\":\"running\",\"intended_status\":\"running\"}", 1), "RUNNING")
+    _ck("vast loading",  _classify_vast("{\"actual_status\":\"loading\"}", 1), "RUNNING")
+    _ck("vast starting", _classify_vast("{\"actual_status\":\"starting\"}", 1), "RUNNING")
+    _ck("vast exited",   _classify_vast("{\"actual_status\":\"exited\",\"intended_status\":\"stopped\"}", 1), "STOPPED")
+    _ck("vast stopped",  _classify_vast("{\"actual_status\":\"stopped\"}", 1), "STOPPED")
+    _ck("vast offline",  _classify_vast("{\"actual_status\":\"offline\"}", 1), "STOPPED")
+
+    // not-in-list → GONE. Empty/non-object detail AND id absent from the live
+    // instance list = reclaimed/destroyed.
+    _ck("vast empty not-in-list → GONE", _classify_vast("", 0), "GONE")
+    _ck("vast non-obj not-in-list → GONE", _classify_vast("error: instance not found", 0), "GONE")
+
+    // Empty detail BUT id IS in the list → UNKNOWN, never a false GONE (a false
+    // GONE would tear down real compute — d6).
+    _ck("vast empty in-list → UNKNOWN", _classify_vast("", 1), "UNKNOWN")
+    _ck("vast weird status in-list → UNKNOWN", _classify_vast("{\"actual_status\":\"frobnicating\"}", 1), "UNKNOWN")
+
+    // not-in-list BUT list call FAILED → UNKNOWN, never GONE (@L4/d6): a
+    // transport outage must not be read as a reclaimed pod.
+    _ck("vast not-in-list + list-FAILED → UNKNOWN", _vast_state_with_list_ok("", 0, 0), "UNKNOWN")
+    _ck("vast not-in-list + list-OK → GONE",        _vast_state_with_list_ok("", 0, 1), "GONE")
+    _ck("vast running + list-FAILED still RUNNING", _vast_state_with_list_ok("{\"actual_status\":\"running\"}", 1, 0), "RUNNING")
+
+    // ── runpod classifier (mocked GraphQL pod{ desiredStatus }) ──
+    _ck("rp running",  _classify_runpod("{\"data\":{\"pod\":{\"desiredStatus\":\"RUNNING\"}}}"), "RUNNING")
+    _ck("rp exited",   _classify_runpod("{\"data\":{\"pod\":{\"desiredStatus\":\"EXITED\"}}}"), "STOPPED")
+    _ck("rp terminated", _classify_runpod("{\"data\":{\"pod\":{\"desiredStatus\":\"TERMINATED\"}}}"), "STOPPED")
+    // data.pod == null → the API positively reports no such pod → GONE.
+    _ck("rp null pod → GONE", _classify_runpod("{\"data\":{\"pod\":null}}"), "GONE")
+    // errors[] / malformed → UNKNOWN, NEVER GONE.
+    _ck("rp errors → UNKNOWN", _classify_runpod("{\"errors\":[{\"message\":\"rate limited\"}]}"), "UNKNOWN")
+    _ck("rp garbage → UNKNOWN", _classify_runpod("not json at all"), "UNKNOWN")
+    _ck("rp unknown status → UNKNOWN", _classify_runpod("{\"data\":{\"pod\":{\"desiredStatus\":\"WAT\"}}}"), "UNKNOWN")
+
+    // ── missing-cred (empty resolved key) ──
+    _ck("empty key → MISSING-CRED", _probe_state_for_empty_key(""), "MISSING-CRED")
+    _ck("present key → continues",  _probe_state_for_empty_key("sk-live-xxx"), "(probe-continues)")
+
+    // ── state → exit-code map ──
+    _cki("RUNNING → 0",      _state_to_exit("RUNNING"), 0)
+    _cki("STOPPED → 3",      _state_to_exit("STOPPED"), 3)
+    _cki("GONE → 4",         _state_to_exit("GONE"), 4)
+    _cki("UNKNOWN → 255",    _state_to_exit("UNKNOWN"), 255)
+    _cki("MISSING-CRED → 255", _state_to_exit("MISSING-CRED"), 255)
+
+    // ── multi-id roll-up: worst/most-actionable wins (255>4>3>0) ──
+    // {RUNNING, STOPPED} → 3 ; {RUNNING, GONE} → 4 ; {GONE, UNKNOWN} → 255.
+    _cki("rank: running<stopped",  _exit_rank(3) > _exit_rank(0), 1)
+    _cki("rank: stopped<gone",     _exit_rank(4) > _exit_rank(3), 1)
+    _cki("rank: gone<unknown/cred", _exit_rank(255) > _exit_rank(4), 1)
+
+    println("alive_test PASS")
+}
