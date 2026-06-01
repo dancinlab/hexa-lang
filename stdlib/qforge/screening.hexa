@@ -30,12 +30,14 @@
 //   는 그대로 dfpt_response 의 drho_to_dvscf 클로저로 투입 가능(국소 ΔV(r)).
 //
 // reuse (d19): stdlib/signal/core_fft fft3/ifft3 (#2076) — FFT 재구현 금지.
+// reuse (d19): stdlib/qforge/correlation — LDA 상관(PW92) f_c (PR#2402/PR2).
 use "stdlib/signal/core_fft"
+use "stdlib/qforge/correlation"
 
 // xc_mode 상수.
 //   0 = Hartree-only           (교환·상관 끔)
 //   1 = Hartree + LDA exchange (Slater) — 본 PR 의 실 커널
-//   2 = Hartree + LDA x+c      → unsupported (상관 후속, clean 빈 반환)
+//   2 = Hartree + LDA x+c (Slater 교환 + PW92 상관) — 실 커널 (PR#2402/PR2)
 pub fn qforge_xc_hartree_only() -> int { return 0 }
 pub fn qforge_xc_lda_exchange() -> int { return 1 }
 pub fn qforge_xc_lda_xc() -> int { return 2 }
@@ -118,6 +120,32 @@ pub fn qforge_vhartree_from_drho(drho: [float], nx: int, ny: int, nz: int,
     return out
 }
 
+// ── GROUND-STATE Hartree V_H[ρ](r) : G-space Poisson (closed-form) ────────────
+//   QFORGE M5.7 — the LAST missing SCF primitive. scf_pw.hexa took the ground-
+//   state Hartree `vh_diag` as a caller-supplied input; this builds it from the
+//   ground-state density ρ for an arbitrary aperiodic cell.
+//
+//   ∇²V_H(r) = −4π ρ(r)  →  G-space  V_H(G) = 4π ρ(G)/|G|²  (G≠0),  V_H(G=0)=0.
+//   The Poisson operator is LINEAR, so it is IDENTICALLY the response kernel
+//   `qforge_vhartree_from_drho` — only the meaning of the input differs (the full
+//   ground-state ρ here, the 1st-order response Δρ there). We REUSE that verified
+//   G-space Poisson core verbatim (d19 — no FFT/Poisson re-implementation).
+//
+//   G=0 (neutral-cell gauge): the divergent G=0 self-/average term is dropped to 0,
+//   the standard plane-wave convention. In a CHARGE-NEUTRAL cell (the only physical
+//   case for an SCF) the ionic + Hartree G=0 terms cancel against the compensating
+//   background, so dropping it here is exact for the *electronic* Hartree screening
+//   that enters the KS operator (the constant gauge shift is unobservable). For a
+//   NON-neutral input the returned V_H omits that constant — caller must neutralize.
+//
+//   Returns the real-space V_H(r) on the same nx·ny·nz grid (length N), which the
+//   caller samples onto the PW/site grid as scf_pw's `vh_diag`. malformed → [].
+pub fn qforge_vhartree_from_rho(rho: [float], nx: int, ny: int, nz: int,
+                                b1: [float], b2: [float], b3: [float]) -> [float] {
+    // V_H[ρ] = same linear Poisson operator as the response kernel (d19 reuse).
+    return qforge_vhartree_from_drho(rho, nx, ny, nz, b1, b2, b3)
+}
+
 // ── 공개 API: 실 Hartree+XC 차폐 커널 ΔV_scf(r) = V_H[Δρ] + f_xc[ρ]·Δρ ────────
 //   drho       : 1차 밀도응답 Δρ(r) (실수 flat, 길이 N, fft3 layout).
 //   rho        : 바닥 밀도 ρ(r) (실수 flat, 길이 N) — XC 커널 f_xc[ρ] 평가점.
@@ -130,7 +158,8 @@ pub fn qforge_dvscf_from_drho(drho: [float], rho: [float], nx: int, ny: int, nz:
                               b1: [float], b2: [float], b3: [float], xc_mode: int) -> [float] {
     let ntot = nx * ny * nz
     if len(drho) != ntot { return [] }
-    if xc_mode == 2 { return [] }            // LDA 상관 = 후속(clean unsupported)
+    if xc_mode < 0 { return [] }                  // 미지 mode → clean 빈 반환
+    if xc_mode > 2 { return [] }
     // Hartree 항 (항상 포함).
     let vh = qforge_vhartree_from_drho(drho, nx, ny, nz, b1, b2, b3)
     if len(vh) != ntot { return [] }
@@ -138,9 +167,13 @@ pub fn qforge_dvscf_from_drho(drho: [float], rho: [float], nx: int, ny: int, nz:
     let mut i = 0
     while i < ntot {
         let mut v = vh[i]
-        // LDA 교환 항: ΔV_x(r) = f_x[ρ(r)]·Δρ(r) (mode 1).
-        if xc_mode == 1 {
+        // LDA 교환 항: ΔV_x(r) = f_x[ρ(r)]·Δρ(r) (mode 1·2).
+        if xc_mode >= 1 {
             if len(rho) == ntot { v = v + qforge_fx_lda(rho[i]) * drho[i] }
+        }
+        // LDA 상관 항: ΔV_c(r) = f_c[ρ(r)]·Δρ(r) (PW92, mode 2 만).
+        if xc_mode == 2 {
+            if len(rho) == ntot { v = v + qforge_fc_pw92(rho[i]) * drho[i] }
         }
         out.push(v)
         i = i + 1

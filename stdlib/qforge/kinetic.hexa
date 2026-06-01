@@ -1,0 +1,74 @@
+// HEXA Standard Library — qforge/kinetic
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// QFORGE front-end brick 2/5 — the plane-wave KINETIC energy.
+//
+// In a plane-wave basis |k+G⟩ the kinetic operator −½∇² is DIAGONAL:
+//
+//   T_{G,G'} = ½ |k + G|²  δ_{G,G'}                       (Hartree atomic units)
+//
+// (In Rydberg units the prefactor is 1 instead of ½ — e²=2, ħ²/2m=1 → T=|k+G|².
+// We work in Hartree throughout the QFORGE front-end, so T = ½|k+G|².)
+//
+// This brick builds the diagonal kinetic array over a list of G-vectors at a
+// given Bloch k-point. It is the first (and only purely-diagonal) term of the
+// plane-wave Hamiltonian H = T + V_loc + V_NL + V_H + V_xc; the assembler
+// (brick 5) adds it to the diagonal of the H_of_rho operator.
+//
+// ── Free-electron anchor (the closed-form g5 target) ─────────────────────────
+//   With V ≡ 0 the Hamiltonian is JUST the kinetic operator, so the exact
+//   eigenvalues are the free-electron energies ε(k+G) = ½|k+G|². The selftest
+//   builds T at known (k,G) and checks every entry against ½|k+G|² in closed
+//   form (🔵), plus the ordering / k-shift consistency.
+//
+// d3/d4: cell- and material-agnostic — the caller supplies (k, {G}) in
+// cartesian reciprocal coordinates (bohr⁻¹). No hardcoded grid.
+
+// ── Diagonal kinetic array T_G = ½ |k+G|²  (Hartree) ─────────────────────────
+//   kvec  : [3] Bloch vector k (cartesian, bohr⁻¹)
+//   gvecs : flat [3·nG] cartesian G-vectors
+// Returns [float] of length nG. Malformed (k≠3 or gvecs not ×3) → [].
+pub fn qforge_kinetic_diag(kvec: [float], gvecs: [float]) -> [float] {
+    if len(kvec) != 3 { return [] }
+    let lg = len(gvecs)
+    if lg % 3 != 0 { return [] }
+    let ng = lg / 3
+    let mut out: [float] = []
+    let mut i = 0
+    while i < ng {
+        let qx = kvec[0] + gvecs[i * 3]
+        let qy = kvec[1] + gvecs[i * 3 + 1]
+        let qz = kvec[2] + gvecs[i * 3 + 2]
+        let q2 = qx * qx + qy * qy + qz * qz
+        out.push(0.5 * q2)
+        i = i + 1
+    }
+    return out
+}
+
+// ── Matrix-free kinetic apply: (T ψ)_G = T_G · ψ_G  (diagonal) ───────────────
+//   tdiag : the diagonal kinetic array from qforge_kinetic_diag.
+//   psi   : coefficient vector (length nG). Returns T·ψ (length nG).
+// Length mismatch → []. This is the form the assembler composes into H_apply.
+pub fn qforge_kinetic_apply(tdiag: [float], psi: [float]) -> [float] {
+    let n = len(tdiag)
+    if len(psi) != n { return [] }
+    let mut out: [float] = []
+    let mut i = 0
+    while i < n { out.push(tdiag[i] * psi[i]) ; i = i + 1 }
+    return out
+}
+
+// ── Kinetic energy expectation ⟨ψ|T|ψ⟩ = Σ_G T_G |ψ_G|² (real coeffs) ─────────
+//   For a normalized real coefficient vector this is the band kinetic energy.
+//   Length mismatch → -1.0 sentinel.
+pub fn qforge_kinetic_energy(tdiag: [float], psi: [float]) -> float {
+    let n = len(tdiag)
+    if len(psi) != n { return -1.0 }
+    let mut e = 0.0
+    let mut i = 0
+    while i < n { e = e + tdiag[i] * psi[i] * psi[i] ; i = i + 1 }
+    return e
+}

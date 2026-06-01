@@ -1,0 +1,9 @@
+clm_large — CLMConvMoE LARGE rung d768/L12/E12 = 44.68M (real config run)
+  n_params = 44678668 (expect 44,678,668 for d768/L12/E12)
+  trunk activation cache (floats): old=110604 new=36864 (L=12 T=4 d=768)
+  ACTIVATION-CKPT: trunk cache 3·[L·T·d]+[L·d] -> [L·T·d]  (O(L) hn/xh/iv dropped, recomputed from tin)
+  step 1  CE = 4.81414
+  step 4 CE = 0.0132543
+  loss0 = 4.81414  lossF = 0.0132543
+F-FLAME-CLM-LARGE-RUN = 1
+PASS — LARGE rung (44.68M) builds + trains + descends on hexa-native stack

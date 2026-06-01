@@ -1,0 +1,172 @@
+// @ci_gate — pure · network-free · deterministic (stdlib_selftest_aggregate --ci-gate)
+//
+// orchestrator_selftest.hexa — QFORGE PRODUCTION ORCHESTRATOR gate.
+//
+// Drives `qforge_elph_to_tc` (the el-ph→Tc production chain) end-to-end on two
+// anchors and asserts it reproduces the verified-brick outputs — proving the
+// chain composes correctly, not just each brick in isolation.
+//
+//   🔵 ANALYTIC anchor — the Einstein closed-form el-ph dataset (on-shell
+//        electrons, constant |g|², single ω₀). The orchestrator's assembled-
+//        then-integrated λ must equal `qforge_einstein_lambda_analytic` (the
+//        independent algebraic λ), and its Tc_AD must equal the direct
+//        `qforge_tc_allen_dynes_full` on (λ, ω₀, ω₀). This pins ① the α²F
+//        assembler ∘ ② moments ∘ ③ Tc compose with NO drift.
+//
+//   🟢 CaH6 QE anchor — an Einstein dataset tuned to the QE-recorded CaH6 DFPT
+//        moments (λ=4.376, ω_log=1236.4 K — VERBATIM from the demiurge verdict
+//        rtsc_cah6_dft_4x4x4q_textbook_proof_20260524.json). The orchestrator's
+//        Tc_AD must reproduce the QE-validated CaH6 Allen-Dynes f1·f2 Tc ≈ 344 K
+//        (the canonical strong-coupling form — NOT the McMillan lower bound the
+//        campaign recorded as 255 K; see qforge_qe_xval_test GATE B/C). This is
+//        the production chain producing the SAME number the isolated bricks do.
+//
+//   guard  the malformed-dataset sentinel propagates (ok==0, λ=-1.0) — the
+//        chain refuses to emit a fabricated Tc on a broken el-ph input (d6).
+//
+// No QE λ is hand-injected into the chain: the orchestrator ASSEMBLES λ from a
+// constructed el-ph dataset and the gate is that assembled λ → Tc reproduces the
+// independently-verified value. (The cell→|g|² plane-wave front-end is the
+// remaining migration blocker — see orchestrator.hexa header; this gate starts
+// from the DFPT el-ph dataset, the same boundary every QFORGE QE-xval starts at.)
+//
+// Run:  hexa run stdlib/qforge/orchestrator_selftest.hexa
+// PASS: exits printing "orchestrator_selftest PASS".
+
+use "stdlib/qforge/orchestrator"
+use "stdlib/qforge/elph"
+use "stdlib/qforge/tc"
+use "stdlib/material/sim"
+
+fn _abs(x: float) -> float { if x < 0.0 { return -x } return x }
+
+fn _ck(name: str, got: float, want: float, tol: float) -> int {
+    let w = _abs(want)
+    let d = _abs(got - want)
+    let rel = if w < 1e-12 { d } else { d / w }
+    if rel <= tol {
+        println("PASS " + name + " (got " + to_string(got) + " rel-ε=" + to_string(rel) + ")")
+        return 0
+    }
+    println("FAIL " + name + " — got " + to_string(got) + " want " + to_string(want)
+            + " (rel-ε=" + to_string(rel) + " > " + to_string(tol) + ")")
+    return 1
+}
+
+fn _assert(name: str, cond: bool, detail: str) -> int {
+    if cond {
+        println("PASS " + name + " " + detail)
+        return 0
+    }
+    println("FAIL " + name + " " + detail)
+    return 1
+}
+
+// uniform ω grid [lo, hi] with ng points.
+fn _grid(lo: float, hi: float, ng: int) -> [float] {
+    let mut g: [float] = []
+    let step = (hi - lo) / to_float(ng - 1)
+    let mut i = 0
+    while i < ng { g.push(lo + step * to_float(i)) ; i = i + 1 }
+    return g
+}
+
+// slice column `which` (0..3) of the packed [4·nk] Einstein sample array.
+fn _slice(packed: [float], nk: int, which: int) -> [float] {
+    let mut out: [float] = []
+    let base = which * nk
+    let mut i = 0
+    while i < nk { out.push(packed[base + i]) ; i = i + 1 }
+    return out
+}
+
+fn main() {
+    let mut fails = 0
+    let mu = 0.10
+    let n_mats = 256
+
+    // shared Einstein construction constants (same idiom as qforge_l3_selftest).
+    let nk = 64
+    let ef = 0.0
+    let n_ef = 1.0
+    let wgt = 1.0 / to_float(nk)
+    let sig_el = 0.05
+    let sig_ph = 1.5
+
+    // ── 🔵 ANALYTIC anchor — chain reproduces the Einstein closed form ────────
+    println("── 🔵 ANALYTIC: qforge_elph_to_tc on the Einstein closed-form el-ph dataset ──")
+    let w0 = 1236.4                       // ω₀ in K (CaH6-scale phonon)
+    let g2c = 42.499                       // |g|² chosen so assembled λ ≈ CaH6 4.376
+    let packed = qforge_a2f_einstein_samples(nk, ef, g2c, w0)
+    let grid = _grid(60.0, 2472.0, 24001) // tight grid bracketing ω₀
+    let res = qforge_elph_to_tc(_slice(packed, nk, 0), _slice(packed, nk, 1),
+                                _slice(packed, nk, 2), _slice(packed, nk, 3),
+                                ef, n_ef, grid, wgt, sig_el, sig_ph, mu, n_mats)
+    fails = fails + _assert("chain ok==1 on a valid dataset", res.ok == 1,
+                            "(err='" + res.err + "')")
+    let lam_analytic = qforge_einstein_lambda_analytic(nk, g2c, w0, n_ef, wgt, sig_el)
+    println("[analytic] λ_chain=" + to_string(res.lambda) +
+            "  λ_analytic=" + to_string(lam_analytic) +
+            "  ω_log=" + to_string(res.omega_log) + " K  (ω₀=" + to_string(w0) + ")")
+    fails = fails + _ck("🔵 chain λ = Einstein analytic λ", res.lambda, lam_analytic, 1e-2)
+    // a tight single Einstein peak → ω_log ≈ ω₀.
+    fails = fails + _ck("🔵 chain ω_log ≈ ω₀", res.omega_log, w0, 5e-3)
+    // the chain's Tc_AD must equal the direct Allen-Dynes f1·f2 on the SAME
+    // moments (proves ③ is wired with no drift between the chain and the brick).
+    let tc_ad_direct = qforge_tc_allen_dynes_full(res.lambda, res.omega_log,
+                                                  res.omega_bar2, mu)
+    fails = fails + _ck("🔵 chain Tc_AD = direct qforge_tc_allen_dynes_full",
+                        res.tc_ad, tc_ad_direct, 1e-9)
+    // both Tc estimators physical & finite; the Matsubara Tc is a positive K.
+    fails = fails + _assert("🔵 chain Tc_AD finite & > 0",
+                            res.tc_ad > 0.0 && res.tc_ad < 1.0e6,
+                            "(Tc_AD=" + to_string(res.tc_ad) + " K)")
+    fails = fails + _assert("🔵 chain Tc_ME finite & > 0",
+                            res.tc_me > 0.0 && res.tc_me < 1.0e6,
+                            "(Tc_ME=" + to_string(res.tc_me) + " K)")
+
+    // ── 🟢 CaH6 QE anchor — chain Tc reproduces the QE-validated AD value ─────
+    // QE-recorded CaH6 DFPT moments (rtsc_cah6_dft_4x4x4q_textbook_proof):
+    //   λ_BZ = 4.376, ω_log = 1236.4 K. The campaign-recorded Tc 255.1 K is the
+    //   McMILLAN lower bound; the canonical Allen-Dynes f1·f2 form gives ≈ 344 K
+    //   (qforge_qe_xval_test GATE C pins allen_dynes_full(4.376,1236.4,…)≈344 K).
+    // The orchestrator ASSEMBLES λ from the el-ph dataset, then its Tc_AD must
+    // land on that 344 K AD value — the production chain reproducing the brick.
+    println("── 🟢 CaH6: chain Tc_AD reproduces QE-validated Allen-Dynes f1·f2 (≈344 K) ──")
+    // Reference AD value direct from the verified brick on the QE moments
+    // (ω̄₂ = ω_log → f2 = 1, the form qforge_qe_xval_test GATE C asserts ≈344 K).
+    let cah6_lam = 4.376
+    let cah6_wlog = 1236.4
+    let tc_ad_cah6_ref = allen_dynes_full(cah6_lam, cah6_wlog, cah6_wlog, mu)
+    println("[CaH6] QE moments λ=" + to_string(cah6_lam) + " ω_log=" + to_string(cah6_wlog)
+            + " K → AD f1·f2 reference Tc=" + to_string(tc_ad_cah6_ref) + " K")
+    fails = fails + _assert("🟢 CaH6 AD reference ≈ 344 K (QE-validated brick, not 416 K)",
+                            tc_ad_cah6_ref > 340.0 && tc_ad_cah6_ref < 348.0,
+                            "(Tc=" + to_string(tc_ad_cah6_ref) + " K)")
+    // Now drive the chain: the analytic anchor above already assembled λ≈4.376 at
+    // ω_log≈1236.4 K from the el-ph dataset. Its Tc_AD must match the CaH6 AD ref
+    // to within the assembled-λ tolerance (the chain reproduces the QE anchor).
+    println("[CaH6] chain assembled λ=" + to_string(res.lambda) + " ω_log=" + to_string(res.omega_log)
+            + " K → chain Tc_AD=" + to_string(res.tc_ad) + " K  (QE AD ref " + to_string(tc_ad_cah6_ref) + " K)")
+    fails = fails + _ck("🟢 chain Tc_AD reproduces QE CaH6 Allen-Dynes Tc",
+                        res.tc_ad, tc_ad_cah6_ref, 1.5e-2)
+
+    // ── guard — malformed dataset → ok==0, no fabricated Tc (d6) ──────────────
+    println("── guard: malformed el-ph dataset → ok==0 sentinel (no fabricated Tc) ──")
+    let bad = qforge_elph_to_tc([ef, ef], [ef], [1.0, 1.0], [w0, w0],
+                                ef, n_ef, grid, wgt, sig_el, sig_ph, mu, n_mats)
+    fails = fails + _assert("guard length-mismatch → ok==0",
+                            bad.ok == 0 && bad.lambda < 0.0,
+                            "(ok=" + to_string(bad.ok) + " λ=" + to_string(bad.lambda) + ")")
+    let bad2 = qforge_elph_to_tc([ef], [ef], [1.0], [w0], ef, 0.0,
+                                 grid, wgt, sig_el, sig_ph, mu, n_mats)
+    fails = fails + _assert("guard N(E_F)≤0 → ok==0",
+                            bad2.ok == 0 && bad2.lambda < 0.0,
+                            "(ok=" + to_string(bad2.ok) + ")")
+
+    if fails == 0 {
+        println("orchestrator_selftest PASS")
+    } else {
+        println("orchestrator_selftest FAIL — " + to_string(fails) + " case(s)")
+    }
+}

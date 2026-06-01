@@ -1397,6 +1397,19 @@ fn _builtin_runtime_sym(name: string) -> string {
     // diverge on non-string keys). get=2-arg, set=3-arg, arities match.
     if name == "get"           { return "hexa_map_get_v" }
     if name == "set"           { return "hexa_map_set_v" }
+    // N5-sym pt5: three more class-B builtins fell through to bare names in
+    // native obj-emit. All three have an AUTHORITATIVE C-path mapping plus a
+    // runtime-defined target with a (HexaVal …) -> HexaVal signature, so the
+    // generic STMT_CALL emit (raw HexaVal pairs) is calling-convention-correct
+    // — same shape as byte_at, 0 miscompile risk:
+    //   float_to_bits → hexa_float_to_bits  (codegen.hexa:357, runtime_core.c:1408
+    //   bits_to_float → hexa_bits_to_float   :358 / :1409 — union bit-reinterpret)
+    //   sha256_hex    → hexa_sha256          (exec_argv_sha256.c:290 — "HexaVal
+    //                   str → HexaVal str (lowercase hex)"; sha256_hex IS the
+    //                   sha256-then-hex op, so the semantics match exactly).
+    if name == "float_to_bits" { return "hexa_float_to_bits" }
+    if name == "bits_to_float" { return "hexa_bits_to_float" }
+    if name == "sha256_hex"    { return "hexa_sha256" }
     // STILL DEFERRED (unmapped-is-safer-than-mis-mapped — this file's policy):
     // `mkdir` collides with libc mkdir (needs a hexa_mkdir wrapper),
     // `sha256_hex` target unconfirmed.

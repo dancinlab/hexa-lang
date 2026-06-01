@@ -1,0 +1,116 @@
+// @ci_gate — deterministic · network-free · PBE GGA 상관 g5 게이트
+//
+// correlation_pbe_selftest.hexa — QFORGE PBE GGA 상관(gradient correction H) g5 gate.
+//   PR1 의 LDA 상관(PW92) 위에 PBE H(r_s,t) 를 올린 PR2 를 검증한다.
+//
+// 검증 케이스:
+//  🔵 (A) LDA 환원: t→0 ⇒ H→0 ⇒ ε_c^PBE(r_s,t→0) = ε_c^PW92(r_s) (abs<1e-10).
+//         PBE 의 핵심 일관성 — 균질극한에서 PW92-LDA 로 정확히 환원.
+//  🟢 (B) H closed-form 손계산 재현 (r_s=1,2,5 · t=0.5,1.0, float 재결합ε abs<1e-6).
+//         H=γ ln(1+(β/γ)t²(1+At²)/(1+At²+A²t⁴)) 를 selftest 내부 독립 재계산.
+//  🔵 (C) 고기울기 포화극한 t→∞: H → −ε_c^LDA (PBE 설계 항등 → ε_c^PBE→0) (abs<1e-9).
+//         A→(β/γ)/(e^{−ε/γ}−1) 에서 H_max=γ ln(1+(β/γ)/A)=−ε_lda — 닫힌형.
+//  🟢 (D) H 양수·단조증가(0<t): 작은 기울기→작은 H, 큰 기울기→큰 H.
+//         H(t=0.5) < H(t=1) < H(t=2)  (각 r_s).
+//  🟢 (E) from_rho helper 환원: |∇ρ|=0 ⇒ ε_c^PBE_from_rho(ρ,0) = ε_c^PW92(r_s(ρ)).
+//  🔵 (F) γ·(상수) 부호 sanity: H(r_s,t)>0 (∇ 보정은 ε_c 를 0 쪽으로 — 양수).
+//
+// Run:  hexa run --no-sentinel stdlib/qforge/correlation_pbe_selftest.hexa
+// PASS: "qforge_correlation_pbe_selftest PASS".
+use "stdlib/qforge/correlation"
+
+fn _abs(x: float) -> float { if x < 0.0 { return -x } return x }
+fn _ck_close(name: str, got: float, want: float, eps: float) -> int {
+    if _abs(got - want) <= eps { println("PASS " + name + " (" + to_string(got) + ")") ; return 0 }
+    println("FAIL " + name + " — got " + to_string(got) + " want " + to_string(want)) ; return 1
+}
+fn _ck_bool(name: str, got: bool, want: bool) -> int {
+    if got == want { println("PASS " + name + " (" + to_string(got) + ")") ; return 0 }
+    println("FAIL " + name + " — got " + to_string(got) + " want " + to_string(want)) ; return 1
+}
+
+// PBE H 손계산 (selftest 독립 재현 — 본 코드와 별경로).
+fn _h_hand(rs: float, t: float) -> float {
+    let g = 0.031090690869654895
+    let b = 0.06672455060314922
+    let ec = qforge_ec_pw92(rs)
+    let bg = b / g
+    let aa = bg / (exp(-1.0 * ec / g) - 1.0)
+    let t2 = t * t
+    let t4 = t2 * t2
+    let inner = 1.0 + bg * t2 * (1.0 + aa * t2) / (1.0 + aa * t2 + aa * aa * t4)
+    return g * log(inner)
+}
+
+fn main() {
+    let mut fails = 0
+
+    // ── (A) LDA 환원: t→0 ⇒ ε_c^PBE = ε_c^PW92 ────────────────────────────────
+    let rsA = [1.0, 2.0, 5.0, 10.0]
+    let mut ia = 0
+    while ia < len(rsA) {
+        let rs = rsA[ia]
+        fails = fails + _ck_close("(A) PBE→PW92 reduction t→0 r_s=" + to_string(rs),
+                                  qforge_ec_pbe(rs, 1.0e-9), qforge_ec_pw92(rs), 1.0e-10)
+        ia = ia + 1
+    }
+
+    // ── (B) H closed-form 손계산 재현 ────────────────────────────────────────
+    let rsB = [1.0, 2.0, 5.0]
+    let tsB = [0.5, 1.0]
+    let mut ib = 0
+    while ib < len(rsB) {
+        let mut jb = 0
+        while jb < len(tsB) {
+            let rs = rsB[ib]
+            let t = tsB[jb]
+            fails = fails + _ck_close("(B) H closed-form r_s=" + to_string(rs) + " t=" + to_string(t),
+                                      qforge_h_pbe(rs, t), _h_hand(rs, t), 1.0e-6)
+            jb = jb + 1
+        }
+        ib = ib + 1
+    }
+
+    // ── (C) 포화극한 t→∞: H → −ε_c^LDA (ε_c^PBE→0) ────────────────────────────
+    let rsC = [1.0, 2.0, 5.0]
+    let mut icx = 0
+    while icx < len(rsC) {
+        let rs = rsC[icx]
+        let hmax = qforge_h_pbe(rs, 1.0e6)
+        fails = fails + _ck_close("(C) H saturation t→∞ → −ε_c^LDA r_s=" + to_string(rs),
+                                  hmax, -1.0 * qforge_ec_pw92(rs), 1.0e-9)
+        icx = icx + 1
+    }
+
+    // ── (D) H 단조증가 (0 < t) ───────────────────────────────────────────────
+    let rsD = [1.0, 2.0, 5.0]
+    let mut idx = 0
+    while idx < len(rsD) {
+        let rs = rsD[idx]
+        let h05 = qforge_h_pbe(rs, 0.5)
+        let h1 = qforge_h_pbe(rs, 1.0)
+        let h2 = qforge_h_pbe(rs, 2.0)
+        fails = fails + _ck_bool("(D) H monotone H(0.5)<H(1)<H(2) r_s=" + to_string(rs),
+                                 h05 < h1 && h1 < h2, true)
+        idx = idx + 1
+    }
+
+    // ── (E) from_rho helper 환원: |∇ρ|=0 ⇒ PW92 ──────────────────────────────
+    let rhoE = [0.05, 0.1, 0.5]
+    let mut ie = 0
+    while ie < len(rhoE) {
+        let rho = rhoE[ie]
+        let rs = qforge_rs_from_rho(rho)
+        fails = fails + _ck_close("(E) from_rho |∇ρ|=0 ⇒ PW92 ρ=" + to_string(rho),
+                                  qforge_ec_pbe_from_rho(rho, 0.0), qforge_ec_pw92(rs), 1.0e-12)
+        ie = ie + 1
+    }
+
+    // ── (F) H > 0 (gradient 보정은 ε_c 를 0 쪽으로) ────────────────────────────
+    fails = fails + _ck_bool("(F) H(r_s=2,t=1) > 0", qforge_h_pbe(2.0, 1.0) > 0.0, true)
+    fails = fails + _ck_bool("(F) ε_c^PBE(r_s=2,t=1) > ε_c^LDA (less negative)",
+                             qforge_ec_pbe(2.0, 1.0) > qforge_ec_pw92(2.0), true)
+
+    if fails == 0 { println("qforge_correlation_pbe_selftest PASS") }
+    else { println("qforge_correlation_pbe_selftest FAIL — " + to_string(fails) + " case(s)") }
+}

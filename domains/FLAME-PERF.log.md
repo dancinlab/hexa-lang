@@ -55,3 +55,25 @@ bf16 `__nv_bfloat16` 커널 → `nvcc -x cu -DHEXA_CUDA` ④ driver API 위해 `
 T=512 로 키워도 O(T²) host 루프가 더 지배(4%). **util GREEN 전제 = backward forge(Phase-4
 bwd-forge) + 큰 batch×T**. cuBLAS 자체는 PHASE_D_H100_EVIDENCE.md 에 51.24 TFLOPS(H100 76%)
 선례 — gap 은 host 잔여. 증거 박제: `.verdicts/flame-perf-clm-forge-h100/`.
+
+## 2026-06-01 — 세션 PR 13개 landing + 마일스톤 일괄 flip
+
+main broken-pipe 게이트(#2381, runtime_core_emit seen-gate 복원)로 main GREEN 복구 후,
+이 세션 검증 PR 13개를 CI-gated squash 로 일괄 landing. 마일스톤 정직 flip(g63):
+
+CLOSED [x] (host falsifier 완전 폐쇄):
+- offset-conv #2354 🟢 (GRAD-EXACT ∧ copy 0)
+- int4 packed #2356 🟢 (byte-identical 0.0 · 8×)
+- activation-ckpt #2357 🟢 (GRAD-EXACT · cache 3.0×)
+- conv1d=im2col #2352/#2359 🟢 (forge + host 60×)
+- conv→GN→GELU #2385 🟢 byte-eq (#2365 대체, #2357 no-cache 보존; wall→GPU defer)
+- expert-streaming #2369 🟢 (resident ≤1.2M counting)
+- self-play #2376 🔴 CLOSED-NEGATIVE (external-LLM 0 ✅, held-out gain 없음)
+
+host-half ✅ / 하드웨어·GPU falsifier OPEN (defer, [ ] 유지):
+- BF16-TC #2372 (host fp fallback 🟢 · 9.67× wall = GPU)
+- optim-shard #2371 (descent bit-identical 🟢 · per-device mem = 다중 GPU)
+- 온칩 plasticity #2373 · learn-while-infer #2375 · MITOSIS #2370 (host 🟢 · 실리콘 BOUND defer → anima ONCHIP-PARADIGM #1641)
+
+forge GPU device-routing 진척: elementwise #2377 + backward-forge #2383 (둘 다 byte-eq 🟢).
+util-RED(#2379) 근본해법 = backward-forge 코드상 완료, clm_large 배선 후 차기 H100 fire 재측정.

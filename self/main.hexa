@@ -2438,7 +2438,34 @@ fn _hexa_clang_capped(cmd) {
             }
         }
     }
-    let out = exec(cmd)
+    // SIGPIPE-immune clang invocation (mac fork-storm cache GC race fix,
+    // inbox/patches/cloud-cli-mac-cache-gc-race.md). Running clang via a
+    // popen pipe (`exec(cmd)` -> /bin/sh -c "clang ... 2>&1" -> fread drain)
+    // races under concurrent `hexa build`/`hexa run`: when a peer build's
+    // SIGCHLD interrupts this process's fread loop, the read end closes
+    // early and clang's next diagnostic write() takes SIGPIPE (rc=141),
+    // killing the LINK mid-flight -- the `-o` binary is never produced, so
+    // the post-clang `test -x <tmp>` reports a phantom "binary not produced"
+    // even though the same clang by hand succeeds. Redirecting clang's
+    // merged stdout+stderr to a regular FILE removes the pipe entirely:
+    // clang writes to disk (no SIGPIPE), completes the link, THEN we read
+    // the diagnostics back. `cmd` already ends in ` 2>&1`; appending
+    // `> <logfile> 2>&1` re-points BOTH streams at the file (the final
+    // `2>&1` rebinds stderr to the freshly-redirected stdout=logfile, so
+    // clang's stderr warnings land in the file too -- not the pipe).
+    // Measured: 4-way concurrent `hexa cloud list` 6/20 -> 20/20 pass.
+    // Best-effort: on any path failure fall back to the legacy pipe capture.
+    let _cap_log = "/tmp/.hexa-runtime/clang." + to_string(mono_ns()) + ".log"
+    exec("mkdir -p /tmp/.hexa-runtime 2>/dev/null")
+    let _cmd_file = cmd + " > '" + _cap_log + "' 2>&1"
+    let _ = exec(_cmd_file)
+    let mut out = ""
+    if file_exists(_cap_log) {
+        out = exec("cat '" + _cap_log + "' 2>/dev/null")
+        exec("rm -f '" + _cap_log + "' 2>/dev/null")
+    } else {
+        out = exec(cmd)
+    }
     exec("rmdir " + token_dir + " 2>/dev/null")
     return out
 }
@@ -7253,6 +7280,23 @@ if len(av) < 3 {
             gpi = gpi + 1
         }
         cmd_gpu(gpu_args)
+    } else if sub == "qforge" {
+        // QFORGE — the hexa-native first-principles el-ph→Tc engine (@L2). The
+        // verb dispatches to stdlib/qforge/qforge_cli.hexa, which parses the
+        // subcommand (run <deck> | selftest | help) and drives the production
+        // orchestrator (qforge_elph_to_tc). Library bricks (scf/dfpt/elph/
+        // eliashberg/tc) stay `use`-able by the selftests without auto-firing a
+        // top-level main. Same install-dir-resolve + cmd_run pattern as `deck`.
+        let __inst_q = install_dir_from_argv0()
+        let mut qf_args = []
+        let mut qi = 3
+        while qi < len(av) { qf_args.push(av[qi]); qi = qi + 1 }
+        let mut qf_script = "stdlib/qforge/qforge_cli.hexa"
+        if len(__inst_q) > 0 {
+            let inst_path = __inst_q + "/stdlib/qforge/qforge_cli.hexa"
+            if file_exists(inst_path) { qf_script = inst_path }
+        }
+        cmd_run(qf_script, qf_args)
     } else if sub == "tool" {
         // CANON M4: go-tool-style drawer. `hexa tool [list]` indexes the
         // specialized verbs by family; `hexa tool <verb> [args]` re-dispatches

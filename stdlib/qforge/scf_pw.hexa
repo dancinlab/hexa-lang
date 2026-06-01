@@ -1,0 +1,299 @@
+// HEXA Standard Library — qforge/scf_pw
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// QFORGE M5.5 — the DENSITY-DEPENDENT plane-wave SCF orchestrator.
+//
+// scf.hexa provides the physics-agnostic Kohn-Sham SCF DRIVER (qforge_scf) but
+// its end-to-end gate fed a DENSITY-INDEPENDENT `H_of_rho` stub (the assembler
+// selftest's `gh_of_rho` ignores ρ and returns a fixed free-electron operator).
+// That proved the WIRING, not a real self-consistent calculation. This brick
+// closes the gap: it builds the REAL `H_of_rho(ρ)` closure that, every SCF
+// iteration, rebuilds the screening potential V_scr = V_H(ρ) + V_xc(ρ) FROM the
+// current density and re-assembles H via assembler.hexa — so the operator
+// genuinely depends on ρ and the fixed point is a true self-consistent KS state.
+//
+//   ρ(r)  ──▶  V_H[ρ](r)  (Hartree, neutral cell → 0 for uniform ρ)
+//        ╲─▶  V_xc[ρ](r)  (LDA x: −(3ρ/π)^⅓ · c: PW92, correlation.hexa)
+//             │
+//             ▼  V_scr(r) = V_H + V_xc  (the G-diagonal local screening term)
+//   [ qforge_assemble_h(cell, UPF, V_scr) ]  ──▶  H(ρ)  ──▶  H_apply
+//             │
+//   qforge_scf  ──diagonalize(davidson)──occupy──new ρ──mix──┘  (iterate to SC)
+//
+// ── d4 generic contract (module-global cell slot, named-fn closure) ──────────
+//   hexa codegen does NOT capture local params in a nested `fn` (the existing
+//   qforge selftests use the SAME module-global pattern). So the cell + UPF +
+//   xc_mode are staged into module-global `let mut` slots by qforge_scf_pw_set,
+//   and the named module-level `qforge_h_of_rho_global` is the H_of_rho closure
+//   qforge_scf calls — physics-agnostic driver, name not hardcoded (d4).
+//
+// ── Honest scope (d6) ────────────────────────────────────────────────────────
+//   The screening enters as a LOCAL real-space potential sampled on the same
+//   index grid the SCF density carries (the assembler's G-diagonal vscr_diag).
+//   The g5 gate verifies the SELF-CONSISTENT physics on cases whose fixed point
+//   is analytic (uniform/jellium V_xc shift; a ρ-coupled fixed point; the free-
+//   electron limit). The G-space Hartree for an arbitrary aperiodic ρ on the PW
+//   basis is the next integration piece (needs the dense FFT grid, not the n-PW
+//   diagonal); it is supplied here as a caller-provided vh_diag (or [] for the
+//   neutral uniform cell where V_H=0) — NOT faked.
+//
+// reuse (d19): assembler (H_of_rho compose) · screening (Hartree+LDA-x) ·
+//   correlation (PW92 c) · scf (the driver) · davidson (diagonalizer).
+use "stdlib/qforge/assembler"
+use "stdlib/qforge/screening"
+use "stdlib/qforge/correlation"
+use "stdlib/qforge/scf"
+
+// ── module-global cell slot for the H_of_rho closure (named-fn pattern, d4) ───
+//   Staged by qforge_scf_pw_set; read by qforge_h_of_rho_global. The same slots
+//   serve a single-atom cell, an H₂-like cell, or a real metallic hydride —
+//   add/swap a material = re-stage the slots, no name hardcoded.
+let mut PW_KVEC: [float] = []
+let mut PW_GVECS: [float] = []
+let mut PW_POS: [float] = []
+let mut PW_R: [float] = []
+let mut PW_RAB: [float] = []
+let mut PW_VLOC: [float] = []
+let mut PW_Z: float = 0.0
+let mut PW_BETAS: [float] = []
+let mut PW_LS: [int] = []
+let mut PW_DIJ: [float] = []
+let mut PW_NPROJ: int = 0
+let mut PW_OMEGA: float = 1.0
+let mut PW_VH: [float] = []
+let mut PW_XCMODE: int = 0
+// ── M5.7: in-loop ground-state Hartree V_H[ρ] FFT-grid slots ──────────────────
+//   When PW_HGRID_ON, qforge_h_of_rho_global builds vh_diag FROM the current ρ
+//   each SCF iteration via qforge_vhartree_from_rho (screening.hexa) — V_H now
+//   updates self-consistently with V_xc, instead of the frozen caller PW_VH.
+//   When OFF (the jellium/free-electron anchors), the frozen PW_VH path is kept
+//   verbatim (backward-compat — a caller may still supply a fixed vh_diag).
+let mut PW_HGRID_ON: bool = false
+let mut PW_NX: int = 0
+let mut PW_NY: int = 0
+let mut PW_NZ: int = 0
+let mut PW_B1: [float] = []
+let mut PW_B2: [float] = []
+let mut PW_B3: [float] = []
+
+// ── LDA xc potential at a single density point (Hartree units) ────────────────
+//   xc_mode: 0=x-only(Slater) · ≥1=x+c(PW92).  ρ≤0 → 0 (no electrons → no xc).
+//   Reuses screening.qforge_vx_lda + correlation.qforge_vc_pw92_from_rho (d19).
+pub fn qforge_vxc_point(rho: float, xc_mode: int) -> float {
+    if rho <= 0.0 { return 0.0 }
+    let mut v = qforge_vx_lda(rho)                       // Slater exchange V_x
+    if xc_mode >= 1 { v = v + qforge_vc_pw92_from_rho(rho) }   // PW92 correlation V_c
+    return v
+}
+
+// ── Build the G-diagonal screening potential V_scr(i) = V_H(i) + V_xc(i) ──────
+//   rho       : length-n density on the PW-site grid (the SCF carries this)
+//   vh_diag   : length-n Hartree potential on the same grid, or [] (neutral
+//               uniform cell → V_H=0; caller supplies the dense-grid V_H when an
+//               aperiodic ρ needs it — d4, screening.hexa produces it)
+//   xc_mode   : <0 → no screening (free-electron) · 0 → x-only · ≥1 → x+c
+//   Returns length-n vscr_diag for qforge_assemble_h, or [] for the bare H.
+pub fn qforge_vscr_diag(rho: [float], vh_diag: [float], xc_mode: int) -> [float] {
+    if xc_mode < 0 { return [] }                          // free-electron: no screening
+    let n = len(rho)
+    let have_vh = len(vh_diag) == n
+    let mut vscr: [float] = []
+    let mut i = 0
+    while i < n {
+        let mut v = qforge_vxc_point(rho[i], xc_mode)
+        if have_vh { v = v + vh_diag[i] }
+        vscr.push(v)
+        i = i + 1
+    }
+    return vscr
+}
+
+// ── Site density from occupied PW coefficients ρ(i)=Σ_b occ_b·|ψ_b(i)|² ───────
+//   The standard rho_of_psi qforge_scf consumes (closed-shell double occupation
+//   handled by the occ vector). Pure — no material coupling (d4).
+pub fn qforge_rho_of_psi(psis: [[float]], occ: [float], nbands: int) -> [float] {
+    let ndim = len(psis[0])
+    let mut rho: [float] = []
+    let mut i = 0
+    while i < ndim { rho.push(0.0) ; i = i + 1 }
+    let mut b = 0
+    while b < nbands {
+        let mut t = 0
+        while t < ndim { rho[t] = rho[t] + occ[b] * psis[b][t] * psis[b][t] ; t = t + 1 }
+        b = b + 1
+    }
+    return rho
+}
+
+// ── stage the cell into the module-global slots (call before qforge_scf) ──────
+//   d4: every material traverses this one staging path — no per-instance branch.
+pub fn qforge_scf_pw_set(kvec: [float], gvecs: [float], pos: [float],
+                         r: [float], rab: [float], vloc_r: [float], z: float,
+                         betas: [float], ls: [int], dij: [float], nproj: int,
+                         omega: float, vh_diag: [float], xc_mode: int) {
+    PW_KVEC = kvec ; PW_GVECS = gvecs ; PW_POS = pos
+    PW_R = r ; PW_RAB = rab ; PW_VLOC = vloc_r ; PW_Z = z
+    PW_BETAS = betas ; PW_LS = ls ; PW_DIJ = dij ; PW_NPROJ = nproj
+    PW_OMEGA = omega ; PW_VH = vh_diag ; PW_XCMODE = xc_mode
+    // reset the in-loop V_H grid (a fresh stage starts on the frozen-PW_VH path
+    // until qforge_scf_pw_set_hgrid enables it) — no stale grid leaks across cells.
+    PW_HGRID_ON = false
+}
+
+// ── the density-dependent H_of_rho closure (the M5.5 deliverable) ─────────────
+//   ρ → (rebuild V_scr(ρ) → assemble H(ρ) → matrix-free apply). Reads the staged
+//   cell from the module-global slots. This is what qforge_scf calls each
+//   iteration — the operator genuinely tracks ρ (no fixed-stub).
+// ── stage the FFT grid for in-loop ground-state V_H[ρ] (M5.7) ─────────────────
+//   Call AFTER qforge_scf_pw_set with the real-space grid (nx,ny,nz) the density
+//   lives on and the reciprocal basis (b1,b2,b3) for |G|². Enables the in-loop
+//   Hartree build. Pass nx=ny=nz=0 (or never call) to keep the frozen-PW_VH path
+//   (backward-compat with every jellium/free-electron anchor). d4 — generic.
+pub fn qforge_scf_pw_set_hgrid(nx: int, ny: int, nz: int,
+                               b1: [float], b2: [float], b3: [float]) {
+    PW_NX = nx ; PW_NY = ny ; PW_NZ = nz
+    PW_B1 = b1 ; PW_B2 = b2 ; PW_B3 = b3
+    PW_HGRID_ON = nx * ny * nz > 0
+}
+
+pub fn qforge_h_of_rho_global(rho: [float]) {
+    // M5.7: build the ground-state Hartree FROM the current ρ in-loop (self-
+    //   consistent with V_xc), or fall back to the frozen caller PW_VH when the
+    //   FFT grid is not staged (free-electron/jellium — V_H=0 in a neutral cell).
+    let mut vh = PW_VH
+    if PW_HGRID_ON {
+        if len(rho) == PW_NX * PW_NY * PW_NZ {
+            vh = qforge_vhartree_from_rho(rho, PW_NX, PW_NY, PW_NZ, PW_B1, PW_B2, PW_B3)
+        }
+    }
+    let vscr = qforge_vscr_diag(rho, vh, PW_XCMODE)
+    let ham = qforge_assemble_h(PW_KVEC, PW_GVECS, PW_POS,
+                                PW_R, PW_RAB, PW_VLOC, PW_Z,
+                                PW_BETAS, PW_LS, PW_DIJ, PW_NPROJ,
+                                PW_OMEGA, vscr)
+    return qforge_pw_apply_global(ham)
+}
+
+// helper: bind the assembled PwHam to a named apply closure (global slot).
+let mut PW_HAM: PwHam = PwHam { h: [], diag: [], n: 0 }
+pub fn qforge_pw_apply_global(ham: PwHam) {
+    PW_HAM = ham
+    return qforge_pw_h_apply
+}
+pub fn qforge_pw_h_apply(v: [float]) { return qforge_h_apply(PW_HAM, v) }
+
+// ── One-call self-consistent PW SCF: cell + UPF + xc_mode → ScfResult ─────────
+//
+//   Stages the cell then drives qforge_scf with the density-dependent closure.
+//   This is the independent atoms→SCF entry point (no QE moment boundary).
+//   Returns the SCF driver's ScfResult (converged density · KS eigenvalues ·
+//   total energy · iters · converged flag).
+//
+//   d6: `converged` is the driver's honest flag — a non-converged (oscillating)
+//   run returns converged=false; the caller must not treat it as self-consistent.
+pub fn qforge_scf_pw(kvec: [float], gvecs: [float], pos: [float],
+                     r: [float], rab: [float], vloc_r: [float], z: float,
+                     betas: [float], ls: [int], dij: [float], nproj: int,
+                     omega: float, vh_diag: [float], xc_mode: int,
+                     nbands: int, nelec: int, mix: float, tol: float,
+                     max_iter: int) -> ScfResult {
+    qforge_scf_pw_set(kvec, gvecs, pos, r, rab, vloc_r, z,
+                      betas, ls, dij, nproj, omega, vh_diag, xc_mode)
+    let n = len(gvecs) / 3
+    return qforge_scf(qforge_h_of_rho_global, qforge_rho_of_psi, n, nbands, nelec,
+                      mix, tol, max_iter)
+}
+
+// ── One-call self-consistent PW SCF WITH in-loop ground-state V_H[ρ] (M5.7) ───
+//
+//   Same as qforge_scf_pw, but ALSO stages the FFT grid so qforge_h_of_rho_global
+//   rebuilds the ground-state Hartree FROM the current ρ each iteration (V_H now
+//   self-consistent with V_xc — the real-cell path). The density grid is the
+//   nx·ny·nz real-space cube; its length must equal the PW basis dim n (the SCF
+//   carries ρ on that grid). b1,b2,b3 = reciprocal basis for |G|². vh_diag here is
+//   the INITIAL/override (use [] for the pure in-loop build). d4 — generic, no
+//   material hardcoded; CaH6 / LaH10 / Li2MgH16 all traverse this one entry.
+pub fn qforge_scf_pw_h(kvec: [float], gvecs: [float], pos: [float],
+                       r: [float], rab: [float], vloc_r: [float], z: float,
+                       betas: [float], ls: [int], dij: [float], nproj: int,
+                       omega: float, vh_diag: [float], xc_mode: int,
+                       nx: int, ny: int, nz: int,
+                       b1: [float], b2: [float], b3: [float],
+                       nbands: int, nelec: int, mix: float, tol: float,
+                       max_iter: int) -> ScfResult {
+    qforge_scf_pw_set(kvec, gvecs, pos, r, rab, vloc_r, z,
+                      betas, ls, dij, nproj, omega, vh_diag, xc_mode)
+    qforge_scf_pw_set_hgrid(nx, ny, nz, b1, b2, b3)        // enable in-loop V_H[ρ]
+    let n = len(gvecs) / 3
+    return qforge_scf(qforge_h_of_rho_global, qforge_rho_of_psi, n, nbands, nelec,
+                      mix, tol, max_iter)
+}
+
+// ── MULTI-SPECIES in-loop-V_H PW SCF (M5.7 PR3 — real heteroatomic cell) ───────
+//   The single-species qforge_scf_pw_h staging composes V_ext from one channel.
+//   A real hydride (CaH6 = Ca + 6·H) needs Σ_s V_loc^s·S_s — this entry stages a
+//   species list and drives qforge_assemble_h_multi each SCF iteration with the
+//   in-loop ground-state V_H[ρ] (M5.7) active. d4-generic: the species list is
+//   data; CaH6 / LaH10 / Li2MgH16 all traverse this one entry. The slice arrays
+//   (mlens · palens · blens · dlens · nprojs) mirror qforge_assemble_h_multi.
+let mut PWM_KVEC: [float] = []
+let mut PWM_GVECS: [float] = []
+let mut PWM_NSPEC: int = 0
+let mut PWM_RS: [float] = []
+let mut PWM_RABS: [float] = []
+let mut PWM_VLOCS: [float] = []
+let mut PWM_MLENS: [int] = []
+let mut PWM_ZS: [float] = []
+let mut PWM_POSS: [float] = []
+let mut PWM_PALENS: [int] = []
+let mut PWM_BETAS: [float] = []
+let mut PWM_LS: [int] = []
+let mut PWM_DIJ: [float] = []
+let mut PWM_NPROJS: [int] = []
+let mut PWM_BLENS: [int] = []
+let mut PWM_DLENS: [int] = []
+let mut PWM_OMEGA: float = 1.0
+
+pub fn qforge_h_of_rho_multi(rho: [float]) {
+    let mut vh = PW_VH
+    if PW_HGRID_ON {
+        if len(rho) == PW_NX * PW_NY * PW_NZ {
+            vh = qforge_vhartree_from_rho(rho, PW_NX, PW_NY, PW_NZ, PW_B1, PW_B2, PW_B3)
+        }
+    }
+    let vscr = qforge_vscr_diag(rho, vh, PW_XCMODE)
+    let ham = qforge_assemble_h_multi(PWM_KVEC, PWM_GVECS, PWM_NSPEC,
+                                      PWM_RS, PWM_RABS, PWM_VLOCS, PWM_MLENS, PWM_ZS,
+                                      PWM_POSS, PWM_PALENS,
+                                      PWM_BETAS, PWM_LS, PWM_DIJ,
+                                      PWM_NPROJS, PWM_BLENS, PWM_DLENS,
+                                      PWM_OMEGA, vscr)
+    return qforge_pw_apply_global(ham)
+}
+
+pub fn qforge_scf_pw_h_multi(kvec: [float], gvecs: [float], nspec: int,
+                             rs: [float], rabs: [float], vlocs: [float],
+                             mlens: [int], zs: [float],
+                             poss: [float], palens: [int],
+                             betas: [float], ls: [int], dij: [float],
+                             nprojs: [int], blens: [int], dlens: [int],
+                             omega: float, xc_mode: int,
+                             nx: int, ny: int, nz: int,
+                             b1: [float], b2: [float], b3: [float],
+                             nbands: int, nelec: int, mix: float, tol: float,
+                             max_iter: int) -> ScfResult {
+    PWM_KVEC = kvec ; PWM_GVECS = gvecs ; PWM_NSPEC = nspec
+    PWM_RS = rs ; PWM_RABS = rabs ; PWM_VLOCS = vlocs ; PWM_MLENS = mlens ; PWM_ZS = zs
+    PWM_POSS = poss ; PWM_PALENS = palens
+    PWM_BETAS = betas ; PWM_LS = ls ; PWM_DIJ = dij
+    PWM_NPROJS = nprojs ; PWM_BLENS = blens ; PWM_DLENS = dlens
+    PWM_OMEGA = omega
+    let mut empty_f: [float] = []
+    PW_VH = empty_f ; PW_XCMODE = xc_mode
+    qforge_scf_pw_set_hgrid(nx, ny, nz, b1, b2, b3)        // enable in-loop V_H[ρ]
+    let n = len(gvecs) / 3
+    return qforge_scf(qforge_h_of_rho_multi, qforge_rho_of_psi, n, nbands, nelec,
+                      mix, tol, max_iter)
+}

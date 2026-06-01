@@ -1,0 +1,276 @@
+// HEXA Standard Library — qforge/assembler
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// QFORGE front-end brick 5/5 — the H_of_rho ASSEMBLER.
+//
+// Composes the four front-end bricks + the Hartree/XC screening into the dense
+// plane-wave Kohn-Sham Hamiltonian H(ρ), exposed as the `H_of_rho` closure that
+// `qforge_scf` (scf.hexa) consumes (d4 — the driver stays physics-agnostic):
+//
+//   H_{G,G'}(ρ) =  ½|k+G|² δ_{G,G'}                       (kinetic, brick 2)
+//                + V_loc(|G−G'|) · S(G−G')                (local V_ext, bricks 1+3)
+//                + V_NL(k+G, k+G')                        (nonlocal KB, brick 4)
+//                + [V_H(G−G') + V_xc(G−G')]               (density screening)
+//
+// At the Γ point with a real local potential this H is real-symmetric, so it
+// drives the existing real matrix-free `qforge_davidson` / `qforge_scf` path
+// unchanged. The assembler returns BOTH the dense matrix and a matrix-free
+// `H_apply` closure (v ↦ H·v) — the latter is exactly what qforge_scf calls.
+//
+// ── Density coupling (d4) ────────────────────────────────────────────────────
+//   The Hartree+XC screening enters as a G-space local potential V_scr(G−G')
+//   built from the density. For the front-end gate we accept that screening
+//   potential as a CALLER-SUPPLIED diagonal-in-G local term `vscr_diag` (length
+//   n, the G-diagonal V_H+V_xc contribution) — the existing screening.hexa /
+//   correlation.hexa kernels produce it (d3 reuse). Passing vscr_diag=[] gives
+//   the bare (kinetic + V_ext + V_NL) Hamiltonian — the free-electron / fixed-
+//   potential anchors the g5 gate uses.
+//
+// reuse (d19): structure (brick1) · vloc (brick3) · kinetic (brick2) ·
+//   projector (brick4). No physics re-implemented here — pure composition.
+use "stdlib/qforge/kinetic"
+use "stdlib/qforge/structure"
+use "stdlib/qforge/vloc"
+use "stdlib/qforge/projector"
+
+// Assembled Hamiltonian: the dense n×n real-symmetric matrix (flat row-major),
+// its diagonal, and the basis dimension n.
+pub struct PwHam {
+    h: [float],          // flat n*n real-symmetric H
+    diag: [float],       // n diagonal entries (Davidson preconditioner)
+    n: int               // number of plane waves = number of G-vectors
+}
+
+// ── Build the dense PW Hamiltonian H from cell + UPF + (optional) screening ───
+//
+//   kvec    : [3] Bloch k (cartesian, bohr⁻¹)
+//   gvecs   : flat [3·n] cartesian G-vectors (the PW basis)
+//   pos     : flat [3·nA] cartesian atom positions (single species here; d4)
+//   r,rab,vloc_r,z : parsed UPF radial local channel + Z (brick 3 inputs)
+//   betas,ls,dij,nproj : parsed KB projectors (brick 4 inputs); nproj=0 → no V_NL
+//   omega   : cell volume Ω
+//   vscr_diag : length-n G-diagonal Hartree+XC screening potential, or [] for
+//               the bare Hamiltonian (d4 — caller owns the density coupling)
+// Returns a PwHam. Malformed → n=0 empty.
+pub fn qforge_assemble_h(kvec: [float], gvecs: [float], pos: [float],
+                         r: [float], rab: [float], vloc_r: [float], z: float,
+                         betas: [float], ls: [int], dij: [float], nproj: int,
+                         omega: float, vscr_diag: [float]) -> PwHam {
+    let empty = PwHam { h: [], diag: [], n: 0 }
+    let lg = len(gvecs)
+    if lg % 3 != 0 || omega <= 0.0 { return empty }
+    let n = lg / 3
+
+    // (2) kinetic diagonal T_G = ½|k+G|²
+    let tdiag = qforge_kinetic_diag(kvec, gvecs)
+    if len(tdiag) != n { return empty }
+
+    // (1+3) local V_ext(G−G') = V_loc(|ΔG|)·S(ΔG): precompute the set of
+    // difference vectors ΔG = G_a − G_b, their magnitudes, then V_loc(|ΔG|) and
+    // S(ΔG) over that flat list (one pass — d19 reuse of the two bricks).
+    let mut dgvec: [float] = []
+    let mut dgmag: [float] = []
+    let mut a = 0
+    while a < n {
+        let mut b = 0
+        while b < n {
+            let dx = gvecs[a * 3] - gvecs[b * 3]
+            let dy = gvecs[a * 3 + 1] - gvecs[b * 3 + 1]
+            let dz = gvecs[a * 3 + 2] - gvecs[b * 3 + 2]
+            dgvec.push(dx) ; dgvec.push(dy) ; dgvec.push(dz)
+            dgmag.push(sqrt(dx * dx + dy * dy + dz * dz))
+            b = b + 1
+        }
+        a = a + 1
+    }
+    let vloc_g = qforge_vloc_of_g(r, rab, vloc_r, z, omega, dgmag)   // [n*n] or []
+    let sg = qforge_structure_factor_cart(dgvec, pos)               // interleaved [2*n*n]
+    let have_vext = len(vloc_g) == n * n && len(sg) == 2 * n * n
+
+    // (4) nonlocal KB block over q = k+G (n×n), if projectors supplied
+    let mut qvecs: [float] = []
+    let mut iq = 0
+    while iq < n {
+        qvecs.push(kvec[0] + gvecs[iq * 3])
+        qvecs.push(kvec[1] + gvecs[iq * 3 + 1])
+        qvecs.push(kvec[2] + gvecs[iq * 3 + 2])
+        iq = iq + 1
+    }
+    let mut vnl: [float] = []
+    if nproj > 0 {
+        vnl = qforge_vnl_block(r, rab, betas, ls, dij, nproj, omega, qvecs)
+    }
+    let have_vnl = len(vnl) == n * n
+
+    let have_scr = len(vscr_diag) == n
+
+    // ── Compose the dense H ──────────────────────────────────────────────
+    let mut h: [float] = []
+    let mut diag: [float] = []
+    a = 0
+    while a < n {
+        let mut b = 0
+        while b < n {
+            let mut hab = 0.0
+            // kinetic (diagonal)
+            if a == b { hab = hab + tdiag[a] }
+            // local V_ext = Re[ V_loc(|ΔG|) · S(ΔG) ]  (real H at Γ)
+            if have_vext {
+                let idx = a * n + b
+                hab = hab + vloc_g[idx] * sg[idx * 2]   // V_loc real × Re(S)
+            }
+            // nonlocal KB block
+            if have_vnl { hab = hab + vnl[a * n + b] }
+            // Hartree+XC screening (caller-supplied G-diagonal local term)
+            if have_scr && a == b { hab = hab + vscr_diag[a] }
+            h.push(hab)
+            if a == b { diag.push(hab) }
+            b = b + 1
+        }
+        a = a + 1
+    }
+    return PwHam { h: h, diag: diag, n: n }
+}
+
+// ── Build the dense PW Hamiltonian for a MULTI-SPECIES cell (M5.7 PR3) ────────
+//
+//   The single-species qforge_assemble_h composes V_ext from ONE (r,rab,vloc,z)
+//   channel + ONE position set. A real heteroatomic hydride (CaH6 = Ca + 6·H)
+//   needs V_ext(ΔG) = Σ_s V_loc^s(ΔG)·S_s(ΔG) summed over species s. This entry
+//   takes parallel per-species arrays and composes that sum — d4-generic (the
+//   caller supplies the species list; no element is hardcoded). The kinetic
+//   diagonal, the optional caller screening (vscr_diag), and the per-species KB
+//   nonlocal block are all summed in. Returns a PwHam (n = #G-vectors).
+//
+//   rs,rabs,vlocs : per-species flat radial arrays, concatenated; mlens[s] gives
+//                   species s's mesh length (the slice boundaries).
+//   zs            : per-species Z_valence (length nspec).
+//   poss,palens   : per-species cartesian positions, concatenated; palens[s]*3 =
+//                   species s's slice length.
+//   betas/ls/dij/nproj per species likewise (blens/dlens slice the KB arrays);
+//                   nprojs[s]=0 → no V_NL for that species.
+//   vscr_diag     : length-n G-diagonal Hartree+XC screening, or [] (bare).
+pub fn qforge_assemble_h_multi(kvec: [float], gvecs: [float], nspec: int,
+                               rs: [float], rabs: [float], vlocs: [float],
+                               mlens: [int], zs: [float],
+                               poss: [float], palens: [int],
+                               betas: [float], ls: [int], dij: [float],
+                               nprojs: [int], blens: [int], dlens: [int],
+                               omega: float, vscr_diag: [float]) -> PwHam {
+    let empty = PwHam { h: [], diag: [], n: 0 }
+    let lg = len(gvecs)
+    if lg % 3 != 0 || omega <= 0.0 { return empty }
+    let n = lg / 3
+    let tdiag = qforge_kinetic_diag(kvec, gvecs)
+    if len(tdiag) != n { return empty }
+
+    // ΔG = G_a − G_b flat list (shared across species).
+    let mut dgvec: [float] = []
+    let mut dgmag: [float] = []
+    let mut a = 0
+    while a < n {
+        let mut b = 0
+        while b < n {
+            let dx = gvecs[a * 3] - gvecs[b * 3]
+            let dy = gvecs[a * 3 + 1] - gvecs[b * 3 + 1]
+            let dz = gvecs[a * 3 + 2] - gvecs[b * 3 + 2]
+            dgvec.push(dx) ; dgvec.push(dy) ; dgvec.push(dz)
+            dgmag.push(sqrt(dx * dx + dy * dy + dz * dz))
+            b = b + 1
+        }
+        a = a + 1
+    }
+
+    // V_ext(ΔG) = Σ_s Re[ V_loc^s(|ΔG|) · S_s(ΔG) ] accumulated over the n*n grid.
+    let mut vext: [float] = []
+    let mut z0 = 0 ; while z0 < n * n { vext.push(0.0) ; z0 = z0 + 1 }
+    // k+G vectors for the KB blocks.
+    let mut qvecs: [float] = []
+    let mut iq = 0
+    while iq < n {
+        qvecs.push(kvec[0] + gvecs[iq * 3])
+        qvecs.push(kvec[1] + gvecs[iq * 3 + 1])
+        qvecs.push(kvec[2] + gvecs[iq * 3 + 2])
+        iq = iq + 1
+    }
+    let mut vnl_sum: [float] = []
+    let mut vz = 0 ; while vz < n * n { vnl_sum.push(0.0) ; vz = vz + 1 }
+    let mut roff = 0 ; let mut poff = 0 ; let mut boff = 0 ; let mut doff = 0
+    let mut s = 0
+    while s < nspec {
+        let ml = mlens[s]
+        let mut rs_s: [float] = [] ; let mut rab_s: [float] = [] ; let mut vl_s: [float] = []
+        let mut ri = 0
+        while ri < ml { rs_s.push(rs[roff + ri]) ; rab_s.push(rabs[roff + ri]) ; vl_s.push(vlocs[roff + ri]) ; ri = ri + 1 }
+        let pa = palens[s]
+        let mut pos_s: [float] = []
+        let mut pi = 0
+        while pi < pa * 3 { pos_s.push(poss[poff + pi]) ; pi = pi + 1 }
+        let vloc_g = qforge_vloc_of_g(rs_s, rab_s, vl_s, zs[s], omega, dgmag)   // [n*n] or []
+        let sg = qforge_structure_factor_cart(dgvec, pos_s)                    // [2*n*n]
+        if len(vloc_g) == n * n {
+            if len(sg) == 2 * n * n {
+                let mut idx = 0
+                while idx < n * n { vext[idx] = vext[idx] + vloc_g[idx] * sg[idx * 2] ; idx = idx + 1 }
+            }
+        }
+        // per-species KB nonlocal (replicated at each of this species' sites via S_s).
+        let np = nprojs[s]
+        if np > 0 {
+            let bl = blens[s] ; let dl = dlens[s]
+            let mut beta_s: [float] = [] ; let mut bi = 0
+            while bi < bl { beta_s.push(betas[boff + bi]) ; bi = bi + 1 }
+            let mut ls_s: [int] = [] ; let mut li = 0
+            while li < np { ls_s.push(ls[doff + li]) ; li = li + 1 }
+            let mut dij_s: [float] = [] ; let mut di = 0
+            while di < dl { dij_s.push(dij[doff * np + di]) ; di = di + 1 }
+            let vnl = qforge_vnl_block(rs_s, rab_s, beta_s, ls_s, dij_s, np, omega, qvecs)
+            if len(vnl) == n * n {
+                let mut vk = 0
+                while vk < n * n { vnl_sum[vk] = vnl_sum[vk] + vnl[vk] ; vk = vk + 1 }
+            }
+            boff = boff + bl ; doff = doff + np
+        }
+        roff = roff + ml ; poff = poff + pa * 3
+        s = s + 1
+    }
+
+    let have_scr = len(vscr_diag) == n
+    let mut h: [float] = []
+    let mut diag: [float] = []
+    a = 0
+    while a < n {
+        let mut b = 0
+        while b < n {
+            let idx = a * n + b
+            let mut hab = vext[idx] + vnl_sum[idx]
+            if a == b { hab = hab + tdiag[a] }
+            if have_scr && a == b { hab = hab + vscr_diag[a] }
+            h.push(hab)
+            if a == b { diag.push(hab) }
+            b = b + 1
+        }
+        a = a + 1
+    }
+    return PwHam { h: h, diag: diag, n: n }
+}
+
+// ── Matrix-free apply (v ↦ H·v) for the assembled dense H ─────────────────────
+//   This is the operator `qforge_scf`/`qforge_davidson` call. Closes over the
+//   PwHam's flat matrix. Returns H·v (length n); length mismatch → [].
+pub fn qforge_h_apply(ham: PwHam, v: [float]) -> [float] {
+    let n = ham.n
+    if len(v) != n { return [] }
+    let mut out: [float] = []
+    let mut i = 0
+    while i < n {
+        let mut s = 0.0
+        let mut j = 0
+        while j < n { s = s + ham.h[i * n + j] * v[j] ; j = j + 1 }
+        out.push(s)
+        i = i + 1
+    }
+    return out
+}

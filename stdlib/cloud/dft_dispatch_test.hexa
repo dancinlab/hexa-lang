@@ -78,6 +78,17 @@ fn _join(xs: [str]) -> str {
 }
 
 fn main() {
+    // ── --engine route resolver (@L3) ────────────────────────────────
+    // DEFAULT (empty / "qe") → "qe" (Quantum ESPRESSO, until the QFORGE
+    // production gate closes); "qforge" → "qforge"; anything else → ""
+    // (unknown — the caller REFUSES, no silent fallback, d6).
+    _check("engine default (empty) → qe", _seq(dft_engine_resolve(""), "qe"), 1)
+    _check("engine qe → qe", _seq(dft_engine_resolve("qe"), "qe"), 1)
+    _check("engine qforge → qforge", _seq(dft_engine_resolve("qforge"), "qforge"), 1)
+    _check("engine unknown → '' (refused)", _seq(dft_engine_resolve("vasp"), ""), 1)
+    _check("engine case-strict (QFORGE ≠ qforge) → '' (refused)",
+        _seq(dft_engine_resolve("QFORGE"), ""), 1)
+
     // ── ③ relax → scf coordinate parser ──────────────────────────────
     // alat=1.0 → scale = BOHR_ANGSTROM = 0.52917720859, so the x-axis cell
     // vector "1.0 0.0 0.0" → 0.529177..., a robust prefix to assert against.

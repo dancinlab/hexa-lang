@@ -20,8 +20,14 @@
 //  PR4 wiring: the forward conv 5× (embed·trunk_dil·router·expert·readout) route
 //  through conv1d_via_forge (im2col + forge_dispatch_matmul, byte-eq F-CLM-CONV-
 //  GPU-EQ #2352) — so the 44.68M LARGE rung's matmul bulk rides cuBLAS on a CUDA
-//  host. Backward stays host (Phase-4 bwd-forge separate). On a `-DHEXA_CUDA` H100
-//  this is the large fire: F-RFC046-GPU-UTILIZATION (nvidia-smi >50% during run).
+//  host. On a `-DHEXA_CUDA` H100 this is the large fire: F-RFC046-GPU-UTILIZATION
+//  (nvidia-smi >50% during run).
+//
+//  Phase-4 wiring (this revision): the backward conv 5× (readout·router·expert·
+//  trunk_dil·embed) route through conv1d_bwd_via_forge (col2im + forge GEMM,
+//  byte-eq to nn_conv1d_bwd per F-CLM-CONV-BWD-FORGE-EQ #2383) — so the backward
+//  GEMMs ride forge cuBLAS too (the prerequisite for util-GREEN; the H100 util
+//  re-fire is the deferred measurement). GRAD-EXACT preserved (byte-eq descent).
 // ════════════════════════════════════════════════════════════════════════════
 
 use "stdlib/flame/tensor_lib"
@@ -74,6 +80,86 @@ fn conv1d_via_forge(x: int, w: int, b: int, y_out: int,
     }
 }
 
+// conv1d backward (causal dilated) via forge matmul + col2im — inlined from
+// clm_conv_gpu (clm flame files cannot `use` one another). Expresses the two
+// heavy gradients (dW, dX) as GEMMs routed through forge_dispatch_matmul
+// (cuBLAS on a CUDA host, identical farr_matmul on CPU) so the backward stops
+// being a host scalar loop. Byte-eq to nn_conv1d_bwd (dW 1.67e-16 / dX 8.3e-17
+// / db 0.0 per F-CLM-CONV-BWD-FORGE-EQ #2383). col index j = ci*K + k.
+// dilation-general → covers the trunk's _pow2(l) dilated conv backwards unchanged.
+fn conv1d_bwd_via_forge(x: int, w: int, dy: int,
+                        dW_out: int, dX_out: int, db_out: int,
+                        T: int, Cin: int, Cout: int, K: int, dil: int) {
+    let Kdim = Cin * K
+    // im2col: xcolT[j, t] = (p>=0) ? x[p, ci] : 0, j = ci*K+k, p = t - dil*(K-1-k).
+    let xcolT = t_zeros(Kdim * T)
+    let mut t = 0
+    while t < T {
+        let mut ci = 0
+        while ci < Cin {
+            let mut k = 0
+            while k < K {
+                let p = t - dil * (K - 1 - k)
+                if p >= 0 {
+                    let j = ci * K + k
+                    t_set(xcolT, j * T + t, t_get(x, p * Cin + ci))
+                }
+                k = k + 1
+            }
+            ci = ci + 1
+        }
+        t = t + 1
+    }
+    // dW: dW_flat[Kdim, Cout] = xcolT[Kdim,T] @ dy[T,Cout] (forge GEMM)
+    let dW_flat = forge_dispatch_matmul(xcolT, Kdim, T, dy, Cout)
+    let mut co = 0
+    while co < Cout {
+        let mut j = 0
+        while j < Kdim {
+            t_set(dW_out, co * Kdim + j, t_get(dW_flat, j * Cout + co))
+            j = j + 1
+        }
+        co = co + 1
+    }
+    // dX: dXcol[T, Kdim] = dy[T,Cout] @ Wflat[Cout,Kdim] (forge GEMM), then col2im.
+    let dXcol = forge_dispatch_matmul(dy, T, Cout, w, Kdim)
+    let mut iz = 0
+    while iz < T * Cin {
+        t_set(dX_out, iz, 0.0)
+        iz = iz + 1
+    }
+    let mut t2b = 0
+    while t2b < T {
+        let mut ci2 = 0
+        while ci2 < Cin {
+            let mut k2 = 0
+            while k2 < K {
+                let p = t2b - dil * (K - 1 - k2)
+                if p >= 0 {
+                    let j = ci2 * K + k2
+                    let xidx = p * Cin + ci2
+                    t_set(dX_out, xidx, t_get(dX_out, xidx) + t_get(dXcol, t2b * Kdim + j))
+                }
+                k2 = k2 + 1
+            }
+            ci2 = ci2 + 1
+        }
+        t2b = t2b + 1
+    }
+    // db: db_out[co] = Σ_t dy[t,co] (host reduction)
+    let mut cb = 0
+    while cb < Cout {
+        let mut acc = 0.0
+        let mut tb = 0
+        while tb < T {
+            acc = acc + t_get(dy, tb * Cout + cb)
+            tb = tb + 1
+        }
+        t_set(db_out, cb, acc)
+        cb = cb + 1
+    }
+}
+
 fn _cp(src: int, soff: int, dst: int, n: int) {
     let mut i = 0
     while i < n { t_set(dst, i, t_get(src, soff + i)); i = i + 1 }
@@ -89,12 +175,22 @@ fn _pow2(e: int) -> int {
 }
 
 // Forward. Packed: trunkW[L·dd] trunkB[L·d] trunkG[L·d] trunkBe[L·d];
-// expW[E·dd] expB[E·d]. Caches: tin[L·T·d] hn[L·T·d] xh[L·T·d] iv[L];
-// eo[E·T·d] probs[T·E] ex[E·T·d]; xe,xtrunk,yn,xhN,ivN.
+// expW[E·dd] expB[E·d].
+//
+// ACTIVATION CHECKPOINTING — the trunk caches ONLY the per-layer INPUT
+// tin[L·T·d] (the checkpoint boundary). The per-layer forward activations
+// hn[L·T·d]/xh[L·T·d]/iv[L] are NOT cached: gen_bwd RECOMPUTES them from tin[l]
+// by re-running this layer's forward (conv_dil + groupnorm, the SAME forward
+// ops). Activation-cache memory for the trunk drops from 3·[L·T·d] (+[L·d]) to
+// a single [L·T·d] — O(L) toward checkpoint-boundary only — at the cost of one
+// extra forward conv+GN per layer in backward. Recompute is bit-identical to
+// the cached value, so gradients stay exact.
+//
+// Caches: tin[L·T·d]; eo[E·T·d] probs[T·E] ex[E·T·d]; xe,xtrunk,yn,xhN,ivN.
 fn gen_fwd(tokens: int, embed: int, ecW: int, ecB: int,
            trunkW: int, trunkB: int, trunkG: int, trunkBe: int,
            rW: int, rB: int, expW: int, expB: int, noG: int, noB: int, roW: int, roB: int,
-           xe: int, xtrunk: int, tin: int, hn: int, xh: int, iv: int,
+           xe: int, xtrunk: int, tin: int,
            eo: int, probs: int, ex: int, yn: int, xhN: int, ivN: int,
            out_logits: int, T: int, d: int, E: int, V: int, K: int, L: int) {
     let dd = d * d * K
@@ -104,15 +200,14 @@ fn gen_fwd(tokens: int, embed: int, ecW: int, ecB: int,
     let wtmp = t_zeros(dd); let btmp = t_zeros(d); let gtmp = t_zeros(d); let getmp = t_zeros(d)
     let mut l = 0
     while l < L {
-        _cpback(x, tin, l * T * d, T * d)            // cache trunk input for layer l
+        _cpback(x, tin, l * T * d, T * d)            // cache trunk input (checkpoint boundary)
         _cp(trunkW, l * dd, wtmp, dd); _cp(trunkB, l * d, btmp, d)
         _cp(trunkG, l * d, gtmp, d);  _cp(trunkBe, l * d, getmp, d)
         let h = t_zeros(T * d)
         conv1d_via_forge(x, wtmp, btmp, h, T, d, d, K, _pow2(l))
         let hnl = t_zeros(T * d); let mean = t_zeros(1); let invl = t_zeros(1); let xhl = t_zeros(T * d)
         nn_groupnorm_fwd(h, gtmp, getmp, hnl, mean, invl, xhl, T, d, 1)
-        _cpback(hnl, hn, l * T * d, T * d); _cpback(xhl, xh, l * T * d, T * d)
-        t_set(iv, l, t_get(invl, 0))
+        // hn/xh/iv intentionally NOT cached — gen_bwd recomputes them from tin[l].
         let hg = t_zeros(T * d); nn_gelu_fwd(hnl, hg, T * d)
         let xn = t_zeros(T * d)
         let mut i = 0
@@ -160,8 +255,8 @@ fn gen_ce_grad(logits: int, targets: int, dlogits: int, T: int, V: int) {
 // Backward. Writes packed grads dtrunkW/dtrunkB/dtrunkG/dtrunkBe, dexpW/dexpB,
 // + decW/decB/drW/drB/dnoG/dnoB/droW/droB/dembed.
 fn gen_bwd(dlogits: int, tokens: int, embed: int, ecW: int,
-           trunkW: int, trunkG: int, rW: int, expW: int, noG: int, roW: int,
-           xe: int, xtrunk: int, tin: int, hn: int, xh: int, iv: int,
+           trunkW: int, trunkB: int, trunkG: int, trunkBe: int, rW: int, expW: int, noG: int, roW: int,
+           xe: int, xtrunk: int, tin: int,
            eo: int, probs: int, ex: int, yn: int, xhN: int, ivN: int,
            dembed: int, decW: int, decB: int,
            dtrunkW: int, dtrunkB: int, dtrunkG: int, dtrunkBe: int,
@@ -169,13 +264,13 @@ fn gen_bwd(dlogits: int, tokens: int, embed: int, ecW: int,
            T: int, d: int, E: int, V: int, K: int, L: int) {
     let dd = d * d * K
     let dynorm = t_zeros(T * d)
-    nn_conv1d_bwd(yn, roW, dlogits, droW, dynorm, droB, T, d, V, 1, 1)
+    conv1d_bwd_via_forge(yn, roW, dlogits, droW, dynorm, droB, T, d, V, 1, 1)
     let dy = t_zeros(T * d)
     nn_groupnorm_bwd(xhN, ivN, noG, dynorm, dnoG, dnoB, dy, T, d, 1)
     let dlogits_r = t_zeros(T * E); let dex = t_zeros(E * T * d)
     nn_moe_router_bwd(probs, ex, dy, dlogits_r, dex, T, E, d)
     let dxr = t_zeros(T * d)
-    nn_conv1d_bwd(xtrunk, rW, dlogits_r, drW, dxr, drB, T, d, E, 1, 1)
+    conv1d_bwd_via_forge(xtrunk, rW, dlogits_r, drW, dxr, drB, T, d, E, 1, 1)
     // dx (grad wrt trunk output) = router + Σ experts
     let dx = t_zeros(T * d)
     let mut z = 0; while z < T * d { t_set(dx, z, t_get(dxr, z)); z = z + 1 }
@@ -187,25 +282,38 @@ fn gen_bwd(dlogits: int, tokens: int, embed: int, ecW: int,
         _cp(eo, e * T * d, wtmp, T * d)              // reuse wtmp as eo-slice (size T*d ≤ dd ok? ensure)
         nn_gelu_bwd(wtmp, dexpe, deo, T * d)
         _cp(expW, e * dd, wtmp, dd)
-        nn_conv1d_bwd(xtrunk, wtmp, deo, dwtmp, dxe_e, dbtmp, T, d, d, K, 1)
+        conv1d_bwd_via_forge(xtrunk, wtmp, deo, dwtmp, dxe_e, dbtmp, T, d, d, K, 1)
         _cpback(dwtmp, dexpW, e * dd, dd); _cpback(dbtmp, dexpB, e * d, d)
         let mut a = 0; while a < T * d { t_set(dx, a, t_get(dx, a) + t_get(dxe_e, a)); a = a + 1 }
         e = e + 1
     }
-    // trunk reverse loop
+    // trunk reverse loop — ACTIVATION CHECKPOINTING.
+    // The forward activations hn[l]/xh[l]/iv[l] are NOT cached. For each layer
+    // we RECOMPUTE them from the cached layer input tin[l] (the checkpoint
+    // boundary) by re-running the layer forward (conv_dil + groupnorm, the SAME
+    // forward ops as gen_fwd), then feed the recomputed (hnl, xhl, invl) to the
+    // existing bwd. Recompute is bit-identical to the forward value, so the
+    // gradients are unchanged — only the [L·T·d] hn/xh and [L·d] iv caches go.
     let gtmp = t_zeros(d); let dgtmp = t_zeros(d); let dgetmp = t_zeros(d)
     let dhn = t_zeros(T * d); let dh = t_zeros(T * d); let hnl = t_zeros(T * d)
     let xhl = t_zeros(T * d); let invl = t_zeros(1); let tinl = t_zeros(T * d); let dconv_in = t_zeros(T * d)
+    let btmp = t_zeros(d); let getmp = t_zeros(d)        // recompute param slices (conv bias, GN beta)
+    let hrc = t_zeros(T * d); let meanrc = t_zeros(1)    // recompute scratch (conv out, GN mean)
     let mut l = L - 1
     while l >= 0 {
-        // dhg = dx ; gelu_bwd(hn[l]) ; gn_bwd(xh[l],iv[l],trunkG[l]) ; conv_bwd(tin[l],trunkW[l])
-        _cp(hn, l * T * d, hnl, T * d)
+        _cp(tin, l * T * d, tinl, T * d)             // checkpoint: layer-l input
+        // RECOMPUTE forward: conv_dil(tin[l]) → GN → (hnl=hn[l], xhl=xh[l], invl=iv[l]).
+        _cp(trunkW, l * dd, wtmp, dd); _cp(trunkB, l * d, btmp, d)
+        _cp(trunkG, l * d, gtmp, d);  _cp(trunkBe, l * d, getmp, d)
+        conv1d_via_forge(tinl, wtmp, btmp, hrc, T, d, d, K, _pow2(l))
+        nn_groupnorm_fwd(hrc, gtmp, getmp, hnl, meanrc, invl, xhl, T, d, 1)
+        // now the original bwd chain, using the recomputed activations:
+        // gelu_bwd(hn[l]) ; gn_bwd(xh[l],iv[l],trunkG[l]) ; conv_bwd(tin[l],trunkW[l])
         nn_gelu_bwd(hnl, dx, dhn, T * d)
-        _cp(xh, l * T * d, xhl, T * d); t_set(invl, 0, t_get(iv, l)); _cp(trunkG, l * d, gtmp, d)
         nn_groupnorm_bwd(xhl, invl, gtmp, dhn, dgtmp, dgetmp, dh, T, d, 1)
         _cpback(dgtmp, dtrunkG, l * d, d); _cpback(dgetmp, dtrunkBe, l * d, d)
-        _cp(tin, l * T * d, tinl, T * d); _cp(trunkW, l * dd, wtmp, dd)
-        nn_conv1d_bwd(tinl, wtmp, dh, dwtmp, dconv_in, dbtmp, T, d, d, K, _pow2(l))
+        // forge backward (tinl/wtmp already prepared by the checkpoint recompute above)
+        conv1d_bwd_via_forge(tinl, wtmp, dh, dwtmp, dconv_in, dbtmp, T, d, d, K, _pow2(l))
         _cpback(dwtmp, dtrunkW, l * dd, dd); _cpback(dbtmp, dtrunkB, l * d, d)
         // residual: dx(layer input) = dx(passthrough) + dconv_in
         let mut a = 0; while a < T * d { t_set(dx, a, t_get(dx, a) + t_get(dconv_in, a)); a = a + 1 }
@@ -213,7 +321,7 @@ fn gen_bwd(dlogits: int, tokens: int, embed: int, ecW: int,
     }
     // embed_conv bwd
     let dxe = t_zeros(T * d)
-    nn_conv1d_bwd(xe, ecW, dx, decW, dxe, decB, T, d, d, K, 1)
+    conv1d_bwd_via_forge(xe, ecW, dx, decW, dxe, decB, T, d, d, K, 1)
     let mut zz = 0; while zz < V * d { t_set(dembed, zz, 0.0); zz = zz + 1 }
     nn_embedding_bwd_scatter(dxe, tokens, dembed, T, d)
 }
@@ -255,26 +363,34 @@ fn main() {
     let m_eW=t_zeros(E*dd); let v_eW=t_zeros(E*dd); let m_eB=t_zeros(E*d); let v_eB=t_zeros(E*d)
     let m_noG=t_zeros(d); let v_noG=t_zeros(d); let m_noB=t_zeros(d); let v_noB=t_zeros(d)
     let m_roW=t_zeros(vd); let v_roW=t_zeros(vd); let m_roB=t_zeros(V); let v_roB=t_zeros(V)
-    // caches
-    let xe=t_zeros(T*d); let xtrunk=t_zeros(T*d); let tin=t_zeros(L*T*d); let hn=t_zeros(L*T*d)
-    let xh=t_zeros(L*T*d); let iv=t_zeros(L); let eo=t_zeros(E*T*d); let probs=t_zeros(T*E)
+    // caches — activation checkpointing: trunk keeps only tin[L·T·d] (the
+    // per-layer input / checkpoint boundary). hn/xh/iv are NOT allocated;
+    // gen_bwd recomputes them from tin[l]. Trunk activation cache: was
+    // 2·[L·T·d] + [L·d] (hn,xh,iv) on top of tin → now just tin[L·T·d].
+    let xe=t_zeros(T*d); let xtrunk=t_zeros(T*d); let tin=t_zeros(L*T*d)
+    let eo=t_zeros(E*T*d); let probs=t_zeros(T*E)
     let ex=t_zeros(E*T*d); let yn=t_zeros(T*d); let xhN=t_zeros(T*d); let ivN=t_zeros(1)
     let logits=t_zeros(T*V); let dlogits=t_zeros(T*V)
 
     let nparams = V*d + dd + d + L*dd + L*d + L*d + L*d + ed + E + E*dd + E*d + d + d + vd + V
     println("  n_params = " + to_string(nparams) + " (expect 44,678,668 for d768/L12/E12)")
+    // activation-cache memory delta report (the mem-Δ falsifier half):
+    let trunk_cache_old = L*T*d + L*T*d + L*T*d + L   // tin + hn + xh + iv (pre-ckpt)
+    let trunk_cache_new = L*T*d                       // tin only (post-ckpt)
+    println("  trunk activation cache (floats): old=" + to_string(trunk_cache_old) + " new=" + to_string(trunk_cache_new) + " (L=" + to_string(L) + " T=" + to_string(T) + " d=" + to_string(d) + ")")
+    println("  ACTIVATION-CKPT: trunk cache 3·[L·T·d]+[L·d] -> [L·T·d]  (O(L) hn/xh/iv dropped, recomputed from tin)")
     let steps = 4
     let mut loss0=0.0; let mut lossF=0.0; let mut step=1
     while step <= steps {
         gen_fwd(tokens, embed, ecW, ecB, trunkW, trunkB, trunkG, trunkBe, rW, rB, expW, expB, noG, noB, roW, roB,
-                xe, xtrunk, tin, hn, xh, iv, eo, probs, ex, yn, xhN, ivN, logits, T, d, E, V, K, L)
+                xe, xtrunk, tin, eo, probs, ex, yn, xhN, ivN, logits, T, d, E, V, K, L)
         let loss = nn_ce_loss_allpos(logits, targets, T, V)
         if step == 1 { loss0 = loss; println("  step 1  CE = " + to_string(loss)) }
         if step == 13 { println("  step 13 CE = " + to_string(loss)) }
         lossF = loss
         gen_ce_grad(logits, targets, dlogits, T, V)
-        gen_bwd(dlogits, tokens, embed, ecW, trunkW, trunkG, rW, expW, noG, roW,
-                xe, xtrunk, tin, hn, xh, iv, eo, probs, ex, yn, xhN, ivN,
+        gen_bwd(dlogits, tokens, embed, ecW, trunkW, trunkB, trunkG, trunkBe, rW, expW, noG, roW,
+                xe, xtrunk, tin, eo, probs, ex, yn, xhN, ivN,
                 dembed, decW, decB, dtrunkW, dtrunkB, dtrunkG, dtrunkBe, drW, drB, dexpW, dexpB,
                 dnoG, dnoB, droW, droB, T, d, E, V, K, L)
         _adam(embed, dembed, m_embed, v_embed, vd, step)

@@ -161,10 +161,16 @@ fn _dfs_family_enabled(fam: string, families_csv: string) -> bool {
 // Writes `prompt` to a temp file and pipes it as stdin to `cmd` (axis 2c).
 // The prompt never reaches the shell argv (R12 injection guard) and is
 // unbounded in size (R13). Returns captured stdout (markdown response).
+// The `{ <cmd> ; } < tmp` group-wrap makes the stdin redirect apply to the
+// WHOLE command — without it a trailing `< tmp` binds only to the LAST simple
+// command of a pipeline (`jq | curl | jq < tmp` would feed the final jq, not
+// the first), and a `cli || api` fallback could not share the prompt. The
+// group gives the first stage the prompt file and lets a `--llm-cmd` buffer it
+// (`P="$(cat)"`) to replay across a `||` fallback. Harmless for a bare command.
 pub fn dfs_llm_invoke(prompt: string, cmd: string) -> string {
     let tmp = "/tmp/hexa_loop_dfs_prompt_" + to_string(_dfs_now_epoch()) + "_" + to_string(len(prompt)) + ".txt"
     let _ = write_text(tmp, prompt)
-    let out = exec(cmd + " < " + _dfs_shq(tmp))
+    let out = exec("{ " + cmd + " ; } < " + _dfs_shq(tmp))
     let _ = exec("rm -f " + _dfs_shq(tmp))
     return out
 }

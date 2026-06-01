@@ -97,12 +97,13 @@ fn cmd_loop_help() {
     println("  --no-cache      disable dist/llm_cache.hxc sidecar")
     println("  --allow-llm     gate real LLM calls (else stub-only)")
     println("  --option        alias for default DFS+LLM config")
-    println("  --claude        alias for --dfs --llm-cmd 'claude --bare -p'")
-    println("                  (Claude Code CLI in --bare mode: skips SessionStart")
-    println("                   hooks/plugins so popened child does not recurse")
-    println("                   into hexa via sidecar hooks. REQUIRES")
-    println("                   ANTHROPIC_API_KEY — OAuth/keychain are not read")
-    println("                   in bare mode. Use --claude-api for jq+curl REST.)")
+    println("  --claude        alias — CLI-FIRST, API-FALLBACK (s14):")
+    println("                   `claude -p --setting-sources \"\"` (subscription")
+    println("                   CLI; OAuth/keychain read, NO key needed; empty")
+    println("                   setting-sources skips SessionStart hooks so the")
+    println("                   popened child never recurses into hexa) || REST")
+    println("                   to api.anthropic.com (fallback; needs")
+    println("                   ANTHROPIC_API_KEY). CLI absolutely first.")
     println("  --codex         alias for --dfs --llm-cmd 'codex exec -'")
     println("                  (OpenAI Codex CLI, non-interactive stdin)")
     println("  --gemini        alias for --dfs --llm-cmd 'gemini -p'")
@@ -480,27 +481,21 @@ fn main() {
         //   OpenAI   : OPENAI_API_KEY    · OPENAI_MODEL    (default gpt-5)
         //   Gemini   : GEMINI_API_KEY    · GEMINI_MODEL    (default gemini-2.5-pro)
         if a == "--claude" {
-            // `claude --bare -p` skips Claude Code's SessionStart hooks,
-            // plugin sync, keychain reads, and CLAUDE.md auto-discovery
-            // (see `claude --help` --bare). Without --bare, a popened
-            // `claude -p` from inside `hexa loop` triggers user sidecar
-            // SessionStart hooks (worktree-gc, easy-auto, ...) that
-            // themselves shell out to `hexa.real run`, causing the
-            // parent loop's fread() to wait through a cascade of
-            // grandchild hexa invocations and hit the wallclock budget.
-            // --bare requires ANTHROPIC_API_KEY (OAuth and keychain are
-            // never read in bare mode), so gate the alias on the env
-            // var with the same refuse-pattern --claude-api uses.
-            if len(env("ANTHROPIC_API_KEY")) == 0 {
-                println("error: --claude requires ANTHROPIC_API_KEY (env var unset or empty)")
-                println("  hint: export ANTHROPIC_API_KEY=$(secret get anthropic.api_key)")
-                println("  why:  --claude now spawns `claude --bare -p` so user sidecar SessionStart")
-                println("        hooks (worktree-gc, easy-auto, ...) do not recursively call hexa")
-                println("        from inside the popened child. --bare requires ANTHROPIC_API_KEY.")
-                exit(2)
-            }
+            // CLI-FIRST, API-FALLBACK (project.tape s14: the subscription CLI
+            // is preferred; the pay-per-token REST API is only a fallback).
+            // `claude -p --setting-sources ""` loads NO user/project/local
+            // settings, so the sidecar SessionStart hooks (worktree-gc,
+            // easy-auto, ...) never fire and the popened child cannot recurse
+            // into `hexa.real run` — yet OAuth/keychain auth IS still read
+            // (unlike --bare), so the CLI path needs NO ANTHROPIC_API_KEY.
+            // The prompt is buffered (`P="$(cat)"`) and replayed so the
+            // `|| <REST>` tail sees the same input; it engages ONLY when the
+            // CLI is absent or unauthenticated, posting to api.anthropic.com
+            // (that path needs ANTHROPIC_API_KEY). CLI absolutely first — no
+            // key gate. dfs_llm_invoke group-wraps so the prompt file reaches
+            // the first stage of this `||` group.
             dfs_enabled = true
-            llm_cmd = "claude --bare -p"
+            llm_cmd = "P=\"$(cat)\"; printf '%s' \"$P\" | claude -p --setting-sources \"\" || { printf '%s' \"$P\" | jq -Rs '{model:(env.ANTHROPIC_MODEL // \"claude-opus-4-7\"),max_tokens:8192,messages:[{role:\"user\",content:.}]}' | curl -sS https://api.anthropic.com/v1/messages -H \"x-api-key: $ANTHROPIC_API_KEY\" -H \"anthropic-version: 2023-06-01\" -H \"content-type: application/json\" --data-binary @- | jq -r '.content[0].text'; }"
             k = k + 1
             continue
         }

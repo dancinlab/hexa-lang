@@ -1,0 +1,148 @@
+// @ci_gate — deterministic · reads a checked-in real NC UPF fixture
+//
+// qforge_assembler_selftest.hexa — QFORGE front-end brick 5/5 (H_of_rho) g5 gate.
+//
+// The assembler composes kinetic+V_ext+V_NL+screening into the dense PW
+// Hamiltonian and the H_of_rho closure qforge_scf consumes. Anchors:
+//
+//   (A) H hermiticity: a real local potential → H real-symmetric H[a,b]=H[b,a]. 🔵
+//   (B) free-electron: zero potential (no UPF, no V_NL, no screening) → H is the
+//       diagonal kinetic matrix, eigenvalues = ½|k+G|² (closed form).          🔵
+//   (C) controlled 2-PW local potential: a 2×2 H with kinetic diag (ε0,ε1) and a
+//       real off-diagonal coupling t has eigenvalues ½(ε0+ε1) ± √((Δ/2)²+t²) —
+//       the analytic two-level splitting.                                      🔵
+//   (D) END-TO-END: drive the assembled free-electron H through qforge_scf
+//       (density-independent → 1-shot self-consistent) and confirm it CONVERGES
+//       and the band energy = Σ occ·(½|k+G|²) over the occupied PW states.     🟢
+//   (E) real Si UPF assembles a finite hermitian H (V_loc+V_NL real, no NaN).   🟢
+//
+// Run:  HEXA_LANG=. hexa run stdlib/qforge/assembler_selftest.hexa
+// PASS: "qforge_assembler_selftest PASS".
+use "stdlib/alloc/math/eigen"
+use "stdlib/qforge/davidson"
+use "stdlib/qforge/scf"
+use "stdlib/qforge/upf"
+use "stdlib/qforge/assembler"
+
+fn _abs(x: float) -> float { if x < 0.0 { return -x } return x }
+fn _ck_close(name: str, got: float, want: float, eps: float) -> int {
+    if _abs(got - want) <= eps { println("PASS " + name + " (" + to_string(got) + ")") ; return 0 }
+    println("FAIL " + name + " — got " + to_string(got) + " want " + to_string(want)) ; return 1
+}
+fn _ck_true(name: str, cond: bool) -> int {
+    if cond { println("PASS " + name) ; return 0 }
+    println("FAIL " + name) ; return 1
+}
+
+// ── global PwHam slot for the matrix-free H_of_rho closure (named-fn pattern) ─
+let mut GH = PwHam { h: [], diag: [], n: 0 }
+fn gh_apply(v: [float]) -> [float] { return qforge_h_apply(GH, v) }
+// density-independent H_of_rho: ignores ρ, returns the fixed assembled operator.
+fn gh_of_rho(rho: [float]) { return gh_apply }
+// site-density from occupied PW coefficients (Σ_b occ_b |ψ_b[i]|²).
+fn rho_of_psi_density(psis: [[float]], occ: [float], nbands: int) -> [float] {
+    let ndim = len(psis[0])
+    let mut rho = []
+    let mut i = 0
+    while i < ndim { rho.push(0.0) ; i = i + 1 }
+    let mut b = 0
+    while b < nbands {
+        let mut t = 0
+        while t < ndim { rho[t] = rho[t] + occ[b] * psis[b][t] * psis[b][t] ; t = t + 1 }
+        b = b + 1
+    }
+    return rho
+}
+
+fn main() {
+    let mut fails = 0
+    let mut empty_f: [float] = []
+    let mut empty_i: [int] = []
+
+    // ══ (B) free-electron: 7 smallest cubic G-vectors, k=0, ZERO potential ══
+    let gvecs = [0.0, 0.0, 0.0,
+                 1.0, 0.0, 0.0,  -1.0, 0.0, 0.0,
+                 0.0, 1.0, 0.0,  0.0, -1.0, 0.0,
+                 0.0, 0.0, 1.0,  0.0, 0.0, -1.0]
+    let n = 7
+    let k0 = [0.0, 0.0, 0.0]
+    // no atoms / no UPF / no projectors / no screening → bare kinetic H
+    let hamFE = qforge_assemble_h(k0, gvecs, empty_f,
+                                  empty_f, empty_f, empty_f, 0.0,
+                                  empty_f, empty_i, empty_f, 0,
+                                  100.0, empty_f)
+    fails = fails + _ck_true("(B) FE H dim = 7", hamFE.n == n)
+    // H must be exactly diagonal = ½|G|²; eigenvalues via davidson
+    GH = hamFE
+    let drFE = qforge_davidson(gh_apply, hamFE.diag, n, 7, 1.0e-12, 200)
+    // sorted eigenvalues: [0, 0.5×6...] → lowest 0, then six at 0.5
+    fails = fails + _ck_close("(B) FE eps_0 = 0 (Γ)", drFE.evals[0], 0.0, 1.0e-10)
+    let mut q = 1
+    while q < 7 {
+        fails = fails + _ck_close("(B) FE eps = ½·1² = 0.5 @" + to_string(q), drFE.evals[q], 0.5, 1.0e-10)
+        q = q + 1
+    }
+
+    // ══ (A) hermiticity on a non-trivial real local potential ══════════════
+    // 2 atoms + real Si V_loc → off-diagonal real V_ext. Check H[a,b]=H[b,a].
+    let pp = upf_parse("stdlib/qforge/fixtures/Si.pz-vbc.UPF")
+    let pos2 = [0.0, 0.0, 0.0, 1.3, 0.7, 0.4]
+    let hamSi = qforge_assemble_h(k0, gvecs, pos2,
+                                  pp.r, pp.rab, pp.vloc, pp.header.z_valence,
+                                  empty_f, empty_i, empty_f, 0,
+                                  100.0, empty_f)
+    fails = fails + _ck_true("(A) Si H assembled (dim 7)", hamSi.n == n)
+    let mut herm = true
+    let mut finite = true
+    let mut a = 0
+    while a < n {
+        let mut b = 0
+        while b < n {
+            let hab = hamSi.h[a * n + b]
+            let hba = hamSi.h[b * n + a]
+            if _abs(hab - hba) > 1.0e-9 { herm = false }
+            if hab != hab { finite = false }
+            if hab > 1.0e30 || hab < -1.0e30 { finite = false }
+            b = b + 1
+        }
+        a = a + 1
+    }
+    fails = fails + _ck_true("(A) Si H hermitian (real-symmetric)", herm)
+    fails = fails + _ck_true("(E) Si H finite (no NaN/inf)", finite)
+
+    // ══ (C) controlled 2-level analytic splitting ═════════════════════════
+    // Build a 2-PW H by hand through the apply path: ε0=0, ε1=1.0 (kinetic),
+    // off-diagonal t via a constant local potential. We construct H directly to
+    // verify the analytic eigenvalues ½(ε0+ε1)±√((Δ/2)²+t²).
+    let eps0 = 0.0
+    let eps1 = 1.0
+    let t = 0.3
+    // assemble a 2×2 PwHam manually (same struct the apply consumes)
+    let h2 = PwHam { h: [eps0, t, t, eps1], diag: [eps0, eps1], n: 2 }
+    GH = h2
+    let dr2 = qforge_davidson(gh_apply, h2.diag, 2, 2, 1.0e-12, 200)
+    let mid = 0.5 * (eps0 + eps1)
+    let half = 0.5 * (eps1 - eps0)
+    let disc = sqrt(half * half + t * t)
+    fails = fails + _ck_close("(C) 2-level lower = mid−√(...)", dr2.evals[0], mid - disc, 1.0e-9)
+    fails = fails + _ck_close("(C) 2-level upper = mid+√(...)", dr2.evals[1], mid + disc, 1.0e-9)
+
+    // ══ (D) END-TO-END assembler → qforge_scf on the free-electron H ═══════
+    // Drive the assembled FE Hamiltonian through the SCF driver. Density-
+    // independent (vscr_diag=[]) so it is self-consistent in one KS step; we
+    // assert it CONVERGES and the total (band) energy = Σ occ·ε over occupied
+    // PW states. nelec=2 → lowest band (ε0=0) doubly occupied → E = 2·0 = 0.
+    GH = hamFE
+    let scfR = qforge_scf(gh_of_rho, rho_of_psi_density, n, 3, 2, 0.5, 1.0e-9, 200)
+    fails = fails + _ck_true("(D) E2E SCF converged", scfR.converged)
+    fails = fails + _ck_close("(D) E2E band energy = 2·ε0 = 0", scfR.e_total, 0.0, 1.0e-7)
+    fails = fails + _ck_close("(D) E2E eps_0 = 0 (Γ kinetic)", scfR.evals[0], 0.0, 1.0e-8)
+    // shift the occupied state off Γ: nelec=4 → ε0(=0) doubly + next(=0.5) doubly
+    GH = hamFE
+    let scfR2 = qforge_scf(gh_of_rho, rho_of_psi_density, n, 4, 4, 0.5, 1.0e-9, 200)
+    fails = fails + _ck_true("(D) E2E SCF(nelec=4) converged", scfR2.converged)
+    fails = fails + _ck_close("(D) E2E band energy = 2·0 + 2·0.5 = 1.0", scfR2.e_total, 1.0, 1.0e-7)
+
+    if fails == 0 { println("qforge_assembler_selftest PASS") }
+    else { println("qforge_assembler_selftest FAIL — " + to_string(fails) + " case(s)") }
+}

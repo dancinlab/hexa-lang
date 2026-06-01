@@ -1,0 +1,133 @@
+// HEXA Standard Library — qforge/structure
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// QFORGE front-end brick 1/5 — the STRUCTURE FACTOR S(G).
+//
+// The plane-wave ionic potential is V_ext(G) = Σ_species V_loc^s(G) · S_s(G),
+// where the per-species structure factor packages WHERE the atoms of that
+// species sit relative to the G-grid:
+//
+//   S_s(G) = Σ_{a ∈ species s} exp(−i G · τ_a)
+//
+// G is a reciprocal-lattice vector (cartesian, 2π convention baked into the
+// b-vectors the caller supplies — i.e. b_i·a_j = 2π δ_ij), and τ_a is the
+// cartesian position of atom a. This brick computes S(G) from atomic positions
+// for a supplied list of G-vectors; the V_loc(G) form factor (brick 3) is
+// multiplied in by the assembler (brick 5).
+//
+// ── The two position conventions (d4 — caller owns the cell) ─────────────────
+//   • cartesian positions τ (bohr): S(G) = Σ_a exp(−i G·τ_a), G·τ a plain dot.
+//   • fractional positions f (∈ cell): with G = h·b1+k·b2+l·b3 and τ = f1·a1+
+//     f2·a2+f3·a3, and b_i·a_j = 2π δ_ij, G·τ = 2π (h·f1 + k·f2 + l·f3). So the
+//     fractional form needs ONLY the integer Miller indices (h,k,l) and the
+//     fractional coords — no metric at all. Both forms are provided.
+//
+// Returns interleaved [re0, im0, re1, im1, …] (length 2·nG) — the same complex
+// packing core_fft uses, so the assembler can multiply S(G)·V_loc(G) directly.
+//
+// SELFTEST anchors (structure_selftest.hexa):
+//   (A) single atom at origin → S(G) = 1 + 0i  ∀G                  (🔵 identity)
+//   (B) two-atom basis at ±τ → S(G) = 2 cos(G·τ)  (real, analytic) (🔵 closed)
+//   (C) translational phase: shifting ALL atoms by Δ multiplies S(G) by the
+//       global phase exp(−i G·Δ) — |S| invariant, phase tracks G·Δ exactly. (🔵)
+//   (D) fractional vs cartesian agree on the same physical configuration.    (🟢)
+//
+// d3/d4: element- and cell-agnostic — the caller supplies positions and the
+// G-list (or Miller indices). No hardcoded species, no hardcoded cell.
+
+let _STRUC_2PI: float = 6.28318530717958647692   // 2π
+
+// ── Cartesian structure factor S(G) = Σ_a exp(−i G·τ_a) ──────────────────────
+//
+//   gvecs : flat [3·nG] cartesian G-vectors  [Gx0,Gy0,Gz0, Gx1,Gy1,Gz1, …]
+//   pos   : flat [3·nA] cartesian atom positions (bohr) [x0,y0,z0, …]
+// Returns interleaved complex [re,im] of length 2·nG.
+// Malformed (non-multiple-of-3 length) → [].
+pub fn qforge_structure_factor_cart(gvecs: [float], pos: [float]) -> [float] {
+    let lg = len(gvecs)
+    let lp = len(pos)
+    if lg % 3 != 0 || lp % 3 != 0 { return [] }
+    let ng = lg / 3
+    let na = lp / 3
+    let mut out: [float] = []
+    let mut ig = 0
+    while ig < ng {
+        let gx = gvecs[ig * 3]
+        let gy = gvecs[ig * 3 + 1]
+        let gz = gvecs[ig * 3 + 2]
+        let mut sre = 0.0
+        let mut sim = 0.0
+        let mut ia = 0
+        while ia < na {
+            let px = pos[ia * 3]
+            let py = pos[ia * 3 + 1]
+            let pz = pos[ia * 3 + 2]
+            let phase = gx * px + gy * py + gz * pz   // G·τ
+            // exp(−i·phase) = cos(phase) − i·sin(phase)
+            sre = sre + cos(phase)
+            sim = sim - sin(phase)
+            ia = ia + 1
+        }
+        out.push(sre)
+        out.push(sim)
+        ig = ig + 1
+    }
+    return out
+}
+
+// ── Fractional structure factor S(G) = Σ_a exp(−i 2π (h·f1 + k·f2 + l·f3)) ────
+//
+//   miller : flat [3·nG] integer Miller indices (as floats) [h0,k0,l0, …]
+//   frac   : flat [3·nA] fractional atom coords [f1_0,f2_0,f3_0, …]
+// With b_i·a_j = 2π δ_ij the metric drops out: only the Miller indices and
+// fractional coords are needed. Returns interleaved complex [re,im] (2·nG).
+// Malformed → [].
+pub fn qforge_structure_factor_frac(miller: [float], frac: [float]) -> [float] {
+    let lm = len(miller)
+    let lf = len(frac)
+    if lm % 3 != 0 || lf % 3 != 0 { return [] }
+    let ng = lm / 3
+    let na = lf / 3
+    let mut out: [float] = []
+    let mut ig = 0
+    while ig < ng {
+        let h = miller[ig * 3]
+        let k = miller[ig * 3 + 1]
+        let l = miller[ig * 3 + 2]
+        let mut sre = 0.0
+        let mut sim = 0.0
+        let mut ia = 0
+        while ia < na {
+            let f1 = frac[ia * 3]
+            let f2 = frac[ia * 3 + 1]
+            let f3 = frac[ia * 3 + 2]
+            let phase = _STRUC_2PI * (h * f1 + k * f2 + l * f3)
+            sre = sre + cos(phase)
+            sim = sim - sin(phase)
+            ia = ia + 1
+        }
+        out.push(sre)
+        out.push(sim)
+        ig = ig + 1
+    }
+    return out
+}
+
+// ── |S(G)|² convenience (intensity) — Σ over the complex array ───────────────
+//   sgc : interleaved [re,im,…] from either builder above. Returns [float] nG.
+pub fn qforge_structure_intensity(sgc: [float]) -> [float] {
+    let n2 = len(sgc)
+    if n2 % 2 != 0 { return [] }
+    let ng = n2 / 2
+    let mut out: [float] = []
+    let mut i = 0
+    while i < ng {
+        let re = sgc[i * 2]
+        let im = sgc[i * 2 + 1]
+        out.push(re * re + im * im)
+        i = i + 1
+    }
+    return out
+}
