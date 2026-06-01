@@ -5333,3 +5333,63 @@ runtime hexa-native 화 거리 = ~13,737 lines × 평균 5-10 lines/fn = 잔여 
 frontier 는 OPEN — physical 천장 (runtime hexa-native + zero-libm + zero-libc) 까지 도달 가능 · time-bounded 아님. 본 세션 종료는 cycle pause.
 
 `feedback-closure-is-physical-limit` 적용: closure = approaching limit, not checkbox. 이 세션 = -1.56% · 5 lane closed · next-tier spec'd.
+
+## 2026-06-01 — `self/runtime_pure.hexa` pure-fn (bucket A) lane RETIRED — carrier-path wall reached
+
+Loop round 4, RUNTIME lane. Audited every remaining FFI/HYBRID function in
+`self/runtime_pure.hexa` (the bucket-A "cleanly-portable pure" lane) to find the
+next pure batch portable WITHOUT the HexaVal carrier path (repr + arena + GC),
+WITHOUT syscalls, and WITHOUT hand-rolled transcendentals. **Result: no remaining
+function is cleanly portable. The pure-fn lane has hit its terminal wall.** This is
+a valid terminal (closed-negative) result, not a failure — every residual is blocked
+for a principled, enumerated reason.
+
+Verified state at audit time: `self/runtime_pure.hexa` is byte-identical to
+`origin/main` (the `#2418`/`#2419` floor-family/trunc-sign-fmod ports referenced in
+the loop brief never landed in this repo — `origin/main` HEAD is `#2420`; those
+function bodies are still `__c_floor`/`__c_ceil`/`__c_round`/`__c_fabs` FFI here, and
+`rt_math_trunc`/`rt_math_sign`/`rt_math_fmod` do not exist). Per loop policy these
+floor-family + trunc/sign/fmod functions are CLAIMED by sibling lanes and were left
+untouched (not re-ported), even though they are themselves pure-portable.
+
+### Residual classification — every non-PURE function and why it is blocked
+
+Math FFI (11 fns, lines 551-561):
+| fn | extern | class | why blocked |
+|----|--------|-------|-------------|
+| `rt_math_sqrt` | `__c_sqrt` | transcendental | `stdlib_trig_libm` ban — STAY on libm |
+| `rt_math_pow`  | `__c_pow`  | transcendental | same |
+| `rt_math_exp`  | `__c_exp`  | transcendental | same |
+| `rt_math_log`  | `__c_log`  | transcendental | same |
+| `rt_math_tanh` | `__c_tanh` | transcendental | same |
+| `rt_math_sin`  | `__c_sin`  | transcendental | same |
+| `rt_math_cos`  | `__c_cos`  | transcendental | same |
+| `rt_math_floor`| `__c_floor`| floor-family   | pure-portable BUT claimed by sibling lane (do-not-re-port) |
+| `rt_math_ceil` | `__c_ceil` | floor-family   | same |
+| `rt_math_round`| `__c_round`| floor-family   | same |
+| `rt_math_abs`  | `__c_fabs` | floor-family   | same |
+
+Memory FFI (2 fns, lines 630-631): `rt_alloc_raw → __c_malloc`, `rt_free_raw → __c_free`
+— raw heap allocation. Irreducible carrier/syscall (mmap/brk under libc). Cannot be
+pure hexa. BLOCKED (carrier-path/syscall).
+
+HYBRID I/O (6 fns, lines 584-623): `rt_read_file`, `rt_write_file`, `rt_write_bytes`,
+`rt_read_file_bytes`, `rt_exec`, `rt_exec_with_status` — delegate to interpreter
+builtins backed by syscalls (open/read/write + popen). The minimal-FFI block
+(`__c_popen/pclose/fgets/fopen/fclose/fread/fwrite/fseek/ftell`, lines 19-29) exists
+solely for these. BLOCKED (syscall).
+
+### Disposition: every residual is one of {transcendental-ban, sibling-claimed-floor-family, syscall, raw-malloc}
+
+There is NO function in `runtime_pure.hexa` that is a pure scalar computation AND
+not transcendental AND not in the sibling-claimed floor-family. The bucket already
+holds 34 PURE functions (20 string + 12 array + `rt_math_min`/`rt_math_max`); the
+only pure-computable math residuals are the floor-family explicitly reserved by a
+sibling lane. **No marginal port was forced.** Honesty gate (g5/g63): nothing marked
+ported because nothing was ported — this round is a documented terminal finding.
+
+Falsifier (how to reopen this lane): if a new pure-computation function (non-libm,
+non-syscall, non-malloc) appears in `runtime_pure.hexa` still on FFI, OR if the
+sibling floor-family lane is abandoned, the bucket-A lane reopens. Otherwise the
+next runtime unlock is the carrier-path tier (HexaVal repr + arena + GC) or the
+B-class macho relocation infra spec'd above — both out of scope for the pure-fn lane.
