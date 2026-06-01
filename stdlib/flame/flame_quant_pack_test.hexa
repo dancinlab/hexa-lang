@@ -1,0 +1,92 @@
+// ════════════════════════════════════════════════════════════════════════════
+//  flame_quant_pack_test.hexa — selftest for packed int4 storage (quant_lib).
+//
+//  Falsifier (pre-registered, H_877 inference byte-identity):
+//    F-FLAME-INT4-PACK-BYTEEQ  for a representative per-channel-quantized weight
+//      tensor, nn_int4_unpack(nn_int4_pack(W)) reproduces nn_int4_quant_fwd's
+//      Wq BIT-FOR-BIT (max_abs_diff == 0). Packing is a pure storage transform:
+//      4 bits/weight = 8× smaller than fp32, 2× smaller than int8, with the
+//      dequantized values feeding inference IDENTICAL to the fake-quant path.
+//
+//  main()-driven selftest — run with `hexa run stdlib/flame/flame_quant_pack_test.hexa`.
+// ════════════════════════════════════════════════════════════════════════════
+
+use "stdlib/flame/tensor_lib"
+use "stdlib/flame/quant_lib"
+
+fn _qpt_abs(x: float) -> float {
+    if x < 0.0 { return 0.0 - x }
+    return x
+}
+
+fn main() {
+    println("flame_quant_pack_test — packed int4 storage (quant_lib)")
+
+    let Cout = 3
+    let rest = 6
+    let n = Cout * rest
+
+    // Same representative tensor as flame_quant_test: large/small/zero channels.
+    let w = t_zeros(n)
+    t_fill_lcg(w, n, 1234, 5.0)
+    let mut z = 0
+    while z < rest { t_set(w, 2 * rest + z, 0.0); z = z + 1 }
+    let mut a = 0
+    while a < rest { t_set(w, 0 * rest + a, t_get(w, 0 * rest + a) * 4.0); a = a + 1 }
+
+    // Reference: fake-quant fwd → Wq (per-channel scale).
+    let wq = t_zeros(n)
+    let scale = t_zeros(Cout)
+    let qlev = t_zeros(n)
+    let mask = t_zeros(n)
+    nn_int4_quant_fwd(w, wq, scale, qlev, mask, Cout, rest)
+
+    // Pack each channel into ceil(rest/2) bytes, then unpack → wq_packed.
+    let zero = 7
+    let bytes_per_ch = (rest + 1) / 2
+    let wq_packed = t_zeros(n)
+    let mut co = 0
+    while co < Cout {
+        let s = t_get(scale, co)
+        // view into w / wq_packed for this channel
+        let wch = t_zeros(rest)
+        let mut j = 0
+        while j < rest { t_set(wch, j, t_get(w, co * rest + j)); j = j + 1 }
+
+        let packed = t_zeros(bytes_per_ch)
+        nn_int4_pack(wch, packed, rest, s, zero)
+
+        let wout = t_zeros(rest)
+        nn_int4_unpack(packed, wout, rest, s, zero)
+
+        let mut k = 0
+        while k < rest { t_set(wq_packed, co * rest + k, t_get(wout, k)); k = k + 1 }
+        co = co + 1
+    }
+
+    // ── F-FLAME-INT4-PACK-BYTEEQ — max_abs_diff(wq_packed, wq) == 0 ──
+    let mut byteeq = 1
+    let mut maxdiff = 0.0
+    let mut i = 0
+    while i < n {
+        // strict bit-for-bit equality (pure storage transform → exact)
+        if t_get(wq_packed, i) != t_get(wq, i) { byteeq = 0 }
+        let d = _qpt_abs(t_get(wq_packed, i) - t_get(wq, i))
+        if d > maxdiff { maxdiff = d }
+        i = i + 1
+    }
+
+    // Storage ratio: fp32 = 4 bytes/weight; packed = 4 bits = 0.5 byte/weight.
+    let fp32_bytes = n * 4
+    let packed_bytes = Cout * bytes_per_ch
+    println("F-FLAME-INT4-PACK-BYTEEQ = " + to_string(byteeq))
+    println("max_abs_diff = " + to_string(maxdiff))
+    println("storage_fp32_bytes = " + to_string(fp32_bytes))
+    println("storage_packed_bytes = " + to_string(packed_bytes))
+
+    if byteeq == 1 {
+        println("PASS — packed int4 inference byte-identical (H_877)")
+        return
+    }
+    println("FAIL — packed/fake-quant mismatch")
+}
