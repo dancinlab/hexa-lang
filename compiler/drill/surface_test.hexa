@@ -61,6 +61,14 @@ fn main() {
     let base = "HOME='" + scratch + "' hexa drill --seed '" + seed
         + "' --rounds 1 --depth-smash 2 --depth-free 2 --fresh --quiet"
 
+    // Warm-up: the FIRST `hexa drill` in a fresh HOME triggers a cold
+    // `hexa build` of drill.hexa whose first run does not deliver program
+    // stdout to the pipe (build-harness behavior — same cause the legacy
+    // /tmp-HOME drill_test truncates on). One throwaway invocation warms
+    // the cache so every MEASURED run below hits a deterministic warm
+    // build. Output intentionally discarded.
+    let _warm = exec(base + " --top 1 2>/dev/null")
+
     let fails = []
     let mut pass: i64 = 0
     let mut total: i64 = 0

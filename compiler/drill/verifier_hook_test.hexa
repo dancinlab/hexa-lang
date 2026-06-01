@@ -61,6 +61,14 @@ fn main() {
         + " --verifier " + _shq(stub)
         + " --verifier-strict 2>/dev/null"
 
+    // Warm-up: the FIRST `hexa drill` in a fresh HOME triggers a cold
+    // `hexa build` whose first run does not deliver program stdout to the
+    // pipe (build-harness behavior). One throwaway invocation warms the
+    // cache so the MEASURED run below is deterministic. No verifier here —
+    // we only need the binary built. Output discarded.
+    let _warm = exec("HOME='" + scratch + "' hexa drill --seed '" + seed
+        + "' --rounds 1 --depth-smash 2 --depth-free 2 --fresh --quiet --top 0 2>/dev/null")
+
     let out = exec(cmd)
     println("  drill summary line:")
     println("    " + out.trim())
