@@ -1387,14 +1387,20 @@ fn _builtin_runtime_sym(name: string) -> string {
     // correctly-lowered sites, so this collapses the bare ref onto an
     // already-resolved symbol (0 new symbols, 0 miscompile risk).
     if name == "byte_at"       { return "hexa_str_byte_at" }
-    // N5-sym: `mkdir` leaked bare (collides with libc mkdir(const char*,mode_t),
-    // wrong ABI for a HexaVal arg). The C-path INLINES hexa_bool(mkdir(HX_STR(p),
-    // 0755)==0) (codegen.hexa:6446); map to the runtime wrapper hexa_mkdir (added
-    // in the same change) which is the byte-eq-identical native-object form.
+    // N5-sym pt7: get/set → HexaVal-keyed runtime wrappers (hexa_map_get_v/set_v
+    // apply hexa_to_cstring INTERNALLY — byte-eq with the C-path lowering of
+    // m.get(k)/m.set(k,v); NOT __map_*_cstr_v which is HX_STR string-only and
+    // would diverge on non-string keys. get=2-arg, set=3-arg, arities match.
+    if name == "get"           { return "hexa_map_get_v" }
+    if name == "set"           { return "hexa_map_set_v" }
+    // N5-sym pt5: float_to_bits/bits_to_float/sha256_hex — authoritative C-path
+    // targets with (HexaVal …)->HexaVal signature, 0 miscompile risk (like byte_at).
+    if name == "float_to_bits" { return "hexa_float_to_bits" }
+    if name == "bits_to_float" { return "hexa_bits_to_float" }
+    if name == "sha256_hex"    { return "hexa_sha256" }
+    // N5-sym pt8: mkdir → hexa_mkdir runtime wrapper (byte-eq with the C-path inline
+    // hexa_bool(mkdir(HX_STR(p),0755)==0); bare mkdir collides with libc mkdir).
     if name == "mkdir"         { return "hexa_mkdir" }
-    // STILL DEFERRED (unmapped-is-safer-than-mis-mapped — this file's policy):
-    // `get`/`set` map-methods need a hexa_to_cstring(key) coercion wrapper,
-    // `sha256_hex` target unconfirmed.
     // Low-level memory / pointer builtins — name -> runtime symbol.
     // Authoritative mapping mirrored from self/codegen_c2.hexa §G5/B3.
     // All take/return HexaVal pairs so the generic STMT_CALL emit path

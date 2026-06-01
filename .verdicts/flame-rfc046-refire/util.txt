@@ -1,0 +1,101 @@
+# F-RFC046-GPU-UTILIZATION re-fire — clm_large 44.68M, fwd+bwd BOTH via forge (post #2394)
+# Date: 2026-06-01  Provider: vast.ai instance 38872154 (TORN DOWN, billing confirmed stopped)
+# GPU: NVIDIA RTX PRO 6000 Blackwell Workstation Edition 97887 MiB, driver 590.48.01, CUDA 12.4
+#   (vast `--gpu "H100"` offer-matched a Blackwell datacenter card, NOT an H100; sm_120,
+#    nvcc 12.4 compiled bf16 kernels to compute_90 PTX, driver JIT'd to sm_120; cuBLAS Dgemm
+#    runs natively on Blackwell. 2 prior runpod H100 rents failed to provision SSH in 300/600s.)
+# Build: nvcc runtime_cuda.c (+runtime_bf16.c) -DHEXA_CUDA RC=0; gcc -DHEXA_CUDA link RC=0 (both T)
+#
+# VERDICT: F-RFC046 util STILL RED — backward-forge did NOT lift util off the floor.
+#   T=4   : peak_util=2%  mean_all=0.7%  mean_active=1.2%  (vs #2379 forward-only 1%@T=4)
+#   T=512 : peak_util=3%  mean_all=0.6%  mean_active=1.9%  (vs #2379 forward-only 4%@T=512)
+#   cuBLAS ENGAGED both passes: T=4 = 364 Dgemms, T=512 = 372 Dgemms (vs #2379's 108 fwd-only;
+#     the ~3.4x rise = backward dW+dX GEMMs now route through forge cuBLAS, confirmed on-device).
+#   F-FLAME-CLM-LARGE-RUN = 1 both (CE 4.81->0.028 @T4, 4.98->0.022 @T512).
+#   Bound: GEMMs are skinny (M=4/512, K=2304, N=768) + per-call H2D/Dgemm/D2H round-trip, and the
+#     conv im2col/col2im + all elementwise (gelu/GN/router/adam/CE) run HOST-side scalar loops.
+#     GPU does microsecond Dgemm bursts between long host stretches -> util pinned ~1-3%.
+#     Lifting needs the elementwise carve-out (#2377) wired into the trainer + on-device farr
+#     residency (avoid per-GEMM H2D/D2H) + batched/fused GEMM, not just routing more GEMMs.
+#
+================= MEASURE t4 (clm_large) =================
+--- run clm_large ---
+run rc=0  wall=58.607s
+--- run_t4.log (CE/PASS lines) ---
+  n_params = 44678668 (expect 44,678,668 for d768/L12/E12)
+  ACTIVATION-CKPT: trunk cache 3·[L·T·d]+[L·d] -> [L·T·d]  (O(L) hn/xh/iv dropped, recomputed from tin)
+  step 1  CE = 4.81414
+  step 4 CE = 0.0280416
+  loss0 = 4.81414  lossF = 0.0280416
+F-FLAME-CLM-LARGE-RUN = 1
+PASS — LARGE rung (44.68M) builds + trains + descends on hexa-native stack
+--- util stats t4 ---
+samples=296 peak_util=2% mean_util_all=0.7% mean_util_active=1.2% (nonzero=174)
+--- peak mem.used + nonzero-util raw samples (up to 15) ---
+peak_mem_used=4205MiB
+2026/06/01 02:57:40.578, 1 %, 683 MiB
+2026/06/01 02:57:40.778, 1 %, 697 MiB
+2026/06/01 02:57:40.978, 1 %, 725 MiB
+2026/06/01 02:57:41.179, 1 %, 739 MiB
+2026/06/01 02:57:41.379, 1 %, 753 MiB
+2026/06/01 02:57:41.579, 1 %, 767 MiB
+2026/06/01 02:57:41.780, 1 %, 781 MiB
+2026/06/01 02:57:41.980, 1 %, 809 MiB
+2026/06/01 02:57:42.180, 1 %, 823 MiB
+2026/06/01 02:57:42.380, 1 %, 837 MiB
+2026/06/01 02:57:42.581, 1 %, 851 MiB
+2026/06/01 02:57:42.781, 1 %, 879 MiB
+2026/06/01 02:57:42.981, 1 %, 895 MiB
+2026/06/01 02:57:43.181, 1 %, 909 MiB
+2026/06/01 02:57:43.381, 1 %, 923 MiB
+--- cuBLAS Dgemm calls: 364 ---
+[cuda] Dgemm #1  M=4 K=2304 N=768
+[cuda] Dgemm #2  M=4 K=2304 N=768
+[cuda] Dgemm #3  M=4 K=2304 N=768
+[cuda] Dgemm #4  M=4 K=2304 N=768
+[cuda] Dgemm #5  M=4 K=2304 N=768
+[cuda] Dgemm #6  M=4 K=2304 N=768
+[cuda] Dgemm #7  M=4 K=2304 N=768
+[cuda] Dgemm #8  M=4 K=2304 N=768
+
+================= MEASURE t512 (clm_large_t512) =================
+--- run clm_large_t512 ---
+run rc=0  wall=135.712s
+--- run_t512.log (CE/PASS lines) ---
+  n_params = 44678668 (expect 44,678,668 for d768/L12/E12)
+  ACTIVATION-CKPT: trunk cache 3·[L·T·d]+[L·d] -> [L·T·d]  (O(L) hn/xh/iv dropped, recomputed from tin)
+  step 1  CE = 4.98393
+  step 4 CE = 0.022152
+  loss0 = 4.98393  lossF = 0.022152
+F-FLAME-CLM-LARGE-RUN = 1
+PASS — LARGE rung (44.68M) builds + trains + descends on hexa-native stack
+--- util stats t512 ---
+samples=682 peak_util=3% mean_util_all=0.6% mean_util_active=1.9% (nonzero=199)
+--- peak mem.used + nonzero-util raw samples (up to 15) ---
+peak_mem_used=8407MiB
+2026/06/01 02:58:38.623, 3 %, 655 MiB
+2026/06/01 02:58:38.823, 3 %, 683 MiB
+2026/06/01 02:58:39.023, 3 %, 683 MiB
+2026/06/01 02:58:43.629, 2 %, 963 MiB
+2026/06/01 02:58:43.829, 2 %, 963 MiB
+2026/06/01 02:58:44.030, 2 %, 991 MiB
+2026/06/01 02:58:44.631, 2 %, 1023 MiB
+2026/06/01 02:58:44.832, 2 %, 1047 MiB
+2026/06/01 02:58:45.032, 2 %, 1051 MiB
+2026/06/01 02:58:46.233, 2 %, 1135 MiB
+2026/06/01 02:58:46.434, 2 %, 1163 MiB
+2026/06/01 02:58:50.639, 2 %, 1409 MiB
+2026/06/01 02:58:50.839, 2 %, 1409 MiB
+2026/06/01 02:58:52.641, 2 %, 1511 MiB
+2026/06/01 02:58:52.842, 2 %, 1511 MiB
+--- cuBLAS Dgemm calls: 372 ---
+[cuda] Dgemm #1  M=512 K=2304 N=768
+[cuda] Dgemm #2  M=512 K=2304 N=768
+[cuda] Dgemm #3  M=512 K=2304 N=768
+[cuda] Dgemm #4  M=512 K=2304 N=768
+[cuda] Dgemm #5  M=512 K=2304 N=768
+[cuda] Dgemm #6  M=512 K=2304 N=768
+[cuda] Dgemm #7  M=512 K=2304 N=768
+[cuda] Dgemm #8  M=512 K=2304 N=768
+
+REMEASURE_DONE

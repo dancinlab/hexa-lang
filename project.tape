@@ -93,6 +93,11 @@
   dont = "ship a verify pass that doesn't auto-fold on success · require manual `atlas register` after verify"
 
 @D h_audit_axis_form := "domain audits = `hexa verify --<axis> <domain>` subcommand form (e.g. --blue-max)" :: governance [required active]
-  do   = "future domain-level audits land as `hexa verify --<axis> <domain>` — single CLI surface, no new verbs"
+  do   = "domain audits land as `hexa verify --<axis> <domain>` — one CLI surface, no new verbs"
   do   = "audit output = tier matrix + pair-coverage + atlas-absorb side-effect (ambient via auto-absorb)"
   dont = "spawn new top-level `hexa <audit>` verbs · split audit from verify · split atlas absorb from verify"
+
+@D hf_org := "HuggingFace namespace = `dancinlab` org (huggingface.co/dancinlab)" :: governance [required active]
+  do   = "all HF uploads + Collections live under the `dancinlab` ORG namespace"
+  do   = "create_collection(namespace=\"dancinlab\") · push `dancinlab/<repo>` — token user is org admin"
+  do   = "the org page huggingface.co/dancinlab is the single SSOT surface for models + datasets"

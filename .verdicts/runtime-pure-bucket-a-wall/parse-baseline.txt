@@ -1,0 +1,28 @@
+# verdict: self/runtime_pure.hexa pure-fn (bucket A) lane — carrier-path wall (closed-negative)
+# round: loop round 4, RUNTIME lane · date: 2026-06-01 · PR: #2424
+# method: enumerate every FFI/HYBRID fn; classify portable-pure vs blocked.
+#         regression gate = `hexa parse self/runtime_pure.hexa` error count unchanged vs origin/main.
+
+$ git diff --stat origin/main -- self/runtime_pure.hexa
+(empty — byte-identical to origin/main; #2418/#2419 ports never landed in this repo)
+
+$ hexa parse self/runtime_pure.hexa  2>&1 | grep -c 'error\['
+32
+
+$ git show origin/main:self/runtime_pure.hexa > /tmp/rp_main.hexa
+$ hexa parse /tmp/rp_main.hexa       2>&1 | grep -c 'error\['
+32
+
+REGRESSION: NONE (32 == 32; pre-existing `match`-as-binding-name baseline on both)
+
+$ hexa run /tmp/smoke_to_float.hexa      # floor-family pure-portability spot check
+7.0
+3
+-4
+# to_float(7)=7.0 · to_int(3.9)=3 (trunc) · pure-floor(-3.7) via to_int+sign-adjust = -4
+# -> floor-family IS pure-portable, but reserved by sibling lane (NOT re-ported).
+
+FINDING (terminal · closed-negative):
+  No remaining function in self/runtime_pure.hexa is cleanly portable.
+  Residuals = {transcendental x7 (libm ban) · sibling-claimed floor-family x4 ·
+               raw malloc/free x2 · syscall I/O x6}. Bucket A retired honestly.

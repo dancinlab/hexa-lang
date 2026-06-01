@@ -1,0 +1,133 @@
+// HEXA Standard Library — qforge/orchestrator_pw
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// QFORGE PRODUCTION ORCHESTRATOR (PW edition) — the INDEPENDENT atoms→Tc chain.
+//
+// orchestrator.hexa chains the el-ph→Tc tail (|g|²→α²F→λ→Tc) but its production
+// entry STARTS from the el-ph |g|² dataset — "the same boundary every QFORGE
+// QE-cross-val test starts from" (its own honest header). That boundary is QE's
+// dvscf moment output, which is exactly what made the chain non-independent.
+//
+// This module closes the head of the chain in-repo: it produces the |g|² dataset
+// from the SELF-CONSISTENT SCF (M5.5 scf_pw.hexa) + the Sternheimer el-ph matrix
+// element (M5.6 elph_scf.hexa), then forwards it to the verified el-ph→Tc tail.
+// The full path is now atoms→SCF→|g|²→λ→Tc with NO QE in any loop.
+//
+//   cell+UPF ─SCF(M5.5)─▶ ψ,ε,H_apply ─Sternheimer(M5.6)─▶ |g_{k,k+q}^ν|²
+//                                                              │
+//                                       qforge_elph_to_tc (orchestrator.hexa tail)
+//                                                              ▼
+//                                                   λ, ω_log, Tc_AD, Tc_ME
+//
+// ── d4 generic contract ──────────────────────────────────────────────────────
+//   The caller supplies the cell (via the M5.5 staging), the phonon modes (bare
+//   ΔV|ψ bundles + ω(q,ν)), the screening kernel, and the Tc-side parameters.
+//   No material is hardcoded — CaH6, LaH10, Li2MgH16 all traverse this one path.
+//
+// ── HONEST SCOPE (d6) ────────────────────────────────────────────────────────
+//   This wires the in-repo chain; it does NOT by itself close M6. M6's FINAL
+//   cross-val needs the QE-NC reference (blocker A = the cloud_cli GC-race). After
+//   this lands the INDEPENDENT atoms→|g|² path EXISTS and the chain RUNS in-repo;
+//   the CaH6 NC-vs-NC cross-val runs once blocker A clears. The selftest verifies
+//   the chain on the smallest system (finite λ>0, Tc) with |g|² from the SCF path.
+//
+// reuse (d19): scf_pw (M5.5 SCF) · elph_scf (M5.6 |g|²) · orchestrator (el-ph→Tc
+//   tail) · davidson (eigenstates). No new physics — pure composition.
+use "stdlib/qforge/scf_pw"
+use "stdlib/qforge/elph_scf"
+use "stdlib/qforge/orchestrator"
+use "stdlib/qforge/davidson"
+
+// ── extract the occupied KS states from an SCF run for the el-ph contraction ──
+//   Re-diagonalizes the converged H(ρ) (the M5.5 global closure) to recover the
+//   eigenvectors (ScfResult carries eigenvalues + density but not the evecs). The
+//   staged cell must be the SAME one qforge_scf_pw ran (caller keeps it staged).
+//   Returns the occupied eigenvector rows (m_occ × n).
+pub fn qforge_pw_occ_states(rho: [float], n: int, nbands: int) -> [[float]] {
+    let h_apply = qforge_h_of_rho_global(rho)              // H(ρ) at the converged ρ
+    // build the diagonal for the davidson preconditioner.
+    let mut e = []
+    let mut d = 0
+    while d < n {
+        let mut col = []
+        let mut t = 0
+        while t < n { if t == d { col.push(1.0) } else { col.push(0.0) } ; t = t + 1 }
+        let hc = h_apply(col)
+        e.push(hc[d])
+        d = d + 1
+    }
+    let dr = qforge_davidson(h_apply, e, n, nbands, 1.0e-12, 300)
+    let mut states: [[float]] = []
+    let mut b = 0
+    while b < nbands {
+        let mut v = []
+        let mut i = 0
+        while i < n { v.push(dr.evecs[b * n + i]) ; i = i + 1 }
+        states.push(v)
+        b = b + 1
+    }
+    return states
+}
+
+// ── the full independent chain: cell+modes → (λ, ω_log, Tc) ──────────────────
+//
+//   PRE: the caller has staged the cell via qforge_scf_pw (M5.5) and holds the
+//   resulting ScfResult `scf` (converged ρ + eigenvalues). This routine:
+//     1. recovers the occupied ψ_n from the converged ρ (qforge_pw_occ_states),
+//     2. for each phonon mode µ, runs qforge_elph_g2 (M5.6) to get |g|² per
+//        occupied pair (the SCF-sourced el-ph matrix element),
+//     3. flattens the per-mode |g|² + ω(q,ν) into the el-ph dataset,
+//     4. forwards to qforge_elph_to_tc (the verified el-ph→Tc tail).
+//
+//   INPUTS:
+//     rho, evals : the converged SCF density + KS eigenvalues (from qforge_scf_pw)
+//     n, nocc    : PW basis dim + number of occupied bands
+//     dv_modes   : nmode bundles, each a flat (nocc×n) ΔV_bare|ψ_n⟩ for mode µ
+//     omega_modes: ω(q,ν) per mode (same unit as omega_grid)
+//     mode_weight: BZ-sample weight per mode (folded star weight)
+//     drho_to_dvscf : Δρ→ΔV_scr screening kernel (0 kernel = bare |g|²)
+//     e_fermi,n_ef,omega_grid,sigma_el,sigma_ph,mu_star,n_mats : el-ph→Tc tail args
+//
+//   Returns the orchestrator's QforgeElphResult (λ, ω_log, Tc_AD, Tc_ME, α²F).
+pub fn qforge_atoms_to_tc(rho: [float], evals: [float], n: int, nocc: int,
+                          dv_modes: [[float]], omega_modes: [float],
+                          mode_weight: float, drho_to_dvscf,
+                          e_fermi: float, n_ef: float, omega_grid: [float],
+                          sigma_el: float, sigma_ph: float,
+                          mu_star: float, n_mats: int) -> QforgeElphResult {
+    // (1) occupied ψ_n from the converged ρ (re-diagonalize H(ρ)).
+    let occ = qforge_pw_occ_states(rho, n, nocc)
+    let h_apply = qforge_h_of_rho_global(rho)
+    // occupied eigenvalues (lowest nocc).
+    let mut eps_occ = []
+    let mut q = 0
+    while q < nocc { eps_occ.push(evals[q]) ; q = q + 1 }
+    // (2)+(3) per-mode SCF-sourced |g|² → the el-ph dataset arrays.
+    let nmode = dv_modes.len()
+    let mut eps_k = []
+    let mut eps_kq = []
+    let mut g2 = []
+    let mut omega_qnu = []
+    let mut mu = 0
+    while mu < nmode {
+        let er = qforge_elph_g2(h_apply, occ, occ, eps_occ, dv_modes[mu],
+                                drho_to_dvscf, n, 1.0e-12, 300)
+        // intra-band on-shell samples: for each occupied n, deposit |g_nn|² with
+        // ε_k=ε_kq=ε_n (the Fermi-surface double-delta the tail histograms).
+        let mut nn = 0
+        while nn < nocc {
+            eps_k.push(eps_occ[nn])
+            eps_kq.push(eps_occ[nn])
+            g2.push(er.g2[nn * nocc + nn])
+            omega_qnu.push(omega_modes[mu])
+            nn = nn + 1
+        }
+        mu = mu + 1
+    }
+    // (4) forward to the verified el-ph→Tc tail (orchestrator.hexa).
+    return qforge_elph_to_tc(eps_k, eps_kq, g2, omega_qnu, e_fermi, n_ef,
+                             omega_grid, mode_weight, sigma_el, sigma_ph,
+                             mu_star, n_mats)
+}

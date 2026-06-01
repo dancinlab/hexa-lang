@@ -1,0 +1,16 @@
+=== clm_prod (forge backward) ===
+clm_prod — CLMConvMoE production corpus loop (PR1)
+  corpus: stdlib/flame/testdata/clm_semantic_parallel.txt  (1407 bytes, V=256)
+  windows: 8/8  (T=24 stride=172)
+  epoch-1 mean CE = 4.69813
+  epoch-12 mean CE = 1.66631
+F-CLM-PROD-DESCENT = 1
+PASS — real-corpus mean CE descends under int4 envelope
+
+=== clm_large (forge backward) ===
+  n_params = 44678668 (expect 44,678,668 for d768/L12/E12)
+  step 1  CE = 4.81414
+  step 4 CE = 0.0132543
+  loss0 = 4.81414  lossF = 0.0132543
+F-FLAME-CLM-LARGE-RUN = 1
+PASS — LARGE rung (44.68M) builds + trains + descends on hexa-native stack

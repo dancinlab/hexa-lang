@@ -23,6 +23,17 @@
 //                        primitive (1 Y + 10 H) — YH10/LaH10-type. Y @ 4a
 //                        (0,0,0), H @ 8c (1/4,1/4,1/4), H @ 32f (x,x,x)
 //                        H32-cage. ibrav=2 (fcc primitive). Pressure sweep.
+//   "pm3n_bc_clathrate" — Pm-3n (SG #223) boron-carbon SODALITE clathrate,
+//                        14-atom conventional cubic cell (Z=2: 2 M + 6 B +
+//                        6 C) — MB3C3 family (SrB3C3 / CaB3C3 / LaB3C3;
+//                        Zhu/Strobel arXiv:1708.03483). Guest M^n+ @ 2a
+//                        (0,0,0)+(1/2,1/2,1/2), ordered B @ 6c-type / C @
+//                        6d-type framework sites. NO hydrogen — MgB2-like
+//                        sigma-bonded covalent SC, AMBIENT-target (recoverable
+//                        toward 1 atm). ibrav=1 (simple cubic) + nosym (B/C
+//                        decoration lowers symmetry below the parent). Cage
+//                        cation set by m_site_symbol/mass/upf — same framework,
+//                        swap M (d4 generic). press=0 ambient gate by default.
 //
 // REGRESSION TARGET — gen_deck("rtsc", <MgBeH8 spec>) reproduces
 // exports/rtsc/decks/MgBeH8/{vc-relax.in,scf.in,ph.in,RUNBOOK.md} byte-
@@ -53,7 +64,7 @@ import "stdlib/cloud/fill_plan.hexa"
 // single edit needed to register a new prototype (alongside its emitter).
 // Keep this list in lockstep with the dispatch branches in `emit_rtsc`.
 pub fn rtsc_prototypes() -> [string] {
-    return ["beh8_clathrate", "perovskite_pm3m", "im3m_group17", "sodalite_im3m_yh10", "a15_ysbh6", "li2mgh16"]
+    return ["beh8_clathrate", "perovskite_pm3m", "im3m_group17", "sodalite_im3m_yh10", "a15_ysbh6", "li2mgh16", "pm3n_bc_clathrate"]
 }
 
 // ── pub entry point ──────────────────────────────────────────────────
@@ -110,6 +121,13 @@ pub fn emit_rtsc(spec: DeckSpec) -> [DeckFile] {
         deck_push(files, "scf.in",      _rtsc_li2mgh16_scf(spec))
         deck_push(files, "ph.in",       _rtsc_li2mgh16_ph(spec))
         deck_push(files, "RUNBOOK.md",  _rtsc_li2mgh16_runbook(spec))
+        return files
+    }
+    if proto == "pm3n_bc_clathrate" {
+        deck_push(files, "vc-relax.in", _rtsc_bcclath_vc_relax(spec))
+        deck_push(files, "scf.in",      _rtsc_bcclath_scf(spec))
+        deck_push(files, "ph.in",       _rtsc_bcclath_ph(spec))
+        deck_push(files, "RUNBOOK.md",  _rtsc_bcclath_runbook(spec))
         return files
     }
     // Unreachable: the coverage guard above panics on anything not in the
@@ -1066,6 +1084,218 @@ fn _rtsc_li2mgh16_runbook(spec: DeckSpec) -> string {
     s = s + "> k/ecut/nq 는 /deck spec 키(k_relax·k_scf·ecutwfc·ecutrho·nq)로 메모리 튜닝 가능.\n"
     s = s + "\n"
     s = s + "체인: vc-relax -> scf (" + k_scf + "^3 k) -> ph (el-ph simple, " + nq + "^3 q). recover=.true.\n"
+    return s
+}
+
+// ── Pm-3n boron-carbon clathrate prototype (MB3C3 · ambient-target) ───
+//
+// MB3C3 boron-carbon SODALITE clathrate, cubic Pm-3n (SG #223), 14-atom
+// conventional cell (Z=2: 2 M + 6 B + 6 C). The (B3C3)^3- truncated-
+// octahedron cage framework hosts guest M^n+ — an MgB2-like sigma-bonded
+// covalent superconductor that needs NO hydrogen and is RECOVERABLE toward
+// AMBIENT pressure (Zhu/Strobel et al., arXiv:1708.03483; SrB3C3 synthesized
+// ~50 GPa, predicted lambda~0.9-1.0, Tc~27-43 K at high P). M = Sr/Ca/La via
+// m_site_symbol/m_site_mass/m_site_upf (d4 — same framework, swap the cation).
+//
+// AMBIENT-STABILITY GATE (campaign primary test): vc-relax at press=0 (1 atm,
+// the default), then DFPT phonon -> NO imaginary modes = ambient dynamically
+// stable. Soft modes at 1 atm -> note min stabilizing pressure (d_defer).
+//
+// ibrav=1 (simple cubic) + nosym=.true. GUARD: the ordered B/C decoration
+// lowers the true symmetry below the Pm-3n parent; auto-symmetry would mis-
+// fold the B/C sites. a ~ 4.74 Ang ambient (recoverable) -> celldm(1)=8.957
+// Bohr start; vc-relax finds the equilibrium lattice. NO Tc claimed pre-DFT.
+
+// _rtsc_bcclath_structure — ATOMIC_SPECIES + ATOMIC_POSITIONS for the
+// 14-atom Pm-3n MB3C3 cell. Shared between vc-relax and scf (same geometry).
+// M @ 2a (0,0,0)+(1/2,1/2,1/2); B @ 6c-type, C @ 6d-type framework sites.
+fn _rtsc_bcclath_structure(spec: DeckSpec) -> string {
+    let m_sym  = spec_get_or(spec, "m_site_symbol", "Sr")
+    let m_mass = spec_get_or(spec, "m_site_mass",   "87.62")
+    let m_upf  = spec_get_or(spec, "m_site_upf",    "Sr.pbe-spn-rrkjus_psl.1.0.0.UPF")
+    let mut s = ""
+    s = s + "ATOMIC_SPECIES\n"
+    s = s + "  " + m_sym + " " + m_mass + " " + m_upf + "\n"
+    s = s + "  B  10.811  B.pbe-n-rrkjus_psl.1.0.0.UPF\n"
+    s = s + "  C  12.011  C.pbe-n-rrkjus_psl.1.0.0.UPF\n"
+    s = s + "ATOMIC_POSITIONS crystal\n"
+    s = s + "  " + m_sym + " 0.0000000  0.0000000  0.0000000\n"
+    s = s + "  " + m_sym + " 0.5000000  0.5000000  0.5000000\n"
+    s = s + "  B  0.2500000  0.0000000  0.5000000\n"
+    s = s + "  B  0.7500000  0.0000000  0.5000000\n"
+    s = s + "  B  0.0000000  0.5000000  0.2500000\n"
+    s = s + "  B  0.0000000  0.5000000  0.7500000\n"
+    s = s + "  B  0.5000000  0.2500000  0.0000000\n"
+    s = s + "  B  0.5000000  0.7500000  0.0000000\n"
+    s = s + "  C  0.2500000  0.5000000  0.0000000\n"
+    s = s + "  C  0.7500000  0.5000000  0.0000000\n"
+    s = s + "  C  0.0000000  0.2500000  0.5000000\n"
+    s = s + "  C  0.0000000  0.7500000  0.5000000\n"
+    s = s + "  C  0.5000000  0.0000000  0.2500000\n"
+    s = s + "  C  0.5000000  0.0000000  0.7500000\n"
+    return s
+}
+
+fn _rtsc_bcclath_vc_relax(spec: DeckSpec) -> string {
+    let prefix    = spec_get_or(spec, "prefix",        "mb3c3")
+    let outdir    = spec_get_or(spec, "outdir",        "./out")
+    let pseudo    = spec_get_or(spec, "pseudo_dir",    "./pseudo")
+    let celldm    = spec_get_or(spec, "celldm_bohr",   "8.957")
+    let ecutwfc   = spec_get_or(spec, "ecutwfc",       "70.0")
+    let ecutrho   = spec_get_or(spec, "ecutrho",       "560.0")
+    let k_relax   = spec_get_or(spec, "k_relax",       "8")
+    let degauss   = spec_get_or(spec, "degauss",       "0.02")
+    let mixing    = spec_get_or(spec, "mixing_beta",   "0.3")
+    let press_kb  = spec_get_or(spec, "pressure_kbar", "0.0")
+    let m_sym     = spec_get_or(spec, "m_site_symbol", "Sr")
+
+    let mut s = ""
+    s = s + "&control\n"
+    s = s + "  ! " + m_sym + "B3C3 — Pm-3n (#223) boron-carbon sodalite clathrate, 14-atom cubic\n"
+    s = s + "  !   cell (2 " + m_sym + " + 6 B + 6 C). MgB2-like sigma-bonded covalent SC, NO hydrogen.\n"
+    s = s + "  ! AMBIENT-stability gate: vc-relax @ press=" + press_kb + " kbar -> ph -> no imaginary modes.\n"
+    s = s + "  ! nosym GUARD: ordered B/C decoration lowers symmetry below the Pm-3n parent.\n"
+    s = s + "  calculation = 'vc-relax'\n"
+    s = s + "  prefix = '" + prefix + "'\n"
+    s = s + "  outdir = '" + outdir + "'\n"
+    s = s + "  pseudo_dir = '" + pseudo + "'\n"
+    s = s + "  tprnfor = .true.\n"
+    s = s + "  tstress = .true.\n"
+    s = s + "  forc_conv_thr = 1.0d-4\n"
+    s = s + "  etot_conv_thr = 1.0d-6\n"
+    s = s + "  nstep = 200\n"
+    s = s + "  verbosity = 'low'\n"
+    s = s + "/\n"
+    s = s + "&system\n"
+    s = s + "  ibrav = 1\n"
+    s = s + "  celldm(1) = " + celldm + "\n"
+    s = s + "  nat = 14\n"
+    s = s + "  ntyp = 3\n"
+    s = s + "  ecutwfc = " + ecutwfc + "\n"
+    s = s + "  ecutrho = " + ecutrho + "\n"
+    s = s + "  nosym = .true.\n"
+    s = s + "  occupations = 'smearing'\n"
+    s = s + "  smearing = 'mp'\n"
+    s = s + "  degauss = " + degauss + "\n"
+    s = s + "/\n"
+    s = s + "&electrons\n"
+    s = s + "  conv_thr = 1.0d-10\n"
+    s = s + "  mixing_beta = " + mixing + "\n"
+    s = s + "  electron_maxstep = 400\n"
+    s = s + "/\n"
+    s = s + "&ions\n"
+    s = s + "  ion_dynamics = 'bfgs'\n"
+    s = s + "/\n"
+    s = s + "&cell\n"
+    s = s + "  cell_dynamics = 'bfgs'\n"
+    s = s + "  press = " + press_kb + "\n"
+    s = s + "  press_conv_thr = 0.5\n"
+    s = s + "  cell_dofree = 'all'\n"
+    s = s + "/\n"
+    s = s + "\n"
+    s = s + _rtsc_bcclath_structure(spec)
+    s = s + "K_POINTS automatic\n"
+    s = s + "  " + k_relax + " " + k_relax + " " + k_relax + " 0 0 0\n"
+    return s
+}
+
+fn _rtsc_bcclath_scf(spec: DeckSpec) -> string {
+    let prefix    = spec_get_or(spec, "prefix",        "mb3c3")
+    let outdir    = spec_get_or(spec, "outdir",        "./out")
+    let pseudo    = spec_get_or(spec, "pseudo_dir",    "./pseudo")
+    let celldm    = spec_get_or(spec, "celldm_bohr",   "8.957")
+    let ecutwfc   = spec_get_or(spec, "ecutwfc",       "70.0")
+    let ecutrho   = spec_get_or(spec, "ecutrho",       "560.0")
+    let k_scf     = spec_get_or(spec, "k_scf",         "12")
+    let degauss   = spec_get_or(spec, "degauss",       "0.02")
+    let mixing    = spec_get_or(spec, "mixing_beta",   "0.3")
+
+    let mut s = ""
+    s = s + "&control\n"
+    s = s + "  ! SCF on the RELAXED Pm-3n MB3C3 cell. REPLACE celldm(1) + ATOMIC_POSITIONS\n"
+    s = s + "  !   with the vc-relax.out final values (the dispatch chain greps them in).\n"
+    s = s + "  calculation = 'scf'\n"
+    s = s + "  prefix = '" + prefix + "'\n"
+    s = s + "  outdir = '" + outdir + "'\n"
+    s = s + "  pseudo_dir = '" + pseudo + "'\n"
+    s = s + "  tprnfor = .true.\n"
+    s = s + "  tstress = .true.\n"
+    s = s + "  verbosity = 'high'\n"
+    s = s + "/\n"
+    s = s + "&system\n"
+    s = s + "  ibrav = 1\n"
+    s = s + "  celldm(1) = " + celldm + "          ! REPLACE with relaxed celldm(1) from vc-relax.out\n"
+    s = s + "  nat = 14\n"
+    s = s + "  ntyp = 3\n"
+    s = s + "  ecutwfc = " + ecutwfc + "\n"
+    s = s + "  ecutrho = " + ecutrho + "\n"
+    s = s + "  nosym = .true.\n"
+    s = s + "  occupations = 'smearing'\n"
+    s = s + "  smearing = 'mp'\n"
+    s = s + "  degauss = " + degauss + "\n"
+    s = s + "/\n"
+    s = s + "&electrons\n"
+    s = s + "  conv_thr = 1.0d-12\n"
+    s = s + "  mixing_beta = " + mixing + "\n"
+    s = s + "  electron_maxstep = 400\n"
+    s = s + "/\n"
+    s = s + "\n"
+    s = s + _rtsc_bcclath_structure(spec)
+    s = s + "K_POINTS automatic\n"
+    s = s + "  " + k_scf + " " + k_scf + " " + k_scf + " 0 0 0\n"
+    return s
+}
+
+fn _rtsc_bcclath_ph(spec: DeckSpec) -> string {
+    let prefix = spec_get_or(spec, "prefix", "mb3c3")
+    let outdir = spec_get_or(spec, "outdir", "./out")
+    let nq     = spec_get_or(spec, "nq",     "2")
+    let m_sym  = spec_get_or(spec, "m_site_symbol", "Sr")
+
+    let mut s = ""
+    s = s + m_sym + "B3C3 DFPT phonon + el-ph " + nq + "x" + nq + "x" + nq + " q (Pm-3n B-C clathrate · ambient-stability gate)\n"
+    s = s + "&inputph\n"
+    s = s + "  prefix = '" + prefix + "'\n"
+    s = s + "  outdir = '" + outdir + "'\n"
+    s = s + "  fildyn = './" + prefix + ".dyn'\n"
+    s = s + "  fildvscf = '" + prefix + ".dvscf'\n"
+    s = s + "  ldisp = .true.\n"
+    s = s + "  nq1 = " + nq + ", nq2 = " + nq + ", nq3 = " + nq + "\n"
+    s = s + "  tr2_ph = 1.0d-14\n"
+    s = s + "  recover = .true.\n"
+    s = s + "  electron_phonon = 'simple'\n"
+    s = s + "  el_ph_sigma = 0.005\n"
+    s = s + "  el_ph_nsigma = 10\n"
+    s = s + "/\n"
+    return s
+}
+
+fn _rtsc_bcclath_runbook(spec: DeckSpec) -> string {
+    let m_sym   = spec_get_or(spec, "m_site_symbol", "Sr")
+    let press   = spec_get_or(spec, "pressure_gpa", "0")
+    let ecutwfc = spec_get_or(spec, "ecutwfc",      "70.0")
+    let ecutrho = spec_get_or(spec, "ecutrho",      "560.0")
+    let k_scf   = spec_get_or(spec, "k_scf",        "12")
+    let nq      = spec_get_or(spec, "nq",           "2")
+    let mut s = ""
+    s = s + "# " + m_sym + "B3C3 — RTSC Pm-3n boron-carbon clathrate runbook (BUILD output)\n"
+    s = s + "\n"
+    s = s + "> Boron-carbon SODALITE clathrate, cubic Pm-3n (SG #223), 14-atom cell\n"
+    s = s + ">   (2 " + m_sym + " + 6 B + 6 C). MgB2-like sigma-bonded covalent SC — NO hydrogen.\n"
+    s = s + "> Reference: Zhu/Strobel et al. arXiv:1708.03483 (SrB3C3, lambda~0.9-1.0,\n"
+    s = s + ">   Tc~27-43 K predicted; synthesized ~50 GPa, RECOVERABLE toward ambient).\n"
+    s = s + "> PRESSURE: " + press + " GPa (default AMBIENT 1 atm — the campaign ambient-stability gate).\n"
+    s = s + ">\n"
+    s = s + "> AMBIENT-STABILITY GATE (PRIMARY · per the Mg2IrH6 lesson — VEC sweet-spot != lattice\n"
+    s = s + ">   stability): DFPT phonon -> NO imaginary modes (omega^2 < 0) = ambient dynamically\n"
+    s = s + ">   stable. Soft modes @ 1 atm -> note min stabilizing pressure (d_defer, NOT discard).\n"
+    s = s + ">   el-ph -> lambda, omega_log -> Tc ONLY for the dynamically-stable ones. NO Tc pre-DFT.\n"
+    s = s + ">\n"
+    s = s + "> ibrav=1 + celldm(1) start 8.957 Bohr (~4.74 Ang); vc-relax finds equilibrium.\n"
+    s = s + "> nosym=.true. — ordered B/C decoration lowers symmetry below the Pm-3n parent.\n"
+    s = s + "> Pseudos auto-fetched (PSL 1.0.0): " + m_sym + " · B.pbe-n · C.pbe-n. La = spfn (d13 f-states).\n"
+    s = s + "\n"
+    s = s + "Chain: vc-relax -> scf (" + k_scf + "^3 k) -> ph (el-ph simple, " + nq + "^3 q). recover=.true.\n"
     return s
 }
 

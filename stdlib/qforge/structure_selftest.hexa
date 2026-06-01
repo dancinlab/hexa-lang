@@ -1,0 +1,140 @@
+// @ci_gate — deterministic · network-free · structure factor S(G) g5 gate
+//
+// qforge_structure_selftest.hexa — QFORGE front-end brick 1/5 (S(G)) g5 gate.
+//
+// S(G) = Σ_a exp(−i G·τ_a). Closed-form analytic anchors (no DFT needed):
+//   (A) single atom at origin → S(G) = 1 + 0i  ∀G                    🔵 identity
+//   (B) two-atom basis at ±τ → S(G) = 2 cos(G·τ), purely real        🔵 closed
+//   (C) global translation Δ → S → S·exp(−i G·Δ): |S| invariant,     🔵 phase
+//       phase shifts by exactly −G·Δ
+//   (D) fractional vs cartesian agree on the same physical cell       🟢 cross
+//   (E) malformed (non-×3 length) → []                                guard
+//
+// Run:  HEXA_LANG=. hexa run stdlib/qforge/structure_selftest.hexa
+// PASS: "qforge_structure_selftest PASS".
+use "stdlib/qforge/structure"
+
+let _PI: float = 3.14159265358979323846
+
+fn _abs(x: float) -> float { if x < 0.0 { return -x } return x }
+fn _ck_close(name: str, got: float, want: float, eps: float) -> int {
+    if _abs(got - want) <= eps { println("PASS " + name + " (" + to_string(got) + ")") ; return 0 }
+    println("FAIL " + name + " — got " + to_string(got) + " want " + to_string(want)) ; return 1
+}
+fn _ck_true(name: str, cond: bool) -> int {
+    if cond { println("PASS " + name) ; return 0 }
+    println("FAIL " + name) ; return 1
+}
+
+fn main() {
+    let mut fails = 0
+
+    // A G-grid of a few arbitrary cartesian vectors (bohr⁻¹).
+    let gvecs = [0.0, 0.0, 0.0,
+                 1.0, 0.0, 0.0,
+                 0.5, 0.7, -0.3,
+                 -1.2, 0.4, 0.9,
+                 2.0, -1.0, 0.5]
+    let ng = 5
+
+    // ══ (A) single atom at origin → S(G) = 1 + 0i ∀G ══════════════════════
+    let posA = [0.0, 0.0, 0.0]
+    let sA = qforge_structure_factor_cart(gvecs, posA)
+    let mut a_ok = len(sA) == 2 * ng
+    fails = fails + _ck_true("(A) S length = 2·nG", a_ok)
+    let mut g = 0
+    while g < ng {
+        fails = fails + _ck_close("(A) re=1 @G" + to_string(g), sA[g * 2], 1.0, 1.0e-12)
+        fails = fails + _ck_close("(A) im=0 @G" + to_string(g), sA[g * 2 + 1], 0.0, 1.0e-12)
+        g = g + 1
+    }
+
+    // ══ (B) two-atom basis at ±τ → S(G) = 2 cos(G·τ), purely real ═════════
+    let tau = [0.31, -0.22, 0.17]
+    let posB = [tau[0], tau[1], tau[2], -tau[0], -tau[1], -tau[2]]
+    let sB = qforge_structure_factor_cart(gvecs, posB)
+    g = 0
+    while g < ng {
+        let gx = gvecs[g * 3]
+        let gy = gvecs[g * 3 + 1]
+        let gz = gvecs[g * 3 + 2]
+        let gdt = gx * tau[0] + gy * tau[1] + gz * tau[2]
+        let want_re = 2.0 * cos(gdt)
+        fails = fails + _ck_close("(B) re=2cos(G·τ) @G" + to_string(g), sB[g * 2], want_re, 1.0e-12)
+        fails = fails + _ck_close("(B) im=0 @G" + to_string(g), sB[g * 2 + 1], 0.0, 1.0e-12)
+        g = g + 1
+    }
+
+    // ══ (C) global translation Δ → S·exp(−i G·Δ): |S| invariant, phase −G·Δ ═
+    let delta = [0.13, 0.41, -0.27]
+    // base config: two arbitrary atoms
+    let posC0 = [0.1, 0.2, 0.05, -0.3, 0.15, 0.22]
+    let posC1 = [0.1 + delta[0], 0.2 + delta[1], 0.05 + delta[2],
+                 -0.3 + delta[0], 0.15 + delta[1], 0.22 + delta[2]]
+    let s0 = qforge_structure_factor_cart(gvecs, posC0)
+    let s1 = qforge_structure_factor_cart(gvecs, posC1)
+    g = 0
+    while g < ng {
+        let r0 = s0[g * 2]
+        let i0 = s0[g * 2 + 1]
+        let r1 = s1[g * 2]
+        let i1 = s1[g * 2 + 1]
+        // |S| invariant under a rigid translation
+        let m0 = sqrt(r0 * r0 + i0 * i0)
+        let m1 = sqrt(r1 * r1 + i1 * i1)
+        fails = fails + _ck_close("(C) |S| invariant @G" + to_string(g), m1, m0, 1.0e-12)
+        // s1 should equal s0 · exp(−i G·Δ): apply the phase to s0 and compare
+        let gx = gvecs[g * 3]
+        let gy = gvecs[g * 3 + 1]
+        let gz = gvecs[g * 3 + 2]
+        let ph = gx * delta[0] + gy * delta[1] + gz * delta[2]
+        // (r0+i·i0)·(cos(−ph)+i·sin(−ph)) = (r0+i·i0)·(cos ph − i·sin ph)
+        let expR = r0 * cos(ph) + i0 * sin(ph)
+        let expI = i0 * cos(ph) - r0 * sin(ph)
+        fails = fails + _ck_close("(C) re phase-shifted @G" + to_string(g), r1, expR, 1.0e-12)
+        fails = fails + _ck_close("(C) im phase-shifted @G" + to_string(g), i1, expI, 1.0e-12)
+        g = g + 1
+    }
+
+    // ══ (D) fractional vs cartesian agree on the same physical cell ═══════
+    // Cubic cell, side a=5.0 bohr → a1=(5,0,0) etc; b_i = 2π/a · ê_i.
+    let acell = 5.0
+    let bmag = 2.0 * _PI / acell
+    // Miller indices (integers) → cartesian G = h·b1 + k·b2 + l·b3 (orthorhombic)
+    let miller = [0.0, 0.0, 0.0,
+                  1.0, 0.0, 0.0,
+                  1.0, -1.0, 2.0,
+                  -2.0, 1.0, 0.0]
+    let nm = 4
+    let mut gcart: [float] = []
+    let mut mi = 0
+    while mi < nm {
+        gcart.push(miller[mi * 3] * bmag)
+        gcart.push(miller[mi * 3 + 1] * bmag)
+        gcart.push(miller[mi * 3 + 2] * bmag)
+        mi = mi + 1
+    }
+    // fractional coords of 2 atoms, and their cartesian images (×a)
+    let frac = [0.25, 0.25, 0.25, 0.5, 0.0, 0.5]
+    let cart = [0.25 * acell, 0.25 * acell, 0.25 * acell,
+                0.5 * acell, 0.0, 0.5 * acell]
+    let sFrac = qforge_structure_factor_frac(miller, frac)
+    let sCart = qforge_structure_factor_cart(gcart, cart)
+    mi = 0
+    while mi < nm {
+        fails = fails + _ck_close("(D) re frac=cart @G" + to_string(mi), sFrac[mi * 2], sCart[mi * 2], 1.0e-9)
+        fails = fails + _ck_close("(D) im frac=cart @G" + to_string(mi), sFrac[mi * 2 + 1], sCart[mi * 2 + 1], 1.0e-9)
+        mi = mi + 1
+    }
+
+    // ══ (E) malformed guard → [] ══════════════════════════════════════════
+    let badG = [1.0, 2.0]              // not a multiple of 3
+    let sBad = qforge_structure_factor_cart(badG, posA)
+    fails = fails + _ck_true("(E) malformed gvecs → []", len(sBad) == 0)
+    let badP = [1.0, 2.0, 3.0, 4.0]    // not a multiple of 3
+    let sBad2 = qforge_structure_factor_cart(gvecs, badP)
+    fails = fails + _ck_true("(E) malformed pos → []", len(sBad2) == 0)
+
+    if fails == 0 { println("qforge_structure_selftest PASS") }
+    else { println("qforge_structure_selftest FAIL — " + to_string(fails) + " case(s)") }
+}

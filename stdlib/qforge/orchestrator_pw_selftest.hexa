@@ -1,0 +1,128 @@
+// @ci_gate — deterministic · network-free · full atoms→Tc chain g5 gate
+//
+// qforge_orchestrator_pw_selftest.hexa — QFORGE PR3 (atoms→SCF→|g|²→λ→Tc) g5 gate.
+//
+// orchestrator_pw.hexa chains the INDEPENDENT head (M5.5 SCF + M5.6 |g|²) into the
+// verified el-ph→Tc tail (orchestrator.hexa) — the full atoms→Tc path with NO QE
+// in any loop. The gate runs the chain end-to-end on the smallest available
+// system and verifies internal consistency (no QE number — the SCF-sourced |g|²
+// drives λ, and λ reproduces the analytic Einstein round-trip).
+//
+//   System: the 7-PW free-electron cell (M5.5 staging), nocc=1 occupied band, one
+//   Einstein phonon mode with a constructed bare perturbation. The chain runs SCF
+//   → |g|² → α²F → λ → Tc. Anchors:
+//
+//  (A) CHAIN COMPLETES: qforge_atoms_to_tc returns ok=1 with finite λ>0, ω_log>0,
+//      and finite Tc_AD/Tc_ME (the full atoms→Tc path runs in-repo).          🟢
+//  (B) |g|² IS SCF-SOURCED: doubling the bare ΔV (→ |g|²×4) raises λ — the
+//      coupling flows from the SCF matrix element, not a hardcoded dataset.   🟢
+//  (C) EINSTEIN ROUND-TRIP: with all electrons on E_F and a single mode ω₀, the
+//      assembled-then-integrated λ matches the analytic Einstein λ (elph.hexa
+//      qforge_einstein_lambda_analytic) for the SAME SCF-derived |g|².         🔵
+//
+// Run:  HEXA_LANG=. hexa run stdlib/qforge/orchestrator_pw_selftest.hexa
+// PASS: "qforge_orchestrator_pw_selftest PASS".
+use "stdlib/qforge/orchestrator_pw"
+use "stdlib/qforge/scf_pw"
+use "stdlib/qforge/elph_scf"
+use "stdlib/qforge/elph"
+
+fn _abs(x: float) -> float { if x < 0.0 { return -x } return x }
+fn _ck_close(name: str, got: float, want: float, eps: float) -> int {
+    if _abs(got - want) <= eps { println("PASS " + name + " (" + to_string(got) + ")") ; return 0 }
+    println("FAIL " + name + " — got " + to_string(got) + " want " + to_string(want)) ; return 1
+}
+fn _ck_true(name: str, cond: bool) -> int {
+    if cond { println("PASS " + name) ; return 0 }
+    println("FAIL " + name) ; return 1
+}
+fn drho_zero(drho: [float]) -> [float] {
+    let mut out = []
+    let mut i = 0
+    while i < drho.len() { out.push(0.0) ; i = i + 1 }
+    return out
+}
+
+fn main() {
+    let mut fails = 0
+    let mut empty_f: [float] = []
+    let mut empty_i: [int] = []
+    let N = 7
+
+    // ── stage + run the SCF on the 7-PW free-electron cell (M5.5) ──────────
+    let gvecs = [0.0, 0.0, 0.0,
+                 1.0, 0.0, 0.0,  -1.0, 0.0, 0.0,
+                 0.0, 1.0, 0.0,  0.0, -1.0, 0.0,
+                 0.0, 0.0, 1.0,  0.0, 0.0, -1.0]
+    let k0 = [0.0, 0.0, 0.0]
+    let scf = qforge_scf_pw(k0, gvecs, empty_f, empty_f, empty_f, empty_f, 0.0,
+                            empty_f, empty_i, empty_f, 0, 100.0, empty_f, -1,
+                            3, 2, 0.5, 1.0e-9, 200)
+    fails = fails + _ck_true("SCF converged (chain head)", scf.converged)
+
+    // ── recover ψ_0 (the single occupied band) → build a bare phonon mode ──
+    let occ = qforge_pw_occ_states(scf.rho, N, 1)
+    // a bare ΔV|ψ_0⟩ = a constant·ψ_0 (a rigid on-site perturbation; |g_00|=const).
+    let g_target = 0.4
+    let mut dvb = []
+    let mut i = 0
+    while i < N { dvb.push(g_target * occ[0][i]) ; i = i + 1 }   // (c·I)ψ_0 = c·ψ_0
+    let mut dv_modes: [[float]] = []
+    dv_modes.push(dvb)
+    let omega0 = 500.0                       // single Einstein mode ω₀ (Kelvin)
+    let omega_modes = [omega0]
+
+    // el-ph→Tc tail parameters. All electrons on E_F (ε_0=0 at Γ → e_fermi=0).
+    let e_fermi = 0.0
+    let n_ef = 1.0
+    // ω grid around ω₀. MUST start > 0 (the moment integrator α²F/ω guards ω≤0).
+    let mut omega_grid = []
+    let mut gpt = 1
+    while gpt < 201 { omega_grid.push(to_float(gpt) * 5.0) ; gpt = gpt + 1 }   // 5..1000 K
+    let sigma_el = 0.05
+    let sigma_ph = 10.0
+    let mode_weight = 1.0
+    let mu_star = 0.1
+    let n_mats = 128
+
+    // ══ (A) CHAIN COMPLETES: atoms→SCF→|g|²→λ→Tc ═══════════════════════════
+    let res = qforge_atoms_to_tc(scf.rho, scf.evals, N, 1, dv_modes, omega_modes,
+                                 mode_weight, drho_zero, e_fermi, n_ef, omega_grid,
+                                 sigma_el, sigma_ph, mu_star, n_mats)
+    fails = fails + _ck_true("(A) chain ok=1", res.ok == 1)
+    fails = fails + _ck_true("(A) λ > 0 finite", res.lambda > 0.0 && res.lambda < 1.0e6)
+    fails = fails + _ck_true("(A) ω_log > 0", res.omega_log > 0.0)
+    fails = fails + _ck_true("(A) Tc_AD finite ≥ 0", res.tc_ad >= 0.0 && res.tc_ad < 1.0e6)
+    fails = fails + _ck_true("(A) Tc_ME finite ≥ 0", res.tc_me >= 0.0 && res.tc_me < 1.0e6)
+
+    // ══ (B) |g|² IS SCF-SOURCED: double the bare ΔV → |g|²×4 → larger λ ════
+    let mut dvb2 = []
+    let mut i2 = 0
+    while i2 < N { dvb2.push(2.0 * g_target * occ[0][i2]) ; i2 = i2 + 1 }
+    let mut dv_modes2: [[float]] = []
+    dv_modes2.push(dvb2)
+    let res2 = qforge_atoms_to_tc(scf.rho, scf.evals, N, 1, dv_modes2, omega_modes,
+                                  mode_weight, drho_zero, e_fermi, n_ef, omega_grid,
+                                  sigma_el, sigma_ph, mu_star, n_mats)
+    fails = fails + _ck_true("(B) λ(2·ΔV) > λ(ΔV) (coupling flows from |g|²)",
+                             res2.lambda > res.lambda)
+    // |g|² scales as ΔV²; λ ∝ |g|² → λ ratio ≈ 4 (same ω, weight, DOS).
+    fails = fails + _ck_close("(B) λ ratio = 4 (|g|² ∝ ΔV²)",
+                              res2.lambda / res.lambda, 4.0, 1.0e-3)
+
+    // ══ (C) EINSTEIN ROUND-TRIP: assembled λ == analytic Einstein λ ════════
+    // The SCF-derived |g_00|² = g_target² (rigid shift on a normalized ψ_0). With
+    // nk=1 on-shell electron, the analytic Einstein λ closed form must match the
+    // chain's λ (the round-trip the el-ph assembler guarantees).
+    let g00 = qforge_elph_g_diag(occ[0], dvb, N)
+    let g2_00 = g00 * g00
+    let lam_an = qforge_einstein_lambda_analytic(1, g2_00, omega0, n_ef,
+                                                 mode_weight, sigma_el)
+    fails = fails + _ck_close("(C) chain λ == analytic Einstein λ (rel 2e-2)",
+                              res.lambda, lam_an, _abs(lam_an) * 2.0e-2 + 1.0e-9)
+    fails = fails + _ck_close("(C) SCF |g_00| = g_target (normalized ψ_0)",
+                              g00, g_target, 1.0e-7)
+
+    if fails == 0 { println("qforge_orchestrator_pw_selftest PASS") }
+    else { println("qforge_orchestrator_pw_selftest FAIL — " + to_string(fails) + " case(s)") }
+}

@@ -1,0 +1,131 @@
+// @ci_gate — deterministic · network-free · KB nonlocal projectors g5 gate
+//
+// qforge_projector_selftest.hexa — QFORGE front-end brick 4/5 (KB V_NL) g5 gate.
+//
+// V_NL = Σ_ij |β_i⟩ D_ij ⟨β_j|, β̃_i(q) = ∫ r² β_i(r) j_l(q r) dr.
+//
+//   (A) 1-projector ANALYTIC case: Gaussian β(r)=exp(−αr²), l=0 → the radial
+//       Bessel transform has the closed form
+//          β̃(q) = ∫ r² e^{−αr²} j0(qr) dr = (√π/(4 α^{3/2})) e^{−q²/4α}.
+//       The numeric log-mesh transform matches it to rel-ε.            🔵 closed
+//   (B) projector normalization: at q→0, j0→1, so β̃(0)=∫ r² β(r) dr — checked
+//       against the analytic Gaussian value √π/(4 α^{3/2}).            🔵
+//   (C) hermiticity: with a symmetric D_ij the V_NL block is real-symmetric,
+//       V_NL[a,b] == V_NL[b,a] ∀a,b.                                   🔵
+//   (D) 1-projector rank-1 structure: V_NL[a,b] = D·(4π/Ω)·β̃(q_a)β̃(q_b) for
+//       l=0 (P_0=1), so V_NL[a,b]² = V_NL[a,a]·V_NL[b,b] (rank-1 separable). 🔵
+//   (E) malformed (size mismatch, Ω≤0) → [] guard.
+//
+// Run:  HEXA_LANG=. hexa run stdlib/qforge/projector_selftest.hexa
+// PASS: "qforge_projector_selftest PASS".
+use "stdlib/qforge/projector"
+
+let _PI: float = 3.14159265358979323846
+
+fn _abs(x: float) -> float { if x < 0.0 { return -x } return x }
+fn _ck_rel(name: str, got: float, want: float, tol: float) -> int {
+    let w = _abs(want)
+    let d = _abs(got - want)
+    let rel = if w < 1.0e-30 { d } else { d / w }
+    if rel <= tol { println("PASS " + name + " (got " + to_string(got) + ", rel " + to_string(rel) + ")") ; return 0 }
+    println("FAIL " + name + " — got " + to_string(got) + " want " + to_string(want) + " rel " + to_string(rel)) ; return 1
+}
+fn _ck_close(name: str, got: float, want: float, eps: float) -> int {
+    if _abs(got - want) <= eps { println("PASS " + name + " (" + to_string(got) + ")") ; return 0 }
+    println("FAIL " + name + " — got " + to_string(got) + " want " + to_string(want)) ; return 1
+}
+fn _ck_true(name: str, cond: bool) -> int {
+    if cond { println("PASS " + name) ; return 0 }
+    println("FAIL " + name) ; return 1
+}
+
+fn main() {
+    let mut fails = 0
+
+    // Build a fine log mesh and a Gaussian projector β(r)=exp(−α r²), l=0.
+    let alpha = 1.5
+    let nmesh = 1600
+    let r0 = 0.0002
+    let dx = 0.010
+    let mut r: [float] = []
+    let mut rab: [float] = []
+    let mut beta: [float] = []
+    let mut i = 0
+    while i < nmesh {
+        let ri = r0 * exp(to_float(i) * dx)
+        r.push(ri)
+        rab.push(ri * dx)
+        beta.push(exp(-alpha * ri * ri))
+        i = i + 1
+    }
+    // analytic β̃(q) = (√π / (4 α^{3/2})) e^{−q²/4α}
+    let pref = sqrt(_PI) / (4.0 * pow(alpha, 1.5))
+
+    // ══ (A) radial Bessel transform vs closed form at several q ════════════
+    let qs = [0.5, 1.0, 2.0, 3.0]
+    let mut k = 0
+    while k < 4 {
+        let q = qs[k]
+        let got = qforge_proj_radial(r, rab, beta, 0, q)
+        let want = pref * exp(-q * q / (4.0 * alpha))
+        fails = fails + _ck_rel("(A) β̃(q) Gaussian closed-form @q" + to_string(k), got, want, 2.0e-4)
+        k = k + 1
+    }
+    // ══ (B) normalization β̃(0) = ∫ r²β dr = √π/(4α^{3/2}) ═════════════════
+    let bt0 = qforge_proj_radial(r, rab, beta, 0, 0.0)
+    fails = fails + _ck_rel("(B) β̃(0) normalization", bt0, pref, 2.0e-4)
+
+    // ══ (C)/(D) V_NL block: 1 projector, l=0, D=2.5, on a q-grid ═══════════
+    let omega = 120.0
+    let dval = 2.5
+    let dij = [dval]
+    let ls = [0]
+    // q-grid: 4 vectors of varied direction/magnitude
+    let qvecs = [0.5, 0.0, 0.0,
+                 0.0, 1.0, 0.3,
+                 -0.7, 0.2, 0.9,
+                 1.2, -0.4, 0.1]
+    let nq = 4
+    let vnl = qforge_vnl_block(r, rab, beta, ls, dij, 1, omega, qvecs)
+    fails = fails + _ck_true("(C) V_NL block size nq²", len(vnl) == nq * nq)
+    // (C) hermiticity / symmetry
+    let mut a = 0
+    let mut sym_ok = true
+    while a < nq {
+        let mut b = 0
+        while b < nq {
+            if _abs(vnl[a * nq + b] - vnl[b * nq + a]) > 1.0e-12 { sym_ok = false }
+            b = b + 1
+        }
+        a = a + 1
+    }
+    fails = fails + _ck_true("(C) V_NL hermitian (real-symmetric)", sym_ok)
+    // (D) rank-1 separability: V[a,b]² = V[a,a]·V[b,b] (l=0, single projector)
+    let mut rank1_ok = true
+    a = 0
+    while a < nq {
+        let mut b = 0
+        while b < nq {
+            let lhs = vnl[a * nq + b] * vnl[a * nq + b]
+            let rhs = vnl[a * nq + a] * vnl[b * nq + b]
+            let denom = if _abs(rhs) > 1.0e-30 { _abs(rhs) } else { 1.0 }
+            if _abs(lhs - rhs) / denom > 1.0e-9 { rank1_ok = false }
+            b = b + 1
+        }
+        a = a + 1
+    }
+    fails = fails + _ck_true("(D) V_NL rank-1 separable (l=0)", rank1_ok)
+    // (D) explicit value: V[0,0] = D·(4π/Ω)·β̃(q0)²  (q0=|0.5|=0.5, P_0=1)
+    let bt_q0 = qforge_proj_radial(r, rab, beta, 0, 0.5)
+    let want_00 = dval * (4.0 * _PI / omega) * bt_q0 * bt_q0
+    fails = fails + _ck_close("(D) V_NL[0,0] = D·4π/Ω·β̃²", vnl[0], want_00, 1.0e-10)
+
+    // ══ (E) malformed guards ══════════════════════════════════════════════
+    fails = fails + _ck_true("(E) betas size mismatch → []",
+        len(qforge_vnl_block(r, rab, [1.0, 2.0], ls, dij, 1, omega, qvecs)) == 0)
+    fails = fails + _ck_true("(E) Ω≤0 → []",
+        len(qforge_vnl_block(r, rab, beta, ls, dij, 1, 0.0, qvecs)) == 0)
+
+    if fails == 0 { println("qforge_projector_selftest PASS") }
+    else { println("qforge_projector_selftest FAIL — " + to_string(fails) + " case(s)") }
+}

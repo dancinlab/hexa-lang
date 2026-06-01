@@ -1,0 +1,133 @@
+B2 — rt_fs gate bug (BUILDFLOOR M7 follow-up, #2421 link-fill workaround → root fix)
+=================================================================================
+date: 2026-06-01
+worktree: .claude/worktrees/agent-aa9c9b5cb9d3e3eb1 (off origin/main)
+verdict tier: 🟢 numerical (real clang compile + nm symbol-table measurement)
+            + 🔴 CLOSED-NEGATIVE on the deliverable axis (root fix is NOT committable)
+
+────────────────────────────────────────────────────────────────────────────
+ROOT CAUSE (verified)
+────────────────────────────────────────────────────────────────────────────
+self/runtime.c had a 3-way gate around rt_fs_append_atomic / rt_fs_stat /
+rt_fs_rotate_if_over:
+
+  #if defined(HEXA_RT_SELFEMIT)              -> extern (self-emit .o supplies)
+  #elif !defined(HEXA_HAS_HEXA_RT_STDLIB)    -> real failure-default C bodies
+  #else  (== HEXA_HAS_HEXA_RT_STDLIB set)    -> extern, NO DEFINER  <<< BUG
+
+tool/build_aprime.sh stage-4 prepends `#define HEXA_HAS_HEXA_RT_STDLIB 1`
+(build_aprime.sh L119-120) and inlines runtime.c, so it hits the `#else`
+branch. The builtin-init (runtime.c L13378-13380) unconditionally takes the
+address `(void*)rt_fs_append_atomic` etc. via hexa_fn_new(), but the `#else`
+externed the bodies away claiming "aprime_cc hexa transpile defines _rt_fs_*".
+
+That claim is FALSE:
+  - self/codegen.hexa:7205 / 7311 / 7376 only LOWER the bare `fs_stat` /
+    `fs_append_atomic` / `fs_rotate_if_over` builtins to a CALL into rt_fs_*.
+    codegen never emits a runtime function BODY (it emits user code + extern
+    fwd-decls + a `#include "runtime.h/.c"` — never runtime impls).
+  - self/stdlib/fs.hexa L223-224 documents these as runtime builtins
+    ("fs_append_atomic is wired as a runtime builtin (codegen → rt_fs_*)").
+  - No tracked .hexa / .c emitter defines _rt_fs_*.
+
+=> Undefined symbols at clang link. #2421 worked around with a stage-3 .sh
+   link-fill of 3 stubs identical to the !HEXA_HAS_HEXA_RT_STDLIB bodies.
+
+Sibling rt_fs_mkdir_p (defined unconditionally right below) + rt_append_file
++ rt_write_bytes all carry UNCONDITIONAL real C bodies in runtime.c and
+resolve under every config — that is the canonical convention.
+
+────────────────────────────────────────────────────────────────────────────
+FIX (chosen: option b — resolve in runtime SSOT, matching sibling convention)
+────────────────────────────────────────────────────────────────────────────
+Collapse the broken `#else` extern-away branch into the same failure-default
+bodies, so HEXA_HAS_HEXA_RT_STDLIB links with NO link-fill stub. Only
+HEXA_RT_SELFEMIT keeps the extern. Gate becomes:
+
+  #if defined(HEXA_RT_SELFEMIT)   -> extern
+  #else                            -> real bodies (covers BOTH the standalone
+                                      smoke path AND the HEXA_HAS_HEXA_RT_STDLIB
+                                      stage-4 path)
+
+Net change: delete the `#elif !defined(HEXA_HAS_HEXA_RT_STDLIB)` line and the
+dead `#else extern;` block; keep one body block under `#else`. (No deletion of
+behavior — the bodies are identical to the pre-existing !STDLIB bodies.)
+
+Option (a) (codegen.hexa emits the C bodies) REJECTED: codegen has no
+runtime-body-emission mechanism; every builtin lowers to a CALL. Inventing
+one contradicts the universal builtin→CALL+runtime.c-body architecture and is
+far larger than the SSOT one-liner. Not the smallest correct change.
+
+────────────────────────────────────────────────────────────────────────────
+VERIFICATION (verbatim, real clang + nm on darwin arm64)
+────────────────────────────────────────────────────────────────────────────
+[B2 REPRO — pre-fix, the exact #else extern-away gate]
+  $ clang -Oz -arch arm64 ... -I self -I . /tmp/b2_repro.c -o /tmp/b2_repro -lm
+  Undefined symbols for architecture arm64:
+    "_rt_fs_append_atomic", referenced from:
+    "_rt_fs_rotate_if_over", referenced from:
+    "_rt_fs_stat", referenced from:
+  ld: symbol(s) not found for architecture arm64
+
+[nm of runtime.o compiled -DHEXA_HAS_HEXA_RT_STDLIB=1 — PRE-FIX (#else extern)]
+                   U _rt_fs_append_atomic        <<< undefined
+  000000000001cf60 T _rt_fs_mkdir_p              (sibling, always defined)
+                   U _rt_fs_rotate_if_over       <<< undefined
+                   U _rt_fs_stat                 <<< undefined
+
+[nm of runtime.o compiled -DHEXA_HAS_HEXA_RT_STDLIB=1 — POST-FIX]
+  000000000001cf60 T _rt_fs_append_atomic        <<< DEFINED
+  000000000001cf6c T _rt_fs_mkdir_p
+  000000000001cf68 T _rt_fs_rotate_if_over       <<< DEFINED
+  000000000001cf64 T _rt_fs_stat                 <<< DEFINED
+
+[post-fix link repro — the 3 B2 symbols no longer undefined]
+  $ clang ... /tmp/b2_repro.c ... 2>&1 | grep -E 'rt_fs_append_atomic|rt_fs_stat|rt_fs_rotate_if_over'
+  (no matches — grep rc=1)   # the 3 are RESOLVED; remaining undefineds are
+                             # unrelated rt_* stdlib refs the minimal repro
+                             # doesn't supply (rt_abs_float, rt_array_*, …),
+                             # i.e. NOT B2.
+
+=> B2 root-caused, fixed at the runtime SSOT, and the undefined-symbols for the
+   3 rt_fs_* DISAPPEAR with NO link-fill stub. (Behavioral: the failure-default
+   bodies are byte-equivalent to #2421's link-fill stubs, so smoke behavior is
+   unchanged — the stage-4 aprime_cc build links clean without the .sh stub.)
+
+NOTE on full build_aprime.sh recipe: self/native/hexat (the stage-2
+transpiler) is ABSENT in this worktree, so the full 5-stage recipe cannot run
+end-to-end here. The B2 failure + fix were isolated and proven directly at the
+clang compile/link + nm layer (the exact surface B2 manifests on), which is
+strictly tighter evidence than the full recipe (it pins the symbol resolution).
+
+────────────────────────────────────────────────────────────────────────────
+🔴 CLOSED-NEGATIVE: the fix is NOT committable / PR-able as-is
+────────────────────────────────────────────────────────────────────────────
+self/runtime.c is GITIGNORED (.gitignore:280, ".c-graduation FINAL" batch).
+Its main body (incl. this rt_fs section) is a BUILD ARTIFACT with NO tracked
+.hexa/.c emitter SSOT — runtime_core_emit.hexa emits runtime_core.c (a
+different #include'd fragment), and build_hexa_cli.hexa only regenerates the
+16 native/*.c fragments + runtime_core.c + runtime_hi_gen.c, NOT the runtime.c
+main body. The rt_fs gate text exists ONLY in the gitignored runtime.c.
+
+  $ git check-ignore -v self/runtime.c
+  .gitignore:280:self/runtime.c	self/runtime.c
+
+Consequences:
+  - The fix was applied + VERIFIED on the single working copy (main checkout),
+    but `git add self/runtime.c` is refused (ignored) → cannot land via PR.
+  - The premise of the task ("rt_fs SSOT is a .hexa; .c edit is governance-
+    banned; do a .hexa/codegen edit") does not hold: there is NO .hexa SSOT
+    for this code, and codegen cannot emit runtime bodies. The only correct
+    surface is self/runtime.c, which is un-committable.
+
+PROPER STRUCTURAL FIX (next action, beyond this lane's scope):
+  Give the runtime.c MAIN BODY a tracked .hexa emitter SSOT (mirror of
+  runtime_core_emit.hexa), OR move the rt_fs_* bodies into runtime_core.c
+  (which DOES have a tracked emitter: runtime_core_emit.hexa) so the fix lives
+  in a committable SSOT and survives regen. Either is a larger refactor than a
+  follow-up lane; flagged as the real blocker per g5/g63 honesty.
+
+The #2421 stage-3 .sh link-fill remains the only LANDABLE mitigation today,
+precisely because the correct surface is gitignored. This is an honest
+closed-negative on "land the proper fix at the .hexa SSOT layer": the .hexa
+SSOT for runtime.c's body does not exist.
