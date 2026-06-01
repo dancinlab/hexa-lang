@@ -37,6 +37,7 @@
 //   output_dir      — remote training output dir (default "out")
 
 import "stdlib/dojo/llm.hexa"
+import "stdlib/dojo/clm.hexa"
 
 // ── data types ───────────────────────────────────────────────────────
 
@@ -121,6 +122,7 @@ pub fn lang_keep(lang: string, kind: string) -> bool {
 // (no name hardcoding past this dispatch — g20).
 pub fn gen_dojo(domain: string, slug: string, spec: DojoSpec, lang: string) -> [DojoFile] {
     if domain == "llm" { return emit_llm(slug, spec, lang) }
+    if domain == "clm" { return emit_clm(slug, spec, lang) }
     // d6 honest stub: vision / rl / tabular have NO emitter yet. The CLI
     // surfaces these via dojo_domains()/dojo_is_stub() and exits with a
     // clear TODO rather than pretending a full emit.
@@ -131,7 +133,7 @@ pub fn gen_dojo(domain: string, slug: string, spec: DojoSpec, lang: string) -> [
 // dojo_domains() — known dojo domains (full + stub). Single source for
 // the `dojo domains` CLI listing.
 pub fn dojo_domains() -> [string] {
-    return ["llm", "vision", "rl", "tabular"]
+    return ["llm", "clm", "vision", "rl", "tabular"]
 }
 
 // dojo_is_stub(domain) — true for a registered-but-unimplemented domain
