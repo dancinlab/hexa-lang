@@ -561,5 +561,25 @@ fn main() {
         _dft_endpoint_resolved(_dft_state_field(gdeck, "host"), _dft_state_field(gdeck, "port")), 1)
     let _grm = exec("rm -rf '" + gdeck + "'")
 
+    // ── fix (a): DIRECT→PROXY upload-fallback transport selection ─────────
+    // _dft_pick_transport is the PURE classifier the live _dft_upload mirrors:
+    // direct scp wins first; on a direct FAIL it falls back to the proxy iff the
+    // proxy endpoint resolved AND the proxy scp passed; otherwise FAIL ("").
+    // This is the inbox dft-run-direct-endpoint-scp255 (a) decision surface — a
+    // proxy-only offer (direct scp 255, proxy scp OK) now uploads via the proxy
+    // instead of tearing the pod down with no recovery path.
+    _check("fix-a: direct scp OK → via=direct (proxy never consulted)",
+        _seq(_dft_pick_transport(1, 0, 0), "direct"), 1)
+    _check("fix-a: direct scp OK wins even if proxy would too",
+        _seq(_dft_pick_transport(1, 1, 1), "direct"), 1)
+    _check("fix-a: direct FAIL + proxy resolved + proxy scp OK → via=proxy (the scp-255 recovery)",
+        _seq(_dft_pick_transport(0, 1, 1), "proxy"), 1)
+    _check("fix-a: direct FAIL + proxy UNRESOLVED → FAIL (no transport)",
+        _seq(_dft_pick_transport(0, 0, 0), ""), 1)
+    _check("fix-a: direct FAIL + proxy resolved but proxy scp FAIL → FAIL",
+        _seq(_dft_pick_transport(0, 1, 0), ""), 1)
+    _check("fix-a: direct FAIL + proxy scp OK but UNRESOLVED guard → FAIL (resolved gate)",
+        _seq(_dft_pick_transport(0, 0, 1), ""), 1)
+
     println("dft_dispatch_test PASS")
 }
