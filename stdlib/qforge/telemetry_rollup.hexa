@@ -1,0 +1,333 @@
+// telemetry_rollup.hexa — QFORGE-PROCESS campaign-wide telemetry rollup.
+//
+// emit (#2474) → analyze (#2477 telemetry_report) → regress (#2483) cover a
+// SINGLE deck's `.dft_telemetry.jsonl`. This module is the CAMPAIGN tier:
+// ingest MANY decks' telemetry at once → a cross-deck bottleneck dashboard
+// answering two questions a per-deck report cannot:
+//
+//   (1) which STAGE CLASS (scf vs ph vs relax vs lambda) dominates the
+//       campaign-wide wall — sum each stage class across ALL decks; and
+//   (2) which DECK is slowest — sum each deck's wall, rank decks.
+//
+// d3/d19 REUSE: per deck we call qforge_telemetry_report (#2477) verbatim —
+// the line parser, the 6-key guard, the rss-null passthrough, the wall sum all
+// live there. This module ONLY aggregates the resulting per-deck Reports; it
+// does NOT re-parse JSONL itself and does NOT edit telemetry_report/regress.
+//
+// @L3 READ-only PURE function over a LIST of (deck_name, jsonl_text) — no pod
+// ops, no source mutation, no I/O. A deck whose telemetry is malformed/empty
+// (qforge_telemetry_report yields 0 stages AND 0 total wall) is SKIPPED and
+// COUNTED (skipped_decks), never crashes the rollup.
+//
+// d6 HONESTY: rss is aggregated (summed) ONLY across cells that carried a real
+// measured rss (has_rss); a stage class / deck with NO measured rss anywhere
+// passes through as `null`, never a fabricated 0.
+
+use "stdlib/qforge/telemetry_report"
+
+// ── stage-CLASS rollup row ────────────────────────────────────────────────
+// A telemetry stage label is `relax` · `scf` · `ph:q1`..`ph:qN` · `lambda`.
+// The campaign view collapses the per-q ph stages into a single `ph` CLASS so
+// "phonon dominates" reads at a glance. _tr_class() does the collapse.
+//   stage_class — relax · scf · ph · lambda · (other → verbatim)
+//   wall_s      — summed wall over this class across ALL decks (s)
+//   rss_kb      — summed peak_rss over class·deck cells that HAD a real rss
+//   has_rss     — false when NO cell in this class carried a measured rss
+//                 (null passthrough — render `null`, never 0)
+//   pct         — integer %-of-campaign-wall
+//   dominant    — true for the single max-wall stage class
+struct StageClassRow {
+    stage_class: str,
+    wall_s: int,
+    rss_kb: int,
+    has_rss: bool,
+    pct: int,
+    dominant: bool,
+}
+
+// ── per-DECK rollup row ───────────────────────────────────────────────────
+//   deck     — the deck name as supplied by the caller
+//   wall_s   — this deck's total wall (= its Report.total_wall) (s)
+//   rss_kb   — summed peak_rss over this deck's stages that HAD a real rss
+//   has_rss  — false when NO stage in this deck carried a measured rss
+//   n_stages — distinct paired stages in this deck
+//   pct      — integer %-of-campaign-wall
+//   slowest  — true for the single max-wall deck
+struct DeckRow {
+    deck: str,
+    wall_s: int,
+    rss_kb: int,
+    has_rss: bool,
+    n_stages: int,
+    pct: int,
+    slowest: bool,
+}
+
+// ── the campaign rollup report ────────────────────────────────────────────
+//   stage_rows   — StageClassRow[] ranked by wall_s DESC (dominant first)
+//   deck_rows    — DeckRow[]       ranked by wall_s DESC (slowest first)
+//   grand_wall   — campaign-wide total wall over ALL ingested decks (s)
+//   n_decks      — decks successfully ingested (≥1 paired stage)
+//   skipped_decks — decks SKIPPED (malformed/empty telemetry — 0 stage 0 wall)
+struct RollupReport {
+    stage_rows: [StageClassRow],
+    deck_rows: [DeckRow],
+    grand_wall: int,
+    n_decks: int,
+    skipped_decks: int,
+}
+
+// ── internal: collapse a per-q stage label into its campaign CLASS ─────────
+// `ph:q1`..`ph:qN` → `ph`; everything else passes through verbatim (relax ·
+// scf · lambda · any future label). Split on ':' and keep the head.
+fn _trr_class(stage: str) -> str {
+    let parts = stage.split(":")
+    return parts[0]
+}
+
+// ── internal: index of a key in a parallel-array accumulator, or -1 ────────
+fn _trr_find(keys: [str], k: str) -> int {
+    let mut i = 0
+    while i < len(keys) {
+        if keys[i] == k { return i }
+        i = i + 1
+    }
+    return -1
+}
+
+// qforge_telemetry_rollup — ingest a LIST of (deck_name, jsonl_text) →
+// campaign-wide RollupReport. Per deck we run qforge_telemetry_report (#2477,
+// d3/d19 reuse) to get its ranked per-stage Report, then aggregate:
+//   • stage-CLASS rollup: Σ wall per collapsed class (ph:qN → ph) across decks,
+//     ranked wall DESC, %-of-campaign, single max flagged dominant;
+//   • per-DECK rollup: each deck's total wall, ranked DESC, single max slowest;
+//   • grand total wall.
+// A deck whose Report has 0 stages AND 0 wall (malformed/empty) is SKIPPED +
+// counted in skipped_decks — never crashes, never a phantom row.
+pub fn qforge_telemetry_rollup(decks: [(str, str)]) -> RollupReport {
+    // stage-class accumulators (parallel arrays keyed by class label)
+    let mut sc_keys = []
+    let mut sc_wall = []
+    let mut sc_rss = []
+    let mut sc_has_rss = []
+
+    // per-deck accumulators
+    let mut deck_names = []
+    let mut deck_wall = []
+    let mut deck_rss = []
+    let mut deck_has_rss = []
+    let mut deck_nstage = []
+
+    let mut grand = 0
+    let mut skipped = 0
+
+    let mut di = 0
+    while di < len(decks) {
+        let pair = decks[di]
+        di = di + 1
+        let name = pair.0
+        let jsonl = pair.1
+
+        // d3/d19: reuse the #2477 per-deck analyzer verbatim (parse · guard ·
+        // wall sum · rss-null passthrough all happen INSIDE this call).
+        let rep = qforge_telemetry_report(jsonl)
+
+        // @L2 SKIP a deck with no usable telemetry (malformed/empty): 0 stages
+        // AND 0 wall → count, no crash, no phantom row.
+        if rep.n_stages == 0 && rep.total_wall == 0 {
+            skipped = skipped + 1
+            continue
+        }
+
+        // ── per-deck row accumulation ────────────────────────────────────
+        let mut deck_r = 0
+        let mut deck_hr = false
+        let mut ri = 0
+        while ri < len(rep.rows) {
+            let row = rep.rows[ri]
+            ri = ri + 1
+            // d6: only a stage that carried a real rss contributes to the sum
+            if row.has_rss {
+                deck_r = deck_r + row.peak_rss
+                deck_hr = true
+            }
+
+            // ── stage-CLASS accumulation (collapse ph:qN → ph) ───────────
+            let cls = _trr_class(row.stage)
+            let mut ci = _trr_find(sc_keys, cls)
+            if ci < 0 {
+                sc_keys.push(cls)
+                sc_wall.push(0)
+                sc_rss.push(0)
+                sc_has_rss.push(false)
+                ci = len(sc_keys) - 1
+            }
+            sc_wall[ci] = sc_wall[ci] + row.wall_s
+            if row.has_rss {
+                sc_rss[ci] = sc_rss[ci] + row.peak_rss
+                sc_has_rss[ci] = true
+            }
+        }
+
+        deck_names.push(name)
+        deck_wall.push(rep.total_wall)
+        deck_rss.push(deck_r)
+        deck_has_rss.push(deck_hr)
+        deck_nstage.push(rep.n_stages)
+        grand = grand + rep.total_wall
+    }
+
+    // ── rank stage classes by wall DESC (small N: relax·scf·ph·lambda) ────
+    let mut sc_order = []
+    let mut so = 0
+    while so < len(sc_keys) { sc_order.push(so); so = so + 1 }
+    let mut sa = 0
+    while sa < len(sc_order) {
+        let mut best = sa
+        let mut sb = sa + 1
+        while sb < len(sc_order) {
+            if sc_wall[sc_order[sb]] > sc_wall[sc_order[best]] { best = sb }
+            sb = sb + 1
+        }
+        if best != sa {
+            let tmp = sc_order[sa]
+            sc_order[sa] = sc_order[best]
+            sc_order[best] = tmp
+        }
+        sa = sa + 1
+    }
+    let mut stage_rows = []
+    let mut sri = 0
+    while sri < len(sc_order) {
+        let s = sc_order[sri]
+        let mut pct = 0
+        if grand > 0 { pct = 100 * sc_wall[s] / grand }
+        let row = StageClassRow {
+            stage_class: sc_keys[s],
+            wall_s: sc_wall[s],
+            rss_kb: sc_rss[s],
+            has_rss: sc_has_rss[s],
+            pct: pct,
+            dominant: sri == 0 && len(sc_order) > 0 && sc_wall[s] > 0,
+        }
+        stage_rows.push(row)
+        sri = sri + 1
+    }
+
+    // ── rank decks by wall DESC ───────────────────────────────────────────
+    let mut dk_order = []
+    let mut dko = 0
+    while dko < len(deck_names) { dk_order.push(dko); dko = dko + 1 }
+    let mut da = 0
+    while da < len(dk_order) {
+        let mut best = da
+        let mut db = da + 1
+        while db < len(dk_order) {
+            if deck_wall[dk_order[db]] > deck_wall[dk_order[best]] { best = db }
+            db = db + 1
+        }
+        if best != da {
+            let tmp = dk_order[da]
+            dk_order[da] = dk_order[best]
+            dk_order[best] = tmp
+        }
+        da = da + 1
+    }
+    let mut deck_rows = []
+    let mut dri = 0
+    while dri < len(dk_order) {
+        let d = dk_order[dri]
+        let mut pct = 0
+        if grand > 0 { pct = 100 * deck_wall[d] / grand }
+        let row = DeckRow {
+            deck: deck_names[d],
+            wall_s: deck_wall[d],
+            rss_kb: deck_rss[d],
+            has_rss: deck_has_rss[d],
+            n_stages: deck_nstage[d],
+            pct: pct,
+            slowest: dri == 0 && len(dk_order) > 0 && deck_wall[d] > 0,
+        }
+        deck_rows.push(row)
+        dri = dri + 1
+    }
+
+    return RollupReport {
+        stage_rows: stage_rows,
+        deck_rows: deck_rows,
+        grand_wall: grand,
+        n_decks: len(deck_names),
+        skipped_decks: skipped,
+    }
+}
+
+// ── internal: rss cell as a render string (`null` passthrough, d6) ─────────
+fn _trr_rss_sc(row: StageClassRow) -> str {
+    if !row.has_rss { return "null" }
+    return to_string(row.rss_kb)
+}
+fn _trr_rss_dk(row: DeckRow) -> str {
+    if !row.has_rss { return "null" }
+    return to_string(row.rss_kb)
+}
+
+// ── internal: self-contained fixed-width pad (no external string dep) ──────
+fn _trr_padr(s: str, w: int) -> str {
+    let mut out = s
+    let mut n = len(s)
+    while n < w { out = out + " " ; n = n + 1 }
+    return out
+}
+fn _trr_padl(s: str, w: int) -> str {
+    let mut pad = ""
+    let mut n = len(s)
+    while n < w { pad = pad + " " ; n = n + 1 }
+    return pad + s
+}
+
+// qforge_telemetry_rollup_render — two ranked fixed-width tables: (1) the
+// stage-CLASS rollup (dominant flagged) and (2) the per-DECK rollup (slowest
+// flagged), plus the grand total. Pure (no I/O); the caller prints. rss cells
+// render the literal `null` when no contributing cell carried a measured rss.
+pub fn qforge_telemetry_rollup_render(rep: RollupReport) -> str {
+    let mut out = "QFORGE-PROCESS campaign telemetry rollup\n"
+
+    // (1) stage-class rollup
+    out = out + "\n[1] stage-class rollup (which stage dominates campaign wall)\n"
+    out = out + "stage_class  wall_s   %camp  sum_rss_kb\n"
+    out = out + "-----------  -------  -----  ----------\n"
+    let mut i = 0
+    while i < len(rep.stage_rows) {
+        let r = rep.stage_rows[i]
+        let mut line = _trr_padr(r.stage_class, 11) + "  "
+        line = line + _trr_padl(to_string(r.wall_s), 7) + "  "
+        line = line + _trr_padl(to_string(r.pct) + "%", 5) + "  "
+        line = line + _trr_padl(_trr_rss_sc(r), 10)
+        if r.dominant { line = line + "  ◄ dominant" }
+        out = out + line + "\n"
+        i = i + 1
+    }
+
+    // (2) per-deck rollup
+    out = out + "\n[2] per-deck rollup (which deck is slowest)\n"
+    out = out + "deck         wall_s   %camp  stages  sum_rss_kb\n"
+    out = out + "-----------  -------  -----  ------  ----------\n"
+    let mut j = 0
+    while j < len(rep.deck_rows) {
+        let r = rep.deck_rows[j]
+        let mut line = _trr_padr(r.deck, 11) + "  "
+        line = line + _trr_padl(to_string(r.wall_s), 7) + "  "
+        line = line + _trr_padl(to_string(r.pct) + "%", 5) + "  "
+        line = line + _trr_padl(to_string(r.n_stages), 6) + "  "
+        line = line + _trr_padl(_trr_rss_dk(r), 10)
+        if r.slowest { line = line + "  ◄ slowest" }
+        out = out + line + "\n"
+        j = j + 1
+    }
+
+    out = out + "-----------  -------  -----  ------  ----------\n"
+    out = out + "grand wall_s=" + to_string(rep.grand_wall)
+    out = out + "  decks=" + to_string(rep.n_decks)
+    out = out + "  skipped=" + to_string(rep.skipped_decks) + "\n"
+    return out
+}
