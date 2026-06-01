@@ -103,3 +103,20 @@ baseline grounding(4/4 hot loop) 위에, 측정 baseline + memory-bound roofline
 - terminal 분류 (g63 정직): closed 9 (5 closed-form + 4 grounded 분모) · GATED 12
   (GPU pod 전부 STOPPING · stdlib/qforge edit 타 에이전트 소유 · 🧠 ML 학습 infra) —
   각 blocker + unblock trigger 명시. = docs-only 도메인에서 가능한 100% closure.
+
+## 2026-06-01 — Lanczos vs Davidson closed-MEASURED (docs-only bench)
+
+GATED-IMPL 항목 중 docs-only bench-driver 로 실측 가능한 것을 닫음 — "Lanczos vs
+Davidson 비교" (🧮 LANE B · ⚪speculative).
+
+- driver: bench/qforge/lanczos_vs_davidson.hexa — 대칭 Lanczos(full-reorth) 를 bench 에
+  구현, 엔진 qforge_davidson 을 read-only 호출, davidson_core 와 동일 결정론 행렬(n=256).
+- 측정: 두 솔버 λ₀=1.86294 로 **1e-8 일치** (equal-accuracy gate 통과 → iter Δ 유의미).
+  동일 정확도에서 Lanczos 75 matvec vs Davidson 11 preconditioned iter.
+- closure: Lanczos 는 이 well-separated spectrum 에서 matvec 이점 없음 — 대각
+  preconditioned Davidson 이 압도. **Davidson 유지** (swap-in 불필요). 🟢 verdict 박제.
+- 보드: Lanczos `- [x]` flip + verdict ptr · closure-status 갱신 (closed 6 · GATED-IMPL
+  5 · 합 21 terminal) · bench.md §8b 신설.
+- 남은 GATED-IMPL (5): EPW-Wannier(연구급) · CheFSI(SCF-context Ritz bound 필요) ·
+  DIIS-mixing(SCF loop 필요) · randomized(lowest-eig 비표준) · adaptive-q(el-ph 파이프
+  필요) — 각 honest blocker. GATED-GPU 4 + GATED-RESEARCH 6 동일.

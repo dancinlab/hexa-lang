@@ -213,9 +213,26 @@ speculative question of "what can this lever achieve."
 ```
 21 backlog items → terminal
 ├─ ✅ closed-form CLOSED (🟢)   5   §8 verdicts
+├─ ✅ closed-measured (🟢)      1   Lanczos vs Davidson (§8b)
 ├─ 📊 measured-grounded         4   §2/§7 denominators (GPU-Δ pending → GATED-GPU)
-└─ ⛔ GATED (blocker named)    12   GPU pod · engine edit · ML infra (see board ## closure status)
+└─ ⛔ GATED (blocker named)    11   GPU pod · engine edit · ML infra (see board ## closure status)
 ```
 
 This is the 100% closure achievable from a docs-only domain: every item is grounded,
 closed, or gated-with-an-explicit-blocker — none is an unscoped proposal.
+
+### 8b. Lanczos vs Davidson — measured comparison (closes a Lane-B item)
+
+A symmetric Lanczos lowest-eigenvalue solver (full reorthogonalization) implemented
+in `bench/qforge/lanczos_vs_davidson.hexa` (docs-only — reads the engine's Davidson
+read-only) runs on the **same** deterministic matrix as `davidson_core` (n=256):
+
+| solver | λ₀ | work to converge (tol 1e-8) |
+|---|---|---|
+| engine Davidson (diag-preconditioned) | 1.86294 | **11 iters** |
+| bench Lanczos (no preconditioner) | 1.86294 | **75 matvecs** |
+
+`|Δλ₀| = 1.0e-8` (equal-accuracy gate passed → the iter Δ is meaningful). At equal
+accuracy Lanczos offers **no matvec-count advantage** — Davidson's diagonal
+preconditioner dominates on this well-separated spectrum. Closure: **Davidson stays**;
+Lanczos is not worth swapping in. Verdict `lanczos-vs-davidson.txt` (🟢).

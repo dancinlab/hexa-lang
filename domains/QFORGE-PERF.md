@@ -2,7 +2,7 @@
 
 @title: 🚀 QFORGE-PERF — "큐포지 가속기" (QFORGE el-ph accelerator backlog)
 
-@goal: hexa-native QFORGE el-ph 엔진(stdlib/qforge · SCF·DFPT·λ·Tc · g5 cross-val vs QE ref, d_qforge_engine)을 **두 개의 벽** 너머로 가속한다 — (1) **하드웨어 벽**: QE ph.x 의 no-GPU DFPT 한계(29-pod CPU teardown 의 원인) · (2) **알고리즘 벽**: O(N³) 대각화 + dense per-q DFPT 의 본질적 스케일링. 세 LANE(⚡hardware · 🧮algorithmic · 🧠paradigm)로 정렬. **각 아이디어는 PROPOSAL** — 실 `hexa bench` roofline + Δ-vs-baseline 으로 닫기 전에는 ⚡/🧮 closed 아님 (g6/g63 정직 scope). **21/21 백로그 항목이 terminal** (`## closure status`): 5 항목 closed-form CLOSED (verdict 박제 · SIMD-INERT 🔴 / mixedprec-2× / multigrid-fav / symmetry-48 / threading-10) · 4 항목 측정-grounded (분모 박제 · [[QFORGE-PERF.bench]] §2/§7) · 12 항목 GATED (GPU pod / 엔진 edit / ML infra 외부 의존 명시). docs-only 도메인에서 가능한 100% closure.
+@goal: hexa-native QFORGE el-ph 엔진(stdlib/qforge · SCF·DFPT·λ·Tc · g5 cross-val vs QE ref, d_qforge_engine)을 **두 개의 벽** 너머로 가속한다 — (1) **하드웨어 벽**: QE ph.x 의 no-GPU DFPT 한계(29-pod CPU teardown 의 원인) · (2) **알고리즘 벽**: O(N³) 대각화 + dense per-q DFPT 의 본질적 스케일링. 세 LANE(⚡hardware · 🧮algorithmic · 🧠paradigm)로 정렬. **각 아이디어는 PROPOSAL** — 실 `hexa bench` roofline + Δ-vs-baseline 으로 닫기 전에는 ⚡/🧮 closed 아님 (g6/g63 정직 scope). **21/21 백로그 항목이 terminal** (`## closure status`): 6 항목 CLOSED — 5 closed-form (SIMD-INERT 🔴 / mixedprec-2× / multigrid-fav / symmetry-48 / threading-10) + 1 measured (Lanczos vs Davidson · docs-only bench) · 4 항목 측정-grounded (분모 박제 · [[QFORGE-PERF.bench]] §2/§7) · 11 항목 GATED (GPU pod / 엔진 edit / ML infra 외부 의존 명시). docs-only 도메인에서 가능한 100% closure.
 
 ## baseline — measured anchor (2026-06-01 · [[QFORGE-PERF.bench]])
 
@@ -83,7 +83,7 @@ seed-from-zero 매 candidate       →    MLIP/Δ-ML pre-screen + transfer acros
 - [ ] **better SCF preconditioner + mixing** 🧮algorithmic 🟢bench-needed — linear mixing → Pulay/Broyden DIIS(arxiv 1803.01763) + Teter-Payne-Allan(TPA) kinetic-energy preconditioner. metal/small-gap(d15 smear 영역)에서 SCF iter-count 직접 절감. falsifier: SCF iter-count Δ ∧ 수렴값 불변.
 - [x] **k/q symmetry reduction + Γ-only fast path** 🧮algorithmic 🟢bench-needed ✅CLOSED-FORM — irreducible BZ wedge 는 **정확** (λ=Σ_q w_q λ_q 가 star-sum 복원에 불변 · 근사 아님). q-count 천장 = 결정 점군 위수: LaH10(Fm-3m)·CaH6(Im-3m) 입방정 Oh → **|G|=48×** (Γ-only → q-count=1). **verdict: `.verdicts/qforge-perf-roofline/symmetry-48.txt` (🟢)**.
 - [ ] **randomized / sketched eigensolver** 🧮algorithmic ⚪speculative — 큰 eigenproblem 에 randomized Rayleigh-Ritz / sketched-GMRES (arxiv 2111.00113). falsifier: 고유값 정확도 == 고전 ∧ wall/storage Δ.
-- [ ] **Lanczos vs Davidson 비교** 🧮algorithmic ⚪speculative — Davidson 대안으로 Lanczos/block-Lanczos subspace. falsifier: 수렴 iter Δ at equal accuracy.
+- [x] **Lanczos vs Davidson 비교** 🧮algorithmic ⚪speculative ✅CLOSED-MEASURED — docs-only bench 에 대칭 Lanczos(full-reorth) 구현 → 엔진 Davidson 과 동일 행렬에서 λ₀ **1e-8 일치**. 동일 정확도에서 Lanczos 75 matvec vs Davidson 11 preconditioned iter → **Lanczos matvec 이점 없음, Davidson 유지**. **verdict: `.verdicts/qforge-perf-roofline/lanczos-vs-davidson.txt` (🟢)** · driver `bench/qforge/lanczos_vs_davidson.hexa`.
 - [ ] **adaptive q-grid sampling** 🧮algorithmic ⚪speculative — α²F(ω) 기여 큰 q 영역 적응 조밀화, flat 영역 coarse. falsifier: λ tol 일치 at 더 적은 총 q.
 - [x] **real-space multigrid vs G-space Poisson** 🧮algorithmic ⚪speculative ✅CLOSED-FORM — multigrid V-cycle O(N) 가 **측정된** FFT-Poisson wall ~O(N^2.1) (bench §7a: nz 4×→~19×) 대비 scaling-favorable (ideal FFT O(N log N) 대비도 log N 우위). **verdict: `.verdicts/qforge-perf-roofline/multigrid-fav.txt` (🟢)**.
 
@@ -125,17 +125,19 @@ terminal 상태       건수   항목
 ─────────────────   ────   ─────────────────────────────────────────────────────
 ✅ closed-form (🟢)   5    SIMD-INERT(🔴neg) · mixedprec-2× · multigrid-fav ·
                             symmetry-48 · threading-10  (verdicts 박제)
+✅ closed-measured    1    Lanczos vs Davidson (docs-only bench · λ₀ 1e-8 일치 ·
+                            75 vs 11 iter → Davidson 유지 · 🟢 verdict 박제)
 📊 grounded (분모)    4    H_apply 0.140 GFLOP/s · FFT/Davidson/Sternheimer wall
                             (bench §2/§7 — speedup 비율의 분모, GPU-Δ 게시 시 close)
 ⛔ GATED-GPU         4    H_apply/Davidson/Sternheimer/cuFFT GPU-GEMM
                             → blocker: GPU pod (전부 STOPPING) · trigger: pod READY
-⛔ GATED-IMPL        6    EPW-Wannier · CheFSI · DIIS-mixing · randomized · Lanczos ·
-                            adaptive-q → blocker: stdlib/qforge edit (타 에이전트 소유) ·
-                            trigger: 엔진 owner 가 구현 OR docs-only bench-driver 구현
+⛔ GATED-IMPL        5    EPW-Wannier · CheFSI · DIIS-mixing · randomized · adaptive-q
+                            → blocker: SCF-context Ritz bound / 연구급 구현 ·
+                            trigger: docs-only bench-driver OR 엔진 owner 구현
 ⛔ GATED-RESEARCH    6    🧠 LANE C 전부 → blocker: ML 학습 infra + GPU + 연구 ·
                             trigger: 별도 ML 도메인 (CLM-KOSMOS 류)
 ─────────────────   ────
-합계                21    (= 5 closed + 4 grounded + 12 gated · 0 ambiguous)
+합계                21    (= 6 closed + 4 grounded + 11 gated · 0 ambiguous)
 ```
 
 > grounded 4 는 `🟢bench-needed` ⚡ 항목 — 분모는 측정됐고(close 의 절반), 실 GPU-Δ
@@ -144,4 +146,4 @@ terminal 상태       건수   항목
 
 ## scope — 정직 (g6/g63)
 
-각 항목의 closure 근거는 `## closure status` 가 SSOT 다. **closed (9):** 5 closed-form (`.verdicts/qforge-perf-roofline/` — SIMD-INERT 🔴 · mixedprec-2× · multigrid-fav · symmetry-48 · threading-10, 전부 🟢) + 4 측정-grounded 분모 (H_apply 0.140 GFLOP/s · FFT/Davidson/Sternheimer per-call wall · roofline 천장 fp64 139.88 / fp32 279.76 GFLOP/s · 🟢 MEMORY-BOUND verdict · [[QFORGE-PERF.bench]] §2/§3/§7). **GATED (12):** GPU pod(전부 STOPPING) / stdlib/qforge edit(타 에이전트 소유) / ML 학습 infra 외부 의존 — blocker + unblock trigger 가 closure-status 에 명시됨. GATED ⚡항목은 자기 GPU `hexa bench` Δ-vs-분모 를 게시할 때 closed-grounded → closed-measured 로 승격. cross-val gate(d_qforge_engine): QFORGE vs QE λ·Tc 가 LaH10·CaH6·Li2MgH16 에서 g5-일치할 때 full migration. NOVEL kick probe(2026-06-01) verdict = skip(⚪ unverified proposals — g63 정직, fold 된 atom 없음).
+각 항목의 closure 근거는 `## closure status` 가 SSOT 다. **closed (10):** 5 closed-form + 1 measured (Lanczos · `.verdicts/qforge-perf-roofline/` — SIMD-INERT 🔴 · mixedprec-2× · multigrid-fav · symmetry-48 · threading-10 · lanczos-vs-davidson, 전부 🟢) + 4 측정-grounded 분모 (H_apply 0.140 GFLOP/s · FFT/Davidson/Sternheimer per-call wall · roofline 천장 fp64 139.88 / fp32 279.76 GFLOP/s · 🟢 MEMORY-BOUND verdict · [[QFORGE-PERF.bench]] §2/§3/§7). **GATED (11):** GPU pod(전부 STOPPING) / stdlib/qforge edit(타 에이전트 소유) / ML 학습 infra 외부 의존 — blocker + unblock trigger 가 closure-status 에 명시됨. GATED ⚡항목은 자기 GPU `hexa bench` Δ-vs-분모 를 게시할 때 closed-grounded → closed-measured 로 승격. cross-val gate(d_qforge_engine): QFORGE vs QE λ·Tc 가 LaH10·CaH6·Li2MgH16 에서 g5-일치할 때 full migration. NOVEL kick probe(2026-06-01) verdict = skip(⚪ unverified proposals — g63 정직, fold 된 atom 없음).
