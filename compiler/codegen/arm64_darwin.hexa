@@ -1374,15 +1374,30 @@ fn _builtin_runtime_sym(name: string) -> string {
     // keys-method→hexa_map_keys) and is VERIFIED present in self/runtime.c.
     // `keys` lowers as a method STMT_CALL with the receiver as first arg
     // (cf. `find` → hexa_find_poly).
-    // DEFERRED (mis-mapped is worse than unmapped — this file's policy):
-    // `get`/`set` need the key hexa_to_cstring'd (map ABI takes const char*),
-    // `mkdir` collides with libc mkdir, `byte_at` resolves via cg_string_sym
-    // (rt_*_v vs hexa_* ambiguous), `sha256_hex` target unconfirmed.
     if name == "byte_len"      { return "hexa_byte_len" }
     if name == "bytes_to_str_raw" { return "hexa_bytes_to_str_raw" }
     if name == "list_dir"      { return "hexa_list_dir" }
     if name == "mono_ns"       { return "hexa_mono_ns" }
     if name == "keys"          { return "hexa_map_keys" }
+    // N5-sym class-B2: the map-method `get`/`set` and the string `byte_at`
+    // also fell through to bare names. Their AUTHORITATIVE targets are the
+    // ones self/codegen.hexa's method-lowering emits, NOT the cstr_v ABI:
+    //   get  → hexa_map_get  (codegen.hexa:4282 — "handles both int and
+    //   set  → hexa_map_set   string keys via the HexaVal tag"; __map_*_cstr_v
+    //                          is the STRING-key-only form for the explicit
+    //                          `__map_get_cstr_v()` call, so mapping the method
+    //                          there would miscompile int-keyed maps)
+    //   byte_at → hexa_str_byte_at  (cg_string_sym:66, single branch — no
+    //                                rt_*_v ambiguity after all)
+    // All three targets VERIFIED present in the runtime, and the obj already
+    // references _hexa_map_get/_hexa_map_set/_hexa_str_byte_at from other
+    // (correctly-lowered) call sites — so this collapses the bare refs onto
+    // already-resolved symbols (zero new symbols, zero miscompile risk).
+    // STILL DEFERRED (unmapped-is-safer): `mkdir` collides with libc mkdir
+    // (needs a hexa_mkdir wrapper), `sha256_hex` target unconfirmed.
+    if name == "get"           { return "hexa_map_get" }
+    if name == "set"           { return "hexa_map_set" }
+    if name == "byte_at"       { return "hexa_str_byte_at" }
     // Low-level memory / pointer builtins — name -> runtime symbol.
     // Authoritative mapping mirrored from self/codegen_c2.hexa §G5/B3.
     // All take/return HexaVal pairs so the generic STMT_CALL emit path
