@@ -1400,16 +1400,16 @@ fn _builtin_runtime_sym(name: string) -> string {
     if name == "float_to_bits" { return "hexa_float_to_bits" }
     if name == "bits_to_float" { return "hexa_bits_to_float" }
     if name == "sha256_hex"    { return "hexa_sha256" }
-    // STILL DEFERRED (unmapped-is-safer-than-mis-mapped — this file's policy):
-    // `get`/`set` map-methods CANNOT be a bare rename: the runtime ABI is
-    // hexa_map_get(HexaVal m, const char* key) — the key is a C STRING, and
-    // the C-path emits hexa_map_get(m, hexa_to_cstring(k)) to coerce it. A
-    // bare rename would pass the raw HexaVal key where a const char* is
-    // expected → links clean but miscompiles at runtime (HexaVal bits read as
-    // a pointer). Needs a dedicated lowering that wraps the key in
-    // hexa_to_cstring (cf. the index_of branch), deferred to its own change.
-    // `mkdir` collides with libc mkdir (needs a hexa_mkdir wrapper),
-    // `sha256_hex` target unconfirmed.
+    // N5-sym pt7: get/set → HexaVal-keyed wrappers (runtime_core_emit.hexa adds
+    // hexa_map_get_v/set_v applying hexa_to_cstring INTERNALLY — byte-eq with the
+    // C-path hexa_map_get(m, hexa_to_cstring(k)); NOT __map_*_cstr_v/HX_STR).
+    if name == "get"           { return "hexa_map_get_v" }
+    if name == "set"           { return "hexa_map_set_v" }
+    // N5-sym pt8: mkdir → hexa_mkdir runtime wrapper (byte-eq w/ C-path inline
+    // hexa_bool(mkdir(HX_STR(p),0755)==0)); bare mkdir collides with libc mkdir.
+    if name == "mkdir"         { return "hexa_mkdir" }
+    // STILL DEFERRED: `__arr_alloc_items_zero{,_int}` — governance-blocked (the
+    // fix needs a s4_flatc_post.py edit, but this repo bans .py authoring).
     // Low-level memory / pointer builtins — name -> runtime symbol.
     // Authoritative mapping mirrored from self/codegen_c2.hexa §G5/B3.
     // All take/return HexaVal pairs so the generic STMT_CALL emit path
