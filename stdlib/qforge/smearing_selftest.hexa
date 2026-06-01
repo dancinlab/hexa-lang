@@ -1,0 +1,98 @@
+// @ci_gate — deterministic · pure analytic anchors
+//
+// qforge_smearing_selftest.hexa — QFORGE M5.8① (Fermi-Dirac smearing) g5 gate.
+//
+// smearing.hexa supplies fractional Fermi-Dirac occupations + an E_F-by-bisection
+// solver so a METAL's bands straddling E_F occupy CONTINUOUSLY (no integer swap →
+// no charge-sloshing). Analytic anchors (d6 — every number derivable, none tuned):
+//
+//   (A) f(E_F) = ½ EXACTLY (the defining symmetry of Fermi-Dirac at the level).  🔵
+//   (B) σ→0 STEP limit: f(ε<E_F)=1, f(ε>E_F)=0 — recovers the integer fill.     🔵
+//   (C) CHARGE CONSERVATION: the bisection E_F makes Σ spin·f(ε_k) == nelec to
+//       tol on a non-trivial (metallic-like) spectrum — the load-bearing solve.  🟢
+//   (D) INSULATOR / INTEGER RECOVERY: a large-gap spectrum with small σ → the
+//       fractional occupations equal the closed-shell integer fill (2,2,…,0) AND
+//       E_F lands inside the gap (the no-regression property M5.8 leans on).     🟢
+//   (E) MONOTONICITY: Σ f(ε_k) is monotone INCREASING in E_F (the bisection
+//       invariant) — a higher trial E_F never occupies fewer electrons.          🔵
+//
+// Run:  HEXA_LANG=. hexa run stdlib/qforge/smearing_selftest.hexa
+// PASS: "qforge_smearing_selftest PASS".
+use "stdlib/qforge/smearing"
+
+fn _abs(x: float) -> float { if x < 0.0 { return -x } return x }
+fn _ck_close(name: str, got: float, want: float, eps: float) -> int {
+    if _abs(got - want) <= eps { println("PASS " + name + " (" + to_string(got) + ")") ; return 0 }
+    println("FAIL " + name + " — got " + to_string(got) + " want " + to_string(want)) ; return 1
+}
+fn _ck_true(name: str, cond: bool) -> int {
+    if cond { println("PASS " + name) ; return 0 }
+    println("FAIL " + name) ; return 1
+}
+
+fn main() {
+    let mut fails = 0
+
+    // ══ (A) f(E_F) = ½ exactly ═════════════════════════════════════════════
+    let fef = qforge_fermi_dirac(1.234, 1.234, 0.01)
+    fails = fails + _ck_close("(A) f(ε=E_F) = ½", fef, 0.5, 1.0e-12)
+
+    // ══ (B) σ→0 step limit ═════════════════════════════════════════════════
+    fails = fails + _ck_close("(B) σ=0: f(ε<E_F) = 1", qforge_fermi_dirac(-1.0, 0.0, 0.0), 1.0, 1.0e-12)
+    fails = fails + _ck_close("(B) σ=0: f(ε>E_F) = 0", qforge_fermi_dirac( 1.0, 0.0, 0.0), 0.0, 1.0e-12)
+    fails = fails + _ck_close("(B) σ=0: f(ε=E_F) = ½", qforge_fermi_dirac( 0.0, 0.0, 0.0), 0.5, 1.0e-12)
+    // small-σ practical limit (σ=1e-4): a state 0.01 below E_F is essentially full.
+    fails = fails + _ck_true("(B) small-σ: deep state ≈ full",
+                             qforge_fermi_dirac(-0.01, 0.0, 1.0e-4) > 0.9999)
+    fails = fails + _ck_true("(B) small-σ: high state ≈ empty",
+                             qforge_fermi_dirac( 0.01, 0.0, 1.0e-4) < 0.0001)
+
+    // ══ (C) CHARGE CONSERVATION on a metallic-like spectrum ════════════════
+    // 6 bands, several clustered near a partial-fill level. spin_deg=2, nelec=5
+    // (an ODD count → genuinely fractional fill, a metal). The bisection E_F must
+    // make Σ 2·f(ε_k) == 5 to tol.
+    let evalsM = [-0.50, -0.20, -0.05, 0.00, 0.30, 0.80]
+    let sigma = 0.02
+    let efM = qforge_fermi_level(evalsM, 5, sigma, 2.0)
+    let sumM = qforge_occ_sum(evalsM, efM, sigma, 2.0)
+    fails = fails + _ck_close("(C) Σ 2·f(ε_k) == nelec=5 (bisection)", sumM, 5.0, 1.0e-9)
+    // the occupation vector also sums to nelec.
+    let occM = qforge_fermi_occupations(evalsM, 6, 5, sigma, 2.0)
+    let mut sov = 0.0
+    let mut k = 0
+    while k < 6 { sov = sov + occM[k] ; k = k + 1 }
+    fails = fails + _ck_close("(C) Σ occ_k == nelec=5 (occupation vector)", sov, 5.0, 1.0e-9)
+    // each occ ∈ [0, 2] (spin-degenerate bound).
+    let mut bounded = true
+    k = 0
+    while k < 6 { if occM[k] < -1.0e-12 || occM[k] > 2.0 + 1.0e-12 { bounded = false } ; k = k + 1 }
+    fails = fails + _ck_true("(C) every occ_k ∈ [0,2]", bounded)
+
+    // ══ (D) INSULATOR / INTEGER RECOVERY ═══════════════════════════════════
+    // 4 bands, a BIG gap between band 1 (−1.0) and band 2 (+1.0); nelec=4 →
+    // closed-shell fill (2,2,0,0). With small σ the fractional occupations must
+    // equal the integer fill AND E_F lands in the gap (−1.0, +1.0).
+    let evalsI = [-1.10, -1.00, 1.00, 1.10]
+    let sigI = 1.0e-3
+    let occI = qforge_fermi_occupations(evalsI, 4, 4, sigI, 2.0)
+    fails = fails + _ck_close("(D) insulator occ[0] → 2", occI[0], 2.0, 1.0e-6)
+    fails = fails + _ck_close("(D) insulator occ[1] → 2", occI[1], 2.0, 1.0e-6)
+    fails = fails + _ck_close("(D) insulator occ[2] → 0", occI[2], 0.0, 1.0e-6)
+    fails = fails + _ck_close("(D) insulator occ[3] → 0", occI[3], 0.0, 1.0e-6)
+    let efI = qforge_fermi_level(evalsI, 4, sigI, 2.0)
+    fails = fails + _ck_true("(D) E_F lands in the gap (−1,+1)", efI > -1.0 && efI < 1.0)
+
+    // ══ (E) MONOTONICITY of Σ f(ε_k) in E_F ════════════════════════════════
+    let s_lo = qforge_occ_sum(evalsM, -1.0, sigma, 2.0)
+    let s_mid = qforge_occ_sum(evalsM, 0.0, sigma, 2.0)
+    let s_hi = qforge_occ_sum(evalsM, 1.0, sigma, 2.0)
+    fails = fails + _ck_true("(E) Σf increasing in E_F (lo<mid<hi)",
+                             s_lo < s_mid && s_mid < s_hi)
+    // top bracket saturates at N·spin = 12, bottom at 0.
+    fails = fails + _ck_true("(E) bracket: Σf → 0 far below, → 12 far above",
+                             qforge_occ_sum(evalsM, -100.0, sigma, 2.0) < 1.0e-6
+                             && qforge_occ_sum(evalsM, 100.0, sigma, 2.0) > 12.0 - 1.0e-6)
+
+    if fails == 0 { println("qforge_smearing_selftest PASS") }
+    else { println("qforge_smearing_selftest FAIL — " + to_string(fails) + " case(s)") }
+}

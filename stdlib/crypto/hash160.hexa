@@ -1,0 +1,17 @@
+// HEXA Standard Library — crypto/hash160 (BTC HASH160 = RIPEMD-160 ∘ SHA-256)
+// @ci_gate
+// Composes the existing sha256_digest_bytes + ripemd160 primitives.
+// HASH160 is the address-hash step for BTC P2PKH / P2WPKH / P2SH.
+
+use "stdlib/crypto/ripemd160"
+use "stdlib/core/hash/hmac"
+
+// HASH160(data) = RIPEMD-160(SHA-256(data)) → 20 bytes.
+pub fn hash160(data: [int]) -> [int] {
+    return ripemd160_bytes(sha256_digest_bytes(data))
+}
+
+// HASH160(data) as a 40-char lowercase hex string.
+pub fn hash160_hex(data: [int]) -> string {
+    return ripemd160_hex(sha256_digest_bytes(data))
+}

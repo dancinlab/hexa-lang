@@ -39,6 +39,23 @@ heavy 항목 (ed25519/TLS) — 환경 제약상 mac 단일 세션 외.
 
 ## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
+## 2026-06-01 — bucket-B/C reconnaissance: terminal closed-negative map (no grounded port)
+
+RUNTIME-lane recon of the two open buckets after bucket-A (pure-fn) retirement.
+Goal: find a category-(i) grounded `.hexa` move (no carrier/codegen wall, no sign gate).
+
+- [x] **Bucket B (syscall)** — no open syscall-port item. Linux arch-gate 17-fn CLOSED
+      (both Linux CI bootstrap SUCCESS 2026-05-27); aprime_cc 0 undefined externs (inline
+      svc #0x80). Only FFI-touching = interp HYBRID I/O (rt_read_file..rt_exec_with_status)
+      + minimal-FFI block = (iii)/(iv) syscall/libc-stdio floor.
+- [x] **Bucket C (phase-H)** — linker (`tool/hexa_ld.hexa`) macOS code residual = ZERO
+      (5 increments RUN-verified; multi-dylib ordinal CLOSED-NEGATIVE 2026-05-27). The
+      actual wall = HEXA_BACKEND flip runtime FLOOR (HexaVal repr/arena/GC ~240 fn) =
+      (ii) carrier wall + (iii) architectural + (iv) cc --regen sign-gated.
+- [x] **Result** — ZERO category-(i) items. No port forced (g5/g63). Map written to
+      RUNTIME.md (`## 2026-06-01 — bucket-B (syscall) / bucket-C (phase-H) reconnaissance`)
+      + verdict `.verdicts/runtime-bucket-bc-recon/recon-map.txt`. Falsifiers registered.
+
 ## 2026-05-27T05:50Z — 🛸 next-list closure final: 8/9 + #9 5/6 · #2 emit-unblock landed
 
 `/goal next list all closure` 종착. single-session-closeable 전부 닫고, #2 의

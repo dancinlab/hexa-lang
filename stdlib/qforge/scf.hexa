@@ -32,8 +32,11 @@
 //   상위 호출자가 위 조각을 조립해 H_of_rho 클로저로 넘긴다 (d4).
 //
 // reuse (d19): 대각화는 stdlib/qforge/davidson 의 qforge_davidson 를,
-//   그 내부는 stdlib/alloc/math/eigen 의 eigh 를 재사용한다.
+//   그 내부는 stdlib/alloc/math/eigen 의 eigh 를 재사용한다. M5.8: 금속 SCF 수렴은
+//   smearing (Fermi-Dirac occ + E_F bisection) + mixing (Anderson) 를 재사용한다.
 use "stdlib/qforge/davidson"
+use "stdlib/qforge/smearing"
+use "stdlib/qforge/mixing"
 
 // SCF 결과 묶음: 수렴 밀도 · KS 고유값(오름차순) · 총 에너지 · 반복수 · 수렴 플래그.
 pub struct ScfResult {
@@ -172,6 +175,131 @@ pub fn qforge_scf(H_of_rho, rho_of_psi, n: int, nbands: int, nelec: int,
         first = false
 
         // (6) 수렴 판정.
+        if resid < tol {
+            converged = true
+            return ScfResult { rho: rho, evals: evals, e_total: e_total,
+                               iters: iters, converged: true }
+        }
+    }
+    return ScfResult { rho: rho, evals: evals, e_total: e_total,
+                       iters: iters, converged: converged }
+}
+
+// ── M5.8: SMEARED + ANDERSON SCF (the metallic-convergence driver) ─────────────
+// qforge_scf above fills FIXED INTEGER occupation + PLAIN LINEAR mixing — for a
+// METAL the integer fill swaps as bands cross E_F → ρ limit-cycle that linear
+// mixing cannot kill (the M5.7 PR3 CaH6 residual). This variant adds:
+//   · FRACTIONAL Fermi-Dirac occupations with E_F by bisection (smearing.hexa) —
+//     a band crossing E_F now changes occupation CONTINUOUSLY (no swap).
+//   · ANDERSON history mixing (mixing.hexa) — cancels the oscillating mode.
+// It is a SEPARATE entry so qforge_scf stays bit-identical for every existing
+// caller (no-regression). OPT-IN params:
+//   sigma     : smearing width (same energy unit as ε; SCF carries Hartree).
+//               sigma ≤ 0 → FIXED INTEGER occupation (the old scf_occupations).
+//   spin_deg  : 2.0 closed-shell (spin-degenerate) · 1.0 spin-resolved.
+//   and_depth : Anderson history depth m (≤0 → plain linear mixing of mix).
+// With sigma≤0 AND and_depth≤0 this reproduces qforge_scf EXACTLY (a smearing/
+// mixing-disabled run is the regression pin).
+pub fn qforge_scf_smeared(H_of_rho, rho_of_psi, n: int, nbands: int, nelec: int,
+                          mix: float, tol: float, max_iter: int,
+                          sigma: float, spin_deg: float, and_depth: int) -> ScfResult {
+    let mut a = mix
+    if a <= 0.0 { a = 0.1 }
+    if a > 1.0 { a = 1.0 }
+    let mut sd = spin_deg
+    if sd <= 0.0 { sd = 2.0 }                       // default closed-shell
+
+    let mut rho = []
+    let mut i = 0
+    let rho0 = to_float(nelec) / to_float(n)
+    while i < n { rho.push(rho0) ; i = i + 1 }
+
+    // Anderson history (flat h×n input/output density buffers, newest appended).
+    let mut hist_in: [float] = []
+    let mut hist_out: [float] = []
+    let mut h = 0
+
+    let mut evals = []
+    let mut e_total = 0.0
+    let mut e_prev = 0.0
+    let mut iters = 0
+    let mut converged = false
+    let mut first = true
+
+    while iters < max_iter {
+        iters = iters + 1
+
+        let H_apply = H_of_rho(rho)
+
+        let mut diag = []
+        let mut d = 0
+        while d < n {
+            let mut e = []
+            let mut t = 0
+            while t < n { if t == d { e.push(1.0) } else { e.push(0.0) } ; t = t + 1 }
+            let col = H_apply(e)
+            diag.push(col[d])
+            d = d + 1
+        }
+
+        let dr = qforge_davidson(H_apply, diag, n, nbands, 1.0e-10, 200)
+        evals = dr.evals
+
+        // (3') occupation: FRACTIONAL Fermi-Dirac (E_F by bisection) when sigma>0,
+        //      else FIXED INTEGER (the old closed-shell fill) — reuses smearing.hexa.
+        let mut occ: [float] = []
+        if sigma > 0.0 {
+            occ = qforge_fermi_occupations(evals, nbands, nelec, sigma, sd)
+        } else {
+            occ = scf_occupations(nbands, nelec)
+        }
+
+        let psis = scf_slice_psis(dr.evecs, nbands, n)
+        let rho_out = rho_of_psi(psis, occ, nbands)
+
+        e_total = scf_band_energy(evals, occ, nbands)
+
+        let dr_rho = scf_dmax(rho, rho_out, n)
+        let dr_e = if first { tol + 1.0 } else { scf_abs(e_total - e_prev) }
+        let resid = if dr_rho > dr_e { dr_rho } else { dr_e }
+
+        // (5') mixing: append the (ρ_in, ρ_out) pair to the history, then take an
+        //      ANDERSON step (and_depth>0) or PLAIN LINEAR (and_depth≤0). Anderson
+        //      with h=1 internally falls back to linear — identical first step.
+        let mut t2 = 0
+        while t2 < n { hist_in.push(rho[t2]) ; hist_out.push(rho_out[t2]) ; t2 = t2 + 1 }
+        h = h + 1
+        let mut rho_new: [float] = []
+        if and_depth > 0 {
+            rho_new = qforge_anderson_next(hist_in, hist_out, h, n, and_depth, a)
+        } else {
+            let mut k = 0
+            while k < n { rho_new.push((1.0 - a) * rho[k] + a * rho_out[k]) ; k = k + 1 }
+        }
+        // cap the stored history at and_depth+2 pairs (trim oldest) to bound cost
+        // and keep the Gram well-conditioned (stale vectors → near-singular).
+        let cap = and_depth + 2
+        if and_depth > 0 && h > cap {
+            let ndrop = h - cap
+            let mut trimmed_in: [float] = []
+            let mut trimmed_out: [float] = []
+            let mut keep = ndrop
+            while keep < h {
+                let mut tt = 0
+                while tt < n {
+                    trimmed_in.push(hist_in[keep * n + tt])
+                    trimmed_out.push(hist_out[keep * n + tt])
+                    tt = tt + 1
+                }
+                keep = keep + 1
+            }
+            hist_in = trimmed_in ; hist_out = trimmed_out ; h = cap
+        }
+        rho = rho_new
+
+        e_prev = e_total
+        first = false
+
         if resid < tol {
             converged = true
             return ScfResult { rho: rho, evals: evals, e_total: e_total,

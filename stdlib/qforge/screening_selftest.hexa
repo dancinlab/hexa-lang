@@ -266,6 +266,60 @@ fn main() {
     let vbad = qforge_dvscf_from_drho(drho_g, rho_g, 1, 1, NG, bb1, bb2, bb3, 7)
     fails = fails + _ck_bool("(G) unknown xc_mode → [] (no fabrication)", len(vbad) == 0, true)
 
+    // ── (H) GROUND-STATE Hartree V_H[ρ] (M5.7) — the last SCF primitive ────────
+    //   V_H[ρ](r) = 4π ρ(G)/|G|² (G≠0), G=0→0. Three g5 anchors:
+    //   (a) ANALYTIC: a single real plane-wave charge ρ(r)=ρ̄+δ·cos(2πG·r/N) →
+    //       V_H(r) = (4π/|G|²)·δ·cos(2πG·r/N) EXACTLY (the uniform ρ̄ → G=0 → 0;
+    //       only the cos mode survives — Laplacian eigenfunction, closed-form).  🔵
+    //   (b) NEUTRALITY / G=0: a uniform ρ(r)=c (the neutral-background limit) →
+    //       V_H ≡ 0 (G=0 gauge drops the divergent average term).                🔵
+    //   (c) REDUCES vs RESPONSE: on a Δρ input, V_H[ρ]'s output is IDENTICAL to
+    //       qforge_vhartree_from_drho (same linear Poisson operator, d19 reuse).  🔵
+    let HG = 8
+    let hb1 = [TWO_PI, 0.0, 0.0]
+    let hb2 = [0.0, TWO_PI, 0.0]
+    let hb3 = [0.0, 0.0, TWO_PI]
+    let hg0 = 2                                   // charge plane-wave mode (≠0)
+    let rho_bar_h = 1.5                           // uniform background (G=0 part)
+    let delta_h = 0.3                             // modulation amplitude
+    let mut rho_h = []
+    let mut hz = 0
+    while hz < HG {
+        rho_h.push(rho_bar_h + delta_h * cos(TWO_PI * to_float(hg0) * to_float(hz) / to_float(HG)))
+        hz = hz + 1
+    }
+    let vh_gs = qforge_vhartree_from_rho(rho_h, 1, 1, HG, hb1, hb2, hb3)
+    // (a) analytic: only the cos mode (the uniform ρ̄ is gauged to 0 at G=0).
+    let hg2 = (to_float(hg0) * TWO_PI) * (to_float(hg0) * TWO_PI)
+    let hfac = 4.0 * PI / hg2
+    let mut hmax = 0.0
+    let mut ha = 0
+    while ha < HG {
+        let want = hfac * delta_h * cos(TWO_PI * to_float(hg0) * to_float(ha) / to_float(HG))
+        let d = _abs(vh_gs[ha] - want)
+        if d > hmax { hmax = d }
+        ha = ha + 1
+    }
+    fails = fails + _ck_close("(H)(a) V_H[ρ]=(4π/|G|²)·δcos (analytic, neutral bg→0)", hmax, 0.0, 1.0e-5)
+    // (b) neutrality: uniform ρ → V_H ≡ 0.
+    let mut rho_uh = []
+    let mut hu = 0
+    while hu < HG { rho_uh.push(2.4) ; hu = hu + 1 }
+    let vh_u = qforge_vhartree_from_rho(rho_uh, 1, 1, HG, hb1, hb2, hb3)
+    let mut humax = 0.0
+    let mut hub = 0
+    while hub < HG { let d = _abs(vh_u[hub]) ; if d > humax { humax = d } ; hub = hub + 1 }
+    fails = fails + _ck_close("(H)(b) neutral/G=0: uniform ρ → V_H≡0", humax, 0.0, 1.0e-9)
+    // (c) reduces vs response kernel: identical on the same input (d19 same core).
+    let vh_resp = qforge_vhartree_from_drho(rho_h, 1, 1, HG, hb1, hb2, hb3)
+    let mut hrmax = 0.0
+    let mut hr = 0
+    while hr < HG { let d = _abs(vh_gs[hr] - vh_resp[hr]) ; if d > hrmax { hrmax = d } ; hr = hr + 1 }
+    fails = fails + _ck_close("(H)(c) V_H[ρ] == response Poisson core (d19 reuse)", hrmax, 0.0, 1.0e-15)
+    // malformed → [] (no fabrication).
+    let vh_bad = qforge_vhartree_from_rho(rho_h, 1, 1, 7, hb1, hb2, hb3)
+    fails = fails + _ck_bool("(H) malformed grid → [] (no fabrication)", len(vh_bad) == 0, true)
+
     if fails == 0 { println("qforge_screening_selftest PASS") }
     else { println("qforge_screening_selftest FAIL — " + to_string(fails) + " case(s)") }
 }

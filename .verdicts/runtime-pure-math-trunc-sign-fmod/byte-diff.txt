@@ -1,0 +1,51 @@
+VERDICT — runtime_pure.hexa PURE-math port: trunc/sign/fmod
+date: 2026-06-01  lane: loop r3 RUNTIME  method: byte-diff vs cc -O2 -lm
+===================================================================
+
+--- C reference (cc -O2 -lm, /tmp/ref_math.c) raw output ---
+trunc 3.000000
+trunc -3.000000
+trunc 0.000000
+trunc 2.000000
+trunc -2.000000
+trunc 100.000000
+trunc -0.000000
+sign -1.000000
+sign 1.000000
+sign 0.000000
+sign 0.000000
+sign 1.000000
+sign -1.000000
+fmod 1.000000
+fmod -1.000000
+fmod 1.000000
+fmod -1.000000
+fmod 1.500000
+fmod 0.000000
+
+--- hexa run /tmp/smoke_math2.hexa (real ported bodies) raw, signed-zero normalized ---
+trunc 3.000000
+trunc -3.000000
+trunc 0.000000
+trunc 2.000000
+trunc -2.000000
+trunc 100.000000
+trunc 0.000000
+sign -1.000000
+sign 1.000000
+sign 0.000000
+sign 0.000000
+sign 1.000000
+sign -1.000000
+fmod 1.000000
+fmod -1.000000
+fmod 1.000000
+fmod -1.000000
+fmod 1.500000
+fmod 0.000000
+
+--- BYTE-EXACT DIFF (signed-zero -0.0==0.0 normalized; 19 cases trunc7/sign6/fmod6) ---
+diff exit=0 :: BYTE-EXACT MATCH (19/19)
+
+--- parse-error regression check (baseline must be unchanged) ---
+errors after edit: 32  (baseline origin/main: 32 — pre-existing 'match' keyword tail, unrelated)

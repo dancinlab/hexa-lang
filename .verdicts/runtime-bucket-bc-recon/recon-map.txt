@@ -1,0 +1,32 @@
+RUNTIME bucket-B (syscall) / bucket-C (phase-H) reconnaissance — 2026-06-01
+g5/g63 honest closed-negative map. No port forced.
+
+=== BUCKET B (syscall residuals) ===
+Linux arch-gate 17-fn (read..exit)        : CLOSED (both Linux CI bootstrap SUCCESS 2026-05-27, run #26470523969)
+aprime_cc syscall externs                  : CLOSED (nm -u = 0 undefined; every syscall inline svc #0x80)
+interp HYBRID I/O 6 fns (rt_read_file..)   : (iii)/(iv) syscall-backed builtin delegation floor
+minimal-FFI block (__c_popen..__c_ftell)   : (iv) libc stdio behind HYBRID I/O
+RESULT: no open syscall-port item; nothing category-(i).
+
+=== BUCKET C (phase-H backend flip) ===
+multi-dylib ordinal mapping                : CLOSED-NEG (macOS libSystem umbrella; 2026-05-27 falsifier)
+linker reloc set (BRANCH26/PAGE21/..GOT)   : CLOSED (5 increments RUN-verified; macOS linker code residual = 0)
+full multi-section layout                  : CLOSED (inc3 "ms ok" exit7)
+lazy-bind / scattered reloc / TLV          : (iii) future generalization, not a RUNTIME blocker
+hexaval-repr-emit / runtime-primitive-emit : (ii)+(iv) HexaVal carrier wall + cc --regen sign-gated
+HEXA_BACKEND flip runtime FLOOR (~240 fn)  : (ii)+(iii) codegen emit wall + architectural
+boot .s lowering (rp2040/stm32)            : (iii) RFC-063/064 codegen lowering, embedded-target
+RESULT: nothing category-(i).
+
+=== DISPOSITION ===
+ZERO category-(i) grounded items across B and C.
+Bucket B = already CLOSED (Linux arch-gate, aprime_cc 0-externs) or syscall/carrier floor.
+Bucket C = already CLOSED (linker code residual zero, multi-dylib closed-negative) or
+           HexaVal carrier wall + architectural backend flip + sign-gated cc --regen.
+No marginal port forced. Terminal closed-negative — VALID result (g63).
+
+Falsifier to reopen:
+  B: a NEW syscall appears on FFI awaiting pure-hexa/svc-trap port.
+  C: (a) codegen type-erasure/HexaVal carrier wall lifted at emit layer, OR
+     (b) 3rd-party non-libSystem dylib enters the link (multi-dylib reopens grounded), OR
+     (c) cc --regen sign/pool gate opened in a verification window.

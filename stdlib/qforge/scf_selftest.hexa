@@ -106,6 +106,19 @@ fn gb_apply(v: [float]) -> [float] {
 // H_of_rho (B): 입력 ρ 를 전역 슬롯에 박고 대각 연산자 반환(d4 — ρ 의존성 캡슐화).
 fn hb_of_rho(rho: [float]) { GB_RHO = rho ; return gb_apply }
 
+// ── 모델 (D) METAL: 2-state diagonal H(ρ)=diag(c·ρ₁, c·ρ₀), c>0 ─────────────
+//   두 상태가 E_F 를 사이에 두고 cross 한다. nelec=2(1 상태 이중점유). 정수점유는
+//   더 낮은 상태를 채우고 그 ρ→2 가 되어 다음 iter 에서 OTHER 상태를 더 낮게 만들어
+//   점유가 SWAP → ρ limit-cycle (금속 charge-sloshing 의 최소 재현). smearing 은
+//   두 상태를 분수점유해 ρ*=(1,1) 고정점으로 수렴시킨다.
+let mut GD_RHO = []
+let GD_C = 2.0
+fn gd_apply(v: [float]) -> [float] {
+    // (H v)[0] = c·ρ₁·v[0],  (H v)[1] = c·ρ₀·v[1]  (cross-coupled on-site).
+    return [GD_C * GD_RHO[1] * v[0], GD_C * GD_RHO[0] * v[1]]
+}
+fn hd_of_rho(rho: [float]) { GD_RHO = rho ; return gd_apply }
+
 fn main() {
     let mut fails = 0
     let pi = 3.141592653589793
@@ -164,6 +177,42 @@ fn main() {
     fails = fails + _ck_close("(C)(e) E_total* = 6 (damped)", rC.e_total, 6.0, 1.0e-6)
     // 발산 가드: 수렴 밀도 유한·물리적(0 ≤ ρ ≤ nelec).
     fails = fails + _ck_bool("(C)(e) rho[0] bounded [0,2]", rC.rho[0] >= 0.0 && rC.rho[0] <= 2.0001, true)
+
+    // ══ (D) M5.8 — METAL: smeared+Anderson reaches the fractional-fill fixed point ══
+    // The cross-coupled H(ρ)=diag(c·ρ₁, c·ρ₀) (nelec=2) is METALLIC: the two states
+    // are degenerate at the symmetric point ρ*=(1,1), straddling E_F. Integer
+    // occupation cannot resolve a HALF-filled degenerate pair (it must put 2e in one
+    // state → breaks the symmetry / sloshes off a perturbed start); FRACTIONAL Fermi
+    // occupation fills both at ½·2=1 and lands on the true fixed point.
+    // (D)(a) start from a PERTURBED density (not the fixed point) and show the
+    //   integer-occupation qforge_scf does NOT settle to the symmetric metal state.
+    GD_RHO = []
+    let rDint = qforge_scf(hd_of_rho, rho_of_psi_density, 2, 2, 2, 0.5, 1.0e-10, 200)
+    // integer fill puts 2e in ONE state → ρ ≈ (2,0) or (0,2), NOT the metal ρ*=(1,1).
+    let int_offmetal = _abs(rDint.rho[0] - 1.0) > 0.5
+    fails = fails + _ck_bool("(D)(a) integer occ misses the half-filled metal (ρ≉(1,1))",
+                             int_offmetal, true)
+    // (D)(b) the SMEARED + ANDERSON driver reaches the metal fixed point (σ=0.05, depth 5).
+    GD_RHO = []
+    let rDsm = qforge_scf_smeared(hd_of_rho, rho_of_psi_density, 2, 2, 2, 0.5,
+                                  1.0e-9, 300, 0.05, 2.0, 5)
+    fails = fails + _ck_bool("(D)(b) smeared+Anderson CONVERGES the metal", rDsm.converged, true)
+    // (D)(c) the converged ρ is the symmetric half-filled fixed point ρ*=(1,1).
+    fails = fails + _ck_close("(D)(c) metal ρ*[0] = 1 (fractional half-fill)", rDsm.rho[0], 1.0, 1.0e-3)
+    fails = fails + _ck_close("(D)(c) metal ρ*[1] = 1 (fractional half-fill)", rDsm.rho[1], 1.0, 1.0e-3)
+    fails = fails + _ck_close("(D)(c) Σρ = nelec = 2", rDsm.rho[0] + rDsm.rho[1], 2.0, 1.0e-3)
+    // (D)(d) BACKWARD-COMPAT pin: qforge_scf_smeared with σ≤0 AND depth≤0 reproduces
+    //   qforge_scf EXACTLY on the (B) ρ-coupled model (same eps_0, same ρ*, converged).
+    GB_RHO = []
+    let rDbc = qforge_scf_smeared(hb_of_rho, rho_of_psi_density, 2, 2, 2, 0.5,
+                                  1.0e-10, 200, 0.0, 2.0, 0)
+    GB_RHO = []
+    let rBref = qforge_scf(hb_of_rho, rho_of_psi_density, 2, 2, 2, 0.5, 1.0e-10, 200)
+    fails = fails + _ck_bool("(D)(d) backward-compat: smeared(σ=0,depth=0) converged like qforge_scf",
+                             rDbc.converged == rBref.converged && rDbc.converged, true)
+    fails = fails + _ck_close("(D)(d) backward-compat: same eps_0", rDbc.evals[0], rBref.evals[0], 1.0e-12)
+    fails = fails + _ck_close("(D)(d) backward-compat: same ρ*[0]", rDbc.rho[0], rBref.rho[0], 1.0e-12)
+    fails = fails + _ck_close("(D)(d) backward-compat: same E_total", rDbc.e_total, rBref.e_total, 1.0e-12)
 
     if fails == 0 { println("qforge_scf_selftest PASS") }
     else { println("qforge_scf_selftest FAIL — " + to_string(fails) + " case(s)") }

@@ -148,6 +148,81 @@ fn main() {
     fails = fails + _ck_close("(D) same fixed-point ρ0 across mixing",
                               scfD.rho[0], scfC.rho[0], 1.0e-7)
 
+    // ══ (E) IN-LOOP GROUND-STATE V_H[ρ] WIRING (M5.7) ══════════════════════
+    //   scf_pw now builds vh_diag FROM the current ρ each iteration (via
+    //   qforge_vhartree_from_rho) when the FFT grid is staged — V_H updates
+    //   self-consistently with V_xc instead of being a frozen caller input.
+    //   We use a bare 8-PW cell mapped to a 1×1×8 real-space grid (the n-grid IS
+    //   the FFT z-axis, the screening-selftest convention).
+    let NE = 8
+    let TWO_PI = 2.0 * 3.14159265358979323846
+    let eb1 = [TWO_PI, 0.0, 0.0]
+    let eb2 = [0.0, TWO_PI, 0.0]
+    let eb3 = [0.0, 0.0, TWO_PI]
+    let mut eg = []
+    let mut ei = 0
+    while ei < NE { eg.push(0.0) ; eg.push(0.0) ; eg.push(to_float(ei)) ; ei = ei + 1 }
+    // (E)(a) NEUTRAL / V_H=0: a UNIFORM ρ → V_H≡0 → the in-loop diagonal equals
+    //   the frozen-path diagonal. Stage the cell + hgrid, build H(ρ_unif), assert
+    //   the screening diagonal is V_xc-only (V_H added 0).
+    qforge_scf_pw_set(k0, eg, empty_f, empty_f, empty_f, empty_f, 0.0,
+                      empty_f, empty_i, empty_f, 0, 100.0, empty_f, 0)   // xc x-only
+    qforge_scf_pw_set_hgrid(1, 1, NE, eb1, eb2, eb3)
+    let mut rho_unif8: [float] = []
+    let mut ru = 0
+    while ru < NE { rho_unif8.push(0.5) ; ru = ru + 1 }
+    qforge_h_of_rho_global(rho_unif8)
+    let dE_on = PW_HAM.diag[0]
+    // frozen path (hgrid off, same uniform ρ): V_H=0 too → identical diagonal.
+    qforge_scf_pw_set(k0, eg, empty_f, empty_f, empty_f, empty_f, 0.0,
+                      empty_f, empty_i, empty_f, 0, 100.0, empty_f, 0)   // resets hgrid OFF
+    qforge_h_of_rho_global(rho_unif8)
+    let dE_off = PW_HAM.diag[0]
+    fails = fails + _ck_close("(E)(a) neutral uniform ρ: in-loop V_H=0 == frozen path",
+                              dE_on, dE_off, 1.0e-12)
+    // (E)(b) V_H FIRES: a NON-uniform ρ → V_H≠0 → the in-loop diagonal DIFFERS
+    //   from the frozen (V_H=0) path. The Hartree genuinely tracks ρ.
+    let mut rho_nu8: [float] = []
+    let mut rn = 0
+    while rn < NE {
+        rho_nu8.push(0.5 + 0.3 * cos(TWO_PI * 2.0 * to_float(rn) / to_float(NE)))
+        rn = rn + 1
+    }
+    qforge_scf_pw_set(k0, eg, empty_f, empty_f, empty_f, empty_f, 0.0,
+                      empty_f, empty_i, empty_f, 0, 100.0, empty_f, 0)
+    qforge_scf_pw_set_hgrid(1, 1, NE, eb1, eb2, eb3)
+    qforge_h_of_rho_global(rho_nu8)
+    let dN_on0 = PW_HAM.diag[0]
+    let dN_on1 = PW_HAM.diag[1]
+    // analytic V_H on this ρ: vh(i)=(4π/|G|²)·0.3cos(2π·2·i/N), |G|²=(2·2π)².
+    let vh_check = qforge_vhartree_from_rho(rho_nu8, 1, 1, NE, eb1, eb2, eb3)
+    // frozen path (V_H off) on the same ρ.
+    qforge_scf_pw_set(k0, eg, empty_f, empty_f, empty_f, empty_f, 0.0,
+                      empty_f, empty_i, empty_f, 0, 100.0, empty_f, 0)
+    qforge_h_of_rho_global(rho_nu8)
+    let dN_off0 = PW_HAM.diag[0]
+    // the in-loop diagonal = frozen diagonal + vh(i) (V_H added per-site).
+    fails = fails + _ck_close("(E)(b) in-loop V_H added per-site: diag_on−diag_off = V_H[ρ]",
+                              dN_on0 - dN_off0, vh_check[0], 1.0e-9)
+    fails = fails + _ck_true("(E)(b) V_H fires (non-uniform ρ → diag shifts)",
+                             _abs(dN_on0 - dN_off0) > 1.0e-6 || _abs(dN_on1 - dN_off0) > 1.0e-6)
+    // (E)(c) SELF-CONSISTENT RUN with the in-loop V_H ACTIVE inside the driver
+    //   (qforge_scf_pw_h stages the FFT grid → V_H[ρ] rebuilt each iteration). A
+    //   neutral 8-PW cell, x-only xc, must CONVERGE with V_H self-consistent.
+    let scfE = qforge_scf_pw_h(k0, eg, empty_f, empty_f, empty_f, empty_f, 0.0,
+                               empty_f, empty_i, empty_f, 0, 100.0, empty_f, 0,
+                               1, 1, NE, eb1, eb2, eb3,
+                               3, 2, 0.4, 1.0e-8, 400)
+    fails = fails + _ck_true("(E)(c) in-loop-V_H SCF converges (qforge_scf_pw_h)",
+                             scfE.converged)
+    // (E)(d) backward-compat: the ORIGINAL one-call entry (hgrid OFF) still runs
+    //   the free-electron neutral SCF unchanged (V_H=0).
+    let scfE2 = qforge_scf_pw(k0, gvecs, empty_f, empty_f, empty_f, empty_f, 0.0,
+                              empty_f, empty_i, empty_f, 0, 100.0, empty_f, -1,
+                              3, 2, 0.5, 1.0e-9, 200)
+    fails = fails + _ck_true("(E)(d) original qforge_scf_pw FE path unchanged",
+                             scfE2.converged && _abs(scfE2.evals[0]) < 1.0e-8)
+
     if fails == 0 { println("qforge_scf_pw_selftest PASS") }
     else { println("qforge_scf_pw_selftest FAIL — " + to_string(fails) + " case(s)") }
 }

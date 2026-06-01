@@ -1,0 +1,204 @@
+// HEXA Standard Library — qforge/mixing
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// QFORGE M5.8② — ANDERSON (Pulay/DIIS-class) density mixing.
+//
+// scf.hexa damps charge oscillation with PLAIN LINEAR mixing
+//   ρ_new = (1−β)·ρ_in + β·ρ_out.
+// For a METAL the SCF map has eigenvalues that drive a limit cycle linear mixing
+// cannot kill (it only rescales the residual, never cancels the oscillating mode).
+// Anderson mixing builds the next input as an OPTIMAL LINEAR COMBINATION of the
+// last m residual-history vectors so the combined residual is minimized in L²,
+// then takes a damped step. This cancels the dominant oscillating mode → the
+// limit cycle collapses and the residual decreases monotonically.
+//
+// ── the Anderson update (history depth m) ────────────────────────────────────
+//   Residual of iteration i:  F_i = ρ_out,i − ρ_in,i   (the SCF fixed-point error).
+//   With history {ρ_in,i, F_i} for i = i0..i_cur, solve for weights θ_j minimizing
+//       ‖ F_cur + Σ_j θ_j (F_{cur−j} − F_cur) ‖²        (j = 1..m)
+//   (the standard Anderson/Pulay normal equations, a tiny m×m solve). The mixed
+//   input is then
+//       ρ̄_in  = ρ_in,cur + Σ_j θ_j (ρ_in,{cur−j} − ρ_in,cur)
+//       ρ̄_out = ρ_out,cur + Σ_j θ_j (ρ_out,{cur−j} − ρ_out,cur)
+//       ρ_next = (1−β)·ρ̄_in + β·ρ̄_out                  (β = the linear-mixing damp)
+//   m=0 → exactly plain linear mixing (the backward-compat fallback).
+//
+// ── numerics (d19) ───────────────────────────────────────────────────────────
+//   The m×m normal-equation matrix is TINY (m ≤ ~8). No general solver is exposed
+//   in alloc/math/eigen (only eigh), so we inline a partial-pivot Gaussian
+//   elimination here — a standard, fully deterministic small dense solve (noted
+//   per d19). The history vectors are full-length n; only the m×m Gram matrix and
+//   the length-m RHS enter the solve, so cost is O(m²·n + m³), m small.
+
+// ── solve A·x = b for a small dense m×m system (partial-pivot Gaussian elim) ──
+//   A is row-major length m·m, b length m. Returns x length m. Singular pivot →
+//   returns [] (caller falls back to plain linear mixing for that step).
+pub fn qforge_small_solve(A: [float], b: [float], m: int) -> [float] {
+    // copy into a working augmented matrix [A | b].
+    let mut M: [float] = []
+    let mut r = 0
+    while r < m {
+        let mut c = 0
+        while c < m { M.push(A[r * m + c]) ; c = c + 1 }
+        M.push(b[r])
+        r = r + 1
+    }
+    let w = m + 1                                   // augmented width
+    // forward elimination with partial pivoting.
+    let mut col = 0
+    while col < m {
+        // pivot = row ≥ col with the largest |M[row][col]|.
+        let mut piv = col
+        let mut pv = qforge_mix_abs(M[col * w + col])
+        let mut rr = col + 1
+        while rr < m {
+            let av = qforge_mix_abs(M[rr * w + col])
+            if av > pv { pv = av ; piv = rr }
+            rr = rr + 1
+        }
+        if pv < 1.0e-14 { return [] }               // singular → caller falls back
+        // swap row col ↔ row piv.
+        if piv != col {
+            let mut cc = 0
+            while cc < w {
+                let tmp = M[col * w + cc]
+                M[col * w + cc] = M[piv * w + cc]
+                M[piv * w + cc] = tmp
+                cc = cc + 1
+            }
+        }
+        // eliminate below.
+        let mut rb = col + 1
+        while rb < m {
+            let f = M[rb * w + col] / M[col * w + col]
+            let mut cc = col
+            while cc < w { M[rb * w + cc] = M[rb * w + cc] - f * M[col * w + cc] ; cc = cc + 1 }
+            rb = rb + 1
+        }
+        col = col + 1
+    }
+    // back substitution.
+    let mut x: [float] = []
+    let mut i = 0
+    while i < m { x.push(0.0) ; i = i + 1 }
+    let mut row = m - 1
+    while row >= 0 {
+        let mut s = M[row * w + m]                   // RHS column
+        let mut cc = row + 1
+        while cc < m { s = s - M[row * w + cc] * x[cc] ; cc = cc + 1 }
+        x[row] = s / M[row * w + row]
+        row = row - 1
+    }
+    return x
+}
+
+fn qforge_mix_abs(x: float) -> float { if x < 0.0 { return -x } return x }
+
+// ── dot product of two length-n vectors ──────────────────────────────────────
+fn qforge_mix_dot(a: [float], b: [float], n: int) -> float {
+    let mut s = 0.0
+    let mut i = 0
+    while i < n { s = s + a[i] * b[i] ; i = i + 1 }
+    return s
+}
+
+// ── Anderson-mixed next input density ────────────────────────────────────────
+//   rho_in_hist  : flat (h × n) history of INPUT densities, newest LAST.
+//   rho_out_hist : flat (h × n) history of OUTPUT densities, newest LAST.
+//   h            : number of stored history pairs (≥1).
+//   n            : density length.
+//   m_max        : max Anderson depth (history vectors USED = min(m_max, h−1)).
+//   beta         : linear-mixing damp applied to the Anderson-extrapolated pair.
+//   Returns the next input density ρ_next (length n). m=0 (or h=1, or a singular
+//   solve) → plain linear mixing of the newest pair (backward-compatible).
+pub fn qforge_anderson_next(rho_in_hist: [float], rho_out_hist: [float],
+                            h: int, n: int, m_max: int, beta: float) -> [float] {
+    let cur = h - 1                                 // newest index
+    // current residual F_cur = ρ_out,cur − ρ_in,cur.
+    let mut Fc: [float] = []
+    let mut i = 0
+    while i < n { Fc.push(rho_out_hist[cur * n + i] - rho_in_hist[cur * n + i]) ; i = i + 1 }
+
+    // Anderson depth m = min(m_max, h−1). m≤0 → plain linear mixing.
+    let mut m = m_max
+    if m > h - 1 { m = h - 1 }
+    if m <= 0 { return qforge_linear_step(rho_in_hist, rho_out_hist, cur, n, beta) }
+
+    // ΔF_j = F_{cur−j} − F_cur for j=1..m (column j-1 of the difference basis).
+    // Build the m×m Gram matrix G[a][b] = ⟨ΔF_a, ΔF_b⟩ and RHS c[a] = ⟨ΔF_a, F_cur⟩.
+    // Then θ solves G·θ = c (least-squares normal equations for the residual min).
+    let mut dF: [float] = []                        // flat (m × n), row j-1 = ΔF_j
+    let mut j = 1
+    while j <= m {
+        let idx = cur - j
+        let mut t = 0
+        while t < n {
+            let Fp = rho_out_hist[idx * n + t] - rho_in_hist[idx * n + t]
+            dF.push(Fp - Fc[t])
+            t = t + 1
+        }
+        j = j + 1
+    }
+    let mut G: [float] = []
+    let mut c: [float] = []
+    let mut a = 0
+    while a < m {
+        let mut bcol = 0
+        while bcol < m {
+            // ⟨ΔF_a, ΔF_b⟩.
+            let mut s = 0.0
+            let mut t = 0
+            while t < n { s = s + dF[a * n + t] * dF[bcol * n + t] ; t = t + 1 }
+            G.push(s)
+            bcol = bcol + 1
+        }
+        // ⟨ΔF_a, F_cur⟩.  θ minimizes ‖F_cur + Σ θ_j ΔF_j‖² ⇒ G·θ = −c with
+        // c=⟨ΔF,F_cur⟩; we solve G·θ = −c, so push −⟨ΔF_a,F_cur⟩.
+        let mut s2 = 0.0
+        let mut t2 = 0
+        while t2 < n { s2 = s2 + dF[a * n + t2] * Fc[t2] ; t2 = t2 + 1 }
+        c.push(-1.0 * s2)
+        a = a + 1
+    }
+    let theta = qforge_small_solve(G, c, m)
+    if len(theta) != m {
+        // singular Gram (linearly dependent history) → fall back to linear mixing.
+        return qforge_linear_step(rho_in_hist, rho_out_hist, cur, n, beta)
+    }
+
+    // build the Anderson-extrapolated input/output:
+    //   ρ̄_in  = ρ_in,cur  + Σ_j θ_j (ρ_in,{cur−j}  − ρ_in,cur)
+    //   ρ̄_out = ρ_out,cur + Σ_j θ_j (ρ_out,{cur−j} − ρ_out,cur)
+    let mut out: [float] = []
+    let mut t = 0
+    while t < n {
+        let mut rin = rho_in_hist[cur * n + t]
+        let mut rout = rho_out_hist[cur * n + t]
+        let mut jj = 1
+        while jj <= m {
+            let idx = cur - jj
+            let th = theta[jj - 1]
+            rin = rin + th * (rho_in_hist[idx * n + t] - rho_in_hist[cur * n + t])
+            rout = rout + th * (rho_out_hist[idx * n + t] - rho_out_hist[cur * n + t])
+            jj = jj + 1
+        }
+        // damped step on the extrapolated pair.
+        out.push((1.0 - beta) * rin + beta * rout)
+        t = t + 1
+    }
+    return out
+}
+
+// ── plain linear step on a single (ρ_in, ρ_out) pair (the m=0 fallback) ──────
+fn qforge_linear_step(rho_in_hist: [float], rho_out_hist: [float],
+                      idx: int, n: int, beta: float) -> [float] {
+    let mut out: [float] = []
+    let mut t = 0
+    while t < n {
+        out.push((1.0 - beta) * rho_in_hist[idx * n + t] + beta * rho_out_hist[idx * n + t])
+        t = t + 1
+    }
+    return out
+}

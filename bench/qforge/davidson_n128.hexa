@@ -1,0 +1,5 @@
+use "bench/qforge/davidson_core"
+fn main() {
+    let cs = qforge_davidson_bench(128, 4, 600, )
+    println("n128 checksum=" + to_string(cs))
+}

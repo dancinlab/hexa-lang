@@ -1,0 +1,243 @@
+// stdlib/qforge/fixtures/cah6_scf_run.hexa — QFORGE M5.7 PR3 REAL-CELL verify.
+//
+// Drives the INDEPENDENT QFORGE PW engine on the REAL CaH6 cell — the case that
+// failed to converge before M5.7 because the inhomogeneous CaH6 ρ has V_H[ρ]≠0
+// and V_H was a frozen stub. Now V_H[ρ] builds in-loop (qforge_vhartree_from_rho)
+// each SCF iteration. This fixture:
+//   (1) parses the REAL ONCV NC UPFs (Ca Z=10, H Z=1) from the demiurge deck,
+//   (2) builds the BCC-primitive CaH6 cell (Im-3m, celldm from vc-relax.in),
+//   (3) generates a PW G-basis within a kinetic cutoff,
+//   (4) runs qforge_scf_pw_h_multi (multi-species V_ext + in-loop V_H[ρ]),
+//   (5) reports converged?, iters, total energy,
+//   (6) drives the el-ph→Tc tail (Γ-only Einstein, coarse) → λ, ω_log, Tc.
+//
+// HONEST SCOPE (d6): LOCAL-pseudopotential SCF (nproj=0) — upf_parse surfaces the
+//   local channel + Z but not the KB beta arrays, so V_NL is omitted here. The in-
+//   loop V_H[ρ] is the M5.7 deliverable under test; this is the engine-convergence
+//   verification (does a real inhomogeneous CaH6 ρ now self-consist), NOT a
+//   production Tc and NOT cross-validated against QE (QE-NC pod torn down).
+//
+// Run: HEXA_LANG=. hexa run --no-sentinel stdlib/qforge/fixtures/cah6_scf_run.hexa
+use "stdlib/qforge/scf_pw"
+use "stdlib/qforge/upf"
+use "stdlib/qforge/orchestrator_pw"
+use "stdlib/qforge/orchestrator"
+use "stdlib/qforge/davidson"
+use "stdlib/qforge/elph"
+use "stdlib/qforge/elph_scf"
+
+let DECK = "/Users/mini/dancinlab/demiurge/exports/rtsc/decks/CaH6_NC"
+
+fn main() {
+    println("=== QFORGE M5.7 PR3 — REAL CaH6 SCF (in-loop V_H[ρ]) ===")
+
+    // ── (1) parse the real ONCV UPFs ──────────────────────────────────────
+    let ca = upf_parse(DECK + "/pseudo/Ca_ONCV_PBE_sr.upf")
+    let h  = upf_parse(DECK + "/pseudo/H_ONCV_PBE_sr.upf")
+    if !ca.ok { println("FAIL Ca UPF: " + ca.error) ; return }
+    if !h.ok  { println("FAIL H UPF: "  + h.error)  ; return }
+    let zca = ca.header.z_valence
+    let zh  = h.header.z_valence
+    println("UPF: Ca Z=" + to_string(zca) + " mesh=" + to_string(len(ca.r))
+            + " · H Z=" + to_string(zh) + " mesh=" + to_string(len(h.r)))
+    let nelec = to_int(zca + 6.0 * zh)            // 10 + 6·1 = 16 valence electrons
+    let nocc = nelec / 2                          // 8 doubly-occupied bands (Γ)
+    println("valence electrons = " + to_string(nelec) + " → nocc = " + to_string(nocc))
+
+    // ── (2) BCC-primitive CaH6 cell (ibrav=3, celldm(1)=6.4640 bohr) ───────
+    //   a1=(a/2)( 1, 1, 1), a2=(a/2)(-1, 1, 1), a3=(a/2)(-1,-1, 1).  Ω=a³/2.
+    let a = 6.4640
+    let ha = 0.5 * a
+    let omega = a * a * a * 0.5
+    println("cell: a=" + to_string(a) + " bohr  Ω=" + to_string(omega) + " bohr³")
+    // reciprocal basis b_i (2π convention): for BCC, b1=(2π/a)(0,1,1) etc.
+    let tpa = 6.28318530717958647692 / a
+    let b1 = [0.0 * tpa, 1.0 * tpa, 1.0 * tpa]
+    let b2 = [-1.0 * tpa, 0.0 * tpa, 1.0 * tpa]
+    let b3 = [-1.0 * tpa, -1.0 * tpa, 0.0 * tpa]
+
+    // cartesian atom positions (bohr): frac · (a1,a2,a3).
+    // Ca @ (0,0,0); H @ the 12d set from the deck.
+    let hf = [0.25, 0.50, 0.00,  0.50, 0.00, 0.25,  0.00, 0.25, 0.50,
+              0.75, 0.50, 0.00,  0.50, 0.00, 0.75,  0.00, 0.75, 0.50]
+    let mut pos_ca = [0.0, 0.0, 0.0]
+    let mut pos_h: [float] = []
+    let a1 = [ha, ha, ha] ; let a2 = [-ha, ha, ha] ; let a3 = [-ha, -ha, ha]
+    let mut ih = 0
+    while ih < 6 {
+        let f1 = hf[ih * 3] ; let f2 = hf[ih * 3 + 1] ; let f3 = hf[ih * 3 + 2]
+        pos_h.push(f1 * a1[0] + f2 * a2[0] + f3 * a3[0])
+        pos_h.push(f1 * a1[1] + f2 * a2[1] + f3 * a3[1])
+        pos_h.push(f1 * a1[2] + f2 * a2[2] + f3 * a3[2])
+        ih = ih + 1
+    }
+
+    // ── (3) PW G-basis: the lowest-|G|² NPW G-vectors (NPW a power of 2) ───
+    //   The in-loop V_H[ρ] (M5.7) builds on a 1×1×n FFT LINE (the scf_pw self-
+    //   consistent convention); core_fft requires each FFT axis to be a power of
+    //   2. A physical |G|²≤ecut shell count is not pow2, so we take the NPW=64
+    //   lowest-kinetic-energy G-vectors (a complete low-energy PW set) → the V_H
+    //   FFT fires. d6 honest: the FULL fix is a dense 3-D pow2 real-space ρ grid
+    //   decoupled from the PW count (the orchestrator-header "dense FFT grid for
+    //   aperiodic ρ" residual); the 1×1×NPW line is the M5.7-landed convention.
+    let NPW = 16          // tractable local verify basis (pow2 for the V_H FFT line)
+    let M = 3
+    let mut gall: [float] = []
+    let mut g2all: [float] = []
+    let mut gi = -M
+    while gi <= M {
+        let mut gj = -M
+        while gj <= M {
+            let mut gk = -M
+            while gk <= M {
+                let gx = to_float(gi) * b1[0] + to_float(gj) * b2[0] + to_float(gk) * b3[0]
+                let gy = to_float(gi) * b1[1] + to_float(gj) * b2[1] + to_float(gk) * b3[1]
+                let gz = to_float(gi) * b1[2] + to_float(gj) * b2[2] + to_float(gk) * b3[2]
+                gall.push(gx) ; gall.push(gy) ; gall.push(gz)
+                g2all.push(gx * gx + gy * gy + gz * gz)
+                gk = gk + 1
+            }
+            gj = gj + 1
+        }
+        gi = gi + 1
+    }
+    // selection sort the lowest NPW by |G|² (small n — simple is fine).
+    let ntot = len(g2all)
+    let mut gvecs: [float] = []
+    let mut used: [int] = [] ; let mut u = 0 ; while u < ntot { used.push(0) ; u = u + 1 }
+    let mut picked = 0
+    while picked < NPW {
+        let mut best = -1 ; let mut bestv = 1.0e30
+        let mut t = 0
+        while t < ntot {
+            if used[t] == 0 { if g2all[t] < bestv { bestv = g2all[t] ; best = t } }
+            t = t + 1
+        }
+        if best < 0 { break }
+        used[best] = 1
+        gvecs.push(gall[best * 3]) ; gvecs.push(gall[best * 3 + 1]) ; gvecs.push(gall[best * 3 + 2])
+        picked = picked + 1
+    }
+    let n = len(gvecs) / 3
+    println("PW basis: n=" + to_string(n) + " lowest-|G|² G-vectors (NPW=" + to_string(NPW) + ")")
+
+    // ── multi-species staging arrays (Ca then H) ──────────────────────────
+    let nspec = 2
+    let mut rs: [float] = [] ; let mut rabs: [float] = [] ; let mut vlocs: [float] = []
+    let mut i = 0
+    while i < len(ca.r) { rs.push(ca.r[i]) ; rabs.push(ca.rab[i]) ; vlocs.push(ca.vloc[i]) ; i = i + 1 }
+    i = 0
+    while i < len(h.r) { rs.push(h.r[i]) ; rabs.push(h.rab[i]) ; vlocs.push(h.vloc[i]) ; i = i + 1 }
+    let mlens = [len(ca.r), len(h.r)]
+    let zs = [zca, zh]
+    let mut poss: [float] = []
+    poss.push(pos_ca[0]) ; poss.push(pos_ca[1]) ; poss.push(pos_ca[2])
+    i = 0
+    while i < len(pos_h) { poss.push(pos_h[i]) ; i = i + 1 }
+    let palens = [1, 6]                            // 1 Ca site, 6 H sites
+    // local-pseudopotential run: no KB projectors surfaced by upf_parse → nproj=0.
+    let mut empty_f: [float] = [] ; let mut empty_i: [int] = []
+    let nprojs = [0, 0] ; let blens = [0, 0] ; let dlens = [0, 0]
+
+    // ── (4) run the multi-species in-loop-V_H SCF (M5.7) ──────────────────
+    //   ρ carried on the n-PW index grid; FFT line nx=ny=1, nz=n (the M5.7
+    //   self-consistent V_H convention) so the in-loop V_H[ρ] fires.
+    let k0 = [0.0, 0.0, 0.0]
+    let xc_mode = 1                                // Hartree + LDA-exchange
+    // |G|-spaced 1-D reciprocal line for the V_H FFT (b·n along the basis index).
+    let eb1 = [tpa, 0.0, 0.0] ; let eb2 = [0.0, tpa, 0.0] ; let eb3 = [0.0, 0.0, tpa]
+    // M5.8: drive the SMEARED + ANDERSON SCF. Metallic CaH6 needs FRACTIONAL
+    //   Fermi-Dirac occupation (E_F by bisection) + ANDERSON history mixing — the
+    //   M5.7 integer/linear path limit-cycled (charge-sloshing). nbands extended
+    //   above nocc so the smeared E_F has empty bands to fractionally populate.
+    let sigma = 0.02                               // Fermi-Dirac smearing width (Ha)
+    let nbands = nocc + 4
+    println("running qforge_scf_pw_h_multi_smeared (mix=0.3, σ=" + to_string(sigma)
+            + " Ha, Anderson depth=6, tol=1e-6, max_iter=200) ...")
+    let scf = qforge_scf_pw_h_multi_smeared(k0, gvecs, nspec, rs, rabs, vlocs, mlens, zs,
+                                            poss, palens, empty_f, empty_i, empty_f,
+                                            nprojs, blens, dlens, omega, xc_mode,
+                                            1, 1, n, eb1, eb2, eb3,
+                                            nbands, nelec, 0.3, 1.0e-6, 200,
+                                            sigma, 2.0, 6)
+    println("--- SCF RESULT ---")
+    println("converged = " + to_string(scf.converged))
+    println("iters     = " + to_string(scf.iters))
+    println("e_total   = " + to_string(scf.e_total) + " (band-energy sum, Hartree)")
+    let mut es = "evals[0..nocc] ="
+    let mut q = 0
+    while q < nocc { es = es + " " + to_string(scf.evals[q]) ; q = q + 1 }
+    println(es)
+
+    if !scf.converged {
+        println("--- NOT SELF-CONSISTENT (d6, honest) — metallic charge-sloshing ---")
+        println("residual pinned (no decrease): CaH6 is METALLIC; the qforge_scf driver")
+        println("uses FIXED integer occupations (no Fermi smearing) + PLAIN linear mixing,")
+        println("so the bands straddling E_F swap occupation between iters → ρ limit-cycle.")
+        println("V_H[ρ] (M5.7) IS active & density-dependent (bound spectrum below); the")
+        println("residual is the OCCUPATION/MIXING scheme, NOT the Hartree wiring.")
+        println("breakthrough (M5.8): Fermi-Dirac/MP smearing + Anderson/Broyden mixing.")
+        println("--- proceeding to el-ph chain on the best-effort ρ (engine-verify, NOT production) ---")
+    }
+
+    // ── (5)+(6) el-ph→Tc tail: Γ-only single Einstein mode (coarse verify) ─
+    //   A rigid on-site bare perturbation on the occupied manifold → finite |g|²
+    //   → λ. NOT a production Tc (no phonon dispersion / DFPT modes) — the goal is
+    //   "the engine converges a real cell and emits a finite λ" (d6).
+    //   Recover the occupied ψ_n by re-diagonalizing the MULTI-species H(ρ) at the
+    //   best-effort ρ (qforge_h_of_rho_multi is the staged closure — the single-
+    //   species orchestrator helper qforge_pw_occ_states uses the wrong slots here).
+    let h_apply = qforge_h_of_rho_multi(scf.rho)
+    let mut diag: [float] = []
+    let mut dd = 0
+    while dd < n {
+        let mut col: [float] = [] ; let mut t = 0
+        while t < n { if t == dd { col.push(1.0) } else { col.push(0.0) } ; t = t + 1 }
+        let hc = h_apply(col) ; diag.push(hc[dd]) ; dd = dd + 1
+    }
+    let dr = qforge_davidson(h_apply, diag, n, nocc, 1.0e-10, 300)
+    let mut occ_states: [[float]] = []
+    let mut bb = 0
+    while bb < nocc {
+        let mut v: [float] = [] ; let mut t = 0
+        while t < n { v.push(dr.evecs[bb * n + t]) ; t = t + 1 }
+        occ_states.push(v) ; bb = bb + 1
+    }
+    let mut eps_occ: [float] = []
+    i = 0 ; while i < nocc { eps_occ.push(dr.evals[i]) ; i = i + 1 }
+    // a rigid on-site bare perturbation ΔV|ψ_n⟩ = g_target·ψ_n → |g_nn|=g_target.
+    let g_target = 0.30
+    let omega0 = 1236.4                            // CaH6 ω₀ scale (K), Einstein
+    let e_fermi = dr.evals[nocc - 1]               // HOMO ≈ E_F (Γ)
+    let n_ef = 1.0
+    let mut grid: [float] = []
+    let mut gp = 1
+    while gp < 401 { grid.push(to_float(gp) * 7.0) ; gp = gp + 1 }   // 7..2800 K
+    // on-shell Fermi-surface double-delta dataset: each occupied n contributes
+    // |g_nn|²=g_target² at ε_k=ε_kq=ε_n, ω=ω₀ (the el-ph tail histograms this).
+    let mut eps_k: [float] = [] ; let mut eps_kq: [float] = []
+    let mut g2: [float] = [] ; let mut wq: [float] = []
+    let mut nn = 0
+    while nn < nocc {
+        let gnn = qforge_elph_g_diag(occ_states[nn], scale_vec(occ_states[nn], g_target, n), n)
+        eps_k.push(eps_occ[nn]) ; eps_kq.push(eps_occ[nn])
+        g2.push(gnn * gnn) ; wq.push(omega0)
+        nn = nn + 1
+    }
+    let res = qforge_elph_to_tc(eps_k, eps_kq, g2, wq, e_fermi, n_ef, grid,
+                                1.0, 0.05, 10.0, 0.10, 256)
+    println("--- el-ph→Tc CHAIN (Γ-only Einstein, coarse — verification, not production) ---")
+    println("chain ok  = " + to_string(res.ok))
+    println("lambda    = " + to_string(res.lambda))
+    println("omega_log = " + to_string(res.omega_log) + " K")
+    println("Tc_AD     = " + to_string(res.tc_ad) + " K")
+    println("Tc_ME     = " + to_string(res.tc_me) + " K")
+    println("=== DONE ===")
+}
+
+fn scale_vec(v: [float], s: float, n: int) -> [float] {
+    let mut out: [float] = []
+    let mut i = 0
+    while i < n { out.push(s * v[i]) ; i = i + 1 }
+    return out
+}

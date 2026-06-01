@@ -1,0 +1,127 @@
+// HEXA Standard Library — qforge/smearing
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// QFORGE M5.8① — FRACTIONAL Fermi-Dirac occupations + an E_F-by-bisection solver.
+//
+// The SCF driver (scf.hexa) fills nelec electrons with FIXED INTEGER closed-shell
+// occupation (2e per state, lowest-first). For a METAL (CaH6) bands straddle the
+// Fermi level E_F, so the integer fill SWAPS which band is occupied between SCF
+// iterations whenever two near-E_F eigenvalues cross → ρ jumps → a charge-sloshing
+// limit cycle (the M5.7 PR3 residual: pinned ~0.83–1.7, no decrease).
+//
+// The textbook fix is to give each state a FRACTIONAL occupation set by a smooth
+// occupation function f((ε−E_F)/σ) of width σ, with E_F fixed by charge
+// conservation Σ_k f_k·(spin) = nelec. Then a band crossing E_F changes occupation
+// CONTINUOUSLY (no discrete swap) and ρ varies smoothly with ε → the limit cycle
+// is removed. This brick supplies:
+//
+//   · qforge_fermi_dirac(eps, ef, sigma)   — f(ε) = 1/(1+exp((ε−E_F)/σ))      (∈[0,1])
+//   · qforge_occ_sum(evals, ef, sigma, sd) — Σ_k spin_deg·f(ε_k)               (electron count)
+//   · qforge_fermi_level(evals, nelec, sigma, spin_deg) — E_F by BISECTION so
+//        Σ spin_deg·f(ε_k) == nelec to tolerance.
+//   · qforge_fermi_occupations(...)        — the per-band occupation VECTOR
+//        spin_deg·f(ε_k − E_F) (the fractional analogue of scf_occupations).
+//
+// ── σ→0 INSULATOR / backward-compat limit (d6) ───────────────────────────────
+//   As σ→0, f → a step: 1 below E_F, 0 above, ½ exactly at E_F. For a gapped
+//   spectrum with E_F placed inside the gap the fractional occupations RECOVER the
+//   integer fill EXACTLY — so an insulator (or σ=0) reproduces scf_occupations.
+//   This is the property that lets M5.8 stay a no-regression opt-in (the driver
+//   keeps the integer path when smearing is disabled).
+//
+// reuse (d19): builtin `exp` (used across qforge/correlation, qforge/elph). The
+//   bisection is plain numerics — no new dependency.
+
+// ── Fermi-Dirac occupation of a single state (per spin channel) ──────────────
+//   f(ε) = 1 / (1 + exp((ε − E_F)/σ)) ∈ (0,1).  σ in the SAME energy unit as ε
+//   (the SCF carries Hartree). The exp argument is clamped to avoid overflow on
+//   states far from E_F (f→1 or f→0 then, the correct limits).
+pub fn qforge_fermi_dirac(eps: float, ef: float, sigma: float) -> float {
+    if sigma <= 0.0 {
+        // σ=0 step limit: below → 1, above → 0, exactly at → ½.
+        if eps < ef { return 1.0 }
+        if eps > ef { return 0.0 }
+        return 0.5
+    }
+    let x = (eps - ef) / sigma
+    if x > 40.0 { return 0.0 }       // exp(40)≈2.4e17 → f≈0 (state well above E_F)
+    if x < -40.0 { return 1.0 }      // exp(−40)≈0 → f≈1 (state well below E_F)
+    return 1.0 / (1.0 + exp(x))
+}
+
+// ── total electron count Σ_k spin_deg·f(ε_k) at a trial E_F ──────────────────
+//   spin_deg = 2.0 for spin-degenerate (closed-shell) bands, 1.0 for spin-resolved.
+pub fn qforge_occ_sum(evals: [float], ef: float, sigma: float,
+                      spin_deg: float) -> float {
+    let n = len(evals)
+    let mut s = 0.0
+    let mut k = 0
+    while k < n {
+        s = s + spin_deg * qforge_fermi_dirac(evals[k], ef, sigma)
+        k = k + 1
+    }
+    return s
+}
+
+// ── E_F by BISECTION so Σ spin_deg·f(ε_k) == nelec ───────────────────────────
+//   The occupation sum is MONOTONE DECREASING in E_F? No — f is INCREASING in E_F
+//   (raising E_F occupies more states), so Σ f(ε_k) is monotone INCREASING in E_F.
+//   Bisection brackets E_F between [ε_min − pad, ε_max + pad] (where the sum is 0
+//   and N_max·spin respectively) and halves until the count matches nelec to tol.
+//   Returns the converged E_F.  Robust: a flat (degenerate) spectrum still
+//   brackets because the pad pushes the sum past nelec at the top end.
+pub fn qforge_fermi_level(evals: [float], nelec: int, sigma: float,
+                          spin_deg: float) -> float {
+    let n = len(evals)
+    let target = to_float(nelec)
+    // bracket: lo below all states (sum→0), hi above all states (sum→N·spin).
+    let mut lo = evals[0]
+    let mut hi = evals[0]
+    let mut k = 1
+    while k < n {
+        if evals[k] < lo { lo = evals[k] }
+        if evals[k] > hi { hi = evals[k] }
+        k = k + 1
+    }
+    // pad the bracket by max(10σ, span) so the endpoints truly straddle the target.
+    let span = hi - lo
+    let mut pad = 10.0 * sigma
+    if span > pad { pad = span }
+    if pad < 1.0 { pad = 1.0 }
+    lo = lo - pad
+    hi = hi + pad
+    // bisection: ~60 halvings → ef to ~(span)·2^-60 (machine precision on the count).
+    let mut it = 0
+    while it < 100 {
+        let mid = 0.5 * (lo + hi)
+        let cnt = qforge_occ_sum(evals, mid, sigma, spin_deg)
+        // sum increasing in E_F: too many electrons → lower E_F; too few → raise it.
+        if cnt > target { hi = mid } else { lo = mid }
+        // tight enough on the bracket → done.
+        if (hi - lo) < 1.0e-12 { break }
+        it = it + 1
+    }
+    return 0.5 * (lo + hi)
+}
+
+// ── per-band fractional occupation vector occ_k = spin_deg·f(ε_k − E_F) ───────
+//   The fractional analogue of scf_occupations. Solves E_F internally so the
+//   returned vector sums (Σ occ_k) to nelec to bisection tolerance. nbands is the
+//   number of computed bands; evals must be at least nbands long.
+pub fn qforge_fermi_occupations(evals: [float], nbands: int, nelec: int,
+                                sigma: float, spin_deg: float) -> [float] {
+    // build the band-restricted spectrum the E_F solve sees (lowest nbands).
+    let mut sp: [float] = []
+    let mut k = 0
+    while k < nbands { sp.push(evals[k]) ; k = k + 1 }
+    let ef = qforge_fermi_level(sp, nelec, sigma, spin_deg)
+    let mut occ: [float] = []
+    k = 0
+    while k < nbands {
+        occ.push(spin_deg * qforge_fermi_dirac(evals[k], ef, sigma))
+        k = k + 1
+    }
+    return occ
+}
