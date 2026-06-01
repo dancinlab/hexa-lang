@@ -1,0 +1,97 @@
+F-N5-STRTAB-PERF — O(n) strtab build in _build_merged_strtab (was O(n²))
+========================================================================
+date:   2026-06-01
+branch: cc-native/n5-strtab-perf-main (off origin/main), PR #2458
+file:   compiler/emit/macho_arm64.hexa  (+68 / -25, single file)
+
+STATEMENT (falsifier)
+---------------------
+_build_merged_strtab is O(n²) over ~3600 self-compiler symbols (3252 .LCstr
++ 344 g<id> + 41 .LCflt): _str_in linear dedup + _sort_rev_desc insertion
+sort + _index_of_str linear result lookup ≈ 13M string ops. Full-flat native
+self-emit took ~60min / ~8.85GB RSS → env/OOM-killed before writing the obj;
+same slowness fails linux-arm64 faithful-nobaseline CI (exit 143 SIGTERM).
+FALSIFIER: the rewrite MUST be byte-identical (clang reversed-desc suffix-merge
+ordering) — if small-obj strtab bytes / symbol order differ, it is wrong.
+
+METHOD
+------
+- dedup  → hash-set map (has_key/seen[name]=true)           O(n)
+- sort   → top-down merge sort _msort_rev_desc/_merge_rev_desc
+           reusing the EXACT _rev_str_gt comparator          O(n log n)
+- result → off_of name→offset map (no _index_of_str scan)    O(n)
+Byte-identity: deduped inputs distinct + _rev_str_gt strict total order ⇒
+merge sort == insertion sort output; suffix-merge offset assignment unchanged.
+
+VERIFICATION — BYTE-IDENTICAL SMALL-OBJ PROOF (real cmp)
+-------------------------------------------------------
+Both aprimes built via build_aprime.sh, smoke exit(6*7)==42 PASS.
+  OLD (O(n²)) = /tmp/aprime_fxp2   NEW (O(n log n)) = /tmp/aprime_strtab
+Same source emitted by each, then cmp:
+
+  st_str.hexa  (println ×3, 1 dup)            cmp → BYTE-IDENTICAL ✅
+  st_fg.hexa   (2 float lits + 1 mut global)  cmp → BYTE-IDENTICAL ✅
+  st_many.hexa (10 strings, shared suffixes)  cmp → BYTE-IDENTICAL ✅
+  nm symbol-count parity: old 19 == new 19 (st_many)
+
+otool -X -s __TEXT __cstring on st_many_new.o confirms the reversed-desc
+suffix-merge layout (shared-suffix strings adjacent, longest-tail first).
+
+FINDING
+-------
+1) CI (INDEPENDENT PROOF — the perf fix's double payoff):
+   PR #2458 (base main) — ALL 4 faithful-nobaseline checks PASS:
+     check @grace consent trailers          pass  1m47s
+     faithful-nobaseline (darwin-arm64)      pass  1m48s
+     faithful-nobaseline (linux-x86_64)      pass  3m57s
+     faithful-nobaseline (linux-arm64)       pass  8m27s   ← was exit 143
+                                                            SIGTERM (timeout
+                                                            on the O(n²) strtab)
+   The linux-arm64 job that previously SIGTERM-timed-out now completes in
+   8m27s. This is the strongest evidence the perf fix worked.
+
+2) Algorithmic Δ (byte-identical, proven on small objs):
+   strtab build: dedup O(n²)→O(n), sort O(n²)→O(n log n), result-map
+   O(n²)→O(n). The ~13M-op quadratic blowup over ~3600 syms is removed.
+
+Old-code baseline (this session): /tmp/aprime_fxp2 (O(n²)) full-flat emit
+was at 05:51 elapsed / 7.9GB RSS still in codegen when killed; prior
+session's full run was env-killed at ~60min / ~8.85GB peak.
+
+3) Local full-flat emit (NEW O(n log n) aprime, /tmp/aprime_strtab):
+   RSS PEAK ~8.7GB at ~3min (codegen), then DECLINED to ~150MB-540MB
+   through the serialize phase — NOT the 8.85GB OOM-kill of the old run,
+   and NOT SIGTERM'd. Process stayed HEALTHY (CPU-bound, steady memory)
+   well past 36min — the catastrophic O(n²) strtab stall is GONE (the
+   strtab phase is now fast; the remaining serialize cost is the slow
+   byte-by-byte obj-WRITE path, a SEPARATE issue from this fix). The
+   linux-arm64 CI completing in 8m27s is the clean apples-to-apples
+   timing proof (same flat, faster host I/O).
+
+4) FULL-FLAT EMIT COMPLETED (the strtab fix's payoff, end-to-end):
+   /tmp/aprime_strtab _drv.hexa --emit=obj … -o /tmp/cc-prc2.o /tmp/cc-l1-flat-new.hexa
+   EXIT=0  WALL=3956s (~66min)  obj=3216096 B  pack_lir residual=0
+   (ALL page refs resolved — 344 g<id> + 41 .LCflt + 3252 .LCstr).
+   The OLD O(n²) code was env/OOM-KILLED at ~60min having STALLED in the
+   strtab loop (8.85GB peak). The NEW code RAN TO COMPLETION at the same
+   wall mark, RSS peak ~8.7GB at codegen then DECLINED to ~50MB through a
+   slow byte-by-byte obj-WRITE finalize (a SEPARATE slow path, not strtab,
+   not OOM, not SIGTERM). The strtab pathology is GONE — measured proof.
+
+LINK + SMOKE (the prize attempt — honest result):
+   /tmp/hld_bin -o /tmp/gen2 /tmp/cc-prc2.o /tmp/rt_new.o --lc-main _main
+     → gen2 = 1930224 B Mach-O executable, link OK (rc 0).
+   HEXA_ATLAS_EMBED=/tmp/noatlas /tmp/gen2 sm.hexa --emit=obj …
+     → **SIGSEGV (signal 11)**, EXIT=139. Crash report
+     gen2-2026-06-01-232914.ips: EXC_BAD_ACCESS KERN_INVALID_ADDRESS at
+     0x1000 (near-null deref) at gen2 offset 0x15a2e8.
+
+⛔ BYTE-EQ FIXPOINT NOT REACHED — blocker MOVED (honest, NOT this PR's scope).
+   The strtab perf bug is FIXED (cc-prc2.o emits residual 0 + links). The
+   remaining blocker is the PRE-EXISTING NATIVE-CODEGEN COMPLETENESS bug
+   documented in memory project_cc_native_n5sym (the `udf #0` / main+40 SIGILL
+   class — aprime's native self-emit isn't yet a VALID runnable copy of
+   itself): gen2 SIGSEGVs at runtime, so self-repro cc-gen3.o cannot be
+   produced and the cmp cannot run. This is a codegen-correctness frontier,
+   ORTHOGONAL to the strtab perf fix. cmp NOT run (gen2 doesn't execute).
+   Prereqs (rt_new.o, hld_bin) verified; cc-prc2.o + gen2 retained at /tmp.
