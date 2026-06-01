@@ -1,0 +1,166 @@
+// @raw117_exempt
+// ════════════════════════════════════════════════════════════════════════
+// stdlib/flame/plasti_sim.hexa — host PLASTI-SIM: on-chip plasticity oracle
+//
+// FLAME-PERF P6 milestone — "온칩 비경첩 가소성 = 유일 학습자":
+//   the DEPLOYMENT learner is on-chip non-deterministic plasticity (local
+//   Hebbian / STDP-style updates · NO global backprop · H_679 / H_904 /
+//   anima a_train_flame_forge). GPU does PLASTI-SIM instrumentation only.
+//
+// HONEST SCOPE (g63):
+//   The REAL on-chip BOUND needs neuromorphic hardware (AKIDA). We have
+//   none. This file is the HOST oracle of the plasticity update rule — a
+//   pure-hexa simulation that runs on a normal CPU and lets us MEASURE a
+//   micro-falsifier (RETAIN ∧ GAIN on a toy task) BEFORE committing it to
+//   silicon. It does NOT and CANNOT close the hardware BOUND. The hardware
+//   half is HONEST-DEFERRED to AKIDA (.discoveries/flame-onchip-plasticity).
+//
+// THE LEARNER (local, no backprop):
+//   A single layer of N output units fully connected to D input units by a
+//   weight matrix W (N×D, row-major). On each presentation the unit with
+//   the strongest pre-synaptic drive fires (winner-take-all); the winner's
+//   afferent weights are updated by a LOCAL Hebbian rule with input-decay
+//   and a per-row L1 normalization (Oja/competitive-learning flavoured).
+//   The update for winning unit i, input j is:
+//
+//     dW[i][j] = lr * (pre[j] - W[i][j])            (Hebbian toward input)
+//     W'[i][j] = clip(W[i][j] + dW[i][j], 0, w_max)
+//     row i then L1-renormalized so sum_j W[i][j] == target_norm
+//
+//   The winner is decided ONLY by units' own pre-synaptic drive crossing a
+//   competitive max — it is NEVER a function of a label or a global loss
+//   gradient. This is the locality contract: a unit learns from its own
+//   input and its own firing, nothing downstream. That is exactly what a
+//   neuromorphic substrate (AKIDA) can do on-chip and what backprop can
+//   not (backprop needs the full reverse graph + a global error signal).
+//
+//   READOUT is a frozen majority-vote prototype→label map: no learning
+//   happens at readout — it only labels which prototype won. This keeps
+//   ALL plasticity local and label-free; the labels touch the readout map
+//   ONLY, never the weights.
+//
+// IMPLEMENTATION NOTE — no builtin / no codegen change:
+//   Pure-hexa element-wise loops over the existing tensor_lib t_* surface.
+//   stdlib composition, not new runtime.c builtins; compiles through the
+//   same codegen_c2 path. stdlib_trig_libm — no hand-rolled transcendentals.
+// ════════════════════════════════════════════════════════════════════════
+
+use "stdlib/flame/tensor_lib"
+
+// ── PS-1: competitive drive — drive[i] = −||W[i] − x||²  (closest wins) ──
+// Negative squared-Euclidean distance: the prototype CLOSEST to the input
+// gets the LARGEST (least-negative) drive, so argmax = nearest prototype.
+// This is genuine competitive learning (SOM/online-k-means flavour): the
+// winner is decided by each unit's OWN distance to its OWN input, with no
+// label and no global signal. Returns a NEW length-N tensor; caller owns.
+pub fn ps_drive(W: int, x: int, N: int, D: int) -> int {
+    let drive = t_zeros(N)
+    let mut i = 0
+    while i < N {
+        let mut acc = 0.0
+        let mut j = 0
+        while j < D {
+            let d = t_get(W, i * D + j) - t_get(x, j)
+            acc = acc + d * d
+            j = j + 1
+        }
+        t_set(drive, i, 0.0 - acc)
+        i = i + 1
+    }
+    return drive
+}
+
+// ── PS-2: winner index — argmax over a length-N drive tensor ────────────
+// Deterministic tie-break: lowest index wins. Returns the winning unit i.
+pub fn ps_winner(drive: int, N: int) -> int {
+    let mut best = 0
+    let mut best_v = t_get(drive, 0)
+    let mut i = 1
+    while i < N {
+        let v = t_get(drive, i)
+        if v > best_v {
+            best_v = v
+            best = i
+        }
+        i = i + 1
+    }
+    return best
+}
+
+// ── PS-3: local Hebbian update of ONE winning row (move-toward-input) ────
+// In-place update of W's row `win` (length D):
+//   W[win][j] += lr * (x[j] - W[win][j])   (Hebbian toward input, decay)
+//   clip to [0, w_max].
+// If target_norm > 0.0 the row is then L1-renormalized to target_norm
+// (optional homeostasis — pass target_norm <= 0.0 to SKIP, which is the
+// right choice for distance-based competition since renorm would pull the
+// prototype off the input cloud). Depends ONLY on {x, W[win], lr, win} —
+// NEVER on a label or a loss gradient. The locality / no-backprop contract.
+pub fn ps_hebb_update(W: int, x: int, win: int, D: int,
+                      lr: float, w_max: float, target_norm: float) {
+    let base = win * D
+    let mut j = 0
+    while j < D {
+        let idx = base + j
+        let w = t_get(W, idx)
+        let mut wn = w + lr * (t_get(x, j) - w)
+        if wn < 0.0 { wn = 0.0 }
+        if wn > w_max { wn = w_max }
+        t_set(W, idx, wn)
+        j = j + 1
+    }
+    if target_norm > 0.0 {
+        // optional L1 renormalize (homeostasis); skipped when <= 0.0.
+        let mut s = 0.0
+        let mut k = 0
+        while k < D {
+            s = s + t_get(W, base + k)
+            k = k + 1
+        }
+        if s > 0.0 {
+            let scale = target_norm / s
+            let mut m = 0
+            while m < D {
+                t_set(W, base + m, t_get(W, base + m) * scale)
+                m = m + 1
+            }
+        }
+    }
+}
+
+// ── PS-4: one presentation = local plasticity step (NO backprop) ────────
+// Compute drive, pick winner, update ONLY the winner's row. Returns the
+// winning unit index (the label-free cluster assignment for this sample).
+pub fn ps_present(W: int, x: int, N: int, D: int,
+                  lr: float, w_max: float, target_norm: float) -> int {
+    let drive = ps_drive(W, x, N, D)
+    let win = ps_winner(drive, N)
+    let _ = t_free(drive)
+    ps_hebb_update(W, x, win, D, lr, w_max, target_norm)
+    return win
+}
+
+// ── PS-5: inference winner (read-only, no plasticity) ───────────────────
+// Same drive+argmax as ps_present but performs NO weight update. Used at
+// test time and for the RETAIN probe — the substrate is frozen.
+pub fn ps_infer(W: int, x: int, N: int, D: int) -> int {
+    let drive = ps_drive(W, x, N, D)
+    let win = ps_winner(drive, N)
+    let _ = t_free(drive)
+    return win
+}
+
+// ── PS-6: seed prototype row `p` from a sample (local k-means++ flavour) ─
+// Copies the length-D vector `x` into W's row `p`. Seeding prototypes ON
+// real samples avoids the single-winner collapse of competitive learning
+// (a prototype far from the data cloud never wins → never updates → dead).
+// This is purely a LOCAL initialization: row p is set from one input, no
+// label, no gradient. Caller still owns x. No-op contract — copies values.
+pub fn ps_seed_row(W: int, x: int, p: int, D: int) {
+    let base = p * D
+    let mut j = 0
+    while j < D {
+        t_set(W, base + j, t_get(x, j))
+        j = j + 1
+    }
+}

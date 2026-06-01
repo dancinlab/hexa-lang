@@ -1,0 +1,11 @@
+=== PLASTI-SIM micro-falsifier (FLAME-PERF P6, host sim) ===
+learner = local Hebbian/WTA competitive plasticity · NO backprop
+GAIN   classes 0..2 held-out acc = 0.916667   (chance=0.333333)
+RETAIN classes 0..2 acc after +class3 = 1.0   (was 0.916667)
+       (sanity) new class 3 acc = 1.0
+
+PASS  GAIN    held-out acc 0.916667 >= gate 0.8
+PASS  RETAIN  post-new-class acc 1.0 >= gate 0.7
+
+VERDICT 🟢 SUPPORTED (host sim): local plasticity RETAINs ∧ GAINs without backprop
+        (on-chip hardware BOUND remains OPEN — HONEST-DEFERRED to AKIDA)
