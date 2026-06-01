@@ -13,11 +13,16 @@
 //    · round-robin multi-window loop — one window per step, epochs passes.
 //    · honest descent measure — mean CE over the first epoch vs the last epoch.
 //
-//  PR3 wiring (this revision): the forward conv 6× (embed·trunk·router·2 experts·
-//  readout) now route through conv1d_via_forge (im2col + forge_dispatch_matmul,
-//  byte-eq per F-CLM-CONV-GPU-EQ #2352) instead of host nn_conv1d_fwd — so on a
-//  CUDA host the matmul bulk rides cuBLAS. Backward stays host (Phase-4 bwd-forge
-//  is separate). Corpus switched to the cross-lingual-semantic parallel fixture.
+//  PR3 wiring: the forward conv 6× (embed·trunk·router·2 experts·readout) route
+//  through conv1d_via_forge (im2col + forge_dispatch_matmul, byte-eq per
+//  F-CLM-CONV-GPU-EQ #2352) instead of host nn_conv1d_fwd — so on a CUDA host the
+//  matmul bulk rides cuBLAS. Corpus = cross-lingual-semantic parallel fixture.
+//
+//  Phase-4 wiring (this revision): the backward conv 6× now route through
+//  conv1d_bwd_via_forge (col2im + forge_dispatch_matmul, byte-eq to nn_conv1d_bwd
+//  per F-CLM-CONV-BWD-FORGE-EQ #2383) instead of host nn_conv1d_bwd — so the
+//  backward GEMMs ride forge cuBLAS too. GRAD-EXACT preserved (byte-eq, identical
+//  CE descent); the GPU util-GREEN measurement itself is the next H100 fire.
 //
 //  F-CLM-PROD-DESCENT: real-corpus mean CE strictly descends (last_epoch <
 //  first_epoch · finite). Corpus = stdlib/flame/testdata/clm_semantic_parallel.txt
@@ -72,6 +77,85 @@ fn conv1d_via_forge(x: int, w: int, b: int, y_out: int,
             c2 = c2 + 1
         }
         t2 = t2 + 1
+    }
+}
+
+// conv1d backward (causal dilated) via forge matmul + col2im — inlined from
+// clm_conv_gpu (clm flame files cannot `use` one another). Expresses the two
+// heavy gradients (dW, dX) as GEMMs routed through forge_dispatch_matmul
+// (cuBLAS on a CUDA host, identical farr_matmul on CPU) so the backward stops
+// being a host scalar loop. Byte-eq to nn_conv1d_bwd (dW 1.67e-16 / dX 8.3e-17
+// / db 0.0 per F-CLM-CONV-BWD-FORGE-EQ #2383). col index j = ci*K + k.
+fn conv1d_bwd_via_forge(x: int, w: int, dy: int,
+                        dW_out: int, dX_out: int, db_out: int,
+                        T: int, Cin: int, Cout: int, K: int, dil: int) {
+    let Kdim = Cin * K
+    // im2col: xcolT[j, t] = (p>=0) ? x[p, ci] : 0, j = ci*K+k, p = t - dil*(K-1-k).
+    let xcolT = t_zeros(Kdim * T)
+    let mut t = 0
+    while t < T {
+        let mut ci = 0
+        while ci < Cin {
+            let mut k = 0
+            while k < K {
+                let p = t - dil * (K - 1 - k)
+                if p >= 0 {
+                    let j = ci * K + k
+                    t_set(xcolT, j * T + t, t_get(x, p * Cin + ci))
+                }
+                k = k + 1
+            }
+            ci = ci + 1
+        }
+        t = t + 1
+    }
+    // dW: dW_flat[Kdim, Cout] = xcolT[Kdim,T] @ dy[T,Cout] (forge GEMM)
+    let dW_flat = forge_dispatch_matmul(xcolT, Kdim, T, dy, Cout)
+    let mut co = 0
+    while co < Cout {
+        let mut j = 0
+        while j < Kdim {
+            t_set(dW_out, co * Kdim + j, t_get(dW_flat, j * Cout + co))
+            j = j + 1
+        }
+        co = co + 1
+    }
+    // dX: dXcol[T, Kdim] = dy[T,Cout] @ Wflat[Cout,Kdim] (forge GEMM), then col2im.
+    let dXcol = forge_dispatch_matmul(dy, T, Cout, w, Kdim)
+    let mut iz = 0
+    while iz < T * Cin {
+        t_set(dX_out, iz, 0.0)
+        iz = iz + 1
+    }
+    let mut t2b = 0
+    while t2b < T {
+        let mut ci2 = 0
+        while ci2 < Cin {
+            let mut k2 = 0
+            while k2 < K {
+                let p = t2b - dil * (K - 1 - k2)
+                if p >= 0 {
+                    let j = ci2 * K + k2
+                    let xidx = p * Cin + ci2
+                    t_set(dX_out, xidx, t_get(dX_out, xidx) + t_get(dXcol, t2b * Kdim + j))
+                }
+                k2 = k2 + 1
+            }
+            ci2 = ci2 + 1
+        }
+        t2b = t2b + 1
+    }
+    // db: db_out[co] = Σ_t dy[t,co] (host reduction)
+    let mut cb = 0
+    while cb < Cout {
+        let mut acc = 0.0
+        let mut tb = 0
+        while tb < T {
+            acc = acc + t_get(dy, tb * Cout + cb)
+            tb = tb + 1
+        }
+        t_set(db_out, cb, acc)
+        cb = cb + 1
     }
 }
 
@@ -161,7 +245,7 @@ fn clm_prod_bwd(dlogits: int, tokens: int,
                T: int, d: int, E: int, V: int, K: int) {
     let dynorm = t_zeros(T * d)
     let droWq = t_zeros(V * d)
-    nn_conv1d_bwd(yn, roWq, dlogits, droWq, dynorm, droB, T, d, V, 1, 1)
+    conv1d_bwd_via_forge(yn, roWq, dlogits, droWq, dynorm, droB, T, d, V, 1, 1)
     nn_int4_quant_bwd(droWq, roM, droW, V, d)
     let dy = t_zeros(T * d)
     nn_groupnorm_bwd(xhatN, invN, noG, dynorm, dnoG, dnoB, dy, T, d, 1)
@@ -169,7 +253,7 @@ fn clm_prod_bwd(dlogits: int, tokens: int,
     let dex_out = t_zeros(E * T * d)
     nn_moe_router_bwd(probs, ex_out, dy, dlogits_r, dex_out, T, E, d)
     let dxt_r = t_zeros(T * d); let drWq = t_zeros(E * d)
-    nn_conv1d_bwd(xt, rWq, dlogits_r, drWq, dxt_r, drB, T, d, E, 1, 1)
+    conv1d_bwd_via_forge(xt, rWq, dlogits_r, drWq, dxt_r, drB, T, d, E, 1, 1)
     nn_int4_quant_bwd(drWq, rM, drW, E, d)
     let dex0 = t_zeros(T * d); let dex1 = t_zeros(T * d)
     let mut ei = 0
@@ -181,10 +265,10 @@ fn clm_prod_bwd(dlogits: int, tokens: int,
     let deo0 = t_zeros(T * d); nn_gelu_bwd(eo0, dex0, deo0, T * d)
     let deo1 = t_zeros(T * d); nn_gelu_bwd(eo1, dex1, deo1, T * d)
     let dxt_e0 = t_zeros(T * d); let de0Wq = t_zeros(d * d * K)
-    nn_conv1d_bwd(xt, e0Wq, deo0, de0Wq, dxt_e0, de0B, T, d, d, K, 1)
+    conv1d_bwd_via_forge(xt, e0Wq, deo0, de0Wq, dxt_e0, de0B, T, d, d, K, 1)
     nn_int4_quant_bwd(de0Wq, e0M, de0W, d, d * K)
     let dxt_e1 = t_zeros(T * d); let de1Wq = t_zeros(d * d * K)
-    nn_conv1d_bwd(xt, e1Wq, deo1, de1Wq, dxt_e1, de1B, T, d, d, K, 1)
+    conv1d_bwd_via_forge(xt, e1Wq, deo1, de1Wq, dxt_e1, de1B, T, d, d, K, 1)
     nn_int4_quant_bwd(de1Wq, e1M, de1W, d, d * K)
     let dxt = t_zeros(T * d)
     let mut xi = 0
@@ -196,13 +280,13 @@ fn clm_prod_bwd(dlogits: int, tokens: int,
     let dh0 = t_zeros(T * d)
     nn_groupnorm_bwd(xhat0, inv0, tgG, dhn0, dtgG, dtgB, dh0, T, d, 1)
     let dxec_b = t_zeros(T * d); let dtcWq = t_zeros(d * d * K)
-    nn_conv1d_bwd(xec, tcWq, dh0, dtcWq, dxec_b, dtcB, T, d, d, K, 1)
+    conv1d_bwd_via_forge(xec, tcWq, dh0, dtcWq, dxec_b, dtcB, T, d, d, K, 1)
     nn_int4_quant_bwd(dtcWq, tcM, dtcW, d, d * K)
     let dxec = t_zeros(T * d)
     let mut ci = 0
     while ci < T * d { t_set(dxec, ci, t_get(dxt, ci) + t_get(dxec_b, ci)); ci = ci + 1 }
     let dxe = t_zeros(T * d); let decWq = t_zeros(d * d * K)
-    nn_conv1d_bwd(xe, ecWq, dxec, decWq, dxe, decB, T, d, d, K, 1)
+    conv1d_bwd_via_forge(xe, ecWq, dxec, decWq, dxe, decB, T, d, d, K, 1)
     nn_int4_quant_bwd(decWq, ecM, decW, d, d * K)
     let mut zi = 0
     while zi < V * d { t_set(dembed, zi, 0.0); zi = zi + 1 }

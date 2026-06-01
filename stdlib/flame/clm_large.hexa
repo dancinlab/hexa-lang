@@ -20,8 +20,14 @@
 //  PR4 wiring: the forward conv 5× (embed·trunk_dil·router·expert·readout) route
 //  through conv1d_via_forge (im2col + forge_dispatch_matmul, byte-eq F-CLM-CONV-
 //  GPU-EQ #2352) — so the 44.68M LARGE rung's matmul bulk rides cuBLAS on a CUDA
-//  host. Backward stays host (Phase-4 bwd-forge separate). On a `-DHEXA_CUDA` H100
-//  this is the large fire: F-RFC046-GPU-UTILIZATION (nvidia-smi >50% during run).
+//  host. On a `-DHEXA_CUDA` H100 this is the large fire: F-RFC046-GPU-UTILIZATION
+//  (nvidia-smi >50% during run).
+//
+//  Phase-4 wiring (this revision): the backward conv 5× (readout·router·expert·
+//  trunk_dil·embed) route through conv1d_bwd_via_forge (col2im + forge GEMM,
+//  byte-eq to nn_conv1d_bwd per F-CLM-CONV-BWD-FORGE-EQ #2383) — so the backward
+//  GEMMs ride forge cuBLAS too (the prerequisite for util-GREEN; the H100 util
+//  re-fire is the deferred measurement). GRAD-EXACT preserved (byte-eq descent).
 // ════════════════════════════════════════════════════════════════════════════
 
 use "stdlib/flame/tensor_lib"
@@ -71,6 +77,86 @@ fn conv1d_via_forge(x: int, w: int, b: int, y_out: int,
             c2 = c2 + 1
         }
         t2 = t2 + 1
+    }
+}
+
+// conv1d backward (causal dilated) via forge matmul + col2im — inlined from
+// clm_conv_gpu (clm flame files cannot `use` one another). Expresses the two
+// heavy gradients (dW, dX) as GEMMs routed through forge_dispatch_matmul
+// (cuBLAS on a CUDA host, identical farr_matmul on CPU) so the backward stops
+// being a host scalar loop. Byte-eq to nn_conv1d_bwd (dW 1.67e-16 / dX 8.3e-17
+// / db 0.0 per F-CLM-CONV-BWD-FORGE-EQ #2383). col index j = ci*K + k.
+// dilation-general → covers the trunk's _pow2(l) dilated conv backwards unchanged.
+fn conv1d_bwd_via_forge(x: int, w: int, dy: int,
+                        dW_out: int, dX_out: int, db_out: int,
+                        T: int, Cin: int, Cout: int, K: int, dil: int) {
+    let Kdim = Cin * K
+    // im2col: xcolT[j, t] = (p>=0) ? x[p, ci] : 0, j = ci*K+k, p = t - dil*(K-1-k).
+    let xcolT = t_zeros(Kdim * T)
+    let mut t = 0
+    while t < T {
+        let mut ci = 0
+        while ci < Cin {
+            let mut k = 0
+            while k < K {
+                let p = t - dil * (K - 1 - k)
+                if p >= 0 {
+                    let j = ci * K + k
+                    t_set(xcolT, j * T + t, t_get(x, p * Cin + ci))
+                }
+                k = k + 1
+            }
+            ci = ci + 1
+        }
+        t = t + 1
+    }
+    // dW: dW_flat[Kdim, Cout] = xcolT[Kdim,T] @ dy[T,Cout] (forge GEMM)
+    let dW_flat = forge_dispatch_matmul(xcolT, Kdim, T, dy, Cout)
+    let mut co = 0
+    while co < Cout {
+        let mut j = 0
+        while j < Kdim {
+            t_set(dW_out, co * Kdim + j, t_get(dW_flat, j * Cout + co))
+            j = j + 1
+        }
+        co = co + 1
+    }
+    // dX: dXcol[T, Kdim] = dy[T,Cout] @ Wflat[Cout,Kdim] (forge GEMM), then col2im.
+    let dXcol = forge_dispatch_matmul(dy, T, Cout, w, Kdim)
+    let mut iz = 0
+    while iz < T * Cin {
+        t_set(dX_out, iz, 0.0)
+        iz = iz + 1
+    }
+    let mut t2b = 0
+    while t2b < T {
+        let mut ci2 = 0
+        while ci2 < Cin {
+            let mut k2 = 0
+            while k2 < K {
+                let p = t2b - dil * (K - 1 - k2)
+                if p >= 0 {
+                    let j = ci2 * K + k2
+                    let xidx = p * Cin + ci2
+                    t_set(dX_out, xidx, t_get(dX_out, xidx) + t_get(dXcol, t2b * Kdim + j))
+                }
+                k2 = k2 + 1
+            }
+            ci2 = ci2 + 1
+        }
+        t2b = t2b + 1
+    }
+    // db: db_out[co] = Σ_t dy[t,co] (host reduction)
+    let mut cb = 0
+    while cb < Cout {
+        let mut acc = 0.0
+        let mut tb = 0
+        while tb < T {
+            acc = acc + t_get(dy, tb * Cout + cb)
+            tb = tb + 1
+        }
+        t_set(db_out, cb, acc)
+        cb = cb + 1
     }
 }
 
@@ -178,13 +264,13 @@ fn gen_bwd(dlogits: int, tokens: int, embed: int, ecW: int,
            T: int, d: int, E: int, V: int, K: int, L: int) {
     let dd = d * d * K
     let dynorm = t_zeros(T * d)
-    nn_conv1d_bwd(yn, roW, dlogits, droW, dynorm, droB, T, d, V, 1, 1)
+    conv1d_bwd_via_forge(yn, roW, dlogits, droW, dynorm, droB, T, d, V, 1, 1)
     let dy = t_zeros(T * d)
     nn_groupnorm_bwd(xhN, ivN, noG, dynorm, dnoG, dnoB, dy, T, d, 1)
     let dlogits_r = t_zeros(T * E); let dex = t_zeros(E * T * d)
     nn_moe_router_bwd(probs, ex, dy, dlogits_r, dex, T, E, d)
     let dxr = t_zeros(T * d)
-    nn_conv1d_bwd(xtrunk, rW, dlogits_r, drW, dxr, drB, T, d, E, 1, 1)
+    conv1d_bwd_via_forge(xtrunk, rW, dlogits_r, drW, dxr, drB, T, d, E, 1, 1)
     // dx (grad wrt trunk output) = router + Σ experts
     let dx = t_zeros(T * d)
     let mut z = 0; while z < T * d { t_set(dx, z, t_get(dxr, z)); z = z + 1 }
@@ -196,7 +282,7 @@ fn gen_bwd(dlogits: int, tokens: int, embed: int, ecW: int,
         _cp(eo, e * T * d, wtmp, T * d)              // reuse wtmp as eo-slice (size T*d ≤ dd ok? ensure)
         nn_gelu_bwd(wtmp, dexpe, deo, T * d)
         _cp(expW, e * dd, wtmp, dd)
-        nn_conv1d_bwd(xtrunk, wtmp, deo, dwtmp, dxe_e, dbtmp, T, d, d, K, 1)
+        conv1d_bwd_via_forge(xtrunk, wtmp, deo, dwtmp, dxe_e, dbtmp, T, d, d, K, 1)
         _cpback(dwtmp, dexpW, e * dd, dd); _cpback(dbtmp, dexpB, e * d, d)
         let mut a = 0; while a < T * d { t_set(dx, a, t_get(dx, a) + t_get(dxe_e, a)); a = a + 1 }
         e = e + 1
@@ -226,7 +312,8 @@ fn gen_bwd(dlogits: int, tokens: int, embed: int, ecW: int,
         nn_gelu_bwd(hnl, dx, dhn, T * d)
         nn_groupnorm_bwd(xhl, invl, gtmp, dhn, dgtmp, dgetmp, dh, T, d, 1)
         _cpback(dgtmp, dtrunkG, l * d, d); _cpback(dgetmp, dtrunkBe, l * d, d)
-        nn_conv1d_bwd(tinl, wtmp, dh, dwtmp, dconv_in, dbtmp, T, d, d, K, _pow2(l))
+        // forge backward (tinl/wtmp already prepared by the checkpoint recompute above)
+        conv1d_bwd_via_forge(tinl, wtmp, dh, dwtmp, dconv_in, dbtmp, T, d, d, K, _pow2(l))
         _cpback(dwtmp, dtrunkW, l * dd, dd); _cpback(dbtmp, dtrunkB, l * d, d)
         // residual: dx(layer input) = dx(passthrough) + dconv_in
         let mut a = 0; while a < T * d { t_set(dx, a, t_get(dx, a) + t_get(dconv_in, a)); a = a + 1 }
@@ -234,7 +321,7 @@ fn gen_bwd(dlogits: int, tokens: int, embed: int, ecW: int,
     }
     // embed_conv bwd
     let dxe = t_zeros(T * d)
-    nn_conv1d_bwd(xe, ecW, dx, decW, dxe, decB, T, d, d, K, 1)
+    conv1d_bwd_via_forge(xe, ecW, dx, decW, dxe, decB, T, d, d, K, 1)
     let mut zz = 0; while zz < V * d { t_set(dembed, zz, 0.0); zz = zz + 1 }
     nn_embedding_bwd_scatter(dxe, tokens, dembed, T, d)
 }
