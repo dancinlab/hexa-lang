@@ -220,6 +220,27 @@ pub fn dft_engine_resolve(sel: str) -> str {
     return ""
 }
 
+// _dft_pick_transport — PURE transport-selection classifier for the DIRECT->PROXY
+// upload fallback (inbox fix a). Given the three scp outcomes, returns the
+// WINNING transport label: direct when the direct scp succeeded; proxy when
+// direct failed but the proxy retry succeeded; empty (FAIL) when direct failed
+// and either the proxy endpoint was unresolvable OR the proxy retry also failed.
+// direct_ok = direct scp ok; proxy_resolved = vast_ssh_endpoint ok; proxy_ok =
+// proxy scp ok. The proxy is only consulted when direct failed (the live
+// _dft_upload short-circuits before resolving the proxy), so this mirrors that:
+// direct wins first, else proxy iff resolved AND its scp passed.
+pub fn _dft_pick_transport(direct_ok: int, proxy_resolved: int, proxy_ok: int) -> str {
+    if direct_ok == 1 {
+        return "direct"
+    }
+    if proxy_resolved == 1 {
+        if proxy_ok == 1 {
+            return "proxy"
+        }
+    }
+    return ""
+}
+
 // ── ① rent query (guard) ─────────────────────────────────────────────
 
 // dft_rent_query — the offer predicates the recipe pins on top of
@@ -1365,6 +1386,58 @@ pub fn dft_run(av: [str], start: int) -> int {
     return _dft_go(deck, image, disk, owner, query, identity, walltime_h, relax_name)
 }
 
+// DftUpload — the result of the deck upload, carrying the WINNING transport so
+// the caller threads it into the rest of the remote chain. `ok=1` iff the deck
+// landed on the pod; `host`/`ssh_opts` are the endpoint that actually accepted
+// the scp (the direct bare-IP endpoint, OR the vast proxy after a fallback).
+// `via` records which won ("direct" | "proxy") for the dispatch log.
+struct DftUpload {
+    ok:       int,
+    host:     str,     // ssh destination that won (root@<endpoint>)
+    ep_host:  str,     // bare endpoint host (no root@) — for the --resume state stamp
+    ep_port:  str,     // endpoint port — for the --resume state stamp
+    ssh_opts: [str],
+    via:      str,
+    message:  str
+}
+
+// _dft_upload — upload the deck with a DIRECT→PROXY single-retry fallback (the
+// inbox patch dft-run-direct-endpoint-scp255 fix (a)). The dispatch rents with
+// `create --direct` and the direct bare-IP endpoint answers the lightweight
+// reachability probe, but on a proxy-only offer the direct port is not a real
+// data-transfer sshd → `scp` exits 255. Before this fix that scp-255 tore the
+// pod down with no recovery path. Now: when the scp to the DIRECT endpoint
+// exits non-zero, resolve the vast PROXY endpoint (vast_ssh_endpoint → the same
+// sshN.vast.ai:PORT `hexa cloud resolve <id>` returns post-boot) and RETRY the
+// upload there ONCE before declaring failure. The WINNING transport is returned
+// so the caller keeps using it for the rest of the remote chain (a direct-fail
+// node will have a working proxy for the exec stages too). Reuses the existing
+// vast_ssh_endpoint proxy resolver — no new oracle (d19).
+fn _dft_upload(iid: str, host: str, ssh_opts: [str], ep_host: str, ep_port: str, identity: str, deck: str) -> DftUpload {
+    let direct = cloud_copy_to_recursive_opts(host, ssh_opts, deck, "/root/deck")
+    if _dft_pick_transport(direct.ok, 0, 0) == "direct" {
+        return DftUpload { ok: 1, host: host, ep_host: ep_host, ep_port: ep_port, ssh_opts: ssh_opts, via: "direct", message: "uploaded over direct endpoint" }
+    }
+    // direct scp failed (e.g. scp exit 255 on a proxy-only offer) — resolve the
+    // vast PROXY endpoint and retry ONCE there before declaring failure.
+    println("[dft-run] upload: direct endpoint scp FAILED (" + direct.message + ") — resolving vast proxy endpoint for a single retry...")
+    let proxy = vast_ssh_endpoint(iid)
+    if proxy.ok == 0 {
+        return DftUpload { ok: 0, host: host, ep_host: ep_host, ep_port: ep_port, ssh_opts: ssh_opts, via: "direct",
+            message: "direct scp failed AND proxy endpoint unresolved (" + proxy.message + ")" }
+    }
+    let proxy_host = "root@" + proxy.host
+    let proxy_opts = _dft_ssh_opts(proxy.port, identity)
+    println("[dft-run] upload: retrying over proxy endpoint " + proxy.host + ":" + proxy.port + " ...")
+    let retry = cloud_copy_to_recursive_opts(proxy_host, proxy_opts, deck, "/root/deck")
+    if _dft_pick_transport(direct.ok, proxy.ok, retry.ok) == "proxy" {
+        println("[dft-run] upload: proxy-fallback OK — pinning proxy transport for the remote chain.")
+        return DftUpload { ok: 1, host: proxy_host, ep_host: proxy.host, ep_port: proxy.port, ssh_opts: proxy_opts, via: "proxy", message: "uploaded over proxy endpoint (direct refused scp)" }
+    }
+    return DftUpload { ok: 0, host: host, ep_host: ep_host, ep_port: ep_port, ssh_opts: ssh_opts, via: "direct",
+        message: "BOTH direct + proxy scp failed (direct: " + direct.message + " · proxy: " + retry.message + ")" }
+}
+
 // _dft_go — the $-incurring path. Rents → resolves the direct endpoint →
 // reachability precheck → uploads the deck → runs relax → harvests +
 // hexa-parses the geometry → assembles + runs scf → runs el-ph → renders the
@@ -1398,8 +1471,8 @@ fn _dft_go(deck: str, image: str, disk: int, owner: str, query: str, identity: s
         println("[dft-run] instance " + inst.instance_id + " kept + tracked (cloud list); not auto-destroyed.")
         return 1
     }
-    let host = "root@" + ep.host
-    let ssh_opts = _dft_ssh_opts(ep.port, identity)
+    let mut host = "root@" + ep.host
+    let mut ssh_opts = _dft_ssh_opts(ep.port, identity)
     println("[dft-run] ② direct endpoint " + ep.host + ":" + ep.port + " (identity " + identity + ")")
 
     // ① reachability precheck — TCP echo. unreachable → destroy + abort.
@@ -1413,12 +1486,15 @@ fn _dft_go(deck: str, image: str, disk: int, owner: str, query: str, identity: s
     }
     println("[dft-run] ① reachability OK")
 
-    // upload the deck
-    let up = cloud_copy_to_recursive_opts(host, ssh_opts, deck, "/root/deck")
+    // upload the deck — DIRECT endpoint first, PROXY-fallback once on scp fail
+    // (inbox fix (a)); the WINNING transport is pinned for the rest of the chain.
+    let up = _dft_upload(inst.instance_id, host, ssh_opts, ep.host, ep.port, identity, deck)
     if up.ok == 0 {
         println("[dft-run] upload: " + up.message)
         return _dft_teardown(inst.instance_id, 1)
     }
+    host = up.host
+    ssh_opts = up.ssh_opts
 
     // ③ phys-core -np
     let lscpu = cloud_exec_opts(host, ssh_opts, "lscpu")
@@ -1857,8 +1933,8 @@ fn _dft_detach(deck: str, image: str, disk: int, owner: str, query: str, identit
         println("[dft-run] instance " + inst.instance_id + " kept + tracked (cloud list); not auto-destroyed.")
         return 1
     }
-    let host = "root@" + ep.host
-    let ssh_opts = _dft_ssh_opts(ep.port, identity)
+    let mut host = "root@" + ep.host
+    let mut ssh_opts = _dft_ssh_opts(ep.port, identity)
     println("[dft-run] ② direct endpoint " + ep.host + ":" + ep.port + " (identity " + identity + ")")
 
     // ① reachability precheck — TCP echo. unreachable → destroy + abort.
@@ -1872,12 +1948,16 @@ fn _dft_detach(deck: str, image: str, disk: int, owner: str, query: str, identit
     }
     println("[dft-run] ① reachability OK")
 
-    // upload the deck
-    let up = cloud_copy_to_recursive_opts(host, ssh_opts, deck, "/root/deck")
+    // upload the deck — DIRECT endpoint first, PROXY-fallback once on scp fail
+    // (inbox fix (a)); the WINNING transport is pinned for the rest of the chain
+    // AND recorded in the state stamp so --resume reconnects via the same endpoint.
+    let up = _dft_upload(inst.instance_id, host, ssh_opts, ep.host, ep.port, identity, deck)
     if up.ok == 0 {
         println("[dft-run] upload: " + up.message)
         return _dft_teardown(inst.instance_id, 1)
     }
+    host = up.host
+    ssh_opts = up.ssh_opts
 
     // ③ phys-core -np, CLAMPED to the ⓪ OOM-gate mem-budget sweet-spot (np_cap) so
     // a high-core but modest-RAM node can't over-subscribe ranks into an OOM kill.
@@ -1923,7 +2003,9 @@ fn _dft_detach(deck: str, image: str, disk: int, owner: str, query: str, identit
     println("[dft-run] ③ relax LAUNCHED detached — remote pid " + to_string(launched.pid) + " · log " + relax_log)
 
     // write the detach state stamp so --resume can reconstruct the pod context.
-    let wrote = _dft_write_state(deck, "relax", inst.instance_id, ep.host, ep.port,
+    // Record the WINNING endpoint (up.ep_host/up.ep_port) — when the proxy won the
+    // upload, --resume MUST reconnect via the proxy, not the scp-refusing direct IP.
+    let wrote = _dft_write_state(deck, "relax", inst.instance_id, up.ep_host, up.ep_port,
                                  identity, np, walltime_h, relax_name)
     if !wrote {
         println("[dft-run] ⚠ could not write detach state stamp " + _dft_state_path(deck)
