@@ -1,0 +1,12 @@
+clm_mitosis — MITOSIS structural growth (expert cell division) BOUND smoke
+  step 1  CE = 4.02517
+  -- MITOSIS at step 13: expert 0 split, E 4 -> 5
+  CE_pre_split  = 0.0218176
+  CE_post_split = 0.0218178
+  step 25 CE = 0.000291811
+  loss0 = 4.02517  lossF = 0.000291811
+  F-FLAME-MITOSIS-FINITE     = 1
+  F-FLAME-MITOSIS-CONTINUOUS = 1  (|jump| = 1.48406e-07)
+  F-FLAME-MITOSIS-DESCEND    = 1
+F-FLAME-MITOSIS-BOUND = 1
+PASS — model stays BOUNDED + stable after expert cell division (E 4 -> 5)
