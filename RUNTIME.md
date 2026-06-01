@@ -2507,6 +2507,35 @@ For each Tier-A sub-phase:
 
 ## Log
 
+### 2026-06-01 — `runtime_pure.hexa` math: floor/ceil/round/abs FFI→PURE (4 libm externs dropped)
+
+Ported 4 of the 11 libm FFI math wrappers in `self/runtime_pure.hexa`
+(`rt_math_floor`/`rt_math_ceil`/`rt_math_round`/`rt_math_abs`) from
+`extern fn __c_*` (libm) to **pure hexa exact arithmetic** — no libm, no
+syscall, no HexaVal carrier path (the codegen type-erasure wall the
+SELFHOST+ common-wall flags). These are integer-rounding ops, NOT
+transcendental, so they DON'T trip the `stdlib_trig_libm` ban on
+hand-rolled Taylor series (that ban is scoped to sin/cos/exp/…). The
+remaining 7 (sqrt/pow/exp/log/tanh/sin/cos) stay on libm FFI by that
+directive — irreducible-external interface (correct terminal state).
+
+**Method.** `to_int(float)` truncates toward zero (empirically verified:
+`to_int(3.7)=3`, `to_int(-2.3)=-2`). floor/ceil correct the
+sign-direction fractional case; round() = round-half-away-from-zero (C99
+`round()`). ceil() preserves IEEE sign-of-zero (`ceil(-0.5) = -0.0`)
+via `0.0 * -1.0` (the `-0.0` literal normalizes to `+0.0` in hexa).
+
+**Verify (g5 — verbatim smoke, 17/17 PASS, byte-exact vs C libm).** The
+4 ported bodies were run via `hexa run` against a C-libm `cc -x c -`
+reference (`floor(-2.3)=-3` · `ceil(-0.5)=-0` · `round(-2.5)=-3` ·
+`fabs(-2.3)=2.3` all matched). Parse-error count unchanged at 31 vs
+origin/main (all pre-existing `match`/`new_str` keyword collisions in
+the reference module — none introduced). Full verdict:
+`.verdicts/runtime-pure-math-floor-ceil-round-abs/smoke.txt`.
+
+PORT STATUS SUMMARY in `runtime_pure.hexa` updated: PURE-math 2→6,
+FFI-libm 11→7 (total 53 fns unchanged: 38 PURE / 9 FFI / 6 HYBRID).
+
 ### 2026-05-26 — step-4 assessment: the irreducible-core FLOOR (runtime.c retirement terminal)
 
 scan-B of the post-step-2/3 state (both "frontiers" the user asked to pursue):
