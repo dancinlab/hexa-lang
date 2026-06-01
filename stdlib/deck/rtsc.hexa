@@ -64,7 +64,7 @@ import "stdlib/cloud/fill_plan.hexa"
 // single edit needed to register a new prototype (alongside its emitter).
 // Keep this list in lockstep with the dispatch branches in `emit_rtsc`.
 pub fn rtsc_prototypes() -> [string] {
-    return ["beh8_clathrate", "perovskite_pm3m", "im3m_group17", "sodalite_im3m_yh10", "a15_ysbh6", "li2mgh16", "pm3n_bc_clathrate"]
+    return ["beh8_clathrate", "perovskite_pm3m", "im3m_group17", "sodalite_im3m_yh10", "a15_ysbh6", "li2mgh16", "pm3n_bc_clathrate", "cah6_sodalite_im3m"]
 }
 
 // ── pub entry point ──────────────────────────────────────────────────
@@ -128,6 +128,13 @@ pub fn emit_rtsc(spec: DeckSpec) -> [DeckFile] {
         deck_push(files, "scf.in",      _rtsc_bcclath_scf(spec))
         deck_push(files, "ph.in",       _rtsc_bcclath_ph(spec))
         deck_push(files, "RUNBOOK.md",  _rtsc_bcclath_runbook(spec))
+        return files
+    }
+    if proto == "cah6_sodalite_im3m" {
+        deck_push(files, "vc-relax.in", _rtsc_cah6_vc_relax(spec))
+        deck_push(files, "scf.in",      _rtsc_cah6_scf(spec))
+        deck_push(files, "ph.in",       _rtsc_cah6_ph(spec))
+        deck_push(files, "RUNBOOK.md",  _rtsc_cah6_runbook(spec))
         return files
     }
     // Unreachable: the coverage guard above panics on anything not in the
@@ -1951,4 +1958,208 @@ fn _int_pow(b: int, e: int) -> int {
     let mut i = 0
     while i < e { r = r * b; i = i + 1 }
     return r
+}
+
+// ── CaH6 sodalite-clathrate prototype (Im-3m · 7-atom · NC-pseudo path) ──
+//
+// CaH6 sodalite clathrate, cubic Im-3m (SG #229), BCC-PRIMITIVE cell with 1
+// formula unit = 1 metal (2a, 0,0,0) + 6 H (12d cage, (1/4,1/2,0)-class) = 7
+// atoms. Isostructural with YH6 (same Wyckoff set) — this emitter reuses the
+// verified YH6 12d H positions (d19 intra-domain reuse). Distinct from the
+// `sodalite_im3m_yh10` (Fm-3m, 11-atom, 10 H) and `im3m_group17` (H3X, 4-atom,
+// 3 H) prototypes.
+//
+// PSEUDO PARAMETERISATION (the M6 NC-vs-NC reason this prototype exists):
+// both the metal pseudo (m_site_upf) AND the H pseudo (h_site_upf) are spec
+// keys. The H key DEFAULTS to the campaign-standard ULTRASOFT psl UPF so the
+// existing prototypes' behaviour is unchanged; the CaH6-NC anchor passes
+// h_site_upf=H_ONCV_PBE_sr.upf + m_site_upf=Ca_ONCV_PBE_sr.upf to get an
+// apples-to-apples NORM-CONSERVING deck (matched NC pseudos on both sides).
+// d4 — same generic framework, swap the cation + pseudo class via the manifest.
+
+fn _rtsc_cah6_vc_relax(spec: DeckSpec) -> string {
+    let prefix    = spec_get_or(spec, "prefix",          "cah6")
+    let m_sym     = spec_get_or(spec, "m_site_symbol",   "Ca")
+    let m_mass    = spec_get_or(spec, "m_site_mass",     "40.078")
+    let m_upf     = spec_get_or(spec, "m_site_upf",      "Ca_ONCV_PBE_sr.upf")
+    let h_upf     = spec_get_or(spec, "h_site_upf",      "H.pbe-rrkjus_psl.1.0.0.UPF")
+    let celldm    = spec_get_or(spec, "celldm_bohr",     "6.4640")
+    let a_ang     = spec_get_or(spec, "a_conv_ang",      "3.42")
+    let press_kb  = spec_get_or(spec, "pressure_kbar",   "1700.0")
+    let press_cmt = spec_get_or(spec, "pressure_comment", "170 GPa")
+    let ecutwfc   = spec_get_or(spec, "ecutwfc",         "80")
+    let ecutrho   = spec_get_or(spec, "ecutrho",         "320")
+    let degauss   = spec_get_or(spec, "degauss",         "0.01")
+    let mixing    = spec_get_or(spec, "mixing_beta",     "0.3")
+
+    let mut s = ""
+    s = s + "&CONTROL\n"
+    s = s + "  calculation     = 'vc-relax'\n"
+    s = s + "  prefix          = '" + prefix + "'\n"
+    s = s + "  outdir          = './out'\n"
+    s = s + "  pseudo_dir      = './pseudo'\n"
+    s = s + "  forc_conv_thr   = 1.0d-4\n"
+    s = s + "  etot_conv_thr   = 1.0d-6\n"
+    s = s + "  tstress         = .true.\n"
+    s = s + "  tprnfor         = .true.\n"
+    s = s + "  nstep           = 200\n"
+    s = s + "/\n"
+    s = s + "&SYSTEM\n"
+    s = s + "  ibrav           = 3                ! BCC primitive, Im-3m (SG 229) — " + m_sym + "H6 sodalite\n"
+    s = s + "  celldm(1)       = " + celldm + "           ! START a_conv ~ " + a_ang + " A @ " + press_cmt + "; vc-relax FINDS true a\n"
+    s = s + "  nat             = 7                ! 1 " + m_sym + " (2a) + 6 H (12d) per BCC-primitive\n"
+    s = s + "  ntyp            = 2\n"
+    s = s + "  ecutwfc         = " + ecutwfc + "\n"
+    s = s + "  ecutrho         = " + ecutrho + "             ! NC norm-conserving: 4x ecutwfc ratio\n"
+    s = s + "  nosym           = .true.\n"
+    s = s + "  occupations     = 'smearing'\n"
+    s = s + "  smearing        = 'mp'             ! Methfessel-Paxton — metallic hydride (d15)\n"
+    s = s + "  degauss         = " + degauss + "\n"
+    s = s + "/\n"
+    s = s + "&ELECTRONS\n"
+    s = s + "  conv_thr        = 1.0d-10\n"
+    s = s + "  mixing_beta     = " + mixing + "\n"
+    s = s + "  mixing_mode     = 'plain'\n"
+    s = s + "  diagonalization = 'david'\n"
+    s = s + "  electron_maxstep = 400\n"
+    s = s + "/\n"
+    s = s + "&IONS\n"
+    s = s + "  ion_dynamics    = 'bfgs'\n"
+    s = s + "/\n"
+    s = s + "&CELL\n"
+    s = s + "  cell_dynamics   = 'bfgs'\n"
+    s = s + "  press           = " + press_kb + "          ! target " + press_cmt + " (QE press = kbar)\n"
+    s = s + "  press_conv_thr  = 0.5\n"
+    s = s + "  cell_dofree     = 'all'\n"
+    s = s + "/\n"
+    s = s + "ATOMIC_SPECIES\n"
+    s = s + "  " + m_sym + "  " + m_mass + "   " + m_upf + "\n"
+    s = s + "  H    1.008   " + h_upf + "\n"
+    s = s + "\n"
+    s = s + "! " + m_sym + "H6 sodalite: " + m_sym + " @ 2a (0,0,0), H @ 12d (1/4,1/2,0) + sym-equiv (H24 cage).\n"
+    s = s + "! BCC-primitive fractional coords (reuse of verified YH6 12d set — d19).\n"
+    s = s + "ATOMIC_POSITIONS crystal\n"
+    s = s + "  " + m_sym + "   0.0000000   0.0000000   0.0000000\n"
+    s = s + "  H    0.2500000   0.5000000   0.0000000\n"
+    s = s + "  H    0.5000000   0.0000000   0.2500000\n"
+    s = s + "  H    0.0000000   0.2500000   0.5000000\n"
+    s = s + "  H    0.7500000   0.5000000   0.0000000\n"
+    s = s + "  H    0.5000000   0.0000000   0.7500000\n"
+    s = s + "  H    0.0000000   0.7500000   0.5000000\n"
+    s = s + "\n"
+    s = s + "K_POINTS automatic\n"
+    s = s + "  16 16 16  0 0 0\n"
+    return s
+}
+
+fn _rtsc_cah6_scf(spec: DeckSpec) -> string {
+    let prefix    = spec_get_or(spec, "prefix",          "cah6")
+    let m_sym     = spec_get_or(spec, "m_site_symbol",   "Ca")
+    let m_mass    = spec_get_or(spec, "m_site_mass",     "40.078")
+    let m_upf     = spec_get_or(spec, "m_site_upf",      "Ca_ONCV_PBE_sr.upf")
+    let h_upf     = spec_get_or(spec, "h_site_upf",      "H.pbe-rrkjus_psl.1.0.0.UPF")
+    let celldm    = spec_get_or(spec, "celldm_bohr",     "6.4640")
+    let ecutwfc   = spec_get_or(spec, "ecutwfc",         "80")
+    let ecutrho   = spec_get_or(spec, "ecutrho",         "320")
+    let k_scf     = spec_get_or(spec, "k_scf",           "16")
+    let degauss   = spec_get_or(spec, "degauss",         "0.01")
+    let mixing    = spec_get_or(spec, "mixing_beta",     "0.3")
+
+    let mut s = ""
+    s = s + "&CONTROL\n"
+    s = s + "  calculation     = 'scf'\n"
+    s = s + "  prefix          = '" + prefix + "'\n"
+    s = s + "  outdir          = './out'\n"
+    s = s + "  verbosity       = 'high'\n"
+    s = s + "  pseudo_dir      = './pseudo'\n"
+    s = s + "  tstress         = .true.\n"
+    s = s + "  tprnfor         = .true.\n"
+    s = s + "/\n"
+    s = s + "&SYSTEM\n"
+    s = s + "  ibrav           = 3\n"
+    s = s + "  celldm(1)       = " + celldm + "           ! REPLACE with relaxed celldm(1) from vc-relax.out\n"
+    s = s + "  nat             = 7\n"
+    s = s + "  ntyp            = 2\n"
+    s = s + "  ecutwfc         = " + ecutwfc + "\n"
+    s = s + "  ecutrho         = " + ecutrho + "\n"
+    s = s + "  nosym           = .true.\n"
+    s = s + "  occupations     = 'smearing'\n"
+    s = s + "  smearing        = 'mp'\n"
+    s = s + "  degauss         = " + degauss + "\n"
+    s = s + "/\n"
+    s = s + "&ELECTRONS\n"
+    s = s + "  conv_thr        = 1.0d-10\n"
+    s = s + "  mixing_beta     = " + mixing + "\n"
+    s = s + "  mixing_mode     = 'plain'\n"
+    s = s + "  diagonalization = 'david'\n"
+    s = s + "  electron_maxstep = 400\n"
+    s = s + "/\n"
+    s = s + "ATOMIC_SPECIES\n"
+    s = s + "  " + m_sym + "  " + m_mass + "   " + m_upf + "\n"
+    s = s + "  H    1.008   " + h_upf + "\n"
+    s = s + "\n"
+    s = s + "! REPLACE celldm(1) + ATOMIC_POSITIONS below with the RELAXED values from vc-relax.out.\n"
+    s = s + "ATOMIC_POSITIONS crystal\n"
+    s = s + "  " + m_sym + "   0.0000000   0.0000000   0.0000000\n"
+    s = s + "  H    0.2500000   0.5000000   0.0000000\n"
+    s = s + "  H    0.5000000   0.0000000   0.2500000\n"
+    s = s + "  H    0.0000000   0.2500000   0.5000000\n"
+    s = s + "  H    0.7500000   0.5000000   0.0000000\n"
+    s = s + "  H    0.5000000   0.0000000   0.7500000\n"
+    s = s + "  H    0.0000000   0.7500000   0.5000000\n"
+    s = s + "\n"
+    s = s + "K_POINTS automatic\n"
+    s = s + "  " + k_scf + " " + k_scf + " " + k_scf + "  0 0 0\n"
+    return s
+}
+
+fn _rtsc_cah6_ph(spec: DeckSpec) -> string {
+    let prefix   = spec_get_or(spec, "prefix",       "cah6")
+    let m_sym    = spec_get_or(spec, "m_site_symbol", "Ca")
+    let nq       = spec_get_or(spec, "nq",           "2")
+    let el_sigma = spec_get_or(spec, "el_ph_sigma",  "0.005")
+    let nsigma   = spec_get_or(spec, "el_ph_nsigma", "10")
+    let max_secs = spec_get_or(spec, "max_seconds",  "504000")
+
+    let mut s = ""
+    s = s + m_sym + "H6 electron-phonon " + nq + "x" + nq + "x" + nq + " q (Im-3m sodalite · NC-vs-NC M6 anchor)\n"
+    s = s + "&inputph\n"
+    s = s + "  prefix              = '" + prefix + "'\n"
+    s = s + "  outdir              = './out'\n"
+    s = s + "  fildyn              = './" + prefix + ".dyn'\n"
+    s = s + "  fildvscf            = 'dvscf'\n"
+    s = s + "  ldisp               = .true.\n"
+    s = s + "  nq1                 = " + nq + ", nq2 = " + nq + ", nq3 = " + nq + "  ! " + nq + "x" + nq + "x" + nq + " — 7-atom single-pod feasible\n"
+    s = s + "  tr2_ph              = 1.0d-14\n"
+    s = s + "  electron_phonon     = 'simple'\n"
+    s = s + "  el_ph_sigma         = " + el_sigma + "\n"
+    s = s + "  el_ph_nsigma        = " + nsigma + "\n"
+    s = s + "  recover             = .true.\n"
+    s = s + "  alpha_mix(1)        = 0.3\n"
+    s = s + "  max_seconds         = " + max_secs + "\n"
+    s = s + "/\n"
+    return s
+}
+
+fn _rtsc_cah6_runbook(spec: DeckSpec) -> string {
+    let m_sym   = spec_get_or(spec, "m_site_symbol", "Ca")
+    let m_upf   = spec_get_or(spec, "m_site_upf",    "Ca_ONCV_PBE_sr.upf")
+    let h_upf   = spec_get_or(spec, "h_site_upf",    "H.pbe-rrkjus_psl.1.0.0.UPF")
+    let press   = spec_get_or(spec, "pressure_comment", "170 GPa")
+    let ecutwfc = spec_get_or(spec, "ecutwfc",       "80")
+    let ecutrho = spec_get_or(spec, "ecutrho",       "320")
+    let k_scf   = spec_get_or(spec, "k_scf",         "16")
+    let nq      = spec_get_or(spec, "nq",            "2")
+    let mut s = ""
+    s = s + "# " + m_sym + "H6 — RTSC 7-atom Im-3m 소달라이트 런북 (NC-vs-NC M6 앵커)\n"
+    s = s + "\n"
+    s = s + "> " + m_sym + "H6 sodalite clathrate (Im-3m, Ma 2022 측정 215K @ " + press + ").\n"
+    s = s + "> ibrav=3 BCC-primitive, nat=7 (1 " + m_sym + " + 6 H), ntyp=2.\n"
+    s = s + "> ⚠ PSEUDO 클래스: 이 앵커는 NORM-CONSERVING — m=" + m_upf + " · H=" + h_upf + ".\n"
+    s = s + "> 목적: QFORGE(NC)↔QE(NC) apples-to-apples 교차검증 (동일 pseudo+grid). PWFORGE M6.\n"
+    s = s + "> ⚠ vc-relax 가 진짜 평형구조를 찾는다. celldm/positions 는 시작 추정치.\n"
+    s = s + "\n"
+    s = s + "체인: vc-relax -> scf (" + k_scf + "^3 k) -> ph (el-ph simple, " + nq + "^3 q). recover=.true.\n"
+    s = s + "> NC-vs-NC 앵커는 coarse " + nq + "^3-q 로 충분 (수렴 생산 Tc 가 아니라 동일 grid+pseudo 일치가 목표).\n"
+    return s
 }
