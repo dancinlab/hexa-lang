@@ -18,6 +18,7 @@ fn main() {
         symbols:    [],
         strtab:     [],
         dwarf_line: [],
+        cstring:    [],
     }
     let bytes = serialize(obj)
     let n = len(bytes)
