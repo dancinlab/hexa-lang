@@ -1,6 +1,7 @@
 # hexa-forge-util-fix — forge cuBLAS conv dispatch left the H100 at 0% util
 
-**Status:** fix landed (PR to hexa-lang); util re-check on real H100 — see "Before/after util" below.
+**Status:** fix landed + merged (hexa-lang PR #2472); local byte-eq PASS. Live-H100 util
+re-check NOT measured this session (both GPU providers infra-blocked — see "Before/after util").
 **Owner:** anima Lane G (F-RFC046 host-backward bottleneck).
 **Repo:** hexa-lang. **Branch:** `feat/hexa-forge-util-fix`.
 
@@ -61,14 +62,44 @@ on a pod you must **rebuild hexa from this branch** (regen the dispatch `.c` fro
 then `hexa cc`), not just `install.sh` the prebuilt tarball. See
 `tool/forge_util_fix_remote.sh` for the A/B profiling + rebuild recipe.
 
-## Before/after util (real H100, nvidia-smi verbatim)
+## byte-eq / grad-exact (local, no-CUDA CPU-fallback path — verbatim)
 
-<!-- FILLED FROM THE LIVE PROFILE RUN -->
-- BASELINE (released binary, CPU dispatch): _pending_
-- FIXED (from-branch rebuild, cuBLAS dispatch): _pending_
-- byte-eq re-check (conv fwd+bwd selftest): _pending_
+`hexa run stdlib/flame/clm_conv_gpu.hexa` (Mac, released binary — the fix's no-CUDA
+fallback is byte-identical to the prior CPU dispatch, so this is the conformance check):
+
+```
+F-CLM-CONV-GPU-EQ = 1
+PASS — im2col+forge conv1d == nn_conv1d_fwd (heavy conv path wired to forge)
+  dil=1  max|Δ| dW=1.11022e-16 dX=8.32667e-17 db=0.0
+  dil=2  max|Δ| dW=8.32667e-17 dX=5.55112e-17 db=0.0
+F-CLM-CONV-BWD-FORGE-EQ = 1
+PASS — forge backward (dW/dX/db) == nn_conv1d_bwd byte-eq, dil∈{1,2}
+ALL-PASS — forward + backward conv1d both ride forge, byte-eq to host
+```
+
+#2352 (fwd) / #2383 (bwd grad-exact) PRESERVED (max|Δ| ≤ 1.1e-16 ≪ 1e-9 tol).
+
+## Before/after util (real H100) — NOT MEASURED this session (infra blocked, HONEST)
+
+The live-H100 A/B util re-check could not be run this session — BOTH GPU providers were
+blocked by environment/credential issues unrelated to the fix:
+
+- **vast.ai**: every freshly-rented H100_SXM instance returned `Permission denied
+  (publickey)` over SSH — the account's registered key (`anima-orc`) is not being attached
+  to new instances, and the cloud-guard (commons @D g8) blocks the direct
+  `vastai attach ssh` that would repair it. Two pods (38978180, 38979746) were rented,
+  found unreachable, and **torn down immediately** (no idle billing).
+- **runpod**: `podFindAndDeployOnDemand` returned `no id in response (no capacity / bad
+  input)` for EVERY gpuTypeId tried — `NVIDIA H100 PCIe`, `H100 80GB HBM3`, `H100 NVL`,
+  `A100 80GB PCIe`, `A100-SXM4-80GB`, `L40S`, `RTX A6000` — i.e. no on-demand capacity at
+  rent time (the API key authenticates: `cloud list` succeeds).
+
+The fix is statically pinned + locally byte-eq verified; the util lift (CPU 0-4% floor →
+cuBLAS-busy) requires a re-run on real silicon once a provider has capacity. Re-fire recipe:
+`tool/forge_util_fix_remote.sh` (A/B profile + from-branch rebuild). **No fabricated green.**
 
 ## hexa verify / parse
 
 - `hexa parse self/forge/forge_tier_v1_emit.hexa` → `OK: ... parses cleanly`.
-- Emitted `forge_tier_v1.c` compiles (`clang -fsyntax-only`).
+- Emitted `forge_tier_v1.c` compiles (`clang -fsyntax-only`, SYNTAX_OK).
+- Teardown confirmed: `cloud list` shows zero `forge-util-fix` pods on either provider.
