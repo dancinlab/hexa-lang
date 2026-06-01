@@ -2378,17 +2378,29 @@ fn main() {
         }
         let pid = _cli_atoi(av[si + 2])
         let ssh_opts = _apply_resolved_port(_ssh_opts_cli(av, si + 3), _rh)
-        let alive = cloud_poll_opts(host, ssh_opts, pid)
-        if alive == 1 {
+        // Bug-2 (@L6): 3-state poll. DEAD only when ssh CONNECTED and the pid
+        // was absent; a transport outage (ssh exit 255 — refused / timeout /
+        // publickey / changed host key) is UNREACHABLE, NOT a death.
+        let status = cloud_poll_status_opts(host, ssh_opts, pid)
+        if status == CLOUD_POLL_ALIVE {
             println("[cloud] pid " + str(pid) + " ALIVE")
             exit(0)
+        }
+        if status == CLOUD_POLL_UNREACHABLE {
+            // The pod may be alive + billing but momentarily unreachable — this
+            // is the edge-genall failure mode. Report UNKNOWN and do NOT flip a
+            // verdict / tear down. exit 2 = distinct from ALIVE(0) / DEAD(1).
+            println("[cloud] pid " + str(pid) + " UNREACHABLE — ssh transport failure (255: refused / timeout / publickey / host-key). Pod may be ALIVE + billing; verdict NOT flipped, NOT torn down. Verify reachability (host / port) or tear the pod down manually.")
+            exit(2)
         }
         println("[cloud] pid " + str(pid) + " DEAD")
         // Fix B — teardown auto-verdict. If this pid was registered via Fix A
         // (`--register` on fire/nohup), flip its verdict PENDING→FAIL so the
-        // ledger never carries a stale-PENDING row for a DEAD remote job.
-        // Conservative default: a launcher that wants PASS calls `cloud
-        // dispatch verdict <jid> PASS` itself (poll cannot see exit code).
+        // ledger never carries a stale-PENDING row for a DEAD remote job. Runs
+        // ONLY on a genuine DEAD (ssh connected, pid absent) — never on an
+        // UNREACHABLE transport outage (handled above). Conservative default: a
+        // launcher that wants PASS calls `cloud dispatch verdict <jid> PASS`
+        // itself (poll cannot see exit code).
         let _ = _teardown_verdict_if_registered(pid)
         exit(1)
     }
