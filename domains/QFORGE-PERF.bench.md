@@ -236,3 +236,31 @@ read-only) runs on the **same** deterministic matrix as `davidson_core` (n=256):
 accuracy Lanczos offers **no matvec-count advantage** — Davidson's diagonal
 preconditioner dominates on this well-separated spectrum. Closure: **Davidson stays**;
 Lanczos is not worth swapping in. Verdict `lanczos-vs-davidson.txt` (🟢).
+
+## 9. Second-generation closed-form corollaries — 11 more, no GPU
+
+A second `bench/qforge/accel_corollaries.hexa` driver derives ELEVEN further
+deterministic consequences of the measured baseline (§2/§7) + roofline (§3) + the
+Allen-Dynes Tc closed form. Each prints one `VERDICT_<TAG>` line, all 🟢
+SUPPORTED-NUMERICAL (`.verdicts/qforge-perf-roofline/`):
+
+| # | tag | closed-form result | what it settles |
+|---|---|---|---|
+| 6  | RIDGE     | block-Davidson GEMM AI = nb/2 → leaves memory roof only at **nb ≥ 121.9** (fp32 ridge) / **452.2** (tensor) | realistic nbands (4–50) stay BW-bound → GPU-GEMM win is bandwidth (≤280 GFLOP/s), not tensor cores |
+| 7  | AMDAHL    | matvec-only GPU caps the pipeline at **1/(1-p)**: p=0.5→2× (even a 2000× kernel), p=0.9→10× | GPU-GEMM alone is fraction-capped by un-accelerated FFT/SCF |
+| 8  | TCPREC    | d ln Tc/d ln λ = **0.685** (de-amplifies); fp32 λ → Tc relerr **8.2e-8** ≪ physics floor ~0.1 | fp32 λ is provably Tc-safe (closed-negative) |
+| 9  | DIAGCROSS | dense O(N³) eig beats Davidson only past **M=5N** matvecs; measured M≈168 ≪ 2560 at n=512 | iterative solver is correctly favored |
+| 10 | ADCORR    | Allen-Dynes f1·f2 corrections O(1), wall fraction **~1.3e-7** | optimizing them is pointless (closed-negative) |
+| 11 | FP16      | fp16-storage matvec relerr **7.3e-4** ≪ λ-budget 0.146 at n=4096 | fp16 storage is Tc-safe (beyond fp32) |
+| 12 | WANNIER   | EPW coarse-DFPT + Wannier interp avoids **(n_d/n_c)³ = 27×** work (12³/4³) | grounds the gated EPW item with a number |
+| 13 | DIIS      | Anderson/DIIS is O(√κ) vs linear O(κ) → **√50 = 7.07×** iter speedup | grounds the gated DIIS item |
+| 14 | GAMMA     | Γ-only (q=0) matrix is real → **2× storage + 4× cmplx-mult flop** | deepens symmetry-48 (stacks on q-count=1) |
+| 15 | ECUT      | matvec cost ∝ E_cut³ (N_pw ∝ E_cut^1.5) → 10% cut = **27.1%** saving | NEW tunable knob, closed-form trade |
+| 16 | QMC       | random q-sampling needs **N_q ≥ (CV/ε)² = 400** for 5% λ | grounds the gated adaptive-q item |
+
+Of these, **#10 ADCORR + #15 ECUT are new terminal closed findings** (not previously
+on the board); **#6/#7/#9/#12/#13/#16 attach closed-form CEILINGS to gated GPU/algo
+items** (they do not ungate them — a pod/engine is still needed to *measure* — but they
+bound what those levers can achieve); **#8/#11/#14 deepen already-closed items**
+(mixedprec, symmetry-48). The gated items keep their `- [ ]` status; the new ceilings
+make their eventual GPU Δ interpretable against a hard closed-form bound.
