@@ -1,0 +1,124 @@
+// @ci_gate — deterministic · network-free · NO pod ops · 실셀 off-diagonal |g_mn| g5 게이트
+//
+// elph_offdiag_selftest.hexa — QFORGE metallic-wall breadth 브릭 (b)/4 g5 gate.
+//
+// 브릭 (b)(elph_offdiag.hexa)는 대각 g_nn 만 쓰던 el-ph 합에 밴드간(m≠n)
+// off-diagonal |g_mn|=⟨ψ_m|ΔV_bare|ψ_n⟩ 를 더한다 — 수소화물에서 지배적인 항.
+// 이 게이트는 그 행렬이
+//   (1) m=n 에서 기존 qforge_realcell_g_diag 와 정확히 일치(상위집합·무회귀),
+//   (2) Hermiticity: g_mn = g_nm (Γ 실대칭, herm_residual = 0),
+//   (3) off-diagonal 기여가 NON-TRIVIAL 한지 — λ(full) ≠ λ(diag-only),
+//   (4) 2-밴드 해석 앵커: Σ_mn |g_mn|² 와 double-δ 가중 λ 가 closed-form 과 일치,
+// 를 검증한다. 어떤 케이스도 λ 를 조작하지 않는다 — 행렬의 물리적 정확성만 본다(d6).
+//
+// Run:  HEXA_STDLIB_ROOT="$PWD/stdlib" hexa run --no-sentinel stdlib/qforge/elph_offdiag_selftest.hexa
+// PASS: "qforge_elph_offdiag_selftest PASS".
+use "stdlib/qforge/elph_offdiag"
+use "stdlib/qforge/realcell_phonon"
+use "stdlib/qforge/tc"
+use "stdlib/material/sim"
+
+fn _abs(x: float) -> float { if x < 0.0 { return -x } return x }
+fn _ck_close(name: str, got: float, want: float, eps: float) -> int {
+    if _abs(got - want) <= eps { println("PASS " + name + " (" + to_string(got) + ")") ; return 0 }
+    println("FAIL " + name + " — got " + to_string(got) + " want " + to_string(want)) ; return 1
+}
+fn _ck_bool(name: str, got: bool, want: bool) -> int {
+    if got == want { println("PASS " + name + " (" + to_string(got) + ")") ; return 0 }
+    println("FAIL " + name + " — got " + to_string(got) + " want " + to_string(want)) ; return 1
+}
+
+fn main() {
+    let mut fails = 0
+    println("── QFORGE off-diagonal |g_mn| g5 게이트 (브릭 (b)/4) ──")
+
+    // ── analytic 2-band anchor: pick a real-symmetric 2×2 ΔV_bare operator ────
+    //   ΔV = [[d0, c], [c, d1]] (real symmetric → Hermitian). States = the basis
+    //   e0,e1 so g_mn = (ΔV)_mn directly: g00=d0, g01=g10=c, g11=d1. We synthesize
+    //   the pre-applied columns (ΔV·ψ_n) by hand so the gate has a CLOSED form.
+    let d0 = 0.40 ; let d1 = -0.20 ; let c = 0.30
+    let psi0 = [1.0, 0.0]
+    let psi1 = [0.0, 1.0]
+    // (ΔV·e0) = column 0 = [d0, c] ; (ΔV·e1) = column 1 = [c, d1].
+    let dv0 = [d0, c]
+    let dv1 = [c, d1]
+    let states = [psi0, psi1]
+    let dv_states = [dv0, dv1]
+
+    // ── (1) m=n recovers qforge_realcell_g_diag exactly ──────────────────────
+    let g00_off = qforge_realcell_g_offdiag(psi0, dv0)
+    let g00_diag = qforge_realcell_g_diag(psi0, dv0)
+    fails = fails + _ck_close("(1) g00 offdiag == realcell_g_diag (superset, no regress)",
+                              g00_off, g00_diag, 1.0e-15)
+    fails = fails + _ck_close("(1) g00 == d0 (closed form)", g00_off, d0, 1.0e-15)
+
+    // ── full 2×2 matrix ──────────────────────────────────────────────────────
+    let g = qforge_gmn_matrix(states, dv_states)
+    fails = fails + _ck_bool("(2a) gmn matrix is 2×2", len(g) == 4, true)
+    // row-major: g[0]=g00, g[1]=g01, g[2]=g10, g[3]=g11.
+    fails = fails + _ck_close("(2a) g01 == c (closed form)", g[1], c, 1.0e-15)
+    fails = fails + _ck_close("(2a) g10 == c (closed form)", g[2], c, 1.0e-15)
+    fails = fails + _ck_close("(2a) g11 == d1 (closed form)", g[3], d1, 1.0e-15)
+
+    // ── (2) Hermiticity: g_mn = g_nm → residual exactly 0 ────────────────────
+    let hr = qforge_gmn_herm_residual(g, 2)
+    fails = fails + _ck_close("(2) Hermiticity residual Σ|g_mn−g_nm| = 0", hr, 0.0, 1.0e-15)
+
+    // ── (4) 2-band analytic anchor: Σ_mn |g_mn|² closed form ─────────────────
+    //   Σ over ALL m,n of g_mn² = d0² + d1² + 2c²  (off-diag pair counted twice).
+    //   Σ over OFF-diagonal only (m≠n) = 2c².
+    let mut sum_full = 0.0 ; let mut k = 0
+    while k < 4 { sum_full = sum_full + g[k] * g[k] ; k = k + 1 }
+    let want_full = d0 * d0 + d1 * d1 + 2.0 * c * c
+    fails = fails + _ck_close("(4) Σ_mn |g_mn|² = d0²+d1²+2c² (analytic)",
+                              sum_full, want_full, 1.0e-14)
+    let sum_off = g[1] * g[1] + g[2] * g[2]
+    fails = fails + _ck_close("(4) Σ_{m≠n} |g_mn|² = 2c² (analytic)",
+                              sum_off, 2.0 * c * c, 1.0e-14)
+
+    // ── (3) off-diagonal contribution is NON-TRIVIAL — λ(full) ≠ λ(diag) ─────
+    //   Put BOTH bands exactly on E_F so the double-delta passes them all, single
+    //   Einstein ω, and assemble α²F via the verified L3 path. λ(full) must EXCEED
+    //   λ(diag-only) by the off-diagonal weight (2c² extra spectral weight).
+    let e_fermi = 0.0
+    let eps = [0.0, 0.0]            // both bands ON the Fermi level
+    let omega0 = 1000.0
+    let mut grid: [float] = []
+    let mut gp = 1
+    while gp < 201 { grid.push(to_float(gp) * 10.0) ; gp = gp + 1 }
+    let n_ef = 1.0 ; let sigma_el = 50.0 ; let sigma_ph = 10.0
+
+    // diagonal-only sample list (include_diag, but we strip off-diag by hand here
+    // via the include_diag=false path = pure off-diag; diag = full − off).
+    let s_full = qforge_gmn_samples(states, dv_states, eps, omega0, true)
+    let s_off  = qforge_gmn_samples(states, dv_states, eps, omega0, false)
+    fails = fails + _ck_bool("(3a) full sample list has 4 pairs (2×2)", len(s_full[0]) == 4, true)
+    fails = fails + _ck_bool("(3a) off-diag sample list has 2 pairs (m≠n)", len(s_off[0]) == 2, true)
+
+    let a2f_full = qforge_a2f_from_elph(s_full[0], s_full[1], s_full[2], s_full[3],
+                                        e_fermi, n_ef, grid, 1.0, sigma_el, sigma_ph)
+    let lam_full = eliashberg_moments_from_a2f(grid, a2f_full)
+    let lambda_full = lam_full[0]
+
+    // diagonal-only baseline: build the m=n sample list explicitly (2 diag pairs).
+    let eps_kd = [eps[0], eps[1]]
+    let g00 = g[0] ; let g11v = g[3]
+    let g2d = [g00 * g00, g11v * g11v]
+    let wqd = [omega0, omega0]
+    let a2f_diag = qforge_a2f_from_elph(eps_kd, eps_kd, g2d, wqd,
+                                        e_fermi, n_ef, grid, 1.0, sigma_el, sigma_ph)
+    let lam_diag = eliashberg_moments_from_a2f(grid, a2f_diag)
+    let lambda_diag = lam_diag[0]
+
+    fails = fails + _ck_bool("(3) λ(full) > λ(diag-only) — off-diagonal NON-trivial",
+                             lambda_full > lambda_diag + 1.0e-9, true)
+    // closed-form ratio: with both bands on E_F & equal δ's, λ ∝ Σ g², so
+    //   λ_full / λ_diag = (d0²+d1²+2c²) / (d0²+d1²).
+    let ratio_want = (d0 * d0 + d1 * d1 + 2.0 * c * c) / (d0 * d0 + d1 * d1)
+    let ratio_got = lambda_full / lambda_diag
+    fails = fails + _ck_close("(3) λ_full/λ_diag = 1 + 2c²/(d0²+d1²) (analytic)",
+                              ratio_got, ratio_want, 1.0e-6)
+
+    if fails == 0 { println("qforge_elph_offdiag_selftest PASS") }
+    else { println("qforge_elph_offdiag_selftest FAIL — " + to_string(fails) + " case(s)") }
+}
