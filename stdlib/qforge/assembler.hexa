@@ -134,6 +134,129 @@ pub fn qforge_assemble_h(kvec: [float], gvecs: [float], pos: [float],
     return PwHam { h: h, diag: diag, n: n }
 }
 
+// ── Build the dense PW Hamiltonian for a MULTI-SPECIES cell (M5.7 PR3) ────────
+//
+//   The single-species qforge_assemble_h composes V_ext from ONE (r,rab,vloc,z)
+//   channel + ONE position set. A real heteroatomic hydride (CaH6 = Ca + 6·H)
+//   needs V_ext(ΔG) = Σ_s V_loc^s(ΔG)·S_s(ΔG) summed over species s. This entry
+//   takes parallel per-species arrays and composes that sum — d4-generic (the
+//   caller supplies the species list; no element is hardcoded). The kinetic
+//   diagonal, the optional caller screening (vscr_diag), and the per-species KB
+//   nonlocal block are all summed in. Returns a PwHam (n = #G-vectors).
+//
+//   rs,rabs,vlocs : per-species flat radial arrays, concatenated; mlens[s] gives
+//                   species s's mesh length (the slice boundaries).
+//   zs            : per-species Z_valence (length nspec).
+//   poss,palens   : per-species cartesian positions, concatenated; palens[s]*3 =
+//                   species s's slice length.
+//   betas/ls/dij/nproj per species likewise (blens/dlens slice the KB arrays);
+//                   nprojs[s]=0 → no V_NL for that species.
+//   vscr_diag     : length-n G-diagonal Hartree+XC screening, or [] (bare).
+pub fn qforge_assemble_h_multi(kvec: [float], gvecs: [float], nspec: int,
+                               rs: [float], rabs: [float], vlocs: [float],
+                               mlens: [int], zs: [float],
+                               poss: [float], palens: [int],
+                               betas: [float], ls: [int], dij: [float],
+                               nprojs: [int], blens: [int], dlens: [int],
+                               omega: float, vscr_diag: [float]) -> PwHam {
+    let empty = PwHam { h: [], diag: [], n: 0 }
+    let lg = len(gvecs)
+    if lg % 3 != 0 || omega <= 0.0 { return empty }
+    let n = lg / 3
+    let tdiag = qforge_kinetic_diag(kvec, gvecs)
+    if len(tdiag) != n { return empty }
+
+    // ΔG = G_a − G_b flat list (shared across species).
+    let mut dgvec: [float] = []
+    let mut dgmag: [float] = []
+    let mut a = 0
+    while a < n {
+        let mut b = 0
+        while b < n {
+            let dx = gvecs[a * 3] - gvecs[b * 3]
+            let dy = gvecs[a * 3 + 1] - gvecs[b * 3 + 1]
+            let dz = gvecs[a * 3 + 2] - gvecs[b * 3 + 2]
+            dgvec.push(dx) ; dgvec.push(dy) ; dgvec.push(dz)
+            dgmag.push(sqrt(dx * dx + dy * dy + dz * dz))
+            b = b + 1
+        }
+        a = a + 1
+    }
+
+    // V_ext(ΔG) = Σ_s Re[ V_loc^s(|ΔG|) · S_s(ΔG) ] accumulated over the n*n grid.
+    let mut vext: [float] = []
+    let mut z0 = 0 ; while z0 < n * n { vext.push(0.0) ; z0 = z0 + 1 }
+    // k+G vectors for the KB blocks.
+    let mut qvecs: [float] = []
+    let mut iq = 0
+    while iq < n {
+        qvecs.push(kvec[0] + gvecs[iq * 3])
+        qvecs.push(kvec[1] + gvecs[iq * 3 + 1])
+        qvecs.push(kvec[2] + gvecs[iq * 3 + 2])
+        iq = iq + 1
+    }
+    let mut vnl_sum: [float] = []
+    let mut vz = 0 ; while vz < n * n { vnl_sum.push(0.0) ; vz = vz + 1 }
+    let mut roff = 0 ; let mut poff = 0 ; let mut boff = 0 ; let mut doff = 0
+    let mut s = 0
+    while s < nspec {
+        let ml = mlens[s]
+        let mut rs_s: [float] = [] ; let mut rab_s: [float] = [] ; let mut vl_s: [float] = []
+        let mut ri = 0
+        while ri < ml { rs_s.push(rs[roff + ri]) ; rab_s.push(rabs[roff + ri]) ; vl_s.push(vlocs[roff + ri]) ; ri = ri + 1 }
+        let pa = palens[s]
+        let mut pos_s: [float] = []
+        let mut pi = 0
+        while pi < pa * 3 { pos_s.push(poss[poff + pi]) ; pi = pi + 1 }
+        let vloc_g = qforge_vloc_of_g(rs_s, rab_s, vl_s, zs[s], omega, dgmag)   // [n*n] or []
+        let sg = qforge_structure_factor_cart(dgvec, pos_s)                    // [2*n*n]
+        if len(vloc_g) == n * n {
+            if len(sg) == 2 * n * n {
+                let mut idx = 0
+                while idx < n * n { vext[idx] = vext[idx] + vloc_g[idx] * sg[idx * 2] ; idx = idx + 1 }
+            }
+        }
+        // per-species KB nonlocal (replicated at each of this species' sites via S_s).
+        let np = nprojs[s]
+        if np > 0 {
+            let bl = blens[s] ; let dl = dlens[s]
+            let mut beta_s: [float] = [] ; let mut bi = 0
+            while bi < bl { beta_s.push(betas[boff + bi]) ; bi = bi + 1 }
+            let mut ls_s: [int] = [] ; let mut li = 0
+            while li < np { ls_s.push(ls[doff + li]) ; li = li + 1 }
+            let mut dij_s: [float] = [] ; let mut di = 0
+            while di < dl { dij_s.push(dij[doff * np + di]) ; di = di + 1 }
+            let vnl = qforge_vnl_block(rs_s, rab_s, beta_s, ls_s, dij_s, np, omega, qvecs)
+            if len(vnl) == n * n {
+                let mut vk = 0
+                while vk < n * n { vnl_sum[vk] = vnl_sum[vk] + vnl[vk] ; vk = vk + 1 }
+            }
+            boff = boff + bl ; doff = doff + np
+        }
+        roff = roff + ml ; poff = poff + pa * 3
+        s = s + 1
+    }
+
+    let have_scr = len(vscr_diag) == n
+    let mut h: [float] = []
+    let mut diag: [float] = []
+    a = 0
+    while a < n {
+        let mut b = 0
+        while b < n {
+            let idx = a * n + b
+            let mut hab = vext[idx] + vnl_sum[idx]
+            if a == b { hab = hab + tdiag[a] }
+            if have_scr && a == b { hab = hab + vscr_diag[a] }
+            h.push(hab)
+            if a == b { diag.push(hab) }
+            b = b + 1
+        }
+        a = a + 1
+    }
+    return PwHam { h: h, diag: diag, n: n }
+}
+
 // ── Matrix-free apply (v ↦ H·v) for the assembled dense H ─────────────────────
 //   This is the operator `qforge_scf`/`qforge_davidson` call. Closes over the
 //   PwHam's flat matrix. Returns H·v (length n); length mismatch → [].

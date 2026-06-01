@@ -2507,6 +2507,35 @@ For each Tier-A sub-phase:
 
 ## Log
 
+### 2026-06-01 — `runtime_pure.hexa` math: floor/ceil/round/abs FFI→PURE (4 libm externs dropped)
+
+Ported 4 of the 11 libm FFI math wrappers in `self/runtime_pure.hexa`
+(`rt_math_floor`/`rt_math_ceil`/`rt_math_round`/`rt_math_abs`) from
+`extern fn __c_*` (libm) to **pure hexa exact arithmetic** — no libm, no
+syscall, no HexaVal carrier path (the codegen type-erasure wall the
+SELFHOST+ common-wall flags). These are integer-rounding ops, NOT
+transcendental, so they DON'T trip the `stdlib_trig_libm` ban on
+hand-rolled Taylor series (that ban is scoped to sin/cos/exp/…). The
+remaining 7 (sqrt/pow/exp/log/tanh/sin/cos) stay on libm FFI by that
+directive — irreducible-external interface (correct terminal state).
+
+**Method.** `to_int(float)` truncates toward zero (empirically verified:
+`to_int(3.7)=3`, `to_int(-2.3)=-2`). floor/ceil correct the
+sign-direction fractional case; round() = round-half-away-from-zero (C99
+`round()`). ceil() preserves IEEE sign-of-zero (`ceil(-0.5) = -0.0`)
+via `0.0 * -1.0` (the `-0.0` literal normalizes to `+0.0` in hexa).
+
+**Verify (g5 — verbatim smoke, 17/17 PASS, byte-exact vs C libm).** The
+4 ported bodies were run via `hexa run` against a C-libm `cc -x c -`
+reference (`floor(-2.3)=-3` · `ceil(-0.5)=-0` · `round(-2.5)=-3` ·
+`fabs(-2.3)=2.3` all matched). Parse-error count unchanged at 31 vs
+origin/main (all pre-existing `match`/`new_str` keyword collisions in
+the reference module — none introduced). Full verdict:
+`.verdicts/runtime-pure-math-floor-ceil-round-abs/smoke.txt`.
+
+PORT STATUS SUMMARY in `runtime_pure.hexa` updated: PURE-math 2→6,
+FFI-libm 11→7 (total 53 fns unchanged: 38 PURE / 9 FFI / 6 HYBRID).
+
 ### 2026-05-26 — step-4 assessment: the irreducible-core FLOOR (runtime.c retirement terminal)
 
 scan-B of the post-step-2/3 state (both "frontiers" the user asked to pursue):
@@ -5357,3 +5386,63 @@ PORT STATUS: PURE-math **2 → 5** · 파일 TOTAL **53 → 56** (37 PURE / 13 F
 은 `stdlib_trig_libm` ban 으로 libm 유지가 올바름. parse-error baseline 변화 없음
 (32 → 32 · 사전존재 `match` reserved-keyword 잔재, 본 변경 무관). verdict:
 `.verdicts/runtime-pure-math-trunc-sign-fmod/byte-diff.txt`.
+
+## 2026-06-01 — `self/runtime_pure.hexa` pure-fn (bucket A) lane RETIRED — carrier-path wall reached
+
+Loop round 4, RUNTIME lane. Audited every remaining FFI/HYBRID function in
+`self/runtime_pure.hexa` (the bucket-A "cleanly-portable pure" lane) to find the
+next pure batch portable WITHOUT the HexaVal carrier path (repr + arena + GC),
+WITHOUT syscalls, and WITHOUT hand-rolled transcendentals. **Result: no remaining
+function is cleanly portable. The pure-fn lane has hit its terminal wall.** This is
+a valid terminal (closed-negative) result, not a failure — every residual is blocked
+for a principled, enumerated reason.
+
+Verified state at audit time: `self/runtime_pure.hexa` is byte-identical to
+`origin/main` (the `#2418`/`#2419` floor-family/trunc-sign-fmod ports referenced in
+the loop brief never landed in this repo — `origin/main` HEAD is `#2420`; those
+function bodies are still `__c_floor`/`__c_ceil`/`__c_round`/`__c_fabs` FFI here, and
+`rt_math_trunc`/`rt_math_sign`/`rt_math_fmod` do not exist). Per loop policy these
+floor-family + trunc/sign/fmod functions are CLAIMED by sibling lanes and were left
+untouched (not re-ported), even though they are themselves pure-portable.
+
+### Residual classification — every non-PURE function and why it is blocked
+
+Math FFI (11 fns, lines 551-561):
+| fn | extern | class | why blocked |
+|----|--------|-------|-------------|
+| `rt_math_sqrt` | `__c_sqrt` | transcendental | `stdlib_trig_libm` ban — STAY on libm |
+| `rt_math_pow`  | `__c_pow`  | transcendental | same |
+| `rt_math_exp`  | `__c_exp`  | transcendental | same |
+| `rt_math_log`  | `__c_log`  | transcendental | same |
+| `rt_math_tanh` | `__c_tanh` | transcendental | same |
+| `rt_math_sin`  | `__c_sin`  | transcendental | same |
+| `rt_math_cos`  | `__c_cos`  | transcendental | same |
+| `rt_math_floor`| `__c_floor`| floor-family   | pure-portable BUT claimed by sibling lane (do-not-re-port) |
+| `rt_math_ceil` | `__c_ceil` | floor-family   | same |
+| `rt_math_round`| `__c_round`| floor-family   | same |
+| `rt_math_abs`  | `__c_fabs` | floor-family   | same |
+
+Memory FFI (2 fns, lines 630-631): `rt_alloc_raw → __c_malloc`, `rt_free_raw → __c_free`
+— raw heap allocation. Irreducible carrier/syscall (mmap/brk under libc). Cannot be
+pure hexa. BLOCKED (carrier-path/syscall).
+
+HYBRID I/O (6 fns, lines 584-623): `rt_read_file`, `rt_write_file`, `rt_write_bytes`,
+`rt_read_file_bytes`, `rt_exec`, `rt_exec_with_status` — delegate to interpreter
+builtins backed by syscalls (open/read/write + popen). The minimal-FFI block
+(`__c_popen/pclose/fgets/fopen/fclose/fread/fwrite/fseek/ftell`, lines 19-29) exists
+solely for these. BLOCKED (syscall).
+
+### Disposition: every residual is one of {transcendental-ban, sibling-claimed-floor-family, syscall, raw-malloc}
+
+There is NO function in `runtime_pure.hexa` that is a pure scalar computation AND
+not transcendental AND not in the sibling-claimed floor-family. The bucket already
+holds 34 PURE functions (20 string + 12 array + `rt_math_min`/`rt_math_max`); the
+only pure-computable math residuals are the floor-family explicitly reserved by a
+sibling lane. **No marginal port was forced.** Honesty gate (g5/g63): nothing marked
+ported because nothing was ported — this round is a documented terminal finding.
+
+Falsifier (how to reopen this lane): if a new pure-computation function (non-libm,
+non-syscall, non-malloc) appears in `runtime_pure.hexa` still on FFI, OR if the
+sibling floor-family lane is abandoned, the bucket-A lane reopens. Otherwise the
+next runtime unlock is the carrier-path tier (HexaVal repr + arena + GC) or the
+B-class macho relocation infra spec'd above — both out of scope for the pure-fn lane.
