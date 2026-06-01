@@ -1,0 +1,12 @@
+headless foreign-path smoke (env -i, no HOME/HEXA_LANG/HX_HOME)
+  root:     /Users/mini/dancinlab/hexa-lang/.claude/worktrees/agent-headless-fpath
+  hexa:     /Users/mini/.hx/bin/hexa
+
+  [PASS] bench_runner davidson_n128.hexa — rc=0, ok bench recorded
+  [PASS] bench_runner fft_poisson_nz256.hexa — rc=0, ok bench recorded
+  [PASS] bench_runner h_apply_n256.hexa — rc=0, ok bench recorded
+  [PASS] hexa verify --expr chsh_tsirelson — rc=0, recompute (calc_dispatch resolved headless)
+  [PASS] grep-guard — no /Users/ghost literal in any output/artifact
+
+Result: 5 PASS / 0 FAIL
+ALL PASS — headless run/verify path is foreign-path-free
