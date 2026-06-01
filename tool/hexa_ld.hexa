@@ -874,10 +874,16 @@ fn link_macho_arm64(objs: [ParsedObj], out_path: string, entry: string, _is_stat
                 // Skip if name resolves internally (treat as a plain
                 // PAGE21/PAGEOFF12 of an internal symbol — degenerate
                 // case where clang emitted GOT-form for an internal sym).
+                // N5-link fix: check the ALL-SLOT defined set (dsym_names), not
+                // the TEXT-only def_names — a DATA symbol (e.g. return_val in
+                // __data) is internally defined but absent from def_names, so it
+                // was wrongly classified as a libSystem import. With dsym_names
+                // it is recognized internal → not imported → the kind-5/6 patch
+                // relaxes its GOT_LOAD to a direct ref.
                 let mut hit_d = false
                 let mut sld = 0
-                while sld < len(def_names) {
-                    if def_names[sld] == dr.sym_name { hit_d = true; break }
+                while sld < len(dsym_names) {
+                    if dsym_names[sld] == dr.sym_name { hit_d = true; break }
                     sld = sld + 1
                 }
                 if !hit_d && len(dr.sym_name) > 0 {
@@ -1417,6 +1423,62 @@ fn link_macho_arm64(objs: [ParsedObj], out_path: string, entry: string, _is_stat
                 // exactly like a regular PAGE21 / PAGEOFF12 reloc, with
                 // the PAGEOFF12 scale forced to 3 (LDR x = 8 B).
                 let patch_off = pbase + pr.offset
+                // N5-link fix: INTERNAL GOT_LOAD target → RELAX to a direct
+                // reference of the symbol itself (no GOT slot, no dyld import).
+                // hexa_ld previously left internal kind-5/6 refs UNPATCHED (the
+                // "degenerate to kind 3/4" note was never implemented) — a
+                // GOT_LOAD to e.g. the weak data global `return_val` then fell
+                // through to the import path → libSystem import → dyld crash.
+                // Resolve the address via the unified dsym table (all slots,
+                // like the kind 3/4 path), then relax: PAGE21 → adrp to the
+                // symbol's page; PAGEOFF12 (an LDR of the GOT slot) → rewrite to
+                // ADD of the symbol's page-offset (compute the address directly).
+                let mut g_int_addr = -1
+                let mut dkg = 0
+                while dkg < len(dsym_names) {
+                    if dsym_names[dkg] == pr.sym_name {
+                        let slotg = dsym_slot[dkg]
+                        let offg  = dsym_offset[dkg]
+                        if slotg == SLOT_TEXT         { g_int_addr = text_section_addr + offg }
+                        else if slotg == SLOT_CONST   { g_int_addr = const_section_addr + offg }
+                        else if slotg == SLOT_CSTRING { g_int_addr = cstring_section_addr + offg }
+                        else if slotg == SLOT_DATA    { g_int_addr = data_section_addr + offg }
+                        else if slotg == SLOT_BSS     { g_int_addr = bss_section_addr + offg }
+                        break
+                    }
+                    dkg = dkg + 1
+                }
+                let bw0 = text_bytes[patch_off + 0]
+                let bw1 = text_bytes[patch_off + 1]
+                let bw2 = text_bytes[patch_off + 2]
+                let bw3 = text_bytes[patch_off + 3]
+                let bcur = bw0 | (bw1 << 8) | (bw2 << 16) | (bw3 << 24)
+                if g_int_addr >= 0 {
+                    let mut patched = bcur
+                    if pr.kind == 5 {
+                        // adrp to the SYMBOL's page (relax — same as kind 3).
+                        let pc_addr  = text_section_addr + patch_off
+                        let tgt_page = g_int_addr & (0 - 0x1000)
+                        let pc_page  = pc_addr  & (0 - 0x1000)
+                        let page_imm = (tgt_page - pc_page) / 0x1000
+                        let immlo = page_imm & 0x3
+                        let immhi = (page_imm >> 2) & 0x7ffff
+                        let cleared = bcur & 0x9f00001f
+                        patched = cleared | (immlo << 29) | (immhi << 5)
+                    } else {
+                        // GOT PAGEOFF12 is `ldr xD, [xN, #s]`; relax to
+                        // `add xD, xN, #pageoff` (UNSCALED 12-bit imm). Preserve
+                        // rn (bits 9:5) and rt→rd (bits 4:0); opcode → ADD imm.
+                        let rn = (bcur >> 5) & 0x1f
+                        let rd = bcur & 0x1f
+                        let off12 = g_int_addr & 0xfff
+                        patched = 0x91000000 | ((off12 & 0xfff) << 10) | (rn << 5) | rd
+                    }
+                    text_bytes[patch_off + 0] = patched & 0xff
+                    text_bytes[patch_off + 1] = (patched >> 8) & 0xff
+                    text_bytes[patch_off + 2] = (patched >> 16) & 0xff
+                    text_bytes[patch_off + 3] = (patched >> 24) & 0xff
+                } else {
                 let mut got_idx = -1
                 let mut gi = 0
                 while gi < len(import_names) {
@@ -1425,11 +1487,7 @@ fn link_macho_arm64(objs: [ParsedObj], out_path: string, entry: string, _is_stat
                 }
                 if got_idx >= 0 {
                     let slot_addr = got_section_addr + 8 * got_idx
-                    let w0 = text_bytes[patch_off + 0]
-                    let w1 = text_bytes[patch_off + 1]
-                    let w2 = text_bytes[patch_off + 2]
-                    let w3 = text_bytes[patch_off + 3]
-                    let cur = w0 | (w1 << 8) | (w2 << 16) | (w3 << 24)
+                    let cur = bcur
                     let mut patched = cur
                     if pr.kind == 5 {
                         // GOT_LOAD_PAGE21 — adrp: page-delta of GOT slot.
@@ -1454,6 +1512,7 @@ fn link_macho_arm64(objs: [ParsedObj], out_path: string, entry: string, _is_stat
                     text_bytes[patch_off + 1] = (patched >> 8) & 0xff
                     text_bytes[patch_off + 2] = (patched >> 16) & 0xff
                     text_bytes[patch_off + 3] = (patched >> 24) & 0xff
+                }
                 }
             }
             pri = pri + 1
