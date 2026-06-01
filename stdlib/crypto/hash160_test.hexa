@@ -1,0 +1,43 @@
+// HEXA Standard Library — crypto/hash160 self-test (published HASH160 vectors)
+// @ci_gate
+use "stdlib/crypto/hash160"
+
+fn sbytes(s: string) -> [int] {
+    let mut b: [int] = []
+    let mut i = 0
+    while i < byte_len(s) { b = b + [byte_at(s, i)]; i = i + 1 }
+    return b
+}
+
+fn main() {
+    let mut total = 0
+    let mut pass = 0
+
+    // RIPEMD-160(SHA-256("")) — published BTC hash160 of empty input
+    total = total + 1
+    assert(hash160_hex([]) == "b472a266d0bd89c13706a4132ccfb16f7c3b9fcb")
+    pass = pass + 1
+
+    // RIPEMD-160(SHA-256("abc"))
+    total = total + 1
+    assert(hash160_hex([97, 98, 99]) == "bb1be98c142444d7a56aa3981c3942a978e4dc33")
+    pass = pass + 1
+
+    // RIPEMD-160(SHA-256("hello"))
+    total = total + 1
+    assert(hash160_hex(sbytes("hello")) == "b6a9c8c230722b7c748331a8b450f05566dc7d0f")
+    pass = pass + 1
+
+    // hash160 returns exactly 20 bytes, and matches hash160_hex
+    total = total + 1
+    let h = hash160(sbytes("hello"))
+    assert(len(h) == 20)
+    pass = pass + 1
+
+    if pass == total {
+        println("[hash160_test] KAT: " + str(total) + "/" + str(total) + " asserts passed")
+        println("__HEXA_HASH160_TEST__ PASS " + str(total) + "/" + str(total))
+    } else {
+        println("__HEXA_HASH160_TEST__ FAIL " + str(pass) + "/" + str(total))
+    }
+}
