@@ -21,7 +21,10 @@
 use "stdlib/qforge/scf_pw"
 use "stdlib/qforge/upf"
 use "stdlib/qforge/orchestrator_pw"
+use "stdlib/qforge/orchestrator"
+use "stdlib/qforge/davidson"
 use "stdlib/qforge/elph"
+use "stdlib/qforge/elph_scf"
 
 let DECK = "/Users/mini/dancinlab/demiurge/exports/rtsc/decks/CaH6_NC"
 
@@ -173,22 +176,48 @@ fn main() {
     //   A rigid on-site bare perturbation on the occupied manifold → finite |g|²
     //   → λ. NOT a production Tc (no phonon dispersion / DFPT modes) — the goal is
     //   "the engine converges a real cell and emits a finite λ" (d6).
-    let occ = qforge_pw_occ_states(scf.rho, n, nocc)
+    //   Recover the occupied ψ_n by re-diagonalizing the MULTI-species H(ρ) at the
+    //   best-effort ρ (qforge_h_of_rho_multi is the staged closure — the single-
+    //   species orchestrator helper qforge_pw_occ_states uses the wrong slots here).
+    let h_apply = qforge_h_of_rho_multi(scf.rho)
+    let mut diag: [float] = []
+    let mut dd = 0
+    while dd < n {
+        let mut col: [float] = [] ; let mut t = 0
+        while t < n { if t == dd { col.push(1.0) } else { col.push(0.0) } ; t = t + 1 }
+        let hc = h_apply(col) ; diag.push(hc[dd]) ; dd = dd + 1
+    }
+    let dr = qforge_davidson(h_apply, diag, n, nocc, 1.0e-10, 300)
+    let mut occ_states: [[float]] = []
+    let mut bb = 0
+    while bb < nocc {
+        let mut v: [float] = [] ; let mut t = 0
+        while t < n { v.push(dr.evecs[bb * n + t]) ; t = t + 1 }
+        occ_states.push(v) ; bb = bb + 1
+    }
+    let mut eps_occ: [float] = []
+    i = 0 ; while i < nocc { eps_occ.push(dr.evals[i]) ; i = i + 1 }
+    // a rigid on-site bare perturbation ΔV|ψ_n⟩ = g_target·ψ_n → |g_nn|=g_target.
     let g_target = 0.30
-    let mut dvb: [float] = []
-    i = 0
-    while i < n { dvb.push(g_target * occ[0][i]) ; i = i + 1 }
-    let mut dv_modes: [[float]] = [] ; dv_modes.push(dvb)
     let omega0 = 1236.4                            // CaH6 ω₀ scale (K), Einstein
-    let omega_modes = [omega0]
-    let e_fermi = scf.evals[nocc - 1]              // HOMO ≈ E_F (Γ)
+    let e_fermi = dr.evals[nocc - 1]               // HOMO ≈ E_F (Γ)
     let n_ef = 1.0
     let mut grid: [float] = []
     let mut gp = 1
     while gp < 401 { grid.push(to_float(gp) * 7.0) ; gp = gp + 1 }   // 7..2800 K
-    let res = qforge_atoms_to_tc(scf.rho, scf.evals, n, nocc, dv_modes, omega_modes,
-                                 1.0, drho_zero_cah6, e_fermi, n_ef, grid,
-                                 0.05, 10.0, 0.10, 256)
+    // on-shell Fermi-surface double-delta dataset: each occupied n contributes
+    // |g_nn|²=g_target² at ε_k=ε_kq=ε_n, ω=ω₀ (the el-ph tail histograms this).
+    let mut eps_k: [float] = [] ; let mut eps_kq: [float] = []
+    let mut g2: [float] = [] ; let mut wq: [float] = []
+    let mut nn = 0
+    while nn < nocc {
+        let gnn = qforge_elph_g_diag(occ_states[nn], scale_vec(occ_states[nn], g_target, n), n)
+        eps_k.push(eps_occ[nn]) ; eps_kq.push(eps_occ[nn])
+        g2.push(gnn * gnn) ; wq.push(omega0)
+        nn = nn + 1
+    }
+    let res = qforge_elph_to_tc(eps_k, eps_kq, g2, wq, e_fermi, n_ef, grid,
+                                1.0, 0.05, 10.0, 0.10, 256)
     println("--- el-ph→Tc CHAIN (Γ-only Einstein, coarse — verification, not production) ---")
     println("chain ok  = " + to_string(res.ok))
     println("lambda    = " + to_string(res.lambda))
@@ -198,9 +227,9 @@ fn main() {
     println("=== DONE ===")
 }
 
-fn drho_zero_cah6(drho: [float]) -> [float] {
+fn scale_vec(v: [float], s: float, n: int) -> [float] {
     let mut out: [float] = []
     let mut i = 0
-    while i < drho.len() { out.push(0.0) ; i = i + 1 }
+    while i < n { out.push(s * v[i]) ; i = i + 1 }
     return out
 }
