@@ -12,8 +12,8 @@
 //
 // group ∈ { lifecycle | manage | exec | io | plan | meta } — render section.
 // Aliases the dispatcher accepts but the help does NOT list as separate rows
-// (up→rent · status→list · destroy→down · --help/-h→help · --version/-v→version)
-// are NOT roster rows; the drift test treats them as aliases.
+// (up→rent · status→list · destroy→down · probe→alive · --help/-h→help ·
+// --version/-v→version) are NOT roster rows; the drift test treats them as aliases.
 
 struct CloudCmd {
     name:    str,
@@ -44,6 +44,9 @@ fn cloud_commands() -> [CloudCmd] {
         CloudCmd { name: "ssh-port", group: "lifecycle",
             args: "<id> [--provider P]",
             summary: "print live ssh host:port of a pod (vast|runpod)" },
+        CloudCmd { name: "alive", group: "lifecycle",
+            args: "<id...> [--provider P] [--json]",
+            summary: "PROVIDER-API liveness (NOT ssh): RUNNING|STOPPED|GONE|UNKNOWN|MISSING-CRED — disambiguates unreachable-vs-dead; exit 0/3/4/255 (alias: probe)" },
         CloudCmd { name: "resolve", group: "lifecycle",
             args: "<id> [--provider P]",
             summary: "alias of ssh-port — pod-id -> ssh host:port for run/copy-to" },
