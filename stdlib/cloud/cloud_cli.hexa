@@ -741,6 +741,27 @@ struct ResolvedHost {
 // fall back to the bare direct IP only when the proxy is not yet mapped, and
 // leave a non-id host (or an unmapped id) untouched. Pure-ish: the only effect
 // is the vastai read inside vast_*_endpoint.
+// _pool_resolve — map a pool-roster name (e.g. "summer") to its ssh
+// destination ("summer@192.168.50.60") via ~/.pool/pool.json (commons g9).
+// Returns "" when the file is absent or the name is not in the roster — the
+// caller then falls back to the legacy ssh-config alias passthrough, so
+// existing ~/.ssh/config Host aliases keep working unchanged.
+fn _pool_resolve(h: str) -> str {
+    let path = env_var("HOME") + "/.pool/pool.json"
+    let raw = read_file(path)
+    if len(raw) == 0 { return "" }
+    let root = json_parse(raw)
+    let hosts = json_object_get_array(root, "hosts")
+    let mut i = 0
+    while i < len(hosts) {
+        if json_object_get_str(hosts[i], "name", "") == h {
+            return json_object_get_str(hosts[i], "ssh", "")
+        }
+        i = i + 1
+    }
+    return ""
+}
+
 fn _resolve_cloud_host(h: str) -> ResolvedHost {
     if _is_vast_numeric_id(h) == 0 {
         // #handoff-aad9f4c0: a bare dotted endpoint (direct IP / DNS) with NO
@@ -756,6 +777,15 @@ fn _resolve_cloud_host(h: str) -> ResolvedHost {
                 return ResolvedHost { host: h, port: "", resolved: 0, via: "" }
             }
             return ResolvedHost { host: "root@" + h, port: "", resolved: 0, via: "direct-root" }
+        }
+        // bare name (no dot, no @) — try the pool roster (~/.pool/pool.json)
+        // name→ssh BEFORE the legacy ~/.ssh/config alias passthrough. A roster
+        // hit (e.g. "summer" → "summer@192.168.50.60") makes `hexa cloud run
+        // summer` resolve like `sidecar pool on summer` (commons g9); a miss
+        // falls through to the unchanged ssh-config alias path below.
+        let pool_ssh = _pool_resolve(h)
+        if len(pool_ssh) > 0 {
+            return ResolvedHost { host: pool_ssh, port: "", resolved: 0, via: "pool" }
         }
         return ResolvedHost { host: h, port: "", resolved: 0, via: "" }
     }
