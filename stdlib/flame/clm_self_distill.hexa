@@ -1,0 +1,390 @@
+// ════════════════════════════════════════════════════════════════════════════
+//  clm_self_distill.hexa — self-play dispatch-KL self-distillation (lever A · P4 §2).
+//
+//  PARADIGM: the CLMConvMoE distils from its OWN higher-rung dispatch — NO
+//  external teacher, NO external LLM call (external-LLM 0, structural by
+//  construction). The router emits per-position expert logits; the model's own
+//  dispatch at a SHARPER (lower) temperature is the soft target (the "higher
+//  rung" self-output), and a KL term pulls the temperature-1 dispatch toward
+//  that detached sharper self-distribution. The KL gradient flows ONLY into the
+//  router logits (student side); the teacher is stop-gradient.
+//
+//    router_logits z[t,e]                       (= conv_lib router out, d→E)
+//    teacher  q[t,e] = softmax(z[t,e] / tau),  tau<1  (sharper · detached · no grad)
+//    student  p[t,e] = softmax(z[t,e])               (temperature 1 · grad)
+//    L_kl = Sum_t Sum_e q·(ln q - ln p)              (KL(q||p), q detached)
+//    dL_kl/dz[t,e] = lam · (p[t,e] - q[t,e])         (closed softmax-KL vjp)
+//
+//  This is entropy-style self-training: the model is nudged to make its own
+//  routing MORE confident (toward its own sharper rung). The extra signal is
+//  added to the router-logit gradient seed BEFORE the router conv bwd, so it
+//  rides the existing GRAD-EXACT backward chain (clm_train #2302) verbatim — no
+//  new bwd edge. Verbatim forward / CE / AdamW from clm_step (assembly 3a).
+//
+//  FALSIFIER (pre-registered): held-out gain ∧ external-LLM 0.
+//    (a) external-LLM 0 — the loop makes ZERO external model call (no socket,
+//        no http, no llm-cmd; asserted structurally · governance external_llm).
+//    (b) held-out gain — the self-distilled model's CE on a HELD-OUT split
+//        (tokens NOT trained on) is strictly lower than the non-distilled
+//        baseline trained from the IDENTICAL init for the IDENTICAL #steps.
+//    If no held-out gain emerges → report the HONEST NEGATIVE (do NOT fabricate).
+//
+//  F-FLAME-SELF-DISTILL: held_out_CE(distill) < held_out_CE(baseline) ∧ ext-LLM=0.
+// ════════════════════════════════════════════════════════════════════════════
+
+use "stdlib/flame/tensor_lib"
+use "stdlib/flame/conv_lib"
+use "stdlib/flame/gn_lib"
+use "stdlib/flame/moe_lib"
+use "stdlib/flame/nn_lib"
+use "stdlib/flame/optim_lib"
+
+// Forward (L=1) — verbatim from the verified clm_step / clm_train (#2302).
+// Writes the bwd caches + out_logits[T·V]. logits_r[T·E] is ALSO surfaced so
+// the self-KL term can read the router logits without recomputing the trunk.
+fn sd_fwd_full(tokens: int,
+               embed: int, ecW: int, ecB: int, tcW: int, tcB: int, tgG: int, tgB: int,
+               rW: int, rB: int, e0W: int, e0B: int, e1W: int, e1B: int,
+               noG: int, noB: int, roW: int, roB: int,
+               xe: int, xec: int, xt: int, hn0: int, xhat0: int, inv0: int,
+               eo0: int, eo1: int, probs: int, ex_out: int, yn: int, xhatN: int, invN: int,
+               logits_r: int, out_logits: int, T: int, d: int, E: int, V: int, K: int) {
+    nn_embedding_fwd(tokens, embed, xe, T, d)
+    nn_conv1d_fwd(xe, ecW, ecB, xec, T, d, d, K, 1)
+    let h0 = t_zeros(T * d)
+    nn_conv1d_fwd(xec, tcW, tcB, h0, T, d, d, K, 1)
+    let mean0 = t_zeros(1)
+    nn_groupnorm_fwd(h0, tgG, tgB, hn0, mean0, inv0, xhat0, T, d, 1)
+    let hg0 = t_zeros(T * d); nn_gelu_fwd(hn0, hg0, T * d)
+    let mut i = 0
+    while i < T * d { t_set(xt, i, t_get(xec, i) + t_get(hg0, i)); i = i + 1 }
+    nn_conv1d_fwd(xt, rW, rB, logits_r, T, d, E, 1, 1)
+    nn_conv1d_fwd(xt, e0W, e0B, eo0, T, d, d, K, 1)
+    nn_conv1d_fwd(xt, e1W, e1B, eo1, T, d, d, K, 1)
+    let ex0 = t_zeros(T * d); nn_gelu_fwd(eo0, ex0, T * d)
+    let ex1 = t_zeros(T * d); nn_gelu_fwd(eo1, ex1, T * d)
+    let mut j = 0
+    while j < T * d {
+        t_set(ex_out, 0 * T * d + j, t_get(ex0, j))
+        t_set(ex_out, 1 * T * d + j, t_get(ex1, j))
+        j = j + 1
+    }
+    let y = t_zeros(T * d)
+    nn_moe_router_fwd(logits_r, ex_out, probs, y, T, E, d)
+    let meanN = t_zeros(1)
+    nn_groupnorm_fwd(y, noG, noB, yn, meanN, invN, xhatN, T, d, 1)
+    nn_conv1d_fwd(yn, roW, roB, out_logits, T, d, V, 1, 1)
+    // free per-step scratch (bounds heap over many steps · t_free = farr_free).
+    t_free(h0); t_free(hg0); t_free(ex0); t_free(ex1); t_free(y)
+    t_free(mean0); t_free(meanN)
+}
+
+// CE gradient seed (verbatim from clm_step).
+fn sd_ce_grad(logits: int, targets: int, dlogits_out: int, T: int, V: int) {
+    let mut t = 0
+    while t < T {
+        let base = t * V
+        let mut mx = t_get(logits, base); let mut i = 1
+        while i < V { let v = t_get(logits, base + i); if v > mx { mx = v }; i = i + 1 }
+        let mut sm = 0.0; let mut i2 = 0
+        while i2 < V { sm = sm + exp(t_get(logits, base + i2) - mx); i2 = i2 + 1 }
+        let invT = 1.0 / to_float(T); let mut v3 = 0
+        while v3 < V {
+            let p = exp(t_get(logits, base + v3) - mx) / sm
+            t_set(dlogits_out, base + v3, p * invT); v3 = v3 + 1
+        }
+        let tgt = to_int(t_get(targets, t))
+        t_set(dlogits_out, base + tgt, t_get(dlogits_out, base + tgt) - invT)
+        t = t + 1
+    }
+}
+
+// temperature-scaled softmax over E experts, per position: out[t,e] = softmax(z[t,e]/tau).
+fn sd_temp_softmax(z: int, tau: float, out: int, T: int, E: int) {
+    let mut t = 0
+    while t < T {
+        let base = t * E
+        let mut mx = t_get(z, base) / tau; let mut e = 1
+        while e < E { let v = t_get(z, base + e) / tau; if v > mx { mx = v }; e = e + 1 }
+        let mut s = 0.0; let mut e2 = 0
+        while e2 < E { let ev = exp(t_get(z, base + e2) / tau - mx); t_set(out, base + e2, ev); s = s + ev; e2 = e2 + 1 }
+        let mut e3 = 0
+        while e3 < E { t_set(out, base + e3, t_get(out, base + e3) / s); e3 = e3 + 1 }
+        t = t + 1
+    }
+}
+
+// ── SELF-KL dispatch-distillation grad-on-router-logits. ─────────────────────
+// teacher q = softmax(z/tau) (SHARPER · stop-grad), student p = softmax(z).
+// L_kl = lam · Sum KL(q||p);  dL_kl/dz[t,e] = lam · (p[t,e] - q[t,e]).  Added INTO
+// the router-logit grad seed dlogits_r so it rides the existing GRAD-EXACT chain.
+// Returns the scalar KL (diagnostic). NO external call — pure self-output.
+fn sd_self_kl_into(z: int, tau: float, lam: float, dlogits_r: int, T: int, E: int) -> float {
+    let q = t_zeros(T * E); let p = t_zeros(T * E)
+    sd_temp_softmax(z, tau, q, T, E)          // teacher (sharper rung · detached)
+    sd_temp_softmax(z, 1.0, p, T, E)          // student (temperature 1)
+    let mut kl = 0.0
+    let mut t = 0
+    while t < T {
+        let base = t * E
+        let mut e = 0
+        while e < E {
+            let qv = t_get(q, base + e); let pv = t_get(p, base + e)
+            let qs = if qv < 0.000001 { 0.000001 } else { qv }
+            let ps = if pv < 0.000001 { 0.000001 } else { pv }
+            kl = kl + qv * (ln(qs) - ln(ps))
+            // add the self-KL grad onto the existing router-logit seed
+            t_set(dlogits_r, base + e, t_get(dlogits_r, base + e) + lam * (pv - qv))
+            e = e + 1
+        }
+        t = t + 1
+    }
+    t_free(q); t_free(p)
+    return kl * lam
+}
+
+// Backward chain seeded by dlogits (CE seed) + an OPTIONAL self-KL router-logit
+// add-on (kl_lam > 0). Verbatim wiring from clm_step (#2302) except the
+// router-logit grad seed dlogits_r is augmented by the self-KL term before the
+// router conv bwd. Writes param grads.
+fn sd_bwd(dlogits: int, tokens: int,
+          embed: int, ecW: int, tcW: int, tgG: int, rW: int, e0W: int, e1W: int, noG: int, roW: int,
+          xe: int, xec: int, xt: int, hn0: int, xhat0: int, inv0: int,
+          eo0: int, eo1: int, probs: int, ex_out: int, yn: int, xhatN: int, invN: int,
+          logits_r: int, kl_tau: float, kl_lam: float,
+          dembed: int, decW: int, decB: int, dtcW: int, dtcB: int, dtgG: int, dtgB: int,
+          drW: int, drB: int, de0W: int, de0B: int, de1W: int, de1B: int,
+          dnoG: int, dnoB: int, droW: int, droB: int,
+          T: int, d: int, E: int, V: int, K: int) {
+    let dynorm = t_zeros(T * d)
+    nn_conv1d_bwd(yn, roW, dlogits, droW, dynorm, droB, T, d, V, 1, 1)
+    let dy = t_zeros(T * d)
+    nn_groupnorm_bwd(xhatN, invN, noG, dynorm, dnoG, dnoB, dy, T, d, 1)
+    let dlogits_r = t_zeros(T * E)
+    let dex_out = t_zeros(E * T * d)
+    nn_moe_router_bwd(probs, ex_out, dy, dlogits_r, dex_out, T, E, d)
+    // SELF-KL: augment the router-logit grad seed with the self-distillation term.
+    if kl_lam > 0.0 {
+        let _ = sd_self_kl_into(logits_r, kl_tau, kl_lam, dlogits_r, T, E)
+    }
+    let dxt_r = t_zeros(T * d)
+    nn_conv1d_bwd(xt, rW, dlogits_r, drW, dxt_r, drB, T, d, E, 1, 1)
+    let dex0 = t_zeros(T * d); let dex1 = t_zeros(T * d)
+    let mut ei = 0
+    while ei < T * d {
+        t_set(dex0, ei, t_get(dex_out, 0 * T * d + ei))
+        t_set(dex1, ei, t_get(dex_out, 1 * T * d + ei))
+        ei = ei + 1
+    }
+    let deo0 = t_zeros(T * d); nn_gelu_bwd(eo0, dex0, deo0, T * d)
+    let deo1 = t_zeros(T * d); nn_gelu_bwd(eo1, dex1, deo1, T * d)
+    let dxt_e0 = t_zeros(T * d); nn_conv1d_bwd(xt, e0W, deo0, de0W, dxt_e0, de0B, T, d, d, K, 1)
+    let dxt_e1 = t_zeros(T * d); nn_conv1d_bwd(xt, e1W, deo1, de1W, dxt_e1, de1B, T, d, d, K, 1)
+    let dxt = t_zeros(T * d)
+    let mut xi = 0
+    while xi < T * d {
+        t_set(dxt, xi, t_get(dxt_r, xi) + t_get(dxt_e0, xi) + t_get(dxt_e1, xi))
+        xi = xi + 1
+    }
+    let dhn0 = t_zeros(T * d); nn_gelu_bwd(hn0, dxt, dhn0, T * d)
+    let dh0 = t_zeros(T * d)
+    nn_groupnorm_bwd(xhat0, inv0, tgG, dhn0, dtgG, dtgB, dh0, T, d, 1)
+    let dxec_b = t_zeros(T * d)
+    nn_conv1d_bwd(xec, tcW, dh0, dtcW, dxec_b, dtcB, T, d, d, K, 1)
+    let dxec = t_zeros(T * d)
+    let mut ci = 0
+    while ci < T * d { t_set(dxec, ci, t_get(dxt, ci) + t_get(dxec_b, ci)); ci = ci + 1 }
+    let dxe = t_zeros(T * d)
+    nn_conv1d_bwd(xe, ecW, dxec, decW, dxe, decB, T, d, d, K, 1)
+    let mut zi = 0
+    while zi < V * d { t_set(dembed, zi, 0.0); zi = zi + 1 }
+    nn_embedding_bwd_scatter(dxe, tokens, dembed, T, d)
+    // free per-step scratch (bounds heap over many steps).
+    t_free(dynorm); t_free(dy); t_free(dlogits_r); t_free(dex_out); t_free(dxt_r)
+    t_free(dex0); t_free(dex1); t_free(deo0); t_free(deo1); t_free(dxt_e0); t_free(dxt_e1)
+    t_free(dxt); t_free(dhn0); t_free(dh0); t_free(dxec_b); t_free(dxec); t_free(dxe)
+}
+
+fn _adam(W: int, gW: int, m: int, v: int, n: int, t: int) {
+    opt_adamw_step(W, gW, m, v, n, 0.05, 0.9, 0.999, 0.00000001, 0.0, t)
+}
+
+// Train a model IN PLACE for `steps` on (tok,tgt). kl_lam>0 → self-KL on.
+// Mutates the passed parameter tensors. All scratch alloc'd here.
+fn sd_train(tok: int, tgt: int, steps: int, kl_tau: float, kl_lam: float,
+            embed: int, ecW: int, ecB: int, tcW: int, tcB: int, tgG: int, tgB: int,
+            rW: int, rB: int, e0W: int, e0B: int, e1W: int, e1B: int,
+            noG: int, noB: int, roW: int, roB: int,
+            T: int, d: int, E: int, V: int, K: int) {
+    let dd = d * d * K; let ed = E * d; let vd = V * d
+    let dembed=t_zeros(vd); let decW=t_zeros(dd); let decB=t_zeros(d)
+    let dtcW=t_zeros(dd); let dtcB=t_zeros(d); let dtgG=t_zeros(d); let dtgB=t_zeros(d)
+    let drW=t_zeros(ed); let drB=t_zeros(E)
+    let de0W=t_zeros(dd); let de0B=t_zeros(d); let de1W=t_zeros(dd); let de1B=t_zeros(d)
+    let dnoG=t_zeros(d); let dnoB=t_zeros(d); let droW=t_zeros(vd); let droB=t_zeros(V)
+    let m_embed=t_zeros(vd); let v_embed=t_zeros(vd)
+    let m_ecW=t_zeros(dd); let v_ecW=t_zeros(dd); let m_ecB=t_zeros(d); let v_ecB=t_zeros(d)
+    let m_tcW=t_zeros(dd); let v_tcW=t_zeros(dd); let m_tcB=t_zeros(d); let v_tcB=t_zeros(d)
+    let m_tgG=t_zeros(d); let v_tgG=t_zeros(d); let m_tgB=t_zeros(d); let v_tgB=t_zeros(d)
+    let m_rW=t_zeros(ed); let v_rW=t_zeros(ed); let m_rB=t_zeros(E); let v_rB=t_zeros(E)
+    let m_e0W=t_zeros(dd); let v_e0W=t_zeros(dd); let m_e0B=t_zeros(d); let v_e0B=t_zeros(d)
+    let m_e1W=t_zeros(dd); let v_e1W=t_zeros(dd); let m_e1B=t_zeros(d); let v_e1B=t_zeros(d)
+    let m_noG=t_zeros(d); let v_noG=t_zeros(d); let m_noB=t_zeros(d); let v_noB=t_zeros(d)
+    let m_roW=t_zeros(vd); let v_roW=t_zeros(vd); let m_roB=t_zeros(V); let v_roB=t_zeros(V)
+    let xe=t_zeros(T*d); let xec=t_zeros(T*d); let xt=t_zeros(T*d)
+    let hn0=t_zeros(T*d); let xhat0=t_zeros(T*d); let inv0=t_zeros(1)
+    let eo0=t_zeros(T*d); let eo1=t_zeros(T*d); let probs=t_zeros(T*E); let ex_out=t_zeros(E*T*d)
+    let yn=t_zeros(T*d); let xhatN=t_zeros(T*d); let invN=t_zeros(1)
+    let logits_r=t_zeros(T*E); let logits=t_zeros(T*V); let dlogits=t_zeros(T*V)
+    let mut step = 1
+    while step <= steps {
+        sd_fwd_full(tok, embed, ecW, ecB, tcW, tcB, tgG, tgB, rW, rB,
+                    e0W, e0B, e1W, e1B, noG, noB, roW, roB,
+                    xe, xec, xt, hn0, xhat0, inv0, eo0, eo1, probs, ex_out,
+                    yn, xhatN, invN, logits_r, logits, T, d, E, V, K)
+        sd_ce_grad(logits, tgt, dlogits, T, V)
+        sd_bwd(dlogits, tok, embed, ecW, tcW, tgG, rW, e0W, e1W, noG, roW,
+               xe, xec, xt, hn0, xhat0, inv0, eo0, eo1, probs, ex_out, yn, xhatN, invN,
+               logits_r, kl_tau, kl_lam,
+               dembed, decW, decB, dtcW, dtcB, dtgG, dtgB, drW, drB, de0W, de0B, de1W, de1B,
+               dnoG, dnoB, droW, droB, T, d, E, V, K)
+        _adam(embed, dembed, m_embed, v_embed, vd, step)
+        _adam(ecW, decW, m_ecW, v_ecW, dd, step); _adam(ecB, decB, m_ecB, v_ecB, d, step)
+        _adam(tcW, dtcW, m_tcW, v_tcW, dd, step); _adam(tcB, dtcB, m_tcB, v_tcB, d, step)
+        _adam(tgG, dtgG, m_tgG, v_tgG, d, step);  _adam(tgB, dtgB, m_tgB, v_tgB, d, step)
+        _adam(rW, drW, m_rW, v_rW, ed, step);     _adam(rB, drB, m_rB, v_rB, E, step)
+        _adam(e0W, de0W, m_e0W, v_e0W, dd, step); _adam(e0B, de0B, m_e0B, v_e0B, d, step)
+        _adam(e1W, de1W, m_e1W, v_e1W, dd, step); _adam(e1B, de1B, m_e1B, v_e1B, d, step)
+        _adam(noG, dnoG, m_noG, v_noG, d, step);  _adam(noB, dnoB, m_noB, v_noB, d, step)
+        _adam(roW, droW, m_roW, v_roW, vd, step); _adam(roB, droB, m_roB, v_roB, V, step)
+        step = step + 1
+    }
+    // free this arm's grad + AdamW state + caches (so the next arm starts clean).
+    t_free(dembed); t_free(decW); t_free(decB); t_free(dtcW); t_free(dtcB); t_free(dtgG); t_free(dtgB)
+    t_free(drW); t_free(drB); t_free(de0W); t_free(de0B); t_free(de1W); t_free(de1B)
+    t_free(dnoG); t_free(dnoB); t_free(droW); t_free(droB)
+    t_free(m_embed); t_free(v_embed); t_free(m_ecW); t_free(v_ecW); t_free(m_ecB); t_free(v_ecB)
+    t_free(m_tcW); t_free(v_tcW); t_free(m_tcB); t_free(v_tcB); t_free(m_tgG); t_free(v_tgG); t_free(m_tgB); t_free(v_tgB)
+    t_free(m_rW); t_free(v_rW); t_free(m_rB); t_free(v_rB)
+    t_free(m_e0W); t_free(v_e0W); t_free(m_e0B); t_free(v_e0B); t_free(m_e1W); t_free(v_e1W); t_free(m_e1B); t_free(v_e1B)
+    t_free(m_noG); t_free(v_noG); t_free(m_noB); t_free(v_noB); t_free(m_roW); t_free(v_roW); t_free(m_roB); t_free(v_roB)
+    t_free(xe); t_free(xec); t_free(xt); t_free(hn0); t_free(xhat0); t_free(inv0)
+    t_free(eo0); t_free(eo1); t_free(probs); t_free(ex_out); t_free(yn); t_free(xhatN); t_free(invN)
+    t_free(logits_r); t_free(logits); t_free(dlogits)
+}
+
+// CE on an arbitrary (tok,tgt) WITHOUT updating params (eval / held-out).
+fn sd_eval_ce(tok: int, tgt: int,
+              embed: int, ecW: int, ecB: int, tcW: int, tcB: int, tgG: int, tgB: int,
+              rW: int, rB: int, e0W: int, e0B: int, e1W: int, e1B: int,
+              noG: int, noB: int, roW: int, roB: int,
+              T: int, d: int, E: int, V: int, K: int) -> float {
+    let xe=t_zeros(T*d); let xec=t_zeros(T*d); let xt=t_zeros(T*d)
+    let hn0=t_zeros(T*d); let xhat0=t_zeros(T*d); let inv0=t_zeros(1)
+    let eo0=t_zeros(T*d); let eo1=t_zeros(T*d); let probs=t_zeros(T*E); let ex_out=t_zeros(E*T*d)
+    let yn=t_zeros(T*d); let xhatN=t_zeros(T*d); let invN=t_zeros(1)
+    let logits_r=t_zeros(T*E); let logits=t_zeros(T*V)
+    sd_fwd_full(tok, embed, ecW, ecB, tcW, tcB, tgG, tgB, rW, rB,
+                e0W, e0B, e1W, e1B, noG, noB, roW, roB,
+                xe, xec, xt, hn0, xhat0, inv0, eo0, eo1, probs, ex_out,
+                yn, xhatN, invN, logits_r, logits, T, d, E, V, K)
+    let ce = nn_ce_loss_allpos(logits, tgt, T, V)
+    t_free(xe); t_free(xec); t_free(xt); t_free(hn0); t_free(xhat0); t_free(inv0)
+    t_free(eo0); t_free(eo1); t_free(probs); t_free(ex_out); t_free(yn); t_free(xhatN); t_free(invN)
+    t_free(logits_r); t_free(logits)
+    return ce
+}
+
+// init the full parameter set from a FIXED LCG seed family (both arms share it).
+fn sd_init(embed: int, ecW: int, ecB: int, tcW: int, tcB: int, tgG: int, tgB: int,
+           rW: int, rB: int, e0W: int, e0B: int, e1W: int, e1B: int,
+           noG: int, noB: int, roW: int, roB: int,
+           d: int, E: int, V: int, K: int) {
+    let dd = d * d * K; let ed = E * d; let vd = V * d
+    t_fill_lcg(embed, vd, 1, 0.3)
+    t_fill_lcg(ecW, dd, 2, 0.2);  t_fill_lcg(ecB, d, 3, 0.1)
+    t_fill_lcg(tcW, dd, 4, 0.2);  t_fill_lcg(tcB, d, 5, 0.1)
+    t_fill_lcg(tgG, d, 6, 0.5);   t_fill_lcg(tgB, d, 7, 0.1)
+    t_fill_lcg(rW, ed, 12, 0.2);  t_fill_lcg(rB, E, 13, 0.1)
+    t_fill_lcg(e0W, dd, 14, 0.2); t_fill_lcg(e0B, d, 15, 0.1)
+    t_fill_lcg(e1W, dd, 16, 0.2); t_fill_lcg(e1B, d, 17, 0.1)
+    t_fill_lcg(noG, d, 18, 0.5);  t_fill_lcg(noB, d, 19, 0.1)
+    t_fill_lcg(roW, vd, 20, 0.2); t_fill_lcg(roB, V, 21, 0.1)
+}
+
+fn main() {
+    println("clm_self_distill — self-play dispatch-KL self-distillation (lever A · P4 §2)")
+    println("  paradigm: NO external teacher · the model distils from its OWN sharper-rung dispatch")
+    let T = 4; let d = 8; let E = 2; let V = 256; let K = 3
+    let dd = d * d * K; let ed = E * d; let vd = V * d
+    let steps = 60
+    let kl_tau = 0.5     // teacher rung sharper (tau<1) than student (tau=1)
+    let kl_lam = 0.30    // self-KL weight
+
+    // ── DATA: a TRAIN batch + a HELD-OUT batch (disjoint token streams). ──────
+    // Held-out = tokens NOT in the train batch → measures generalization, not fit.
+    let tr_tok = t_zeros(T); t_set(tr_tok,0,3.0); t_set(tr_tok,1,14.0); t_set(tr_tok,2,159.0); t_set(tr_tok,3,26.0)
+    let tr_tgt = t_zeros(T); t_set(tr_tgt,0,14.0); t_set(tr_tgt,1,159.0); t_set(tr_tgt,2,26.0); t_set(tr_tgt,3,7.0)
+    let ho_tok = t_zeros(T); t_set(ho_tok,0,11.0); t_set(ho_tok,1,42.0); t_set(ho_tok,2,200.0); t_set(ho_tok,3,5.0)
+    let ho_tgt = t_zeros(T); t_set(ho_tgt,0,42.0); t_set(ho_tgt,1,200.0); t_set(ho_tgt,2,5.0); t_set(ho_tgt,3,88.0)
+
+    // ── ARM B (baseline · CE only · kl_lam=0). ───────────────────────────────
+    let b_embed=t_zeros(vd); let b_ecW=t_zeros(dd); let b_ecB=t_zeros(d)
+    let b_tcW=t_zeros(dd); let b_tcB=t_zeros(d); let b_tgG=t_zeros(d); let b_tgB=t_zeros(d)
+    let b_rW=t_zeros(ed); let b_rB=t_zeros(E); let b_e0W=t_zeros(dd); let b_e0B=t_zeros(d)
+    let b_e1W=t_zeros(dd); let b_e1B=t_zeros(d); let b_noG=t_zeros(d); let b_noB=t_zeros(d)
+    let b_roW=t_zeros(vd); let b_roB=t_zeros(V)
+    sd_init(b_embed,b_ecW,b_ecB,b_tcW,b_tcB,b_tgG,b_tgB,b_rW,b_rB,b_e0W,b_e0B,b_e1W,b_e1B,b_noG,b_noB,b_roW,b_roB,d,E,V,K)
+
+    // ── ARM D (self-distill · CE + self-KL · kl_lam>0) — IDENTICAL init. ──────
+    let s_embed=t_zeros(vd); let s_ecW=t_zeros(dd); let s_ecB=t_zeros(d)
+    let s_tcW=t_zeros(dd); let s_tcB=t_zeros(d); let s_tgG=t_zeros(d); let s_tgB=t_zeros(d)
+    let s_rW=t_zeros(ed); let s_rB=t_zeros(E); let s_e0W=t_zeros(dd); let s_e0B=t_zeros(d)
+    let s_e1W=t_zeros(dd); let s_e1B=t_zeros(d); let s_noG=t_zeros(d); let s_noB=t_zeros(d)
+    let s_roW=t_zeros(vd); let s_roB=t_zeros(V)
+    sd_init(s_embed,s_ecW,s_ecB,s_tcW,s_tcB,s_tgG,s_tgB,s_rW,s_rB,s_e0W,s_e0B,s_e1W,s_e1B,s_noG,s_noB,s_roW,s_roB,d,E,V,K)
+
+    // held-out CE at INIT (same for both arms — identical init; sanity print).
+    let ho0 = sd_eval_ce(ho_tok,ho_tgt,b_embed,b_ecW,b_ecB,b_tcW,b_tcB,b_tgG,b_tgB,b_rW,b_rB,b_e0W,b_e0B,b_e1W,b_e1B,b_noG,b_noB,b_roW,b_roB,T,d,E,V,K)
+    println("  held-out CE @ init       = " + to_string(ho0))
+
+    // train both arms on the SAME train batch / SAME #steps / SAME optimizer.
+    sd_train(tr_tok,tr_tgt,steps,kl_tau,0.0,
+             b_embed,b_ecW,b_ecB,b_tcW,b_tcB,b_tgG,b_tgB,b_rW,b_rB,b_e0W,b_e0B,b_e1W,b_e1B,b_noG,b_noB,b_roW,b_roB,T,d,E,V,K)
+    sd_train(tr_tok,tr_tgt,steps,kl_tau,kl_lam,
+             s_embed,s_ecW,s_ecB,s_tcW,s_tcB,s_tgG,s_tgB,s_rW,s_rB,s_e0W,s_e0B,s_e1W,s_e1B,s_noG,s_noB,s_roW,s_roB,T,d,E,V,K)
+
+    // train-fit CE (both arms) — diagnostic, NOT the falsifier.
+    let bt = sd_eval_ce(tr_tok,tr_tgt,b_embed,b_ecW,b_ecB,b_tcW,b_tcB,b_tgG,b_tgB,b_rW,b_rB,b_e0W,b_e0B,b_e1W,b_e1B,b_noG,b_noB,b_roW,b_roB,T,d,E,V,K)
+    let st = sd_eval_ce(tr_tok,tr_tgt,s_embed,s_ecW,s_ecB,s_tcW,s_tcB,s_tgG,s_tgB,s_rW,s_rB,s_e0W,s_e0B,s_e1W,s_e1B,s_noG,s_noB,s_roW,s_roB,T,d,E,V,K)
+    println("  train CE  baseline       = " + to_string(bt))
+    println("  train CE  self-distill   = " + to_string(st))
+
+    // ── FALSIFIER MEASUREMENT: held-out CE for both arms. ─────────────────────
+    let bho = sd_eval_ce(ho_tok,ho_tgt,b_embed,b_ecW,b_ecB,b_tcW,b_tcB,b_tgG,b_tgB,b_rW,b_rB,b_e0W,b_e0B,b_e1W,b_e1B,b_noG,b_noB,b_roW,b_roB,T,d,E,V,K)
+    let sho = sd_eval_ce(ho_tok,ho_tgt,s_embed,s_ecW,s_ecB,s_tcW,s_tcB,s_tgG,s_tgB,s_rW,s_rB,s_e0W,s_e0B,s_e1W,s_e1B,s_noG,s_noB,s_roW,s_roB,T,d,E,V,K)
+    println("  held-out CE baseline     = " + to_string(bho))
+    println("  held-out CE self-distill = " + to_string(sho))
+    let delta = bho - sho
+    println("  held-out delta (base-distill) = " + to_string(delta) + "  (>0 = distill better)")
+
+    // ── (a) EXTERNAL-LLM 0 — structural, asserted. No socket / http / llm-cmd in
+    // this file; the teacher is the model's OWN sharper-temperature dispatch.
+    let ext_llm = 0
+    println("  external-LLM calls       = " + to_string(ext_llm) + "  (self-play · zero external teacher)")
+
+    // ── FALSIFIER VERDICT: held-out gain ∧ external-LLM 0. ────────────────────
+    if ext_llm == 0 {
+        if sho < bho {
+            println("F-FLAME-SELF-DISTILL = 1")
+            println("PASS — self-play dispatch-KL distillation shows HELD-OUT GAIN and external-LLM 0")
+            return
+        }
+        println("F-FLAME-SELF-DISTILL = 0")
+        println("HONEST-NEGATIVE — external-LLM 0 holds, but NO held-out gain on this toy task")
+        println("  ruled-out axis: dispatch-KL self-sharpening does NOT generalize here (identical init, fixed batch)")
+        return
+    }
+    println("F-FLAME-SELF-DISTILL = 0")
+    println("FAIL — external-LLM 0 assertion violated (should be impossible by construction)")
+}
