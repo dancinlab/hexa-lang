@@ -1,0 +1,11 @@
+clm_h911_B1 — F-CLM-H911-STDP (spike-timing vs rate-Hebbian)
+  concept 0: STDP par=3.81858 con=0.316597 diff=3.50198
+  concept 1: STDP par=3.90947 con=0.330859 diff=3.57861
+  concept 2: STDP par=4.02356 con=0.34114 diff=3.68242
+  concept 3: STDP par=3.96276 con=0.332609 diff=3.63015
+  concept 4: STDP par=3.86557 con=0.323283 diff=3.54229
+  RATE-Hebbian control (tau->inf): par=47.8837 con=47.8798 gap=0.003851
+  [STDP] paired mean diff (parallel-concat) = 3.58709
+  [STDP] bootstrap 95% CI = [3.53343, 3.64394]
+F-CLM-H911-STDP = 1
+TIER 🟢 — STDP RECOVERS the parallel>concat H_911 cross-lingual binding (paired CI>0)

@@ -1,0 +1,8 @@
+clm_h911_A — F-CLM-H911-CPU-CAPACITY (full-capacity, paired CI)
+  n_paired_windows = 12
+  parallel mean CE = 1.98176
+  concat   mean CE = 2.05405
+  paired mean diff (concat - parallel) = 0.0722956
+  bootstrap 95% CI = [-0.0755346, 0.223859]
+F-CLM-H911-CPU-CAPACITY = 0
+TIER 🔴 — paired CI straddles/≤0; even full-capacity host cannot separate (corpus/measure problem)
