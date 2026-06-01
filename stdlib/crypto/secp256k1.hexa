@@ -282,3 +282,86 @@ fn _inv_mod_p(a: [int]) -> [int] {
     e[0] = e[0] - 2
     return _pow_mod_p(a, e)
 }
+
+// === Point arithmetic (affine; identity = both coords zero) — PR2 ===
+// secp256k1: y^2 = x^3 + 7 mod p  (a = 0, b = 7)
+
+@pure
+fn _is_infinity(x: [int], y: [int]) -> bool {
+    return _is_zero(x) && _is_zero(y)
+}
+
+// on-curve test: y^2 == x^3 + 7 (identity counts as on-curve)
+@pure
+fn _on_curve(x: [int], y: [int]) -> bool {
+    if _is_infinity(x, y) { return true }
+    let y2 = _mul_mod_p(y, y)
+    let x3 = _mul_mod_p(_mul_mod_p(x, x), x)
+    let seven = _zeros(); let mut b7 = seven; b7[0] = 7
+    let rhs = _add_mod_p(x3, b7)
+    return _cmp(y2, rhs) == 0
+}
+
+@pure
+fn _point_double(x: [int], y: [int]) -> [int] {
+    if _is_zero(y) {
+        let mut o: [int] = []; let mut i = 0
+        while i < 32 { o.push(0); i = i + 1 }; return o
+    }
+    // s = 3x^2 / (2y)  (a = 0)
+    let three = _zeros(); let mut t3 = three; t3[0] = 3
+    let xx = _mul_mod_p(x, x)
+    let num = _mul_mod_p(t3, xx)
+    let two_y = _add_mod_p(y, y)
+    let s = _mul_mod_p(num, _inv_mod_p(two_y))
+    // x3 = s^2 - 2x ; y3 = s(x - x3) - y
+    let s2 = _mul_mod_p(s, s)
+    let two_x = _add_mod_p(x, x)
+    let x3 = _sub_mod_p(s2, two_x)
+    let prod = _mul_mod_p(s, _sub_mod_p(x, x3))
+    let y3 = _sub_mod_p(prod, y)
+    let mut out: [int] = []
+    let mut i = 0
+    while i < 16 { out.push(x3[i]); i = i + 1 }
+    i = 0
+    while i < 16 { out.push(y3[i]); i = i + 1 }
+    return out
+}
+
+@pure
+fn _point_add(x1: [int], y1: [int], x2: [int], y2: [int]) -> [int] {
+    if _is_infinity(x1, y1) {
+        let mut out: [int] = []; let mut i = 0
+        while i < 16 { out.push(x2[i]); i = i + 1 }
+        i = 0
+        while i < 16 { out.push(y2[i]); i = i + 1 }
+        return out
+    }
+    if _is_infinity(x2, y2) {
+        let mut out: [int] = []; let mut i = 0
+        while i < 16 { out.push(x1[i]); i = i + 1 }
+        i = 0
+        while i < 16 { out.push(y1[i]); i = i + 1 }
+        return out
+    }
+    if _cmp(x1, x2) == 0 {
+        if _cmp(y1, y2) == 0 { return _point_double(x1, y1) }
+        // P + (-P) = identity
+        let mut out: [int] = []; let mut i = 0
+        while i < 32 { out.push(0); i = i + 1 }
+        return out
+    }
+    // s = (y2 - y1) / (x2 - x1)
+    let s = _mul_mod_p(_sub_mod_p(y2, y1), _inv_mod_p(_sub_mod_p(x2, x1)))
+    // x3 = s^2 - x1 - x2 ; y3 = s(x1 - x3) - y1
+    let s2 = _mul_mod_p(s, s)
+    let x3 = _sub_mod_p(_sub_mod_p(s2, x1), x2)
+    let prod = _mul_mod_p(s, _sub_mod_p(x1, x3))
+    let y3 = _sub_mod_p(prod, y1)
+    let mut out: [int] = []
+    let mut i = 0
+    while i < 16 { out.push(x3[i]); i = i + 1 }
+    i = 0
+    while i < 16 { out.push(y3[i]); i = i + 1 }
+    return out
+}

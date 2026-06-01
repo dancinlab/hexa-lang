@@ -1,4 +1,4 @@
-// HEXA Standard Library — crypto/secp256k1 self-test (field KAT — PR1)
+// HEXA Standard Library — crypto/secp256k1 self-test (field + point KAT — PR1/PR2)
 // @ci_gate
 use "stdlib/crypto/secp256k1"
 
@@ -20,6 +20,18 @@ fn hx(b: [int]) -> string {
 fn fe(s: string) -> [int] { return _be32_to_limbs(unhex(s)) }
 // field element back to big-endian hex
 fn fehx(a: [int]) -> string { return hx(_limbs_to_be32(a)) }
+// x-coord of a 32-limb point as big-endian hex
+fn px(pt: [int]) -> string {
+    let mut o: [int] = []; let mut i = 0
+    while i < 16 { o.push(pt[i]); i = i + 1 }
+    return fehx(o)
+}
+// y-coord of a 32-limb point as big-endian hex
+fn py(pt: [int]) -> string {
+    let mut o: [int] = []; let mut i = 0
+    while i < 16 { o.push(pt[16 + i]); i = i + 1 }
+    return fehx(o)
+}
 
 let mut pass = 0
 let mut total = 0
@@ -63,6 +75,38 @@ fn main() {
     ck("sub_wrap", fehx(_sub_mod_p(zero, one)),
        "fffffffffffffffffffffffffffffffffffffffffffffffffffffffefffffc2e")
 
-    println("secp256k1 field self-test: " + to_string(pass) + "/" + to_string(total))
+    // === PR2: point add / double / on-curve / identity ===
+    let gx = fe("79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798")
+    let gy = fe("483ada7726a3c4655da4fbfc0e1108a8fd17b448a68554199c47d08ffb10d4b8")
+
+    // G is on-curve, a bogus point is not
+    if _on_curve(gx, gy) { pass = pass + 1 } else { println("FAIL g_on_curve") }
+    total = total + 1
+    if !_on_curve(gx, gx) { pass = pass + 1 } else { println("FAIL bogus_off_curve") }
+    total = total + 1
+
+    // double(G) = 2G (published vector)
+    let two_g = _point_double(gx, gy)
+    ck("2G_x", px(two_g), "c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5")
+    ck("2G_y", py(two_g), "1ae168fea63dc339a3c58419466ceaeef7f632653266d0e1236431a950cfe52a")
+
+    // add(2G, G) = 3G (published vector)
+    let g2x = fe(px(two_g))
+    let g2y = fe(py(two_g))
+    let three_g = _point_add(g2x, g2y, gx, gy)
+    ck("3G_x", px(three_g), "f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9")
+    ck("3G_y", py(three_g), "388f7b0f632de8140fe337e62a37f3566500a99934c2231b6cb9fd7584b8e672")
+
+    // G + (-G) = identity (both coords zero)
+    let neg_gy = _sub_mod_p(zero, gy)
+    let id_pt = _point_add(gx, gy, gx, neg_gy)
+    ck("G_plus_negG", px(id_pt) + py(id_pt),
+       "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000")
+
+    // identity + G = G
+    let id_plus_g = _point_add(zero, zero, gx, gy)
+    ck("id_plus_G_x", px(id_plus_g), "79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798")
+
+    println("secp256k1 field+point self-test: " + to_string(pass) + "/" + to_string(total))
     if pass == total { println("PASS") } else { println("FAILED") }
 }
