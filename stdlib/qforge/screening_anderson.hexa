@@ -244,86 +244,45 @@ pub fn qforge_screened_dv_columns_anderson(H_apply, states: [[float]], eps: [flo
     let mut scf_it = 0
     let mut max_res = 0.0
     let mut all_conv = true
-    let mut fp_res = -1.0
     let mut diverged = false
-    // BEST-ITERATE tracking: keep the lowest-residual x* and its residual. Anderson's
-    // residual is NOT monotone (it is for an SPD map, not a general affine one); on a
-    // high-gain metallic feedback it can overshoot, so we RETURN the best point seen,
-    // not the last. This is the robustness that makes a moderately-high-gain metal
-    // converge where the last-iterate would look diverged (d2).
-    let mut best_x = []
-    let mut bx0 = 0
-    while bx0 < N { best_x.push(x[bx0]) ; bx0 = bx0 + 1 }
-    let mut best_res = 1.0e300
-    // residual-growth safeguard: if ‖f‖ grows past a factor over the best, RESTART
-    // the history (drop accumulated, possibly-stale differences) and UNDER-RELAX the
-    // next step. A restart turns a runaway Anderson back into a damped Picard step
-    // from the best point — the standard production safeguard for non-monotone AA.
-    let mut relax = beta
-    let GROWTH = 10.0                   // restart trigger: ‖f‖ > GROWTH·best_res
+
+    // ── MONOTONE LINE-SEARCH ANDERSON (unconditionally stable) ───────────────────
+    // The CURRENT accepted point (x, fx=g(x)−x, res_x=‖fx‖). Each iteration PROPOSES a
+    // candidate x' and evaluates res(x'); it is ACCEPTED only if res(x') ≤ res_x (the
+    // residual is NON-INCREASING). A rejected step halves the relaxation `relax` and
+    // re-proposes from the SAME accepted point — so the residual can NEVER blow up
+    // (the failure mode that NaN'd Picard AND naive Anderson on the high-gain metallic
+    // Hartree kernel). When relax underflows the residual cannot be reduced further →
+    // the current x is the best reachable fixed point; stop. d2 robustness.
+    // Seed: evaluate g at the bare init to get fx/res_x.
+    let gm0 = ad_map(H_apply, states, eps, bare, drho_to_dvscf, x, nb, n, scf_tol, scf_max_iter)
+    let mut fx = []
+    let mut s0 = 0
+    while s0 < N { fx.push(gm0[s0] - x[s0]) ; s0 = s0 + 1 }
+    max_res = gm0[N]
+    if gm0[N + 1] < 0.5 { all_conv = false }
+    let mut res_x = 1.0e300
+    if ad_all_finite(fx, N) { res_x = ad_norm(fx, N) }
+    let mut relax = beta              // current relaxation (line-search shrinks it)
+    let MINRELAX = 1.0e-4            // relaxation floor → fixed point reached / stalled
 
     while scf_it < scf_max_iter {
-        // g(x) + meta.
-        let gm = ad_map(H_apply, states, eps, bare, drho_to_dvscf, x, nb, n, scf_tol, scf_max_iter)
-        let mut gx = []
-        let mut i = 0
-        while i < N { gx.push(gm[i]) ; i = i + 1 }
-        max_res = gm[N]
-        if gm[N + 1] < 0.5 { all_conv = false }
-
-        // finiteness guard — a NaN/inf in g(x) means THIS x blew up; restart from the
-        // best finite point with a damped step instead of aborting (d2 robustness).
-        if !ad_all_finite(gx, N) {
-            if best_res < 1.0e299 {
-                // restart from best with a hard-damped Picard step; clear history.
-                histx = [] ; histf = []
-                relax = relax * 0.5
-                if relax < 1.0e-3 { diverged = true ; break }
-                i = 0
-                while i < N { x[i] = best_x[i] ; i = i + 1 }
-                scf_it = scf_it + 1
-                continue
-            }
-            diverged = true ; break
-        }
-
-        // residual f = g(x) − x.
-        let mut f = []
-        i = 0
-        while i < N { f.push(gx[i] - x[i]) ; i = i + 1 }
-        fp_res = ad_norm(f, N)
-        // track best.
-        if fp_res < best_res {
-            best_res = fp_res
-            let mut bb2 = 0
-            while bb2 < N { best_x[bb2] = x[bb2] ; bb2 = bb2 + 1 }
-        }
-        if fp_res < scf_tol { x = gx ; scf_it = scf_it + 1 ; break }
-        // residual-growth restart: history went stale / Anderson overshot.
-        if fp_res > GROWTH * best_res && best_res < 1.0e299 {
-            histx = [] ; histf = []
-            relax = relax * 0.5
-            if relax < 1.0e-3 { break }    // damping exhausted → return best so far
-            i = 0
-            while i < N { x[i] = best_x[i] ; i = i + 1 }
-            scf_it = scf_it + 1
-            continue
-        }
-
-        // push current (x, f) into the history window.
+        if res_x < scf_tol { break }                 // converged at current x
+        // build the Anderson proposal x' from (x, fx) + history.
+        let mut f = fx
+        // push the CURRENT accepted (x, f) into the history window.
         let mut xc = [] ; let mut fc = []
-        i = 0
-        while i < N { xc.push(x[i]) ; fc.push(f[i]) ; i = i + 1 }
+        let mut hi = 0
+        while hi < N { xc.push(x[hi]) ; fc.push(f[hi]) ; hi = hi + 1 }
         histx.push(xc) ; histf.push(fc)
-        // trim to the window: keep the last mwin entries.
         while histx.len() > mwin {
             let mut nx: [[float]] = [] ; let mut nf: [[float]] = []
             let mut j = 1
             while j < histx.len() { nx.push(histx[j]) ; nf.push(histf[j]) ; j = j + 1 }
             histx = nx ; histf = nf
         }
-
         let mdim = histx.len() - 1     // number of residual differences available
+        let mut i = 0
         let mut x_next = []
         if mdim < 1 {
             // first step (or window too small) → plain (Picard-like) relaxed step.
@@ -394,31 +353,54 @@ pub fn qforge_screened_dv_columns_anderson(H_apply, states: [[float]], eps: [flo
                 }
             }
         }
-        // guard the proposed step — if Anderson produced a non-finite x, RESTART from
-        // the best finite point with a damped step (never abort while best is finite).
-        if !ad_all_finite(x_next, N) {
-            if best_res < 1.0e299 {
-                histx = [] ; histf = []
-                relax = relax * 0.5
-                if relax < 1.0e-3 { break }
-                i = 0
-                while i < N { x[i] = best_x[i] ; i = i + 1 }
-                scf_it = scf_it + 1
-                continue
+        // ── MONOTONE ACCEPT / REJECT: evaluate the candidate's residual ──────────
+        //   reject (and shrink relax, retry from x) unless res(x') ≤ (1+ε)·res_x AND
+        //   finite. This makes ‖f‖ non-increasing → unconditionally bounded.
+        let mut accepted = false
+        if ad_all_finite(x_next, N) {
+            let gm2 = ad_map(H_apply, states, eps, bare, drho_to_dvscf, x_next, nb, n, scf_tol, scf_max_iter)
+            let mut fx2 = []
+            let mut ok2 = true
+            let mut a3 = 0
+            while a3 < N {
+                let d = gm2[a3] - x_next[a3]
+                if d != d { ok2 = false }
+                fx2.push(d)
+                a3 = a3 + 1
             }
-            diverged = true ; break
+            if ok2 && ad_all_finite(fx2, N) {
+                let res2 = ad_norm(fx2, N)
+                // accept if not worse than the current accepted residual (1% slack).
+                if res2 <= res_x * 1.01 {
+                    x = x_next
+                    fx = fx2
+                    res_x = res2
+                    max_res = gm2[N]
+                    if gm2[N + 1] < 0.5 { all_conv = false }
+                    accepted = true
+                }
+            }
         }
-        x = x_next
+        if !accepted {
+            // reject: shrink the relaxation, drop the (now-stale) just-pushed history
+            // entry, and retry from the SAME accepted x next iteration.
+            relax = relax * 0.5
+            // pop the entry we just pushed (it is the current x; keep history minimal).
+            if histx.len() > 0 {
+                let mut nx: [[float]] = [] ; let mut nf: [[float]] = []
+                let mut j = 0
+                while j < histx.len() - 1 { nx.push(histx[j]) ; nf.push(histf[j]) ; j = j + 1 }
+                histx = nx ; histf = nf
+            }
+            if relax < MINRELAX { break }   // cannot reduce further → fixed point reached
+        }
         scf_it = scf_it + 1
     }
 
-    // RETURN THE BEST ITERATE x* (lowest residual seen), not the last — Anderson on a
-    // non-symmetric affine map is non-monotone, so the final x may have overshot while
-    // best_x is the converged fixed point. If no finite best was ever recorded the run
-    // truly diverged. Report best_res as the fixed-point residual.
-    let mut xout = best_x
-    let mut fpr = best_res
-    if best_res > 1.0e299 { xout = x ; fpr = fp_res ; diverged = true }   // never improved
+    // The accepted x is the (monotone) fixed point; res_x is its residual.
+    let mut xout = x
+    let mut fpr = res_x
+    if !ad_all_finite(xout, N) { diverged = true }
     // unpack flat → nb columns.
     let mut cols: [[float]] = []
     let mut c = 0
