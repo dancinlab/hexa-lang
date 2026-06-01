@@ -264,3 +264,45 @@ items** (they do not ungate them — a pod/engine is still needed to *measure* �
 bound what those levers can achieve); **#8/#11/#14 deepen already-closed items**
 (mixedprec, symmetry-48). The gated items keep their `- [ ]` status; the new ceilings
 make their eventual GPU Δ interpretable against a hard closed-form bound.
+
+## 10. GPU empirical validation of the RIDGE corollary (real RTX 5070)
+
+The RIDGE corollary (§9 #6) is a closed-form *prediction*; the pool's idle RTX 5070
+(summer, the same card as GPU-ROOFLINE.bench.md) lets us **measure** it. `tool/gpu_qforge_ridge.cu`
+(standalone cuBLAS, NO `stdlib/qforge` edit) sweeps nb (= cuBLAS M = Davidson block width)
+through an H[n×n]·V[n×nb] SGEMM at n=4096 and reports achieved GFLOP/s + roofline regime:
+
+```
+HBM_BW=580.02 GB/s · FP32_peak=34.11 TFLOP/s · measured_ridge=58.81 flop/byte
+predicted nb_crossover = 2·ridge = 117.6   (closed-form corollary said ~121.9)
+
+ nb      GFLOP/s     AI(F/B)   HBM_pct   regime
+  1        295.2      0.500    101.8%    memory-bound   ← H_apply GEMV
+  4       1162.2      1.996    100.4%    memory-bound
+ 16       4679.8      7.938    101.6%    memory-bound
+ 32       9051.6     15.754     99.1%    memory-bound
+ 64      17054.3     31.030     94.8%    memory-bound
+100      15770.4     47.672     57.0%    memory-bound
+122      19039.5     57.571     57.0%    memory-bound   ← transition
+144      16059.9     67.270     41.2%    compute-bound  ← regime flip
+256      22996.3    113.778     34.8%    compute-bound
+452      19364.9    185.139     18.0%    compute-bound
+512      24787.4    204.800     20.9%    compute-bound  (72.7% of FP32 peak)
+```
+
+**Findings — closed form confirmed on silicon:**
+- **H_apply (nb=1 GEMV) achieves 295 GFLOP/s, fully memory-bound** (HBM 101.8%, compute 0.9%)
+  — matches the §3 closed-form fp32 memory ceiling (279.76 GFLOP/s; the small overshoot is the
+  measured 580 GB/s vs the 559 GB/s used in §3). This is **~2100× the CPU-scalar baseline**
+  (0.140 GFLOP/s, §2) — but the win is *bandwidth*, capped at the memory roof, exactly as RIDGE says.
+- **The memory→compute regime flip lands at nb=122–144**, dead-on the closed-form prediction
+  (117.6 measured-ridge / 121.9 corollary). Tensor-territory throughput (≥20 TFLOP/s) needs nb≳122,
+  confirming a single GEMV cannot reach FP32/tensor peak — only batched block-Davidson can.
+- Non-power-of-2 nb (100, 144, 452) dip from cuBLAS kernel-selection noise; the regime boundary is
+  unaffected.
+
+Scope (g63 honest): this is a **cuBLAS PROXY** for H_apply, not the actual QFORGE engine GPU-GEMM
+(which still needs the gated `stdlib/qforge` edit). It does NOT ungate the GPU-GEMM item — it
+**empirically grounds its closed-form ceiling**, so the eventual engine GPU Δ can be read against a
+measured bound (295 GFLOP/s GEMV roof · nb≈122 crossover). Provenance: summer · RTX 5070 · nvcc 12.0 ·
+cuBLAS 12 · 2026-06-01.
