@@ -31,10 +31,6 @@ extern fn __c_sqrt(x: float) -> float
 extern fn __c_pow(base: float, exp: float) -> float
 extern fn __c_exp(x: float) -> float
 extern fn __c_log(x: float) -> float
-extern fn __c_floor(x: float) -> float
-extern fn __c_ceil(x: float) -> float
-extern fn __c_round(x: float) -> float
-extern fn __c_fabs(x: float) -> float
 extern fn __c_tanh(x: float) -> float
 extern fn __c_sin(x: float) -> float
 extern fn __c_cos(x: float) -> float
@@ -547,18 +543,52 @@ fn rt_str_join(arr, sep) {
 // These MUST call libm via FFI. Pure hexa alternatives would be
 // too slow or imprecise for production use.
 
+// Transcendental functions (sqrt/pow/exp/log/tanh/sin/cos) MUST call libm
+// via FFI — a hand-rolled Taylor series is project-forbidden (CLAUDE.md
+// `stdlib_trig_libm`: float→int narrowing the codegen drops → collapses).
 // STATUS: FFI
 fn rt_math_sqrt(x) { return __c_sqrt(to_float(x)) }
 fn rt_math_pow(b, e) { return __c_pow(to_float(b), to_float(e)) }
 fn rt_math_exp(x) { return __c_exp(to_float(x)) }
 fn rt_math_log(x) { return __c_log(to_float(x)) }
-fn rt_math_floor(x) { return __c_floor(to_float(x)) }
-fn rt_math_ceil(x) { return __c_ceil(to_float(x)) }
-fn rt_math_round(x) { return __c_round(to_float(x)) }
-fn rt_math_abs(x) { return __c_fabs(to_float(x)) }
 fn rt_math_tanh(x) { return __c_tanh(to_float(x)) }
 fn rt_math_sin(x) { return __c_sin(to_float(x)) }
 fn rt_math_cos(x) { return __c_cos(to_float(x)) }
+
+// floor/ceil/round/abs: PURE (exact arithmetic — no libm, no Taylor).
+// These are integer-rounding ops, not transcendental, so they port to
+// pure hexa with byte-exact C-libm parity. `to_int` truncates toward
+// zero (verified), so floor/ceil correct the sign-direction fractional
+// case and round() rounds half away from zero (C99 `round()` semantics).
+// STATUS: PURE (ported 2026-06-01 — drops 4 of the 11 libm externs)
+fn rt_math_floor(x) {
+    let fx = to_float(x)
+    let t = to_float(to_int(fx))   // truncation toward zero
+    if fx < 0.0 && t != fx { return t - 1.0 }
+    return t
+}
+
+fn rt_math_ceil(x) {
+    let fx = to_float(x)
+    let t = to_float(to_int(fx))
+    if fx > 0.0 && t != fx { return t + 1.0 }
+    // C ceil() preserves the sign of zero: ceil(-0.5) = -0.0
+    if fx < 0.0 && t == 0.0 { return 0.0 * -1.0 }
+    return t
+}
+
+fn rt_math_abs(x) {
+    let fx = to_float(x)
+    if fx < 0.0 { return -fx }
+    return fx
+}
+
+fn rt_math_round(x) {
+    // round half away from zero (matches C99 round())
+    let fx = to_float(x)
+    if fx >= 0.0 { return rt_math_floor(fx + 0.5) }
+    return rt_math_ceil(fx - 0.5)
+}
 
 // min/max: PURE (no libm needed)
 fn rt_math_min(a, b) {
@@ -646,12 +676,14 @@ fn rt_free_raw(ptr) { __c_free(ptr) }
 //   rt_index_set, rt_array_slice, rt_array_reverse, rt_array_contains,
 //   rt_array_index_of, rt_array_map, rt_array_filter, rt_array_fold
 //
-// PURE (2 functions — math, no libm needed):
-//   rt_math_min, rt_math_max
+// PURE (6 functions — math, no libm needed):
+//   rt_math_min, rt_math_max,
+//   rt_math_floor, rt_math_ceil, rt_math_round, rt_math_abs
+//     (ported 2026-06-01: exact integer-rounding arithmetic, byte-exact
+//      C-libm parity — NOT transcendental, so no forbidden Taylor series)
 //
-// FFI (11 functions — thin libm wrappers):
+// FFI (7 functions — thin libm wrappers, irreducibly transcendental):
 //   rt_math_sqrt, rt_math_pow, rt_math_exp, rt_math_log,
-//   rt_math_floor, rt_math_ceil, rt_math_round, rt_math_abs,
 //   rt_math_tanh, rt_math_sin, rt_math_cos
 //
 // FFI (2 functions — unavoidable malloc/free):
@@ -662,6 +694,6 @@ fn rt_free_raw(ptr) { __c_free(ptr) }
 //   rt_exec, rt_exec_with_status
 //
 // TOTAL: 53 functions
-//   34 PURE (no C at all)
-//   13 FFI  (thin libc/libm wrappers)
+//   38 PURE (no C at all)
+//    9 FFI  (thin libc/libm wrappers)
 //    6 HYBRID (builtin delegation)
