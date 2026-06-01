@@ -762,6 +762,19 @@ fn _pool_resolve(h: str) -> str {
     return ""
 }
 
+// _registry_resolved_host — adapt a PodEndpoint (M5 registry hit) to a
+// ResolvedHost. A stored ssh_host that already carries `user@` is honored
+// verbatim; a bare host/IP is prefixed `root@` (pods are root — matches the
+// vast/runpod resolution convention and dft_dispatch's `root@<ip>`). via is
+// "registry" so the run/poll banner names the resolution source.
+fn _registry_resolved_host(ep: PodEndpoint) -> ResolvedHost {
+    let mut host = ep.host
+    if host.contains("@") == false {
+        host = "root@" + host
+    }
+    return ResolvedHost { host: host, port: ep.port, resolved: 1, via: "registry" }
+}
+
 fn _resolve_cloud_host(h: str) -> ResolvedHost {
     if _is_vast_numeric_id(h) == 0 {
         // #handoff-aad9f4c0: a bare dotted endpoint (direct IP / DNS) with NO
@@ -787,6 +800,14 @@ fn _resolve_cloud_host(h: str) -> ResolvedHost {
         if len(pool_ssh) > 0 {
             return ResolvedHost { host: pool_ssh, port: "", resolved: 0, via: "pool" }
         }
+        // Bug-1 (@L5): a non-numeric provider pod-id (e.g. a runpod id like
+        // `8g5r7jup4lw35e`) is neither a dotted endpoint nor a pool name — try
+        // the M5 registry for a stored ssh_host+ssh_port before giving up. A
+        // hit reaches the pod by its registry id with no hand-typed host/port.
+        let reg = pod_registry_resolve_endpoint(h)
+        if reg.resolved == 1 {
+            return _registry_resolved_host(reg)
+        }
         return ResolvedHost { host: h, port: "", resolved: 0, via: "" }
     }
     let proxy = vast_ssh_endpoint(h)
@@ -797,8 +818,18 @@ fn _resolve_cloud_host(h: str) -> ResolvedHost {
     if direct.ok == 1 {
         return ResolvedHost { host: "root@" + direct.host, port: direct.port, resolved: 1, via: "direct" }
     }
-    // No live endpoint mapped yet — leave the id as-is so the legacy
-    // ~/.ssh/config block path (written by rent/adopt) still applies.
+    // Bug-1 (@L5): a numeric vast id with NO live provider endpoint (vastai
+    // CLI absent / offline / proxy+direct both unmapped) — fall back to the M5
+    // registry's stored ssh_host+ssh_port. THIS is the edge-genall path: pod
+    // 38961119 had ssh_host "ssh1.vast.ai" + ssh_port "11118" recorded, but the
+    // endpoint lookups returned nothing locally, so poll hit :22 and reported a
+    // false DEAD. The registry hit now carries the real :11118.
+    let reg = pod_registry_resolve_endpoint(h)
+    if reg.resolved == 1 {
+        return _registry_resolved_host(reg)
+    }
+    // No live endpoint AND no registry mapping — leave the id as-is so the
+    // legacy ~/.ssh/config block path (written by rent/adopt) still applies.
     return ResolvedHost { host: h, port: "", resolved: 0, via: "" }
 }
 
@@ -2144,7 +2175,7 @@ fn main() {
         let _rh = _resolve_cloud_host(_id)
         let host = _rh.host
         if _rh.resolved == 1 {
-            println("[cloud] run: resolved vast id → " + host + " :" + _rh.port + " (" + _rh.via + ")")
+            println("[cloud] run: resolved pod-id → " + host + " :" + _rh.port + " (" + _rh.via + ")")
         }
         let base_opts = _ssh_opts_cli(av, si + 2)
         let ssh_opts = _apply_resolved_port(base_opts, _rh)
@@ -2342,6 +2373,9 @@ fn main() {
         }
         let _rh = _resolve_cloud_host(_checked_host(av[si + 1]))
         let host = _rh.host
+        if _rh.resolved == 1 {
+            println("[cloud] poll: resolved pod-id → " + host + " :" + _rh.port + " (" + _rh.via + ")")
+        }
         let pid = _cli_atoi(av[si + 2])
         let ssh_opts = _apply_resolved_port(_ssh_opts_cli(av, si + 3), _rh)
         let alive = cloud_poll_opts(host, ssh_opts, pid)

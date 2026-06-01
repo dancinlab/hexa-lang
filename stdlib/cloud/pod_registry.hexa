@@ -719,6 +719,40 @@ fn pod_registry_load() -> [PodRecord] {
     return _m5_parse_records(body)
 }
 
+// PodEndpoint — the ssh destination resolved out of the M5 registry for a
+// bare pod-id. `resolved=1` iff a matching record carried a non-empty
+// ssh_host; `port` is the stored ssh_port ("" when unset). Lets a transport
+// verb (poll/run/exec/nohup/copy) reach a pod by its registry id WITHOUT a
+// hand-typed host/port — the root-cause-#1 fix (edge-genall pod 38961119 had
+// ssh_port "11118" in the registry all along, but poll defaulted to :22 →
+// false DEAD → teardown).
+struct PodEndpoint {
+    host:     str,
+    port:     str,
+    resolved: int
+}
+
+// pod_registry_resolve_endpoint — look `pod_id` up in the M5 registry and
+// return its stored ssh_host + ssh_port. resolved=0 (host/port "") when the
+// id is absent OR has no recorded ssh_host yet (still RENTING / never mapped),
+// so the caller falls back to its existing resolution paths unchanged. Pure
+// read — never mutates the registry.
+fn pod_registry_resolve_endpoint(pod_id: str) -> PodEndpoint {
+    if len(pod_id) == 0 {
+        return PodEndpoint { host: "", port: "", resolved: 0 }
+    }
+    let records = pod_registry_load()
+    let idx = _m5_find(records, pod_id)
+    if idx < 0 {
+        return PodEndpoint { host: "", port: "", resolved: 0 }
+    }
+    let r = records[idx]
+    if len(r.ssh_host) == 0 {
+        return PodEndpoint { host: "", port: "", resolved: 0 }
+    }
+    return PodEndpoint { host: r.ssh_host, port: r.ssh_port, resolved: 1 }
+}
+
 // _m5_emit_record — serialize one PodRecord as a flat JSON object (no
 // outer braces stripping; the array writer joins with `,`).
 fn _m5_emit_record(r: PodRecord) -> str {
