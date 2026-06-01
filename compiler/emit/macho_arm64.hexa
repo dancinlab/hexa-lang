@@ -287,6 +287,76 @@ fn _movw_imm_hw(operand: string) -> [i64] {
 // relative forms (ADRP + ADD/LDR pair) are emitted as bare bits;
 // the relocation record carries the symbol identity, the linker
 // patches the bits.
+// Encode a 64-bit logical immediate into the ARM ARM N:immr:imms field
+// (13 bits: N at bit 22 once OR'd by caller, immr 6 bits, imms 6 bits).
+// Returns -1 if `val` is not a legal bitmask immediate (caller must then
+// materialize the constant some other way). Algorithm per the DDI 0487
+// "DecodeBitMasks" inverse: find the smallest power-of-two element size
+// `esize` whose value repeats across 64 bits, require the element to be a
+// single contiguous run of `ones` set bits (rotated by `rot`), then encode
+// N = (esize==64), imms carries (ones-1) packed under a NOT-mask selecting
+// the element size, immr = rot.
+//
+// Returns the combined `(N<<12) | (immr<<6) | imms` (13-bit) value, or -1.
+fn _logical_imm64(val: i64) -> i64 {
+    // 0 and all-ones are NOT encodable as a logical immediate.
+    if val == 0 { return -1 }
+    if val == -1 { return -1 }
+    // Try each element size 2,4,8,16,32,64.
+    let mut size = 2
+    while size <= 64 {
+        // Check `val` is `size`-periodic: every `size`-bit chunk equal.
+        let mut periodic = true
+        let mask = if size == 64 { -1 } else { (1 << size) - 1 }
+        let elem = val & mask
+        let mut sh = size
+        while sh < 64 {
+            if ((val >> sh) & mask) != elem { periodic = false; sh = 64 } else { sh = sh + size }
+        }
+        if periodic {
+            // elem must be a rotated run of 1s within `size` bits. Count
+            // the ones; reject 0 / all-ones (not encodable at this size).
+            let mut ones = 0
+            let mut b = 0
+            while b < size {
+                if ((elem >> b) & 1) == 1 { ones = ones + 1 }
+                b = b + 1
+            }
+            if ones != 0 && ones != size {
+                // Find rotation: the canonical (un-rotated) pattern is
+                // `ones` low set bits = (1<<ones)-1. Determine `rot` such
+                // that ROR(canonical, rot) == elem over `size` bits.
+                let canon = (1 << ones) - 1
+                let mut rot = 0
+                let mut found = false
+                while rot < size {
+                    // ROR canon right by `rot` within `size` bits.
+                    let lo = (canon >> rot) & mask
+                    let hi = (canon << (size - rot)) & mask
+                    let rored = (lo | hi) & mask
+                    if rored == elem { found = true; rot = size } else { rot = rot + 1 }
+                }
+                if found {
+                    // immr = rot. imms = ((-(size) << 1) & 0x3f) | (ones-1)
+                    // encodes element size in the high bits (NOT-mask) per
+                    // the ARM ARM: imms = (NOT(size-1) ... ) — concretely
+                    // imms bits set so that the leading-ones run identifies
+                    // `size`, low bits = ones-1.
+                    let n_bit = if size == 64 { 1 } else { 0 }
+                    // imms: high bits = ~(size_log2 mask). Build per spec:
+                    // for size s, the field is (128 - 2*s) low 6 bits with
+                    // (ones-1) OR'd in (only valid because runs are <size).
+                    let imms = ((0 - (size << 1)) & 0x3f) | ((ones - 1) & 0x3f)
+                    let immr = rot & 0x3f
+                    return (n_bit << 12) | (immr << 6) | (imms & 0x3f)
+                }
+            }
+        }
+        size = size * 2
+    }
+    return -1
+}
+
 fn encode_arm64_insn(op: string, ops: [string]) -> i64 {
     // ── Move ──
     // MOVZ Xd, #imm16  (zero-extend; canonical 16-bit immediate move).
@@ -553,6 +623,131 @@ fn encode_arm64_insn(op: string, ops: [string]) -> i64 {
     if op == "CBNZ" && len(ops) == 2 {
         let rt = xreg_idx(ops[0])
         return 0xb5000000 | rt
+    }
+
+    // ── PC-relative page address (ADRP Xd, sym@PAGE) ──
+    // imm field (immhi:immlo) is patched by an ARM64_RELOC_PAGE21 reloc
+    // that the walker emits for the `@PAGE` label operand; the encoder
+    // returns the bare base word. Base: 1 immlo 10000 immhi(19) Rd =
+    // 0x90000000 | Rd. (ADR, no `p`, would be 0x10000000 — codegen uses
+    // ADRP exclusively for symbol page loads.)
+    if op == "ADRP" && len(ops) == 2 {
+        let rd = xreg_idx(ops[0])
+        if rd >= 0 { return 0x90000000 | rd }
+    }
+
+    // ── Logical, register form (shifted-register, shift=0) ──
+    // AND Xd, Xn, Xm   0x8a000000
+    if op == "AND" && len(ops) == 3 && ops[2].substring(0, 1) != "#" {
+        let rd = xreg_idx(ops[0])
+        let rn = xreg_idx(ops[1])
+        let rm = xreg_idx(ops[2])
+        return 0x8a000000 | (rm << 16) | (rn << 5) | rd
+    }
+    // ORR Xd, Xn, Xm   0xaa000000
+    if op == "ORR" && len(ops) == 3 && ops[2].substring(0, 1) != "#" {
+        let rd = xreg_idx(ops[0])
+        let rn = xreg_idx(ops[1])
+        let rm = xreg_idx(ops[2])
+        return 0xaa000000 | (rm << 16) | (rn << 5) | rd
+    }
+    // EOR Xd, Xn, Xm   0xca000000
+    if op == "EOR" && len(ops) == 3 && ops[2].substring(0, 1) != "#" {
+        let rd = xreg_idx(ops[0])
+        let rn = xreg_idx(ops[1])
+        let rm = xreg_idx(ops[2])
+        return 0xca000000 | (rm << 16) | (rn << 5) | rd
+    }
+    // ORN Xd, Xn, Xm   0xaa200000 (ORR with bit-21 N=1)
+    if op == "ORN" && len(ops) == 3 && ops[2].substring(0, 1) != "#" {
+        let rd = xreg_idx(ops[0])
+        let rn = xreg_idx(ops[1])
+        let rm = xreg_idx(ops[2])
+        return 0xaa200000 | (rm << 16) | (rn << 5) | rd
+    }
+
+    // ── Logical, immediate form (bitmask) ──
+    // AND Xd, Xn, #imm  0x92000000 ; ORR 0xb2000000 ; EOR 0xd2000000.
+    // The N:immr:imms field comes from _logical_imm64; -1 = not a legal
+    // bitmask immediate (codegen should have materialized it instead).
+    if (op == "AND" || op == "ORR" || op == "EOR") && len(ops) == 3 && ops[2].substring(0, 1) == "#" {
+        let rd = xreg_idx(ops[0])
+        let rn = xreg_idx(ops[1])
+        let li = _logical_imm64(imm_val(ops[2]))
+        if li >= 0 {
+            let mut base = 0x92000000          // AND
+            if op == "ORR" { base = 0xb2000000 }
+            if op == "EOR" { base = 0xd2000000 }
+            let n_immr_imms = li & 0x1fff
+            return base | (n_immr_imms << 10) | (rn << 5) | rd
+        }
+    }
+
+    // ── MVN Xd, Xm  (alias for ORN Xd, XZR, Xm; Rn=31) ──
+    if op == "MVN" && len(ops) == 2 {
+        let rd = xreg_idx(ops[0])
+        let rm = xreg_idx(ops[1])
+        if rd >= 0 && rm >= 0 { return 0xaa2003e0 | (rm << 16) | rd }
+    }
+
+    // ── Variable shift (register amount): LSLV/LSRV/ASRV ──
+    // codegen emits `lsl Xd,Xn,Xm` (3 reg ops) → the variable-shift form.
+    // LSLV 0x9ac02000 | LSRV 0x9ac02400 | ASRV 0x9ac02800 (Rm<<16,Rn<<5,Rd).
+    if (op == "LSL" || op == "LSLV") && len(ops) == 3 && ops[2].substring(0, 1) != "#" {
+        let rd = xreg_idx(ops[0])
+        let rn = xreg_idx(ops[1])
+        let rm = xreg_idx(ops[2])
+        return 0x9ac02000 | (rm << 16) | (rn << 5) | rd
+    }
+    if (op == "LSR" || op == "LSRV") && len(ops) == 3 && ops[2].substring(0, 1) != "#" {
+        let rd = xreg_idx(ops[0])
+        let rn = xreg_idx(ops[1])
+        let rm = xreg_idx(ops[2])
+        return 0x9ac02400 | (rm << 16) | (rn << 5) | rd
+    }
+    if (op == "ASR" || op == "ASRV") && len(ops) == 3 && ops[2].substring(0, 1) != "#" {
+        let rd = xreg_idx(ops[0])
+        let rn = xreg_idx(ops[1])
+        let rm = xreg_idx(ops[2])
+        return 0x9ac02800 | (rm << 16) | (rn << 5) | rd
+    }
+    // ── Immediate shift: LSL/LSR/ASR Xd, Xn, #sh (UBFM/SBFM aliases) ──
+    // LSL #sh = UBFM Xd,Xn,#(-sh%64),#(63-sh) ; LSR #sh = UBFM Xd,Xn,#sh,#63 ;
+    // ASR #sh = SBFM Xd,Xn,#sh,#63.
+    if op == "LSL" && len(ops) == 3 && ops[2].substring(0, 1) == "#" {
+        let rd = xreg_idx(ops[0])
+        let rn = xreg_idx(ops[1])
+        let sh = imm_val(ops[2]) & 0x3f
+        let immr = (0 - sh) & 0x3f
+        let imms = (63 - sh) & 0x3f
+        return 0xd3400000 | (immr << 16) | (imms << 10) | (rn << 5) | rd
+    }
+    if op == "LSR" && len(ops) == 3 && ops[2].substring(0, 1) == "#" {
+        let rd = xreg_idx(ops[0])
+        let rn = xreg_idx(ops[1])
+        let sh = imm_val(ops[2]) & 0x3f
+        return 0xd3400000 | (sh << 16) | (63 << 10) | (rn << 5) | rd
+    }
+    if op == "ASR" && len(ops) == 3 && ops[2].substring(0, 1) == "#" {
+        let rd = xreg_idx(ops[0])
+        let rn = xreg_idx(ops[1])
+        let sh = imm_val(ops[2]) & 0x3f
+        return 0x93400000 | (sh << 16) | (63 << 10) | (rn << 5) | rd
+    }
+
+    // ── Division: SDIV / UDIV Xd, Xn, Xm ──
+    // SDIV 0x9ac00c00 | UDIV 0x9ac00800 (Rm<<16, Rn<<5, Rd).
+    if op == "SDIV" && len(ops) == 3 {
+        let rd = xreg_idx(ops[0])
+        let rn = xreg_idx(ops[1])
+        let rm = xreg_idx(ops[2])
+        return 0x9ac00c00 | (rm << 16) | (rn << 5) | rd
+    }
+    if op == "UDIV" && len(ops) == 3 {
+        let rd = xreg_idx(ops[0])
+        let rn = xreg_idx(ops[1])
+        let rm = xreg_idx(ops[2])
+        return 0x9ac00800 | (rm << 16) | (rn << 5) | rd
     }
 
     // Unknown op — caller checks for 0 as failure marker.
@@ -1121,6 +1316,21 @@ fn _lir_op_uppercase(op: string) -> string {
     if op == "asr"   { return "ASR"  }
     if op == "cset"  { return "CSET" }
     if op == "csel"  { return "CSEL" }
+    // RFC 063 P0 fill (self-host udf-hole closure): the native obj-emit
+    // path also lowers these in main's prologue + arithmetic; without a
+    // table entry they fell through `_lir_op_uppercase` as lowercase →
+    // encode_arm64_insn returned 0 (the `udf #0` self-emit hole).
+    if op == "adrp"  { return "ADRP" }
+    if op == "eor"   { return "EOR"  }
+    if op == "mvn"   { return "MVN"  }
+    if op == "and"   { return "AND"  }
+    if op == "orr"   { return "ORR"  }
+    if op == "orn"   { return "ORN"  }
+    if op == "lslv"  { return "LSLV" }
+    if op == "lsrv"  { return "LSRV" }
+    if op == "asrv"  { return "ASRV" }
+    if op == "sdiv"  { return "SDIV" }
+    if op == "udiv"  { return "UDIV" }
     // Conditional branch: `b.eq` -> `B.EQ`. The encoder reads the
     // condition from the suffix; uppercasing the whole token preserves
     // the dot.
