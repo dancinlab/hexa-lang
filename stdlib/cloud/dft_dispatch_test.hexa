@@ -380,6 +380,55 @@ fn main() {
     _check("disjoint: corrupt-recover sample is NOT walltime",
         _dft_failure_is_walltime(parse_err_out), 0)
 
+    // ── corrupt-recover SALVAGE relaunch + one-attempt guard (PR2) ──
+    // The failing q is parsed from the `_ph0/<prefix>.q_<N>/` line ph.x prints just
+    // before it dies — the marker is keyed on it (@L3 one-attempt-per-q guard).
+    _check("salvage: parse failing q from `.q_4/` reading line", _dft_corrupt_recover_q(parse_err_out), 4)
+    let q7_out = "     Bands found: reading from ./out/_ph0/cabeh8.q_7/\n     PARSE_ERR\n"
+    _check("salvage: parse failing q=7", _dft_corrupt_recover_q(q7_out), 7)
+    // the LAST `.q_N` token wins (ph.x may log several q's; the crash is on the last).
+    let multi_q = "reading ./out/_ph0/x.q_2/\nok\nreading ./out/_ph0/x.q_5/\nPARSE_ERR\n"
+    _check("salvage: last `.q_N` token wins (the crashing q)", _dft_corrupt_recover_q(multi_q), 5)
+    // a corrupt-recover with no parseable `.q_N` keys the marker on 0 (still guarded).
+    _check("salvage: no `.q_N` token → q=0 (still a valid marker key)",
+        _dft_corrupt_recover_q("PARTIAL_EL_PHON not found\nSTOP 1\n"), 0)
+    // the digit run stops at the first non-digit so `.q_4/x.save` is 4, not 4+later.
+    _check("salvage: digit run stops at non-digit (`.q_4/lah10.save` → 4)",
+        _dft_corrupt_recover_q("reading ./out/_ph0/lah10.q_4/lah10.save/\n"), 4)
+
+    // the salvage command shape (@L2): derives prefix+nq from `*.dyn0`, finds the
+    // first q lacking a good dynN as start_q, DELETES the corrupt `_ph0/<pfx>.q_<sq>`,
+    // writes ph_salvage.in with recover=.false. + start_q + last_q, relaunches ph.x.
+    let salv = _dft_salvage_cmd(8, 12)
+    _check("salvage cmd: derives prefix+nq from *.dyn0", _has(salv, "ls *.dyn0"), 1)
+    _check("salvage cmd: start_q = first q with no nonzero dynN", _has(salv, "[ ! -s \"${pfx}${q}\" ]"), 1)
+    _check("salvage cmd: DELETES the corrupt per-q _ph0 scratch", _has(salv, "rm -rf \"./out/_ph0/${pfx}.q_${sq}\""), 1)
+    _check("salvage cmd: sets recover = .false. (bypass corrupt recover)", _has(salv, "recover = .false."), 1)
+    _check("salvage cmd: injects start_q", _has(salv, "start_q = $sq"), 1)
+    _check("salvage cmd: injects last_q = nq", _has(salv, "last_q = $nq"), 1)
+    _check("salvage cmd: writes a FRESH ph_salvage.in (does not overwrite ph.in)", _has(salv, "cp ph.in ph_salvage.in"), 1)
+    _check("salvage cmd: relaunches ph.x on ph_salvage.in", _has(salv, "ph.x -in ph_salvage.in"), 1)
+    _check("salvage cmd: APPENDS to ph.out (union of q's for the terminal harvest)", _has(salv, ">> ph.out"), 1)
+    _check("salvage cmd: PRESERVES completed dynN (no rm of ${pfx}<n> dyn files)", _has(salv, "rm -rf \"${pfx}"), 0)
+    _check("salvage cmd: all-done short-circuit (no missing q)", _has(salv, "SALVAGE_ALLDONE"), 1)
+    _check("salvage cmd: no-dyn0 guard (nothing completed → defer, not salvage)", _has(salv, "SALVAGE_NODYN0"), 1)
+    // single-threaded BLAS env reused (no core over-subscription on the shared pod).
+    _check("salvage cmd: reuses single-thread MPI env (OMP_NUM_THREADS=1)", _has(salv, "OMP_NUM_THREADS=1"), 1)
+
+    // @L3 one-attempt guard — keyed per failing q in the deck dir. Use a temp deck
+    // path; the marker is created, then `already_tried` must flip 0→1 for THAT q
+    // while a DIFFERENT q stays 0 (a fresh q is a fresh attempt, not a loop).
+    let tdeck = "/tmp/dft_salvage_guard_test"
+    let _mkg = exec("rm -rf '" + tdeck + "' && mkdir -p '" + tdeck + "'")
+    _check("guard: q=4 not yet tried (no marker)", _dft_salvage_already_tried(tdeck, 4), 0)
+    let _mk = write_text(_dft_salvage_marker(tdeck, 4), "salvaged q=4\n")
+    _check("guard: q=4 tried after marker written → blocks 2nd salvage", _dft_salvage_already_tried(tdeck, 4), 1)
+    _check("guard: a DIFFERENT q=5 is still a fresh attempt (per-q key)", _dft_salvage_already_tried(tdeck, 5), 0)
+    let _rmg = exec("rm -rf '" + tdeck + "'")
+    // marker path is deck-local + durable (next to the state stamp, NOT /tmp-only).
+    _check("guard: marker path is deck-local + q-keyed",
+        _has(_dft_salvage_marker("/decks/lah10", 4), "/decks/lah10/.dft_salvage.q4.done"), 1)
+
     // ── pod-side self-resume loop (walltime-kill → auto recover-relaunch) ──
     // The el-ph compute stage is wrapped in an `until DONE` bash loop so a per-pod
     // walltime kill is followed by an AUTOMATIC recover-relaunch on the SAME pod —
