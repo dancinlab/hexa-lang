@@ -3325,3 +3325,169 @@
   raw    = ".verdicts/clm-h911/F-CLM-H911-MI.txt"
   src    = "stdlib/flame/clm_h911_c_mi.hexa + clm_h911_bc_mechanisms.hexa (mi_binding, lambda=0.5)"
   status = "🔴 CLOSED-NEGATIVE — paired mean -1.28, CI [-3.3569, 0.0]. The binary sign-agreement MI proxy saturates order-independently → does not detect the linkage."
+
+# ── CLM-KOSMOS H_911 EDU+NEU — construct-valid LEARNED-embedding line (20 hypotheses) ──
+# slug=clm-kosmos-h911-edu-neuro · all measured on the shared learned CLM embedding
+# (stdlib/flame/clm_h911_shared_embed.hexa) with the within-concept-shuffle NULL probe.
+# method=hexa run construct-valid · src=stdlib/flame/clm_h911_edu_neuro.hexa
+# 🟢 = learned CI_lo>0 AND NULL-probe PASS (NULL CI_lo≤0); 🔴 = artifact or closed-neg.
+
+@C h911_interleave := "INTERLEAVE: held-out-lang transfer on the LEARNED embedding does NOT separate parallel>concat (CI ≤0)" :: discovery [slug=clm-kosmos-h911-edu-neuro group=CLM-KOSMOS]
+  id = "F-CLM-H911-INTERLEAVE"
+  method = "hexa run construct-valid"
+  cmd = "hexa run stdlib/flame/clm_h911_edu_neuro.hexa"
+  raw = ".verdicts/clm-h911-edu-neuro/F-CLM-H911-INTERLEAVE.txt"
+  src = "stdlib/flame/clm_h911_edu_neuro.hexa + clm_h911_shared_embed.hexa (transfer metric)"
+  status = "🔴 CLOSED-NEGATIVE — learned paired mean -0.3217, CI [-0.5627,-0.0948]. NULL n/a (learned ≤0)."
+
+@C h911_spacing := "SPACING: transfer-retention on the LEARNED embedding does NOT separate parallel>concat (CI ≤0)" :: discovery [slug=clm-kosmos-h911-edu-neuro group=CLM-KOSMOS]
+  id = "F-CLM-H911-SPACING"
+  method = "hexa run construct-valid"
+  cmd = "hexa run stdlib/flame/clm_h911_edu_neuro.hexa"
+  raw = ".verdicts/clm-h911-edu-neuro/F-CLM-H911-SPACING.txt"
+  src = "stdlib/flame/clm_h911_edu_neuro.hexa + clm_h911_shared_embed.hexa (transfer metric)"
+  status = "🔴 CLOSED-NEGATIVE — learned paired mean -0.3217, CI [-0.5627,-0.0948]. NULL n/a."
+
+@C h911_retrieval := "RETRIEVAL: cross-lingual transfer on the LEARNED embedding does NOT separate parallel>concat (CI ≤0)" :: discovery [slug=clm-kosmos-h911-edu-neuro group=CLM-KOSMOS]
+  id = "F-CLM-H911-RETRIEVAL"
+  method = "hexa run construct-valid"
+  cmd = "hexa run stdlib/flame/clm_h911_edu_neuro.hexa"
+  raw = ".verdicts/clm-h911-edu-neuro/F-CLM-H911-RETRIEVAL.txt"
+  src = "stdlib/flame/clm_h911_edu_neuro.hexa + clm_h911_shared_embed.hexa (transfer metric)"
+  status = "🔴 CLOSED-NEGATIVE — learned paired mean -0.3217, CI [-0.5627,-0.0948]. NULL n/a."
+
+@C h911_dualcode := "DUALCODE: AMODAL concept anchor (XL cos − lang-id baseline) RECOVERS parallel>concat on the LEARNED axis AND survives the within-concept-shuffle NULL" :: discovery [slug=clm-kosmos-h911-edu-neuro group=CLM-KOSMOS]
+  id = "F-CLM-H911-DUALCODE"
+  method = "hexa run construct-valid"
+  cmd = "hexa run stdlib/flame/clm_h911_edu_neuro.hexa"
+  raw = ".verdicts/clm-h911-edu-neuro/F-CLM-H911-DUALCODE.txt"
+  src = "stdlib/flame/clm_h911_edu_neuro.hexa + clm_h911_shared_embed.hexa (amodal metric)"
+  status = "🟢 — learned paired mean +0.2337, CI [+0.0683,+0.4365]. NULL-probe PASS (NULL CI [-0.3108,-0.2957] ≤0 → semantic, not order). Shared amodal concept node forms on the learned axis."
+
+@C h911_iplus1 := "IPLUS1: raw within-concept XL cosine on the LEARNED embedding does NOT separate parallel>concat (CI straddles 0)" :: discovery [slug=clm-kosmos-h911-edu-neuro group=CLM-KOSMOS]
+  id = "F-CLM-H911-IPLUS1"
+  method = "hexa run construct-valid"
+  cmd = "hexa run stdlib/flame/clm_h911_edu_neuro.hexa"
+  raw = ".verdicts/clm-h911-edu-neuro/F-CLM-H911-IPLUS1.txt"
+  src = "stdlib/flame/clm_h911_edu_neuro.hexa + clm_h911_shared_embed.hexa (within-XL metric)"
+  status = "🔴 CLOSED-NEGATIVE — learned paired mean -0.0481, CI [-0.2089,+0.1380] straddles 0."
+
+@C h911_desdiff := "DESDIFF: AMODAL concept anchor RECOVERS parallel>concat on the LEARNED axis AND survives the within-concept-shuffle NULL" :: discovery [slug=clm-kosmos-h911-edu-neuro group=CLM-KOSMOS]
+  id = "F-CLM-H911-DESDIFF"
+  method = "hexa run construct-valid"
+  cmd = "hexa run stdlib/flame/clm_h911_edu_neuro.hexa"
+  raw = ".verdicts/clm-h911-edu-neuro/F-CLM-H911-DESDIFF.txt"
+  src = "stdlib/flame/clm_h911_edu_neuro.hexa + clm_h911_shared_embed.hexa (amodal metric)"
+  status = "🟢 — learned paired mean +0.2337, CI [+0.0683,+0.4365]. NULL-probe PASS (NULL CI [-0.3108,-0.2957] ≤0)."
+
+@C h911_tap := "TAP: transfer-appropriate held-out-lang transfer on the LEARNED embedding does NOT separate parallel>concat (CI ≤0)" :: discovery [slug=clm-kosmos-h911-edu-neuro group=CLM-KOSMOS]
+  id = "F-CLM-H911-TAP"
+  method = "hexa run construct-valid"
+  cmd = "hexa run stdlib/flame/clm_h911_edu_neuro.hexa"
+  raw = ".verdicts/clm-h911-edu-neuro/F-CLM-H911-TAP.txt"
+  src = "stdlib/flame/clm_h911_edu_neuro.hexa + clm_h911_shared_embed.hexa (transfer metric)"
+  status = "🔴 CLOSED-NEGATIVE — learned paired mean -0.3217, CI [-0.5627,-0.0948]. NULL n/a."
+
+@C h911_chunk := "CHUNK: participation-ratio compression on the LEARNED embedding does NOT separate parallel>concat (CI ≤0)" :: discovery [slug=clm-kosmos-h911-edu-neuro group=CLM-KOSMOS]
+  id = "F-CLM-H911-CHUNK"
+  method = "hexa run construct-valid"
+  cmd = "hexa run stdlib/flame/clm_h911_edu_neuro.hexa"
+  raw = ".verdicts/clm-h911-edu-neuro/F-CLM-H911-CHUNK.txt"
+  src = "stdlib/flame/clm_h911_edu_neuro.hexa + clm_h911_shared_embed.hexa (compression metric)"
+  status = "🔴 CLOSED-NEGATIVE — learned paired mean -1.1716, CI [-1.3836,-0.9902]."
+
+@C h911_immersion := "IMMERSION: raw within-concept XL cosine on the LEARNED embedding does NOT separate parallel>concat (CI straddles 0)" :: discovery [slug=clm-kosmos-h911-edu-neuro group=CLM-KOSMOS]
+  id = "F-CLM-H911-IMMERSION"
+  method = "hexa run construct-valid"
+  cmd = "hexa run stdlib/flame/clm_h911_edu_neuro.hexa"
+  raw = ".verdicts/clm-h911-edu-neuro/F-CLM-H911-IMMERSION.txt"
+  src = "stdlib/flame/clm_h911_edu_neuro.hexa + clm_h911_shared_embed.hexa (within-XL metric)"
+  status = "🔴 CLOSED-NEGATIVE — learned paired mean -0.0481, CI [-0.2089,+0.1380] straddles 0."
+
+@C h911_elaborate := "ELABORATE: cross-lingual elaboration transfer on the LEARNED embedding does NOT separate parallel>concat (CI ≤0)" :: discovery [slug=clm-kosmos-h911-edu-neuro group=CLM-KOSMOS]
+  id = "F-CLM-H911-ELABORATE"
+  method = "hexa run construct-valid"
+  cmd = "hexa run stdlib/flame/clm_h911_edu_neuro.hexa"
+  raw = ".verdicts/clm-h911-edu-neuro/F-CLM-H911-ELABORATE.txt"
+  src = "stdlib/flame/clm_h911_edu_neuro.hexa + clm_h911_shared_embed.hexa (transfer metric)"
+  status = "🔴 CLOSED-NEGATIVE — learned paired mean -0.3217, CI [-0.5627,-0.0948]. NULL n/a."
+
+@C h911_atlhub := "ATLHUB: amodal semantic hub (XL cos − lang-id baseline) RECOVERS parallel>concat on the LEARNED axis AND survives the within-concept-shuffle NULL — a real amodal hub forms" :: discovery [slug=clm-kosmos-h911-edu-neuro group=CLM-KOSMOS]
+  id = "F-CLM-H911-ATLHUB"
+  method = "hexa run construct-valid"
+  cmd = "hexa run stdlib/flame/clm_h911_edu_neuro.hexa"
+  raw = ".verdicts/clm-h911-edu-neuro/F-CLM-H911-ATLHUB.txt"
+  src = "stdlib/flame/clm_h911_edu_neuro.hexa + clm_h911_shared_embed.hexa (amodal metric)"
+  status = "🟢 — learned paired mean +0.2337, CI [+0.0683,+0.4365]. NULL-probe PASS (NULL CI [-0.3108,-0.2957] ≤0). Construct-valid HUB (replaces bio-HUB artifact)."
+
+@C h911_gwt := "GWT: Φ-proxy (whole − min-bipartition) on the LEARNED embedding does NOT separate parallel>concat — code is MORE reducible under parallel (CI <0)" :: discovery [slug=clm-kosmos-h911-edu-neuro group=CLM-KOSMOS]
+  id = "F-CLM-H911-GWT"
+  method = "hexa run construct-valid"
+  cmd = "hexa run stdlib/flame/clm_h911_edu_neuro.hexa"
+  raw = ".verdicts/clm-h911-edu-neuro/F-CLM-H911-GWT.txt"
+  src = "stdlib/flame/clm_h911_edu_neuro.hexa + clm_h911_shared_embed.hexa (phi metric)"
+  status = "🔴 CLOSED-NEGATIVE — learned paired mean -0.8435, CI [-0.9398,-0.7188]. Workspace-bottleneck Φ does not rise under parallel."
+
+@C h911_reuse := "REUSE: participation-ratio compression on the LEARNED embedding does NOT separate parallel>concat (CI ≤0)" :: discovery [slug=clm-kosmos-h911-edu-neuro group=CLM-KOSMOS]
+  id = "F-CLM-H911-REUSE"
+  method = "hexa run construct-valid"
+  cmd = "hexa run stdlib/flame/clm_h911_edu_neuro.hexa"
+  raw = ".verdicts/clm-h911-edu-neuro/F-CLM-H911-REUSE.txt"
+  src = "stdlib/flame/clm_h911_edu_neuro.hexa + clm_h911_shared_embed.hexa (compression metric)"
+  status = "🔴 CLOSED-NEGATIVE — learned paired mean -1.1716, CI [-1.3836,-0.9902]. No parallel low-rank reuse."
+
+@C h911_predcode := "PREDCODE: shared-cause transfer on the LEARNED embedding does NOT separate parallel>concat (CI ≤0)" :: discovery [slug=clm-kosmos-h911-edu-neuro group=CLM-KOSMOS]
+  id = "F-CLM-H911-PREDCODE"
+  method = "hexa run construct-valid"
+  cmd = "hexa run stdlib/flame/clm_h911_edu_neuro.hexa"
+  raw = ".verdicts/clm-h911-edu-neuro/F-CLM-H911-PREDCODE.txt"
+  src = "stdlib/flame/clm_h911_edu_neuro.hexa + clm_h911_shared_embed.hexa (transfer metric)"
+  status = "🔴 CLOSED-NEGATIVE — learned paired mean -0.3217, CI [-0.5627,-0.0948]. NULL n/a."
+
+@C h911_syscon := "SYSCON: schema-generalization transfer on the LEARNED embedding does NOT separate parallel>concat (CI ≤0)" :: discovery [slug=clm-kosmos-h911-edu-neuro group=CLM-KOSMOS]
+  id = "F-CLM-H911-SYSCON"
+  method = "hexa run construct-valid"
+  cmd = "hexa run stdlib/flame/clm_h911_edu_neuro.hexa"
+  raw = ".verdicts/clm-h911-edu-neuro/F-CLM-H911-SYSCON.txt"
+  src = "stdlib/flame/clm_h911_edu_neuro.hexa + clm_h911_shared_embed.hexa (transfer metric)"
+  status = "🔴 CLOSED-NEGATIVE — learned paired mean -0.3217, CI [-0.5627,-0.0948]. NULL n/a."
+
+@C h911_l1l2overlap := "L1L2OVERLAP: sign-coherence across langs on the LEARNED embedding does NOT separate parallel>concat (CI straddles 0)" :: discovery [slug=clm-kosmos-h911-edu-neuro group=CLM-KOSMOS]
+  id = "F-CLM-H911-L1L2OVERLAP"
+  method = "hexa run construct-valid"
+  cmd = "hexa run stdlib/flame/clm_h911_edu_neuro.hexa"
+  raw = ".verdicts/clm-h911-edu-neuro/F-CLM-H911-L1L2OVERLAP.txt"
+  src = "stdlib/flame/clm_h911_edu_neuro.hexa + clm_h911_shared_embed.hexa (coherence metric)"
+  status = "🔴 CLOSED-NEGATIVE — learned paired mean -0.04, CI [-0.16,+0.08] straddles 0."
+
+@C h911_trw := "TRW: temporal-receptive-window transfer on the LEARNED embedding does NOT separate parallel>concat (CI ≤0)" :: discovery [slug=clm-kosmos-h911-edu-neuro group=CLM-KOSMOS]
+  id = "F-CLM-H911-TRW"
+  method = "hexa run construct-valid"
+  cmd = "hexa run stdlib/flame/clm_h911_edu_neuro.hexa"
+  raw = ".verdicts/clm-h911-edu-neuro/F-CLM-H911-TRW.txt"
+  src = "stdlib/flame/clm_h911_edu_neuro.hexa + clm_h911_shared_embed.hexa (transfer metric)"
+  status = "🔴 CLOSED-NEGATIVE — learned paired mean -0.3217, CI [-0.5627,-0.0948]. NULL n/a."
+
+@C h911_oscillate := "OSCILLATE: sign-coherence phase proxy on the LEARNED embedding does NOT separate parallel>concat (CI straddles 0)" :: discovery [slug=clm-kosmos-h911-edu-neuro group=CLM-KOSMOS]
+  id = "F-CLM-H911-OSCILLATE"
+  method = "hexa run construct-valid"
+  cmd = "hexa run stdlib/flame/clm_h911_edu_neuro.hexa"
+  raw = ".verdicts/clm-h911-edu-neuro/F-CLM-H911-OSCILLATE.txt"
+  src = "stdlib/flame/clm_h911_edu_neuro.hexa + clm_h911_shared_embed.hexa (coherence metric)"
+  status = "🔴 CLOSED-NEGATIVE — learned paired mean -0.04, CI [-0.16,+0.08] straddles 0."
+
+@C h911_semctrl := "SEMCTRL: semantic-control AMODAL anchor RECOVERS parallel>concat on the LEARNED axis AND survives the within-concept-shuffle NULL" :: discovery [slug=clm-kosmos-h911-edu-neuro group=CLM-KOSMOS]
+  id = "F-CLM-H911-SEMCTRL"
+  method = "hexa run construct-valid"
+  cmd = "hexa run stdlib/flame/clm_h911_edu_neuro.hexa"
+  raw = ".verdicts/clm-h911-edu-neuro/F-CLM-H911-SEMCTRL.txt"
+  src = "stdlib/flame/clm_h911_edu_neuro.hexa + clm_h911_shared_embed.hexa (amodal metric)"
+  status = "🟢 — learned paired mean +0.2337, CI [+0.0683,+0.4365]. NULL-probe PASS (NULL CI [-0.3108,-0.2957] ≤0)."
+
+@C h911_phi := "PHI: IIT Φ-proxy (whole − min-bipartition) on the LEARNED embedding does NOT separate parallel>concat — Φ does NOT rise (CI <0); #2348 substrate Φ inverse-U does not reproduce on the learned code" :: discovery [slug=clm-kosmos-h911-edu-neuro group=CLM-KOSMOS]
+  id = "F-CLM-H911-PHI"
+  method = "hexa run construct-valid"
+  cmd = "hexa run stdlib/flame/clm_h911_edu_neuro.hexa"
+  raw = ".verdicts/clm-h911-edu-neuro/F-CLM-H911-PHI.txt"
+  src = "stdlib/flame/clm_h911_edu_neuro.hexa + clm_h911_shared_embed.hexa (phi metric)"
+  status = "🔴 CLOSED-NEGATIVE — learned paired mean -0.8435, CI [-0.9398,-0.7188]. Closed-negative: learned-rep Φ-irreducibility does not rise with cross-lingual coupling."
