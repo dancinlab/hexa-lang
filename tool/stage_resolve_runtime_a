@@ -39,10 +39,108 @@ ROOT="$PWD"
 RA="$ROOT/build/runtime.a"
 mkdir -p build
 
+# ── B9.C-10/F3 (CI parity with the LOCAL build) — regen self/runtime_core.c from
+# its emitter SSOT (self/runtime_core_emit.hexa) BEFORE compiling runtime.a.
+#
+# THE BUG THIS CLOSES (exec pipe-EOF leak fix never reached binaries): the
+# bootstrap seed restored here (frozen blob 151c52c82, pinned PRE-graduation) is
+# a STALE self/runtime_core.c — it predates the merged exec()/exec_stream leak
+# fix (#2350/#2351), whose ONLY source edit is self/runtime_core_emit.hexa. The
+# amalgam self/runtime.c `#include`s runtime_core.c (line ~2149), so compiling
+# the frozen .c bakes the OLD drain into runtime.a → into the release/edge
+# binary. CI never ran the emitter; only the LOCAL build (build_hexa_cli.hexa
+# `_regen_runtime_core`, Step 0-pre) did → only local binaries carried the fix.
+#
+# This mirrors that local Step 0-pre on the CI path: run the emitter with an
+# available hexa runner and overwrite runtime_core.c with the freshly-emitted
+# SSOT output BEFORE the compile below. The runner can be the prior edge `hexa`
+# binary — the emitter is plain hexa source that prints C text, so a STALE
+# runner still emits the CURRENT (fixed) runtime_core.c (verified: a fix-less
+# edge binary regenerates a runtime_core.c carrying HEXA_EXEC_DRAIN_GRACE_MS).
+#
+# STRICTLY-OPTIONAL + NO-OP-SAFE, matching _regen_runtime_core's contract:
+#   · emitter absent  → keep the in-tree .c (no change).
+#   · no hexa runner  → keep the in-tree .c (no change).
+#   · emitter fails   → keep the in-tree .c (warn, non-fatal).
+# On a SHA-identical regen the runtime.c TU is byte-unchanged (PERF UNCHANGED).
+regen_runtime_core_from_emitter() {
+    local emitter="self/runtime_core_emit.hexa"
+    local dst="self/runtime_core.c"
+    [ -f "$emitter" ] || { echo "[stage_resolve_runtime_a] runtime_core.c regen SKIP — emitter absent"; return 0; }
+
+    # Resolve a hexa runner that can `run` a .hexa file end-to-end.
+    #   1. an external hexa-run / hexa on PATH (local dev parity), else
+    #   2. the prior edge `hexa` binary (CI: same asset stage_regen_hexa_cc uses).
+    local runner=""
+    if command -v hexa-run >/dev/null 2>&1; then
+        runner="hexa-run"
+    elif command -v hexa >/dev/null 2>&1; then
+        runner="hexa run"
+    else
+        local asset="${EDGE_ASSET:-}"
+        if [ -n "$asset" ]; then
+            local edge_dir="/tmp/edge_rc_runner"
+            rm -rf "$edge_dir"; mkdir -p "$edge_dir"
+            if gh release download edge --repo "${GITHUB_REPOSITORY:-dancinlab/hexa-lang}" \
+                  --pattern "$asset" --dir "$edge_dir" --clobber 2>/tmp/rc_dl.err \
+               && tar xzf "$edge_dir/$asset" -C "$edge_dir" 2>/dev/null; then
+                local edge_hexa
+                edge_hexa="$(find "$edge_dir" -name hexa -type f -perm -u+x 2>/dev/null | head -1)"
+                [ -z "$edge_hexa" ] && edge_hexa="$(find "$edge_dir" -name hexa -type f 2>/dev/null | head -1)"
+                if [ -n "$edge_hexa" ]; then chmod +x "$edge_hexa" 2>/dev/null || true; runner="$edge_hexa run"; fi
+            fi
+        fi
+    fi
+    if [ -z "$runner" ]; then
+        echo "[stage_resolve_runtime_a] runtime_core.c regen SKIP — no hexa runner (in-tree .c used)"
+        return 0
+    fi
+
+    local tmp
+    tmp="$(mktemp -t regen_runtime_core_c.XXXXXX)" || { echo "[stage_resolve_runtime_a] mktemp failed — regen skipped" >&2; return 0; }
+    # HEXA_LANG must point at this checkout so the emitter resolves its imports.
+    if HEXA_LANG="$ROOT" $runner "$emitter" "$tmp" >/tmp/rc_emit.log 2>&1 && [ -s "$tmp" ]; then
+        cp -f "$tmp" "$dst"
+        echo "[stage_resolve_runtime_a] runtime_core.c REGENERATED from emitter SSOT ($(wc -l < "$dst") lines)"
+        reconcile_runtime_c_ssot_dups
+    else
+        echo "[stage_resolve_runtime_a] warn: emitter failed ($(tail -1 /tmp/rc_emit.log 2>/dev/null)) — in-tree .c used" >&2
+    fi
+    rm -f "$tmp"
+}
+
+# SSOT-migration reconciliation: pairs the FROZEN runtime.c with the CURRENT
+# emitter-regenerated runtime_core.c. The frozen runtime.c (151c52c82, pre-
+# graduation) still carries weak C bodies for the four f64<->bits reinterpret
+# primitives; those symbols were MIGRATED into the runtime_core.c SSOT emitter at
+# #2185 (it now emits the canonical NON-weak bodies). Once we regen runtime_core.c
+# from the current emitter, the frozen runtime.c's stale duplicates collide
+# ("redefinition of 'hexa_float_to_bits'") because runtime.c `#include`s
+# runtime_core.c into one TU. CI never hit this only because it copied the
+# prebuilt edge runtime.a and never recompiled — the same seam that froze the
+# exec-leak fix out of binaries. Drop the four migrated single-line weak defs so
+# the emitter's SSOT bodies are the sole definitions (same union-pun impl →
+# behavior-preserving). No-op when runtime.c is current (defs already absent).
+reconcile_runtime_c_ssot_dups() {
+    [ -f self/runtime.c ] || return 0
+    grep -q '__attribute__((weak)) HexaVal hexa_float_to_bits(HexaVal x) {' self/runtime.c || return 0
+    local before after
+    before=$(wc -l < self/runtime.c)
+    sed -E -i.ssotbak \
+      '/__attribute__\(\(weak\)\) HexaVal (hexa_float_to_bits|hexa_bits_to_float|float_to_bits|bits_to_float)\(HexaVal x\) \{/d' \
+      self/runtime.c
+    rm -f self/runtime.c.ssotbak
+    after=$(wc -l < self/runtime.c)
+    echo "[stage_resolve_runtime_a] SSOT reconcile: dropped $((before-after)) migrated f64<->bits defs from runtime.c (emitter owns them)"
+}
+
 # Shared source-compile of runtime.a from the in-tree self/runtime.c (+ its
 # #include seed .c). Used by BOTH the seeds-present branch and the frozen-seed
-# fallback so there is exactly ONE compile recipe (no drift).
+# fallback so there is exactly ONE compile recipe (no drift). The runtime_core.c
+# emitter-regen runs FIRST so the compiled .a carries the SSOT (not the stale
+# frozen fragment) — see regen_runtime_core_from_emitter above.
 build_runtime_a_from_source() {
+    regen_runtime_core_from_emitter
     $CC $CFLAGS -I self -c self/runtime.c -o build/runtime.o
     ar rcs "$RA" build/runtime.o
     ls -la "$RA"
@@ -55,9 +153,35 @@ if [ -f self/runtime.c ]; then
     exit 0
 fi
 
-# Seeds removed: pull the prior edge tarball's prebuilt runtime.a.
-echo "stage_resolve_runtime_a: self/runtime.c ABSENT — fetching prebuilt runtime.a from prior edge"
+# ── Seeds removed (.c=0 checkout) — REBUILD from source, do NOT trust the edge .a.
+#
+# WHY NOT just `cp` the prior edge build/runtime.a (the old behavior)? Because the
+# edge runtime.a is the "frozen dough": it was itself compiled from a STALE
+# runtime_core.c and so it carries the OLD exec drain. Copying it forward
+# perpetuates the leak in every release — exactly the bug this change closes. The
+# prebuilt .a optimization froze a SOURCE fragment that the SSOT emitter has since
+# moved past, with no recompile to pick the change up.
+#
+# Correct order of preference now:
+#   1. Restore the frozen bootstrap seeds (self/runtime.c + fragments, pinned
+#      7906951c0^) → regen runtime_core.c from its emitter SSOT → compile .a from
+#      source. This is the SAME source recipe + emitter-regen as the seeds-present
+#      branch, so the fix is baked in. Seeds are working-tree-only (never
+#      committed) — the .hexa-only graduated git state is preserved.
+#   2. ONLY IF frozen-seed restore is impossible (e.g. the pinned blob is
+#      unreachable), fall back to the prior edge prebuilt runtime.a as a
+#      last-resort bootstrap so the build can still proceed. This path keeps the
+#      stale fragment, but it is now the exception, not the default.
 ASSET="${EDGE_ASSET:?EDGE_ASSET must be set when seeds are removed}"
+echo "stage_resolve_runtime_a: self/runtime.c ABSENT — restoring frozen seeds + regen runtime_core.c, then building from source"
+if bash tool/restore_frozen_seeds && [ -f self/runtime.c ]; then
+    build_runtime_a_from_source
+    exit 0
+fi
+
+# Last-resort bootstrap: frozen-seed restore failed → pull the prior edge
+# prebuilt runtime.a so the build can still complete (stale-fragment risk noted).
+echo "stage_resolve_runtime_a: frozen-seed restore unavailable — falling back to prior edge prebuilt runtime.a" >&2
 EDGE_DIR="/tmp/edge_ra"
 mkdir -p "$EDGE_DIR"
 if gh release download edge --repo "${GITHUB_REPOSITORY:-dancinlab/hexa-lang}" \
@@ -75,17 +199,5 @@ else
     echo "stage_resolve_runtime_a: edge download failed ($(head -1 /tmp/ra_dl.err 2>/dev/null))" >&2
 fi
 
-# P7 edge-seed chicken-egg fallback: the per-platform edge tarball is missing
-# (e.g. `edge` ships only hexa-linux-arm64.tar.gz, so x86_64/darwin can't pull).
-# Restore the frozen bootstrap seeds from the authoritative pre-graduation blob
-# (pinned 7906951c0^) into the working tree and build runtime.a from source —
-# the SAME compile as the seeds-present branch. Seeds are working-tree-only and
-# never committed, so the .hexa-only graduated git state is preserved.
-echo "stage_resolve_runtime_a: edge asset unavailable — restoring frozen seeds (7906951c0^) and building from source"
-if bash tool/restore_frozen_seeds && [ -f self/runtime.c ]; then
-    build_runtime_a_from_source
-    exit 0
-fi
-
-echo "stage_resolve_runtime_a: NO runtime.a available (no source, no prior asset, frozen-seed restore failed)" >&2
+echo "stage_resolve_runtime_a: NO runtime.a available (no source, frozen-seed restore failed, no prior asset)" >&2
 exit 1
