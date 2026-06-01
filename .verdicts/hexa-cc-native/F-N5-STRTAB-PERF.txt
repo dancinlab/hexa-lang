@@ -68,11 +68,30 @@ session's full run was env-killed at ~60min / ~8.85GB peak.
    linux-arm64 CI completing in 8m27s is the clean apples-to-apples
    timing proof (same flat, faster host I/O).
 
-RESUME — link/cmp prize (when /tmp/cc-prc2.o lands; poll /tmp/prc2new-emit.done):
+4) FULL-FLAT EMIT COMPLETED (the strtab fix's payoff, end-to-end):
+   /tmp/aprime_strtab _drv.hexa --emit=obj … -o /tmp/cc-prc2.o /tmp/cc-l1-flat-new.hexa
+   EXIT=0  WALL=3956s (~66min)  obj=3216096 B  pack_lir residual=0
+   (ALL page refs resolved — 344 g<id> + 41 .LCflt + 3252 .LCstr).
+   The OLD O(n²) code was env/OOM-KILLED at ~60min having STALLED in the
+   strtab loop (8.85GB peak). The NEW code RAN TO COMPLETION at the same
+   wall mark, RSS peak ~8.7GB at codegen then DECLINED to ~50MB through a
+   slow byte-by-byte obj-WRITE finalize (a SEPARATE slow path, not strtab,
+   not OOM, not SIGTERM). The strtab pathology is GONE — measured proof.
+
+LINK + SMOKE (the prize attempt — honest result):
    /tmp/hld_bin -o /tmp/gen2 /tmp/cc-prc2.o /tmp/rt_new.o --lc-main _main
-   HEXA_ATLAS_EMBED=/tmp/noatlas /tmp/gen2 sm.hexa --emit=obj -o /tmp/sm.o sm.hexa  # smoke
-   /tmp/gen2 _drv.hexa --emit=obj --target=arm64-apple-darwin \
-       -o /tmp/cc-gen3.o /tmp/cc-l1-flat-new.hexa
-   cmp /tmp/cc-prc2.o /tmp/cc-gen3.o    # IDENTICAL = N5 byte-eq fixpoint
-   Prereqs VERIFIED ready: /tmp/rt_new.o (all N5-sym wrappers T),
-   /tmp/hld_bin (L1+L2 patched hexa_ld, runs).
+     → gen2 = 1930224 B Mach-O executable, link OK (rc 0).
+   HEXA_ATLAS_EMBED=/tmp/noatlas /tmp/gen2 sm.hexa --emit=obj …
+     → **SIGSEGV (signal 11)**, EXIT=139. Crash report
+     gen2-2026-06-01-232914.ips: EXC_BAD_ACCESS KERN_INVALID_ADDRESS at
+     0x1000 (near-null deref) at gen2 offset 0x15a2e8.
+
+⛔ BYTE-EQ FIXPOINT NOT REACHED — blocker MOVED (honest, NOT this PR's scope).
+   The strtab perf bug is FIXED (cc-prc2.o emits residual 0 + links). The
+   remaining blocker is the PRE-EXISTING NATIVE-CODEGEN COMPLETENESS bug
+   documented in memory project_cc_native_n5sym (the `udf #0` / main+40 SIGILL
+   class — aprime's native self-emit isn't yet a VALID runnable copy of
+   itself): gen2 SIGSEGVs at runtime, so self-repro cc-gen3.o cannot be
+   produced and the cmp cannot run. This is a codegen-correctness frontier,
+   ORTHOGONAL to the strtab perf fix. cmp NOT run (gen2 doesn't execute).
+   Prereqs (rt_new.o, hld_bin) verified; cc-prc2.o + gen2 retained at /tmp.
