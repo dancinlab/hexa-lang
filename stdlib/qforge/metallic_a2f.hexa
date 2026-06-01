@@ -1,0 +1,184 @@
+// HEXA Standard Library — qforge/metallic_a2f
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// QFORGE L3.q — the MULTI-q α²F ASSEMBLY DRIVER. This is the rung that lifts the
+// L3 assembler from a flat hand-built (q,ν) sample list to a REAL q-MESH sweep:
+// given a Monkhorst-Pack q-grid and a per-q electron-phonon PROVIDER CLOSURE
+// {ω(q,ν), |g(q,ν)|²}, it walks every q-point, folds each q's MP star weight
+// into the BZ-sample weight, concatenates the per-q samples into ONE flat
+// index-aligned (q,ν) list, and hands that to the verified L3 BZ double-delta
+// assembler + the L2 moment integrator to produce a single multi-q α²F → λ·ω_log.
+//
+//   qforge_mp_grid(nq,nq,nq) ──┐ (d19 reuse — same generator as the SCF k-mesh)
+//                              │
+//        per-q PROVIDER(qx,qy,qz) ──▶ {ω(q,ν), |g|²}  (caller closure — d4)
+//                              │
+//        concat over all q (MP weight folded) ──▶ flat (q,ν) sample list
+//                              │  qforge_a2f_from_elph  (L3 BZ double-δ)
+//                              ▼
+//                       multi-q α²F(ω)
+//                              │  eliashberg_moments_from_a2f  (L2)
+//                              ▼
+//                       λ = 2∫α²F/ω , ω_log
+//
+// ── WHY THIS IS A NEW LAYER (not a duplicate — d3) ──────────────────────────
+// The L3 assembler (qforge_a2f_from_elph) takes an ALREADY-flattened (q,ν)
+// sample list; the orchestrator (qforge_elph_to_tc) likewise starts from a flat
+// dataset. NEITHER consumes a q-MESH. The Γ-only metallic estimate (M5.8) uses a
+// SINGLE q (Γ) Einstein mode. This driver is the missing piece: it generates the
+// q-mesh and SWEEPS the provider over it, so the assembled α²F is a genuine
+// BZ-sampled multi-q spectral function — the structure a real DFPT-over-a-q-mesh
+// run produces, and the thing that lets λ go BEYOND the Γ-only single-Einstein
+// coarse estimate toward an independent λ that can cross-val QE.
+//
+// ── d4 GENERIC — the provider is a caller closure, no material hardcode ──────
+// The driver knows NOTHING about CaH6 / LaH10 / the band structure. It calls the
+// provider once per q-point with the fractional q-coordinate; the provider
+// returns that q's modes as a flat pack [ω…, g2…, eps_k…, eps_kq…] (nmode each).
+// Add / change a material = swap the closure. No branch on a material name.
+//
+// ── HONEST SCOPE (d6 — the metallic wall is NOT claimed closed here) ─────────
+// This builds the ASSEMBLY PATH + its g5 selftest on SYNTHETIC providers whose
+// multi-q λ = Σ_{q,ν} λ(q,ν) is known in closed form. It does NOT run DFPT and
+// does NOT fabricate a CaH6 λ. The converged-CaH6 QFORGE-vs-QE λ cross-val (real
+// DFPT |g| over a q-mesh, QFORGE λ_BZ within 1% of QE λ_BZ) is the REMAINING
+// GATED step for the metallic wall to fully close — reported as such, not faked.
+//
+// d3/d19 reuse (compose, don't reinvent — every brick below is verified 🟢/🔵):
+//   - q-mesh        : stdlib/qforge/mpgrid  (qforge_mp_grid — the SCF k-mesh gen)
+//   - α²F assembler : stdlib/qforge/tc      (qforge_a2f_from_elph — L3 BZ double-δ)
+//   - λ, ω_log      : stdlib/material/sim   (eliashberg_moments_from_a2f — L2)
+// New code here = the q-mesh WALK + per-q provider invocation + MP-weight fold
+// only. Zero physics is re-implemented.
+//
+// Surface (pure functions, closure-driven, no syscall):
+//   pub fn qforge_metallic_a2f_mesh(grid, provider, nmode_per_q, e_fermi, n_ef,
+//                          omega_grid, sigma_el, sigma_ph) -> [float]   // α²F(ω)
+//   pub fn qforge_metallic_lambda_mesh(...) -> float                    // λ
+//   pub struct MetallicA2fResult { ok, err, lambda, omega_log, a2f }
+//   pub fn qforge_metallic_a2f(...) -> MetallicA2fResult                // bundle
+
+use "stdlib/qforge/mpgrid"
+use "stdlib/qforge/tc"
+use "stdlib/material/sim"
+
+// Per-q provider PACKING (d4 — avoids a struct dep so the driver stays generic):
+// the provider returns a flat [4·nmode] array for one q-point, blocked as
+//   [ omega_qnu… (nmode), g2… (nmode), eps_k… (nmode), eps_kq… (nmode) ].
+// `nmode` is the modes-per-q the caller declares (3·n_atom for a real cell; a
+// synthetic provider can pick any nmode). The driver slices these blocks and
+// appends them to the growing flat (q,ν) sample list, with the MP star weight of
+// that q-point folded into the per-sample BZ weight.
+
+// ── the multi-q assembly: q-mesh WALK → flat samples → L3 → α²F(ω) ───────────
+//
+// For each q-point i of `grid` (an MpGrid from qforge_mp_grid), call
+//   provider(qx, qy, qz)  →  flat [4·nmode] pack for that q,
+// and for each of its nmode modes append (eps_k, eps_kq, g2, ω) to the flat
+// (q,ν) sample list with BZ weight = grid.weights[i] (the MP star weight; for a
+// uniform full mesh = 1/N_q). The flat list is then handed to the verified L3
+// assembler. Because qforge_a2f_from_elph multiplies EACH sample by its own
+// weight argument — but takes ONE scalar `weight` — we fold the per-q MP weight
+// into g2 (g2·w_q) and pass weight=1.0; this is the SAME α²F since the weight
+// enters linearly (w·g2·δ·δ). Returns the assembled α²F(ω) (len = omega_grid),
+// or the [-1.0] sentinel on a malformed mesh / empty provider output.
+pub fn qforge_metallic_a2f_mesh(grid: MpGrid, provider, nmode_per_q: int,
+                                e_fermi: float, n_ef: float,
+                                omega_grid: [float],
+                                sigma_el: float, sigma_ph: float) -> [float] {
+    let nq = grid.npoints
+    if nq < 1 || nmode_per_q < 1 { return [-1.0] }
+
+    // flat index-aligned (q,ν) sample lists (concatenated over the q-mesh)
+    let mut eps_k: [float] = []
+    let mut eps_kq: [float] = []
+    let mut g2: [float] = []
+    let mut omega_qnu: [float] = []
+
+    let mut iq = 0
+    while iq < nq {
+        let qx = grid.coords[3 * iq]
+        let qy = grid.coords[3 * iq + 1]
+        let qz = grid.coords[3 * iq + 2]
+        let wq = grid.weights[iq]               // MP star weight of this q-point
+
+        let pack = provider(qx, qy, qz)         // flat [4·nmode] for this q (d4)
+        // guard: provider must return exactly the declared block size.
+        if len(pack) != 4 * nmode_per_q { return [-1.0] }
+
+        let mut m = 0
+        while m < nmode_per_q {
+            let w_om = pack[m]                   // ω(q,ν) block 0
+            let w_g2 = pack[nmode_per_q + m]     // |g|²   block 1
+            let w_ek = pack[2 * nmode_per_q + m] // ε_k    block 2
+            let w_ekq = pack[3 * nmode_per_q + m]// ε_{k+q} block 3
+            omega_qnu.push(w_om)
+            g2.push(w_g2 * wq)                   // fold MP weight into g2 (linear)
+            eps_k.push(w_ek)
+            eps_kq.push(w_ekq)
+            m = m + 1
+        }
+        iq = iq + 1
+    }
+
+    // weight=1.0 since the MP star weight is already folded into g2 above.
+    return qforge_a2f_from_elph(eps_k, eps_kq, g2, omega_qnu, e_fermi, n_ef,
+                               omega_grid, 1.0, sigma_el, sigma_ph)
+}
+
+// ── multi-q λ = 2∫α²F/ω from the q-mesh-assembled α²F (reuse L2) ─────────────
+//
+// Thin closure of the q-mesh assembler with the verified L2 moment integrator.
+// Returns λ; −1.0 on a malformed mesh / assembler sentinel (propagates upward).
+pub fn qforge_metallic_lambda_mesh(grid: MpGrid, provider, nmode_per_q: int,
+                                   e_fermi: float, n_ef: float,
+                                   omega_grid: [float],
+                                   sigma_el: float, sigma_ph: float) -> float {
+    let a2f = qforge_metallic_a2f_mesh(grid, provider, nmode_per_q, e_fermi,
+                                       n_ef, omega_grid, sigma_el, sigma_ph)
+    if len(a2f) < 2 { return -1.0 }
+    let m = eliashberg_moments_from_a2f(omega_grid, a2f)
+    return m[0]
+}
+
+// MetallicA2fResult — the bundle a q-mesh el-ph assembly yields: λ, ω_log, and
+// the assembled α²F so a caller can audit it against a QE α²F. ok==0 (err set,
+// λ/ω_log = -1.0) on a malformed mesh / provider / assembler sentinel.
+pub struct MetallicA2fResult {
+    ok:        int,
+    err:       str,
+    lambda:    float,
+    omega_log: float,
+    a2f:       [float]
+}
+
+fn _metallic_sentinel(err: str) -> MetallicA2fResult {
+    return MetallicA2fResult {
+        ok: 0, err: err, lambda: -1.0, omega_log: -1.0, a2f: []
+    }
+}
+
+// ── bundled entry: q-mesh + provider → {λ, ω_log, α²F} ──────────────────────
+//
+// The one-call production form: generate-and-sweep the q-mesh, assemble the
+// multi-q α²F, integrate to (λ, ω_log). Surfaces the sentinel as ok==0 with an
+// explicit `err` (not a silent zero) so a malformed mesh / provider is honest.
+pub fn qforge_metallic_a2f(grid: MpGrid, provider, nmode_per_q: int,
+                           e_fermi: float, n_ef: float, omega_grid: [float],
+                           sigma_el: float, sigma_ph: float) -> MetallicA2fResult {
+    let a2f = qforge_metallic_a2f_mesh(grid, provider, nmode_per_q, e_fermi,
+                                       n_ef, omega_grid, sigma_el, sigma_ph)
+    if len(a2f) < 2 {
+        return _metallic_sentinel("q-mesh assembler returned malformed sentinel")
+    }
+    let m = eliashberg_moments_from_a2f(omega_grid, a2f)
+    let lam = m[0]
+    if lam <= 0.0 {
+        return _metallic_sentinel("non-positive lambda from q-mesh a2f")
+    }
+    return MetallicA2fResult {
+        ok: 1, err: "", lambda: lam, omega_log: m[1], a2f: a2f
+    }
+}
