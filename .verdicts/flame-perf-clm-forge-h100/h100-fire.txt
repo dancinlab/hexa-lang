@@ -1,0 +1,36 @@
+=== CLM forge GPU H100 fire — clm_large.hexa (d768/L12/E12 = 44.68M) ===
+pod: runpod 60miju3hm831f8 (H100 80GB HBM3, nvcc 12.4, cuBLAS 12.4) — teardown confirmed, billing stopped.
+build: local ~/.hx/src runtime shipped (public repo .c-graduated runtime.c absent);
+  nvcc -x cu -DHEXA_CUDA runtime_cuda.c (bf16 kernels) + gcc clm_large.c runtime.c -lcuda -lcublas -lcudart.
+
+--- F-FLAME-CLM-LARGE-RUN (clm_out.log, verbatim) ---
+clm_large — CLMConvMoE LARGE rung d768/L12/E12 = 44.68M (real config run)
+  n_params = 44678668 (expect 44,678,668 for d768/L12/E12)
+  step 1  CE = 4.81414
+  step 4 CE = 0.0132543
+  loss0 = 4.81414  lossF = 0.0132543
+F-FLAME-CLM-LARGE-RUN = 1
+PASS — LARGE rung (44.68M) builds + trains + descends on hexa-native stack
+=> 🟢 GREEN (CUDA build, descent preserved)
+
+--- F-CLM-CUBLAS-ENGAGED (cublas_trace.log) ---
+108 real [CUBLAS-DGEMM] calls fired (NOT a silent farr_matmul CPU fallback):
+  100× M=4 K=2304 N=768   (d768 trunk convs; im2col Kdim=Cin*K=768*3=2304)
+  4×   M=4 K=768  N=256   (readout)
+  4×   M=4 K=768  N=12    (MoE router)
+dim-gate M*K>8192 trips for d768 conv (4*2304=9216) → routes to RFC-040 cuBLAS Dgemm.
+=> 🟢 GREEN (forge matmul routing functionally verified on H100)
+
+--- F-RFC046-GPU-UTILIZATION (util.log / util_big.log) ---
+peak GPU util = 1% (T=4, 50ms sampling) / 4% (T=512, 100ms sampling). threshold >50%.
+=> 🔴 RED — honest negative.
+root cause: forward-only-partial-GPU + host-only backward (by design: clm_large "Backward stays
+host") + small T. Each Dgemm is 4x2304x768 (~14 MFLOP, microseconds); wall is dominated by host
+FP64 scalar (im2col gather, GN/GELU/MoE elementwise, full backward). Larger T just makes O(T^2)
+host loops dominate harder. util GREEN needs backward forge (Phase-4 bwd-forge) + far larger batch*T.
+
+prior evidence: self/cuda/PHASE_D_H100_EVIDENCE.md — runtime_cuda.c TU alone hit 51.24 TFLOPS
+FP64 cuBLAS Dgemm (76% H100 peak), Dgemm vs CPU ~2e-9. cuBLAS path itself proven; gap = host residual.
+
+raw logs in sibling files: clm_out.log clm_trace_out.log cublas_trace.log util.log util_big.log
+big_out.log build4.log
