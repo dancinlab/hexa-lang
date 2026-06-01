@@ -1,0 +1,104 @@
+// ════════════════════════════════════════════════════════════════════════════
+//  flame_expert_stream_test.hexa — selftest for expert_stream_lib (AKD1000 paging).
+//
+//  FLAME-PERF P5 AXIS1 falsifier (pre-registered):
+//    F-FLAME-EXPERT-STREAM  streaming expert combine RUNS to completion, its
+//                           output is byte-identical to the resident-whole combine,
+//                           AND the resident-param high-water mark NEVER exceeds the
+//                           AKD1000 envelope (1.2M) while the total expert bank is
+//                           >> that envelope (LARGE-rung weights + paged output).
+//
+//  HONESTY (g63): the AKD1000 chip is physical and ABSENT here. The bound proven
+//  is a COUNTING property (max-resident <= cap) over the streaming glue — it is
+//  hardware-independent and holds by construction. Real on-chip placement of the
+//  loaded shard is DEFERRED. This is the verifiable (host-closeable) half.
+//
+//  Run: hexa run stdlib/flame/flame_expert_stream_test.hexa
+// ════════════════════════════════════════════════════════════════════════════
+
+use "stdlib/flame/tensor_lib"
+use "stdlib/flame/moe_lib"
+use "stdlib/flame/expert_stream_lib"
+
+// Two tiers of "total >> resident" reported by the test:
+//   (a) WEIGHT bank   = E * d * d * K   — the off-chip expert weights (LARGE rung)
+//   (b) OUTPUT stream = E * T * C        — the per-expert activations we actually
+//                                          page through the resident buffer here.
+// The streaming COUNTER bounds resident <= cap for the OUTPUT stream we run; the
+// WEIGHT bank number documents that even a single LARGE expert (1.77M) exceeds the
+// 1.2M chip, which is WHY paging is mandatory (the shard granularity carries over).
+
+fn main() {
+    println("flame_expert_stream_test — AKD1000 expert-shard streaming (FLAME-PERF P5 AXIS1)")
+
+    let cap = es_resident_cap()    // 1,200,000 resident envelope
+
+    // ── LARGE-rung weight bank (documents total >> resident) ────────────────
+    let d = 768; let K = 3; let E = 12
+    let dd = d * d * K                       // 1,769,472 — ONE expert > cap
+    let wbank = E * dd                       // 21,233,664 — full bank >> cap
+    println("  LARGE rung: 1 expert weights = " + to_string(dd) + " params (cap = " + to_string(cap) + ")")
+    println("  full expert bank E*d*d*K = " + to_string(wbank) + " params (>> cap)")
+    let one_expert_over = if dd > cap { 1 } else { 0 }
+    println("  single-expert-over-cap = " + to_string(one_expert_over) + " (paging mandatory)")
+
+    // ── Streaming-combine run: page a per-expert output block bigger than cap ─
+    // Choose T*C so the per-expert output block STRICTLY exceeds the cap, forcing
+    // genuine multi-shard paging (not a degenerate 1-shard pass). T*C = 2,500,000
+    // > 1,200,000 → 3 shards per expert. With ES experts the total output stream
+    // is ES * T * C, vastly larger than what is ever resident at once.
+    let T = 2500; let C = 1000; let ES = 4
+    let block = T * C                        // 2,500,000 per-expert output > cap
+    let total_stream = ES * block            // 10,000,000 streamed, never resident
+    let nsh = es_shard_count(block, cap)
+    println("  stream cfg: T=" + to_string(T) + " C=" + to_string(C) + " E=" + to_string(ES))
+    println("  per-expert output block = " + to_string(block) + " params (shards = " + to_string(nsh) + ")")
+    println("  total output stream = " + to_string(total_stream) + " params (>> cap)")
+
+    let probs = t_zeros(T * ES); t_fill_lcg(probs, T * ES, 7, 0.5)
+    let ex_out = t_zeros(ES * block); t_fill_lcg(ex_out, ES * block, 99, 0.4)
+
+    // reference (resident-whole) combine
+    let y_ref = t_zeros(block)
+    es_combine_whole(probs, ex_out, y_ref, T, ES, C)
+
+    // streaming combine with a resident counter
+    let y_str = t_zeros(block)
+    let st = es_state_new(cap)
+    es_combine_stream(probs, ex_out, y_str, st, T, ES, C, cap)
+
+    // ── (1) streaming RAN (we got here) + (2) byte-eq vs whole ──────────────
+    let mut byte_eq = 1
+    let mut i = 0
+    while i < block {
+        if t_get(y_ref, i) != t_get(y_str, i) { byte_eq = 0 }
+        i = i + 1
+    }
+
+    // ── (3) resident bound: high-water never exceeded cap ───────────────────
+    let hw = es_high_water(st)
+    let bound_ok = es_bound_ok(st)
+    println("  resident high-water = " + to_string(hw) + " params (cap = " + to_string(cap) + ")")
+    println("  resident-now after run = " + to_string(es_resident_now(st)) + " (evicted)")
+
+    // ── (4) total >> resident ───────────────────────────────────────────────
+    let total_over = if total_stream > hw { 1 } else { 0 }
+
+    println("F-FLAME-EXPERT-STREAM-RAN     = 1")
+    println("F-FLAME-EXPERT-STREAM-BYTEEQ  = " + to_string(byte_eq))
+    println("F-FLAME-EXPERT-STREAM-BOUND   = " + to_string(bound_ok))
+    println("F-FLAME-EXPERT-STREAM-TOTAL>R = " + to_string(total_over))
+
+    if byte_eq == 1 {
+        if bound_ok == 1 {
+            if total_over == 1 {
+                if one_expert_over == 1 {
+                    println("PASS 4/4 — streaming glue runs, max-resident " + to_string(hw)
+                            + " <= " + to_string(cap) + " while total " + to_string(total_stream) + " >> resident")
+                    return
+                }
+            }
+        }
+    }
+    println("FAIL")
+}

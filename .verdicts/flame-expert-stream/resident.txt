@@ -1,0 +1,14 @@
+flame_expert_stream_test — AKD1000 expert-shard streaming (FLAME-PERF P5 AXIS1)
+  LARGE rung: 1 expert weights = 1769472 params (cap = 1200000)
+  full expert bank E*d*d*K = 21233664 params (>> cap)
+  single-expert-over-cap = 1 (paging mandatory)
+  stream cfg: T=2500 C=1000 E=4
+  per-expert output block = 2500000 params (shards = 3)
+  total output stream = 10000000 params (>> cap)
+  resident high-water = 1200000 params (cap = 1200000)
+  resident-now after run = 0 (evicted)
+F-FLAME-EXPERT-STREAM-RAN     = 1
+F-FLAME-EXPERT-STREAM-BYTEEQ  = 1
+F-FLAME-EXPERT-STREAM-BOUND   = 1
+F-FLAME-EXPERT-STREAM-TOTAL>R = 1
+PASS 4/4 — streaming glue runs, max-resident 1200000 <= 1200000 while total 10000000 >> resident
