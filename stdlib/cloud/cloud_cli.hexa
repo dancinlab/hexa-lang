@@ -18,6 +18,7 @@ use "stdlib/cloud/pods_local"
 use "stdlib/cloud/parallel_audit"
 use "stdlib/cloud/providers_catalog"
 use "stdlib/cloud/alive"
+use "stdlib/cloud/api"
 use "stdlib/sys"
 
 // _cloud_help_render_roster — render the verb usage block by ITERATING the
@@ -2072,7 +2073,7 @@ fn main() {
     while i < len(av) {
         let t = av[i]
         if si < 0 {
-            if t == "rent" || t == "up" || t == "rm" || t == "down" || t == "destroy" || t == "reboot" || t == "list" || t == "status" || t == "preflight" || t == "watchdog" || t == "run" || t == "exec" || t == "nohup" || t == "fire" || t == "poll" || t == "tail" || t == "watch" || t == "ssh-port" || t == "resolve" || t == "alive" || t == "probe" || t == "copy-to" || t == "copy-from" || t == "orphans" || t == "reconcile" || t == "reap" || t == "idle-reap" || t == "adopt" || t == "attribute" || t == "forget" || t == "dft-run" || t == "parallel-audit" || t == "pods" || t == "dispatch" || t == "providers" || t == "help" || t == "--help" || t == "-h" || t == "version" || t == "--version" || t == "-v" {
+            if t == "rent" || t == "up" || t == "rm" || t == "down" || t == "destroy" || t == "reboot" || t == "list" || t == "status" || t == "preflight" || t == "watchdog" || t == "run" || t == "exec" || t == "nohup" || t == "fire" || t == "poll" || t == "tail" || t == "watch" || t == "ssh-port" || t == "resolve" || t == "alive" || t == "probe" || t == "copy-to" || t == "copy-from" || t == "orphans" || t == "reconcile" || t == "reap" || t == "idle-reap" || t == "adopt" || t == "attribute" || t == "forget" || t == "api" || t == "dft-run" || t == "parallel-audit" || t == "pods" || t == "dispatch" || t == "providers" || t == "help" || t == "--help" || t == "-h" || t == "version" || t == "--version" || t == "-v" {
                 si = i
                 sub = t
             }
@@ -2644,6 +2645,35 @@ fn main() {
             } }
         }
         exit(alive_run(ids, provider, as_json))
+    }
+    if sub == "api" {
+        // UNIVERSAL authenticated REST passthrough (api.hexa) — makes hexa
+        // cloud a full substitute for the provider REST API so cloud-guard
+        // (commons g8) never strands an unwrapped operation. Positional shape:
+        //   cloud api <provider> <METHOD> <endpoint> [--data JSON] [--json] [--allow-mutate]
+        // GET / vast-search pass freely; a registry-MUTATING call is REFUSED
+        // and redirected to rent/rm unless --allow-mutate (then auto-reconcile).
+        let as_json = _has_flag(av, si + 1, "--json")
+        let allow_mutate = _has_flag(av, si + 1, "--allow-mutate")
+        let data = _flag_val(av, si + 1, "--data", "")
+        let mut pos = []
+        let mut ai = si + 1
+        while ai < len(av) {
+            let t = av[ai]
+            if t == "--data" {
+                ai = ai + 2
+            } else { if t == "--json" || t == "--allow-mutate" {
+                ai = ai + 1
+            } else {
+                pos.push(t)
+                ai = ai + 1
+            } }
+        }
+        if len(pos) < 3 {
+            println("[cloud] api: usage — cloud api <vast|runpod> <GET|POST|PUT|DELETE> <endpoint> [--data JSON] [--json] [--allow-mutate]")
+            exit(2)
+        }
+        exit(api_run(pos[0], pos[1], pos[2], data, as_json, allow_mutate))
     }
     if sub == "orphans" {
         // List tracked pods, flagging stale ones (created > N hours ago and

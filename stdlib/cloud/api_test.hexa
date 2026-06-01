@@ -1,0 +1,141 @@
+// @ci_gate — pure · network-free · deterministic (stdlib_selftest_aggregate --ci-gate)
+// stdlib/cloud/api_test.hexa — falsifier suite for `hexa cloud api`.
+//
+// The helpers in api.hexa (_api_base / _api_resolve_url / _api_norm_method /
+// _api_is_mutating / _api_exit_for_status) are `_`-prefixed and private, so
+// this MIRRORS the pure logic (mirror-test pattern — see alive_test.hexa /
+// cloud_rm_test.hexa). KEEP IN SYNC with api.hexa. Every assertion is on a
+// pure string/int transform — no network, no creds, no vastai/runpodctl/curl.
+//
+// Falsifiers (@L5):
+//   F-API-BASE          — provider → REST base URL (vast/runpod), "" unknown
+//   F-API-URL-JOIN      — endpoint joined onto base (leading-/ tolerant)
+//   F-API-URL-ABS       — a full https:// endpoint passes through verbatim
+//   F-API-METHOD-NORM   — method upper-cased + validated; bad method → ""
+//   F-API-MUTATE-GET    — GET is read-only (never refused)
+//   F-API-MUTATE-POST-SEARCH — POST to bundles/search is read-only (vast query)
+//   F-API-MUTATE-POST-CREATE — POST create is MUTATING (refused w/o --allow-mutate)
+//   F-API-MUTATE-DELETE — DELETE is MUTATING
+//   F-API-EXIT-2XX      — 2xx → exit 0
+//   F-API-EXIT-NON2XX   — 4xx→4 · 5xx→5 · transport(0)→255 (never faked 0)
+//   F-API-MISSING-CRED  — empty key → MISSING-CRED + exit 255 (mirror)
+//
+// The auth-header injection + non-2xx-verbatim + missing-cred-refusal RUNTIME
+// paths are exercised by the live api_run flow; here we assert the PURE
+// decision functions those paths consume (auth header is `Bearer <key>` built
+// in _api_request; the empty-key guard returns 255 before any request).
+//
+// Run:  hexa run stdlib/cloud/api_test.hexa
+// PASS: exits 0, prints "api_test PASS".
+
+// ── mirrors of api.hexa pure helpers — KEEP IN SYNC ──
+
+fn _base(provider: str) -> str {
+    if provider == "vast" { return "https://console.vast.ai/api/v0" }
+    if provider == "runpod" { return "https://rest.runpod.io/v1" }
+    return ""
+}
+
+fn _resolve_url(provider: str, endpoint: str) -> str {
+    if endpoint.index_of("http://") == 0 || endpoint.index_of("https://") == 0 {
+        return endpoint
+    }
+    let base = _base(provider)
+    if len(base) == 0 { return "" }
+    let mut ep = endpoint
+    if len(ep) == 0 { return base }
+    if ep.substring(0, 1) != "/" { ep = "/" + ep }
+    return base + ep
+}
+
+fn _norm_method(m: str) -> str {
+    let u = m.to_upper()
+    if u == "GET" || u == "POST" || u == "PUT" || u == "DELETE" { return u }
+    return ""
+}
+
+fn _is_mutating(method: str, endpoint: str) -> int {
+    let m = _norm_method(method)
+    if m == "GET" { return 0 }
+    let ep = endpoint.to_lower()
+    if m == "POST" {
+        if ep.index_of("bundles") >= 0 || ep.index_of("search") >= 0 { return 0 }
+    }
+    return 1
+}
+
+fn _exit_for_status(status: int) -> int {
+    if status >= 200 && status < 300 { return 0 }
+    if status >= 400 && status < 500 { return 4 }
+    if status >= 500 && status < 600 { return 5 }
+    return 255
+}
+
+// _missing_cred_exit — mirror of the empty-key guard in api_run: an empty
+// resolved key → MISSING-CRED + exit 255 (NEVER a guessed call; @L3/d6).
+fn _missing_cred_exit(key: str) -> int {
+    if len(key) == 0 { return 255 }
+    return 0
+}
+
+fn _ck(name: str, got: str, want: str) {
+    if got != want {
+        println("  FAIL: " + name + " got '" + got + "' want '" + want + "'")
+        exit(1)
+    }
+}
+fn _cki(name: str, got: int, want: int) {
+    if got != want {
+        println("  FAIL: " + name + " got " + to_string(got) + " want " + to_string(want))
+        exit(1)
+    }
+}
+
+fn main() {
+    // ── provider base URLs ──
+    _ck("vast base",   _base("vast"),   "https://console.vast.ai/api/v0")
+    _ck("runpod base", _base("runpod"), "https://rest.runpod.io/v1")
+    _ck("unknown base → empty", _base("aws"), "")
+
+    // ── url join (leading-/ tolerant) ──
+    _ck("vast join no-slash",  _resolve_url("vast", "instances"),  "https://console.vast.ai/api/v0/instances")
+    _ck("vast join with-slash", _resolve_url("vast", "/instances"), "https://console.vast.ai/api/v0/instances")
+    _ck("runpod join",         _resolve_url("runpod", "pods"),     "https://rest.runpod.io/v1/pods")
+    _ck("empty endpoint → base", _resolve_url("vast", ""),         "https://console.vast.ai/api/v0")
+    // a full https:// endpoint passes through verbatim (covers a host the base misses)
+    _ck("absolute url verbatim", _resolve_url("vast", "https://console.vast.ai/api/v0/instances/123/"),
+        "https://console.vast.ai/api/v0/instances/123/")
+
+    // ── method normalize ──
+    _ck("get lower → GET",  _norm_method("get"),    "GET")
+    _ck("post → POST",      _norm_method("post"),   "POST")
+    _ck("put → PUT",        _norm_method("PUT"),    "PUT")
+    _ck("delete → DELETE",  _norm_method("Delete"), "DELETE")
+    _ck("patch unsupported → empty", _norm_method("PATCH"), "")
+    _ck("garbage method → empty",    _norm_method("frob"),  "")
+
+    // ── @L4 mutating classification ──
+    _cki("GET read-only",            _is_mutating("GET", "/instances"),         0)
+    _cki("GET-lc read-only",         _is_mutating("get", "/instances"),         0)
+    _cki("POST bundles search free", _is_mutating("POST", "/bundles/"),         0)
+    _cki("POST search free",         _is_mutating("POST", "/search/asks/"),     0)
+    _cki("POST create MUTATING",     _is_mutating("POST", "/asks/123/"),        1)
+    _cki("PUT MUTATING",             _is_mutating("PUT", "/instances/123/"),    1)
+    _cki("DELETE MUTATING",          _is_mutating("DELETE", "/instances/123/"), 1)
+
+    // ── @L5 status → exit map (non-2xx NEVER faked into 0) ──
+    _cki("200 → 0",   _exit_for_status(200), 0)
+    _cki("204 → 0",   _exit_for_status(204), 0)
+    _cki("400 → 4",   _exit_for_status(400), 4)
+    _cki("401 → 4",   _exit_for_status(401), 4)
+    _cki("404 → 4",   _exit_for_status(404), 4)
+    _cki("500 → 5",   _exit_for_status(500), 5)
+    _cki("502 → 5",   _exit_for_status(502), 5)
+    _cki("transport 0 → 255", _exit_for_status(0), 255)
+
+    // ── @L3 missing-cred guard ──
+    _cki("empty key → 255",  _missing_cred_exit(""),          255)
+    _cki("present key → 0",   _missing_cred_exit("sk-live-x"), 0)
+
+    println("api_test PASS")
+}

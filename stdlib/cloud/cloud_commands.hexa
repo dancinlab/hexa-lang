@@ -79,6 +79,9 @@ fn cloud_commands() -> [CloudCmd] {
         CloudCmd { name: "preflight", group: "manage",
             args: "--params N [--gpu KEY] [opts...]  |  --kind dft-phonon --atoms N --nq M [opts...]",
             summary: "closed-form GPU mem-budget / DFPT walltime check (no pod/ssh)" },
+        CloudCmd { name: "api", group: "manage",
+            args: "<vast|runpod> <GET|POST|PUT|DELETE> <endpoint> [--data JSON] [--json] [--allow-mutate]",
+            summary: "UNIVERSAL authenticated REST passthrough — makes hexa cloud a full substitute for the provider API; GET/search free, a registry-MUTATING call is REFUSED→use rent/rm (or --allow-mutate + auto-reconcile); non-2xx surfaced verbatim" },
 
         // ── exec ───────────────────────────────────────────────────────
         CloudCmd { name: "run", group: "exec",
