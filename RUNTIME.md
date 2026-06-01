@@ -5333,3 +5333,101 @@ runtime hexa-native 화 거리 = ~13,737 lines × 평균 5-10 lines/fn = 잔여 
 frontier 는 OPEN — physical 천장 (runtime hexa-native + zero-libm + zero-libc) 까지 도달 가능 · time-bounded 아님. 본 세션 종료는 cycle pause.
 
 `feedback-closure-is-physical-limit` 적용: closure = approaching limit, not checkbox. 이 세션 = -1.56% · 5 lane closed · next-tier spec'd.
+
+## 2026-06-01 — bucket-B (syscall) / bucket-C (phase-H) reconnaissance — terminal closed-negative map
+
+Loop RUNTIME-lane recon. Bucket A (`self/runtime_pure.hexa` pure-fn) already
+retired at its carrier-path wall (the prior bucket-A addendum). This round audits the
+other two open RUNTIME buckets — **(B) syscall residuals** and **(C) phase-H backend
+flip** — to find any item that is a concrete `.hexa` move needing NEITHER the
+HexaVal carrier/codegen wall NOR a sign/pool gate. Each residual is classified into
+one of four categories:
+
+- **(i) grounded** — a clean `.hexa` move, no carrier wall, no sign gate
+- **(ii) carrier-wall-blocked** — needs the codegen type-erasure / HexaVal carrier path
+- **(iii) phase-H backend flip** — architectural (HEXA_BACKEND=native runtime FLOOR)
+- **(iv) sign/pool-gated** — requires a heavy `cc --regen` rebuild behind `! sidecar sign local`
+
+**Result: ZERO category-(i) items. Both buckets are terminal closed-negative.** No
+port was forced (g5/g63). Cross-ref: `domains/HEXA-SELFHOST+.md` common-wall catalog
+items (1)+(4) = the codegen emit type-erasure wall (HexaVal carrier), (2)+(5) = the
+`cc --regen` sign/pool gate.
+
+### Bucket B — syscall residuals → ALREADY CLOSED (no open syscall-port item)
+
+The framed "~17 residual syscalls" lane resolves to the **Linux self-host arch-gate
+17-fn set** (`read · write · open · close · mkdir · dup2 · lseek · select · poll ·
+nanosleep · wait4 · getpid · getuid · kill · fcntl · ioctl · stat · fstat · mmap ·
+gettimeofday · exit`), tracked in `RUNTIME.log.md` 2026-05-25T13:30Z. That lane was
+**CLOSED 2026-05-27** — every `HXLCL_SYS_*` callsite guarded; both `bootstrap
+(linux-arm64)` and `bootstrap (linux-x86_64)` GitHub Actions SUCCESS (run
+#26470523969). At HEAD, `aprime_cc` measures **0 undefined externs** — every syscall
+is inline `svc #0x80`, not even a stub (north-star MET, #1058/#1059).
+
+The only syscall-touching code that remains FFI is the interpreter-side HYBRID I/O in
+`self/runtime_pure.hexa` (`rt_read_file` / `rt_write_file` / `rt_write_bytes` /
+`rt_read_file_bytes` / `rt_exec` / `rt_exec_with_status`) backed by the minimal-FFI
+block (`__c_popen/pclose/fgets/fopen/fclose/fread/fwrite/fseek/ftell`) — these are the
+bucket-A I/O residuals, classified BLOCKED-(iv)/(iii) (syscall delegation; cannot be
+pure hexa without the carrier/syscall floor). No new syscall is on FFI awaiting a
+pure-hexa port.
+
+| bucket-B item | category | reason |
+|---------------|----------|--------|
+| Linux arch-gate 17-fn (`read`…`exit`) | — CLOSED | guarded + both Linux CI bootstrap SUCCESS (2026-05-27); not reopenable as a port |
+| `aprime_cc` syscall externs | — CLOSED | 0 undefined externs; every syscall inline `svc #0x80` |
+| interp HYBRID I/O 6 fns (`rt_read_file`…`rt_exec_with_status`) | (iii)/(iv) | syscall-backed builtin delegation — irreducible carrier/syscall floor (bucket-A residual) |
+| minimal-FFI block (`__c_popen`…`__c_ftell`) | (iv) | libc stdio behind the HYBRID I/O; raw fd/popen floor |
+
+### Bucket C — phase-H backend flip → all residuals (ii)/(iii)/(iv)
+
+Phase-H splits cleanly into TWO sub-lanes with very different status:
+
+**(C-1) hexa-native LINKER (`tool/hexa_ld.hexa`) — macOS code residual = ZERO.**
+The five increments closed BRANCH26 + PAGE21/PAGEOFF12 (ADD/LDR) + ARM64_RELOC_ADDEND
++ full multi-section layout (`__text`/`__const`/`__cstring`/`__data`/`__bss`) + dyld
+function import (`__stubs`+`__got`+chained-fixups) + dyld DATA import (GOT_LOAD
+PAGE21/PAGEOFF12). The once-planned **multi-dylib ordinal** boss is a documented
+**🔴 CLOSED-NEGATIVE** (2026-05-27): modern macOS re-exports libm/libc through the
+single `libSystem.B.dylib` umbrella (ordinal 1), so the existing single-dylib linker
+already covers all 161 standard undefineds. The doc states it verbatim: phase-H
+linker is "**macOS 기준 코드 잔여 없음**". Future generalizations (multi-dylib for
+3rd-party frameworks, lazy-bind, scattered reloc, TLV thread-locals) are NOT RUNTIME
+blockers — they only matter for a non-libSystem 3rd-party dylib (e.g. Metal/CUDA).
+
+**(C-2) HEXA_BACKEND=native runtime FLOOR — the actual wall.** `HEXA_BACKEND=native`
+is 27/27 sound for USER code; the residual is the runtime FLOOR: the HexaVal
+tagged-union repr + arena + GC (~240 fns, `RUNTIME.floor.md` F1) must be self-emitted
+as machine code (no C struct, no C-source memory primitives). This is exactly the
+codegen type-erasure / HexaVal carrier wall (common-wall catalog (1)+(4)). It is not a
+`.hexa` source move — it is a codegen-emit change, and verifying it requires the heavy
+`cc --regen` fixpoint build behind the sign/pool gate (common-wall (2)+(5)).
+
+| bucket-C item | category | reason |
+|---------------|----------|--------|
+| multi-dylib ordinal mapping | — CLOSED-NEG | macOS re-exports via libSystem umbrella; not a blocker (2026-05-27 falsifier) |
+| linker reloc set (BRANCH26/PAGE21/PAGEOFF12/ADDEND/GOT_LOAD) | — CLOSED | all 5 increments RUN-verified; macOS linker code residual = ZERO |
+| full multi-section layout (`__text`…`__bss`) | — CLOSED | inc3 RUN-verified ("ms ok" exit7) |
+| lazy-bind / scattered reloc / TLV | (iii) | future generalization, not a RUNTIME completion blocker |
+| `hexaval-repr-emit` / `runtime-primitive-emit` (B9.6) | (ii)+(iv) | HexaVal repr/arena/GC self-emit = codegen carrier wall + `cc --regen` sign-gated verify |
+| HEXA_BACKEND flip runtime FLOOR (repr/arena/GC ~240 fn) | (ii)+(iii) | codegen emit wall (carrier) AND architectural (multi-session) |
+| boot `.s` lowering (rp2040/stm32) — RUNTIME.flip B9.1 | (iii) | RFC-063/064 vector-table codegen lowering lane; embedded-target architectural, not in tree |
+
+### Disposition: NO grounded port available; deliverable is the MAP
+
+Every bucket-B item is either already CLOSED (Linux arch-gate, aprime_cc externs) or a
+syscall/carrier floor (HYBRID I/O). Every bucket-C item is either already CLOSED
+(linker reloc + multi-section + multi-dylib-negative) or the HexaVal carrier wall +
+architectural backend flip + sign-gated `cc --regen`. **There is NO category-(i)
+item** — no clean `.hexa` move that avoids both the carrier/codegen wall and the sign
+gate. No marginal port was forced; nothing was marked ported because nothing is
+cleanly portable this round. This is a valid terminal (closed-negative) result.
+
+Falsifier (how to reopen): bucket B reopens if a NEW syscall appears on FFI awaiting a
+pure-hexa/svc-trap port (not delegated to a syscall floor). Bucket C reopens if (a) the
+codegen type-erasure / HexaVal carrier wall is lifted at the emit layer (then
+`hexaval-repr-emit` becomes grounded), OR (b) a 3rd-party non-libSystem dylib enters
+the link (then multi-dylib ordinal reopens as grounded linker `.hexa` work), OR (c) the
+`cc --regen` sign/pool gate is opened in a verification window. Otherwise the next
+RUNTIME unlock is strictly the carrier-path / phase-H backend-flip tier — out of scope
+for any single clean `.hexa` port.
