@@ -19,6 +19,7 @@ use "stdlib/cloud/parallel_audit"
 use "stdlib/cloud/providers_catalog"
 use "stdlib/cloud/alive"
 use "stdlib/cloud/api"
+use "stdlib/cloud/provider_cli"
 use "stdlib/sys"
 
 // _cloud_help_render_roster — render the verb usage block by ITERATING the
@@ -2073,7 +2074,7 @@ fn main() {
     while i < len(av) {
         let t = av[i]
         if si < 0 {
-            if t == "rent" || t == "up" || t == "rm" || t == "down" || t == "destroy" || t == "reboot" || t == "list" || t == "status" || t == "preflight" || t == "watchdog" || t == "run" || t == "exec" || t == "nohup" || t == "fire" || t == "poll" || t == "tail" || t == "watch" || t == "ssh-port" || t == "resolve" || t == "alive" || t == "probe" || t == "copy-to" || t == "copy-from" || t == "orphans" || t == "reconcile" || t == "reap" || t == "idle-reap" || t == "adopt" || t == "attribute" || t == "forget" || t == "api" || t == "dft-run" || t == "parallel-audit" || t == "pods" || t == "dispatch" || t == "providers" || t == "help" || t == "--help" || t == "-h" || t == "version" || t == "--version" || t == "-v" {
+            if t == "rent" || t == "up" || t == "rm" || t == "down" || t == "destroy" || t == "reboot" || t == "list" || t == "status" || t == "preflight" || t == "watchdog" || t == "run" || t == "exec" || t == "nohup" || t == "fire" || t == "poll" || t == "tail" || t == "watch" || t == "ssh-port" || t == "resolve" || t == "alive" || t == "probe" || t == "copy-to" || t == "copy-from" || t == "orphans" || t == "reconcile" || t == "reap" || t == "idle-reap" || t == "adopt" || t == "attribute" || t == "forget" || t == "api" || t == "provider-cli" || t == "dft-run" || t == "parallel-audit" || t == "pods" || t == "dispatch" || t == "providers" || t == "help" || t == "--help" || t == "-h" || t == "version" || t == "--version" || t == "-v" {
                 si = i
                 sub = t
             }
@@ -2674,6 +2675,44 @@ fn main() {
             exit(2)
         }
         exit(api_run(pos[0], pos[1], pos[2], data, as_json, allow_mutate))
+    }
+    if sub == "provider-cli" {
+        // Proxy the provider's OWN cli (vastai|runpodctl) THROUGH the guarded
+        // path with creds injected (provider_cli.hexa) — keeps CLI-only
+        // conveniences reachable without an un-guarded raw `vastai`. Shape:
+        //   cloud provider-cli <vast|runpod> [--allow-mutate] -- <args...>
+        // Everything AFTER `--` is the verbatim provider argv; a registry-
+        // mutating subcommand is refused unless --allow-mutate (then reconcile).
+        let allow_mutate = _has_flag(av, si + 1, "--allow-mutate")
+        // first positional after the verb (skipping flags) = the provider.
+        let mut provider = ""
+        let mut sep = -1
+        let mut ai = si + 1
+        while ai < len(av) {
+            let t = av[ai]
+            if t == "--" {
+                sep = ai
+                ai = len(av)
+            } else { if t == "--allow-mutate" {
+                ai = ai + 1
+            } else {
+                if len(provider) == 0 { provider = t }
+                ai = ai + 1
+            } }
+        }
+        let mut pargs = []
+        if sep >= 0 {
+            let mut pi = sep + 1
+            while pi < len(av) {
+                pargs.push(av[pi])
+                pi = pi + 1
+            }
+        }
+        if len(provider) == 0 {
+            println("[cloud] provider-cli: usage — cloud provider-cli <vast|runpod> [--allow-mutate] -- <args...>")
+            exit(2)
+        }
+        exit(provider_cli_run(provider, pargs, allow_mutate))
     }
     if sub == "orphans" {
         // List tracked pods, flagging stale ones (created > N hours ago and

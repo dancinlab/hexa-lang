@@ -82,6 +82,9 @@ fn cloud_commands() -> [CloudCmd] {
         CloudCmd { name: "api", group: "manage",
             args: "<vast|runpod> <GET|POST|PUT|DELETE> <endpoint> [--data JSON] [--json] [--allow-mutate]",
             summary: "UNIVERSAL authenticated REST passthrough — makes hexa cloud a full substitute for the provider API; GET/search free, a registry-MUTATING call is REFUSED→use rent/rm (or --allow-mutate + auto-reconcile); non-2xx surfaced verbatim" },
+        CloudCmd { name: "provider-cli", group: "manage",
+            args: "<vast|runpod> [--allow-mutate] -- <args...>",
+            summary: "proxy the provider's OWN cli (vastai|runpodctl) with creds injected, behind the guard — keeps CLI-only conveniences reachable without raw vastai; MISSING-CLI honest; a registry-MUTATING subcommand is REFUSED→use rent/rm (or --allow-mutate + auto-reconcile)" },
 
         // ── exec ───────────────────────────────────────────────────────
         CloudCmd { name: "run", group: "exec",
