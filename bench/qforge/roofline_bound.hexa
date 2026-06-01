@@ -1,0 +1,58 @@
+// QFORGE-PERF — closed-form roofline bound for the dense H_apply matvec.
+//
+// hexa-native recompute of the arithmetic-intensity + roofline ceiling that
+// governs every ⚡hardware-PR item. Deterministic → g5 verify surface:
+//   hexa verify --verifier-cmd "HEXA_LANG=. hexa run bench/qforge/roofline_bound.hexa" \
+//               --claim "dense H_apply matvec is memory-bound on RTX 5070" \
+//               --expect "VERDICT=MEMORY-BOUND"
+//
+// Inputs are MEASURED constants (no spec-sheet): RTX 5070 achieved-peak from
+// domains/GPU-ROOFLINE.bench.md (ubu-2, 2026-05-30, $0 pool fire).
+//
+// Dense matvec v ↦ H·v at dim n:
+//   FLOPs/matvec      = 2n²              (n² fused multiply-add)
+//   bytes/matvec(fpX) = bX·n² + 2·bX·n ≈ bX·n²   (H streamed, no reuse)
+//   AI(fpX)           = 2n² / (bX·n²) = 2/bX      (n-independent!)
+//     → AI(fp64,b=8) = 0.25 · AI(fp32,b=4) = 0.50 flop/byte
+//
+// Roofline: AI < ridge(=compute_peak/BW) ⇒ MEMORY-BOUND, ceiling = BW·AI.
+
+fn main() {
+    // ── RTX 5070 measured achieved-peak (GPU-ROOFLINE.bench.md) ──
+    let bw_gbs        = 559.52      // HBM STREAM copy, GB/s
+    let fp32_gflops   = 34110.0     // CUDA-core FMA-chain, GFLOP/s
+    let tc_fp16_gflops = 126520.0   // tensor-core cuBLAS HGEMM, GFLOP/s
+
+    // ── kernel arithmetic intensity (n-independent) ──
+    let ai_fp64 = 2.0 / 8.0         // 0.25 flop/byte
+    let ai_fp32 = 2.0 / 4.0         // 0.50 flop/byte
+
+    // ── ridge points (binding-roof crossover) ──
+    let ridge_fp32 = fp32_gflops / bw_gbs        // ~60.96 flop/byte
+    let ridge_tc   = tc_fp16_gflops / bw_gbs     // ~226.1 flop/byte
+
+    // ── memory-bound ceilings = BW · AI ──
+    let ceil_fp64 = bw_gbs * ai_fp64             // ~139.88 GFLOP/s
+    let ceil_fp32 = bw_gbs * ai_fp32             // ~279.76 GFLOP/s
+
+    println("=== QFORGE H_apply dense-matvec roofline (RTX 5070, measured peak) ===")
+    println("AI_fp64 = " + to_string(ai_fp64) + " flop/byte")
+    println("AI_fp32 = " + to_string(ai_fp32) + " flop/byte")
+    println("ridge_fp32 (FP32 CUDA-core) = " + to_string(ridge_fp32) + " flop/byte")
+    println("ridge_tc   (FP16 tensor)    = " + to_string(ridge_tc) + " flop/byte")
+    println("mem-ceiling fp64 = " + to_string(ceil_fp64) + " GFLOP/s")
+    println("mem-ceiling fp32 = " + to_string(ceil_fp32) + " GFLOP/s")
+
+    // ── closed-form verdict ──
+    // memory-bound ⟺ AI < ridge (binding roof = memory). Single GEMV cannot
+    // feed tensor cores because AI(0.5) ≪ ridge_tc(226) — tensor peak is
+    // UNREACHABLE without batching matvecs into a GEMM (raising AI).
+    let mem_bound = ai_fp32 < ridge_fp32
+    let tc_unreachable = ai_fp32 < ridge_tc
+    if mem_bound && tc_unreachable {
+        println("VERDICT=MEMORY-BOUND")          // BW-bound; FLOP/tensor peak irrelevant
+        exit(0)
+    }
+    println("VERDICT=COMPUTE-BOUND")
+    exit(1)
+}

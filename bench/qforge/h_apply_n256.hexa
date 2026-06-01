@@ -1,0 +1,7 @@
+// QFORGE-PERF baseline roofline — n=256 point. `hexa bench` wall surface (g5).
+// FLOPs = 21000·2·256² ; reps sized for ~20 s loop (≫ build/startup).
+use "bench/qforge/h_apply_core"
+fn main() {
+    let cs = qforge_h_apply_bench(256, 21000)
+    println("h_apply n=256 reps=21000 checksum=" + to_string(cs))
+}
