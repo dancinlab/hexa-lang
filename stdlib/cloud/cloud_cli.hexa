@@ -1454,6 +1454,71 @@ fn _down_guard_refuses(id: str, force: int) -> int {
     return 1
 }
 
+// _down_has_running_job — 1 iff the cwd dispatch ledger (pods.json) carries a
+// PENDING (= still-running) job pinned to this pod id. The running-job half of
+// the @L9 pre-teardown surface: tearing down a pod with a live job loses it.
+fn _down_has_running_job(id: str) -> int {
+    let active = pods_local_active_pod_ids()
+    let mut i = 0
+    while i < len(active) {
+        if active[i] == id {
+            return 1
+        }
+        i = i + 1
+    }
+    return 0
+}
+
+// _down_attribution_surface — print the target pod's project · purpose + a
+// running-job check BEFORE any teardown (@L9), so the operator sees WHAT they
+// are about to destroy (the cross-project near-miss + the lost-job hazard).
+// Read-only; never mutates. Returns 1 iff a running job is pinned to the pod
+// (the caller raises the confirm bar). An untracked pod prints a "no
+// attribution" line so the absence is explicit, not silent.
+fn _down_attribution_surface(id: str) -> int {
+    let records = pod_registry_load()
+    let idx = _m5_find(records, id)
+    if idx < 0 {
+        println("[cloud] down: pod " + id + " — no registry attribution (untracked / orphan)")
+    } else {
+        let r = records[idx]
+        let mut proj = r.project
+        if len(proj) == 0 { proj = "⚠unattributed" }
+        let mut purp = r.purpose
+        if len(purp) == 0 { purp = "(no purpose recorded)" }
+        println("[cloud] down: pod " + id + " — project '" + proj + "' · purpose \"" + purp + "\" · provider " + r.provider + " · status " + r.status)
+    }
+    let running = _down_has_running_job(id)
+    if running == 1 {
+        println("[cloud] down: ⚠ a PENDING (running) job is pinned to pod " + id + " in this repo's dispatch ledger — tearing it down LOSES that job.")
+    } else {
+        println("[cloud] down: no PENDING job pinned to pod " + id + " in this repo's dispatch ledger.")
+    }
+    return running
+}
+
+// _down_confirm_gate — the @L9 confirm gate for `down`/`destroy`. Prints the
+// project·purpose + running-job surface, then prompts (default N) unless
+// `force` (--force/--yes). When a running job is pinned, the prompt names it so
+// a careless `y` is harder. Returns 1 = proceed, 0 = cancel.
+fn _down_confirm_gate(id: str, provider: str, force: int) -> int {
+    let running = _down_attribution_surface(id)
+    if force == 1 {
+        return 1
+    }
+    let mut q = "[cloud] down " + id + " (provider=" + provider + "): destroy this pod? [y/N]"
+    if running == 1 {
+        q = "[cloud] down " + id + " (provider=" + provider + ") — a RUNNING job is pinned: destroy anyway? [y/N]"
+    }
+    println(q)
+    let ans = sys_stdin_read_line()
+    if _rm_confirm_yes(ans) == 0 {
+        println("[cloud] down: cancelled (no destroy issued)")
+        return 0
+    }
+    return 1
+}
+
 fn _cloud_down(id: str, provider: str) -> int {
     // M5 — flag the pod STOPPING before issuing teardown, so an
     // agent-crash between here and provider-confirm still leaves an
@@ -2083,7 +2148,7 @@ fn main() {
         // teardown path (default vast). Wires vast_destroy /
         // runpod_terminate + pod_registry_forget.
         if si + 1 >= len(av) {
-            println("[cloud] down: missing <id> — usage: cloud down <id> [--provider vast|runpod]")
+            println("[cloud] down: missing <id> — usage: cloud down <id> [--provider vast|runpod] [--yes|--force]")
             exit(2)
         }
         let id = av[si + 1]
@@ -2095,9 +2160,18 @@ fn main() {
         }
         // Cross-project kill-guard — refuse a teardown of a pod owned by a
         // different project unless --force. (The anima RTSC near-miss fix.)
-        let force = _has_flag(av, si + 2, "--force")
+        let mut force = _has_flag(av, si + 2, "--force")
+        if _has_flag(av, si + 2, "--yes") == 1 {
+            force = 1
+        }
         if _down_guard_refuses(id, force) == 1 {
             exit(3)
+        }
+        // @L9 — surface project·purpose + running-job check, then require
+        // confirmation (default N) unless --force/--yes. Code only; this is the
+        // pre-destroy attribution gate (the wrong-pod / lost-job safety add).
+        if _down_confirm_gate(id, provider, force) == 0 {
+            exit(2)
         }
         exit(_cloud_down(id, provider))
     }
