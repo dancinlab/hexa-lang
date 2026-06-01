@@ -1,0 +1,281 @@
+// HEXA Standard Library — codec/unicode_normalize (UAX #15)
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Unicode normalization NFC / NFD / NFKC / NFKD. Hangul syllables are handled
+// by the algorithmic L/V/T rules (UAX #15 §10.1); everything else comes from
+// the CPython-`unicodedata`-generated tables (unicode_normalize_table.gen.hexa):
+// canonical + compatibility decomposition, combining classes, canonical
+// composition pairs (the compose table is derived via the CPython NFC oracle so
+// composition exclusions are already baked in).
+//
+// Self-contained UTF-8 (string<->codepoint) is inlined — no stdlib/codec/utf8
+// dependency (utf8 references bytes_to_str without importing it).
+
+use "stdlib/codec/unicode_normalize_table.gen"
+
+let _UN_SBASE = 0xAC00
+let _UN_LBASE = 0x1100
+let _UN_VBASE = 0x1161
+let _UN_TBASE = 0x11A7
+let _UN_VCOUNT = 21
+let _UN_TCOUNT = 28
+let _UN_NCOUNT = 588    // VCOUNT * TCOUNT
+let _UN_SCOUNT = 11172  // LCOUNT * NCOUNT
+
+fn _un_hv(c: int) -> int {
+    if c >= 48 && c <= 57 { return c - 48 }
+    if c >= 97 && c <= 102 { return c - 87 }
+    return 0
+}
+
+// parse a 6-hex codepoint at byte offset i of string s.
+fn _un_p6(s: string, i: int) -> int {
+    return _un_hv(s.byte_at(i)) * 1048576 + _un_hv(s.byte_at(i + 1)) * 65536
+        + _un_hv(s.byte_at(i + 2)) * 4096 + _un_hv(s.byte_at(i + 3)) * 256
+        + _un_hv(s.byte_at(i + 4)) * 16 + _un_hv(s.byte_at(i + 5))
+}
+
+// --- table builders (decomposition value = concat of 6-hex decomp cps) ---
+
+fn _un_build_decomp(blob: string) -> map {
+    let mut m: map = {}
+    let n = blob.len()
+    let mut i = 0
+    while i + 8 <= n {
+        let cp = _un_p6(blob, i)
+        let cnt = _un_hv(blob.byte_at(i + 6)) * 16 + _un_hv(blob.byte_at(i + 7))
+        i = i + 8
+        let mut v = ""
+        let mut j = 0
+        while j < cnt { v = v + blob.slice(i, i + 6); i = i + 6; j = j + 1 }
+        m[str(cp)] = v
+    }
+    return m
+}
+
+fn _un_build_ccc() -> map {
+    let mut m: map = {}
+    let n = UN_CCC_BLOB.len()
+    let mut i = 0
+    while i + 8 <= n {
+        let cp = _un_p6(UN_CCC_BLOB, i)
+        let c = _un_hv(UN_CCC_BLOB.byte_at(i + 6)) * 16 + _un_hv(UN_CCC_BLOB.byte_at(i + 7))
+        m[str(cp)] = c
+        i = i + 8
+    }
+    return m
+}
+
+fn _un_build_compose() -> map {
+    let mut m: map = {}
+    let n = UN_COMPOSE_BLOB.len()
+    let mut i = 0
+    while i + 18 <= n {
+        let a = _un_p6(UN_COMPOSE_BLOB, i)
+        let b = _un_p6(UN_COMPOSE_BLOB, i + 6)
+        let cp = _un_p6(UN_COMPOSE_BLOB, i + 12)
+        m[str(a) + "_" + str(b)] = cp
+        i = i + 18
+    }
+    return m
+}
+
+fn _un_ccc(ccc: map, cp: int) -> int {
+    let k = str(cp)
+    if ccc.has(k) { return ccc[k] }
+    return 0
+}
+
+// --- decomposition (recursive, table + Hangul algorithm) ---
+
+fn _un_hangul_decomp(cp: int) -> [int] {
+    let s = cp - _UN_SBASE
+    let l = _UN_LBASE + s / _UN_NCOUNT
+    let v = _UN_VBASE + (s % _UN_NCOUNT) / _UN_TCOUNT
+    let t = s % _UN_TCOUNT
+    if t == 0 { return [l, v] }
+    return [l, v, _UN_TBASE + t]
+}
+
+// decompose one codepoint one level into [int]; canon (+ compat when useCompat).
+fn _un_decomp_one(canon: map, compat: map, useCompat: int, cp: int) -> [int] {
+    if cp >= _UN_SBASE && cp < _UN_SBASE + _UN_SCOUNT {
+        return _un_hangul_decomp(cp)
+    }
+    let k = str(cp)
+    if canon.has(k) {
+        let v = canon[k]
+        let mut out: [int] = []
+        let mut i = 0
+        while i < v.len() { out = out + [_un_p6(v, i)]; i = i + 6 }
+        return out
+    }
+    if useCompat == 1 && compat.has(k) {
+        let v = compat[k]
+        let mut out: [int] = []
+        let mut i = 0
+        while i < v.len() { out = out + [_un_p6(v, i)]; i = i + 6 }
+        return out
+    }
+    return [cp]
+}
+
+// fully decompose a codepoint list (to fixed point).
+fn _un_decompose(canon: map, compat: map, useCompat: int, cps: [int]) -> [int] {
+    let mut work = cps
+    let mut changed = 1
+    while changed == 1 {
+        changed = 0
+        let mut out: [int] = []
+        let mut i = 0
+        while i < len(work) {
+            let d = _un_decomp_one(canon, compat, useCompat, work[i])
+            if len(d) == 1 && d[0] == work[i] {
+                out = out + [work[i]]
+            } else {
+                changed = 1
+                let mut j = 0
+                while j < len(d) { out = out + [d[j]]; j = j + 1 }
+            }
+            i = i + 1
+        }
+        work = out
+    }
+    return work
+}
+
+// canonical ordering: stable sort combining marks (ccc>0) by ccc.
+fn _un_order(ccc: map, cps: [int]) -> [int] {
+    let mut a = cps
+    let n = len(a)
+    let mut i = 1
+    while i < n {
+        let cci = _un_ccc(ccc, a[i])
+        if cci != 0 {
+            let mut j = i
+            while j > 0 && _un_ccc(ccc, a[j - 1]) > cci {
+                let tmp = a[j - 1]
+                a[j - 1] = a[j]
+                a[j] = tmp
+                j = j - 1
+            }
+        }
+        i = i + 1
+    }
+    return a
+}
+
+// --- composition (canonical, Hangul algorithmic + compose table) ---
+
+fn _un_pair(compose: map, a: int, b: int) -> int {
+    // Hangul L + V -> LV
+    let li = a - _UN_LBASE
+    if li >= 0 && li < 19 {
+        let vi = b - _UN_VBASE
+        if vi >= 0 && vi < _UN_VCOUNT {
+            return _UN_SBASE + (li * _UN_VCOUNT + vi) * _UN_TCOUNT
+        }
+    }
+    // Hangul LV + T -> LVT
+    if a >= _UN_SBASE && a < _UN_SBASE + _UN_SCOUNT && (a - _UN_SBASE) % _UN_TCOUNT == 0 {
+        let ti = b - _UN_TBASE
+        if ti >= 1 && ti < _UN_TCOUNT { return a + ti }
+    }
+    let k = str(a) + "_" + str(b)
+    if compose.has(k) { return compose[k] }
+    return -1
+}
+
+fn _un_compose(ccc: map, compose: map, cps: [int]) -> [int] {
+    if len(cps) == 0 { return cps }
+    let mut out: [int] = [cps[0]]
+    let mut starter = 0
+    if _un_ccc(ccc, cps[0]) != 0 { starter = -1 }
+    let mut lastCC = _un_ccc(ccc, cps[0])
+    let mut i = 1
+    while i < len(cps) {
+        let cp = cps[i]
+        let cc = _un_ccc(ccc, cp)
+        let mut composed = -1
+        if starter >= 0 {
+            if lastCC < cc || lastCC == 0 {
+                composed = _un_pair(compose, out[starter], cp)
+            }
+        }
+        if composed >= 0 {
+            out[starter] = composed
+        } else {
+            if cc == 0 { starter = len(out) }
+            lastCC = cc
+            out = out + [cp]
+        }
+        i = i + 1
+    }
+    return out
+}
+
+// --- self-contained UTF-8 ---
+
+fn _un_str_cps(s: string) -> [int] {
+    let n = s.len()
+    let mut cps: [int] = []
+    let mut i = 0
+    while i < n {
+        let b0 = s.byte_at(i) & 0xFF
+        if b0 < 0x80 {
+            cps = cps + [b0]; i = i + 1
+        } else if b0 < 0xE0 {
+            cps = cps + [((b0 & 0x1F) * 64) + (s.byte_at(i + 1) & 0x3F)]; i = i + 2
+        } else if b0 < 0xF0 {
+            cps = cps + [((b0 & 0x0F) * 4096) + ((s.byte_at(i + 1) & 0x3F) * 64) + (s.byte_at(i + 2) & 0x3F)]; i = i + 3
+        } else {
+            cps = cps + [((b0 & 0x07) * 262144) + ((s.byte_at(i + 1) & 0x3F) * 4096) + ((s.byte_at(i + 2) & 0x3F) * 64) + (s.byte_at(i + 3) & 0x3F)]; i = i + 4
+        }
+    }
+    return cps
+}
+
+fn _un_cps_str(cps: [int]) -> string {
+    let mut out = ""
+    let mut i = 0
+    while i < len(cps) { out = out + to_string(from_char_code(cps[i])); i = i + 1 }
+    return out
+}
+
+// --- public API ---
+
+pub fn nfd(s: string) -> string {
+    let canon = _un_build_decomp(UN_CANON_BLOB)
+    let compat: map = {}
+    let ccc = _un_build_ccc()
+    let d = _un_order(ccc, _un_decompose(canon, compat, 0, _un_str_cps(s)))
+    return _un_cps_str(d)
+}
+
+pub fn nfkd(s: string) -> string {
+    let canon = _un_build_decomp(UN_CANON_BLOB)
+    let compat = _un_build_decomp(UN_COMPAT_BLOB)
+    let ccc = _un_build_ccc()
+    let d = _un_order(ccc, _un_decompose(canon, compat, 1, _un_str_cps(s)))
+    return _un_cps_str(d)
+}
+
+pub fn nfc(s: string) -> string {
+    let canon = _un_build_decomp(UN_CANON_BLOB)
+    let compat: map = {}
+    let ccc = _un_build_ccc()
+    let compose = _un_build_compose()
+    let d = _un_order(ccc, _un_decompose(canon, compat, 0, _un_str_cps(s)))
+    return _un_cps_str(_un_compose(ccc, compose, d))
+}
+
+pub fn nfkc(s: string) -> string {
+    let canon = _un_build_decomp(UN_CANON_BLOB)
+    let compat = _un_build_decomp(UN_COMPAT_BLOB)
+    let ccc = _un_build_ccc()
+    let compose = _un_build_compose()
+    let d = _un_order(ccc, _un_decompose(canon, compat, 1, _un_str_cps(s)))
+    return _un_cps_str(_un_compose(ccc, compose, d))
+}
