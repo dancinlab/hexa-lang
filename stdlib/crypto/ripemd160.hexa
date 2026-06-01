@@ -1,0 +1,166 @@
+// HEXA Standard Library — crypto/ripemd160 (pure-hexa RIPEMD-160)
+// @ci_gate
+// Extracted from forge forge_btccore_pre036_enumerator.hexa (KAT-verified).
+// @cite Dobbertin–Bosselaers–Preneel, RIPEMD-160 (1996).
+
+fn _rmd_add32(a: int, b: int) -> int { return (a + b) & 4294967295 }
+
+fn _rmd_rotl32(x: int, n: int) -> int {
+    let v = x & 4294967295
+    return ((v << n) | (v >> (32 - n))) & 4294967295
+}
+
+fn _rmd_f(j: int, x: int, y: int, z: int) -> int {
+    if j < 16 { return (x ^ y ^ z) & 4294967295 }
+    if j < 32 { return ((x & y) | ((4294967295 ^ x) & z)) & 4294967295 }
+    if j < 48 { return ((x | (4294967295 ^ y)) ^ z) & 4294967295 }
+    if j < 64 { return ((x & z) | (y & (4294967295 ^ z))) & 4294967295 }
+    return (x ^ (y | (4294967295 ^ z))) & 4294967295
+}
+
+fn _rmd_r() -> [int] {
+    return [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,
+            7,4,13,1,10,6,15,3,12,0,9,5,2,14,11,8,
+            3,10,14,4,9,15,8,1,2,7,0,6,13,11,5,12,
+            1,9,11,10,0,8,12,4,13,3,7,15,14,5,6,2,
+            4,0,5,9,7,12,2,10,14,1,3,8,11,6,15,13]
+}
+
+fn _rmd_rp() -> [int] {
+    return [5,14,7,0,9,2,11,4,13,6,15,8,1,10,3,12,
+            6,11,3,7,0,13,5,10,14,15,8,12,4,9,1,2,
+            15,5,1,3,7,14,6,9,11,8,12,2,10,0,4,13,
+            8,6,4,1,3,11,15,0,5,12,2,13,9,7,10,14,
+            12,15,10,4,1,5,8,7,6,2,13,14,0,3,9,11]
+}
+
+fn _rmd_s() -> [int] {
+    return [11,14,15,12,5,8,7,9,11,13,14,15,6,7,9,8,
+            7,6,8,13,11,9,7,15,7,12,15,9,11,7,13,12,
+            11,13,6,7,14,9,13,15,14,8,13,6,5,12,7,5,
+            11,12,14,15,14,15,9,8,9,14,5,6,8,6,5,12,
+            9,15,5,11,6,8,13,12,5,12,13,14,11,8,5,6]
+}
+
+fn _rmd_sp() -> [int] {
+    return [8,9,9,11,13,15,15,5,7,7,8,11,14,14,12,6,
+            9,13,15,7,12,8,9,11,7,7,12,7,6,15,13,11,
+            9,7,15,11,8,6,6,14,12,13,5,14,13,13,7,5,
+            15,5,8,11,14,14,6,14,6,9,12,9,12,5,15,8,
+            8,5,12,9,12,5,14,6,8,13,6,5,15,13,11,11]
+}
+
+fn _rmd_k(j: int) -> int {
+    if j < 16 { return 0 }
+    if j < 32 { return 1518500249 }
+    if j < 48 { return 1859775393 }
+    if j < 64 { return 2400959708 }
+    return 2840853838
+}
+
+fn _rmd_kp(j: int) -> int {
+    if j < 16 { return 1352829926 }
+    if j < 32 { return 1548603684 }
+    if j < 48 { return 1836072691 }
+    if j < 64 { return 2053994217 }
+    return 0
+}
+
+fn _rmd_emit_le(out: [int], w: int) -> [int] {
+    let mut o = out
+    let mut v = w & 4294967295
+    let mut i = 0
+    while i < 4 { o = o + [v & 255]; v = v >> 8; i = i + 1 }
+    return o
+}
+
+// RIPEMD-160 of a byte array → 20 bytes.
+pub fn ripemd160_bytes(msg: [int]) -> [int] {
+    let mlen = len(msg)
+    let mut data: [int] = []
+    let mut i = 0
+    while i < mlen { data = data + [msg[i] & 255]; i = i + 1 }
+    data = data + [128]
+    while (len(data) % 64) != 56 { data = data + [0] }
+    let bitlen = mlen * 8
+    let mut bl = bitlen
+    i = 0
+    while i < 8 { data = data + [bl & 255]; bl = bl >> 8; i = i + 1 }
+    let mut h0 = 1732584193
+    let mut h1 = 4023233417
+    let mut h2 = 2562383102
+    let mut h3 = 271733878
+    let mut h4 = 3285377520
+    let rr = _rmd_r()
+    let rp = _rmd_rp()
+    let ss = _rmd_s()
+    let sp = _rmd_sp()
+    let nblocks = len(data) / 64
+    let mut blk = 0
+    while blk < nblocks {
+        let base = blk * 64
+        let mut x: [int] = []
+        let mut w = 0
+        while w < 16 {
+            let o = base + w * 4
+            x = x + [data[o] | (data[o + 1] << 8) | (data[o + 2] << 16) | (data[o + 3] << 24)]
+            w = w + 1
+        }
+        let mut al = h0
+        let mut bl2 = h1
+        let mut cl = h2
+        let mut dl = h3
+        let mut el = h4
+        let mut ar = h0
+        let mut br = h1
+        let mut cr = h2
+        let mut dr = h3
+        let mut er = h4
+        let mut j = 0
+        while j < 80 {
+            let tl = _rmd_add32(_rmd_add32(_rmd_add32(al, _rmd_f(j, bl2, cl, dl)), x[rr[j]]), _rmd_k(j))
+            let t1 = _rmd_add32(_rmd_rotl32(tl, ss[j]), el)
+            al = el
+            el = dl
+            dl = _rmd_rotl32(cl, 10)
+            cl = bl2
+            bl2 = t1
+            let jr = 79 - j
+            let tr = _rmd_add32(_rmd_add32(_rmd_add32(ar, _rmd_f(jr, br, cr, dr)), x[rp[j]]), _rmd_kp(j))
+            let t2 = _rmd_add32(_rmd_rotl32(tr, sp[j]), er)
+            ar = er
+            er = dr
+            dr = _rmd_rotl32(cr, 10)
+            cr = br
+            br = t2
+            j = j + 1
+        }
+        let t = _rmd_add32(_rmd_add32(h1, cl), dr)
+        h1 = _rmd_add32(_rmd_add32(h2, dl), er)
+        h2 = _rmd_add32(_rmd_add32(h3, el), ar)
+        h3 = _rmd_add32(_rmd_add32(h4, al), br)
+        h4 = _rmd_add32(_rmd_add32(h0, bl2), cr)
+        h0 = t
+        blk = blk + 1
+    }
+    let mut out: [int] = []
+    out = _rmd_emit_le(out, h0)
+    out = _rmd_emit_le(out, h1)
+    out = _rmd_emit_le(out, h2)
+    out = _rmd_emit_le(out, h3)
+    out = _rmd_emit_le(out, h4)
+    return out
+}
+
+// RIPEMD-160 of a byte array → 40-char lowercase hex.
+pub fn ripemd160_hex(msg: [int]) -> string {
+    let b = ripemd160_bytes(msg)
+    let H = "0123456789abcdef"
+    let mut s = ""
+    let mut i = 0
+    while i < len(b) {
+        s = s + H.substring(b[i] / 16, b[i] / 16 + 1) + H.substring(b[i] % 16, b[i] % 16 + 1)
+        i = i + 1
+    }
+    return s
+}
