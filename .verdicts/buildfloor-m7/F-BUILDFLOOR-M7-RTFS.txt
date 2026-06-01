@@ -1,0 +1,79 @@
+F-BUILDFLOOR-M7-RTFS — B2 rt_fs link fix made committable via tracked emitter
+================================================================================
+claim: The 3 rt_fs_* symbols (rt_fs_append_atomic / rt_fs_stat /
+       rt_fs_rotate_if_over) resolve as DEFINED (nm T) in the stage-4 build
+       config (HEXA_HAS_HEXA_RT_STDLIB && !HEXA_RT_SELFEMIT) from a REGENERATED
+       runtime_core.c — emitted by the TRACKED emitter
+       self/runtime_core_emit.hexa — with NO .sh link-fill stub, and the full
+       aprime_cc build smoke passes exit(42)==42.
+
+method: edit self/runtime_core_emit.hexa (committable SSOT) to define the 3
+        bodies #ifndef HEXA_RT_SELFEMIT (mirroring rt_write_bytes: body in
+        runtime_core.c, forward-decl in runtime.c). Revert gitignored runtime.c
+        rt_fs gate to forward-decl-only. Regen runtime_core.c via
+        `hexa run self/runtime_core_emit.hexa <out>`, then nm + build_aprime.sh.
+
+--------------------------------------------------------------------------------
+[1] regen runtime_core.c from edited emitter (verbatim stdout)
+--------------------------------------------------------------------------------
+$ hexa run self/runtime_core_emit.hexa /tmp/runtime_core_regen.c
+[runtime_core_emit] wrote /tmp/runtime_core_regen.c
+EXIT=0
+
+bodies present in regen:
+7328:HexaVal rt_fs_append_atomic(HexaVal path, HexaVal data) {
+7332:HexaVal rt_fs_stat(HexaVal path) {
+7336:HexaVal rt_fs_rotate_if_over(HexaVal path, HexaVal max_bytes, HexaVal keep) {
+
+--------------------------------------------------------------------------------
+[2] nm U->T proof (stage-4 config: -DHEXA_HAS_HEXA_RT_STDLIB=1, !SELFEMIT)
+--------------------------------------------------------------------------------
+BEFORE (canonical runtime_core.c WITHOUT bodies + forward-decl runtime.c):
+                 U _rt_fs_append_atomic
+                 U _rt_fs_rotate_if_over
+                 U _rt_fs_stat
+
+AFTER (regenerated runtime_core.c WITH emitter bodies):
+000000000000b554 T _rt_fs_append_atomic
+000000000000b56c T _rt_fs_rotate_if_over
+000000000000b560 T _rt_fs_stat
+
+--------------------------------------------------------------------------------
+[3] no double-definition guard check
+--------------------------------------------------------------------------------
+SELFEMIT config (-DHEXA_HAS_HEXA_RT_STDLIB=1 -DHEXA_RT_SELFEMIT=1):
+  compile rc=0 (no redefinition/duplicate)
+                 U _rt_fs_append_atomic   <- correctly deferred to self-emit .o
+                 U _rt_fs_rotate_if_over
+                 U _rt_fs_stat
+
+standalone smoke config (neither flag):
+000000000000ddf8 T _rt_fs_append_atomic
+000000000000de10 T _rt_fs_rotate_if_over
+000000000000de04 T _rt_fs_stat
+
+--------------------------------------------------------------------------------
+[4] full build_aprime.sh (NO link-fill stub) — verbatim tail
+--------------------------------------------------------------------------------
+=== build_aprime: repo=/Users/mini/dancinlab/hexa-lang  hexat=.../build/hexat ===
+HEAD: ba12d37df feat(qforge): M5.7 ... V_H[ρ] (#2423)
+  [1/5] flatten: 46 files 40186 lines
+  [2/5] transpile:    43707 lines C
+  [3/5] post-process: s4_flatc_post + builtin sed + runtime.c inline
+  [4/5] clang: build/aprime_cc (1455016 B, Mach-O 64-bit executable arm64)
+  [5/5] smoke: exit(42)==42 PASS — aprime_cc OK
+build_aprime: OK -> build/aprime_cc
+
+nm of final stage-4 binary build/aprime_cc:
+0000000100006794 T _rt_fs_append_atomic
+000000010000679c T _rt_fs_rotate_if_over
+0000000100006798 T _rt_fs_stat
+
+--------------------------------------------------------------------------------
+verdict: 🟢 NUMERICAL — PASS
+  - regenerated runtime_core.c (NOT a hand-edit of gitignored runtime.c)
+    defines all 3 symbols T in stage-4 config (was U).
+  - SELFEMIT config keeps them U (body from self-emit .o) — no double-def.
+  - full build_aprime.sh smoke exit(42)==42 with NO .sh link-fill stub.
+  - #2421 stage-3 link-fill stub OBVIATED; deletable after this merge.
+  committable surface = self/runtime_core_emit.hexa (tracked) + this doc/verdict.
