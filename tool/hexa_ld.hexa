@@ -684,13 +684,30 @@ fn link_macho_arm64(objs: [ParsedObj], out_path: string, entry: string, _is_stat
         obj_slot_base.push(base4)
 
         // Append this obj's section bytes into the matching slot.
+        // Const-family sections (`__const`, `__literal4/8/16`, `__DATA,__const`)
+        // all carry read-only constant data — clang puts float/double/vector
+        // constant pools in `__literalN`, referenced by `lCPI*` symbols via
+        // PAGE21/PAGEOFF12 relocs. They MUST merge into slot1 (the const slot)
+        // or their symbols never register → the reloc is silently dropped →
+        // `adrp xN,#0; ldr d0,[xN]` reads the Mach-O header → wild constant.
+        // We record each const-family section's slot1-relative base (keyed by
+        // its 1-based n_sect index) so symbol routing below resolves multiple
+        // const sections within one object to correct offsets.
+        let mut const_sect_idx:  [Int] = []
+        let mut const_sect_base: [Int] = []
         let mut sxx = 0
         while sxx < len(obj.sects) {
             let sc = obj.sects[sxx]
+            let is_const_fam = sc.sectname == "__const"
+                || sc.sectname == "__literal4"
+                || sc.sectname == "__literal8"
+                || sc.sectname == "__literal16"
             if sc.sectname == "__text" {
                 let mut k = 0
                 while k < len(sc.bytes) { slot0_bytes.push(sc.bytes[k] & 0xff); k = k + 1 }
-            } else if sc.sectname == "__const" {
+            } else if is_const_fam {
+                const_sect_idx.push(sc.index)
+                const_sect_base.push(len(slot1_bytes))
                 let mut k = 0
                 while k < len(sc.bytes) { slot1_bytes.push(sc.bytes[k] & 0xff); k = k + 1 }
             } else if sc.sectname == "__cstring" {
@@ -722,8 +739,22 @@ fn link_macho_arm64(objs: [ParsedObj], out_path: string, entry: string, _is_stat
                 let sc = obj.sects[sj]
                 if sc.index == d.sect {
                     sec_addr = sc.addr
+                    let is_const_fam = sc.sectname == "__const"
+                        || sc.sectname == "__literal4"
+                        || sc.sectname == "__literal8"
+                        || sc.sectname == "__literal16"
                     if sc.sectname == "__text"        { slot = SLOT_TEXT;    soff_base = base0 }
-                    else if sc.sectname == "__const"  { slot = SLOT_CONST;   soff_base = base1 }
+                    else if is_const_fam {
+                        // soff_base = this section's recorded slot1-relative base
+                        // (NOT base1) — multiple const sections share slot1, each
+                        // appended sequentially, so the per-section base differs.
+                        slot = SLOT_CONST
+                        let mut ci = 0
+                        while ci < len(const_sect_idx) {
+                            if const_sect_idx[ci] == sc.index { soff_base = const_sect_base[ci]; break }
+                            ci = ci + 1
+                        }
+                    }
                     else if sc.sectname == "__cstring"{ slot = SLOT_CSTRING; soff_base = base2 }
                     else if sc.sectname == "__data"   { slot = SLOT_DATA;    soff_base = base3 }
                     else if sc.sectname == "__bss" || sc.sectname == "__common" { slot = SLOT_BSS; soff_base = base4 }
