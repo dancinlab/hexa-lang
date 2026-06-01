@@ -60,3 +60,27 @@ verbatim:
 compiler object cc-pt9b.o is link-resolvable against the regenerated runtime. The
 self-host LINK is residual-0 (link-ready). Remaining: actual hexa_ld link → run →
 gen2≡gen3 byte-eq.
+
+=== UPDATE 2: hexa_ld LINK succeeds + dedups, but gen2 dyld-crashes (N5-link weak-sym gap) ===
+Built hexa_ld via the same hexa_v2+amalgam recipe (standalone, 0 `use`; it explicitly
+de-duplicates by name, runtime_core_emit notes "De-duplicate ... multiple objects").
+  hexa_ld -o gen2 cc-pt9b.o rt_new.o --lc-main _main  → rc=0, gen2 = 1833120 B Mach-O arm64
+So the 17 duplicate stdlib rt_* DEFINED symbols ARE deduped by hexa_ld (system ld
+rejected them; hexa_ld handles them). LINK STRUCTURALLY SUCCEEDS.
+
+BUT gen2 aborts at LOAD (SIGABRT):
+  dyld: Symbol not found: _return_val
+        Referenced from: gen2_hexa   Expected in: libSystem.B.dylib
+Root: `return_val` IS DEFINED in rt_new.o (nm: `D _return_val` @0x459d0), but the
+runtime emits it as a WEAK COMMON symbol (runtime_core_emit.hexa:4826-4827:
+`extern HexaVal return_val __attribute__((weak_import,weak)); __attribute__((weak))
+HexaVal return_val __attribute__((common));`). hexa_ld leaves the weak ref as a
+DYNAMIC IMPORT (expected from libSystem) instead of binding it to rt_new.o's local
+`D` definition → dyld can't find it → crash. This is a hexa_ld WEAK/COMMON symbol-
+resolution gap (N5-link), NOT an N5-sym issue.
+
+🟢 N5-sym: COMPLETE (residual=0, 9/9 resolved).
+🟠 N5-link: hexa_ld links + dedups, but the weak/common `_return_val` is mis-resolved
+   as a libSystem import → gen2 dyld-crashes → byte-eq fixpoint NOT reachable until
+   hexa_ld binds weak/common defs locally (or the runtime emits return_val non-weak).
+   This is the NEXT distinct frontier — a hexa_ld linker fix, precisely localized.
