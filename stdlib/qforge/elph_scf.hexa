@@ -1,0 +1,177 @@
+// HEXA Standard Library — qforge/elph_scf
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// QFORGE M5.6 — electron-phonon |g|² FROM the self-consistent SCF (atoms path).
+//
+// M5.5 (scf_pw.hexa) made the density-dependent SCF real: ψ, ε come from a true
+// self-consistent Kohn-Sham fixed point. This brick computes the electron-phonon
+// matrix element from THAT SCF state — NOT from a QE dvscf moment boundary (the
+// boundary qforge_qe_xval starts at, which is exactly what made it non-
+// independent). The el-ph matrix element is
+//
+//     g_{mn}^{qν}(k) = ⟨ ψ_{m,k+q} | ΔV_scf^{qν} | ψ_{n,k} ⟩
+//
+// where ΔV_scf is the SELF-CONSISTENT first-order potential response to a phonon
+// displacement, obtained by the Sternheimer DFPT loop (dfpt_response.hexa) seeded
+// from the bare ΔV_bare and screened by V_H+V_xc (screening.hexa). Both ψ and
+// ΔV_scf trace back to the SCF — so |g|² is computed atoms→ independently.
+//
+//   SCF (M5.5: ψ, ε)  ─┐
+//   phonon disp u_qν ──▶ ΔV_bare ─Sternheimer SC─▶ ΔV_scf ─▶ g_{mn}=⟨ψ_m|ΔV_scf|ψ_n⟩
+//                                                              │
+//                                                          |g_{mn}|²  ──▶ elph.hexa α²F
+//
+// ── Honest scope (d6) ────────────────────────────────────────────────────────
+//   The bare perturbation ΔV_bare and the screening kernel drho_to_dvscf are the
+//   caller's (d4) — the SAME generic contract dfpt_response uses. With a ZERO
+//   screening kernel this reduces to the independent-particle (bare) |g|², the
+//   g5-anchored limit. The g5 gate verifies the SCF-sourced |g| against a FROZEN-
+//   PHONON finite-difference cross-check (Hellmann-Feynman: g_nn = dε_n/du) — a
+//   genuinely independent derivative, not a QE number. No QE |g| is fabricated.
+//
+// reuse (d19): sternheimer (response) · dfpt_response (SC screening loop) ·
+//   elph (|g|² → α²F → λ). No new physics — composition of verified bricks.
+use "stdlib/qforge/sternheimer"
+use "stdlib/qforge/dfpt_response"
+
+// el-ph result for one (k,q,ν): the g_{mn} block (flat M_occ×M_state row-major,
+// real at Γ with a real local ΔV), its |g|² block, and the SCF convergence flag.
+pub struct ElphResult {
+    g: [float],              // M_bra × M_ket flat: g[m*M_ket+n] = ⟨ψ_m|ΔV_scf|ψ_n⟩
+    g2: [float],             // |g_{mn}|² (same layout)
+    converged: bool,         // Sternheimer SC response converged for all states
+    max_residual: float
+}
+
+// ── ⟨ψ_m | v | ψ_n⟩ helper: m runs over `bra` states, contracting with v·ψ_n ──
+//   v_psi_n = (ΔV_scf applied to ψ_n), already a length-n vector. g_{mn}=ψ_m·v_psi_n.
+fn elph_braket(bra: [[float]], v_psi_n: [float], m_bra: int, n: int) -> [float] {
+    let mut col: [float] = []
+    let mut m = 0
+    while m < m_bra {
+        let mut s = 0.0
+        let mut i = 0
+        while i < n { s = s + bra[m][i] * v_psi_n[i] ; i = i + 1 }
+        col.push(s)
+        m = m + 1
+    }
+    return col
+}
+
+// ── The M5.6 deliverable: |g|² from the self-consistent ΔV_scf ────────────────
+//
+//   H_apply        : matrix-free H·v from the CONVERGED SCF (Sternheimer/Davidson
+//                    contract, d4) — the SAME operator qforge_scf_pw diagonalized.
+//   bra_states     : ⟨ψ_{m,k+q}| set (rows; the m-index of g). For Γ-phonon
+//                    intra-band g, pass the occupied set; caller owns k+q (d4).
+//   occ_states     : occupied ψ_{n,k} (P_c definition + the n-index ket of g).
+//   eps            : occupied eigenvalues ε_n (occ_states order).
+//   dv_bare_psi    : ΔV_bare|ψ_n⟩ bundle (flat M_occ×n) for the phonon mode —
+//                    the bare potential derivative applied to each occupied ψ_n.
+//   drho_to_dvscf  : Δρ→ΔV_scr screening kernel (length n→n). 0 kernel = bare |g|².
+//   tol, max_iter  : Sternheimer + SC-screening termination.
+//
+//   Returns ElphResult. The SC response runs ONE Sternheimer screening loop
+//   (reusing dfpt_response's fc_scf_response is internal; here we expose the g
+//   contraction so callers get |g|² directly without going through Φ).
+pub fn qforge_elph_g2(H_apply, bra_states: [[float]], occ_states: [[float]],
+                      eps: [float], dv_bare_psi: [float], drho_to_dvscf,
+                      n: int, tol: float, max_iter: int) -> ElphResult {
+    let m_occ = occ_states.len()
+    let m_bra = bra_states.len()
+    // ── self-consistent ΔV_scf|ψ_n⟩ bundle via the screening loop ─────────────
+    //   Init ΔV_scf = ΔV_bare. Iterate: Sternheimer Δψ_n → Δρ → ΔV_scr → update.
+    let mut dvscf = []
+    let mut t = 0
+    while t < m_occ * n { dvscf.push(dv_bare_psi[t]) ; t = t + 1 }
+    let mut dpsi_all = []
+    let mut prep = 0
+    while prep < m_occ * n { dpsi_all.push(0.0) ; prep = prep + 1 }
+    let mut max_res = 0.0
+    let mut all_conv = true
+    let mut sc = 0
+    while sc < max_iter {
+        // Sternheimer per occupied state → Δψ_n.
+        let mut nn = 0
+        while nn < m_occ {
+            let mut dvpsi = []
+            let mut k = 0
+            while k < n { dvpsi.push(dvscf[nn * n + k]) ; k = k + 1 }
+            let res = qforge_sternheimer(H_apply, eps[nn], occ_states[nn],
+                                         occ_states, dvpsi, n, tol, max_iter)
+            let mut w = 0
+            while w < n { dpsi_all[nn * n + w] = res.dpsi[w] ; w = w + 1 }
+            if res.residual > max_res { max_res = res.residual }
+            if res.converged == false { all_conv = false }
+            nn = nn + 1
+        }
+        // first-order density response Δρ(r) = Σ_occ 2·ψ_n·Δψ_n.
+        let mut drho = []
+        let mut r0 = 0
+        while r0 < n { drho.push(0.0) ; r0 = r0 + 1 }
+        let mut nd = 0
+        while nd < m_occ {
+            let mut i = 0
+            while i < n { drho[i] = drho[i] + 2.0 * occ_states[nd][i] * dpsi_all[nd * n + i] ; i = i + 1 }
+            nd = nd + 1
+        }
+        // screening update: ΔV_scf ψ_n = ΔV_bare ψ_n + (ΔV_scr ⊙ ψ_n).
+        let dvscr = drho_to_dvscf(drho)
+        let mut new_dvscf = []
+        let mut nb = 0
+        while nb < m_occ {
+            let mut i = 0
+            while i < n {
+                new_dvscf.push(dv_bare_psi[nb * n + i] + dvscr[i] * occ_states[nb][i])
+                i = i + 1
+            }
+            nb = nb + 1
+        }
+        // SC convergence of the screening potential.
+        let mut delta = 0.0
+        let mut dd = 0
+        while dd < m_occ * n {
+            let d = new_dvscf[dd] - dvscf[dd]
+            delta = delta + d * d
+            dvscf[dd] = new_dvscf[dd]
+            dd = dd + 1
+        }
+        sc = sc + 1
+        if sqrt(delta) < tol { break }
+    }
+    // ── contract g_{mn} = ⟨ψ_m | ΔV_scf | ψ_n⟩ (ΔV_scf|ψ_n⟩ = dvscf bundle) ───
+    let mut g = []
+    let mut z = 0
+    while z < m_bra * m_occ { g.push(0.0) ; z = z + 1 }
+    let mut nn2 = 0
+    while nn2 < m_occ {
+        // ΔV_scf|ψ_n⟩ for ket n = dvscf[nn2*n .. +n].
+        let mut vpsi = []
+        let mut k = 0
+        while k < n { vpsi.push(dvscf[nn2 * n + k]) ; k = k + 1 }
+        let col = elph_braket(bra_states, vpsi, m_bra, n)   // length m_bra
+        let mut m = 0
+        while m < m_bra { g[m * m_occ + nn2] = col[m] ; m = m + 1 }
+        nn2 = nn2 + 1
+    }
+    // |g_{mn}|² (real at Γ).
+    let mut g2 = []
+    let mut q = 0
+    while q < m_bra * m_occ { g2.push(g[q] * g[q]) ; q = q + 1 }
+    return ElphResult { g: g, g2: g2, converged: all_conv, max_residual: max_res }
+}
+
+// ── Diagonal el-ph from Hellmann-Feynman: g_nn = ⟨ψ_n|ΔV_bare|ψ_n⟩ = dε_n/du ──
+//   The independent frozen-phonon cross-check the g5 gate anchors against: the
+//   BARE diagonal matrix element equals the first-order eigenvalue derivative
+//   under the displacement (Hellmann-Feynman theorem), which a finite-difference
+//   of the SCF eigenvalue reproduces. Pure contraction — no SC loop.
+//   dv_bare_psi_n = ΔV_bare|ψ_n⟩ (length n).
+pub fn qforge_elph_g_diag(psi_n: [float], dv_bare_psi_n: [float], n: int) -> float {
+    let mut s = 0.0
+    let mut i = 0
+    while i < n { s = s + psi_n[i] * dv_bare_psi_n[i] ; i = i + 1 }
+    return s
+}
