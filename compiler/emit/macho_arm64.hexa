@@ -429,7 +429,7 @@ fn encode_arm64_insn(op: string, ops: [string]) -> i64 {
         let rt  = xreg_idx(ops[0])
         let rt2 = xreg_idx(ops[1])
         let mp  = _parse_mem_op(ops[2])
-        if mp[0] < 0 { return 0 }
+        if mp[0] < 0 { eprintln("ENCODE-MISS: " + op + " mem-parse-fail mem=" + ops[2]); return 0 }
         let rn   = mp[0]
         let imm  = (mp[1] >> 3) & 0x7f
         let mode = mp[2]
@@ -442,7 +442,7 @@ fn encode_arm64_insn(op: string, ops: [string]) -> i64 {
         let rt  = xreg_idx(ops[0])
         let rt2 = xreg_idx(ops[1])
         let mp  = _parse_mem_op(ops[2])
-        if mp[0] < 0 { return 0 }
+        if mp[0] < 0 { eprintln("ENCODE-MISS: " + op + " mem-parse-fail mem=" + ops[2]); return 0 }
         let rn   = mp[0]
         let imm  = (mp[1] >> 3) & 0x7f
         let mode = mp[2]
@@ -556,6 +556,14 @@ fn encode_arm64_insn(op: string, ops: [string]) -> i64 {
     }
 
     // Unknown op — caller checks for 0 as failure marker.
+    let mut _miss = "ENCODE-MISS: unknown-op op=" + op + " ops=[ "
+    let mut _mi = 0
+    while _mi < len(ops) {
+        _miss = _miss + ops[_mi] + " "
+        _mi = _mi + 1
+    }
+    _miss = _miss + "]"
+    eprintln(_miss)
     return 0
 }
 
