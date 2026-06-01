@@ -1722,21 +1722,50 @@ fn _rev_str_gt(a: string, b: string) -> bool {
     return la > lb
 }
 
-// In-place insertion sort of `xs` by `_rev_str_gt` (descending reversed
-// string). Stable enough for the short symbol-name lists here.
-fn _sort_rev_desc(xs: [string]) {
-    let n = len(xs)
-    let mut i = 1
-    while i < n {
-        let key = xs[i]
-        let mut j = i - 1
-        while j >= 0 && _rev_str_gt(key, xs[j]) {
-            xs[j + 1] = xs[j]
-            j = j - 1
+// Merge two already-sorted runs `a` and `b` (each descending by
+// `_rev_str_gt`) into a fresh array, preserving that order. Stable: on a
+// tie (neither strictly before the other) the `a` element is taken first
+// — but the inputs here are DISTINCT (deduped upstream) so `_rev_str_gt`
+// is a strict total order and the merge result is unambiguous.
+fn _merge_rev_desc(a: [string], b: [string]) -> [string] {
+    let la = len(a)
+    let lb = len(b)
+    let out: [string] = []
+    let mut i = 0
+    let mut j = 0
+    while i < la && j < lb {
+        // Take `a[i]` unless `b[j]` strictly sorts before it.
+        if _rev_str_gt(b[j], a[i]) {
+            out.push(b[j])
+            j = j + 1
+        } else {
+            out.push(a[i])
+            i = i + 1
         }
-        xs[j + 1] = key
-        i = i + 1
     }
+    while i < la { out.push(a[i]); i = i + 1 }
+    while j < lb { out.push(b[j]); j = j + 1 }
+    return out
+}
+
+// O(n log n) merge sort of `xs` by `_rev_str_gt` (descending reversed
+// string). Replaces the prior O(n²) insertion sort — for the ~3600-symbol
+// self-compiler flat the quadratic sort (with the quadratic dedup) made
+// the native obj-emit take ~60min / ~8.85GB RSS. Produces a BYTE-IDENTICAL
+// result to the insertion sort: the inputs are distinct and `_rev_str_gt`
+// is a strict total order, so both yield the unique descending sequence.
+fn _msort_rev_desc(xs: [string]) -> [string] {
+    let n = len(xs)
+    if n <= 1 { return xs }
+    let mid = n / 2
+    let left: [string] = []
+    let right: [string] = []
+    let mut i = 0
+    while i < mid { left.push(xs[i]); i = i + 1 }
+    while i < n { right.push(xs[i]); i = i + 1 }
+    let ls = _msort_rev_desc(left)
+    let rs = _msort_rev_desc(right)
+    return _merge_rev_desc(ls, rs)
 }
 
 // True iff `suf` is a (proper-or-equal) suffix of `s`.
@@ -1759,33 +1788,48 @@ fn _ends_with(s: string, suf: string) -> bool {
 // `names[i]`'s merged offset, in the SAME order as `names`.
 fn _build_merged_strtab(out: [Int], names: [string]) -> [Int] {
     // Unique names, first-seen order preserved (only used to drive the
-    // sort; the returned offsets map back to the original `names`).
+    // sort; the returned offsets map back to the original `names`). O(n)
+    // dedup via a hash-set membership map — was O(n²) `_str_in` per name.
     let uniq: [string] = []
+    let seen = {}
     let mut i = 0
     while i < len(names) {
-        if !_str_in(uniq, names[i]) { uniq.push(names[i]) }
+        if !has_key(seen, names[i]) {
+            seen[names[i]] = true
+            uniq.push(names[i])
+        }
         i = i + 1
     }
-    _sort_rev_desc(uniq)
+    // O(n log n) merge sort (was O(n²) insertion sort). Distinct inputs +
+    // strict total order ⇒ byte-identical result to the insertion sort.
+    let sorted = _msort_rev_desc(uniq)
 
     // Index-0 NUL (empty string).
     out.push(0)
 
     // Assign a merged offset to each unique name, tail-merging suffixes.
-    let uniq_off: [Int] = []
+    // `off_of` (name -> merged offset) lets the final original-order map
+    // be O(1)/name instead of an O(n²) `_index_of_str` linear scan.
+    let off_of = {}
     let mut u = 0
-    while u < len(uniq) {
-        let s = uniq[u]
-        if u > 0 && _ends_with(uniq[u - 1], s) {
+    let mut prev_name = ""
+    let mut prev_off = 0
+    while u < len(sorted) {
+        let s = sorted[u]
+        if u > 0 && _ends_with(prev_name, s) {
             // `s` is a suffix of its predecessor: reuse the tail.
-            let prev_off = uniq_off[u - 1]
-            uniq_off.push(prev_off + (len(uniq[u - 1]) - len(s)))
+            let so = prev_off + (len(prev_name) - len(s))
+            off_of[s] = so
+            prev_off = so
         } else {
-            uniq_off.push(len(out))
+            let so = len(out)
+            off_of[s] = so
+            prev_off = so
             let mut c = 0
             while c < len(s) { out.push(char_code(s, c) & 0xff); c = c + 1 }
             out.push(0)
         }
+        prev_name = s
         u = u + 1
     }
 
@@ -1793,8 +1837,7 @@ fn _build_merged_strtab(out: [Int], names: [string]) -> [Int] {
     let result: [Int] = []
     i = 0
     while i < len(names) {
-        let idx = _index_of_str(uniq, names[i])
-        result.push(uniq_off[idx])
+        result.push(off_of[names[i]])
         i = i + 1
     }
     return result
