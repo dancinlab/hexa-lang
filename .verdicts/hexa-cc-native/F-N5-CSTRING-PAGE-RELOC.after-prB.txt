@@ -1,0 +1,24 @@
+=== AFTER PR-B (final): __cstring symbol-value fix → LINK + RUN proof ===
+aprime_page2: build smoke exit(42)==42 PASS
+
+--- .LCstr0 N_SECT value = 0x38 (in __cstring vmaddr range; was 0 = ld64-rejected) ---
+                 (undefined) external _hexa_println
+0000000000000000 (__TEXT,__text) external _main
+0000000000000010 (__TEXT,__text) non-external __L2c8b_main_bb0
+0000000000000038 (__TEXT,__cstring) non-external .LCstr0
+
+--- otool -rv (PAGE21 + PAGEOFF12 to .LCstr0; pcrel correct) ---
+/tmp/str1_p2.o:
+Relocation information (__TEXT,__text) 4 entries
+address  pcrel length extern type    scattered symbolnum/value
+0000001c True  long   True   BR26    False     _hexa_println
+00000018 False long   True   PAGOF12 False     .LCstr0
+00000014 True  long   True   PAGE21  False     .LCstr0
+00000008 True  long   True   BR26    False     _hexa_set_args
+
+--- ld64 LINK (clang -arch arm64 str1_p2.o rt_am.o ...): link_rc=0, NO errors ---
+(prior PR-B-pre had: 'ld: .LCstr0 ... address isn't in its designated section')
+
+--- RUN /tmp/str1_prog ---
+hello world
+exit=0  (string literal 'hello world' correctly addressed via PAGE21/PAGEOFF12)

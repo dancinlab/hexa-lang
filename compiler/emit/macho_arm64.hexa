@@ -103,10 +103,12 @@ let MACHO_S_REGULAR               = 0x00000000
 let MACHO_S_ATTR_PURE_INSTRUCTIONS = 0x80000000
 
 // arm64 relocation types (`mach-o/arm64/reloc.h`).
-let MACHO_ARM64_RELOC_UNSIGNED   = 0
-let MACHO_ARM64_RELOC_BRANCH26   = 2
-let MACHO_ARM64_RELOC_PAGE21     = 3
-let MACHO_ARM64_RELOC_PAGEOFF12  = 4
+let MACHO_ARM64_RELOC_UNSIGNED          = 0
+let MACHO_ARM64_RELOC_BRANCH26          = 2
+let MACHO_ARM64_RELOC_PAGE21            = 3
+let MACHO_ARM64_RELOC_PAGEOFF12         = 4
+let MACHO_ARM64_RELOC_GOT_LOAD_PAGE21   = 5
+let MACHO_ARM64_RELOC_GOT_LOAD_PAGEOFF12 = 6
 
 // nlist `n_type` bits (`<mach-o/nlist.h>`).
 let MACHO_N_UNDF = 0x00   // undefined (extern reference)
@@ -149,6 +151,18 @@ struct MachoArm64Obj {
     // pair resolves against those symbols. Empty when the module has no
     // string literals (keeps the 3-section layout byte-stable).
     cstring:  [u8],
+    // `__TEXT,__const` float-literal pool (PR-C2): the concatenated
+    // 8-byte IEEE-754 doubles of every `.LCfltN` (8-aligned). Each
+    // float's start offset is the N_SECT value of its `.LCflt*` local;
+    // the ADRP/ADD `@PAGE`/`@PAGEOFF` reloc pair resolves against them.
+    // Empty when the module has no float literals.
+    cflt:     [u8],
+    // `__DATA,__data` module-global slots (PR-C1): one 16-byte
+    // zero-initialized HexaVal slot per `lm.globals` entry (8-aligned),
+    // symbol name `g<id>`. The `g<id>@PAGE`/`@PAGEOFF` load/store reloc
+    // pair resolves against these N_SECT defs. Empty when the module
+    // has no module-level mutable globals.
+    gdata:    [u8],
 }
 
 struct Arm64Reloc {
@@ -1159,22 +1173,53 @@ fn serialize(obj: MachoArm64Obj) -> [Int] {
     // clang's order: `__text` (1) · `__cstring` (2) · `__cap` (3) ·
     // `__abi` (4). When the pool is EMPTY we keep the legacy 3-section
     // layout so the existing byte-eq corpus stays stable.
-    let cstr_len = len(obj.cstring)
-    let has_cstr = cstr_len > 0
+    let cstr_len  = len(obj.cstring)
+    let cflt_len  = len(obj.cflt)
+    let gdata_len = len(obj.gdata)
+    let has_cstr  = cstr_len > 0
+    let has_cflt  = cflt_len > 0
+    let has_gdata = gdata_len > 0
+    // Base 3 sections (__text · __cap · __abi); +1 per present data pool
+    // (__cstring / __const / __data), in clang segment+section order:
+    //   1 __text · [__cstring] · [__const] · [__data] · __cap · __abi
     let mut nsects = 3
-    if has_cstr { nsects = 4 }
-    // `__cstring` sits immediately after `__text`'s 4-aligned bytes;
-    // align 2^0 (clang's __cstring alignment), so no inter-section pad.
+    if has_cstr  { nsects = nsects + 1 }
+    if has_cflt  { nsects = nsects + 1 }
+    if has_gdata { nsects = nsects + 1 }
+
+    // Contiguous vmaddr/file layout. `__cstring` is align-1 (follows
+    // __text's 4-aligned end directly); `__const` / `__data` are align-8,
+    // so a present one may carry inter-section padding. An ABSENT section
+    // is a pure no-op (no addr advance, no pad) → prior layout byte-stable.
     let cstr_addr = text_size_aligned
-    // `__cap` / `__abi` vmaddr follows __text + __cstring (both align 1).
-    let mut meta_addr = text_size_aligned
-    if has_cstr { meta_addr = text_size_aligned + cstr_len }
+    let mut cursor = text_size_aligned
+    if has_cstr { cursor = cstr_addr + cstr_len }
+    let mut const_addr = 0
+    let mut const_pad  = 0
+    if has_cflt {
+        let crem = cursor & 7
+        if crem != 0 { const_pad = 8 - crem }
+        const_addr = cursor + const_pad
+        cursor = const_addr + cflt_len
+    }
+    let mut data_addr = 0
+    let mut data_pad  = 0
+    if has_gdata {
+        let drem2 = cursor & 7
+        if drem2 != 0 { data_pad = 8 - drem2 }
+        data_addr = cursor + data_pad
+        cursor = data_addr + gdata_len
+    }
+    // `__cap` / `__abi` vmaddr follows the last data section.
+    let meta_addr = cursor
     let sizeofcmds = (72 + 80 * nsects) + 24 + 24 + 80  // seg + buildver + symtab + dysymtab
     let data_off = 32 + sizeofcmds
-    let cstr_off = data_off + text_size_aligned    // __cstring file offset
-    // __cap (size 0) and __abi (12 B) sit after __text + __cstring; all
-    // are 1-byte aligned so no inter-section padding.
-    let meta_off = cstr_off + cstr_len             // == __cap.offset == __abi.offset
+    let cstr_off  = data_off + text_size_aligned    // __cstring file offset
+    // File offsets parallel the vmaddr layout (a `.o` packs sections
+    // contiguously); reuse the same per-section pads.
+    let const_off = data_off + const_addr
+    let data_doff = data_off + data_addr
+    let meta_off  = data_off + meta_addr            // == __cap.offset == __abi.offset
     // clang aligns the relocation table to an 8-byte file boundary: it
     // pads the section data after __abi up to the next multiple of 8.
     // (Verified: clang reloff is 536/712/616 for the corpus — all %8==0.)
@@ -1236,6 +1281,24 @@ fn serialize(obj: MachoArm64Obj) -> [Int] {
                          0, 0,
                          0x00000002)
     }
+    // __const — float-literal pool (PR-C2). S_REGULAR (0x0), align 2^3
+    // (8-byte `.double`s). Read-only `__TEXT` data, no reloc.
+    if has_cflt {
+        _emit_section_64(out, "__const", "__TEXT",
+                         const_addr, cflt_len,
+                         const_off, 3,
+                         0, 0,
+                         0x00000000)
+    }
+    // __data — module-global HexaVal slots (PR-C1). S_REGULAR (0x0),
+    // align 2^3 (16-byte slots are 8-aligned). Writable `__DATA`, no reloc.
+    if has_gdata {
+        _emit_section_64(out, "__data", "__DATA",
+                         data_addr, gdata_len,
+                         data_doff, 3,
+                         0, 0,
+                         0x00000000)
+    }
     // __cap — empty capability manifest header (size 0, align 1, no reloc).
     _emit_section_64(out, "__cap", "__HEXA",
                      meta_addr, 0,
@@ -1262,6 +1325,18 @@ fn serialize(obj: MachoArm64Obj) -> [Int] {
     if has_cstr {
         let mut ci = 0
         while ci < cstr_len { out.push(obj.cstring[ci] & 0xff); ci = ci + 1 }
+    }
+    // __const bytes (8-aligned float-literal `.double` pool, PR-C2).
+    if has_cflt {
+        _zero_n(out, const_pad)
+        let mut cfi = 0
+        while cfi < cflt_len { out.push(obj.cflt[cfi] & 0xff); cfi = cfi + 1 }
+    }
+    // __data bytes (8-aligned zero-initialized global slots, PR-C1).
+    if has_gdata {
+        _zero_n(out, data_pad)
+        let mut gdi = 0
+        while gdi < gdata_len { out.push(obj.gdata[gdi] & 0xff); gdi = gdi + 1 }
     }
 
     // __cap is empty (no bytes). __abi: the 12-byte stamp.
@@ -1406,6 +1481,31 @@ fn _lir_op_uppercase(op: string) -> string {
     // Unknown — pass through; the encoder returns 0 and the walker
     // emits the sentinel word for follow-up triage.
     return op
+}
+
+// Classify a label operand's PC-relative addressing suffix into a
+// Mach-O reloc kind, returning [kind, base_len] where base_len is the
+// length of the symbol name with the `@…` suffix stripped. kind == -1
+// means no recognized suffix (a plain intra-fn label / runtime name).
+//   `sym@PAGE`        -> PAGE21      (3)
+//   `sym@PAGEOFF`     -> PAGEOFF12   (4)
+//   `sym@GOTPAGE`     -> GOT_LOAD_PAGE21    (handled in PR-C; classify now)
+//   `sym@GOTPAGEOFF`  -> GOT_LOAD_PAGEOFF12 (PR-C)
+fn _label_reloc_kind(s: string) -> [Int] {
+    // Order matters: test the GOT (longer) suffixes before the bare ones.
+    if _ends_with(s, "@GOTPAGEOFF") { return [MACHO_ARM64_RELOC_GOT_LOAD_PAGEOFF12, len(s) - 11] }
+    if _ends_with(s, "@GOTPAGE")    { return [MACHO_ARM64_RELOC_GOT_LOAD_PAGE21,    len(s) - 8] }
+    if _ends_with(s, "@PAGEOFF")    { return [MACHO_ARM64_RELOC_PAGEOFF12, len(s) - 8] }
+    if _ends_with(s, "@PAGE")       { return [MACHO_ARM64_RELOC_PAGE21,     len(s) - 5] }
+    return [-1, len(s)]
+}
+
+// Extract the bare symbol name (the `@…` suffix stripped to `base_len`)
+// from a page-relative operand. For a `label` operand the suffix lives
+// on `op.label`; for a `mem` operand (GOT load) it lives on `op.label`
+// too (`[Xn, sym@GOTPAGEOFF]`'s label field is `sym@GOTPAGEOFF`).
+fn _label_base_name(op: LOperand, base_len: Int) -> string {
+    return op.label.substring(0, base_len)
 }
 
 fn _lir_operand_str(op: LOperand) -> string {
@@ -1753,6 +1853,8 @@ fn _darwin_mangle_label(label: string) -> string {
 //     (first-defined) is prepended by pack_lir.
 fn _pack_fn(out_text: [Int],
             pending_offsets: [Int], pending_names: [string],
+            pending_page_offsets: [Int], pending_page_names: [string],
+            pending_page_kinds: [Int],
             blabel_names: [string], blabel_offsets: [Int],
             blabel_reforder: [string],
             f: LFunc) {
@@ -1783,17 +1885,59 @@ fn _pack_fn(out_text: [Int],
         }
 
         // Format operands to the [string] form encode_arm64_insn expects.
+        // PC-relative page operands (`sym@PAGE` / `sym@PAGEOFF` / GOT
+        // variants) are sanitized to a zero-immediate base form here: the
+        // encoder emits the bare instruction word (imm=0) and Pass-4
+        // attaches the matching PAGE21 / PAGEOFF12 relocation, which the
+        // linker patches with the resolved page / page-offset. Without
+        // this, `add Xd,Xn,sym@PAGEOFF` fell through to the register-form
+        // ADD path (xreg_idx of a `.LCstr@PAGEOFF` string = -1) → a
+        // garbage word, and `adrp Xd,sym@PAGE` carried no reloc → page 0.
         let mut ops: [string] = []
         let na = len(ins.args)
+        // Per-operand page-reloc capture (at most one symbol-relative
+        // operand per instruction in the LIR the codegen emits).
+        let mut page_kind = -1
+        let mut page_name = ""
         let mut k = 0
         while k < na {
-            ops.push(_lir_operand_str(ins.args[k]))
+            let arg = ins.args[k]
+            let raw = _lir_operand_str(arg)
+            // A label operand OR a mem operand may carry the `@…` suffix
+            // (mem form `[Xn, sym@GOTPAGEOFF]` is emitted by GOT loads).
+            let rk = _label_reloc_kind(raw)
+            if rk[0] >= 0 && (arg.kind == "label" || arg.kind == "mem") {
+                page_kind = rk[0]
+                page_name = _label_base_name(arg, rk[1])
+                // Sanitize the operand to a zero-immediate base form so
+                // the encoder produces the bare word.
+                if arg.kind == "mem" {
+                    // `[Xn, sym@GOTPAGEOFF]` -> `[Xn, #0]` (ldr base).
+                    ops.push("[" + arg.mem_base.name + ", #0]")
+                } else {
+                    // ADRP ignores ops[1]; ADD/LDR-imm read it as `#0`.
+                    ops.push("#0")
+                }
+            } else {
+                ops.push(raw)
+            }
             k = k + 1
         }
 
         let up = _lir_op_uppercase(ins.op)
         let word = encode_arm64_insn(up, ops)
         let cur_off = len(out_text)
+
+        // Symbol-relative page operand: emit the base word + record the
+        // (offset, base symbol, reloc kind) for Pass-4.
+        if page_kind >= 0 {
+            _push_word_le(out_text, word)
+            pending_page_offsets.push(cur_off)
+            pending_page_names.push(page_name)
+            pending_page_kinds.push(page_kind)
+            i = i + 1
+            continue
+        }
 
         // Branch targets: encoder emits the bare base bit-pattern;
         // intra-fn imm26 / imm19 / B.cond imm19 are patched below.
@@ -1944,6 +2088,14 @@ struct CstrPool {
 // concatenates every payload in rodata (= codegen intern) order, so a
 // `.LCstrN@PAGE`/`@PAGEOFF` ref resolves against the symbol at that
 // pool offset.
+// Round `v` up to the next multiple of 8 (section alignment for the
+// `__const` / `__data` pools).
+fn _align_up8(v: Int) -> Int {
+    let r = v & 7
+    if r == 0 { return v }
+    return v + (8 - r)
+}
+
 fn _build_cstr_pool(lm: LModule) -> CstrPool {
     let pool = CstrPool { bytes: [], labels: [], offsets: [] }
     let n = len(lm.rodata)
@@ -1953,6 +2105,57 @@ fn _build_cstr_pool(lm: LModule) -> CstrPool {
         pool.labels.push(sec.name)
         pool.offsets.push(len(pool.bytes))
         _append_hex_bytes(pool.bytes, sec.bytes)
+        i = i + 1
+    }
+    return pool
+}
+
+// Append the little-endian 8 bytes of an i64 to `out`.
+fn _append_u64_le_bytes(out: [Int], v: Int) {
+    let mut k = 0
+    while k < 8 {
+        out.push((v >> (8 * k)) & 0xff)
+        k = k + 1
+    }
+}
+
+// Build the `__TEXT,__const` float-literal pool (PR-C2) from `lm.floats`.
+// Each `LFloat` carries a `.LCfltN` label and the decimal source `text`
+// (e.g. "16.0"). clang lays each as a 8-byte `.double` (8-aligned). We
+// recover the IEEE-754 bits via the runtime `float_to_bits(to_float(text))`
+// (the same 4-surface builtin the compiler itself uses at op-fold time,
+// arm64_darwin.hexa) and serialize them little-endian. `offsets[i]` is the
+// pool offset of `.LCfltN` (= N_SECT value once the section vmaddr is added).
+fn _build_flt_pool(lm: LModule) -> CstrPool {
+    let pool = CstrPool { bytes: [], labels: [], offsets: [] }
+    let n = len(lm.floats)
+    let mut i = 0
+    while i < n {
+        let f = lm.floats[i]
+        pool.labels.push(f.label)
+        pool.offsets.push(len(pool.bytes))
+        let bits = float_to_bits(to_float(f.text))
+        _append_u64_le_bytes(pool.bytes, bits)
+        i = i + 1
+    }
+    return pool
+}
+
+// Build the `__DATA,__data` module-global pool (PR-C1) from `lm.globals`.
+// Each entry is a 16-byte zero-initialized HexaVal slot (8-aligned),
+// symbol name = the raw `g<id>` string (matches the `.s` path's
+// `g<id>: .quad 0 / .quad 0`). `offsets[i]` is the slot's pool offset
+// (= N_SECT value once the __data section vmaddr is added).
+fn _build_gdata_pool(lm: LModule) -> CstrPool {
+    let pool = CstrPool { bytes: [], labels: [], offsets: [] }
+    let n = len(lm.globals)
+    let mut i = 0
+    while i < n {
+        pool.labels.push(lm.globals[i])
+        pool.offsets.push(len(pool.bytes))
+        // 16-byte zero HexaVal slot.
+        let mut z = 0
+        while z < 16 { pool.bytes.push(0); z = z + 1 }
         i = i + 1
     }
     return pool
@@ -1995,24 +2198,46 @@ pub fn pack_lir(lm: LModule) -> MachoArm64Obj {
         strtab:     [],
         dwarf_line: [],
         cstring:    [],
+        cflt:       [],
+        gdata:      [],
     }
 
-    // ── Pass 0: build the `__cstring` literal pool from rodata. ──
-    // The pool bytes become `__TEXT,__cstring`; each `.LCstr*` label is
-    // a local N_SECT symbol (section 2) at its pool offset. When the
-    // pool is empty the 3-section legacy layout is preserved (the
-    // `__cstring` section + symbols are simply not emitted).
+    // ── Pass 0: build the data pools. ──
+    //   __cstring  ← rodata `.LCstr*`  (PR-A)
+    //   __const    ← lm.floats `.LCflt*` 8-byte doubles (PR-C2)
+    //   __data     ← lm.globals `g<id>` 16-byte HexaVal slots (PR-C1)
+    // Each pool's labels become local N_SECT symbols at their pool
+    // offset; the `@PAGE`/`@PAGEOFF` reloc pair resolves against them.
+    // Empty pools keep the prior layout byte-stable (the section + its
+    // symbols are simply not emitted).
     let cpool = _build_cstr_pool(lm)
     let has_cstr = len(cpool.bytes) > 0
     let mut ci = 0
     while ci < len(cpool.bytes) { obj.cstring.push(cpool.bytes[ci]); ci = ci + 1 }
-    // Section indices: with `__cstring` present the meta sections shift
-    // down one (1 __text · 2 __cstring · 3 __cap · 4 __abi); without it
-    // they keep the legacy (2 __cap · 3 __abi) numbering.
-    let mut sect_cap = 2
-    let mut sect_abi = 3
-    if has_cstr { sect_cap = 3 }
-    if has_cstr { sect_abi = 4 }
+
+    let fpool = _build_flt_pool(lm)
+    let has_cflt = len(fpool.bytes) > 0
+    let mut fi0 = 0
+    while fi0 < len(fpool.bytes) { obj.cflt.push(fpool.bytes[fi0]); fi0 = fi0 + 1 }
+
+    let gpool = _build_gdata_pool(lm)
+    let has_gdata = len(gpool.bytes) > 0
+    let mut gi0 = 0
+    while gi0 < len(gpool.bytes) { obj.gdata.push(gpool.bytes[gi0]); gi0 = gi0 + 1 }
+
+    // Section indices in clang emission order:
+    //   1 __text · [__cstring] · [__const] · [__data] · __cap · __abi
+    // Each optional data section, when present, shifts every later
+    // section's 1-based index up by one. `__text` is always 1.
+    let mut sect_cstr  = 0
+    let mut sect_const = 0
+    let mut sect_data  = 0
+    let mut next_sect  = 2
+    if has_cstr  { sect_cstr  = next_sect; next_sect = next_sect + 1 }
+    if has_cflt  { sect_const = next_sect; next_sect = next_sect + 1 }
+    if has_gdata { sect_data  = next_sect; next_sect = next_sect + 1 }
+    let sect_cap = next_sect
+    let sect_abi = next_sect + 1
 
     // ── Pass 1: walk every LFunc → text bytes + collect symbol inputs ──
     //
@@ -2021,6 +2246,11 @@ pub fn pack_lir(lm: LModule) -> MachoArm64Obj {
     // defined-externs, then undefs) — required for `r_symbolnum` parity.
     let pending_offsets: [Int]    = []   // __text offset of each extern BL
     let pending_names:   [string] = []   // target name per extern BL
+    // Page-relative refs (ADRP/ADD/LDR `@PAGE`/`@PAGEOFF`/GOT) — parallel
+    // to the BRANCH26 pending arrays but carrying a per-site reloc KIND.
+    let pending_page_offsets: [Int]    = []
+    let pending_page_names:   [string] = []
+    let pending_page_kinds:   [Int]    = []
     let blabel_names:    [string] = []   // every block label (def order)
     let blabel_offsets:  [Int]    = []   // its __text offset
     let blabel_reforder: [string] = []   // labels in first-branch-ref order
@@ -2036,6 +2266,7 @@ pub fn pack_lir(lm: LModule) -> MachoArm64Obj {
         fn_values.push(len(obj.text))
         if _is_entry_symbol_name(f.name) { fn_is_entry.push(1) } else { fn_is_entry.push(0) }
         _pack_fn(obj.text, pending_offsets, pending_names,
+                 pending_page_offsets, pending_page_names, pending_page_kinds,
                  blabel_names, blabel_offsets, blabel_reforder, f)
         i = i + 1
     }
@@ -2044,11 +2275,24 @@ pub fn pack_lir(lm: LModule) -> MachoArm64Obj {
     let mut text_pad = 0
     let trem = text_len & 3
     if trem != 0 { text_pad = 4 - trem }
-    // __cap / __abi vmaddr = end of __text (4-aligned) + __cstring pool.
-    // Must match `serialize`'s meta_addr so the N_SECT symbol values
-    // (ltmp1/ltmp2/_hexa_cap_manifest/_hexa_abi_stamp) line up.
-    let mut meta_addr = text_len + text_pad
-    if has_cstr { meta_addr = text_len + text_pad + len(cpool.bytes) }
+    // Contiguous section vmaddr layout (must match `serialize`'s
+    // _data_section_layout EXACTLY so every N_SECT symbol value lines up):
+    //   __text   @ 0 .. text_size_aligned (4-align)
+    //   __cstring@ cstr_base, align 1
+    //   __const  @ const_base, align 8 (.LCflt doubles)
+    //   __data   @ data_base, align 8 (g<id> HexaVal slots)
+    //   __cap/__abi @ meta_addr
+    // Walk the running vmaddr, only advancing (and 8-aligning) for
+    // sections that are actually present, so an absent section is a
+    // pure no-op (keeps the prior layout byte-stable).
+    let cstr_base = text_len + text_pad
+    let mut cursor = cstr_base
+    if has_cstr { cursor = cstr_base + len(cpool.bytes) }
+    let mut const_base = 0
+    if has_cflt { const_base = _align_up8(cursor); cursor = const_base + len(fpool.bytes) }
+    let mut data_base = 0
+    if has_gdata { data_base = _align_up8(cursor); cursor = data_base + len(gpool.bytes) }
+    let meta_addr = cursor
 
     // ── Pass 2: partition extern BL targets into intra-module-defined
     // (pre-patch, no reloc) vs undefined (sorted, get a reloc). ──
@@ -2151,16 +2395,39 @@ pub fn pack_lir(lm: LModule) -> MachoArm64Obj {
     }
 
     // `__cstring` literal-pool symbols — one local N_SECT per `.LCstr*`
-    // (section 2, value = byte offset into the pool). The ADRP/ADD
-    // `@PAGE`/`@PAGEOFF` reloc pair (PR-B) resolves against these. The
-    // label name already carries the `.LCstr` form; the `.s` path
-    // references it verbatim (no `_` mangle — it's a section-local L
-    // symbol, not an ABI symbol). Emit only when the pool is non-empty.
+    // (section 2). The ADRP/ADD `@PAGE`/`@PAGEOFF` reloc pair (PR-B)
+    // resolves against these. A Mach-O N_SECT symbol's `n_value` is the
+    // section-relative VIRTUAL ADDRESS, not a bare in-section offset:
+    // `__text` syms work with a plain offset only because __text.vmaddr
+    // is 0, but `__cstring` sits at vmaddr `cstr_base` (= 4-aligned end
+    // of __text), so each label's value = cstr_base + pool_offset.
+    // (Without this ld64 rejects: ".LCstr0 ... address isn't in its
+    // designated section".) The label name carries the `.LCstr` form
+    // verbatim (no `_` mangle — section-local L symbol). `cstr_base` /
+    // `const_base` / `data_base` were computed in the layout block above.
     if has_cstr {
         let mut pli = 0
         while pli < len(cpool.labels) {
-            _push_local_sym(obj, sym_names, cpool.labels[pli], 2, cpool.offsets[pli])
+            _push_local_sym(obj, sym_names, cpool.labels[pli], sect_cstr, cstr_base + cpool.offsets[pli])
             pli = pli + 1
+        }
+    }
+    // `__TEXT,__const` float-pool symbols — one local N_SECT per `.LCflt*`
+    // (PR-C2). Value = const_base (section vmaddr) + pool offset.
+    if has_cflt {
+        let mut fli = 0
+        while fli < len(fpool.labels) {
+            _push_local_sym(obj, sym_names, fpool.labels[fli], sect_const, const_base + fpool.offsets[fli])
+            fli = fli + 1
+        }
+    }
+    // `__DATA,__data` module-global symbols — one local N_SECT per
+    // `g<id>` (PR-C1). Value = data_base (section vmaddr) + slot offset.
+    if has_gdata {
+        let mut dli = 0
+        while dli < len(gpool.labels) {
+            _push_local_sym(obj, sym_names, gpool.labels[dli], sect_data, data_base + gpool.offsets[dli])
+            dli = dli + 1
         }
     }
 
@@ -2226,9 +2493,17 @@ pub fn pack_lir(lm: LModule) -> MachoArm64Obj {
         mi = mi + 1
     }
 
-    // ── Pass 4: resolve branches; emit relocs (descending address) ──
-    let reloc_offs: [Int] = []
-    let reloc_idxs: [Int] = []
+    // ── Pass 4: resolve branches + page refs; emit relocs ──
+    // A single reloc table carries BRANCH26 (calls) and PAGE21 /
+    // PAGEOFF12 / GOT_LOAD (data addressing) records. Collected with a
+    // parallel kind list, then flushed in DESCENDING address order
+    // (clang's __text relocation table is emitted high-address-first).
+    let reloc_offs:  [Int] = []
+    let reloc_idxs:  [Int] = []
+    let reloc_kinds: [Int] = []
+    // Page targets that resolved to no symbol (PR-C scope: globals /
+    // float pool). Reported (not silently dropped) after the walk.
+    let pack_page_unresolved: [string] = []
     pi = 0
     while pi < np {
         let off = pending_offsets[pi]
@@ -2266,22 +2541,93 @@ pub fn pack_lir(lm: LModule) -> MachoArm64Obj {
         } else {
             reloc_offs.push(off)
             reloc_idxs.push(idx)
+            reloc_kinds.push(MACHO_ARM64_RELOC_BRANCH26)
         }
         pi = pi + 1
     }
-    // Flush extern relocs in DESCENDING address order (clang's __text
-    // relocation table is emitted high-address-first).
+
+    // Page-relative refs (ADRP/ADD/LDR @PAGE/@PAGEOFF/GOT). Each resolves
+    // against a SYMBOL in obj.symbols: the `.LCstr*` literals are defined
+    // N_SECT locals (added in Pass 3); `_g*` data globals are defined
+    // N_SECT (PR-C) or undefined externs. Symbol-based reloc (r_extern=1)
+    // works for both — the linker computes the page/page-offset of the
+    // target symbol's final address. The PAGE21 vs PAGEOFF12 vs GOT kind
+    // is carried per-site from `_pack_fn`.
+    let mut ppi = 0
+    let npp = len(pending_page_offsets)
+    while ppi < npp {
+        let poff  = pending_page_offsets[ppi]
+        let praw  = pending_page_names[ppi]
+        let pkind = pending_page_kinds[ppi]
+        // `.LCstr*` / `.LCflt*` local labels are stored verbatim in
+        // symbols[]; `g<id>` data globals are defined as `_g<id>`. Try the
+        // raw name first, then the ABI-mangled form.
+        let mut pidx = _find_sym_by_name(obj.symbols, obj.strtab, praw)
+        if pidx < 0 {
+            pidx = _find_sym_by_name(obj.symbols, obj.strtab, _darwin_mangle(praw))
+        }
+        if pidx < 0 {
+            // Unknown page target (not a `.LCstr*` literal, a block
+            // label, or a known global). PR-B's measured scope is
+            // cstring-only; `g<id>` data globals + `.LCflt*` float pool
+            // are PR-C. Skipping the reloc would silently mis-address, so
+            // FAIL LOUDLY: leave the site UNRELOCATED but record the gap
+            // via the pack diagnostic counter rather than fabricate a
+            // binding. (A missing reloc shows as a 0-page ref in otool —
+            // observable, not a hidden miscompile claim.)
+            pack_page_unresolved.push(praw)
+            ppi = ppi + 1
+            continue
+        }
+        reloc_offs.push(poff)
+        reloc_idxs.push(pidx)
+        reloc_kinds.push(pkind)
+        ppi = ppi + 1
+    }
+
+    // Flush all relocs in DESCENDING address order. Insertion-order the
+    // (offset, idx, kind) triples high-address-first.
     let nr = len(reloc_offs)
-    let mut ri = nr - 1
-    while ri >= 0 {
+    let order: [Int] = []
+    let mut oi = 0
+    while oi < nr { order.push(oi); oi = oi + 1 }
+    // Selection-sort `order` by reloc_offs DESCENDING (nr is small).
+    let mut a = 0
+    while a < nr {
+        let mut best = a
+        let mut b = a + 1
+        while b < nr {
+            if reloc_offs[order[b]] > reloc_offs[order[best]] { best = b }
+            b = b + 1
+        }
+        let tmp = order[a]
+        order[a] = order[best]
+        order[best] = tmp
+        a = a + 1
+    }
+    let mut ri = 0
+    while ri < nr {
+        let e = order[ri]
+        let k = reloc_kinds[e]
+        // PAGEOFF12 / GOT_LOAD_PAGEOFF12 encode the LOW 12 bits of the
+        // target's absolute address — they are NOT pc-relative (pcrel=0).
+        // BRANCH26 / PAGE21 / GOT_LOAD_PAGE21 are pc-relative (pcrel=1).
+        let mut pc = 1
+        if k == MACHO_ARM64_RELOC_PAGEOFF12 || k == MACHO_ARM64_RELOC_GOT_LOAD_PAGEOFF12 { pc = 0 }
         obj.relocs.push(Arm64Reloc {
-            offset:  reloc_offs[ri],
-            sym_idx: reloc_idxs[ri],
-            kind:    MACHO_ARM64_RELOC_BRANCH26,
-            pcrel:   1,
+            offset:  reloc_offs[e],
+            sym_idx: reloc_idxs[e],
+            kind:    k,
+            pcrel:   pc,
             length:  2,
         })
-        ri = ri - 1
+        ri = ri + 1
+    }
+    // Honest diagnostic: page refs that found no defining symbol (a
+    // PR-C global / float-pool gap, NOT a silent miscompile). Surfaced
+    // so the caller / verdict sees the real residual.
+    if len(pack_page_unresolved) > 0 {
+        eprintln("pack_lir: " + to_string(len(pack_page_unresolved)) + " page ref(s) unresolved (PR-C: globals/floats) e.g. " + pack_page_unresolved[0])
     }
     return obj
 }

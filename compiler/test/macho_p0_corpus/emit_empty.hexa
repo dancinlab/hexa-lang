@@ -19,6 +19,8 @@ fn main() {
         strtab:     [],
         dwarf_line: [],
         cstring:    [],
+        cflt:       [],
+        gdata:      [],
     }
     let bytes = serialize(obj)
     let n = len(bytes)

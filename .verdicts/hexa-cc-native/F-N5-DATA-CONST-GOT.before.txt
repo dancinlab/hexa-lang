@@ -1,0 +1,26 @@
+PR-C (cc-native/n5-data-const-got) — BEFORE measurement
+Base: cc-native/n5-page-reloc-v2 (PR-B #2455) + merged origin/main (commit aa9855e1d)
+Date: 2026-06-01
+aprime: /tmp/aprime_page2 (PR-B build, smoke exit(42) PASS)
+Flat: /tmp/cc-l1-flat.hexa (46 files / 40198L)
+
+Command:
+  HEXA_ATLAS_EMBED=/tmp/noatlas /tmp/aprime_page2 _drv.hexa --emit=obj \
+    --target=arm64-apple-darwin --ignore-errors -o /tmp/cc-prc.o /tmp/cc-l1-flat.hexa
+
+Pre-existing (NOT a regression): 15 diagnostics incl HX3001 empty_atlas dup
+(AtlasRef vs AtlasIndex, cc-l1-flat.hexa:39761) — --ignore-errors proceeds to codegen.
+
+UNRESOLVED PAGE-REF RESIDUAL (the eprintln, verbatim):
+  pack_lir: 4324 page ref(s) unresolved (PR-C: globals/floats) e.g. g0
+
+Work-list classification (per arm64_darwin.hexa _hv_load / _hv_store_dst / asm.hexa):
+  - g<id>     globals  -> __DATA,__data section + g<id> N_SECT defs
+                          (16B HexaVal slot = .quad 0/.quad 0, zero-init, 8-align)
+                          refs: gN@PAGE / gN@PAGEOFF (PAGE21/PAGEOFF12), load + store paths
+  - .LCflt*   floats   -> __TEXT,__const section + .LCflt* N_SECT defs
+                          (8B IEEE-754 double = .double <text>, 8-align)
+                          refs: .LCfltN@PAGE / .LCfltN@PAGEOFF
+  - GOT_LOAD: opts.shared-gated = 0 for obj-emit -> NOT exercised by L1 flat (none expected)
+
+Falsifier: after PR-C, the eprintln count must DROP toward 0 (every g<id>/.LCflt* must resolve).
