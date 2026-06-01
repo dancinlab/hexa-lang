@@ -1,0 +1,319 @@
+// ════════════════════════════════════════════════════════════════════════════
+//  clm_learn_while_infer.hexa — host learn-while-infer loop (no train/infer split).
+//
+//  PARADIGM (FLAME-PERF p8): there is NO separate train phase. Every inference
+//  step ALSO applies a bounded streaming update. The model improves WHILE it is
+//  being queried — each forward pass is immediately followed by one bounded
+//  AdamW step seeded by that step's own CE gradient. This is the host-simulable
+//  slice of the full on-chip-plasticity claim (the hardware-streaming half is
+//  HONEST-DEFERred — see §finding in the verdict).
+//
+//  TOY TASK: a fixed (tokens, targets) next-token block (L=1 CLMConvMoE, the
+//  proven tiny config V=256·d=8·E=2·K=3·T=4 from clm_step #2303). The "stream"
+//  feeds the block once per step; at each step the model (a) does a forward
+//  INFERENCE, recording CE + argmax-correct, then (b) immediately applies ONE
+//  bounded streaming update. No epoch boundary, no batch accumulation, no
+//  freeze — inference and learning are the same step.
+//
+//  FALSIFIER (pre-registered):
+//    (a) z_drop WITHIN BUDGET — streaming quality never degrades: no step's CE
+//        spikes above loss0 (the un-updated initial inference CE), AND the
+//        late-window mean CE ≤ loss0 (online learning does not hurt inference).
+//        z_drop := max(0, late_mean_CE − loss0). budget := 0.0 (no degradation).
+//    (b) identity PROBE > 0.80 — after the stream, the model RETAINS its task
+//        ability: fraction of probe positions with argmax(logits)==target > 0.80.
+//
+//  CLOSES (🟢) iff z_drop ≤ budget ∧ PROBE > 0.80. Otherwise the honest negative
+//  reports the ruled-out axis (which clause failed) — a closed-negative is valid.
+//
+//  Reuses verified ops (conv #2288 · gn #2289 · moe #2292 · CE/AdamW #2303).
+//  English code · hexa idiom · stdlib_trig_libm (libm exp via nn_lib).
+// ════════════════════════════════════════════════════════════════════════════
+
+use "stdlib/flame/tensor_lib"
+use "stdlib/flame/conv_lib"
+use "stdlib/flame/gn_lib"
+use "stdlib/flame/moe_lib"
+use "stdlib/flame/nn_lib"
+use "stdlib/flame/optim_lib"
+
+fn _lwi_abs(x: float) -> float { if x < 0.0 { return 0.0 - x } return x }
+
+// Forward (L=1) — verbatim wiring from the verified clm_step (#2303). Writes
+// the bwd caches and out_logits. This single forward is BOTH the inference and
+// the source of the streaming-update gradient (no separate train forward).
+fn lwi_fwd(tokens: int,
+           embed: int, ecW: int, ecB: int, tcW: int, tcB: int, tgG: int, tgB: int,
+           rW: int, rB: int, e0W: int, e0B: int, e1W: int, e1B: int,
+           noG: int, noB: int, roW: int, roB: int,
+           xe: int, xec: int, xt: int, hn0: int, xhat0: int, inv0: int,
+           eo0: int, eo1: int, probs: int, ex_out: int, yn: int, xhatN: int, invN: int,
+           out_logits: int, T: int, d: int, E: int, V: int, K: int) {
+    nn_embedding_fwd(tokens, embed, xe, T, d)
+    nn_conv1d_fwd(xe, ecW, ecB, xec, T, d, d, K, 1)
+    let h0 = t_zeros(T * d)
+    nn_conv1d_fwd(xec, tcW, tcB, h0, T, d, d, K, 1)
+    let mean0 = t_zeros(1)
+    nn_groupnorm_fwd(h0, tgG, tgB, hn0, mean0, inv0, xhat0, T, d, 1)
+    let hg0 = t_zeros(T * d); nn_gelu_fwd(hn0, hg0, T * d)
+    let mut i = 0
+    while i < T * d { t_set(xt, i, t_get(xec, i) + t_get(hg0, i)); i = i + 1 }
+    let logits_r = t_zeros(T * E)
+    nn_conv1d_fwd(xt, rW, rB, logits_r, T, d, E, 1, 1)
+    nn_conv1d_fwd(xt, e0W, e0B, eo0, T, d, d, K, 1)
+    nn_conv1d_fwd(xt, e1W, e1B, eo1, T, d, d, K, 1)
+    let ex0 = t_zeros(T * d); nn_gelu_fwd(eo0, ex0, T * d)
+    let ex1 = t_zeros(T * d); nn_gelu_fwd(eo1, ex1, T * d)
+    let mut j = 0
+    while j < T * d {
+        t_set(ex_out, 0 * T * d + j, t_get(ex0, j))
+        t_set(ex_out, 1 * T * d + j, t_get(ex1, j))
+        j = j + 1
+    }
+    let y = t_zeros(T * d)
+    nn_moe_router_fwd(logits_r, ex_out, probs, y, T, E, d)
+    let meanN = t_zeros(1)
+    nn_groupnorm_fwd(y, noG, noB, yn, meanN, invN, xhatN, T, d, 1)
+    nn_conv1d_fwd(yn, roW, roB, out_logits, T, d, V, 1, 1)
+}
+
+// CE gradient seed: dlogits[t,v] = (softmax(logits[t])[v] − 1[v=tgt]) / T.
+fn lwi_ce_grad(logits: int, targets: int, dlogits_out: int, T: int, V: int) {
+    let mut t = 0
+    while t < T {
+        let base = t * V
+        let mut mx = t_get(logits, base)
+        let mut i = 1
+        while i < V { let v = t_get(logits, base + i); if v > mx { mx = v }; i = i + 1 }
+        let mut sm = 0.0
+        let mut i2 = 0
+        while i2 < V { sm = sm + exp(t_get(logits, base + i2) - mx); i2 = i2 + 1 }
+        let invT = 1.0 / to_float(T)
+        let mut v3 = 0
+        while v3 < V {
+            let p = exp(t_get(logits, base + v3) - mx) / sm
+            t_set(dlogits_out, base + v3, p * invT)
+            v3 = v3 + 1
+        }
+        let tgt = to_int(t_get(targets, t))
+        t_set(dlogits_out, base + tgt, t_get(dlogits_out, base + tgt) - invT)
+        t = t + 1
+    }
+}
+
+// Backward chain (verbatim wiring from #2303). Writes analytic grads.
+fn lwi_bwd(dlogits: int, tokens: int,
+           embed: int, ecW: int, tcW: int, tgG: int, rW: int, e0W: int, e1W: int, noG: int, roW: int,
+           xe: int, xec: int, xt: int, hn0: int, xhat0: int, inv0: int,
+           eo0: int, eo1: int, probs: int, ex_out: int, yn: int, xhatN: int, invN: int,
+           dembed: int, decW: int, decB: int, dtcW: int, dtcB: int, dtgG: int, dtgB: int,
+           drW: int, drB: int, de0W: int, de0B: int, de1W: int, de1B: int,
+           dnoG: int, dnoB: int, droW: int, droB: int,
+           T: int, d: int, E: int, V: int, K: int) {
+    let dynorm = t_zeros(T * d)
+    nn_conv1d_bwd(yn, roW, dlogits, droW, dynorm, droB, T, d, V, 1, 1)
+    let dy = t_zeros(T * d)
+    nn_groupnorm_bwd(xhatN, invN, noG, dynorm, dnoG, dnoB, dy, T, d, 1)
+    let dlogits_r = t_zeros(T * E)
+    let dex_out = t_zeros(E * T * d)
+    nn_moe_router_bwd(probs, ex_out, dy, dlogits_r, dex_out, T, E, d)
+    let dxt_r = t_zeros(T * d)
+    nn_conv1d_bwd(xt, rW, dlogits_r, drW, dxt_r, drB, T, d, E, 1, 1)
+    let dex0 = t_zeros(T * d); let dex1 = t_zeros(T * d)
+    let mut ei = 0
+    while ei < T * d {
+        t_set(dex0, ei, t_get(dex_out, 0 * T * d + ei))
+        t_set(dex1, ei, t_get(dex_out, 1 * T * d + ei))
+        ei = ei + 1
+    }
+    let deo0 = t_zeros(T * d); nn_gelu_bwd(eo0, dex0, deo0, T * d)
+    let deo1 = t_zeros(T * d); nn_gelu_bwd(eo1, dex1, deo1, T * d)
+    let dxt_e0 = t_zeros(T * d); nn_conv1d_bwd(xt, e0W, deo0, de0W, dxt_e0, de0B, T, d, d, K, 1)
+    let dxt_e1 = t_zeros(T * d); nn_conv1d_bwd(xt, e1W, deo1, de1W, dxt_e1, de1B, T, d, d, K, 1)
+    let dxt = t_zeros(T * d)
+    let mut xi = 0
+    while xi < T * d {
+        t_set(dxt, xi, t_get(dxt_r, xi) + t_get(dxt_e0, xi) + t_get(dxt_e1, xi))
+        xi = xi + 1
+    }
+    let dhn0 = t_zeros(T * d); nn_gelu_bwd(hn0, dxt, dhn0, T * d)
+    let dh0 = t_zeros(T * d)
+    nn_groupnorm_bwd(xhat0, inv0, tgG, dhn0, dtgG, dtgB, dh0, T, d, 1)
+    let dxec_b = t_zeros(T * d)
+    nn_conv1d_bwd(xec, tcW, dh0, dtcW, dxec_b, dtcB, T, d, d, K, 1)
+    let dxec = t_zeros(T * d)
+    let mut ci = 0
+    while ci < T * d { t_set(dxec, ci, t_get(dxt, ci) + t_get(dxec_b, ci)); ci = ci + 1 }
+    let dxe = t_zeros(T * d)
+    nn_conv1d_bwd(xe, ecW, dxec, decW, dxe, decB, T, d, d, K, 1)
+    let mut zi = 0
+    while zi < V * d { t_set(dembed, zi, 0.0); zi = zi + 1 }
+    nn_embedding_bwd_scatter(dxe, tokens, dembed, T, d)
+}
+
+// Bounded streaming update. The "bound" is the essence of learn-while-infer:
+// a small step size so each inference's online update is gentle (no runaway,
+// bounded plasticity). lr=0.02 · weight-decay 0 · standard AdamW betas.
+fn _stream_adam(W: int, gW: int, m: int, v: int, n: int, t: int) {
+    opt_adamw_step(W, gW, m, v, n, 0.02, 0.9, 0.999, 0.00000001, 0.0, t)
+}
+
+// PROBE: fraction of positions where argmax(logits[t]) == target[t].
+fn lwi_probe(logits: int, targets: int, T: int, V: int) -> float {
+    let mut hit = 0
+    let mut t = 0
+    while t < T {
+        let base = t * V
+        let mut amax = 0
+        let mut mx = t_get(logits, base)
+        let mut i = 1
+        while i < V {
+            let v = t_get(logits, base + i)
+            if v > mx { mx = v; amax = i }
+            i = i + 1
+        }
+        if amax == to_int(t_get(targets, t)) { hit = hit + 1 }
+        t = t + 1
+    }
+    return to_float(hit) / to_float(T)
+}
+
+fn main() {
+    println("clm_learn_while_infer — host learn-while-infer (no train/infer split)")
+    let T = 4; let d = 8; let E = 2; let V = 256; let K = 3
+    let dd = d * d * K; let ed = E * d; let vd = V * d
+
+    // toy task: a fixed next-token block (tokens → targets)
+    let tokens = t_zeros(T)
+    t_set(tokens, 0, 3.0); t_set(tokens, 1, 14.0); t_set(tokens, 2, 159.0); t_set(tokens, 3, 26.0)
+    let targets = t_zeros(T)
+    t_set(targets, 0, 14.0); t_set(targets, 1, 159.0); t_set(targets, 2, 26.0); t_set(targets, 3, 7.0)
+
+    // params
+    let embed = t_zeros(vd);  t_fill_lcg(embed, vd, 1, 0.3)
+    let ecW = t_zeros(dd);    t_fill_lcg(ecW, dd, 2, 0.2)
+    let ecB = t_zeros(d);     t_fill_lcg(ecB, d, 3, 0.1)
+    let tcW = t_zeros(dd);    t_fill_lcg(tcW, dd, 4, 0.2)
+    let tcB = t_zeros(d);     t_fill_lcg(tcB, d, 5, 0.1)
+    let tgG = t_zeros(d);     t_fill_lcg(tgG, d, 6, 0.5)
+    let tgB = t_zeros(d);     t_fill_lcg(tgB, d, 7, 0.1)
+    let rW = t_zeros(ed);     t_fill_lcg(rW, ed, 12, 0.2)
+    let rB = t_zeros(E);      t_fill_lcg(rB, E, 13, 0.1)
+    let e0W = t_zeros(dd);    t_fill_lcg(e0W, dd, 14, 0.2)
+    let e0B = t_zeros(d);     t_fill_lcg(e0B, d, 15, 0.1)
+    let e1W = t_zeros(dd);    t_fill_lcg(e1W, dd, 16, 0.2)
+    let e1B = t_zeros(d);     t_fill_lcg(e1B, d, 17, 0.1)
+    let noG = t_zeros(d);     t_fill_lcg(noG, d, 18, 0.5)
+    let noB = t_zeros(d);     t_fill_lcg(noB, d, 19, 0.1)
+    let roW = t_zeros(vd);    t_fill_lcg(roW, vd, 20, 0.2)
+    let roB = t_zeros(V);     t_fill_lcg(roB, V, 21, 0.1)
+
+    // grads
+    let dembed=t_zeros(vd); let decW=t_zeros(dd); let decB=t_zeros(d)
+    let dtcW=t_zeros(dd); let dtcB=t_zeros(d); let dtgG=t_zeros(d); let dtgB=t_zeros(d)
+    let drW=t_zeros(ed); let drB=t_zeros(E)
+    let de0W=t_zeros(dd); let de0B=t_zeros(d); let de1W=t_zeros(dd); let de1B=t_zeros(d)
+    let dnoG=t_zeros(d); let dnoB=t_zeros(d); let droW=t_zeros(vd); let droB=t_zeros(V)
+
+    // adam (streaming-plasticity) state per param
+    let m_embed=t_zeros(vd); let v_embed=t_zeros(vd)
+    let m_ecW=t_zeros(dd); let v_ecW=t_zeros(dd); let m_ecB=t_zeros(d); let v_ecB=t_zeros(d)
+    let m_tcW=t_zeros(dd); let v_tcW=t_zeros(dd); let m_tcB=t_zeros(d); let v_tcB=t_zeros(d)
+    let m_tgG=t_zeros(d); let v_tgG=t_zeros(d); let m_tgB=t_zeros(d); let v_tgB=t_zeros(d)
+    let m_rW=t_zeros(ed); let v_rW=t_zeros(ed); let m_rB=t_zeros(E); let v_rB=t_zeros(E)
+    let m_e0W=t_zeros(dd); let v_e0W=t_zeros(dd); let m_e0B=t_zeros(d); let v_e0B=t_zeros(d)
+    let m_e1W=t_zeros(dd); let v_e1W=t_zeros(dd); let m_e1B=t_zeros(d); let v_e1B=t_zeros(d)
+    let m_noG=t_zeros(d); let v_noG=t_zeros(d); let m_noB=t_zeros(d); let v_noB=t_zeros(d)
+    let m_roW=t_zeros(vd); let v_roW=t_zeros(vd); let m_roB=t_zeros(V); let v_roB=t_zeros(V)
+
+    // caches
+    let xe=t_zeros(T*d); let xec=t_zeros(T*d); let xt=t_zeros(T*d)
+    let hn0=t_zeros(T*d); let xhat0=t_zeros(T*d); let inv0=t_zeros(1)
+    let eo0=t_zeros(T*d); let eo1=t_zeros(T*d); let probs=t_zeros(T*E); let ex_out=t_zeros(E*T*d)
+    let yn=t_zeros(T*d); let xhatN=t_zeros(T*d); let invN=t_zeros(1)
+    let logits=t_zeros(T*V); let dlogits=t_zeros(T*V)
+
+    // ── learn-while-infer stream ────────────────────────────────────────────
+    // Each step = ONE inference forward (records CE quality) + ONE bounded
+    // streaming update. There is no separate train phase: the SAME forward that
+    // serves inference also seeds the plasticity update applied immediately.
+    let stream_steps = 30
+    let warmup = 5            // late-window begins after warmup steps
+    let mut loss0 = 0.0       // un-updated initial inference CE (the baseline)
+    let mut step_ce = 0.0
+    let mut peak_ce = 0.0     // worst CE seen over the WHOLE stream
+    let mut late_sum = 0.0    // sum of CE over the late window
+    let mut late_n = 0
+    let mut step = 1
+    while step <= stream_steps {
+        // (a) INFERENCE forward — this is the model answering a query.
+        lwi_fwd(tokens, embed, ecW, ecB, tcW, tcB, tgG, tgB, rW, rB,
+                e0W, e0B, e1W, e1B, noG, noB, roW, roB,
+                xe, xec, xt, hn0, xhat0, inv0, eo0, eo1, probs, ex_out,
+                yn, xhatN, invN, logits, T, d, E, V, K)
+        step_ce = nn_ce_loss_allpos(logits, targets, T, V)
+        if step == 1 { loss0 = step_ce; peak_ce = step_ce }
+        if step_ce > peak_ce { peak_ce = step_ce }
+        if step > warmup { late_sum = late_sum + step_ce; late_n = late_n + 1 }
+        if step == 1  { println("  stream step 1   infer CE = " + to_string(step_ce)) }
+        if step == 15 { println("  stream step 15  infer CE = " + to_string(step_ce)) }
+
+        // (b) STREAMING UPDATE — bounded plasticity from THIS step's own CE.
+        lwi_ce_grad(logits, targets, dlogits, T, V)
+        lwi_bwd(dlogits, tokens, embed, ecW, tcW, tgG, rW, e0W, e1W, noG, roW,
+                xe, xec, xt, hn0, xhat0, inv0, eo0, eo1, probs, ex_out, yn, xhatN, invN,
+                dembed, decW, decB, dtcW, dtcB, dtgG, dtgB, drW, drB, de0W, de0B, de1W, de1B,
+                dnoG, dnoB, droW, droB, T, d, E, V, K)
+        _stream_adam(embed, dembed, m_embed, v_embed, vd, step)
+        _stream_adam(ecW, decW, m_ecW, v_ecW, dd, step); _stream_adam(ecB, decB, m_ecB, v_ecB, d, step)
+        _stream_adam(tcW, dtcW, m_tcW, v_tcW, dd, step); _stream_adam(tcB, dtcB, m_tcB, v_tcB, d, step)
+        _stream_adam(tgG, dtgG, m_tgG, v_tgG, d, step);  _stream_adam(tgB, dtgB, m_tgB, v_tgB, d, step)
+        _stream_adam(rW, drW, m_rW, v_rW, ed, step);     _stream_adam(rB, drB, m_rB, v_rB, E, step)
+        _stream_adam(e0W, de0W, m_e0W, v_e0W, dd, step); _stream_adam(e0B, de0B, m_e0B, v_e0B, d, step)
+        _stream_adam(e1W, de1W, m_e1W, v_e1W, dd, step); _stream_adam(e1B, de1B, m_e1B, v_e1B, d, step)
+        _stream_adam(noG, dnoG, m_noG, v_noG, d, step);  _stream_adam(noB, dnoB, m_noB, v_noB, d, step)
+        _stream_adam(roW, droW, m_roW, v_roW, vd, step); _stream_adam(roB, droB, m_roB, v_roB, V, step)
+        step = step + 1
+    }
+
+    // final inference (post-stream) — for the identity PROBE.
+    lwi_fwd(tokens, embed, ecW, ecB, tcW, tcB, tgG, tgB, rW, rB,
+            e0W, e0B, e1W, e1B, noG, noB, roW, roB,
+            xe, xec, xt, hn0, xhat0, inv0, eo0, eo1, probs, ex_out,
+            yn, xhatN, invN, logits, T, d, E, V, K)
+    let final_ce = nn_ce_loss_allpos(logits, targets, T, V)
+    let probe = lwi_probe(logits, targets, T, V)
+    let late_mean = if late_n > 0 { late_sum / to_float(late_n) } else { final_ce }
+
+    // z_drop budget: online learning must NOT degrade inference quality.
+    // z_drop = max(0, late_mean_CE − loss0). budget = 0.0 (no degradation).
+    let z_drop = if late_mean > loss0 { late_mean - loss0 } else { 0.0 }
+    let budget = 0.0
+    // spike guard: no step's CE may blow past loss0 (bounded plasticity).
+    let spike_ok = if peak_ce <= loss0 { 1 } else { 0 }
+
+    println("  loss0(initial infer CE) = " + to_string(loss0))
+    println("  peak_ce(worst over stream) = " + to_string(peak_ce))
+    println("  late_mean_CE(post-warmup) = " + to_string(late_mean))
+    println("  final_ce = " + to_string(final_ce))
+    println("  z_drop = " + to_string(z_drop) + "  budget = " + to_string(budget))
+    println("  PROBE(argmax==target) = " + to_string(probe))
+
+    let zdrop_ok = if z_drop <= budget { 1 } else { 0 }
+    let probe_ok = if probe > 0.80 { 1 } else { 0 }
+    println("  F-FLAME-LWI-ZDROP = " + to_string(zdrop_ok) + " (z_drop within budget)")
+    println("  F-FLAME-LWI-SPIKE = " + to_string(spike_ok) + " (no per-step CE spike past loss0)")
+    println("  F-FLAME-LWI-PROBE = " + to_string(probe_ok) + " (identity PROBE > 0.80)")
+
+    if zdrop_ok == 1 {
+        if spike_ok == 1 {
+            if probe_ok == 1 {
+                println("F-FLAME-LEARN-WHILE-INFER = 1")
+                println("PASS — learn-while-infer closes on host: z_drop within budget AND PROBE>0.80")
+                return
+            }
+        }
+    }
+    println("F-FLAME-LEARN-WHILE-INFER = 0")
+    println("CLOSED-NEGATIVE — see clause flags above for the ruled-out axis")
+}
