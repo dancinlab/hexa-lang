@@ -60,6 +60,23 @@
     if name == "log"   { return "rt_math_log_v" }
     if name == "exp"   { return "rt_math_exp_v" }
     if name == "tanh"  { return "rt_math_tanh_v" }
+    // G1-FLOAT-PRIM + VERIFY-KIT V4 — full mirror of self/codegen.hexa
+    // cg_math_sym. Closes the SSOT gap that left erf/gamma/bessel/lgamma
+    // out of this routing table (FLAME-PERF ⑤ erf-AOT-fix follow-up):
+    // a missing entry here re-introduces the exact "bare erf" link class
+    // the moment rt_target() flips to "rt". libm-backed (stdlib_trig_libm).
+    if name == "lgamma"        { return "rt_math_lgamma_v" }
+    if name == "isnan"         { return "rt_math_isnan_v" }
+    if name == "isinf"         { return "rt_math_isinf_v" }
+    if name == "isfinite"      { return "rt_math_isfinite_v" }
+    if name == "gamma"         { return "rt_math_tgamma_v" }
+    if name == "tgamma"        { return "rt_math_tgamma_v" }
+    if name == "erf"           { return "rt_math_erf_v" }
+    if name == "erfc"          { return "rt_math_erfc_v" }
+    if name == "bessel_j0"     { return "rt_math_j0_v" }
+    if name == "bessel_j1"     { return "rt_math_j1_v" }
+    if name == "float_to_bits" { return "rt_float_to_bits_v" }
+    if name == "bits_to_float" { return "rt_bits_to_float_v" }
     // 2026-05-20 (blocker-3 fmod-shim): SSOT mirror of codegen_c2.hexa.
     if name == "fmod"  { return "rt_math_fmod_v" }
     return ""
@@ -84,6 +101,24 @@
     if name == "log"   { return "hexa_math_log" }
     if name == "exp"   { return "hexa_math_exp" }
     if name == "tanh"  { return "hexa_math_tanh" }
+    // G1-FLOAT-PRIM + VERIFY-KIT V4 — full mirror of self/codegen.hexa
+    // cg_math_sym (the ACTIVE legacy "c"-target map). These were missing
+    // here, so this SSOT disagreed with the live emitter on erf/gamma/
+    // bessel/lgamma — the precise hole behind FLAME-PERF ⑤'s erf-AOT
+    // surrogate. All libm-backed (CLAUDE.md stdlib_trig_libm), defined in
+    // self/runtime.h (hexa_math_erf/erfc/tgamma/lgamma/j0/j1, …).
+    if name == "lgamma"        { return "hexa_math_lgamma" }
+    if name == "isnan"         { return "hexa_math_isnan" }
+    if name == "isinf"         { return "hexa_math_isinf" }
+    if name == "isfinite"      { return "hexa_math_isfinite" }
+    if name == "gamma"         { return "hexa_math_tgamma" }
+    if name == "tgamma"        { return "hexa_math_tgamma" }
+    if name == "erf"           { return "hexa_math_erf" }
+    if name == "erfc"          { return "hexa_math_erfc" }
+    if name == "bessel_j0"     { return "hexa_math_j0" }
+    if name == "bessel_j1"     { return "hexa_math_j1" }
+    if name == "float_to_bits" { return "hexa_float_to_bits" }
+    if name == "bits_to_float" { return "hexa_bits_to_float" }
     // 2026-05-20 (blocker-3 fmod-shim): direct libm fmod() shim.
     if name == "fmod"  { return "hexa_math_fmod" }
     return ""

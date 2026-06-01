@@ -1,0 +1,58 @@
+=== FLAME-PERF erf-AOT-fix — conv→GN→GELU fusion WALL re-bench with REAL erf ===
+COMPILED native (`hexa build`). Re-runs milestone ⑤'s wall bench but with the
+PRODUCTION libm erf-GELU instead of the tanh-approx surrogate ⑤ was forced to
+use (because the then-stale AOT could not link `erf`). Confirms whether ⑤'s
+"host wall Δ negligible (HBM win is GPU-only)" finding HOLDS with the real GELU.
+
+Falsifier: byte-eq (∧) wall Δ. _gelu = x·0.5·(1 + erf(x/√2)) — char-for-char
+gn_lib _gn_gelu / nn_lib _nn_gelu (libm erf, NOT tanh-approx, NOT hand-rolled).
+
+Method: self-contained single-file COMPILED bench (`hexa build`, native C, no
+`use` — both paths inlined so the comparison is FAIR). Times ONLY the GN+GELU
+region (shared conv front excluded — the fusion boundary; conv→GN cannot stream
+because GN needs whole-group stats). unfused = GN-affine pass (write y) + GELU
+pass (read y, write a); fused = GN-affine + GELU in one pass over [T·C]. G=1
+(clm_gen trunk). mono_ns() internal timing, iters=20000. Bench source:
+.tmpbuild/gn_gelu_realerf_bench.hexa. Built binary references hexa_math_erf
+(nm: T _hexa_math_erf + U _erf), so this is the REAL erf path, not a surrogate.
+
+--- byte-eq (correctness gate) ---
+max|delta| unfused-vs-fused = 0.0 in EVERY run, both shapes (fused == unfused,
+bit-identical). Independently, the stdlib byte-eq test
+(stdlib/flame/flame_gn_gelu_fused_test.hexa, `hexa run`, real stdlib) =
+OVERALL max_abs_diff 0.0 across 4 shapes (T128/C64 G1, T256/C128 G1 dil2,
+T128/C64 G8, offset L3 l1) — F-FLAME-GN-GELU-FUSED-BYTEEQ = 1 PASS.
+
+--- wall (COMPILED native, REAL erf-GELU, iters=20000) ---
+RUN 1 (compiled binary):
+  T=256 C=128 : unfused 2.13253 ms/it · fused 2.01058 ms/it · speedup u/f = 1.06065
+  T=128 C=64  : unfused 0.53743 ms/it · fused 0.515171 ms/it · speedup u/f = 1.04321
+RUN 2 (compiled binary):
+  T=256 C=128 : speedup u/f = 1.0479
+  T=128 C=64  : speedup u/f = 1.05684
+RUN 3 (compiled binary):
+  T=256 C=128 : speedup u/f = 1.06079
+  T=128 C=64  : speedup u/f = 1.0791
+(interp cross-check, real erf: T256/C128 1.05871 · T128/C64 1.07212 — same band.)
+
+REAL-erf compiled speedup unfused/fused across all runs/shapes: 1.043 – 1.079,
+centered ~1.055. ⑤'s tanh-approx surrogate band was 0.946 – 1.084 (centered
+~1.0).
+
+--- finding ---
+⑤'s NEGLIGIBLE-WALL finding HOLDS with the real erf-GELU. The compiled real-erf
+speedup (1.043–1.079) sits inside the same run-to-run noise band as ⑤'s
+surrogate (0.946–1.084) — host wall Δ is still NEGLIGIBLE / noise-dominated. If
+anything the real-erf runs lean very slightly positive (median ~1.055 vs ~1.0),
+consistent with removing one [T·C] read+write pass giving a small cache-locality
+nudge on host CPU; this is well within noise and does NOT change the verdict.
+The GELU region is COMPUTE-bound (one libm transcendental per element dominates
+on host CPU), so eliminating one buffer round-trip is lost in the transcendental
+cost — exactly ⑤'s diagnosis. The fusion win remains a MEMORY-BANDWIDTH (HBM
+round-trip) property, maximal on GPU; on host it is cache-locality only and
+noise-dominated.
+
+VERDICT: HONEST-NEGATIVE WALL (host) · byte-eq HELD · erf AOT path WORKING.
+⑤'s "host wall Δ negligible (HBM win is GPU-only)" CONFIRMED with the real
+compiled erf-GELU — no surrogate needed. The surrogate caveat in ⑤'s wall.txt
+is now retired: the COMPILED bench above uses the production erf path directly.
