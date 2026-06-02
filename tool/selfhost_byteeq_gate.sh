@@ -13,11 +13,13 @@
 #     flattened source gen2's own object was built from (cc-flat-fix.hexa), then
 #     re-emit gen4 the SAME way, and assert:
 #       (1) ENCODE-MISS = 0 on both emits,
-#       (2) cmp cc-gen3.o cc-gen4.o is byte-identical (FIRSTDIFF=0),
-#       (3) if a graduated reference object (cc-prc2-fix.o / GEN_REF) is present,
-#           cmp gen3 vs it is ALSO byte-identical.
-#     A re-emit that differs from itself or from the graduated reference is a
-#     true byte-eq regression (exit 1).
+#       (2) cmp cc-gen3.o cc-gen4.o is byte-identical (FIRSTDIFF=0).
+#     This SELF-REPRODUCTION (gen2's emit reproducing itself across re-runs,
+#     gen3==gen4==gen3b) is the canonical graduation fixpoint. A re-emit that
+#     differs from itself is a true byte-eq regression (exit 1). An OPTIONAL
+#     GEN_REF cmp (default unset) is INFORMATIONAL only — see GEN_REF below;
+#     cc-prc2-fix.o is gen2's relinked object, not its emit, so it differs by
+#     design and must NOT be used as the fixpoint comparand.
 #
 #   LEG B — NATIVE-CODEGEN PROBE (fast): native --emit=obj the two highest-value
 #     regression-class programs from self/test/miscompile_zero/ —
@@ -34,8 +36,15 @@
 #                    (default: ~/dancinlab/selfhost-work)
 #   GEN_FLAT         flattened compiler source to re-emit
 #                    (default: $SHW/cc-flat-fix.hexa)
-#   GEN_REF          graduated reference object to cmp gen3 against
-#                    (default: $SHW/cc-prc2-fix.o, optional)
+#   GEN_REF          OPTIONAL informational object to cmp gen3 against. Default
+#                    UNSET. NOTE: do NOT point this at cc-prc2-fix.o — that is
+#                    gen2's OWN object, relinked via a different path (hld_fixed
+#                    literal8-merge, see gen2fix.done), so it legitimately
+#                    differs from gen2's EMIT (cc-gen3.o) at char 1528257 — it
+#                    differed at graduation time too (gen3.done CMP=DIFFER). The
+#                    canonical fixpoint is the SELF-REPRODUCTION gen3==gen4
+#                    (== gen3b), NOT gen3==cc-prc2-fix.o. GEN_REF cmp is
+#                    INFORMATIONAL ONLY and never fails the gate.
 #   HEXA_CC_PREARGS  args after the driver, before flags. gen2_fix wants a
 #                    driver-name placeholder ("_drv.hexa", the default); a
 #                    released ./hexa wants "run compiler/main.hexa".
@@ -47,9 +56,10 @@
 # EXIT
 #   0  fixpoint held (gen3==gen4, 0 ENCODE-MISS) AND the codegen probe is clean.
 #      If LEG A inputs are absent but the probe ran, also 0 (probe-only PASS).
-#   1  REGRESSION — objects WERE produced but gen3 != gen4 (or != GEN_REF), OR an
-#      ENCODE-MISS surfaced, OR a probe program emitted a dirty/empty object
-#      while another emitted clean (the codegen floor broke).
+#   1  REGRESSION — objects WERE produced but gen3 != gen4 (the self-reproduction
+#      fixpoint broke), OR an ENCODE-MISS surfaced, OR a probe program emitted a
+#      dirty/empty object while another emitted clean (the codegen floor broke).
+#      (GEN_REF cmp, if set, is informational only and never reds the gate.)
 #   2  SETUP / INFRA — the configured driver cannot native-emit AT ALL in THIS
 #      environment (canary 0-byte, no ENCODE-MISS). CI-neutral: the floor is NOT
 #      broken; the runner just lacks the graduated gen2_fix. A released ./hexa
@@ -65,7 +75,7 @@ REPO="$(cd "$SCRIPT_DIR/.." && pwd)"
 CORPUS="${BYTEEQ_CORPUS:-$REPO/self/test/miscompile_zero}"
 SHW="${SHW:-$HOME/dancinlab/selfhost-work}"
 GEN_FLAT="${GEN_FLAT:-$SHW/cc-flat-fix.hexa}"
-GEN_REF="${GEN_REF:-$SHW/cc-prc2-fix.o}"
+GEN_REF="${GEN_REF:-}"   # OPTIONAL informational only — NOT a fixpoint comparand
 TARGET="${HEXA_TARGET:-arm64-apple-darwin}"
 
 # ── locate the native self-hosted compiler ───────────────────────────────
@@ -216,16 +226,19 @@ else
   fail=1
 fi
 
-if [ -s "$GEN_REF" ]; then
+# GEN_REF cmp is INFORMATIONAL ONLY (never fails the gate): cc-prc2-fix.o is
+# gen2's own relinked object, not gen2's emit, so it differs by design. The
+# canonical fixpoint above (gen3==gen4) is the real gate.
+if [ -n "${GEN_REF:-}" ] && [ -s "$GEN_REF" ]; then
   if cmp "$GEN_REF" "$OUT/cc-gen3.o" >/dev/null 2>&1; then
-    echo "  cmp ref  vs gen3 : BYTE-EQ (graduated reference matches)"
+    echo "  cmp ref  vs gen3 : identical (info; GEN_REF matches emit)"
   else
-    RD=$(cmp "$GEN_REF" "$OUT/cc-gen3.o" 2>&1 | grep -oE "byte [0-9]+" | grep -oE "[0-9]+" | head -1)
-    echo "  cmp ref  vs gen3 : DIFFER@${RD:-?} — drift from graduated reference"
-    fail=1
+    RD=$(cmp "$GEN_REF" "$OUT/cc-gen3.o" 2>&1 | grep -oE "char [0-9]+" | grep -oE "[0-9]+" | head -1)
+    echo "  cmp ref  vs gen3 : differ@${RD:-?} (info only — GEN_REF is not a"
+    echo "                     fixpoint comparand; self-reproduction is the gate)"
   fi
 else
-  echo "  cmp ref  vs gen3 : (no GEN_REF present — self-fixpoint only)"
+  echo "  cmp ref  vs gen3 : (no GEN_REF — self-reproduction fixpoint is the gate)"
 fi
 
 echo "──────────────────────────────────────────────────────────────────"
