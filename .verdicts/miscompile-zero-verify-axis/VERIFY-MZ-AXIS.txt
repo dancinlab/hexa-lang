@@ -1,0 +1,68 @@
+VERIFY-MZ-AXIS — MISCOMPILE-ZERO promoted to the `hexa verify` axis surface
+==========================================================================
+date    : 2026-06-03
+host    : ghost (192.168.50.150) — working self-hosted compiler (gen2_fix)
+branch  : mczero/verify-axis  (base origin/main @ 1c700914f)
+
+WHAT LANDED
+  1. hexa-native axis: tool/verify_cli.hexa::cmd_miscompile_zero
+     - dispatched by `hexa verify --miscompile-zero` (main() + _is_sub + rubric)
+     - mirrors cmd_blue_max's delegate-to-kernel shape; delegates to the
+       existing gate tool/miscompile_zero_gate.sh (corpus REUSED, not rewritten)
+     - emits a tier matrix + auto-absorb side-effect (@D h_verify_auto_absorb)
+     - gate rc captured via exec_capture (NO pipe-mask); rc 0→🟢 / 1→🔴 / 2→🟠
+     - 56 insertions, 1 deletion (g4: <200 lines, 1 thing); ONE CLI surface,
+       NO new top-level verb (@D h_audit_axis_form)
+  2. runnable wrapper: tool/hexa_verify_miscompile_zero.sh
+     - same engine + identical tier matrix the native axis prints, runnable
+       TODAY (the native JIT axis is build-floor-blocked, see below)
+
+BUILD-FLOOR BLOCKER (named — NOT introduced by this change)
+  `hexa verify <any-axis>` JIT-builds tool/verify_cli.hexa and FAILS at LINK:
+    Undefined symbols for architecture arm64:
+      "_calc_eps"  / "_calc_is_float_fn" / "_calc_is_zero_arg_float_fn"
+      "_sigma_k" / "_mobius" / "_bell" / "_catalan" / "_static_atlas"
+      "_read_file_safe" / "_write_file_safe" / ... (calc_dispatch + calculator
+      namespace + atlas) — "compiled module_loader not found — falling back to
+      raw src" → cross-directory `use compiler/atlas/calc_dispatch` not flattened
+    ld: symbol(s) not found for architecture arm64
+  PROVEN pre-existing: the SAME wall hits the existing `--blue-max` axis
+  (verbatim `_calc_eps`/`_sigma_k` undefined) on the unmodified verify_cli.
+  This is the module_loader-flatten / verify-build floor, owned by in-flight
+  self-emit work — OUT of this lane's surface. The native axis activates the
+  moment that floor is repaired.
+
+REAL RUN (runnable wrapper surface — exit code captured SEPARATELY, no pipe-mask)
+  $ HEXA_NATIVE_CC=~/dancinlab/selfhost-work/gen2_fix \
+      bash tool/hexa_verify_miscompile_zero.sh ; echo AXIS_RC=$?
+AXIS_RC=0
+
+verify --miscompile-zero  (MISCOMPILE-ZERO native-codegen floor audit · @D h_audit_axis_form)
+── miscompile-zero gate ──────────────────────────────────────────
+  compiler : ~/dancinlab/selfhost-work/gen2_fix _drv.hexa
+  target   : arm64-apple-darwin
+  corpus   : ~/dancinlab/wt-mzverify/self/test/miscompile_zero
+  out      : ~/dancinlab/wt-mzverify/build/mczero-gate-out
+  disasm   : otool -tv
+──────────────────────────────────────────────────────────────────
+  canary   : c1_hex_literal emits (objsize=1600) — native-emit OK
+──────────────────────────────────────────────────────────────────
+  PASS  c1_hex_literal         rc=0 objsize=1600 encode_miss=0 udf=0
+  PASS  c10_try_catch          rc=0 objsize=2056 encode_miss=0 udf=0
+  PASS  c2_stack_locals        rc=0 objsize=1816 encode_miss=0 udf=0
+  PASS  c3_struct_ctor         rc=0 objsize=2296 encode_miss=0 udf=0
+  PASS  c4_f64_literal         rc=0 objsize=1576 encode_miss=0 udf=0
+  PASS  c5_multi_fn_alias      rc=0 objsize=2240 encode_miss=0 udf=0
+  PASS  c6_closures            rc=0 objsize=1408 encode_miss=0 udf=0
+  PASS  c7_recursion_arrays    rc=0 objsize=3544 encode_miss=0 udf=0
+  PASS  c8_string_methods      rc=0 objsize=2144 encode_miss=0 udf=0
+  PASS  c9_match_control       rc=0 objsize=2320 encode_miss=0 udf=0
+──────────────────────────────────────────────────────────────────
+miscompile-zero-gate: PASS — 10/10 programs emit clean
+  (0 ENCODE-MISS, 0 udf) — miscompile-zero floor held.
+── tier matrix ───────────────────────────────────────────────
+  axis              : MISCOMPILE-ZERO (native --emit=obj codegen floor)
+  corpus            : self/test/miscompile_zero/c1..c10 (+ class m1..m7)
+  gate              : tool/miscompile_zero_gate.sh
+  gate rc           : 0
+  tier              : 🟢 SUPPORTED-NUMERICAL  (floor held — 0 ENCODE-MISS, 0 udf across corpus)
