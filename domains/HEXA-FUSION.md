@@ -34,7 +34,7 @@ FORGE-UTILGREEN lever-1~5 가 GEMM repack 을 전부 device 化했어도 util ME
 ### L3 — fusion moat (= PyTorch 초과 · 구조적)
 
 - [ ] **fwd+bwd autograd-aware fusion** (GPU.md §5d) — forward + backward 커널을 한 device 그래프로 fuse. falsifier: `F-FUSION-TRAINSTEP-EQ` max|Δ|=0 (fused == op-by-op reference).
-- [ ] **compile-time specialization** (GPU.md §5b) — known-(M,N,K) shape 특화 · dead-output elimination · layer 별 mixed-precision auto-select. falsifier: 특화 emit Δ vs generic ∧ byte-eq 무회귀.
+- [x] **compile-time specialization** (GPU.md §5b) ✅ W1-⑥ (PR #2558) — known-(M,N,K) GEMM 특화: M/N/K `.param` 제거 · bounds-setp 에 M/N immediate baking · K stride literal-fold · K 수축 완전 unroll(loop·back-edge·counter 제거). emit Δ: generic fma 1(looped) → specialized K straight-line. default re-emit byte-eq max|Δ|=0. 잔여: dead-output elim · MIR call-site auto-select · WMMA matmul 경로 확장 · silicon. 상세 = §W1 results.
 - [x] **operator-specific surgical override** (GPU.md §5g) ✅ W1-⑦ (PR #2556) — per-call-site WMMA precision override(`_nvptx_wmma_mnemonic_override` reads dst Local.precision). emit Δ: load `.shared.f16`→`.shared.bf16` · mma `.f32.f32`→`.f32.bf16.bf16.f32`, **store-c default .f32 유지(per-site granularity 증명)**. default re-emit byte-eq max|Δ|=0. 잔여: HIR `@bf16` grammar → Local.precision · silicon fire. 상세 = §W1 results.
 - [x] **launch-overhead amortization 우위 측정** (GPU.md §5f · R12) ✅ W1-⑧ — ≥30% wall win UNCONDITIONAL (n*<0, no crossover; launch-bound 80% → BW-bound 72.7%), $0 oracle exit 0 + 실측 교차확인 max|Δ|=1.1e-5. raw-GEMM 우위 아님(경계 제거뿐). 상세 = §W1 results.
 
@@ -139,6 +139,17 @@ verdict: `.verdicts/hexa-fusion/F-CLM-DEVFEED-DEVRESIDENT-MV.txt`. 잔여(PR bod
 F-FUSION-WMMA-OVERRIDE: PASS (emit Δ ∧ default byte-eq max|Δ|=0)
 ```
 verdict: `.verdicts/fusion-wmma-override/F-FUSION-WMMA-OVERRIDE.txt`. 잔여: HIR `@bf16` → Local.precision grammar · silicon fire. raw-GEMM 우위 주장 0 — cuBLAS 가 못 하는 override 능력 probe.
+
+### ⑥ compile-time specialization — ✅ (PR #2558, base main, emit Δ ∧ byte-eq)
+
+`compiler/codegen/nvptx_target.hexa` GEMM 은 shape-generic emit(M/N/K = runtime `.param.u64`, K data-dependent loop). 새 `emit_ptx_gemm_module_specialized(M,N,K)` (additive, 0 deletion): compile-time 상수 shape 면 M/N/K param·`ld.param`·`cvt` 제거, M/N bounds-setp immediate, K stride literal-fold, K 수축 완전 unroll(`$L_LOOP`·back-edge·`kk` counter 제거).
+
+```
+emit-Δ: generic fma.rn.f64 count=1 (looped) vs specialized=3 (K straight-line, M4/N4/K3) — CONFIRMED
+✅ BYTE-EQ: generic GEMM PTX IDENTICAL (origin/main == new binary), max|Δ|=0 — no regression
+F-FUSION-GEMM-SHAPE-SPECIALIZE: rc=0
+```
+verdict: `.verdicts/hexa-fusion/F-FUSION-GEMM-SHAPE-SPECIALIZE.txt`. 잔여: dead-output elim(§5b 2nd) · MIR call-site auto-select · WMMA matmul 경로(`_nvptx_emit_matmul_body` K/16 tile) · silicon. raw-GEMM 우위 주장 0 — 런타임 loop-control + shape param-load 경계 제거(라이브러리는 런타임 dispatch).
 
 ## ── 전략 정정 (⑧+⑨ 합성) — 2-regime: compute-bound=MATCH · launch-bound=EXCEED ──
 
