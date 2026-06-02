@@ -436,6 +436,40 @@ fn _residual_add(a: int, b: int, out: int, n: int) {
     while i < n { t_set(out, i, t_get(a, i) + t_get(b, i)); i = i + 1 }
 }
 
+// HEXA-FUSION L3 (glue half): device-resident elementwise GELU.
+// out[i] = GELU(in[i]) for i in 0..n — gelu ×3 in clm_prod_fwd (hg0/ex0/ex1)
+// are the 2nd-highest interpreted inter-op host glue after the residual (the ③
+// fwd-only 0% floor). Under CLM_PROD_DEVRESIDENT the activation runs on-device
+// (forge_dispatch_gelu), keeping out FARR_DEVICE so the next conv GEMM
+// H2D-skips it and the interpreter leaves the per-step hot path. erf-based GELU,
+// pure elementwise (no reduction) → bit-exact to nn_gelu_fwd (max|Δ|=0). rc 0 =
+// done on device; else the proven host nn_gelu_fwd runs (byte-eq). Env-gated
+// like _residual_add (no-CUDA / prebuilt mac binary → host gelu).
+fn _gelu(g: int, out: int, n: int) {
+    if env("CLM_PROD_DEVRESIDENT") != "" {
+        let rc = forge_dispatch_gelu(g, out, n)
+        if rc == 0 { return }
+    }
+    nn_gelu_fwd(g, out, n)
+}
+
+// HEXA-FUSION L3 (glue half): device-resident GroupNorm forward.
+// groupnorm ×2 in clm_prod_fwd (h0→hn0, y→yn) are interpreted inter-op host
+// glue with a per-group reduction (the ③ fwd-only 0% floor). Under
+// CLM_PROD_DEVRESIDENT the norm runs on-device (forge_dispatch_groupnorm),
+// keeping y/xhat/mean/inv FARR_DEVICE so the next conv GEMM / gelu H2D-skips
+// them. The device kernel reduces SEQUENTIALLY (t outer, c inner) per group and
+// uses the SAME Newton-Raphson 40-iter sqrt as the host (NO tree re-assoc) →
+// bit-exact to nn_groupnorm_fwd (max|Δ|=0). rc 0 = done on device; else the
+// proven host nn_groupnorm_fwd runs (byte-eq). Env-gated like _gelu above.
+fn _groupnorm(x: int, gamma: int, beta: int, y: int, mean: int, inv: int, xhat: int, T: int, C: int, G: int) {
+    if env("CLM_PROD_DEVRESIDENT") != "" {
+        let rc = forge_dispatch_groupnorm(x, gamma, beta, y, mean, inv, xhat, T, C, G)
+        if rc == 0 { return }
+    }
+    nn_groupnorm_fwd(x, gamma, beta, y, mean, inv, xhat, T, C, G)
+}
+
 // Forward with weight-only int4 QAT (verbatim from clm_qat assembly-3b).
 fn clm_prod_fwd(tokens: int,
                embed: int, ecW: int, ecB: int, tcW: int, tcB: int, tgG: int, tgB: int,
@@ -458,8 +492,13 @@ fn clm_prod_fwd(tokens: int,
     let h0 = t_zeros(T * d)
     conv1d_via_forge(xec, tcWq, tcB, h0, T, d, d, K, 1)
     let mean0 = t_zeros(1)
-    nn_groupnorm_fwd(h0, tgG, tgB, hn0, mean0, inv0, xhat0, T, d, 1)
-    let hg0 = t_zeros(T * d); nn_gelu_fwd(hn0, hg0, T * d)
+    // HEXA-FUSION L3 (glue half): groupnorm #1 (h0→hn0) — interpreted inter-op
+    // host glue with a per-group reduction. Device path keeps hn0/xhat0/inv0
+    // FARR_DEVICE (byte-eq via sequential reduction + NR sqrt); else host loop.
+    _groupnorm(h0, tgG, tgB, hn0, mean0, inv0, xhat0, T, d, 1)
+    // HEXA-FUSION L3 (glue half): gelu #1 (hn0→hg0) — fuses onto the device
+    // under CLM_PROD_DEVRESIDENT (erf-based, byte-eq); else host nn_gelu_fwd.
+    let hg0 = t_zeros(T * d); _gelu(hn0, hg0, T * d)
     // HEXA-FUSION L3 (glue half): the residual xt = xec + hg0 — the
     // highest-frequency interpreted inter-op host glue in this fwd path (T·d
     // host t_get/t_set per step). Under CLM_PROD_DEVRESIDENT it fuses onto the
@@ -472,8 +511,11 @@ fn clm_prod_fwd(tokens: int,
     // (byte-eq to the 2 separate conv1d_via_forge calls — F-CLM-CONV2-BATCHED-
     // FWD-EQ; on a CUDA host = 1 cublasDgemmStridedBatched vs 2 micro-launches).
     conv2_fwd_via_forge_batched(xt, e0Wq, e0B, e1Wq, e1B, eo0, eo1, T, d, d, K, 1)
-    let ex0 = t_zeros(T * d); nn_gelu_fwd(eo0, ex0, T * d)
-    let ex1 = t_zeros(T * d); nn_gelu_fwd(eo1, ex1, T * d)
+    // HEXA-FUSION L3 (glue half): gelu #2/#3 (eo0→ex0, eo1→ex1, the 2 expert
+    // activations) — fused onto the device under CLM_PROD_DEVRESIDENT (byte-eq);
+    // else host nn_gelu_fwd.
+    let ex0 = t_zeros(T * d); _gelu(eo0, ex0, T * d)
+    let ex1 = t_zeros(T * d); _gelu(eo1, ex1, T * d)
     let mut j = 0
     while j < T * d {
         t_set(ex_out, 0 * T * d + j, t_get(ex0, j))
@@ -483,7 +525,10 @@ fn clm_prod_fwd(tokens: int,
     let y = t_zeros(T * d)
     nn_moe_router_fwd(logits_r, ex_out, probs, y, T, E, d)
     let meanN = t_zeros(1)
-    nn_groupnorm_fwd(y, noG, noB, yn, meanN, invN, xhatN, T, d, 1)
+    // HEXA-FUSION L3 (glue half): groupnorm #2 (norm_out, y→yn) — interpreted
+    // inter-op host glue with a per-group reduction. Device path keeps
+    // yn/xhatN/invN FARR_DEVICE (byte-eq); else host loop.
+    _groupnorm(y, noG, noB, yn, meanN, invN, xhatN, T, d, 1)
     conv1d_via_forge(yn, roWq, roB, out_logits, T, d, V, 1, 1)
 }
 

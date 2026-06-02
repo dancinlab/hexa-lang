@@ -344,3 +344,69 @@ HexaVal forge_dispatch_residual_add(HexaVal a, HexaVal b,
                              HexaVal out, HexaVal n) {
     return hexa_forge_dispatch_residual_add(a, b, out, n);
 }
+
+/* HEXA-FUSION L3 (glue half) — device-resident elementwise GELU.
+ * forge_dispatch_gelu(in, out, n). Routes to _hx_cuda_farr_gelu_gpu:
+ * out[i] = in[i]·0.5·(1+erf(in[i]/√2)) — the EXACT erf-based GELU of
+ * stdlib/flame/nn_lib.hexa _nn_gelu, elementwise with NO reduction. Device
+ * erf() is IEEE-correct (same libm contract) → bit-exact to the host scalar
+ * loop (max|Δ|=0). Fuses the gelu ×3 host glue in clm_prod_fwd (hg0/ex0/ex1
+ * — the ③ fwd-only 0% floor) and keeps OUT FARR_DEVICE so the next conv GEMM
+ * H2D-skips it. no-CUDA → -1 so the .hexa caller runs the host gelu. */
+HexaVal hexa_forge_dispatch_gelu(HexaVal in_v, HexaVal out_v, HexaVal n_v) {
+    int64_t in_id  = hexa_as_num(in_v);
+    int64_t out_id = hexa_as_num(out_v);
+    int64_t n      = hexa_as_num(n_v);
+    if (n <= 0) return hexa_int(-1);
+    if (in_id < 0 || out_id < 0) return hexa_int(-1);
+#ifdef HEXA_CUDA
+    extern int _hx_cuda_farr_gelu_gpu(int64_t, int64_t, int64_t);
+    int grc = _hx_cuda_farr_gelu_gpu(in_id, out_id, n);
+    if (grc == 0) return hexa_int(0);
+#endif
+    return hexa_int(-1);
+}
+HexaVal forge_dispatch_gelu(HexaVal in_v, HexaVal out_v, HexaVal n_v) {
+    return hexa_forge_dispatch_gelu(in_v, out_v, n_v);
+}
+
+/* HEXA-FUSION L3 (glue half) — device-resident GroupNorm forward.
+ * forge_dispatch_groupnorm(x, gamma, beta, y, mean, inv, xhat, T, C, G).
+ * Routes to _hx_cuda_farr_groupnorm_gpu, which reproduces gn_lib.hexa
+ * nn_groupnorm_fwd EXACTLY — per-group SEQUENTIAL reduction (t outer, c inner)
+ * under ONE thread per group (NO tree re-assoc) + Newton-Raphson 40-iter
+ * _gn_sqrt (NOT CUDA rsqrt) → bit-exact (max|Δ|=0). Fuses the groupnorm ×2
+ * host glue in clm_prod_fwd (h0→hn0, y→yn — the ③ fwd-only 0% floor); keeps
+ * Y/xhat/mean/inv FARR_DEVICE. no-CUDA → -1 → host groupnorm. */
+HexaVal hexa_forge_dispatch_groupnorm(HexaVal x_v, HexaVal gamma_v, HexaVal beta_v,
+                                  HexaVal y_v, HexaVal mean_v, HexaVal inv_v,
+                                  HexaVal xhat_v, HexaVal t_v, HexaVal c_v,
+                                  HexaVal g_v) {
+    int64_t x_id    = hexa_as_num(x_v);
+    int64_t gamma_id= hexa_as_num(gamma_v);
+    int64_t beta_id = hexa_as_num(beta_v);
+    int64_t y_id    = hexa_as_num(y_v);
+    int64_t mean_id = hexa_as_num(mean_v);
+    int64_t inv_id  = hexa_as_num(inv_v);
+    int64_t xhat_id = hexa_as_num(xhat_v);
+    int64_t T       = hexa_as_num(t_v);
+    int64_t C       = hexa_as_num(c_v);
+    int64_t G       = hexa_as_num(g_v);
+    if (T <= 0 || C <= 0 || G <= 0 || (C % G) != 0) return hexa_int(-1);
+    if (x_id < 0 || gamma_id < 0 || beta_id < 0 || y_id < 0) return hexa_int(-1);
+    if (mean_id < 0 || inv_id < 0 || xhat_id < 0) return hexa_int(-1);
+#ifdef HEXA_CUDA
+    extern int _hx_cuda_farr_groupnorm_gpu(int64_t, int64_t, int64_t, int64_t,
+                                           int64_t, int64_t, int64_t,
+                                           int64_t, int64_t, int64_t);
+    int grc = _hx_cuda_farr_groupnorm_gpu(x_id, gamma_id, beta_id, y_id, mean_id,
+                                          inv_id, xhat_id, T, C, G);
+    if (grc == 0) return hexa_int(0);
+#endif
+    return hexa_int(-1);
+}
+HexaVal forge_dispatch_groupnorm(HexaVal x, HexaVal gamma, HexaVal beta,
+                             HexaVal y, HexaVal mean, HexaVal inv,
+                             HexaVal xhat, HexaVal t, HexaVal c, HexaVal g) {
+    return hexa_forge_dispatch_groupnorm(x, gamma, beta, y, mean, inv, xhat, t, c, g);
+}
