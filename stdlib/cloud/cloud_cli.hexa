@@ -1177,6 +1177,22 @@ fn _cloud_rent_vast(av: [str], start: int) -> int {
             println("owner=" + owner)
             return 0
         }
+    } else {
+        // RE-RENT ROTATION CAP — `--force-new` opts out of the dedup guard
+        // above, which is EXACTLY the path a runaway re-rent loop rides
+        // (incident 2026-06-02: fire2→fire5 leak). Bound it: at most N
+        // force-new rents per (project,owner) in a window, then REFUSE and
+        // require an explicit re-arm. `--rearm` purges the window first.
+        if _has_flag(av, start, "--rearm") == 1 {
+            let purged = pod_registry_rerent_rearm(project, owner)
+            println("[cloud] rent: re-armed force-new rotation for " + project + "/" + owner + " (purged " + str(purged) + " prior force-new events)")
+        }
+        if pod_registry_rerent_guard(project, owner) == 0 {
+            let cap = pod_registry_rerent_cap()
+            println("[cloud] rent vast: REFUSED — auto-re-rent cap reached (" + str(cap) + ") for " + project + "/" + owner + " — re-arm explicitly to continue (cloud rent vast --force-new --rearm ...)")
+            println("[cloud] this backstop stops a driver that re-rents a fresh pod on every pod-death (runaway billing leak). NO pod was rented.")
+            return 3
+        }
     }
     // verified_only=1 → vast.hexa applies the campaign-proven default
     // filters (reliability>=0.95 + verified + rentable). An explicit
@@ -1314,6 +1330,20 @@ fn _cloud_rent_runpod(av: [str], start: int) -> int {
             println("pod_id=" + existing)
             println("owner=" + owner)
             return 0
+        }
+    } else {
+        // RE-RENT ROTATION CAP — same backstop as the vast path. `--force-new`
+        // opts out of dedup, so it is the runaway-re-rent vector; bound it to
+        // N per (project,owner) window, then REFUSE + require `--rearm`.
+        if _has_flag(av, start, "--rearm") == 1 {
+            let purged = pod_registry_rerent_rearm(project, owner)
+            println("[cloud] rent: re-armed force-new rotation for " + project + "/" + owner + " (purged " + str(purged) + " prior force-new events)")
+        }
+        if pod_registry_rerent_guard(project, owner) == 0 {
+            let cap = pod_registry_rerent_cap()
+            println("[cloud] rent runpod: REFUSED — auto-re-rent cap reached (" + str(cap) + ") for " + project + "/" + owner + " — re-arm explicitly to continue (cloud rent runpod --force-new --rearm ...)")
+            println("[cloud] this backstop stops a driver that re-rents a fresh pod on every pod-death (runaway billing leak). NO pod was rented.")
+            return 3
         }
     }
     let pod = runpod_create(api_key, gpu, image, pubkey, owner)
@@ -2090,7 +2120,7 @@ fn main() {
         return
     }
     if sub == "version" || sub == "--version" || sub == "-v" {
-        println("hexa cloud 0.5.1 — leak-guard: `rent` is IDEMPOTENT per (project,purpose) — a repeated same-key rent REUSES the live M5 pod instead of leaking a new orphan (--force-new overrides; `rent --selftest` checks it offline) · `rent` auto-registers a ./pods.json row by default (--no-register opts out) · `watchdog` COMPOSITE idle classifier (uptime≥thr AND util≤cap AND no-compute-proc AND no-workdir — slow-but-working pod NEVER killed) + ./pods.json budget.cap cross-ref (breach → kill lowest-value pod) · [0.4.1: rent --max-wait-sec bounded SSH gate · 0.4.0: nohup/fire --register · 0.3.x: resolve/ssh-config/identity/registry-guard/dft-run]")
+        println("hexa cloud 0.5.2 — re-rent rotation cap: `rent --force-new` is BOUNDED per (project,owner) — at most N (default 3, HEXA_CLOUD_RERENT_CAP) force-new rents in a window (default 3600s), then REFUSED with an 'auto-re-rent cap reached — re-arm explicitly' message until `--rearm` clears the window (stops a driver that re-rents a fresh pod on every pod-death · 2026-06-02 fire2→fire5 leak) · [0.5.1: `rent` IDEMPOTENT per (project,purpose) — a repeated same-key rent REUSES the live M5 pod (--force-new overrides) · `rent` auto-registers a ./pods.json row (--no-register opts out) · `watchdog` COMPOSITE idle classifier + ./pods.json budget.cap cross-ref · 0.4.1: rent --max-wait-sec bounded SSH gate · 0.4.0: nohup/fire --register · 0.3.x: resolve/ssh-config/identity/registry-guard/dft-run]")
         return
     }
     if sub == "rent" || sub == "up" {
@@ -2111,8 +2141,8 @@ fn main() {
         // RENTED a real pod because -h/--help was just an unparsed trailing
         // token. Print usage and exit 0 — creating NOTHING.
         if _has_flag(av, si + 1, "--help") == 1 || _has_flag(av, si + 1, "-h") == 1 {
-            println("usage: cloud rent <vast|runpod> [--gpu T] [--image IMG] [--disk GiB] [--owner TAG] [--query Q] [--max-wait-sec N] [--no-register] [--force-new]")
-            println("  IDEMPOTENT per (project,owner): a repeated same-key rent REUSES the live M5 pod; --force-new provisions a fresh one. `cloud rent --selftest` checks the dedup offline.")
+            println("usage: cloud rent <vast|runpod> [--gpu T] [--image IMG] [--disk GiB] [--owner TAG] [--query Q] [--max-wait-sec N] [--no-register] [--force-new] [--rearm]")
+            println("  IDEMPOTENT per (project,owner): a repeated same-key rent REUSES the live M5 pod; --force-new provisions a fresh one. --force-new is ROTATION-CAPPED (≤N per window; REFUSED past the cap until --rearm). `cloud rent --selftest` checks the dedup offline.")
             return
         }
         if si + 1 >= len(av) {

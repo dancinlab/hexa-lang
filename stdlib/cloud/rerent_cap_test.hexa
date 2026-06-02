@@ -1,0 +1,108 @@
+// stdlib/cloud/rerent_cap_test.hexa — falsifiers for the RE-RENT ROTATION
+// CAP (bounded `cloud rent --force-new` auto-re-rent). Incident 2026-06-02:
+// a dispatched Lane-G fire driver re-rented a FRESH vast pod via
+// `cloud rent ... --force-new` on every pod-death with NO cap and NO re-arm
+// gate — leaking fire2(39046120)→fire3(39052854)→fire4(39059036)→
+// fire5(39059081), each billing. This unit-checks the guard in isolation
+// (NO provider call, NO pod rent).
+//
+// Falsifiers:
+//   F-RERENT-CAP-STOPS   — a fire that loses its pod re-rents at most N
+//                          (cap) times, then the (N+1)-th force-new is
+//                          REFUSED (guard returns 0) with the cap reached.
+//   F-RERENT-REARM       — an explicit re-arm purges the window so the next
+//                          force-new is ALLOWED again (guard returns 1).
+//   F-RERENT-BACKSTOP    — the SAME (project,owner) rapid force-new beyond N
+//                          is refused; a DIFFERENT key is unaffected (the
+//                          dispatcher backstop is per-(project,owner)).
+//
+// Run:   hexa run stdlib/cloud/rerent_cap_test.hexa
+// PASS:  exits 0, prints "rerent_cap_test PASS".
+
+use "stdlib/cloud/pod_registry"
+
+fn _t_assert(cond: int, label: str) {
+    if cond == 0 {
+        println("FAIL: " + label)
+        exit(1)
+    }
+}
+
+fn _t_sandbox() -> str {
+    let real = env_var("HOME") + "/.hx/cloud/rerent-log.jsonl"
+    let _ = exec("mkdir -p " + env_var("HOME") + "/.hx/cloud 2>/dev/null")
+    let sb = exec("mktemp -d /tmp/hexa-rerent-cap.XXXXXX 2>/dev/null").trim()
+    let _ = exec("test -f " + real + " && cp -p " + real + " " + sb + "/SAVED.jsonl || true")
+    let _ = exec("rm -f " + real + " 2>/dev/null")
+    return sb
+}
+
+fn _t_restore(sb: str) {
+    let real = env_var("HOME") + "/.hx/cloud/rerent-log.jsonl"
+    let _ = exec("rm -f " + real + " 2>/dev/null")
+    let _ = exec("test -f " + sb + "/SAVED.jsonl && cp -p " + sb + "/SAVED.jsonl " + real + " || true")
+    let _ = exec("rm -rf " + sb + " 2>/dev/null")
+}
+
+fn _t_main() {
+    let sb = _t_sandbox()
+
+    // Default cap is 3 (no env override in the sandbox).
+    let cap = pod_registry_rerent_cap()
+    _t_assert(cap == 3, "default cap == 3 (got " + str(cap) + ")")
+
+    // ── (i) F-RERENT-CAP-STOPS — a fire losing its pod re-rents <= N then STOPS.
+    // Emulate the driver loop: each pod-death calls the guard. The first N
+    // force-new rents are ALLOWED (return 1); the (N+1)-th is REFUSED (0).
+    println("--- (i) re-rent loop: fire re-rents on every pod-death ---")
+    let mut k = 1
+    while k <= cap {
+        let g = pod_registry_rerent_guard("anima", "laneg-devfeed")
+        _t_assert(g == 1, "force-new rent #" + str(k) + " ALLOWED (under cap)")
+        println("    rent #" + str(k) + " → ALLOWED (force-new ok, under cap " + str(cap) + ")")
+        k = k + 1
+    }
+    let over = pod_registry_rerent_guard("anima", "laneg-devfeed")
+    _t_assert(over == 0, "F-RERENT-CAP-STOPS: (cap+1)-th force-new REFUSED")
+    println("    rent #" + str(cap + 1) + " → REFUSED (auto-re-rent cap reached " + str(cap) + " — re-arm explicitly to continue)")
+    // Idempotent refusal: refusing again is still 0 (does not slide the window).
+    let over2 = pod_registry_rerent_guard("anima", "laneg-devfeed")
+    _t_assert(over2 == 0, "F-RERENT-CAP-STOPS: still refused (no window slide)")
+    println("    rent #" + str(cap + 2) + " → REFUSED again (loop stays stopped — no runaway)")
+
+    // ── (ii) F-RERENT-REARM — explicit re-arm allows continuation.
+    println("--- (ii) explicit re-arm allows continuation ---")
+    let purged = pod_registry_rerent_rearm("anima", "laneg-devfeed")
+    _t_assert(purged == cap, "re-arm purged the window (" + str(purged) + " events)")
+    let after = pod_registry_rerent_guard("anima", "laneg-devfeed")
+    _t_assert(after == 1, "F-RERENT-REARM: force-new ALLOWED after re-arm")
+    println("    re-arm → purged " + str(purged) + " events; next force-new → ALLOWED")
+
+    // ── (iii) F-RERENT-BACKSTOP — same (project,owner) rapid force-new past N
+    // is refused; a DIFFERENT key is unaffected.
+    println("--- (iii) backstop: same-key rapid force-new refused, other key unaffected ---")
+    // burn the rest of the budget for this key (1 already spent above).
+    let mut j = 2
+    while j <= cap {
+        let _ = pod_registry_rerent_guard("anima", "laneg-devfeed")
+        j = j + 1
+    }
+    let blocked = pod_registry_rerent_guard("anima", "laneg-devfeed")
+    _t_assert(blocked == 0, "F-RERENT-BACKSTOP: same-key (N+1)-th rapid force-new REFUSED")
+    println("    same (anima,laneg-devfeed) (cap+1)-th rapid force-new → REFUSED")
+    // a DIFFERENT (project,owner) has its own fresh budget.
+    let other = pod_registry_rerent_guard("demiurge", "qforge")
+    _t_assert(other == 1, "F-RERENT-BACKSTOP: different (project,owner) ALLOWED")
+    println("    different (demiurge,qforge) force-new → ALLOWED (per-key budget)")
+
+    // blank key disables the guard entirely (legacy first-rent path).
+    _t_assert(pod_registry_rerent_guard("", "") == 1, "blank key → guard inert")
+    _t_assert(pod_registry_rerent_guard("anima", "") == 1, "blank owner → guard inert")
+
+    _t_restore(sb)
+    println("rerent_cap_test PASS")
+}
+
+fn main() {
+    _t_main()
+}

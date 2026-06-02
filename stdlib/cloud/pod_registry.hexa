@@ -1398,3 +1398,179 @@ fn pod_registry_orphans(provider_alive_ids: [str], registry_ids: [str], provider
     }
     return out
 }
+
+// ── RE-RENT ROTATION CAP — bounded `--force-new` auto-re-rent ─────────
+//
+// INCIDENT (2026-06-02): a dispatched Lane-G fire driver re-rented a FRESH
+// vast pod via `cloud rent ... --force-new` every time its pod died/was
+// torn down — with NO cap and NO re-arm gate. The detached loop leaked
+// fire2(39046120)→fire3(39052854)→fire4(39059036)→fire5(39059081), each
+// billing. The idempotent-rent guard above does NOT catch this: every
+// re-rent passed `--force-new`, which is exactly the dedup opt-out.
+//
+// FIX: a SECOND backstop that bounds `--force-new` itself. Each force-new
+// rent for a (project,owner) is recorded in an append-only ledger with a
+// timestamp. Before the (cap+1)-th force-new rent inside a short window,
+// the guard REFUSES — a fire that loses its pod re-rents at most N times,
+// then STOPS with a clear cap-reached message and does NOT rent again. An
+// explicit re-arm (`cloud rent --rearm`) purges the window so a human who
+// genuinely wants to continue can.
+//
+// Defaults: cap N=3 (HEXA_CLOUD_RERENT_CAP override), window=3600s
+// (HEXA_CLOUD_RERENT_WINDOW_SEC override). Blank project/owner → guard
+// inert (no stable rotation key, same as the dedup path).
+//
+// Ledger @ ~/.hx/cloud/rerent-log.jsonl — one JSONL line per force-new
+// event: {"project":"..","owner":"..","ts":<epoch>}. Append-only; the
+// window filter + re-arm purge are read-rewrite passes.
+
+fn _rerent_log_path() -> str {
+    return _m5_dir() + "/rerent-log.jsonl"
+}
+
+// pod_registry_rerent_cap — max force-new re-rents per (project,owner)
+// window. Default 3; HEXA_CLOUD_RERENT_CAP overrides (>=1).
+fn pod_registry_rerent_cap() -> int {
+    let e = env_var("HEXA_CLOUD_RERENT_CAP")
+    let v = _reg_atoi(e.trim())
+    if v >= 1 {
+        return v
+    }
+    return 3
+}
+
+// pod_registry_rerent_window_sec — the rolling window. Default 3600s;
+// HEXA_CLOUD_RERENT_WINDOW_SEC overrides (>=1).
+fn pod_registry_rerent_window_sec() -> int {
+    let e = env_var("HEXA_CLOUD_RERENT_WINDOW_SEC")
+    let v = _reg_atoi(e.trim())
+    if v >= 1 {
+        return v
+    }
+    return 3600
+}
+
+// pod_registry_rerent_count — number of force-new events recorded for
+// (project,owner) within the last `window_sec` seconds. A negative or 0
+// stored ts (clock unavailable at record time) is counted as in-window
+// (fail-safe: degrade toward refusing, never toward an unbounded leak).
+fn pod_registry_rerent_count(project: str, owner: str, window_sec: int) -> int {
+    if len(project) == 0 || len(owner) == 0 {
+        return 0
+    }
+    if !file_exists(_rerent_log_path()) {
+        return 0
+    }
+    let body = read_file(_rerent_log_path())
+    if len(body) == 0 {
+        return 0
+    }
+    let now = _reg_now_sec()
+    let lines = body.split("\n")
+    let mut count = 0
+    let mut i = 0
+    while i < len(lines) {
+        let line = lines[i]
+        i = i + 1
+        if len(line) == 0 {
+            continue
+        }
+        if _reg_field(line, "project") != project {
+            continue
+        }
+        if _reg_field(line, "owner") != owner {
+            continue
+        }
+        let ts = _reg_atoi(_reg_field(line, "ts"))
+        let mut in_window = false
+        if ts <= 0 {
+            in_window = true
+        } else if now <= 0 {
+            in_window = true
+        } else if now - ts <= window_sec {
+            in_window = true
+        }
+        if in_window {
+            count = count + 1
+        }
+    }
+    return count
+}
+
+// pod_registry_rerent_record — append one force-new event for
+// (project,owner) at the current epoch. Inert on a blank key. Returns the
+// post-append in-window count.
+fn pod_registry_rerent_record(project: str, owner: str) -> int {
+    if len(project) == 0 || len(owner) == 0 {
+        return 0
+    }
+    _m5_ensure_dir()
+    let now = _reg_now_sec()
+    let line = "{\"project\":\"" + _reg_jstr(project) + "\",\"owner\":\"" + _reg_jstr(owner) + "\",\"ts\":\"" + str(now) + "\"}\n"
+    let mut prev = ""
+    if file_exists(_rerent_log_path()) {
+        prev = read_file(_rerent_log_path())
+    }
+    write_file(_rerent_log_path(), prev + line)
+    return pod_registry_rerent_count(project, owner, pod_registry_rerent_window_sec())
+}
+
+// pod_registry_rerent_rearm — explicit re-arm: drop every recorded
+// force-new event for (project,owner), resetting its rotation budget.
+// Returns the number of entries purged.
+fn pod_registry_rerent_rearm(project: str, owner: str) -> int {
+    if len(project) == 0 || len(owner) == 0 {
+        return 0
+    }
+    if !file_exists(_rerent_log_path()) {
+        return 0
+    }
+    let body = read_file(_rerent_log_path())
+    if len(body) == 0 {
+        return 0
+    }
+    let lines = body.split("\n")
+    let mut kept = ""
+    let mut purged = 0
+    let mut i = 0
+    while i < len(lines) {
+        let line = lines[i]
+        i = i + 1
+        if len(line) == 0 {
+            continue
+        }
+        if _reg_field(line, "project") == project && _reg_field(line, "owner") == owner {
+            purged = purged + 1
+            continue
+        }
+        kept = kept + line + "\n"
+    }
+    _m5_ensure_dir()
+    write_file(_rerent_log_path(), kept)
+    return purged
+}
+
+// pod_registry_rerent_guard — the SINGLE gate the `cloud rent --force-new`
+// path calls. Returns 1 if the force-new rent is ALLOWED (and records the
+// event so the next one counts), 0 if it is REFUSED (cap reached). Blank
+// key → always allowed (no rotation tracking). The CLI prints the
+// cap-reached / re-arm message on a 0 return — this fn is pure decision +
+// ledger so a network-free test can drive it.
+fn pod_registry_rerent_guard(project: str, owner: str) -> int {
+    if len(project) == 0 || len(owner) == 0 {
+        return 1
+    }
+    let cap = pod_registry_rerent_cap()
+    let window = pod_registry_rerent_window_sec()
+    let prior = pod_registry_rerent_count(project, owner, window)
+    if prior >= cap {
+        // Already at/over the cap inside the window → REFUSE. Do NOT
+        // record (a refused rent never happened — recording it would let
+        // the window slide forward forever and never decay).
+        return 0
+    }
+    // Under the cap → allow, and record this force-new event so the
+    // (cap)-th rent is the last one before a refusal.
+    let _ = pod_registry_rerent_record(project, owner)
+    return 1
+}
