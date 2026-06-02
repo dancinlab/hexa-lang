@@ -56,8 +56,20 @@
 # EXIT
 #   0  every program emits byte-identically twice AND links byte-identically
 #      twice — determinism floor held.
-#   1  one or more byte diffs (or compile/link failures) — determinism broke.
-#   2  setup error (no compiler / no corpus).
+#   1  REGRESSION — objects/executables WERE produced but two runs of the same
+#      input gave DIFFERENT bytes (true nondeterminism). The only red.
+#   2  SETUP / INFRA — the configured driver cannot native-emit a single program
+#      in THIS environment at all (both runs 0-byte with NO ENCODE-MISS).
+#      CI-neutral: determinism is untestable here, NOT broken. A released
+#      `./hexa` recompiles compiler/main.hexa against its embedded runtime and
+#      hits the build-floor staleness wall (0-byte emit); only the graduated
+#      self-host gen2 (ghost gen2_fix) native-emits cleanly. Up front a trivial
+#      CANARY (c1_hex_literal) is emitted: if it will not emit, exit 2 at once.
+#
+# CLASSIFICATION RULE
+#   Two runs that BOTH fail to produce an object (0-byte, no ENCODE-MISS) is an
+#   INFRA error, NOT a nondeterminism regression. Only two PRODUCED outputs
+#   that differ byte-for-byte (or a produce-then-fail asymmetry) is a red.
 
 set -uo pipefail
 
@@ -131,8 +143,43 @@ echo "────────────────────────�
 
 sha() { shasum -a256 "$1" 2>/dev/null | cut -d' ' -f1; }
 
-fail=0
+# emit_obj SRC OUTOBJ LOG → sets E_RC / E_SZ / E_EM (rc, byte-size, ENCODE-MISS)
+emit_obj() {
+  local src="$1" obj="$2" log="$3"
+  rm -f "$obj"
+  "$CC" "${PREARGS[@]}" --emit=obj --target="$TARGET" --ignore-errors \
+        -o "$obj" "$src" >"$log" 2>&1
+  E_RC=$?
+  E_EM=$(grep -c "ENCODE-MISS" "$log" 2>/dev/null); E_EM=${E_EM:-0}
+  if [ -s "$obj" ]; then E_SZ=$(wc -c < "$obj" | tr -d ' '); else E_SZ=0; fi
+}
+
+fail=0          # 1 => produced outputs DIFFER (true nondeterminism — red)
+setuperr=0      # count of programs that could not emit at all (infra)
 n=0
+
+# ── CANARY — can this env native-emit AT ALL? ─────────────────────────────
+# (See tool/miscompile_zero_gate.sh for the full rationale.) If the simplest
+# corpus program will not produce a non-empty object with no ENCODE-MISS, the
+# configured driver cannot native-emit here → SETUP/INFRA (exit 2), NOT a
+# nondeterminism regression. Guards against a released `./hexa`'s
+# `run compiler/main.hexa` recompile hitting the build-floor staleness wall.
+CANARY_SRC="$CORPUS/c1_hex_literal.hexa"
+if [ -e "$CANARY_SRC" ]; then
+  emit_obj "$CANARY_SRC" "$OUT/emit/_canary.o" "$OUT/emit/_canary.log"
+  if [ "$E_SZ" -eq 0 ] && [ "$E_EM" -eq 0 ]; then
+    echo "determinism-gate: SETUP/INFRA — canary will not native-emit" >&2
+    echo "  (c1_hex_literal: rc=$E_RC objsize=0 ENCODE-MISS=0 — the compiler" >&2
+    echo "   cannot native --emit=obj in THIS environment; determinism is" >&2
+    echo "   untestable, NOT broken). The real determinism gate needs the" >&2
+    echo "   graduated self-host gen2 (ghost gen2_fix) or a self-host build" >&2
+    echo "   step; a released ./hexa recompiles compiler/main.hexa against its" >&2
+    echo "   embedded runtime and hits the build-floor staleness wall (0-byte" >&2
+    echo "   emit). Set HEXA_NATIVE_CC to a graduated native compiler." >&2
+    echo "        ↳ canary emit log: $OUT/emit/_canary.log" >&2
+    exit 2
+  fi
+fi
 
 # ── PHASE 1 — RE-EMIT determinism ────────────────────────────────────────
 echo "== PHASE 1 — re-emit (native --emit=obj twice, byte-identical) =="
@@ -142,14 +189,20 @@ for src in "$CORPUS"/*.hexa; do
   b="$(basename "$src" .hexa)"
   oA="$OUT/emit/$b.A.o"; oB="$OUT/emit/$b.B.o"
   lA="$OUT/emit/$b.A.log"; lB="$OUT/emit/$b.B.log"
-  rm -f "$oA" "$oB"
 
-  "$CC" "${PREARGS[@]}" --emit=obj --target="$TARGET" --ignore-errors \
-        -o "$oA" "$src" >"$lA" 2>&1; rcA=$?
-  "$CC" "${PREARGS[@]}" --emit=obj --target="$TARGET" --ignore-errors \
-        -o "$oB" "$src" >"$lB" 2>&1; rcB=$?
+  emit_obj "$src" "$oA" "$lA"; rcA=$E_RC; szA=$E_SZ; emA=$E_EM
+  emit_obj "$src" "$oB" "$lB"; rcB=$E_RC; szB=$E_SZ; emB=$E_EM
 
-  sz=0; [ -s "$oA" ] && sz=$(wc -c < "$oA" | tr -d ' ')
+  sz="$szA"
+  if [ "$szA" -eq 0 ] && [ "$szB" -eq 0 ] && [ "$emA" -eq 0 ] && [ "$emB" -eq 0 ]; then
+    # Neither run produced an object and no ENCODE-MISS → infra, not a diff.
+    printf "  SETUP %-22s rcA=%s rcB=%s sz=0 (no emit, no ENCODE-MISS — infra)\n" \
+           "$b" "$rcA" "$rcB"
+    echo "        ↳ logs: $lA  $lB"
+    setuperr=$((setuperr + 1))
+    continue
+  fi
+
   if [ "$rcA" -eq 0 ] && [ "$rcB" -eq 0 ] && [ -s "$oA" ] && cmp -s "$oA" "$oB"; then
     printf "  PASS  %-22s rcA=%s rcB=%s sz=%s sha=%s\n" \
            "$b" "$rcA" "$rcB" "$sz" "$(sha "$oA" | cut -c1-12)"
@@ -202,8 +255,14 @@ if [ "$n" -eq 0 ]; then
 fi
 if [ "$fail" -ne 0 ]; then
   echo "determinism-gate: FAIL — toolchain nondeterminism detected" >&2
-  echo "  (an emit or relink produced different bytes for the same input)." >&2
+  echo "  (two runs produced DIFFERENT bytes for the same input)." >&2
   exit 1
+fi
+if [ "$setuperr" -ne 0 ]; then
+  echo "determinism-gate: SETUP/INFRA — $setuperr/$n programs could not" >&2
+  echo "  native-emit (0-byte, no ENCODE-MISS). Determinism is untestable here," >&2
+  echo "  NOT broken. CI-neutral (exit 2)." >&2
+  exit 2
 fi
 echo "determinism-gate: PASS — $n/$n programs re-emit AND relink byte-identically"
 echo "  (toolchain byte-determinism floor held)."

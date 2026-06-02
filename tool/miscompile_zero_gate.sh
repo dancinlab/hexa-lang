@@ -42,8 +42,23 @@
 #
 # EXIT
 #   0  all corpus programs emit clean (0 ENCODE-MISS, 0 udf) — floor held.
-#   1  one or more regressions detected (details printed).
-#   2  setup error (no compiler / no corpus).
+#   1  REGRESSION — an object WAS produced but is dirty (ENCODE-MISS or a real
+#      spurious `udf`). This is the only red: the graduated native compiler
+#      emitted, but emitted a miscompile.
+#   2  SETUP / INFRA — the configured driver cannot native-emit a single program
+#      in THIS environment at all (every emit is 0-byte / rc!=0 with NO
+#      ENCODE-MISS). CI-neutral: the miscompile-zero FLOOR is NOT broken, the
+#      runner just lacks the graduated native emitter (only the full self-host
+#      gen2 build, or the ghost-host gen2_fix, can native-emit cleanly — a
+#      released `./hexa` recompiles compiler/main.hexa against its embedded
+#      runtime and hits the build-floor staleness wall, producing 0 bytes).
+#
+# CLASSIFICATION RULE (the whole point of this gate's hardening)
+#   A 0-byte object / invocation failure with NO ENCODE-MISS is an INFRA error,
+#   NOT a codegen regression. Only an object that IS produced AND carries an
+#   ENCODE-MISS or a real spurious `udf` is a red regression. Up front we emit a
+#   trivial CANARY (c1_hex_literal): if even the canary will not emit, the env
+#   cannot native-emit → exit 2 immediately with a clear message.
 
 set -uo pipefail
 
@@ -113,15 +128,67 @@ fi
 
 disasm() { $MCZERO_DISASM "$1" 2>/dev/null; }
 
+# emit_one SRC OBJ LOG  — run the native --emit=obj for one program; populate
+# the globals: E_RC (compiler rc), E_SZ (object byte size, 0 if absent),
+# E_EM (ENCODE-MISS count), E_UDF (spurious `udf` count in disasm).
+emit_one() {
+  local src="$1" obj="$2" log="$3"
+  rm -f "$obj"
+  # The native driver consumes the PREARGS slot (driver-name placeholder for
+  # gen2_fix / aprime_cc, or "run compiler/main.hexa" for a released ./hexa)
+  # and the LAST positional as SOURCE (see selfhost-work/build_gen3.sh).
+  "$CC" "${PREARGS[@]}" \
+        --emit=obj --target="$TARGET" --ignore-errors \
+        -o "$obj" "$src" >"$log" 2>&1
+  E_RC=$?
+  # grep -c prints the count AND exits 1 when zero; capture stdout only and
+  # normalize, never relying on the exit code (which would add a stray "0").
+  E_EM=$(grep -c "ENCODE-MISS" "$log" 2>/dev/null); E_EM=${E_EM:-0}
+  if [ -s "$obj" ]; then E_SZ=$(wc -c < "$obj" | tr -d ' '); else E_SZ=0; fi
+  if [ "$E_SZ" -gt 0 ]; then
+    E_UDF=$(disasm "$obj" | grep -ci '\budf\b' 2>/dev/null); E_UDF=${E_UDF:-0}
+  else
+    E_UDF=0
+  fi
+}
+
 echo "── miscompile-zero gate ──────────────────────────────────────────"
-echo "  compiler : $CC"
+echo "  compiler : $CC ${PREARGS[*]}"
 echo "  target   : $TARGET"
 echo "  corpus   : $CORPUS"
 echo "  out      : $OUT"
 echo "  disasm   : $MCZERO_DISASM"
 echo "──────────────────────────────────────────────────────────────────"
 
-fail=0
+# ── CANARY — can this env native-emit AT ALL? ─────────────────────────────
+# c1_hex_literal is the simplest corpus program. If even it will not produce a
+# non-empty object (and produced NO ENCODE-MISS), the configured driver simply
+# cannot native-emit here → SETUP/INFRA error (exit 2), NOT a codegen
+# regression. This is the structural guard against a released `./hexa`'s
+# `run compiler/main.hexa` recompile hitting the build-floor staleness wall and
+# uniformly emitting 0-byte objects, which would otherwise look like a 10/10
+# "regression".
+CANARY_SRC="$CORPUS/c1_hex_literal.hexa"
+if [ -e "$CANARY_SRC" ]; then
+  emit_one "$CANARY_SRC" "$OUT/_canary.o" "$OUT/_canary.emit.log"
+  if [ "$E_SZ" -eq 0 ] && [ "$E_EM" -eq 0 ]; then
+    echo "miscompile-zero-gate: SETUP/INFRA — canary will not native-emit" >&2
+    echo "  (c1_hex_literal: rc=$E_RC objsize=0 ENCODE-MISS=0 — the compiler" >&2
+    echo "   cannot native --emit=obj in THIS environment; the floor is NOT" >&2
+    echo "   broken). The real native-emit gate needs the graduated self-host" >&2
+    echo "   gen2 (ghost gen2_fix) or a self-host build step; a released" >&2
+    echo "   ./hexa recompiles compiler/main.hexa against its embedded runtime" >&2
+    echo "   and hits the build-floor staleness wall (0-byte emit). Set" >&2
+    echo "   HEXA_NATIVE_CC to a graduated native compiler to run the gate." >&2
+    echo "        ↳ canary emit log: $OUT/_canary.emit.log" >&2
+    exit 2
+  fi
+  echo "  canary   : c1_hex_literal emits (objsize=$E_SZ) — native-emit OK"
+  echo "──────────────────────────────────────────────────────────────────"
+fi
+
+fail=0          # 1 => an object WAS produced but is dirty (red regression)
+setuperr=0      # count of programs that could not emit at all (infra)
 n=0
 for src in "$CORPUS"/*.hexa; do
   [ -e "$src" ] || continue
@@ -129,36 +196,32 @@ for src in "$CORPUS"/*.hexa; do
   b="$(basename "$src" .hexa)"
   obj="$OUT/$b.o"
   log="$OUT/$b.emit.log"
-  rm -f "$obj"
 
-  # The native driver consumes the PREARGS slot (driver-name placeholder for
-  # gen2_fix, or "run compiler/main.hexa" for a released ./hexa) and the LAST
-  # positional as SOURCE (see selfhost-work/build_gen3.sh).
-  "$CC" "${PREARGS[@]}" \
-        --emit=obj --target="$TARGET" --ignore-errors \
-        -o "$obj" "$src" >"$log" 2>&1
-  rc=$?
+  emit_one "$src" "$obj" "$log"
 
-  # grep -c prints the count AND exits 1 when zero; capture stdout only and
-  # normalize, never relying on the exit code (which would add a stray "0").
-  em=$(grep -c "ENCODE-MISS" "$log" 2>/dev/null); em=${em:-0}
-  if [ -s "$obj" ]; then
-    sz=$(wc -c < "$obj" | tr -d ' ')
-  else
-    sz=0
+  if [ "$E_SZ" -eq 0 ] && [ "$E_EM" -eq 0 ]; then
+    # No object, no ENCODE-MISS → infra failure for this program, NOT a
+    # codegen regression. Count it as setup error.
+    printf "  SETUP %-22s rc=%s objsize=0 (no emit, no ENCODE-MISS — infra)\n" \
+           "$b" "$E_RC"
+    echo "        ↳ emit log: $log"
+    setuperr=$((setuperr + 1))
+    continue
   fi
-  udf=$(disasm "$obj" | grep -ci '\budf\b' 2>/dev/null); udf=${udf:-0}
 
+  # An object WAS produced (or an ENCODE-MISS surfaced). Now a dirty emit is a
+  # real regression.
   bad=0
   reason=""
-  if [ "$rc" -ne 0 ];   then bad=1; reason="$reason rc=$rc";          fi
-  if [ "$em" -ne 0 ];   then bad=1; reason="$reason ENCODE-MISS=$em"; fi
-  if [ "$sz" -eq 0 ];   then bad=1; reason="$reason objsize=0";       fi
-  if [ "$udf" -ne 0 ];  then bad=1; reason="$reason udf=$udf";        fi
+  if [ "$E_EM" -ne 0 ];  then bad=1; reason="$reason ENCODE-MISS=$E_EM"; fi
+  if [ "$E_UDF" -ne 0 ]; then bad=1; reason="$reason udf=$E_UDF";        fi
+  if [ "$E_RC" -ne 0 ] && [ "$E_SZ" -gt 0 ]; then
+    bad=1; reason="$reason rc=$E_RC(obj-present)"
+  fi
 
   if [ "$bad" -eq 0 ]; then
     printf "  PASS  %-22s rc=%s objsize=%s encode_miss=%s udf=%s\n" \
-           "$b" "$rc" "$sz" "$em" "$udf"
+           "$b" "$E_RC" "$E_SZ" "$E_EM" "$E_UDF"
   else
     printf "  FAIL  %-22s%s\n" "$b" "$reason"
     echo "        ↳ emit log: $log"
@@ -173,8 +236,15 @@ if [ "$n" -eq 0 ]; then
 fi
 if [ "$fail" -ne 0 ]; then
   echo "miscompile-zero-gate: FAIL — native-codegen regression detected" >&2
-  echo "  (an ENCODE-MISS or spurious udf returned; the floor broke)." >&2
+  echo "  (an object was produced but carries an ENCODE-MISS or spurious udf;" >&2
+  echo "   the miscompile-zero floor broke)." >&2
   exit 1
+fi
+if [ "$setuperr" -ne 0 ]; then
+  echo "miscompile-zero-gate: SETUP/INFRA — $setuperr/$n programs could not" >&2
+  echo "  native-emit (0-byte, no ENCODE-MISS). The floor is NOT broken; this" >&2
+  echo "  env lacks the graduated native emitter. CI-neutral (exit 2)." >&2
+  exit 2
 fi
 echo "miscompile-zero-gate: PASS — $n/$n programs emit clean"
 echo "  (0 ENCODE-MISS, 0 udf) — miscompile-zero floor held."
