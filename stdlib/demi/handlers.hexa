@@ -1,0 +1,111 @@
+// HEXA Standard Library — demi/handlers
+//
+// @version 0.1.0
+// @capabilities [proc]
+//
+// The "local" hexa-native handler family for the demiurge-cli manifest
+// (demi-cli-pure-hexa-native · plan @L1). These are the pure-hexa
+// replacements for the Swift DemiurgeCLI functions; the dispatcher calls
+// handler_local(target, argv) and routes by `target` (the manifest handler
+// id) — ONE generic entry, no per-verb dispatcher class (d4).
+//
+// FOUNDATION+PROOF scope: only `action` (the honest-gap base path) is ported
+// LIVE. Every other declared `local` target routes to handler_stub() — an
+// HONEST "not yet ported" notice with a non-zero exit, never a fake success
+// and never a fabricated parity (plan @L2/@L7). The remaining handlers land
+// one-per-PR in the plan's `## handoff` stack.
+
+import "stdlib/demi/manifest.hexa"
+
+// handler_stub(target, argv) — a DECLARED-but-unported local verb. Prints an
+// honest notice naming the verb + the stacked-PR that will port it, and
+// returns exit 2 (usage-class). NO fabricated output — this is the @L7
+// honesty floor: a not-yet-ported verb must NEVER masquerade as parity-green.
+pub fn handler_stub(target: string, argv: [string]) -> int {
+    eprintln("demi: verb handler '" + target + "' not yet ported to hexa-native.")
+    eprintln("      this is FOUNDATION+PROOF — only `discover` + `action` are LIVE.")
+    eprintln("      the '" + target + "' handler lands in a stacked PR (see plan ## handoff).")
+    eprintln("      during migration the Swift CLI remains the parity reference (plan @L2/@L5).")
+    return 2
+}
+
+// ── action (PROOF · LIVE) ────────────────────────────────────────────
+//
+// `demi action <verb> [domain]` — dispatch a 7-verb stage. This ports the
+// Swift `cliAction` base path (main.swift:331-360): the honest-gap report
+// when no measured record is produced. The Swift implementation also routes
+// to real engine tools (ActionDispatch.runEngineTool) and supports
+// --compose / --converge / --deck; those land in the `action` stacked PR
+// (handoff §action). The PROOF cell is the (verb, domain) → honest-gap line,
+// which is byte-matchable against the Swift reference for verbs with no wired
+// engine tool (the dominant case).
+//
+// Verb-string parsing mirrors Swift parseVerbArg (English short-name OR Korean
+// canonical). Unknown verb → stderr + exit 2 (Swift parity).
+
+// _verb_korean(verb) — the Korean label printed by the Swift cliAction header
+// (Verb.koreanLabel). Returns "" for an unrecognized verb.
+fn _verb_korean(verb: string) -> string {
+    if verb == "specify"    || verb == "명세" { return "명세" }
+    if verb == "structure"  || verb == "구조" { return "구조" }
+    if verb == "design"     || verb == "설계" { return "설계" }
+    if verb == "analyze"    || verb == "해석" || verb == "해석⟲" { return "해석" }
+    if verb == "synthesize" || verb == "synth" || verb == "합성" { return "합성" }
+    if verb == "verify"     || verb == "measure" || verb == "검증" || verb == "측정" { return "검증" }
+    if verb == "handoff"    || verb == "인계" { return "인계" }
+    return ""
+}
+
+// _verb_plain(verb) — the English canonical label (Verb.plain).
+fn _verb_plain(verb: string) -> string {
+    if verb == "specify"    || verb == "명세" { return "specify" }
+    if verb == "structure"  || verb == "구조" { return "structure" }
+    if verb == "design"     || verb == "설계" { return "design" }
+    if verb == "analyze"    || verb == "해석" || verb == "해석⟲" { return "analyze" }
+    if verb == "synthesize" || verb == "synth" || verb == "합성" { return "synthesize" }
+    if verb == "verify"     || verb == "measure" || verb == "검증" || verb == "측정" { return "verify" }
+    if verb == "handoff"    || verb == "인계" { return "handoff" }
+    return ""
+}
+
+pub fn handler_action(argv: [string]) -> int {
+    // argv is the post-verb tail: [<verb>, <domain?>, <flags...>].
+    if len(argv) < 1 {
+        eprintln("action: missing <verb> argument")
+        return 2
+    }
+    let verb = argv[0]
+    let plain = _verb_plain(verb)
+    if plain == "" {
+        eprintln("action: unknown verb '" + verb + "' — try one of "
+                 + "specify/structure/design/analyze/synthesize/verify/handoff")
+        return 2
+    }
+    let korean = _verb_korean(verb)
+    // Domain hint — caller may pass it; else "general" (the claude-CLI
+    // honest-gap cohort). Skip a leading flag token so `action specify --x`
+    // does not read "--x" as the domain (mirrors Swift actionArgs[1]).
+    let mut domain = "general"
+    if len(argv) >= 2 {
+        if !argv[1].starts_with("--") { domain = argv[1] }
+    }
+    // The PROOF cell surfaces the dispatch header + the honest no-record gap.
+    // Swift cliAction prints the ActionDispatch.runEngineTool result text in
+    // between; for the (verb, domain) pairs with NO wired engine tool that
+    // text is empty and the surrounding lines are the byte-matchable parity
+    // contract. handler_action reproduces exactly those framing lines.
+    println("action: " + korean + " (" + plain + ") · domain=" + domain + " — dispatching…")
+    println("---")
+    println("⏳ no new measured record — this stage has not been measured (g3).")
+    return 0
+}
+
+// handler_local(target, argv) — generic local-handler entry. Routes by the
+// manifest `target` id to the ported hexa-native handler, else the honest
+// stub. The ONE place the local family fans out — adding a ported handler is
+// one branch here + flipping its manifest row off the stub (d4).
+pub fn handler_local(target: string, argv: [string]) -> int {
+    if target == "action" { return handler_action(argv) }
+    // every other declared local target is not-yet-ported → honest stub.
+    return handler_stub(target, argv)
+}
