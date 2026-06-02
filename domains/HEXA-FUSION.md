@@ -210,7 +210,20 @@ groupnorm_bwd max|Δ| dgamma=0.0 dbeta=0.0 dX=0.0 → F-CLM-DEVFEED-GROUPNORM-BW
 expert-unpack max|Δ| dex0=0.0 dex1=0.0 → F-CLM-DEVFEED-EXUNPACK-EQ = 1
 ALL-PASS (전 F-CLM-DEVFEED-* max|Δ|=0 유지)
 ```
-verdict: `.verdicts/hexa-fusion-l3-bwd-glue/F-CLM-DEVFEED-BWD-GLUE-EQ.txt`. **잔여 bwd glue (⑤-bwd2 진행중)**: ce_grad · moe_router_bwd · dxt/dxec grad sum · embedding_bwd_scatter (+ orthogonal: dX col2im · AdamW tail). raw-GEMM 우위 주장 0.
+verdict: `.verdicts/hexa-fusion-l3-bwd-glue/F-CLM-DEVFEED-BWD-GLUE-EQ.txt`. raw-GEMM 우위 주장 0.
+
+### ⑤-bwd2 BWD glue EXHAUST (slice 2 FINAL) — ✅ (consolidated #2591 = ⑤-bwd+⑤-bwd2, strict byte-eq)
+
+`forge_dispatch_ce_grad`(CE softmax-grad, seq per-row) · `forge_dispatch_moe_router_bwd`(cached probs, seq, no atomics) · `forge_dispatch_grad_sum3/2`(dxt/dxec) · `forge_dispatch_embedding_bwd_scatter`(deterministic, NO atomics, host-order accumulate). 출력 `FARR_DEVICE dirty_host=0`.
+
+```
+ce_grad max|Δ| dlogits=0.0 → F-CLM-DEVFEED-CE-GRAD-EQ = 1
+moe_router_bwd max|Δ| dlogits=0.0 dex_out=0.0 → F-CLM-DEVFEED-MOEROUTER-BWD-EQ = 1
+grad-sum max|Δ| sum3=0.0 sum2=0.0 → F-CLM-DEVFEED-GRADSUM-EQ = 1
+embedding-scatter max|Δ| dtable=0.0 → F-CLM-DEVFEED-EMBSCATTER-EQ = 1
+ALL-PASS — 19 oracles 전부 max|Δ|=0
+```
+verdict: `.verdicts/hexa-fusion-l3-bwd-glue2/F-CLM-DEVFEED-BWD-GLUE2-EQ.txt`. **🎯 bwd 인터프리트-glue EXHAUSTED 확정** — fwd+bwd 둘 다 소진 → 인터프리터가 full-step hot path 거의 이탈. 잔여 orthogonal: dX col2im · per-tensor AdamW tail. main merge: consolidated #2591(rebase clean ← #2584/#2590). raw-GEMM 우위 주장 0.
 
 ### 📦 main merge (2026-06-02) — device-resident + glue 전부 landed
 
