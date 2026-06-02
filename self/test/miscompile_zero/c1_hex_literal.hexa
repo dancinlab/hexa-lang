@@ -1,0 +1,17 @@
+// c1_hex_literal.hexa — miscompile class: hex-literal lowering (0xNN -> 0)
+// Regression: native _parse_int dropped hex literals to 0 (fixed 47421c89c).
+// Exercises `&`/`|`/`<<` on 0xNN constants so a lowering bug shows as a
+// wrong value AND historically as ENCODE-MISS in the emitted object.
+
+fn mask(x: i64) -> i64 {
+    return x & 0xff
+}
+
+fn combine(a: i64, b: i64) -> i64 {
+    return (a << 0x8) | (b & 0x0f)
+}
+
+let m = mask(0x1ff)
+let c = combine(0xab, 0xcd)
+println("mask:", m)
+println("combine:", c)

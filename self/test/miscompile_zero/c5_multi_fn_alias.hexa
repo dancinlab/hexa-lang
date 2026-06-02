@@ -1,0 +1,26 @@
+// c5_multi_fn_alias.hexa — miscompile class: multi-function bodies + module
+// globals (function-body aliasing). The `.truncate(0)` no-op on a module
+// global mis-lowered when several function bodies referenced shared globals
+// (953c8824b). Several fns mutate/read shared module-level state + strings.
+
+let mut counter = 0
+
+fn bump(n: i64) -> i64 {
+    counter = counter + n
+    return counter
+}
+
+fn label(s: string) -> string {
+    return "[" + s + "]"
+}
+
+fn ends_ok(s: string) -> bool {
+    // string-compare cascade (downstream of the hex-literal fix)
+    return s.ends_with("z")
+}
+
+let a = bump(3)
+let b = bump(4)
+println(label("count"), b)
+println("a:", a)
+println("ends:", ends_ok("xyz"))

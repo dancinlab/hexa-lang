@@ -1,0 +1,11 @@
+// c4_f64_literal.hexa — miscompile class: f64 __literal8 constant pool +
+// __DATA reloc. f64 constants land in the __literal8 section and need a
+// correct UNSIGNED/literal8 relocation (linker reloc-gap class, #2509).
+// A dropped reloc historically showed as a spurious `udf` at the load site.
+
+fn scale(x: f64) -> f64 {
+    return x * 3.14159265358979 + 2.71828182845905
+}
+
+let r = scale(1.5)
+println("scale:", r)
