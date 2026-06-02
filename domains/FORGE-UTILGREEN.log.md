@@ -1,5 +1,46 @@
 # FORGE-UTILGREEN — append-only step log
 
+## 2026-06-02T22:30Z — Lane-G (substrate=GPU · H100 sm_90 pod vast 39126604 · a_lane_akida_gpu_split — NEVER merged with AKIDA) — lever-3 util fire **2nd INDEPENDENT CONFIRMATION** (longer run, n=6868): DESCENT 🟢 / util 🔴 RED (PEAK 35% MEAN 0.4879%) — corroborates #2542 lever-4 verdict
+
+Independent re-fire of lever-3 on a FRESH single-GPU pod, corroborating the #2542
+closure with a much longer, finer-grained measurement. #2542 ran the short config
+(E=4 ep=3 nwin=8, 0.5s sampler, **n=349** PEAK 21% MEAN 0.5616%) on the adopted
+8-GPU candidate 38996679; this run uses a clean **single-GPU** H100 sm_90
+(`num_gpus=1`, `CUDA_VISIBLE_DEVICES=0`) pod 39126604, the longer config
+(E=2 ep=2 nwin=32, 0.1s sampler → **n=6868**, 19× more samples).
+
+- **rented** fresh `H100_SXM num_gpus=1` (pod 39126604, after the adopted 38996679
+  died on a vast transport outage mid fire-launch). protected pods untouched.
+- **build path** (proven, scripted all-in-one, nohup fire survives SSH drop): clone
+  `lane-g/rfc046-lever3-batched-gemmfeed` `a5d01f37f` → spliced `self/runtime.c`
+  (levers a+b+2+3, byte-eq DELEGATE fix) → `tool/stage_build_hexa` (cuda_link_decision
+  baked=1) → **symlink `hexa`→`hexa_fresh` on PATH** (the emit sub-proc resolves `hexa`
+  via PATH — the silent-CPU-fallback trap if missing) → pre-emit `runtime_cuda.c`
+  (bt/atb/batched kernels + `_d2h_out`/`_ensure_dev_alloc_out` fwd-decls) →
+  `HEXA_CUDA_LINK=1 HEXA_CUDA_ARCH=90` build → `-lcuda` relink.
+- **3-GATE PASS** (g5): CUDA link ENGAGED=1 · `nvcc -x cu` EXIT 0 (660952B .90.o, 0 err)
+  · `clm_prod` ldd 4 cuda libs (cublas+cudart+**libcuda.so.1**+cublasLt) + 10 lever syms.
+- **byte-eq ALL PASS** (g5, max|Δ|=0.0): `F-RFC046-GEMMFEED-EQ`=1 · `F-RFC046-BATCHED-GEMMFEED-EQ`=1
+  · `F-CLM-DEVFEED-*` ALL-PASS (dX 5.55e-17 ULP) · `F-CLM-CONV2-BATCHED-*` ALL-PASS.
+- **util fire** (CLM_PROD_DEVFEED=1 CLM_PROD_BATCHED=1, d1536/T512, c4 5-lang 402270B):
+  - **DESCENT 🟢 GREEN**: `epoch-1 mean CE = 4.05535` → `epoch-2 mean CE = 3.45564`,
+    `F-CLM-PROD-DESCENT = 1` (g5 verbatim).
+  - **util 🔴 RED**: `n=6868 PEAK=35% MEAN=0.4879% busy_mean=5.3445% pct≥20%=0.1019%`
+    (GPU0, 0.1s, g5 verbatim). forge live on GPU (115W vs 70W idle).
+- **two-pod cross-check (decisive)**: #2542 (n=349) MEAN 0.5616% · this (n=6868) MEAN
+  0.4879%. Across two pods + two configs, lever-3 MEAN util is **flat ~0.5%** (lever-1
+  0.811% → lever-2 0.4999% → lever-3 0.49–0.56%). PEAK rose (19→21→35%) but MEAN did
+  not — **confirms** the device-feed lever chain (a+b+2+3) is necessary-but-insufficient
+  and the residual is the **interpreted per-step DRIVER LOOP** (F-RFC046 root: ~30
+  host↔device crossings/step incl 20× separate AdamW; busy_mean 5.34% ⇒ GPU ~95% idle),
+  NOT the GEMM-feed/link/kernel/emit/scale (all ruled out). → **lever-4** (fused
+  on-device per-step driver) is the real unblock.
+- **closure**: util RED → closure-FAIL → **.clm PRIVATE** `dancinlab/clm-v1-dev-d1536-lever3-util-probe`
+  (a_hf_autonomous). recover-before-teardown DONE (.clm 14379581B sha256 `06e2dcf4…`
+  pull+verify + HF.jsonl substrate=GPU + CLM collection + marker verified → pod 39126604
+  destroyed, confirmed). PUBLIC HF / 3B / 7B still gated. inbox handoff:
+  `inbox/patches/forge-rfc046-lever3-util-residual-lever4-driver-loop.md`. g5 verbatim · 날조 0.
+
 ## 2026-06-02T19:05Z — Lane-G (substrate=GPU · mac CPU-local `hexa run` $0 · a_lane_akida_gpu_split — NEVER merged with AKIDA) — lever-3 batched GEMM-feed **byte-eq GREEN** (max|Δ|=0.0), util fire HELD; lever-2 RED → lever-3 unblock 65% batched repack 확정
 
 lever-3 (batched transpose-aware GEMM-feed) **소스 byte-eq-GREEN-ready**. 체크포인트 `62139159a`
