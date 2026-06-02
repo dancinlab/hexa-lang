@@ -1,5 +1,61 @@
 # FORGE-UTILGREEN — append-only step log
 
+## 2026-06-02T22:30Z — Lane-G (substrate=GPU · H100 sm_90 pod vast 39126604 · a_lane_akida_gpu_split — NEVER merged with AKIDA) — lever-3 util-verify fire CLOSED: DESCENT 🟢 / util 🔴 RED (PEAK 35% MEAN 0.4879%), residual = per-step DRIVER LOOP → lever-4
+
+clean single-driver H100 sm_90 fire (pod 39126604, `CUDA_VISIBLE_DEVICES=0`, num_gpus=1)
+landed the HELD lever-3 verify. Build path (proven, scripted end-to-end): clone branch
+`lane-g/rfc046-lever3-batched-gemmfeed` (`a5d01f37f`) → seeds + **spliced `self/runtime.c`
+(levers a+b+2+3, byte-eq DELEGATE fix)** → self-host rebuild (`tool/stage_build_hexa`,
+`cuda_link_decision` baked count=1) → symlink `hexa`→`hexa_fresh` on PATH (the emit
+sub-process resolves `hexa` via PATH — missing symlink was the silent CPU-fallback trap)
+→ pre-emit `runtime_cuda.c` (bt/atb/batched GPU kernels + `_d2h_out`/`_ensure_dev_alloc_out`
+fwd-decls present) → `HEXA_CUDA_LINK=1 HEXA_CUDA_ARCH=90` build → `-lcuda` relink (driver
+API cuInit/cuLaunchKernel).
+
+**3-GATE PASS** (g5 verbatim):
+- GATE-1 `CUDA link ENGAGED` = 1 (cuBLAS sm_90)
+- GATE-2 `nvcc -x cu runtime_cuda.c` EXIT 0 · 660952B `.90.o` · 0 errors
+- GATE-3 `clm_prod` ldd = 4 cuda libs (libcublas.so.12 + libcudart.so.12 + **libcuda.so.1** + libcublasLt.so.12) · 10 lever symbols
+
+**BYTE-EQ ALL PASS** (g5 verbatim, max|Δ|=0.0 hard gate held):
+- `F-RFC046-GEMMFEED-EQ = 1` BT/ATB max|Δ|=0.0
+- `F-RFC046-BATCHED-GEMMFEED-EQ = 1` BT/ATB/per-problem max|Δ|=0.0
+- `F-CLM-DEVFEED-*` ALL-PASS (im2col/fwd 0.0 · bwd dW/db=0.0 dX=5.55e-17 ULP · adam 0.0)
+- `F-CLM-CONV2-BATCHED-*` ALL-PASS (fwd/bwd dW/dX/db all 0.0)
+
+**UTIL FIRE** (`CLM_PROD_DEVFEED=1 CLM_PROD_BATCHED=1`, d=1536/T=512, c4 5-lang 402270B,
+E=2 epochs=2 nwin=32):
+```
+F-CLM-PROD-DESCENT = 1   PASS   CE 4.05535 → 3.45564          (🟢 DESCENT GREEN)
+F-RFC046-GPU-UTILIZATION 🔴 RED  PEAK=35% MEAN=0.4879% n=6868 busy_mean=5.3445% pct_ge20=0.1019%
+```
+forge PROVABLY on GPU (power 115W vs 70W idle during fire). before(lever-2)=MEAN 0.4999%.
+
+**CLOSURE = FAIL on util (descent GREEN / util RED) → PUBLIC-grade Lane-G NOT reached.**
+lever progression: lever-1 MEAN 0.811% (PEAK 6%) → lever-2 0.4999% (PEAK 19%) → lever-3
+0.4879% (**PEAK 35%**). PEAK climbed but **MEAN flat** ⇒ the device-feed lever chain
+(a+b+2+3) is **necessary but INSUFFICIENT**. CLOSED-NEGATIVE (all ruled out): link · kernel
+· emit · scale · the 65%/31% host GEMM-repack feed (now all on device, byte-eq). The
+util-RED residual is the **interpreted per-step DRIVER LOOP** in `clm_prod.main`
+(`while step<=steps` host orchestration + **20× separate `_adam`** host↔device round-trips
++ token gather + CE glue ≈ 30 host↔device crossings/step) — at d1536 sub-ms cuBLAS GEMMs
+are SM-starved by the 1-CPU-core host loop (busy_mean 5.34% ⇒ GPU idle ~95% of wall).
+
+**lever-4 = next unblock (DESIGN, the real one):** fused on-device per-step driver —
+fuse the 20× AdamW into ONE batched on-device AdamW + keep step activations device-resident
+→ ~30→~2 host↔device crossings/step. oracle `F-RFC046-FUSED-STEP-EQ` max|Δ|=0.0. Spec:
+inbox/patches/forge-rfc046-lever3-util-residual-lever4-driver-loop.md.
+
+recover-before-teardown DONE: `.clm` (14379581B, sha256 06e2dcf4…) pulled + sha-verified +
+HF **PRIVATE** `dancinlab/clm-v1-dev-d1536-lever3-util-probe` (closure-FAIL → PRIVATE per
+a_hf_autonomous) + HF.jsonl row (substrate=GPU, Lane-G) + CLM collection + recovery marker
+verified → pod 39126604 destroyed (confirmed, billing stopped). g5 verbatim · no fabricated GREEN.
+
+NOTE (recipe gap, a_runpod_inbox): the FIRST candidate pod 38996679 (8-GPU) built+3-gate+
+byte-eq ALL PASS but DIED (vast transport outage → destroyed) mid fire-launch (non-nohup SSH
+session) before util landed → re-rented single-GPU 39126604 + re-ran with **nohup-detached
+fire** (survives SSH drop). Lesson: ALWAYS nohup the fire, never a bare-session run.
+
 ## 2026-06-02T19:05Z — Lane-G (substrate=GPU · mac CPU-local `hexa run` $0 · a_lane_akida_gpu_split — NEVER merged with AKIDA) — lever-3 batched GEMM-feed **byte-eq GREEN** (max|Δ|=0.0), util fire HELD; lever-2 RED → lever-3 unblock 65% batched repack 확정
 
 lever-3 (batched transpose-aware GEMM-feed) **소스 byte-eq-GREEN-ready**. 체크포인트 `62139159a`
