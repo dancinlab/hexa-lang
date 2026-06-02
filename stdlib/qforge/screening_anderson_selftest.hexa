@@ -80,6 +80,73 @@ fn drho_amplify(drho: [float]) -> [float] {
     return out
 }
 
+// ── EXPLICIT AFFINE MAP g(x)=b+L·x with a KNOWN closed-form fixed point ──────
+//   The g5 linear-algebra identity: the Anderson core solves (I−L)x=b → x*. We use
+//   an L whose spectral radius EXCEEDS 1 (the metallic high-gain regime: Picard
+//   x←(1−β)x+βg(x) DIVERGES) yet (I−L) is non-singular, so x*=(I−L)⁻¹b EXISTS and is
+//   computable independently (Gaussian elimination here). Anderson (= GMRES on the
+//   affine map) must reproduce x* to tol. dim=4. d4: g_apply is a caller closure.
+let mut L_MAT: [float] = []      // n×n linear part L
+let mut L_B:   [float] = []      // affine offset b
+let mut L_N = 0
+fn affine_map(x: [float]) -> [float] {
+    // g(x) = b + L·x.
+    let mut out: [float] = []
+    let mut i = 0
+    while i < L_N {
+        let mut s = L_B[i]
+        let mut j = 0
+        while j < L_N { s = s + L_MAT[i * L_N + j] * x[j] ; j = j + 1 }
+        out.push(s)
+        i = i + 1
+    }
+    return out
+}
+// solve (I−L)x = b directly (reference x*); plain Gaussian elimination w/ pivoting.
+fn iml_solve(Lm: [float], b: [float], n: int) -> [float] {
+    let mut A: [float] = []
+    let mut i = 0
+    while i < n {
+        let mut j = 0
+        while j < n {
+            let id = if i == j { 1.0 } else { 0.0 }
+            A.push(id - Lm[i * n + j]) ; j = j + 1
+        }
+        i = i + 1
+    }
+    let mut x: [float] = []
+    i = 0 ; while i < n { x.push(b[i]) ; i = i + 1 }
+    let mut col = 0
+    while col < n {
+        let mut piv = col ; let mut pv = _abs(A[col * n + col])
+        let mut r = col + 1
+        while r < n { let v = _abs(A[r * n + col]) ; if v > pv { pv = v ; piv = r } ; r = r + 1 }
+        if piv != col {
+            let mut c = 0
+            while c < n { let t = A[col*n+c] ; A[col*n+c] = A[piv*n+c] ; A[piv*n+c] = t ; c = c + 1 }
+            let t2 = x[col] ; x[col] = x[piv] ; x[piv] = t2
+        }
+        let mut rr = col + 1
+        while rr < n {
+            let f = A[rr*n+col] / A[col*n+col]
+            let mut c = col
+            while c < n { A[rr*n+c] = A[rr*n+c] - f * A[col*n+c] ; c = c + 1 }
+            x[rr] = x[rr] - f * x[col]
+            rr = rr + 1
+        }
+        col = col + 1
+    }
+    let mut ri = n - 1
+    while ri >= 0 {
+        let mut acc = x[ri]
+        let mut c = ri + 1
+        while c < n { acc = acc - A[ri*n+c] * x[c] ; c = c + 1 }
+        x[ri] = acc / A[ri*n+ri]
+        ri = ri - 1
+    }
+    return x
+}
+
 fn main() {
     let mut fails = 0
     let N = 8
@@ -207,6 +274,65 @@ fn main() {
                                                  drho_amplify, TOL, 80, 1.0, 5)
     fails = fails + _ck_bool("(F) malformed → empty columns", rf.columns.len() == 0, true)
     fails = fails + _ck_bool("(F) malformed → not converged", rf.converged, false)
+
+    // ── (G) LINEAR-ALGEBRA IDENTITY: generic Anderson solves (I−L)x=b → x* ──────
+    //   high-gain L (spectral radius > 1, so Picard diverges) but (I−L) non-singular.
+    //   L = 0.6·(ones off-diag) + 1.4 on diag over dim 4 → ‖L‖>1; compare the
+    //   Anderson core's x* against the directly-computed (I−L)⁻¹b. residual < tol.
+    let GN = 4
+    let mut Lm: [float] = []
+    let mut gi = 0
+    while gi < GN {
+        let mut gj = 0
+        while gj < GN {
+            if gi == gj { Lm.push(1.4) } else { Lm.push(0.6) }
+            gj = gj + 1
+        }
+        gi = gi + 1
+    }
+    let bb = [1.0, -2.0, 0.5, 3.0]
+    L_MAT = Lm ; L_B = bb ; L_N = GN
+    let xref = iml_solve(Lm, bb, GN)            // reference x* = (I−L)⁻¹b
+    let mut x0: [float] = [] ; let mut zi = 0
+    while zi < GN { x0.push(0.0) ; zi = zi + 1 }
+    let afp = qforge_anderson_fixed_point(affine_map, x0, GN, 1.0e-10, 200, 1.0, 5)
+    let mut maxe = 0.0
+    let mut ci = 0
+    while ci < GN { let e = _abs(afp.x[ci] - xref[ci]) ; if e > maxe { maxe = e } ; ci = ci + 1 }
+    fails = fails + _ck_bool("(G) Anderson affine converged", afp.converged, true)
+    fails = fails + _ck_lt("(G) Anderson x* == (I−L)⁻¹b (max|Δ|)", maxe, 1.0e-7)
+    fails = fails + _ck_lt("(G) Anderson fixed-point residual < tol", afp.residual, 1.0e-10)
+
+    // ── (G') NEAR-SINGULAR (I−L): spectral radius → 1⁻, ill-conditioned, NO NaN ──
+    //   L diag 0.999 (so I−L diag ≈ 1e-3, near-singular but non-singular) → x* large
+    //   but FINITE; assert the no-NaN guarantee holds and x* matches the reference.
+    let mut Ls: [float] = []
+    gi = 0
+    while gi < GN {
+        let mut gj = 0
+        while gj < GN {
+            if gi == gj { Ls.push(0.999) } else { Ls.push(0.0001) }
+            gj = gj + 1
+        }
+        gi = gi + 1
+    }
+    L_MAT = Ls ; L_B = bb ; L_N = GN
+    let xref2 = iml_solve(Ls, bb, GN)
+    let afp2 = qforge_anderson_fixed_point(affine_map, x0, GN, 1.0e-9, 600, 1.0, 6)
+    let mut all_fin2 = true
+    ci = 0
+    while ci < GN { if !_finite(afp2.x[ci]) { all_fin2 = false } ; ci = ci + 1 }
+    fails = fails + _ck_bool("(G') near-singular x* all FINITE (no NaN/inf)", all_fin2, true)
+    let mut maxe2 = 0.0
+    let mut maxref2 = 1.0e-30
+    ci = 0
+    while ci < GN {
+        let e = _abs(afp2.x[ci] - xref2[ci]) ; if e > maxe2 { maxe2 = e }
+        let a = _abs(xref2[ci]) ; if a > maxref2 { maxref2 = a }
+        ci = ci + 1
+    }
+    let relerr2 = maxe2 / maxref2
+    fails = fails + _ck_lt("(G') near-singular x* rel-ε vs (I−L)⁻¹b", relerr2, 1.0e-4)
 
     if fails == 0 { println("qforge_screening_anderson_selftest PASS") }
     else { println("qforge_screening_anderson_selftest FAIL — " + to_string(fails) + " case(s)") }

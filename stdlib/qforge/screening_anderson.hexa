@@ -202,6 +202,168 @@ fn ad_solve(a: [float], b: [float], m: int) -> [float] {
     return x
 }
 
+// ── result bundle for the GENERIC affine/fixed-point solver ──────────────────────
+pub struct AndersonFpResult {
+    x: [float],            // the (monotone) fixed point x* (length n)
+    iters: int,            // Anderson iterations taken
+    converged: bool,       // ‖g(x)−x‖<tol reached AND all values finite (no NaN/inf)
+    residual: float        // final ‖g(x)−x‖ (the fixed-point residual)
+}
+
+// ── GENERIC monotone-line-search Anderson fixed-point solve x* = g(x*) ───────────
+//   This is the SOLVER CORE extracted as a directly-testable primitive (d3/d4): for
+//   an AFFINE map g(x)=b+L·x it is GMRES on (I−L)x=b and converges to the EXACT
+//   linear-algebra solution x*=(I−L)⁻¹b EVEN WHEN ‖L‖>1 (the metallic high-gain
+//   regime that diverges Picard). The monotone accept/reject line-search (residual
+//   NON-INCREASING; reject → halve relax, retry from the same accepted x) makes ‖f‖
+//   unconditionally bounded — the no-NaN guarantee on a near-singular (I−L).
+//     g_apply : x(length n) -> g(x)(length n)  (the fixed-point map; caller-supplied).
+//     x0      : initial guess (length n).
+//     n       : vector length.
+//     tol     : ‖g(x)−x‖ convergence threshold.
+//     max_iter: max Anderson iterations.
+//     mix     : relaxation β∈(0,1] (out-of-range → 1.0, the pure Anderson step).
+//     mdepth  : history window m (≥1; m=1 ≈ damped Picard, m≥2 = acceleration).
+//   Returns AndersonFpResult; the g5 selftest verifies x* matches (I−L)⁻¹b on a known
+//   fixture AND that no NaN is produced on a near-singular (spectral-radius→1⁻) L.
+pub fn qforge_anderson_fixed_point(g_apply, x0: [float], n: int,
+                                   tol: float, max_iter: int,
+                                   mix: float, mdepth: int) -> AndersonFpResult {
+    let mut beta = mix
+    if beta <= 0.0 || beta > 1.0 { beta = 1.0 }
+    let mut mwin = mdepth
+    if mwin < 1 { mwin = 5 }
+    if n < 1 || len(x0) != n {
+        return AndersonFpResult { x: [], iters: 0, converged: false, residual: -1.0 }
+    }
+    let N = n
+    let mut x = []
+    let mut bi = 0
+    while bi < N { x.push(x0[bi]) ; bi = bi + 1 }
+    let mut histx: [[float]] = []
+    let mut histf: [[float]] = []
+    let mut it = 0
+    // seed: f0 = g(x0) − x0.
+    let g0 = g_apply(x)
+    let mut fx = []
+    let mut s0 = 0
+    while s0 < N { fx.push(g0[s0] - x[s0]) ; s0 = s0 + 1 }
+    let mut res_x = 1.0e300
+    if ad_all_finite(fx, N) { res_x = ad_norm(fx, N) }
+    let mut relax = beta
+    let MINRELAX = 1.0e-12          // relaxation floor → fixed point reached / stalled
+    while it < max_iter {
+        if res_x < tol { break }
+        let mut f = fx
+        let mut xc = [] ; let mut fc = []
+        let mut hi = 0
+        while hi < N { xc.push(x[hi]) ; fc.push(f[hi]) ; hi = hi + 1 }
+        histx.push(xc) ; histf.push(fc)
+        while histx.len() > mwin {
+            let mut nx: [[float]] = [] ; let mut nf: [[float]] = []
+            let mut j = 1
+            while j < histx.len() { nx.push(histx[j]) ; nf.push(histf[j]) ; j = j + 1 }
+            histx = nx ; histf = nf
+        }
+        let mdim = histx.len() - 1
+        let mut i = 0
+        let mut x_next = []
+        if mdim < 1 {
+            i = 0
+            while i < N { x_next.push(x[i] + relax * f[i]) ; i = i + 1 }
+        } else {
+            let last = histx.len() - 1
+            let mut A = []
+            let mut z = 0
+            while z < mdim * mdim { A.push(0.0) ; z = z + 1 }
+            let mut rhs = []
+            z = 0
+            while z < mdim { rhs.push(0.0) ; z = z + 1 }
+            let mut dF: [[float]] = []
+            let mut dX: [[float]] = []
+            let mut kk = 0
+            while kk < mdim {
+                let idxp = last - 1 - kk
+                let mut dfc = [] ; let mut dxc = []
+                i = 0
+                while i < N {
+                    dfc.push(histf[last][i] - histf[idxp][i])
+                    dxc.push(histx[last][i] - histx[idxp][i])
+                    i = i + 1
+                }
+                dF.push(dfc) ; dX.push(dxc)
+                kk = kk + 1
+            }
+            let mut a = 0
+            while a < mdim {
+                let mut b = 0
+                while b < mdim {
+                    let mut acc = 0.0
+                    i = 0
+                    while i < N { acc = acc + dF[a][i] * dF[b][i] ; i = i + 1 }
+                    A[a * mdim + b] = acc
+                    b = b + 1
+                }
+                A[a * mdim + a] = A[a * mdim + a] * 1.0000001 + 1.0e-12
+                let mut accr = 0.0
+                i = 0
+                while i < N { accr = accr + dF[a][i] * f[i] ; i = i + 1 }
+                rhs[a] = accr
+                a = a + 1
+            }
+            let gamma = ad_solve(A, rhs, mdim)
+            if len(gamma) != mdim {
+                i = 0
+                while i < N { x_next.push(x[i] + relax * f[i]) ; i = i + 1 }
+            } else {
+                i = 0
+                while i < N {
+                    let mut v = x[i] + relax * f[i]
+                    let mut a2 = 0
+                    while a2 < mdim {
+                        v = v - gamma[a2] * (dX[a2][i] + relax * dF[a2][i])
+                        a2 = a2 + 1
+                    }
+                    x_next.push(v)
+                    i = i + 1
+                }
+            }
+        }
+        let mut accepted = false
+        if ad_all_finite(x_next, N) {
+            let g2 = g_apply(x_next)
+            let mut fx2 = []
+            let mut ok2 = true
+            let mut a3 = 0
+            while a3 < N {
+                let d = g2[a3] - x_next[a3]
+                if d != d { ok2 = false }
+                fx2.push(d)
+                a3 = a3 + 1
+            }
+            if ok2 && ad_all_finite(fx2, N) {
+                let res2 = ad_norm(fx2, N)
+                if res2 <= res_x * 1.01 {
+                    x = x_next ; fx = fx2 ; res_x = res2 ; accepted = true
+                }
+            }
+        }
+        if !accepted {
+            relax = relax * 0.5
+            if histx.len() > 0 {
+                let mut nx: [[float]] = [] ; let mut nf: [[float]] = []
+                let mut j = 0
+                while j < histx.len() - 1 { nx.push(histx[j]) ; nf.push(histf[j]) ; j = j + 1 }
+                histx = nx ; histf = nf
+            }
+            if relax < MINRELAX { break }
+        }
+        it = it + 1
+    }
+    let conv = ad_all_finite(x, N) && (res_x >= 0.0) && (res_x < tol)
+    return AndersonFpResult { x: x, iters: it, converged: conv, residual: res_x }
+}
+
 // ── public API: Anderson-accelerated screened ΔV_scr·ψ columns (METALLIC-STABLE) ─
 //   Identical I/O contract to qforge_screened_dv_columns EXCEPT `mix` is the Anderson
 //   relaxation β (default behaviour at β=1 is the pure Anderson step) and `mdepth` is
