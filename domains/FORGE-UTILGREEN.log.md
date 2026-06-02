@@ -1,5 +1,46 @@
 # FORGE-UTILGREEN — append-only step log
 
+## 2026-06-02T18:30Z — Lane-G (substrate=GPU · pod vast 39082940 · a_lane_akida_gpu_split — NEVER merged with AKIDA) — lever-2 util-verify fire CLOSED: DESCENT 🟢 GREEN / util 🔴 RED (PEAK 19% MEAN 0.4999% n=147863), lever-2 byte-eq PRESERVED, lever-3 (batched bt/atb) confirmed as the real unblock
+
+lever-2 transpose-aware GEMM(bt/atb) util-verify fire **완주·CLOSED** (직전 드라이버는 closure
+직전 서버 rate-limit 으로 종료 → 본 세션이 backoff·inline·sole-driver 로 마감). branch
+`lane-g/rfc046-lever2-gemmfeed` `403735b29`, config d=1536 E=2 epochs=6 nwin=32, corpus 402270B V=256.
+
+- **DESCENT 🟢 PASS** (g5 verbatim):
+  ```
+  epoch-1 mean CE = 0.818097
+  epoch-6 mean CE = 0.0591666
+  config d=1536 E=2 epochs=6 nwin=32
+  F-CLM-PROD-DESCENT = 1
+  PASS — real-corpus mean CE descends under int4 envelope
+  ```
+- **util 🔴 RED** (g5 verbatim) — util-GREEN(≥20% MEAN ∧ descent GREEN) **NOT 도달**:
+  ```
+  util samples n=147863  PEAK=19%  MEAN=0.4999%  busy_n=21575  busy_mean=3.43%
+  pct≥20% = 0
+  ```
+  MEAN 0.4999% ≪ 20%, PEAK 19% < 20%.
+- **lever-2 byte-eq PRESERVED** (hard gate): `F-RFC046-GEMMFEED-EQ = 1` (bt/atb GPU 커널 == host-
+  transposed forge, max|Δ|=0.0) + 기존 오라클 전부 max|Δ|=0.0 (DEVFEED-{IM2COL,FWD,BWD,ADAM}-EQ ·
+  HOSTFEED-{FWD,BWD}-EQ). 드리프트 0, 가짜 GREEN 0.
+- **KEY 발견** — **before(lever-1-only) MEAN 0.811% → after(lever-2) MEAN 0.4999%**: lever-2 는
+  util 을 올리지 **못함**. lever-2 가 device 화한 것은 **un-batched conv 경로(profile 31.2%)** 뿐 —
+  프로덕션 트레이너가 실제 도는 **DOMINANT 65% batched `conv2_*_via_forge_batched` host repack 은
+  미접촉**. ⇒ **lever-3 (batched bt/atb)가 진짜 unblock** (DESIGN-AHEAD 박제됨, byte-eq pending).
+  정직한 closed result: util<20% → closure-FAIL → PRIVATE.
+- **ckpt** `lever2_d1536_t512.clm` 14379581 B (6 int4 blocks CLM\x01), sha256
+  `407f1564d5b21bc3e896e503560a580934d276462d2ffc65b439b6e7b90865d1` (local==pod MATCH).
+  recover-before-teardown 충족.
+- **HF PRIVATE** (a_hf_autonomous: closure-FAIL/util-RED = PRIVATE · a_hf_complete: model card + sha256
+  + manifest): `dancinlab/clm-v1-dev-d1536-lever2-util-probe` private=True (ckpt + README + SHA256SUMS +
+  util_fire.csv + HARVEST.txt + fire_train.log + verify.out = 7 files, HF API 확인). FORGE 엔드게임의
+  reserved PUBLIC `clm-v1-base-mirror-lane-g-forge`(미래 util-GREEN 용)와 별개의 dev-probe id. NOT
+  PUBLIC-grade(util 게이트 미달). HF.jsonl row(substrate=GPU) `anima_clm_mid_d1536_t512_lever2_lane_g_2026_06_02`.
+- **3B/7B 게이트 STILL throughput-blocked**: util-RED 지속 → 3B forge fire 는 throughput-justified
+  아님(NOT-before-util-GREEN guard 유지). util-GREEN 은 lever-3 fire 의 verdict 에 달림.
+- pod 39082940 teardown 완료(marker+HF 검증 후) · 보호 pod 무손상 · 재-rent 0. substrate=GPU,
+  a_lane_akida_gpu_split (AKIDA 무병합) · 날조 0 · g5 verbatim.
+
 ## 2026-06-02 — 도메인 생성 (util-GREEN 엔드게임 시드)
 
 flame+forge CLM 트레이너의 GPU util-GREEN 을 향한 엔드게임 lever 체인을 박제. 광범위 가속
