@@ -1,0 +1,5 @@
+flame_forge_batched — LEVER (b) builtin: forge_dispatch_matmul_batched
+  forge_dispatch_matmul_batched rc=0.0
+  per-problem max|Δ| batched-vs-serial = 0.0
+F-FORGE-BATCHED-EQ = 1
+PASS — forge_dispatch_matmul_batched == batch× forge_dispatch_matmul byte-eq

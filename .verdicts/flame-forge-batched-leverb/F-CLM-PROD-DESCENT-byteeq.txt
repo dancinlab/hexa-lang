@@ -1,0 +1,3 @@
+=== trainer byte-eq verdict ===
+un-batched baseline: epoch-1 4.69813 epoch-12 1.66631
+batched experts:    epoch-1 4.69813 epoch-12 1.66631  (IDENTICAL — byte-eq full-loop)
