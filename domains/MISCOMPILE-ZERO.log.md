@@ -270,3 +270,34 @@ CI-wiring note (for a future gate agent — NOT done here): invocable in CI with
 HEXA_NATIVE_CC=<graduated gen2>, gated like miscompile_zero_gate.sh (exit 2 =
 CI-neutral infra; exit 1 = real perf regression). Captures cost; complements
 (does not replace) the correctness gates.
+
+## VERIFY-AXIS — `hexa verify --miscompile-zero` (2026-06-03, branch mczero/verify-axis)
+
+Promoted the miscompile-zero corpus onto the single canonical `hexa verify`
+surface per @D h_audit_axis_form (ONE CLI surface, NO new top-level verb).
+
+LANDED:
+- `tool/verify_cli.hexa::cmd_miscompile_zero` — dispatched by
+  `hexa verify --miscompile-zero`; wired into `main()`, `_is_sub`, and the
+  rubric help. Mirrors `cmd_blue_max`'s delegate-to-kernel shape: delegates to
+  the existing `tool/miscompile_zero_gate.sh` (corpus c1..c10 REUSED, not
+  rewritten), prints a tier matrix, captures gate rc via `exec_capture` (no
+  pipe-mask: rc 0→🟢 / 1→🔴 / 2→🟠), and auto-absorbs `miscompile_zero_floor=held`
+  on a clean floor (@D h_verify_auto_absorb; `--no-absorb` opts out).
+  56 insertions / 1 deletion (g4).
+- `tool/hexa_verify_miscompile_zero.sh` — runnable wrapper (same engine +
+  identical tier matrix), the surface the axis delegates to until the verify
+  build floor is repaired.
+
+BUILD-FLOOR BLOCKER (named, pre-existing, OUT of this lane's surface):
+`hexa verify <any-axis>` JIT-builds `tool/verify_cli.hexa` and fails at LINK —
+`Undefined symbols: _calc_eps / _sigma_k / _bell / _static_atlas / ...`
+(cross-dir `use compiler/atlas/calc_dispatch` not flattened; "compiled
+module_loader not found — falling back to raw src"). PROVEN identical on the
+unmodified `--blue-max` axis → it is the module_loader-flatten / verify-build
+floor (in-flight self-emit work), not introduced here. The native axis goes
+live the moment that floor lands.
+
+REAL RUN (ghost, gen2_fix, exit code captured separately): 10/10 corpus
+programs emit clean (0 ENCODE-MISS, 0 udf), tier 🟢 SUPPORTED-NUMERICAL,
+AXIS_RC=0. Verdict: .verdicts/miscompile-zero-verify-axis/VERIFY-MZ-AXIS.txt
