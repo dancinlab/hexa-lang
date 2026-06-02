@@ -40,3 +40,5 @@
 @domain HEXA-TRAIN-FLOOR := "./HEXA-TRAIN-FLOOR.md"
 @domain HEXA-CC-NATIVE := "./HEXA-CC-NATIVE.md"
 @domain HEXA-SELFHOST+ := "domains/HEXA-SELFHOST+.md"
+@domain SELFHOST-NEXT := "domains/SELFHOST-NEXT.md"
+@domain MISCOMPILE-ZERO := "domains/MISCOMPILE-ZERO.md"
