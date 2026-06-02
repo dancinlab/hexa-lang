@@ -1,0 +1,79 @@
+// ════════════════════════════════════════════════════════════════════════
+// stdlib/flame/flame_forge_batched_test.hexa — LEVER (b) builtin smoke.
+//
+// Verifies the 7-arg `forge_dispatch_matmul_batched(a_all,M,K,b_all,N,batch,
+// c_all)` builtin (codegen.hexa lowering → hexa_forge_dispatch_matmul_batched
+// in runtime.c) produces, per problem g, the SAME farr as a separate
+// forge_dispatch_matmul(A_g,M,K,B_g,N). On a no-CUDA host this exercises the
+// host-loop ORACLE branch (`batch` hexa_farr_matmul calls scattered into
+// c_all); on a CUDA host it exercises cublasDgemmStridedBatched — both must be
+// byte-eq to the per-problem path.
+//
+// Falsifier:
+//   F-FORGE-BATCHED-EQ  c_all[g·M·N ..] == forge_dispatch_matmul(A_g,M,K,B_g,N)
+//                       for every g in 0..batch, element-by-element.
+//
+// $0 — CPU farr only (no-CUDA host runs the oracle branch). This proves the
+// codegen lowering + the runtime.c wrapper + the host oracle are correct; the
+// GPU strided-batched path is the single small fire.
+//
+// REQUIRES a self-host rebuild (the prebuilt binary has no batched builtin) —
+// run after `bash tool/stage_build_hexa` and invoke via the rebuilt ./hexa.
+// ════════════════════════════════════════════════════════════════════════
+
+use "stdlib/flame/tensor_lib"
+
+fn _fb_abs(x: float) -> float { if x < 0.0 { return 0.0 - x } return x }
+
+fn _fb_maxdev(a: int, b: int, n: int) -> float {
+    let mut m = 0.0
+    let mut i = 0
+    while i < n { let d = _fb_abs(t_get(a, i) - t_get(b, i)); if d > m { m = d }; i = i + 1 }
+    return m
+}
+
+fn main() {
+    println("flame_forge_batched — LEVER (b) builtin: forge_dispatch_matmul_batched")
+    let M = 24; let K = 24; let N = 8; let batch = 2
+
+    // contiguous batched operands
+    let a_all = t_zeros(batch * M * K); t_fill_lcg(a_all, batch * M * K, 7, 0.4)
+    let b_all = t_zeros(batch * K * N); t_fill_lcg(b_all, batch * K * N, 9, 0.2)
+    let c_all = t_zeros(batch * M * N)
+
+    // batched builtin (ONE call)
+    let rc = forge_dispatch_matmul_batched(a_all, M, K, b_all, N, batch, c_all)
+    print("  forge_dispatch_matmul_batched rc="); println(to_string(to_float(rc)))
+    if rc != 0 { println("F-FORGE-BATCHED-EQ = 0"); println("FAIL — dispatch rc != 0"); return }
+
+    // reference: `batch` separate forge_dispatch_matmul calls
+    let tol = 0.000000001
+    let mut ok = 1
+    let mut maxd = 0.0
+    let mut g = 0
+    while g < batch {
+        let asl = t_zeros(M * K)
+        let mut ia = 0
+        while ia < M * K { t_set(asl, ia, t_get(a_all, g * M * K + ia)); ia = ia + 1 }
+        let bsl = t_zeros(K * N)
+        let mut ib = 0
+        while ib < K * N { t_set(bsl, ib, t_get(b_all, g * K * N + ib)); ib = ib + 1 }
+        let csl = forge_dispatch_matmul(asl, M, K, bsl, N)
+        // compare csl vs c_all[g·M·N ..]
+        let cslice = t_zeros(M * N)
+        let mut ic = 0
+        while ic < M * N { t_set(cslice, ic, t_get(c_all, g * M * N + ic)); ic = ic + 1 }
+        let d = _fb_maxdev(csl, cslice, M * N)
+        if d > maxd { maxd = d }
+        if d > tol { ok = 0 }
+        g = g + 1
+    }
+    print("  per-problem max|Δ| batched-vs-serial = "); println(to_string(maxd))
+    if ok == 1 {
+        println("F-FORGE-BATCHED-EQ = 1")
+        println("PASS — forge_dispatch_matmul_batched == batch× forge_dispatch_matmul byte-eq")
+        return
+    }
+    println("F-FORGE-BATCHED-EQ = 0")
+    println("FAIL")
+}

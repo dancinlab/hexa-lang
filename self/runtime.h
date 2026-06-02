@@ -1018,6 +1018,26 @@ HexaVal hexa_forge_dispatch_matmul(HexaVal a_v, HexaVal m_v, HexaVal k_v,
 HexaVal forge_dispatch_matmul(HexaVal a_v, HexaVal m_v, HexaVal k_v,
                               HexaVal b_v, HexaVal n_v);               /* runtime.c — RFC 050 seam */
 
+/* ── LEVER (b): strided-batched FP64 matmul (forge GPU util) ────────
+ * `forge_dispatch_matmul_batched(a_all, M, K, b_all, N, batch, c_all)`
+ * — 7-arg builtin. ONE strided-batched GEMM over `batch` contiguous
+ * problems: A_all[batch·M·K] @ B_all[batch·K·N] = C_all[batch·M·N],
+ * problem g at A_all[g·M·K], B_all[g·K·N], C_all[g·M·N]. C_all is
+ * CALLER-ALLOCATED (len batch·M·N); the wrapper fills it in place and
+ * returns hexa_int(0) on success / hexa_int(-1) on failure (caller
+ * falls back to the per-problem oracle). CUDA build →
+ * _hx_cuda_farr_matmul_batched_gpu (cublasDgemmStridedBatched, one
+ * launch — the util lever vs `batch` serial micro-launches); no-CUDA →
+ * a byte-eq host loop (`batch` hexa_farr_matmul calls). Same bare-symbol
+ * seam as forge_dispatch_matmul. Body (SSOT): self/runtime.c +
+ * self/cuda/runtime_cuda.c (emit: runtime_cuda_emit.hexa). */
+HexaVal hexa_forge_dispatch_matmul_batched(HexaVal a_v, HexaVal m_v, HexaVal k_v,
+                                           HexaVal b_v, HexaVal n_v,
+                                           HexaVal batch_v, HexaVal c_v); /* runtime.c — lever b */
+HexaVal forge_dispatch_matmul_batched(HexaVal a_v, HexaVal m_v, HexaVal k_v,
+                                      HexaVal b_v, HexaVal n_v,
+                                      HexaVal batch_v, HexaVal c_v);      /* runtime.c — lever b seam */
+
 /* ── RFC 050 PERF-INHERITANCE: forge BF16 FFN dispatch wrapper ──────
  * `forge_dispatch_ffn_fp64_via_bf16(x, w1, w2, y, M, D, FD)` — 7-arg
  * builtin. Takes FP64 farr handles, internally allocates HexaFarrBf16

@@ -7519,6 +7519,18 @@ fn gen2_expr(node) {
                 if name == "farr_apply_cnot" {
                     return "hexa_farr_apply_cnot(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ", " + arg_strs[3] + ", " + arg_strs[4] + ", " + arg_strs[5] + ", " + arg_strs[6] + ")"
                 }
+                // LEVER (b) forge GPU util: strided-batched FP64 matmul. ONE
+                // cublasDgemmStridedBatched over `batch` contiguous problems —
+                // A_all[batch·M·K] @ B_all[batch·K·N] = C_all[batch·M·N] in place
+                // (C_all caller-allocated). Returns rc int (0 ok / -1 fall-back).
+                // CUDA build → _hx_cuda_farr_matmul_batched_gpu (one launch over
+                // the batch dim); no-CUDA build → byte-eq host loop oracle. The
+                // util lever vs `batch` serial forge_dispatch_matmul micro-launches.
+                // (#1187 lesson: a new GPU builtin needs BOTH this call-name
+                // mapping AND the runtime.h proto.)
+                if name == "forge_dispatch_matmul_batched" {
+                    return "hexa_forge_dispatch_matmul_batched(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ", " + arg_strs[3] + ", " + arg_strs[4] + ", " + arg_strs[5] + ", " + arg_strs[6] + ")"
+                }
             }
             if len(node.args) == 8 {
                 // flame spiking RFC — STDP pair-based GPU dispatch

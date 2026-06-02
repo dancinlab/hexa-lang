@@ -159,6 +159,171 @@ fn conv1d_bwd_via_forge(x: int, w: int, dy: int,
     }
 }
 
+// ── LEVER (b): batched strided GEMM helper (inlined from clm_conv_batched) ──
+// forge_matmul_batched is the CPU oracle: `batch` independent forge_dispatch_
+// matmul calls scattered into c_all (caller-allocated, batch·M·N) — byte-eq to
+// the un-batched path. On a CUDA host (env CLM_PROD_BATCHED != "") the trainer
+// routes the 2-expert convs through forge_dispatch_matmul_batched (ONE
+// cublasDgemmStridedBatched launch) instead — the util lever vs 2 micro-launches.
+fn _fmb_oracle(a_all: int, M: int, K: int, b_all: int, N: int, batch: int, c_all: int) {
+    let mut g = 0
+    while g < batch {
+        let aoff = g * M * K; let boff = g * K * N; let coff = g * M * N
+        let asl = t_zeros(M * K)
+        let mut ia = 0
+        while ia < M * K { t_set(asl, ia, t_get(a_all, aoff + ia)); ia = ia + 1 }
+        let bsl = t_zeros(K * N)
+        let mut ib = 0
+        while ib < K * N { t_set(bsl, ib, t_get(b_all, boff + ib)); ib = ib + 1 }
+        let csl = forge_dispatch_matmul(asl, M, K, bsl, N)
+        let mut ic = 0
+        while ic < M * N { t_set(c_all, coff + ic, t_get(csl, ic)); ic = ic + 1 }
+        t_free(asl); t_free(bsl); t_free(csl)
+        g = g + 1
+    }
+}
+fn _clmp_matmul_batched(a_all: int, M: int, K: int, b_all: int, N: int, batch: int, c_all: int) {
+    // GPU strided-batched path engages only in the self-host-rebuilt pod binary
+    // (env-gated so the prebuilt mac binary, which lacks the batched builtin,
+    // never link-references it under `hexa run`). rc 0 = done; else CPU oracle.
+    if env("CLM_PROD_BATCHED") != "" {
+        let rc = forge_dispatch_matmul_batched(a_all, M, K, b_all, N, batch, c_all)
+        if rc == 0 { return }
+    }
+    _fmb_oracle(a_all, M, K, b_all, N, batch, c_all)
+}
+
+// forward of the TWO identical-shape ConvExperts (e0,e1: d→d, K) fused into ONE
+// batched im2col-matmul. Both read the same trunk input x. Byte-eq to two
+// conv1d_via_forge calls (F-CLM-CONV2-BATCHED-FWD-EQ, clm_conv_batched.hexa).
+fn conv2_fwd_via_forge_batched(x: int, w0: int, b0: int, w1: int, b1: int,
+                               y0_out: int, y1_out: int,
+                               T: int, Cin: int, Cout: int, K: int, dil: int) {
+    let Kdim = Cin * K
+    let xcol = t_zeros(T * Kdim)
+    let mut t = 0
+    while t < T {
+        let mut ci = 0
+        while ci < Cin {
+            let mut k = 0
+            while k < K {
+                let p = t - dil * (K - 1 - k)
+                if p >= 0 { t_set(xcol, t * Kdim + ci * K + k, t_get(x, p * Cin + ci)) }
+                k = k + 1
+            }
+            ci = ci + 1
+        }
+        t = t + 1
+    }
+    let a_all = t_zeros(2 * T * Kdim)
+    let mut ia = 0
+    while ia < T * Kdim {
+        t_set(a_all, ia, t_get(xcol, ia)); t_set(a_all, T * Kdim + ia, t_get(xcol, ia)); ia = ia + 1
+    }
+    let b_all = t_zeros(2 * Kdim * Cout)
+    let mut co = 0
+    while co < Cout {
+        let mut j = 0
+        while j < Kdim {
+            t_set(b_all, j * Cout + co, t_get(w0, co * Kdim + j))
+            t_set(b_all, Kdim * Cout + j * Cout + co, t_get(w1, co * Kdim + j))
+            j = j + 1
+        }
+        co = co + 1
+    }
+    let c_all = t_zeros(2 * T * Cout)
+    _clmp_matmul_batched(a_all, T, Kdim, b_all, Cout, 2, c_all)
+    let mut t2 = 0
+    while t2 < T {
+        let mut c2 = 0
+        while c2 < Cout {
+            t_set(y0_out, t2 * Cout + c2, t_get(c_all, t2 * Cout + c2) + t_get(b0, c2))
+            t_set(y1_out, t2 * Cout + c2, t_get(c_all, T * Cout + t2 * Cout + c2) + t_get(b1, c2))
+            c2 = c2 + 1
+        }
+        t2 = t2 + 1
+    }
+    t_free(xcol); t_free(a_all); t_free(b_all); t_free(c_all)
+}
+
+// backward of the TWO ConvExperts fused: batched dW + batched dX GEMM. Byte-eq
+// to two conv1d_bwd_via_forge calls (F-CLM-CONV2-BATCHED-BWD-EQ).
+fn conv2_bwd_via_forge_batched(x: int, w0: int, w1: int, dy0: int, dy1: int,
+                               dW0_out: int, dX0_out: int, db0_out: int,
+                               dW1_out: int, dX1_out: int, db1_out: int,
+                               T: int, Cin: int, Cout: int, K: int, dil: int) {
+    let Kdim = Cin * K
+    let xcolT = t_zeros(Kdim * T)
+    let mut t = 0
+    while t < T {
+        let mut ci = 0
+        while ci < Cin {
+            let mut k = 0
+            while k < K {
+                let p = t - dil * (K - 1 - k)
+                if p >= 0 { let j = ci * K + k; t_set(xcolT, j * T + t, t_get(x, p * Cin + ci)) }
+                k = k + 1
+            }
+            ci = ci + 1
+        }
+        t = t + 1
+    }
+    let dwA = t_zeros(2 * Kdim * T)
+    let mut ia = 0
+    while ia < Kdim * T { t_set(dwA, ia, t_get(xcolT, ia)); t_set(dwA, Kdim * T + ia, t_get(xcolT, ia)); ia = ia + 1 }
+    let dwB = t_zeros(2 * T * Cout)
+    let mut ib = 0
+    while ib < T * Cout { t_set(dwB, ib, t_get(dy0, ib)); t_set(dwB, T * Cout + ib, t_get(dy1, ib)); ib = ib + 1 }
+    let dW_flat_all = t_zeros(2 * Kdim * Cout)
+    _clmp_matmul_batched(dwA, Kdim, T, dwB, Cout, 2, dW_flat_all)
+    let mut co = 0
+    while co < Cout {
+        let mut j = 0
+        while j < Kdim {
+            t_set(dW0_out, co * Kdim + j, t_get(dW_flat_all, j * Cout + co))
+            t_set(dW1_out, co * Kdim + j, t_get(dW_flat_all, Kdim * Cout + j * Cout + co))
+            j = j + 1
+        }
+        co = co + 1
+    }
+    let dxA = t_zeros(2 * T * Cout)
+    let mut ja = 0
+    while ja < T * Cout { t_set(dxA, ja, t_get(dy0, ja)); t_set(dxA, T * Cout + ja, t_get(dy1, ja)); ja = ja + 1 }
+    let dxB = t_zeros(2 * Cout * Kdim)
+    let mut jb = 0
+    while jb < Cout * Kdim { t_set(dxB, jb, t_get(w0, jb)); t_set(dxB, Cout * Kdim + jb, t_get(w1, jb)); jb = jb + 1 }
+    let dXcol_all = t_zeros(2 * T * Kdim)
+    _clmp_matmul_batched(dxA, T, Cout, dxB, Kdim, 2, dXcol_all)
+    let mut iz = 0
+    while iz < T * Cin { t_set(dX0_out, iz, 0.0); t_set(dX1_out, iz, 0.0); iz = iz + 1 }
+    let mut t2 = 0
+    while t2 < T {
+        let mut ci2 = 0
+        while ci2 < Cin {
+            let mut k2 = 0
+            while k2 < K {
+                let p = t2 - dil * (K - 1 - k2)
+                if p >= 0 {
+                    let j = ci2 * K + k2; let xidx = p * Cin + ci2
+                    t_set(dX0_out, xidx, t_get(dX0_out, xidx) + t_get(dXcol_all, t2 * Kdim + j))
+                    t_set(dX1_out, xidx, t_get(dX1_out, xidx) + t_get(dXcol_all, T * Kdim + t2 * Kdim + j))
+                }
+                k2 = k2 + 1
+            }
+            ci2 = ci2 + 1
+        }
+        t2 = t2 + 1
+    }
+    let mut cb = 0
+    while cb < Cout {
+        let mut a0 = 0.0; let mut a1 = 0.0; let mut tb = 0
+        while tb < T { a0 = a0 + t_get(dy0, tb * Cout + cb); a1 = a1 + t_get(dy1, tb * Cout + cb); tb = tb + 1 }
+        t_set(db0_out, cb, a0); t_set(db1_out, cb, a1); cb = cb + 1
+    }
+    t_free(xcolT); t_free(dwA); t_free(dwB); t_free(dW_flat_all)
+    t_free(dxA); t_free(dxB); t_free(dXcol_all)
+}
+
 // fake-quant a weight into wq (caller-allocated) + write the STE mask.
 fn _fq(w: int, wq: int, mask: int, Cout: int, rest: int) {
     let sc = t_zeros(Cout); let ql = t_zeros(Cout * rest)
@@ -193,8 +358,10 @@ fn clm_prod_fwd(tokens: int,
     while i < T * d { t_set(xt, i, t_get(xec, i) + t_get(hg0, i)); i = i + 1 }
     let logits_r = t_zeros(T * E)
     conv1d_via_forge(xt, rWq, rB, logits_r, T, d, E, 1, 1)
-    conv1d_via_forge(xt, e0Wq, e0B, eo0, T, d, d, K, 1)
-    conv1d_via_forge(xt, e1Wq, e1B, eo1, T, d, d, K, 1)
+    // LEVER (b): the 2 identical-shape ConvExperts fused into ONE batched GEMM
+    // (byte-eq to the 2 separate conv1d_via_forge calls — F-CLM-CONV2-BATCHED-
+    // FWD-EQ; on a CUDA host = 1 cublasDgemmStridedBatched vs 2 micro-launches).
+    conv2_fwd_via_forge_batched(xt, e0Wq, e0B, e1Wq, e1B, eo0, eo1, T, d, d, K, 1)
     let ex0 = t_zeros(T * d); nn_gelu_fwd(eo0, ex0, T * d)
     let ex1 = t_zeros(T * d); nn_gelu_fwd(eo1, ex1, T * d)
     let mut j = 0
@@ -264,11 +431,14 @@ fn clm_prod_bwd(dlogits: int, tokens: int,
     }
     let deo0 = t_zeros(T * d); nn_gelu_bwd(eo0, dex0, deo0, T * d)
     let deo1 = t_zeros(T * d); nn_gelu_bwd(eo1, dex1, deo1, T * d)
+    // LEVER (b): the 2 ConvExperts' backward (dW + dX GEMMs) fused into batched
+    // GEMMs (byte-eq to 2 separate conv1d_bwd_via_forge — F-CLM-CONV2-BATCHED-
+    // BWD-EQ; on a CUDA host = 1 strided-batched launch per GEMM vs 2 each).
     let dxt_e0 = t_zeros(T * d); let de0Wq = t_zeros(d * d * K)
-    conv1d_bwd_via_forge(xt, e0Wq, deo0, de0Wq, dxt_e0, de0B, T, d, d, K, 1)
-    nn_int4_quant_bwd(de0Wq, e0M, de0W, d, d * K)
     let dxt_e1 = t_zeros(T * d); let de1Wq = t_zeros(d * d * K)
-    conv1d_bwd_via_forge(xt, e1Wq, deo1, de1Wq, dxt_e1, de1B, T, d, d, K, 1)
+    conv2_bwd_via_forge_batched(xt, e0Wq, e1Wq, deo0, deo1,
+                                de0Wq, dxt_e0, de0B, de1Wq, dxt_e1, de1B, T, d, d, K, 1)
+    nn_int4_quant_bwd(de0Wq, e0M, de0W, d, d * K)
     nn_int4_quant_bwd(de1Wq, e1M, de1W, d, d * K)
     let dxt = t_zeros(T * d)
     let mut xi = 0
@@ -320,10 +490,66 @@ fn clm_corpus_windows(bytes_arr: int, n_bytes: int, IDS: int, TGT: int,
     return filled
 }
 
+// ── .clm weight serialization (PR4 — mirrors clm_ckpt.hexa save format) ──
+// Saves the 6 trained CLMConvMoE conv weights to the anima `.clm` format
+// ("CLM\x01" magic + per-block int4-sym nibbles + per-channel fp32-le scale)
+// so the trained model is a REAL, recoverable, sha256-verifiable artifact
+// (a_fire_recover_complete: a printed CE descent with no saved weights = a
+// lost model — this is the root fix). Path = env CLM_PROD_OUT (empty = skip).
+fn _clmp_push_u32(buf, n: int) {
+    buf.push(n & 0xFF); buf.push((n / 0x100) & 0xFF)
+    buf.push((n / 0x10000) & 0xFF); buf.push((n / 0x1000000) & 0xFF)
+}
+fn _clmp_push_f32(buf, f: float) {
+    let b = f32_to_bytes_le(f)
+    let mut i = 0
+    while i < 4 { buf.push(b[i]); i = i + 1 }
+}
+fn _clmp_save_block(buf, w: int, cout: int, rest: int) {
+    // int4-sym quantize this trained weight -> integer codes (qlevel_out) +
+    // per-channel fp32 scale. We pack the CODES (q in [-7,7], +8 offset),
+    // identical to clm_ckpt.hexa::save_block (F-CLM-CKPT-ROUNDTRIP format).
+    let wq_dq = t_zeros(cout * rest)   // dequant temp (discarded)
+    let codes = t_zeros(cout * rest)   // integer qlevel codes (what we pack)
+    let mask  = t_zeros(cout * rest)
+    let scale = t_zeros(cout)
+    nn_int4_quant_fwd(w, wq_dq, scale, codes, mask, cout, rest)
+    _clmp_push_u32(buf, cout); _clmp_push_u32(buf, rest)
+    let n = cout * rest
+    let mut i = 0
+    while i < n {
+        let lo = (to_int(t_get(codes, i)) + 8) & 0xF
+        let mut hi = 8
+        if i + 1 < n { hi = (to_int(t_get(codes, i + 1)) + 8) & 0xF }
+        buf.push(lo + hi * 16)
+        i = i + 2
+    }
+    let mut c = 0
+    while c < cout { _clmp_push_f32(buf, t_get(scale, c)); c = c + 1 }
+}
+
 fn main() {
     println("clm_prod — CLMConvMoE production corpus loop (PR1)")
-    let T = 24; let d = 8; let E = 2; let V = 256; let K = 3
-    let nsamp = 8
+    // PR4: d / E / epochs / nsamp overridable via env for the H100 d768/12L
+    // fire (CLM_PROD_D, CLM_PROD_E, CLM_PROD_EPOCHS, CLM_PROD_NSAMP). Empty
+    // env keeps the tiny d=8 $0-CPU verify config (byte-eq back-compat).
+    let _envd = env("CLM_PROD_D")
+    let _enve = env("CLM_PROD_E")
+    let _envn = env("CLM_PROD_NSAMP")
+    let _envt = env("CLM_PROD_T")
+    let d = if _envd == "" { 8 } else { to_int(_envd) }
+    let E = if _enve == "" { 2 } else { to_int(_enve) }
+    let nsamp = if _envn == "" { 8 } else { to_int(_envn) }
+    // PERF-LEVER (c) — raise effective M. Every conv GEMM has M=T rows; at the
+    // prior fire's T=24 the d768 conv→cuBLAS GEMMs were M=24 latency-bound micro-
+    // ops (util RED PEAK=5%). T is a pure causal-window-length parameter (flows
+    // identically through conv1d_via_forge / nn_ce_loss_allpos / clm_prod_bwd —
+    // GRAD-EXACT, no math change), so raising it lifts M of EVERY forge GEMM and
+    // amortizes the host im2col/col2im/adam feed over a longer sequence (fewer
+    // steps per token budget). Env CLM_PROD_T overrides; empty keeps the byte-eq
+    // T=24 verify config (back-compat).
+    let T = if _envt == "" { 24 } else { to_int(_envt) }
+    let V = 256; let K = 3
     let dd = d * d * K; let ed = E * d; let vd = V * d
 
     // ---- corpus → nsamp windows (in-repo fixture, repo-root relative) ----
@@ -390,7 +616,8 @@ fn main() {
     let tok=t_zeros(T); let tgt=t_zeros(T)
 
     // ---- round-robin multi-window loop; epochs full passes over nwin ----
-    let epochs = 12
+    let _enve2 = env("CLM_PROD_EPOCHS")
+    let epochs = if _enve2 == "" { 12 } else { to_int(_enve2) }
     let steps = epochs * nwin
     let mut sum_first = 0.0
     let mut sum_last = 0.0
@@ -432,6 +659,29 @@ fn main() {
     let last_ce = sum_last / to_float(nwin)
     print("  epoch-1 mean CE = "); println(to_string(first_ce))
     print("  epoch-"); print(epochs); print(" mean CE = "); println(to_string(last_ce))
+
+    // ---- PR4: serialize the 6 trained CLMConvMoE conv weights to .clm ----
+    // (a_fire_recover_complete) — the trained model is now a real artifact.
+    let _outp = env("CLM_PROD_OUT")
+    if _outp != "" {
+        let buf = []
+        buf.push(67); buf.push(76); buf.push(77); buf.push(1)   // MAGIC "CLM\x01"
+        buf.push(6)                                              // nblocks
+        // block order + (cout, rest) mirror clm_ckpt.hexa exactly:
+        //   ecW/tcW/e0W/e1W : (d, d*K)   rW : (E, d)   roW : (V, d)
+        _clmp_save_block(buf, ecW, d, d * K)
+        _clmp_save_block(buf, tcW, d, d * K)
+        _clmp_save_block(buf, e0W, d, d * K)
+        _clmp_save_block(buf, e1W, d, d * K)
+        _clmp_save_block(buf, rW,  E, d)
+        _clmp_save_block(buf, roW, V, d)
+        write_bytes(_outp, buf)
+        print("  CLM_PROD_OUT wrote "); print(_outp); print("  (")
+        print(len(buf)); println(" bytes, 6 blocks, CLM\\x01)")
+        print("  config d="); print(d); print(" E="); print(E)
+        print(" epochs="); print(epochs); print(" nwin="); print(nwin); println("")
+    }
+
     if last_ce < first_ce {
         println("F-CLM-PROD-DESCENT = 1")
         println("PASS — real-corpus mean CE descends under int4 envelope")
