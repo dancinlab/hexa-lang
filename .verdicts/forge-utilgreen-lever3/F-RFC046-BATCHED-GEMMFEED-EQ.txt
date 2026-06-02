@@ -1,0 +1,6 @@
+clm_batched_gemmfeed_eq — LEVER (3): batched transpose-aware GEMM-feed byte-eq oracle
+  BT-BATCHED  rc=0 max|Δ|=0.0
+  ATB-BATCHED rc=0 max|Δ|=0.0
+  BT-BATCHED(per-problem) rc=0 max|Δ|=0.0
+F-RFC046-BATCHED-GEMMFEED-EQ = 1
+PASS — batched transpose-aware GEMM-feed (bt/atb, strideA=0 broadcast + per-problem) == host repack reference byte-eq (max|Δ|=0)

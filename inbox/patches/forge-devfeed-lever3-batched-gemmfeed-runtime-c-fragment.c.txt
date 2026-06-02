@@ -12,12 +12,23 @@
 //
 // Routing: HEXA_CUDA → _hx_cuda_farr_matmul_batched_{bt,atb}_gpu
 // (runtime_cuda.c — cublasDgemmStridedBatched OP_T, strideA/strideB=0 broadcast
-// when the stride-blocks arg is 0); no-CUDA → byte-eq host loop (per-slice
-// transpose-then-matmul against the shared/per-problem operand). Never silently
-// wrong, only silently slower.
+// when the stride-blocks arg is 0); no-CUDA → byte-eq host fallback that
+// DELEGATES per slice to hexa_farr_matmul through the identical host transpose.
+// Never silently wrong, only silently slower.
+//
+// BYTE-EQ FIX (2026-06-02): the original no-CUDA host loop was an open-coded
+// ijk dot (acc += A·B); against hexa_farr_matmul's ikj UNROLLED (FMA-contracted)
+// reference it drifted ~1e-14 — BT-BATCHED max|Δ|=2.84e-14 — FAILING the
+// max|Δ|=0.0 HARD gate. Fix = delegate per slice to hexa_farr_matmul via the
+// SAME host transpose the oracle reference uses → bit-identical by construction.
+// The SAME drift+fix applies to the lever-2 un-batched hexa_forge_dispatch_
+// matmul_{bt,atb} bodies spliced immediately ABOVE this block (F-RFC046-
+// GEMMFEED-EQ was BT max|Δ|=1.42e-14 → now 0.0); apply the identical
+// delegate-to-hexa_farr_matmul rewrite there too.
 //
 // Byte-eq oracle: stdlib/flame/clm_batched_gemmfeed_eq.hexa
-// (F-RFC046-BATCHED-GEMMFEED-EQ = 1, max|Δ| = 0.0).
+// (F-RFC046-BATCHED-GEMMFEED-EQ = 1, max|Δ| = 0.0) + clm_gemmfeed_eq.hexa
+// (F-RFC046-GEMMFEED-EQ = 1, max|Δ| = 0.0).
 //
 // fire-confirmed rationale: pod 39082940 lever-2 util fire returned DESCENT 🟢
 // (CE 0.818→0.059) · util 🔴 (PEAK 19% MEAN 0.4999% n=147863). lever-2 patched
@@ -67,21 +78,40 @@ HexaVal hexa_forge_dispatch_matmul_batched_bt(HexaVal a_v, HexaVal m_v, HexaVal 
     if (grc == 0) return hexa_int(0);
     /* GPU path failed — fall through to the host loop (correctness kept). */
 #endif
+    /* no-CUDA host fallback — BYTE-EQ contract (the HARD gate, max|Δ|=0.0).
+     * The oracle reference is per-slice host-transpose w_g[N,K] → Wt[K,N] THEN
+     * hexa_farr_matmul(Ag,M,K, Wt,N). An open-coded ijk dot drifts ~1e-14 from
+     * hexa_farr_matmul's ikj unrolled (FMA-contracted) loop, so DELEGATE per
+     * slice through the identical Wt host transpose — bit-identical by
+     * construction. The farr id-array may realloc inside hexa_farr_zeros/
+     * _matmul, so re-fetch buf ptrs by id every iteration. */
     {
-        double* A = _hx_farr_table[a_id].buf;   /* [M,K] (as=0) or [batch,M,K] */
-        double* B = _hx_farr_table[b_id].buf;   /* [batch, N, K] */
-        double* C = _hx_farr_table[c_id].buf;   /* [batch, M, N] */
         for (int64_t g = 0; g < batch; g++) {
-            const double* Ag = A + (as == 0 ? 0 : g * M * K);
-            const double* Bg = B + g * N * K;            /* B_g[N,K] */
-            double*       Cg = C + g * M * N;
-            for (int64_t i = 0; i < M; i++)
-                for (int64_t n = 0; n < N; n++) {
-                    double acc = 0.0;
-                    for (int64_t kk = 0; kk < K; kk++)
-                        acc += Ag[i * K + kk] * Bg[n * K + kk];   /* B^T: B[n,k] */
-                    Cg[i * N + n] = acc;
-                }
+            HexaVal wt_h = hexa_farr_zeros(hexa_int(K * N));
+            int64_t wt_id = HX_INT(wt_h);
+            if (wt_id < 0 || wt_id >= _hx_farr_count) return hexa_int(-1);
+            const double* Bg = _hx_farr_table[b_id].buf + g * N * K;   /* w_g[N,K] */
+            double* Wt = _hx_farr_table[wt_id].buf;
+            for (int64_t n = 0; n < N; n++)
+                for (int64_t kk = 0; kk < K; kk++)
+                    Wt[kk * N + n] = Bg[n * K + kk];
+            /* stage shared/own Ag[M,K] into a temp farr to pass its id. */
+            HexaVal ag_h = hexa_farr_zeros(hexa_int(M * K));
+            int64_t ag_id = HX_INT(ag_h);
+            if (ag_id < 0 || ag_id >= _hx_farr_count) { hexa_farr_free(wt_h); return hexa_int(-1); }
+            {
+                const double* Asrc = _hx_farr_table[a_id].buf + (as == 0 ? 0 : g * M * K);
+                double* Adst = _hx_farr_table[ag_id].buf;
+                for (int64_t t = 0; t < M * K; t++) Adst[t] = Asrc[t];
+            }
+            HexaVal csl = hexa_farr_matmul(hexa_int(ag_id), hexa_int(M), hexa_int(K),
+                                           hexa_int(wt_id), hexa_int(N));
+            int64_t csl_id = HX_INT(csl);
+            if (csl_id < 0 || csl_id >= _hx_farr_count) { hexa_farr_free(wt_h); hexa_farr_free(ag_h); return hexa_int(-1); }
+            const double* Csrc = _hx_farr_table[csl_id].buf;
+            double*       Cg   = _hx_farr_table[c_id].buf + g * M * N;
+            for (int64_t t = 0; t < M * N; t++) Cg[t] = Csrc[t];
+            hexa_farr_free(wt_h); hexa_farr_free(ag_h); hexa_farr_free(csl);
         }
     }
     return hexa_int(0);
@@ -117,21 +147,37 @@ HexaVal hexa_forge_dispatch_matmul_batched_atb(HexaVal a_v, HexaVal m_v, HexaVal
     int grc = _hx_cuda_farr_matmul_batched_atb_gpu(a_id, M, K, b_id, N, batch, bs, c_id);
     if (grc == 0) return hexa_int(0);
 #endif
+    /* no-CUDA host fallback — BYTE-EQ contract (max|Δ|=0.0). Reference is
+     * per-slice host-transpose A_g[K,M] → AgT[M,K] THEN hexa_farr_matmul(AgT,
+     * M,K, Bg,N) with Bg the shared/own B[K,N]. DELEGATE through the identical
+     * transpose so the ikj accumulation matches bit-for-bit (open-coded ijk dot
+     * would drift ~1e-14). Re-fetch buf ptrs by id after each alloc. */
     {
-        double* A = _hx_farr_table[a_id].buf;   /* [batch, K, M] (A_g=dy[K=T,M=Cout]) */
-        double* B = _hx_farr_table[b_id].buf;   /* [K,N] (bs=0) or [batch,K,N] */
-        double* C = _hx_farr_table[c_id].buf;   /* [batch, M, N] */
         for (int64_t g = 0; g < batch; g++) {
-            const double* Ag = A + g * K * M;             /* A_g[K,M] */
-            const double* Bg = B + (bs == 0 ? 0 : g * K * N);
-            double*       Cg = C + g * M * N;
-            for (int64_t i = 0; i < M; i++)
-                for (int64_t n = 0; n < N; n++) {
-                    double acc = 0.0;
-                    for (int64_t kk = 0; kk < K; kk++)
-                        acc += Ag[kk * M + i] * Bg[kk * N + n];   /* A^T: A[k,i] */
-                    Cg[i * N + n] = acc;
-                }
+            HexaVal at_h = hexa_farr_zeros(hexa_int(M * K));
+            int64_t at_id = HX_INT(at_h);
+            if (at_id < 0 || at_id >= _hx_farr_count) return hexa_int(-1);
+            const double* Ag = _hx_farr_table[a_id].buf + g * K * M;   /* A_g[K,M]=dy */
+            double* AgT = _hx_farr_table[at_id].buf;
+            for (int64_t kk = 0; kk < K; kk++)
+                for (int64_t i = 0; i < M; i++)
+                    AgT[i * K + kk] = Ag[kk * M + i];
+            HexaVal bg_h = hexa_farr_zeros(hexa_int(K * N));
+            int64_t bg_id = HX_INT(bg_h);
+            if (bg_id < 0 || bg_id >= _hx_farr_count) { hexa_farr_free(at_h); return hexa_int(-1); }
+            {
+                const double* Bsrc = _hx_farr_table[b_id].buf + (bs == 0 ? 0 : g * K * N);
+                double* Bdst = _hx_farr_table[bg_id].buf;
+                for (int64_t t = 0; t < K * N; t++) Bdst[t] = Bsrc[t];
+            }
+            HexaVal csl = hexa_farr_matmul(hexa_int(at_id), hexa_int(M), hexa_int(K),
+                                           hexa_int(bg_id), hexa_int(N));
+            int64_t csl_id = HX_INT(csl);
+            if (csl_id < 0 || csl_id >= _hx_farr_count) { hexa_farr_free(at_h); hexa_farr_free(bg_h); return hexa_int(-1); }
+            const double* Csrc = _hx_farr_table[csl_id].buf;
+            double*       Cg   = _hx_farr_table[c_id].buf + g * M * N;
+            for (int64_t t = 0; t < M * N; t++) Cg[t] = Csrc[t];
+            hexa_farr_free(at_h); hexa_farr_free(bg_h); hexa_farr_free(csl);
         }
     }
     return hexa_int(0);

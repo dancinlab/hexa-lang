@@ -1,0 +1,5 @@
+clm_gemmfeed_eq — LEVER (2): transpose-aware GEMM byte-eq oracle
+  BT  rc=0 max|Δ|=0.0
+  ATB rc=0 max|Δ|=0.0
+F-RFC046-GEMMFEED-EQ = 1
+PASS — transpose-aware GEMM (bt/atb) == host-transposed forge byte-eq (max|Δ|=0)

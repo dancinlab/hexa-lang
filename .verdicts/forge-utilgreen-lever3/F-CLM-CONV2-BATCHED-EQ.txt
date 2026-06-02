@@ -1,0 +1,9 @@
+clm_conv_batched — LEVER (b): fused 2-expert conv GEMMs (strided-batched)
+  fwd max|Δ| y0=0.0 y1=0.0
+F-CLM-CONV2-BATCHED-FWD-EQ = 1
+PASS — batched 2-expert fwd == 2× conv1d_via_forge byte-eq
+  bwd e0 max|Δ| dW=0.0 dX=0.0 db=0.0
+  bwd e1 max|Δ| dW=0.0 dX=0.0 db=0.0
+F-CLM-CONV2-BATCHED-BWD-EQ = 1
+PASS — batched 2-expert bwd (dW/dX/db) == 2× conv1d_bwd_via_forge byte-eq
+ALL-PASS — LEVER (b) fused 2-expert conv (fwd+bwd) byte-eq to un-batched forge

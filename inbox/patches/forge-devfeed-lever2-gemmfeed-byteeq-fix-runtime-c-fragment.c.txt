@@ -1,0 +1,77 @@
+// forge-devfeed lever-2 BYTE-EQ FIX — self/runtime.c host-fallback bodies (SSOT).
+// substrate = GPU / Lane-G / FORGE-UTILGREEN.
+//
+// self/runtime.c is a gitignored build seed (post-#2065 .c-graduation), so the
+// lever-2 transpose-aware GEMM host bodies are NOT regenerated from .hexa. The
+// ORIGINAL lever-2 host fallback (landed PR #2515) used an open-coded ijk dot
+// product (`acc += A·B`). Against the byte-eq reference — host-transpose THEN
+// hexa_farr_matmul, whose ikj loop is x4-UNROLLED and FMA-contracted by clang
+// -O2 — the open-coded dot drifts ~1e-14:
+//     F-RFC046-GEMMFEED-EQ : BT max|Δ| = 1.42109e-14   (FAIL, gate is 0.0)
+// This was MASKED on the mac because `hexa run` content-addresses the compiled
+// binary in ~/.hexa-cache keyed on SOURCE hash only; a stale cached binary hid
+// the true byte-eq state until the cache was busted.
+//
+// FIX: delegate the no-CUDA host fallback per call to hexa_farr_matmul through
+// the IDENTICAL host transpose the oracle reference uses (transpose B→Wt for
+// _bt, transpose A→At for _atb) — bit-identical by construction. Verified:
+//     F-RFC046-GEMMFEED-EQ = 1   (BT 0.0 · ATB 0.0)   `hexa run` mac, $0.
+//
+// On a fresh pod checkout, REPLACE the two `{ double* A=...; ijk acc += ... }`
+// host-fallback blocks of hexa_forge_dispatch_matmul_bt / _atb (the lever-2
+// seam, just ABOVE the lever-3 batched block) with the two blocks below. The
+// CUDA #ifdef branch (cublasDgemm OP_T) is UNCHANGED — the device path was
+// already byte-eq via cuBLAS's own K-accumulation; only the host fallback drifted.
+
+/* ── lever-2 _bt host fallback (REPLACES the open-coded ijk dot) ───── */
+    /* no-CUDA host fallback — BYTE-EQ contract (max|Δ|=0.0). The oracle/lever-2
+     * reference is host-transpose B[N,K] → Wt[K,N] THEN hexa_farr_matmul(A,M,K,
+     * Wt,N). An open-coded ijk dot drifts ~1e-14 from hexa_farr_matmul's ikj
+     * unrolled (FMA-contracted) loop, so DELEGATE through the identical Wt
+     * transpose — bit-identical by construction. Re-fetch buf by id after each
+     * alloc (realloc-move safe). */
+    {
+        HexaVal wt_h = hexa_farr_zeros(hexa_int(K * N));
+        int64_t wt_id = HX_INT(wt_h);
+        if (wt_id < 0 || wt_id >= _hx_farr_count) return hexa_int(-1);
+        const double* B = _hx_farr_table[b_id].buf;
+        double* Wt = _hx_farr_table[wt_id].buf;
+        for (int64_t n = 0; n < N; n++)
+            for (int64_t k = 0; k < K; k++)
+                Wt[k * N + n] = B[n * K + k];
+        HexaVal csl = hexa_farr_matmul(hexa_int(a_id), hexa_int(M), hexa_int(K),
+                                       hexa_int(wt_id), hexa_int(N));
+        int64_t csl_id = HX_INT(csl);
+        if (csl_id < 0 || csl_id >= _hx_farr_count) { hexa_farr_free(wt_h); return hexa_int(-1); }
+        const double* Csrc = _hx_farr_table[csl_id].buf;
+        double* C = _hx_farr_table[c_id].buf;
+        for (int64_t t = 0; t < M * N; t++) C[t] = Csrc[t];
+        hexa_farr_free(wt_h); hexa_farr_free(csl);
+    }
+    return hexa_int(0);
+
+/* ── lever-2 _atb host fallback (REPLACES the open-coded ijk dot) ──── */
+    /* no-CUDA host fallback — BYTE-EQ contract (max|Δ|=0.0). Reference is
+     * host-transpose A[K,M] → At[M,K] THEN hexa_farr_matmul(At,M,K, B,N).
+     * DELEGATE through the identical transpose so the ikj accumulation matches
+     * bit-for-bit (open-coded ijk dot would drift ~1e-14). Re-fetch buf by id
+     * after each alloc (realloc-move safe). */
+    {
+        HexaVal at_h = hexa_farr_zeros(hexa_int(M * K));
+        int64_t at_id = HX_INT(at_h);
+        if (at_id < 0 || at_id >= _hx_farr_count) return hexa_int(-1);
+        const double* A = _hx_farr_table[a_id].buf;
+        double* At = _hx_farr_table[at_id].buf;
+        for (int64_t k = 0; k < K; k++)
+            for (int64_t i = 0; i < M; i++)
+                At[i * K + k] = A[k * M + i];
+        HexaVal csl = hexa_farr_matmul(hexa_int(at_id), hexa_int(M), hexa_int(K),
+                                       hexa_int(b_id), hexa_int(N));
+        int64_t csl_id = HX_INT(csl);
+        if (csl_id < 0 || csl_id >= _hx_farr_count) { hexa_farr_free(at_h); return hexa_int(-1); }
+        const double* Csrc = _hx_farr_table[csl_id].buf;
+        double* C = _hx_farr_table[c_id].buf;
+        for (int64_t t = 0; t < M * N; t++) C[t] = Csrc[t];
+        hexa_farr_free(at_h); hexa_farr_free(csl);
+    }
+    return hexa_int(0);
