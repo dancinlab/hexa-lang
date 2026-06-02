@@ -346,3 +346,34 @@ NEXT FULL-SELF-EMIT WALL (named): `undefined reference to hexa_add_slow`. Probe 
   the runtime → aarch64 runtime.a, then link <p>.o under qemu = the next milestone.
 
 Verdict: .verdicts/selfhost-next-linux-arm64/CROSS-EMIT-DATA.txt (🟢).
+
+## 2026-06-03 — CCNATIVE-CROSS: cross-build the COMPILER BINARY (cc_native) to aarch64-linux
+Removes the #2575 named wall: build_native_linux_arm64 built cc_native NATIVELY-ONLY (no
+cross path to an aarch64-linux compiler binary from a non-arm64-linux host). New tool
+tool/cross_build_ccnative_linux_arm64 (cross sibling of build_native_linux_arm64) — reuses
+stages 1-3 byte-identically (host python3 flatten → host hexat transpile → s4/sed
+post-process + inline runtime.c + rt_fs/rt_array link-fills); the ONLY deltas are stage4 CC
+(aarch64-linux-gnu-gcc, not native gcc) and the RUN wrapper (qemu-aarch64-static).
+
+PROVEN on aiden (x86_64 linux — gcc 13.3.0 · qemu-aarch64 8.2.2):
+  stage4  cc_native = ELF 64-bit LSB pie executable, ARM aarch64 [3,391,856 B] (CROSS-built).
+  stage4b cross runtime.a (#2574 reuse) = 535,562 B.
+  stage5a qemu run cc_native --version → rc=2 stdout=[] (no --version flag; binary EXECUTED).
+  stage5b qemu run cc_native: emit `fn main(){exit(42)}` --emit=obj --backend=native
+          --target=arm64-linux-gnu → p42.o (ELF aarch64 relocatable), emit rc=0.
+  stage5c link p42.o + cross runtime.a → p42 (ELF aarch64 pie); qemu RUN:
+          stdout=[]  rc=42  stderr=[]   ← EXACTLY the pre-registered target.
+
+FINDING (🟢): the cc_native C build is host/target-agnostic in stages 1-3 — only the COMPILER
+(CC) + run wrapper (qemu) differ — so the cross delta is a ~3-line recipe change. The
+bootstrap compiler has NO native-only dependency. C-cross path → does NOT touch the self-emit
+codegen wall.
+
+FULL-SELF-EMIT REMAINING (named — codegen lane, OUT of this C-cross lane):
+  1. F-STP-ENCODE-MISS — `ENCODE-MISS: STP mem-parse-fail mem=#0` @ compiler/emit/macho_arm64.hexa
+     (STP/LDP encode @541-566 → _parse_mem_op @1551 rejects bare `#0`) — BLOCKING true self-emit.
+  2. (downstream of 1) gen2 self-emit byte-eq vs C-built cc_native — gated on (1).
+Scope boundary FORBIDS editing compiler/emit/* / macho_arm64.hexa here; cc_native being
+C-built is exactly why this lane does NOT depend on that fix.
+
+Verdict: .verdicts/selfhost-next-linux-arm64/CCNATIVE-CROSS.txt (🟢).
