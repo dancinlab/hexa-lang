@@ -163,3 +163,42 @@ The next piece is END-TO-END SOURCE→x86_64-BINARY via the BUILT native compile
 (2) either fall through emit_asm→`as`/`ld` on a linux host, or (3) wire the
 native pack_lir_x86_64+serialize OBJ fast-path for x86_64 in main.hexa L900
 (mirroring the arm64-darwin branch) — guarding arm64-darwin byte-identical.
+
+## ELF AArch64 .o — ADRP/ADD page relocs + .rodata/.data/.bss sections (2026-06-03)
+
+MILESTONE: complete the in-tree ELF AArch64 `.o` serializer beyond text-only
+exit(42) (#2539) — page-relocation pairs + data/rodata sections so real programs
+(string literals, module globals) emit a native linux-arm64 `.o` with NO host `as`.
+
+LANDED (compiler/emit/elf_arm64.hexa):
+  - reloc kinds: R_AARCH64_ADR_PREL_PG_HI21 (ADRP @PAGE) + R_AARCH64_ADD_ABS_LO12_NC
+    (ADD @PAGEOFF) — the page-relative pair the codegen lowers string/global refs to.
+    GOT-suffixed operands fold to the same non-GOT pair (static/non-PIE obj for now).
+  - sections: `.rodata` (string/const literal pool, one LOCAL `.LCstrN` sym per
+    lm.rodata LSection) · `.data` (16-byte zero HexaVal slot per lm.globals `g<id>`,
+    LOCAL) · `.bss` (SHT_NOBITS, sh_size, no file bytes — plumbed, 0 unless requested).
+  - symbol ORDER fix: ELF requires LOCAL before GLOBAL — `.LCstrN`/`g<id>` locals
+    now precede fn globals; `.symtab` sh_info = nlocal+1 (was hardcoded 1).
+  - walker: _pack_fn_arm64_elf captures one `@PAGE`/`@PAGEOFF` operand per insn
+    (sanitized to imm=0 base word), Pass-3 emits the ADRP/ADD reloc vs the local sym.
+  - serializer: all new sections GATED on presence → text-only exit(42) path stays
+    BYTE-IDENTICAL to the #2539 baseline (verified: 6 sections, no .rodata/.data/.bss).
+
+VERIFIED (built native aprime_cc from source; ELF on summer @ readelf 2.42 + qemu-aarch64-static):
+  1. `fn main(){ print("hi"); exit(7) }` → ELF aarch64 .o (968B).
+     readelf -r: R_AARCH64_ADR_PREL_PG_HI21 + R_AARCH64_ADD_ABS_LO12_NC vs .LCstr0
+     (in .rodata, sec 3) + 3× R_AARCH64_CALL26. readelf -s: LOCAL .LCstr0 then GLOBAL main.
+     Linked (aarch64-linux-gnu-ld, minimal write/exit stubs) → qemu STDOUT="hi" rc 7.
+     objdump: `adrp x1,400000` + `add x1,x1,#0x1a8` = 0x4001a8 = exact .rodata addr. ✅
+  2. module global `let mut counter=0; counter=5; exit(counter+2)` → .data section with
+     16B `g0` LOCAL slot; ADRP/ADD reloc pairs vs g0. Linked + qemu → rc 7. ✅
+  3. exit(42) baseline: still 6 sections (no .rodata/.data/.bss), linked + qemu → rc 42.
+     text-only path byte-structure UNCHANGED. ✅
+  Mach-O darwin: UNAFFECTED — main.hexa routes arm64-apple-darwin through pack_lir +
+  serialize (macho_arm64.hexa); my edits touch ONLY pack_lir_arm64_elf / serialize_elf_arm64.
+
+GAP (named, honest): R_AARCH64_ABS64 — constant + generic Elf64_Rela path are present,
+  but NO codegen operand currently lowers to a 64-bit absolute data pointer (the arm64
+  backend uses the ADRP/ADD page-relative form for both string + global refs, which is
+  PIE-friendly). ABS64 will wire when a codegen path emits an absolute `.quad sym`
+  (e.g. a data-section pointer table). Not blocking real programs today.
