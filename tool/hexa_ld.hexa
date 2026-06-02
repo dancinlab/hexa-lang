@@ -393,7 +393,20 @@ pub fn parse_macho_obj(path: string) -> ParsedObj {
         // section-relative offset (section addr is 0). We record n_sect
         // so the link pass can route __text vs data symbols.
         let sym = LinkSym { name: name, offset: n_value, scope: scope_v, sect: n_sect }
-        if n_sect == 0 { extern_refs.push(sym) } else { defined.push(sym) }
+        if n_sect == 0 {
+            // COMMON (tentative definition): Mach-O encodes it as N_UNDF
+            // (n_sect==0) with n_value = SIZE (nonzero) and external. hexa_ld
+            // previously bucketed it as an undefined extern → libSystem import
+            // → dyld crash (e.g. the 112 runtime fn-ptr-table globals like
+            // __builtin_time_now, net_*, farr_*_gpu). Tag it sect=255 so the
+            // common-allocation pass (after section layout) places it in __bss
+            // (zero-init), making references resolve internally.
+            if n_value != 0 && n_ext != 0 {
+                defined.push(LinkSym { name: name, offset: n_value, scope: scope_v, sect: 255 })
+            } else {
+                extern_refs.push(sym)
+            }
+        } else { defined.push(sym) }
         si = si + 1
     }
 
@@ -613,11 +626,30 @@ fn link_macho_arm64(objs: [ParsedObj], out_path: string, entry: string, _is_stat
     let slot2_bytes: [Int] = []
     let slot3_bytes: [Int] = []
     let mut slot4_size = 0                            // __bss virtual size
+    // A-3: __mod_init_func (C constructors). dyld calls these ptrs at load
+    // iff they live in an S_MOD_INIT_FUNC_POINTERS section (flag 0x9). They
+    // route into slot3 (__DATA RW) so their UNSIGNED relocs become chained
+    // rebases (the slot3 rebase pass), but we track the contiguous slot3
+    // byte-range so a SEPARATE section_64 header (flag 0x9) can describe it
+    // (shrinking __data's header to exclude the tail — non-overlapping).
+    let mut mod_init_start = -1                       // slot3-relative byte start
+    let mut mod_init_end   = 0                        // slot3-relative byte end
 
     // Per-obj, per-slot base offset within the slot. Stored as a flat
     // array indexed [oi * N_SLOTS + slot]. -1 = this obj contributed
     // nothing to that slot (so a symbol shouldn't route there).
     let mut obj_slot_base: [Int] = []
+    // Per-INPUT-SECTION slot routing, captured during the slot-build loop
+    // so the post-layout ARM64_RELOC_UNSIGNED pass can patch absolute
+    // pointer-init slots in __data / __DATA,__const. Parallel arrays:
+    //   usect_oi    = owning obj index
+    //   usect_idx   = 1-based n_sect (input section index)
+    //   usect_slot  = output slot id this section landed in
+    //   usect_base  = slot-relative byte base of this section's bytes
+    let mut usect_oi:   [Int] = []
+    let mut usect_idx:  [Int] = []
+    let mut usect_slot: [Int] = []
+    let mut usect_base: [Int] = []
     // Map an input (obj, n_sect) → output slot id. Flat: we rebuild per
     // obj during the symbol pass from obj.sects.
 
@@ -671,22 +703,63 @@ fn link_macho_arm64(objs: [ParsedObj], out_path: string, entry: string, _is_stat
         obj_slot_base.push(base4)
 
         // Append this obj's section bytes into the matching slot.
+        // Const-family sections (`__const`, `__literal4/8/16`, `__DATA,__const`)
+        // all carry read-only constant data — clang puts float/double/vector
+        // constant pools in `__literalN`, referenced by `lCPI*` symbols via
+        // PAGE21/PAGEOFF12 relocs. They MUST merge into slot1 (the const slot)
+        // or their symbols never register → the reloc is silently dropped →
+        // `adrp xN,#0; ldr d0,[xN]` reads the Mach-O header → wild constant.
+        // We record each const-family section's slot1-relative base (keyed by
+        // its 1-based n_sect index) so symbol routing below resolves multiple
+        // const sections within one object to correct offsets.
+        let mut const_sect_idx:  [Int] = []
+        let mut const_sect_base: [Int] = []
         let mut sxx = 0
         while sxx < len(obj.sects) {
             let sc = obj.sects[sxx]
+            // __DATA,__const (pointer tables) must route to slot3 (__DATA RW)
+            // so dyld can rebase it; only __TEXT const-family stays in slot1.
+            let is_data_const = sc.sectname == "__const" && sc.segname == "__DATA"
+            let is_const_fam = (sc.sectname == "__const"
+                || sc.sectname == "__literal4"
+                || sc.sectname == "__literal8"
+                || sc.sectname == "__literal16") && !is_data_const
             if sc.sectname == "__text" {
+                usect_oi.push(oi); usect_idx.push(sc.index)
+                usect_slot.push(SLOT_TEXT); usect_base.push(len(slot0_bytes))
                 let mut k = 0
                 while k < len(sc.bytes) { slot0_bytes.push(sc.bytes[k] & 0xff); k = k + 1 }
-            } else if sc.sectname == "__const" {
+            } else if is_const_fam {
+                const_sect_idx.push(sc.index)
+                const_sect_base.push(len(slot1_bytes))
+                usect_oi.push(oi); usect_idx.push(sc.index)
+                usect_slot.push(SLOT_CONST); usect_base.push(len(slot1_bytes))
                 let mut k = 0
                 while k < len(sc.bytes) { slot1_bytes.push(sc.bytes[k] & 0xff); k = k + 1 }
             } else if sc.sectname == "__cstring" {
+                usect_oi.push(oi); usect_idx.push(sc.index)
+                usect_slot.push(SLOT_CSTRING); usect_base.push(len(slot2_bytes))
                 let mut k = 0
                 while k < len(sc.bytes) { slot2_bytes.push(sc.bytes[k] & 0xff); k = k + 1 }
-            } else if sc.sectname == "__data" {
+            } else if sc.sectname == "__data" || is_data_const {
+                usect_oi.push(oi); usect_idx.push(sc.index)
+                usect_slot.push(SLOT_DATA); usect_base.push(len(slot3_bytes))
                 let mut k = 0
                 while k < len(sc.bytes) { slot3_bytes.push(sc.bytes[k] & 0xff); k = k + 1 }
+            } else if sc.sectname == "__mod_init_func" {
+                // Route into slot3 (__DATA RW) so the UNSIGNED ctor-ptr relocs
+                // become chained rebases; track the contiguous slot3 range so a
+                // dedicated S_MOD_INIT_FUNC_POINTERS header can cover it.
+                usect_oi.push(oi); usect_idx.push(sc.index)
+                usect_slot.push(SLOT_DATA); usect_base.push(len(slot3_bytes))
+                let mi_b = len(slot3_bytes)
+                if mod_init_start < 0 { mod_init_start = mi_b }
+                let mut k = 0
+                while k < len(sc.bytes) { slot3_bytes.push(sc.bytes[k] & 0xff); k = k + 1 }
+                mod_init_end = len(slot3_bytes)
             } else if sc.sectname == "__bss" || sc.sectname == "__common" {
+                usect_oi.push(oi); usect_idx.push(sc.index)
+                usect_slot.push(SLOT_BSS); usect_base.push(slot4_size)
                 slot4_size = slot4_size + sc.zfill_size
             }
             sxx = sxx + 1
@@ -709,10 +782,37 @@ fn link_macho_arm64(objs: [ParsedObj], out_path: string, entry: string, _is_stat
                 let sc = obj.sects[sj]
                 if sc.index == d.sect {
                     sec_addr = sc.addr
+                    let is_data_const = sc.sectname == "__const" && sc.segname == "__DATA"
+                    let is_const_fam = (sc.sectname == "__const"
+                        || sc.sectname == "__literal4"
+                        || sc.sectname == "__literal8"
+                        || sc.sectname == "__literal16") && !is_data_const
                     if sc.sectname == "__text"        { slot = SLOT_TEXT;    soff_base = base0 }
-                    else if sc.sectname == "__const"  { slot = SLOT_CONST;   soff_base = base1 }
+                    else if is_const_fam {
+                        // soff_base = this section's recorded slot1-relative base
+                        // (NOT base1) — multiple const sections share slot1, each
+                        // appended sequentially, so the per-section base differs.
+                        slot = SLOT_CONST
+                        let mut ci = 0
+                        while ci < len(const_sect_idx) {
+                            if const_sect_idx[ci] == sc.index { soff_base = const_sect_base[ci]; break }
+                            ci = ci + 1
+                        }
+                    }
                     else if sc.sectname == "__cstring"{ slot = SLOT_CSTRING; soff_base = base2 }
-                    else if sc.sectname == "__data"   { slot = SLOT_DATA;    soff_base = base3 }
+                    else if sc.sectname == "__data" || is_data_const {
+                        // __data + __DATA,__const both merge into slot3; look up
+                        // this section's recorded slot3-relative base.
+                        slot = SLOT_DATA
+                        soff_base = base3
+                        let mut ci = 0
+                        while ci < len(usect_oi) {
+                            if usect_oi[ci] == oi && usect_idx[ci] == sc.index && usect_slot[ci] == SLOT_DATA {
+                                soff_base = usect_base[ci]; break
+                            }
+                            ci = ci + 1
+                        }
+                    }
                     else if sc.sectname == "__bss" || sc.sectname == "__common" { slot = SLOT_BSS; soff_base = base4 }
                     break
                 }
@@ -731,6 +831,38 @@ fn link_macho_arm64(objs: [ParsedObj], out_path: string, entry: string, _is_stat
             di = di + 1
         }
         oi = oi + 1
+    }
+
+    // ── COMMON symbol allocation (N5-link) ───────────────────────────
+    // Tentative defs (sect==255, tagged at parse; .offset = byte SIZE) get
+    // zero-init space APPENDED to the merged __bss, so their references
+    // resolve internally instead of becoming libSystem imports (dyld crash).
+    // Dedup by name (a strong section def or an earlier common wins). bss_size
+    // is captured from slot4_size AFTER this pass, so growth is picked up.
+    let mut coi = 0
+    while coi < len(objs) {
+        let cdefs = objs[coi].defined
+        let mut cci = 0
+        while cci < len(cdefs) {
+            let cs = cdefs[cci]
+            if cs.sect == 255 {
+                let mut seen = false
+                let mut csk = 0
+                while csk < len(dsym_names) {
+                    if dsym_names[csk] == cs.name { seen = true; break }
+                    csk = csk + 1
+                }
+                if !seen {
+                    let aligned = (slot4_size + 7) & (0 - 8)   // 8-align
+                    dsym_names.push(cs.name)
+                    dsym_slot.push(SLOT_BSS)
+                    dsym_offset.push(aligned)
+                    slot4_size = aligned + cs.offset            // cs.offset = size
+                }
+            }
+            cci = cci + 1
+        }
+        coi = coi + 1
     }
 
     // ── Compatibility aliases so the downstream reloc + symtab passes
@@ -874,10 +1006,16 @@ fn link_macho_arm64(objs: [ParsedObj], out_path: string, entry: string, _is_stat
                 // Skip if name resolves internally (treat as a plain
                 // PAGE21/PAGEOFF12 of an internal symbol — degenerate
                 // case where clang emitted GOT-form for an internal sym).
+                // N5-link fix: check the ALL-SLOT defined set (dsym_names), not
+                // the TEXT-only def_names — a DATA symbol (e.g. return_val in
+                // __data) is internally defined but absent from def_names, so it
+                // was wrongly classified as a libSystem import. With dsym_names
+                // it is recognized internal → not imported → the kind-5/6 patch
+                // relaxes its GOT_LOAD to a direct ref.
                 let mut hit_d = false
                 let mut sld = 0
-                while sld < len(def_names) {
-                    if def_names[sld] == dr.sym_name { hit_d = true; break }
+                while sld < len(dsym_names) {
+                    if dsym_names[sld] == dr.sym_name { hit_d = true; break }
                     sld = sld + 1
                 }
                 if !hit_d && len(dr.sym_name) > 0 {
@@ -925,10 +1063,15 @@ fn link_macho_arm64(objs: [ParsedObj], out_path: string, entry: string, _is_stat
     // __got = 8-byte pointer slot per import (function + data, both
     // chained-fixups bound).
     let got_size = 8 * nimports
+    // A-3: __mod_init_func size/base (slot3-relative range tracked in the
+    // slot-build loop). A nonzero range → emit a dedicated section header.
+    let mod_init_size = mod_init_end - mod_init_start
+    let has_mod_init  = mod_init_start >= 0 && mod_init_size > 0
     let mut data_nsects = 0
-    if has_data    { data_nsects = data_nsects + 1 }
-    if has_imports { data_nsects = data_nsects + 1 }  // __got
-    if has_bss     { data_nsects = data_nsects + 1 }
+    if has_data     { data_nsects = data_nsects + 1 }
+    if has_mod_init { data_nsects = data_nsects + 1 }  // __mod_init_func
+    if has_imports  { data_nsects = data_nsects + 1 }  // __got
+    if has_bss      { data_nsects = data_nsects + 1 }
     let has_data_seg = data_nsects > 0
 
     // ── Cycle 4: build symbol table + string table from inputs ────
@@ -962,15 +1105,17 @@ fn link_macho_arm64(objs: [ParsedObj], out_path: string, entry: string, _is_stat
     let mut osect_const   = 0
     let mut osect_cstring = 0
     let mut osect_stubs   = 0
-    let mut osect_data    = 0
-    let mut osect_got     = 0
-    let mut osect_bss     = 0
+    let mut osect_data     = 0
+    let mut osect_mod_init = 0
+    let mut osect_got      = 0
+    let mut osect_bss      = 0
     if has_const   { nx = nx + 1; osect_const   = nx }
     if has_cstring { nx = nx + 1; osect_cstring = nx }
     if has_stubs   { nx = nx + 1; osect_stubs   = nx }
-    if has_data    { nx = nx + 1; osect_data    = nx }
-    if has_imports { nx = nx + 1; osect_got     = nx }
-    if has_bss     { nx = nx + 1; osect_bss     = nx }
+    if has_data     { nx = nx + 1; osect_data     = nx }
+    if has_mod_init { nx = nx + 1; osect_mod_init = nx }
+    if has_imports  { nx = nx + 1; osect_got      = nx }
+    if has_bss      { nx = nx + 1; osect_bss      = nx }
     // Map a slot id → output 1-based section index.
     // (used in the symtab pass + the nlist VM-addr fix-up below)
 
@@ -1137,6 +1282,10 @@ fn link_macho_arm64(objs: [ParsedObj], out_path: string, entry: string, _is_stat
     // MH_DYLDLINK (0x4) — built to use dyld. Required by macOS Sonoma
     // loader; clang emits unconditionally. Without it, dyld kills the
     // process at very-early load stage (rc=137).
+    // MH_PIE is REQUIRED on arm64 macOS (AMFI SIGKILLs non-PIE main exes;
+    // clang's -no_pie is ignored on arm64). The data pointer-init values in
+    // __DATA,__const / __data are therefore emitted as dyld CHAINED REBASE
+    // links (see the rebase-collection + chain pass), NOT raw absolutes.
     let mut mh_flags = MACHO_LD_MH_PIE | MACHO_LD_MH_TWOLEVEL | 0x4
     if nsyms - nextdefsym == 0 { mh_flags = mh_flags | 0x1 }
     _w_u32(out, MACHO_LD_MAGIC_64)
@@ -1204,6 +1353,18 @@ fn link_macho_arm64(objs: [ParsedObj], out_path: string, entry: string, _is_stat
     // __data section at the very start of __DATA's file region.
     let data_fileoff      = data_seg_fileoff
     let data_section_addr = data_seg_vmaddr
+    // A-3: __mod_init_func is the contiguous slot3 tail [mod_init_start,
+    // data_size). Its header covers that range; the __data header is shrunk
+    // to [0, mod_init_start) so the two sections do not overlap. Both share
+    // the single slot3 byte stream written in the __DATA payload pass.
+    let mut data_visible_size   = data_size
+    let mut mod_init_section_addr = 0
+    let mut mod_init_fileoff      = 0
+    if has_mod_init {
+        data_visible_size     = mod_init_start
+        mod_init_section_addr = data_section_addr + mod_init_start
+        mod_init_fileoff      = data_fileoff + mod_init_start
+    }
     // __got follows __data, 8-aligned (pointer-sized).
     let got_pad = (8 - (data_size & 7)) & 7
     let got_fileoff      = data_fileoff + data_size + got_pad
@@ -1417,6 +1578,62 @@ fn link_macho_arm64(objs: [ParsedObj], out_path: string, entry: string, _is_stat
                 // exactly like a regular PAGE21 / PAGEOFF12 reloc, with
                 // the PAGEOFF12 scale forced to 3 (LDR x = 8 B).
                 let patch_off = pbase + pr.offset
+                // N5-link fix: INTERNAL GOT_LOAD target → RELAX to a direct
+                // reference of the symbol itself (no GOT slot, no dyld import).
+                // hexa_ld previously left internal kind-5/6 refs UNPATCHED (the
+                // "degenerate to kind 3/4" note was never implemented) — a
+                // GOT_LOAD to e.g. the weak data global `return_val` then fell
+                // through to the import path → libSystem import → dyld crash.
+                // Resolve the address via the unified dsym table (all slots,
+                // like the kind 3/4 path), then relax: PAGE21 → adrp to the
+                // symbol's page; PAGEOFF12 (an LDR of the GOT slot) → rewrite to
+                // ADD of the symbol's page-offset (compute the address directly).
+                let mut g_int_addr = -1
+                let mut dkg = 0
+                while dkg < len(dsym_names) {
+                    if dsym_names[dkg] == pr.sym_name {
+                        let slotg = dsym_slot[dkg]
+                        let offg  = dsym_offset[dkg]
+                        if slotg == SLOT_TEXT         { g_int_addr = text_section_addr + offg }
+                        else if slotg == SLOT_CONST   { g_int_addr = const_section_addr + offg }
+                        else if slotg == SLOT_CSTRING { g_int_addr = cstring_section_addr + offg }
+                        else if slotg == SLOT_DATA    { g_int_addr = data_section_addr + offg }
+                        else if slotg == SLOT_BSS     { g_int_addr = bss_section_addr + offg }
+                        break
+                    }
+                    dkg = dkg + 1
+                }
+                let bw0 = text_bytes[patch_off + 0]
+                let bw1 = text_bytes[patch_off + 1]
+                let bw2 = text_bytes[patch_off + 2]
+                let bw3 = text_bytes[patch_off + 3]
+                let bcur = bw0 | (bw1 << 8) | (bw2 << 16) | (bw3 << 24)
+                if g_int_addr >= 0 {
+                    let mut patched = bcur
+                    if pr.kind == 5 {
+                        // adrp to the SYMBOL's page (relax — same as kind 3).
+                        let pc_addr  = text_section_addr + patch_off
+                        let tgt_page = g_int_addr & (0 - 0x1000)
+                        let pc_page  = pc_addr  & (0 - 0x1000)
+                        let page_imm = (tgt_page - pc_page) / 0x1000
+                        let immlo = page_imm & 0x3
+                        let immhi = (page_imm >> 2) & 0x7ffff
+                        let cleared = bcur & 0x9f00001f
+                        patched = cleared | (immlo << 29) | (immhi << 5)
+                    } else {
+                        // GOT PAGEOFF12 is `ldr xD, [xN, #s]`; relax to
+                        // `add xD, xN, #pageoff` (UNSCALED 12-bit imm). Preserve
+                        // rn (bits 9:5) and rt→rd (bits 4:0); opcode → ADD imm.
+                        let rn = (bcur >> 5) & 0x1f
+                        let rd = bcur & 0x1f
+                        let off12 = g_int_addr & 0xfff
+                        patched = 0x91000000 | ((off12 & 0xfff) << 10) | (rn << 5) | rd
+                    }
+                    text_bytes[patch_off + 0] = patched & 0xff
+                    text_bytes[patch_off + 1] = (patched >> 8) & 0xff
+                    text_bytes[patch_off + 2] = (patched >> 16) & 0xff
+                    text_bytes[patch_off + 3] = (patched >> 24) & 0xff
+                } else {
                 let mut got_idx = -1
                 let mut gi = 0
                 while gi < len(import_names) {
@@ -1425,11 +1642,7 @@ fn link_macho_arm64(objs: [ParsedObj], out_path: string, entry: string, _is_stat
                 }
                 if got_idx >= 0 {
                     let slot_addr = got_section_addr + 8 * got_idx
-                    let w0 = text_bytes[patch_off + 0]
-                    let w1 = text_bytes[patch_off + 1]
-                    let w2 = text_bytes[patch_off + 2]
-                    let w3 = text_bytes[patch_off + 3]
-                    let cur = w0 | (w1 << 8) | (w2 << 16) | (w3 << 24)
+                    let cur = bcur
                     let mut patched = cur
                     if pr.kind == 5 {
                         // GOT_LOAD_PAGE21 — adrp: page-delta of GOT slot.
@@ -1455,11 +1668,107 @@ fn link_macho_arm64(objs: [ParsedObj], out_path: string, entry: string, _is_stat
                     text_bytes[patch_off + 2] = (patched >> 16) & 0xff
                     text_bytes[patch_off + 3] = (patched >> 24) & 0xff
                 }
+                }
             }
             pri = pri + 1
         }
         pro = pro + 1
     }
+
+    // ── ARM64_RELOC_UNSIGNED in DATA sections — absolute pointer init ──
+    //
+    // A pointer-init global (e.g. the runtime type-name cache:
+    //   __DATA,__const: const char* names[] = { l_.str.3, ..,
+    //                                            __cached_str_int.0, .. };
+    // ) carries kind-0 (ARM64_RELOC_UNSIGNED) relocs in its OWN section's
+    // reloc table — NOT in __text. The prior link pass only walked __text
+    // relocs, so these 8-byte slots stayed at their raw .o addend → deref
+    // of a wild header pointer → the gen2 startup SIGSEGV (type-cache reads
+    // 0x100000000).
+    //
+    // arm64 macOS MANDATES MH_PIE (AMFI SIGKILLs a non-PIE main exe), so a
+    // raw absolute pointer would be wrong once the image slides. Instead we
+    // COLLECT each kind-0 reloc target as a dyld CHAINED REBASE fixup and
+    // emit them as DYLD_CHAINED_PTR_64_OFFSET rebase links threaded into the
+    // __DATA fixup chain (see the chain-emission pass). The pointer-bearing
+    // __DATA,__const section is routed to slot3 (__DATA RW) — see the slot
+    // build loop — so dyld is allowed to write the rebased value (a RO
+    // __TEXT page cannot be a rebase target).
+    //
+    // rebase_off / rebase_tgt are kept SORTED ascending by slot3 offset so
+    // the single-page chain links in address order.
+    let mut rebase_off: [Int] = []
+    let mut rebase_tgt: [Int] = []
+    let mut uoi = 0
+    while uoi < len(objs) {
+        let uobj = objs[uoi]
+        let mut usx = 0
+        while usx < len(uobj.sects) {
+            let usc = uobj.sects[usx]
+            // Find this section's output slot + slot-relative base.
+            let mut sl = -1
+            let mut sb = 0
+            let mut fk = 0
+            while fk < len(usect_oi) {
+                if usect_oi[fk] == uoi && usect_idx[fk] == usc.index {
+                    sl = usect_slot[fk]; sb = usect_base[fk]; break
+                }
+                fk = fk + 1
+            }
+            // Only slot3 (__DATA, RW) sections can hold dyld-rebased pointers.
+            if sl == SLOT_DATA {
+                let mut uri = 0
+                while uri < len(usc.relocs) {
+                    let ur = usc.relocs[uri]
+                    if ur.kind == 0 {
+                        // Resolve target symbol → absolute VM address.
+                        let mut ta = -1
+                        let mut dn = 0
+                        while dn < len(dsym_names) {
+                            if dsym_names[dn] == ur.sym_name {
+                                let s2 = dsym_slot[dn]
+                                let o2 = dsym_offset[dn]
+                                if s2 == SLOT_TEXT         { ta = text_section_addr + o2 }
+                                else if s2 == SLOT_CONST   { ta = const_section_addr + o2 }
+                                else if s2 == SLOT_CSTRING { ta = cstring_section_addr + o2 }
+                                else if s2 == SLOT_DATA    { ta = data_section_addr + o2 }
+                                else if s2 == SLOT_BSS     { ta = bss_section_addr + o2 }
+                                break
+                            }
+                            dn = dn + 1
+                        }
+                        if ta >= 0 {
+                            ta = ta + ur.addend
+                            let po = sb + ur.offset
+                            // Insert (po, ta) sorted ascending by po.
+                            let mut ins = len(rebase_off)
+                            let mut q = 0
+                            while q < len(rebase_off) {
+                                if rebase_off[q] > po { ins = q; break }
+                                q = q + 1
+                            }
+                            rebase_off.push(0)
+                            rebase_tgt.push(0)
+                            let mut q2 = len(rebase_off) - 1
+                            while q2 > ins {
+                                rebase_off[q2] = rebase_off[q2 - 1]
+                                rebase_tgt[q2] = rebase_tgt[q2 - 1]
+                                q2 = q2 - 1
+                            }
+                            rebase_off[ins] = po
+                            rebase_tgt[ins] = ta
+                        }
+                    }
+                    uri = uri + 1
+                }
+            }
+            usx = usx + 1
+        }
+        uoi = uoi + 1
+    }
+    let has_rebases = len(rebase_off) > 0
+    // A dyld fixup chain is needed for imports (binds) OR data rebases.
+    let has_chain = has_imports || has_rebases
 
     _w_u32(out, MACHO_LD_LC_SEGMENT_64)
     _w_u32(out, lc_text_size)
@@ -1549,12 +1858,28 @@ fn link_macho_arm64(objs: [ParsedObj], out_path: string, entry: string, _is_stat
             _w_name_fixed(out, "__data", 16)
             _w_name_fixed(out, "__DATA", 16)
             _w_u64(out, data_section_addr)
-            _w_u64(out, data_size)
+            _w_u64(out, data_visible_size)           // excludes __mod_init_func tail
             _w_u32(out, data_fileoff)
             _w_u32(out, 3)                           // align log2(8)
             _w_u32(out, 0)
             _w_u32(out, 0)
             _w_u32(out, 0)                           // flags = S_REGULAR
+            _w_u32(out, 0); _w_u32(out, 0); _w_u32(out, 0)
+        }
+        // A-3: section_64 __mod_init_func — S_MOD_INIT_FUNC_POINTERS (0x9).
+        // dyld calls each 8-byte ptr at load. Bytes live in the slot3 stream
+        // (the __data payload pass writes them); the ctor-ptr UNSIGNED relocs
+        // were collected as chained rebases by the slot3 rebase pass.
+        if has_mod_init {
+            _w_name_fixed(out, "__mod_init_func", 16)
+            _w_name_fixed(out, "__DATA", 16)
+            _w_u64(out, mod_init_section_addr)
+            _w_u64(out, mod_init_size)
+            _w_u32(out, mod_init_fileoff)
+            _w_u32(out, 3)                           // align log2(8)
+            _w_u32(out, 0)                           // reloff
+            _w_u32(out, 0)                           // nreloc
+            _w_u32(out, 0x09)                        // S_MOD_INIT_FUNC_POINTERS
             _w_u32(out, 0); _w_u32(out, 0); _w_u32(out, 0)
         }
         // section_64 __got (inc4) — pointer slots for dyld imports.
@@ -1631,9 +1956,11 @@ fn link_macho_arm64(objs: [ParsedObj], out_path: string, entry: string, _is_stat
     // Total chained_fixups blob: 32 (header) + starts_in_image + [if imports]
     // seg_info + imports + symbols. Pad final to 8.
     let mut chained_fixups_size = 32 + starts_in_image_size
-    if has_imports {
+    if has_chain {
         chained_fixups_size = chained_fixups_size + cf_seg_info_size
-                            + imports_table_size + symbols_table_size
+    }
+    if has_imports {
+        chained_fixups_size = chained_fixups_size + imports_table_size + symbols_table_size
     }
     let cfrem = chained_fixups_size & 7
     if cfrem != 0 { chained_fixups_size = chained_fixups_size + (8 - cfrem) }
@@ -1792,6 +2119,38 @@ fn link_macho_arm64(objs: [ParsedObj], out_path: string, entry: string, _is_stat
     // ── __DATA payload: __data + __got bytes (bss has NO file bytes),
     //    padded to the segment's page-aligned filesize. ──
     if has_data_seg {
+        // Overwrite each rebased slot3 pointer with a DYLD_CHAINED_PTR_64_OFFSET
+        // REBASE link (bit63=0): bits0..35 = target (vmaddr - image_base),
+        // bits51..62 = next (stride-4 steps to the next fixup). The rebases
+        // chain into the got binds: the last rebase's `next` jumps to got[0]
+        // (if imports), else ends the chain. All __data + __got fixups fit in
+        // one 16KB page (__data starts at a page boundary).
+        let dsa_pg = data_section_addr & (page - 1)
+        let got_pg = got_section_addr & (page - 1)
+        let mut ri2 = 0
+        while ri2 < len(rebase_off) {
+            let roff = rebase_off[ri2]
+            let target = rebase_tgt[ri2] - 0x100000000      // runtime offset
+            let my_pg  = dsa_pg + roff
+            let mut nxt = 0
+            if ri2 < len(rebase_off) - 1 {
+                let nxt_pg = dsa_pg + rebase_off[ri2 + 1]
+                nxt = (nxt_pg - my_pg) / 4
+            } else if has_imports {
+                nxt = (got_pg - my_pg) / 4
+            }
+            let lo = target & 0xffffffff
+            let hi = ((target >> 32) & 0xf) | ((nxt & 0xfff) << 19)
+            slot3_bytes[roff + 0] = lo & 0xff
+            slot3_bytes[roff + 1] = (lo >> 8)  & 0xff
+            slot3_bytes[roff + 2] = (lo >> 16) & 0xff
+            slot3_bytes[roff + 3] = (lo >> 24) & 0xff
+            slot3_bytes[roff + 4] = hi & 0xff
+            slot3_bytes[roff + 5] = (hi >> 8)  & 0xff
+            slot3_bytes[roff + 6] = (hi >> 16) & 0xff
+            slot3_bytes[roff + 7] = (hi >> 24) & 0xff
+            ri2 = ri2 + 1
+        }
         let mut ddi = 0
         while ddi < data_size { out.push(slot3_bytes[ddi] & 0xff); ddi = ddi + 1 }
         let mut data_written = data_size
@@ -1865,7 +2224,7 @@ fn link_macho_arm64(objs: [ParsedObj], out_path: string, entry: string, _is_stat
     let data_seg_idx = 2                           // when has_data_seg
     let mut fsc = 0
     while fsc < fixups_seg_count {
-        if has_imports && has_data_seg && fsc == data_seg_idx {
+        if has_chain && has_data_seg && fsc == data_seg_idx {
             _w_u32(out, cf_seg_info_off)
         } else {
             _w_u32(out, 0)
@@ -1877,7 +2236,14 @@ fn link_macho_arm64(objs: [ParsedObj], out_path: string, entry: string, _is_stat
     if starts_in_image_size > siim_written {
         _w_zero_n(out, starts_in_image_size - siim_written)
     }
-    if has_imports {
+    if has_chain {
+        // page_start[0] = page-relative offset of the FIRST fixup. Rebases
+        // (in __data) precede the got binds; if any rebase exists the first
+        // chain link is data_section_addr + rebase_off[0], else got[0].
+        let mut first_fix = got_section_addr & (page - 1)
+        if has_rebases {
+            first_fix = (data_section_addr + rebase_off[0]) & (page - 1)
+        }
         // ── dyld_chained_starts_in_segment (24 B) — __DATA chain ─────
         // struct fields (from dyld's chained-fixups format header):
         //   u32 size            (24)
@@ -1899,7 +2265,9 @@ fn link_macho_arm64(objs: [ParsedObj], out_path: string, entry: string, _is_stat
         _w_u64(out, data_seg_fileoff)              // segment_offset (file off works since vmaddr@file)
         _w_u32(out, 0)                             // max_valid_pointer
         _w_u16(out, 1)                             // page_count
-        _w_u16(out, got_section_addr & (page - 1)) // page_start[0] — offset within page
+        _w_u16(out, first_fix)                     // page_start[0] — first fixup in page
+    }
+    if has_imports {
         // ── imports table — 4 B × nimports + pad to 8 ─────────────────
         // Each import (DYLD_CHAINED_IMPORT format) is a 32-bit packed:
         //   lib_ordinal:8 | weak_import:1 | name_offset:23
@@ -1931,8 +2299,11 @@ fn link_macho_arm64(objs: [ParsedObj], out_path: string, entry: string, _is_stat
     }
     // Trailing pad to chained_fixups_size (8-aligned).
     let mut cf_written = 32 + starts_in_image_size
+    if has_chain {
+        cf_written = cf_written + cf_seg_info_size
+    }
     if has_imports {
-        cf_written = cf_written + cf_seg_info_size + imports_table_size + symbols_table_size
+        cf_written = cf_written + imports_table_size + symbols_table_size
     }
     if chained_fixups_size > cf_written { _w_zero_n(out, chained_fixups_size - cf_written) }
 

@@ -291,10 +291,18 @@ fn _lr_ctx_restore(saved: LowerArrays) {
 // The module arrays are first allocated at MODULE scope (mark_top == 0 ->
 // heap); they stay heap for the whole pass.
 fn _lr_ctx_clear() {
-    _lr_locals.truncate(0)
-    _lr_blocks.truncate(0)
-    _lr_bindings.truncate(0)
-    _lr_frame_starts.truncate(0)
+    // A-4 fix: allocate FRESH arrays per function (NOT truncate-in-place).
+    // _lower_fn returns MFunc { blocks: _lr_blocks, locals: _lr_locals } by
+    // reference; the native codegen shares the array object, so an in-place
+    // truncate on the next fn overwrote EVERY prior MFunc.body with the last
+    // fn (function-body aliasing -> ENCODE-MISS/SIGSEGV in gen2). Fresh 
+    // gives each MFunc an independent buffer on BOTH the C-copy and native
+    // paths -> byte-eq preserved, native aliasing eliminated. Mirrors
+    // _lr_ctx_fresh() which already documents this handle-vs-buffer hazard.
+    _lr_locals = []
+    _lr_blocks = []
+    _lr_bindings = []
+    _lr_frame_starts = []
 }
 
 // Swap in a FRESH (independent) array set for a nested lowering scope --
