@@ -1151,6 +1151,23 @@ HexaVal hexa_forge_dispatch_int4_quant_bwd(HexaVal dy_v, HexaVal mask_v,
 HexaVal forge_dispatch_int4_quant_bwd(HexaVal dy_v, HexaVal mask_v,
                              HexaVal dw_v, HexaVal n_v);                      /* runtime.c — fusion L1 param seam */
 
+/* HEXA-FUSION L3 (glue half) — device-resident elementwise residual-add.
+ * forge_dispatch_residual_add(a, b, out, n) -> int rc (0 ok / -1 host
+ * fallback). out[i] = a[i] + b[i] — pure elementwise add, no reduction →
+ * bit-exact to the host scalar loop (max|Δ|=0). Fuses the highest-frequency
+ * interpreted inter-op host glue in clm_prod_fwd (the residual xt = xec + hg0,
+ * T·d host t_get/t_set per step between device GEMM spikes — the ③ fwd-only 0%
+ * floor) onto the device via _hx_cuda_farr_residual_add_gpu, leaving the
+ * interpreter off the per-step hot path. Keeps OUT DEVICE-RESIDENT
+ * (loc=FARR_DEVICE, dirty_host=0) so the next conv GEMM H2D-skips it (same
+ * residence convention as keepmv / db_colsum / int4_quant). Gated in
+ * clm_prod.hexa behind env CLM_PROD_DEVRESIDENT; no-CUDA → -1 → host add
+ * (byte-eq). */
+HexaVal hexa_forge_dispatch_residual_add(HexaVal a_v, HexaVal b_v,
+                                  HexaVal out_v, HexaVal n_v);               /* runtime.c — fusion L3 glue */
+HexaVal forge_dispatch_residual_add(HexaVal a_v, HexaVal b_v,
+                             HexaVal out_v, HexaVal n_v);                     /* runtime.c — fusion L3 glue seam */
+
 /* ── RFC 050 PERF-INHERITANCE: forge BF16 FFN dispatch wrapper ──────
  * `forge_dispatch_ffn_fp64_via_bf16(x, w1, w2, y, M, D, FD)` — 7-arg
  * builtin. Takes FP64 farr handles, internally allocates HexaFarrBf16

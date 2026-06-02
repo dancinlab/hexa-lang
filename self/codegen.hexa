@@ -7480,6 +7480,17 @@ fn gen2_expr(node) {
                 if name == "forge_dispatch_int4_quant_bwd" {
                     return "hexa_forge_dispatch_int4_quant_bwd(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ", " + arg_strs[3] + ")"
                 }
+                // HEXA-FUSION L3 (glue half): forge_dispatch_residual_add(a, b,
+                // out, n) -> int rc. out[i] = a[i] + b[i] — pure elementwise add
+                // with NO reduction, so the device kernel is trivially bit-exact
+                // to the host scalar loop (max|Δ|=0). Fuses the highest-frequency
+                // interpreted inter-op host glue in clm_prod_fwd (residual xt =
+                // xec + hg0, T·d host t_get/t_set per step) onto the device, keeps
+                // OUT DEVICE-RESIDENT so the next conv GEMM H2D-skips it.
+                // no-CUDA → -1 → host add (byte-eq).
+                if name == "forge_dispatch_residual_add" {
+                    return "hexa_forge_dispatch_residual_add(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ", " + arg_strs[3] + ")"
+                }
                 // stdlib/os/pty — 4-arg builtin (RFC stdlib-os-pty.md)
                 if name == "pty_forkexec"   { return "hexa_pty_forkexec(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ", " + arg_strs[3] + ")" }
                 // stdlib/os/exec_pipe — fork+exec with separated stdout/stderr (RFC ssh-server stderr)

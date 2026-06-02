@@ -314,3 +314,33 @@ HexaVal forge_dispatch_int4_quant_bwd(HexaVal dy, HexaVal mask,
                              HexaVal dw, HexaVal n) {
     return hexa_forge_dispatch_int4_quant_bwd(dy, mask, dw, n);
 }
+
+/* HEXA-FUSION L3 (glue half) — device-resident elementwise residual-add.
+ * forge_dispatch_residual_add(a, b, out, n). Routes to
+ * _hx_cuda_farr_residual_add_gpu: out[i] = a[i] + b[i], a pure elementwise
+ * add with NO reduction → bit-exact to the host scalar loop (max|Δ|=0). This
+ * is the highest-frequency interpreted inter-op host glue in clm_prod_fwd (the
+ * residual xt = xec + hg0, run T·d times in the interpreter between device
+ * GEMM spikes — the ③ fwd-only 0% floor). Fusing it leaves the interpreter off
+ * the per-step hot path AND keeps OUT FARR_DEVICE so the next conv GEMM
+ * H2D-skips it. no-CUDA → -1 so the .hexa caller runs the host add. */
+HexaVal hexa_forge_dispatch_residual_add(HexaVal a_v, HexaVal b_v,
+                                  HexaVal out_v, HexaVal n_v) {
+    int64_t a_id   = hexa_as_num(a_v);
+    int64_t b_id   = hexa_as_num(b_v);
+    int64_t out_id = hexa_as_num(out_v);
+    int64_t n      = hexa_as_num(n_v);
+    if (n <= 0) return hexa_int(-1);
+    if (a_id < 0 || b_id < 0 || out_id < 0) return hexa_int(-1);
+#ifdef HEXA_CUDA
+    extern int _hx_cuda_farr_residual_add_gpu(int64_t, int64_t, int64_t,
+                                              int64_t);
+    int grc = _hx_cuda_farr_residual_add_gpu(a_id, b_id, out_id, n);
+    if (grc == 0) return hexa_int(0);
+#endif
+    return hexa_int(-1);
+}
+HexaVal forge_dispatch_residual_add(HexaVal a, HexaVal b,
+                             HexaVal out, HexaVal n) {
+    return hexa_forge_dispatch_residual_add(a, b, out, n);
+}
