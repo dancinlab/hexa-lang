@@ -23,8 +23,8 @@ FORGE-UTILGREEN lever-1~5 가 GEMM repack 을 전부 device 化했어도 util ME
 
 ### L1 — device-resident (= PyTorch eager 수준, util-GREEN)
 
-- [~] **device-resident tensor lifetime** — param/grad/moment 를 step 전체에 GPU-resident 유지(host roundtrip 0). falsifier: 기존 오라클 byte-eq max|Δ|=0 ∧ nvidia-smi devmem persist across step. **W1-① PARTIAL (PR #2555 m,v + #2559 grad-db)**: AdamW moments m,v (#2555) + bias grad db (#2559) device-resident 착지(env `CLM_PROD_DEVRESIDENT`, byte-eq ALL-PASS). 잔여 = **int4 quant wall (①c 진행중)**: dW/dX(host `nn_int4_quant_bwd` STE mask) · param W(host int4 re-quant) · devmem-persist pod 측정. 상세 = §W1 results.
-- [ ] **async kernel-launch pipeline** — step body 가 host 인터프리터 블로킹 없이 device 커널을 비동기 디스패치(GPU 안 굶음). falsifier: `F-RFC046-GPU-UTILIZATION` util MEAN≥20% @ d1536/T512 (= FORGE-UTILGREEN endgame gate, single-driver H100 sm_90 fire).
+- [~] **device-resident tensor lifetime** — param/grad/moment 를 step 전체에 GPU-resident 유지(host roundtrip 0). falsifier: 기존 오라클 byte-eq max|Δ|=0 ∧ nvidia-smi devmem persist across step. **W1-① PARTIAL (PR #2555 m,v + #2559 grad-db + #2561 int4)**: m,v + bias grad db + **int4 quant(W-fwd/dW-STE, 정수-exact)** device-resident 착지(env `CLM_PROD_DEVRESIDENT`, byte-eq ALL-PASS). 잔여: dX col2im transpose(orthogonal) · self-host pod build · devmem/util fire. **③ 정밀화: 텐서 resident 만으론 부족 — op 사이 인터프리트 host glue 도 fuse 해야 util MEAN gap 닫힘**. 상세 = §W1 results.
+- [ ] **async kernel-launch pipeline + inter-op glue fusion** 〔③ 정밀화: 텐서 resident 만으론 부족〕 — step body 가 host 인터프리터 블로킹 없이 device 커널 비동기 디스패치 **AND op 사이 인터프리트 host glue(add·gelu·groupnorm·moe-router 스칼라 루프)를 device 로 fuse**(③ 가 fwd-only 내부 0% floor 로 이게 잔여 병목임을 측정). falsifier: `F-RFC046-GPU-UTILIZATION` util MEAN≥20% @ d1536/T512 (single-driver H100 sm_90 fire).
 - [ ] **fwd-only fused device kernel 프로토타입 + util Δ probe** (safe falsifier — 풀포트 전) — fwd path 만 device-resident fuse 해 util Δ 측정(lever-4 fire pod 재사용). 풀 train-step fusion 의 ROI 를 싸게 검증.
 
 ### L2 — graph capture (= torch.compile / CUDA-graph 수준)
@@ -136,7 +136,35 @@ bias grad **db device-resident across bwd→AdamW**. Root: `conv*_bwd_via_forge*
 F-CLM-DEVFEED-DB-EQ = 1   (db dil∈{1,2} colsum-vs-host max|Δ|=0.0)
 + IM2COL/FWD/BWD/ADAM-EQ 전부 max|Δ|=0.0 유지  → ALL-PASS
 ```
-verdict: `.verdicts/hexa-fusion/F-CLM-DEVFEED-DEVRESIDENT-GRAD.txt`. **잔여 = int4 quant wall (①c 진행중)**: dW/dX(host `nn_int4_quant_bwd` STE mask multiply) · param W(host int4 re-quant each fwd) — 둘 다 device int4 quant/STE 로 옮겨야 W 가 resident. raw-GEMM 우위 주장 0.
+verdict: `.verdicts/hexa-fusion/F-CLM-DEVFEED-DEVRESIDENT-GRAD.txt`. raw-GEMM 우위 주장 0.
+
+### ①c device int4 quant (the crux) — ✅ (PR #2561, base fusion/l1-devresident-grad, integer-exact byte-eq)
+
+int4 quant wall 격파 → W resident 가능. device fwd-quant `forge_dispatch_int4_quant`(per-out-channel `s=max|W|/7`, `q=clamp(round(W/s),±7)`, W `loc=FARR_DEVICE dirty_host=0`) + STE-masked bwd `forge_dispatch_int4_quant_bwd`(`dW=dy·mask`, dW resident).
+
+```
+int4 fwd max|Δ| wq=0.0 scale=0.0 qlevel=0.0 mask=0.0
+int4 bwd (STE) max|Δ| dW=0.0
+F-CLM-DEVFEED-INT4QUANT-EQ = 1   (정수-exact: max|Δ|>0 이면 FAIL — FMA-drift 핑계 없음)
+ALL-PASS (im2col/fwd/db/int4/adam = max|Δ|0.0, bwd dX≤5.55e-17)
+```
+verdict: `.verdicts/hexa-fusion/F-CLM-DEVFEED-DEVRESIDENT-PARAM.txt`. 잔여: dX col2im transpose(quant 과 orthogonal) · self-host pod build(HEXA_CUDA emit) → W/dW/db/m/v ALL resident → util fire. raw-GEMM 우위 주장 0.
+
+### ③ fwd-only fused util Δ probe — ✅ MEASURED (H100 sm_90, d1536/T512, pod 39139563 reused, $0)
+
+fwd-only 경로(ce-grad+bwd+20×AdamW elide, fwd byte-identical)로 device-residency 가 util 을 움직이는지 측정.
+
+```
+n=1048 PEAK=81% MEAN=2.8349% busy_mean=13.26% pct≥20=5.06% mem_max=67699MiB (66GB·116-120W)
+F-CLM-DEVFEED-FWD-EQ = 1 (fwd dil=1,2 max|Δ|=0.0)
+```
+| path | PEAK | MEAN |
+|---|---|---|
+| lever-2 full-step | 19% | 0.50% |
+| lever-3 full-step | 21% | 0.56% |
+| **fwd-only (③)** | **81%** | **2.83%** |
+
+**HONEST: 부분적으로 움직임 — MEAN 0.56→2.83% (5×↑), PEAK 21→81%, 단 여전히 RED**(78.6% 샘플 0%). **결정적 정밀화**: PEAK 81% = device 를 세게 driven 가능 증명 + bwd/AdamW host tail 제거가 util 회복 ⇒ binding = **인터프리트 per-step driver loop(F-RFC046 root), NOT GEMM kernels** 재확정. 그러나 fwd-only 내부 0% 잔여 floor = **텐서 device-resident 만으론 부족, op 사이 인터프리트 host glue(add·gelu·groupnorm·moe-router 스칼라 루프)도 fuse 해야 MEAN→20% 닫힘** ⇒ ②(async-launch)·⑤(fwd+bwd fusion)의 진짜 과제 = inter-op glue 제거. verdict: `.verdicts/hexa-fusion-l1-fwdonly/F-RFC046-FWDONLY-UTIL.txt`. raw-GEMM 우위 주장 0.
 
 ### ⑦ operator surgical override — ✅ (PR #2556, base main, emit Δ ∧ byte-eq)
 
