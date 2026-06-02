@@ -499,3 +499,102 @@ HexaVal forge_dispatch_embedding(HexaVal ids, HexaVal table, HexaVal out,
                              HexaVal t, HexaVal d) {
     return hexa_forge_dispatch_embedding(ids, table, out, t, d);
 }
+
+/* HEXA-FUSION L3 (BWD glue half) — device-resident elementwise GELU backward.
+ * forge_dispatch_gelu_bwd(g, da, dg, n). Routes to _hx_cuda_farr_gelu_bwd_gpu:
+ * DG[i]=DA[i]·GELU'(G[i]), GELU'(x)=Φ(x)+x·φ(x) — the EXACT erf/exp-based gelu
+ * grad of nn_lib.hexa nn_gelu_bwd (same 1/√2 + 1/√(2π) literals, same cdf + x·pdf
+ * op order). G is the pre-activation saved from forward. Device erf()/exp() are
+ * IEEE-correct (same libm contract) → bit-exact to the host scalar loop (max|Δ|=0).
+ * Fuses the gelu_bwd ×3 host glue in clm_prod_bwd (deo0/deo1/dhn0 — the bwd mirror
+ * of the fwd gelu ×3) and keeps DG FARR_DEVICE. no-CUDA → -1 → host gelu_bwd. */
+HexaVal hexa_forge_dispatch_gelu_bwd(HexaVal g_v, HexaVal da_v,
+                                  HexaVal dg_v, HexaVal n_v) {
+    int64_t g_id  = hexa_as_num(g_v);
+    int64_t da_id = hexa_as_num(da_v);
+    int64_t dg_id = hexa_as_num(dg_v);
+    int64_t n     = hexa_as_num(n_v);
+    if (n <= 0) return hexa_int(-1);
+    if (g_id < 0 || da_id < 0 || dg_id < 0) return hexa_int(-1);
+#ifdef HEXA_CUDA
+    extern int _hx_cuda_farr_gelu_bwd_gpu(int64_t, int64_t, int64_t, int64_t);
+    int grc = _hx_cuda_farr_gelu_bwd_gpu(g_id, da_id, dg_id, n);
+    if (grc == 0) return hexa_int(0);
+#endif
+    return hexa_int(-1);
+}
+HexaVal forge_dispatch_gelu_bwd(HexaVal g_v, HexaVal da_v,
+                             HexaVal dg_v, HexaVal n_v) {
+    return hexa_forge_dispatch_gelu_bwd(g_v, da_v, dg_v, n_v);
+}
+
+/* HEXA-FUSION L3 (BWD glue half) — device-resident GroupNorm backward.
+ * forge_dispatch_groupnorm_bwd(xhat, inv, gamma, dy, dgamma, dbeta, dx, T, C, G).
+ * Routes to _hx_cuda_farr_groupnorm_bwd_gpu, which reproduces gn_lib.hexa
+ * nn_groupnorm_bwd EXACTLY — per-channel DGAMMA[c]=Σ_t DY·XHAT, DBETA[c]=Σ_t DY
+ * (one thread/channel, t ascending), then per-group s1=Σ dxh, s2=Σ dxh·xhat,
+ * DX=INV·(dxh - s1/m - xhat·s2/m) (one thread/group, t outer c inner). Every
+ * reduction accumulates SEQUENTIALLY in the host order (NO tree re-assoc, NO
+ * atomics) → bit-exact (max|Δ|=0). INV is the saved forward reciprocal-stddev
+ * (no sqrt re-derivation). Fuses the groupnorm_bwd ×2 host glue in clm_prod_bwd;
+ * keeps DGAMMA/DBETA/DX FARR_DEVICE. no-CUDA → -1 → host groupnorm_bwd. */
+HexaVal hexa_forge_dispatch_groupnorm_bwd(HexaVal xhat_v, HexaVal inv_v,
+                                  HexaVal gamma_v, HexaVal dy_v, HexaVal dgamma_v,
+                                  HexaVal dbeta_v, HexaVal dx_v, HexaVal t_v,
+                                  HexaVal c_v, HexaVal g_v) {
+    int64_t xhat_id  = hexa_as_num(xhat_v);
+    int64_t inv_id   = hexa_as_num(inv_v);
+    int64_t gamma_id = hexa_as_num(gamma_v);
+    int64_t dy_id    = hexa_as_num(dy_v);
+    int64_t dgamma_id= hexa_as_num(dgamma_v);
+    int64_t dbeta_id = hexa_as_num(dbeta_v);
+    int64_t dx_id    = hexa_as_num(dx_v);
+    int64_t T        = hexa_as_num(t_v);
+    int64_t C        = hexa_as_num(c_v);
+    int64_t G        = hexa_as_num(g_v);
+    if (T <= 0 || C <= 0 || G <= 0 || (C % G) != 0) return hexa_int(-1);
+    if (xhat_id < 0 || inv_id < 0 || gamma_id < 0 || dy_id < 0) return hexa_int(-1);
+    if (dgamma_id < 0 || dbeta_id < 0 || dx_id < 0) return hexa_int(-1);
+#ifdef HEXA_CUDA
+    extern int _hx_cuda_farr_groupnorm_bwd_gpu(int64_t, int64_t, int64_t, int64_t,
+                                               int64_t, int64_t, int64_t,
+                                               int64_t, int64_t, int64_t);
+    int grc = _hx_cuda_farr_groupnorm_bwd_gpu(xhat_id, inv_id, gamma_id, dy_id,
+                                              dgamma_id, dbeta_id, dx_id, T, C, G);
+    if (grc == 0) return hexa_int(0);
+#endif
+    return hexa_int(-1);
+}
+HexaVal forge_dispatch_groupnorm_bwd(HexaVal xhat, HexaVal inv, HexaVal gamma,
+                             HexaVal dy, HexaVal dgamma, HexaVal dbeta,
+                             HexaVal dx, HexaVal t, HexaVal c, HexaVal g) {
+    return hexa_forge_dispatch_groupnorm_bwd(xhat, inv, gamma, dy, dgamma, dbeta,
+                                             dx, t, c, g);
+}
+
+/* HEXA-FUSION L3 (BWD glue half) — device-resident expert-unpack (residual grad
+ * split). forge_dispatch_expert_unpack2(dex_out, dex0, dex1, n). Routes to
+ * _hx_cuda_farr_expert_unpack2_gpu: DEX0[i]=DEX_OUT[0·n+i], DEX1[i]=DEX_OUT[1·n+i]
+ * for i in 0..n (n=T·d) — the bwd mirror of expert_pack2, splitting the moe-router
+ * grad dex_out[E·T·d] back into the 2 per-expert grads. Pure copy, NO reduction →
+ * trivially bit-exact (max|Δ|=0). Keeps DEX0/DEX1 FARR_DEVICE so the follow-up
+ * gelu_bwd H2D-skips them. no-CUDA → -1 → host unpack loop. */
+HexaVal hexa_forge_dispatch_expert_unpack2(HexaVal dex_out_v, HexaVal dex0_v,
+                                  HexaVal dex1_v, HexaVal n_v) {
+    int64_t dex_out_id = hexa_as_num(dex_out_v);
+    int64_t dex0_id    = hexa_as_num(dex0_v);
+    int64_t dex1_id    = hexa_as_num(dex1_v);
+    int64_t n          = hexa_as_num(n_v);
+    if (n <= 0) return hexa_int(-1);
+    if (dex_out_id < 0 || dex0_id < 0 || dex1_id < 0) return hexa_int(-1);
+#ifdef HEXA_CUDA
+    extern int _hx_cuda_farr_expert_unpack2_gpu(int64_t, int64_t, int64_t, int64_t);
+    int grc = _hx_cuda_farr_expert_unpack2_gpu(dex_out_id, dex0_id, dex1_id, n);
+    if (grc == 0) return hexa_int(0);
+#endif
+    return hexa_int(-1);
+}
+HexaVal forge_dispatch_expert_unpack2(HexaVal dex_out_v, HexaVal dex0_v,
+                             HexaVal dex1_v, HexaVal n_v) {
+    return hexa_forge_dispatch_expert_unpack2(dex_out_v, dex0_v, dex1_v, n_v);
+}
