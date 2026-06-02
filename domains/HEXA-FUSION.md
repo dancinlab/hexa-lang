@@ -200,6 +200,18 @@ ALL-PASS (전 F-CLM-DEVFEED-* max|Δ|0.0 유지)
 ```
 verdict: `.verdicts/hexa-fusion-l3-glue-final/F-CLM-DEVFEED-FINAL-GLUE-EQ.txt`. **🎯 fwd 인터프리트-glue EXHAUSTED 확정** — clm_prod_fwd 의 모든 host scalar 루프(embedding→conv→groupnorm→gelu→residual→expert-pack→moe-router)가 device-gated. W2 self-host pod util refire UNBLOCKED. raw-GEMM 우위 주장 0.
 
+### ⑤-bwd BWD-tail glue fusion (slice 1) — ✅ (PR #2584, base main, strict byte-eq)
+
+fwd glue 소진 후 다음 floor = bwd/AdamW-tail 인터프리트 glue. `forge_dispatch_gelu_bwd`(GELU'=Φ+x·φ, host literal/order 동일) · `forge_dispatch_groupnorm_bwd`(dgamma/dbeta/dX, seq reduction no atomics, saved fwd inv) · `forge_dispatch_expert_unpack2`(pack 의 bwd mirror). 출력 `FARR_DEVICE dirty_host=0`.
+
+```
+gelu_bwd max|Δ| dg=0.0 → F-CLM-DEVFEED-GELU-BWD-EQ = 1
+groupnorm_bwd max|Δ| dgamma=0.0 dbeta=0.0 dX=0.0 → F-CLM-DEVFEED-GROUPNORM-BWD-EQ = 1
+expert-unpack max|Δ| dex0=0.0 dex1=0.0 → F-CLM-DEVFEED-EXUNPACK-EQ = 1
+ALL-PASS (전 F-CLM-DEVFEED-* max|Δ|=0 유지)
+```
+verdict: `.verdicts/hexa-fusion-l3-bwd-glue/F-CLM-DEVFEED-BWD-GLUE-EQ.txt`. **잔여 bwd glue (⑤-bwd2 진행중)**: ce_grad · moe_router_bwd · dxt/dxec grad sum · embedding_bwd_scatter (+ orthogonal: dX col2im · AdamW tail). raw-GEMM 우위 주장 0.
+
 ### 📦 main merge (2026-06-02) — device-resident + glue 전부 landed
 
 squash×스택 충돌(베이스 재작성)을 rebase + consolidation 으로 해소하고 6 logical PR 전부 main 착지:
