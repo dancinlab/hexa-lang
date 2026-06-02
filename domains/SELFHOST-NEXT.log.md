@@ -401,3 +401,47 @@ byte-eq-critical codegen for an unreachable path is pure downside. Wall retired 
 non-issue; it was NOT on the live self-emit critical path. Real remaining self-emit work =
 the SELFHOST-NEXT integration/promotion milestones, not this encoder reject.
 Verdict: .verdicts/selfhost-next-stp-fix/STP-ENCODE-MISS-FIX.txt (🔴 CLOSED-NEGATIVE).
+
+## 2026-06-03 — PROMOTE-TO-DEFAULT READINESS (assess + de-risk, NO flip) [selfhost-next/promote-readiness]
+
+Lane: SELFHOST-NEXT promote-readiness. READ + RUN-GATES + REPORT only — no flip,
+default toolchain UNTOUCHED. Fresh clone ghost ~/dancinlab/wt-promote off origin/main.
+
+Pre-registered falsifier (g63): GO iff ALL hold on ghost — (a) cc-gen3.o==cc-gen4.o,
+(b) parity gate green real-exit-0, (c) gen3 fresh compile+link+run correct, (d) gen3
+emit deterministic, (e) default NOT already flipped.
+
+Real verification (verbatim runs, ghost macOS 26.5 arm64):
+  (a) cmp cc-gen3.o cc-gen4.o -> exit 0 (3224592 B each). BYTE-EQ FIXPOINT HOLDS.
+  (b) tool/selfhost_parity_gate.sh -> exit 0. 5/5 behaviour PASS (arith ok(42)/42-ok,
+      bitmask ok(15), branch ok(7), call ok(13), recurse ok(120)). "PARITY PASS —
+      promotion AUTHORIZED". asm axis = ref-err (dispatch-wrapper ref rejects the
+      `_drv.hexa` shim token; asm informational unless --strict — NOT a gen3 fault).
+  (c) fn main(){exit(99)} via gen3 -> clang -> hexa_ld -> run -> exit 99. PASS.
+  (d) gen3 emit x2 byte-identical. DETERMINISTIC.
+  (e) promote_selfhost.sh --status: slot absent, launcher absent, hexa.real = shipped
+      (NOT flipped). No irreversible state touched.
+
+Gate parity vs bootstrap: miscompile-zero YES (ENCODE_MISS=0), determinism YES,
+behaviour/faithful YES; asm-byte parity UNVERIFIED vs dispatch wrapper (ref-shim, not
+load-bearing — re-run with raw-native -r to close the informational axis).
+
+Build-floor staleness wall: reproduced (`hexa run compiler/main.hexa --help` -> exit 1,
+shipped hexat C-transpiler can't compile current-main sources). ORTHOGONAL to the flip:
+gen3 was built via build_selfhost.sh frozen-seed ladder (151c52c8), NOT via that path;
+neither the parity gate nor promote_selfhost.sh invoke it. NOT a blocker.
+
+Flip anatomy (promote_selfhost.sh): HARD-precondition re-runs parity gate (fail=>exit 1,
+nothing touched). tier1 install = cp gen3/hexa_ld/rt.o -> $HX_HOME/self/native/selfhost/
++ hx-selfhost launcher; default UNTOUCHED; fully reversible. tier2 --default
+--i-have-reviewed-parity = mv hexa.real -> hexa.real.pre-selfhost.<ts> (backup) +
+ln -sf hx-selfhost hexa.real; REVERSIBLE via --revert while backup retained. tier2 is an
+on-disk $HX_HOME mutation OUTSIDE the repo (no PR can carry it) — needs human ack.
+
+VERDICT: GO (tier-1, zero-risk) / CONDITIONAL-GO-DEFERRED (tier-2 default-flip — gate
+green + fixpoint + determinism + miscompile-zero + behaviour parity all hold; deferred to
+user explicit ack as an irreversible-by-policy host-local change). No blocker. Build-floor
+wall orthogonal; asm axis = informational residual only. Steady-state: remaining =
+the flip itself (needs user OK).
+Verdict: .verdicts/selfhost-next-promote/PROMOTE-READINESS.txt (raw parity stdout:
+.verdicts/selfhost-next-promote/parity_gate_raw_stdout.txt). NO flip performed.
