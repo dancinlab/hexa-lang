@@ -437,3 +437,31 @@ byte-eq-critical codegen for an unreachable path is pure downside. Wall retired 
 non-issue; it was NOT on the live self-emit critical path. Real remaining self-emit work =
 the SELFHOST-NEXT integration/promotion milestones, not this encoder reject.
 Verdict: .verdicts/selfhost-next-stp-fix/STP-ENCODE-MISS-FIX.txt (🔴 CLOSED-NEGATIVE).
+
+## 2026-06-03 — TIER2 DEFAULT-FLIP EXECUTED on ghost (self-host gen3 promoted to default)
+The approved, host-local tier2 default-toolchain flip was executed on the GHOST macOS
+host ONLY (per the readiness GO from PR #2580: parity 5/5, byte-eq fixpoint intact).
+mini and all other hosts UNTOUCHED.
+- [x] Followed `tool/SELFHOST_PROMOTE_RUNBOOK.md` exactly. Build artifacts present in the
+      graduated tree (`~/dancinlab/selfhost-work/promote/build/`): gen3 (1.96MB), hexa_ld
+      (341KB), rt.o (516KB).
+- [x] Flip command (runbook tier2 form):
+      `bash tool/promote_selfhost.sh install --default --i-have-reviewed-parity -w ~/dancinlab/selfhost-work/promote/build --hx-home ~/.hx`
+- [x] HARD-precondition parity gate re-ran GREEN at flip time: 5/5 PASS, 0 fail
+      (arith ok(42)/42-ok, bitmask ok(15), branch ok(7), call ok(13), recurse ok(120)).
+      "RESULT: PARITY PASS — promotion AUTHORIZED".
+- [x] tier1 side-by-side slot installed: `~/.hx/self/native/selfhost/{gen3,hexa_ld,rt.o}`
+      + launcher `~/.hx/bin/hx-selfhost`.
+- [x] tier2 flip confirmed:
+      (a) backup created: `~/.hx/bin/hexa.real.pre-selfhost.20260603-062045`
+      (b) `~/.hx/bin/hexa.real` symlink now -> `~/.hx/bin/hx-selfhost` (FLIPPED to selfhost)
+- [x] POST-FLIP SMOKE PASS — `fn main(){ exit(42) }` compiled via the now-default
+      `hexa.real` (-> hx-selfhost -> gen3) emit asm (EMIT_RC=0) → clang -c (CC_RC=0) →
+      self-host hexa_ld link (LD_RC=0) → run → **RUN_RC=42**. $? captured separately, no
+      pipe-mask. The shipped-CLI `hexa build` subcommand form does NOT apply: gen3 is the
+      bare compiler (raw `SOURCE.hexa --emit=asm`), so the smoke uses the exact invocation
+      the parity gate uses.
+- [x] REVERT command (host-local, reversible):
+      `sidecar pool on ghost 'cd ~/dancinlab/wt-promote && bash tool/promote_selfhost.sh --revert --hx-home ~/.hx'`
+      (restores the most-recent `hexa.real.pre-selfhost.*` backup over the symlink).
+Verdict: `.verdicts/selfhost-next-promote/PROMOTE-FLIP-DONE.txt`.
