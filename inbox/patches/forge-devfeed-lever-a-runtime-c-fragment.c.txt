@@ -175,3 +175,47 @@ HexaVal forge_dispatch_adamw(HexaVal w, HexaVal g, HexaVal m, HexaVal v,
                              HexaVal eps, HexaVal wd, HexaVal t) {
     return hexa_forge_dispatch_adamw(w, g, m, v, n, lr, b1, b2, eps, wd, t);
 }
+
+/* HEXA-FUSION L1 — device-resident moment lifetime. Same ABI/args as
+ * forge_dispatch_adamw, but routes to _hx_cuda_farr_adamw_step_inplace_
+ * keepmv_gpu which keeps m,v DEVICE-RESIDENT across the step (no D2H of
+ * m/v; W still D2H'd for the host fwd re-quant). m/v escape only into
+ * _adam → never read on host → the next step's H2D-skip reuses the device
+ * accumulator (byte-eq to the always-D2H inplace path). no-CUDA → -1 so
+ * the .hexa caller falls back to the proven host adamw_step (byte-eq). */
+HexaVal hexa_forge_dispatch_adamw_keepmv(HexaVal w_v, HexaVal g_v, HexaVal m_v,
+                                  HexaVal v_v, HexaVal n_v, HexaVal lr_v,
+                                  HexaVal b1_v, HexaVal b2_v, HexaVal eps_v,
+                                  HexaVal wd_v, HexaVal t_v) {
+    int64_t w_id = hexa_as_num(w_v);
+    int64_t g_id = hexa_as_num(g_v);
+    int64_t m_id = hexa_as_num(m_v);
+    int64_t v_id = hexa_as_num(v_v);
+    int64_t n    = hexa_as_num(n_v);
+    double  lr   = __hx_to_double(lr_v);
+    double  b1   = __hx_to_double(b1_v);
+    double  b2   = __hx_to_double(b2_v);
+    double  eps  = __hx_to_double(eps_v);
+    double  wd   = __hx_to_double(wd_v);
+    int64_t step = hexa_as_num(t_v);
+    if (n <= 0 || step < 1) return hexa_int(-1);
+    if (w_id < 0 || g_id < 0 || m_id < 0 || v_id < 0) return hexa_int(-1);
+#ifdef HEXA_CUDA
+    extern int _hx_cuda_farr_adamw_step_inplace_keepmv_gpu(int64_t, int64_t,
+                                                    int64_t, int64_t, int64_t,
+                                                    double, double, double,
+                                                    double, double, int64_t);
+    int grc = _hx_cuda_farr_adamw_step_inplace_keepmv_gpu(w_id, m_id, v_id,
+                                                   g_id, n, lr, b1, b2, eps,
+                                                   wd, step);
+    if (grc == 0) return hexa_int(0);
+    /* GPU adam failed — return -1 so the .hexa caller runs the host
+     * adamw_step (byte-eq). Never silently wrong. */
+#endif
+    return hexa_int(-1);
+}
+HexaVal forge_dispatch_adamw_keepmv(HexaVal w, HexaVal g, HexaVal m, HexaVal v,
+                             HexaVal n, HexaVal lr, HexaVal b1, HexaVal b2,
+                             HexaVal eps, HexaVal wd, HexaVal t) {
+    return hexa_forge_dispatch_adamw_keepmv(w, g, m, v, n, lr, b1, b2, eps, wd, t);
+}

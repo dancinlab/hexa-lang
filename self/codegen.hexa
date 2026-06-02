@@ -7610,6 +7610,21 @@ fn gen2_expr(node) {
                         + arg_strs[8] + ", " + arg_strs[9] + ", "
                         + arg_strs[10] + ")"
                 }
+                // HEXA-FUSION L1: device-resident moment lifetime. Same args as
+                // forge_dispatch_adamw, but routes to the keepmv wrapper that
+                // keeps m,v device-resident across the step (no m/v D2H; W still
+                // D2H'd for the host re-quant). byte-eq: m/v never read on host
+                // → next step H2D-skip reuses the device accumulator. no-CUDA →
+                // -1 so the .hexa caller falls back to host adamw_step (byte-eq).
+                if name == "forge_dispatch_adamw_keepmv" {
+                    return "hexa_forge_dispatch_adamw_keepmv("
+                        + arg_strs[0] + ", " + arg_strs[1] + ", "
+                        + arg_strs[2] + ", " + arg_strs[3] + ", "
+                        + arg_strs[4] + ", " + arg_strs[5] + ", "
+                        + arg_strs[6] + ", " + arg_strs[7] + ", "
+                        + arg_strs[8] + ", " + arg_strs[9] + ", "
+                        + arg_strs[10] + ")"
+                }
             }
             if len(node.args) == 12 {
                 // anima RFC 035 (2026-05-16): loss-scaled mixed-precision
