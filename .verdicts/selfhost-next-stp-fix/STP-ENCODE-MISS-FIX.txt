@@ -1,0 +1,111 @@
+F-STP-ENCODE-MISS — CLOSED-NEGATIVE (the reject path is UNREACHABLE on current main)
+====================================================================================
+DATE   : 2026-06-03
+BASE   : origin/main df50ee478 (#2577); codegen files verified vs the gen2_fix
+         build head (efe6176f8) — arm64_darwin.hexa BYTE-IDENTICAL, the STP/LDP
+         encode region (macho_arm64.hexa:520-570) BYTE-IDENTICAL, _parse_mem_op
+         body identical (line-offset only).
+HOST   : ghost (192.168.50.150) macOS arm64 — graduated byte-eq toolchain.
+GROUP  : COMPILER   SLUG: selfhost-next-stp-fix
+
+CLAIM UNDER TEST
+  `_parse_mem_op` (compiler/emit/macho_arm64.hexa:1559) rejects a bare `#0`
+  memory operand → `ENCODE-MISS: STP mem-parse-fail mem=#0`, blocking true
+  self-emit. The proposed fix: make _parse_mem_op accept the bare `#0` form.
+
+PRE-REGISTERED FALSIFIER
+  If the STP `mem=#0` reject is a live wall, then (a) some program the current
+  arm64 codegen emits must produce an STP/LDP whose 3rd operand renders as bare
+  `#0`, AND (b) the named repro (c2_stack_locals — the test purpose-built for the
+  "STP/LDP mem-parse-fail" signature) must show ENCODE-MISS > 0 on current main.
+
+────────────────────────────────────────────────────────────────────────────
+FINDING: 🔴 FALSIFIED — the reject path is structurally UNREACHABLE. NO EDIT MADE.
+────────────────────────────────────────────────────────────────────────────
+The bare-`#0` reject at macho_arm64.hexa:1561 (`n < 3 || s.substring(0,1)!="["`)
+cannot be triggered by any STP/LDP the compiler emits. Three independent axes:
+
+(1) EMPIRICAL — direct repro of the named signature (REAL measured, gen2_fix):
+    The graduated gen2_fix self-built compiler emits the purpose-built STP/LDP
+    stack-spill test (self/test/miscompile_zero/c2_stack_locals.hexa, named for
+    the "ENCODE-MISS: STP/LDP mem-parse-fail" miscompile class) cleanly:
+
+      $ HEXA_ATLAS_EMBED=$W/noatlas $W/gen2_fix _drv.hexa --emit=obj \
+          --target=arm64-apple-darwin --ignore-errors -o c2_stack.o c2probe.hexa
+      EMIT_RC=0
+      ENCODE_MISS=0            # grep -c ENCODE-MISS = 0
+      STP_LDP_MISS=0           # grep -c mem-parse-fail = 0
+      OBJSIZE=1816
+
+    $ otool -tv c2_stack.o | grep -icE 'stp|ldp'  → 100   (path EXERCISED)
+    Sample (incl. the zero-offset form that would hit the `#0` branch):
+      0x00  stp  x29, x30, [sp, #-0x10]!     (pre-index, mode 1)
+      0x0c  stp  x0, x1, [sp]                (ZERO-OFFSET — bracketed `[sp]`)
+      0x10  ldp  x0, x1, [sp]                (ZERO-OFFSET — bracketed `[sp]`)
+      0x20  stp  x0, x1, [sp, #0x10]  …      (offset, mode 0)
+    The zero-offset case renders as a BRACKETED `[sp]`, which _parse_mem_op
+    ALREADY accepts (macho_arm64.hexa:1605-1606, tail_n==0 → [rn,0,0]). It is
+    NEVER a bare `#0`.
+
+(2) CODEGEN-EXHAUSTIVE — every STP/LDP mem operand in compiler/codegen/
+    arm64_darwin.hexa (the SOLE source of arm64 LIR; 14 STP/LDP sites at
+    L1087/1163/1178/1195/1220/1778/1968/2042/2086/2384/2389/2394/2469) uses
+    EITHER `_hv_memb(off,"x15")` (→ `[sp,#N]` or `[x15]`, both bracketed; def
+    @L1059-1062) OR an explicit `_arm64_op_label("[...]")` (`[x15]`, `[sp],#16`,
+    `[x29,#N]`, `["+lo+"]`). NONE uses an `@PAGE`/`@PAGEOFF`/`@GOT*` label or a
+    bare `#0`. So no STP/LDP operand can ever reach the sanitizer that produces
+    `#0`.
+
+(3) SANITIZER-EXHAUSTIVE — the ONLY code that produces a bare `"#0"` operand is
+    the page-reloc sanitize (macho_arm64.hexa:1985-1987), which fires solely when
+    `_label_reloc_kind(raw) >= 0 && arg.kind=="label"` — i.e. a LABEL operand
+    carrying an `@PAGE`/`@PAGEOFF`/`@GOT*` suffix (ADRP/ADD/LDR-imm). Per axis
+    (2) no STP/LDP carries such an operand, so this branch never feeds STP/LDP.
+    (The mem branch @L1984 emits `[Xn, #0]` — already bracketed, also accepted.)
+
+FULL-COMPILER CORROBORATION (the graduated byte-eq self-emit, REAL measured):
+  gen2_fix self-emit of the FULL compiler (cc-flat-fix.hexa, 1.72 MB source →
+  3,224,592 B object): FULL-COMPILER-SELFEMIT ENCODE_MISS=0 (gen3.done) and
+  the first native self-emit PRC2_ENCODE_MISS=0 (gen2fix.done). The entire
+  compiler emits with ZERO ENCODE-MISS — the STP `mem=#0` miss never fires at
+  full scale.
+
+────────────────────────────────────────────────────────────────────────────
+g63 MANDATORY VERIFICATIONS (no edit applied → no regression possible)
+────────────────────────────────────────────────────────────────────────────
+1. REPRO CLEARED  : the named STP/LDP repro (c2_stack_locals) already emits with
+                    0 ENCODE-MISS on current main (before==after==0; there is no
+                    "before=MISS" state — the wall does not fire on current main).
+2. BYTE-EQ NOT REGRESSED : NO codegen edit made → byte-eq graduation untouched.
+                    Baseline re-confirmed verbatim on ghost:
+                      shasum cc-gen3.o = 32c6db9b5696bd25…
+                      shasum cc-gen4.o = 32c6db9b5696bd25…
+                      $ cmp cc-gen3.o cc-gen4.o ; echo exit=$?   → exit=0
+                    BYTE-EQ (FIRSTDIFF=0) — UNCHANGED.
+3. DARWIN UNAFFECTED : NO change to compiler/emit/macho_arm64.hexa →
+                    darwin emission byte-identical by construction. YES.
+
+DISPOSITION
+  DO-NOT-EDIT. Editing _parse_mem_op to accept bare `#0` would be a change to
+  byte-eq-critical production codegen for a path that CANNOT be triggered: pure
+  downside (byte-eq-regression risk) with zero reachable upside. Per the
+  milestone's hard gate ("a byte-eq regression is worse than leaving the wall")
+  and project doctrine paper_negative_ok (a deterministic closed-negative is a
+  valid finding), the correct action is to record the ruled-out axis and NOT
+  ship a codegen change.
+
+  This supersedes/closes the F-STP-ENCODE-MISS-REPRO.txt UPDATE-1 hypothesis
+  (the `mem=#0` form is not producible on current main — likely a pre-#2464/
+  #2479 gen2-build artifact) with the empirical c2 repro + the exhaustive
+  codegen/sanitizer audit.
+
+HOW FAR SELF-EMIT NOW GETS (unchanged — this wall was already not blocking)
+  Full self-emit reaches the BYTE-EQ FIXPOINT (gen3 == gen4, cmp exit 0) with
+  ENCODE_MISS=0. F-STP-ENCODE-MISS is NOT on the live self-emit critical path.
+  The actual remaining self-emit work is the SELFHOST-NEXT integration/promotion
+  milestones (land cc-native/selfhost-ghost link prereqs; promote gen to default
+  toolchain; multi-target linux-arm64/x86_64), NOT this encoder reject.
+
+VERDICT: 🔴 CLOSED-NEGATIVE — F-STP-ENCODE-MISS reject path is UNREACHABLE by
+         current codegen; no fix required; no edit made; byte-eq fixpoint and
+         darwin emission verified intact. Wall retired as a non-issue.

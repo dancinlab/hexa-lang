@@ -377,3 +377,27 @@ Scope boundary FORBIDS editing compiler/emit/* / macho_arm64.hexa here; cc_nativ
 C-built is exactly why this lane does NOT depend on that fix.
 
 Verdict: .verdicts/selfhost-next-linux-arm64/CCNATIVE-CROSS.txt (🟢).
+
+## 2026-06-03 — F-STP-ENCODE-MISS: CLOSED-NEGATIVE (reject path unreachable — NO codegen edit)
+Investigated the deepest named self-emit wall, `ENCODE-MISS: STP mem-parse-fail mem=#0`
+(macho_arm64.hexa STP/LDP encode @541-566 → _parse_mem_op @1559 rejects a bare `#0`).
+Pre-registered falsifier: if live, some emitted program must produce an STP/LDP with a
+bare-`#0` 3rd operand AND the named repro must show ENCODE-MISS>0 on current main.
+FALSIFIED on three axes:
+  (1) EMPIRICAL — gen2_fix emits the purpose-built STP/LDP stack-spill repro
+      (self/test/miscompile_zero/c2_stack_locals.hexa) clean: EMIT_RC=0, ENCODE_MISS=0,
+      100 STP/LDP in the object incl. zero-offset `[sp]` (bracketed, already accepted —
+      NEVER a bare `#0`).
+  (2) CODEGEN-EXHAUSTIVE — all 14 STP/LDP sites in compiler/codegen/arm64_darwin.hexa use
+      _hv_memb (→ `[sp,#N]`/`[x15]`) or explicit `[...]` labels; NONE uses an @PAGE/@GOT
+      label or bare `#0`.
+  (3) SANITIZER-EXHAUSTIVE — the only producer of bare `"#0"` (page-reloc sanitize
+      @1985-1987) fires solely on @PAGE/@PAGEOFF/@GOT* LABEL operands, which never land on
+      an STP/LDP.
+Full-compiler self-emit corroborates: FULL-COMPILER ENCODE_MISS=0 (gen3.done),
+PRC2_ENCODE_MISS=0 (gen2fix.done). Byte-eq fixpoint intact (cc-gen3.o==cc-gen4.o, cmp
+exit 0, sha 32c6db9b…). Per hard gate + paper_negative_ok: DO-NOT-EDIT — editing
+byte-eq-critical codegen for an unreachable path is pure downside. Wall retired as a
+non-issue; it was NOT on the live self-emit critical path. Real remaining self-emit work =
+the SELFHOST-NEXT integration/promotion milestones, not this encoder reject.
+Verdict: .verdicts/selfhost-next-stp-fix/STP-ENCODE-MISS-FIX.txt (🔴 CLOSED-NEGATIVE).
