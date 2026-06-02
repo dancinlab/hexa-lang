@@ -770,6 +770,169 @@ fn emit_runtime_cuda_c() -> str {
             "}\n" +
             "\n" +
             "/* ════════════════════════════════════════════════════════════════════\n" +
+            " * LEVER (a) — device-resident im2col / col2im (forge device-feed).\n" +
+            " *\n" +
+            " * The dominant Lane-G util peg is the HOST backward feed: the trainer\n" +
+            " * rebuilds x_col on the host each step (host-dirty → re-H2D every GEMM)\n" +
+            " * and scatters col2im on the host. These kernels run the gather/scatter\n" +
+            " * ON-DEVICE and, when the disposition register is FORGE_OUT_DEVICE_KEEP,\n" +
+            " * KEEP the output FARR_DEVICE (via _d2h_out's RFC-056 defer) so the\n" +
+            " * follow-up forge GEMM reads it in place — NO D2H/H2D roundtrip.\n" +
+            " *\n" +
+            " * im2col gather   : x_col[t, ci*K+k] = (p>=0)?x[p,ci]:0, p=t-dil*(K-1-k)\n" +
+            " *   one thread per (t, ci, k) output cell — PURE GATHER, no atomics.\n" +
+            " * im2col_t (dW)   : xcolT[ci*K+k, t] (transpose layout, j*T+t).\n" +
+            " * col2im scatter  : dX[p,ci] = Σ_k dXcol[(p+dil*(K-1-k))*Kdim + ci*K+k],\n" +
+            " *   t<T. TRANSPOSE-GATHER form (one thread per dX[p,ci] output cell,\n" +
+            " *   summing the K taps) — NO atomics → deterministic, byte-eq to the\n" +
+            " *   host scatter order (the clm_conv_devfeed.hexa oracle).\n" +
+            " * ──────────────────────────────────────────────────────────────────── */\n" +
+            "__global__ void _hx_k_im2col(const double* __restrict__ X,\n" +
+            "                             double* __restrict__ XC,\n" +
+            "                             int64_t T, int64_t Cin, int64_t K,\n" +
+            "                             int64_t dil) {\n" +
+            "    int64_t Kdim = Cin * K;\n" +
+            "    int64_t total = T * Kdim;\n" +
+            "    int64_t stride = (int64_t)blockDim.x * (int64_t)gridDim.x;\n" +
+            "    for (int64_t idx = (int64_t)blockIdx.x * blockDim.x + threadIdx.x;\n" +
+            "         idx < total; idx += stride) {\n" +
+            "        int64_t t  = idx / Kdim;\n" +
+            "        int64_t j  = idx - t * Kdim;      /* j = ci*K + k */\n" +
+            "        int64_t ci = j / K;\n" +
+            "        int64_t k  = j - ci * K;\n" +
+            "        int64_t p  = t - dil * (K - 1 - k);\n" +
+            "        XC[idx] = (p >= 0) ? X[p * Cin + ci] : 0.0;\n" +
+            "    }\n" +
+            "}\n" +
+            "\n" +
+            "__global__ void _hx_k_im2col_t(const double* __restrict__ X,\n" +
+            "                               double* __restrict__ XCT,\n" +
+            "                               int64_t T, int64_t Cin, int64_t K,\n" +
+            "                               int64_t dil) {\n" +
+            "    int64_t Kdim = Cin * K;\n" +
+            "    int64_t total = Kdim * T;\n" +
+            "    int64_t stride = (int64_t)blockDim.x * (int64_t)gridDim.x;\n" +
+            "    for (int64_t idx = (int64_t)blockIdx.x * blockDim.x + threadIdx.x;\n" +
+            "         idx < total; idx += stride) {\n" +
+            "        int64_t j  = idx / T;             /* j = ci*K + k */\n" +
+            "        int64_t t  = idx - j * T;\n" +
+            "        int64_t ci = j / K;\n" +
+            "        int64_t k  = j - ci * K;\n" +
+            "        int64_t p  = t - dil * (K - 1 - k);\n" +
+            "        XCT[idx] = (p >= 0) ? X[p * Cin + ci] : 0.0;\n" +
+            "    }\n" +
+            "}\n" +
+            "\n" +
+            "__global__ void _hx_k_col2im(const double* __restrict__ DXC,\n" +
+            "                             double* __restrict__ DX,\n" +
+            "                             int64_t T, int64_t Cin, int64_t K,\n" +
+            "                             int64_t dil) {\n" +
+            "    int64_t Kdim = Cin * K;\n" +
+            "    int64_t total = T * Cin;\n" +
+            "    int64_t stride = (int64_t)blockDim.x * (int64_t)gridDim.x;\n" +
+            "    for (int64_t idx = (int64_t)blockIdx.x * blockDim.x + threadIdx.x;\n" +
+            "         idx < total; idx += stride) {\n" +
+            "        int64_t p  = idx / Cin;\n" +
+            "        int64_t ci = idx - p * Cin;\n" +
+            "        double acc = 0.0;\n" +
+            "        for (int64_t k = 0; k < K; k++) {\n" +
+            "            int64_t t = p + dil * (K - 1 - k);\n" +
+            "            if (t < T) acc += DXC[t * Kdim + (ci * K + k)];\n" +
+            "        }\n" +
+            "        DX[idx] = acc;\n" +
+            "    }\n" +
+            "}\n" +
+            "\n" +
+            "/* Launch helper: one 1-D grid over `total` output cells. */\n" +
+            "static void _hx_im2col_grid(int64_t total, int* grid_sz, int* block_sz) {\n" +
+            "    *block_sz = 256;\n" +
+            "    int64_t want = (total + 255) / 256;\n" +
+            "    *grid_sz = (want > 1024) ? 1024 : (int)want;\n" +
+            "    if (*grid_sz < 1) *grid_sz = 1;\n" +
+            "}\n" +
+            "\n" +
+            "/* im2col gather → device-resident XC. Reads X (H2D idempotent), writes\n" +
+            " * the output device buffer; _d2h_out honours FORGE_OUT_DEVICE_KEEP so XC\n" +
+            " * stays FARR_DEVICE for the next GEMM (no roundtrip). 0 ok / -1 err. */\n" +
+            "int _hx_cuda_farr_im2col_gpu(int64_t x_id, int64_t xc_id,\n" +
+            "                             int64_t T, int64_t Cin, int64_t K,\n" +
+            "                             int64_t dil) {\n" +
+            "#ifdef __CUDACC__\n" +
+            "    if (T <= 0 || Cin <= 0 || K <= 0 || dil <= 0) {\n" +
+            "        fprintf(stderr, \"[cuda] im2col: bad shape T=%lld Cin=%lld K=%lld dil=%lld\\n\",\n" +
+            "                (long long)T, (long long)Cin, (long long)K, (long long)dil);\n" +
+            "        return -1;\n" +
+            "    }\n" +
+            "    int64_t Kdim = Cin * K;\n" +
+            "    if (_h2d(x_id) != 0) return -1;\n" +
+            "    if (_ensure_dev_alloc_out(xc_id, T * Kdim) != 0) return -1;\n" +
+            "    const double* X  = g_slots[x_id].d_buf;\n" +
+            "    double*       XC = g_slots[xc_id].d_buf;\n" +
+            "    int grid_sz, block_sz; _hx_im2col_grid(T * Kdim, &grid_sz, &block_sz);\n" +
+            "    _hx_k_im2col<<<grid_sz, block_sz>>>(X, XC, T, Cin, K, dil);\n" +
+            "    cudaError_t er = cudaDeviceSynchronize();\n" +
+            "    if (er != cudaSuccess) {\n" +
+            "        fprintf(stderr, \"[cuda] im2col launch failed: %s\\n\", cudaGetErrorString(er));\n" +
+            "        return -1;\n" +
+            "    }\n" +
+            "    return _d2h_out(xc_id, T * Kdim);\n" +
+            "#else\n" +
+            "    (void)x_id; (void)xc_id; (void)T; (void)Cin; (void)K; (void)dil;\n" +
+            "    fprintf(stderr, \"[cuda] im2col: built without __CUDACC__\\n\");\n" +
+            "    return -1;\n" +
+            "#endif\n" +
+            "}\n" +
+            "\n" +
+            "int _hx_cuda_farr_im2col_t_gpu(int64_t x_id, int64_t xct_id,\n" +
+            "                               int64_t T, int64_t Cin, int64_t K,\n" +
+            "                               int64_t dil) {\n" +
+            "#ifdef __CUDACC__\n" +
+            "    if (T <= 0 || Cin <= 0 || K <= 0 || dil <= 0) return -1;\n" +
+            "    int64_t Kdim = Cin * K;\n" +
+            "    if (_h2d(x_id) != 0) return -1;\n" +
+            "    if (_ensure_dev_alloc_out(xct_id, Kdim * T) != 0) return -1;\n" +
+            "    const double* X   = g_slots[x_id].d_buf;\n" +
+            "    double*       XCT = g_slots[xct_id].d_buf;\n" +
+            "    int grid_sz, block_sz; _hx_im2col_grid(Kdim * T, &grid_sz, &block_sz);\n" +
+            "    _hx_k_im2col_t<<<grid_sz, block_sz>>>(X, XCT, T, Cin, K, dil);\n" +
+            "    cudaError_t er = cudaDeviceSynchronize();\n" +
+            "    if (er != cudaSuccess) {\n" +
+            "        fprintf(stderr, \"[cuda] im2col_t launch failed: %s\\n\", cudaGetErrorString(er));\n" +
+            "        return -1;\n" +
+            "    }\n" +
+            "    return _d2h_out(xct_id, Kdim * T);\n" +
+            "#else\n" +
+            "    (void)x_id; (void)xct_id; (void)T; (void)Cin; (void)K; (void)dil;\n" +
+            "    fprintf(stderr, \"[cuda] im2col_t: built without __CUDACC__\\n\");\n" +
+            "    return -1;\n" +
+            "#endif\n" +
+            "}\n" +
+            "\n" +
+            "int _hx_cuda_farr_col2im_gpu(int64_t dxc_id, int64_t dx_id,\n" +
+            "                             int64_t T, int64_t Cin, int64_t K,\n" +
+            "                             int64_t dil) {\n" +
+            "#ifdef __CUDACC__\n" +
+            "    if (T <= 0 || Cin <= 0 || K <= 0 || dil <= 0) return -1;\n" +
+            "    if (_h2d(dxc_id) != 0) return -1;\n" +
+            "    if (_ensure_dev_alloc_out(dx_id, T * Cin) != 0) return -1;\n" +
+            "    const double* DXC = g_slots[dxc_id].d_buf;\n" +
+            "    double*       DX  = g_slots[dx_id].d_buf;\n" +
+            "    int grid_sz, block_sz; _hx_im2col_grid(T * Cin, &grid_sz, &block_sz);\n" +
+            "    _hx_k_col2im<<<grid_sz, block_sz>>>(DXC, DX, T, Cin, K, dil);\n" +
+            "    cudaError_t er = cudaDeviceSynchronize();\n" +
+            "    if (er != cudaSuccess) {\n" +
+            "        fprintf(stderr, \"[cuda] col2im launch failed: %s\\n\", cudaGetErrorString(er));\n" +
+            "        return -1;\n" +
+            "    }\n" +
+            "    return _d2h_out(dx_id, T * Cin);\n" +
+            "#else\n" +
+            "    (void)dxc_id; (void)dx_id; (void)T; (void)Cin; (void)K; (void)dil;\n" +
+            "    fprintf(stderr, \"[cuda] col2im: built without __CUDACC__\\n\");\n" +
+            "    return -1;\n" +
+            "#endif\n" +
+            "}\n" +
+            "\n" +
+            "/* ════════════════════════════════════════════════════════════════════\n" +
             " * RFC 041 Phase 4-D-5-2 — Phase B reduction + Phase B2 real CUDA kernels\n" +
             " * ────────────────────────────────────────────────────────────────────\n" +
             " * 6 ops landed this cycle (reduction + matmul-variants split; the\n" +
