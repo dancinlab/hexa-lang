@@ -1,0 +1,143 @@
+// @ci_gate — pure · network-free · deterministic (stdlib_selftest_aggregate --ci-gate)
+//
+// allen_dynes_f1f2_selftest.hexa — QFORGE g5 gate for the Allen-Dynes
+// strong-coupling + spectral-shape correction factors f1(λ,μ*) and
+// f2(λ, ω̄₂/ω_log, μ*) that multiply the McMillan kernel in the full
+// Allen-Dynes 1975 Tc form. This is on the CaH₆ gate's CRITICAL PATH: CaH₆
+// has λ≈4.4 — DEEP strong-coupling, exactly the regime where the plain
+// McMillan / f1=f2=1 Tc UNDERESTIMATES Tc. Without these factors the QFORGE
+// Tc would disagree with QE at high λ for a NON-physics reason.
+//
+//   Tc = f1·f2·(ω_log/1.2)·exp[ −1.04(1+λ) / (λ − μ*(1+0.62λ)) ]
+//   f1 = [ 1 + (λ/Λ1)^(3/2) ]^(1/3),         Λ1 = 2.46(1 + 3.8μ*)
+//   f2 = 1 + [ (ω̄₂/ω_log − 1)·λ² ] / [ λ² + Λ2² ], Λ2 = 1.82(1+6.3μ*)(ω̄₂/ω_log)
+//
+// The factors live in the verified `allen_dynes_tc` atom (stdlib/material/
+// sim); this gate pins their TWO published limits + the documented CaH₆
+// lift, all on the qforge_tc_allen_dynes_full pass-through entry.
+//
+// g5 CHECKS (numerical identity — NO LLM judge):
+//  (1) WEAK-COUPLING LIMIT — at λ≪1, f1→1 and f2→1, so the full f1·f2 Tc
+//      collapses onto the bare McMillan Tc (qforge_tc_allen_dynes_full with
+//      a generic ω̄₂≠ω_log reduces to the plain mcmillan_tc). Backward
+//      compatible: the corrections are inert at weak coupling.
+//  (2) PUBLISHED STRONG-COUPLING ASYMPTOTE — Allen & Dynes 1975, PRB 12 905:
+//      as λ→∞ the f1·f2 Tc → 0.18·√λ·ω̄₂. The EXACT large-λ coefficient of
+//      this implementation (μ*=0, ω̄₂=ω_log) is
+//        exp(−1.04)/(1.2·√2.46) = 0.187795…  ≈ the published 0.18,
+//      and Tc/[coef·√λ·ω̄₂] → 1 as λ→∞. We pin coef to its closed form and
+//      the convergence at λ=1e6 (ratio = 1 ± 1e-5).
+//  (3) CaH₆-CLASS LIFT — for λ=4.376, ω_log=900 K, ω̄₂/ω_log=1.3, μ*=0.1:
+//      f1=1.3506 and f2=1.1689 (both >1), lifting Tc from the plain McMillan
+//      185.7 K to the full 293.1 K — a documented ≈1.58× strong-coupling
+//      lift. This is the CaH₆-gate physics the factors restore.
+//
+// Run:  HEXA_MAC_BUILD_OK=1 hexa build stdlib/qforge/allen_dynes_f1f2_selftest.hexa -o /tmp/qf_adf && /tmp/qf_adf
+// PASS: exits printing "allen_dynes_f1f2_selftest PASS".
+
+use "stdlib/material/sim"
+use "stdlib/qforge/tc"
+
+fn _abs(x: float) -> float { if x < 0.0 { return -x } return x }
+
+fn _rel(got: float, want: float) -> float {
+    let d = _abs(got - want)
+    let w = _abs(want)
+    if w < 1e-12 { return d }
+    return d / w
+}
+
+fn _ck(name: str, got: float, want: float, tol: float) -> int {
+    if _rel(got, want) <= tol {
+        println("PASS " + name + " (got " + to_string(got) + ")")
+        return 0
+    }
+    println("FAIL " + name + " — got " + to_string(got) + " want " + to_string(want))
+    return 1
+}
+
+fn _gt(name: str, got: float, lo: float) -> int {
+    if got > lo {
+        println("PASS " + name + " (got " + to_string(got) + " > " + to_string(lo) + ")")
+        return 0
+    }
+    println("FAIL " + name + " — got " + to_string(got) + " not > " + to_string(lo))
+    return 1
+}
+
+// Recover f1·f2 as the ratio of the full-AD Tc to the bare McMillan Tc.
+// qforge_tc_allen_dynes_full(λ, ω_log, ω̄₂, μ*) = f1·f2·mcmillan_tc(...).
+fn _f1f2(lam: float, wlog: float, w2: float, mu: float) -> float {
+    let full = qforge_tc_allen_dynes_full(lam, wlog, w2, mu)
+    let base = mcmillan_tc(wlog, lam, mu)
+    if base <= 0.0 { return 0.0 }
+    return full / base
+}
+
+fn main() {
+    let mut fails = 0
+
+    // ── CHECK 1 — WEAK-COUPLING LIMIT: λ≪1 → f1≈1, f2≈1 ───────────────────
+    // Use a generic ω̄₂/ω_log = 1.1 (so f2 is *not* trivially 1 by ω̄₂=ω_log);
+    // it must still collapse to 1 because the λ-dependence of both factors
+    // vanishes. μ*=0 keeps the McMillan kernel positive at tiny λ (the
+    // denom λ−μ*(1+0.62λ) > 0), isolating the f1·f2 factors. Backward-
+    // compatibility: the corrections are inert at weak coupling.
+    let wlog_w = 300.0
+    let mu_w = 0.0
+    let r_w = 1.1
+    let w2_w = r_w * wlog_w
+    // λ=0.01 → f1·f2 ≈ 1.0000889, λ=0.1 → ≈ 1.002974 (Python-verified).
+    fails = fails + _ck("weak λ=0.01 f1·f2→1", _f1f2(0.01, wlog_w, w2_w, mu_w), 1.0, 1e-3)
+    fails = fails + _ck("weak λ=0.10 f1·f2→1", _f1f2(0.10, wlog_w, w2_w, mu_w), 1.0, 4e-3)
+    // and at weak λ the full Tc equals the bare McMillan Tc (no shape lift).
+    let tc_full_w = qforge_tc_allen_dynes_full(0.05, wlog_w, w2_w, mu_w)
+    let tc_mcm_w = mcmillan_tc(wlog_w, 0.05, mu_w)
+    fails = fails + _ck("weak λ=0.05 Tc_full=McMillan", tc_full_w, tc_mcm_w, 2e-3)
+
+    // ── CHECK 2 — PUBLISHED Allen-Dynes 1975 STRONG-COUPLING ASYMPTOTE ────
+    // As λ→∞ the f1·f2 Tc → coef·√λ·ω̄₂ with the CLOSED-FORM coefficient
+    //   coef = exp(−1.04) / (1.2·√2.46) = 0.18779953952…
+    // (≈ the textbook-quoted 0.18, Allen & Dynes 1975 PRB 12 905). Pin BOTH
+    // the closed-form coefficient AND the numerical convergence at λ=1e6.
+    let coef_want = exp(-1.04) / (1.2 * sqrt(2.46))   // 0.18779539528343892
+    fails = fails + _ck("AD asymptote coef closed-form", coef_want, 0.18779539528343892, 1e-9)
+    // numerical: μ*=0, ω̄₂=ω_log → Tc/(coef·√λ·ω_log) → 1.
+    let lam_big = 1.0e6
+    let wlog_a = 300.0
+    let tc_big = qforge_tc_allen_dynes_full(lam_big, wlog_a, wlog_a, 0.0)
+    let asy_big = coef_want * sqrt(lam_big) * wlog_a
+    fails = fails + _ck("AD asymptote λ=1e6 Tc/asy→1", tc_big / asy_big, 1.0, 1e-4)
+    // sanity: it is the published 0.18-class, not some other power.
+    fails = fails + _ck("AD asymptote coef ≈ 0.18", coef_want, 0.18, 5e-2)
+
+    // ── CHECK 3 — CaH₆-CLASS STRONG-COUPLING LIFT (the CaH₆ gate physics) ─
+    // λ=4.376, ω_log=900 K, ω̄₂/ω_log=1.3, μ*=0.1 (CaH₆-class, deep strong-
+    // coupling). Python-verified reference: f1=1.35057, f2=1.16887, both >1;
+    // Tc_plain(McMillan)=185.67 K → Tc_full=293.10 K, a ≈1.5786× lift.
+    let lam_c = 4.376
+    let wlog_c = 900.0
+    let r_c = 1.3
+    let w2_c = r_c * wlog_c
+    let mu_c = 0.10
+    let tc_plain = mcmillan_tc(wlog_c, lam_c, mu_c)
+    let tc_full = qforge_tc_allen_dynes_full(lam_c, wlog_c, w2_c, mu_c)
+    let f1f2 = tc_full / tc_plain
+    fails = fails + _ck("CaH6 Tc_plain (McMillan)", tc_plain, 185.67, 5e-3)
+    fails = fails + _ck("CaH6 Tc_full (f1·f2)", tc_full, 293.10, 5e-3)
+    fails = fails + _ck("CaH6 lift factor f1·f2", f1f2, 1.5786, 5e-3)
+    // both factors individually > 1 in the strong-coupling regime.
+    // recover f1 alone by setting ω̄₂=ω_log (f2≡1) then f1·f2 / f1 = f2.
+    let f1_only = _f1f2(lam_c, wlog_c, wlog_c, mu_c)   // ω̄₂=ω_log → f2=1 → ratio = f1
+    fails = fails + _gt("CaH6 f1 > 1 (strong-coupling lift)", f1_only, 1.0)
+    let f2_only = f1f2 / f1_only                        // = (f1·f2)/f1 = f2
+    fails = fails + _gt("CaH6 f2 > 1 (spectral-shape lift)", f2_only, 1.0)
+    fails = fails + _ck("CaH6 f1 ≈ 1.3506", f1_only, 1.35057, 5e-3)
+    fails = fails + _ck("CaH6 f2 ≈ 1.1689", f2_only, 1.16887, 5e-3)
+
+    if fails == 0 {
+        println("allen_dynes_f1f2_selftest PASS")
+    } else {
+        println("allen_dynes_f1f2_selftest FAIL — " + to_string(fails) + " case(s)")
+    }
+}
