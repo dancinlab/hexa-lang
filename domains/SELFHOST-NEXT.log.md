@@ -2,6 +2,42 @@
 
 Append-only history sister of `SELFHOST-NEXT.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
+## 2026-06-02 — multi-target: linux-arm64 cross-emit + assemble + RUN (exit(42), rc 42)
+
+Branch `selfhost-next/linux-arm64-rebased` (cut clean from origin/main; +97 lines, g4-ok).
+First working linux-arm64 emit: the arm64 instruction codegen is target-shared with
+arm64-apple-darwin — the only deltas are ELF-vs-Mach-O format, bare-vs-`_` symbol prefix,
+and the asm-syntax selectors. Wired the (already host-detected but previously unrouted)
+`arm64-linux-gnu` triple end to end.
+
+- [x] inventory: `detect_default_target` already returns `arm64-linux-gnu` for Linux
+      aarch64 hosts but the codegen dispatch (main.hexa) had NO branch for it → hit the
+      unsupported-target error. ELF emitter `compiler/emit/elf_x86_64.hexa` exists
+      (defines ELF_EM_AARCH64=0xb7) but is x86-bound; emit/asm.hexa already had a generic
+      ELF text path for non-darwin. Runtime is C (`#ifdef __linux__` gated) — portable.
+- [x] main.hexa: route `arm64-linux-gnu` → codegen_arm64_darwin with opts.target_triple
+      set; ELF aarch64 link recipe (crt1.o + ld-linux-aarch64.so.1); help/error lists.
+- [x] arm64_darwin.hexa: thread `cg_target` so LFunc/LModule carry the ELF target string;
+      bare `g<id>` global labels on ELF. Default callers keep "arm64-apple-darwin" →
+      Mach-O output byte-identical. stream.hexa (darwin-only) passes the Mach-O target.
+- [x] emit/asm.hexa: `_is_elf_arm64`/`_is_arm64` so AArch64 `#N` imm + `[base,#off]` mem +
+      `.p2align 2` render on ELF instead of x86 Intel fallthrough; suppress `.intel_syntax`
+      for ELF arm64; **comment marker `//` not `#`** (on aarch64 GNU as `#` is the imm
+      prefix → trailing `# cmt` errors as operands). Caught by the cross-assemble step.
+- [x] VERIFY: aprime_cc built from THIS branch on ghost → emit asm (arm64-linux-gnu) →
+      cross-assemble on summer (aarch64-linux-gnu-as): `ELF 64-bit LSB relocatable, ARM
+      aarch64`, Machine AArch64, Type REL, `R_AARCH64_CALL26` relocs for hexa_exit/
+      hexa_set_args → freestanding-stub link (`ld -static -nostdlib`, svc #0 exit) → RUN
+      under qemu-aarch64-static: **rc 42**. Verdict: .verdicts/selfhost-next-linux-arm64/.
+- [ ] GAP — full linux-arm64 SELF-HOST (compile the compiler for linux-arm64) is the
+      remaining milestone: needs (a) ELF arm64 `.o` produced IN-TREE (today the asm→.o
+      step uses the host `as`; native `--backend=native` obj path is Mach-O-only — an ELF
+      arm64 serializer keyed off elf_x86_64.hexa is the next increment), and (b) the C
+      runtime cross-compiled for aarch64-linux + the full compiler-source emit/link there.
+- [ ] GAP — no native arm64-linux RUN host in the pool unrestricted (summer/aiden are
+      x86_64; pi5-akida is native arm64 but anima-only). Verified via x86_64 cross-binutils
+      + qemu-aarch64; native-host bare-metal run is the remaining run-verification axis.
+
 ## 2026-06-02 — promote-toolchain: reproducible recipe + parity gate + gated promotion
 
 Scoped + implemented the "promote self-hosted gen to default `hx`/hexa_v2, PARITY-GATED"
