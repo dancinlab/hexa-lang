@@ -257,7 +257,15 @@ pub fn qforge_scf_smeared(H_of_rho, rho_of_psi, n: int, nbands: int, nelec: int,
         let psis = scf_slice_psis(dr.evecs, nbands, n)
         let rho_out = rho_of_psi(psis, occ, nbands)
 
+        // ── energy: the MERMIN FREE ENERGY F = Σ occ·ε − σ·S when smeared ──────
+        //   The bare band sum Σ occ·ε is NOT variational once occupations are
+        //   FRACTIONAL — only F is stationary at the fixed point AND monotone-
+        //   decreasing in the basis size (the CaH6 etot-vs-NPW monotonicity).
+        //   σ≤0 (integer fill) → S=0 → F = the bare sum (bit-identical old path).
         e_total = scf_band_energy(evals, occ, nbands)
+        if sigma > 0.0 {
+            e_total = e_total - sigma * qforge_smearing_entropy(occ, sd)
+        }
 
         let dr_rho = scf_dmax(rho, rho_out, n)
         let dr_e = if first { tol + 1.0 } else { scf_abs(e_total - e_prev) }
