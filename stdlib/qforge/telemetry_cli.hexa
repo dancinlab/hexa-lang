@@ -1,0 +1,146 @@
+// stdlib/qforge/telemetry_cli.hexa — QFORGE-PROCESS telemetry CLI logic (@L1).
+//
+// The deck-local-file IO + verb dispatch behind `hexa qforge telemetry
+// <report|regress|rollup> <deck...>`. Split out of qforge_cli.hexa (which holds
+// `main()` and cannot be imported) so this logic is importable by an @ci_gate
+// selftest (qforge_cli_telemetry_selftest.hexa) — the dft_dispatch precedent
+// (deck-local IO kept testable, the wrapper just routes argv).
+//
+// Each function reads a deck's `.dft_telemetry.jsonl` (the per-stage telemetry
+// dft-run emits, #2474), renders it through the #2477/#2483/#2487 analyzer
+// library (IMPORT-ONLY, @L3 — 0-diff to telemetry_report/regress/rollup), and
+// returns a CLI exit code:
+//   0  success (a report rendered)
+//   1  missing/empty telemetry → a clean message (d6 — never a fabricated report)
+//   2  usage error (missing required arg)
+//
+// READ-ONLY w.r.t. the campaign: a local file read (test/cat), no pod, no
+// network, no mutation. d6 HONESTY — a deck with no `.dft_telemetry.jsonl`
+// reports "no telemetry in <deck>", never a phantom/zero report.
+
+use "stdlib/qforge/telemetry_report"   // #2477 ranked per-stage bottleneck
+use "stdlib/qforge/telemetry_regress"  // #2483 cross-run regression
+use "stdlib/qforge/telemetry_rollup"   // #2487 campaign rollup
+use "stdlib/core/parse"                // to_int_safe — optional pct threshold arg
+
+let QF_TELEM_NAME = ".dft_telemetry.jsonl"
+
+// qf_telem_path — the deck-local telemetry JSONL for a deck dir. PURE.
+pub fn qf_telem_path(deck: str) -> str {
+    return deck + "/" + QF_TELEM_NAME
+}
+
+// qf_telem_read — read a deck's `.dft_telemetry.jsonl`. Returns the file text,
+// or "" when the file is absent OR empty (the caller renders a clean message,
+// d6 — never a fabricated report). Single-quote-safe via test/cat (no pod, no
+// network — a local file read).
+pub fn qf_telem_read(deck: str) -> str {
+    let exists = exec("test -f '" + qf_telem_path(deck) + "' && printf yes || printf no")
+    if exists != "yes" { return "" }
+    let txt = exec("cat '" + qf_telem_path(deck) + "' 2>/dev/null")
+    return txt
+}
+
+// qf_telem_report — `hexa qforge telemetry report <deck>`. Render the ranked
+// per-stage bottleneck table; missing/empty telemetry → a clean message (no
+// crash, no fabricated report). rc: 0 success · 1 missing telemetry · 2 usage.
+pub fn qf_telem_report(deck: str) -> int {
+    if len(deck) == 0 {
+        println("[qforge] usage: hexa qforge telemetry report <deck>")
+        return 2
+    }
+    let jsonl = qf_telem_read(deck)
+    if len(jsonl.trim()) == 0 {
+        println("[qforge] no telemetry in " + deck + " (no " + QF_TELEM_NAME
+            + " — run `hexa cloud dft-run " + deck + "` to emit per-stage telemetry).")
+        return 1
+    }
+    let rep = qforge_telemetry_report(jsonl)
+    print(qforge_telemetry_report_render(rep))
+    return 0
+}
+
+// qf_telem_regress — `hexa qforge telemetry regress <base-deck> <cur-deck> [pct]`.
+// Cross-run regression of two decks' telemetry; caller-supplied threshold. Either
+// deck missing telemetry → a clean message (no fabricated Δ). rc as above.
+pub fn qf_telem_regress(base: str, cur: str, pct: int) -> int {
+    if len(base) == 0 || len(cur) == 0 {
+        println("[qforge] usage: hexa qforge telemetry regress <base-deck> <cur-deck> [pct]")
+        return 2
+    }
+    let bjs = qf_telem_read(base)
+    let cjs = qf_telem_read(cur)
+    if len(bjs.trim()) == 0 {
+        println("[qforge] no telemetry in baseline deck " + base + " (no " + QF_TELEM_NAME + ").")
+        return 1
+    }
+    if len(cjs.trim()) == 0 {
+        println("[qforge] no telemetry in current deck " + cur + " (no " + QF_TELEM_NAME + ").")
+        return 1
+    }
+    let rep = qforge_telemetry_regress(bjs, cjs, pct)
+    print(qforge_telemetry_regress_render(rep))
+    return 0
+}
+
+// qf_telem_rollup — `hexa qforge telemetry rollup <deck...>`. Campaign-wide
+// stage/deck rollup over N decks. Decks with missing/empty telemetry are SKIPPED
+// (the library counts them in skipped_decks — never a phantom row, d6); if NONE
+// of the decks have telemetry, a clean message + rc 1. rc as above.
+pub fn qf_telem_rollup(decks: [str]) -> int {
+    if len(decks) == 0 {
+        println("[qforge] usage: hexa qforge telemetry rollup <deck...>")
+        return 2
+    }
+    let mut pairs: [(str, str)] = []
+    let mut found = 0
+    let mut i = 0
+    while i < len(decks) {
+        let d = decks[i]
+        let jsonl = qf_telem_read(d)
+        if len(jsonl.trim()) > 0 { found = found + 1 }
+        pairs.push((d, jsonl))
+        i = i + 1
+    }
+    if found == 0 {
+        println("[qforge] no telemetry in any of the " + to_string(len(decks))
+            + " deck(s) (no " + QF_TELEM_NAME + ").")
+        return 1
+    }
+    let rep = qforge_telemetry_rollup(pairs)
+    print(qforge_telemetry_rollup_render(rep))
+    return 0
+}
+
+// qf_telemetry — `hexa qforge telemetry <report|regress|rollup> ...`. av is the
+// full argv; av[1]=="telemetry", av[2]=the telemetry verb, av[3..]=its args.
+// Default regression threshold = 20% when the optional pct arg is omitted.
+pub fn qf_telemetry(av: [str]) -> int {
+    if len(av) < 3 {
+        println("[qforge] usage: hexa qforge telemetry <report|regress|rollup> <deck...>")
+        return 2
+    }
+    let tv = av[2]
+    if tv == "report" {
+        let mut deck = ""
+        if len(av) >= 4 { deck = av[3] }
+        return qf_telem_report(deck)
+    }
+    if tv == "regress" {
+        let mut base = ""
+        let mut cur = ""
+        let mut pct = 20
+        if len(av) >= 4 { base = av[3] }
+        if len(av) >= 5 { cur = av[4] }
+        if len(av) >= 6 { pct = to_int_safe(av[5]) }
+        return qf_telem_regress(base, cur, pct)
+    }
+    if tv == "rollup" {
+        let mut decks: [str] = []
+        let mut i = 3
+        while i < len(av) { decks.push(av[i]); i = i + 1 }
+        return qf_telem_rollup(decks)
+    }
+    println("[qforge] unknown telemetry verb '" + tv + "' — try report|regress|rollup")
+    return 2
+}
