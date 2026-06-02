@@ -687,6 +687,161 @@ fn emit_runtime_cuda_c() -> str {
             "}\n" +
             "\n" +
             "/* ════════════════════════════════════════════════════════════════════\n" +
+            " * _hx_cuda_farr_matmul_bt_gpu — LEVER (2) @L1, transpose-aware GEMM.\n" +
+            " *\n" +
+            " * Row-major C[M,N] = A[M,K] @ B^T, where B is stored row-major as\n" +
+            " * [N,K] (so B^T is K×N). The cuBLAS NATIVE transB (CUBLAS_OP_T) reads\n" +
+            " * B in place — so the CLM forward-conv host `Wt`-transpose loop\n" +
+            " * (Kdim·Cout scalar t_set per conv, the 14.16M-op repack) is DROPPED:\n" +
+            " * the weight `w[Cout,Kdim]` feeds the GEMM directly as B[N,K].\n" +
+            " *\n" +
+            " * Mapping (cuBLAS is column-major; row-major buffers read transposed):\n" +
+            " *   B row-major [N,K] → cuBLAS col-major Bc[K,N] (ldb=K)\n" +
+            " *   A row-major [M,K] → cuBLAS col-major Ac[K,M] (lda=K)\n" +
+            " *   want col-major C'[N,M] (= row-major C[M,N]) = Bc^T(N×K)·Ac(K×M)\n" +
+            " *   Dgemm(OP_T, OP_N, m=N, n=M, k=K, B_dev, ldb=K, A_dev, lda=K,\n" +
+            " *         C_dev, ldc=N) ⇒ C'[n,m]=Σ_k B[n,k]·A[m,k] = (A·B^T)[m,n]. ✓\n" +
+            " * Bit-eq to the host-transposed A·Wt path (cuBLAS accumulates the\n" +
+            " * same K terms in the same order). Returns 0 ok / -1 err. */\n" +
+            "int _hx_cuda_farr_matmul_bt_gpu(int64_t a_id, int64_t M, int64_t K,\n" +
+            "                                int64_t b_id, int64_t N,\n" +
+            "                                int64_t c_id) {\n" +
+            "    if (_ensure_cublas() != 0) return -1;\n" +
+            "    if (a_id < 0 || b_id < 0 || c_id < 0) return -1;\n" +
+            "    if (M <= 0 || K <= 0 || N <= 0) return -1;\n" +
+            "    if (_h2d(a_id) != 0) return -1;\n" +
+            "    if (_h2d(b_id) != 0) return -1;\n" +
+            "    if (_ensure_slot_cap(c_id) != 0) return -1;\n" +
+            "    HexaFarrEntry* ce = &_hx_farr_table[c_id];\n" +
+            "    _CudaFarrSlot*  cs = &g_slots[c_id];\n" +
+            "    if (!ce->buf || ce->len < M * N) {\n" +
+            "        fprintf(stderr, \"[cuda] matmul_bt: C host len %lld < M*N %lld\\n\",\n" +
+            "                (long long)ce->len, (long long)(M*N));\n" +
+            "        return -1;\n" +
+            "    }\n" +
+            "    if (!cs->d_buf || cs->len != ce->len) {\n" +
+            "        if (cs->d_buf) cudaFree(cs->d_buf);\n" +
+            "        cudaError_t er = cudaMalloc((void**)&cs->d_buf,\n" +
+            "                                    (size_t)ce->len * sizeof(double));\n" +
+            "        if (er != cudaSuccess) {\n" +
+            "            fprintf(stderr, \"[cuda] cudaMalloc C_bt(%lld) failed: %s\\n\",\n" +
+            "                    (long long)ce->len, cudaGetErrorString(er));\n" +
+            "            cs->d_buf = NULL; cs->len = 0;\n" +
+            "            return -1;\n" +
+            "        }\n" +
+            "        cs->len = ce->len;\n" +
+            "    }\n" +
+            "    double* A_dev = g_slots[a_id].d_buf;\n" +
+            "    double* B_dev = g_slots[b_id].d_buf;\n" +
+            "    double* C_dev = cs->d_buf;\n" +
+            "    const double alpha = 1.0;\n" +
+            "    const double beta  = 0.0;\n" +
+            "    cublasStatus_t st = cublasDgemm(g_cublas,\n" +
+            "                                    CUBLAS_OP_T, CUBLAS_OP_N,\n" +
+            "                                    (int)N, (int)M, (int)K,\n" +
+            "                                    &alpha,\n" +
+            "                                    B_dev, (int)K,\n" +
+            "                                    A_dev, (int)K,\n" +
+            "                                    &beta,\n" +
+            "                                    C_dev, (int)N);\n" +
+            "    if (st != CUBLAS_STATUS_SUCCESS) {\n" +
+            "        fprintf(stderr, \"[cuda] cublasDgemm(bt) failed: %d\\n\", (int)st);\n" +
+            "        return -1;\n" +
+            "    }\n" +
+            "    cudaError_t er = cudaMemcpy(ce->buf, C_dev,\n" +
+            "                                (size_t)(M * N) * sizeof(double),\n" +
+            "                                cudaMemcpyDeviceToHost);\n" +
+            "    if (er != cudaSuccess) {\n" +
+            "        fprintf(stderr, \"[cuda] cudaMemcpy C_bt D2H failed: %s\\n\",\n" +
+            "                cudaGetErrorString(er));\n" +
+            "        return -1;\n" +
+            "    }\n" +
+            "    ce->d_buf      = (void*)C_dev;\n" +
+            "    ce->loc        = FARR_MIRRORED;\n" +
+            "    ce->dirty_host = 0;\n" +
+            "    ce->dirty_dev  = 0;\n" +
+            "    return 0;\n" +
+            "}\n" +
+            "\n" +
+            "/* ════════════════════════════════════════════════════════════════════\n" +
+            " * _hx_cuda_farr_matmul_atb_gpu — LEVER (2) @L1, transA GEMM.\n" +
+            " *\n" +
+            " * Row-major C[M,N] = A^T @ B, where A is stored row-major as [K,M]\n" +
+            " * (so A^T is M×K) and B is row-major [K,N]. cuBLAS NATIVE transA\n" +
+            " * (CUBLAS_OP_T) reads A in place — this is the backward dW GEMM\n" +
+            " * `dW[Cout,Kdim] = dy[T,Cout]^T @ xcol[T,Kdim]` fed so the result is\n" +
+            " * ALREADY in [Cout,Kdim] layout, DROPPING the host dW-unpack transpose\n" +
+            " * (the dW_flat[Kdim,Cout]→dW[Cout,Kdim] scalar repack loop).\n" +
+            " *\n" +
+            " * Here A=dy stored row-major [K=T, M=Cout]; B=xcol row-major [K=T,N=Kdim].\n" +
+            " * Want row-major C[Cout,Kdim] = Σ_t dy[t,co]·xcol[t,j].\n" +
+            " *   A row-major [K,M] → cuBLAS col-major [M,K] (lda=M)\n" +
+            " *   B row-major [K,N] → cuBLAS col-major [N,K] (ldb=N)\n" +
+            " *   want col-major C'[N,M] (= row-major C[M,N]) = Bc(N×K)·Ac^T(K×M)\n" +
+            " *   Dgemm(OP_N, OP_T, m=N, n=M, k=K, B_dev, ldb=N, A_dev, lda=M,\n" +
+            " *         C_dev, ldc=N) ⇒ C'[n,m]=Σ_k B[k,n]·A[k,m] = (A^T·B)[m,n]. ✓\n" +
+            " * Returns 0 ok / -1 err. */\n" +
+            "int _hx_cuda_farr_matmul_atb_gpu(int64_t a_id, int64_t M, int64_t K,\n" +
+            "                                 int64_t b_id, int64_t N,\n" +
+            "                                 int64_t c_id) {\n" +
+            "    if (_ensure_cublas() != 0) return -1;\n" +
+            "    if (a_id < 0 || b_id < 0 || c_id < 0) return -1;\n" +
+            "    if (M <= 0 || K <= 0 || N <= 0) return -1;\n" +
+            "    if (_h2d(a_id) != 0) return -1;\n" +
+            "    if (_h2d(b_id) != 0) return -1;\n" +
+            "    if (_ensure_slot_cap(c_id) != 0) return -1;\n" +
+            "    HexaFarrEntry* ce = &_hx_farr_table[c_id];\n" +
+            "    _CudaFarrSlot*  cs = &g_slots[c_id];\n" +
+            "    if (!ce->buf || ce->len < M * N) {\n" +
+            "        fprintf(stderr, \"[cuda] matmul_atb: C host len %lld < M*N %lld\\n\",\n" +
+            "                (long long)ce->len, (long long)(M*N));\n" +
+            "        return -1;\n" +
+            "    }\n" +
+            "    if (!cs->d_buf || cs->len != ce->len) {\n" +
+            "        if (cs->d_buf) cudaFree(cs->d_buf);\n" +
+            "        cudaError_t er = cudaMalloc((void**)&cs->d_buf,\n" +
+            "                                    (size_t)ce->len * sizeof(double));\n" +
+            "        if (er != cudaSuccess) {\n" +
+            "            fprintf(stderr, \"[cuda] cudaMalloc C_atb(%lld) failed: %s\\n\",\n" +
+            "                    (long long)ce->len, cudaGetErrorString(er));\n" +
+            "            cs->d_buf = NULL; cs->len = 0;\n" +
+            "            return -1;\n" +
+            "        }\n" +
+            "        cs->len = ce->len;\n" +
+            "    }\n" +
+            "    double* A_dev = g_slots[a_id].d_buf;\n" +
+            "    double* B_dev = g_slots[b_id].d_buf;\n" +
+            "    double* C_dev = cs->d_buf;\n" +
+            "    const double alpha = 1.0;\n" +
+            "    const double beta  = 0.0;\n" +
+            "    cublasStatus_t st = cublasDgemm(g_cublas,\n" +
+            "                                    CUBLAS_OP_N, CUBLAS_OP_T,\n" +
+            "                                    (int)N, (int)M, (int)K,\n" +
+            "                                    &alpha,\n" +
+            "                                    B_dev, (int)N,\n" +
+            "                                    A_dev, (int)M,\n" +
+            "                                    &beta,\n" +
+            "                                    C_dev, (int)N);\n" +
+            "    if (st != CUBLAS_STATUS_SUCCESS) {\n" +
+            "        fprintf(stderr, \"[cuda] cublasDgemm(atb) failed: %d\\n\", (int)st);\n" +
+            "        return -1;\n" +
+            "    }\n" +
+            "    cudaError_t er = cudaMemcpy(ce->buf, C_dev,\n" +
+            "                                (size_t)(M * N) * sizeof(double),\n" +
+            "                                cudaMemcpyDeviceToHost);\n" +
+            "    if (er != cudaSuccess) {\n" +
+            "        fprintf(stderr, \"[cuda] cudaMemcpy C_atb D2H failed: %s\\n\",\n" +
+            "                cudaGetErrorString(er));\n" +
+            "        return -1;\n" +
+            "    }\n" +
+            "    ce->d_buf      = (void*)C_dev;\n" +
+            "    ce->loc        = FARR_MIRRORED;\n" +
+            "    ce->dirty_host = 0;\n" +
+            "    ce->dirty_dev  = 0;\n" +
+            "    return 0;\n" +
+            "}\n" +
+            "\n" +
+            "/* ════════════════════════════════════════════════════════════════════\n" +
             " * _hx_cuda_farr_matmul_batched_gpu — LEVER (b), forge GPU util.\n" +
             " *\n" +
             " * ONE cublasDgemmStridedBatched over `batch` contiguous row-major\n" +

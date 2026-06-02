@@ -7536,6 +7536,24 @@ fn gen2_expr(node) {
                 if name == "forge_dispatch_col2im" {
                     return "hexa_forge_dispatch_col2im(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ", " + arg_strs[3] + ", " + arg_strs[4] + ", " + arg_strs[5] + ")"
                 }
+                // LEVER (2) transpose-aware GEMM: drop the host Wt/dW repack.
+                // forge_dispatch_matmul_bt(a, M, K, b, N, c) -> int rc:
+                //   row-major C[M,N] = A[M,K] @ B^T, B stored [N,K]; cuBLAS
+                //   NATIVE transB (OP_T) reads w[Cout,Kdim] in place — the host
+                //   forward-conv Wt-transpose loop is DROPPED. C caller-allocated
+                //   (len M·N), filled in place; 0 ok / -1 err.
+                // forge_dispatch_matmul_atb(a, M, K, b, N, c) -> int rc:
+                //   row-major C[M,N] = A^T @ B, A stored [K,M]; cuBLAS transA —
+                //   the backward dW result lands ALREADY as [Cout,Kdim] so the
+                //   host dW-unpack transpose is DROPPED. CUDA → _hx_cuda_farr_
+                //   matmul_{bt,atb}_gpu; no-CUDA → byte-eq host oracle.
+                // (#1187: needs BOTH this call-name mapping AND the runtime.h proto.)
+                if name == "forge_dispatch_matmul_bt" {
+                    return "hexa_forge_dispatch_matmul_bt(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ", " + arg_strs[3] + ", " + arg_strs[4] + ", " + arg_strs[5] + ")"
+                }
+                if name == "forge_dispatch_matmul_atb" {
+                    return "hexa_forge_dispatch_matmul_atb(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ", " + arg_strs[3] + ", " + arg_strs[4] + ", " + arg_strs[5] + ")"
+                }
             }
             if len(node.args) == 7 {
                 // feat/primitive-float-array — CNOT kernel.

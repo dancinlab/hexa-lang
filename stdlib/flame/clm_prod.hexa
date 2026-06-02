@@ -130,14 +130,32 @@ fn conv1d_via_forge(x: int, w: int, b: int, y_out: int,
     let Kdim = Cin * K
     let xcol = t_zeros(T * Kdim)
     _clmp_im2col(x, xcol, T, Cin, K, dil)
-    let Wt = t_zeros(Kdim * Cout)
-    let mut co = 0
-    while co < Cout {
-        let mut j = 0
-        while j < Kdim { t_set(Wt, j * Cout + co, t_get(w, co * Kdim + j)); j = j + 1 }
-        co = co + 1
+    // LEVER (2): transpose-aware forward GEMM. Under CLM_PROD_DEVFEED the
+    // weight w[Cout,Kdim] feeds forge_dispatch_matmul_bt (cuBLAS OP_T) so
+    // y[T,Cout] = xcol[T,Kdim] @ w^T WITHOUT the host Wt-transpose repack
+    // (the per-step Kdim·Cout scalar t_set loop — the 14.16M-op host cost).
+    // Byte-eq: the BT path transposes w to the same Wt internally on CPU and
+    // bit-eq on GPU (F-RFC046-GEMMFEED-EQ). The env gate keeps the prebuilt
+    // mac binary (no _bt builtin) on the explicit-transpose path below.
+    let mm = t_zeros(T * Cout)
+    let mut used_bt = false
+    if env("CLM_PROD_DEVFEED") != "" {
+        let rc = forge_dispatch_matmul_bt(xcol, T, Kdim, w, Cout, mm)
+        if rc == 0 { used_bt = true }
     }
-    let mm = forge_dispatch_matmul(xcol, T, Kdim, Wt, Cout)
+    if !used_bt {
+        let Wt = t_zeros(Kdim * Cout)
+        let mut co = 0
+        while co < Cout {
+            let mut j = 0
+            while j < Kdim { t_set(Wt, j * Cout + co, t_get(w, co * Kdim + j)); j = j + 1 }
+            co = co + 1
+        }
+        let mm2 = forge_dispatch_matmul(xcol, T, Kdim, Wt, Cout)
+        let mut iz = 0
+        while iz < T * Cout { t_set(mm, iz, t_get(mm2, iz)); iz = iz + 1 }
+        t_free(Wt)
+    }
     let mut t2 = 0
     while t2 < T {
         let mut c2 = 0
@@ -147,6 +165,7 @@ fn conv1d_via_forge(x: int, w: int, b: int, y_out: int,
         }
         t2 = t2 + 1
     }
+    t_free(xcol); t_free(mm)
 }
 
 // conv1d backward (causal dilated) via forge matmul + col2im — inlined from
@@ -159,20 +178,38 @@ fn conv1d_bwd_via_forge(x: int, w: int, dy: int,
                         dW_out: int, dX_out: int, db_out: int,
                         T: int, Cin: int, Cout: int, K: int, dil: int) {
     let Kdim = Cin * K
-    // im2col_t: xcolT[j, t] = (p>=0) ? x[p, ci] : 0, j = ci*K+k, p = t - dil*(K-1-k).
-    // LEVER (a): device-resident under CLM_PROD_DEVFEED (no host roundtrip).
-    let xcolT = t_zeros(Kdim * T)
-    _clmp_im2col_t(x, xcolT, T, Cin, K, dil)
-    // dW: dW_flat[Kdim, Cout] = xcolT[Kdim,T] @ dy[T,Cout] (forge GEMM)
-    let dW_flat = forge_dispatch_matmul(xcolT, Kdim, T, dy, Cout)
-    let mut co = 0
-    while co < Cout {
-        let mut j = 0
-        while j < Kdim {
-            t_set(dW_out, co * Kdim + j, t_get(dW_flat, j * Cout + co))
-            j = j + 1
+    // dW = dy[T,Cout]^T @ xcol[T,Kdim] = dW[Cout,Kdim].
+    // LEVER (2): under CLM_PROD_DEVFEED the transA GEMM forge_dispatch_matmul_atb
+    // (cuBLAS OP_T on dy) lands the result ALREADY in [Cout,Kdim] layout — so
+    // BOTH the host im2col_t transpose build AND the dW_flat[Kdim,Cout]→
+    // dW[Cout,Kdim] unpack repack are DROPPED off the host hot path. Byte-eq:
+    // the ATB oracle transposes dy→dy^T then matmuls (same FP64 order as the
+    // old xcolT@dy then unpack) — F-RFC046-GEMMFEED-EQ. The env gate keeps the
+    // prebuilt mac binary on the explicit xcolT path.
+    let mut used_atb = false
+    if env("CLM_PROD_DEVFEED") != "" {
+        let xcol = t_zeros(T * Kdim)
+        _clmp_im2col(x, xcol, T, Cin, K, dil)
+        let rc = forge_dispatch_matmul_atb(dy, Cout, T, xcol, Kdim, dW_out)
+        if rc == 0 { used_atb = true }
+        t_free(xcol)
+    }
+    if !used_atb {
+        // im2col_t: xcolT[j,t]=(p>=0)?x[p,ci]:0, j=ci*K+k, p=t-dil*(K-1-k).
+        let xcolT = t_zeros(Kdim * T)
+        _clmp_im2col_t(x, xcolT, T, Cin, K, dil)
+        // dW_flat[Kdim,Cout] = xcolT[Kdim,T] @ dy[T,Cout] (forge GEMM)
+        let dW_flat = forge_dispatch_matmul(xcolT, Kdim, T, dy, Cout)
+        let mut co = 0
+        while co < Cout {
+            let mut j = 0
+            while j < Kdim {
+                t_set(dW_out, co * Kdim + j, t_get(dW_flat, j * Cout + co))
+                j = j + 1
+            }
+            co = co + 1
         }
-        co = co + 1
+        t_free(xcolT)
     }
     // dX: dXcol[T, Kdim] = dy[T,Cout] @ Wflat[Cout,Kdim] (forge GEMM), then col2im.
     // LEVER (a): device-resident col2im scatter under CLM_PROD_DEVFEED.

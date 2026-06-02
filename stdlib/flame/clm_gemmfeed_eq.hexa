@@ -1,0 +1,113 @@
+// ════════════════════════════════════════════════════════════════════════════
+//  clm_gemmfeed_eq.hexa — LEVER (2): transpose-aware GEMM byte-eq oracle.
+//
+//  F-RFC046-GEMMFEED-EQ: the transpose-aware forge GEMMs match the host-
+//  transposed reference exactly (max|Δ| = 0.0), so the CLM forward/backward
+//  conv stays GRAD-EXACT while the host Wt-transpose + dW-unpack repack leave
+//  the per-step hot path.
+//
+//  Root cause of the residual Lane-G util RED after lever-1 (PR #2515): the
+//  forge GEMM builtin had NO transpose variant, so every step the host built
+//  Wt[Kdim,Cout] from w[Cout,Kdim] (forward) and unpacked dW_flat[Kdim,Cout]→
+//  dW[Cout,Kdim] (backward) — the 14.16M-op host repack loops. cuBLAS has
+//  NATIVE transA/transB (CUBLAS_OP_T); lever-2 passes the op flags so the GEMM
+//  reads the un-transposed operand in place and the host repack is DROPPED.
+//
+//  TWO oracles (CPU, $0 — prove the host-side shape; the device bit-eq runs on
+//  the pod against these same references):
+//    BT  : forge_dispatch_matmul_bt(A,M,K, w[N,K], N, C) == A[M,K] @ Wt[K,N]
+//          where Wt = transpose(w) — the forward-conv path.
+//    ATB : forge_dispatch_matmul_atb(dy[K,M],M,K, B[K,N], N, C) ==
+//          dyT[M,K] @ B[K,N] where dyT = transpose(dy) — the backward dW path.
+//
+//  On the prebuilt mac binary the _bt/_atb builtins resolve to their byte-eq
+//  host oracle (transpose-then-matmul) in self/runtime.c; on a CUDA pod they
+//  resolve to _hx_cuda_farr_matmul_{bt,atb}_gpu (cublasDgemm OP_T) — same FP64
+//  K-accumulation order, so byte-eq is exact both ways.
+// ════════════════════════════════════════════════════════════════════════════
+
+use "stdlib/flame/tensor_lib"
+
+fn _gf_absf(x: float) -> float { if x < 0.0 { return 0.0 - x } return x }
+
+fn _gf_maxdev(a: int, b: int, n: int) -> float {
+    let mut m = 0.0
+    let mut i = 0
+    while i < n {
+        let d = _gf_absf(t_get(a, i) - t_get(b, i))
+        if d > m { m = d }
+        i = i + 1
+    }
+    return m
+}
+
+// fill a farr with a deterministic non-trivial pattern (no RNG dependency).
+fn _gf_fill(t: int, n: int, seed: int) {
+    let mut i = 0
+    while i < n {
+        let v = to_float(((i * 2654435761 + seed * 40503) % 1009) - 504) * 0.01
+        t_set(t, i, v)
+        i = i + 1
+    }
+}
+
+fn main() {
+    println("clm_gemmfeed_eq — LEVER (2): transpose-aware GEMM byte-eq oracle")
+
+    // shapes mirror a CLM conv GEMM: M=T, K=Kdim=Cin·K, N=Cout.
+    let M = 17   // T
+    let K = 12   // Kdim
+    let N = 9    // Cout
+
+    // ── BT oracle: C[M,N] = A[M,K] @ B^T, B stored [N,K]. ──
+    // reference = A @ Wt where Wt[K,N] = transpose(B[N,K]).
+    let A = t_zeros(M * K); _gf_fill(A, M * K, 1)
+    let B = t_zeros(N * K); _gf_fill(B, N * K, 2)   // w[Cout,Kdim] layout
+    let Wt = t_zeros(K * N)
+    let mut n0 = 0
+    while n0 < N {
+        let mut k0 = 0
+        while k0 < K { t_set(Wt, k0 * N + n0, t_get(B, n0 * K + k0)); k0 = k0 + 1 }
+        n0 = n0 + 1
+    }
+    let ref_bt = forge_dispatch_matmul(A, M, K, Wt, N)   // A @ Wt (host-transposed)
+    let got_bt = t_zeros(M * N)
+    let rc_bt = forge_dispatch_matmul_bt(A, M, K, B, N, got_bt)
+    let dbt = _gf_maxdev(ref_bt, got_bt, M * N)
+    print("  BT  rc="); print(to_string(rc_bt)); print(" max|Δ|="); println(to_string(dbt))
+    let mut bt_ok = 0
+    if rc_bt == 0 { if dbt == 0.0 { bt_ok = 1 } }
+
+    // ── ATB oracle: C[M,N] = A^T @ B, A stored [K,M]. ──
+    // reference = At @ B where At[M,K] = transpose(A[K,M]); A here = dy[T,Cout]
+    // with K=T rows, M=Cout cols. Reuse the same shapes (K2=T rows).
+    let K2 = 17  // T
+    let M2 = 9   // Cout
+    let N2 = 12  // Kdim
+    let DY = t_zeros(K2 * M2); _gf_fill(DY, K2 * M2, 3)   // dy[T,Cout]
+    let XC = t_zeros(K2 * N2); _gf_fill(XC, K2 * N2, 4)   // xcol[T,Kdim]
+    let At = t_zeros(M2 * K2)
+    let mut k1 = 0
+    while k1 < K2 {
+        let mut m1 = 0
+        while m1 < M2 { t_set(At, m1 * K2 + k1, t_get(DY, k1 * M2 + m1)); m1 = m1 + 1 }
+        k1 = k1 + 1
+    }
+    let ref_atb = forge_dispatch_matmul(At, M2, K2, XC, N2)   // dy^T @ xcol
+    let got_atb = t_zeros(M2 * N2)
+    let rc_atb = forge_dispatch_matmul_atb(DY, M2, K2, XC, N2, got_atb)
+    let datb = _gf_maxdev(ref_atb, got_atb, M2 * N2)
+    print("  ATB rc="); print(to_string(rc_atb)); print(" max|Δ|="); println(to_string(datb))
+    let mut atb_ok = 0
+    if rc_atb == 0 { if datb == 0.0 { atb_ok = 1 } }
+
+    if bt_ok == 1 {
+        if atb_ok == 1 {
+            println("F-RFC046-GEMMFEED-EQ = 1")
+            println("PASS — transpose-aware GEMM (bt/atb) == host-transposed forge byte-eq (max|Δ|=0)")
+            return
+        }
+    }
+    println("F-RFC046-GEMMFEED-EQ = 0")
+    println("FAIL — transpose-aware GEMM drifted from the host-transposed reference")
+}

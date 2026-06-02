@@ -1038,6 +1038,34 @@ HexaVal forge_dispatch_matmul_batched(HexaVal a_v, HexaVal m_v, HexaVal k_v,
                                       HexaVal b_v, HexaVal n_v,
                                       HexaVal batch_v, HexaVal c_v);      /* runtime.c — lever b seam */
 
+/* ── LEVER (2): transpose-aware GEMM — drop the host Wt/dW repack ───
+ * `forge_dispatch_matmul_bt(a, M, K, b, N, c)` (6-arg) computes the
+ * row-major C[M,N] = A[M,K] @ B^T with B STORED row-major as [N,K]
+ * (B^T is K×N). cuBLAS NATIVE transB (CUBLAS_OP_T) reads B in place →
+ * the CLM forward-conv host Wt-transpose loop (w[Cout,Kdim] → Wt[Kdim,
+ * Cout], the per-step scalar repack) is DROPPED: the weight feeds the
+ * GEMM directly. C CALLER-ALLOCATED (len M·N); fills in place, returns
+ * hexa_int(0) ok / hexa_int(-1) err. CUDA → _hx_cuda_farr_matmul_bt_gpu
+ * (one cublasDgemm OP_T,OP_N); no-CUDA → byte-eq host oracle (transpose
+ * B then hexa_farr_matmul — same K-accumulation order).
+ *
+ * `forge_dispatch_matmul_atb(a, M, K, b, N, c)` (6-arg) computes the
+ * row-major C[M,N] = A^T @ B with A STORED row-major as [K,M] (A^T is
+ * M×K), B row-major [K,N]. This is the backward dW GEMM dW[Cout,Kdim]=
+ * dy[T,Cout]^T @ xcol[T,Kdim] fed so the result is ALREADY [Cout,Kdim]
+ * — DROPPING the host dW-unpack transpose (dW_flat[Kdim,Cout]→dW[Cout,
+ * Kdim]). CUDA → _hx_cuda_farr_matmul_atb_gpu (OP_N,OP_T); no-CUDA →
+ * byte-eq host oracle. Body (SSOT): self/runtime.c + self/cuda/
+ * runtime_cuda.c (emit: runtime_cuda_emit.hexa). */
+HexaVal hexa_forge_dispatch_matmul_bt(HexaVal a_v, HexaVal m_v, HexaVal k_v,
+                                      HexaVal b_v, HexaVal n_v, HexaVal c_v); /* runtime.c — lever 2 */
+HexaVal forge_dispatch_matmul_bt(HexaVal a_v, HexaVal m_v, HexaVal k_v,
+                                 HexaVal b_v, HexaVal n_v, HexaVal c_v);      /* runtime.c — lever 2 seam */
+HexaVal hexa_forge_dispatch_matmul_atb(HexaVal a_v, HexaVal m_v, HexaVal k_v,
+                                       HexaVal b_v, HexaVal n_v, HexaVal c_v); /* runtime.c — lever 2 */
+HexaVal forge_dispatch_matmul_atb(HexaVal a_v, HexaVal m_v, HexaVal k_v,
+                                  HexaVal b_v, HexaVal n_v, HexaVal c_v);      /* runtime.c — lever 2 seam */
+
 /* ── LEVER (a): device-resident im2col/col2im + on-device AdamW ─────
  * The dominant Lane-G util peg is the HOST backward feed: each step the
  * trainer rebuilds x_col on the host (host-dirty → re-H2D every GEMM)
