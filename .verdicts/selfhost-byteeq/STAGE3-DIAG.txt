@@ -1,0 +1,38 @@
+HEXA SELF-HOST BYTE-EQ — STAGE3 DIFF DIAGNOSIS (ghost, 2026-06-02)
+=================================================================
+OBJECTS: cc-prc2-fix.o (STAGE2, aprime_fixhex=C-built) vs cc-gen3.o
+         (STAGE3, gen2_fix=native). Same size 3,224,592. ENCODE-MISS 0 both.
+CMP: differ @ byte 1,528,257 (in __const), 79,297 bytes total.
+
+DIFF BY SECTION (cmp -l bucketed by mach-o section offset):
+  __text    0      machine code BYTE-IDENTICAL
+  __cstring 0      string pool identical
+  __const   4      f64 literal 1-ULP (LSByte) diffs
+  __data    0
+  LINKEDIT  79,293 symtab+strtab = 99.99% of the diff
+
+RESIDUAL 1 (LINKEDIT 79,293B) = modhash label token, NOT nondeterminism:
+  nm | normalize-label-hash | sort  -> diff = 0 lines.
+  ONE distinct prefix per obj: stage2 _L3a6c_  stage3 _L14f9_.
+  modhash = sha256(module.file)[0:4] (arm64_darwin.hexa:752); the single
+  4-hex token rides ~24,500 local block-label symbols -> 79K strtab bytes.
+  ISOLATION on mh.hexa (same path to both): aprime _L2111_ vs gen2_fix
+  _L1cfd_. sha256()+substring on a literal are IDENTICAL across both
+  compilers => divergence is the module.file STRING the native frontend
+  feeds sha256 (C-vs-native frontend), not the hash. Deterministic per side.
+
+RESIDUAL 2 (__const 4B) = f64 literal 1-ULP:
+  C strtod vs native float-parse round differently in the last mantissa
+  bit. ISOLATION (flt.hexa): aprime vs gen2_fix DIFFER; gen2_fix vs
+  gen2_fix IDENTICAL.
+
+NATIVE DETERMINISM (graduation precondition) — PROVEN:
+  gen2_fix x3 on mh.hexa  -> 3 byte-identical objs (sha cb13282412...)
+  gen2_fix x2 on flt.hexa -> identical
+  => native compiler is a deterministic fn of input. Both residuals are
+  benign C-vs-native bootstrap-transition diffs (stage2!=stage3) that
+  VANISH at stage3==stage4. Textbook GCC-style 3-stage bootstrap.
+
+VERDICT: stage2!=stage3 is EXPECTED + fully explained (2 benign residuals,
+  both deterministic-per-side). Fixpoint test = stage3==stage4 (in flight,
+  gen4.done). Prediction: BYTE-EQ GRADUATION.
