@@ -1,0 +1,185 @@
+// HEXA Standard Library — demi/dispatch
+//
+// @version 0.1.0
+// @capabilities [proc]
+//
+// THE GENERIC VERB DISPATCHER for the demiurge-cli surface
+// (demi-cli-pure-hexa-native · plan @L1). ONE dispatch path: every verb,
+// regardless of identity, flows through demi_dispatch() → dispatch_kind(),
+// which branches PURELY on the manifest `kind` (subprocess | local | meta).
+// There is NO per-verb branch and NO per-verb dispatcher class anywhere in
+// this file (d4). Adding a verb is a manifest row; adding a HANDLER FAMILY
+// is one new `kind` arm here.
+
+import "stdlib/demi/manifest.hexa"
+import "stdlib/demi/handlers.hexa"
+
+pub let DEMI_VERSION = "0.1.0-foundation (pure hexa-native · demi-cli-pure-hexa-native)"
+
+// _shq(s) — minimal single-quote shell escaping for subprocess argv assembly.
+fn _shq(s: string) -> string {
+    let mut out = "'"
+    let mut i = 0
+    while i < len(s) {
+        let c = s.substring(i, i + 1)
+        if c == "'" { out = out + "'\\''" } else { out = out + c }
+        i = i + 1
+    }
+    return out + "'"
+}
+
+// _phanes_candidates() — the resolution-order path list (mirrors Swift
+// discoverCmd EXACTLY): $PHANES_BIN (if set), then the three well-known
+// paths. Used both to resolve the binary AND to render the byte-identical
+// `searched: ...` line in the not-found message.
+fn _phanes_candidates() -> [string] {
+    let env_bin = env("PHANES_BIN")
+    let mut cands: [string] = []
+    if len(env_bin) > 0 { cands.push(env_bin) }
+    cands.push("/usr/local/bin/phanes")
+    cands.push("/opt/homebrew/bin/phanes")
+    cands.push(env("HOME") + "/core/phanes/bin/phanes")
+    return cands
+}
+
+// _resolve_phanes(cands) — first executable candidate, or "" if none.
+fn _resolve_phanes(cands: [string]) -> string {
+    let mut i = 0
+    while i < len(cands) {
+        let hit = exec("test -x " + _shq(cands[i]) + " && echo yes || echo no").trim()
+        if hit == "yes" { return cands[i] }
+        i = i + 1
+    }
+    return ""
+}
+
+// _join(xs, sep) — small string join helper (no stdlib import needed).
+fn _join(xs: [string], sep: string) -> string {
+    let mut out = ""
+    let mut i = 0
+    while i < len(xs) {
+        if i > 0 { out = out + sep }
+        out = out + xs[i]
+        i = i + 1
+    }
+    return out
+}
+
+// dispatch_subprocess(target, post) — forward `post` (the post-verb argv)
+// to the logical child binary named by `target`, surfacing stdout+stderr
+// VERBATIM and returning the child's exit code (g5 — the child owns the
+// verdict, demi never re-judges). Two children are wired:
+//   "phanes" — the discovery engine (d3 canonical home). The subverb sent is
+//              `discover` (the manifest verb name maps 1:1 here).
+//   "hexa"   — the hexa stdlib kernel (verify / atlas). The manifest verb
+//              name is forwarded as the hexa subcommand.
+fn dispatch_subprocess(verb_name: string, target: string, post: [string]) -> int {
+    let mut bin = ""
+    if target == "phanes" {
+        // Swift discoverCmd: empty argv → usage line, exit 2.
+        if len(post) < 1 {
+            eprintln("discover: usage — discover <objective> [--verifier <path>] [--rounds N] [--json]")
+            return 2
+        }
+        let cands = _phanes_candidates()
+        bin = _resolve_phanes(cands)
+        if bin == "" {
+            // Byte-identical to Swift discoverCmd's not-found block (@L7
+            // parity — the migration must not regress the diagnostic).
+            eprintln("discover: phanes CLI not found.")
+            eprintln("  searched: " + _join(cands, ", "))
+            eprintln("  set PHANES_BIN env var to override.")
+            eprintln("  contract expected (phanes-side):")
+            eprintln("    phanes discover <objective> [--verifier <path>] [--rounds N] [--json]")
+            eprintln("  phanes owns the OUROBOROS loop; demiurge dispatches only (d3/d4).")
+            eprintln("  see ~/core/phanes/INBOX.log.md for the CLI surface request.")
+            return 2
+        }
+    } else {
+        // "hexa" — resolve from PATH (hx dependency, M18).
+        bin = exec("command -v hexa 2>/dev/null || echo hexa").trim()
+    }
+    // Build the child argv: <bin> <verb_name> <post...>, stderr merged so the
+    // verdict surfaces verbatim. The verb_name IS the child subcommand
+    // (discover / verify / atlas) — no per-verb special-casing.
+    let mut cmd = _shq(bin) + " " + _shq(verb_name)
+    let mut i = 0
+    while i < len(post) {
+        cmd = cmd + " " + _shq(post[i])
+        i = i + 1
+    }
+    cmd = cmd + " 2>&1"
+    let pair = exec_with_status(cmd)
+    let out = to_string(pair[0])
+    print(out)
+    if len(out) > 0 {
+        if !out.ends_with("\n") { println("") }
+    }
+    return pair[1]
+}
+
+// dispatch_kind — the SINGLE generic fan-out on handler family. This is the
+// only switch in the whole CLI that touches a verb's behavior, and it
+// branches on `kind`, never on the verb name (d4).
+fn dispatch_kind(v: Verb, post: [string]) -> int {
+    if v.kind == "meta" {
+        if v.target == "version" { println("demiurge " + DEMI_VERSION) ; return 0 }
+        demi_usage()
+        return 0
+    }
+    if v.kind == "subprocess" { return dispatch_subprocess(v.name, v.target, post) }
+    if v.kind == "local"      { return handler_local(v.target, post) }
+    eprintln("demi: verb '" + v.name + "' has unknown kind '" + v.kind + "' (manifest bug)")
+    return 2
+}
+
+// demi_usage() — the help screen, RENDERED FROM THE MANIFEST (d4 — no
+// hand-maintained usage list to drift from the verb table).
+pub fn demi_usage() {
+    println("demiurge — Demiurge cockpit CLI (pure hexa-native · foundation)")
+    println("")
+    println("8-VERB LADDER: 0 discover → 1 specify → 2 structure → 3 design →")
+    println("               4 analyze⟲ → 5 synthesize → 6 verify → 7 handoff")
+    println("")
+    println("USAGE: demiurge cli <verb> [args]")
+    let m = demi_manifest()
+    let mut i = 0
+    while i < len(m.verbs) {
+        let v = m.verbs[i]
+        // pad the verb name to a column
+        let mut pad = ""
+        let mut p = len(v.name)
+        while p < 18 { pad = pad + " " ; p = p + 1 }
+        println("  " + v.name + pad + v.summary)
+        i = i + 1
+    }
+}
+
+// demi_dispatch(argv) — THE entry. argv is the full process argv
+// (argv[0] = program path, argv[1] = verb, argv[2..] = post-verb tail),
+// matching the Swift CommandLine.arguments convention. Returns the exit code.
+// ONE path: lookup the verb in the manifest, then dispatch_kind().
+pub fn demi_dispatch(argv: [string]) -> int {
+    if len(argv) < 2 {
+        demi_usage()
+        return 0
+    }
+    let name = argv[1]
+    // -v / -h short aliases map onto the meta rows.
+    let lookup_name = if name == "-v" { "--version" } else if name == "-h" { "--help" } else { name }
+    let m = demi_manifest()
+    let idx = manifest_lookup(m, lookup_name)
+    if idx < 0 {
+        eprintln("unknown subcommand: " + name)
+        demi_usage()
+        return 2
+    }
+    // post-verb tail
+    let mut post: [string] = []
+    let mut i = 2
+    while i < len(argv) {
+        post.push(argv[i])
+        i = i + 1
+    }
+    return dispatch_kind(m.verbs[idx], post)
+}

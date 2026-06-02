@@ -1,0 +1,135 @@
+// HEXA Standard Library — demi/manifest
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// MANIFEST-DRIVEN GENERIC VERB TABLE for the `demiurge cli` surface
+// (demi-cli-pure-hexa-native · plan @L1).
+//
+// This is the SINGLE SOURCE OF TRUTH for every demiurge-cli subcommand.
+// Each row declares a verb by (name · kind · summary). The dispatcher
+// (dispatch.hexa) routes PURELY on the `kind` — never on the verb name —
+// so adding / renaming / removing a verb is a MANIFEST-ONLY edit (d4):
+//   - add a verb        → push one Verb row here
+//   - rename a verb      → change its `name` here (no dispatch edit)
+//   - remove a verb      → drop the row here
+//   - new handler class  → one new `kind` + one branch in dispatch_kind()
+//
+// `kind` enumerates the HANDLER FAMILIES, not the verbs. The whole point of
+// d4 is that the generic layer branches on a small fixed set of kinds, while
+// the verb set grows freely in the manifest:
+//   "subprocess"  — forward argv to an external binary (phanes / hexa), the
+//                   child owns the verdict; demi surfaces stdout VERBATIM (g5).
+//   "local"       — a pure hexa-native handler implemented in handlers.hexa
+//                   (no external process; record/registry reads, geometry
+//                   emit, gate summaries, …).
+//   "meta"        — version / help, served from the manifest itself.
+//
+// hexa has no native map type, so the manifest is parallel arrays carried in
+// one struct (same idiom as stdlib/deck/types.hexa DeckSpec).
+
+// One manifest row.
+pub struct Verb {
+    name:     string,   // the cli subcommand token (e.g. "discover", "action")
+    kind:     string,   // handler family: "subprocess" | "local" | "meta"
+    target:   string,   // for "subprocess": logical child ("phanes" | "hexa");
+                        // for "local": the handler id; for "meta": "" .
+    summary:  string,   // one-line help text
+}
+
+// The verb manifest carrier — parallel-array-free: a real array of structs.
+pub struct Manifest {
+    verbs: [Verb],
+}
+
+// demi_manifest() — the canonical demiurge-cli verb table.
+//
+// FOUNDATION+PROOF scope: the 2 PROOF verbs (`discover`, `action`) are wired
+// LIVE through the generic path; the remaining 23 Swift subcommands are listed
+// here as DECLARED rows (kind/target set) so the manifest is the complete
+// parity spec, but their `local` handlers land in the stacked PRs enumerated
+// in the plan's `## handoff`. A declared-but-unimplemented `local` verb routes
+// to handler_stub() (honest "not yet ported" + exit 2) — never a silent
+// success, never a fake parity (plan @L2/@L7).
+pub fn demi_manifest() -> Manifest {
+    let mut vs: [Verb] = []
+
+    // ── meta (served from the manifest) ──────────────────────────────
+    vs.push(Verb { name: "--version", kind: "meta", target: "version",
+                   summary: "Print version banner" })
+    vs.push(Verb { name: "--help",    kind: "meta", target: "help",
+                   summary: "Show usage" })
+
+    // ── PROOF verbs (LIVE this PR) ───────────────────────────────────
+    // discover — 8-verb head; forwards argv to the phanes CLI subprocess
+    // (d3: phanes owns the OUROBOROS loop; demi just dispatches — d4).
+    vs.push(Verb { name: "discover", kind: "subprocess", target: "phanes",
+                   summary: "8-verb head — phanes-bridged autonomous discovery" })
+    // action — dispatch a 7-verb stage. PROOF wires the honest-gap base
+    // path (`action <verb> [domain]`); --compose / --converge / --deck land
+    // in the stacked PRs (handoff §action).
+    vs.push(Verb { name: "action", kind: "local", target: "action",
+                   summary: "Dispatch a 7-verb stage (specify/structure/.../handoff)" })
+
+    // ── DECLARED rows (handlers land in stacked PRs — handoff) ────────
+    // All "local" until ported; handler_stub() keeps them honest (exit 2).
+    vs.push(Verb { name: "list-all",        kind: "local", target: "list_all",
+                   summary: "List artifacts of all kinds" })
+    vs.push(Verb { name: "list-records",    kind: "local", target: "list_records",
+                   summary: "List F1F2 records under exports/" })
+    vs.push(Verb { name: "list-decisions",  kind: "local", target: "list_decisions",
+                   summary: "List design.md decisions" })
+    vs.push(Verb { name: "list-rfcs",       kind: "local", target: "list_rfcs",
+                   summary: "List proposals/rfc_*.md" })
+    vs.push(Verb { name: "list-domains",    kind: "local", target: "list_domains",
+                   summary: "List domains/*.md" })
+    vs.push(Verb { name: "show",            kind: "local", target: "show",
+                   summary: "Show one F1F2 record + provenance" })
+    vs.push(Verb { name: "list-projects",   kind: "local", target: "list_projects",
+                   summary: "List workbench projects" })
+    vs.push(Verb { name: "show-project",    kind: "local", target: "show_project",
+                   summary: "Show one project + 7-verb progress" })
+    vs.push(Verb { name: "project",         kind: "local", target: "project",
+                   summary: "project new|advance|retreat" })
+    vs.push(Verb { name: "list-shelf",      kind: "local", target: "list_shelf",
+                   summary: "Show a domain's §6 shelf options" })
+    vs.push(Verb { name: "list-gates",      kind: "local", target: "list_gates",
+                   summary: "F1F2 records grouped by gate" })
+    vs.push(Verb { name: "gate-summary",    kind: "local", target: "gate_summary",
+                   summary: "One-screen gate + absorbed totals" })
+    vs.push(Verb { name: "compose",         kind: "local", target: "compose",
+                   summary: "Resolve a domain into its constituent stack" })
+    vs.push(Verb { name: "operate",         kind: "local", target: "operate",
+                   summary: "Operation manifest — list|audit" })
+    vs.push(Verb { name: "backend",         kind: "local", target: "backend",
+                   summary: "Compute backend — list|current" })
+    vs.push(Verb { name: "llm",             kind: "local", target: "llm",
+                   summary: "AI connection — list|use|mode|model|key|test|ask" })
+    vs.push(Verb { name: "owner",           kind: "local", target: "owner",
+                   summary: "Owner-mode (사장실) status" })
+    // verify / atlas forward to the hexa stdlib kernel (subprocess); a bare
+    // `verify <path|id>` is the local record-consistency check — that arg
+    // split lands in the verify stacked PR (handoff §verify).
+    vs.push(Verb { name: "verify",          kind: "local", target: "verify",
+                   summary: "Provenance/claim-gate check · --expr forwards to hexa verify" })
+    vs.push(Verb { name: "atlas",           kind: "subprocess", target: "hexa",
+                   summary: "Read the hexa atlas SSOT (lookup/stats/hash/dump)" })
+    // 3D exporters (plan @L3) — local hexa-native USD/STL emit.
+    vs.push(Verb { name: "emit-component",  kind: "local", target: "emit_component",
+                   summary: "Emit the procedural BIPV artifact (.usda/.usdz)" })
+    vs.push(Verb { name: "export-component", kind: "local", target: "export_component",
+                   summary: "Export bundled geometry — usda | stl" })
+
+    return Manifest { verbs: vs }
+}
+
+// manifest_lookup(m, name) — return the index of the verb row named `name`,
+// or -1 if absent. PURE; no name hardcoding past the equality test.
+pub fn manifest_lookup(m: Manifest, name: string) -> int {
+    let mut i = 0
+    while i < len(m.verbs) {
+        if m.verbs[i].name == name { return i }
+        i = i + 1
+    }
+    return -1
+}

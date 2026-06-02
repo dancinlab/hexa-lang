@@ -1,0 +1,24 @@
+// HEXA Standard Library — demi/demi_cli
+//
+// @version 0.1.0
+// @capabilities [cli]
+//
+// THIN main-bearing entry for the pure hexa-native `demiurge cli` surface
+// (demi-cli-pure-hexa-native · plan @L1). Keeps main() OUT of the library
+// modules (manifest / dispatch / handlers) so those stay importable without
+// the flatten-time main() conflict (cf. stdlib/deck/cli.hexa). ALL behavior
+// lives in the generic manifest+dispatcher — this file only forwards argv.
+//
+// Run (during migration):  hexa run stdlib/demi/demi_cli.hexa <verb> [args]
+// End state (plan @L5):     bin/demiurge cli  → this entry (after full parity)
+//
+// args()[0] is the program path (cf. deck/cli.hexa, cloud_cli.hexa); the
+// generic dispatcher consumes the FULL argv (it expects argv[1] = verb),
+// matching the Swift CommandLine.arguments convention 1:1.
+
+import "stdlib/demi/dispatch.hexa"
+
+fn main() {
+    let code = demi_dispatch(args())
+    exit(code)
+}
