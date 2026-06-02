@@ -2,6 +2,32 @@
 
 Append-only history sister of `SELFHOST-NEXT.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
+## 2026-06-03 — lane A: MINI default-flip — tier1 installed, tier2 DEFERRED (g63, bare-gen3)
+
+Executed the user-approved MINI default-toolchain flip with the hard CLI-safety gate
+(mini = PRIMARY box running this session's hooks/skills; bricking its `hexa` CLI is
+forbidden). Verdict: `.verdicts/selfhost-next-promote/MINI-FLIP.txt`.
+
+- [x] artifacts: no mini-local gen3 (full build = 3.5h triple self-emit on the primary
+      box); fetched ghost's VERIFIED byte-eq-fixpoint gen3/hexa_ld/rt.o (SAME target,
+      macOS arm64) → `build/selfhost/`. mini-validity re-proven by the parity gate ON mini.
+- [x] parity gate on mini (no pipe-mask): 5/5 BEHAVIOUR pass (arith 42 · bitmask 15 ·
+      branch 7 · call 13 · recurse 120) → `RESULT: PARITY PASS — promotion AUTHORIZED`
+      (exit 0). ASM=ref-err is informational (shipped ref `--emit=asm` errored on the
+      driver); behaviour axis is load-bearing + green.
+- [x] tier1 install (`promote_selfhost.sh install`) — side-by-side slot + `hx-selfhost`
+      launcher; default `hexa.real` UNTOUCHED (still shipped `hexa 0.1.0-dispatch`).
+- [x] HARD CLI-SAFETY GATE: exercised full CLI via `hx-selfhost` → bare-gen3.
+      `hx-selfhost {--version,build,run,verify}` → "missing SOURCE.hexa" (subcommand
+      read as filename); `hx-selfhost atlas hash` → "cannot open `hash`". gen3's only
+      mode is `SOURCE.hexa --emit=asm/obj` (confirmed works). NO subcommand dispatch.
+- [x] DECISION: tier2 DEFERRED (correct g63). Flipping would break every `hexa
+      <subcommand>` the hooks use (30k+ `hexa verify` alone). NO flip. tier1 left in
+      place (harmless). Post-state: default NOT flipped · `hexa --version` rc 0 → safe.
+- [ ] FOLLOW-UP: CLI-shim wrapping gen3 with the dispatch surface
+      (build/run/verify/atlas/loop/--version/cc/kick) is the prerequisite before any
+      mini (or further) default flip. Until then `hx-selfhost` is opt-in bare-emit only.
+
 ## 2026-06-02 — in-tree ELF AArch64 .o serializer — NATIVE exit(42) runs rc 42 (no host `as`)
 
 Branch `selfhost-next/elf-arm64-serializer` (cut clean from origin/main d437f3fb4). Removes
