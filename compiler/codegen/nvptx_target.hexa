@@ -902,6 +902,59 @@ fn _nvptx_wmma_mnemonic(op: string) -> string {
     return ""
 }
 
+// HEXA-FUSION §5g — operator-specific surgical override (per-call-site
+// precision / custom layout). The default WMMA mnemonic table above is
+// HANDLE-UNIFORM: every `gpu_wmma_*` call-site resolves to the SAME
+// mnemonic regardless of context — structurally the cuBLAS model, where
+// one handle pins one (compute-type, A-layout, B-layout, output-dtype)
+// for ALL GEMMs issued through it. This resolver lets a SINGLE call-site
+// in the pipeline carry a per-site override tag (read from the dst
+// Local's `precision` field — already on the MIR `Local`, see
+// `compiler/ir/mir.hexa`) and emit a DIFFERENT mnemonic than its
+// siblings, WITHOUT touching the others. That is the §5g moat: replace
+// one kernel mid-pipeline / per-call-site precision — a monolithic
+// library API cannot express it.
+//
+// Override grammar (minimal probe surface):
+//   prec == ""        → byte-identical to `_nvptx_wmma_mnemonic(op)`
+//                       (the DEFAULT path — `precision` is "" in every
+//                        codegen run today, so default emit is unchanged).
+//   prec == ".bf16"   → store-c writes a bf16 accumulator out
+//                       (`.shared.bf16` vs the default `.shared.f32`);
+//                       load.a/load.b switch their multiplicand dtype to
+//                       `.bf16` and mma takes the long 4-type form
+//                       `.f32.bf16.bf16.f32` (ptxas-canonical for bf16
+//                       multiplicands — the short `.f32.f32` form is
+//                       f16-ONLY per N122). This is per-CALL-SITE: a
+//                       neighbouring f16 store-c keeps `.shared.f32`.
+//   prec == ".f32"    → explicit f32 == default (idempotent; lets a
+//                       call-site PIN f32 even if a future cycle flips
+//                       the table default).
+//
+// Falsifier F-FUSION-WMMA-OVERRIDE (this probe): override-tagged emit
+// DIFFERS from the default mnemonic AND the un-tagged (default) path
+// stays byte-identical to `_nvptx_wmma_mnemonic`.
+fn _nvptx_wmma_mnemonic_override(op: string, prec: string) -> string {
+    // Default path — no per-site override. Byte-identical to the
+    // handle-uniform table (the only path real codegen takes today).
+    if len(prec) == 0 || prec == ".f16" || prec == ".f32" {
+        return _nvptx_wmma_mnemonic(op)
+    }
+    // Surgical bf16 override — ONE call-site emits the bf16 family while
+    // its pipeline siblings keep emitting the f16 default above.
+    if prec == ".bf16" {
+        if op == "gpu_wmma_load_a"  { return "wmma.load.a.sync.aligned.row.m16n16k16.shared.bf16" }
+        if op == "gpu_wmma_load_b"  { return "wmma.load.b.sync.aligned.col.m16n16k16.shared.bf16" }
+        // bf16 multiplicands REQUIRE the long 4-type form (N122 catalog:
+        // the short `.f32.f32` is f16-only; bf16/tf32 use `.f32.bf16.bf16.f32`).
+        if op == "gpu_wmma_mma"     { return "wmma.mma.sync.aligned.row.col.m16n16k16.f32.bf16.bf16.f32" }
+        if op == "gpu_wmma_store_c" { return "wmma.store.d.sync.aligned.row.m16n16k16.shared.f32" }
+        return ""
+    }
+    // Unknown override tag — fall back to default (never silently drop).
+    return _nvptx_wmma_mnemonic(op)
+}
+
 // _nvptx_lower_stmt - lower one MIR statement to PTX-flavored LInstr
 // records, appending to `buf`. FP64-arithmetic subset only (RFC 055 §6.6).
 //
@@ -1775,7 +1828,13 @@ fn _nvptx_lower_stmt(buf: [LInstr], s: Stmt, kinds: [PReg], shared_idx_off: [i64
         // synthesizes the dst fragment Local but no source operands).
         // Real GEMM K-loop integration is the P4 wiring + numeric-eq
         // falsifier (separate cycle).
-        let wmma_mnem = _nvptx_wmma_mnemonic(s.op)
+        // HEXA-FUSION §5g — per-call-site surgical override. The dst
+        // Local's `precision` tag (default "" → handle-uniform default
+        // emit, byte-identical to `_nvptx_wmma_mnemonic`) lets ONE
+        // call-site in the pipeline pick a different precision/dtype
+        // family than its siblings — the override a monolithic cuBLAS
+        // handle structurally cannot express.
+        let wmma_mnem = _nvptx_wmma_mnemonic_override(s.op, s.dst.precision)
         if len(wmma_mnem) > 0 {
             let dst_tuple = _nvptx_wmma_frag_tuple(s.dst.id, _nvptx_frag_width)
             if s.op == "gpu_wmma_load_a" || s.op == "gpu_wmma_load_b" {

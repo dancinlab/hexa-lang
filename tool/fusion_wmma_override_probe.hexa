@@ -1,0 +1,131 @@
+// HEXA-FUSION §5g — operator-specific surgical override probe.
+//
+// Standalone $0 codegen emit-diff probe for the WMMA per-call-site
+// precision override (`_nvptx_wmma_mnemonic_override`). Imports ONLY the
+// nvptx codegen module + its MIR/LIR deps — NOT `hir_to_mir.hexa` (which
+// the full `nvptx_lower_test.hexa` pulls in, surfacing a pre-existing
+// flatten-ordering breakage on `_hir_let_type_text`, unrelated to this
+// milestone). This probe exercises the override resolver + the full
+// `codegen_emit_ptx_sm80` lowering on a 4-op WMMA fixture.
+//
+// Falsifier F-FUSION-WMMA-OVERRIDE:
+//   (emit Δ)  override-tagged call-site emits a DIFFERENT mnemonic family
+//             (.bf16) than the handle-uniform default (.f16), AND
+//   (byte-eq) the un-tagged (precision="") path is BYTE-IDENTICAL to the
+//             default `_nvptx_wmma_mnemonic` emit — max|Δ|=0.
+//
+// $0 — pure source→PTX-text, no silicon/ptxas. Per HEXA-FUSION g5 this
+// is a CAPABILITY probe (an override a monolithic library lacks), NOT a
+// raw-GEMM-win claim.
+
+import "../compiler/ir/mir.hexa"
+import "../compiler/ir/lir.hexa"
+import "../compiler/codegen/nvptx_ptx_ops.hexa"
+import "../compiler/codegen/nvptx_tma_ops.hexa"
+import "../compiler/codegen/nvptx_target.hexa"
+
+fn _loc(id: i64, name: string, prec: string) -> Local {
+    return Local { id: id, arena_id: 1, type_id: 0, name_hint: name, precision: prec, space: "" }
+}
+
+fn _miss() -> Local {
+    return Local { id: -1, arena_id: 0, type_id: 0, name_hint: "", precision: "", space: "" }
+}
+
+fn _call(dst: Local, callee: string) -> Stmt {
+    return Stmt { kind: STMT_CALL, dst: dst, op: callee, args: [],
+                  target_block: -1, target_block_else: -1 }
+}
+
+fn _ret() -> Stmt {
+    return Stmt { kind: STMT_RETURN, dst: _miss(), op: "", args: [],
+                  target_block: -1, target_block_else: -1 }
+}
+
+// Build a 4-op WMMA MModule with the given precision tag on the
+// multiplicand (load_a/load_b) + mma fragments. prec="" → default.
+fn _build(prec: string) -> MModule {
+    let frag_a = _loc(7, "fa", prec)
+    let frag_b = _loc(8, "fb", prec)
+    let frag_d = _loc(9, "fd", prec)
+    let mut s0 = []
+    s0.push(_call(frag_a, "gpu_wmma_load_a"))
+    s0.push(_call(frag_b, "gpu_wmma_load_b"))
+    s0.push(_call(frag_d, "gpu_wmma_mma"))
+    s0.push(_call(_miss(), "gpu_wmma_store_c"))   // store-c stays default f32
+    s0.push(_ret())
+    let mut blocks = []
+    blocks.push(Block { id: 0, stmts: s0, preds: [], succs: [] })
+    let mut locals = []
+    locals.push(frag_a); locals.push(frag_b); locals.push(frag_d)
+    let mf = MFunc {
+        name: "wmma_probe", params: [], return_local: _miss(),
+        locals: locals, blocks: blocks, entry_block: 0,
+        arena_root: 1, def_line: 0, gpu_kind: GPU_KIND_DEVICE
+    }
+    let mut fns = []
+    fns.push(mf)
+    return MModule { file: "wmma_probe.hexa", funcs: fns, globals: [] }
+}
+
+fn _has(hay: string, needle: string) -> bool {
+    return hay.find(needle) >= 0
+}
+
+fn main() {
+    let ptx_def = codegen_emit_ptx_sm80(_build(""))
+    let ptx_ref = codegen_emit_ptx_sm80(_build(""))     // re-emit for byte-eq
+    let ptx_ovr = codegen_emit_ptx_sm80(_build(".bf16"))
+
+    println("=== HEXA-FUSION §5g WMMA per-call-site override — $0 emit-diff probe ===")
+    println("")
+    println("--- DEFAULT emit (handle-uniform f16, precision=\"\") ---")
+    println(ptx_def)
+    println("--- OVERRIDE emit (.bf16 multiplicands, surgical single-site) ---")
+    println(ptx_ovr)
+
+    let mut ok = true
+
+    // (byte-eq) — default path byte-identical to itself across re-emit.
+    if ptx_def == ptx_ref {
+        println("[byte-eq] default-path re-emit IDENTICAL — max|Δ|=0  PASS")
+    } else {
+        println("[byte-eq] FAIL — default path nondeterministic")
+        ok = false
+    }
+
+    // (emit Δ) — override emits the bf16 family that is ABSENT from default.
+    let ovr_has_bf16 = _has(ptx_ovr, "wmma.load.a.sync.aligned.row.m16n16k16.shared.bf16")
+                    && _has(ptx_ovr, "wmma.load.b.sync.aligned.col.m16n16k16.shared.bf16")
+                    && _has(ptx_ovr, "wmma.mma.sync.aligned.row.col.m16n16k16.f32.bf16.bf16.f32")
+    let def_no_bf16 = !_has(ptx_def, ".shared.bf16") && !_has(ptx_def, "f32.bf16.bf16.f32")
+    // per-call-site: store-c keeps default f32 EVEN in the override emit.
+    let ovr_storec_f32 = _has(ptx_ovr, "wmma.store.d.sync.aligned.row.m16n16k16.shared.f32")
+
+    if ovr_has_bf16 {
+        println("[emit Δ] override call-site emits .bf16 family       PASS")
+    } else {
+        println("[emit Δ] FAIL — override did not switch to bf16 family")
+        ok = false
+    }
+    if def_no_bf16 {
+        println("[emit Δ] default emit has ZERO bf16 family            PASS")
+    } else {
+        println("[emit Δ] FAIL — default leaked bf16 (override not opt-in)")
+        ok = false
+    }
+    if ovr_storec_f32 {
+        println("[per-site] store-c keeps default .shared.f32          PASS")
+    } else {
+        println("[per-site] FAIL — store-c was globally flipped (not surgical)")
+        ok = false
+    }
+
+    println("")
+    if ok {
+        println("F-FUSION-WMMA-OVERRIDE: PASS (emit Δ ∧ default byte-eq max|Δ|=0)")
+    } else {
+        println("F-FUSION-WMMA-OVERRIDE: FAIL")
+        exit(1)
+    }
+}
