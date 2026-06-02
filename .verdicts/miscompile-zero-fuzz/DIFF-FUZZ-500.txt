@@ -1,0 +1,13 @@
+DIFF-FUZZ-500 — gen2-native vs aprime-C differential codegen fuzz
+=================================================================
+seeds:        121..500 (380 deterministic seeded random programs)
+axes added:   float (arith/format) · struct (decl+field) · closure (capture)
+axes excluded: for-in ranges — snapshot PARSE surface fragile (not a codegen bug;
+              parse-reject on BOTH gen2 and oracle → excluded, not a divergence)
+oracle:       aprime_fixhex (C-built)  vs  gen2_fix (self-hosted native)
+per-seed gate: asm byte-diff (modulo benign __L<sha4>_ label hash) + 0 ENCODE-MISS/udf + exit-code match
+host:         ghost (macOS arm64), native
+
+RESULT: ALL CLEAN — 380/380 programs, no divergence.
+  every seed: asm=match  obj=clean  exit=match
+  0 ENCODE-MISS · 0 spurious udf · 0 behavioral mismatch

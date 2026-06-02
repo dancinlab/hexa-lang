@@ -1,0 +1,192 @@
+// compiler/test/elf_x86_64_data.hexa
+//
+// SELFHOST-NEXT verification harness — exercises the cycle-32 data-ref
+// path of the in-tree ELF x86_64 serializer (`compiler/emit/elf_x86_64.hexa`):
+//   * a `.rodata` string literal (`.LCstr0`) referenced RIP-relatively,
+//   * a `.data` module-global slot (`g0`) referenced RIP-relatively,
+//   * the matching R_X86_64_PC32 relocs + LOCAL-before-GLOBAL .symtab.
+//
+// Two LModules are built by hand:
+//   (A) "data" — a `main` that `lea`s `.LCstr0` into rdi and `g0` into
+//       rsi, then returns. Drives the R_X86_64_PC32 + .rodata + .data
+//       + .bss section emission. `readelf -r` shows PC32 vs `.LCstr0`/`g0`.
+//   (B) "exit7" — a text-only `main` returning 7 (mov eax,#7; ret). The
+//       baseline byte structure: NO .rodata/.data/.bss, nlocal=0, so the
+//       serialized bytes match the pre-cycle-32 text-only path exactly.
+//
+// Output is written to the relative dir `out_elfx86/` under the process
+// cwd (relative — no machine-absolute path in source, so CI
+// no_hardcode_lint passes). The caller creates the dir + runs from the
+// host-local checkout root, then inspects with readelf/ld/run.
+//
+// Run:  mkdir -p out_elfx86 && hexa run compiler/test/elf_x86_64_data.hexa
+
+import "../ir/lir.hexa"               // LFunc / LModule / LSection / PReg / LInstr / LOperand
+import "../emit/macho_arm64.hexa"     // _append_hex_bytes + LIR helpers
+import "../emit/elf_x86_64.hexa"      // the unit under test
+
+fn _xreg(name: string) -> PReg {
+    return PReg { name: name, kind: "gpr", frag_role: "", frag_dtype: "", frag_layout: "" }
+}
+fn _xop_reg(name: string) -> LOperand {
+    return LOperand { kind: "reg", reg: _xreg(name), imm: 0,
+                      mem_base: _xreg(""), mem_offset: 0, label: "" }
+}
+fn _xop_imm(v: i64) -> LOperand {
+    return LOperand { kind: "imm", reg: _xreg(""), imm: v,
+                      mem_base: _xreg(""), mem_offset: 0, label: "" }
+}
+fn _xop_label(name: string) -> LOperand {
+    return LOperand { kind: "label", reg: _xreg(""), imm: 0,
+                      mem_base: _xreg(""), mem_offset: 0, label: name }
+}
+fn _xins(op: string, args: [LOperand]) -> LInstr {
+    return LInstr { op: op, args: args, comment: "" }
+}
+fn _xnyb(n: i64) -> string {
+    if n < 10 { return to_string(n) }
+    if n == 10 { return "a" }
+    if n == 11 { return "b" }
+    if n == 12 { return "c" }
+    if n == 13 { return "d" }
+    if n == 14 { return "e" }
+    return "f"
+}
+fn _xhex(bytes: [Int]) -> string {
+    let mut s = ""
+    let mut i = 0
+    while i < len(bytes) {
+        let b = bytes[i] & 0xff
+        s = s + _xnyb((b >> 4) & 0xf) + _xnyb(b & 0xf) + " "
+        i = i + 1
+    }
+    return s
+}
+
+fn main() {
+    let dir = "out_elfx86"
+
+    // ── (A) data-ref module ──────────────────────────────────────
+    // main:
+    //   lea rdi, .LCstr0   (RIP-rel → R_X86_64_PC32 vs .LCstr0)
+    //   lea rsi, g0        (RIP-rel → R_X86_64_PC32 vs g0)
+    //   ret
+    let fa = LFunc {
+        name:         "main",
+        target:       "x86_64-linux-gnu",
+        instrs:       [
+            _xins("lea", [_xop_reg("rdi"), _xop_label(".LCstr0")]),
+            _xins("lea", [_xop_reg("rsi"), _xop_label("g0")]),
+            _xins("ret", [])
+        ],
+        frame_size:   0,
+        callee_saved: [],
+        def_line:     0
+    }
+    // .rodata literal `.LCstr0` = "hi\0" → hex 68 69 00.
+    let ro = LSection { name: ".LCstr0", bytes: "686900", align: 1 }
+    let lm_a = LModule {
+        file:    "elfx86_data.hexa",
+        target:  "x86_64-linux-gnu",
+        funcs:   [fa],
+        rodata:  [ro],
+        bss:     [],
+        globals: ["g0"],
+        floats:  []
+    }
+    let obj_a = pack_lir_x86_64(lm_a)
+    let bytes_a = serialize_elf_x86_64(obj_a)
+    let path_a = dir + "/hexa_elf_x86_64_data.o"
+    write_bytes(path_a, bytes_a)
+    println("elf_x86_64_data(A): wrote " + to_string(len(bytes_a)) + " bytes to " + path_a)
+    println("  .text bytes = " + to_string(len(obj_a.text)))
+    println("  .rodata     = " + to_string(len(obj_a.rodata)))
+    println("  .data       = " + to_string(len(obj_a.data)))
+    println("  symbols     = " + to_string(len(obj_a.symbols)))
+    println("  nlocal      = " + to_string(obj_a.nlocal))
+    println("  relocs      = " + to_string(len(obj_a.relocs)))
+    println("  .text hex   = " + _xhex(obj_a.text))
+
+    // ── (B) text-only baseline — exit(7) ─────────────────────────
+    // main: mov eax, #7 ; ret  → crt1 turns eax into rc.
+    let fb = LFunc {
+        name:         "main",
+        target:       "x86_64-linux-gnu",
+        instrs:       [
+            _xins("mov", [_xop_reg("eax"), _xop_imm(7)]),
+            _xins("ret", [])
+        ],
+        frame_size:   0,
+        callee_saved: [],
+        def_line:     0
+    }
+    let lm_b = LModule {
+        file:    "elfx86_exit7.hexa",
+        target:  "x86_64-linux-gnu",
+        funcs:   [fb],
+        rodata:  [],
+        bss:     [],
+        globals: [],
+        floats:  []
+    }
+    let obj_b = pack_lir_x86_64(lm_b)
+    let bytes_b = serialize_elf_x86_64(obj_b)
+    let path_b = dir + "/hexa_elf_x86_64_exit7.o"
+    write_bytes(path_b, bytes_b)
+    println("elf_x86_64_data(B): wrote " + to_string(len(bytes_b)) + " bytes to " + path_b)
+    println("  .text bytes = " + to_string(len(obj_b.text)))
+    println("  nlocal      = " + to_string(obj_b.nlocal))
+    println("  relocs      = " + to_string(len(obj_b.relocs)))
+    println("  .text hex   = " + _xhex(obj_b.text))
+
+    // ── (C) runnable freestanding `_start` — write(1,.LCstr0,3)+exit(7) ─
+    // Proves the R_X86_64_PC32 .rodata reloc resolves to the right
+    // runtime address (the string is actually printed):
+    //   mov rax, #1          (sys_write)
+    //   mov rdi, #1          (fd=stdout)
+    //   lea rsi, .LCstr0     (buf — RIP-relative, R_X86_64_PC32)
+    //   mov rdx, #3          (len "hi\n")
+    //   syscall
+    //   mov rax, #60         (sys_exit)
+    //   mov rdi, #7          (rc)
+    //   syscall
+    let fc = LFunc {
+        name:         "_start",
+        target:       "x86_64-linux-gnu",
+        instrs:       [
+            _xins("mov", [_xop_reg("rax"), _xop_imm(1)]),
+            _xins("mov", [_xop_reg("rdi"), _xop_imm(1)]),
+            _xins("lea", [_xop_reg("rsi"), _xop_label(".LCstr0")]),
+            _xins("mov", [_xop_reg("rdx"), _xop_imm(3)]),
+            _xins("syscall", []),
+            _xins("mov", [_xop_reg("rax"), _xop_imm(60)]),
+            _xins("mov", [_xop_reg("rdi"), _xop_imm(7)]),
+            _xins("syscall", [])
+        ],
+        frame_size:   0,
+        callee_saved: [],
+        def_line:     0
+    }
+    // "hi\n\0" → 68 69 0a 00.
+    let ro_c = LSection { name: ".LCstr0", bytes: "68690a00", align: 1 }
+    let lm_c = LModule {
+        file:    "elfx86_start.hexa",
+        target:  "x86_64-linux-gnu",
+        funcs:   [fc],
+        rodata:  [ro_c],
+        bss:     [],
+        globals: [],
+        floats:  []
+    }
+    let obj_c = pack_lir_x86_64(lm_c)
+    let bytes_c = serialize_elf_x86_64(obj_c)
+    let path_c = dir + "/hexa_elf_x86_64_start.o"
+    write_bytes(path_c, bytes_c)
+    println("elf_x86_64_data(C): wrote " + to_string(len(bytes_c)) + " bytes to " + path_c)
+    println("  .text bytes = " + to_string(len(obj_c.text)))
+    println("  .rodata     = " + to_string(len(obj_c.rodata)))
+    println("  symbols     = " + to_string(len(obj_c.symbols)))
+    println("  nlocal      = " + to_string(obj_c.nlocal))
+    println("  relocs      = " + to_string(len(obj_c.relocs)))
+    println("  .text hex   = " + _xhex(obj_c.text))
+}
