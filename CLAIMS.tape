@@ -55,6 +55,17 @@
   raw    = ".verdicts/compiler-selfhost-fixpoint/<id>.txt   # NOT YET PERSISTED"
   src    = "COMPILER.md S3 (2026-05-20 🛸 SELF-HOST FIXPOINT) + RFC 063 P0/P1/P2/P3"
   status = "STUB — terminal verdict NOT persisted (md5/byte-diff evidence is md-only). gated OUT of /paper until claim_verify writes a closure verdict to .verdicts/."
+# ─────────────────────────────────────────────────────────────────────────────
+# COMPILER — selfhost-byteeq (slug · group=COMPILER · paper-track)
+# Terminal upgrade of compiler_selfhost_fixpoint: the OBJECT-level byte-eq
+# fixpoint of the 3-stage native bootstrap — stage3-output (cc-gen3.o) ==
+# stage4-output (cc-gen4.o), BYTE-IDENTICAL (real verdict persisted).
+@C selfhost_byteeq_fixpoint := "hexa native compiler reaches byte-eq self-host fixpoint: stage3 cc-gen3.o == stage4 cc-gen4.o byte-identical (sha 32c6db9b…, 3224592 B, cmp=0, ENCODE_MISS=0)" :: fixpoint [slug=selfhost-byteeq group=COMPILER]
+  method = "fixpoint"
+  cmd    = "tool/build_selfhost.sh (seeds→hexat→aprime→gen2→gen3→gen4) → cmp cc-gen3.o cc-gen4.o (exit 0) → shasum -a 256 (match)"
+  raw    = ".verdicts/selfhost-byteeq/selfhost_byteeq_fixpoint.txt"
+  src    = "tool/build_selfhost.sh + ghost ~/dancinlab/selfhost-work (gen3.done/gen4.done) · source fixpoint fixes #2479 #2509 #2532 · .verdicts/selfhost-byteeq/STAGE3-DIAG.txt"
+  status = "🟢 SUPPORTED — REAL verdict persisted verbatim (cmp exit 0 · matching sha256 · 3224592 B · ENCODE_MISS=0). terminal · paper-eligible."
 
 # ───────────────────────────────────────────────────────────────────────
 # GPU — fusion-epilogue-gemm-bias-gelu (slug · group=GPU · paper-track)

@@ -63,3 +63,26 @@ turn the ad-hoc ghost byte-eq build into a one-command reproducible + safely-pro
       opt-in delivers the capability now at zero risk; flip is one gated command when ready.
 - [ ] heavy ghost build re-verification from a clean main checkout = follow-up (detached).
 
+
+## 2026-06-03 — byte-eq fixpoint published as first-class verifiable claim (CLAIMS.tape)
+
+Deferred milestone CLOSED: reproducible-build attestation. The graduated self-host
+byte-eq fixpoint is now a terminal `@C` claim in root `CLAIMS.tape` with a persisted
+`.verdicts/` verdict carrying REAL measured bytes (g63 honest, not asserted).
+
+- **Claim**: `@C selfhost_byteeq_fixpoint` (group=COMPILER · slug=selfhost-byteeq ·
+  method=fixpoint). Terminal upgrade of the `compiler_selfhost_fixpoint` STUB (which
+  was gen1/gen2 `.s` md5, md-only, NO persisted verdict): this asserts the OBJECT-level
+  fixpoint stage3 `cc-gen3.o` == stage4 `cc-gen4.o`, BYTE-IDENTICAL, with a real verdict.
+- **Verdict**: `.verdicts/selfhost-byteeq/selfhost_byteeq_fixpoint.txt` — verbatim
+  evidence captured from ghost `~/dancinlab/selfhost-work`:
+    - `gen4.done`: `EXIT=0 OBJSIZE=3224592 ENCODE_MISS=0 LINK_gen3=0 SMOKE=2 CMP_gen3_vs_gen4=BYTE-EQ-GRADUATION FIRSTDIFF=0`
+    - sha256 `32c6db9b5696bd251da62770275d0ba929387198dd750ce3466e7ef11e37fdec` — IDENTICAL
+      across cc-gen3.o, cc-gen4.o, AND cc-gen3b.o (full-scale native determinism gen3==gen3b).
+    - `cmp cc-gen3.o cc-gen4.o; echo $?` → `0` (byte-identical) · 3224592 B each · ENCODE_MISS=0.
+- **Method**: deterministic 3-stage bootstrap via `tool/build_selfhost.sh` → `cmp` GATE;
+  artifacts regenerable one-command (verdict notes this honestly). Source fixpoint fixes
+  on main: #2479 #2509 #2532. Diagnosis lineage: STAGE3-DIAG.txt predicted the graduation.
+- **Schema lint**: self-checked — fields {method,cmd,raw,src,status} present in sibling
+  order, slug/group well-formed, `raw` ptr resolves to the verdict file. No dedicated
+  CLAIMS lint / `hexa` CLI on ghost; method=fixpoint is empirical (run-stdout = the verify).
