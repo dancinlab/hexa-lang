@@ -1,0 +1,43 @@
+=== SELFHOST-NEXT: ELF x86_64 .o — data relocs (R_X86_64_PC32) + .rodata/.data/.bss ===
+host: summer (native x86_64 linux); date: 2026-06-02T19:30:51Z
+
+### Module A — main lea .LCstr0/g0 (data-ref reloc + sections)
+--- readelf -h ---
+  Type:                              REL (Relocatable file)
+  Machine:                           Advanced Micro Devices X86-64
+--- readelf -S ---
+  [ 1] .text             PROGBITS         0000000000000000  00000040
+  [ 2] .rela.text        RELA             0000000000000000  00000050
+  [ 3] .rodata           PROGBITS         0000000000000000  00000080
+  [ 4] .data             PROGBITS         0000000000000000  00000088
+  [ 5] .symtab           SYMTAB           0000000000000000  00000098
+--- readelf -r ---
+
+Relocation section '.rela.text' at offset 0x50 contains 2 entries:
+  Offset          Info           Type           Sym. Value    Sym. Name + Addend
+000000000003  000100000002 R_X86_64_PC32     0000000000000000 .LCstr0 - 4
+00000000000a  000200000002 R_X86_64_PC32     0000000000000000 g0 - 4
+--- readelf -s ---
+
+Symbol table '.symtab' contains 4 entries:
+   Num:    Value          Size Type    Bind   Vis      Ndx Name
+     0: 0000000000000000     0 NOTYPE  LOCAL  DEFAULT  UND 
+     1: 0000000000000000     0 NOTYPE  LOCAL  DEFAULT    3 .LCstr0
+     2: 0000000000000000    16 NOTYPE  LOCAL  DEFAULT    4 g0
+     3: 0000000000000000    15 FUNC    GLOBAL DEFAULT    1 main
+
+### Module C — freestanding _start write(1,.LCstr0,3)+exit(7) — RUNNABLE
+--- readelf -r ---
+
+Relocation section '.rela.text' at offset 0x70 contains 1 entry:
+  Offset          Info           Type           Sym. Value    Sym. Name + Addend
+000000000011  000100000002 R_X86_64_PC32     0000000000000000 .LCstr0 - 4
+ld rc=0
+--- objdump (lea patched by linker) ---
+  40100e:	48 8d 35 eb 0f 00 00 	lea    0xfeb(%rip),%rsi        # 402000 <.LCstr0>
+--- RUN ---
+stdout=[hi]  rc=7
+
+### Baseline exit(7) text-only — byte-structure UNCHANGED vs origin/main
+7f68eb200cec3a621129917384ed779143fd23549e565d3a45b77c5f267583db  hexa_elf_x86_64_exit7.o
+(matches origin/main serializer sha — byte-identical, verified by cmp)
