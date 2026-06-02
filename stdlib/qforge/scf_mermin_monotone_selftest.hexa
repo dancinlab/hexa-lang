@@ -1,0 +1,158 @@
+// @ci_gate — deterministic · pure analytic anchors (no fixture I/O required)
+//
+// qforge_scf_mermin_monotone_selftest.hexa — the CaH6 BASIS-MONOTONICITY g5 gate.
+//
+// THE WALL (demiurge 7581435): the CaH6 real-cell ground-state SCF total energy
+// SCATTERED non-variationally with the PW basis size NPW (−13→−18→−37→−29→−52 Ry),
+// so the composed λ was ill-posed (3.36 → 1.4e7 → 0 → 4.59 → 4.3e-52). A correct
+// variational PW-SCF MUST give a basis-monotone energy: adding a plane wave can
+// only LOWER (or hold) the energy (Rayleigh-Ritz).
+//
+// ROOT CAUSE (scf.hexa : qforge_scf_smeared, pre-fix line 260): the driver reported
+// the BARE BAND-ENERGY SUM  E = Σ occ_k·ε_k.  With the FRACTIONAL (smeared) metallic
+// occupations the metal needs (d15), the bare sum is NOT a variational functional —
+// only the MERMIN FREE ENERGY  F = Σ occ_k·ε_k − σ·S  (S = the Fermi-Dirac smearing
+// entropy, smearing.hexa : qforge_smearing_entropy) is stationary at the SCF fixed
+// point AND monotone-decreasing in the basis. The fix makes qforge_scf_smeared
+// report F when σ>0; this gate pins the variational guarantee.
+//
+//   (A) MERMIN MONOTONICITY: on a fixed metallic spectrum grown by adding higher
+//       plane-wave states, F(N+1) ≤ F(N) + tol for every basis-growth step, and F
+//       PLATEAUS (a converged limit, not a chaotic neighbourhood). The variational
+//       guarantee the CaH6 etot-vs-NPW curve was missing.                       🟢
+//   (B) ENTROPY CORRECTNESS: qforge_smearing_entropy on a half-filled state
+//       (f̃=½) returns the analytic spin-degenerate value 2·ln2; a fully
+//       occupied/empty state returns 0 (no entropy).                            🟢
+//   (C) BACKWARD-COMPAT: σ≤0 → S=0 → F = the bare band sum (the integer-fill path
+//       is bit-identical; every prior anchor unaffected).                       🟢
+//
+// Run:  HEXA_LANG=. hexa run stdlib/qforge/scf_mermin_monotone_selftest.hexa
+// PASS: "qforge_scf_mermin_monotone_selftest PASS".
+use "stdlib/qforge/scf"
+use "stdlib/qforge/smearing"
+use "stdlib/qforge/assembler"
+
+fn _abs(x: float) -> float { if x < 0.0 { return -x } return x }
+fn _ck_true(name: str, cond: bool) -> int {
+    if cond { println("PASS " + name) ; return 0 }
+    println("FAIL " + name) ; return 1
+}
+fn _ck_close(name: str, got: float, want: float, eps: float) -> int {
+    if _abs(got - want) <= eps { println("PASS " + name + " (" + to_string(got) + ")") ; return 0 }
+    println("FAIL " + name + " — got " + to_string(got) + " want " + to_string(want)) ; return 1
+}
+
+// ── a FIXED (ρ-independent) metallic Hamiltonian whose basis size GN varies ────
+//   Diagonal kinetic ladder ε_k=½(0.37k)² (a free-electron-like metal) with a
+//   near-degenerate pair around the Fermi index (the hard-fill swap zone), plus a
+//   small all-to-all hop t so a larger basis genuinely lowers the near-E_F states
+//   (Rayleigh-Ritz). H ignores ρ → the SCF settles in one step; the only variable
+//   is the basis size GN — exactly the NPW axis the CaH6 wall scattered on.
+let mut GN = 0
+let mut GHAM: PwHam = PwHam { h: [], diag: [], n: 0 }
+fn gd_apply(v: [float]) -> [float] { return qforge_h_apply(GHAM, v) }
+fn gfixed_of_rho(rho: [float]) {
+    let mut h: [float] = []
+    let mut a = 0
+    while a < GN {
+        let mut b = 0
+        while b < GN {
+            let mut e = 0.5 * (0.37 * to_float(a)) * (0.37 * to_float(a))
+            if a == 3 { e = e - 0.02 }
+            if a == 4 { e = e - 0.018 }       // states 3,4 nearly degenerate at E_F
+            if a == b {
+                h.push(e)
+            } else {
+                // a PHYSICAL hop that DECAYS with |Δindex| (like V(G−G') of a real
+                // PW Hamiltonian): a high-|G| basis state couples weakly, so its
+                // contribution to the near-E_F energy → 0 → F converges/plateaus.
+                let d = _abs(to_float(a - b))
+                h.push(-0.12 / (1.0 + d * d))
+            }
+            b = b + 1
+        }
+        a = a + 1
+    }
+    let mut dg: [float] = []
+    let mut i = 0
+    while i < GN {
+        let mut e = 0.5 * (0.37 * to_float(i)) * (0.37 * to_float(i))
+        if i == 3 { e = e - 0.02 }
+        if i == 4 { e = e - 0.018 }
+        dg.push(e) ; i = i + 1
+    }
+    GHAM = PwHam { h: h, diag: dg, n: GN }
+    return gd_apply
+}
+// density stub: uniform ρ summing to nelec (the fixed H ignores it).
+fn rho_stub(psis: [[float]], occ: [float], nbands: int) -> [float] {
+    let ndim = len(psis[0])
+    let mut tot = 0.0
+    let mut b = 0
+    while b < nbands { tot = tot + occ[b] ; b = b + 1 }
+    let u = tot / to_float(ndim)
+    let mut rho: [float] = []
+    let mut i = 0
+    while i < ndim { rho.push(u) ; i = i + 1 }
+    return rho
+}
+
+fn main() {
+    let mut fails = 0
+    let sigma = 0.25
+    let nelec = 6
+
+    // ══ (A) MERMIN FREE-ENERGY BASIS-MONOTONICITY (the variational guarantee) ══
+    //   Grow the basis 6→7→8→10→12→16→20 and assert F(N_{i+1}) ≤ F(N_i)+tol at
+    //   EVERY step, and that the last two steps PLATEAU (converged limit). This is
+    //   the property the CaH6 NPW=16/32/48/64/96 etot curve VIOLATED.
+    let sizes = [6, 7, 8, 10, 12, 16, 20]
+    let mut prevF = 1.0e30
+    let mut all_mono = true
+    let mut fvals: [float] = []
+    let mut ci = 0
+    while ci < len(sizes) {
+        GN = sizes[ci]
+        let scf = qforge_scf_smeared(gfixed_of_rho, rho_stub, GN, GN, nelec,
+                                     0.5, 1.0e-12, 120, sigma, 2.0, 0)
+        fails = fails + _ck_true("(A) smeared SCF converged @N=" + to_string(GN), scf.converged)
+        if ci > 0 && scf.e_total > prevF + 1.0e-9 { all_mono = false }
+        fvals.push(scf.e_total)
+        prevF = scf.e_total
+        ci = ci + 1
+    }
+    fails = fails + _ck_true("(A) Mermin F(N+1) ≤ F(N)+tol for every basis step (variational)",
+                             all_mono)
+    // plateau: the last step changes F by < 1e-3 (a converged limit, not chaos).
+    let nlast = len(fvals)
+    let dplateau = _abs(fvals[nlast - 1] - fvals[nlast - 2])
+    fails = fails + _ck_true("(A) F PLATEAUS at the basis limit (|ΔF_last| < 1e-3)",
+                             dplateau < 1.0e-3)
+
+    // ══ (B) ENTROPY CORRECTNESS ════════════════════════════════════════════════
+    //   Half-filled spin-degenerate state (occ=1.0, spin_deg=2 → f̃=½): the
+    //   per-channel entropy is −[½ln½ + ½ln½] = ln2, times spin_deg=2 → 2·ln2.
+    let ln2 = 0.6931471805599453
+    let s_half = qforge_smearing_entropy([1.0], 2.0)
+    fails = fails + _ck_close("(B) entropy of a half-filled state = 2·ln2", s_half, 2.0 * ln2, 1.0e-9)
+    // fully occupied (occ=2.0 → f̃=1) and empty (occ=0) → zero entropy.
+    let s_full = qforge_smearing_entropy([2.0, 0.0], 2.0)
+    fails = fails + _ck_close("(B) entropy of fully occ/empty states = 0", s_full, 0.0, 1.0e-12)
+
+    // ══ (C) BACKWARD-COMPAT: σ≤0 → F = bare band sum (integer-fill path intact) ══
+    //   With σ=0 the smeared driver must report the SAME energy as the bare band
+    //   sum (no entropy subtracted) — the prior anchors are unaffected.
+    GN = 8
+    let scf0 = qforge_scf_smeared(gfixed_of_rho, rho_stub, GN, GN, nelec,
+                                  0.5, 1.0e-12, 120, 0.0, 2.0, 0)
+    // recompute the bare band sum from the converged eigenvalues + integer occ.
+    let occ_int = [2.0, 2.0, 2.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    let mut bandsum = 0.0
+    let mut k = 0
+    while k < 3 { bandsum = bandsum + occ_int[k] * scf0.evals[k] ; k = k + 1 }
+    fails = fails + _ck_close("(C) σ=0 → reported E = bare band sum (no entropy)",
+                              scf0.e_total, bandsum, 1.0e-9)
+
+    if fails == 0 { println("qforge_scf_mermin_monotone_selftest PASS") }
+    else { println("qforge_scf_mermin_monotone_selftest FAIL — " + to_string(fails) + " case(s)") }
+}

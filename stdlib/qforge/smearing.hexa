@@ -106,6 +106,39 @@ pub fn qforge_fermi_level(evals: [float], nelec: int, sigma: float,
     return 0.5 * (lo + hi)
 }
 
+// ── smearing entropy S = −Σ_k [ f̃ ln f̃ + (1−f̃) ln(1−f̃) ] (per spin channel) ─
+//   The Mermin finite-T entropy of the Fermi-Dirac occupations. occ_k carries the
+//   spin-degenerate occupation (spin_deg·f̃, f̃ ∈ [0,1] the per-channel filling);
+//   the entropy is computed on the PER-CHANNEL f̃ = occ_k/spin_deg and re-scaled by
+//   spin_deg (each of the spin_deg degenerate channels contributes the same S_k).
+//
+//   WHY THIS EXISTS (the CaH6 basis-instability fix): the bare band-energy sum
+//   Σ occ_k·ε_k is NOT a variational functional once occupations are FRACTIONAL —
+//   only the MERMIN FREE ENERGY  F = Σ occ_k·ε_k − σ·S  is stationary at the SCF
+//   fixed point and MONOTONE-DECREASING in the basis size (Rayleigh-Ritz on ε plus
+//   a continuous, basis-smooth entropy). qforge_scf_smeared reports F (not the bare
+//   sum) so etot CONVERGES MONOTONICALLY with NPW (the −13→−18→−37 Ry CaH6 scatter
+//   is the bare-sum artifact). S ≥ 0; a fully-occupied/empty state contributes 0.
+//
+//   The −x·ln(x) terms are evaluated with the x→0 limit x·ln(x)→0 (a state pinned
+//   at f̃=0 or f̃=1 has zero entropy) so the sum is finite for any occupation set.
+pub fn qforge_smearing_entropy(occ: [float], spin_deg: float) -> float {
+    let mut sd = spin_deg
+    if sd <= 0.0 { sd = 2.0 }
+    let n = len(occ)
+    let mut s = 0.0
+    let mut k = 0
+    while k < n {
+        let f = occ[k] / sd                              // per-channel filling f̃ ∈ [0,1]
+        // x·ln(x) with the x→0 limit = 0 (clamp tiny/edge values out of the log).
+        if f > 1.0e-12 && f < 1.0 - 1.0e-12 {
+            s = s + sd * (-1.0 * (f * log(f) + (1.0 - f) * log(1.0 - f)))
+        }
+        k = k + 1
+    }
+    return s
+}
+
 // ── per-band fractional occupation vector occ_k = spin_deg·f(ε_k − E_F) ───────
 //   The fractional analogue of scf_occupations. Solves E_F internally so the
 //   returned vector sums (Σ occ_k) to nelec to bisection tolerance. nbands is the
