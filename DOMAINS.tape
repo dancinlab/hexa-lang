@@ -42,6 +42,7 @@
 @domain HEXA-CC-NATIVE := "./HEXA-CC-NATIVE.md"
 @domain HEXA-SELFHOST+ := "domains/HEXA-SELFHOST+.md"
 @domain SELFHOST-NEXT := "domains/SELFHOST-NEXT.md"
+@domain SELFHOST-CI := "domains/SELFHOST-CI.md"
 @domain MISCOMPILE-ZERO := "domains/MISCOMPILE-ZERO.md"
 
 @domain FORGE-UTILGREEN := "domains/FORGE-UTILGREEN.md"
