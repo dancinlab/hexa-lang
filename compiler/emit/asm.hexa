@@ -67,7 +67,11 @@ fn _label_prefix(target: string) -> string {
 fn _comment_marker(target: string) -> string {
     if _is_darwin(target) { return " ; " }
     if _is_thumb(target) { return " @ " }   // ARM/Thumb assembler line comment
-    return " # "
+    // ELF AArch64 (GNU as): `#` is the immediate prefix, NOT a comment
+    // char — a trailing `# …` is parsed as instruction operands and
+    // errors. AArch64 GNU as uses `//` for line comments.
+    if _is_elf_arm64(target) { return " // " }
+    return " # "   // x86_64 GAS line comment
 }
 
 // Apple ARM64 uses bare `x0`, `w0`, `sp`, etc.
