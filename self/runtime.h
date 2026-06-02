@@ -1168,6 +1168,41 @@ HexaVal hexa_forge_dispatch_residual_add(HexaVal a_v, HexaVal b_v,
 HexaVal forge_dispatch_residual_add(HexaVal a_v, HexaVal b_v,
                              HexaVal out_v, HexaVal n_v);                     /* runtime.c — fusion L3 glue seam */
 
+/* HEXA-FUSION L3 (glue half) — device-resident elementwise GELU.
+ * forge_dispatch_gelu(in, out, n) -> int rc (0 ok / -1 host fallback).
+ * out[i] = in[i]·Φ(in[i]) = in[i]·0.5·(1+erf(in[i]·(1/√2))) — the EXACT
+ * erf-based GELU of stdlib/flame/nn_lib.hexa _nn_gelu, elementwise with NO
+ * reduction. Device CUDA erf() is IEEE-correct (same libm contract as the host
+ * erf builtin) → bit-exact to the host scalar loop (max|Δ|=0). Fuses the gelu
+ * ×3 host glue in clm_prod_fwd (hg0/ex0/ex1 — the ③ fwd-only 0% floor) onto the
+ * device via _hx_cuda_farr_gelu_gpu, keeps OUT DEVICE-RESIDENT (loc=FARR_DEVICE,
+ * dirty_host=0) so the next conv GEMM H2D-skips it. Gated in clm_prod.hexa
+ * behind env CLM_PROD_DEVRESIDENT; no-CUDA → -1 → host gelu (byte-eq). */
+HexaVal hexa_forge_dispatch_gelu(HexaVal in_v, HexaVal out_v,
+                                  HexaVal n_v);                              /* runtime.c — fusion L3 glue */
+HexaVal forge_dispatch_gelu(HexaVal in_v, HexaVal out_v,
+                             HexaVal n_v);                                    /* runtime.c — fusion L3 glue seam */
+
+/* HEXA-FUSION L3 (glue half) — device-resident GroupNorm forward.
+ * forge_dispatch_groupnorm(x, gamma, beta, y, mean, inv, xhat, T, C, G) -> int
+ * rc (0 ok / -1 host fallback). PyTorch GroupNorm fwd (gn_lib.hexa
+ * nn_groupnorm_fwd): per group g, mu = mean over (Cg·T), var = mean (x-mu)²,
+ * inv = 1/sqrt(var+eps) (eps=1e-5), xhat = (x-mu)·inv, y = gamma·xhat + beta.
+ * The reduction runs SEQUENTIALLY (t outer, c inner) under ONE thread per group
+ * and inv uses the SAME Newton-Raphson 40-iter _gn_sqrt as the host (NO CUDA
+ * rsqrt, NO tree re-association) → bit-exact (max|Δ|=0). Fuses the groupnorm ×2
+ * host glue in clm_prod_fwd (h0→hn0, y→yn — the ③ fwd-only 0% floor) onto the
+ * device via _hx_cuda_farr_groupnorm_gpu, keeps Y/xhat/mean/inv DEVICE-RESIDENT.
+ * Gated behind env CLM_PROD_DEVRESIDENT; no-CUDA → -1 → host loop (byte-eq). */
+HexaVal hexa_forge_dispatch_groupnorm(HexaVal x_v, HexaVal gamma_v, HexaVal beta_v,
+                                  HexaVal y_v, HexaVal mean_v, HexaVal inv_v,
+                                  HexaVal xhat_v, HexaVal t_v, HexaVal c_v,
+                                  HexaVal g_v);                              /* runtime.c — fusion L3 glue */
+HexaVal forge_dispatch_groupnorm(HexaVal x_v, HexaVal gamma_v, HexaVal beta_v,
+                             HexaVal y_v, HexaVal mean_v, HexaVal inv_v,
+                             HexaVal xhat_v, HexaVal t_v, HexaVal c_v,
+                             HexaVal g_v);                                    /* runtime.c — fusion L3 glue seam */
+
 /* ── RFC 050 PERF-INHERITANCE: forge BF16 FFN dispatch wrapper ──────
  * `forge_dispatch_ffn_fp64_via_bf16(x, w1, w2, y, M, D, FD)` — 7-arg
  * builtin. Takes FP64 farr handles, internally allocates HexaFarrBf16
