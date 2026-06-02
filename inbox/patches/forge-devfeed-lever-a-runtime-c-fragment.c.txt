@@ -598,3 +598,152 @@ HexaVal forge_dispatch_expert_unpack2(HexaVal dex_out_v, HexaVal dex0_v,
                              HexaVal dex1_v, HexaVal n_v) {
     return hexa_forge_dispatch_expert_unpack2(dex_out_v, dex0_v, dex1_v, n_v);
 }
+
+/* HEXA-FUSION L3 (BWD glue half · ⑤-bwd2) — device-resident CE softmax grad.
+ * forge_dispatch_ce_grad(logits, targets, dlogits, T, V). Routes to
+ * _hx_cuda_farr_ce_grad_gpu, reproducing clm_prod.hexa clm_ce_grad: per t mx=max
+ * logit, sm=Σ exp(logit-mx), dlogits[t,v]=(exp(logit-mx)/sm)·(1/T), dlogits[t,tgt]
+ * -=1/T. Sequential per-row (host scan order), device exp() = IEEE libm contract →
+ * bit-exact (max|Δ|=0). Keeps DLOGITS FARR_DEVICE. no-CUDA → -1 → host. */
+HexaVal hexa_forge_dispatch_ce_grad(HexaVal logits_v, HexaVal targets_v,
+                                  HexaVal dlogits_v, HexaVal t_v, HexaVal v_v) {
+    int64_t logits_id  = hexa_as_num(logits_v);
+    int64_t targets_id = hexa_as_num(targets_v);
+    int64_t dlogits_id = hexa_as_num(dlogits_v);
+    int64_t T          = hexa_as_num(t_v);
+    int64_t V          = hexa_as_num(v_v);
+    if (T <= 0 || V <= 0) return hexa_int(-1);
+    if (logits_id < 0 || targets_id < 0 || dlogits_id < 0) return hexa_int(-1);
+#ifdef HEXA_CUDA
+    extern int _hx_cuda_farr_ce_grad_gpu(int64_t, int64_t, int64_t, int64_t, int64_t);
+    int grc = _hx_cuda_farr_ce_grad_gpu(logits_id, targets_id, dlogits_id, T, V);
+    if (grc == 0) return hexa_int(0);
+#endif
+    return hexa_int(-1);
+}
+HexaVal forge_dispatch_ce_grad(HexaVal logits_v, HexaVal targets_v,
+                             HexaVal dlogits_v, HexaVal t_v, HexaVal v_v) {
+    return hexa_forge_dispatch_ce_grad(logits_v, targets_v, dlogits_v, t_v, v_v);
+}
+
+/* HEXA-FUSION L3 (BWD glue half · ⑤-bwd2) — device-resident MoE-router bwd.
+ * forge_dispatch_moe_router_bwd(probs, ex_out, dy, dlogits, dex_out, T, E, C).
+ * Routes to _hx_cuda_farr_moe_router_bwd_gpu, reproducing moe_lib.hexa
+ * nn_moe_router_bwd EXACTLY (reads CACHED probs — NO _moe_exp replay): per t a
+ * 2-pass over E with inner Σ_c — dg=Σ_c dy·ex_out, dex_out=pte·dy, dot=Σ_e pte·dg,
+ * dlogits=pte·(dg-dot). Every reduction accumulates SEQUENTIALLY in the host order
+ * under ONE thread per t (NO tree re-assoc, NO atomics) → bit-exact (max|Δ|=0).
+ * Keeps DLOGITS/DEX_OUT FARR_DEVICE. no-CUDA → -1 → host bwd. */
+HexaVal hexa_forge_dispatch_moe_router_bwd(HexaVal probs_v, HexaVal ex_out_v,
+                                  HexaVal dy_v, HexaVal dlogits_v, HexaVal dex_out_v,
+                                  HexaVal t_v, HexaVal e_v, HexaVal c_v) {
+    int64_t probs_id   = hexa_as_num(probs_v);
+    int64_t ex_out_id  = hexa_as_num(ex_out_v);
+    int64_t dy_id      = hexa_as_num(dy_v);
+    int64_t dlogits_id = hexa_as_num(dlogits_v);
+    int64_t dex_out_id = hexa_as_num(dex_out_v);
+    int64_t T          = hexa_as_num(t_v);
+    int64_t E          = hexa_as_num(e_v);
+    int64_t C          = hexa_as_num(c_v);
+    if (T <= 0 || E <= 0 || C <= 0) return hexa_int(-1);
+    if (probs_id < 0 || ex_out_id < 0 || dy_id < 0) return hexa_int(-1);
+    if (dlogits_id < 0 || dex_out_id < 0) return hexa_int(-1);
+#ifdef HEXA_CUDA
+    extern int _hx_cuda_farr_moe_router_bwd_gpu(int64_t, int64_t, int64_t, int64_t,
+                                                int64_t, int64_t, int64_t, int64_t);
+    int grc = _hx_cuda_farr_moe_router_bwd_gpu(probs_id, ex_out_id, dy_id,
+                                              dlogits_id, dex_out_id, T, E, C);
+    if (grc == 0) return hexa_int(0);
+#endif
+    return hexa_int(-1);
+}
+HexaVal forge_dispatch_moe_router_bwd(HexaVal probs, HexaVal ex_out, HexaVal dy,
+                             HexaVal dlogits, HexaVal dex_out,
+                             HexaVal t, HexaVal e, HexaVal c) {
+    return hexa_forge_dispatch_moe_router_bwd(probs, ex_out, dy, dlogits, dex_out,
+                                              t, e, c);
+}
+
+/* HEXA-FUSION L3 (BWD glue half · ⑤-bwd2) — device-resident 3-way grad sum.
+ * forge_dispatch_grad_sum3(a, b, c, out, n). Routes to _hx_cuda_farr_grad_sum3_gpu:
+ * out[i]=a[i]+b[i]+c[i] (host order = dxt = dxt_r+dxt_e0+dxt_e1, fixed (a+b)+c
+ * association). Pure elementwise → bit-exact (max|Δ|=0). Keeps OUT FARR_DEVICE.
+ * no-CUDA → -1 → host sum loop. */
+HexaVal hexa_forge_dispatch_grad_sum3(HexaVal a_v, HexaVal b_v, HexaVal c_v,
+                                  HexaVal out_v, HexaVal n_v) {
+    int64_t a_id   = hexa_as_num(a_v);
+    int64_t b_id   = hexa_as_num(b_v);
+    int64_t c_id   = hexa_as_num(c_v);
+    int64_t out_id = hexa_as_num(out_v);
+    int64_t n      = hexa_as_num(n_v);
+    if (n <= 0) return hexa_int(-1);
+    if (a_id < 0 || b_id < 0 || c_id < 0 || out_id < 0) return hexa_int(-1);
+#ifdef HEXA_CUDA
+    extern int _hx_cuda_farr_grad_sum3_gpu(int64_t, int64_t, int64_t, int64_t, int64_t);
+    int grc = _hx_cuda_farr_grad_sum3_gpu(a_id, b_id, c_id, out_id, n);
+    if (grc == 0) return hexa_int(0);
+#endif
+    return hexa_int(-1);
+}
+HexaVal forge_dispatch_grad_sum3(HexaVal a_v, HexaVal b_v, HexaVal c_v,
+                             HexaVal out_v, HexaVal n_v) {
+    return hexa_forge_dispatch_grad_sum3(a_v, b_v, c_v, out_v, n_v);
+}
+
+/* HEXA-FUSION L3 (BWD glue half · ⑤-bwd2) — device-resident 2-way grad sum.
+ * forge_dispatch_grad_sum2(a, b, out, n). Routes to _hx_cuda_farr_grad_sum2_gpu:
+ * out[i]=a[i]+b[i] (host order = dxec = dxt+dxec_b). Pure elementwise → bit-exact
+ * (max|Δ|=0). Keeps OUT FARR_DEVICE. no-CUDA → -1 → host sum loop. */
+HexaVal hexa_forge_dispatch_grad_sum2(HexaVal a_v, HexaVal b_v,
+                                  HexaVal out_v, HexaVal n_v) {
+    int64_t a_id   = hexa_as_num(a_v);
+    int64_t b_id   = hexa_as_num(b_v);
+    int64_t out_id = hexa_as_num(out_v);
+    int64_t n      = hexa_as_num(n_v);
+    if (n <= 0) return hexa_int(-1);
+    if (a_id < 0 || b_id < 0 || out_id < 0) return hexa_int(-1);
+#ifdef HEXA_CUDA
+    extern int _hx_cuda_farr_grad_sum2_gpu(int64_t, int64_t, int64_t, int64_t);
+    int grc = _hx_cuda_farr_grad_sum2_gpu(a_id, b_id, out_id, n);
+    if (grc == 0) return hexa_int(0);
+#endif
+    return hexa_int(-1);
+}
+HexaVal forge_dispatch_grad_sum2(HexaVal a_v, HexaVal b_v,
+                             HexaVal out_v, HexaVal n_v) {
+    return hexa_forge_dispatch_grad_sum2(a_v, b_v, out_v, n_v);
+}
+
+/* HEXA-FUSION L3 (BWD glue half · ⑤-bwd2) — device-resident deterministic
+ * embedding scatter. forge_dispatch_embedding_bwd_scatter(dx, ids, dtable, T, d,
+ * V). Routes to _hx_cuda_farr_embedding_bwd_scatter_gpu, reproducing nn_lib.hexa
+ * nn_embedding_bwd_scatter (dtable[tok·d+c] += dx[i·d+c], tok=(int)ids[i], i
+ * ascending) WITHOUT atomics — ONE thread per vocab row scans i=0..T ascending and
+ * adds matching tokens in the SAME order → bit-exact (max|Δ|=0). dtable pre-zeroed
+ * on host (H2D-loaded), kept FARR_DEVICE. no-CUDA → -1 → host scatter. */
+HexaVal hexa_forge_dispatch_embedding_bwd_scatter(HexaVal dx_v, HexaVal ids_v,
+                                  HexaVal dtable_v, HexaVal t_v, HexaVal d_v,
+                                  HexaVal v_v) {
+    int64_t dx_id     = hexa_as_num(dx_v);
+    int64_t ids_id    = hexa_as_num(ids_v);
+    int64_t dtable_id = hexa_as_num(dtable_v);
+    int64_t T         = hexa_as_num(t_v);
+    int64_t d         = hexa_as_num(d_v);
+    int64_t V         = hexa_as_num(v_v);
+    if (T <= 0 || d <= 0 || V <= 0) return hexa_int(-1);
+    if (dx_id < 0 || ids_id < 0 || dtable_id < 0) return hexa_int(-1);
+#ifdef HEXA_CUDA
+    extern int _hx_cuda_farr_embedding_bwd_scatter_gpu(int64_t, int64_t, int64_t,
+                                                       int64_t, int64_t, int64_t);
+    int grc = _hx_cuda_farr_embedding_bwd_scatter_gpu(dx_id, ids_id, dtable_id,
+                                                     T, d, V);
+    if (grc == 0) return hexa_int(0);
+#endif
+    return hexa_int(-1);
+}
+HexaVal forge_dispatch_embedding_bwd_scatter(HexaVal dx_v, HexaVal ids_v,
+                             HexaVal dtable_v, HexaVal t_v, HexaVal d_v,
+                             HexaVal v_v) {
+    return hexa_forge_dispatch_embedding_bwd_scatter(dx_v, ids_v, dtable_v,
+                                                     t_v, d_v, v_v);
+}
