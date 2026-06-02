@@ -481,3 +481,27 @@ wall orthogonal; asm axis = informational residual only. Steady-state: remaining
 the flip itself (needs user OK).
 Verdict: .verdicts/selfhost-next-promote/PROMOTE-READINESS.txt (raw parity stdout:
 .verdicts/selfhost-next-promote/parity_gate_raw_stdout.txt). NO flip performed.
+
+## 2026-06-03 — lane B: native arm64 ≥16GiB self-emit — PROVISION BLOCKED (g63 STOP, $0)
+
+USER approved renting a high-RAM native aarch64-linux host to push the full native
+self-emit past the #2578 OOM wall (pi5-akida reached codegen with 0 ENCODE-MISS,
+then OOM-kill ~7.76 GiB on its 7.8 GiB host). Goal: ≥16 GiB arm64-linux, run the
+full native self-emit + byte-eq fixpoint. Outcome = no qualifying host rentable.
+
+- [x] vast.ai sweep: `cpu_arch=arm64/arm/aarch64` -> [] (empty). Wide sweep
+      `num_gpus>=0 verified=any rentable=any --limit 3000` = 3000 offers, cpu_arch
+      distribution {amd64: 3000}, zero non-amd64. vast inventory is 100% x86_64.
+- [x] runpod: gpuTypes = NVIDIA RTX30xx/40xx/A40/A100/B200/B300 + AMD MI300X — all
+      x86_64 GPU hosts; NO Graviton/Ampere/arm64 CPU class. No arm64 rentable.
+- [x] pool (owned, for completeness): summer/aiden x86_64 30GiB (wrong arch); ghost
+      macOS; pi5-akida aarch64 but 7.9 GiB (the #2578 OOM host) + anima-only/restricted.
+      None satisfies native-arm64 ≥16 GiB.
+- [x] g63 STOP per task: did NOT rent an x86_64 substitute (cannot produce a native
+      arm64 measurement). ZERO spend ($0.00), nothing provisioned, no teardown needed.
+- [x] Verdict: .verdicts/selfhost-next-linux-arm64/NATIVE-SELFEMIT-BIGRAM.txt
+- [ ] UNBLOCK = a ≥16 GiB aarch64-linux host from a provider NOT wired into `hexa
+      cloud` (AWS Graviton r7g.xlarge 32GiB · Oracle Ampere A1 · Hetzner CAX31 16GiB ·
+      Scaleway/GCP T2A). Add as a provider adapter / one-off pool host, then re-run
+      the full native self-emit + gen3==gen4 byte-eq fixpoint. Prior native peak RSS
+      ~7.76 GiB @ OOM, 0 ENCODE-MISS — a ≥16 GiB box is expected to clear the wall.
