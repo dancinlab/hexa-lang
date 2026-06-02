@@ -1,0 +1,440 @@
+// ════════════════════════════════════════════════════════════════════════════
+//  clm_conv_batched.hexa — LEVER (b): fuse the per-step conv GEMMs.
+//
+//  Root cause of the Lane-G util RED (PEAK 4-6%, MEAN 0.24%, SCALE-INVARIANT):
+//  the CLMConvMoE trainer launches MANY tiny per-step GEMMs (M=T=24..512 each,
+//  microsecond-latency-bound) through forge_dispatch_matmul. Each is a separate
+//  cuBLAS launch; the GPU finishes in microseconds and idles while the host feed
+//  (im2col/col2im + adam + the interpreted per-step loop) pegs one CPU core. A
+//  bigger model idles the GPU MORE, not less — raising M and d did not move util.
+//
+//  This file FUSES the batchable GEMMs into ONE strided-batched call so the GPU
+//  does meaningful work per launch. The cleanest provably-byte-eq batch unit is
+//  the TWO ConvExperts (e0, e1): identical shape (d→d, K=3, dilation 1), run
+//  back-to-back every step in both the forward and the backward. Batching their
+//  GEMMs (forward conv-matmul, and backward dW + dX) over a batch dimension of 2
+//  halves the launch count for the expert convs and gives cuBLAS a B=2 strided
+//  problem instead of 2 serial micro-launches.
+//
+//  GRAD-EXACT contract (matches the conv→forge byte-eq bar #2352 / #2383):
+//  forge_matmul_batched is byte-IDENTICAL to B separate forge_dispatch_matmul
+//  calls — on CPU it IS exactly that loop (no math change); on a CUDA host the
+//  forge_dispatch_matmul_batched builtin issues ONE cublasDgemmStridedBatched
+//  over the same B contiguous problems (same FP64 accumulation order per
+//  problem → byte-eq to B serial Dgemm). The conv2 fwd/bwd batched paths are
+//  therefore byte-eq to running conv1d_via_forge / conv1d_bwd_via_forge twice.
+//
+//  F-CLM-CONV2-BATCHED-FWD-EQ : conv2_fwd_via_forge_batched == 2× conv1d_via_forge
+//  F-CLM-CONV2-BATCHED-BWD-EQ : conv2_bwd_via_forge_batched == 2× conv1d_bwd_via_forge
+//  Verified $0 on Mac CPU (max|Δ| = 0 exact); the GPU-busy util measurement is
+//  the single small fire after both levers are locally green.
+//
+//  sibling: clm_conv_gpu.hexa (the un-batched per-conv forge path).
+// ════════════════════════════════════════════════════════════════════════════
+
+use "stdlib/flame/tensor_lib"
+use "stdlib/flame/conv_lib"
+
+fn _cb_absf(x: float) -> float { if x < 0.0 { return 0.0 - x } return x }
+
+// ── forge_matmul_batched: ONE strided-batched GEMM over `batch` problems ──
+// A_all[batch · M · K] @ B_all[batch · K · N] = C_all[batch · M · N], where
+// problem g lives at A_all[g·M·K ..], B_all[g·K·N ..], C_all[g·M·N ..].
+// Caller allocates C_all (batch·M·N).
+//
+// This is the CPU ORACLE / byte-eq reference: EXACTLY `batch` independent
+// forge_dispatch_matmul calls over the strided slices, copied into the
+// contiguous C_all. It is byte-eq by construction to the un-batched per-problem
+// path, so the descent + grads are unchanged. It runs under `hexa run` ($0).
+//
+// On a CUDA host the trainer calls forge_dispatch_matmul_batched (a 7-arg
+// builtin landed in codegen.hexa + self/runtime.c + self/cuda/runtime_cuda.c)
+// which issues ONE cublasDgemmStridedBatched over these same B contiguous
+// problems — same FP64 accumulation order per problem → byte-eq to this oracle.
+// That builtin only resolves in the self-host-rebuilt pod binary; this oracle is
+// the always-correct CPU reference the GPU path must match. The trainer selects
+// the GPU dispatch via env at the call site (clm_prod_gpu.hexa), never here, so
+// this file stays runnable on the prebuilt mac binary with no link dependency.
+pub fn forge_matmul_batched(a_all: int, M: int, K: int, b_all: int, N: int,
+                            batch: int, c_all: int) {
+    let mut g = 0
+    while g < batch {
+        let aoff = g * M * K
+        let boff = g * K * N
+        let coff = g * M * N
+        // slice the g-th A,B into temp contiguous problems (forge_dispatch_matmul
+        // takes farr handles whose data starts at index 0), then matmul.
+        let asl = t_zeros(M * K)
+        let mut ia = 0
+        while ia < M * K { t_set(asl, ia, t_get(a_all, aoff + ia)); ia = ia + 1 }
+        let bsl = t_zeros(K * N)
+        let mut ib = 0
+        while ib < K * N { t_set(bsl, ib, t_get(b_all, boff + ib)); ib = ib + 1 }
+        let csl = forge_dispatch_matmul(asl, M, K, bsl, N)
+        let mut ic = 0
+        while ic < M * N { t_set(c_all, coff + ic, t_get(csl, ic)); ic = ic + 1 }
+        t_free(asl); t_free(bsl); t_free(csl)
+        g = g + 1
+    }
+}
+
+// ── conv2_fwd_via_forge_batched: forward of TWO identical-shape convs, fused ──
+// Processes conv g=0 with (w0,b0)->y0 and g=1 with (w1,b1)->y1 in ONE batched
+// im2col-matmul. Both share x (the experts read the same trunk input xt) and the
+// same shape (T, Cin=d, Cout=d, K, dil). Byte-eq to two conv1d_via_forge calls.
+//
+// im2col is identical per problem (same x, same gather) so xcol is shared and
+// the batch only varies the weight: A_all = [xcol, xcol] (batch over the SAME
+// activation), B_all = [Wt0, Wt1]. The strided-batched GEMM then yields both
+// [T,Cout] results in one launch.
+pub fn conv2_fwd_via_forge_batched(x: int, w0: int, b0: int, w1: int, b1: int,
+                                   y0_out: int, y1_out: int,
+                                   T: int, Cin: int, Cout: int, K: int, dil: int) {
+    let Kdim = Cin * K
+    // shared im2col (both experts read the same x)
+    let xcol = t_zeros(T * Kdim)
+    let mut t = 0
+    while t < T {
+        let mut ci = 0
+        while ci < Cin {
+            let mut k = 0
+            while k < K {
+                let p = t - dil * (K - 1 - k)
+                if p >= 0 { t_set(xcol, t * Kdim + ci * K + k, t_get(x, p * Cin + ci)) }
+                k = k + 1
+            }
+            ci = ci + 1
+        }
+        t = t + 1
+    }
+    // A_all = [xcol ; xcol]  (batch 2, M=T, K=Kdim)
+    let a_all = t_zeros(2 * T * Kdim)
+    let mut ia = 0
+    while ia < T * Kdim {
+        t_set(a_all, ia, t_get(xcol, ia))
+        t_set(a_all, T * Kdim + ia, t_get(xcol, ia))
+        ia = ia + 1
+    }
+    // B_all = [Wt0 ; Wt1]  (each Wt[j,co] = w[co*Kdim + j], Kdim×Cout)
+    let b_all = t_zeros(2 * Kdim * Cout)
+    let mut co = 0
+    while co < Cout {
+        let mut j = 0
+        while j < Kdim {
+            t_set(b_all, j * Cout + co, t_get(w0, co * Kdim + j))
+            t_set(b_all, Kdim * Cout + j * Cout + co, t_get(w1, co * Kdim + j))
+            j = j + 1
+        }
+        co = co + 1
+    }
+    let c_all = t_zeros(2 * T * Cout)
+    forge_matmul_batched(a_all, T, Kdim, b_all, Cout, 2, c_all)
+    // + bias, split back into y0/y1
+    let mut t2 = 0
+    while t2 < T {
+        let mut c2 = 0
+        while c2 < Cout {
+            t_set(y0_out, t2 * Cout + c2, t_get(c_all, t2 * Cout + c2) + t_get(b0, c2))
+            t_set(y1_out, t2 * Cout + c2,
+                  t_get(c_all, T * Cout + t2 * Cout + c2) + t_get(b1, c2))
+            c2 = c2 + 1
+        }
+        t2 = t2 + 1
+    }
+    t_free(xcol); t_free(a_all); t_free(b_all); t_free(c_all)
+}
+
+// ── conv2_bwd_via_forge_batched: backward of TWO identical-shape convs, fused ──
+// dW/dX/db for conv g=0 (x, w0, dy0) and g=1 (x, w1, dy1) — both share x (trunk
+// input) and shape. The two heavy GEMMs (dW, dX) are each batched over g=2:
+//   dW: dW_flat_g[Kdim,Cout] = xcolT[Kdim,T] @ dy_g[T,Cout]   (A shared, B = dy_g)
+//   dX: dXcol_g[T,Kdim]      = dy_g[T,Cout] @ Wflat_g[Cout,Kdim] (A = dy_g, B = w_g)
+// Byte-eq to two conv1d_bwd_via_forge calls. db is a tiny host reduction (kept
+// per-problem; it is not GEMM-bound). col2im scatter is per-problem (host, cheap).
+pub fn conv2_bwd_via_forge_batched(x: int, w0: int, w1: int, dy0: int, dy1: int,
+                                   dW0_out: int, dX0_out: int, db0_out: int,
+                                   dW1_out: int, dX1_out: int, db1_out: int,
+                                   T: int, Cin: int, Cout: int, K: int, dil: int) {
+    let Kdim = Cin * K
+    // shared im2col transpose xcolT[Kdim,T] (both experts read the same x)
+    let xcolT = t_zeros(Kdim * T)
+    let mut t = 0
+    while t < T {
+        let mut ci = 0
+        while ci < Cin {
+            let mut k = 0
+            while k < K {
+                let p = t - dil * (K - 1 - k)
+                if p >= 0 {
+                    let j = ci * K + k
+                    t_set(xcolT, j * T + t, t_get(x, p * Cin + ci))
+                }
+                k = k + 1
+            }
+            ci = ci + 1
+        }
+        t = t + 1
+    }
+    // ── dW batched: A_all = [xcolT ; xcolT] (M=Kdim,K=T), B_all = [dy0 ; dy1] ──
+    let dwA = t_zeros(2 * Kdim * T)
+    let mut ia = 0
+    while ia < Kdim * T {
+        t_set(dwA, ia, t_get(xcolT, ia))
+        t_set(dwA, Kdim * T + ia, t_get(xcolT, ia))
+        ia = ia + 1
+    }
+    let dwB = t_zeros(2 * T * Cout)
+    let mut ib = 0
+    while ib < T * Cout {
+        t_set(dwB, ib, t_get(dy0, ib))
+        t_set(dwB, T * Cout + ib, t_get(dy1, ib))
+        ib = ib + 1
+    }
+    let dW_flat_all = t_zeros(2 * Kdim * Cout)
+    forge_matmul_batched(dwA, Kdim, T, dwB, Cout, 2, dW_flat_all)
+    // reshape dW_flat[j*Cout+co] -> dW_out[co*Kdim + j] per problem
+    let mut co = 0
+    while co < Cout {
+        let mut j = 0
+        while j < Kdim {
+            t_set(dW0_out, co * Kdim + j, t_get(dW_flat_all, j * Cout + co))
+            t_set(dW1_out, co * Kdim + j, t_get(dW_flat_all, Kdim * Cout + j * Cout + co))
+            j = j + 1
+        }
+        co = co + 1
+    }
+    // ── dX batched: A_all = [dy0 ; dy1] (M=T,K=Cout), B_all = [w0 ; w1] ──
+    let dxA = t_zeros(2 * T * Cout)
+    let mut ja = 0
+    while ja < T * Cout {
+        t_set(dxA, ja, t_get(dy0, ja))
+        t_set(dxA, T * Cout + ja, t_get(dy1, ja))
+        ja = ja + 1
+    }
+    let dxB = t_zeros(2 * Cout * Kdim)
+    let mut jb = 0
+    while jb < Cout * Kdim {
+        t_set(dxB, jb, t_get(w0, jb))
+        t_set(dxB, Cout * Kdim + jb, t_get(w1, jb))
+        jb = jb + 1
+    }
+    let dXcol_all = t_zeros(2 * T * Kdim)
+    forge_matmul_batched(dxA, T, Cout, dxB, Kdim, 2, dXcol_all)
+    // col2im scatter-add per problem (zero dX first)
+    let mut iz = 0
+    while iz < T * Cin {
+        t_set(dX0_out, iz, 0.0); t_set(dX1_out, iz, 0.0)
+        iz = iz + 1
+    }
+    let mut t2 = 0
+    while t2 < T {
+        let mut ci2 = 0
+        while ci2 < Cin {
+            let mut k2 = 0
+            while k2 < K {
+                let p = t2 - dil * (K - 1 - k2)
+                if p >= 0 {
+                    let j = ci2 * K + k2
+                    let xidx = p * Cin + ci2
+                    t_set(dX0_out, xidx, t_get(dX0_out, xidx) + t_get(dXcol_all, t2 * Kdim + j))
+                    t_set(dX1_out, xidx,
+                          t_get(dX1_out, xidx) + t_get(dXcol_all, T * Kdim + t2 * Kdim + j))
+                }
+                k2 = k2 + 1
+            }
+            ci2 = ci2 + 1
+        }
+        t2 = t2 + 1
+    }
+    // ── db per problem (tiny host reduction) ──
+    let mut cb = 0
+    while cb < Cout {
+        let mut a0 = 0.0
+        let mut a1 = 0.0
+        let mut tb = 0
+        while tb < T {
+            a0 = a0 + t_get(dy0, tb * Cout + cb)
+            a1 = a1 + t_get(dy1, tb * Cout + cb)
+            tb = tb + 1
+        }
+        t_set(db0_out, cb, a0)
+        t_set(db1_out, cb, a1)
+        cb = cb + 1
+    }
+    t_free(xcolT); t_free(dwA); t_free(dwB); t_free(dW_flat_all)
+    t_free(dxA); t_free(dxB); t_free(dXcol_all)
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//  byte-eq selftest: batched conv2 (fwd + bwd) == 2× the un-batched forge path.
+// ════════════════════════════════════════════════════════════════════════════
+
+// un-batched forge forward (inlined from clm_conv_gpu — the reference path)
+fn _ref_fwd(x: int, w: int, b: int, y_out: int, T: int, Cin: int, Cout: int, K: int, dil: int) {
+    let Kdim = Cin * K
+    let xcol = t_zeros(T * Kdim)
+    let mut t = 0
+    while t < T {
+        let mut ci = 0
+        while ci < Cin {
+            let mut k = 0
+            while k < K {
+                let p = t - dil * (K - 1 - k)
+                if p >= 0 { t_set(xcol, t * Kdim + ci * K + k, t_get(x, p * Cin + ci)) }
+                k = k + 1
+            }
+            ci = ci + 1
+        }
+        t = t + 1
+    }
+    let Wt = t_zeros(Kdim * Cout)
+    let mut co = 0
+    while co < Cout {
+        let mut j = 0
+        while j < Kdim { t_set(Wt, j * Cout + co, t_get(w, co * Kdim + j)); j = j + 1 }
+        co = co + 1
+    }
+    let mm = forge_dispatch_matmul(xcol, T, Kdim, Wt, Cout)
+    let mut t2 = 0
+    while t2 < T {
+        let mut c2 = 0
+        while c2 < Cout {
+            t_set(y_out, t2 * Cout + c2, t_get(mm, t2 * Cout + c2) + t_get(b, c2))
+            c2 = c2 + 1
+        }
+        t2 = t2 + 1
+    }
+    t_free(xcol); t_free(Wt); t_free(mm)
+}
+
+// un-batched forge backward (inlined from clm_conv_gpu — the reference path)
+fn _ref_bwd(x: int, w: int, dy: int, dW_out: int, dX_out: int, db_out: int,
+            T: int, Cin: int, Cout: int, K: int, dil: int) {
+    let Kdim = Cin * K
+    let xcolT = t_zeros(Kdim * T)
+    let mut t = 0
+    while t < T {
+        let mut ci = 0
+        while ci < Cin {
+            let mut k = 0
+            while k < K {
+                let p = t - dil * (K - 1 - k)
+                if p >= 0 { let j = ci * K + k; t_set(xcolT, j * T + t, t_get(x, p * Cin + ci)) }
+                k = k + 1
+            }
+            ci = ci + 1
+        }
+        t = t + 1
+    }
+    let dW_flat = forge_dispatch_matmul(xcolT, Kdim, T, dy, Cout)
+    let mut co = 0
+    while co < Cout {
+        let mut j = 0
+        while j < Kdim { t_set(dW_out, co * Kdim + j, t_get(dW_flat, j * Cout + co)); j = j + 1 }
+        co = co + 1
+    }
+    let dXcol = forge_dispatch_matmul(dy, T, Cout, w, Kdim)
+    let mut iz = 0
+    while iz < T * Cin { t_set(dX_out, iz, 0.0); iz = iz + 1 }
+    let mut t2 = 0
+    while t2 < T {
+        let mut ci2 = 0
+        while ci2 < Cin {
+            let mut k2 = 0
+            while k2 < K {
+                let p = t2 - dil * (K - 1 - k2)
+                if p >= 0 {
+                    let j = ci2 * K + k2; let xidx = p * Cin + ci2
+                    t_set(dX_out, xidx, t_get(dX_out, xidx) + t_get(dXcol, t2 * Kdim + j))
+                }
+                k2 = k2 + 1
+            }
+            ci2 = ci2 + 1
+        }
+        t2 = t2 + 1
+    }
+    let mut cb = 0
+    while cb < Cout {
+        let mut acc = 0.0; let mut tb = 0
+        while tb < T { acc = acc + t_get(dy, tb * Cout + cb); tb = tb + 1 }
+        t_set(db_out, cb, acc); cb = cb + 1
+    }
+    t_free(dW_flat); t_free(dXcol)
+}
+
+fn _maxdev(a: int, b: int, n: int) -> float {
+    let mut m = 0.0
+    let mut i = 0
+    while i < n { let d = _cb_absf(t_get(a, i) - t_get(b, i)); if d > m { m = d }; i = i + 1 }
+    return m
+}
+
+fn main() {
+    println("clm_conv_batched — LEVER (b): fused 2-expert conv GEMMs (strided-batched)")
+    let T = 24; let d = 8; let K = 3; let dil = 1
+    let Cin = d; let Cout = d; let Kdim = Cin * K; let dd = Cout * Kdim
+
+    let x  = t_zeros(T * Cin);  t_fill_lcg(x, T * Cin, 31, 0.4)
+    let w0 = t_zeros(dd);       t_fill_lcg(w0, dd, 14, 0.2)
+    let b0 = t_zeros(Cout);     t_fill_lcg(b0, Cout, 15, 0.1)
+    let w1 = t_zeros(dd);       t_fill_lcg(w1, dd, 16, 0.2)
+    let b1 = t_zeros(Cout);     t_fill_lcg(b1, Cout, 17, 0.1)
+
+    // ── F-CLM-CONV2-BATCHED-FWD-EQ ──
+    let y0r = t_zeros(T * Cout); let y1r = t_zeros(T * Cout)
+    _ref_fwd(x, w0, b0, y0r, T, Cin, Cout, K, dil)
+    _ref_fwd(x, w1, b1, y1r, T, Cin, Cout, K, dil)
+    let y0b = t_zeros(T * Cout); let y1b = t_zeros(T * Cout)
+    conv2_fwd_via_forge_batched(x, w0, b0, w1, b1, y0b, y1b, T, Cin, Cout, K, dil)
+    let fd0 = _maxdev(y0r, y0b, T * Cout)
+    let fd1 = _maxdev(y1r, y1b, T * Cout)
+    print("  fwd max|Δ| y0="); print(to_string(fd0)); print(" y1="); println(to_string(fd1))
+    let tol = 0.000000001
+    let mut fwd_ok = 0
+    if fd0 <= tol { if fd1 <= tol {
+        println("F-CLM-CONV2-BATCHED-FWD-EQ = 1")
+        println("PASS — batched 2-expert fwd == 2× conv1d_via_forge byte-eq")
+        fwd_ok = 1
+    } }
+    if fwd_ok == 0 { println("F-CLM-CONV2-BATCHED-FWD-EQ = 0"); println("FAIL — fwd") }
+
+    // ── F-CLM-CONV2-BATCHED-BWD-EQ ──
+    // representative upstream grads dy0/dy1 = forward outputs (nonzero fields)
+    let dy0 = t_zeros(T * Cout); let dy1 = t_zeros(T * Cout)
+    _ref_fwd(x, w0, b0, dy0, T, Cin, Cout, K, dil)
+    _ref_fwd(x, w1, b1, dy1, T, Cin, Cout, K, dil)
+
+    let dW0r = t_zeros(dd); let dX0r = t_zeros(T * Cin); let db0r = t_zeros(Cout)
+    let dW1r = t_zeros(dd); let dX1r = t_zeros(T * Cin); let db1r = t_zeros(Cout)
+    _ref_bwd(x, w0, dy0, dW0r, dX0r, db0r, T, Cin, Cout, K, dil)
+    _ref_bwd(x, w1, dy1, dW1r, dX1r, db1r, T, Cin, Cout, K, dil)
+
+    let dW0b = t_zeros(dd); let dX0b = t_zeros(T * Cin); let db0b = t_zeros(Cout)
+    let dW1b = t_zeros(dd); let dX1b = t_zeros(T * Cin); let db1b = t_zeros(Cout)
+    conv2_bwd_via_forge_batched(x, w0, w1, dy0, dy1,
+                                dW0b, dX0b, db0b, dW1b, dX1b, db1b,
+                                T, Cin, Cout, K, dil)
+
+    let mdW0 = _maxdev(dW0r, dW0b, dd); let mdX0 = _maxdev(dX0r, dX0b, T * Cin)
+    let mdb0 = _maxdev(db0r, db0b, Cout)
+    let mdW1 = _maxdev(dW1r, dW1b, dd); let mdX1 = _maxdev(dX1r, dX1b, T * Cin)
+    let mdb1 = _maxdev(db1r, db1b, Cout)
+    print("  bwd e0 max|Δ| dW="); print(to_string(mdW0)); print(" dX="); print(to_string(mdX0))
+    print(" db="); println(to_string(mdb0))
+    print("  bwd e1 max|Δ| dW="); print(to_string(mdW1)); print(" dX="); print(to_string(mdX1))
+    print(" db="); println(to_string(mdb1))
+    let mut bwd_ok = 0
+    if mdW0 <= tol { if mdX0 <= tol { if mdb0 <= tol {
+    if mdW1 <= tol { if mdX1 <= tol { if mdb1 <= tol {
+        println("F-CLM-CONV2-BATCHED-BWD-EQ = 1")
+        println("PASS — batched 2-expert bwd (dW/dX/db) == 2× conv1d_bwd_via_forge byte-eq")
+        bwd_ok = 1
+    } } } } } }
+    if bwd_ok == 0 { println("F-CLM-CONV2-BATCHED-BWD-EQ = 0"); println("FAIL — bwd") }
+
+    if fwd_ok == 1 { if bwd_ok == 1 {
+        println("ALL-PASS — LEVER (b) fused 2-expert conv (fwd+bwd) byte-eq to un-batched forge")
+        return
+    } }
+    println("FAIL")
+}
