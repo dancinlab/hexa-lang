@@ -1,5 +1,43 @@
 # FORGE-UTILGREEN — append-only step log
 
+## 2026-06-02T19:05Z — Lane-G (substrate=GPU · mac CPU-local `hexa run` $0 · a_lane_akida_gpu_split — NEVER merged with AKIDA) — lever-3 batched GEMM-feed **byte-eq GREEN** (max|Δ|=0.0), util fire HELD; lever-2 RED → lever-3 unblock 65% batched repack 확정
+
+lever-3 (batched transpose-aware GEMM-feed) **소스 byte-eq-GREEN-ready**. 체크포인트 `62139159a`
+가 batched `bt/atb` 빌트인(runtime.h decl + codegen 8-arg lowering + runtime_cuda_emit GPU 커널
+`cublasDgemmStridedBatched` OP_T + clm_prod 배치경로 라우팅 + 오라클)을 올렸으나 no-CUDA 호스트
+fallback drift 로 HARD gate FAIL 이었다 — 본 세션이 진단·교정·재그린·랜딩.
+
+- **fire-confirmed rationale (lever-2 RED → lever-3 unblock)**: pod vast 39082940 lever-2 fire =
+  DESCENT 🟢 (CE 0.818097→0.0591666) / util 🔴 RED (**PEAK 19% MEAN 0.4999% n=147863**, byte-eq
+  PRESERVED). lever-2 는 un-batched conv(profile 31.2%)만 device 化 → DOMINANT **65% batched
+  `conv2_*_via_forge_batched` host repack** 미접촉. lever-3 가 그 repack(b_all Wt-pack · a_all xcol
+  복제 · dW_flat unpack)을 strided-batched op-flag GEMM + strideA=0 broadcast 로 DROP.
+
+- **ROOT CAUSE (drift)**: `hexa run` 은 `~/.hexa-cache` 에 SOURCE-hash 로 컴파일 바이너리를 캐시 →
+  stale 캐시가 진짜 byte-eq 상태를 가렸다. 캐시 bust 후 drift 노출: BATCHED-BT 2.84e-14,
+  lever-2 GEMMFEED-BT 1.42e-14 (둘 다 open-coded ijk dot vs `hexa_farr_matmul` ikj UNROLL/FMA).
+
+- **FIX**: lever-2 `_bt/_atb` + lever-3 batched `_bt/_atb` no-CUDA fallback 4종을 오라클 레퍼런스와
+  동일한 호스트 transpose 후 `hexa_farr_matmul` 위임으로 재작성 → 구성상 bit-identical. CUDA
+  `#ifdef`(cuBLAS OP_T) 불변. self/runtime.c gitignore → SSOT = inbox 프래그먼트(lever3 갱신 +
+  lever2 byteeq-fix 신설).
+
+- **byte-eq GREEN (mac `hexa run`, $0, g5 verbatim → `.verdicts/forge-utilgreen-lever3/`)**:
+  ```
+  F-RFC046-BATCHED-GEMMFEED-EQ = 1   BT 0.0 · ATB 0.0 · BT(per-problem) 0.0
+  F-RFC046-GEMMFEED-EQ         = 1   BT 0.0 · ATB 0.0           (lever-2 재그린)
+  F-CLM-DEVFEED-{IM2COL,FWD,BWD,ADAM}-EQ = 1 (ALL-PASS)
+  F-CLM-CONV2-BATCHED-{FWD,BWD}-EQ        = 1 (ALL-PASS)
+  ```
+
+- **랜딩**: PR **#2528** (squash, `--base lane-g/rfc046-lever2-gemmfeed` stacked) MERGED.
+
+- **util≥20% = HELD pod fire** — 소스에서 주장 안 함 (a_scale_honest_scope). 별도 free pod 가
+  lever-3 적용 트레이너로 single-driver H100 fire 를 돌려 verdict 확정. **lever-4 forward-design**
+  = `inbox/patches/forge-devfeed-lever4-fused-step-driver-DESIGN.md` (fused on-device per-step
+  driver — F-RFC046 root residual: glue ~3.8% + 인터프리트 per-step 드라이버 루프 + 20×분리 AdamW;
+  投影 ~30→~2 host boundary crossings/step; 오라클 `F-RFC046-FUSED-STEP-EQ`).
+
 ## 2026-06-02T18:30Z — Lane-G (substrate=GPU · pod vast 39082940 · a_lane_akida_gpu_split — NEVER merged with AKIDA) — lever-2 util-verify fire CLOSED: DESCENT 🟢 GREEN / util 🔴 RED (PEAK 19% MEAN 0.4999% n=147863), lever-2 byte-eq PRESERVED, lever-3 (batched bt/atb) confirmed as the real unblock
 
 lever-2 transpose-aware GEMM(bt/atb) util-verify fire **완주·CLOSED** (직전 드라이버는 closure
