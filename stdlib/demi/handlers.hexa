@@ -49,15 +49,16 @@ fn _verb_korean(verb: string) -> string {
     if verb == "specify"    || verb == "명세" { return "명세" }
     if verb == "structure"  || verb == "구조" { return "구조" }
     if verb == "design"     || verb == "설계" { return "설계" }
-    if verb == "analyze"    || verb == "해석" || verb == "해석⟲" { return "해석" }
+    if verb == "analyze"    || verb == "해석" || verb == "해석⟲" { return "해석⟲" }
     if verb == "synthesize" || verb == "synth" || verb == "합성" { return "합성" }
     if verb == "verify"     || verb == "measure" || verb == "검증" || verb == "측정" { return "검증" }
     if verb == "handoff"    || verb == "인계" { return "인계" }
     return ""
 }
 
-// _verb_plain(verb) — the English canonical label (Verb.plain).
-fn _verb_plain(verb: string) -> string {
+// _verb_canonical(verb) — the English wire form (Verb.canonical) used to
+// recognize a verb token. Returns "" for an unrecognized verb.
+fn _verb_canonical(verb: string) -> string {
     if verb == "specify"    || verb == "명세" { return "specify" }
     if verb == "structure"  || verb == "구조" { return "structure" }
     if verb == "design"     || verb == "설계" { return "design" }
@@ -68,6 +69,21 @@ fn _verb_plain(verb: string) -> string {
     return ""
 }
 
+// _verb_plain(verb) — the rfc_012 §4 plain-language Korean wording
+// (Verb.plain), which is what the Swift cliAction header prints in
+// parentheses (e.g. "명세 (무엇을)"). NOT the English word.
+fn _verb_plain(verb: string) -> string {
+    let c = _verb_canonical(verb)
+    if c == "specify"    { return "무엇을" }
+    if c == "structure"  { return "어떻게" }
+    if c == "design"     { return "설계" }
+    if c == "analyze"    { return "점검" }
+    if c == "synthesize" { return "만들기" }
+    if c == "verify"     { return "검증" }
+    if c == "handoff"    { return "넘기기" }
+    return ""
+}
+
 pub fn handler_action(argv: [string]) -> int {
     // argv is the post-verb tail: [<verb>, <domain?>, <flags...>].
     if len(argv) < 1 {
@@ -75,29 +91,34 @@ pub fn handler_action(argv: [string]) -> int {
         return 2
     }
     let verb = argv[0]
-    let plain = _verb_plain(verb)
-    if plain == "" {
+    if _verb_canonical(verb) == "" {
         eprintln("action: unknown verb '" + verb + "' — try one of "
                  + "specify/structure/design/analyze/synthesize/verify/handoff")
         return 2
     }
+    let plain = _verb_plain(verb)
     let korean = _verb_korean(verb)
-    // Domain hint — caller may pass it; else "general" (the claude-CLI
-    // honest-gap cohort). Skip a leading flag token so `action specify --x`
-    // does not read "--x" as the domain (mirrors Swift actionArgs[1]).
+    // Domain hint — caller may pass it; else "general". Skip a leading flag
+    // token so `action specify --x` does not read "--x" as the domain
+    // (mirrors Swift actionArgs[1]).
     let mut domain = "general"
     if len(argv) >= 2 {
         if !argv[1].starts_with("--") { domain = argv[1] }
     }
-    // The PROOF cell surfaces the dispatch header + the honest no-record gap.
-    // Swift cliAction prints the ActionDispatch.runEngineTool result text in
-    // between; for the (verb, domain) pairs with NO wired engine tool that
-    // text is empty and the surrounding lines are the byte-matchable parity
-    // contract. handler_action reproduces exactly those framing lines.
+    // HONESTY (plan @L7 · d6): the Swift `action <verb> <domain>` HAPPY path
+    // routes through ActionDispatch.runEngineTool → the `cellrun` engine,
+    // which reads domains/<domain>.demi manifests + a python substrate and
+    // emits multi-line [cellrun] output with exit 1 on an engine gap. That
+    // engine is NOT yet ported; reproducing only the framing lines would be a
+    // FAKE parity (the middle [cellrun] block + the exit code would diverge).
+    // So the dispatch header is printed (it IS exact), then the happy path
+    // routes to the honest stub — the cellrun engine port is the `action`
+    // stacked PR (plan ## handoff §action). The DETERMINISTIC, byte-matchable
+    // PROOF cell for `action` is the unknown-verb / missing-verb ERROR path
+    // above (exit 2, stderr identical to Swift) — that is what the @ci_gate
+    // parity smoke asserts GREEN this PR.
     println("action: " + korean + " (" + plain + ") · domain=" + domain + " — dispatching…")
-    println("---")
-    println("⏳ no new measured record — this stage has not been measured (g3).")
-    return 0
+    return handler_stub("action.cellrun", argv)
 }
 
 // handler_local(target, argv) — generic local-handler entry. Routes by the

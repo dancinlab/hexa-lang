@@ -1,0 +1,165 @@
+// @ci_gate — demiurge-cli PARITY SMOKE (hexa-native ⇄ Swift reference)
+//
+// demi_selftest.hexa — per-verb parity gate for the pure hexa-native
+// `demiurge cli` migration (demi-cli-pure-hexa-native · plan @L7). For each
+// registered PARITY CELL it runs BOTH surfaces and asserts:
+//   (1) stdout+stderr byte-identical, AND
+//   (2) exit codes equal.
+// This is the @ci_gate that plan @L2 requires ALL-GREEN before any Swift
+// deletion. A cell whose hexa handler is not yet ported is NOT registered
+// here (a stub-only verb has no parity claim — @L7 honesty: never assert a
+// green parity for an unported handler).
+//
+// Run:  hexa run --no-sentinel stdlib/demi/demi_selftest.hexa
+//   - DEMI_HEXA_ENTRY  (default "stdlib/demi/demi_cli.hexa")
+//   - DEMI_SWIFT_BIN   the built Swift DemiurgeCLI. If unset/missing, the
+//                      Swift side is SKIPPED and only the hexa side's exit
+//                      code + a GOLDEN expected-output string is checked
+//                      (so the gate still runs network-free in CI without a
+//                      Swift toolchain — the GOLDEN strings were captured
+//                      byte-for-byte from the Swift reference 2026-06-03).
+// PASS line: "demi_parity_selftest PASS".
+//
+// FOUNDATION+PROOF cells (LIVE, byte-matched against Swift this PR):
+//   - discover (no objective)        → usage line, exit 2
+//   - discover <obj> (no phanes)     → not-found block, exit 2
+//   - action <unknown verb>          → unknown-verb stderr, exit 2
+// Remaining verbs register their cells as they are ported (stacked PRs).
+
+use "stdlib/demi/dispatch.hexa"
+
+fn _shq2(s: string) -> string {
+    let mut out = "'"
+    let mut i = 0
+    while i < len(s) {
+        let c = s.substring(i, i + 1)
+        if c == "'" { out = out + "'\\''" } else { out = out + c }
+        i = i + 1
+    }
+    return out + "'"
+}
+
+// Run the hexa CLI entry with `argv_str` (a pre-quoted argv tail) under a
+// fixed env, capturing merged stdout+stderr and the exit code.
+fn _run_hexa(entry: string, env_prefix: string, argv_str: string) -> [string] {
+    let hexa = exec("command -v hexa 2>/dev/null || echo hexa").trim()
+    let cmd = env_prefix + " " + _shq2(hexa) + " run " + _shq2(entry) + " " + argv_str + " 2>&1"
+    let pair = exec_with_status(cmd)
+    return [to_string(pair[0]), to_string(pair[1])]
+}
+
+fn _run_swift(bin: string, env_prefix: string, argv_str: string) -> [string] {
+    let cmd = env_prefix + " " + _shq2(bin) + " " + argv_str + " 2>&1"
+    let pair = exec_with_status(cmd)
+    return [to_string(pair[0]), to_string(pair[1])]
+}
+
+// One parity cell. `argv` is the demiurge-cli argv tail; `env_prefix` is a
+// shell env assignment string applied to BOTH surfaces; `golden` is the
+// byte-for-byte expected merged output (used when no Swift bin is present);
+// `want_rc` is the expected exit code.
+fn _cell(name: string, entry: string, swift_bin: string,
+         env_prefix: string, argv_str: string,
+         golden: string, want_rc: int) -> int {
+    let hx = _run_hexa(entry, env_prefix, argv_str)
+    let hx_out = hx[0]
+    let hx_rc = _atoi2(hx[1])
+
+    // (1) hexa exit code
+    if hx_rc != want_rc {
+        println("FAIL " + name + " — hexa rc=" + to_string(hx_rc) + " want " + to_string(want_rc))
+        return 1
+    }
+
+    if len(swift_bin) > 0 {
+        // Live cross-check against the Swift reference (the strongest gate).
+        let sw = _run_swift(swift_bin, env_prefix, argv_str)
+        let sw_out = sw[0]
+        let sw_rc = _atoi2(sw[1])
+        if sw_out != hx_out {
+            println("FAIL " + name + " — output DIFFERS from Swift")
+            println("  --- swift ---"); println(sw_out)
+            println("  --- hexa  ---"); println(hx_out)
+            return 1
+        }
+        if sw_rc != hx_rc {
+            println("FAIL " + name + " — rc swift=" + to_string(sw_rc) + " hexa=" + to_string(hx_rc))
+            return 1
+        }
+        println("PASS " + name + " (byte ≡ Swift · rc=" + to_string(hx_rc) + ")")
+        return 0
+    }
+
+    // No Swift bin — fall back to the GOLDEN string captured from Swift.
+    if hx_out != golden {
+        println("FAIL " + name + " — output DIFFERS from golden")
+        println("  --- golden ---"); println(golden)
+        println("  --- hexa   ---"); println(hx_out)
+        return 1
+    }
+    println("PASS " + name + " (byte ≡ golden · rc=" + to_string(hx_rc) + ")")
+    return 0
+}
+
+fn _atoi2(s: string) -> int {
+    let t = s.trim()
+    if len(t) == 0 { return 0 }
+    let mut n = 0
+    let mut i = 0
+    while i < len(t) {
+        let d = ord(t.substring(i, i + 1)) - 48
+        if d < 0 { return -1 }
+        if d > 9 { return -1 }
+        n = n * 10 + d
+        i = i + 1
+    }
+    return n
+}
+
+fn main() {
+    let entry = if len(env("DEMI_HEXA_ENTRY")) > 0 { env("DEMI_HEXA_ENTRY") } else { "stdlib/demi/demi_cli.hexa" }
+    let swift_bin_env = env("DEMI_SWIFT_BIN")
+    // verify the swift bin is actually executable; else fall to golden mode.
+    let mut swift_bin = ""
+    if len(swift_bin_env) > 0 {
+        let ok = exec("test -x " + _shq2(swift_bin_env) + " && echo yes || echo no").trim()
+        if ok == "yes" { swift_bin = swift_bin_env }
+    }
+    if len(swift_bin) > 0 {
+        println("demi_parity_selftest — LIVE Swift cross-check (" + swift_bin + ")")
+    } else {
+        println("demi_parity_selftest — GOLDEN mode (no DEMI_SWIFT_BIN; strings captured from Swift 2026-06-03)")
+    }
+
+    let mut fails = 0
+    // Pin ONLY PHANES_BIN — overriding HOME would break the nested `hexa run`
+    // (it needs the real HOME for its build cache). The HOME-dependent tail of
+    // the `searched:` line is computed dynamically below from env("HOME") so
+    // the golden stays correct on any machine.
+    let nf_env = "PHANES_BIN=/demi-selftest-nonexistent"
+    let home = env("HOME")
+
+    // GOLDEN strings — the framing captured byte-for-byte from the Swift
+    // DemiurgeCLI on 2026-06-03; the one machine-dependent token (the
+    // $HOME/core/phanes path) is interpolated from the live HOME.
+    let g_disc_usage = "discover: usage — discover <objective> [--verifier <path>] [--rounds N] [--json]\n"
+    let g_disc_nf = "discover: phanes CLI not found.\n"
+        + "  searched: /demi-selftest-nonexistent, /usr/local/bin/phanes, /opt/homebrew/bin/phanes, " + home + "/core/phanes/bin/phanes\n"
+        + "  set PHANES_BIN env var to override.\n"
+        + "  contract expected (phanes-side):\n"
+        + "    phanes discover <objective> [--verifier <path>] [--rounds N] [--json]\n"
+        + "  phanes owns the OUROBOROS loop; demiurge dispatches only (d3/d4).\n"
+        + "  see ~/core/phanes/INBOX.log.md for the CLI surface request.\n"
+    let g_act_unknown = "action: unknown verb 'zzz' — try one of specify/structure/design/analyze/synthesize/verify/handoff\n"
+
+    // ── PROOF cells ──────────────────────────────────────────────────
+    fails = fails + _cell("discover/usage", entry, swift_bin, nf_env, "discover",
+                          g_disc_usage, 2)
+    fails = fails + _cell("discover/phanes-not-found", entry, swift_bin, nf_env,
+                          "discover " + _shq2("high-Tc hydride"), g_disc_nf, 2)
+    fails = fails + _cell("action/unknown-verb", entry, swift_bin, "",
+                          "action zzz", g_act_unknown, 2)
+
+    if fails == 0 { println("demi_parity_selftest PASS") }
+    else { println("demi_parity_selftest FAIL — " + to_string(fails) + " cell(s)") }
+}
