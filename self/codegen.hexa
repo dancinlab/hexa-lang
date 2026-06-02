@@ -7461,6 +7461,15 @@ fn gen2_expr(node) {
             }
             if len(node.args) == 4 {
                 if name == "matvec"         { return "hexa_matvec(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ", " + arg_strs[3] + ")" }
+                // HEXA-FUSION L1 (GRAD half): device-resident bias-grad colsum.
+                // forge_dispatch_db_colsum(dy, db_out, T, Cout) -> int rc. Sums
+                // db[co]=Σ_t dy[t,co] on-device (sequential per-channel sum →
+                // bit-exact to the host loop) and keeps db DEVICE-RESIDENT so the
+                // next _adam H2D-skips the grad (d*B escape only into _adam). no-
+                // CUDA → -1 so the .hexa caller falls back to the host db reduce.
+                if name == "forge_dispatch_db_colsum" {
+                    return "hexa_forge_dispatch_db_colsum(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ", " + arg_strs[3] + ")"
+                }
                 // stdlib/os/pty — 4-arg builtin (RFC stdlib-os-pty.md)
                 if name == "pty_forkexec"   { return "hexa_pty_forkexec(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ", " + arg_strs[3] + ")" }
                 // stdlib/os/exec_pipe — fork+exec with separated stdout/stderr (RFC ssh-server stderr)

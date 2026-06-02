@@ -219,3 +219,34 @@ HexaVal forge_dispatch_adamw_keepmv(HexaVal w, HexaVal g, HexaVal m, HexaVal v,
                              HexaVal eps, HexaVal wd, HexaVal t) {
     return hexa_forge_dispatch_adamw_keepmv(w, g, m, v, n, lr, b1, b2, eps, wd, t);
 }
+
+/* HEXA-FUSION L1 (GRAD half) — device-resident bias-gradient column sum.
+ * forge_dispatch_db_colsum(dy, db_out, T, Cout). Routes to
+ * _hx_cuda_farr_db_colsum_gpu, which computes db[co]=Σ_{t=0..T-1} dy[t,co]
+ * with one thread per channel summing T sequentially (bit-exact to the host
+ * loop — NO tree re-association), then keeps db DEVICE-RESIDENT so the next
+ * _adam(W, db, ...) H2D-skips the grad. The conv bias grads d*B escape only
+ * into _adam (never read on host between bwd and AdamW) → pure removable
+ * grad roundtrip. no-CUDA → -1 so the .hexa caller falls back to the host
+ * db reduction (byte-eq). */
+HexaVal hexa_forge_dispatch_db_colsum(HexaVal dy_v, HexaVal db_v,
+                                  HexaVal t_v, HexaVal cout_v) {
+    int64_t dy_id = hexa_as_num(dy_v);
+    int64_t db_id = hexa_as_num(db_v);
+    int64_t T     = hexa_as_num(t_v);
+    int64_t Cout  = hexa_as_num(cout_v);
+    if (T <= 0 || Cout <= 0) return hexa_int(-1);
+    if (dy_id < 0 || db_id < 0) return hexa_int(-1);
+#ifdef HEXA_CUDA
+    extern int _hx_cuda_farr_db_colsum_gpu(int64_t, int64_t, int64_t, int64_t);
+    int grc = _hx_cuda_farr_db_colsum_gpu(dy_id, db_id, T, Cout);
+    if (grc == 0) return hexa_int(0);
+    /* GPU colsum failed — return -1 so the .hexa caller runs the host db
+     * reduction (byte-eq). Never silently wrong. */
+#endif
+    return hexa_int(-1);
+}
+HexaVal forge_dispatch_db_colsum(HexaVal dy, HexaVal db,
+                             HexaVal t, HexaVal cout) {
+    return hexa_forge_dispatch_db_colsum(dy, db, t, cout);
+}
