@@ -13,6 +13,15 @@
 //                (d6). The DFPT front-end currently runs on QE (`hexa cloud
 //                dft-run <deck>`); QFORGE then computes moments→λ→Tc.
 //   selftest     run the orchestrator selftest (the el-ph→Tc chain gate).
+//   telemetry <report|regress|rollup> <deck...>
+//                QFORGE-PROCESS observability over harvested `.dft_telemetry.jsonl`
+//                files. `report <deck>` → ranked per-stage bottleneck table;
+//                `regress <base-deck> <cur-deck> [pct]` → cross-run regression;
+//                `rollup <deck...>` → campaign-wide stage/deck rollup. Reads the
+//                deck-local `.dft_telemetry.jsonl` each dft-run emits (#2474). A
+//                missing/empty file → a clean message (d6, never a fabricated
+//                report), not a crash. Reuses the #2477/#2483/#2487 library
+//                verbatim (d3/d19 — import-only, 0-diff).
 //   help         this text.
 //
 // d4 generic — no per-material branch; the orchestrator forwards whatever
@@ -20,6 +29,7 @@
 
 use "stdlib/qforge/orchestrator"
 use "stdlib/qforge/migration_scoreboard"
+use "stdlib/qforge/telemetry_cli"      // qf_telemetry — telemetry subverb logic (importable, testable)
 
 fn _qf_help() {
     println("hexa qforge — hexa-native first-principles electron-phonon → Tc engine")
@@ -28,6 +38,12 @@ fn _qf_help() {
     println("  hexa qforge run <deck>   run the QFORGE el-ph→Tc chain on a deck")
     println("  hexa qforge selftest     run the orchestrator (el-ph→Tc chain) gate")
     println("  hexa qforge gate         migration-gate scoreboard (CaH6·LaH10·Li2MgH16 λ·Tc)")
+    println("  hexa qforge telemetry report <deck>")
+    println("                           ranked per-stage bottleneck (.dft_telemetry.jsonl)")
+    println("  hexa qforge telemetry regress <base-deck> <cur-deck> [pct]")
+    println("                           cross-run regression (default threshold 20%)")
+    println("  hexa qforge telemetry rollup <deck...>")
+    println("                           campaign-wide stage/deck wall rollup")
     println("  hexa qforge help         this text")
     println("")
     println("engine: SCF·DFPT·elph·Eliashberg·Tc bricks (stdlib/qforge), composed by")
@@ -140,6 +156,10 @@ fn main() {
         // SSOT; renders PASS/HELD/PENDING + the n/3 verdict. Pure read+compute.
         print(qforge_migration_scoreboard())
         return
+    }
+    if sub == "telemetry" {
+        let rc = qf_telemetry(av)
+        exit(rc)
     }
     if sub == "run" {
         let mut deck = ""

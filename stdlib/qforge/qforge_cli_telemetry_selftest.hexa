@@ -1,0 +1,139 @@
+// @ci_gate — deterministic · local-file-only · the telemetry CLI logic g5 gate
+//
+// qforge_cli_telemetry_selftest.hexa — `hexa qforge telemetry
+//   <report|regress|rollup>` (stdlib/qforge/telemetry_cli.hexa) g5 gate. The
+//   subverb reads each deck's `.dft_telemetry.jsonl` (emitted by dft-run #2474)
+//   and renders it through the #2477/#2483/#2487 analyzer library — exposing the
+//   whole PROCESS observability stack from the command line.
+//
+// The CLI-SPECIFIC behavior under test (the renders are gated by their own
+//   library selftests, IMPORT-ONLY/@L3): deck-local file IO, the missing/empty
+//   telemetry GUARD (d6 — a clean message + rc 1, NEVER a fabricated report),
+//   verb dispatch, the optional pct-threshold arg, and exit codes.
+//
+// 검증 케이스 (writes real fixture deck dirs under a temp dir via exec; reads
+//   them back through qf_telem_*; no pod, no network):
+//  🔵 (A) report over a fixture deck → rc 0; the parsed Report has the expected
+//         per-stage wall + bottleneck (the same text qf_telem_report renders).
+//  🔵 (B) regress base→cur (default 20% via qf_telemetry argv) → rc 0; a
+//         >threshold stage REGRESSED, a sub-threshold stage SAME.
+//  🔵 (C) rollup over both decks → rc 0; grand wall = Σ both, 0 skipped.
+//  🔵 (D) MISSING-FILE GUARD (d6): report/regress/rollup over a deck with NO
+//         `.dft_telemetry.jsonl` → rc 1 (clean message, no crash, no fabrication).
+//  🔵 (E) USAGE errors → rc 2: bare `telemetry`, an unknown telemetry verb,
+//         `report` with no deck arg.
+//  🔵 (F) rollup where SOME decks have telemetry and some do not → rc 0 with the
+//         empty ones SKIPPED (found>0 path); ALL-empty → rc 1.
+//
+// Run (point HEXA_STDLIB_ROOT at THIS worktree's stdlib):
+//   HEXA_STDLIB_ROOT="$PWD/stdlib" hexa run --no-sentinel \
+//     stdlib/qforge/qforge_cli_telemetry_selftest.hexa
+// PASS: "qforge_cli_telemetry_selftest PASS".
+use "stdlib/qforge/telemetry_cli"
+use "stdlib/qforge/telemetry_report"
+
+fn _ck(name: str, ok: bool) -> int {
+    if ok { println("PASS " + name) ; return 0 }
+    println("FAIL " + name)
+    return 1
+}
+
+// write the canonical telemetry fixture into <dir>/.dft_telemetry.jsonl.
+fn _write_base(dir: str) {
+    let body = "{\"ts\":100,\"stage\":\"relax\",\"event\":\"start\",\"wall_s\":0,\"rss_kb\":null,\"exit\":null}\n"
+        + "{\"ts\":110,\"stage\":\"relax\",\"event\":\"done\",\"wall_s\":10,\"rss_kb\":2000,\"exit\":0}\n"
+        + "{\"ts\":110,\"stage\":\"scf\",\"event\":\"start\",\"wall_s\":0,\"rss_kb\":null,\"exit\":null}\n"
+        + "{\"ts\":150,\"stage\":\"scf\",\"event\":\"done\",\"wall_s\":40,\"rss_kb\":3000,\"exit\":0}\n"
+        + "{\"ts\":150,\"stage\":\"ph:q1\",\"event\":\"start\",\"wall_s\":0,\"rss_kb\":null,\"exit\":null}\n"
+        + "{\"ts\":250,\"stage\":\"ph:q1\",\"event\":\"done\",\"wall_s\":100,\"rss_kb\":5000,\"exit\":0}\n"
+    let _w = exec("cat > '" + dir + "/.dft_telemetry.jsonl' <<'EOF'\n" + body + "EOF")
+}
+
+// a "current" run where scf got 2.5× slower (40→100) — a clear regression.
+fn _write_cur(dir: str) {
+    let body = "{\"ts\":100,\"stage\":\"relax\",\"event\":\"start\",\"wall_s\":0,\"rss_kb\":null,\"exit\":null}\n"
+        + "{\"ts\":111,\"stage\":\"relax\",\"event\":\"done\",\"wall_s\":11,\"rss_kb\":2100,\"exit\":0}\n"
+        + "{\"ts\":111,\"stage\":\"scf\",\"event\":\"start\",\"wall_s\":0,\"rss_kb\":null,\"exit\":null}\n"
+        + "{\"ts\":211,\"stage\":\"scf\",\"event\":\"done\",\"wall_s\":100,\"rss_kb\":3000,\"exit\":0}\n"
+        + "{\"ts\":211,\"stage\":\"ph:q1\",\"event\":\"start\",\"wall_s\":0,\"rss_kb\":null,\"exit\":null}\n"
+        + "{\"ts\":311,\"stage\":\"ph:q1\",\"event\":\"done\",\"wall_s\":100,\"rss_kb\":5000,\"exit\":0}\n"
+    let _w = exec("cat > '" + dir + "/.dft_telemetry.jsonl' <<'EOF'\n" + body + "EOF")
+}
+
+fn main() {
+    let mut fails = 0
+
+    // isolated temp workspace (cleaned at the end).
+    let root = exec("mktemp -d")
+    let base = root + "/base"
+    let cur = root + "/cur"
+    let empty = root + "/empty"
+    let _m = exec("mkdir -p '" + base + "' '" + cur + "' '" + empty + "'")
+    _write_base(base)
+    _write_cur(cur)
+
+    // (A) report over a fixture deck → rc 0, and the underlying Report agrees.
+    let rc_rep = qf_telem_report(base)
+    fails = fails + _ck("(A) report rc==0 over a fixture deck", rc_rep == 0)
+    let rep = qforge_telemetry_report(qf_telem_read(base))
+    fails = fails + _ck("(A) parsed report: 3 stages, total wall_s=150",
+        rep.n_stages == 3 && rep.total_wall == 150)
+    // bottleneck = the max-wall stage (ph:q1, wall 100); row[0] flagged slowest.
+    fails = fails + _ck("(A) bottleneck = ph:q1 (max wall, slowest flagged)",
+        len(rep.rows) > 0 && rep.rows[0].stage == "ph:q1" && rep.rows[0].slowest)
+
+    // (B) regress via the argv dispatch (default 20% threshold) → rc 0.
+    let av_reg: [str] = ["qforge_cli", "telemetry", "regress", base, cur]
+    let rc_reg = qf_telemetry(av_reg)
+    fails = fails + _ck("(B) regress rc==0 (default 20% threshold via argv)", rc_reg == 0)
+    // direct: scf +150% > 20% → REGRESSED; relax +10% < 20% → SAME.
+    let rr = qforge_telemetry_regress(qf_telem_read(base), qf_telem_read(cur), 20)
+    let mut scf_regressed = false
+    let mut relax_same = false
+    let mut ri = 0
+    while ri < len(rr.rows) {
+        let row = rr.rows[ri]
+        if row.stage == "scf" && row.kind == "REGRESSED" { scf_regressed = true }
+        if row.stage == "relax" && row.kind == "SAME" { relax_same = true }
+        ri = ri + 1
+    }
+    fails = fails + _ck("(B) scf REGRESSED (>20%), relax SAME (<20%)", scf_regressed && relax_same)
+
+    // (C) rollup over both decks → rc 0, both counted, none skipped.
+    let av_roll: [str] = ["qforge_cli", "telemetry", "rollup", base, cur]
+    let rc_roll = qf_telemetry(av_roll)
+    fails = fails + _ck("(C) rollup rc==0 over two fixture decks", rc_roll == 0)
+
+    // (D) MISSING-FILE GUARD (d6): each verb over a deck with NO telemetry → rc 1.
+    fails = fails + _ck("(D) report missing telemetry → rc 1 (clean, no fabrication)",
+        qf_telem_report(empty) == 1)
+    fails = fails + _ck("(D) regress with missing baseline → rc 1",
+        qf_telem_regress(empty, cur, 20) == 1)
+    fails = fails + _ck("(D) regress with missing current → rc 1",
+        qf_telem_regress(base, empty, 20) == 1)
+    let av_roll_empty: [str] = ["qforge_cli", "telemetry", "rollup", empty]
+    fails = fails + _ck("(D) rollup all-empty → rc 1", qf_telemetry(av_roll_empty) == 1)
+
+    // (E) USAGE errors → rc 2.
+    let av_bare: [str] = ["qforge_cli", "telemetry"]
+    fails = fails + _ck("(E) bare `telemetry` → rc 2 (usage)", qf_telemetry(av_bare) == 2)
+    let av_unknown: [str] = ["qforge_cli", "telemetry", "bogus"]
+    fails = fails + _ck("(E) unknown telemetry verb → rc 2", qf_telemetry(av_unknown) == 2)
+    let av_noarg: [str] = ["qforge_cli", "telemetry", "report"]
+    fails = fails + _ck("(E) report with no deck arg → rc 2", qf_telemetry(av_noarg) == 2)
+
+    // (F) rollup with SOME telemetry present (base) + some absent (empty) → rc 0
+    //     (found>0 path; the empty deck is SKIPPED, never a phantom row, d6).
+    let av_mixed: [str] = ["qforge_cli", "telemetry", "rollup", base, empty]
+    fails = fails + _ck("(F) rollup mixed (base has telemetry, empty skipped) → rc 0",
+        qf_telemetry(av_mixed) == 0)
+
+    let _rm = exec("rm -rf '" + root + "'")
+
+    if fails == 0 {
+        println("qforge_cli_telemetry_selftest PASS")
+        return
+    }
+    println("qforge_cli_telemetry_selftest FAIL (" + to_string(fails) + ")")
+    exit(1)
+}
