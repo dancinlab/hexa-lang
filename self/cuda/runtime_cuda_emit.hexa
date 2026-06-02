@@ -851,6 +851,15 @@ fn emit_runtime_cuda_c() -> str {
             "    if (*grid_sz < 1) *grid_sz = 1;\n" +
             "}\n" +
             "\n" +
+            "/* Forward declarations — these static output helpers are DEFINED later\n" +
+            " * (~_ensure_dev_alloc_out / ~_d2h_out below) but are CALLED by the\n" +
+            " * lever-(a) im2col / im2col_t / col2im wrappers immediately below this\n" +
+            " * point. nvcc -x cu (C++/CUDA front-end) rejects use-before-declaration,\n" +
+            " * unlike lenient C89 implicit-decl — so the prototypes must precede the\n" +
+            " * first call site. Linkage matches the definitions (static). */\n" +
+            "static int _ensure_dev_alloc_out(int64_t out_id, int64_t need_len);\n" +
+            "static int _d2h_out(int64_t out_id, int64_t copy_len);\n" +
+            "\n" +
             "/* im2col gather → device-resident XC. Reads X (H2D idempotent), writes\n" +
             " * the output device buffer; _d2h_out honours FORGE_OUT_DEVICE_KEEP so XC\n" +
             " * stays FARR_DEVICE for the next GEMM (no roundtrip). 0 ok / -1 err. */\n" +
