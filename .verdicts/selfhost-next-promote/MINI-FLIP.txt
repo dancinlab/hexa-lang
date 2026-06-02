@@ -1,0 +1,86 @@
+=== SELFHOST-NEXT lane A — MINI default-toolchain flip attempt ===
+date    : 2026-06-03
+host    : mini (macOS arm64, PRIMARY working box running this session's hooks/skills)
+goal    : flip mini's default hexa toolchain to the self-hosted gen3 compiler
+          (ghost was already flipped #2581), GATED to never brick mini's `hexa` CLI.
+outcome : tier2 DEFERRED (g63 honest) — hx-selfhost is bare-gen3, lacks full CLI
+          surface. tier1 side-by-side install LEFT IN PLACE (default UNTOUCHED).
+
+──────────────────────────────────────────────────────────────────────────────
+ARTIFACT SOURCE
+  mini-local gen3/hexa_ld/rt.o did NOT exist; a full local build is a 3.5h triple
+  self-emit that would saturate the primary box. ghost (SAME target: macOS arm64)
+  holds the VERIFIED byte-eq-fixpoint artifacts. Fetched them to a mini-local
+  build dir; mini-validity is then re-proven by running the parity gate ON MINI
+  (assemble gen3 asm with mini clang + link with hexa_ld on mini + RUN on mini).
+    scp ghost@192.168.50.150:~/.hx/self/native/selfhost/{gen3,hexa_ld,rt.o}
+        -> build/selfhost/{gen3,hexa_ld,rt.o}
+    file: all three Mach-O 64-bit arm64 (gen3 exec, hexa_ld exec, rt.o object)
+
+──────────────────────────────────────────────────────────────────────────────
+STEP 2 — PARITY GATE (on mini, no pipe-mask)
+  $ bash tool/selfhost_parity_gate.sh -g build/selfhost/gen3 \
+        -l build/selfhost/hexa_ld -t build/selfhost/rt.o -w build/selfhost/parity
+  PROG           BEHAVIOUR  ASM        SMOKE    VERDICT
+  arith          ok(42)     ref-err    42-ok    PASS
+  bitmask        ok(15)     ref-err    n/a      PASS
+  branch         ok(7)      ref-err    n/a      PASS
+  call           ok(13)     ref-err    n/a      PASS
+  recurse        ok(120)    ref-err    n/a      PASS
+  parity: 5/5 pass, 0 fail (strict=0, asm-axis=on)
+  RESULT: PARITY PASS — promotion AUTHORIZED   (exit 0)
+  note: ASM=ref-err is informational only — the shipped ref `--emit=asm` errored on
+        the corpus driver; the load-bearing BEHAVIOUR axis is green (gen3 compiles+
+        links+RUNS correct exit codes on mini → artifacts are mini-valid).
+
+──────────────────────────────────────────────────────────────────────────────
+STEP 3 — TIER1 INSTALL (default UNTOUCHED)
+  $ bash tool/promote_selfhost.sh install -w build/selfhost     (exit 0)
+  parity gate re-ran green as hard precondition.
+  slot      : installed (/Users/mini/.hx/self/native/selfhost)
+  launcher  : present   (/Users/mini/.hx/bin/hx-selfhost)
+  default   : hexa.real = shipped binary (NOT flipped)
+
+──────────────────────────────────────────────────────────────────────────────
+STEP 4 — HARD CLI-SAFETY GATE before tier2 (exercise FULL CLI via hx-selfhost)
+  hooks/skills call counts (top): hexa verify ×30236 · hexa run ×20608 ·
+    hexa kick ×11791 · hexa atlas ×10773 · hexa cc ×6054 · hexa build ×3900 ·
+    hexa loop ×719 · hexa --version ×485 ...  → full subcommand CLI surface.
+
+  hx-selfhost launcher body = `exec <slot>/gen3 "$@"`  (bare gen3 passthrough)
+
+  $ hx-selfhost --version  -> "hexa-compiler: missing SOURCE.hexa"  (NOT a version)
+  $ hx-selfhost build      -> "hexa-compiler: missing SOURCE.hexa"  ('build' read as filename)
+  $ hx-selfhost run        -> "hexa-compiler: missing SOURCE.hexa"  ('run' read as filename)
+  $ hx-selfhost verify     -> "hexa-compiler: missing SOURCE.hexa"  ('verify' read as filename)
+  $ hx-selfhost atlas hash -> "hexa-compiler: cannot open `hash`: file not found"
+
+  gen3's ONLY mode is bare:  gen3 SOURCE.hexa --emit=asm/obj  (CONFIRMED works —
+    emitted valid arm64 asm for fn main(){exit(6*7)}). It has NO subcommand
+    dispatch: build/run/verify/atlas/loop/--version are all interpreted as source
+    filenames. Contrast: real hexa.real = `hexa 0.1.0-dispatch`, `hexa run <p>` rc=0.
+
+  CLI-SAFETY GATE RESULT: full CLI surface does NOT work via hx-selfhost (bare-gen3).
+
+──────────────────────────────────────────────────────────────────────────────
+DECISION (g63)
+  tier2 DEFERRED — flipping mini's default hexa.real -> hx-selfhost would break
+  every `hexa <subcommand>` the hooks/skills use (30k+ `hexa verify` alone),
+  bricking the primary working box's tooling. Per lane-A protocol this is the
+  CORRECT g63 outcome, NOT a failure. A CLI-shim wrapping gen3 with the dispatch
+  surface (build/run/verify/atlas/...) is needed FIRST.
+
+  NO flip performed. Default hexa.real remains the shipped dispatch binary.
+  tier1 install LEFT IN PLACE (harmless side-by-side; opt-in `hx-selfhost` only).
+
+  Post-state confirmed:
+    bash tool/promote_selfhost.sh --status  -> default = shipped binary (NOT flipped)
+    hexa --version  -> "hexa 0.1.0-dispatch" (rc 0)  → hooks/skills SAFE.
+
+  --revert cmd if ever flipped (not needed here, no flip occurred):
+    bash tool/promote_selfhost.sh --revert
+  (tier1 uninstall, if desired: rm -rf $HX_HOME/self/native/selfhost \
+     $HX_HOME/bin/hx-selfhost — harmless to leave.)
+
+VERDICT: 🟢 g63 DEFER — parity PASS · tier1 installed · CLI-surface gate caught
+         bare-gen3 · mini default NOT flipped · primary box CLI intact.
