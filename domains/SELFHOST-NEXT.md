@@ -18,7 +18,7 @@ prereqs: arr_alloc codegen map + runtime leaf fns + hexa_ld L1/L2 patches.
 
 ## milestones
 
-- [ ] ENTRY GATE — gen2 byte-eq fixpoint verdict (cmp cc-prc2.o == cc-gen3.o, exit 0) confirmed on ghost
+- [x] ENTRY GATE — gen2 byte-eq fixpoint verdict (cmp cc-prc2.o == cc-gen3.o, exit 0) confirmed on ghost
 - [ ] land integration branch `cc-native/selfhost-ghost` (link prereqs: arr_alloc map + leaf fns + hexa_ld L1/L2) to main
 - [ ] promote self-hosted gen to the default `hx` / hexa_v2 toolchain (replace the bootstrap compiler), with smoke + verify parity
 - [ ] multi-target bootstrap: linux-arm64 self-host (faithful CI already exercises rt_fs guard — extend to full self-emit)

@@ -20,7 +20,7 @@ native mis-eval (in flight). When byte-eq lands, MISCOMPILE-ZERO opens here.
 
 ## milestones
 
-- [ ] ENTRY GATE — self-host byte-eq fixpoint achieved (gen2 emits cc-gen3.o == cc-prc2, 0 ENCODE-MISS / 0 udf)
+- [x] ENTRY GATE — self-host byte-eq fixpoint achieved (gen2 emits cc-gen3.o == cc-prc2, 0 ENCODE-MISS / 0 udf)
 - [ ] regression guard: a CI gate that fails on ANY `gen2 --emit=obj` ENCODE-MISS / spurious udf (keep the floor at zero)
 - [ ] broaden the self-emit corpus beyond the compiler flat — exercise gen2 native codegen on diverse stdlib / app programs, sweep for new miscompiles
 - [ ] catalogue the native-codegen miscompile CLASS (index/slice/char_code, 2-reg value ABI, aliasing, string-intern) as targeted codegen tests so regressions (cf. the cycle-41 `.truncate` regression) can't silently return
