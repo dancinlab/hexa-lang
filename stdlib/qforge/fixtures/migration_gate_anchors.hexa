@@ -110,7 +110,13 @@ pub fn mga_li2mgh16() -> [float] {
 // LaH10 + Li2MgH16: no composed QFORGE λ measured yet → sentinel -1.0 (PENDING).
 
 // CaH6 — QFORGE-NC composed real-cell λ MEASURED (honest, outside the 1% bar).
-pub fn mga_cah6_qforge_lambda() -> float { return 0.0895675 }
+// 2026-06-02 (QFORGE-PERF.log.md, d6 NOT tuned): dense-k CONVERGED composed all-4-brick
+//   λ = 3.45443 @ 6x6x6 MP k (NPW=64 SCF converged, N(E_F)=13.0909, ω_log=1030.18 K,
+//   Anderson-screened ΔV[d]). rel-ε vs QE 2.27 = 0.5218 (now ~+52% ABOVE; was −49% below
+//   at Γ-only N(E_F)=19.95 → old λ=1.15). λ-vs-kmesh CONVERGED (Γ→2³→4³→6³ plateau ≈3.45).
+//   Dense k closed the DOS gap but OVERSHOT 2.27 — residual now on the COUPLING side:
+//   Γ-only |g_mn| (ψ_m not k-resolved) + BARE phonon FC. Gate CaH6-NC stays HELD (d2 named).
+pub fn mga_cah6_qforge_lambda() -> float { return 3.45443 }
 
 // LaH10 — QFORGE-NC composed λ not yet measured (qforge-pending).
 pub fn mga_lah10_qforge_lambda() -> float { return -1.0 }
