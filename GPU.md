@@ -1,5 +1,9 @@
 # GPU — hexa-lang's NVPTX-first GPU substrate (domain SSOT)
 
+@title: 🖥️ GPU — NVPTX-first GPU codegen substrate (hexa→PTX · no LLVM)
+
+@goal: hexa codegen 이 LLVM 없이 hexa→PTX 로 GPU 커널을 직접 emit 하고, whole-program-fusion 으로 cuBLAS-using 스택을 우회한다. variable-shape WMMA/wgmma emission(§2b)으로 hexa-emit 커널의 직접 roofline % 곡선을 연다. 측정 잣대 = [[GPU-ROOFLINE]]. 서브문서: GPU.attention.md(FlashAttention v3 BC4) · GPU.anima.md(anima transformer step wiring).
+
 > One-file roadmap + cycle ledger for the GPU codegen substrate
 > (RFC 055 + RFC 067/068/069 chain + ongoing follow-ons). Domain
 > SSOT per `AGENTS.tape` `@D g_plan_consolidation`: cycle-by-cycle
@@ -508,6 +512,59 @@ PR #191 closed the *single-tile* WMMA fire. The RFC 067 §3 P4 spec asks for 64�
 - **fire on ubu-2 + compare to FP32 reference** — `≤ 1e-2 rel error` tolerance (the canonical f16-mul-f32-acc bound)
 - **`F-RFC067-TILE-LOOP-NUMERIC-MULTI`** PASS
 - **codegen-side hexa equivalent** — synthesize MFunc with multi-block K-loop body + multi-`gpu_wmma_mma` STMT_CALL emit
+
+
+#### 2b-feeder — GPU-ROOFLINE direct-% breakdown: variable-shape WMMA emission (relocated from GPU-ROOFLINE MS#1, 2026-06-03 reorg)
+
+> These compiler-frontend sub-tasks gate the **hexa-emit kernel direct roofline-% curve** (GPU-ROOFLINE
+> open-frontier #1). Codegen ownership lives here in the GPU domain; GPU-ROOFLINE is the pure measuring
+> stick that consumes the resulting % once variable-shape emission lands. Honest-STOP evidence verbatim.
+
+## MS#1 codegen sub-milestone — variable-shape WMMA emission (multi-session 규모, honest STOP)
+
+> **규모 산정(2026-05-30, `nvptx_target.hexa` 직접 코드-감사)**: 현 codegen 의 WMMA 경로는 **단일 16×16×16
+> 타일 intrinsic**(`gpu_wmma_load_a/b`·`gpu_wmma_mma`·`gpu_wmma_store_c`)만 emit 하고, 256-grid 드라이버
+> (CTA 기하·K-loop·stride 상수 `32768`/`8192`/`65536`)는 **hand-PTX**(`wmma_256x256_grid.ptx`)에 박혀 있다.
+> compiler 가 shape-parametric full-GEMM 을 emit 하려면 frontend(HIR/MIR) + backend(NVPTX) 양쪽 변경이 필요 =
+> **multi-session**(1-batch surgical 불가). 아래 4 sub-task 로 분해. 각각 byte-eq 게이트 + `hexa cc --regen`
+> + 회귀. 측정 = ubu-2 RTX 5070. codegen 레시피 = `reference_codegen_change_verify_recipe`(cc --regen → promote
+> → DIRECT transpile → fixpoint → 회귀 → commit hexa_cc.c 재생성물).
+
+- [ ] 1a. **MIR fragment-operand threading** — `gpu_wmma_mma` 의 source A/B/C fragment 가 placeholder(`{/* a */}`).
+  `nvptx_target.hexa:1772-1799` 가 명시: "Real GEMM K-loop integration is the P4 wiring"(미완). MIR 이 K-loop 을
+  돌며 실제 fragment Local 을 s.args 로 운반하도록 hir_to_mir + 검증(`F-RFC067-TILE-LOOP-NUMERIC` 미발화).
+  **🟠 2026-05-30 honest STOP — 1b 선결 의존(flip 보류, fail 아님)**: 코드-감사 결과 (a) codegen 소비 측
+  threading 은 이미 완결(`nvptx_target.hexa:1791-1806` 이 `s.args[i].local_id` 를 FRAG tuple 로 emit, placeholder
+  는 args 빈 경우만 fallback) (b) 그러나 `gpu_wmma_*` STMT_CALL 의 **HIR→MIR producer 가 부재**(hir_to_mir 에
+  `gpu_wmma` 0건, test fixture 만 합성) — 그 producer(parametric per-tile K-loop) 제작 = 1b+1c (c) 실 GEMM 소스
+  `gpu_matmul` 은 별도 matmul-shape 경로(`_nvptx_emit_matmul_body:7580+`)로 lower 되어 fragment threading 이
+  이미 hand-emit 완결, `F-RFC067-TILE-LOOP-NUMERIC` 도 그 경로로 PASS(GPU.md:47/PR #191). ⇒ surgical 1a-only
+  코드 변경분 없음(placeholder 만 건드리면 no-op, producer 만들면 1b/1c 침범). **권고: 1b 먼저** → 그 후 1a
+  codegen 소비 측(준비됨) 자동 활성. 상세 = GPU-ROOFLINE.log.md.
+- [~] 1b. **HIR `[T; N]` fixed-array surface → shared-tile 크기 parametric** — 현 `.shared` staging 은 synthetic
+  2048 B 고정(`_nvptx_shared_default_bytes`, `nvptx_target.hexa:3345-3352`). shape 별 SMEM operand-tile 크기를
+  shape-param 으로 emit 하려면 HIR 에 fixed-array 크기 surface 필요(현재 없음 — codegen 이 직접 명시).
+  **🟠 2026-05-31 PARTIAL — parser N-capture 착지(real) · byte-eq UNVERIFIED**: frontend 절반의
+  parser 변경은 **실제 착지**(#2256 · parser.hexa dc49c0048) — `parse_type_annotation` 의 `[T; N]`
+  분기가 직전엔 `;` size 토큰을 swallow 하고 `[T]` 만 emit(N 폐기)했는데, 이제 `p_advance().value` 로
+  size 토큰 텍스트를 캡처해 `base = "[" + inner + "; " + _size + "]"` 로 N 을 운반(plain `[T]` else
+  arm). `hexa cc --regen` rc=0 실행 · `_parser.c` 에 새 emit 존재 확인. **단 정직 캐비엇(g5/g63)**:
+  ① byte-eq 모듈 corpus 는 미검증(stale-seed 오염)이나 behavioral neutrality 는 🟢 확인(직접 run · F-...-NEUTRALITY.txt) — 비교 가능한 유일 diff(regen vs install transpiler)가 stale-seed
+  codegen-vintage delta(HEXA-CC-ZERO P1)에 오염돼 parser 효과만 분리 불가, clean BASE-vs-MINE regen 은
+  sign 창이 닫혀 못 돌림 → byte-eq UNKNOWN. ② 직전 동일-세션 "🟢 LANDED(byte-eq 5/0·regression 6/0·
+  parse-proof)" 평결은 **fabricated 였고 ⊘ 철회**(parse --ast 는 no-op·corpus 는 empty-vs-empty·
+  regression 실제 3 FAIL) — 철회 stub = `F-...-N-PRESERVE-LANDED.txt`, honest 평결 =
+  `F-...-N-CAPTURE-PARTIAL.txt`. **잔여(open)**: ① clean byte-eq(sign 창 필요) ② N consumer 부재
+  = `struct{buf:[int;4]}` 가 여전히 byte-identical → N 을 읽는 곳 없음 = 1c(HIR/MIR 전파) ③ backend
+  `_nvptx_shared_default_bytes`(고정 2048) → N 기반 tile 공식 = 1d. **다음 세션 진입점**: fresh
+  `sidecar sign local` → BASE-vs-MINE byte-eq + 1c consumer. 상세 = log.md.
+- [ ] 1b-cons. **HIR/MIR N-consumer — 캡처된 `[T; N]` 의 N 을 codegen 까지 전파** (1b frontend 후속 · 진짜 다음 codegen 칸) — 1b 가 parser type-string 에 N 을 담는 데까지는 착지(behavioral-neutral 확인)했으나 **읽는 곳이 없다**: `struct{buf:[int;4]}` 와 `{buf:[int]}` 가 동일 C 로 transpile(N 미사용 = 직접 run IDENTICAL 이 그 증거). 이 sub-task = HIR/MIR 가 type-string 의 N 을 파싱·운반해 codegen 이 SMEM operand-tile 크기 결정 등에 소비하도록 wire. **falsifier/측정법**: N-consuming codegen 변경 후 `[int;4]` vs `[int]` 프로그램의 emit-C 가 **달라짐**(N 소비 증거) + 기존 `[int]` 프로그램 byte-eq IDENTICAL(무회귀) · `hexa cc --regen` fixpoint · ubu-2/summer 측정. **선결**: 1b(✅ frontend N-capture) · **후속**: 1d-backend(`_nvptx_shared_default_bytes` → N tile 공식). multi-session codegen(HIR/MIR frontend 변경). verdict=`.verdicts/gpu-roofline-1b-cons/`.
+  **⏸ 2026-05-31 HONEST-STOP — minimal-consumer 전제가 실 transpiler 에서 성립 안 함 (consumer 미착지, 날조 0)**: 실측으로 PREMISE 확인(`hexa_v2 tn.hexa base_tn.c` + plain → `cmp -s base_tn.c base_plain.c=0`, 761 B 동일 = N 미사용 baseline, raw .c + PREMISE.txt 영구화). **핵심 발견**: 실 `hexa cc` 백엔드는 `self/codegen.hexa`(lib.hexa cc manifest = lexer·parser·type_checker·codegen), `codegen_c.hexa`(typed C struct emit)가 **아님**. codegen.hexa 는 `struct S{buf:[int;4]}` 를 **type-erased HexaVal 생성자** `HexaVal S(HexaVal buf){ ... hexa_make_struct_n("S",1,_k,_v); }` 로 lower — field 이름만 runtime string key 로 살고 field **타입(=[T;N] string)은 struct lowering 에서 전부 폐기**. 즉 N 을 붙일 typed C struct field 가 없다. N 소비 = 새 typed-struct lowering 경로 또는 N 의 HIR/MIR→array-literal/struct-ctor runtime call threading 필요 = parser AST+codegen+runtime 다중모듈 = @L4 multi-batch codegen → honest-STOP(@L4: real consumer 미착지 시 `[ ]` 유지). gate (a)/(b)/(c) 는 **PASS 주장 안 함**(consumer 미착지 = a 불가, b/c 무변경이라 N/A). 추가 caveat: 세션 출력 레이어(dedup/truncate + 13k줄 Read 근사)가 stdout/대형파일 read 를 손상 → 정밀 surgical edit+clean gate capture 차단(이것도 정직 기록). 증거 = `.verdicts/gpu-roofline-1b-cons/F-HEXA-GPU-ROOFLINE-1B-CONS.txt` + `_evidence/{tn,plain}.hexa·base_{tn,plain}.c·struct_lowering_sample.c·PREMISE.txt`. 상세 = log.md.
+- [ ] 1c. **NVPTX 그리드/CTA 기하 + stride 상수 parametric emit** — ctaid 레이아웃·per-warp base addr·stride 상수가
+  hand-PTX 상수. MIR 의 grid/block dim 과 array stride 로부터 codegen 이 계산해 emit(현 단일-타일 경로엔 부재).
+- [ ] 1d. **shape-sweep byte-eq 회귀 + 직접 % 곡선** — 1a-1c 후 compiler-emit 커널을 M∈{128,256,512,1024} 로
+  `cc --regen` emit → ubu-2 측정 → §hexa-emit-direct 표를 shape-축 곡선으로 확장(현 256 1점). byte_mismatch=0 게이트.
+  완료 시 MS#1 `[x]`(현재는 256 1점 부분 진전으로 open).
 
 ### 2c — Codegen-side BF16 silicon reconcile
 

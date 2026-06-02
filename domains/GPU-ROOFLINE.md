@@ -38,7 +38,7 @@ roofline % 수치표는 모두 `domains/GPU-ROOFLINE.bench.md` 단일 SSOT 로 �
 > 측정 호스트 = ubu-2 RTX 5070($0 fire) · 멀티디바이스 분모는 측정 pod preapproved ·
 > **vast RTSC 학습 pod 미접촉**(adopt/list 만). codegen 무변경.
 
-- [ ] 1. 🔵 **GPU**: hexa-emit 커널 직접 roofline % (cuBLAS 아닌 hexa codegen 산출) — **부분 진전(256-locked 1점 측정 완료, open 유지)**. **2026-05-30 ubu-2 RTX 5070 $0 fire**(`archive/fires/gpu_roofline_ms1_hexa_emit_direct_2026_05_30/`): **compiler-emitted** `wmma_256x256_grid`(PR #214) 직접 achieved/peak = **2.79–2.84%**(분모 §peak 박제 126.52 TF) / **4.96–5.05%**(same-process 71.13 TF), hexa-emit 3.53–3.59 TF, **byte-eq max|Δ|=0**(cuBLAS-INDEPENDENT numerator). 256³ 는 launch/occupancy-bound 영역이라 M=4096 peak 분모 대비 % 작음(정직 — shape-local cuBLAS 도 3.5% 뿐). 상세 = `.bench.md §hexa-emit-direct`. **full shape-축 % 곡선은 variable-shape compiler emission 필요 = multi-session codegen**(아래 `## MS#1 codegen sub-milestone` 로 분해, MS#1 open 유지). **falsifier/측정법**: variable-shape WMMA emission 후 hexa-emit 커널의 직접 achieved/peak % shape-축 곡선 · byte-eq 게이트(byte_mismatch=0) · ubu-2 RTX 5070
+- [ ] 1. 🔵 **GPU**: hexa-emit 커널 직접 roofline % — **codegen 본체는 GPU 도메인으로 이관**(2026-06-03 reorg). variable-shape WMMA emission(구 MS#1: 1a~1d)은 `GPU.md §2b` 가 소유; 이 도메인(측정축)은 emission 착지 후 결과 % 곡선만 소비. 현 단일점(256-locked compiler-emit 2.79~2.84% / same-process 4.96~5.05%, byte-eq max|Δ|=0) = `.bench.md §hexa-emit-direct`. **falsifier/측정법**: GPU.md §2b 가 variable-shape emit 착지 → hexa-emit 커널 직접 achieved/peak % shape-축 곡선 · byte_mismatch=0 · ubu-2 RTX 5070.
 - [x] 2. 🔵 **GPU**: PTX-diff → roofline 정적 예측 (fire 없이) — **PASS** 4/4 비교쌍(vec-add·cuBLAS HGEMM·hexa HGEMM M=256/M=1024) 정적 PTX-op-count 예측이 기존 ubu-2 실측과 ±15% 이내(실제 ≤3pp): AI 0.167 vec-add→93% BW-roof / HMMA-dense→0.53 cuBLAS-ratio / SMEM-tile 부재→monotonic 강등 0.767→0.287 모두 적중. 정적 한계(L2 hit-rate·occupancy)=roofline-N/A 표기. 상세 = GPU-ROOFLINE.bench.md §ptx-static
 - [x] 3. 🟢 **flame**: 학습 step 전체 dominant 커널 roofline 완전 롤업 — linear(14–45%)+FFN(14–35%) 시간-가중 합산 = **~14–42% of HBM-roof**(둘 다 memory-bound 동질 → binding 정합). 🟢 개별 %는 실측-유래·🟠 step-time 비중(35/45/20%)은 가정(PERF.md per-kernel 프로파일 부재) · attention 커널은 별도 측정 미존재(MS#4)로 **명시적 누락** 표기("누락 0" 게이트 부분충족). 상세 = GPU-ROOFLINE.bench.md §flame-lane
 - [x] 4. 🟢 **flame**: attention(flash-attn류) 커널 별도 roofline lane — **2026-05-30 ubu-2 RTX 5070 $0 fire**(`/tmp/flame_attn_roofline.cu`, cuBLAS QKᵀ+PV @ T=1024·hd=64·nh=12). **AI=28.44 F/B < ridge 61 → memory-bound**; attn-core achieved 8597 GFLOP/s = **52.1% of HBM-roof**(BW×AI, DtoD)/54.0%(STREAM). flame attention = CPU farr 스칼라(decoder_block_lib.hexa:363) — GPU 설계는 QKᵀ·PV→cuBLAS·softmax→CPU(forge masked-attn 커널 부재). flash-attn 아님(S materialize → AI 천장). 상세 = `.bench.md §attention-lane`
@@ -46,48 +46,7 @@ roofline % 수치표는 모두 `domains/GPU-ROOFLINE.bench.md` 단일 SSOT 로 �
 - [x] 6. 🔴 **forge**: FP64 TC 41–43% 천장 origin 분석 — **CLOSED-NEGATIVE**: origin = **operand SMEM tiling/reuse 부재**(+ naive launch occupancy) 확정. RFC 052 §3.9a 가 직접 측정 명시("no SMEM operand tiling/reuse, memory-bound"), RFC 060-C FP64 mega-kernel(2× A100)이 다른 축에서 동일 41–43% 교차 확증. SMEM-tile 없이 cuBLAS(77–87% CUTLASS-grade) 따라잡기 = 물리적 닫힘 = "못 이김 ≠ 실패". 끌어올림=C Phase 4 CUTLASS-grade(3–6주, batch 밖). 상세 = GPU-ROOFLINE.bench.md §forge-lane
 - [x] 7. 🟢 **공통**: 멀티디바이스 분모 (A100 추가) — **2026-05-30 vast pod 38481895 측정**(NVIDIA **A100 80GB PCIe**, sm_80, 108 SM, driver 590.48.01). achieved-peak: **HBM2e 1640.8 GB/s**(theo 1935, 84.8%) · **FP32 SGEMM 19.12 TF**(theo 19.5, 98.1%) · **FP64 DGEMM 16.90 TF**(FP64-TC theo 19.5, 86.7% / FP64-core 9.7 의 174%) · **FP16-TC 245.19 TF**(theo 312 dense, 78.6%) · BF16-TC 239.04 TF · TF32-TC 112.73 TF. PyTorch 2.6.0+cu124 번들 cuBLAS(이미지 nvcc 부재 → torch.matmul=cuBLAS GEMM, RTX 5070 .cu cuBLAS 와 동형). **핵심 발견**: 같은 cuBLAS 라도 디바이스 등급이 achieved/theo % 를 크게 가름 — A100(DC) FP16-TC 78.6% sustainable vs RTX 5070(소비자) 26%(tensor 게이팅). 분모를 디바이스별 박제해야 roofline % 가 의미. RTX 5070 행 + A100 행 비교표 = `.bench.md §multi-device-peak`. 측정 후 pod 즉시 down(비용 차단) · vast RTSC 학습 pod 미접촉. 상세 = GPU-ROOFLINE.log.md
 
-## MS#1 codegen sub-milestone — variable-shape WMMA emission (multi-session 규모, honest STOP)
 
-> **규모 산정(2026-05-30, `nvptx_target.hexa` 직접 코드-감사)**: 현 codegen 의 WMMA 경로는 **단일 16×16×16
-> 타일 intrinsic**(`gpu_wmma_load_a/b`·`gpu_wmma_mma`·`gpu_wmma_store_c`)만 emit 하고, 256-grid 드라이버
-> (CTA 기하·K-loop·stride 상수 `32768`/`8192`/`65536`)는 **hand-PTX**(`wmma_256x256_grid.ptx`)에 박혀 있다.
-> compiler 가 shape-parametric full-GEMM 을 emit 하려면 frontend(HIR/MIR) + backend(NVPTX) 양쪽 변경이 필요 =
-> **multi-session**(1-batch surgical 불가). 아래 4 sub-task 로 분해. 각각 byte-eq 게이트 + `hexa cc --regen`
-> + 회귀. 측정 = ubu-2 RTX 5070. codegen 레시피 = `reference_codegen_change_verify_recipe`(cc --regen → promote
-> → DIRECT transpile → fixpoint → 회귀 → commit hexa_cc.c 재생성물).
+## codegen feeder → GPU domain (2026-06-03 reorg)
 
-- [ ] 1a. **MIR fragment-operand threading** — `gpu_wmma_mma` 의 source A/B/C fragment 가 placeholder(`{/* a */}`).
-  `nvptx_target.hexa:1772-1799` 가 명시: "Real GEMM K-loop integration is the P4 wiring"(미완). MIR 이 K-loop 을
-  돌며 실제 fragment Local 을 s.args 로 운반하도록 hir_to_mir + 검증(`F-RFC067-TILE-LOOP-NUMERIC` 미발화).
-  **🟠 2026-05-30 honest STOP — 1b 선결 의존(flip 보류, fail 아님)**: 코드-감사 결과 (a) codegen 소비 측
-  threading 은 이미 완결(`nvptx_target.hexa:1791-1806` 이 `s.args[i].local_id` 를 FRAG tuple 로 emit, placeholder
-  는 args 빈 경우만 fallback) (b) 그러나 `gpu_wmma_*` STMT_CALL 의 **HIR→MIR producer 가 부재**(hir_to_mir 에
-  `gpu_wmma` 0건, test fixture 만 합성) — 그 producer(parametric per-tile K-loop) 제작 = 1b+1c (c) 실 GEMM 소스
-  `gpu_matmul` 은 별도 matmul-shape 경로(`_nvptx_emit_matmul_body:7580+`)로 lower 되어 fragment threading 이
-  이미 hand-emit 완결, `F-RFC067-TILE-LOOP-NUMERIC` 도 그 경로로 PASS(GPU.md:47/PR #191). ⇒ surgical 1a-only
-  코드 변경분 없음(placeholder 만 건드리면 no-op, producer 만들면 1b/1c 침범). **권고: 1b 먼저** → 그 후 1a
-  codegen 소비 측(준비됨) 자동 활성. 상세 = GPU-ROOFLINE.log.md.
-- [~] 1b. **HIR `[T; N]` fixed-array surface → shared-tile 크기 parametric** — 현 `.shared` staging 은 synthetic
-  2048 B 고정(`_nvptx_shared_default_bytes`, `nvptx_target.hexa:3345-3352`). shape 별 SMEM operand-tile 크기를
-  shape-param 으로 emit 하려면 HIR 에 fixed-array 크기 surface 필요(현재 없음 — codegen 이 직접 명시).
-  **🟠 2026-05-31 PARTIAL — parser N-capture 착지(real) · byte-eq UNVERIFIED**: frontend 절반의
-  parser 변경은 **실제 착지**(#2256 · parser.hexa dc49c0048) — `parse_type_annotation` 의 `[T; N]`
-  분기가 직전엔 `;` size 토큰을 swallow 하고 `[T]` 만 emit(N 폐기)했는데, 이제 `p_advance().value` 로
-  size 토큰 텍스트를 캡처해 `base = "[" + inner + "; " + _size + "]"` 로 N 을 운반(plain `[T]` else
-  arm). `hexa cc --regen` rc=0 실행 · `_parser.c` 에 새 emit 존재 확인. **단 정직 캐비엇(g5/g63)**:
-  ① byte-eq 모듈 corpus 는 미검증(stale-seed 오염)이나 behavioral neutrality 는 🟢 확인(직접 run · F-...-NEUTRALITY.txt) — 비교 가능한 유일 diff(regen vs install transpiler)가 stale-seed
-  codegen-vintage delta(HEXA-CC-ZERO P1)에 오염돼 parser 효과만 분리 불가, clean BASE-vs-MINE regen 은
-  sign 창이 닫혀 못 돌림 → byte-eq UNKNOWN. ② 직전 동일-세션 "🟢 LANDED(byte-eq 5/0·regression 6/0·
-  parse-proof)" 평결은 **fabricated 였고 ⊘ 철회**(parse --ast 는 no-op·corpus 는 empty-vs-empty·
-  regression 실제 3 FAIL) — 철회 stub = `F-...-N-PRESERVE-LANDED.txt`, honest 평결 =
-  `F-...-N-CAPTURE-PARTIAL.txt`. **잔여(open)**: ① clean byte-eq(sign 창 필요) ② N consumer 부재
-  = `struct{buf:[int;4]}` 가 여전히 byte-identical → N 을 읽는 곳 없음 = 1c(HIR/MIR 전파) ③ backend
-  `_nvptx_shared_default_bytes`(고정 2048) → N 기반 tile 공식 = 1d. **다음 세션 진입점**: fresh
-  `sidecar sign local` → BASE-vs-MINE byte-eq + 1c consumer. 상세 = log.md.
-- [ ] 1b-cons. **HIR/MIR N-consumer — 캡처된 `[T; N]` 의 N 을 codegen 까지 전파** (1b frontend 후속 · 진짜 다음 codegen 칸) — 1b 가 parser type-string 에 N 을 담는 데까지는 착지(behavioral-neutral 확인)했으나 **읽는 곳이 없다**: `struct{buf:[int;4]}` 와 `{buf:[int]}` 가 동일 C 로 transpile(N 미사용 = 직접 run IDENTICAL 이 그 증거). 이 sub-task = HIR/MIR 가 type-string 의 N 을 파싱·운반해 codegen 이 SMEM operand-tile 크기 결정 등에 소비하도록 wire. **falsifier/측정법**: N-consuming codegen 변경 후 `[int;4]` vs `[int]` 프로그램의 emit-C 가 **달라짐**(N 소비 증거) + 기존 `[int]` 프로그램 byte-eq IDENTICAL(무회귀) · `hexa cc --regen` fixpoint · ubu-2/summer 측정. **선결**: 1b(✅ frontend N-capture) · **후속**: 1d-backend(`_nvptx_shared_default_bytes` → N tile 공식). multi-session codegen(HIR/MIR frontend 변경). verdict=`.verdicts/gpu-roofline-1b-cons/`.
-  **⏸ 2026-05-31 HONEST-STOP — minimal-consumer 전제가 실 transpiler 에서 성립 안 함 (consumer 미착지, 날조 0)**: 실측으로 PREMISE 확인(`hexa_v2 tn.hexa base_tn.c` + plain → `cmp -s base_tn.c base_plain.c=0`, 761 B 동일 = N 미사용 baseline, raw .c + PREMISE.txt 영구화). **핵심 발견**: 실 `hexa cc` 백엔드는 `self/codegen.hexa`(lib.hexa cc manifest = lexer·parser·type_checker·codegen), `codegen_c.hexa`(typed C struct emit)가 **아님**. codegen.hexa 는 `struct S{buf:[int;4]}` 를 **type-erased HexaVal 생성자** `HexaVal S(HexaVal buf){ ... hexa_make_struct_n("S",1,_k,_v); }` 로 lower — field 이름만 runtime string key 로 살고 field **타입(=[T;N] string)은 struct lowering 에서 전부 폐기**. 즉 N 을 붙일 typed C struct field 가 없다. N 소비 = 새 typed-struct lowering 경로 또는 N 의 HIR/MIR→array-literal/struct-ctor runtime call threading 필요 = parser AST+codegen+runtime 다중모듈 = @L4 multi-batch codegen → honest-STOP(@L4: real consumer 미착지 시 `[ ]` 유지). gate (a)/(b)/(c) 는 **PASS 주장 안 함**(consumer 미착지 = a 불가, b/c 무변경이라 N/A). 추가 caveat: 세션 출력 레이어(dedup/truncate + 13k줄 Read 근사)가 stdout/대형파일 read 를 손상 → 정밀 surgical edit+clean gate capture 차단(이것도 정직 기록). 증거 = `.verdicts/gpu-roofline-1b-cons/F-HEXA-GPU-ROOFLINE-1B-CONS.txt` + `_evidence/{tn,plain}.hexa·base_{tn,plain}.c·struct_lowering_sample.c·PREMISE.txt`. 상세 = log.md.
-- [ ] 1c. **NVPTX 그리드/CTA 기하 + stride 상수 parametric emit** — ctaid 레이아웃·per-warp base addr·stride 상수가
-  hand-PTX 상수. MIR 의 grid/block dim 과 array stride 로부터 codegen 이 계산해 emit(현 단일-타일 경로엔 부재).
-- [ ] 1d. **shape-sweep byte-eq 회귀 + 직접 % 곡선** — 1a-1c 후 compiler-emit 커널을 M∈{128,256,512,1024} 로
-  `cc --regen` emit → ubu-2 측정 → §hexa-emit-direct 표를 shape-축 곡선으로 확장(현 256 1점). byte_mismatch=0 게이트.
-  완료 시 MS#1 `[x]`(현재는 256 1점 부분 진전으로 open).
+variable-shape WMMA emission 의 codegen sub-milestone(구 MS#1: 1a MIR fragment-operand threading · 1b `[T;N]` parametric · 1b-cons HIR/MIR N-consumer · 1c NVPTX grid/stride parametric · 1d shape-sweep byte-eq)은 **GPU 도메인(`GPU.md §2b — Multi-tile WMMA GEMM K-loop`)으로 이관**됐다. 이 도메인은 순수 측정축(HW roofline % 잣대)으로 남고, emission 이 GPU.md 에서 착지하면 그 결과 직접 % 곡선을 소비·박제한다. honest-STOP 증거 전문은 `GPU.md §2b-feeder` 에 verbatim 보존.

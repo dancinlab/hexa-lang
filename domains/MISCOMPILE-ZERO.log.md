@@ -1,6 +1,54 @@
 # MISCOMPILE-ZERO — log
 Append-only history sister of `MISCOMPILE-ZERO.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
+
+## 2026-06-03 — broaden real-program sweep: FULL example/ tree (236) = CLEAN
+
+Continuous-discovery lane. Where the 82-sweep (#2535) covered a hand-picked
+feature-axis SUBSET, this sweeps the FULL real shipped program tree — every
+`example/*.hexa` (236 programs) — with the graduated gen2_fix native
+`--emit=obj`, oracle-compared vs the C-built aprime_fixhex, hunting any NEW
+native-codegen miscompile beyond the already-clean corpora (synthetic class
+gate · 82-subset · 500 diff-fuzz seeds #2565).
+
+NEW (additive — DRIVE + MEASURE + REPORT only, NO production codegen edits):
+  - tool/mczero_real_sweep.sh  — reusable real-program sweep driver. Per program:
+      (1) gen2_fix --emit=obj  -> rc / objsize / ENCODE-MISS / spurious-udf (real,
+          no pipe-mask) ; (2) gen2 --emit=asm vs aprime oracle --emit=asm, byte-
+          diff modulo the benign per-module __L<4hex>_ label hash. Classifies
+          CLEAN / SKIP (oracle-also-no-emit = unrelated dep, not a finding) /
+          FINDING (dirty emit OR asm-DIVERGE-vs-clean-oracle OR gen2-no-emit
+          where oracle emits). exit 0=clean · 1=finding · 2=infra.
+      Reuses the miscompile_zero_gate.sh / 82-sweep oracle methodology, pointed
+      at MCZERO_TREE=example instead of the synthetic corpus. Env-configurable
+      (HEXA_NATIVE_CC / HEXA_ORACLE_CC / MCZERO_TREE / MCZERO_GLOB), gates untouched.
+  - .verdicts/miscompile-zero-realsweep/REAL-SWEEP.txt  — verdict (pre-registered
+    falsifier + raw counts) + results.tsv (236 per-program rows).
+
+RESULT (graduated gen2_fix, ghost 192.168.50.150; fresh clone wt-mzsweep off
+origin/main @1c700914f):
+  236 / 236 real programs CLEAN — rc=0, ENCODE-MISS=0, udf=0, non-empty obj
+  (objsize 928..58952), oracle asm MATCH (modulo benign label hash) for all 236.
+  SKIP=0 · FINDING=0. swept=236 clean=236.
+  gen2_fix sha256 dce5c1e2…68f1e66 · aprime_fixhex sha256 c56c6413…0bb2dd4a.
+
+  Falsifier NOT triggered: zero divergence in instruction selection / regalloc /
+  branch targeting across the entire real shipped set (anima neural engines,
+  pattern-match, recursion+array, float math, string/encoding, maps, FFI/extern,
+  CLI tools, comptime/contract/attr demos).
+
+  Artifact note: the long nohup run's stdout/TSV tail was buffer-truncated at
+  process exit (last streamed line = verify_pages_test) while the script's own
+  counters reported swept=236 clean=236 skip=0 finding=0; the 3 tail programs
+  not in the streamed view (versioning_test, wc, wf) were re-run single-program
+  -> all CLEAN, and the fully-flushed results.tsv holds all 236 rows CLEAN. No gap.
+
+g63 honest framing: this is a DISCOVERY sweep with diminishing marginal value —
+the worth was entirely in whether it surfaced a real miscompile. It did not. A
+broad real-program FLOOR-HELD result IS the verdict. The MZ continuous-discovery
+lane is now at STEADY-STATE — the clean-MZ milestones are effectively exhausted
+(real-program surface broadly swept clean across all four corpora).
+
 ## 2026-06-03 — differential fuzz: 120 seeded random programs CLEAN (gen2 vs aprime-C)
 Deferred milestone "differential fuzz — generate random hexa programs and
 compare gen2-native vs aprime-C codegen to surface latent miscompiles". A NEW
@@ -230,6 +278,10 @@ with HEXA_NATIVE_CC=<graduated gen2> + HEXA_RUNTIME=self/runtime.c, gated like
 miscompile_zero_gate.sh (exit 2 = CI-neutral infra; exit 1 = real regression);
 complements (does not replace) the program-level gate.
 
+## 2026-06-03 diff-fuzz widened 121..500 (float/struct/closure) — ALL CLEAN
+- 380 seeded programs (seeds 121..500) gen2-native vs aprime-C: 0 divergence, 0 ENCODE-MISS/udf, exit-match.
+- generator axes added: float, struct, closure; for-in excluded (parse-fragile on both, not codegen).
+- verdict: .verdicts/miscompile-zero-fuzz/DIFF-FUZZ-500.txt · branch mczero/diff-fuzz-500
 ## 2026-06-03 — codegen perf-stability baseline + budget (PERF axis)
 
 Added the PERF axis to MISCOMPILE-ZERO: emit COST as a tracked regression
@@ -270,3 +322,34 @@ CI-wiring note (for a future gate agent — NOT done here): invocable in CI with
 HEXA_NATIVE_CC=<graduated gen2>, gated like miscompile_zero_gate.sh (exit 2 =
 CI-neutral infra; exit 1 = real perf regression). Captures cost; complements
 (does not replace) the correctness gates.
+
+## VERIFY-AXIS — `hexa verify --miscompile-zero` (2026-06-03, branch mczero/verify-axis)
+
+Promoted the miscompile-zero corpus onto the single canonical `hexa verify`
+surface per @D h_audit_axis_form (ONE CLI surface, NO new top-level verb).
+
+LANDED:
+- `tool/verify_cli.hexa::cmd_miscompile_zero` — dispatched by
+  `hexa verify --miscompile-zero`; wired into `main()`, `_is_sub`, and the
+  rubric help. Mirrors `cmd_blue_max`'s delegate-to-kernel shape: delegates to
+  the existing `tool/miscompile_zero_gate.sh` (corpus c1..c10 REUSED, not
+  rewritten), prints a tier matrix, captures gate rc via `exec_capture` (no
+  pipe-mask: rc 0→🟢 / 1→🔴 / 2→🟠), and auto-absorbs `miscompile_zero_floor=held`
+  on a clean floor (@D h_verify_auto_absorb; `--no-absorb` opts out).
+  56 insertions / 1 deletion (g4).
+- `tool/hexa_verify_miscompile_zero.sh` — runnable wrapper (same engine +
+  identical tier matrix), the surface the axis delegates to until the verify
+  build floor is repaired.
+
+BUILD-FLOOR BLOCKER (named, pre-existing, OUT of this lane's surface):
+`hexa verify <any-axis>` JIT-builds `tool/verify_cli.hexa` and fails at LINK —
+`Undefined symbols: _calc_eps / _sigma_k / _bell / _static_atlas / ...`
+(cross-dir `use compiler/atlas/calc_dispatch` not flattened; "compiled
+module_loader not found — falling back to raw src"). PROVEN identical on the
+unmodified `--blue-max` axis → it is the module_loader-flatten / verify-build
+floor (in-flight self-emit work), not introduced here. The native axis goes
+live the moment that floor lands.
+
+REAL RUN (ghost, gen2_fix, exit code captured separately): 10/10 corpus
+programs emit clean (0 ENCODE-MISS, 0 udf), tier 🟢 SUPPORTED-NUMERICAL,
+AXIS_RC=0. Verdict: .verdicts/miscompile-zero-verify-axis/VERIFY-MZ-AXIS.txt

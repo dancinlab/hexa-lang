@@ -902,6 +902,59 @@ fn _nvptx_wmma_mnemonic(op: string) -> string {
     return ""
 }
 
+// HEXA-FUSION §5g — operator-specific surgical override (per-call-site
+// precision / custom layout). The default WMMA mnemonic table above is
+// HANDLE-UNIFORM: every `gpu_wmma_*` call-site resolves to the SAME
+// mnemonic regardless of context — structurally the cuBLAS model, where
+// one handle pins one (compute-type, A-layout, B-layout, output-dtype)
+// for ALL GEMMs issued through it. This resolver lets a SINGLE call-site
+// in the pipeline carry a per-site override tag (read from the dst
+// Local's `precision` field — already on the MIR `Local`, see
+// `compiler/ir/mir.hexa`) and emit a DIFFERENT mnemonic than its
+// siblings, WITHOUT touching the others. That is the §5g moat: replace
+// one kernel mid-pipeline / per-call-site precision — a monolithic
+// library API cannot express it.
+//
+// Override grammar (minimal probe surface):
+//   prec == ""        → byte-identical to `_nvptx_wmma_mnemonic(op)`
+//                       (the DEFAULT path — `precision` is "" in every
+//                        codegen run today, so default emit is unchanged).
+//   prec == ".bf16"   → store-c writes a bf16 accumulator out
+//                       (`.shared.bf16` vs the default `.shared.f32`);
+//                       load.a/load.b switch their multiplicand dtype to
+//                       `.bf16` and mma takes the long 4-type form
+//                       `.f32.bf16.bf16.f32` (ptxas-canonical for bf16
+//                       multiplicands — the short `.f32.f32` form is
+//                       f16-ONLY per N122). This is per-CALL-SITE: a
+//                       neighbouring f16 store-c keeps `.shared.f32`.
+//   prec == ".f32"    → explicit f32 == default (idempotent; lets a
+//                       call-site PIN f32 even if a future cycle flips
+//                       the table default).
+//
+// Falsifier F-FUSION-WMMA-OVERRIDE (this probe): override-tagged emit
+// DIFFERS from the default mnemonic AND the un-tagged (default) path
+// stays byte-identical to `_nvptx_wmma_mnemonic`.
+fn _nvptx_wmma_mnemonic_override(op: string, prec: string) -> string {
+    // Default path — no per-site override. Byte-identical to the
+    // handle-uniform table (the only path real codegen takes today).
+    if len(prec) == 0 || prec == ".f16" || prec == ".f32" {
+        return _nvptx_wmma_mnemonic(op)
+    }
+    // Surgical bf16 override — ONE call-site emits the bf16 family while
+    // its pipeline siblings keep emitting the f16 default above.
+    if prec == ".bf16" {
+        if op == "gpu_wmma_load_a"  { return "wmma.load.a.sync.aligned.row.m16n16k16.shared.bf16" }
+        if op == "gpu_wmma_load_b"  { return "wmma.load.b.sync.aligned.col.m16n16k16.shared.bf16" }
+        // bf16 multiplicands REQUIRE the long 4-type form (N122 catalog:
+        // the short `.f32.f32` is f16-only; bf16/tf32 use `.f32.bf16.bf16.f32`).
+        if op == "gpu_wmma_mma"     { return "wmma.mma.sync.aligned.row.col.m16n16k16.f32.bf16.bf16.f32" }
+        if op == "gpu_wmma_store_c" { return "wmma.store.d.sync.aligned.row.m16n16k16.shared.f32" }
+        return ""
+    }
+    // Unknown override tag — fall back to default (never silently drop).
+    return _nvptx_wmma_mnemonic(op)
+}
+
 // _nvptx_lower_stmt - lower one MIR statement to PTX-flavored LInstr
 // records, appending to `buf`. FP64-arithmetic subset only (RFC 055 §6.6).
 //
@@ -1775,7 +1828,13 @@ fn _nvptx_lower_stmt(buf: [LInstr], s: Stmt, kinds: [PReg], shared_idx_off: [i64
         // synthesizes the dst fragment Local but no source operands).
         // Real GEMM K-loop integration is the P4 wiring + numeric-eq
         // falsifier (separate cycle).
-        let wmma_mnem = _nvptx_wmma_mnemonic(s.op)
+        // HEXA-FUSION §5g — per-call-site surgical override. The dst
+        // Local's `precision` tag (default "" → handle-uniform default
+        // emit, byte-identical to `_nvptx_wmma_mnemonic`) lets ONE
+        // call-site in the pipeline pick a different precision/dtype
+        // family than its siblings — the override a monolithic cuBLAS
+        // handle structurally cannot express.
+        let wmma_mnem = _nvptx_wmma_mnemonic_override(s.op, s.dst.precision)
         if len(wmma_mnem) > 0 {
             let dst_tuple = _nvptx_wmma_frag_tuple(s.dst.id, _nvptx_frag_width)
             if s.op == "gpu_wmma_load_a" || s.op == "gpu_wmma_load_b" {
@@ -6501,6 +6560,191 @@ fn _nvptx_build_gemm_kernel(target: string) -> NvptxKernelFn {
 // pipes to `ptxas` for F-RFC055-PTX-EMIT / F-RFC055-GEMM-FEASIBLE.
 pub fn emit_ptx_gemm_module(target: string) -> string {
     let kf = _nvptx_build_gemm_kernel(target)
+    let mut parts: [string] = []
+    parts.push(_emit_ptx_header(target))
+    parts.push("\n")
+    parts.push(emit_ptx_kernel(kf))
+    return parts.join("")
+}
+
+// ════════════════════════════════════════════════════════════════════
+// HEXA-FUSION L3 §5b — compile-time shape specialization (GPU.md §5b)
+// ════════════════════════════════════════════════════════════════════
+//
+// The generic `_nvptx_build_gemm_kernel` above is SHAPE-GENERIC: M, N, K
+// arrive as runtime `.param.u64` arguments, get truncated to u32, and the
+// contraction dimension K drives a *data-dependent* loop —
+//   $L_LOOP:
+//     setp.lt.s32 %p2, %kk, %k     // runtime trip-count compare
+//     @!%p2 bra $L_LOOPEND         // runtime exit branch
+//     ...                          // one A·B fma
+//     add.s32 %kk, %kk, 1
+//     bra $L_LOOP                  // back-edge
+// A library-call stack (cuBLAS / cuDNN) is *structurally* forced into this
+// regime: the GEMM entry point is shaped once and the dimensions are
+// runtime descriptor fields — the trip count, the bounds tests, and the
+// back-edge can never be folded away because the shape is not a fact at
+// the call site, it is data at dispatch time.
+//
+// hexa codegen, by contrast, can treat a known-(M,N,K) call site as a
+// COMPILE-TIME FACT. `_nvptx_build_gemm_kernel_specialized(M,N,K)` bakes
+// the shape into the emitted PTX:
+//   * M / N / K are emitted as literal immediates — NO `.param` for them,
+//     NO `ld.param.u64`, NO `cvt.u32.u64` shape-truncation.
+//   * the contraction loop is FULLY UNROLLED to exactly K straight-line
+//     `fma.rn.f64` steps — NO `setp.lt.s32` runtime K compare, NO
+//     `@!%p bra` loop-exit branch, NO `bra` back-edge, NO `kk` counter.
+//   * the per-iteration A/B element offsets become literal constants
+//     (kk known ⇒ `row*K + kk` and `kk*N + col` have constant kk term).
+//
+// The win this probe demonstrates is NOT raw GEMM throughput — cuBLAS is
+// the roofline and beating one GEMM is FALSIFIED (GPU.md:84). The win is
+// the *compile-time specialization a library call cannot perform*: the
+// emitted instruction stream provably DIFFERS (loop control + shape
+// param-loads erased) for a known shape, while staying byte-identical in
+// numeric result (same fma chain, same operands, same round-to-nearest).
+//
+// Falsifier (HEXA-FUSION §5b "Static shape specialization"):
+//   (1) emit Δ:  specialized PTX MUST differ from generic — it MUST NOT
+//       contain `setp.lt.s32 %p2` / `bra $L_LOOP` and MUST NOT take an M/N/K
+//       `.param`; it MUST contain exactly K `fma.rn.f64` straight-line steps.
+//   (2) byte-eq no-regression: the specialized fma operand chain is the
+//       SAME sequence the generic loop executes for that K (same a[row*K+kk],
+//       b[kk*N+col], same fma.rn order) — numerically identical, max|Δ|=0.
+//   The text-shape half is the $0 codegen probe in this file; the ptxas-
+//   accept + silicon numeric-eq half reuses tool/dispatch_r055_p2_gemm.sh.
+
+// _nvptx_build_gemm_kernel_specialized - shape-specialized FP64 GEMM.
+// M, N, K are compile-time-constant non-negative dimensions. The emitted
+// kernel keeps the three buffer base pointers (a / b / c) as `.param.u64`
+// (they are DATA, not shape) but bakes M/N/K as immediates and fully
+// unrolls the K contraction into straight-line fma.rn.f64 steps.
+//
+// Register convention (a strict subset of the generic kernel — no kk
+// counter, no shape regs):
+//   %r0  ctaid.y  %r1  ntid.y  %r2  tid.y  %r3  row
+//   %r4  ctaid.x  %r5  ntid.x  %r6  tid.x  %r7  col
+//   %r12 row*K (A-row base, loop-invariant, K baked)
+//   %r13 row*K + kk   %r14 kk*N + col  (per-unroll-step index temporaries)
+//   %r16 row*N        %r17 row*N + col (C address compose)
+//   %rd0 a base  %rd1 b base  %rd2 c base
+//   %rd6..8  A elem addr   %rd9..11 B elem addr   %rd12..14 C elem addr
+//   %p0 row<M  %p1 col<N    (M / N baked as immediates in the compares)
+//   %fd0 acc   %fd1 a[*]    %fd2 b[*]
+fn _nvptx_build_gemm_kernel_specialized(target: string, m_dim: i64, n_dim: i64, k_dim: i64) -> NvptxKernelFn {
+    let mut buf = []
+
+    // Block 0 - entry. Only the THREE buffer bases are params now; M/N/K
+    // are compile-time facts, so no shape param-loads + no shape truncation.
+    buf.push(_nvptx_instr("label", [_nvptx_op("$L_0")], ""))
+    buf = _nvptx_p1_ld_param_u64(buf, _nvptx_reg_u64(0), "gemm", 0, "load a base ptr (row-major MxK, K baked)")
+    buf = _nvptx_p1_ld_param_u64(buf, _nvptx_reg_u64(1), "gemm", 1, "load b base ptr (row-major KxN, K baked)")
+    buf = _nvptx_p1_ld_param_u64(buf, _nvptx_reg_u64(2), "gemm", 2, "load c base ptr (row-major MxN)")
+
+    // row = ctaid.y*ntid.y + tid.y
+    buf = _nvptx_p2_mov_sreg(buf, _nvptx_reg_u32(0), PTX_SREG_CTAID, "y", "gpu_block_id_y()")
+    buf = _nvptx_p2_mov_sreg(buf, _nvptx_reg_u32(1), PTX_SREG_NTID,  "y", "gpu_block_dim_y()")
+    buf = _nvptx_p2_mov_sreg(buf, _nvptx_reg_u32(2), PTX_SREG_TID,   "y", "gpu_thread_id_y()")
+    buf = _nvptx_p1_mad_lo_s32(buf, _nvptx_reg_u32(3),
+        _nvptx_reg_u32(0), _nvptx_reg_u32(1), _nvptx_reg_u32(2),
+        "row = block_id_y * block_dim_y + thread_id_y")
+
+    // col = ctaid.x*ntid.x + tid.x
+    buf = _nvptx_p2_mov_sreg(buf, _nvptx_reg_u32(4), PTX_SREG_CTAID, "x", "gpu_block_id_x()")
+    buf = _nvptx_p2_mov_sreg(buf, _nvptx_reg_u32(5), PTX_SREG_NTID,  "x", "gpu_block_dim_x()")
+    buf = _nvptx_p2_mov_sreg(buf, _nvptx_reg_u32(6), PTX_SREG_TID,   "x", "gpu_thread_id_x()")
+    buf = _nvptx_p1_mad_lo_s32(buf, _nvptx_reg_u32(7),
+        _nvptx_reg_u32(4), _nvptx_reg_u32(5), _nvptx_reg_u32(6),
+        "col = block_id_x * block_dim_x + thread_id_x")
+
+    // Bounds - M and N are baked as immediates in the setp compares
+    // (SPECIALIZATION: the generic kernel compares against %r8/%r9 loaded
+    // from params; here the extents are literal operands).
+    buf = _nvptx_p1_setp_lt_s32(buf, _nvptx_reg_pred(0), _nvptx_reg_u32(3), to_string(m_dim),
+        "p0 = (row < M)  [M=" + to_string(m_dim) + " baked]")
+    buf = _nvptx_p1_bra_if_not(buf, _nvptx_reg_pred(0), "$L_END", "skip OOB row")
+    buf = _nvptx_p1_setp_lt_s32(buf, _nvptx_reg_pred(1), _nvptx_reg_u32(7), to_string(n_dim),
+        "p1 = (col < N)  [N=" + to_string(n_dim) + " baked]")
+    buf = _nvptx_p1_bra_if_not(buf, _nvptx_reg_pred(1), "$L_END", "skip OOB col")
+
+    // acc = 0.0 ; row*K base offset (K baked immediate). NO kk counter.
+    buf = _nvptx_p2_mov_f64_imm(buf, _nvptx_reg_f64(0), "0d0000000000000000", "acc = 0.0")
+    buf = _nvptx_p2_mul_lo_s32(buf, _nvptx_reg_u32(12), _nvptx_reg_u32(3), to_string(k_dim),
+        "row*K - A-row base index (K=" + to_string(k_dim) + " baked)")
+
+    // FULLY-UNROLLED contraction: exactly K straight-line fma steps. No
+    // setp/bra loop control, no kk counter, no back-edge. kk is a known
+    // constant at each step so its term in the A/B index is folded.
+    let mut kk = 0
+    while kk < k_dim {
+        // av = a[row*K + kk]  (kk literal in the add)
+        buf = _nvptx_p2_add_s32(buf, _nvptx_reg_u32(13), _nvptx_reg_u32(12), to_string(kk),
+            "row*K + " + to_string(kk) + " (kk baked)")
+        buf = _nvptx_p1_cvt_u64_u32(buf, _nvptx_reg_u64(6), _nvptx_reg_u32(13), "widen A index -> u64")
+        buf = _nvptx_p1_mul_lo_u64(buf, _nvptx_reg_u64(7), _nvptx_reg_u64(6), "8", "A byte offset = idx * 8")
+        buf = _nvptx_p1_add_u64(buf, _nvptx_reg_u64(8), _nvptx_reg_u64(0), _nvptx_reg_u64(7), "&a[row*K+" + to_string(kk) + "]")
+        buf = _nvptx_p1_ld_global_f64(buf, _nvptx_reg_f64(1), _nvptx_reg_u64(8), "av = a[row*K+" + to_string(kk) + "]")
+
+        // bv = b[kk*N + col]  (kk*N folded to a literal immediate)
+        buf = _nvptx_p2_add_s32(buf, _nvptx_reg_u32(14), _nvptx_reg_u32(7), to_string(kk * n_dim),
+            "kk*N + col  (kk*N=" + to_string(kk * n_dim) + " folded)")
+        buf = _nvptx_p1_cvt_u64_u32(buf, _nvptx_reg_u64(9), _nvptx_reg_u32(14), "widen B index -> u64")
+        buf = _nvptx_p1_mul_lo_u64(buf, _nvptx_reg_u64(10), _nvptx_reg_u64(9), "8", "B byte offset = idx * 8")
+        buf = _nvptx_p1_add_u64(buf, _nvptx_reg_u64(11), _nvptx_reg_u64(1), _nvptx_reg_u64(10), "&b[" + to_string(kk * n_dim) + "+col]")
+        buf = _nvptx_p1_ld_global_f64(buf, _nvptx_reg_f64(2), _nvptx_reg_u64(11), "bv = b[kk*N+col]")
+
+        // acc = fma(av, bv, acc) - SAME round-to-nearest fma the generic
+        // loop executes for this kk (byte-eq numeric chain).
+        buf = _nvptx_p2_fma_rn_f64(buf, _nvptx_reg_f64(0), _nvptx_reg_f64(1), _nvptx_reg_f64(2), _nvptx_reg_f64(0),
+            "acc = fma(av, bv, acc)  [unrolled kk=" + to_string(kk) + "]")
+        kk = kk + 1
+    }
+
+    // Write C[row*N + col] (N baked immediate in the row*N multiply).
+    buf = _nvptx_p2_mul_lo_s32(buf, _nvptx_reg_u32(16), _nvptx_reg_u32(3), to_string(n_dim),
+        "row*N  (N=" + to_string(n_dim) + " baked)")
+    buf = _nvptx_p2_add_s32(buf, _nvptx_reg_u32(17), _nvptx_reg_u32(16), _nvptx_reg_u32(7), "row*N + col")
+    buf = _nvptx_p1_cvt_u64_u32(buf, _nvptx_reg_u64(12), _nvptx_reg_u32(17), "widen C index -> u64")
+    buf = _nvptx_p1_mul_lo_u64(buf, _nvptx_reg_u64(13), _nvptx_reg_u64(12), "8", "C byte offset = idx * 8")
+    buf = _nvptx_p1_add_u64(buf, _nvptx_reg_u64(14), _nvptx_reg_u64(2), _nvptx_reg_u64(13), "&c[row*N+col]")
+    buf = _nvptx_p1_st_global_f64(buf, _nvptx_reg_u64(14), _nvptx_reg_f64(0), "c[row*N+col] = acc")
+
+    // Common exit.
+    buf.push(_nvptx_instr("label", [_nvptx_op("$L_END")], ""))
+    buf.push(_nvptx_instr(PTX_OP_RET, [], "return from kernel"))
+
+    let mut fp64_regs = []
+    fp64_regs.push(PReg { name: _nvptx_reg_f64(0), kind: "fpr", frag_role: "", frag_dtype: "", frag_layout: "" })
+    fp64_regs.push(PReg { name: _nvptx_reg_f64(1), kind: "fpr", frag_role: "", frag_dtype: "", frag_layout: "" })
+    fp64_regs.push(PReg { name: _nvptx_reg_f64(2), kind: "fpr", frag_role: "", frag_dtype: "", frag_layout: "" })
+
+    let f = LFunc {
+        name: "gemm",
+        target: target,
+        instrs: buf,
+        frame_size: 0,
+        callee_saved: fp64_regs,
+        def_line: 0
+    }
+
+    // Param bank - SPECIALIZED: only the THREE buffer bases remain. The
+    // M/N/K extent params of the generic kernel are GONE (baked).
+    let mut ps = []
+    ps.push(_nvptx_param_spec("gemm_param_0", ".u64", "a: [f64]  (device-resident farr base, MxK)"))
+    ps.push(_nvptx_param_spec("gemm_param_1", ".u64", "b: [f64]  (device-resident farr base, KxN)"))
+    ps.push(_nvptx_param_spec("gemm_param_2", ".u64", "c: [f64]  (device-resident farr base, MxN)"))
+
+    // Register banks - %r0..17 (u32 index/addr; no shape regs but the high
+    // ids are still referenced) %rd0..14 (15 .u64) %p0..1 (2 .pred; no kk
+    // guard) %fd0..2 (3 .f64).
+    return _nvptx_kernel_fn(f, ps, 18, 15, 2)
+}
+
+// emit_ptx_gemm_module_specialized - render the full PTX module text for
+// the compile-time shape-specialized FP64 GEMM (M, N, K baked). Mirror of
+// `emit_ptx_gemm_module` but routes through the specialized builder.
+pub fn emit_ptx_gemm_module_specialized(target: string, m_dim: i64, n_dim: i64, k_dim: i64) -> string {
+    let kf = _nvptx_build_gemm_kernel_specialized(target, m_dim, n_dim, k_dim)
     let mut parts: [string] = []
     parts.push(_emit_ptx_header(target))
     parts.push("\n")

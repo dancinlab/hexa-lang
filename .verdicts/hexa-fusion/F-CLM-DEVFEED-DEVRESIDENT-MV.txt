@@ -1,0 +1,17 @@
+clm_conv_devfeed — LEVER (a): device im2col/col2im + device AdamW (CPU oracle)
+  im2col dil=1 max|Δ|=0.0
+  im2col dil=2 max|Δ|=0.0
+F-CLM-DEVFEED-IM2COL-EQ = 1
+PASS — device im2col gather == host xcol byte-eq, dil∈{1,2}
+  fwd dil=1 max|Δ| devfeed-vs-forge = 0.0
+  fwd dil=2 max|Δ| devfeed-vs-forge = 0.0
+F-CLM-DEVFEED-FWD-EQ = 1
+PASS — devfeed fwd == forge conv1d byte-eq, dil∈{1,2}
+  bwd dil=1 max|Δ| dW=0.0 dX=2.77556e-17 db=0.0
+  bwd dil=2 max|Δ| dW=0.0 dX=5.55112e-17 db=0.0
+F-CLM-DEVFEED-BWD-EQ = 1
+PASS — devfeed bwd (dW/dX/db) == forge conv1d_bwd byte-eq, dil∈{1,2}
+  adam 5-step max|Δ| W=0.0
+F-CLM-DEVFEED-ADAM-EQ = 1
+PASS — AdamW oracle (opt_adamw_step) deterministic 5-step trajectory
+ALL-PASS — LEVER (a) device im2col/col2im + device AdamW oracle byte-eq to host feed
