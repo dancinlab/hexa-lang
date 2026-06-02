@@ -76,6 +76,30 @@ pub fn qforge_edc_uniform(rhobar: float, nelec: int, xc_mode: int) -> float {
     return to_float(nelec) * (exc - vxc)
 }
 
+// -- reciprocal basis b_i = 2pi (a_j x a_k)/Omega from real lattice a1,a2,a3 ----
+//   Returns the flat 9-array [b1(3) b2(3) b3(3)]. The Ewald reciprocal sum MUST
+//   enumerate the TRUE reciprocal lattice of a1,a2,a3 -- a skew/degenerate b-set
+//   (e.g. a BCC recip triple with b1-b2+b3=0) mis-samples G-space.
+pub fn qforge_recip_basis(a1: [float], a2: [float], a3: [float]) -> [float] {
+    let pi2 = 2.0 * 3.14159265358979323846
+    let c23x = a2[1]*a3[2] - a2[2]*a3[1]
+    let c23y = a2[2]*a3[0] - a2[0]*a3[2]
+    let c23z = a2[0]*a3[1] - a2[1]*a3[0]
+    let c31x = a3[1]*a1[2] - a3[2]*a1[1]
+    let c31y = a3[2]*a1[0] - a3[0]*a1[2]
+    let c31z = a3[0]*a1[1] - a3[1]*a1[0]
+    let c12x = a1[1]*a2[2] - a1[2]*a2[1]
+    let c12y = a1[2]*a2[0] - a1[0]*a2[2]
+    let c12z = a1[0]*a2[1] - a1[1]*a2[0]
+    let vol = a1[0]*c23x + a1[1]*c23y + a1[2]*c23z
+    let inv = pi2 / vol
+    let mut b: [float] = []
+    b.push(inv*c23x) ; b.push(inv*c23y) ; b.push(inv*c23z)
+    b.push(inv*c31x) ; b.push(inv*c31y) ; b.push(inv*c31z)
+    b.push(inv*c12x) ; b.push(inv*c12y) ; b.push(inv*c12z)
+    return b
+}
+
 // -- ION-ION EWALD energy (Ha) -- basis-independent Madelung constant ----------
 //   Standard Ewald split E = E_real + E_recip + E_self + E_bg:
 //     E_real  = 1/2 Sum_{i,j,L} q_i q_j erfc(eta|r_ij+L|)/|r_ij+L|  (L!=0 for i=j)
@@ -143,6 +167,11 @@ pub fn qforge_ewald(a1: [float], a2: [float], a3: [float],
                     let gy = to_float(ga)*b1[1] + to_float(gb)*b2[1] + to_float(gc)*b3[1]
                     let gz = to_float(ga)*b1[2] + to_float(gb)*b2[2] + to_float(gc)*b3[2]
                     let g2 = gx*gx + gy*gy + gz*gz
+                    // guard: a degenerate / skew reciprocal basis can produce a
+                    //   zero-length |G| for a NONZERO integer triple (e.g. a BCC
+                    //   recip set with b1−b2+b3=0). Skip those — only the true
+                    //   nonzero-|G| shells carry the Ewald reciprocal sum.
+                    if g2 > 1.0e-10 {
                     let mut sre = 0.0 ; let mut sim = 0.0
                     let mut k = 0
                     while k < nion {
@@ -152,6 +181,7 @@ pub fn qforge_ewald(a1: [float], a2: [float], a3: [float],
                     }
                     let s2 = sre*sre + sim*sim
                     e_recip = e_recip + pref * exp(-1.0*g2/(4.0*eta*eta)) / g2 * s2
+                    }
                 }
                 gc = gc + 1
             }
