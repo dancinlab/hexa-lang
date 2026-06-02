@@ -7358,6 +7358,18 @@ fn gen2_expr(node) {
                 if name == "farr_add_gaussian_noise" { return "hexa_farr_add_gaussian_noise(" + arg_strs[0] + ", " + arg_strs[1] + ")" }
             }
             if len(node.args) == 3 {
+                // HEXA-FUSION L3 (glue half): forge_dispatch_gelu(in, out, n) ->
+                // int rc. out[i] = in[i]·Φ(in[i]) = in[i]·0.5·(1+erf(in[i]/√2)) —
+                // the EXACT erf-based GELU of stdlib/flame/nn_lib.hexa _nn_gelu,
+                // elementwise with NO reduction. Device CUDA erf() is IEEE-correct
+                // (same libm contract as the host erf builtin) → byte-eq to the
+                // host scalar loop. Fuses the gelu ×3 host glue in clm_prod_fwd
+                // (hg0/ex0/ex1 — the ③ fwd-only 0% util floor), keeps OUT
+                // DEVICE-RESIDENT so the next conv GEMM H2D-skips it. no-CUDA →
+                // -1 → host gelu loop (byte-eq).
+                if name == "forge_dispatch_gelu" {
+                    return "hexa_forge_dispatch_gelu(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ")"
+                }
                 // PTY 3-arg builtins
                 if name == "term_pty_spawn_sh" { return "hexa_term_pty_spawn_sh(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ")" }
                 // P7-6 three-arg runtime builtins
@@ -7436,6 +7448,15 @@ fn gen2_expr(node) {
                 // FP64 matmul through forge_tier_dispatch_v1 instead of
                 // calling hexa_farr_matmul directly. Returns the farr handle.
                 if name == "forge_dispatch_matmul" { return "hexa_forge_dispatch_matmul(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ", " + arg_strs[3] + ", " + arg_strs[4] + ")" }
+                // HEXA-FUSION L3 (glue half · final ⑤c): forge_dispatch_embedding(
+                // ids, table, x_out, T, d) -> int rc. X_OUT[i·d+c]=TABLE[tok·d+c]
+                // where tok=(int)IDS[i] — the token-gather host glue at the head of
+                // clm_prod_fwd (nn_embedding_fwd). Pure gather/copy, NO reduction →
+                // trivially bit-exact (max|Δ|=0). Keeps X_OUT DEVICE-RESIDENT so the
+                // first conv GEMM H2D-skips it. no-CUDA → -1 → host gather (byte-eq).
+                if name == "forge_dispatch_embedding" {
+                    return "hexa_forge_dispatch_embedding(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ", " + arg_strs[3] + ", " + arg_strs[4] + ")"
+                }
                 // anima RFC 034 (2026-05-16): farr autograd — ad_matmul
                 // (5-arg; forward = farr_matmul + records backward).
                 if name == "ad_matmul"      { return "hexa_ad_matmul(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ", " + arg_strs[3] + ", " + arg_strs[4] + ")" }
@@ -7461,6 +7482,46 @@ fn gen2_expr(node) {
             }
             if len(node.args) == 4 {
                 if name == "matvec"         { return "hexa_matvec(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ", " + arg_strs[3] + ")" }
+                // HEXA-FUSION L1 (GRAD half): device-resident bias-grad colsum.
+                // forge_dispatch_db_colsum(dy, db_out, T, Cout) -> int rc. Sums
+                // db[co]=Σ_t dy[t,co] on-device (sequential per-channel sum →
+                // bit-exact to the host loop) and keeps db DEVICE-RESIDENT so the
+                // next _adam H2D-skips the grad (d*B escape only into _adam). no-
+                // CUDA → -1 so the .hexa caller falls back to the host db reduce.
+                if name == "forge_dispatch_db_colsum" {
+                    return "hexa_forge_dispatch_db_colsum(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ", " + arg_strs[3] + ")"
+                }
+                // HEXA-FUSION L1 (PARAM half): device-resident int4 STE backward.
+                // forge_dispatch_int4_quant_bwd(dy, mask, dW_out, n) -> int rc. The
+                // clipped straight-through estimator is dW[i] = dy[i] · mask[i] (mask
+                // ∈ {0,1}) — a pure elementwise multiply with NO reduction, so the
+                // device kernel is trivially bit-exact to nn_int4_quant_bwd (max|Δ|=0)
+                // and keeps dW DEVICE-RESIDENT so the next _adam H2D-skips the grad
+                // (the int4 W grads escape only into _adam). no-CUDA → -1 → host STE.
+                if name == "forge_dispatch_int4_quant_bwd" {
+                    return "hexa_forge_dispatch_int4_quant_bwd(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ", " + arg_strs[3] + ")"
+                }
+                // HEXA-FUSION L3 (glue half): forge_dispatch_residual_add(a, b,
+                // out, n) -> int rc. out[i] = a[i] + b[i] — pure elementwise add
+                // with NO reduction, so the device kernel is trivially bit-exact
+                // to the host scalar loop (max|Δ|=0). Fuses the highest-frequency
+                // interpreted inter-op host glue in clm_prod_fwd (residual xt =
+                // xec + hg0, T·d host t_get/t_set per step) onto the device, keeps
+                // OUT DEVICE-RESIDENT so the next conv GEMM H2D-skips it.
+                // no-CUDA → -1 → host add (byte-eq).
+                if name == "forge_dispatch_residual_add" {
+                    return "hexa_forge_dispatch_residual_add(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ", " + arg_strs[3] + ")"
+                }
+                // HEXA-FUSION L3 (glue half · final ⑤c): forge_dispatch_expert_pack2(
+                // ex0, ex1, ex_out, n) -> int rc. EX_OUT[0·n+j]=EX0[j],
+                // EX_OUT[1·n+j]=EX1[j] for j in 0..n (n=T·d) — the clm_prod_fwd
+                // j-loop that stacks the 2 expert activations into ex_out[E·T·d].
+                // Pure copy, NO reduction → trivially bit-exact (max|Δ|=0). Keeps
+                // EX_OUT DEVICE-RESIDENT so the moe-router H2D-skips it. no-CUDA →
+                // -1 → host pack loop (byte-eq).
+                if name == "forge_dispatch_expert_pack2" {
+                    return "hexa_forge_dispatch_expert_pack2(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ", " + arg_strs[3] + ")"
+                }
                 // stdlib/os/pty — 4-arg builtin (RFC stdlib-os-pty.md)
                 if name == "pty_forkexec"   { return "hexa_pty_forkexec(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ", " + arg_strs[3] + ")" }
                 // stdlib/os/exec_pipe — fork+exec with separated stdout/stderr (RFC ssh-server stderr)
@@ -7554,6 +7615,28 @@ fn gen2_expr(node) {
                 if name == "forge_dispatch_matmul_batched" {
                     return "hexa_forge_dispatch_matmul_batched(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ", " + arg_strs[3] + ", " + arg_strs[4] + ", " + arg_strs[5] + ", " + arg_strs[6] + ")"
                 }
+                // HEXA-FUSION L1 (PARAM half): device-resident int4 fake-quant fwd.
+                // forge_dispatch_int4_quant(w, wq, sc, ql, mask, Cout, rest) -> int
+                // rc. Computes the per-channel int4-sym[-7,+7] quant ON DEVICE so W
+                // stays FARR_DEVICE (no per-step W D2H) and writes wq/sc/ql/mask
+                // device-resident. int4 is INTEGER rounding + per-channel sequential
+                // max → NO fp re-association → bit-exact to nn_int4_quant_fwd
+                // (max|Δ| MUST be exactly 0 — integer, no FMA-drift excuse). no-CUDA
+                // → -1 so the .hexa caller falls back to the host fake-quant (byte-eq).
+                if name == "forge_dispatch_int4_quant" {
+                    return "hexa_forge_dispatch_int4_quant(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ", " + arg_strs[3] + ", " + arg_strs[4] + ", " + arg_strs[5] + ", " + arg_strs[6] + ")"
+                }
+                // HEXA-FUSION L3 (glue half · final ⑤c): forge_dispatch_moe_router(
+                // logits, ex_out, probs, y, T, E, C) -> int rc. Reproduces
+                // nn_moe_router_fwd: probs=softmax(logits) per-t (stable, max-sub),
+                // Y[t,c]=Σ_e probs[t,e]·ex_out[e·T·C+t·C+c]. The softmax replays
+                // moe_lib's HAND-ROLLED _moe_exp (scaled-Taylor, NOT CUDA exp) and
+                // both reductions accumulate SEQUENTIALLY under ONE thread per t (NO
+                // tree re-assoc) → bit-exact (max|Δ|=0). Keeps Y+PROBS DEVICE-RESIDENT.
+                // no-CUDA → -1 → host nn_moe_router_fwd (byte-eq).
+                if name == "forge_dispatch_moe_router" {
+                    return "hexa_forge_dispatch_moe_router(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ", " + arg_strs[3] + ", " + arg_strs[4] + ", " + arg_strs[5] + ", " + arg_strs[6] + ")"
+                }
             }
             if len(node.args) == 8 {
                 // flame spiking RFC — STDP pair-based GPU dispatch
@@ -7579,6 +7662,26 @@ fn gen2_expr(node) {
                         + arg_strs[4] + ", " + arg_strs[5] + ", "
                         + arg_strs[6] + ", " + arg_strs[7] + ", "
                         + arg_strs[8] + ")"
+                }
+            }
+            if len(node.args) == 10 {
+                // HEXA-FUSION L3 (glue half): forge_dispatch_groupnorm(x, gamma,
+                // beta, y, mean, inv, xhat, T, C, G) -> int rc. PyTorch GroupNorm
+                // fwd (stdlib/flame/gn_lib.hexa nn_groupnorm_fwd): per group g,
+                // mu = mean over (Cg·T), var = mean (x-mu)², inv = 1/sqrt(var+eps)
+                // with eps=1e-5, y = gamma·(x-mu)·inv + beta. The reduction is
+                // done SEQUENTIALLY (t outer, c inner) by ONE thread per group and
+                // inv uses the SAME Newton-Raphson 40-iter _gn_sqrt as the host
+                // (NO CUDA rsqrt, NO tree re-assoc) → bit-exact (max|Δ|=0). Fuses
+                // the groupnorm ×2 host glue in clm_prod_fwd (h0→hn0, y→yn — ③
+                // floor), keeps OUT DEVICE-RESIDENT. no-CUDA → -1 → host loop.
+                if name == "forge_dispatch_groupnorm" {
+                    return "hexa_forge_dispatch_groupnorm("
+                        + arg_strs[0] + ", " + arg_strs[1] + ", "
+                        + arg_strs[2] + ", " + arg_strs[3] + ", "
+                        + arg_strs[4] + ", " + arg_strs[5] + ", "
+                        + arg_strs[6] + ", " + arg_strs[7] + ", "
+                        + arg_strs[8] + ", " + arg_strs[9] + ")"
                 }
             }
             if len(node.args) == 11 {

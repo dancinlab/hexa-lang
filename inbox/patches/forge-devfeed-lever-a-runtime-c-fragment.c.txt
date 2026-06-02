@@ -219,3 +219,283 @@ HexaVal forge_dispatch_adamw_keepmv(HexaVal w, HexaVal g, HexaVal m, HexaVal v,
                              HexaVal eps, HexaVal wd, HexaVal t) {
     return hexa_forge_dispatch_adamw_keepmv(w, g, m, v, n, lr, b1, b2, eps, wd, t);
 }
+
+/* HEXA-FUSION L1 (GRAD half) — device-resident bias-gradient column sum.
+ * forge_dispatch_db_colsum(dy, db_out, T, Cout). Routes to
+ * _hx_cuda_farr_db_colsum_gpu, which computes db[co]=Σ_{t=0..T-1} dy[t,co]
+ * with one thread per channel summing T sequentially (bit-exact to the host
+ * loop — NO tree re-association), then keeps db DEVICE-RESIDENT so the next
+ * _adam(W, db, ...) H2D-skips the grad. The conv bias grads d*B escape only
+ * into _adam (never read on host between bwd and AdamW) → pure removable
+ * grad roundtrip. no-CUDA → -1 so the .hexa caller falls back to the host
+ * db reduction (byte-eq). */
+HexaVal hexa_forge_dispatch_db_colsum(HexaVal dy_v, HexaVal db_v,
+                                  HexaVal t_v, HexaVal cout_v) {
+    int64_t dy_id = hexa_as_num(dy_v);
+    int64_t db_id = hexa_as_num(db_v);
+    int64_t T     = hexa_as_num(t_v);
+    int64_t Cout  = hexa_as_num(cout_v);
+    if (T <= 0 || Cout <= 0) return hexa_int(-1);
+    if (dy_id < 0 || db_id < 0) return hexa_int(-1);
+#ifdef HEXA_CUDA
+    extern int _hx_cuda_farr_db_colsum_gpu(int64_t, int64_t, int64_t, int64_t);
+    int grc = _hx_cuda_farr_db_colsum_gpu(dy_id, db_id, T, Cout);
+    if (grc == 0) return hexa_int(0);
+    /* GPU colsum failed — return -1 so the .hexa caller runs the host db
+     * reduction (byte-eq). Never silently wrong. */
+#endif
+    return hexa_int(-1);
+}
+HexaVal forge_dispatch_db_colsum(HexaVal dy, HexaVal db,
+                             HexaVal t, HexaVal cout) {
+    return hexa_forge_dispatch_db_colsum(dy, db, t, cout);
+}
+
+/* HEXA-FUSION L1 (PARAM half) — device-resident int4 fake-quant forward.
+ * forge_dispatch_int4_quant(w, wq, sc, ql, mask, Cout, rest). Routes to
+ * _hx_cuda_farr_int4_quant_gpu, which computes the per-channel int4-sym[-7,+7]
+ * QAT forward (s=max|W|/7, q=clamp(round(W/s),±7), Wq=q·s, mask=in-range) one
+ * thread per channel — per-channel max + integer round are SEQUENTIAL so the
+ * device result is BIT-EXACT to nn_int4_quant_fwd (max|Δ|=0; int4 is integer,
+ * no FMA-drift excuse). Keeps W FARR_DEVICE (no per-step W D2H) + wq/sc/ql/mask
+ * device-resident. no-CUDA → -1 so the .hexa caller runs the host fake-quant. */
+HexaVal hexa_forge_dispatch_int4_quant(HexaVal w_v, HexaVal wq_v, HexaVal sc_v,
+                                  HexaVal ql_v, HexaVal mask_v,
+                                  HexaVal cout_v, HexaVal rest_v) {
+    int64_t w_id    = hexa_as_num(w_v);
+    int64_t wq_id   = hexa_as_num(wq_v);
+    int64_t sc_id   = hexa_as_num(sc_v);
+    int64_t ql_id   = hexa_as_num(ql_v);
+    int64_t mask_id = hexa_as_num(mask_v);
+    int64_t Cout    = hexa_as_num(cout_v);
+    int64_t rest    = hexa_as_num(rest_v);
+    if (Cout <= 0 || rest <= 0) return hexa_int(-1);
+    if (w_id < 0 || wq_id < 0 || sc_id < 0 || ql_id < 0 || mask_id < 0)
+        return hexa_int(-1);
+#ifdef HEXA_CUDA
+    extern int _hx_cuda_farr_int4_quant_gpu(int64_t, int64_t, int64_t, int64_t,
+                                            int64_t, int64_t, int64_t);
+    int grc = _hx_cuda_farr_int4_quant_gpu(w_id, wq_id, sc_id, ql_id, mask_id,
+                                           Cout, rest);
+    if (grc == 0) return hexa_int(0);
+    /* GPU quant failed — return -1 so the .hexa caller runs the host
+     * fake-quant (byte-eq). Never silently wrong. */
+#endif
+    return hexa_int(-1);
+}
+HexaVal forge_dispatch_int4_quant(HexaVal w, HexaVal wq, HexaVal sc,
+                             HexaVal ql, HexaVal mask, HexaVal cout, HexaVal rest) {
+    return hexa_forge_dispatch_int4_quant(w, wq, sc, ql, mask, cout, rest);
+}
+
+/* HEXA-FUSION L1 (PARAM half) — device-resident int4 STE backward.
+ * forge_dispatch_int4_quant_bwd(dy, mask, dW_out, n). Routes to
+ * _hx_cuda_farr_int4_quant_bwd_gpu: dW[i] = dy[i]·mask[i] (mask ∈ {0,1}), a
+ * pure elementwise multiply with NO reduction → bit-exact to
+ * nn_int4_quant_bwd (max|Δ|=0). Keeps dW DEVICE-RESIDENT so the next _adam
+ * H2D-skips the grad. no-CUDA → -1 so the .hexa caller runs the host STE. */
+HexaVal hexa_forge_dispatch_int4_quant_bwd(HexaVal dy_v, HexaVal mask_v,
+                                  HexaVal dw_v, HexaVal n_v) {
+    int64_t dy_id   = hexa_as_num(dy_v);
+    int64_t mask_id = hexa_as_num(mask_v);
+    int64_t dw_id   = hexa_as_num(dw_v);
+    int64_t n       = hexa_as_num(n_v);
+    if (n <= 0) return hexa_int(-1);
+    if (dy_id < 0 || mask_id < 0 || dw_id < 0) return hexa_int(-1);
+#ifdef HEXA_CUDA
+    extern int _hx_cuda_farr_int4_quant_bwd_gpu(int64_t, int64_t, int64_t,
+                                                int64_t);
+    int grc = _hx_cuda_farr_int4_quant_bwd_gpu(dy_id, mask_id, dw_id, n);
+    if (grc == 0) return hexa_int(0);
+#endif
+    return hexa_int(-1);
+}
+HexaVal forge_dispatch_int4_quant_bwd(HexaVal dy, HexaVal mask,
+                             HexaVal dw, HexaVal n) {
+    return hexa_forge_dispatch_int4_quant_bwd(dy, mask, dw, n);
+}
+
+/* HEXA-FUSION L3 (glue half) — device-resident elementwise residual-add.
+ * forge_dispatch_residual_add(a, b, out, n). Routes to
+ * _hx_cuda_farr_residual_add_gpu: out[i] = a[i] + b[i], a pure elementwise
+ * add with NO reduction → bit-exact to the host scalar loop (max|Δ|=0). This
+ * is the highest-frequency interpreted inter-op host glue in clm_prod_fwd (the
+ * residual xt = xec + hg0, run T·d times in the interpreter between device
+ * GEMM spikes — the ③ fwd-only 0% floor). Fusing it leaves the interpreter off
+ * the per-step hot path AND keeps OUT FARR_DEVICE so the next conv GEMM
+ * H2D-skips it. no-CUDA → -1 so the .hexa caller runs the host add. */
+HexaVal hexa_forge_dispatch_residual_add(HexaVal a_v, HexaVal b_v,
+                                  HexaVal out_v, HexaVal n_v) {
+    int64_t a_id   = hexa_as_num(a_v);
+    int64_t b_id   = hexa_as_num(b_v);
+    int64_t out_id = hexa_as_num(out_v);
+    int64_t n      = hexa_as_num(n_v);
+    if (n <= 0) return hexa_int(-1);
+    if (a_id < 0 || b_id < 0 || out_id < 0) return hexa_int(-1);
+#ifdef HEXA_CUDA
+    extern int _hx_cuda_farr_residual_add_gpu(int64_t, int64_t, int64_t,
+                                              int64_t);
+    int grc = _hx_cuda_farr_residual_add_gpu(a_id, b_id, out_id, n);
+    if (grc == 0) return hexa_int(0);
+#endif
+    return hexa_int(-1);
+}
+HexaVal forge_dispatch_residual_add(HexaVal a, HexaVal b,
+                             HexaVal out, HexaVal n) {
+    return hexa_forge_dispatch_residual_add(a, b, out, n);
+}
+
+/* HEXA-FUSION L3 (glue half) — device-resident elementwise GELU.
+ * forge_dispatch_gelu(in, out, n). Routes to _hx_cuda_farr_gelu_gpu:
+ * out[i] = in[i]·0.5·(1+erf(in[i]/√2)) — the EXACT erf-based GELU of
+ * stdlib/flame/nn_lib.hexa _nn_gelu, elementwise with NO reduction. Device
+ * erf() is IEEE-correct (same libm contract) → bit-exact to the host scalar
+ * loop (max|Δ|=0). Fuses the gelu ×3 host glue in clm_prod_fwd (hg0/ex0/ex1
+ * — the ③ fwd-only 0% floor) and keeps OUT FARR_DEVICE so the next conv GEMM
+ * H2D-skips it. no-CUDA → -1 so the .hexa caller runs the host gelu. */
+HexaVal hexa_forge_dispatch_gelu(HexaVal in_v, HexaVal out_v, HexaVal n_v) {
+    int64_t in_id  = hexa_as_num(in_v);
+    int64_t out_id = hexa_as_num(out_v);
+    int64_t n      = hexa_as_num(n_v);
+    if (n <= 0) return hexa_int(-1);
+    if (in_id < 0 || out_id < 0) return hexa_int(-1);
+#ifdef HEXA_CUDA
+    extern int _hx_cuda_farr_gelu_gpu(int64_t, int64_t, int64_t);
+    int grc = _hx_cuda_farr_gelu_gpu(in_id, out_id, n);
+    if (grc == 0) return hexa_int(0);
+#endif
+    return hexa_int(-1);
+}
+HexaVal forge_dispatch_gelu(HexaVal in_v, HexaVal out_v, HexaVal n_v) {
+    return hexa_forge_dispatch_gelu(in_v, out_v, n_v);
+}
+
+/* HEXA-FUSION L3 (glue half) — device-resident GroupNorm forward.
+ * forge_dispatch_groupnorm(x, gamma, beta, y, mean, inv, xhat, T, C, G).
+ * Routes to _hx_cuda_farr_groupnorm_gpu, which reproduces gn_lib.hexa
+ * nn_groupnorm_fwd EXACTLY — per-group SEQUENTIAL reduction (t outer, c inner)
+ * under ONE thread per group (NO tree re-assoc) + Newton-Raphson 40-iter
+ * _gn_sqrt (NOT CUDA rsqrt) → bit-exact (max|Δ|=0). Fuses the groupnorm ×2
+ * host glue in clm_prod_fwd (h0→hn0, y→yn — the ③ fwd-only 0% floor); keeps
+ * Y/xhat/mean/inv FARR_DEVICE. no-CUDA → -1 → host groupnorm. */
+HexaVal hexa_forge_dispatch_groupnorm(HexaVal x_v, HexaVal gamma_v, HexaVal beta_v,
+                                  HexaVal y_v, HexaVal mean_v, HexaVal inv_v,
+                                  HexaVal xhat_v, HexaVal t_v, HexaVal c_v,
+                                  HexaVal g_v) {
+    int64_t x_id    = hexa_as_num(x_v);
+    int64_t gamma_id= hexa_as_num(gamma_v);
+    int64_t beta_id = hexa_as_num(beta_v);
+    int64_t y_id    = hexa_as_num(y_v);
+    int64_t mean_id = hexa_as_num(mean_v);
+    int64_t inv_id  = hexa_as_num(inv_v);
+    int64_t xhat_id = hexa_as_num(xhat_v);
+    int64_t T       = hexa_as_num(t_v);
+    int64_t C       = hexa_as_num(c_v);
+    int64_t G       = hexa_as_num(g_v);
+    if (T <= 0 || C <= 0 || G <= 0 || (C % G) != 0) return hexa_int(-1);
+    if (x_id < 0 || gamma_id < 0 || beta_id < 0 || y_id < 0) return hexa_int(-1);
+    if (mean_id < 0 || inv_id < 0 || xhat_id < 0) return hexa_int(-1);
+#ifdef HEXA_CUDA
+    extern int _hx_cuda_farr_groupnorm_gpu(int64_t, int64_t, int64_t, int64_t,
+                                           int64_t, int64_t, int64_t,
+                                           int64_t, int64_t, int64_t);
+    int grc = _hx_cuda_farr_groupnorm_gpu(x_id, gamma_id, beta_id, y_id, mean_id,
+                                          inv_id, xhat_id, T, C, G);
+    if (grc == 0) return hexa_int(0);
+#endif
+    return hexa_int(-1);
+}
+HexaVal forge_dispatch_groupnorm(HexaVal x, HexaVal gamma, HexaVal beta,
+                             HexaVal y, HexaVal mean, HexaVal inv,
+                             HexaVal xhat, HexaVal t, HexaVal c, HexaVal g) {
+    return hexa_forge_dispatch_groupnorm(x, gamma, beta, y, mean, inv, xhat, t, c, g);
+}
+
+/* HEXA-FUSION L3 (glue half · final slice ⑤c) — device-resident expert-pack copy.
+ * forge_dispatch_expert_pack2(ex0, ex1, ex_out, n). Routes to
+ * _hx_cuda_farr_expert_pack2_gpu: EX_OUT[0·n+j]=EX0[j], EX_OUT[1·n+j]=EX1[j] for
+ * j in 0..n (n=T·d) — the clm_prod_fwd j-loop stacking the 2 expert activations
+ * into ex_out[E·T·d]. Pure copy, NO reduction → trivially bit-exact (max|Δ|=0).
+ * Keeps EX_OUT FARR_DEVICE so the follow-up moe-router H2D-skips it. no-CUDA →
+ * -1 → host pack loop. */
+HexaVal hexa_forge_dispatch_expert_pack2(HexaVal ex0_v, HexaVal ex1_v,
+                                  HexaVal out_v, HexaVal n_v) {
+    int64_t ex0_id = hexa_as_num(ex0_v);
+    int64_t ex1_id = hexa_as_num(ex1_v);
+    int64_t out_id = hexa_as_num(out_v);
+    int64_t n      = hexa_as_num(n_v);
+    if (n <= 0) return hexa_int(-1);
+    if (ex0_id < 0 || ex1_id < 0 || out_id < 0) return hexa_int(-1);
+#ifdef HEXA_CUDA
+    extern int _hx_cuda_farr_expert_pack2_gpu(int64_t, int64_t, int64_t, int64_t);
+    int grc = _hx_cuda_farr_expert_pack2_gpu(ex0_id, ex1_id, out_id, n);
+    if (grc == 0) return hexa_int(0);
+#endif
+    return hexa_int(-1);
+}
+HexaVal forge_dispatch_expert_pack2(HexaVal ex0_v, HexaVal ex1_v,
+                             HexaVal out_v, HexaVal n_v) {
+    return hexa_forge_dispatch_expert_pack2(ex0_v, ex1_v, out_v, n_v);
+}
+
+/* HEXA-FUSION L3 (glue half · final slice ⑤c) — device-resident MoE router.
+ * forge_dispatch_moe_router(logits, ex_out, probs, y, T, E, C). Routes to
+ * _hx_cuda_farr_moe_router_gpu, which reproduces moe_lib.hexa nn_moe_router_fwd
+ * EXACTLY — stable softmax with the HAND-ROLLED _moe_exp (scaled-Taylor, NOT
+ * CUDA exp) replayed term-for-term, both reductions (softmax sum + combine acc)
+ * accumulated SEQUENTIALLY under ONE thread per t (NO tree re-assoc) → no ULP
+ * delta, bit-exact (max|Δ|=0). Fuses the moe-router host glue in clm_prod_fwd
+ * (logits_r·ex_out → y, probs — the ③ fwd-only 0% floor); keeps Y+PROBS
+ * FARR_DEVICE. no-CUDA → -1 → host moe-router. */
+HexaVal hexa_forge_dispatch_moe_router(HexaVal logits_v, HexaVal ex_out_v,
+                                  HexaVal probs_v, HexaVal y_v, HexaVal t_v,
+                                  HexaVal e_v, HexaVal c_v) {
+    int64_t logits_id = hexa_as_num(logits_v);
+    int64_t ex_out_id = hexa_as_num(ex_out_v);
+    int64_t probs_id  = hexa_as_num(probs_v);
+    int64_t y_id      = hexa_as_num(y_v);
+    int64_t T         = hexa_as_num(t_v);
+    int64_t E         = hexa_as_num(e_v);
+    int64_t C         = hexa_as_num(c_v);
+    if (T <= 0 || E <= 0 || C <= 0) return hexa_int(-1);
+    if (logits_id < 0 || ex_out_id < 0 || probs_id < 0 || y_id < 0) return hexa_int(-1);
+#ifdef HEXA_CUDA
+    extern int _hx_cuda_farr_moe_router_gpu(int64_t, int64_t, int64_t, int64_t,
+                                            int64_t, int64_t, int64_t);
+    int grc = _hx_cuda_farr_moe_router_gpu(logits_id, ex_out_id, probs_id, y_id,
+                                           T, E, C);
+    if (grc == 0) return hexa_int(0);
+#endif
+    return hexa_int(-1);
+}
+HexaVal forge_dispatch_moe_router(HexaVal logits, HexaVal ex_out, HexaVal probs,
+                             HexaVal y, HexaVal t, HexaVal e, HexaVal c) {
+    return hexa_forge_dispatch_moe_router(logits, ex_out, probs, y, t, e, c);
+}
+
+/* HEXA-FUSION L3 (glue half · final slice ⑤c) — device-resident embedding gather.
+ * forge_dispatch_embedding(ids, table, x_out, T, d). Routes to
+ * _hx_cuda_farr_embedding_gpu: X_OUT[i·d+c]=TABLE[tok·d+c] where tok=(int)IDS[i]
+ * — the token-gather host glue at the head of clm_prod_fwd (nn_embedding_fwd).
+ * Pure gather/copy, NO reduction → trivially bit-exact (max|Δ|=0). Keeps X_OUT
+ * FARR_DEVICE so the first conv GEMM H2D-skips it. no-CUDA → -1 → host gather. */
+HexaVal hexa_forge_dispatch_embedding(HexaVal ids_v, HexaVal table_v,
+                                  HexaVal out_v, HexaVal t_v, HexaVal d_v) {
+    int64_t ids_id   = hexa_as_num(ids_v);
+    int64_t table_id = hexa_as_num(table_v);
+    int64_t out_id   = hexa_as_num(out_v);
+    int64_t T        = hexa_as_num(t_v);
+    int64_t d        = hexa_as_num(d_v);
+    if (T <= 0 || d <= 0) return hexa_int(-1);
+    if (ids_id < 0 || table_id < 0 || out_id < 0) return hexa_int(-1);
+#ifdef HEXA_CUDA
+    extern int _hx_cuda_farr_embedding_gpu(int64_t, int64_t, int64_t, int64_t, int64_t);
+    int grc = _hx_cuda_farr_embedding_gpu(ids_id, table_id, out_id, T, d);
+    if (grc == 0) return hexa_int(0);
+#endif
+    return hexa_int(-1);
+}
+HexaVal forge_dispatch_embedding(HexaVal ids, HexaVal table, HexaVal out,
+                             HexaVal t, HexaVal d) {
+    return hexa_forge_dispatch_embedding(ids, table, out, t, d);
+}

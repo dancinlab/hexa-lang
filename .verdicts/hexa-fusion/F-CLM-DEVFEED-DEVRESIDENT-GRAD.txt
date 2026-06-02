@@ -1,0 +1,52 @@
+HEXA-FUSION L1 (GRAD half) — device-resident bias-gradient lifetime (db).
+
+Stacked on PR #2555 (m,v moments device-resident). This slice keeps the conv
+bias gradients d*B DEVICE-RESIDENT across bwd→AdamW: db[co] = Σ_t dy[t,co] now
+runs as an on-device sequential per-channel sum (_hx_cuda_farr_db_colsum_gpu,
+one thread per channel, t-order 0..T-1 — NO tree re-association → bit-exact to
+the host reduction) that marks db loc=FARR_DEVICE / dirty_host=0, so the next
+_adam(W, db, ...) RFC056 §6.1 H2D-skips the grad. The bias grads d*B escape ONLY
+into _adam (clm_prod.hexa — nothing on the host reads them between bwd and the
+optimizer) → the per-step db D2H (read dy back) + next H2D is a pure removable
+grad roundtrip. Env CLM_PROD_DEVRESIDENT (default off → host reduction, byte-
+identical). NO raw-GEMM-win claim — strictly boundary/roundtrip removal.
+
+Byte-eq HARD GATE (g5) — `hexa run stdlib/flame/clm_conv_devfeed.hexa` ($0 mac
+CPU oracle; the device colsum sums in the SAME sequential t-order as this host
+reference → max|Δ|=0). VERBATIM stdout:
+
+clm_conv_devfeed — LEVER (a): device im2col/col2im + device AdamW (CPU oracle)
+  im2col dil=1 max|Δ|=0.0
+  im2col dil=2 max|Δ|=0.0
+F-CLM-DEVFEED-IM2COL-EQ = 1
+PASS — device im2col gather == host xcol byte-eq, dil∈{1,2}
+  fwd dil=1 max|Δ| devfeed-vs-forge = 0.0
+  fwd dil=2 max|Δ| devfeed-vs-forge = 0.0
+F-CLM-DEVFEED-FWD-EQ = 1
+PASS — devfeed fwd == forge conv1d byte-eq, dil∈{1,2}
+  bwd dil=1 max|Δ| dW=0.0 dX=2.77556e-17 db=0.0
+  bwd dil=2 max|Δ| dW=0.0 dX=5.55112e-17 db=0.0
+F-CLM-DEVFEED-BWD-EQ = 1
+PASS — devfeed bwd (dW/dX/db) == forge conv1d_bwd byte-eq, dil∈{1,2}
+  db dil=1 max|Δ| colsum-vs-host = 0.0
+  db dil=2 max|Δ| colsum-vs-host = 0.0
+F-CLM-DEVFEED-DB-EQ = 1
+PASS — device-resident db colsum == host Σ_t dy[t,co] byte-eq, dil∈{1,2}
+  adam 5-step max|Δ| W=0.0
+F-CLM-DEVFEED-ADAM-EQ = 1
+PASS — AdamW oracle (opt_adamw_step) deterministic 5-step trajectory
+ALL-PASS — LEVER (a) device im2col/col2im + device db colsum + device AdamW oracle byte-eq to host feed
+
+All four inherited gates stay max|Δ|=0.0; the new F-CLM-DEVFEED-DB-EQ = 1 at
+max|Δ|=0.0 (dil∈{1,2}). Self-host pod realization (HEXA_CUDA) verified by clean
+emit: runtime_cuda.c contains _hx_k_db_colsum + _hx_cuda_farr_db_colsum_gpu
+(`hexa build self/cuda/runtime_cuda_emit.hexa` OK). clm_prod.hexa is built on
+the self-host pod binary (the prebuilt mac `hexa run` lacks the forge_dispatch_*
+builtins by design — pre-existing on the m/v base); the oracle above is the
+link-clean byte-eq surface and runs $0 under `hexa run`.
+
+Remaining toward full device-resident tensor lifetime:
+  · dW / dX conv-weight grads — blocked on host nn_int4_quant_bwd (STE mask
+    multiply reads the grad on host) + dW transpose / col2im permutations.
+  · param W — host int4 re-quant of conv weights each fwd forces W D2H.
+  · devmem-persist nvidia-smi measurement (pod self-host rebuild fire).

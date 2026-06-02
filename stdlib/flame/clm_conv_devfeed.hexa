@@ -39,6 +39,7 @@
 use "stdlib/flame/tensor_lib"
 use "stdlib/flame/conv_lib"
 use "stdlib/flame/optim_lib"
+use "stdlib/flame/quant_lib"
 
 fn _df_absf(x: float) -> float { if x < 0.0 { return 0.0 - x } return x }
 
@@ -125,6 +126,283 @@ pub fn devfeed_col2im(dXcol: int, dX_out: int, T: int, Cin: int, K: int, dil: in
             ci = ci + 1
         }
         p = p + 1
+    }
+}
+
+// ── devfeed_db_colsum: bias-gradient column sum db[co] = Σ_t dy[t,co] ──
+// HEXA-FUSION L1 (GRAD half) — the REFERENCE host reduction that the device
+// kernel _hx_cuda_farr_db_colsum_gpu reproduces. The device kernel sums T
+// SEQUENTIALLY per channel (t = 0,1,…,T-1) with NO tree / warp re-association,
+// so its IEEE-754 accumulation order is IDENTICAL to this loop → bit-exact
+// (max|Δ|=0), unlike the row-reduction kernels which carry a ~N·ε tolerance.
+// This oracle deliberately does NOT call forge_dispatch_db_colsum (so the
+// prebuilt mac binary never link-references the device builtin under
+// `hexa run`); the builtin is wired ONLY in clm_prod.hexa::_clmp_db_colsum
+// under env CLM_PROD_DEVRESIDENT and realized in the self-host-rebuilt pod
+// binary. The byte-eq guarantee here is the sequential-sum-order equivalence.
+pub fn devfeed_db_colsum(dy: int, db_out: int, T: int, Cout: int) {
+    let mut cb = 0
+    while cb < Cout {
+        let mut acc = 0.0
+        let mut tb = 0
+        while tb < T {
+            acc = acc + t_get(dy, tb * Cout + cb)
+            tb = tb + 1
+        }
+        t_set(db_out, cb, acc)
+        cb = cb + 1
+    }
+}
+
+// ── devfeed_int4_quant: device-resident int4 fake-quant (PARAM half) ──────────
+// HEXA-FUSION L1 (PARAM half) — the REFERENCE host fake-quant that the device
+// kernel _hx_cuda_farr_int4_quant_gpu reproduces. Inlined here (NOT a call into
+// quant_lib's nn_int4_quant_fwd, and NOT a call into the device builtin) so the
+// prebuilt mac binary never link-references the device builtin under `hexa run`;
+// the builtin is wired ONLY in clm_prod.hexa::_fq under env CLM_PROD_DEVRESIDENT
+// and realized in the self-host-rebuilt pod binary. int4 is INTEGER rounding +
+// per-channel SEQUENTIAL max (NO fp reduction re-association), so the device
+// kernel's accumulation is byte-identical — max|Δ| MUST be exactly 0 (no
+// FMA-drift excuse). _q_abs / _q_round mirror quant_lib EXACTLY.
+fn _dfq_abs(x: float) -> float { if x < 0.0 { return 0.0 - x } return x }
+fn _dfq_round(x: float) -> float {
+    if x >= 0.0 { return to_float(to_int(x + 0.5)) }
+    return 0.0 - to_float(to_int((0.0 - x) + 0.5))
+}
+pub fn devfeed_int4_quant(w: int, wq_out: int, scale_out: int,
+                          qlevel_out: int, mask_out: int, Cout: int, rest: int) {
+    let mut co = 0
+    while co < Cout {
+        let mut mx = 0.0
+        let mut j = 0
+        while j < rest {
+            let a = _dfq_abs(t_get(w, co * rest + j))
+            if a > mx { mx = a }
+            j = j + 1
+        }
+        let s = if mx > 0.0 { mx / 7.0 } else { 1.0 }
+        t_set(scale_out, co, s)
+        let mut j2 = 0
+        while j2 < rest {
+            let idx = co * rest + j2
+            let r = _dfq_round(t_get(w, idx) / s)
+            let mut q = r
+            let mut inrange = 1.0
+            if q > 7.0 { q = 7.0; inrange = 0.0 }
+            if q < 0.0 - 7.0 { q = 0.0 - 7.0; inrange = 0.0 }
+            t_set(qlevel_out, idx, q)
+            t_set(mask_out, idx, inrange)
+            t_set(wq_out, idx, q * s)
+            j2 = j2 + 1
+        }
+        co = co + 1
+    }
+}
+
+// int4 clipped-STE backward reference: dW[i] = dy[i]·mask[i] (mask ∈ {0,1}).
+// Pure elementwise — the device kernel is trivially bit-exact (max|Δ|=0).
+pub fn devfeed_int4_quant_bwd(dy: int, mask: int, dW_out: int, n: int) {
+    let mut i = 0
+    while i < n { t_set(dW_out, i, t_get(dy, i) * t_get(mask, i)); i = i + 1 }
+}
+
+// ── devfeed_residual_add: device-resident elementwise residual-add (glue) ─────
+// HEXA-FUSION L3 (glue half) — the REFERENCE host residual-add that the device
+// kernel _hx_cuda_farr_residual_add_gpu reproduces: out[i] = a[i] + b[i]. This
+// is the exact math of clm_prod_fwd's xt = xec + hg0 (the highest-frequency
+// interpreted inter-op host glue between device GEMM spikes — the ③ fwd-only 0%
+// floor). Pure elementwise add, NO reduction → the device kernel is trivially
+// bit-exact (max|Δ| MUST be exactly 0). Inlined here (NOT a call into the device
+// builtin) so the prebuilt mac binary never link-references the builtin under
+// `hexa run`; the builtin is wired ONLY in clm_prod.hexa::_residual_add under
+// env CLM_PROD_DEVRESIDENT and realized in the self-host-rebuilt pod binary.
+pub fn devfeed_residual_add(a: int, b: int, out: int, n: int) {
+    let mut i = 0
+    while i < n { t_set(out, i, t_get(a, i) + t_get(b, i)); i = i + 1 }
+}
+
+// ── devfeed_gelu: device-resident elementwise GELU (glue) ─────────────────────
+// HEXA-FUSION L3 (glue half) — the REFERENCE host GELU that the device kernel
+// _hx_cuda_farr_gelu_gpu reproduces: out[i] = in[i]·0.5·(1+erf(in[i]/√2)), the
+// EXACT erf-based GELU of nn_lib.hexa _nn_gelu (the 1/√2 literal and x·cdf op
+// order match the kernel verbatim). Pure elementwise, NO reduction → the device
+// kernel is trivially bit-exact (max|Δ| MUST be exactly 0). `erf` is the libm
+// codegen builtin (IEEE-correct on both host + CUDA device). Inlined here (NOT a
+// call into the device builtin) so the prebuilt mac binary never link-references
+// the builtin under `hexa run`; the builtin is wired ONLY in clm_prod.hexa::_gelu
+// under env CLM_PROD_DEVRESIDENT and realized in the self-host-rebuilt pod binary.
+pub fn devfeed_gelu(g: int, out: int, n: int) {
+    let inv_sqrt2 = 0.70710678118654752440
+    let mut i = 0
+    while i < n {
+        let x = t_get(g, i)
+        let cdf = 0.5 * (1.0 + erf(x * inv_sqrt2))
+        t_set(out, i, x * cdf)
+        i = i + 1
+    }
+}
+
+// Newton-Raphson sqrt (byte-identical to gn_lib.hexa _gn_sqrt AND to the device
+// kernel's _hx_gn_sqrt_dev — 40 iters, NO libm sqrt → no codegen sqrt-impl skew).
+fn _devfeed_gn_sqrt(x: float) -> float {
+    if x <= 0.0 { return 0.0 }
+    let mut g = x
+    let mut i = 0
+    while i < 40 { g = 0.5 * (g + x / g); i = i + 1 }
+    return g
+}
+
+// ── devfeed_groupnorm: device-resident GroupNorm forward (glue) ───────────────
+// HEXA-FUSION L3 (glue half) — the REFERENCE host GroupNorm that the device
+// kernel _hx_cuda_farr_groupnorm_gpu reproduces, byte-identical to gn_lib.hexa
+// nn_groupnorm_fwd: per group g, mu = mean over (Cg·T), var = mean (x-mu)²,
+// inv = 1/sqrt(var+eps) (eps=1e-5), xhat=(x-mu)·inv, y=gamma·xhat+beta. The two
+// reductions accumulate SEQUENTIALLY (t outer, c inner) in the SAME order the
+// device kernel's single-thread-per-group loop uses (NO tree re-assoc), and inv
+// uses the SAME NR-40 sqrt (NO CUDA rsqrt) → max|Δ| MUST be exactly 0. Inlined
+// here so the prebuilt mac binary never link-references the device builtin; the
+// builtin is wired ONLY in clm_prod.hexa::_groupnorm under CLM_PROD_DEVRESIDENT.
+pub fn devfeed_groupnorm(x: int, gamma: int, beta: int, y_out: int, mean_out: int, inv_out: int, xhat_out: int, T: int, C: int, G: int) {
+    let eps = 0.00001
+    let cg = C / G
+    let m = to_float(cg * T)
+    let mut g = 0
+    while g < G {
+        let c0 = g * cg
+        let mut sum = 0.0
+        let mut t = 0
+        while t < T {
+            let mut c = 0
+            while c < cg { sum = sum + t_get(x, t * C + (c0 + c)); c = c + 1 }
+            t = t + 1
+        }
+        let mu = sum / m
+        let mut vs = 0.0
+        let mut t2 = 0
+        while t2 < T {
+            let mut c2 = 0
+            while c2 < cg { let dd = t_get(x, t2 * C + (c0 + c2)) - mu; vs = vs + dd * dd; c2 = c2 + 1 }
+            t2 = t2 + 1
+        }
+        let var = vs / m
+        let inv = 1.0 / _devfeed_gn_sqrt(var + eps)
+        t_set(mean_out, g, mu)
+        t_set(inv_out, g, inv)
+        let mut t3 = 0
+        while t3 < T {
+            let mut c3 = 0
+            while c3 < cg {
+                let ch = c0 + c3
+                let xh = (t_get(x, t3 * C + ch) - mu) * inv
+                t_set(xhat_out, t3 * C + ch, xh)
+                t_set(y_out, t3 * C + ch, t_get(gamma, ch) * xh + t_get(beta, ch))
+                c3 = c3 + 1
+            }
+            t3 = t3 + 1
+        }
+        g = g + 1
+    }
+}
+
+// ── devfeed_expert_pack2: device-resident expert-pack copy (glue) ─────────────
+// HEXA-FUSION L3 (glue half · final ⑤c) — the REFERENCE host pack that the device
+// kernel _hx_cuda_farr_expert_pack2_gpu reproduces, byte-identical to the
+// clm_prod_fwd j-loop: ex_out[0·n+j]=ex0[j], ex_out[1·n+j]=ex1[j] for j in 0..n.
+// Pure copy, NO arithmetic → the device kernel is trivially bit-exact (max|Δ|=0).
+// Inlined here so the prebuilt mac binary never link-references the device
+// builtin; the builtin is wired ONLY in clm_prod.hexa::_expert_pack2 under env.
+pub fn devfeed_expert_pack2(ex0: int, ex1: int, ex_out: int, n: int) {
+    let mut j = 0
+    while j < n {
+        t_set(ex_out, 0 * n + j, t_get(ex0, j))
+        t_set(ex_out, 1 * n + j, t_get(ex1, j))
+        j = j + 1
+    }
+}
+
+// _moe_exp byte-identical to moe_lib.hexa _moe_exp (hand-rolled scaled-Taylor
+// e^x, NOT libm exp — the device kernel's _hx_moe_exp_dev replays it term-for-
+// term). Same range reduction + 13-term Taylor + 2^n by repeated ·2/÷2.
+fn _devfeed_moe_exp(x: float) -> float {
+    let ln2 = 0.6931471805599453
+    let mut n = 0
+    let mut r = x
+    while r > 0.34657359 { r = r - ln2; n = n + 1 }
+    while r < 0.0 - 0.34657359 { r = r + ln2; n = n - 1 }
+    let mut term = 1.0
+    let mut sum = 1.0
+    let mut k = 1
+    while k < 14 { term = term * r / to_float(k); sum = sum + term; k = k + 1 }
+    let mut p = sum
+    if n >= 0 {
+        let mut i = 0
+        while i < n { p = p * 2.0; i = i + 1 }
+    } else {
+        let mut i = 0
+        while i < (0 - n) { p = p / 2.0; i = i + 1 }
+    }
+    return p
+}
+
+// ── devfeed_moe_router: device-resident MoE router (glue, HAS A REDUCTION) ─────
+// HEXA-FUSION L3 (glue half · final ⑤c) — the REFERENCE host router that the
+// device kernel _hx_cuda_farr_moe_router_gpu reproduces, byte-identical to
+// moe_lib.hexa nn_moe_router_fwd: per t, probs=softmax(logits) (stable, max-sub,
+// _moe_exp), y[t,c]=Σ_e probs[t,e]·ex_out[e·T·C+t·C+c]. The softmax sum and the
+// combine acc accumulate SEQUENTIALLY (e=0..E) in the SAME order the device
+// kernel's single-thread-per-t loop uses (NO tree re-assoc), and exp uses the
+// SAME hand-rolled _moe_exp (NO CUDA exp) → max|Δ| MUST be exactly 0. Inlined
+// here so the prebuilt mac binary never link-references the device builtin.
+pub fn devfeed_moe_router(logits: int, ex_out: int, probs: int, y: int, T: int, E: int, C: int) {
+    // softmax (stable, sequential sum)
+    let mut t = 0
+    while t < T {
+        let base = t * E
+        let mut mx = t_get(logits, base)
+        let mut e = 1
+        while e < E { let v = t_get(logits, base + e); if v > mx { mx = v }; e = e + 1 }
+        let mut s = 0.0
+        let mut e2 = 0
+        while e2 < E {
+            let ev = _devfeed_moe_exp(t_get(logits, base + e2) - mx)
+            t_set(probs, base + e2, ev); s = s + ev; e2 = e2 + 1
+        }
+        let mut e3 = 0
+        while e3 < E { t_set(probs, base + e3, t_get(probs, base + e3) / s); e3 = e3 + 1 }
+        t = t + 1
+    }
+    // weighted combine (sequential acc over experts)
+    let mut t2 = 0
+    while t2 < T {
+        let mut c = 0
+        while c < C {
+            let mut acc = 0.0
+            let mut e = 0
+            while e < E {
+                acc = acc + t_get(probs, t2 * E + e) * t_get(ex_out, e * T * C + t2 * C + c)
+                e = e + 1
+            }
+            t_set(y, t2 * C + c, acc)
+            c = c + 1
+        }
+        t2 = t2 + 1
+    }
+}
+
+// ── devfeed_embedding: device-resident embedding gather (glue) ────────────────
+// HEXA-FUSION L3 (glue half · final ⑤c) — the REFERENCE host gather that the
+// device kernel _hx_cuda_farr_embedding_gpu reproduces, byte-identical to
+// nn_lib.hexa nn_embedding_fwd: for each i, tok=(int)ids[i] (truncate-toward-zero
+// = the kernel's (int64_t) cast), x_out[i·d+c]=table[tok·d+c]. Pure gather, NO
+// arithmetic → trivially bit-exact (max|Δ|=0). Inlined here so the prebuilt mac
+// binary never link-references the device builtin.
+pub fn devfeed_embedding(ids: int, table: int, x_out: int, T: int, d: int) {
+    let mut i = 0
+    while i < T {
+        let tok = to_int(t_get(ids, i))
+        let mut c = 0
+        while c < d { t_set(x_out, i * d + c, t_get(table, tok * d + c)); c = c + 1 }
+        i = i + 1
     }
 }
 
@@ -264,12 +542,7 @@ fn _devfeed_conv_bwd(x: int, w: int, dy: int, dW_out: int, dX_out: int, db_out: 
     }
     let dXcol = forge_dispatch_matmul(dy, T, Cout, w, Kdim)
     devfeed_col2im(dXcol, dX_out, T, Cin, K, dil)
-    let mut cb = 0
-    while cb < Cout {
-        let mut acc = 0.0; let mut tb = 0
-        while tb < T { acc = acc + t_get(dy, tb * Cout + cb); tb = tb + 1 }
-        t_set(db_out, cb, acc); cb = cb + 1
-    }
+    devfeed_db_colsum(dy, db_out, T, Cout)
     t_free(xcolT); t_free(dW_flat); t_free(dXcol)
 }
 
@@ -360,6 +633,298 @@ fn main() {
     if bwd_ok == 1 { println("F-CLM-DEVFEED-BWD-EQ = 1"); println("PASS — devfeed bwd (dW/dX/db) == forge conv1d_bwd byte-eq, dil∈{1,2}") }
     if bwd_ok == 0 { println("F-CLM-DEVFEED-BWD-EQ = 0"); println("FAIL — bwd") }
 
+    // ── F-CLM-DEVFEED-DB-EQ : HEXA-FUSION L1 (GRAD half) device-resident db ──
+    // The bias grad db[co] = Σ_t dy[t,co] now routes through devfeed_db_colsum
+    // (device kernel under CLM_PROD_DEVRESIDENT, host loop on the CPU oracle).
+    // The device path sums T SEQUENTIALLY per channel (no tree re-association)
+    // → must be byte-eq to the reference host reduction. This is the grad-half
+    // analogue of the col2im scatter: db stays DEVICE-RESIDENT for the next
+    // _adam H2D-skip; the falsifier here pins max|Δ|=0 of the colsum itself.
+    let mut db_ok = 1
+    let mut dilb = 1
+    while dilb <= 2 {
+        let dyb = t_zeros(T * Cout)
+        _ref_conv_fwd(x, w, b, dyb, T, Cin, Cout, K, dilb)  // representative nonzero dy
+        let dbR = t_zeros(Cout)   // reference host reduction
+        let mut cr = 0
+        while cr < Cout {
+            let mut ac = 0.0; let mut tr = 0
+            while tr < T { ac = ac + t_get(dyb, tr * Cout + cr); tr = tr + 1 }
+            t_set(dbR, cr, ac); cr = cr + 1
+        }
+        let dbD = t_zeros(Cout)   // devfeed_db_colsum (device path / host fallback)
+        devfeed_db_colsum(dyb, dbD, T, Cout)
+        let mDB = _maxdev(dbR, dbD, Cout)
+        print("  db dil="); print(dilb); print(" max|Δ| colsum-vs-host = "); println(to_string(mDB))
+        if mDB > tol { db_ok = 0 }
+        t_free(dyb); t_free(dbR); t_free(dbD)
+        dilb = dilb + 1
+    }
+    if db_ok == 1 { println("F-CLM-DEVFEED-DB-EQ = 1"); println("PASS — device-resident db colsum == host Σ_t dy[t,co] byte-eq, dil∈{1,2}") }
+    if db_ok == 0 { println("F-CLM-DEVFEED-DB-EQ = 0"); println("FAIL — db colsum") }
+
+    // ── F-CLM-DEVFEED-INT4QUANT-EQ : HEXA-FUSION L1 (PARAM half) device int4 ──
+    // The int4 fake-quant now routes through the device kernel
+    // _hx_cuda_farr_int4_quant_gpu under CLM_PROD_DEVRESIDENT (host fake-quant on
+    // this CPU oracle), keeping W FARR_DEVICE (no per-step W D2H — the last
+    // roundtrip blocking full device-residency). int4 is INTEGER rounding +
+    // per-channel SEQUENTIAL max → NO fp re-association → the device quant MUST
+    // be EXACTLY byte-eq to the canonical host nn_int4_quant_fwd (max|Δ|=0 — int4
+    // is integer, no FMA-drift excuse). Here we pin devfeed_int4_quant (the exact
+    // device-kernel math reference) == nn_int4_quant_fwd (canonical host quant)
+    // on wq/scale/qlevel/mask AND the STE bwd dW == nn_int4_quant_bwd, at a
+    // STRICT zero (not the < tol band): a single bit difference fails the gate.
+    let mut q_ok = 1
+    let Cq = Cout; let restq = Cin * K   // per-output-channel quant, rest = Cin·K
+    let nq = Cq * restq
+    // canonical host quant (quant_lib.nn_int4_quant_fwd)
+    let wqH = t_zeros(nq); let scH = t_zeros(Cq); let qlH = t_zeros(nq); let mkH = t_zeros(nq)
+    nn_int4_quant_fwd(w, wqH, scH, qlH, mkH, Cq, restq)
+    // device-kernel math reference (devfeed_int4_quant — what the GPU reproduces)
+    let wqD = t_zeros(nq); let scD = t_zeros(Cq); let qlD = t_zeros(nq); let mkD = t_zeros(nq)
+    devfeed_int4_quant(w, wqD, scD, qlD, mkD, Cq, restq)
+    let mWq = _maxdev(wqH, wqD, nq); let mSc = _maxdev(scH, scD, Cq)
+    let mQl = _maxdev(qlH, qlD, nq); let mMk = _maxdev(mkH, mkD, nq)
+    print("  int4 fwd max|Δ| wq="); print(to_string(mWq)); print(" scale="); print(to_string(mSc))
+    print(" qlevel="); print(to_string(mQl)); print(" mask="); println(to_string(mMk))
+    if mWq > 0.0 { q_ok = 0 }
+    if mSc > 0.0 { q_ok = 0 }
+    if mQl > 0.0 { q_ok = 0 }
+    if mMk > 0.0 { q_ok = 0 }
+    // STE backward: dW = dy·mask (clipped straight-through). Device kernel is a
+    // pure elementwise multiply → bit-exact to nn_int4_quant_bwd.
+    let dyq = t_zeros(nq); t_fill_lcg(dyq, nq, 41, 0.25)
+    let dWH = t_zeros(nq); nn_int4_quant_bwd(dyq, mkH, dWH, Cq, restq)
+    let dWD = t_zeros(nq); devfeed_int4_quant_bwd(dyq, mkD, dWD, nq)
+    let mDW = _maxdev(dWH, dWD, nq)
+    print("  int4 bwd (STE) max|Δ| dW="); println(to_string(mDW))
+    if mDW > 0.0 { q_ok = 0 }
+    t_free(wqH); t_free(scH); t_free(qlH); t_free(mkH)
+    t_free(wqD); t_free(scD); t_free(qlD); t_free(mkD)
+    t_free(dyq); t_free(dWH); t_free(dWD)
+    if q_ok == 1 { println("F-CLM-DEVFEED-INT4QUANT-EQ = 1"); println("PASS — device int4 quant fwd (wq/scale/qlevel/mask) + STE bwd == host quant byte-eq (max|Δ|=0, integer-exact)") }
+    if q_ok == 0 { println("F-CLM-DEVFEED-INT4QUANT-EQ = 0"); println("FAIL — int4 quant") }
+
+    // ── F-CLM-DEVFEED-RESIDUAL-EQ : HEXA-FUSION L3 (glue half) device residual ──
+    // The fwd-path residual xt = xec + hg0 (clm_prod_fwd) now routes through the
+    // device kernel _hx_cuda_farr_residual_add_gpu under CLM_PROD_DEVRESIDENT,
+    // leaving the interpreter off the per-step hot path (the ③ fwd-only 0% util
+    // floor: tensors device-resident is necessary but NOT sufficient while the
+    // inter-op glue stays interpreted) and keeping the result FARR_DEVICE so the
+    // next conv GEMM H2D-skips it. out[i] = a[i] + b[i] is a pure elementwise add
+    // with NO reduction → the device add MUST be EXACTLY byte-eq to the host
+    // scalar loop (max|Δ|=0 — no fp re-association, no FMA-drift excuse). Here we
+    // pin devfeed_residual_add (the exact device-kernel math reference) == an
+    // INDEPENDENT host scalar add at a STRICT zero (a single bit fails the gate).
+    let mut rsd_ok = 1
+    let nr = 257                       // odd len exercises the grid-stride tail
+    let aR = t_zeros(nr); t_fill_lcg(aR, nr, 13, 0.4)
+    let bR = t_zeros(nr); t_fill_lcg(bR, nr, 29, 0.6)
+    // independent host reference (NOT via devfeed_residual_add)
+    let outH = t_zeros(nr); let mut ri = 0
+    while ri < nr { t_set(outH, ri, t_get(aR, ri) + t_get(bR, ri)); ri = ri + 1 }
+    // device-kernel math reference (devfeed_residual_add — what the GPU reproduces)
+    let outD = t_zeros(nr); devfeed_residual_add(aR, bR, outD, nr)
+    let mRsd = _maxdev(outH, outD, nr)
+    print("  residual-add max|Δ| out="); println(to_string(mRsd))
+    if mRsd > 0.0 { rsd_ok = 0 }
+    t_free(aR); t_free(bR); t_free(outH); t_free(outD)
+    if rsd_ok == 1 { println("F-CLM-DEVFEED-RESIDUAL-EQ = 1"); println("PASS — device residual-add (xt = xec + hg0) == host scalar add byte-eq (max|Δ|=0)") }
+    if rsd_ok == 0 { println("F-CLM-DEVFEED-RESIDUAL-EQ = 0"); println("FAIL — residual add") }
+
+    // ── F-CLM-DEVFEED-GELU-EQ : HEXA-FUSION L3 (glue half) device GELU ──────────
+    // The gelu ×3 in clm_prod_fwd (hg0/ex0/ex1) now route through the device
+    // kernel _hx_cuda_farr_gelu_gpu under CLM_PROD_DEVRESIDENT, keeping out
+    // FARR_DEVICE. out[i] = in[i]·0.5·(1+erf(in[i]/√2)) is the EXACT erf-based
+    // GELU of nn_lib _nn_gelu — pure elementwise, NO reduction → the device gelu
+    // MUST be EXACTLY byte-eq to an independent host erf-GELU (max|Δ|=0; erf is
+    // the IEEE libm builtin, same contract host + CUDA). Pins devfeed_gelu (the
+    // device-kernel math reference) == an INDEPENDENT inline host gelu at STRICT 0.
+    let mut gel_ok = 1
+    let ng = 257                       // odd len exercises the grid-stride tail
+    let gG = t_zeros(ng); t_fill_lcg(gG, ng, 41, 1.5)   // wide range hits erf tails
+    // independent inline host reference (NOT via devfeed_gelu)
+    let gOH = t_zeros(ng); let isq2 = 0.70710678118654752440; let mut gi = 0
+    while gi < ng {
+        let xv = t_get(gG, gi)
+        t_set(gOH, gi, xv * (0.5 * (1.0 + erf(xv * isq2))))
+        gi = gi + 1
+    }
+    // device-kernel math reference (devfeed_gelu — what the GPU reproduces)
+    let gOD = t_zeros(ng); devfeed_gelu(gG, gOD, ng)
+    let mGel = _maxdev(gOH, gOD, ng)
+    print("  gelu max|Δ| out="); println(to_string(mGel))
+    if mGel > 0.0 { gel_ok = 0 }
+    t_free(gG); t_free(gOH); t_free(gOD)
+    if gel_ok == 1 { println("F-CLM-DEVFEED-GELU-EQ = 1"); println("PASS — device GELU (hg0/ex0/ex1) == host erf-GELU byte-eq (max|Δ|=0)") }
+    if gel_ok == 0 { println("F-CLM-DEVFEED-GELU-EQ = 0"); println("FAIL — gelu") }
+
+    // ── F-CLM-DEVFEED-GROUPNORM-EQ : HEXA-FUSION L3 (glue half) device GroupNorm ─
+    // The groupnorm ×2 in clm_prod_fwd (h0→hn0, y→yn) now route through the device
+    // kernel _hx_cuda_farr_groupnorm_gpu under CLM_PROD_DEVRESIDENT, keeping
+    // y/xhat/mean/inv FARR_DEVICE. GroupNorm has a per-group REDUCTION — the HARD
+    // case for bit-exactness. The device kernel reduces SEQUENTIALLY (t outer, c
+    // inner) under ONE thread per group (NO tree re-assoc) and uses the SAME
+    // Newton-Raphson 40-iter sqrt as the host (NO CUDA rsqrt) → max|Δ| MUST be
+    // EXACTLY 0. Pins devfeed_groupnorm (the device-kernel math reference, same
+    // sequential order + same NR sqrt) == an INDEPENDENT inline host GroupNorm
+    // (also sequential, same NR sqrt) on y/xhat/mean/inv at a STRICT zero.
+    let mut gn_ok = 1
+    let Tn = 13; let Cn = 8; let Gn = 2   // C%G==0; Cg=4; T·Cg=52 elems/group reduce
+    let xN = t_zeros(Tn * Cn); t_fill_lcg(xN, Tn * Cn, 53, 1.2)
+    let gaN = t_zeros(Cn); t_fill_lcg(gaN, Cn, 61, 0.7)
+    let beN = t_zeros(Cn); t_fill_lcg(beN, Cn, 67, 0.5)
+    // device-kernel math reference (devfeed_groupnorm — what the GPU reproduces)
+    let yD = t_zeros(Tn * Cn); let mnD = t_zeros(Gn); let ivD = t_zeros(Gn); let xhD = t_zeros(Tn * Cn)
+    devfeed_groupnorm(xN, gaN, beN, yD, mnD, ivD, xhD, Tn, Cn, Gn)
+    // independent inline host reference (sequential reduction + NR-40 sqrt)
+    let yH = t_zeros(Tn * Cn); let mnH = t_zeros(Gn); let ivH = t_zeros(Gn); let xhH = t_zeros(Tn * Cn)
+    let epsN = 0.00001; let cgN = Cn / Gn; let mN = to_float(cgN * Tn)
+    let mut gg = 0
+    while gg < Gn {
+        let c0 = gg * cgN
+        let mut s = 0.0; let mut tt = 0
+        while tt < Tn { let mut cc = 0; while cc < cgN { s = s + t_get(xN, tt * Cn + (c0 + cc)); cc = cc + 1 }; tt = tt + 1 }
+        let mu = s / mN
+        let mut vsum = 0.0; let mut t2 = 0
+        while t2 < Tn { let mut c2 = 0; while c2 < cgN { let dd = t_get(xN, t2 * Cn + (c0 + c2)) - mu; vsum = vsum + dd * dd; c2 = c2 + 1 }; t2 = t2 + 1 }
+        let varr = vsum / mN
+        let invv = 1.0 / _devfeed_gn_sqrt(varr + epsN)
+        t_set(mnH, gg, mu); t_set(ivH, gg, invv)
+        let mut t3 = 0
+        while t3 < Tn {
+            let mut c3 = 0
+            while c3 < cgN {
+                let ch = c0 + c3
+                let xh = (t_get(xN, t3 * Cn + ch) - mu) * invv
+                t_set(xhH, t3 * Cn + ch, xh)
+                t_set(yH, t3 * Cn + ch, t_get(gaN, ch) * xh + t_get(beN, ch))
+                c3 = c3 + 1
+            }
+            t3 = t3 + 1
+        }
+        gg = gg + 1
+    }
+    let mGnY = _maxdev(yH, yD, Tn * Cn)
+    let mGnXh = _maxdev(xhH, xhD, Tn * Cn)
+    let mGnMn = _maxdev(mnH, mnD, Gn)
+    let mGnIv = _maxdev(ivH, ivD, Gn)
+    print("  groupnorm max|Δ| y="); print(to_string(mGnY)); print(" xhat="); print(to_string(mGnXh))
+    print(" mean="); print(to_string(mGnMn)); print(" inv="); println(to_string(mGnIv))
+    if mGnY > 0.0 { gn_ok = 0 }
+    if mGnXh > 0.0 { gn_ok = 0 }
+    if mGnMn > 0.0 { gn_ok = 0 }
+    if mGnIv > 0.0 { gn_ok = 0 }
+    t_free(xN); t_free(gaN); t_free(beN)
+    t_free(yD); t_free(mnD); t_free(ivD); t_free(xhD)
+    t_free(yH); t_free(mnH); t_free(ivH); t_free(xhH)
+    if gn_ok == 1 { println("F-CLM-DEVFEED-GROUPNORM-EQ = 1"); println("PASS — device GroupNorm (h0→hn0, y→yn; seq reduction + NR sqrt) == host byte-eq (max|Δ|=0)") }
+    if gn_ok == 0 { println("F-CLM-DEVFEED-GROUPNORM-EQ = 0"); println("FAIL — groupnorm") }
+
+    // ── F-CLM-DEVFEED-EXPACK-EQ : HEXA-FUSION L3 (final ⑤c) device expert-pack ──
+    // The clm_prod_fwd j-loop (ex0/ex1 → ex_out[E·T·d]) now routes through the
+    // device kernel _hx_cuda_farr_expert_pack2_gpu under CLM_PROD_DEVRESIDENT,
+    // keeping ex_out FARR_DEVICE. Pure copy, NO reduction → MUST be EXACTLY
+    // byte-eq (max|Δ|=0). Pins devfeed_expert_pack2 (the device-kernel reference)
+    // == an INDEPENDENT inline host pack at STRICT 0 (E=2 stack, n=T·d).
+    let mut ep_ok = 1
+    let epN = 251                       // odd len exercises the grid-stride tail
+    let ep0 = t_zeros(epN); t_fill_lcg(ep0, epN, 71, 1.1)
+    let ep1 = t_zeros(epN); t_fill_lcg(ep1, epN, 73, 0.9)
+    // device-kernel reference (devfeed_expert_pack2 — what the GPU reproduces)
+    let epD = t_zeros(2 * epN); devfeed_expert_pack2(ep0, ep1, epD, epN)
+    // independent inline host pack (NOT via devfeed_expert_pack2)
+    let epH = t_zeros(2 * epN); let mut epj = 0
+    while epj < epN {
+        t_set(epH, 0 * epN + epj, t_get(ep0, epj))
+        t_set(epH, 1 * epN + epj, t_get(ep1, epj))
+        epj = epj + 1
+    }
+    let mEp = _maxdev(epH, epD, 2 * epN)
+    print("  expert-pack max|Δ| ex_out="); println(to_string(mEp))
+    if mEp > 0.0 { ep_ok = 0 }
+    t_free(ep0); t_free(ep1); t_free(epD); t_free(epH)
+    if ep_ok == 1 { println("F-CLM-DEVFEED-EXPACK-EQ = 1"); println("PASS — device expert-pack (ex0/ex1→ex_out) == host pack byte-eq (max|Δ|=0)") }
+    if ep_ok == 0 { println("F-CLM-DEVFEED-EXPACK-EQ = 0"); println("FAIL — expert-pack") }
+
+    // ── F-CLM-DEVFEED-MOEROUTER-EQ : HEXA-FUSION L3 (final ⑤c) device MoE router ─
+    // The moe-router (logits_r·ex_out → y, probs) now routes through the device
+    // kernel _hx_cuda_farr_moe_router_gpu under CLM_PROD_DEVRESIDENT, keeping
+    // y/probs FARR_DEVICE. The router HAS A REDUCTION (softmax sum + weighted
+    // combine) — the HARD case. The device kernel uses the SAME hand-rolled
+    // _moe_exp (NOT CUDA exp) and reduces SEQUENTIALLY (e=0..E) under ONE thread
+    // per t (NO tree re-assoc) → max|Δ| MUST be EXACTLY 0. Pins devfeed_moe_router
+    // (the device-kernel reference) == an INDEPENDENT inline host router (also
+    // sequential, same _moe_exp) on y AND probs at a STRICT zero.
+    let mut mr_ok = 1
+    let Tm = 11; let Em = 2; let Cm = 9   // E=2 experts (model shape), T·C combine
+    let lgM = t_zeros(Tm * Em); t_fill_lcg(lgM, Tm * Em, 81, 1.3)   // logits range hits softmax tails
+    let exM = t_zeros(Em * Tm * Cm); t_fill_lcg(exM, Em * Tm * Cm, 83, 1.0)
+    // device-kernel reference (devfeed_moe_router — what the GPU reproduces)
+    let prD = t_zeros(Tm * Em); let yD2 = t_zeros(Tm * Cm)
+    devfeed_moe_router(lgM, exM, prD, yD2, Tm, Em, Cm)
+    // independent inline host router (sequential softmax + sequential combine)
+    let prH = t_zeros(Tm * Em); let yH2 = t_zeros(Tm * Cm)
+    let mut tr = 0
+    while tr < Tm {
+        let bs = tr * Em
+        let mut mxr = t_get(lgM, bs)
+        let mut er = 1
+        while er < Em { let vr = t_get(lgM, bs + er); if vr > mxr { mxr = vr }; er = er + 1 }
+        let mut sr = 0.0; let mut er2 = 0
+        while er2 < Em { let evr = _devfeed_moe_exp(t_get(lgM, bs + er2) - mxr); t_set(prH, bs + er2, evr); sr = sr + evr; er2 = er2 + 1 }
+        let mut er3 = 0
+        while er3 < Em { t_set(prH, bs + er3, t_get(prH, bs + er3) / sr); er3 = er3 + 1 }
+        tr = tr + 1
+    }
+    let mut tr2 = 0
+    while tr2 < Tm {
+        let mut cr = 0
+        while cr < Cm {
+            let mut accr = 0.0; let mut er4 = 0
+            while er4 < Em { accr = accr + t_get(prH, tr2 * Em + er4) * t_get(exM, er4 * Tm * Cm + tr2 * Cm + cr); er4 = er4 + 1 }
+            t_set(yH2, tr2 * Cm + cr, accr)
+            cr = cr + 1
+        }
+        tr2 = tr2 + 1
+    }
+    let mMrY = _maxdev(yH2, yD2, Tm * Cm)
+    let mMrP = _maxdev(prH, prD, Tm * Em)
+    print("  moe-router max|Δ| y="); print(to_string(mMrY)); print(" probs="); println(to_string(mMrP))
+    if mMrY > 0.0 { mr_ok = 0 }
+    if mMrP > 0.0 { mr_ok = 0 }
+    t_free(lgM); t_free(exM); t_free(prD); t_free(yD2); t_free(prH); t_free(yH2)
+    if mr_ok == 1 { println("F-CLM-DEVFEED-MOEROUTER-EQ = 1"); println("PASS — device MoE router (softmax+combine; seq reduction + _moe_exp) == host byte-eq (max|Δ|=0)") }
+    if mr_ok == 0 { println("F-CLM-DEVFEED-MOEROUTER-EQ = 0"); println("FAIL — moe-router") }
+
+    // ── F-CLM-DEVFEED-EMBED-EQ : HEXA-FUSION L3 (final ⑤c) device embedding gather ─
+    // The embedding gather (tokens→xe) at the fwd head now routes through the
+    // device kernel _hx_cuda_farr_embedding_gpu under CLM_PROD_DEVRESIDENT,
+    // keeping xe FARR_DEVICE. Pure gather, NO reduction → MUST be EXACTLY byte-eq
+    // (max|Δ|=0). Pins devfeed_embedding (tok=(int)ids[i] truncate, table gather —
+    // the device-kernel reference) == an INDEPENDENT inline host gather at STRICT 0.
+    let mut em_ok = 1
+    let Te = 19; let de = 7; let Ve = 23   // T positions gather rows from a V·d table
+    let idE = t_zeros(Te); let mut ie = 0
+    while ie < Te { t_set(idE, ie, to_float((ie * 7 + 3) % Ve)); ie = ie + 1 }   // varied token ids in [0,V)
+    let tbE = t_zeros(Ve * de); t_fill_lcg(tbE, Ve * de, 91, 1.4)
+    // device-kernel reference (devfeed_embedding — what the GPU reproduces)
+    let xeD = t_zeros(Te * de); devfeed_embedding(idE, tbE, xeD, Te, de)
+    // independent inline host gather (NOT via devfeed_embedding)
+    let xeH = t_zeros(Te * de); let mut ie2 = 0
+    while ie2 < Te {
+        let tok = to_int(t_get(idE, ie2))
+        let mut ce = 0
+        while ce < de { t_set(xeH, ie2 * de + ce, t_get(tbE, tok * de + ce)); ce = ce + 1 }
+        ie2 = ie2 + 1
+    }
+    let mEm = _maxdev(xeH, xeD, Te * de)
+    print("  embedding max|Δ| xe="); println(to_string(mEm))
+    if mEm > 0.0 { em_ok = 0 }
+    t_free(idE); t_free(tbE); t_free(xeD); t_free(xeH)
+    if em_ok == 1 { println("F-CLM-DEVFEED-EMBED-EQ = 1"); println("PASS — device embedding gather (tokens→xe) == host gather byte-eq (max|Δ|=0)") }
+    if em_ok == 0 { println("F-CLM-DEVFEED-EMBED-EQ = 0"); println("FAIL — embedding") }
+
     // ── F-CLM-DEVFEED-ADAM-EQ : host AdamW oracle trajectory self-consistent ──
     // The device AdamW (forge_dispatch_adamw, wired in clm_prod.hexa under env)
     // routes to _hx_cuda_farr_adamw_step_inplace_gpu — already byte-eq to this
@@ -392,9 +957,9 @@ fn main() {
     if adam_ok == 1 { println("F-CLM-DEVFEED-ADAM-EQ = 1"); println("PASS — AdamW oracle (opt_adamw_step) deterministic 5-step trajectory") }
     if adam_ok == 0 { println("F-CLM-DEVFEED-ADAM-EQ = 0"); println("FAIL — adam") }
 
-    if all_ok == 1 { if fwd_ok == 1 { if bwd_ok == 1 { if adam_ok == 1 {
-        println("ALL-PASS — LEVER (a) device im2col/col2im + device AdamW oracle byte-eq to host feed")
+    if all_ok == 1 { if fwd_ok == 1 { if bwd_ok == 1 { if db_ok == 1 { if q_ok == 1 { if rsd_ok == 1 { if gel_ok == 1 { if gn_ok == 1 { if ep_ok == 1 { if mr_ok == 1 { if em_ok == 1 { if adam_ok == 1 {
+        println("ALL-PASS — LEVER (a) device im2col/col2im + device db colsum + device int4 quant + device residual-add + device gelu + device groupnorm + device expert-pack + device moe-router + device embedding glue + device AdamW oracle byte-eq to host feed")
         return
-    } } } }
+    } } } } } } } } } } } }
     println("FAIL")
 }

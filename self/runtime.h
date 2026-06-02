@@ -1107,6 +1107,144 @@ HexaVal forge_dispatch_adamw_keepmv(HexaVal w_v, HexaVal g_v, HexaVal m_v,
                              HexaVal b1_v, HexaVal b2_v, HexaVal eps_v,
                              HexaVal wd_v, HexaVal t_v);                       /* runtime.c — fusion L1 seam */
 
+/* HEXA-FUSION L1 (GRAD half) — forge_dispatch_db_colsum(dy, db_out, T, Cout)
+ * -> int rc (0 ok / -1 host fallback). Device-resident bias-gradient column
+ * sum db[co] = Σ_{t=0..T-1} dy[t,co], computed by _hx_cuda_farr_db_colsum_gpu
+ * (one thread per channel, SEQUENTIAL t-sum → bit-exact to the host loop, no
+ * tree re-association). Keeps db DEVICE-RESIDENT (loc=FARR_DEVICE,
+ * dirty_host=0) so the next _adam H2D-skips the grad — the conv bias grads
+ * d*B escape only into _adam (never read on host between bwd and AdamW), so
+ * this is a pure removable grad roundtrip. Gated in clm_prod.hexa behind env
+ * CLM_PROD_DEVRESIDENT; no-CUDA → -1 → host db reduction fallback (byte-eq). */
+HexaVal hexa_forge_dispatch_db_colsum(HexaVal dy_v, HexaVal db_v,
+                                  HexaVal t_v, HexaVal cout_v);               /* runtime.c — fusion L1 grad */
+HexaVal forge_dispatch_db_colsum(HexaVal dy_v, HexaVal db_v,
+                             HexaVal t_v, HexaVal cout_v);                    /* runtime.c — fusion L1 grad seam */
+
+/* HEXA-FUSION L1 (PARAM half) — device-resident int4 fake-quant.
+ * forge_dispatch_int4_quant(w, wq, sc, ql, mask, Cout, rest) -> int rc (0 ok /
+ * -1 host fallback). Computes the per-output-channel int4-sym[-7,+7] QAT
+ * forward (s = max|W|/7, q = clamp(round(W/s), ±7), Wq = q·s, mask = in-range)
+ * ON DEVICE via _hx_cuda_farr_int4_quant_gpu (one thread per channel — the
+ * per-channel max + round are SEQUENTIAL, no fp re-association, and int4 is
+ * INTEGER, so the device result is BIT-EXACT to nn_int4_quant_fwd, max|Δ|=0).
+ * Keeps W device-resident (H2D-skip if already FARR_DEVICE) so W no longer
+ * D2H's each step, and keeps wq/sc/ql/mask FARR_DEVICE (the GEMM reads Wq on
+ * device; mask feeds the device STE bwd). Gated in clm_prod.hexa behind env
+ * CLM_PROD_DEVRESIDENT; no-CUDA → -1 → host fake-quant fallback (byte-eq). */
+HexaVal hexa_forge_dispatch_int4_quant(HexaVal w_v, HexaVal wq_v, HexaVal sc_v,
+                                  HexaVal ql_v, HexaVal mask_v,
+                                  HexaVal cout_v, HexaVal rest_v);            /* runtime.c — fusion L1 param */
+HexaVal forge_dispatch_int4_quant(HexaVal w_v, HexaVal wq_v, HexaVal sc_v,
+                             HexaVal ql_v, HexaVal mask_v,
+                             HexaVal cout_v, HexaVal rest_v);                 /* runtime.c — fusion L1 param seam */
+
+/* HEXA-FUSION L1 (PARAM half) — device-resident int4 STE backward.
+ * forge_dispatch_int4_quant_bwd(dy, mask, dW_out, n) -> int rc (0 ok / -1 host
+ * fallback). Clipped straight-through estimator dW[i] = dy[i]·mask[i] (mask ∈
+ * {0,1}) — a pure elementwise multiply, no reduction → bit-exact to
+ * nn_int4_quant_bwd (max|Δ|=0). Keeps dW DEVICE-RESIDENT (loc=FARR_DEVICE,
+ * dirty_host=0) so the next _adam H2D-skips the grad (the int4 W grads escape
+ * only into _adam). Gated behind CLM_PROD_DEVRESIDENT; no-CUDA → -1 → host. */
+HexaVal hexa_forge_dispatch_int4_quant_bwd(HexaVal dy_v, HexaVal mask_v,
+                                  HexaVal dw_v, HexaVal n_v);                 /* runtime.c — fusion L1 param */
+HexaVal forge_dispatch_int4_quant_bwd(HexaVal dy_v, HexaVal mask_v,
+                             HexaVal dw_v, HexaVal n_v);                      /* runtime.c — fusion L1 param seam */
+
+/* HEXA-FUSION L3 (glue half) — device-resident elementwise residual-add.
+ * forge_dispatch_residual_add(a, b, out, n) -> int rc (0 ok / -1 host
+ * fallback). out[i] = a[i] + b[i] — pure elementwise add, no reduction →
+ * bit-exact to the host scalar loop (max|Δ|=0). Fuses the highest-frequency
+ * interpreted inter-op host glue in clm_prod_fwd (the residual xt = xec + hg0,
+ * T·d host t_get/t_set per step between device GEMM spikes — the ③ fwd-only 0%
+ * floor) onto the device via _hx_cuda_farr_residual_add_gpu, leaving the
+ * interpreter off the per-step hot path. Keeps OUT DEVICE-RESIDENT
+ * (loc=FARR_DEVICE, dirty_host=0) so the next conv GEMM H2D-skips it (same
+ * residence convention as keepmv / db_colsum / int4_quant). Gated in
+ * clm_prod.hexa behind env CLM_PROD_DEVRESIDENT; no-CUDA → -1 → host add
+ * (byte-eq). */
+HexaVal hexa_forge_dispatch_residual_add(HexaVal a_v, HexaVal b_v,
+                                  HexaVal out_v, HexaVal n_v);               /* runtime.c — fusion L3 glue */
+HexaVal forge_dispatch_residual_add(HexaVal a_v, HexaVal b_v,
+                             HexaVal out_v, HexaVal n_v);                     /* runtime.c — fusion L3 glue seam */
+
+/* HEXA-FUSION L3 (glue half) — device-resident elementwise GELU.
+ * forge_dispatch_gelu(in, out, n) -> int rc (0 ok / -1 host fallback).
+ * out[i] = in[i]·Φ(in[i]) = in[i]·0.5·(1+erf(in[i]·(1/√2))) — the EXACT
+ * erf-based GELU of stdlib/flame/nn_lib.hexa _nn_gelu, elementwise with NO
+ * reduction. Device CUDA erf() is IEEE-correct (same libm contract as the host
+ * erf builtin) → bit-exact to the host scalar loop (max|Δ|=0). Fuses the gelu
+ * ×3 host glue in clm_prod_fwd (hg0/ex0/ex1 — the ③ fwd-only 0% floor) onto the
+ * device via _hx_cuda_farr_gelu_gpu, keeps OUT DEVICE-RESIDENT (loc=FARR_DEVICE,
+ * dirty_host=0) so the next conv GEMM H2D-skips it. Gated in clm_prod.hexa
+ * behind env CLM_PROD_DEVRESIDENT; no-CUDA → -1 → host gelu (byte-eq). */
+HexaVal hexa_forge_dispatch_gelu(HexaVal in_v, HexaVal out_v,
+                                  HexaVal n_v);                              /* runtime.c — fusion L3 glue */
+HexaVal forge_dispatch_gelu(HexaVal in_v, HexaVal out_v,
+                             HexaVal n_v);                                    /* runtime.c — fusion L3 glue seam */
+
+/* HEXA-FUSION L3 (glue half) — device-resident GroupNorm forward.
+ * forge_dispatch_groupnorm(x, gamma, beta, y, mean, inv, xhat, T, C, G) -> int
+ * rc (0 ok / -1 host fallback). PyTorch GroupNorm fwd (gn_lib.hexa
+ * nn_groupnorm_fwd): per group g, mu = mean over (Cg·T), var = mean (x-mu)²,
+ * inv = 1/sqrt(var+eps) (eps=1e-5), xhat = (x-mu)·inv, y = gamma·xhat + beta.
+ * The reduction runs SEQUENTIALLY (t outer, c inner) under ONE thread per group
+ * and inv uses the SAME Newton-Raphson 40-iter _gn_sqrt as the host (NO CUDA
+ * rsqrt, NO tree re-association) → bit-exact (max|Δ|=0). Fuses the groupnorm ×2
+ * host glue in clm_prod_fwd (h0→hn0, y→yn — the ③ fwd-only 0% floor) onto the
+ * device via _hx_cuda_farr_groupnorm_gpu, keeps Y/xhat/mean/inv DEVICE-RESIDENT.
+ * Gated behind env CLM_PROD_DEVRESIDENT; no-CUDA → -1 → host loop (byte-eq). */
+HexaVal hexa_forge_dispatch_groupnorm(HexaVal x_v, HexaVal gamma_v, HexaVal beta_v,
+                                  HexaVal y_v, HexaVal mean_v, HexaVal inv_v,
+                                  HexaVal xhat_v, HexaVal t_v, HexaVal c_v,
+                                  HexaVal g_v);                              /* runtime.c — fusion L3 glue */
+HexaVal forge_dispatch_groupnorm(HexaVal x_v, HexaVal gamma_v, HexaVal beta_v,
+                             HexaVal y_v, HexaVal mean_v, HexaVal inv_v,
+                             HexaVal xhat_v, HexaVal t_v, HexaVal c_v,
+                             HexaVal g_v);                                    /* runtime.c — fusion L3 glue seam */
+
+/* HEXA-FUSION L3 (glue half · final slice ⑤c) — device-resident expert-pack copy.
+ * forge_dispatch_expert_pack2(ex0, ex1, ex_out, n) -> int rc (0 ok / -1 host).
+ * EX_OUT[0·n+j]=EX0[j], EX_OUT[1·n+j]=EX1[j] for j in 0..n (n=T·d) — the
+ * clm_prod_fwd j-loop that stacks the 2 expert activations into ex_out[E·T·d].
+ * Pure copy, NO reduction → trivially bit-exact (max|Δ|=0) via
+ * _hx_cuda_farr_expert_pack2_gpu; keeps EX_OUT DEVICE-RESIDENT so the follow-up
+ * moe-router H2D-skips it. Gated behind env CLM_PROD_DEVRESIDENT; no-CUDA → -1
+ * → host pack loop (byte-eq). */
+HexaVal hexa_forge_dispatch_expert_pack2(HexaVal ex0_v, HexaVal ex1_v,
+                                  HexaVal out_v, HexaVal n_v);                /* runtime.c — fusion L3 glue */
+HexaVal forge_dispatch_expert_pack2(HexaVal ex0_v, HexaVal ex1_v,
+                             HexaVal out_v, HexaVal n_v);                     /* runtime.c — fusion L3 glue seam */
+
+/* HEXA-FUSION L3 (glue half · final slice ⑤c) — device-resident MoE router.
+ * forge_dispatch_moe_router(logits, ex_out, probs, y, T, E, C) -> int rc (0 ok
+ * / -1 host). Reproduces moe_lib.hexa nn_moe_router_fwd: probs=softmax(logits)
+ * per-t (stable, max-subtracted), Y[t,c]=Σ_e probs[t,e]·ex_out[e·T·C+t·C+c]. The
+ * softmax replays moe_lib's HAND-ROLLED _moe_exp (scaled-Taylor range reduction,
+ * NOT CUDA exp) term-for-term, and BOTH reductions (softmax sum + combine acc)
+ * accumulate SEQUENTIALLY under ONE thread per t (NO tree re-association) → no
+ * ULP delta, bit-exact (max|Δ|=0) via _hx_cuda_farr_moe_router_gpu. Keeps Y+PROBS
+ * DEVICE-RESIDENT. Gated behind env CLM_PROD_DEVRESIDENT; no-CUDA → -1 → host
+ * nn_moe_router_fwd (byte-eq). */
+HexaVal hexa_forge_dispatch_moe_router(HexaVal logits_v, HexaVal ex_out_v,
+                                  HexaVal probs_v, HexaVal y_v, HexaVal t_v,
+                                  HexaVal e_v, HexaVal c_v);                  /* runtime.c — fusion L3 glue */
+HexaVal forge_dispatch_moe_router(HexaVal logits_v, HexaVal ex_out_v,
+                             HexaVal probs_v, HexaVal y_v, HexaVal t_v,
+                             HexaVal e_v, HexaVal c_v);                       /* runtime.c — fusion L3 glue seam */
+
+/* HEXA-FUSION L3 (glue half · final slice ⑤c) — device-resident embedding gather.
+ * forge_dispatch_embedding(ids, table, x_out, T, d) -> int rc (0 ok / -1 host).
+ * X_OUT[i·d+c]=TABLE[tok·d+c] where tok=(int)IDS[i] — the token-gather host glue
+ * at the head of clm_prod_fwd (nn_embedding_fwd). Pure gather/copy, NO reduction
+ * → trivially bit-exact (max|Δ|=0) via _hx_cuda_farr_embedding_gpu; keeps X_OUT
+ * DEVICE-RESIDENT so the first conv GEMM H2D-skips it. Gated behind env
+ * CLM_PROD_DEVRESIDENT; no-CUDA → -1 → host gather (byte-eq). */
+HexaVal hexa_forge_dispatch_embedding(HexaVal ids_v, HexaVal table_v,
+                                  HexaVal out_v, HexaVal t_v, HexaVal d_v);   /* runtime.c — fusion L3 glue */
+HexaVal forge_dispatch_embedding(HexaVal ids_v, HexaVal table_v,
+                             HexaVal out_v, HexaVal t_v, HexaVal d_v);        /* runtime.c — fusion L3 glue seam */
+
 /* ── RFC 050 PERF-INHERITANCE: forge BF16 FFN dispatch wrapper ──────
  * `forge_dispatch_ffn_fp64_via_bf16(x, w1, w2, y, M, D, FD)` — 7-arg
  * builtin. Takes FP64 farr handles, internally allocates HexaFarrBf16
