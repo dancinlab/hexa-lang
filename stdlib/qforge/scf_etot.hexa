@@ -1,0 +1,170 @@
+// HEXA Standard Library — qforge/scf_etot
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// QFORGE-PERF — the VARIATIONAL Kohn-Sham TOTAL ENERGY corrections.
+//
+// THE WALL (demiurge QFORGE-PERF, ccb6cc1): the smeared SCF reported
+//   e_total = Sum occ*eps - sigma*S  (the bare BAND-ENERGY SUM minus Mermin entropy).
+// That is NOT the variational total energy. The band sum DOUBLE-COUNTS the
+// Hartree + xc that V_H, V_xc already fold into each KS eigenvalue, and it OMITS
+// the ion-ion Ewald constant. The Harris-Foulkes/Kohn-Sham total energy is
+//
+//   E_tot = Sum occ*eps  -  1/2 INT V_H*rho  +  (E_xc[rho] - INT V_xc*rho)
+//           +  E_ewald(ion-ion)  -  sigma*S
+//
+// The driver (scf.hexa) already carries Sum occ*eps - sigma*S; this module supplies
+// the DOUBLE-COUNT correction (-1/2 INT V_H*rho + E_xc - INT V_xc*rho) and the
+// basis-independent E_ewald. The driver adds them via a caller-supplied correction
+// (d4 -- physics-agnostic driver, the correction is data).
+//
+// -- Honest scope (d6) --------------------------------------------------------
+//   The basis-DECOUPLED FDG screening (scf_pw qforge_vscr_diag_fdg) is the
+//   uniform-electron-gas G=0 shift V_xc(rhobar) on every G, with <V_H>=0 (neutral
+//   cell gauge). For THAT screening the double-count is closed-form from rhobar and
+//   nelec -- the V_H term is exactly 0 and the xc double-count is
+//   nelec*(eps_xc(rhobar) - V_xc(rhobar)). E_ewald is the cell Madelung constant.
+//   ALL of these are NPW-INDEPENDENT constants, so they shift E_tot(NPW) by a
+//   constant without changing dE between NPW steps -- the variational test isolates
+//   whether the REMAINING Rayleigh-Ritz band sum plateaus on its own (layer-1 dive).
+//
+// reuse (d19): screening.qforge_vx_lda (LDA-x V) . correlation.qforge_ec_pw92 /
+//   qforge_vc_pw92 / qforge_rs_from_rho (PW92 eps_c, V_c) . core/special.erfc_fn.
+use "stdlib/qforge/screening"
+use "stdlib/qforge/correlation"
+use "stdlib/core/special"
+
+// -- LDA exchange ENERGY density per particle eps_x(rho) = 3/4 * V_x(rho) -------
+//   V_x = -(3/pi)^1/3 rho^1/3 = (4/3) eps_x  =>  eps_x = 3/4 V_x.  rho<=0 -> 0.
+pub fn qforge_ex_lda(rho: float) -> float {
+    if rho <= 0.0 { return 0.0 }
+    return 0.75 * qforge_vx_lda(rho)
+}
+
+// -- xc ENERGY density per particle eps_xc(rho) (Ha) ---------------------------
+//   xc_mode: <0 -> 0 (free-electron) . 0 -> x-only(Slater) . >=1 -> x + PW92 c.
+pub fn qforge_exc_point(rho: float, xc_mode: int) -> float {
+    if xc_mode < 0 { return 0.0 }
+    if rho <= 0.0 { return 0.0 }
+    let mut e = qforge_ex_lda(rho)
+    if xc_mode >= 1 { e = e + qforge_ec_pw92(qforge_rs_from_rho(rho)) }
+    return e
+}
+
+// -- xc POTENTIAL at a density point (mirrors scf_pw.qforge_vxc_point) ----------
+fn _etot_vxc_point(rho: float, xc_mode: int) -> float {
+    if xc_mode < 0 { return 0.0 }
+    if rho <= 0.0 { return 0.0 }
+    let mut v = qforge_vx_lda(rho)
+    if xc_mode >= 1 { v = v + qforge_vc_pw92(qforge_rs_from_rho(rho)) }
+    return v
+}
+
+// -- FDG (uniform-gas G=0) xc DOUBLE-COUNT correction (Ha) ---------------------
+//   For the basis-decoupled screening the screening potential is the CONSTANT
+//   V_xc(rhobar) felt by every one of the nelec electrons, so INT V_xc*rho =
+//   nelec*V_xc(rhobar) and E_xc[rhobar] = nelec*eps_xc(rhobar). The correction
+//   (E_xc - INT V_xc*rho) is therefore nelec*(eps_xc(rhobar) - V_xc(rhobar)).
+//   The Hartree double-count -1/2 INT V_H*rho = 0 here (<V_H>=0, neutral G=0 gauge).
+//   rhobar = nelec/Omega (basis-INDEPENDENT mean density). xc_mode<0 -> 0.
+pub fn qforge_edc_uniform(rhobar: float, nelec: int, xc_mode: int) -> float {
+    if xc_mode < 0 { return 0.0 }
+    if rhobar <= 0.0 { return 0.0 }
+    let exc = qforge_exc_point(rhobar, xc_mode)
+    let vxc = _etot_vxc_point(rhobar, xc_mode)
+    return to_float(nelec) * (exc - vxc)
+}
+
+// -- ION-ION EWALD energy (Ha) -- basis-independent Madelung constant ----------
+//   Standard Ewald split E = E_real + E_recip + E_self + E_bg:
+//     E_real  = 1/2 Sum_{i,j,L} q_i q_j erfc(eta|r_ij+L|)/|r_ij+L|  (L!=0 for i=j)
+//     E_recip = (2pi/Omega) Sum_{G!=0} exp(-|G|^2/4eta^2)/|G|^2 * |Sum_i q_i e^{iG.r_i}|^2
+//     E_self  = -eta/sqrt(pi) * Sum_i q_i^2
+//     E_bg    = -pi/(2 Omega eta^2) * (Sum_i q_i)^2     (neutralizing background)
+//   a1,a2,a3 = REAL lattice vectors . b1,b2,b3 = RECIPROCAL (with 2pi) . pos =
+//   Cartesian ion positions (flat 3*nion) . q = ion charges (valence Z) . omega =
+//   cell volume . nshell = real/recip lattice shell radius. eta = Ewald split
+//   parameter (Ha-bohr). d4 -- every cell is data.
+pub fn qforge_ewald(a1: [float], a2: [float], a3: [float],
+                    b1: [float], b2: [float], b3: [float],
+                    pos: [float], q: [float], omega: float,
+                    eta: float, nshell: int) -> float {
+    let nion = len(q)
+    let pi = 3.14159265358979323846
+    let sqrtpi = pow(pi, 0.5)
+
+    let mut e_real = 0.0
+    let mut i = 0
+    while i < nion {
+        let mut j = 0
+        while j < nion {
+            let dx0 = pos[i*3] - pos[j*3]
+            let dy0 = pos[i*3+1] - pos[j*3+1]
+            let dz0 = pos[i*3+2] - pos[j*3+2]
+            let mut la = -nshell
+            while la <= nshell {
+                let mut lb = -nshell
+                while lb <= nshell {
+                    let mut lc = -nshell
+                    while lc <= nshell {
+                        let home = (la == 0) && (lb == 0) && (lc == 0)
+                        if !(home && i == j) {
+                            let lx = to_float(la)*a1[0] + to_float(lb)*a2[0] + to_float(lc)*a3[0]
+                            let ly = to_float(la)*a1[1] + to_float(lb)*a2[1] + to_float(lc)*a3[1]
+                            let lz = to_float(la)*a1[2] + to_float(lb)*a2[2] + to_float(lc)*a3[2]
+                            let rx = dx0 + lx ; let ry = dy0 + ly ; let rz = dz0 + lz
+                            let r = pow(rx*rx + ry*ry + rz*rz, 0.5)
+                            if r > 1.0e-12 {
+                                e_real = e_real + 0.5 * q[i]*q[j] * erfc_fn(eta*r) / r
+                            }
+                        }
+                        lc = lc + 1
+                    }
+                    lb = lb + 1
+                }
+                la = la + 1
+            }
+            j = j + 1
+        }
+        i = i + 1
+    }
+
+    let mut e_recip = 0.0
+    let pref = 2.0 * pi / omega
+    let mut ga = -nshell
+    while ga <= nshell {
+        let mut gb = -nshell
+        while gb <= nshell {
+            let mut gc = -nshell
+            while gc <= nshell {
+                if !((ga == 0) && (gb == 0) && (gc == 0)) {
+                    let gx = to_float(ga)*b1[0] + to_float(gb)*b2[0] + to_float(gc)*b3[0]
+                    let gy = to_float(ga)*b1[1] + to_float(gb)*b2[1] + to_float(gc)*b3[1]
+                    let gz = to_float(ga)*b1[2] + to_float(gb)*b2[2] + to_float(gc)*b3[2]
+                    let g2 = gx*gx + gy*gy + gz*gz
+                    let mut sre = 0.0 ; let mut sim = 0.0
+                    let mut k = 0
+                    while k < nion {
+                        let gr = gx*pos[k*3] + gy*pos[k*3+1] + gz*pos[k*3+2]
+                        sre = sre + q[k]*cos(gr) ; sim = sim + q[k]*sin(gr)
+                        k = k + 1
+                    }
+                    let s2 = sre*sre + sim*sim
+                    e_recip = e_recip + pref * exp(-1.0*g2/(4.0*eta*eta)) / g2 * s2
+                }
+                gc = gc + 1
+            }
+            gb = gb + 1
+        }
+        ga = ga + 1
+    }
+
+    let mut sumq2 = 0.0 ; let mut sumq = 0.0
+    let mut m = 0
+    while m < nion { sumq2 = sumq2 + q[m]*q[m] ; sumq = sumq + q[m] ; m = m + 1 }
+    let e_self = -1.0 * eta / sqrtpi * sumq2
+    let e_bg = -1.0 * pi / (2.0 * omega * eta * eta) * sumq * sumq
+
+    return e_real + e_recip + e_self + e_bg
+}
