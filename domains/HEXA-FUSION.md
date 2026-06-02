@@ -23,7 +23,7 @@ FORGE-UTILGREEN lever-1~5 가 GEMM repack 을 전부 device 化했어도 util ME
 
 ### L1 — device-resident (= PyTorch eager 수준, util-GREEN)
 
-- [~] **device-resident tensor lifetime** — param/grad/moment 를 step 전체에 GPU-resident 유지(host roundtrip 0). falsifier: 기존 오라클 byte-eq max|Δ|=0 ∧ nvidia-smi devmem persist across step. **W1-① PARTIAL (PR #2555)**: AdamW moments m,v device-resident 착지(env `CLM_PROD_DEVRESIDENT`, byte-eq ALL-PASS) — m/v 는 `_adam` 외 host 미참조라 순수 제거가능 roundtrip. 잔여: grad(host col2im/db reduce) · param W(host int4 re-quant 차단) · devmem-persist pod 측정. 상세 = §W1 results.
+- [~] **device-resident tensor lifetime** — param/grad/moment 를 step 전체에 GPU-resident 유지(host roundtrip 0). falsifier: 기존 오라클 byte-eq max|Δ|=0 ∧ nvidia-smi devmem persist across step. **W1-① PARTIAL (PR #2555 m,v + #2559 grad-db)**: AdamW moments m,v (#2555) + bias grad db (#2559) device-resident 착지(env `CLM_PROD_DEVRESIDENT`, byte-eq ALL-PASS). 잔여 = **int4 quant wall (①c 진행중)**: dW/dX(host `nn_int4_quant_bwd` STE mask) · param W(host int4 re-quant) · devmem-persist pod 측정. 상세 = §W1 results.
 - [ ] **async kernel-launch pipeline** — step body 가 host 인터프리터 블로킹 없이 device 커널을 비동기 디스패치(GPU 안 굶음). falsifier: `F-RFC046-GPU-UTILIZATION` util MEAN≥20% @ d1536/T512 (= FORGE-UTILGREEN endgame gate, single-driver H100 sm_90 fire).
 - [ ] **fwd-only fused device kernel 프로토타입 + util Δ probe** (safe falsifier — 풀포트 전) — fwd path 만 device-resident fuse 해 util Δ 측정(lever-4 fire pod 재사용). 풀 train-step fusion 의 ROI 를 싸게 검증.
 
@@ -126,7 +126,17 @@ F-CLM-DEVFEED-BWD-EQ    = 1   (dW=0.0 dX≤5.55e-17 db=0.0)
 F-CLM-DEVFEED-ADAM-EQ   = 1   (adam 5-step W max|Δ|=0.0)
 ALL-PASS — device im2col/col2im + device AdamW byte-eq to host feed
 ```
-verdict: `.verdicts/hexa-fusion/F-CLM-DEVFEED-DEVRESIDENT-MV.txt`. 잔여(PR body): grad(d*) device-residency · param W(host int4 re-quant 차단) · devmem-persist H100 측정(pod self-host rebuild 필요). raw-GEMM 우위 주장 0 — roundtrip 제거뿐.
+verdict: `.verdicts/hexa-fusion/F-CLM-DEVFEED-DEVRESIDENT-MV.txt`. raw-GEMM 우위 주장 0 — roundtrip 제거뿐.
+
+### ①b device-resident GRAD half — ✅ (PR #2559, base fusion/l1-devresident-mv, byte-eq ALL-PASS)
+
+bias grad **db device-resident across bwd→AdamW**. Root: `conv*_bwd_via_forge*` 가 device GEMM 출력 dy 를 host 로 읽어 `db[co]=Σ_t dy` 를 host reduce → `_adam` 재업로드. db 는 `_adam` 외 host 미참조 → 제거가능. 새 `_hx_cuda_farr_db_colsum_gpu`(1 thread/channel, **sequential t-sum, tree 재결합 없음 → bit-exact**, db `loc=FARR_DEVICE dirty_host=0`).
+
+```
+F-CLM-DEVFEED-DB-EQ = 1   (db dil∈{1,2} colsum-vs-host max|Δ|=0.0)
++ IM2COL/FWD/BWD/ADAM-EQ 전부 max|Δ|=0.0 유지  → ALL-PASS
+```
+verdict: `.verdicts/hexa-fusion/F-CLM-DEVFEED-DEVRESIDENT-GRAD.txt`. **잔여 = int4 quant wall (①c 진행중)**: dW/dX(host `nn_int4_quant_bwd` STE mask multiply) · param W(host int4 re-quant each fwd) — 둘 다 device int4 quant/STE 로 옮겨야 W 가 resident. raw-GEMM 우위 주장 0.
 
 ### ⑦ operator surgical override — ✅ (PR #2556, base main, emit Δ ∧ byte-eq)
 
