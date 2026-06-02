@@ -1,0 +1,59 @@
+HEXA SELF-HOST BYTE-EQ FIXPOINT — TERMINAL VERDICT (claim: selfhost_byteeq_fixpoint)
+====================================================================================
+claim   : the hexa native compiler reaches a byte-eq self-host fixpoint —
+          stage3-output (cc-gen3.o) == stage4-output (cc-gen4.o), BYTE-IDENTICAL.
+method  : deterministic 3-stage bootstrap ladder, tool/build_selfhost.sh
+          (seeds -> hexat -> aprime_cc -> gen2 -> gen3 -> gen4) then
+          `cmp cc-gen3.o cc-gen4.o`. GATE = cc-gen3.o == cc-gen4.o.
+host    : ghost (192.168.50.150) — persistent ~/dancinlab/selfhost-work
+date    : measured 2026-06-02 (cc-gen4.o emit), attested 2026-06-03
+group   : COMPILER   slug: selfhost-byteeq
+
+────────────────────────────────────────────────────────────────────────────
+EVIDENCE — REAL measured bytes (copied verbatim from ghost, NOT asserted)
+────────────────────────────────────────────────────────────────────────────
+
+(1) STAGE MARKERS (verbatim ~/dancinlab/selfhost-work/gen3.done, gen4.done):
+
+  gen3.done:
+  EXIT=0 OBJSIZE=3224592 ENCODE_MISS=0 CMP=DIFFER@ FIRSTDIFF=NA
+
+  gen4.done:
+  EXIT=0 OBJSIZE=3224592 ENCODE_MISS=0 LINK_gen3=0 SMOKE=2 CMP_gen3_vs_gen4=BYTE-EQ-GRADUATION FIRSTDIFF=0
+
+  Read: stage4 emit EXIT=0, ENCODE_MISS=0, links gen3 (LINK_gen3=0),
+  smoke OK, and CMP_gen3_vs_gen4=BYTE-EQ-GRADUATION with FIRSTDIFF=0
+  (no differing byte). gen3.done CMP=DIFFER@ is the EXPECTED stage2!=stage3
+  bootstrap-transition delta that converges out at the gen3==gen4 fixpoint
+  (see STAGE3-DIAG.txt — 2 benign C-vs-native residuals, deterministic/side).
+
+(2) SHA-256 (shasum -a 256, all three identical):
+
+  32c6db9b5696bd251da62770275d0ba929387198dd750ce3466e7ef11e37fdec  cc-gen3.o
+  32c6db9b5696bd251da62770275d0ba929387198dd750ce3466e7ef11e37fdec  cc-gen4.o
+  32c6db9b5696bd251da62770275d0ba929387198dd750ce3466e7ef11e37fdec  cc-gen3b.o
+
+  cc-gen3b.o = independent re-run of stage2 (gen2 re-emit) — proves
+  FULL-SCALE native determinism (gen3 == gen3b), the graduation precondition.
+
+(3) BYTE COMPARE (cmp, exit status captured — no pipe mask):
+
+  $ cmp cc-gen3.o cc-gen4.o ; echo cmp_exit=$?
+  cmp_exit=0          # 0 = files are byte-identical (cmp prints nothing)
+
+  $ cmp cc-gen3.o cc-gen3b.o ; echo cmp3b_exit=$?
+  cmp3b_exit=0        # native determinism: gen3 == gen3b
+
+(4) OBJECT SIZE (stat -f %z): cc-gen3.o = cc-gen4.o = cc-gen3b.o = 3224592 B
+
+────────────────────────────────────────────────────────────────────────────
+VERDICT: 🟢 SUPPORTED — BYTE-EQ SELF-HOST FIXPOINT REACHED.
+  stage3-output (cc-gen3.o) is byte-identical to stage4-output (cc-gen4.o):
+  cmp exit 0, matching sha256 32c6db9b..., identical 3224592 B, ENCODE_MISS=0.
+  The hexa native compiler is a verified deterministic self-host fixpoint.
+  Terminal · paper-eligible (closure glyph persisted, real measured bytes).
+
+NOTE (artifact regenerability): the cc-gen3.o / cc-gen4.o artifacts live on
+  ghost ~/dancinlab/selfhost-work and are REGENERABLE one-command via
+  tool/build_selfhost.sh on a macOS arm64 host; the GATE (cmp gen3 gen4)
+  re-derives this verdict deterministically.
