@@ -1290,6 +1290,69 @@ HexaVal hexa_forge_dispatch_expert_unpack2(HexaVal dex_out_v, HexaVal dex0_v,
 HexaVal forge_dispatch_expert_unpack2(HexaVal dex_out_v, HexaVal dex0_v,
                              HexaVal dex1_v, HexaVal n_v);        /* runtime.c — fusion L3 bwd glue seam */
 
+/* HEXA-FUSION L3 (BWD glue half · ⑤-bwd2) — device-resident CE softmax grad.
+ * forge_dispatch_ce_grad(logits, targets, dlogits, T, V) -> int rc (0 ok / -1
+ * host). Reproduces clm_prod.hexa clm_ce_grad: per t (one thread) mx=max_v logit,
+ * sm=Σ_v exp(logit-mx), dlogits[t,v]=(exp(logit-mx)/sm)·(1/T), dlogits[t,tgt]-=1/T.
+ * Sequential per-row (max + sum + writes), device exp() = IEEE libm contract →
+ * bit-exact (max|Δ|=0) via _hx_cuda_farr_ce_grad_gpu. Keeps DLOGITS DEVICE-
+ * RESIDENT. Gated behind CLM_PROD_DEVRESIDENT; no-CUDA → -1 → host clm_ce_grad. */
+HexaVal hexa_forge_dispatch_ce_grad(HexaVal logits_v, HexaVal targets_v,
+                                  HexaVal dlogits_v, HexaVal t_v, HexaVal v_v);   /* runtime.c — fusion L3 bwd glue */
+HexaVal forge_dispatch_ce_grad(HexaVal logits_v, HexaVal targets_v,
+                             HexaVal dlogits_v, HexaVal t_v, HexaVal v_v);        /* runtime.c — fusion L3 bwd glue seam */
+
+/* HEXA-FUSION L3 (BWD glue half · ⑤-bwd2) — device-resident MoE-router bwd.
+ * forge_dispatch_moe_router_bwd(probs, ex_out, dy, dlogits, dex_out, T, E, C) ->
+ * int rc (0 ok / -1 host). Reproduces moe_lib.hexa nn_moe_router_bwd (reads CACHED
+ * probs — NO _moe_exp replay): per t (one thread) 2-pass over E with inner Σ_c —
+ * dg=Σ_c dy·ex_out, dex_out=pte·dy, dot=Σ_e pte·dg, dlogits=pte·(dg-dot). Every
+ * reduction SEQUENTIAL in host order (NO tree re-assoc, NO atomics) → bit-exact
+ * (max|Δ|=0) via _hx_cuda_farr_moe_router_bwd_gpu. Keeps DLOGITS/DEX_OUT DEVICE-
+ * RESIDENT. Gated behind CLM_PROD_DEVRESIDENT; no-CUDA → -1 → host bwd. */
+HexaVal hexa_forge_dispatch_moe_router_bwd(HexaVal probs_v, HexaVal ex_out_v,
+                                  HexaVal dy_v, HexaVal dlogits_v, HexaVal dex_out_v,
+                                  HexaVal t_v, HexaVal e_v, HexaVal c_v);   /* runtime.c — fusion L3 bwd glue */
+HexaVal forge_dispatch_moe_router_bwd(HexaVal probs_v, HexaVal ex_out_v,
+                             HexaVal dy_v, HexaVal dlogits_v, HexaVal dex_out_v,
+                             HexaVal t_v, HexaVal e_v, HexaVal c_v);        /* runtime.c — fusion L3 bwd glue seam */
+
+/* HEXA-FUSION L3 (BWD glue half · ⑤-bwd2) — device-resident 3-way grad sum.
+ * forge_dispatch_grad_sum3(a, b, c, out, n) -> int rc (0 ok / -1 host).
+ * out[i]=a[i]+b[i]+c[i] (host order = dxt = dxt_r+dxt_e0+dxt_e1). Pure elementwise,
+ * fixed (a+b)+c association → bit-exact (max|Δ|=0) via _hx_cuda_farr_grad_sum3_gpu.
+ * Keeps OUT DEVICE-RESIDENT. Gated behind CLM_PROD_DEVRESIDENT; no-CUDA → -1 →
+ * host sum loop. */
+HexaVal hexa_forge_dispatch_grad_sum3(HexaVal a_v, HexaVal b_v, HexaVal c_v,
+                                  HexaVal out_v, HexaVal n_v);   /* runtime.c — fusion L3 bwd glue */
+HexaVal forge_dispatch_grad_sum3(HexaVal a_v, HexaVal b_v, HexaVal c_v,
+                             HexaVal out_v, HexaVal n_v);        /* runtime.c — fusion L3 bwd glue seam */
+
+/* HEXA-FUSION L3 (BWD glue half · ⑤-bwd2) — device-resident 2-way grad sum.
+ * forge_dispatch_grad_sum2(a, b, out, n) -> int rc (0 ok / -1 host).
+ * out[i]=a[i]+b[i] (host order = dxec = dxt+dxec_b). Pure elementwise → bit-exact
+ * (max|Δ|=0) via _hx_cuda_farr_grad_sum2_gpu. Keeps OUT DEVICE-RESIDENT. Gated
+ * behind CLM_PROD_DEVRESIDENT; no-CUDA → -1 → host sum loop. */
+HexaVal hexa_forge_dispatch_grad_sum2(HexaVal a_v, HexaVal b_v,
+                                  HexaVal out_v, HexaVal n_v);   /* runtime.c — fusion L3 bwd glue */
+HexaVal forge_dispatch_grad_sum2(HexaVal a_v, HexaVal b_v,
+                             HexaVal out_v, HexaVal n_v);        /* runtime.c — fusion L3 bwd glue seam */
+
+/* HEXA-FUSION L3 (BWD glue half · ⑤-bwd2) — device-resident deterministic
+ * embedding scatter. forge_dispatch_embedding_bwd_scatter(dx, ids, dtable, T, d,
+ * V) -> int rc (0 ok / -1 host). Reproduces nn_lib.hexa nn_embedding_bwd_scatter
+ * (dtable[tok·d+c] += dx[i·d+c], tok=(int)ids[i], i ascending) WITHOUT atomics —
+ * ONE thread per vocab row r scans i=0..T ascending, adds matching tokens in the
+ * SAME ascending-i order → bit-exact (max|Δ|=0) via
+ * _hx_cuda_farr_embedding_bwd_scatter_gpu. dtable pre-zeroed on host; kept DEVICE-
+ * RESIDENT. Gated behind CLM_PROD_DEVRESIDENT; no-CUDA → -1 → host scatter. */
+HexaVal hexa_forge_dispatch_embedding_bwd_scatter(HexaVal dx_v, HexaVal ids_v,
+                                  HexaVal dtable_v, HexaVal t_v, HexaVal d_v,
+                                  HexaVal v_v);   /* runtime.c — fusion L3 bwd glue */
+HexaVal forge_dispatch_embedding_bwd_scatter(HexaVal dx_v, HexaVal ids_v,
+                             HexaVal dtable_v, HexaVal t_v, HexaVal d_v,
+                             HexaVal v_v);        /* runtime.c — fusion L3 bwd glue seam */
+
 /* ── RFC 050 PERF-INHERITANCE: forge BF16 FFN dispatch wrapper ──────
  * `forge_dispatch_ffn_fp64_via_bf16(x, w1, w2, y, M, D, FD)` — 7-arg
  * builtin. Takes FP64 farr handles, internally allocates HexaFarrBf16
