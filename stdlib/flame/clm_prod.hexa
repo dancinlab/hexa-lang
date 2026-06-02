@@ -504,6 +504,18 @@ fn _adam(W: int, gW: int, m: int, v: int, n: int, t: int) {
     // the proven host opt_adamw_step (byte-eq fallback). Engages only in the
     // self-host-rebuilt pod binary (env-gated so the prebuilt mac binary, which
     // lacks the builtin, never link-references it under `hexa run`).
+    // HEXA-FUSION L1: device-resident moment lifetime. Under CLM_PROD_DEVRESIDENT
+    // the moments m,v stay GPU-resident across the whole train loop (no per-step
+    // m/v host roundtrip) — the m_*/v_* tensors escape ONLY into this _adam, so
+    // nothing on the host reads them and the next step's H2D-skip reuses the
+    // device accumulator in place. W is still materialized on host (the forward
+    // re-quantizes the conv weights). byte-eq to the always-D2H forge_dispatch_
+    // adamw path (same kernel, only the m/v write-back elided). rc 0 = applied
+    // on-device; else fall through to forge_dispatch_adamw / host opt_adamw_step.
+    if env("CLM_PROD_DEVRESIDENT") != "" {
+        let rc = forge_dispatch_adamw_keepmv(W, gW, m, v, n, 0.05, 0.9, 0.999, 0.00000001, 0.0, t)
+        if rc == 0 { return }
+    }
     if env("CLM_PROD_DEVFEED") != "" {
         let rc = forge_dispatch_adamw(W, gW, m, v, n, 0.05, 0.9, 0.999, 0.00000001, 0.0, t)
         if rc == 0 { return }

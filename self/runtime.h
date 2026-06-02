@@ -1091,6 +1091,22 @@ HexaVal forge_dispatch_adamw(HexaVal w_v, HexaVal g_v, HexaVal m_v,
                              HexaVal b1_v, HexaVal b2_v, HexaVal eps_v,
                              HexaVal wd_v, HexaVal t_v);                       /* runtime.c — lever a seam */
 
+/* HEXA-FUSION L1 — forge_dispatch_adamw_keepmv(W, g, m, v, n, lr, b1, b2,
+ * eps, wd, t) -> int rc (0 ok / -1 host fallback). Same ABI as
+ * forge_dispatch_adamw, but routes to _hx_cuda_farr_adamw_step_inplace_
+ * keepmv_gpu which keeps the Adam moments m,v DEVICE-RESIDENT across the
+ * step (no m/v D2H; W still D2H'd). m/v are never read on host → next
+ * step's H2D-skip reuses the device accumulator (byte-eq). Gated in
+ * clm_prod.hexa behind env CLM_PROD_DEVRESIDENT. */
+HexaVal hexa_forge_dispatch_adamw_keepmv(HexaVal w_v, HexaVal g_v, HexaVal m_v,
+                                  HexaVal v_v, HexaVal n_v, HexaVal lr_v,
+                                  HexaVal b1_v, HexaVal b2_v, HexaVal eps_v,
+                                  HexaVal wd_v, HexaVal t_v);                  /* runtime.c — fusion L1 */
+HexaVal forge_dispatch_adamw_keepmv(HexaVal w_v, HexaVal g_v, HexaVal m_v,
+                             HexaVal v_v, HexaVal n_v, HexaVal lr_v,
+                             HexaVal b1_v, HexaVal b2_v, HexaVal eps_v,
+                             HexaVal wd_v, HexaVal t_v);                       /* runtime.c — fusion L1 seam */
+
 /* ── RFC 050 PERF-INHERITANCE: forge BF16 FFN dispatch wrapper ──────
  * `forge_dispatch_ffn_fp64_via_bf16(x, w1, w2, y, M, D, FD)` — 7-arg
  * builtin. Takes FP64 farr handles, internally allocates HexaFarrBf16
