@@ -1038,6 +1038,59 @@ HexaVal forge_dispatch_matmul_batched(HexaVal a_v, HexaVal m_v, HexaVal k_v,
                                       HexaVal b_v, HexaVal n_v,
                                       HexaVal batch_v, HexaVal c_v);      /* runtime.c — lever b seam */
 
+/* ── LEVER (a): device-resident im2col/col2im + on-device AdamW ─────
+ * The dominant Lane-G util peg is the HOST backward feed: each step the
+ * trainer rebuilds x_col on the host (host-dirty → re-H2D every GEMM)
+ * and runs a per-weight host adam loop between micro-GEMMs, pegging one
+ * CPU core while the GPU idles. These three builtins move that feed
+ * on-device so x_col stays FARR_DEVICE (fed straight into the already-
+ * device GEMM, no D2H/H2D roundtrip) and the optimizer step runs on the
+ * device kernel.
+ *
+ * forge_dispatch_im2col(x, xcol_out, T, Cin, K, dil) -> int rc:
+ *   causal-dilated gather x_col[t, ci*K+k] = (p>=0)?x[p,ci]:0,
+ *   p = t - dil*(K-1-k); writes xcol_out (caller-allocated len T·Cin·K)
+ *   to a device-resident buffer. CUDA → _hx_cuda_farr_im2col_gpu (one
+ *   thread per output cell, pure gather, no atomics); no-CUDA → byte-eq
+ *   host gather oracle. 0 ok / -1 err.
+ * forge_dispatch_im2col_t(x, xcolT_out, T, Cin, K, dil) -> int rc:
+ *   transpose form xcolT[ci*K+k, t] for the backward dW GEMM (len Cin·K·T).
+ * forge_dispatch_col2im(dXcol, dX_out, T, Cin, K, dil) -> int rc:
+ *   transpose-gather scatter dX[p,ci] = Σ_k dXcol[(p+dil·(K-1-k))·Cin·K +
+ *   ci·K+k], t<T; one thread per dX output cell — NO atomics →
+ *   deterministic, byte-eq to the host scatter order. dX_out len T·Cin.
+ * Same bare-symbol seam as forge_dispatch_matmul. Bodies (SSOT):
+ * self/runtime.c (wrapper: CUDA-route / host-oracle) + self/cuda/
+ * runtime_cuda.c (kernels, emit: self/cuda/runtime_cuda_emit.hexa). */
+HexaVal hexa_forge_dispatch_im2col(HexaVal x_v, HexaVal xcol_v, HexaVal t_v,
+                                   HexaVal cin_v, HexaVal k_v, HexaVal dil_v); /* runtime.c — lever a */
+HexaVal forge_dispatch_im2col(HexaVal x_v, HexaVal xcol_v, HexaVal t_v,
+                              HexaVal cin_v, HexaVal k_v, HexaVal dil_v);      /* runtime.c — lever a seam */
+HexaVal hexa_forge_dispatch_im2col_t(HexaVal x_v, HexaVal xcolt_v, HexaVal t_v,
+                                     HexaVal cin_v, HexaVal k_v, HexaVal dil_v); /* runtime.c — lever a */
+HexaVal forge_dispatch_im2col_t(HexaVal x_v, HexaVal xcolt_v, HexaVal t_v,
+                                HexaVal cin_v, HexaVal k_v, HexaVal dil_v);    /* runtime.c — lever a seam */
+HexaVal hexa_forge_dispatch_col2im(HexaVal dxcol_v, HexaVal dx_v, HexaVal t_v,
+                                   HexaVal cin_v, HexaVal k_v, HexaVal dil_v); /* runtime.c — lever a */
+HexaVal forge_dispatch_col2im(HexaVal dxcol_v, HexaVal dx_v, HexaVal t_v,
+                              HexaVal cin_v, HexaVal k_v, HexaVal dil_v);      /* runtime.c — lever a seam */
+
+/* forge_dispatch_adamw(W, g, m, v, n, lr, b1, b2, eps, wd, t) -> int rc
+ * (0 ok / -1 fall back to host adamw_step). CUDA →
+ * _hx_cuda_farr_adamw_step_inplace_gpu (decoupled-wd, byte-eq to the host
+ * oracle; W/m/v device-resident — the optimizer step stops being a host
+ * scalar loop between micro-GEMMs). no-CUDA → returns -1 so the .hexa
+ * caller (adamw_step_devfeed) runs the proven host adamw_step (byte-eq).
+ * Same arg order as the RFC 034 adamw_step builtin. Same bare seam. */
+HexaVal hexa_forge_dispatch_adamw(HexaVal w_v, HexaVal g_v, HexaVal m_v,
+                                  HexaVal v_v, HexaVal n_v, HexaVal lr_v,
+                                  HexaVal b1_v, HexaVal b2_v, HexaVal eps_v,
+                                  HexaVal wd_v, HexaVal t_v);                  /* runtime.c — lever a */
+HexaVal forge_dispatch_adamw(HexaVal w_v, HexaVal g_v, HexaVal m_v,
+                             HexaVal v_v, HexaVal n_v, HexaVal lr_v,
+                             HexaVal b1_v, HexaVal b2_v, HexaVal eps_v,
+                             HexaVal wd_v, HexaVal t_v);                       /* runtime.c — lever a seam */
+
 /* ── RFC 050 PERF-INHERITANCE: forge BF16 FFN dispatch wrapper ──────
  * `forge_dispatch_ffn_fp64_via_bf16(x, w1, w2, y, M, D, FD)` — 7-arg
  * builtin. Takes FP64 farr handles, internally allocates HexaFarrBf16

@@ -7513,6 +7513,29 @@ fn gen2_expr(node) {
                 if name == "farr_ce_seed_gpu" {
                     return "hexa_farr_ce_seed_gpu(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ", " + arg_strs[3] + ", " + arg_strs[4] + ", " + arg_strs[5] + ")"
                 }
+                // LEVER (a) forge device-feed: device-resident im2col / col2im.
+                // forge_dispatch_im2col(x, xcol_out, T, Cin, K, dil) -> int rc:
+                // causal-dilated gather x_col[t, ci*K+k] = (p>=0)?x[p,ci]:0 written
+                // to a FARR_DEVICE buffer (one thread per output cell, no atomics)
+                // so the follow-up forge GEMM reads it in place — NO host
+                // roundtrip (the dominant Lane-G util peg). CUDA build →
+                // _hx_cuda_farr_im2col_gpu; no-CUDA → byte-eq host gather oracle.
+                // forge_dispatch_im2col_t(...) is the transpose form xcolT[Kdim,T]
+                // for the backward dW GEMM. (#1187: needs codegen + runtime.h proto.)
+                if name == "forge_dispatch_im2col" {
+                    return "hexa_forge_dispatch_im2col(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ", " + arg_strs[3] + ", " + arg_strs[4] + ", " + arg_strs[5] + ")"
+                }
+                if name == "forge_dispatch_im2col_t" {
+                    return "hexa_forge_dispatch_im2col_t(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ", " + arg_strs[3] + ", " + arg_strs[4] + ", " + arg_strs[5] + ")"
+                }
+                // forge_dispatch_col2im(dXcol, dX_out, T, Cin, K, dil) -> int rc:
+                // transpose-gather scatter (one thread per dX[p,ci] output cell
+                // summing the K dilated taps — NO atomics → deterministic, byte-eq
+                // to the host scatter order). CUDA build → _hx_cuda_farr_col2im_gpu;
+                // no-CUDA → byte-eq host scatter oracle.
+                if name == "forge_dispatch_col2im" {
+                    return "hexa_forge_dispatch_col2im(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ", " + arg_strs[3] + ", " + arg_strs[4] + ", " + arg_strs[5] + ")"
+                }
             }
             if len(node.args) == 7 {
                 // feat/primitive-float-array — CNOT kernel.
@@ -7563,6 +7586,23 @@ fn gen2_expr(node) {
                 // step (param, grad, m, v, n, lr, b1, b2, eps, wd, t).
                 if name == "adamw_step" {
                     return "hexa_adamw_step("
+                        + arg_strs[0] + ", " + arg_strs[1] + ", "
+                        + arg_strs[2] + ", " + arg_strs[3] + ", "
+                        + arg_strs[4] + ", " + arg_strs[5] + ", "
+                        + arg_strs[6] + ", " + arg_strs[7] + ", "
+                        + arg_strs[8] + ", " + arg_strs[9] + ", "
+                        + arg_strs[10] + ")"
+                }
+                // LEVER (a) forge device-feed: on-device AdamW.
+                // forge_dispatch_adamw(W, g, m, v, n, lr, b1, b2, eps, wd, t) ->
+                // int rc (0 ok / -1 fall back to host adamw_step). CUDA build →
+                // _hx_cuda_farr_adamw_step_inplace_gpu (the decoupled-wd kernel,
+                // already byte-eq to the host oracle; W/m/v kept device-resident
+                // so the optimizer step stops being a host scalar loop between
+                // micro-GEMMs). no-CUDA → returns -1 so the .hexa caller runs the
+                // proven host adamw_step (byte-eq). Same arg order as adamw_step.
+                if name == "forge_dispatch_adamw" {
+                    return "hexa_forge_dispatch_adamw("
                         + arg_strs[0] + ", " + arg_strs[1] + ", "
                         + arg_strs[2] + ", " + arg_strs[3] + ", "
                         + arg_strs[4] + ", " + arg_strs[5] + ", "

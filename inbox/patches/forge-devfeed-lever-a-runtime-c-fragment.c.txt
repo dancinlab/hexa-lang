@@ -1,0 +1,177 @@
+// forge-devfeed lever-a — self/runtime.c wrapper bodies (SSOT C fragment).
+// self/runtime.c is a gitignored build seed (post-#2065 .c-graduation); these
+// four wrappers are NOT regenerated from .hexa. On a fresh pod checkout for
+// the CUDA fire, splice this block into self/runtime.c immediately AFTER the
+// lever-b hexa_forge_dispatch_matmul_batched body (search:
+//   'CPU oracle:.*batch independent' → the closing } at ~L14434), BEFORE the
+// 'BF16 substrate externs' comment. Then run the self-host stage build.
+// Routing: HEXA_CUDA → _hx_cuda_farr_{im2col,im2col_t,col2im}_gpu /
+// _hx_cuda_farr_adamw_step_inplace_gpu (runtime_cuda.c); no-CUDA → byte-eq
+// host gather/scatter (im2col/col2im) or -1 (adamw → host adamw_step).
+// Byte-eq oracle: stdlib/flame/clm_conv_devfeed.hexa (F-CLM-DEVFEED-* green).
+
+ * LEVER (a) — device-resident im2col / col2im + on-device AdamW wrappers.
+ *
+ * The forge device-feed: move the host backward feed (im2col/col2im gather
+ * + per-weight adam loop — the dominant Lane-G util peg) on-device. Each
+ * wrapper routes to the runtime_cuda.c device kernel under HEXA_CUDA and
+ * falls through to the byte-eq host oracle (the clm_conv_devfeed.hexa
+ * reference) otherwise — never silently wrong, only silently slower.
+ *
+ * im2col / im2col_t write a DEVICE-RESIDENT x_col so the follow-up forge
+ * GEMM reads it in place (no D2H/H2D roundtrip). The kernels call _d2h_out
+ * which, under FORGE_OUT_DEVICE_KEEP, keeps the output FARR_DEVICE.
+ * col2im is a transpose-gather scatter (no atomics → deterministic).
+ * adamw routes to the already-byte-eq _hx_cuda_farr_adamw_step_inplace_gpu.
+ * ═══════════════════════════════════════════════════════════════════ */
+HexaVal hexa_forge_dispatch_im2col(HexaVal x_v, HexaVal xc_v, HexaVal t_v,
+                                   HexaVal cin_v, HexaVal k_v, HexaVal dil_v) {
+    int64_t x_id = hexa_as_num(x_v);
+    int64_t xc_id= hexa_as_num(xc_v);
+    int64_t T    = hexa_as_num(t_v);
+    int64_t Cin  = hexa_as_num(cin_v);
+    int64_t K    = hexa_as_num(k_v);
+    int64_t dil  = hexa_as_num(dil_v);
+    if (T <= 0 || Cin <= 0 || K <= 0 || dil <= 0) return hexa_int(-1);
+    if (x_id < 0 || x_id >= _hx_farr_count)        return hexa_int(-1);
+    if (xc_id < 0 || xc_id >= _hx_farr_count)      return hexa_int(-1);
+    int64_t Kdim = Cin * K;
+    if (_hx_farr_table[xc_id].len < T * Kdim)      return hexa_int(-1);
+#ifdef HEXA_CUDA
+    extern int _hx_cuda_farr_im2col_gpu(int64_t, int64_t, int64_t,
+                                        int64_t, int64_t, int64_t);
+    int grc = _hx_cuda_farr_im2col_gpu(x_id, xc_id, T, Cin, K, dil);
+    if (grc == 0) return hexa_int(0);
+    /* GPU path failed — fall through to the host gather (correctness kept). */
+#endif
+    {
+        double* X  = _hx_farr_table[x_id].buf;
+        double* XC = _hx_farr_table[xc_id].buf;
+        for (int64_t i = 0; i < T * Kdim; i++) XC[i] = 0.0;
+        for (int64_t t = 0; t < T; t++)
+            for (int64_t ci = 0; ci < Cin; ci++)
+                for (int64_t k = 0; k < K; k++) {
+                    int64_t p = t - dil * (K - 1 - k);
+                    if (p >= 0) XC[t * Kdim + ci * K + k] = X[p * Cin + ci];
+                }
+    }
+    return hexa_int(0);
+}
+HexaVal forge_dispatch_im2col(HexaVal x, HexaVal xc, HexaVal t,
+                              HexaVal cin, HexaVal k, HexaVal dil) {
+    return hexa_forge_dispatch_im2col(x, xc, t, cin, k, dil);
+}
+
+HexaVal hexa_forge_dispatch_im2col_t(HexaVal x_v, HexaVal xct_v, HexaVal t_v,
+                                     HexaVal cin_v, HexaVal k_v, HexaVal dil_v) {
+    int64_t x_id  = hexa_as_num(x_v);
+    int64_t xct_id= hexa_as_num(xct_v);
+    int64_t T     = hexa_as_num(t_v);
+    int64_t Cin   = hexa_as_num(cin_v);
+    int64_t K     = hexa_as_num(k_v);
+    int64_t dil   = hexa_as_num(dil_v);
+    if (T <= 0 || Cin <= 0 || K <= 0 || dil <= 0) return hexa_int(-1);
+    if (x_id < 0 || x_id >= _hx_farr_count)         return hexa_int(-1);
+    if (xct_id < 0 || xct_id >= _hx_farr_count)     return hexa_int(-1);
+    int64_t Kdim = Cin * K;
+    if (_hx_farr_table[xct_id].len < Kdim * T)      return hexa_int(-1);
+#ifdef HEXA_CUDA
+    extern int _hx_cuda_farr_im2col_t_gpu(int64_t, int64_t, int64_t,
+                                          int64_t, int64_t, int64_t);
+    int grc = _hx_cuda_farr_im2col_t_gpu(x_id, xct_id, T, Cin, K, dil);
+    if (grc == 0) return hexa_int(0);
+#endif
+    {
+        double* X   = _hx_farr_table[x_id].buf;
+        double* XCT = _hx_farr_table[xct_id].buf;
+        for (int64_t i = 0; i < Kdim * T; i++) XCT[i] = 0.0;
+        for (int64_t t = 0; t < T; t++)
+            for (int64_t ci = 0; ci < Cin; ci++)
+                for (int64_t k = 0; k < K; k++) {
+                    int64_t p = t - dil * (K - 1 - k);
+                    if (p >= 0) { int64_t j = ci * K + k; XCT[j * T + t] = X[p * Cin + ci]; }
+                }
+    }
+    return hexa_int(0);
+}
+HexaVal forge_dispatch_im2col_t(HexaVal x, HexaVal xct, HexaVal t,
+                                HexaVal cin, HexaVal k, HexaVal dil) {
+    return hexa_forge_dispatch_im2col_t(x, xct, t, cin, k, dil);
+}
+
+HexaVal hexa_forge_dispatch_col2im(HexaVal dxc_v, HexaVal dx_v, HexaVal t_v,
+                                   HexaVal cin_v, HexaVal k_v, HexaVal dil_v) {
+    int64_t dxc_id= hexa_as_num(dxc_v);
+    int64_t dx_id = hexa_as_num(dx_v);
+    int64_t T     = hexa_as_num(t_v);
+    int64_t Cin   = hexa_as_num(cin_v);
+    int64_t K     = hexa_as_num(k_v);
+    int64_t dil   = hexa_as_num(dil_v);
+    if (T <= 0 || Cin <= 0 || K <= 0 || dil <= 0) return hexa_int(-1);
+    if (dxc_id < 0 || dxc_id >= _hx_farr_count)     return hexa_int(-1);
+    if (dx_id < 0 || dx_id >= _hx_farr_count)       return hexa_int(-1);
+    int64_t Kdim = Cin * K;
+    if (_hx_farr_table[dx_id].len < T * Cin)        return hexa_int(-1);
+#ifdef HEXA_CUDA
+    extern int _hx_cuda_farr_col2im_gpu(int64_t, int64_t, int64_t,
+                                        int64_t, int64_t, int64_t);
+    int grc = _hx_cuda_farr_col2im_gpu(dxc_id, dx_id, T, Cin, K, dil);
+    if (grc == 0) return hexa_int(0);
+#endif
+    {
+        double* DXC = _hx_farr_table[dxc_id].buf;
+        double* DX  = _hx_farr_table[dx_id].buf;
+        /* transpose-gather: one output dX[p,ci] sums its K dilated taps
+         * (byte-eq to the host scatter order; deterministic). */
+        for (int64_t p = 0; p < T; p++)
+            for (int64_t ci = 0; ci < Cin; ci++) {
+                double acc = 0.0;
+                for (int64_t k = 0; k < K; k++) {
+                    int64_t t = p + dil * (K - 1 - k);
+                    if (t < T) acc += DXC[t * Kdim + (ci * K + k)];
+                }
+                DX[p * Cin + ci] = acc;
+            }
+    }
+    return hexa_int(0);
+}
+HexaVal forge_dispatch_col2im(HexaVal dxc, HexaVal dx, HexaVal t,
+                              HexaVal cin, HexaVal k, HexaVal dil) {
+    return hexa_forge_dispatch_col2im(dxc, dx, t, cin, k, dil);
+}
+
+HexaVal hexa_forge_dispatch_adamw(HexaVal w_v, HexaVal g_v, HexaVal m_v,
+                                  HexaVal v_v, HexaVal n_v, HexaVal lr_v,
+                                  HexaVal b1_v, HexaVal b2_v, HexaVal eps_v,
+                                  HexaVal wd_v, HexaVal t_v) {
+    int64_t w_id = hexa_as_num(w_v);
+    int64_t g_id = hexa_as_num(g_v);
+    int64_t m_id = hexa_as_num(m_v);
+    int64_t v_id = hexa_as_num(v_v);
+    int64_t n    = hexa_as_num(n_v);
+    double  lr   = __hx_to_double(lr_v);
+    double  b1   = __hx_to_double(b1_v);
+    double  b2   = __hx_to_double(b2_v);
+    double  eps  = __hx_to_double(eps_v);
+    double  wd   = __hx_to_double(wd_v);
+    int64_t step = hexa_as_num(t_v);
+    if (n <= 0 || step < 1) return hexa_int(-1);
+    if (w_id < 0 || g_id < 0 || m_id < 0 || v_id < 0) return hexa_int(-1);
+#ifdef HEXA_CUDA
+    extern int _hx_cuda_farr_adamw_step_inplace_gpu(int64_t, int64_t, int64_t,
+                                                    int64_t, int64_t, double,
+                                                    double, double, double,
+                                                    double, int64_t);
+    int grc = _hx_cuda_farr_adamw_step_inplace_gpu(w_id, m_id, v_id, g_id, n,
+                                                   lr, b1, b2, eps, wd, step);
+    if (grc == 0) return hexa_int(0);
+    /* GPU adam failed — return -1 so the .hexa caller runs the host
+     * adamw_step (byte-eq). Never silently wrong. */
+#endif
+    return hexa_int(-1);
+}
+HexaVal forge_dispatch_adamw(HexaVal w, HexaVal g, HexaVal m, HexaVal v,
+                             HexaVal n, HexaVal lr, HexaVal b1, HexaVal b2,
+                             HexaVal eps, HexaVal wd, HexaVal t) {
+    return hexa_forge_dispatch_adamw(w, g, m, v, n, lr, b1, b2, eps, wd, t);
+}

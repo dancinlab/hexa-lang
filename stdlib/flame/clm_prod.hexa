@@ -43,10 +43,22 @@ use "stdlib/flame/optim_lib"
 // exactly: p = t − dil·(K−1−k); rows below p<0 are zero (left causal pad). On a
 // CUDA host the matmul rides cuBLAS; on CPU it is the identical farr_matmul, so
 // the routed forward is byte-eq to the host baseline (F-CLM-CONV-GPU-EQ #2352).
-fn conv1d_via_forge(x: int, w: int, b: int, y_out: int,
-                    T: int, Cin: int, Cout: int, K: int, dil: int) {
+// ── LEVER (a): device-resident im2col / col2im helpers (forge device-feed) ──
+// Env CLM_PROD_DEVFEED gates the device builtins (forge_dispatch_im2col /
+// _im2col_t / _col2im), which engage ONLY in the self-host-rebuilt pod binary
+// (the prebuilt mac binary lacks them; the env gate keeps `hexa run` from link-
+// referencing them). On CUDA the gather/scatter run on-device and KEEP x_col
+// FARR_DEVICE so the follow-up forge GEMM reads it in place — NO host roundtrip
+// (the dominant Lane-G util peg). rc 0 = done on-device; else the host gather/
+// scatter below runs (byte-eq oracle, clm_conv_devfeed.hexa F-CLM-DEVFEED-*).
+fn _clmp_im2col(x: int, xcol: int, T: int, Cin: int, K: int, dil: int) {
+    if env("CLM_PROD_DEVFEED") != "" {
+        let rc = forge_dispatch_im2col(x, xcol, T, Cin, K, dil)
+        if rc == 0 { return }
+    }
     let Kdim = Cin * K
-    let xcol = t_zeros(T * Kdim)
+    let mut iz = 0
+    while iz < T * Kdim { t_set(xcol, iz, 0.0); iz = iz + 1 }
     let mut t = 0
     while t < T {
         let mut ci = 0
@@ -61,6 +73,63 @@ fn conv1d_via_forge(x: int, w: int, b: int, y_out: int,
         }
         t = t + 1
     }
+}
+fn _clmp_im2col_t(x: int, xcolT: int, T: int, Cin: int, K: int, dil: int) {
+    if env("CLM_PROD_DEVFEED") != "" {
+        let rc = forge_dispatch_im2col_t(x, xcolT, T, Cin, K, dil)
+        if rc == 0 { return }
+    }
+    let Kdim = Cin * K
+    let mut iz = 0
+    while iz < Kdim * T { t_set(xcolT, iz, 0.0); iz = iz + 1 }
+    let mut t = 0
+    while t < T {
+        let mut ci = 0
+        while ci < Cin {
+            let mut k = 0
+            while k < K {
+                let p = t - dil * (K - 1 - k)
+                if p >= 0 { let j = ci * K + k; t_set(xcolT, j * T + t, t_get(x, p * Cin + ci)) }
+                k = k + 1
+            }
+            ci = ci + 1
+        }
+        t = t + 1
+    }
+}
+fn _clmp_col2im(dXcol: int, dX_out: int, T: int, Cin: int, K: int, dil: int) {
+    if env("CLM_PROD_DEVFEED") != "" {
+        let rc = forge_dispatch_col2im(dXcol, dX_out, T, Cin, K, dil)
+        if rc == 0 { return }
+    }
+    // host transpose-gather scatter (byte-eq to the device kernel; each dX[p,ci]
+    // sums its K dilated taps once — deterministic, no double-count).
+    let Kdim = Cin * K
+    let mut iz = 0
+    while iz < T * Cin { t_set(dX_out, iz, 0.0); iz = iz + 1 }
+    let mut p = 0
+    while p < T {
+        let mut ci = 0
+        while ci < Cin {
+            let mut acc = 0.0
+            let mut k = 0
+            while k < K {
+                let tt = p + dil * (K - 1 - k)
+                if tt < T { let j = ci * K + k; acc = acc + t_get(dXcol, tt * Kdim + j) }
+                k = k + 1
+            }
+            t_set(dX_out, p * Cin + ci, acc)
+            ci = ci + 1
+        }
+        p = p + 1
+    }
+}
+
+fn conv1d_via_forge(x: int, w: int, b: int, y_out: int,
+                    T: int, Cin: int, Cout: int, K: int, dil: int) {
+    let Kdim = Cin * K
+    let xcol = t_zeros(T * Kdim)
+    _clmp_im2col(x, xcol, T, Cin, K, dil)
     let Wt = t_zeros(Kdim * Cout)
     let mut co = 0
     while co < Cout {
@@ -90,25 +159,10 @@ fn conv1d_bwd_via_forge(x: int, w: int, dy: int,
                         dW_out: int, dX_out: int, db_out: int,
                         T: int, Cin: int, Cout: int, K: int, dil: int) {
     let Kdim = Cin * K
-    // im2col: xcolT[j, t] = (p>=0) ? x[p, ci] : 0, j = ci*K+k, p = t - dil*(K-1-k).
+    // im2col_t: xcolT[j, t] = (p>=0) ? x[p, ci] : 0, j = ci*K+k, p = t - dil*(K-1-k).
+    // LEVER (a): device-resident under CLM_PROD_DEVFEED (no host roundtrip).
     let xcolT = t_zeros(Kdim * T)
-    let mut t = 0
-    while t < T {
-        let mut ci = 0
-        while ci < Cin {
-            let mut k = 0
-            while k < K {
-                let p = t - dil * (K - 1 - k)
-                if p >= 0 {
-                    let j = ci * K + k
-                    t_set(xcolT, j * T + t, t_get(x, p * Cin + ci))
-                }
-                k = k + 1
-            }
-            ci = ci + 1
-        }
-        t = t + 1
-    }
+    _clmp_im2col_t(x, xcolT, T, Cin, K, dil)
     // dW: dW_flat[Kdim, Cout] = xcolT[Kdim,T] @ dy[T,Cout] (forge GEMM)
     let dW_flat = forge_dispatch_matmul(xcolT, Kdim, T, dy, Cout)
     let mut co = 0
@@ -121,30 +175,9 @@ fn conv1d_bwd_via_forge(x: int, w: int, dy: int,
         co = co + 1
     }
     // dX: dXcol[T, Kdim] = dy[T,Cout] @ Wflat[Cout,Kdim] (forge GEMM), then col2im.
+    // LEVER (a): device-resident col2im scatter under CLM_PROD_DEVFEED.
     let dXcol = forge_dispatch_matmul(dy, T, Cout, w, Kdim)
-    let mut iz = 0
-    while iz < T * Cin {
-        t_set(dX_out, iz, 0.0)
-        iz = iz + 1
-    }
-    let mut t2b = 0
-    while t2b < T {
-        let mut ci2 = 0
-        while ci2 < Cin {
-            let mut k2 = 0
-            while k2 < K {
-                let p = t2b - dil * (K - 1 - k2)
-                if p >= 0 {
-                    let j = ci2 * K + k2
-                    let xidx = p * Cin + ci2
-                    t_set(dX_out, xidx, t_get(dX_out, xidx) + t_get(dXcol, t2b * Kdim + j))
-                }
-                k2 = k2 + 1
-            }
-            ci2 = ci2 + 1
-        }
-        t2b = t2b + 1
-    }
+    _clmp_col2im(dXcol, dX_out, T, Cin, K, dil)
     // db: db_out[co] = Σ_t dy[t,co] (host reduction)
     let mut cb = 0
     while cb < Cout {
@@ -464,6 +497,17 @@ fn clm_prod_bwd(dlogits: int, tokens: int,
 }
 
 fn _adam(W: int, gW: int, m: int, v: int, n: int, t: int) {
+    // LEVER (a): on-device AdamW under CLM_PROD_DEVFEED. forge_dispatch_adamw
+    // routes to _hx_cuda_farr_adamw_step_inplace_gpu (byte-eq to the host oracle,
+    // W/m/v device-resident — the optimizer step stops being a host scalar loop
+    // between micro-GEMMs). rc 0 = applied on-device; -1 (no-CUDA / GPU fail) →
+    // the proven host opt_adamw_step (byte-eq fallback). Engages only in the
+    // self-host-rebuilt pod binary (env-gated so the prebuilt mac binary, which
+    // lacks the builtin, never link-references it under `hexa run`).
+    if env("CLM_PROD_DEVFEED") != "" {
+        let rc = forge_dispatch_adamw(W, gW, m, v, n, 0.05, 0.9, 0.999, 0.00000001, 0.0, t)
+        if rc == 0 { return }
+    }
     opt_adamw_step(W, gW, m, v, n, 0.05, 0.9, 0.999, 0.00000001, 0.0, t)
 }
 
