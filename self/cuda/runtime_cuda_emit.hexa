@@ -3996,9 +3996,14 @@ fn main() {
     let argv = real_args()
     let out_path = if argv.len() >= 1 { argv[0] } else { "runtime_cuda.c" }
     let c_text = emit_runtime_cuda_c()
-    let cmd = "cat > \"" + out_path + "\" <<'__HEXA_EMIT_EOF__'\n" +
-              c_text + "__HEXA_EMIT_EOF__"
-    let _ = exec(cmd)
+    // Write the emitted C DIRECTLY via the write_file builtin (rt_write_file).
+    // The prior `cat > out <<'EOF' ... EOF` heredoc was assembled into a single
+    // exec() command string ~100KB+; the exec arg buffer truncates/drops it, so
+    // the file was silently never written (Lane-G util-RED root cause #3b — the
+    // on-demand emit ALWAYS failed, masked by the HEXA_CUDA_LINK fork-bomb
+    // recursion). write_file streams content straight to the fd: no shell, no
+    // ARG_MAX limit. Numeric output identical (same c_text) — byte-eq preserved.
+    write_file(out_path, c_text)
     let exists_check = exec("[ -f \"" + out_path + "\" ] && echo y || echo n").trim()
     if exists_check != "y" {
         println("[runtime_cuda_emit] FATAL: failed to write " + out_path)
