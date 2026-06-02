@@ -1287,7 +1287,16 @@ fn cuda_link_decision(self_dir, c_file) {
     let cuda_c = self_dir + "/cuda/runtime_cuda.c"
     if !file_exists(cuda_c) {
         println("  [cuda] emitting runtime_cuda.c (seed absent)")
-        exec("hexa run '" + self_dir + "/cuda/runtime_cuda_emit.hexa' '" + cuda_c + "' 2>&1 | tail -2")
+        // CRITICAL: the nested `hexa run` that emits runtime_cuda.c must NOT
+        // re-enter the CUDA link path. Under HEXA_CUDA_LINK=1 (a forced-on
+        // clm_prod build), that env is inherited by the child `hexa run`, which
+        // builds runtime_cuda_emit.hexa → cuda_link_decision() → sees
+        // runtime_cuda.c still absent (this emit hasn't finished) → emits AGAIN
+        // → infinite fork-bomb recursion (1800+ procs, never produces the .c).
+        // HEXA_NO_CUDA=1 hits the force_off short-circuit at the top of this fn,
+        // so the emit child links CPU-only (it is pure C-string generation —
+        // needs no GPU). HEXA_CUDA_LINK is also cleared for belt-and-suspenders.
+        exec("HEXA_NO_CUDA=1 HEXA_CUDA_LINK= hexa run '" + self_dir + "/cuda/runtime_cuda_emit.hexa' '" + cuda_c + "' 2>&1 | tail -2")
     }
     if !file_exists(cuda_c) {
         println("  [cuda] runtime_cuda.c could not be produced — building CPU-only.")
