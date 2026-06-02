@@ -1,0 +1,36 @@
+// m2_fn_body_aliasing.hexa — CLASS: function-body aliasing via a shared
+// module-global array cleared with `.truncate(0)`/reassignment.
+// History: _lr_ctx_clear reset module-global arrays in place; native codegen
+// stored the array BY REFERENCE so every saved snapshot aliased ONE buffer —
+// the truncate+rebuild for the next item overwrote all prior snapshots with
+// the LAST one (#2509, 953c8824b). The C-transpile path value-copied (correct);
+// native must now match.
+//
+// PRIMITIVE: snapshot a module-global array into a struct, CLEAR the global,
+// rebuild it, snapshot again. The FIRST snapshot's data must SURVIVE the
+// clear+rebuild (no aliasing). exit 0 = both snapshots independent.
+
+struct Snap { rows: [i64] }
+
+let mut buf: [i64] = []
+
+fn snapshot() -> Snap { return Snap { rows: buf } }
+fn ctx_clear() { buf = [] }                 // the clear-in-place analogue
+fn build(a: i64, b: i64) { buf.push(a); buf.push(b) }
+
+let mut saved: [Snap] = []
+build(1, 2)
+saved.push(snapshot())
+ctx_clear()
+build(3, 4)
+saved.push(snapshot())
+ctx_clear()
+
+let s0 = saved[0]
+let s1 = saved[1]
+if s0.rows[0] != 1 { exit(21) }   // first snapshot must NOT be overwritten
+if s0.rows[1] != 2 { exit(22) }   //   by the last build (the aliasing bug)
+if s1.rows[0] != 3 { exit(23) }
+if s1.rows[1] != 4 { exit(24) }
+
+println("ALIAS-OK")

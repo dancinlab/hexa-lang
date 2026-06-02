@@ -1,0 +1,28 @@
+// m7_struct_ctor_fields.hexa — CLASS: struct constructor + field reads.
+// History: the struct-ctor / field-read codegen path is adjacent to the
+// `.truncate(0)` aliasing miscompile (it returns a struct holding arrays by
+// reference; cf. c3_struct_ctor in the program-level corpus). A wrong field
+// offset or a mis-ordered ctor surfaces as a wrong runtime value.
+//
+// PRIMITIVE: construct a struct with mixed i64 / string fields, read each
+// field back, and exercise a field used in arithmetic. exit 0 = ctor layout
+// and field-offset loads are correct.
+
+struct Pt { x: i64, y: i64, tag: string }
+
+fn mk(a: i64, b: i64) -> Pt { return Pt { x: a, y: b, tag: "pt" } }
+
+let p = mk(3, 4)
+if p.x != 3 { exit(41) }
+if p.y != 4 { exit(42) }
+if p.tag != "pt" { exit(43) }
+if (p.x * p.x + p.y * p.y) != 25 { exit(44) }   // fields in arithmetic
+
+// a second struct to ensure ctor layout is per-instance, not aliased
+let q = mk(5, 12)
+if q.x != 5 { exit(45) }
+if q.y != 12 { exit(46) }
+if (q.x * q.x + q.y * q.y) != 169 { exit(47) }
+if p.x != 3 { exit(48) }   // p must be untouched by q's construction
+
+println("STRUCT-OK")

@@ -1,0 +1,23 @@
+// m3_string_compare.hexa — CLASS: _ends_with / string-compare cascade.
+// History: native gen2 mis-evaluated `_ends_with` and the string-compare
+// cascade (downstream of the hex-literal fix). The compiler's own code does
+// `"...".ends_with("@PAGE")` on emitted asm-operand strings, so a regression
+// here corrupts relocation/operand classification.
+//
+// PRIMITIVE: ends_with / starts_with / == on the exact KIND of strings the
+// compiler classifies (asm operands, @PAGE-suffixed labels). exit 0 = every
+// comparison evaluated correctly.
+
+fn ew(h: string, n: string) -> bool { return h.ends_with(n) }
+
+if "[sp, #0]".ends_with("@PAGE")     { exit(71) }  // must be FALSE
+if !"Lstr_42@PAGE".ends_with("@PAGE") { exit(72) } // must be TRUE
+if !"add x0, x1, x2".starts_with("add ") { exit(73) }
+if "ldr x0".starts_with("str ")      { exit(74) }
+if !ew("foo.bar", ".bar")            { exit(75) }
+if ew("foo.bar", ".baz")             { exit(76) }
+if ("abc" == "abc") == false         { exit(77) }
+if ("abc" == "abd") == true          { exit(78) }
+if !"".ends_with("")                 { exit(79) }  // empty-needle edge
+
+println("STRCMP-OK")
