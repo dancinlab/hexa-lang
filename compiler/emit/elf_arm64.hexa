@@ -1,0 +1,448 @@
+// compiler/emit/elf_arm64.hexa
+//
+// SELFHOST-NEXT — in-tree ELF AArch64 relocatable-object serializer.
+//
+// Continuation of PR #2537 (linux-arm64 cross-EMIT). #2537 produced
+// correct ELF AArch64 *assembly* that the host `aarch64-linux-gnu-as`
+// cross-assembled into a `.o`. This module removes that host-`as`
+// dependency: it serializes the ELF AArch64 `.o` bytes NATIVELY,
+// directly from the post-codegen `LModule`.
+//
+// Design — keyed off `compiler/emit/elf_x86_64.hexa`'s ELF model
+// (the cleanest in-tree ELF reference: STN_UNDEF index 0, `.rela.text`,
+// `.symtab`/`.strtab`/`.shstrtab`, Elf64_Rela), but:
+//   * e_machine            = ELF_EM_AARCH64 (0xb7)        (was 0x3e)
+//   * text bytes           = 4-byte LE words from
+//                            `encode_arm64_insn` (reused from
+//                            `compiler/emit/macho_arm64.hexa`) — NOT the
+//                            variable-length x86 encoder.
+//   * relocations          = R_AARCH64_* (CALL26 / ADR_PREL_PG_HI21 /
+//                            ADD_ABS_LO12_NC / ABS64) instead of
+//                            R_X86_64_*.
+//   * symbol names         = bare ELF identifiers (no Mach-O `_`
+//                            prefix) — the linux-arm64 ABI uses the
+//                            source name verbatim.
+//
+// SCOPE (smallest increment to a NATIVE linux-arm64 `.o`):
+//   * exit(42): `main` returning 42 → ELF AArch64 `.o`, readelf -h/-r
+//     clean, links + runs rc 42 under qemu.
+//   * Intra-fn branches (B/BL/CBZ/CBNZ/B.cond) resolved at pack time
+//     (PC-relative imm26/imm19), mirroring macho `_pack_fn`.
+//   * Cross-fn / extern BL → R_AARCH64_CALL26 reloc record against an
+//     (undef or defined) symbol, with intra-module pre-patch.
+// Out of scope this increment (precise gap recorded in the domain log):
+//   * ADRP/ADD GOT/PAGE reloc pairs for `.rodata`/`.data` symbol
+//     references (R_AARCH64_ADR_PREL_PG_HI21 + ADD_ABS_LO12_NC).
+//     The reloc-type constants + the serializer's Elf64_Rela path
+//     handle them; the codegen→reloc *mapping* for ADRP/ADD pairs is
+//     the next increment.
+//   * `.rodata`/`.data`/`.bss` sections (currently `.text`-only, like
+//     the x86 native obj path's cycle-29 baseline).
+
+// ─────────────────────────────────────────────────────────────────
+// AArch64 ELF reloc-type constants (binutils `elf/aarch64.h`)
+// ─────────────────────────────────────────────────────────────────
+//
+// `ELF_R_AARCH64_*` prefix to avoid collision with the `ELF_R_X86_64_*`
+// constants in elf_x86_64.hexa (whole-program compile shares scope).
+
+let ELF_R_AARCH64_NONE             = 0
+let ELF_R_AARCH64_ABS64            = 257   // S + A (64-bit absolute)
+let ELF_R_AARCH64_ABS32            = 258
+let ELF_R_AARCH64_ADR_PREL_PG_HI21 = 275   // ADRP: Page(S+A) - Page(P)
+let ELF_R_AARCH64_ADD_ABS_LO12_NC  = 277   // ADD:  (S+A) & 0xfff
+let ELF_R_AARCH64_CALL26           = 283   // BL:   (S+A-P) >> 2, imm26
+let ELF_R_AARCH64_JUMP26           = 282   // B:    (S+A-P) >> 2, imm26
+
+// ─────────────────────────────────────────────────────────────────
+// Object model — reuses `ElfRel` / `ElfSym` from elf_x86_64.hexa
+// (identical Elf64_Rela / Elf64_Sym shapes; only the `kind` values
+// and `e_machine` differ between x86_64 and AArch64).
+// ─────────────────────────────────────────────────────────────────
+
+struct ElfArm64Obj {
+    text:    [u8],
+    relocs:  [ElfRel],
+    symbols: [ElfSym],
+    strtab:  [u8],
+}
+
+// ─────────────────────────────────────────────────────────────────
+// serialize_elf_arm64 — ELF AArch64 relocatable `.o` byte stream.
+// ─────────────────────────────────────────────────────────────────
+//
+// Byte-for-byte the same section layout as `serialize_elf_x86_64`
+// (header → .text → .rela.text → .symtab → .strtab → .shstrtab →
+// section header table). The ONLY wire deltas vs the x86_64 serializer:
+//   * e_machine = ELF_EM_AARCH64
+//   * the `.text` section is a sequence of 4-byte instruction words
+//     (the caller's `obj.text` is already byte-packed LE by pack_lir).
+//   * the reloc `kind` values written into r_info are R_AARCH64_*.
+// Everything structural (the `_ew_*` writers, STN_UNDEF index-0 sym,
+// Elf64_Rela r_info = (sym_idx_1based << 32) | kind, sh_link/sh_info)
+// is shared, so this stays a faithful sibling of the proven x86 path.
+pub fn serialize_elf_arm64(obj: ElfArm64Obj) -> [Int] {
+    let out: [Int] = []
+    let text_size = len(obj.text)
+    let nrelocs = len(obj.relocs)
+
+    // ELF symtab: index 0 is STN_UNDEF (all zeros); real syms at 1+.
+    // reloc.sym_idx is incremented by 1 when written into r_info.
+    let nsyms_real = len(obj.symbols)
+    let symtab_size = 24 * (nsyms_real + 1)
+    let strsize = len(obj.strtab)
+
+    let shstrtab: [Int] = []
+    shstrtab.push(0)
+    let off_text     = _ew_str(shstrtab, ".text")
+    let off_rela_text = if nrelocs > 0 { _ew_str(shstrtab, ".rela.text") } else { 0 }
+    let off_symtab   = _ew_str(shstrtab, ".symtab")
+    let off_strtab   = _ew_str(shstrtab, ".strtab")
+    let off_shstrtab = _ew_str(shstrtab, ".shstrtab")
+    let shstrsize = len(shstrtab)
+
+    let elf_header_size = 64
+    let shdr_size = 64
+    let nshdrs = if nrelocs > 0 { 6 } else { 5 }
+    let shstrndx = if nrelocs > 0 { 5 } else { 4 }
+    let symtab_sec = if nrelocs > 0 { 3 } else { 2 }
+    let strtab_sec = if nrelocs > 0 { 4 } else { 3 }
+
+    let text_off     = elf_header_size
+    // arm64 instructions are 4-byte; the stream is already a multiple of
+    // 4. Pad to 8 anyway so `.rela.text` starts on an 8-byte boundary
+    // (Elf64_Rela is 8-aligned), matching the x86 serializer.
+    let text_pad     = (8 - (text_size & 7)) & 7
+    let rela_size    = 24 * nrelocs
+    let rela_off     = text_off + text_size + text_pad
+    let symtab_off   = rela_off + rela_size
+    let strtab_off   = symtab_off + symtab_size
+    let shstrtab_off = strtab_off + strsize
+    let pre_shdr     = shstrtab_off + shstrsize
+    let shdr_pad     = (8 - (pre_shdr & 7)) & 7
+    let shdr_off     = pre_shdr + shdr_pad
+
+    // ── ELF64 header ──
+    out.push(ELF_EI_MAG0); out.push(ELF_EI_MAG1)
+    out.push(ELF_EI_MAG2); out.push(ELF_EI_MAG3)
+    out.push(ELF_ELFCLASS64)
+    out.push(ELF_ELFDATA2LSB)
+    out.push(ELF_EV_CURRENT)
+    out.push(ELF_ELFOSABI_NONE)
+    _ew_zero(out, 8)                       // EI_ABIVERSION + 7 pad
+    _ew_u16(out, ELF_ET_REL)
+    _ew_u16(out, ELF_EM_AARCH64)           // ← the AArch64 delta
+    _ew_u32(out, ELF_EV_CURRENT)
+    _ew_u64(out, 0)                         // e_entry
+    _ew_u64(out, 0)                         // e_phoff
+    _ew_u64(out, shdr_off)                  // e_shoff
+    _ew_u32(out, 0)                         // e_flags
+    _ew_u16(out, elf_header_size)           // e_ehsize
+    _ew_u16(out, 0)                         // e_phentsize
+    _ew_u16(out, 0)                         // e_phnum
+    _ew_u16(out, shdr_size)                 // e_shentsize
+    _ew_u16(out, nshdrs)                    // e_shnum
+    _ew_u16(out, shstrndx)                  // e_shstrndx
+
+    // ── .text (4-byte LE instruction words, pre-packed by pack_lir) ──
+    let mut ti = 0
+    while ti < text_size { out.push(obj.text[ti] & 0xff); ti = ti + 1 }
+    _ew_zero(out, text_pad)
+
+    // ── .rela.text ──
+    // Elf64_Rela = r_offset(u64) r_info(u64) r_addend(i64). sym index in
+    // r_info is the high 32 bits; reloc kind the low 32. +1 because ELF
+    // symtab index 0 is STN_UNDEF.
+    let mut ri = 0
+    while ri < nrelocs {
+        let r = obj.relocs[ri]
+        _ew_u64(out, r.offset)
+        let sym_index_1based = r.sym_idx + 1
+        _ew_u64(out, (sym_index_1based << 32) | (r.kind & 0xffffffff))
+        _ew_u64(out, r.addend)
+        ri = ri + 1
+    }
+
+    // ── .symtab ──
+    // Index 0: STN_UNDEF (all zeros, 24 B).
+    _ew_zero(out, 24)
+    let mut si = 0
+    while si < nsyms_real {
+        let s = obj.symbols[si]
+        _ew_u32(out, s.name_offset)
+        let st_info = ((s.bind & 0xf) << 4) | (s.type_ & 0xf)
+        out.push(st_info & 0xff)
+        out.push(0)                          // st_other
+        _ew_u16(out, s.section)
+        _ew_u64(out, s.value)
+        _ew_u64(out, s.size)
+        si = si + 1
+    }
+
+    // ── .strtab ──
+    let mut ki = 0
+    while ki < strsize { out.push(obj.strtab[ki] & 0xff); ki = ki + 1 }
+
+    // ── .shstrtab ──
+    let mut hi = 0
+    while hi < shstrsize { out.push(shstrtab[hi] & 0xff); hi = hi + 1 }
+    _ew_zero(out, shdr_pad)
+
+    // ── Section header table ──
+    // [0] SHT_NULL.
+    _ew_zero(out, 64)
+    // [1] .text.
+    _ew_u32(out, off_text)
+    _ew_u32(out, ELF_SHT_PROGBITS)
+    _ew_u64(out, ELF_SHF_ALLOC | ELF_SHF_EXECINSTR)
+    _ew_u64(out, 0)
+    _ew_u64(out, text_off)
+    _ew_u64(out, text_size)
+    _ew_u32(out, 0); _ew_u32(out, 0)
+    // arm64 .text alignment = 4 (one instruction word).
+    _ew_u64(out, 4); _ew_u64(out, 0)
+    // [2] .rela.text (only when relocs exist).
+    if nrelocs > 0 {
+        _ew_u32(out, off_rela_text)
+        _ew_u32(out, ELF_SHT_RELA)
+        _ew_u64(out, 0); _ew_u64(out, 0)
+        _ew_u64(out, rela_off)
+        _ew_u64(out, rela_size)
+        _ew_u32(out, symtab_sec)             // sh_link → .symtab
+        _ew_u32(out, 1)                       // sh_info → .text section idx
+        _ew_u64(out, 8); _ew_u64(out, 24)
+    }
+    // [symtab_sec] .symtab.
+    _ew_u32(out, off_symtab)
+    _ew_u32(out, ELF_SHT_SYMTAB)
+    _ew_u64(out, 0); _ew_u64(out, 0)
+    _ew_u64(out, symtab_off)
+    _ew_u64(out, symtab_size)
+    _ew_u32(out, strtab_sec)                  // sh_link → .strtab
+    _ew_u32(out, 1)                           // sh_info = 1 past last LOCAL
+    _ew_u64(out, 8); _ew_u64(out, 24)
+    // [strtab_sec] .strtab.
+    _ew_u32(out, off_strtab)
+    _ew_u32(out, ELF_SHT_STRTAB)
+    _ew_u64(out, 0); _ew_u64(out, 0)
+    _ew_u64(out, strtab_off)
+    _ew_u64(out, strsize)
+    _ew_u32(out, 0); _ew_u32(out, 0)
+    _ew_u64(out, 1); _ew_u64(out, 0)
+    // [shstrndx] .shstrtab.
+    _ew_u32(out, off_shstrtab)
+    _ew_u32(out, ELF_SHT_STRTAB)
+    _ew_u64(out, 0); _ew_u64(out, 0)
+    _ew_u64(out, shstrtab_off)
+    _ew_u64(out, shstrsize)
+    _ew_u32(out, 0); _ew_u32(out, 0)
+    _ew_u64(out, 1); _ew_u64(out, 0)
+
+    return out
+}
+
+// ─────────────────────────────────────────────────────────────────
+// LIR walker — `LModule` → ElfArm64Obj  (mirrors macho_arm64 pack_lir)
+// ─────────────────────────────────────────────────────────────────
+//
+// `pack_lir_arm64_elf(lm)` walks `lm.funcs`, encodes each `LInstr` via
+// the SHARED `encode_arm64_insn` (4-byte word), patches intra-fn
+// branches, and emits R_AARCH64_CALL26 relocs for unresolved BL
+// targets. Symbol names are BARE (ELF) — no Mach-O `_` mangling.
+//
+// Reuses these helpers already defined in macho_arm64.hexa:
+//   encode_arm64_insn / _lir_op_uppercase / _lir_operand_str /
+//   _push_word_le / _patch_word_le
+// and from elf_x86_64.hexa: _ew_str (strtab byte writer).
+
+fn _pack_fn_arm64_elf(out_text: [Int],
+                      pending_offsets: [Int], pending_names: [string],
+                      f: LFunc) {
+    let label_names:    [string] = []
+    let label_offsets:  [Int]    = []
+    let unresolved_brs: [Int]    = []
+    let unresolved_to:  [string] = []
+
+    let n = len(f.instrs)
+    let mut i = 0
+    while i < n {
+        let ins = f.instrs[i]
+        if ins.op == "label" {
+            let mut name = ins.comment
+            if len(name) == 0 && len(ins.args) > 0 { name = ins.args[0].label }
+            label_names.push(name)
+            label_offsets.push(len(out_text))
+            i = i + 1
+            continue
+        }
+
+        let mut ops: [string] = []
+        let na = len(ins.args)
+        let mut k = 0
+        while k < na {
+            ops.push(_lir_operand_str(ins.args[k]))
+            k = k + 1
+        }
+
+        let up = _lir_op_uppercase(ins.op)
+        let word = encode_arm64_insn(up, ops)
+        let cur_off = len(out_text)
+
+        // B / BL with a label arg.
+        if (up == "B" || up == "BL") && na == 1 && ins.args[0].kind == "label" {
+            _push_word_le(out_text, word)
+            unresolved_brs.push(cur_off)
+            unresolved_to.push(ins.args[0].label)
+            i = i + 1
+            continue
+        }
+        // CBZ / CBNZ Xt, label — label is args[1].
+        if (up == "CBZ" || up == "CBNZ") && na == 2 && ins.args[1].kind == "label" {
+            _push_word_le(out_text, word)
+            unresolved_brs.push(cur_off)
+            unresolved_to.push(ins.args[1].label)
+            i = i + 1
+            continue
+        }
+        // B.cond label.
+        if len(up) > 2 && up.substring(0, 2) == "B." && na == 1 && ins.args[0].kind == "label" {
+            _push_word_le(out_text, word)
+            unresolved_brs.push(cur_off)
+            unresolved_to.push(ins.args[0].label)
+            i = i + 1
+            continue
+        }
+
+        _push_word_le(out_text, word)
+        i = i + 1
+    }
+
+    // Resolve intra-fn branches; bubble cross-fn / extern targets.
+    // imm26 (B/BL) = bits [25:0] of word = delta/4. imm19 (CBZ/CBNZ/
+    // B.cond) = bits [23:5] = delta/4.
+    let nb = len(unresolved_brs)
+    let mut bi = 0
+    while bi < nb {
+        let off    = unresolved_brs[bi]
+        let target = unresolved_to[bi]
+        let toff   = _elf_lookup_label(label_names, label_offsets, target)
+        if toff < 0 {
+            pending_offsets.push(off)
+            pending_names.push(target)
+            bi = bi + 1
+            continue
+        }
+        let delta = (toff - off) / 4
+        let w0 = out_text[off + 0]
+        let w1 = out_text[off + 1]
+        let w2 = out_text[off + 2]
+        let w3 = out_text[off + 3]
+        let cur = w0 | (w1 << 8) | (w2 << 16) | (w3 << 24)
+        let top = (cur >> 26) & 0x3f
+        if top == 0x05 || top == 0x25 {
+            // B / BL → imm26.
+            let patched = (cur & 0xfc000000) | (delta & 0x03ffffff)
+            _patch_word_le(out_text, off, patched)
+        } else {
+            // CBZ / CBNZ / B.cond → imm19 at bits [23:5].
+            let imm19 = delta & 0x7ffff
+            let patched = (cur & 0xff00001f) | (imm19 << 5)
+            _patch_word_le(out_text, off, patched)
+        }
+        bi = bi + 1
+    }
+}
+
+fn _elf_lookup_label(names: [string], offsets: [Int], target: string) -> Int {
+    let n = len(names)
+    let mut i = 0
+    while i < n {
+        if names[i] == target { return offsets[i] }
+        i = i + 1
+    }
+    return -1
+}
+
+// Public entry — LModule → ElfArm64Obj (text + symbols + strtab +
+// relocs). Symbol names are bare ELF identifiers.
+pub fn pack_lir_arm64_elf(lm: LModule) -> ElfArm64Obj {
+    let obj = ElfArm64Obj {
+        text:    [],
+        relocs:  [],
+        symbols: [],
+        strtab:  [],
+    }
+    // ELF strtab convention: index 0 is the empty string (NUL).
+    obj.strtab.push(0)
+
+    let pending_offsets: [Int]    = []
+    let pending_names:   [string] = []
+
+    // Pass 1 — walk funcs into text + collect one defined fn symbol each.
+    let nf = len(lm.funcs)
+    let mut i = 0
+    while i < nf {
+        let f = lm.funcs[i]
+        let fn_start = len(obj.text)
+        let strx = _ew_str(obj.strtab, f.name)        // BARE name (ELF)
+        _pack_fn_arm64_elf(obj.text, pending_offsets, pending_names, f)
+        obj.symbols.push(ElfSym {
+            name_offset: strx,
+            section:     1,    // .text (1-based ELF section index)
+            value:       fn_start,
+            size:        len(obj.text) - fn_start,
+            bind:        1,    // STB_GLOBAL
+            type_:       2,    // STT_FUNC
+        })
+        i = i + 1
+    }
+
+    // Pass 2 — bubbled BL targets → R_AARCH64_CALL26 reloc records.
+    // For each pending BL placeholder:
+    //   1. Match the target against a defined fn symbol; if found AND
+    //      defined (section != 0), pre-patch imm26 with the PC-rel delta
+    //      so the .o is runnable even without `ld -r`.
+    //   2. Otherwise append an undef extern symbol (section=SHN_UNDEF).
+    //   3. Emit a CALL26 reloc at the BL word offset, addend 0
+    //      (AArch64 CALL26 is `(S + A - P) >> 2`; A=0 reproduces the
+    //      canonical `bl` displacement).
+    let np = len(pending_offsets)
+    let mut pi = 0
+    while pi < np {
+        let bl_off = pending_offsets[pi]
+        let name   = pending_names[pi]
+        let mut idx = _find_elf_sym_by_name(obj.symbols, obj.strtab, name)
+        if idx < 0 {
+            let strx = _ew_str(obj.strtab, name)
+            obj.symbols.push(ElfSym {
+                name_offset: strx,
+                section:     0,    // SHN_UNDEF
+                value:       0,
+                size:        0,
+                bind:        1,    // STB_GLOBAL
+                type_:       0,    // STT_NOTYPE
+            })
+            idx = len(obj.symbols) - 1
+        }
+        obj.relocs.push(ElfRel {
+            offset:  bl_off,
+            sym_idx: idx,
+            kind:    ELF_R_AARCH64_CALL26,
+            addend:  0,
+        })
+        // Intra-module pre-patch when the target is defined here.
+        let sym = obj.symbols[idx]
+        if sym.section != 0 {
+            let delta = (sym.value - bl_off) / 4
+            let w0 = obj.text[bl_off + 0]
+            let w1 = obj.text[bl_off + 1]
+            let w2 = obj.text[bl_off + 2]
+            let w3 = obj.text[bl_off + 3]
+            let cur = w0 | (w1 << 8) | (w2 << 16) | (w3 << 24)
+            let patched = (cur & 0xfc000000) | (delta & 0x03ffffff)
+            _patch_word_le(obj.text, bl_off, patched)
+        }
+        pi = pi + 1
+    }
+    return obj
+}

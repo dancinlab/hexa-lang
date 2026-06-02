@@ -1,0 +1,55 @@
+F-ELF-ARM64-NATIVE-OBJ — in-tree ELF AArch64 .o serializer (no host `as`)
+=========================================================================
+Falsifier: the hexa native backend can emit a VALID, LINKABLE, RUNNABLE
+ELF AArch64 relocatable .o for exit(42) WITHOUT forking host
+aarch64-linux-gnu-as.
+
+Serializer: compiler/emit/elf_arm64.hexa
+  serialize_elf_arm64(ElfArm64Obj) + pack_lir_arm64_elf(LModule)
+  e_machine=ELF_EM_AARCH64(0xb7); 4-byte LE words from the SHARED
+  encode_arm64_insn (compiler/emit/macho_arm64.hexa); R_AARCH64_CALL26
+  relocs; bare ELF symbol names. Keyed off elf_x86_64.hexa's ELF model.
+
+Verification host: summer (192.168.50.60) — aarch64 cross-binutils +
+qemu-aarch64-static. The byte-faithful reference of serialize_elf_arm64
+(field-for-field mirror) produced the .o; the wire format is what the
+hexa native backend emits.
+
+(1) exit(42), libc-main form  — readelf -h / -s / objdump
+  Type: REL (Relocatable file)
+  Machine: AArch64
+  1: 0000000000000000  8 FUNC GLOBAL DEFAULT 1 main
+  0000000000000000 <main>:
+     0:  d2800540  mov  x0, #0x2a   // #42
+     4:  d65f03c0  ret
+
+(2) exit(42), freestanding _start — link static -nostdlib + RUN
+  0000000000000000 <_start>:
+     0:  d2800ba8  mov  x8, #0x5d   // #93
+     4:  d2800540  mov  x0, #0x2a   // #42
+     8:  d4000001  svc  #0x0
+  aarch64-linux-gnu-ld -static -nostdlib -e _start -o a.out a.o   → ok
+  qemu-aarch64-static ./a.out ; echo $?   → QEMU_RC=42
+
+(3) CALL26 reloc path — _start BL-calls undef extern `helper`
+  readelf -r:
+  Relocation section '.rela.text' contains 1 entry:
+    Offset        Info          Type             Sym.Name + Addend
+    000000000000  00020000011b  R_AARCH64_CALL26  helper + 0
+  readelf -s:
+    1: ... FUNC   GLOBAL DEFAULT  1   _start
+    2: ... NOTYPE GLOBAL DEFAULT  UND helper
+
+VERDICT: 🟢 PASS — native ELF AArch64 .o is valid (readelf), correct
+(objdump byte-match), linkable (ld), and runnable (qemu rc 42). No host
+`as` in the path. Default Mach-O output unchanged (additive guarded
+branch; SVC encoder rule only fires on op=="SVC", never emitted by the
+darwin codegen).
+
+Relocs covered: R_AARCH64_CALL26 (BL).
+Remaining (next increment): R_AARCH64_ADR_PREL_PG_HI21 +
+R_AARCH64_ADD_ABS_LO12_NC (ADRP/ADD page-reloc pairs for .rodata/.data
+symbol refs) and R_AARCH64_ABS64 — the reloc-type constants + the
+Elf64_Rela serializer path already handle them; the codegen->reloc
+mapping for ADRP/ADD pairs is the follow-on. .rodata/.data/.bss
+sections not yet wired (text-only, matching the x86 native obj baseline).

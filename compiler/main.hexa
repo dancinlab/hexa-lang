@@ -70,6 +70,11 @@ import "../stdlib/runtime/numeric.hexa"
 import "../stdlib/runtime/io.hexa"
 import "./emit/asm.hexa"
 import "./emit/macho_arm64.hexa"
+// SELFHOST-NEXT — shared ELF64 primitives (Elf64_Rela/Sym shapes, the
+// `_ew_*` byte writers, STN_UNDEF layout, R_* constants) live in
+// elf_x86_64.hexa; the native ELF AArch64 serializer reuses them.
+import "./emit/elf_x86_64.hexa"
+import "./emit/elf_arm64.hexa"
 import "./diag/catalog.hexa"
 import "./diag/builder.hexa"
 import "./diag/render.hexa"
@@ -500,6 +505,14 @@ if !backend_kind_user_set
     && emit_kind == "obj" {
     backend_kind = "native"
 }
+// SELFHOST-NEXT — same native-default for the ELF AArch64 obj path so
+// `--target=arm64-linux-gnu --emit=obj` skips host `as` out of the box.
+// Opt back into the `as` fork via `--backend=system`.
+if !backend_kind_user_set
+    && target == "arm64-linux-gnu"
+    && emit_kind == "obj" {
+    backend_kind = "native"
+}
 
 if len(source_path) == 0 {
     eprintln("hexa-compiler: missing SOURCE.hexa")
@@ -904,6 +917,26 @@ if stream_mode && target == "arm64-apple-darwin" {
         if verbose {
             eprintln("hexa-compiler: emitted Mach-O .o via native backend ("
                      + to_string(len(obj_bytes)) + " bytes) to " + out_path)
+        }
+        exit(0)
+    }
+
+    // ── Emit OBJ (native ELF AArch64, SELFHOST-NEXT) ─────────────
+    //
+    // `--backend=native` + `target=arm64-linux-gnu` writes the ELF
+    // AArch64 `.o` directly via `pack_lir_arm64_elf` + `serialize_elf_
+    // arm64` — NO host `aarch64-linux-gnu-as`. Reuses the arm64
+    // instruction encoder (encode_arm64_insn) for text bytes; the only
+    // wire delta from the Mach-O path is the ELF container + AArch64
+    // relocs. Default arm64-apple-darwin stays Mach-O (guarded above),
+    // byte-identical.
+    if emit_kind == "obj" && backend_kind == "native" && target == "arm64-linux-gnu" {
+        let elf_obj = pack_lir_arm64_elf(lmodule)
+        let elf_bytes = serialize_elf_arm64(elf_obj)
+        write_bytes(out_path, elf_bytes)
+        if verbose {
+            eprintln("hexa-compiler: emitted ELF AArch64 .o via native backend ("
+                     + to_string(len(elf_bytes)) + " bytes) to " + out_path)
         }
         exit(0)
     }
