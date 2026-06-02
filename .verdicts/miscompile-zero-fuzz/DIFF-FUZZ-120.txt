@@ -1,0 +1,58 @@
+MISCOMPILE-ZERO differential fuzz — verdict DIFF-FUZZ-120
+=========================================================
+
+date            : 2026-06-03
+host            : ghost (macOS arm64, 192.168.50.150)
+clone (isolated): ~/dancinlab/wt-fuzz  @ origin/main 12c13e6c58a4
+harness         : tool/diff_fuzz.sh + tool/diff_fuzz_gen.py
+gen2 (native)   : ~/dancinlab/selfhost-work/gen2_fix   (graduated self-host compiler)
+oracle (C/clang): ~/dancinlab/selfhost-work/aprime_fixhex
+linker / runtime: hld_fixed + rt_new.o ; atlas = noatlas/ (empty, benign)
+target          : arm64-apple-darwin
+
+METHOD
+------
+For each deterministic-seeded random hexa program (seed -> identical .hexa
+via an LCG, no platform RNG), three differential axes vs the C oracle:
+
+  axis 1  --emit=asm  : byte-diff modulo the documented benign per-module
+                        label hash __L<sha4>_  (canonicalized to __L_HASH_).
+  axis 2  --emit=obj  : gen2 must emit 0 "ENCODE-MISS", 0 spurious/unresolved
+                        udf, and a non-empty .o.
+  axis 3  behavior    : link both .o with the runtime, compare process exit
+                        codes (8-bit mask applied identically on both sides).
+
+Generated feature surface (all proven to compile+run on BOTH compilers):
+  i64 + hex-literal arithmetic (+ - *), guarded / and %, comparison chains,
+  if/else, counter-bounded while loops, array literals + indexing,
+  match-expressions (`->` arms), 1..3 helper functions incl. nested calls,
+  recursion-safe call graph. (for-in ranges and float-heavy paths are
+  deliberately excluded — snapshot-fragile parse, not codegen, surface.)
+
+RESULT
+------
+seeds fuzzed     : 1 .. 120  (120 programs)
+asm divergences  : 0   (every program: gen2 asm == oracle asm mod label-hash)
+encode-miss      : 0
+spurious udf     : 0
+empty .o         : 0
+exit mismatches  : 0
+link-only-on-one : 0
+distinct exit codes observed : 101 / 120  (programs exercise real, varied
+                                            computation — not trivial)
+
+VERDICT: 🟢 ALL CLEAN — 120 seeded random programs, no miscompile found
+across asm / obj-encode / behavioral exit-code axes.
+
+REPRODUCE
+---------
+  cd ~/dancinlab/wt-fuzz
+  bash tool/diff_fuzz.sh 1 120
+  # single seed:
+  python3 tool/diff_fuzz_gen.py <seed>   # prints the exact .hexa
+  bash tool/diff_fuzz.sh <seed> <seed>
+
+The harness STOPS on the first divergence and prints seed + program + the
+canonicalized asm diff / encode log / exit pair, so any future miscompile is
+reported with an immediate minimal repro. Extend coverage by widening the
+seed range (e.g. `bash tool/diff_fuzz.sh 121 500`).

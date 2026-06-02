@@ -1,6 +1,27 @@
 # MISCOMPILE-ZERO — log
-
 Append-only history sister of `MISCOMPILE-ZERO.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
+
+## 2026-06-03 — differential fuzz: 120 seeded random programs CLEAN (gen2 vs aprime-C)
+Deferred milestone "differential fuzz — generate random hexa programs and
+compare gen2-native vs aprime-C codegen to surface latent miscompiles". A NEW
+harness (no overlap with the fixed-corpus gate) that RANDOM-generates valid
+hexa and diffs the two compilers across asm / obj-encode / behavioral axes.
+- [x] GENERATOR `tool/diff_fuzz_gen.py` — deterministic LCG (seed -> identical
+      .hexa, no platform RNG). Feature surface proven on BOTH compilers:
+      i64+hex arith, guarded / %, comparisons, if/else, bounded while, arrays+
+      index, match-expr (`->` arms), 1-3 helper fns incl. nested calls.
+- [x] HARNESS `tool/diff_fuzz.sh` — per seed: (1) --emit=asm byte-diff modulo
+      benign `__L<sha4>_` label hash; (2) gen2 --emit=obj 0 ENCODE-MISS / 0 udf
+      / non-empty .o; (3) link both + compare exit codes. STOPS on first
+      divergence printing seed+program+diff. Honest rc (no pipe-mask).
+- [x] RAN seeds 1..120 on ghost (gen2_fix vs aprime_fixhex): 120/120 CLEAN —
+      0 asm divergence, 0 ENCODE-MISS, 0 udf, 0 exit mismatch, 0 link-skew.
+      101/120 distinct exit codes => programs exercise real varied computation.
+- [x] VERDICT `.verdicts/miscompile-zero-fuzz/DIFF-FUZZ-120.txt` (seed range,
+      counts, reproduce one-liner). Extend via wider seed range.
+- [ ] follow-up: widen seed range (121..500) + add float/struct/closure axes
+      once snapshot parse surface is confirmed stable.
+
 
 ## 2026-06-03 — CI-health fix: gate invocation + setup/regression classification
 
