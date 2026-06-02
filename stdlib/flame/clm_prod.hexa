@@ -524,6 +524,148 @@ fn _moe_router(logits: int, ex_out: int, probs: int, y: int, T: int, E: int, C: 
     nn_moe_router_fwd(logits, ex_out, probs, y, T, E, C)
 }
 
+// HEXA-FUSION L3 (BWD glue half): device-resident elementwise GELU backward.
+// dg[i] = da[i]·GELU'(g[i]) (g = pre-activation saved from fwd). gelu_bwd ×3 in
+// clm_prod_bwd (deo0/deo1/dhn0) are the bwd MIRROR of the fwd gelu ×3 host glue —
+// the bwd-tail counterpart of the ③ fwd-only 0% floor. Under CLM_PROD_DEVRESIDENT
+// the grad runs on-device (forge_dispatch_gelu_bwd), keeping dg FARR_DEVICE so the
+// follow-up conv-bwd GEMM H2D-skips it. erf/exp-based GELU' (cdf + x·pdf), pure
+// elementwise (no reduction) → bit-exact to nn_gelu_bwd (max|Δ|=0). rc 0 = on
+// device; else the proven host nn_gelu_bwd runs (byte-eq). Env-gated like _gelu.
+fn _gelu_bwd(g: int, da: int, dg: int, n: int) {
+    if env("CLM_PROD_DEVRESIDENT") != "" {
+        let rc = forge_dispatch_gelu_bwd(g, da, dg, n)
+        if rc == 0 { return }
+    }
+    nn_gelu_bwd(g, da, dg, n)
+}
+
+// HEXA-FUSION L3 (BWD glue half): device-resident GroupNorm backward.
+// groupnorm_bwd ×2 in clm_prod_bwd (dy←dynorm, dh0←dhn0) are the bwd MIRROR of the
+// fwd groupnorm ×2 host glue (per-channel + per-group reductions). Under
+// CLM_PROD_DEVRESIDENT the grad runs on-device (forge_dispatch_groupnorm_bwd),
+// keeping dgamma/dbeta/dx FARR_DEVICE so the follow-up conv-bwd / gelu_bwd
+// H2D-skips them. The device kernel reduces SEQUENTIALLY (per-channel over t;
+// per-group s1/s2 over t outer c inner) in the host order (NO tree re-assoc) and
+// reads the SAVED forward inv (no sqrt re-derivation) → bit-exact to
+// nn_groupnorm_bwd (max|Δ|=0). rc 0 = on device; else the proven host
+// nn_groupnorm_bwd runs (byte-eq). Env-gated like _groupnorm.
+fn _groupnorm_bwd(xhat: int, inv: int, gamma: int, dy: int,
+                  dgamma: int, dbeta: int, dX: int, T: int, C: int, G: int) {
+    if env("CLM_PROD_DEVRESIDENT") != "" {
+        let rc = forge_dispatch_groupnorm_bwd(xhat, inv, gamma, dy, dgamma, dbeta, dX, T, C, G)
+        if rc == 0 { return }
+    }
+    nn_groupnorm_bwd(xhat, inv, gamma, dy, dgamma, dbeta, dX, T, C, G)
+}
+
+// HEXA-FUSION L3 (BWD glue half): device-resident expert-unpack (residual grad
+// split). dex0[i]=dex_out[0·n+i], dex1[i]=dex_out[1·n+i] for i in 0..n (n=T·d) —
+// the bwd MIRROR of _expert_pack2, splitting the moe-router grad dex_out[E·T·d]
+// back into the 2 per-expert grads. Under CLM_PROD_DEVRESIDENT it fuses onto the
+// device (forge_dispatch_expert_unpack2), keeping dex0/dex1 FARR_DEVICE so the
+// follow-up gelu_bwd H2D-skips them. Pure copy, NO reduction → bit-exact
+// (max|Δ|=0). rc 0 = on device; else the byte-identical host unpack loop runs.
+// Env-gated like _expert_pack2.
+fn _expert_unpack2(dex_out: int, dex0: int, dex1: int, n: int) {
+    if env("CLM_PROD_DEVRESIDENT") != "" {
+        let rc = forge_dispatch_expert_unpack2(dex_out, dex0, dex1, n)
+        if rc == 0 { return }
+    }
+    let mut i = 0
+    while i < n {
+        t_set(dex0, i, t_get(dex_out, 0 * n + i))
+        t_set(dex1, i, t_get(dex_out, 1 * n + i))
+        i = i + 1
+    }
+}
+
+// HEXA-FUSION L3 (BWD glue half · ⑤-bwd2): device-resident CE softmax grad. The
+// clm_ce_grad host glue (softmax-grad per position) at the head of the full-step
+// driver — interpreted before clm_prod_bwd. Under CLM_PROD_DEVRESIDENT the grad
+// runs on-device (forge_dispatch_ce_grad), keeping dlogits FARR_DEVICE so the
+// first conv-bwd GEMM H2D-skips it. Per-row sequential (max + sum + writes),
+// device exp() = libm → bit-exact to the host clm_ce_grad (max|Δ|=0). rc 0 = on
+// device; else the proven host loop runs (byte-eq). Env-gated like _gelu.
+fn _ce_grad(logits: int, targets: int, dlogits_out: int, T: int, V: int) {
+    if env("CLM_PROD_DEVRESIDENT") != "" {
+        let rc = forge_dispatch_ce_grad(logits, targets, dlogits_out, T, V)
+        if rc == 0 { return }
+    }
+    clm_ce_grad(logits, targets, dlogits_out, T, V)
+}
+
+// HEXA-FUSION L3 (BWD glue half · ⑤-bwd2): device-resident MoE-router backward.
+// The nn_moe_router_bwd host glue in clm_prod_bwd (softmax-Jacobian + dex_out
+// fill, 2-pass over E with inner C reduction). Under CLM_PROD_DEVRESIDENT it runs
+// on-device (forge_dispatch_moe_router_bwd), keeping dlogits_r/dex_out
+// FARR_DEVICE so the follow-up conv-bwd + expert-unpack H2D-skip them. Reads
+// CACHED probs (NO _moe_exp replay) and reduces SEQUENTIALLY (Σ_c, Σ_e dot) in
+// the host order (NO tree re-assoc) → bit-exact to nn_moe_router_bwd (max|Δ|=0).
+// rc 0 = on device; else the proven host bwd runs (byte-eq). Env-gated like _moe_router.
+fn _moe_router_bwd(probs: int, ex_out: int, dy: int, dlogits_out: int, dex_out: int,
+                   T: int, E: int, C: int) {
+    if env("CLM_PROD_DEVRESIDENT") != "" {
+        let rc = forge_dispatch_moe_router_bwd(probs, ex_out, dy, dlogits_out, dex_out, T, E, C)
+        if rc == 0 { return }
+    }
+    nn_moe_router_bwd(probs, ex_out, dy, dlogits_out, dex_out, T, E, C)
+}
+
+// HEXA-FUSION L3 (BWD glue half · ⑤-bwd2): device-resident 3-way grad sum. The
+// dxt accumulation in clm_prod_bwd (dxt = dxt_r + dxt_e0 + dxt_e1 — the router +
+// 2 expert dX paths). Under CLM_PROD_DEVRESIDENT it fuses onto the device
+// (forge_dispatch_grad_sum3), keeping out FARR_DEVICE so the follow-up gelu_bwd
+// H2D-skips it. Pure elementwise, fixed (a+b)+c association → bit-exact (max|Δ|=0).
+// rc 0 = on device; else the byte-identical host sum loop runs. Env-gated.
+fn _grad_sum3(a: int, b: int, c: int, out: int, n: int) {
+    if env("CLM_PROD_DEVRESIDENT") != "" {
+        let rc = forge_dispatch_grad_sum3(a, b, c, out, n)
+        if rc == 0 { return }
+    }
+    let mut i = 0
+    while i < n {
+        t_set(out, i, t_get(a, i) + t_get(b, i) + t_get(c, i))
+        i = i + 1
+    }
+}
+
+// HEXA-FUSION L3 (BWD glue half · ⑤-bwd2): device-resident 2-way grad sum. The
+// dxec accumulation in clm_prod_bwd (dxec = dxt + dxec_b). Under
+// CLM_PROD_DEVRESIDENT it fuses onto the device (forge_dispatch_grad_sum2),
+// keeping out FARR_DEVICE so the follow-up conv-bwd GEMM H2D-skips it. Pure
+// elementwise → bit-exact (max|Δ|=0). rc 0 = on device; else the byte-identical
+// host sum loop runs. Env-gated.
+fn _grad_sum2(a: int, b: int, out: int, n: int) {
+    if env("CLM_PROD_DEVRESIDENT") != "" {
+        let rc = forge_dispatch_grad_sum2(a, b, out, n)
+        if rc == 0 { return }
+    }
+    let mut i = 0
+    while i < n {
+        t_set(out, i, t_get(a, i) + t_get(b, i))
+        i = i + 1
+    }
+}
+
+// HEXA-FUSION L3 (BWD glue half · ⑤-bwd2): device-resident deterministic
+// embedding scatter (grad accumulate into the table). The nn_embedding_bwd_scatter
+// host glue at the tail of clm_prod_bwd (dembed[tok·d+c] += dxe[i·d+c]). Under
+// CLM_PROD_DEVRESIDENT it fuses onto the device
+// (forge_dispatch_embedding_bwd_scatter), keeping dembed FARR_DEVICE so the
+// follow-up AdamW H2D-skips it. The device kernel uses ONE thread per vocab row
+// scanning tokens in ascending-i order (NO atomics, NO tree re-assoc) →
+// bit-exact to nn_embedding_bwd_scatter (max|Δ|=0). dtable must be pre-zeroed by
+// the caller. rc 0 = on device; else the proven host scatter runs (byte-eq).
+// Env-gated. NOTE the extra V param (vocab rows) the device kernel needs.
+fn _embedding_bwd_scatter(dX: int, ids: int, dtable_inout: int, T: int, d: int, V: int) {
+    if env("CLM_PROD_DEVRESIDENT") != "" {
+        let rc = forge_dispatch_embedding_bwd_scatter(dX, ids, dtable_inout, T, d, V)
+        if rc == 0 { return }
+    }
+    nn_embedding_bwd_scatter(dX, ids, dtable_inout, T, d)
+}
+
 // Forward with weight-only int4 QAT (verbatim from clm_qat assembly-3b).
 fn clm_prod_fwd(tokens: int,
                embed: int, ecW: int, ecB: int, tcW: int, tcB: int, tgG: int, tgB: int,
@@ -630,22 +772,33 @@ fn clm_prod_bwd(dlogits: int, tokens: int,
     conv1d_bwd_via_forge(yn, roWq, dlogits, droWq, dynorm, droB, T, d, V, 1, 1)
     _qbwd(droWq, roM, droW, V, d)
     let dy = t_zeros(T * d)
-    nn_groupnorm_bwd(xhatN, invN, noG, dynorm, dnoG, dnoB, dy, T, d, 1)
+    // HEXA-FUSION L3 (BWD glue half): groupnorm_bwd #2 (norm_out, dynorm→dy) —
+    // interpreted inter-op host glue (per-channel + per-group reductions), the bwd
+    // mirror of the fwd groupnorm #2. Device path keeps dnoG/dnoB/dy FARR_DEVICE
+    // (byte-eq via sequential reduction + saved inv); else host nn_groupnorm_bwd.
+    _groupnorm_bwd(xhatN, invN, noG, dynorm, dnoG, dnoB, dy, T, d, 1)
     let dlogits_r = t_zeros(T * E)
     let dex_out = t_zeros(E * T * d)
-    nn_moe_router_bwd(probs, ex_out, dy, dlogits_r, dex_out, T, E, d)
+    // HEXA-FUSION L3 (BWD glue half · ⑤-bwd2): moe-router bwd (probs/ex_out/dy →
+    // dlogits_r/dex_out) — interpreted host glue (softmax-Jacobian + dex_out fill,
+    // 2-pass over E with inner C reduction). Device path keeps dlogits_r/dex_out
+    // FARR_DEVICE so the next conv-bwd + expert-unpack H2D-skip them (byte-eq via
+    // sequential reduction + cached probs); else host nn_moe_router_bwd.
+    _moe_router_bwd(probs, ex_out, dy, dlogits_r, dex_out, T, E, d)
     let dxt_r = t_zeros(T * d); let drWq = t_zeros(E * d)
     conv1d_bwd_via_forge(xt, rWq, dlogits_r, drWq, dxt_r, drB, T, d, E, 1, 1)
     _qbwd(drWq, rM, drW, E, d)
+    // HEXA-FUSION L3 (BWD glue half): expert-unpack (dex_out→dex0/dex1) — the bwd
+    // mirror of _expert_pack2 (T·d host t_get/t_set per step). Device path keeps
+    // dex0/dex1 FARR_DEVICE so the next gelu_bwd H2D-skips them (byte-eq); else the
+    // byte-identical host unpack loop.
     let dex0 = t_zeros(T * d); let dex1 = t_zeros(T * d)
-    let mut ei = 0
-    while ei < T * d {
-        t_set(dex0, ei, t_get(dex_out, 0 * T * d + ei))
-        t_set(dex1, ei, t_get(dex_out, 1 * T * d + ei))
-        ei = ei + 1
-    }
-    let deo0 = t_zeros(T * d); nn_gelu_bwd(eo0, dex0, deo0, T * d)
-    let deo1 = t_zeros(T * d); nn_gelu_bwd(eo1, dex1, deo1, T * d)
+    _expert_unpack2(dex_out, dex0, dex1, T * d)
+    // HEXA-FUSION L3 (BWD glue half): gelu_bwd #1/#2 (eo0/dex0→deo0, eo1/dex1→deo1)
+    // — the bwd mirror of the fwd gelu #2/#3 expert activations. Device path keeps
+    // deo0/deo1 FARR_DEVICE (byte-eq, erf/exp grad); else host nn_gelu_bwd.
+    let deo0 = t_zeros(T * d); _gelu_bwd(eo0, dex0, deo0, T * d)
+    let deo1 = t_zeros(T * d); _gelu_bwd(eo1, dex1, deo1, T * d)
     // LEVER (b): the 2 ConvExperts' backward (dW + dX GEMMs) fused into batched
     // GEMMs (byte-eq to 2 separate conv1d_bwd_via_forge — F-CLM-CONV2-BATCHED-
     // BWD-EQ; on a CUDA host = 1 strided-batched launch per GEMM vs 2 each).
@@ -655,27 +808,39 @@ fn clm_prod_bwd(dlogits: int, tokens: int,
                                 de0Wq, dxt_e0, de0B, de1Wq, dxt_e1, de1B, T, d, d, K, 1)
     _qbwd(de0Wq, e0M, de0W, d, d * K)
     _qbwd(de1Wq, e1M, de1W, d, d * K)
+    // HEXA-FUSION L3 (BWD glue half · ⑤-bwd2): dxt 3-way grad sum (dxt = dxt_r +
+    // dxt_e0 + dxt_e1) — interpreted host glue. Device path keeps dxt FARR_DEVICE
+    // so the next gelu_bwd H2D-skips it (byte-eq, fixed (a+b)+c association); else
+    // the byte-identical host sum loop.
     let dxt = t_zeros(T * d)
-    let mut xi = 0
-    while xi < T * d {
-        t_set(dxt, xi, t_get(dxt_r, xi) + t_get(dxt_e0, xi) + t_get(dxt_e1, xi))
-        xi = xi + 1
-    }
-    let dhn0 = t_zeros(T * d); nn_gelu_bwd(hn0, dxt, dhn0, T * d)
+    _grad_sum3(dxt_r, dxt_e0, dxt_e1, dxt, T * d)
+    // HEXA-FUSION L3 (BWD glue half): gelu_bwd #3 (hn0/dxt→dhn0) — the bwd mirror
+    // of the fwd gelu #1. Device path keeps dhn0 FARR_DEVICE (byte-eq); else host.
+    let dhn0 = t_zeros(T * d); _gelu_bwd(hn0, dxt, dhn0, T * d)
     let dh0 = t_zeros(T * d)
-    nn_groupnorm_bwd(xhat0, inv0, tgG, dhn0, dtgG, dtgB, dh0, T, d, 1)
+    // HEXA-FUSION L3 (BWD glue half): groupnorm_bwd #1 (dhn0→dh0) — the bwd mirror
+    // of the fwd groupnorm #1. Device path keeps dtgG/dtgB/dh0 FARR_DEVICE (byte-eq
+    // via sequential reduction + saved inv); else host nn_groupnorm_bwd.
+    _groupnorm_bwd(xhat0, inv0, tgG, dhn0, dtgG, dtgB, dh0, T, d, 1)
     let dxec_b = t_zeros(T * d); let dtcWq = t_zeros(d * d * K)
     conv1d_bwd_via_forge(xec, tcWq, dh0, dtcWq, dxec_b, dtcB, T, d, d, K, 1)
     _qbwd(dtcWq, tcM, dtcW, d, d * K)
+    // HEXA-FUSION L3 (BWD glue half · ⑤-bwd2): dxec 2-way grad sum (dxec = dxt +
+    // dxec_b) — interpreted host glue. Device path keeps dxec FARR_DEVICE so the
+    // next conv-bwd GEMM H2D-skips it (byte-eq); else the byte-identical host loop.
     let dxec = t_zeros(T * d)
-    let mut ci = 0
-    while ci < T * d { t_set(dxec, ci, t_get(dxt, ci) + t_get(dxec_b, ci)); ci = ci + 1 }
+    _grad_sum2(dxt, dxec_b, dxec, T * d)
     let dxe = t_zeros(T * d); let decWq = t_zeros(d * d * K)
     conv1d_bwd_via_forge(xe, ecWq, dxec, decWq, dxe, decB, T, d, d, K, 1)
     _qbwd(decWq, ecM, decW, d, d * K)
     let mut zi = 0
     while zi < V * d { t_set(dembed, zi, 0.0); zi = zi + 1 }
-    nn_embedding_bwd_scatter(dxe, tokens, dembed, T, d)
+    // HEXA-FUSION L3 (BWD glue half · ⑤-bwd2): embedding bwd scatter (dxe → dembed,
+    // grad accumulate per token row) — interpreted host glue at the bwd tail. Device
+    // path uses ONE thread per vocab row scanning tokens in ascending-i order (NO
+    // atomics) so dembed stays FARR_DEVICE for the follow-up AdamW (byte-eq); else
+    // host nn_embedding_bwd_scatter. dembed pre-zeroed just above (required).
+    _embedding_bwd_scatter(dxe, tokens, dembed, T, d, V)
 }
 
 fn _adam(W: int, gW: int, m: int, v: int, n: int, t: int) {
@@ -891,7 +1056,11 @@ fn main() {
         let loss = nn_ce_loss_allpos(logits, tgt, T, V)
         if step <= nwin { sum_first = sum_first + loss }
         if step > steps - nwin { sum_last = sum_last + loss }
-        clm_ce_grad(logits, tgt, dlogits, T, V)
+        // HEXA-FUSION L3 (BWD glue half · ⑤-bwd2): CE softmax grad (logits/tgt →
+        // dlogits) — interpreted host glue at the head of the bwd. Device path keeps
+        // dlogits FARR_DEVICE so clm_prod_bwd's first conv-bwd GEMM H2D-skips it
+        // (byte-eq via per-row sequential softmax-grad + libm exp); else host clm_ce_grad.
+        _ce_grad(logits, tgt, dlogits, T, V)
         clm_prod_bwd(dlogits, tok, embed, ecWq, tcWq, tgG, rWq, e0Wq, e1Wq, noG, roWq,
                     ecM, tcM, e0M, e1M, rM, roM,
                     xe, xec, xt, hn0, xhat0, inv0, eo0, eo1, probs, ex_out, yn, xhatN, invN,

@@ -1631,6 +1631,592 @@ fn emit_runtime_cuda_c() -> str {
             "#endif\n" +
             "}\n" +
             "\n" +
+            "/* HEXA-FUSION L3 (BWD glue half) — device-resident elementwise GELU backward.\n" +
+            " * Reproduces stdlib/flame/nn_lib.hexa nn_gelu_bwd EXACTLY:\n" +
+            " *   DG[i] = DA[i] · GELU'(G[i]) ; GELU'(x) = Φ(x) + x·φ(x)\n" +
+            " *   Φ(x) = 0.5·(1 + erf(x·(1/√2)))   (_nn_normal_cdf)\n" +
+            " *   φ(x) = (1/√(2π))·exp(-0.5·x²)    (_nn_normal_pdf)\n" +
+            " * G is the PRE-activation saved from forward. The constants are the SAME\n" +
+            " * literals the host uses (1/√2 = _nn_inv_sqrt2, 1/√(2π) = _nn_inv_sqrt2pi)\n" +
+            " * and the op order matches _nn_gelu_grad verbatim (cdf + x·pdf). Device erf()\n" +
+            " * and exp() are the IEEE-correct libm contract (same as the host builtins).\n" +
+            " * Pure elementwise, NO reduction → bit-exact to the host scalar loop\n" +
+            " * (max|Δ|=0). Fuses the gelu_bwd ×3 host glue in clm_prod_bwd (deo0/deo1/dhn0\n" +
+            " * — the bwd mirror of the fwd gelu ×3) and keeps DG FARR_DEVICE so the\n" +
+            " * follow-up conv-bwd GEMM H2D-skips it. */\n" +
+            "__global__ void _hx_k_gelu_bwd(const double* __restrict__ G,\n" +
+            "                               const double* __restrict__ DA,\n" +
+            "                               double* __restrict__ DG, int64_t n) {\n" +
+            "    const double inv_sqrt2   = 0.70710678118654752440;\n" +
+            "    const double inv_sqrt2pi = 0.39894228040143267794;\n" +
+            "    int64_t stride = (int64_t)blockDim.x * (int64_t)gridDim.x;\n" +
+            "    for (int64_t i = (int64_t)blockIdx.x * blockDim.x + threadIdx.x;\n" +
+            "         i < n; i += stride) {\n" +
+            "        double x   = G[i];\n" +
+            "        double cdf = 0.5 * (1.0 + erf(x * inv_sqrt2));\n" +
+            "        double pdf = inv_sqrt2pi * exp(0.0 - 0.5 * x * x);\n" +
+            "        double grad = cdf + x * pdf;\n" +
+            "        DG[i] = DA[i] * grad;\n" +
+            "    }\n" +
+            "}\n" +
+            "\n" +
+            "int _hx_cuda_farr_gelu_bwd_gpu(int64_t g_id, int64_t da_id,\n" +
+            "                               int64_t dg_id, int64_t n) {\n" +
+            "#ifdef __CUDACC__\n" +
+            "    if (n <= 0) return -1;\n" +
+            "    if (_h2d(g_id) != 0) return -1;\n" +
+            "    if (_h2d(da_id) != 0) return -1;\n" +
+            "    if (_ensure_dev_alloc_out(dg_id, n) != 0) return -1;\n" +
+            "    const double* G  = g_slots[g_id].d_buf;\n" +
+            "    const double* DA = g_slots[da_id].d_buf;\n" +
+            "    double*       DG = g_slots[dg_id].d_buf;\n" +
+            "    int block_sz = 256;\n" +
+            "    int64_t want = (n + block_sz - 1) / block_sz;\n" +
+            "    int grid_sz = (want > 1024) ? 1024 : (int)want;\n" +
+            "    if (grid_sz < 1) grid_sz = 1;\n" +
+            "    _hx_k_gelu_bwd<<<grid_sz, block_sz>>>(G, DA, DG, n);\n" +
+            "    cudaError_t er = cudaDeviceSynchronize();\n" +
+            "    if (er != cudaSuccess) {\n" +
+            "        fprintf(stderr, \"[cuda] gelu_bwd launch failed: %s\\n\",\n" +
+            "                cudaGetErrorString(er));\n" +
+            "        return -1;\n" +
+            "    }\n" +
+            "    {\n" +
+            "        HexaFarrEntry* e = &_hx_farr_table[dg_id];\n" +
+            "        e->d_buf      = (void*)g_slots[dg_id].d_buf;\n" +
+            "        e->loc        = FARR_DEVICE;\n" +
+            "        e->dirty_host = 0;\n" +
+            "        e->dirty_dev  = 0;\n" +
+            "    }\n" +
+            "    return 0;\n" +
+            "#else\n" +
+            "    (void)g_id; (void)da_id; (void)dg_id; (void)n;\n" +
+            "    fprintf(stderr, \"[cuda] gelu_bwd: built without __CUDACC__\\n\");\n" +
+            "    return -1;\n" +
+            "#endif\n" +
+            "}\n" +
+            "\n" +
+            "/* HEXA-FUSION L3 (BWD glue half) — device-resident GroupNorm backward.\n" +
+            " * Reproduces stdlib/flame/gn_lib.hexa nn_groupnorm_bwd EXACTLY:\n" +
+            " *   per channel c: DGAMMA[c] = Σ_t DY[t,c]·XHAT[t,c] ; DBETA[c] = Σ_t DY[t,c]\n" +
+            " *   per group  g: s1 = Σ dxh ; s2 = Σ dxh·xhat  (dxh = DY·GAMMA over the group)\n" +
+            " *                 DX[t,c] = INV[g]·(dxh - s1/m - XHAT[t,c]·s2/m) , m = Cg·T\n" +
+            " * BIT-EXACTNESS: every reduction accumulates SEQUENTIALLY in the host order —\n" +
+            " * the per-channel sums over t (one thread per channel, t ascending), and the\n" +
+            " * per-group s1/s2 over (t outer, c inner) under ONE thread per group — NO tree\n" +
+            " * re-association, NO warp/atomic partials → max|Δ|=0. (No sqrt here; INV is the\n" +
+            " * saved forward reciprocal-stddev, read verbatim.) Fuses the groupnorm_bwd ×2\n" +
+            " * host glue in clm_prod_bwd (dy←dynorm, dh0←dhn0 — the bwd mirror of the fwd\n" +
+            " * groupnorm ×2). Keeps DGAMMA/DBETA/DX FARR_DEVICE. NOTE the kernel is split\n" +
+            " * into TWO launches sharing the grid (channel pass, then group pass) because\n" +
+            " * the DX pass depends on the per-group s1/s2 reductions — each pass is itself a\n" +
+            " * single-thread sequential reduction, preserving the host accumulation order. */\n" +
+            "__global__ void _hx_k_groupnorm_bwd_affine(const double* __restrict__ XHAT,\n" +
+            "                                           const double* __restrict__ DY,\n" +
+            "                                           double* __restrict__ DGAMMA,\n" +
+            "                                           double* __restrict__ DBETA,\n" +
+            "                                           int64_t T, int64_t C) {\n" +
+            "    for (int64_t c = (int64_t)blockIdx.x * blockDim.x + threadIdx.x;\n" +
+            "         c < C; c += (int64_t)blockDim.x * gridDim.x) {\n" +
+            "        double sg = 0.0;\n" +
+            "        double sb = 0.0;\n" +
+            "        for (int64_t t = 0; t < T; t++) {\n" +
+            "            int64_t idx = t * C + c;\n" +
+            "            double gy = DY[idx];\n" +
+            "            sg += gy * XHAT[idx];\n" +
+            "            sb += gy;\n" +
+            "        }\n" +
+            "        DGAMMA[c] = sg;\n" +
+            "        DBETA[c]  = sb;\n" +
+            "    }\n" +
+            "}\n" +
+            "__global__ void _hx_k_groupnorm_bwd_dx(const double* __restrict__ XHAT,\n" +
+            "                                       const double* __restrict__ INV,\n" +
+            "                                       const double* __restrict__ GAMMA,\n" +
+            "                                       const double* __restrict__ DY,\n" +
+            "                                       double* __restrict__ DX,\n" +
+            "                                       int64_t T, int64_t C, int64_t G) {\n" +
+            "    int64_t cg = C / G;\n" +
+            "    double m = (double)(cg * T);\n" +
+            "    for (int64_t g = (int64_t)blockIdx.x * blockDim.x + threadIdx.x;\n" +
+            "         g < G; g += (int64_t)blockDim.x * gridDim.x) {\n" +
+            "        int64_t c0 = g * cg;\n" +
+            "        double inv_g = INV[g];\n" +
+            "        double s1 = 0.0;\n" +
+            "        double s2 = 0.0;\n" +
+            "        for (int64_t t = 0; t < T; t++)\n" +
+            "            for (int64_t cc = 0; cc < cg; cc++) {\n" +
+            "                int64_t ch = c0 + cc;\n" +
+            "                int64_t idx = t * C + ch;\n" +
+            "                double dxh = DY[idx] * GAMMA[ch];\n" +
+            "                s1 += dxh;\n" +
+            "                s2 += dxh * XHAT[idx];\n" +
+            "            }\n" +
+            "        for (int64_t t = 0; t < T; t++)\n" +
+            "            for (int64_t cc = 0; cc < cg; cc++) {\n" +
+            "                int64_t ch = c0 + cc;\n" +
+            "                int64_t idx = t * C + ch;\n" +
+            "                double dxh = DY[idx] * GAMMA[ch];\n" +
+            "                DX[idx] = inv_g * (dxh - s1 / m - XHAT[idx] * s2 / m);\n" +
+            "            }\n" +
+            "    }\n" +
+            "}\n" +
+            "\n" +
+            "int _hx_cuda_farr_groupnorm_bwd_gpu(int64_t xhat_id, int64_t inv_id,\n" +
+            "                                    int64_t gamma_id, int64_t dy_id,\n" +
+            "                                    int64_t dgamma_id, int64_t dbeta_id,\n" +
+            "                                    int64_t dx_id,\n" +
+            "                                    int64_t T, int64_t C, int64_t G) {\n" +
+            "#ifdef __CUDACC__\n" +
+            "    if (T <= 0 || C <= 0 || G <= 0 || (C % G) != 0) return -1;\n" +
+            "    if (_h2d(xhat_id) != 0) return -1;\n" +
+            "    if (_h2d(inv_id) != 0) return -1;\n" +
+            "    if (_h2d(gamma_id) != 0) return -1;\n" +
+            "    if (_h2d(dy_id) != 0) return -1;\n" +
+            "    if (_ensure_dev_alloc_out(dgamma_id, C) != 0) return -1;\n" +
+            "    if (_ensure_dev_alloc_out(dbeta_id, C) != 0) return -1;\n" +
+            "    if (_ensure_dev_alloc_out(dx_id, T * C) != 0) return -1;\n" +
+            "    const double* XHAT  = g_slots[xhat_id].d_buf;\n" +
+            "    const double* INV   = g_slots[inv_id].d_buf;\n" +
+            "    const double* GAMMA = g_slots[gamma_id].d_buf;\n" +
+            "    const double* DY    = g_slots[dy_id].d_buf;\n" +
+            "    double*       DGAMMA = g_slots[dgamma_id].d_buf;\n" +
+            "    double*       DBETA  = g_slots[dbeta_id].d_buf;\n" +
+            "    double*       DX     = g_slots[dx_id].d_buf;\n" +
+            "    {\n" +
+            "        int block_sz = 128;\n" +
+            "        int64_t want = (C + block_sz - 1) / block_sz;\n" +
+            "        int grid_sz = (want > 1024) ? 1024 : (int)want;\n" +
+            "        if (grid_sz < 1) grid_sz = 1;\n" +
+            "        _hx_k_groupnorm_bwd_affine<<<grid_sz, block_sz>>>(XHAT, DY,\n" +
+            "                                                          DGAMMA, DBETA, T, C);\n" +
+            "    }\n" +
+            "    {\n" +
+            "        int block_sz = 64;\n" +
+            "        int64_t want = (G + block_sz - 1) / block_sz;\n" +
+            "        int grid_sz = (want > 1024) ? 1024 : (int)want;\n" +
+            "        if (grid_sz < 1) grid_sz = 1;\n" +
+            "        _hx_k_groupnorm_bwd_dx<<<grid_sz, block_sz>>>(XHAT, INV, GAMMA, DY,\n" +
+            "                                                      DX, T, C, G);\n" +
+            "    }\n" +
+            "    cudaError_t er = cudaDeviceSynchronize();\n" +
+            "    if (er != cudaSuccess) {\n" +
+            "        fprintf(stderr, \"[cuda] groupnorm_bwd launch failed: %s\\n\",\n" +
+            "                cudaGetErrorString(er));\n" +
+            "        return -1;\n" +
+            "    }\n" +
+            "    {\n" +
+            "        int64_t outs[3] = { dgamma_id, dbeta_id, dx_id };\n" +
+            "        for (int k = 0; k < 3; k++) {\n" +
+            "            HexaFarrEntry* e = &_hx_farr_table[outs[k]];\n" +
+            "            e->d_buf      = (void*)g_slots[outs[k]].d_buf;\n" +
+            "            e->loc        = FARR_DEVICE;\n" +
+            "            e->dirty_host = 0;\n" +
+            "            e->dirty_dev  = 0;\n" +
+            "        }\n" +
+            "    }\n" +
+            "    return 0;\n" +
+            "#else\n" +
+            "    (void)xhat_id; (void)inv_id; (void)gamma_id; (void)dy_id;\n" +
+            "    (void)dgamma_id; (void)dbeta_id; (void)dx_id; (void)T; (void)C; (void)G;\n" +
+            "    fprintf(stderr, \"[cuda] groupnorm_bwd: built without __CUDACC__\\n\");\n" +
+            "    return -1;\n" +
+            "#endif\n" +
+            "}\n" +
+            "\n" +
+            "/* HEXA-FUSION L3 (BWD glue half) — device-resident expert-unpack (residual\n" +
+            " * grad split). The bwd MIRROR of expert_pack2: reproduces the clm_prod_bwd\n" +
+            " * ei-loop EXACTLY: for i in 0..n,\n" +
+            " *   DEX0[i] = DEX_OUT[0·n + i] ; DEX1[i] = DEX_OUT[1·n + i]   (n = T·d)\n" +
+            " * = the moe-router grad dex_out[E·T·d] split back into the 2 per-expert grads.\n" +
+            " * Pure copy, NO arithmetic, NO reduction → trivially bit-exact (max|Δ|=0).\n" +
+            " * Fuses the T·d host t_get/t_set unpack loop in clm_prod_bwd (between the\n" +
+            " * moe-router bwd and the 2 gelu_bwd). Keeps DEX0/DEX1 FARR_DEVICE so the\n" +
+            " * follow-up gelu_bwd H2D-skips them. */\n" +
+            "__global__ void _hx_k_expert_unpack2(const double* __restrict__ DEX_OUT,\n" +
+            "                                     double* __restrict__ DEX0,\n" +
+            "                                     double* __restrict__ DEX1, int64_t n) {\n" +
+            "    int64_t stride = (int64_t)blockDim.x * (int64_t)gridDim.x;\n" +
+            "    for (int64_t i = (int64_t)blockIdx.x * blockDim.x + threadIdx.x;\n" +
+            "         i < n; i += stride) {\n" +
+            "        DEX0[i] = DEX_OUT[i];\n" +
+            "        DEX1[i] = DEX_OUT[n + i];\n" +
+            "    }\n" +
+            "}\n" +
+            "\n" +
+            "int _hx_cuda_farr_expert_unpack2_gpu(int64_t dex_out_id, int64_t dex0_id,\n" +
+            "                                     int64_t dex1_id, int64_t n) {\n" +
+            "#ifdef __CUDACC__\n" +
+            "    if (n <= 0) return -1;\n" +
+            "    if (_h2d(dex_out_id) != 0) return -1;\n" +
+            "    if (_ensure_dev_alloc_out(dex0_id, n) != 0) return -1;\n" +
+            "    if (_ensure_dev_alloc_out(dex1_id, n) != 0) return -1;\n" +
+            "    const double* DEX_OUT = g_slots[dex_out_id].d_buf;\n" +
+            "    double*       DEX0    = g_slots[dex0_id].d_buf;\n" +
+            "    double*       DEX1    = g_slots[dex1_id].d_buf;\n" +
+            "    int block_sz = 256;\n" +
+            "    int64_t want = (n + block_sz - 1) / block_sz;\n" +
+            "    int grid_sz = (want > 1024) ? 1024 : (int)want;\n" +
+            "    if (grid_sz < 1) grid_sz = 1;\n" +
+            "    _hx_k_expert_unpack2<<<grid_sz, block_sz>>>(DEX_OUT, DEX0, DEX1, n);\n" +
+            "    cudaError_t er = cudaDeviceSynchronize();\n" +
+            "    if (er != cudaSuccess) {\n" +
+            "        fprintf(stderr, \"[cuda] expert_unpack2 launch failed: %s\\n\",\n" +
+            "                cudaGetErrorString(er));\n" +
+            "        return -1;\n" +
+            "    }\n" +
+            "    {\n" +
+            "        int64_t outs[2] = { dex0_id, dex1_id };\n" +
+            "        for (int k = 0; k < 2; k++) {\n" +
+            "            HexaFarrEntry* e = &_hx_farr_table[outs[k]];\n" +
+            "            e->d_buf      = (void*)g_slots[outs[k]].d_buf;\n" +
+            "            e->loc        = FARR_DEVICE;\n" +
+            "            e->dirty_host = 0;\n" +
+            "            e->dirty_dev  = 0;\n" +
+            "        }\n" +
+            "    }\n" +
+            "    return 0;\n" +
+            "#else\n" +
+            "    (void)dex_out_id; (void)dex0_id; (void)dex1_id; (void)n;\n" +
+            "    fprintf(stderr, \"[cuda] expert_unpack2: built without __CUDACC__\\n\");\n" +
+            "    return -1;\n" +
+            "#endif\n" +
+            "}\n" +
+            "\n" +
+            "/* HEXA-FUSION L3 (BWD glue half · ⑤-bwd2) — device-resident CE softmax grad.\n" +
+            " * Reproduces clm_prod.hexa clm_ce_grad EXACTLY: per position t (one thread),\n" +
+            " *   mx = max_v LOGITS[t,v] ; sm = Σ_v exp(LOGITS[t,v] - mx)\n" +
+            " *   DLOGITS[t,v] = (exp(LOGITS[t,v] - mx)/sm) · (1/T)   for all v\n" +
+            " *   DLOGITS[t, tgt] -= 1/T          (tgt = (int)TARGETS[t])\n" +
+            " * The max + the sum + the per-col writes all run SEQUENTIALLY in the host\n" +
+            " * scan order (one thread per t, v ascending) — NO tree re-assoc, NO atomics.\n" +
+            " * Device exp() is the IEEE libm contract (same as the host `exp`), and the\n" +
+            " * 1/T = 1.0/(double)T scaling matches `1.0 / to_float(T)` exactly → bit-exact\n" +
+            " * (max|Δ|=0). Fuses the clm_ce_grad host glue at the head of the full-step\n" +
+            " * driver (before clm_prod_bwd). Keeps DLOGITS FARR_DEVICE so the first\n" +
+            " * conv-bwd GEMM H2D-skips it. */\n" +
+            "__global__ void _hx_k_ce_grad(const double* __restrict__ LOGITS,\n" +
+            "                              const double* __restrict__ TARGETS,\n" +
+            "                              double* __restrict__ DLOGITS,\n" +
+            "                              int64_t T, int64_t V) {\n" +
+            "    double invT = 1.0 / (double)T;\n" +
+            "    for (int64_t t = (int64_t)blockIdx.x * blockDim.x + threadIdx.x;\n" +
+            "         t < T; t += (int64_t)blockDim.x * gridDim.x) {\n" +
+            "        int64_t base = t * V;\n" +
+            "        double mx = LOGITS[base];\n" +
+            "        for (int64_t i = 1; i < V; i++) {\n" +
+            "            double v = LOGITS[base + i];\n" +
+            "            if (v > mx) mx = v;\n" +
+            "        }\n" +
+            "        double sm = 0.0;\n" +
+            "        for (int64_t i2 = 0; i2 < V; i2++)\n" +
+            "            sm += exp(LOGITS[base + i2] - mx);\n" +
+            "        for (int64_t v3 = 0; v3 < V; v3++) {\n" +
+            "            double p = exp(LOGITS[base + v3] - mx) / sm;\n" +
+            "            DLOGITS[base + v3] = p * invT;\n" +
+            "        }\n" +
+            "        int64_t tgt = (int64_t)TARGETS[t];\n" +
+            "        DLOGITS[base + tgt] = DLOGITS[base + tgt] - invT;\n" +
+            "    }\n" +
+            "}\n" +
+            "\n" +
+            "int _hx_cuda_farr_ce_grad_gpu(int64_t logits_id, int64_t targets_id,\n" +
+            "                              int64_t dlogits_id, int64_t T, int64_t V) {\n" +
+            "#ifdef __CUDACC__\n" +
+            "    if (T <= 0 || V <= 0) return -1;\n" +
+            "    if (_h2d(logits_id) != 0) return -1;\n" +
+            "    if (_h2d(targets_id) != 0) return -1;\n" +
+            "    if (_ensure_dev_alloc_out(dlogits_id, T * V) != 0) return -1;\n" +
+            "    const double* LOGITS  = g_slots[logits_id].d_buf;\n" +
+            "    const double* TARGETS = g_slots[targets_id].d_buf;\n" +
+            "    double*       DLOGITS = g_slots[dlogits_id].d_buf;\n" +
+            "    int block_sz = 64;\n" +
+            "    int64_t want = (T + block_sz - 1) / block_sz;\n" +
+            "    int grid_sz = (want > 1024) ? 1024 : (int)want;\n" +
+            "    if (grid_sz < 1) grid_sz = 1;\n" +
+            "    _hx_k_ce_grad<<<grid_sz, block_sz>>>(LOGITS, TARGETS, DLOGITS, T, V);\n" +
+            "    cudaError_t er = cudaDeviceSynchronize();\n" +
+            "    if (er != cudaSuccess) {\n" +
+            "        fprintf(stderr, \"[cuda] ce_grad launch failed: %s\\n\",\n" +
+            "                cudaGetErrorString(er));\n" +
+            "        return -1;\n" +
+            "    }\n" +
+            "    {\n" +
+            "        HexaFarrEntry* e = &_hx_farr_table[dlogits_id];\n" +
+            "        e->d_buf      = (void*)g_slots[dlogits_id].d_buf;\n" +
+            "        e->loc        = FARR_DEVICE;\n" +
+            "        e->dirty_host = 0;\n" +
+            "        e->dirty_dev  = 0;\n" +
+            "    }\n" +
+            "    return 0;\n" +
+            "#else\n" +
+            "    (void)logits_id; (void)targets_id; (void)dlogits_id; (void)T; (void)V;\n" +
+            "    fprintf(stderr, \"[cuda] ce_grad: built without __CUDACC__\\n\");\n" +
+            "    return -1;\n" +
+            "#endif\n" +
+            "}\n" +
+            "\n" +
+            "/* HEXA-FUSION L3 (BWD glue half · ⑤-bwd2) — device-resident MoE-router bwd.\n" +
+            " * Reproduces moe_lib.hexa nn_moe_router_bwd EXACTLY (reads CACHED probs from\n" +
+            " * fwd — NO _moe_exp replay needed). Per position t (one thread):\n" +
+            " *   pass 1 (e ascending): pte = PROBS[t,e] ; dg = Σ_c DY[t,c]·EX_OUT[e,t,c]\n" +
+            " *                         DEX_OUT[e,t,c] = pte·DY[t,c]  (c ascending)\n" +
+            " *                         stash dg in DLOGITS[t,e] ; dot += pte·dg\n" +
+            " *   pass 2 (e ascending): DLOGITS[t,e] = PROBS[t,e]·(DLOGITS[t,e] - dot)\n" +
+            " * Every reduction (the inner Σ_c and the dot Σ_e) accumulates SEQUENTIALLY in\n" +
+            " * the host order under ONE thread per t — NO tree re-assoc, NO atomics → bit-\n" +
+            " * exact (max|Δ|=0). dot is read AFTER pass-1 completes the full E scan, so the\n" +
+            " * 2-pass dependency is preserved within the single thread (no cross-thread\n" +
+            " * sync). Fuses the nn_moe_router_bwd host glue in clm_prod_bwd; keeps\n" +
+            " * DLOGITS/DEX_OUT FARR_DEVICE so the follow-up conv-bwd + expert-unpack\n" +
+            " * H2D-skip them. */\n" +
+            "__global__ void _hx_k_moe_router_bwd(const double* __restrict__ PROBS,\n" +
+            "                                     const double* __restrict__ EX_OUT,\n" +
+            "                                     const double* __restrict__ DY,\n" +
+            "                                     double* __restrict__ DLOGITS,\n" +
+            "                                     double* __restrict__ DEX_OUT,\n" +
+            "                                     int64_t T, int64_t E, int64_t C) {\n" +
+            "    for (int64_t t = (int64_t)blockIdx.x * blockDim.x + threadIdx.x;\n" +
+            "         t < T; t += (int64_t)blockDim.x * gridDim.x) {\n" +
+            "        double dot = 0.0;\n" +
+            "        for (int64_t e = 0; e < E; e++) {\n" +
+            "            double pte = PROBS[t * E + e];\n" +
+            "            double dg = 0.0;\n" +
+            "            for (int64_t c = 0; c < C; c++) {\n" +
+            "                double gy = DY[t * C + c];\n" +
+            "                dg += gy * EX_OUT[e * T * C + t * C + c];\n" +
+            "                DEX_OUT[e * T * C + t * C + c] = pte * gy;\n" +
+            "            }\n" +
+            "            DLOGITS[t * E + e] = dg;\n" +
+            "            dot += pte * dg;\n" +
+            "        }\n" +
+            "        for (int64_t e2 = 0; e2 < E; e2++) {\n" +
+            "            double pte = PROBS[t * E + e2];\n" +
+            "            double dg = DLOGITS[t * E + e2];\n" +
+            "            DLOGITS[t * E + e2] = pte * (dg - dot);\n" +
+            "        }\n" +
+            "    }\n" +
+            "}\n" +
+            "\n" +
+            "int _hx_cuda_farr_moe_router_bwd_gpu(int64_t probs_id, int64_t ex_out_id,\n" +
+            "                                     int64_t dy_id, int64_t dlogits_id,\n" +
+            "                                     int64_t dex_out_id,\n" +
+            "                                     int64_t T, int64_t E, int64_t C) {\n" +
+            "#ifdef __CUDACC__\n" +
+            "    if (T <= 0 || E <= 0 || C <= 0) return -1;\n" +
+            "    if (_h2d(probs_id) != 0) return -1;\n" +
+            "    if (_h2d(ex_out_id) != 0) return -1;\n" +
+            "    if (_h2d(dy_id) != 0) return -1;\n" +
+            "    if (_ensure_dev_alloc_out(dlogits_id, T * E) != 0) return -1;\n" +
+            "    if (_ensure_dev_alloc_out(dex_out_id, E * T * C) != 0) return -1;\n" +
+            "    const double* PROBS  = g_slots[probs_id].d_buf;\n" +
+            "    const double* EX_OUT = g_slots[ex_out_id].d_buf;\n" +
+            "    const double* DY     = g_slots[dy_id].d_buf;\n" +
+            "    double*       DLOGITS = g_slots[dlogits_id].d_buf;\n" +
+            "    double*       DEX_OUT = g_slots[dex_out_id].d_buf;\n" +
+            "    int block_sz = 64;\n" +
+            "    int64_t want = (T + block_sz - 1) / block_sz;\n" +
+            "    int grid_sz = (want > 1024) ? 1024 : (int)want;\n" +
+            "    if (grid_sz < 1) grid_sz = 1;\n" +
+            "    _hx_k_moe_router_bwd<<<grid_sz, block_sz>>>(PROBS, EX_OUT, DY,\n" +
+            "                                               DLOGITS, DEX_OUT, T, E, C);\n" +
+            "    cudaError_t er = cudaDeviceSynchronize();\n" +
+            "    if (er != cudaSuccess) {\n" +
+            "        fprintf(stderr, \"[cuda] moe_router_bwd launch failed: %s\\n\",\n" +
+            "                cudaGetErrorString(er));\n" +
+            "        return -1;\n" +
+            "    }\n" +
+            "    {\n" +
+            "        int64_t outs[2] = { dlogits_id, dex_out_id };\n" +
+            "        for (int k = 0; k < 2; k++) {\n" +
+            "            HexaFarrEntry* e = &_hx_farr_table[outs[k]];\n" +
+            "            e->d_buf      = (void*)g_slots[outs[k]].d_buf;\n" +
+            "            e->loc        = FARR_DEVICE;\n" +
+            "            e->dirty_host = 0;\n" +
+            "            e->dirty_dev  = 0;\n" +
+            "        }\n" +
+            "    }\n" +
+            "    return 0;\n" +
+            "#else\n" +
+            "    (void)probs_id; (void)ex_out_id; (void)dy_id; (void)dlogits_id;\n" +
+            "    (void)dex_out_id; (void)T; (void)E; (void)C;\n" +
+            "    fprintf(stderr, \"[cuda] moe_router_bwd: built without __CUDACC__\\n\");\n" +
+            "    return -1;\n" +
+            "#endif\n" +
+            "}\n" +
+            "\n" +
+            "/* HEXA-FUSION L3 (BWD glue half · ⑤-bwd2) — device-resident 3-way grad sum.\n" +
+            " * Reproduces the clm_prod_bwd dxt accumulation EXACTLY:\n" +
+            " *   OUT[i] = A[i] + B[i] + C[i]   for i in 0..n  (left-to-right, host order)\n" +
+            " * = dxt = dxt_r + dxt_e0 + dxt_e1 (the router + 2 expert dX paths summed).\n" +
+            " * Pure elementwise, NO reduction across i, fixed (A+B)+C association matching\n" +
+            " * the host `t_get(a)+t_get(b)+t_get(c)` → bit-exact (max|Δ|=0). Fuses the dxt\n" +
+            " * 3-way host sum loop; keeps OUT FARR_DEVICE for the follow-up gelu_bwd. */\n" +
+            "__global__ void _hx_k_grad_sum3(const double* __restrict__ A,\n" +
+            "                                const double* __restrict__ B,\n" +
+            "                                const double* __restrict__ C,\n" +
+            "                                double* __restrict__ OUT, int64_t n) {\n" +
+            "    int64_t stride = (int64_t)blockDim.x * (int64_t)gridDim.x;\n" +
+            "    for (int64_t i = (int64_t)blockIdx.x * blockDim.x + threadIdx.x;\n" +
+            "         i < n; i += stride) {\n" +
+            "        OUT[i] = A[i] + B[i] + C[i];\n" +
+            "    }\n" +
+            "}\n" +
+            "\n" +
+            "int _hx_cuda_farr_grad_sum3_gpu(int64_t a_id, int64_t b_id, int64_t c_id,\n" +
+            "                                int64_t out_id, int64_t n) {\n" +
+            "#ifdef __CUDACC__\n" +
+            "    if (n <= 0) return -1;\n" +
+            "    if (_h2d(a_id) != 0) return -1;\n" +
+            "    if (_h2d(b_id) != 0) return -1;\n" +
+            "    if (_h2d(c_id) != 0) return -1;\n" +
+            "    if (_ensure_dev_alloc_out(out_id, n) != 0) return -1;\n" +
+            "    const double* A = g_slots[a_id].d_buf;\n" +
+            "    const double* B = g_slots[b_id].d_buf;\n" +
+            "    const double* C = g_slots[c_id].d_buf;\n" +
+            "    double*       OUT = g_slots[out_id].d_buf;\n" +
+            "    int block_sz = 256;\n" +
+            "    int64_t want = (n + block_sz - 1) / block_sz;\n" +
+            "    int grid_sz = (want > 1024) ? 1024 : (int)want;\n" +
+            "    if (grid_sz < 1) grid_sz = 1;\n" +
+            "    _hx_k_grad_sum3<<<grid_sz, block_sz>>>(A, B, C, OUT, n);\n" +
+            "    cudaError_t er = cudaDeviceSynchronize();\n" +
+            "    if (er != cudaSuccess) {\n" +
+            "        fprintf(stderr, \"[cuda] grad_sum3 launch failed: %s\\n\",\n" +
+            "                cudaGetErrorString(er));\n" +
+            "        return -1;\n" +
+            "    }\n" +
+            "    {\n" +
+            "        HexaFarrEntry* e = &_hx_farr_table[out_id];\n" +
+            "        e->d_buf      = (void*)g_slots[out_id].d_buf;\n" +
+            "        e->loc        = FARR_DEVICE;\n" +
+            "        e->dirty_host = 0;\n" +
+            "        e->dirty_dev  = 0;\n" +
+            "    }\n" +
+            "    return 0;\n" +
+            "#else\n" +
+            "    (void)a_id; (void)b_id; (void)c_id; (void)out_id; (void)n;\n" +
+            "    fprintf(stderr, \"[cuda] grad_sum3: built without __CUDACC__\\n\");\n" +
+            "    return -1;\n" +
+            "#endif\n" +
+            "}\n" +
+            "\n" +
+            "/* HEXA-FUSION L3 (BWD glue half · ⑤-bwd2) — device-resident 2-way grad sum.\n" +
+            " * Reproduces the clm_prod_bwd dxec accumulation EXACTLY:\n" +
+            " *   OUT[i] = A[i] + B[i]   for i in 0..n  (host order) = dxec = dxt + dxec_b.\n" +
+            " * Pure elementwise, NO reduction → bit-exact (max|Δ|=0). Fuses the dxec 2-way\n" +
+            " * host sum loop; keeps OUT FARR_DEVICE for the follow-up conv-bwd GEMM. */\n" +
+            "__global__ void _hx_k_grad_sum2(const double* __restrict__ A,\n" +
+            "                                const double* __restrict__ B,\n" +
+            "                                double* __restrict__ OUT, int64_t n) {\n" +
+            "    int64_t stride = (int64_t)blockDim.x * (int64_t)gridDim.x;\n" +
+            "    for (int64_t i = (int64_t)blockIdx.x * blockDim.x + threadIdx.x;\n" +
+            "         i < n; i += stride) {\n" +
+            "        OUT[i] = A[i] + B[i];\n" +
+            "    }\n" +
+            "}\n" +
+            "\n" +
+            "int _hx_cuda_farr_grad_sum2_gpu(int64_t a_id, int64_t b_id,\n" +
+            "                                int64_t out_id, int64_t n) {\n" +
+            "#ifdef __CUDACC__\n" +
+            "    if (n <= 0) return -1;\n" +
+            "    if (_h2d(a_id) != 0) return -1;\n" +
+            "    if (_h2d(b_id) != 0) return -1;\n" +
+            "    if (_ensure_dev_alloc_out(out_id, n) != 0) return -1;\n" +
+            "    const double* A = g_slots[a_id].d_buf;\n" +
+            "    const double* B = g_slots[b_id].d_buf;\n" +
+            "    double*       OUT = g_slots[out_id].d_buf;\n" +
+            "    int block_sz = 256;\n" +
+            "    int64_t want = (n + block_sz - 1) / block_sz;\n" +
+            "    int grid_sz = (want > 1024) ? 1024 : (int)want;\n" +
+            "    if (grid_sz < 1) grid_sz = 1;\n" +
+            "    _hx_k_grad_sum2<<<grid_sz, block_sz>>>(A, B, OUT, n);\n" +
+            "    cudaError_t er = cudaDeviceSynchronize();\n" +
+            "    if (er != cudaSuccess) {\n" +
+            "        fprintf(stderr, \"[cuda] grad_sum2 launch failed: %s\\n\",\n" +
+            "                cudaGetErrorString(er));\n" +
+            "        return -1;\n" +
+            "    }\n" +
+            "    {\n" +
+            "        HexaFarrEntry* e = &_hx_farr_table[out_id];\n" +
+            "        e->d_buf      = (void*)g_slots[out_id].d_buf;\n" +
+            "        e->loc        = FARR_DEVICE;\n" +
+            "        e->dirty_host = 0;\n" +
+            "        e->dirty_dev  = 0;\n" +
+            "    }\n" +
+            "    return 0;\n" +
+            "#else\n" +
+            "    (void)a_id; (void)b_id; (void)out_id; (void)n;\n" +
+            "    fprintf(stderr, \"[cuda] grad_sum2: built without __CUDACC__\\n\");\n" +
+            "    return -1;\n" +
+            "#endif\n" +
+            "}\n" +
+            "\n" +
+            "/* HEXA-FUSION L3 (BWD glue half · ⑤-bwd2) — device-resident deterministic\n" +
+            " * embedding scatter (grad accumulate into the table). Reproduces nn_lib.hexa\n" +
+            " * nn_embedding_bwd_scatter EXACTLY but WITHOUT atomics: the host loops i in\n" +
+            " * 0..T and does DTABLE[tok·d + c] += DX[i·d + c] (tok = (int)IDS[i]); colliding\n" +
+            " * tokens accumulate in i-ascending order. To preserve that order bit-exactly\n" +
+            " * with NO atomics and NO tree re-assoc, we assign ONE THREAD PER VOCAB ROW r:\n" +
+            " * each thread scans i = 0..T ascending and, for every i with tok==r, adds\n" +
+            " * DX[i·d + c] into DTABLE[r·d + c] (c ascending) — so each table row is touched\n" +
+            " * by exactly one thread, accumulating its colliding tokens in the SAME\n" +
+            " * ascending-i order the host uses. DTABLE is pre-zeroed on the host (the\n" +
+            " * clm_prod_bwd zero loop). Sequential per-row accumulation → bit-exact\n" +
+            " * (max|Δ|=0). Fuses the nn_embedding_bwd_scatter host glue at the tail of\n" +
+            " * clm_prod_bwd; keeps DTABLE FARR_DEVICE for the follow-up AdamW. */\n" +
+            "__global__ void _hx_k_embedding_bwd_scatter(const double* __restrict__ DX,\n" +
+            "                                            const double* __restrict__ IDS,\n" +
+            "                                            double* __restrict__ DTABLE,\n" +
+            "                                            int64_t T, int64_t d, int64_t V) {\n" +
+            "    for (int64_t r = (int64_t)blockIdx.x * blockDim.x + threadIdx.x;\n" +
+            "         r < V; r += (int64_t)blockDim.x * gridDim.x) {\n" +
+            "        for (int64_t i = 0; i < T; i++) {\n" +
+            "            int64_t tok = (int64_t)IDS[i];\n" +
+            "            if (tok != r) continue;\n" +
+            "            for (int64_t c = 0; c < d; c++)\n" +
+            "                DTABLE[r * d + c] = DTABLE[r * d + c] + DX[i * d + c];\n" +
+            "        }\n" +
+            "    }\n" +
+            "}\n" +
+            "\n" +
+            "int _hx_cuda_farr_embedding_bwd_scatter_gpu(int64_t dx_id, int64_t ids_id,\n" +
+            "                                            int64_t dtable_id,\n" +
+            "                                            int64_t T, int64_t d, int64_t V) {\n" +
+            "#ifdef __CUDACC__\n" +
+            "    if (T <= 0 || d <= 0 || V <= 0) return -1;\n" +
+            "    if (_h2d(dx_id) != 0) return -1;\n" +
+            "    if (_h2d(ids_id) != 0) return -1;\n" +
+            "    if (_h2d(dtable_id) != 0) return -1;   /* pre-zeroed host buffer → device */\n" +
+            "    const double* DX  = g_slots[dx_id].d_buf;\n" +
+            "    const double* IDS = g_slots[ids_id].d_buf;\n" +
+            "    double*       DTABLE = g_slots[dtable_id].d_buf;\n" +
+            "    int block_sz = 128;\n" +
+            "    int64_t want = (V + block_sz - 1) / block_sz;\n" +
+            "    int grid_sz = (want > 1024) ? 1024 : (int)want;\n" +
+            "    if (grid_sz < 1) grid_sz = 1;\n" +
+            "    _hx_k_embedding_bwd_scatter<<<grid_sz, block_sz>>>(DX, IDS, DTABLE, T, d, V);\n" +
+            "    cudaError_t er = cudaDeviceSynchronize();\n" +
+            "    if (er != cudaSuccess) {\n" +
+            "        fprintf(stderr, \"[cuda] embedding_bwd_scatter launch failed: %s\\n\",\n" +
+            "                cudaGetErrorString(er));\n" +
+            "        return -1;\n" +
+            "    }\n" +
+            "    {\n" +
+            "        HexaFarrEntry* e = &_hx_farr_table[dtable_id];\n" +
+            "        e->d_buf      = (void*)g_slots[dtable_id].d_buf;\n" +
+            "        e->loc        = FARR_DEVICE;\n" +
+            "        e->dirty_host = 0;\n" +
+            "        e->dirty_dev  = 0;\n" +
+            "    }\n" +
+            "    return 0;\n" +
+            "#else\n" +
+            "    (void)dx_id; (void)ids_id; (void)dtable_id; (void)T; (void)d; (void)V;\n" +
+            "    fprintf(stderr, \"[cuda] embedding_bwd_scatter: built without __CUDACC__\\n\");\n" +
+            "    return -1;\n" +
+            "#endif\n" +
+            "}\n" +
+            "\n" +
             "/* ════════════════════════════════════════════════════════════════════\n" +
             " * RFC 041 Phase 4-D-5-2 — Phase B reduction + Phase B2 real CUDA kernels\n" +
             " * ────────────────────────────────────────────────────────────────────\n" +

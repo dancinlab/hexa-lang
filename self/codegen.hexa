@@ -7457,6 +7457,22 @@ fn gen2_expr(node) {
                 if name == "forge_dispatch_embedding" {
                     return "hexa_forge_dispatch_embedding(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ", " + arg_strs[3] + ", " + arg_strs[4] + ")"
                 }
+                // HEXA-FUSION L3 (BWD glue half · ⑤-bwd2): forge_dispatch_ce_grad(
+                // logits, targets, dlogits, T, V) -> int rc. The clm_ce_grad host
+                // glue: per t mx=max logit, sm=Σ exp(logit-mx), dlogits[t,v]=p·(1/T),
+                // dlogits[t,tgt]-=1/T. Sequential per-row, device exp() = libm → bit-
+                // exact (max|Δ|=0). Keeps DLOGITS DEVICE-RESIDENT. no-CUDA → -1 → host.
+                if name == "forge_dispatch_ce_grad" {
+                    return "hexa_forge_dispatch_ce_grad(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ", " + arg_strs[3] + ", " + arg_strs[4] + ")"
+                }
+                // HEXA-FUSION L3 (BWD glue half · ⑤-bwd2): forge_dispatch_grad_sum3(
+                // a, b, c, out, n) -> int rc. out[i]=a[i]+b[i]+c[i] — the dxt 3-way
+                // grad sum (dxt_r+dxt_e0+dxt_e1). Pure elementwise, fixed (a+b)+c
+                // association → bit-exact (max|Δ|=0). Keeps OUT DEVICE-RESIDENT for
+                // the follow-up gelu_bwd. no-CUDA → -1 → host sum loop (byte-eq).
+                if name == "forge_dispatch_grad_sum3" {
+                    return "hexa_forge_dispatch_grad_sum3(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ", " + arg_strs[3] + ", " + arg_strs[4] + ")"
+                }
                 // anima RFC 034 (2026-05-16): farr autograd — ad_matmul
                 // (5-arg; forward = farr_matmul + records backward).
                 if name == "ad_matmul"      { return "hexa_ad_matmul(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ", " + arg_strs[3] + ", " + arg_strs[4] + ")" }
@@ -7522,6 +7538,33 @@ fn gen2_expr(node) {
                 if name == "forge_dispatch_expert_pack2" {
                     return "hexa_forge_dispatch_expert_pack2(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ", " + arg_strs[3] + ")"
                 }
+                // HEXA-FUSION L3 (BWD glue half): forge_dispatch_gelu_bwd(g, da,
+                // dg, n) -> int rc. DG[i] = DA[i]·GELU'(G[i]), GELU'(x)=Φ(x)+x·φ(x)
+                // — the EXACT erf/exp-based gelu grad of nn_lib nn_gelu_bwd (same
+                // 1/√2 + 1/√(2π) literals, same cdf + x·pdf op order). Pure
+                // elementwise, NO reduction → bit-exact to the host scalar loop
+                // (max|Δ|=0). Fuses the gelu_bwd ×3 host glue in clm_prod_bwd
+                // (deo0/deo1/dhn0). no-CUDA → -1 → host gelu_bwd (byte-eq).
+                if name == "forge_dispatch_gelu_bwd" {
+                    return "hexa_forge_dispatch_gelu_bwd(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ", " + arg_strs[3] + ")"
+                }
+                // HEXA-FUSION L3 (BWD glue half): forge_dispatch_expert_unpack2(
+                // dex_out, dex0, dex1, n) -> int rc. The bwd MIRROR of expert_pack2:
+                // DEX0[i]=DEX_OUT[0·n+i], DEX1[i]=DEX_OUT[1·n+i] for i in 0..n (n=T·d)
+                // — the moe-router grad split back into the 2 per-expert grads. Pure
+                // copy, NO reduction → trivially bit-exact (max|Δ|=0). Keeps
+                // DEX0/DEX1 DEVICE-RESIDENT so the gelu_bwd H2D-skips them. no-CUDA →
+                // -1 → host unpack loop (byte-eq).
+                if name == "forge_dispatch_expert_unpack2" {
+                    return "hexa_forge_dispatch_expert_unpack2(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ", " + arg_strs[3] + ")"
+                }
+                // HEXA-FUSION L3 (BWD glue half · ⑤-bwd2): forge_dispatch_grad_sum2(
+                // a, b, out, n) -> int rc. out[i]=a[i]+b[i] — the dxec 2-way grad sum
+                // (dxt+dxec_b). Pure elementwise → bit-exact (max|Δ|=0). Keeps OUT
+                // DEVICE-RESIDENT for the follow-up conv-bwd GEMM. no-CUDA → -1 → host.
+                if name == "forge_dispatch_grad_sum2" {
+                    return "hexa_forge_dispatch_grad_sum2(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ", " + arg_strs[3] + ")"
+                }
                 // stdlib/os/pty — 4-arg builtin (RFC stdlib-os-pty.md)
                 if name == "pty_forkexec"   { return "hexa_pty_forkexec(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ", " + arg_strs[3] + ")" }
                 // stdlib/os/exec_pipe — fork+exec with separated stdout/stderr (RFC ssh-server stderr)
@@ -7547,6 +7590,16 @@ fn gen2_expr(node) {
                 }
             }
             if len(node.args) == 6 {
+                // HEXA-FUSION L3 (BWD glue half · ⑤-bwd2): forge_dispatch_embedding_
+                // bwd_scatter(dx, ids, dtable, T, d, V) -> int rc. The
+                // nn_embedding_bwd_scatter host glue (dtable[tok·d+c] += dx[i·d+c],
+                // tok=(int)ids[i], i ascending). Device kernel: ONE thread/vocab-row,
+                // scans i=0..T ascending, adds matching tokens in host order — NO
+                // atomics, NO tree re-assoc → bit-exact (max|Δ|=0). dtable pre-zeroed
+                // on host, kept DEVICE-RESIDENT. no-CUDA → -1 → host scatter (byte-eq).
+                if name == "forge_dispatch_embedding_bwd_scatter" {
+                    return "hexa_forge_dispatch_embedding_bwd_scatter(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ", " + arg_strs[3] + ", " + arg_strs[4] + ", " + arg_strs[5] + ")"
+                }
                 // feat/primitive-float-array — single-qubit gate kernel.
                 if name == "farr_apply_single" {
                     return "hexa_farr_apply_single(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ", " + arg_strs[3] + ", " + arg_strs[4] + ", " + arg_strs[5] + ")"
@@ -7639,6 +7692,17 @@ fn gen2_expr(node) {
                 }
             }
             if len(node.args) == 8 {
+                // HEXA-FUSION L3 (BWD glue half · ⑤-bwd2): forge_dispatch_moe_router_
+                // bwd(probs, ex_out, dy, dlogits, dex_out, T, E, C) -> int rc.
+                // Reproduces nn_moe_router_bwd (reads CACHED probs — NO _moe_exp
+                // replay): per t 2-pass over E with inner Σ_c — dg=Σ_c dy·ex_out,
+                // dex_out=pte·dy, dot=Σ_e pte·dg, dlogits=pte·(dg-dot). Every reduction
+                // SEQUENTIAL in host order under ONE thread per t (NO tree re-assoc, NO
+                // atomics) → bit-exact (max|Δ|=0). Keeps DLOGITS/DEX_OUT DEVICE-
+                // RESIDENT. no-CUDA → -1 → host nn_moe_router_bwd (byte-eq).
+                if name == "forge_dispatch_moe_router_bwd" {
+                    return "hexa_forge_dispatch_moe_router_bwd(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ", " + arg_strs[3] + ", " + arg_strs[4] + ", " + arg_strs[5] + ", " + arg_strs[6] + ", " + arg_strs[7] + ")"
+                }
                 // flame spiking RFC — STDP pair-based GPU dispatch
                 // (archive/patches/flame-stdp-pair-gpu-kernel.md).
                 // forge_dispatch_stdp_pair(W, tr_pre, tr_post, spike, out,
@@ -7677,6 +7741,23 @@ fn gen2_expr(node) {
                 // floor), keeps OUT DEVICE-RESIDENT. no-CUDA → -1 → host loop.
                 if name == "forge_dispatch_groupnorm" {
                     return "hexa_forge_dispatch_groupnorm("
+                        + arg_strs[0] + ", " + arg_strs[1] + ", "
+                        + arg_strs[2] + ", " + arg_strs[3] + ", "
+                        + arg_strs[4] + ", " + arg_strs[5] + ", "
+                        + arg_strs[6] + ", " + arg_strs[7] + ", "
+                        + arg_strs[8] + ", " + arg_strs[9] + ")"
+                }
+                // HEXA-FUSION L3 (BWD glue half): forge_dispatch_groupnorm_bwd(
+                // xhat, inv, gamma, dy, dgamma, dbeta, dx, T, C, G) -> int rc.
+                // GroupNorm bwd (gn_lib.hexa nn_groupnorm_bwd): per-channel
+                // DGAMMA[c]=Σ_t DY·XHAT, DBETA[c]=Σ_t DY (one thread/channel), then
+                // per-group s1=Σ dxh, s2=Σ dxh·xhat, DX=INV·(dxh - s1/m - xhat·s2/m)
+                // (one thread/group, t outer c inner). Every reduction SEQUENTIAL in
+                // the host order (NO tree re-assoc, NO atomics) → bit-exact
+                // (max|Δ|=0). Fuses the groupnorm_bwd ×2 host glue in clm_prod_bwd
+                // (dy←dynorm, dh0←dhn0). no-CUDA → -1 → host loop (byte-eq).
+                if name == "forge_dispatch_groupnorm_bwd" {
+                    return "hexa_forge_dispatch_groupnorm_bwd("
                         + arg_strs[0] + ", " + arg_strs[1] + ", "
                         + arg_strs[2] + ", " + arg_strs[3] + ", "
                         + arg_strs[4] + ", " + arg_strs[5] + ", "

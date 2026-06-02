@@ -406,6 +406,225 @@ pub fn devfeed_embedding(ids: int, table: int, x_out: int, T: int, d: int) {
     }
 }
 
+// ── devfeed_gelu_bwd: device-resident elementwise GELU backward (BWD glue) ─────
+// HEXA-FUSION L3 (BWD glue half) — the REFERENCE host gelu_bwd that the device
+// kernel _hx_cuda_farr_gelu_bwd_gpu reproduces, byte-identical to nn_lib.hexa
+// nn_gelu_bwd: dg[i]=da[i]·GELU'(g[i]), GELU'(x)=Φ(x)+x·φ(x), Φ(x)=0.5·(1+erf(x/√2)),
+// φ(x)=(1/√(2π))·exp(-0.5·x²). The 1/√2 + 1/√(2π) literals and the cdf + x·pdf op
+// order match the kernel verbatim; erf/exp are the libm codegen builtins (IEEE-
+// correct host + CUDA). Pure elementwise, NO reduction → bit-exact (max|Δ|=0).
+// Inlined here so the prebuilt mac binary never link-references the device builtin;
+// the builtin is wired ONLY in clm_prod.hexa::_gelu_bwd under CLM_PROD_DEVRESIDENT.
+pub fn devfeed_gelu_bwd(g: int, da: int, dg: int, n: int) {
+    let inv_sqrt2 = 0.70710678118654752440
+    let inv_sqrt2pi = 0.39894228040143267794
+    let mut i = 0
+    while i < n {
+        let x = t_get(g, i)
+        let cdf = 0.5 * (1.0 + erf(x * inv_sqrt2))
+        let pdf = inv_sqrt2pi * exp(0.0 - 0.5 * x * x)
+        let grad = cdf + x * pdf
+        t_set(dg, i, t_get(da, i) * grad)
+        i = i + 1
+    }
+}
+
+// ── devfeed_groupnorm_bwd: device-resident GroupNorm backward (BWD glue) ───────
+// HEXA-FUSION L3 (BWD glue half) — the REFERENCE host groupnorm_bwd that the device
+// kernel _hx_cuda_farr_groupnorm_bwd_gpu reproduces, byte-identical to gn_lib.hexa
+// nn_groupnorm_bwd: per channel dgamma[c]=Σ_t dy·xhat, dbeta[c]=Σ_t dy; per group
+// s1=Σ dxh, s2=Σ dxh·xhat (dxh=dy·gamma), dX=inv·(dxh - s1/m - xhat·s2/m), m=Cg·T.
+// Every reduction accumulates SEQUENTIALLY in the SAME order the device kernel uses
+// (per-channel over t; per-group s1/s2 over t outer c inner — NO tree re-assoc),
+// and inv is the SAVED forward reciprocal-stddev (no sqrt re-derivation) → max|Δ|
+// MUST be exactly 0. Inlined here so the prebuilt mac binary never link-references
+// the device builtin; the builtin is wired ONLY in clm_prod.hexa::_groupnorm_bwd.
+pub fn devfeed_groupnorm_bwd(xhat: int, inv: int, gamma: int, dy: int,
+                             dgamma_out: int, dbeta_out: int, dX_out: int,
+                             T: int, C: int, G: int) {
+    let cg = C / G
+    let m = to_float(cg * T)
+    let mut c = 0
+    while c < C {
+        let mut sg = 0.0
+        let mut sb = 0.0
+        let mut t = 0
+        while t < T {
+            let idx = t * C + c
+            let gy = t_get(dy, idx)
+            sg = sg + gy * t_get(xhat, idx)
+            sb = sb + gy
+            t = t + 1
+        }
+        t_set(dgamma_out, c, sg)
+        t_set(dbeta_out, c, sb)
+        c = c + 1
+    }
+    let mut g = 0
+    while g < G {
+        let c0 = g * cg
+        let inv_g = t_get(inv, g)
+        let mut s1 = 0.0
+        let mut s2 = 0.0
+        let mut t = 0
+        while t < T {
+            let mut cc = 0
+            while cc < cg {
+                let ch = c0 + cc
+                let idx = t * C + ch
+                let dxh = t_get(dy, idx) * t_get(gamma, ch)
+                s1 = s1 + dxh
+                s2 = s2 + dxh * t_get(xhat, idx)
+                cc = cc + 1
+            }
+            t = t + 1
+        }
+        let mut t2 = 0
+        while t2 < T {
+            let mut cc2 = 0
+            while cc2 < cg {
+                let ch = c0 + cc2
+                let idx = t2 * C + ch
+                let dxh = t_get(dy, idx) * t_get(gamma, ch)
+                let dx = inv_g * (dxh - s1 / m - t_get(xhat, idx) * s2 / m)
+                t_set(dX_out, idx, dx)
+                cc2 = cc2 + 1
+            }
+            t2 = t2 + 1
+        }
+        g = g + 1
+    }
+}
+
+// ── devfeed_expert_unpack2: device-resident expert-unpack (BWD glue) ───────────
+// HEXA-FUSION L3 (BWD glue half) — the REFERENCE host unpack that the device
+// kernel _hx_cuda_farr_expert_unpack2_gpu reproduces, byte-identical to the
+// clm_prod_bwd ei-loop: dex0[i]=dex_out[0·n+i], dex1[i]=dex_out[1·n+i] for i in
+// 0..n. The bwd mirror of devfeed_expert_pack2. Pure copy, NO arithmetic → the
+// device kernel is trivially bit-exact (max|Δ|=0). Inlined here so the prebuilt
+// mac binary never link-references the device builtin; the builtin is wired ONLY
+// in clm_prod.hexa::_expert_unpack2 under CLM_PROD_DEVRESIDENT.
+pub fn devfeed_expert_unpack2(dex_out: int, dex0: int, dex1: int, n: int) {
+    let mut i = 0
+    while i < n {
+        t_set(dex0, i, t_get(dex_out, 0 * n + i))
+        t_set(dex1, i, t_get(dex_out, 1 * n + i))
+        i = i + 1
+    }
+}
+
+// ── devfeed_ce_grad: device-resident CE softmax grad (BWD glue · ⑤-bwd2) ───────
+// HEXA-FUSION L3 (BWD glue half) — the REFERENCE host ce_grad that the device
+// kernel _hx_cuda_farr_ce_grad_gpu reproduces, byte-identical to clm_prod.hexa
+// clm_ce_grad: per t, mx=max_v logit, sm=Σ_v exp(logit-mx),
+// dlogits[t,v]=(exp(logit-mx)/sm)·(1/T), dlogits[t,tgt]-=1/T. The max, the sum and
+// the per-col writes run SEQUENTIALLY in the host scan order (v ascending) and the
+// 1/T = 1.0/to_float(T) scaling matches verbatim; exp() is the libm codegen builtin
+// (IEEE-correct host + CUDA) → bit-exact (max|Δ|=0). Inlined here so the prebuilt
+// mac binary never link-references the device builtin; wired ONLY in
+// clm_prod.hexa::_ce_grad under CLM_PROD_DEVRESIDENT.
+pub fn devfeed_ce_grad(logits: int, targets: int, dlogits_out: int, T: int, V: int) {
+    let mut t = 0
+    while t < T {
+        let base = t * V
+        let mut mx = t_get(logits, base)
+        let mut i = 1
+        while i < V { let v = t_get(logits, base + i); if v > mx { mx = v }; i = i + 1 }
+        let mut sm = 0.0
+        let mut i2 = 0
+        while i2 < V { sm = sm + exp(t_get(logits, base + i2) - mx); i2 = i2 + 1 }
+        let invT = 1.0 / to_float(T)
+        let mut v3 = 0
+        while v3 < V {
+            let p = exp(t_get(logits, base + v3) - mx) / sm
+            t_set(dlogits_out, base + v3, p * invT)
+            v3 = v3 + 1
+        }
+        let tgt = to_int(t_get(targets, t))
+        t_set(dlogits_out, base + tgt, t_get(dlogits_out, base + tgt) - invT)
+        t = t + 1
+    }
+}
+
+// ── devfeed_moe_router_bwd: device-resident MoE-router bwd (BWD glue · ⑤-bwd2) ──
+// HEXA-FUSION L3 (BWD glue half) — the REFERENCE host moe-router bwd that the device
+// kernel _hx_cuda_farr_moe_router_bwd_gpu reproduces, byte-identical to moe_lib.hexa
+// nn_moe_router_bwd: per t a 2-pass over E with inner Σ_c — pass1 dg[e]=Σ_c dy·ex_out,
+// dex_out[e,t,c]=probs[t,e]·dy[t,c], stash dg in dlogits, dot=Σ_e probs·dg; pass2
+// dlogits[e]=probs[e]·(dg[e]-dot). Reads CACHED probs (NO _moe_exp replay). Every
+// reduction accumulates SEQUENTIALLY in the SAME order the device kernel uses (one
+// thread per t) → max|Δ| MUST be exactly 0. Inlined here so the prebuilt mac binary
+// never link-references the device builtin; wired ONLY in clm_prod.hexa::_moe_router_bwd.
+pub fn devfeed_moe_router_bwd(probs: int, ex_out: int, dy: int,
+                              dlogits_out: int, dex_out: int,
+                              T: int, E: int, C: int) {
+    let mut t = 0
+    while t < T {
+        let mut dot = 0.0
+        let mut e = 0
+        while e < E {
+            let pte = t_get(probs, t * E + e)
+            let mut dg = 0.0
+            let mut c = 0
+            while c < C {
+                let gy = t_get(dy, t * C + c)
+                dg = dg + gy * t_get(ex_out, e * T * C + t * C + c)
+                t_set(dex_out, e * T * C + t * C + c, pte * gy)
+                c = c + 1
+            }
+            t_set(dlogits_out, t * E + e, dg)
+            dot = dot + pte * dg
+            e = e + 1
+        }
+        let mut e2 = 0
+        while e2 < E {
+            let pte = t_get(probs, t * E + e2)
+            let dg = t_get(dlogits_out, t * E + e2)
+            t_set(dlogits_out, t * E + e2, pte * (dg - dot))
+            e2 = e2 + 1
+        }
+        t = t + 1
+    }
+}
+
+// ── devfeed_grad_sum3 / devfeed_grad_sum2: device-resident grad sums (⑤-bwd2) ──
+// HEXA-FUSION L3 (BWD glue half) — the REFERENCE host grad sums the device kernels
+// _hx_cuda_farr_grad_sum3_gpu / _hx_cuda_farr_grad_sum2_gpu reproduce, byte-identical
+// to the clm_prod_bwd dxt / dxec accumulations: out[i]=a[i]+b[i]+c[i] (fixed (a+b)+c)
+// and out[i]=a[i]+b[i]. Pure elementwise, NO reduction → trivially bit-exact (max|Δ|=0).
+pub fn devfeed_grad_sum3(a: int, b: int, c: int, out: int, n: int) {
+    let mut i = 0
+    while i < n { t_set(out, i, t_get(a, i) + t_get(b, i) + t_get(c, i)); i = i + 1 }
+}
+pub fn devfeed_grad_sum2(a: int, b: int, out: int, n: int) {
+    let mut i = 0
+    while i < n { t_set(out, i, t_get(a, i) + t_get(b, i)); i = i + 1 }
+}
+
+// ── devfeed_embedding_bwd_scatter: device-resident embedding scatter (⑤-bwd2) ──
+// HEXA-FUSION L3 (BWD glue half) — the REFERENCE host scatter the device kernel
+// _hx_cuda_farr_embedding_bwd_scatter_gpu reproduces, byte-identical to nn_lib.hexa
+// nn_embedding_bwd_scatter: for i in 0..T, tok=(int)ids[i], dtable[tok·d+c] +=
+// dx[i·d+c] (c ascending), i ascending. The device kernel uses one thread per vocab
+// row scanning i ascending (NO atomics) so colliding tokens accumulate in the SAME
+// ascending-i order → max|Δ| MUST be exactly 0. dtable must be pre-zeroed by the
+// caller. Inlined here so the prebuilt mac binary never link-references the device
+// builtin; wired ONLY in clm_prod.hexa::_embedding_bwd_scatter under CLM_PROD_DEVRESIDENT.
+pub fn devfeed_embedding_bwd_scatter(dX: int, ids: int, dtable_inout: int,
+                                     T: int, d: int) {
+    let mut i = 0
+    while i < T {
+        let tok = to_int(t_get(ids, i))
+        let mut c = 0
+        while c < d {
+            let cur = t_get(dtable_inout, tok * d + c)
+            t_set(dtable_inout, tok * d + c, cur + t_get(dX, i * d + c))
+            c = c + 1
+        }
+        i = i + 1
+    }
+}
+
 // ════════════════════════════════════════════════════════════════════════════
 //  Reference forge conv (inlined — flame files cannot `use` one another). These
 //  mirror clm_conv_gpu.hexa's conv1d_via_forge / conv1d_bwd_via_forge EXACTLY;
@@ -925,6 +1144,277 @@ fn main() {
     if em_ok == 1 { println("F-CLM-DEVFEED-EMBED-EQ = 1"); println("PASS — device embedding gather (tokens→xe) == host gather byte-eq (max|Δ|=0)") }
     if em_ok == 0 { println("F-CLM-DEVFEED-EMBED-EQ = 0"); println("FAIL — embedding") }
 
+    // ── F-CLM-DEVFEED-GELU-BWD-EQ : HEXA-FUSION L3 (BWD glue half) device gelu_bwd ─
+    // The gelu_bwd ×3 in clm_prod_bwd (deo0/deo1/dhn0) now route through the device
+    // kernel _hx_cuda_farr_gelu_bwd_gpu under CLM_PROD_DEVRESIDENT, keeping dg
+    // FARR_DEVICE. dg[i]=da[i]·GELU'(g[i]), GELU'(x)=Φ(x)+x·φ(x) is the EXACT
+    // erf/exp-based gelu grad of nn_lib nn_gelu_bwd — pure elementwise, NO reduction
+    // → the device gelu_bwd MUST be EXACTLY byte-eq to an independent host erf/exp
+    // grad (max|Δ|=0; erf/exp are the IEEE libm builtins, same contract host + CUDA).
+    // Pins devfeed_gelu_bwd (the device-kernel math reference) == an INDEPENDENT
+    // inline host gelu_bwd at STRICT 0.
+    let mut gelb_ok = 1
+    let ngb = 257                      // odd len exercises the grid-stride tail
+    let gGb = t_zeros(ngb); t_fill_lcg(gGb, ngb, 53, 1.5)   // wide range hits erf/exp tails
+    let daB = t_zeros(ngb); t_fill_lcg(daB, ngb, 67, 0.8)   // upstream grad
+    // device-kernel reference (devfeed_gelu_bwd — what the GPU reproduces)
+    let dgD = t_zeros(ngb); devfeed_gelu_bwd(gGb, daB, dgD, ngb)
+    // independent inline host reference (NOT via devfeed_gelu_bwd)
+    let dgH = t_zeros(ngb); let isq2b = 0.70710678118654752440; let isq2pi = 0.39894228040143267794
+    let mut gbi = 0
+    while gbi < ngb {
+        let xv = t_get(gGb, gbi)
+        let cdf = 0.5 * (1.0 + erf(xv * isq2b))
+        let pdf = isq2pi * exp(0.0 - 0.5 * xv * xv)
+        t_set(dgH, gbi, t_get(daB, gbi) * (cdf + xv * pdf))
+        gbi = gbi + 1
+    }
+    let mGelb = _maxdev(dgH, dgD, ngb)
+    print("  gelu_bwd max|Δ| dg="); println(to_string(mGelb))
+    if mGelb > 0.0 { gelb_ok = 0 }
+    t_free(gGb); t_free(daB); t_free(dgD); t_free(dgH)
+    if gelb_ok == 1 { println("F-CLM-DEVFEED-GELU-BWD-EQ = 1"); println("PASS — device GELU bwd (deo0/deo1/dhn0) == host erf/exp gelu-grad byte-eq (max|Δ|=0)") }
+    if gelb_ok == 0 { println("F-CLM-DEVFEED-GELU-BWD-EQ = 0"); println("FAIL — gelu_bwd") }
+
+    // ── F-CLM-DEVFEED-GROUPNORM-BWD-EQ : HEXA-FUSION L3 (BWD glue half) device gn_bwd ─
+    // The groupnorm_bwd ×2 in clm_prod_bwd (dy←dynorm, dh0←dhn0) now route through
+    // the device kernel _hx_cuda_farr_groupnorm_bwd_gpu under CLM_PROD_DEVRESIDENT,
+    // keeping dgamma/dbeta/dx FARR_DEVICE. The per-channel + per-group reductions
+    // accumulate SEQUENTIALLY in the host order (NO tree re-assoc) and read the SAVED
+    // forward inv → the device gn_bwd MUST be EXACTLY byte-eq to an INDEPENDENT
+    // inline host gn_bwd (max|Δ|=0). We first run the fwd (devfeed_groupnorm) to
+    // produce a consistent xhat/inv, then pin devfeed_groupnorm_bwd (the device-
+    // kernel math reference) == an INDEPENDENT inline host bwd (NOT via the device
+    // reference, the same gn_lib nn_groupnorm_bwd math) at STRICT 0 on dgamma/dbeta/dx.
+    let mut gnb_ok = 1
+    let Tg = 12; let Cg = 8; let Gg = 2   // C%G==0, cg=4
+    let xG = t_zeros(Tg * Cg); t_fill_lcg(xG, Tg * Cg, 31, 1.1)
+    let gaG = t_zeros(Cg); t_fill_lcg(gaG, Cg, 37, 0.9)
+    let beG = t_zeros(Cg); t_fill_lcg(beG, Cg, 41, 0.5)
+    let yG = t_zeros(Tg * Cg); let mnG = t_zeros(Gg); let ivG = t_zeros(Gg); let xhG = t_zeros(Tg * Cg)
+    devfeed_groupnorm(xG, gaG, beG, yG, mnG, ivG, xhG, Tg, Cg, Gg)   // produce xhat/inv
+    let dyG = t_zeros(Tg * Cg); t_fill_lcg(dyG, Tg * Cg, 59, 0.7)    // upstream grad
+    // device-kernel reference (devfeed_groupnorm_bwd — what the GPU reproduces)
+    let dgaD = t_zeros(Cg); let dbeD = t_zeros(Cg); let dxD = t_zeros(Tg * Cg)
+    devfeed_groupnorm_bwd(xhG, ivG, gaG, dyG, dgaD, dbeD, dxD, Tg, Cg, Gg)
+    // INDEPENDENT inline host bwd (NOT via devfeed_groupnorm_bwd — gn_lib math)
+    let dgaH = t_zeros(Cg); let dbeH = t_zeros(Cg); let dxH = t_zeros(Tg * Cg)
+    let cgh = Cg / Gg; let mh = to_float(cgh * Tg)
+    let mut chn = 0
+    while chn < Cg {
+        let mut sgh = 0.0; let mut sbh = 0.0; let mut tch = 0
+        while tch < Tg {
+            let idxh = tch * Cg + chn; let gyh = t_get(dyG, idxh)
+            sgh = sgh + gyh * t_get(xhG, idxh); sbh = sbh + gyh; tch = tch + 1
+        }
+        t_set(dgaH, chn, sgh); t_set(dbeH, chn, sbh); chn = chn + 1
+    }
+    let mut grh = 0
+    while grh < Gg {
+        let c0h = grh * cgh; let invh = t_get(ivG, grh)
+        let mut s1h = 0.0; let mut s2h = 0.0; let mut t1h = 0
+        while t1h < Tg {
+            let mut cc1 = 0
+            while cc1 < cgh {
+                let chh = c0h + cc1; let idxh = t1h * Cg + chh
+                let dxhh = t_get(dyG, idxh) * t_get(gaG, chh)
+                s1h = s1h + dxhh; s2h = s2h + dxhh * t_get(xhG, idxh); cc1 = cc1 + 1
+            }
+            t1h = t1h + 1
+        }
+        let mut t2h = 0
+        while t2h < Tg {
+            let mut cc2 = 0
+            while cc2 < cgh {
+                let chh = c0h + cc2; let idxh = t2h * Cg + chh
+                let dxhh = t_get(dyG, idxh) * t_get(gaG, chh)
+                t_set(dxH, idxh, invh * (dxhh - s1h / mh - t_get(xhG, idxh) * s2h / mh)); cc2 = cc2 + 1
+            }
+            t2h = t2h + 1
+        }
+        grh = grh + 1
+    }
+    let mDga = _maxdev(dgaH, dgaD, Cg); let mDbe = _maxdev(dbeH, dbeD, Cg); let mDx = _maxdev(dxH, dxD, Tg * Cg)
+    print("  groupnorm_bwd max|Δ| dgamma="); print(to_string(mDga)); print(" dbeta="); print(to_string(mDbe)); print(" dX="); println(to_string(mDx))
+    if mDga > 0.0 { gnb_ok = 0 }
+    if mDbe > 0.0 { gnb_ok = 0 }
+    if mDx > 0.0 { gnb_ok = 0 }
+    t_free(xG); t_free(gaG); t_free(beG); t_free(yG); t_free(mnG); t_free(ivG); t_free(xhG)
+    t_free(dyG); t_free(dgaD); t_free(dbeD); t_free(dxD); t_free(dgaH); t_free(dbeH); t_free(dxH)
+    if gnb_ok == 1 { println("F-CLM-DEVFEED-GROUPNORM-BWD-EQ = 1"); println("PASS — device GroupNorm bwd (dgamma/dbeta/dX; seq reduction + saved inv) == host nn_groupnorm_bwd byte-eq (max|Δ|=0)") }
+    if gnb_ok == 0 { println("F-CLM-DEVFEED-GROUPNORM-BWD-EQ = 0"); println("FAIL — groupnorm_bwd") }
+
+    // ── F-CLM-DEVFEED-EXUNPACK-EQ : HEXA-FUSION L3 (BWD glue half) device unpack ──
+    // The expert-unpack (dex_out→dex0/dex1) in clm_prod_bwd now routes through the
+    // device kernel _hx_cuda_farr_expert_unpack2_gpu under CLM_PROD_DEVRESIDENT,
+    // keeping dex0/dex1 FARR_DEVICE. dex0[i]=dex_out[0·n+i], dex1[i]=dex_out[1·n+i]
+    // is a pure copy with NO arithmetic → the device unpack MUST be EXACTLY byte-eq
+    // to the host scalar loop (max|Δ|=0). Pins devfeed_expert_unpack2 (the device-
+    // kernel reference) == an INDEPENDENT inline host unpack at STRICT 0.
+    let mut exu_ok = 1
+    let nu = 257                       // odd len exercises the grid-stride tail
+    let dexAll = t_zeros(2 * nu); t_fill_lcg(dexAll, 2 * nu, 71, 0.9)
+    // device-kernel reference (devfeed_expert_unpack2 — what the GPU reproduces)
+    let d0D = t_zeros(nu); let d1D = t_zeros(nu); devfeed_expert_unpack2(dexAll, d0D, d1D, nu)
+    // independent inline host unpack (NOT via devfeed_expert_unpack2)
+    let d0H = t_zeros(nu); let d1H = t_zeros(nu); let mut ui = 0
+    while ui < nu {
+        t_set(d0H, ui, t_get(dexAll, 0 * nu + ui))
+        t_set(d1H, ui, t_get(dexAll, 1 * nu + ui))
+        ui = ui + 1
+    }
+    let mEx0 = _maxdev(d0H, d0D, nu); let mEx1 = _maxdev(d1H, d1D, nu)
+    print("  expert-unpack max|Δ| dex0="); print(to_string(mEx0)); print(" dex1="); println(to_string(mEx1))
+    if mEx0 > 0.0 { exu_ok = 0 }
+    if mEx1 > 0.0 { exu_ok = 0 }
+    t_free(dexAll); t_free(d0D); t_free(d1D); t_free(d0H); t_free(d1H)
+    if exu_ok == 1 { println("F-CLM-DEVFEED-EXUNPACK-EQ = 1"); println("PASS — device expert-unpack (dex_out→dex0/dex1) == host unpack byte-eq (max|Δ|=0)") }
+    if exu_ok == 0 { println("F-CLM-DEVFEED-EXUNPACK-EQ = 0"); println("FAIL — expert-unpack") }
+
+    // ── F-CLM-DEVFEED-CE-GRAD-EQ : HEXA-FUSION L3 (BWD glue · ⑤-bwd2) device ce_grad ─
+    // The clm_ce_grad host glue at the head of the bwd now routes through the device
+    // kernel _hx_cuda_farr_ce_grad_gpu under CLM_PROD_DEVRESIDENT, keeping dlogits
+    // FARR_DEVICE. dlogits[t,v]=(exp(logit-mx)/sm)·(1/T), dlogits[t,tgt]-=1/T is a
+    // per-row sequential softmax-grad (libm exp, same host contract) → the device
+    // ce_grad MUST be EXACTLY byte-eq to an INDEPENDENT inline host softmax-grad
+    // (max|Δ|=0). Pins devfeed_ce_grad (device-kernel reference) == independent host.
+    let mut ceg_ok = 1
+    let Tce = 9; let Vce = 17                 // small T·V, odd to exercise tails
+    let lgCe = t_zeros(Tce * Vce); t_fill_lcg(lgCe, Tce * Vce, 83, 1.3)
+    let tgCe = t_zeros(Tce)                   // integer-valued targets in [0,Vce)
+    let mut tci = 0
+    while tci < Tce { t_set(tgCe, tci, to_float((tci * 5 + 3) - ((tci * 5 + 3) / Vce) * Vce)); tci = tci + 1 }
+    // device-kernel reference (devfeed_ce_grad — what the GPU reproduces)
+    let dlD = t_zeros(Tce * Vce); devfeed_ce_grad(lgCe, tgCe, dlD, Tce, Vce)
+    // INDEPENDENT inline host softmax-grad (NOT via devfeed_ce_grad)
+    let dlH = t_zeros(Tce * Vce)
+    let mut tH = 0
+    while tH < Tce {
+        let bs = tH * Vce
+        let mut mxh = t_get(lgCe, bs); let mut ih = 1
+        while ih < Vce { let vv = t_get(lgCe, bs + ih); if vv > mxh { mxh = vv }; ih = ih + 1 }
+        let mut smh = 0.0; let mut ih2 = 0
+        while ih2 < Vce { smh = smh + exp(t_get(lgCe, bs + ih2) - mxh); ih2 = ih2 + 1 }
+        let invTh = 1.0 / to_float(Tce)
+        let mut vh = 0
+        while vh < Vce { t_set(dlH, bs + vh, (exp(t_get(lgCe, bs + vh) - mxh) / smh) * invTh); vh = vh + 1 }
+        let tgth = to_int(t_get(tgCe, tH))
+        t_set(dlH, bs + tgth, t_get(dlH, bs + tgth) - invTh)
+        tH = tH + 1
+    }
+    let mCeg = _maxdev(dlH, dlD, Tce * Vce)
+    print("  ce_grad max|Δ| dlogits="); println(to_string(mCeg))
+    if mCeg > 0.0 { ceg_ok = 0 }
+    t_free(lgCe); t_free(tgCe); t_free(dlD); t_free(dlH)
+    if ceg_ok == 1 { println("F-CLM-DEVFEED-CE-GRAD-EQ = 1"); println("PASS — device CE softmax-grad (dlogits) == host clm_ce_grad byte-eq (max|Δ|=0)") }
+    if ceg_ok == 0 { println("F-CLM-DEVFEED-CE-GRAD-EQ = 0"); println("FAIL — ce_grad") }
+
+    // ── F-CLM-DEVFEED-MOEROUTER-BWD-EQ : HEXA-FUSION L3 (BWD · ⑤-bwd2) device moe_bwd ─
+    // The nn_moe_router_bwd host glue in clm_prod_bwd now routes through the device
+    // kernel _hx_cuda_farr_moe_router_bwd_gpu under CLM_PROD_DEVRESIDENT, keeping
+    // dlogits/dex_out FARR_DEVICE. The 2-pass-over-E + inner-C reductions accumulate
+    // SEQUENTIALLY in the host order (NO tree re-assoc) and read CACHED probs (NO
+    // _moe_exp replay) → the device moe_bwd MUST be EXACTLY byte-eq to an INDEPENDENT
+    // inline host bwd (max|Δ|=0). Pins devfeed_moe_router_bwd == independent host.
+    let mut mrb_ok = 1
+    let Tm = 7; let Em = 2; let Cm = 6
+    let prM = t_zeros(Tm * Em); t_fill_lcg(prM, Tm * Em, 89, 0.4)   // any probs (bwd reads them verbatim)
+    let exM = t_zeros(Em * Tm * Cm); t_fill_lcg(exM, Em * Tm * Cm, 97, 1.0)
+    let dyM = t_zeros(Tm * Cm); t_fill_lcg(dyM, Tm * Cm, 101, 0.6)
+    // device-kernel reference
+    let dlmD = t_zeros(Tm * Em); let dexD = t_zeros(Em * Tm * Cm)
+    devfeed_moe_router_bwd(prM, exM, dyM, dlmD, dexD, Tm, Em, Cm)
+    // INDEPENDENT inline host bwd (NOT via devfeed_moe_router_bwd)
+    let dlmH = t_zeros(Tm * Em); let dexH = t_zeros(Em * Tm * Cm)
+    let mut tm = 0
+    while tm < Tm {
+        let mut doth = 0.0; let mut em = 0
+        while em < Em {
+            let pteh = t_get(prM, tm * Em + em); let mut dgh = 0.0; let mut cm = 0
+            while cm < Cm {
+                let gyh = t_get(dyM, tm * Cm + cm)
+                dgh = dgh + gyh * t_get(exM, em * Tm * Cm + tm * Cm + cm)
+                t_set(dexH, em * Tm * Cm + tm * Cm + cm, pteh * gyh); cm = cm + 1
+            }
+            t_set(dlmH, tm * Em + em, dgh); doth = doth + pteh * dgh; em = em + 1
+        }
+        let mut em2 = 0
+        while em2 < Em {
+            let pteh = t_get(prM, tm * Em + em2); let dgh = t_get(dlmH, tm * Em + em2)
+            t_set(dlmH, tm * Em + em2, pteh * (dgh - doth)); em2 = em2 + 1
+        }
+        tm = tm + 1
+    }
+    let mDlm = _maxdev(dlmH, dlmD, Tm * Em); let mDex = _maxdev(dexH, dexD, Em * Tm * Cm)
+    print("  moe_router_bwd max|Δ| dlogits="); print(to_string(mDlm)); print(" dex_out="); println(to_string(mDex))
+    if mDlm > 0.0 { mrb_ok = 0 }
+    if mDex > 0.0 { mrb_ok = 0 }
+    t_free(prM); t_free(exM); t_free(dyM); t_free(dlmD); t_free(dexD); t_free(dlmH); t_free(dexH)
+    if mrb_ok == 1 { println("F-CLM-DEVFEED-MOEROUTER-BWD-EQ = 1"); println("PASS — device MoE-router bwd (dlogits/dex_out; seq reduction + cached probs) == host nn_moe_router_bwd byte-eq (max|Δ|=0)") }
+    if mrb_ok == 0 { println("F-CLM-DEVFEED-MOEROUTER-BWD-EQ = 0"); println("FAIL — moe_router_bwd") }
+
+    // ── F-CLM-DEVFEED-GRADSUM-EQ : HEXA-FUSION L3 (BWD · ⑤-bwd2) device grad sums ─
+    // The dxt 3-way (dxt_r+dxt_e0+dxt_e1) and dxec 2-way (dxt+dxec_b) grad sums in
+    // clm_prod_bwd now route through _hx_cuda_farr_grad_sum3_gpu /
+    // _hx_cuda_farr_grad_sum2_gpu under CLM_PROD_DEVRESIDENT, keeping the result
+    // FARR_DEVICE. Pure elementwise (fixed (a+b)+c / a+b association) → the device
+    // sums MUST be EXACTLY byte-eq to an INDEPENDENT inline host sum (max|Δ|=0).
+    let mut gs_ok = 1
+    let ns = 259                       // odd len exercises the grid-stride tail
+    let saA = t_zeros(ns); t_fill_lcg(saA, ns, 103, 0.9)
+    let saB = t_zeros(ns); t_fill_lcg(saB, ns, 107, 0.7)
+    let saC = t_zeros(ns); t_fill_lcg(saC, ns, 109, 0.5)
+    let s3D = t_zeros(ns); devfeed_grad_sum3(saA, saB, saC, s3D, ns)
+    let s2D = t_zeros(ns); devfeed_grad_sum2(saA, saB, s2D, ns)
+    let s3H = t_zeros(ns); let s2H = t_zeros(ns); let mut si = 0
+    while si < ns {
+        t_set(s3H, si, t_get(saA, si) + t_get(saB, si) + t_get(saC, si))
+        t_set(s2H, si, t_get(saA, si) + t_get(saB, si))
+        si = si + 1
+    }
+    let mS3 = _maxdev(s3H, s3D, ns); let mS2 = _maxdev(s2H, s2D, ns)
+    print("  grad-sum max|Δ| sum3="); print(to_string(mS3)); print(" sum2="); println(to_string(mS2))
+    if mS3 > 0.0 { gs_ok = 0 }
+    if mS2 > 0.0 { gs_ok = 0 }
+    t_free(saA); t_free(saB); t_free(saC); t_free(s3D); t_free(s2D); t_free(s3H); t_free(s2H)
+    if gs_ok == 1 { println("F-CLM-DEVFEED-GRADSUM-EQ = 1"); println("PASS — device grad sums (dxt 3-way + dxec 2-way) == host sum byte-eq (max|Δ|=0)") }
+    if gs_ok == 0 { println("F-CLM-DEVFEED-GRADSUM-EQ = 0"); println("FAIL — grad-sum") }
+
+    // ── F-CLM-DEVFEED-EMBSCATTER-EQ : HEXA-FUSION L3 (BWD · ⑤-bwd2) device scatter ─
+    // The nn_embedding_bwd_scatter host glue at the bwd tail now routes through the
+    // device kernel _hx_cuda_farr_embedding_bwd_scatter_gpu under CLM_PROD_DEVRESIDENT,
+    // keeping dembed FARR_DEVICE. dtable[tok·d+c] += dx[i·d+c] (tok=(int)ids[i], i
+    // ascending) — the device kernel uses ONE thread per vocab row scanning i
+    // ascending so COLLIDING tokens accumulate in the SAME order → the device scatter
+    // MUST be EXACTLY byte-eq to an INDEPENDENT inline host scatter (max|Δ|=0). The
+    // ids deliberately COLLIDE (multiple positions → same row) to exercise the
+    // accumulation order. Pins devfeed_embedding_bwd_scatter == independent host.
+    let mut ebs_ok = 1
+    let Te = 11; let de = 4; let Ve = 5      // Te > Ve forces collisions
+    let dxe2 = t_zeros(Te * de); t_fill_lcg(dxe2, Te * de, 113, 0.8)
+    let idse = t_zeros(Te)
+    let mut iei = 0
+    while iei < Te { t_set(idse, iei, to_float((iei * 3) - ((iei * 3) / Ve) * Ve)); iei = iei + 1 }   // ids in [0,Ve), colliding
+    // device-kernel reference (dtable pre-zeroed)
+    let dtD = t_zeros(Ve * de); devfeed_embedding_bwd_scatter(dxe2, idse, dtD, Te, de)
+    // INDEPENDENT inline host scatter (NOT via devfeed_embedding_bwd_scatter; pre-zeroed)
+    let dtH = t_zeros(Ve * de)
+    let mut ie = 0
+    while ie < Te {
+        let toke = to_int(t_get(idse, ie)); let mut ce = 0
+        while ce < de {
+            let cure = t_get(dtH, toke * de + ce)
+            t_set(dtH, toke * de + ce, cure + t_get(dxe2, ie * de + ce)); ce = ce + 1
+        }
+        ie = ie + 1
+    }
+    let mEbs = _maxdev(dtH, dtD, Ve * de)
+    print("  embedding-scatter max|Δ| dtable="); println(to_string(mEbs))
+    if mEbs > 0.0 { ebs_ok = 0 }
+    t_free(dxe2); t_free(idse); t_free(dtD); t_free(dtH)
+    if ebs_ok == 1 { println("F-CLM-DEVFEED-EMBSCATTER-EQ = 1"); println("PASS — device embedding scatter (dembed grad accumulate; per-row seq, NO atomics) == host nn_embedding_bwd_scatter byte-eq (max|Δ|=0)") }
+    if ebs_ok == 0 { println("F-CLM-DEVFEED-EMBSCATTER-EQ = 0"); println("FAIL — embedding-scatter") }
+
     // ── F-CLM-DEVFEED-ADAM-EQ : host AdamW oracle trajectory self-consistent ──
     // The device AdamW (forge_dispatch_adamw, wired in clm_prod.hexa under env)
     // routes to _hx_cuda_farr_adamw_step_inplace_gpu — already byte-eq to this
@@ -957,9 +1447,9 @@ fn main() {
     if adam_ok == 1 { println("F-CLM-DEVFEED-ADAM-EQ = 1"); println("PASS — AdamW oracle (opt_adamw_step) deterministic 5-step trajectory") }
     if adam_ok == 0 { println("F-CLM-DEVFEED-ADAM-EQ = 0"); println("FAIL — adam") }
 
-    if all_ok == 1 { if fwd_ok == 1 { if bwd_ok == 1 { if db_ok == 1 { if q_ok == 1 { if rsd_ok == 1 { if gel_ok == 1 { if gn_ok == 1 { if ep_ok == 1 { if mr_ok == 1 { if em_ok == 1 { if adam_ok == 1 {
-        println("ALL-PASS — LEVER (a) device im2col/col2im + device db colsum + device int4 quant + device residual-add + device gelu + device groupnorm + device expert-pack + device moe-router + device embedding glue + device AdamW oracle byte-eq to host feed")
+    if all_ok == 1 { if fwd_ok == 1 { if bwd_ok == 1 { if db_ok == 1 { if q_ok == 1 { if rsd_ok == 1 { if gel_ok == 1 { if gn_ok == 1 { if ep_ok == 1 { if mr_ok == 1 { if em_ok == 1 { if gelb_ok == 1 { if gnb_ok == 1 { if exu_ok == 1 { if ceg_ok == 1 { if mrb_ok == 1 { if gs_ok == 1 { if ebs_ok == 1 { if adam_ok == 1 {
+        println("ALL-PASS — LEVER (a) device im2col/col2im + device db colsum + device int4 quant + device residual-add + device gelu + device groupnorm + device expert-pack + device moe-router + device embedding glue + BWD device gelu_bwd + device groupnorm_bwd + device expert-unpack + device ce_grad + device moe-router_bwd + device grad-sums + device embedding-scatter glue + device AdamW oracle byte-eq to host feed")
         return
-    } } } } } } } } } } } }
+    } } } } } } } } } } } } } } } } } } }
     println("FAIL")
 }

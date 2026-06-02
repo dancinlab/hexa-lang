@@ -1,0 +1,52 @@
+clm_conv_devfeed — LEVER (a): device im2col/col2im + device AdamW (CPU oracle)
+  im2col dil=1 max|Δ|=0.0
+  im2col dil=2 max|Δ|=0.0
+F-CLM-DEVFEED-IM2COL-EQ = 1
+PASS — device im2col gather == host xcol byte-eq, dil∈{1,2}
+  fwd dil=1 max|Δ| devfeed-vs-forge = 0.0
+  fwd dil=2 max|Δ| devfeed-vs-forge = 0.0
+F-CLM-DEVFEED-FWD-EQ = 1
+PASS — devfeed fwd == forge conv1d byte-eq, dil∈{1,2}
+  bwd dil=1 max|Δ| dW=0.0 dX=2.77556e-17 db=0.0
+  bwd dil=2 max|Δ| dW=0.0 dX=5.55112e-17 db=0.0
+F-CLM-DEVFEED-BWD-EQ = 1
+PASS — devfeed bwd (dW/dX/db) == forge conv1d_bwd byte-eq, dil∈{1,2}
+  db dil=1 max|Δ| colsum-vs-host = 0.0
+  db dil=2 max|Δ| colsum-vs-host = 0.0
+F-CLM-DEVFEED-DB-EQ = 1
+PASS — device-resident db colsum == host Σ_t dy[t,co] byte-eq, dil∈{1,2}
+  int4 fwd max|Δ| wq=0.0 scale=0.0 qlevel=0.0 mask=0.0
+  int4 bwd (STE) max|Δ| dW=0.0
+F-CLM-DEVFEED-INT4QUANT-EQ = 1
+PASS — device int4 quant fwd (wq/scale/qlevel/mask) + STE bwd == host quant byte-eq (max|Δ|=0, integer-exact)
+  residual-add max|Δ| out=0.0
+F-CLM-DEVFEED-RESIDUAL-EQ = 1
+PASS — device residual-add (xt = xec + hg0) == host scalar add byte-eq (max|Δ|=0)
+  gelu max|Δ| out=0.0
+F-CLM-DEVFEED-GELU-EQ = 1
+PASS — device GELU (hg0/ex0/ex1) == host erf-GELU byte-eq (max|Δ|=0)
+  groupnorm max|Δ| y=0.0 xhat=0.0 mean=0.0 inv=0.0
+F-CLM-DEVFEED-GROUPNORM-EQ = 1
+PASS — device GroupNorm (h0→hn0, y→yn; seq reduction + NR sqrt) == host byte-eq (max|Δ|=0)
+  expert-pack max|Δ| ex_out=0.0
+F-CLM-DEVFEED-EXPACK-EQ = 1
+PASS — device expert-pack (ex0/ex1→ex_out) == host pack byte-eq (max|Δ|=0)
+  moe-router max|Δ| y=0.0 probs=0.0
+F-CLM-DEVFEED-MOEROUTER-EQ = 1
+PASS — device MoE router (softmax+combine; seq reduction + _moe_exp) == host byte-eq (max|Δ|=0)
+  embedding max|Δ| xe=0.0
+F-CLM-DEVFEED-EMBED-EQ = 1
+PASS — device embedding gather (tokens→xe) == host gather byte-eq (max|Δ|=0)
+  gelu_bwd max|Δ| dg=0.0
+F-CLM-DEVFEED-GELU-BWD-EQ = 1
+PASS — device GELU bwd (deo0/deo1/dhn0) == host erf/exp gelu-grad byte-eq (max|Δ|=0)
+  groupnorm_bwd max|Δ| dgamma=0.0 dbeta=0.0 dX=0.0
+F-CLM-DEVFEED-GROUPNORM-BWD-EQ = 1
+PASS — device GroupNorm bwd (dgamma/dbeta/dX; seq reduction + saved inv) == host nn_groupnorm_bwd byte-eq (max|Δ|=0)
+  expert-unpack max|Δ| dex0=0.0 dex1=0.0
+F-CLM-DEVFEED-EXUNPACK-EQ = 1
+PASS — device expert-unpack (dex_out→dex0/dex1) == host unpack byte-eq (max|Δ|=0)
+  adam 5-step max|Δ| W=0.0
+F-CLM-DEVFEED-ADAM-EQ = 1
+PASS — AdamW oracle (opt_adamw_step) deterministic 5-step trajectory
+ALL-PASS — LEVER (a) device im2col/col2im + device db colsum + device int4 quant + device residual-add + device gelu + device groupnorm + device expert-pack + device moe-router + device embedding glue + BWD device gelu_bwd + device groupnorm_bwd + device expert-unpack glue + device AdamW oracle byte-eq to host feed
