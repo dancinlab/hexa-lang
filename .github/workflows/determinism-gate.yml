@@ -105,8 +105,11 @@ jobs:
           DETERM_OUT: ${{ runner.temp }}/determinism-gate-out
         run: |
           set -uo pipefail
-          bash tool/determinism_gate.sh
-          rc=$?
+          # GitHub's default step shell runs with `-e`, so a nonzero exit from
+          # the gate would ABORT the step before the exit-2 remap below (that is
+          # what reded this gate). Capture rc with `|| rc=$?` so we classify it.
+          rc=0
+          bash tool/determinism_gate.sh || rc=$?
           if [ "$rc" -eq 2 ]; then
             echo "::notice::determinism-gate NEUTRAL (exit 2) — this CI env cannot native-emit (no graduated gen2 compiler). Determinism is untestable here, NOT broken; gate passes neutral."
             exit 0
