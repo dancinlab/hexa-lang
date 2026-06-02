@@ -1,0 +1,120 @@
+// @ci_gate — deterministic · local-file-only · the rollup-all DISCOVERY g5 gate
+//
+// qforge_telemetry_rollup_all_selftest.hexa — `hexa qforge telemetry rollup-all
+//   <campaign-root>` (stdlib/qforge/telemetry_cli.hexa) g5 gate. This is the
+//   PROCESS auto-discovery glue: `rollup` demanded the operator hand-list every
+//   deck path; `rollup-all` WALKS a campaign root for every `.dft_telemetry.jsonl`
+//   and rolls up the discovered set with NO hand-listing.
+//
+// The rollup-all-SPECIFIC behavior under test (the rollup render itself is gated
+//   by telemetry_rollup's own selftest, and the hand-list rollup by the CLI
+//   selftest — both IMPORT-ONLY/d4, 0-diff): the deck-DISCOVERY walk, the empty-
+//   root GUARD (d6 — a clean message + rc 1, NEVER a fabricated zero rollup),
+//   deterministic SORTED+deduped deck order, and the argv dispatch + exit codes.
+//
+// 검증 케이스 (writes real fixture deck dirs at NESTED depths under a temp root
+//   via exec; discovers + rolls them back through qf_telem_rollup_all; no pod,
+//   no network):
+//  🔵 (A) DISCOVERY finds every telemetry-bearing deck under a NESTED root
+//         (deck dirs at mixed depths) and returns the PARENT deck dirs, SORTED.
+//  🔵 (B) a sibling dir with NO `.dft_telemetry.jsonl` is NOT discovered (only
+//         the parent-of-telemetry dirs come back — no phantom deck, d6).
+//  🔵 (C) rollup-all over the discovered set → rc 0; the rolled-up grand wall
+//         equals the hand-list rollup over the SAME decks (delegation is 0-diff).
+//  🔵 (D) argv dispatch `telemetry rollup-all <root>` → rc 0 (verb wired in).
+//  🔵 (E) EMPTY-ROOT GUARD (d6): a root with NO telemetry-bearing deck → rc 1
+//         (clean message, no crash, no fabricated rollup) — discovery returns [].
+//  🔵 (F) USAGE error → rc 2: `rollup-all` with no root arg.
+//
+// Run (point HEXA_STDLIB_ROOT at THIS worktree's stdlib):
+//   HEXA_STDLIB_ROOT="$PWD/stdlib" hexa run --no-sentinel \
+//     stdlib/qforge/qforge_telemetry_rollup_all_selftest.hexa
+// PASS: "qforge_telemetry_rollup_all_selftest PASS".
+use "stdlib/qforge/telemetry_cli"
+use "stdlib/qforge/telemetry_rollup"
+
+fn _ck(name: str, ok: bool) -> int {
+    if ok { println("PASS " + name) ; return 0 }
+    println("FAIL " + name)
+    return 1
+}
+
+// write a 1-stage telemetry fixture into <dir>/.dft_telemetry.jsonl with a known
+// wall_s (so the rolled-up grand wall is a deterministic sum we can assert).
+fn _write_telem(dir: str, wall: int) {
+    let body = "{\"ts\":100,\"stage\":\"scf\",\"event\":\"start\",\"wall_s\":0,\"rss_kb\":null,\"exit\":null}\n"
+        + "{\"ts\":200,\"stage\":\"scf\",\"event\":\"done\",\"wall_s\":" + to_string(wall)
+        + ",\"rss_kb\":3000,\"exit\":0}\n"
+    let _w = exec("cat > '" + dir + "/.dft_telemetry.jsonl' <<'EOF'\n" + body + "EOF")
+}
+
+fn _has(decks: [str], d: str) -> bool {
+    let mut i = 0
+    while i < len(decks) {
+        if decks[i] == d { return true }
+        i = i + 1
+    }
+    return false
+}
+
+fn main() {
+    let mut fails = 0
+
+    // isolated campaign root: two telemetry decks at MIXED nesting depths plus a
+    // bystander dir with NO telemetry (must NOT be discovered).
+    let root = exec("mktemp -d").trim()
+    let dA = root + "/decks/LaH10"           // nested
+    let dB = root + "/decks/sub/CaH6"        // deeper-nested
+    let bystander = root + "/decks/NOTES"    // no telemetry
+    let _m = exec("mkdir -p '" + dA + "' '" + dB + "' '" + bystander + "'")
+    _write_telem(dA, 40)
+    _write_telem(dB, 60)
+    // a non-telemetry file in the bystander dir (it must stay undiscovered).
+    let _bn = exec("printf 'just notes\\n' > '" + bystander + "/README.txt'")
+
+    // (A) DISCOVERY finds both telemetry decks (parent dirs), SORTED + deduped.
+    let found = qf_discover_telemetry_decks(root)
+    fails = fails + _ck("(A) discovery finds exactly 2 telemetry decks", len(found) == 2)
+    fails = fails + _ck("(A) discovery returns the deck PARENT dirs (dA, dB)",
+        _has(found, dA) && _has(found, dB))
+    // sort -u → deterministic order; dA ("/decks/LaH10") sorts before dB ("/decks/sub/CaH6").
+    fails = fails + _ck("(A) discovery order is SORTED (deterministic g5)",
+        len(found) == 2 && found[0] == dA && found[1] == dB)
+
+    // (B) the bystander (no .dft_telemetry.jsonl) is NOT discovered (no phantom, d6).
+    fails = fails + _ck("(B) bystander dir (no telemetry) NOT discovered",
+        !_has(found, bystander))
+
+    // (C) rollup-all → rc 0; grand wall == hand-list rollup over the SAME decks.
+    let rc_all = qf_telem_rollup_all(root)
+    fails = fails + _ck("(C) rollup-all rc==0 over the discovered set", rc_all == 0)
+    let pairs: [(str, str)] = [(dA, qf_telem_read(dA)), (dB, qf_telem_read(dB))]
+    let rep = qforge_telemetry_rollup(pairs)
+    fails = fails + _ck("(C) discovered rollup: 2 decks ingested, grand wall = 40+60 = 100",
+        rep.n_decks == 2 && rep.grand_wall == 100 && rep.skipped_decks == 0)
+
+    // (D) argv dispatch `telemetry rollup-all <root>` → rc 0 (verb wired in).
+    let av_all: [str] = ["qforge_cli", "telemetry", "rollup-all", root]
+    fails = fails + _ck("(D) argv `telemetry rollup-all <root>` → rc 0", qf_telemetry(av_all) == 0)
+
+    // (E) EMPTY-ROOT GUARD (d6): a root with NO telemetry deck → rc 1, no fabrication.
+    let empty_root = exec("mktemp -d").trim()
+    let _em = exec("mkdir -p '" + empty_root + "/decks/X'")
+    fails = fails + _ck("(E) discovery over a telemetry-free root → []",
+        len(qf_discover_telemetry_decks(empty_root)) == 0)
+    fails = fails + _ck("(E) rollup-all over a telemetry-free root → rc 1 (clean, no fabrication)",
+        qf_telem_rollup_all(empty_root) == 1)
+
+    // (F) USAGE error → rc 2: rollup-all with no root arg.
+    let av_noarg: [str] = ["qforge_cli", "telemetry", "rollup-all"]
+    fails = fails + _ck("(F) `rollup-all` with no root arg → rc 2 (usage)", qf_telemetry(av_noarg) == 2)
+
+    let _rm = exec("rm -rf '" + root + "' '" + empty_root + "'")
+
+    if fails == 0 {
+        println("qforge_telemetry_rollup_all_selftest PASS")
+        return
+    }
+    println("qforge_telemetry_rollup_all_selftest FAIL (" + to_string(fails) + ")")
+    exit(1)
+}

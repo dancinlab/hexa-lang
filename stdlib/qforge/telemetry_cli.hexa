@@ -112,9 +112,55 @@ pub fn qf_telem_rollup(decks: [str]) -> int {
     return 0
 }
 
-// qf_telemetry — `hexa qforge telemetry <report|regress|rollup> ...`. av is the
-// full argv; av[1]=="telemetry", av[2]=the telemetry verb, av[3..]=its args.
-// Default regression threshold = 20% when the optional pct arg is omitted.
+// qf_discover_telemetry_decks — campaign-root deck DISCOVERY (the PROCESS glue).
+// Walk a campaign root for every `.dft_telemetry.jsonl` and return its parent
+// deck dir. So far rollup demanded the operator hand-list every deck path; this
+// closes the loop — point it at exports/rtsc/decks (or any campaign root) and it
+// finds every deck that emitted telemetry. Each match's PARENT dir is the deck.
+// Returns a SORTED deck-dir list (sort = deterministic g5 + stable report order).
+// A local file walk only (no pod, no network), mirroring qf_telem_read's IO.
+pub fn qf_discover_telemetry_decks(root: str) -> [str] {
+    let mut decks: [str] = []
+    // -type f so a deck named `.dft_telemetry.jsonl` (impossible, but cheap) can't
+    // sneak a dir in; dirname → the deck; sort for a deterministic ingest order.
+    let raw = exec("find '" + root + "' -type f -name '" + QF_TELEM_NAME
+        + "' 2>/dev/null | while read f; do dirname \"$f\"; done | sort -u")
+    if len(raw.trim()) == 0 { return decks }
+    let lines = raw.split("\n")
+    let mut i = 0
+    while i < len(lines) {
+        let d = lines[i].trim()
+        if len(d) > 0 { decks.push(d) }
+        i = i + 1
+    }
+    return decks
+}
+
+// qf_telem_rollup_all — `hexa qforge telemetry rollup-all <campaign-root>`. The
+// auto-discovery sibling of `rollup`: DISCOVER every deck under <campaign-root>
+// holding a `.dft_telemetry.jsonl`, then roll them all up — no hand-listing. A
+// campaign root with NO telemetry-bearing deck → a clean message + rc 1 (d6,
+// never a fabricated zero rollup). rc: 0 success · 1 none discovered · 2 usage.
+pub fn qf_telem_rollup_all(root: str) -> int {
+    if len(root.trim()) == 0 {
+        println("[qforge] usage: hexa qforge telemetry rollup-all <campaign-root>")
+        return 2
+    }
+    let decks = qf_discover_telemetry_decks(root)
+    if len(decks) == 0 {
+        println("[qforge] no deck under " + root + " carries " + QF_TELEM_NAME
+            + " — nothing to roll up.")
+        return 1
+    }
+    println("[qforge] rollup-all: discovered " + to_string(len(decks))
+        + " telemetry-bearing deck(s) under " + root)
+    // delegate to the hand-list path — identical ingest + render (d4, 0 new render).
+    return qf_telem_rollup(decks)
+}
+
+// qf_telemetry — `hexa qforge telemetry <report|regress|rollup|rollup-all> ...`.
+// av is the full argv; av[1]=="telemetry", av[2]=the telemetry verb, av[3..]=its
+// args. Default regression threshold = 20% when the optional pct arg is omitted.
 pub fn qf_telemetry(av: [str]) -> int {
     if len(av) < 3 {
         println("[qforge] usage: hexa qforge telemetry <report|regress|rollup> <deck...>")
@@ -141,6 +187,11 @@ pub fn qf_telemetry(av: [str]) -> int {
         while i < len(av) { decks.push(av[i]); i = i + 1 }
         return qf_telem_rollup(decks)
     }
-    println("[qforge] unknown telemetry verb '" + tv + "' — try report|regress|rollup")
+    if tv == "rollup-all" {
+        let mut root = ""
+        if len(av) >= 4 { root = av[3] }
+        return qf_telem_rollup_all(root)
+    }
+    println("[qforge] unknown telemetry verb '" + tv + "' — try report|regress|rollup|rollup-all")
     return 2
 }
