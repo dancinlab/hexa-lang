@@ -45,6 +45,7 @@
 @domain MISCOMPILE-ZERO := "domains/MISCOMPILE-ZERO.md"
 
 @domain FORGE-UTILGREEN := "domains/FORGE-UTILGREEN.md"
+@domain HEXA-FUSION := "domains/HEXA-FUSION.md"
 
 # FORGE-UTILGREEN refines FLAME-PERF's F-RFC046-GPU-UTILIZATION into the focused
 # util-GREEN endgame lever chain (host per-step orchestration → device).
@@ -58,3 +59,10 @@
 # GPU codegen substrate sub-docs (self-declared in-file as 서브문서 of GPU.md SSOT):
 @link GPU.attention --subdoc-of--> GPU            # FlashAttention v3 BC4 axis · GPU.attention.md
 @link GPU.anima --subdoc-of--> GPU                # anima transformer step-wall priority side · GPU.anima.md
+
+# --- HEXA-FUSION (2026-06-03) — whole-program train-step fusion: match PyTorch+CUDA → exceed ---
+# Realizes GPU's whole-program-fusion North-Star (§5d/5f/5g) as the device-resident cure for
+# FORGE-UTILGREEN option-B (host-feed lever chain CLOSED-NEGATIVE → only fusion reaches util-GREEN).
+@link HEXA-FUSION --refines--> GPU                # whole-program-fusion North-Star §5d autograd-aware / §5f launch-amort / §5g surgical override
+@link HEXA-FUSION --cures--> FORGE-UTILGREEN       # device-resident train-step port = the named option-B util-GREEN cure (host-feed axis closed)
+@link HEXA-FUSION --measured-by--> GPU-ROOFLINE   # fusion-kernel roofline % + vs-PyTorch+CUDA wall (honest: cuBLAS GEMM = roofline, win = boundary removal)
