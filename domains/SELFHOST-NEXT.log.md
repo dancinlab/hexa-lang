@@ -107,3 +107,59 @@ turn the ad-hoc ghost byte-eq build into a one-command reproducible + safely-pro
       opt-in delivers the capability now at zero risk; flip is one gated command when ready.
 - [ ] heavy ghost build re-verification from a clean main checkout = follow-up (detached).
 
+
+## 2026-06-03 — x86_64 codegen path: SCOPE + smallest-increment (object layer PROVEN)
+
+Milestone: "multi-target bootstrap: x86_64 codegen path (new backend surface — scope first)".
+
+INVENTORY — x86_64 is FAR more present in-tree than the milestone assumed.
+PRESENT:
+  - Instruction encoder (TWO forms):
+    * `self/codegen/x86_64.hexa` (304 L) — typed emitters: mov/add/sub/imul/
+      cmp/test/setcc/jcc/call/ret/push/pop + REX.W/R/B, movabs imm64, Linux
+      syscall (write/exit). Tested: `self/codegen/test_x86_encoders.hexa`
+      (byte-golden vs Intel SDM / objdump).
+    * `compiler/emit/elf_x86_64.hexa` (1420 L) — `encode_x86_64_insn(op, ops)`
+      string-mnemonic assembler + ModRM/SIB/disp mem operands + REL8/REL32
+      branch patching.
+  - IR→x86 bridge: `self/codegen/ir_to_x86.hexa` (830 L) + linear regalloc;
+    tested `self/codegen/test_ir_to_x86.hexa` (load/add/jump/backward-jump/
+    movabs-neg/syscall byte-golden).
+  - MIR→LIR backend: `compiler/codegen/x86_64_linux.hexa` (1361 L) —
+    `codegen_x86_64_linux(MModule, opts) -> LModule`: linear-scan regalloc +
+    spilling + System V arg regs + arith/bit/cmp/setcc/div/call lowering.
+  - ELF emit: `serialize_elf_x86_64` (REL object, ET_REL/EM_X86_64) +
+    `serialize_elf_exec_x86_64` (static PT_LOAD executable) + `pack_lir_x86_64`
+    (LModule→ELF obj) + `link_elf_x86_64`. In-tree linker `compiler/link/hexa_ld.hexa`.
+  - Driver: `compiler/main.hexa` accepts `--target=x86_64-linux-gnu`, dispatches
+    to codegen_x86_64_linux (L868-869) + wires ld w/ crt1.o + ld-linux-x86-64
+    (L1022-1027). asm-text emit via `emit_asm` (compiler/emit/asm.hexa).
+  - Cross plan: `self/crosscompile.hexa` darwin-arm64 → linux-x86_64 triple +
+    linker argv. P2 falsifier corpus: compiler/test/macho_p0_corpus/run_F_P2_X86_*.
+GAP (missing / unproven):
+  - Native OBJ fast-path in main.hexa (pack_lir_x86_64+serialize, no system `as`)
+    is gated `target=="arm64-apple-darwin"` ONLY (main.hexa L900) → x86_64 falls
+    back to emit_asm → system `as`/`ld`.
+  - Full SOURCE→x86_64-binary correctness NOT proven end-to-end here: running
+    `hexa run compiler/main.hexa -- … --target=x86_64-linux-gnu` fails at the
+    BOOTSTRAP layer (clang: undeclared `__raw_add_f`/`__raw_cmp3` transpiling
+    main.hexa itself under `hexa run`) — a known runtime-extern gap, NOT x86
+    codegen. Needs the BUILT native compiler with a --target front-door.
+
+SMALLEST VERIFIABLE INCREMENT (produced + verified):
+  `compiler/test/macho_p0_corpus/run_F_P2_X86_EXIT42_SCRATCH.hexa` — emits an
+  exit(42) ELF64 x86-64 static executable via the in-tree encoder + serializer
+  (no external assembler), writes to scratch (NOT /tmp), structural self-check.
+  VERIFIED on TWO real x86_64 Linux hosts (summer + aiden):
+    readelf → ELF64 / LE / EXEC / X86-64 ; ./exit42.elf → REMOTE_RC=42 (both).
+    text @0x78 = b8 3c 00 00 00 bf 2a 00 00 00 0f 05 (mov eax,60;mov edi,42;syscall).
+    Deterministic byte-identical re-emit (cmp == 0).
+  Verdict: .verdicts/selfhost-next-x86_64-scope/F-P2-X86-EXIT42-SCRATCH.txt 🟢
+  Harness: ~/dancinlab/selfhost-work/x86-64/run.sh
+
+NAMED NEXT BIG PIECE: NOT a new instruction encoder (it exists + is byte-tested).
+The next piece is END-TO-END SOURCE→x86_64-BINARY via the BUILT native compiler:
+(1) build compiler/main.hexa to a native binary that exposes --target, then
+(2) either fall through emit_asm→`as`/`ld` on a linux host, or (3) wire the
+native pack_lir_x86_64+serialize OBJ fast-path for x86_64 in main.hexa L900
+(mirroring the arm64-darwin branch) — guarding arm64-darwin byte-identical.
