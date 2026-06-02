@@ -378,6 +378,42 @@ C-built is exactly why this lane does NOT depend on that fix.
 
 Verdict: .verdicts/selfhost-next-linux-arm64/CCNATIVE-CROSS.txt (🟢).
 
+## 2026-06-03 — linux-arm64 NATIVE EMIT verified on pi5 (real hardware) + self-emit OOM wall (named)
+
+Drove the SELFHOST-NEXT linux-arm64 self-EMIT milestone on pi5-akida (the pool's
+ONLY native aarch64 host — RPi5, 7.8 GiB RAM, no swap, gcc 13.3, no clang).
+Branch `selfhost-next/linux-arm64-self-emit`. Complements the cross-build/qemu
+lane (#2574/#2577 — CCNATIVE-CROSS, verified on x86_64+qemu): this is the
+NATIVE-on-real-arm64-hardware run + the self-emit resource wall.
+
+- [x] BUILT bootstrap toolchain natively via `TARGET=linux-arm64 CC=gcc
+      LIBS='-lm -ldl' bash tool/release_build`: runtime.a (501 KB) + hexat
+      (2.17 MB) + ./hexa (2.24 MB ELF aarch64 PIE). Seeds self-restored from the
+      frozen blob; full-source build, no edge-pull.
+- [x] BUILT cc_native natively via tool/build_native_linux_arm64 (the recipe that
+      landed in #2575/#2577): cc-flat 48 files/43240 lines → hexat → 47019-line C
+      → gcc -O1 → cc_native 3.3 MB ELF aarch64. (Independently arrived at the same
+      recipe incl. rt_array link-fill; main's copy is byte-identical, so this PR
+      drops the duplicate tool files and keeps only the native-run verdict.)
+- [x] GOAL 1 NATIVE — `print("hi"); exit(7)` → native ELF .o via cc_native
+      --emit=obj --backend=native --target=arm64-linux-gnu (NO host `as`):
+      R_AARCH64_CALL26 (hexa_print_val/exit/set_args) + ADRP/ADD page-reloc pair
+      (R_AARCH64_ADR_PREL_PG_HI21 + R_AARCH64_ADD_ABS_LO12_NC) vs .LCstr0 (#2562).
+      Linked w/ runtime.a + crt1.o; **RAN NATIVELY on pi5** (NOT qemu): stdout="hi",
+      rc=7 (real $?). exit(42) → rc 42. This is the native-hardware counterpart to
+      the cross/qemu verification in CCNATIVE-CROSS / CROSS-EMIT-DATA.
+- [ ] GOAL 2 — COMPILER SELF-EMIT (cc_native emits its own 43240-line flattened
+      source): REACHED parse + typecheck (15 diagnostics = flatten artifacts: the
+      known empty_atlas AtlasRef/AtlasIndex collision, NOT a compiler bug;
+      --ignore-errors proceeds) + ENTERED codegen with **0 ENCODE-MISS** (no STP
+      mem=#0 / unknown-op encoder wall), then **OOM-killed**: journalctl
+      `Out of memory: Killed process 58398 (cc_native) total-vm:8006332kB
+      anon-rss:7758464kB` — ~7.76 GiB RSS on a 7.8 GiB / no-swap host. FIRST WALL =
+      HOST RAM, NOT codegen correctness. NEXT: self-emit on a higher-RAM
+      (≥~12–16 GiB) native aarch64 host / add swap; OR a codegen-peak-RSS milestone.
+      g63: no such aarch64 host in the current pool (summer/aiden x86_64; pi5 is
+      the only aarch64 and is RAM-tight) — honest scope, not faked.
+      Verdict: .verdicts/selfhost-next-linux-arm64/SELF-EMIT-LARM64.txt.
 ## 2026-06-03 — F-STP-ENCODE-MISS: CLOSED-NEGATIVE (reject path unreachable — NO codegen edit)
 Investigated the deepest named self-emit wall, `ENCODE-MISS: STP mem-parse-fail mem=#0`
 (macho_arm64.hexa STP/LDP encode @541-566 → _parse_mem_op @1559 rejects a bare `#0`).
