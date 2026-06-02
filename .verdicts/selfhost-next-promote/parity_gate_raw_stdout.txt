@@ -1,0 +1,15 @@
+=== selfhost parity gate ===
+gen3=/Users/ghost/dancinlab/selfhost-work/promote/build/gen3
+ref=/Users/ghost/.hx/bin/hexa.real (asm-axis=on) strict=0
+corpus=/Users/ghost/dancinlab/selfhost-work/promote/build/parity_readiness/corpus
+PROG           BEHAVIOUR  ASM        SMOKE    VERDICT
+----           ---------  ---        -----    -------
+arith          ok(42)     ref-err    42-ok    PASS
+bitmask        ok(15)     ref-err    n/a      PASS
+branch         ok(7)      ref-err    n/a      PASS
+call           ok(13)     ref-err    n/a      PASS
+recurse        ok(120)    ref-err    n/a      PASS
+----
+parity: 5/5 pass, 0 fail (strict=0, asm-axis=on)
+RESULT: PARITY PASS — promotion AUTHORIZED
+PARITY_GATE_EXIT=0 (captured verbatim above)
