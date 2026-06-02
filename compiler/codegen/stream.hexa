@@ -97,7 +97,10 @@ pub fn codegen_emit_streaming(hmodule: HModule, target: string) -> string {
 
             // MIR→LIR for this one function. lfunc lands in iter F1.
             if _stream_reclaim { let _r3 = env("__HEXA_ARENA_RETURN_REGION_ON__") }
-            let lfunc = _arm64_lower_func(mfunc, st, modhash)
+            // Streaming codegen is darwin-only (gated in main.hexa on
+            // arm64-apple-darwin); the ELF arm64 path uses the batch
+            // codegen_arm64_darwin entry, so pass the Mach-O target here.
+            let lfunc = _arm64_lower_func(mfunc, st, modhash, "arm64-apple-darwin")
 
             // LIR→text. The asm fragment must survive POP — route to malloc.
             // A5.2 (2026-05-16): compute frag + check lfunc.target match

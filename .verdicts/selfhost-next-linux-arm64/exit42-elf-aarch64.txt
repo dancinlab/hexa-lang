@@ -1,0 +1,35 @@
+SELFHOST-NEXT — linux-arm64 cross-emit verdict (exit(42))
+=========================================================
+date:    2026-06-02
+branch:  selfhost-next/linux-arm64-rebased
+compiler: aprime_cc (stage0 native arm64 compiler) built from this branch on
+          ghost (macOS arm64) via tool/build_aprime.sh; aprime_cc smoke
+          exit(42)==42 PASS.
+
+source:  fn main() { exit(42) }
+
+[1] EMIT — aprime_cc _drv.hexa --emit=asm --target=arm64-linux-gnu -o exit42.linux.s exit42.hexa
+    Produced ELF AArch64 GNU-as assembly:
+      // comment marker (NOT ; Mach-O, NOT # x86 — `#` is the arm64 imm prefix)
+      .text / .globl main      (bare label, no `_` Mach-O prefix)
+      .p2align 2               (4-byte arm64, NOT x86 .p2align 4)
+      AArch64 mnemonics, `#42` immediates, `[sp, #-16]!` memory syntax
+      .section .hexa.cap/.hexa.abi ,"",@progbits   (ELF metadata)
+      no `.intel_syntax noprefix` directive (suppressed for ELF arm64)
+
+[2] ASSEMBLE — aarch64-linux-gnu-as exit42.linux.s -o exit42.linux.o   (on summer, x86_64 linux, cross binutils)
+    file:    ELF 64-bit LSB relocatable, ARM aarch64, version 1 (SYSV)
+    readelf -h:  Class ELF64 · Data little endian · Type REL · Machine AArch64
+    symbols:     main (GLOBAL) · hexa_exit / hexa_set_args (UND)
+    .rela.text:  R_AARCH64_CALL26  hexa_set_args + 0
+                 R_AARCH64_CALL26  hexa_exit + 0
+    => VALID ELF aarch64 relocatable, correct e_machine + correct arm64 reloc type.
+
+[3] LINK + RUN — freestanding aarch64 stub (rtstub.s: _start + hexa_set_args + hexa_exit
+    via Linux svc #0 __NR_exit=93) linked with aarch64-linux-gnu-ld -static -nostdlib;
+    executed under qemu-aarch64-static:
+      file: ELF 64-bit LSB executable, ARM aarch64, statically linked
+      RUN_RC = 42   ✅
+
+VERDICT: 🟢 linux-arm64 cross-emit + assemble + link + run VERIFIED for exit(42).
+         e_machine=AARCH64, relocations correct, runs to rc 42 under qemu.

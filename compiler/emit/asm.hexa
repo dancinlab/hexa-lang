@@ -31,6 +31,7 @@ import "../ir/lir.hexa"
 
 pub let TARGET_DARWIN_ARM64 = "arm64-apple-darwin"
 pub let TARGET_LINUX_X86_64 = "x86_64-linux-gnu"
+pub let TARGET_LINUX_ARM64  = "arm64-linux-gnu"
 pub let TARGET_THUMBV7EM_HF  = "thumbv7em-none-eabihf"
 
 // ── Operand formatting ──────────────────────────────────────
@@ -43,6 +44,21 @@ fn _is_thumb(target: string) -> bool {
     return target == TARGET_THUMBV7EM_HF
 }
 
+// SELFHOST-NEXT linux-arm64: the AArch64 *instruction* syntax (immediate
+// `#N`, memory `[base, #off]`, register-list `{…}`) is shared between the
+// Mach-O (arm64-apple-darwin) and ELF (arm64-linux-gnu) targets — the only
+// platform deltas are the `_` label prefix, the section directives, and the
+// reloc/visibility spelling, all of which still key off `_is_darwin`. This
+// helper gates the AArch64 *assembly-syntax* branches so the ELF arm64 path
+// renders `#42` / `[sp, #0]` instead of falling through to x86 Intel syntax.
+fn _is_elf_arm64(target: string) -> bool {
+    return target == TARGET_LINUX_ARM64
+}
+
+fn _is_arm64(target: string) -> bool {
+    return _is_darwin(target) || _is_elf_arm64(target)
+}
+
 fn _label_prefix(target: string) -> string {
     if _is_darwin(target) { return "_" }
     return ""
@@ -51,7 +67,11 @@ fn _label_prefix(target: string) -> string {
 fn _comment_marker(target: string) -> string {
     if _is_darwin(target) { return " ; " }
     if _is_thumb(target) { return " @ " }   // ARM/Thumb assembler line comment
-    return " # "
+    // ELF AArch64 (GNU as): `#` is the immediate prefix, NOT a comment
+    // char — a trailing `# …` is parsed as instruction operands and
+    // errors. AArch64 GNU as uses `//` for line comments.
+    if _is_elf_arm64(target) { return " // " }
+    return " # "   // x86_64 GAS line comment
 }
 
 // Apple ARM64 uses bare `x0`, `w0`, `sp`, etc.
@@ -61,8 +81,8 @@ fn _fmt_reg(target: string, reg: PReg) -> string {
 }
 
 fn _fmt_imm(target: string, imm: i64) -> string {
-    if _is_darwin(target) {
-        // Apple ARM64 immediates: `#42`
+    if _is_arm64(target) {
+        // AArch64 immediates: `#42` (Apple Mach-O + ELF GNU as alike)
         return "#" + to_string(imm)
     }
     if _is_thumb(target) {
@@ -85,10 +105,11 @@ fn _fmt_mem(target: string, op: LOperand) -> string {
     if len(op.label) > 0 {
         return "[" + op.mem_base.name + ", " + op.label + "]"
     }
-    if _is_darwin(target) {
-        // Apple ARM64 memory: `[base, #offset]` — always emit the
-        // explicit `#offset`, even at offset 0, so the C7 spill stores
-        // for arg 9 land as `[sp, #0]` (matches tests/m0/many_args_test.hexa).
+    if _is_arm64(target) {
+        // AArch64 memory: `[base, #offset]` — always emit the explicit
+        // `#offset`, even at offset 0, so the C7 spill stores for arg 9
+        // land as `[sp, #0]` (matches tests/m0/many_args_test.hexa).
+        // Identical syntax for Mach-O (darwin) and ELF (linux-gnu).
         return "[" + op.mem_base.name + ", #" + to_string(op.mem_offset) + "]"
     }
     if _is_thumb(target) {
@@ -494,8 +515,9 @@ fn _emit_func(target: string, f: LFunc) -> string {
     // _start) keeps default-public visibility. Empty string when the
     // target has no visibility concept (Thumb-2 bare-metal).
     out = out + _visibility_directive(target, f.name)
-    if _is_darwin(target) {
-        // Apple/Mach-O: .p2align 2 (4-byte) for ARM64
+    if _is_arm64(target) {
+        // AArch64 (Apple Mach-O + ELF GNU): .p2align 2 (4-byte) — every
+        // arm64 instruction is 4 bytes wide.
         out = out + "    .p2align 2\n"
     } else if _is_thumb(target) {
         // Thumb-2 (Cortex-M4): 2-byte instruction alignment + the
@@ -559,6 +581,10 @@ pub fn emit_asm(module: LModule) -> string {
         parts.push(".cpu cortex-m4\n")
         parts.push(".fpu vfpv4-sp-d16\n")
         parts.push(".thumb\n")
+    } else if _is_elf_arm64(target) {
+        // ELF AArch64 (GNU as): AT&T/Intel syntax selectors are x86-only.
+        // GNU `as` for aarch64 takes the native ARM mnemonic syntax with
+        // no `.syntax`/`.intel_syntax` directive — emit nothing here.
     } else if !_is_darwin(target) {
         // x86_64 GAS: select Intel syntax once at the top (RFC-018 §3 note).
         parts.push(".intel_syntax noprefix\n")

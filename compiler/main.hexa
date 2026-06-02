@@ -151,7 +151,7 @@ fn print_help() {
     println("")
     println("flags:")
     println("  -o OUT                 output binary path (default: a.out)")
-    println("  --target=TRIPLE        arm64-apple-darwin | x86_64-linux-gnu | thumbv7em-none-eabihf | nvptx64-nvidia-cuda-sm{80,90} (default: detected)")
+    println("  --target=TRIPLE        arm64-apple-darwin | arm64-linux-gnu | x86_64-linux-gnu | thumbv7em-none-eabihf | nvptx64-nvidia-cuda-sm{80,90} (default: detected)")
     println("  --emit=KIND            asm | obj | exec   (default: exec)")
     println("  --error-format=MODE    pretty | short | json | github (default: pretty)")
     println("  --linker=KIND          hexa | system     (default: system; hexa_ld not yet landed)")
@@ -851,7 +851,19 @@ if stream_mode && target == "arm64-apple-darwin" {
     if shared_flag {
         __cg_opts = CodegenOptions { shared: 1, target_triple: __cg_opts.target_triple }
     }
+    // SELFHOST-NEXT linux-arm64: thread the triple to codegen so the
+    // shared arm64 backend stamps the ELF target (→ ELF sections + bare
+    // labels in emit). Non-arm64-linux targets keep target_triple as-is,
+    // so their codegen output is byte-identical.
+    if target == "arm64-linux-gnu" {
+        __cg_opts = CodegenOptions { shared: __cg_opts.shared, target_triple: "arm64-linux-gnu" }
+    }
     let lmodule = if target == "arm64-apple-darwin" {
+        codegen_arm64_darwin(mmodule, __cg_opts)
+    } else if target == "arm64-linux-gnu" {
+        // ELF AArch64 — same arm64 instruction codegen as darwin; the
+        // ELF/Mach-O delta lives in the emit pass (keyed on the LModule
+        // target stamped via __cg_opts.target_triple above).
         codegen_arm64_darwin(mmodule, __cg_opts)
     } else if target == "x86_64-linux-gnu" {
         codegen_x86_64_linux(mmodule, __cg_opts)
@@ -866,7 +878,7 @@ if stream_mode && target == "arm64-apple-darwin" {
         codegen_nvptx_sm80(mmodule)
     } else {
         eprintln("hexa-compiler: unsupported --target=" + target)
-        eprintln("  supported: arm64-apple-darwin | x86_64-linux-gnu | thumbv7em-none-eabihf | nvptx64-nvidia-cuda-sm90 | nvptx64-nvidia-cuda-sm80")
+        eprintln("  supported: arm64-apple-darwin | arm64-linux-gnu | x86_64-linux-gnu | thumbv7em-none-eabihf | nvptx64-nvidia-cuda-sm90 | nvptx64-nvidia-cuda-sm80")
         exit(2)
     }
 
@@ -1012,6 +1024,18 @@ if target == "arm64-apple-darwin" {
         + " /usr/lib/x86_64-linux-gnu/crt1.o"
         + " -lc"
         + " -dynamic-linker /lib64/ld-linux-x86-64.so.2"
+        + " 2>&1"
+} else if target == "arm64-linux-gnu" {
+    // SELFHOST-NEXT linux-arm64: stock Debian/Ubuntu aarch64 layout.
+    // crt1.o + the aarch64 dynamic loader; the hexa runtime symbols
+    // (hexa_exit, …) come from the separately-built runtime object the
+    // caller links in, or libc when the program is runtime-free. This
+    // recipe is host-resolved on a linux-arm64 box; paths are best-effort
+    // (adjust the multiarch dir for non-glibc distros).
+    ld_cmd = "ld -o " + out_path + " " + obj_path
+        + " /usr/lib/aarch64-linux-gnu/crt1.o"
+        + " -lc"
+        + " -dynamic-linker /lib/ld-linux-aarch64.so.1"
         + " 2>&1"
 } else {
     eprintln("hexa-compiler: no linker recipe for target=" + target)
