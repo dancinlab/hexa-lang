@@ -1,0 +1,13 @@
+# codegen_perf_baseline — native --emit=obj cost, MISCOMPILE-ZERO perf axis
+# compiler=gen2_fix target=arm64-apple-darwin runs=5 warmup=1
+# columns: program<TAB>obj_bytes<TAB>wall_ms_median
+c1_hex_literal	1600	14
+c10_try_catch	2056	13
+c2_stack_locals	1816	14
+c3_struct_ctor	2296	13
+c4_f64_literal	1576	12
+c5_multi_fn_alias	2240	14
+c6_closures	1408	24
+c7_recursion_arrays	3544	17
+c8_string_methods	2144	21
+c9_match_control	2320	14

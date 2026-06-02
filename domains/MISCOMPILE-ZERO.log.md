@@ -234,3 +234,43 @@ complements (does not replace) the program-level gate.
 - 380 seeded programs (seeds 121..500) gen2-native vs aprime-C: 0 divergence, 0 ENCODE-MISS/udf, exit-match.
 - generator axes added: float, struct, closure; for-in excluded (parse-fragile on both, not codegen).
 - verdict: .verdicts/miscompile-zero-fuzz/DIFF-FUZZ-500.txt · branch mczero/diff-fuzz-500
+## 2026-06-03 — codegen perf-stability baseline + budget (PERF axis)
+
+Added the PERF axis to MISCOMPILE-ZERO: emit COST as a tracked regression
+budget, complementing the locked correctness gates (miscompile-zero #2534,
+determinism #2538, class tests #2548, diff-fuzz #2557). NOT a correctness
+gate — it does not inspect ENCODE-MISS / udf (miscompile_zero_gate.sh owns
+that); it records per-program native --emit=obj wall-time + object byte-size.
+
+New files (no production source touched, no collision with #2557):
+  - tool/codegen_perf_budget.sh — modes baseline | check. Reuses the read-only
+    self/test/miscompile_zero/c1..c10 corpus. baseline = measure → write a
+    machine-readable TSV (program<TAB>obj_bytes<TAB>wall_ms_median). check =
+    re-measure → diff vs committed baseline, FAIL (exit 1) if obj-size > +5%
+    OR median wall > +50% (CI-noise tolerant). Mirrors miscompile_zero_gate.sh
+    conventions: same CC-locate / PREARGS / hermetic atlas / build/ scratch
+    (NO /tmp), canary 0-byte ⇒ exit 2 CI-neutral infra (NOT a regression),
+    no pipe-mask. bash-3.2 portable (baseline lookup via grep, not declare -A).
+  - tool/codegen_perf_baseline.tsv — committed REAL baseline (gen2_fix, ghost).
+  - .verdicts/miscompile-zero-perf/PERF-BASELINE.txt — verdict (verbatim run).
+
+REAL baseline (graduated native gen2_fix, ghost 192.168.50.150, arm64-darwin,
+bash 3.2.57; 5 timed runs, 1 warmup, median wall):
+  c1_hex_literal 1600B/14ms · c2_stack_locals 1816B/14ms · c3_struct_ctor
+  2296B/13ms · c4_f64_literal 1576B/12ms · c5_multi_fn_alias 2240B/14ms ·
+  c6_closures 1408B/24ms · c7_recursion_arrays 3544B/17ms · c8_string_methods
+  2144B/21ms · c9_match_control 2320B/14ms · c10_try_catch 2056B/13ms.
+  10/10 measured; obj sizes deterministic (byte-identical across runs).
+
+RESULT: budget check vs the committed baseline ⇒ PASS, exit 0 (0 regression
+vs self — all 10 within +5% size / +50% wall). g63 discrimination both ways:
+  + positive: check vs self PASS (exit 0), sizes byte-match baseline.
+  - negative: a baseline row tampered to shrink c7 (3544→1000) ⇒ the real
+    3544B object exceeds the +5% cap (1050) ⇒ "FAIL c7_recursion_arrays
+    size=3544>cap1050" + terminal exit 1. The budget actually trips on a real
+    size growth — not a no-op green.
+
+CI-wiring note (for a future gate agent — NOT done here): invocable in CI with
+HEXA_NATIVE_CC=<graduated gen2>, gated like miscompile_zero_gate.sh (exit 2 =
+CI-neutral infra; exit 1 = real perf regression). Captures cost; complements
+(does not replace) the correctness gates.
