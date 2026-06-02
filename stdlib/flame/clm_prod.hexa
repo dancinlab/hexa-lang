@@ -233,21 +233,13 @@ fn conv2_fwd_via_forge_batched(x: int, w0: int, b0: int, w1: int, b1: int,
                                y0_out: int, y1_out: int,
                                T: int, Cin: int, Cout: int, K: int, dil: int) {
     let Kdim = Cin * K
+    // F-RFC046: route the shared expert im2col through the lever-(a) device helper
+    // (_clmp_im2col, device-resident under CLM_PROD_DEVFEED) instead of an inline
+    // host t_set gather. Byte-eq: _clmp_im2col's host fallback IS this exact gather
+    // (F-CLM-DEVFEED-IM2COL-EQ max|Δ|=0.0); on a CUDA host it stays FARR_DEVICE so
+    // the follow-up batched GEMM reads it with no H2D roundtrip — off the host hot path.
     let xcol = t_zeros(T * Kdim)
-    let mut t = 0
-    while t < T {
-        let mut ci = 0
-        while ci < Cin {
-            let mut k = 0
-            while k < K {
-                let p = t - dil * (K - 1 - k)
-                if p >= 0 { t_set(xcol, t * Kdim + ci * K + k, t_get(x, p * Cin + ci)) }
-                k = k + 1
-            }
-            ci = ci + 1
-        }
-        t = t + 1
-    }
+    _clmp_im2col(x, xcol, T, Cin, K, dil)
     let a_all = t_zeros(2 * T * Kdim)
     let mut ia = 0
     while ia < T * Kdim {
@@ -286,21 +278,13 @@ fn conv2_bwd_via_forge_batched(x: int, w0: int, w1: int, dy0: int, dy1: int,
                                dW1_out: int, dX1_out: int, db1_out: int,
                                T: int, Cin: int, Cout: int, K: int, dil: int) {
     let Kdim = Cin * K
+    // F-RFC046: route the shared expert transpose-im2col through the lever-(a)
+    // device helper (_clmp_im2col_t) instead of an inline host t_set gather.
+    // Byte-eq: _clmp_im2col_t's host fallback IS this exact transpose-gather
+    // (F-CLM-DEVFEED-IM2COL-EQ); device-resident under CLM_PROD_DEVFEED → off the
+    // host hot path, fed straight into the batched dW GEMM.
     let xcolT = t_zeros(Kdim * T)
-    let mut t = 0
-    while t < T {
-        let mut ci = 0
-        while ci < Cin {
-            let mut k = 0
-            while k < K {
-                let p = t - dil * (K - 1 - k)
-                if p >= 0 { let j = ci * K + k; t_set(xcolT, j * T + t, t_get(x, p * Cin + ci)) }
-                k = k + 1
-            }
-            ci = ci + 1
-        }
-        t = t + 1
-    }
+    _clmp_im2col_t(x, xcolT, T, Cin, K, dil)
     let dwA = t_zeros(2 * Kdim * T)
     let mut ia = 0
     while ia < Kdim * T { t_set(dwA, ia, t_get(xcolT, ia)); t_set(dwA, Kdim * T + ia, t_get(xcolT, ia)); ia = ia + 1 }
