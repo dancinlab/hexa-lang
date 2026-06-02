@@ -1245,6 +1245,51 @@ HexaVal hexa_forge_dispatch_embedding(HexaVal ids_v, HexaVal table_v,
 HexaVal forge_dispatch_embedding(HexaVal ids_v, HexaVal table_v,
                              HexaVal out_v, HexaVal t_v, HexaVal d_v);        /* runtime.c — fusion L3 glue seam */
 
+/* HEXA-FUSION L3 (BWD glue half) — device-resident elementwise GELU backward.
+ * forge_dispatch_gelu_bwd(g, da, dg, n) -> int rc (0 ok / -1 host). Reproduces
+ * nn_lib.hexa nn_gelu_bwd: DG[i]=DA[i]·GELU'(G[i]), GELU'(x)=Φ(x)+x·φ(x) with the
+ * SAME 1/√2 + 1/√(2π) literals and op order (cdf + x·pdf). Device erf()/exp() are
+ * the IEEE libm contract → bit-exact (max|Δ|=0) via _hx_cuda_farr_gelu_bwd_gpu.
+ * Fuses the gelu_bwd ×3 host glue in clm_prod_bwd (deo0/deo1/dhn0 — the bwd mirror
+ * of the fwd gelu ×3); keeps DG DEVICE-RESIDENT. Gated behind CLM_PROD_DEVRESIDENT;
+ * no-CUDA → -1 → host nn_gelu_bwd (byte-eq). */
+HexaVal hexa_forge_dispatch_gelu_bwd(HexaVal g_v, HexaVal da_v,
+                                  HexaVal dg_v, HexaVal n_v);   /* runtime.c — fusion L3 bwd glue */
+HexaVal forge_dispatch_gelu_bwd(HexaVal g_v, HexaVal da_v,
+                             HexaVal dg_v, HexaVal n_v);        /* runtime.c — fusion L3 bwd glue seam */
+
+/* HEXA-FUSION L3 (BWD glue half) — device-resident GroupNorm backward.
+ * forge_dispatch_groupnorm_bwd(xhat, inv, gamma, dy, dgamma, dbeta, dx, T, C, G)
+ * -> int rc (0 ok / -1 host). Reproduces gn_lib.hexa nn_groupnorm_bwd: per-channel
+ * DGAMMA[c]=Σ_t DY·XHAT, DBETA[c]=Σ_t DY (one thread/channel, t ascending), then
+ * per-group s1=Σ dxh, s2=Σ dxh·xhat, DX=INV·(dxh - s1/m - xhat·s2/m) (one thread/
+ * group, t outer c inner). Every reduction SEQUENTIAL in the host order (NO tree
+ * re-assoc, NO atomics) → bit-exact (max|Δ|=0) via _hx_cuda_farr_groupnorm_bwd_gpu.
+ * Fuses the groupnorm_bwd ×2 host glue in clm_prod_bwd; keeps DGAMMA/DBETA/DX
+ * DEVICE-RESIDENT. Gated behind CLM_PROD_DEVRESIDENT; no-CUDA → -1 → host
+ * nn_groupnorm_bwd (byte-eq). */
+HexaVal hexa_forge_dispatch_groupnorm_bwd(HexaVal xhat_v, HexaVal inv_v,
+                                  HexaVal gamma_v, HexaVal dy_v, HexaVal dgamma_v,
+                                  HexaVal dbeta_v, HexaVal dx_v, HexaVal t_v,
+                                  HexaVal c_v, HexaVal g_v);   /* runtime.c — fusion L3 bwd glue */
+HexaVal forge_dispatch_groupnorm_bwd(HexaVal xhat_v, HexaVal inv_v,
+                             HexaVal gamma_v, HexaVal dy_v, HexaVal dgamma_v,
+                             HexaVal dbeta_v, HexaVal dx_v, HexaVal t_v,
+                             HexaVal c_v, HexaVal g_v);        /* runtime.c — fusion L3 bwd glue seam */
+
+/* HEXA-FUSION L3 (BWD glue half) — device-resident expert-unpack (residual grad
+ * split). forge_dispatch_expert_unpack2(dex_out, dex0, dex1, n) -> int rc (0 ok /
+ * -1 host). The bwd MIRROR of expert_pack2: DEX0[i]=DEX_OUT[0·n+i],
+ * DEX1[i]=DEX_OUT[1·n+i] for i in 0..n (n=T·d) — the moe-router grad dex_out[E·T·d]
+ * split back into the 2 per-expert grads. Pure copy, NO reduction → trivially
+ * bit-exact (max|Δ|=0) via _hx_cuda_farr_expert_unpack2_gpu; keeps DEX0/DEX1
+ * DEVICE-RESIDENT so the follow-up gelu_bwd H2D-skips them. Gated behind
+ * CLM_PROD_DEVRESIDENT; no-CUDA → -1 → host unpack loop. */
+HexaVal hexa_forge_dispatch_expert_unpack2(HexaVal dex_out_v, HexaVal dex0_v,
+                                  HexaVal dex1_v, HexaVal n_v);   /* runtime.c — fusion L3 bwd glue */
+HexaVal forge_dispatch_expert_unpack2(HexaVal dex_out_v, HexaVal dex0_v,
+                             HexaVal dex1_v, HexaVal n_v);        /* runtime.c — fusion L3 bwd glue seam */
+
 /* ── RFC 050 PERF-INHERITANCE: forge BF16 FFN dispatch wrapper ──────
  * `forge_dispatch_ffn_fp64_via_bf16(x, w1, w2, y, M, D, FD)` — 7-arg
  * builtin. Takes FP64 farr handles, internally allocates HexaFarrBf16
