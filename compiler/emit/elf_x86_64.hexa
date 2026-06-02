@@ -55,6 +55,16 @@ struct ElfX86Obj {
     relocs:  [ElfRel],
     symbols: [ElfSym],
     strtab:  [u8],
+    // ── Data-section payloads (cycle 32 — mirror of elf_arm64) ──
+    // `.rodata` = string/const literal pool (`.LCstrN` locals).
+    // `.data`   = module-global HexaVal slots (16-B zero, `g<id>` locals).
+    // `.bss`    = SHT_NOBITS byte count (no file bytes). `nlocal` = count
+    // of STB_LOCAL symbols (the rodata/data defs) so the serializer can
+    // stamp `.symtab` `sh_info` = nlocal+1 (ELF requires LOCAL < GLOBAL).
+    rodata:   [u8],
+    data:     [u8],
+    bss_size: i64,
+    nlocal:   i64,
 }
 
 struct ElfRel {
@@ -841,6 +851,13 @@ pub fn serialize_elf_x86_64(obj: ElfX86Obj) -> [Int] {
     let out: [Int] = []
     let text_size = len(obj.text)
     let nrelocs = len(obj.relocs)
+    // ── Data sections (cycle 32 — mirror of serialize_elf_arm64) ──
+    let rodata_size = len(obj.rodata)
+    let data_size   = len(obj.data)
+    let bss_size    = obj.bss_size
+    let has_rodata = rodata_size > 0
+    let has_data   = data_size > 0
+    let has_bss    = bss_size > 0
 
     // ── ELF symtab convention ──
     // Index 0 is reserved as STN_UNDEF (all zeros). Real symbols start
@@ -860,6 +877,9 @@ pub fn serialize_elf_x86_64(obj: ElfX86Obj) -> [Int] {
     // emitting them separately is simpler than computing an overlap
     // offset (extra 11 bytes is negligible).
     let off_rela_text = if nrelocs > 0 { _ew_str(shstrtab, ".rela.text") } else { 0 }
+    let off_rodata   = if has_rodata { _ew_str(shstrtab, ".rodata") } else { 0 }
+    let off_data     = if has_data   { _ew_str(shstrtab, ".data") } else { 0 }
+    let off_bss      = if has_bss    { _ew_str(shstrtab, ".bss") } else { 0 }
     let off_symtab   = _ew_str(shstrtab, ".symtab")
     let off_strtab   = _ew_str(shstrtab, ".strtab")
     let off_shstrtab = _ew_str(shstrtab, ".shstrtab")
@@ -867,20 +887,35 @@ pub fn serialize_elf_x86_64(obj: ElfX86Obj) -> [Int] {
 
     let elf_header_size = 64
     let shdr_size = 64
-    let nshdrs = if nrelocs > 0 { 6 } else { 5 }
-    let shstrndx = if nrelocs > 0 { 5 } else { 4 }
-    // When relocs exist:
-    //   sec[1]=.text  sec[2]=.rela.text  sec[3]=.symtab  sec[4]=.strtab  sec[5]=.shstrtab
-    // Otherwise:
-    //   sec[1]=.text  sec[2]=.symtab  sec[3]=.strtab  sec[4]=.shstrtab
-    let symtab_sec = if nrelocs > 0 { 3 } else { 2 }
-    let strtab_sec = if nrelocs > 0 { 4 } else { 3 }
+
+    // Section index assignment (order: NULL, .text, [.rela.text],
+    // [.rodata], [.data], [.bss], .symtab, .strtab, .shstrtab). Indices
+    // shift as optional sections appear — identical scheme to elf_arm64,
+    // so pack_lir_x86_64's pre-computed section indices stay in sync.
+    let mut next = if nrelocs > 0 { 3 } else { 2 }
+    let rodata_sec = if has_rodata { next } else { 0 }
+    if has_rodata { next = next + 1 }
+    let data_sec = if has_data { next } else { 0 }
+    if has_data { next = next + 1 }
+    let bss_sec = if has_bss { next } else { 0 }
+    if has_bss { next = next + 1 }
+    let symtab_sec = next
+    let strtab_sec = next + 1
+    let shstrndx   = next + 2
+    let nshdrs     = next + 3
 
     let text_off     = elf_header_size
     let text_pad     = (8 - (text_size & 7)) & 7    // 8-align for rela
     let rela_size    = 24 * nrelocs
     let rela_off     = text_off + text_size + text_pad
-    let symtab_off   = rela_off + rela_size
+    // .rodata follows .rela.text, 8-aligned (string literal pool).
+    let rodata_off   = rela_off + rela_size
+    let rodata_pad   = if has_rodata { (8 - (rodata_size & 7)) & 7 } else { 0 }
+    // .data follows .rodata, 8-aligned (16-byte HexaVal slots already 8-mult).
+    let data_off     = rodata_off + rodata_size + rodata_pad
+    let data_pad     = if has_data { (8 - (data_size & 7)) & 7 } else { 0 }
+    // .bss is SHT_NOBITS — occupies NO file bytes (next section starts here).
+    let symtab_off   = data_off + data_size + data_pad
     let strtab_off   = symtab_off + symtab_size
     let shstrtab_off = strtab_off + strsize
     // Section header table aligned to 8.
@@ -930,6 +965,21 @@ pub fn serialize_elf_x86_64(obj: ElfX86Obj) -> [Int] {
         ri = ri + 1
     }
 
+    // ── .rodata (string/const literal pool) ──
+    if has_rodata {
+        let mut di = 0
+        while di < rodata_size { out.push(obj.rodata[di] & 0xff); di = di + 1 }
+        _ew_zero(out, rodata_pad)
+    }
+
+    // ── .data (module-global HexaVal slots, zero-initialized) ──
+    if has_data {
+        let mut gi = 0
+        while gi < data_size { out.push(obj.data[gi] & 0xff); gi = gi + 1 }
+        _ew_zero(out, data_pad)
+    }
+    // .bss has NO file bytes (SHT_NOBITS).
+
     // ── .symtab ──
     // Index 0: STN_UNDEF (all zeros, 24 B).
     _ew_zero(out, 24)
@@ -978,6 +1028,39 @@ pub fn serialize_elf_x86_64(obj: ElfX86Obj) -> [Int] {
         _ew_u32(out, 1)                       // sh_info → .text section idx
         _ew_u64(out, 8); _ew_u64(out, 24)
     }
+    // [rodata_sec] .rodata (ALLOC, read-only string/const pool).
+    if has_rodata {
+        _ew_u32(out, off_rodata)
+        _ew_u32(out, ELF_SHT_PROGBITS)
+        _ew_u64(out, ELF_SHF_ALLOC)
+        _ew_u64(out, 0)
+        _ew_u64(out, rodata_off)
+        _ew_u64(out, rodata_size)
+        _ew_u32(out, 0); _ew_u32(out, 0)
+        _ew_u64(out, 8); _ew_u64(out, 0)
+    }
+    // [data_sec] .data (ALLOC|WRITE, module-global slots).
+    if has_data {
+        _ew_u32(out, off_data)
+        _ew_u32(out, ELF_SHT_PROGBITS)
+        _ew_u64(out, ELF_SHF_ALLOC | ELF_SHF_WRITE)
+        _ew_u64(out, 0)
+        _ew_u64(out, data_off)
+        _ew_u64(out, data_size)
+        _ew_u32(out, 0); _ew_u32(out, 0)
+        _ew_u64(out, 8); _ew_u64(out, 0)
+    }
+    // [bss_sec] .bss (ALLOC|WRITE, SHT_NOBITS — sh_size but no file bytes).
+    if has_bss {
+        _ew_u32(out, off_bss)
+        _ew_u32(out, ELF_SHT_NOBITS)
+        _ew_u64(out, ELF_SHF_ALLOC | ELF_SHF_WRITE)
+        _ew_u64(out, 0)
+        _ew_u64(out, symtab_off)              // sh_offset (conventional: = next sec)
+        _ew_u64(out, bss_size)
+        _ew_u32(out, 0); _ew_u32(out, 0)
+        _ew_u64(out, 8); _ew_u64(out, 0)
+    }
     // [symtab_sec] .symtab.
     _ew_u32(out, off_symtab)
     _ew_u32(out, ELF_SHT_SYMTAB)
@@ -985,9 +1068,11 @@ pub fn serialize_elf_x86_64(obj: ElfX86Obj) -> [Int] {
     _ew_u64(out, symtab_off)
     _ew_u64(out, symtab_size)
     _ew_u32(out, strtab_sec)                  // sh_link → .strtab
-    // sh_info = one past last STB_LOCAL symbol. We always start at 1
-    // since index 0 is STN_UNDEF (which is technically LOCAL).
-    _ew_u32(out, 1)
+    // sh_info = one past last STB_LOCAL symbol. Index 0 is STN_UNDEF
+    // (LOCAL) + `obj.nlocal` `.LCstrN`/`g<id>` LOCAL defs → first
+    // non-local index = nlocal + 1. (Was hardcoded 1 when no data
+    // sections existed; nlocal=0 reproduces the old value.)
+    _ew_u32(out, obj.nlocal + 1)
     _ew_u64(out, 8); _ew_u64(out, 24)
     // [strtab_sec] .strtab.
     _ew_u32(out, off_strtab)
@@ -1104,6 +1189,44 @@ pub fn serialize_elf_exec_x86_64(text: [Int]) -> [Int] {
 // bytes are appended (so the byte stream stays length-correct for
 // later inspection via `objdump -d`).
 
+// ── Cycle 32 — RIP-relative data-address materialization ─────────
+//
+// A string/global reference reaches the walker as a `label` operand
+// (`.LCstrN` / `g<id>`), the SOURCE of a `mov reg, <label>` produced by
+// `_x86_64_op_for_operand`. On x86_64 the address of such a symbol is
+// loaded RIP-relatively via `lea reg, [rip + disp32]`:
+//
+//   REX.W  8D  ModR/M(mod=00 reg=rd rm=101=RIP)  disp32
+//
+// rm=101 with mod=00 is the special "RIP-relative" encoding (long mode).
+// The disp32 is a placeholder 0; pass-2 attaches an R_X86_64_PC32 reloc
+// at the disp32 offset with addend -4 (the linker computes S + A - P =
+// symbol - (next_insn_pc), exactly the RIP-relative displacement).
+// Mirrors elf_arm64's ADRP/ADD `@PAGE`/`@PAGEOFF` data-ref pair — the
+// x86_64 RIP-relative form needs ONE reloc instead of arm64's two.
+fn _ex86_lea_rip_rel(reg_idx: Int) -> [Int] {
+    let rex = _ex86_rex(1, if reg_idx >= 8 { 1 } else { 0 }, 0, 0)
+    let modrm = (0 << 6) | ((reg_idx & 0x7) << 3) | 0x5   // mod=00 rm=101 (RIP)
+    return [rex, 0x8d, modrm, 0x00, 0x00, 0x00, 0x00]
+}
+
+// A data symbol is a string literal (`.LCstr…`) or a module-global
+// slot (`g<id>`). These are the only `label` operands that denote a
+// data ADDRESS to be materialized RIP-relatively (vs branch/call
+// targets, which are code labels handled by the jmp/call paths). The
+// `g` test requires a trailing digit so a fn named e.g. `getline`
+// (which would never appear as a bare-label data operand here, but be
+// safe) is not misclassified.
+fn _ex86_is_data_label(s: string) -> bool {
+    let n = len(s)
+    if n >= 5 && s.substring(0, 5) == ".LCst" { return true }
+    if n >= 2 && s.substring(0, 1) == "g" {
+        let c = char_code(s, 1)
+        if c >= 48 && c <= 57 { return true }   // '0'..'9'
+    }
+    return false
+}
+
 fn _lir_op_uppercase_x86(op: string, ops: [LOperand]) -> string {
     // 0/1-arg ops with no width variant.
     if op == "ret"     { return "RET" }
@@ -1189,6 +1312,7 @@ fn _lookup_label_x86(names: [string], offsets: [Int], target: string) -> Int {
 
 fn _pack_fn_x86(out_text: [Int],
                 pending_offsets: [Int], pending_names: [string],
+                data_offsets: [Int], data_names: [string],
                 f: LFunc) {
     let label_names:     [string] = []
     let label_offsets:   [Int]    = []
@@ -1252,6 +1376,29 @@ fn _pack_fn_x86(out_text: [Int],
             continue
         }
 
+        // Data-address materialization — `mov <reg>, <.LCstrN | g<id>>`.
+        // The source is a data symbol whose ADDRESS is wanted; encode as
+        // RIP-relative `lea reg, [rip+0]` + bubble an R_X86_64_PC32 reloc
+        // at the disp32 field (off+3). Mirrors elf_arm64's ADRP/ADD page
+        // capture. Both `mov` (any-width LIR op) and an explicit `lea`
+        // route here when the second operand is a data label.
+        if (ins.op == "mov" || ins.op == "lea") && len(ins.args) == 2
+           && ins.args[0].kind == "reg" && ins.args[1].kind == "label"
+           && _ex86_is_data_label(ins.args[1].label) {
+            let rd = _ex86_reg64(ins.args[0].reg.name)
+            if rd >= 0 {
+                let cur_off = len(out_text)
+                let bs = _ex86_lea_rip_rel(rd)
+                let mut bi = 0
+                while bi < len(bs) { out_text.push(bs[bi]); bi = bi + 1 }
+                // disp32 sits at the last 4 bytes of the 7-byte insn.
+                data_offsets.push(cur_off + 3)
+                data_names.push(ins.args[1].label)
+                i = i + 1
+                continue
+            }
+        }
+
         // Default — format operands, dispatch encoder.
         let ops: [string] = []
         let na = len(ins.args)
@@ -1303,16 +1450,74 @@ fn _pack_fn_x86(out_text: [Int],
 // cross-fn / extern CALL/JMP targets that bubble up unresolved.
 pub fn pack_lir_x86_64(lm: LModule) -> ElfX86Obj {
     let obj = ElfX86Obj {
-        text:    [],
-        relocs:  [],
-        symbols: [],
-        strtab:  [],
+        text:     [],
+        relocs:   [],
+        symbols:  [],
+        strtab:   [],
+        rodata:   [],
+        data:     [],
+        bss_size: 0,
+        nlocal:   0,
     }
     // ELF strtab convention: index 0 is the empty string (NUL terminator).
     obj.strtab.push(0)
 
+    // Resolve the `.rodata` / `.data` section indices the same way the
+    // serializer does (order NULL,.text,[.rela.text],[.rodata],[.data],…).
+    // A module carrying rodata/data refs always emits PC32 relocs, so the
+    // `.rela.text` section (index 2) is present → first data section is 3.
+    let has_rodata = len(lm.rodata) > 0
+    let rodata_sec = 3
+    let data_sec   = if has_rodata { 4 } else { 3 }
+
+    // Pass 0 — build `.rodata` literal pool + one LOCAL symbol per
+    // `.LCstrN` (defined at its pool offset). Mirrors elf_arm64 / macho
+    // `__cstring`. `sec.bytes` is hex-encoded NUL-terminated payload.
+    let mut r = 0
+    let nr = len(lm.rodata)
+    while r < nr {
+        let sec = lm.rodata[r]
+        let pool_off = len(obj.rodata)
+        _append_hex_bytes(obj.rodata, sec.bytes)
+        let strx = _ew_str(obj.strtab, sec.name)      // `.LCstrN` (verbatim)
+        obj.symbols.push(ElfSym {
+            name_offset: strx,
+            section:     rodata_sec,
+            value:       pool_off,
+            size:        0,
+            bind:        0,    // STB_LOCAL
+            type_:       0,    // STT_NOTYPE
+        })
+        obj.nlocal = obj.nlocal + 1
+        r = r + 1
+    }
+
+    // Pass 0b — build `.data` module-global pool: one 16-byte zero
+    // HexaVal slot per `lm.globals` entry (symbol name `g<id>`), each a
+    // LOCAL def. Mirrors elf_arm64 / macho `__data`.
+    let mut g = 0
+    let ng = len(lm.globals)
+    while g < ng {
+        let pool_off = len(obj.data)
+        let mut z = 0
+        while z < 16 { obj.data.push(0); z = z + 1 }
+        let strx = _ew_str(obj.strtab, lm.globals[g])
+        obj.symbols.push(ElfSym {
+            name_offset: strx,
+            section:     data_sec,
+            value:       pool_off,
+            size:        16,
+            bind:        0,    // STB_LOCAL
+            type_:       0,    // STT_NOTYPE (object data)
+        })
+        obj.nlocal = obj.nlocal + 1
+        g = g + 1
+    }
+
     let pending_offsets: [Int]    = []
     let pending_names:   [string] = []
+    let data_offsets:    [Int]    = []
+    let data_names:      [string] = []
 
     let nf = len(lm.funcs)
     let mut i = 0
@@ -1320,7 +1525,8 @@ pub fn pack_lir_x86_64(lm: LModule) -> ElfX86Obj {
         let f = lm.funcs[i]
         let fn_start = len(obj.text)
         let strx = _ew_str(obj.strtab, f.name)
-        _pack_fn_x86(obj.text, pending_offsets, pending_names, f)
+        _pack_fn_x86(obj.text, pending_offsets, pending_names,
+                     data_offsets, data_names, f)
         // ElfSym pushed after packing so `size` is final (hexa rvalue
         // restriction prevents `obj.symbols[k].size = ...` patching).
         obj.symbols.push(ElfSym {
@@ -1393,6 +1599,45 @@ pub fn pack_lir_x86_64(lm: LModule) -> ElfX86Obj {
             obj.text[call_off + 4] = (delta >> 24) & 0xff
         }
         pi = pi + 1
+    }
+
+    // ── Pass 3: data-address refs → R_X86_64_PC32 reloc records ──
+    //
+    // Each entry in data_* is the disp32 offset of a RIP-relative
+    // `lea reg, [rip+0]` placeholder whose source is a `.LCstrN` /
+    // `g<id>` data symbol. The symbol is already defined (Pass 0/0b
+    // built the LOCAL defs). Emit one R_X86_64_PC32 with addend -4:
+    // the linker computes `S + A - P` = symbol_addr - (disp32_off + 4)
+    // = symbol_addr - next_insn_pc, exactly the RIP-relative
+    // displacement. Mirrors elf_arm64's Pass 3 ADR_PREL_PG_HI21 /
+    // ADD_ABS_LO12_NC, collapsed to the single x86_64 PC32 reloc.
+    let nd = len(data_offsets)
+    let mut dpi = 0
+    while dpi < nd {
+        let disp_off = data_offsets[dpi]
+        let name     = data_names[dpi]
+        let mut idx = _find_elf_sym_by_name(obj.symbols, obj.strtab, name)
+        if idx < 0 {
+            // Unknown data target (no `.LCstrN`/`g<id>` def) → undef
+            // extern. Keeps the .o well-formed; the linker resolves it.
+            let strx = _ew_str(obj.strtab, name)
+            obj.symbols.push(ElfSym {
+                name_offset: strx,
+                section:     0,    // SHN_UNDEF
+                value:       0,
+                size:        0,
+                bind:        1,    // STB_GLOBAL
+                type_:       0,    // STT_NOTYPE
+            })
+            idx = len(obj.symbols) - 1
+        }
+        obj.relocs.push(ElfRel {
+            offset:  disp_off,
+            sym_idx: idx,
+            kind:    ELF_R_X86_64_PC32,
+            addend:  -4,
+        })
+        dpi = dpi + 1
     }
     return obj
 }

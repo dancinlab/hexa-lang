@@ -185,3 +185,53 @@ The next piece is END-TO-END SOURCE→x86_64-BINARY via the BUILT native compile
 (2) either fall through emit_asm→`as`/`ld` on a linux host, or (3) wire the
 native pack_lir_x86_64+serialize OBJ fast-path for x86_64 in main.hexa L900
 (mirroring the arm64-darwin branch) — guarding arm64-darwin byte-identical.
+
+## 2026-06-03 — ELF x86_64 .o data relocs (R_X86_64_PC32) + .rodata/.data/.bss — print("hi")/exit(7) RUNS native x86_64
+
+Mirror of #2562 (ELF AArch64 data relocs) for the x86_64 path. Touches ONLY
+`compiler/emit/elf_x86_64.hexa` (+ a self-contained test harness) per the scope boundary
+(`elf_arm64.hexa` / `macho_arm64.hexa` untouched → darwin/arm64 unaffected). Branch
+`selfhost-next/elf-x86_64-relocs`. VERIFIED on summer (native x86_64 linux, current hexa).
+
+- [x] Backend operand form that drove the reloc: a string/global reference reaches the
+      LIR walker as a `label` operand (`.LCstrN` / `g<id>`), produced by
+      `_x86_64_op_for_operand` as the SOURCE of a `mov reg, <label>` (= "load this
+      symbol's ADDRESS"). On x86_64 the canonical form is RIP-relative
+      `lea reg, [rip + disp32]` → exactly ONE reloc kind needed.
+- [x] reloc kind ADDED: **R_X86_64_PC32** (addend −4). Drove by the `mov`/`lea reg,
+      <.LCstrN|g<id>>` data-address operand. Encoder `_ex86_lea_rip_rel` emits
+      `REX.W 8D ModR/M(mod=00 reg=rd rm=101=RIP) disp32=0`; walker bubbles the disp32
+      offset; `pack_lir_x86_64` Pass 3 attaches the PC32 reloc (S+A−P with A=−4 = the
+      RIP-relative displacement, collapsing arm64's 2-reloc ADRP/ADD pair into 1).
+- [x] sections ADDED: `.rodata` (PROGBITS ALLOC — `.LCstrN` string pool from `lm.rodata`),
+      `.data` (PROGBITS ALLOC|WRITE — 16-B zero HexaVal slot per `lm.globals`, `g<id>`),
+      `.bss` (SHT_NOBITS — `bss_size`, no file bytes). `ElfX86Obj` gained
+      rodata/data/bss_size/nlocal fields.
+- [x] symtab LOCAL-before-GLOBAL fixed: Pass 0/0b push `.LCstrN`/`g<id>` as STB_LOCAL
+      defs first, fn defs STB_GLOBAL after; `serialize_elf_x86_64` stamps
+      `.symtab` `sh_info = obj.nlocal + 1` (was hardcoded 1; nlocal=0 reproduces it).
+- [x] PROVEN — Module A (`main` lea .LCstr0/g0): `readelf -r` → 2× R_X86_64_PC32 vs
+      `.LCstr0 - 4` / `g0 - 4`; `readelf -s` → LOCAL .LCstr0(.rodata) + LOCAL g0(.data,sz16)
+      + GLOBAL main(.text), Info=3=nlocal+1. Module C (freestanding `_start`
+      write(1,.LCstr0,3)+exit(7)): `ld -static -nostdlib -e _start` rc 0; objdump shows the
+      linker patched `lea 0xfeb(%rip),%rsi # 402000 <.LCstr0>`; **RUN: stdout=`hi`, rc=7**
+      ($? captured separately, no pipe-mask).
+- [x] exit(N)-only baseline byte-structure UNCHANGED: text-only exit(7) .o is
+      sha256-IDENTICAL (`cmp` clean) to the origin/main serializer (mirrors #2562's
+      "text-only path unchanged" check).
+- [x] darwin/arm64 UNAFFECTED: only `elf_x86_64.hexa` modified (`git diff --stat`); new
+      test file is additive. no_hardcode_lint --staged PASS (0 new hits).
+- [ ] HONEST g63 — gaps remaining (named, not hidden):
+      (1) **R_X86_64_64** (absolute 64-bit data pointer) NOT added — the x86_64 backend
+          emits no absolute-imm64 data-address operand today (all data refs are the
+          RIP-relative `label` form), so adding it would be a dead reloc kind. Same call
+          #2562 made for ABS64 on arm64.
+      (2) **R_X86_64_GOTPCREL / PLT32-for-data** (shared/PIC `@GOTPCREL`) NOT added —
+          gated on the `--shared` CodegenOptions path (lir.hexa scaffold), which no call
+          site constructs yet. Executable/PIE baseline only.
+      (3) aiden (2nd x86_64 host) has a STALE installed hexa runtime (missing
+          `hexa_float_to_bits`) → its `hexa run` of the harness fails at C-compile,
+          unrelated to this change; summer (current runtime) is the proof host.
+
+Verdict: `.verdicts/selfhost-next-elf-x86_64-relocs/F-ELF-X86-DATA-RELOC.txt` (verbatim
+readelf -h/-S/-r/-s + ld + objdump + native run stdout/rc + baseline sha256).
