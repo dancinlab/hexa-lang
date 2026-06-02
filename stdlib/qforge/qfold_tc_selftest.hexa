@@ -1,0 +1,176 @@
+// @ci_gate — deterministic · closed-form real-cell q-resolved Tc closure asserts
+//
+// qforge_qfold_tc_selftest.hexa — QFORGE qfold→Tc closure g5 gate.
+//
+// Closes the seam qfold_dispersion (#2596) left open: that brick returns the
+// real-cell q-resolved λ·ω_log but STOPS there — nothing turned it into a
+// superconducting Tc. This brick is the adapter + one-call closure that runs the
+// λ·ω_log through the verified Allen-Dynes fit and the isotropic Eliashberg
+// Matsubara solve (stdlib/qforge/tc). The gate pins:
+//
+//   (A) ADAPTER = VERIFIED PREDICTORS, NO NEW PHYSICS: feed a hand-built
+//       QfoldElphResult (λ, ω_log) to qforge_qfold_tc_from_result and assert the
+//       returned tc_ad / tc_me are BIT-IDENTICAL to calling qforge_tc_allen_dynes
+//       / qforge_tc_eliashberg_from_lambda directly — proving the adapter only
+//       re-routes, it adds no formula (rel-ε = 0, exact forward).
+//   (B) SENTINEL PROPAGATION: a non-ok upstream (ok==0) AND a non-physical
+//       upstream (λ≤0) both → ok==0, Tc = -1 (loud, never a silent wrong Tc, d6).
+//   (C) END-TO-END COMPOSE: build a GENUINE QmeshDispersion (1-atom cubic chain,
+//       2×2×2 q-mesh, the #2596 (D) fixture) and run qforge_qfold_dispersion_tc
+//       to a finite physical Tc>0 with full q-coverage (n_qhit==nk) — the real-
+//       cell λ·ω_log→Tc chain runs end to end, and its λ·ω_log MATCH the bare
+//       qfold_dispersion composer (the closure adds nothing upstream).
+//   (D) Tc MONOTONE IN μ*: a larger Coulomb pseudopotential μ* SUPPRESSES Tc
+//       (μ*=0.16 → Tc < μ*=0.10 → Tc) on the same λ·ω_log — the physical sign of
+//       the Coulomb repulsion, on BOTH predictors.
+//
+// @L5/d6 HONEST: the synthetic-cell witness is NOT physical CaH6; this gate pins
+// MACHINERY (forward-identity · sentinel · μ*-monotonicity), not a physical Tc
+// claim. Nothing is tuned toward any QE reference; no migration gate is flipped.
+//
+// Run:  hexa run stdlib/qforge/qfold_tc_selftest.hexa
+// PASS: exits printing "qforge_qfold_tc_selftest PASS".
+use "stdlib/qforge/qfold_tc"
+use "stdlib/qforge/qmesh_qfold"      // QfoldElphResult (the adapter input type)
+use "stdlib/qforge/realcell_qmesh"   // QmeshDispersion + qforge_qmesh_dispersion
+use "stdlib/qforge/tc"               // direct predictors for the (A) identity check
+
+fn _abs(x: float) -> float { if x < 0.0 { return -x } return x }
+
+fn _ck_true(name: str, cond: bool) -> int {
+    if cond { println("PASS " + name) ; return 0 }
+    println("FAIL " + name)
+    return 1
+}
+fn _ck_eq(name: str, got: float, want: float, tol: float) -> int {
+    if _abs(got - want) <= tol {
+        println("PASS " + name + " (" + to_string(got) + ")")
+        return 0
+    }
+    println("FAIL " + name + " — got " + to_string(got) + " want " + to_string(want))
+    return 1
+}
+fn _ck_ieq(name: str, got: int, want: int) -> int {
+    if got == want { println("PASS " + name + " (" + to_string(got) + ")") ; return 0 }
+    println("FAIL " + name + " — got " + to_string(got) + " want " + to_string(want))
+    return 1
+}
+
+// module-level constant single-band |g|² provider (the #2596 selftest idiom —
+// hexa nested fns do not capture lexical scope, so the provider reads module state).
+let mut G2C: float = 0.0
+fn _g2_const_1band(i: int, j: int) -> [float] { return [G2C] }   // nb=1
+
+fn main() {
+    let mut fails = 0
+    let mu = 0.10
+    let n_mats = 256
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // (A) ADAPTER = VERIFIED PREDICTORS, NO NEW PHYSICS — exact forward identity
+    // ─────────────────────────────────────────────────────────────────────────
+    // a hand-built finished result with a known λ·ω_log (Nb-scale anchor).
+    let lam0 = 1.05
+    let wlog0 = 320.0
+    let rIn = QfoldElphResult { ok: 1, err: "", lambda: lam0, omega_log: wlog0,
+                                n_kpairs: 4, n_qhit: 4, n_samples: 32, g2_total: 1.0 }
+    let tcOut = qforge_qfold_tc_from_result(rIn, mu, n_mats)
+    fails = fails + _ck_ieq("A.ok", tcOut.ok, 1)
+    // BIT-IDENTICAL to the verified predictors called directly (adapter adds nothing).
+    let tc_ad_ref = qforge_tc_allen_dynes(lam0, wlog0, mu)
+    let tc_me_ref = qforge_tc_eliashberg_from_lambda(lam0, wlog0, mu, n_mats)
+    fails = fails + _ck_eq("A.tc_ad_exact_forward", tcOut.tc_ad, tc_ad_ref, 1.0e-12)
+    fails = fails + _ck_eq("A.tc_me_exact_forward", tcOut.tc_me, tc_me_ref, 1.0e-12)
+    fails = fails + _ck_eq("A.lambda_verbatim", tcOut.lambda, lam0, 1.0e-12)
+    fails = fails + _ck_eq("A.omega_log_verbatim", tcOut.omega_log, wlog0, 1.0e-12)
+    fails = fails + _ck_ieq("A.n_qhit_verbatim", tcOut.n_qhit, 4)
+    fails = fails + _ck_true("A.tc_ad_physical (>0, =" + to_string(tcOut.tc_ad) + ")", tcOut.tc_ad > 0.0)
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // (B) SENTINEL PROPAGATION — non-ok AND non-physical upstream → loud sentinel
+    // ─────────────────────────────────────────────────────────────────────────
+    let rBad = QfoldElphResult { ok: 0, err: "upstream failed", lambda: -1.0,
+                                 omega_log: -1.0, n_kpairs: 0, n_qhit: 0,
+                                 n_samples: 0, g2_total: 0.0 }
+    let tcBad = qforge_qfold_tc_from_result(rBad, mu, n_mats)
+    fails = fails + _ck_ieq("B.notok_propagates", tcBad.ok, 0)
+    fails = fails + _ck_eq("B.notok_tc_sentinel", tcBad.tc_ad, -1.0, 1.0e-12)
+    // ok==1 but non-physical λ → also sentinel (no superconductivity / bad input).
+    let rZero = QfoldElphResult { ok: 1, err: "", lambda: 0.0, omega_log: 320.0,
+                                  n_kpairs: 1, n_qhit: 1, n_samples: 1, g2_total: 0.0 }
+    let tcZero = qforge_qfold_tc_from_result(rZero, mu, n_mats)
+    fails = fails + _ck_ieq("B.zerolambda_sentinel", tcZero.ok, 0)
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // (C) END-TO-END COMPOSE — real QmeshDispersion → qforge_qfold_dispersion_tc
+    // ─────────────────────────────────────────────────────────────────────────
+    // closed-form 1-atom cubic monatomic chain (the #2596 (D) fixture exactly):
+    // on-site self-term + nearest-cell xx coupling → a real cosine band.
+    let mass = 1.0
+    let kx = 2.0
+    let ky0 = 1.5
+    let kz0 = 1.5
+    let phi: [float] = [
+        2.0*kx, 0.0, 0.0,  0.0, ky0, 0.0,  0.0, 0.0, kz0,   // c0  R=0  on-site
+        -kx, 0.0, 0.0,  0.0, 0.0, 0.0,  0.0, 0.0, 0.0,       // c1  R=+x
+        -kx, 0.0, 0.0,  0.0, 0.0, 0.0,  0.0, 0.0, 0.0        // c2  R=−x
+    ]
+    let cell_R: [float] = [ 0.0, 0.0, 0.0,   1.0, 0.0, 0.0,   -1.0, 0.0, 0.0 ]
+    let twopi = 6.283185307179586
+    let b1: [float] = [twopi, 0.0, 0.0]
+    let b2: [float] = [0.0, twopi, 0.0]
+    let b3: [float] = [0.0, 0.0, twopi]
+    let disp = qforge_qmesh_dispersion(phi, [mass], 1, 3, cell_R,
+                                       2, 2, 2, b1, b2, b3)
+
+    let e_fermi = 0.0
+    let n_ef = 3.0
+    let sigma_el = 0.05
+    let sigma_ph = 10.0
+    let mut grid: [float] = []
+    let mut gp = 1
+    while gp < 401 { grid.push(to_float(gp) * 7.0) ; gp = gp + 1 }
+    let mut eps: [float] = []
+    let mut ke = 0
+    while ke < 8 { eps.push(e_fermi) ; ke = ke + 1 }
+    let mut wk: [float] = []
+    ke = 0
+    while ke < 8 { wk.push(1.0 / 8.0) ; ke = ke + 1 }
+    G2C = 0.5
+
+    let rC = qforge_qfold_dispersion_tc(disp, eps, wk, 2, 2, 2, 1,
+                                        _g2_const_1band,
+                                        e_fermi, n_ef, grid, sigma_el, sigma_ph,
+                                        -1.0, 1.0e-6, mu, n_mats)
+    fails = fails + _ck_ieq("C.ok", rC.ok, 1)
+    fails = fails + _ck_ieq("C.full_q_coverage (n_qhit==nk)", rC.n_qhit, 8)
+    fails = fails + _ck_true("C.finite_physical_lambda (λ>0, =" + to_string(rC.lambda) + ")", rC.lambda > 0.0)
+    fails = fails + _ck_true("C.finite_physical_tc_ad (Tc>0, =" + to_string(rC.tc_ad) + ")", rC.tc_ad > 0.0)
+    fails = fails + _ck_true("C.finite_physical_tc_me (Tc>0, =" + to_string(rC.tc_me) + ")", rC.tc_me > 0.0)
+    // the closure adds nothing upstream: λ·ω_log match the bare composer VERBATIM.
+    let rLam = qforge_qfold_dispersion_lambda(disp, eps, wk, 2, 2, 2, 1,
+                                              _g2_const_1band,
+                                              e_fermi, n_ef, grid, sigma_el, sigma_ph,
+                                              -1.0, 1.0e-6)
+    fails = fails + _ck_eq("C.lambda_matches_composer", rC.lambda, rLam.lambda, 1.0e-12)
+    fails = fails + _ck_eq("C.omega_log_matches_composer", rC.omega_log, rLam.omega_log, 1.0e-12)
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // (D) Tc MONOTONE IN μ* — larger Coulomb pseudopotential suppresses Tc
+    // ─────────────────────────────────────────────────────────────────────────
+    // same hand-built λ·ω_log, two μ*: μ*=0.16 must give a SMALLER Tc than μ*=0.10
+    // on BOTH predictors (the physical sign of Coulomb repulsion).
+    let tcLowMu = qforge_qfold_tc_from_result(rIn, 0.10, n_mats)
+    let tcHiMu  = qforge_qfold_tc_from_result(rIn, 0.16, n_mats)
+    fails = fails + _ck_true("D.tc_ad_suppressed_by_mu (" + to_string(tcHiMu.tc_ad) + " < " + to_string(tcLowMu.tc_ad) + ")",
+                             tcHiMu.tc_ad < tcLowMu.tc_ad)
+    fails = fails + _ck_true("D.tc_me_suppressed_by_mu (" + to_string(tcHiMu.tc_me) + " < " + to_string(tcLowMu.tc_me) + ")",
+                             tcHiMu.tc_me < tcLowMu.tc_me)
+
+    // ─────────────────────────────────────────────────────────────────────────
+    if fails == 0 {
+        println("qforge_qfold_tc_selftest PASS")
+    } else {
+        println("qforge_qfold_tc_selftest FAIL — " + to_string(fails) + " check(s) failed")
+    }
+}
