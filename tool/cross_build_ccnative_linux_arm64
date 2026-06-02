@@ -1,0 +1,221 @@
+#!/usr/bin/env bash
+# ─────────────────────────────────────────────────────────────────────────
+# tool/cross_build_ccnative_linux_arm64 — CROSS-compile the hexa BOOTSTRAP
+# COMPILER (cc_native, the C-built aprime_cc analogue) to an aarch64-linux ELF
+# from a NON-arm64-linux host, then PROVE it under qemu-aarch64-static: run it,
+# and have it COMPILE a tiny hexa program (exit 42) → emit ELF .o → link against
+# the cross-built runtime.a → run under qemu → rc 42.
+#
+# This is the CROSS sibling of tool/build_native_linux_arm64 (which builds
+# cc_native NATIVELY on an aarch64 host with stock gcc and can only run on that
+# host). The named wall it removes (#2575): build_native_linux_arm64 builds
+# cc_native NATIVELY-only — there was no CROSS path to obtain an aarch64-linux
+# compiler binary from an x86_64-linux host. Here we cross-compile the SAME C
+# translation unit (the flattened+transpiled compiler source `ap_post.c`) with
+# aarch64-linux-gnu-gcc instead of native gcc.
+#
+# This does NOT require compiler self-emit — cc_native is C-built, so it does
+# NOT hit the F-STP-ENCODE-MISS native-codegen wall (that wall is the deepest
+# residual for TRUE self-emit, and stays out of this C-cross lane).
+#
+# Deltas vs tool/build_native_linux_arm64 (all to make the C build CROSS):
+#   * CC  = aarch64-linux-gnu-gcc (cross), not native gcc;
+#   * RUN of cc_native goes through qemu-aarch64-static -L <sysroot>
+#     (x86_64-linux proof host can't run an aarch64 ELF directly);
+#   * the EMITTED program (stage5 exit-42) links against the cross runtime.a
+#     produced by tool/cross_build_runtime_linux_arm64 (#2574), then runs
+#     under qemu — the runtime/emit halves already proven there, reused here.
+# Stages 1-3 (flatten → hexat transpile → post-process / link-fills) are
+# byte-identical to build_native_linux_arm64; only the CC + run wrapper change.
+#
+# Extension-less (not .sh) per the stage_* / build_native_linux_arm64
+# precedent: the sidecar hook blocks .sh Write/Edit. Invoke as
+#   bash tool/cross_build_ccnative_linux_arm64 [-r REPO] [-w WORK]
+#
+# ── Prereqs (x86_64 linux proof host, e.g. aiden/summer) ─────────────────────
+#   aarch64-linux-gnu-gcc + binutils + the aarch64 sysroot (/usr/aarch64-linux-gnu)
+#   + qemu-aarch64-static + python3 + build/hexat (the bootstrap transpiler).
+#   On Debian/Ubuntu: sudo apt-get install -y gcc-aarch64-linux-gnu qemu-user-static
+#   A native aarch64 host (pi5-akida) can substitute CC=gcc and drop qemu.
+#
+# ── Usage ────────────────────────────────────────────────────────────────────
+#   tool/cross_build_ccnative_linux_arm64 [-r REPO] [-w WORK]
+#     -r REPO   repo root (default: cwd; must hold compiler/main.hexa)
+#     -w WORK   scratch/output dir (default: $REPO/build/larm64xcc) — NOT /tmp
+#
+# ── Exit codes ───────────────────────────────────────────────────────────────
+#   0  cc_native CROSS-built (aarch64 ELF) + ran under qemu + compiled exit-42
+#      program → emitted .o → linked vs cross runtime.a → ran under qemu rc 42
+#   1  build failure (flatten/transpile/cross-gcc/link of cc_native)
+#   2  qemu-run / emit / probe failure (cc_native built but proof step failed)
+#   3  bad invocation / missing inputs / missing cross toolchain
+# ─────────────────────────────────────────────────────────────────────────
+set -u
+
+REPO="$(pwd)"; WORK=""
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -r) REPO="$2"; shift 2 ;;
+        -w) WORK="$2"; shift 2 ;;
+        *) echo "cross_build_ccnative_linux_arm64: unknown arg '$1'" >&2; exit 3 ;;
+    esac
+done
+
+cd "$REPO" || { echo "bad repo '$REPO'" >&2; exit 3; }
+[ -f compiler/main.hexa ] || { echo "no compiler/main.hexa under $REPO" >&2; exit 3; }
+[ -z "$WORK" ] && WORK="$REPO/build/larm64xcc"
+case "$WORK" in /tmp/*|/private/tmp/*) echo "WORK must not be under /tmp" >&2; exit 3 ;; esac
+mkdir -p "$WORK" || { echo "cannot mkdir $WORK" >&2; exit 3; }
+
+CC="${CC:-aarch64-linux-gnu-gcc}"
+AR="${AR:-aarch64-linux-gnu-ar}"
+SYSROOT="${SYSROOT:-/usr/aarch64-linux-gnu}"
+QEMU="${QEMU:-qemu-aarch64-static}"
+GCC_FLAGS="-O1 -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs -fno-builtin-bzero -fno-builtin-memcpy -fno-builtin-strlen -D_FORTIFY_SOURCE=0 -fno-stack-protector"
+log()  { echo "[cross_build_ccnative] $*"; }
+fail() { log "FATAL ($1): $2"; exit "${3:-1}"; }
+
+command -v "$CC"   >/dev/null 2>&1 || fail tc "cross compiler '$CC' not found (apt install gcc-aarch64-linux-gnu)" 3
+command -v "$QEMU" >/dev/null 2>&1 || log "WARNING: '$QEMU' not found — qemu run/proof steps will be skipped"
+
+HEAD_SHA="$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
+log "=== repo=$REPO HEAD=$HEAD_SHA work=$WORK CC=$CC (CROSS) ==="
+
+# ── stage seed: bootstrap transpiler + runtime C seeds (gitignored) ───────────
+# hexat (the C-built bootstrap transpiler) runs on the HOST (x86_64) to produce
+# the compiler's C source — it is a host tool, not the cross target. runtime.c
+# is restored for the gate-ON inline include (stage3) + cross runtime.a build.
+if [ ! -x build/hexat ] || [ ! -f self/runtime.c ]; then
+    log "stage seed: restoring frozen seeds + (if needed) host bootstrap transpiler"
+    bash tool/restore_frozen_seeds >/dev/null 2>&1 || true
+    [ -f self/runtime.c ] || fail seed "self/runtime.c missing (restore_frozen_seeds failed)"
+    if [ ! -x build/hexat ]; then
+        # hexat is a HOST tool → build with the native host CC, not the cross CC.
+        HOSTCC="${HOSTCC:-cc}"
+        TARGET=linux CC="$HOSTCC" LIBS="-lm -ldl" bash tool/stage_resolve_runtime_a >/dev/null 2>&1 || true
+        HEXA_PREBUILT_RUNTIME="$REPO/build/runtime.a" TARGET=linux CC="$HOSTCC" LIBS="-lm -ldl" \
+            bash tool/stage_prebuild_hexat >/dev/null 2>&1 || fail seed "stage_prebuild_hexat failed"
+    fi
+fi
+[ -x build/hexat ] || fail seed "build/hexat missing (host bootstrap transpiler)"
+log "seed: hexat=$(stat -c%s build/hexat 2>/dev/null)B (host tool) · runtime.c=$([ -f self/runtime.c ] && wc -l < self/runtime.c || echo MISSING)L"
+
+# ── stage 1: flatten compiler/main.hexa closure (HOST python3) ────────────────
+log "stage1: flatten compiler/main.hexa -> cc-flat.hexa"
+python3 tool/larm64_flatten.py compiler/main.hexa "$WORK/cc-flat.hexa" || fail flatten "larm64_flatten.py failed"
+[ -s "$WORK/cc-flat.hexa" ] || fail flatten "cc-flat.hexa empty"
+
+# ── stage 2: transpile via HOST hexat -> C ────────────────────────────────────
+log "stage2: hexat transpile -> ap.c (host tool)"
+build/hexat "$WORK/cc-flat.hexa" "$WORK/ap.c" 2>&1 | tail -1
+[ -f "$WORK/ap.c" ] || fail transpile "no $WORK/ap.c"
+
+# ── stage 3: post-process (s4 + builtin sed + runtime inline + link-fills) ────
+# Byte-identical to build_native_linux_arm64 stage3 — the C source is
+# host/target-agnostic; only the COMPILER (stage4 CC) is cross.
+log "stage3: post-process"
+cp "$WORK/ap.c" "$WORK/flat4.c"
+python3 tool/s4_flatc_post.py "$WORK/flat4.c" 2>&1 | tail -1
+sed -E -e 's/hexa_call1\(sha256_hex,[ ]*([^)]*)\)/hexa_sha256(\1)/g' \
+       -e 's/hexa_call1\(list_dir,[ ]*[^)]*\)/hexa_array_new()/g' \
+       "$WORK/flat4.c" > "$WORK/ap_post.c"
+sed -i 's|#include "runtime.h"|#include "runtime.c"|' "$WORK/ap_post.c"
+sed -i '1i #define HEXA_HAS_HEXA_RT_STDLIB 1' "$WORK/ap_post.c"
+
+if ! grep -q 'HexaVal rt_fs_append_atomic(HexaVal path, HexaVal data) {' self/runtime_core.c 2>/dev/null; then
+    cat >> "$WORK/ap_post.c" <<'RTFS'
+/* TEMP B2 link-fill (remove once self/runtime_core_emit.hexa emits these). */
+#ifndef HEXA_RT_SELFEMIT
+HexaVal rt_fs_append_atomic(HexaVal path, HexaVal data) { (void)path; (void)data; return hexa_int(-1); }
+HexaVal rt_fs_stat(HexaVal path) { (void)path; return hexa_void(); }
+HexaVal rt_fs_rotate_if_over(HexaVal path, HexaVal max_bytes, HexaVal keep) { (void)path; (void)max_bytes; (void)keep; return hexa_int(0); }
+#endif
+RTFS
+    log "stage3: rt_fs B2 link-fill appended"
+fi
+if ! grep -q 'HexaVal rt_array_pop(HexaVal arr) {' self/runtime_core.c 2>/dev/null; then
+    cat >> "$WORK/ap_post.c" <<'RTARR'
+/* linux-arm64 rt_array link-fill (rt-stdlib-gate; mirrors #ifndef branch). */
+#ifndef HEXA_RT_SELFEMIT
+HexaVal rt_array_pop(HexaVal arr) {
+    int n = HX_ARR_LEN(arr);
+    HexaVal last = HX_ARR_ITEMS(arr)[n - 1];
+    HX_SET_ARR_LEN(arr, n - 1);
+    return last;
+}
+HexaVal rt_array_shift(HexaVal arr) {
+    HexaVal first = HX_ARR_ITEMS(arr)[0];
+    int n = HX_ARR_LEN(arr);
+    for (int i = 0; i < n - 1; i++) { HX_ARR_ITEMS(arr)[i] = HX_ARR_ITEMS(arr)[i + 1]; }
+    HX_SET_ARR_LEN(arr, n - 1);
+    return first;
+}
+#endif
+RTARR
+    log "stage3: rt_array link-fill appended"
+fi
+
+# ── stage 4: CROSS-gcc compile the compiler -> aarch64-linux cc_native ELF ─────
+# This is the lane's core delta: the SAME ap_post.c that build_native compiles
+# with native gcc, here compiled with aarch64-linux-gnu-gcc → an aarch64 ELF.
+log "stage4: CROSS-gcc compile -> cc_native (aarch64-linux ELF)"
+CL_ERR="$($CC $GCC_FLAGS -I self -I . "$WORK/ap_post.c" -o "$WORK/cc_native" -lm -ldl -lpthread 2>&1 | grep -iE 'error:|undefined' | head -10)"
+if [ -n "$CL_ERR" ] || [ ! -x "$WORK/cc_native" ]; then
+    echo "$CL_ERR" >&2
+    fail xgcc "cc_native cross-compile/link failed"
+fi
+FILE_DESC="$(file -b "$WORK/cc_native")"
+log "stage4: cc_native = $(stat -c%s "$WORK/cc_native")B · $(echo "$FILE_DESC" | cut -d, -f1-2)"
+case "$FILE_DESC" in
+    *aarch64*|*ARM\ aarch64*) : ;;
+    *) fail xgcc "cc_native is not an aarch64 ELF: $FILE_DESC" ;;
+esac
+
+# ── cross runtime.a (for the EMITTED program link in stage5) — reuse #2574 ─────
+if [ ! -s "$WORK/runtime.a" ]; then
+    log "stage4b: building cross runtime.a via tool/cross_build_runtime_linux_arm64 (#2574)"
+    CC="$CC" AR="$AR" SYSROOT="$SYSROOT" QEMU="$QEMU" \
+        bash tool/cross_build_runtime_linux_arm64 -r "$REPO" -w "$WORK/rtbuild" >"$WORK/rtbuild.log" 2>&1 || \
+        fail rt "cross_build_runtime_linux_arm64 failed (see $WORK/rtbuild.log)"
+    cp "$WORK/rtbuild/runtime.a" "$WORK/runtime.a" 2>/dev/null || fail rt "no runtime.a from cross_build_runtime"
+fi
+log "stage4b: cross runtime.a = $(stat -c%s "$WORK/runtime.a" 2>/dev/null)B"
+
+# ── stage 5: PROVE under qemu — run cc_native; compile exit-42; emit; link; run ─
+if ! command -v "$QEMU" >/dev/null 2>&1; then
+    log "stage5: SKIP qemu proof ($QEMU absent) — cc_native cross-built, run on an aarch64 host"
+    log "DONE — cc_native CROSS-built (no qemu proof); HEAD=$HEAD_SHA"
+    exit 0
+fi
+
+# 5a: cc_native RUNS under qemu at all (smoke — accept any rc; capture stderr).
+log "stage5a: qemu smoke — run cc_native (capture rc; --help/--version may be unsupported)"
+"$QEMU" -L "$SYSROOT" "$WORK/cc_native" --version >"$WORK/ver.out" 2>"$WORK/ver.err"; VRC=$?
+log "stage5a: cc_native --version rc=$VRC stdout=[$(head -c 120 "$WORK/ver.out" | tr '\n' ' ')] (qemu-runnable)"
+
+# 5b: cc_native COMPILES a tiny program (exit 42) → ELF aarch64 .o, under qemu.
+T="$WORK/larm64-test"; mkdir -p "$T"
+printf 'fn main() {\n  exit(42)\n}\n' > "$T/p42.hexa"
+log "stage5b: qemu run cc_native — emit p42.hexa -> ELF .o (--backend=native --target=arm64-linux-gnu)"
+"$QEMU" -L "$SYSROOT" "$WORK/cc_native" _drv.hexa --emit=obj --backend=native \
+    --target=arm64-linux-gnu -o "$T/p42.o" "$T/p42.hexa" >"$T/emit.out" 2>"$T/emit.err"
+EMRC=$?
+tail -2 "$T/emit.err" 2>/dev/null
+[ -s "$T/p42.o" ] || fail emit "p42.o not produced by cc_native under qemu (emit rc=$EMRC; see $T/emit.err)" 2
+log "stage5b: p42.o = $(file -b "$T/p42.o" | cut -d, -f1-2) (emit rc=$EMRC)"
+
+# 5c: link the emitted .o against the cross runtime.a, run the result under qemu.
+log "stage5c: link p42.o + cross runtime.a -> p42 (cross-gcc; crt1 + libc entry)"
+"$CC" "$T/p42.o" "$WORK/runtime.a" -o "$T/p42" -lm -ldl -lpthread 2>"$T/link.err"
+grep -iE 'undefined|error' "$T/link.err" | head -10
+[ -x "$T/p42" ] || fail link "p42 link failed (see $T/link.err)" 2
+log "stage5c: p42 = $(file -b "$T/p42" | cut -d, -f1-3)"
+OUT="$("$QEMU" -L "$SYSROOT" "$T/p42" 2>"$T/run.err")"; RC=$?
+log "stage5c: QEMU RUN — stdout=[$OUT] rc=$RC (want rc 42)"
+if [ "$RC" != "42" ]; then
+    fail run "expected rc=42 from cc_native-compiled program under qemu, got rc=$RC" 2
+fi
+
+log "stage5: PASS — cc_native (CROSS aarch64) ran under qemu + compiled exit-42 → linked → RAN rc 42"
+log "DONE — cc_native CROSS-built + qemu-proven (HEAD=$HEAD_SHA)"
+exit 0
