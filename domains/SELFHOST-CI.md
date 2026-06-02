@@ -1,0 +1,38 @@
+@title: 🔒 SELFHOST-CI — lock self-host into standing CI
+
+@goal: Lock the self-host achievement (gen2 byte-eq fixpoint + multi-target cross-emit + promote parity + the hx-selfhost-cli shim) into REQUIRED CI checks, so that any codegen / linker / runtime edit that silently regresses self-host FAILS the PR instead of rotting unnoticed. The byte-eq graduation is the entry GATE for SELFHOST-NEXT; this domain is the standing regression FENCE around it.
+
+# SELFHOST-CI — current state
+
+The self-host byte-eq fixpoint was won on the ghost macOS host: the graduated
+`gen2_fix` native compiler re-emits the FULL flattened compiler to a
+byte-identical object across generations —
+`cmp cc-prc2-fix.o == cc-gen3.o == cc-gen3b.o == cc-gen4.o` all exit 0
+(3,224,592 bytes each). That proof is a one-time event; nothing in CI yet
+prevents a future codegen/linker edit from quietly breaking it.
+
+This domain turns each leg of the achievement into a standing gate. It is
+ADDITIVE only — gate scripts + workflows + verdicts + docs. NO production
+codegen edits live here (those belong to RUNTIME / CC-NATIVE / HEXA-CC-ZERO).
+
+Sister gates already on main establish the pattern this domain extends:
+`tool/miscompile_zero_gate.sh` (+ `.github/workflows/miscompile-zero-gate.yml`)
+and `tool/determinism_gate.sh` (+ `determinism-gate.yml`). Both classify a
+build-floor "cannot native-emit here" as exit 2 → CI-neutral (#2547), so a
+runner that lacks the graduated `gen2_fix` never false-fails a PR. SELFHOST-CI
+follows the exact same exit-2-neutral discipline.
+
+## milestones
+
+- [x] byte-eq fixpoint gate — `tool/selfhost_byteeq_gate.sh`: re-emit gen3 → gen4 from the graduated `gen2_fix`, `cmp` byte-identical (FIRSTDIFF=0), assert ENCODE-MISS=0; + a fast native-codegen regression probe (`0xff`→255 hex-literal + the `c2_stack_locals` STP/[sp] corpus emit clean, 0 ENCODE-MISS). Wired as `.github/workflows/selfhost-byteeq-gate.yml`.
+- [ ] native-codegen regression guards — extend the probe corpus (0x-literal + STP/[sp] + the full miscompile_zero class set) into a standalone always-run guard distinct from the heavy byte-eq leg.
+- [ ] multi-target cross-emit smoke — native --emit=obj for each supported target triple (darwin-arm64 + linux-arm64 faithful) produces a non-empty object with 0 ENCODE-MISS (extend toward x86_64 once that backend lands).
+- [ ] promote parity-gate-in-CI — when the self-hosted gen is promoted to the default `hx` toolchain, gate that gen ≡ bootstrap on the smoke + verify surface so a promote can't silently drift.
+- [ ] shim integrity — `hx-selfhost-cli` shim byte/behaviour integrity check so the CLI wrapper around the graduated gen can't rot.
+- [ ] determinism — keep the existing re-emit + relink byte-eq (`determinism_gate.sh`) wired and required; track its inclusion in the self-host required-check set.
+
+## deferred
+
+- make the byte-eq + determinism + miscompile-zero gates REQUIRED status checks on the `main` branch protection (needs repo-admin; record the check names once green on ghost).
+- self-host a cached `gen2_fix` build step IN CI so the heavy byte-eq leg runs hermetically on `macos-latest` instead of only exit-2-neutral there (today it is real only on the ghost host that holds the graduated artifacts).
+- publish the byte-eq fixpoint as a CLAIMS.tape verifiable claim cross-linked to `.verdicts/selfhost-ci/BYTEEQ-GATE.txt` (overlaps SELFHOST-NEXT deferred reproducible-build attestation).

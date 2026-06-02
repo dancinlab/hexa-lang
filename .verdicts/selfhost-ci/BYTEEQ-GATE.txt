@@ -1,0 +1,79 @@
+SELFHOST-CI — byte-eq fixpoint CI gate verdict
+==============================================
+date    : 2026-06-03
+host    : ghost (macOS arm64, 192.168.50.150) — holds the graduated self-host artifacts
+gate    : tool/selfhost_byteeq_gate.sh
+driver  : ~/dancinlab/selfhost-work/gen2_fix  (graduated native self-hosted compiler)
+target  : arm64-apple-darwin
+result  : PASS (exit 0)
+
+VERDICT: 🟢 byte-eq fixpoint held — gen3 == gen4 (FIRSTDIFF=0, 0 ENCODE-MISS)
+         AND native-codegen probe (0x-literal + STP/[sp]) clean.
+
+──────────────────────────────────────────────────────────────────────────────
+RAW GATE STDOUT (verbatim, GEN_REF unset = self-reproduction fixpoint is the gate)
+──────────────────────────────────────────────────────────────────────────────
+── selfhost byte-eq gate ─────────────────────────────────────────
+  compiler : ~/dancinlab/selfhost-work/gen2_fix _drv.hexa
+  target   : arm64-apple-darwin
+  flat src : ~/dancinlab/selfhost-work/cc-flat-fix.hexa
+  gen ref  :
+  corpus   : ~/dancinlab/hexa-lang/self/test/miscompile_zero
+  out      : ~/dancinlab/selfhost-work/byteeq-gate-out2
+──────────────────────────────────────────────────────────────────
+  canary   : c1_hex_literal emits (objsize=1600) — native-emit OK
+──────────────────────────────────────────────────────────────────
+LEG B — native-codegen probe (0x-literal + STP/[sp]):
+  PASS  c1_hex_literal     objsize=1600 encode_miss=0
+  PASS  c2_stack_locals    objsize=1816 encode_miss=0
+──────────────────────────────────────────────────────────────────
+LEG A — byte-eq fixpoint (re-emit gen3 → gen4):
+  gen3 : rc=0 objsize=3224592 encode_miss=0
+  gen4 : rc=0 objsize=3224592 encode_miss=0
+  cmp gen3 vs gen4 : BYTE-EQ (FIRSTDIFF=0)
+  cmp ref  vs gen3 : (no GEN_REF — self-reproduction fixpoint is the gate)
+──────────────────────────────────────────────────────────────────
+selfhost-byteeq-gate: PASS — byte-eq fixpoint held (gen3==gen4,
+  FIRSTDIFF=0, 0 ENCODE-MISS) AND native-codegen probe clean.
+GATE_RC=0
+
+──────────────────────────────────────────────────────────────────────────────
+FIRST RUN (initial gate draft) — same byte-eq PASS for the fixpoint, but the
+draft also cmp'd gen3 vs cc-prc2-fix.o and red'd on it. Verbatim:
+──────────────────────────────────────────────────────────────────────────────
+  PASS  c1_hex_literal     objsize=1600 encode_miss=0
+  PASS  c2_stack_locals    objsize=1816 encode_miss=0
+  gen3 : rc=0 objsize=3224592 encode_miss=0
+  gen4 : rc=0 objsize=3224592 encode_miss=0
+  cmp gen3 vs gen4 : BYTE-EQ (FIRSTDIFF=0)
+  cmp ref  vs gen3 : DIFFER@? — drift from graduated reference
+  selfhost-byteeq-gate: FAIL — self-host regression detected
+
+──────────────────────────────────────────────────────────────────────────────
+FINDING — cc-prc2-fix.o is NOT a valid fixpoint comparand
+──────────────────────────────────────────────────────────────────────────────
+The canonical graduation fixpoint is the SELF-REPRODUCTION gen3 ≡ gen3b ≡ gen4
+(gen2's emit reproducing itself across re-runs). Ghost graduation markers:
+
+  gen3b.done : EXIT=0 OBJSIZE=3224592 ENCODE_MISS=0 CMP_gen3_vs_gen3b=IDENTICAL FIRSTDIFF=0
+  gen4.done  : EXIT=0 OBJSIZE=3224592 ENCODE_MISS=0 LINK_gen3=0 SMOKE=2 CMP_gen3_vs_gen4=BYTE-EQ-GRADUATION FIRSTDIFF=0
+  gen2fix.done: EXIT=0 OBJSIZE=3224592 PRC2_ENCODE_MISS=0 LINK=0 ... NOTE=relinked-with-hld_fixed-literal8-merge
+
+cc-prc2-fix.o is gen2's OWN object, RELINKED via a different path (hld_fixed
+literal8-merge — see gen2fix.done NOTE), so it differs from gen2's EMIT by
+design. It differed at graduation time too — the original gen3.done recorded
+"CMP=DIFFER FIRSTDIFF=NA". Evidence (ghost):
+
+  cmp (fresh gen3) (graduated cc-gen3.o)  -> rc=0   (byte-identical: gen2's emit IS reproducible)
+  cmp cc-prc2-fix.o cc-gen3.o             -> differ: char 1528257, line 3773  (relinked != emit, by design)
+
+FIX: GEN_REF defaults UNSET and is INFORMATIONAL ONLY (never reds the gate);
+the fixpoint gate compares gen3 vs gen4 (self-reproduction). This is the
+honest, correct invariant for a standing regression fence.
+
+SUMMARY METRICS
+  FIRSTDIFF (gen3 vs gen4)        : 0       (byte-identical fixpoint)
+  ENCODE-MISS (gen3 / gen4)       : 0 / 0
+  ENCODE-MISS (0x-literal probe)  : 0
+  ENCODE-MISS (STP/[sp] probe)    : 0
+  object size                     : 3,224,592 bytes (all generations)
