@@ -40,3 +40,27 @@ AND descent GREEN. 교훈: H100 sm_90 · 단일드라이버 · 하네스X · inl
 
 좀비 a9b8016a 는 same throttle 로 마침내 종료(재-rent 시도 중 죽음). 중복 pod 39075752
 (laneg-utilgreen2) teardown 필요.
+
+## 2026-06-02 (cont.) — pod-INDEPENDENT endgame prep STAGED (live fire untouched)
+
+lever-2 verify fire 가 pod 39082940 에서 in-flight 인 동안, pod-독립 엔드게임 4축을
+모두 전진(라이브 fire / pod 무접촉):
+- **HF PUBLIC closure readiness** (`inbox/patches/forge-utilgreen-hf-public-closure-readiness.md`):
+  repo_id `dancinlab/clm-v1-base-mirror-lane-g-forge` (mk2 §2.1 EBNF: clm·v1·base-mirror·
+  lane-g-forge variant — Lane A⊥G 분리를 NAME 에 박제) + model-card 5섹션 템플릿(GPU·forge+flame,
+  fire 로그 `{FILL}`) + HF.jsonl row schema(substrate=GPU/lane=Lane-G) + dancinlab CLM 컬렉션 plan.
+  업로드 NO (fire run 소유, a_hf_autonomous).
+- **lever-3 DESIGN-AHEAD** (`inbox/patches/forge-rfc046-lever3-batched-expert-repack.md`):
+  committed profile 정독 → lever-2 가 처리한 건 un-batched 4conv(31.2% 항)뿐, 프로덕션이 실제
+  도는 batched 2-expert 경로(`conv2_*_via_forge_batched` = **65% DOMINANT** 항)의 host repack
+  (b_all Wt-pack·a_all 복제·c_all/dW unpack)은 잔존. lever-3 = strided-batched transpose-aware
+  GEMM(`forge_dispatch_matmul_batched_{bt,atb}` + xcol strideA=0 broadcast)로 device 화 →
+  host op 을 glue floor 로. byte-eq oracle = F-RFC046-BATCHED-GEMMFEED-EQ. self/runtime.c+cuda
+  시그니처 = pod 빌드 필요 → DESIGN DOC only(라이브 fire 와 무경쟁). util≥20% 는 fire verdict.
+- **3B throughput-justification 게이트**: FORGE-UTILGREEN.md 에 NOT-before-util-GREEN guard +
+  util-GREEN(≥20% MEAN)∧descent-GREEN AND-게이트 + ≥3 rung ladder(d1536→~d2048→3B) 명문화.
+- **도메인 hygiene**: lever-2/util-verify 는 fire agent 소유라 미변경(✅ 안 찍음). lever-3 는
+  DESIGN-AHEAD 로 별 milestone 추가.
+
+라이브 fire / pod 39082940 / 보호 pod(38704336/38996679/39070097) 전부 무접촉. 재-rent 0.
+substrate=GPU, a_lane_akida_gpu_split (AKIDA 무병합).
