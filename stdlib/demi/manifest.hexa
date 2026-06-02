@@ -107,9 +107,11 @@ pub fn demi_manifest() -> Manifest {
                    summary: "AI connection — list|use|mode|model|key|test|ask" })
     vs.push(Verb { name: "owner",           kind: "local", target: "owner",
                    summary: "Owner-mode (사장실) status" })
-    // verify / atlas forward to the hexa stdlib kernel (subprocess); a bare
-    // `verify <path|id>` is the local record-consistency check — that arg
-    // split lands in the verify stacked PR (handoff §verify).
+    // verify — local handler that splits on the first token:
+    //   --expr | --fence | rubric → hexa verify KERNEL passthrough (LIVE,
+    //                               PR-verify-passthrough · verbatim · @D g5);
+    //   <path|id> (bare)          → local record check (PR-verify-record stub).
+    // atlas forwards to the hexa stdlib kernel (subprocess kind).
     vs.push(Verb { name: "verify",          kind: "local", target: "verify",
                    summary: "Provenance/claim-gate check · --expr forwards to hexa verify" })
     vs.push(Verb { name: "atlas",           kind: "subprocess", target: "hexa",

@@ -113,6 +113,27 @@ fn _cell(name: string, entry: string, swift_bin: string,
     return 0
 }
 
+// _cell_passthrough — a parity cell for a VERBATIM-FORWARD verb (PR-verify-
+// passthrough). demi `verify --expr|--fence|rubric` forwards to the hexa
+// verify KERNEL, which is the SAME binary Swift's verifyHexa forwards to. So
+// the golden is computed LIVE from `hexa verify <args>` (the kernel SSOT) —
+// no brittle hardcoded multi-line string, and the cell asserts demi's output
+// is byte-identical + rc-identical to a direct kernel call. When DEMI_SWIFT_BIN
+// is present the standard live cross-check still runs too (via the inner
+// `verify_argv` that the Swift CLI maps through verifyHexa identically).
+// `verify_argv` is the post-verb tail (e.g. "--fence '1+1==2'").
+fn _cell_passthrough(name: string, entry: string, swift_bin: string,
+                     verify_argv: string) -> int {
+    let hexa = exec("command -v hexa 2>/dev/null || echo hexa").trim()
+    // golden = a direct kernel call (what Swift verifyHexa forwards to).
+    let kpair = exec_with_status(_shq2(hexa) + " verify " + verify_argv + " 2>&1")
+    let golden = to_string(kpair[0])
+    let want_rc = kpair[1]
+    // demi side: `<hexa> run <entry> verify <verify_argv>`.
+    return _cell(name, entry, swift_bin, "", "verify " + verify_argv,
+                 golden, want_rc)
+}
+
 fn _atoi2(s: string) -> int {
     let t = s.trim()
     if len(t) == 0 { return 0 }
@@ -185,6 +206,16 @@ fn main() {
                           g_disc_live, 7)
     fails = fails + _cell("action/unknown-verb", entry, swift_bin, "",
                           "action zzz", g_act_unknown, 2)
+
+    // PR-verify-passthrough — `verify --expr|--fence|rubric` → hexa verify
+    // kernel, output forwarded VERBATIM (Swift verifyHexa · @D g5). Golden
+    // is the live kernel call (the SSOT both surfaces forward to).
+    fails = fails + _cell_passthrough("verify/fence", entry, swift_bin,
+                                      "--fence " + _shq2("1+1==2"))
+    fails = fails + _cell_passthrough("verify/expr", entry, swift_bin,
+                                      "--expr add 2 4")
+    fails = fails + _cell_passthrough("verify/rubric", entry, swift_bin,
+                                      "rubric")
 
     if fails == 0 { println("demi_parity_selftest PASS") }
     else { println("demi_parity_selftest FAIL — " + to_string(fails) + " cell(s)") }

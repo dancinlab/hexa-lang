@@ -121,12 +121,85 @@ pub fn handler_action(argv: [string]) -> int {
     return handler_stub("action.cellrun", argv)
 }
 
+// ── verify (PR-verify-passthrough · LIVE) ───────────────────────────
+//
+// `demi verify <arg> [more...]` — ports the Swift `verify` dispatch split
+// (main.swift:1171-1185). Two paths, branched on the FIRST post-verb token:
+//   --expr | --fence | rubric  → the hexa stdlib verify KERNEL (5-tier, M16).
+//        Forwarded to `hexa verify <post...>` VERBATIM; verdict printed as-is,
+//        child exit code propagated (Swift verifyHexa · @D g5 — demi never
+//        re-judges). A missing `hexa` on PATH → exit 127 (honest gap, not a
+//        fabricated verdict; mirrors HexaBridge.run ran=false).
+//   <path|id> (bare)           → the local record provenance/claim-gate check
+//        (Swift verifyRecord). That reads exports/** records + an artifact
+//        registry which are NOT yet ported (PR-verify-record stacked PR), so
+//        the bare path routes to the honest stub — NEVER a fake parity (@L7).
+// Missing arg → Swift parity: stderr line + usage + exit 2. The usage screen
+// itself is the manifest-rendered demi_usage (d4); the deterministic,
+// byte-matchable parity cell registered this PR is the --fence/--expr/rubric
+// forward (its output is fully owned by the hexa kernel, identical on both
+// surfaces).
+
+// _shq_h(s) — single-quote shell escaping for the verify subprocess argv
+// (local copy so handlers.hexa does not import dispatch.hexa back — that
+// would be an import cycle; dispatch.hexa imports handlers.hexa).
+fn _shq_h(s: string) -> string {
+    let mut out = "'"
+    let mut i = 0
+    while i < len(s) {
+        let c = s.substring(i, i + 1)
+        if c == "'" { out = out + "'\\''" } else { out = out + c }
+        i = i + 1
+    }
+    return out + "'"
+}
+
+// _verify_is_kernel(tok) — does the first post-verb token select the hexa
+// verify kernel passthrough (vs the bare-record local check)?
+fn _verify_is_kernel(tok: string) -> bool {
+    return tok == "--expr" || tok == "--fence" || tok == "rubric"
+}
+
+pub fn handler_verify(argv: [string]) -> int {
+    // Swift requires args.count >= 3 → at least one post-verb token. Swift
+    // also prints usage() here; the demi usage is manifest-rendered in
+    // dispatch.hexa (importing it back would cycle), and the missing-arg case
+    // is NOT a registered parity cell (its usage tail is a separate concern),
+    // so this path stays honest with the stderr line + exit 2 only.
+    if len(argv) < 1 {
+        eprintln("verify: missing <path|id> argument")
+        return 2
+    }
+    if _verify_is_kernel(argv[0]) {
+        // Forward to `hexa verify <post...>` verbatim (Swift verifyHexa).
+        let hexa = exec("command -v hexa 2>/dev/null || echo hexa").trim()
+        let mut cmd = _shq_h(hexa) + " verify"
+        let mut i = 0
+        while i < len(argv) {
+            cmd = cmd + " " + _shq_h(argv[i])
+            i = i + 1
+        }
+        cmd = cmd + " 2>&1"
+        let pair = exec_with_status(cmd)
+        let out = to_string(pair[0])
+        // print verbatim + Swift's trailing-newline normalization.
+        print(out)
+        if len(out) > 0 {
+            if !out.ends_with("\n") { println("") }
+        }
+        return pair[1]
+    }
+    // Bare <path|id> → local record check (PR-verify-record). Honest stub.
+    return handler_stub("verify.record", argv)
+}
+
 // handler_local(target, argv) — generic local-handler entry. Routes by the
 // manifest `target` id to the ported hexa-native handler, else the honest
 // stub. The ONE place the local family fans out — adding a ported handler is
 // one branch here + flipping its manifest row off the stub (d4).
 pub fn handler_local(target: string, argv: [string]) -> int {
     if target == "action" { return handler_action(argv) }
+    if target == "verify" { return handler_verify(argv) }
     // every other declared local target is not-yet-ported → honest stub.
     return handler_stub(target, argv)
 }
