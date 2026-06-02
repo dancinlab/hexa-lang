@@ -7572,6 +7572,19 @@ fn gen2_expr(node) {
                 if name == "forge_dispatch_matmul_batched" {
                     return "hexa_forge_dispatch_matmul_batched(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ", " + arg_strs[3] + ", " + arg_strs[4] + ", " + arg_strs[5] + ", " + arg_strs[6] + ")"
                 }
+                // LEVER (4) F-RFC046 ROOT: fused AdamW group — ONE host crossing
+                // applies the whole optimizer param group. W_ids/g_ids/m_ids/v_ids
+                // are farr[count] of FP64-exact farr handles, n_sizes a farr[count]
+                // of per-tensor lengths, count the group size, t the adam step.
+                // CUDA → _hx_cuda_farr_adamw_group_gpu (H2D all → `count` back-to-
+                // back launches, ONE sync → D2H all), collapsing the interpreted
+                // 20× separate forge_dispatch_adamw per-step driver loop into 1.
+                // no-CUDA → rc -1 so the .hexa caller runs per-tensor host adam
+                // (byte-eq). (#1187 lesson: a new GPU builtin needs BOTH this
+                // call-name mapping AND the runtime.h proto.)
+                if name == "forge_dispatch_adamw_group" {
+                    return "hexa_forge_dispatch_adamw_group(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ", " + arg_strs[3] + ", " + arg_strs[4] + ", " + arg_strs[5] + ", " + arg_strs[6] + ")"
+                }
             }
             if len(node.args) == 8 {
                 // flame spiking RFC — STDP pair-based GPU dispatch

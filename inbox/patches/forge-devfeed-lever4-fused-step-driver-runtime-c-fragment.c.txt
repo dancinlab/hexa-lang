@@ -1,0 +1,136 @@
+// forge-devfeed lever-4 — self/runtime.c wrapper body (SSOT C fragment).
+// substrate = GPU / Lane-G / FORGE-UTILGREEN.   F-RFC046 ROOT residual.
+//
+// self/runtime.c is a gitignored build seed (post-#2065 .c-graduation); this
+// wrapper is NOT regenerated from .hexa. On a fresh pod checkout for the CUDA
+// fire, splice this block into self/runtime.c immediately AFTER the lever-a
+// hexa_forge_dispatch_adamw body (search: 'hexa_forge_dispatch_adamw' → its
+// closing `}` for forge_dispatch_adamw), then run the self-host stage build.
+//
+// ── why a lever-4 exists AFTER lever-3 (the F-RFC046 ROOT) ───────────────────
+// levers a/b/1/2/3 pushed every GEMM-feed repack + im2col/col2im on-device and
+// proved (byte-eq max|Δ|=0.0) the GPU is device-resident (6.3GB/119W) — yet
+// util stayed flat 🔴 (lever-2 MEAN 0.4999% → lever-3 MEAN 0.5616%). The
+// PRECISELY-ISOLATED residual is NOT GEMM repack, link, compile, emit, scale,
+// or device-math — it is the INTERPRETED host per-step DRIVER LOOP: each step
+// body dispatches ~30 separate interpreted builtin calls (1×fwd · 1×ce ·
+// 1×ce-grad · 1×bwd · **20× separate forge_dispatch_adamw**). The 20 optimizer
+// updates each do an independent H2D(W,g,m,v)→launch→sync→D2H(W,m,v) crossing,
+// so the GPU idles between 20 microsecond-latency-bound launches every step.
+//
+// lever-4 = `forge_dispatch_adamw_group`: ONE host→builtin crossing applies the
+// whole AdamW param group. The wrapper reads the group handle-arrays
+// (W_ids/g_ids/m_ids/v_ids each a farr of `count` packed FP64-exact int handles,
+// n_sizes a farr of `count` per-tensor lengths) and, under HEXA_CUDA, drives the
+// entire group through ONE device call (_hx_cuda_farr_adamw_group_gpu — H2D all,
+// `count` back-to-back kernel launches with NO per-tensor host sync, ONE final
+// cudaDeviceSynchronize, D2H all), collapsing 20 host crossings → 1. Projection
+// ~30 → ~11 host crossings/step (the 20× adam → 1; fwd/ce/cegrad/bwd unchanged).
+//
+// Routing: HEXA_CUDA → _hx_cuda_farr_adamw_group_gpu (runtime_cuda.c — the group
+//   kernel-launch loop, byte-eq to `count` serial _hx_cuda_farr_adamw_step_
+//   inplace_gpu by construction: identical per-tensor decoupled-wd kernel, same
+//   bias-correction, just no host round-trip between tensors).
+// no-CUDA → rc -1 so the .hexa caller (_adam_group in clm_prod.hexa) runs the
+//   proven host opt_adamw_step per tensor (byte-eq fallback). Never silently
+//   wrong, only silently slower (same discipline as forge_dispatch_adamw).
+//
+// Byte-eq oracle: stdlib/flame/clm_fused_step_eq.hexa
+//   F-RFC046-ADAMW-GROUP-EQ = 1  iff the grouped update == `count` serial
+//   opt_adamw_step calls, max|Δ| = 0.0, over a deterministic multi-step
+//   trajectory on a heterogeneous param group (mirrors the lever-a
+//   F-CLM-DEVFEED-ADAM-EQ #2383-class adamw proof, extended to the group).
+//   F-RFC046-FUSED-STEP-EQ = 1   iff a full driver step run through the
+//   _adam_group path == the per-tensor _adam path, max|Δ|=0.0 on the resulting
+//   weights (the end-to-end fused-step contract).
+//
+// fire-confirmed rationale: pod 38996679 lever-3 util fire returned DESCENT 🟢
+// (CE 4.2974→3.79897) · util 🔴 (PEAK 21% transient MEAN 0.5616% n=349), byte-eq
+// PRESERVED. The diagnosis pinned the interpreted per-step driver (20× separate
+// _adam) as the SM-starvation residual. lever-4 collapses it. util≥20% needs the
+// (HELD) pod fire — the source CANNOT claim util≥20% without the fire
+// (a_scale_honest_scope, same discipline as lever-2/3).
+
+/* ═══════════════════════════════════════════════════════════════════
+ * LEVER (4) — fused AdamW group: ONE host crossing for the whole param
+ * group (F-RFC046 ROOT — the interpreted 20×-_adam per-step driver loop).
+ *
+ * forge_dispatch_adamw_group(W_ids, g_ids, m_ids, v_ids, n_sizes,
+ *                            count, t) -> int rc.
+ *   W_ids/g_ids/m_ids/v_ids : farr[count] of FP64-exact farr handles
+ *                             (tensor j's W = farr W_ids[j], etc.)
+ *   n_sizes                 : farr[count] of per-tensor element counts
+ *   count                   : group size (20 for CLMConvMoE)
+ *   t                       : adam step (shared across the group)
+ * Hyperparams are the trainer's fixed schedule (lr 0.05, b1 0.9, b2 0.999,
+ * eps 1e-8, wd 0.0) — identical to the per-tensor _adam, so byte-eq holds.
+ *
+ * CUDA → _hx_cuda_farr_adamw_group_gpu (the group device driver); no-CUDA →
+ * rc -1 → host opt_adamw_step per tensor (the clm_fused_step_eq.hexa
+ * reference). Never silently wrong, only silently slower.
+ * ═══════════════════════════════════════════════════════════════════ */
+HexaVal hexa_forge_dispatch_adamw_group(HexaVal wids_v, HexaVal gids_v,
+                                        HexaVal mids_v, HexaVal vids_v,
+                                        HexaVal nsz_v, HexaVal count_v,
+                                        HexaVal t_v) {
+    int64_t wids_id = hexa_as_num(wids_v);
+    int64_t gids_id = hexa_as_num(gids_v);
+    int64_t mids_id = hexa_as_num(mids_v);
+    int64_t vids_id = hexa_as_num(vids_v);
+    int64_t nsz_id  = hexa_as_num(nsz_v);
+    int64_t count   = hexa_as_num(count_v);
+    int64_t step    = hexa_as_num(t_v);
+    if (count <= 0 || step < 1) return hexa_int(-1);
+    if (wids_id < 0 || wids_id >= _hx_farr_count) return hexa_int(-1);
+    if (gids_id < 0 || gids_id >= _hx_farr_count) return hexa_int(-1);
+    if (mids_id < 0 || mids_id >= _hx_farr_count) return hexa_int(-1);
+    if (vids_id < 0 || vids_id >= _hx_farr_count) return hexa_int(-1);
+    if (nsz_id  < 0 || nsz_id  >= _hx_farr_count) return hexa_int(-1);
+    if (_hx_farr_table[wids_id].len < count) return hexa_int(-1);
+    if (_hx_farr_table[gids_id].len < count) return hexa_int(-1);
+    if (_hx_farr_table[mids_id].len < count) return hexa_int(-1);
+    if (_hx_farr_table[vids_id].len < count) return hexa_int(-1);
+    if (_hx_farr_table[nsz_id].len  < count) return hexa_int(-1);
+    /* validate every tensor handle BEFORE touching the device (no partial
+     * group update — byte-eq requires all-or-nothing vs the serial path). */
+    {
+        const double* Wi = _hx_farr_table[wids_id].buf;
+        const double* Gi = _hx_farr_table[gids_id].buf;
+        const double* Mi = _hx_farr_table[mids_id].buf;
+        const double* Vi = _hx_farr_table[vids_id].buf;
+        const double* Ni = _hx_farr_table[nsz_id].buf;
+        for (int64_t j = 0; j < count; j++) {
+            int64_t w = (int64_t)Wi[j], g = (int64_t)Gi[j];
+            int64_t m = (int64_t)Mi[j], v = (int64_t)Vi[j];
+            int64_t n = (int64_t)Ni[j];
+            if (n <= 0) return hexa_int(-1);
+            if (w < 0 || w >= _hx_farr_count) return hexa_int(-1);
+            if (g < 0 || g >= _hx_farr_count) return hexa_int(-1);
+            if (m < 0 || m >= _hx_farr_count) return hexa_int(-1);
+            if (v < 0 || v >= _hx_farr_count) return hexa_int(-1);
+            if (_hx_farr_table[w].len < n) return hexa_int(-1);
+            if (_hx_farr_table[g].len < n) return hexa_int(-1);
+            if (_hx_farr_table[m].len < n) return hexa_int(-1);
+            if (_hx_farr_table[v].len < n) return hexa_int(-1);
+        }
+    }
+#ifdef HEXA_CUDA
+    extern int _hx_cuda_farr_adamw_group_gpu(int64_t wids_id, int64_t gids_id,
+                                             int64_t mids_id, int64_t vids_id,
+                                             int64_t nsz_id, int64_t count,
+                                             double lr, double b1, double b2,
+                                             double eps, double wd, int64_t step);
+    int grc = _hx_cuda_farr_adamw_group_gpu(wids_id, gids_id, mids_id, vids_id,
+                                            nsz_id, count, 0.05, 0.9, 0.999,
+                                            0.00000001, 0.0, step);
+    if (grc == 0) return hexa_int(0);
+    /* GPU group path failed — rc -1 so the .hexa caller runs the per-tensor
+     * host opt_adamw_step (byte-eq). Never silently wrong. */
+#endif
+    return hexa_int(-1);
+}
+HexaVal forge_dispatch_adamw_group(HexaVal wids, HexaVal gids, HexaVal mids,
+                                   HexaVal vids, HexaVal nsz, HexaVal count,
+                                   HexaVal t) {
+    return hexa_forge_dispatch_adamw_group(wids, gids, mids, vids, nsz, count, t);
+}

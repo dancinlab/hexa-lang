@@ -2339,6 +2339,101 @@ fn emit_runtime_cuda_c() -> str {
             "}\n" +
             "\n" +
             "/* ════════════════════════════════════════════════════════════════════\n" +
+            " * LEVER (4) F-RFC046 ROOT: fused AdamW group — ONE host crossing for\n" +
+            " * the whole optimizer param group. The interpreted per-step driver\n" +
+            " * dispatched 20 separate forge_dispatch_adamw calls, each doing its own\n" +
+            " * H2D(W,g,m,v) -> launch -> cudaDeviceSynchronize -> D2H(W,m,v); the\n" +
+            " * GPU idled between 20 microsecond-latency launches every step. This\n" +
+            " * group driver does H2D for ALL tensors, then `count` back-to-back\n" +
+            " * _hx_k_adamw_step_inplace launches with NO per-tensor host sync, ONE\n" +
+            " * final cudaDeviceSynchronize, then D2H for all. Byte-eq to `count`\n" +
+            " * serial _hx_cuda_farr_adamw_step_inplace_gpu by construction: identical\n" +
+            " * per-tensor decoupled-wd kernel + bias-correction, only the host round-\n" +
+            " * trip between tensors removed. The W_ids/g_ids/m_ids/v_ids/n_sizes args\n" +
+            " * are HOST farr buffers of FP64-exact int handles (NOT device tensors).\n" +
+            " * ════════════════════════════════════════════════════════════════════ */\n" +
+            "int _hx_cuda_farr_adamw_group_gpu(int64_t wids_id, int64_t gids_id,\n" +
+            "                                  int64_t mids_id, int64_t vids_id,\n" +
+            "                                  int64_t nsz_id, int64_t count,\n" +
+            "                                  double lr, double b1, double b2,\n" +
+            "                                  double eps, double wd, int64_t step_t) {\n" +
+            "#ifdef __CUDACC__\n" +
+            "    if (count <= 0 || step_t < 1) {\n" +
+            "        fprintf(stderr, \"[cuda] adamw_group: bad count=%lld step_t=%lld\\n\",\n" +
+            "                (long long)count, (long long)step_t);\n" +
+            "        return -1;\n" +
+            "    }\n" +
+            "    /* shared bias-correction (step is the same for the whole group) —\n" +
+            "     * identical to the per-tensor kernel so byte-eq holds. */\n" +
+            "    double b1t = 1.0, b2t = 1.0;\n" +
+            "    for (int64_t e = 0; e < step_t; e++) { b1t *= b1; b2t *= b2; }\n" +
+            "    double c1 = 1.0 - b1t;\n" +
+            "    double c2 = 1.0 - b2t;\n" +
+            "    /* the handle arrays live on the HOST farr buffers (FP64-exact int\n" +
+            "     * handles); read them straight from the farr table, NOT g_slots. */\n" +
+            "    if (wids_id < 0 || wids_id >= _hx_farr_count) return -1;\n" +
+            "    if (gids_id < 0 || gids_id >= _hx_farr_count) return -1;\n" +
+            "    if (mids_id < 0 || mids_id >= _hx_farr_count) return -1;\n" +
+            "    if (vids_id < 0 || vids_id >= _hx_farr_count) return -1;\n" +
+            "    if (nsz_id  < 0 || nsz_id  >= _hx_farr_count) return -1;\n" +
+            "    const double* Wi = (const double*)_hx_farr_table[wids_id].buf;\n" +
+            "    const double* Gi = (const double*)_hx_farr_table[gids_id].buf;\n" +
+            "    const double* Mi = (const double*)_hx_farr_table[mids_id].buf;\n" +
+            "    const double* Vi = (const double*)_hx_farr_table[vids_id].buf;\n" +
+            "    const double* Ni = (const double*)_hx_farr_table[nsz_id].buf;\n" +
+            "    if (!Wi || !Gi || !Mi || !Vi || !Ni) return -1;\n" +
+            "    /* phase 1: H2D every tensor of the group (no sync between). */\n" +
+            "    for (int64_t j = 0; j < count; j++) {\n" +
+            "        int64_t w = (int64_t)Wi[j], g = (int64_t)Gi[j];\n" +
+            "        int64_t m = (int64_t)Mi[j], v = (int64_t)Vi[j];\n" +
+            "        if (_h2d(w) != 0) return -1;\n" +
+            "        if (_h2d(g) != 0) return -1;\n" +
+            "        if (_h2d(m) != 0) return -1;\n" +
+            "        if (_h2d(v) != 0) return -1;\n" +
+            "    }\n" +
+            "    /* phase 2: `count` back-to-back kernel launches, NO per-tensor host\n" +
+            "     * sync — the GPU runs them as one dense launch sequence. */\n" +
+            "    for (int64_t j = 0; j < count; j++) {\n" +
+            "        int64_t w = (int64_t)Wi[j], g = (int64_t)Gi[j];\n" +
+            "        int64_t m = (int64_t)Mi[j], v = (int64_t)Vi[j];\n" +
+            "        int64_t n = (int64_t)Ni[j];\n" +
+            "        double* W  = g_slots[w].d_buf;\n" +
+            "        double* Mm = g_slots[m].d_buf;\n" +
+            "        double* Vv = g_slots[v].d_buf;\n" +
+            "        const double* G = g_slots[g].d_buf;\n" +
+            "        int block_sz = 256;\n" +
+            "        int64_t want_blocks = (n + block_sz - 1) / block_sz;\n" +
+            "        int grid_sz = (want_blocks > 1024) ? 1024 : (int)want_blocks;\n" +
+            "        if (grid_sz < 1) grid_sz = 1;\n" +
+            "        _hx_k_adamw_step_inplace<<<grid_sz, block_sz>>>(W, Mm, Vv, G, n,\n" +
+            "                                            lr, b1, b2, eps, wd, c1, c2);\n" +
+            "    }\n" +
+            "    /* phase 3: ONE sync for the whole group. */\n" +
+            "    cudaError_t er = cudaDeviceSynchronize();\n" +
+            "    if (er != cudaSuccess) {\n" +
+            "        fprintf(stderr, \"[cuda] adamw_group launch failed: %s\\n\",\n" +
+            "                cudaGetErrorString(er));\n" +
+            "        return -1;\n" +
+            "    }\n" +
+            "    /* phase 4: D2H the updated W/m/v of every tensor. */\n" +
+            "    for (int64_t j = 0; j < count; j++) {\n" +
+            "        int64_t w = (int64_t)Wi[j];\n" +
+            "        int64_t m = (int64_t)Mi[j], v = (int64_t)Vi[j];\n" +
+            "        if (_d2h(w) != 0) return -1;\n" +
+            "        if (_d2h(m) != 0) return -1;\n" +
+            "        if (_d2h(v) != 0) return -1;\n" +
+            "    }\n" +
+            "    return 0;\n" +
+            "#else\n" +
+            "    (void)wids_id; (void)gids_id; (void)mids_id; (void)vids_id;\n" +
+            "    (void)nsz_id; (void)count; (void)lr; (void)b1; (void)b2;\n" +
+            "    (void)eps; (void)wd; (void)step_t;\n" +
+            "    fprintf(stderr, \"[cuda] adamw_group: built without __CUDACC__\\n\");\n" +
+            "    return -1;\n" +
+            "#endif\n" +
+            "}\n" +
+            "\n" +
+            "/* ════════════════════════════════════════════════════════════════════\n" +
             " * matmul_t and outer — cuBLAS Dgemm reshape (RFC 041 §1, proven exact\n" +
             " * on real hardware for the outer case; same Dgemm path as Phase A\n" +
             " * for matmul_t — TOL_MATMUL ≈ 2e-9 inherited).\n" +

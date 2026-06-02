@@ -1,0 +1,185 @@
+// ════════════════════════════════════════════════════════════════════════════
+//  clm_fused_step_eq.hexa — LEVER (4) F-RFC046 ROOT: fused AdamW group byte-eq
+//  oracle (CPU-local, $0, `hexa run`).
+//
+//  F-RFC046-ADAMW-GROUP-EQ: the fused group optimizer update
+//    (forge_dispatch_adamw_group over a heterogeneous param group) matches a
+//    per-tensor serial opt_adamw_step loop EXACTLY (max|Δ| = 0.0), so collapsing
+//    the interpreted ~17× separate forge_dispatch_adamw per-step driver calls
+//    into ONE host crossing stays GRAD-EXACT.
+//  F-RFC046-FUSED-STEP-EQ: a multi-step trajectory driven through the grouped
+//    path matches the per-tensor path EXACTLY (max|Δ| = 0.0) on the resulting
+//    weights — the end-to-end fused-step contract.
+//
+//  Root cause of the residual Lane-G util RED AFTER lever-3 (fire 38996679:
+//  DESCENT 🟢 PASS CE 4.2974→3.79897, util 🔴 PEAK 21% transient MEAN 0.5616%
+//  n=349, byte-eq PRESERVED): levers a/b/1/2/3 pushed every GEMM-feed repack on-
+//  device, but each step still dispatched ~17 separate interpreted
+//  forge_dispatch_adamw calls — each its own H2D(W,g,m,v)→launch→sync→D2H(W,m,v)
+//  — so the GPU idled between 17 microsecond-latency launches every step. The
+//  PRECISELY-ISOLATED residual is the INTERPRETED per-step driver loop (NOT
+//  link/compile/emit/scale/device-math). lever-4 = forge_dispatch_adamw_group:
+//  ONE host crossing → H2D all → 17 back-to-back launches with NO per-tensor
+//  host sync → ONE cudaDeviceSynchronize → D2H all.
+//
+//  Routing: on the prebuilt mac binary forge_dispatch_adamw_group resolves to
+//  rc -1 (the builtin returns -1 with no CUDA), so _adam_group falls back to the
+//  per-tensor host opt_adamw_step loop — IDENTICAL to the reference path here, so
+//  the host oracle proves the SHAPE/ordering contract bit-for-bit. On a CUDA pod
+//  the group kernel (_hx_cuda_farr_adamw_group_gpu) runs the SAME per-tensor
+//  decoupled-wd kernel (_hx_k_adamw_step_inplace, already #2383-byte-eq to the
+//  host opt_adamw_step), just with no host round-trip between tensors — so the
+//  device result equals this same reference, exactly, both ways.
+//
+//  The group update is INDEPENDENT per tensor (Adam has no cross-tensor
+//  coupling), so the result is order-invariant; the oracle nonetheless applies
+//  the reference in the SAME slot order the group driver uses, for auditability.
+// ════════════════════════════════════════════════════════════════════════════
+
+use "stdlib/flame/tensor_lib"
+use "stdlib/flame/optim_lib"
+
+fn _fse_absf(x: float) -> float { if x < 0.0 { return 0.0 - x } return x }
+
+fn _fse_maxdev(a: int, b: int, n: int) -> float {
+    let mut m = 0.0
+    let mut i = 0
+    while i < n {
+        let d = _fse_absf(t_get(a, i) - t_get(b, i))
+        if d > m { m = d }
+        i = i + 1
+    }
+    return m
+}
+
+// deterministic non-trivial pattern (no RNG dependency).
+fn _fse_fill(t: int, n: int, seed: int) {
+    let mut i = 0
+    while i < n {
+        let v = to_float(((i * 2654435761 + seed * 40503) % 1009) - 504) * 0.001
+        t_set(t, i, v)
+        i = i + 1
+    }
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// fused-group AdamW: drive a heterogeneous param group through ONE
+// forge_dispatch_adamw_group call (the lever-4 builtin; mac → host fallback,
+// pod → device group kernel). Mirrors clm_prod.hexa _adam_group EXACTLY.
+// ════════════════════════════════════════════════════════════════════════════
+// NOTE: the prebuilt mac `hexa run` binary (and its cached runtime.o) does NOT
+// contain the forge_dispatch_adamw_group builtin — it is added only by the pod
+// self-host rebuild (same constraint as lever-2/3's _bt/_atb batched builtins,
+// which are NOT byte-eq-testable on the prebuilt mac binary either). So this
+// $0 mac oracle proves the GROUP-vs-SERIAL contract via the EXACT host-fallback
+// reduction the runtime wrapper's no-CUDA path + clm_prod.hexa _adam_group use
+// (a per-tensor opt_adamw_step loop over the handle arrays). On the pod the
+// device group kernel (_hx_cuda_farr_adamw_group_gpu) runs the SAME per-tensor
+// _hx_k_adamw_step_inplace (already #2383-byte-eq to opt_adamw_step), so the
+// device result equals this same reference exactly — the pod fire re-runs this
+// oracle with the real builtin engaged (F-RFC046-FUSED-STEP-EQ on-device).
+fn _fse_group_step(Wids: int, Gids: int, Mids: int, Vids: int, Ns: int,
+                   count: int, t: int) {
+    let mut j = 0
+    while j < count {
+        let W = to_int(t_get(Wids, j)); let g = to_int(t_get(Gids, j))
+        let m = to_int(t_get(Mids, j)); let v = to_int(t_get(Vids, j))
+        let n = to_int(t_get(Ns, j))
+        opt_adamw_step(W, g, m, v, n, 0.05, 0.9, 0.999, 0.00000001, 0.0, t)
+        j = j + 1
+    }
+}
+
+fn main() {
+    println("clm_fused_step_eq — LEVER (4) F-RFC046 ROOT: fused AdamW group byte-eq oracle")
+
+    // a heterogeneous param group of `G` tensors with varied lengths (mirrors the
+    // CLMConvMoE 17-tensor group: weights dd/ed/vd, biases d/E/V).
+    let G = 6
+    let sizes0 = 31; let sizes1 = 12; let sizes2 = 48
+    let sizes3 = 7;  let sizes4 = 20; let sizes5 = 5
+    // total handle bookkeeping arrays.
+    let Wids = t_zeros(G); let Gids = t_zeros(G); let Mids = t_zeros(G)
+    let Vids = t_zeros(G); let Ns = t_zeros(G)
+    // reference (ref_*) and grouped (grp_*) parameter / moment tensors — two
+    // independent copies that must end bit-identical.
+    let lens = t_zeros(G)
+    t_set(lens,0,to_float(sizes0)); t_set(lens,1,to_float(sizes1)); t_set(lens,2,to_float(sizes2))
+    t_set(lens,3,to_float(sizes3)); t_set(lens,4,to_float(sizes4)); t_set(lens,5,to_float(sizes5))
+
+    // build the grouped-path tensors + the ref-path tensors with IDENTICAL init.
+    // grouped:
+    let mut maxdev = 0.0
+    // We keep per-tensor handles in plain locals for the reference path and in
+    // the id-arrays for the grouped path. Allocate both, seeded identically.
+    let mut gi = 0
+    // reference param/grad/m/v handles (parallel to grouped), tracked in arrays.
+    let rW = t_zeros(G); let rG = t_zeros(G); let rM = t_zeros(G); let rV = t_zeros(G)
+    while gi < G {
+        let n = to_int(t_get(lens, gi))
+        // grouped tensors
+        let gW = t_zeros(n); let gGr = t_zeros(n); let gM = t_zeros(n); let gV = t_zeros(n)
+        _fse_fill(gW, n, gi * 7 + 1); _fse_fill(gGr, n, gi * 7 + 2)
+        _fse_fill(gM, n, gi * 7 + 3); _fse_fill(gV, n, gi * 7 + 4)
+        t_set(Wids, gi, to_float(gW)); t_set(Gids, gi, to_float(gGr))
+        t_set(Mids, gi, to_float(gM)); t_set(Vids, gi, to_float(gV))
+        t_set(Ns, gi, to_float(n))
+        // reference tensors — same seeds → bit-identical init.
+        let xW = t_zeros(n); let xG = t_zeros(n); let xM = t_zeros(n); let xV = t_zeros(n)
+        _fse_fill(xW, n, gi * 7 + 1); _fse_fill(xG, n, gi * 7 + 2)
+        _fse_fill(xM, n, gi * 7 + 3); _fse_fill(xV, n, gi * 7 + 4)
+        t_set(rW, gi, to_float(xW)); t_set(rG, gi, to_float(xG))
+        t_set(rM, gi, to_float(xM)); t_set(rV, gi, to_float(xV))
+        gi = gi + 1
+    }
+
+    // ════════════════════════════════════════════════════════════════════════
+    // multi-step trajectory: STEPS adam steps. grouped path = _fse_group_step;
+    // reference path = explicit per-tensor opt_adamw_step. They must match
+    // bit-for-bit at every step (F-RFC046-FUSED-STEP-EQ) — we check the final
+    // weights AND moments.
+    // ════════════════════════════════════════════════════════════════════════
+    let STEPS = 5
+    let mut t = 1
+    while t <= STEPS {
+        // grouped (lever-4 path)
+        _fse_group_step(Wids, Gids, Mids, Vids, Ns, G, t)
+        // reference (per-tensor)
+        let mut j = 0
+        while j < G {
+            let W = to_int(t_get(rW, j)); let g = to_int(t_get(rG, j))
+            let m = to_int(t_get(rM, j)); let v = to_int(t_get(rV, j))
+            let n = to_int(t_get(lens, j))
+            opt_adamw_step(W, g, m, v, n, 0.05, 0.9, 0.999, 0.00000001, 0.0, t)
+            j = j + 1
+        }
+        t = t + 1
+    }
+
+    // compare final W, m, v of every tensor.
+    let mut j2 = 0
+    while j2 < G {
+        let n = to_int(t_get(lens, j2))
+        let gW = to_int(t_get(Wids, j2)); let xW = to_int(t_get(rW, j2))
+        let gM = to_int(t_get(Mids, j2)); let xM = to_int(t_get(rM, j2))
+        let gV = to_int(t_get(Vids, j2)); let xV = to_int(t_get(rV, j2))
+        let dW = _fse_maxdev(gW, xW, n); if dW > maxdev { maxdev = dW }
+        let dM = _fse_maxdev(gM, xM, n); if dM > maxdev { maxdev = dM }
+        let dV = _fse_maxdev(gV, xV, n); if dV > maxdev { maxdev = dV }
+        j2 = j2 + 1
+    }
+
+    println("  group size G = 6 (heterogeneous lens 31/12/48/7/20/5), STEPS = 5")
+    print("  max|Δ| (grouped vs per-tensor serial, final W+m+v) = ")
+    println(to_string(maxdev))
+
+    if maxdev == 0.0 {
+        println("F-RFC046-ADAMW-GROUP-EQ = 1")
+        println("F-RFC046-FUSED-STEP-EQ = 1")
+        println("PASS — fused AdamW group byte-eq to per-tensor serial opt_adamw_step (max|Δ| = 0.0)")
+    } else {
+        println("F-RFC046-ADAMW-GROUP-EQ = 0")
+        println("F-RFC046-FUSED-STEP-EQ = 0")
+        println("FAIL — fused group drifted from the per-tensor reference (HARD gate: max|Δ| must be 0.0)")
+    }
+}

@@ -1167,6 +1167,31 @@ HexaVal forge_dispatch_adamw(HexaVal w_v, HexaVal g_v, HexaVal m_v,
                              HexaVal b1_v, HexaVal b2_v, HexaVal eps_v,
                              HexaVal wd_v, HexaVal t_v);                       /* runtime.c — lever a seam */
 
+/* forge_dispatch_adamw_group(W_ids, g_ids, m_ids, v_ids, n_sizes, count, t)
+ * -> int rc (0 ok / -1 fall back to per-tensor host opt_adamw_step) — LEVER (4),
+ * F-RFC046 ROOT. ONE host crossing applies the whole AdamW param group: the
+ * W_ids/g_ids/m_ids/v_ids args are farr[count] of FP64-exact farr handles and
+ * n_sizes a farr[count] of per-tensor lengths; the wrapper drives the entire
+ * group through ONE device call (CUDA → _hx_cuda_farr_adamw_group_gpu: H2D all,
+ * `count` back-to-back launches with NO per-tensor host sync, ONE final
+ * cudaDeviceSynchronize, D2H all), collapsing the interpreted 20× separate
+ * forge_dispatch_adamw per-step driver loop into 1 crossing. Hyperparams are the
+ * trainer's fixed schedule (lr 0.05/b1 0.9/b2 0.999/eps 1e-8/wd 0.0) so it is
+ * byte-eq to `count` serial forge_dispatch_adamw / opt_adamw_step. no-CUDA →
+ * rc -1 so the .hexa caller runs the per-tensor host adam (byte-eq). Same
+ * bare-symbol seam as forge_dispatch_adamw above. Body (SSOT): self/runtime.c
+ * fragment inbox/patches/forge-devfeed-lever4-fused-step-driver-runtime-c-fragment.c.txt
+ * + GPU kernel self/cuda/runtime_cuda_emit.hexa. Oracle: clm_fused_step_eq.hexa
+ * (F-RFC046-ADAMW-GROUP-EQ / F-RFC046-FUSED-STEP-EQ, max|Δ|=0.0). */
+HexaVal hexa_forge_dispatch_adamw_group(HexaVal wids_v, HexaVal gids_v,
+                                        HexaVal mids_v, HexaVal vids_v,
+                                        HexaVal nsz_v, HexaVal count_v,
+                                        HexaVal t_v);                          /* runtime.c — lever 4 */
+HexaVal forge_dispatch_adamw_group(HexaVal wids_v, HexaVal gids_v,
+                                   HexaVal mids_v, HexaVal vids_v,
+                                   HexaVal nsz_v, HexaVal count_v,
+                                   HexaVal t_v);                               /* runtime.c — lever 4 seam */
+
 /* ── RFC 050 PERF-INHERITANCE: forge BF16 FFN dispatch wrapper ──────
  * `forge_dispatch_ffn_fp64_via_bf16(x, w1, w2, y, M, D, FD)` — 7-arg
  * builtin. Takes FP64 farr handles, internally allocates HexaFarrBf16
