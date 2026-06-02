@@ -1,0 +1,170 @@
+// @ci_gate — deterministic · closed-form k-mesh BZ el-ph scattering asserts
+//
+// qforge_kmesh_elph_selftest.hexa — QFORGE metallic-wall breadth CLOSER g5 gate.
+//
+// Closes the real k-mesh el-ph BZ scattering sum (the SINGLE named CaH6 residual:
+// Γ-only |g|² lacking full BZ q-sampling). Asserts the physical invariants of the
+// double BZ sum
+//   α²F(ω) = (1/N(E_F)) Σ_{k,k'} w_k w_{k'} Σ_{m,n} |g^{kk'}_{mn}|² δ(ε_{k,m}−E_F) δ(ε_{k',n}−E_F) δ(ω−ω_ν)
+//
+//   (A) MALFORMED GUARD: length/size mismatch · empty band · bad provider → sentinel.
+//   (B) BZ-WEIGHT FLAT-BAND INVARIANCE (d4 normalization): a flat band sitting
+//       exactly at E_F over an nk-point UNIFORM mesh (w_k=1/nk), constant |g|²,
+//       single Einstein ω₀ → the BZ-summed λ is INDEPENDENT of nk (the pair
+//       weights w_k·w_{k'} sum to 1 over the nk² pairs). nk=1, 2, 4 give the SAME
+//       λ. This is the deterministic reduction proving the BZ walk + weight fold
+//       is correct: more k-points must NOT inflate a flat Fermi surface.
+//   (C) Γ-ONLY REDUCTION CLOSED FORM: the nk=1 single-k flat-band λ equals the
+//       analytic Einstein λ = 2D/ω₀ (D = g²·δ_σ(0)²/N(E_F), the same closed form
+//       qforge_einstein_lambda_analytic checks for the L3 assembler) — so the
+//       k-mesh composer's Γ-limit is the verified single-point value EXACTLY.
+//   (D) NON-TRIVIAL vs Γ-only (the brick's REASON TO EXIST): on a DISPERSIVE band
+//       where the OFF-Γ k-points sit AWAY from E_F (suppressed by their Fermi δ)
+//       but the inter-k scattering channel k→k' (one on E_F, one off) STILL
+//       contributes through the single δ that is on-shell — the real BZ-summed λ
+//       DIFFERS from the Γ-only-collapsed λ. The collapse (counting only k=k'=Γ)
+//       MISSES the cross-k channels → the BZ λ ≠ the Γ λ (strictly different).
+//   (E) PROVIDER-MATRIX FAITHFULNESS: a provider returning an OFF-DIAGONAL |g_mn|²
+//       matrix (m≠n nonzero) emits MORE spectral weight (larger λ) than the same
+//       provider zeroed off-diagonal — the (m,n) walk reaches every band pair, so
+//       the off-diagonal coupling [b] is carried through the BZ sum (superset).
+//
+// Run:  hexa run stdlib/qforge/kmesh_elph_selftest.hexa
+// PASS: exits printing "qforge_kmesh_elph_selftest PASS".
+use "stdlib/qforge/kmesh_elph"
+use "stdlib/qforge/tc"            // qforge_einstein_lambda_analytic (closed form)
+
+let _SQRT2PI: float = 2.50662827463100050242
+
+fn _abs(x: float) -> float { if x < 0.0 { return -x } return x }
+
+fn _ck_true(name: str, cond: bool) -> int {
+    if cond { println("PASS " + name) ; return 0 }
+    println("FAIL " + name)
+    return 1
+}
+fn _ck_eq(name: str, got: float, want: float, tol: float) -> int {
+    if _abs(got - want) <= tol {
+        println("PASS " + name + " (" + to_string(got) + ")")
+        return 0
+    }
+    println("FAIL " + name + " — got " + to_string(got) + " want " + to_string(want))
+    return 1
+}
+
+// ── module-level provider state (hexa nested fns do not capture lexical scope) ─
+let mut G2_CONST: float = 0.0       // constant single-band |g|² provider value
+fn _g2_const_1band(i: int, j: int) -> [float] { return [G2_CONST] }   // nb=1
+
+// a 2-band provider: diagonal d0,d1 and off-diagonal c (same for every (i,j)).
+let mut G2_D0: float = 0.0
+let mut G2_D1: float = 0.0
+let mut G2_OFF: float = 0.0
+fn _g2_2band(i: int, j: int) -> [float] {
+    // [m*nb+n] = [00, 01, 10, 11]
+    return [G2_D0, G2_OFF, G2_OFF, G2_D1]
+}
+
+fn main() {
+    let mut fails = 0
+
+    // common spectral parameters
+    let e_fermi = 0.0
+    let n_ef = 3.0
+    let sigma_el = 0.05
+    let sigma_ph = 10.0
+    let omega0 = 1236.4
+    let band1 = [omega0]                 // single Einstein mode
+    // dense α²F grid spanning ω₀
+    let mut grid: [float] = []
+    let mut gp = 1
+    while gp < 401 { grid.push(to_float(gp) * 7.0) ; gp = gp + 1 }
+
+    // ── (A) MALFORMED GUARDS → sentinel ───────────────────────────────────────
+    G2_CONST = 0.5
+    let bad_len = qforge_kmesh_elph_lambda([0.0, 0.0], [1.0], 1, 1, band1, _g2_const_1band,
+                                           e_fermi, n_ef, grid, sigma_el, sigma_ph, 0.0)
+    fails = fails + _ck_true("(A) eps len mismatch → ok==0", bad_len.ok == 0)
+    let bad_band = qforge_kmesh_elph_lambda([0.0], [1.0], 1, 1, [], _g2_const_1band,
+                                            e_fermi, n_ef, grid, sigma_el, sigma_ph, 0.0)
+    fails = fails + _ck_true("(A) empty phonon band → ok==0", bad_band.ok == 0)
+    let bad_nef = qforge_kmesh_elph_lambda([0.0], [1.0], 1, 1, band1, _g2_const_1band,
+                                           e_fermi, 0.0, grid, sigma_el, sigma_ph, 0.0)
+    fails = fails + _ck_true("(A) N(E_F)≤0 → ok==0", bad_nef.ok == 0)
+
+    // ── (B) BZ-WEIGHT FLAT-BAND INVARIANCE (d4) — λ independent of nk ─────────
+    // flat band at E_F over nk uniform k-points; uniform weights 1/nk; constant g².
+    G2_CONST = 0.5
+    // nk=1
+    let r1 = qforge_kmesh_elph_lambda([0.0], [1.0], 1, 1, band1, _g2_const_1band,
+                                      e_fermi, n_ef, grid, sigma_el, sigma_ph, 0.0)
+    // nk=2 (uniform weights 0.5 each, both at E_F)
+    let r2 = qforge_kmesh_elph_lambda([0.0, 0.0], [0.5, 0.5], 2, 1, band1, _g2_const_1band,
+                                      e_fermi, n_ef, grid, sigma_el, sigma_ph, 0.0)
+    // nk=4 (uniform weights 0.25 each, all at E_F)
+    let r4 = qforge_kmesh_elph_lambda([0.0, 0.0, 0.0, 0.0], [0.25, 0.25, 0.25, 0.25], 4, 1,
+                                      band1, _g2_const_1band, e_fermi, n_ef, grid,
+                                      sigma_el, sigma_ph, 0.0)
+    fails = fails + _ck_true("(B) all runs ok", r1.ok == 1 && r2.ok == 1 && r4.ok == 1)
+    println("[B] flat-band λ:  nk1=" + to_string(r1.lambda) + "  nk2=" + to_string(r2.lambda)
+            + "  nk4=" + to_string(r4.lambda) + "  (n_kpairs " + to_string(r1.n_kpairs)
+            + "/" + to_string(r2.n_kpairs) + "/" + to_string(r4.n_kpairs) + ")")
+    fails = fails + _ck_eq("(B) nk-invariance λ(nk=2)=λ(nk=1)", r2.lambda, r1.lambda, 1e-9)
+    fails = fails + _ck_eq("(B) nk-invariance λ(nk=4)=λ(nk=1)", r4.lambda, r1.lambda, 1e-9)
+    fails = fails + _ck_true("(B) nk=4 walked 16 k-pairs", r4.n_kpairs == 16)
+
+    // ── (C) Γ-ONLY REDUCTION = analytic Einstein closed form ──────────────────
+    // single k on E_F, constant g², single ω₀ → λ = 2D/ω₀, D=g²·δ_σ(0)²/N(E_F)
+    // (qforge_einstein_lambda_analytic with nk=1, weight=1). The k-mesh composer's
+    // Γ-limit must equal the verified L3 analytic target EXACTLY.
+    // rel-ε bar 1e-3: the assembled α²F is a Gaussian-histogram of δ_ph on a finite
+    // ω grid, so the round-trip λ matches the closed form to grid-resolution, not to
+    // machine ε (the same finite-grid bar the L3 xval tests use). The EXACT (1e-9)
+    // nk-invariance in (B) already proves the BZ walk + weight fold are correct.
+    let lam_anal = qforge_einstein_lambda_analytic(1, G2_CONST, omega0, n_ef, 1.0, sigma_el)
+    let relC = _abs(r1.lambda - lam_anal) / lam_anal
+    println("[C] Γ-limit λ=" + to_string(r1.lambda) + " analytic=" + to_string(lam_anal)
+            + " rel-ε=" + to_string(relC))
+    fails = fails + _ck_true("(C) Γ-limit λ = analytic Einstein 2D/ω₀ (rel-ε ≤ 1e-3)", relC <= 1e-3)
+
+    // ── (D) NON-TRIVIAL vs Γ-only collapse ───────────────────────────────────
+    // dispersive 2-k mesh: k0 ON E_F (ε=0), k1 PARTIALLY on-shell (ε=0.08 ≈ 1.6σ,
+    // a small-but-nonzero Fermi δ). The Γ-only collapse keeps ONLY (k0,k0); the BZ
+    // sum ALSO walks (k0,k1),(k1,k0),(k1,k1). Those cross channels carry the k1
+    // electron's nonzero δ, so the BZ-summed λ STRICTLY EXCEEDS the single-(k0,k0)
+    // λ — the real Fermi-surface scattering channels the Γ-collapse threw away.
+    G2_CONST = 0.5
+    let eps_disp = [0.0, 0.08]             // 2k × 1b: k0 at E_F, k1 ≈1.6σ above (on-shell)
+    let wdisp = [0.5, 0.5]
+    let r_bz = qforge_kmesh_elph_lambda(eps_disp, wdisp, 2, 1, band1, _g2_const_1band,
+                                        e_fermi, n_ef, grid, sigma_el, sigma_ph, 0.0)
+    // Γ-only collapse: ONLY the k0=k0 pair, weight w0·w0 = 0.25.
+    let r_gamma = qforge_kmesh_elph_lambda([0.0], [0.5], 1, 1, band1, _g2_const_1band,
+                                           e_fermi, n_ef, grid, sigma_el, sigma_ph, 0.0)
+    println("[D] dispersive BZ λ=" + to_string(r_bz.lambda) + " (samples " + to_string(r_bz.n_samples)
+            + ") vs Γ-collapse λ=" + to_string(r_gamma.lambda) + " (samples " + to_string(r_gamma.n_samples) + ")")
+    fails = fails + _ck_true("(D) both runs ok", r_bz.ok == 1 && r_gamma.ok == 1)
+    fails = fails + _ck_true("(D) BZ walks more samples than Γ-collapse", r_bz.n_samples > r_gamma.n_samples)
+    fails = fails + _ck_true("(D) BZ λ > Γ-collapse λ (real cross-k scattering channels added)",
+                             r_bz.lambda > r_gamma.lambda + 1e-9)
+
+    // ── (E) PROVIDER-MATRIX FAITHFULNESS — off-diagonal [b] carried through ───
+    // 2-band flat manifold both at E_F. Off-diagonal coupling adds weight → λ↑.
+    let eps2 = [0.0, 0.0]                  // 1k × 2b, both at E_F
+    G2_D0 = 0.4 ; G2_D1 = 0.3 ; G2_OFF = 0.25
+    let r_off = qforge_kmesh_elph_lambda(eps2, [1.0], 1, 2, band1, _g2_2band,
+                                         e_fermi, n_ef, grid, sigma_el, sigma_ph, 0.0)
+    G2_OFF = 0.0
+    let r_diag = qforge_kmesh_elph_lambda(eps2, [1.0], 1, 2, band1, _g2_2band,
+                                          e_fermi, n_ef, grid, sigma_el, sigma_ph, 0.0)
+    println("[E] off-diag λ=" + to_string(r_off.lambda) + " vs diag-only λ=" + to_string(r_diag.lambda))
+    fails = fails + _ck_true("(E) both runs ok", r_off.ok == 1 && r_diag.ok == 1)
+    fails = fails + _ck_true("(E) off-diagonal |g_mn| RAISES λ (band-pair walk reaches m≠n)",
+                             r_off.lambda > r_diag.lambda + 1e-9)
+
+    if fails == 0 {
+        println("qforge_kmesh_elph_selftest PASS")
+    } else {
+        println("qforge_kmesh_elph_selftest FAIL — " + to_string(fails) + " case(s)")
+    }
+}

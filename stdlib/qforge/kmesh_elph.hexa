@@ -1,0 +1,184 @@
+// HEXA Standard Library — qforge/kmesh_elph
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// QFORGE metallic-wall breadth CLOSER — the REAL k-mesh el-ph BZ scattering sum.
+//
+// ── WHY THIS EXISTS (the Γ-only wall, the SINGLE named residual, d6 honest) ──
+// All four metallic-breadth bricks now exist + are g5-verified — real q-mesh
+// ω(q,ν) [a], off-diagonal |g_mn| [b], real N(E_F) [c], screened ΔV_scr [d] —
+// and compose on ONE converged CaH6 cell (compose_cah6, #2500). But that
+// composition still samples the electrons at a SINGLE k-point (Γ). The
+// Fermi-surface double-delta of the el-ph spectral function
+//
+//   α²F(ω) = (1/N(E_F)) Σ_{k,q,ν} |g^{kν}_{mn}|² δ(ε_{k,m}−E_F) δ(ε_{k+q,n}−E_F) δ(ω−ω_{qν})
+//
+// is a DOUBLE BZ sum over BOTH an electron momentum k AND a phonon momentum q
+// (with the scattered electron at k+q). The Γ-only composer collapses k→{Γ} and
+// k+q→{Γ}, so only the q=0 forward-scattering channel survives. The CaH6
+// migration-gate residual (#2503 audit) named this EXACTLY: "the Γ-only bare/NPW
+// |g|² lacking ... full 4×4×4q BZ q-sampling". This brick closes it: it walks a
+// real k-mesh AND the q=k'−k transfer between every k-pair, restoring the full
+// Fermi-surface scattering-channel count the single-Γ collapse threw away.
+//
+//   For each (k_i, k_j=k_i+q) pair and each band pair (m,n) and each phonon mode
+//   ν, emit one sample (ε_{k_i,m}, ε_{k_j,n}, |g^{ij,ν}_{mn}|², ω_ν) with the BZ
+//   weight w_{k_i}·w_{k_j}. The verified L3 assembler then applies the two
+//   Fermi-surface δ's and the 1/N(E_F) prefactor — UNCHANGED (d3/d19, 0-diff).
+//
+// ── d4 GENERIC — caller supplies the per-k manifolds + a (i,j) coupling provider─
+// This module knows NOTHING about CaH6 / LaH10. The caller provides:
+//   • the per-k band-energy table eps[k*nb + b] (k-major, the dos_nef layout),
+//   • the BZ weights w_k (qforge_mp_grid weights, sum=1 over the full BZ),
+//   • a g2 PROVIDER closure  g2_of(i, j) -> [nb*nb]  returning the |g_mn|² matrix
+//     for the electron-momentum pair (k_i → k_j) (built however the caller likes:
+//     qforge_gmn_matrix on screened columns, a frozen-phonon FD, or a synthetic
+//     fixture). The provider IS the (a/b/d) physics; this brick only WALKS the BZ.
+//   • the real phonon band ω_ν [a] (qforge_qmesh_omega_band) + N(E_F) [c].
+// Add/swap a cell or a coupling model = change the inputs; no name branch. The
+// nk=1 single-k call reproduces the Γ-only composer EXACTLY (d4 identity limit).
+//
+// d3/d19 reuse (compose, don't reinvent — every brick below is verified 🟢/🔵):
+//   - L3 BZ double-δ α²F : stdlib/qforge/tc      (qforge_a2f_from_elph)
+//   - λ, ω_log (unit-fix) : stdlib/material/sim   (eliashberg_moments_from_a2f_scaled · ha_per_kelvin)
+//   - F1 phonon amplitude : stdlib/qforge/elph_offdiag (qforge_elph_amp2)
+// The new code is ONLY the (k_i, k_j) × (m,n) × ν BZ walk + the weight folding.
+
+use "stdlib/qforge/elph_offdiag"
+use "stdlib/qforge/tc"
+use "stdlib/material/sim"
+
+// the BZ-summed composed result bundle.
+pub struct KmeshElphResult {
+    ok:        int,
+    err:       str,
+    lambda:    float,   // BZ-summed QFORGE-NC λ = 2∫α²F/ω (unit-correct)
+    omega_log: float,   // ω_log of the composed spectrum (K)
+    n_kpairs:  int,     // electron-momentum pairs walked (nk²)
+    n_samples: int,     // total (k_i,k_j,m,n,ν) el-ph samples emitted
+    g2_total:  float    // Σ over all samples of the (weighted) |g|² (witness)
+}
+
+fn _kme_sentinel(err: str) -> KmeshElphResult {
+    return KmeshElphResult { ok: 0, err: err, lambda: -1.0, omega_log: -1.0,
+                             n_kpairs: 0, n_samples: 0, g2_total: 0.0 }
+}
+
+// ── BUILD the full (k_i, k_j, m, n, ν) sample bundle (the BZ walk) ───────────
+// Returns a flat [4*ns] packing [eps_k…, eps_kq…, g2…, omega…] (the same packing
+// idiom qforge_a2f_einstein_samples uses), so a caller can feed it straight into
+// qforge_a2f_from_elph without a struct dependency (d4 keeps the assembler
+// generic). Returns [] on malformed input.
+//   eps        : [nk*nb] band energies, k-major (eps[k*nb+b]) — the dos_nef layout.
+//   wk         : [nk] BZ weights (uniform MP weights sum to 1; ANY positive set ok).
+//   nk, nb     : mesh size + active band count.
+//   omega_band : [nw] REAL positive phonon frequencies ω_ν (K) [a].
+//   g2_of      : (i, j) -> [nb*nb]  |g_mn|² matrix for the pair (k_i → k_j).
+//   mass_amu   : F1 displaced-atom mass (amu); >0 → multiply each (m,n,ν) g² by
+//                ℏ/(2 M ω_ν) (the textbook displacement amplitude²); ≤0 → bare g².
+pub fn qforge_kmesh_elph_samples(eps: [float], wk: [float], nk: int, nb: int,
+                                 omega_band: [float], g2_of,
+                                 mass_amu: float) -> [float] {
+    if nk < 1 || nb < 1 { return [] }
+    if len(eps) != nk * nb || len(wk) != nk { return [] }
+    let nw = len(omega_band)
+    if nw < 1 { return [] }
+
+    let mut eps_k:  [float] = []
+    let mut eps_kq: [float] = []
+    let mut g2:     [float] = []
+    let mut wq:     [float] = []
+
+    let mut i = 0
+    while i < nk {
+        let wi = wk[i]
+        let mut j = 0
+        while j < nk {
+            let wij = wi * wk[j]                       // BZ pair weight w_{k_i}·w_{k_j}
+            let gm = g2_of(i, j)                        // [nb*nb] |g_mn|² for (k_i→k_j)
+            if len(gm) != nb * nb { return [] }         // provider contract guard
+            let mut m = 0
+            while m < nb {
+                let mut n = 0
+                while n < nb {
+                    let g2mn = gm[m * nb + n]
+                    let mut iw = 0
+                    while iw < nw {
+                        let wnu = omega_band[iw]
+                        // F1: per-mode displacement-amplitude² ℏ/(2 M_κ ω_ν).
+                        let amp2 = if mass_amu > 0.0 { qforge_elph_amp2(mass_amu, wnu) } else { 1.0 }
+                        eps_k.push(eps[i * nb + m])
+                        eps_kq.push(eps[j * nb + n])
+                        // BZ pair weight × 1/nw mode weight × F1 amplitude folded
+                        // into g² (the assembler is linear in g²·weight, weight=1).
+                        g2.push(g2mn * wij / to_float(nw) * amp2)
+                        wq.push(wnu)
+                        iw = iw + 1
+                    }
+                    n = n + 1
+                }
+                m = m + 1
+            }
+            j = j + 1
+        }
+        i = i + 1
+    }
+
+    // pack [eps_k… eps_kq… g2… omega…]  (each length ns)
+    let ns = len(g2)
+    let mut packed: [float] = []
+    let mut p = 0
+    while p < ns { packed.push(eps_k[p])  ; p = p + 1 }
+    p = 0
+    while p < ns { packed.push(eps_kq[p]) ; p = p + 1 }
+    p = 0
+    while p < ns { packed.push(g2[p])     ; p = p + 1 }
+    p = 0
+    while p < ns { packed.push(wq[p])     ; p = p + 1 }
+    return packed
+}
+
+// ── COMPOSE: BZ-summed α²F → λ over a real k-mesh ────────────────────────────
+// Walks the k-mesh el-ph samples, assembles α²F via the verified L3 double-δ,
+// integrates λ with the unit-correct (K→Ha) scaled moment integrator (F2). The
+// same Fermi-surface δ's and 1/N(E_F) prefactor the Γ-only composer used — now
+// over the FULL (k, k+q) scattering set. Returns KmeshElphResult; ok==0 on
+// malformed input or a sentinel from the assembler.
+//   omega_grid : α²F frequency grid (K)
+//   n_ef       : REAL N(E_F) (states/Ha/cell) — the Allen normalizer 1/N(E_F) [c].
+//   sigma_el   : Fermi-surface δ-smearing (eps unit) · sigma_ph : α²F δ (K).
+pub fn qforge_kmesh_elph_lambda(eps: [float], wk: [float], nk: int, nb: int,
+                                omega_band: [float], g2_of,
+                                e_fermi: float, n_ef: float,
+                                omega_grid: [float],
+                                sigma_el: float, sigma_ph: float,
+                                mass_amu: float) -> KmeshElphResult {
+    if n_ef <= 0.0 { return _kme_sentinel("non-positive N(E_F) [c]") }
+    let packed = qforge_kmesh_elph_samples(eps, wk, nk, nb, omega_band, g2_of, mass_amu)
+    if len(packed) < 4 { return _kme_sentinel("empty / malformed BZ sample bundle") }
+    let ns = len(packed) / 4
+    let mut eps_k:  [float] = []
+    let mut eps_kq: [float] = []
+    let mut g2:     [float] = []
+    let mut wq:     [float] = []
+    let mut t = 0
+    while t < ns { eps_k.push(packed[t])          ; t = t + 1 }
+    t = 0
+    while t < ns { eps_kq.push(packed[ns + t])    ; t = t + 1 }
+    let mut g2_total = 0.0
+    t = 0
+    while t < ns { let v = packed[2 * ns + t] ; g2.push(v) ; g2_total = g2_total + v ; t = t + 1 }
+    t = 0
+    while t < ns { wq.push(packed[3 * ns + t])    ; t = t + 1 }
+
+    let a2f = qforge_a2f_from_elph(eps_k, eps_kq, g2, wq, e_fermi, n_ef,
+                                   omega_grid, 1.0, sigma_el, sigma_ph)
+    if len(a2f) < 2 { return _kme_sentinel("L3 assembler sentinel") }
+    // F2 unit fix: omega_grid is KELVIN, the α²F numerator on a HARTREE scale.
+    let mo = eliashberg_moments_from_a2f_scaled(omega_grid, a2f, ha_per_kelvin())
+    let lam = mo[0]
+    if lam < 0.0 { return _kme_sentinel("non-physical lambda from a2f") }
+    return KmeshElphResult { ok: 1, err: "", lambda: lam, omega_log: mo[1],
+                             n_kpairs: nk * nk, n_samples: ns, g2_total: g2_total }
+}
