@@ -2,6 +2,42 @@
 
 Append-only history sister of `MISCOMPILE-ZERO.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
+## 2026-06-03 — CI-health fix: gate invocation + setup/regression classification
+
+Both gate workflows (miscompile-zero + determinism, on main via #2534/#2538)
+were RED on every compiler/self/corpus PR — required checks, so they blocked
+PR #2539 + all future compiler PRs. Root cause: the CI invocation drove the
+compiler via `./hexa run compiler/main.hexa`, which RECOMPILES the compiler
+against the installed embedded runtime and hits the build-floor staleness wall
+(undeclared `__raw_add_f` / `__raw_cmp3`) -> every `--emit=obj` is 0-byte. The
+gate scored that uniform 0-byte as a 10/10 codegen REGRESSION (exit 1) instead
+of a SETUP/INFRA error.
+
+- [x] DIAGNOSED locally: `./hexa run compiler/main.hexa … --emit=obj` -> rc=1,
+      0-byte (build-floor wall). `./build/aprime_cc _drv.hexa --emit=obj …` ->
+      1208-byte clean object (0 ENCODE-MISS) = the WORKING native-emit form;
+      `./hexa run tool/hexa_ld.hexa` linker form works (current embedded rt).
+- [x] HONEST g63 finding: the released `./hexa` GENUINELY cannot native-emit a
+      single program in CI. Only the graduated self-host gen2 (ghost gen2_fix)
+      native-emits cleanly, and it is NOT buildable via release_build in CI.
+      Correct fix = gate exits 2 (CI-neutral) in that env, NOT false-red.
+- [x] Gate scripts hardened (tool/miscompile_zero_gate.sh + determinism_gate.sh):
+      up-front CANARY (c1_hex_literal); if even it won't emit (0-byte, no
+      ENCODE-MISS) -> exit 2 "cannot native-emit in this env". Per-program:
+      0-byte/no-ENCODE-MISS = SETUP-ERROR (exit 2); exit 1 reserved for a
+      PRODUCED object carrying ENCODE-MISS / spurious udf (mcz) or two PRODUCED
+      outputs that differ byte-for-byte (determinism).
+- [x] Workflows: dropped broken `HEXA_CC_PREARGS="run compiler/main.hexa"`;
+      `HEXA_NATIVE_CC` via `${{ vars.HEXA_NATIVE_CC || './hexa' }}` (graduated
+      compiler wireable later); gate exit 2 -> neutral job success via
+      `::notice::` (infra never reds a PR; real regression still exit 1).
+- [x] VERIFIED locally (darwin-arm64): broken `./hexa` -> exit 2 both gates;
+      a dirty-emitting native compiler -> exit 1 (real regression); a clean
+      single-program emit -> exit 0 PASS + relink byte-identical.
+- [x] Landed on branch `ci/fix-gate-invocation` (commit 11ca16adc) -> PR to main.
+- [ ] follow-up: add a self-host gen2 build step (or wire `vars.HEXA_NATIVE_CC`)
+      so the gate runs the REAL native-emit floor check in CI instead of neutral.
+
 ## 2026-06-02 — linker/compiler DETERMINISM gate: verified + locked
 
 Milestone: "linker determinism — make hexa_ld output byte-deterministic
