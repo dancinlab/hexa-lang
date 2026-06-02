@@ -1,0 +1,78 @@
+SELFHOST-NEXT — linux-arm64 RUNTIME CROSS-BUILD verdict (multi-fn link+run)
+==========================================================================
+date:    2026-06-03
+branch:  selfhost-next/linux-arm64-runtime  (stacked on #2572 / linux-arm64-depth @ 8cd9bed69)
+stack:   #2569 (recipe) <- #2572 (data-reloc depth) <- THIS (runtime cross-build)
+hosts:   ghost (macOS arm64) = aprime_cc build + native ELF-aarch64 emit;
+         aiden (x86_64 linux) = aarch64-linux-gnu cross-gcc 13.3 + binutils +
+         aarch64 sysroot + qemu-aarch64-static = runtime cross-build + link + RUN.
+
+NAMED WALL (from #2572)
+  A multi-fn integer-arith probe cross-EMITs + assembles cleanly (in-tree ELF
+  aarch64 serializer, no host `as`) but FAILED AT LINK:
+      undefined reference to hexa_add_slow
+  The freestanding _start stub cannot satisfy arithmetic/string/alloc externs.
+  Real programs need the C runtime (self/runtime.c) cross-compiled to an
+  aarch64-linux runtime.a, then linked under qemu.
+
+[1] RUNTIME CROSS-BUILD  (tool/cross_build_runtime_linux_arm64, on aiden)
+    aarch64-linux-gnu-gcc -O1 -std=gnu11 -D_GNU_SOURCE ... -c self/runtime.c
+      (frozen seeds restored via tool/restore_frozen_seeds @151c52c8)
+    KEY: compiled WITHOUT -DHEXA_HAS_HEXA_RT_STDLIB (the standalone smoke path,
+      runtime_core.c:3120).  Gate OFF -> the `#ifndef HEXA_HAS_HEXA_RT_STDLIB`
+      C-fallback rt_* bodies compile in (incl. rt_add_slow, the fn behind the
+      hexa_add macro that hexa_add_slow tail-calls).
+    self-check: hexa_add_slow defined=1 (T) · residual rt_* undefined=0.
+      (With the gate ON, runtime.o externs 156 rt_* symbols only the per-program
+       hexa-source stdlib closure supplies — wrong for a reusable archive.)
+    -> build/larm64rt/runtime.a = 522520 B · ELF 64-bit LSB relocatable, ARM aarch64.
+    Remaining undefined = libc / libm / syscall only (mmap, dlopen, sqrt, j0,
+      erf, fork, sscanf, ...) -> resolved at final link by -lm -ldl -lpthread + libc.
+
+[2] PROBE A — multi-fn INTEGER ARITHMETIC  (the #2572 hexa_add_slow blocker)
+    source:
+        fn add(a, b) { return a + b }
+        fn mul(a, b) { return a * b }
+        fn poly(x) { return add(mul(x, x), add(x, 7)) }
+        fn main() { let r = poly(5); print("poly(5)="); print(r); exit(r) }
+    EMIT (ghost): aprime_cc _drv.hexa --emit=obj --backend=native
+                  --target=arm64-linux-gnu -o probe_multifn.o
+        -> ELF 64-bit LSB relocatable, ARM aarch64 (1512 B); 1 undefined: hexa_set_args.
+    LINK (aiden): aarch64-linux-gnu-gcc probe_multifn.o runtime.a -lm -ldl -lpthread
+        -> ELF 64-bit LSB pie executable, ARM aarch64, dynamically linked.   (rc 0, NO undefined)
+    RUN  (aiden): qemu-aarch64-static -L /usr/aarch64-linux-gnu build/larm64rt/probe
+        stdout = poly(5)=37
+        rc     = 37            (mul(5,5)=25 · add(5,7)=12 · add(25,12)=37)   ✅
+
+[3] PROBE B — multi-fn STRING CONCAT  (hexa_add_slow string branch / rt_add_slow)
+    source:
+        fn greet(name) { return "hi " + name }
+        fn twice(s) { return s + s }
+        fn main() { let g = greet("arm64"); print(twice(g)); print("\n"); exit(0) }
+    EMIT (ghost) -> probe_strcat.o (ELF aarch64).  LINK + RUN (aiden, qemu):
+        stdout = hi arm64hi arm64
+        rc     = 0                                                            ✅
+
+[4] REPRODUCIBLE one-command (validated on aiden from clean build/larm64rt):
+        bash tool/cross_build_runtime_linux_arm64 -o probe_multifn.o
+      -> ... QEMU RUN — stdout=[poly(5)=37] rc=37 ... DONE
+
+VERDICT: 🟢 linux-arm64 RUNTIME CROSS-BUILD VERIFIED.
+  self/runtime.c cross-compiles to an aarch64-linux runtime.a (gate OFF,
+  self-contained, 0 rt_* externs). TWO previously-blocked multi-fn real
+  programs (integer-arith + string-concat) now LINK against it and RUN
+  correctly under qemu-aarch64-static. The #2572 hexa_add_slow link wall
+  is CLEARED. Win condition met.
+
+REMAINING for FULL compiler self-emit on linux-arm64 (honest):
+  (a) cc_native (the linux-arm64 ELF compiler binary) — build_native_linux_arm64
+      builds it NATIVELY on an aarch64 host; no aarch64 RUN host is unrestricted
+      in the pool (pi5-akida is anima-only). Cross-building cc_native itself
+      (vs the runtime) is the next increment; the runtime half is now done.
+  (b) compiler SELF-EMIT: cc_native emitting its OWN flattened source to an ELF
+      aarch64 .o still hits the ENCODE-MISS class (STP mem=#0 page-reloc, the
+      hexa-cc-native F-STP-ENCODE-MISS-REPRO residual on the Mach-O encoder;
+      the ELF arm64 path shares the same arm64 instruction codegen). That is a
+      codegen/emit fix OUTSIDE this DRIVE-lane's scope.
+  (c) a native aarch64-linux RUN host (bare-metal, not qemu) remains the final
+      run-verification axis (#2572 [ ] GAP).

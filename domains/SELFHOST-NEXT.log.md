@@ -107,6 +107,49 @@ turn the ad-hoc ghost byte-eq build into a one-command reproducible + safely-pro
       opt-in delivers the capability now at zero risk; flip is one gated command when ready.
 - [ ] heavy ghost build re-verification from a clean main checkout = follow-up (detached).
 
+## 2026-06-03 — linux-arm64 RUNTIME cross-build: multi-fn programs LINK + RUN (qemu)
+
+Stacked on #2572 (`selfhost-next/linux-arm64-depth` @8cd9bed69). Clears the exact
+named wall from #2572: a multi-fn integer-arith probe cross-EMITs+assembles but
+fails at LINK with `undefined reference to hexa_add_slow` — the freestanding stub
+can't satisfy arithmetic/string externs. Real programs need the C runtime
+(`self/runtime.c`) cross-compiled to an aarch64-linux `runtime.a`.
+
+Hosts: ghost (macOS) = aprime_cc build + native ELF-aarch64 emit; aiden (x86_64
+linux) = installed `gcc-aarch64-linux-gnu` 13.3 + `qemu-user-static` (joins the
+existing cross-binutils) = runtime cross-build + link + RUN.
+
+- [x] `tool/cross_build_runtime_linux_arm64` (NEW, ext-less per the
+      build_native_linux_arm64 precedent) — cross-compiles `self/runtime.c`
+      (frozen seeds via restore_frozen_seeds) with `aarch64-linux-gnu-gcc` to
+      `build/larm64rt/runtime.a`. KEY: gate OFF (no `-DHEXA_HAS_HEXA_RT_STDLIB`)
+      = the standalone smoke path (runtime_core.c:3120) where the `#ifndef`
+      C-fallback `rt_*` bodies compile in (incl. `rt_add_slow`, behind the
+      `hexa_add` macro). self-check: `hexa_add_slow` defined=1 · residual `rt_*`
+      undefined=0. (Gate ON externs 156 `rt_*` only the per-program hexa stdlib
+      closure supplies — wrong for a reusable archive.) runtime.a = 522 KB, ELF
+      aarch64; remaining undefined = libc/libm/syscall only → `-lm -ldl -lpthread`.
+- [x] PROBE A — multi-fn INTEGER ARITHMETIC (the #2572 `hexa_add_slow` blocker):
+      `add`/`mul`/`poly`/`main` over `+` and `*`. EMIT (ghost) `--emit=obj
+      --backend=native --target=arm64-linux-gnu` → ELF aarch64 .o (1 undef:
+      hexa_set_args). LINK (aiden) `aarch64-linux-gnu-gcc probe.o runtime.a`
+      → ELF aarch64 PIE, NO undefined. RUN `qemu-aarch64-static -L
+      /usr/aarch64-linux-gnu` → **stdout=`poly(5)=37` rc=37** (25+5+7). ✅
+- [x] PROBE B — multi-fn STRING CONCAT (`hexa_add_slow` string branch /
+      `rt_add_slow`): `greet`/`twice`/`main`. RUN → **stdout=`hi arm64hi arm64`
+      rc=0**. ✅ Both previously-blocked classes now link+run on linux-arm64.
+- [x] reproducible one-command (validated clean on aiden):
+      `bash tool/cross_build_runtime_linux_arm64 -o probe_multifn.o`
+      → `QEMU RUN — stdout=[poly(5)=37] rc=37 ... DONE`.
+- [x] Verdict: `.verdicts/selfhost-next-linux-arm64/RUNTIME-CROSS.txt` (🟢).
+- [ ] GAP — FULL compiler self-emit on linux-arm64 remaining: (a) cross-build
+      `cc_native` itself (the runtime half is now done; build_native_linux_arm64
+      builds cc_native NATIVELY only); (b) compiler SELF-EMIT still hits the
+      ENCODE-MISS class (STP `mem=#0` page-reloc — the hexa-cc-native
+      F-STP-ENCODE-MISS residual; arm64 codegen is target-shared, OUT of this
+      DRIVE-lane scope); (c) a native aarch64-linux RUN host (bare-metal, not
+      qemu) is the final run-verification axis.
+
 
 ## 2026-06-03 — byte-eq fixpoint published as first-class verifiable claim (CLAIMS.tape)
 
