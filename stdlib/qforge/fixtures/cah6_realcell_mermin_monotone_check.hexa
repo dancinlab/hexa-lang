@@ -1,0 +1,142 @@
+// stdlib/qforge/fixtures/cah6_realcell_mermin_monotone_check.hexa — Mermin-F etot-vs-NPW REAL cell.
+//
+// THE MEASUREMENT (demiurge CaH6-NC gate, PR#2514 on the REAL cell — NOT the synthetic spectrum):
+//   PR#2514 made qforge_scf_smeared report the MERMIN FREE ENERGY F = Σ occ·ε − σ·S (the
+//   variational functional for fractional metallic occupations); scf_mermin_monotone_selftest
+//   PROVES F is basis-monotone on a FIXED synthetic metallic spectrum. THIS driver asks the
+//   harder question: is F basis-monotone on the REAL inhomogeneous CaH6 BCC cell (the same
+//   smeared SCF cah6_realcell_compose_xval.hexa drives)? It runs NPW ∈ {48,64,96} and reports
+//   F(NPW) + the monotonicity verdict VERBATIM.
+//
+//   FINDING (2026-06-02, mini native, d6/g63 VERBATIM): the REAL cell is STILL NON-monotone
+//   under Mermin F — F = −37.08 / −28.61 / −52.79 Ha over NPW=48/64/96 (monotone=false,
+//   |ΔF|_last=24.17 Ha, NO plateau). The Mermin fix corrects the ENERGY FUNCTIONAL (synthetic
+//   gate PASS) but each NPW on the real cell still self-consists to a DIFFERENT (partly spurious)
+//   solution — the residual is the real-cell SCF landing on basis-dependent local minima, NOT
+//   the energy-functional definition. Composed λ at the converged NPW=64 cell = 0.215 (bare),
+//   NOT the OLD non-variational λ=4.59 (which did NOT survive). Named breakthrough (d2): a
+//   basis-consistent real-space ρ grid decoupled from NPW + a denser k-mesh.
+//
+// Run: HEXA_STDLIB_ROOT="$PWD/stdlib" hexa run --no-sentinel stdlib/qforge/fixtures/cah6_realcell_mermin_monotone_check.hexa
+use "stdlib/qforge/scf_pw"
+use "stdlib/qforge/upf"
+use "stdlib/qforge/orchestrator_pw"
+use "stdlib/qforge/davidson"
+
+let DECK = "/Users/mini/dancinlab/demiurge/exports/rtsc/decks/CaH6_NC"
+let SCF_MAXIT = 550
+let SCF_MIX = 0.2
+
+fn build_npw(npw: int, mshell: int, b1: [float], b2: [float], b3: [float]) -> [float] {
+    let mut gall: [float] = [] ; let mut g2all: [float] = []
+    let mut gi = -mshell
+    while gi <= mshell {
+        let mut gj = -mshell
+        while gj <= mshell {
+            let mut gk = -mshell
+            while gk <= mshell {
+                let gx = to_float(gi) * b1[0] + to_float(gj) * b2[0] + to_float(gk) * b3[0]
+                let gy = to_float(gi) * b1[1] + to_float(gj) * b2[1] + to_float(gk) * b3[1]
+                let gz = to_float(gi) * b1[2] + to_float(gj) * b2[2] + to_float(gk) * b3[2]
+                gall.push(gx) ; gall.push(gy) ; gall.push(gz)
+                g2all.push(gx * gx + gy * gy + gz * gz)
+                gk = gk + 1
+            }
+            gj = gj + 1
+        }
+        gi = gi + 1
+    }
+    let ntot = len(g2all)
+    let mut gvecs: [float] = []
+    let mut used: [int] = [] ; let mut u = 0 ; while u < ntot { used.push(0) ; u = u + 1 }
+    let mut picked = 0
+    while picked < npw {
+        let mut best = -1 ; let mut bestv = 1.0e30 ; let mut t = 0
+        while t < ntot { if used[t] == 0 { if g2all[t] < bestv { bestv = g2all[t] ; best = t } } ; t = t + 1 }
+        if best < 0 { break }
+        used[best] = 1
+        gvecs.push(gall[best * 3]) ; gvecs.push(gall[best * 3 + 1]) ; gvecs.push(gall[best * 3 + 2])
+        picked = picked + 1
+    }
+    return gvecs
+}
+
+fn main() {
+    println("=== QFORGE CaH6 real-cell Mermin-F etot-vs-NPW sweep (PR#2514) ===")
+    let ca = upf_parse(DECK + "/pseudo/Ca_ONCV_PBE_sr.upf")
+    let h  = upf_parse(DECK + "/pseudo/H_ONCV_PBE_sr.upf")
+    if !ca.ok { println("FAIL Ca UPF: " + ca.error) ; return }
+    if !h.ok  { println("FAIL H UPF: "  + h.error)  ; return }
+    let zca = ca.header.z_valence ; let zh = h.header.z_valence
+    let nelec = to_int(zca + 6.0 * zh) ; let nocc = nelec / 2
+
+    // ── CaH6 BCC cell (ibrav=3, celldm(1)=6.4640 bohr) — same as compose fixture ─
+    let a = 6.4640 ; let ha = 0.5 * a ; let omega = a * a * a * 0.5
+    let tpa = 6.28318530717958647692 / a
+    let b1 = [0.0, tpa, tpa] ; let b2 = [-tpa, 0.0, tpa] ; let b3 = [-tpa, -tpa, 0.0]
+    let hf = [0.25, 0.50, 0.00,  0.50, 0.00, 0.25,  0.00, 0.25, 0.50,
+              0.75, 0.50, 0.00,  0.50, 0.00, 0.75,  0.00, 0.75, 0.50]
+    let mut pos_h: [float] = []
+    let a1 = [ha, ha, ha] ; let a2 = [-ha, ha, ha] ; let a3 = [-ha, -ha, ha]
+    let mut ih = 0
+    while ih < 6 {
+        let f1 = hf[ih * 3] ; let f2 = hf[ih * 3 + 1] ; let f3 = hf[ih * 3 + 2]
+        pos_h.push(f1 * a1[0] + f2 * a2[0] + f3 * a3[0])
+        pos_h.push(f1 * a1[1] + f2 * a2[1] + f3 * a3[1])
+        pos_h.push(f1 * a1[2] + f2 * a2[2] + f3 * a3[2])
+        ih = ih + 1
+    }
+
+    // multi-species staging (Ca then H)
+    let nspec = 2
+    let mut rs: [float] = [] ; let mut rabs: [float] = [] ; let mut vlocs: [float] = []
+    let mut i = 0
+    while i < len(ca.r) { rs.push(ca.r[i]) ; rabs.push(ca.rab[i]) ; vlocs.push(ca.vloc[i]) ; i = i + 1 }
+    i = 0
+    while i < len(h.r) { rs.push(h.r[i]) ; rabs.push(h.rab[i]) ; vlocs.push(h.vloc[i]) ; i = i + 1 }
+    let mlens = [len(ca.r), len(h.r)] ; let zs = [zca, zh]
+    let mut poss: [float] = []
+    poss.push(0.0) ; poss.push(0.0) ; poss.push(0.0)
+    i = 0 ; while i < len(pos_h) { poss.push(pos_h[i]) ; i = i + 1 }
+    let palens = [1, 6]
+    let mut empty_f: [float] = [] ; let mut empty_i: [int] = []
+    let nprojs = [0, 0] ; let blens = [0, 0] ; let dlens = [0, 0]
+    let k0 = [0.0, 0.0, 0.0] ; let xc_mode = 1
+    let eb1 = [tpa, 0.0, 0.0] ; let eb2 = [0.0, tpa, 0.0] ; let eb3 = [0.0, 0.0, tpa]
+    let sigma = 0.02 ; let nbands = nocc + 4
+
+    let npws = [48, 64, 96]
+    let mshells = [4, 4, 5]
+    let mut prevF = 1.0e30
+    let mut all_mono = true
+    let mut fvals: [float] = []
+    let mut ns: [int] = []
+    println("NPW   n_used  conv  iters   F=Mermin etot (Ha)")
+    let mut ci = 0
+    while ci < len(npws) {
+        let gvecs = build_npw(npws[ci], mshells[ci], b1, b2, b3)
+        let n = len(gvecs) / 3
+        let scf = qforge_scf_pw_h_multi_smeared(k0, gvecs, nspec, rs, rabs, vlocs, mlens, zs,
+                                                poss, palens, empty_f, empty_i, empty_f,
+                                                nprojs, blens, dlens, omega, xc_mode,
+                                                1, 1, n, eb1, eb2, eb3,
+                                                nbands, nelec, SCF_MIX, 1.0e-6, SCF_MAXIT, sigma, 2.0, 6)
+        println(to_string(npws[ci]) + "    " + to_string(n) + "    "
+                + to_string(scf.converged) + "  " + to_string(scf.iters) + "    "
+                + to_string(scf.e_total))
+        if ci > 0 && scf.e_total > prevF + 1.0e-6 { all_mono = false }
+        fvals.push(scf.e_total) ; ns.push(n) ; prevF = scf.e_total
+        ci = ci + 1
+    }
+    println("── VERDICT (d6 VERBATIM) ──")
+    println("Mermin F basis-monotone over the REAL cell NPW sweep (F(N+1) <= F(N)+tol): "
+            + to_string(all_mono))
+    let nl = len(fvals)
+    if nl >= 2 {
+        let mut d = fvals[nl - 1] - fvals[nl - 2]
+        if d < 0.0 { d = -d }
+        println("|ΔF| last step (NPW=" + to_string(npws[nl-2]) + "→" + to_string(npws[nl-1])
+                + ") = " + to_string(d) + " Ha  (plateau if small)")
+    }
+    println("=== DONE ===")
+}
