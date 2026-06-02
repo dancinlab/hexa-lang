@@ -1,0 +1,39 @@
+// stdlib/qforge/fixtures/cah6_grid_coupling_probe.hexa — INSTRUMENTATION (no SCF).
+//
+// Proves the grid-coupling confound the etot-vs-NPW scatter blamed (d6, no guessing):
+//   (1) the Mermin fixture stages the in-loop V_H FFT grid as (nx,ny,nz)=(1,1,NPW).
+//       core_fft requires EACH axis to be pow2 → for NPW∈{48,96} the z-axis is
+//       non-pow2 → qforge_vhartree_from_rho returns [] → Hartree SILENTLY dropped,
+//       but for NPW=64 (pow2) it is APPLIED. So the screening Hamiltonian itself
+//       CHANGES KIND across the sweep — a direct basis/grid coupling, not physics.
+//   (2) the "density" fed to V_H/V_xc is ρ(i)=Σocc·|c(G_i)|² indexed by the PW
+//       coefficient index, NOT a real-space grid point — so its representation
+//       and its V_xc image change as NPW grows even at the same physical state.
+//
+// Run: HEXA_STDLIB_ROOT="$PWD/stdlib" hexa run --no-sentinel stdlib/qforge/fixtures/cah6_grid_coupling_probe.hexa
+use "stdlib/qforge/screening"
+
+fn main() {
+    println("=== CaH6 grid-coupling probe (Hartree silent-drop on non-pow2 (1,1,NPW)) ===")
+    // a uniform unit ρ of length NPW staged on the fixture's (1,1,NPW) grid.
+    let a = 6.4640
+    let tpa = 6.28318530717958647692 / a
+    let eb1 = [tpa, 0.0, 0.0] ; let eb2 = [0.0, tpa, 0.0] ; let eb3 = [0.0, 0.0, tpa]
+    let npws = [48, 64, 96, 128]
+    println("NPW   grid=(1,1,NPW)   V_H len   Hartree-applied?")
+    let mut ci = 0
+    while ci < len(npws) {
+        let npw = npws[ci]
+        let mut rho: [float] = []
+        let mut i = 0
+        while i < npw { rho.push(1.0) ; i = i + 1 }
+        let vh = qforge_vhartree_from_rho(rho, 1, 1, npw, eb1, eb2, eb3)
+        let applied = len(vh) == npw
+        println(to_string(npw) + "        (1,1," + to_string(npw) + ")     "
+                + to_string(len(vh)) + "        " + to_string(applied))
+        ci = ci + 1
+    }
+    println("── If 'applied' flips across NPW, the screening Hamiltonian CHANGES KIND")
+    println("   per-NPW → the etot scatter is grid-coupling, NOT the energy functional. ──")
+    println("=== DONE ===")
+}
