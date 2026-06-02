@@ -2921,6 +2921,12 @@ fn _mir_digit_val(c: char) -> i64 {
     if c == '7' { return 7 }
     if c == '8' { return 8 }
     if c == '9' { return 9 }
+    if c == 'a' || c == 'A' { return 10 }
+    if c == 'b' || c == 'B' { return 11 }
+    if c == 'c' || c == 'C' { return 12 }
+    if c == 'd' || c == 'D' { return 13 }
+    if c == 'e' || c == 'E' { return 14 }
+    if c == 'f' || c == 'F' { return 15 }
     return -1
 }
 
@@ -2934,10 +2940,19 @@ fn _parse_int(t: string) -> i64 {
         neg = true
         i = 1
     }
+    // Hex literal (0x/0X prefix): parse base-16. Without this the digit
+    // loop ran base-10 only and silently dropped a-f digits, so native
+    // codegen lowered every 0xNN mask in the compiler's own source
+    // (e.g. char_code(...) & 0xff) to a wrong value (0xff -> 0).
+    let mut base: i64 = 10
+    if i + 1 < n && chars[i] == '0' && (chars[i + 1] == 'x' || chars[i + 1] == 'X') {
+        base = 16
+        i = i + 2
+    }
     let mut v: i64 = 0
     while i < n {
         let d = _mir_digit_val(chars[i])
-        if d >= 0 { v = v * 10 + d }
+        if d >= 0 && d < base { v = v * base + d }
         i = i + 1
     }
     if neg { return -v }
