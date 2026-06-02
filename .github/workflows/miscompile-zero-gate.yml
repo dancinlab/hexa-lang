@@ -1,0 +1,84 @@
+name: miscompile-zero-gate
+
+# ── MISCOMPILE-ZERO regression gate ─────────────────────────────────────────
+#
+# PURPOSE
+#   Keep the native self-hosted hexa codegen at MISCOMPILE-ZERO. The byte-eq
+#   self-host graduation was won by fixing a CLASS of native-codegen
+#   miscompiles, each surfacing as an `ENCODE-MISS` in the --emit=obj stderr or
+#   a spurious `udf` instruction in the emitted Mach-O object:
+#     - hex-literal 0xNN -> 0          (lower _parse_int, 47421c89c)
+#     - .truncate(0) global aliasing   (953c8824b)
+#     - _ends_with / string-compare cascade (downstream of hex)
+#     - linker reloc gaps: literal8 / __DATA UNSIGNED / mod_init_func (#2509)
+#
+# WHAT IT DOES
+#   1. Builds the native `./hexa` driver via the SAME shared release path the
+#      release + nobaseline gate use (tool/release_build).
+#   2. Runs tool/miscompile_zero_gate.sh, which native --emit=obj compiles a
+#      tiny corpus (self/test/miscompile_zero/*.hexa) — one program per class —
+#      and FAILS NONZERO on ANY ENCODE-MISS or spurious udf.
+#
+#   This is the LIGHTWEIGHT gate (seconds of emit, not the 68-min full
+#   self-emit). It runs on macos-latest (arm64) so the arm64-apple-darwin
+#   emit + `otool` disassembly path the graduation was proven on is exercised.
+#
+#   The proven reference run is on the ghost macOS host with the gen2_fix
+#   native compiler; for that host the one-liner is:
+#     HEXA_NATIVE_CC=~/dancinlab/selfhost-work/gen2_fix \
+#       bash tool/miscompile_zero_gate.sh
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'self/test/miscompile_zero/**'
+      - 'tool/miscompile_zero_gate.sh'
+      - '.github/workflows/miscompile-zero-gate.yml'
+      - 'compiler/**'
+      - 'self/**'
+  pull_request:
+    paths:
+      - 'self/test/miscompile_zero/**'
+      - 'tool/miscompile_zero_gate.sh'
+      - '.github/workflows/miscompile-zero-gate.yml'
+      - 'compiler/**'
+      - 'self/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  miscompile-zero-gate:
+    name: miscompile-zero (native emit, darwin-arm64)
+    runs-on: macos-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Build — shared release_build (native ./hexa driver)
+        shell: bash
+        env:
+          TARGET: darwin-arm64
+          CC: clang
+          LIBS: ""
+          GH_TOKEN: ${{ github.token }}
+        run: bash tool/release_build
+
+      - name: Sanity — ./hexa runs
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./hexa --version
+
+      - name: Gate — native --emit=obj corpus must be miscompile-zero
+        shell: bash
+        env:
+          # The released ./hexa driver runs the compiler via
+          # `hexa run compiler/main.hexa <flags> SOURCE`.
+          HEXA_NATIVE_CC: ./hexa
+          HEXA_CC_PREARGS: run compiler/main.hexa
+          HEXA_TARGET: arm64-apple-darwin
+          MCZERO_OUT: ${{ runner.temp }}/mczero-gate-out
+        run: bash tool/miscompile_zero_gate.sh

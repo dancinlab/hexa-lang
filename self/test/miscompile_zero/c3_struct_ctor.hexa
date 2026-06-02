@@ -1,0 +1,18 @@
+// c3_struct_ctor.hexa — miscompile class: aggregate/struct construction +
+// field load. Exercises a struct constructor (heap/aggregate init) and field
+// reads, the codegen path adjacent to the `.truncate(0)` aliasing miscompile
+// (953c8824b) where a no-op on an aggregate global mis-lowered.
+
+struct Vec3 {
+    x: int,
+    y: int,
+    z: int
+}
+
+fn dot(a, b) {
+    return a.x * b.x + a.y * b.y + a.z * b.z
+}
+
+let u = Vec3 { x: 1, y: 2, z: 3 }
+let v = Vec3 { x: 4, y: 5, z: 6 }
+println("dot:", dot(u, v))

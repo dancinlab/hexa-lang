@@ -1,0 +1,22 @@
+// c2_stack_locals.hexa — miscompile class: STP/LDP stack-slot codegen.
+// A function with many live locals forces the arm64 backend to spill to
+// `[sp,#N]` via STP/LDP pairs. A mem-parse-fail in that path was the literal
+// "ENCODE-MISS: STP/LDP mem-parse-fail" signature of the miscompile class.
+
+fn churn(n: i64) -> i64 {
+    let a = n + 1
+    let b = a * 2
+    let c = b - 3
+    let d = c + a
+    let e = d * b
+    let f = e - c
+    let g = f + d
+    let h = g * e
+    let i_ = h - f
+    let j = i_ + g
+    let k = j * h
+    let l = k - i_
+    return a + b + c + d + e + f + g + h + i_ + j + k + l
+}
+
+println("churn:", churn(7))
