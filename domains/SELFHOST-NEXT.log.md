@@ -558,3 +558,32 @@ full native self-emit + byte-eq fixpoint. Outcome = no qualifying host rentable.
       Scaleway/GCP T2A). Add as a provider adapter / one-off pool host, then re-run
       the full native self-emit + gen3==gen4 byte-eq fixpoint. Prior native peak RSS
       ~7.76 GiB @ OOM, 0 ENCODE-MISS — a ≥16 GiB box is expected to clear the wall.
+
+## 2026-06-03 — MINI default-flip via CLI-shim (g63 GREEN, NOT reverted)
+
+Built `tool/hx-selfhost-cli`: a tiny delegating launcher that REPLACES the bare
+`exec gen3` (hx-selfhost) as the tier2 default-flip target. gen3 returns rc 0
+even on subcommands it can't parse, so the shim routes by EXPLICIT surface
+detection, never by exit code:
+- `--emit=*` invocations -> self-hosted gen3 (`gen3 _drv.hexa <args>`, parity-gate
+  form, empty HEXA_ATLAS_EMBED) -> the ONLY gen3-backed surface (compile only).
+- everything else (build/run/verify/atlas/--version/--help, any non-emit) ->
+  DELEGATE to the backed-up shipped dispatch `hexa.real.pre-selfhost.<ts>`.
+  Safety > coverage: build/run NOT mapped to gen3 (link orchestration risk).
+
+`promote_selfhost.sh`: tier1 installs the shim; tier2 now symlinks hexa.real ->
+hx-selfhost-cli (REFUSED if shim absent — never flips to bare gen3); --status
+gained a `cli-shim` line.
+
+FLIP on mini: backed up shipped hexa.real -> hexa.real.pre-selfhost.20260603-065348,
+symlinked hexa.real -> hx-selfhost-cli.
+
+g63 FULL-CLI smoke (all via live `hexa`): --version rc0 ("hexa 0.1.0-dispatch") ·
+atlas hash rc0 (17265 nodes) · run prints+exits rc7 · verify rc0 (rubric+runs) ·
+gen3-path compile fn main(){exit(42)} -> rc42. ALL PASS.
+g63 HOOK smoke: real verify-guard 0.1.4 PreToolUse hook fired through flipped
+hexa -> correct deny/allow JSON; exit-code propagation rc2 identical on flipped
+vs backup. ZERO hook regression. ALL PASS.
+
+Verdict: .verdicts/selfhost-next-promote/MINI-FLIP-SHIM.txt
+Revert : bash tool/promote_selfhost.sh --revert (backup + symlink preconds met).

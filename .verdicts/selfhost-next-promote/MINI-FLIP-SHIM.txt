@@ -1,0 +1,101 @@
+SELFHOST-NEXT — MINI default-flip via CLI-shim (g63 hard-gated)
+================================================================
+date    : 2026-06-03
+box     : mini (PRIMARY — runs this session's ~60k+ hexa hook/skill invocations)
+HX_HOME : /Users/mini/.hx
+result  : FLIPPED — all g63 full-CLI + hook smokes PASS. NOT reverted.
+
+----------------------------------------------------------------
+SHIM DESIGN — tool/hx-selfhost-cli
+----------------------------------------------------------------
+A tiny (~95-line) bash launcher that replaces the bare `exec gen3` (hx-selfhost).
+Routes by EXPLICIT surface detection, NEVER by gen3's exit code (gen3 returns
+rc 0 even on subcommands it cannot parse — see PROBE below):
+
+  ROUTE  -> gen3 (self-hosted):  any invocation carrying `--emit=<x>` — the exact
+           bare-compiler surface tool/selfhost_parity_gate.sh validates. The shim
+           injects the driver-placeholder argv1 and an empty HEXA_ATLAS_EMBED:
+               exec gen3 _drv.hexa <user args...>   (SOURCE.hexa = last positional)
+  DELEGATE -> shipped dispatch:  EVERYTHING else — named subcommands
+           (build/run/verify/atlas/...), --version, --help, any non-emit call.
+           Target = newest hexa.real.pre-selfhost.<ts> backup (the shipped
+           `hexa 0.1.0-dispatch`). Symlink-loop guard: refuses to recurse into
+           a hexa.real that is itself a symlink with no backup present.
+
+  Safety > coverage: build/run are DELEGATED (NOT mapped onto gen3). gen3's
+  link path needs specific clang+hexa_ld orchestration and the shipped `build`
+  does extra libsodium/openssl linking the shim cannot safely replicate.
+  When unsure -> DELEGATE, so the full CLI + every hook keeps working verbatim.
+
+GEN3-BACKED SURFACE FRACTION : the compile surface only (`SOURCE.hexa --emit=*`).
+  Everything operators/hooks invoke by name (run/verify/atlas/build/--version)
+  is delegated to the shipped dispatch binary -> 100% CLI compatibility retained.
+
+promote_selfhost.sh : tier1 now also installs the CLI shim; tier2 symlinks
+  hexa.real -> hx-selfhost-cli (REFUSED if the shim is absent — never flips to
+  bare gen3). --status gained a `cli-shim` line. --revert unchanged.
+
+----------------------------------------------------------------
+PROBE — why surface-detection (not exit code)
+----------------------------------------------------------------
+gen3 --version            -> "missing SOURCE.hexa"  rc=2
+gen3 build / verify / (no args) -> "missing SOURCE.hexa"  rc=0   <-- rc 0 on unparseable
+gen3 _drv.hexa --emit=asm ... SOURCE.hexa  -> emits asm, rc 0 (parity-gate form)
+
+----------------------------------------------------------------
+THE FLIP (mini)
+----------------------------------------------------------------
+pre : /Users/mini/.hx/bin/hexa.real = Mach-O 64-bit arm64 (shipped dispatch, 2.1MB)
+back: mv hexa.real -> /Users/mini/.hx/bin/hexa.real.pre-selfhost.20260603-065348
+flip: ln -sf /Users/mini/.hx/bin/hx-selfhost-cli  /Users/mini/.hx/bin/hexa.real
+post (promote_selfhost.sh --status):
+  slot      : installed (/Users/mini/.hx/self/native/selfhost)
+  launcher  : present (/Users/mini/.hx/bin/hx-selfhost)
+  cli-shim  : present (/Users/mini/.hx/bin/hx-selfhost-cli)
+  default   : hexa.real -> /Users/mini/.hx/bin/hx-selfhost-cli (FLIPPED to selfhost)
+  backup    : /Users/mini/.hx/bin/hexa.real.pre-selfhost.20260603-065348
+
+PATH entry `hexa` = `exec hexa.real "$@"` -> symlink -> hx-selfhost-cli -> delegate/gen3.
+
+----------------------------------------------------------------
+G63 FULL-CLI SMOKE (all via the live `hexa` entry point, post-flip)
+----------------------------------------------------------------
+[1] hexa --version            -> "hexa 0.1.0-dispatch"                 rc=0  PASS
+[2] hexa atlas hash           -> loaded 17265 nodes; 663698a06bc6...   rc=0  PASS
+[3] hexa run run7.hexa        -> stdout "hello-from-run"               rc=7  PASS
+        (fn main(){ print("hello-from-run\n"); exit(7) })
+[4] hexa verify --help        -> full tier rubric                      rc=0  PASS
+    hexa verify 'cos(0)' 1 1.0 -> verify 1, 🟠 INSUFFICIENT (runs)     rc=0  PASS
+[5] gen3-path compile (DELIVERABLE smoke):
+        hexa g42.hexa --emit=asm --target=arm64-apple-darwin -o g42.s
+        clang -arch arm64 -c g42.s -o g42.o
+        hexa_ld -o g42.bin g42.o rt.o --lc-main _main
+        ./g42.bin                                                      rc=42 PASS
+        (fn main(){ exit(42) } — compiled by self-hosted gen3)
+
+----------------------------------------------------------------
+G63 HOOK SMOKE — real sidecar PreToolUse hook (verify-guard 0.1.4)
+----------------------------------------------------------------
+hooks.json fires: `hexa run ${PLUGIN}/bin/_verify_guard.hexa` with the Bash
+tool payload on stdin (JSON). Fired verbatim through the FLIPPED hexa:
+
+  DENY payload {tool_name:Bash, command:"python3 -c 'import sympy'"}
+    -> guard emits permissionDecision:"deny" JSON (modern hook protocol,
+       byte-perfect reason string)                                     PASS
+  ALLOW payload {tool_name:Bash, command:"ls -la"}  -> allow           PASS
+  exit-code propagation: `hexa run exit2.hexa` -> rc 2 on BOTH flipped
+       and backup binary (identical)                                   PASS
+
+  Parity cross-check: flipped hexa == backup hexa.real.pre-selfhost on
+  every hook input tested -> the flip introduced ZERO hook regression.
+
+----------------------------------------------------------------
+BACKUP + REVERT
+----------------------------------------------------------------
+backup path : /Users/mini/.hx/bin/hexa.real.pre-selfhost.20260603-065348
+revert cmd  : bash tool/promote_selfhost.sh --revert
+   (rm hexa.real symlink; mv newest hexa.real.pre-selfhost.* -> hexa.real)
+revert precond satisfied: hexa.real IS a symlink AND a backup exists.
+
+VERDICT: g63 GREEN on all axes. mini CLI fully functional post-flip.
+         compile -> self-hosted gen3; all named subcommands -> shipped dispatch.

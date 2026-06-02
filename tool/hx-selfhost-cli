@@ -1,0 +1,93 @@
+#!/bin/bash
+# hx-selfhost-cli — SAFE delegating launcher for the self-hosted compiler (gen3).
+#
+# Installed by tool/promote_selfhost.sh as the tier2 default-flip target
+# (hexa.real -> this shim). Replaces the bare `exec gen3` launcher so that
+# flipping the default does NOT brick the full `hexa` CLI / the ~60k+ hook
+# invocations that shell `hexa <subcommand>` every session.
+#
+# gen3 is the BARE self-hosted compiler: it ONLY handles the compile surface
+# `SOURCE.hexa --emit=asm|obj`. It does NOT implement subcommands
+# (build/run/verify/atlas/--version -> "missing SOURCE.hexa", often rc 0).
+# So this shim CANNOT trust gen3's exit code to detect "couldn't parse"; it
+# routes by EXPLICIT surface detection:
+#
+#   ROUTE -> gen3 (self-hosted):  an invocation carrying `--emit=<x>`
+#            (the exact bare-compiler surface the parity gate validates).
+#   DELEGATE -> shipped dispatch: EVERYTHING else — named subcommands
+#            (build/run/verify/atlas/...), --version, --help, and any
+#            invocation without --emit. Safety > coverage: when unsure,
+#            DELEGATE so the full CLI + every hook keeps working verbatim.
+#
+# Delegation target = the shipped dispatch binary backed up by tier2 to
+# hexa.real.pre-selfhost.<ts> (newest wins). If no backup exists yet (shim
+# run before tier2 ran its backup) we fall back to hexa.real itself UNLESS
+# hexa.real is this very shim (a symlink loop) — in which case we hard-fail
+# loudly rather than recurse.
+#
+# Revert the whole flip with: tool/promote_selfhost.sh --revert
+set -u
+
+# ── resolve install layout from this script's own location ───────────────────
+SELF="${BASH_SOURCE[0]}"
+while [ -L "$SELF" ]; do d="$(cd "$(dirname "$SELF")" && pwd)"; SELF="$(readlink "$SELF")"; case "$SELF" in /*) ;; *) SELF="$d/$SELF" ;; esac; done
+BIN_DIR="$(cd "$(dirname "$SELF")" && pwd)"           # $HX_HOME/bin
+HX_HOME="$(cd "$BIN_DIR/.." && pwd)"
+SLOT="$HX_HOME/self/native/selfhost"
+GEN3="$SLOT/gen3"
+HEXA_LD="$SLOT/hexa_ld"
+RT_O="$SLOT/rt.o"
+
+# delegation target: newest backed-up shipped dispatch binary
+pick_delegate() {
+    local bk
+    bk="$(ls -1t "$BIN_DIR"/hexa.real.pre-selfhost.* 2>/dev/null | head -1)"
+    if [ -n "$bk" ] && [ -x "$bk" ]; then printf '%s' "$bk"; return 0; fi
+    # fall back to hexa.real only if it is a REAL binary (not a symlink to us)
+    local real="$BIN_DIR/hexa.real"
+    if [ -e "$real" ] && [ ! -L "$real" ]; then printf '%s' "$real"; return 0; fi
+    return 1
+}
+
+delegate() {
+    local d; d="$(pick_delegate)" || {
+        echo "hx-selfhost-cli: FATAL — no shipped dispatch binary to delegate to" >&2
+        echo "  (no hexa.real.pre-selfhost.* backup and hexa.real is a symlink)" >&2
+        echo "  recover: tool/promote_selfhost.sh --revert" >&2
+        exit 127
+    }
+    exec "$d" "$@"
+}
+
+# ── surface detection: does this invocation carry --emit=<x> ? ───────────────
+has_emit=0
+src=""
+for a in "$@"; do
+    case "$a" in
+        --emit=*) has_emit=1 ;;
+        *.hexa)   src="$a" ;;     # remember last .hexa positional (the SOURCE)
+    esac
+done
+
+# Anything that is NOT a bare-compiler emit -> delegate to the full CLI.
+if [ "$has_emit" != 1 ]; then
+    delegate "$@"
+fi
+
+# ── compile surface -> self-hosted gen3 ──────────────────────────────────────
+# gen3 expects a driver-placeholder as argv1 and reads the real SOURCE as the
+# last positional (per tool/selfhost_parity_gate.sh). We must not let gen3
+# accidentally embed the live atlas during a bare emit, so point
+# HEXA_ATLAS_EMBED at an empty dir unless the caller already set it.
+if [ ! -x "$GEN3" ]; then
+    echo "hx-selfhost-cli: gen3 missing at $GEN3 — delegating to shipped CLI" >&2
+    delegate "$@"
+fi
+
+if [ -z "${HEXA_ATLAS_EMBED:-}" ]; then
+    NOATLAS="$(mktemp -d 2>/dev/null || echo "${TMPDIR:-/tmp}/hx-noatlas.$$")"
+    mkdir -p "$NOATLAS"
+    export HEXA_ATLAS_EMBED="$NOATLAS"
+fi
+
+exec "$GEN3" _drv.hexa "$@"
