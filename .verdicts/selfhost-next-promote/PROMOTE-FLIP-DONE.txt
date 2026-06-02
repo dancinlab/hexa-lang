@@ -1,0 +1,42 @@
+SELFHOST-NEXT — TIER2 DEFAULT-FLIP VERDICT (raw)
+================================================
+date        : 2026-06-03
+host        : ghost (macOS arm64) — GHOST ONLY (mini + all other hosts untouched)
+readiness   : GO per PR #2580 (parity 5/5, byte-eq fixpoint intact, determinism green)
+HX_HOME     : ~/.hx
+
+flip cmd    : bash tool/promote_selfhost.sh install --default --i-have-reviewed-parity \
+                -w ~/dancinlab/selfhost-work/promote/build --hx-home ~/.hx
+flip result : EXECUTED (exit 0)
+
+=== parity gate (HARD precondition, re-ran at flip time) ===
+PROG           BEHAVIOUR  ASM        SMOKE    VERDICT
+----           ---------  ---        -----    -------
+arith          ok(42)     ref-err    42-ok    PASS
+bitmask        ok(15)     ref-err    n/a      PASS
+branch         ok(7)      ref-err    n/a      PASS
+call           ok(13)     ref-err    n/a      PASS
+recurse        ok(120)    ref-err    n/a      PASS
+----
+parity: 5/5 pass, 0 fail (strict=0, asm-axis=on)
+RESULT: PARITY PASS — promotion AUTHORIZED
+
+=== flip artifacts ===
+backup path   : ~/.hx/bin/hexa.real.pre-selfhost.20260603-062045
+symlink target: ~/.hx/bin/hexa.real -> ~/.hx/bin/hx-selfhost   (FLIPPED to selfhost)
+tier1 slot    : ~/.hx/self/native/selfhost/{gen3,hexa_ld,rt.o}
+launcher      : ~/.hx/bin/hx-selfhost  (exec gen3)
+
+=== post-flip smoke (now-default hexa.real -> hx-selfhost -> gen3) ===
+program       : fn main(){ exit(42) }
+emit (asm)    : EMIT_RC=0
+assemble      : CC_RC=0   (clang -arch arm64 -c)
+link          : LD_RC=0   (self-host hexa_ld + rt.o, --lc-main _main)
+run           : RUN_RC=42   ($? captured separately, no pipe-mask)
+SMOKE         : PASS
+
+=== revert (host-local, reversible) ===
+revert cmd    : sidecar pool on ghost 'cd ~/dancinlab/wt-promote && bash tool/promote_selfhost.sh --revert --hx-home ~/.hx'
+                (restores most-recent ~/.hx/bin/hexa.real.pre-selfhost.* over the symlink)
+
+FLIP STATUS   : DONE — default hexa on ghost now resolves to the self-hosted gen3 compiler.
