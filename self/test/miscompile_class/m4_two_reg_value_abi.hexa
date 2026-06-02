@@ -1,0 +1,34 @@
+// m4_two_reg_value_abi.hexa — CLASS: 2-register HexaVal value ABI.
+// History: a hexa string value is carried as a (ptr, len) PAIR across two
+// registers; a dropped second register or a mis-set return pair surfaced as
+// garbage strings / udf. The risk window is when such a value is LIVE across
+// an intervening call that clobbers caller-saved registers.
+//
+// PRIMITIVE: build a 2-reg string value, hold it live across a call that does
+// real work (and itself returns a value), then read both halves of the held
+// value. exit 0 = the (ptr,len) pair survived the intervening call.
+
+fn make_tag(n: i64) -> string { return "tag" + ("" + n) }
+
+fn noise(x: i64) -> i64 {
+    let mut s = 0
+    let mut i = 0
+    while i < x { s = s + i; i = i + 1 }
+    return s
+}
+
+let t = make_tag(7)        // 2-reg string value materialized...
+let junk = noise(1000)     // ...held live across a clobbering call
+if junk != 499500 { exit(31) }
+if t != "tag7"    { exit(32) }   // full (ptr,len) value must survive
+if !t.ends_with("7") { exit(33) } // and still be a usable string
+
+// nested: two live string values across a call
+let a = make_tag(1)
+let b = make_tag(2)
+let k = noise(10)
+if k != 45 { exit(34) }
+if a != "tag1" { exit(35) }
+if b != "tag2" { exit(36) }
+
+println("VALABI-OK")

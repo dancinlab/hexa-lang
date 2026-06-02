@@ -1,0 +1,34 @@
+// m5_linker_reloc_kinds.hexa — CLASS: linker relocation kinds.
+// History: the Mach-O linker (hexa_ld) was missing reloc handling for
+//   - __literal8 const-merge (f64 constants)     (#2509, 5f38d7eb4)
+//   - __DATA UNSIGNED (module-global mutable)     (#2509, 23207ce70)
+//   - __mod_init_func (top-level initializers)    (#2509, 07d8556d1)
+// Each gap produced a wrong runtime VALUE (relocated to the wrong address)
+// rather than an ENCODE-MISS — only a RUN catches it.
+//
+// PRIMITIVE: exercise all three reloc kinds in one program —
+//   * f64 literals  -> __literal8
+//   * a mutable module-global accumulated at runtime -> __DATA UNSIGNED
+//   * top-level statements that run before main -> __mod_init_func
+// exit 0 = every reloc resolved to the correct address (correct value).
+
+let mut accum = 0.0           // mutable module-global (__DATA)
+
+fn addf(x: f64) { accum = accum + x }
+
+let pi = 3.141592653589793    // f64 literal (__literal8)
+let e  = 2.718281828459045
+
+// top-level calls (run via __mod_init_func before the program's main body)
+addf(pi)
+addf(e)
+
+let sum = accum
+let diff = sum - 5.859874482048838
+let ad = if diff < 0.0 { 0.0 - diff } else { diff }
+if ad > 0.0000001 { exit(61) }   // accumulated module-global value correct
+if pi < 3.14159   { exit(62) }   // f64 literal relocated correctly
+if pi > 3.14160   { exit(63) }
+if e  < 2.71828   { exit(64) }
+
+println("RELOC-OK")

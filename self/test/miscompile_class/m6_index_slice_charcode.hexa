@@ -1,0 +1,29 @@
+// m6_index_slice_charcode.hexa — CLASS: index / slice / char_code codegen.
+// History: the cycle-34/35 `.truncate(n)` fallthrough + the broader
+// index/slice/char_code family sit on the codegen path adjacent to the
+// aliasing miscompile (arm64_darwin.hexa:1303). char_code / substring / array
+// index each lower to a load with an offset computation — an off-by-one or a
+// dropped sign-extend surfaces as a wrong runtime value.
+//
+// PRIMITIVE: array index, string substring/slice, and char_code, each with a
+// known expected value. exit 0 = every offset-load lowered correctly.
+
+let xs: [i64] = [10, 20, 30, 40]
+if xs[0] != 10 { exit(81) }
+if xs[3] != 40 { exit(82) }              // last index (no off-by-one)
+if (xs[1] + xs[2]) != 50 { exit(83) }
+
+let s = "hexa"
+if s.substring(0, 1) != "h" { exit(84) }
+if s.substring(1, 4) != "exa" { exit(85) }  // mid slice
+if char_code(s, 0) != 104 { exit(86) }       // 'h'
+if char_code(s, 3) != 97  { exit(87) }       // 'a'
+
+// truncate(n) with a non-zero n (the cycle-34/35 fallthrough target)
+let mut ys: [i64] = [1, 2, 3, 4, 5]
+ys = ys.truncate(2)
+if len(ys) != 2 { exit(88) }
+if ys[0] != 1 { exit(89) }
+if ys[1] != 2 { exit(90) }
+
+println("INDEX-OK")
