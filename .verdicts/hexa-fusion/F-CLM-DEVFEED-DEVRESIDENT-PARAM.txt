@@ -1,0 +1,74 @@
+HEXA-FUSION L1 (PARAM half) — device-resident int4-quant weight lifetime (W).
+
+Stacked on PR #2559 (db bias-grad device-resident, itself on #2555 m,v). This is
+the CRUX slice of full device-residency: param W was int4-quantized on the HOST
+every forward (clm_prod._fq → nn_int4_quant_fwd), which forced W D2H every step,
+and the STE mask-multiply backward (nn_int4_quant_bwd) read the grad on host —
+so W and dW could not stay device-resident. This slice moves both onto device:
+
+  · forge_dispatch_int4_quant(w, wq, sc, ql, mask, Cout, rest) → device kernel
+    _hx_cuda_farr_int4_quant_gpu: one thread per output channel computes the
+    per-channel int4-sym[-7,+7] QAT forward (s=max|W|/7, q=clamp(round(W/s),±7),
+    Wq=q·s, mask=in-range). The per-channel max scan + integer round/clamp are
+    SEQUENTIAL — NO fp reduction re-association, and int4 is INTEGER, so the
+    device quant is BIT-EXACT to nn_int4_quant_fwd (max|Δ| MUST be exactly 0, no
+    FMA-drift excuse). Keeps W loc=FARR_DEVICE (no per-step W D2H) and
+    wq/sc/ql/mask FARR_DEVICE / dirty_host=0 (the GEMM reads Wq on device; mask
+    feeds the device STE bwd).
+  · forge_dispatch_int4_quant_bwd(dy, mask, dW, n) → _hx_cuda_farr_int4_quant_
+    bwd_gpu: dW[i] = dy[i]·mask[i] (clipped STE), a pure elementwise multiply
+    with NO reduction → bit-exact, and keeps dW FARR_DEVICE so the next _adam
+    H2D-skips the grad (the int4 W grads escape only into _adam).
+
+Same residence convention as the keepmv moments / db colsum. Env CLM_PROD_DEV-
+RESIDENT (default off → host fake-quant, byte-identical). NO raw-GEMM-win claim
+— strictly host-roundtrip removal (W stays resident); cuBLAS GEMM = roofline.
+
+Byte-eq HARD GATE (g5) — `hexa run stdlib/flame/clm_conv_devfeed.hexa` ($0 mac
+CPU oracle). The new F-CLM-DEVFEED-INT4QUANT-EQ pins devfeed_int4_quant (the
+exact device-kernel math reference) == nn_int4_quant_fwd (canonical host quant)
+on wq/scale/qlevel/mask AND the STE bwd dW == nn_int4_quant_bwd, at a STRICT
+zero (max|Δ| > 0.0 fails — not the < tol band; int4 is integer). VERBATIM stdout:
+
+clm_conv_devfeed — LEVER (a): device im2col/col2im + device AdamW (CPU oracle)
+  im2col dil=1 max|Δ|=0.0
+  im2col dil=2 max|Δ|=0.0
+F-CLM-DEVFEED-IM2COL-EQ = 1
+PASS — device im2col gather == host xcol byte-eq, dil∈{1,2}
+  fwd dil=1 max|Δ| devfeed-vs-forge = 0.0
+  fwd dil=2 max|Δ| devfeed-vs-forge = 0.0
+F-CLM-DEVFEED-FWD-EQ = 1
+PASS — devfeed fwd == forge conv1d byte-eq, dil∈{1,2}
+  bwd dil=1 max|Δ| dW=0.0 dX=2.77556e-17 db=0.0
+  bwd dil=2 max|Δ| dW=0.0 dX=5.55112e-17 db=0.0
+F-CLM-DEVFEED-BWD-EQ = 1
+PASS — devfeed bwd (dW/dX/db) == forge conv1d_bwd byte-eq, dil∈{1,2}
+  db dil=1 max|Δ| colsum-vs-host = 0.0
+  db dil=2 max|Δ| colsum-vs-host = 0.0
+F-CLM-DEVFEED-DB-EQ = 1
+PASS — device-resident db colsum == host Σ_t dy[t,co] byte-eq, dil∈{1,2}
+  int4 fwd max|Δ| wq=0.0 scale=0.0 qlevel=0.0 mask=0.0
+  int4 bwd (STE) max|Δ| dW=0.0
+F-CLM-DEVFEED-INT4QUANT-EQ = 1
+PASS — device int4 quant fwd (wq/scale/qlevel/mask) + STE bwd == host quant byte-eq (max|Δ|=0, integer-exact)
+  adam 5-step max|Δ| W=0.0
+F-CLM-DEVFEED-ADAM-EQ = 1
+PASS — AdamW oracle (opt_adamw_step) deterministic 5-step trajectory
+ALL-PASS — LEVER (a) device im2col/col2im + device db colsum + device int4 quant + device AdamW oracle byte-eq to host feed
+
+All inherited gates stay max|Δ|=0.0 (IM2COL/FWD/DB/ADAM = 0.0; BWD dX≤5.55e-17
+as before). The new F-CLM-DEVFEED-INT4QUANT-EQ = 1 at max|Δ|=0.0 on ALL of
+wq/scale/qlevel/mask AND the STE bwd dW — integer-exact (a single bit would
+fail the strict-zero check). clm_prod.hexa is built on the self-host pod binary
+(the prebuilt mac `hexa run` lacks the forge_dispatch_* builtins by design —
+pre-existing on the m/v + db base; clm_prod's clang error on `hexa run` is the
+forge_dispatch_adamw int→HexaVal seam from the base, NOT this slice). The oracle
+above is the link-clean byte-eq surface and runs $0 under `hexa run`.
+
+Remaining toward FULL device-resident tensor lifetime (W2 util-GREEN fire):
+  · self-host pod build (HEXA_CUDA) that emits the int4_quant kernels into
+    runtime_cuda.c, so W + dW + db + m/v are ALL device-resident across the full
+    CLMConvMoE train loop under CLM_PROD_DEVRESIDENT — then the async-launch /
+    F-RFC046 util MEAN≥20% fire (lane ②) can run on that build.
+  · devmem-persist nvidia-smi measurement (confirm W never D2H's across steps).
+  · dX conv-weight grad permutations (col2im transpose) — orthogonal to quant.

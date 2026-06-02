@@ -1121,6 +1121,36 @@ HexaVal hexa_forge_dispatch_db_colsum(HexaVal dy_v, HexaVal db_v,
 HexaVal forge_dispatch_db_colsum(HexaVal dy_v, HexaVal db_v,
                              HexaVal t_v, HexaVal cout_v);                    /* runtime.c — fusion L1 grad seam */
 
+/* HEXA-FUSION L1 (PARAM half) — device-resident int4 fake-quant.
+ * forge_dispatch_int4_quant(w, wq, sc, ql, mask, Cout, rest) -> int rc (0 ok /
+ * -1 host fallback). Computes the per-output-channel int4-sym[-7,+7] QAT
+ * forward (s = max|W|/7, q = clamp(round(W/s), ±7), Wq = q·s, mask = in-range)
+ * ON DEVICE via _hx_cuda_farr_int4_quant_gpu (one thread per channel — the
+ * per-channel max + round are SEQUENTIAL, no fp re-association, and int4 is
+ * INTEGER, so the device result is BIT-EXACT to nn_int4_quant_fwd, max|Δ|=0).
+ * Keeps W device-resident (H2D-skip if already FARR_DEVICE) so W no longer
+ * D2H's each step, and keeps wq/sc/ql/mask FARR_DEVICE (the GEMM reads Wq on
+ * device; mask feeds the device STE bwd). Gated in clm_prod.hexa behind env
+ * CLM_PROD_DEVRESIDENT; no-CUDA → -1 → host fake-quant fallback (byte-eq). */
+HexaVal hexa_forge_dispatch_int4_quant(HexaVal w_v, HexaVal wq_v, HexaVal sc_v,
+                                  HexaVal ql_v, HexaVal mask_v,
+                                  HexaVal cout_v, HexaVal rest_v);            /* runtime.c — fusion L1 param */
+HexaVal forge_dispatch_int4_quant(HexaVal w_v, HexaVal wq_v, HexaVal sc_v,
+                             HexaVal ql_v, HexaVal mask_v,
+                             HexaVal cout_v, HexaVal rest_v);                 /* runtime.c — fusion L1 param seam */
+
+/* HEXA-FUSION L1 (PARAM half) — device-resident int4 STE backward.
+ * forge_dispatch_int4_quant_bwd(dy, mask, dW_out, n) -> int rc (0 ok / -1 host
+ * fallback). Clipped straight-through estimator dW[i] = dy[i]·mask[i] (mask ∈
+ * {0,1}) — a pure elementwise multiply, no reduction → bit-exact to
+ * nn_int4_quant_bwd (max|Δ|=0). Keeps dW DEVICE-RESIDENT (loc=FARR_DEVICE,
+ * dirty_host=0) so the next _adam H2D-skips the grad (the int4 W grads escape
+ * only into _adam). Gated behind CLM_PROD_DEVRESIDENT; no-CUDA → -1 → host. */
+HexaVal hexa_forge_dispatch_int4_quant_bwd(HexaVal dy_v, HexaVal mask_v,
+                                  HexaVal dw_v, HexaVal n_v);                 /* runtime.c — fusion L1 param */
+HexaVal forge_dispatch_int4_quant_bwd(HexaVal dy_v, HexaVal mask_v,
+                             HexaVal dw_v, HexaVal n_v);                      /* runtime.c — fusion L1 param seam */
+
 /* ── RFC 050 PERF-INHERITANCE: forge BF16 FFN dispatch wrapper ──────
  * `forge_dispatch_ffn_fp64_via_bf16(x, w1, w2, y, M, D, FD)` — 7-arg
  * builtin. Takes FP64 farr handles, internally allocates HexaFarrBf16

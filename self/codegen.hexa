@@ -7470,6 +7470,16 @@ fn gen2_expr(node) {
                 if name == "forge_dispatch_db_colsum" {
                     return "hexa_forge_dispatch_db_colsum(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ", " + arg_strs[3] + ")"
                 }
+                // HEXA-FUSION L1 (PARAM half): device-resident int4 STE backward.
+                // forge_dispatch_int4_quant_bwd(dy, mask, dW_out, n) -> int rc. The
+                // clipped straight-through estimator is dW[i] = dy[i] · mask[i] (mask
+                // ∈ {0,1}) — a pure elementwise multiply with NO reduction, so the
+                // device kernel is trivially bit-exact to nn_int4_quant_bwd (max|Δ|=0)
+                // and keeps dW DEVICE-RESIDENT so the next _adam H2D-skips the grad
+                // (the int4 W grads escape only into _adam). no-CUDA → -1 → host STE.
+                if name == "forge_dispatch_int4_quant_bwd" {
+                    return "hexa_forge_dispatch_int4_quant_bwd(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ", " + arg_strs[3] + ")"
+                }
                 // stdlib/os/pty — 4-arg builtin (RFC stdlib-os-pty.md)
                 if name == "pty_forkexec"   { return "hexa_pty_forkexec(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ", " + arg_strs[3] + ")" }
                 // stdlib/os/exec_pipe — fork+exec with separated stdout/stderr (RFC ssh-server stderr)
@@ -7562,6 +7572,17 @@ fn gen2_expr(node) {
                 // mapping AND the runtime.h proto.)
                 if name == "forge_dispatch_matmul_batched" {
                     return "hexa_forge_dispatch_matmul_batched(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ", " + arg_strs[3] + ", " + arg_strs[4] + ", " + arg_strs[5] + ", " + arg_strs[6] + ")"
+                }
+                // HEXA-FUSION L1 (PARAM half): device-resident int4 fake-quant fwd.
+                // forge_dispatch_int4_quant(w, wq, sc, ql, mask, Cout, rest) -> int
+                // rc. Computes the per-channel int4-sym[-7,+7] quant ON DEVICE so W
+                // stays FARR_DEVICE (no per-step W D2H) and writes wq/sc/ql/mask
+                // device-resident. int4 is INTEGER rounding + per-channel sequential
+                // max → NO fp re-association → bit-exact to nn_int4_quant_fwd
+                // (max|Δ| MUST be exactly 0 — integer, no FMA-drift excuse). no-CUDA
+                // → -1 so the .hexa caller falls back to the host fake-quant (byte-eq).
+                if name == "forge_dispatch_int4_quant" {
+                    return "hexa_forge_dispatch_int4_quant(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ", " + arg_strs[3] + ", " + arg_strs[4] + ", " + arg_strs[5] + ", " + arg_strs[6] + ")"
                 }
             }
             if len(node.args) == 8 {

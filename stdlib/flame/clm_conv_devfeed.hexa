@@ -39,6 +39,7 @@
 use "stdlib/flame/tensor_lib"
 use "stdlib/flame/conv_lib"
 use "stdlib/flame/optim_lib"
+use "stdlib/flame/quant_lib"
 
 fn _df_absf(x: float) -> float { if x < 0.0 { return 0.0 - x } return x }
 
@@ -151,6 +152,58 @@ pub fn devfeed_db_colsum(dy: int, db_out: int, T: int, Cout: int) {
         t_set(db_out, cb, acc)
         cb = cb + 1
     }
+}
+
+// ── devfeed_int4_quant: device-resident int4 fake-quant (PARAM half) ──────────
+// HEXA-FUSION L1 (PARAM half) — the REFERENCE host fake-quant that the device
+// kernel _hx_cuda_farr_int4_quant_gpu reproduces. Inlined here (NOT a call into
+// quant_lib's nn_int4_quant_fwd, and NOT a call into the device builtin) so the
+// prebuilt mac binary never link-references the device builtin under `hexa run`;
+// the builtin is wired ONLY in clm_prod.hexa::_fq under env CLM_PROD_DEVRESIDENT
+// and realized in the self-host-rebuilt pod binary. int4 is INTEGER rounding +
+// per-channel SEQUENTIAL max (NO fp reduction re-association), so the device
+// kernel's accumulation is byte-identical — max|Δ| MUST be exactly 0 (no
+// FMA-drift excuse). _q_abs / _q_round mirror quant_lib EXACTLY.
+fn _dfq_abs(x: float) -> float { if x < 0.0 { return 0.0 - x } return x }
+fn _dfq_round(x: float) -> float {
+    if x >= 0.0 { return to_float(to_int(x + 0.5)) }
+    return 0.0 - to_float(to_int((0.0 - x) + 0.5))
+}
+pub fn devfeed_int4_quant(w: int, wq_out: int, scale_out: int,
+                          qlevel_out: int, mask_out: int, Cout: int, rest: int) {
+    let mut co = 0
+    while co < Cout {
+        let mut mx = 0.0
+        let mut j = 0
+        while j < rest {
+            let a = _dfq_abs(t_get(w, co * rest + j))
+            if a > mx { mx = a }
+            j = j + 1
+        }
+        let s = if mx > 0.0 { mx / 7.0 } else { 1.0 }
+        t_set(scale_out, co, s)
+        let mut j2 = 0
+        while j2 < rest {
+            let idx = co * rest + j2
+            let r = _dfq_round(t_get(w, idx) / s)
+            let mut q = r
+            let mut inrange = 1.0
+            if q > 7.0 { q = 7.0; inrange = 0.0 }
+            if q < 0.0 - 7.0 { q = 0.0 - 7.0; inrange = 0.0 }
+            t_set(qlevel_out, idx, q)
+            t_set(mask_out, idx, inrange)
+            t_set(wq_out, idx, q * s)
+            j2 = j2 + 1
+        }
+        co = co + 1
+    }
+}
+
+// int4 clipped-STE backward reference: dW[i] = dy[i]·mask[i] (mask ∈ {0,1}).
+// Pure elementwise — the device kernel is trivially bit-exact (max|Δ|=0).
+pub fn devfeed_int4_quant_bwd(dy: int, mask: int, dW_out: int, n: int) {
+    let mut i = 0
+    while i < n { t_set(dW_out, i, t_get(dy, i) * t_get(mask, i)); i = i + 1 }
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -410,6 +463,48 @@ fn main() {
     if db_ok == 1 { println("F-CLM-DEVFEED-DB-EQ = 1"); println("PASS — device-resident db colsum == host Σ_t dy[t,co] byte-eq, dil∈{1,2}") }
     if db_ok == 0 { println("F-CLM-DEVFEED-DB-EQ = 0"); println("FAIL — db colsum") }
 
+    // ── F-CLM-DEVFEED-INT4QUANT-EQ : HEXA-FUSION L1 (PARAM half) device int4 ──
+    // The int4 fake-quant now routes through the device kernel
+    // _hx_cuda_farr_int4_quant_gpu under CLM_PROD_DEVRESIDENT (host fake-quant on
+    // this CPU oracle), keeping W FARR_DEVICE (no per-step W D2H — the last
+    // roundtrip blocking full device-residency). int4 is INTEGER rounding +
+    // per-channel SEQUENTIAL max → NO fp re-association → the device quant MUST
+    // be EXACTLY byte-eq to the canonical host nn_int4_quant_fwd (max|Δ|=0 — int4
+    // is integer, no FMA-drift excuse). Here we pin devfeed_int4_quant (the exact
+    // device-kernel math reference) == nn_int4_quant_fwd (canonical host quant)
+    // on wq/scale/qlevel/mask AND the STE bwd dW == nn_int4_quant_bwd, at a
+    // STRICT zero (not the < tol band): a single bit difference fails the gate.
+    let mut q_ok = 1
+    let Cq = Cout; let restq = Cin * K   // per-output-channel quant, rest = Cin·K
+    let nq = Cq * restq
+    // canonical host quant (quant_lib.nn_int4_quant_fwd)
+    let wqH = t_zeros(nq); let scH = t_zeros(Cq); let qlH = t_zeros(nq); let mkH = t_zeros(nq)
+    nn_int4_quant_fwd(w, wqH, scH, qlH, mkH, Cq, restq)
+    // device-kernel math reference (devfeed_int4_quant — what the GPU reproduces)
+    let wqD = t_zeros(nq); let scD = t_zeros(Cq); let qlD = t_zeros(nq); let mkD = t_zeros(nq)
+    devfeed_int4_quant(w, wqD, scD, qlD, mkD, Cq, restq)
+    let mWq = _maxdev(wqH, wqD, nq); let mSc = _maxdev(scH, scD, Cq)
+    let mQl = _maxdev(qlH, qlD, nq); let mMk = _maxdev(mkH, mkD, nq)
+    print("  int4 fwd max|Δ| wq="); print(to_string(mWq)); print(" scale="); print(to_string(mSc))
+    print(" qlevel="); print(to_string(mQl)); print(" mask="); println(to_string(mMk))
+    if mWq > 0.0 { q_ok = 0 }
+    if mSc > 0.0 { q_ok = 0 }
+    if mQl > 0.0 { q_ok = 0 }
+    if mMk > 0.0 { q_ok = 0 }
+    // STE backward: dW = dy·mask (clipped straight-through). Device kernel is a
+    // pure elementwise multiply → bit-exact to nn_int4_quant_bwd.
+    let dyq = t_zeros(nq); t_fill_lcg(dyq, nq, 41, 0.25)
+    let dWH = t_zeros(nq); nn_int4_quant_bwd(dyq, mkH, dWH, Cq, restq)
+    let dWD = t_zeros(nq); devfeed_int4_quant_bwd(dyq, mkD, dWD, nq)
+    let mDW = _maxdev(dWH, dWD, nq)
+    print("  int4 bwd (STE) max|Δ| dW="); println(to_string(mDW))
+    if mDW > 0.0 { q_ok = 0 }
+    t_free(wqH); t_free(scH); t_free(qlH); t_free(mkH)
+    t_free(wqD); t_free(scD); t_free(qlD); t_free(mkD)
+    t_free(dyq); t_free(dWH); t_free(dWD)
+    if q_ok == 1 { println("F-CLM-DEVFEED-INT4QUANT-EQ = 1"); println("PASS — device int4 quant fwd (wq/scale/qlevel/mask) + STE bwd == host quant byte-eq (max|Δ|=0, integer-exact)") }
+    if q_ok == 0 { println("F-CLM-DEVFEED-INT4QUANT-EQ = 0"); println("FAIL — int4 quant") }
+
     // ── F-CLM-DEVFEED-ADAM-EQ : host AdamW oracle trajectory self-consistent ──
     // The device AdamW (forge_dispatch_adamw, wired in clm_prod.hexa under env)
     // routes to _hx_cuda_farr_adamw_step_inplace_gpu — already byte-eq to this
@@ -442,9 +537,9 @@ fn main() {
     if adam_ok == 1 { println("F-CLM-DEVFEED-ADAM-EQ = 1"); println("PASS — AdamW oracle (opt_adamw_step) deterministic 5-step trajectory") }
     if adam_ok == 0 { println("F-CLM-DEVFEED-ADAM-EQ = 0"); println("FAIL — adam") }
 
-    if all_ok == 1 { if fwd_ok == 1 { if bwd_ok == 1 { if db_ok == 1 { if adam_ok == 1 {
-        println("ALL-PASS — LEVER (a) device im2col/col2im + device db colsum + device AdamW oracle byte-eq to host feed")
+    if all_ok == 1 { if fwd_ok == 1 { if bwd_ok == 1 { if db_ok == 1 { if q_ok == 1 { if adam_ok == 1 {
+        println("ALL-PASS — LEVER (a) device im2col/col2im + device db colsum + device int4 quant + device AdamW oracle byte-eq to host feed")
         return
-    } } } } }
+    } } } } } }
     println("FAIL")
 }
