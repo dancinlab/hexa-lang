@@ -200,9 +200,30 @@ pub fn qforge_scf(H_of_rho, rho_of_psi, n: int, nbands: int, nelec: int,
 //   and_depth : Anderson history depth m (≤0 → plain linear mixing of mix).
 // With sigma≤0 AND and_depth≤0 this reproduces qforge_scf EXACTLY (a smearing/
 // mixing-disabled run is the regression pin).
+//
+// ── QFORGE-PERF: the VARIATIONAL TOTAL ENERGY (the e_dc correction) ────────────
+//   The band sum Σocc·ε − σ·S is NOT the Kohn-Sham total energy: V_H, V_xc already
+//   fold their contribution into each ε_i, so the sum DOUBLE-COUNTS Hartree+xc and
+//   OMITS the ion-ion Ewald constant. The variational E_tot is
+//     E_tot = Σocc·ε − σ·S  +  e_dc,
+//   with e_dc = (−½∫V_H·ρ) + (E_xc[ρ] − ∫V_xc·ρ) + E_ewald — the double-count
+//   correction PLUS Ewald, a value the CALLER computes from ρ (scf_etot.hexa) and
+//   passes in (d4 — the driver stays physics-agnostic; the correction is data).
+//   In the basis-DECOUPLED FDG screening this is a single NPW-independent constant
+//   (ρ̄ + Ewald), so this entry adds it as a precomputed scalar. qforge_scf_smeared
+//   delegates with e_dc=0.0 → bit-identical to the prior band-sum behaviour.
 pub fn qforge_scf_smeared(H_of_rho, rho_of_psi, n: int, nbands: int, nelec: int,
                           mix: float, tol: float, max_iter: int,
                           sigma: float, spin_deg: float, and_depth: int) -> ScfResult {
+    return qforge_scf_smeared_dc(H_of_rho, rho_of_psi, n, nbands, nelec,
+                                 mix, tol, max_iter, sigma, spin_deg, and_depth, 0.0)
+}
+
+// ── the VARIATIONAL-energy SCF (adds the precomputed double-count+Ewald e_dc) ──
+pub fn qforge_scf_smeared_dc(H_of_rho, rho_of_psi, n: int, nbands: int, nelec: int,
+                             mix: float, tol: float, max_iter: int,
+                             sigma: float, spin_deg: float, and_depth: int,
+                             e_dc: float) -> ScfResult {
     let mut a = mix
     if a <= 0.0 { a = 0.1 }
     if a > 1.0 { a = 1.0 }
@@ -266,6 +287,10 @@ pub fn qforge_scf_smeared(H_of_rho, rho_of_psi, n: int, nbands: int, nelec: int,
         if sigma > 0.0 {
             e_total = e_total - sigma * qforge_smearing_entropy(occ, sd)
         }
+        // QFORGE-PERF: add the variational double-count + Ewald correction (a
+        //   precomputed scalar, NPW-independent in the FDG path). e_dc=0 → the
+        //   bare band-sum behaviour (the regression-pin delegation above).
+        e_total = e_total + e_dc
 
         let dr_rho = scf_dmax(rho, rho_out, n)
         let dr_e = if first { tol + 1.0 } else { scf_abs(e_total - e_prev) }
