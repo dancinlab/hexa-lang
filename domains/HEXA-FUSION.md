@@ -25,7 +25,7 @@ FORGE-UTILGREEN lever-1~5 가 GEMM repack 을 전부 device 化했어도 util ME
 
 - [~] **device-resident tensor lifetime** — param/grad/moment 를 step 전체에 GPU-resident 유지(host roundtrip 0). falsifier: 기존 오라클 byte-eq max|Δ|=0 ∧ nvidia-smi devmem persist across step. **W1-① PARTIAL (PR #2555 m,v + #2559 grad-db + #2561 int4)**: m,v + bias grad db + **int4 quant(W-fwd/dW-STE, 정수-exact)** device-resident 착지(env `CLM_PROD_DEVRESIDENT`, byte-eq ALL-PASS). 잔여: dX col2im transpose(orthogonal) · self-host pod build · devmem/util fire. **③ 정밀화: 텐서 resident 만으론 부족 — op 사이 인터프리트 host glue 도 fuse 해야 util MEAN gap 닫힘**. 상세 = §W1 results.
 - [ ] **async kernel-launch pipeline + inter-op glue fusion** 〔③ 정밀화: 텐서 resident 만으론 부족〕 — step body 가 host 인터프리터 블로킹 없이 device 커널 비동기 디스패치 **AND op 사이 인터프리트 host glue(add·gelu·groupnorm·moe-router 스칼라 루프)를 device 로 fuse**(③ 가 fwd-only 내부 0% floor 로 이게 잔여 병목임을 측정). falsifier: `F-RFC046-GPU-UTILIZATION` util MEAN≥20% @ d1536/T512 (single-driver H100 sm_90 fire).
-- [ ] **fwd-only fused device kernel 프로토타입 + util Δ probe** (safe falsifier — 풀포트 전) — fwd path 만 device-resident fuse 해 util Δ 측정(lever-4 fire pod 재사용). 풀 train-step fusion 의 ROI 를 싸게 검증.
+- [x] **fwd-only fused device kernel 프로토타입 + util Δ probe** ✅ W1-③ — H100 fwd-only fire: MEAN 0.56→**2.83%** (5×↑) PEAK 21→**81%**, 여전히 RED. **진단**: device 는 세게 돌 수 있음 + binding = 인터프리트 per-step glue(GEMM 아님). 텐서 resident 만으론 부족 → inter-op glue fusion(⑤) 필요. 상세 = §W1 results.
 
 ### L2 — graph capture (= torch.compile / CUDA-graph 수준)
 
@@ -165,6 +165,17 @@ F-CLM-DEVFEED-FWD-EQ = 1 (fwd dil=1,2 max|Δ|=0.0)
 | **fwd-only (③)** | **81%** | **2.83%** |
 
 **HONEST: 부분적으로 움직임 — MEAN 0.56→2.83% (5×↑), PEAK 21→81%, 단 여전히 RED**(78.6% 샘플 0%). **결정적 정밀화**: PEAK 81% = device 를 세게 driven 가능 증명 + bwd/AdamW host tail 제거가 util 회복 ⇒ binding = **인터프리트 per-step driver loop(F-RFC046 root), NOT GEMM kernels** 재확정. 그러나 fwd-only 내부 0% 잔여 floor = **텐서 device-resident 만으론 부족, op 사이 인터프리트 host glue(add·gelu·groupnorm·moe-router 스칼라 루프)도 fuse 해야 MEAN→20% 닫힘** ⇒ ②(async-launch)·⑤(fwd+bwd fusion)의 진짜 과제 = inter-op glue 제거. verdict: `.verdicts/hexa-fusion-l1-fwdonly/F-RFC046-FWDONLY-UTIL.txt`. raw-GEMM 우위 주장 0.
+
+### ⑤ inter-op glue fusion (slice 1: residual-add) — ✅ (branch `fusion/l3-glue-fuse-slice` @7c820b56d, base #2561 · PR=UI-pending)
+
+③ 가 찾은 잔여 floor 의 최고빈도 glue: 잔차 `xt = xec + hg0`(매 step T·d host scalar 루프, t-conv↔router-conv GEMM 사이)을 device 로. `forge_dispatch_residual_add` → `_hx_cuda_farr_residual_add_gpu` grid-stride, 출력 `FARR_DEVICE dirty_host=0`.
+
+```
+residual-add max|Δ| out=0.0
+F-CLM-DEVFEED-RESIDUAL-EQ = 1
+ALL-PASS (im2col/fwd/bwd/db/int4quant/adam 전부 max|Δ|0.0 유지)
+```
+verdict: `.verdicts/hexa-fusion-l3-glue/F-CLM-DEVFEED-RESIDUAL-EQ.txt`. **잔여 glue inventory(fuse 우선순위)**: gelu ×3 → groupnorm ×2 → expert-pack copy → moe-router → embedding. 각 byte-eq-gated stacked slice. 전부 fuse → 인터프리터가 fwd hot path 이탈 → W2 self-host pod util fire 가능. raw-GEMM 우위 주장 0. **⚠ PR=UI-pending**: org `dancinlab` 이 classic-PAT PR 생성 차단(403) → 브랜치는 origin durable, PR 은 UI/fine-grained token 으로 개설 필요.
 
 ### ⑦ operator surgical override — ✅ (PR #2556, base main, emit Δ ∧ byte-eq)
 
