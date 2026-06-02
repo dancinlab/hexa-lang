@@ -2255,7 +2255,13 @@ fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
 
 // ── Function lowering ────────────────────────────────────────
 
-fn _arm64_lower_func(mf: MFunc, st: ArmStrTab, modhash: string) -> LFunc {
+// SELFHOST-NEXT linux-arm64: `cg_target` selects the AArch64 *platform*
+// (Mach-O "arm64-apple-darwin" vs ELF "arm64-linux-gnu"). The instruction
+// lowering below is target-shared — `cg_target` only flows into the LFunc/
+// LModule `target` field so the downstream emit pass picks ELF sections +
+// bare labels (see compiler/emit/asm.hexa _is_elf_arm64). Default callers
+// pass "arm64-apple-darwin" → byte-identical Mach-O output.
+fn _arm64_lower_func(mf: MFunc, st: ArmStrTab, modhash: string, cg_target: string) -> LFunc {
     // Cycle 56 recovery: opts not threaded through _arm64_lower_func
     // signature (would require touching codegen_arm64_darwin caller
     // + every other call). Use codegen_options_default() locally —
@@ -2442,7 +2448,7 @@ fn _arm64_lower_func(mf: MFunc, st: ArmStrTab, modhash: string) -> LFunc {
         if last.op == "ret" {
             return LFunc {
                 name: fn_name,
-                target: "arm64-apple-darwin",
+                target: cg_target,
                 instrs: instrs,
                 frame_size: 16 + total_frame,
                 callee_saved: [],
@@ -2466,7 +2472,7 @@ fn _arm64_lower_func(mf: MFunc, st: ArmStrTab, modhash: string) -> LFunc {
 
     return LFunc {
         name: fn_name,
-        target: "arm64-apple-darwin",
+        target: cg_target,
         instrs: instrs,
         frame_size: 16 + total_frame,
         callee_saved: [],
@@ -2740,6 +2746,18 @@ fn _strtab_to_rodata(st: ArmStrTab) -> [LSection] {
 // default `opts` argument (any diff would mean an accidental capture
 // of `opts.shared` somewhere in the body).
 pub fn codegen_arm64_darwin(module: MModule, opts: CodegenOptions) -> LModule {
+    // SELFHOST-NEXT linux-arm64: same arm64 instruction codegen serves both
+    // the Mach-O (darwin) and ELF (linux-gnu) AArch64 platforms. The only
+    // delta is the `target` string stamped on the LFunc/LModule, which the
+    // emit pass keys on for ELF sections + bare (no `_`) symbol labels.
+    // `opts.target_triple == "arm64-linux-gnu"` selects ELF; any other value
+    // (incl. the default empty string) keeps the historical Mach-O output
+    // byte-identical.
+    let mut cg_target = "arm64-apple-darwin"
+    if opts.target_triple == "arm64-linux-gnu" {
+        cg_target = "arm64-linux-gnu"
+    }
+    let elf = cg_target == "arm64-linux-gnu"
     let st = _build_arm_strtab(module)
     let mut funcs = []
     let mut i = 0
@@ -2747,7 +2765,7 @@ pub fn codegen_arm64_darwin(module: MModule, opts: CodegenOptions) -> LModule {
         // Stage1 C8 — recompute modhash inline at every call site so
         // stage0's transitive-let binding gap (see _STMT_* mirror at
         // top of this file) cannot hand the lowering pass a void.
-        funcs.push(_arm64_lower_func(module.funcs[i], st, _arm64_modhash(module.file)))
+        funcs.push(_arm64_lower_func(module.funcs[i], st, _arm64_modhash(module.file), cg_target))
         i = i + 1
     }
     // Emit a writable 16-byte slot per module-level mutable global
@@ -2761,7 +2779,14 @@ pub fn codegen_arm64_darwin(module: MModule, opts: CodegenOptions) -> LModule {
     let mut gnames: [string] = []
     let mut gi = 0
     while gi < len(module.globals) {
-        gnames.push("_g" + to_string(module.globals[gi].id))
+        // Mach-O user symbols carry the leading `_`; ELF symbols are bare.
+        // The emit-side _fmt_label adds the `_` for darwin only, so the
+        // data label must match the reference spelling on each platform.
+        if elf {
+            gnames.push("g" + to_string(module.globals[gi].id))
+        } else {
+            gnames.push("_g" + to_string(module.globals[gi].id))
+        }
         gi = gi + 1
     }
     // Float-pool entries from the strtab → LFloat list. `.LC*` is a
@@ -2783,7 +2808,7 @@ pub fn codegen_arm64_darwin(module: MModule, opts: CodegenOptions) -> LModule {
     }
     return LModule {
         file: module.file,
-        target: "arm64-apple-darwin",
+        target: cg_target,
         funcs: funcs,
         rodata: _strtab_to_rodata(st),
         bss: [],
