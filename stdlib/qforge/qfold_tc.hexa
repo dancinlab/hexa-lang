@@ -1,0 +1,125 @@
+// HEXA Standard Library — qforge/qfold_tc
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// QFORGE real-cell q-resolved Tc CLOSURE — the rung ABOVE qfold_dispersion.
+//
+// ── WHY THIS EXISTS (the seam qfold_dispersion left open, d6) ────────────────
+// qfold_dispersion (#2596) wired the real-cell BZ phonon dispersion into the
+// momentum-conserving α²F → λ sum and returned a QfoldElphResult carrying the
+// q-resolved λ and ω_log. But it STOPS at λ·ω_log: nothing turned that real-cell
+// q-resolved coupling INTO a superconducting Tc. Tc is the actual observable the
+// whole engine exists to predict — and the verified Tc predictors already live
+// one folder over (stdlib/qforge/tc): the Allen-Dynes fit and the isotropic
+// Migdal-Eliashberg Matsubara eigenvalue solve. They were never wired to the
+// q-resolved composer's output. THIS brick is that one-call closure:
+//
+//   realcell_qmesh ── qmesh_qfold ── qfold_dispersion  (λ, ω_log)   [#2596]
+//                                              │
+//                          qforge_tc_allen_dynes(λ, ω_log, μ*)       (L0, fit)
+//                          qforge_tc_eliashberg_from_lambda(...)     (L1, gap solve)
+//                                              ▼
+//                                       Tc_AD · Tc_ME (K)
+//
+// ── d4 GENERIC — caller hands the same dispersion + provider, plus μ* ────────
+// This module knows NOTHING about CaH6 / LaH10. It takes the exact argument set
+// qforge_qfold_dispersion_lambda already takes (a real QmeshDispersion + a g2
+// provider + the band table), adds only μ* and the Eliashberg Matsubara count,
+// and runs the full chain. ONE path, every cell — add/swap a cell = change the
+// dispersion/provider, no branch on a material name.
+//
+// ── HONEST scope (d6 / @L5) ──────────────────────────────────────────────────
+// The λ·ω_log are whatever the real broadened q-resolved sum gives — nothing is
+// tuned toward a QE reference. Tc is the deterministic image of that λ·ω_log
+// under the two verified predictors. A SYNTHETIC-cell witness is NOT physical
+// CaH6 and this closure does NOT flip any migration gate; it supplies the
+// λ·ω_log → Tc MACHINERY only. The selftest pins closed-form identities, not a
+// physical Tc claim.
+//
+// d3/d19 reuse (compose, don't reinvent — every brick below is verified 🟢/🔵):
+//   - real-cell q-resolved λ·ω_log : stdlib/qforge/qfold_dispersion (#2596)
+//   - Allen-Dynes Tc fit           : stdlib/qforge/tc (qforge_tc_allen_dynes)
+//   - isotropic Eliashberg Tc      : stdlib/qforge/tc (qforge_tc_eliashberg_from_lambda)
+// New code here = the QfoldElphResult → (Tc_AD, Tc_ME) ADAPTER + the one-call
+// composer ONLY. Zero physics is re-implemented; no Tc/λ formula is duplicated.
+
+use "stdlib/qforge/qfold_dispersion"
+use "stdlib/qforge/realcell_qmesh"   // QmeshDispersion (the input dispersion type)
+use "stdlib/qforge/qmesh_qfold"      // QfoldElphResult (the λ·ω_log carrier)
+use "stdlib/qforge/tc"               // qforge_tc_allen_dynes · qforge_tc_eliashberg_from_lambda
+
+// ── the result: the q-resolved λ·ω_log witnesses PLUS the two Tc closures ─────
+// Carries the upstream QfoldElphResult fields VERBATIM (so a caller need not run
+// the composer separately) and adds the two Tc predictions. ok==0 + a sentinel
+// (Tc = -1) propagates any upstream composer failure loud, never a silent wrong Tc.
+pub struct QfoldTcResult {
+    ok:        int,
+    err:       str,
+    lambda:    float,   // q-resolved BZ-summed QFORGE-NC λ (from qfold_dispersion)
+    omega_log: float,   // ω_log of the composed spectrum (K)
+    tc_ad:     float,   // Allen-Dynes Tc (K) — the closed-form strong-coupling fit
+    tc_me:     float,   // isotropic Migdal-Eliashberg Tc (K) — the Matsubara solve
+    n_qhit:    int      // distinct transfer q-indices hit (q-coverage witness)
+}
+
+fn _qftc_sentinel(err: str) -> QfoldTcResult {
+    return QfoldTcResult { ok: 0, err: err, lambda: -1.0, omega_log: -1.0,
+                           tc_ad: -1.0, tc_me: -1.0, n_qhit: 0 }
+}
+
+// ── the ADAPTER: a finished QfoldElphResult → (Tc_AD, Tc_ME) ─────────────────
+// Stateless, also unit-tested directly: given the λ·ω_log a composer already
+// produced, run BOTH verified Tc predictors. Allen-Dynes uses ω_log directly;
+// the isotropic Eliashberg solve models the coupling as a single Einstein mode
+// at ω_log (the L1.2 qforge_tc_eliashberg_from_lambda contract — the apples-to-
+// apples counterpart of the Allen-Dynes scalar entry). A non-ok / non-physical
+// upstream (λ ≤ 0 or ω_log ≤ 0) → sentinel (no superconductivity / bad input).
+//   r       : a QfoldElphResult from qforge_qfold_dispersion_lambda (#2596).
+//   mu_star : Coulomb pseudopotential μ* (e.g. 0.10–0.13).
+//   n_mats  : positive Matsubara frequencies for the Eliashberg solve (256–512).
+pub fn qforge_qfold_tc_from_result(r: QfoldElphResult, mu_star: float,
+                                   n_mats: int) -> QfoldTcResult {
+    if r.ok == 0 { return _qftc_sentinel(r.err) }
+    if r.lambda <= 0.0 || r.omega_log <= 0.0 {
+        return _qftc_sentinel("non-physical upstream (lambda<=0 or omega_log<=0)")
+    }
+    // forward to the verified Tc predictors — zero new physics.
+    let tc_ad = qforge_tc_allen_dynes(r.lambda, r.omega_log, mu_star)
+    let tc_me = qforge_tc_eliashberg_from_lambda(r.lambda, r.omega_log,
+                                                 mu_star, n_mats)
+    return QfoldTcResult { ok: 1, err: "", lambda: r.lambda,
+                           omega_log: r.omega_log, tc_ad: tc_ad, tc_me: tc_me,
+                           n_qhit: r.n_qhit }
+}
+
+// ── COMPOSE: real-cell q-resolved Tc from a QmeshDispersion + a g2 provider ──
+// The one-call full chain: drive the verified qfold_dispersion composer to get
+// the real-cell q-resolved λ·ω_log, then close it to Tc via the adapter above.
+// Takes the SAME argument set as qforge_qfold_dispersion_lambda (#2596) PLUS
+// μ* and the Eliashberg Matsubara count — every other argument is forwarded
+// VERBATIM so the q-mesh / k-mesh / broadening contracts are identical (d4).
+//   disp     : real ω(q,ν) over the q-mesh (from realcell_qmesh).
+//   eps, wk  : [nk·nb] band energies (k-major) + [nk] BZ weights.
+//   n1,n2,n3 : k-mesh dims; product == nk == disp.nq (same commensurate mesh).
+//   nb       : active band count.   g2_of : (i,j) -> [nb*nb] |g_mn|² (caller physics).
+//   e_fermi/n_ef : Fermi level + real N(E_F) (Allen 1/N(E_F) normalizer).
+//   omega_grid   : α²F frequency grid (K).
+//   sigma_el/sigma_ph : Fermi-surface δ-smear (eps) / α²F δ-smear (K).
+//   mass_amu : F1 displaced-atom mass (amu); >0 → fold ℏ/(2 M ω) per mode.
+//   tol      : soft/acoustic ω drop cutoff (e.g. 1.0e-6).
+//   mu_star  : Coulomb pseudopotential μ*.   n_mats : Eliashberg Matsubara count.
+pub fn qforge_qfold_dispersion_tc(disp: QmeshDispersion,
+                                  eps: [float], wk: [float],
+                                  n1: int, n2: int, n3: int, nb: int,
+                                  g2_of,
+                                  e_fermi: float, n_ef: float,
+                                  omega_grid: [float],
+                                  sigma_el: float, sigma_ph: float,
+                                  mass_amu: float, tol: float,
+                                  mu_star: float, n_mats: int) -> QfoldTcResult {
+    let r = qforge_qfold_dispersion_lambda(disp, eps, wk, n1, n2, n3, nb,
+                                           g2_of, e_fermi, n_ef, omega_grid,
+                                           sigma_el, sigma_ph, mass_amu, tol)
+    return qforge_qfold_tc_from_result(r, mu_star, n_mats)
+}
