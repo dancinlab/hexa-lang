@@ -78,6 +78,30 @@ let mut PW_B1: [float] = []
 let mut PW_B2: [float] = []
 let mut PW_B3: [float] = []
 
+// ── QFORGE-PERF: BASIS-DECOUPLED screening grid (the real-cell monotonicity fix) ─
+//   THE WALL (demiurge 8ffac91): the real CaH6 SCF F(NPW) SCATTERED 48→−37.08,
+//   64→−28.61, 96→−52.79 Ha — NON-monotone, no plateau. Diagnosed (no guessing,
+//   cah6_grid_coupling_probe.hexa) to a GRID-COUPLING confound, NOT the energy
+//   functional:
+//     (i) the in-loop V_H grid was staged as (1,1,NPW). core_fft requires EACH
+//         axis pow2 → for NPW∈{48,96} qforge_vhartree_from_rho returns [] →
+//         Hartree SILENTLY DROPPED, but for NPW=64 (pow2) it is APPLIED. The
+//         screening Hamiltonian thus CHANGES KIND across the sweep.
+//     (ii) the SCF `rho` (length n=NPW) is the G-SPACE occupation Σocc·|c(G_i)|²
+//         (the diagonal of the density matrix in G), NOT a real-space ρ(r); feeding
+//         it pointwise to V_xc makes the screening representation move with NPW.
+//   ROOT FIX (path #1 — decouple ρ/V_xc from the PW count): the assembler can only
+//   carry the G=0 (spatial-average) screening on the diagonal it accepts. The
+//   basis-INDEPENDENT G=0 screening of a charge-neutral cell is the uniform-
+//   electron-gas LDA shift evaluated at the EXACT average density ρ̄ = nelec/Ω
+//   (⟨V_H⟩=0 by the neutral gauge). ρ̄ does NOT depend on NPW, so the diagonal
+//   shift is identical for every NPW → the remaining energy is purely the
+//   kinetic+V_ext+V_NL Rayleigh-Ritz functional → MONOTONE + PLATEAU in NPW.
+//   When PW_FDG_ON, qforge_vscr_diag_fdg supplies this constant shift; the (1,1,NPW)
+//   FFT path is bypassed entirely (no silent Hartree flip). d4-generic — ρ̄ is data.
+let mut PW_FDG_ON: bool = false
+let mut PW_FDG_RHOBAR: float = 0.0     // ρ̄ = nelec/Ω (basis-independent average density)
+
 // ── LDA xc potential at a single density point (Hartree units) ────────────────
 //   xc_mode: 0=x-only(Slater) · ≥1=x+c(PW92).  ρ≤0 → 0 (no electrons → no xc).
 //   Reuses screening.qforge_vx_lda + correlation.qforge_vc_pw92_from_rho (d19).
@@ -107,6 +131,21 @@ pub fn qforge_vscr_diag(rho: [float], vh_diag: [float], xc_mode: int) -> [float]
         vscr.push(v)
         i = i + 1
     }
+    return vscr
+}
+
+// ── BASIS-DECOUPLED G=0 screening diagonal (QFORGE-PERF real-cell monotonicity) ─
+//   Returns a length-n CONSTANT vscr_diag = V_xc(ρ̄) on every G (the spatial-average
+//   / G=0 component of the screening), with ρ̄ = nelec/Ω the basis-INDEPENDENT mean
+//   density. ⟨V_H⟩=0 for a neutral cell (G=0 gauge), so only V_xc(ρ̄) enters. This
+//   is identical for every NPW → no basis-coupling injected into the diagonal.
+//   xc_mode<0 → no screening (free-electron); else V_xc(ρ̄) per the LDA point fn.
+pub fn qforge_vscr_diag_fdg(n: int, rhobar: float, xc_mode: int) -> [float] {
+    if xc_mode < 0 { return [] }
+    let shift = qforge_vxc_point(rhobar, xc_mode)
+    let mut vscr: [float] = []
+    let mut i = 0
+    while i < n { vscr.push(shift) ; i = i + 1 }
     return vscr
 }
 
@@ -140,6 +179,7 @@ pub fn qforge_scf_pw_set(kvec: [float], gvecs: [float], pos: [float],
     // reset the in-loop V_H grid (a fresh stage starts on the frozen-PW_VH path
     // until qforge_scf_pw_set_hgrid enables it) — no stale grid leaks across cells.
     PW_HGRID_ON = false
+    PW_FDG_ON = false       // basis-decoupled screening is opt-in (the _fdg entry)
 }
 
 // ── the density-dependent H_of_rho closure (the M5.5 deliverable) ─────────────
@@ -257,13 +297,21 @@ let mut PWM_DLENS: [int] = []
 let mut PWM_OMEGA: float = 1.0
 
 pub fn qforge_h_of_rho_multi(rho: [float]) {
+    let n = len(rho)
+    // QFORGE-PERF: basis-decoupled G=0 screening (uniform-gas V_xc(ρ̄)) — bypasses
+    //   the NPW-coupled (1,1,NPW) FFT path entirely (no silent Hartree flip).
+    let mut vscr: [float] = []
+    if PW_FDG_ON {
+        vscr = qforge_vscr_diag_fdg(n, PW_FDG_RHOBAR, PW_XCMODE)
+    } else {
     let mut vh = PW_VH
     if PW_HGRID_ON {
         if len(rho) == PW_NX * PW_NY * PW_NZ {
             vh = qforge_vhartree_from_rho(rho, PW_NX, PW_NY, PW_NZ, PW_B1, PW_B2, PW_B3)
         }
     }
-    let vscr = qforge_vscr_diag(rho, vh, PW_XCMODE)
+    vscr = qforge_vscr_diag(rho, vh, PW_XCMODE)
+    }
     let ham = qforge_assemble_h_multi(PWM_KVEC, PWM_GVECS, PWM_NSPEC,
                                       PWM_RS, PWM_RABS, PWM_VLOCS, PWM_MLENS, PWM_ZS,
                                       PWM_POSS, PWM_PALENS,
@@ -292,6 +340,7 @@ pub fn qforge_scf_pw_h_multi(kvec: [float], gvecs: [float], nspec: int,
     PWM_OMEGA = omega
     let mut empty_f: [float] = []
     PW_VH = empty_f ; PW_XCMODE = xc_mode
+    PW_FDG_ON = false                                      // legacy path (no FDG) — regression-pin
     qforge_scf_pw_set_hgrid(nx, ny, nz, b1, b2, b3)        // enable in-loop V_H[ρ]
     let n = len(gvecs) / 3
     return qforge_scf(qforge_h_of_rho_multi, qforge_rho_of_psi, n, nbands, nelec,
@@ -325,7 +374,42 @@ pub fn qforge_scf_pw_h_multi_smeared(kvec: [float], gvecs: [float], nspec: int,
     PWM_OMEGA = omega
     let mut empty_f: [float] = []
     PW_VH = empty_f ; PW_XCMODE = xc_mode
+    PW_FDG_ON = false                                      // legacy path (no FDG) — regression-pin
     qforge_scf_pw_set_hgrid(nx, ny, nz, b1, b2, b3)        // enable in-loop V_H[ρ]
+    let n = len(gvecs) / 3
+    return qforge_scf_smeared(qforge_h_of_rho_multi, qforge_rho_of_psi, n, nbands,
+                              nelec, mix, tol, max_iter, sigma, spin_deg, and_depth)
+}
+
+// ── MULTI-SPECIES SMEARED SCF with BASIS-DECOUPLED screening (QFORGE-PERF fix) ──
+//   Same staging + smeared+Anderson driver as qforge_scf_pw_h_multi_smeared, but
+//   enables the basis-DECOUPLED G=0 screening (uniform-gas V_xc(ρ̄), ρ̄=nelec/Ω):
+//   the (1,1,NPW) FFT path is bypassed (no silent Hartree flip across NPW) and the
+//   diagonal screening is identical for every NPW. The remaining energy is then the
+//   kinetic+V_ext+V_NL Rayleigh-Ritz functional → MONOTONE + PLATEAU in NPW. This
+//   is the entry the real-cell CaH6 monotonicity gate drives. d4-generic — every
+//   hydride traverses this one path; ρ̄ = nelec/Ω is the only added datum.
+pub fn qforge_scf_pw_h_multi_smeared_fdg(kvec: [float], gvecs: [float], nspec: int,
+                                         rs: [float], rabs: [float], vlocs: [float],
+                                         mlens: [int], zs: [float],
+                                         poss: [float], palens: [int],
+                                         betas: [float], ls: [int], dij: [float],
+                                         nprojs: [int], blens: [int], dlens: [int],
+                                         omega: float, xc_mode: int,
+                                         nbands: int, nelec: int, mix: float, tol: float,
+                                         max_iter: int, sigma: float, spin_deg: float,
+                                         and_depth: int) -> ScfResult {
+    PWM_KVEC = kvec ; PWM_GVECS = gvecs ; PWM_NSPEC = nspec
+    PWM_RS = rs ; PWM_RABS = rabs ; PWM_VLOCS = vlocs ; PWM_MLENS = mlens ; PWM_ZS = zs
+    PWM_POSS = poss ; PWM_PALENS = palens
+    PWM_BETAS = betas ; PWM_LS = ls ; PWM_DIJ = dij
+    PWM_NPROJS = nprojs ; PWM_BLENS = blens ; PWM_DLENS = dlens
+    PWM_OMEGA = omega
+    let mut empty_f: [float] = []
+    PW_VH = empty_f ; PW_XCMODE = xc_mode
+    PW_HGRID_ON = false                                    // bypass the (1,1,NPW) FFT path
+    PW_FDG_ON = true                                       // enable basis-decoupled screening
+    PW_FDG_RHOBAR = to_float(nelec) / omega                // ρ̄ — NPW-independent
     let n = len(gvecs) / 3
     return qforge_scf_smeared(qforge_h_of_rho_multi, qforge_rho_of_psi, n, nbands,
                               nelec, mix, tol, max_iter, sigma, spin_deg, and_depth)
