@@ -222,3 +222,40 @@ lever-3 batched GEMM-feed 의 **util≥20% pod fire** 를 깨끗한 single-drive
 
 다음 세션 시작점: lever-4 (fused step driver) 소스 구현 → 깨끗한 H100 sm_90 self-host 빌드 → 3-gate →
 pod byte-eq(F-RFC046-FUSED-STEP-EQ 추가) → util fire. before=0.5616%. 날조 0 · g5 verbatim · a_scale_honest_scope.
+
+## 2026-06-02 — lever-4 fused AdamW group fire CLOSED + lever-5 workload-bound SWEEP (TERMINAL)
+substrate = GPU (Lane G) · pod vast 39139563 (H100 80GB HBM3, sm_90 / compute_cap 9.0, ssh4.vast.ai) · REUSED (no re-rent).
+
+### lever-4 (fused AdamW group) — 3-GATE + BYTEEQ + util fire
+- 3-GATE PASS: GATE1 CUDA link ENGAGED=1 · GATE2 nvcc -x cu sm_90 EXIT 0 obj=664048B err=0 · GATE3 clm_prod ldd 4 cuda libs (libcublas/libcudart/libcuda.so.1/libcublasLt) + adamw_group symbol.
+- BYTEEQ-PASS (g5 verbatim, host oracles + ON-DEVICE HEXA_CUDA): clm_gemmfeed_eq · clm_batched_gemmfeed_eq · clm_conv_devfeed · clm_conv_batched · clm_fused_step_eq — incl on-device `F-RFC046-FUSED-STEP-EQ=1` + `F-RFC046-ADAMW-GROUP-EQ=1`, all max|Δ|=0.0.
+- DESCENT 🟢 GREEN: CE 4.05535 → 2.99508, F-CLM-PROD-DESCENT=1.
+- util 🔴 RED (g5 verbatim): `UTIL n=9153 PEAK=41% MEAN=0.6630% busy_ge20=80 pct_ge20=0.87%`.
+- ckpt `.verdicts/lane-g-lever4/clm_lever4_d1536_t512.clm`. HF PRIVATE (closure-FAIL).
+- 17 host crossings 제거(adamw_group)했어도 MEAN flat(0.4879→0.6630%), PEAK 상승(35→41%) ⇒ crossing-count ≠ MEAN binding constraint.
+
+### lever-5 (workload-bound disambiguation SWEEP) — A vs B
+방법: lever-4 byte-identical clm_prod 으로 apples(d1536/T512=lever-4 정확 config) + 3 LARGER config. nvidia-smi util@0.1s · devmem@0.5s · descent per config. CLM_PROD_DEVFEED=1 BATCHED=1 HEXA_CUDA_LINK=1. 전 config FIRE_RC=0.
+
+util (g5 verbatim, /root/lever5_sweep.log → .verdicts/lane-g-lever5/):
+```
+UTIL[apples] n=9149  PEAK=38% MEAN=0.6619% busy_ge20=81  pct_ge20=0.89% pct_ge50=0.00%  DEVMEM 20447MiB
+UTIL[d3072]  n=11441 PEAK=78% MEAN=0.7152% busy_ge20=125 pct_ge20=1.09% pct_ge50=0.39%  DEVMEM 26405MiB
+UTIL[t1024]  n=5892  PEAK=38% MEAN=0.5883% busy_ge20=35  pct_ge20=0.59% pct_ge50=0.00%  DEVMEM 15097MiB
+UTIL[big]    n=8931  PEAK=75% MEAN=0.6838% busy_ge20=87  pct_ge20=0.97% pct_ge50=0.32%  DEVMEM 23215MiB
+```
+descent (전 config 🟢 GREEN, F-CLM-PROD-DESCENT=1): apples 4.05535→2.99508 · d3072 4.48673→3.96246 · t1024 4.20807→3.36669 · big 4.60325→4.22859.
+
+apples-to-apples: lever-4 PEAK41%/MEAN0.6630% vs lever-5 apples PEAK38%/MEAN0.6619% — 샘플링 노이즈 내 재현 (byte-identical build). harness sound.
+
+### A-vs-B RULING = (B) WORKLOAD-BOUND · host-feed axis CLOSED-NEGATIVE
+- 8× per-step work sweep 에서 PEAK 38→78% 배증, MEAN 0.59-0.72% PINNED. bigger work 가 MEAN 못 올림.
+- (A) crossing-bound 배제: d3072 는 crossing 개수 = apples 와 동일, crossing 당 device compute ~4×. fixed-count launch latency 가 binding 이었으면 MEAN 상승했어야. 안 올랐음(+0.05pp). PEAK 78% = 커널이 SM 더 점유하나 GPU wall-time ~99.3% idle.
+- root residual = 인터프리트 host per-step 드라이버 루프 wall-time (hexa scalar fwd/CE/bwd ~13ns/op · ~104M op/step @ d1536 ≈ ~1.4s/step · model 크기 비례 → d3072 host gap 도 ~4× → busy fraction flat). 잔여 ~11 crossing = constraint 아님, 인터프리터 = constraint.
+- lever curve (MEAN flat · PEAK monotone = workload-bound 시그니처): l1 0.811%/6% → l2 0.4999%/19% → l3 0.4879%/35% → l4 0.6630%/41% → l5 0.59-0.72%/up to 78%.
+
+### VERDICT = HONEST TERMINAL of host-feed util lever chain
+util-GREEN(MEAN≥20%∧PEAK≥20%) 어떤 config 에서도 미도달, MEAN 천장 ~0.72%. host-feed/crossing-count axis CLOSED-NEGATIVE — 추가 host-feed lever 로 MEAN 불가. 治: (i) 전체 device-resident model port (fwd+CE+bwd 그래프 CUDA C 재작성 — feed lever 아닌 production model rewrite) 또는 (ii) d3072/T1024 훨씬 너머의 production scale. a_scale_honest_scope: d1536 MEAN-util = workload-size + interpreter-wall artifact 이지 forge 결함 아님 (forge provably device-resident 20-26GB · PEAK 78% · byte-eq PRESERVED · descent GREEN 전 config).
+
+Lane G PUBLIC milestone NOT 도달 (util-GREEN 미달) — workload-bound terminal note 유지. 3B/7B chain = util-GREEN gate 미통과로 BLOCKED 유지 (production-scale device-port 가 진짜 unblock).
+pod 39139563 RUNNING 유지 (sweep, no teardown). 날조 0 · g5 verbatim.
