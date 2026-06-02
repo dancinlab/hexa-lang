@@ -7,17 +7,38 @@
 //  with a whole-file sha256 manifest. Round-trips through write_bytes /
 //  read_file_bytes; floats via the f32_to_bytes_le / bytes_to_f32_le builtins.
 //
-//  Layout (this PR — int4 inference track, the .clm.i 2-track member):
+//  Layout v0.1 (int4 inference track, the .clm.i 2-track member):
 //    [MAGIC "CLM\x01"] [nblocks u8]
 //    per block: [Cout u32-le][rest u32-le]
 //               [int4 nibbles: ceil(Cout*rest/2) bytes, (q+8) packed 2/byte]
 //               [qat_scale: Cout * 4 bytes fp32-le]
 //    (fp16 shadow track + HEADER/MANIFEST json are layered in a later PR.)
 //
+//  Layout v0.2 (BACKWARD-COMPATIBLE extension — embed table + GroupNorm affine
+//  + conv biases, per anima:CLM/CLM_FORMAT_SPEC.md §2 v0.2):
+//    ... v0.1 [MAGIC][nblocks=6][6 conv blocks] ...
+//    [EXT_MAGIC "CLMX" = 67,76,77,88] [n_ext u8]
+//    per ext entry: [len u32-le] [len × fp32-le]      // FULL-PRECISION fp32
+//  The extension is APPENDED AFTER the v0.1 conv blocks. A v0.1 reader reads
+//  exactly `nblocks` conv blocks and STOPS — it never looks past block 6, so an
+//  old reader is byte-unaffected (backward-read PRESERVED). A v0.2 reader, after
+//  the 6 conv blocks, peeks for the "CLMX" ext-magic; absent ⇒ legacy 6-block
+//  file (embed/GN reconstructed by the decoder stand-in); present ⇒ the trained
+//  embed table + GN affine (tgG/tgB/noG/noB) + conv biases are read VERBATIM at
+//  fp32 (these are precision-critical for CE descent and small in count, so they
+//  are stored full-precision, NOT int4-quantized).
+//
+//  Ext entry order (must match clm_prod_fwd's parameter set):
+//    0 embed[V·d]  1 ecB[d]  2 tcB[d]  3 e0B[d]  4 e1B[d]  5 rB[E]  6 roB[V]
+//    7 tgG[d]  8 tgB[d]  9 noG[d]  10 noB[d]
+//
 //  F-CLM-CKPT-ROUNDTRIP: save→load reproduces every block byte-identically —
 //  int4 codes exact (integer) and qat_scale identical at fp32 (f32 byte-equal).
 //  Since loaded (wq, scale) == saved, the dequantized weights and hence the
 //  logits are reproduced (determinism); the gate asserts the (wq, scale) pair.
+//  F-CLM-CKPT-EXT-ROUNDTRIP: the v0.2 ext trailer save→load reproduces every
+//  fp32 ext entry byte-identically (f32 byte-equal), AND a v0.1 reader on a v0.2
+//  file still reads the 6 conv blocks unchanged (backward-read preserved).
 // ════════════════════════════════════════════════════════════════════════════
 
 use "stdlib/flame/tensor_lib"
@@ -42,6 +63,55 @@ fn _push_f32(buf, f: float) {
     let b = f32_to_bytes_le(f)
     let mut i = 0
     while i < 4 { buf.push(b[i]); i = i + 1 }
+}
+
+// ── v0.2 extension trailer (embed + GN affine + conv biases) ─────────────────
+// EXT_MAGIC "CLMX" = 67('C') 76('L') 77('M') 88('X'). Each ext entry is a
+// length-prefixed fp32-le vector (FULL precision — descent-critical + small).
+
+// clm_ext_save_entry — append one fp32 ext vector: [len u32-le][len × fp32-le].
+pub fn clm_ext_save_entry(buf, t: int, n: int) {
+    _push_u32(buf, n)
+    let mut i = 0
+    while i < n { _push_f32(buf, t_get(t, i)); i = i + 1 }
+}
+
+// clm_ext_begin — append the ext-magic + entry count. Call ONCE after the v0.1
+// conv blocks, before the ext entries.
+pub fn clm_ext_begin(buf, n_ext: int) {
+    buf.push(67); buf.push(76); buf.push(77); buf.push(88)   // "CLMX"
+    buf.push(n_ext)
+}
+
+// clm_ext_present — does the byte buffer carry a v0.2 ext trailer starting at
+// `off` (the byte index right after the last v0.1 conv block)? Backward-safe:
+// a legacy v0.1 file has no bytes there (or non-CLMX bytes) → false.
+pub fn clm_ext_present(rb, off: int) -> int {
+    if off + 5 > len(rb) { return 0 }
+    if rb[off] == 67 && rb[off+1] == 76 && rb[off+2] == 77 && rb[off+3] == 88 { return 1 }
+    return 0
+}
+
+// clm_ext_load_entry — read one fp32 ext vector into t_out (caller-allocated to
+// the stored length); returns the new offset. Assumes off points at the [len].
+pub fn clm_ext_load_entry(rb, off: int, t_out: int) -> int {
+    let n = _rd_u32(rb, off); off = off + 4
+    let mut i = 0
+    while i < n { t_set(t_out, i, bytes_to_f32_le(rb, off)); off = off + 4; i = i + 1 }
+    return off
+}
+
+// clm_ext_entry_eq — fp32 byte-identical equality of two ext vectors of length n.
+fn clm_ext_entry_eq(a: int, b: int, n: int) -> int {
+    let mut i = 0
+    while i < n {
+        let ba = f32_to_bytes_le(t_get(a, i))
+        let bb = f32_to_bytes_le(t_get(b, i))
+        let mut k = 0
+        while k < 4 { if ba[k] != bb[k] { return 0 }; k = k + 1 }
+        i = i + 1
+    }
+    return 1
 }
 
 // Append one block: dims + int4 nibbles (q+8 packed 2/byte) + fp32-le scales.
@@ -153,11 +223,53 @@ fn main() {
     }
 
     print("  reload blocks="); print(rblocks); print("/"); println(nblocks)
-    if allok == 1 && rblocks == nblocks {
-        println("F-CLM-CKPT-ROUNDTRIP = 1")
-        println("PASS — .clm save->load reproduces int4 codes + qat_scale byte-identically")
+    let conv_ok = if allok == 1 && rblocks == nblocks { 1 } else { 0 }
+    println("F-CLM-CKPT-ROUNDTRIP = " + to_string(conv_ok))
+
+    // ---- v0.2 EXT roundtrip: append embed + GN affine, read back fp32-eq ----
+    // The conv-block offset after 6 blocks is exactly `off` (load loop advanced it).
+    let embed = t_zeros(vd); t_fill_lcg(embed, vd, 1, 0.3)
+    let tgG = t_zeros(d);    t_fill_lcg(tgG, d, 6, 0.5)
+    let noB = t_zeros(d);    t_fill_lcg(noB, d, 19, 0.1)
+    let buf2 = buf                                   // start from the v0.1 file bytes
+    clm_ext_begin(buf2, 3)
+    clm_ext_save_entry(buf2, embed, vd)
+    clm_ext_save_entry(buf2, tgG, d)
+    clm_ext_save_entry(buf2, noB, d)
+    let path2 = "/tmp/clm_ckpt_smoke_v2.clm"
+    write_bytes(path2, buf2)
+    let rb2 = read_file_bytes(path2)
+    // re-walk the 6 conv blocks to find the ext offset (v0.1 backward-read intact)
+    let mut o2 = 5; let mut bb = 0
+    while bb < 6 {
+        let cout = couts[bb]; let rest = rests[bb]
+        let wqx = t_zeros(cout * rest); let scx = t_zeros(cout)
+        o2 = load_block(rb2, o2, wqx, scx)
+        bb = bb + 1
+    }
+    let ext_here = clm_ext_present(rb2, o2)
+    let mut ext_ok = 0
+    if ext_here == 1 {
+        let n_ext = rb2[o2 + 4]                        // byte after the 4 magic bytes
+        let off3 = o2 + 5
+        let e_embed = t_zeros(vd); let e_tgG = t_zeros(d); let e_noB = t_zeros(d)
+        let mut p = off3
+        p = clm_ext_load_entry(rb2, p, e_embed)
+        p = clm_ext_load_entry(rb2, p, e_tgG)
+        p = clm_ext_load_entry(rb2, p, e_noB)
+        let ee = clm_ext_entry_eq(embed, e_embed, vd)
+        let eg = clm_ext_entry_eq(tgG, e_tgG, d)
+        let en = clm_ext_entry_eq(noB, e_noB, d)
+        if n_ext == 3 && ee == 1 && eg == 1 && en == 1 { ext_ok = 1 }
+    }
+    // backward-read: a v0.1 reader on the v0.2 file still reads 6 blocks correctly.
+    let bw_ok = if rb2[0] == 67 && rb2[4] == nblocks { 1 } else { 0 }
+    println("F-CLM-CKPT-EXT-ROUNDTRIP = " + to_string(ext_ok))
+    println("F-CLM-CKPT-EXT-BACKWARD-READ = " + to_string(bw_ok))
+
+    if conv_ok == 1 && ext_ok == 1 && bw_ok == 1 {
+        println("PASS — .clm v0.1 conv roundtrip + v0.2 ext (embed/GN) fp32-eq + v0.1 backward-read")
         return
     }
-    println("F-CLM-CKPT-ROUNDTRIP = 0")
     println("FAIL")
 }

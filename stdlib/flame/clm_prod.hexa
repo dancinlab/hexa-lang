@@ -572,6 +572,21 @@ fn _clmp_save_block(buf, w: int, cout: int, rest: int) {
     while c < cout { _clmp_push_f32(buf, t_get(scale, c)); c = c + 1 }
 }
 
+// v0.2 EXT trailer (embed + conv biases + GN affine), full-precision fp32. The
+// trained 6 conv blocks alone can NOT reproduce the GPU-measured descent CORE-
+// side because the embed table + GroupNorm affine are absent; serializing them
+// here (after the 6 v0.1 blocks, behind a "CLMX" magic) closes that format gap
+// while keeping a v0.1 reader byte-eq (it stops after nblocks conv blocks).
+fn _clmp_ext_begin(buf, n_ext: int) {
+    buf.push(67); buf.push(76); buf.push(77); buf.push(88)   // EXT_MAGIC "CLMX"
+    buf.push(n_ext)
+}
+fn _clmp_ext_save_entry(buf, t: int, n: int) {
+    _clmp_push_u32(buf, n)
+    let mut i = 0
+    while i < n { _clmp_push_f32(buf, t_get(t, i)); i = i + 1 }
+}
+
 fn main() {
     println("clm_prod — CLMConvMoE production corpus loop (PR1)")
     // PR4: d / E / epochs / nsamp overridable via env for the H100 d768/12L
@@ -719,9 +734,27 @@ fn main() {
         _clmp_save_block(buf, e1W, d, d * K)
         _clmp_save_block(buf, rW,  E, d)
         _clmp_save_block(buf, roW, V, d)
+        // v0.2 EXT trailer — trained embed table + conv biases + GN affine, stored
+        // FULL-PRECISION fp32 (descent-critical, small). Order MUST match
+        // clm_ckpt.hexa header + the CORE decoder (generator.hexa::clm_decode_ce):
+        //   0 embed[V·d] 1 ecB 2 tcB 3 e0B 4 e1B 5 rB 6 roB 7 tgG 8 tgB 9 noG 10 noB
+        // BACKWARD-COMPAT: appended AFTER the 6 v0.1 conv blocks; a v0.1 reader
+        // reads exactly nblocks=6 and never sees these bytes (byte-eq old path).
+        _clmp_ext_begin(buf, 11)
+        _clmp_ext_save_entry(buf, embed, vd)
+        _clmp_ext_save_entry(buf, ecB, d)
+        _clmp_ext_save_entry(buf, tcB, d)
+        _clmp_ext_save_entry(buf, e0B, d)
+        _clmp_ext_save_entry(buf, e1B, d)
+        _clmp_ext_save_entry(buf, rB, E)
+        _clmp_ext_save_entry(buf, roB, V)
+        _clmp_ext_save_entry(buf, tgG, d)
+        _clmp_ext_save_entry(buf, tgB, d)
+        _clmp_ext_save_entry(buf, noG, d)
+        _clmp_ext_save_entry(buf, noB, d)
         write_bytes(_outp, buf)
         print("  CLM_PROD_OUT wrote "); print(_outp); print("  (")
-        print(len(buf)); println(" bytes, 6 blocks, CLM\\x01)")
+        print(len(buf)); println(" bytes, 6 blocks + v0.2 ext[embed+bias+GN], CLM\\x01+CLMX)")
         print("  config d="); print(d); print(" E="); print(E)
         print(" epochs="); print(epochs); print(" nwin="); print(nwin); println("")
     }
