@@ -1,0 +1,208 @@
+// @ci_gate — deterministic · closed-form real-cell q-resolved el-ph composer asserts
+//
+// qforge_qfold_dispersion_selftest.hexa — QFORGE dispersion→qfold wiring g5 gate.
+//
+// Closes the PROVIDER SEAM qmesh_qfold (#2593) left open: that brick folds the
+// transfer q = k'−k and asks an ABSTRACT omega_of(qidx) for ω(q,ν), but nothing
+// turned a REAL realcell_qmesh QmeshDispersion (brick a) INTO that provider.
+// This brick is the adapter + the one-call composer. The gate pins:
+//
+//   (A) ADAPTER SLICE CLOSED FORM: qforge_qfold_omega_slice pulls the correct
+//       nmode-wide ω block at q-index qidx out of the flat q-major dispersion,
+//       and DROPS soft/acoustic modes (ω ≤ tol) honestly (d6 — no clamp). Out of
+//       range → []. A 2-q × 2-mode dispersion with one soft mode is checked
+//       block-by-block against its known layout.
+//   (B) d4 TRANSPARENT-WIRING IDENTITY: a 1×1×1 single-q single-mode dispersion
+//       (one flat Einstein ω₀) drives the composer to the SAME closed-form
+//       Einstein λ the bare qmesh_qfold sum gives — proving the adapter adds NO
+//       physics, it only re-routes the band (rel-ε ≤ 1e-3, the #2593 (C) bar).
+//   (C) COMMENSURATE-MESH GUARD: a dispersion whose nq ≠ the k-mesh nk is a
+//       non-commensurate mesh → loud sentinel (ok==0), never a silent wrong λ.
+//   (D) REAL DISPERSION END-TO-END: build a GENUINE QmeshDispersion via
+//       qforge_qmesh_dispersion on a closed-form 1-atom cubic chain over a 2×2×2
+//       q-mesh, feed it through the composer on the matching 2×2×2 k-mesh, and
+//       assert a finite physical λ>0 with full q-coverage (n_qhit==nk) — the
+//       real-cell compose path runs to a λ end to end.
+//   (E) DISPERSION ≠ FLAT-BAND: the same real-cell λ DIFFERS from a degenerate
+//       single-frequency (flat) dispersion of the same mean — because λ ∝ 1/ω²
+//       weights the soft end of the real band MORE (the brick's reason to exist;
+//       resolving ω per-q ≠ collapsing it to one number).
+//
+// Run:  hexa run stdlib/qforge/qfold_dispersion_selftest.hexa
+// PASS: exits printing "qforge_qfold_dispersion_selftest PASS".
+use "stdlib/qforge/qfold_dispersion"
+use "stdlib/qforge/realcell_qmesh"   // QmeshDispersion + qforge_qmesh_dispersion (brick a)
+use "stdlib/qforge/elph"             // qforge_einstein_lambda_analytic (closed form)
+
+fn _abs(x: float) -> float { if x < 0.0 { return -x } return x }
+
+fn _ck_true(name: str, cond: bool) -> int {
+    if cond { println("PASS " + name) ; return 0 }
+    println("FAIL " + name)
+    return 1
+}
+fn _ck_eq(name: str, got: float, want: float, tol: float) -> int {
+    if _abs(got - want) <= tol {
+        println("PASS " + name + " (" + to_string(got) + ")")
+        return 0
+    }
+    println("FAIL " + name + " — got " + to_string(got) + " want " + to_string(want))
+    return 1
+}
+fn _ck_ieq(name: str, got: int, want: int) -> int {
+    if got == want { println("PASS " + name + " (" + to_string(got) + ")") ; return 0 }
+    println("FAIL " + name + " — got " + to_string(got) + " want " + to_string(want))
+    return 1
+}
+
+// module-level constant single-band |g|² provider (qmesh_qfold selftest idiom —
+// hexa nested fns do not capture lexical scope, so the provider reads module state).
+let mut G2C: float = 0.0
+fn _g2_const_1band(i: int, j: int) -> [float] { return [G2C] }   // nb=1
+
+fn main() {
+    let mut fails = 0
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // (A) ADAPTER SLICE CLOSED FORM — per-qidx block extraction + soft drop
+    // ─────────────────────────────────────────────────────────────────────────
+    // 2 q-points × 2 modes, q-major: q0=[100, 200], q1=[ -5 (soft), 300].
+    // tol=1e-6 drops the soft ω<0 mode at q1 (d6 honest, not clamped).
+    let dispA = QmeshDispersion {
+        omega:  [100.0, 200.0, -5.0, 300.0],
+        omega2: [0.0, 0.0, 0.0, 0.0], qcoords: [],
+        nq: 2, nmode: 2, n_gamma_zero: 0
+    }
+    let sl0 = qforge_qfold_omega_slice(dispA, 0, 1.0e-6)
+    fails = fails + _ck_ieq("A.slice0_len", len(sl0), 2)
+    fails = fails + _ck_eq("A.slice0_m0", sl0[0], 100.0, 1.0e-12)
+    fails = fails + _ck_eq("A.slice0_m1", sl0[1], 200.0, 1.0e-12)
+    let sl1 = qforge_qfold_omega_slice(dispA, 1, 1.0e-6)
+    fails = fails + _ck_ieq("A.slice1_soft_dropped_len", len(sl1), 1)   // -5.0 dropped
+    fails = fails + _ck_eq("A.slice1_m0", sl1[0], 300.0, 1.0e-12)
+    fails = fails + _ck_ieq("A.slice_oob_empty", len(qforge_qfold_omega_slice(dispA, 2, 1.0e-6)), 0)
+    fails = fails + _ck_ieq("A.slice_neg_empty", len(qforge_qfold_omega_slice(dispA, -1, 1.0e-6)), 0)
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // (B) d4 TRANSPARENT-WIRING IDENTITY — 1×1×1 single-q flat dispersion = Einstein λ
+    // ─────────────────────────────────────────────────────────────────────────
+    // ONE q-block, ONE mode at ω₀ → omega_of(0) = [ω₀] always → the composer must
+    // reproduce the bare qmesh_qfold (C) closed-form Einstein λ to rel-ε ≤ 1e-3.
+    let om0 = 1236.4
+    G2C = 0.8
+    let n_ef = 3.0
+    let sigma_el = 0.05
+    let sigma_ph = 10.0
+    let mut grid: [float] = []
+    let mut gp = 1
+    while gp < 401 { grid.push(to_float(gp) * 7.0) ; gp = gp + 1 }
+
+    let dispB = QmeshDispersion {
+        omega: [om0], omega2: [0.0], qcoords: [],
+        nq: 1, nmode: 1, n_gamma_zero: 0
+    }
+    let rB = qforge_qfold_dispersion_lambda(dispB, [0.0], [1.0], 1, 1, 1, 1,
+                                            _g2_const_1band,
+                                            0.0, n_ef, grid, sigma_el, sigma_ph,
+                                            -1.0, 1.0e-6)
+    fails = fails + _ck_ieq("B.ok", rB.ok, 1)
+    fails = fails + _ck_ieq("B.one_qhit", rB.n_qhit, 1)
+    // single sample: weight folded by the driver = wk²·(1/nw) = 1.0 (the #2593 (C) convention).
+    let lam_ana = qforge_einstein_lambda_analytic(1, G2C, om0, n_ef, 1.0, sigma_el)
+    let relB = _abs(rB.lambda - lam_ana) / _abs(lam_ana)
+    fails = fails + _ck_true("B.transparent_wiring_einstein (rel-ε ≤ 1e-3, λ=" + to_string(rB.lambda) + ")", relB <= 1.0e-3)
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // (C) COMMENSURATE-MESH GUARD — q-mesh nq ≠ k-mesh nk → loud sentinel
+    // ─────────────────────────────────────────────────────────────────────────
+    // dispC has nq=2 but the k-mesh below is 1×1×1 (nk=1) → non-commensurate.
+    let dispC = QmeshDispersion {
+        omega: [100.0, 200.0], omega2: [0.0, 0.0], qcoords: [],
+        nq: 2, nmode: 1, n_gamma_zero: 0
+    }
+    let rC = qforge_qfold_dispersion_lambda(dispC, [0.0], [1.0], 1, 1, 1, 1,
+                                            _g2_const_1band,
+                                            0.0, n_ef, grid, sigma_el, sigma_ph,
+                                            -1.0, 1.0e-6)
+    fails = fails + _ck_ieq("C.noncommensurate_sentinel", rC.ok, 0)
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // (D) REAL DISPERSION END-TO-END — qforge_qmesh_dispersion → composer → λ
+    // ─────────────────────────────────────────────────────────────────────────
+    // A closed-form 1-atom cubic monatomic chain: on-site self-term + nearest-cell
+    // coupling so D(q) is a real cosine band (the dfpt selftest's analytic style).
+    // 1 atom → 3 modes; 3 cells (R=0, +x, −x) → a 3-mode dispersive band per q.
+    let mass = 1.0
+    let kx = 2.0                              // x-direction spring; y,z self-terms only
+    // phi flat: 3 cells of (3×3) blocks. Block c at phi[c*9 + a*3 + b].
+    // R=0 (self): diag(2kx, ky0, kz0) so the chain is stable in x, stiff in y,z.
+    let ky0 = 1.5
+    let kz0 = 1.5
+    let phi: [float] = [
+        // c0  R=0  on-site (positive diag — restoring)
+        2.0*kx, 0.0, 0.0,  0.0, ky0, 0.0,  0.0, 0.0, kz0,
+        // c1  R=+x  nearest-cell xx coupling = −kx (off-diagonal in R)
+        -kx, 0.0, 0.0,  0.0, 0.0, 0.0,  0.0, 0.0, 0.0,
+        // c2  R=−x  symmetric partner = −kx
+        -kx, 0.0, 0.0,  0.0, 0.0, 0.0,  0.0, 0.0, 0.0
+    ]
+    let cell_R: [float] = [ 0.0, 0.0, 0.0,   1.0, 0.0, 0.0,   -1.0, 0.0, 0.0 ]
+    // simple cubic reciprocal vectors (a=1, 2π scaling).
+    let twopi = 6.283185307179586
+    let b1: [float] = [twopi, 0.0, 0.0]
+    let b2: [float] = [0.0, twopi, 0.0]
+    let b3: [float] = [0.0, 0.0, twopi]
+
+    let disp = qforge_qmesh_dispersion(phi, [mass], 1, 3, cell_R,
+                                       2, 2, 2, b1, b2, b3)
+    fails = fails + _ck_ieq("D.disp_nq", disp.nq, 8)        // 2×2×2 = 8 q-points
+    fails = fails + _ck_ieq("D.disp_nmode", disp.nmode, 3)  // 1 atom → 3 modes
+
+    // band table: flat electron band pinned at E_F over the 8-point k-mesh, 1 band.
+    let e_fermi = 0.0
+    let mut eps: [float] = []
+    let mut ke = 0
+    while ke < 8 { eps.push(e_fermi) ; ke = ke + 1 }
+    let mut wk: [float] = []
+    ke = 0
+    while ke < 8 { wk.push(1.0 / 8.0) ; ke = ke + 1 }       // uniform MP weights
+    G2C = 0.5
+
+    let rD = qforge_qfold_dispersion_lambda(disp, eps, wk, 2, 2, 2, 1,
+                                            _g2_const_1band,
+                                            e_fermi, n_ef, grid, sigma_el, sigma_ph,
+                                            -1.0, 1.0e-6)
+    fails = fails + _ck_ieq("D.ok", rD.ok, 1)
+    fails = fails + _ck_ieq("D.full_q_coverage (n_qhit==nk)", rD.n_qhit, 8)
+    fails = fails + _ck_true("D.finite_physical_lambda (λ>0, λ=" + to_string(rD.lambda) + ")", rD.lambda > 0.0)
+    fails = fails + _ck_true("D.physical_omega_log (ω_log>0, =" + to_string(rD.omega_log) + ")", rD.omega_log > 0.0)
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // (E) DISPERSION ≠ FLAT-BAND — real band ≠ collapsed single-ω band (λ∝1/ω²)
+    // ─────────────────────────────────────────────────────────────────────────
+    // collapse the real dispersion to ONE frequency (its ω_log) at every q,mode,
+    // keeping nq/nmode identical → the q-resolved sum sees a flat band. The real
+    // λ must DIFFER (λ weights the soft end of the real band more heavily).
+    let wflat = rD.omega_log
+    let mut flatband: [float] = []
+    let mut fe = 0
+    while fe < disp.nq * disp.nmode { flatband.push(wflat) ; fe = fe + 1 }
+    let dispFlat = QmeshDispersion {
+        omega: flatband, omega2: disp.omega2, qcoords: disp.qcoords,
+        nq: disp.nq, nmode: disp.nmode, n_gamma_zero: 0
+    }
+    let rE = qforge_qfold_dispersion_lambda(dispFlat, eps, wk, 2, 2, 2, 1,
+                                            _g2_const_1band,
+                                            e_fermi, n_ef, grid, sigma_el, sigma_ph,
+                                            -1.0, 1.0e-6)
+    fails = fails + _ck_ieq("E.flat_ok", rE.ok, 1)
+    let relE = _abs(rD.lambda - rE.lambda) / _abs(rE.lambda)
+    fails = fails + _ck_true("E.dispersion_distinct_from_flat (rel-Δ=" + to_string(relE) + " > 1e-3)", relE > 1.0e-3)
+
+    // ─────────────────────────────────────────────────────────────────────────
+    if fails == 0 {
+        println("qforge_qfold_dispersion_selftest PASS")
+    } else {
+        println("qforge_qfold_dispersion_selftest FAIL — " + to_string(fails) + " check(s) failed")
+    }
+}
