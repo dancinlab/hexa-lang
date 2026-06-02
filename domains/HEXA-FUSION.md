@@ -42,6 +42,29 @@ FORGE-UTILGREEN lever-1~5 가 GEMM repack 을 전부 device 化했어도 util ME
 
 - [ ] **vs-PyTorch+CUDA wall 벤치** — 동일 모델 device-resident, step/s + util 을 torch eager + torch.compile 와 나란히. **정직**: cuBLAS GEMM = roofline(못 이김 ≠ 실패) — 우위는 fusion/launch-amort regime 에서만 주장. closure = util-GREEN ∧ descent-GREEN ∧ vs-PyTorch wall Δ 기록.
 
+## ── completion roadmap (goal: 병렬 발사 전략으로 HEXA-FUSION 완성) ──
+
+각 웨이브의 독립 레인을 병렬 백그라운드 에이전트로 발사 → 착지 시 verdict 를 본 문서에 g5 verbatim 기록 → 다음 웨이브 발사. pod 레인 = idle 재사용·1-fire·즉시 down. byte-eq max|Δ|=0 = 전 레인 hard gate. raw-GEMM 우위 주장 금지.
+
+```
+W1 (fired 06-03)  ──────────────────────────────────  4/6 landed
+  ⑧ launch-amort ✅  ⑨ baseline ✅  ⑦ override ✅  ① m/v [~]
+  ③ fwd-only probe 🔄   ⑥ compile-time spec 🔄
+        │ gate: ① FULL (grad+param) + pod self-host build
+        ▼
+W2 (① full → util-GREEN MATCH)  ─────────────────────
+  ①b grad-residency 🔄   ①c param W (host int4 re-quant 차단 해소)
+  ② async launch pipeline → F-RFC046 util MEAN≥20% fire  ← util-GREEN MATCH 닫힘
+  ④ CUDA-graph capture/replay   ⑤ fwd+bwd autograd-aware fusion
+        │ gate: util-GREEN ∧ ⑤ fused
+        ▼
+W3 closure  ─────────────────────────────────────────
+  ⑨-full hexa-vs-PyTorch wall bench (compute-bound MATCH · launch-bound EXCEED)
+  → 9/9 terminal → HEXA-FUSION 완성
+```
+
+병렬 가능 노드(현재): ①b·①c·⑥·③ 동시. ②④⑤ 는 ① full 착지가 gate(공유 device-resident 기반). ⑨-full 은 ② util fire 이후.
+
 ## ── first parallel wave (W1) — 6 independent lanes fired 2026-06-03 ──
 
 Dependency DAG 추출: 선행 0 인 노드를 전부 뽑아 동시 발사(maximal parallelism). 4 lanes $0(agent/mac/codegen·oracle) + 2 lanes pod(GPU 실측). 나머지 ②④⑤ + ⑨-full 은 ① 착지 후 unblock.
