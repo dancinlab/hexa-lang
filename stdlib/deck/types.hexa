@@ -93,9 +93,128 @@ pub fn spec_get_list(spec: DeckSpec, key: string) -> [string] {
     return empty
 }
 
+// ── ASCII sanitizer (QE / FoX-XML hygiene) ───────────────────────────
+//
+// ROOT CAUSE this prevents: a non-ASCII byte (em-dash U+2014 "—", en-dash,
+// curly quote, ellipsis, nbsp) carried from an easy-style title/comment into
+// a QE input file's `title` / comment / namelist label crashes QE 6.7's FoX
+// XML parser (`runParser`) → PARSE_ERR → signal-6 abort (the LaH10 gate
+// anchor crash, 2026-06). QE titles/comments are PURE LABELS (zero physics),
+// so mapping them to ASCII is metadata-only and safe.
+//
+// Strings here are UTF-8 byte arrays (len = byte count, byte_at = byte).
+// We scan byte-by-byte: ASCII (<0x80) passes through; a >=0x80 lead byte
+// starts a multi-byte UTF-8 run which we decode to its codepoint, map the
+// known typographic cases to ASCII, and replace anything else with "-".
+// NUMERIC / PHYSICS bytes (lattice, atoms, k/q-mesh, cutoffs) are all plain
+// ASCII already, so they are bit-identical through this pass.
+
+// utf8_seq_len — byte length of the UTF-8 sequence whose lead byte is `b`
+// (b expected >= 0x80). Returns 1 for a stray continuation/invalid byte so
+// the scanner always makes forward progress.
+fn utf8_seq_len(b: int) -> int {
+    if b >= 0xF0 { return 4 }
+    if b >= 0xE0 { return 3 }
+    if b >= 0xC0 { return 2 }
+    return 1
+}
+
+// utf8_codepoint — decode the codepoint of the UTF-8 sequence of length
+// `seqlen` starting at byte `i` of `s`. Returns -1 on a truncated/invalid
+// sequence (caller then emits the "-" fallback).
+fn utf8_codepoint(s: string, i: int, seqlen: int) -> int {
+    let n = len(s)
+    if i + seqlen > n { return -1 }
+    let b0 = s.byte_at(i)
+    if seqlen == 1 { return b0 }
+    let mut cp = 0
+    if seqlen == 2 { cp = b0 & 0x1F }
+    if seqlen == 3 { cp = b0 & 0x0F }
+    if seqlen == 4 { cp = b0 & 0x07 }
+    let mut k = 1
+    while k < seqlen {
+        let bk = s.byte_at(i + k)
+        if (bk & 0xC0) != 0x80 { return -1 }
+        cp = (cp << 6) | (bk & 0x3F)
+        k = k + 1
+    }
+    return cp
+}
+
+// cp_to_ascii — map a non-ASCII codepoint to its safe ASCII spelling.
+// Common typographic Unicode → readable ASCII; everything else → "-".
+fn cp_to_ascii(cp: int) -> string {
+    // dashes: hyphen-minus family, en/em/figure/horizontal-bar, minus sign
+    if cp == 0x2010 { return "-" }   // hyphen
+    if cp == 0x2011 { return "-" }   // non-breaking hyphen
+    if cp == 0x2012 { return "-" }   // figure dash
+    if cp == 0x2013 { return "-" }   // en dash –
+    if cp == 0x2014 { return "-" }   // em dash —  (the FoX-crash culprit)
+    if cp == 0x2015 { return "-" }   // horizontal bar
+    if cp == 0x2212 { return "-" }   // minus sign −
+    // single quotes / apostrophes → straight '
+    if cp == 0x2018 { return "'" }   // left single quote '
+    if cp == 0x2019 { return "'" }   // right single quote '
+    if cp == 0x201A { return "'" }   // single low-9 quote
+    if cp == 0x201B { return "'" }   // single high-reversed-9 quote
+    if cp == 0x2032 { return "'" }   // prime
+    // double quotes → straight "
+    if cp == 0x201C { return "\"" }  // left double quote "
+    if cp == 0x201D { return "\"" }  // right double quote "
+    if cp == 0x201E { return "\"" }  // double low-9 quote
+    if cp == 0x2033 { return "\"" }  // double prime
+    // ellipsis → ...
+    if cp == 0x2026 { return "..." } // horizontal ellipsis …
+    // spaces → ordinary space
+    if cp == 0x00A0 { return " " }   // no-break space
+    if cp == 0x2009 { return " " }   // thin space
+    if cp == 0x202F { return " " }   // narrow no-break space
+    // any other non-ASCII codepoint → safe placeholder
+    return "-"
+}
+
+// sanitize_ascii — map an arbitrary UTF-8 string to ASCII-only (<=0x7F).
+// THE single generic choke point: applied to every QE input file the deck
+// generator emits, so no emitter (current or future) can leak a non-ASCII
+// byte into a FoX-parsed `.in`. Pure (no syscall).
+pub fn sanitize_ascii(s: string) -> string {
+    let n = len(s)
+    let mut out = ""
+    let mut i = 0
+    while i < n {
+        let b = s.byte_at(i)
+        if b < 0x80 {
+            out = out + chr(b)
+            i = i + 1
+        } else {
+            let seqlen = utf8_seq_len(b)
+            let cp = utf8_codepoint(s, i, seqlen)
+            if cp < 0 {
+                out = out + "-"
+                i = i + 1            // invalid lead byte — skip one, keep progress
+            } else {
+                out = out + cp_to_ascii(cp)
+                i = i + seqlen
+            }
+        }
+    }
+    return out
+}
+
+// is_qe_input_path — is `path` a QE input file (FoX/QE-parsed)? Only these
+// get sanitized; runbook `.md` files carry intentional Korean and pass
+// through untouched. d4-generic: dispatch on extension, never a filename.
+fn is_qe_input_path(path: string) -> bool {
+    return path.ends_with(".in")
+}
+
 // ── shared emit helper ──────────────────────────────────────────────
 
-// Append a DeckFile to an accumulator.
+// Append a DeckFile to an accumulator. QE input files (.in) are routed
+// through sanitize_ascii so no non-ASCII byte (em-dash &c.) can reach
+// QE 6.7's FoX XML parser — the single generic choke point (d4).
 pub fn deck_push(files: [DeckFile], path: string, content: string) {
-    files.push(DeckFile { path: path, content: content })
+    let mut text = content
+    if is_qe_input_path(path) { text = sanitize_ascii(content) }
+    files.push(DeckFile { path: path, content: text })
 }
