@@ -2,6 +2,53 @@
 
 Append-only history sister of `MISCOMPILE-ZERO.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
+## 2026-06-02 — linker/compiler DETERMINISM gate: verified + locked
+
+Milestone: "linker determinism — make hexa_ld output byte-deterministic
+(relink gen2 == gen2b; prior diff @byte ~1924664 symtab tail)". The OLD
+note flagged possible linker nondeterminism; byte-eq graduation suggested
+it was resolved but it was never LOCKED as a gate. Verified deterministic
+end-to-end and gated.
+
+- [x] RE-EMIT determinism: native --emit=obj each corpus program TWICE on
+      GHOST (gen2_fix) — 10/10 byte-identical objects (cmp + SHA256). The
+      `_L<sha4>_` label hash = sha256(module.file)[:4]
+      (compiler/codegen/arm64_darwin.hexa:752) is a PURE FUNCTION of the
+      fixed module path — same path → same labels every emit (path-derived,
+      NOT nondeterminism), empirically confirmed by the byte-identical
+      re-emit.
+- [x] RELINK determinism: link each object TWICE with hld_fixed —
+      10/10 byte-identical executables. ROOT-CAUSE of the only diff seen:
+      a naive two-name relink (link_A vs link_B) differs in EXACTLY ONE
+      byte at 0x8192 — the output basename baked into the linker
+      ad-hoc-codesign build-id string `<basename>-UUID0123…0123456789abc`
+      (the hex tail is the hardcoded LC_UUID constant, hexa_ld.hexa:1750-53,
+      NOT a timestamp/random). Same-basename relink (two dirs) → SHA256
+      identical. So the build-id is path-derived/deterministic, NOT a
+      nondeterminism source. NO fix to hexa_ld needed.
+- [x] SCALE proof (the exact OLD-note case): re-linked the 3.2MB graduated
+      compiler object cc-prc2-fix.o TWICE → 1.6MB executable, IDENTICAL
+      SHA256 (683b85f8f7e3…). The symtab/strtab tail at ~1924664 is
+      deterministic; the relink wall is CLOSED. Audited hexa_ld.hexa:
+      LC_UUID = hardcoded const, LC_SOURCE_VERSION = 0, n_desc = 0,
+      strtab verbatim + zero-pad, nlist emitted in fixed scan order — no
+      wall-clock / random / unstable-sort / uninit-pad source exists.
+- [x] GATE `tool/determinism_gate.sh` — PHASE 1 emit-twice + PHASE 2
+      link-twice (same basename) over self/test/miscompile_zero/*.hexa,
+      FAIL NONZERO on any byte diff. Env-portable (HEXA_NATIVE_CC /
+      HEXA_CC_PREARGS / HEXA_LD / HEXA_TARGET / DETERM_OUT). NO /tmp
+      (writes under repo build/). Honest rc, no pipe-masking.
+- [x] VERIFIED on GHOST against graduated gen2_fix + hld_fixed:
+      PASS 10/10 re-emit AND 10/10 relink byte-identical, real exit 0.
+- [x] NEGATIVE-TESTED: a one-byte perturbation in a relink output trips
+      the FAIL branch → exit 1. Detection proven both directions.
+- [x] CI wired: `.github/workflows/determinism-gate.yml` builds ./hexa via
+      the shared release_build on macos-latest (arm64), then runs the gate
+      with the linker via `hexa run tool/hexa_ld.hexa`. Path-filtered on
+      compiler/self/corpus/gate/linker changes.
+- [x] One-line ghost reference run:
+      `HEXA_NATIVE_CC=~/dancinlab/selfhost-work/gen2_fix HEXA_LD=~/dancinlab/selfhost-work/hld_fixed bash tool/determinism_gate.sh`
+
 ## 2026-06-02 — broad self-emit sweep: 82-program CLEAN-SWEEP (no new miscompile)
 
 Milestone: "broaden the self-emit corpus beyond the compiler flat — exercise
