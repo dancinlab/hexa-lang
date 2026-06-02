@@ -613,6 +613,38 @@ fn _adam(W: int, gW: int, m: int, v: int, n: int, t: int) {
     opt_adamw_step(W, gW, m, v, n, 0.05, 0.9, 0.999, 0.00000001, 0.0, t)
 }
 
+// LEVER (4) F-RFC046 ROOT — fused AdamW group: ONE host crossing for the whole
+// optimizer param group. The per-step driver previously dispatched 20 separate
+// interpreted forge_dispatch_adamw calls (each its own H2D->launch->sync->D2H),
+// SM-starving the GPU between launches. _adam_group packs the group's W/g/m/v
+// handles + per-tensor lengths into farr arrays and drives the whole group with
+// ONE forge_dispatch_adamw_group call (CUDA: H2D all -> count back-to-back
+// launches, ONE sync -> D2H all). rc 0 = applied on-device; rc != 0 (no-CUDA /
+// GPU fail) -> the proven per-tensor host _adam loop (byte-eq fallback). Env-
+// gated on CLM_PROD_DEVFEED so the prebuilt mac binary (which lacks the builtin)
+// never link-references it. Byte-eq oracle: stdlib/flame/clm_fused_step_eq.hexa
+// (F-RFC046-ADAMW-GROUP-EQ / F-RFC046-FUSED-STEP-EQ, max|Δ|=0.0).
+fn _adam_group(Wids: int, Gids: int, Mids: int, Vids: int, Ns: int,
+               count: int, t: int) {
+    if env("CLM_PROD_DEVFEED") != "" {
+        let rc = forge_dispatch_adamw_group(Wids, Gids, Mids, Vids, Ns, count, t)
+        if rc == 0 { return }
+    }
+    // byte-eq host fallback — per-tensor opt_adamw_step in the SAME order the
+    // group kernel applies them (the group is independent per tensor, so order
+    // does not affect the result; kept identical for auditability).
+    let mut j = 0
+    while j < count {
+        let W = to_int(t_get(Wids, j))
+        let g = to_int(t_get(Gids, j))
+        let m = to_int(t_get(Mids, j))
+        let v = to_int(t_get(Vids, j))
+        let n = to_int(t_get(Ns, j))
+        opt_adamw_step(W, g, m, v, n, 0.05, 0.9, 0.999, 0.00000001, 0.0, t)
+        j = j + 1
+    }
+}
+
 // Load nsamp causal windows of length T from a byte corpus into IDS/TGT.
 // IDS[s*T+p] = byte[off+p], TGT[s*T+p] = byte[off+p+1]; off = s*stride.
 // Returns the number of windows actually filled (<= nsamp if corpus is short).
@@ -761,6 +793,37 @@ fn main() {
     // per-step window buffers
     let tok=t_zeros(T); let tgt=t_zeros(T)
 
+    // LEVER (4) F-RFC046 ROOT — fused AdamW group handle arrays (built ONCE; the
+    // 20 CLMConvMoE param tensors are stable across steps). Each slot j carries
+    // the (W, grad, m, v, n) farr handles; _adam_group drives the whole group
+    // with ONE forge_dispatch_adamw_group host crossing instead of 20 separate
+    // forge_dispatch_adamw calls (the SM-starving per-step driver residual).
+    let _AG = 17
+    let agW=t_zeros(_AG); let agG=t_zeros(_AG); let agM=t_zeros(_AG)
+    let agV=t_zeros(_AG); let agN=t_zeros(_AG)
+    // pack the (W, grad, m, v, n) handles per slot (handles are FP64-exact ints).
+    t_set(agW,0,to_float(embed)); t_set(agG,0,to_float(dembed)); t_set(agM,0,to_float(m_embed)); t_set(agV,0,to_float(v_embed)); t_set(agN,0,to_float(vd))
+    t_set(agW,1,to_float(ecW)); t_set(agG,1,to_float(decW)); t_set(agM,1,to_float(m_ecW)); t_set(agV,1,to_float(v_ecW)); t_set(agN,1,to_float(dd))
+    t_set(agW,2,to_float(ecB)); t_set(agG,2,to_float(decB)); t_set(agM,2,to_float(m_ecB)); t_set(agV,2,to_float(v_ecB)); t_set(agN,2,to_float(d))
+    t_set(agW,3,to_float(tcW)); t_set(agG,3,to_float(dtcW)); t_set(agM,3,to_float(m_tcW)); t_set(agV,3,to_float(v_tcW)); t_set(agN,3,to_float(dd))
+    t_set(agW,4,to_float(tcB)); t_set(agG,4,to_float(dtcB)); t_set(agM,4,to_float(m_tcB)); t_set(agV,4,to_float(v_tcB)); t_set(agN,4,to_float(d))
+    t_set(agW,5,to_float(tgG)); t_set(agG,5,to_float(dtgG)); t_set(agM,5,to_float(m_tgG)); t_set(agV,5,to_float(v_tgG)); t_set(agN,5,to_float(d))
+    t_set(agW,6,to_float(tgB)); t_set(agG,6,to_float(dtgB)); t_set(agM,6,to_float(m_tgB)); t_set(agV,6,to_float(v_tgB)); t_set(agN,6,to_float(d))
+    t_set(agW,7,to_float(rW)); t_set(agG,7,to_float(drW)); t_set(agM,7,to_float(m_rW)); t_set(agV,7,to_float(v_rW)); t_set(agN,7,to_float(ed))
+    t_set(agW,8,to_float(rB)); t_set(agG,8,to_float(drB)); t_set(agM,8,to_float(m_rB)); t_set(agV,8,to_float(v_rB)); t_set(agN,8,to_float(E))
+    t_set(agW,9,to_float(e0W)); t_set(agG,9,to_float(de0W)); t_set(agM,9,to_float(m_e0W)); t_set(agV,9,to_float(v_e0W)); t_set(agN,9,to_float(dd))
+    t_set(agW,10,to_float(e0B)); t_set(agG,10,to_float(de0B)); t_set(agM,10,to_float(m_e0B)); t_set(agV,10,to_float(v_e0B)); t_set(agN,10,to_float(d))
+    t_set(agW,11,to_float(e1W)); t_set(agG,11,to_float(de1W)); t_set(agM,11,to_float(m_e1W)); t_set(agV,11,to_float(v_e1W)); t_set(agN,11,to_float(dd))
+    t_set(agW,12,to_float(e1B)); t_set(agG,12,to_float(de1B)); t_set(agM,12,to_float(m_e1B)); t_set(agV,12,to_float(v_e1B)); t_set(agN,12,to_float(d))
+    t_set(agW,13,to_float(noG)); t_set(agG,13,to_float(dnoG)); t_set(agM,13,to_float(m_noG)); t_set(agV,13,to_float(v_noG)); t_set(agN,13,to_float(d))
+    t_set(agW,14,to_float(noB)); t_set(agG,14,to_float(dnoB)); t_set(agM,14,to_float(m_noB)); t_set(agV,14,to_float(v_noB)); t_set(agN,14,to_float(d))
+    t_set(agW,15,to_float(roW)); t_set(agG,15,to_float(droW)); t_set(agM,15,to_float(m_roW)); t_set(agV,15,to_float(v_roW)); t_set(agN,15,to_float(vd))
+    t_set(agW,16,to_float(roB)); t_set(agG,16,to_float(droB)); t_set(agM,16,to_float(m_roB)); t_set(agV,16,to_float(v_roB)); t_set(agN,16,to_float(V))
+    // CLMConvMoE here has exactly 17 trainable tensors (embed + 8 weight/bias
+    // pairs); the group count is the populated slot count. (The named lever-4
+    // target "~20× separate _adam" is this 17-call optimizer loop.)
+    let ag_count = 17
+
     // ---- round-robin multi-window loop; epochs full passes over nwin ----
     let _enve2 = env("CLM_PROD_EPOCHS")
     let epochs = if _enve2 == "" { 12 } else { to_int(_enve2) }
@@ -790,15 +853,11 @@ fn main() {
                     xe, xec, xt, hn0, xhat0, inv0, eo0, eo1, probs, ex_out, yn, xhatN, invN,
                     dembed, decW, decB, dtcW, dtcB, dtgG, dtgB, drW, drB, de0W, de0B, de1W, de1B,
                     dnoG, dnoB, droW, droB, T, d, E, V, K)
-        _adam(embed, dembed, m_embed, v_embed, vd, step)
-        _adam(ecW, decW, m_ecW, v_ecW, dd, step); _adam(ecB, decB, m_ecB, v_ecB, d, step)
-        _adam(tcW, dtcW, m_tcW, v_tcW, dd, step); _adam(tcB, dtcB, m_tcB, v_tcB, d, step)
-        _adam(tgG, dtgG, m_tgG, v_tgG, d, step);  _adam(tgB, dtgB, m_tgB, v_tgB, d, step)
-        _adam(rW, drW, m_rW, v_rW, ed, step);     _adam(rB, drB, m_rB, v_rB, E, step)
-        _adam(e0W, de0W, m_e0W, v_e0W, dd, step); _adam(e0B, de0B, m_e0B, v_e0B, d, step)
-        _adam(e1W, de1W, m_e1W, v_e1W, dd, step); _adam(e1B, de1B, m_e1B, v_e1B, d, step)
-        _adam(noG, dnoG, m_noG, v_noG, d, step);  _adam(noB, dnoB, m_noB, v_noB, d, step)
-        _adam(roW, droW, m_roW, v_roW, vd, step); _adam(roB, droB, m_roB, v_roB, V, step)
+        // LEVER (4) F-RFC046 ROOT — the whole 17-tensor AdamW update in ONE host
+        // crossing (was 17 separate forge_dispatch_adamw calls SM-starving the GPU
+        // between launches). Byte-eq to the per-tensor loop (F-RFC046-ADAMW-GROUP-EQ
+        // / F-RFC046-FUSED-STEP-EQ, max|Δ|=0.0); no-CUDA falls back to per-tensor.
+        _adam_group(agW, agG, agM, agV, agN, ag_count, step)
         step = step + 1
     }
     let first_ce = sum_first / to_float(nwin)
