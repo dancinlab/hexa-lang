@@ -1,0 +1,94 @@
+name: determinism-gate
+
+# ── MISCOMPILE-ZERO linker/compiler DETERMINISM gate ────────────────────────
+#
+# PURPOSE
+#   Lock that the native hexa toolchain is BYTE-DETERMINISTIC for fixed input,
+#   gated so nondeterminism can't regress. Sister of miscompile-zero-gate:
+#   that proves emit is *clean* (0 ENCODE-MISS / 0 udf); THIS proves emit + the
+#   hexa_ld link are *reproducible* (same input bytes -> same output bytes,
+#   twice).
+#
+# WHAT IT DOES
+#   1. Builds the native `./hexa` driver via the SAME shared release path the
+#      release + miscompile-zero gates use (tool/release_build).
+#   2. Runs tool/determinism_gate.sh over self/test/miscompile_zero/*.hexa:
+#        PHASE 1 — native --emit=obj each program TWICE, assert byte-identical.
+#        PHASE 2 — link each object TWICE with `hexa run tool/hexa_ld.hexa`,
+#                  same output basename in two dirs (isolates the path-derived
+#                  build-id), assert byte-identical.
+#      FAILS NONZERO on ANY byte diff.
+#
+#   Determinism note (NOT nondeterminism): the codegen label hash `_L<sha4>_`
+#   (= sha256(module.file)[:4], compiler/codegen/arm64_darwin.hexa:752) and the
+#   linker ad-hoc-codesign build-id `<out-basename>-UUID...` are PURE FUNCTIONS
+#   of fixed input (module path / output path). PHASE 2 links with the same
+#   basename so only a TRUE nondeterminism (timestamp / random UUID / unstable
+#   sort / uninit pad) can make the two outputs differ.
+#
+#   Runs on macos-latest (arm64) so the arm64-apple-darwin emit + hexa_ld
+#   Mach-O link path the byte-eq graduation was proven on is exercised. The
+#   proven reference run is on the ghost macOS host with the graduated
+#   gen2_fix compiler + hld_fixed linker:
+#     HEXA_NATIVE_CC=~/dancinlab/selfhost-work/gen2_fix \
+#     HEXA_LD=~/dancinlab/selfhost-work/hld_fixed \
+#       bash tool/determinism_gate.sh
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'self/test/miscompile_zero/**'
+      - 'tool/determinism_gate.sh'
+      - 'tool/hexa_ld.hexa'
+      - '.github/workflows/determinism-gate.yml'
+      - 'compiler/**'
+      - 'self/**'
+  pull_request:
+    paths:
+      - 'self/test/miscompile_zero/**'
+      - 'tool/determinism_gate.sh'
+      - 'tool/hexa_ld.hexa'
+      - '.github/workflows/determinism-gate.yml'
+      - 'compiler/**'
+      - 'self/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  determinism-gate:
+    name: determinism (re-emit + relink byte-eq, darwin-arm64)
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Build — shared release_build (native ./hexa driver)
+        shell: bash
+        env:
+          TARGET: darwin-arm64
+          CC: clang
+          LIBS: ""
+          GH_TOKEN: ${{ github.token }}
+        run: bash tool/release_build
+
+      - name: Sanity — ./hexa runs
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./hexa --version
+
+      - name: Gate — re-emit + relink must be byte-deterministic
+        shell: bash
+        env:
+          # The released ./hexa driver runs the compiler via
+          # `hexa run compiler/main.hexa <flags> SOURCE`, and the linker via
+          # `hexa run tool/hexa_ld.hexa -o OUT OBJ`.
+          HEXA_NATIVE_CC: ./hexa
+          HEXA_CC_PREARGS: run compiler/main.hexa
+          HEXA_LD: ./hexa run tool/hexa_ld.hexa
+          HEXA_TARGET: arm64-apple-darwin
+          DETERM_OUT: ${{ runner.temp }}/determinism-gate-out
+        run: bash tool/determinism_gate.sh
