@@ -1,0 +1,116 @@
+// @ci_gate — pure · network-free · deterministic (stdlib_selftest_aggregate --ci-gate)
+//
+// stdlib/deck/sanitize_ascii_test.hexa — selftest for the QE/FoX ASCII
+// sanitizer (deck_push choke point). Proves the em-dash → FoX PARSE_ERR
+// signal-6 crash class is structurally prevented.
+//
+// ROOT CAUSE prevented: a non-ASCII byte (em-dash U+2014 "—" &c.) carried
+// from an easy-style title/comment into a QE `.in` file crashes QE 6.7's
+// FoX XML parser (runParser → PARSE_ERR → SIGABRT). The LaH10 gate anchor
+// hit exactly this (2026-06).
+//
+// 단언:
+//   - em-dash input → ASCII-only output, em-dash mapped to "-".
+//   - a title with mixed Unicode (em/en dash · curly quotes · ellipsis ·
+//     nbsp · stray CJK) → pure ASCII (every byte <= 0x7F).
+//   - physics-bearing numeric fields (celldm/ecutwfc/k-mesh/floats) are
+//     bit-identical through the pass (no numeric byte is > 0x7F).
+//   - the choke point: deck_push routes .in through the sanitizer but
+//     leaves .md (intentional Korean runbook) untouched.
+//
+// Run:  hexa run stdlib/deck/sanitize_ascii_test.hexa
+// PASS: exits 0, prints "deck_sanitize_ascii_test PASS".
+use "stdlib/deck/types"
+
+// every byte of `s` is ASCII (<= 0x7F) ?
+fn _is_pure_ascii(s: str) -> bool {
+    let n = len(s)
+    let mut i = 0
+    while i < n {
+        if s.byte_at(i) > 0x7F { return false }
+        i = i + 1
+    }
+    return true
+}
+
+fn _eq(case: str, got: str, want: str) {
+    if got != want {
+        println("  FAIL: " + case + " — got '" + got + "' want '" + want + "'")
+        exit(1)
+    }
+    println("  ok: " + case)
+}
+
+fn _ascii(case: str, s: str) {
+    if !_is_pure_ascii(s) {
+        println("  FAIL: " + case + " — output still has a non-ASCII byte")
+        exit(1)
+    }
+    println("  ok: " + case)
+}
+
+fn main() {
+    println("# deck_sanitize_ascii_test — QE/FoX em-dash crash-class prevention")
+
+    // ── em-dash → "-" (the exact FoX-crash culprit, U+2014) ──────────────
+    let em = sanitize_ascii("RTSC A01 — Mg variant")
+    _ascii("em-dash output is pure ASCII", em)
+    _eq("em-dash maps to hyphen", em, "RTSC A01 - Mg variant")
+
+    // ── a title with MIXED Unicode → pure ASCII ──────────────────────────
+    // Build the input from explicit UTF-8 bytes (hexa has no \u{} escape).
+    // Includes: curly double-quotes “ ”, em-dash —, en-dash –, curly
+    // single-quotes ‘ ’, ellipsis …, no-break space (U+00A0), minus sign −,
+    // and a stray CJK glyph (수) with no mapping → "-".
+    let lq2 = chr(0xE2) + chr(0x80) + chr(0x9C)  // “  U+201C
+    let rq2 = chr(0xE2) + chr(0x80) + chr(0x9D)  // ”  U+201D
+    let emd = chr(0xE2) + chr(0x80) + chr(0x94)  // —  U+2014
+    let end = chr(0xE2) + chr(0x80) + chr(0x93)  // –  U+2013
+    let lq1 = chr(0xE2) + chr(0x80) + chr(0x98)  // ‘  U+2018
+    let rq1 = chr(0xE2) + chr(0x80) + chr(0x99)  // ’  U+2019
+    let ell = chr(0xE2) + chr(0x80) + chr(0xA6)  // …  U+2026
+    let nbs = chr(0xC2) + chr(0xA0)              // nbsp U+00A0
+    let mns = chr(0xE2) + chr(0x88) + chr(0x92)  // −  U+2212
+    let cjk = chr(0xEC) + chr(0x88) + chr(0x98)  // 수  U+C218 (no map → "-")
+    let mixed = sanitize_ascii(
+        "LaH10 " + lq2 + "gate" + rq2 + " " + emd + " Tc" + end + "run "
+        + lq1 + "x" + rq1 + ell + " 10 GPa" + nbs + "step " + mns + "5 " + cjk)
+    _ascii("mixed-Unicode title is pure ASCII", mixed)
+    _eq("mixed-Unicode title maps deterministically",
+        mixed, "LaH10 \"gate\" - Tc-run 'x'... 10 GPa step -5 -")
+
+    // (λ U+03BB, a 2-byte non-typographic codepoint — placeholder, not raw)
+    let lam = chr(0xCE) + chr(0xBB)              // λ  U+03BB
+    _ascii("greek lambda became ASCII", sanitize_ascii(lam + " phonon"))
+    _eq("greek lambda → placeholder", sanitize_ascii(lam + " phonon"), "- phonon")
+
+    // no-break space → ordinary space
+    _eq("nbsp → space", sanitize_ascii("a" + nbs + "b"), "a b")
+
+    // ── ellipsis expands to three dots ───────────────────────────────────
+    _eq("ellipsis → ...", sanitize_ascii("wait…done"), "wait...done")
+
+    // ── PHYSICS / NUMERIC fields are bit-identical (all bytes < 0x80) ─────
+    let phys = "  celldm(1) = 8.5132   ecutwfc = 80   1.0d-10   12 12 12  0 0 0"
+    _eq("numeric/physics line untouched", sanitize_ascii(phys), phys)
+    let coords = "  H    0.1200000  -0.1200000   0.6200000"
+    _eq("atomic coords untouched", sanitize_ascii(coords), coords)
+
+    // already-clean ASCII is an exact identity (no spurious rewrites)
+    let clean = "&CONTROL\n  prefix = 'lah10'\n/\n"
+    _eq("clean ASCII is identity", sanitize_ascii(clean), clean)
+
+    // ── the CHOKE POINT: deck_push sanitizes .in, leaves .md alone ───────
+    let md_in = "# 실행 안내 " + emd + " " + lam + " 계산\n"  // Korean + em-dash + λ
+    let files: [DeckFile] = []
+    deck_push(files, "ph.in",      "LaH10 " + emd + " " + lam + " run\n&inputph\n/\n")
+    deck_push(files, "RUNBOOK.md", md_in)  // intentional Korean runbook
+    // files[0] = the .in → must be pure ASCII (crash-proof for FoX)
+    _ascii("deck_push .in content is pure ASCII", files[0].content)
+    _eq("deck_push .in em-dash + lambda sanitized",
+        files[0].content, "LaH10 - - run\n&inputph\n/\n")
+    // files[1] = the .md runbook → Unicode preserved verbatim (NOT sanitized)
+    _eq("deck_push .md runbook left untouched", files[1].content, md_in)
+
+    println("deck_sanitize_ascii_test PASS")
+}
