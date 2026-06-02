@@ -19,6 +19,7 @@
 // el-ph dataset it is handed. This CLI is the thin argv front-end.
 
 use "stdlib/qforge/orchestrator"
+use "stdlib/qforge/migration_scoreboard"
 
 fn _qf_help() {
     println("hexa qforge — hexa-native first-principles electron-phonon → Tc engine")
@@ -26,6 +27,7 @@ fn _qf_help() {
     println("usage:")
     println("  hexa qforge run <deck>   run the QFORGE el-ph→Tc chain on a deck")
     println("  hexa qforge selftest     run the orchestrator (el-ph→Tc chain) gate")
+    println("  hexa qforge gate         migration-gate scoreboard (CaH6·LaH10·Li2MgH16 λ·Tc)")
     println("  hexa qforge help         this text")
     println("")
     println("engine: SCF·DFPT·elph·Eliashberg·Tc bricks (stdlib/qforge), composed by")
@@ -131,6 +133,13 @@ fn main() {
     if sub == "selftest" {
         let rc = _qf_selftest()
         exit(rc)
+    }
+    if sub == "gate" {
+        // Migration-gate scoreboard — a live rollup of the 3 anchors' QFORGE-vs-QE
+        // λ·Tc agreement (the d_qforge_engine default-flip gate). Reads the fixture
+        // SSOT; renders PASS/HELD/PENDING + the n/3 verdict. Pure read+compute.
+        print(qforge_migration_scoreboard())
+        return
     }
     if sub == "run" {
         let mut deck = ""

@@ -45,3 +45,29 @@ pub fn mga_li2mgh16() -> [float] {
     // status=0.0 → placeholder; numerics are 0.0 sentinels (never compared).
     return [0.0, 0.0, 0.0, 0.10, 0.0]
 }
+
+// ── QFORGE-NC MEASURED λ (the live-rollup side of the scoreboard) ─────────────
+// The scoreboard (qforge_migration_scoreboard) reports the QFORGE-NC composed
+// real-cell λ ALONGSIDE the QE reference and classifies each anchor. These are
+// the HONEST as-found composed values, NOT the L0-identity placeholder the
+// ci_gate harness uses. A sentinel < 0.0 means "qforge-pending" (no composed λ
+// measured for that anchor yet) → the scoreboard renders PENDING, never PASS.
+//
+// PROVENANCE (CaH6, verbatim from QFORGE-FEATURE.log.md, d6/g63 — NOT tuned):
+//   composed real-cell xval (cah6_realcell_compose_xval.hexa, real ω(q,ν) band +
+//   off-diag 10×10 + real N(E_F)=77.3948, bare ΔV, NPW=64 ground SCF converged):
+//   QFORGE-NC composed λ = 0.0895675 · rel-ε vs QE 4.376 = 0.9795 (~49× under).
+//   Root cause of the 49× NAMED (not fixed): Γ-only-vs-full-4×4×4q BZ + NPW
+//   undersampling (calibration RULED OUT — clean-metal Al/Nb/Pb controls validate
+//   the same back-end, PR#2508+). Gate CaH6-NC stays HELD (PARTIAL, not flipped).
+//   cite: hexa-lang PR#2502 (4fa6afdc9) + PR#2503 (6ad68de23) audit chain.
+// LaH10 + Li2MgH16: no composed QFORGE λ measured yet → sentinel -1.0 (PENDING).
+
+// CaH6 — QFORGE-NC composed real-cell λ MEASURED (honest, outside the 1% bar).
+pub fn mga_cah6_qforge_lambda() -> float { return 0.0895675 }
+
+// LaH10 — QFORGE-NC composed λ not yet measured (qforge-pending).
+pub fn mga_lah10_qforge_lambda() -> float { return -1.0 }
+
+// Li2MgH16 — QFORGE-NC composed λ not yet measured (qforge-pending).
+pub fn mga_li2mgh16_qforge_lambda() -> float { return -1.0 }

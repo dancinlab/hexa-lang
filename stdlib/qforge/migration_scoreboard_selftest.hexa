@@ -1,0 +1,81 @@
+// @ci_gate — pure · deterministic · network-free · NO pod ops
+//
+// migration_scoreboard_selftest.hexa — g5 gate for the QFORGE→QE migration-gate
+// SCOREBOARD (stdlib/qforge/migration_scoreboard.hexa).
+//
+// This does NOT LLM-judge any arithmetic: it `hexa verify`-style ASSERTS the
+// rel-ε identity (|qf−qe|/qe), the PASS/HELD/PENDING classification thresholds,
+// and the n/3 PASS gate count, on KNOWN fixture (qe, qforge) pairs.
+//
+// Run:  hexa run stdlib/qforge/migration_scoreboard_selftest.hexa
+// PASS: exits printing "migration_scoreboard_selftest PASS".
+
+use "stdlib/qforge/migration_scoreboard"
+
+fn _abs(x: float) -> float { if x < 0.0 { return -x } return x }
+fn _close(got: float, want: float, tol: float) -> bool { return _abs(got - want) <= tol }
+
+fn main() {
+    let mut fails = 0
+
+    // ── (1) rel-ε identity — known pairs, hand-computed expectations ─────────
+    // |0.0895675 − 4.376| / 4.376 = 4.2864325 / 4.376 = 0.97953…  (CaH6 live)
+    let r1 = qfg_rel_eps(0.0895675, 4.376)
+    if !_close(r1, 0.9795322, 1e-6) {
+        println("FAIL rel-ε(0.0896,4.376) = " + to_string(r1) + " want 0.9795322"); fails = fails + 1
+    }
+    // exact agreement → 0.0
+    let r2 = qfg_rel_eps(4.376, 4.376)
+    if !_close(r2, 0.0, 1e-12) { println("FAIL rel-ε(eq) = " + to_string(r2)); fails = fails + 1 }
+    // 0.5% under → 0.005 (just inside the bar)
+    let r3 = qfg_rel_eps(1.0 - 0.005, 1.0)
+    if !_close(r3, 0.005, 1e-9) { println("FAIL rel-ε(0.5%) = " + to_string(r3)); fails = fails + 1 }
+    // want≈0 guard: must NOT divide-by-zero into a false 0% — returns |got|.
+    let r4 = qfg_rel_eps(0.7, 0.0)
+    if !_close(r4, 0.7, 1e-12) { println("FAIL rel-ε(want=0) = " + to_string(r4)); fails = fails + 1 }
+
+    // ── (2) classification thresholds (2=PASS · 1=HELD · 0=PENDING) ──────────
+    // PASS: terminal ref + qf measured + rel-ε ≤ 1%. λ_qf 1.000 vs λ_qe 1.000.
+    if qfg_classify(1.0, 1.000, 1.000) != 2 { println("FAIL classify exact-PASS"); fails = fails + 1 }
+    // PASS just-inside: 0.9% < 1% bar → PASS. 0.991 vs 1.00 = 0.9%.
+    if qfg_classify(1.0, 1.00, 0.991) != 2 { println("FAIL classify inside-PASS@0.9%"); fails = fails + 1 }
+    // HELD just-outside: 1.1% > 1% bar → HELD. 0.989 vs 1.00 = 1.1%.
+    if qfg_classify(1.0, 1.00, 0.989) != 1 { println("FAIL classify outside-HELD@1.1%"); fails = fails + 1 }
+    // HELD: rel-ε well over the bar (1.02 vs 1.00 = 2.0% > bar).
+    if qfg_classify(1.0, 1.00, 1.02) != 1 { println("FAIL classify HELD@2%"); fails = fails + 1 }
+    // HELD: the CaH6 live disagreement (0.0896 vs 4.376 = 97.95% ≫ bar).
+    if qfg_classify(1.0, 4.376, 0.0895675) != 1 { println("FAIL classify CaH6-HELD"); fails = fails + 1 }
+    // PENDING: ref not terminal (status 0.0) even though a qf value is present.
+    if qfg_classify(0.0, 4.376, 0.0896) != 0 { println("FAIL classify ref-PENDING"); fails = fails + 1 }
+    // PENDING: qforge not measured (sentinel −1.0) even with a terminal ref.
+    if qfg_classify(1.0, 4.376, -1.0) != 0 { println("FAIL classify qf-PENDING"); fails = fails + 1 }
+
+    // ── (3) n/3 gate count via the LIVE scoreboard (reads the fixture SSOT) ───
+    // Current honest state: CaH6 HELD, LaH10+Li2MgH16 PENDING → 0/3 PASS.
+    let board = qforge_migration_scoreboard()
+    if !board.contains("0/3 anchors PASS") {
+        println("FAIL live gate-count — expected '0/3 anchors PASS' in scoreboard:"); println(board)
+        fails = fails + 1
+    }
+    if !board.contains("1 HELD") { println("FAIL live HELD count — expected '1 HELD'"); fails = fails + 1 }
+    if !board.contains("2 PENDING") { println("FAIL live PENDING count — expected '2 PENDING'"); fails = fails + 1 }
+    if !board.contains("migration gate = HELD") {
+        println("FAIL live verdict — expected 'migration gate = HELD' (0/3 not green)"); fails = fails + 1
+    }
+    // honesty: a 0/3 board must NOT print ALL_PASS.
+    if board.contains("ALL_PASS") { println("FAIL honesty — 0/3 board printed ALL_PASS"); fails = fails + 1 }
+
+    // ── (4) synthetic 3/3 → ALL_PASS count is right (drive classify directly) ─
+    // (the live fixture can't be 3/3 yet; assert the COUNT logic on a synthetic.)
+    let mut n_pass = 0
+    if qfg_classify(1.0, 4.0, 4.0) == 2 { n_pass = n_pass + 1 }   // PASS
+    if qfg_classify(1.0, 2.0, 2.0) == 2 { n_pass = n_pass + 1 }   // PASS
+    if qfg_classify(1.0, 1.0, 1.0) == 2 { n_pass = n_pass + 1 }   // PASS
+    if n_pass != 3 { println("FAIL synthetic 3/3 count = " + to_string(n_pass)); fails = fails + 1 }
+
+    if fails == 0 {
+        println("migration_scoreboard_selftest PASS")
+    } else {
+        println("migration_scoreboard_selftest FAIL — " + to_string(fails) + " case(s)")
+    }
+}

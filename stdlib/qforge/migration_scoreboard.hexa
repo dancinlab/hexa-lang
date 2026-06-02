@@ -1,0 +1,183 @@
+// stdlib/qforge/migration_scoreboard.hexa — QFORGE→QE MIGRATION-GATE SCOREBOARD.
+//
+// ── PURPOSE (d_qforge_engine — the migration default-flip gate, ROLLED UP) ────
+// The WHOLE QFORGE→production engine swap hinges on ONE gate: QFORGE-vs-QE λ·Tc
+// agreement on the 3 anchors CaH6 · LaH10 · Li2MgH16 (QFORGE.md "full migration
+// when QFORGE vs QE λ·Tc g5-agree"). `qforge_migration_gate_test.hexa` is the
+// CI HARNESS (pass/fail); this is the SCOREBOARD — a single auditable VIEW that
+// rolls up where every anchor stands, for a human/agent reading the campaign.
+//
+// It reads the EXISTING SSOT — `fixtures/migration_gate_anchors.hexa` — for both
+//   • the QE reference {λ, ω_log, μ*, Tc} per anchor (terminal RTSC-campaign JSON)
+//   • the QFORGE-NC composed-real-cell λ MEASURED so far (mga_*_qforge_lambda)
+// computes rel-ε = |qforge − qe| / qe per anchor, classifies each, and emits a
+// compact ASCII table + a one-line gate verdict. NOTHING is hardcoded here: the
+// QFORGE values come from the fixture SSOT; a missing value renders `pending`.
+//
+// ── CLASSIFICATION (3 states — honest, d6) ───────────────────────────────────
+//   PASS    — anchor TERMINAL (real QE ref) AND a QFORGE λ measured AND
+//             rel-ε(λ) ≤ GATE_EPS (1% — the same g5 bar the L3 YH10 xval uses).
+//   HELD    — QFORGE λ measured but rel-ε(λ) > GATE_EPS (show the gap; the gate
+//             is held open by a real disagreement, not a missing value).
+//   PENDING — QE ref not yet terminal (ref-pending) OR QFORGE λ not yet measured
+//             (qforge-pending). NEVER colored as PASS.
+//
+// The one-line verdict counts ONLY true PASS rows: `migration gate = HELD
+// (n/3 anchors PASS)`. A 0/3 is reported as 0/3 — a scoreboard's job is TRUTH.
+//
+// Run:  hexa run stdlib/qforge/migration_scoreboard.hexa     (renders live)
+//       hexa qforge gate                                     (CLI surface)
+
+use "stdlib/material/sim"
+use "stdlib/qforge/fixtures/migration_gate_anchors"
+
+pub let QFG_GATE_EPS: float = 0.01      // g5 rel-ε bar (≤ 1% λ-agreement)
+
+fn _qfg_abs(x: float) -> float { if x < 0.0 { return -x } return x }
+
+// rel-ε = |got − want| / |want|. For want≈0 (no ref) returns |got| so a fake
+// "0 vs 0" can never masquerade as a 0% agreement.
+pub fn qfg_rel_eps(got: float, want: float) -> float {
+    let w = _qfg_abs(want)
+    let d = _qfg_abs(got - want)
+    if w < 1e-12 { return d }
+    return d / w
+}
+
+// Classify one anchor from its raw inputs (PURE — the g5 selftest drives this).
+//   status_terminal: 1.0 ⇔ the QE reference is a real terminal record.
+//   lam_qe:          QE reference λ (meaningful only when terminal).
+//   lam_qf:          QFORGE-NC measured λ; < 0.0 ⇔ qforge-pending (not measured).
+// Returns: 2 = PASS · 1 = HELD · 0 = PENDING.
+pub fn qfg_classify(status_terminal: float, lam_qe: float, lam_qf: float) -> int {
+    let ref_ok = status_terminal > 0.5
+    let qf_ok = lam_qf >= 0.0
+    if !ref_ok || !qf_ok { return 0 }              // PENDING (ref or qforge missing)
+    let rel = qfg_rel_eps(lam_qf, lam_qe)
+    if rel <= QFG_GATE_EPS { return 2 }            // PASS  (within the 1% bar)
+    return 1                                       // HELD  (measured, outside bar)
+}
+
+fn _qfg_status_word(code: int) -> str {
+    if code == 2 { return "PASS" }
+    if code == 1 { return "HELD" }
+    return "PENDING"
+}
+
+// ── small formatting helpers (self-contained — no fmt dep) ───────────────────
+// right-pad a string to width w with spaces (left-justify in a column).
+fn _qfg_pad(s: str, w: int) -> str {
+    let mut out = s
+    let mut k = len(s)
+    while k < w { out = out + " "; k = k + 1 }
+    return out
+}
+
+// round a non-negative float to `dp` decimals and render as a fixed string.
+fn _qfg_fixed(x: float, dp: int) -> str {
+    let neg = x < 0.0
+    let mut v = x
+    if neg { v = -v }
+    let mut scale = 1.0
+    let mut i = 0
+    while i < dp { scale = scale * 10.0; i = i + 1 }
+    let scaled = v * scale + 0.5            // round-half-up
+    let ip = to_int(scaled)                 // truncates → rounded integer of v*scale
+    let whole = ip / pow10i(dp)
+    let frac = ip - whole * pow10i(dp)
+    let mut fs = to_string(frac)
+    // left-pad the fractional part to dp digits.
+    let mut fk = len(fs)
+    while fk < dp { fs = "0" + fs; fk = fk + 1 }
+    let mut out = to_string(whole)
+    if dp > 0 { out = out + "." + fs }
+    if neg { out = "-" + out }
+    return out
+}
+
+fn pow10i(n: int) -> int {
+    let mut p = 1
+    let mut i = 0
+    while i < n { p = p * 10; i = i + 1 }
+    return p
+}
+
+// percent string for a rel-ε (e.g. 0.9795 → "97.95%").
+fn _qfg_pct(rel: float) -> str { return _qfg_fixed(rel * 100.0, 2) + "%" }
+
+// Build a deterministic ASCII scoreboard from the fixture SSOT + return it.
+// PURE-ish: reads only the checked-in fixture functions; emits NO side effects
+// here (the CLI wrapper prints the returned string). Live values come from the
+// fixture, never hardcoded — a missing QFORGE/QE value renders as `pending`.
+pub fn qforge_migration_scoreboard() -> str {
+    let mut names: [str] = []
+    names.push("CaH6"); names.push("LaH10"); names.push("Li2MgH16")
+
+    let mut recs: [[float]] = []
+    recs.push(mga_cah6()); recs.push(mga_lah10()); recs.push(mga_li2mgh16())
+
+    let mut qf_lams: [float] = []
+    qf_lams.push(mga_cah6_qforge_lambda())
+    qf_lams.push(mga_lah10_qforge_lambda())
+    qf_lams.push(mga_li2mgh16_qforge_lambda())
+
+    let mut out = ""
+    out = out + "── QFORGE→QE migration-gate scoreboard (λ·Tc, bar rel-ε ≤ 1%) ──\n"
+    // header. columns: anchor | QE λ | QF λ | rel-ε | Tc(QE) | Tc(QF) | status
+    out = out + _qfg_pad("anchor", 10) + _qfg_pad("QE λ", 10) + _qfg_pad("QF λ", 11)
+              + _qfg_pad("rel-ε", 10) + _qfg_pad("Tc(QE)", 10) + _qfg_pad("Tc(QF)", 10)
+              + "status\n"
+    out = out + "--------  --------  ---------  --------  --------  --------  -------\n"
+
+    let mut n_pass = 0
+    let mut n_held = 0
+    let mut n_pending = 0
+    let mut ai = 0
+    while ai < 3 {
+        let rec = recs[ai]
+        let status_term = rec[0]
+        let lam_qe = rec[1]
+        let wlog = rec[2]
+        let mu = rec[3]
+        let tc_qe = rec[4]
+        let lam_qf = qf_lams[ai]
+
+        let code = qfg_classify(status_term, lam_qe, lam_qf)
+        if code == 2 { n_pass = n_pass + 1 }
+        else if code == 1 { n_held = n_held + 1 }
+        else { n_pending = n_pending + 1 }
+
+        // render cells honestly: ref-pending / qforge-pending where absent.
+        let ref_ok = status_term > 0.5
+        let qf_ok = lam_qf >= 0.0
+
+        let mut c_qe_lam = "ref-pend"
+        let mut c_qe_tc = "ref-pend"
+        if ref_ok { c_qe_lam = _qfg_fixed(lam_qe, 3); c_qe_tc = _qfg_fixed(tc_qe, 1) }
+
+        let mut c_qf_lam = "qf-pend"
+        let mut c_qf_tc = "qf-pend"
+        if qf_ok { c_qf_lam = _qfg_fixed(lam_qf, 4) }
+        // Tc(QF): only meaningful when BOTH a QFORGE λ and a QE ω_log/μ* exist.
+        if qf_ok && ref_ok { c_qf_tc = _qfg_fixed(mcmillan_tc(wlog, lam_qf, mu), 1) }
+
+        let mut c_rel = "—"
+        if ref_ok && qf_ok { c_rel = _qfg_pct(qfg_rel_eps(lam_qf, lam_qe)) }
+
+        out = out + _qfg_pad(names[ai], 10) + _qfg_pad(c_qe_lam, 10) + _qfg_pad(c_qf_lam, 11)
+                  + _qfg_pad(c_rel, 10) + _qfg_pad(c_qe_tc, 10) + _qfg_pad(c_qf_tc, 10)
+                  + _qfg_status_word(code) + "\n"
+        ai = ai + 1
+    }
+
+    out = out + "--------  --------  ---------  --------  --------  --------  -------\n"
+    let mut verdict = "HELD"
+    if n_pass == 3 { verdict = "ALL_PASS" }
+    out = out + "migration gate = " + verdict + " (" + to_string(n_pass) + "/3 anchors PASS"
+              + " · " + to_string(n_held) + " HELD · " + to_string(n_pending) + " PENDING)\n"
+    return out
+}
+
+fn main() {
+    print(qforge_migration_scoreboard())
+}
