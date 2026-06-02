@@ -229,3 +229,8 @@ CI-wiring note (for the gate agent — NOT done here): run.sh is invocable in CI
 with HEXA_NATIVE_CC=<graduated gen2> + HEXA_RUNTIME=self/runtime.c, gated like
 miscompile_zero_gate.sh (exit 2 = CI-neutral infra; exit 1 = real regression);
 complements (does not replace) the program-level gate.
+
+## 2026-06-03 diff-fuzz widened 121..500 (float/struct/closure) — ALL CLEAN
+- 380 seeded programs (seeds 121..500) gen2-native vs aprime-C: 0 divergence, 0 ENCODE-MISS/udf, exit-match.
+- generator axes added: float, struct, closure; for-in excluded (parse-fragile on both, not codegen).
+- verdict: .verdicts/miscompile-zero-fuzz/DIFF-FUZZ-500.txt · branch mczero/diff-fuzz-500
