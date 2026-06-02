@@ -1,0 +1,81 @@
+// F-P2-X86-EXIT42-SCRATCH — SELFHOST-NEXT x86_64 smallest-increment falsifier.
+//
+// Re-proves the in-tree x86_64 object-format layer end-to-end against a
+// CURRENT x86_64 Linux pool host (summer / aiden), writing into the
+// agent scratch dir (NOT /tmp), per SELFHOST-NEXT discipline.
+//
+// Pipeline (all in-tree, no external assembler):
+//   encode_x86_64_insn (compiler/emit/elf_x86_64.hexa instruction encoder)
+//     → exit(42) instruction stream
+//   serialize_elf_exec_x86_64 → static PT_LOAD ELF executable bytes
+//   write_bytes → scratch .elf
+//   sidecar pool copy + run on a real x86_64 Linux host → rc must be 42.
+//
+// Falsifier: if the emitted ELF does NOT exit(42) on x86_64 Linux, the
+// object-format layer is FALSIFIED. This is the honest "object layer
+// proven" milestone deliverable — NOT a working x86_64 codegen backend
+// (the x86 instruction *selection* from real Hexa source is the named
+// next big piece).
+
+import "../../emit/elf_x86_64.hexa"
+
+fn main() {
+    // exit(42) via Linux x86_64 syscall ABI (nr in eax, arg0 in edi):
+    //   B8 3C 00 00 00   mov eax, #60   (__NR_exit)
+    //   BF 2A 00 00 00   mov edi, #42   (status)
+    //   0F 05            syscall
+    let mov_eax = encode_x86_64_insn("MOV", ["eax", "#60"])
+    let mov_edi = encode_x86_64_insn("MOV", ["edi", "#42"])
+    let syscall = encode_x86_64_insn("SYSCALL", [])
+
+    let text: [Int] = []
+    let mut i = 0
+    while i < len(mov_eax) { text.push(mov_eax[i]); i = i + 1 }
+    i = 0
+    while i < len(mov_edi) { text.push(mov_edi[i]); i = i + 1 }
+    i = 0
+    while i < len(syscall) { text.push(syscall[i]); i = i + 1 }
+
+    println("encoded exit(42) text stream: len=" + to_string(len(text)))
+    // Expected 12 bytes: B8 3C 00 00 00 BF 2A 00 00 00 0F 05
+    if len(text) != 12 {
+        println("FAIL: expected 12-byte text stream, got " + to_string(len(text)))
+        exit(1)
+    }
+    let want = [0xB8, 0x3C, 0x00, 0x00, 0x00, 0xBF, 0x2A, 0x00, 0x00, 0x00, 0x0F, 0x05]
+    i = 0
+    while i < 12 {
+        if (text[i] & 0xff) != want[i] {
+            println("FAIL: text byte @" + to_string(i) + " = " + to_string(text[i] & 0xff) +
+                    " want " + to_string(want[i]))
+            exit(1)
+        }
+        i = i + 1
+    }
+    println("ok: instruction encoder bytes match Intel SDM golden")
+
+    let bytes = serialize_elf_exec_x86_64(text)
+    let out_path = "/Users/mini/dancinlab/selfhost-work/x86-64/exit42.elf"
+    write_bytes(out_path, bytes)
+    println("wrote " + to_string(len(bytes)) + " bytes → " + out_path)
+
+    // Structural self-check of the ELF header we just emitted.
+    //   e_ident MAG = 7F 45 4C 46 ; EI_CLASS=2 (ELF64) ; EI_DATA=1 (LE)
+    //   e_type @16 = ET_EXEC(2) ; e_machine @18 = EM_X86_64(0x3e)
+    if (bytes[0] & 0xff) != 0x7f || (bytes[1] & 0xff) != 0x45 ||
+       (bytes[2] & 0xff) != 0x4c || (bytes[3] & 0xff) != 0x46 {
+        println("FAIL: bad ELF magic"); exit(1)
+    }
+    if (bytes[4] & 0xff) != 2 { println("FAIL: EI_CLASS != ELF64"); exit(1) }
+    if (bytes[5] & 0xff) != 1 { println("FAIL: EI_DATA != LE"); exit(1) }
+    if (bytes[16] & 0xff) != 2 { println("FAIL: e_type != ET_EXEC"); exit(1) }
+    if (bytes[18] & 0xff) != 0x3e { println("FAIL: e_machine != EM_X86_64"); exit(1) }
+    println("ok: ELF header structural check (magic / ELF64 / LE / ET_EXEC / EM_X86_64)")
+
+    let f = exec_capture("file " + out_path + " 2>&1")
+    println("=== file(1) ===")
+    println(to_string(f[0]))
+
+    println("F-P2-X86-EXIT42-SCRATCH: emit OK — run host verification via run.sh")
+    exit(0)
+}

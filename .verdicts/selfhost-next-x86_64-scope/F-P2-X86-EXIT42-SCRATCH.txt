@@ -1,0 +1,59 @@
+F-P2-X86-EXIT42-SCRATCH — SELFHOST-NEXT x86_64 object-layer falsifier
+=====================================================================
+date: 2026-06-03
+branch: selfhost-next/x86_64-scope-clean
+host(s): summer (192.168.50.60, x86_64 Linux) + aiden (192.168.50.119, x86_64 Linux)
+
+FALSIFIER
+  If an exit(42) instruction stream emitted by the in-tree x86_64
+  instruction encoder (compiler/emit/elf_x86_64.hexa::encode_x86_64_insn)
+  and serialized by the in-tree static-exec ELF emitter
+  (serialize_elf_exec_x86_64) does NOT produce a structurally-valid
+  ELF64 x86-64 executable that runs and exits 42 on a real x86_64 Linux
+  host, the x86_64 object-format + instruction-encoder layers are
+  FALSIFIED.
+
+LOCAL EMIT (Mac, hexa run)
+  encoded exit(42) text stream: len=12
+  ok: instruction encoder bytes match Intel SDM golden
+       (B8 3C 00 00 00  BF 2A 00 00 00  0F 05
+        = mov eax,60 ; mov edi,42 ; syscall)
+  wrote 132 bytes -> /Users/mini/dancinlab/selfhost-work/x86-64/exit42.elf
+  ok: ELF header structural check (magic / ELF64 / LE / ET_EXEC / EM_X86_64)
+  file(1): ELF 64-bit LSB executable, x86-64, version 1 (SYSV),
+           statically linked, no section header
+  DETERMINISTIC: byte-identical re-emit (cmp exit42.elf exit42_b.elf == 0)
+
+HOST VERIFY — summer (x86_64 Linux)
+  $ readelf -h exit42.elf | grep -E 'Class|Data|Type|Machine'
+    Class:                             ELF64
+    Data:                              2's complement, little endian
+    Type:                              EXEC (Executable file)
+    Machine:                           Advanced Micro Devices X86-64
+  $ ./exit42.elf ; echo REMOTE_RC=$?
+    REMOTE_RC=42
+  $ xxd -s 120 -l 12 exit42.elf
+    00000078: b83c 0000 00bf 2a00 0000 0f05   .<....*.....
+    (text region == expected exit(42) instruction stream)
+
+HOST VERIFY — aiden (x86_64 Linux)
+  $ ./exit42.elf ; echo REMOTE_RC=$?
+    REMOTE_RC=42
+
+VERDICT: 🟢 PASS — object-format layer + instruction encoder PROVEN on
+two independent x86_64 Linux hosts. This proves the OBJECT-FORMAT layer
+only; it is NOT a claim of a working x86_64 codegen backend from Hexa
+source. The x86 instruction-selection-from-MIR path (codegen_x86_64_linux
+-> emit_asm/pack_lir_x86_64) is wired in compiler/main.hexa but its
+end-to-end source->binary correctness is the named NEXT piece.
+
+NOTE — full source->x86_64-asm path NOT exercised here:
+  `hexa run compiler/main.hexa -- ret42.hexa --target=x86_64-linux-gnu
+   --emit=asm` FAILS at the bootstrap layer (clang: use of undeclared
+  identifier '__raw_add_f' / '__raw_cmp3' while C-transpiling main.hexa
+  itself under `hexa run`). This is the known runtime-extern gap when the
+  big self-hosted compiler is run via the bootstrap interpreter — it is
+  UNRELATED to x86_64 codegen. Exercising codegen_x86_64_linux end-to-end
+  needs the BUILT native compiler (build/hexat / hexa_v2 with a
+  --target front-door), which is the next concrete step.
+
