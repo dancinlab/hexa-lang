@@ -1,0 +1,25 @@
+// c10_try_catch.hexa — miscompile class: try / catch / throw error handling.
+// Exercises the exception-control-flow codegen: try-block with no error, a
+// thrown value caught by a catch binding, and a guarded division. The
+// throw/catch landing-pad lowering and the catch-binding slot are codegen paths
+// not covered by c1-c9; a mis-lowered landing pad would surface as wrong
+// control flow, a spurious udf, or ENCODE-MISS.
+// Added by the MISCOMPILE-ZERO broad sweep (82-program clean sweep, 2026-06-02).
+
+let mut r1 = 0
+try {
+    r1 = 42
+} catch e {
+    r1 = -1
+}
+println("no-error:", r1)
+
+let mut r2 = 0
+try {
+    throw "boom"
+    r2 = 99
+} catch e {
+    r2 = -1
+    println("caught:", e)
+}
+println("after-throw:", r2)

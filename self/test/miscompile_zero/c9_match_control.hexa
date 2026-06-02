@@ -1,0 +1,24 @@
+// c9_match_control.hexa — miscompile class: branch-heavy control flow + loops.
+// A fizzbuzz-style multi-branch function inside a range loop: many cbz/b basic
+// blocks, modulo arithmetic, and a string-returning function called in a hot
+// loop. Exercises the basic-block label + conditional-branch codegen (the
+// __L<hash>_<fn>_bbN labels) at density — a mis-targeted branch would corrupt
+// control flow; a label-emit bug would surface as ENCODE-MISS.
+// Added by the MISCOMPILE-ZERO broad sweep (82-program clean sweep, 2026-06-02).
+
+fn fizzbuzz(n: int) -> string {
+    if n % 6 == 0 {
+        return "FizzBuzz"
+    }
+    if n % 3 == 0 {
+        return "Fizz"
+    }
+    if n % 2 == 0 {
+        return "Buzz"
+    }
+    return "."
+}
+
+for i in 1..25 {
+    println(i, fizzbuzz(i))
+}

@@ -1,0 +1,22 @@
+// c6_closures.hexa — miscompile class: closures / lambda capture.
+// Exercises |x| lambda syntax, multi-param lambdas, block-body lambdas, and
+// variable capture of outer locals — the closure-environment codegen path
+// (heap-captured upvalue load + indirect call). A capture-slot or 2-reg value
+// ABI miscompile would surface as wrong values, a spurious udf, or ENCODE-MISS.
+// Added by the MISCOMPILE-ZERO broad sweep (82-program clean sweep, 2026-06-02)
+// to widen the gate beyond the 6 graduation classes.
+
+let double = |x| x * 2
+let add = |x, y| x + y
+let calc = |x, y| {
+    let s = x + y
+    return s * 2
+}
+
+let factor = 6
+let mul = |x| x * factor
+
+println("double:", double(6))
+println("add:", add(3, 4))
+println("calc:", calc(3, 4))
+println("mul:", mul(7))
