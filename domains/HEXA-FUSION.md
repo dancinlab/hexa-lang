@@ -166,7 +166,7 @@ F-CLM-DEVFEED-FWD-EQ = 1 (fwd dil=1,2 max|Δ|=0.0)
 
 **HONEST: 부분적으로 움직임 — MEAN 0.56→2.83% (5×↑), PEAK 21→81%, 단 여전히 RED**(78.6% 샘플 0%). **결정적 정밀화**: PEAK 81% = device 를 세게 driven 가능 증명 + bwd/AdamW host tail 제거가 util 회복 ⇒ binding = **인터프리트 per-step driver loop(F-RFC046 root), NOT GEMM kernels** 재확정. 그러나 fwd-only 내부 0% 잔여 floor = **텐서 device-resident 만으론 부족, op 사이 인터프리트 host glue(add·gelu·groupnorm·moe-router 스칼라 루프)도 fuse 해야 MEAN→20% 닫힘** ⇒ ②(async-launch)·⑤(fwd+bwd fusion)의 진짜 과제 = inter-op glue 제거. verdict: `.verdicts/hexa-fusion-l1-fwdonly/F-RFC046-FWDONLY-UTIL.txt`. raw-GEMM 우위 주장 0.
 
-### ⑤ inter-op glue fusion (slice 1: residual-add) — ✅ (branch `fusion/l3-glue-fuse-slice` @7c820b56d, base #2561 · PR=UI-pending)
+### ⑤ inter-op glue fusion (slice 1: residual-add) — ✅ (PR #2564, base #2561)
 
 ③ 가 찾은 잔여 floor 의 최고빈도 glue: 잔차 `xt = xec + hg0`(매 step T·d host scalar 루프, t-conv↔router-conv GEMM 사이)을 device 로. `forge_dispatch_residual_add` → `_hx_cuda_farr_residual_add_gpu` grid-stride, 출력 `FARR_DEVICE dirty_host=0`.
 
@@ -175,7 +175,18 @@ residual-add max|Δ| out=0.0
 F-CLM-DEVFEED-RESIDUAL-EQ = 1
 ALL-PASS (im2col/fwd/bwd/db/int4quant/adam 전부 max|Δ|0.0 유지)
 ```
-verdict: `.verdicts/hexa-fusion-l3-glue/F-CLM-DEVFEED-RESIDUAL-EQ.txt`. **잔여 glue inventory(fuse 우선순위)**: gelu ×3 → groupnorm ×2 → expert-pack copy → moe-router → embedding. 각 byte-eq-gated stacked slice. 전부 fuse → 인터프리터가 fwd hot path 이탈 → W2 self-host pod util fire 가능. raw-GEMM 우위 주장 0. **⚠ PR=UI-pending**: org `dancinlab` 이 classic-PAT PR 생성 차단(403) → 브랜치는 origin durable, PR 은 UI/fine-grained token 으로 개설 필요.
+verdict: `.verdicts/hexa-fusion-l3-glue/F-CLM-DEVFEED-RESIDUAL-EQ.txt`. raw-GEMM 우위 주장 0.
+
+### ⑤b inter-op glue fusion (slice 2: gelu ×3 + groupnorm ×2) — ✅ (PR #2566, base #2564, bit-exact)
+
+`forge_dispatch_gelu`(EXACT erf-based, device `erf()`=IEEE libm) + `forge_dispatch_groupnorm`(10-arg; sequential reduction + host-identical NR-40 sqrt → no tree re-assoc). 출력 `FARR_DEVICE dirty_host=0`.
+
+```
+gelu max|Δ| out=0.0                              → F-CLM-DEVFEED-GELU-EQ = 1
+groupnorm max|Δ| y=0.0 xhat=0.0 mean=0.0 inv=0.0 → F-CLM-DEVFEED-GROUPNORM-EQ = 1
+ALL-PASS (전 F-CLM-DEVFEED-* max|Δ|0.0 유지, no regression)
+```
+verdict: `.verdicts/hexa-fusion-l3-glue/F-CLM-DEVFEED-GELU-GN-EQ.txt`. **잔여 glue (⑤c 진행중)**: expert-pack copy · moe-router · embedding gather — 이 3개 fuse 시 fwd 인터프리트-glue 소진 → W2 self-host pod util refire 가능. raw-GEMM 우위 주장 0.
 
 ### ⑦ operator surgical override — ✅ (PR #2556, base main, emit Δ ∧ byte-eq)
 
