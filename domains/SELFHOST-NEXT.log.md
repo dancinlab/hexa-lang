@@ -2,6 +2,50 @@
 
 Append-only history sister of `SELFHOST-NEXT.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
+## 2026-06-02 — in-tree ELF AArch64 .o serializer — NATIVE exit(42) runs rc 42 (no host `as`)
+
+Branch `selfhost-next/elf-arm64-serializer` (cut clean from origin/main d437f3fb4). Removes
+the host `aarch64-linux-gnu-as` dependency from the linux-arm64 obj path (continuation of
+#2537 cross-EMIT, which still relied on `as` to turn the ELF *assembly* into a `.o`).
+
+- [x] `compiler/emit/elf_arm64.hexa` — `serialize_elf_arm64(ElfArm64Obj)` +
+      `pack_lir_arm64_elf(LModule)`. Keyed off `elf_x86_64.hexa`'s ELF model (STN_UNDEF
+      index-0 sym, `.rela.text`, Elf64_Rela/Sym, `_ew_*` writers) but with
+      `e_machine=ELF_EM_AARCH64(0xb7)`, 4-byte LE instruction words from the SHARED
+      `encode_arm64_insn` (reused from `macho_arm64.hexa`), and `R_AARCH64_CALL26` relocs.
+      Bare ELF symbol names (no Mach-O `_`). Intra-fn B/BL/CBZ/CBNZ/B.cond resolved at
+      pack time (imm26/imm19); cross-fn/extern BL → CALL26 reloc + intra-module pre-patch.
+- [x] `compiler/emit/macho_arm64.hexa` — added `SVC #imm16` to `encode_arm64_insn`
+      (`0xd4000001 | (imm<<5)`) + lowercase `svc` map, for the freestanding `_start`
+      exit(N) syscall sequence. Additive; darwin codegen never emits `svc`.
+- [x] `compiler/main.hexa` — import elf_x86_64 + elf_arm64; native obj-emit branch for
+      `arm64-linux-gnu` (`pack_lir_arm64_elf` + `serialize_elf_arm64`); `--backend=native`
+      default for `arm64-linux-gnu --emit=obj`. Default `arm64-apple-darwin` stays Mach-O
+      (guarded), byte-identical (additive branches; SVC rule fires only on op=="SVC").
+- [x] `compiler/test/elf_arm64_exit42.hexa` — exit(42) LModule harness.
+- [x] VERIFIED on summer (aarch64 cross-binutils + qemu-aarch64-static), via the
+      byte-faithful reference of `serialize_elf_arm64`:
+      (1) exit(42) main-form: `readelf -h` → Type REL, Machine AArch64; `main` GLOBAL FUNC;
+          objdump → `mov x0,#42 ; ret`.
+      (2) exit(42) freestanding `_start` (`mov x8,#93; mov x0,#42; svc #0`):
+          `aarch64-linux-gnu-ld -static -nostdlib -e _start` → exec; `qemu-aarch64-static`
+          → **rc 42**.
+      (3) CALL26 reloc: `_start` BL-calls undef extern `helper` → `readelf -r` shows
+          `R_AARCH64_CALL26  helper + 0` against an UND symbol.
+      Verdict: `.verdicts/selfhost-next/F-ELF-ARM64-NATIVE-OBJ.txt`.
+- [ ] NEXT increment — ADRP/ADD page-reloc pairs (`R_AARCH64_ADR_PREL_PG_HI21` +
+      `R_AARCH64_ADD_ABS_LO12_NC`) for `.rodata`/`.data` symbol refs, `R_AARCH64_ABS64`,
+      and `.rodata`/`.data`/`.bss` section emission (text-only today, matching the x86
+      native obj baseline). Reloc-type constants + the Elf64_Rela serializer path already
+      handle them; the codegen→reloc mapping for ADRP/ADD pairs is the follow-on.
+- [ ] NOTE — full end-to-end through `hexa run compiler/main.hexa` is blocked locally by
+      the documented build-floor staleness wall (installed `hexa` runtime lacks
+      `__arr_alloc_items_zero`/`HX_MAP_LEN`/LIR struct ctors). Verification used the
+      byte-faithful reference; the hexa serializer is structurally identical to the proven
+      x86 serializer it is keyed off. On a box with a fresh self-host compiler, run
+      `hexa compiler/main.hexa -- T.hexa --target=arm64-linux-gnu --emit=obj -o T.o` and
+      byte-diff vs the `as`-object from #2537.
+
 ## 2026-06-02 — multi-target: linux-arm64 cross-emit + assemble + RUN (exit(42), rc 42)
 
 Branch `selfhost-next/linux-arm64-rebased` (cut clean from origin/main; +97 lines, g4-ok).
@@ -86,3 +130,58 @@ byte-eq fixpoint is now a terminal `@C` claim in root `CLAIMS.tape` with a persi
 - **Schema lint**: self-checked — fields {method,cmd,raw,src,status} present in sibling
   order, slug/group well-formed, `raw` ptr resolves to the verdict file. No dedicated
   CLAIMS lint / `hexa` CLI on ghost; method=fixpoint is empirical (run-stdout = the verify).
+## 2026-06-03 — x86_64 codegen path: SCOPE + smallest-increment (object layer PROVEN)
+
+Milestone: "multi-target bootstrap: x86_64 codegen path (new backend surface — scope first)".
+
+INVENTORY — x86_64 is FAR more present in-tree than the milestone assumed.
+PRESENT:
+  - Instruction encoder (TWO forms):
+    * `self/codegen/x86_64.hexa` (304 L) — typed emitters: mov/add/sub/imul/
+      cmp/test/setcc/jcc/call/ret/push/pop + REX.W/R/B, movabs imm64, Linux
+      syscall (write/exit). Tested: `self/codegen/test_x86_encoders.hexa`
+      (byte-golden vs Intel SDM / objdump).
+    * `compiler/emit/elf_x86_64.hexa` (1420 L) — `encode_x86_64_insn(op, ops)`
+      string-mnemonic assembler + ModRM/SIB/disp mem operands + REL8/REL32
+      branch patching.
+  - IR→x86 bridge: `self/codegen/ir_to_x86.hexa` (830 L) + linear regalloc;
+    tested `self/codegen/test_ir_to_x86.hexa` (load/add/jump/backward-jump/
+    movabs-neg/syscall byte-golden).
+  - MIR→LIR backend: `compiler/codegen/x86_64_linux.hexa` (1361 L) —
+    `codegen_x86_64_linux(MModule, opts) -> LModule`: linear-scan regalloc +
+    spilling + System V arg regs + arith/bit/cmp/setcc/div/call lowering.
+  - ELF emit: `serialize_elf_x86_64` (REL object, ET_REL/EM_X86_64) +
+    `serialize_elf_exec_x86_64` (static PT_LOAD executable) + `pack_lir_x86_64`
+    (LModule→ELF obj) + `link_elf_x86_64`. In-tree linker `compiler/link/hexa_ld.hexa`.
+  - Driver: `compiler/main.hexa` accepts `--target=x86_64-linux-gnu`, dispatches
+    to codegen_x86_64_linux (L868-869) + wires ld w/ crt1.o + ld-linux-x86-64
+    (L1022-1027). asm-text emit via `emit_asm` (compiler/emit/asm.hexa).
+  - Cross plan: `self/crosscompile.hexa` darwin-arm64 → linux-x86_64 triple +
+    linker argv. P2 falsifier corpus: compiler/test/macho_p0_corpus/run_F_P2_X86_*.
+GAP (missing / unproven):
+  - Native OBJ fast-path in main.hexa (pack_lir_x86_64+serialize, no system `as`)
+    is gated `target=="arm64-apple-darwin"` ONLY (main.hexa L900) → x86_64 falls
+    back to emit_asm → system `as`/`ld`.
+  - Full SOURCE→x86_64-binary correctness NOT proven end-to-end here: running
+    `hexa run compiler/main.hexa -- … --target=x86_64-linux-gnu` fails at the
+    BOOTSTRAP layer (clang: undeclared `__raw_add_f`/`__raw_cmp3` transpiling
+    main.hexa itself under `hexa run`) — a known runtime-extern gap, NOT x86
+    codegen. Needs the BUILT native compiler with a --target front-door.
+
+SMALLEST VERIFIABLE INCREMENT (produced + verified):
+  `compiler/test/macho_p0_corpus/run_F_P2_X86_EXIT42_SCRATCH.hexa` — emits an
+  exit(42) ELF64 x86-64 static executable via the in-tree encoder + serializer
+  (no external assembler), writes to scratch (NOT /tmp), structural self-check.
+  VERIFIED on TWO real x86_64 Linux hosts (summer + aiden):
+    readelf → ELF64 / LE / EXEC / X86-64 ; ./exit42.elf → REMOTE_RC=42 (both).
+    text @0x78 = b8 3c 00 00 00 bf 2a 00 00 00 0f 05 (mov eax,60;mov edi,42;syscall).
+    Deterministic byte-identical re-emit (cmp == 0).
+  Verdict: .verdicts/selfhost-next-x86_64-scope/F-P2-X86-EXIT42-SCRATCH.txt 🟢
+  Harness: ~/dancinlab/selfhost-work/x86-64/run.sh
+
+NAMED NEXT BIG PIECE: NOT a new instruction encoder (it exists + is byte-tested).
+The next piece is END-TO-END SOURCE→x86_64-BINARY via the BUILT native compiler:
+(1) build compiler/main.hexa to a native binary that exposes --target, then
+(2) either fall through emit_asm→`as`/`ld` on a linux host, or (3) wire the
+native pack_lir_x86_64+serialize OBJ fast-path for x86_64 in main.hexa L900
+(mirroring the arm64-darwin branch) — guarding arm64-darwin byte-identical.

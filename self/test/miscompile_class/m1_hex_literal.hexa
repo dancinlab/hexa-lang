@@ -1,0 +1,23 @@
+// m1_hex_literal.hexa — CLASS: hex-literal lowering (0xNN -> 0)
+// History: native _parse_int dropped hex literals to 0 (#2532, 47421c89c).
+// PRIMITIVE: a single hex constant evaluated in arithmetic / bit-ops must
+// produce its true value, not 0. A re-regression of the lowering bug would
+// flip one of these asserts (wrong runtime value) and historically also
+// surfaced as an ENCODE-MISS in the emitted object.
+//
+// Behavioral contract: exit 0 = every hex constant lowered correctly.
+// Any non-zero exit names the exact hex case that regressed.
+
+fn band(a: i64, b: i64) -> i64 { return a & b }
+fn shl(a: i64, n: i64) -> i64 { return a << n }
+
+if (0xff & 0xf0) != 240        { exit(51) }   // mask
+if (0x100 | 0x001) != 257      { exit(52) }   // or
+if (0x1 << 0x8) != 256         { exit(53) }   // shift by hex
+if band(0xabcd, 0x00ff) != 205 { exit(54) }   // through a fn boundary
+if shl(0xab, 8) != 43776       { exit(55) }
+if (0xdeadbeef & 0xffff) != 48879 { exit(56) } // wide hex literal
+if 0x0 != 0                    { exit(57) }    // the original collapse target
+if 0xA != 10                   { exit(58) }    // single-nibble
+
+println("HEX-OK")

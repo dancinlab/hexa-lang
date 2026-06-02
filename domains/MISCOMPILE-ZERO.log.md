@@ -163,3 +163,48 @@ self-emit) covering every miscompile class fixed to reach byte-eq graduation.
 - [ ] follow-up: broaden corpus + promote into the standard `hexa verify` suite
       (domain `## deferred`).
 
+
+## 2026-06-03 — PRIMITIVE-level miscompile-CLASS targeted tests (branch mczero/class-tests)
+
+Milestone: "catalogue the native-codegen miscompile CLASS as targeted codegen
+tests" — each historical class isolated as a MINIMAL primitive test (not a whole
+program), native-compiled + RUN on the graduated gen2_fix (ghost), with a real
+exit-code behavioral assert AND a cheap byte/asm oracle (0 ENCODE-MISS, 0 udf).
+
+NEW (additive — does NOT touch tool/miscompile_zero_gate.sh / determinism_gate.sh
+/ .github/workflows, per scope boundary):
+  - self/test/miscompile_class/  (NEW dir, distinct from miscompile_zero/)
+      m1_hex_literal          — hex-literal lowering 0xNN->0 (#2532, 47421c89c)
+      m2_fn_body_aliasing     — shared module-global .truncate(0)/reassign
+                                snapshot survival (#2509, _lr_ctx_clear 953c8824b)
+      m3_string_compare       — _ends_with/starts_with/== cascade on asm-operand
+                                + @PAGE-label strings (hex downstream)
+      m4_two_reg_value_abi    — (ptr,len) string value live across a clobbering
+                                intervening call
+      m5_linker_reloc_kinds   — __literal8(f64) + __DATA UNSIGNED(module-global)
+                                + __mod_init_func(top-level init) in one program
+                                (#2509: 5f38d7eb4/23207ce70/07d8556d1)
+      m6_index_slice_charcode — array index / substring / char_code / truncate(n)
+                                offset-loads (cycle-34/35 fallthrough,
+                                arm64_darwin.hexa:1303)
+      m7_struct_ctor_fields   — struct ctor + field-offset reads (cf. c3)
+  - self/test/miscompile_class/run.sh  — standalone runner: emit -> asm-oracle
+      (0 ENCODE-MISS, 0 udf) -> clang link vs self/runtime.c -> RUN, real rc.
+      exit 0 all-clean / 1 class-regressed / 2 infra. No pipe-mask.
+  - .verdicts/miscompile-class/CLASS-TESTS.txt  — verdict (verbatim runner output)
+
+RESULT (graduated gen2_fix, ghost 192.168.50.150):
+  7/7 PASS — every class emits clean (0 ENCODE-MISS, 0 udf) AND runs rc=0.
+  RUNNER-EXIT=0. No surprising failure -> no live regression in any class.
+
+g63 discrimination proof (both directions):
+  - negative control: assert the COLLAPSED hex value (0xff&0xf0==0) -> gen2_fix
+    printed CORRECT rc=99 (hex did NOT collapse); a regressed compiler would
+    have printed COLLAPSED rc=0.
+  - tamper control: m1 expected 240 mutated to 999 -> runner "FAIL ... RUN
+    rc=51 (CLASS REGRESSED)", RUNNER-EXIT=1 (names the class, real nonzero).
+
+CI-wiring note (for the gate agent — NOT done here): run.sh is invocable in CI
+with HEXA_NATIVE_CC=<graduated gen2> + HEXA_RUNTIME=self/runtime.c, gated like
+miscompile_zero_gate.sh (exit 2 = CI-neutral infra; exit 1 = real regression);
+complements (does not replace) the program-level gate.

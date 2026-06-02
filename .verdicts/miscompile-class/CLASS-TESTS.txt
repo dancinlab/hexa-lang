@@ -1,0 +1,69 @@
+MISCOMPILE-ZERO — primitive-level class regression tests
+=========================================================
+Milestone: catalogue the native-codegen miscompile CLASS as targeted codegen
+tests, so any class re-regression (cf. the cycle-41 `.truncate` regression) is
+caught at the PRIMITIVE level, not just by the whole-program corpus.
+
+Graduated compiler : ~/dancinlab/selfhost-work/gen2_fix  (byte-eq self-host
+                     graduation, ghost macOS host 192.168.50.150)
+Runtime / link     : self/runtime.c + clang -O2 -lsodium (arm64-apple-darwin)
+Oracle per test    : (a) emit CLEAN — 0 ENCODE-MISS, 0 spurious `udf` in the
+                     disassembled object (the historical miscompile signature,
+                     a cheap byte/asm-level check on the emitted primitive),
+                     AND (b) RUN with a REAL exit code of 0 (each test is a
+                     behavioral assert; a wrong runtime value exits with a
+                     class-specific code). No pipe-mask.
+Runner             : self/test/miscompile_class/run.sh  (standalone; does NOT
+                     touch tool/miscompile_zero_gate.sh / determinism_gate.sh)
+
+CLASS  →  HISTORY (fix)                               →  TARGETED TEST            →  RESULT
+-------------------------------------------------------------------------------------------
+hex-literal lowering 0xNN->0  (#2532, 47421c89c)      →  m1_hex_literal.hexa      →  PASS  emit-clean sz=2872 · run rc=0
+fn-body aliasing via shared module-global .truncate(0)
+  (#2509, _lr_ctx_clear 953c8824b)                    →  m2_fn_body_aliasing.hexa →  PASS  emit-clean sz=3576 · run rc=0
+_ends_with / string-compare cascade (downstream hex)  →  m3_string_compare.hexa   →  PASS  emit-clean sz=3680 · run rc=0
+2-register HexaVal value ABI (ptr+len pair live
+  across an intervening call)                         →  m4_two_reg_value_abi.hexa→  PASS  emit-clean sz=3664 · run rc=0
+linker reloc kinds: __literal8 (f64) / __DATA UNSIGNED
+  (module-global) / __mod_init_func (top-level init)
+  (#2509, 5f38d7eb4 / 23207ce70 / 07d8556d1)          →  m5_linker_reloc_kinds.hexa→ PASS  emit-clean sz=3488 · run rc=0
+index / slice / char_code / truncate(n) offset-loads
+  (cycle-34/35 .truncate fallthrough,
+   arm64_darwin.hexa:1303)                            →  m6_index_slice_charcode.hexa→PASS emit-clean sz=4616 · run rc=0
+struct ctor + field-offset reads (cf. c3_struct_ctor) →  m7_struct_ctor_fields.hexa→ PASS  emit-clean sz=4512 · run rc=0
+
+RUNNER VERDICT (graduated gen2_fix, ghost)
+------------------------------------------
+  $ HEXA_RUNTIME=.../self/runtime.c bash self/test/miscompile_class/run.sh
+  PASS  m1_hex_literal             emit-clean (sz=2872 em=0 udf=0) · run rc=0
+  PASS  m2_fn_body_aliasing        emit-clean (sz=3576 em=0 udf=0) · run rc=0
+  PASS  m3_string_compare          emit-clean (sz=3680 em=0 udf=0) · run rc=0
+  PASS  m4_two_reg_value_abi       emit-clean (sz=3664 em=0 udf=0) · run rc=0
+  PASS  m5_linker_reloc_kinds      emit-clean (sz=3488 em=0 udf=0) · run rc=0
+  PASS  m6_index_slice_charcode    emit-clean (sz=4616 em=0 udf=0) · run rc=0
+  PASS  m7_struct_ctor_fields      emit-clean (sz=4512 em=0 udf=0) · run rc=0
+  miscompile-class: PASS — 7/7 class tests emit clean AND run rc=0
+  RUNNER-EXIT=0
+
+ALL PASS: YES (7/7, real rc=0 on the graduated compiler).
+SURPRISING FAILURE (live regression): NONE — every historical class is correctly
+  compiled by the graduated gen2_fix.
+
+DISCRIMINATION PROOF (g63 honesty — the tests actually catch a regression)
+--------------------------------------------------------------------------
+Negative control: assert `(0xff & 0xf0) == 0` (the COLLAPSED/regressed value).
+  gen2_fix -> printed CORRECT, rc=99 (hex did NOT collapse). A regressed
+  compiler would have printed COLLAPSED rc=0 -> the assert discriminates.
+Tamper control: a copy of m1 with the expected value mutated 240 -> 999.
+  Runner -> "FAIL  m1_hex_literal — RUN rc=51 (wrong runtime value -> CLASS
+  REGRESSED)", RUNNER-EXIT=1. The runner returns nonzero and names the class
+  on any value mismatch (no pipe-mask, real exit codes).
+
+CI-WIRING NOTE (for the gate agent; NOT done here, gates untouched)
+-------------------------------------------------------------------
+This runner is additive and standalone. A future CI step could invoke
+`self/test/miscompile_class/run.sh` with HEXA_NATIVE_CC pointed at the
+graduated gen2 and HEXA_RUNTIME at self/runtime.c, gated identically to
+miscompile_zero_gate.sh (exit 2 = infra/no-native-emitter = CI-neutral;
+exit 1 = real class regression). It complements (does not replace) the
+program-level tool/miscompile_zero_gate.sh.

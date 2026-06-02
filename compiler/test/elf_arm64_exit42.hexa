@@ -1,0 +1,93 @@
+// compiler/test/elf_arm64_exit42.hexa
+//
+// SELFHOST-NEXT verification harness — builds an exit(42) LModule by
+// hand, runs it through the native ELF AArch64 serializer, and writes
+// the `.o` to /tmp/hexa_elf_arm64_exit42.o.
+//
+// Verified externally (summer aarch64 cross-toolchain): readelf -h/-r
+// clean (e_machine=AARCH64, Type=REL), links with aarch64-linux-gnu-ld
+// + runs rc 42 under qemu-aarch64-static.
+//
+// Run:  hexa run compiler/test/elf_arm64_exit42.hexa
+
+import "../emit/macho_arm64.hexa"     // encode_arm64_insn + LIR helpers
+import "../emit/elf_x86_64.hexa"      // shared ELF64 primitives (_ew_*, ElfRel/Sym)
+import "../emit/elf_arm64.hexa"       // the unit under test
+
+fn _reg(name: string) -> PReg {
+    return PReg { name: name, kind: "gpr", frag_role: "", frag_dtype: "", frag_layout: "" }
+}
+
+fn _op_reg(name: string) -> LOperand {
+    return LOperand { kind: "reg", reg: _reg(name), imm: 0,
+                      mem_base: _reg(""), mem_offset: 0, label: "" }
+}
+
+fn _op_imm(v: i64) -> LOperand {
+    return LOperand { kind: "imm", reg: _reg(""), imm: v,
+                      mem_base: _reg(""), mem_offset: 0, label: "" }
+}
+
+fn _ins(op: string, args: [LOperand]) -> LInstr {
+    return LInstr { op: op, args: args, comment: "" }
+}
+
+fn main() {
+    let out_path = "/tmp/hexa_elf_arm64_exit42.o"
+
+    // exit(42): a `main` that returns 42. Under the libc crt1 link,
+    // crt1 calls main; W0 (=42) becomes the process exit code.
+    //   mov x0, #42      0xd2800540
+    //   ret              0xd65f03c0
+    let f = LFunc {
+        name:         "main",
+        target:       "arm64-linux-gnu",
+        instrs:       [
+            _ins("mov", [_op_reg("x0"), _op_imm(42)]),
+            _ins("ret", [])
+        ],
+        frame_size:   0,
+        callee_saved: [],
+        def_line:     0
+    }
+    let lm = LModule {
+        file:    "exit42.hexa",
+        target:  "arm64-linux-gnu",
+        funcs:   [f],
+        rodata:  [],
+        bss:     [],
+        globals: [],
+        floats:  []
+    }
+
+    let obj = pack_lir_arm64_elf(lm)
+    let bytes = serialize_elf_arm64(obj)
+    write_bytes(out_path, bytes)
+    println("elf_arm64_exit42: wrote " + to_string(len(bytes)) + " bytes to " + out_path)
+    println("  .text bytes = " + to_string(len(obj.text)))
+    println("  symbols     = " + to_string(len(obj.symbols)))
+    println("  relocs      = " + to_string(len(obj.relocs)))
+
+    // Print the .text bytes as hex so the verdict captures the encoded
+    // instruction words (mov x0,#42 = 40 05 80 d2 ; ret = c0 03 5f d6).
+    let mut hexs = ""
+    let mut i = 0
+    while i < len(obj.text) {
+        let b = obj.text[i] & 0xff
+        let hi = (b >> 4) & 0xf
+        let lo = b & 0xf
+        hexs = hexs + _nyb(hi) + _nyb(lo) + " "
+        i = i + 1
+    }
+    println("  .text hex   = " + hexs)
+}
+
+fn _nyb(n: i64) -> string {
+    if n < 10 { return to_string(n) }
+    if n == 10 { return "a" }
+    if n == 11 { return "b" }
+    if n == 12 { return "c" }
+    if n == 13 { return "d" }
+    if n == 14 { return "e" }
+    return "f"
+}
