@@ -42,3 +42,9 @@
 @domain HEXA-SELFHOST+ := "domains/HEXA-SELFHOST+.md"
 @domain SELFHOST-NEXT := "domains/SELFHOST-NEXT.md"
 @domain MISCOMPILE-ZERO := "domains/MISCOMPILE-ZERO.md"
+
+@domain FORGE-UTILGREEN := "domains/FORGE-UTILGREEN.md"
+
+# FORGE-UTILGREEN refines FLAME-PERF's F-RFC046-GPU-UTILIZATION into the focused
+# util-GREEN endgame lever chain (host per-step orchestration → device).
+@link FORGE-UTILGREEN --refines--> FLAME-PERF  # F-RFC046 host-feed util-GREEN endgame · PR #2515 (lever-1) + lever-2 · anima CLM+KOSMOS
