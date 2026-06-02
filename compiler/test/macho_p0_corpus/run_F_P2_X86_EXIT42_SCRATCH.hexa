@@ -55,7 +55,7 @@ fn main() {
     println("ok: instruction encoder bytes match Intel SDM golden")
 
     let bytes = serialize_elf_exec_x86_64(text)
-    let out_path = "/Users/mini/dancinlab/selfhost-work/x86-64/exit42.elf"
+    let out_path = "build/x86_exit42_scratch.elf"
     write_bytes(out_path, bytes)
     println("wrote " + to_string(len(bytes)) + " bytes → " + out_path)
 
