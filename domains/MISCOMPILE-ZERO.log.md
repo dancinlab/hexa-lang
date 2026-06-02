@@ -2,6 +2,51 @@
 
 Append-only history sister of `MISCOMPILE-ZERO.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
+## 2026-06-02 — broad self-emit sweep: 82-program CLEAN-SWEEP (no new miscompile)
+
+Milestone: "broaden the self-emit corpus beyond the compiler flat — exercise
+gen2 native codegen on diverse programs, sweep for new miscompiles." Hunted for
+LATENT gen2 miscompiles beyond the 6 graduation classes by widening coverage to
+a feature-diverse 82-program corpus on GHOST.
+
+- [x] Swept 82 diverse `example/*.hexa` programs through the native gen2 path on
+      GHOST (`~/dancinlab/selfhost-work/gen2_fix`, graduated byte-eq compiler).
+      Per program: gen2 `--emit=obj` + gen2 `--emit=asm` + oracle
+      (`aprime_fixhex`) `--emit=asm` = 246 native compiles. Assert per program:
+      rc=0 · 0 ENCODE-MISS · 0 spurious udf · non-empty obj · gen2-asm ==
+      oracle-asm after normalizing the benign per-module label hash
+      (`__L<hex>_` → `__L_`).
+- [x] Feature axes covered: closures/lambda-capture/callbacks · pattern-match +
+      dense branch control · recursion + array index/assign (quicksort, sudoku,
+      queens, hanoi, ackermann) · float math + format precision (mandelbrot,
+      physics, stats) · string ops/methods/encoding (regex, base64, rot13,
+      chained methods) · arrays/maps/aggregate (matmul, histogram, json,
+      hash_demo) · memoization · structs/records/globals · comptime/builtins ·
+      parsers/calculators/state-machines (calc, rpn, bf, mini_transpiler) ·
+      text tools (wc/uniq/grep/diff/tree) · self-host lexer/parser ·
+      try/catch · ptr arithmetic.
+- [x] RESULT = CLEAN SWEEP. 82/82 CLEAN: rc=0, ENCODE-MISS=0, udf=0,
+      objsize 1272..25328, oracle-asm MATCH 82/82. The ONLY asm difference
+      observed anywhere = the benign 4-hex label hash (e.g.
+      `__L18a9_fizzbuzz_bb0` vs `__Lb30b_fizzbuzz_bb0`) — every instruction,
+      operand, and basic-block structure identical. NO new miscompile found.
+- [x] Pre-registered falsifier (a NEW ENCODE-MISS / udf / non-benign asm
+      divergence on any broader program) NOT triggered → strong positive
+      result. Verdict persisted verbatim:
+      `.verdicts/miscompile-zero-sweep/CLEAN-SWEEP-82.txt` (+ raw
+      `results.tsv`, 82 rows).
+- [x] Corpus broadened 6 → 10 classes so the gate guards the newly-swept
+      surface: `self/test/miscompile_zero/`
+        c6_closures          — closures / lambda capture
+        c7_recursion_arrays  — recursion + array index/assign (quicksort)
+        c8_string_methods    — chained string methods + parse_int builtin
+        c9_match_control     — dense branch / control-flow basic blocks
+        c10_try_catch        — try / catch / throw landing-pad lowering
+      All 10 (c1..c10) PASS the gate on gen2_fix: 10/10 clean, 0 ENCODE-MISS,
+      0 udf.
+- [ ] follow-up (deferred): random differential-fuzz gen2 vs aprime to surface
+      latent miscompiles before users hit them (domain `## deferred`).
+
 ## 2026-06-02 — regression guard: lightweight miscompile-zero gate landed
 
 Milestone: "regression guard — a CI gate that fails on ANY `gen2 --emit=obj`

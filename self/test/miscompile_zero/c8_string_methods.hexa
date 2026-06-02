@@ -1,0 +1,15 @@
+// c8_string_methods.hexa — miscompile class: chained string methods + builtins.
+// Exercises trim / to_upper / to_lower / method chaining and parse_int — the
+// string-op + runtime-call codegen path (2-reg string value ABI: ptr+len in a
+// pair of regs). A dropped second register or a mis-set return pair would
+// surface as garbage strings or, in the worst case, ENCODE-MISS / udf.
+// Added by the MISCOMPILE-ZERO broad sweep (82-program clean sweep, 2026-06-02).
+
+let s = "   hello WORLD  "
+println("trim:", s.trim())
+println("upper:", s.to_upper())
+println("lower:", s.to_lower())
+println("chain:", s.trim().to_upper())
+println("pi:", parse_int("42"))
+println("pn:", parse_int("-17"))
+println("pad:", parse_int("  99  "))

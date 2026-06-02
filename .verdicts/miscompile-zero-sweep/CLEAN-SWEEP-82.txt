@@ -1,0 +1,104 @@
+MISCOMPILE-ZERO — broad self-emit corpus sweep (CLEAN-SWEEP verdict)
+====================================================================
+
+Date    : 2026-06-02
+Host    : GHOST (ghostui-MacBookAir, arm64-apple-darwin, Darwin 25.5.0)
+Native  : ~/dancinlab/selfhost-work/gen2_fix  (graduated byte-eq self-hosted hexa)
+          sha256 dce5c1e29541dfdf403809a9b77e677066fefbd31ca102e5dc9904e1968f1e66
+Oracle  : ~/dancinlab/selfhost-work/aprime_fixhex  (C-built reference compiler)
+          sha256 c56c641389b367f4b5e3b8bf3ee29b59c9d67f341ca5b1fbe3d7b3b60bb2dd4a
+Target  : arm64-apple-darwin
+Invoke  : gen2_fix _drv.hexa --emit=obj  --target=arm64-apple-darwin --ignore-errors -o <obj> <src>
+          gen2_fix _drv.hexa --emit=asm  ... (gen2)  vs  aprime_fixhex --emit=asm ... (oracle)
+Atlas   : hermetic empty (HEXA_ATLAS_EMBED=<empty dir>)
+
+PRE-REGISTERED FALSIFIER
+------------------------
+Hypothesis: gen2's native codegen is at MISCOMPILE-ZERO only for the 6
+graduation classes already in the gate; a BROADER program set will surface a
+NEW latent miscompile (an ENCODE-MISS, a spurious `udf`, or an oracle asm
+divergence beyond the benign per-module label hash).
+
+Falsifier: for ANY program in a diverse 82-program corpus, observe
+  rc!=0  OR  ENCODE-MISS>0  OR  spurious udf>0  OR  objsize==0  OR
+  gen2 --emit=asm != oracle --emit=asm after normalizing the benign label
+  hash (__L<hex>_ -> __L_).
+
+RESULT — FALSIFIER NOT TRIGGERED (clean sweep)
+----------------------------------------------
+82 / 82 programs CLEAN:
+  rc=0           : 82/82
+  ENCODE-MISS=0  : 82/82
+  spurious udf=0 : 82/82
+  non-empty obj  : 82/82  (objsize range 1272 .. 25328 bytes)
+  oracle asm     : 82/82 MATCH after benign label-hash normalization
+                   (only difference observed = __L<hash>_ prefix, e.g.
+                    __L18a9_fizzbuzz_bb0 vs __Lb30b_fizzbuzz_bb0 — the
+                    documented benign per-module 4-hex label hash; every
+                    instruction, operand, and block structure identical.)
+
+NO new miscompile found. Zero divergence in instruction selection / register
+allocation / branch targeting across the entire diverse set.
+
+COVERAGE (82 programs, all under example/) by language-feature axis
+------------------------------------------------------------------
+  closures / lambda capture / callbacks / lazy : test_closures, test_callback,
+        test_lazy
+  pattern match / branchy control flow         : pattern_match, struct_patterns,
+        match_min, nested_if_expr, elseif_min, fizzbuzz_min, test_53_keywords
+  recursion + array index/assign               : quicksort, sorting, bsearch,
+        sudoku, queens, maze, life, hanoi, factorial_min, gcd_lcm,
+        optimize_ackermann
+  float math / format precision                : mathlib, physics, mandelbrot,
+        stats, float_min, test_format_precision
+  string ops / methods / encoding              : string_processing, strmethods_min,
+        strops_min, strcat_min, strarr_min, split_min, rot13, base64, base_conv,
+        regex
+  arrays / maps / aggregate                    : array_sum, arrconcat_min,
+        dynarr_min, forarray_min, idxassign_min, histogram, matmul, hash_demo,
+        json_get, json_pretty, csv_sum
+  memoization / recursion-heavy                : fibonacci, fibonacci_memo,
+        memoize_fib, memoize_binom, sieve_era, sieve_min
+  structs / records / globals                  : struct_min, record_test,
+        auto_record_test, bank, global_mut
+  comptime / builtins / generation             : comptime_const, test_comptime,
+        test_builtins, test_generation
+  parsers / calculators / state machines       : calc, rpn, roman,
+        egyptian_fraction, practical_state_machine, practical_calculator,
+        practical_data_pipeline, bf, mini_transpiler
+  text tools / IO-shaped                        : wc, uniq, grep, diff, tree
+  self-host front-end                          : self_host_lexer, self_host_parser
+  error handling                                : test_try_catch,
+        test_error_fallback
+  pointer arithmetic                            : test_ptr_arith
+
+(Each program: 3 native compiles — gen2 obj, gen2 asm, oracle asm. 246 native
+compiles total, all clean.)
+
+INTERPRETATION
+--------------
+A clean sweep across 82 feature-diverse real programs — none of which were in
+the gate corpus, and which exercise codegen primitives well beyond the 6
+graduation classes (closures, lambda capture, recursion-under-array-index,
+chained string methods, dense branch tables, try/catch landing pads, ptr
+arithmetic) — strengthens confidence in the miscompile-zero floor. The
+graduated gen2 native compiler is byte-faithful to the C oracle's instruction
+selection on this corpus (modulo the benign label hash).
+
+CORPUS BROADENED (gate now guards 10 classes, was 6)
+----------------------------------------------------
+Added 5 representative programs to self/test/miscompile_zero/ so the
+regression gate covers the newly-swept classes:
+  c6_closures.hexa          — closures / lambda capture
+  c7_recursion_arrays.hexa  — recursion + array index/assign (quicksort)
+  c8_string_methods.hexa    — chained string methods + parse_int builtin
+  c9_match_control.hexa     — dense branch / control-flow basic blocks
+  c10_try_catch.hexa        — try / catch / throw landing-pad lowering
+All 10 (c1..c10) PASS the gate on gen2_fix: 10/10 clean, 0 ENCODE-MISS, 0 udf.
+
+REPRODUCE
+---------
+  # on GHOST, from ~/dancinlab/hexa-lang:
+  bash ~/dancinlab/selfhost-work/sweep/run_sweep.sh   # writes sweep/results.tsv
+  HEXA_NATIVE_CC=~/dancinlab/selfhost-work/gen2_fix \
+    bash tool/miscompile_zero_gate.sh                  # 10/10 corpus gate
