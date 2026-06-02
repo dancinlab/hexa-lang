@@ -186,7 +186,24 @@ gelu max|Δ| out=0.0                              → F-CLM-DEVFEED-GELU-EQ = 1
 groupnorm max|Δ| y=0.0 xhat=0.0 mean=0.0 inv=0.0 → F-CLM-DEVFEED-GROUPNORM-EQ = 1
 ALL-PASS (전 F-CLM-DEVFEED-* max|Δ|0.0 유지, no regression)
 ```
-verdict: `.verdicts/hexa-fusion-l3-glue/F-CLM-DEVFEED-GELU-GN-EQ.txt`. **잔여 glue (⑤c 진행중)**: expert-pack copy · moe-router · embedding gather — 이 3개 fuse 시 fwd 인터프리트-glue 소진 → W2 self-host pod util refire 가능. raw-GEMM 우위 주장 0.
+verdict: `.verdicts/hexa-fusion-l3-glue/F-CLM-DEVFEED-GELU-GN-EQ.txt`. raw-GEMM 우위 주장 0.
+
+### ⑤c inter-op glue fusion (slice 3 FINAL: expert-pack + moe-router + embedding) — ✅ (consolidated #2571, bit-exact)
+
+`forge_dispatch_expert_pack2` · `forge_dispatch_moe_router`(softmax: moe_lib `_moe_exp` Taylor 재현 + seq accumulation → strict 0) · `forge_dispatch_embedding`(token gather). 출력 `FARR_DEVICE dirty_host=0`.
+
+```
+expert-pack max|Δ| ex_out=0.0 → F-CLM-DEVFEED-EXPACK-EQ = 1
+moe-router max|Δ| y=0.0 probs=0.0 → F-CLM-DEVFEED-MOEROUTER-EQ = 1
+embedding max|Δ| xe=0.0 → F-CLM-DEVFEED-EMBED-EQ = 1
+ALL-PASS (전 F-CLM-DEVFEED-* max|Δ|0.0 유지)
+```
+verdict: `.verdicts/hexa-fusion-l3-glue-final/F-CLM-DEVFEED-FINAL-GLUE-EQ.txt`. **🎯 fwd 인터프리트-glue EXHAUSTED 확정** — clm_prod_fwd 의 모든 host scalar 루프(embedding→conv→groupnorm→gelu→residual→expert-pack→moe-router)가 device-gated. W2 self-host pod util refire UNBLOCKED. raw-GEMM 우위 주장 0.
+
+### 📦 main merge (2026-06-02) — device-resident + glue 전부 landed
+
+squash×스택 충돌(베이스 재작성)을 rebase + consolidation 으로 해소하고 6 logical PR 전부 main 착지:
+`#2552`(reorg) · `#2556`(⑦) · `#2558`(⑥) · `#2555`(①m/v) · `#2570`(domain doc, rebased ← #2553) · `#2571`(device-resident port + 전 fwd glue, consolidated ← #2559/#2561/#2564/#2566 + ⑤c). 전부 env-gated `CLM_PROD_DEVRESIDENT` default off → byte-identical, 동작 변화 0. 남은 것: W2 pod util fire · bwd/AdamW-tail fusion(②⑤) · ④ CUDA-graph · ⑨-full bench.
 
 ### ⑦ operator surgical override — ✅ (PR #2556, base main, emit Δ ∧ byte-eq)
 
