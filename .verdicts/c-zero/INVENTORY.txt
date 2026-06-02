@@ -1,0 +1,84 @@
+C-ZERO INVENTORY — live build/run-path .c across the dancinlab ecosystem
+captured 2026-06-03 on host `mini` (hexa 0.1.0-dispatch, self-host default)
+HONEST: only repos checked out under ~/dancinlab/* are counted; absent repos are marked ABSENT.
+
+════════════════════════════════════════════════════════════════════════════
+A. hexa-lang  (~/dancinlab/hexa-lang) — PRIMARY TARGET
+════════════════════════════════════════════════════════════════════════════
+NOTE: all self/*.c are gitignored (generated/authored-untracked). The runtime .c
+are EMITTED from .hexa SSOTs; the native shims are authored C with emitters.
+
+  A1. runtime (EMITTED from .hexa — no authored C; SSOT = *_emit.hexa)
+      runtime.c            14919 LOC  (emitted)
+      runtime_core.c        8544 LOC  (SSOT runtime_core_emit.hexa, 8874 LOC)
+      runtime_hi_gen.c       188 LOC  (SSOT runtime_hi_gen_emit.hexa)
+      subtotal             23651 LOC  — already hexa-backed (byte_diff oracles exist)
+
+  A2. native FFI-shims (authored C · self/native/*.c · each w/ emitter+oracle)
+      module                 LOC   emit  byte_diff   note
+      crypto_openssl          47    Y      Y
+      crypto_sodium          336    Y      Y
+      exec_argv_sha256       470    Y      Y
+      exec_pipe              114    Y      Y
+      fp_init                 59    Y      Y        ← FIRST PORT (RUNEQ GREEN)
+      mount                   55    Y      Y
+      namespace              106    Y      Y
+      net                    661    Y      Y
+      persistent_pipe        427    Y      Y
+      proc_fork               37    Y      Y
+      pty                    246    Y      Y
+      signal_flock           304    Y      Y
+      tensor_kernels         306    Y      Y
+      term_ffi               434    Y      Y
+      thread                 277    Y      Y
+      wait                    67    Y      Y
+      hexa_cc              28482    -      -        ← BIGGEST remaining C mass
+      subtotal             32428 LOC  (16/17 modules emitter-backed; hexa_cc is 88% of it)
+
+  A3. cuda / forge (authored C · GPU substrate)
+      cuda/runtime_bf16.c    787    Y(emit)
+      cuda/runtime_cuda.c   3795    Y(emit)
+      forge/forge_tier_v1.c  343    Y(emit)
+      subtotal              4925 LOC  — emitters present, GPU-substrate (parity needs GPU host)
+
+  hexa-lang authored-C (A2+A3, excl emitted runtime) = 37353 LOC
+  → emitter-backed: 8871 LOC ; NOT emitter-backed: 28482 LOC (hexa_cc.c alone)
+
+════════════════════════════════════════════════════════════════════════════
+B. sibling repos checked out under ~/dancinlab/*
+════════════════════════════════════════════════════════════════════════════
+  repo            .c (non-git/non-build)   classification
+  anima           1652 files / ~1.83M LOC  VENDORED + deploy-snapshot + training-shim:
+                                             .claude(4910) .worktrees(2323) build(1044)
+                                             .venv-eeg(34) = plugin caches/build artifacts;
+                                             own source = training/*.c (hxblas/hxvdsp wrappers,
+                                             train_ffi.c, train_step.c) + frozen
+                                             */state/*_2026_05_*/ deploy snapshots (hexa-cc
+                                             OUTPUT + CUDA shims, NOT live build path).
+                                             LIVE authored shim mass ≈ training/*.c (~6 files).
+  void              30 files               EXTERNAL Ghostty C/Zig hard-fork (src/pty.c,
+                                             src/stb/stb.c, src/os/locale.c, …) — OUT OF SCOPE.
+  echoes-experience  0                     no C
+  demiurge           0                     no C
+  hexa-codex         0                     no C
+  kosmos             0                     no C
+  sidecar            0                     no C
+  pool               0                     no C
+  secret             0                     no C
+  phanes          ABSENT (not checked out — NOT counted)
+  n6              ABSENT
+  tape            ABSENT
+  airgenome       ABSENT
+
+════════════════════════════════════════════════════════════════════════════
+C. SUMMARY — live authored-C burn-down targets (reachable, honest)
+════════════════════════════════════════════════════════════════════════════
+  hexa-lang authored FFI/GPU C (emitter-backed, gate = run oracle + retire) :   8871 LOC
+  hexa-lang hexa_cc.c (NO emitter — dominant single mass)                    :  28482 LOC
+  anima live training shims (training/*.c)                                    :  ~6 files (small)
+  void Ghostty fork                                                           :  OUT OF SCOPE
+  anima vendored/deploy/cache C                                               :  NOT live build path
+
+  BIGGEST REMAINING C MASS (named): self/native/hexa_cc.c — 28482 LOC, the cc driver,
+  no emitter yet. Everything else in hexa-lang is already emitter-backed; C-ZERO there
+  reduces to running the oracles and retiring on green.
