@@ -259,3 +259,11 @@ util-GREEN(MEAN≥20%∧PEAK≥20%) 어떤 config 에서도 미도달, MEAN 천�
 
 Lane G PUBLIC milestone NOT 도달 (util-GREEN 미달) — workload-bound terminal note 유지. 3B/7B chain = util-GREEN gate 미통과로 BLOCKED 유지 (production-scale device-port 가 진짜 unblock).
 pod 39139563 RUNNING 유지 (sweep, no teardown). 날조 0 · g5 verbatim.
+
+## 2026-06-03 — option-B device-port track recorded + anima campaign pivot (decision A)
+
+lever-5 가 host-feed lever 체인을 HONEST TERMINAL 로 닫은 뒤, 이 도메인에 **진짜 util-GREEN 의 유일 트랙 = option-B (device-resident model port)** 를 명시 milestone 으로 기록. cure = full CLMConvMoE train step(fwd→CE→bwd→AdamW)을 ONE device-resident CUDA-C graph 로 재작성해 hexa 인터프리터를 per-step hot path 에서 완전 제거 (production model rewrite, feed lever 아님; lever 체인을 extend 가 아니라 supersede). oracle target = whole train-step byte-eq (max|Δ|=0.0, `F-RFC046-FUSED-STEP-EQ` 위에 빌드) → util≥20% MEAN fire verdict. alt(ii) = production scale ≫ d3072/T1024 (8× sweep 도 미도달 → option-(i) 가 PRIMARY).
+
+**anima campaign pivot (decision A · 2026-06-03)**: anima ENGINE+CLM+KOSMOS 캠페인은 7B 목표를 forge util-GREEN 에서 DECOUPLE — descent 축으로 3B→7B 진행 (forge 가 low-util 에서 descent-GREEN .clm 생산, util-RED/NOT throughput-justified 정직표기). NOT-before guard 불변: descent-axis .clm 은 util-RED·not-throughput-justified 로 honest scope. 이 도메인의 **util-GREEN throughput-justified** production 경로(PUBLIC-grade / 3B / 7B milestone)는 option-B device-port 에만 gated — 그것만이 해당 milestone 들을 flip.
+
+lever-5 apples ckpt → HF PRIVATE `dancinlab/clm-v1-dev-d1536-lever5-util-probe` 업로드 완료 (모델카드+MANIFEST, private=true·4파일·sha 11ef9300… 검증, anima HF.jsonl status=uploaded · PR #1715). 날조 0 · g5 verbatim.
