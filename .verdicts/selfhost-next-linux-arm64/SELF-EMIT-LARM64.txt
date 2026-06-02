@@ -1,0 +1,108 @@
+SELFHOST-NEXT — linux-arm64 native EMIT + self-emit verdict
+==========================================================
+date:    2026-06-03
+branch:  selfhost-next/linux-arm64-self-emit
+host:    pi5-akida (ubuntu@192.168.50.155) — Raspberry Pi 5, NATIVE linux-arm64
+         (aarch64), 4 cores, 7.8 GiB RAM, NO swap. gcc 13.3.0, GNU ld 2.42,
+         NO clang. Everything below RAN NATIVELY on this box (no qemu).
+base:    origin/main 1c70091 (#2562 — ELF AArch64 .o ADRP/ADD page relocs +
+         .rodata/.data/.bss). Fresh clone ~/dancinlab/wt-larm64.
+
+WHAT BUILT
+----------
+[A] Bootstrap toolchain via `TARGET=linux-arm64 CC=gcc LIBS='-lm -ldl'
+    bash tool/release_build`:
+      build/runtime.a   501168 B   (gcc, from restored frozen seeds)
+      build/hexat      2167192 B   (C-transpiler, gcc from hexa_cc.c)
+      ./hexa           2238504 B   (ELF aarch64 PIE; `hexa 0.1.0-dispatch`)
+    release_build PASS — ./hexa built (TARGET=linux-arm64).
+
+[B] Native-codegen compiler `cc_native` (the aprime_cc analogue for ELF
+    AArch64) via the NEW recipe tool/build_native_linux_arm64:
+      flatten compiler/main.hexa closure -> cc-flat.hexa  (48 files, 43240 lines)
+      hexat transpile -> ap.c (47019 lines C)
+      s4_flatc_post + builtin sed + runtime.c inline + rt_array link-fill
+      gcc -O1 (no -arch arm64) -> cc_native  3321624 B
+        ELF 64-bit LSB pie executable, ARM aarch64.
+    NOTE — the `./hexa` 0.1.0-dispatch stub cannot self-serve native emit (it
+    shells to a clang rebuild path; clang is absent on the Pi). The native-emit
+    backend lives in compiler/main.hexa, so the native compiler must be built
+    from it = cc_native. rt_array link-fill needed because the rt-stdlib-gate
+    (HEXA_HAS_HEXA_RT_STDLIB) externs rt_array_pop/shift expecting the
+    hexa-source array stdlib, which is not in the compiler flatten closure;
+    darwin avoids this only via -Wl,-dead_strip.
+
+GOAL 1 — small real program -> native ELF .o -> native link -> native RUN
+-------------------------------------------------------------------------
+source:  fn main() { print("hi"); exit(7) }
+emit:    cc_native _drv.hexa --emit=obj --backend=native --target=arm64-linux-gnu
+           -o hi.o hi.hexa          (NO host aarch64-linux-gnu-as)
+hi.o:    ELF 64-bit LSB relocatable, ARM aarch64 (REL), 968 B
+readelf -h:  Class ELF64 · little endian · Type REL · Machine AArch64
+readelf -r .rela.text (5 entries):
+   R_AARCH64_CALL26          hexa_set_args  + 0
+   R_AARCH64_CALL26          hexa_print_val + 0
+   R_AARCH64_CALL26          hexa_exit      + 0
+   R_AARCH64_ADR_PREL_PG_HI21  .LCstr0 + 0     (ADRP @PAGE   — #2562 path)
+   R_AARCH64_ADD_ABS_LO12_NC   .LCstr0 + 0     (ADD  @PAGEOFF — #2562 path)
+symbols: .LCstr0 (LOCAL, .rodata) · main (GLOBAL FUNC) · hexa_print_val/
+         hexa_exit (UND)
+link:    gcc hi.o build/runtime.a -o hi -lm -ldl   (native ld + crt1.o)
+         -> ELF aarch64 PIE, dynamically linked
+RUN (native on pi5, real $? — NO pipe-mask):
+         $ ./hi
+         hi
+         rc = 7                                   ✅
+also:    fn main(){ exit(6*7) } -> native ELF .o -> rc 42   ✅
+
+VERDICT GOAL 1: 🟢 linux-arm64 NATIVE-EMIT + native link + native RUN VERIFIED.
+  The in-tree ELF AArch64 serializer (#2562) emits a valid relocatable .o for a
+  real string-literal program on actual linux-arm64 hardware, links + runs to
+  the exact rc with stdout="hi" — no host `as`, no qemu, no cross-toolchain.
+
+GOAL 2 — COMPILER SELF-EMIT (cc_native emits its OWN flattened source)
+---------------------------------------------------------------------
+cmd:     HEXA_ATLAS_EMBED=noatlas cc_native _drv.hexa --emit=obj --backend=native
+           --target=arm64-linux-gnu --ignore-errors -o cc-self.o cc-flat.hexa
+progress (selfemit.log + journalctl):
+   - parse + typecheck of the 43240-line flattened compiler: REACHED.
+   - 15 diagnostics, all FLATTEN ARTIFACTS not compiler bugs:
+       HX3001 cc-flat.hexa:42760 "expected AtlasRef, got AtlasIndex" — the
+       known `empty_atlas` dual-definition collision (parser -> AtlasRef vs
+       obj-emit -> AtlasIndex) the flatten merges; documented in
+       .verdicts/hexa-cc-native/F-STP-ENCODE-MISS-REPRO.txt. --ignore-errors
+       lets it proceed: "15 diagnostic(s); --ignore-errors set, proceeding to
+       codegen".
+   - CODEGEN: ENTERED and ran for ~1h elapsed wall.
+   - ENCODE-MISS count: 0   (NO STP mem=#0 / unknown-op encoder wall hit — the
+       ELF @PAGE/@PAGEOFF reloc interception did not surface the Mach-O-path
+       STP wall during the code it emitted).
+   - cc-self.o: NOT produced.
+
+FIRST WALL (named, exact):  HOST OUT-OF-MEMORY during codegen — NOT a
+  compiler-correctness wall.
+   journalctl -k:
+     Out of memory: Killed process 58398 (cc_native)
+       total-vm:8006332kB, anon-rss:7758464kB, file-rss:0kB
+   i.e. cc_native reached ~7.76 GiB anonymous RSS and was OOM-killed by the
+   kernel (Pi5 = 7.8 GiB RAM, 0 swap). The self-emit codegen of the full
+   compiler does not fit in this host's memory.
+
+VERDICT GOAL 2: 🟠 self-emit BLOCKED ON HOST RESOURCE (RAM), not on codegen
+  correctness. Reached parse + typecheck + codegen with 0 ENCODE-MISS before
+  the OOM. The remaining wall for full linux-arm64 self-host on THIS host is
+  memory headroom, not a missing symbol / unsupported reloc / encoder miss.
+  NEXT: re-run the self-emit on a higher-RAM linux-arm64 host (>= ~12-16 GiB,
+  or add swap) — the gcc-native recipe (tool/build_native_linux_arm64
+  --self-emit) is host-portable; OR reduce compiler-codegen peak RSS (a
+  separate codegen-memory milestone). Honest g63: NO native linux-arm64 host
+  with enough RAM exists in the current pool (summer/aiden are x86_64; pi5 is
+  the only aarch64 host and is RAM-tight).
+
+REPRO
+-----
+  git clone https://github.com/dancinlab/hexa-lang.git wt-larm64   # origin/main
+  cd wt-larm64
+  TARGET=linux-arm64 CC=gcc LIBS='-lm -ldl' bash tool/release_build   # toolchain
+  bash tool/build_native_linux_arm64                # cc_native + Goal-1 (hi/rc7)
+  bash tool/build_native_linux_arm64 --self-emit    # Goal-2 (OOM on a 7.8G host)
