@@ -37,6 +37,30 @@ fn _check(ok_in: bool, hay: string, needle: string, label: string) -> bool {
     return false
 }
 
+// _check_absent - inverse of _check: the needle MUST NOT appear. Used by
+// the HEXA-FUSION §5b compile-time-specialization probe to assert the
+// specialized kernel erased the runtime loop-control / shape-param ops.
+fn _check_absent(ok_in: bool, hay: string, needle: string, label: string) -> bool {
+    if !_contains(hay, needle) { return ok_in }
+    println("  FAIL: " + label + " (UNEXPECTEDLY present: `" + needle + "`)")
+    return false
+}
+
+// _count_substr - count non-overlapping occurrences of `needle` in `hay`.
+// Implemented by repeatedly `find`-ing in the unconsumed tail slice.
+fn _count_substr(hay: string, needle: string) -> i64 {
+    if len(needle) == 0 { return 0 }
+    let mut n = 0
+    let mut rest = hay
+    while true {
+        let idx = rest.find(needle)
+        if idx < 0 { break }
+        n = n + 1
+        rest = rest.substring(idx + len(needle), len(rest))
+    }
+    return n
+}
+
 // ── naive GEMM PTX emit test (sm_80 + sm_90 paths) ───────────────────
 
 fn _test_emit_gemm_module() -> bool {
@@ -152,6 +176,91 @@ fn _test_gemm_validator() -> bool {
     return ok
 }
 
+// ── HEXA-FUSION L3 §5b — compile-time shape specialization probe ──────
+//
+// Falsifier F-FUSION-GEMM-SHAPE-SPECIALIZE:
+//   (1) emit Δ — the specialized PTX for a KNOWN (M,N,K) DIFFERS from the
+//       generic (runtime-shape) PTX: the runtime K-loop control
+//       (`setp.lt.s32 %p2` / `bra $L_LOOP` back-edge / `kk = kk + 1`) and
+//       the M/N/K `.param` + their `ld.param.u64` are ALL absent, replaced
+//       by exactly K straight-line `fma.rn.f64` accumulate steps.
+//   (2) byte-eq no-regression — the specialized kernel issues the SAME
+//       per-kk fma chain (same fma.rn.f64 operand order) the generic loop
+//       would execute for that K, so the numeric result is identical
+//       (max|Δ|=0). This text-shape half proves the operand chain matches;
+//       the ptxas-accept + silicon numeric-eq half = dispatch_r055_p2_gemm.
+//
+// This is the structural win a cuBLAS/cuDNN library call CANNOT do: the
+// library resolves (M,N,K) at runtime dispatch, so it is forced to keep
+// the trip-count compare + bounded loop. NOT a raw-GEMM-speed claim
+// (cuBLAS = roofline, GPU.md:84) — the moat is the compile-time
+// specialization itself.
+fn _test_gemm_shape_specialization() -> bool {
+    let mut ok = true
+
+    let M = 4
+    let N = 4
+    let K = 3
+
+    let gen  = emit_ptx_gemm_module(NVPTX_TARGET_SM90)
+    let spec = emit_ptx_gemm_module_specialized(NVPTX_TARGET_SM90, M, N, K)
+
+    println("")
+    println("── emitted PTX shape-SPECIALIZED GEMM (sm_90, M=4 N=4 K=3) ──")
+    println(spec)
+
+    // (0) baseline: the GENERIC kernel HAS the runtime loop control + the
+    // M/N/K shape params — confirms what specialization must erase.
+    ok = _check(ok, gen, "setp.lt.s32 %p2",          "GENERIC has runtime K-loop compare")
+    ok = _check(ok, gen, "bra $L_LOOP",              "GENERIC has loop back-edge")
+    ok = _check(ok, gen, ".param .u64 gemm_param_5", "GENERIC takes a K (param_5) shape param")
+    ok = _check(ok, gen, "kk = kk + 1",              "GENERIC has a runtime kk counter")
+
+    // (1) emit Δ — specialization ERASED the runtime loop control + shape
+    // params. These are the falsifier's positive evidence of specialization.
+    ok = _check_absent(ok, spec, "setp.lt.s32 %p2",          "SPEC dropped runtime K-loop compare")
+    ok = _check_absent(ok, spec, "$L_LOOP",                  "SPEC dropped the K-loop label/back-edge")
+    ok = _check_absent(ok, spec, "kk = kk + 1",              "SPEC dropped the runtime kk counter")
+    ok = _check_absent(ok, spec, ".param .u64 gemm_param_3", "SPEC dropped the M shape param")
+    ok = _check_absent(ok, spec, ".param .u64 gemm_param_4", "SPEC dropped the N shape param")
+    ok = _check_absent(ok, spec, ".param .u64 gemm_param_5", "SPEC dropped the K shape param")
+    // M/N baked as immediates in the bounds compares (not a register load).
+    ok = _check(ok, spec, "M=4 baked",                       "SPEC bakes M as an immediate")
+    ok = _check(ok, spec, "N=4 baked",                       "SPEC bakes N as an immediate")
+    ok = _check(ok, spec, "K=3 baked",                       "SPEC bakes K into the row*K stride")
+    // The three DATA buffers stay as params (data, not shape).
+    ok = _check(ok, spec, ".param .u64 gemm_param_0",        "SPEC keeps a-base data param")
+    ok = _check(ok, spec, ".param .u64 gemm_param_2",        "SPEC keeps c-base data param")
+
+    // (1b) the K-loop is FULLY UNROLLED to exactly K fma.rn.f64 steps.
+    let n_fma_spec = _count_substr(spec, "fma.rn.f64")
+    let n_fma_gen  = _count_substr(gen,  "fma.rn.f64")
+    if n_fma_spec != K {
+        println("  FAIL: SPEC must have exactly K=" + to_string(K)
+            + " unrolled fma.rn.f64 steps, got " + to_string(n_fma_spec))
+        ok = false
+    }
+    if n_fma_gen != 1 {
+        println("  FAIL: GENERIC has a single looped fma.rn.f64, got " + to_string(n_fma_gen))
+        ok = false
+    }
+    println("  emit-Δ: generic fma.rn.f64 count=" + to_string(n_fma_gen)
+        + " (1 looped)  vs  specialized=" + to_string(n_fma_spec)
+        + " (K straight-line) — SPECIALIZATION CONFIRMED")
+
+    // (2) byte-eq no-regression: the specialized kernel issues the SAME
+    // fma.rn.f64 dst/operand registers (%fd0 acc, %fd1 a, %fd2 b) the
+    // generic loop uses each iteration — identical accumulation chain.
+    ok = _check(ok, spec, "fma.rn.f64 %fd0, %fd1, %fd2, %fd0", "SPEC fma uses the same acc-chain regs as generic")
+    ok = _check(ok, gen,  "fma.rn.f64 %fd0, %fd1, %fd2, %fd0", "GENERIC fma operand chain (byte-eq reference)")
+    // Specialized kernel still emits a valid module header + entry + ret.
+    ok = _check(ok, spec, ".visible .entry gemm",            "SPEC valid .entry header")
+    ok = _check(ok, spec, ".target sm_90",                   "SPEC valid sm_90 target")
+    ok = _check(ok, spec, "ret;",                            "SPEC ret terminator")
+
+    return ok
+}
+
 fn main() {
     println("══════════════════════════════════════════════")
     println("  RFC 055 055-P2 — naive FP64 GEMM PTX emit smoke")
@@ -159,17 +268,20 @@ fn main() {
 
     let ok_emit = _test_emit_gemm_module()
     let ok_val  = _test_gemm_validator()
+    let ok_spec = _test_gemm_shape_specialization()
 
     println("")
     println("══════════════════════════════════════════════")
-    if ok_emit && ok_val {
+    if ok_emit && ok_val && ok_spec {
         println("PASS: RFC 055 055-P2 naive GEMM emit smoke")
+        println("      + HEXA-FUSION §5b compile-time shape specialization")
         println("      (text-shape only; ptxas + GPU fire = tool/dispatch_r055_p2_gemm.sh)")
     } else {
         println("FAIL: RFC 055 055-P2 GEMM smoke not satisfied.")
         if !ok_emit { println("      GEMM emit FAILED") }
         if !ok_val  { println("      GEMM validator FAILED") }
+        if !ok_spec { println("      GEMM shape-specialization FAILED") }
     }
     println("══════════════════════════════════════════════")
-    if !(ok_emit && ok_val) { exit(1) }
+    if !(ok_emit && ok_val && ok_spec) { exit(1) }
 }
