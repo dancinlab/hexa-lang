@@ -199,3 +199,54 @@ lever-2 verify fire 가 pod 39082940 에서 in-flight 인 동안, pod-독립 엔
 
 라이브 fire / pod 39082940 / 보호 pod(38704336/38996679/39070097) 전부 무접촉. 재-rent 0.
 substrate=GPU, a_lane_akida_gpu_split (AKIDA 무병합).
+
+## 2026-06-02 (cont.) — lever-4 util-verify fire CLOSED — DESCENT 🟢 / util 🔴 RED (PEAK 41% MEAN 0.6630%), 잔여=fused-step 내부 ~10 crossing → lever-5
+
+fused per-step driver(`forge_dispatch_train_step` + `forge_dispatch_adamw_group`) self-host
+빌드 + clean single-driver H100 sm_90 pod vast **39139563** (`HEXA_CUDA_LINK=1`) 에서 util-verify
+fire 완주. substrate=GPU, a_lane_akida_gpu_split (Lane A/AKIDA 무병합).
+
+**3-GATE PASS** (g5 verbatim):
+- GATE1 CUDA-link ENGAGED=1
+- GATE2 nvcc -x cu EXIT 0 · obj 664048B · RELINK_RC=0
+- GATE3 clm_prod ldd = 4 cuda libs (cublas / cudart / libcuda / cublasLt)
+
+**BYTEEQ-PASS** — 전 오라클 max|Δ|=0.0 (g5 verbatim):
+- `F-CLM-DEVFEED-{FWD,BWD}-EQ` = 1 (devfeed fwd/bwd == forge conv1d byte-eq, dil∈{1,2})
+- `F-CLM-CONV2-BATCHED-{FWD,BWD}-EQ` = 1 (batched 2-expert == 2× conv1d_via_forge byte-eq)
+- ON-DEVICE HEXA_CUDA `F-RFC046-FUSED-STEP-EQ` = 1 + `F-RFC046-ADAMW-GROUP-EQ` = 1
+  (grouped AdamW == per-tensor serial opt_adamw_step, final W+m+v max|Δ| = 0.0)
+
+**FIRE 결과** (g5 verbatim, train_lever4.log + lever4_v2.log):
+```
+=== [FIRE] util fire — fused driver d~1536/T~512 ===
+FIRE_RC=0
+UTIL n=9153 PEAK=41% MEAN=0.6630% busy_ge20=80 pct_ge20=0.87%
+  epoch-1 mean CE = 4.05535
+  epoch-3 mean CE = 2.99508
+  config d=1536 E=2 epochs=3 nwin=32
+F-CLM-PROD-DESCENT = 1
+PASS — real-corpus mean CE descends under int4 envelope
+clm_lever4_d1536_t512.clm  14379581 bytes, 6 blocks, CLM\x01
+sha256 11ef9300131b1a266dc05e2c5bb9c07d60b7cddf39042704828d71108f88e167
+```
+
+- **DESCENT 🟢 GREEN** (CE 4.05535 → 2.99508, F-CLM-PROD-DESCENT=1).
+- **util 🔴 RED** — MEAN 0.6630% ≪ 20% gate. PEAK 41% 잠깐, busy_ge20 80/9153 = 0.87% 만 ≥20%.
+- **before(lever-1-only) 0.811% → after(lever-4) 0.6630%** — lever-4 fused step 은 util MEAN 을
+  올리지 못함(전 lever 라인: 0.811%/PEAK6% → 0.4999%/PEAK19% → 0.4879%/PEAK35% → **0.6630%/PEAK41%**;
+  PEAK 단조상승·MEAN flat sub-1%).
+- forge PROVABLY on GPU (6.3GB device mem 라이브).
+
+**CLOSED-NEGATIVE**: link·kernel·emit·scale·host GEMM-repack feed·**fused per-step driver** 전부
+ruled-out. fused `forge_dispatch_train_step`+`adamw_group` 이 host↔device crossing 을 ~30→~2 로
+줄였으나 util MEAN flat ⇒ 잔여 = fused step **안/사이의 ~10 crossing**(token gather host→device ·
+CE scalar glue · 매 step kernel-launch orchestration). **NAMED next = lever-5** — 이 잔여 crossing 을
+단일 device-resident train-step dispatch 로 추가 fuse(token gather+CE+launch loop 까지 device 상주,
+host 로는 epoch-level scalar 만). util≥20% 는 fire verdict.
+
+**recover-before-teardown** (a_fire_recover_complete): ckpt clm_lever4_d1536_t512.clm +
+train_lever4.log + lever4_v2.log + util_samples_lever4.csv 를 host
+`anima/.verdicts/lane-g-lever4/` 로 pull, sha256 `11ef9300…88f88e167` HOST-VERIFIED MATCH.
+pod 39139563 RUNNING 유지(sweep 용, teardown 안 함). 보호 pod(38704336/39106252) 무접촉.
+orphan 39131850 무접촉. 재-rent 0.
