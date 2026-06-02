@@ -1,0 +1,85 @@
+MISCOMPILE-ZERO — codegen perf-stability baseline + budget
+==========================================================
+
+Milestone : codegen perf-stability baseline + budget — record the native
+            compiler's emit cost (wall + object size) as a tracked baseline so
+            a future codegen change that regresses perf is caught, complementing
+            the correctness gates already in place (miscompile-zero #2534,
+            determinism #2538, class tests #2548, diff-fuzz #2557).
+
+Harness   : tool/codegen_perf_budget.sh   (modes: baseline | check)
+Baseline  : tool/codegen_perf_baseline.tsv (committed, REAL measured numbers)
+Corpus    : self/test/miscompile_zero/c1..c10 (read-only; shared with the gates)
+Compiler  : graduated native self-host gen2_fix
+            (ghost 192.168.50.150, ~/dancinlab/selfhost-work/gen2_fix, 1.96 MB)
+Host      : ghost macOS arm64 (Darwin 25.5.0, bash 3.2.57) — REAL, not invented
+Target    : arm64-apple-darwin
+Method    : native --emit=obj per program, 5 timed runs (1 warmup) → median wall
+            (real, ms) + emitted object byte-size. Budget: obj-size +5%,
+            wall +50% (CI-noise tolerant). Exit 0 ok / 1 regression / 2 infra
+            (canary 0-byte ⇒ CI-neutral, mirrors miscompile_zero_gate.sh).
+
+REAL BASELINE (gen2_fix, ghost) — per-program obj_bytes / wall_ms_median
+-----------------------------------------------------------------------
+  program                obj_bytes   wall_ms_median
+  c1_hex_literal              1600       14
+  c10_try_catch              2056       13
+  c2_stack_locals            1816       14
+  c3_struct_ctor             2296       13
+  c4_f64_literal             1576       12
+  c5_multi_fn_alias          2240       14
+  c6_closures                1408       24
+  c7_recursion_arrays        3544       17
+  c8_string_methods          2144       21
+  c9_match_control           2320       14
+                        ───────────
+  10/10 measured. obj sizes are deterministic (byte-identical across runs).
+
+BUDGET CHECK vs committed baseline (PASS — 0 regression vs self)
+---------------------------------------------------------------
+$ HEXA_NATIVE_CC=.../gen2_fix bash tool/codegen_perf_budget.sh check
+── codegen perf budget (check) ───────────────────────────────────
+  compiler : .../selfhost-work/gen2_fix _drv.hexa
+  target   : arm64-apple-darwin
+  runs     : 5 (warmup 1)   budget: size +5% wall +50%
+  canary   : c1_hex_literal emits (objsize=1600) — native-emit OK
+──────────────────────────────────────────────────────────────────
+  PASS  c1_hex_literal         objsize=1600    (base 1600    ) wall=13  ms(base 14ms)
+  PASS  c10_try_catch          objsize=2056    (base 2056    ) wall=14  ms(base 13ms)
+  PASS  c2_stack_locals        objsize=1816    (base 1816    ) wall=15  ms(base 14ms)
+  PASS  c3_struct_ctor         objsize=2296    (base 2296    ) wall=15  ms(base 13ms)
+  PASS  c4_f64_literal         objsize=1576    (base 1576    ) wall=15  ms(base 12ms)
+  PASS  c5_multi_fn_alias      objsize=2240    (base 2240    ) wall=16  ms(base 14ms)
+  PASS  c6_closures            objsize=1408    (base 1408    ) wall=25  ms(base 24ms)
+  PASS  c7_recursion_arrays    objsize=3544    (base 3544    ) wall=18  ms(base 17ms)
+  PASS  c8_string_methods      objsize=2144    (base 2144    ) wall=22  ms(base 21ms)
+  PASS  c9_match_control       objsize=2320    (base 2320    ) wall=15  ms(base 14ms)
+──────────────────────────────────────────────────────────────────
+perf-budget: PASS — all measured programs within budget
+  (≤ +5% obj-size, ≤ +50% wall vs baseline) — perf floor held.
+RC_CHECK=0
+
+g63 discrimination proof (both directions)
+------------------------------------------
+ + positive control: check vs self ⇒ PASS, exit 0 (above). Object sizes match
+   the committed baseline byte-for-byte; wall medians within the +50% budget.
+ - negative control: a baseline row tampered to shrink c7's expected size
+   (3544 → 1000) ⇒ the REAL 3544-byte object exceeds the +5% cap (1050):
+     FAIL  c7_recursion_arrays    size=3544>cap1050(base1000 +5%)
+     perf-budget: FAIL — codegen emit-perf regression beyond budget
+     REAL_RC=1
+   The budget therefore actually trips (exit 1) on a real size growth — it is
+   not a no-op green.
+
+CLASSIFICATION (CI-neutral, mirrors tool/miscompile_zero_gate.sh)
+----------------------------------------------------------------
+  exit 0  baseline written / check within budget — perf floor held.
+  exit 1  check mode ONLY: a program's object grew > +5% or median wall
+          grew > +50% vs the committed baseline — real measured regression.
+  exit 2  SETUP/INFRA — canary 0-byte (env cannot native-emit) or baseline
+          missing/malformed. NOT a perf regression; safe in a CI runner that
+          lacks the graduated native emitter.
+
+This is the PERF axis of MISCOMPILE-ZERO. It does NOT inspect correctness
+(ENCODE-MISS / udf) — that is owned by tool/miscompile_zero_gate.sh. It tracks
+emit COST as a regression budget, complementing the locked correctness gates.
