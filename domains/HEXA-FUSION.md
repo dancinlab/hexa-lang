@@ -23,7 +23,7 @@ FORGE-UTILGREEN lever-1~5 가 GEMM repack 을 전부 device 化했어도 util ME
 
 ### L1 — device-resident (= PyTorch eager 수준, util-GREEN)
 
-- [ ] **device-resident tensor lifetime** — param/grad/moment 를 step 전체에 GPU-resident 유지(host roundtrip 0). falsifier: 기존 오라클 byte-eq max|Δ|=0 ∧ nvidia-smi devmem persist across step.
+- [~] **device-resident tensor lifetime** — param/grad/moment 를 step 전체에 GPU-resident 유지(host roundtrip 0). falsifier: 기존 오라클 byte-eq max|Δ|=0 ∧ nvidia-smi devmem persist across step. **W1-① PARTIAL (PR #2555)**: AdamW moments m,v device-resident 착지(env `CLM_PROD_DEVRESIDENT`, byte-eq ALL-PASS) — m/v 는 `_adam` 외 host 미참조라 순수 제거가능 roundtrip. 잔여: grad(host col2im/db reduce) · param W(host int4 re-quant 차단) · devmem-persist pod 측정. 상세 = §W1 results.
 - [ ] **async kernel-launch pipeline** — step body 가 host 인터프리터 블로킹 없이 device 커널을 비동기 디스패치(GPU 안 굶음). falsifier: `F-RFC046-GPU-UTILIZATION` util MEAN≥20% @ d1536/T512 (= FORGE-UTILGREEN endgame gate, single-driver H100 sm_90 fire).
 - [ ] **fwd-only fused device kernel 프로토타입 + util Δ probe** (safe falsifier — 풀포트 전) — fwd path 만 device-resident fuse 해 util Δ 측정(lever-4 fire pod 재사용). 풀 train-step fusion 의 ROI 를 싸게 검증.
 
@@ -35,7 +35,7 @@ FORGE-UTILGREEN lever-1~5 가 GEMM repack 을 전부 device 化했어도 util ME
 
 - [ ] **fwd+bwd autograd-aware fusion** (GPU.md §5d) — forward + backward 커널을 한 device 그래프로 fuse. falsifier: `F-FUSION-TRAINSTEP-EQ` max|Δ|=0 (fused == op-by-op reference).
 - [ ] **compile-time specialization** (GPU.md §5b) — known-(M,N,K) shape 특화 · dead-output elimination · layer 별 mixed-precision auto-select. falsifier: 특화 emit Δ vs generic ∧ byte-eq 무회귀.
-- [ ] **operator-specific surgical override** (GPU.md §5g) — per-call-site precision · custom layout/stride · 파이프라인 중간 커널 1개 교체(cuBLAS monolithic 이 못 하는 것). falsifier: override 경로 byte-eq + emit Δ.
+- [x] **operator-specific surgical override** (GPU.md §5g) ✅ W1-⑦ (PR #2556) — per-call-site WMMA precision override(`_nvptx_wmma_mnemonic_override` reads dst Local.precision). emit Δ: load `.shared.f16`→`.shared.bf16` · mma `.f32.f32`→`.f32.bf16.bf16.f32`, **store-c default .f32 유지(per-site granularity 증명)**. default re-emit byte-eq max|Δ|=0. 잔여: HIR `@bf16` grammar → Local.precision · silicon fire. 상세 = §W1 results.
 - [x] **launch-overhead amortization 우위 측정** (GPU.md §5f · R12) ✅ W1-⑧ — ≥30% wall win UNCONDITIONAL (n*<0, no crossover; launch-bound 80% → BW-bound 72.7%), $0 oracle exit 0 + 실측 교차확인 max|Δ|=1.1e-5. raw-GEMM 우위 아님(경계 제거뿐). 상세 = §W1 results.
 
 ### closure — vs PyTorch+CUDA 벤치
@@ -91,6 +91,31 @@ elementwise/glue sub-graph 에서 fusion 이 op-by-op(cuBLAS-style) 스택보다
 | torch.compile | 1.871 | 99.99% (n=265) |
 
 pod 39139563(anima idle) 재사용·발견상태 복귀(0% util), 신규 rent 0. **target line**: 이 shape 에서 성숙 라이브러리 스택은 H100 을 **이미 util 100% 포화**(eager==compile) = **compute-bound**.
+
+### ① device-resident tensor lifetime — ✅ PARTIAL slice (PR #2555, base main, byte-eq ALL-PASS)
+
+AdamW moments **m,v GPU-resident across the whole CLMConvMoE train loop** (host roundtrip = 0 for m/v). Root cause: `forge_dispatch_adamw` D2H'd W,m,v every step; m/v escape only into `_adam` (host fwd/bwd never read them) → per-step m/v D2H+H2D = pure removable roundtrip. New `_keepmv` builtin elides it (marks m/v `loc=FARR_DEVICE, dirty_host=0` → next step H2D-skip). env `CLM_PROD_DEVRESIDENT` (default off → byte-identical).
+
+```
+F-CLM-DEVFEED-IM2COL-EQ = 1   (max|Δ|=0.0)
+F-CLM-DEVFEED-FWD-EQ    = 1   (max|Δ|=0.0)
+F-CLM-DEVFEED-BWD-EQ    = 1   (dW=0.0 dX≤5.55e-17 db=0.0)
+F-CLM-DEVFEED-ADAM-EQ   = 1   (adam 5-step W max|Δ|=0.0)
+ALL-PASS — device im2col/col2im + device AdamW byte-eq to host feed
+```
+verdict: `.verdicts/hexa-fusion/F-CLM-DEVFEED-DEVRESIDENT-MV.txt`. 잔여(PR body): grad(d*) device-residency · param W(host int4 re-quant 차단) · devmem-persist H100 측정(pod self-host rebuild 필요). raw-GEMM 우위 주장 0 — roundtrip 제거뿐.
+
+### ⑦ operator surgical override — ✅ (PR #2556, base main, emit Δ ∧ byte-eq)
+
+`compiler/codegen/nvptx_target.hexa` `_nvptx_wmma_mnemonic` was handle-uniform (cuBLAS model: one handle pins compute-type for all GEMMs). New `_nvptx_wmma_mnemonic_override(op,prec)` reads dst Local.precision → ONE call-site carries `.bf16` while siblings keep default (empty in every real run today → default byte-identical).
+
+```
+[byte-eq] default-path re-emit IDENTICAL — max|Δ|=0   PASS
+[emit Δ]  override call-site emits .bf16 family         PASS
+[per-site] store-c keeps default .shared.f32            PASS
+F-FUSION-WMMA-OVERRIDE: PASS (emit Δ ∧ default byte-eq max|Δ|=0)
+```
+verdict: `.verdicts/fusion-wmma-override/F-FUSION-WMMA-OVERRIDE.txt`. 잔여: HIR `@bf16` → Local.precision grammar · silicon fire. raw-GEMM 우위 주장 0 — cuBLAS 가 못 하는 override 능력 probe.
 
 ## ── 전략 정정 (⑧+⑨ 합성) — 2-regime: compute-bound=MATCH · launch-bound=EXCEED ──
 
