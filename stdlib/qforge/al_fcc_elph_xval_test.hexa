@@ -53,7 +53,7 @@
 //   • report the converged λ + rel-ε vs the 0.43–0.44 literature band
 //   • zero-coupling (D=0) → λ=0 invariant; λ≥0, α²F≥0 invariants
 //
-// Run:  HEXA_STDLIB_ROOT=<worktree> hexa run stdlib/qforge/fixtures/al_fcc_elph_xval.hexa
+// Run:  HEXA_STDLIB_ROOT=<worktree> hexa run stdlib/qforge/al_fcc_elph_xval_test.hexa
 // PASS: exits printing "al_fcc_elph_xval PASS".
 
 use "stdlib/qforge/elph"

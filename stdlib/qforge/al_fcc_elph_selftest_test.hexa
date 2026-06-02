@@ -14,7 +14,7 @@
 //       analytic single-mode λ to rel-ε (qforge_einstein_lambda_analytic) —
 //       pins that the composed back-end the Al harness uses is the verified one.
 //
-// Run:  HEXA_STDLIB_ROOT=<worktree> hexa run stdlib/qforge/fixtures/al_fcc_elph_selftest.hexa
+// Run:  HEXA_STDLIB_ROOT=<worktree> hexa run stdlib/qforge/al_fcc_elph_selftest_test.hexa
 // PASS: exits printing "al_fcc_elph_selftest PASS".
 
 use "stdlib/qforge/elph"
