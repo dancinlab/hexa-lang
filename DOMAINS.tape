@@ -32,6 +32,7 @@
 # @link <consumer> --uses--> stdlib/chem    # stdlib/chem family · no recorded from-hexa edge yet
 # @link <consumer> --uses--> stdlib/<other> # alloc · aura · aws · booksim · bot · brain · cert · ... — provides exist, downstream edges pending
 @domain UNSHADOW := "domains/UNSHADOW.md"
+@domain GPU := "./GPU.md"
 @domain GPU-ROOFLINE := "domains/GPU-ROOFLINE.md"
 @domain FLAME-PERF := "domains/FLAME-PERF.md"
 @domain QFORGE-PERF := "domains/QFORGE-PERF.md"
@@ -48,3 +49,12 @@
 # FORGE-UTILGREEN refines FLAME-PERF's F-RFC046-GPU-UTILIZATION into the focused
 # util-GREEN endgame lever chain (host per-step orchestration → device).
 @link FORGE-UTILGREEN --refines--> FLAME-PERF  # F-RFC046 host-feed util-GREEN endgame · PR #2515 (lever-1) + lever-2 · anima CLM+KOSMOS
+
+# --- GPU 가속 tree (2026-06-03 reorg) — GPU-ROOFLINE = shared HW-roofline measuring stick ---
+# All three accel domains report kernel positions against the one GPU-ROOFLINE denominator (achieved-peak).
+@link GPU --measured-by--> GPU-ROOFLINE          # hexa-emit kernel direct roofline % — codegen owned by GPU §2b (relocated from GR MS#1)
+@link FLAME-PERF --measured-by--> GPU-ROOFLINE    # CLM trainer dominant-kernel roofline rollup · stdlib/flame/PERF.md §GPU-ROOFLINE lane
+@link QFORGE-PERF --measured-by--> GPU-ROOFLINE   # el-ph GEMM/DFPT kernel roofline % · self/forge/PLAN.md lane
+# GPU codegen substrate sub-docs (self-declared in-file as 서브문서 of GPU.md SSOT):
+@link GPU.attention --subdoc-of--> GPU            # FlashAttention v3 BC4 axis · GPU.attention.md
+@link GPU.anima --subdoc-of--> GPU                # anima transformer step-wall priority side · GPU.anima.md
