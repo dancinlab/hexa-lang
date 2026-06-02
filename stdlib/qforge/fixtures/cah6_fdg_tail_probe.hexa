@@ -62,7 +62,7 @@ fn main() {
 
     let a = 6.4640 ; let ha = 0.5 * a ; let omega = a * a * a * 0.5
     let tpa = 6.28318530717958647692 / a
-    let b1 = [0.0, tpa, tpa] ; let b2 = [-tpa, 0.0, tpa] ; let b3 = [-tpa, -tpa, 0.0]
+    let b1 = [tpa, 0.0, tpa] ; let b2 = [-tpa, tpa, 0.0] ; let b3 = [0.0, -tpa, tpa]
     let hf = [0.25, 0.50, 0.00,  0.50, 0.00, 0.25,  0.00, 0.25, 0.50,
               0.75, 0.50, 0.00,  0.50, 0.00, 0.75,  0.00, 0.75, 0.50]
     let mut pos_h: [float] = []
