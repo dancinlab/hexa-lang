@@ -1,0 +1,26 @@
+// cah6_vlocg_probe.hexa — V_loc(G) form factor vs |G| for Ca and H. A smooth ONCV
+// local potential must give V_loc(G) that DECAYS (→ −8πZ/(ΩG²)) at large G. If it
+// GROWS, the Coulomb subtraction / quadrature is wrong → unbounded well with NPW.
+use "stdlib/qforge/vloc"
+use "stdlib/qforge/upf"
+
+let DECK = "/Users/mini/dancinlab/demiurge/exports/rtsc/decks/CaH6_NC"
+
+fn main() {
+    let ca = upf_parse(DECK + "/pseudo/Ca_ONCV_PBE_sr.upf")
+    let h  = upf_parse(DECK + "/pseudo/H_ONCV_PBE_sr.upf")
+    if !ca.ok || !h.ok { println("FAIL UPF") ; return }
+    let a = 6.4640 ; let omega = a*a*a*0.5
+    // sample |G| from small to large (bohr^-1)
+    let gmags = [0.0, 0.5, 1.0, 2.0, 4.0, 8.0, 16.0, 32.0]
+    let vca = qforge_vloc_of_g(ca.r, ca.rab, ca.vloc, ca.header.z_valence, omega, gmags)
+    let vh  = qforge_vloc_of_g(h.r,  h.rab,  h.vloc,  h.header.z_valence,  omega, gmags)
+    println("|G|     V_loc^Ca(G)        V_loc^H(G)   (Ry/Omega per brick comment)")
+    let mut i = 0
+    while i < len(gmags) {
+        println(to_string(gmags[i]) + "   " + to_string(vca[i]) + "   " + to_string(vh[i]))
+        i = i + 1
+    }
+    println("Z_Ca=" + to_string(ca.header.z_valence) + "  Z_H=" + to_string(h.header.z_valence))
+    println("=== DONE ===")
+}

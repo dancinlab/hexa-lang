@@ -1,0 +1,100 @@
+// cah6_bare_eig_probe.hexa — lowest eigenvalues of the BARE (T+V_ext, no screening)
+// CaH6 Hamiltonian vs NPW. Isolates whether the unbounded etot descent is in the
+// ionic Hamiltonian itself (independent of any screening) — if the lowest eigenvalue
+// keeps diving with NPW, the V_ext form factor / units are the residual, not screening.
+use "stdlib/qforge/assembler"
+use "stdlib/qforge/davidson"
+use "stdlib/qforge/upf"
+
+let DECK = "/Users/mini/dancinlab/demiurge/exports/rtsc/decks/CaH6_NC"
+
+fn build_npw(npw: int, mshell: int, b1: [float], b2: [float], b3: [float]) -> [float] {
+    let mut gall: [float] = [] ; let mut g2all: [float] = []
+    let mut gi = -mshell
+    while gi <= mshell {
+        let mut gj = -mshell
+        while gj <= mshell {
+            let mut gk = -mshell
+            while gk <= mshell {
+                let gx = to_float(gi)*b1[0]+to_float(gj)*b2[0]+to_float(gk)*b3[0]
+                let gy = to_float(gi)*b1[1]+to_float(gj)*b2[1]+to_float(gk)*b3[1]
+                let gz = to_float(gi)*b1[2]+to_float(gj)*b2[2]+to_float(gk)*b3[2]
+                gall.push(gx); gall.push(gy); gall.push(gz)
+                g2all.push(gx*gx+gy*gy+gz*gz)
+                gk = gk+1
+            }
+            gj = gj+1
+        }
+        gi = gi+1
+    }
+    let ntot = len(g2all)
+    let mut gvecs: [float] = []
+    let mut used: [int] = []; let mut u=0; while u<ntot { used.push(0); u=u+1 }
+    let mut picked = 0
+    while picked < npw {
+        let mut best = -1; let mut bestv = 1.0e30; let mut t=0
+        while t<ntot { if used[t]==0 { if g2all[t]<bestv { bestv=g2all[t]; best=t } } ; t=t+1 }
+        if best<0 { break }
+        used[best]=1
+        gvecs.push(gall[best*3]); gvecs.push(gall[best*3+1]); gvecs.push(gall[best*3+2])
+        picked=picked+1
+    }
+    return gvecs
+}
+
+fn main() {
+    let ca = upf_parse(DECK + "/pseudo/Ca_ONCV_PBE_sr.upf")
+    let h  = upf_parse(DECK + "/pseudo/H_ONCV_PBE_sr.upf")
+    if !ca.ok || !h.ok { println("FAIL UPF") ; return }
+    let zca = ca.header.z_valence ; let zh = h.header.z_valence
+    let a = 6.4640 ; let ha = 0.5*a ; let omega = a*a*a*0.5
+    let tpa = 6.28318530717958647692/a
+    let b1 = [0.0,tpa,tpa]; let b2 = [-tpa,0.0,tpa]; let b3 = [-tpa,-tpa,0.0]
+    let hf = [0.25,0.50,0.00, 0.50,0.00,0.25, 0.00,0.25,0.50,
+              0.75,0.50,0.00, 0.50,0.00,0.75, 0.00,0.75,0.50]
+    let a1=[ha,ha,ha]; let a2=[-ha,ha,ha]; let a3=[-ha,-ha,ha]
+    let mut pos_h: [float] = []
+    let mut ih=0
+    while ih<6 {
+        let f1=hf[ih*3]; let f2=hf[ih*3+1]; let f3=hf[ih*3+2]
+        pos_h.push(f1*a1[0]+f2*a2[0]+f3*a3[0])
+        pos_h.push(f1*a1[1]+f2*a2[1]+f3*a3[1])
+        pos_h.push(f1*a1[2]+f2*a2[2]+f3*a3[2])
+        ih=ih+1
+    }
+    let nspec = 2
+    let mut rs: [float]=[]; let mut rabs: [float]=[]; let mut vlocs: [float]=[]
+    let mut i=0
+    while i<len(ca.r) { rs.push(ca.r[i]); rabs.push(ca.rab[i]); vlocs.push(ca.vloc[i]); i=i+1 }
+    i=0
+    while i<len(h.r) { rs.push(h.r[i]); rabs.push(h.rab[i]); vlocs.push(h.vloc[i]); i=i+1 }
+    let mlens=[len(ca.r),len(h.r)]; let zs=[zca,zh]
+    let mut poss: [float]=[]
+    poss.push(0.0); poss.push(0.0); poss.push(0.0)
+    i=0; while i<len(pos_h) { poss.push(pos_h[i]); i=i+1 }
+    let palens=[1,6]
+    let mut empty_f: [float]=[]; let mut empty_i: [int]=[]
+    let nprojs=[0,0]; let blens=[0,0]; let dlens=[0,0]
+    let k0=[0.0,0.0,0.0]
+
+    let npws=[48,64,96,128,180]
+    let mshells=[4,4,5,5,6]
+    println("NPW   eig0      eig1      eig2   (lowest 3 bare T+V_ext eigenvalues, Ha)")
+    let mut ci=0
+    while ci<len(npws) {
+        let gvecs = build_npw(npws[ci], mshells[ci], b1,b2,b3)
+        let n = len(gvecs)/3
+        let ham = qforge_assemble_h_multi(k0, gvecs, nspec, rs, rabs, vlocs, mlens, zs,
+                                          poss, palens, empty_f, empty_i, empty_f,
+                                          nprojs, blens, dlens, omega, empty_f)
+        let dr = qforge_davidson(qforge_pw_apply_bind(ham), ham.diag, n, 3, 1.0e-9, 300)
+        println(to_string(npws[ci]) + "   " + to_string(dr.evals[0]) + "  "
+                + to_string(dr.evals[1]) + "  " + to_string(dr.evals[2]))
+        ci=ci+1
+    }
+    println("=== DONE ===")
+}
+
+let mut _BH: PwHam = PwHam { h:[], diag:[], n:0 }
+pub fn qforge_pw_apply_bind(ham: PwHam) { _BH = ham ; return _bh_apply }
+pub fn _bh_apply(v: [float]) { return qforge_h_apply(_BH, v) }
