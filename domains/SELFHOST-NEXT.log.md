@@ -224,3 +224,44 @@ GAP (named, honest): R_AARCH64_ABS64 — constant + generic Elf64_Rela path are 
   backend uses the ADRP/ADD page-relative form for both string + global refs, which is
   PIE-friendly). ABS64 will wire when a codegen path emits an absolute `.quad sym`
   (e.g. a data-section pointer table). Not blocking real programs today.
+
+## 2026-06-03 — linux-arm64 NATIVE EMIT verified on pi5 + self-emit OOM wall (named)
+
+Drove the SELFHOST-NEXT linux-arm64 self-EMIT milestone on pi5-akida (the pool's
+ONLY native aarch64 host — RPi5, 7.8 GiB RAM, no swap, gcc 13.3, no clang).
+Branch `selfhost-next/linux-arm64-self-emit` off origin/main 1c70091 (#2562).
+Everything below RAN NATIVELY (no qemu, no cross-toolchain).
+
+- [x] BUILT bootstrap toolchain via the proven CI path `TARGET=linux-arm64
+      CC=gcc LIBS='-lm -ldl' bash tool/release_build`: runtime.a (501 KB) +
+      hexat (2.17 MB) + ./hexa (2.24 MB ELF aarch64 PIE). Seeds self-restored
+      from the frozen blob; full source build, no edge-pull needed.
+- [x] BUILT the native-codegen compiler `cc_native` (the aprime_cc analogue for
+      ELF AArch64; ./hexa 0.1.0-dispatch can't self-serve native emit — it
+      shells to a clang rebuild absent on the Pi). New gcc-native recipe
+      `tool/build_native_linux_arm64` (sibling of build_aprime.sh, no clang / no
+      -arch arm64) flattens compiler/main.hexa (48 files, 43240 lines) → hexat
+      → C → gcc -O1 → cc_native (3.3 MB ELF aarch64). Needed an rt_array
+      link-fill (rt-stdlib-gate externs rt_array_pop/shift; darwin hides it via
+      -Wl,-dead_strip) — mirrors the existing rt_fs B2 link-fill.
+- [x] GOAL 1 — `print("hi"); exit(7)` → NATIVE ELF .o via
+      `cc_native --emit=obj --backend=native --target=arm64-linux-gnu` (NO host
+      `as`). readelf: REL/AArch64, R_AARCH64_CALL26 (hexa_print_val/exit/
+      set_args) + R_AARCH64_ADR_PREL_PG_HI21 + R_AARCH64_ADD_ABS_LO12_NC vs
+      .LCstr0 (the #2562 ADRP/ADD page-reloc pair). Linked with runtime.a +
+      crt1.o; NATIVE RUN on pi5: stdout="hi", rc=7 (real $?, no pipe-mask).
+      exit(42) → rc 42. 🟢 verdict
+      .verdicts/selfhost-next-linux-arm64/SELF-EMIT-LARM64.txt.
+- [ ] GOAL 2 — COMPILER SELF-EMIT (cc_native emits its own 43240-line flattened
+      source to ELF .o): REACHED parse + typecheck (15 diagnostics, all FLATTEN
+      ARTIFACTS — the known empty_atlas AtlasRef/AtlasIndex collision, NOT a
+      compiler bug; --ignore-errors proceeds) + ENTERED codegen, ran ~1h wall
+      with **0 ENCODE-MISS** (no STP mem=#0 / unknown-op encoder wall), then
+      **OOM-killed**: journalctl `Out of memory: Killed process 58398
+      (cc_native) total-vm:8006332kB anon-rss:7758464kB` — ~7.76 GiB RSS on a
+      7.8 GiB / no-swap host. FIRST WALL = HOST RAM, NOT codegen correctness.
+      NEXT: re-run `tool/build_native_linux_arm64 --self-emit` on a higher-RAM
+      (≥~12–16 GiB) native aarch64 host or add swap; OR a separate
+      codegen-peak-RSS reduction milestone. g63: no such aarch64 host in the
+      current pool (summer/aiden x86_64; pi5 is the only aarch64 and is
+      RAM-tight) — honest scope, not faked.
