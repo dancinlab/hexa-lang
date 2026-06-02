@@ -1,0 +1,201 @@
+// @ci_gate — deterministic · closed-form q-resolved el-ph BZ scattering asserts
+//
+// qforge_qmesh_qfold_selftest.hexa — QFORGE q-momentum-conservation g5 gate.
+//
+// Closes the q-DECOUPLING residual the k-mesh brick (#2586) left: it paired one
+// flat ω-band with every electron pair (q-averaged). This brick folds the
+// transfer q = k' − k onto the commensurate MP mesh and asks ω(q,ν) AT that q:
+//   α²F(ω) = (1/N(E_F)) Σ_{k,k'} w_k w_{k'} Σ_{m,n} Σ_ν
+//              |g^{kk',ν}_{mn}|² δ(ε_{k,m}−E_F) δ(ε_{k',n}−E_F) δ(ω − ω_{q=k'−k, ν})
+//
+//   (A) MALFORMED GUARD: bad dims · length mismatch · empty ω-provider · bad g2
+//       provider → sentinel (ok==0), and the fold helper returns -1 out of range.
+//   (B) FOLD-MAP CLOSED FORM: q = k'−k on the commensurate mesh —
+//       • diagonal i==j → q-index 0 (zero transfer) for ANY (i,j) pair on any mesh,
+//       • a 1×1×4 chain: qfold(i,j) == (j−i) mod 4 (the canonical 1-D fold),
+//       • periodicity: qfold(i,j) wraps (anti-symmetric pair maps to the conjugate
+//         q-index), and EVERY transfer index 0..nk−1 is reached over the nk² pairs.
+//   (C) d4 IDENTITY LIMIT: a 1×1×1 single-point mesh has ONE q-index, so omega_of
+//       always returns the SAME flat band → the q-resolved λ EQUALS the flat-band
+//       value the (unchanged) kmesh-style sum would give (closed-form Einstein λ).
+//   (D) q-DISPERSION IS NON-TRIVIAL (the brick's REASON TO EXIST): on a flat band
+//       at E_F over a 1×1×4 mesh, a DISPERSIVE ω(q) (soft mode at large transfer)
+//       gives a λ that DIFFERS from the q-AVERAGED flat-band λ — because λ ∝ 1/ω²
+//       weights soft modes MORE, so resolving ω per-q ≠ reusing one mean band.
+//   (E) FULL-MESH q-COVERAGE: over a complete nk-point mesh the n_qhit witness ==
+//       nk (every transfer momentum on the mesh is realised by some k-pair).
+//
+// Run:  hexa run stdlib/qforge/qmesh_qfold_selftest.hexa
+// PASS: exits printing "qforge_qmesh_qfold_selftest PASS".
+use "stdlib/qforge/qmesh_qfold"
+use "stdlib/qforge/elph"          // qforge_einstein_lambda_analytic (closed form)
+
+fn _abs(x: float) -> float { if x < 0.0 { return -x } return x }
+
+fn _ck_true(name: str, cond: bool) -> int {
+    if cond { println("PASS " + name) ; return 0 }
+    println("FAIL " + name)
+    return 1
+}
+fn _ck_eq(name: str, got: float, want: float, tol: float) -> int {
+    if _abs(got - want) <= tol {
+        println("PASS " + name + " (" + to_string(got) + ")")
+        return 0
+    }
+    println("FAIL " + name + " — got " + to_string(got) + " want " + to_string(want))
+    return 1
+}
+fn _ck_ieq(name: str, got: int, want: int) -> int {
+    if got == want { println("PASS " + name + " (" + to_string(got) + ")") ; return 0 }
+    println("FAIL " + name + " — got " + to_string(got) + " want " + to_string(want))
+    return 1
+}
+
+// ── module-level provider state (hexa nested fns do not capture lexical scope) ─
+let mut OM0: float = 0.0            // single flat Einstein ω₀ (K) provider value
+fn _omega_flat(qidx: int) -> [float] { return [OM0] }   // 1 mode, q-independent
+
+// a q-DISPERSIVE provider: soft at the largest transfer index (qidx==3 on a
+// 4-point chain), stiff at q=0. ω(q) = OM0 * (1 − 0.5*qidx/3).
+fn _omega_disp(qidx: int) -> [float] {
+    return [OM0 * (1.0 - 0.5 * to_float(qidx) / 3.0)]
+}
+
+let mut G2C: float = 0.0            // constant single-band |g|² provider value
+fn _g2_const_1band(i: int, j: int) -> [float] { return [G2C] }   // nb=1
+
+fn _omega_empty(qidx: int) -> [float] { return [] }     // (A) malformed ω provider
+
+fn main() {
+    let mut fails = 0
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // (A) MALFORMED GUARD
+    // ─────────────────────────────────────────────────────────────────────────
+    fails = fails + _ck_ieq("A.fold_bad_dims", qforge_qfold_index(0, 0, 0, 1, 1), -1)
+    fails = fails + _ck_ieq("A.fold_oob_i",    qforge_qfold_index(9, 0, 1, 1, 4), -1)
+    fails = fails + _ck_ieq("A.fold_oob_j",    qforge_qfold_index(0, 9, 1, 1, 4), -1)
+
+    let omg: [float] = [100.0, 200.0, 300.0, 400.0, 500.0]
+    G2C = 1.0
+    // length mismatch (eps too short) → sentinel
+    let rA1 = qforge_qfold_elph_lambda([0.0], [1.0, 1.0], 1, 1, 2, 1,
+                                       _omega_flat, _g2_const_1band,
+                                       0.0, 1.0, omg, 0.05, 30.0, -1.0)
+    fails = fails + _ck_ieq("A.len_mismatch_sentinel", rA1.ok, 0)
+    // empty ω provider → sentinel
+    OM0 = 200.0
+    let rA2 = qforge_qfold_elph_lambda([0.0], [1.0], 1, 1, 1, 1,
+                                       _omega_empty, _g2_const_1band,
+                                       0.0, 1.0, omg, 0.05, 30.0, -1.0)
+    fails = fails + _ck_ieq("A.empty_omega_sentinel", rA2.ok, 0)
+    // non-positive N(E_F) → sentinel
+    let rA3 = qforge_qfold_elph_lambda([0.0], [1.0], 1, 1, 1, 1,
+                                       _omega_flat, _g2_const_1band,
+                                       0.0, 0.0, omg, 0.05, 30.0, -1.0)
+    fails = fails + _ck_ieq("A.bad_nef_sentinel", rA3.ok, 0)
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // (B) FOLD-MAP CLOSED FORM
+    // ─────────────────────────────────────────────────────────────────────────
+    // diagonal i==j → q-index 0 on a 2×2×2 mesh (nk=8), for every i
+    let mut diag_ok = true
+    let mut di = 0
+    while di < 8 {
+        if qforge_qfold_index(di, di, 2, 2, 2) != 0 { diag_ok = false }
+        di = di + 1
+    }
+    fails = fails + _ck_true("B.diagonal_q0", diag_ok)
+    // 1×1×4 chain: qfold(i,j) == (j−i) mod 4
+    let mut chain_ok = true
+    let mut ci = 0
+    while ci < 4 {
+        let mut cj = 0
+        while cj < 4 {
+            let want = ((cj - ci) % 4 + 4) % 4
+            if qforge_qfold_index(ci, cj, 1, 1, 4) != want { chain_ok = false }
+            cj = cj + 1
+        }
+        ci = ci + 1
+    }
+    fails = fails + _ck_true("B.chain_jminusi_mod4", chain_ok)
+    // every transfer index 0..3 reached over the 4×4 pairs of the chain
+    let mut hit = [false, false, false, false]
+    let mut hi = 0
+    while hi < 4 {
+        let mut hj = 0
+        while hj < 4 { hit[qforge_qfold_index(hi, hj, 1, 1, 4)] = true ; hj = hj + 1 }
+        hi = hi + 1
+    }
+    fails = fails + _ck_true("B.all_transfers_reached", hit[0] && hit[1] && hit[2] && hit[3])
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // (C) d4 IDENTITY LIMIT — 1×1×1, flat band at E_F, closed-form Einstein λ
+    // ─────────────────────────────────────────────────────────────────────────
+    // single k-point at E_F, single band, constant g², single flat Einstein ω₀.
+    // dense α²F grid spanning ω₀ + small σ_ph → the assembler reproduces the
+    // sharp-mode closed form to rel-ε ≤ 1e-3 (same convention as #2586's (C)).
+    OM0 = 1236.4
+    G2C = 0.8
+    let n_ef = 3.0
+    let sigma_el = 0.05
+    let sigma_ph = 10.0
+    let mut grid: [float] = []
+    let mut gp = 1
+    while gp < 401 { grid.push(to_float(gp) * 7.0) ; gp = gp + 1 }
+    let r1 = qforge_qfold_elph_lambda([0.0], [1.0], 1, 1, 1, 1,
+                                      _omega_flat, _g2_const_1band,
+                                      0.0, n_ef, grid, sigma_el, sigma_ph, -1.0)
+    fails = fails + _ck_ieq("C.ok", r1.ok, 1)
+    fails = fails + _ck_ieq("C.one_qhit", r1.n_qhit, 1)
+    // closed-form: at E_F both δ's peak at 1/(σ√2π); D = g²·δ(0)²/N(E_F),
+    // λ_Einstein = 2D/ω₀ on a single sharp Einstein mode (the L3 closed form).
+    // single sample: nk_samp=1, weight folded by the driver = wk²·(1/nw) = 1.0.
+    let lam_ana = qforge_einstein_lambda_analytic(1, G2C, OM0, n_ef, 1.0, sigma_el)
+    let relC = _abs(r1.lambda - lam_ana) / _abs(lam_ana)
+    fails = fails + _ck_true("C.gamma_einstein_closed_form (rel-ε ≤ 1e-3, λ=" + to_string(r1.lambda) + ")", relC <= 1.0e-3)
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // (D) q-DISPERSION NON-TRIVIAL — flat-band 1×1×4, disp ω(q) ≠ averaged ω
+    // ─────────────────────────────────────────────────────────────────────────
+    OM0 = 300.0
+    G2C = 0.5
+    let wk4 = [0.25, 0.25, 0.25, 0.25]      // uniform MP weights (sum 1)
+    let eps4 = [0.0, 0.0, 0.0, 0.0]         // flat band exactly at E_F
+    let omgD: [float] = [60.0, 120.0, 180.0, 240.0, 300.0, 360.0]
+    let r_flat = qforge_qfold_elph_lambda(eps4, wk4, 1, 1, 4, 1,
+                                          _omega_flat, _g2_const_1band,
+                                          0.0, n_ef, omgD, sigma_el, sigma_ph, -1.0)
+    let r_disp = qforge_qfold_elph_lambda(eps4, wk4, 1, 1, 4, 1,
+                                          _omega_disp, _g2_const_1band,
+                                          0.0, n_ef, omgD, sigma_el, sigma_ph, -1.0)
+    fails = fails + _ck_ieq("D.flat_ok", r_flat.ok, 1)
+    fails = fails + _ck_ieq("D.disp_ok", r_disp.ok, 1)
+    // resolving ω per transfer-q ≠ reusing one shared mean band: the q-resolved λ
+    // is STRICTLY DIFFERENT from the q-averaged flat-band λ — the brick's whole
+    // reason to exist (momentum conservation in the phonon δ). The sign of Δλ is
+    // set by grid/smearing detail (λ∝Σ1/ω² favours soft modes, but the finite α²F
+    // grid + σ_ph redistribute weight), so we assert the DIFFERENCE, not its sign.
+    fails = fails + _ck_true("D.disp_differs_from_flat (Δλ=" + to_string(r_disp.lambda - r_flat.lambda) + ")",
+                             _abs(r_disp.lambda - r_flat.lambda) > 1.0e-6)
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // (E) FULL-MESH q-COVERAGE — n_qhit == nk
+    // ─────────────────────────────────────────────────────────────────────────
+    fails = fails + _ck_ieq("E.qhit_eq_nk_chain4", r_flat.n_qhit, 4)
+    // a 2×2×2 mesh: nk=8 transfer momenta all reached
+    let wk8 = [0.125, 0.125, 0.125, 0.125, 0.125, 0.125, 0.125, 0.125]
+    let eps8 = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    OM0 = 250.0
+    let r8 = qforge_qfold_elph_lambda(eps8, wk8, 2, 2, 2, 1,
+                                      _omega_flat, _g2_const_1band,
+                                      0.0, n_ef, omg, sigma_el, sigma_ph, -1.0)
+    fails = fails + _ck_ieq("E.ok_222", r8.ok, 1)
+    fails = fails + _ck_ieq("E.qhit_eq_nk_222", r8.n_qhit, 8)
+
+    if fails == 0 {
+        println("qforge_qmesh_qfold_selftest PASS")
+    } else {
+        println("qforge_qmesh_qfold_selftest FAIL (" + to_string(fails) + ")")
+    }
+}

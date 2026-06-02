@@ -1,0 +1,231 @@
+// HEXA Standard Library — qforge/qmesh_qfold
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// QFORGE q-RESOLVED el-ph BZ scattering sum — momentum conservation q = k' − k.
+//
+// ── WHY THIS EXISTS (the q-decoupling residual the k-mesh brick left, d6) ─────
+// kmesh_elph (#2586) walks the FULL (k_i, k_j) × (m,n) × ν BZ scattering set and
+// folds the BZ pair weights correctly — closing the Γ-only ELECTRON-momentum
+// collapse. But it pairs EVERY phonon mode in one FLAT omega_band with EVERY
+// electron pair: the phonon momentum q is DECOUPLED from the electron momentum
+// transfer q = k_j − k_i. That is the q-AVERAGED approximation — physically the
+// phonon ω in the double-delta MUST be ω(q,ν) AT the transfer momentum:
+//
+//   α²F(ω) = (1/N(E_F)) Σ_{k,k'} w_k w_{k'} Σ_{m,n} Σ_ν
+//              |g^{kk',ν}_{mn}|² δ(ε_{k,m}−E_F) δ(ε_{k',n}−E_F) δ(ω − ω_{q=k'−k, ν})
+//
+// On a commensurate Monkhorst-Pack mesh the transfer q = k_j − k_i FOLDS back
+// onto a mesh point (mod the grid dims), so every electron pair maps to exactly
+// one q-mesh index. This brick supplies that fold map + a q-RESOLVED driver that
+// asks a per-q provider for ω(q,ν) [from realcell_qmesh, brick a] at the matching
+// q, restoring the momentum conservation the flat-band reuse threw away.
+//
+// ── d4 GENERIC — the q-index fold + a per-q omega provider closure ───────────
+// This module knows NOTHING about CaH6 / LaH10. The caller supplies:
+//   • the per-k band table eps[k*nb+b] + BZ weights w_k  (same layout as #2586),
+//   • the mesh dims (n1,n2,n3) so the transfer q = k_j − k_i can be folded,
+//   • a g2 PROVIDER g2_of(i, j) -> [nb*nb]            (the a/b/d coupling physics),
+//   • an OMEGA PROVIDER omega_of(qidx) -> [float]     returning ω(q,ν) (K) AT the
+//     folded transfer-momentum index qidx (the realcell_qmesh dispersion [a]).
+// The single-q-mesh degenerate limit (n1=n2=n3=1 → one q-index → omega_of always
+// returns the same flat band) reproduces qforge_kmesh_elph_samples EXACTLY — the
+// d4 identity the selftest pins.
+//
+// d3/d19 reuse (compose, don't reinvent — every brick below is verified 🟢/🔵):
+//   - the BZ k-walk packing idiom : stdlib/qforge/kmesh_elph (#2586)
+//   - L3 BZ double-δ α²F          : stdlib/qforge/tc        (qforge_a2f_from_elph)
+//   - λ, ω_log (K→Ha unit-fix)    : stdlib/material/sim     (eliashberg_moments_from_a2f_scaled · ha_per_kelvin)
+//   - F1 phonon amplitude         : stdlib/qforge/elph_offdiag (qforge_elph_amp2)
+// The new code is ONLY the q = k'−k fold map + the per-q omega substitution.
+
+use "stdlib/qforge/elph_offdiag"
+use "stdlib/qforge/tc"
+use "stdlib/material/sim"
+
+// the q-resolved BZ-summed composed result bundle.
+pub struct QfoldElphResult {
+    ok:        int,
+    err:       str,
+    lambda:    float,   // q-resolved BZ-summed QFORGE-NC λ = 2∫α²F/ω (unit-correct)
+    omega_log: float,   // ω_log of the composed spectrum (K)
+    n_kpairs:  int,     // electron-momentum pairs walked (nk²)
+    n_qhit:    int,     // distinct transfer q-indices that received ≥1 sample
+    n_samples: int,     // total (k_i,k_j,m,n,ν) el-ph samples emitted
+    g2_total:  float    // Σ over all samples of the (weighted) |g|² (witness)
+}
+
+fn _qf_sentinel(err: str) -> QfoldElphResult {
+    return QfoldElphResult { ok: 0, err: err, lambda: -1.0, omega_log: -1.0,
+                             n_kpairs: 0, n_qhit: 0, n_samples: 0, g2_total: 0.0 }
+}
+
+// ── the q = k_j − k_i FOLD map (commensurate Monkhorst-Pack momentum) ────────
+// A linear MP point index p ∈ [0..nk) on an (n1,n2,n3) mesh decomposes (the
+// qforge_mp_grid loop order is i1-outer, i2, i3-inner) as
+//   p = ((a1)*n2 + a2)*n3 + a3 ,  a_d ∈ [0..n_d).
+// The transfer q = k_j − k_i folds component-wise modulo n_d:
+//   c_d = (a_d(j) − a_d(i)) mod n_d ,  qidx = (c1*n2 + c2)*n3 + c3.
+// This is the standard commensurate-mesh momentum conservation: q lands on the
+// SAME mesh, so the phonon at the transfer momentum is a real q-mesh point.
+//   p, n1, n2, n3 : the linear k-index + mesh dims (n1*n2*n3 == nk required).
+fn _axis_idx(p: int, n1: int, n2: int, n3: int) -> [int] {
+    let a3 = p % n3
+    let r  = (p - a3) / n3
+    let a2 = r % n2
+    let a1 = (r - a2) / n2
+    return [a1, a2, a3]
+}
+
+// PUBLIC fold helper (also unit-tested directly): index of q = k_j − k_i.
+//   Returns -1 on a malformed index/dims (caller guards).
+pub fn qforge_qfold_index(i: int, j: int, n1: int, n2: int, n3: int) -> int {
+    let nk = n1 * n2 * n3
+    if n1 < 1 || n2 < 1 || n3 < 1 { return -1 }
+    if i < 0 || j < 0 || i >= nk || j >= nk { return -1 }
+    let ai = _axis_idx(i, n1, n2, n3)
+    let aj = _axis_idx(j, n1, n2, n3)
+    let c1 = ((aj[0] - ai[0]) % n1 + n1) % n1
+    let c2 = ((aj[1] - ai[1]) % n2 + n2) % n2
+    let c3 = ((aj[2] - ai[2]) % n3 + n3) % n3
+    return (c1 * n2 + c2) * n3 + c3
+}
+
+// ── BUILD the q-resolved (k_i, k_j, m, n, ν) sample bundle ───────────────────
+// Same flat [4*ns] packing [eps_k… eps_kq… g2… omega…] qforge_kmesh_elph_samples
+// uses, so it feeds straight into qforge_a2f_from_elph (d4 generic assembler).
+// The ONLY difference vs #2586: the per-pair phonon band is omega_of(qidx) at the
+// FOLDED transfer momentum, not one shared flat band. Returns [] on malformed
+// input or a provider contract violation.
+//   eps      : [nk*nb] band energies, k-major (eps[k*nb+b]).
+//   wk       : [nk] BZ weights (uniform MP weights sum to 1; any positive set ok).
+//   n1,n2,n3 : mesh dims (product == nk).   nb : active band count.
+//   omega_of : (qidx) -> [float]  REAL positive ω(q,ν) (K) at transfer q [a].
+//   g2_of    : (i, j) -> [nb*nb]  |g_mn|² matrix for the pair (k_i → k_j).
+//   mass_amu : F1 displaced-atom mass (amu); >0 → fold ℏ/(2 M ω_ν) per mode.
+pub fn qforge_qfold_elph_samples(eps: [float], wk: [float],
+                                 n1: int, n2: int, n3: int, nb: int,
+                                 omega_of, g2_of, mass_amu: float) -> [float] {
+    let nk = n1 * n2 * n3
+    if n1 < 1 || n2 < 1 || n3 < 1 || nb < 1 { return [] }
+    if len(eps) != nk * nb || len(wk) != nk { return [] }
+
+    let mut eps_k:  [float] = []
+    let mut eps_kq: [float] = []
+    let mut g2:     [float] = []
+    let mut wq:     [float] = []
+
+    let mut i = 0
+    while i < nk {
+        let wi = wk[i]
+        let mut j = 0
+        while j < nk {
+            let wij = wi * wk[j]                        // BZ pair weight w_{k_i}·w_{k_j}
+            let qidx = qforge_qfold_index(i, j, n1, n2, n3)
+            if qidx < 0 { return [] }                   // fold guard
+            let omega_band = omega_of(qidx)             // ω(q,ν) AT the transfer q [a]
+            let nw = len(omega_band)
+            if nw < 1 { return [] }                     // omega provider contract guard
+            let gm = g2_of(i, j)                        // [nb*nb] |g_mn|² for (k_i→k_j)
+            if len(gm) != nb * nb { return [] }         // g2 provider contract guard
+            let mut m = 0
+            while m < nb {
+                let mut n = 0
+                while n < nb {
+                    let g2mn = gm[m * nb + n]
+                    let mut iw = 0
+                    while iw < nw {
+                        let wnu = omega_band[iw]
+                        let amp2 = if mass_amu > 0.0 { qforge_elph_amp2(mass_amu, wnu) } else { 1.0 }
+                        eps_k.push(eps[i * nb + m])
+                        eps_kq.push(eps[j * nb + n])
+                        // BZ pair weight × 1/nw mode weight × F1 amplitude (the
+                        // assembler is linear in g²·weight, weight=1).
+                        g2.push(g2mn * wij / to_float(nw) * amp2)
+                        wq.push(wnu)
+                        iw = iw + 1
+                    }
+                    n = n + 1
+                }
+                m = m + 1
+            }
+            j = j + 1
+        }
+        i = i + 1
+    }
+
+    let ns = len(g2)
+    let mut packed: [float] = []
+    let mut p = 0
+    while p < ns { packed.push(eps_k[p])  ; p = p + 1 }
+    p = 0
+    while p < ns { packed.push(eps_kq[p]) ; p = p + 1 }
+    p = 0
+    while p < ns { packed.push(g2[p])     ; p = p + 1 }
+    p = 0
+    while p < ns { packed.push(wq[p])     ; p = p + 1 }
+    return packed
+}
+
+// ── COMPOSE: q-resolved BZ-summed α²F → λ over a real (k-mesh, q-dispersion) ──
+// Walks the q-resolved samples, assembles α²F via the verified L3 double-δ,
+// integrates λ with the K→Ha scaled moment integrator (F2). Identical seam to
+// qforge_kmesh_elph_lambda; the phonon ω is now q-RESOLVED. ok==0 on malformed
+// input or an assembler sentinel.
+//   omega_grid : α²F frequency grid (K).
+//   n_ef       : REAL N(E_F) (states/Ha/cell) — the Allen normalizer 1/N(E_F) [c].
+//   sigma_el   : Fermi-surface δ-smearing (eps unit) · sigma_ph : α²F δ (K).
+pub fn qforge_qfold_elph_lambda(eps: [float], wk: [float],
+                                n1: int, n2: int, n3: int, nb: int,
+                                omega_of, g2_of,
+                                e_fermi: float, n_ef: float,
+                                omega_grid: [float],
+                                sigma_el: float, sigma_ph: float,
+                                mass_amu: float) -> QfoldElphResult {
+    if n_ef <= 0.0 { return _qf_sentinel("non-positive N(E_F) [c]") }
+    let nk = n1 * n2 * n3
+    let packed = qforge_qfold_elph_samples(eps, wk, n1, n2, n3, nb, omega_of, g2_of, mass_amu)
+    if len(packed) < 4 { return _qf_sentinel("empty / malformed q-resolved sample bundle") }
+    let ns = len(packed) / 4
+    let mut eps_k:  [float] = []
+    let mut eps_kq: [float] = []
+    let mut g2:     [float] = []
+    let mut wq:     [float] = []
+    let mut t = 0
+    while t < ns { eps_k.push(packed[t])          ; t = t + 1 }
+    t = 0
+    while t < ns { eps_kq.push(packed[ns + t])    ; t = t + 1 }
+    let mut g2_total = 0.0
+    t = 0
+    while t < ns { let v = packed[2 * ns + t] ; g2.push(v) ; g2_total = g2_total + v ; t = t + 1 }
+    t = 0
+    while t < ns { wq.push(packed[3 * ns + t])    ; t = t + 1 }
+
+    // distinct transfer-q witness: count unique fold indices over the nk² pairs.
+    let mut qhit = 0
+    let mut qi = 0
+    while qi < nk {
+        let mut seen = false
+        let mut ii = 0
+        while ii < nk {
+            let mut jj = 0
+            while jj < nk {
+                if qforge_qfold_index(ii, jj, n1, n2, n3) == qi { seen = true }
+                jj = jj + 1
+            }
+            ii = ii + 1
+        }
+        if seen { qhit = qhit + 1 }
+        qi = qi + 1
+    }
+
+    let a2f = qforge_a2f_from_elph(eps_k, eps_kq, g2, wq, e_fermi, n_ef,
+                                   omega_grid, 1.0, sigma_el, sigma_ph)
+    if len(a2f) < 2 { return _qf_sentinel("L3 assembler sentinel") }
+    let mo = eliashberg_moments_from_a2f_scaled(omega_grid, a2f, ha_per_kelvin())
+    let lam = mo[0]
+    if lam < 0.0 { return _qf_sentinel("non-physical lambda from a2f") }
+    return QfoldElphResult { ok: 1, err: "", lambda: lam, omega_log: mo[1],
+                             n_kpairs: nk * nk, n_qhit: qhit, n_samples: ns, g2_total: g2_total }
+}
