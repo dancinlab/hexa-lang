@@ -55,13 +55,15 @@ while [ $# -gt 0 ]; do
 done
 [ -z "$BUILD" ] && BUILD="$(pwd)/build/selfhost"
 SLOT="$HX_HOME/self/native/selfhost"
-LAUNCHER="$HX_HOME/bin/hx-selfhost"
+LAUNCHER="$HX_HOME/bin/hx-selfhost"          # bare: exec gen3 (compile surface only)
+CLI_LAUNCHER="$HX_HOME/bin/hx-selfhost-cli"  # safe: compile->gen3, everything else->delegate
 REAL="$HX_HOME/bin/hexa.real"
 
 status() {
     echo "=== selfhost promotion status (HX_HOME=$HX_HOME) ==="
     echo "slot      : $([ -d "$SLOT" ] && echo "installed ($SLOT)" || echo absent)"
     echo "launcher  : $([ -x "$LAUNCHER" ] && echo "present ($LAUNCHER)" || echo absent)"
+    echo "cli-shim  : $([ -x "$CLI_LAUNCHER" ] && echo "present ($CLI_LAUNCHER)" || echo absent)"
     if [ -L "$REAL" ]; then
         echo "default   : hexa.real -> $(readlink "$REAL") (FLIPPED to selfhost)"
     else
@@ -109,6 +111,15 @@ chmod +x "$LAUNCHER"
 echo "tier1: installed self-host slot at $SLOT + launcher $LAUNCHER"
 echo "       opt-in: 'hx-selfhost <args>' (default hx/hexa is untouched)"
 
+# install the SAFE delegating CLI shim (tier2 flips to THIS, not the bare launcher)
+if [ -f "$HERE/hx-selfhost-cli" ]; then
+    cp "$HERE/hx-selfhost-cli" "$CLI_LAUNCHER"; chmod +x "$CLI_LAUNCHER"
+    echo "tier1: installed CLI shim $CLI_LAUNCHER (compile->gen3, subcommands->delegate)"
+else
+    echo "promote_selfhost: WARNING — tool/hx-selfhost-cli not found next to script;" >&2
+    echo "                  tier2 default-flip will be UNSAFE (bare gen3). Aborting flip." >&2
+fi
+
 # tier 2: default flip (guarded)
 if [ "$DO_DEFAULT" = 1 ]; then
     if [ "$REVIEWED" != 1 ]; then
@@ -116,13 +127,20 @@ if [ "$DO_DEFAULT" = 1 ]; then
         echo "                  tier1 side-by-side install succeeded; default unchanged." >&2
         exit 2
     fi
+    # The SAFE delegating shim is REQUIRED for tier2 — it is what keeps the full
+    # CLI + every hook working after the flip. Refuse to flip to bare gen3.
+    if [ ! -x "$CLI_LAUNCHER" ]; then
+        echo "promote_selfhost: --default REFUSED — CLI shim $CLI_LAUNCHER absent." >&2
+        echo "                  flipping to bare gen3 would brick the full CLI. tier1 ok." >&2
+        exit 2
+    fi
     if [ -e "$REAL" ] && [ ! -L "$REAL" ]; then
         TS="$(date +%Y%m%d-%H%M%S)"
         mv "$REAL" "$HX_HOME/bin/hexa.real.pre-selfhost.$TS"
         echo "tier2: backed up shipped hexa.real -> hexa.real.pre-selfhost.$TS"
     fi
-    ln -sf "$LAUNCHER" "$REAL"
-    echo "tier2: DEFAULT FLIPPED — hexa.real -> $LAUNCHER (revert: tool/promote_selfhost.sh --revert)"
+    ln -sf "$CLI_LAUNCHER" "$REAL"
+    echo "tier2: DEFAULT FLIPPED — hexa.real -> $CLI_LAUNCHER (revert: tool/promote_selfhost.sh --revert)"
 fi
 status
 exit 0
