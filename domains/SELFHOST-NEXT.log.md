@@ -224,3 +224,33 @@ GAP (named, honest): R_AARCH64_ABS64 — constant + generic Elf64_Rela path are 
   backend uses the ADRP/ADD page-relative form for both string + global refs, which is
   PIE-friendly). ABS64 will wire when a codegen path emits an absolute `.quad sym`
   (e.g. a data-section pointer table). Not blocking real programs today.
+
+## 2026-06-03 — cross-emit DEPTH: .rodata string + .data global RUN under qemu (asm path)
+Branch selfhost-next/linux-arm64-depth (stacked on #2569). Driver tool/cross_emit_larm64_depth.
+aprime_cc built on mini (Darwin arm64) via build_aprime.sh — smoke exit 42 PASS. Cross-tools
+on summer (aarch64-linux-gnu-as/-ld 2.42 + qemu-aarch64-static); mini has none (driver runs
+emit+fixup there, SKIPs assemble/link/run).
+
+Extended exit(42) to REAL programs hitting the merged #2562 data relocs:
+  P1 `fn main(){ print("hi"); exit(7) }`   → qemu stdout=[hi] rc=7  ✅  (.rodata string)
+  P2 `let g:int=99; fn main(){print("hi");exit(g)}` → qemu stdout=[hi] rc=99 ✅ (.data global)
+readelf -rW: P1 = 1× R_AARCH64_ADR_PREL_PG_HI21 + 1× R_AARCH64_ADD_ABS_LO12_NC (.rodata);
+  P2 = 3×+3× (.data ×2 store/load + .rodata ×1) — EXACTLY the #2562 reloc pair. Both ELF
+  AArch64 statically linked, run to correct stdout+rc. String/global reloc CONFIRMED in asm
+  (adrp SYM / add :lo12:SYM) AND in the .o.
+
+KEY FINDING (asm-path fixup needed): the emit pass writes Mach-O `SYM@PAGE`/`SYM@PAGEOFF`
+  page-rel syntax EVEN for --target=arm64-linux-gnu. GNU-as REJECTS it ("unexpected
+  characters following instruction `adrp x1,.LCstr0@PAGE'"). Driver translates
+  @PAGE→bare-sym (adrp), @PAGEOFF→:lo12: (add) as a recipe-level sed fixup (NOT a codegen
+  edit — scope boundary respected: no elf_arm64.hexa / emit-pass edits). Candidate follow-up
+  for the codegen lane: emit :pg_hi21:/:lo12: directly when target==arm64-linux-gnu.
+
+NEXT FULL-SELF-EMIT WALL (named): `undefined reference to hexa_add_slow`. Probe multi.hexa
+  (fn add + integer arith) cross-emits + assembles fine but link fails — the freestanding
+  stub (rtstub_io.s: set_args/exit/print_val[TAG_STR]) can't satisfy arithmetic/string/alloc
+  externs. Real programs need self/runtime.c cross-compiled to aarch64-linux. Native aarch64
+  has this (build_native_linux_arm64, gcc); the Mac cross path needs aarch64-linux-gnu-gcc on
+  the runtime → aarch64 runtime.a, then link <p>.o under qemu = the next milestone.
+
+Verdict: .verdicts/selfhost-next-linux-arm64/CROSS-EMIT-DATA.txt (🟢).

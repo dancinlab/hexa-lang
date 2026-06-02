@@ -1,0 +1,92 @@
+SELFHOST-NEXT — linux-arm64 cross-emit DEPTH verdict (.rodata + .data page relocs)
+=================================================================================
+date:     2026-06-03
+branch:   selfhost-next/linux-arm64-depth   (stacked on #2569 / origin/selfhost-next/linux-arm64-self-emit)
+driver:   tool/cross_emit_larm64_depth
+compiler: aprime_cc (stage0 native arm64 compiler) built on this host (mini,
+          Darwin arm64) via tool/build_aprime.sh — smoke exit(6*7)==42 PASS,
+          1518504 B Mach-O arm64, atlas 17265 nodes.
+hosts:    emit+fixup = mini (Darwin arm64); assemble/link/run = summer
+          (x86_64 linux + aarch64-linux-gnu binutils 2.42 + qemu-aarch64-static).
+          (mini has NO cross-tools; the driver runs stages 1-2 there and
+           reports SKIP for 3-5 — full pipeline run on summer.)
+
+OBJECTIVE: extend the exit(42) cross-emit to REAL programs exercising the merged
+#2562 ELF AArch64 DATA relocs — R_AARCH64_ADR_PREL_PG_HI21 +
+R_AARCH64_ADD_ABS_LO12_NC against .rodata (string literal) and .data (module
+global) — cross-emitted → assembled → linked → RUN under qemu.
+
+PIPELINE (asm path; NOT --backend=native — the merged elf_arm64.hexa obj
+serializer is the other path. The asm path reaches the SAME relocs via
+aarch64-linux-gnu-as):
+  (1) aprime_cc --emit=asm --target=arm64-linux-gnu -o <p>.linux.s <p>.hexa
+  (2) Mach-O→GNU-as page-rel SYNTAX fixup (driver surface, NOT a codegen edit):
+        adrp X, SYM@PAGE       →  adrp X, SYM
+        add  X, X, SYM@PAGEOFF →  add  X, X, :lo12:SYM
+      (the emit pass writes Mach-O `@PAGE`/`@PAGEOFF` even for arm64-linux-gnu;
+       GNU-as REJECTS these — confirmed: "Error: unexpected characters following
+       instruction ... `adrp x1,.LCstr0@PAGE'".)
+  (3) aarch64-linux-gnu-as <p>.gnu.s -> <p>.o  (ELF AArch64 relocatable)
+  (4) aarch64-linux-gnu-ld -static -nostdlib <p>.o rtstub_io.s.o -> <p>
+      freestanding stub: _start + hexa_set_args(ret) + hexa_exit[svc 93] +
+      hexa_print_val[TAG_STR(3) → strlen + write(1,…) svc 64].
+  (5) qemu-aarch64-static <p>  → REAL stdout + rc (rc captured separately).
+
+────────────────────────────────────────────────────────────────────────────
+[P1] hi.hexa :  fn main() { print("hi"); exit(7) }
+  emit:    OK (Mach-O @PAGE/@PAGEOFF → fixed up to :lo12: form)
+  string:  .section .rodata / .LCstr0: .byte 0x68,0x69,0x00   ("hi\0")
+  reloc syntax confirmed in asm:  adrp x1, .LCstr0 / add x1, x1, :lo12:.LCstr0  → YES
+  assemble: ELF 64-bit LSB relocatable, ARM aarch64, version 1 (SYSV)
+  readelf -rW hi.o page relocs:
+        1  R_AARCH64_ADR_PREL_PG_HI21   .rodata + 0
+        1  R_AARCH64_ADD_ABS_LO12_NC    .rodata + 0
+       (3  R_AARCH64_CALL26  hexa_set_args / hexa_print_val / hexa_exit)
+  link+run: ELF 64-bit LSB executable, ARM aarch64, statically linked
+        qemu-aarch64-static ./hi  →  stdout=[hi]  rc=7    ✅
+
+[P2] glob.hexa :  let g: int = 99 ; fn main() { print("hi"); exit(g) }
+  emit:    OK
+  global:  .section .data / .p2align 3 / g0: .quad 0 / .quad 0
+  string:  .section .rodata / .LCstr0 ("hi\0")
+  reloc syntax in asm:  adrp x15,g0 / add x15,x15,:lo12:g0 (store) +
+                        adrp x0,g0 / add x0,x0,:lo12:g0 (load) +
+                        adrp x1,.LCstr0 / add x1,x1,:lo12:.LCstr0  → YES (.data AND .rodata)
+  readelf -rW glob.o page relocs:
+        3  R_AARCH64_ADR_PREL_PG_HI21   (.data ×2  +  .rodata ×1)
+        3  R_AARCH64_ADD_ABS_LO12_NC    (.data ×2  +  .rodata ×1)
+  link+run:  qemu-aarch64-static ./glob  →  stdout=[hi]  rc=99   ✅
+       (rc=99 = the module global g read back from .data and passed to exit)
+
+STRING/GLOBAL RELOC CONFIRMED IN ASM + IN ELF:  YES (both .rodata and .data
+resolve to R_AARCH64_ADR_PREL_PG_HI21 + R_AARCH64_ADD_ABS_LO12_NC — exactly the
+merged #2562 data reloc pair).
+
+────────────────────────────────────────────────────────────────────────────
+NEXT FULL-SELF-EMIT WALL (named, honest):
+  `undefined reference to hexa_add_slow` (and the broader hexa runtime).
+
+  Probe: multi.hexa  (fn add(a,b){return a+b}; main{ x=add(3,4); print("sum");
+  exit(x) }) cross-emits cleanly (multi-fn + .text CALL26 to a user fn works),
+  assembles, but LINK against the freestanding stub fails:
+     aarch64-linux-gnu-ld: multi.o: in function `_Le9e7_add_bb0':
+     multi.hexa:1: undefined reference to `hexa_add_slow'
+
+  i.e. the freestanding rtstub_io.s only covers set_args / exit /
+  print_val(TAG_STR). Any program with INTEGER ARITHMETIC (hexa_add_slow),
+  string ops, collections, or allocation needs the REAL self/runtime.c
+  cross-compiled to aarch64-linux. On native aarch64 (pi5-akida) this is
+  tool/build_native_linux_arm64 (gcc native). The cross path FROM a Mac needs
+  aarch64-linux-gnu-gcc to build self/runtime.c → aarch64 runtime.a, then link
+  <p>.o against it under qemu — that runtime cross-build is the next milestone.
+  Two further walls behind it (from the exit42 gap-map, still open): an in-tree
+  ELF AArch64 obj serializer reachable from the asm-free --backend=native path
+  end-to-end on real programs, and a native aarch64 RUN host for self-emit.
+
+VERDICT: 🟢 linux-arm64 cross-emit + assemble + link + RUN VERIFIED for a
+         .rodata string program (print "hi"; exit 7 → rc 7) AND a .data
+         module-global program (exit g=99 → rc 99). Both resolve the merged
+         #2562 R_AARCH64_ADR_PREL_PG_HI21 + R_AARCH64_ADD_ABS_LO12_NC page
+         relocs against .rodata and .data, run to correct stdout+rc under qemu.
+         Next wall = hexa runtime cross-build (hexa_add_slow et al.) for any
+         arithmetic/string program toward full compiler self-emit.

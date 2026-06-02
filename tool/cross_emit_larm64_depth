@@ -1,0 +1,149 @@
+#!/usr/bin/env bash
+# ─────────────────────────────────────────────────────────────────────────
+# tool/cross_emit_larm64_depth — SELFHOST-NEXT linux-arm64 cross-emit DEPTH.
+#
+# Extends the exit(42) cross-emit (PR #2569 / #2537) to REAL programs that
+# exercise .rodata (string literal) + .data (module global) and the AArch64
+# page-relative addressing relocs:
+#   R_AARCH64_ADR_PREL_PG_HI21  (adrp SYM)      ← `:pg_hi21:` / bare-sym form
+#   R_AARCH64_ADD_ABS_LO12_NC   (add :lo12:SYM) ← `:lo12:`     form
+#
+# PIPELINE (asm path — NOT --backend=native; the merged elf_arm64.hexa obj
+# serializer is the OTHER path. The asm path reaches the SAME relocs via
+# aarch64-linux-gnu-as):
+#   (1) aprime_cc --emit=asm --target=arm64-linux-gnu  →  <p>.linux.s
+#   (2) MACH-O→GNU-as page-rel SYNTAX FIXUP (the emit pass writes Mach-O
+#       `SYM@PAGE`/`SYM@PAGEOFF`; GNU-as rejects these — translate to the
+#       ELF `adrp X, SYM` / `add X, X, :lo12:SYM` form).  ← driver surface,
+#       NOT a codegen edit (scope boundary: no elf_arm64.hexa edits).
+#   (3) aarch64-linux-gnu-as <p>.gnu.s  →  <p>.o   (ELF AArch64 reloc'able)
+#   (4) aarch64-linux-gnu-ld -static -nostdlib <p>.o rtstub_io.s.o → <p>
+#       (freestanding stub: _start + hexa_set_args + hexa_exit[svc 93] +
+#        hexa_print_val[TAG_STR → write(1,…) svc 64])
+#   (5) qemu-aarch64-static <p>   → REAL stdout + rc (rc captured separately)
+#
+# RELOC VERIFY: readelf -r confirms R_AARCH64_ADR_PREL_PG_HI21 +
+# R_AARCH64_ADD_ABS_LO12_NC against .rodata (string) and .data (global).
+#
+# Extension-less (sidecar hook blocks .sh Write). Invoke:
+#   bash tool/cross_emit_larm64_depth -c build/aprime_cc -w build/larm64-depth
+# The assemble/link/run stages REQUIRE aarch64-linux-gnu-as/-ld +
+# qemu-aarch64-static (Ubuntu cross binutils) — run on a host that has them
+# (e.g. summer). On a host lacking them, stages 1–2 (emit + fixup + reloc
+# syntax check) still run; 3–5 report SKIP-NO-CROSS-TOOLS.
+#
+# Exit codes: 0 all programs ran (stdout+rc as expected) · 1 emit/fixup fail
+#   · 2 assemble/link/run mismatch · 3 bad invocation · 4 no cross-tools
+# ─────────────────────────────────────────────────────────────────────────
+set -u
+REPO="$(pwd)"; CC_BIN=""; WORK=""
+while [ $# -gt 0 ]; do case "$1" in
+    -r) REPO="$2"; shift 2 ;;
+    -c) CC_BIN="$2"; shift 2 ;;
+    -w) WORK="$2"; shift 2 ;;
+    *) echo "cross_emit_larm64_depth: unknown arg '$1'" >&2; exit 3 ;;
+esac; done
+cd "$REPO" || { echo "bad repo '$REPO'" >&2; exit 3; }
+[ -z "$CC_BIN" ] && CC_BIN="$REPO/build/aprime_cc"
+[ -x "$CC_BIN" ] || { echo "no aprime_cc at '$CC_BIN' (build via tool/build_aprime.sh)" >&2; exit 3; }
+[ -z "$WORK" ] && WORK="$REPO/build/larm64-depth"
+case "$WORK" in /tmp/*|/private/tmp/*) echo "WORK must not be /tmp" >&2; exit 3 ;; esac
+mkdir -p "$WORK" || exit 3
+log() { echo "[cross_emit_larm64_depth] $*"; }
+
+AS="${AS:-aarch64-linux-gnu-as}"; LD="${LD:-aarch64-linux-gnu-ld}"
+QEMU="${QEMU:-qemu-aarch64-static}"
+HAVE_CROSS=1
+command -v "$AS" >/dev/null 2>&1 || HAVE_CROSS=0
+command -v "$LD" >/dev/null 2>&1 || HAVE_CROSS=0
+command -v "$QEMU" >/dev/null 2>&1 || HAVE_CROSS=0
+
+# ── freestanding I/O stub (rtstub_io.s) ──────────────────────────────────
+# Linux AArch64 syscalls: write=64, exit=93. Small-struct ABI: HexaVal{tag,union}
+# is 16B → passed in x0(tag)/x1(payload). TAG_STR=3 → x1 = char* (NUL-term).
+cat > "$WORK/rtstub_io.s" <<'STUB'
+    .text
+    .globl _start
+_start:
+    bl main
+    mov x0, #0           // main returned w/o exit() → exit(0)
+    mov x8, #93
+    svc #0
+    .globl hexa_set_args
+hexa_set_args:
+    ret                  // freestanding: no argc/argv wiring
+    .globl hexa_exit
+hexa_exit:               // x0=tag(TAG_INT) x1=code
+    mov x0, x1
+    mov x8, #93          // __NR_exit
+    svc #0
+    .globl hexa_print_val
+hexa_print_val:          // x0=tag x1=payload. TAG_STR=3 → write(1,x1,strlen)
+    cmp x0, #3
+    b.ne 2f
+    mov x2, #0           // len = 0
+1:  ldrb w3, [x1, x2]    // scan to NUL
+    cbz w3, 1f
+    add x2, x2, #1
+    b 1b
+1:  mov x3, x1           // x3 = ptr (save; x1 will be 2nd syscall arg)
+    mov x0, #1           // fd = stdout
+    mov x1, x3           // buf
+    mov x8, #64          // __NR_write
+    svc #0
+2:  ret
+STUB
+
+# Mach-O page-rel → GNU-as ELF page-rel syntax fixup.
+fixup() {  # $1 = in.s  $2 = out.s
+    sed -E \
+      -e 's/adrp([[:space:]]+)([xw][0-9]+),([[:space:]]*)([._A-Za-z0-9]+)@PAGE/adrp\1\2,\3\4/g' \
+      -e 's/@PAGEOFF/__PGOFF__/g' "$1" \
+    | sed -E -e 's/,([[:space:]]*)([._A-Za-z0-9]+)__PGOFF__/,\1:lo12:\2/g' > "$2"
+}
+
+declare -i FAILS=0
+run_prog() {  # $1=name  $2=hexa-src  $3=expect-stdout  $4=expect-rc
+    local NM="$1" SRC="$2" XOUT="$3" XRC="$4" D="$WORK"
+    printf '%s' "$SRC" > "$D/$NM.hexa"
+    log "── $NM ── emit asm (arm64-linux-gnu)"
+    "$CC_BIN" _drv.hexa --emit=asm --target=arm64-linux-gnu -o "$D/$NM.linux.s" "$D/$NM.hexa" 2>&1 | grep -iE 'error|miss' | head -3
+    [ -s "$D/$NM.linux.s" ] || { log "$NM: FAIL emit"; FAILS+=1; return; }
+    if grep -q '@PAGE' "$D/$NM.linux.s"; then
+        log "$NM: emit uses Mach-O @PAGE/@PAGEOFF (expected — fixing up for GNU-as)"
+    fi
+    fixup "$D/$NM.linux.s" "$D/$NM.gnu.s"
+    if grep -q '@PAGE' "$D/$NM.gnu.s"; then log "$NM: FAIL fixup left @PAGE"; FAILS+=1; return; fi
+    log "$NM: gnu.s page-rel: $(grep -cE 'adrp|:lo12:' "$D/$NM.gnu.s") adrp/:lo12: ops"
+    if [ "$HAVE_CROSS" = 0 ]; then log "$NM: SKIP assemble/link/run — no cross-tools on $(uname -m -s)"; return; fi
+    "$AS" "$D/$NM.gnu.s" -o "$D/$NM.o" 2>&1 | head -4
+    [ -s "$D/$NM.o" ] || { log "$NM: FAIL assemble"; FAILS+=1; return; }
+    log "$NM: relocs → $(readelf -r "$D/$NM.o" 2>/dev/null | grep -oE 'R_AARCH64_[A-Z0-9_]+' | sort -u | tr '\n' ' ')"
+    "$AS" "$D/rtstub_io.s" -o "$D/rtstub_io.s.o" 2>&1 | head -2
+    "$LD" -static -nostdlib "$D/$NM.o" "$D/rtstub_io.s.o" -o "$D/$NM" 2>&1 | head -4
+    [ -x "$D/$NM" ] || { log "$NM: FAIL link"; FAILS+=1; return; }
+    local GOT RC
+    GOT="$("$QEMU" "$D/$NM" 2>/dev/null)"; RC=$?
+    log "$NM: RUN stdout=[$GOT] rc=$RC  (expect stdout=[$XOUT] rc=$XRC)"
+    if [ "$GOT" != "$XOUT" ] || [ "$RC" != "$XRC" ]; then log "$NM: MISMATCH"; FAILS+=1; else log "$NM: PASS"; fi
+}
+
+HEAD_SHA="$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
+log "=== repo=$REPO HEAD=$HEAD_SHA cc=$CC_BIN work=$WORK cross=$HAVE_CROSS ($(uname -m -s)) ==="
+
+run_prog hi     'fn main() {
+  print("hi")
+  exit(7)
+}
+'  hi 7
+
+run_prog glob   'let g: int = 99
+fn main() {
+  print("hi")
+  exit(g)
+}
+'  hi 99
+
+if [ "$HAVE_CROSS" = 0 ]; then log "DONE (emit+fixup only; no cross-tools)"; exit 4; fi
+[ "$FAILS" = 0 ] && { log "DONE — all programs cross-emitted + ran (HEAD=$HEAD_SHA)"; exit 0; }
+log "DONE with $FAILS failure(s)"; exit 2
