@@ -1,0 +1,149 @@
+// HEXA Standard Library — qforge/qfold_dispersion
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// QFORGE real-cell q-RESOLVED el-ph COMPOSER — wires the BZ phonon dispersion
+// into the momentum-conserving α²F → λ sum.
+//
+// ── WHY THIS EXISTS (the provider seam the q-fold brick left open, d6) ───────
+// qmesh_qfold (#2593) closed the q-DECOUPLING residual: it folds the electron
+// transfer q = k' − k onto the commensurate Monkhorst-Pack mesh and asks a
+// per-q provider for ω(q,ν) AT the matching transfer momentum. But that brick
+// left omega_of(qidx) as an ABSTRACT closure — the selftest fed it a toy
+// analytic dispersion. The REAL phonon dispersion lives in a different brick:
+// realcell_qmesh (brick a) sweeps the verified dynmat → phonon solver over an
+// MP q-mesh and returns a QmeshDispersion (a flat q-major ω(q,ν) array). The
+// two bricks were never wired: nothing turned a real QmeshDispersion INTO the
+// omega_of provider qmesh_qfold consumes. THIS brick is that adapter + the
+// one-call composer that runs the FULL real-cell q-resolved λ:
+//
+//   realcell_qmesh  ω(q,ν)  ──(slice per qidx)──▶  qmesh_qfold  omega_of(qidx)
+//        (brick a)                                   (#2593, q = k'−k fold)
+//                                                          │
+//                                       qforge_a2f_from_elph (L3 double-δ)
+//                                                          │
+//                                  eliashberg_moments (K→Ha) ──▶ λ · ω_log
+//
+// ── THE INDEX-ALIGNMENT THAT MAKES THIS WORK (the load-bearing fact) ─────────
+// qforge_mp_grid walks (i1-outer, i2, i3-fastest), so its linear point index p
+// decomposes as p = ((a1)·n2 + a2)·n3 + a3 — EXACTLY the decomposition
+// qforge_qfold_index uses to fold q = k_j − k_i. realcell_qmesh builds its
+// dispersion on the SAME generator with the SAME dims, laying ω(q,ν) out q-major
+// in that same order. Therefore the qidx qmesh_qfold computes indexes DIRECTLY
+// into the QmeshDispersion's q-blocks — no remap. The adapter just slices the
+// nmode-wide block at q-block qidx (dropping soft/acoustic-zero modes, ω≤tol,
+// d6 honest — a ω≈0 mode makes λ=2∫α²F/ω diverge and carries no real weight).
+//
+// ── d4 GENERIC — caller supplies the dispersion + a g2 provider, no name ─────
+// This module knows NOTHING about CaH6 / LaH10. The caller hands it a real
+// QmeshDispersion (from realcell_qmesh on its Φ/cell) + a g2 provider closure +
+// the band table. ONE path, every cell — add/swap a cell = change Φ/masses, no
+// branch on a material name. The qmesh q-mesh dims (nq1,nq2,nq3) MUST equal the
+// k-mesh dims (n1,n2,n3) the qfold sum walks (the same commensurate mesh) — the
+// composer asserts that so a mismatched mesh fails loud, not silently wrong.
+//
+// d3/d19 reuse (compose, don't reinvent — every brick below is verified 🟢/🔵):
+//   - ω(q,ν) BZ dispersion : stdlib/qforge/realcell_qmesh (QmeshDispersion, brick a)
+//   - q = k'−k fold + sum  : stdlib/qforge/qmesh_qfold     (#2593, the consumer)
+// New code here = the QmeshDispersion → omega_of(qidx) ADAPTER + the one-call
+// composer ONLY. Zero physics is re-implemented; no ω/λ formula is duplicated.
+
+use "stdlib/qforge/realcell_qmesh"
+use "stdlib/qforge/qmesh_qfold"
+
+// ── module-level dispersion state for the omega_of(qidx) closure ─────────────
+// hexa nested fns do NOT capture lexical scope (the qmesh_qfold selftest pins
+// this same idiom), so the per-q omega provider reads the active dispersion from
+// module state. The composer below sets it before driving the qfold sum.
+let mut _QFD_OMEGA: [float] = []      // flat q-major ω(q,ν) (the QmeshDispersion band)
+let mut _QFD_NMODE: int     = 0       // modes per q (= dispersion.nmode)
+let mut _QFD_NQ: int        = 0       // number of q-blocks
+let mut _QFD_TOL: float     = 1.0e-6  // soft/acoustic drop cutoff (ω ≤ tol dropped)
+
+// ── the ADAPTER: QmeshDispersion q-block qidx → a positive ω(q,ν) list ───────
+// Slices the nmode-wide ω block at q-index qidx out of the flat q-major band and
+// returns its PHYSICAL (ω > tol) frequencies — the exact list shape
+// qmesh_qfold's omega_of contract wants. Soft/acoustic-zero modes are dropped
+// honestly (not clamped to a fake positive). Out-of-range / empty after the drop
+// → [] (the qfold sum treats [] as a provider-contract violation → sentinel).
+fn _qfd_omega_of(qidx: int) -> [float] {
+    if qidx < 0 || qidx >= _QFD_NQ || _QFD_NMODE < 1 { return [] }
+    let base = qidx * _QFD_NMODE
+    let mut band: [float] = []
+    let mut m = 0
+    while m < _QFD_NMODE {
+        let w = _QFD_OMEGA[base + m]
+        if w > _QFD_TOL { band.push(w) }       // d6: drop soft/acoustic, no clamp
+        m = m + 1
+    }
+    return band
+}
+
+// PUBLIC adapter form (also unit-tested directly): given a QmeshDispersion + a
+// q-index, return the physical ω(q,ν) list at that transfer momentum. Stateless
+// (reads the passed dispersion, not module state) — for direct verification and
+// for callers that want the slice without driving the full sum.
+//   disp  : a QmeshDispersion from qforge_qmesh_dispersion (brick a).
+//   qidx  : the folded transfer-momentum index (qforge_qfold_index out).
+//   tol   : soft/acoustic cutoff (ω ≤ tol dropped). Returns [] out of range.
+pub fn qforge_qfold_omega_slice(disp: QmeshDispersion, qidx: int, tol: float) -> [float] {
+    if qidx < 0 || qidx >= disp.nq || disp.nmode < 1 { return [] }
+    let base = qidx * disp.nmode
+    let mut band: [float] = []
+    let mut m = 0
+    while m < disp.nmode {
+        let w = disp.omega[base + m]
+        if w > tol { band.push(w) }
+        m = m + 1
+    }
+    return band
+}
+
+// ── COMPOSE: real-cell q-resolved λ from a QmeshDispersion + a g2 provider ───
+// Binds the QmeshDispersion as the active omega_of band, then drives the verified
+// qmesh_qfold momentum-conserving sum (q = k'−k fold → L3 α²F → λ). The q-mesh
+// dims MUST equal the k-mesh dims so qidx indexes the SAME commensurate mesh —
+// asserted (sentinel on mismatch). Returns the qmesh_qfold QfoldElphResult
+// VERBATIM (λ · ω_log · n_qhit · g2_total witnesses) — d6: whatever the real
+// broadened sum gives, in or out of the QE bar; nothing tuned.
+//   disp     : real ω(q,ν) over the q-mesh (from realcell_qmesh, brick a).
+//   eps      : [nk·nb] band energies, k-major (eps[k*nb+b]).  wk : [nk] BZ weights.
+//   n1,n2,n3 : k-mesh dims; product == nk == disp.nq (same commensurate mesh).
+//   nb       : active band count.   g2_of : (i,j) -> [nb*nb] |g_mn|² (caller physics).
+//   e_fermi/n_ef : Fermi level + REAL N(E_F) (Allen normalizer 1/N(E_F)).
+//   omega_grid   : α²F frequency grid (K).
+//   sigma_el/sigma_ph : Fermi-surface δ-smear (eps) / α²F δ-smear (K).
+//   mass_amu : F1 displaced-atom mass (amu); >0 → fold ℏ/(2 M ω) per mode.
+//   tol      : soft/acoustic ω drop cutoff (e.g. 1.0e-6).
+pub fn qforge_qfold_dispersion_lambda(disp: QmeshDispersion,
+                                      eps: [float], wk: [float],
+                                      n1: int, n2: int, n3: int, nb: int,
+                                      g2_of,
+                                      e_fermi: float, n_ef: float,
+                                      omega_grid: [float],
+                                      sigma_el: float, sigma_ph: float,
+                                      mass_amu: float, tol: float) -> QfoldElphResult {
+    let nk = n1 * n2 * n3
+    // the load-bearing commensurate-mesh check: q-mesh dims == k-mesh dims.
+    if disp.nq != nk {
+        return QfoldElphResult { ok: 0, err: "q-mesh nq != k-mesh nk (non-commensurate)",
+                                 lambda: -1.0, omega_log: -1.0, n_kpairs: 0,
+                                 n_qhit: 0, n_samples: 0, g2_total: 0.0 }
+    }
+    if disp.nmode < 1 {
+        return QfoldElphResult { ok: 0, err: "empty dispersion (nmode<1)",
+                                 lambda: -1.0, omega_log: -1.0, n_kpairs: 0,
+                                 n_qhit: 0, n_samples: 0, g2_total: 0.0 }
+    }
+    // bind the active dispersion for the module-level omega_of closure.
+    _QFD_OMEGA = disp.omega
+    _QFD_NMODE = disp.nmode
+    _QFD_NQ    = disp.nq
+    _QFD_TOL   = tol
+    // drive the verified q-fold momentum-conserving sum with the real band.
+    return qforge_qfold_elph_lambda(eps, wk, n1, n2, n3, nb,
+                                    _qfd_omega_of, g2_of,
+                                    e_fermi, n_ef, omega_grid,
+                                    sigma_el, sigma_ph, mass_amu)
+}
