@@ -1,6 +1,54 @@
 # MISCOMPILE-ZERO — log
 Append-only history sister of `MISCOMPILE-ZERO.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
+
+## 2026-06-03 — broaden real-program sweep: FULL example/ tree (236) = CLEAN
+
+Continuous-discovery lane. Where the 82-sweep (#2535) covered a hand-picked
+feature-axis SUBSET, this sweeps the FULL real shipped program tree — every
+`example/*.hexa` (236 programs) — with the graduated gen2_fix native
+`--emit=obj`, oracle-compared vs the C-built aprime_fixhex, hunting any NEW
+native-codegen miscompile beyond the already-clean corpora (synthetic class
+gate · 82-subset · 500 diff-fuzz seeds #2565).
+
+NEW (additive — DRIVE + MEASURE + REPORT only, NO production codegen edits):
+  - tool/mczero_real_sweep.sh  — reusable real-program sweep driver. Per program:
+      (1) gen2_fix --emit=obj  -> rc / objsize / ENCODE-MISS / spurious-udf (real,
+          no pipe-mask) ; (2) gen2 --emit=asm vs aprime oracle --emit=asm, byte-
+          diff modulo the benign per-module __L<4hex>_ label hash. Classifies
+          CLEAN / SKIP (oracle-also-no-emit = unrelated dep, not a finding) /
+          FINDING (dirty emit OR asm-DIVERGE-vs-clean-oracle OR gen2-no-emit
+          where oracle emits). exit 0=clean · 1=finding · 2=infra.
+      Reuses the miscompile_zero_gate.sh / 82-sweep oracle methodology, pointed
+      at MCZERO_TREE=example instead of the synthetic corpus. Env-configurable
+      (HEXA_NATIVE_CC / HEXA_ORACLE_CC / MCZERO_TREE / MCZERO_GLOB), gates untouched.
+  - .verdicts/miscompile-zero-realsweep/REAL-SWEEP.txt  — verdict (pre-registered
+    falsifier + raw counts) + results.tsv (236 per-program rows).
+
+RESULT (graduated gen2_fix, ghost 192.168.50.150; fresh clone wt-mzsweep off
+origin/main @1c700914f):
+  236 / 236 real programs CLEAN — rc=0, ENCODE-MISS=0, udf=0, non-empty obj
+  (objsize 928..58952), oracle asm MATCH (modulo benign label hash) for all 236.
+  SKIP=0 · FINDING=0. swept=236 clean=236.
+  gen2_fix sha256 dce5c1e2…68f1e66 · aprime_fixhex sha256 c56c6413…0bb2dd4a.
+
+  Falsifier NOT triggered: zero divergence in instruction selection / regalloc /
+  branch targeting across the entire real shipped set (anima neural engines,
+  pattern-match, recursion+array, float math, string/encoding, maps, FFI/extern,
+  CLI tools, comptime/contract/attr demos).
+
+  Artifact note: the long nohup run's stdout/TSV tail was buffer-truncated at
+  process exit (last streamed line = verify_pages_test) while the script's own
+  counters reported swept=236 clean=236 skip=0 finding=0; the 3 tail programs
+  not in the streamed view (versioning_test, wc, wf) were re-run single-program
+  -> all CLEAN, and the fully-flushed results.tsv holds all 236 rows CLEAN. No gap.
+
+g63 honest framing: this is a DISCOVERY sweep with diminishing marginal value —
+the worth was entirely in whether it surfaced a real miscompile. It did not. A
+broad real-program FLOOR-HELD result IS the verdict. The MZ continuous-discovery
+lane is now at STEADY-STATE — the clean-MZ milestones are effectively exhausted
+(real-program surface broadly swept clean across all four corpora).
+
 ## 2026-06-03 — differential fuzz: 120 seeded random programs CLEAN (gen2 vs aprime-C)
 Deferred milestone "differential fuzz — generate random hexa programs and
 compare gen2-native vs aprime-C codegen to surface latent miscompiles". A NEW

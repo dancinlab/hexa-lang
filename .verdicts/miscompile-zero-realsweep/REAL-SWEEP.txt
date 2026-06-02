@@ -1,0 +1,80 @@
+MISCOMPILE-ZERO — full real-program self-emit sweep (CLEAN verdict)
+====================================================================
+
+Date    : 2026-06-03
+Host    : GHOST (ghostui-MacBookAir, arm64-apple-darwin, Darwin 25.5.0)
+Native  : ~/dancinlab/selfhost-work/gen2_fix  (graduated byte-eq self-hosted hexa)
+          sha256 dce5c1e29541dfdf403809a9b77e677066fefbd31ca102e5dc9904e1968f1e66
+Oracle  : ~/dancinlab/selfhost-work/aprime_fixhex  (C-built reference compiler)
+          sha256 c56c641389b367f4b5e3b8bf3ee29b59c9d67f341ca5b1fbe3d7b3b60bb2dd4a
+Target  : arm64-apple-darwin
+Driver  : tool/mczero_real_sweep.sh  (reusable; default MCZERO_TREE=example)
+Invoke  : gen2_fix _drv.hexa --emit=obj --target=arm64-apple-darwin --ignore-errors -o <obj> <src>
+          gen2_fix _drv.hexa --emit=asm ... (gen2)  vs  aprime_fixhex _drv.hexa --emit=asm ... (oracle)
+Atlas   : hermetic empty (HEXA_ATLAS_EMBED=<empty dir>)
+Isolation: fresh clone ~/dancinlab/wt-mzsweep off origin/main @1c700914f
+
+SCOPE
+-----
+This is the FULL real shipped program tree, superseding the hand-picked
+82-program feature-axis subset (#2535, .verdicts/miscompile-zero-sweep/). Every
+example/*.hexa is swept — 236 programs, the complete top-level real corpus
+(paper/ playground/ regressions/ subdirs and *.bin artifacts are out of the
+*.hexa glob by construction).
+
+PRE-REGISTERED FALSIFIER
+------------------------
+Hypothesis: gen2's native codegen is at MISCOMPILE-ZERO on the already-swept
+corpora (10-program synthetic gate, 82-program subset, 500 diff-fuzz seeds); the
+FULL 236-program real-program tree will surface a NEW latent miscompile beyond
+those — an ENCODE-MISS, a spurious `udf`, a gen2-fails-to-emit, or an oracle asm
+divergence beyond the benign per-module 4-hex label hash.
+
+Falsifier: for ANY of the 236 real programs, observe
+  rc!=0(obj-present)  OR  ENCODE-MISS>0  OR  spurious udf>0  OR
+  objsize==0 while the oracle DOES emit  OR
+  gen2 --emit=asm != oracle --emit=asm after normalizing the benign label hash
+  (__L<4hex>_ -> __L_).
+
+RESULT — FALSIFIER NOT TRIGGERED (clean sweep)
+----------------------------------------------
+236 / 236 real programs CLEAN:
+  rc=0           : 236/236
+  ENCODE-MISS=0  : 236/236
+  spurious udf=0 : 236/236
+  non-empty obj  : 236/236  (objsize range 928 .. 58952 bytes)
+  oracle asm     : 236/236 MATCH after benign label-hash normalization
+                   (only difference class = the documented __L<4hex>_ per-module
+                    label prefix; every instruction, operand, register
+                    allocation, and block-structure identical to the C oracle.)
+  SKIP           : 0   (no program failed to compile for an unrelated dep reason)
+  FINDING        : 0   (no NEW native-codegen miscompile)
+
+Per-program results: .verdicts/miscompile-zero-realsweep/results.tsv
+  (prog, rc, objsize, encode_miss, udf, oracle_rc, asm_diff, status)
+
+NO new miscompile found. Zero divergence in instruction selection / register
+allocation / branch targeting across the entire real shipped program set, which
+spans: anima neural-engine programs (autograd / GRU / Hebbian / CLM training /
+consciousness), pattern-match + branchy control, recursion + array index/assign
+(quicksort / sudoku / queens / maze / life / hanoi / ackermann), float math +
+format precision (mandelbrot / physics / stats), string ops/methods/encoding
+(base64 / rot13 / regex / split), maps/aggregates (histogram / matmul / json),
+FFI/extern (test_extern* / test_float_ffi / test_file_io), CLI tools (wc / wf /
+uniq / tree / todo_cli / traffic), and the comptime/contract/attr feature demos.
+
+The single per-process artifact note: the long nohup run's stdout/TSV tail was
+buffer-truncated at process exit (last visible streamed line = verify_pages_test)
+while the script's own internal counters reported swept=236 clean=236 skip=0
+finding=0. The 3 tail programs not in the streamed view (versioning_test, wc,
+wf) were INDEPENDENTLY re-run single-program -> all CLEAN, and the fully-flushed
+results.tsv contains all 236 rows, all CLEAN. No gap.
+
+VERDICT
+-------
+CLEAN. The native self-hosted codegen (gen2_fix) holds MISCOMPILE-ZERO across
+the entire real shipped example/ program tree, byte/asm-identical to the C
+oracle. Combined with the prior clean corpora (synthetic class gate, 82-subset,
+500 diff-fuzz seeds), the real-program miscompile-discovery surface is now
+broadly exhausted with no finding. The MZ continuous-discovery lane is at
+steady-state: clean is the result.
