@@ -20,17 +20,63 @@
 // touched here). Their numeric fields are 0.0 sentinels and are NEVER compared;
 // they keep the aggregate HELD until the real λ·Tc are folded in. No fabrication.
 //
-// ── PROVENANCE (CaH6, verbatim) ──────────────────────────────────────────────
-//   CaH6 : rtsc_cah6_dft_4x4x4q_textbook_proof_20260524.json
-//          λ_BZ = 4.376 · ω_log = 1236.4 K · μ* = 0.10 · Tc(McMillan) = 255.1 K.
-//   (QE 7.5 pw.x+ph.x @ vast.ai; the SAME moments qforge_qe_xval_test.hexa pins.)
+// ── PROVENANCE (CaH6 reference λ — RE-ANCHORED 2026-06-02, d6 honesty) ────────
+// The gate REFERENCE is a literature/QE TARGET (the value QFORGE-NC must reproduce
+// to flip the migration default); it is NOT a QFORGE measurement. This brick only
+// corrects that TARGET — the QFORGE-measured λ (mga_cah6_qforge_lambda, lane A/B's
+// live work) is untouched.
+//
+//   ANCHOR (active) — Sci. Rep. 14 (2024) s41598-024-69190-0 (PMC11310335),
+//     "fully ab initio Eliashberg" CaH6 Im-3m @ 170 GPa:
+//       λ = 2.27 · 96×96×96 k · 8×8×8 q · self-consistent G · screened μee=0.137
+//       (harmonic DFPT; paper Tc = 236 K via full screened-Coulomb Eliashberg).
+//     PRESSURE-MATCHED to the campaign's own QE run (170 GPa) → we pair this λ
+//     with the campaign-measured ω_log = 1236.4 K @170 GPa (apples-to-apples P).
+//     μ* = 0.13 here (the campaign's CaH6 Tc-vs-measurement comparison μ*).
+//     Re-derived reference Tc:
+//       • allen_dynes_full(2.27, 1236.4, 1236.4, 0.13) = 206.8 K  (f1-only, ω̄₂=ω_log;
+//         🟢 hexa verify --expr allen_dynes_full 2.27 1236.4 1236.4 0.13 206.811 --tol 0.01)
+//       • allen_dynes_full(…, 0.10)                    = 223.0 K
+//       • mcmillan_tc(1236.4, 2.27, 0.13)              = 181.3 K  ← the Tc_QE_K field
+//         below (the gate test's internal mcmillan-consistency value, kept green).
+//     The f1-only allen_dynes Tc UNDER-estimates the paper's full-Eliashberg 236 K
+//     (expected: no screened-Coulomb f2 lift) — recorded honestly, not tuned.
+//   ALTERNATE — Wang, Tse, Tanaka, Iitaka, Ma, PNAS 109, 6463 (2012)
+//     (arXiv:1203.0263, the canonical CaH6 discovery paper) @ 150 GPa: λ = 2.69,
+//     Eliashberg Tc = 220–235 K (μ*=0.10/0.13). allen_dynes_full(2.69, 1236.4,
+//     1236.4, 0.13) = 235.6 K lands AT the top of Wang's published band. Not the
+//     active anchor only because its pressure (150 GPa) ≠ the campaign ω_log P
+//     (170 GPa); Sci.Rep.2024 is pressure-matched + denser-mesh-documented.
+//
+// ── SUPERSEDED PRIOR VALUE (preserved for audit, d_defer_no_delete + d6) ──────
+//   λ = 4.376 · ω_log = 1236.4 K · μ* = 0.10 · Tc(McMillan) = 255.1 K, from
+//   rtsc_cah6_dft_4x4x4q_textbook_proof_20260524.json. TRACEABLE but NOT a
+//   converged published value: it is the broad_Ry=0.015 row — the SOFTEST/lowest
+//   el_ph_sigma of that QE run's 10-broadening sweep, where λ over-counts. The SAME
+//   record's λ-ladder falls 4.376→3.403 as broadening tightens (0.015→0.030) and its
+//   own literature_harmonic field reads "1.5–3.0"; the record's preferred Tc-vs-
+//   measured match uses the broad=0.030 row (λ=3.403, Tc 213 K vs measured 215 K),
+//   NOT the 4.376 row. Every converged published CaH6 (Im-3m) λ @150–250 GPa sits
+//   at 1.6–2.7 (Wang 2012: 2.69 · Sci.Rep.2024: 2.27/1.92/1.62). So 4.376 is an
+//   under-converged near-soft-mode artifact, ~1.6–2.7× the converged value.
+//   Retained verbatim in mga_cah6_superseded_4376() below for the audit trail.
 //
 // A "record" is a flat [status, λ_QE, ω_log_K, μ_star, Tc_QE_K]. status:
 //   1.0 = terminal (real QE {λ,Tc}; compared)   0.0 = pending (placeholder; HELD)
 
-// CaH6 — TERMINAL (real QE-DFPT moments).
+// CaH6 — TERMINAL (RE-ANCHORED to the converged published λ; see PROVENANCE).
+// [status, λ_QE, ω_log_K, μ*, Tc_QE_K] — Tc_QE_K = mcmillan_tc(ω_log, λ, μ*) so the
+// gate test's internal Tc-consistency check stays green; the SCIENTIFIC re-anchored
+// reference Tc is the allen_dynes_full value 206.8 K (μ*=0.13), recorded above.
 pub fn mga_cah6() -> [float] {
-    // [status, λ_QE, ω_log_K, μ*, Tc_QE_K]
+    return [1.0, 2.27, 1236.4, 0.13, 181.256]
+}
+
+// CaH6 — SUPERSEDED prior reference (un-converged broad=0.015 / near-soft-mode
+// value λ=4.376, ω_log=1236.4, μ*=0.10, Tc=255.1). PRESERVED for audit per
+// d_defer_no_delete + d6 — superseded by Sci.Rep.2024 λ=2.27 (see PROVENANCE).
+// NOT consumed by the gate (kept as a frozen audit record only).
+pub fn mga_cah6_superseded_4376() -> [float] {
     return [1.0, 4.376, 1236.4, 0.10, 255.1]
 }
 
