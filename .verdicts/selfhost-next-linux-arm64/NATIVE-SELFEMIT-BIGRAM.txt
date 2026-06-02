@@ -1,0 +1,58 @@
+SELFHOST-NEXT lane B — native arm64 ≥16GiB self-emit (big-RAM) — PROVISION VERDICT
+==================================================================================
+date:   2026-06-03
+branch: feat/clm-prod-env-corpus (verdict+log only; no code change)
+goal:   rent a ≥16 GiB-RAM native aarch64-linux host and run the FULL native
+        self-emit past the #2578 OOM wall (pi5-akida reached codegen with 0
+        ENCODE-MISS, then OOM-killed at ~7.76 GiB on its 7.8 GiB host), then
+        measure byte-eq self-emit (gen3 emits gen4, cmp gen3.o==gen4.o) natively.
+
+RESULT: 🔴 NO RENTABLE arm64 ≥16GiB HOST — provision blocked, ZERO spend.
+        (g63 honest STOP per task: do NOT fake, do NOT substitute an x86_64 host
+         — the milestone requires a NATIVE aarch64 run.)
+
+PROVIDER INVENTORY SWEEP (the two providers wired into `hexa cloud`)
+-------------------------------------------------------------------
+vast.ai  (vastai CLI, key=vast.api_key):
+  * `search offers 'cpu_arch=arm64 cpu_ram>=16'`  -> []   (empty)
+  * `cpu_arch=arm` / `cpu_arch=aarch64`           -> []   (empty)
+  * wide sweep `num_gpus>=0 verified=any rentable=any --limit 3000`:
+       3000 offers returned, cpu_arch distribution = {amd64: 3000}, non-amd64 = 0.
+    => vast.ai's entire queryable inventory is x86_64/amd64. No arm64 offers exist.
+
+runpod   (GraphQL, key=runpod.api_key):
+  * gpuTypes enumeration = NVIDIA (RTX 30xx/40xx/A40/A100/B200/B300) + AMD MI300X.
+    All RunPod instances are NVIDIA/AMD GPU hosts on x86_64 CPUs. RunPod offers
+    NO Graviton / Ampere Altra / arm64 CPU-instance class.
+    => no arm64 ≥16GiB rentable on runpod.
+
+POOL (sidecar pool — owned hosts, for completeness; not "rentable")
+-------------------------------------------------------------------
+  summer    x86_64  30 GiB   -> wrong arch (need native arm64)
+  aiden     x86_64  30 GiB   -> wrong arch
+  ghost     macOS (Darwin)   -> not linux-arm64
+  pi5-akida aarch64  7.9 GiB -> NATIVE arm64 but only 7.9 GiB (this IS the #2578
+                               OOM host: codegen reached, 0 ENCODE-MISS, OOM-kill
+                               ~7.76 GiB) AND anima-only/restricted (@D s8, 공용=false).
+                               Does NOT satisfy the ≥16 GiB requirement.
+
+SELF-EMIT RESULT: not run (no qualifying host to run it on).
+BYTE-EQ FIXPOINT: not run (blocked on the same).
+PEAK RSS / ENCODE-MISS: prior #2578 native arm64 peak ~7.76 GiB at OOM, 0 ENCODE-MISS.
+                        A ≥16 GiB host remains the open requirement to clear the wall.
+
+COST: $0.00 — nothing rented (preflight inventory only).
+TEARDOWN: N/A — no host provisioned. (No new billing started by this lane.)
+
+CONCLUSION / NEXT
+-----------------
+The arm64-native big-RAM self-emit milestone is BLOCKED at provisioning: neither
+provider in the project cloud system (vast, runpod) carries any aarch64 inventory,
+and the only native arm64 pool host (pi5-akida) is the 7.9 GiB box that already
+OOM'd in #2578. To clear the OOM wall natively, a ≥16 GiB aarch64-linux host must
+come from a provider NOT currently wired into `hexa cloud` — e.g. AWS Graviton
+(c7g/m7g/r7g; r7g.xlarge = 4 vCPU / 32 GiB), Oracle Ampere A1 (free tier up to
+24 GiB / 4 OCPU), Hetzner CAX arm64 (CAX21 = 4 vCPU / 8 GiB; CAX31 = 8 vCPU /
+16 GiB), or Scaleway/GCP Tau-T2A arm. Adding one of these as a provider adapter
+(or a one-off pool host) is the unblock; this lane stops here per g63 rather than
+renting an x86_64 host that cannot produce the native-arm64 measurement.
