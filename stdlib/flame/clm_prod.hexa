@@ -415,6 +415,27 @@ fn _qbwd(dy: int, mask: int, dW: int, Cout: int, rest: int) {
     nn_int4_quant_bwd(dy, mask, dW, Cout, rest)
 }
 
+// HEXA-FUSION L3 (glue half): device-resident elementwise residual-add.
+// out[i] = a[i] + b[i] for i in 0..n. This is the highest-frequency
+// interpreted inter-op host glue in clm_prod_fwd — the residual xt = xec + hg0
+// run T·d times in the interpreter between device GEMM spikes (the ③ fwd-only
+// 0% util floor: tensors device-resident is necessary but NOT sufficient while
+// the inter-op glue stays interpreted on host). Under CLM_PROD_DEVRESIDENT the
+// add runs on-device (forge_dispatch_residual_add) keeping out FARR_DEVICE so
+// the next conv GEMM (conv1d_via_forge over rWq, then conv2 experts) H2D-skips
+// it, and — critically — the interpreter leaves the per-step hot path. Pure
+// elementwise add (no reduction) → bit-exact to the host scalar loop
+// (max|Δ|=0). rc 0 = done on device; else the host loop runs (byte-eq).
+// Env-gated like _fq / _qbwd above (no-CUDA / prebuilt mac binary → host loop).
+fn _residual_add(a: int, b: int, out: int, n: int) {
+    if env("CLM_PROD_DEVRESIDENT") != "" {
+        let rc = forge_dispatch_residual_add(a, b, out, n)
+        if rc == 0 { return }
+    }
+    let mut i = 0
+    while i < n { t_set(out, i, t_get(a, i) + t_get(b, i)); i = i + 1 }
+}
+
 // Forward with weight-only int4 QAT (verbatim from clm_qat assembly-3b).
 fn clm_prod_fwd(tokens: int,
                embed: int, ecW: int, ecB: int, tcW: int, tcB: int, tgG: int, tgB: int,
@@ -439,8 +460,12 @@ fn clm_prod_fwd(tokens: int,
     let mean0 = t_zeros(1)
     nn_groupnorm_fwd(h0, tgG, tgB, hn0, mean0, inv0, xhat0, T, d, 1)
     let hg0 = t_zeros(T * d); nn_gelu_fwd(hn0, hg0, T * d)
-    let mut i = 0
-    while i < T * d { t_set(xt, i, t_get(xec, i) + t_get(hg0, i)); i = i + 1 }
+    // HEXA-FUSION L3 (glue half): the residual xt = xec + hg0 — the
+    // highest-frequency interpreted inter-op host glue in this fwd path (T·d
+    // host t_get/t_set per step). Under CLM_PROD_DEVRESIDENT it fuses onto the
+    // device, leaving the interpreter off the per-step hot path (the ③ fwd-only
+    // 0% floor); else byte-identical host loop.
+    _residual_add(xec, hg0, xt, T * d)
     let logits_r = t_zeros(T * E)
     conv1d_via_forge(xt, rWq, rB, logits_r, T, d, E, 1, 1)
     // LEVER (b): the 2 identical-shape ConvExperts fused into ONE batched GEMM

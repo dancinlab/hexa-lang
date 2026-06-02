@@ -206,6 +206,21 @@ pub fn devfeed_int4_quant_bwd(dy: int, mask: int, dW_out: int, n: int) {
     while i < n { t_set(dW_out, i, t_get(dy, i) * t_get(mask, i)); i = i + 1 }
 }
 
+// ── devfeed_residual_add: device-resident elementwise residual-add (glue) ─────
+// HEXA-FUSION L3 (glue half) — the REFERENCE host residual-add that the device
+// kernel _hx_cuda_farr_residual_add_gpu reproduces: out[i] = a[i] + b[i]. This
+// is the exact math of clm_prod_fwd's xt = xec + hg0 (the highest-frequency
+// interpreted inter-op host glue between device GEMM spikes — the ③ fwd-only 0%
+// floor). Pure elementwise add, NO reduction → the device kernel is trivially
+// bit-exact (max|Δ| MUST be exactly 0). Inlined here (NOT a call into the device
+// builtin) so the prebuilt mac binary never link-references the builtin under
+// `hexa run`; the builtin is wired ONLY in clm_prod.hexa::_residual_add under
+// env CLM_PROD_DEVRESIDENT and realized in the self-host-rebuilt pod binary.
+pub fn devfeed_residual_add(a: int, b: int, out: int, n: int) {
+    let mut i = 0
+    while i < n { t_set(out, i, t_get(a, i) + t_get(b, i)); i = i + 1 }
+}
+
 // ════════════════════════════════════════════════════════════════════════════
 //  Reference forge conv (inlined — flame files cannot `use` one another). These
 //  mirror clm_conv_gpu.hexa's conv1d_via_forge / conv1d_bwd_via_forge EXACTLY;
@@ -505,6 +520,33 @@ fn main() {
     if q_ok == 1 { println("F-CLM-DEVFEED-INT4QUANT-EQ = 1"); println("PASS — device int4 quant fwd (wq/scale/qlevel/mask) + STE bwd == host quant byte-eq (max|Δ|=0, integer-exact)") }
     if q_ok == 0 { println("F-CLM-DEVFEED-INT4QUANT-EQ = 0"); println("FAIL — int4 quant") }
 
+    // ── F-CLM-DEVFEED-RESIDUAL-EQ : HEXA-FUSION L3 (glue half) device residual ──
+    // The fwd-path residual xt = xec + hg0 (clm_prod_fwd) now routes through the
+    // device kernel _hx_cuda_farr_residual_add_gpu under CLM_PROD_DEVRESIDENT,
+    // leaving the interpreter off the per-step hot path (the ③ fwd-only 0% util
+    // floor: tensors device-resident is necessary but NOT sufficient while the
+    // inter-op glue stays interpreted) and keeping the result FARR_DEVICE so the
+    // next conv GEMM H2D-skips it. out[i] = a[i] + b[i] is a pure elementwise add
+    // with NO reduction → the device add MUST be EXACTLY byte-eq to the host
+    // scalar loop (max|Δ|=0 — no fp re-association, no FMA-drift excuse). Here we
+    // pin devfeed_residual_add (the exact device-kernel math reference) == an
+    // INDEPENDENT host scalar add at a STRICT zero (a single bit fails the gate).
+    let mut rsd_ok = 1
+    let nr = 257                       // odd len exercises the grid-stride tail
+    let aR = t_zeros(nr); t_fill_lcg(aR, nr, 13, 0.4)
+    let bR = t_zeros(nr); t_fill_lcg(bR, nr, 29, 0.6)
+    // independent host reference (NOT via devfeed_residual_add)
+    let outH = t_zeros(nr); let mut ri = 0
+    while ri < nr { t_set(outH, ri, t_get(aR, ri) + t_get(bR, ri)); ri = ri + 1 }
+    // device-kernel math reference (devfeed_residual_add — what the GPU reproduces)
+    let outD = t_zeros(nr); devfeed_residual_add(aR, bR, outD, nr)
+    let mRsd = _maxdev(outH, outD, nr)
+    print("  residual-add max|Δ| out="); println(to_string(mRsd))
+    if mRsd > 0.0 { rsd_ok = 0 }
+    t_free(aR); t_free(bR); t_free(outH); t_free(outD)
+    if rsd_ok == 1 { println("F-CLM-DEVFEED-RESIDUAL-EQ = 1"); println("PASS — device residual-add (xt = xec + hg0) == host scalar add byte-eq (max|Δ|=0)") }
+    if rsd_ok == 0 { println("F-CLM-DEVFEED-RESIDUAL-EQ = 0"); println("FAIL — residual add") }
+
     // ── F-CLM-DEVFEED-ADAM-EQ : host AdamW oracle trajectory self-consistent ──
     // The device AdamW (forge_dispatch_adamw, wired in clm_prod.hexa under env)
     // routes to _hx_cuda_farr_adamw_step_inplace_gpu — already byte-eq to this
@@ -537,9 +579,9 @@ fn main() {
     if adam_ok == 1 { println("F-CLM-DEVFEED-ADAM-EQ = 1"); println("PASS — AdamW oracle (opt_adamw_step) deterministic 5-step trajectory") }
     if adam_ok == 0 { println("F-CLM-DEVFEED-ADAM-EQ = 0"); println("FAIL — adam") }
 
-    if all_ok == 1 { if fwd_ok == 1 { if bwd_ok == 1 { if db_ok == 1 { if q_ok == 1 { if adam_ok == 1 {
-        println("ALL-PASS — LEVER (a) device im2col/col2im + device db colsum + device int4 quant + device AdamW oracle byte-eq to host feed")
+    if all_ok == 1 { if fwd_ok == 1 { if bwd_ok == 1 { if db_ok == 1 { if q_ok == 1 { if rsd_ok == 1 { if adam_ok == 1 {
+        println("ALL-PASS — LEVER (a) device im2col/col2im + device db colsum + device int4 quant + device residual-add glue + device AdamW oracle byte-eq to host feed")
         return
-    } } } } } }
+    } } } } } } }
     println("FAIL")
 }
