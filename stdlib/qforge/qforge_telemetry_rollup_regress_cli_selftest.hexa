@@ -1,0 +1,161 @@
+// @ci_gate — deterministic · local-file-only · the rollup-regress CLI g5 gate
+//
+// qforge_telemetry_rollup_regress_cli_selftest.hexa — `hexa qforge telemetry
+//   rollup-regress <base-root> <cur-root> [pct]` (stdlib/qforge/telemetry_cli.hexa)
+//   g5 gate. This is the CAMPAIGN-tier cross-run regression surface: it DISCOVERS
+//   every telemetry-bearing deck under a BASELINE campaign root and a CURRENT
+//   campaign root, rolls each into a RollupReport, and JOINS them per stage class
+//   to flag which class regressed campaign-wide run-over-run (#2595). `rollup-all`
+//   answered "which class dominates ONE snapshot"; this answers "which class got
+//   slower across the WHOLE campaign between TWO runs".
+//
+// The rollup-regress-CLI-SPECIFIC behavior under test (the join math itself is
+//   gated by telemetry_rollup_regress's own selftest, discovery by the rollup-all
+//   selftest, the rollup ingest by telemetry_rollup's — ALL import-only/d4,
+//   0-diff): the two-root DISCOVER→build_rollup glue, the per-class REGRESSED/
+//   IMPROVED/SAME verdict over the two campaign snapshots, the per-root empty
+//   GUARD (d6 — a clean message + rc 1, NEVER a fabricated Δ over a phantom
+//   snapshot), the argv dispatch, and the exit codes.
+//
+// 검증 케이스 (writes real fixture deck dirs under two temp campaign roots via
+//   exec; discovers + rolls + joins them through qf_telem_* ; no pod, no network):
+//  🔵 (A) qf_telem_build_rollup DISCOVERS+rolls a campaign root: 2 decks ingested,
+//         grand wall = the deterministic sum of the fixtures.
+//  🔵 (B) campaign REGRESSED: the `scf` class wall grew 100→150 (+50% > 20%) →
+//         that class is flagged REGRESSED in the joined report.
+//  🔵 (C) campaign IMPROVED: the `ph` class wall dropped 100→50 (−50%) → IMPROVED.
+//  🔵 (D) within-threshold class is SAME (no false REGRESS): `relax` 100→105 (+5%).
+//  🔵 (E) argv dispatch `telemetry rollup-regress <base> <cur>` → rc 0 (wired in);
+//         the default threshold (20%) is applied when pct is omitted.
+//  🔵 (F) per-root EMPTY GUARD (d6): a baseline root with NO telemetry deck → rc 1
+//         (clean, no crash, no fabricated Δ); likewise an empty CURRENT root → rc 1.
+//  🔵 (G) USAGE error → rc 2: `rollup-regress` with a missing root arg.
+//
+// Run (point HEXA_STDLIB_ROOT at THIS worktree's stdlib):
+//   HEXA_STDLIB_ROOT="$PWD/stdlib" hexa run --no-sentinel \
+//     stdlib/qforge/qforge_telemetry_rollup_regress_cli_selftest.hexa
+// PASS: "qforge_telemetry_rollup_regress_cli_selftest PASS".
+use "stdlib/qforge/telemetry_cli"
+use "stdlib/qforge/telemetry_rollup"
+use "stdlib/qforge/telemetry_rollup_regress"
+
+fn _ck(name: str, ok: bool) -> int {
+    if ok { println("PASS " + name) ; return 0 }
+    println("FAIL " + name)
+    return 1
+}
+
+// write a 1-stage telemetry fixture (<dir>/.dft_telemetry.jsonl) for stage `st`
+// with a known wall_s, so the rolled-up per-class campaign wall is a sum we can
+// assert. rss_kb is null at start / a real value at done (mirrors dft-run #2474).
+fn _write_telem(dir: str, st: str, wall: int) {
+    let body = "{\"ts\":100,\"stage\":\"" + st + "\",\"event\":\"start\",\"wall_s\":0,\"rss_kb\":null,\"exit\":null}\n"
+        + "{\"ts\":200,\"stage\":\"" + st + "\",\"event\":\"done\",\"wall_s\":" + to_string(wall)
+        + ",\"rss_kb\":3000,\"exit\":0}\n"
+    let _w = exec("cat > '" + dir + "/.dft_telemetry.jsonl' <<'EOF'\n" + body + "EOF")
+}
+
+// find a joined report's row for a stage class (stage_class=="" if absent).
+fn _row_kind(rep: CampaignRegressReport, cls: str) -> str {
+    let mut i = 0
+    while i < len(rep.rows) {
+        if rep.rows[i].stage_class == cls { return rep.rows[i].kind }
+        i = i + 1
+    }
+    return "(absent)"
+}
+
+fn main() {
+    let mut fails = 0
+
+    // ── BASELINE campaign root: deck LaH10 carries scf=100 · ph=100 · relax=100.
+    let base_root = exec("mktemp -d").trim()
+    let bA = base_root + "/decks/LaH10"
+    let bB = base_root + "/decks/CaH6"
+    let _mb = exec("mkdir -p '" + bA + "' '" + bB + "'")
+    // split the class walls across the two decks so build_rollup sums them:
+    //   scf class = 60+40 = 100 · ph class = 70+30 = 100 · relax class = 50+50 = 100
+    let _wb1 = exec("cat > '" + bA + "/.dft_telemetry.jsonl' <<'EOF'\n"
+        + "{\"ts\":100,\"stage\":\"scf\",\"event\":\"start\",\"wall_s\":0,\"rss_kb\":null,\"exit\":null}\n"
+        + "{\"ts\":200,\"stage\":\"scf\",\"event\":\"done\",\"wall_s\":60,\"rss_kb\":3000,\"exit\":0}\n"
+        + "{\"ts\":300,\"stage\":\"ph\",\"event\":\"start\",\"wall_s\":0,\"rss_kb\":null,\"exit\":null}\n"
+        + "{\"ts\":400,\"stage\":\"ph\",\"event\":\"done\",\"wall_s\":70,\"rss_kb\":3000,\"exit\":0}\n"
+        + "{\"ts\":500,\"stage\":\"relax\",\"event\":\"start\",\"wall_s\":0,\"rss_kb\":null,\"exit\":null}\n"
+        + "{\"ts\":600,\"stage\":\"relax\",\"event\":\"done\",\"wall_s\":50,\"rss_kb\":3000,\"exit\":0}\n"
+        + "EOF")
+    let _wb2 = exec("cat > '" + bB + "/.dft_telemetry.jsonl' <<'EOF'\n"
+        + "{\"ts\":100,\"stage\":\"scf\",\"event\":\"start\",\"wall_s\":0,\"rss_kb\":null,\"exit\":null}\n"
+        + "{\"ts\":200,\"stage\":\"scf\",\"event\":\"done\",\"wall_s\":40,\"rss_kb\":3000,\"exit\":0}\n"
+        + "{\"ts\":300,\"stage\":\"ph\",\"event\":\"start\",\"wall_s\":0,\"rss_kb\":null,\"exit\":null}\n"
+        + "{\"ts\":400,\"stage\":\"ph\",\"event\":\"done\",\"wall_s\":30,\"rss_kb\":3000,\"exit\":0}\n"
+        + "{\"ts\":500,\"stage\":\"relax\",\"event\":\"start\",\"wall_s\":0,\"rss_kb\":null,\"exit\":null}\n"
+        + "{\"ts\":600,\"stage\":\"relax\",\"event\":\"done\",\"wall_s\":50,\"rss_kb\":3000,\"exit\":0}\n"
+        + "EOF")
+
+    // ── CURRENT campaign root: scf class GREW (100→150) · ph DROPPED (100→50) ·
+    //    relax within threshold (100→105). One deck for simplicity.
+    let cur_root = exec("mktemp -d").trim()
+    let cA = cur_root + "/decks/LaH10"
+    let _mc = exec("mkdir -p '" + cA + "'")
+    let _wc = exec("cat > '" + cA + "/.dft_telemetry.jsonl' <<'EOF'\n"
+        + "{\"ts\":100,\"stage\":\"scf\",\"event\":\"start\",\"wall_s\":0,\"rss_kb\":null,\"exit\":null}\n"
+        + "{\"ts\":200,\"stage\":\"scf\",\"event\":\"done\",\"wall_s\":150,\"rss_kb\":3000,\"exit\":0}\n"
+        + "{\"ts\":300,\"stage\":\"ph\",\"event\":\"start\",\"wall_s\":0,\"rss_kb\":null,\"exit\":null}\n"
+        + "{\"ts\":400,\"stage\":\"ph\",\"event\":\"done\",\"wall_s\":50,\"rss_kb\":3000,\"exit\":0}\n"
+        + "{\"ts\":500,\"stage\":\"relax\",\"event\":\"start\",\"wall_s\":0,\"rss_kb\":null,\"exit\":null}\n"
+        + "{\"ts\":600,\"stage\":\"relax\",\"event\":\"done\",\"wall_s\":105,\"rss_kb\":3000,\"exit\":0}\n"
+        + "EOF")
+
+    // (A) build_rollup DISCOVERS+rolls the baseline root → 2 decks, grand = 300.
+    let base_rep = qf_telem_build_rollup(base_root)
+    fails = fails + _ck("(A) build_rollup baseline: 2 decks ingested, grand wall = 100+100+100 = 300",
+        base_rep.n_decks == 2 && base_rep.grand_wall == 300 && base_rep.skipped_decks == 0)
+    let cur_rep = qf_telem_build_rollup(cur_root)
+    fails = fails + _ck("(A) build_rollup current: 1 deck ingested, grand wall = 150+50+105 = 305",
+        cur_rep.n_decks == 1 && cur_rep.grand_wall == 305)
+
+    // join the two campaign snapshots at the 20% threshold.
+    let rep = qforge_telemetry_rollup_regress(base_rep, cur_rep, 20)
+
+    // (B) scf class grew 100→150 (+50% > 20%) → REGRESSED.
+    fails = fails + _ck("(B) scf class campaign wall +50% → REGRESSED",
+        _row_kind(rep, "scf") == "REGRESSED")
+
+    // (C) ph class dropped 100→50 (−50%) → IMPROVED.
+    fails = fails + _ck("(C) ph class campaign wall −50% → IMPROVED",
+        _row_kind(rep, "ph") == "IMPROVED")
+
+    // (D) relax class 100→105 (+5% < 20%) → SAME (no false REGRESS).
+    fails = fails + _ck("(D) relax class +5% within threshold → SAME (no false regress)",
+        _row_kind(rep, "relax") == "SAME")
+
+    // counters reflect exactly one of each.
+    fails = fails + _ck("(D) report counters: 1 regressed · 1 improved",
+        rep.n_regressed == 1 && rep.n_improved == 1)
+
+    // (E) argv dispatch `telemetry rollup-regress <base> <cur>` → rc 0 (wired in,
+    //     default 20% threshold applied with pct omitted).
+    let av: [str] = ["qforge_cli", "telemetry", "rollup-regress", base_root, cur_root]
+    fails = fails + _ck("(E) argv `telemetry rollup-regress <base> <cur>` → rc 0", qf_telemetry(av) == 0)
+
+    // (F) per-root EMPTY GUARD (d6): a root with NO telemetry deck → rc 1.
+    let empty_root = exec("mktemp -d").trim()
+    let _me = exec("mkdir -p '" + empty_root + "/decks/X'")
+    fails = fails + _ck("(F) empty BASELINE root → rc 1 (clean, no fabricated Δ)",
+        qf_telem_rollup_regress(empty_root, cur_root, 20) == 1)
+    fails = fails + _ck("(F) empty CURRENT root → rc 1 (clean, no fabricated Δ)",
+        qf_telem_rollup_regress(base_root, empty_root, 20) == 1)
+
+    // (G) USAGE error → rc 2: rollup-regress with a missing root arg.
+    let av_noarg: [str] = ["qforge_cli", "telemetry", "rollup-regress", base_root]
+    fails = fails + _ck("(G) `rollup-regress` with one root missing → rc 2 (usage)", qf_telemetry(av_noarg) == 2)
+
+    let _rm = exec("rm -rf '" + base_root + "' '" + cur_root + "' '" + empty_root + "'")
+
+    if fails == 0 {
+        println("qforge_telemetry_rollup_regress_cli_selftest PASS")
+        return
+    }
+    println("qforge_telemetry_rollup_regress_cli_selftest FAIL (" + to_string(fails) + ")")
+    exit(1)
+}

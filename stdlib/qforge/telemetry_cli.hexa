@@ -21,6 +21,7 @@
 use "stdlib/qforge/telemetry_report"   // #2477 ranked per-stage bottleneck
 use "stdlib/qforge/telemetry_regress"  // #2483 cross-run regression
 use "stdlib/qforge/telemetry_rollup"   // #2487 campaign rollup
+use "stdlib/qforge/telemetry_rollup_regress" // #2595 campaign cross-deck regression
 use "stdlib/core/parse"                // to_int_safe — optional pct threshold arg
 
 let QF_TELEM_NAME = ".dft_telemetry.jsonl"
@@ -158,7 +159,60 @@ pub fn qf_telem_rollup_all(root: str) -> int {
     return qf_telem_rollup(decks)
 }
 
-// qf_telemetry — `hexa qforge telemetry <report|regress|rollup|rollup-all> ...`.
+// qf_telem_build_rollup — DISCOVER every telemetry-bearing deck under a campaign
+// root and roll them into a single RollupReport (the per-class campaign snapshot
+// rollup-regress joins). IMPORT-ONLY reuse: discovery is qf_discover_telemetry_decks
+// (the rollup-all walk), the read is qf_telem_read, the aggregation is
+// qforge_telemetry_rollup (#2487) — 0-diff, d4. A root with NO telemetry deck
+// yields an EMPTY RollupReport (0 decks); the caller's guard turns that into a
+// clean rc-1 message (d6 — never a fabricated snapshot). PURE local file walk.
+pub fn qf_telem_build_rollup(root: str) -> RollupReport {
+    let decks = qf_discover_telemetry_decks(root)
+    let mut pairs: [(str, str)] = []
+    let mut i = 0
+    while i < len(decks) {
+        let d = decks[i]
+        pairs.push((d, qf_telem_read(d)))
+        i = i + 1
+    }
+    return qforge_telemetry_rollup(pairs)
+}
+
+// qf_telem_rollup_regress — `hexa qforge telemetry rollup-regress <base-root>
+// <cur-root> [pct]`. The CAMPAIGN-tier cross-run regression: DISCOVER+rollup the
+// BASELINE campaign root and the CURRENT campaign root, then JOIN per stage class
+// (scf · ph · relax · lambda) to flag which class regressed campaign-wide
+// run-over-run (#2595). Either root with NO telemetry deck → a clean message + rc
+// 1 (d6 — never a fabricated Δ over a phantom snapshot). rc: 0 success · 1 a root
+// has no telemetry · 2 usage error. READ-only (a local file walk; no pod/network).
+pub fn qf_telem_rollup_regress(base_root: str, cur_root: str, pct: int) -> int {
+    if len(base_root.trim()) == 0 || len(cur_root.trim()) == 0 {
+        println("[qforge] usage: hexa qforge telemetry rollup-regress <base-root> <cur-root> [pct]")
+        return 2
+    }
+    let base_decks = qf_discover_telemetry_decks(base_root)
+    if len(base_decks) == 0 {
+        println("[qforge] no deck under baseline root " + base_root + " carries "
+            + QF_TELEM_NAME + " — nothing to roll up.")
+        return 1
+    }
+    let cur_decks = qf_discover_telemetry_decks(cur_root)
+    if len(cur_decks) == 0 {
+        println("[qforge] no deck under current root " + cur_root + " carries "
+            + QF_TELEM_NAME + " — nothing to roll up.")
+        return 1
+    }
+    println("[qforge] rollup-regress: baseline " + to_string(len(base_decks))
+        + " deck(s) under " + base_root + " vs current " + to_string(len(cur_decks))
+        + " deck(s) under " + cur_root + " (threshold " + to_string(pct) + "%)")
+    let base_rep = qf_telem_build_rollup(base_root)
+    let cur_rep = qf_telem_build_rollup(cur_root)
+    let rep = qforge_telemetry_rollup_regress(base_rep, cur_rep, pct)
+    print(qforge_telemetry_rollup_regress_render(rep))
+    return 0
+}
+
+// qf_telemetry — `hexa qforge telemetry <report|regress|rollup|rollup-all|rollup-regress> ...`.
 // av is the full argv; av[1]=="telemetry", av[2]=the telemetry verb, av[3..]=its
 // args. Default regression threshold = 20% when the optional pct arg is omitted.
 pub fn qf_telemetry(av: [str]) -> int {
@@ -192,6 +246,15 @@ pub fn qf_telemetry(av: [str]) -> int {
         if len(av) >= 4 { root = av[3] }
         return qf_telem_rollup_all(root)
     }
-    println("[qforge] unknown telemetry verb '" + tv + "' — try report|regress|rollup|rollup-all")
+    if tv == "rollup-regress" {
+        let mut base_root = ""
+        let mut cur_root = ""
+        let mut pct = 20
+        if len(av) >= 4 { base_root = av[3] }
+        if len(av) >= 5 { cur_root = av[4] }
+        if len(av) >= 6 { pct = to_int_safe(av[5]) }
+        return qf_telem_rollup_regress(base_root, cur_root, pct)
+    }
+    println("[qforge] unknown telemetry verb '" + tv + "' — try report|regress|rollup|rollup-all|rollup-regress")
     return 2
 }
