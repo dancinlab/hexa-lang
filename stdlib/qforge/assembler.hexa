@@ -133,7 +133,7 @@ pub fn qforge_assemble_h(kvec: [float], gvecs: [float], pos: [float],
                 hab = hab + _QF_VEXT_RY2HA * vloc_g[idx] * sg[idx * 2]   // V_loc(Ry)*Re(S)*1/2 -> Ha
             }
             // nonlocal KB block
-            if have_vnl { hab = hab + vnl[a * n + b] }
+            if have_vnl { hab = hab + _QF_VEXT_RY2HA * vnl[a * n + b] }
             // Hartree+XC screening (caller-supplied G-diagonal local term)
             if have_scr && a == b { hab = hab + vscr_diag[a] }
             h.push(hab)
@@ -208,7 +208,7 @@ pub fn qforge_assemble_h_multi(kvec: [float], gvecs: [float], nspec: int,
     }
     let mut vnl_sum: [float] = []
     let mut vz = 0 ; while vz < n * n { vnl_sum.push(0.0) ; vz = vz + 1 }
-    let mut roff = 0 ; let mut poff = 0 ; let mut boff = 0 ; let mut doff = 0
+    let mut roff = 0 ; let mut poff = 0 ; let mut boff = 0 ; let mut doff = 0 ; let mut dijoff = 0
     let mut s = 0
     while s < nspec {
         let ml = mlens[s]
@@ -236,13 +236,13 @@ pub fn qforge_assemble_h_multi(kvec: [float], gvecs: [float], nspec: int,
             let mut ls_s: [int] = [] ; let mut li = 0
             while li < np { ls_s.push(ls[doff + li]) ; li = li + 1 }
             let mut dij_s: [float] = [] ; let mut di = 0
-            while di < dl { dij_s.push(dij[doff * np + di]) ; di = di + 1 }
+            while di < dl { dij_s.push(dij[dijoff + di]) ; di = di + 1 }
             let vnl = qforge_vnl_block(rs_s, rab_s, beta_s, ls_s, dij_s, np, omega, qvecs)
             if len(vnl) == n * n {
                 let mut vk = 0
-                while vk < n * n { vnl_sum[vk] = vnl_sum[vk] + vnl[vk] ; vk = vk + 1 }
+                while vk < n * n { vnl_sum[vk] = vnl_sum[vk] + _QF_VEXT_RY2HA * vnl[vk] ; vk = vk + 1 }
             }
-            boff = boff + bl ; doff = doff + np
+            boff = boff + bl ; doff = doff + np ; dijoff = dijoff + dl
         }
         roff = roff + ml ; poff = poff + pa * 3
         s = s + 1
