@@ -1,0 +1,217 @@
+// ════════════════════════════════════════════════════════════════════════════
+//  clm_batched_gemmfeed_eq.hexa — LEVER (3): batched transpose-aware GEMM-feed
+//  byte-eq oracle (CPU-local, $0, `hexa run`).
+//
+//  F-RFC046-BATCHED-GEMMFEED-EQ: the BATCHED transpose-aware forge GEMMs
+//  (forge_dispatch_matmul_batched_bt / _atb) match the host-transposed +
+//  host-repacked reference EXACTLY (max|Δ| = 0.0), so the fused 2-expert
+//  ConvExpert path stays GRAD-EXACT while the DOMINANT 65% host repack term
+//  — b_all Wt-transpose (fwd) + dW_flat unpack (bwd) + a_all/dwA xcol
+//  duplication — leaves the per-step hot path.
+//
+//  Root cause of the residual Lane-G util RED AFTER lever-2 (fire 39082940:
+//  DESCENT 🟢 PASS CE 0.818→0.059, util 🔴 PEAK 19% MEAN 0.4999% n=147863):
+//  lever-2 patched only the UN-batched conv path (profile 31.2%). The
+//  production trainer's DOMINANT 65% term is the BATCHED
+//  conv2_*_via_forge_batched host repack — every step it
+//    (fwd)  duplicates xcol → a_all[2·T·Kdim]   (T·Kdim copy ×2)
+//           transposes w0/w1[Cout,Kdim] → b_all[2·Kdim·Cout]  (the repack)
+//    (bwd)  duplicates xcolT → dwA[2·Kdim·T]
+//           unpacks dW_flat[Kdim,Cout] → dW[Cout,Kdim]  (the repack)
+//  all on the host hot path. lever-3 feeds w[Cout,Kdim] / dy[T,Cout] DIRECTLY
+//  through the batched op-flag GEMM and broadcasts the shared xcol with
+//  strideA=0 — the host repack is DROPPED.
+//
+//  THREE oracles (CPU, $0 — prove the host-side shape; the device bit-eq runs
+//  on the pod against these same references):
+//    BT-BATCHED  : forge_dispatch_matmul_batched_bt(a_all,M,K, w_all[batch·N·K],
+//                  N, batch, c_all) == per-slice A[M,K] @ Wt[K,N], Wt=trans(w).
+//                  strideA=0 form: a_all is ONE [M,K] block (the shared xcol),
+//                  broadcast across the batch.
+//    ATB-BATCHED : forge_dispatch_matmul_batched_atb(dy_all[batch·K·M],M,K,
+//                  b_all[batch·K·N],N,batch,c_all) == per-slice dyT[M,K]@B[K,N]
+//                  landing directly as [Cout,Kdim] (the dW path). strideA=0 on
+//                  the SHARED operand (xcol in the dW GEMM is per-expert dy, so
+//                  here strideA broadcasts the shared xcol on the B side via
+//                  the _xb variant — see notes).
+//
+//  On the prebuilt mac binary the batched _bt/_atb builtins resolve to their
+//  byte-eq host oracle (transpose-then-batched-matmul) in self/runtime.c; on a
+//  CUDA pod they resolve to _hx_cuda_farr_matmul_batched_{bt,atb}_gpu
+//  (cublasDgemmStridedBatched OP_T, with strideA=0 broadcast) — same FP64
+//  K-accumulation order, so byte-eq is exact both ways.
+//
+//  STRIDE-BROADCAST contract: when the caller passes a_stride=0 (the shared
+//  xcol), the device path sets strideA=0 in cublasDgemmStridedBatched so all
+//  batch problems read the SAME A block; the host oracle reads a_all[0..M·K)
+//  for every g. When a_stride=M·K (the default), each problem reads its own
+//  block (the plain batched form). The 7th arg `a_stride_blocks` selects:
+//  0 = broadcast, 1 = per-problem.
+// ════════════════════════════════════════════════════════════════════════════
+
+use "stdlib/flame/tensor_lib"
+
+fn _bgf_absf(x: float) -> float { if x < 0.0 { return 0.0 - x } return x }
+
+fn _bgf_maxdev(a: int, b: int, n: int) -> float {
+    let mut m = 0.0
+    let mut i = 0
+    while i < n {
+        let d = _bgf_absf(t_get(a, i) - t_get(b, i))
+        if d > m { m = d }
+        i = i + 1
+    }
+    return m
+}
+
+// deterministic non-trivial pattern (no RNG dependency), matches clm_gemmfeed_eq.
+fn _bgf_fill(t: int, n: int, seed: int) {
+    let mut i = 0
+    while i < n {
+        let v = to_float(((i * 2654435761 + seed * 40503) % 1009) - 504) * 0.01
+        t_set(t, i, v)
+        i = i + 1
+    }
+}
+
+fn main() {
+    println("clm_batched_gemmfeed_eq — LEVER (3): batched transpose-aware GEMM-feed byte-eq oracle")
+
+    // shapes mirror the fused 2-expert conv GEMM: M=T, K=Kdim=Cin·K, N=Cout, batch=2.
+    let M = 17       // T
+    let K = 12       // Kdim
+    let N = 9        // Cout
+    let batch = 2
+
+    // ════════════════════════════════════════════════════════════════════════
+    // BT-BATCHED oracle (FORWARD conv2 batched path).
+    //   A = shared xcol[T,Kdim] (broadcast across the 2 experts, a_stride=0).
+    //   w_all = [w0[Cout,Kdim] ; w1[Cout,Kdim]] stored row-major [batch·N·K].
+    //   want C_g[M,N] = A[M,K] @ w_g^T  (== conv2 fwd GEMM, dropping the b_all
+    //   Wt-transpose AND the a_all xcol duplication).
+    // reference = per-slice forge_dispatch_matmul(A, M,K, Wt_g, N) with the
+    //   HOST transpose Wt_g[K,N] = transpose(w_g[N,K]) and the SHARED A.
+    // ════════════════════════════════════════════════════════════════════════
+    let A = t_zeros(M * K); _bgf_fill(A, M * K, 1)            // shared xcol
+    let w_all = t_zeros(batch * N * K)
+    _bgf_fill(w_all, batch * N * K, 2)                        // [w0;w1], each [Cout,Kdim]
+
+    // reference: host-transpose each w_g then matmul shared A.
+    let ref_bt = t_zeros(batch * M * N)
+    let mut g = 0
+    while g < batch {
+        let woff = g * N * K
+        let Wt = t_zeros(K * N)
+        let mut n0 = 0
+        while n0 < N {
+            let mut k0 = 0
+            while k0 < K { t_set(Wt, k0 * N + n0, t_get(w_all, woff + n0 * K + k0)); k0 = k0 + 1 }
+            n0 = n0 + 1
+        }
+        let csl = forge_dispatch_matmul(A, M, K, Wt, N)       // shared A @ Wt_g
+        let coff = g * M * N
+        let mut ic = 0
+        while ic < M * N { t_set(ref_bt, coff + ic, t_get(csl, ic)); ic = ic + 1 }
+        t_free(Wt); t_free(csl)
+        g = g + 1
+    }
+
+    // got: batched bt with a_stride_blocks=0 (broadcast shared A).
+    let got_bt = t_zeros(batch * M * N)
+    let rc_bt = forge_dispatch_matmul_batched_bt(A, M, K, w_all, N, batch, 0, got_bt)
+    let dbt = _bgf_maxdev(ref_bt, got_bt, batch * M * N)
+    print("  BT-BATCHED  rc="); print(to_string(rc_bt)); print(" max|Δ|="); println(to_string(dbt))
+    let mut bt_ok = 0
+    if rc_bt == 0 { if dbt == 0.0 { bt_ok = 1 } }
+
+    // ════════════════════════════════════════════════════════════════════════
+    // ATB-BATCHED oracle (BACKWARD conv2 dW batched path).
+    //   For each expert: dW_g[Cout,Kdim] = dy_g[T,Cout]^T @ xcol[T,Kdim].
+    //   dy_all = [dy0[T,Cout] ; dy1[T,Cout]] stored [batch·K2·M2] (K2=T rows).
+    //   xcol shared [T,Kdim] broadcast on the B operand (b_stride=0).
+    //   want C_g[M2,N2] = dy_g^T @ xcol  landing DIRECTLY as [Cout,Kdim]
+    //   (drops the dW_flat unpack AND the dwA xcolT duplication).
+    // reference = per-slice forge_dispatch_matmul(dyT_g, M2,K2, xcol, N2) with
+    //   HOST transpose dyT_g[Cout,T] and the SHARED xcol.
+    // ════════════════════════════════════════════════════════════════════════
+    let K2 = 17      // T
+    let M2 = 9       // Cout
+    let N2 = 12      // Kdim
+    let dy_all = t_zeros(batch * K2 * M2)
+    _bgf_fill(dy_all, batch * K2 * M2, 3)                     // [dy0;dy1], each [T,Cout]
+    let xcol = t_zeros(K2 * N2); _bgf_fill(xcol, K2 * N2, 4)  // shared xcol[T,Kdim]
+
+    // reference: host-transpose each dy_g then matmul shared xcol.
+    let ref_atb = t_zeros(batch * M2 * N2)
+    let mut g2 = 0
+    while g2 < batch {
+        let dyoff = g2 * K2 * M2
+        let dyT = t_zeros(M2 * K2)
+        let mut k1 = 0
+        while k1 < K2 {
+            let mut m1 = 0
+            while m1 < M2 { t_set(dyT, m1 * K2 + k1, t_get(dy_all, dyoff + k1 * M2 + m1)); m1 = m1 + 1 }
+            k1 = k1 + 1
+        }
+        let csl = forge_dispatch_matmul(dyT, M2, K2, xcol, N2)  // dy_g^T @ xcol
+        let coff = g2 * M2 * N2
+        let mut ic = 0
+        while ic < M2 * N2 { t_set(ref_atb, coff + ic, t_get(csl, ic)); ic = ic + 1 }
+        t_free(dyT); t_free(csl)
+        g2 = g2 + 1
+    }
+
+    // got: batched atb with b_stride_blocks=0 (broadcast shared xcol on B).
+    // signature: forge_dispatch_matmul_batched_atb(a_all[batch·K·M], M, K,
+    //   b[K·N], N, batch, b_stride_blocks, c_all). b_stride_blocks=0 broadcasts
+    //   the SHARED xcol across the batch; a (dy) is always per-problem.
+    let got_atb = t_zeros(batch * M2 * N2)
+    let rc_atb = forge_dispatch_matmul_batched_atb(dy_all, M2, K2, xcol, N2, batch, 0, got_atb)
+    let datb = _bgf_maxdev(ref_atb, got_atb, batch * M2 * N2)
+    print("  ATB-BATCHED rc="); print(to_string(rc_atb)); print(" max|Δ|="); println(to_string(datb))
+    let mut atb_ok = 0
+    if rc_atb == 0 { if datb == 0.0 { atb_ok = 1 } }
+
+    // ── also exercise per-problem stride (a_stride_blocks=1) on BT to prove the
+    //    non-broadcast form is byte-eq too (the plain batched bt). ──
+    let A2 = t_zeros(batch * M * K); _bgf_fill(A2, batch * M * K, 5)
+    let ref_bt2 = t_zeros(batch * M * N)
+    let mut g3 = 0
+    while g3 < batch {
+        let aoff = g3 * M * K; let woff = g3 * N * K
+        let asl = t_zeros(M * K)
+        let mut ia = 0
+        while ia < M * K { t_set(asl, ia, t_get(A2, aoff + ia)); ia = ia + 1 }
+        let Wt = t_zeros(K * N)
+        let mut n0 = 0
+        while n0 < N {
+            let mut k0 = 0
+            while k0 < K { t_set(Wt, k0 * N + n0, t_get(w_all, woff + n0 * K + k0)); k0 = k0 + 1 }
+            n0 = n0 + 1
+        }
+        let csl = forge_dispatch_matmul(asl, M, K, Wt, N)
+        let coff = g3 * M * N
+        let mut ic = 0
+        while ic < M * N { t_set(ref_bt2, coff + ic, t_get(csl, ic)); ic = ic + 1 }
+        t_free(asl); t_free(Wt); t_free(csl)
+        g3 = g3 + 1
+    }
+    let got_bt2 = t_zeros(batch * M * N)
+    let rc_bt2 = forge_dispatch_matmul_batched_bt(A2, M, K, w_all, N, batch, 1, got_bt2)
+    let dbt2 = _bgf_maxdev(ref_bt2, got_bt2, batch * M * N)
+    print("  BT-BATCHED(per-problem) rc="); print(to_string(rc_bt2)); print(" max|Δ|="); println(to_string(dbt2))
+    let mut bt2_ok = 0
+    if rc_bt2 == 0 { if dbt2 == 0.0 { bt2_ok = 1 } }
+
+    if bt_ok == 1 {
+        if atb_ok == 1 {
+            if bt2_ok == 1 {
+                println("F-RFC046-BATCHED-GEMMFEED-EQ = 1")
+                println("PASS — batched transpose-aware GEMM-feed (bt/atb, strideA=0 broadcast + per-problem) == host repack reference byte-eq (max|Δ|=0)")
+                return
+            }
+        }
+    }
+    println("F-RFC046-BATCHED-GEMMFEED-EQ = 0")
+    println("FAIL — batched transpose-aware GEMM-feed drifted from the host repack reference")
+}

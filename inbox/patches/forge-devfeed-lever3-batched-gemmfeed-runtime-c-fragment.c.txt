@@ -1,0 +1,143 @@
+// forge-devfeed lever-3 — self/runtime.c wrapper bodies (SSOT C fragment).
+// substrate = GPU / Lane-G / FORGE-UTILGREEN.
+//
+// self/runtime.c is a gitignored build seed (post-#2065 .c-graduation); these
+// two wrappers are NOT regenerated from .hexa. On a fresh pod checkout for the
+// CUDA fire, splice this block into self/runtime.c immediately AFTER the
+// lever-2 hexa_forge_dispatch_matmul_atb body (search:
+//   'matmul_atb' → its closing `}` for forge_dispatch_matmul_atb), BEFORE the
+// lever-a im2col/col2im/adamw block (that fragment is
+//   forge-devfeed-lever-a-runtime-c-fragment.c.txt). Then run the self-host
+// stage build.
+//
+// Routing: HEXA_CUDA → _hx_cuda_farr_matmul_batched_{bt,atb}_gpu
+// (runtime_cuda.c — cublasDgemmStridedBatched OP_T, strideA/strideB=0 broadcast
+// when the stride-blocks arg is 0); no-CUDA → byte-eq host loop (per-slice
+// transpose-then-matmul against the shared/per-problem operand). Never silently
+// wrong, only silently slower.
+//
+// Byte-eq oracle: stdlib/flame/clm_batched_gemmfeed_eq.hexa
+// (F-RFC046-BATCHED-GEMMFEED-EQ = 1, max|Δ| = 0.0).
+//
+// fire-confirmed rationale: pod 39082940 lever-2 util fire returned DESCENT 🟢
+// (CE 0.818→0.059) · util 🔴 (PEAK 19% MEAN 0.4999% n=147863). lever-2 patched
+// only the un-batched conv path (profile 31.2%); the production trainer's
+// DOMINANT 65% term is the BATCHED conv2_*_via_forge_batched host repack
+// (b_all Wt-transpose + dW_flat unpack + a_all/dwA xcol duplication), still on
+// the host hot path. lever-3 drops it. util≥20% needs the (HELD) pod fire.
+
+/* ═══════════════════════════════════════════════════════════════════
+ * LEVER (3) — BATCHED transpose-aware GEMM-feed wrappers.
+ *
+ * Drop the DOMINANT 65% batched-expert host repack: feed the raw
+ * weights w[Cout,Kdim] / grads dy[T,Cout] DIRECTLY through ONE
+ * strided-batched op-flag GEMM, with a strideA/strideB=0 broadcast that
+ * collapses the shared-xcol duplication. CUDA → the runtime_cuda.c
+ * device kernel; no-CUDA → the byte-eq host loop (the
+ * clm_batched_gemmfeed_eq.hexa reference).
+ *
+ * _bt : per slice g, C_g[M,N] = A_g[M,K] @ B_g^T (B_g stored [N,K]).
+ *       as_blocks=0 → broadcast the shared A (the fwd xcol); 1 → per-prob.
+ * _atb: per slice g, C_g[M,N] = A_g^T @ B_g (A_g stored [K,M] = dy).
+ *       bs_blocks=0 → broadcast the shared B (the bwd xcol); 1 → per-prob.
+ * ═══════════════════════════════════════════════════════════════════ */
+HexaVal hexa_forge_dispatch_matmul_batched_bt(HexaVal a_v, HexaVal m_v, HexaVal k_v,
+                                              HexaVal b_v, HexaVal n_v,
+                                              HexaVal batch_v, HexaVal as_v,
+                                              HexaVal c_v) {
+    int64_t a_id  = hexa_as_num(a_v);
+    int64_t M     = hexa_as_num(m_v);
+    int64_t K     = hexa_as_num(k_v);
+    int64_t b_id  = hexa_as_num(b_v);
+    int64_t N     = hexa_as_num(n_v);
+    int64_t batch = hexa_as_num(batch_v);
+    int64_t as    = hexa_as_num(as_v);   /* a_stride_blocks ∈ {0,1} */
+    int64_t c_id  = hexa_as_num(c_v);
+    if (M <= 0 || K <= 0 || N <= 0 || batch <= 0) return hexa_int(-1);
+    if (as != 0 && as != 1) return hexa_int(-1);
+    if (a_id < 0 || a_id >= _hx_farr_count) return hexa_int(-1);
+    if (b_id < 0 || b_id >= _hx_farr_count) return hexa_int(-1);
+    if (c_id < 0 || c_id >= _hx_farr_count) return hexa_int(-1);
+    if (_hx_farr_table[c_id].len < batch * M * N) return hexa_int(-1);
+#ifdef HEXA_CUDA
+    extern int _hx_cuda_farr_matmul_batched_bt_gpu(int64_t, int64_t, int64_t,
+                                                   int64_t, int64_t, int64_t,
+                                                   int64_t, int64_t);
+    int grc = _hx_cuda_farr_matmul_batched_bt_gpu(a_id, M, K, b_id, N, batch, as, c_id);
+    if (grc == 0) return hexa_int(0);
+    /* GPU path failed — fall through to the host loop (correctness kept). */
+#endif
+    {
+        double* A = _hx_farr_table[a_id].buf;   /* [M,K] (as=0) or [batch,M,K] */
+        double* B = _hx_farr_table[b_id].buf;   /* [batch, N, K] */
+        double* C = _hx_farr_table[c_id].buf;   /* [batch, M, N] */
+        for (int64_t g = 0; g < batch; g++) {
+            const double* Ag = A + (as == 0 ? 0 : g * M * K);
+            const double* Bg = B + g * N * K;            /* B_g[N,K] */
+            double*       Cg = C + g * M * N;
+            for (int64_t i = 0; i < M; i++)
+                for (int64_t n = 0; n < N; n++) {
+                    double acc = 0.0;
+                    for (int64_t kk = 0; kk < K; kk++)
+                        acc += Ag[i * K + kk] * Bg[n * K + kk];   /* B^T: B[n,k] */
+                    Cg[i * N + n] = acc;
+                }
+        }
+    }
+    return hexa_int(0);
+}
+HexaVal forge_dispatch_matmul_batched_bt(HexaVal a, HexaVal m, HexaVal k,
+                                         HexaVal b, HexaVal n, HexaVal batch,
+                                         HexaVal as, HexaVal c) {
+    return hexa_forge_dispatch_matmul_batched_bt(a, m, k, b, n, batch, as, c);
+}
+
+HexaVal hexa_forge_dispatch_matmul_batched_atb(HexaVal a_v, HexaVal m_v, HexaVal k_v,
+                                               HexaVal b_v, HexaVal n_v,
+                                               HexaVal batch_v, HexaVal bs_v,
+                                               HexaVal c_v) {
+    int64_t a_id  = hexa_as_num(a_v);
+    int64_t M     = hexa_as_num(m_v);
+    int64_t K     = hexa_as_num(k_v);
+    int64_t b_id  = hexa_as_num(b_v);
+    int64_t N     = hexa_as_num(n_v);
+    int64_t batch = hexa_as_num(batch_v);
+    int64_t bs    = hexa_as_num(bs_v);   /* b_stride_blocks ∈ {0,1} */
+    int64_t c_id  = hexa_as_num(c_v);
+    if (M <= 0 || K <= 0 || N <= 0 || batch <= 0) return hexa_int(-1);
+    if (bs != 0 && bs != 1) return hexa_int(-1);
+    if (a_id < 0 || a_id >= _hx_farr_count) return hexa_int(-1);
+    if (b_id < 0 || b_id >= _hx_farr_count) return hexa_int(-1);
+    if (c_id < 0 || c_id >= _hx_farr_count) return hexa_int(-1);
+    if (_hx_farr_table[c_id].len < batch * M * N) return hexa_int(-1);
+#ifdef HEXA_CUDA
+    extern int _hx_cuda_farr_matmul_batched_atb_gpu(int64_t, int64_t, int64_t,
+                                                    int64_t, int64_t, int64_t,
+                                                    int64_t, int64_t);
+    int grc = _hx_cuda_farr_matmul_batched_atb_gpu(a_id, M, K, b_id, N, batch, bs, c_id);
+    if (grc == 0) return hexa_int(0);
+#endif
+    {
+        double* A = _hx_farr_table[a_id].buf;   /* [batch, K, M] (A_g=dy[K=T,M=Cout]) */
+        double* B = _hx_farr_table[b_id].buf;   /* [K,N] (bs=0) or [batch,K,N] */
+        double* C = _hx_farr_table[c_id].buf;   /* [batch, M, N] */
+        for (int64_t g = 0; g < batch; g++) {
+            const double* Ag = A + g * K * M;             /* A_g[K,M] */
+            const double* Bg = B + (bs == 0 ? 0 : g * K * N);
+            double*       Cg = C + g * M * N;
+            for (int64_t i = 0; i < M; i++)
+                for (int64_t n = 0; n < N; n++) {
+                    double acc = 0.0;
+                    for (int64_t kk = 0; kk < K; kk++)
+                        acc += Ag[kk * M + i] * Bg[kk * N + n];   /* A^T: A[k,i] */
+                    Cg[i * N + n] = acc;
+                }
+        }
+    }
+    return hexa_int(0);
+}
+HexaVal forge_dispatch_matmul_batched_atb(HexaVal a, HexaVal m, HexaVal k,
+                                          HexaVal b, HexaVal n, HexaVal batch,
+                                          HexaVal bs, HexaVal c) {
+    return hexa_forge_dispatch_matmul_batched_atb(a, m, k, b, n, batch, bs, c);
+}

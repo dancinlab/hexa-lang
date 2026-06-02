@@ -7585,6 +7585,28 @@ fn gen2_expr(node) {
                 if name == "forge_dispatch_stdp_pair" {
                     return "hexa_forge_dispatch_stdp_pair(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ", " + arg_strs[3] + ", " + arg_strs[4] + ", " + arg_strs[5] + ", " + arg_strs[6] + ", " + arg_strs[7] + ")"
                 }
+                // LEVER (3) BATCHED transpose-aware GEMM-feed: drop the DOMINANT
+                // 65% batched-expert host repack (fire 39082940 confirmed lever-2
+                // RED → lever-3 is the unblock). 8-arg, with an a/b stride selector.
+                // forge_dispatch_matmul_batched_bt(a_all, M, K, b_all, N, batch,
+                //   a_stride_blocks, c_all) -> int rc: per slice g, row-major
+                //   C_g[M,N]=A_g[M,K]@B_g^T (B_g stored [N,K]); cuBLAS OP_T per
+                //   slice. a_stride_blocks=0 → BROADCAST shared a_all (strideA=0,
+                //   collapses fwd a_all xcol dup); 1 → per-problem (strideA=M·K).
+                // forge_dispatch_matmul_batched_atb(a_all, M, K, b, N, batch,
+                //   b_stride_blocks, c_all) -> int rc: per slice g, C_g[M,N]=
+                //   A_g^T@B_g (A_g stored [K,M]=dy); result lands [Cout,Kdim]
+                //   directly (drops dW_flat unpack). b_stride_blocks=0 → BROADCAST
+                //   shared xcol on B (strideB=0, collapses dwA dup); 1 → per-problem.
+                // CUDA → _hx_cuda_farr_matmul_batched_{bt,atb}_gpu
+                // (cublasDgemmStridedBatched); no-CUDA → byte-eq host loop.
+                // (#1187: needs BOTH this call-name mapping AND the runtime.h proto.)
+                if name == "forge_dispatch_matmul_batched_bt" {
+                    return "hexa_forge_dispatch_matmul_batched_bt(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ", " + arg_strs[3] + ", " + arg_strs[4] + ", " + arg_strs[5] + ", " + arg_strs[6] + ", " + arg_strs[7] + ")"
+                }
+                if name == "forge_dispatch_matmul_batched_atb" {
+                    return "hexa_forge_dispatch_matmul_batched_atb(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ", " + arg_strs[3] + ", " + arg_strs[4] + ", " + arg_strs[5] + ", " + arg_strs[6] + ", " + arg_strs[7] + ")"
+                }
             }
             if len(node.args) == 9 {
                 // RFC 037 (2026-05-13): whole-Hamiltonian Pauli-expectation

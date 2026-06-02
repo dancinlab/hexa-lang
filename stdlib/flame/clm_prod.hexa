@@ -285,24 +285,46 @@ fn conv2_fwd_via_forge_batched(x: int, w0: int, b0: int, w1: int, b1: int,
         }
         t = t + 1
     }
-    let a_all = t_zeros(2 * T * Kdim)
-    let mut ia = 0
-    while ia < T * Kdim {
-        t_set(a_all, ia, t_get(xcol, ia)); t_set(a_all, T * Kdim + ia, t_get(xcol, ia)); ia = ia + 1
-    }
-    let b_all = t_zeros(2 * Kdim * Cout)
-    let mut co = 0
-    while co < Cout {
-        let mut j = 0
-        while j < Kdim {
-            t_set(b_all, j * Cout + co, t_get(w0, co * Kdim + j))
-            t_set(b_all, Kdim * Cout + j * Cout + co, t_get(w1, co * Kdim + j))
-            j = j + 1
-        }
-        co = co + 1
-    }
     let c_all = t_zeros(2 * T * Cout)
-    _clmp_matmul_batched(a_all, T, Kdim, b_all, Cout, 2, c_all)
+    // LEVER (3): under CLM_PROD_DEVFEED ∧ CLM_PROD_BATCHED feed the raw weights
+    // w0/w1[Cout,Kdim] DIRECTLY through the batched transB GEMM (cuBLAS OP_T per
+    // slice) with the SHARED xcol broadcast (a_stride_blocks=0) — DROPPING the
+    // 65% host repack: the b_all Wt-transpose loop AND the a_all xcol
+    // duplication. w_all = [w0 ; w1] is the un-transposed [batch·Cout·Kdim].
+    let mut used_l3 = false
+    if env("CLM_PROD_DEVFEED") != "" {
+        if env("CLM_PROD_BATCHED") != "" {
+            let w_all = t_zeros(2 * Cout * Kdim)
+            let mut iw = 0
+            while iw < Cout * Kdim { t_set(w_all, iw, t_get(w0, iw)); t_set(w_all, Cout * Kdim + iw, t_get(w1, iw)); iw = iw + 1 }
+            // a_stride_blocks=0 → broadcast the single xcol[T,Kdim] block.
+            let rc = forge_dispatch_matmul_batched_bt(xcol, T, Kdim, w_all, Cout, 2, 0, c_all)
+            if rc == 0 { used_l3 = true }
+            t_free(w_all)
+        }
+    }
+    if !used_l3 {
+        // host-repack fallback (byte-eq): build a_all (xcol dup) + b_all (Wt
+        // transpose) then the plain batched matmul / per-problem oracle.
+        let a_all = t_zeros(2 * T * Kdim)
+        let mut ia = 0
+        while ia < T * Kdim {
+            t_set(a_all, ia, t_get(xcol, ia)); t_set(a_all, T * Kdim + ia, t_get(xcol, ia)); ia = ia + 1
+        }
+        let b_all = t_zeros(2 * Kdim * Cout)
+        let mut co = 0
+        while co < Cout {
+            let mut j = 0
+            while j < Kdim {
+                t_set(b_all, j * Cout + co, t_get(w0, co * Kdim + j))
+                t_set(b_all, Kdim * Cout + j * Cout + co, t_get(w1, co * Kdim + j))
+                j = j + 1
+            }
+            co = co + 1
+        }
+        _clmp_matmul_batched(a_all, T, Kdim, b_all, Cout, 2, c_all)
+        t_free(a_all); t_free(b_all)
+    }
     let mut t2 = 0
     while t2 < T {
         let mut c2 = 0
@@ -313,7 +335,7 @@ fn conv2_fwd_via_forge_batched(x: int, w0: int, b0: int, w1: int, b1: int,
         }
         t2 = t2 + 1
     }
-    t_free(xcol); t_free(a_all); t_free(b_all); t_free(c_all)
+    t_free(xcol); t_free(c_all)
 }
 
 // backward of the TWO ConvExperts fused: batched dW + batched dX GEMM. Byte-eq
@@ -323,38 +345,82 @@ fn conv2_bwd_via_forge_batched(x: int, w0: int, w1: int, dy0: int, dy1: int,
                                dW1_out: int, dX1_out: int, db1_out: int,
                                T: int, Cin: int, Cout: int, K: int, dil: int) {
     let Kdim = Cin * K
-    let xcolT = t_zeros(Kdim * T)
-    let mut t = 0
-    while t < T {
-        let mut ci = 0
-        while ci < Cin {
-            let mut k = 0
-            while k < K {
-                let p = t - dil * (K - 1 - k)
-                if p >= 0 { let j = ci * K + k; t_set(xcolT, j * T + t, t_get(x, p * Cin + ci)) }
-                k = k + 1
+    let mut used_l3 = false
+    // LEVER (3): under CLM_PROD_DEVFEED ∧ CLM_PROD_BATCHED compute dW DIRECTLY in
+    // [Cout,Kdim] layout via the batched transA GEMM dW_g = dy_g^T @ xcol (cuBLAS
+    // OP_T on A=dy per slice) with the SHARED xcol broadcast (b_stride_blocks=0)
+    // — DROPPING the 65% host repack: the dW_flat[Kdim,Cout]→[Cout,Kdim] unpack
+    // AND the dwA xcolT duplication. xcol here = the plain [T,Kdim] gather (the
+    // atb B operand), dy_all = [dy0 ; dy1] each [T,Cout] (the per-problem A).
+    if env("CLM_PROD_DEVFEED") != "" {
+        if env("CLM_PROD_BATCHED") != "" {
+            let xcol = t_zeros(T * Kdim)
+            let mut tt = 0
+            while tt < T {
+                let mut ci = 0
+                while ci < Cin {
+                    let mut k = 0
+                    while k < K {
+                        let p = tt - dil * (K - 1 - k)
+                        if p >= 0 { t_set(xcol, tt * Kdim + ci * K + k, t_get(x, p * Cin + ci)) }
+                        k = k + 1
+                    }
+                    ci = ci + 1
+                }
+                tt = tt + 1
             }
-            ci = ci + 1
+            let dy_all = t_zeros(2 * T * Cout)
+            let mut iy = 0
+            while iy < T * Cout { t_set(dy_all, iy, t_get(dy0, iy)); t_set(dy_all, T * Cout + iy, t_get(dy1, iy)); iy = iy + 1 }
+            // atb: A_g=dy_g[T,Cout] (K=T, M=Cout per-problem), B=xcol[T,Kdim]
+            // (N=Kdim) broadcast → C_g[Cout,Kdim] lands directly.
+            let dW_all = t_zeros(2 * Cout * Kdim)
+            let rc = forge_dispatch_matmul_batched_atb(dy_all, Cout, T, xcol, Kdim, 2, 0, dW_all)
+            if rc == 0 {
+                let mut id = 0
+                while id < Cout * Kdim { t_set(dW0_out, id, t_get(dW_all, id)); t_set(dW1_out, id, t_get(dW_all, Cout * Kdim + id)); id = id + 1 }
+                used_l3 = true
+            }
+            t_free(xcol); t_free(dy_all); t_free(dW_all)
         }
-        t = t + 1
     }
-    let dwA = t_zeros(2 * Kdim * T)
-    let mut ia = 0
-    while ia < Kdim * T { t_set(dwA, ia, t_get(xcolT, ia)); t_set(dwA, Kdim * T + ia, t_get(xcolT, ia)); ia = ia + 1 }
-    let dwB = t_zeros(2 * T * Cout)
-    let mut ib = 0
-    while ib < T * Cout { t_set(dwB, ib, t_get(dy0, ib)); t_set(dwB, T * Cout + ib, t_get(dy1, ib)); ib = ib + 1 }
-    let dW_flat_all = t_zeros(2 * Kdim * Cout)
-    _clmp_matmul_batched(dwA, Kdim, T, dwB, Cout, 2, dW_flat_all)
-    let mut co = 0
-    while co < Cout {
-        let mut j = 0
-        while j < Kdim {
-            t_set(dW0_out, co * Kdim + j, t_get(dW_flat_all, j * Cout + co))
-            t_set(dW1_out, co * Kdim + j, t_get(dW_flat_all, Kdim * Cout + j * Cout + co))
-            j = j + 1
+    if !used_l3 {
+        // host-repack fallback (byte-eq): xcolT dup → dwA, batched dW_flat, then
+        // unpack [Kdim,Cout]→[Cout,Kdim].
+        let xcolT = t_zeros(Kdim * T)
+        let mut t = 0
+        while t < T {
+            let mut ci = 0
+            while ci < Cin {
+                let mut k = 0
+                while k < K {
+                    let p = t - dil * (K - 1 - k)
+                    if p >= 0 { let j = ci * K + k; t_set(xcolT, j * T + t, t_get(x, p * Cin + ci)) }
+                    k = k + 1
+                }
+                ci = ci + 1
+            }
+            t = t + 1
         }
-        co = co + 1
+        let dwA = t_zeros(2 * Kdim * T)
+        let mut ia = 0
+        while ia < Kdim * T { t_set(dwA, ia, t_get(xcolT, ia)); t_set(dwA, Kdim * T + ia, t_get(xcolT, ia)); ia = ia + 1 }
+        let dwB = t_zeros(2 * T * Cout)
+        let mut ib = 0
+        while ib < T * Cout { t_set(dwB, ib, t_get(dy0, ib)); t_set(dwB, T * Cout + ib, t_get(dy1, ib)); ib = ib + 1 }
+        let dW_flat_all = t_zeros(2 * Kdim * Cout)
+        _clmp_matmul_batched(dwA, Kdim, T, dwB, Cout, 2, dW_flat_all)
+        let mut co = 0
+        while co < Cout {
+            let mut j = 0
+            while j < Kdim {
+                t_set(dW0_out, co * Kdim + j, t_get(dW_flat_all, j * Cout + co))
+                t_set(dW1_out, co * Kdim + j, t_get(dW_flat_all, Kdim * Cout + j * Cout + co))
+                j = j + 1
+            }
+            co = co + 1
+        }
+        t_free(xcolT); t_free(dwA); t_free(dwB); t_free(dW_flat_all)
     }
     let dxA = t_zeros(2 * T * Cout)
     let mut ja = 0
@@ -390,7 +456,6 @@ fn conv2_bwd_via_forge_batched(x: int, w0: int, w1: int, dy0: int, dy1: int,
         while tb < T { a0 = a0 + t_get(dy0, tb * Cout + cb); a1 = a1 + t_get(dy1, tb * Cout + cb); tb = tb + 1 }
         t_set(db0_out, cb, a0); t_set(db1_out, cb, a1); cb = cb + 1
     }
-    t_free(xcolT); t_free(dwA); t_free(dwB); t_free(dW_flat_all)
     t_free(dxA); t_free(dxB); t_free(dXcol_all)
 }
 

@@ -925,6 +925,175 @@ fn emit_runtime_cuda_c() -> str {
             "}\n" +
             "\n" +
             "/* ════════════════════════════════════════════════════════════════════\n" +
+            " * _hx_cuda_farr_matmul_batched_bt_gpu — LEVER (3), batched transB.\n" +
+            " *\n" +
+            " * Per slice g, row-major C_g[M,N] = A_g[M,K] @ B_g^T with B_g STORED\n" +
+            " * row-major [N,K]. cuBLAS NATIVE transB (OP_T) per slice reads the\n" +
+            " * weight w[Cout,Kdim] in place — the BATCHED forward conv2 host\n" +
+            " * Wt-transpose (b_all repack, the dominant 65% term) is DROPPED.\n" +
+            " * a_stride_blocks ∈ {0,1}: 0 = BROADCAST (strideA=0, every problem\n" +
+            " * reads the SAME A block = the shared xcol — collapses the a_all\n" +
+            " * duplication); 1 = per-problem (strideA=M·K).\n" +
+            " *\n" +
+            " * Mapping (cuBLAS col-major; row-major buffers read transposed; same\n" +
+            " * row→col swap as the single _bt). Per slice:\n" +
+            " *   B_g row-major [N,K] → col-major [K,N], strideB(cuBLAS-A) = N·K\n" +
+            " *   A_g row-major [M,K] → col-major [K,M], strideA(cuBLAS-B) = as·M·K\n" +
+            " *   want col-major C'_g[N,M] (= row-major C_g[M,N]) = B_g^T·A_g\n" +
+            " *   Dgemm(OP_T, OP_N, m=N, n=M, k=K, B_dev,ldb=K,strideB=N·K,\n" +
+            " *         A_dev,lda=K,strideA=as·M·K, C_dev,ldc=N,strideC=M·N, batch)\n" +
+            " *   ⇒ C'_g[n,m]=Σ_k B_g[n,k]·A_g[m,k]=(A_g·B_g^T)[m,n]. ✓\n" +
+            " * Bit-eq to `batch` serial _bt (cuBLAS same per-problem accum order).\n" +
+            " * Returns 0 ok / -1 err. */\n" +
+            "int _hx_cuda_farr_matmul_batched_bt_gpu(int64_t a_id, int64_t M, int64_t K,\n" +
+            "                                        int64_t b_id, int64_t N,\n" +
+            "                                        int64_t batch, int64_t as_blocks,\n" +
+            "                                        int64_t c_id) {\n" +
+            "    if (_ensure_cublas() != 0) return -1;\n" +
+            "    if (a_id < 0 || b_id < 0 || c_id < 0) return -1;\n" +
+            "    if (M <= 0 || K <= 0 || N <= 0 || batch <= 0) return -1;\n" +
+            "    if (as_blocks != 0 && as_blocks != 1) return -1;\n" +
+            "    if (_h2d(a_id) != 0) return -1;\n" +
+            "    if (_h2d(b_id) != 0) return -1;\n" +
+            "    if (_ensure_slot_cap(c_id) != 0) return -1;\n" +
+            "    HexaFarrEntry* ce = &_hx_farr_table[c_id];\n" +
+            "    _CudaFarrSlot*  cs = &g_slots[c_id];\n" +
+            "    if (!ce->buf || ce->len < batch * M * N) {\n" +
+            "        fprintf(stderr, \"[cuda] matmul_batched_bt: C host len %lld < batch*M*N %lld\\n\",\n" +
+            "                (long long)ce->len, (long long)(batch*M*N));\n" +
+            "        return -1;\n" +
+            "    }\n" +
+            "    if (!cs->d_buf || cs->len != ce->len) {\n" +
+            "        if (cs->d_buf) cudaFree(cs->d_buf);\n" +
+            "        cudaError_t er = cudaMalloc((void**)&cs->d_buf,\n" +
+            "                                    (size_t)ce->len * sizeof(double));\n" +
+            "        if (er != cudaSuccess) {\n" +
+            "            fprintf(stderr, \"[cuda] cudaMalloc C_batched_bt(%lld) failed: %s\\n\",\n" +
+            "                    (long long)ce->len, cudaGetErrorString(er));\n" +
+            "            cs->d_buf = NULL; cs->len = 0;\n" +
+            "            return -1;\n" +
+            "        }\n" +
+            "        cs->len = ce->len;\n" +
+            "    }\n" +
+            "    double* A_dev = g_slots[a_id].d_buf;\n" +
+            "    double* B_dev = g_slots[b_id].d_buf;\n" +
+            "    double* C_dev = cs->d_buf;\n" +
+            "    const double alpha = 1.0;\n" +
+            "    const double beta  = 0.0;\n" +
+            "    long long strideA = (as_blocks == 0) ? 0LL : (long long)(M * K);\n" +
+            "    cublasStatus_t st = cublasDgemmStridedBatched(\n" +
+            "        g_cublas, CUBLAS_OP_T, CUBLAS_OP_N,\n" +
+            "        (int)N, (int)M, (int)K,\n" +
+            "        &alpha,\n" +
+            "        B_dev, (int)K, (long long)(N * K),\n" +
+            "        A_dev, (int)K, strideA,\n" +
+            "        &beta,\n" +
+            "        C_dev, (int)N, (long long)(M * N),\n" +
+            "        (int)batch);\n" +
+            "    if (st != CUBLAS_STATUS_SUCCESS) {\n" +
+            "        fprintf(stderr, \"[cuda] cublasDgemmStridedBatched(bt) failed: %d\\n\", (int)st);\n" +
+            "        return -1;\n" +
+            "    }\n" +
+            "    cudaError_t er = cudaMemcpy(ce->buf, C_dev,\n" +
+            "                                (size_t)(batch * M * N) * sizeof(double),\n" +
+            "                                cudaMemcpyDeviceToHost);\n" +
+            "    if (er != cudaSuccess) {\n" +
+            "        fprintf(stderr, \"[cuda] cudaMemcpy C_batched_bt D2H failed: %s\\n\",\n" +
+            "                cudaGetErrorString(er));\n" +
+            "        return -1;\n" +
+            "    }\n" +
+            "    ce->d_buf      = (void*)C_dev;\n" +
+            "    ce->loc        = FARR_MIRRORED;\n" +
+            "    ce->dirty_host = 0;\n" +
+            "    ce->dirty_dev  = 0;\n" +
+            "    return 0;\n" +
+            "}\n" +
+            "\n" +
+            "/* ════════════════════════════════════════════════════════════════════\n" +
+            " * _hx_cuda_farr_matmul_batched_atb_gpu — LEVER (3), batched transA.\n" +
+            " *\n" +
+            " * Per slice g, row-major C_g[M,N] = A_g^T @ B_g with A_g STORED\n" +
+            " * row-major [K,M]. This is the BATCHED backward dW GEMM\n" +
+            " * dW_g[Cout,Kdim] = dy_g[T,Cout]^T @ xcol[T,Kdim] (A_g=dy_g, K=T,\n" +
+            " * M=Cout, N=Kdim) fed so the result lands ALREADY [Cout,Kdim] —\n" +
+            " * DROPPING the batched dW_flat unpack. b_stride_blocks ∈ {0,1}:\n" +
+            " * 0 = BROADCAST the shared xcol on B (strideB=0 — collapses the dwA\n" +
+            " * xcolT duplication); 1 = per-problem (strideB=K·N). A (dy) is always\n" +
+            " * per-problem (strideA=K·M).\n" +
+            " *\n" +
+            " * Mapping (same row→col swap as the single _atb). Per slice:\n" +
+            " *   A_g row-major [K,M] → col-major [M,K], strideA(cuBLAS-B) = K·M\n" +
+            " *   B_g row-major [K,N] → col-major [N,K], strideB(cuBLAS-A) = bs·K·N\n" +
+            " *   want col-major C'_g[N,M] (= row-major C_g[M,N]) = B_g·A_g^T\n" +
+            " *   Dgemm(OP_N, OP_T, m=N, n=M, k=K, B_dev,ldb=N,strideB=bs·K·N,\n" +
+            " *         A_dev,lda=M,strideA=K·M, C_dev,ldc=N,strideC=M·N, batch)\n" +
+            " *   ⇒ C'_g[n,m]=Σ_k B_g[k,n]·A_g[k,m]=(A_g^T·B_g)[m,n]. ✓\n" +
+            " * Returns 0 ok / -1 err. */\n" +
+            "int _hx_cuda_farr_matmul_batched_atb_gpu(int64_t a_id, int64_t M, int64_t K,\n" +
+            "                                         int64_t b_id, int64_t N,\n" +
+            "                                         int64_t batch, int64_t bs_blocks,\n" +
+            "                                         int64_t c_id) {\n" +
+            "    if (_ensure_cublas() != 0) return -1;\n" +
+            "    if (a_id < 0 || b_id < 0 || c_id < 0) return -1;\n" +
+            "    if (M <= 0 || K <= 0 || N <= 0 || batch <= 0) return -1;\n" +
+            "    if (bs_blocks != 0 && bs_blocks != 1) return -1;\n" +
+            "    if (_h2d(a_id) != 0) return -1;\n" +
+            "    if (_h2d(b_id) != 0) return -1;\n" +
+            "    if (_ensure_slot_cap(c_id) != 0) return -1;\n" +
+            "    HexaFarrEntry* ce = &_hx_farr_table[c_id];\n" +
+            "    _CudaFarrSlot*  cs = &g_slots[c_id];\n" +
+            "    if (!ce->buf || ce->len < batch * M * N) {\n" +
+            "        fprintf(stderr, \"[cuda] matmul_batched_atb: C host len %lld < batch*M*N %lld\\n\",\n" +
+            "                (long long)ce->len, (long long)(batch*M*N));\n" +
+            "        return -1;\n" +
+            "    }\n" +
+            "    if (!cs->d_buf || cs->len != ce->len) {\n" +
+            "        if (cs->d_buf) cudaFree(cs->d_buf);\n" +
+            "        cudaError_t er = cudaMalloc((void**)&cs->d_buf,\n" +
+            "                                    (size_t)ce->len * sizeof(double));\n" +
+            "        if (er != cudaSuccess) {\n" +
+            "            fprintf(stderr, \"[cuda] cudaMalloc C_batched_atb(%lld) failed: %s\\n\",\n" +
+            "                    (long long)ce->len, cudaGetErrorString(er));\n" +
+            "            cs->d_buf = NULL; cs->len = 0;\n" +
+            "            return -1;\n" +
+            "        }\n" +
+            "        cs->len = ce->len;\n" +
+            "    }\n" +
+            "    double* A_dev = g_slots[a_id].d_buf;\n" +
+            "    double* B_dev = g_slots[b_id].d_buf;\n" +
+            "    double* C_dev = cs->d_buf;\n" +
+            "    const double alpha = 1.0;\n" +
+            "    const double beta  = 0.0;\n" +
+            "    long long strideB = (bs_blocks == 0) ? 0LL : (long long)(K * N);\n" +
+            "    cublasStatus_t st = cublasDgemmStridedBatched(\n" +
+            "        g_cublas, CUBLAS_OP_N, CUBLAS_OP_T,\n" +
+            "        (int)N, (int)M, (int)K,\n" +
+            "        &alpha,\n" +
+            "        B_dev, (int)N, strideB,\n" +
+            "        A_dev, (int)M, (long long)(K * M),\n" +
+            "        &beta,\n" +
+            "        C_dev, (int)N, (long long)(M * N),\n" +
+            "        (int)batch);\n" +
+            "    if (st != CUBLAS_STATUS_SUCCESS) {\n" +
+            "        fprintf(stderr, \"[cuda] cublasDgemmStridedBatched(atb) failed: %d\\n\", (int)st);\n" +
+            "        return -1;\n" +
+            "    }\n" +
+            "    cudaError_t er = cudaMemcpy(ce->buf, C_dev,\n" +
+            "                                (size_t)(batch * M * N) * sizeof(double),\n" +
+            "                                cudaMemcpyDeviceToHost);\n" +
+            "    if (er != cudaSuccess) {\n" +
+            "        fprintf(stderr, \"[cuda] cudaMemcpy C_batched_atb D2H failed: %s\\n\",\n" +
+            "                cudaGetErrorString(er));\n" +
+            "        return -1;\n" +
+            "    }\n" +
+            "    ce->d_buf      = (void*)C_dev;\n" +
+            "    ce->loc        = FARR_MIRRORED;\n" +
+            "    ce->dirty_host = 0;\n" +
+            "    ce->dirty_dev  = 0;\n" +
+            "    return 0;\n" +
+            "}\n" +
+            "\n" +
+            "/* ════════════════════════════════════════════════════════════════════\n" +
             " * LEVER (a) — device-resident im2col / col2im (forge device-feed).\n" +
             " *\n" +
             " * The dominant Lane-G util peg is the HOST backward feed: the trainer\n" +

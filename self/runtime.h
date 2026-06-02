@@ -1066,6 +1066,54 @@ HexaVal hexa_forge_dispatch_matmul_atb(HexaVal a_v, HexaVal m_v, HexaVal k_v,
 HexaVal forge_dispatch_matmul_atb(HexaVal a_v, HexaVal m_v, HexaVal k_v,
                                   HexaVal b_v, HexaVal n_v, HexaVal c_v);      /* runtime.c — lever 2 seam */
 
+/* ── LEVER (3): BATCHED transpose-aware GEMM-feed — drop the DOMINANT
+ *    65% batched-expert host repack (the fire-confirmed unblock) ─────
+ * lever-2 patched only the UN-batched conv (profile 31.2%); the
+ * production trainer's dominant term is the BATCHED
+ * conv2_*_via_forge_batched host repack (b_all Wt-transpose + dW_flat
+ * unpack + a_all/dwA xcol duplication). lever-3 feeds it through ONE
+ * strided-batched op-flag GEMM with a strideA=0 broadcast for the
+ * shared xcol.
+ *
+ * `forge_dispatch_matmul_batched_bt(a_all, M, K, b_all, N, batch,
+ *  a_stride_blocks, c_all)` (8-arg) — per slice g, row-major
+ * C_g[M,N] = A_g[M,K] @ B_g^T with B_g STORED row-major [N,K] (B^T is
+ * K×N). cuBLAS NATIVE transB (OP_T) per slice → the host Wt-transpose
+ * is DROPPED. `a_stride_blocks` ∈ {0,1}: 0 = BROADCAST (strideA=0, every
+ * problem reads the SAME a_all[0..M·K) — collapses the fwd a_all xcol
+ * duplication); 1 = per-problem (strideA=M·K). B stride = N·K, C stride
+ * = M·N. C_all CALLER-ALLOCATED (len batch·M·N). Returns hexa_int(0) ok
+ * / hexa_int(-1) err. CUDA → _hx_cuda_farr_matmul_batched_bt_gpu
+ * (cublasDgemmStridedBatched OP_T,OP_N); no-CUDA → byte-eq host loop
+ * (per-slice transpose-B then hexa_farr_matmul).
+ *
+ * `forge_dispatch_matmul_batched_atb(a_all, M, K, b, N, batch,
+ *  b_stride_blocks, c_all)` (8-arg) — per slice g, row-major
+ * C_g[M,N] = A_g^T @ B_g with A_g STORED row-major [K,M] (the dW GEMM:
+ * A_g=dy_g[T,Cout] so K=T,M=Cout; result lands ALREADY [Cout,Kdim],
+ * DROPPING the dW_flat unpack). `b_stride_blocks` ∈ {0,1}: 0 = BROADCAST
+ * the shared xcol on the B operand (strideB=0 — collapses the dwA xcolT
+ * duplication); 1 = per-problem. A (dy) stride = K·M always. CUDA →
+ * _hx_cuda_farr_matmul_batched_atb_gpu (OP_N,OP_T); no-CUDA → byte-eq
+ * host loop. Body (SSOT): self/runtime.c + self/cuda/runtime_cuda.c
+ * (emit: runtime_cuda_emit.hexa). */
+HexaVal hexa_forge_dispatch_matmul_batched_bt(HexaVal a_v, HexaVal m_v, HexaVal k_v,
+                                              HexaVal b_v, HexaVal n_v,
+                                              HexaVal batch_v, HexaVal as_v,
+                                              HexaVal c_v); /* runtime.c — lever 3 */
+HexaVal forge_dispatch_matmul_batched_bt(HexaVal a_v, HexaVal m_v, HexaVal k_v,
+                                         HexaVal b_v, HexaVal n_v,
+                                         HexaVal batch_v, HexaVal as_v,
+                                         HexaVal c_v);      /* runtime.c — lever 3 seam */
+HexaVal hexa_forge_dispatch_matmul_batched_atb(HexaVal a_v, HexaVal m_v, HexaVal k_v,
+                                               HexaVal b_v, HexaVal n_v,
+                                               HexaVal batch_v, HexaVal bs_v,
+                                               HexaVal c_v); /* runtime.c — lever 3 */
+HexaVal forge_dispatch_matmul_batched_atb(HexaVal a_v, HexaVal m_v, HexaVal k_v,
+                                          HexaVal b_v, HexaVal n_v,
+                                          HexaVal batch_v, HexaVal bs_v,
+                                          HexaVal c_v);      /* runtime.c — lever 3 seam */
+
 /* ── LEVER (a): device-resident im2col/col2im + on-device AdamW ─────
  * The dominant Lane-G util peg is the HOST backward feed: each step the
  * trainer rebuilds x_col on the host (host-dirty → re-H2D every GEMM)
