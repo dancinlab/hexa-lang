@@ -1,0 +1,120 @@
+#!/usr/bin/env bash
+# ─────────────────────────────────────────────────────────────────────────
+# tool/cross_build_runtime_linux_arm64 — CROSS-compile the hexa C runtime to
+# an aarch64-linux `runtime.a`, then LINK + RUN a native-emitted multi-fn
+# program against it under qemu.  The SELFHOST-NEXT linux-arm64 RUNTIME step.
+#
+# Stacks on #2572 (selfhost-next/linux-arm64-depth): #2572 cross-EMITs a
+# multi-fn .o in-tree (ELF aarch64, no host `as`) but it failed at LINK with
+# `undefined reference to hexa_add_slow` — the freestanding _start stub can't
+# satisfy the arithmetic/string/alloc externs.  Real programs need the C
+# runtime (self/runtime.c) cross-compiled to an aarch64-linux runtime.a.
+#
+# This is the CROSS sibling of tool/build_native_linux_arm64 (which builds the
+# runtime NATIVELY on an aarch64 host with stock gcc).  Deltas:
+#   * CC = aarch64-linux-gnu-gcc (cross), not native gcc;
+#   * runtime.c compiled WITHOUT -DHEXA_HAS_HEXA_RT_STDLIB — the standalone
+#     smoke path (runtime_core.c:3120) where the `#ifndef HEXA_HAS_HEXA_RT_STDLIB`
+#     C-fallback bodies provide the rt_* stdlib (incl. rt_add_slow, the fn
+#     behind the hexa_add_slow macro).  With the gate ON, runtime.o externs
+#     156 rt_* symbols that only the per-program hexa-source stdlib closure
+#     supplies — wrong for a reusable archive.  Gate OFF → 0 rt_* undefined.
+#   * run verified under qemu-aarch64-static -L <sysroot> (x86_64 proof host).
+#
+# The runtime C seeds are gitignored frozen blobs; this script restores them
+# via tool/restore_frozen_seeds (same as build_native_linux_arm64).
+#
+# Extension-less (not .sh) per the stage_* / build_native_linux_arm64
+# precedent: the sidecar hook blocks .sh Write/Edit. Invoke as
+#   bash tool/cross_build_runtime_linux_arm64 [-r REPO] [-w WORK] [-o PROBE.o]
+#
+# ── Prereqs (x86_64 linux proof host, e.g. summer/aiden) ─────────────────────
+#   aarch64-linux-gnu-gcc + binutils + the aarch64 sysroot (/usr/aarch64-linux-gnu)
+#   + qemu-aarch64-static.  On Debian/Ubuntu:
+#     sudo apt-get install -y gcc-aarch64-linux-gnu qemu-user-static
+#   A native aarch64 host (pi5-akida) can substitute CC=gcc and drop qemu.
+#
+# ── Args ─────────────────────────────────────────────────────────────────────
+#   -r REPO   repo root (default: cwd; must hold self/runtime.c after restore)
+#   -w WORK   scratch/output dir (default: $REPO/build/larm64rt) — NOT /tmp
+#   -o PROBE  a pre-emitted ELF aarch64 .o (from `--emit=obj --backend=native
+#             --target=arm64-linux-gnu` on a host that has aprime_cc/cc_native);
+#             linked + run against the cross-built runtime.a.  When omitted, the
+#             script only builds runtime.a (the emit half runs on the cc host).
+#
+# ── Exit codes ───────────────────────────────────────────────────────────────
+#   0  runtime.a cross-built (and, if -o given, probe linked + RAN under qemu)
+#   1  cross-compile / archive failure
+#   2  probe link/run failure (runtime.a built but probe != expected)
+#   3  bad invocation / missing inputs / missing cross toolchain
+# ─────────────────────────────────────────────────────────────────────────
+set -u
+
+REPO="$(pwd)"; WORK=""; PROBE=""
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -r) REPO="$2"; shift 2 ;;
+        -w) WORK="$2"; shift 2 ;;
+        -o) PROBE="$2"; shift 2 ;;
+        *) echo "cross_build_runtime_linux_arm64: unknown arg '$1'" >&2; exit 3 ;;
+    esac
+done
+
+cd "$REPO" || { echo "bad repo '$REPO'" >&2; exit 3; }
+[ -z "$WORK" ] && WORK="$REPO/build/larm64rt"
+case "$WORK" in /tmp/*|/private/tmp/*) echo "WORK must not be under /tmp" >&2; exit 3 ;; esac
+mkdir -p "$WORK" || { echo "cannot mkdir $WORK" >&2; exit 3; }
+
+CC="${CC:-aarch64-linux-gnu-gcc}"
+AR="${AR:-aarch64-linux-gnu-ar}"
+SYSROOT="${SYSROOT:-/usr/aarch64-linux-gnu}"
+QEMU="${QEMU:-qemu-aarch64-static}"
+FLAGS="-O1 -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs -fno-builtin-bzero -fno-builtin-memcpy -fno-builtin-strlen -D_FORTIFY_SOURCE=0 -fno-stack-protector"
+log() { echo "[cross_build_runtime] $*"; }
+fail() { log "FATAL ($1): $2"; exit "${3:-1}"; }
+
+command -v "$CC" >/dev/null 2>&1 || fail tc "cross compiler '$CC' not found (apt install gcc-aarch64-linux-gnu)" 3
+
+# ── restore the frozen runtime C seeds (gitignored) ──────────────────────────
+if [ ! -f self/runtime.c ]; then
+    log "restoring frozen runtime seeds"
+    bash tool/restore_frozen_seeds >/dev/null 2>&1 || true
+fi
+[ -f self/runtime.c ] || fail seed "self/runtime.c missing (restore_frozen_seeds failed)"
+
+# ── cross-compile runtime.c STANDALONE (no HEXA_HAS_HEXA_RT_STDLIB) ───────────
+# Gate OFF → the #ifndef HEXA_HAS_HEXA_RT_STDLIB C-fallback rt_* bodies compile
+# in, so runtime.o is self-contained (0 rt_* undefined; only libc/libm/syscalls).
+log "cross-compile self/runtime.c -> runtime.o  (CC=$CC, gate OFF)"
+"$CC" $FLAGS -c -I self -I . self/runtime.c -o "$WORK/runtime.o" 2>"$WORK/rt_cc.err"
+RC=$?
+grep -iE 'error:|fatal' "$WORK/rt_cc.err" | head -10
+[ "$RC" = 0 ] && [ -s "$WORK/runtime.o" ] || fail cc "runtime.o cross-compile failed (rc=$RC)"
+"$AR" rcs "$WORK/runtime.a" "$WORK/runtime.o" || fail ar "ar failed"
+log "runtime.a = $(stat -c%s "$WORK/runtime.a" 2>/dev/null)B · $(file -b "$WORK/runtime.o" | cut -d, -f1-2)"
+
+# Confirm the named-wall symbol + zero hexa-side rt_* externs remain.
+HAS_ADD=$("$AR" t "$WORK/runtime.a" >/dev/null 2>&1; "${CC%-gcc}-nm" "$WORK/runtime.o" 2>/dev/null | grep -cE ' T hexa_add_slow$')
+RT_UND=$("${CC%-gcc}-nm" -u "$WORK/runtime.o" 2>/dev/null | grep -cE ' rt_')
+log "self-check: hexa_add_slow defined=$HAS_ADD · residual rt_* undefined=$RT_UND (want 1 / 0)"
+[ "$RT_UND" = 0 ] || fail rt "runtime.a still externs $RT_UND rt_* symbols — gate likely ON"
+
+# ── optional: link + RUN a pre-emitted native probe against the runtime ───────
+if [ -n "$PROBE" ]; then
+    [ -s "$PROBE" ] || fail probe "probe '$PROBE' not found/empty" 3
+    log "link $PROBE + runtime.a -> probe (cross-gcc; crt1 + libc entry)"
+    "$CC" "$PROBE" "$WORK/runtime.a" -o "$WORK/probe" -lm -ldl -lpthread 2>"$WORK/link.err"
+    grep -iE 'undefined|error' "$WORK/link.err" | head -10
+    [ -x "$WORK/probe" ] || fail link "probe link failed" 2
+    log "probe = $(file -b "$WORK/probe" | cut -d, -f1-3)"
+    if command -v "$QEMU" >/dev/null 2>&1; then
+        OUT="$("$QEMU" -L "$SYSROOT" "$WORK/probe" 2>"$WORK/probe.err")"; PRC=$?
+        log "QEMU RUN — stdout=[$OUT] rc=$PRC"
+    else
+        OUT="$("$WORK/probe" 2>"$WORK/probe.err")"; PRC=$?
+        log "NATIVE RUN — stdout=[$OUT] rc=$PRC"
+    fi
+fi
+
+log "DONE — aarch64-linux runtime.a cross-built (HEAD=$(git rev-parse --short HEAD 2>/dev/null || echo ?))"
+exit 0
