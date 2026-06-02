@@ -1,0 +1,177 @@
+// @ci_gate — deterministic · pure (in-memory RollupReports) · the campaign
+//   cross-deck regression g5 gate.
+//
+// qforge_telemetry_rollup_regress_selftest.hexa — the g5 gate for
+//   qforge_telemetry_rollup_regress (stdlib/qforge/telemetry_rollup_regress.hexa),
+//   the rollup ⨯ regress tier: JOIN a BASELINE campaign rollup and a CURRENT
+//   campaign rollup per STAGE CLASS and flag which class regressed campaign-wide
+//   run-over-run — the question neither per-deck regress (one deck) nor a single
+//   rollup (one snapshot) can answer.
+//
+// The module-SPECIFIC behavior under test (the rollup aggregation + the report
+//   parse are gated by telemetry_rollup's / telemetry_report's own selftests —
+//   both IMPORT-ONLY/d4, 0-diff): the per-STAGE-CLASS JOIN, the threshold
+//   classification (REGRESSED/IMPROVED/SAME), the NEW/DROPPED structural cases,
+//   the rss-null skip (d6 — never a fabricated Δrss), the zero-baseline-wall
+//   guard (no divide-by-zero → NEW), and the worst-first ranking.
+//
+// Fixtures are built by feeding real JSONL through qforge_telemetry_rollup (the
+//   public ingest path) so the StageClassRow rollup matches production exactly —
+//   no hand-built structs. Two campaign snapshots over the SAME deck names:
+//     baseline:  scf=100  ph=200  relax=50   (lambda DROPPED — only baseline)
+//     current:   scf=130  ph=210  relax=50   newx=10 (NEW — only current)
+//   With threshold=20%: scf +30% → REGRESSED · ph +5% → SAME · relax 0% → SAME ·
+//   lambda → DROPPED · newx → NEW.
+//
+// 검증 케이스 (no pod, no network, no file IO beyond the JSONL fixtures in-memory):
+//  🔵 (A) a class whose campaign wall grew > threshold → REGRESSED (scf +30%).
+//  🔵 (B) a class within ±threshold → SAME, NOT flagged (ph +5%, relax 0%).
+//  🔵 (C) a class present only in current → NEW (no finite ratio); only in
+//         baseline → DROPPED. Counts match.
+//  🔵 (D) ranking: the worst regression ranks FIRST; NEW/DROPPED sink to tail.
+//  🔵 (E) rss-null skip (d6): a class with rss on only ONE side → has_rss=false,
+//         Δrss renders `null`, the wall-Δ is still computed (no fabrication).
+//  🔵 (F) zero-baseline-wall guard: a class with base wall 0 → NEW, no /0.
+//  🔵 (G) IMPROVED: a class whose campaign wall dropped > threshold → IMPROVED.
+//
+// Run (point HEXA_STDLIB_ROOT at THIS worktree's stdlib):
+//   HEXA_STDLIB_ROOT="$PWD/stdlib" hexa run --no-sentinel \
+//     stdlib/qforge/qforge_telemetry_rollup_regress_selftest.hexa
+// PASS: "qforge_telemetry_rollup_regress_selftest PASS".
+use "stdlib/qforge/telemetry_rollup_regress"
+use "stdlib/qforge/telemetry_rollup"
+
+fn _ck(name: str, ok: bool) -> int {
+    if ok { println("PASS " + name) ; return 0 }
+    println("FAIL " + name)
+    return 1
+}
+
+// build a 1-stage `done` telemetry line for a given stage label + wall + rss.
+// rss<0 → the literal null (d6 — the emitter omits rss when ps was unavailable).
+fn _line(stage: str, wall: int, rss: int) -> str {
+    let mut rss_str = "null"
+    if rss >= 0 { rss_str = to_string(rss) }
+    let start = "{\"ts\":1,\"stage\":\"" + stage
+        + "\",\"event\":\"start\",\"wall_s\":0,\"rss_kb\":null,\"exit\":null}\n"
+    let done = "{\"ts\":2,\"stage\":\"" + stage + "\",\"event\":\"done\",\"wall_s\":"
+        + to_string(wall) + ",\"rss_kb\":" + rss_str + ",\"exit\":0}\n"
+    return start + done
+}
+
+// find a row by stage class in a CampaignRegressReport, or a sentinel.
+fn _row(rep: CampaignRegressReport, cls: str) -> CampaignRegressRow {
+    let mut i = 0
+    while i < len(rep.rows) {
+        if rep.rows[i].stage_class == cls { return rep.rows[i] }
+        i = i + 1
+    }
+    return CampaignRegressRow { stage_class: "", kind: "", base_wall: -1, cur_wall: -1,
+        dwall_pct: 0, has_dwall: false, base_rss: -1, cur_rss: -1, has_rss: false, drss_pct: 0 }
+}
+
+fn main() {
+    let mut fails = 0
+
+    // ── BASELINE campaign snapshot: 2 decks, real JSONL through the rollup ──
+    //   deckA: scf=60  ph:q1=120  relax=50  lambda=30   (rss measured)
+    //   deckB: scf=40  ph:q1=80                          (rss measured)
+    //   class totals: scf=100  ph=200  relax=50  lambda=30
+    let baseA = _line("scf", 60, 1000) + _line("ph:q1", 120, 2000)
+        + _line("relax", 50, 500) + _line("lambda", 30, 300)
+    let baseB = _line("scf", 40, 800) + _line("ph:q1", 80, 1500)
+    let base_pairs: [(str, str)] = [("LaH10", baseA), ("CaH6", baseB)]
+    let base = qforge_telemetry_rollup(base_pairs)
+
+    // ── CURRENT campaign snapshot: scf REGRESSED, ph SAME, relax SAME, lambda
+    //    DROPPED, newx NEW. rss on scf only on one side later (case E uses a
+    //    dedicated pair) — here all rss present for the wall-Δ cases.
+    //   deckA: scf=78  ph:q1=126  relax=50  newx=10
+    //   deckB: scf=52  ph:q1=84
+    //   class totals: scf=130 (+30%)  ph=210 (+5%)  relax=50 (0%)  newx=10 (NEW)
+    let curA = _line("scf", 78, 1100) + _line("ph:q1", 126, 2000)
+        + _line("relax", 50, 500) + _line("newx", 10, 100)
+    let curB = _line("scf", 52, 900) + _line("ph:q1", 84, 1500)
+    let cur_pairs: [(str, str)] = [("LaH10", curA), ("CaH6", curB)]
+    let cur = qforge_telemetry_rollup(cur_pairs)
+
+    let rep = qforge_telemetry_rollup_regress(base, cur, 20)
+
+    // sanity: the rollups ingested what we expect (grand walls).
+    fails = fails + _ck("(0) baseline grand wall = 100+200+50+30 = 380",
+        base.grand_wall == 380)
+    fails = fails + _ck("(0) current grand wall = 130+210+50+10 = 400",
+        cur.grand_wall == 400)
+
+    // (A) scf grew 100→130 = +30% > 20% → REGRESSED.
+    let scf = _row(rep, "scf")
+    fails = fails + _ck("(A) scf REGRESSED (+30% > threshold 20%)",
+        scf.kind == "REGRESSED" && scf.has_dwall && scf.dwall_pct == 30
+            && scf.base_wall == 100 && scf.cur_wall == 130)
+
+    // (B) ph grew 200→210 = +5% ≤ 20% → SAME; relax 50→50 = 0% → SAME.
+    let ph = _row(rep, "ph")
+    fails = fails + _ck("(B) ph SAME (+5% ≤ threshold)",
+        ph.kind == "SAME" && ph.dwall_pct == 5)
+    let relax = _row(rep, "relax")
+    fails = fails + _ck("(B) relax SAME (0%)", relax.kind == "SAME" && relax.dwall_pct == 0)
+
+    // (C) lambda only in baseline → DROPPED; newx only in current → NEW.
+    let lam = _row(rep, "lambda")
+    fails = fails + _ck("(C) lambda DROPPED (baseline-only)",
+        lam.kind == "DROPPED" && !lam.has_dwall && lam.base_wall == 30 && lam.cur_wall == 0)
+    let newx = _row(rep, "newx")
+    fails = fails + _ck("(C) newx NEW (current-only)",
+        newx.kind == "NEW" && !newx.has_dwall && newx.base_wall == 0 && newx.cur_wall == 10)
+    fails = fails + _ck("(C) counts: regressed=1 new=1 dropped=1",
+        rep.n_regressed == 1 && rep.n_new == 1 && rep.n_dropped == 1)
+
+    // (D) ranking: worst (scf +30%) FIRST; NEW/DROPPED (no finite Δ) at the tail.
+    fails = fails + _ck("(D) worst regression (scf) ranks first",
+        len(rep.rows) >= 1 && rep.rows[0].stage_class == "scf")
+    let n = len(rep.rows)
+    fails = fails + _ck("(D) NEW/DROPPED sink to the tail (last two rows no finite Δ)",
+        n >= 2 && !rep.rows[n - 1].has_dwall && !rep.rows[n - 2].has_dwall)
+
+    // (E) rss-null skip (d6): a SEPARATE pair where current scf carries NO rss.
+    //    base scf rss=1000, cur scf rss=null → has_rss=false, Δrss `null`, but
+    //    the wall-Δ is STILL computed (no fabrication, no dropped row).
+    let eb_pairs: [(str, str)] = [("X", _line("scf", 100, 1000))]
+    let ec_pairs: [(str, str)] = [("X", _line("scf", 130, -1))]   // rss null
+    let erep = qforge_telemetry_rollup_regress(
+        qforge_telemetry_rollup(eb_pairs), qforge_telemetry_rollup(ec_pairs), 20)
+    let escf = _row(erep, "scf")
+    fails = fails + _ck("(E) rss-null one side → has_rss=false, wall-Δ still computed",
+        escf.kind == "REGRESSED" && escf.has_dwall && escf.dwall_pct == 30 && !escf.has_rss)
+    // the render shows the literal `null` for Δrss, never a fabricated 0.
+    let etxt = qforge_telemetry_rollup_regress_render(erep)
+    fails = fails + _ck("(E) render carries the literal `null` Δrss (d6 no fabrication)",
+        etxt.contains("null"))
+
+    // (F) zero-baseline-wall guard: baseline class wall 0 → NEW, no divide-by-0.
+    //    A `done` line with wall_s=0 rolls up to a 0-wall class → guarded to NEW.
+    let fb_pairs: [(str, str)] = [("X", _line("scf", 0, -1))]
+    let fc_pairs: [(str, str)] = [("X", _line("scf", 50, -1))]
+    let frep = qforge_telemetry_rollup_regress(
+        qforge_telemetry_rollup(fb_pairs), qforge_telemetry_rollup(fc_pairs), 20)
+    let fscf = _row(frep, "scf")
+    fails = fails + _ck("(F) zero-baseline-wall class → NEW (no divide-by-zero)",
+        fscf.kind == "NEW" && !fscf.has_dwall)
+
+    // (G) IMPROVED: a class whose campaign wall dropped > threshold.
+    //    base scf=100, cur scf=70 = -30% < -20% → IMPROVED.
+    let gb_pairs: [(str, str)] = [("X", _line("scf", 100, -1))]
+    let gc_pairs: [(str, str)] = [("X", _line("scf", 70, -1))]
+    let grep = qforge_telemetry_rollup_regress(
+        qforge_telemetry_rollup(gb_pairs), qforge_telemetry_rollup(gc_pairs), 20)
+    let gscf = _row(grep, "scf")
+    fails = fails + _ck("(G) scf IMPROVED (-30% < -threshold)",
+        gscf.kind == "IMPROVED" && gscf.dwall_pct == -30 && grep.n_improved == 1)
+
+    if fails == 0 {
+        println("qforge_telemetry_rollup_regress_selftest PASS")
+        return
+    }
+    println("qforge_telemetry_rollup_regress_selftest FAIL (" + to_string(fails) + ")")
+    exit(1)
+}
