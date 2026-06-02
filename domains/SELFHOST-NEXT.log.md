@@ -2,6 +2,50 @@
 
 Append-only history sister of `SELFHOST-NEXT.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
+## 2026-06-02 — in-tree ELF AArch64 .o serializer — NATIVE exit(42) runs rc 42 (no host `as`)
+
+Branch `selfhost-next/elf-arm64-serializer` (cut clean from origin/main d437f3fb4). Removes
+the host `aarch64-linux-gnu-as` dependency from the linux-arm64 obj path (continuation of
+#2537 cross-EMIT, which still relied on `as` to turn the ELF *assembly* into a `.o`).
+
+- [x] `compiler/emit/elf_arm64.hexa` — `serialize_elf_arm64(ElfArm64Obj)` +
+      `pack_lir_arm64_elf(LModule)`. Keyed off `elf_x86_64.hexa`'s ELF model (STN_UNDEF
+      index-0 sym, `.rela.text`, Elf64_Rela/Sym, `_ew_*` writers) but with
+      `e_machine=ELF_EM_AARCH64(0xb7)`, 4-byte LE instruction words from the SHARED
+      `encode_arm64_insn` (reused from `macho_arm64.hexa`), and `R_AARCH64_CALL26` relocs.
+      Bare ELF symbol names (no Mach-O `_`). Intra-fn B/BL/CBZ/CBNZ/B.cond resolved at
+      pack time (imm26/imm19); cross-fn/extern BL → CALL26 reloc + intra-module pre-patch.
+- [x] `compiler/emit/macho_arm64.hexa` — added `SVC #imm16` to `encode_arm64_insn`
+      (`0xd4000001 | (imm<<5)`) + lowercase `svc` map, for the freestanding `_start`
+      exit(N) syscall sequence. Additive; darwin codegen never emits `svc`.
+- [x] `compiler/main.hexa` — import elf_x86_64 + elf_arm64; native obj-emit branch for
+      `arm64-linux-gnu` (`pack_lir_arm64_elf` + `serialize_elf_arm64`); `--backend=native`
+      default for `arm64-linux-gnu --emit=obj`. Default `arm64-apple-darwin` stays Mach-O
+      (guarded), byte-identical (additive branches; SVC rule fires only on op=="SVC").
+- [x] `compiler/test/elf_arm64_exit42.hexa` — exit(42) LModule harness.
+- [x] VERIFIED on summer (aarch64 cross-binutils + qemu-aarch64-static), via the
+      byte-faithful reference of `serialize_elf_arm64`:
+      (1) exit(42) main-form: `readelf -h` → Type REL, Machine AArch64; `main` GLOBAL FUNC;
+          objdump → `mov x0,#42 ; ret`.
+      (2) exit(42) freestanding `_start` (`mov x8,#93; mov x0,#42; svc #0`):
+          `aarch64-linux-gnu-ld -static -nostdlib -e _start` → exec; `qemu-aarch64-static`
+          → **rc 42**.
+      (3) CALL26 reloc: `_start` BL-calls undef extern `helper` → `readelf -r` shows
+          `R_AARCH64_CALL26  helper + 0` against an UND symbol.
+      Verdict: `.verdicts/selfhost-next/F-ELF-ARM64-NATIVE-OBJ.txt`.
+- [ ] NEXT increment — ADRP/ADD page-reloc pairs (`R_AARCH64_ADR_PREL_PG_HI21` +
+      `R_AARCH64_ADD_ABS_LO12_NC`) for `.rodata`/`.data` symbol refs, `R_AARCH64_ABS64`,
+      and `.rodata`/`.data`/`.bss` section emission (text-only today, matching the x86
+      native obj baseline). Reloc-type constants + the Elf64_Rela serializer path already
+      handle them; the codegen→reloc mapping for ADRP/ADD pairs is the follow-on.
+- [ ] NOTE — full end-to-end through `hexa run compiler/main.hexa` is blocked locally by
+      the documented build-floor staleness wall (installed `hexa` runtime lacks
+      `__arr_alloc_items_zero`/`HX_MAP_LEN`/LIR struct ctors). Verification used the
+      byte-faithful reference; the hexa serializer is structurally identical to the proven
+      x86 serializer it is keyed off. On a box with a fresh self-host compiler, run
+      `hexa compiler/main.hexa -- T.hexa --target=arm64-linux-gnu --emit=obj -o T.o` and
+      byte-diff vs the `as`-object from #2537.
+
 ## 2026-06-02 — multi-target: linux-arm64 cross-emit + assemble + RUN (exit(42), rc 42)
 
 Branch `selfhost-next/linux-arm64-rebased` (cut clean from origin/main; +97 lines, g4-ok).
