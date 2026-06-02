@@ -30,14 +30,20 @@
 //     (PC-relative imm26/imm19), mirroring macho `_pack_fn`.
 //   * Cross-fn / extern BL → R_AARCH64_CALL26 reloc record against an
 //     (undef or defined) symbol, with intra-module pre-patch.
+// LANDED (this increment — verified on summer + qemu-aarch64):
+//   * ADRP/ADD page reloc pairs for `.rodata`/`.data` symbol references
+//     (R_AARCH64_ADR_PREL_PG_HI21 + ADD_ABS_LO12_NC). The walker captures
+//     `@PAGE`/`@PAGEOFF` operands → Pass-3 reloc records vs the local
+//     `.LCstrN`/`g<id>` symbol; GOT-suffixed forms fold to the same pair.
+//   * `.rodata` (string/const literal pool) + `.data` (16-byte HexaVal
+//     module-global slots) + `.bss` (SHT_NOBITS) section emission. The
+//     text-only exit(42) path stays byte-identical (all gated on presence).
+//   * LOCAL-before-GLOBAL `.symtab` ordering (`.LCstrN`/`g<id>` locals
+//     precede fn globals; sh_info = nlocal+1) per the ELF ABI.
 // Out of scope this increment (precise gap recorded in the domain log):
-//   * ADRP/ADD GOT/PAGE reloc pairs for `.rodata`/`.data` symbol
-//     references (R_AARCH64_ADR_PREL_PG_HI21 + ADD_ABS_LO12_NC).
-//     The reloc-type constants + the serializer's Elf64_Rela path
-//     handle them; the codegen→reloc *mapping* for ADRP/ADD pairs is
-//     the next increment.
-//   * `.rodata`/`.data`/`.bss` sections (currently `.text`-only, like
-//     the x86 native obj path's cycle-29 baseline).
+//   * R_AARCH64_ABS64 — constant + generic Elf64_Rela path present, but no
+//     codegen operand lowers to a 64-bit absolute data pointer yet (the
+//     backend uses the PIE-friendly ADRP/ADD page form for all refs).
 
 // ─────────────────────────────────────────────────────────────────
 // AArch64 ELF reloc-type constants (binutils `elf/aarch64.h`)
@@ -65,6 +71,40 @@ struct ElfArm64Obj {
     relocs:  [ElfRel],
     symbols: [ElfSym],
     strtab:  [u8],
+    // `.rodata` — concatenated string/const literal pool, one entry per
+    // `lm.rodata` LSection (mirrors macho `__cstring`). Each `.LCstrN`
+    // gets a LOCAL N_SECT-equivalent symbol at its pool offset; the
+    // ADRP/ADD `@PAGE`/`@PAGEOFF` reloc pair resolves against it.
+    rodata:  [u8],
+    // `.data` — module-global pool: one 16-byte zero HexaVal slot per
+    // `lm.globals` entry (symbol name `g<id>`). Mirrors macho `__data`.
+    data:    [u8],
+    // `.bss` byte count — zero-init storage (SHT_NOBITS, no file bytes).
+    // Currently 0 unless an LSection in `lm.bss` requests it.
+    bss_size: i64,
+    // Count of LOCAL symbols (the leading `.LCstrN`/`g<id>` defs). ELF
+    // requires LOCAL symbols precede GLOBAL in `.symtab`; this is the
+    // `.symtab` `sh_info` (index of the first non-local symbol = nlocal+1
+    // counting STN_UNDEF at index 0).
+    nlocal:  i64,
+}
+
+// Map an arm64 `@…` page-relative operand suffix to its ELF AArch64
+// reloc kind, returning [kind, base_len]. Mirrors macho's
+// `_label_reloc_kind` but yields R_AARCH64_* constants. kind == -1 means
+// no recognized suffix. GOT forms fall back to the non-GOT page/lo12
+// pair (the linux-arm64 native obj path is static/non-PIE for now; a
+// real GOT slot is a later increment — recorded in the domain log).
+//   `sym@PAGE`       -> ADR_PREL_PG_HI21
+//   `sym@PAGEOFF`    -> ADD_ABS_LO12_NC
+//   `sym@GOTPAGE`    -> ADR_PREL_PG_HI21  (no GOT yet)
+//   `sym@GOTPAGEOFF` -> ADD_ABS_LO12_NC   (no GOT yet)
+fn _elf_arm64_reloc_kind(s: string) -> [Int] {
+    if _ends_with(s, "@GOTPAGEOFF") { return [ELF_R_AARCH64_ADD_ABS_LO12_NC,  len(s) - 11] }
+    if _ends_with(s, "@GOTPAGE")    { return [ELF_R_AARCH64_ADR_PREL_PG_HI21, len(s) - 8] }
+    if _ends_with(s, "@PAGEOFF")    { return [ELF_R_AARCH64_ADD_ABS_LO12_NC,  len(s) - 8] }
+    if _ends_with(s, "@PAGE")       { return [ELF_R_AARCH64_ADR_PREL_PG_HI21, len(s) - 5] }
+    return [-1, len(s)]
 }
 
 // ─────────────────────────────────────────────────────────────────
@@ -85,6 +125,12 @@ pub fn serialize_elf_arm64(obj: ElfArm64Obj) -> [Int] {
     let out: [Int] = []
     let text_size = len(obj.text)
     let nrelocs = len(obj.relocs)
+    let rodata_size = len(obj.rodata)
+    let data_size   = len(obj.data)
+    let bss_size    = obj.bss_size
+    let has_rodata = rodata_size > 0
+    let has_data   = data_size > 0
+    let has_bss    = bss_size > 0
 
     // ELF symtab: index 0 is STN_UNDEF (all zeros); real syms at 1+.
     // reloc.sym_idx is incremented by 1 when written into r_info.
@@ -96,6 +142,9 @@ pub fn serialize_elf_arm64(obj: ElfArm64Obj) -> [Int] {
     shstrtab.push(0)
     let off_text     = _ew_str(shstrtab, ".text")
     let off_rela_text = if nrelocs > 0 { _ew_str(shstrtab, ".rela.text") } else { 0 }
+    let off_rodata   = if has_rodata { _ew_str(shstrtab, ".rodata") } else { 0 }
+    let off_data     = if has_data   { _ew_str(shstrtab, ".data") } else { 0 }
+    let off_bss      = if has_bss    { _ew_str(shstrtab, ".bss") } else { 0 }
     let off_symtab   = _ew_str(shstrtab, ".symtab")
     let off_strtab   = _ew_str(shstrtab, ".strtab")
     let off_shstrtab = _ew_str(shstrtab, ".shstrtab")
@@ -103,10 +152,23 @@ pub fn serialize_elf_arm64(obj: ElfArm64Obj) -> [Int] {
 
     let elf_header_size = 64
     let shdr_size = 64
-    let nshdrs = if nrelocs > 0 { 6 } else { 5 }
-    let shstrndx = if nrelocs > 0 { 5 } else { 4 }
-    let symtab_sec = if nrelocs > 0 { 3 } else { 2 }
-    let strtab_sec = if nrelocs > 0 { 4 } else { 3 }
+
+    // Section index assignment (order: NULL, .text, [.rela.text],
+    // [.rodata], [.data], [.bss], .symtab, .strtab, .shstrtab). Indices
+    // shift as optional sections appear; relocs/symbols carry resolved
+    // section indices already (computed in pack_lir to match this order).
+    let rela_sec = if nrelocs > 0 { 2 } else { 0 }
+    let mut next = if nrelocs > 0 { 3 } else { 2 }
+    let rodata_sec = if has_rodata { next } else { 0 }
+    if has_rodata { next = next + 1 }
+    let data_sec = if has_data { next } else { 0 }
+    if has_data { next = next + 1 }
+    let bss_sec = if has_bss { next } else { 0 }
+    if has_bss { next = next + 1 }
+    let symtab_sec = next
+    let strtab_sec = next + 1
+    let shstrndx   = next + 2
+    let nshdrs     = next + 3
 
     let text_off     = elf_header_size
     // arm64 instructions are 4-byte; the stream is already a multiple of
@@ -115,7 +177,14 @@ pub fn serialize_elf_arm64(obj: ElfArm64Obj) -> [Int] {
     let text_pad     = (8 - (text_size & 7)) & 7
     let rela_size    = 24 * nrelocs
     let rela_off     = text_off + text_size + text_pad
-    let symtab_off   = rela_off + rela_size
+    // .rodata follows .rela.text, 8-aligned (string literal pool).
+    let rodata_off   = rela_off + rela_size
+    let rodata_pad   = if has_rodata { (8 - (rodata_size & 7)) & 7 } else { 0 }
+    // .data follows .rodata, 8-aligned (16-byte HexaVal slots already 8-mult).
+    let data_off     = rodata_off + rodata_size + rodata_pad
+    let data_pad     = if has_data { (8 - (data_size & 7)) & 7 } else { 0 }
+    // .bss is SHT_NOBITS — occupies NO file bytes (next section starts here).
+    let symtab_off   = data_off + data_size + data_pad
     let strtab_off   = symtab_off + symtab_size
     let shstrtab_off = strtab_off + strsize
     let pre_shdr     = shstrtab_off + shstrsize
@@ -162,6 +231,21 @@ pub fn serialize_elf_arm64(obj: ElfArm64Obj) -> [Int] {
         _ew_u64(out, r.addend)
         ri = ri + 1
     }
+
+    // ── .rodata (string/const literal pool) ──
+    if has_rodata {
+        let mut di = 0
+        while di < rodata_size { out.push(obj.rodata[di] & 0xff); di = di + 1 }
+        _ew_zero(out, rodata_pad)
+    }
+
+    // ── .data (module-global HexaVal slots, zero-initialized) ──
+    if has_data {
+        let mut gi = 0
+        while gi < data_size { out.push(obj.data[gi] & 0xff); gi = gi + 1 }
+        _ew_zero(out, data_pad)
+    }
+    // .bss has NO file bytes (SHT_NOBITS).
 
     // ── .symtab ──
     // Index 0: STN_UNDEF (all zeros, 24 B).
@@ -212,6 +296,39 @@ pub fn serialize_elf_arm64(obj: ElfArm64Obj) -> [Int] {
         _ew_u32(out, 1)                       // sh_info → .text section idx
         _ew_u64(out, 8); _ew_u64(out, 24)
     }
+    // [rodata_sec] .rodata (ALLOC, read-only string/const pool).
+    if has_rodata {
+        _ew_u32(out, off_rodata)
+        _ew_u32(out, ELF_SHT_PROGBITS)
+        _ew_u64(out, ELF_SHF_ALLOC)
+        _ew_u64(out, 0)
+        _ew_u64(out, rodata_off)
+        _ew_u64(out, rodata_size)
+        _ew_u32(out, 0); _ew_u32(out, 0)
+        _ew_u64(out, 8); _ew_u64(out, 0)
+    }
+    // [data_sec] .data (ALLOC|WRITE, module-global slots).
+    if has_data {
+        _ew_u32(out, off_data)
+        _ew_u32(out, ELF_SHT_PROGBITS)
+        _ew_u64(out, ELF_SHF_ALLOC | ELF_SHF_WRITE)
+        _ew_u64(out, 0)
+        _ew_u64(out, data_off)
+        _ew_u64(out, data_size)
+        _ew_u32(out, 0); _ew_u32(out, 0)
+        _ew_u64(out, 8); _ew_u64(out, 0)
+    }
+    // [bss_sec] .bss (ALLOC|WRITE, SHT_NOBITS — sh_size but no file bytes).
+    if has_bss {
+        _ew_u32(out, off_bss)
+        _ew_u32(out, ELF_SHT_NOBITS)
+        _ew_u64(out, ELF_SHF_ALLOC | ELF_SHF_WRITE)
+        _ew_u64(out, 0)
+        _ew_u64(out, symtab_off)              // sh_offset (conventional: = next sec)
+        _ew_u64(out, bss_size)
+        _ew_u32(out, 0); _ew_u32(out, 0)
+        _ew_u64(out, 8); _ew_u64(out, 0)
+    }
     // [symtab_sec] .symtab.
     _ew_u32(out, off_symtab)
     _ew_u32(out, ELF_SHT_SYMTAB)
@@ -219,7 +336,7 @@ pub fn serialize_elf_arm64(obj: ElfArm64Obj) -> [Int] {
     _ew_u64(out, symtab_off)
     _ew_u64(out, symtab_size)
     _ew_u32(out, strtab_sec)                  // sh_link → .strtab
-    _ew_u32(out, 1)                           // sh_info = 1 past last LOCAL
+    _ew_u32(out, obj.nlocal + 1)              // sh_info = 1 past last LOCAL
     _ew_u64(out, 8); _ew_u64(out, 24)
     // [strtab_sec] .strtab.
     _ew_u32(out, off_strtab)
@@ -257,6 +374,8 @@ pub fn serialize_elf_arm64(obj: ElfArm64Obj) -> [Int] {
 
 fn _pack_fn_arm64_elf(out_text: [Int],
                       pending_offsets: [Int], pending_names: [string],
+                      page_offsets: [Int], page_names: [string],
+                      page_kinds: [Int],
                       f: LFunc) {
     let label_names:    [string] = []
     let label_offsets:  [Int]    = []
@@ -276,17 +395,47 @@ fn _pack_fn_arm64_elf(out_text: [Int],
             continue
         }
 
+        // Format operands; capture at most one page-relative `@…` operand
+        // per instruction (ADRP `@PAGE` / ADD `@PAGEOFF` / GOT variants).
+        // The captured operand is sanitized to a zero-immediate base form
+        // so the encoder emits the bare word; Pass-4 attaches the matching
+        // ADR_PREL_PG_HI21 / ADD_ABS_LO12_NC reloc. Mirrors macho_arm64.
         let mut ops: [string] = []
         let na = len(ins.args)
+        let mut page_kind = -1
+        let mut page_name = ""
         let mut k = 0
         while k < na {
-            ops.push(_lir_operand_str(ins.args[k]))
+            let arg = ins.args[k]
+            let raw = _lir_operand_str(arg)
+            let rk = _elf_arm64_reloc_kind(raw)
+            if rk[0] >= 0 && (arg.kind == "label" || arg.kind == "mem") {
+                page_kind = rk[0]
+                page_name = _label_base_name(arg, rk[1])
+                if arg.kind == "mem" {
+                    ops.push("[" + arg.mem_base.name + ", #0]")
+                } else {
+                    ops.push("#0")
+                }
+            } else {
+                ops.push(raw)
+            }
             k = k + 1
         }
 
         let up = _lir_op_uppercase(ins.op)
         let word = encode_arm64_insn(up, ops)
         let cur_off = len(out_text)
+
+        // Symbol-relative page operand → base word + Pass-4 page reloc.
+        if page_kind >= 0 {
+            _push_word_le(out_text, word)
+            page_offsets.push(cur_off)
+            page_names.push(page_name)
+            page_kinds.push(page_kind)
+            i = i + 1
+            continue
+        }
 
         // B / BL with a label arg.
         if (up == "B" || up == "BL") && na == 1 && ins.args[0].kind == "label" {
@@ -365,18 +514,84 @@ fn _elf_lookup_label(names: [string], offsets: [Int], target: string) -> Int {
 
 // Public entry — LModule → ElfArm64Obj (text + symbols + strtab +
 // relocs). Symbol names are bare ELF identifiers.
+//
+// Symbol ORDER (ELF requires LOCAL before GLOBAL in `.symtab`):
+//   [0..nlocal)  — `.LCstrN` rodata literals + `g<id>` data globals
+//                  (STB_LOCAL, defined N_SECT-equivalent).
+//   [nlocal..]   — fn defs (STB_GLOBAL STT_FUNC) + undef externs.
+// `obj.nlocal` is stored so `serialize_elf_arm64` can stamp the .symtab
+// `sh_info` (= first-non-local index = nlocal+1, counting STN_UNDEF).
 pub fn pack_lir_arm64_elf(lm: LModule) -> ElfArm64Obj {
     let obj = ElfArm64Obj {
-        text:    [],
-        relocs:  [],
-        symbols: [],
-        strtab:  [],
+        text:     [],
+        relocs:   [],
+        symbols:  [],
+        strtab:   [],
+        rodata:   [],
+        data:     [],
+        bss_size: 0,
+        nlocal:   0,
     }
     // ELF strtab convention: index 0 is the empty string (NUL).
     obj.strtab.push(0)
 
+    // Resolve the `.rodata` / `.data` section indices the same way the
+    // serializer does (order NULL,.text,[.rela.text],[.rodata],[.data],…).
+    // A module carrying rodata/data refs always emits page relocs, so the
+    // `.rela.text` section (index 2) is present → first data section is 3.
+    let has_rodata = len(lm.rodata) > 0
+    let has_data   = len(lm.globals) > 0
+    let rodata_sec = 3
+    let data_sec   = if has_rodata { 4 } else { 3 }
+
+    // Pass 0 — build `.rodata` literal pool + one LOCAL symbol per
+    // `.LCstrN` (defined at its pool offset). Mirrors macho `__cstring`.
+    let mut r = 0
+    let nr = len(lm.rodata)
+    while r < nr {
+        let sec = lm.rodata[r]
+        let pool_off = len(obj.rodata)
+        _append_hex_bytes(obj.rodata, sec.bytes)
+        let strx = _ew_str(obj.strtab, sec.name)      // `.LCstrN` (verbatim)
+        obj.symbols.push(ElfSym {
+            name_offset: strx,
+            section:     rodata_sec,
+            value:       pool_off,
+            size:        0,
+            bind:        0,    // STB_LOCAL
+            type_:       0,    // STT_NOTYPE
+        })
+        obj.nlocal = obj.nlocal + 1
+        r = r + 1
+    }
+
+    // Pass 0b — build `.data` module-global pool: one 16-byte zero
+    // HexaVal slot per `lm.globals` entry (symbol name `g<id>`), each a
+    // LOCAL def. Mirrors macho `__data`.
+    let mut g = 0
+    let ng = len(lm.globals)
+    while g < ng {
+        let pool_off = len(obj.data)
+        let mut z = 0
+        while z < 16 { obj.data.push(0); z = z + 1 }
+        let strx = _ew_str(obj.strtab, lm.globals[g])
+        obj.symbols.push(ElfSym {
+            name_offset: strx,
+            section:     data_sec,
+            value:       pool_off,
+            size:        16,
+            bind:        0,    // STB_LOCAL
+            type_:       0,    // STT_NOTYPE (object data)
+        })
+        obj.nlocal = obj.nlocal + 1
+        g = g + 1
+    }
+
     let pending_offsets: [Int]    = []
     let pending_names:   [string] = []
+    let page_offsets:    [Int]    = []
+    let page_names:      [string] = []
+    let page_kinds:      [Int]    = []
 
     // Pass 1 — walk funcs into text + collect one defined fn symbol each.
     let nf = len(lm.funcs)
@@ -385,7 +600,8 @@ pub fn pack_lir_arm64_elf(lm: LModule) -> ElfArm64Obj {
         let f = lm.funcs[i]
         let fn_start = len(obj.text)
         let strx = _ew_str(obj.strtab, f.name)        // BARE name (ELF)
-        _pack_fn_arm64_elf(obj.text, pending_offsets, pending_names, f)
+        _pack_fn_arm64_elf(obj.text, pending_offsets, pending_names,
+                           page_offsets, page_names, page_kinds, f)
         obj.symbols.push(ElfSym {
             name_offset: strx,
             section:     1,    // .text (1-based ELF section index)
@@ -443,6 +659,43 @@ pub fn pack_lir_arm64_elf(lm: LModule) -> ElfArm64Obj {
             _patch_word_le(obj.text, bl_off, patched)
         }
         pi = pi + 1
+    }
+
+    // Pass 3 — ADRP/ADD page-relative refs → ADR_PREL_PG_HI21 /
+    // ADD_ABS_LO12_NC reloc records. Each resolves against a defined
+    // symbol (the `.LCstrN` literals + `g<id>` globals built in Pass 0).
+    // The encoder already emitted the bare base word (imm=0); the linker
+    // fills the page / page-offset bits. Addend 0 (S+A with A=0): the
+    // symbol value is the pool offset, and the symbol's section gives the
+    // final address — exactly the `(S+A)` the reloc resolves.
+    let npg = len(page_offsets)
+    let mut gi2 = 0
+    while gi2 < npg {
+        let pg_off = page_offsets[gi2]
+        let name   = page_names[gi2]
+        let kind   = page_kinds[gi2]
+        let mut idx = _find_elf_sym_by_name(obj.symbols, obj.strtab, name)
+        if idx < 0 {
+            // Unknown page target (no `.LCstrN`/`g<id>` def) → undef
+            // extern. Keeps the .o well-formed; the linker resolves it.
+            let strx = _ew_str(obj.strtab, name)
+            obj.symbols.push(ElfSym {
+                name_offset: strx,
+                section:     0,    // SHN_UNDEF
+                value:       0,
+                size:        0,
+                bind:        1,    // STB_GLOBAL
+                type_:       0,    // STT_NOTYPE
+            })
+            idx = len(obj.symbols) - 1
+        }
+        obj.relocs.push(ElfRel {
+            offset:  pg_off,
+            sym_idx: idx,
+            kind:    kind,
+            addend:  0,
+        })
+        gi2 = gi2 + 1
     }
     return obj
 }
