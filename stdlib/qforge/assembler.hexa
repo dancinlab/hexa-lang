@@ -34,6 +34,17 @@ use "stdlib/qforge/kinetic"
 use "stdlib/qforge/structure"
 use "stdlib/qforge/vloc"
 use "stdlib/qforge/projector"
+// Ry->Ha unit conversion for V_ext (the ONE canonical assembly site, d4)
+//   vloc.hexa returns V_loc(G) in RYDBERG (UPF convention, e2=2; anchored by
+//   the vloc_selftest pure-Coulomb tail -8piZ/OmegaG2). The kinetic diagonal
+//   1/2|k+G|2 is HARTREE. So V_ext = V_loc(G)*S(G) must be multiplied by 1/2
+//   here -- at the single composition site, NOT scattered. Without it the ionic
+//   well is 2x too deep and the bare T+V_ext lowest eigenvalue dives unbounded
+//   with NPW (the QFORGE-PERF no-plateau wall). Applied identically in
+//   qforge_assemble_h and qforge_assemble_h_multi (the two V_ext composition
+//   sites). d6: the form factor itself (vloc_of_g) stays Rydberg -- only the
+//   Hamiltonian composition converts.
+let _QF_VEXT_RY2HA: float = 0.5
 
 // Assembled Hamiltonian: the dense n×n real-symmetric matrix (flat row-major),
 // its diagonal, and the basis dimension n.
@@ -119,7 +130,7 @@ pub fn qforge_assemble_h(kvec: [float], gvecs: [float], pos: [float],
             // local V_ext = Re[ V_loc(|ΔG|) · S(ΔG) ]  (real H at Γ)
             if have_vext {
                 let idx = a * n + b
-                hab = hab + vloc_g[idx] * sg[idx * 2]   // V_loc real × Re(S)
+                hab = hab + _QF_VEXT_RY2HA * vloc_g[idx] * sg[idx * 2]   // V_loc(Ry)*Re(S)*1/2 -> Ha
             }
             // nonlocal KB block
             if have_vnl { hab = hab + vnl[a * n + b] }
@@ -213,7 +224,7 @@ pub fn qforge_assemble_h_multi(kvec: [float], gvecs: [float], nspec: int,
         if len(vloc_g) == n * n {
             if len(sg) == 2 * n * n {
                 let mut idx = 0
-                while idx < n * n { vext[idx] = vext[idx] + vloc_g[idx] * sg[idx * 2] ; idx = idx + 1 }
+                while idx < n * n { vext[idx] = vext[idx] + _QF_VEXT_RY2HA * vloc_g[idx] * sg[idx * 2] ; idx = idx + 1 }
             }
         }
         // per-species KB nonlocal (replicated at each of this species' sites via S_s).
