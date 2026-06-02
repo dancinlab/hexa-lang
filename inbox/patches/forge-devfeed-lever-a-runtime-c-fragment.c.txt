@@ -410,3 +410,92 @@ HexaVal forge_dispatch_groupnorm(HexaVal x, HexaVal gamma, HexaVal beta,
                              HexaVal xhat, HexaVal t, HexaVal c, HexaVal g) {
     return hexa_forge_dispatch_groupnorm(x, gamma, beta, y, mean, inv, xhat, t, c, g);
 }
+
+/* HEXA-FUSION L3 (glue half · final slice ⑤c) — device-resident expert-pack copy.
+ * forge_dispatch_expert_pack2(ex0, ex1, ex_out, n). Routes to
+ * _hx_cuda_farr_expert_pack2_gpu: EX_OUT[0·n+j]=EX0[j], EX_OUT[1·n+j]=EX1[j] for
+ * j in 0..n (n=T·d) — the clm_prod_fwd j-loop stacking the 2 expert activations
+ * into ex_out[E·T·d]. Pure copy, NO reduction → trivially bit-exact (max|Δ|=0).
+ * Keeps EX_OUT FARR_DEVICE so the follow-up moe-router H2D-skips it. no-CUDA →
+ * -1 → host pack loop. */
+HexaVal hexa_forge_dispatch_expert_pack2(HexaVal ex0_v, HexaVal ex1_v,
+                                  HexaVal out_v, HexaVal n_v) {
+    int64_t ex0_id = hexa_as_num(ex0_v);
+    int64_t ex1_id = hexa_as_num(ex1_v);
+    int64_t out_id = hexa_as_num(out_v);
+    int64_t n      = hexa_as_num(n_v);
+    if (n <= 0) return hexa_int(-1);
+    if (ex0_id < 0 || ex1_id < 0 || out_id < 0) return hexa_int(-1);
+#ifdef HEXA_CUDA
+    extern int _hx_cuda_farr_expert_pack2_gpu(int64_t, int64_t, int64_t, int64_t);
+    int grc = _hx_cuda_farr_expert_pack2_gpu(ex0_id, ex1_id, out_id, n);
+    if (grc == 0) return hexa_int(0);
+#endif
+    return hexa_int(-1);
+}
+HexaVal forge_dispatch_expert_pack2(HexaVal ex0_v, HexaVal ex1_v,
+                             HexaVal out_v, HexaVal n_v) {
+    return hexa_forge_dispatch_expert_pack2(ex0_v, ex1_v, out_v, n_v);
+}
+
+/* HEXA-FUSION L3 (glue half · final slice ⑤c) — device-resident MoE router.
+ * forge_dispatch_moe_router(logits, ex_out, probs, y, T, E, C). Routes to
+ * _hx_cuda_farr_moe_router_gpu, which reproduces moe_lib.hexa nn_moe_router_fwd
+ * EXACTLY — stable softmax with the HAND-ROLLED _moe_exp (scaled-Taylor, NOT
+ * CUDA exp) replayed term-for-term, both reductions (softmax sum + combine acc)
+ * accumulated SEQUENTIALLY under ONE thread per t (NO tree re-assoc) → no ULP
+ * delta, bit-exact (max|Δ|=0). Fuses the moe-router host glue in clm_prod_fwd
+ * (logits_r·ex_out → y, probs — the ③ fwd-only 0% floor); keeps Y+PROBS
+ * FARR_DEVICE. no-CUDA → -1 → host moe-router. */
+HexaVal hexa_forge_dispatch_moe_router(HexaVal logits_v, HexaVal ex_out_v,
+                                  HexaVal probs_v, HexaVal y_v, HexaVal t_v,
+                                  HexaVal e_v, HexaVal c_v) {
+    int64_t logits_id = hexa_as_num(logits_v);
+    int64_t ex_out_id = hexa_as_num(ex_out_v);
+    int64_t probs_id  = hexa_as_num(probs_v);
+    int64_t y_id      = hexa_as_num(y_v);
+    int64_t T         = hexa_as_num(t_v);
+    int64_t E         = hexa_as_num(e_v);
+    int64_t C         = hexa_as_num(c_v);
+    if (T <= 0 || E <= 0 || C <= 0) return hexa_int(-1);
+    if (logits_id < 0 || ex_out_id < 0 || probs_id < 0 || y_id < 0) return hexa_int(-1);
+#ifdef HEXA_CUDA
+    extern int _hx_cuda_farr_moe_router_gpu(int64_t, int64_t, int64_t, int64_t,
+                                            int64_t, int64_t, int64_t);
+    int grc = _hx_cuda_farr_moe_router_gpu(logits_id, ex_out_id, probs_id, y_id,
+                                           T, E, C);
+    if (grc == 0) return hexa_int(0);
+#endif
+    return hexa_int(-1);
+}
+HexaVal forge_dispatch_moe_router(HexaVal logits, HexaVal ex_out, HexaVal probs,
+                             HexaVal y, HexaVal t, HexaVal e, HexaVal c) {
+    return hexa_forge_dispatch_moe_router(logits, ex_out, probs, y, t, e, c);
+}
+
+/* HEXA-FUSION L3 (glue half · final slice ⑤c) — device-resident embedding gather.
+ * forge_dispatch_embedding(ids, table, x_out, T, d). Routes to
+ * _hx_cuda_farr_embedding_gpu: X_OUT[i·d+c]=TABLE[tok·d+c] where tok=(int)IDS[i]
+ * — the token-gather host glue at the head of clm_prod_fwd (nn_embedding_fwd).
+ * Pure gather/copy, NO reduction → trivially bit-exact (max|Δ|=0). Keeps X_OUT
+ * FARR_DEVICE so the first conv GEMM H2D-skips it. no-CUDA → -1 → host gather. */
+HexaVal hexa_forge_dispatch_embedding(HexaVal ids_v, HexaVal table_v,
+                                  HexaVal out_v, HexaVal t_v, HexaVal d_v) {
+    int64_t ids_id   = hexa_as_num(ids_v);
+    int64_t table_id = hexa_as_num(table_v);
+    int64_t out_id   = hexa_as_num(out_v);
+    int64_t T        = hexa_as_num(t_v);
+    int64_t d        = hexa_as_num(d_v);
+    if (T <= 0 || d <= 0) return hexa_int(-1);
+    if (ids_id < 0 || table_id < 0 || out_id < 0) return hexa_int(-1);
+#ifdef HEXA_CUDA
+    extern int _hx_cuda_farr_embedding_gpu(int64_t, int64_t, int64_t, int64_t, int64_t);
+    int grc = _hx_cuda_farr_embedding_gpu(ids_id, table_id, out_id, T, d);
+    if (grc == 0) return hexa_int(0);
+#endif
+    return hexa_int(-1);
+}
+HexaVal forge_dispatch_embedding(HexaVal ids, HexaVal table, HexaVal out,
+                             HexaVal t, HexaVal d) {
+    return hexa_forge_dispatch_embedding(ids, table, out, t, d);
+}

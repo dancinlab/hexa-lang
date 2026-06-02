@@ -7448,6 +7448,15 @@ fn gen2_expr(node) {
                 // FP64 matmul through forge_tier_dispatch_v1 instead of
                 // calling hexa_farr_matmul directly. Returns the farr handle.
                 if name == "forge_dispatch_matmul" { return "hexa_forge_dispatch_matmul(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ", " + arg_strs[3] + ", " + arg_strs[4] + ")" }
+                // HEXA-FUSION L3 (glue half · final ⑤c): forge_dispatch_embedding(
+                // ids, table, x_out, T, d) -> int rc. X_OUT[i·d+c]=TABLE[tok·d+c]
+                // where tok=(int)IDS[i] — the token-gather host glue at the head of
+                // clm_prod_fwd (nn_embedding_fwd). Pure gather/copy, NO reduction →
+                // trivially bit-exact (max|Δ|=0). Keeps X_OUT DEVICE-RESIDENT so the
+                // first conv GEMM H2D-skips it. no-CUDA → -1 → host gather (byte-eq).
+                if name == "forge_dispatch_embedding" {
+                    return "hexa_forge_dispatch_embedding(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ", " + arg_strs[3] + ", " + arg_strs[4] + ")"
+                }
                 // anima RFC 034 (2026-05-16): farr autograd — ad_matmul
                 // (5-arg; forward = farr_matmul + records backward).
                 if name == "ad_matmul"      { return "hexa_ad_matmul(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ", " + arg_strs[3] + ", " + arg_strs[4] + ")" }
@@ -7502,6 +7511,16 @@ fn gen2_expr(node) {
                 // no-CUDA → -1 → host add (byte-eq).
                 if name == "forge_dispatch_residual_add" {
                     return "hexa_forge_dispatch_residual_add(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ", " + arg_strs[3] + ")"
+                }
+                // HEXA-FUSION L3 (glue half · final ⑤c): forge_dispatch_expert_pack2(
+                // ex0, ex1, ex_out, n) -> int rc. EX_OUT[0·n+j]=EX0[j],
+                // EX_OUT[1·n+j]=EX1[j] for j in 0..n (n=T·d) — the clm_prod_fwd
+                // j-loop that stacks the 2 expert activations into ex_out[E·T·d].
+                // Pure copy, NO reduction → trivially bit-exact (max|Δ|=0). Keeps
+                // EX_OUT DEVICE-RESIDENT so the moe-router H2D-skips it. no-CUDA →
+                // -1 → host pack loop (byte-eq).
+                if name == "forge_dispatch_expert_pack2" {
+                    return "hexa_forge_dispatch_expert_pack2(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ", " + arg_strs[3] + ")"
                 }
                 // stdlib/os/pty — 4-arg builtin (RFC stdlib-os-pty.md)
                 if name == "pty_forkexec"   { return "hexa_pty_forkexec(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ", " + arg_strs[3] + ")" }
@@ -7606,6 +7625,17 @@ fn gen2_expr(node) {
                 // → -1 so the .hexa caller falls back to the host fake-quant (byte-eq).
                 if name == "forge_dispatch_int4_quant" {
                     return "hexa_forge_dispatch_int4_quant(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ", " + arg_strs[3] + ", " + arg_strs[4] + ", " + arg_strs[5] + ", " + arg_strs[6] + ")"
+                }
+                // HEXA-FUSION L3 (glue half · final ⑤c): forge_dispatch_moe_router(
+                // logits, ex_out, probs, y, T, E, C) -> int rc. Reproduces
+                // nn_moe_router_fwd: probs=softmax(logits) per-t (stable, max-sub),
+                // Y[t,c]=Σ_e probs[t,e]·ex_out[e·T·C+t·C+c]. The softmax replays
+                // moe_lib's HAND-ROLLED _moe_exp (scaled-Taylor, NOT CUDA exp) and
+                // both reductions accumulate SEQUENTIALLY under ONE thread per t (NO
+                // tree re-assoc) → bit-exact (max|Δ|=0). Keeps Y+PROBS DEVICE-RESIDENT.
+                // no-CUDA → -1 → host nn_moe_router_fwd (byte-eq).
+                if name == "forge_dispatch_moe_router" {
+                    return "hexa_forge_dispatch_moe_router(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ", " + arg_strs[3] + ", " + arg_strs[4] + ", " + arg_strs[5] + ", " + arg_strs[6] + ")"
                 }
             }
             if len(node.args) == 8 {

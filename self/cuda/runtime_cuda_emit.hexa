@@ -1407,6 +1407,230 @@ fn emit_runtime_cuda_c() -> str {
             "#endif\n" +
             "}\n" +
             "\n" +
+            "/* HEXA-FUSION L3 (glue half · final slice ⑤c) — device-resident expert-pack\n" +
+            " * copy. Reproduces the clm_prod_fwd j-loop EXACTLY: for j in 0..n,\n" +
+            " *   EX_OUT[0·n + j] = EX0[j] ; EX_OUT[1·n + j] = EX1[j]   (n = T·d)\n" +
+            " * = the two expert activations stacked into ex_out[E·T·d] (E=2). Pure copy,\n" +
+            " * NO arithmetic, NO reduction → trivially bit-exact (max|Δ|=0). Fuses the\n" +
+            " * T·d host t_get/t_set pack loop in clm_prod_fwd (between the gelu ×3 and the\n" +
+            " * moe-router — part of the ③ fwd-only 0% floor). Keeps EX_OUT FARR_DEVICE so\n" +
+            " * the follow-up moe-router H2D-skips it. */\n" +
+            "__global__ void _hx_k_expert_pack2(const double* __restrict__ EX0,\n" +
+            "                                   const double* __restrict__ EX1,\n" +
+            "                                   double* __restrict__ EX_OUT, int64_t n) {\n" +
+            "    int64_t stride = (int64_t)blockDim.x * (int64_t)gridDim.x;\n" +
+            "    for (int64_t j = (int64_t)blockIdx.x * blockDim.x + threadIdx.x;\n" +
+            "         j < n; j += stride) {\n" +
+            "        EX_OUT[j]     = EX0[j];\n" +
+            "        EX_OUT[n + j] = EX1[j];\n" +
+            "    }\n" +
+            "}\n" +
+            "\n" +
+            "int _hx_cuda_farr_expert_pack2_gpu(int64_t ex0_id, int64_t ex1_id,\n" +
+            "                                   int64_t out_id, int64_t n) {\n" +
+            "#ifdef __CUDACC__\n" +
+            "    if (n <= 0) return -1;\n" +
+            "    if (_h2d(ex0_id) != 0) return -1;\n" +
+            "    if (_h2d(ex1_id) != 0) return -1;\n" +
+            "    if (_ensure_dev_alloc_out(out_id, 2 * n) != 0) return -1;\n" +
+            "    const double* EX0 = g_slots[ex0_id].d_buf;\n" +
+            "    const double* EX1 = g_slots[ex1_id].d_buf;\n" +
+            "    double*       OUT = g_slots[out_id].d_buf;\n" +
+            "    int block_sz = 256;\n" +
+            "    int64_t want = (n + block_sz - 1) / block_sz;\n" +
+            "    int grid_sz = (want > 1024) ? 1024 : (int)want;\n" +
+            "    if (grid_sz < 1) grid_sz = 1;\n" +
+            "    _hx_k_expert_pack2<<<grid_sz, block_sz>>>(EX0, EX1, OUT, n);\n" +
+            "    cudaError_t er = cudaDeviceSynchronize();\n" +
+            "    if (er != cudaSuccess) {\n" +
+            "        fprintf(stderr, \"[cuda] expert_pack2 launch failed: %s\\n\",\n" +
+            "                cudaGetErrorString(er));\n" +
+            "        return -1;\n" +
+            "    }\n" +
+            "    {\n" +
+            "        HexaFarrEntry* e = &_hx_farr_table[out_id];\n" +
+            "        e->d_buf      = (void*)g_slots[out_id].d_buf;\n" +
+            "        e->loc        = FARR_DEVICE;\n" +
+            "        e->dirty_host = 0;\n" +
+            "        e->dirty_dev  = 0;\n" +
+            "    }\n" +
+            "    return 0;\n" +
+            "#else\n" +
+            "    (void)ex0_id; (void)ex1_id; (void)out_id; (void)n;\n" +
+            "    fprintf(stderr, \"[cuda] expert_pack2: built without __CUDACC__\\n\");\n" +
+            "    return -1;\n" +
+            "#endif\n" +
+            "}\n" +
+            "\n" +
+            "/* HEXA-FUSION L3 (glue half · final slice ⑤c) — device-resident MoE router.\n" +
+            " * Reproduces moe_lib.hexa nn_moe_router_fwd EXACTLY: per time position t,\n" +
+            " *   probs[t,:] = softmax(logits[t,:])  (numerically-stable, max-subtracted)\n" +
+            " *   Y[t,c]     = Σ_e probs[t,e]·EX_OUT[e·T·C + t·C + c]\n" +
+            " * BIT-EXACTNESS — two subtleties handled VERBATIM:\n" +
+            " *  (1) the softmax uses moe_lib's HAND-ROLLED _moe_exp (scaled-Taylor range\n" +
+            " *      reduction, 13 terms, 2^n by repeated ·2/÷2), NOT CUDA exp()/expf — so\n" +
+            " *      the device replays _moe_exp_dev term-for-term in the SAME op order.\n" +
+            " *  (2) the softmax sum and the combine acc accumulate SEQUENTIALLY (e=0..E,\n" +
+            " *      and the combine e-loop inside c) in the host order — ONE thread per t,\n" +
+            " *      NO tree re-association, NO warp partials → max|Δ|=0 (no ULP delta).\n" +
+            " * Fuses the moe-router host glue in clm_prod_fwd (logits_r·ex_out → y, probs\n" +
+            " * — the ③ fwd-only 0% floor). Keeps Y + PROBS FARR_DEVICE. */\n" +
+            "__device__ static double _hx_moe_exp_dev(double x) {\n" +
+            "    /* byte-identical to moe_lib.hexa _moe_exp. */\n" +
+            "    const double ln2 = 0.6931471805599453;\n" +
+            "    long long n = 0;\n" +
+            "    double r = x;\n" +
+            "    while (r > 0.34657359) { r = r - ln2; n = n + 1; }\n" +
+            "    while (r < 0.0 - 0.34657359) { r = r + ln2; n = n - 1; }\n" +
+            "    double term = 1.0;\n" +
+            "    double sum = 1.0;\n" +
+            "    int k = 1;\n" +
+            "    while (k < 14) { term = term * r / (double)k; sum = sum + term; k = k + 1; }\n" +
+            "    double p = sum;\n" +
+            "    if (n >= 0) { long long i = 0; while (i < n) { p = p * 2.0; i = i + 1; } }\n" +
+            "    else { long long i = 0; while (i < (0 - n)) { p = p / 2.0; i = i + 1; } }\n" +
+            "    return p;\n" +
+            "}\n" +
+            "__global__ void _hx_k_moe_router(const double* __restrict__ LOGITS,\n" +
+            "                                 const double* __restrict__ EX_OUT,\n" +
+            "                                 double* __restrict__ PROBS,\n" +
+            "                                 double* __restrict__ Y,\n" +
+            "                                 int64_t T, int64_t E, int64_t C) {\n" +
+            "    /* one thread per time position → softmax + combine reductions are a\n" +
+            "     * single-thread sequential loop in EXACTLY the host accumulation order. */\n" +
+            "    for (int64_t t = (int64_t)blockIdx.x * blockDim.x + threadIdx.x;\n" +
+            "         t < T; t += (int64_t)blockDim.x * gridDim.x) {\n" +
+            "        int64_t base = t * E;\n" +
+            "        /* stable softmax — max */\n" +
+            "        double mx = LOGITS[base];\n" +
+            "        for (int64_t e = 1; e < E; e++) {\n" +
+            "            double v = LOGITS[base + e];\n" +
+            "            if (v > mx) mx = v;\n" +
+            "        }\n" +
+            "        /* exp (hand-rolled _moe_exp) + sequential sum */\n" +
+            "        double s = 0.0;\n" +
+            "        for (int64_t e = 0; e < E; e++) {\n" +
+            "            double ev = _hx_moe_exp_dev(LOGITS[base + e] - mx);\n" +
+            "            PROBS[base + e] = ev;\n" +
+            "            s = s + ev;\n" +
+            "        }\n" +
+            "        /* normalize */\n" +
+            "        for (int64_t e = 0; e < E; e++)\n" +
+            "            PROBS[base + e] = PROBS[base + e] / s;\n" +
+            "        /* weighted combine — sequential acc over experts, host order */\n" +
+            "        for (int64_t c = 0; c < C; c++) {\n" +
+            "            double acc = 0.0;\n" +
+            "            for (int64_t e = 0; e < E; e++)\n" +
+            "                acc = acc + PROBS[t * E + e] * EX_OUT[e * T * C + t * C + c];\n" +
+            "            Y[t * C + c] = acc;\n" +
+            "        }\n" +
+            "    }\n" +
+            "}\n" +
+            "\n" +
+            "int _hx_cuda_farr_moe_router_gpu(int64_t logits_id, int64_t ex_out_id,\n" +
+            "                                 int64_t probs_id, int64_t y_id,\n" +
+            "                                 int64_t T, int64_t E, int64_t C) {\n" +
+            "#ifdef __CUDACC__\n" +
+            "    if (T <= 0 || E <= 0 || C <= 0) return -1;\n" +
+            "    if (_h2d(logits_id) != 0) return -1;\n" +
+            "    if (_h2d(ex_out_id) != 0) return -1;\n" +
+            "    if (_ensure_dev_alloc_out(probs_id, T * E) != 0) return -1;\n" +
+            "    if (_ensure_dev_alloc_out(y_id, T * C) != 0) return -1;\n" +
+            "    const double* LOGITS = g_slots[logits_id].d_buf;\n" +
+            "    const double* EX_OUT = g_slots[ex_out_id].d_buf;\n" +
+            "    double*       PROBS  = g_slots[probs_id].d_buf;\n" +
+            "    double*       Y      = g_slots[y_id].d_buf;\n" +
+            "    int block_sz = 128;\n" +
+            "    int64_t want = (T + block_sz - 1) / block_sz;\n" +
+            "    int grid_sz = (want > 1024) ? 1024 : (int)want;\n" +
+            "    if (grid_sz < 1) grid_sz = 1;\n" +
+            "    _hx_k_moe_router<<<grid_sz, block_sz>>>(LOGITS, EX_OUT, PROBS, Y, T, E, C);\n" +
+            "    cudaError_t er = cudaDeviceSynchronize();\n" +
+            "    if (er != cudaSuccess) {\n" +
+            "        fprintf(stderr, \"[cuda] moe_router launch failed: %s\\n\",\n" +
+            "                cudaGetErrorString(er));\n" +
+            "        return -1;\n" +
+            "    }\n" +
+            "    {\n" +
+            "        int64_t outs[2] = { probs_id, y_id };\n" +
+            "        for (int k = 0; k < 2; k++) {\n" +
+            "            HexaFarrEntry* e = &_hx_farr_table[outs[k]];\n" +
+            "            e->d_buf      = (void*)g_slots[outs[k]].d_buf;\n" +
+            "            e->loc        = FARR_DEVICE;\n" +
+            "            e->dirty_host = 0;\n" +
+            "            e->dirty_dev  = 0;\n" +
+            "        }\n" +
+            "    }\n" +
+            "    return 0;\n" +
+            "#else\n" +
+            "    (void)logits_id; (void)ex_out_id; (void)probs_id; (void)y_id;\n" +
+            "    (void)T; (void)E; (void)C;\n" +
+            "    fprintf(stderr, \"[cuda] moe_router: built without __CUDACC__\\n\");\n" +
+            "    return -1;\n" +
+            "#endif\n" +
+            "}\n" +
+            "\n" +
+            "/* HEXA-FUSION L3 (glue half · final slice ⑤c) — device-resident embedding\n" +
+            " * gather. Reproduces nn_lib.hexa nn_embedding_fwd EXACTLY: for each position\n" +
+            " * i in 0..T, tok = (int)IDS[i] (token ids stored as doubles in the farr —\n" +
+            " * truncate-toward-zero like to_int), then\n" +
+            " *   X_OUT[i·d + c] = TABLE[tok·d + c]   for c in 0..d.\n" +
+            " * Pure gather/copy, NO arithmetic, NO reduction → trivially bit-exact\n" +
+            " * (max|Δ|=0). Fuses the token-gather host glue at the head of clm_prod_fwd\n" +
+            " * (the ③ fwd-only 0% floor). Keeps X_OUT FARR_DEVICE so the first conv GEMM\n" +
+            " * H2D-skips it. */\n" +
+            "__global__ void _hx_k_embedding(const double* __restrict__ IDS,\n" +
+            "                                const double* __restrict__ TABLE,\n" +
+            "                                double* __restrict__ X_OUT,\n" +
+            "                                int64_t T, int64_t d) {\n" +
+            "    /* one thread per (i,c) element; tok read per-thread (no shared state). */\n" +
+            "    int64_t total = T * d;\n" +
+            "    int64_t stride = (int64_t)blockDim.x * (int64_t)gridDim.x;\n" +
+            "    for (int64_t idx = (int64_t)blockIdx.x * blockDim.x + threadIdx.x;\n" +
+            "         idx < total; idx += stride) {\n" +
+            "        int64_t i = idx / d;\n" +
+            "        int64_t c = idx - i * d;\n" +
+            "        int64_t tok = (int64_t)IDS[i];\n" +
+            "        X_OUT[i * d + c] = TABLE[tok * d + c];\n" +
+            "    }\n" +
+            "}\n" +
+            "\n" +
+            "int _hx_cuda_farr_embedding_gpu(int64_t ids_id, int64_t table_id,\n" +
+            "                                int64_t out_id, int64_t T, int64_t d) {\n" +
+            "#ifdef __CUDACC__\n" +
+            "    if (T <= 0 || d <= 0) return -1;\n" +
+            "    if (_h2d(ids_id) != 0) return -1;\n" +
+            "    if (_h2d(table_id) != 0) return -1;\n" +
+            "    if (_ensure_dev_alloc_out(out_id, T * d) != 0) return -1;\n" +
+            "    const double* IDS   = g_slots[ids_id].d_buf;\n" +
+            "    const double* TABLE = g_slots[table_id].d_buf;\n" +
+            "    double*       OUT   = g_slots[out_id].d_buf;\n" +
+            "    int block_sz = 256;\n" +
+            "    int64_t want = (T * d + block_sz - 1) / block_sz;\n" +
+            "    int grid_sz = (want > 1024) ? 1024 : (int)want;\n" +
+            "    if (grid_sz < 1) grid_sz = 1;\n" +
+            "    _hx_k_embedding<<<grid_sz, block_sz>>>(IDS, TABLE, OUT, T, d);\n" +
+            "    cudaError_t er = cudaDeviceSynchronize();\n" +
+            "    if (er != cudaSuccess) {\n" +
+            "        fprintf(stderr, \"[cuda] embedding launch failed: %s\\n\",\n" +
+            "                cudaGetErrorString(er));\n" +
+            "        return -1;\n" +
+            "    }\n" +
+            "    {\n" +
+            "        HexaFarrEntry* e = &_hx_farr_table[out_id];\n" +
+            "        e->d_buf      = (void*)g_slots[out_id].d_buf;\n" +
+            "        e->loc        = FARR_DEVICE;\n" +
+            "        e->dirty_host = 0;\n" +
+            "        e->dirty_dev  = 0;\n" +
+            "    }\n" +
+            "    return 0;\n" +
+            "#else\n" +
+            "    (void)ids_id; (void)table_id; (void)out_id; (void)T; (void)d;\n" +
+            "    fprintf(stderr, \"[cuda] embedding: built without __CUDACC__\\n\");\n" +
+            "    return -1;\n" +
+            "#endif\n" +
+            "}\n" +
+            "\n" +
             "/* ════════════════════════════════════════════════════════════════════\n" +
             " * RFC 041 Phase 4-D-5-2 — Phase B reduction + Phase B2 real CUDA kernels\n" +
             " * ────────────────────────────────────────────────────────────────────\n" +

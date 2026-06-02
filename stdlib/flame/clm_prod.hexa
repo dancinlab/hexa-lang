@@ -470,6 +470,60 @@ fn _groupnorm(x: int, gamma: int, beta: int, y: int, mean: int, inv: int, xhat: 
     nn_groupnorm_fwd(x, gamma, beta, y, mean, inv, xhat, T, C, G)
 }
 
+// HEXA-FUSION L3 (glue half · final slice ⑤c): device-resident embedding gather.
+// The token-gather at the head of clm_prod_fwd (xe[i·d+c] = embed[tok·d+c]) is
+// interpreted inter-op host glue (the ③ fwd-only 0% floor). Under
+// CLM_PROD_DEVRESIDENT it fuses onto the device (forge_dispatch_embedding),
+// keeping xe FARR_DEVICE so the first conv GEMM H2D-skips it. Pure gather, NO
+// reduction → bit-exact to nn_embedding_fwd (max|Δ|=0). rc 0 = on device; else
+// the proven host nn_embedding_fwd runs (byte-eq). Env-gated like _gelu above.
+fn _embedding(ids: int, table: int, out: int, T: int, d: int) {
+    if env("CLM_PROD_DEVRESIDENT") != "" {
+        let rc = forge_dispatch_embedding(ids, table, out, T, d)
+        if rc == 0 { return }
+    }
+    nn_embedding_fwd(ids, table, out, T, d)
+}
+
+// HEXA-FUSION L3 (glue half · final slice ⑤c): device-resident expert-pack copy.
+// The clm_prod_fwd j-loop that stacks the 2 expert activations ex0/ex1 into
+// ex_out[E·T·d] (ex_out[0·n+j]=ex0[j], ex_out[1·n+j]=ex1[j], n=T·d) is
+// interpreted inter-op host glue (the ③ fwd-only 0% floor). Under
+// CLM_PROD_DEVRESIDENT it fuses onto the device (forge_dispatch_expert_pack2),
+// keeping ex_out FARR_DEVICE so the moe-router H2D-skips it. Pure copy, NO
+// reduction → bit-exact (max|Δ|=0). rc 0 = on device; else the byte-identical
+// host pack loop runs. Env-gated like _gelu above.
+fn _expert_pack2(ex0: int, ex1: int, ex_out: int, n: int) {
+    if env("CLM_PROD_DEVRESIDENT") != "" {
+        let rc = forge_dispatch_expert_pack2(ex0, ex1, ex_out, n)
+        if rc == 0 { return }
+    }
+    let mut j = 0
+    while j < n {
+        t_set(ex_out, 0 * n + j, t_get(ex0, j))
+        t_set(ex_out, 1 * n + j, t_get(ex1, j))
+        j = j + 1
+    }
+}
+
+// HEXA-FUSION L3 (glue half · final slice ⑤c): device-resident MoE router.
+// The moe-router (softmax gate over E experts + gate-weighted combine, logits_r
+// · ex_out → y/probs) is interpreted inter-op host glue with a per-position
+// REDUCTION (the ③ fwd-only 0% floor). Under CLM_PROD_DEVRESIDENT it fuses onto
+// the device (forge_dispatch_moe_router), keeping y/probs FARR_DEVICE so the
+// next groupnorm/conv H2D-skips them. The device kernel replays moe_lib's
+// hand-rolled _moe_exp (scaled-Taylor, NOT CUDA exp) and accumulates BOTH
+// reductions SEQUENTIALLY (NO tree re-assoc) → bit-exact to nn_moe_router_fwd
+// (max|Δ|=0). rc 0 = on device; else the proven host nn_moe_router_fwd runs
+// (byte-eq). Env-gated like _gelu above.
+fn _moe_router(logits: int, ex_out: int, probs: int, y: int, T: int, E: int, C: int) {
+    if env("CLM_PROD_DEVRESIDENT") != "" {
+        let rc = forge_dispatch_moe_router(logits, ex_out, probs, y, T, E, C)
+        if rc == 0 { return }
+    }
+    nn_moe_router_fwd(logits, ex_out, probs, y, T, E, C)
+}
+
 // Forward with weight-only int4 QAT (verbatim from clm_qat assembly-3b).
 fn clm_prod_fwd(tokens: int,
                embed: int, ecW: int, ecB: int, tcW: int, tcB: int, tgG: int, tgB: int,
@@ -487,7 +541,10 @@ fn clm_prod_fwd(tokens: int,
     _fq(rW, rWq, rM, E, d)
     _fq(roW, roWq, roM, V, d)
 
-    nn_embedding_fwd(tokens, embed, xe, T, d)
+    // HEXA-FUSION L3 (glue half · final ⑤c): embedding gather (tokens→xe) —
+    // interpreted inter-op host glue at the fwd head. Device path keeps xe
+    // FARR_DEVICE so the first conv GEMM H2D-skips it (byte-eq); else host loop.
+    _embedding(tokens, embed, xe, T, d)
     conv1d_via_forge(xe, ecWq, ecB, xec, T, d, d, K, 1)
     let h0 = t_zeros(T * d)
     conv1d_via_forge(xec, tcWq, tcB, h0, T, d, d, K, 1)
@@ -516,14 +573,17 @@ fn clm_prod_fwd(tokens: int,
     // else host nn_gelu_fwd.
     let ex0 = t_zeros(T * d); _gelu(eo0, ex0, T * d)
     let ex1 = t_zeros(T * d); _gelu(eo1, ex1, T * d)
-    let mut j = 0
-    while j < T * d {
-        t_set(ex_out, 0 * T * d + j, t_get(ex0, j))
-        t_set(ex_out, 1 * T * d + j, t_get(ex1, j))
-        j = j + 1
-    }
+    // HEXA-FUSION L3 (glue half · final ⑤c): expert-pack copy (ex0/ex1→ex_out)
+    // — interpreted inter-op host glue (T·d host t_get/t_set per step). Device
+    // path keeps ex_out FARR_DEVICE so the moe-router H2D-skips it (byte-eq);
+    // else byte-identical host pack loop.
+    _expert_pack2(ex0, ex1, ex_out, T * d)
     let y = t_zeros(T * d)
-    nn_moe_router_fwd(logits_r, ex_out, probs, y, T, E, d)
+    // HEXA-FUSION L3 (glue half · final ⑤c): moe-router (logits_r·ex_out→y,probs)
+    // — interpreted inter-op host glue with a per-position reduction. Device path
+    // keeps y/probs FARR_DEVICE (byte-eq via hand-rolled _moe_exp + sequential
+    // reductions, NO tree re-assoc); else host nn_moe_router_fwd.
+    _moe_router(logits_r, ex_out, probs, y, T, E, d)
     let meanN = t_zeros(1)
     // HEXA-FUSION L3 (glue half): groupnorm #2 (norm_out, y→yn) — interpreted
     // inter-op host glue with a per-group reduction. Device path keeps

@@ -1203,6 +1203,48 @@ HexaVal forge_dispatch_groupnorm(HexaVal x_v, HexaVal gamma_v, HexaVal beta_v,
                              HexaVal xhat_v, HexaVal t_v, HexaVal c_v,
                              HexaVal g_v);                                    /* runtime.c — fusion L3 glue seam */
 
+/* HEXA-FUSION L3 (glue half · final slice ⑤c) — device-resident expert-pack copy.
+ * forge_dispatch_expert_pack2(ex0, ex1, ex_out, n) -> int rc (0 ok / -1 host).
+ * EX_OUT[0·n+j]=EX0[j], EX_OUT[1·n+j]=EX1[j] for j in 0..n (n=T·d) — the
+ * clm_prod_fwd j-loop that stacks the 2 expert activations into ex_out[E·T·d].
+ * Pure copy, NO reduction → trivially bit-exact (max|Δ|=0) via
+ * _hx_cuda_farr_expert_pack2_gpu; keeps EX_OUT DEVICE-RESIDENT so the follow-up
+ * moe-router H2D-skips it. Gated behind env CLM_PROD_DEVRESIDENT; no-CUDA → -1
+ * → host pack loop (byte-eq). */
+HexaVal hexa_forge_dispatch_expert_pack2(HexaVal ex0_v, HexaVal ex1_v,
+                                  HexaVal out_v, HexaVal n_v);                /* runtime.c — fusion L3 glue */
+HexaVal forge_dispatch_expert_pack2(HexaVal ex0_v, HexaVal ex1_v,
+                             HexaVal out_v, HexaVal n_v);                     /* runtime.c — fusion L3 glue seam */
+
+/* HEXA-FUSION L3 (glue half · final slice ⑤c) — device-resident MoE router.
+ * forge_dispatch_moe_router(logits, ex_out, probs, y, T, E, C) -> int rc (0 ok
+ * / -1 host). Reproduces moe_lib.hexa nn_moe_router_fwd: probs=softmax(logits)
+ * per-t (stable, max-subtracted), Y[t,c]=Σ_e probs[t,e]·ex_out[e·T·C+t·C+c]. The
+ * softmax replays moe_lib's HAND-ROLLED _moe_exp (scaled-Taylor range reduction,
+ * NOT CUDA exp) term-for-term, and BOTH reductions (softmax sum + combine acc)
+ * accumulate SEQUENTIALLY under ONE thread per t (NO tree re-association) → no
+ * ULP delta, bit-exact (max|Δ|=0) via _hx_cuda_farr_moe_router_gpu. Keeps Y+PROBS
+ * DEVICE-RESIDENT. Gated behind env CLM_PROD_DEVRESIDENT; no-CUDA → -1 → host
+ * nn_moe_router_fwd (byte-eq). */
+HexaVal hexa_forge_dispatch_moe_router(HexaVal logits_v, HexaVal ex_out_v,
+                                  HexaVal probs_v, HexaVal y_v, HexaVal t_v,
+                                  HexaVal e_v, HexaVal c_v);                  /* runtime.c — fusion L3 glue */
+HexaVal forge_dispatch_moe_router(HexaVal logits_v, HexaVal ex_out_v,
+                             HexaVal probs_v, HexaVal y_v, HexaVal t_v,
+                             HexaVal e_v, HexaVal c_v);                       /* runtime.c — fusion L3 glue seam */
+
+/* HEXA-FUSION L3 (glue half · final slice ⑤c) — device-resident embedding gather.
+ * forge_dispatch_embedding(ids, table, x_out, T, d) -> int rc (0 ok / -1 host).
+ * X_OUT[i·d+c]=TABLE[tok·d+c] where tok=(int)IDS[i] — the token-gather host glue
+ * at the head of clm_prod_fwd (nn_embedding_fwd). Pure gather/copy, NO reduction
+ * → trivially bit-exact (max|Δ|=0) via _hx_cuda_farr_embedding_gpu; keeps X_OUT
+ * DEVICE-RESIDENT so the first conv GEMM H2D-skips it. Gated behind env
+ * CLM_PROD_DEVRESIDENT; no-CUDA → -1 → host gather (byte-eq). */
+HexaVal hexa_forge_dispatch_embedding(HexaVal ids_v, HexaVal table_v,
+                                  HexaVal out_v, HexaVal t_v, HexaVal d_v);   /* runtime.c — fusion L3 glue */
+HexaVal forge_dispatch_embedding(HexaVal ids_v, HexaVal table_v,
+                             HexaVal out_v, HexaVal t_v, HexaVal d_v);        /* runtime.c — fusion L3 glue seam */
+
 /* ── RFC 050 PERF-INHERITANCE: forge BF16 FFN dispatch wrapper ──────
  * `forge_dispatch_ffn_fp64_via_bf16(x, w1, w2, y, M, D, FD)` — 7-arg
  * builtin. Takes FP64 farr handles, internally allocates HexaFarrBf16
