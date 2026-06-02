@@ -55,7 +55,9 @@ pub struct Upf {
     vloc: [float],           // PP_LOCAL — local potential (Rydberg)
     rho: [float],            // PP_RHOATOM — atomic charge 4*pi*r^2*rho(r)
     dij: [float],            // PP_DIJ  — flat nproj*nproj couplings (Ry)
-    beta_lengths: [int]      // per-projector PP_BETA.i sample count
+    beta_lengths: [int],     // per-projector PP_BETA.i sample count
+    betas: [float],          // flat [nproj*mesh] radial projectors, zero-padded to mesh
+    ls: [int]                // [nproj] angular momenta (PP_BETA.i angular_momentum)
 }
 
 // --- primitive string helpers ------------------------------------------
@@ -131,6 +133,52 @@ fn _upf_block_floats(text: str, open_tag: str, close_base: str) -> [float] {
 }
 
 // Count how many PP_BETA.i blocks exist and record each one's sample length.
+// Extract attribute key (numeric) from a multi-line opening tag that begins
+// with open_tag (e.g. "<PP_BETA.1"). Scans from the tag start to its
+// closing ">" for key="value" and returns the trimmed value.
+fn _upf_tag_attr(text: str, open_tag: str, key: str) -> str {
+    let o = text.index_of(open_tag)
+    if o < 0 { return "" }
+    let after = text.substring(o, len(text))
+    let gt = after.index_of(">")
+    if gt < 0 { return "" }
+    let taghdr = after.substring(0, gt + 1)
+    return _upf_attr(taghdr, key).trim()
+}
+
+// Flat [nproj*mesh] radial projectors, each PP_BETA.i zero-padded to mesh length
+// (UPF betas are stored only out to a cutoff radius index < mesh_size; the radial
+// quadrature in qforge_proj_radial needs len(beta)==len(r)).
+fn _upf_betas_flat(text: str, nproj: int, mesh: int) -> [float] {
+    let mut out: [float] = []
+    let mut i = 1
+    while i <= nproj {
+        let open = "<PP_BETA." + to_string(i)
+        let vals = _upf_block_floats(text, open, "PP_BETA." + to_string(i))
+        let nv = len(vals)
+        let mut t = 0
+        while t < mesh {
+            if t < nv { out = out.push(vals[t]) } else { out = out.push(0.0) }
+            t = t + 1
+        }
+        i = i + 1
+    }
+    return out
+}
+
+// [nproj] angular momenta from each PP_BETA.i angular_momentum attribute.
+fn _upf_beta_ls(text: str, nproj: int) -> [int] {
+    let mut out: [int] = []
+    let mut i = 1
+    while i <= nproj {
+        let open = "<PP_BETA." + to_string(i)
+        let am = _upf_tag_attr(text, open, "angular_momentum")
+        if am == "" { out = out.push(0) } else { out = out.push(to_int(to_float(am))) }
+        i = i + 1
+    }
+    return out
+}
+
 fn _upf_beta_lengths(text: str, nproj: int) -> [int] {
     let mut out: [int] = []
     let mut i = 1
@@ -159,12 +207,15 @@ pub fn upf_parse(path: str) -> Upf {
     let mut empty_rho: [float] = []
     let mut empty_dij: [float] = []
     let mut empty_beta: [int] = []
+    let mut empty_betaf: [float] = []
+    let mut empty_betal: [int] = []
 
     let text = read_file(path)
     if len(text) == 0 {
         return Upf { ok: false, error: "cannot read or empty file: " + path,
             header: bad_header, r: empty_r, rab: empty_rab, vloc: empty_vloc,
-            rho: empty_rho, dij: empty_dij, beta_lengths: empty_beta }
+            rho: empty_rho, dij: empty_dij, beta_lengths: empty_beta,
+            betas: empty_betaf, ls: empty_betal }
     }
 
     // locate the single-line <PP_HEADER ... /> element
@@ -172,14 +223,16 @@ pub fn upf_parse(path: str) -> Upf {
     if h < 0 {
         return Upf { ok: false, error: "malformed UPF: no PP_HEADER element",
             header: bad_header, r: empty_r, rab: empty_rab, vloc: empty_vloc,
-            rho: empty_rho, dij: empty_dij, beta_lengths: empty_beta }
+            rho: empty_rho, dij: empty_dij, beta_lengths: empty_beta,
+            betas: empty_betaf, ls: empty_betal }
     }
     let after_h = text.substring(h, len(text))
     let hclose = after_h.index_of(">")
     if hclose < 0 {
         return Upf { ok: false, error: "malformed UPF: unterminated PP_HEADER",
             header: bad_header, r: empty_r, rab: empty_rab, vloc: empty_vloc,
-            rho: empty_rho, dij: empty_dij, beta_lengths: empty_beta }
+            rho: empty_rho, dij: empty_dij, beta_lengths: empty_beta,
+            betas: empty_betaf, ls: empty_betal }
     }
     let hline = after_h.substring(0, hclose + 1)
 
@@ -203,13 +256,15 @@ pub fn upf_parse(path: str) -> Upf {
         return Upf { ok: false,
             error: "unsupported: ultrasoft pseudopotential (NC-only parser; US augmentation deferred)",
             header: header, r: empty_r, rab: empty_rab, vloc: empty_vloc,
-            rho: empty_rho, dij: empty_dij, beta_lengths: empty_beta }
+            rho: empty_rho, dij: empty_dij, beta_lengths: empty_beta,
+            betas: empty_betaf, ls: empty_betal }
     }
     if is_paw {
         return Upf { ok: false,
             error: "unsupported: PAW dataset (NC-only parser; PAW reconstruction deferred)",
             header: header, r: empty_r, rab: empty_rab, vloc: empty_vloc,
-            rho: empty_rho, dij: empty_dij, beta_lengths: empty_beta }
+            rho: empty_rho, dij: empty_dij, beta_lengths: empty_beta,
+            betas: empty_betaf, ls: empty_betal }
     }
 
     // body blocks
@@ -219,8 +274,10 @@ pub fn upf_parse(path: str) -> Upf {
     let rho = _upf_block_floats(text, "<PP_RHOATOM", "PP_RHOATOM")
     let dij = _upf_block_floats(text, "<PP_DIJ", "PP_DIJ")
     let beta_lengths = _upf_beta_lengths(text, nproj)
+    let betas = _upf_betas_flat(text, nproj, len(r))
+    let beta_ls = _upf_beta_ls(text, nproj)
 
     return Upf { ok: true, error: "", header: header,
         r: r, rab: rab, vloc: vloc, rho: rho, dij: dij,
-        beta_lengths: beta_lengths }
+        beta_lengths: beta_lengths, betas: betas, ls: beta_ls }
 }
