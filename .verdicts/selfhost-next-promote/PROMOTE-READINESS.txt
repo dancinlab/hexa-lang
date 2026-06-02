@@ -1,0 +1,130 @@
+=== SELFHOST-NEXT — PROMOTE-TO-DEFAULT-TOOLCHAIN READINESS ===
+slug: selfhost-next-promote   id: PROMOTE-READINESS
+host: ghost (macOS 26.5 arm64, 192.168.50.150)
+branch: selfhost-next/promote-readiness   base: origin/main
+date: 2026-06-03
+discipline: READ + RUN-GATES + REPORT only. NO flip performed. Default toolchain UNTOUCHED.
+
+PRE-REGISTERED FALSIFIER (g63)
+  Readiness is GO iff ALL hold on ghost:
+   (a) byte-eq fixpoint intact (cc-gen3.o == cc-gen4.o)
+   (b) parity gate green (behaviour axis + 42-smoke), real exit 0, no pipe-mask
+   (c) gen3 compiles+links+RUNS a fresh program with correct exit
+   (d) gen3 emit is deterministic (identical bytes across runs)
+   (e) default NOT already flipped (no irreversible state touched)
+  Any failure => NO-GO with the named blocker.
+
+VERIFICATION (real runs on ghost, verbatim)
+
+ (a) BYTE-EQ FIXPOINT — PASS
+     cmp cc-gen3.o cc-gen4.o  -> exit 0 (both 3224592 bytes)
+     "BYTE-EQ: cc-gen3.o == cc-gen4.o (FIXPOINT HOLDS)"
+
+ (b) PARITY GATE — PASS  (tool/selfhost_parity_gate.sh, exit 0)
+     gen3 = selfhost-work/promote/build/gen3
+     ref  = ~/.hx/bin/hexa.real (hexa 0.1.0-dispatch)
+     PROG      BEHAVIOUR  ASM      SMOKE   VERDICT
+     arith     ok(42)     ref-err  42-ok   PASS
+     bitmask   ok(15)     ref-err  n/a     PASS
+     branch    ok(7)      ref-err  n/a     PASS
+     call      ok(13)     ref-err  n/a     PASS
+     recurse   ok(120)    ref-err  n/a     PASS
+     parity: 5/5 pass, 0 fail (strict=0, asm-axis=on)
+     RESULT: PARITY PASS — promotion AUTHORIZED   (PARITY_GATE_EXIT=0)
+     Raw stdout: .verdicts/selfhost-next-promote/parity_gate_raw_stdout.txt
+
+     NOTE on ASM axis = "ref-err" (NOT a gen3 fault):
+       The gate's asm-parity axis invokes BOTH compilers with a placeholder
+       `_drv.hexa` driver token. The shipped reference (`hexa 0.1.0-dispatch`,
+       a dispatch WRAPPER) treats `_drv.hexa` as a real source file and rejects
+       it ("source file not found: _drv.hexa"); the raw native gen3 ignores the
+       token and emits fine. So the asm axis cannot run vs this particular ref.
+       Per the gate/runbook design, asm is INFORMATIONAL unless --strict; the
+       load-bearing BEHAVIOUR axis (which does not use the wrapper) is 5/5 green.
+       This is a ref-shim mismatch, not a gen3 codegen divergence.
+
+ (c) FRESH COMPILE+LINK+RUN — PASS
+     fn main(){exit(99)}  -> gen3 emit asm (exit 0) -> clang -c -> hexa_ld ->
+     run -> exit 99 (correct).
+
+ (d) DETERMINISM — PASS
+     gen3 emit asm of same source x2 -> cmp identical ("DETERMINISTIC").
+
+ (e) DEFAULT NOT FLIPPED — PASS (no irreversible state)
+     promote_selfhost.sh --status:
+       slot     : absent
+       launcher : absent
+       default  : hexa.real = shipped binary (NOT flipped)
+
+GATES THE BOOTSTRAP PASSES — DOES gen3 PASS THE SAME? (honest g63)
+  - miscompile-zero  : YES. FULL-COMPILER ENCODE_MISS=0 (gen3.done) +
+                       PRC2_ENCODE_MISS=0; STP-ENCODE-MISS closed-negative
+                       (.verdicts/selfhost-next-stp-fix). Fresh+corpus runs clean.
+  - determinism      : YES (axis d).
+  - faithful/behaviour: YES — 5/5 behaviour parity + 42-smoke + fresh exit-99.
+  - asm-byte parity  : UNVERIFIED vs the dispatch-wrapper ref (ref-shim mismatch,
+                       see note). NOT load-bearing; --strict not asserted. To close
+                       this informational axis pre-flip, re-run with -r pointing at a
+                       RAW native ref (e.g. ~/.hx/bin/self/native/hexa_v2) rather
+                       than the 0.1.0-dispatch wrapper.
+
+BUILD-FLOOR STALENESS WALL — ORTHOGONAL, NOT A FLIP BLOCKER
+  Repro (ghost, PATH=~/.hx/bin): `hexa run compiler/main.hexa --help` -> exit 1
+  ("hexa build compiler/main.hexa failed (compile error)") — the SHIPPED bootstrap
+  hexat C-transpiler cannot compile current-main compiler sources.
+  Why orthogonal: the graduated gen3 was NOT built via `hexa run compiler/main.hexa`.
+  It was built by tool/build_selfhost.sh's FROZEN-SEED ladder (151c52c8 seeds ->
+  hexat -> aprime_cc -> gen2 -> gen3) emitting cc-flat. The promote path consumes the
+  prebuilt gen3/hexa_ld/rt.o directly; neither the parity gate nor promote_selfhost.sh
+  invoke the failing `hexa run compiler/main.hexa` path. The wall blocks a from-source
+  rebuild-via-shipped-bootstrap, NOT the parity gate, NOT the flip. (Already retired as
+  a non-issue in the STP closed-negative log.)
+
+WHAT THE FLIP DOES (tool/promote_selfhost.sh) — exact swaps
+  HARD PRECONDITION (both tiers): re-runs selfhost_parity_gate.sh; if it fails,
+  NOTHING is installed/flipped, exit 1.
+  tier 1  `install`  (REVERSIBLE, default UNTOUCHED):
+     - cp gen3,hexa_ld,rt.o -> $HX_HOME/self/native/selfhost/{gen3,hexa_ld,rt.o}
+     - write launcher $HX_HOME/bin/hx-selfhost (exec's the slot gen3)
+     - default hx/hexa UNCHANGED; opt-in via `hx-selfhost <args>`.
+  tier 2  `install --default --i-have-reviewed-parity`  (REVERSIBLE):
+     - mv $HX_HOME/bin/hexa.real -> hexa.real.pre-selfhost.<ts>   (BACKUP)
+     - ln -sf $HX_HOME/bin/hx-selfhost  $HX_HOME/bin/hexa.real    (SYMLINK swap)
+     - REFUSED unless BOTH --default AND --i-have-reviewed-parity AND green gate.
+  REVERSIBILITY:
+     - tier 1: fully reversible (delete slot+launcher; nothing else changed).
+     - tier 2: REVERSIBLE via `promote_selfhost.sh --revert` (rm symlink, mv the
+       hexa.real.pre-selfhost.<ts> backup back). Reversible as long as the backup
+       is retained. The only "not-trivially-undoable" bit = if the backup file is
+       later deleted during a soak window; runbook says keep it until soak passes.
+  NOT-A-PR: tier 2 mutates an on-disk launcher in $HX_HOME OUTSIDE the repo, per
+  host. No PR can carry it; it is a host-local irreversible-by-policy action needing
+  human ack. THIS is why the lane does not perform it.
+
+GO / NO-GO
+  >>> GO for tier-1 side-by-side install (zero risk to default).
+  >>> CONDITIONAL-GO for tier-2 default-flip — technically authorized (gate green,
+      fixpoint intact, determinism + miscompile-zero + behaviour parity all hold),
+      but DELIBERATELY DEFERRED to the user: it is an irreversible-by-policy
+      host-local change requiring explicit human ack (--i-have-reviewed-parity).
+  Named residual (non-blocking, advisory): the asm-byte parity axis is UNVERIFIED
+      against the dispatch wrapper. Recommend closing it with a raw-native -r ref
+      before tier-2 for max confidence; behaviour parity already covers semantics.
+
+EXACT FLIP STEPS (for user to approve+run on the target host)
+  # preconditions (re-verify on the flip host):
+  bash tool/selfhost_parity_gate.sh -g <BUILD>/gen3 -l <BUILD>/hexa_ld -t <BUILD>/rt.o
+  # tier 1 (reversible, do first, exercise it):
+  bash tool/promote_selfhost.sh install -w <BUILD>
+  hx-selfhost build <a real workload>     # exercise side-by-side
+  # tier 2 (the irreversible-by-policy default flip — human ack):
+  bash tool/promote_selfhost.sh install --default --i-have-reviewed-parity -w <BUILD>
+  hexa --version                          # smoke the new default
+
+EXACT ROLLBACK STEPS
+  bash tool/promote_selfhost.sh --revert  # restores hexa.real from backup
+  bash tool/promote_selfhost.sh --status  # confirm "NOT flipped"
+  # keep hexa.real.pre-selfhost.<ts> until the soak window passes.
+
+VERDICT: GO (tier-1) / CONDITIONAL-GO-DEFERRED (tier-2, user ack). No blocker.
+         Build-floor wall = orthogonal. asm axis = informational residual only.
