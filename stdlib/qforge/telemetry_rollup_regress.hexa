@@ -1,0 +1,306 @@
+// telemetry_rollup_regress.hexa — QFORGE-PROCESS campaign-wide cross-deck
+//   regression detector (the rollup ⨯ regress tier).
+//
+// The PROCESS observability stack so far has TWO axes that do not yet meet:
+//   • telemetry_regress (#2483) — cross-RUN Δ for a SINGLE deck (baseline run
+//     vs current run, per stage).
+//   • telemetry_rollup  (#2487) — cross-DECK aggregate for a SINGLE campaign
+//     snapshot (which STAGE CLASS dominates the campaign wall).
+//
+// This module is their product: cross-RUN Δ at the CAMPAIGN tier. Given a
+// BASELINE campaign rollup and a CURRENT campaign rollup, JOIN per STAGE CLASS
+// (scf · ph · relax · lambda) and flag any class whose campaign-wide wall GREW
+// beyond a percent threshold — "did the phonon stage get slower across the
+// WHOLE campaign run-over-run", a question neither per-deck regress (one deck)
+// nor a single rollup (one snapshot) can answer. IMPROVED classes (campaign
+// wall dropped past threshold) are surfaced too.
+//
+// d3/d19 REUSE (IMPORT-ONLY, 0-diff): the stage-class aggregation, the per-q
+//   ph→ph collapse, the JSONL parse, the rss-null passthrough ALL live in
+//   qforge_telemetry_rollup (#2487) → qforge_telemetry_report (#2477). This
+//   module ONLY joins the two resulting RollupReports' stage_rows and computes
+//   the campaign Δ. It re-implements NOTHING and edits NO existing file.
+//
+// @L3 READ-only PURE function over two RollupReports — no pod ops, no source
+//   mutation, no I/O. A class present in only one snapshot is NEW / DROPPED (no
+//   finite ratio — surfaced via `kind`, never a fabricated number). rss-Δ is
+//   computed ONLY when BOTH snapshots carried a real rss for the class
+//   (d6 HONESTY — else the render shows the literal `null`, never 0).
+use "stdlib/qforge/telemetry_rollup"
+
+// ── per-stage-class campaign delta row ────────────────────────────────────
+//   stage_class — the collapsed class (relax · scf · ph · lambda · other)
+//   kind        — REGRESSED · IMPROVED · SAME · NEW · DROPPED
+//   base_wall   — baseline campaign wall_s for the class (0 if NEW)
+//   cur_wall    — current  campaign wall_s for the class (0 if DROPPED)
+//   dwall_pct   — signed %Δ campaign wall vs baseline; 0 if NEW/DROPPED (no
+//                 finite ratio — surfaced via `kind`, not a number)
+//   has_dwall   — true iff a finite wall-Δ% exists (both sides present, base>0)
+//   base_rss    — baseline summed class rss_kb (valid iff has_rss)
+//   cur_rss     — current  summed class rss_kb (valid iff has_rss)
+//   has_rss     — true iff BOTH snapshots carried a real rss for the class (d6)
+//   drss_pct    — signed %Δ rss vs baseline; only meaningful when has_rss
+struct CampaignRegressRow {
+    stage_class: str,
+    kind: str,
+    base_wall: int,
+    cur_wall: int,
+    dwall_pct: int,
+    has_dwall: bool,
+    base_rss: int,
+    cur_rss: int,
+    has_rss: bool,
+    drss_pct: int,
+}
+
+// ── the campaign cross-deck regression report ─────────────────────────────
+//   rows          — CampaignRegressRow[] ranked by dwall_pct DESC (worst
+//                   campaign regression first); NEW/DROPPED sink to the tail
+//   pct_threshold — the flag threshold this report was computed against
+//   n_regressed   — classes flagged REGRESSED (wall OR rss > threshold)
+//   n_improved    — classes flagged IMPROVED (wall dropped > threshold)
+//   n_new         — classes present only in the current snapshot
+//   n_dropped     — classes present only in the baseline snapshot
+//   base_grand    — baseline campaign grand wall (s)
+//   cur_grand     — current  campaign grand wall (s)
+//   base_decks    — decks ingested in the baseline snapshot
+//   cur_decks     — decks ingested in the current  snapshot
+struct CampaignRegressReport {
+    rows: [CampaignRegressRow],
+    pct_threshold: int,
+    n_regressed: int,
+    n_improved: int,
+    n_new: int,
+    n_dropped: int,
+    base_grand: int,
+    cur_grand: int,
+    base_decks: int,
+    cur_decks: int,
+}
+
+// ── internal: locate a StageClassRow by class label, or a sentinel ────────
+// found=false sentinel (stage_class=="") lets the join treat "absent"
+// structurally (NEW/DROPPED) without a parallel presence array.
+fn _crr_find(rep: RollupReport, cls: str) -> StageClassRow {
+    let mut i = 0
+    while i < len(rep.stage_rows) {
+        if rep.stage_rows[i].stage_class == cls { return rep.stage_rows[i] }
+        i = i + 1
+    }
+    return StageClassRow { stage_class: "", wall_s: -1, rss_kb: -1, has_rss: false, pct: -1, dominant: false }
+}
+fn _crr_present(r: StageClassRow) -> bool { return r.stage_class != "" }
+
+// ── internal: signed integer %Δ = 100·(cur-base)/base. Caller guards base>0. ─
+fn _crr_pct(base: int, cur: int) -> int {
+    return 100 * (cur - base) / base
+}
+
+// ── internal: baseline cell accessors (sentinel → 0, never a -1 leak) ─────
+fn _crr_base_wall(b: StageClassRow) -> int {
+    if _crr_present(b) { return b.wall_s }
+    return 0
+}
+fn _crr_base_rss(b: StageClassRow) -> int {
+    if _crr_present(b) && b.has_rss { return b.rss_kb }
+    return 0
+}
+
+// qforge_telemetry_rollup_regress — JOIN a BASELINE and a CURRENT campaign
+// RollupReport per STAGE CLASS, compute Δ campaign-wall%/Δrss%, classify, rank.
+//
+// Classification per class (priority order):
+//   NEW       — absent in baseline OR baseline wall==0 (the zero-baseline-wall
+//               guard lands here — NEVER divide-by-zero).
+//   DROPPED   — present in baseline, absent in current.
+//   REGRESSED — finite Δ and (Δwall% > threshold) OR (rss both sides and
+//               Δrss% > threshold).
+//   IMPROVED  — finite Δ and Δwall% < -threshold (got faster past threshold).
+//   SAME      — finite Δ within ±threshold on wall (and rss not regressed).
+//
+// rss-Δ (d6): computed ONLY when BOTH snapshots carried a real rss for the
+// class; otherwise has_rss=false and drss_pct stays 0 (the render shows `null`).
+pub fn qforge_telemetry_rollup_regress(base: RollupReport, cur: RollupReport, pct_threshold: int) -> CampaignRegressReport {
+    let mut rows = []
+    let mut n_regressed = 0
+    let mut n_improved = 0
+    let mut n_new = 0
+    let mut n_dropped = 0
+
+    // union of class labels: every current class first (preserves current
+    // ranking as the secondary order), then baseline-only classes.
+    let mut ci = 0
+    while ci < len(cur.stage_rows) {
+        let c = cur.stage_rows[ci]
+        ci = ci + 1
+        let b = _crr_find(base, c.stage_class)
+
+        let mut kind = "SAME"
+        let mut dwall = 0
+        let mut has_dwall = false
+        // rss-Δ only when BOTH sides carry a real rss (d6 — no fabrication)
+        let mut has_rss = _crr_present(b) && b.has_rss && c.has_rss
+        let mut drss = 0
+
+        if !_crr_present(b) || b.wall_s == 0 {
+            // absent in baseline OR zero-baseline-wall guard → NEW (no ratio)
+            kind = "NEW"
+            n_new = n_new + 1
+            has_rss = false
+        } else {
+            has_dwall = true
+            dwall = _crr_pct(b.wall_s, c.wall_s)
+            if has_rss && b.rss_kb != 0 {
+                drss = _crr_pct(b.rss_kb, c.rss_kb)
+            } else {
+                has_rss = false
+            }
+            let wall_reg = dwall > pct_threshold
+            let rss_reg = has_rss && drss > pct_threshold
+            if wall_reg || rss_reg {
+                kind = "REGRESSED"
+                n_regressed = n_regressed + 1
+            } else if dwall < (0 - pct_threshold) {
+                kind = "IMPROVED"
+                n_improved = n_improved + 1
+            } else {
+                kind = "SAME"
+            }
+        }
+
+        rows.push(CampaignRegressRow {
+            stage_class: c.stage_class,
+            kind: kind,
+            base_wall: _crr_base_wall(b),
+            cur_wall: c.wall_s,
+            dwall_pct: dwall,
+            has_dwall: has_dwall,
+            base_rss: _crr_base_rss(b),
+            cur_rss: c.rss_kb,
+            has_rss: has_rss,
+            drss_pct: drss,
+        })
+    }
+
+    // baseline-only classes = DROPPED (present baseline, absent current)
+    let mut bi = 0
+    while bi < len(base.stage_rows) {
+        let b = base.stage_rows[bi]
+        bi = bi + 1
+        if _crr_present(_crr_find(cur, b.stage_class)) { continue }
+        n_dropped = n_dropped + 1
+        rows.push(CampaignRegressRow {
+            stage_class: b.stage_class,
+            kind: "DROPPED",
+            base_wall: b.wall_s,
+            cur_wall: 0,
+            dwall_pct: 0,
+            has_dwall: false,
+            base_rss: _crr_base_rss(b),
+            cur_rss: 0,
+            has_rss: false,
+            drss_pct: 0,
+        })
+    }
+
+    // rank by dwall_pct DESC; rows with no finite Δ (NEW/DROPPED) sink to tail.
+    _crr_sort(rows)
+
+    return CampaignRegressReport {
+        rows: rows,
+        pct_threshold: pct_threshold,
+        n_regressed: n_regressed,
+        n_improved: n_improved,
+        n_new: n_new,
+        n_dropped: n_dropped,
+        base_grand: base.grand_wall,
+        cur_grand: cur.grand_wall,
+        base_decks: base.n_decks,
+        cur_decks: cur.n_decks,
+    }
+}
+
+// ── internal: selection-sort rows by dwall_pct DESC; no-finite-Δ rows last ─
+fn _crr_rank_lt(x: CampaignRegressRow, y: CampaignRegressRow) -> bool {
+    // returns true iff x should rank BEFORE y (x is "more regressed")
+    if x.has_dwall && !y.has_dwall { return true }
+    if !x.has_dwall && y.has_dwall { return false }
+    if !x.has_dwall && !y.has_dwall { return false }
+    return x.dwall_pct > y.dwall_pct
+}
+fn _crr_sort(rows: [CampaignRegressRow]) {
+    let mut a = 0
+    while a < len(rows) {
+        let mut best = a
+        let mut b = a + 1
+        while b < len(rows) {
+            if _crr_rank_lt(rows[b], rows[best]) { best = b }
+            b = b + 1
+        }
+        if best != a {
+            let tmp = rows[a]
+            rows[a] = rows[best]
+            rows[best] = tmp
+        }
+        a = a + 1
+    }
+}
+
+// ── internal: signed-pct render with explicit '+' on growth, `null`/`--` ───
+fn _crr_dwall_str(r: CampaignRegressRow) -> str {
+    if !r.has_dwall { return "  --" }
+    if r.dwall_pct >= 0 { return "+" + to_string(r.dwall_pct) + "%" }
+    return to_string(r.dwall_pct) + "%"
+}
+fn _crr_drss_str(r: CampaignRegressRow) -> str {
+    if !r.has_rss { return "null" }
+    if r.drss_pct >= 0 { return "+" + to_string(r.drss_pct) + "%" }
+    return to_string(r.drss_pct) + "%"
+}
+fn _crr_padr(s: str, w: int) -> str {
+    let mut out = s
+    let mut n = len(s)
+    while n < w { out = out + " " ; n = n + 1 }
+    return out
+}
+fn _crr_padl(s: str, w: int) -> str {
+    let mut pad = ""
+    let mut n = len(s)
+    while n < w { pad = pad + " " ; n = n + 1 }
+    return pad + s
+}
+
+// qforge_telemetry_rollup_regress_render — a fixed-width text table of the
+// campaign cross-deck regression report, ranked worst-first. Columns:
+// stage_class · kind · base_w · cur_w · Δwall · Δrss. REGRESSED rows carry a
+// trailing `◄ REGRESSED`. rss Δ renders the literal `null` when either snapshot
+// lacked a real rss for the class (d6). Pure (no I/O) — the caller prints.
+pub fn qforge_telemetry_rollup_regress_render(rep: CampaignRegressReport) -> str {
+    let mut out = "QFORGE-PROCESS campaign cross-deck regression report (threshold=+"
+    out = out + to_string(rep.pct_threshold) + "%)\n"
+    out = out + "stage_class  kind        base_w   cur_w   Δwall   Δrss\n"
+    out = out + "-----------  ----------  -------  ------  ------  ------\n"
+    let mut i = 0
+    while i < len(rep.rows) {
+        let r = rep.rows[i]
+        let mut line = _crr_padr(r.stage_class, 11) + "  "
+        line = line + _crr_padr(r.kind, 10) + "  "
+        line = line + _crr_padl(to_string(r.base_wall), 7) + "  "
+        line = line + _crr_padl(to_string(r.cur_wall), 6) + "  "
+        line = line + _crr_padl(_crr_dwall_str(r), 6) + "  "
+        line = line + _crr_padl(_crr_drss_str(r), 6)
+        if r.kind == "REGRESSED" { line = line + "  ◄ REGRESSED" }
+        out = out + line + "\n"
+        i = i + 1
+    }
+    out = out + "-----------  ----------  -------  ------  ------  ------\n"
+    out = out + "base_grand=" + to_string(rep.base_grand)
+    out = out + " (" + to_string(rep.base_decks) + " decks)"
+    out = out + "  cur_grand=" + to_string(rep.cur_grand)
+    out = out + " (" + to_string(rep.cur_decks) + " decks)"
+    out = out + "  regressed=" + to_string(rep.n_regressed)
+    out = out + "  improved=" + to_string(rep.n_improved)
+    out = out + "  new=" + to_string(rep.n_new)
+    out = out + "  dropped=" + to_string(rep.n_dropped) + "\n"
+    return out
+}
