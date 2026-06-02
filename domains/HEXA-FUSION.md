@@ -36,7 +36,7 @@ FORGE-UTILGREEN lever-1~5 가 GEMM repack 을 전부 device 化했어도 util ME
 - [ ] **fwd+bwd autograd-aware fusion** (GPU.md §5d) — forward + backward 커널을 한 device 그래프로 fuse. falsifier: `F-FUSION-TRAINSTEP-EQ` max|Δ|=0 (fused == op-by-op reference).
 - [ ] **compile-time specialization** (GPU.md §5b) — known-(M,N,K) shape 특화 · dead-output elimination · layer 별 mixed-precision auto-select. falsifier: 특화 emit Δ vs generic ∧ byte-eq 무회귀.
 - [ ] **operator-specific surgical override** (GPU.md §5g) — per-call-site precision · custom layout/stride · 파이프라인 중간 커널 1개 교체(cuBLAS monolithic 이 못 하는 것). falsifier: override 경로 byte-eq + emit Δ.
-- [ ] **launch-overhead amortization 우위 측정** (GPU.md §5f · R12) — sub-threshold launch-bound regime 에서 library 스택 대비 실측 wall 우위. falsifier: vs cuBLAS-call wall Δ < 1.0× @ launch-bound shape.
+- [x] **launch-overhead amortization 우위 측정** (GPU.md §5f · R12) ✅ W1-⑧ — ≥30% wall win UNCONDITIONAL (n*<0, no crossover; launch-bound 80% → BW-bound 72.7%), $0 oracle exit 0 + 실측 교차확인 max|Δ|=1.1e-5. raw-GEMM 우위 아님(경계 제거뿐). 상세 = §W1 results.
 
 ### closure — vs PyTorch+CUDA 벤치
 
@@ -67,6 +67,46 @@ t0 (선행 없음 — 병렬 발사)              blocks ▶  대기
 | ⑨ | vs-PyTorch+CUDA baseline | pod | 💰 1-fire | PyTorch util/step-rate 기준선 |
 
 pod 비용 가드: idle READY pod 재사용 우선 · 신규 rent 시 smallest-sufficient 1대 · single fire · 측정 후 즉시 down.
+
+## ── W1 results — landed 2026-06-03 (2/6 first, g5 verbatim) ──
+
+### ⑧ launch-amort 우위 — ✅ RE-CONFIRMED ($0 mac-local, byte-identical, exit 0)
+
+```
+[1] LAUNCH      fused 1 vs baseline 5  → 5.0× fewer
+[2] HBM/elem    fused 3 vs baseline 11 → 3.67× less
+[3] 30%-crossover n* = -26595.7 (NEGATIVE ⇒ no crossover)
+    ⇒ ≥30% wall win UNCONDITIONAL across all n>0 (launch-bound 80% → BW-bound 72.7%)
+[4] pct_faster: n=64→79.98% · n=1024→79.69% · n=16M→72.88%
+VERDICT: structural advantage PROVEN — ORACLE_EXIT=0
+```
+
+elementwise/glue sub-graph 에서 fusion 이 op-by-op(cuBLAS-style) 스택보다 **항상 72.7~80% 빠름**. 실측 교차확인(ubu-2 RTX 5070, n∈{1024…16.7M}, max|Δ|=1.1e-5, `.verdicts/fusion-launch-amort-wall/`). 정직: launch + HBM-traffic 경계 제거뿐, raw-GEMM 우위 아님.
+
+### ⑨ PyTorch+CUDA baseline — ✅ MEASURED (H100 sm_90, d1536/T512, 1.09B ConvMoE)
+
+| 스택 | step/s | util MEAN |
+|---|---|---|
+| PyTorch eager | 1.872 | **100.00%** (n=266) |
+| torch.compile | 1.871 | 99.99% (n=265) |
+
+pod 39139563(anima idle) 재사용·발견상태 복귀(0% util), 신규 rent 0. **target line**: 이 shape 에서 성숙 라이브러리 스택은 H100 을 **이미 util 100% 포화**(eager==compile) = **compute-bound**.
+
+## ── 전략 정정 (⑧+⑨ 합성) — 2-regime: compute-bound=MATCH · launch-bound=EXCEED ──
+
+⑨ 가 확정: 프로덕션 shape(d1536 dense MoE)는 **compute-bound** — PyTorch 가 같은 H100·shape 에서 util 100% 를 이미 찍는다. ⇒ hexa 의 util-RED(0.6%)는 GPU 일이 작아서가 **아니라 인터프리터 host-loop 가 굶긴 것**(PyTorch 100% 가 그 반증). 따라서:
+
+```
+regime                compute-bound (dense GEMM)        launch-bound (elementwise glue · 30 builtin · 20× AdamW)
+────────              ──────────────────────────        ────────────────────────────────────────────────────
+PyTorch               util 100% · roofline (포화)        op-by-op launch 손해
+HEXA 목표             = MATCH (못 이김 ≠ 실패)           = EXCEED (⑧: ≥30% wall win UNCONDITIONAL)
+도달 수단             lane ① device-resident 면 충분      lane ⑤⑥⑦ fusion + compile-time 특화
+```
+
+- **util-GREEN(=match)** 는 lane ① (device-resident, host-loop 제거)만으로 도달 — 워크로드가 이미 충분히 무거움(⑨ 증명). 추가 fusion 불필요.
+- **exceed-PyTorch** 는 오직 launch-bound regime(작은 op·glue)에서 — ⑧ 이 ≥30% 무조건 우위를 $0 로 박제. dense GEMM 은 둘 다 roofline → 비김.
+- 측정 전제(g5): full hexa-vs-PyTorch wall 벤치는 lane ① 착지 후 unblock(⑨-full).
 
 ## ── 상속: 이미 측정된 fusion 승리 (재유도 금지, cite) ──
 
