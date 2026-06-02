@@ -13,11 +13,13 @@
 //                (d6). The DFPT front-end currently runs on QE (`hexa cloud
 //                dft-run <deck>`); QFORGE then computes moments→λ→Tc.
 //   selftest     run the orchestrator selftest (the el-ph→Tc chain gate).
-//   telemetry <report|regress|rollup> <deck...>
+//   telemetry <report|regress|rollup|rollup-all> <deck...>
 //                QFORGE-PROCESS observability over harvested `.dft_telemetry.jsonl`
 //                files. `report <deck>` → ranked per-stage bottleneck table;
 //                `regress <base-deck> <cur-deck> [pct]` → cross-run regression;
-//                `rollup <deck...>` → campaign-wide stage/deck rollup. Reads the
+//                `rollup <deck...>` → campaign-wide stage/deck rollup;
+//                `rollup-all <campaign-root>` → auto-discover every telemetry-bearing
+//                deck under the root, then roll up (no hand-listing). Reads the
 //                deck-local `.dft_telemetry.jsonl` each dft-run emits (#2474). A
 //                missing/empty file → a clean message (d6, never a fabricated
 //                report), not a crash. Reuses the #2477/#2483/#2487 library
@@ -44,6 +46,8 @@ fn _qf_help() {
     println("                           cross-run regression (default threshold 20%)")
     println("  hexa qforge telemetry rollup <deck...>")
     println("                           campaign-wide stage/deck wall rollup")
+    println("  hexa qforge telemetry rollup-all <campaign-root>")
+    println("                           auto-discover every telemetry-bearing deck + roll up")
     println("  hexa qforge help         this text")
     println("")
     println("engine: SCF·DFPT·elph·Eliashberg·Tc bricks (stdlib/qforge), composed by")
