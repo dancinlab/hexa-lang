@@ -297,6 +297,18 @@ let mut PWM_BLENS: [int] = []
 let mut PWM_DLENS: [int] = []
 let mut PWM_OMEGA: float = 1.0
 
+// ── NSCF k-point setter (QFORGE-PERF dense-k DOS) ────────────────────────────
+//   After a converged Γ SCF (qforge_scf_pw_h_multi_smeared), the PWM_* staging
+//   globals hold the full multi-species Hamiltonian context. To evaluate the band
+//   structure at ANOTHER k-point on a Monkhorst-Pack mesh at FIXED converged ρ
+//   (a standard NSCF / band-DOS step), set PWM_KVEC to the new k and call
+//   qforge_h_of_rho_multi(rho) — the G-basis is shared across k (only the kinetic
+//   |k+G|² diag and the KB k+G q-vectors change, assembler.hexa). d4-generic: no
+//   material/k hardcoded; the same setter serves the SCF k and every DOS k.
+pub fn qforge_pwm_set_kvec(kvec: [float]) {
+    PWM_KVEC = kvec
+}
+
 pub fn qforge_h_of_rho_multi(rho: [float]) {
     let n = len(rho)
     // QFORGE-PERF: basis-decoupled G=0 screening (uniform-gas V_xc(ρ̄)) — bypasses

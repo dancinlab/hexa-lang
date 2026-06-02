@@ -2,6 +2,89 @@
 
 Append-only history sister of `MISCOMPILE-ZERO.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
+## 2026-06-03 — CI-health fix: gate invocation + setup/regression classification
+
+Both gate workflows (miscompile-zero + determinism, on main via #2534/#2538)
+were RED on every compiler/self/corpus PR — required checks, so they blocked
+PR #2539 + all future compiler PRs. Root cause: the CI invocation drove the
+compiler via `./hexa run compiler/main.hexa`, which RECOMPILES the compiler
+against the installed embedded runtime and hits the build-floor staleness wall
+(undeclared `__raw_add_f` / `__raw_cmp3`) -> every `--emit=obj` is 0-byte. The
+gate scored that uniform 0-byte as a 10/10 codegen REGRESSION (exit 1) instead
+of a SETUP/INFRA error.
+
+- [x] DIAGNOSED locally: `./hexa run compiler/main.hexa … --emit=obj` -> rc=1,
+      0-byte (build-floor wall). `./build/aprime_cc _drv.hexa --emit=obj …` ->
+      1208-byte clean object (0 ENCODE-MISS) = the WORKING native-emit form;
+      `./hexa run tool/hexa_ld.hexa` linker form works (current embedded rt).
+- [x] HONEST g63 finding: the released `./hexa` GENUINELY cannot native-emit a
+      single program in CI. Only the graduated self-host gen2 (ghost gen2_fix)
+      native-emits cleanly, and it is NOT buildable via release_build in CI.
+      Correct fix = gate exits 2 (CI-neutral) in that env, NOT false-red.
+- [x] Gate scripts hardened (tool/miscompile_zero_gate.sh + determinism_gate.sh):
+      up-front CANARY (c1_hex_literal); if even it won't emit (0-byte, no
+      ENCODE-MISS) -> exit 2 "cannot native-emit in this env". Per-program:
+      0-byte/no-ENCODE-MISS = SETUP-ERROR (exit 2); exit 1 reserved for a
+      PRODUCED object carrying ENCODE-MISS / spurious udf (mcz) or two PRODUCED
+      outputs that differ byte-for-byte (determinism).
+- [x] Workflows: dropped broken `HEXA_CC_PREARGS="run compiler/main.hexa"`;
+      `HEXA_NATIVE_CC` via `${{ vars.HEXA_NATIVE_CC || './hexa' }}` (graduated
+      compiler wireable later); gate exit 2 -> neutral job success via
+      `::notice::` (infra never reds a PR; real regression still exit 1).
+- [x] VERIFIED locally (darwin-arm64): broken `./hexa` -> exit 2 both gates;
+      a dirty-emitting native compiler -> exit 1 (real regression); a clean
+      single-program emit -> exit 0 PASS + relink byte-identical.
+- [x] Landed on branch `ci/fix-gate-invocation` (commit 11ca16adc) -> PR to main.
+- [ ] follow-up: add a self-host gen2 build step (or wire `vars.HEXA_NATIVE_CC`)
+      so the gate runs the REAL native-emit floor check in CI instead of neutral.
+
+## 2026-06-02 — linker/compiler DETERMINISM gate: verified + locked
+
+Milestone: "linker determinism — make hexa_ld output byte-deterministic
+(relink gen2 == gen2b; prior diff @byte ~1924664 symtab tail)". The OLD
+note flagged possible linker nondeterminism; byte-eq graduation suggested
+it was resolved but it was never LOCKED as a gate. Verified deterministic
+end-to-end and gated.
+
+- [x] RE-EMIT determinism: native --emit=obj each corpus program TWICE on
+      GHOST (gen2_fix) — 10/10 byte-identical objects (cmp + SHA256). The
+      `_L<sha4>_` label hash = sha256(module.file)[:4]
+      (compiler/codegen/arm64_darwin.hexa:752) is a PURE FUNCTION of the
+      fixed module path — same path → same labels every emit (path-derived,
+      NOT nondeterminism), empirically confirmed by the byte-identical
+      re-emit.
+- [x] RELINK determinism: link each object TWICE with hld_fixed —
+      10/10 byte-identical executables. ROOT-CAUSE of the only diff seen:
+      a naive two-name relink (link_A vs link_B) differs in EXACTLY ONE
+      byte at 0x8192 — the output basename baked into the linker
+      ad-hoc-codesign build-id string `<basename>-UUID0123…0123456789abc`
+      (the hex tail is the hardcoded LC_UUID constant, hexa_ld.hexa:1750-53,
+      NOT a timestamp/random). Same-basename relink (two dirs) → SHA256
+      identical. So the build-id is path-derived/deterministic, NOT a
+      nondeterminism source. NO fix to hexa_ld needed.
+- [x] SCALE proof (the exact OLD-note case): re-linked the 3.2MB graduated
+      compiler object cc-prc2-fix.o TWICE → 1.6MB executable, IDENTICAL
+      SHA256 (683b85f8f7e3…). The symtab/strtab tail at ~1924664 is
+      deterministic; the relink wall is CLOSED. Audited hexa_ld.hexa:
+      LC_UUID = hardcoded const, LC_SOURCE_VERSION = 0, n_desc = 0,
+      strtab verbatim + zero-pad, nlist emitted in fixed scan order — no
+      wall-clock / random / unstable-sort / uninit-pad source exists.
+- [x] GATE `tool/determinism_gate.sh` — PHASE 1 emit-twice + PHASE 2
+      link-twice (same basename) over self/test/miscompile_zero/*.hexa,
+      FAIL NONZERO on any byte diff. Env-portable (HEXA_NATIVE_CC /
+      HEXA_CC_PREARGS / HEXA_LD / HEXA_TARGET / DETERM_OUT). NO /tmp
+      (writes under repo build/). Honest rc, no pipe-masking.
+- [x] VERIFIED on GHOST against graduated gen2_fix + hld_fixed:
+      PASS 10/10 re-emit AND 10/10 relink byte-identical, real exit 0.
+- [x] NEGATIVE-TESTED: a one-byte perturbation in a relink output trips
+      the FAIL branch → exit 1. Detection proven both directions.
+- [x] CI wired: `.github/workflows/determinism-gate.yml` builds ./hexa via
+      the shared release_build on macos-latest (arm64), then runs the gate
+      with the linker via `hexa run tool/hexa_ld.hexa`. Path-filtered on
+      compiler/self/corpus/gate/linker changes.
+- [x] One-line ghost reference run:
+      `HEXA_NATIVE_CC=~/dancinlab/selfhost-work/gen2_fix HEXA_LD=~/dancinlab/selfhost-work/hld_fixed bash tool/determinism_gate.sh`
+
 ## 2026-06-02 — broad self-emit sweep: 82-program CLEAN-SWEEP (no new miscompile)
 
 Milestone: "broaden the self-emit corpus beyond the compiler flat — exercise

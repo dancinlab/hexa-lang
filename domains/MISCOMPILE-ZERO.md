@@ -25,7 +25,7 @@ native mis-eval (in flight). When byte-eq lands, MISCOMPILE-ZERO opens here.
 - [x] broaden the self-emit corpus beyond the compiler flat — exercise gen2 native codegen on diverse stdlib / app programs, sweep for new miscompiles — 82-program broad sweep on GHOST gen2_fix = CLEAN (0 ENCODE-MISS / 0 udf / 82 oracle-asm-match modulo benign label hash); verdict `.verdicts/miscompile-zero-sweep/CLEAN-SWEEP-82.txt`; corpus widened 6→10 (c6 closures · c7 recursion+array · c8 string-methods · c9 branch-control · c10 try/catch)
 - [ ] catalogue the native-codegen miscompile CLASS (index/slice/char_code, 2-reg value ABI, aliasing, string-intern) as targeted codegen tests so regressions (cf. the cycle-41 `.truncate` regression) can't silently return
 - [ ] each newly-exposed native-codegen miscompile → its own fix + byte-verify vs clang oracle, driven to zero
-- [ ] linker determinism: make hexa_ld output byte-deterministic (relink gen2 == gen2b; prior diff @byte ~1924664 symtab tail) so byte-eq holds across rebuilds
+- [x] linker determinism: make hexa_ld output byte-deterministic (relink gen2 == gen2b; prior diff @byte ~1924664 symtab tail) so byte-eq holds across rebuilds — VERIFIED + GATED: re-link of the 3.2MB cc-prc2-fix.o twice gives an identical SHA256 (symtab/strtab tail deterministic, wall closed); `tool/determinism_gate.sh` + `.github/workflows/determinism-gate.yml` lock re-emit + relink byte-eq; PASS 10/10 on graduated gen2_fix + hld_fixed
 
 ## deferred
 
