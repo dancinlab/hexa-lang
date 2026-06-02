@@ -42,6 +42,32 @@ FORGE-UTILGREEN lever-1~5 가 GEMM repack 을 전부 device 化했어도 util ME
 
 - [ ] **vs-PyTorch+CUDA wall 벤치** — 동일 모델 device-resident, step/s + util 을 torch eager + torch.compile 와 나란히. **정직**: cuBLAS GEMM = roofline(못 이김 ≠ 실패) — 우위는 fusion/launch-amort regime 에서만 주장. closure = util-GREEN ∧ descent-GREEN ∧ vs-PyTorch wall Δ 기록.
 
+## ── first parallel wave (W1) — 6 independent lanes fired 2026-06-03 ──
+
+Dependency DAG 추출: 선행 0 인 노드를 전부 뽑아 동시 발사(maximal parallelism). 4 lanes $0(agent/mac/codegen·oracle) + 2 lanes pod(GPU 실측). 나머지 ②④⑤ + ⑨-full 은 ① 착지 후 unblock.
+
+```
+t0 (선행 없음 — 병렬 발사)              blocks ▶  대기
+─────────────────────────────                   ──────
+① device-resident tensor lifetime ──┬─▶ ② async launch · ④ CUDA-graph · ⑤ fwd+bwd fusion
+③ fwd-only fused probe (util Δ)  ────┘   (⑤ 설계 입력)
+⑥ compile-time specialization        (독립 codegen)
+⑦ operator surgical override         (독립 codegen)
+⑧ launch-amort 측정 (R12 재사용)      (독립 $0 oracle)
+⑨ vs-PyTorch baseline                (독립 — full bench 만 ① 대기)
+```
+
+| lane | milestone | 기질 | 비용 | falsifier |
+|---|---|---|---|---|
+| ① | device-resident tensor lifetime | forge/codegen | agent $0 | byte-eq max\|Δ\|=0 ∧ devmem persist |
+| ③ | fwd-only fused device probe | pod H100 | 💰 1-fire | util MEAN Δ vs 0.6% floor |
+| ⑥ | compile-time specialization | codegen emit | mac $0 | 특화 emit Δ + byte-eq |
+| ⑦ | operator surgical override | codegen emit | mac $0 | override emit Δ + byte-eq |
+| ⑧ | launch-amort 측정 | static oracle | mac $0 | vs-call wall Δ < 1.0× |
+| ⑨ | vs-PyTorch+CUDA baseline | pod | 💰 1-fire | PyTorch util/step-rate 기준선 |
+
+pod 비용 가드: idle READY pod 재사용 우선 · 신규 rent 시 smallest-sufficient 1대 · single fire · 측정 후 즉시 down.
+
 ## ── 상속: 이미 측정된 fusion 승리 (재유도 금지, cite) ──
 
 이 도메인은 GPU 도메인의 fusion 캠페인이 측정한 교두보를 상속한다 (재측정 아님 · g5 verbatim 인용):
