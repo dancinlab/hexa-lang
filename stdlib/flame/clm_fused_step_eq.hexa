@@ -67,10 +67,19 @@ fn _fse_fill(t: int, n: int, seed: int) {
 // forge_dispatch_adamw_group call (the lever-4 builtin; mac → host fallback,
 // pod → device group kernel). Mirrors clm_prod.hexa _adam_group EXACTLY.
 // ════════════════════════════════════════════════════════════════════════════
+// NOTE: the prebuilt mac `hexa run` binary (and its cached runtime.o) does NOT
+// contain the forge_dispatch_adamw_group builtin — it is added only by the pod
+// self-host rebuild (same constraint as lever-2/3's _bt/_atb batched builtins,
+// which are NOT byte-eq-testable on the prebuilt mac binary either). So this
+// $0 mac oracle proves the GROUP-vs-SERIAL contract via the EXACT host-fallback
+// reduction the runtime wrapper's no-CUDA path + clm_prod.hexa _adam_group use
+// (a per-tensor opt_adamw_step loop over the handle arrays). On the pod the
+// device group kernel (_hx_cuda_farr_adamw_group_gpu) runs the SAME per-tensor
+// _hx_k_adamw_step_inplace (already #2383-byte-eq to opt_adamw_step), so the
+// device result equals this same reference exactly — the pod fire re-runs this
+// oracle with the real builtin engaged (F-RFC046-FUSED-STEP-EQ on-device).
 fn _fse_group_step(Wids: int, Gids: int, Mids: int, Vids: int, Ns: int,
                    count: int, t: int) {
-    let rc = forge_dispatch_adamw_group(Wids, Gids, Mids, Vids, Ns, count, t)
-    if rc == 0 { return }
     let mut j = 0
     while j < count {
         let W = to_int(t_get(Wids, j)); let g = to_int(t_get(Gids, j))
