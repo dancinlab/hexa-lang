@@ -1107,6 +1107,20 @@ HexaVal forge_dispatch_adamw_keepmv(HexaVal w_v, HexaVal g_v, HexaVal m_v,
                              HexaVal b1_v, HexaVal b2_v, HexaVal eps_v,
                              HexaVal wd_v, HexaVal t_v);                       /* runtime.c — fusion L1 seam */
 
+/* HEXA-FUSION L1 (GRAD half) — forge_dispatch_db_colsum(dy, db_out, T, Cout)
+ * -> int rc (0 ok / -1 host fallback). Device-resident bias-gradient column
+ * sum db[co] = Σ_{t=0..T-1} dy[t,co], computed by _hx_cuda_farr_db_colsum_gpu
+ * (one thread per channel, SEQUENTIAL t-sum → bit-exact to the host loop, no
+ * tree re-association). Keeps db DEVICE-RESIDENT (loc=FARR_DEVICE,
+ * dirty_host=0) so the next _adam H2D-skips the grad — the conv bias grads
+ * d*B escape only into _adam (never read on host between bwd and AdamW), so
+ * this is a pure removable grad roundtrip. Gated in clm_prod.hexa behind env
+ * CLM_PROD_DEVRESIDENT; no-CUDA → -1 → host db reduction fallback (byte-eq). */
+HexaVal hexa_forge_dispatch_db_colsum(HexaVal dy_v, HexaVal db_v,
+                                  HexaVal t_v, HexaVal cout_v);               /* runtime.c — fusion L1 grad */
+HexaVal forge_dispatch_db_colsum(HexaVal dy_v, HexaVal db_v,
+                             HexaVal t_v, HexaVal cout_v);                    /* runtime.c — fusion L1 grad seam */
+
 /* ── RFC 050 PERF-INHERITANCE: forge BF16 FFN dispatch wrapper ──────
  * `forge_dispatch_ffn_fp64_via_bf16(x, w1, w2, y, M, D, FD)` — 7-arg
  * builtin. Takes FP64 farr handles, internally allocates HexaFarrBf16

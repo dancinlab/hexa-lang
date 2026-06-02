@@ -125,6 +125,35 @@ fn _clmp_col2im(dXcol: int, dX_out: int, T: int, Cin: int, K: int, dil: int) {
     }
 }
 
+// HEXA-FUSION L1 (GRAD half): device-resident bias-gradient column sum.
+// db_out[co] = Σ_{t=0..T-1} dy[t,co]. Under CLM_PROD_DEVRESIDENT this runs
+// on-device (forge_dispatch_db_colsum) keeping db_out FARR_DEVICE so the
+// follow-up _adam(W, db_out, ...) H2D-skips the grad — the conv bias grads
+// d*B escape ONLY into _adam (nothing on the host reads them between bwd and
+// the optimizer), so the per-step db D2H (read dy back) + next H2D is a pure
+// removable grad roundtrip. The device kernel sums T SEQUENTIALLY per channel
+// (NO tree re-association) → bit-exact to the host loop below (max|Δ|=0). rc 0
+// = done on-device; else the host reduction runs (byte-eq oracle). Engages
+// only in the self-host-rebuilt pod binary (env-gated so the prebuilt mac
+// binary, which lacks the builtin, never link-references it under `hexa run`).
+fn _clmp_db_colsum(dy: int, db_out: int, T: int, Cout: int) {
+    if env("CLM_PROD_DEVRESIDENT") != "" {
+        let rc = forge_dispatch_db_colsum(dy, db_out, T, Cout)
+        if rc == 0 { return }
+    }
+    let mut cb = 0
+    while cb < Cout {
+        let mut acc = 0.0
+        let mut tb = 0
+        while tb < T {
+            acc = acc + t_get(dy, tb * Cout + cb)
+            tb = tb + 1
+        }
+        t_set(db_out, cb, acc)
+        cb = cb + 1
+    }
+}
+
 fn conv1d_via_forge(x: int, w: int, b: int, y_out: int,
                     T: int, Cin: int, Cout: int, K: int, dil: int) {
     let Kdim = Cin * K
@@ -178,18 +207,10 @@ fn conv1d_bwd_via_forge(x: int, w: int, dy: int,
     // LEVER (a): device-resident col2im scatter under CLM_PROD_DEVFEED.
     let dXcol = forge_dispatch_matmul(dy, T, Cout, w, Kdim)
     _clmp_col2im(dXcol, dX_out, T, Cin, K, dil)
-    // db: db_out[co] = Σ_t dy[t,co] (host reduction)
-    let mut cb = 0
-    while cb < Cout {
-        let mut acc = 0.0
-        let mut tb = 0
-        while tb < T {
-            acc = acc + t_get(dy, tb * Cout + cb)
-            tb = tb + 1
-        }
-        t_set(db_out, cb, acc)
-        cb = cb + 1
-    }
+    // db: db_out[co] = Σ_t dy[t,co]. HEXA-FUSION L1 (GRAD half): device-resident
+    // under CLM_PROD_DEVRESIDENT (keeps db_out FARR_DEVICE → next _adam H2D-skips
+    // the grad), else host reduction (byte-eq). Sequential t-sum either way.
+    _clmp_db_colsum(dy, db_out, T, Cout)
 }
 
 // ── LEVER (b): batched strided GEMM helper (inlined from clm_conv_batched) ──
@@ -347,12 +368,13 @@ fn conv2_bwd_via_forge_batched(x: int, w0: int, w1: int, dy0: int, dy1: int,
         }
         t2 = t2 + 1
     }
-    let mut cb = 0
-    while cb < Cout {
-        let mut a0 = 0.0; let mut a1 = 0.0; let mut tb = 0
-        while tb < T { a0 = a0 + t_get(dy0, tb * Cout + cb); a1 = a1 + t_get(dy1, tb * Cout + cb); tb = tb + 1 }
-        t_set(db0_out, cb, a0); t_set(db1_out, cb, a1); cb = cb + 1
-    }
+    // db0/db1: each db[co] = Σ_t dy{0,1}[t,co]. HEXA-FUSION L1 (GRAD half):
+    // device-resident under CLM_PROD_DEVRESIDENT (each kept FARR_DEVICE → next
+    // _adam H2D-skips the grad), else host reduction (byte-eq). The two sums are
+    // independent so routing each through _clmp_db_colsum is identical to the
+    // prior fused loop (same sequential t-order per channel → max|Δ|=0).
+    _clmp_db_colsum(dy0, db0_out, T, Cout)
+    _clmp_db_colsum(dy1, db1_out, T, Cout)
     t_free(xcolT); t_free(dwA); t_free(dwB); t_free(dW_flat_all)
     t_free(dxA); t_free(dxB); t_free(dXcol_all)
 }

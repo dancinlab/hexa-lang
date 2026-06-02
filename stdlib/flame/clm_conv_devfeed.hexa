@@ -128,6 +128,31 @@ pub fn devfeed_col2im(dXcol: int, dX_out: int, T: int, Cin: int, K: int, dil: in
     }
 }
 
+// ── devfeed_db_colsum: bias-gradient column sum db[co] = Σ_t dy[t,co] ──
+// HEXA-FUSION L1 (GRAD half) — the REFERENCE host reduction that the device
+// kernel _hx_cuda_farr_db_colsum_gpu reproduces. The device kernel sums T
+// SEQUENTIALLY per channel (t = 0,1,…,T-1) with NO tree / warp re-association,
+// so its IEEE-754 accumulation order is IDENTICAL to this loop → bit-exact
+// (max|Δ|=0), unlike the row-reduction kernels which carry a ~N·ε tolerance.
+// This oracle deliberately does NOT call forge_dispatch_db_colsum (so the
+// prebuilt mac binary never link-references the device builtin under
+// `hexa run`); the builtin is wired ONLY in clm_prod.hexa::_clmp_db_colsum
+// under env CLM_PROD_DEVRESIDENT and realized in the self-host-rebuilt pod
+// binary. The byte-eq guarantee here is the sequential-sum-order equivalence.
+pub fn devfeed_db_colsum(dy: int, db_out: int, T: int, Cout: int) {
+    let mut cb = 0
+    while cb < Cout {
+        let mut acc = 0.0
+        let mut tb = 0
+        while tb < T {
+            acc = acc + t_get(dy, tb * Cout + cb)
+            tb = tb + 1
+        }
+        t_set(db_out, cb, acc)
+        cb = cb + 1
+    }
+}
+
 // ════════════════════════════════════════════════════════════════════════════
 //  Reference forge conv (inlined — flame files cannot `use` one another). These
 //  mirror clm_conv_gpu.hexa's conv1d_via_forge / conv1d_bwd_via_forge EXACTLY;
@@ -264,12 +289,7 @@ fn _devfeed_conv_bwd(x: int, w: int, dy: int, dW_out: int, dX_out: int, db_out: 
     }
     let dXcol = forge_dispatch_matmul(dy, T, Cout, w, Kdim)
     devfeed_col2im(dXcol, dX_out, T, Cin, K, dil)
-    let mut cb = 0
-    while cb < Cout {
-        let mut acc = 0.0; let mut tb = 0
-        while tb < T { acc = acc + t_get(dy, tb * Cout + cb); tb = tb + 1 }
-        t_set(db_out, cb, acc); cb = cb + 1
-    }
+    devfeed_db_colsum(dy, db_out, T, Cout)
     t_free(xcolT); t_free(dW_flat); t_free(dXcol)
 }
 
@@ -360,6 +380,36 @@ fn main() {
     if bwd_ok == 1 { println("F-CLM-DEVFEED-BWD-EQ = 1"); println("PASS — devfeed bwd (dW/dX/db) == forge conv1d_bwd byte-eq, dil∈{1,2}") }
     if bwd_ok == 0 { println("F-CLM-DEVFEED-BWD-EQ = 0"); println("FAIL — bwd") }
 
+    // ── F-CLM-DEVFEED-DB-EQ : HEXA-FUSION L1 (GRAD half) device-resident db ──
+    // The bias grad db[co] = Σ_t dy[t,co] now routes through devfeed_db_colsum
+    // (device kernel under CLM_PROD_DEVRESIDENT, host loop on the CPU oracle).
+    // The device path sums T SEQUENTIALLY per channel (no tree re-association)
+    // → must be byte-eq to the reference host reduction. This is the grad-half
+    // analogue of the col2im scatter: db stays DEVICE-RESIDENT for the next
+    // _adam H2D-skip; the falsifier here pins max|Δ|=0 of the colsum itself.
+    let mut db_ok = 1
+    let mut dilb = 1
+    while dilb <= 2 {
+        let dyb = t_zeros(T * Cout)
+        _ref_conv_fwd(x, w, b, dyb, T, Cin, Cout, K, dilb)  // representative nonzero dy
+        let dbR = t_zeros(Cout)   // reference host reduction
+        let mut cr = 0
+        while cr < Cout {
+            let mut ac = 0.0; let mut tr = 0
+            while tr < T { ac = ac + t_get(dyb, tr * Cout + cr); tr = tr + 1 }
+            t_set(dbR, cr, ac); cr = cr + 1
+        }
+        let dbD = t_zeros(Cout)   // devfeed_db_colsum (device path / host fallback)
+        devfeed_db_colsum(dyb, dbD, T, Cout)
+        let mDB = _maxdev(dbR, dbD, Cout)
+        print("  db dil="); print(dilb); print(" max|Δ| colsum-vs-host = "); println(to_string(mDB))
+        if mDB > tol { db_ok = 0 }
+        t_free(dyb); t_free(dbR); t_free(dbD)
+        dilb = dilb + 1
+    }
+    if db_ok == 1 { println("F-CLM-DEVFEED-DB-EQ = 1"); println("PASS — device-resident db colsum == host Σ_t dy[t,co] byte-eq, dil∈{1,2}") }
+    if db_ok == 0 { println("F-CLM-DEVFEED-DB-EQ = 0"); println("FAIL — db colsum") }
+
     // ── F-CLM-DEVFEED-ADAM-EQ : host AdamW oracle trajectory self-consistent ──
     // The device AdamW (forge_dispatch_adamw, wired in clm_prod.hexa under env)
     // routes to _hx_cuda_farr_adamw_step_inplace_gpu — already byte-eq to this
@@ -392,9 +442,9 @@ fn main() {
     if adam_ok == 1 { println("F-CLM-DEVFEED-ADAM-EQ = 1"); println("PASS — AdamW oracle (opt_adamw_step) deterministic 5-step trajectory") }
     if adam_ok == 0 { println("F-CLM-DEVFEED-ADAM-EQ = 0"); println("FAIL — adam") }
 
-    if all_ok == 1 { if fwd_ok == 1 { if bwd_ok == 1 { if adam_ok == 1 {
-        println("ALL-PASS — LEVER (a) device im2col/col2im + device AdamW oracle byte-eq to host feed")
+    if all_ok == 1 { if fwd_ok == 1 { if bwd_ok == 1 { if db_ok == 1 { if adam_ok == 1 {
+        println("ALL-PASS — LEVER (a) device im2col/col2im + device db colsum + device AdamW oracle byte-eq to host feed")
         return
-    } } } }
+    } } } } }
     println("FAIL")
 }
