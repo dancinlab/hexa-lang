@@ -143,3 +143,41 @@ lever-2 verify fire 가 pod 39082940 에서 in-flight 인 동안, pod-독립 엔
 
 라이브 fire / pod 39082940 / 보호 pod(38704336/38996679/39070097) 전부 무접촉. 재-rent 0.
 substrate=GPU, a_lane_akida_gpu_split (AKIDA 무병합).
+
+## 2026-06-02 (cont.) — lever-3 util-verify fire CLOSED: DESCENT 🟢 / util 🔴 RED (lever-4 = real unblock)
+
+lever-3 batched GEMM-feed 의 **util≥20% pod fire** 를 깨끗한 single-driver H100 sm_90 에서 완주
+(HELD 해제). substrate=GPU (Lane-G), AKIDA 무병합 (a_lane_akida_gpu_split).
+
+- **pod**: adopted 38996679 (@anima-cudafix · vast ssh7 · 8×H100 80GB HBM3 compute_cap 9.0 · 충돌0 ·
+  rent 0 — 기존 보호 아닌 idle candidate 입양). 보호 pod(38704336/39106252/39115197) 무접촉.
+- **3-gate PASS** (no CPU fire): ① CUDA-link ENGAGED — cached clm_prod 바이너리(`hexa_run.92a5798d…`)에
+  `_hx_cuda_farr_matmul_bt_gpu`/`_atb_gpu` + `cublasDgemmStridedBatched` 심볼 링크. ② `nvcc -x cu -arch=sm_90`
+  EXIT 0 + runtime_cuda.90.o(564K)에 cublas* undef + bt/atb 정의. ③ `ldd clm_prod` → libcublas.so.12 ·
+  libcudart.so.12 · libcuda.so.1 · libcublasLt.so.12.
+- **pod byte-eq (g5 verbatim, /root/byteeq.log)**: `F-RFC046-GEMMFEED-EQ=1` (BT/ATB max|Δ|=0.0) ·
+  `F-RFC046-BATCHED-GEMMFEED-EQ=1` (BT/ATB/per-problem max|Δ|=0.0) · `F-CLM-DEVFEED-{IM2COL,FWD,BWD,ADAM}-EQ=1` ·
+  `F-CLM-CONV2-BATCHED-{FWD,BWD}-EQ=1`. 전 오라클 max|Δ|=0.0 → byte-eq hard gate PASS, 드리프트 0.
+- **util fire** (CLM_PROD_DEVFEED=1 CLM_PROD_BATCHED=1 d=1536 T=512 E=4 epochs=3 nwin=8, GPU0 핀,
+  nvidia-smi 0.5s 샘플러): RUN_RC=0, .clm 14381125B 6blocks CLM\x01.
+  - **DESCENT 🟢 GREEN**: `epoch-1 mean CE = 4.2974` → `epoch-3 mean CE = 3.79897`, `F-CLM-PROD-DESCENT = 1`,
+    `PASS — real-corpus mean CE descends under int4 envelope` (g5 verbatim).
+  - **util 🔴 RED**: `n=349 PEAK=21.0% MEAN=0.5616% busy_n=339 busy_mean=0.5782% pct≥20=2 mem_max=6331MiB`
+    (GPU0, g5 verbatim). GPU 는 device-resident (6.3GB · 119W power)이나 SM-starve.
+- **결정적 발견**: before(lever-2)=0.4999% → after(lever-3)=0.5616% — **lever-3 도 MEAN util 을 못 올렸다**.
+  lever-3 가 batched 65% host repack 을 device 化한 것은 byte-eq GREEN 으로 증명되었지만, MEAN util 은 flat.
+  ⇒ 잔여 지배 병목은 GEMM repack 이 아니라 **인터프리트 per-step 드라이버 루프(F-RFC046 root)**: step body 가
+  ~30 분리 빌트인 콜(fwd·ce·ce-grad·bwd·20×분리 _adam)을 인터프리트로 디스패치 → 커널 사이 GPU idle.
+  device 메모리는 차고 power 도 흐르나(allocated+launched) SM occupancy 가 launch 간극에 죽는다.
+- **closure**: util RED → closure-FAIL → **.clm PRIVATE** (a_hf_autonomous). PUBLIC HF / 3B / 7B 는 still gated
+  (util-GREEN NOT-before guard 유지). 아티팩트 회수 완료(recover-before — anima `state/laneg-lever3-utilfire/`:
+  .clm sha256 `34982a31…20a6f7a` byte-verified + utilfire_run.out + util_samples.csv(349) + byteeq.log).
+  pod 38996679 = adopted candidate, rent 0 — teardown 의무 없음(입양, 보호 pod 아님), idle 로 유지.
+- **next bottleneck = lever-4 (fused on-device per-step driver)** — `forge_dispatch_train_step` 단일 fused
+  빌트인(device-resident param/grad/moment, fwd→loss→bwd→AdamW 전부 device, host 로 scalar loss 만) +
+  `forge_dispatch_adamw_group`(20 텐서 1 launch). 投影 ~30→~2 host boundary crossings/step. 시그니처 변경 =
+  pod self-host 빌드 필요 → DESIGN DOC + 차기 fire. 오라클 `F-RFC046-FUSED-STEP-EQ` + `F-RFC046-ADAMW-GROUP-EQ`
+  max|Δ|=0.0. inbox/patches 에 root-residual 분해 + lever-4 설계 기록.
+
+다음 세션 시작점: lever-4 (fused step driver) 소스 구현 → 깨끗한 H100 sm_90 self-host 빌드 → 3-gate →
+pod byte-eq(F-RFC046-FUSED-STEP-EQ 추가) → util fire. before=0.5616%. 날조 0 · g5 verbatim · a_scale_honest_scope.
