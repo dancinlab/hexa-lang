@@ -18,6 +18,7 @@
 import "stdlib/demi/manifest.hexa"
 import "stdlib/demi/verify_record.hexa"
 import "stdlib/demi/record_loader.hexa"
+import "stdlib/demi/project_store.hexa"
 
 // handler_stub(target, argv) — a DECLARED-but-unported local verb. Prints an
 // honest notice naming the verb + the stacked-PR that will port it, and
@@ -557,6 +558,89 @@ pub fn handler_gate_summary(argv: [string]) -> int {
     return 0
 }
 
+// ── list-projects / show-project (PR#12 · LIVE) ─────────────────────
+//
+// `demi list-projects`        — every workbench project, createdAt-sorted.
+// `demi show-project <name>`   — one project's manifest + 7-verb progress.
+//
+// Both port the Swift listProjects / showProject (main.swift:223-259) reading
+// through the #12 ProjectStore (ps_load_all · the fixed app-data store dir).
+// list-projects:  `projects (<n>):` header, then per project a row
+//   `  <name>  —  <domainLabel> · <verb+1>/7 <koreanLabel>`  (rc 0).
+// show-project:   a field block (name/target/domain/canvas_mode/created_at),
+//   then `7-verb progress:` and the 7 spine rows
+//   `  <i+1>. <koreanLabel> (<plain>)  <mark>`  where mark ∈
+//   `[x] done (measured)` · `[>] current` · `[~] visited (unmeasured)` ·
+//   `[ ] upcoming` (Project.state). A missing name → `show-project: no project
+//   named '<name>'` stderr + exit 2 (Swift parity). d3: the load + the verb
+//   spine + the state machine + the domain-label fallback all come from the
+//   #12 project_store; these handlers add only the byte-exact render. The
+//   project new|advance|retreat MUTATION is the separate PR#13 (NOT here).
+
+pub fn handler_list_projects(argv: [string]) -> int {
+    let projs = ps_load_all()
+    println("projects (" + to_string(len(projs)) + "):")
+    let mut i = 0
+    while i < len(projs) {
+        let p = projs[i]
+        let label = ps_domain_label(p.domain)
+        // `<verb+1>/7 <koreanLabel>` — Swift `verb.rawValue + 1` (1-based).
+        println("  " + p.name + "  —  " + label + " · "
+                + to_string(p.current_verb + 1) + "/7 " + ps_verb_korean(p.current_verb))
+        i = i + 1
+    }
+    return 0
+}
+
+// _ps_mark(state) — the show-project progress mark for a stage state (Swift's
+// switch over VerbState). Kept verbatim — the parenthetical qualifiers are
+// part of the byte-exact contract.
+fn _ps_mark(state: string) -> string {
+    if state == "done"    { return "[x] done (measured)" }
+    if state == "current" { return "[>] current" }
+    if state == "visited" { return "[~] visited (unmeasured)" }
+    return "[ ] upcoming"
+}
+
+pub fn handler_show_project(argv: [string]) -> int {
+    // Swift requires the <name> arg; the manifest-rendered usage covers the
+    // missing-arg case (dispatched in main.swift before showProject), so keep
+    // it honest with a `show-project: ` stderr line + exit 2.
+    if len(argv) < 1 {
+        eprintln("show-project: missing <name> argument")
+        return 2
+    }
+    let name = argv[0]
+    let projs = ps_load_all()
+    // first project whose name == arg (Swift `first(where:)`).
+    let mut found = -1
+    let mut i = 0
+    while i < len(projs) {
+        if projs[i].name == name { found = i ; break }
+        i = i + 1
+    }
+    if found < 0 {
+        eprintln("show-project: no project named '" + name + "'")
+        return 2
+    }
+    let p = projs[found]
+    let label = ps_domain_label(p.domain)
+    println("name:        " + p.name)
+    println("target:      " + p.target)
+    println("domain:      " + p.domain + " (" + label + ")")
+    println("canvas_mode: " + ps_domain_canvas(p.domain))
+    println("created_at:  " + ps_date_desc(p.created_at))
+    println("7-verb progress:")
+    let mut v = 0
+    while v < 7 {
+        let mark = _ps_mark(ps_state_of(p, v))
+        println("  " + to_string(v + 1) + ". " + ps_verb_korean(v)
+                + " (" + ps_verb_plain(v) + ")  " + mark)
+        v = v + 1
+    }
+    return 0
+}
+
 // handler_local(target, argv) — generic local-handler entry. Routes by the
 // manifest `target` id to the ported hexa-native handler, else the honest
 // stub. The ONE place the local family fans out — adding a ported handler is
@@ -573,6 +657,8 @@ pub fn handler_local(target: string, argv: [string]) -> int {
     if target == "list_domains"   { return handler_list("domain") }
     if target == "list_gates"     { return handler_list_gates(argv) }
     if target == "gate_summary"   { return handler_gate_summary(argv) }
+    if target == "list_projects"  { return handler_list_projects(argv) }
+    if target == "show_project"   { return handler_show_project(argv) }
     // every other declared local target is not-yet-ported → honest stub.
     return handler_stub(target, argv)
 }

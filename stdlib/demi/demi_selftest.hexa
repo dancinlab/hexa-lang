@@ -249,6 +249,87 @@ fn _run_swift(bin: string, env_prefix: string, argv_str: string) -> [string] {
     return [to_string(pair[0]), to_string(pair[1])]
 }
 
+// ── PR#12 ProjectStore fixture (the fixed app-data store dir) ───────────────
+//
+// ProjectStore.projectsRoot is ~/Library/Application Support/lab.dancin.demiurge/
+// projects — a FIXED path with no env override (clause e). The parity cell can
+// therefore not redirect it; it BACKS UP the real store to a sibling, lays down
+// a deterministic fixture, runs the cells, and RESTORES the backup (so the
+// user's real workbench projects are untouched). _project_store_backup returns
+// the backup-dir path (or "" if the store did not exist — restore then removes
+// the fixture and leaves it absent, matching the original empty state).
+
+fn _project_store_root() -> string {
+    return env("HOME") + "/Library/Application Support/lab.dancin.demiurge/projects"
+}
+
+// _project_store_backup() — move any existing real store aside; return its
+// backup path (or "" if the store dir did not exist).
+fn _project_store_backup() -> string {
+    let root = _project_store_root()
+    let bak = root + ".selftest-realbak"
+    let exists = exec("test -d " + _shq2(root) + " && echo yes || echo no").trim()
+    // always clear a stale backup from a previous interrupted run.
+    exec("rm -rf " + _shq2(bak))
+    if exists == "yes" {
+        exec("mv " + _shq2(root) + " " + _shq2(bak))
+        return bak
+    }
+    return ""
+}
+
+// _project_store_restore(bak) — wipe the fixture store; if a backup exists,
+// move it back; else leave the store absent (its original empty state).
+fn _project_store_restore(bak: string) {
+    let root = _project_store_root()
+    exec("rm -rf " + _shq2(root))
+    if len(bak) > 0 {
+        exec("mv " + _shq2(bak) + " " + _shq2(root))
+    }
+}
+
+// _project_store_empty() — an empty store (loadAll → []) → `projects (0):`.
+fn _project_store_empty() {
+    let root = _project_store_root()
+    exec("rm -rf " + _shq2(root) + " && mkdir -p " + _shq2(root))
+}
+
+// _make_project_fixture() — TWO deterministic project manifests under the store,
+// matching the Swift ProjectStore.save layout (<uuid>/manifest.json, .iso8601
+// createdAt, sortedKeys). alpha = general domain (일반 공학 label) at 1/7;
+// beta = a non-INDEX.demi custom key (synthetic label) at 4/7 with doneVerbs
+// [0,1] (so the show render exercises every VerbState mark). createdAt orders
+// alpha (2026-01) before beta (2026-03) so the loadAll createdAt-sort is asserted.
+fn _make_project_fixture() {
+    let root = _project_store_root()
+    let da = root + "/AAAA1111-0000-0000-0000-000000000001"
+    let db = root + "/BBBB2222-0000-0000-0000-000000000002"
+    exec("rm -rf " + _shq2(root)
+         + " && mkdir -p " + _shq2(da) + " " + _shq2(db))
+    let ma = "{\n"
+        + "  \"createdAt\" : \"2026-01-01T00:00:00Z\",\n"
+        + "  \"currentVerb\" : 0,\n"
+        + "  \"domain\" : \"general\",\n"
+        + "  \"doneVerbs\" : [],\n"
+        + "  \"id\" : \"AAAA1111-0000-0000-0000-000000000001\",\n"
+        + "  \"name\" : \"alpha-proj\",\n"
+        + "  \"target\" : \"a general engineering thing\",\n"
+        + "  \"walk\" : []\n"
+        + "}\n"
+    let mb = "{\n"
+        + "  \"createdAt\" : \"2026-03-15T08:30:45Z\",\n"
+        + "  \"currentVerb\" : 3,\n"
+        + "  \"domain\" : \"zzzcustomkey\",\n"
+        + "  \"doneVerbs\" : [0, 1],\n"
+        + "  \"id\" : \"BBBB2222-0000-0000-0000-000000000002\",\n"
+        + "  \"name\" : \"beta-proj\",\n"
+        + "  \"target\" : \"custom domain widget\",\n"
+        + "  \"walk\" : []\n"
+        + "}\n"
+    exec("printf %s " + _shq2(ma) + " > " + _shq2(da + "/manifest.json"))
+    exec("printf %s " + _shq2(mb) + " > " + _shq2(db + "/manifest.json"))
+}
+
 // _cell_live_only — a parity cell whose Swift output is NOT deterministically
 // golden-able (e.g. a Foundation decode error whose tail is locale/machine-
 // dependent). It asserts the hexa exit code unconditionally, and the BYTE
@@ -714,6 +795,80 @@ fn main() {
         + "absorbed=false: 0\n"
     fails = fails + _cell("gate-summary/empty", entry, swift_bin, genv0,
                           "gate-summary", g_gs0, 0)
+
+    // ── PR#12 list-projects / show-project cells — workbench projects read
+    // through the #12 ProjectStore (ps_load_all). ProjectStore has NO env
+    // override (the store is the FIXED ~/Library/Application Support/
+    // lab.dancin.demiurge/projects dir — @D g_cockpit_isolation clause e), so
+    // BOTH surfaces read the SAME path; the cell BACKS UP the real store, lays
+    // down a deterministic fixture (2 projects · createdAt-sorted · general +
+    // a non-INDEX.demi custom key so both surfaces take DomainCatalog's
+    // SYNTHETIC fallback — label render machine-independent, no INDEX.demi dep),
+    // runs the cells, then RESTORES the real store. Goldens captured byte-for-
+    // byte from the Swift DemiurgeCLI reference 2026-06-04. The project
+    // new|advance|retreat MUTATION is the separate PR#13 (NOT asserted here).
+    let pbak = _project_store_backup()
+    _make_project_fixture()
+
+    // list-projects (populated) — `projects (2):` then a row per project,
+    // createdAt-sorted (alpha 2026-01 before beta 2026-03). No name padding.
+    let g_lp = "projects (2):\n"
+        + "  alpha-proj  —  일반 공학 · 1/7 명세\n"
+        + "  beta-proj  —  zzzcustomkey · 4/7 해석⟲\n"
+    fails = fails + _cell("list-projects/populated", entry, swift_bin, "",
+                          "list-projects", g_lp, 0)
+
+    // show-project alpha — general domain (일반 공학 label) · all-default verb
+    // pointer (1/7 current, rest upcoming) · created_at Date.description render.
+    let g_sp_a = "name:        alpha-proj\n"
+        + "target:      a general engineering thing\n"
+        + "domain:      general (일반 공학)\n"
+        + "canvas_mode: cohort\n"
+        + "created_at:  2026-01-01 00:00:00 +0000\n"
+        + "7-verb progress:\n"
+        + "  1. 명세 (무엇을)  [>] current\n"
+        + "  2. 구조 (어떻게)  [ ] upcoming\n"
+        + "  3. 설계 (설계)  [ ] upcoming\n"
+        + "  4. 해석⟲ (점검)  [ ] upcoming\n"
+        + "  5. 합성 (만들기)  [ ] upcoming\n"
+        + "  6. 검증 (검증)  [ ] upcoming\n"
+        + "  7. 인계 (넘기기)  [ ] upcoming\n"
+    fails = fails + _cell("show-project/alpha-general", entry, swift_bin, "",
+                          "show-project alpha-proj", g_sp_a, 0)
+
+    // show-project beta — synthetic (non-catalog) domain label · currentVerb=3
+    // (해석⟲) + doneVerbs [0,1] → exercises EVERY mark: done · done · visited ·
+    // current · upcoming×3.
+    let g_sp_b = "name:        beta-proj\n"
+        + "target:      custom domain widget\n"
+        + "domain:      zzzcustomkey (zzzcustomkey)\n"
+        + "canvas_mode: cohort\n"
+        + "created_at:  2026-03-15 08:30:45 +0000\n"
+        + "7-verb progress:\n"
+        + "  1. 명세 (무엇을)  [x] done (measured)\n"
+        + "  2. 구조 (어떻게)  [x] done (measured)\n"
+        + "  3. 설계 (설계)  [~] visited (unmeasured)\n"
+        + "  4. 해석⟲ (점검)  [>] current\n"
+        + "  5. 합성 (만들기)  [ ] upcoming\n"
+        + "  6. 검증 (검증)  [ ] upcoming\n"
+        + "  7. 인계 (넘기기)  [ ] upcoming\n"
+    fails = fails + _cell("show-project/beta-marks", entry, swift_bin, "",
+                          "show-project beta-proj", g_sp_b, 0)
+
+    // show-project miss → stderr line + exit 2 (Swift showProject guard).
+    let g_sp_miss = "show-project: no project named 'no-such-proj'\n"
+    fails = fails + _cell("show-project/missing", entry, swift_bin, "",
+                          "show-project no-such-proj", g_sp_miss, 2)
+
+    // EMPTY store → `projects (0):` (loadAll → []), rc 0. Tear down the fixture
+    // (empty store) and assert the empty render before restoring the real store.
+    _project_store_empty()
+    fails = fails + _cell("list-projects/empty", entry, swift_bin, "",
+                          "list-projects", "projects (0):\n", 0)
+
+    // restore the user's real store (or its absence) — the cell must not leave
+    // a fixture behind in the app-data store.
+    _project_store_restore(pbak)
 
     // ── PR-record-loader self-check (@ci_gate · @L7 spirit) — NOT a verb-
     // parity cell (PR#5 adds NO new user-facing verb; the list-*/show/gate
