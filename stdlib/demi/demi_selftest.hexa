@@ -263,6 +263,51 @@ fn _run_swift(bin: string, env_prefix: string, argv_str: string) -> [string] {
     return [to_string(pair[0]), to_string(pair[1])]
 }
 
+// _make_compose_fixture(repo) — a deterministic domains/INDEX.demi DAG for the
+// PR#10 `compose <domain>` parity cells. BOTH surfaces read this same SSOT via
+// DEMIURGE_REPO (Swift DomainLoader.indexPath's first-priority path is
+// $DEMIURGE_REPO/domains/INDEX.demi; hexa dco_index_path resolves identically
+// off rl_project_root). exports/ must exist so rl_project_root() (exportsRoot
+// minus its last segment) lands on <repo>. `repo` MUST be a non-symlinked real
+// path (same reason as the verify/cellrun fixtures — Foundation/rl_canon
+// standardize lexically).
+//
+// The 4-domain DAG exercises every compose branch deterministically:
+//   root  — scale=device · [physical] · prereq []            → 단일 (atomic)
+//   mid   — scale=device · [engineering] · prereq [root]      → 구성형 (composite·2)
+//   apex  — scale=system · [physical,propulsion] · [mid,root] → 메타(통합) (meta·3)
+//   xdisc — scale=component · [bio,engineering] · [root]      → 구성형 · 결합
+// A trailing `#` comment + an inline comment exercise comment-strip; quoted
+// labels exercise unquote. Cluster union is first-seen across the topo stack.
+fn _make_compose_fixture(repo: string) {
+    let ddir = repo + "/domains"
+    exec("rm -rf " + _shq2(repo) + " && mkdir -p " + _shq2(ddir)
+        + " && mkdir -p " + _shq2(repo + "/exports"))
+    let idx = "# fixture INDEX.demi — compose parity (PR#10)\n\n"
+        + "[root]\n"
+        + "label = \"뿌리\"\n"
+        + "canvas_mode = \"cohort\"\n"
+        + "prerequisites = []\n"
+        + "facets.scale = \"device\"   # inline comment after value\n"
+        + "facets.cluster = [\"physical\"]\n\n"
+        + "[mid]\n"
+        + "label = \"중간\"\n"
+        + "prerequisites = [\"root\"]\n"
+        + "facets.scale = \"device\"\n"
+        + "facets.cluster = [\"engineering\"]\n\n"
+        + "[apex]\n"
+        + "label = \"꼭대기\"\n"
+        + "prerequisites = [\"mid\", \"root\"]\n"
+        + "facets.scale = \"system\"\n"
+        + "facets.cluster = [\"physical\", \"propulsion\"]\n\n"
+        + "[xdisc]\n"
+        + "label = \"교차\"\n"
+        + "prerequisites = [\"root\"]\n"
+        + "facets.scale = \"component\"\n"
+        + "facets.cluster = [\"bio\", \"engineering\"]\n"
+    exec("printf %s " + _shq2(idx) + " > " + _shq2(ddir + "/INDEX.demi"))
+}
+
 // ── PR#12 ProjectStore fixture (the fixed app-data store dir) ───────────────
 //
 // ProjectStore.projectsRoot is ~/Library/Application Support/lab.dancin.demiurge/
@@ -936,6 +981,66 @@ fn main() {
     // the child env (in-process setenv is a no-op) against a $HOME-rooted
     // fixture; the probe self-asserts + emits an ALL_PASS sentinel.
     fails = fails + _catalog_selfcheck()
+
+    // ── PR#10 compose cells — `compose <domain>` resolves a domain into its
+    // constituent prerequisite stack (topo foundation→apex) + cluster union +
+    // kind, byte-for-byte against the Swift compose(_:) plain-default render
+    // (Korean kind labels · no substrate line · DEMIURGE_EXPERT unset). BOTH
+    // surfaces read the SAME domains/INDEX.demi DAG via DEMIURGE_REPO, so the
+    // goldens carry no absolute paths and are machine-independent. The fixture
+    // exercises every branch: atomic (단일) · composite (구성형) · meta (메타(통합))
+    // · cross-discipline (결합) · an unknown domain (synthetic node → 메타(통합),
+    // empty stack "(none)", empty 성격, rc 0). Goldens captured byte-for-byte
+    // from the Swift DemiurgeCLI reference 2026-06-04.
+    let cmpfix = home + "/.demi-selftest-compose-fixture"
+    _make_compose_fixture(cmpfix)
+    let cmpenv = "DEMIURGE_REPO=" + _shq2(cmpfix)
+
+    // atomic leaf — no prereqs, scale=device → 단일; stack=[root]; 성격=physical.
+    let g_c_atomic = "compose root — 뿌리 · 단일\n"
+        + "  구성 도메인 (1):\n"
+        + "    root\n"
+        + "  성격: physical\n"
+    fails = fails + _cell("compose/atomic", entry, swift_bin, cmpenv,
+                          "compose root", g_c_atomic, 0)
+
+    // composite — mid←root, scale=device, stack>1 → 구성형; topo root→mid;
+    // 성격 first-seen union physical(root) · engineering(mid). NOT 결합 (own
+    // clusters [engineering] = tech-side only).
+    let g_c_comp = "compose mid — 중간 · 구성형\n"
+        + "  구성 도메인 (2):\n"
+        + "    root → mid\n"
+        + "  성격: physical · engineering\n"
+    fails = fails + _cell("compose/composite", entry, swift_bin, cmpenv,
+                          "compose mid", g_c_comp, 0)
+
+    // meta — apex scale=system → 메타(통합); closure {apex,mid,root} topo-sorts
+    // root→mid→apex (Kahn + alpha tie-break); 성격 physical·engineering·propulsion.
+    let g_c_meta = "compose apex — 꼭대기 · 메타(통합)\n"
+        + "  구성 도메인 (3):\n"
+        + "    root → mid → apex\n"
+        + "  성격: physical · engineering · propulsion\n"
+    fails = fails + _cell("compose/meta", entry, swift_bin, cmpenv,
+                          "compose apex", g_c_meta, 0)
+
+    // cross-discipline — xdisc own clusters [bio(life), engineering(tech)] →
+    // 결합 tag; scale=component, stack 2 → 구성형; topo root→xdisc; 성격
+    // physical(root) · bio(xdisc) · engineering(xdisc).
+    let g_c_xdisc = "compose xdisc — 교차 · 구성형 · 결합\n"
+        + "  구성 도메인 (2):\n"
+        + "    root → xdisc\n"
+        + "  성격: physical · bio · engineering\n"
+    fails = fails + _cell("compose/cross-discipline", entry, swift_bin, cmpenv,
+                          "compose xdisc", g_c_xdisc, 0)
+
+    // unknown domain — no INDEX.demi record → synthetic node (label==key, scale
+    // system → 메타(통합)), empty closure → stack 0 "(none)", empty 성격, rc 0.
+    let g_c_unknown = "compose zzznope — zzznope · 메타(통합)\n"
+        + "  구성 도메인 (0):\n"
+        + "    (none)\n"
+        + "  성격: \n"
+    fails = fails + _cell("compose/unknown", entry, swift_bin, cmpenv,
+                          "compose zzznope", g_c_unknown, 0)
 
     if fails == 0 { println("demi_parity_selftest PASS") }
     else { println("demi_parity_selftest FAIL — " + to_string(fails) + " cell(s)") }
