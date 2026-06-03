@@ -1,0 +1,669 @@
+RUNTIME-PORT · Milestone-1 Portability Inventory of self/runtime.c
+date: 2026-06-03   host: mini   base: origin/main d920b7e8f06a
+########################################################################
+
+SCOPE: self/runtime.c = 14919 LOC, 606 function definitions (525 unique
+names; platform-conditional #if/#else dual-defs share a name).
+CAVEAT: the CORE tier (HexaVal tag encode/decode, arena allocator,
+array backing store, hexa_array_new/push/get, hexa_truthy, refcount
+incref/decref) lives in self/runtime_core.c (8544 LOC), #include'd by
+runtime.c at L2149 — OUT OF SCOPE here and the deepest tier-A bedrock.
+This inventory covers runtime.c's OWN 14919 lines (the HI tier:
+combinators, numeric kernels, FFI, freestanding libc/libm shims).
+
+KEY FINDING — hexa-rt-stdlib dual-branch: 74 #ifndef HEXA_HAS_HEXA_RT_STDLIB
+guards already delegate 82 distinct helpers to hexa-native rt_* stdlib fns
+(the #else branch). Tier-B is therefore split:
+  B-OPEN   = portable, NO hexa impl yet  -> the real Milestone-2 target
+  B-PORTED = C reference fallback only; hexa impl already exists in rt-stdlib
+
+AGGREGATE
+------------------------------------------------------------------------
+  A            167 fns   1547 LOC   IRREDUCIBLE bootstrap primitive (projected C floor)
+  B-OPEN        30 fns   2783 LOC   PORTABLE helper, unported -> M2 PORT TARGET
+  B-PORTED      74 fns    817 LOC   PORTABLE helper, hexa impl already in rt-stdlib (C fallback)
+  C            184 fns   2188 LOC   FFI / platform / syscall shim (irreducible external ABI)
+  BORDERLINE   151 fns   3066 LOC   ambiguous — see per-fn reason
+  TOTAL        606 fns  10401 LOC   (rest of 14919 = globals/macros/#include/comments)
+
+  Projected irreducible C floor (tier-A) .......... 1547 LOC / 167 fns
+  PORTABLE target (B-OPEN, real frontier) ......... 2783 LOC / 30 fns
+  Already-ported portable (B-PORTED, fallback) .... 817 LOC / 74 fns
+  Borderline to adjudicate in M2 .................. 3066 LOC / 151 fns
+
+Note: tier-A 1547 LOC is the floor for runtime.c HI tier ALONE; the true
+ecosystem C floor must add runtime_core.c's CORE primitives (separate file).
+Method: AST-free brace-match extractor over runtime.c raw text; tier rule
+per name-prefix + manual adjudication of borderline bodies (raw alloc/
+pointer/GPU-dispatch -> A or C; pure combinator over core API -> B).
+
+########################################################################
+TIER A — IRREDUCIBLE bootstrap primitive (projected C floor)  (167 fns, 1547 LOC)
+########################################################################
+  LOC  lines          function                                   reason
+    6  L299-304        hxlcl_strlen                               freestanding libc primitive (str/mem/stdio/malloc — bootstrap floor)
+    9  L310-318        hxlcl_memcmp                               freestanding libc primitive (str/mem/stdio/malloc — bootstrap floor)
+    8  L324-331        hxlcl_strcmp                               freestanding libc primitive (str/mem/stdio/malloc — bootstrap floor)
+   11  L341-351        hxlcl_strcat                               freestanding libc primitive (str/mem/stdio/malloc — bootstrap floor)
+    9  L358-366        hxlcl_strncmp                              freestanding libc primitive (str/mem/stdio/malloc — bootstrap floor)
+    9  L374-382        hxlcl_strchr                               freestanding libc primitive (str/mem/stdio/malloc — bootstrap floor)
+   10  L389-398        hxlcl_strrchr                              freestanding libc primitive (str/mem/stdio/malloc — bootstrap floor)
+   10  L400-409        hxlcl_strstr                               freestanding libc primitive (str/mem/stdio/malloc — bootstrap floor)
+    1  L478-478        hxlcl_atoi                                 freestanding libc primitive (str/mem/stdio/malloc — bootstrap floor)
+   29  L480-508        hxlcl_strtoll                              freestanding libc primitive (str/mem/stdio/malloc — bootstrap floor)
+   27  L509-535        hxlcl_strtoull                             freestanding libc primitive (str/mem/stdio/malloc — bootstrap floor)
+    6  L542-547        hxlcl_bzero                                freestanding libc primitive (str/mem/stdio/malloc — bootstrap floor)
+    6  L553-558        hxlcl_memcpy                               freestanding libc primitive (str/mem/stdio/malloc — bootstrap floor)
+    6  L580-585        hxlcl_memset                               freestanding libc primitive (str/mem/stdio/malloc — bootstrap floor)
+   11  L594-604        hxlcl_memmove                              freestanding libc primitive (str/mem/stdio/malloc — bootstrap floor)
+    6  L610-615        hxlcl_strncpy                              freestanding libc primitive (str/mem/stdio/malloc — bootstrap floor)
+    6  L621-626        hxlcl_strcpy                               freestanding libc primitive (str/mem/stdio/malloc — bootstrap floor)
+   18  L628-645        hxlcl_strerror                             freestanding libc primitive (str/mem/stdio/malloc — bootstrap floor)
+  262  L657-918        hxlcl_vsnprintf                            freestanding libc primitive (str/mem/stdio/malloc — bootstrap floor)
+    6  L919-924        hxlcl_snprintf                             freestanding libc primitive (str/mem/stdio/malloc — bootstrap floor)
+    6  L925-930        hxlcl_sprintf                              freestanding libc primitive (str/mem/stdio/malloc — bootstrap floor)
+   22  L931-952        hxlcl_vfprintf_fd                          freestanding libc primitive (str/mem/stdio/malloc — bootstrap floor)
+    6  L953-958        hxlcl_printf                               freestanding libc primitive (str/mem/stdio/malloc — bootstrap floor)
+    8  L959-966        hxlcl_fprintf                              freestanding libc primitive (str/mem/stdio/malloc — bootstrap floor)
+    6  L967-972        hxlcl_fputs                                freestanding libc primitive (str/mem/stdio/malloc — bootstrap floor)
+    5  L973-977        hxlcl_fputc                                freestanding libc primitive (str/mem/stdio/malloc — bootstrap floor)
+    4  L978-981        hxlcl_fflush                               freestanding libc primitive (str/mem/stdio/malloc — bootstrap floor)
+    4  L982-985        hxlcl_putchar                              freestanding libc primitive (str/mem/stdio/malloc — bootstrap floor)
+    8  L986-993        hxlcl_perror                               freestanding libc primitive (str/mem/stdio/malloc — bootstrap floor)
+   17  L1027-1043       hxlcl_malloc                               freestanding libc primitive (str/mem/stdio/malloc — bootstrap floor)
+    3  L1054-1056       hxlcl_free                                 freestanding libc primitive (str/mem/stdio/malloc — bootstrap floor)
+   15  L1058-1072       hxlcl_realloc                              freestanding libc primitive (str/mem/stdio/malloc — bootstrap floor)
+    9  L1073-1081       hxlcl_calloc                               freestanding libc primitive (str/mem/stdio/malloc — bootstrap floor)
+    4  L1093-1096       hxlcl_munmap                               freestanding libc primitive (str/mem/stdio/malloc — bootstrap floor)
+    5  L1177-1181       hxlcl_ftell                                freestanding libc primitive (str/mem/stdio/malloc — bootstrap floor)
+    5  L1182-1186       hxlcl_fseek                                freestanding libc primitive (str/mem/stdio/malloc — bootstrap floor)
+    4  L1196-1199       hxlcl_setvbuf                              freestanding libc primitive (str/mem/stdio/malloc — bootstrap floor)
+    6  L1360-1365       _hxlcl_syscall1                            raw syscall trampoline (freestanding ABI)
+    7  L1366-1372       _hxlcl_syscall2                            raw syscall trampoline (freestanding ABI)
+    8  L1373-1380       _hxlcl_syscall3                            raw syscall trampoline (freestanding ABI)
+    9  L1381-1389       _hxlcl_syscall4                            raw syscall trampoline (freestanding ABI)
+   11  L1390-1400       _hxlcl_syscall6                            raw syscall trampoline (freestanding ABI)
+    9  L1418-1426       _hxlcl_syscall1_cf                         raw syscall trampoline (freestanding ABI)
+   11  L1427-1437       _hxlcl_syscall3_cf                         raw syscall trampoline (freestanding ABI)
+   10  L1442-1451       _hxlcl_syscall2_cf                         raw syscall trampoline (freestanding ABI)
+   12  L1452-1463       _hxlcl_syscall4_cf                         raw syscall trampoline (freestanding ABI)
+   14  L1464-1477       _hxlcl_syscall6_cf                         raw syscall trampoline (freestanding ABI)
+    8  L1485-1492       _hxlcl_pipe_cf                             raw syscall trampoline (freestanding ABI)
+    1  L1567-1567       hxlcl_fsync                                freestanding libc primitive (str/mem/stdio/malloc — bootstrap floor)
+    1  L1578-1578       hxlcl_truncate                             freestanding libc primitive (str/mem/stdio/malloc — bootstrap floor)
+    1  L1579-1579       hxlcl_chown                                freestanding libc primitive (str/mem/stdio/malloc — bootstrap floor)
+    1  L1580-1580       hxlcl_lchown                               freestanding libc primitive (str/mem/stdio/malloc — bootstrap floor)
+    3  L1615-1617       hxlcl_chkstk                               freestanding libc primitive (str/mem/stdio/malloc — bootstrap floor)
+    1  L1671-1671       hxlcl_geteuid                              freestanding libc primitive (str/mem/stdio/malloc — bootstrap floor)
+    1  L1676-1676       hxlcl_getegid                              freestanding libc primitive (str/mem/stdio/malloc — bootstrap floor)
+    1  L1681-1681       hxlcl_getgid                               freestanding libc primitive (str/mem/stdio/malloc — bootstrap floor)
+    1  L1686-1686       hxlcl_getppid                              freestanding libc primitive (str/mem/stdio/malloc — bootstrap floor)
+    4  L1884-1887       hxlcl_exit                                 freestanding libc primitive (str/mem/stdio/malloc — bootstrap floor)
+    1  L1909-1909       hxlcl_mmap                                 freestanding libc primitive (str/mem/stdio/malloc — bootstrap floor)
+    1  L1936-1936       hxlcl_fd_overflow                          freestanding libc primitive (str/mem/stdio/malloc — bootstrap floor)
+    3  L1988-1990       hxlcl_exit                                 freestanding libc primitive (str/mem/stdio/malloc — bootstrap floor)
+    1  L1991-1991       hxlcl_mmap                                 freestanding libc primitive (str/mem/stdio/malloc — bootstrap floor)
+    4  L1993-1996       hxlcl_darwin_check_fd_set_overflow         freestanding libc primitive (str/mem/stdio/malloc — bootstrap floor)
+    7  L2194-2200       rt_isalnum                                 libm/ctype primitive hexa lowers math/char ops to
+    6  L2201-2206       rt_isalpha                                 libm/ctype primitive hexa lowers math/char ops to
+    1  L2211-2211       hxlcl_isalnum                              freestanding libc primitive (str/mem/stdio/malloc — bootstrap floor)
+    1  L2212-2212       hxlcl_isalpha                              freestanding libc primitive (str/mem/stdio/malloc — bootstrap floor)
+    4  L2222-2225       hxlcl_atof                                 freestanding libc primitive (str/mem/stdio/malloc — bootstrap floor)
+   38  L2227-2264       hxlcl_atof                                 freestanding libc primitive (str/mem/stdio/malloc — bootstrap floor)
+    4  L2274-2277       hxlcl_atoll                                freestanding libc primitive (str/mem/stdio/malloc — bootstrap floor)
+   14  L2279-2292       hxlcl_atoll                                freestanding libc primitive (str/mem/stdio/malloc — bootstrap floor)
+    7  L2299-2305       rt_fmod                                    libm/ctype primitive hexa lowers math/char ops to
+   16  L2306-2321       rt_exp                                     libm/ctype primitive hexa lowers math/char ops to
+   11  L2322-2332       rt_log                                     libm/ctype primitive hexa lowers math/char ops to
+   12  L2333-2344       rt_cos                                     libm/ctype primitive hexa lowers math/char ops to
+    5  L2345-2349       rt_sin                                     libm/ctype primitive hexa lowers math/char ops to
+    1  L2357-2357       hxlcl_fmod                                 freestanding libc primitive (str/mem/stdio/malloc — bootstrap floor)
+    1  L2358-2358       hxlcl_exp                                  freestanding libc primitive (str/mem/stdio/malloc — bootstrap floor)
+    1  L2359-2359       hxlcl_log                                  freestanding libc primitive (str/mem/stdio/malloc — bootstrap floor)
+    1  L2360-2360       hxlcl_cos                                  freestanding libc primitive (str/mem/stdio/malloc — bootstrap floor)
+    1  L2361-2361       hxlcl_sin                                  freestanding libc primitive (str/mem/stdio/malloc — bootstrap floor)
+    1  L2376-2376       rt_pthread_noop                            pthread/atomics primitive (GC/concurrency needs)
+    1  L2377-2377       rt_pthread_create_policy                   pthread/atomics primitive (GC/concurrency needs)
+    3  L2455-2457       hxlcl_sigprocmask                          freestanding libc primitive (str/mem/stdio/malloc — bootstrap floor)
+    1  L2487-2487       hxlcl_grantpt                              freestanding libc primitive (str/mem/stdio/malloc — bootstrap floor)
+    1  L2488-2488       hxlcl_unlockpt                             freestanding libc primitive (str/mem/stdio/malloc — bootstrap floor)
+    1  L2489-2489       hxlcl_ptsname                              freestanding libc primitive (str/mem/stdio/malloc — bootstrap floor)
+    9  L2491-2499       hxlcl_getrlimit                            freestanding libc primitive (str/mem/stdio/malloc — bootstrap floor)
+    8  L2500-2507       hxlcl_getrusage                            freestanding libc primitive (str/mem/stdio/malloc — bootstrap floor)
+    8  L2582-2589       hxlcl_task_info                            freestanding libc primitive (str/mem/stdio/malloc — bootstrap floor)
+    4  L3742-3745       N                                          macro-ish primitive
+    4  L4005-4008       forge_dispatch_matmul                      flat-array GPU/device-dispatch or mmap primitive (numeric runtime ABI)
+    5  L4017-4021       forge_dispatch_matmul_batched              flat-array GPU/device-dispatch or mmap primitive (numeric runtime ABI)
+    5  L4032-4036       forge_dispatch_ffn_fp64_via_bf16           flat-array GPU/device-dispatch or mmap primitive (numeric runtime ABI)
+    5  L4277-4281       _hx_bit_or                                 low-level bit/encode primitive
+    6  L5802-5807       _hexa_f                                    low-level bit/encode primitive
+    1  L5826-5826       hexa_math_tanh                             libm math op (the math ABI hexa codegen lowers to)
+    1  L5827-5827       hexa_math_tan                              libm math op (the math ABI hexa codegen lowers to)
+    1  L5833-5833       hexa_math_tanh                             libm math op (the math ABI hexa codegen lowers to)
+    1  L5834-5834       hexa_math_tan                              libm math op (the math ABI hexa codegen lowers to)
+    1  L5836-5836       hexa_math_sin                              libm math op (the math ABI hexa codegen lowers to)
+    1  L5837-5837       hexa_math_cos                              libm math op (the math ABI hexa codegen lowers to)
+    1  L5842-5842       hexa_math_asin                             libm math op (the math ABI hexa codegen lowers to)
+    1  L5843-5843       hexa_math_acos                             libm math op (the math ABI hexa codegen lowers to)
+    1  L5844-5844       hexa_math_atan                             libm math op (the math ABI hexa codegen lowers to)
+    1  L5849-5849       hexa_math_asin                             libm math op (the math ABI hexa codegen lowers to)
+    1  L5850-5850       hexa_math_acos                             libm math op (the math ABI hexa codegen lowers to)
+    1  L5851-5851       hexa_math_atan                             libm math op (the math ABI hexa codegen lowers to)
+    1  L5856-5856       hexa_math_atan2                            libm math op (the math ABI hexa codegen lowers to)
+    1  L5859-5859       hexa_math_atan2                            libm math op (the math ABI hexa codegen lowers to)
+    1  L5861-5861       hexa_math_log                              libm math op (the math ABI hexa codegen lowers to)
+    1  L5862-5862       hexa_math_exp                              libm math op (the math ABI hexa codegen lowers to)
+    1  L5875-5875       hexa_math_pow                              libm math op (the math ABI hexa codegen lowers to)
+    1  L5878-5878       hexa_math_pow                              libm math op (the math ABI hexa codegen lowers to)
+    1  L5889-5889       hexa_math_fmod                             libm math op (the math ABI hexa codegen lowers to)
+    1  L5892-5892       hexa_math_fmod                             libm math op (the math ABI hexa codegen lowers to)
+    1  L5903-5903       hexa_math_lgamma                           libm math op (the math ABI hexa codegen lowers to)
+    1  L5906-5906       hexa_math_lgamma                           libm math op (the math ABI hexa codegen lowers to)
+    1  L5913-5913       hexa_math_tgamma                           libm math op (the math ABI hexa codegen lowers to)
+    1  L5914-5914       hexa_math_erf                              libm math op (the math ABI hexa codegen lowers to)
+    1  L5915-5915       hexa_math_erfc                             libm math op (the math ABI hexa codegen lowers to)
+    1  L5916-5916       hexa_math_j0                               libm math op (the math ABI hexa codegen lowers to)
+    1  L5917-5917       hexa_math_j1                               libm math op (the math ABI hexa codegen lowers to)
+    1  L5919-5919       hexa_math_isnan                            libm math op (the math ABI hexa codegen lowers to)
+    1  L5920-5920       hexa_math_isinf                            libm math op (the math ABI hexa codegen lowers to)
+    1  L5921-5921       hexa_math_isfinite                         libm math op (the math ABI hexa codegen lowers to)
+    1  L5926-5926       hexa_math_isnan                            libm math op (the math ABI hexa codegen lowers to)
+    1  L5927-5927       hexa_math_isinf                            libm math op (the math ABI hexa codegen lowers to)
+    1  L5928-5928       hexa_math_isfinite                         libm math op (the math ABI hexa codegen lowers to)
+   14  L7955-7968       _hx_mmap_alloc_slot                        flat-array GPU/device-dispatch or mmap primitive (numeric runtime ABI)
+   14  L9170-9183       hexa_farr_to_device                        flat-array GPU/device-dispatch or mmap primitive (numeric runtime ABI)
+   11  L9187-9197       hexa_farr_to_host                          flat-array GPU/device-dispatch or mmap primitive (numeric runtime ABI)
+    7  L9202-9208       hexa_farr_pin                              flat-array GPU/device-dispatch or mmap primitive (numeric runtime ABI)
+   10  L9273-9282       hexa_farr_pin_device                       flat-array GPU/device-dispatch or mmap primitive (numeric runtime ABI)
+   10  L9286-9295       hexa_farr_unpin_device                     flat-array GPU/device-dispatch or mmap primitive (numeric runtime ABI)
+   12  L9299-9310       hexa_farr_device_free                      flat-array GPU/device-dispatch or mmap primitive (numeric runtime ABI)
+   32  L9321-9352       hexa_farr_matmul_gpu                       flat-array GPU/device-dispatch or mmap primitive (numeric runtime ABI)
+    4  L9373-9376       farr_matmul_gpu_impl                       flat-array GPU/device-dispatch or mmap primitive (numeric runtime ABI)
+    4  L9377-9380       farr_matmul_gpu                            flat-array GPU/device-dispatch or mmap primitive (numeric runtime ABI)
+   17  L9639-9655       hexa_farr_softmax_rows_gpu                 flat-array GPU/device-dispatch or mmap primitive (numeric runtime ABI)
+   20  L9688-9707       hexa_farr_rmsnorm_rows_gpu                 flat-array GPU/device-dispatch or mmap primitive (numeric runtime ABI)
+   18  L9713-9730       hexa_farr_add_gpu                          flat-array GPU/device-dispatch or mmap primitive (numeric runtime ABI)
+   17  L9736-9752       hexa_farr_scale_gpu                        flat-array GPU/device-dispatch or mmap primitive (numeric runtime ABI)
+   18  L9759-9776       hexa_farr_silu_gate_gpu                    flat-array GPU/device-dispatch or mmap primitive (numeric runtime ABI)
+   20  L10104-10123      farr_rmsnorm_mh_gpu                        flat-array GPU/device-dispatch or mmap primitive (numeric runtime ABI)
+   22  L10136-10157      farr_attn_dt_fwd_gpu                       flat-array GPU/device-dispatch or mmap primitive (numeric runtime ABI)
+   10  L10197-10206      hexa_farr_zero_slice_gpu                   flat-array GPU/device-dispatch or mmap primitive (numeric runtime ABI)
+   10  L10207-10216      hexa_farr_add_inplace_gpu                  flat-array GPU/device-dispatch or mmap primitive (numeric runtime ABI)
+   13  L10219-10231      farr_fill_dt_lcg_gpu                       flat-array GPU/device-dispatch or mmap primitive (numeric runtime ABI)
+   13  L10232-10244      farr_copy_slice_gpu                        flat-array GPU/device-dispatch or mmap primitive (numeric runtime ABI)
+   17  L10245-10261      farr_transpose_2d_gpu                      flat-array GPU/device-dispatch or mmap primitive (numeric runtime ABI)
+   28  L10263-10290      farr_attn_dt_bwd_gpu                       flat-array GPU/device-dispatch or mmap primitive (numeric runtime ABI)
+   20  L10889-10908      hexa_farr_matmul_t_gpu                     flat-array GPU/device-dispatch or mmap primitive (numeric runtime ABI)
+   20  L10957-10976      hexa_farr_outer_gpu                        flat-array GPU/device-dispatch or mmap primitive (numeric runtime ABI)
+   18  L10981-10998      hexa_farr_mul_gpu                          flat-array GPU/device-dispatch or mmap primitive (numeric runtime ABI)
+   16  L11004-11019      hexa_farr_silu_gpu                         flat-array GPU/device-dispatch or mmap primitive (numeric runtime ABI)
+   16  L11024-11039      hexa_farr_silu_grad_gpu                    flat-array GPU/device-dispatch or mmap primitive (numeric runtime ABI)
+   20  L11045-11064      hexa_farr_rmsnorm_bwd_rows_gpu             flat-array GPU/device-dispatch or mmap primitive (numeric runtime ABI)
+   40  L11070-11109      hexa_farr_adamw_step_gpu                   flat-array GPU/device-dispatch or mmap primitive (numeric runtime ABI)
+    6  L11121-11126      farr_adamw_step_gpu                        flat-array GPU/device-dispatch or mmap primitive (numeric runtime ABI)
+   25  L11192-11216      hexa_farr_rope_gpu                         flat-array GPU/device-dispatch or mmap primitive (numeric runtime ABI)
+   25  L11222-11246      hexa_farr_rope_bwd_gpu                     flat-array GPU/device-dispatch or mmap primitive (numeric runtime ABI)
+   20  L11259-11278      hexa_farr_transpose_scatter_gpu            flat-array GPU/device-dispatch or mmap primitive (numeric runtime ABI)
+   23  L11291-11313      hexa_farr_ce_seed_gpu                      flat-array GPU/device-dispatch or mmap primitive (numeric runtime ABI)
+    4  L11316-11319      farr_rope_gpu                              flat-array GPU/device-dispatch or mmap primitive (numeric runtime ABI)
+    4  L11320-11323      farr_rope_bwd_gpu                          flat-array GPU/device-dispatch or mmap primitive (numeric runtime ABI)
+    6  L11324-11329      farr_ce_seed_gpu                           flat-array GPU/device-dispatch or mmap primitive (numeric runtime ABI)
+
+########################################################################
+TIER B-OPEN — PORTABLE helper, unported -> M2 PORT TARGET  (30 fns, 2783 LOC)
+########################################################################
+  LOC  lines          function                                   reason
+    9  L4659-4667       hexa_count_poly                            pure data/predicate helper
+    6  L4673-4678       hexa_contains_poly                         pure data/predicate helper
+    4  L4706-4709       hexa_find_poly                             pure data/predicate helper
+   13  L4716-4728       hexa_range_array                           pure data/predicate helper
+   18  L4748-4765       hexa_range_field                           pure data/predicate helper
+   15  L4769-4783       hexa_array_flat_map                        pure array combinator (map/filter/zip/etc — calls core push/get only)
+    8  L4809-4816       hexa_is_empty                              pure data/predicate helper
+   14  L5166-5179       hexa_array_concat                          pure array combinator (map/filter/zip/etc — calls core push/get only)
+   10  L5307-5316       hexa_array_take_while                      pure array combinator (map/filter/zip/etc — calls core push/get only)
+    9  L5319-5327       hexa_array_skip_while                      pure array combinator (map/filter/zip/etc — calls core push/get only)
+   12  L5330-5341       hexa_array_min_by                          pure array combinator (map/filter/zip/etc — calls core push/get only)
+   12  L5344-5355       hexa_array_max_by                          pure array combinator (map/filter/zip/etc — calls core push/get only)
+    8  L5358-5365       hexa_array_position                        pure array combinator (map/filter/zip/etc — calls core push/get only)
+   10  L5370-5379       hexa_array_reduce                          pure array combinator (map/filter/zip/etc — calls core push/get only)
+   12  L5383-5394       hexa_array_dedup                           pure array combinator (map/filter/zip/etc — calls core push/get only)
+    9  L5397-5405       hexa_array_step_by                         pure array combinator (map/filter/zip/etc — calls core push/get only)
+   19  L5650-5668       hexa_array_group_by                        pure array combinator (map/filter/zip/etc — calls core push/get only)
+   15  L5673-5687       hexa_array_frequencies                     pure array combinator (map/filter/zip/etc — calls core push/get only)
+    6  L5812-5817       hexa_float_to_int                          pure data/predicate helper
+    7  L6000-6006       hexa_is_error                              pure data/predicate helper
+   25  L6035-6059       hexa_from_char_code                        pure data/predicate helper
+   23  L6105-6127       hexa_bytes_to_str_raw                      string/char helper
+   22  L11746-11767      hexa_list_dir                              pure data/predicate helper
+    1  L11887-11887      hexa_dict_keys                             pure data/predicate helper
+    7  L12417-12423      _jp_skip_ws                                JSON-parse pure helper (string scan)
+   48  L12427-12474      _jp_parse_string                           JSON-parse pure helper (string scan)
+   22  L12476-12497      _jp_parse_number                           JSON-parse pure helper (string scan)
+   17  L12499-12515      _jp_parse_array                            JSON-parse pure helper (string scan)
+   19  L12517-12535      _jp_parse_object                           JSON-parse pure helper (string scan)
+ 2383  L12539-14921      _jp_parse_value                            JSON-parse pure helper (string scan)
+
+########################################################################
+TIER B-PORTED — PORTABLE helper, hexa impl already in rt-stdlib (C fallback)  (74 fns, 817 LOC)
+########################################################################
+  LOC  lines          function                                   reason
+    6  L3836-3841       hexa_char_code                             string/char helper
+    4  L3844-3847       hexa_char_code                             string/char helper
+    4  L4291-4294       hexa_str_parse_int                         string/char helper
+   36  L4296-4331       hexa_str_parse_int                         string/char helper
+    4  L4339-4342       hexa_str_parse_float                       string/char helper
+    4  L4345-4348       hexa_str_parse_float                       string/char helper
+    6  L4356-4361       rt_str_trim_start                          pure string-edge trim helper
+    6  L4367-4372       rt_str_trim_end                            pure string-edge trim helper
+    9  L4381-4389       hexa_str_slice                             string/char helper
+    4  L4392-4395       hexa_str_slice                             string/char helper
+   40  L4403-4442       hexa_array_slice                           pure array combinator (map/filter/zip/etc — calls core push/get only)
+   37  L4446-4482       hexa_array_slice                           pure array combinator (map/filter/zip/etc — calls core push/get only)
+    8  L4512-4519       hexa_array_map                             pure array combinator (map/filter/zip/etc — calls core push/get only)
+    4  L4522-4525       hexa_array_map                             pure array combinator (map/filter/zip/etc — calls core push/get only)
+    9  L4530-4538       hexa_array_filter                          pure array combinator (map/filter/zip/etc — calls core push/get only)
+    8  L4540-4547       hexa_array_fold                            pure array combinator (map/filter/zip/etc — calls core push/get only)
+    4  L4551-4554       hexa_array_filter                          pure array combinator (map/filter/zip/etc — calls core push/get only)
+    4  L4555-4558       hexa_array_fold                            pure array combinator (map/filter/zip/etc — calls core push/get only)
+    7  L4565-4571       hexa_array_index_of                        pure array combinator (map/filter/zip/etc — calls core push/get only)
+   10  L4575-4584       hexa_array_index_of                        pure array combinator (map/filter/zip/etc — calls core push/get only)
+    8  L4598-4605       hexa_array_any                             pure array combinator (map/filter/zip/etc — calls core push/get only)
+    8  L4607-4614       hexa_array_all                             pure array combinator (map/filter/zip/etc — calls core push/get only)
+   12  L4616-4627       hexa_array_count                           pure array combinator (map/filter/zip/etc — calls core push/get only)
+    5  L4632-4636       hexa_array_any                             pure array combinator (map/filter/zip/etc — calls core push/get only)
+    5  L4637-4641       hexa_array_all                             pure array combinator (map/filter/zip/etc — calls core push/get only)
+    8  L4642-4649       hexa_array_count                           pure array combinator (map/filter/zip/etc — calls core push/get only)
+    8  L4684-4691       hexa_array_find                            pure array combinator (map/filter/zip/etc — calls core push/get only)
+    6  L4694-4699       hexa_array_find                            pure array combinator (map/filter/zip/etc — calls core push/get only)
+    4  L4789-4792       hexa_array_enumerate                       pure array combinator (map/filter/zip/etc — calls core push/get only)
+   11  L4794-4804       hexa_array_enumerate                       pure array combinator (map/filter/zip/etc — calls core push/get only)
+   11  L4825-4835       hexa_array_min                             pure array combinator (map/filter/zip/etc — calls core push/get only)
+   11  L4837-4847       hexa_array_max                             pure array combinator (map/filter/zip/etc — calls core push/get only)
+   12  L4858-4869       hexa_array_min                             pure array combinator (map/filter/zip/etc — calls core push/get only)
+   12  L4870-4881       hexa_array_max                             pure array combinator (map/filter/zip/etc — calls core push/get only)
+   15  L4891-4905       hexa_array_flatten                         pure array combinator (map/filter/zip/etc — calls core push/get only)
+   21  L4908-4928       hexa_array_flatten                         pure array combinator (map/filter/zip/etc — calls core push/get only)
+    7  L4934-4940       hexa_array_for_each                        pure array combinator (map/filter/zip/etc — calls core push/get only)
+    4  L4943-4946       hexa_array_for_each                        pure array combinator (map/filter/zip/etc — calls core push/get only)
+    9  L4956-4964       hexa_array_fill                            pure array combinator (map/filter/zip/etc — calls core push/get only)
+   12  L4967-4978       hexa_array_fill                            pure array combinator (map/filter/zip/etc — calls core push/get only)
+   12  L5077-5088       hexa_array_take                            pure array combinator (map/filter/zip/etc — calls core push/get only)
+   11  L5089-5099       hexa_array_drop                            pure array combinator (map/filter/zip/etc — calls core push/get only)
+   13  L5103-5115       hexa_array_take                            pure array combinator (map/filter/zip/etc — calls core push/get only)
+   12  L5116-5127       hexa_array_drop                            pure array combinator (map/filter/zip/etc — calls core push/get only)
+   13  L5132-5144       hexa_array_zip                             pure array combinator (map/filter/zip/etc — calls core push/get only)
+   14  L5147-5160       hexa_array_zip                             pure array combinator (map/filter/zip/etc — calls core push/get only)
+   17  L5184-5200       hexa_array_chunk                           pure array combinator (map/filter/zip/etc — calls core push/get only)
+   18  L5203-5220       hexa_array_chunk                           pure array combinator (map/filter/zip/etc — calls core push/get only)
+   15  L5228-5242       hexa_array_window                          pure array combinator (map/filter/zip/etc — calls core push/get only)
+   16  L5245-5260       hexa_array_window                          pure array combinator (map/filter/zip/etc — calls core push/get only)
+   14  L5266-5279       hexa_array_unique                          pure array combinator (map/filter/zip/etc — calls core push/get only)
+   15  L5282-5296       hexa_array_unique                          pure array combinator (map/filter/zip/etc — calls core push/get only)
+   13  L5410-5422       hexa_array_rotate                          pure array combinator (map/filter/zip/etc — calls core push/get only)
+   14  L5425-5438       hexa_array_rotate                          pure array combinator (map/filter/zip/etc — calls core push/get only)
+   18  L5445-5462       hexa_array_partition                       pure array combinator (map/filter/zip/etc — calls core push/get only)
+    9  L5465-5473       hexa_array_partition                       pure array combinator (map/filter/zip/etc — calls core push/get only)
+   14  L5482-5495       hexa_array_interleave                      pure array combinator (map/filter/zip/etc — calls core push/get only)
+   17  L5498-5514       hexa_array_interleave                      pure array combinator (map/filter/zip/etc — calls core push/get only)
+   11  L5522-5532       hexa_array_scan                            pure array combinator (map/filter/zip/etc — calls core push/get only)
+    7  L5535-5541       hexa_array_scan                            pure array combinator (map/filter/zip/etc — calls core push/get only)
+   14  L5548-5561       hexa_array_product                         pure array combinator (map/filter/zip/etc — calls core push/get only)
+   16  L5564-5579       hexa_array_product                         pure array combinator (map/filter/zip/etc — calls core push/get only)
+   10  L5585-5594       hexa_array_mean                            pure array combinator (map/filter/zip/etc — calls core push/get only)
+    4  L5597-5600       hexa_array_mean                            pure array combinator (map/filter/zip/etc — calls core push/get only)
+   17  L5607-5623       hexa_array_swap                            pure array combinator (map/filter/zip/etc — calls core push/get only)
+   18  L5626-5643       hexa_array_swap                            pure array combinator (map/filter/zip/etc — calls core push/get only)
+   13  L5696-5708       hexa_array_sample                          pure array combinator (map/filter/zip/etc — calls core push/get only)
+    5  L5711-5715       hexa_array_sample                          pure array combinator (map/filter/zip/etc — calls core push/get only)
+   17  L5727-5743       hexa_str_substr                            string/char helper
+   13  L5746-5758       hexa_str_substr                            string/char helper
+    8  L5763-5770       hexa_str_bytes                             string/char helper
+    4  L5773-5776       hexa_str_bytes                             string/char helper
+    1  L12353-12353      hexa_to_bool                               pure data/predicate helper
+    1  L12355-12355      hexa_to_bool                               pure data/predicate helper
+
+########################################################################
+TIER C — FFI / platform / syscall shim (irreducible external ABI)  (184 fns, 2188 LOC)
+########################################################################
+  LOC  lines          function                                   reason
+    4  L34-37         hxlcl_capture_environ                      libc platform/syscall shim (capture_environ)
+   10  L421-430        hxlcl_strdup                               libc platform/syscall shim (strdup)
+   10  L448-457        hxlcl_strndup                              libc platform/syscall shim (strndup)
+   25  L1103-1127       hxlcl_fopen                                libc platform/syscall shim (fopen)
+   10  L1128-1137       hxlcl_fclose                               libc platform/syscall shim (fclose)
+   11  L1138-1148       _hxlcl_fp_fd                               process/stdio FFI plumbing
+   14  L1149-1162       hxlcl_fread                                libc platform/syscall shim (fread)
+   14  L1163-1176       hxlcl_fwrite                               libc platform/syscall shim (fwrite)
+    5  L1187-1191       hxlcl_fdopen                               libc platform/syscall shim (fdopen)
+    4  L1192-1195       hxlcl_flock                                libc platform/syscall shim (flock)
+   14  L1229-1242       hxlcl_getenv                               libc platform/syscall shim (getenv)
+    1  L1506-1506       hxlcl_read                                 libc platform/syscall shim (read)
+    1  L1521-1521       hxlcl_mkdir                                libc platform/syscall shim (mkdir)
+    1  L1527-1527       hxlcl_write                                libc platform/syscall shim (write)
+    1  L1555-1555       hxlcl_close                                libc platform/syscall shim (close)
+    1  L1564-1564       hxlcl_chdir                                libc platform/syscall shim (chdir)
+    1  L1565-1565       hxlcl_unlink                               libc platform/syscall shim (unlink)
+    1  L1566-1566       hxlcl_rmdir                                libc platform/syscall shim (rmdir)
+    1  L1568-1568       hxlcl_dup                                  libc platform/syscall shim (dup)
+    1  L1576-1576       hxlcl_chmod                                libc platform/syscall shim (chmod)
+    1  L1577-1577       hxlcl_access                               libc platform/syscall shim (access)
+    1  L1602-1602       hxlcl_getpid                               libc platform/syscall shim (getpid)
+    8  L1625-1632       hxlcl_setjmp                               libc platform/syscall shim (setjmp)
+    8  L1634-1641       hxlcl_longjmp                              libc platform/syscall shim (longjmp)
+    1  L1657-1657       hxlcl_getuid                               libc platform/syscall shim (getuid)
+    4  L1696-1699       hxlcl_backtrace                            libc platform/syscall shim (backtrace)
+    5  L1700-1704       hxlcl_backtrace_symbols_fd                 libc platform/syscall shim (backtrace_symbols_fd)
+    1  L1718-1718       hxlcl_dup2                                 libc platform/syscall shim (dup2)
+    1  L1732-1732       hxlcl_pipe                                 libc platform/syscall shim (pipe)
+    8  L1739-1746       hxlcl_fork                                 libc platform/syscall shim (fork)
+    1  L1756-1756       hxlcl_kill                                 libc platform/syscall shim (kill)
+    1  L1763-1763       hxlcl_fcntl                                libc platform/syscall shim (fcntl)
+    1  L1770-1770       hxlcl_ioctl                                libc platform/syscall shim (ioctl)
+    1  L1791-1791       hxlcl_lseek                                libc platform/syscall shim (lseek)
+    1  L1798-1798       hxlcl_select                               libc platform/syscall shim (select)
+    1  L1805-1805       hxlcl_poll                                 libc platform/syscall shim (poll)
+    1  L1818-1818       hxlcl_waitpid                              libc platform/syscall shim (waitpid)
+   20  L1822-1841       hxlcl_open_sys                             libc platform/syscall shim (open_sys)
+    1  L1862-1862       hxlcl_fstat                                libc platform/syscall shim (fstat)
+    1  L1875-1875       hxlcl_stat                                 libc platform/syscall shim (stat)
+   14  L1911-1924       hxlcl_clock_gettime                        libc platform/syscall shim (clock_gettime)
+    1  L1963-1963       hxlcl_read                                 libc platform/syscall shim (read)
+    1  L1964-1964       hxlcl_write                                libc platform/syscall shim (write)
+    1  L1965-1965       hxlcl_close                                libc platform/syscall shim (close)
+    1  L1966-1966       hxlcl_getpid                               libc platform/syscall shim (getpid)
+    1  L1967-1967       hxlcl_dup2                                 libc platform/syscall shim (dup2)
+    1  L1968-1968       hxlcl_pipe                                 libc platform/syscall shim (pipe)
+    1  L1969-1969       hxlcl_fork                                 libc platform/syscall shim (fork)
+    1  L1970-1970       hxlcl_kill                                 libc platform/syscall shim (kill)
+    1  L1971-1971       hxlcl_fcntl                                libc platform/syscall shim (fcntl)
+    1  L1972-1972       hxlcl_ioctl                                libc platform/syscall shim (ioctl)
+    1  L1973-1973       hxlcl_lseek                                libc platform/syscall shim (lseek)
+    1  L1974-1974       hxlcl_select                               libc platform/syscall shim (select)
+    1  L1975-1975       hxlcl_poll                                 libc platform/syscall shim (poll)
+    1  L1976-1976       hxlcl_waitpid                              libc platform/syscall shim (waitpid)
+    8  L1978-1985       hxlcl_open_sys                             libc platform/syscall shim (open_sys)
+    1  L1986-1986       hxlcl_fstat                                libc platform/syscall shim (fstat)
+    1  L1987-1987       hxlcl_stat                                 libc platform/syscall shim (stat)
+    1  L1992-1992       hxlcl_clock_gettime                        libc platform/syscall shim (clock_gettime)
+    3  L2002-2004       hxlcl_mkdir                                libc platform/syscall shim (mkdir)
+    3  L2014-2016       hxlcl_longjmp                              libc platform/syscall shim (longjmp)
+    3  L2021-2023       hxlcl_getuid                               libc platform/syscall shim (getuid)
+    4  L2024-2027       hxlcl_backtrace                            libc platform/syscall shim (backtrace)
+    5  L2028-2032       hxlcl_backtrace_symbols_fd                 libc platform/syscall shim (backtrace_symbols_fd)
+    3  L2382-2384       hxlcl_pthread_mutex_init                   libc platform/syscall shim (pthread_mutex_init)
+    3  L2385-2387       hxlcl_pthread_mutex_destroy                libc platform/syscall shim (pthread_mutex_destroy)
+    3  L2388-2390       hxlcl_pthread_mutex_lock                   libc platform/syscall shim (pthread_mutex_lock)
+    3  L2391-2393       hxlcl_pthread_mutex_unlock                 libc platform/syscall shim (pthread_mutex_unlock)
+    3  L2394-2396       hxlcl_pthread_cond_init                    libc platform/syscall shim (pthread_cond_init)
+    3  L2397-2399       hxlcl_pthread_cond_destroy                 libc platform/syscall shim (pthread_cond_destroy)
+    3  L2400-2402       hxlcl_pthread_cond_signal                  libc platform/syscall shim (pthread_cond_signal)
+    3  L2403-2405       hxlcl_pthread_cond_broadcast               libc platform/syscall shim (pthread_cond_broadcast)
+    3  L2406-2408       hxlcl_pthread_cond_wait                    libc platform/syscall shim (pthread_cond_wait)
+    3  L2409-2411       hxlcl_pthread_cond_timedwait               libc platform/syscall shim (pthread_cond_timedwait)
+    7  L2412-2418       hxlcl_pthread_create                       libc platform/syscall shim (pthread_create)
+    5  L2419-2423       hxlcl_pthread_join                         libc platform/syscall shim (pthread_join)
+    3  L2436-2438       rt_posix_ok                                POSIX/pthread/net FFI stub
+    1  L2439-2439       rt_net_zero                                POSIX/pthread/net FFI stub
+    1  L2440-2440       rt_posix_ok                                POSIX/pthread/net FFI stub
+    4  L2444-2447       rt_posix_ok                                POSIX/pthread/net FFI stub
+    1  L2448-2448       hxlcl_isatty                               libc platform/syscall shim (isatty)
+    3  L2449-2451       hxlcl_signal                               libc platform/syscall shim (signal)
+    3  L2452-2454       hxlcl_sigaction                            libc platform/syscall shim (sigaction)
+    3  L2459-2461       hxlcl_setenv                               libc platform/syscall shim (setenv)
+   11  L2475-2485       hxlcl_setsockopt                           libc platform/syscall shim (setsockopt)
+    1  L2490-2490       hxlcl_ttyname                              libc platform/syscall shim (ttyname)
+    4  L2509-2512       hxlcl_time                                 time/locale platform shim
+   41  L2528-2568       hxlcl_nanosleep                            libc platform/syscall shim (nanosleep)
+    9  L2569-2577       hxlcl_tcgetattr                            libc platform/syscall shim (tcgetattr)
+    4  L2578-2581       hxlcl_tcsetattr                            libc platform/syscall shim (tcsetattr)
+    5  L2591-2595       hxlcl_strftime                             time/locale platform shim
+   32  L2599-2630       hxlcl_gmtime_r                             time/locale platform shim
+    7  L2656-2662       hxlcl_socket                               libc platform/syscall shim (socket)
+    7  L2671-2677       hxlcl_bind                                 libc platform/syscall shim (bind)
+    7  L2689-2695       hxlcl_listen                               libc platform/syscall shim (listen)
+    7  L2707-2713       hxlcl_accept                               libc platform/syscall shim (accept)
+    7  L2722-2728       hxlcl_connect                              libc platform/syscall shim (connect)
+    7  L2741-2747       hxlcl_recv                                 libc platform/syscall shim (recv)
+    7  L2752-2758       hxlcl_send                                 libc platform/syscall shim (send)
+    7  L2768-2774       hxlcl_recvmsg                              libc platform/syscall shim (recvmsg)
+    7  L2779-2785       hxlcl_sendmsg                              libc platform/syscall shim (sendmsg)
+   24  L2791-2814       hxlcl_inet_pton                            libc platform/syscall shim (inet_pton)
+    7  L2837-2843       hxlcl_execve                               libc platform/syscall shim (execve)
+   24  L2848-2871       hxlcl_execvp                               libc platform/syscall shim (execvp)
+   16  L2874-2889       hxlcl_execl                                libc platform/syscall shim (execl)
+    8  L2904-2911       _hxlcl_popen_init                          process/stdio FFI plumbing
+   10  L2912-2921       _hxlcl_popen_remember                      process/stdio FFI plumbing
+   12  L2922-2933       _hxlcl_popen_forget                        process/stdio FFI plumbing
+   27  L2934-2960       hxlcl_popen                                libc platform/syscall shim (popen)
+   13  L2961-2973       hxlcl_pclose                               libc platform/syscall shim (pclose)
+    3  L2974-2976       hxlcl_forkpty                              libc platform/syscall shim (forkpty)
+    3  L2977-2979       hxlcl_posix_openpt                         libc platform/syscall shim (posix_openpt)
+   27  L2994-3020       hexa_ffi_extract_libname                   FFI/dlopen/extern-call ABI bridge
+  122  L3025-3146       hexa_ffi_dlopen                            FFI/dlopen/extern-call ABI bridge
+    7  L3150-3156       hexa_ffi_dlsym                             FFI/dlopen/extern-call ABI bridge
+   10  L3159-3168       hexa_ffi_marshal_arg                       FFI/dlopen/extern-call ABI bridge
+   38  L3173-3210       hexa_call_extern_raw                       FFI/dlopen/extern-call ABI bridge
+   15  L3214-3228       hexa_extern_call                           FFI/dlopen/extern-call ABI bridge
+  171  L3235-3405       hexa_extern_call_typed                     FFI/dlopen/extern-call ABI bridge
+    6  L3428-3433       hexa_host_ffi_open                         FFI/dlopen/extern-call ABI bridge
+   13  L3437-3449       hexa_host_ffi_sym                          FFI/dlopen/extern-call ABI bridge
+   12  L3460-3471       hexa_host_ffi_unwrap                       FFI/dlopen/extern-call ABI bridge
+   33  L3473-3505       hexa_host_ffi_call                         FFI/dlopen/extern-call ABI bridge
+   74  L3522-3595       hexa_host_ffi_call_6                       FFI/dlopen/extern-call ABI bridge
+    9  L3614-3622       hexa_struct_pack                           C-ABI struct marshalling (raw calloc/free + pointer encode for FFI)
+    7  L3628-3634       hexa_struct_unpack                         C-ABI struct marshalling (raw calloc/free + pointer encode for FFI)
+    8  L3637-3644       hexa_struct_rect                           C-ABI struct marshalling (raw calloc/free + pointer encode for FFI)
+    6  L3647-3652       hexa_struct_point                          C-ABI struct marshalling (raw calloc/free + pointer encode for FFI)
+    6  L3655-3660       hexa_struct_size_pack                      C-ABI struct marshalling (raw calloc/free + pointer encode for FFI)
+    5  L3663-3667       hexa_struct_free                           C-ABI struct marshalling (raw calloc/free + pointer encode for FFI)
+   37  L3698-3734       hexa_trampoline_dispatch                   FFI/dlopen/extern-call ABI bridge
+    8  L3762-3769       hexa_trampoline_init                       FFI/dlopen/extern-call ABI bridge
+   16  L3775-3790       hexa_callback_create                       FFI/dlopen/extern-call ABI bridge
+   11  L3794-3804       hexa_callback_free                         FFI/dlopen/extern-call ABI bridge
+    9  L3808-3816       hexa_callback_slot_id                      FFI/dlopen/extern-call ABI bridge
+    1  L3827-3827       hexa_random                                OS/clock/env/io platform shim
+   11  L5789-5799       hexa_sleep                                 OS/clock/env/io platform shim
+   34  L5965-5998       hexa_input                                 OS/clock/env/io platform shim
+   26  L6008-6033       rt_read_lines                              file I/O platform shim
+   21  L7974-7994       hexa_safetensors_mmap_open                 mmap-backed safetensors loader (mmap + raw byte ABI)
+   14  L8001-8014       hexa_safetensors_mmap_header               mmap-backed safetensors loader (mmap + raw byte ABI)
+   10  L8018-8027       hexa_safetensors_mmap_data_offset          mmap-backed safetensors loader (mmap + raw byte ABI)
+    6  L8030-8035       hexa_safetensors_mmap_size                 mmap-backed safetensors loader (mmap + raw byte ABI)
+   21  L8042-8062       hexa_safetensors_mmap_read_f32_farr        mmap-backed safetensors loader (mmap + raw byte ABI)
+   27  L8099-8125       hexa_safetensors_mmap_read_bf16_to_f32_farr mmap-backed safetensors loader (mmap + raw byte ABI)
+   16  L8133-8148       hexa_safetensors_mmap_read_bytes           mmap-backed safetensors loader (mmap + raw byte ABI)
+   27  L8155-8181       hexa_safetensors_mmap_close                mmap-backed safetensors loader (mmap + raw byte ABI)
+  100  L11421-11520      hexa_env_var                               OS/clock/env/io platform shim
+    5  L11526-11530      hexa_cwd                                   OS/clock/env/io platform shim
+    9  L11541-11549      hexa_glob                                  OS/clock/env/io platform shim
+   14  L11551-11564      hexa_listdir                               OS/clock/env/io platform shim
+    7  L11566-11572      hexa_tempfile                              OS/clock/env/io platform shim
+    5  L11574-11578      hexa_tempdir                               OS/clock/env/io platform shim
+    6  L11586-11591      hexa_setenv                                OS/clock/env/io platform shim
+  116  L11598-11713      hexa_exec_capture                          process exec platform shim
+    1  L11724-11724      hexa_exec_with_status3                     process exec platform shim
+    5  L11726-11730      rt_delete_file                             file I/O platform shim
+    9  L11769-11777      rt_append_file                             file I/O platform shim
+   12  L11803-11814      hexa_pinned_epoch                          OS/clock/env/io platform shim
+    7  L11816-11822      hexa_timestamp                             OS/clock/env/io platform shim
+    9  L11828-11836      hexa_time_ms                               OS/clock/env/io platform shim
+    1  L11857-11857      _hexa_time_ms_thunk                        time fn shim (clock platform)
+    1  L11858-11858      _hexa_timestamp_thunk                      time fn shim (clock platform)
+    7  L11859-11865      _hexa_init_time_fn_shims                   time fn shim (clock platform)
+   23  L11922-11944      hexa_read_stdin                            OS/clock/env/io platform shim
+   21  L11958-11978      read_stdin_n_c                             stdio platform shim
+    5  L11990-11994      flush_stdout_c                             stdio platform shim
+   12  L11998-12009      hexa_sleep_s                               OS/clock/env/io platform shim
+   12  L12016-12027      hexa_sleep_ms                              OS/clock/env/io platform shim
+   12  L12031-12042      hexa_sleep_ns                              OS/clock/env/io platform shim
+    7  L12047-12053      hexa_now_monotonic_s                       OS/clock/env/io platform shim
+    9  L12062-12070      hexa_utc_iso_now                           OS/clock/env/io platform shim
+    9  L12077-12085      hexa_utc_iso_format                        OS/clock/env/io platform shim
+   39  L12090-12128      hexa_utc_iso_parse                         OS/clock/env/io platform shim
+    5  L12145-12149      _hexa_re_compile                           POSIX regcomp/regexec FFI wrapper
+    8  L12152-12159      _hexa_re_strip_flags                       POSIX regcomp/regexec FFI wrapper
+   13  L12161-12173      hexa_regex_match                           POSIX regcomp/regexec FFI wrapper
+   15  L12175-12189      hexa_regex_match_full                      POSIX regcomp/regexec FFI wrapper
+   18  L12191-12208      hexa_regex_search                          POSIX regcomp/regexec FFI wrapper
+   29  L12210-12238      hexa_regex_findall                         POSIX regcomp/regexec FFI wrapper
+   35  L12240-12274      hexa_regex_split                           POSIX regcomp/regexec FFI wrapper
+   59  L12276-12334      hexa_regex_replace                         POSIX regcomp/regexec FFI wrapper
+    9  L12337-12345      hexa_utc_compact_now                       OS/clock/env/io platform shim
+   38  L12363-12400      hexa_http_get                              OS/clock/env/io platform shim
+
+########################################################################
+TIER BORDERLINE — ambiguous — see per-fn reason  (151 fns, 3066 LOC)
+########################################################################
+  LOC  lines          function                                   reason
+    5  L3409-3413       hexa_from_cstring                          raw C-string pointer (uintptr) -> hexa string: pointer ABI
+    5  L3821-3825       hexa_clock                                 unclassified — needs manual review
+    4  L3989-3992       farr_matmul                                flat-array numeric CPU kernel — expressible in hexa but perf-critical + raw buffer ABI
+    5  L4043-4047       farr_apply_single_farr                     flat-array numeric CPU kernel — expressible in hexa but perf-critical + raw buffer ABI
+    7  L4048-4054       farr_apply_cnot                            flat-array numeric CPU kernel — expressible in hexa but perf-critical + raw buffer ABI
+    4  L4097-4100       ad_matmul                                  flat-array numeric CPU kernel — expressible in hexa but perf-critical + raw buffer ABI
+    6  L4101-4106       adamw_step                                 flat-array numeric CPU kernel — expressible in hexa but perf-critical + raw buffer ABI
+    6  L4120-4125       adamw_step_mixed                           flat-array numeric CPU kernel — expressible in hexa but perf-critical + raw buffer ABI
+    4  L4202-4205       farr_vec_reflect                           flat-array numeric CPU kernel — expressible in hexa but perf-critical + raw buffer ABI
+    4  L4206-4209       farr_vec_blend                             flat-array numeric CPU kernel — expressible in hexa but perf-critical + raw buffer ABI
+    4  L4210-4213       farr_vertex_copy                           flat-array numeric CPU kernel — expressible in hexa but perf-critical + raw buffer ABI
+    4  L4215-4218       farr_simplex_set                           flat-array numeric CPU kernel — expressible in hexa but perf-critical + raw buffer ABI
+    4  L4238-4241       farr_uccsd_apply                           flat-array numeric CPU kernel — expressible in hexa but perf-critical + raw buffer ABI
+    5  L4242-4246       ham_pack                                   flat-array numeric CPU kernel — expressible in hexa but perf-critical + raw buffer ABI
+    5  L4247-4251       ansatz_pack                                flat-array numeric CPU kernel — expressible in hexa but perf-critical + raw buffer ABI
+    7  L4252-4258       farr_parameter_shift_grad                  flat-array numeric CPU kernel — expressible in hexa but perf-critical + raw buffer ABI
+    7  L4261-4267       farr_pauli_exp_inplace                     flat-array numeric CPU kernel — expressible in hexa but perf-critical + raw buffer ABI
+    6  L4268-4273       farr_pauli_expectation                     flat-array numeric CPU kernel — expressible in hexa but perf-critical + raw buffer ABI
+   10  L4489-4498       __hexa_range_array                         unclassified — needs manual review
+    4  L4502-4505       __hexa_range_array                         unclassified — needs manual review
+    7  L4851-4857       _arr_all_float                             flat-array numeric CPU kernel — expressible in hexa but perf-critical + raw buffer ABI
+   15  L5003-5017       hexa_array_zeros_float                     array combinator that allocates/frees raw backing store
+    5  L5020-5024       hexa_array_zeros_float                     array combinator that allocates/frees raw backing store
+   15  L5035-5049       hexa_array_alloc                           array combinator that allocates/frees raw backing store
+    5  L5052-5056       hexa_array_alloc                           array combinator that allocates/frees raw backing store
+   15  L5059-5073       hexa_array_free                            array combinator that allocates/frees raw backing store
+   16  L5938-5953       hexa_matvec                                matvec numeric kernel — portable but perf-critical raw buffer
+    7  L5956-5962       hexa_matvec                                matvec numeric kernel — portable but perf-critical raw buffer
+   13  L6067-6079       hexa_chr_byte                              unclassified — needs manual review
+   43  L6210-6252       hexa_farr_zeros                            flat-array numeric CPU kernel — expressible in hexa but perf-critical + raw buffer ABI
+   20  L6255-6274       hexa_farr_get                              flat-array numeric CPU kernel — expressible in hexa but perf-critical + raw buffer ABI
+   25  L6277-6301       hexa_farr_set                              flat-array numeric CPU kernel — expressible in hexa but perf-critical + raw buffer ABI
+    5  L6304-6308       hexa_farr_len                              flat-array numeric CPU kernel — expressible in hexa but perf-critical + raw buffer ABI
+   37  L6311-6347       hexa_farr_free                             flat-array numeric CPU kernel — expressible in hexa but perf-critical + raw buffer ABI
+   41  L6423-6463       hexa_farr32_zeros                          flat-array numeric CPU kernel — expressible in hexa but perf-critical + raw buffer ABI
+   10  L6465-6474       hexa_farr32_get                            flat-array numeric CPU kernel — expressible in hexa but perf-critical + raw buffer ABI
+   12  L6476-6487       hexa_farr32_set                            flat-array numeric CPU kernel — expressible in hexa but perf-critical + raw buffer ABI
+    5  L6489-6493       hexa_farr32_len                            flat-array numeric CPU kernel — expressible in hexa but perf-critical + raw buffer ABI
+   25  L6495-6519       hexa_farr32_free                           flat-array numeric CPU kernel — expressible in hexa but perf-critical + raw buffer ABI
+   66  L6533-6598       hexa_farr32_matmul                         flat-array numeric CPU kernel — expressible in hexa but perf-critical + raw buffer ABI
+   78  L6638-6715       hexa_farr32_matmul_NT_b                    flat-array numeric CPU kernel — expressible in hexa but perf-critical + raw buffer ABI
+   74  L6764-6837       hexa_farr32_matmul_NT_a                    flat-array numeric CPU kernel — expressible in hexa but perf-critical + raw buffer ABI
+   33  L6875-6907       hexa_farr_int_zeros                        flat-array numeric CPU kernel — expressible in hexa but perf-critical + raw buffer ABI
+    8  L6909-6916       hexa_farr_int_get                          flat-array numeric CPU kernel — expressible in hexa but perf-critical + raw buffer ABI
+   10  L6918-6927       hexa_farr_int_set                          flat-array numeric CPU kernel — expressible in hexa but perf-critical + raw buffer ABI
+    5  L6929-6933       hexa_farr_int_len                          flat-array numeric CPU kernel — expressible in hexa but perf-critical + raw buffer ABI
+   33  L6940-6972       hexa_farr_int_fill_from_array              flat-array numeric CPU kernel — expressible in hexa but perf-critical + raw buffer ABI
+   14  L6974-6987       hexa_farr_int_copy                         flat-array numeric CPU kernel — expressible in hexa but perf-critical + raw buffer ABI
+    9  L6989-6997       hexa_farr_int_sum                          flat-array numeric CPU kernel — expressible in hexa but perf-critical + raw buffer ABI
+   19  L6999-7017       hexa_farr_int_free                         flat-array numeric CPU kernel — expressible in hexa but perf-critical + raw buffer ABI
+    8  L7037-7044       _hx_farr_unpack_gate4                      flat-array numeric CPU kernel — expressible in hexa but perf-critical + raw buffer ABI
+   23  L7048-7070       _hx_farr_apply_single_core                 flat-array numeric CPU kernel — expressible in hexa but perf-critical + raw buffer ABI
+   18  L7075-7092       hexa_farr_apply_single                     flat-array numeric CPU kernel — expressible in hexa but perf-critical + raw buffer ABI
+   24  L7098-7121       hexa_farr_apply_single_farr                flat-array numeric CPU kernel — expressible in hexa but perf-critical + raw buffer ABI
+   31  L7131-7161       hexa_farr_apply_cnot                       flat-array numeric CPU kernel — expressible in hexa but perf-critical + raw buffer ABI
+   10  L7193-7202       _hx_pauli_popcount6                        flat-array numeric CPU kernel — expressible in hexa but perf-critical + raw buffer ABI
+   49  L7217-7265       _hx_pauli_exp_raw                          flat-array numeric CPU kernel — expressible in hexa but perf-critical + raw buffer ABI
+   28  L7267-7294       _hx_pauli_expectation_raw                  flat-array numeric CPU kernel — expressible in hexa but perf-critical + raw buffer ABI
+   21  L7296-7316       hexa_farr_pauli_exp_inplace                flat-array numeric CPU kernel — expressible in hexa but perf-critical + raw buffer ABI
+   19  L7323-7341       hexa_farr_pauli_expectation                flat-array numeric CPU kernel — expressible in hexa but perf-critical + raw buffer ABI
+   50  L7361-7410       hexa_farr_pauli_expectation_batch          flat-array numeric CPU kernel — expressible in hexa but perf-critical + raw buffer ABI
+   22  L7427-7448       hexa_farr_simplex_centroid                 flat-array numeric CPU kernel — expressible in hexa but perf-critical + raw buffer ABI
+   19  L7451-7469       hexa_farr_vec_reflect                      flat-array numeric CPU kernel — expressible in hexa but perf-critical + raw buffer ABI
+   19  L7472-7490       hexa_farr_vec_blend                        flat-array numeric CPU kernel — expressible in hexa but perf-critical + raw buffer ABI
+   18  L7493-7510       hexa_farr_vertex_copy                      flat-array numeric CPU kernel — expressible in hexa but perf-critical + raw buffer ABI
+   11  L7514-7524       hexa_farr_simplex_get                      flat-array numeric CPU kernel — expressible in hexa but perf-critical + raw buffer ABI
+   12  L7526-7537       hexa_farr_simplex_set                      flat-array numeric CPU kernel — expressible in hexa but perf-critical + raw buffer ABI
+   17  L7542-7558       hexa_farr_simplex_shrink                   flat-array numeric CPU kernel — expressible in hexa but perf-critical + raw buffer ABI
+   29  L7562-7590       hexa_farr_simplex_sort                     flat-array numeric CPU kernel — expressible in hexa but perf-critical + raw buffer ABI
+   11  L7646-7656       _hx_ham_alloc_slot                         flat-array numeric CPU kernel — expressible in hexa but perf-critical + raw buffer ABI
+   11  L7658-7668       _hx_ans_alloc_slot                         flat-array numeric CPU kernel — expressible in hexa but perf-critical + raw buffer ABI
+   12  L7677-7688       _hx_unwrap_array                           flat-array numeric CPU kernel — expressible in hexa but perf-critical + raw buffer ABI
+   34  L7690-7723       hexa_ham_pack                              numeric/quantum kernel — portable logic, raw buffer ABI
+   12  L7725-7736       hexa_ham_free                              numeric/quantum kernel — portable logic, raw buffer ABI
+   37  L7739-7775       hexa_ansatz_pack                           numeric/quantum kernel — portable logic, raw buffer ABI
+   13  L7777-7789       hexa_ansatz_free                           numeric/quantum kernel — portable logic, raw buffer ABI
+   30  L7793-7822       _rfc039_energy                             flat-array numeric CPU kernel — expressible in hexa but perf-critical + raw buffer ABI
+   41  L7826-7866       hexa_farr_parameter_shift_grad             flat-array numeric CPU kernel — expressible in hexa but perf-critical + raw buffer ABI
+   12  L7897-7908       _rfc038_apply_ansatz_raw                   flat-array numeric CPU kernel — expressible in hexa but perf-critical + raw buffer ABI
+   24  L7916-7939       hexa_farr_uccsd_apply                      flat-array numeric CPU kernel — expressible in hexa but perf-critical + raw buffer ABI
+   75  L8219-8293       hexa_farr_matmul                           flat-array numeric CPU kernel — expressible in hexa but perf-critical + raw buffer ABI
+   21  L8318-8338       hexa_farr_copy                             flat-array numeric CPU kernel — expressible in hexa but perf-critical + raw buffer ABI
+    6  L8349-8354       _hx_splitmix64_next                        flat-array numeric CPU kernel — expressible in hexa but perf-critical + raw buffer ABI
+    5  L8358-8362       _hx_uniform01_open                         flat-array numeric CPU kernel — expressible in hexa but perf-critical + raw buffer ABI
+   12  L8364-8375       _hx_gauss_rng_lazy_init                    flat-array numeric CPU kernel — expressible in hexa but perf-critical + raw buffer ABI
+   32  L8386-8417       hexa_farr_add_gaussian_noise               flat-array numeric CPU kernel — expressible in hexa but perf-critical + raw buffer ABI
+    6  L8485-8490       _hx_ad_farr_buf                            flat-array numeric CPU kernel — expressible in hexa but perf-critical + raw buffer ABI
+   18  L8494-8511       _hx_ad_grad_put                            flat-array numeric CPU kernel — expressible in hexa but perf-critical + raw buffer ABI
+    5  L8513-8517       _hx_ad_grad_get                            flat-array numeric CPU kernel — expressible in hexa but perf-critical + raw buffer ABI
+   23  L8520-8542       hexa_ad_tape_begin                         numeric/quantum kernel — portable logic, raw buffer ABI
+    9  L8546-8554       hexa_ad_tape_end                           numeric/quantum kernel — portable logic, raw buffer ABI
+   15  L8556-8570       _hx_ad_record                              flat-array numeric CPU kernel — expressible in hexa but perf-critical + raw buffer ABI
+   13  L8574-8586       hexa_ad_matmul                             numeric/quantum kernel — portable logic, raw buffer ABI
+   29  L8592-8620       hexa_ad_softmax_cross_entropy              numeric/quantum kernel — portable logic, raw buffer ABI
+   12  L8625-8636       _hx_ad_grad_ensure                         flat-array numeric CPU kernel — expressible in hexa but perf-critical + raw buffer ABI
+   76  L8643-8718       hexa_ad_backward                           numeric/quantum kernel — portable logic, raw buffer ABI
+    4  L8721-8724       hexa_ad_grad                               numeric/quantum kernel — portable logic, raw buffer ABI
+   35  L8730-8764       hexa_adamw_step                            numeric/quantum kernel — portable logic, raw buffer ABI
+   16  L8793-8808       _hx_f32_to_bf16                            flat-array numeric CPU kernel — expressible in hexa but perf-critical + raw buffer ABI
+   12  L8815-8826       hexa_farr_to_bf16                          flat-array numeric CPU kernel — expressible in hexa but perf-critical + raw buffer ABI
+   12  L8832-8843       hexa_farr_from_bf16                        flat-array numeric CPU kernel — expressible in hexa but perf-critical + raw buffer ABI
+   43  L8857-8899       hexa_adamw_step_mixed                      numeric/quantum kernel — portable logic, raw buffer ABI
+   22  L8930-8951       _hx_phi_bin_values                         flat-array numeric CPU kernel — expressible in hexa but perf-critical + raw buffer ABI
+   11  L8954-8964       _hx_phi_entropy                            flat-array numeric CPU kernel — expressible in hexa but perf-critical + raw buffer ABI
+   27  L8968-8994       _hx_phi_mi_pair                            flat-array numeric CPU kernel — expressible in hexa but perf-critical + raw buffer ABI
+   13  L8998-9010       hexa_phi_mi_pair                           numeric/quantum kernel — portable logic, raw buffer ABI
+   64  L9020-9083       hexa_phi_spatial                           numeric/quantum kernel — portable logic, raw buffer ABI
+    8  L9221-9228       hexa_farr_set_out_disposition              flat-array numeric CPU kernel — expressible in hexa but perf-critical + raw buffer ABI
+   30  L9239-9268       hexa_farr_dev_view                         flat-array numeric CPU kernel — expressible in hexa but perf-critical + raw buffer ABI
+   30  L9435-9464       _hx_farr_softmax_rows_cpu                  flat-array numeric CPU kernel — expressible in hexa but perf-critical + raw buffer ABI
+   27  L9473-9499       _hx_farr_softmax_rows_inplace_cpu          flat-array numeric CPU kernel — expressible in hexa but perf-critical + raw buffer ABI
+   27  L9507-9533       _hx_farr_rmsnorm_rows_cpu                  flat-array numeric CPU kernel — expressible in hexa but perf-critical + raw buffer ABI
+   21  L9536-9556       _hx_farr_add_cpu                           flat-array numeric CPU kernel — expressible in hexa but perf-critical + raw buffer ABI
+   12  L9568-9579       _hx_dt_exp_d                               flat-array numeric CPU kernel — expressible in hexa but perf-critical + raw buffer ABI
+   26  L9585-9610       _hx_farr_silu_gate_cpu                     flat-array numeric CPU kernel — expressible in hexa but perf-critical + raw buffer ABI
+   16  L9614-9629       _hx_farr_scale_cpu                         flat-array numeric CPU kernel — expressible in hexa but perf-critical + raw buffer ABI
+   16  L9665-9680       hexa_farr_softmax_rows                     flat-array numeric CPU kernel — expressible in hexa but perf-critical + raw buffer ABI
+    7  L9796-9802       _hx_dt_sqrt_d                              flat-array numeric CPU kernel — expressible in hexa but perf-critical + raw buffer ABI
+   40  L9808-9847       _hx_farr_rmsnorm_mh_cpu                    flat-array numeric CPU kernel — expressible in hexa but perf-critical + raw buffer ABI
+   13  L9854-9866       _hx_farr_copy_slice_cpu                    flat-array numeric CPU kernel — expressible in hexa but perf-critical + raw buffer ABI
+   15  L9867-9881       _hx_farr_fill_dt_lcg_cpu                   flat-array numeric CPU kernel — expressible in hexa but perf-critical + raw buffer ABI
+   12  L9882-9893       _hx_farr_add_inplace_cpu                   flat-array numeric CPU kernel — expressible in hexa but perf-critical + raw buffer ABI
+    8  L9894-9901       _hx_farr_zero_slice_cpu                    flat-array numeric CPU kernel — expressible in hexa but perf-critical + raw buffer ABI
+   20  L9902-9921       _hx_farr_transpose_2d_cpu                  flat-array numeric CPU kernel — expressible in hexa but perf-critical + raw buffer ABI
+   68  L9928-9995       _hx_farr_attn_dt_fwd_cpu                   flat-array numeric CPU kernel — expressible in hexa but perf-critical + raw buffer ABI
+   83  L10002-10084      _hx_farr_attn_dt_bwd_cpu                   flat-array numeric CPU kernel — expressible in hexa but perf-critical + raw buffer ABI
+   27  L10402-10428      _hx_farr_matmul_t_cpu                      flat-array numeric CPU kernel — expressible in hexa but perf-critical + raw buffer ABI
+   28  L10435-10462      _hx_farr_packed_gemv_offset_cpu            flat-array numeric CPU kernel — expressible in hexa but perf-critical + raw buffer ABI
+   26  L10466-10491      _hx_farr_outer_cpu                         flat-array numeric CPU kernel — expressible in hexa but perf-critical + raw buffer ABI
+   21  L10494-10514      _hx_farr_mul_cpu                           flat-array numeric CPU kernel — expressible in hexa but perf-critical + raw buffer ABI
+    1  L10517-10517      _hx_sigmoid_d                              flat-array numeric CPU kernel — expressible in hexa but perf-critical + raw buffer ABI
+   16  L10520-10535      _hx_farr_silu_cpu                          flat-array numeric CPU kernel — expressible in hexa but perf-critical + raw buffer ABI
+   19  L10539-10557      _hx_farr_silu_grad_cpu                     flat-array numeric CPU kernel — expressible in hexa but perf-critical + raw buffer ABI
+   36  L10568-10603      _hx_farr_rmsnorm_bwd_rows_cpu              flat-array numeric CPU kernel — expressible in hexa but perf-critical + raw buffer ABI
+   52  L10631-10682      _hx_farr_rope_cpu                          flat-array numeric CPU kernel — expressible in hexa but perf-critical + raw buffer ABI
+   28  L10694-10721      _hx_farr_ce_seed_cpu_v2                    flat-array numeric CPU kernel — expressible in hexa but perf-critical + raw buffer ABI
+   43  L10732-10774      _hx_farr_ce_seed_cpu                       flat-array numeric CPU kernel — expressible in hexa but perf-critical + raw buffer ABI
+   50  L10783-10832      _hx_farr_adamw_step_cpu                    flat-array numeric CPU kernel — expressible in hexa but perf-critical + raw buffer ABI
+   39  L10843-10881      _hx_farr_adamw_step_inplace_cpu            flat-array numeric CPU kernel — expressible in hexa but perf-critical + raw buffer ABI
+   27  L10918-10944      hexa_farr_packed_gemv_offset               flat-array numeric CPU kernel — expressible in hexa but perf-critical + raw buffer ABI
+    4  L10948-10951      farr_packed_gemv_offset                    flat-array numeric CPU kernel — expressible in hexa but perf-critical + raw buffer ABI
+   38  L11137-11174      hexa_farr_adamw_step_inplace               flat-array numeric CPU kernel — expressible in hexa but perf-critical + raw buffer ABI
+    7  L11178-11184      farr_adamw_step_inplace                    flat-array numeric CPU kernel — expressible in hexa but perf-critical + raw buffer ABI
+   19  L11338-11356      hexa_farr_ce_seed                          flat-array numeric CPU kernel — expressible in hexa but perf-critical + raw buffer ABI
+    4  L11360-11363      farr_ce_seed                               flat-array numeric CPU kernel — expressible in hexa but perf-critical + raw buffer ABI
+    7  L11406-11412      _hx_arena_total_bytes                      flat-array numeric CPU kernel — expressible in hexa but perf-critical + raw buffer ABI
+    7  L11413-11419      _hx_arena_live_bytes                       flat-array numeric CPU kernel — expressible in hexa but perf-critical + raw buffer ABI
+   10  L11779-11788      hexa_bin                                   unclassified — needs manual review
+    6  L11790-11795      hexa_hex                                   unclassified — needs manual review
+    9  L11873-11881      hexa_byte_len                              unclassified — needs manual review
+    6  L11905-11910      __fd_write_bytes                           unclassified — needs manual review
