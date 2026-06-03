@@ -1,0 +1,77 @@
+name: selfhost-shim-integrity
+
+# ── SELFHOST-CI M5 hx-selfhost-cli shim integrity ───────────────────────────
+#
+# PURPOSE
+#   A STANDING, per-PR gate that asserts the CONTRACT of the self-host CLI shim
+#   tool/hx-selfhost-cli (#2588) — the SAFE delegating launcher that tier2
+#   (tool/promote_selfhost.sh --default) flips the default hexa.real to. The
+#   shim's contract is what keeps a flipped-default host's FULL CLI (+ the ~60k+
+#   hook/skill `hexa <subcmd>` callers) working:
+#     ① compile routing      — `--emit=<x>` invocation → self-hosted gen3
+#     ② subcommand delegation — every named subcmd (no --emit) → shipped, verbatim
+#     ③ symlink-loop guard   — flipped layout never recurses into the shim
+#     ④ syntax / lint        — bash -n clean (+ shellcheck if present)
+#
+#   Distinct from the sister gates:
+#     • selfhost-byteeq-gate.yml    — whole-compiler byte-eq fixpoint
+#     • selfhost-codegen-guard.yml  — native arm64 codegen-class correctness
+#     • selfhost-crossemit-smoke.yml— cross-target object-format reloc fence
+#   This is the CLI-WRAPPER integrity fence around the graduated gen.
+#
+# RUNNER MODEL — FULLY HERMETIC, RUNS REAL IN CI (no neutral legs)
+#   Unlike the sister gates (which depend on the host's graduated gen2_fix or
+#   cross-binutils/qemu for their run legs and therefore report NEUTRAL on the
+#   hosted runner), THIS gate is hermetic: it builds a fake $HX_HOME with
+#   INSTRUMENTED STUB targets (a fake gen3 + a fake shipped dispatch backup that
+#   each echo a sentinel) and probes which one the shim reached. It needs only
+#   `bash` — present on every runner — so every assertion runs REAL on
+#   macos-latest. NO neutral leg is needed.
+#
+#   The exit-2-neutral remap is kept ONLY for a genuine SETUP/INFRA failure
+#   (the shim file missing, or mktemp failing) so a broken runner remaps to
+#   neutral instead of false-failing a PR. A TRUE contract violation (mis-route,
+#   dropped argv, loop guard didn't fire, bad syntax) exits 1 and fails the job.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'tool/hx-selfhost-cli'
+      - 'tool/promote_selfhost.sh'
+      - 'tool/selfhost_shim_integrity.sh'
+      - '.github/workflows/selfhost-shim-integrity.yml'
+  pull_request:
+    paths:
+      - 'tool/hx-selfhost-cli'
+      - 'tool/promote_selfhost.sh'
+      - 'tool/selfhost_shim_integrity.sh'
+      - '.github/workflows/selfhost-shim-integrity.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  selfhost-shim-integrity:
+    name: selfhost shim integrity (compile→gen3 · subcmd→shipped · loop-guard)
+    runs-on: macos-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+
+      # No compiler build needed — the gate is hermetic (stub gen3 + stub
+      # shipped). bash is the only dependency, present on every runner.
+      - name: Shim integrity — compile→gen3 · subcmd→shipped · loop-guard · syntax
+        shell: bash
+        run: |
+          set -uo pipefail
+          # GitHub's default step shell runs with `-e`, so a nonzero exit would
+          # ABORT before the exit-2 remap. Capture rc with `|| rc=$?`.
+          rc=0
+          bash tool/selfhost_shim_integrity.sh || rc=$?
+          if [ "$rc" -eq 2 ]; then
+            echo "::notice::selfhost-shim-integrity NEUTRAL (exit 2) — SETUP/INFRA only (shim file missing or mktemp failed). The shim contract is NOT broken; gate passes neutral."
+            exit 0
+          fi
+          exit "$rc"
