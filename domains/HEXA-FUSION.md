@@ -29,7 +29,17 @@ FORGE-UTILGREEN lever-1~5 가 GEMM repack 을 전부 device 化했어도 util ME
 
 ### L2 — graph capture (= torch.compile / CUDA-graph 수준)
 
-- [ ] **per-step CUDA-graph capture/replay** — step 커널 시퀀스를 1회 캡처 → 매 step replay 로 launch overhead ~0. falsifier: replay 출력 byte-eq ∧ per-step launch-count Δ(측정).
+- [x] **per-step CUDA-graph capture/replay — 구현+측정 DONE (PR #2658)** — fwd→ce_grad→bwd 1회 캡처
+  (첫 비-metric step) → bulk step 은 `cudaGraphLaunch` 1번 replay. AdamW eager(step-의존 t), loss readback
+  캡처 밖. env `HEXA_CUDA_GRAPH`. 측정(idle H100, `.verdicts/hexa-fusion/F-FUSION-GRAPH-AB.txt`):
+  GRAPH=0 util 11.85% vs GRAPH=1 13.17%(+1.32pp) · CE 4.46624→3.64669 **둘 다 비트동일 = byte-eq PASS**.
+  ✅ 정확성: 캡처 건전(race 無) — ②가 깬 byte-eq 회복(②와 달리 정확성 통과한 최초 레버).
+  ❌ util-GREEN 미달(+1.32pp, FALSIFIED ≥20%): 그래프가 fwd→bwd 만 — eager 28-launch AdamW + 토큰 H2D 가
+  여전히 host 임계경로 고정. ④ = 필요조건이나 불충분.
+- [ ] **⑤ whole-step capture — ★ NEW FRONTIER (④의 잔여 host 제거)** — AdamW 를 그래프 안으로:
+  bias-correction `t` 를 host 가 매 replay 갱신하는 device-resident scalar 로(또는 `cudaGraphExecKernelNodeSetParams`
+  per step) → 28-launch optimizer sweep + 토큰 H2D 까지 캡처해 host 를 완전히 임계경로에서 제거. falsifier:
+  whole-step replay byte-eq ∧ util MEAN≥20%. (④가 fwd/bwd byte-eq 캡처 증명 → ⑤는 optimizer-t 동역학만.)
 
 ### L3 — fusion moat (= PyTorch 초과 · 구조적)
 
