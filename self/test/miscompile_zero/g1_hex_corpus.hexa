@@ -1,0 +1,36 @@
+// g1_hex_corpus.hexa — SELFHOST-CI M2: 0x-literal regression corpus.
+// Locks the #47421c89c hex-literal fix (native _parse_int dropped 0xNN -> 0).
+// Each literal is loaded into a value so the emitted object MUST encode the
+// decimal immediate; a regression re-collapses the constant to #0x0 (and/or
+// surfaces ENCODE-MISS). The guard disassembles this object and asserts every
+// expected immediate is present in the instruction stream.
+//
+//   0x0        -> 0
+//   0x7f       -> 127        (signed-byte max)
+//   0x80       -> 128        (signed-byte overflow boundary)
+//   0xff       -> 255        (the original 47421c89c probe)
+//   0xffff     -> 65535      (16-bit-wide MOVZ boundary)
+//   0xdeadbeef -> 3735928559 (32-bit-wide → MOVZ #0xbeef + MOVK #0xdead,lsl#16;
+//                             the wide-constant multi-chunk lowering path)
+
+fn h0() -> i64  { return 0x0 }
+fn h7f() -> i64 { return 0x7f }
+fn h80() -> i64 { return 0x80 }
+fn hff() -> i64 { return 0xff }
+fn hffff() -> i64 { return 0xffff }
+fn hdead() -> i64 { return 0xdeadbeef }
+
+// also exercise the bitwise paths the original probe used so a lowering bug
+// shows on the operate path too, not only the bare load.
+fn maskff(x: i64) -> i64 { return x & 0xff }
+fn shl8(x: i64) -> i64   { return x << 0x8 }
+
+let a = h0()
+let b = h7f()
+let c = h80()
+let d = hff()
+let e = hffff()
+let f = hdead()
+let g = maskff(0x1ff)
+let i_ = shl8(0x1)
+println("hex:", a, b, c, d, e, f, g, i_)
