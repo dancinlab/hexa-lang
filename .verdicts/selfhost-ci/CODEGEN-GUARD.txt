@@ -1,0 +1,91 @@
+SELFHOST-CI — native-codegen regression guard verdict (milestone 2)
+===================================================================
+date    : 2026-06-03
+host    : ghost (macOS arm64, 192.168.50.150) — holds the graduated self-host artifacts
+gate    : tool/selfhost_codegen_guard.sh
+driver  : ~/dancinlab/selfhost-work/gen2_fix  (graduated native self-hosted compiler)
+flat src: ~/dancinlab/selfhost-work/cc-flat-fix.hexa
+target  : arm64-apple-darwin
+disas   : otool -tvV
+result  : PASS (exit 0)
+
+VERDICT: 🟢 native-codegen floor held — full self-emit ENCODE-MISS=0, every 0x
+         literal lowered to the correct immediate (locks #47421c89c), STP/LDP
+         [sp] spill pairs clean at 35 distinct offsets (locks #2579).
+
+PER-CORPUS RESULT
+  CORPUS 1 — full self-emit ENCODE-MISS=0 : PASS (rc=0 objsize=3224592 ENCODE-MISS=0)
+  CORPUS 2 — 0x-literal value-check       : PASS (8/8 literals: 0x0 0x7f 0x80 0xff
+                                                   0xffff 0xdeadbeef 0x8 0x1ff)
+  CORPUS 3 — STP/LDP [sp] value-check     : PASS (73 stp + 115 ldp [sp] pairs,
+                                                   35 distinct offsets, ENCODE-MISS=0)
+
+──────────────────────────────────────────────────────────────────────────────
+RAW GUARD STDOUT (verbatim, ghost graduated gen2_fix)
+──────────────────────────────────────────────────────────────────────────────
+── selfhost codegen guard (M2) ───────────────────────────────────
+  compiler : /Users/ghost/dancinlab/selfhost-work/gen2_fix _drv.hexa
+  target   : arm64-apple-darwin
+  flat src : /Users/ghost/dancinlab/selfhost-work/cc-flat-fix.hexa
+  corpus   : /Users/ghost/dancinlab/hexa-lang/self/test/miscompile_zero
+  disas    : otool -tvV
+  out      : /Users/ghost/dancinlab/hexa-lang/build/selfhost-codegen-out
+──────────────────────────────────────────────────────────────────
+  canary   : c1_hex_literal emits (objsize=1600) — native-emit OK
+──────────────────────────────────────────────────────────────────
+CORPUS 1 — full self-emit ENCODE-MISS=0 (required assert):
+  self-emit : rc=0 objsize=3224592 ENCODE-MISS=0
+  PASS  full self-emit ENCODE-MISS=0
+──────────────────────────────────────────────────────────────────
+CORPUS 2 — 0x-literal value-check (locks #47421c89c):
+  emit  : rc=0 objsize=2584 ENCODE-MISS=0
+  ok    literal 0x0          lowered (#0x0) present in stream
+  ok    literal 0x7f         lowered (#0x7f) present in stream
+  ok    literal 0x80         lowered (#0x80) present in stream
+  ok    literal 0xff         lowered (#0xff) present in stream
+  ok    literal 0xffff       lowered (#0xffff) present in stream
+  ok    literal 0xdeadbeef   lowered (#0xbeef #0xdead) present in stream
+  ok    literal 0x8          lowered (#0x8) present in stream
+  ok    literal 0x1ff        lowered (#0x1ff) present in stream
+  PASS  0x-literal corpus — all 8 literals lowered correctly, ENCODE-MISS=0
+──────────────────────────────────────────────────────────────────
+CORPUS 3 — STP/LDP [sp] spill value-check (locks #2579):
+  emit  : rc=0 objsize=2992 ENCODE-MISS=0
+  stp [sp] count : 73  (distinct offset forms: 35)
+  ldp [sp] count : 115
+  stp offsets    : [sp, #0x10] [sp, #0x100] [sp, #0x110] [sp, #0x120] [sp, #0x130] [sp, #0x140] [sp, #0x150] [sp, #0x160] [sp, #0x170] [sp, #0x180] [sp, #0x190] [sp, #0x1a0] [sp, #0x1b0] [sp, #0x1c0] [sp, #0x1d0] [sp, #0x1e0] [sp, #0x1f0] [sp, #0x20] [sp, #0x30] [sp, #0x40] [sp, #0x50] [sp, #0x60] [sp, #0x70] [sp, #0x80] [sp, #0x90] [sp, #0xa0] [sp, #0xb0] [sp, #0xc0] [sp, #0xd0] [sp, #0xe0] [sp, #0xf0]
+  ldp offsets    : [sp, #0x10] [sp, #0x100] [sp, #0x110] [sp, #0x120] [sp, #0x130] [sp, #0x140] [sp, #0x150] [sp, #0x160] [sp, #0x170] [sp, #0x180] [sp, #0x190] [sp, #0x1a0] [sp, #0x1b0] [sp, #0x1c0] [sp, #0x1d0] [sp, #0x1e0] [sp, #0x1f0] [sp, #0x20] [sp, #0x30] [sp, #0x40] [sp, #0x50] [sp, #0x60] [sp, #0x70] [sp, #0x80] [sp, #0x90] [sp, #0xa0] [sp, #0xb0] [sp, #0xc0] [sp, #0xd0] [sp, #0xe0] [sp, #0xf0]
+  PASS  STP/LDP corpus — store/load pairs at 35+ distinct [sp] offsets, ENCODE-MISS=0
+──────────────────────────────────────────────────────────────────
+selfhost-codegen-guard: PASS — full self-emit ENCODE-MISS=0, all 0x
+  literals encode correctly, STP/LDP spill pairs clean at varied offsets.
+GUARD_RC=0
+
+──────────────────────────────────────────────────────────────────────────────
+FINDING — the value-check caught its own naive wide-constant assumption first
+──────────────────────────────────────────────────────────────────────────────
+The first guard run (before this fix) FAILED on `0xdeadbeef` with
+"FAIL immediate #0xdeadbeef MISSING (literal re-collapsed?)" → GUARD_RC=1. This
+was NOT a codegen regression. Inspection of the emitted object showed the
+constant is correctly lowered as a two-instruction MOVZ/MOVK pair:
+
+  0000000000000084  mov  x1, #0xbeef
+  0000000000000088  movk x1, #0xdead, lsl #16
+
+i.e. 0xdeadbeef = 0xdead<<16 | 0xbeef = 3735928559. A 32-bit constant cannot
+fit a single arm64 `mov #imm16`, so the backend emits the low 16-bit half via
+MOVZ and the high half via MOVK — the full `#0xdeadbeef` token never appears in
+the disassembly. The hex-literal fix (#47421c89c) is intact: both 16-bit halves
+are present, and a regression to #0x0 would drop both chunks. The guard's
+value-check was corrected to assert the 16-bit chunk decomposition for
+wide constants (>16 bits check #0xbeef AND #0xdead) rather than the
+never-emitted full immediate. This is a honest g63 catch — the guard rejected a
+false negative in its own assertion logic before being declared green.
+
+SUMMARY METRICS
+  full self-emit ENCODE-MISS         : 0   (objsize 3,224,592 bytes)
+  0x-literal corpus                  : 8/8 PASS (incl. wide 0xdeadbeef MOVZ/MOVK)
+  0x-literal corpus ENCODE-MISS      : 0
+  STP/LDP corpus stp [sp] pairs      : 73  (35 distinct [sp] offsets)
+  STP/LDP corpus ldp [sp] pairs      : 115
+  STP/LDP corpus ENCODE-MISS         : 0

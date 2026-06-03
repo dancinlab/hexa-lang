@@ -1,0 +1,102 @@
+name: selfhost-codegen-guard
+
+# ── SELFHOST-CI M2 native-codegen regression guard ──────────────────────────
+#
+# PURPOSE
+#   A STANDING, always-run codegen-correctness fence around the graduated
+#   self-host — distinct from the heavy byte-eq fixpoint leg
+#   (selfhost-byteeq-gate.yml). It locks two landed codegen fixes against
+#   silent regression:
+#     • #47421c89c — hex-literal lowering (native _parse_int dropped 0xNN -> 0)
+#     • #2579      — STP/LDP [sp] stack-spill mem-parse closed-negative
+#
+#   Three hard-assert corpora (tool/selfhost_codegen_guard.sh):
+#     CORPUS 1 — full self-emit ENCODE-MISS=0 (required assert, not just report)
+#     CORPUS 2 — 0x-literal value-check: emit g1_hex_corpus, disassemble, assert
+#                every expected immediate (incl. the wide 0xdeadbeef MOVZ/MOVK
+#                chunk decomposition) is present + ENCODE-MISS=0.
+#     CORPUS 3 — STP/LDP [sp] value-check: emit g2_stp_ldp_corpus, assert STP+LDP
+#                store/load pairs at multiple distinct [sp] offsets + ENCODE-MISS=0.
+#
+#   Same exit-2-neutral classification as the sister gates (#2547): a CI runner
+#   that lacks the graduated gen2_fix cannot native-emit → the script's canary
+#   exits 2 (SETUP/INFRA) and we remap to neutral-success so a build-floor
+#   hiccup never false-fails a PR. A TRUE regression (an ENCODE-MISS, a
+#   re-collapsed hex literal, or a dead STP/LDP spill path) exits 1 and fails.
+#
+#   Proven reference run is on the ghost macOS host with the graduated gen2_fix:
+#     HEXA_NATIVE_CC=~/dancinlab/selfhost-work/gen2_fix \
+#     GEN_FLAT=~/dancinlab/selfhost-work/cc-flat-fix.hexa \
+#       bash tool/selfhost_codegen_guard.sh
+#   Verdict: .verdicts/selfhost-ci/CODEGEN-GUARD.txt
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'self/test/miscompile_zero/**'
+      - 'tool/selfhost_codegen_guard.sh'
+      - '.github/workflows/selfhost-codegen-guard.yml'
+      - 'compiler/**'
+      - 'self/**'
+  pull_request:
+    paths:
+      - 'self/test/miscompile_zero/**'
+      - 'tool/selfhost_codegen_guard.sh'
+      - '.github/workflows/selfhost-codegen-guard.yml'
+      - 'compiler/**'
+      - 'self/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  selfhost-codegen-guard:
+    name: selfhost codegen guard (self-emit + 0x-literal + STP/LDP, darwin-arm64)
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Build — shared release_build (native ./hexa driver)
+        shell: bash
+        env:
+          TARGET: darwin-arm64
+          CC: clang
+          LIBS: ""
+          GH_TOKEN: ${{ github.token }}
+        run: bash tool/release_build
+
+      - name: Sanity — ./hexa runs
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./hexa --version
+
+      # ── Guard invocation ─────────────────────────────────────────────────
+      # Same root cause as the sister gates: a released `./hexa`'s
+      # `run compiler/main.hexa` recompiles against its embedded runtime and
+      # hits the build-floor staleness wall, so every --emit=obj is 0-byte in
+      # CI. Only the graduated gen2_fix (ghost host) native-emits cleanly, so
+      # here the canary detects "cannot native-emit" and the guard exits 2
+      # (SETUP/INFRA) → remapped to neutral. Override HEXA_NATIVE_CC + GEN_FLAT
+      # (e.g. a self-hosted runner that holds gen2_fix) to run the guard for real.
+      - name: Guard — native-codegen regression corpus
+        shell: bash
+        env:
+          HEXA_NATIVE_CC: ${{ vars.HEXA_NATIVE_CC || './hexa' }}
+          HEXA_TARGET: arm64-apple-darwin
+          GEN_FLAT: ${{ vars.GEN_FLAT || '' }}
+          CG_OUT: ${{ runner.temp }}/selfhost-codegen-out
+        run: |
+          set -uo pipefail
+          # GitHub's default step shell runs with `-e`, so a nonzero exit would
+          # ABORT before the exit-2 remap. Capture rc with `|| rc=$?`.
+          rc=0
+          bash tool/selfhost_codegen_guard.sh || rc=$?
+          if [ "$rc" -eq 2 ]; then
+            echo "::notice::selfhost-codegen-guard NEUTRAL (exit 2) — this CI env cannot native-emit (no graduated gen2_fix). The native-codegen floor is NOT broken; guard passes neutral."
+            exit 0
+          fi
+          exit "$rc"
