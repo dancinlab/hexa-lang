@@ -1,0 +1,119 @@
+RUNTIME-PORT · STRBUILDER-FEAS · NUL-clean string-builder intrinsic feasibility
+date: 2026-06-03   host: mini (LOCAL — no ghost/pool)   base: origin/main 36d2deb03
+scope: FEASIBILITY-ONLY (NO codegen/runtime mutation this round)
+verdict: CLASS B — needs-new-runtime-intrinsic (codegen surface). NOT done this
+         round (wipe_guard + codegen-surface caution). rt_bytes_to_str_raw stays
+         BLOCKED / not-live-wired. The C SSOT remains authoritative.
+########################################################################
+
+QUESTION
+------------------------------------------------------------------------
+Can a NUL-clean string-builder — a hexa-native way to construct a string of
+known length N from bytes WITHOUT strlen truncation — be expressed in hexa
+over the EXISTING string ABI/intrinsics (Class A), or does it REQUIRE a new
+codegen builtin (Class B) / an ABI change (Class C)?
+
+STRING ABI (read from self/runtime_core.c — READ-ONLY, gitignored)
+------------------------------------------------------------------------
+The hexa string value is a NUL-terminated `char*` (HX_STR(v) == (v).s) with an
+OPTIONAL 8-byte length header (perf-31, runtime_core.c L744-789):
+
+    #define HEXA_STR_MAGIC 0xC0DECAFE0F58A7E1
+    typedef struct { uint64_t magic; size_t len; char data[]; } HexaStrHdr;
+    hexa_strbuf_alloc(len)        -> data ptr; writes magic+len header, NUL@len
+    HX_STRLEN(v) = hexa_strlen_v_inline(HX_STR(v)):
+        reads 16 bytes BEFORE s; if magic matches -> hdr->len (O(1), NUL-clean)
+                                 else             -> strlen(s)  (truncates @NUL)
+
+So length IS carried — but ONLY for buffers built via the header allocator. A
+plain malloc'd / strdup'd buffer has no magic, so HX_STRLEN falls back to
+strlen and truncates at the first 0x00. NUL-clean == "producer used the header
+allocator AND the recorded len covers the embedded NULs."  No ABI change is
+needed to represent a NUL-bearing string — the representation already exists.
+
+ROOT CAUSE (exact), confirmed by reading the C bodies
+------------------------------------------------------------------------
+The hexa port's chr()/join path collapses NUL not at chr, and not at the join
+memcpy, but at the FINAL re-wrap:
+
+  1. chr -> hexa_chr_byte: length-1 strbuf, header len=1 -> a lone NUL byte
+     DOES survive as a single-char string. (codegen.hexa L7151)
+  2. join -> hexa_str_join (runtime_core.c L7987 / L8020): computes total via
+     HX_STRLEN, `char* result = malloc(total+1)`, memcpy's ALL bytes incl NULs
+     correctly, result[total]=0, then returns hexa_str_own(result).
+  3. hexa_str_own(char* s) (runtime_core.c L1664):
+         size_t len = hxlcl_strlen(s);          // <-- TRUNCATES at first NUL
+         buf = hexa_strbuf_dup_n(s, len);        // header carries truncated len
+     => every NUL-bearing join result is re-measured by strlen and the header
+        it finally gets records the truncated length. join's correct `total` is
+        discarded. This is why FAIL b2s nul/mix-nul/full all collapse to len 0.
+
+The same strlen re-measure sits on the generic ownership boundary used by the
+whole hexa-surface string-construction family (concat/join/from_chars), so NO
+hexa-expressible path can carry an embedded NUL today.
+
+CLASSIFICATION: CLASS B (needs-new-runtime-intrinsic, medium, codegen surface)
+------------------------------------------------------------------------
+NOT Class A (expressible-in-hexa-today): every hexa string builder funnels
+through a strlen-truncating wrapper (hexa_str_own / hexa_str / hexa_str_join's
+own_path). Hexa source has NO intrinsic that attaches/preserves a length header
+— the length-carrying C entry points (hexa_str_own_with_len(char*,size_t) L1672,
+hexa_str_own_buf L1681, hexa_strbuf_alloc L756) are NOT exposed in the codegen
+builtin table (self/codegen.hexa L7143-7155 maps chr/ord/from_char_code/
+bytes_to_str_raw but NOTHING length-carrying). So a pure-body hexa port cannot
+close it — the M2 falsifier already proved this empirically (6/9 PORT-EQ, 3/9
+DIFFER on NUL).
+
+NOT Class C (needs-ABI-change): the length-header representation ALREADY EXISTS
+and is the canonical NUL-clean rep. No struct/tag/HexaVal layout change, no
+caller migration. The C SSOT hexa_bytes_to_str_raw already produces exactly the
+right value via hexa_strbuf_alloc(n). What is missing is ONE codegen mapping.
+
+EXACT REQUIRED DELTA (the smallest unblock — for a LATER, non-feas round)
+------------------------------------------------------------------------
+Option B1 (minimal, recommended): wire `bytes_to_str_raw` itself NUL-clean.
+  It is ALREADY codegen-mapped to the C SSOT hexa_bytes_to_str_raw (codegen.hexa
+  L7155), which is NUL-clean. The only reason the leaf is "BLOCKED" is that the
+  *hexa port body* rt_bytes_to_str_raw routes through chr()/join. To make the
+  HEXA-NATIVE body NUL-clean you need a length-carrying builder builtin, e.g.:
+    - add ONE codegen builtin, suggested `str_from_bytes_n(arr)` (or expose
+      `__strbuf_from_ints`), mapping to a thin C constructor that does the
+      hexa_strbuf_alloc(n)+per-byte-write loop with the recorded len = n
+      (i.e. the body of hexa_bytes_to_str_raw, but as a reusable length-clean
+      builder rather than the leaf itself).
+  Delta surface:
+    • self/codegen.hexa  — +1 builtin row (~1 line) in the L7143-7155 block.
+    • a C constructor (NEW symbol in runtime_core_emit.hexa -> runtime_core.c):
+      `HexaVal __hexa_str_from_ints_n(HexaVal arr)` == the L6109-6126 body, OR
+      simply expose the EXISTING hexa_str_own_with_len / hexa_strbuf_alloc.
+    • rt/string.hexa  — rewrite rt_bytes_to_str_raw body to call the new builtin
+      instead of rt_str_from_chars (range-guard loop stays identical).
+  Risk: MEDIUM. Touches the codegen builtin table + runtime_core_emit.hexa (the
+  hexa SSOT that EMITS runtime_core.c). runtime_core_emit.hexa is exactly the
+  codegen/runtime surface wipe_guard + stdlib_trig_libm caution flags. Requires
+  a runtime_core_emit -> runtime_core.c regen + the self-host gate (byte-eq).
+  Out of scope for a FEASIBILITY-ONLY round.
+
+Option B2 (broader, fixes the whole family): make hexa_str_join (and the
+  general ownership boundary) preserve length when the joined parts' summed
+  HX_STRLEN exceeds strlen(result) — i.e. add hexa_str_own_with_len(result,
+  total) at runtime_core.c L8009/L8047 instead of hexa_str_own(result). This
+  would make EVERY hexa join NUL-clean (not just bytes_to_str_raw) and let the
+  existing rt_str_from_chars/join body close with NO new builtin. Higher blast
+  radius (changes a hot, universally-used join), so larger byte-eq + perf risk.
+  Recommend B1 first (scoped to the one leaf), defer B2 to an RFC.
+
+WHY NOT DONE THIS ROUND
+------------------------------------------------------------------------
+Mandate is FEASIBILITY-ONLY with explicit NO codegen/runtime mutation. Both
+viable deltas land squarely on the codegen builtin table + runtime_core_emit
+.hexa (a wipe_guard / stdlib_trig_libm-cautioned surface) and require a runtime
+regen + the self-host byte-eq gate. That is a deliberate, reviewed PR — not a
+feasibility-round mutation. Honest disposition: CLASS B, scoped delta known,
+deferred to a dedicated codegen PR.
+
+DISPOSITION: BLOCKED (Class B). rt_bytes_to_str_raw NOT wired live; C SSOT
+hexa_bytes_to_str_raw stays authoritative for NUL-bearing callers (image_read
+PNG IHDR length fields). Carry the B1 delta to M2-followup / M3 alongside the
+hexa_dict_keys map-rep gap. The persisted M2 falsifier
+(.verdicts/runtime-port/M2-hexa_bytes_to_str_raw.txt) remains the live gate.

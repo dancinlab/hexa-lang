@@ -113,3 +113,33 @@ Net: M2 now has **3 PORT-EQ leaves landed** (float_to_int + from_char_code +
 is_empty) and **2 BLOCKED** on primitive gaps (dict_keys = map-rep, bytes_to_
 str_raw = NUL-clean builder). RUNEQ method continues to earn its keep — caught
 the NUL divergence honestly rather than waving it through.
+
+## 2026-06-03 — STRBUILDER-FEAS (feasibility-only, no codegen/runtime mutation)
+
+Scoped what a NUL-clean hexa-native string-builder would take to unblock the
+M2 BLOCKED leaf **rt_bytes_to_str_raw**. Verdict-only investigation.
+
+**Class B** (needs-new-runtime-intrinsic / codegen surface; medium risk). NOT
+Class A (no hexa-expressible path carries a length header — every builder
+funnels through a strlen-truncating wrapper) and NOT Class C (the length-header
+representation ALREADY EXISTS; no ABI change).
+
+Exact root cause located: `hexa_str_join` (runtime_core.c L7987/L8020) memcpy's
+all bytes incl NULs correctly, but returns `hexa_str_own(result)`, and
+`hexa_str_own` (L1664) does `len = strlen(s)` — re-measuring TRUNCATES at the
+first NUL, discarding join's correct total. The length-carrying C entry points
+(`hexa_str_own_with_len` L1672, `hexa_strbuf_alloc` L756) exist but are NOT
+exposed in the codegen builtin table (codegen.hexa L7143-7155).
+
+Smallest unblock (deferred to a dedicated codegen PR, NOT this round): B1 =
+add ONE codegen builtin mapping a length-carrying byte→string constructor +
+rewrite rt_bytes_to_str_raw's body to use it (range-guard loop unchanged).
+Touches codegen.hexa + runtime_core_emit.hexa (wipe_guard / stdlib_trig_libm
+cautioned surface) + a runtime regen + self-host byte-eq gate — out of scope
+for a feasibility-only round. B2 (make hexa_str_join itself length-preserving
+via hexa_str_own_with_len) fixes the whole join family but has larger blast
+radius; defer to an RFC.
+
+rt_bytes_to_str_raw stays BLOCKED / not-live-wired; C SSOT authoritative for
+NUL callers (image_read PNG IHDR). Carry B1 to M2-followup / M3 alongside the
+hexa_dict_keys map-rep gap. `.verdicts/runtime-port/STRBUILDER-FEAS.txt`.
