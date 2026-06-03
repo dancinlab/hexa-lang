@@ -1,0 +1,22 @@
+{
+  "schema": "demiurge:geometry:hts_coil:1.0",
+  "kind": "hts_coil",
+  "id": "hts_solenoid_proxy_v1",
+  "displayName": "HTS Solenoid Proxy (lab-scale)",
+  "lengthMM": 200.0,
+  "turns": 120,
+  "rings": [
+    { "name": "Bore", "plainName": "Sample bore", "material": "vacuum / sample volume",
+      "innerRadiusMM": 0.0, "outerRadiusMM": 25.0, "colorHex": "#2A2A2A", "opacity": 0.15 },
+    { "name": "Cold Mass Support", "plainName": "Inner support", "material": "G10 / stainless",
+      "innerRadiusMM": 25.0, "outerRadiusMM": 30.0, "colorHex": "#7A7A7A", "opacity": 1.0 },
+    { "name": "HTS Coil", "plainName": "Superconducting coil", "material": "REBCO HTS tape + Hastelloy",
+      "innerRadiusMM": 30.0, "outerRadiusMM": 55.0, "colorHex": "#D4A53A", "opacity": 1.0 },
+    { "name": "Cold Mass Jacket", "plainName": "Coil jacket", "material": "copper former",
+      "innerRadiusMM": 55.0, "outerRadiusMM": 60.0, "colorHex": "#B87333", "opacity": 1.0 },
+    { "name": "Radiation Shield", "plainName": "Heat shield", "material": "aluminized mylar / MLI",
+      "innerRadiusMM": 60.0, "outerRadiusMM": 75.0, "colorHex": "#C0C0C0", "opacity": 0.45 },
+    { "name": "Cryostat OVC", "plainName": "Outer vacuum vessel", "material": "304L stainless steel",
+      "innerRadiusMM": 75.0, "outerRadiusMM": 90.0, "colorHex": "#5C7A99", "opacity": 0.25 }
+  ]
+}
