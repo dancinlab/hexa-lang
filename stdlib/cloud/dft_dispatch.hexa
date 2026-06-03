@@ -221,6 +221,66 @@ pub fn dft_engine_resolve(sel: str) -> str {
     return ""
 }
 
+// ── --qe-version provisioner (gap-1, handoff d5ef0017) ───────────────
+//
+// The apt `quantum-espresso` package ships Ubuntu's distro QE — **6.7 (2020,
+// v.6.7MaX)** — while the reference cross-anchor fixture (YH10) was produced
+// on QE **7.5**. A 6.7-vs-7.5 mismatch silently shifts λ/Tc (DFPT + screening
+// changed across the 7.x line), poisoning a cross-anchor comparison. So the
+// DEFAULT must resolve a MODERN QE 7.x via conda-forge; apt 6.7 is kept ONLY
+// as an explicit opt-in fallback.
+//
+// dft_qe_default_version — the pinned modern QE the default resolves to. One
+// constant (g20 — bump here, never branch on it). conda-forge ships qe 7.x.
+fn dft_qe_default_version() -> str {
+    return "7.5"
+}
+
+// dft_qe_version_resolve — PURE: normalize the `--qe-version` selector to the
+// version STRING recorded in the run manifest.
+//   "" (absent) → the pinned modern default (dft_qe_default_version, ≥7.0)
+//   "apt"       → "apt-6.7" (the explicit Ubuntu-distro fallback, opt-in only)
+//   "latest"    → the pinned modern default (alias)
+//   "7.x"/"7.5" → that exact version (conda-forge `qe=<v>`)
+// ANY other value is returned verbatim (the caller passes it to conda-forge
+// `qe=<v>`; an invalid spec fails LOUDLY at provision, never a silent 6.7).
+pub fn dft_qe_version_resolve(sel: str) -> str {
+    if len(sel) == 0 { return dft_qe_default_version() }
+    if sel == "apt" { return "apt-6.7" }
+    if sel == "latest" { return dft_qe_default_version() }
+    return sel
+}
+
+// dft_qe_version_is_apt — PURE: 1 iff the resolved version selects the apt
+// 6.7 fallback path (vs a conda-forge qe=<v> install). Drives _dft_provision_cmd.
+pub fn dft_qe_version_is_apt(resolved: str) -> int {
+    if resolved == "apt-6.7" { return 1 }
+    return 0
+}
+
+// dft_qe_version_major — PURE: the integer MAJOR component of a resolved
+// conda-forge version string ("7.5" → 7, "7" → 7). "apt-6.7" → 6. Used by the
+// selftest to assert the default resolves to a QE major ≥ 7 (gap-1 contract).
+pub fn dft_qe_version_major(resolved: str) -> int {
+    if resolved == "apt-6.7" { return 6 }
+    let mut i = 0
+    let n = len(resolved)
+    let mut val = 0
+    let mut got = 0
+    while i < n {
+        let cc = char_code(resolved.substring(i, i + 1))
+        if cc >= 48 && cc <= 57 {
+            val = val * 10 + (cc - 48)
+            got = 1
+            i = i + 1
+        } else {
+            i = n
+        }
+    }
+    if got == 0 { return -1 }
+    return val
+}
+
 // _dft_pick_transport — PURE transport-selection classifier for the DIRECT->PROXY
 // upload fallback (inbox fix a). Given the three scp outcomes, returns the
 // WINNING transport label: direct when the direct scp succeeded; proxy when
@@ -1064,12 +1124,42 @@ fn _dft_mpi_env() -> str {
 // + `openmpi-bin` (mpirun), but ONLY when pw.x is not already present — so a
 // QE-preinstalled `--image` short-circuits the apt install. Prints `pw.x OK`
 // (caller asserts it) when both pw.x and mpirun resolve.
-fn _dft_provision_cmd() -> str {
-    return "command -v pw.x >/dev/null 2>&1 || { export DEBIAN_FRONTEND=noninteractive"
-        + " && apt-get update -qq && apt-get install -y -qq quantum-espresso openmpi-bin"
-        + " > /root/provision.log 2>&1; }; "
+// gap-1 (d5ef0017): `resolved` is dft_qe_version_resolve's output. The DEFAULT
+// (a 7.x string) installs a MODERN QE via conda-forge (`micromamba`/`conda`
+// `qe=<v>`) so the cross-anchor fixture (QE 7.5) matches; "apt-6.7" keeps the
+// legacy Ubuntu-distro path as the explicit opt-in fallback. The resolved
+// version is echoed back (`QE_RESOLVED=<v>`) so the dispatcher records it in
+// the run manifest. Idempotent: pw.x already present short-circuits.
+fn _dft_provision_cmd(resolved: str) -> str {
+    let echo_ver = "; echo QE_RESOLVED=" + resolved
+    if dft_qe_version_is_apt(resolved) == 1 {
+        // explicit apt 6.7 fallback (--qe-version apt)
+        return "command -v pw.x >/dev/null 2>&1 || { export DEBIAN_FRONTEND=noninteractive"
+            + " && apt-get update -qq && apt-get install -y -qq quantum-espresso openmpi-bin"
+            + " > /root/provision.log 2>&1; }; "
+            + "command -v pw.x >/dev/null 2>&1 && command -v mpirun >/dev/null 2>&1"
+            + " && echo 'pw.x OK' || echo 'pw.x MISSING'" + echo_ver
+    }
+    // DEFAULT: conda-forge modern QE 7.x. Prefer micromamba (fast, static),
+    // fall back to conda if present. Installs into the base env on PATH so
+    // pw.x / ph.x / mpirun resolve for the existing -np mpirun invocations.
+    return "command -v pw.x >/dev/null 2>&1 || { "
+        + "MM=$(command -v micromamba || command -v conda); "
+        + "if [ -z \"$MM\" ]; then export DEBIAN_FRONTEND=noninteractive"
+        + " && apt-get update -qq && apt-get install -y -qq wget bzip2 > /root/provision.log 2>&1"
+        + " && wget -qO /tmp/mm.tar.bz2 https://micro.mamba.pm/api/micromamba/linux-64/latest"
+        + " && mkdir -p /opt/mm && tar -xjf /tmp/mm.tar.bz2 -C /opt/mm bin/micromamba"
+        + " && MM=/opt/mm/bin/micromamba; fi; "
+        + "\"$MM\" install -y -n base -c conda-forge 'qe=" + resolved + "' openmpi"
+        + " >> /root/provision.log 2>&1; "
+        + "for d in /opt/conda/bin /root/micromamba/bin /opt/mm/bin "
+        + "$(\"$MM\" info 2>/dev/null | awk '/base environment/{print $3\"/bin\"}'); do "
+        + "[ -x \"$d/pw.x\" ] && export PATH=\"$d:$PATH\"; done; "
+        + "ln -sf $(command -v pw.x 2>/dev/null) /usr/local/bin/pw.x 2>/dev/null; "
+        + "ln -sf $(command -v ph.x 2>/dev/null) /usr/local/bin/ph.x 2>/dev/null; "
+        + "ln -sf $(command -v mpirun 2>/dev/null) /usr/local/bin/mpirun 2>/dev/null; }; "
         + "command -v pw.x >/dev/null 2>&1 && command -v mpirun >/dev/null 2>&1"
-        + " && echo 'pw.x OK' || echo 'pw.x MISSING'"
+        + " && echo 'pw.x OK' || echo 'pw.x MISSING'" + echo_ver
 }
 
 // _dft_pseudo_cmd — fetch the deck's pseudopotentials into ./pseudo before the
@@ -1364,11 +1454,14 @@ fn _dft_state_path(deck: str) -> str {
 
 // _dft_write_state — persist the phase / endpoint / run params so --resume can
 // reconstruct the pod context from a fresh local process. KEY=VALUE plaintext.
-fn _dft_write_state(deck: str, phase: str, iid: str, host: str, port: str,
-                    identity: str, np: int, walltime_h: int, relax_name: str) -> bool {
+fn _dft_write_state(deck: str, phase: str, iid: str, host: str, port: str, identity: str, np: int, walltime_h: int, relax_name: str, qe_version: str) -> bool {
+    // gap-1 (d5ef0017): qe_version is the resolved QE version string
+    // (dft_qe_version_resolve) — RECORDED here so the run manifest pins the
+    // exact QE the el-ph data was produced on (cross-anchor reproducibility).
     let body = "phase=" + phase + "\ninstance_id=" + iid + "\nhost=" + host
         + "\nport=" + port + "\nidentity=" + identity + "\nnp=" + to_string(np)
         + "\nwalltime_h=" + to_string(walltime_h) + "\nrelax_name=" + relax_name
+        + "\nqe_version=" + qe_version
         + "\ndeck=" + deck + "\n"
     return write_text(_dft_state_path(deck), body)
 }
@@ -1527,6 +1620,14 @@ pub fn dft_run(av: [str], start: int) -> int {
         println("[dft-run] ✗ REFUSED — unknown --engine (use `qe` [default] or `qforge`).")
         return 2
     }
+
+    // --qe-version <v> (gap-1, handoff d5ef0017) — DEFAULT resolves a MODERN
+    // QE 7.x via conda-forge (the cross-anchor fixture used 7.5); `apt` keeps
+    // the Ubuntu-distro 6.7 as the explicit opt-in fallback. The resolved
+    // version string is recorded into the run manifest (.dft_detach.state).
+    let qe_version = dft_qe_version_resolve(_dft_flag_val(av, start, "--qe-version", ""))
+    println("[dft-run] QE version: " + qe_version
+        + (if dft_qe_version_is_apt(qe_version) == 1 { " (apt 6.7 fallback)" } else { " (conda-forge modern)" }))
     if engine == "qforge" {
         println("[dft-run] --engine qforge: el-ph→Tc routes through the hexa-native QFORGE chain")
         println("[dft-run]   (qforge_elph_to_tc) once DFPT |g|² is available — DFPT front-end stays QE")
@@ -1632,10 +1733,10 @@ pub fn dft_run(av: [str], start: int) -> int {
     // is the explicit `--detach`→`--resume` handoff (option α; replaces the
     // forbidden `( nohup dft-run --go & )` local double-fork).
     if detach == 1 {
-        return _dft_detach(deck, image, disk, owner, query, identity, walltime_h, relax_name, force)
+        return _dft_detach(deck, image, disk, owner, query, identity, walltime_h, relax_name, force, qe_version)
     }
 
-    return _dft_go(deck, image, disk, owner, query, identity, walltime_h, relax_name)
+    return _dft_go(deck, image, disk, owner, query, identity, walltime_h, relax_name, qe_version)
 }
 
 // DftUpload — the result of the deck upload, carrying the WINNING transport so
@@ -1696,7 +1797,7 @@ fn _dft_upload(iid: str, host: str, ssh_opts: [str], ep_host: str, ep_port: str,
 // stability verdict → tears the pod down. Each remote stage is a single
 // guarded cloud_exec (timeout-capped), so an outage surfaces as a stage error
 // rather than a silent hang.
-fn _dft_go(deck: str, image: str, disk: int, owner: str, query: str, identity: str, walltime_h: int, relax_name: str) -> int {
+fn _dft_go(deck: str, image: str, disk: int, owner: str, query: str, identity: str, walltime_h: int, relax_name: str, qe_version: str) -> int {
     println("[dft-run] ① RENT — searching verified offers (CPU-first → GPU fallback)...")
     let offer = _dft_rent_first_offer(query)
     if offer.ok == 0 {
@@ -1760,8 +1861,8 @@ fn _dft_go(deck: str, image: str, disk: int, owner: str, query: str, identity: s
     // ③ provision — install QE on the bare pod (idempotent; skipped if pw.x
     // already present from a QE `--image`). Without this a bare ubuntu:22.04
     // pod has no pw.x → relax dies exit 127.
-    println("[dft-run] ③ provision QE (apt quantum-espresso if pw.x absent)...")
-    let prov = cloud_exec_opts(host, ssh_opts, _dft_provision_cmd())
+    println("[dft-run] ③ provision QE " + qe_version + " (conda-forge modern, or apt 6.7 if --qe-version apt)...")
+    let prov = cloud_exec_opts(host, ssh_opts, _dft_provision_cmd(qe_version))
     if prov.ok == 0 || !prov.stdout_.contains("pw.x OK") {
         println("[dft-run] provision: QE install/verify FAILED — " + prov.message)
         println("[dft-run]   (see /root/provision.log on the pod; or pass --image with QE preinstalled)")
@@ -2274,7 +2375,7 @@ fn _dft_oom_preflight(deck: str) -> int {
 // Advance with `hexa cloud dft-run <deck> --resume` (phase-2). This replaces the
 // forbidden `( nohup dft-run --go & )` local double-fork — the long work runs on
 // the POD, not in a detached local process, so the Bash cap is never exceeded.
-fn _dft_detach(deck: str, image: str, disk: int, owner: str, query: str, identity: str, walltime_h: int, relax_name: str, force: int) -> int {
+fn _dft_detach(deck: str, image: str, disk: int, owner: str, query: str, identity: str, walltime_h: int, relax_name: str, force: int, qe_version: str) -> int {
     println("[dft-run] ━ DETACH (phase-1) — rent + provision + launch relax detached on the pod ━")
 
     // ⓪ IDEMPOTENCY GUARD (the dup-idle-pod recurrence-stopper, 2026-06-01) —
@@ -2402,8 +2503,8 @@ fn _dft_detach(deck: str, image: str, disk: int, owner: str, query: str, identit
     }
 
     // ③ provision QE (idempotent; skipped if pw.x present from a QE --image).
-    println("[dft-run] ③ provision QE (apt quantum-espresso if pw.x absent)...")
-    let prov = cloud_exec_opts(host, ssh_opts, _dft_provision_cmd())
+    println("[dft-run] ③ provision QE " + qe_version + " (conda-forge modern, or apt 6.7 if --qe-version apt)...")
+    let prov = cloud_exec_opts(host, ssh_opts, _dft_provision_cmd(qe_version))
     if prov.ok == 0 || !prov.stdout_.contains("pw.x OK") {
         println("[dft-run] provision: QE install/verify FAILED — " + prov.message)
         return _dft_teardown(inst.instance_id, 1)
@@ -2434,8 +2535,7 @@ fn _dft_detach(deck: str, image: str, disk: int, owner: str, query: str, identit
     // write the detach state stamp so --resume can reconstruct the pod context.
     // Record the WINNING endpoint (up.ep_host/up.ep_port) — when the proxy won the
     // upload, --resume MUST reconnect via the proxy, not the scp-refusing direct IP.
-    let wrote = _dft_write_state(deck, "relax", inst.instance_id, up.ep_host, up.ep_port,
-                                 identity, np, walltime_h, relax_name)
+    let wrote = _dft_write_state(deck, "relax", inst.instance_id, up.ep_host, up.ep_port, identity, np, walltime_h, relax_name, qe_version)
     if !wrote {
         println("[dft-run] ⚠ could not write detach state stamp " + _dft_state_path(deck)
             + " — --resume will not find the pod (instance " + inst.instance_id + " is tracked in `cloud list`).")
@@ -2479,6 +2579,9 @@ fn _dft_resume(deck: str) -> int {
     let relax_name = _dft_state_field(deck, "relax_name")
     let np = _dft_atoi(_dft_state_field(deck, "np"))
     let walltime_h = _dft_atoi(_dft_state_field(deck, "walltime_h"))
+    // gap-1 (d5ef0017): recover the resolved QE version recorded at --detach so
+    // every re-written stamp keeps it (empty for a pre-gap-1 stamp → default).
+    let qe_version = dft_qe_version_resolve(_dft_state_field(deck, "qe_version"))
     // TRANSPORT GUARD (cost a real pod — Li2MgH16 #38751850): if the endpoint
     // never resolved (empty host OR port → the `instance ... @ :` symptom), the
     // pod is UNREACHABLE, not failed. We cannot read relax.out, so we must NEVER
@@ -2531,7 +2634,7 @@ fn _dft_resume(deck: str) -> int {
             println("[dft-run] --resume: relax FAILED / no 'Begin final coordinates' — not dispatching scf on stale geometry.")
             let rt = cloud_exec_opts(host, ssh_opts, "tail -40 /root/deck/relax.out 2>/dev/null")
             println("[dft-run] ── relax.out tail ──\n" + rt.stdout_ + "\n[dft-run] ── end ──")
-            let _ws = _dft_write_state(deck, "failed", iid, host_ip, port, identity, np, walltime_h, relax_name)
+            let _ws = _dft_write_state(deck, "failed", iid, host_ip, port, identity, np, walltime_h, relax_name, qe_version)
             return _dft_teardown(iid, 1)
         }
         // assemble scf = head + LOCAL-parsed coords + tail; write scf.in.gen (no
@@ -2556,7 +2659,7 @@ fn _dft_resume(deck: str) -> int {
             println("[dft-run] --resume: scf→ph detach launch FAILED — " + launched.message)
             return _dft_teardown(iid, 1)
         }
-        let _ws2 = _dft_write_state(deck, "phon", iid, host_ip, port, identity, np, walltime_h, relax_name)
+        let _ws2 = _dft_write_state(deck, "phon", iid, host_ip, port, identity, np, walltime_h, relax_name, qe_version)
         println("[dft-run] --resume: relax DONE → scf→ph CHAIN LAUNCHED detached (pid " + to_string(launched.pid) + " · log " + phon_log + ")")
         println("[dft-run]   monitor: hexa cloud tail " + host + " " + phon_log)
         println("[dft-run]   advance: hexa cloud dft-run " + deck + " --resume   (harvest+verdict+teardown on ph-terminal)")
@@ -2613,7 +2716,7 @@ fn _dft_resume(deck: str) -> int {
                     println("[dft-run]   leaving pod " + iid + " INTACT (transport fail ≠ science fail) — retry: hexa cloud dft-run " + deck + " --resume")
                     return 3
                 }
-                let _wp = _dft_write_state(deck, "phon", iid, host_ip, port, identity, np, walltime_h, relax_name)
+                let _wp = _dft_write_state(deck, "phon", iid, host_ip, port, identity, np, walltime_h, relax_name, qe_version)
                 println("[dft-run] --resume: el-ph RECOVER-RELAUNCHED detached (pid " + to_string(relaunched.pid) + " · log " + phon_log + ").")
                 println("[dft-run]   monitor: hexa cloud tail " + host + " " + phon_log + "   ·   advance: hexa cloud dft-run " + deck + " --resume")
                 return 0
@@ -2634,7 +2737,7 @@ fn _dft_resume(deck: str) -> int {
                         + " AGAIN after a clean recompute — GENUINE fault, no re-salvage (@L3).")
                     let pt2 = cloud_exec_opts(host, ssh_opts, "tail -40 /root/deck/ph.out 2>/dev/null")
                     println("[dft-run] ── ph.out tail ──\n" + pt2.stdout_ + "\n[dft-run] ── end ──")
-                    let _wcf = _dft_write_state(deck, "failed", iid, host_ip, port, identity, np, walltime_h, relax_name)
+                    let _wcf = _dft_write_state(deck, "failed", iid, host_ip, port, identity, np, walltime_h, relax_name, qe_version)
                     return _dft_teardown(iid, 1)
                 }
                 println("[dft-run] --resume: ph CORRUPT phonon-recover (q=" + to_string(badq)
@@ -2653,7 +2756,7 @@ fn _dft_resume(deck: str) -> int {
                     println("[dft-run]   leaving pod " + iid + " INTACT (transport fail ≠ science fail) — retry: hexa cloud dft-run " + deck + " --resume")
                     return 3
                 }
-                let _wsv = _dft_write_state(deck, "phon", iid, host_ip, port, identity, np, walltime_h, relax_name)
+                let _wsv = _dft_write_state(deck, "phon", iid, host_ip, port, identity, np, walltime_h, relax_name, qe_version)
                 println("[dft-run] --resume: el-ph SALVAGE-RELAUNCHED detached (pid " + to_string(salvaged.pid) + " · log " + phon_log + ").")
                 println("[dft-run]   monitor: hexa cloud tail " + host + " " + phon_log + "   ·   advance: hexa cloud dft-run " + deck + " --resume")
                 return 0
@@ -2663,7 +2766,7 @@ fn _dft_resume(deck: str) -> int {
             println("[dft-run] --resume: ph (or scf) CRASHED before a clean JOB DONE (non-walltime, non-recover signature) — closed as failure.")
             let pt = cloud_exec_opts(host, ssh_opts, "tail -40 /root/deck/ph.out 2>/dev/null")
             println("[dft-run] ── ph.out tail ──\n" + pt.stdout_ + "\n[dft-run] ── end ──")
-            let _wf = _dft_write_state(deck, "failed", iid, host_ip, port, identity, np, walltime_h, relax_name)
+            let _wf = _dft_write_state(deck, "failed", iid, host_ip, port, identity, np, walltime_h, relax_name, qe_version)
             return _dft_teardown(iid, 1)
         }
         // ④ stability verdict on the harvested ph.out.
@@ -2681,7 +2784,7 @@ fn _dft_resume(deck: str) -> int {
         // PROCESS auto-wire (@L1): rank the per-stage telemetry → .dft_bottleneck.txt
         // (guarded clean skip when no telemetry was harvested — @L2/d6).
         let _bn = _dft_write_bottleneck(deck)
-        let _wd = _dft_write_state(deck, "done", iid, host_ip, port, identity, np, walltime_h, relax_name)
+        let _wd = _dft_write_state(deck, "done", iid, host_ip, port, identity, np, walltime_h, relax_name, qe_version)
         return _dft_teardown(iid, 0)
     }
 

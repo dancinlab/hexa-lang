@@ -1,0 +1,98 @@
+// @ci_gate — pure · network-free · deterministic (stdlib_selftest_aggregate --ci-gate)
+// stdlib/cloud/dft_qe_version_test.hexa — falsifier suite for gap-1 (QE
+// provisioner, sidecar handoff d5ef0017): `dft-run --qe-version` must DEFAULT
+// to a MODERN QE 7.x (conda-forge), keeping apt 6.7 only as an explicit
+// opt-in fallback, and RECORD the resolved version string into the run
+// manifest (.dft_detach.state via _dft_write_state).
+//
+// Evidence: apt `quantum-espresso` installs QE 6.7 (2020) while the reference
+// cross-anchor fixture (YH10) used QE 7.5 → silent λ/Tc mismatch.
+//
+// dft_dispatch.hexa is a LIBRARY (no top-level main), so `use` is side-effect
+// free and the PURE resolvers are exercised directly (no mirror needed). The
+// provision/manifest STRINGS are checked for the persisted version token.
+//
+// Falsifiers:
+//   F-DFT-QE-DEFAULT-MODERN — absent --qe-version resolves to QE major ≥ 7
+//   F-DFT-QE-APT-OPTIN      — "apt" resolves to the 6.7 fallback (major 6)
+//   F-DFT-QE-EXPLICIT       — an explicit "7.x" passes through verbatim
+//   F-DFT-QE-MANIFEST       — the resolved version is persisted in the manifest body
+//
+// Run:   hexa run stdlib/cloud/dft_qe_version_test.hexa
+// PASS:  exits 0, prints "dft_qe_version_test PASS".
+
+use "stdlib/cloud/dft_dispatch"
+
+fn _ck(name: str, got: int, want: int) {
+    if got != want {
+        println("  FAIL: " + name + " got " + to_string(got) + " want " + to_string(want))
+        exit(1)
+    }
+}
+
+fn _ck_str(name: str, got: str, want: str) {
+    if got != want {
+        println("  FAIL: " + name + " got '" + got + "' want '" + want + "'")
+        exit(1)
+    }
+}
+
+fn _ck_ge(name: str, got: int, floor: int) {
+    if got < floor {
+        println("  FAIL: " + name + " got " + to_string(got) + " want >= " + to_string(floor))
+        exit(1)
+    }
+}
+
+fn _ck_has(name: str, hay: str, needle: str) {
+    if hay.index_of(needle) < 0 {
+        println("  FAIL: " + name + " — '" + needle + "' absent in: " + hay)
+        exit(1)
+    }
+}
+
+fn main() {
+    // F-DFT-QE-DEFAULT-MODERN — the DEFAULT (no --qe-version) MUST resolve to a
+    // conda-forge modern QE whose MAJOR is >= 7 (the gap-1 contract). A 6.x
+    // default (the old apt 6.7 behaviour) FALSIFIES the fix.
+    let def = dft_qe_version_resolve("")
+    _ck_ge("default QE major >= 7", dft_qe_version_major(def), 7)
+    _ck("default is NOT apt fallback", dft_qe_version_is_apt(def), 0)
+
+    // "latest" is an alias of the modern default.
+    _ck_ge("latest QE major >= 7", dft_qe_version_major(dft_qe_version_resolve("latest")), 7)
+
+    // F-DFT-QE-APT-OPTIN — apt 6.7 stays available ONLY as an explicit opt-in.
+    let apt = dft_qe_version_resolve("apt")
+    _ck_str("apt → apt-6.7", apt, "apt-6.7")
+    _ck("apt flagged as apt path", dft_qe_version_is_apt(apt), 1)
+    _ck("apt major == 6", dft_qe_version_major(apt), 6)
+
+    // F-DFT-QE-EXPLICIT — an explicit conda-forge version passes through verbatim
+    // (so a deck can pin e.g. 7.3.1) and is NOT treated as the apt fallback.
+    _ck_str("explicit 7.3.1 verbatim", dft_qe_version_resolve("7.3.1"), "7.3.1")
+    _ck("explicit 7.3.1 not apt", dft_qe_version_is_apt(dft_qe_version_resolve("7.3.1")), 0)
+    _ck("explicit 7.3.1 major 7", dft_qe_version_major(dft_qe_version_resolve("7.3.1")), 7)
+
+    // F-DFT-QE-MANIFEST — the resolved version is RECORDED into the run manifest.
+    // _dft_write_state is IO (writes .dft_detach.state); we drive it against a
+    // throwaway deck dir and read the stamp back, asserting the `qe_version=`
+    // line is present with the resolved string. (Network-free: local file IO.)
+    let tmp = "/tmp/.dft_qe_ver_test_" + to_string(timestamp())
+    let _mk = exec("mkdir -p " + tmp)
+    let ok = _dft_write_state(tmp, "relax", "iid123", "root@1.2.3.4", "22", "/key", 8, 12, "vc-relax.in", def)
+    if !ok {
+        println("  FAIL: _dft_write_state returned false")
+        exit(1)
+    }
+    let stamp = read_file(tmp + "/.dft_detach.state")
+    _ck_has("manifest carries qe_version line", stamp, "qe_version=" + def)
+    let _rm = exec("rm -rf " + tmp)
+
+    // The default provision path uses conda-forge (NOT apt), and the apt path
+    // is reachable only via the explicit "apt" selector. (Indirect via the
+    // is_apt classifier — the live _dft_provision_cmd string is private.)
+    _ck("default routes conda-forge (not apt)", dft_qe_version_is_apt(def), 0)
+
+    println("dft_qe_version_test PASS")
+}
