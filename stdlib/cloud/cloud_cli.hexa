@@ -2645,7 +2645,47 @@ fn main() {
     if sub == "watch" {
         if si + 2 >= len(av) {
             println("[cloud] watch: usage — cloud watch <host> <pid> [--port N] [--insecure] [--interval N] [--max-wait S] [--then-down <id> [--provider P]]")
+            println("[cloud]        OR — cloud watch <host> <logfile> --until <marker> --detach [--grep RE]  (session-independent durable watcher)")
             exit(2)
+        }
+        // gap-3 (watch-detach): `cloud watch <host> <log> --until <marker>
+        // --detach` spawns a SESSION-INDEPENDENT watcher (setsid + nohup,
+        // durable log) over the `cloud tail` 3-tier failure-first exit taxonomy
+        // (0 DONE / 3 TIMEOUT / 4 CRASH / 255 transport). It survives the
+        // parent shell SIGHUP / session re-auth (the exit-144 mass-death this
+        // campaign). The 2nd positional is a LOGFILE here, not a pid.
+        if _has_flag(av, si + 3, "--detach") == 1 {
+            let _rhd = _resolve_cloud_host(_checked_host(av[si + 1]))
+            let host_d = _rhd.host
+            let logfile = av[si + 2]
+            let ssh_opts_d = _apply_resolved_port(_ssh_opts_cli(av, si + 3), _rhd)
+            let grep_re = _flag_val(av, si + 3, "--grep", "")
+            // Build the inner tail command: an explicit --until uses the legacy
+            // single terminal block; absent --until uses the 3-tier taxonomy.
+            let mut inner = ""
+            if _has_flag(av, si + 3, "--until") == 1 {
+                let until_re = _flag_val(av, si + 3, "--until", "")
+                inner = cloud_tail_cmd_opts(host_d, ssh_opts_d, logfile, grep_re, until_re)
+            } else {
+                inner = cloud_tail_cmd_taxonomy_opts(host_d, ssh_opts_d, logfile, grep_re)
+            }
+            // Durable log: explicit --log, else canonical /tmp/cloud-watch-<ts>.log.
+            let mut durable = _flag_val(av, si + 3, "--log", "")
+            if durable == "" {
+                durable = "/tmp/cloud-watch-" + str(timestamp()) + ".log"
+            }
+            let wr = cloud_watch_detach_opts(inner, durable)
+            println("[cloud] " + wr.message)
+            if wr.ok == 1 {
+                // __MONITOR_HANDLE__= JSON: a harness picks up the durable log +
+                // watcher pid without parsing the human line (mirrors nohup/fire).
+                println("__MONITOR_HANDLE__={"
+                    + "\"watcher_pid\":" + str(wr.pid)
+                    + ",\"log\":" + _mh_json_str(durable)
+                    + ",\"detached\":1}")
+                exit(0)
+            }
+            exit(1)
         }
         let _rh = _resolve_cloud_host(_checked_host(av[si + 1]))
         let host = _rh.host

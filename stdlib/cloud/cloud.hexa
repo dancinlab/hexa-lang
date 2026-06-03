@@ -743,6 +743,67 @@ fn cloud_tail_cmd_taxonomy_opts(host: str, ssh_opts: [str], logfile: str, grep_r
     return _ssh_cmd(host, ssh_opts, remote)
 }
 
+// ── session-independent detached watch (gap-3, watch-detach) ─────────
+//
+// A poll-loop / `cloud tail` watcher runs as a child of the SESSION shell, so
+// when the session is reaped (a `/login` re-auth this campaign) the whole
+// process group takes SIGHUP and the watcher dies — exit 144 (128+SIGHUP), the
+// mass watcher death this session. The fix is a truly session-independent
+// watcher: `setsid` puts it in its OWN session (no controlling terminal, so a
+// parent SIGHUP cannot reach it), `nohup` ignores SIGHUP belt-and-suspenders,
+// stdin is detached from the tty, and stdout/stderr go to a DURABLE log file.
+// On the inner tail returning, its 3-tier verdict (0/3/4/255) is appended as
+// `__WATCH_RC__=<code>` so a later reader recovers the terminal class without
+// having been attached. The watcher PID is echoed (`__WATCH_PID__=<pid>`) so
+// the caller can poll/await it; after the parent dies the watcher reparents to
+// init (ppid=1) and keeps writing — the selftest's falsifier.
+
+// _cloud_watch_detach_cmd — wrap an arbitrary inner command (`inner`, e.g. a
+// `cloud_tail_cmd_taxonomy_opts` ssh pipeline) into the session-independent
+// form, logging to `durable_log`. PURE string builder — no spawn — so the
+// falsifier suite pins the exact shape (setsid · nohup · </dev/null · the
+// __WATCH_RC__ verdict capture · __WATCH_PID__ handle) with no live process.
+// The inner command's exit code is preserved across the `bash -c` so the
+// 3-tier tail taxonomy (0 DONE / 3 TIMEOUT / 4 CRASH / 255 transport) survives
+// into `__WATCH_RC__`. The `&` backgrounds the setsid leader; `$!` is its PID.
+fn _cloud_watch_detach_cmd(inner: str, durable_log: str) -> str {
+    // The inner runs under `bash -c`; on return its $? is appended to the log
+    // as the verdict marker. setsid puts the watcher in its OWN session (Linux);
+    // nohup ignores SIGHUP (the campaign's exit-144 failure mode) on BOTH Linux
+    // and macOS (which ships no setsid); </dev/null detaches stdin; >>log 2>&1
+    // makes the log durable + append-only. Backgrounding from the launching
+    // shell + the parent's exit reparents the watcher to init (ppid=1).
+    // PORTABLE: use setsid when present (Linux), else plain nohup (macOS) — the
+    // SIGHUP immunity comes from nohup either way.
+    let body = "{ " + inner + "; echo __WATCH_RC__=$? >> " + _shq(durable_log) + "; }"
+    let sid_prefix = "$(command -v setsid || true)"
+    return sid_prefix + " nohup bash -c " + _shq(body)
+        + " < /dev/null >> " + _shq(durable_log) + " 2>&1 & echo __WATCH_PID__=$!"
+}
+
+// cloud_watch_detach_opts — IO: spawn the session-independent watcher LOCALLY
+// (the local shell launches the setsid leader, which then holds the ssh tail
+// pipeline). Returns the watcher PID via the __WATCH_PID__ marker. The watcher
+// outlives this process AND the session shell (setsid + nohup), writing its
+// 3-tier verdict to `durable_log`. `inner` is the remote tail command (built by
+// the caller from cloud_tail_cmd_*_opts) — passing it lets the selftest inject
+// a local stub command instead of a live ssh hop.
+fn cloud_watch_detach_opts(inner: str, durable_log: str) -> CloudResult {
+    if len(inner) == 0 {
+        return _cloud_fail("cloud_watch_detach: empty inner command")
+    }
+    let cmd = _cloud_watch_detach_cmd(inner, durable_log)
+    let res = exec_capture(cmd)
+    let pid = _parse_uint_after(res[0], "__WATCH_PID__=")
+    if pid < 0 {
+        return CloudResult { ok: 0, exit_code: -1, pid: 0, stdout_: res[0],
+            message: "cloud_watch_detach: no __WATCH_PID__ marker — setsid/nohup spawn failed", logfile: durable_log }
+    }
+    return CloudResult { ok: 1, exit_code: 0, pid: pid, stdout_: res[0],
+        message: "detached watcher pid " + str(pid) + " · durable log " + durable_log
+            + " (session-independent: survives parent SIGHUP / re-auth)", logfile: durable_log }
+}
+
 // _cloud_tail_sed_prog — assemble the remote sed program from the grep
 // filter + the terminal mode. `taxonomy` (1) selects the 3-tier failure-first
 // classifier and IGNORES `until_re`; otherwise `until_re` drives a single
