@@ -1,0 +1,51 @@
+// g2_stp_ldp_corpus.hexa — SELFHOST-CI M2: STP/LDP [sp] regression corpus.
+// Locks the #2579 STP closed-negative: a mem-parse-fail in the arm64
+// stack-spill path was the literal "ENCODE-MISS: STP/LDP mem-parse-fail"
+// signature. This program forces the backend to spill MANY live locals to
+// `[sp,#N]` across several frame sizes, so STP/LDP store/load pairs land at a
+// spread of [sp] offsets. The guard asserts 0 ENCODE-MISS AND that STP+LDP
+// [sp,#N] pairs at varied offsets are actually present in the emitted object.
+
+// small frame — a handful of locals
+fn frame_small(n: i64) -> i64 {
+    let a = n + 1
+    let b = a * 2
+    let c = b - 3
+    return a + b + c
+}
+
+// medium frame — more spills, deeper [sp] offsets
+fn frame_medium(n: i64) -> i64 {
+    let a = n + 1
+    let b = a * 2
+    let c = b - 3
+    let d = c + a
+    let e = d * b
+    let f = e - c
+    let g = f + d
+    let h = g * e
+    return a + b + c + d + e + f + g + h
+}
+
+// large frame — wide spill set, large [sp] offsets exercise the offset-encode
+fn frame_large(n: i64) -> i64 {
+    let a = n + 1
+    let b = a * 2
+    let c = b - 3
+    let d = c + a
+    let e = d * b
+    let f = e - c
+    let g = f + d
+    let h = g * e
+    let i_ = h - f
+    let j = i_ + g
+    let k = j * h
+    let l = k - i_
+    let m = l + j
+    let o = m * k
+    let p = o - l
+    let q = p + m
+    return a + b + c + d + e + f + g + h + i_ + j + k + l + m + o + p + q
+}
+
+println("stp/ldp:", frame_small(7), frame_medium(7), frame_large(7))
