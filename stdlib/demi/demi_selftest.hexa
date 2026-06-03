@@ -60,6 +60,53 @@ fn _make_phanes_stub(path: string) {
     exec("printf %s " + _shq2(body) + " > " + _shq2(path) + " && chmod +x " + _shq2(path))
 }
 
+// _make_verify_fixture(repo) — build a deterministic exports/ tree under `repo`
+// (which becomes DEMIURGE_REPO) for the bare `verify <path|id>` parity cells
+// (PR-verify-record). Two F1F2 records:
+//   FIXTURE_OK     — all provenance fields present · clean rationale · GATE_OPEN
+//                    → all 6 checks [OK], rc 0.
+//   FIXTURE_REJECT — verdict claims "absorbed" but gate=GATE_OPEN
+//                    → REJECTED stderr line + the consistency [FAIL], rc 1.
+// `repo` MUST be a non-symlinked real path (Foundation .standardizedFileURL does
+// NOT resolve symlinks; a /tmp → /private/tmp symlink makes exportsRoot and the
+// arg disagree). The caller passes a $HOME-rooted path for this reason.
+fn _make_verify_fixture(repo: string) {
+    let rdir = repo + "/exports/chip/noc/f1f2/records"
+    exec("rm -rf " + _shq2(repo) + " && mkdir -p " + _shq2(rdir))
+    let ok = "{\n"
+        + "  \"interface\": \"hexa-arch:chip:noc:F1F2-record\",\n"
+        + "  \"schema_version\": \"1.0\",\n"
+        + "  \"record_id\": \"FIXTURE_OK\",\n"
+        + "  \"produced_at_utc\": \"2026-06-03T00:00:00Z\",\n"
+        + "  \"topology\": { \"kind\": \"mesh_2d\", \"degree\": 4, \"node_count\": 64, \"routing\": \"min\" },\n"
+        + "  \"traffic\": \"tornado\",\n"
+        + "  \"verdict\": { \"f1\": \"INCONCLUSIVE\", \"f2\": \"INCONCLUSIVE\", \"rationale\": \"single-topology fixture record for the demi verify selftest cell\" },\n"
+        + "  \"provenance\": {\n"
+        + "    \"absorbed\": false, \"measurement_gate\": \"GATE_OPEN\",\n"
+        + "    \"sim_engine\": \"fixture_engine\", \"sim_commit_hash\": \"deadbeef\",\n"
+        + "    \"gate_failures\": [], \"consumer_target\": \"demi:selftest\",\n"
+        + "    \"atlas_cite_block\": \"@cite fixture\", \"scope_caveats\": []\n"
+        + "  }\n"
+        + "}\n"
+    let reject = "{\n"
+        + "  \"interface\": \"hexa-arch:chip:noc:F1F2-record\",\n"
+        + "  \"schema_version\": \"1.0\",\n"
+        + "  \"record_id\": \"FIXTURE_REJECT\",\n"
+        + "  \"produced_at_utc\": \"2026-06-03T00:00:00Z\",\n"
+        + "  \"topology\": { \"kind\": \"mesh_2d\", \"degree\": 4, \"node_count\": 64, \"routing\": \"min\" },\n"
+        + "  \"traffic\": \"tornado\",\n"
+        + "  \"verdict\": { \"f1\": \"ABSORBED\", \"f2\": \"PASS\", \"rationale\": \"absorbed claim with an open gate\" },\n"
+        + "  \"provenance\": {\n"
+        + "    \"absorbed\": true, \"measurement_gate\": \"GATE_OPEN\",\n"
+        + "    \"sim_engine\": \"fixture_engine\", \"sim_commit_hash\": \"deadbeef\",\n"
+        + "    \"gate_failures\": [], \"consumer_target\": \"demi:selftest\",\n"
+        + "    \"atlas_cite_block\": \"@cite fixture\", \"scope_caveats\": []\n"
+        + "  }\n"
+        + "}\n"
+    exec("printf %s " + _shq2(ok) + " > " + _shq2(rdir + "/fixture_ok.json"))
+    exec("printf %s " + _shq2(reject) + " > " + _shq2(rdir + "/fixture_reject.json"))
+}
+
 fn _run_swift(bin: string, env_prefix: string, argv_str: string) -> [string] {
     let cmd = env_prefix + " " + _shq2(bin) + " " + argv_str + " 2>&1"
     let pair = exec_with_status(cmd)
@@ -216,6 +263,54 @@ fn main() {
                                       "--expr add 2 4")
     fails = fails + _cell_passthrough("verify/rubric", entry, swift_bin,
                                       "rubric")
+
+    // ── PR-verify-record cells — bare `verify <path|id>` local record check.
+    // A $HOME-rooted (non-symlinked) fixture repo keeps the canonical-path
+    // goldens machine-independent (see _make_verify_fixture). DEMIURGE_REPO is
+    // applied to BOTH surfaces via env_prefix, so exportsRoot resolves to the
+    // fixture on both the hexa and (when present) Swift sides.
+    let vfix = home + "/.demi-selftest-verify-fixture"
+    _make_verify_fixture(vfix)
+    let vroot = vfix + "/exports/chip/noc/f1f2/records"
+    let venv = "DEMIURGE_REPO=" + _shq2(vfix)
+
+    // valid record BY PATH → 6 [OK] lines, rc 0.
+    let g_v_ok = "[OK]   recordId\n"
+        + "[OK]   provenance.simEngine non-empty\n"
+        + "[OK]   provenance.simCommitHash non-empty\n"
+        + "[OK]   provenance.consumerTarget non-empty\n"
+        + "[OK]   provenance.atlasCiteBlock non-empty\n"
+        + "[OK]   verdict claim vs gate consistent\n"
+    fails = fails + _cell("verify/record-ok-path", entry, swift_bin, venv,
+                          "verify " + _shq2(vroot + "/fixture_ok.json"),
+                          g_v_ok, 0)
+    // valid record BY ID → resolveRecord scans the records dir, same 6 [OK].
+    fails = fails + _cell("verify/record-ok-id", entry, swift_bin, venv,
+                          "verify FIXTURE_OK", g_v_ok, 0)
+
+    // inconsistent record → REJECTED stderr line FIRST (merged-output order),
+    // then 5 [OK] + the consistency [FAIL], rc 1.
+    let g_v_reject = "verify: REJECTED — record inconsistent (rfc_011 §4.2 / @F f6)\n"
+        + "[OK]   recordId\n"
+        + "[OK]   provenance.simEngine non-empty\n"
+        + "[OK]   provenance.simCommitHash non-empty\n"
+        + "[OK]   provenance.consumerTarget non-empty\n"
+        + "[OK]   provenance.atlasCiteBlock non-empty\n"
+        + "[FAIL] verdict claim vs gate consistent — verdict asserts a measurement but gate = GATE_OPEN\n"
+    fails = fails + _cell("verify/record-reject", entry, swift_bin, venv,
+                          "verify FIXTURE_REJECT", g_v_reject, 1)
+
+    // missing path UNDER exports → fileNotFound (canonical path), rc 1.
+    let g_v_missing = "verify: Record file not found: " + vroot + "/MISSING.json\n"
+    fails = fails + _cell("verify/record-missing", entry, swift_bin, venv,
+                          "verify " + _shq2(vroot + "/MISSING.json"),
+                          g_v_missing, 1)
+
+    // path OUTSIDE exports (invariant a) → pathOutsideExports (canonical), rc 1.
+    let g_v_outside = "verify: Refused (@D g_cockpit_isolation invariant a): path is outside ../exports/**: " + vfix + "/outside.json\n"
+    fails = fails + _cell("verify/record-outside", entry, swift_bin, venv,
+                          "verify " + _shq2(vfix + "/outside.json"),
+                          g_v_outside, 1)
 
     if fails == 0 { println("demi_parity_selftest PASS") }
     else { println("demi_parity_selftest FAIL — " + to_string(fails) + " cell(s)") }

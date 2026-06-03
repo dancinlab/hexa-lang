@@ -16,6 +16,7 @@
 // one-per-PR in the plan's `## handoff` stack.
 
 import "stdlib/demi/manifest.hexa"
+import "stdlib/demi/verify_record.hexa"
 
 // handler_stub(target, argv) — a DECLARED-but-unported local verb. Prints an
 // honest notice naming the verb + the stacked-PR that will port it, and
@@ -131,9 +132,10 @@ pub fn handler_action(argv: [string]) -> int {
 //        re-judges). A missing `hexa` on PATH → exit 127 (honest gap, not a
 //        fabricated verdict; mirrors HexaBridge.run ran=false).
 //   <path|id> (bare)           → the local record provenance/claim-gate check
-//        (Swift verifyRecord). That reads exports/** records + an artifact
-//        registry which are NOT yet ported (PR-verify-record stacked PR), so
-//        the bare path routes to the honest stub — NEVER a fake parity (@L7).
+//        (Swift verifyRecord), now LIVE (PR-verify-record). vr_verify_record()
+//        in verify_record.hexa reads exports/** records + scans the F1F2
+//        records dir for an id, then runs the 6-check consistency gate —
+//        byte-parity with the Swift reference (see verify_record.hexa header).
 // Missing arg → Swift parity: stderr line + usage + exit 2. The usage screen
 // itself is the manifest-rendered demi_usage (d4); the deterministic,
 // byte-matchable parity cell registered this PR is the --fence/--expr/rubric
@@ -189,8 +191,10 @@ pub fn handler_verify(argv: [string]) -> int {
         }
         return pair[1]
     }
-    // Bare <path|id> → local record check (PR-verify-record). Honest stub.
-    return handler_stub("verify.record", argv)
+    // Bare <path|id> → local record provenance/claim-gate check (PR-verify-
+    // record · LIVE). The Swift verifyRecord resolves arg as a path then an id;
+    // vr_verify_record mirrors that + the 6-check gate byte-for-byte.
+    return vr_verify_record(argv[0])
 }
 
 // handler_local(target, argv) — generic local-handler entry. Routes by the
