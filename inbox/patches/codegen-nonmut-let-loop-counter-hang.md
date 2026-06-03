@@ -2,8 +2,41 @@
 
 - **Source**: anima #1795 (OMEGA-C / HEXAD cross-module forward wiring), filed cross-repo per `a_runpod_inbox`.
 - **Toolchain**: `hexa 0.1.0-dispatch`, `hexa run` → `hexat` → clang (compiled codegen path; interp retired).
-- **Status**: LOCALLY REPRODUCED — build succeeds, the produced binary hangs (does not terminate).
+- **Status**: ✅ RESOLVED (2026-06-04) — fixed by the **HX2006 immutability diagnostic** at S2 (bind), so the previously-SILENT write is now a VISIBLE compile-time diagnostic instead of a silent runtime hang. See "Resolution" below.
 - **Severity**: correctness — a loop that should terminate runs forever. No compile-time diagnostic; the failure is silent at runtime.
+
+## Resolution (2026-06-04)
+
+Fixed per **suggested direction #1 (reject at compile time)** — `compiler/check/bind.hexa`
+(S2 bind pass) now emits **HX2006 — "cannot assign to immutable binding `x`
+(declared without `mut`)"** on a write to a function-local non-`mut` `let`.
+This turns the silent runtime hang into a visible compile-time diagnostic. Lands
+as the **upstream fix** (self-hosted compiler only; `hexa-cc` untouched, retiring).
+
+- **Where**: `compiler/check/bind.hexa` (`_bind_is_mut` mutability probe + the
+  Assign branch in `_bind_walk_expr` + `_emit_hx2006`), the new `HX2006` catalog
+  entry in `compiler/diag/catalog.hexa`, regression cases (d)/(e) in
+  `compiler/check/bind_test.hexa`. The parser already tracked the `Mut` token
+  (`mut:` name prefix); the gap was the unenforced write-side check.
+- **Scope finding — PERVASIVE.** An in-tree corpus sweep flagged **~1033**
+  pre-existing function-local non-`mut` writes across **76** files (crypto ·
+  aws-sigv4 · math · atlas-verifiers) that the silent-drop tolerated *outside*
+  loops. Hard-erroring all of them would brick the self-host build before stdlib
+  migration. So **HX2006 lands as a WARNING by default** (build-safe, no longer
+  silent) and **escalates to a hard Error under `HEXA_STRICT_LET=1`** (same
+  opt-in gate the legacy `self/type_checker.hexa` already honours). The full
+  stdlib `mut`-migration to flip the default to Error is tracked as follow-up.
+- **Two false-positive classes fixed** vs the first WIP cut (10460 → genuine
+  1033): (1) the parser synthesises one `X = E` init-assign per top-level `let`
+  into the merged `main` body — those target module-frame globals; (2) writes to
+  module-level `let mut` globals from a function. Both are module-frame (global
+  slot, NOT the miscompiled stack-slot case), so `_bind_is_mut` returns `2` for
+  any outermost-frame match and the diagnostic is suppressed there.
+- **Verify (verbatim)**: installed `hexa` on the repro → `exit=143` (silent
+  HANG); the `let mut` control → `exit=0`. The fixed `bind()` flags the repro
+  with `HX2006 @5:5` and the `let mut` control with 0 hits. `bind_test.hexa`
+  cases (a)–(e) PASS (`exit=0`), with (d) showing `HX2006 (warning S2)` and (e)
+  showing 0.
 
 ## Symptom
 
