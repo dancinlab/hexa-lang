@@ -345,6 +345,75 @@ fn main() {
                           "DEMIURGE_OWNER=1", "atlas register",
                           g_atlas_owner, r_owner[1])
 
+    // ── PR-record-loader self-check (@ci_gate · @L7 spirit) — NOT a verb-
+    // parity cell (PR#5 adds NO new user-facing verb; the list-*/show/gate
+    // verb parity lands in PR#6-#8). This is a FOCUSED unit-check of the
+    // shared loader primitives (stdlib/demi/record_loader.hexa) the later
+    // verbs build on: enumerate-by-kind count · load-by-id finds a known
+    // record · load-outside-exports refused (invariant a). It runs IN-PROCESS
+    // against the same $HOME-rooted fixture (DEMIURGE_REPO → vfix via setenv),
+    // so it agrees with the lexical-canon path guard machine-independently.
+    fails = fails + _loader_selfcheck(vfix, vroot)
+
     if fails == 0 { println("demi_parity_selftest PASS") }
     else { println("demi_parity_selftest FAIL — " + to_string(fails) + " cell(s)") }
+}
+
+// _loader_selfcheck(vfix, vroot) — in-process assertions on the record_loader
+// primitives against the verify fixture (2 records: FIXTURE_OK, FIXTURE_REJECT).
+// Returns the number of FAILED assertions (0 = all green). DEMIURGE_REPO is set
+// so rl_exports_root() resolves to the fixture's exports/ subtree.
+fn _loader_selfcheck(vfix: string, vroot: string) -> int {
+    setenv("DEMIURGE_REPO", vfix)
+    let mut f = 0
+
+    // (1) enumerate(f1f2) → exactly the 2 fixture records, sorted, canonical.
+    let recs = rl_enumerate("f1f2")
+    if len(recs) != 2 {
+        println("FAIL loader/enumerate-count — got " + to_string(len(recs)) + " want 2")
+        f = f + 1
+    } else {
+        // sorted by lastPathComponent: fixture_ok.json < fixture_reject.json.
+        if recs[0] != vroot + "/fixture_ok.json" {
+            println("FAIL loader/enumerate-sort[0] — " + recs[0]); f = f + 1
+        }
+        if recs[1] != vroot + "/fixture_reject.json" {
+            println("FAIL loader/enumerate-sort[1] — " + recs[1]); f = f + 1
+        }
+    }
+    // enumerate of an unimplemented kind → empty (decision/rfc/domain land #6-#8).
+    if len(rl_enumerate("decision")) != 0 {
+        println("FAIL loader/enumerate-unimpl — non-empty for 'decision'"); f = f + 1
+    }
+
+    // (2) load-by-id finds a known record_id → ok, canonical path of the match.
+    let byid = rl_load_by_id("FIXTURE_OK")
+    if byid[0] != "ok" || byid[1] != vroot + "/fixture_ok.json" {
+        println("FAIL loader/load-by-id — [" + byid[0] + ", " + byid[1] + "]"); f = f + 1
+    }
+    // unknown id → notfound (resolveRecord then prefers the path error; here we
+    // assert the by-id primitive's own miss signal).
+    let bymiss = rl_load_by_id("NO_SUCH_ID")
+    if bymiss[0] != "notfound" {
+        println("FAIL loader/load-by-id-miss — " + bymiss[0]); f = f + 1
+    }
+
+    // (3) load-by-path of a record UNDER exports → ok.
+    let bypath = rl_load_by_path(vroot + "/fixture_ok.json")
+    if bypath[0] != "ok" {
+        println("FAIL loader/load-by-path — " + bypath[0]); f = f + 1
+    }
+    // load OUTSIDE exports (invariant a) → refused with the canonical path.
+    let outside = rl_load_by_path(vfix + "/outside.json")
+    if outside[0] != "outside" || outside[1] != vfix + "/outside.json" {
+        println("FAIL loader/load-outside-refused — [" + outside[0] + ", " + outside[1] + "]"); f = f + 1
+    }
+    // `..` escape that canonicalizes outside exports → also refused.
+    let escape = rl_load_by_path(vroot + "/../../../../escape.json")
+    if escape[0] != "outside" {
+        println("FAIL loader/load-escape-refused — " + escape[0]); f = f + 1
+    }
+
+    if f == 0 { println("PASS loader/record-loader (enumerate · load-by-id · invariant-a guard)") }
+    return f
 }
