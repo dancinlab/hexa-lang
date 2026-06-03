@@ -34,11 +34,13 @@ self-host build passes, (3) writing emitters+oracles for the units that still la
 - [x] C-LOC burn-down ledger — running total of live authored C across the ecosystem
       → `.verdicts/c-zero/LEDGER.txt`: live-C 37353 LOC / proven-retirable **3946 LOC**
         (16/16 A2 shims, COMPLETE) / remaining-named 33407 (`hexa_cc.c` 28482 + GPU 4925).
-- [ ] A3 GPU shims (cuda/forge, 4925 LOC) — DEFERRED: byte/run parity needs a CUDA GPU host
-      (none on `mini`). Emitters present; re-run the oracle on a pool RTX host. Not faked.
-- [ ] `hexa_cc.c` (28482 LOC) — the dominant remaining authored-C mass; OWNED BY a separate
-      domain (HEXA-CC-ZERO). Needs an emitter or a native-hexa self-host of the cc driver
-      (large; multi-PR). Out of C-ZERO scope.
+- [x] A3 GPU shims (cuda/forge, 4925 LOC) — DONE on pool summer RTX 5070 (FREE, no rental):
+      runtime_bf16/forge_tier_v1/lora_cuda_host/gpu_codegen_stub BYTE-EQ (#2611) + runtime_cuda
+      emitter nvcc-CLEAN after 2 fixes (#2612). See `.verdicts/c-zero/LEDGER.txt` §5-7.
+- [x] `hexa_cc.c` (28482 LOC) — RECLASSIFIED (#2613): it is the GENERATED boot image of the
+      self-host toolchain (SSOT self/{lexer,parser,type_checker,codegen}.hexa), `.hexanoport` —
+      NOT hand-authored port debt. Already git-rm'd (#2065) + cold-seed bootstrap (HEXA-CC-ZERO
+      P6). See `.verdicts/c-zero/F-HEXA-CC-RECLASSIFY.txt`. C-ZERO portable-surface burn-down COMPLETE.
 
 ## scope (reachable repos this run)
 
