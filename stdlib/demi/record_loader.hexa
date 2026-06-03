@@ -242,3 +242,277 @@ pub fn rl_error_line(status: string, path: string) -> string {
     // ok/outside/notfound. A decode failure still exits 1 with a generic line.
     return "verify: Decode failed (" + path + ")"
 }
+
+// ── ArtifactRegistry stub enumeration (list-* verbs · PR#6) ─────────────────
+//
+// The list-*/show verbs (#6+) need, per artifact, the THREE display fields the
+// Swift ArtifactStub carries: the `$<id>` display token, the human title, and
+// the source path. `rl_enumerate(kind)` above intentionally returns f1f2 PATHS
+// only (its contract is the RecordLoader-anchored path scan that load-by-id
+// reuses). So the richer list view gets its own typed carrier here, mirroring
+// ArtifactRegistry.load(kind:) for all FOUR kinds:
+//   f1f2     → exports/chip/noc/f1f2/records/*.json  ($R<i>, 1-based load index)
+//   decision → <repo>/design.md  `### Decision N — title`  ($D<n>, numeric sort)
+//   rfc      → <repo>/proposals/rfc_*.md              ($RFC<n>, n = 2nd `_` field)
+//   domain   → <repo>/domains/*.md (README excluded) + matter/README pointer
+// projectRoot == parent of exportsRoot (Swift ArtifactRegistry.projectRoot),
+// i.e. exports-root with its last path segment dropped.
+
+// A single list-row stub: the `$<id>` display token, human title, source path.
+pub struct RlStub {
+    id_display: string,   // "$R1" · "$D29" · "$RFC011" · "$DOM:chip"
+    title:      string,   // sidebar/list human label
+    path:       string,   // absolute source path (pseudo for decisions)
+}
+
+// rl_project_root() — ArtifactRegistry.projectRoot: exportsRoot with its last
+// segment removed (exportsRoot is <repo>/exports → projectRoot is <repo>).
+pub fn rl_project_root() -> string {
+    let root = rl_exports_root()
+    let segs = root.split("/")
+    let mut stack: [string] = []
+    let mut i = 0
+    while i < len(segs) {
+        if len(segs[i]) > 0 { stack.push(segs[i]) }
+        i = i + 1
+    }
+    if len(stack) > 0 { stack = rl_pop(stack) }
+    let mut out = ""
+    let mut j = 0
+    while j < len(stack) {
+        out = out + "/" + stack[j]
+        j = j + 1
+    }
+    if out == "" { return "/" }
+    return out
+}
+
+// rl_basename(p) — last path segment.
+fn rl_basename(p: string) -> string {
+    let segs = p.split("/")
+    if len(segs) == 0 { return p }
+    return segs[len(segs) - 1]
+}
+
+// rl_drop_ext(name) — strip the final `.<ext>` (lastPathComponent without the
+// extension — matches URL.deletingPathExtension().lastPathComponent).
+fn rl_drop_ext(name: string) -> string {
+    let mut dot = -1
+    let mut i = 0
+    while i < len(name) {
+        if name.substring(i, i + 1) == "." { dot = i }
+        i = i + 1
+    }
+    if dot < 0 { return name }
+    return name.substring(0, dot)
+}
+
+// rl_atoi(s) — parse a leading non-negative integer; non-numeric → 0 (matches
+// the Swift `Int(key) ?? 0` decision-sort fallback).
+fn rl_atoi(s: string) -> int {
+    let t = s.trim()
+    if len(t) == 0 { return 0 }
+    let mut n = 0
+    let mut i = 0
+    while i < len(t) {
+        let d = ord(t.substring(i, i + 1)) - 48
+        if d < 0 || d > 9 { return 0 }
+        n = n * 10 + d
+        i = i + 1
+    }
+    return n
+}
+
+// rl_records_dir_list(dir, pat) — `ls <dir>/<pat> | sort` → basenames sorted by
+// lastPathComponent (ArtifactRegistry sorts F1F2/RFC/domain by lastPathComponent).
+fn rl_dir_files_sorted(dir: string, pat: string) -> [string] {
+    let listing = exec("ls " + rl_shq(dir) + "/" + pat + " 2>/dev/null | sort").trim()
+    let mut out: [string] = []
+    if len(listing) > 0 {
+        let lines = listing.split("\n")
+        let mut i = 0
+        while i < len(lines) {
+            let f = lines[i].trim()
+            if len(f) > 0 { out.push(f) }
+            i = i + 1
+        }
+    }
+    return out
+}
+
+// ── f1f2 stubs (reuses rl_enumerate path scan) ──────────────────────────────
+fn rl_stubs_f1f2() -> [RlStub] {
+    let files = rl_enumerate("f1f2")
+    let mut out: [RlStub] = []
+    let mut i = 0
+    while i < len(files) {
+        let title = rl_drop_ext(rl_basename(files[i]))
+        out.push(RlStub { id_display: "$R" + to_string(i + 1),
+                          title: title, path: files[i] })
+        i = i + 1
+    }
+    return out
+}
+
+// ── decision stubs (parse <repo>/design.md `### Decision N — title`) ─────────
+// Dedup by number (keep first), then sort numerically by N (Swift loadDecisions).
+fn rl_stubs_decision() -> [RlStub] {
+    let path = rl_project_root() + "/design.md"
+    let exists = exec("test -f " + rl_shq(path) + " && echo yes || echo no").trim()
+    if exists != "yes" { return [] }
+    let content = read_file(path)
+    let lines = content.split("\n")
+    let head = "### Decision "
+    let mut nums: [string] = []
+    let mut stubs: [RlStub] = []
+    let mut i = 0
+    while i < len(lines) {
+        let line = lines[i]
+        if rl_starts_with(line, head) {
+            // rest = "<N> — <title>"; N = the leading digit run.
+            let rest = line.substring(len(head), len(line))
+            let mut k = 0
+            while k < len(rest) {
+                let d = ord(rest.substring(k, k + 1)) - 48
+                if d < 0 || d > 9 { break }
+                k = k + 1
+            }
+            if k > 0 {
+                let n = rest.substring(0, k)
+                // separator is " — " (space em-dash space); title = after it.
+                let sep = " — "
+                let si = rl_index_of(rest, sep, k)
+                if si >= 0 {
+                    let title = rest.substring(si + len(sep), len(rest))
+                    // dedupe by N (first wins).
+                    let mut seen = false
+                    let mut j = 0
+                    while j < len(nums) {
+                        if nums[j] == n { seen = true }
+                        j = j + 1
+                    }
+                    if !seen {
+                        nums.push(n)
+                        stubs.push(RlStub { id_display: "$D" + n,
+                                            title: "D" + n + " — " + title,
+                                            path: path })
+                    }
+                }
+            }
+        }
+        i = i + 1
+    }
+    // numeric selection-sort by N (small list) — build a fresh array so we
+    // never need struct-element index assignment (only push + read).
+    let mut sorted: [RlStub] = []
+    let mut used: [bool] = []
+    let mut u = 0
+    while u < len(stubs) { used.push(false) ; u = u + 1 }
+    let mut placed = 0
+    while placed < len(stubs) {
+        let mut best = -1
+        let mut best_n = 0
+        let mut k = 0
+        while k < len(stubs) {
+            if !used[k] {
+                let nk = rl_atoi(nums[k])
+                if best < 0 || nk < best_n {
+                    best = k
+                    best_n = nk
+                }
+            }
+            k = k + 1
+        }
+        sorted.push(stubs[best])
+        used[best] = true
+        placed = placed + 1
+    }
+    return sorted
+}
+
+// ── rfc stubs (<repo>/proposals/rfc_*.md, sorted by lastPathComponent) ───────
+// key = the 2nd `_`-field of the stem (rfc_<N>_<slug> → N), title = full stem.
+fn rl_stubs_rfc() -> [RlStub] {
+    let dir = rl_project_root() + "/proposals"
+    let files = rl_dir_files_sorted(dir, "rfc_*.md")
+    let mut out: [RlStub] = []
+    let mut i = 0
+    while i < len(files) {
+        let stem = rl_drop_ext(rl_basename(files[i]))
+        // split on "_", maxSplits=2 → need >= 2 parts (rfc, N[, slug]).
+        let parts = stem.split("_")
+        if len(parts) >= 2 {
+            let n = parts[1]
+            out.push(RlStub { id_display: "$RFC" + n,
+                              title: stem, path: dir + "/" + rl_basename(files[i]) })
+        }
+        i = i + 1
+    }
+    return out
+}
+
+// ── domain stubs (<repo>/domains/*.md minus README + matter pointer) ─────────
+// Built sorted-by-lastPathComponent, matter appended, THEN re-sorted by key
+// (the filename stem) — matching Swift loadDomains' final `.sorted { key }`.
+fn rl_stubs_domain() -> [RlStub] {
+    let dir = rl_project_root() + "/domains"
+    let files = rl_dir_files_sorted(dir, "*.md")
+    let mut keys: [string] = []
+    let mut stubs: [RlStub] = []
+    let mut i = 0
+    while i < len(files) {
+        let base = rl_basename(files[i])
+        if base != "README.md" {
+            let name = rl_drop_ext(base)
+            keys.push(name)
+            stubs.push(RlStub { id_display: "$DOM:" + name,
+                                title: name, path: dir + "/" + base })
+        }
+        i = i + 1
+    }
+    // matter pointer (D17) — domains/matter/README.md if present.
+    let matter = dir + "/matter/README.md"
+    let mhit = exec("test -f " + rl_shq(matter) + " && echo yes || echo no").trim()
+    if mhit == "yes" {
+        keys.push("matter")
+        stubs.push(RlStub { id_display: "$DOM:matter",
+                            title: "matter (pointer — D17 hexa-lang absorbed)",
+                            path: matter })
+    }
+    // final sort by key (string compare) — selection sort into a fresh array
+    // (push + read only; no struct-element index assignment).
+    let mut sorted: [RlStub] = []
+    let mut used: [bool] = []
+    let mut u = 0
+    while u < len(stubs) { used.push(false) ; u = u + 1 }
+    let mut placed = 0
+    while placed < len(stubs) {
+        let mut best = -1
+        let mut best_k = ""
+        let mut k = 0
+        while k < len(stubs) {
+            if !used[k] {
+                if best < 0 || keys[k] < best_k {
+                    best = k
+                    best_k = keys[k]
+                }
+            }
+            k = k + 1
+        }
+        sorted.push(stubs[best])
+        used[best] = true
+        placed = placed + 1
+    }
+    return sorted
+}
+
+// rl_stubs(kind) — ArtifactRegistry.load(kind:) for ALL four kinds, as typed
+// RlStub rows the list-* handlers render. (rl_enumerate stays the path-only
+// f1f2 scan that load-by-id reuses; this is the richer list-facing view.)
+pub fn rl_stubs(kind: string) -> [RlStub] {
+    if kind == "f1f2"     { return rl_stubs_f1f2() }
+    if kind == "decision" { return rl_stubs_decision() }
+    if kind == "rfc"      { return rl_stubs_rfc() }
+    if kind == "domain"   { return rl_stubs_domain() }
+    return []
+}

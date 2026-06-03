@@ -17,6 +17,7 @@
 
 import "stdlib/demi/manifest.hexa"
 import "stdlib/demi/verify_record.hexa"
+import "stdlib/demi/record_loader.hexa"
 
 // handler_stub(target, argv) — a DECLARED-but-unported local verb. Prints an
 // honest notice naming the verb + the stacked-PR that will port it, and
@@ -264,6 +265,82 @@ pub fn handler_atlas(argv: [string]) -> int {
     return pair[1]
 }
 
+// ── list-* (PR#6 · LIVE) ─────────────────────────────────────────────
+//
+// `demi list-records|list-decisions|list-rfcs|list-domains|list-all` — ports
+// the Swift `list(kind:)` + `listAll()` (main.swift:162-181) reading through
+// the #5 RecordLoader/ArtifactRegistry (rl_stubs in record_loader.hexa). All
+// five share ONE renderer (_list_render) — exactly the Swift `list(kind:)`
+// body: a `<rawValue> (<count>):` header, then each row `  <id><pad>  <title>`
+// where pad aligns every id to the LONGEST id.display in the batch. Exit 0.
+//
+// The kind rawValues are the Swift ArtifactKind rawValues (the header text):
+//   f1f2 → "Records" · decision → "Decisions" · rfc → "RFCs" · domain → "Domains".
+
+// _kind_header(kind) — the Swift ArtifactKind.rawValue printed as the header.
+fn _kind_header(kind: string) -> string {
+    if kind == "f1f2"     { return "Records" }
+    if kind == "decision" { return "Decisions" }
+    if kind == "rfc"      { return "RFCs" }
+    if kind == "domain"   { return "Domains" }
+    return kind
+}
+
+// _spaces(n) — n spaces (String(repeating:count:) — clamped at 0).
+fn _spaces(n: int) -> string {
+    let mut out = ""
+    let mut i = 0
+    while i < n {
+        out = out + " "
+        i = i + 1
+    }
+    return out
+}
+
+// _list_render(kind) — the Swift `list(kind:)` body, byte-for-byte: header
+// `<rawValue> (<count>):` then each stub padded to the longest id.display.
+fn _list_render(kind: string) -> int {
+    let stubs = rl_stubs(kind)
+    println(_kind_header(kind) + " (" + to_string(len(stubs)) + "):")
+    // pad to the longest id in this batch (Swift `maxLen`).
+    let mut maxLen = 0
+    let mut i = 0
+    while i < len(stubs) {
+        let l = len(stubs[i].id_display)
+        if l > maxLen { maxLen = l }
+        i = i + 1
+    }
+    let mut j = 0
+    while j < len(stubs) {
+        let s = stubs[j]
+        let pad = _spaces(maxLen - len(s.id_display))
+        println("  " + s.id_display + pad + "  " + s.title)
+        j = j + 1
+    }
+    return 0
+}
+
+// handler_list(kind) — the four single-kind list verbs.
+pub fn handler_list(kind: string) -> int {
+    return _list_render(kind)
+}
+
+// handler_list_all() — Swift listAll(): each kind in ArtifactKind.allCases
+// order (f1f2, decision, rfc, domain), each followed by a blank line (so the
+// output ends with a trailing blank line, matching Swift's per-iteration
+// `print("")`).
+pub fn handler_list_all() -> int {
+    _list_render("f1f2")
+    println("")
+    _list_render("decision")
+    println("")
+    _list_render("rfc")
+    println("")
+    _list_render("domain")
+    println("")
+    return 0
+}
+
 // handler_local(target, argv) — generic local-handler entry. Routes by the
 // manifest `target` id to the ported hexa-native handler, else the honest
 // stub. The ONE place the local family fans out — adding a ported handler is
@@ -272,6 +349,11 @@ pub fn handler_local(target: string, argv: [string]) -> int {
     if target == "action" { return handler_action(argv) }
     if target == "verify" { return handler_verify(argv) }
     if target == "atlas"  { return handler_atlas(argv) }
+    if target == "list_all"       { return handler_list_all() }
+    if target == "list_records"   { return handler_list("f1f2") }
+    if target == "list_decisions" { return handler_list("decision") }
+    if target == "list_rfcs"      { return handler_list("rfc") }
+    if target == "list_domains"   { return handler_list("domain") }
     // every other declared local target is not-yet-ported → honest stub.
     return handler_stub(target, argv)
 }
