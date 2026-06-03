@@ -392,6 +392,76 @@ fn rt_str_from_chars(codes: [int]) -> string {
     return parts.join("")
 }
 
+// ── from_char_code — RUNTIME-PORT M2 (runtime.c L6035 hexa_from_char_code) ──
+// Codepoint → string, UTF-8 encoded. Mirrors the C body's branch ladder:
+//   code < 0      -> clamped to 0 (then 1-byte NUL byte)
+//   code < 0x80   -> 1-byte ASCII (raw byte = code)
+//   code < 0x800  -> 2-byte UTF-8  (0xC0|hi, 0x80|lo)
+//   code < 0x10000-> 3-byte UTF-8
+//   else          -> 4-byte UTF-8
+// We assemble the raw UTF-8 bytes ourselves and hand them to
+// rt_str_from_chars (chr() lowers to hexa_chr_byte which masks code&0xFF —
+// every byte we emit is already in 0..255, so the mask is a no-op and the
+// produced string is byte-identical to the C strbuf result). NUL bytes are
+// preserved by the chr()/join path (hexa_chr_byte uses a length-1 strbuf).
+// RUNEQ-gated vs the shipping C hexa_from_char_code — see verdict.
+@pure fn rt_from_char_code(n: int) -> string {
+    let mut code = n
+    if code < 0 { code = 0 }
+    if code < 128 {                       // 0x80
+        return rt_str_from_chars([code])
+    }
+    if code < 2048 {                      // 0x800
+        let b0 = 192 + (code / 64)            // 0xC0 | (code >> 6)
+        let b1 = 128 + (code % 64)            // 0x80 | (code & 0x3F)
+        return rt_str_from_chars([b0, b1])
+    }
+    if code < 65536 {                     // 0x10000
+        let b0 = 224 + (code / 4096)         // 0xE0 | (code >> 12)
+        let b1 = 128 + ((code / 64) % 64)    // 0x80 | ((code >> 6) & 0x3F)
+        let b2 = 128 + (code % 64)           // 0x80 | (code & 0x3F)
+        return rt_str_from_chars([b0, b1, b2])
+    }
+    let b0 = 240 + (code / 262144)           // 0xF0 | (code >> 18)
+    let b1 = 128 + ((code / 4096) % 64)      // 0x80 | ((code >> 12) & 0x3F)
+    let b2 = 128 + ((code / 64) % 64)        // 0x80 | ((code >> 6) & 0x3F)
+    let b3 = 128 + (code % 64)               // 0x80 | (code & 0x3F)
+    return rt_str_from_chars([b0, b1, b2, b3])
+}
+
+// ── bytes_to_str_raw — RUNTIME-PORT M2 (runtime.c L6105) ─────────────
+// Wrap a [int] (each ∈ 0..255) as a string whose bytes are exactly those
+// integers — NO UTF-8 codepoint re-encoding (RFC 030). Distinct contract
+// from rt_str_from_chars: any element <0 or >255 voids the whole result to
+// "" (Phase-1 silent-error policy), and empty / non-array → "".
+//
+// ⚠ RUNEQ status = DIFFER (NUL-clean primitive gap) — see verdict
+//   .verdicts/runtime-port/M2-hexa_bytes_to_str_raw.txt. For inputs with
+//   NO embedded NUL this is byte-identical to the C SSOT (Hi / kör-raw /
+//   range-guard cases all PORT-EQ). For inputs containing 0x00 it DIFFERs:
+//   the C body uses hexa_strbuf_alloc(n) with an explicit length header so
+//   NULs survive (RFC 030 Phase 2), whereas this hexa body routes through
+//   chr()/join → hexa_str_join, which derives length from the NUL-truncated
+//   C string and collapses any NUL-containing result to "". This is the
+//   SAME class of primitive gap M2 hit on hexa_dict_keys: closing it needs
+//   a NUL-clean string builder intrinsic (a length-header-carrying analogue
+//   of hexa_strbuf_alloc exposed to hexa), NOT a body change here. UNTIL
+//   that primitive lands this fn is NOT wired as the live delegation — the
+//   C SSOT stays authoritative for NUL-bearing callers (image_read PNG
+//   IHDR etc.). Kept in-source as the proven non-NUL port + the falsifier.
+@pure fn rt_bytes_to_str_raw(arr: [int]) -> string {
+    let n = len(arr)
+    if n <= 0 { return "" }
+    let mut i = 0
+    while i < n {
+        let b = arr[i]
+        if b < 0 { return "" }
+        if b > 255 { return "" }
+        i = i + 1
+    }
+    return rt_str_from_chars(arr)
+}
+
 // ── parse_int (runtime.c L4688) ─────────────────────────────────────
 // Sign + optional 0x/0X hex prefix + digits. Unparseable / non-digit at
 // start → 0 (strtoll behavior: stops at first invalid char, returns 0 if

@@ -174,5 +174,25 @@ fn main() -> int {
     check_eq_int("IT5 char_code_at UTF-8 first-byte", rt_str_char_code_at(it5_kor, 0), 237)
     check_eq_int("IT5 str len 3-byte codepoint",      len(it5_kor), 3)
 
+    // IT6: from_char_code — RUNTIME-PORT M2 (RUNEQ PORT-EQ 32/32 vs C
+    //      hexa_from_char_code). 1/2/3/4-byte UTF-8 boundaries + the
+    //      negative-clamp edge. "한" = U+D55C re-encodes to its 3 bytes.
+    check_eq_str("IT6 fcc ASCII 'A'",        rt_from_char_code(65), "A")
+    check_eq_int("IT6 fcc 1-byte len",       len(rt_from_char_code(127)), 1)
+    check_eq_int("IT6 fcc 2-byte len",       len(rt_from_char_code(169)), 2)   // ©
+    check_eq_str("IT6 fcc 3-byte 한",         rt_from_char_code(54620), "한")
+    check_eq_int("IT6 fcc 4-byte len",       len(rt_from_char_code(128640)), 4) // 🚀
+    check_eq_str("IT6 fcc neg→clamp NUL",    rt_from_char_code(-1), rt_from_char_code(0))
+
+    // IT7: bytes_to_str_raw — RUNTIME-PORT M2. ⚠ DIFFER on embedded NUL
+    //      (NUL-clean primitive gap, see verdict) — assert ONLY the
+    //      non-NUL contract that IS PORT-EQ: identity for in-range bytes,
+    //      empty for out-of-range / empty input.
+    check_eq_str("IT7 b2s 'Hi'",             rt_bytes_to_str_raw([72, 105]), "Hi")
+    check_eq_str("IT7 b2s 한-raw bytes",      rt_bytes_to_str_raw([237, 149, 156]), "한")
+    check_eq_str("IT7 b2s empty→\"\"",        rt_bytes_to_str_raw([]), "")
+    check_eq_str("IT7 b2s oob 256→\"\"",      rt_bytes_to_str_raw([72, 256, 73]), "")
+    check_eq_str("IT7 b2s oob neg→\"\"",      rt_bytes_to_str_raw([72, 0 - 1, 73]), "")
+
     return 0
 }
