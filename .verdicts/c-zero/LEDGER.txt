@@ -115,3 +115,25 @@ Plus two additional GPU-adjacent self/native shims discovered with byte_diff har
     hexa_cc.c       28482  NO emitter — HEXA-CC-ZERO-owned, out of C-ZERO scope
   All authored GPU-substrate shims with a faithful (non-diverged) emitter are now proven; the only
   GPU-substrate residual is runtime_cuda, an honestly-attributed live-SSOT divergence (not a fake pass).
+
+════════════════════════════════════════════════════════════════════════════
+7. RECLASSIFICATION (2026-06-03) — hexa_cc.c is NOT port debt
+════════════════════════════════════════════════════════════════════════════
+The §3 "remaining-named: hexa_cc.c 28482" line was a MISCLASSIFICATION. Per its
+own self/native/hexa_cc.c.hexanoport marker, hexa_cc.c is the GENERATED boot image
+of the self-host toolchain (SSOT = self/lexer.hexa + parser.hexa + type_checker.hexa
++ codegen.hexa) — "it IS the output of porting", already git-rm'd (#2065) + bootstrap
+via cold-seed (HEXA-CC-ZERO P6 half-A). It is compiler OUTPUT, not hand-authored C.
+See .verdicts/c-zero/F-HEXA-CC-RECLASSIFY.txt for the full 7-marker classification.
+
+  CORRECTED authored-C accounting (hexa-lang):
+    generated artifacts (hexa_cc.c + 4 v2 siblings)   → SSOT is .hexa; NOT port debt
+    irreducible runtime  (runtime.c 14919)            → .hexanoport by design; NOT a target
+    platform FFI shims   (hxblas/hxqwen32b/hxvdsp)    → irreducible external ABI (formal)
+    emitter-backed shims (16 A2 + 4 GPU substrate)    → BYTE-EQ proven (this session)
+    runtime_cuda emitter                              → nvcc-CLEAN on RTX 5070 (this session)
+
+  => C-ZERO PORTABLE-SURFACE BURN-DOWN COMPLETE. Every .c that COULD be hexa-emitter-
+     backed IS (proven). The residual C is exactly the two formally-irreducible classes
+     (the bootstrap runtime floor + the vendor-FFI boundary) — neither is "live authored
+     C debt"; both are .hexanoport by design. There is no remaining port work.
