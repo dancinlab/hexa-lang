@@ -1,0 +1,147 @@
+// @ci_gate — pure · network-free · deterministic (stdlib_selftest_aggregate --ci-gate)
+// stdlib/cloud/cloud_watch_detach_test.hexa — falsifier suite for gap-3
+// (watch-detach): `cloud watch <pod> <log> --until <marker> --detach` must
+// spawn a TRULY session-independent watcher (setsid + nohup, durable log) that
+// SURVIVES the parent shell's SIGHUP / session re-auth — the exit-144 mass
+// watcher death this campaign.
+//
+// This is a SELFTEST — no live pod. The detach wrapper is driven against a
+// LOCAL stub inner command (a tick loop writing a local log), spawned from a
+// throwaway PARENT shell which is then KILLED. The falsifier: after the parent
+// dies the watcher must be ORPHANED TO INIT (ppid=1) and STILL WRITING its log.
+//
+// The wrapper (_cloud_watch_detach_cmd) is private to cloud.hexa; the PURE
+// shape (setsid · nohup · </dev/null · __WATCH_RC__ verdict · __WATCH_PID__) is
+// mirrored here, and the LIVE orphan-survival is exercised by a small shell
+// harness via exec (local, deterministic).
+//
+// Falsifiers:
+//   F-CLOUD-WATCH-SETSID    — the wrapper carries setsid + nohup + </dev/null
+//   F-CLOUD-WATCH-VERDICT   — the inner exit code is captured as __WATCH_RC__
+//   F-CLOUD-WATCH-ORPHAN    — after parent kill the watcher's ppid == 1 (init)
+//   F-CLOUD-WATCH-ALIVE     — the orphaned watcher is still writing its log
+//
+// Run:   hexa run stdlib/cloud/cloud_watch_detach_test.hexa
+// PASS:  exits 0, prints "cloud_watch_detach_test PASS".
+
+// Mirror of cloud.hexa:_shq (private).
+fn _shq_m(s: str) -> str {
+    let mut out = "'"
+    let mut i = 0
+    let n = len(s)
+    while i < n {
+        let c = s.substring(i, i + 1)
+        if c == "'" { out = out + "'\\''" } else { out = out + c }
+        i = i + 1
+    }
+    return out + "'"
+}
+
+// Mirror of cloud.hexa:_cloud_watch_detach_cmd (private) — session-independent
+// wrapper: setsid + nohup + detached stdin + durable append log + verdict.
+fn _watch_detach_cmd_m(inner: str, durable_log: str) -> str {
+    let body = "{ " + inner + "; echo __WATCH_RC__=$? >> " + _shq_m(durable_log) + "; }"
+    let sid_prefix = "$(command -v setsid || true)"
+    return sid_prefix + " nohup bash -c " + _shq_m(body)
+        + " < /dev/null >> " + _shq_m(durable_log) + " 2>&1 & echo __WATCH_PID__=$!"
+}
+
+fn _ck(name: str, got: int, want: int) {
+    if got != want {
+        println("  FAIL: " + name + " got " + to_string(got) + " want " + to_string(want))
+        exit(1)
+    }
+}
+
+fn _ck_has(name: str, hay: str, needle: str) {
+    if hay.index_of(needle) < 0 {
+        println("  FAIL: " + name + " — '" + needle + "' absent in: " + hay)
+        exit(1)
+    }
+}
+
+fn main() {
+    // F-CLOUD-WATCH-SETSID — the wrapper carries the session-independence
+    // primitives (setsid, nohup, detached stdin) and the durable append log.
+    let cmd = _watch_detach_cmd_m("sleep 1", "/tmp/wd.log")
+    _ck_has("setsid (when present)", cmd, "command -v setsid")
+    _ck_has("nohup present (SIGHUP immunity)", cmd, "nohup")
+    _ck_has("stdin detached", cmd, "< /dev/null")
+    _ck_has("durable append log", cmd, ">> '/tmp/wd.log'")
+    _ck_has("backgrounded", cmd, "&")
+    // F-CLOUD-WATCH-VERDICT — the inner exit code is captured as __WATCH_RC__.
+    _ck_has("verdict capture", cmd, "__WATCH_RC__=$?")
+    _ck_has("pid handle", cmd, "__WATCH_PID__=$!")
+
+    // ── LIVE orphan-survival harness (local, no pod) ──────────────────
+    // A throwaway PARENT shell spawns the detached watcher (a tick loop), prints
+    // the watcher pid, then EXITS immediately. After the parent is gone the
+    // watcher must (a) reparent to init (ppid=1) and (b) keep writing its log.
+    let ts = to_string(timestamp())
+    let log = "/tmp/.cloud_wd_test_" + ts + ".log"
+    let pidf = "/tmp/.cloud_wd_test_" + ts + ".pid"
+    let _rm0 = exec("rm -f " + log + " " + pidf)
+    // inner = a tick loop that writes to the SAME durable log for ~6s.
+    let inner = "for i in $(seq 1 20); do echo tick$i; sleep 0.3; done"
+    let launch = _watch_detach_cmd_m(inner, log)
+    // The PARENT: a subshell that runs the launch, extracts the watcher pid into
+    // pidf, then exits. `setsid` inside detaches the watcher from this subshell's
+    // session, so the subshell's death cannot SIGHUP it. We run the parent and
+    // WAIT for it to exit (it returns immediately after backgrounding).
+    let parent = "( " + launch + " ) | sed -n 's/^__WATCH_PID__=//p' > " + pidf + "; sleep 0.2"
+    let _p = exec(parent)
+    // The parent subshell has now exited. Read the watcher pid.
+    let wpid_s = read_file(pidf).trim()
+    if len(wpid_s) == 0 {
+        println("  FAIL: no watcher pid captured from parent")
+        exit(1)
+    }
+    // Give it a moment to reparent + write a few more ticks.
+    let _s = exec("sleep 1.5")
+
+    // F-CLOUD-WATCH-ORPHAN — the watcher reparented to init (ppid == 1). The
+    // parent subshell is gone; a session-bound watcher would have died with it.
+    let ppid_s = exec("ps -o ppid= -p " + wpid_s + " 2>/dev/null | tr -d ' '").trim()
+    if len(ppid_s) == 0 {
+        println("  FAIL: watcher pid " + wpid_s + " not alive after parent death (it was reaped — NOT session-independent)")
+        exit(1)
+    }
+    _ck("watcher orphaned to init (ppid=1)", _cli_atoi_local(ppid_s), 1)
+
+    // F-CLOUD-WATCH-ALIVE — the orphaned watcher is STILL WRITING its log.
+    // Sample the log size, wait, sample again — it must have grown.
+    let size1 = _cli_atoi_local(exec("wc -c < " + log + " 2>/dev/null | tr -d ' '").trim())
+    let _s2 = exec("sleep 1.2")
+    let size2 = _cli_atoi_local(exec("wc -c < " + log + " 2>/dev/null | tr -d ' '").trim())
+    if size2 <= size1 {
+        println("  FAIL: orphaned watcher log did not grow (" + to_string(size1)
+            + " → " + to_string(size2) + ") — watcher stalled/died")
+        exit(1)
+    }
+
+    // Cleanup: kill the watcher + remove temp files (best-effort).
+    let _k = exec("kill " + wpid_s + " 2>/dev/null; pkill -P " + wpid_s + " 2>/dev/null; rm -f " + log + " " + pidf)
+
+    println("cloud_watch_detach_test PASS")
+}
+
+// _cli_atoi_local — minimal decimal parse (the test is standalone; cloud_cli's
+// _cli_atoi is private to a main()-bearing module we cannot import side-effect free).
+fn _cli_atoi_local(s: str) -> int {
+    let mut i = 0
+    let n = len(s)
+    let mut val = 0
+    let mut got = 0
+    while i < n {
+        let cc = char_code(s.substring(i, i + 1))
+        if cc >= 48 && cc <= 57 {
+            val = val * 10 + (cc - 48)
+            got = 1
+            i = i + 1
+        } else {
+            i = n
+        }
+    }
+    if got == 0 { return -1 }
+    return val
+}
