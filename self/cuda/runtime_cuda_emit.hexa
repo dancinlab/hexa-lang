@@ -92,6 +92,12 @@ fn emit_runtime_cuda_c() -> str {
             "static _CudaFarrSlot* g_slots     = NULL;\n" +
             "static int64_t        g_slot_cap  = 0;\n" +
             "\n" +
+            "/* Forward declarations — these static helpers are defined further down but\n" +
+            " * called earlier (e.g. by _hx_cuda_farr_im2col_gpu); nvcc -x cu compiles as\n" +
+            " * C++ which requires a prior declaration. */\n" +
+            "static int _ensure_dev_alloc_out(int64_t out_id, int64_t need_len);\n" +
+            "static int _d2h_out(int64_t out_id, int64_t copy_len);\n" +
+            "\n" +
             "static int _ensure_slot_cap(int64_t id) {\n" +
             "    if (id < 0) return -1;\n" +
             "    if (id < g_slot_cap) return 0;\n" +
@@ -3297,7 +3303,7 @@ fn emit_runtime_cuda_c() -> str {
             " * Adam first/second moments m and v are kept DEVICE-RESIDENT across the\n" +
             " * step boundary: NO D2H of m/v after the kernel. They are only ever\n" +
             " * read + written by AdamW itself (never by the host fwd/bwd — in\n" +
-            " * clm_prod.hexa m_*/v_* escape ONLY into _adam), so there is no host\n" +
+            " * clm_prod.hexa m_* / v_* escape ONLY into _adam), so there is no host\n" +
             " * reader between steps and the device buffer is the sole authoritative\n" +
             " * copy. W IS still D2H'd (the host forward re-quantizes the conv\n" +
             " * weights, so W must materialize on host every step — contract kept).\n" +

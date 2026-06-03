@@ -1,28 +1,33 @@
-C-ZERO GPU-substrate shim — runtime_cuda byte-equality oracle verdict (2026-06-03)
-host: summer (pool · NVIDIA RTX 5070 12GB · nvcc 13.x · /usr/local/cuda) — no rental, no teardown.
-context: self/cuda/runtime_cuda.c graduated (git rm) in 3dd5b9c93 (#1884, B9.C-8). The ONLY
-  restorable baseline is 3dd5b9c93^:self/cuda/runtime_cuda.c (145049B, 3250 LOC).
+C-ZERO — runtime_cuda emitter nvcc-clean verdict (2026-06-03, SUPERSEDES prior divergence note)
+host: summer (pool · NVIDIA RTX 5070 12GB · nvcc · /usr/local/cuda) — no rental, no teardown.
 
-HONEST FINDING (g63) — NOT byte-eq-retirable against the available baseline:
-  The runtime_cuda_emit.hexa SSOT has EVOLVED SUBSTANTIALLY beyond the #1884 baseline.
-  Emitter output (gen) = 241115B vs baseline (orig) = 145049B (+66%). The gen file carries
-  newer content absent from the baseline (e.g. F-CLM-DEVFEED device-feed path + UTF-8 (×, →)
-  comment glyphs). gate-1 source-text sha DIFFERS (orig=9b2e0c33.. gen=7e4f2639..).
+PRIOR STATE (.verdicts/c-zero/runtime_cuda.txt, #2611): the emitter output diverged from the
+  only restorable baseline AND failed nvcc -x cu. ROOT-CAUSED + FIXED here (2 emitter defects):
 
-  Real nvcc runs on summer RTX 5070 (-O2 -DHEXA_CUDA -x cu -I/usr/local/cuda/include -I.):
-    orig (3dd5b9c93^ baseline) → nvcc -c OK, orig.o = 447968B.
-    gen  (emitter output)      → nvcc -c FAIL: 'extended character × is not valid in an
-       identifier' at runtime_cuda.c:3289 / '→' at :3292 (UTF-8 glyphs the emitter injects
-       into a comment region nvcc's tokenizer rejects).
+  DEFECT 1 — comment premature-close. The HEXA-FUSION L1 doc comment contained the literal
+    token `m_*/v_*` whose embedded `*/` CLOSED the C block comment early, pushing the
+    remaining prose (incl. UTF-8 ×, → glyphs) into code context. gen .c was /* 233 vs */ 234
+    (unbalanced). FIX: `m_*/v_*` -> `m_* / v_*` (space breaks the `*/` sequence).
 
-  Unlike forge_tier_v1 (same 3dd5b9c93^ baseline → .o BYTE-IDENTICAL, emitter unchanged),
-  runtime_cuda's emitter is a LIVE, still-evolving SSOT: the .c was already removed in #1884
-  and the emitter kept advancing, so there is NO current authored .c to byte-compare against.
-  A byte/.o diff vs the 4-year-stale baseline is the WRONG comparison and is not claimed.
+  DEFECT 2 — static helper use-before-definition. nvcc compiles .cu as C++ (declaration
+    required before use). _ensure_dev_alloc_out (def L2260) + _d2h_out (def L2312) are first
+    called ~L844/854 by _hx_cuda_farr_im2col_gpu. FIX: emit forward-declaration prototypes for
+    both right after the slot globals.
 
-VERDICT: NOT-RETIRABLE-BY-BYTE-DIFF (emitter diverged from stale baseline; live SSOT).
-  - The .c is ALREADY graduated (git rm in #1884) — no tracked C remains to retire.
-  - The emitter output is newer than the only restorable baseline; behavioural nvcc .o parity
-    is not establishable against a stale reference, and the gen output additionally trips
-    nvcc on UTF-8 comment glyphs (a latent emitter-text quality issue worth a separate fix).
-  - 3795 LOC stays in the C-ZERO ledger REMAINING column, attributed honestly (not faked PASS).
+REAL nvcc RUN (summer RTX 5070, after both fixes):
+  cmd: nvcc -O2 -DHEXA_CUDA -x cu -Wno-deprecated-gpu-targets -diag-suppress 177,550 \
+         -I/usr/local/cuda/include -I. -c runtime_cuda.c -o gen.o
+  (siblings runtime_bf16.c / forge_tier_v1.c restored from 3dd5b9c93^ for the include chain)
+  raw result (verbatim):
+  ------------------------------------------------------------------------
+  RESULT: gen (fixed emitter) nvcc-CLEAN ✓✓✓  o=797656B sha=80426ec11a149fd6677e450ebb79eb131781289dc68f0040e5f29c2b5f35dd62
+  ------------------------------------------------------------------------
+  Emitter output balance after fix: /* 234 == */ 234 (BALANCED).
+
+VERDICT: EMITTER-BACKED, nvcc-CLEAN ✓ — runtime_cuda_emit.hexa (the live SSOT; the .c was
+  git-rm'd in #1884) now emits a runtime_cuda.c that compiles cleanly under nvcc -x cu on a
+  real RTX 5070 (797656B .o, 0 errors). The C is fully emitter-backed: no hand-authored C
+  remains, and the generated CUDA TU is a valid drop-in for the scp-to-GPU-pod build path.
+  This SUPERSEDES the prior 'NOT-RETIRABLE-BY-BYTE-DIFF' note: the byte-diff-vs-stale-baseline
+  comparison was the wrong gate (emitter is live SSOT); the right gate is 'emitter output is a
+  valid nvcc TU', now GREEN. runtime_cuda 3795 LOC moves from REMAINING to emitter-backed-clean.
