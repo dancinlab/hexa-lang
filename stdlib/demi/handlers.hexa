@@ -341,6 +341,110 @@ pub fn handler_list_all() -> int {
     return 0
 }
 
+// ── show (PR#7 · LIVE) ───────────────────────────────────────────────
+//
+// `demi show <path>` — the record + provenance dump. Ports the Swift `show`
+// (main.swift:183-218): `RecordLoader.load(relativePath:)` (LOAD-BY-PATH only,
+// NOT resolveRecord — id resolution is `verify`'s; `show` takes a literal path)
+// → on failure a `show: <error>\n` stderr line + exit 2; on success the typed
+// fields in the EXACT Swift order/spacing, with the gate-failure / scope-caveat
+// counts followed by their `  [i] <value>` rows. d3: the load + invariant-(a)
+// guard come from the #5 RecordLoader (rl_load_by_path / rl_error_line); this
+// handler adds only the field-render.
+//
+// rl_error_line() prefixes `verify: ` (its first consumer was verifyRecord);
+// the Swift `show` prefix is `show: ` and the failure exit code is 2 (verify's
+// is 1). So _show_err re-derives the SAME message body with the show prefix,
+// rather than thread a prefix param through the shared primitive.
+fn _show_err(status: string, path: string) -> string {
+    if status == "outside" {
+        return "show: Refused (@D g_cockpit_isolation invariant a): path is outside ../exports/**: " + path
+    }
+    if status == "notfound" {
+        return "show: Record file not found: " + path
+    }
+    // decode (read OK, JSON undecodable) — Swift appends the locale/machine-
+    // dependent Foundation decode message after "Decode failed (<path>): "; the
+    // deterministic, golden-able cases are outside/notfound. A decode failure
+    // still exits 2 with the path-prefixed line (its tail is matched only LIVE
+    // against the Swift binary, never as a hardcoded golden).
+    return "show: Decode failed (" + path + ")"
+}
+
+// _show_path_str(obj, path) — dotted-path lookup → string ("" if absent / not a
+// scalar). Mirrors verify_record's _vr_path_str (json_object_get_str does not
+// split on "."). int/bool terminals render via to_string EXACTLY as Swift
+// prints them (4 · 64 · true · false) — verified against the Swift reference.
+fn _show_path_str(obj, path: string) -> string {
+    let v = json_object_get_path(obj, path)
+    if type_of(v) == "void" { return "" }
+    return to_string(v)
+}
+
+// handler_show(argv) — `demi show <path>`.
+pub fn handler_show(argv: [string]) -> int {
+    // Swift requires the path arg; the manifest-rendered usage covers the
+    // missing-arg case (not a registered parity cell), so keep it honest with
+    // a `show: ` stderr line + exit 2 (Swift's failure exit code).
+    if len(argv) < 1 {
+        eprintln("show: missing <path> argument")
+        return 2
+    }
+    let res = rl_load_by_path(argv[0])
+    if res[0] != "ok" {
+        eprintln(_show_err(res[0], res[1]))
+        return 2
+    }
+    let path = res[1]
+    let obj = json_parse_object(read_file(path))
+
+    // sim_commit = first 12 chars of sim_commit_hash (Swift `.prefix(12)`).
+    let sim_commit_full = _show_path_str(obj, "provenance.sim_commit_hash")
+    let sim_commit = if len(sim_commit_full) > 12 {
+        sim_commit_full.substring(0, 12)
+    } else { sim_commit_full }
+
+    // Fields in the EXACT Swift print order + the byte-exact label padding.
+    // (provenance.measurement_gate: has NO pad before the value — Swift parity.)
+    println("record_id:                  " + json_object_get_str(obj, "record_id", ""))
+    println("interface:                  " + json_object_get_str(obj, "interface", ""))
+    println("schema_version:             " + json_object_get_str(obj, "schema_version", ""))
+    println("produced_at_utc:            " + json_object_get_str(obj, "produced_at_utc", ""))
+    println("topology.kind:              " + _show_path_str(obj, "topology.kind"))
+    println("topology.degree:            " + _show_path_str(obj, "topology.degree"))
+    println("topology.node_count:        " + _show_path_str(obj, "topology.node_count"))
+    println("topology.routing:           " + _show_path_str(obj, "topology.routing"))
+    println("traffic:                    " + json_object_get_str(obj, "traffic", ""))
+    println("verdict.f1:                 " + _show_path_str(obj, "verdict.f1"))
+    println("verdict.f2:                 " + _show_path_str(obj, "verdict.f2"))
+    println("verdict.rationale:          " + _show_path_str(obj, "verdict.rationale"))
+    println("provenance.measurement_gate:" + _show_path_str(obj, "provenance.measurement_gate"))
+    println("provenance.absorbed:        " + _show_path_str(obj, "provenance.absorbed"))
+    println("provenance.sim_engine:      " + _show_path_str(obj, "provenance.sim_engine"))
+    println("provenance.sim_commit:      " + sim_commit)
+    println("provenance.consumer_target: " + _show_path_str(obj, "provenance.consumer_target"))
+    println("provenance.atlas_cite:      " + _show_path_str(obj, "provenance.atlas_cite_block"))
+
+    let gfs = json_object_get_path(obj, "provenance.gate_failures")
+    let gf_n = if type_of(gfs) == "array" { len(gfs) } else { 0 }
+    println("provenance.gate_failures:   " + to_string(gf_n))
+    let mut gi = 0
+    while gi < gf_n {
+        println("  [" + to_string(gi) + "] " + to_string(gfs[gi]))
+        gi = gi + 1
+    }
+
+    let scs = json_object_get_path(obj, "provenance.scope_caveats")
+    let sc_n = if type_of(scs) == "array" { len(scs) } else { 0 }
+    println("provenance.scope_caveats:   " + to_string(sc_n))
+    let mut si = 0
+    while si < sc_n {
+        println("  [" + to_string(si) + "] " + to_string(scs[si]))
+        si = si + 1
+    }
+    return 0
+}
+
 // handler_local(target, argv) — generic local-handler entry. Routes by the
 // manifest `target` id to the ported hexa-native handler, else the honest
 // stub. The ONE place the local family fans out — adding a ported handler is
@@ -349,6 +453,7 @@ pub fn handler_local(target: string, argv: [string]) -> int {
     if target == "action" { return handler_action(argv) }
     if target == "verify" { return handler_verify(argv) }
     if target == "atlas"  { return handler_atlas(argv) }
+    if target == "show"           { return handler_show(argv) }
     if target == "list_all"       { return handler_list_all() }
     if target == "list_records"   { return handler_list("f1f2") }
     if target == "list_decisions" { return handler_list("decision") }
