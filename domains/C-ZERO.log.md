@@ -2,6 +2,18 @@
 
 ## 2026-06-03 — milestone: full shim oracle sweep + burn-down ledger
 
+## 2026-06-03 — GPU-substrate shim sweep (pool summer RTX 5070, no rental)
+
+- [x] runtime_bf16 (787) — BYTE-EQ (source-text + .o, 6/6)
+- [x] forge_tier_v1 (343) — RETIRABLE via .o-IDENTITY (gate-2/3 .o byte-eq; src cosmetic drift)
+- [x] lora_cuda_host (185) — BYTE-EQ (3/3)
+- [x] gpu_codegen_stub (264) — BYTE-EQ (6/6)
+- [ ] runtime_cuda (3795) — NOT-RETIRABLE-BY-BYTE-DIFF: emitter SSOT diverged from the only restorable
+      baseline (#1884 3dd5b9c93^); gen=241KB vs 145KB. orig nvcc-OK (447968B .o on RTX 5070), gen trips
+      nvcc on UTF-8 comment glyphs. .c already git-rm in #1884. Honest non-pass (g63), not faked.
+- GPU verification ran FREE on pool host summer (RTX 5070 + nvcc) — no cloud rental, no teardown (g9).
+- Cumulative oracle-proven-retirable: 3946 → 5525 LOC. See .verdicts/c-zero/LEDGER.txt §5-6.
+
 Ran the replay byte-diff oracle for the REMAINING 11 emitter-backed A2 shims (INVENTORY A2 not
 yet done). Recipe (same as M2): restore the authored baseline from pre-deletion parent
 `151c52c82502e93d01735c58b43b017d102fee63:self/native/<mod>.c`, run

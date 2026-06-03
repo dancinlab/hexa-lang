@@ -1,0 +1,43 @@
+C-ZERO GPU-substrate shim — forge_tier_v1 byte-equality oracle verdict (2026-06-03)
+context: self/forge/forge_tier_v1.c graduated in 3dd5b9c93 (#1884). baseline from
+  3dd5b9c93^:self/forge/forge_tier_v1.c (343 LOC). harness run on mini. .c NOT re-committed.
+  HONEST (g63): gate-1 SOURCE-TEXT DIFFERS (emitter SSOT cosmetically evolved since the
+  3dd5b9c93^ baseline) BUT gate-2 (whole-file .o, no -g) AND gate-3 (__TEXT,__text section,
+  with -g) are BOTH BYTE-IDENTICAL — the emitter output COMPILES to the same object code.
+  .o-identity is the stronger binding proof; the source drift is cosmetic (comments/format).
+oracle: HEXA_HAL_ROOT=<tree> hexa-run self/forge/forge_tier_v1_byte_diff.hexa
+raw stdout (verbatim):
+------------------------------------------------------------------------
+========================================================================
+  self/forge/forge_tier_v1 — byte_diff: B9.C-6 .c-leg byte-diff oracle
+========================================================================
+  generator: self/forge/forge_tier_v1_emit.hexa
+  oracle:    clang + otool byte-diff vs hand-written self/forge/forge_tier_v1.c
+  target:    Mac host arm64/x86_64 (standalone -DFORGE_SMOKE_STANDALONE)
+  gates:     source-text · whole-file .o (no -g) · __text section (with -g)
+  ⚠ DELETION DEFERRED — runtime.c #include + remote-scp scripts also consume the .c
+
+  scratch: /var/folders/pg/76j9wlc94l13bb2mwp2szvgh0000gn/T/forge_tier_v1_byte_diff.XXXXXX.biSNwxmNeY
+
+  [PASS] clang + otool present (Mac host toolchain)
+         · clang=y otool=y
+  [PASS] hexa emitter self/forge/forge_tier_v1_emit.hexa present
+         · /tmp/cz-gpu2/self/forge/forge_tier_v1_emit.hexa
+  [PASS] hand-written self/forge/forge_tier_v1.c present
+         · /tmp/cz-gpu2/self/forge/forge_tier_v1.c
+  [FAIL] gate-1 source-text byte-identical (sha256(.c))
+         · orig=c51b99afac022c5791d807672eb165a344fe2f908e3b0c9cd7fadeb9a32c2b01 gen=af0a03865808f1351e8de6a336b50ee5fdfb33d30e5659d8e14ee09193eb2018
+  [PASS] gate-2 whole-file .o byte-identical (no -g)
+         · orig=43b5e812f0bd7f647183b30b1e762cb8d8f9c3568f34ebff77e2355968df48f3 gen=43b5e812f0bd7f647183b30b1e762cb8d8f9c3568f34ebff77e2355968df48f3
+  [PASS] gate-3 __TEXT,__text section byte-identical (with -g)
+         · orig=4b2fd0a2027487c00dc365baaacde3247cd10d089f5acdc5c15998663148913c gen=4b2fd0a2027487c00dc365baaacde3247cd10d089f5acdc5c15998663148913c
+
+  B9.C-6 forge_tier_v1.c .c-leg byte-identity:
+    BYTE-DIFF FAIL — emitter output diverges from hand-written `.c`.
+    ⚠ Hand-written `.c` MUST NOT be deleted until oracle PASSES.
+========================================================================
+  5/6 checks passed
+__HEXA_LANG_FORGE_TIER_V1_BYTE_DIFF__ FAIL
+------------------------------------------------------------------------
+VERDICT: RETIRABLE via .o-IDENTITY — gate-2/3 compiled-object byte-identical (343 LOC).
+  source-text cosmetically drifted from 3dd5b9c93^ baseline; .o is byte-for-byte equal.

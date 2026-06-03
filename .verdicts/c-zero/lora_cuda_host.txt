@@ -1,0 +1,29 @@
+C-ZERO shim — lora_cuda_host byte-equality oracle verdict (2026-06-03)
+context: self/native/lora_cuda_host.c graduated in a422631a2 (#1894). baseline from
+  a422631a2^:self/native/lora_cuda_host.c (185 LOC). harness run on mini. .c NOT re-committed.
+oracle: HEXA_HAL_ROOT=<tree> hexa-run self/native/lora_cuda_host_byte_diff.hexa
+raw stdout (verbatim):
+------------------------------------------------------------------------
+========================================================================
+  self/native — lora_cuda_host_byte_diff: B9.C .c-text byte-diff oracle
+========================================================================
+  generator: self/native/lora_cuda_host_emit.hexa
+  gate:      gate-1 source-SHA (activation criterion)
+
+  scratch: /var/folders/pg/76j9wlc94l13bb2mwp2szvgh0000gn/T/lora_cuda_host_byte_diff.XXXXXX.d5hrTGSmCB
+
+  [PASS] emitter self/native/lora_cuda_host_emit.hexa present
+         · /tmp/cz-gpu2/self/native/lora_cuda_host_emit.hexa
+  [PASS] hand-written self/native/lora_cuda_host.c present
+         · /tmp/cz-gpu2/self/native/lora_cuda_host.c
+  [PASS] gate-1 source-text byte-identical (sha256(.c))
+         · orig=37cff552ac872c7af88136215422d553bbeb5edaf3838c9118f877d0ccdee0e9 gen=37cff552ac872c7af88136215422d553bbeb5edaf3838c9118f877d0ccdee0e9
+
+  B9.C lora_cuda_host.c .c-text byte-identity:
+    PROVEN ✓ — hand-written lora_cuda_host.c is fully hexa-emittable.
+    DELETION GATE OPEN — self/native/lora_cuda_host.c may be `git rm`.
+========================================================================
+  3/3 checks passed
+__HEXA_LANG_LORA_CUDA_HOST_BYTE_DIFF__ PASS
+------------------------------------------------------------------------
+VERDICT: BYTE-EQ — emitter reproduces lora_cuda_host.c (3/3). Retirable (185 LOC).

@@ -1,0 +1,40 @@
+C-ZERO GPU-substrate shim — runtime_bf16 byte-equality oracle verdict (2026-06-03)
+context: self/cuda/runtime_bf16.c graduated (git rm) in 3dd5b9c93 (#1884, B9.C-8).
+  baseline restored from 3dd5b9c93^:self/cuda/runtime_bf16.c (787 LOC), harness
+  self/cuda/runtime_bf16_byte_diff.hexa run on mini (HEXA_HAL_ROOT=repo). .c NOT re-committed.
+oracle: HEXA_HAL_ROOT=<tree> hexa-run self/cuda/runtime_bf16_byte_diff.hexa
+raw stdout (verbatim):
+------------------------------------------------------------------------
+========================================================================
+  self/cuda — runtime_bf16_byte_diff: B9.C-5 .c-leg byte-diff oracle
+========================================================================
+  generator: self/cuda/runtime_bf16_emit.hexa
+  oracle:    cc + otool byte-diff vs hand-written self/cuda/runtime_bf16.c
+  target:    Mac host (no HEXA_CUDA → portable plain-C path) — production
+             builds on remote GPU pods via nvcc dispatch scripts
+  gates:     source-text · whole-file .o (no -g) · __text section (with -g)
+
+  scratch: /var/folders/pg/76j9wlc94l13bb2mwp2szvgh0000gn/T/runtime_bf16_byte_diff.XXXXXX.gShrTjh0MI
+
+  [PASS] cc + otool present (Mac host toolchain)
+         · cc=y otool=y
+  [PASS] hexa emitter self/cuda/runtime_bf16_emit.hexa present
+         · /tmp/cz-gpu2/self/cuda/runtime_bf16_emit.hexa
+  [PASS] hand-written self/cuda/runtime_bf16.c present
+         · /tmp/cz-gpu2/self/cuda/runtime_bf16.c
+  [PASS] gate-1 source-text byte-identical (sha256(.c))
+         · orig=3c32db0855b632ff3dd7ef279ab2454a70783a742defa3a1016f4488a7d55835 gen=3c32db0855b632ff3dd7ef279ab2454a70783a742defa3a1016f4488a7d55835
+  [PASS] gate-2 whole-file .o byte-identical (no -g, no HEXA_CUDA)
+         · orig=29de085e6b8396bcdc51c8f1708baa73d86cf68194c883048fb76c3a3cb65ffd gen=29de085e6b8396bcdc51c8f1708baa73d86cf68194c883048fb76c3a3cb65ffd
+  [PASS] gate-3 __TEXT,__text section byte-identical (with -g)
+         · orig=5f6fd4cd4096f13352080eb53616e4e17ed545a969149c3b8fbc0fc6e6dd0718 gen=5f6fd4cd4096f13352080eb53616e4e17ed545a969149c3b8fbc0fc6e6dd0718
+
+  B9.C-5 runtime_bf16.c .c-leg byte-identity:
+    PROVEN ✓ — hand-written runtime_bf16.c is fully hexa-emittable.
+    DELETION GATE OPEN — self/cuda/runtime_bf16.c may be `git rm`.
+========================================================================
+  6/6 checks passed
+__HEXA_LANG_RUNTIME_BF16_BYTE_DIFF__ PASS
+------------------------------------------------------------------------
+VERDICT: BYTE-EQ — emitter runtime_bf16_emit.hexa reproduces hand-written
+  runtime_bf16.c (6/6 checks incl. source-text + .o). Emitter-superseded / retirable (787 LOC).
