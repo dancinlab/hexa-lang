@@ -1262,12 +1262,7 @@ fn emit_runtime_cuda_c() -> str {
             "    int grid_sz = (want > 1024) ? 1024 : (int)want;\n" +
             "    if (grid_sz < 1) grid_sz = 1;\n" +
             "    _hx_k_int4_quant_bwd<<<grid_sz, block_sz, 0, _forge_stream()>>>(DY, MASK, DW, n);\n" +
-            "    cudaError_t er = cudaDeviceSynchronize();\n" +
-            "    if (er != cudaSuccess) {\n" +
-            "        fprintf(stderr, \"[cuda] int4_quant_bwd launch failed: %s\\n\",\n" +
-            "                cudaGetErrorString(er));\n" +
-            "        return -1;\n" +
-            "    }\n" +
+            "    if (_forge_launch_check(\"int4_quant_bwd\") != 0) return -1;\n" +
             "    {\n" +
             "        HexaFarrEntry* e = &_hx_farr_table[dw_id];\n" +
             "        e->d_buf      = (void*)g_slots[dw_id].d_buf;\n" +
@@ -1744,12 +1739,7 @@ fn emit_runtime_cuda_c() -> str {
             "    int grid_sz = (want > 1024) ? 1024 : (int)want;\n" +
             "    if (grid_sz < 1) grid_sz = 1;\n" +
             "    _hx_k_gelu_bwd<<<grid_sz, block_sz, 0, _forge_stream()>>>(G, DA, DG, n);\n" +
-            "    cudaError_t er = cudaDeviceSynchronize();\n" +
-            "    if (er != cudaSuccess) {\n" +
-            "        fprintf(stderr, \"[cuda] gelu_bwd launch failed: %s\\n\",\n" +
-            "                cudaGetErrorString(er));\n" +
-            "        return -1;\n" +
-            "    }\n" +
+            "    if (_forge_launch_check(\"gelu_bwd\") != 0) return -1;\n" +
             "    {\n" +
             "        HexaFarrEntry* e = &_hx_farr_table[dg_id];\n" +
             "        e->d_buf      = (void*)g_slots[dg_id].d_buf;\n" +
@@ -1868,12 +1858,7 @@ fn emit_runtime_cuda_c() -> str {
             "        _hx_k_groupnorm_bwd_dx<<<grid_sz, block_sz, 0, _forge_stream()>>>(XHAT, INV, GAMMA, DY,\n" +
             "                                                      DX, T, C, G);\n" +
             "    }\n" +
-            "    cudaError_t er = cudaDeviceSynchronize();\n" +
-            "    if (er != cudaSuccess) {\n" +
-            "        fprintf(stderr, \"[cuda] groupnorm_bwd launch failed: %s\\n\",\n" +
-            "                cudaGetErrorString(er));\n" +
-            "        return -1;\n" +
-            "    }\n" +
+            "    if (_forge_launch_check(\"groupnorm_bwd\") != 0) return -1;\n" +
             "    {\n" +
             "        int64_t outs[3] = { dgamma_id, dbeta_id, dx_id };\n" +
             "        for (int k = 0; k < 3; k++) {\n" +
@@ -1928,12 +1913,7 @@ fn emit_runtime_cuda_c() -> str {
             "    int grid_sz = (want > 1024) ? 1024 : (int)want;\n" +
             "    if (grid_sz < 1) grid_sz = 1;\n" +
             "    _hx_k_expert_unpack2<<<grid_sz, block_sz, 0, _forge_stream()>>>(DEX_OUT, DEX0, DEX1, n);\n" +
-            "    cudaError_t er = cudaDeviceSynchronize();\n" +
-            "    if (er != cudaSuccess) {\n" +
-            "        fprintf(stderr, \"[cuda] expert_unpack2 launch failed: %s\\n\",\n" +
-            "                cudaGetErrorString(er));\n" +
-            "        return -1;\n" +
-            "    }\n" +
+            "    if (_forge_launch_check(\"expert_unpack2\") != 0) return -1;\n" +
             "    {\n" +
             "        int64_t outs[2] = { dex0_id, dex1_id };\n" +
             "        for (int k = 0; k < 2; k++) {\n" +
@@ -2004,12 +1984,7 @@ fn emit_runtime_cuda_c() -> str {
             "    int grid_sz = (want > 1024) ? 1024 : (int)want;\n" +
             "    if (grid_sz < 1) grid_sz = 1;\n" +
             "    _hx_k_ce_grad<<<grid_sz, block_sz, 0, _forge_stream()>>>(LOGITS, TARGETS, DLOGITS, T, V);\n" +
-            "    cudaError_t er = cudaDeviceSynchronize();\n" +
-            "    if (er != cudaSuccess) {\n" +
-            "        fprintf(stderr, \"[cuda] ce_grad launch failed: %s\\n\",\n" +
-            "                cudaGetErrorString(er));\n" +
-            "        return -1;\n" +
-            "    }\n" +
+            "    if (_forge_launch_check(\"ce_grad\") != 0) return -1;\n" +
             "    {\n" +
             "        HexaFarrEntry* e = &_hx_farr_table[dlogits_id];\n" +
             "        e->d_buf      = (void*)g_slots[dlogits_id].d_buf;\n" +
@@ -2089,12 +2064,7 @@ fn emit_runtime_cuda_c() -> str {
             "    if (grid_sz < 1) grid_sz = 1;\n" +
             "    _hx_k_moe_router_bwd<<<grid_sz, block_sz, 0, _forge_stream()>>>(PROBS, EX_OUT, DY,\n" +
             "                                               DLOGITS, DEX_OUT, T, E, C);\n" +
-            "    cudaError_t er = cudaDeviceSynchronize();\n" +
-            "    if (er != cudaSuccess) {\n" +
-            "        fprintf(stderr, \"[cuda] moe_router_bwd launch failed: %s\\n\",\n" +
-            "                cudaGetErrorString(er));\n" +
-            "        return -1;\n" +
-            "    }\n" +
+            "    if (_forge_launch_check(\"moe_router_bwd\") != 0) return -1;\n" +
             "    {\n" +
             "        int64_t outs[2] = { dlogits_id, dex_out_id };\n" +
             "        for (int k = 0; k < 2; k++) {\n" +
@@ -2149,12 +2119,7 @@ fn emit_runtime_cuda_c() -> str {
             "    int grid_sz = (want > 1024) ? 1024 : (int)want;\n" +
             "    if (grid_sz < 1) grid_sz = 1;\n" +
             "    _hx_k_grad_sum3<<<grid_sz, block_sz, 0, _forge_stream()>>>(A, B, C, OUT, n);\n" +
-            "    cudaError_t er = cudaDeviceSynchronize();\n" +
-            "    if (er != cudaSuccess) {\n" +
-            "        fprintf(stderr, \"[cuda] grad_sum3 launch failed: %s\\n\",\n" +
-            "                cudaGetErrorString(er));\n" +
-            "        return -1;\n" +
-            "    }\n" +
+            "    if (_forge_launch_check(\"grad_sum3\") != 0) return -1;\n" +
             "    {\n" +
             "        HexaFarrEntry* e = &_hx_farr_table[out_id];\n" +
             "        e->d_buf      = (void*)g_slots[out_id].d_buf;\n" +
@@ -2200,12 +2165,7 @@ fn emit_runtime_cuda_c() -> str {
             "    int grid_sz = (want > 1024) ? 1024 : (int)want;\n" +
             "    if (grid_sz < 1) grid_sz = 1;\n" +
             "    _hx_k_grad_sum2<<<grid_sz, block_sz, 0, _forge_stream()>>>(A, B, OUT, n);\n" +
-            "    cudaError_t er = cudaDeviceSynchronize();\n" +
-            "    if (er != cudaSuccess) {\n" +
-            "        fprintf(stderr, \"[cuda] grad_sum2 launch failed: %s\\n\",\n" +
-            "                cudaGetErrorString(er));\n" +
-            "        return -1;\n" +
-            "    }\n" +
+            "    if (_forge_launch_check(\"grad_sum2\") != 0) return -1;\n" +
             "    {\n" +
             "        HexaFarrEntry* e = &_hx_farr_table[out_id];\n" +
             "        e->d_buf      = (void*)g_slots[out_id].d_buf;\n" +
@@ -2265,12 +2225,7 @@ fn emit_runtime_cuda_c() -> str {
             "    int grid_sz = (want > 1024) ? 1024 : (int)want;\n" +
             "    if (grid_sz < 1) grid_sz = 1;\n" +
             "    _hx_k_embedding_bwd_scatter<<<grid_sz, block_sz, 0, _forge_stream()>>>(DX, IDS, DTABLE, T, d, V);\n" +
-            "    cudaError_t er = cudaDeviceSynchronize();\n" +
-            "    if (er != cudaSuccess) {\n" +
-            "        fprintf(stderr, \"[cuda] embedding_bwd_scatter launch failed: %s\\n\",\n" +
-            "                cudaGetErrorString(er));\n" +
-            "        return -1;\n" +
-            "    }\n" +
+            "    if (_forge_launch_check(\"embedding_bwd_scatter\") != 0) return -1;\n" +
             "    {\n" +
             "        HexaFarrEntry* e = &_hx_farr_table[dtable_id];\n" +
             "        e->d_buf      = (void*)g_slots[dtable_id].d_buf;\n" +
