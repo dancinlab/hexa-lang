@@ -2354,6 +2354,20 @@ fn main() {
         exit(rc)
     }
     if sub == "pods" {
+        // ACTIVE reconcile FIRST (anima ghost-drift fix, plan @L2): before
+        // rendering anything, reconcile the global M5 registry against the
+        // AUTHORITATIVE runpod myself.pods GraphQL (+ vast) — prune ghost rows
+        // (in registry, absent from the provider's own ledger) and surface
+        // real orphans. `--no-reconcile` opts out (offline / no-key hosts).
+        let mut do_reconcile = 1
+        let mut pi = si + 1
+        while pi < len(av) {
+            if av[pi] == "--no-reconcile" { do_reconcile = 0 }
+            pi = pi + 1
+        }
+        if do_reconcile == 1 {
+            let _ = cloud_pods_reconcile_prune()
+        }
         // Per-project active pod/job work manifest at cwd's ./pods.json.
         // Bare form = full table render (operator's "what is running here
         // right now?" view). Distinct from `cloud orphans` / pod_registry

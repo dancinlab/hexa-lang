@@ -544,7 +544,11 @@ fn pod_registry_reconcile_rows(provider_ids: [str]) -> [ReconRow] {
 // (the honest "I can't see that provider" degrade, distinct from a confirmed
 // teardown) — only pods absent from BOTH live sets classify GHOST.
 fn cloud_reconcile_print() -> int {
-    let rl = runpod_list_pods()
+    // AUTHORITATIVE runpod source: the `myself.pods` GraphQL query (the
+    // provider's own ledger), CLI-fallback only when that is degraded. The
+    // live ghost-drift incident (2026-06-04: registry showed 3 RENTING pods
+    // absent from myself.pods, real count 1) is exactly what this refutes.
+    let rl = runpod_authoritative_pods()
     let vl = vast_list_instances()
     let mut provider_ids = []
     let mut ri = 0
@@ -585,6 +589,81 @@ fn cloud_reconcile_print() -> int {
     println("[cloud] " + str(len(rows)) + " reconciled · " + str(drift)
         + " drift (ORPHAN=adopt|stop · GHOST=forget) · " + _reg_file())
     return drift
+}
+
+// cloud_pods_reconcile_prune — ACTIVE reconcile pass for `cloud pods` (anima
+// ghost-drift fix, plan @L2). Fetches the AUTHORITATIVE merged provider-alive
+// id set (runpod myself.pods GraphQL + vast), then over the M5 registry:
+//   GHOST  (tracked RENTING/READY but absent from the authoritative set)
+//          → auto-forget (pod_registry_remove): the registry stops claiming a
+//          pod RunPod no longer reports. This is the exact drift the live hook
+//          showed (3 phantom RENTING rows vs 1 real pod).
+//   ORPHAN (alive on the provider but untracked) → SURFACED (warned, never
+//          auto-touched — a human adopts or reaps it).
+// Returns the count of ghosts pruned. SKIPPED ENTIRELY when BOTH provider
+// queries are degraded (no authoritative truth → never prune on a blind set,
+// g63: never invent "gone" from an unreachable provider).
+fn cloud_pods_reconcile_prune() -> int {
+    let rl = runpod_authoritative_pods()
+    let vl = vast_list_instances()
+    if rl.ok == 0 {
+        if vl.ok == 0 {
+            println("[cloud] pods: reconcile SKIPPED — no authoritative provider truth (runpod: "
+                + rl.message + " · vast: " + vl.message + ")")
+            return 0
+        }
+    }
+    let mut alive = []
+    let mut ri = 0
+    while ri < len(rl.pod_ids) { alive.push(rl.pod_ids[ri]); ri = ri + 1 }
+    let mut vi = 0
+    while vi < len(vl.instance_ids) { alive.push(vl.instance_ids[vi]); vi = vi + 1 }
+    // Prune GHOST M5 rows + surface ORPHANs.
+    let reg = pod_registry_list()
+    let mut ghosts = []
+    let mut gi = 0
+    while gi < len(reg) {
+        let r = reg[gi]
+        let mut tracked_alive = 0
+        if _recon_id_in(alive, r.id) == 1 { tracked_alive = 1 }
+        // only a live-intent row (RENTING/READY) is a meaningful ghost; a
+        // STOPPING row is already on its way out.
+        let mut live_intent = 0
+        if r.status == "RENTING" { live_intent = 1 }
+        if r.status == "READY" { live_intent = 1 }
+        if tracked_alive == 0 {
+            if live_intent == 1 {
+                ghosts.push(r.id)
+            }
+        }
+        gi = gi + 1
+    }
+    let mut pruned = 0
+    let mut pi = 0
+    while pi < len(ghosts) {
+        println("[cloud] pods: GHOST " + ghosts[pi]
+            + " — in registry, absent from authoritative provider set → forgetting")
+        let _ = pod_registry_remove(ghosts[pi])
+        pruned = pruned + 1
+        pi = pi + 1
+    }
+    // Surface real orphans (alive on provider, untracked) for human action.
+    let mut reg_ids = []
+    let mut k = 0
+    while k < len(reg) { reg_ids.push(reg[k].id); k = k + 1 }
+    let mut ai = 0
+    while ai < len(alive) {
+        let id = alive[ai]
+        if _recon_id_in(reg_ids, id) == 0 {
+            println("[cloud] pods: ORPHAN " + id
+                + " — alive on provider, untracked (adopt or `cloud reap`)")
+        }
+        ai = ai + 1
+    }
+    if pruned > 0 {
+        println("[cloud] pods: pruned " + str(pruned) + " ghost row(s) against authoritative myself.pods")
+    }
+    return pruned
 }
 
 // ── M5 — agent-crash-safe pod registry @ ~/.hx/cloud/active-pods.json ─

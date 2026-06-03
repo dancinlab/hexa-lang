@@ -1,0 +1,73 @@
+// @ci_gate — pure · network-free · deterministic (stdlib_selftest_aggregate --ci-gate)
+// stdlib/cloud/myself_pods_test.hexa — falsifiers for the AUTHORITATIVE
+// runpod `myself.pods` GraphQL parser (_runpod_myself_strip_ids) that the
+// registry reconcile (plan @L2) trusts as the source of truth.
+//
+// Live anima incident (2026-06-04): the local hook/registry showed 3 pods
+// RENTING (e472ep / xjmfo9 / 656rv9) that did NOT exist in RunPod's
+// authoritative `myself.pods` (real count 1). Ghost drift. The reconcile fix
+// trusts `myself { pods { id } }` as the source of truth — so the parser that
+// turns that GraphQL envelope into a clean id list MUST be exact: it pulls
+// data.myself.pods[].id and NOTHING else (no error-envelope fabrication, no
+// help-text ids). This test locks that contract over canned response strings.
+//
+// LLM-free, network-free, NO live GraphQL call — _runpod_myself_strip_ids is
+// pure over a response string.
+//
+// Run:   hexa run stdlib/cloud/myself_pods_test.hexa
+// PASS:  exits 0, prints "myself_pods_test PASS — N/N cases".
+
+use "stdlib/cloud/runpod"
+
+fn _fail(case: str, msg: str) {
+    println("FAIL " + case + ": " + msg)
+    exit(1)
+}
+
+fn _eq_int(case: str, got: int, want: int) {
+    if got != want { _fail(case, "got " + str(got) + " want " + str(want)) }
+}
+
+fn _eq_str(case: str, got: str, want: str) {
+    if got != want { _fail(case, "got " + got + " want " + want) }
+}
+
+fn main() {
+    let mut n = 0
+
+    // Case 1 — canonical multi-pod envelope → exactly the ids, in order.
+    let r1 = "{\"data\":{\"myself\":{\"pods\":[{\"id\":\"qk0312abc\",\"desiredStatus\":\"RUNNING\"},{\"id\":\"zz9988xyz\",\"desiredStatus\":\"EXITED\"}]}}}"
+    let ids1 = _runpod_myself_strip_ids(r1)
+    _eq_int("c1-count", len(ids1), 2); n = n + 1
+    _eq_str("c1-id0", ids1[0], "qk0312abc"); n = n + 1
+    _eq_str("c1-id1", ids1[1], "zz9988xyz"); n = n + 1
+
+    // Case 2 — the live incident shape: ONE real pod (not the 3 phantom
+    // RENTING rows the local registry claimed). The parser reports exactly 1.
+    let r2 = "{\"data\":{\"myself\":{\"pods\":[{\"id\":\"realpod001\",\"desiredStatus\":\"RUNNING\"}]}}}"
+    let ids2 = _runpod_myself_strip_ids(r2)
+    _eq_int("c2-incident-real-count", len(ids2), 1); n = n + 1
+    _eq_str("c2-incident-real-id", ids2[0], "realpod001"); n = n + 1
+
+    // Case 3 — empty pods array (account with zero pods) → [].
+    let r3 = "{\"data\":{\"myself\":{\"pods\":[]}}}"
+    _eq_int("c3-empty", len(_runpod_myself_strip_ids(r3)), 0); n = n + 1
+
+    // Case 4 — a GraphQL ERROR envelope (no data) must NOT fabricate ids.
+    // (runpod_myself_pods() further degrades this to ok=0; the parser itself
+    // simply yields [] rather than inventing pods.)
+    let r4 = "{\"errors\":[{\"message\":\"Unauthorized\"}]}"
+    _eq_int("c4-error-envelope-no-fabrication", len(_runpod_myself_strip_ids(r4)), 0); n = n + 1
+
+    // Case 5 — empty / junk string → [] (never crash, never fabricate).
+    _eq_int("c5-empty-string", len(_runpod_myself_strip_ids("")), 0); n = n + 1
+    _eq_int("c5-junk-string", len(_runpod_myself_strip_ids("not json at all")), 0); n = n + 1
+
+    // Case 6 — a pod object missing its id is skipped, not counted as "".
+    let r6 = "{\"data\":{\"myself\":{\"pods\":[{\"desiredStatus\":\"RUNNING\"},{\"id\":\"keep01abc\"}]}}}"
+    let ids6 = _runpod_myself_strip_ids(r6)
+    _eq_int("c6-missing-id-skipped", len(ids6), 1); n = n + 1
+    _eq_str("c6-kept-id", ids6[0], "keep01abc"); n = n + 1
+
+    println("myself_pods_test PASS — " + str(n) + "/" + str(n) + " cases")
+}
