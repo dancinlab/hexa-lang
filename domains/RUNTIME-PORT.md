@@ -32,12 +32,16 @@
   - hexa_dict_keys: **BLOCKED** — not a true leaf; rt_map_keys consumes a
     different (pure-hexa) map representation than the native C map, so no
     apples-to-apples RUNEQ. `.verdicts/runtime-port/M2-hexa_dict_keys.txt`.
-  - hexa_bytes_to_str_raw → rt_bytes_to_str_raw: **DIFFER/BLOCKED** — RUNEQ
-    6/9 PORT-EQ but DIFFERs on embedded NUL (C strbuf length-header vs hexa
-    chr/join strlen-truncation). Needs a NUL-clean string-builder intrinsic;
-    kept in-source as the non-NUL port + falsifier, NOT wired as live
-    delegation. `.verdicts/runtime-port/M2-hexa_bytes_to_str_raw.txt`.
-  - score so far: 3 PORT-EQ landed · 2 BLOCKED on primitive gaps (map-rep,
-    NUL-clean builder). Remaining B-OPEN leaves carry to M2-followup (see log).
+  - hexa_bytes_to_str_raw → rt_bytes_to_str_raw: **PORT-EQ (B1 closed)** —
+    RUNEQ 9/9 byte-exact (incl all 3 embedded-NUL cases) after the B1
+    str_from_bytes_n length-carrying builder builtin landed. The hexa body
+    keeps its range-guard loop and delegates final assembly to the NUL-clean
+    builder (→ hexa_bytes_to_str_raw / hexa_strbuf_alloc length header). Proven
+    end-to-end: regenerated hexat lowers str_from_bytes_n → hexa_bytes_to_str_raw,
+    emitted code 9/9 PORT-EQ. `.verdicts/runtime-port/M2-bytes_to_str_raw.txt`
+    (codegen fixpoint byte-eq validated on ghost selfhost-byteeq-real).
+  - score so far: 4 PORT-EQ landed · 1 BLOCKED on primitive gap (map-rep).
+    The NUL-clean builder gap is CLOSED (STRBUILDER-FEAS B1). Remaining B-OPEN
+    leaves carry to M2-followup (see log).
 - [ ] M3 — adjudicate the 151 BORDERLINE fns (numeric CPU kernels: keep vs port)
 - [ ] M4 — extend inventory to self/runtime_core.c (the CORE tier)

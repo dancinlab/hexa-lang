@@ -143,3 +143,32 @@ radius; defer to an RFC.
 rt_bytes_to_str_raw stays BLOCKED / not-live-wired; C SSOT authoritative for
 NUL callers (image_read PNG IHDR). Carry B1 to M2-followup / M3 alongside the
 hexa_dict_keys map-rep gap. `.verdicts/runtime-port/STRBUILDER-FEAS.txt`.
+
+## 2026-06-03 · B1 LANDED — str_from_bytes_n NUL-clean builder closes rt_bytes_to_str_raw
+
+STRBUILDER-FEAS Class B delta implemented. Added a length-carrying byte→string
+constructor codegen builtin `str_from_bytes_n(arr)` → maps to the EXISTING
+NUL-clean C constructor hexa_bytes_to_str_raw (hexa_strbuf_alloc(n) + perf-31
+length header). NO new runtime symbol · NO ABI change. Registered in all 3
+builtin tables: self/codegen.hexa (tier-2), compiler/codegen/arm64_darwin.hexa
+(native), compiler/check/bind.hexa (bind allow-list).
+
+rt_bytes_to_str_raw rewritten: keeps the hexa range-guard loop (b<0/b>255 → "")
+and delegates final assembly to str_from_bytes_n instead of chr()/join, which
+derived length via the NUL-truncated C string and collapsed NUL-bearing results
+to "".
+
+RUNEQ 9/9 PORT-EQ (LOCAL on mini), byte-exact vs C SSOT, incl all 3 prior
+embedded-NUL DIFFER cases: nul [00], mix-nul [00 41 00 42 00], full
+[00 01 7f 80 fe ff]. End-to-end proof: `hexa cc --regen` folded the codegen
+edit into hexa_cc.c; the regenerated hexat lowers str_from_bytes_n →
+hexa_bytes_to_str_raw (was hexa_call1 fallback), emitted code 9/9 PORT-EQ.
+Install toolchain restored to pristine after the local proof.
+
+byte-eq risk: SELF-HOST CODEGEN change — the codegen fixpoint (shipped
+transpiler re-emits byte-identically) is the non-required ghost
+selfhost-byteeq-real check; PR does NOT run/wait on it (parent gates merge).
+Local lowering + semantic proof is 9/9 PORT-EQ.
+
+M2 score: 4 PORT-EQ landed · 1 BLOCKED (hexa_dict_keys map-rep). NUL-clean
+builder gap CLOSED. `.verdicts/runtime-port/M2-bytes_to_str_raw.txt`.
