@@ -841,6 +841,101 @@ fn main() {
     fails = fails + _cell("action/cellrun-manifest-missing", entry, swift_bin, crenv,
                           "action specify nonesuchdomain", g_cellrun_missing, 1)
 
+    // PR#19 action --compose / --converge — dispatch a verb ACROSS a domain's
+    // topo-ordered constituent stack (--compose) / convergently (--converge).
+    // BOTH surfaces read the SAME PR#10 compose-fixture INDEX.demi DAG via
+    // DEMIURGE_REPO (root → mid → apex · root → xdisc). The fixture has NO
+    // per-domain `<id>.demi` manifests, so EVERY constituent's cellrun honest-
+    // skips at rc=2 (manifest missing) — the deterministic, host-INDEPENDENT
+    // fan-out (no dep-probe / substrate / python_candidates variance). The
+    // multi-constituent banners (with the Swift omittingEmptySubsequences:false
+    // trailing-blank capture artifact after each step), the aggregate "합성
+    // 실행 — 새 측정 record 없음" line (--compose), and the per-iter ok/skip tag
+    // summary + "✅ 수렴 … iter 2 … fixpoint" verdict (--converge) are all
+    // byte-asserted. The substrate-PRESENT success path (📸 합성 records · ok
+    // tags · rc=0 record emit) is NOT host-deterministic (needs a live
+    // python/ngspice substrate) — honestly scoped to a follow-up (cf. #18).
+    let s19fix = home + "/.demi-selftest-s19-compose-fixture"
+    _make_compose_fixture(s19fix)
+    let s19env = "DEMIURGE_REPO=" + _shq2(s19fix)
+    // (1) --compose across a 3-constituent META stack (apex: scale=system).
+    let g_compose_apex = "action 명세(무엇을) · domain=apex · COMPOSE meta (구성 3 · topo):\n"
+        + "  root → mid → apex\n"
+        + "── [root] ──\n"
+        + "[cellrun] domain=root verb=specify\n"
+        + "[cellrun] honest-skip — manifest missing: " + s19fix + "/domains/root.demi\n"
+        + "\n"
+        + "── [mid] ──\n"
+        + "[cellrun] domain=mid verb=specify\n"
+        + "[cellrun] honest-skip — manifest missing: " + s19fix + "/domains/mid.demi\n"
+        + "\n"
+        + "── [apex] ──\n"
+        + "[cellrun] domain=apex verb=specify\n"
+        + "[cellrun] honest-skip — manifest missing: " + s19fix + "/domains/apex.demi\n"
+        + "\n"
+        + "---\n"
+        + "⏳ 합성 실행 — 새 측정 record 없음 (구성 3 단계 · g3).\n"
+    fails = fails + _cell("action/compose-meta-stack", entry, swift_bin, s19env,
+                          "action --compose specify apex", g_compose_apex, 0)
+    // (2) --compose across a COMPOSITE stack (xdisc: scale=component, stack=2),
+    // with the flag placed AFTER the verb/domain (position-independent parse).
+    let g_compose_xdisc = "action 해석⟲(점검) · domain=xdisc · COMPOSE composite (구성 2 · topo):\n"
+        + "  root → xdisc\n"
+        + "── [root] ──\n"
+        + "[cellrun] domain=root verb=analyze\n"
+        + "[cellrun] honest-skip — manifest missing: " + s19fix + "/domains/root.demi\n"
+        + "\n"
+        + "── [xdisc] ──\n"
+        + "[cellrun] domain=xdisc verb=analyze\n"
+        + "[cellrun] honest-skip — manifest missing: " + s19fix + "/domains/xdisc.demi\n"
+        + "\n"
+        + "---\n"
+        + "⏳ 합성 실행 — 새 측정 record 없음 (구성 2 단계 · g3).\n"
+    fails = fails + _cell("action/compose-flag-after-args", entry, swift_bin, s19env,
+                          "action analyze xdisc --compose", g_compose_xdisc, 0)
+    // (3) --compose on an ATOMIC domain (root: no prereqs, stack==1).
+    let g_compose_root = "action 구조(어떻게) · domain=root · COMPOSE atomic (구성 1 · topo):\n"
+        + "  root\n"
+        + "── [root] ──\n"
+        + "[cellrun] domain=root verb=structure\n"
+        + "[cellrun] honest-skip — manifest missing: " + s19fix + "/domains/root.demi\n"
+        + "\n"
+        + "---\n"
+        + "⏳ 합성 실행 — 새 측정 record 없음 (구성 1 단계 · g3).\n"
+    fails = fails + _cell("action/compose-atomic", entry, swift_bin, s19env,
+                          "action --compose structure root", g_compose_root, 0)
+    // (4) --converge across the 3-constituent stack — iter summary + fixpoint.
+    let g_converge_apex = "action 명세(무엇을) · domain=apex · CONVERGE ⟲ (구성 3 · max 3 iter):\n"
+        + "  iter 1 [0 rec]: root:skip · mid:skip · apex:skip\n"
+        + "  iter 2 [0 rec]: root:skip · mid:skip · apex:skip\n"
+        + "---\n"
+        + "✅ 수렴 — iter 2에서 outcome 패턴 fixpoint 도달.\n"
+    fails = fails + _cell("action/converge-meta-stack", entry, swift_bin, s19env,
+                          "action --converge specify apex", g_converge_apex, 0)
+    // (5) --converge on an ATOMIC domain (stack==1 · still converges iter 2).
+    let g_converge_root = "action 구조(어떻게) · domain=root · CONVERGE ⟲ (구성 1 · max 3 iter):\n"
+        + "  iter 1 [0 rec]: root:skip\n"
+        + "  iter 2 [0 rec]: root:skip\n"
+        + "---\n"
+        + "✅ 수렴 — iter 2에서 outcome 패턴 fixpoint 도달.\n"
+    fails = fails + _cell("action/converge-atomic", entry, swift_bin, s19env,
+                          "action --converge structure root", g_converge_root, 0)
+    // (6/7) flag-parse error paths — unknown verb + missing domain, for BOTH
+    // flags (stderr line, exit 2 · merged via _run_*'s 2>&1). No DEMIURGE_REPO
+    // needed (the error fires before any composer/engine resolution).
+    let g_compose_unknown = "action --compose: unknown verb 'zzz'\n"
+    fails = fails + _cell("action/compose-unknown-verb", entry, swift_bin, "",
+                          "action --compose zzz apex", g_compose_unknown, 2)
+    let g_compose_missing = "action --compose: missing <domain>\n"
+    fails = fails + _cell("action/compose-missing-domain", entry, swift_bin, "",
+                          "action --compose specify", g_compose_missing, 2)
+    let g_converge_unknown = "action --converge: unknown verb 'zzz'\n"
+    fails = fails + _cell("action/converge-unknown-verb", entry, swift_bin, "",
+                          "action --converge zzz apex", g_converge_unknown, 2)
+    let g_converge_missing = "action --converge: missing <domain>\n"
+    fails = fails + _cell("action/converge-missing-domain", entry, swift_bin, "",
+                          "action --converge specify", g_converge_missing, 2)
+
     // PR-verify-passthrough — `verify --expr|--fence|rubric` → hexa verify
     // kernel, output forwarded VERBATIM (Swift verifyHexa · @D g5). Golden
     // is the live kernel call (the SSOT both surfaces forward to).

@@ -294,7 +294,7 @@ fn dco_closure(doms: [DcDomain], start: string) -> [string] {
 // dco_sort_strings(xs) — ascending lexicographic sort (Swift `.sorted()` on
 // String uses Unicode scalar ordering; all domain ids are ASCII so a byte
 // compare agrees). Simple insertion sort (id sets are small).
-fn dco_sort_strings(xs: [string]) -> [string] {
+pub fn dco_sort_strings(xs: [string]) -> [string] {
     let mut a: [string] = []
     let mut i = 0
     while i < len(xs) { a.push(xs[i]); i = i + 1 }
@@ -417,7 +417,7 @@ fn dco_cluster_union(doms: [DcDomain], stack: [string]) -> [string] {
 }
 
 // dco_join(xs, sep)
-fn dco_join(xs: [string], sep: string) -> string {
+pub fn dco_join(xs: [string], sep: string) -> string {
     let mut out = ""
     let mut i = 0
     while i < len(xs) {

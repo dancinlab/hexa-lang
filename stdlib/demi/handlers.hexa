@@ -92,6 +92,20 @@ fn _verb_plain(verb: string) -> string {
 
 pub fn handler_action(argv: [string]) -> int {
     // argv is the post-verb tail: [<verb>, <domain?>, <flags...>].
+    // --compose / --converge (M15) route ACROSS the domain's constituent
+    // stack before the single-cell path. Swift cliAction (main.swift:1114-
+    // 1123) checks --converge FIRST, then --compose; the flag may appear in
+    // any position (firstIndex search). We mirror that precedence + position-
+    // independence: --converge wins if both present. The flag is removed and
+    // the REMAINING tokens are [verb, domain?] (Swift actionArgs.first /
+    // [1] after remove(at:)). The --producer / --deck value-flags land in
+    // their own stacked PR; this PR ports compose/converge only.
+    if _action_has_flag(argv, "--converge") {
+        return handler_action_converge(_action_drop_flag(argv, "--converge"))
+    }
+    if _action_has_flag(argv, "--compose") {
+        return handler_action_compose(_action_drop_flag(argv, "--compose"))
+    }
     if len(argv) < 1 {
         eprintln("action: missing <verb> argument")
         return 2
@@ -163,6 +177,171 @@ pub fn handler_action(argv: [string]) -> int {
     }
     // engine gap (rc 2/3/4/5) — usedEngineTool && engineToolSucceeded==false.
     println("⏳ engine tool gap — no new measured record (g3).")
+    return 1
+}
+
+// ── action --compose / --converge (PR#19 · LIVE) ─────────────────────
+//
+// Port of the Swift cliActionComposite / cliActionConvergent
+// (main.swift:362-433) + ActionDispatch.runComposite / runConvergent
+// (ActionDispatch.swift:497-551). Dispatch a verb ACROSS a domain's
+// topo-ordered constituent stack (--compose) or convergently (--converge).
+//
+// d3: the constituent stack comes from domain_composer.hexa (#10) and each
+// per-step run delegates to the SAME cellrun engine dc_run() (#18) — no
+// re-authored dispatch here. d4: every constituent routes through the one
+// generic (verb, domain) cellrun path; no per-instance branch.
+//
+// Per-step outcome tag (Swift convergenceSignature / the --converge tags):
+//   engineToolSucceeded==true  → "ok"   (cellrun rc==0 · record emitted)
+//   engineToolSucceeded==false → "skip" (cellrun rc!=0 · honest-skip/gap)
+//   nil → "gap" — the LLM-fallback path; the cellrun engine NEVER returns
+//   nil (CellrunDispatch.run always sets a Bool), so a cellrun-routed cell
+//   is ALWAYS "ok"/"skip", never "gap". We therefore map rc==0→ok, else→skip,
+//   matching the Swift tag verbatim for every constituent.
+
+// _action_has_flag(argv, flag) — is `flag` present anywhere in argv (Swift
+// firstIndex(of:) test)?
+fn _action_has_flag(argv: [string], flag: string) -> bool {
+    let mut i = 0
+    while i < len(argv) {
+        if argv[i] == flag { return true }
+        i = i + 1
+    }
+    return false
+}
+
+// _action_drop_flag(argv, flag) — argv with the FIRST occurrence of `flag`
+// removed (Swift actionArgs.remove(at: idx)). The remaining tokens are
+// [verb?, domain?] in order.
+fn _action_drop_flag(argv: [string], flag: string) -> [string] {
+    let mut out: [string] = []
+    let mut dropped = false
+    let mut i = 0
+    while i < len(argv) {
+        if !dropped && argv[i] == flag { dropped = true } else { out.push(argv[i]) }
+        i = i + 1
+    }
+    return out
+}
+
+// _step_tag(rc) — the ok/skip outcome tag for one cellrun step (see above).
+fn _step_tag(rc: int) -> string {
+    if rc == 0 { return "ok" }
+    return "skip"
+}
+
+// handler_action_compose(rest) — `action <verb> <domain> --compose`. `rest`
+// is argv with --compose removed → [verb?, domain?]. Swift cliActionComposite.
+pub fn handler_action_compose(rest: [string]) -> int {
+    let verb = if len(rest) >= 1 { rest[0] } else { "" }
+    if _verb_canonical(verb) == "" {
+        eprintln("action --compose: unknown verb '" + verb + "'")
+        return 2
+    }
+    if len(rest) < 2 {
+        eprintln("action --compose: missing <domain>")
+        return 2
+    }
+    let domain = rest[1]
+    let plain = _verb_plain(verb)
+    let korean = _verb_korean(verb)
+    let verb_c = _verb_canonical(verb)
+    let stack = dco_project_walk(domain)
+    let kind = dco_english_kind(domain)
+    // header (note: NO space between koreanLabel and "(plain)" — distinct
+    // from the single-cell `action: <k> (<p>)` framing).
+    println("action " + korean + "(" + plain + ") · domain=" + domain + " · "
+            + "COMPOSE " + kind + " (구성 " + to_string(len(stack)) + " · topo):")
+    let ids_line = if len(stack) == 0 { "(none)" } else { dco_join(stack, " → ") }
+    println("  " + ids_line)
+    // each constituent IN ORDER — render the `── [id] ──` marker, then the
+    // cellrun engine prints its banner inline (Swift captures the subprocess
+    // text and re-prints; here the engine prints directly). dc_run's trailing
+    // line + the Swift omittingEmptySubsequences:false capture artifact → a
+    // blank line after each step's banner (cf. handler_action).
+    let mut any_record = false
+    let mut i = 0
+    while i < len(stack) {
+        println("── [" + stack[i] + "] ──")
+        let rc = dc_run(verb_c, stack[i])
+        if rc == 0 { any_record = true }
+        println("")
+        i = i + 1
+    }
+    println("---")
+    if any_record {
+        // Swift surfaces "📸 합성 records: <ids>" — the record ids are the
+        // engine's own `[cellrun] record → ` banner lines (printed inline
+        // above). The deterministic, host-independent parity path is the
+        // all-skip case (no record); the substrate-present record path is
+        // scoped to a follow-up (it needs a live substrate · cf. #18).
+        println("📸 합성 records: (see [cellrun] record → lines above).")
+    } else {
+        println("⏳ 합성 실행 — 새 측정 record 없음 (구성 " + to_string(len(stack)) + " 단계 · g3).")
+    }
+    return 0
+}
+
+// handler_action_converge(rest) — `action <verb> <domain> --converge`. The
+// analyze ⟲ loop: re-run the composite until the outcome PATTERN reaches a
+// fixpoint (Swift runConvergent · maxIter=3, loop bound max(2,3)=3). Since
+// the cellrun outcome signature is deterministic per (verb, stack), iter 2
+// always equals iter 1 → converges at iter 2 (g3 honest — judged on the
+// ok/skip pattern, NOT on record ids which carry fresh timestamps).
+pub fn handler_action_converge(rest: [string]) -> int {
+    let verb = if len(rest) >= 1 { rest[0] } else { "" }
+    if _verb_canonical(verb) == "" {
+        eprintln("action --converge: unknown verb '" + verb + "'")
+        return 2
+    }
+    if len(rest) < 2 {
+        eprintln("action --converge: missing <domain>")
+        return 2
+    }
+    let domain = rest[1]
+    let plain = _verb_plain(verb)
+    let korean = _verb_korean(verb)
+    let verb_c = _verb_canonical(verb)
+    let stack = dco_project_walk(domain)
+    println("action " + korean + "(" + plain + ") · domain=" + domain + " · "
+            + "CONVERGE ⟲ (구성 " + to_string(len(stack)) + " · max 3 iter):")
+    // The --converge surface prints ONLY the per-iter tag summary, NOT the
+    // per-constituent cellrun banners (Swift renders iter.steps tags only).
+    // So we run the engine SILENTLY here — but dc_run() always prints the
+    // banner. To keep the convergence summary byte-clean we recompute the
+    // outcome via cell_run_quiet (no banner): a deterministic rc per cell.
+    let mut prev_sig = ""
+    let mut converged_at = 0
+    let mut iter = 1
+    while iter <= 3 {
+        // build the per-iter tag list + the timestamp-agnostic signature
+        // (Swift convergenceSignature — sorted "id:tag" join).
+        let mut tags: [string] = []
+        let mut sig_parts: [string] = []
+        let mut rec_count = 0
+        let mut i = 0
+        while i < len(stack) {
+            let rc = dc_run_quiet(verb_c, stack[i])
+            let tag = _step_tag(rc)
+            if rc == 0 { rec_count = rec_count + 1 }
+            tags.push(stack[i] + ":" + tag)
+            sig_parts.push(stack[i] + ":" + tag)
+            i = i + 1
+        }
+        println("  iter " + to_string(iter) + " [" + to_string(rec_count)
+                + " rec]: " + dco_join(tags, " · "))
+        let sig = dco_join(dco_sort_strings(sig_parts), ",")
+        if iter > 1 && sig == prev_sig { converged_at = iter; break }
+        prev_sig = sig
+        iter = iter + 1
+    }
+    println("---")
+    if converged_at > 0 {
+        println("✅ 수렴 — iter " + to_string(converged_at) + "에서 outcome 패턴 fixpoint 도달.")
+        return 0
+    }
+    println("🔶 max iter 도달 — 미수렴 (패턴 변동 지속).")
     return 1
 }
 
