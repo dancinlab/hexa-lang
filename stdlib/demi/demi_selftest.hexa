@@ -1593,6 +1593,11 @@ fn main() {
     fails = fails + _geometry_selfcheck(swift_bin)
     fails = fails + _geometry_swap_selfcheck()
 
+    // PR#24 export-component CLI-verb wiring — usda/stl write (stdout + written
+    // bytes byte ≡ Swift) + unknown/missing-format error paths + exit codes.
+    // Builds on PR#21's loader+builder (no hardcoded geometry · @L3 · d3).
+    fails = fails + _export_component_selfcheck(swift_bin)
+
     // ── PR#10 compose cells — `compose <domain>` resolves a domain into its
     // constituent prerequisite stack (topo foundation→apex) + cluster union +
     // kind, byte-for-byte against the Swift compose(_:) plain-default render
@@ -2324,4 +2329,132 @@ fn _geometry_swap_selfcheck() -> int {
     println("FAIL geometry/@L3-file-swap — rc=" + to_string(rc))
     println(out)
     return 1
+}
+
+// ── PR#24 export-component CLI-verb parity (@L7 · @L3) ───────────────────────
+//
+// PR#21 proved the geometry BUILDER (geo_usda/geo_stl) is byte ≡ Swift; PR#24
+// wires the `export-component` CLI VERB on top of it. These cells assert the
+// VERB-WIRING parity that #21 explicitly did NOT (format/arg parse · output
+// destination · the two stdout confirmation lines · the written-file bytes ·
+// the unknown/missing-format errors + exit codes) — NOT the geometry, which is
+// #21's concern (the handler calls #21's loader+builder · @L3 · no hardcode).
+//
+// _ec_run(surf_cmd, cwd, argv) — run a surface's CLI in a FIXED real cwd and
+// capture [stdout+stderr, rc, written-file-bytes-or-EMPTY]. `cwd` is a real
+// (non-symlinked) $HOME-rooted dir so the DEFAULT-path print is deterministic
+// (pwd -P == pwd) and the write lands at a known location we can read back.
+fn _ec_run(surf_cmd: string, cwd: string, argv: string, want_file: string) -> [string] {
+    exec("rm -f " + _shq2(want_file))
+    let cmd = "cd " + _shq2(cwd) + " && " + surf_cmd + " " + argv + " 2>&1"
+    let pair = exec_with_status(cmd)
+    let out = to_string(pair[0])
+    let rc = to_string(pair[1])
+    let exists = exec("test -f " + _shq2(want_file) + " && echo y || echo n").trim()
+    let bytes = if exists == "y" { exec("cat " + _shq2(want_file)) } else { "" }
+    return [out, rc, bytes]
+}
+
+// _export_component_selfcheck(swift_bin) — the PR#24 verb-wiring parity gate.
+//   write cells (usda · stl): run the verb with the DEFAULT path arg from a
+//     fixed cwd → assert both stdout lines + the written-file bytes byte ≡ Swift
+//     (GOLDEN arm: the hexa write is self-consistent + deterministic). The path
+//     line is asserted EXACTLY (it embeds the physical cwd both surfaces print).
+//   unknown-format: stderr error line + rc 2, no file (full-byte equal).
+//   missing-format: demi-owned stderr error line + rc 2. The usage TAIL differs
+//     by surface (Swift usage() vs the manifest-rendered demi_usage) so — like
+//     the discover/owner usage cells (@L7) — only the demi-owned head is
+//     asserted, never a string demi cannot faithfully reproduce.
+fn _export_component_selfcheck(swift_bin: string) -> int {
+    let entry = if len(env("DEMI_HEXA_ENTRY")) > 0 { env("DEMI_HEXA_ENTRY") } else { "stdlib/demi/demi_cli.hexa" }
+    let hexa = exec("command -v hexa 2>/dev/null || echo hexa").trim()
+    let hxlang = env("HEXA_LANG")
+    // A REAL (non-symlinked) cwd → the DEFAULT outpath print is deterministic.
+    let cwd = env("HOME") + "/.demi-selftest-export-component"
+    exec("rm -rf " + _shq2(cwd) + " && mkdir -p " + _shq2(cwd))
+    // the surface command lines (env applied; argv appended by _ec_run).
+    let hx_cmd = "HEXA_LANG=" + _shq2(hxlang) + " " + _shq2(hexa) + " run " + _shq2(entry)
+    // bundled spec id → the DEFAULT output basename Swift/hexa pick.
+    let usda_file = cwd + "/bipv_5layer_v0.usda"
+    let stl_file  = cwd + "/bipv_5layer_v0.stl"
+
+    let mut fails = 0
+
+    // (1) usda write — default path. The path line embeds the physical cwd.
+    let g_usda = "export-component: wrote " + cwd + "/bipv_5layer_v0.usda (usda)\n"
+        + "   procedural placeholder geometry — GATE_OPEN (g3)\n"
+    let hu = _ec_run(hx_cmd, cwd, "export-component usda", usda_file)
+    if hu[0] != g_usda { println("FAIL export-component/usda-write — hexa stdout != expected") ; println("  --- want ---"); println(g_usda); println("  --- hexa ---"); println(hu[0]); fails = fails + 1 }
+    if _atoi2(hu[1]) != 0 { println("FAIL export-component/usda-write — hexa rc=" + hu[1]) ; fails = fails + 1 }
+    if len(hu[2]) == 0 { println("FAIL export-component/usda-write — no .usda written") ; fails = fails + 1 }
+    if len(swift_bin) > 0 {
+        let su = _ec_run(_shq2(swift_bin), cwd, "export-component usda", usda_file)
+        if su[0] != hu[0] { println("FAIL export-component/usda-write — stdout DIFFERS from Swift") ; println("  --- swift ---"); println(su[0]); println("  --- hexa ---"); println(hu[0]); fails = fails + 1 }
+        if su[1] != hu[1] { println("FAIL export-component/usda-write — rc swift=" + su[1] + " hexa=" + hu[1]) ; fails = fails + 1 }
+        if su[2] != hu[2] { println("FAIL export-component/usda-write — .usda bytes DIFFER from Swift") ; fails = fails + 1 }
+        if fails == 0 { println("PASS export-component/usda-write (stdout + .usda bytes ≡ Swift · rc=0)") }
+    } else {
+        if fails == 0 { println("PASS export-component/usda-write (stdout + .usda written · deterministic · GOLDEN — no Swift bin)") }
+    }
+
+    // (2) stl write — default path.
+    let g_stl = "export-component: wrote " + cwd + "/bipv_5layer_v0.stl (stl)\n"
+        + "   procedural placeholder geometry — GATE_OPEN (g3)\n"
+    let hs = _ec_run(hx_cmd, cwd, "export-component stl", stl_file)
+    let mut sfail = 0
+    if hs[0] != g_stl { println("FAIL export-component/stl-write — hexa stdout != expected") ; println("  --- want ---"); println(g_stl); println("  --- hexa ---"); println(hs[0]); sfail = sfail + 1 }
+    if _atoi2(hs[1]) != 0 { println("FAIL export-component/stl-write — hexa rc=" + hs[1]) ; sfail = sfail + 1 }
+    if len(hs[2]) == 0 { println("FAIL export-component/stl-write — no .stl written") ; sfail = sfail + 1 }
+    if len(swift_bin) > 0 {
+        let ss = _ec_run(_shq2(swift_bin), cwd, "export-component stl", stl_file)
+        if ss[0] != hs[0] { println("FAIL export-component/stl-write — stdout DIFFERS from Swift") ; println("  --- swift ---"); println(ss[0]); println("  --- hexa ---"); println(hs[0]); sfail = sfail + 1 }
+        if ss[1] != hs[1] { println("FAIL export-component/stl-write — rc swift=" + ss[1] + " hexa=" + hs[1]) ; sfail = sfail + 1 }
+        if ss[2] != hs[2] { println("FAIL export-component/stl-write — .stl bytes DIFFER from Swift") ; sfail = sfail + 1 }
+        if sfail == 0 { println("PASS export-component/stl-write (stdout + .stl bytes ≡ Swift · rc=0)") }
+    } else {
+        if sfail == 0 { println("PASS export-component/stl-write (stdout + .stl written · deterministic · GOLDEN — no Swift bin)") }
+    }
+    fails = fails + sfail
+
+    // (3) unknown-format — stderr error line + rc 2, NO file. Full-byte equal.
+    let bogus_file = cwd + "/zzz.bogus"
+    let g_unknown = "export-component: unknown format 'foobar' — "
+        + "use usda | stl  (usdz: emit-component packages it)\n"
+    let hk = _ec_run(hx_cmd, cwd, "export-component foobar", bogus_file)
+    let mut kfail = 0
+    if hk[0] != g_unknown { println("FAIL export-component/unknown-format — hexa stderr != expected") ; println("  --- want ---"); println(g_unknown); println("  --- hexa ---"); println(hk[0]); kfail = kfail + 1 }
+    if _atoi2(hk[1]) != 2 { println("FAIL export-component/unknown-format — hexa rc=" + hk[1] + " want 2") ; kfail = kfail + 1 }
+    if len(swift_bin) > 0 {
+        let sk = _ec_run(_shq2(swift_bin), cwd, "export-component foobar", bogus_file)
+        if sk[0] != hk[0] { println("FAIL export-component/unknown-format — stderr DIFFERS from Swift") ; println("  --- swift ---"); println(sk[0]); println("  --- hexa ---"); println(hk[0]); kfail = kfail + 1 }
+        if sk[1] != hk[1] { println("FAIL export-component/unknown-format — rc swift=" + sk[1] + " hexa=" + hk[1]) ; kfail = kfail + 1 }
+        if kfail == 0 { println("PASS export-component/unknown-format (stderr ≡ Swift · rc=2 · no file)") }
+    } else {
+        if kfail == 0 { println("PASS export-component/unknown-format (stderr ≡ golden · rc=2 · no file)") }
+    }
+    fails = fails + kfail
+
+    // (4) missing-format — demi-owned stderr error line head + rc 2. The usage
+    // tail differs by surface (Swift usage() vs manifest-rendered demi_usage),
+    // so only the demi-owned head is asserted (@L7; cf. discover/owner usage).
+    let g_missing = "export-component: missing <format> argument (usda|stl)\n"
+    let mlen = len(g_missing)
+    let hm = _ec_run(hx_cmd, cwd, "export-component", bogus_file)
+    let mut mfail = 0
+    let hm_head = if len(hm[0]) >= mlen { hm[0].substring(0, mlen) } else { hm[0] }
+    if hm_head != g_missing { println("FAIL export-component/missing-format — hexa head != expected") ; println("  --- want ---"); println(g_missing); println("  --- hexa ---"); println(hm[0]); mfail = mfail + 1 }
+    if _atoi2(hm[1]) != 2 { println("FAIL export-component/missing-format — hexa rc=" + hm[1] + " want 2") ; mfail = mfail + 1 }
+    if len(swift_bin) > 0 {
+        let sm = _ec_run(_shq2(swift_bin), cwd, "export-component", bogus_file)
+        let sm_head = if len(sm[0]) >= mlen { sm[0].substring(0, mlen) } else { sm[0] }
+        if sm_head != g_missing { println("FAIL export-component/missing-format — Swift head != expected") ; println("  --- swift ---"); println(sm[0]); mfail = mfail + 1 }
+        if sm[1] != hm[1] { println("FAIL export-component/missing-format — rc swift=" + sm[1] + " hexa=" + hm[1]) ; mfail = mfail + 1 }
+        if mfail == 0 { println("PASS export-component/missing-format (error head ≡ Swift · rc=2 · usage tail surface-owned)") }
+    } else {
+        if mfail == 0 { println("PASS export-component/missing-format (error head ≡ golden · rc=2 · usage tail surface-owned)") }
+    }
+    fails = fails + mfail
+
+    exec("rm -rf " + _shq2(cwd))
+    return fails
 }
