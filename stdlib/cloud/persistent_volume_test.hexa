@@ -1,0 +1,66 @@
+// @ci_gate — pure · network-free · deterministic (stdlib_selftest_aggregate --ci-gate)
+// stdlib/cloud/persistent_volume_test.hexa — falsifiers for the RunPod rent
+// PERSISTENT-VOLUME DEFAULT (plan @L3): _runpod_clamp_volume_gb.
+//
+// Live anima incident (2026-06-04): an EPHEMERAL-disk pod kill wiped a full
+// training run; only a persistent-volume re-fire (volumeInGb=50, /workspace)
+// survived. The fix makes `cloud rent` DEFAULT to a persistent /workspace
+// volume with a floor of >= 40 GiB. This test locks the size-resolution
+// contract: a sane default, an honored override, and the >= 40 floor clamp.
+//
+// LLM-free, network-free: _runpod_clamp_volume_gb is PURE over its raw-string
+// arg (the env read lives in runpod_default_volume_gb, which simply forwards
+// env_var("HEXA_CLOUD_VOLUME_GB") into this resolver). So the contract is
+// driven directly with canned strings — no env mutation, fully deterministic.
+//
+// Run:   hexa run stdlib/cloud/persistent_volume_test.hexa
+// PASS:  exits 0, prints "persistent_volume_test PASS — N/N cases".
+
+use "stdlib/cloud/runpod"
+
+fn _fail(case: str, msg: str) {
+    println("FAIL " + case + ": " + msg)
+    exit(1)
+}
+
+fn _eq_int(case: str, got: int, want: int) {
+    if got != want { _fail(case, "got " + str(got) + " want " + str(want)) }
+}
+
+fn _ge_int(case: str, got: int, floor: int) {
+    if got < floor { _fail(case, "got " + str(got) + " want >= " + str(floor)) }
+}
+
+fn main() {
+    let mut n = 0
+
+    // Case 1 — bare default (blank env): a sane positive persistent size that
+    // clears the plan floor of >= 40 GiB (a pod kill must survive).
+    let d = _runpod_clamp_volume_gb("")
+    _ge_int("c1-default-floor", d, 40); n = n + 1
+    _eq_int("c1-default-is-50", d, 50); n = n + 1
+
+    // The live default path (runpod_default_volume_gb) must also clear the
+    // floor — the CI env does not set HEXA_CLOUD_VOLUME_GB, so this is the
+    // real default a rent would use.
+    _ge_int("c1b-live-default-floor", runpod_default_volume_gb(), 40); n = n + 1
+
+    // Case 2 — explicit override above the floor is honored exactly.
+    _eq_int("c2-override-100", _runpod_clamp_volume_gb("100"), 100); n = n + 1
+    _eq_int("c2-override-250", _runpod_clamp_volume_gb("250"), 250); n = n + 1
+
+    // Case 3 — an override BELOW the floor is clamped UP to 40 (never ship a
+    // sub-floor persistent volume that can't hold a checkpoint).
+    _eq_int("c3-below-floor-10", _runpod_clamp_volume_gb("10"), 40); n = n + 1
+    _eq_int("c3-below-floor-39", _runpod_clamp_volume_gb("39"), 40); n = n + 1
+
+    // Case 4 — exactly at the floor is honored (boundary).
+    _eq_int("c4-at-floor-40", _runpod_clamp_volume_gb("40"), 40); n = n + 1
+
+    // Case 5 — junk / zero never yields 0 = accidental ephemeral; it defaults.
+    // (The ONLY ephemeral path is the explicit `--ephemeral` rent flag.)
+    _eq_int("c5-zero-defaults", _runpod_clamp_volume_gb("0"), 50); n = n + 1
+    _eq_int("c5-junk-defaults", _runpod_clamp_volume_gb("abc"), 50); n = n + 1
+
+    println("persistent_volume_test PASS — " + str(n) + "/" + str(n) + " cases")
+}

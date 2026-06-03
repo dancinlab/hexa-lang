@@ -1346,7 +1346,26 @@ fn _cloud_rent_runpod(av: [str], start: int) -> int {
             return 3
         }
     }
-    let pod = runpod_create(api_key, gpu, image, pubkey, owner)
+    // PERSISTENT-VOLUME DEFAULT (@L3): rent provisions a persistent
+    // /workspace volume by default so a pod kill never wipes the run (the
+    // live anima incident lost a full training run on ephemeral disk). The
+    // size defaults to runpod_default_volume_gb (>= 40); `--volume-gb N`
+    // overrides; `--ephemeral` opts OUT (with a loud warning).
+    let mut volume_gb = runpod_default_volume_gb()
+    let vg = _flag_val(av, start, "--volume-gb", "")
+    if len(vg) > 0 {
+        let v = _cli_atoi(vg)
+        if v > 0 { volume_gb = v }
+    }
+    if _has_flag(av, start, "--ephemeral") == 1 {
+        volume_gb = 0
+    }
+    if volume_gb <= 0 {
+        println("[cloud] rent runpod: WARNING — EPHEMERAL container disk (no persistent volume). A pod kill / preemption WIPES all work under /workspace. Drop --ephemeral to get a persistent volume (the anima incident lost a full training run this way).")
+    } else {
+        println("[cloud] rent runpod: persistent /workspace volume " + str(volume_gb) + " GiB (pod-kill-survivable; --ephemeral to opt out)")
+    }
+    let pod = runpod_create_vol(api_key, gpu, image, pubkey, owner, volume_gb)
     if pod.ok == 0 {
         println("[cloud] rent runpod: " + pod.message)
         return 1
