@@ -119,9 +119,20 @@ HOST_ARCH="$(uname -m 2>/dev/null || echo unknown)"
 HOST_OS="$(uname -s 2>/dev/null || echo unknown)"
 HEAD_SHA="$(git -C "$REPO" rev-parse --short HEAD 2>/dev/null || echo unknown)"
 
-# readelf relocs of OBJ → stdout (normalized)
-relocs_of() { [ -z "$READELF" ] && return 1; $READELF -r "$1" 2>/dev/null; }
-count_reloc() { grep -cE "(^|[[:space:]])$2([[:space:]]|$)" <<<"$1"; }
+# readelf relocs of OBJ → stdout. Use `-rW` (wide) so GNU readelf does NOT
+# truncate long AArch64 type names (`R_AARCH64_ADR_PREL_PG_HI21` →
+# `R_AARCH64_ADR_PRE` in the default narrow column); llvm-readobj uses --relocs.
+relocs_of() {
+  [ -z "$READELF" ] && return 1
+  case "$READELF" in
+    *llvm-readobj*) $READELF "$1" 2>/dev/null ;;
+    *)              readelf -rW "$1" 2>/dev/null ;;
+  esac
+}
+# Count a reloc type by matching the FULL name as a whole token. The wide
+# readelf form prints the full name; this matches it exactly (no trailing
+# alnum/underscore) so `..._PG_HI21` never matches a longer name by prefix.
+count_reloc() { grep -oE "${2}([^0-9A-Za-z_]|$)" <<<"$1" | wc -l | tr -d ' '; }
 
 echo "── selfhost cross-emit smoke (M3) ────────────────────────────────"
 echo "  hexa      : $HEXA"
