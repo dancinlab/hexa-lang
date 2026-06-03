@@ -1,0 +1,40 @@
+C-ZERO milestone-5 — tensor_kernels byte-equality oracle verdict
+context: self/native/tensor_kernels.c was graduated (git rm) in commit 7906951c0 (#2065,
+  "tracked .c = 0"). The emit + byte_diff harnesses remain on main. This
+  verdict REPLAYS the byte-equality proof: the hand-written baseline is
+  restored from its pre-deletion parent commit
+  151c52c82502e93d01735c58b43b017d102fee63:self/native/tensor_kernels.c (loc=306),
+  then self/native/tensor_kernels_byte_diff.hexa is run with HEXA_HAL_ROOT pointing at a
+  tree containing that restored baseline. The .c is NOT re-committed.
+baseline sha256(.c) = b201b85820df05a6bfbfc877e6d9b73ef0566b954a87e4f9a3bea63a72ec4d99
+oracle invocation:
+  HEXA_HAL_ROOT=<tree-with-restored-tensor_kernels.c> hexa-run self/native/tensor_kernels_byte_diff.hexa
+raw stdout (verbatim):
+------------------------------------------------------------------------
+========================================================================
+  self/native — tensor_kernels_byte_diff: B9.C-10 .c-text byte-diff oracle
+========================================================================
+  generator: self/native/tensor_kernels_emit.hexa
+  oracle:    source-SHA byte-diff vs hand-written tensor_kernels.c
+  note:      runtime.c #include fragment — .o proof via full hexa_cc build
+
+  scratch: /var/folders/pg/76j9wlc94l13bb2mwp2szvgh0000gn/T/tensor_kernels_byte_diff.XXXXXX.h3JVC884Mr
+
+  [PASS] hexa emitter self/native/tensor_kernels_emit.hexa present
+         · /tmp/cz-hal/self/native/tensor_kernels_emit.hexa
+  [PASS] hand-written self/native/tensor_kernels.c present
+         · /tmp/cz-hal/self/native/tensor_kernels.c
+  [PASS] gate-1 source-text byte-identical (sha256(.c))
+         · orig=b201b85820df05a6bfbfc877e6d9b73ef0566b954a87e4f9a3bea63a72ec4d99 gen=b201b85820df05a6bfbfc877e6d9b73ef0566b954a87e4f9a3bea63a72ec4d99
+
+  B9.C-10 tensor_kernels.c .c-text byte-identity:
+    PROVEN ✓ — hand-written tensor_kernels.c is fully hexa-emittable.
+    DELETION GATE OPEN — self/native/tensor_kernels.c may be `git rm` once the
+    full hexa_cc build (regen + runtime.c compile + smoke) also PASSes.
+========================================================================
+  3/3 checks passed
+__HEXA_LANG_TENSOR_KERNELS_BYTE_DIFF__ PASS
+------------------------------------------------------------------------
+VERDICT: BYTE-EQ — emitter self/native/tensor_kernels_emit.hexa reproduces the
+  hand-written self/native/tensor_kernels.c byte-for-byte (sha256 match, 3/3 checks).
+  tensor_kernels C shim is emitter-superseded / oracle-proven-retirable (306 LOC).

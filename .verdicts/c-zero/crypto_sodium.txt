@@ -1,0 +1,40 @@
+C-ZERO milestone-5 — crypto_sodium byte-equality oracle verdict
+context: self/native/crypto_sodium.c was graduated (git rm) in commit 7906951c0 (#2065,
+  "tracked .c = 0"). The emit + byte_diff harnesses remain on main. This
+  verdict REPLAYS the byte-equality proof: the hand-written baseline is
+  restored from its pre-deletion parent commit
+  151c52c82502e93d01735c58b43b017d102fee63:self/native/crypto_sodium.c (loc=336),
+  then self/native/crypto_sodium_byte_diff.hexa is run with HEXA_HAL_ROOT pointing at a
+  tree containing that restored baseline. The .c is NOT re-committed.
+baseline sha256(.c) = d5e0929d1437dcf9292c3b018e0dade3cf892a70f9b95ab608b87f7d39ba24fa
+oracle invocation:
+  HEXA_HAL_ROOT=<tree-with-restored-crypto_sodium.c> hexa-run self/native/crypto_sodium_byte_diff.hexa
+raw stdout (verbatim):
+------------------------------------------------------------------------
+========================================================================
+  self/native — crypto_sodium_byte_diff: B9.C-10 .c-text byte-diff oracle
+========================================================================
+  generator: self/native/crypto_sodium_emit.hexa
+  oracle:    source-SHA byte-diff vs hand-written crypto_sodium.c
+  note:      runtime.c #include fragment — .o proof via full hexa_cc build
+
+  scratch: /var/folders/pg/76j9wlc94l13bb2mwp2szvgh0000gn/T/crypto_sodium_byte_diff.XXXXXX.H1wGN4S5Bw
+
+  [PASS] hexa emitter self/native/crypto_sodium_emit.hexa present
+         · /tmp/cz-hal/self/native/crypto_sodium_emit.hexa
+  [PASS] hand-written self/native/crypto_sodium.c present
+         · /tmp/cz-hal/self/native/crypto_sodium.c
+  [PASS] gate-1 source-text byte-identical (sha256(.c))
+         · orig=d5e0929d1437dcf9292c3b018e0dade3cf892a70f9b95ab608b87f7d39ba24fa gen=d5e0929d1437dcf9292c3b018e0dade3cf892a70f9b95ab608b87f7d39ba24fa
+
+  B9.C-10 crypto_sodium.c .c-text byte-identity:
+    PROVEN ✓ — hand-written crypto_sodium.c is fully hexa-emittable.
+    DELETION GATE OPEN — self/native/crypto_sodium.c may be `git rm` once the
+    full hexa_cc build (regen + runtime.c compile + smoke) also PASSes.
+========================================================================
+  3/3 checks passed
+__HEXA_LANG_CRYPTO_SODIUM_BYTE_DIFF__ PASS
+------------------------------------------------------------------------
+VERDICT: BYTE-EQ — emitter self/native/crypto_sodium_emit.hexa reproduces the
+  hand-written self/native/crypto_sodium.c byte-for-byte (sha256 match, 3/3 checks).
+  crypto_sodium C shim is emitter-superseded / oracle-proven-retirable (336 LOC).

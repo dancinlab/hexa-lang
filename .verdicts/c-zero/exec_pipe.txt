@@ -1,0 +1,40 @@
+C-ZERO milestone-5 — exec_pipe byte-equality oracle verdict
+context: self/native/exec_pipe.c was graduated (git rm) in commit 7906951c0 (#2065,
+  "tracked .c = 0"). The emit + byte_diff harnesses remain on main. This
+  verdict REPLAYS the byte-equality proof: the hand-written baseline is
+  restored from its pre-deletion parent commit
+  151c52c82502e93d01735c58b43b017d102fee63:self/native/exec_pipe.c (loc=114),
+  then self/native/exec_pipe_byte_diff.hexa is run with HEXA_HAL_ROOT pointing at a
+  tree containing that restored baseline. The .c is NOT re-committed.
+baseline sha256(.c) = aa3b15e892c29608312853339c315c0cb1b776192b35ea5805a565909a4c6cf5
+oracle invocation:
+  HEXA_HAL_ROOT=<tree-with-restored-exec_pipe.c> hexa-run self/native/exec_pipe_byte_diff.hexa
+raw stdout (verbatim):
+------------------------------------------------------------------------
+========================================================================
+  self/native — exec_pipe_byte_diff: B9.C-10 .c-text byte-diff oracle
+========================================================================
+  generator: self/native/exec_pipe_emit.hexa
+  oracle:    source-SHA byte-diff vs hand-written exec_pipe.c
+  note:      runtime.c #include fragment — .o proof via full hexa_cc build
+
+  scratch: /var/folders/pg/76j9wlc94l13bb2mwp2szvgh0000gn/T/exec_pipe_byte_diff.XXXXXX.nsWh1u3Zth
+
+  [PASS] hexa emitter self/native/exec_pipe_emit.hexa present
+         · /tmp/cz-hal/self/native/exec_pipe_emit.hexa
+  [PASS] hand-written self/native/exec_pipe.c present
+         · /tmp/cz-hal/self/native/exec_pipe.c
+  [PASS] gate-1 source-text byte-identical (sha256(.c))
+         · orig=aa3b15e892c29608312853339c315c0cb1b776192b35ea5805a565909a4c6cf5 gen=aa3b15e892c29608312853339c315c0cb1b776192b35ea5805a565909a4c6cf5
+
+  B9.C-10 exec_pipe.c .c-text byte-identity:
+    PROVEN ✓ — hand-written exec_pipe.c is fully hexa-emittable.
+    DELETION GATE OPEN — self/native/exec_pipe.c may be `git rm` once the
+    full hexa_cc build (regen + runtime.c compile + smoke) also PASSes.
+========================================================================
+  3/3 checks passed
+__HEXA_LANG_EXEC_PIPE_BYTE_DIFF__ PASS
+------------------------------------------------------------------------
+VERDICT: BYTE-EQ — emitter self/native/exec_pipe_emit.hexa reproduces the
+  hand-written self/native/exec_pipe.c byte-for-byte (sha256 match, 3/3 checks).
+  exec_pipe C shim is emitter-superseded / oracle-proven-retirable (114 LOC).

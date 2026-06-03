@@ -1,0 +1,40 @@
+C-ZERO milestone-5 — thread byte-equality oracle verdict
+context: self/native/thread.c was graduated (git rm) in commit 7906951c0 (#2065,
+  "tracked .c = 0"). The emit + byte_diff harnesses remain on main. This
+  verdict REPLAYS the byte-equality proof: the hand-written baseline is
+  restored from its pre-deletion parent commit
+  151c52c82502e93d01735c58b43b017d102fee63:self/native/thread.c (loc=277),
+  then self/native/thread_byte_diff.hexa is run with HEXA_HAL_ROOT pointing at a
+  tree containing that restored baseline. The .c is NOT re-committed.
+baseline sha256(.c) = cc5f4bda8299d913cd7b5d06286fc00ad25ae2c66fdb49ee15a8a50935c1b4ac
+oracle invocation:
+  HEXA_HAL_ROOT=<tree-with-restored-thread.c> hexa-run self/native/thread_byte_diff.hexa
+raw stdout (verbatim):
+------------------------------------------------------------------------
+========================================================================
+  self/native — thread_byte_diff: B9.C-10 .c-text byte-diff oracle
+========================================================================
+  generator: self/native/thread_emit.hexa
+  oracle:    source-SHA byte-diff vs hand-written thread.c
+  note:      runtime.c #include fragment — .o proof via full hexa_cc build
+
+  scratch: /var/folders/pg/76j9wlc94l13bb2mwp2szvgh0000gn/T/thread_byte_diff.XXXXXX.YQ9YYykUaq
+
+  [PASS] hexa emitter self/native/thread_emit.hexa present
+         · /tmp/cz-hal/self/native/thread_emit.hexa
+  [PASS] hand-written self/native/thread.c present
+         · /tmp/cz-hal/self/native/thread.c
+  [PASS] gate-1 source-text byte-identical (sha256(.c))
+         · orig=cc5f4bda8299d913cd7b5d06286fc00ad25ae2c66fdb49ee15a8a50935c1b4ac gen=cc5f4bda8299d913cd7b5d06286fc00ad25ae2c66fdb49ee15a8a50935c1b4ac
+
+  B9.C-10 thread.c .c-text byte-identity:
+    PROVEN ✓ — hand-written thread.c is fully hexa-emittable.
+    DELETION GATE OPEN — self/native/thread.c may be `git rm` once the
+    full hexa_cc build (regen + runtime.c compile + smoke) also PASSes.
+========================================================================
+  3/3 checks passed
+__HEXA_LANG_THREAD_BYTE_DIFF__ PASS
+------------------------------------------------------------------------
+VERDICT: BYTE-EQ — emitter self/native/thread_emit.hexa reproduces the
+  hand-written self/native/thread.c byte-for-byte (sha256 match, 3/3 checks).
+  thread C shim is emitter-superseded / oracle-proven-retirable (277 LOC).
