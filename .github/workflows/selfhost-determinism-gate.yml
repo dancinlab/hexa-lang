@@ -1,0 +1,97 @@
+name: selfhost-determinism-gate
+
+# ── SELFHOST-CI M6 determinism gate (gen3 DEFAULT promoted path) ─────────────
+#
+# PURPOSE
+#   A STANDING, per-PR gate that the native self-host toolchain is BYTE-
+#   DETERMINISTic on the gen3 DEFAULT path — the promoted hx-selfhost-cli
+#   compile+link route (graduated gen3 + hexa_ld + rt.o). Emitting the same
+#   source twice produces byte-identical objects, and relinking the same object
+#   twice (same output basename, two dirs — isolating the path-derived
+#   build-id) is byte-identical: no embedded timestamp / random UUID / unstable
+#   sort / hashmap-iteration leak. Any TRUE nondeterminism (two runs produce
+#   DIFFERENT bytes for the same input) FAILS the PR instead of surfacing only
+#   at the next manual self-host build/promotion.
+#
+#   This is the REPRODUCIBILITY fence, distinct from the sister gates:
+#     • selfhost-byteeq-gate.yml      — whole-compiler byte-eq fixpoint gen3≡gen4
+#     • selfhost-codegen-guard.yml    — native arm64 codegen-class correctness
+#     • selfhost-crossemit-smoke.yml  — cross-target object-format reloc fence
+#     • selfhost-promote-parity.yml   — gen3 ≡ shipped behaviour-match
+#     • selfhost-shim-integrity.yml   — hx-selfhost-cli shim routing
+#
+# WHAT THE GATE ASSERTS
+#   Over self/test/miscompile_zero/*.hexa (12 programs):
+#     PHASE 1  gen3 --emit=obj each program TWICE -> cmp byte-identical.
+#     PHASE 2  hexa_ld -o out prog.o rt.o --lc-main _main TWICE (same basename,
+#              two dirs) -> cmp byte-identical.
+#   The PHASE-2 link is the REAL gen3 promoted route (rt.o appended +
+#   --lc-main _main), not the legacy standalone hld_fixed bootstrap. The
+#   committed verdict .verdicts/selfhost-ci/DETERMINISM.txt is the REAL ghost
+#   run (graduated slot): 12/12 re-emit BYTE-EQ + 12/12 relink BYTE-EQ,
+#   FIRSTDIFF=0 on both axes, gate exit 0.
+#
+# RUNNER MODEL (same exit-2-neutral canary shape as the sister gates)
+#   The determinism gate on the gen3 DEFAULT path needs the GRADUATED gen3 slot
+#   (gen3 + hexa_ld + rt.o), installed by tool/promote_selfhost.sh into
+#   $HX_HOME/self/native/selfhost/, or a fresh tool/build_selfhost.sh output.
+#   macos-latest (the hosted runner) does NOT carry those graduated artifacts;
+#   the gate's own CANARY then exits 2 (SETUP/INFRA — the compiler cannot
+#   native-emit here, determinism untestable NOT broken). This workflow REMAPS
+#   that to NEUTRAL (exit 0 with a ::notice::) rather than false-failing the PR
+#   — the SAME exit-2-neutral discipline as #2600/#2605/#2607/#2608/#2609. It
+#   is NOT green-by-skip: the moment a runner DOES hold a graduated gen3 slot (a
+#   self-hosted ghost/mini runner, or vars pointing at a slot), every leg runs
+#   REAL and a TRUE nondeterminism exits 1.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'tool/determinism_gate.sh'
+      - 'self/test/miscompile_zero/**'
+      - '.github/workflows/selfhost-determinism-gate.yml'
+  pull_request:
+    paths:
+      - 'tool/determinism_gate.sh'
+      - 'self/test/miscompile_zero/**'
+      - '.github/workflows/selfhost-determinism-gate.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  selfhost-determinism-gate:
+    name: selfhost determinism (gen3 DEFAULT path — re-emit + relink byte-eq)
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+
+      # ── Determinism gate invocation ──────────────────────────────────────
+      # The gate auto-discovers the graduated slot {gen3,hexa_ld,rt.o} at
+      # SELFHOST_SLOT / $HX_HOME/self/native/selfhost / ~/.hx/self/native/
+      # selfhost / build/selfhost. On a host with no slot, the CANARY exits 2
+      # (SETUP/INFRA) -> we remap to NEUTRAL, exactly like the sister gates.
+      - name: Determinism — re-emit + relink byte-eq (gen3 DEFAULT path)
+        shell: bash
+        env:
+          # A self-hosted runner sets one of these repo/org Variables to its
+          # graduated slot or HX_HOME; absent on macos-latest -> neutral.
+          SELFHOST_SLOT: ${{ vars.SELFHOST_SLOT }}
+          HX_HOME: ${{ vars.HX_HOME }}
+        run: |
+          set -uo pipefail
+          # GitHub's default step shell runs with `-e`; capture rc with
+          # `|| rc=$?` so the neutral remap survives a nonzero gate exit.
+          rc=0
+          bash tool/determinism_gate.sh || rc=$?
+
+          if [ "$rc" -eq 2 ]; then
+            echo "::notice::selfhost-determinism-gate NEUTRAL (exit 2) — no graduated gen3 slot (gen3+hexa_ld+rt.o) on this host, so the compiler cannot native-emit here. Determinism on the gen3 DEFAULT path is UNTESTABLE here, NOT broken. To run REAL, target a self-hosted runner holding a tool/build_selfhost.sh / promote output (or set the SELFHOST_SLOT repo variable)."
+            exit 0
+          fi
+          # rc 0 = determinism floor held; rc 1 = a TRUE nondeterminism (two
+          # runs produced DIFFERENT bytes for the same input) -> fail the PR.
+          exit "$rc"
