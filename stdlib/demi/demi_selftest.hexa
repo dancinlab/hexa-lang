@@ -308,6 +308,41 @@ fn _make_compose_fixture(repo: string) {
     exec("printf %s " + _shq2(idx) + " > " + _shq2(ddir + "/INDEX.demi"))
 }
 
+// _make_shelf_fixture(repo) — a deterministic domains/ tree for the PR#11
+// `list-shelf <domain>` parity cells. BOTH surfaces read it via DEMIURGE_REPO
+// (Swift IngredientShelf.section6Lines opens $DEMIURGE_REPO/domains/<d>.md;
+// hexa dc_section6_lines resolves identically off rl_project_root). exports/
+// must exist so rl_project_root() (exportsRoot minus its last segment) lands on
+// <repo>; `repo` must be a real (non-symlinked) path (lexical-standardize).
+//
+// Two domain maps exercise every render branch:
+//   warp  — §6 with TWO verb lines (설계 + 해석) → multi verbs render in
+//           rawValue order; a `[multi]` group → ` (multi)` tag; multi-option
+//           join ` / `; a `;`-split second group on the design line. The §6
+//           `해석` token prefix-matches koreanLabel `해석⟲`.
+//   nomap — a domain map with NO `## ... Design options` section → empty shelf
+//           → the "(no §6 …)" mapless line. (A truly-missing file is a SEPARATE
+//           cell against `ghostdom`, which has no .md at all — same render.)
+// The DEMIURGE_EXPERT-independent output carries no absolute paths (machine-
+// independent golden). Captured byte-for-byte from the Swift reference 2026-06-04.
+fn _make_shelf_fixture(repo: string) {
+    let ddir = repo + "/domains"
+    exec("rm -rf " + _shq2(repo) + " && mkdir -p " + _shq2(ddir)
+        + " && mkdir -p " + _shq2(repo + "/exports"))
+    let warp = "# WARP domain\n\n"
+        + "## 1. Goal\n"
+        + "warp stuff\n\n"
+        + "## 6. Design options (workbench shelf)\n"
+        + "> options below\n"
+        + "- 설계: metric = Alcubierre / Natario ; shell [multi] = thin / thick / graded\n"
+        + "- 해석: solver = analytic / numeric\n"
+    let nomap = "# NOMAP domain\n\n"
+        + "## 1. Goal\n"
+        + "no section six here\n"
+    exec("printf %s " + _shq2(warp) + " > " + _shq2(ddir + "/warp.md"))
+    exec("printf %s " + _shq2(nomap) + " > " + _shq2(ddir + "/nomap.md"))
+}
+
 // ── PR#12 ProjectStore fixture (the fixed app-data store dir) ───────────────
 //
 // ProjectStore.projectsRoot is ~/Library/Application Support/lab.dancin.demiurge/
@@ -1041,6 +1076,46 @@ fn main() {
         + "  성격: \n"
     fails = fails + _cell("compose/unknown", entry, swift_bin, cmpenv,
                           "compose zzznope", g_c_unknown, 0)
+
+    // ── PR#11 list-shelf cells — `list-shelf <domain>` renders the §6
+    // ingredient-shelf design-option groups per 7-verb stage, byte-for-byte
+    // against the Swift listShelf(_:) reference. BOTH surfaces read the SAME
+    // domains/<d>.md maps via DEMIURGE_REPO. The fixture exercises: a domain
+    // WITH a §6 shelf (two verb lines in rawValue order · a `[multi]` tag ·
+    // `;`-split + ` / `-join), a domain with NO §6 section (mapless render),
+    // and a truly-missing domain map (same mapless render). Synthetic-fallback
+    // label (== key) keeps the goldens machine-independent — like compose's
+    // unknown cell, the INDEX.demi-backed label render lands with the catalog
+    // loader. Goldens captured byte-for-byte from Swift DemiurgeCLI 2026-06-04.
+    let shfix = home + "/.demi-selftest-shelf-fixture"
+    _make_shelf_fixture(shfix)
+    let shenv = "DEMIURGE_REPO=" + _shq2(shfix)
+
+    // WITH a §6 shelf — 설계 (rawValue 2 → "3.") two groups, the 2nd `[multi]`;
+    // 해석 (rawValue 3 → "4.", koreanLabel 해석⟲) one group. Verbs render in
+    // rawValue order; options joined " / "; `[multi]` → " (multi)".
+    let g_ls_warp = "ingredient shelf — domain 'warp' (warp):\n"
+        + "  3. 설계:\n"
+        + "       metric = Alcubierre / Natario\n"
+        + "       shell (multi) = thin / thick / graded\n"
+        + "  4. 해석⟲:\n"
+        + "       solver = analytic / numeric\n"
+    fails = fails + _cell("list-shelf/with-shelf", entry, swift_bin, shenv,
+                          "list-shelf warp", g_ls_warp, 0)
+
+    // NO §6 section — the domain map exists but has no "Design options" header
+    // → empty shelf → the mapless line (rc 0, honest no-op, not an error).
+    let g_ls_nomap = "ingredient shelf — domain 'nomap' (nomap):\n"
+        + "  (no §6 design-options section — domains/nomap.md absent or mapless)\n"
+    fails = fails + _cell("list-shelf/no-section6", entry, swift_bin, shenv,
+                          "list-shelf nomap", g_ls_nomap, 0)
+
+    // MISSING domain — no domains/ghostdom.md at all → same mapless render
+    // (Swift section6Lines returns nil on a read miss; hexa dc_resolve "" → []).
+    let g_ls_miss = "ingredient shelf — domain 'ghostdom' (ghostdom):\n"
+        + "  (no §6 design-options section — domains/ghostdom.md absent or mapless)\n"
+    fails = fails + _cell("list-shelf/missing-domain", entry, swift_bin, shenv,
+                          "list-shelf ghostdom", g_ls_miss, 0)
 
     if fails == 0 { println("demi_parity_selftest PASS") }
     else { println("demi_parity_selftest FAIL — " + to_string(fails) + " cell(s)") }
