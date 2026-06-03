@@ -10,7 +10,8 @@
 //   0x80       -> 128        (signed-byte overflow boundary)
 //   0xff       -> 255        (the original 47421c89c probe)
 //   0xffff     -> 65535      (16-bit-wide MOVZ boundary)
-//   0xdeadbeef -> 3735928559 (32-bit-wide, multi-MOVK lowering)
+//   0xdeadbeef -> 3735928559 (32-bit-wide → MOVZ #0xbeef + MOVK #0xdead,lsl#16;
+//                             the wide-constant multi-chunk lowering path)
 
 fn h0() -> i64  { return 0x0 }
 fn h7f() -> i64 { return 0x7f }

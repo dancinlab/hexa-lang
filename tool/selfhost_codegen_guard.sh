@@ -181,8 +181,25 @@ echo "────────────────────────�
 # ── CORPUS 2 — 0x-LITERAL corpus (locks #47421c89c) ───────────────────────
 echo "CORPUS 2 — 0x-literal value-check (locks #47421c89c):"
 HEXSRC="$CORPUS/g1_hex_corpus.hexa"
-# expected immediates (hex form as the disassembler prints them) + their decimal
-HEX_IMMS=("0x0" "0x7f" "0x80" "0xff" "0xffff" "0xdeadbeef" "0x8" "0x1ff")
+# Expected immediates, each "literal:checkspec". The checkspec is a
+# space-separated list of disassembler immediate tokens that MUST ALL be
+# present for the literal to count as correctly lowered. Constants that fit a
+# single MOVZ (<=16 bits) check their own `#0xNN`; WIDE constants (>16 bits)
+# are lowered MOVZ low-half + MOVK high-half(s) `lsl #16/#32/...`, so they
+# check their 16-bit chunks instead of the (never-emitted) full immediate.
+# A regression of #47421c89c re-collapses a literal to #0x0 → its chunk(s)
+# vanish from the stream and the check fails loudly.
+#   0xdeadbeef = MOVZ #0xbeef + MOVK #0xdead,lsl#16  (32-bit, multi-chunk)
+HEX_CHECKS=(
+  "0x0:#0x0"
+  "0x7f:#0x7f"
+  "0x80:#0x80"
+  "0xff:#0xff"
+  "0xffff:#0xffff"
+  "0xdeadbeef:#0xbeef #0xdead"
+  "0x8:#0x8"
+  "0x1ff:#0x1ff"
+)
 if [ ! -e "$HEXSRC" ]; then
   printf "  FAIL  corpus program absent: %s\n" "$HEXSRC"
   fail=1
@@ -203,21 +220,29 @@ else
       echo "  PASS  0x-literal corpus (ENCODE-MISS=0; disas value-check unavailable)"
     else
       miss=""
-      for imm in "${HEX_IMMS[@]}"; do
-        # match `#0xff` / `#0xff,` etc as an immediate operand in the stream
-        if echo "$DIS" | grep -qE "#${imm}([^0-9a-fA-F]|$)"; then
-          printf "  ok    immediate %-12s present in instruction stream\n" "#$imm"
+      for spec in "${HEX_CHECKS[@]}"; do
+        lit="${spec%%:*}"
+        toks="${spec#*:}"
+        lit_ok=1
+        for tok in $toks; do
+          # match e.g. `#0xff` / `#0xff,` as an immediate operand (no trailing hex)
+          if ! echo "$DIS" | grep -qE "${tok}([^0-9a-fA-F]|$)"; then
+            lit_ok=0
+          fi
+        done
+        if [ "$lit_ok" -eq 1 ]; then
+          printf "  ok    literal %-12s lowered (%s) present in stream\n" "$lit" "$toks"
         else
-          printf "  FAIL  immediate %-12s MISSING (literal re-collapsed?)\n" "#$imm"
-          miss="$miss $imm"
+          printf "  FAIL  literal %-12s MISSING chunk(s) %s (re-collapsed?)\n" "$lit" "$toks"
+          miss="$miss $lit"
         fi
       done
       if [ -n "$miss" ]; then
-        echo "        ↳ missing immediates:$miss  (disas: $OUT/g1_hex.dis)"
+        echo "        ↳ literals with missing chunks:$miss  (disas: $OUT/g1_hex.dis)"
         $DISAS "$OUT/g1_hex.o" >"$OUT/g1_hex.dis" 2>/dev/null
         fail=1
       else
-        echo "  PASS  0x-literal corpus — all ${#HEX_IMMS[@]} immediates present, ENCODE-MISS=0"
+        echo "  PASS  0x-literal corpus — all ${#HEX_CHECKS[@]} literals lowered correctly, ENCODE-MISS=0"
       fi
     fi
   fi
