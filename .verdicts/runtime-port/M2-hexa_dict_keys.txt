@@ -1,0 +1,27 @@
+RUNTIME-PORT · Milestone-2 · hexa_dict_keys
+date: 2026-06-03   host: mini (LOCAL — no ghost/pool)   base: origin/main
+verdict: BLOCKED (map-representation mismatch — not RUNEQ-able as a leaf)
+########################################################################
+
+C SSOT : HexaVal hexa_dict_keys(HexaVal m) { return hexa_map_keys(m); }
+                                            self/runtime.c L11887
+
+Looked like the easiest leaf (1 LOC dispatch) but is NOT a safe leaf:
+
+1. hexa_dict_keys delegates to hexa_map_keys, which iterates the NATIVE
+   C hashmap backing a `{}` literal. Its key ORDER is the C hashmap's
+   internal iteration order.
+2. The hexa-side equivalent rt_map_keys (self/rt/map_ops.hexa →
+   map_keys_pure) operates on a SEPARATE pure-hexa functional map
+   representation built via rt_map_new/rt_map_set — a different data
+   structure with its own ordering.
+3. A meaningful RUNEQ (same map object → both fns → compare key arrays)
+   is therefore impossible at the leaf level: the two fns consume two
+   different map types. Verifying hexa_dict_keys honestly requires first
+   RUNEQ-proving rt_map_keys' key-ORDER against the native C map across
+   insertion/collision patterns — a whole-map-representation port, well
+   outside a "smallest/safest leaf" M2 scope.
+
+Per g5/g63 honesty: NOT claiming PORT-EQ on an un-RUNEQ'd dispatch.
+Deferred to a future map-representation port milestone. The "1 LOC"
+count was misleading — the real surface is the entire map backing store.
