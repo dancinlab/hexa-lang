@@ -1217,6 +1217,27 @@ pub fn rt_len(v: HexaVal) -> int {
     return byte_len(v) as int
 }
 
+// RUNTIME-PORT M5 — hexa-native port of hexa_null_coal (runtime_core.c).
+// `a ?? b`: return b if a is void OR an empty/NUL-leading string, else a.
+// Byte-faithful to the C body (HX_IS_VOID || HX_STR[0]=='\0'): the
+// `a.byte_at(0) == 0` arm mirrors the C first-byte-NUL test (a perf-31
+// length-header string can carry an embedded leading NUL with len>0). The
+// C `HX_STR(a)==NULL` arm has no hexa analog — `??` never produces a
+// TAG_STR with a NULL backing pointer, so it cannot be exercised.
+// Recursion-safe: uses only typeof()/byte_at()/byte_len(), never re-enters
+// hexa_null_coal. Lives in the LINKED rt-stdlib set (stdlib/runtime), the
+// same object set as rt_len/rt_map_keys — distinct from the dormant
+// self/rt/core.hexa scaffold (cg_rt_target=="c", not linked).
+pub fn rt_null_coal(a: HexaVal, b: HexaVal) -> HexaVal {
+    let t = typeof(a)
+    if t == "void" { return b }
+    if t == "string" {
+        if byte_len(a) == 0 { return b }
+        if a.byte_at(0) == 0 { return b }
+    }
+    return a
+}
+
 // ─────────────────────────────────────────────────────────────────────
 // Step 3 cycle 103 — hexa_eq same-tag scalar branches (잔여 #4 → 9/9)
 // ─────────────────────────────────────────────────────────────────────
