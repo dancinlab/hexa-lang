@@ -1,0 +1,111 @@
+RUNTIME-PORT · Milestone-5 · hexa_null_coal → rt_null_coal (delegation-guard wire)
+date: 2026-06-03   host: mini (LOCAL — no ghost/pool)   base: origin/main a827beeb8
+verdict: PORT-EQ   (12/12 RUNEQ cases value-faithful vs C SSOT, incl leading-NUL edge)
+########################################################################
+
+DISPATCH CHAIN
+------------------------------------------------------------------------
+  surface `a ?? b` / `a ??= b`  (codegen.hexa L3342/L3351/L5531)
+    -> hexa_null_coal(a, b)              (runtime_core.c, C SSOT)
+    -> [HEXA_HAS_HEXA_RT_STDLIB] rt_null_coal(a, b)
+         (stdlib/runtime/numeric.hexa — LINKED rt-stdlib object set)
+
+C SSOT body (runtime_core_emit.hexa, unchanged under #else):
+    if (HX_IS_VOID(a)) return b;
+    if (HX_IS_STR(a) && (HX_STR(a) == NULL || HX_STR(a)[0] == '\0')) return b;
+    return a;
+
+THE PORT (this PR — hexa-source + emitter guard only)
+------------------------------------------------------------------------
+1. stdlib/runtime/numeric.hexa  (+21 LOC): NEW rt_null_coal, placed next to
+   the live rt_len / rt_map_keys polymorphic ports in the SAME linked object
+   set. Body:
+       let t = typeof(a)
+       if t == "void" { return b }
+       if t == "string" {
+           if byte_len(a) == 0 { return b }
+           if a.byte_at(0) == 0 { return b }   // mirrors HX_STR[0]=='\0'
+       }
+       return a
+2. self/runtime_core_emit.hexa  (+13 LOC): wrap the emitted hexa_null_coal C
+   body in the standard #ifdef HEXA_HAS_HEXA_RT_STDLIB delegation guard
+   (delegate -> rt_null_coal; #else retains the C body for the standalone
+   smoke link). Identical shape to the M2 rt_len / rt_str_char_count guards.
+
+KEY FEASIBILITY CORRECTION vs M4 inventory
+------------------------------------------------------------------------
+M4 said "rt_null_coal hexa impl ALREADY EXISTS; needs only HX_IS_VOID/HX_IS_STR
+tag preds (exist)". It DOES exist — but ONLY in self/rt/core.hexa, which is the
+DORMANT rt_target=="rt" migration scaffold (cg_rt_target() is hardcoded "c",
+rt_symbols.hexa: core "deferred to last"). That copy is NOT in the linked
+runtime object set, so a core-side `extern rt_null_coal` would have been an
+UNDEFINED SYMBOL at link under HEXA_HAS_HEXA_RT_STDLIB. The real work was
+adding rt_null_coal to the LINKED set (stdlib/runtime/numeric.hexa) — the same
+object set that defines the live rt_len/rt_map_keys this PR neighbors it with.
+
+RECURSION SAFETY
+------------------------------------------------------------------------
+rt_null_coal uses only typeof() / byte_len() / byte_at() — none re-enter
+hexa_null_coal. `byte_at` lowers to hexa_str_byte_at (raw byte read, C, no
+null-coal call). No infinite-recursion path. (Contrast: the M4 substring /
+char_code_at "already-exists" leaves DO have recursion traps — see M5 notes.)
+
+METHOD (real RUNEQ — not self-judge; LOCAL on mini, no ghost/pool)
+------------------------------------------------------------------------
+Harness /tmp/rp-m5-runeq-nullcoal.hexa run via the installed `hexa`. For each
+corpus value it computes BOTH the C-SSOT branch (the live `??` operator, which
+lowers to hexa_null_coal) AND the inline transliteration of the ported
+rt_null_coal, then asserts both selected the SAME operand (a vs b). The `??`
+operator → hexa_null_coal lowering is source-confirmed (codegen.hexa above),
+so the C path IS the ground truth.
+
+RUNEQ EVIDENCE (verbatim stdout)
+------------------------------------------------------------------------
+ok   void->b
+ok   empty->b
+ok   str->a
+ok   onechar->a
+ok   int0->a
+ok   int42->a
+ok   float0->a
+ok   boolfalse->a
+ok   arr->a
+ok   emptyarr->a
+ok   utf8->a
+ok   nullead->b
+RUNEQ-RESULT pass=12 fail=0
+
+CASE COVERAGE
+------------------------------------------------------------------------
+  void        : -> b (HX_IS_VOID arm).
+  empty       : "" -> b (byte_len==0 arm == C [0]=='\0' for NUL-term empty).
+  str/onechar : non-empty -> a.
+  int0/int42  : non-string non-void scalar -> a (both guards fall through).
+  float0      : 0.0 -> a (NOT coalesced — C only voids/empties).
+  boolfalse   : false -> a (bool is neither void nor string).
+  arr/emptyarr: array (incl []) -> a (C empties STRINGS only, never arrays).
+  utf8        : "한글" multibyte -> a.
+  nullead     : chr(0)+"tail" -> b — the leading-NUL edge: port's byte_at(0)==0
+                arm reproduces C's HX_STR(a)[0]=='\0' (a perf-31 length-header
+                string carries an embedded leading NUL with byte_len>0). MATCH.
+
+KNOWN NON-EXERCISABLE EDGE
+------------------------------------------------------------------------
+The C `HX_STR(a)==NULL` sub-arm has no hexa analog. The `??` operator never
+produces a TAG_STR HexaVal with a NULL backing pointer (hexa_str/intern always
+allocate), so the arm is dead on the live path — not a divergence.
+
+BYTE-EQ GATE NOTE
+------------------------------------------------------------------------
+self/runtime_core_emit.hexa generates self/runtime_core.c, which compiles INTO
+the self-host transpiler; stdlib/runtime/numeric.hexa likewise links into the
+runtime. So this change trips the gen3->gen4 codegen byte-eq fixpoint + the
+non-required ghost selfhost-byteeq-real check (SAME gate class as B1 #2632 /
+dict_keys #2634). Ghost REAL run intentionally NOT run here — PARENT watches it
+before merge. Local evidence is conclusive for source-level PORT-EQ; the ghost
+gate validates the codegen fixpoint.
+
+DISPOSITION: PORT-EQ (live). hexa_null_coal delegation-guard-wired to a
+hexa-native rt_null_coal placed in the LINKED rt-stdlib set; RUNEQ
+value-faithful vs the C SSOT across 12 cases including the leading-NUL edge.
+########################################################################
