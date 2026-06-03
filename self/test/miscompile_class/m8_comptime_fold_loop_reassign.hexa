@@ -1,0 +1,38 @@
+// m8_comptime_fold_loop_reassign.hexa — CLASS: comptime-const fold of a plain
+// immutable `let` that is REASSIGNED inside a loop body.
+// History (MISCOMPILE-ZERO hexa-run-hang-diag, surfaced by cross-repo C-PORT):
+//   A plain `let s = 0` const-folds `s -> 0`. Reassigning it inside a `for`
+//   loop body (`for j in 0..n { s = s + 1 }`) made the gen2 C transpiler abort
+//   with `index 0 out of bounds (len 0)` — _comptime_const_scope_restore read
+//   past the table tail after the body's AssignStmt invalidated an entry
+//   recorded below the scope mark. No .c produced -> `hexa run` hung on the
+//   failed-build retry. Fix: clamp scope_restore to min(mark, live-len).
+//
+// Behavioral contract: exit 0 = the accumulator reassigned across the loop
+// boundary holds its real value (NOT the stale folded literal).
+// A re-regression either crashes the transpiler (no binary) or folds `s` to its
+// initializer, flipping one assert.
+
+fn loop_accum(n: i64) -> i64 {
+    let s = 0
+    for j in 0..n {
+        s = s + 1
+    }
+    return s
+}
+
+fn nested_accum(m: i64, k: i64) -> i64 {
+    let s = 0
+    for i in 0..m {
+        for kk in 0..k {
+            s = s + 1
+        }
+    }
+    return s
+}
+
+if loop_accum(4) != 4      { exit(61) }   // single-loop reassign
+if loop_accum(0) != 0      { exit(62) }   // zero-trip
+if nested_accum(2, 3) != 6 { exit(63) }   // nested-loop reassign (the GEMM shape)
+
+println("FOLD-LOOP-REASSIGN-OK")
