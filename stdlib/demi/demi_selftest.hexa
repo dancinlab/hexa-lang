@@ -210,32 +210,41 @@ fn _cell_live_only(name: string, entry: string, swift_bin: string,
         println("FAIL " + name + " — hexa rc=" + to_string(hx_rc) + " want " + to_string(want_rc))
         return 1
     }
+    // The hexa output's deterministic HEAD must equal `prefix` (the demi-owned
+    // portion: `show: Decode failed (<path>)`). The trailing Foundation
+    // decode-error sentence is environment-OWNED (locale / OS version), NOT part
+    // of demi's parity contract — verify_record's decode case omits a cell for
+    // the same reason (@L7: never assert byte-equality of a string demi cannot
+    // faithfully reproduce). So both arms assert demi's head + the exit code.
+    let hx_head = if len(hx_out) >= len(prefix) { hx_out.substring(0, len(prefix)) } else { hx_out }
+    if hx_head != prefix {
+        println("FAIL " + name + " — hexa output does not start with the expected prefix")
+        println("  --- prefix ---"); println(prefix)
+        println("  --- hexa   ---"); println(hx_out)
+        return 1
+    }
     if len(swift_bin) > 0 {
+        // Live cross-check: the Swift reference's head + exit code must agree
+        // with hexa's (the demi-owned portion is byte-identical; the Foundation
+        // tail beyond `prefix` is out of scope, asserted on neither side).
         let sw = _run_swift(swift_bin, env_prefix, argv_str)
         let sw_out = sw[0]
         let sw_rc = _atoi2(sw[1])
-        if sw_out != hx_out {
-            println("FAIL " + name + " — output DIFFERS from Swift")
-            println("  --- swift ---"); println(sw_out)
-            println("  --- hexa  ---"); println(hx_out)
+        let sw_head = if len(sw_out) >= len(prefix) { sw_out.substring(0, len(prefix)) } else { sw_out }
+        if sw_head != prefix {
+            println("FAIL " + name + " — Swift output does not start with the expected prefix")
+            println("  --- prefix ---"); println(prefix)
+            println("  --- swift  ---"); println(sw_out)
             return 1
         }
         if sw_rc != hx_rc {
             println("FAIL " + name + " — rc swift=" + to_string(sw_rc) + " hexa=" + to_string(hx_rc))
             return 1
         }
-        println("PASS " + name + " (byte ≡ Swift · rc=" + to_string(hx_rc) + ")")
+        println("PASS " + name + " (head ≡ Swift · rc=" + to_string(hx_rc) + " · Foundation tail env-owned)")
         return 0
     }
-    // No Swift bin — assert the deterministic head only.
-    let head = if len(hx_out) >= len(prefix) { hx_out.substring(0, len(prefix)) } else { hx_out }
-    if head != prefix {
-        println("FAIL " + name + " — output does not start with the expected prefix")
-        println("  --- prefix ---"); println(prefix)
-        println("  --- hexa   ---"); println(hx_out)
-        return 1
-    }
-    println("PASS " + name + " (prefix ≡ golden · rc=" + to_string(hx_rc) + ")")
+    println("PASS " + name + " (head ≡ golden · rc=" + to_string(hx_rc) + " · Foundation tail env-owned)")
     return 0
 }
 
