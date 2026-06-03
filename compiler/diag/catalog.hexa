@@ -239,6 +239,31 @@ pub let CATALOG: [DiagSpec] = [
         explain: "An enum variant constructor supplied a payload value whose static type does not match the declared positional slot type. Under RFC-074 §2.2 each variant carries a `typs: [TypeRef]` list; the construction site's `children[i]` must be type-assignable to `typs[i]`. Common causes: argument-order swap (e.g. `E::V(\"hi\", 42)` against `enum E { V(int, string) }`), a typo in the enum declaration, or a stale call site after a variant signature change. Fix: reorder the arguments, correct the expression types, or amend the enum variant declaration.",
         fix_it_kind: FixItKind::None
     },
+    // #2663 (2026-06-04) — assignment to an immutable binding. Stage S2 (bind)
+    // emits this when an assignment LHS (`x = …`, `x += …`, …) is a FUNCTION-
+    // LOCAL Ident whose innermost binding is a non-`mut` `let` or non-`mut`
+    // param. Before this check, the 0.1.0-dispatch codegen SILENTLY DROPPED a
+    // write to such a slot — for a loop counter the slot the condition reads
+    // never updated → infinite loop / hang, with NO compile-time diagnostic.
+    //
+    // Severity is WARNING by default (NOT Error): a scope sweep of the in-tree
+    // corpus found ~1033 pre-existing non-`mut` local writes across 76 files
+    // (crypto/aws-sigv4/math/atlas-verifiers) that the silent-drop tolerated
+    // outside loops. Hard-erroring all of them would brick the self-host build
+    // before stdlib is migrated, so HX2006 lands as a VISIBLE warning first —
+    // turning the previously-SILENT hang into a diagnosable one — and escalates
+    // to a hard Error under `HEXA_STRICT_LET=1` (see _emit_hx2006 in bind.hexa),
+    // matching the existing self/type_checker.hexa strict-let gate. The
+    // canonical `let mut` idiom is never flagged.
+    DiagSpec {
+        code: "HX2006",
+        title: "cannot assign to immutable binding",
+        severity: Severity::Warning,
+        stage: "S2",
+        template: "cannot assign to immutable binding `{name}` (declared without `mut`)",
+        explain: "The assignment target is a function-local `let` binding (or parameter) declared without `mut`, so it should not be reassigned. Under hexa 0.1.0-dispatch such a write was silently dropped by codegen — the binding kept its initial value, so a loop counter advanced with a non-`mut` `let` never terminated (#2663, anima #1795). The bind pass now flags the write at compile time. Default severity is a warning (the in-tree corpus still carries ~1033 such writes pending migration); set HEXA_STRICT_LET=1 to escalate to a hard error. Fix: declare the binding `let mut <name> = …` if it is meant to change, or remove the reassignment. Shadowing with a fresh `let <name> = …` in an inner scope is still allowed; only reassigning the SAME binding is flagged.",
+        fix_it_kind: FixItKind::Replace
+    },
     DiagSpec {
         code: "HX3001",
         title: "type mismatch",
