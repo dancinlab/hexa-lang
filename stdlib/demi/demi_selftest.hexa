@@ -107,6 +107,20 @@ fn _make_verify_fixture(repo: string) {
     exec("printf %s " + _shq2(reject) + " > " + _shq2(rdir + "/fixture_reject.json"))
 }
 
+// _make_cellrun_fixture(repo) — a deterministic repo with an EMPTY domains/
+// dir for the PR#18 `action <verb> <domain>` cellrun parity cell. With an
+// empty domains/, the requested `<domain>.demi` manifest is ALWAYS missing,
+// so the cellrun engine returns rc=2 honest-skip BEFORE any dep-probe /
+// substrate-resolution (those are host-dependent — python3.13 presence etc.).
+// This is the byte-deterministic, host-independent cellrun parity path:
+// `[cellrun] honest-skip — manifest missing: <repo>/domains/<domain>.demi`.
+// `repo` MUST be a non-symlinked real path (same reason as the verify
+// fixture — Swift CellrunDispatch.demiRootURL standardizes lexically, and
+// rl_canon does too; a /tmp symlink would make the two disagree).
+fn _make_cellrun_fixture(repo: string) {
+    exec("rm -rf " + _shq2(repo) + " && mkdir -p " + _shq2(repo + "/domains"))
+}
+
 // _make_list_fixture(repo) — a deterministic project tree under `repo`
 // (DEMIURGE_REPO) for the PR#6 list-* parity cells. Exercises EVERY ordering /
 // dedup / pad / pointer branch of ArtifactRegistry:
@@ -525,6 +539,31 @@ fn main() {
                           g_disc_live, 7)
     fails = fails + _cell("action/unknown-verb", entry, swift_bin, "",
                           "action zzz", g_act_unknown, 2)
+
+    // PR#18 cellrun engine — `action <verb> <domain>` HAPPY-path dispatch.
+    // The DETERMINISTIC, host-independent parity cell is the MANIFEST-MISSING
+    // path: with an empty fixture domains/ the engine returns rc=2 honest-skip
+    // BEFORE any dep-probe / python_candidates resolution (those vary by host),
+    // and handler_action wraps it with the Swift cliAction framing (header +
+    // [cellrun] banner + blank line + "---" + engine-gap line + exit 1). The
+    // blank line between the banner and "---" replicates the Swift subprocess-
+    // capture artifact (omittingEmptySubsequences:false on the engine's
+    // trailing newline). DEMIURGE_REPO is applied to BOTH surfaces so the
+    // domains/ root resolves to the fixture on hexa AND Swift. The substrate-
+    // present rc=0 HAPPY path (record emitted · "📸 new record" line) is NOT
+    // byte-asserted here — it requires a live python/ngspice substrate that is
+    // not host-deterministic; that path is honestly scoped to a follow-up.
+    let crfix = home + "/.demi-selftest-cellrun-fixture"
+    _make_cellrun_fixture(crfix)
+    let crenv = "DEMIURGE_REPO=" + _shq2(crfix)
+    let g_cellrun_missing = "action: 명세 (무엇을) · domain=nonesuchdomain — dispatching…\n"
+        + "[cellrun] domain=nonesuchdomain verb=specify\n"
+        + "[cellrun] honest-skip — manifest missing: " + crfix + "/domains/nonesuchdomain.demi\n"
+        + "\n"
+        + "---\n"
+        + "⏳ engine tool gap — no new measured record (g3).\n"
+    fails = fails + _cell("action/cellrun-manifest-missing", entry, swift_bin, crenv,
+                          "action specify nonesuchdomain", g_cellrun_missing, 1)
 
     // PR-verify-passthrough — `verify --expr|--fence|rubric` → hexa verify
     // kernel, output forwarded VERBATIM (Swift verifyHexa · @D g5). Golden
