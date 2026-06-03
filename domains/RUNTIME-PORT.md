@@ -29,17 +29,20 @@
   - hexa_is_empty → rt_is_empty: **PORT-EQ 9/9** (RUNEQ confirmed the C quirk
     that every non-array/string tag — incl. map — reports empty=true; 6 locked
     tests). `.verdicts/runtime-port/M2-hexa_is_empty.txt`.
-  - hexa_dict_keys: **CLASS A (feas)** — prior BLOCKED verdict CORRECTED. The
-    "separate map-rep" claim was a factual error: map_keys_pure(m) is literally
-    `return keys(m)` and walks the SAME native HexaMapTable as the C SSOT (the
-    real defect is that self-referential re-entry, not a rep mismatch). Portable
-    hexa-native TODAY via the already-registered __map_raw_len +
-    __map_order_key_at order-walk primitives — zero new builtins, zero ABI/rep
-    change (strictly less work than B1). Ready-to-apply hexa-source patch + RUNEQ
-    evidence in `.verdicts/runtime-port/DICTKEYS-FEAS.txt`. Live-wire deferred to
-    a reviewed impl PR (map_pure.hexa recompiles into the self-host set → codegen
-    byte-eq gate, same gate-class as B1). `.verdicts/runtime-port/M2-hexa_dict_keys.txt`
-    (SUPERSEDED).
+  - hexa_dict_keys → map_keys_pure: **PORT-EQ (live-wired)** — prior BLOCKED
+    verdict was a FACTUAL ERROR, now corrected. map_keys_pure was literally
+    `return keys(m)` (self-referential re-entry into the C SSOT — never ported
+    the walk), NOT a separate map-rep. Rewrote the body as an explicit
+    insertion-order walk over the SAME native HexaMapTable via the already-
+    registered __map_raw_len + __map_order_key_at builtins (+13/-1 LOC, one
+    file; zero new builtin, zero ABI/rep change — Class A). RUNEQ byte/order-
+    identical vs the C SSOT across empty · 1 · many · dedup-on-overwrite ·
+    40-key collision-stress · interleaved · NUL-bearing keys (all PASS, LOCAL
+    on mini, B1 self-contained-link pattern; no global regen). map_pure.hexa
+    recompiles into the self-host set → codegen byte-eq gate (same gate-class
+    as B1; ghost selfhost-byteeq-real is the parent's merge gate, NOT run here).
+    `.verdicts/runtime-port/M2-dict_keys.txt` (DICTKEYS-FEAS #2633 superseded
+    by this live-wire; M2-hexa_dict_keys.txt BLOCKED SUPERSEDED).
   - hexa_bytes_to_str_raw → rt_bytes_to_str_raw: **PORT-EQ (B1 closed)** —
     RUNEQ 9/9 byte-exact (incl all 3 embedded-NUL cases) after the B1
     str_from_bytes_n length-carrying builder builtin landed. The hexa body
@@ -48,10 +51,9 @@
     end-to-end: regenerated hexat lowers str_from_bytes_n → hexa_bytes_to_str_raw,
     emitted code 9/9 PORT-EQ. `.verdicts/runtime-port/M2-bytes_to_str_raw.txt`
     (codegen fixpoint byte-eq validated on ghost selfhost-byteeq-real).
-  - score so far: 4 PORT-EQ landed · hexa_dict_keys re-classed BLOCKED→CLASS A
-    (DICTKEYS-FEAS; ready patch, byte-eq-gated impl PR pending). The NUL-clean
-    builder gap is CLOSED (STRBUILDER-FEAS B1). No remaining hard-BLOCKED
-    portable leaf — the last one (dict_keys) is now a known Class-A unblock.
-    Remaining B-OPEN leaves carry to M2-followup (see log).
+  - score so far: 5 PORT-EQ landed (incl. hexa_dict_keys live-wired — the last
+    portable leaf, prior BLOCKED corrected). The NUL-clean builder gap is CLOSED
+    (STRBUILDER-FEAS B1). NO remaining hard-BLOCKED portable leaf. Remaining
+    B-OPEN leaves carry to M2-followup (see log).
 - [ ] M3 — adjudicate the 151 BORDERLINE fns (numeric CPU kernels: keep vs port)
 - [ ] M4 — extend inventory to self/runtime_core.c (the CORE tier)

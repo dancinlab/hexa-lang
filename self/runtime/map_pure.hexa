@@ -40,7 +40,19 @@
 
 @pure
 pub fn map_keys_pure(m) {
-    return keys(m)
+    // Insertion-order walk of the native HexaMapTable, mirroring the C SSOT
+    // hexa_map_keys (#else body): for i<t->len push hexa_str(t->order_keys[i]).
+    // Uses the already-registered codegen builtins __map_raw_len /
+    // __map_order_key_at instead of the self-referential `return keys(m)`,
+    // which lowered straight back to hexa_map_keys (never ported the walk).
+    let n = __map_raw_len(m)
+    let mut out = []
+    let mut i = 0
+    while i < n {
+        out.push(__map_order_key_at(m, i))
+        i = i + 1
+    }
+    return out
 }
 
 @pure

@@ -1,0 +1,117 @@
+RUNTIME-PORT · Milestone-2 · hexa_dict_keys → map_keys_pure (LIVE-WIRE)
+date: 2026-06-03   host: mini (LOCAL — no ghost/pool)   base: origin/main bdb0f7b4d
+verdict: PORT-EQ   (live-wired; 6+1 RUNEQ cases byte/order-identical vs C SSOT)
+
+*** This UPDATES + CORRECTS the prior M2-hexa_dict_keys.txt "BLOCKED
+*** (map-representation mismatch)" verdict, which was a FACTUAL ERROR.
+*** The path does NOT consume a separate pure-hexa map rep: map_keys_pure(m)
+*** was literally `return keys(m)`, consuming the SAME native HexaMapTable as
+*** the C SSOT. The only real defect was that self-referential re-entry
+*** (keys() lowered straight back to hexa_map_keys → never ported the walk).
+*** See DICTKEYS-FEAS.txt (#2633) for the full feasibility/correction record.
+########################################################################
+
+DISPATCH CHAIN
+------------------------------------------------------------------------
+  surface keys(m)/dict_keys -> hexa_dict_keys -> hexa_map_keys (C SSOT)
+                            -> rt_map_keys (self/rt/map_ops.hexa L76)
+                            -> map_keys_pure (self/runtime/map_pure.hexa L42)
+
+C SSOT body (hexa_map_keys #else, runtime_core.c L3025-3034):
+    arr = hexa_array_reserve(arr, t->len);
+    for (i = 0; i < t->len; i++)
+        arr = hexa_array_push(arr, hexa_str(t->order_keys[i]));
+  -> strict INSERTION order; overwrite of an existing key updates
+     order_vals[order_idx] in place, NEVER appends (no dup key).
+
+THE PORT (live-wired this PR — hexa-source only)
+------------------------------------------------------------------------
+self/runtime/map_pure.hexa map_keys_pure body changed from
+`return keys(m)` to an explicit insertion-order walk over the SAME native
+HexaMapTable, a 1:1 transliteration of the C SSOT loop:
+
+    let n = __map_raw_len(m)          // -> HX_MAP_LEN(m) == t->len
+    let mut out = []
+    let mut i = 0
+    while i < n {
+        out.push(__map_order_key_at(m, i))   // -> hexa_str(t->order_keys[i])
+        i = i + 1
+    }
+    return out
+
+Both builtins (__map_raw_len, __map_order_key_at) ALREADY existed +
+registered in all three tables (codegen.hexa is_builtin L12421/L12433,
+gen2_expr lowering L6094/L6161; bind.hexa allow-list L1059/L1156). ZERO
+new builtin, ZERO new runtime symbol, ZERO ABI/rep change (Class A).
+DELTA: +13 / -1 LOC in one file. No other file touched.
+
+METHOD (real RUNEQ — not self-judge; LOCAL on mini, no ghost/pool)
+------------------------------------------------------------------------
+1. Emitted C from a harness via the installed codegen (hexat). The ported
+   body lowered EXACTLY as designed, byte-for-byte:
+     line 80:  HexaVal n = hexa_int((int64_t)HX_MAP_LEN(m));
+     line 84:  hexa_array_push(out, __map_order_key_at(m, i));
+   confirming the INSTALLED transpiler already recognizes + lowers all the
+   builtins to the SSOT-field accessors.
+2. Linked against the cache runtime object
+   runtime.2dc93e6e…o, which DEFINES ___map_order_key_at /
+   ___map_order_val_at (verified via nm). HX_MAP_LEN is a macro
+   ((v).map_ptr->len) inlined by codegen, so no symbol is needed for it —
+   only its macro decl, supplied via a tiny prelude header alongside the
+   __map_order_* extern protos the pinned install's runtime.h predates
+   (the STALE-INSTALL header gap DICTKEYS-FEAS identified — NOT a rep/abi
+   change). This is the SAME self-contained RUNEQ pattern as B1 #2632;
+   the global install was NOT mutated (no `hexa cc --regen` needed).
+3. Each case: compute C-SSOT ground truth via surface keys(m) (== the
+   C hexa_map_keys path) AND the ported walk over the SAME map object;
+   compare length + every element + strict order.
+
+RUNEQ EVIDENCE (verbatim stdout)
+------------------------------------------------------------------------
+ok   empty n=0 order=
+ok   one n=1 order=[solo]
+ok   many n=5 order=[k1][k2][k3][zzz][a]
+ok   overwrite n=2 order=[x][y]
+ok   forty n=40 order=[0][1][2][3][4][5][6][7][8][9][10][11][12][13][14][15][16][17][18][19][20][21][22][23][24][25][26][27][28][29][30][31][32][33][34][35][36][37][38][39]
+ok   mix n=4 order=[alpha][beta][gamma][delta]
+RUNEQ-RESULT: ALL-PASS
+
+NUL-bearing key (chr(0)-embedded), separate harness:
+ok   nul n=2 key0len(C)=4 key0len(hexa)=4
+RUNEQ-NUL: PASS
+
+CASE COVERAGE
+------------------------------------------------------------------------
+  empty       : len 0, both paths empty array.
+  one         : single key.
+  many        : strict insertion order across mixed key names.
+  overwrite   : re-insert existing key x (twice) + y (once) -> order
+                UNCHANGED [x][y], NO duplicate (dedup-on-overwrite proven).
+  forty       : 40 numeric-string keys 0..39 — collision-stress, exact
+                insertion order preserved.
+  mix         : interleaved insert + overwrite — overwrites neither move
+                nor duplicate the order entry.
+  nul         : embedded-NUL key handled bit-identically on both paths
+                (pre-existing C-rep NUL-termination inherited, not changed).
+
+FINDING — Δ vs the broken pre-port path
+------------------------------------------------------------------------
+The pre-port body `return keys(m)` did not port the walk at all: it
+re-entered the C SSOT (or self-recursed if the C shim were removed). The
+ported order-walk is byte/order-identical to the C SSOT across all cases,
+closing the last portable RUNTIME-PORT M2 leaf as a genuine hexa-native
+implementation rather than a self-referential alias.
+
+BYTE-EQ GATE NOTE
+------------------------------------------------------------------------
+self/runtime/map_pure.hexa compiles INTO the self-host transpiler set, so
+changing map_keys_pure's emitted body trips the codegen byte-eq fixpoint
+gate (gen3->gen4 + the non-required ghost selfhost-byteeq-real check) —
+the SAME gate-class as B1 #2632. That ghost REAL run is intentionally NOT
+run here (parent watches it before merge). Local evidence is conclusive
+for the source-level PORT-EQ; the ghost gate validates the codegen fixpoint.
+
+DISPOSITION: PORT-EQ (live). map_keys_pure ported to an explicit
+insertion-order HexaMapTable walk; RUNEQ byte/order-identical vs the C SSOT
+including dedup-on-overwrite, 40-key collision-stress, and NUL-bearing
+keys. Prior BLOCKED verdict was a factual error, now corrected.
