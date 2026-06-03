@@ -729,6 +729,20 @@ fn main() {
     // + an `ALL_PASS` sentinel; the parent checks the merged output + rc.
     fails = fails + _loader_selfcheck(vfix, vroot)
 
+    // ── PR#9 domain-catalog self-check (@ci_gate · @L7 spirit) — NOT a verb-
+    // parity cell. PR#9 adds NO new user-facing verb (DomainCatalog +
+    // IngredientShelf are the SHARED BASE; the compose verb parity lands in
+    // #10 and the list-shelf verb parity in #11 — BE HONEST: NEITHER is
+    // asserted here). This is a FOCUSED unit-check of the catalog/shelf parse
+    // primitives (stdlib/demi/domain_catalog.hexa) against a baked fixture
+    // domain map: enumerate the domains dir · resolve hit/miss · parse a known
+    // §6 "Design options" section → expected groups (count · title · options ·
+    // [multi] flag · verb koreanLabel-prefix match · empty for a no-shelf verb
+    // / no-map domain). Runs in a CHILD `hexa run` with DEMIURGE_REPO set in
+    // the child env (in-process setenv is a no-op) against a $HOME-rooted
+    // fixture; the probe self-asserts + emits an ALL_PASS sentinel.
+    fails = fails + _catalog_selfcheck()
+
     if fails == 0 { println("demi_parity_selftest PASS") }
     else { println("demi_parity_selftest FAIL — " + to_string(fails) + " cell(s)") }
 }
@@ -785,4 +799,105 @@ fn _loader_selfcheck(vfix: string, vroot: string) -> int {
 // _ends_with_pass(out) — the probe's last meaningful line is ALL_PASS.
 fn _ends_with_pass(out: string) -> bool {
     return rl_contains(out, "ALL_PASS")
+}
+
+// _catalog_selfcheck() — build a $HOME-rooted fixture repo with two domain
+// maps (one carrying a known §6 "Design options" section in the canonical
+// `- <verb>: <g> = a / b / c ; ...` form incl. a `[multi]` group + a stray
+// non-Design `## ` section that must NOT bleed in; one with NO §6 at all),
+// then run a child probe importing domain_catalog.hexa with DEMIURGE_REPO set
+// to the fixture repo, asserting enumerate / resolve / shelf-group parse.
+fn _catalog_selfcheck() -> int {
+    let home = exec("printf %s \"$HOME\"").trim()
+    let repo = home + "/.demi-selftest-catalog-fixture"
+    let ddir = repo + "/domains"
+    // exports/ must exist so rl_project_root() (= exportsRoot minus last seg)
+    // resolves to <repo> — DomainCatalog reads <projectRoot>/domains.
+    exec("rm -rf " + _shq2(repo) + " && mkdir -p " + _shq2(ddir)
+        + " && mkdir -p " + _shq2(repo + "/exports"))
+    // widget.md — §6 with two `- <verb>:` lines. `구조` (structure) has one
+    // single-pick group; `설계` (design) has a normal group + a `[multi]` group.
+    // A `해석` (analyze) line exercises the koreanLabel-prefix match (§6 token
+    // "해석" prefix of label "해석⟲"). A trailing `## 7.` header closes §6.
+    let widget = "# widget\n\n"
+        + "## 5. Something else\n\n"
+        + "- 구조: NOT A SHELF LINE (wrong section)\n\n"
+        + "## 6. Design options (workbench shelf)\n\n"
+        + "> rfc_012 §5 ingredient shelf.\n"
+        + "- 구조: 통신 = BLE / 유선\n"
+        + "- 설계: 센서 = 건식 / 습식 ; 전원 [multi] = 일회용 / 충전식\n"
+        + "- 해석: 모드 = 정적 / 동적\n\n"
+        + "## 7. Closing\n\n"
+        + "- 구조: 통신 = SHOULD-NOT-PARSE (after §6 closed)\n"
+    exec("printf %s " + _shq2(widget) + " > " + _shq2(ddir + "/widget.md"))
+    // noshelf.md — a domain map with NO §6 Design-options section → empty shelf
+    // (honest, not faked — Swift IngredientShelf returns []).
+    exec("printf %s " + _shq2("# noshelf\n\n## 1. Goal\n\nnothing here.\n")
+        + " > " + _shq2(ddir + "/noshelf.md"))
+    // README.md must be EXCLUDED from enumerate (Swift domain-stub rule).
+    exec("printf %s " + _shq2("# readme\n") + " > " + _shq2(ddir + "/README.md"))
+
+    let probe = "/tmp/.demi-selftest-catalog-probe.hexa"
+    let body = "import \"stdlib/demi/domain_catalog.hexa\"\n"
+        + "fn _eq(got: string, want: string, tag: string) -> int {\n"
+        + "  if got == want { println(\"ok \" + tag); return 0 }\n"
+        + "  println(\"NO \" + tag + \" got=[\" + got + \"] want=[\" + want + \"]\"); return 1\n"
+        + "}\n"
+        + "fn main() {\n"
+        + "  let mut f = 0\n"
+        // enumerate — sorted stems, README excluded.
+        + "  let doms = dc_enumerate()\n"
+        + "  f = f + _eq(to_string(len(doms)), \"2\", \"enum-count\")\n"
+        + "  if len(doms) == 2 {\n"
+        + "    f = f + _eq(doms[0], \"noshelf\", \"enum-sort0\")\n"
+        + "    f = f + _eq(doms[1], \"widget\", \"enum-sort1\")\n"
+        + "  } else { f = f + 2 }\n"
+        // resolve hit/miss.
+        + "  f = f + _eq(dc_resolve(\"nope\"), \"\", \"resolve-miss\")\n"
+        + "  let rp = dc_resolve(\"widget\")\n"
+        + "  f = f + _eq(to_string(len(rp) > 0), \"true\", \"resolve-hit\")\n"
+        // shelf — structure verb → one group [통신 = BLE / 유선], single-pick.
+        + "  let gs = dc_shelf_groups(\"widget\", \"structure\")\n"
+        + "  f = f + _eq(to_string(len(gs)), \"1\", \"shelf-struct-count\")\n"
+        + "  if len(gs) == 1 {\n"
+        + "    f = f + _eq(gs[0].title, \"통신\", \"shelf-struct-title\")\n"
+        + "    f = f + _eq(to_string(len(gs[0].options)), \"2\", \"shelf-struct-optn\")\n"
+        + "    f = f + _eq(gs[0].options[0], \"BLE\", \"shelf-struct-opt0\")\n"
+        + "    f = f + _eq(gs[0].options[1], \"유선\", \"shelf-struct-opt1\")\n"
+        + "    f = f + _eq(to_string(gs[0].multi_select), \"false\", \"shelf-struct-single\")\n"
+        + "  } else { f = f + 5 }\n"
+        // shelf — design verb → two groups; 2nd is [multi] (marker stripped).
+        + "  let gd = dc_shelf_groups(\"widget\", \"design\")\n"
+        + "  f = f + _eq(to_string(len(gd)), \"2\", \"shelf-design-count\")\n"
+        + "  if len(gd) == 2 {\n"
+        + "    f = f + _eq(gd[0].title, \"센서\", \"shelf-design-g0-title\")\n"
+        + "    f = f + _eq(to_string(gd[0].multi_select), \"false\", \"shelf-design-g0-single\")\n"
+        + "    f = f + _eq(gd[1].title, \"전원\", \"shelf-design-g1-title-stripped\")\n"
+        + "    f = f + _eq(to_string(gd[1].multi_select), \"true\", \"shelf-design-g1-multi\")\n"
+        + "    f = f + _eq(gd[1].options[0], \"일회용\", \"shelf-design-g1-opt0\")\n"
+        + "  } else { f = f + 5 }\n"
+        // analyze verb → §6 token \"해석\" prefix-matches koreanLabel \"해석⟲\".
+        + "  f = f + _eq(to_string(len(dc_shelf_groups(\"widget\", \"analyze\"))), \"1\", \"shelf-analyze-prefix\")\n"
+        // verb with no §6 line → empty; domain with no §6 section → empty.
+        + "  f = f + _eq(to_string(len(dc_shelf_groups(\"widget\", \"verify\"))), \"0\", \"shelf-verb-empty\")\n"
+        + "  f = f + _eq(to_string(len(dc_shelf_groups(\"noshelf\", \"structure\"))), \"0\", \"shelf-nomap-empty\")\n"
+        // unknown domain map → empty (resolve miss).
+        + "  f = f + _eq(to_string(len(dc_shelf_groups(\"nope\", \"structure\"))), \"0\", \"shelf-unknown-empty\")\n"
+        + "  if f == 0 { println(\"ALL_PASS\") } else { println(\"FAILED \" + to_string(f)); exit(1) }\n"
+        + "}\n"
+    exec("printf %s " + _shq2(body) + " > " + _shq2(probe))
+    let hexa = exec("command -v hexa 2>/dev/null || echo hexa").trim()
+    let cmd = "DEMIURGE_REPO=" + _shq2(repo) + " " + _shq2(hexa)
+        + " run --no-sentinel " + _shq2(probe) + " 2>&1"
+    let pair = exec_with_status(cmd)
+    let out = to_string(pair[0])
+    let rc = _atoi2(pair[1])
+    exec("rm -rf " + _shq2(repo))
+    if rc == 0 && _ends_with_pass(out) {
+        println("PASS catalog/domain-catalog (enumerate · resolve · §6 shelf parse · [multi] · verb-prefix)")
+        return 0
+    }
+    println("FAIL catalog/domain-catalog — rc=" + to_string(rc))
+    println(out)
+    return 1
 }
