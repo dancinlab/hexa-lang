@@ -514,6 +514,32 @@ fn _llm_store_read() -> string {
     return read_file(path)
 }
 
+// ── PR #17b keychain fixture helpers (key · key-rm · test/ask no-key) ────────
+// The keychain entries live in the user's LOGIN keychain (service =
+// lab.dancin.demiurge.llm, account = provider id) — a REAL machine resource,
+// like llm.json. The #17b cells that depend on the no-key state (api-mode test
+// / ask → "키 없음") must guarantee no entry for the probed id WITHOUT clobbering
+// a key the user actually stored. So we BACK UP the user's value (if any),
+// delete it for the duration, run the deterministic cell, then RESTORE it
+// verbatim — leaving the keychain exactly as found (PR contract: clean).
+fn _kc_svc() -> string { return "lab.dancin.demiurge.llm" }
+// _kc_read(id) — the stored value, or "" if absent (find-generic-password -w).
+fn _kc_read(id: string) -> string {
+    return exec("security find-generic-password -s " + _shq2(_kc_svc())
+                + " -a " + _shq2(id) + " -w 2>/dev/null").trim()
+}
+// _kc_del(id) — idempotent delete (no error if absent).
+fn _kc_del(id: string) {
+    exec("security delete-generic-password -s " + _shq2(_kc_svc())
+         + " -a " + _shq2(id) + " >/dev/null 2>&1 || true")
+}
+// _kc_set(id, value) — restore a previously-backed-up value (update-or-add).
+fn _kc_set(id: string, value: string) {
+    if len(value) == 0 { return }
+    exec("security add-generic-password -U -s " + _shq2(_kc_svc())
+         + " -a " + _shq2(id) + " -w " + _shq2(value) + " >/dev/null 2>&1 || true")
+}
+
 // _cell_llm_write — a config-SET parity cell (use / mode / model). Clears the
 // store, runs hexa, captures stdout+rc+the WRITTEN llm.json; clears + runs
 // Swift; asserts stdout≡, rc≡, AND the written-file bytes≡. `want_file` is the
@@ -2023,6 +2049,46 @@ fn main() {
     fails = fails + _cell("llm/unknown-sub", entry, swift_bin, "",
         "llm frobnicate",
         "llm: unknown subcommand 'frobnicate' — use list [--json] | use | mode | model | key | key-rm | test | ask\n", 2)
+
+    // ── PR #17b deterministic paths (resolved BEFORE keychain / network) ──────
+    // key / key-rm with a BAD provider id → the usage diagnostic + rc 2, BEFORE
+    // any keychain SecItem touch (Swift `guard ... findProvider` fails first).
+    _llm_store_clear()
+    fails = fails + _cell("llm/key-bad-provider", entry, swift_bin, "",
+        "llm key bogus sk-xxxx", "llm key: usage — llm key <id> <key>\n", 2)
+    _llm_store_clear()
+    fails = fails + _cell("llm/key-rm-bad-provider", entry, swift_bin, "",
+        "llm key-rm bogus", "llm key-rm: usage — llm key-rm <id>\n", 2)
+
+    // api-mode test / ask with NO key configured → the honest "키 없음" error
+    // resolved by LLMKeyStore.resolvedKey BEFORE any HTTPS touch (deterministic).
+    // We seed mode=api, env-clear the provider key vars, AND back up + delete the
+    // user's keychain entries for the 3 ids so the no-key state is GUARANTEED;
+    // restored verbatim right after. The ENV-clear (var= ) on both surfaces makes
+    // the resolved-key miss host-independent for the GOLDEN arm.
+    let bk_claude = _kc_read("claude")
+    let bk_codex  = _kc_read("codex")
+    let bk_gemini = _kc_read("gemini")
+    _kc_del("claude") ; _kc_del("codex") ; _kc_del("gemini")
+    let api_seed = "{\n"
+        + "  \"cliOverrides\" : {\n\n  },\n"
+        + "  \"mode\" : \"api\",\n"
+        + "  \"models\" : {\n\n  },\n"
+        + "  \"selectedProvider\" : \"claude\"\n"
+        + "}"
+    let no_key_env = "ANTHROPIC_API_KEY= OPENAI_API_KEY= GEMINI_API_KEY="
+    // test [api · no key] → ❌ line + rc 1. detail is deterministic (no timing).
+    _llm_store_seed(api_seed)
+    fails = fails + _cell("llm/test-api-nokey", entry, swift_bin, no_key_env,
+        "llm test",
+        "❌ Claude · claude · api · 키 없음 — 설정에서 키 입력 또는 ANTHROPIC_API_KEY export\n", 1)
+    // ask [api · no key] → ⚠️ detail line + rc 1 (reply.text empty pre-network).
+    _llm_store_seed(api_seed)
+    fails = fails + _cell("llm/ask-api-nokey", entry, swift_bin, no_key_env,
+        "llm ask hello",
+        "⚠️ claude · api · 키 없음 — 설정에서 키 입력 또는 ANTHROPIC_API_KEY export\n", 1)
+    // restore the user's real keychain entries verbatim.
+    _kc_set("claude", bk_claude) ; _kc_set("codex", bk_codex) ; _kc_set("gemini", bk_gemini)
 
     // restore the user's real llm.json (or its original absence).
     _llm_store_restore(lbak)
