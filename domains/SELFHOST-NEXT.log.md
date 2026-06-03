@@ -587,3 +587,6 @@ vs backup. ZERO hook regression. ALL PASS.
 
 Verdict: .verdicts/selfhost-next-promote/MINI-FLIP-SHIM.txt
 Revert : bash tool/promote_selfhost.sh --revert (backup + symlink preconds met).
+
+## 2026-06-03 native linux-arm64 self-emit BYTE-EQ FIXPOINT (GCP T2A)
+- GCP t2a-standard-8 (8vCPU/31GiB aarch64): RELEASE_BUILD_RC=0 SELF_EMIT_RC=0 ENCODE_MISS=0 PEAK_RSS=10.88GiB (cleared pi5 7.76 OOM); cc-self.o==cc-self2.o 4062448B FIXPOINT_CMP=BYTE-EQ-FIXPOINT. native arm64 self-host complete (not just cross-emit). instance torn down (~$0.8). verdict .verdicts/selfhost-next-linux-arm64/NATIVE-SELFEMIT-ARM64-BYTEEQ.txt

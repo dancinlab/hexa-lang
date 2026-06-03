@@ -1,0 +1,24 @@
+NATIVE linux-arm64 full self-emit — BYTE-EQ FIXPOINT achieved (GCP T2A)
+======================================================================
+date:        2026-06-03
+host:        GCP selfhost-arm64 = t2a-standard-8 (8 vCPU Ampere Altra, 31 GiB, us-central1-a)
+provider:    GCP (gcp.access_token/project creds) — vast/runpod have 0 aarch64; AWS aws_braket key = Braket-IAM only (ec2 denied)
+repo HEAD:   cb57d1e
+recipe:      TARGET=linux-arm64 release_build -> cc_native -> full native self-emit -> re-emit + cmp (PR #2589 remote runner)
+
+REPORT (verbatim runner output):
+  HOST_ARCH=aarch64  HOST_RAM_GIB=31
+  RELEASE_BUILD_RC=0
+  SELF_EMIT_RC=0
+  PEAK_RSS_GIB=10.88        (cleared the pi5 #2578 OOM wall at 7.76 GiB / 7.9 GiB host)
+  ENCODE_MISS=0
+  CC_SELF_O_BYTES=4062448
+  RE_EMIT_RC=0  cc-self2.o=4062448 B
+  FIXPOINT_CMP=BYTE-EQ-FIXPOINT
+  FIXPOINT_FIRSTDIFF=NA
+  self-emit wall clock: 1:17:23  (Maximum RSS 11412888 KiB)
+
+RESULT: native aarch64-linux full compiler self-emit reproduces a BYTE-IDENTICAL object
+        (gen3 == gen4, 0 ENCODE-MISS) on real ARM hardware. linux-arm64 is now self-hosting
+        NATIVELY (not just cross-emit) at the byte-eq fixpoint.
+cost:    ~$0.8 ; instance TORN DOWN (deleted) after capture — no residual billing.
