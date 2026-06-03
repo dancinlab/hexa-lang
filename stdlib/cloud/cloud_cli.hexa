@@ -1346,7 +1346,26 @@ fn _cloud_rent_runpod(av: [str], start: int) -> int {
             return 3
         }
     }
-    let pod = runpod_create(api_key, gpu, image, pubkey, owner)
+    // PERSISTENT-VOLUME DEFAULT (@L3): rent provisions a persistent
+    // /workspace volume by default so a pod kill never wipes the run (the
+    // live anima incident lost a full training run on ephemeral disk). The
+    // size defaults to runpod_default_volume_gb (>= 40); `--volume-gb N`
+    // overrides; `--ephemeral` opts OUT (with a loud warning).
+    let mut volume_gb = runpod_default_volume_gb()
+    let vg = _flag_val(av, start, "--volume-gb", "")
+    if len(vg) > 0 {
+        let v = _cli_atoi(vg)
+        if v > 0 { volume_gb = v }
+    }
+    if _has_flag(av, start, "--ephemeral") == 1 {
+        volume_gb = 0
+    }
+    if volume_gb <= 0 {
+        println("[cloud] rent runpod: WARNING — EPHEMERAL container disk (no persistent volume). A pod kill / preemption WIPES all work under /workspace. Drop --ephemeral to get a persistent volume (the anima incident lost a full training run this way).")
+    } else {
+        println("[cloud] rent runpod: persistent /workspace volume " + str(volume_gb) + " GiB (pod-kill-survivable; --ephemeral to opt out)")
+    }
+    let pod = runpod_create_vol(api_key, gpu, image, pubkey, owner, volume_gb)
     if pod.ok == 0 {
         println("[cloud] rent runpod: " + pod.message)
         return 1
@@ -1814,27 +1833,71 @@ fn _cloud_reap(provider_scope: str, apply: int) -> int {
             while j < len(vp) { orphans.push(vp[j]); j = j + 1 }
         }
     }
+    // ── M6 dead-owner / TTL-expired sweep ─────────────────────────────
+    // The INVERSE leak axis (live anima incident, 2026-06-04): a registry-
+    // TRACKED pod still ALIVE on the provider whose owning agent is DEAD
+    // (kill -0 → gone, e.g. a rate-limit storm killed it) or whose heartbeat
+    // has gone silent past its max-ttl. Build a merged provider-alive id set,
+    // resolve each tracked pod's owner liveness (kill -0), classify (pure).
+    // g63: every reap decision is against the AUTHORITATIVE provider-alive id
+    // set + the recorded owner pid/heartbeat — never a fabricated state.
+    let mut alive_ids = []
+    if do_runpod {
+        let rl2 = runpod_list_pods()
+        if rl2.ok == 1 {
+            let mut a = 0
+            while a < len(rl2.pod_ids) { alive_ids.push(rl2.pod_ids[a]); a = a + 1 }
+        }
+    }
+    if do_vast {
+        let vl2 = vast_list_instances()
+        if vl2.ok == 1 {
+            let mut b = 0
+            while b < len(vl2.instance_ids) { alive_ids.push(vl2.instance_ids[b]); b = b + 1 }
+        }
+    }
+    let mut owner_alive = []
+    let mut oi = 0
+    while oi < len(reg) {
+        owner_alive.push(pod_registry_owner_alive(reg[oi].owner_pid))
+        oi = oi + 1
+    }
+    let dead = pod_registry_reap_dead_rows(reg, alive_ids, owner_alive, _reg_now_sec())
+
     // Table — even when empty so the verb's contract is uniform.
-    if len(orphans) == 0 {
-        println("[cloud] reap: 0 orphans found · registry covers every alive pod")
+    if len(orphans) == 0 && len(dead) == 0 {
+        println("[cloud] reap: 0 orphans · 0 dead-owner/TTL-expired · registry covers every alive pod")
         return 0
     }
-    println("ID                       PROVIDER  ACTION")
+    println("ID                       PROVIDER  CLASS         ACTION")
     let mut k = 0
     while k < len(orphans) {
         let o = orphans[k]
         let mut act = "(dry-run)"
         if apply == 1 { act = "DESTROY" }
-        println(_reg_pad(o.id, 24) + " " + _reg_pad(o.provider, 9) + " " + act)
+        println(_reg_pad(o.id, 24) + " " + _reg_pad(o.provider, 9) + " "
+            + _reg_pad("orphan", 13) + " " + act)
         k = k + 1
     }
+    let mut dk = 0
+    while dk < len(dead) {
+        let d = dead[dk]
+        let mut dact = "(dry-run)"
+        if apply == 1 { dact = "DESTROY" }
+        println(_reg_pad(d.id, 24) + " " + _reg_pad(d.provider, 9) + " "
+            + _reg_pad(d.reason, 13) + " " + dact)
+        dk = dk + 1
+    }
     if apply == 0 {
-        println("[cloud] reap: " + str(len(orphans)) + " orphans found · use --apply to destroy")
+        println("[cloud] reap: " + str(len(orphans)) + " orphans · " + str(len(dead))
+            + " dead-owner/TTL-expired · DRY-RUN (use --yes / --apply to terminate)")
         return 0
     }
-    // --apply: route each orphan through _cloud_down. The legacy registry
-    // forget on success is harmless (orphan is absent there too).
+    // execute: route every orphan AND dead-owner pod through _cloud_down
+    // (idempotent teardown + registry forget/remove). g63: only the pods
+    // positively classified above — never a foreign/unattributed pod.
     let mut failed = 0
+    let total = len(orphans) + len(dead)
     let mut m = 0
     while m < len(orphans) {
         let o = orphans[m]
@@ -1845,8 +1908,18 @@ fn _cloud_reap(provider_scope: str, apply: int) -> int {
         }
         m = m + 1
     }
-    println("[cloud] reap: " + str(len(orphans) - failed) + "/" + str(len(orphans))
-        + " destroyed · " + str(failed) + " failed")
+    let mut dm = 0
+    while dm < len(dead) {
+        let d = dead[dm]
+        let rc = _cloud_down(d.id, d.provider)
+        if rc != 0 {
+            failed = failed + 1
+            println("[cloud] reap: FAILED to destroy " + d.id + " (" + d.provider + ", " + d.reason + ")")
+        }
+        dm = dm + 1
+    }
+    println("[cloud] reap: " + str(total - failed) + "/" + str(total)
+        + " terminated · " + str(failed) + " failed")
     if failed > 0 {
         return 1
     }
@@ -2300,6 +2373,20 @@ fn main() {
         exit(rc)
     }
     if sub == "pods" {
+        // ACTIVE reconcile FIRST (anima ghost-drift fix, plan @L2): before
+        // rendering anything, reconcile the global M5 registry against the
+        // AUTHORITATIVE runpod myself.pods GraphQL (+ vast) — prune ghost rows
+        // (in registry, absent from the provider's own ledger) and surface
+        // real orphans. `--no-reconcile` opts out (offline / no-key hosts).
+        let mut do_reconcile = 1
+        let mut pi = si + 1
+        while pi < len(av) {
+            if av[pi] == "--no-reconcile" { do_reconcile = 0 }
+            pi = pi + 1
+        }
+        if do_reconcile == 1 {
+            let _ = cloud_pods_reconcile_prune()
+        }
         // Per-project active pod/job work manifest at cwd's ./pods.json.
         // Bare form = full table render (operator's "what is running here
         // right now?" view). Distinct from `cloud orphans` / pod_registry
@@ -2788,7 +2875,9 @@ fn main() {
         let mut apply = 0
         let mut ri = si + 1
         while ri < len(av) {
-            if av[ri] == "--apply" {
+            // `--yes` is the plan-spec execute flag; `--apply` kept as the
+            // pre-existing alias (no breakage for existing reap callers).
+            if av[ri] == "--apply" || av[ri] == "--yes" {
                 apply = 1
             }
             ri = ri + 1

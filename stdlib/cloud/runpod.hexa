@@ -186,13 +186,79 @@ fn _runpod_post(api_key: str, body: str, timeout_sec: int) -> str {
 
 // ── pod create ───────────────────────────────────────────────────────
 
-fn _runpod_create_cli(rpc: str, gpu_type: str, image: str, pubkey: str, name: str) -> RunPodPod {
+// runpod_default_volume_gb — the persistent /workspace volume size rent
+// DEFAULTS to (plan @L3). A persistent network volume survives a pod kill;
+// the live anima incident (2026-06-04) lost a full training run on an
+// EPHEMERAL-disk pod, and only the persistent-volume re-fire (volumeInGb=50)
+// survived. Default 50 GiB; overridable via HEXA_CLOUD_VOLUME_GB; the plan
+// floor is >= 40, so a smaller override is clamped up to 40.
+fn runpod_default_volume_gb() -> int {
+    return _runpod_clamp_volume_gb(env_var("HEXA_CLOUD_VOLUME_GB"))
+}
+
+// _runpod_clamp_volume_gb — PURE size resolver (network/env-free over its
+// arg) so a test can drive the floor/clamp/default contract directly:
+//   raw parses to >= 40  → that value (override honored)
+//   raw parses to 1..39  → 40 (clamp UP to the plan floor; a sub-floor
+//                          persistent volume can't hold a checkpoint)
+//   raw blank / 0 / junk → 50 (the default; NEVER 0 = accidental ephemeral —
+//                          the only ephemeral path is the explicit flag).
+fn _runpod_clamp_volume_gb(raw: str) -> int {
+    if len(raw) > 0 {
+        let v = _runpod_atoi(raw)
+        if v >= 40 { return v }
+        if v > 0 { return 40 }
+    }
+    return 50
+}
+
+// _runpod_atoi — leading decimal run; 0 if none (volume-gb env parse).
+fn _runpod_atoi(s: str) -> int {
+    let n = len(s)
+    let mut i = 0
+    let mut val = 0
+    let mut seen = 0
+    while i < n {
+        let c = s.substring(i, i + 1)
+        if c >= "0" && c <= "9" {
+            val = val * 10 + (_runpod_digit(c))
+            seen = 1
+            i = i + 1
+        } else {
+            i = n
+        }
+    }
+    if seen == 0 { return 0 }
+    return val
+}
+
+fn _runpod_digit(c: str) -> int {
+    if c == "1" { return 1 }
+    if c == "2" { return 2 }
+    if c == "3" { return 3 }
+    if c == "4" { return 4 }
+    if c == "5" { return 5 }
+    if c == "6" { return 6 }
+    if c == "7" { return 7 }
+    if c == "8" { return 8 }
+    if c == "9" { return 9 }
+    return 0
+}
+
+fn _runpod_create_cli(rpc: str, gpu_type: str, image: str, pubkey: str, name: str, volume_gb: int) -> RunPodPod {
     // runpodctl 2.x: `pod create` (new form). Deprecated `create pod` emits
     // a warning line that breaks json_parse. Flags renamed: --gpu-id /
     // --image / --container-disk-in-gb / --cloud-type. --env now takes a
     // JSON object, not KEY=val. Pubkeys are ASCII without ", \, or control
     // chars, so plain concatenation produces valid JSON.
+    // PERSISTENT-VOLUME DEFAULT (@L3): --volume-in-gb mounts a persistent
+    // network volume at /workspace so a pod kill does not wipe the run.
+    // volume_gb <= 0 = ephemeral opt-out (no --volume-in-gb flag emitted).
     let env_json = "{\"PUBLIC_KEY\":\"" + pubkey + "\"}"
+    let mut vol_flag = ""
+    if volume_gb > 0 {
+        vol_flag = " --volume-in-gb " + str(volume_gb)
+    }
     let cmd = _shq_local(rpc) + " pod create"
         + " --gpu-id " + _shq_local(gpu_type)
         + " --image " + _shq_local(image)
@@ -200,6 +266,7 @@ fn _runpod_create_cli(rpc: str, gpu_type: str, image: str, pubkey: str, name: st
         + " --env " + _shq_local(env_json)
         + " --ports 22/tcp"
         + " --container-disk-in-gb 80"
+        + vol_flag
         + " --volume-mount-path /workspace"
         + " --cloud-type SECURE"
         + " -o json 2>&1"
@@ -219,10 +286,16 @@ fn _runpod_create_cli(rpc: str, gpu_type: str, image: str, pubkey: str, name: st
     return _runpod_fail_pod("create (cli) failed: " + snippet + cloud_runpod_401_hint(snippet))
 }
 
-fn _runpod_create_api(api_key: str, gpu_type: str, image: str, pubkey: str, name: str) -> RunPodPod {
+fn _runpod_create_api(api_key: str, gpu_type: str, image: str, pubkey: str, name: str, volume_gb: int) -> RunPodPod {
     // `costPerHr` is on the Pod type returned by the mutation — request it so
     // the M3 cost-cap has a rate source captured at create time.
-    let body = "{\"query\":\"mutation { podFindAndDeployOnDemand(input:{cloudType: ALL, gpuCount:1, volumeInGb:0, containerDiskInGb:80, minVcpuCount:8, minMemoryInGb:32, gpuTypeId:\\\"" + gpu_type + "\\\", name:\\\"" + name + "\\\", imageName:\\\"" + image + "\\\", dockerArgs:\\\"\\\", ports:\\\"22/tcp\\\", volumeMountPath:\\\"/workspace\\\", env:[{key:\\\"PUBLIC_KEY\\\", value:\\\"" + pubkey + "\\\"}]}) { id machineId costPerHr } }\"}"
+    // PERSISTENT-VOLUME DEFAULT (@L3): volumeInGb now defaults to a positive
+    // persistent volume at /workspace (was hardcoded 0 = ephemeral, the exact
+    // shape that lost a full training run on a pod kill). volume_gb <= 0 keeps
+    // the legacy ephemeral behavior (the explicit `--ephemeral` opt-out path).
+    let mut vol = volume_gb
+    if vol < 0 { vol = 0 }
+    let body = "{\"query\":\"mutation { podFindAndDeployOnDemand(input:{cloudType: ALL, gpuCount:1, volumeInGb:" + str(vol) + ", containerDiskInGb:80, minVcpuCount:8, minMemoryInGb:32, gpuTypeId:\\\"" + gpu_type + "\\\", name:\\\"" + name + "\\\", imageName:\\\"" + image + "\\\", dockerArgs:\\\"\\\", ports:\\\"22/tcp\\\", volumeMountPath:\\\"/workspace\\\", env:[{key:\\\"PUBLIC_KEY\\\", value:\\\"" + pubkey + "\\\"}]}) { id machineId costPerHr } }\"}"
     let resp = _runpod_post(api_key, body, 60)
     if len(resp) == 0 {
         return _runpod_fail_pod("create (api): empty response (HTTPS / auth failure)")
@@ -239,21 +312,32 @@ fn _runpod_create_api(api_key: str, gpu_type: str, image: str, pubkey: str, name
     return _runpod_fail_pod("create (api): no id in response (no capacity / bad input)" + cloud_runpod_401_hint(resp))
 }
 
-// runpod_create — try CLI first, fall back to GraphQL API on CLI absence
-// or failure. `api_key` is only used by the API fallback path.
-fn runpod_create(api_key: str, gpu_type: str, image: str, pubkey: str, name: str) -> RunPodPod {
+// runpod_create_vol — create with an EXPLICIT persistent-volume size at
+// /workspace (@L3). volume_gb > 0 = persistent network volume; <= 0 =
+// ephemeral (the `--ephemeral` opt-out). CLI first, GraphQL API fallback.
+fn runpod_create_vol(api_key: str, gpu_type: str, image: str, pubkey: str, name: str, volume_gb: int) -> RunPodPod {
     let rpc = _runpodctl_path()
     if len(rpc) > 0 {
-        let r = _runpod_create_cli(rpc, gpu_type, image, pubkey, name)
+        let r = _runpod_create_cli(rpc, gpu_type, image, pubkey, name, volume_gb)
         if r.ok == 1 {
             return r
         }
     }
-    return _runpod_create_api(api_key, gpu_type, image, pubkey, name)
+    return _runpod_create_api(api_key, gpu_type, image, pubkey, name, volume_gb)
+}
+
+// runpod_create — try CLI first, fall back to GraphQL API on CLI absence
+// or failure. `api_key` is only used by the API fallback path. DEFAULTS to a
+// persistent /workspace volume (runpod_default_volume_gb, plan @L3) — a pod
+// kill no longer wipes the run. Use runpod_create_vol for an explicit size /
+// the ephemeral opt-out.
+fn runpod_create(api_key: str, gpu_type: str, image: str, pubkey: str, name: str) -> RunPodPod {
+    return runpod_create_vol(api_key, gpu_type, image, pubkey, name, runpod_default_volume_gb())
 }
 
 // runpod_create_cascade — try each GPU type in order; first that succeeds
-// wins. RunPod capacity for any single GPU is bursty.
+// wins. RunPod capacity for any single GPU is bursty. Persistent-volume
+// default (@L3) via runpod_create.
 fn runpod_create_cascade(api_key: str, gpu_types: [str], image: str, pubkey: str, name: str) -> RunPodPod {
     let mut i = 0
     while i < len(gpu_types) {
@@ -692,6 +776,93 @@ fn runpod_list_pods() -> RunPodList {
         return r
     }
     return _runpod_list_old(rpc)
+}
+
+// ── authoritative pod list — myself.pods GraphQL (anima reconcile fix) ─
+//
+// The runpodctl CLI list above can drift (a degraded/old/missing CLI, a host
+// without the binary). The AUTHORITATIVE source of truth for "what pods do I
+// actually have billing right now" is the RunPod GraphQL `myself { pods }`
+// query against api.runpod.io — the exact endpoint a human falls back to when
+// the registry/CLI disagree. The live anima incident (2026-06-04): the local
+// hook showed 3 pods RENTING that did NOT exist in `myself.pods` (real count
+// 1) — ghost drift the CLI list could not authoritatively refute. This query
+// closes that: a pod is REAL iff it is in `myself.pods`, full stop.
+//
+// g63: NEVER fabricate/assume pod state — every id here is one RunPod itself
+// returned. A degraded query (no key / HTTPS failure / non-2xx) returns ok=0
+// so the caller degrades to the CLI list rather than inventing an empty set.
+
+// _runpod_myself_strip_ids — pull every pods[].id out of the
+// data.myself.pods array of a GraphQL response. Defensive: a non-array /
+// missing path yields []. desiredStatus is requested so a future caller can
+// distinguish EXITED from RUNNING without a second round-trip.
+fn _runpod_myself_strip_ids(resp: str) -> [str] {
+    let mut ids = []
+    if len(resp) == 0 {
+        return ids
+    }
+    let parsed = json_parse(resp)
+    let pods_v = json_object_get_path(parsed, "data.myself.pods")
+    if type_of(pods_v) != "array" {
+        return ids
+    }
+    let mut i = 0
+    while i < len(pods_v) {
+        let id_v = json_object_get(pods_v[i], "id")
+        if type_of(id_v) == "string" {
+            let id_s = to_string(id_v)
+            if len(id_s) > 0 {
+                ids.push(id_s)
+            }
+        }
+        i = i + 1
+    }
+    return ids
+}
+
+// runpod_myself_pods — AUTHORITATIVE live pod-id list via the
+// `myself { pods { id desiredStatus } }` GraphQL query. ok=0 on no-key /
+// transport failure / non-array response (caller must NOT treat that as
+// "zero pods" — it is "could not authoritatively determine"). Reuses
+// _runpod_post (the same endpoint podTerminate uses), so the same api_key
+// resolution + 401 hinting applies.
+fn runpod_myself_pods() -> RunPodList {
+    let api_key = runpod_api_key()
+    if len(api_key) == 0 {
+        return _runpod_list_fail("myself.pods: no RunPod api key (RUNPOD_API_KEY)")
+    }
+    let body = "{\"query\":\"query { myself { pods { id desiredStatus } } }\"}"
+    let resp = _runpod_post(api_key, body, 30)
+    if len(resp) == 0 {
+        return _runpod_list_fail("myself.pods: empty response (HTTPS / auth failure)")
+    }
+    // A GraphQL error envelope (no data) must NOT read as zero pods.
+    let parsed = json_parse(resp)
+    let myself_v = json_object_get_path(parsed, "data.myself")
+    if type_of(myself_v) != "object" {
+        return _runpod_list_fail("myself.pods: no data.myself in response" + cloud_runpod_401_hint(resp))
+    }
+    let ids = _runpod_myself_strip_ids(resp)
+    return RunPodList { ok: 1, pod_ids: ids, message: "myself.pods (graphql) - " + to_string(len(ids)) + " pods" }
+}
+
+// runpod_authoritative_pods — the reconcile/reap source of truth. Prefers
+// the GraphQL `myself.pods` query (authoritative); on a degraded query
+// (ok=0) falls back to the runpodctl CLI list so a host without the API key
+// still reconciles against SOMETHING real rather than an empty set. The two
+// agree in the common case; myself.pods wins on disagreement (it is the
+// provider's own ledger). g63: both arms return only ids RunPod reported.
+fn runpod_authoritative_pods() -> RunPodList {
+    let m = runpod_myself_pods()
+    if m.ok == 1 {
+        return m
+    }
+    let c = runpod_list_pods()
+    if c.ok == 1 {
+        return RunPodList { ok: 1, pod_ids: c.pod_ids, message: "cli-fallback (" + m.message + ") - " + c.message }
+    }
+    return _runpod_list_fail("authoritative: both myself.pods + cli list unavailable (" + m.message + " / " + c.message + ")")
 }
 
 // ── env-var passthrough audit (G5 — anima 2026-05-24 cycle 15) ───────
