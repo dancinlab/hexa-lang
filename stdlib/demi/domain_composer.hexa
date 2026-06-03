@@ -51,6 +51,7 @@ pub struct DcDomain {
     clusters:      [string],   // facts.cluster, unknown rawValues dropped (compactMap)
     scale:         string,     // facets.scale (default "system")
     substrate:     string,     // substrate_ssot ("" if absent)
+    keywords:      [string],   // free-text → domain key match (DomainCatalog.infer · PR#13)
 }
 
 // dco_trim(s) — whitespace-trim (space + tab), matching DemiParser's
@@ -168,6 +169,7 @@ pub fn dco_load_domains() -> [DcDomain] {
     let mut cur_clusters: [string] = []
     let mut cur_scale = "system"
     let mut cur_sub = ""
+    let mut cur_keywords: [string] = []
 
     let mut i = 0
     while i <= len(lines) {
@@ -191,7 +193,8 @@ pub fn dco_load_domains() -> [DcDomain] {
                 out.push(DcDomain {
                     id: cur_id, label: cur_label,
                     prerequisites: cur_prereqs, clusters: cur_clusters,
-                    scale: cur_scale, substrate: cur_sub })
+                    scale: cur_scale, substrate: cur_sub,
+                    keywords: cur_keywords })
             }
             if i == len(lines) { break }
             // open the new section
@@ -202,6 +205,7 @@ pub fn dco_load_domains() -> [DcDomain] {
             cur_clusters = []
             cur_scale = "system"
             cur_sub = ""
+            cur_keywords = []
             i = i + 1
             continue
         }
@@ -217,6 +221,8 @@ pub fn dco_load_domains() -> [DcDomain] {
             if dco_is_list(val) { cur_prereqs = dco_split_list(dco_list_inner(val)) }
         } else if key == "substrate_ssot" {
             cur_sub = dco_unquote(val)
+        } else if key == "keywords" {
+            if dco_is_list(val) { cur_keywords = dco_split_list(dco_list_inner(val)) }
         } else if key == "facets.scale" {
             cur_scale = dco_unquote(val)
         } else if key == "facets.cluster" {
@@ -444,6 +450,74 @@ fn dco_crosses(clusters: [string]) -> bool {
         i = i + 1
     }
     return life && tech
+}
+
+// ── project new resolver (PR#13 — DomainCatalog.infer + DomainComposer kind) ──
+//
+// `project new` needs three composer derivations the `compose` render did not
+// surface as pub: the inferred domain key (when omitted), the topo `walk` ids,
+// and the ENGLISH kind rawValue (atomic/composite/meta) — note `compose` prints
+// the KOREAN plain-default label (dco_kind_label) while `projectNew` prints
+// `comp.kind.rawValue`. Same module, so these reuse the private graph walkers.
+
+// dco_lower_ascii(s) — ASCII A-Z → a-z (Swift `.lowercased()` for the infer
+// keyword match; INDEX.demi keywords are stored lowercase, Korean is case-less).
+fn dco_lower_ascii(s: string) -> string {
+    let mut out = ""
+    let mut i = 0
+    while i < len(s) {
+        let c = s.substring(i, i + 1)
+        if c >= "A" && c <= "Z" {
+            // shift by the A→a gap via the byte code (char_code(s,i) reads byte i).
+            out = out + from_char_code(char_code(c, 0) + 32)
+        } else {
+            out = out + c
+        }
+        i = i + 1
+    }
+    return out
+}
+
+// dco_infer(target) — DomainCatalog.infer: first domain whose keyword the
+// lowercased target contains; else "general". Catalog order = INDEX.demi order.
+pub fn dco_infer(target: string) -> string {
+    let t = dco_lower_ascii(target)
+    let doms = dco_load_domains()
+    let mut di = 0
+    while di < len(doms) {
+        let kw = doms[di].keywords
+        let mut ki = 0
+        while ki < len(kw) {
+            if rl_contains(t, kw[ki]) { return doms[di].id }
+            ki = ki + 1
+        }
+        di = di + 1
+    }
+    return "general"
+}
+
+// dco_english_kind(start) — DomainComposition.kind.rawValue for the start key:
+//   start scale==system → meta ; else stack.count>1 → composite ; else atomic.
+pub fn dco_english_kind(start: string) -> string {
+    let doms = dco_load_domains()
+    let known = dco_find(doms, start)
+    let scale = if known >= 0 { doms[known].scale } else { "system" }
+    let stack = dco_toposort(doms, dco_closure(doms, start))
+    if scale == "system" { return "meta" }
+    if len(stack) > 1 { return "composite" }
+    return "atomic"
+}
+
+// dco_project_walk(start) — DomainComposition.ids (topo-ordered constituent
+// stack). For a synthetic / no-prereq start this is just [start].
+pub fn dco_project_walk(start: string) -> [string] {
+    let doms = dco_load_domains()
+    return dco_toposort(doms, dco_closure(doms, start))
+}
+
+// dco_project_stack_count(start) — DomainComposition.stack.count (구성 N).
+pub fn dco_project_stack_count(start: string) -> int {
+    return len(dco_project_walk(start))
 }
 
 // ── handler_compose(argv) — the `compose <domain>` CLI verb ──────────────────

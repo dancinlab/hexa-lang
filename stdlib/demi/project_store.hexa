@@ -75,11 +75,17 @@ pub fn ps_verb_plain(i: int) -> string {
     return ""
 }
 
-// ── one loaded project (the Swift Project model, read-only fields) ──────────
+// ── one loaded project (the Swift Project model) ────────────────────────────
+// PR#12 read verbs use name/target/domain/current_verb/done_verbs/created_at.
+// PR#13's advance/retreat REWRITE the manifest, so the full Codable surface is
+// carried — id (Project.id.uuidString) + walk (Project.walk) — so the writer
+// round-trips every field byte-for-byte (only currentVerb changes on a step).
 pub struct PsProject {
+    id:           string,    // Project.id.uuidString (UPPERCASE uuid) — store dir + manifest field
     name:         string,    // user-typed display name
     target:       string,    // free-text "무엇을 만들고 싶으세요" answer
     domain:       string,    // domain key (Project.domain)
+    walk:         [string],  // Project.walk — topo-ordered constituent ids
     current_verb: int,       // currentVerb.rawValue (0..6)
     done_verbs:   [int],     // doneVerbs (raw values of measured ✅ stages)
     created_at:   string,    // createdAt stored ISO8601 (for the sort + render)
@@ -157,10 +163,22 @@ pub fn ps_load_all() -> [PsProject] {
                 k = k + 1
             }
         }
+        // walk — a JSON string array (Project.walk). Same shape as doneVerbs.
+        let mut wk: [string] = []
+        let wks = json_object_get_path(obj, "walk")
+        if type_of(wks) == "array" {
+            let mut w = 0
+            while w < len(wks) {
+                if type_of(wks[w]) == "string" { wk.push(wks[w]) }
+                w = w + 1
+            }
+        }
         projs.push(PsProject {
+            id:           json_object_get_str(obj, "id", ""),
             name:         json_object_get_str(obj, "name", ""),
             target:       json_object_get_str(obj, "target", ""),
             domain:       json_object_get_str(obj, "domain", ""),
+            walk:         wk,
             current_verb: cv_i,
             done_verbs:   dv,
             created_at:   json_object_get_str(obj, "createdAt", ""),
@@ -227,4 +245,108 @@ pub fn ps_domain_label(key: string) -> string {
 // ps_domain_canvas(key) — the synthetic-fallback canvasMode rawValue (.cohort).
 pub fn ps_domain_canvas(key: string) -> string {
     return "cohort"
+}
+
+// ── manifest WRITER (PR#13 — the project new|advance|retreat persist path) ──
+//
+// ProjectStore.save (.iso8601 · [.prettyPrinted, .sortedKeys]) writes a fixed
+// byte layout: 2-space indent, ` : ` (space-colon-space) separator, keys in
+// alphabetical order (createdAt · currentVerb · domain · doneVerbs · id · name
+// · target · walk), an empty array as `[\n\n  ]`, a non-empty array one item per
+// line at 4-space indent, NO trailing newline (the encoded Data ends at `}`).
+// The serializer below reproduces that layout literally so the demi writer is
+// byte-identical to the cockpit writer (D50) — verified against the live Swift
+// binary's manifest output in the PR#13 parity cell.
+
+// ps_json_escape(s) — Swift JSONEncoder string escaping. Foundation escapes
+// `\` → `\\`, `"` → `\"`, `/` → `\/` (the solidus, JSONSerialization default),
+// and the C0 controls \b \t \n \f \r as their two-char forms. Other code points
+// pass through as raw UTF-8 (Swift emits Korean/unicode literally, NOT \uXXXX).
+pub fn ps_json_escape(s: string) -> string {
+    let n = len(s)
+    let mut out = ""
+    let mut i = 0
+    while i < n {
+        let c = s.substring(i, i + 1)
+        if c == "\\" { out = out + "\\\\" }
+        else if c == "\"" { out = out + "\\\"" }
+        else if c == "/" { out = out + "\\/" }
+        else if c == "\n" { out = out + "\\n" }
+        else if c == "\r" { out = out + "\\r" }
+        else if c == "\t" { out = out + "\\t" }
+        else { out = out + c }
+        i = i + 1
+    }
+    return out
+}
+
+// ps_int_array_json(xs) — a JSON int array in Swift's pretty layout, indented
+// so the closing bracket sits at 2 spaces (the value column for a top-level
+// key). Empty → `[\n\n  ]` (Swift emits a blank line inside an empty array);
+// non-empty → one int per line at 4-space indent.
+fn ps_int_array_json(xs: [int]) -> string {
+    if len(xs) == 0 { return "[\n\n  ]" }
+    let mut out = "[\n"
+    let mut i = 0
+    while i < len(xs) {
+        out = out + "    " + to_string(xs[i])
+        if i < len(xs) - 1 { out = out + "," }
+        out = out + "\n"
+        i = i + 1
+    }
+    return out + "  ]"
+}
+
+// ps_str_array_json(xs) — the string-array sibling (walk). Same layout; each
+// item escaped + quoted.
+fn ps_str_array_json(xs: [string]) -> string {
+    if len(xs) == 0 { return "[\n\n  ]" }
+    let mut out = "[\n"
+    let mut i = 0
+    while i < len(xs) {
+        out = out + "    \"" + ps_json_escape(xs[i]) + "\""
+        if i < len(xs) - 1 { out = out + "," }
+        out = out + "\n"
+        i = i + 1
+    }
+    return out + "  ]"
+}
+
+// ps_manifest_json(p) — the byte-exact manifest.json text for a project (no
+// trailing newline, matching the Swift encoder's Data). Keys alphabetical.
+pub fn ps_manifest_json(p: PsProject) -> string {
+    let mut out = "{\n"
+    out = out + "  \"createdAt\" : \"" + ps_json_escape(p.created_at) + "\",\n"
+    out = out + "  \"currentVerb\" : " + to_string(p.current_verb) + ",\n"
+    out = out + "  \"domain\" : \"" + ps_json_escape(p.domain) + "\",\n"
+    out = out + "  \"doneVerbs\" : " + ps_int_array_json(p.done_verbs) + ",\n"
+    out = out + "  \"id\" : \"" + ps_json_escape(p.id) + "\",\n"
+    out = out + "  \"name\" : \"" + ps_json_escape(p.name) + "\",\n"
+    out = out + "  \"target\" : \"" + ps_json_escape(p.target) + "\",\n"
+    out = out + "  \"walk\" : " + ps_str_array_json(p.walk) + "\n"
+    out = out + "}"
+    return out
+}
+
+// ps_save_project(p) — ProjectStore.save: mkdir -p <root>/<uuid>/ then write
+// manifest.json atomically. The per-project dir is the project's UUID (D45 — a
+// display name can collide / carry path-hostile chars). Returns true on success.
+pub fn ps_save_project(p: PsProject) -> bool {
+    let dir = ps_projects_root() + "/" + p.id
+    exec("mkdir -p " + rl_shq(dir))
+    let path = dir + "/manifest.json"
+    write_file(path, ps_manifest_json(p))
+    return true
+}
+
+// ps_new_uuid() — ProjectStore uses Foundation UUID (uppercase, 8-4-4-4-12).
+// macOS `uuidgen` emits the same uppercase canonical form.
+pub fn ps_new_uuid() -> string {
+    return exec("uuidgen").trim()
+}
+
+// ps_now_iso8601() — Swift's .iso8601 encodes a Date as `YYYY-MM-DDTHH:MM:SSZ`
+// (whole-second UTC, trailing Z). `date -u` reproduces that exact form.
+pub fn ps_now_iso8601() -> string {
+    return exec("date -u +%Y-%m-%dT%H:%M:%SZ").trim()
 }
