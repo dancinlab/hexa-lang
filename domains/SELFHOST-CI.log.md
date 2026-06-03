@@ -2,6 +2,14 @@
 
 ## 2026-06-03 — milestone 6: determinism re-confirm (gen3 default path)
 
+## 2026-06-03 — gates REQUIRED on main (deferred satisfied, safe aggregator)
+
+- [x] selfhost-gates-summary always-on aggregator (#2616) — runs unconditionally on every PR,
+      so it is required-safe (path-filtered gates would deadlock unrelated PRs). Self-PR green 10s.
+- [x] branch protection: required_status_checks=[selfhost-gates-summary], strict=false,
+      enforce_admins=true preserved. Reversible via admin. Verdict REQUIRED-CHECK.txt.
+- Real native-emit enforcement activates by flipping repo var SELFHOST_SLOT_READY on a gen2_fix runner.
+
 - EXTENDED `tool/determinism_gate.sh` to the gen3 DEFAULT promoted path + wired NEW `.github/workflows/selfhost-determinism-gate.yml` (per-PR + push(main)). Additive only (g4) — no production codegen/linker/runtime edits; the gate ALREADY existed on main but defaulted to the legacy `gen2_fix`/`hld_fixed` bootstrap and was NOT wired to any workflow. M6 makes it (a) discover the graduated gen3 slot and (b) run as a standing per-PR check.
 - Gate change: auto-discover the graduated slot `$HX_HOME/self/native/selfhost/{gen3,hexa_ld,rt.o}` (SELFHOST_SLOT / HX_HOME / ~/.hx / build/selfhost — the SAME slot the byte-eq / promote-parity sisters use). When found it sets CC=slot/gen3, linker=slot/hexa_ld, and appends rt.o + `--lc-main _main` to each PHASE-2 link — i.e. the REAL promoted compile+link route, not the legacy standalone-object link. HEXA_NATIVE_CC / HEXA_LD still override; the legacy gen2_fix/hld_fixed fallback is preserved.
 - The DETERMINISM claim locked: emitting the same source twice through the gen3 DEFAULT path produces BYTE-IDENTICAL objects (PHASE 1), AND relinking the same object twice (same output basename in two dirs, isolating the path-derived build-id) is BYTE-IDENTICAL (PHASE 2) — no embedded timestamp / random UUID / unstable sort / hashmap-iteration leak.

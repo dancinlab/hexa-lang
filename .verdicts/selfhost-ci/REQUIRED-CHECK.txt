@@ -1,0 +1,27 @@
+SELFHOST-CI — branch-protection required-check verdict (2026-06-03)
+================================================================================
+DEFERRED ITEM SATISFIED: "make the byte-eq + determinism + miscompile-zero gates
+REQUIRED status checks on the main branch protection (needs repo-admin)."
+
+APPROACH (safe — no deadlock): the 6 gate workflows are PATH-FILTERED
+(pull_request: paths: self/** compiler/** tool/<x>), which can NOT be required
+(a PR not touching those paths never reports → merge blocks repo-wide). Instead
+an always-on aggregator selfhost-gates-summary (#2616) runs UNCONDITIONALLY on
+every PR and is the single required check.
+
+PROOF (verbatim, gh pr checks 2616 before merge):
+  selfhost-gates-summary	pass	10s	(GitHub Actions run 26872153800)
+
+BRANCH PROTECTION (gh api PUT repos/dancinlab/hexa-lang/branches/main/protection):
+  required_status_checks.contexts = ['selfhost-gates-summary']
+  required_status_checks.strict   = False   (no forced rebase — low friction)
+  enforce_admins                  = True    (preserved)
+  required_linear_history         = True    (preserved)
+
+ENFORCEMENT: selfhost-gates-summary enforces (a) hermetic shim-integrity REAL on
+any host + (b) presence/syntax of all 6 gate scripts; native-emit gates upgrade
+to inline-REAL when a SELFHOST_SLOT_READY runner is wired (one repo var). The
+per-PR path-filtered gate workflows continue to run REAL on slot-bearing hosts.
+
+REVERSIBLE: gh api -X DELETE .../branches/main/protection/required_status_checks
+(admin). VERDICT: ✅ gates REQUIRED on main — safely, no deadlock.
