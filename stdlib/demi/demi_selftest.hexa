@@ -1606,6 +1606,72 @@ fn main() {
     fails = fails + _cell("operate/unknown-subcommand", entry, swift_bin, "",
                           "operate badsub", g_op_unknown, 2)
 
+    // ── PR#15 backend cells — `backend [list|current]` renders the
+    // BackendResolver (backend_resolver.hexa): local default + the
+    // `DEMIURGE_BACKEND` user remote, byte-for-byte against the Swift
+    // `backend` reference. The default + remote backends carry NO machine
+    // state (the host is the env value verbatim · no pool.json read in the
+    // external path), so the goldens are machine-independent. Owner pool
+    // hosts are NOT exercised here — they read the owner's own
+    // ~/.pool/pool.json (non-portable, machine-dependent), out of scope.
+    // Goldens captured byte-for-byte from Swift DemiurgeCLI 2026-06-04.
+    // Covers: list (local-only · remote-via-env · expert local · expert
+    // remote), bare→list default, current (local · remote · ssh: prefix ·
+    // "local" treated-as-none), and the unknown-subcommand stderr+rc=2 path.
+    let g_bk_hint = "(🔒 owner pool hosts hidden — DEMIURGE_OWNER + ~/.pool/pool.json)\n"
+
+    // (1) list — external local-only: ▶ marks the local default + hint + active line.
+    let g_bk_list_local = "▶ 내 컴퓨터 (local)\n" + g_bk_hint
+        + "active: local  (change via DEMIURGE_BACKEND env)\n"
+    fails = fails + _cell("backend/list-local", entry, swift_bin, "",
+                          "backend list", g_bk_list_local, 0)
+    // (2) bare `backend` → defaults to list (Swift `first(where:) ?? "list"`).
+    fails = fails + _cell("backend/bare-defaults-list", entry, swift_bin, "",
+                          "backend", g_bk_list_local, 0)
+    // (3) list with DEMIURGE_BACKEND=<host> — local row (space-marked) + the
+    //     remote row (▶ active) + hint + active=remote:<host> line.
+    let g_bk_list_remote = "  내 컴퓨터 (local)\n"
+        + "▶ 원격 백엔드 (gpu-box)\n" + g_bk_hint
+        + "active: remote:gpu-box  (change via DEMIURGE_BACKEND env)\n"
+    fails = fails + _cell("backend/list-remote-env", entry, swift_bin,
+                          "DEMIURGE_BACKEND=gpu-box", "backend list",
+                          g_bk_list_remote, 0)
+    // (4) expert list local-only — id/[kind]/label/host bracket form.
+    let g_bk_list_local_expert = "▶ local  [local]  내 컴퓨터 (local) — this machine\n"
+        + g_bk_hint + "active: local  (change via DEMIURGE_BACKEND env)\n"
+    fails = fails + _cell("backend/list-local-expert", entry, swift_bin,
+                          "DEMIURGE_EXPERT=1", "backend list",
+                          g_bk_list_local_expert, 0)
+    // (5) expert list with remote env — both rows in bracket form.
+    let g_bk_list_remote_expert = "  local  [local]  내 컴퓨터 (local) — this machine\n"
+        + "▶ remote:gpu-box  [remote]  원격 백엔드 (gpu-box) — gpu-box\n"
+        + g_bk_hint + "active: remote:gpu-box  (change via DEMIURGE_BACKEND env)\n"
+    fails = fails + _cell("backend/list-remote-expert", entry, swift_bin,
+                          "DEMIURGE_EXPERT=1 DEMIURGE_BACKEND=gpu-box", "backend list",
+                          g_bk_list_remote_expert, 0)
+    // (6) current — local default.
+    let g_bk_cur_local = "active backend: local · 내 컴퓨터 (local) — this machine\n"
+    fails = fails + _cell("backend/current-local", entry, swift_bin, "",
+                          "backend current", g_bk_cur_local, 0)
+    // (7) current — DEMIURGE_BACKEND=<host> remote.
+    let g_bk_cur_remote = "active backend: remote:gpu-box · 원격 백엔드 (gpu-box) — gpu-box\n"
+    fails = fails + _cell("backend/current-remote-env", entry, swift_bin,
+                          "DEMIURGE_BACKEND=gpu-box", "backend current",
+                          g_bk_cur_remote, 0)
+    // (8) current — "ssh:" prefix stripped from the host (Swift dropFirst(4)).
+    let g_bk_cur_ssh = "active backend: remote:user@gpu · 원격 백엔드 (user@gpu) — user@gpu\n"
+    fails = fails + _cell("backend/current-ssh-prefix", entry, swift_bin,
+                          "DEMIURGE_BACKEND=ssh:user@gpu", "backend current",
+                          g_bk_cur_ssh, 0)
+    // (9) current — DEMIURGE_BACKEND=local treated as none → local default.
+    fails = fails + _cell("backend/current-local-literal", entry, swift_bin,
+                          "DEMIURGE_BACKEND=local", "backend current",
+                          g_bk_cur_local, 0)
+    // (10) unknown subcommand → stderr line + rc 2 (Swift default arm).
+    let g_bk_unknown = "backend: unknown subcommand 'badsub' — use list | current\n"
+    fails = fails + _cell("backend/unknown-subcommand", entry, swift_bin, "",
+                          "backend badsub", g_bk_unknown, 2)
+
     if fails == 0 { println("demi_parity_selftest PASS") }
     else { println("demi_parity_selftest FAIL — " + to_string(fails) + " cell(s)") }
 }
