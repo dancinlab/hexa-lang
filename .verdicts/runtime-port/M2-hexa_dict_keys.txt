@@ -1,6 +1,11 @@
 RUNTIME-PORT · Milestone-2 · hexa_dict_keys
 date: 2026-06-03   host: mini (LOCAL — no ghost/pool)   base: origin/main
 verdict: BLOCKED (map-representation mismatch — not RUNEQ-able as a leaf)
+*** SUPERSEDED 2026-06-03 by DICTKEYS-FEAS.txt → CLASS A (this BLOCKED verdict
+*** was based on a FACTUAL ERROR: map_keys_pure(m) is `return keys(m)` and
+*** consumes the SAME native HexaMapTable, NOT a separate pure-hexa rep. The
+*** leaf is hexa-portable TODAY via __map_raw_len + __map_order_key_at (already
+*** registered in all 3 builtin tables). See .verdicts/runtime-port/DICTKEYS-FEAS.txt.
 ########################################################################
 
 C SSOT : HexaVal hexa_dict_keys(HexaVal m) { return hexa_map_keys(m); }
