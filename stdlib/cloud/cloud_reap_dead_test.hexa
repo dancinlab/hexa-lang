@@ -1,0 +1,123 @@
+// @ci_gate — pure · network-free · deterministic (stdlib_selftest_aggregate --ci-gate)
+// stdlib/cloud/cloud_reap_dead_test.hexa — falsifiers for the M6 reap-guard
+// DEAD-OWNER / TTL-EXPIRED sweep (pod_registry_reap_dead_rows).
+//
+// Live incident (anima, 2026-06-04): a dispatched run rented a RunPod H100,
+// the owning agent died in a rate-limit storm, and the pod kept RUNNING with
+// NO teardown. The orphan axis (provider-alive-but-untracked) does NOT catch
+// it — the pod IS tracked. This axis does: a tracked, provider-alive pod whose
+// owner pid is DEAD (kill -0 gone) or whose heartbeat went silent past max-ttl.
+//
+// Reap criteria (g63 — only against authoritative provider-alive ids + the
+// recorded owner pid/heartbeat, never fabricated state):
+//   REAP iff alive-on-provider AND owned (project|rented_by) AND
+//        ( owner_pid DEAD  OR  (now − last_heartbeat) > max_ttl_sec )
+// FAIL-SAFE never-reap: an unattributed pod (blank project AND rented_by); a
+// GHOST (absent from provider-alive); an UNDETERMINED liveness probe alone.
+//
+// LLM-free, network-free, no registry-file dependency: pod_registry_reap_dead_rows
+// is pure over (records, provider_alive_ids, owner_alive[], now_sec).
+//
+// Run:   hexa run stdlib/cloud/cloud_reap_dead_test.hexa
+// PASS:  exits 0, prints "cloud_reap_dead_test PASS — N/N cases".
+
+use "stdlib/cloud/pod_registry"
+
+fn _fail(case: str, msg: str) {
+    println("FAIL " + case + ": " + msg)
+    exit(1)
+}
+
+fn _eq_int(case: str, got: int, want: int) {
+    if got != want { _fail(case, "got " + str(got) + " want " + str(want)) }
+}
+
+fn _eq_str(case: str, got: str, want: str) {
+    if got != want { _fail(case, "got " + got + " want " + want) }
+}
+
+// _rec — minimal PodRecord builder for the axes this test exercises.
+// last_heartbeat is a real ISO ts the production helper can parse with date(1)
+// so the TTL math is exercised end-to-end (not just the pid axis).
+fn _rec(id: str, project: str, rented_by: str, last_hb: str, max_ttl: int, owner_pid: int) -> PodRecord {
+    return PodRecord {
+        id: id, provider: "runpod", created_at: "2026-06-04T00:00:00Z",
+        rented_by: rented_by, project: project, purpose: "",
+        ssh_host: "", ssh_port: "", status: "READY",
+        ttl_sec: -1, max_cost_usd: "", cumulative_cost_usd: "0.0", cost_per_hr_usd: "",
+        owner_pid: owner_pid, last_heartbeat: last_hb, max_ttl_sec: max_ttl
+    }
+}
+
+fn main() {
+    let mut n = 0
+
+    // now = 2026-06-04T12:00:00Z (epoch 1780574400). A heartbeat at
+    // T00:00:00Z is 12h stale; T11:59:00Z is 1m fresh.
+    let now = 1780574400
+    let hb_stale = "2026-06-04T00:00:00Z"   // 12h before now
+    let hb_fresh = "2026-06-04T11:59:00Z"   // 1m before now
+    let ttl_6h = 21600                       // 6h
+
+    // Case 1 — owner DEAD (kill -0 gone), alive on provider, owned → REAP.
+    let r1 = [_rec("rp-dead", "anima", "agent-x", hb_fresh, ttl_6h, 999999)]
+    let d1 = pod_registry_reap_dead_rows(r1, ["rp-dead"], [0], now)  // 0 = owner dead
+    _eq_int("c1-dead-owner-count", len(d1), 1); n = n + 1
+    _eq_str("c1-dead-owner-reason", d1[0].reason, "owner-dead"); n = n + 1
+
+    // Case 2 — owner ALIVE + heartbeat FRESH → NO reap (healthy run).
+    let r2 = [_rec("rp-live", "anima", "agent-x", hb_fresh, ttl_6h, 1)]
+    let d2 = pod_registry_reap_dead_rows(r2, ["rp-live"], [1], now)  // 1 = alive
+    _eq_int("c2-healthy-no-reap", len(d2), 0); n = n + 1
+
+    // Case 3 — TTL EXPIRED (12h stale heartbeat > 6h ttl), owner liveness
+    // UNDETERMINED (-1) → REAP on the TTL axis alone (pid inconclusive).
+    let r3 = [_rec("rp-ttl", "anima", "agent-x", hb_stale, ttl_6h, -1)]
+    let d3 = pod_registry_reap_dead_rows(r3, ["rp-ttl"], [-1], now)  // -1 = undetermined
+    _eq_int("c3-ttl-expired-count", len(d3), 1); n = n + 1
+    _eq_str("c3-ttl-expired-reason", d3[0].reason, "ttl-expired"); n = n + 1
+
+    // Case 4 — DEAD owner AND TTL expired → combined reason.
+    let r4 = [_rec("rp-both", "anima", "agent-x", hb_stale, ttl_6h, 999999)]
+    let d4 = pod_registry_reap_dead_rows(r4, ["rp-both"], [0], now)
+    _eq_int("c4-both-count", len(d4), 1); n = n + 1
+    _eq_str("c4-both-reason", d4[0].reason, "owner-dead+ttl"); n = n + 1
+
+    // Case 5 — FAIL-SAFE: undetermined liveness AND fresh heartbeat → NO reap
+    // (an inconclusive kill -0 alone must never reap; TTL must also fire).
+    let r5 = [_rec("rp-unk", "anima", "agent-x", hb_fresh, ttl_6h, -1)]
+    let d5 = pod_registry_reap_dead_rows(r5, ["rp-unk"], [-1], now)
+    _eq_int("c5-undetermined-fresh-no-reap", len(d5), 0); n = n + 1
+
+    // Case 6 — FAIL-SAFE: UNATTRIBUTED pod (blank project AND rented_by),
+    // dead owner, alive on provider → NEVER reaped (could be foreign/protected).
+    let r6 = [_rec("rp-foreign", "", "", hb_stale, ttl_6h, 999999)]
+    let d6 = pod_registry_reap_dead_rows(r6, ["rp-foreign"], [0], now)
+    _eq_int("c6-unattributed-never-reap", len(d6), 0); n = n + 1
+
+    // Case 7 — FAIL-SAFE: a GHOST (tracked, dead owner, but NOT alive on the
+    // provider) is reconcile's job, NOT reap's → no row here (never billing).
+    let r7 = [_rec("rp-ghost", "anima", "agent-x", hb_stale, ttl_6h, 999999)]
+    let d7 = pod_registry_reap_dead_rows(r7, [], [0], now)  // empty provider-alive set
+    _eq_int("c7-ghost-not-reaped", len(d7), 0); n = n + 1
+
+    // Case 8 — broken clock (now_sec <= 0) disables the TTL axis; only the
+    // pid axis can reap. Stale heartbeat + undetermined pid → NO reap.
+    let r8 = [_rec("rp-noclock", "anima", "agent-x", hb_stale, ttl_6h, -1)]
+    let d8 = pod_registry_reap_dead_rows(r8, ["rp-noclock"], [-1], 0)
+    _eq_int("c8-broken-clock-ttl-disabled", len(d8), 0); n = n + 1
+
+    // Case 9 — mixed batch: one dead, one healthy, one foreign → exactly one reap.
+    let batch = [
+        _rec("rp-d", "anima", "a", hb_fresh, ttl_6h, 999999),
+        _rec("rp-h", "anima", "a", hb_fresh, ttl_6h, 1),
+        _rec("rp-f", "", "", hb_stale, ttl_6h, 999999)
+    ]
+    let alive = ["rp-d", "rp-h", "rp-f"]
+    let liveness = [0, 1, 0]
+    let db = pod_registry_reap_dead_rows(batch, alive, liveness, now)
+    _eq_int("c9-mixed-batch-count", len(db), 1); n = n + 1
+    _eq_str("c9-mixed-batch-id", db[0].id, "rp-d"); n = n + 1
+
+    println("cloud_reap_dead_test PASS — " + str(n) + "/" + str(n) + " cases")
+}

@@ -76,6 +76,58 @@ fn _reg_iso_to_sec(iso: str) -> int {
     return _reg_atoi(s)
 }
 
+// -- M6 reap-guard heartbeat-TTL helpers ------------------------------
+//
+// _reg_owner_pid - the OS pid of the process renting the pod (this hexa
+// CLI). Stamped into the registry at rent so `cloud reap` can later check
+// owner liveness via kill -0. Prefers an explicit HEXA_OWNER_PID (a parent
+// agent can pin its own pid through the env so the reap signal survives the
+// short-lived `hexa cloud rent` child), else this process's own pid. -1 if
+// neither is resolvable (heartbeat-pid signal simply unset, never false).
+fn _reg_owner_pid() -> int {
+    let env_pid = env_var("HEXA_OWNER_PID")
+    if len(env_pid) > 0 {
+        let v = _reg_atoi(env_pid)
+        if v > 0 { return v }
+    }
+    let p = exec("echo $$ 2>/dev/null").trim()
+    let pv = _reg_atoi(p)
+    if pv > 0 { return pv }
+    return -1
+}
+
+// _reg_default_max_ttl_sec - the self-expiry window stamped at rent. A pod
+// whose owner has gone silent for longer than this is reapable even if a
+// kill -0 liveness probe is inconclusive (e.g. the owner pid was recycled).
+// Overridable via HEXA_CLOUD_MAX_TTL_SEC; default 6h (21600s) - long enough
+// not to reap a healthy long training run, short enough to bound a leak.
+fn _reg_default_max_ttl_sec() -> int {
+    let e = env_var("HEXA_CLOUD_MAX_TTL_SEC")
+    if len(e) > 0 {
+        let v = _reg_atoi(e)
+        if v > 0 { return v }
+    }
+    return 21600
+}
+
+// pod_registry_owner_alive - kill -0 liveness for a recorded owner pid.
+// 1 = the pid is alive (signal-0 succeeds) * 0 = the pid is gone (no such
+// process) * -1 = UNDETERMINED (pid unset, or the probe could not run). The
+// reaper treats -1 as "no death signal from the pid axis" (fail-safe: never
+// reap on an inconclusive liveness probe alone - TTL must also be exceeded).
+fn pod_registry_owner_alive(pid: int) -> int {
+    if pid <= 0 {
+        return -1
+    }
+    // kill -0 <pid>: exit 0 iff the process exists AND is signalable. We
+    // print a sentinel token per branch so a degraded shell can't be
+    // misread as "alive". ALIVE/DEAD are authoritative; anything else -> -1.
+    let out = exec("kill -0 " + str(pid) + " 2>/dev/null && echo __ALIVE__ || echo __DEAD__").trim()
+    if out.index_of("__ALIVE__") >= 0 { return 1 }
+    if out.index_of("__DEAD__") >= 0 { return 0 }
+    return -1
+}
+
 // _reg_atoi — leading run of decimal digits; -1 if none.
 fn _reg_atoi(s: str) -> int {
     let n = len(s)
@@ -596,7 +648,15 @@ struct PodRecord {
     ttl_sec:               int,    // -1 = unset (M2 will populate)
     max_cost_usd:          str,    // "" = unset (M3; str to preserve "5.00")
     cumulative_cost_usd:   str,    // "0.0" default (M3; derived-on-read in the sweep, not persisted)
-    cost_per_hr_usd:       str     // "" = unset (M3 rate source; provider dph captured at rent)
+    cost_per_hr_usd:       str,    // "" = unset (M3 rate source; provider dph captured at rent)
+    // ── M6 reap-guard heartbeat-TTL (anima orphan-leak fix, 2026-06-04) ──
+    // Deterministic owner-death / expiry signal for `cloud reap`. The owning
+    // agent stamps its OS pid + a last-heartbeat ts at rent; the reaper treats
+    // a registry pod still ALIVE on the provider as dead-owned when the pid is
+    // gone (kill -0) OR (now − last_heartbeat) > max_ttl_sec.
+    owner_pid:             int,    // -1 = unset (no owner pid recorded)
+    last_heartbeat:        str,    // ISO-8601 UTC; "" = unset (never beaten)
+    max_ttl_sec:           int     // -1 = unset (no self-expiry signal)
 }
 
 // _m5_numfield — sniff the bare (unquoted) value of "key":value out of a
@@ -683,6 +743,19 @@ fn _m5_parse_records(body: str) -> [PodRecord] {
             if len(cum) == 0 || cum == "null" {
                 cum = "0.0"
             }
+            // M6 heartbeat-TTL — owner_pid + max_ttl_sec are JSON-numeric/null
+            // (sniffed unquoted); last_heartbeat is a quoted string. All absent
+            // → unset defaults, so a pre-M6 record reads back cleanly (no migration).
+            let mut opid = -1
+            let opid_num = _m5_numfield(rec, "owner_pid")
+            if len(opid_num) > 0 && opid_num != "null" {
+                opid = _reg_atoi(opid_num)
+            }
+            let mut mttl = -1
+            let mttl_num = _m5_numfield(rec, "max_ttl_sec")
+            if len(mttl_num) > 0 && mttl_num != "null" {
+                mttl = _reg_atoi(mttl_num)
+            }
             out.push(PodRecord {
                 id: id,
                 provider: _reg_field(rec, "provider"),
@@ -696,7 +769,10 @@ fn _m5_parse_records(body: str) -> [PodRecord] {
                 ttl_sec: ttl,
                 max_cost_usd: _reg_field(rec, "max_cost_usd"),
                 cumulative_cost_usd: cum,
-                cost_per_hr_usd: _reg_field(rec, "cost_per_hr_usd")
+                cost_per_hr_usd: _reg_field(rec, "cost_per_hr_usd"),
+                owner_pid: opid,
+                last_heartbeat: _reg_field(rec, "last_heartbeat"),
+                max_ttl_sec: mttl
             })
         }
         k = k + 1
@@ -772,6 +848,16 @@ fn _m5_emit_record(r: PodRecord) -> str {
     if len(r.cost_per_hr_usd) > 0 {
         rate_field = "\"" + _reg_jstr(r.cost_per_hr_usd) + "\""
     }
+    // M6 heartbeat-TTL — numeric pid/max_ttl emit unquoted (null when unset),
+    // last_heartbeat is a quoted string (empty when never beaten).
+    let mut opid_field = "null"
+    if r.owner_pid >= 0 {
+        opid_field = str(r.owner_pid)
+    }
+    let mut mttl_field = "null"
+    if r.max_ttl_sec >= 0 {
+        mttl_field = str(r.max_ttl_sec)
+    }
     return "{\"id\":\"" + _reg_jstr(r.id) + "\","
         + "\"provider\":\"" + _reg_jstr(r.provider) + "\","
         + "\"created_at\":\"" + _reg_jstr(r.created_at) + "\","
@@ -784,7 +870,10 @@ fn _m5_emit_record(r: PodRecord) -> str {
         + "\"ttl_sec\":" + ttl_field + ","
         + "\"max_cost_usd\":" + max_cost_field + ","
         + "\"cumulative_cost_usd\":" + cost_field + ","
-        + "\"cost_per_hr_usd\":" + rate_field + "}"
+        + "\"cost_per_hr_usd\":" + rate_field + ","
+        + "\"owner_pid\":" + opid_field + ","
+        + "\"last_heartbeat\":\"" + _reg_jstr(r.last_heartbeat) + "\","
+        + "\"max_ttl_sec\":" + mttl_field + "}"
 }
 
 // _m5_write_atomic — write the records to ~/.hx/cloud/active-pods.json
@@ -886,9 +975,20 @@ fn pod_registry_add(pod_id: str, provider: str, project: str, purpose: str, ssh_
             ttl_sec: prev.ttl_sec,
             max_cost_usd: prev.max_cost_usd,
             cumulative_cost_usd: prev.cumulative_cost_usd,
-            cost_per_hr_usd: prev.cost_per_hr_usd
+            cost_per_hr_usd: prev.cost_per_hr_usd,
+            // An in-place update (status flip / ssh-ready) doubles as a
+            // liveness heartbeat — the owning agent is demonstrably still
+            // alive, so refresh last_heartbeat; preserve owner_pid/max_ttl.
+            owner_pid: prev.owner_pid,
+            last_heartbeat: now,
+            max_ttl_sec: prev.max_ttl_sec
         }
     } else {
+        // First rent — stamp the M6 heartbeat-TTL owner-death/expiry signal:
+        // the owning OS pid (kill -0 liveness), a last-heartbeat ts, and a
+        // default max-ttl (env HEXA_CLOUD_MAX_TTL_SEC, else 6h). The reaper
+        // treats a still-billing pod as dead-owned when the pid is gone OR
+        // (now − last_heartbeat) > max_ttl_sec.
         records.push(PodRecord {
             id: pod_id,
             provider: provider,
@@ -902,7 +1002,10 @@ fn pod_registry_add(pod_id: str, provider: str, project: str, purpose: str, ssh_
             ttl_sec: -1,
             max_cost_usd: "",
             cumulative_cost_usd: "0.0",
-            cost_per_hr_usd: ""
+            cost_per_hr_usd: "",
+            owner_pid: _reg_owner_pid(),
+            last_heartbeat: now,
+            max_ttl_sec: _reg_default_max_ttl_sec()
         })
     }
     _m5_write_atomic(records)
@@ -934,7 +1037,11 @@ fn pod_registry_update_status(pod_id: str, status: str) -> int {
         ttl_sec: prev.ttl_sec,
         max_cost_usd: prev.max_cost_usd,
         cumulative_cost_usd: prev.cumulative_cost_usd,
-        cost_per_hr_usd: prev.cost_per_hr_usd
+        cost_per_hr_usd: prev.cost_per_hr_usd,
+        // A status flip is owner activity → refresh the heartbeat.
+        owner_pid: prev.owner_pid,
+        last_heartbeat: _reg_now_iso(),
+        max_ttl_sec: prev.max_ttl_sec
     }
     _m5_write_atomic(records)
     return 1
@@ -971,7 +1078,10 @@ fn pod_registry_set_limits(pod_id: str, ttl_sec: int, max_cost_usd: str, cost_pe
         ttl_sec: ttl_sec,
         max_cost_usd: max_cost_usd,
         cumulative_cost_usd: prev.cumulative_cost_usd,
-        cost_per_hr_usd: cost_per_hr_usd
+        cost_per_hr_usd: cost_per_hr_usd,
+        owner_pid: prev.owner_pid,
+        last_heartbeat: prev.last_heartbeat,
+        max_ttl_sec: prev.max_ttl_sec
     }
     _m5_write_atomic(records)
     return 1
@@ -1393,6 +1503,85 @@ fn pod_registry_orphans(provider_alive_ids: [str], registry_ids: [str], provider
         }
         if tracked == 0 {
             out.push(Orphan { id: pid, provider: provider_label })
+        }
+        i = i + 1
+    }
+    return out
+}
+
+// -- M6 reap-guard - DEAD-OWNER / TTL-EXPIRED sweep --------------------
+//
+// Complements pod_registry_orphans (provider-alive-but-untracked). This axis
+// is the inverse leak the live incident exposed: a pod the registry KNOWS it
+// owns, still ALIVE on the provider, whose OWNING AGENT IS DEAD (rate-limit
+// storm killed it) so it never tore the pod down. Reap criteria (g63 - every
+// decision is against authoritative provider-alive ids + recorded owner pid /
+// heartbeat, never a fabricated state):
+//   REAP  iff  the pod is alive on the provider
+//         AND  it is positively anima/agent-owned (project/rented_by non-empty)
+//         AND  ( owner_pid is DEAD (kill -0 -> gone)
+//                OR (now - last_heartbeat) > max_ttl_sec )
+// FAIL-SAFE: a pod with NO ownership attribution (blank project AND blank
+// rented_by) is NEVER reaped (could be a foreign/protected pod) - it surfaces
+// only via the orphan axis for human review. An UNDETERMINED liveness probe
+// (owner_alive == -1) does NOT by itself reap; the TTL axis must also fire.
+
+struct ReapDead {
+    id:       str,
+    provider: str,
+    reason:   str    // "owner-dead" | "ttl-expired" | "owner-dead+ttl"
+}
+
+// pod_registry_reap_dead_rows - PURE classifier over explicit inputs so a
+// network-free test drives it with canned rows. `owner_alive` per row is a
+// tri-value (1 alive / 0 dead / -1 undetermined) the CALLER resolves (via
+// pod_registry_owner_alive) - keeping the kill -0 side-effect out of the pure
+// core. A pod absent from `provider_alive_ids` is NOT reaped here (it is a
+// GHOST - reconcile's job, never billing). `now_sec <= 0` disables the TTL
+// axis (degrade to owner-pid-only rather than mis-expire on a broken clock).
+fn pod_registry_reap_dead_rows(records: [PodRecord], provider_alive_ids: [str], owner_alive: [int], now_sec: int) -> [ReapDead] {
+    let mut out = []
+    let mut i = 0
+    while i < len(records) {
+        let r = records[i]
+        // owned = positively anima/agent-attributed (1) vs unattributed (0).
+        let mut owned = 0
+        if len(r.project) > 0 { owned = 1 }
+        if len(r.rented_by) > 0 { owned = 1 }
+        // alive on provider (1) - only a billing pod can leak.
+        let mut alive = 0
+        if _recon_id_in(provider_alive_ids, r.id) == 1 { alive = 1 }
+        // owner_pid DEAD (the per-row liveness the caller resolved; 0 = dead).
+        let mut dead = 0
+        if i < len(owner_alive) {
+            if owner_alive[i] == 0 { dead = 1 }
+        }
+        // heartbeat silent past max-ttl (TTL axis; clock<=0 disables it).
+        let mut ttl_expired = 0
+        if now_sec > 0 {
+            if r.max_ttl_sec >= 0 {
+                if len(r.last_heartbeat) > 0 {
+                    let hb = _reg_iso_to_sec(r.last_heartbeat)
+                    if hb >= 0 {
+                        if (now_sec - hb) > r.max_ttl_sec { ttl_expired = 1 }
+                    }
+                }
+            }
+        }
+        if alive == 1 {
+            if owned == 1 {
+                if dead == 1 {
+                    if ttl_expired == 1 {
+                        out.push(ReapDead { id: r.id, provider: r.provider, reason: "owner-dead+ttl" })
+                    } else {
+                        out.push(ReapDead { id: r.id, provider: r.provider, reason: "owner-dead" })
+                    }
+                } else {
+                    if ttl_expired == 1 {
+                        out.push(ReapDead { id: r.id, provider: r.provider, reason: "ttl-expired" })
+                    }
+                }
+            }
         }
         i = i + 1
     }
