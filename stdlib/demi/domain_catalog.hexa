@@ -1,0 +1,232 @@
+// HEXA Standard Library — demi/domain_catalog
+//
+// @version 0.1.0
+// @capabilities [proc]
+//
+// The pure-hexa-native port of the Swift cockpit `DomainCatalog` +
+// `IngredientShelf` pair (demiurge cockpit/Sources/DemiurgeCore/Models/
+// Domain.swift `enum DomainCatalog` + Models/Ingredient.swift `enum
+// IngredientShelf` · demi-cli-pure-hexa-native · plan PR#9 domain-catalog).
+// This is the SHARED BASE the later shelf/compose verbs (PR#10 compose,
+// PR#11 list-shelf) build on — it adds NO user-facing verb by itself
+// (like PR#5 record_loader was infra-only).
+//
+// Canonical primitives (d3 — one home for the catalog/shelf parse; the
+// compose/list-shelf handlers will CONSUME these instead of re-deriving):
+//   dc_domains_dir()             — <projectRoot>/domains (reuses rl_project_root)
+//   dc_enumerate()               — every domains/<d>.md basename-stem, sorted
+//   dc_resolve(name)             — domains/<name>.md path if it exists, else ""
+//   dc_shelf_groups(domain, verb)— IngredientShelf.groups: parse §6 → DcGroup[]
+//
+// §6 PARSE SEMANTICS reproduced byte-for-byte from IngredientShelf (so the
+// later compose/list-shelf verbs match the Swift reference):
+//   • Section detect: scan lines; on a `## ` header — if ALREADY in-section,
+//     STOP; else in-section = header CONTAINS "Design options". Lines inside
+//     (blockquotes incl.) are collected. An empty section → no groups.
+//   • Line form `- <verb>: <g1> = a / b / c ; <g2> = ...`. Must start `- `;
+//     body = line minus the 2-char "- " prefix; split body at the FIRST `:`;
+//     LEFT = verb token (trimmed) → match by `verb.koreanLabel.hasPrefix(tok)`
+//     (§6 writes "해석", koreanLabel is "해석⟲" → prefix match); RIGHT split
+//     by `;` into groups.
+//   • Each group split by `=` (EXACTLY 2 parts, else skip); title = left
+//     trimmed; a trailing `[multi]` marker (regex `\s*\[multi\]\s*$`) flips
+//     multiSelect and is stripped; options = right split by `/`, each trimmed,
+//     empties filtered. Emit ONLY if title non-empty AND options non-empty.
+//   • NO dedup, NO sort — groups appended in source order (Swift parity).
+//
+// Reuses record_loader.hexa leaf helpers (rl_index_of · rl_contains ·
+// rl_starts_with · rl_shq · rl_project_root) — d3 no-dup.
+
+import "stdlib/demi/record_loader.hexa"
+
+// ── verb → koreanLabel (Swift Verb.koreanLabel · Project.swift) ─────────────
+// The §6 verb token is matched against THIS label by prefix (so the short
+// "해석" §6 token prefix-matches the "해석⟲" loop-back label). The accepted
+// English wire forms are the Verb enum case names (canonical).
+pub fn dc_verb_label(verb: string) -> string {
+    if verb == "specify"    { return "명세" }
+    if verb == "structure"  { return "구조" }
+    if verb == "design"     { return "설계" }
+    if verb == "analyze"    { return "해석⟲" }
+    if verb == "synthesize" { return "합성" }
+    if verb == "verify"     { return "검증" }
+    if verb == "handoff"    { return "인계" }
+    return ""
+}
+
+// ── one shelf group (Swift IngredientGroup) ─────────────────────────────────
+pub struct DcGroup {
+    title:        string,    // displayed group title (`[multi]` stripped)
+    options:      [string],  // pick-list, source order, empties filtered
+    multi_select: bool,      // true iff the §6 title carried `[multi]`
+}
+
+// ── domains dir + enumeration (DomainCatalog surface) ───────────────────────
+
+// dc_domains_dir() — <projectRoot>/domains. projectRoot == exportsRoot with its
+// last segment dropped (rl_project_root, == ArtifactRegistry.projectRoot).
+// IngredientShelf reads domains/<domain>.md off this same root.
+pub fn dc_domains_dir() -> string {
+    return rl_project_root() + "/domains"
+}
+
+// dc_enumerate() — every domains/*.md as its basename stem (README excluded,
+// matching the domain-stub enumeration), sorted by lastPathComponent. This is
+// the catalog's "which domains have a map" view the list-shelf verb walks.
+pub fn dc_enumerate() -> [string] {
+    let dir = dc_domains_dir()
+    let listing = exec("ls " + rl_shq(dir) + "/*.md 2>/dev/null | sort").trim()
+    let mut out: [string] = []
+    if len(listing) == 0 { return out }
+    let lines = listing.split("\n")
+    let mut i = 0
+    while i < len(lines) {
+        let f = lines[i].trim()
+        if len(f) > 0 {
+            let base = dc_basename(f)
+            if base != "README.md" {
+                out.push(dc_drop_md(base))
+            }
+        }
+        i = i + 1
+    }
+    return out
+}
+
+// dc_resolve(name) — the domains/<name>.md path if it exists on disk, else "".
+// (IngredientShelf.section6Lines opens this exact path; a miss → empty shelf.)
+pub fn dc_resolve(name: string) -> string {
+    let path = dc_domains_dir() + "/" + name + ".md"
+    let hit = exec("test -f " + rl_shq(path) + " && echo yes || echo no").trim()
+    if hit == "yes" { return path }
+    return ""
+}
+
+// dc_basename(p) — last path segment.
+fn dc_basename(p: string) -> string {
+    let segs = p.split("/")
+    if len(segs) == 0 { return p }
+    return segs[len(segs) - 1]
+}
+
+// dc_drop_md(name) — strip a trailing ".md" (lastPathComponent w/o extension).
+fn dc_drop_md(name: string) -> string {
+    let n = len(name)
+    if n >= 3 && name.substring(n - 3, n) == ".md" {
+        return name.substring(0, n - 3)
+    }
+    return name
+}
+
+// ── §6 section extraction (IngredientShelf.section6Lines) ───────────────────
+// Returns the lines INSIDE the first "## ... Design options" section; the
+// terminating `## ` header (or EOF) closes it. Empty → no shelf.
+fn dc_section6_lines(domain: string) -> [string] {
+    let path = dc_resolve(domain)
+    let mut out: [string] = []
+    if path == "" { return out }
+    let content = read_file(path)
+    let lines = content.split("\n")
+    let mut in_section = false
+    let mut i = 0
+    while i < len(lines) {
+        let line = lines[i]
+        if rl_starts_with(line, "## ") {
+            if in_section { break }
+            in_section = rl_contains(line, "Design options")
+        } else {
+            if in_section { out.push(line) }
+        }
+        i = i + 1
+    }
+    return out
+}
+
+// dc_trim(s) — whitespace-trim helper (matches Swift .whitespaces: space + tab).
+fn dc_trim(s: string) -> string {
+    let mut a = 0
+    let mut b = len(s)
+    while a < b {
+        let c = s.substring(a, a + 1)
+        if c == " " || c == "\t" { a = a + 1 } else { break }
+    }
+    while b > a {
+        let c = s.substring(b - 1, b)
+        if c == " " || c == "\t" { b = b - 1 } else { break }
+    }
+    return s.substring(a, b)
+}
+
+// dc_strip_multi(title) — if `title` ends in `[multi]` (with optional
+// surrounding whitespace, matching the Swift `\s*\[multi\]\s*$` regex), strip
+// it and return [stripped-trimmed-title, "1"]; else [title, "0"]. The marker
+// must be at the END (the regex is `$`-anchored).
+fn dc_strip_multi(title: string) -> [string] {
+    let t = dc_trim(title)
+    let marker = "[multi]"
+    let n = len(t)
+    let m = len(marker)
+    if n >= m && t.substring(n - m, n) == marker {
+        return [dc_trim(t.substring(0, n - m)), "1"]
+    }
+    return [t, "0"]
+}
+
+// dc_split_options(rest) — split on `/`, trim each, drop empties.
+fn dc_split_options(rest: string) -> [string] {
+    let parts = rest.split("/")
+    let mut out: [string] = []
+    let mut i = 0
+    while i < len(parts) {
+        let o = dc_trim(parts[i])
+        if len(o) > 0 { out.push(o) }
+        i = i + 1
+    }
+    return out
+}
+
+// dc_shelf_groups(domain, verb) — IngredientShelf.groups(domain:verb:). Parse
+// the domain's §6 lines, keep `- <verb>: ...` lines whose koreanLabel
+// prefix-matches the line's verb token, and split each into DcGroup rows.
+// Empty array = "no shelf ingredients" (also the honest result for a domain
+// with no map / no §6 — never faked).
+pub fn dc_shelf_groups(domain: string, verb: string) -> [DcGroup] {
+    let mut result: [DcGroup] = []
+    let label = dc_verb_label(verb)
+    if label == "" { return result }
+    let lines = dc_section6_lines(domain)
+    let mut li = 0
+    while li < len(lines) {
+        let line = lines[li]
+        li = li + 1
+        if !rl_starts_with(line, "- ") { continue }
+        let body = line.substring(2, len(line))
+        let colon = rl_index_of(body, ":", 0)
+        if colon < 0 { continue }
+        let line_verb = dc_trim(body.substring(0, colon))
+        // §6 token must be a PREFIX of the verb's koreanLabel (Swift parity).
+        if !rl_starts_with(label, line_verb) { continue }
+        let rest = body.substring(colon + 1, len(body))
+        let groups = rest.split(";")
+        let mut gi = 0
+        while gi < len(groups) {
+            let group_str = groups[gi]
+            gi = gi + 1
+            let eq = rl_index_of(group_str, "=", 0)
+            if eq < 0 { continue }
+            // EXACTLY 2 `=`-parts (a second `=` makes parts.count != 2 → skip).
+            if rl_index_of(group_str, "=", eq + 1) >= 0 { continue }
+            let raw_title = group_str.substring(0, eq)
+            let opts_str = group_str.substring(eq + 1, len(group_str))
+            let stripped = dc_strip_multi(raw_title)
+            let title = stripped[0]
+            let multi = stripped[1] == "1"
+            let options = dc_split_options(opts_str)
+            if len(title) > 0 && len(options) > 0 {
+                result.push(DcGroup { title: title, options: options,
+                                      multi_select: multi })
+            }
+        }
+    }
+    return result
+}
