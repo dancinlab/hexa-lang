@@ -22,6 +22,7 @@ import "stdlib/demi/project_store.hexa"
 import "stdlib/demi/cellrun.hexa"
 import "stdlib/demi/domain_composer.hexa"
 import "stdlib/demi/domain_catalog.hexa"
+import "stdlib/demi/operation_registry.hexa"
 
 // handler_stub(target, argv) — a DECLARED-but-unported local verb. Prints an
 // honest notice naming the verb + the stacked-PR that will port it, and
@@ -1072,6 +1073,148 @@ pub fn handler_list_shelf(argv: [string]) -> int {
 // manifest `target` id to the ported hexa-native handler, else the honest
 // stub. The ONE place the local family fans out — adding a ported handler is
 // one branch here + flipping its manifest row off the stub (d4).
+// ── operate (PR#14 · LIVE) ───────────────────────────────────────────
+//
+// `demi operate [list|audit]` — the operability surface (Swift `operate`,
+// main.swift:618). Reads the SAME OperationRegistry manifest the cockpit
+// renders (D50 byte-identical), via op_registry() (operation_registry.hexa).
+// Owner 사장실 ops show only with `--owner` OR DEMIURGE_OWNER set; external
+// users never see them (M0 §1 / M20). Expert register (DEMIURGE_EXPERT)
+// reveals the [target · verb · milestone] bracket (Swift DemiurgeMode.expert).
+//
+//   list  → 8-verb ladder banner, then per-tier sections (product, then
+//           owner when visible). Plain = "  <glyph> <title>"; expert =
+//           "  <glyph> <id>  [<target> · <verb> · <milestone>]  <title>".
+//           When owner ops are hidden, a trailing "(🔒 …)" hint line. Exit 0.
+//   audit → OperabilityAudit snapshot: product OK/🔶/❌ counts + owner total +
+//           a verdict. productComplete (no 🔶/❌) → ✅ verdict, exit 0; else
+//           ⏳ pending with the non-ok product ids, exit 1.
+//   <other> → stderr "operate: unknown subcommand …", exit 2.
+
+// _operate_owner() — Swift `args.contains("--owner") || ownerModeEnabled`.
+// ownerModeEnabled = DEMIURGE_OWNER present (mirrors DemiurgeMode.owner).
+fn _operate_owner(argv: [string]) -> bool {
+    let mut i = 0
+    while i < len(argv) {
+        if argv[i] == "--owner" { return true }
+        i = i + 1
+    }
+    return len(env("DEMIURGE_OWNER")) > 0
+}
+
+// _operate_expert() — Swift DemiurgeMode.expert: DEMIURGE_EXPERT present.
+fn _operate_expert() -> bool {
+    return len(env("DEMIURGE_EXPERT")) > 0
+}
+
+// _operate_first_sub(argv) — Swift `args.first(where: { !$0.hasPrefix("--") })
+// ?? "list"`: first non-flag token, else "list".
+fn _operate_first_sub(argv: [string]) -> string {
+    let mut i = 0
+    while i < len(argv) {
+        if !argv[i].starts_with("--") { return argv[i] }
+        i = i + 1
+    }
+    return "list"
+}
+
+// _operate_render_tier(ops, tier, owner, expert) — render one tier's section
+// (header + rows + trailing blank), or nothing when the tier is empty/hidden.
+fn _operate_render_tier(ops: [Operation], tier: string, owner: bool, expert: bool) {
+    // visible(): product always; owner only when unlocked.
+    if tier == "owner" && !owner { return }
+    // Count this tier's rows first (Swift `guard !rows.isEmpty`).
+    let mut count = 0
+    let mut i = 0
+    while i < len(ops) {
+        if ops[i].tier == tier { count = count + 1 }
+        i = i + 1
+    }
+    if count == 0 { return }
+    let label = if tier == "product" { "🛒 진열대 (external)" } else { "🔒 사장실 (owner)" }
+    println(label + " — " + to_string(count) + ":")
+    i = 0
+    while i < len(ops) {
+        let o = ops[i]
+        if o.tier == tier {
+            if expert {
+                println("  " + op_reach_glyph(o.reach) + " " + o.id + "  ["
+                        + o.target + " · " + op_verb_display(o.verb) + " · "
+                        + o.milestone + "]  " + o.title)
+            } else {
+                println("  " + op_reach_glyph(o.reach) + " " + o.title)
+            }
+        }
+        i = i + 1
+    }
+    println("")
+}
+
+pub fn handler_operate(argv: [string]) -> int {
+    let sub = _operate_first_sub(argv)
+    let owner = _operate_owner(argv)
+    if sub == "list" {
+        // 8VERB — `discover` is stage 0 of the 8-verb ladder (label only).
+        println("8-verb ladder: 0/8 discover → 1/8 specify → 2/8 structure → "
+                + "3/8 design → 4/8 analyze⟲ → 5/8 synthesize → 6/8 verify → 7/8 handoff")
+        println("")
+        let expert = _operate_expert()
+        let ops = op_registry()
+        _operate_render_tier(ops, "product", owner, expert)
+        _operate_render_tier(ops, "owner", owner, expert)
+        if !owner {
+            println("(🔒 owner ops hidden — set DEMIURGE_OWNER or pass --owner)")
+        }
+        return 0
+    }
+    if sub == "audit" {
+        let ops = op_registry()
+        let mut p_ok = 0
+        let mut p_partial = 0
+        let mut p_blocked = 0
+        let mut owner_total = 0
+        let mut i = 0
+        while i < len(ops) {
+            let o = ops[i]
+            if o.tier == "product" {
+                if o.reach == "ok"      { p_ok = p_ok + 1 }
+                if o.reach == "partial" { p_partial = p_partial + 1 }
+                if o.reach == "blocked" { p_blocked = p_blocked + 1 }
+            } else {
+                owner_total = owner_total + 1
+            }
+            i = i + 1
+        }
+        let p_total = p_ok + p_partial + p_blocked
+        println("operability audit (CLI+COCKPIT M21):")
+        println("  product: " + to_string(p_ok) + " ✅ · " + to_string(p_partial)
+                + " 🔶 · " + to_string(p_blocked) + " ❌  (of " + to_string(p_total) + ")")
+        println("  owner:   " + to_string(owner_total) + " 🔒 (env-gated)")
+        // productComplete = no 🔶 and no ❌ in the product tier.
+        if p_blocked == 0 && p_partial == 0 {
+            println("  verdict: ✅ external operability COMPLETE — @goal met")
+            return 0
+        }
+        // pending = product ops with reach != ok, as "<id>(<milestone>)".
+        let mut pend = ""
+        i = 0
+        let mut first = true
+        while i < len(ops) {
+            let o = ops[i]
+            if o.tier == "product" && o.reach != "ok" {
+                if !first { pend = pend + ", " }
+                pend = pend + o.id + "(" + o.milestone + ")"
+                first = false
+            }
+            i = i + 1
+        }
+        println("  verdict: ⏳ pending — " + pend)
+        return 1
+    }
+    eprintln("operate: unknown subcommand '" + sub + "' — use list | audit")
+    return 2
+}
+
 pub fn handler_local(target: string, argv: [string]) -> int {
     if target == "action" { return handler_action(argv) }
     if target == "verify" { return handler_verify(argv) }
@@ -1089,6 +1232,7 @@ pub fn handler_local(target: string, argv: [string]) -> int {
     if target == "project"        { return handler_project(argv) }
     if target == "list_shelf"     { return handler_list_shelf(argv) }
     if target == "compose"        { return handler_compose(argv) }
+    if target == "operate"        { return handler_operate(argv) }
     // every other declared local target is not-yet-ported → honest stub.
     return handler_stub(target, argv)
 }
