@@ -107,6 +107,55 @@ fn _make_verify_fixture(repo: string) {
     exec("printf %s " + _shq2(reject) + " > " + _shq2(rdir + "/fixture_reject.json"))
 }
 
+// _make_list_fixture(repo) — a deterministic project tree under `repo`
+// (DEMIURGE_REPO) for the PR#6 list-* parity cells. Exercises EVERY ordering /
+// dedup / pad / pointer branch of ArtifactRegistry:
+//   2 F1F2 records (aaa,bbb) → load-index $R1/$R2 sorted by filename.
+//   design.md with Decisions 3,1,10 + a dup 1 → numeric-sort 1,3,10 + dedup.
+//   proposals/rfc_002_*, rfc_011_* (+ a non-rfc) → $RFC002/$RFC011, full stem.
+//   domains/{chip,aaa-domain}.md + README (excluded) + matter/README pointer.
+fn _make_list_fixture(repo: string) {
+    let rdir = repo + "/exports/chip/noc/f1f2/records"
+    exec("rm -rf " + _shq2(repo)
+         + " && mkdir -p " + _shq2(rdir)
+         + " " + _shq2(repo + "/proposals")
+         + " " + _shq2(repo + "/domains/matter"))
+    // minimal-but-decodable F1F2 records (only record_id is read for the title-
+    // from-filename list view; the loader's decode guard needs record_id).
+    let rec = "{\"interface\":\"i\",\"schema_version\":\"1.0\",\"record_id\":\"X\","
+        + "\"produced_at_utc\":\"2026-01-01T00:00:00Z\",\"topology\":{\"kind\":\"k\","
+        + "\"degree\":4,\"node_count\":64,\"routing\":\"min\"},\"traffic\":\"t\","
+        + "\"verdict\":{\"f1\":\"a\",\"f2\":\"b\",\"rationale\":\"r\"},"
+        + "\"provenance\":{\"absorbed\":false,\"measurement_gate\":\"GATE_OPEN\","
+        + "\"sim_engine\":\"e\",\"sim_commit_hash\":\"abc\",\"gate_failures\":[],"
+        + "\"consumer_target\":\"c\",\"atlas_cite_block\":\"a\",\"scope_caveats\":[]}}\n"
+    exec("printf %s " + _shq2(rec) + " > " + _shq2(rdir + "/aaa.json"))
+    exec("printf %s " + _shq2(rec) + " > " + _shq2(rdir + "/bbb.json"))
+    // design.md — Decisions out of order + a duplicate number (dedup, first wins).
+    let design = "# Design\n\n"
+        + "### Decision 3 — third thing\nbody\n\n"
+        + "### Decision 1 — first thing\nbody\n\n"
+        + "### Decision 10 — tenth thing\nbody\n\n"
+        + "### Decision 1 — dup first should be deduped\nbody\n"
+    exec("printf %s " + _shq2(design) + " > " + _shq2(repo + "/design.md"))
+    // proposals — two rfc_*.md (different number widths) + one non-rfc.
+    exec("printf %s " + _shq2("rfc\n") + " > " + _shq2(repo + "/proposals/rfc_002_beta.md"))
+    exec("printf %s " + _shq2("rfc\n") + " > " + _shq2(repo + "/proposals/rfc_011_alpha.md"))
+    exec("printf %s " + _shq2("notes\n") + " > " + _shq2(repo + "/proposals/notes.md"))
+    // domains — two .md + README (excluded) + the matter/README pointer (D17).
+    exec("printf %s " + _shq2("d\n") + " > " + _shq2(repo + "/domains/chip.md"))
+    exec("printf %s " + _shq2("d\n") + " > " + _shq2(repo + "/domains/aaa-domain.md"))
+    exec("printf %s " + _shq2("readme\n") + " > " + _shq2(repo + "/domains/README.md"))
+    exec("printf %s " + _shq2("m\n") + " > " + _shq2(repo + "/domains/matter/README.md"))
+}
+
+// _make_list_empty(repo) — an empty project tree: only the (empty) records dir
+// exists, no design.md / proposals / top-level domains. Every kind → "(0):".
+fn _make_list_empty(repo: string) {
+    exec("rm -rf " + _shq2(repo)
+         + " && mkdir -p " + _shq2(repo + "/exports/chip/noc/f1f2/records"))
+}
+
 fn _run_swift(bin: string, env_prefix: string, argv_str: string) -> [string] {
     let cmd = env_prefix + " " + _shq2(bin) + " " + argv_str + " 2>&1"
     let pair = exec_with_status(cmd)
@@ -344,6 +393,67 @@ fn main() {
     fails = fails + _cell("atlas/write-owner-passthrough", entry, swift_bin,
                           "DEMIURGE_OWNER=1", "atlas register",
                           g_atlas_owner, r_owner[1])
+
+    // ── PR#6 list-* cells — `list-records|list-decisions|list-rfcs|
+    // list-domains|list-all` rendered from the #5 RecordLoader/ArtifactRegistry
+    // (rl_stubs). DEMIURGE_REPO is applied to BOTH surfaces via env_prefix so
+    // exportsRoot+projectRoot resolve to the SAME fixture tree; the list output
+    // carries no absolute paths, so the goldens are machine-independent. Each
+    // verb has a POPULATED cell (sort/dedup/pad/pointer) + an EMPTY cell
+    // (`<header> (0):`). Goldens captured byte-for-byte from the Swift
+    // DemiurgeCLI reference (cockpit .build/debug · 2026-06-04).
+    let lfix = home + "/.demi-selftest-list-fixture"
+    _make_list_fixture(lfix)
+    let lenv = "DEMIURGE_REPO=" + _shq2(lfix)
+    let lempty = home + "/.demi-selftest-list-empty"
+    _make_list_empty(lempty)
+    let lenv0 = "DEMIURGE_REPO=" + _shq2(lempty)
+
+    // list-records (populated) — $R1/$R2 sorted by filename, padded.
+    let g_l_records = "Records (2):\n"
+        + "  $R1  aaa\n"
+        + "  $R2  bbb\n"
+    fails = fails + _cell("list-records/populated", entry, swift_bin, lenv,
+                          "list-records", g_l_records, 0)
+    // list-decisions (populated) — numeric sort 1,3,10 · dup deduped · pad to $D10.
+    let g_l_decisions = "Decisions (3):\n"
+        + "  $D1   D1 — first thing\n"
+        + "  $D3   D3 — third thing\n"
+        + "  $D10  D10 — tenth thing\n"
+    fails = fails + _cell("list-decisions/populated", entry, swift_bin, lenv,
+                          "list-decisions", g_l_decisions, 0)
+    // list-rfcs (populated) — key = 2nd `_`-field, title = full stem, pad equal.
+    let g_l_rfcs = "RFCs (2):\n"
+        + "  $RFC002  rfc_002_beta\n"
+        + "  $RFC011  rfc_011_alpha\n"
+    fails = fails + _cell("list-rfcs/populated", entry, swift_bin, lenv,
+                          "list-rfcs", g_l_rfcs, 0)
+    // list-domains (populated) — README excluded · matter pointer · sort by key.
+    let g_l_domains = "Domains (3):\n"
+        + "  $DOM:aaa-domain  aaa-domain\n"
+        + "  $DOM:chip        chip\n"
+        + "  $DOM:matter      matter (pointer — D17 hexa-lang absorbed)\n"
+    fails = fails + _cell("list-domains/populated", entry, swift_bin, lenv,
+                          "list-domains", g_l_domains, 0)
+    // list-all (populated) — all four kinds in allCases order, blank-line after
+    // each (so a trailing blank line ends the output).
+    let g_l_all = g_l_records + "\n" + g_l_decisions + "\n"
+        + g_l_rfcs + "\n" + g_l_domains + "\n"
+    fails = fails + _cell("list-all/populated", entry, swift_bin, lenv,
+                          "list-all", g_l_all, 0)
+
+    // EMPTY cells — empty project tree → `<header> (0):` for each kind, rc 0.
+    fails = fails + _cell("list-records/empty", entry, swift_bin, lenv0,
+                          "list-records", "Records (0):\n", 0)
+    fails = fails + _cell("list-decisions/empty", entry, swift_bin, lenv0,
+                          "list-decisions", "Decisions (0):\n", 0)
+    fails = fails + _cell("list-rfcs/empty", entry, swift_bin, lenv0,
+                          "list-rfcs", "RFCs (0):\n", 0)
+    fails = fails + _cell("list-domains/empty", entry, swift_bin, lenv0,
+                          "list-domains", "Domains (0):\n", 0)
+    let g_l_all_empty = "Records (0):\n\nDecisions (0):\n\nRFCs (0):\n\nDomains (0):\n\n"
+    fails = fails + _cell("list-all/empty", entry, swift_bin, lenv0,
+                          "list-all", g_l_all_empty, 0)
 
     // ── PR-record-loader self-check (@ci_gate · @L7 spirit) — NOT a verb-
     // parity cell (PR#5 adds NO new user-facing verb; the list-*/show/gate
