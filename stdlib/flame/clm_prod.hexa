@@ -1048,24 +1048,43 @@ fn main() {
             t_set(tgt, p, t_get(TGT, w * T + p))
             p = p + 1
         }
-        clm_prod_fwd(tok, embed, ecW, ecB, tcW, tcB, tgG, tgB, rW, rB,
-                    e0W, e0B, e1W, e1B, noG, noB, roW, roB,
-                    ecWq, ecM, tcWq, tcM, e0Wq, e0M, e1Wq, e1M, rWq, rM, roWq, roM,
-                    xe, xec, xt, hn0, xhat0, inv0, eo0, eo1, probs, ex_out, yn, xhatN, invN,
-                    logits, T, d, E, V, K)
-        let loss = nn_ce_loss_allpos(logits, tgt, T, V)
-        if step <= nwin { sum_first = sum_first + loss }
-        if step > steps - nwin { sum_last = sum_last + loss }
-        // HEXA-FUSION L3 (BWD glue half · ⑤-bwd2): CE softmax grad (logits/tgt →
-        // dlogits) — interpreted host glue at the head of the bwd. Device path keeps
-        // dlogits FARR_DEVICE so clm_prod_bwd's first conv-bwd GEMM H2D-skips it
-        // (byte-eq via per-row sequential softmax-grad + libm exp); else host clm_ce_grad.
-        _ce_grad(logits, tgt, dlogits, T, V)
-        clm_prod_bwd(dlogits, tok, embed, ecWq, tcWq, tgG, rWq, e0Wq, e1Wq, noG, roWq,
-                    ecM, tcM, e0M, e1M, rM, roM,
-                    xe, xec, xt, hn0, xhat0, inv0, eo0, eo1, probs, ex_out, yn, xhatN, invN,
-                    dembed, decW, decB, dtcW, dtcB, dtgG, dtgB, drW, drB, de0W, de0B, de1W, de1B,
-                    dnoG, dnoB, droW, droB, T, d, E, V, K)
+        // ── HEXA-FUSION L2 (4): CUDA-graph capture/replay of the fwd→ce_grad→bwd
+        // kernel region (the launch-bound bulk). The optimizer stays EAGER below —
+        // AdamW reads `step` (bias-correction t), a host-dependent param that a
+        // static graph would bake wrong on replay. The scalar-loss readback
+        // (nn_ce_loss_allpos, host d2h) is excluded from capture: it runs only on
+        // the metric steps (first/last nwin), which take the eager branch. Capture
+        // fires once on the first non-metric step; the bulk middle steps replay with
+        // one cudaGraphLaunch (host off the critical path). HEXA_CUDA_GRAPH off =>
+        // forge_graph_* are no-ops => the eager branch always => byte-identical.
+        let _g_ready = forge_graph_ready()
+        let _need_loss = if (step <= nwin) || (step > steps - nwin) { 1 } else { 0 }
+        if (_g_ready != 0) && (_need_loss == 0) {
+            forge_graph_launch()
+        } else {
+            let _do_cap = if (forge_graph_on() != 0) && (_g_ready == 0) && (_need_loss == 0) { 1 } else { 0 }
+            if _do_cap != 0 { forge_graph_begin() }
+            clm_prod_fwd(tok, embed, ecW, ecB, tcW, tcB, tgG, tgB, rW, rB,
+                        e0W, e0B, e1W, e1B, noG, noB, roW, roB,
+                        ecWq, ecM, tcWq, tcM, e0Wq, e0M, e1Wq, e1M, rWq, rM, roWq, roM,
+                        xe, xec, xt, hn0, xhat0, inv0, eo0, eo1, probs, ex_out, yn, xhatN, invN,
+                        logits, T, d, E, V, K)
+            if _need_loss != 0 {
+                let loss = nn_ce_loss_allpos(logits, tgt, T, V)
+                if step <= nwin { sum_first = sum_first + loss }
+                if step > steps - nwin { sum_last = sum_last + loss }
+            }
+            // HEXA-FUSION L3 (BWD glue half · ⑤-bwd2): CE softmax grad (logits/tgt →
+            // dlogits) — device path keeps dlogits FARR_DEVICE so clm_prod_bwd's first
+            // conv-bwd GEMM H2D-skips it (byte-eq via per-row softmax-grad + libm exp).
+            _ce_grad(logits, tgt, dlogits, T, V)
+            clm_prod_bwd(dlogits, tok, embed, ecWq, tcWq, tgG, rWq, e0Wq, e1Wq, noG, roWq,
+                        ecM, tcM, e0M, e1M, rM, roM,
+                        xe, xec, xt, hn0, xhat0, inv0, eo0, eo1, probs, ex_out, yn, xhatN, invN,
+                        dembed, decW, decB, dtcW, dtcB, dtgG, dtgB, drW, drB, de0W, de0B, de1W, de1B,
+                        dnoG, dnoB, droW, droB, T, d, E, V, K)
+            if _do_cap != 0 { forge_graph_commit() }
+        }
         _adam(embed, dembed, m_embed, v_embed, vd, step)
         _adam(ecW, decW, m_ecW, v_ecW, dd, step); _adam(ecB, decB, m_ecB, v_ecB, d, step)
         _adam(tcW, dtcW, m_tcW, v_tcW, dd, step); _adam(tcB, dtcB, m_tcB, v_tcB, d, step)
