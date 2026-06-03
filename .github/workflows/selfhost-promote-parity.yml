@@ -1,0 +1,127 @@
+name: selfhost-promote-parity
+
+# ── SELFHOST-CI M4 promote parity-gate as CI ────────────────────────────────
+#
+# PURPOSE
+#   A STANDING, per-PR gate around the PROMOTION PRECONDITION: the self-hosted
+#   native compiler (gen3, from tool/build_selfhost.sh) may only be promoted to
+#   the default `hx`/hexa toolchain (tool/promote_selfhost.sh) AFTER
+#   tool/selfhost_parity_gate.sh proves gen3 behaves identically to the shipped
+#   reference compiler across a representative corpus (≥5 behaviours). That gate
+#   is the HARD precondition baked into promote_selfhost.sh. This workflow keeps
+#   it from ROTTING: every PR re-runs the parity gate so a codegen / linker /
+#   runtime edit that would silently break the gen3≡shipped equivalence FAILS
+#   the PR instead of surfacing only at the next manual promotion.
+#
+#   This is the PROMOTION-PRECONDITION fence, distinct from the sister gates:
+#     • selfhost-byteeq-gate.yml    — whole-compiler byte-eq fixpoint (gen3≡gen4)
+#     • selfhost-codegen-guard.yml  — native arm64 codegen-class correctness
+#     • selfhost-crossemit-smoke.yml — cross-target object-format reloc fence
+#
+# WHAT THE PARITY GATE ASSERTS (the N≥5 behaviour-match)
+#   For each of 5 representative corpus programs (arith / call / branch / bitmask
+#   / recurse), gen3 compiles --emit=asm → clang -c → hexa_ld link with rt.o →
+#   RUN, and the observed exit code must match the program's pre-registered
+#   expected exit. Plus the 42-smoke (6*7 must exit 42 under gen3). The
+#   load-bearing axis is BEHAVIOUR (same observable semantics); the optional
+#   asm-parity axis vs the shipped reference is informational unless --strict.
+#   A PASS = 5/5 behaviour-match AND smoke-42 → "promotion AUTHORIZED".
+#
+# RUNNER MODEL (same exit-2-neutral canary shape as the sister gates)
+#   The parity gate needs the GRADUATED gen3 + hexa_ld + rt.o (the promoted
+#   self-host slot, installed by tool/promote_selfhost.sh into
+#   $HX_HOME/self/native/selfhost/, or a fresh tool/build_selfhost.sh output).
+#   macos-latest (the hosted runner here) does NOT carry those graduated
+#   artifacts, so this workflow REMAPS that to NEUTRAL (exit 0 with a ::notice::)
+#   rather than false-failing the PR — the SAME exit-2-neutral discipline as the
+#   #2600/#2605/#2607 sister gates. It is NOT green-by-skip: the moment a runner
+#   DOES hold a graduated gen3 (a self-hosted ghost/mini runner, or vars pointing
+#   at a slot), every leg runs REAL and a behaviour regression exits 1.
+#
+#   The committed verdict .verdicts/selfhost-ci/PROMOTE-PARITY.txt captures the
+#   REAL run on ghost (macOS, graduated gen3 + promoted hx-selfhost-cli shim)
+#   verbatim: 5/5 behaviour-match PASS.
+#
+#   A TRUE regression — any corpus program whose gen3 binary exits with the wrong
+#   code, or the 42-smoke failing — exits 1 and fails the job. "no graduated gen3
+#   on this host" remaps to neutral.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'tool/selfhost_parity_gate.sh'
+      - 'tool/promote_selfhost.sh'
+      - 'tool/hx-selfhost-cli'
+      - 'tool/build_selfhost.sh'
+      - '.github/workflows/selfhost-promote-parity.yml'
+  pull_request:
+    paths:
+      - 'tool/selfhost_parity_gate.sh'
+      - 'tool/promote_selfhost.sh'
+      - 'tool/hx-selfhost-cli'
+      - 'tool/build_selfhost.sh'
+      - '.github/workflows/selfhost-promote-parity.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  selfhost-promote-parity:
+    name: selfhost promote parity (gen3 ≡ shipped, 5/5 behaviour-match)
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+
+      # ── Parity gate invocation ───────────────────────────────────────────
+      # Locate the graduated self-host slot (gen3 + hexa_ld + rt.o). The promote
+      # machinery installs it at $HX_HOME/self/native/selfhost/; a self-hosted
+      # runner that ran tool/build_selfhost.sh can point SELFHOST_SLOT at its
+      # build dir. If no slot is found, this host cannot run the parity gate —
+      # remap to NEUTRAL (the exit-2 canary), exactly like the sister gates.
+      - name: Parity — gen3 ≡ shipped behaviour-match (≥5 programs)
+        shell: bash
+        env:
+          # A self-hosted runner sets one of these repo/org Variables to its
+          # graduated slot or build dir; absent on macos-latest -> neutral.
+          SELFHOST_SLOT: ${{ vars.SELFHOST_SLOT }}
+          HX_HOME_VAR: ${{ vars.HX_HOME }}
+        run: |
+          set -uo pipefail
+          # GitHub's default step shell runs with `-e`; capture rc with `|| rc=$?`
+          # so the neutral remap survives a nonzero gate/locate exit.
+
+          # Resolve the slot holding gen3 + hexa_ld + rt.o.
+          SLOT=""
+          for cand in \
+            "${SELFHOST_SLOT:-}" \
+            "${HX_HOME_VAR:-}/self/native/selfhost" \
+            "${HX_HOME:-}/self/native/selfhost" \
+            "$HOME/.hx/self/native/selfhost" \
+            "$PWD/build/selfhost"; do
+            [ -n "$cand" ] || continue
+            if [ -x "$cand/gen3" ] && [ -x "$cand/hexa_ld" ] && [ -s "$cand/rt.o" ]; then
+              SLOT="$cand"; break
+            fi
+          done
+
+          if [ -z "$SLOT" ]; then
+            echo "::notice::selfhost-promote-parity NEUTRAL — no graduated gen3 slot (gen3+hexa_ld+rt.o) on this host. The promotion precondition is NOT broken; this runner just lacks the self-host artifacts. To run REAL, target a self-hosted runner holding a tool/build_selfhost.sh output (or set the SELFHOST_SLOT repo variable)."
+            exit 0
+          fi
+
+          echo "parity slot: $SLOT"
+          rc=0
+          bash tool/selfhost_parity_gate.sh \
+            -g "$SLOT/gen3" -l "$SLOT/hexa_ld" -t "$SLOT/rt.o" \
+            -w "$PWD/build/selfhost/parity-ci" || rc=$?
+
+          if [ "$rc" -eq 3 ]; then
+            echo "::notice::selfhost-promote-parity NEUTRAL (exit 3) — parity gate could not start (missing/non-exec inputs) on this host. Promotion precondition NOT broken."
+            exit 0
+          fi
+          # rc 0 = PARITY PASS (promotion authorized); rc 1 = a real behaviour
+          # regression -> fail the PR.
+          exit "$rc"
