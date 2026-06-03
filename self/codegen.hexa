@@ -7106,6 +7106,14 @@ fn gen2_expr(node) {
                 if name == "utc_compact_now"  { return "hexa_utc_compact_now()" }
                 // anima RFC 034 (2026-05-16): farr autograd — 0-arg tape open.
                 if name == "ad_tape_begin"    { return "hexa_ad_tape_begin()" }
+                // HEXA-FUSION L2 (4): CUDA Graph capture/replay control (0-arg, int rc).
+                // Bare seam -> hexa_int(_forge_graph_*()); symbols live in runtime_cuda.c
+                // (CUDA build). Driver calls these only under CLM_PROD_DEVRESIDENT.
+                if name == "forge_graph_on"     { return "hexa_int(_forge_graph_on())" }
+                if name == "forge_graph_begin"  { return "hexa_int(_forge_graph_begin())" }
+                if name == "forge_graph_commit" { return "hexa_int(_forge_graph_commit())" }
+                if name == "forge_graph_ready"  { return "hexa_int(_forge_graph_ready())" }
+                if name == "forge_graph_launch" { return "hexa_int(_forge_graph_launch())" }
             }
             if len(node.args) == 1 {
                 let a0 = arg_strs[0]

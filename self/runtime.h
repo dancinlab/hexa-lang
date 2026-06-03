@@ -1062,6 +1062,15 @@ HexaVal forge_dispatch_matmul_batched(HexaVal a_v, HexaVal m_v, HexaVal k_v,
  * Same bare-symbol seam as forge_dispatch_matmul. Bodies (SSOT):
  * self/runtime.c (wrapper: CUDA-route / host-oracle) + self/cuda/
  * runtime_cuda.c (kernels, emit: self/cuda/runtime_cuda_emit.hexa). */
+/* L2 (4) CUDA Graph capture/replay — int C symbols defined in runtime_cuda.c
+ * (CUDA build only). codegen lowers the bare `forge_graph_*()` builtins to
+ * `hexa_int(_forge_graph_*())`; clm_prod's train loop calls them only under
+ * CLM_PROD_DEVRESIDENT + HEXA_CUDA_GRAPH. Decls are harmless when unreferenced. */
+int _forge_graph_on(void);      /* runtime_cuda.c — graph enabled (env HEXA_CUDA_GRAPH) */
+int _forge_graph_begin(void);   /* runtime_cuda.c — begin stream capture */
+int _forge_graph_commit(void);  /* runtime_cuda.c — end capture + instantiate */
+int _forge_graph_ready(void);   /* runtime_cuda.c — graph instantiated? */
+int _forge_graph_launch(void);  /* runtime_cuda.c — replay (one cudaGraphLaunch) */
 HexaVal hexa_forge_dispatch_im2col(HexaVal x_v, HexaVal xcol_v, HexaVal t_v,
                                    HexaVal cin_v, HexaVal k_v, HexaVal dil_v); /* runtime.c — lever a */
 HexaVal forge_dispatch_im2col(HexaVal x_v, HexaVal xcol_v, HexaVal t_v,
