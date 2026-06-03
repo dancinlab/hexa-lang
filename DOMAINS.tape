@@ -68,4 +68,5 @@
 @link HEXA-FUSION --cures--> FORGE-UTILGREEN       # device-resident train-step port = the named option-B util-GREEN cure (host-feed axis closed)
 @link HEXA-FUSION --measured-by--> GPU-ROOFLINE   # fusion-kernel roofline % + vs-PyTorch+CUDA wall (honest: cuBLAS GEMM = roofline, win = boundary removal)
 @domain C-ZERO := "domains/C-ZERO.md"          # ecosystem-wide live-C → 0 (all FFI shims + siblings); HEXA-CC-ZERO owns the hexa_cc.c seed sub-goal
+@domain RUNTIME-PORT := "domains/RUNTIME-PORT.md"
 @link C-ZERO --refines--> HEXA-CC-ZERO              # C-ZERO is the ecosystem superset; HEXA-CC-ZERO is its hexa_cc.c (28482 LOC) sub-target
