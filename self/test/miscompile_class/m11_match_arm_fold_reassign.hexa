@@ -1,0 +1,31 @@
+// m11_match_arm_fold_reassign.hexa — CLASS: comptime-const fold leaking the
+// STALE initializer of a plain `let` past a MATCH whose ARM body reassigns it.
+// Sibling of #2650 (while-cond) / #2660 (if-body). gen2_match_stmt had NO fold
+// pre-invalidation (unlike if/while/for), so a `let x = <const>` reassigned in
+// a match arm kept the stale fold for x in sibling arms / post-match reads —
+// and the scope-restore tail-read crashed the transpiler on the pre-fix
+// install (`index N out of bounds`). Surfaced inline during the MISCOMPILE-ZERO
+// const-fold-family fuzz (after the cross-repo C-PORT sgemm fixes #2650/#2660).
+//   Fix: gen2_match_stmt collects every arm body's assigned names +
+//   _invalidate_comptime_const before emitting the scrutinee / arm conditions
+//   (mirrors the IfStmt #2660 / WhileStmt #2650 pre-invalidate).
+//
+// Behavioral contract: exit 0 = the post-match read sees the LIVE arm-reassigned
+// value, NOT the stale folded `0`. A re-regression mis-values (or crashes the
+// transpile with the scope-restore out-of-bounds).
+
+fn pick(sel) -> i64 {
+    let r = 0                       // plain immutable let -> folded; reassigned in arm
+    match sel {
+        1 => { r = 100 }
+        2 => { r = 200 }
+        _ => { r = 999 }
+    }
+    return r                        // OLD: stale fold -> r reads 0, or transpile crash
+}
+
+if pick(2) != 200 { exit(91) }     // sibling-arm reassign -> live 200
+if pick(1) != 100 { exit(92) }
+if pick(7) != 999 { exit(93) }     // wildcard arm reassign -> live 999
+
+println("MATCH-ARM-FOLD-OK")

@@ -1,0 +1,34 @@
+# const-fold MATCH-arm gap (MISCOMPILE-ZERO #3 sibling)
+
+Found inline 2026-06-04 (foreground, no bg) via static analysis + live repro.
+
+## Bug
+`gen2_match_stmt` (self/codegen.hexa @L9046) does NOT pre-invalidate the
+comptime-const fold for names a match/case ARM body reassigns — unlike the
+already-fixed IfStmt (#2660 @L3445), WhileStmt (#2650 @L3510), for-range/in
+(@L3581/3634). So `let x=<const>` reassigned inside a `match` arm keeps the
+stale fold (sibling of #2650/#2660).
+
+## Repro (pure match, no if/while confound)
+```
+fn main() {
+  let r = 0
+  let v = 2
+  match v { 1 => { r = 100 }  2 => { r = 200 }  _ => { r = 999 } }
+  println("r=" + str(r))   // expect r=200
+}
+```
+Installed hexat (predates #2650/#2660): transpile CRASH `index 1 out of bounds (len 1)`.
+Confirmation-on-fixed-base PENDING a rebuilt hexat (#2650+#2660): expected to
+either still crash OR mis-value r (stale fold) since gen2_match_stmt has zero
+invalidation regardless of the IfStmt/scope-restore fixes.
+
+## Fix (mirror if/while)
+In gen2_match_stmt: before lowering arm bodies, collect_assigned over all arm
+bodies + `_invalidate_comptime_const(name)` for each (same pattern as L3445/3510).
+Add m11 regression catcher to self/test/miscompile_class/. byte-eq gate (edits
+gen2 SSOT self/codegen.hexa).
+
+## Status
+DIAGNOSED (static gap + live crash repro). Fix is a codegen edit → needs the
+self-host byte-eq gate. Foreground-only per session rule (no bg parallel).

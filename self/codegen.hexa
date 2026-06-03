@@ -9046,6 +9046,22 @@ fn gen2_let_else(node, depth) {
 fn gen2_match_stmt(node, depth) {
     // PROBE r16-T4: warn on non-exhaustive enum match (statement form).
     _gen2_warn_nonexhaustive_match(node)
+    // const-fold pre-invalidate (sibling of IfStmt #2660 / WhileStmt #2650):
+    // a match ARM body that reassigns a folded `let x = <const>` must NOT keep
+    // the stale fold for x in sibling arms / post-match reads (gen2_match_stmt
+    // had no invalidation, unlike if/while/for). Collect every arm body's
+    // assigned names + invalidate BEFORE emitting the scrutinee / arm conds.
+    let mut _m_assigned = []
+    let mut _mai0 = 0
+    while _mai0 < len(node.arms) {
+        _m_assigned = _gen2_collect_assigned(node.arms[_mai0].body, _m_assigned)
+        _mai0 = _mai0 + 1
+    }
+    let mut _mai1 = 0
+    while _mai1 < len(_m_assigned) {
+        _invalidate_comptime_const(_m_assigned[_mai1])
+        _mai1 = _mai1 + 1
+    }
     let pad = gen2_indent(depth)
     let scrutinee = gen2_expr(node.left)
 
