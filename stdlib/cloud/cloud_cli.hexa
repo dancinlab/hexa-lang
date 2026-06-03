@@ -1151,7 +1151,22 @@ fn _cloud_rent_vast(av: [str], start: int) -> int {
     // Project attribution (down-guard source) — explicit --project, else
     // cwd git-repo basename, else "unattributed". `owner` doubles as purpose.
     let project = _resolve_project(av, start)
-    let query = _flag_val(av, start, "--query", "")
+    let raw_query = _flag_val(av, start, "--query", "")
+    // --gpu FAMILY|VARIANT — was declared in help but NEVER read, so an empty
+    // --query searched with NO gpu filter and rented an arbitrary GPU (a B200
+    // for `--gpu H100`). Convert it to a vast predicate (exact `gpu_name=` for
+    // a variant/unknown, `gpu_name in [...]` for a known family) and prepend
+    // it so a caller --query token can still override (vastai last-wins).
+    let gpu = _flag_val(av, start, "--gpu", "")
+    let gpu_pred = vast_gpu_predicate(gpu)
+    let mut query = raw_query
+    if len(gpu_pred) > 0 {
+        if len(raw_query) > 0 {
+            query = gpu_pred + " " + raw_query
+        } else {
+            query = gpu_pred
+        }
+    }
     // M1 — bounded SSH-readiness gate. Default 180s; 0/negative = legacy
     // unbounded (opt-in). Caps the rent so a ghost-RUNNING pod whose ssh
     // transport never comes up (exit 255 forever) can't bleed billing.
