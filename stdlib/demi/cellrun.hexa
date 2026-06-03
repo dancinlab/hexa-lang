@@ -1,0 +1,83 @@
+// HEXA Standard Library — demi/cellrun
+//
+// @version 0.1.0
+// @capabilities [proc, fs_write]
+//
+// The hexa-native `action <verb> <domain>` HAPPY-path engine for the
+// `demiurge cli` surface (demi-cli-pure-hexa-native · plan @L1 · PR #18).
+//
+// This is the leaf module that ports the Swift `ActionDispatch.runEngineTool`
+// → `CellrunDispatch.run` cellrun engine. The Swift `CellrunDispatch` is
+// itself a THIN WRAPPER that spawns `hexa run stdlib/cockpit/cellrun.hexa
+// <domain> <verb>` (see CellrunDispatch.swift header) — i.e. the cellrun
+// ENGINE has always been hexa-native; the canonical home is
+// `stdlib/cockpit/cellrun.hexa` (manifest load · dep probe · substrate
+// spawn · record envelope · g3 gate). So d3 (implementation lives in ONE
+// canonical home) DEMANDS we DELEGATE to that engine rather than re-author
+// the ~190-line manifest parser here. This module is the demi-side adapter:
+//   • resolve the three cellrun roots from $DEMIURGE_REPO (Swift
+//     CellrunDispatch.demiRootURL / RecordLoader.exportsRoot parity) +
+//     the hexa-lang script root,
+//   • call cell_run_with_roots(domain, verb, roots) — the engine prints the
+//     multi-line `[cellrun]` banner VERBATIM (byte-identical to the block
+//     the Swift wrapper surfaced),
+//   • return the engine rc (0 ok · 2 manifest/script-missing · 3 deps ·
+//     4 substrate-fail · 5 record-write-fail).
+// handler_action (handlers.hexa) wraps the engine call with the Swift
+// cliAction framing (`---` separator · the engine-gap / new-record line ·
+// the exit-code translation engineToolSucceeded==false ? 1 : 0).
+//
+// d4 PRESERVED: the generic dispatch layer (dispatch.hexa) is UNTOUCHED.
+// The cellrun engine routes PURELY on the `.demi` manifest by (domain,
+// verb) — there is no per-instance hardcoding here (the engine never
+// branches on a domain name; it reads domains/<domain>.demi). This mirrors
+// the Swift `default → CellrunDispatch.run(...)` arm exactly.
+
+import "stdlib/cockpit/cellrun.hexa"
+import "stdlib/demi/record_loader.hexa"
+
+// _dc_env(name) — minimal env read (env() builtin · same as dispatch.hexa).
+fn _dc_env(name: string) -> string {
+    return env(name)
+}
+
+// dc_demi_root() — the demiurge `<repo>/domains` directory the cellrun
+// engine reads `<domain>.demi` from. Mirrors Swift CellrunDispatch.demiRootURL:
+//   $DEMIURGE_REPO/domains if set, else <cwd>/../domains.
+// (Swift then forwards this as HEXA_CELLRUN_DEMI_ROOT to the engine; here we
+//  pass it directly into the roots map — no env round-trip needed since
+//  setenv() is a no-op stub in the current runtime.)
+pub fn dc_demi_root() -> string {
+    let repo = _dc_env("DEMIURGE_REPO")
+    if len(repo) > 0 {
+        return rl_canon(repo + "/domains")
+    }
+    let cwd = exec("pwd").trim()
+    return rl_canon(cwd + "/../domains")
+}
+
+// dc_hexa_lang_root() — the hexa-lang checkout the engine resolves substrate
+// `script` paths against (HEXA_CELLRUN_HEXA_LANG_ROOT). Honor an explicit
+// env override (Swift derives it from the cellrun.hexa path's grandparent);
+// else fall back to the engine's own default ($HOME/core/hexa-lang), which
+// default_roots() already supplies — so we only set it when an override is
+// present, to avoid second-guessing the engine default.
+pub fn dc_hexa_lang_root() -> string {
+    let hl = _dc_env("HEXA_CELLRUN_HEXA_LANG_ROOT")
+    if len(hl) > 0 { return hl }
+    let home = _dc_env("HOME")
+    return home + "/core/hexa-lang"
+}
+
+// dc_run(verb_canonical, domain) — drive the canonical cellrun engine for
+// (verb, domain) and return its rc. The engine PRINTS the `[cellrun]` banner
+// lines itself (byte-identical to the Swift-surfaced block). `verb_canonical`
+// is the English wire form (Verb.canonical) — the same token the Swift
+// `CellrunDispatch.run` passes as `verb.canonical`.
+pub fn dc_run(verb_canonical: string, domain: string) -> int {
+    let roots = json_parse("{}")
+    roots["demi_root"] = dc_demi_root()
+    roots["exports_root"] = rl_exports_root()
+    roots["hexa_lang_root"] = dc_hexa_lang_root()
+    return cell_run_with_roots(domain, verb_canonical, roots)
+}

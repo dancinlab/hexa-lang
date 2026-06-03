@@ -19,6 +19,7 @@ import "stdlib/demi/manifest.hexa"
 import "stdlib/demi/verify_record.hexa"
 import "stdlib/demi/record_loader.hexa"
 import "stdlib/demi/project_store.hexa"
+import "stdlib/demi/cellrun.hexa"
 
 // handler_stub(target, argv) — a DECLARED-but-unported local verb. Prints an
 // honest notice naming the verb + the stacked-PR that will port it, and
@@ -108,20 +109,59 @@ pub fn handler_action(argv: [string]) -> int {
     if len(argv) >= 2 {
         if !argv[1].starts_with("--") { domain = argv[1] }
     }
-    // HONESTY (plan @L7 · d6): the Swift `action <verb> <domain>` HAPPY path
-    // routes through ActionDispatch.runEngineTool → the `cellrun` engine,
-    // which reads domains/<domain>.demi manifests + a python substrate and
-    // emits multi-line [cellrun] output with exit 1 on an engine gap. That
-    // engine is NOT yet ported; reproducing only the framing lines would be a
-    // FAKE parity (the middle [cellrun] block + the exit code would diverge).
-    // So the dispatch header is printed (it IS exact), then the happy path
-    // routes to the honest stub — the cellrun engine port is the `action`
-    // stacked PR (plan ## handoff §action). The DETERMINISTIC, byte-matchable
-    // PROOF cell for `action` is the unknown-verb / missing-verb ERROR path
-    // above (exit 2, stderr identical to Swift) — that is what the @ci_gate
-    // parity smoke asserts GREEN this PR.
+    // HAPPY path (plan @L7 · d6 · PR #18 cellrun engine): the Swift
+    // `action <verb> <domain>` routes through ActionDispatch.runEngineTool →
+    // the generic `default → CellrunDispatch.run(...)` arm → the cellrun
+    // engine, which reads domains/<domain>.demi + dispatches the substrate,
+    // emitting the multi-line [cellrun] banner (exit 1 on an engine gap).
+    // The Swift CellrunDispatch is a THIN WRAPPER over `hexa run
+    // stdlib/cockpit/cellrun.hexa <domain> <verb>` (CellrunDispatch.swift) —
+    // the engine is hexa-native already, so dc_run() DELEGATES to that
+    // canonical engine (d3 · no re-author) which PRINTS the [cellrun] lines
+    // itself (byte-identical to the block the Swift wrapper surfaced).
+    //
+    // Output framing mirrors Swift cliAction (main.swift:344-359):
+    //   1. the dispatch header (exact),
+    //   2. the engine's [cellrun] banner (printed by dc_run → the engine),
+    //   3. a "---" separator,
+    //   4. the engine-gap / new-record line,
+    //   5. exit = engineToolSucceeded==false ? 1 : 0, where
+    //      engineToolSucceeded = (rc==0 && record emitted). The cellrun
+    //      engine returns rc=0 ONLY when it both ran the substrate AND wrote
+    //      a record (it prints "[cellrun] record → ..." on that path), so
+    //      rc==0 ⇔ engineToolSucceeded — no separate record-path reparse is
+    //      needed (Swift parsed the banner only because it ran the engine as
+    //      a SUBPROCESS; in-process we own the rc directly).
+    //
+    // d4 PRESERVED: this routes EVERY (verb, domain) through the one generic
+    // manifest-driven engine — no per-instance branch (mirrors the Swift
+    // `default` arm). dispatch.hexa is untouched.
     println("action: " + korean + " (" + plain + ") · domain=" + domain + " — dispatching…")
-    return handler_stub("action.cellrun", argv)
+    let verb_c = _verb_canonical(verb)
+    let rc = dc_run(verb_c, domain)
+    // Swift cliAction prints `result.text` then `print("---")`. The Swift
+    // CellrunDispatch builds `result.text` by re-splitting the engine
+    // SUBPROCESS stdout with omittingEmptySubsequences:false — the engine's
+    // trailing "\n" yields a trailing EMPTY element, so `result.text` ends
+    // with a newline and the following `print()` adds one more → a BLANK
+    // line lands between the [cellrun] banner and "---". In-process the
+    // engine's last println already terminated its line, so we replicate
+    // that one Swift subprocess-capture artifact explicitly to stay
+    // byte-identical with the reference.
+    println("")
+    println("---")
+    if rc == 0 {
+        // engineToolSucceeded — the engine wrote a record. The record id is
+        // the engine's own banner line; the dispatch surface mirrors Swift's
+        // "📸 new record ID(s): ..." only when a record landed. The engine
+        // already printed the absolute record path on the [cellrun] record →
+        // line above, so we surface the success marker without re-deriving it.
+        println("📸 new record emitted (see [cellrun] record → line above).")
+        return 0
+    }
+    // engine gap (rc 2/3/4/5) — usedEngineTool && engineToolSucceeded==false.
+    println("⏳ engine tool gap — no new measured record (g3).")
+    return 1
 }
 
 // ── verify (PR-verify-passthrough · LIVE) ───────────────────────────
