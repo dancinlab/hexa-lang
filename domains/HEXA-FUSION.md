@@ -49,8 +49,19 @@ FORGE-UTILGREEN lever-1~5 가 GEMM repack 을 전부 device 化했어도 util ME
   ② async · ④ fwd/bwd graph · ⑤ whole-step 전부 MEDIAN 2% / MEAN ~12-15% 로 bottom-out → "host launch
   overhead = util ceiling" 축 전체 CLOSED-NEGATIVE TERMINAL. (paper_negative_ok 자격: 닫힌 음성.)
 
-### L3 — fusion moat (= PyTorch 초과 · 구조적)
+### L3 — fusion moat (= PyTorch 초과 · 구조적) 〔★ ACTIVE — occupancy 가 유일한 남은 util 레버〕
 
+ROOT (2026-06-04): host-removal(②④⑤) 소진 ~13% · 벽 = occupancy(작은 element-wise/norm 커널이
+GEMM 사이 직렬 체인으로 H100 미충전). util 을 올리는 길 = 인접 작은 커널 융합(op-boundary fusion).
+31개 `_hx_k_*` 중 GEMM 사이 small kernel: gelu·groupnorm·rmsnorm·residual_add·softmax·int4_quant.
+
+- [ ] **L3-a: groupnorm+gelu → 1 융합 커널** (★ START HERE — 최저리스크·고빈도) — 새 `_hx_k_groupnorm_gelu`
+  + forge_dispatch wrapper + codegen reg + hexa 콜사이트 1개로 합침. falsifier: fused == op-by-op byte-eq
+  max|Δ|=0 ∧ util MEAN Δ 측정(idle H100). HBM 1왕복 절약 + launch 1개 제거.
+- [ ] **L3-b: residual_add+rmsnorm → 1 융합 커널** — add→norm 레지스터 유지. falsifier: byte-eq + util Δ.
+- [ ] **L3-c: int4_quant → GEMM epilogue 흡수** — quantize-on-write, 커널 1개 제거. falsifier: byte-eq + util Δ.
+- [ ] **occupancy probe: T-sweep / batch sweep** (H100 가용 시) — 커널 widen(T·batch↑)으로 util 천장 확정.
+  verdict `.verdicts/hexa-fusion/F-FUSION-BATCH-OCCUPANCY.txt`. (D-sweep 은 이미 util↓ 확인.)
 - [ ] **fwd+bwd autograd-aware fusion** (GPU.md §5d) — forward + backward 커널을 한 device 그래프로 fuse. falsifier: `F-FUSION-TRAINSTEP-EQ` max|Δ|=0 (fused == op-by-op reference).
 - [x] **compile-time specialization** (GPU.md §5b) ✅ W1-⑥ (PR #2558) — known-(M,N,K) GEMM 특화: M/N/K `.param` 제거 · bounds-setp 에 M/N immediate baking · K stride literal-fold · K 수축 완전 unroll(loop·back-edge·counter 제거). emit Δ: generic fma 1(looped) → specialized K straight-line. default re-emit byte-eq max|Δ|=0. 잔여: dead-output elim · MIR call-site auto-select · WMMA matmul 경로 확장 · silicon. 상세 = §W1 results.
 - [x] **operator-specific surgical override** (GPU.md §5g) ✅ W1-⑦ (PR #2556) — per-call-site WMMA precision override(`_nvptx_wmma_mnemonic_override` reads dst Local.precision). emit Δ: load `.shared.f16`→`.shared.bf16` · mma `.f32.f32`→`.f32.bf16.bf16.f32`, **store-c default .f32 유지(per-site granularity 증명)**. default re-emit byte-eq max|Δ|=0. 잔여: HIR `@bf16` grammar → Local.precision · silicon fire. 상세 = §W1 results.
