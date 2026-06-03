@@ -1,0 +1,230 @@
+// HEXA Standard Library — demi/project_store
+//
+// @version 0.1.0
+// @capabilities [proc]
+//
+// The pure-hexa-native port of the Swift cockpit `ProjectStore` + the
+// `Project` / `Verb` model (demiurge cockpit/Sources/DemiurgeCore/
+// Loaders/ProjectStore.swift + Models/Project.swift · demi-cli-pure-hexa-
+// native · plan PR#12 project-store). This is the SHARED BASE the two READ
+// verbs (list-projects · show-project, handlers.hexa) build on; the
+// project new|advance|retreat MUTATION lands in PR#13 (NOT here).
+//
+// Canonical primitives (d3 — one home for the project read; the list-/show-
+// project handlers CONSUME these instead of re-deriving):
+//   ps_projects_root()    — ProjectStore.projectsRoot (the fixed app-data dir)
+//   ps_load_all()         — ProjectStore.loadAll() — every manifest, createdAt-sorted
+//   ps_verb_korean(i)     — Verb.koreanLabel for verb index i (the 7-verb spine)
+//   ps_verb_plain(i)      — Verb.plain for verb index i
+//   ps_state_of(p, i)     — Project.state(of:) → done|current|visited|upcoming
+//   ps_date_desc(iso)     — Swift `Date.description` from a stored ISO8601 string
+//
+// @D g_cockpit_isolation clause (e): a project manifest is the cockpit's OWN
+// app-state, NOT an exports/ record. It lives under the macOS app-data
+// standard location EXPLICITLY outside exports/:
+//   ~/Library/Application Support/lab.dancin.demiurge/projects/<uuid>/manifest.json
+// ProjectStore has NO env override (unlike RecordLoader's DEMIURGE_REPO) — both
+// surfaces read the SAME fixed path, so the parity cell backs up / restores the
+// real store around a deterministic fixture (demi_selftest §PR#12).
+//
+// Reuses record_loader.hexa leaf helpers (rl_shq · rl_starts_with) — d3 no-dup.
+
+import "stdlib/alloc/json_object.hexa"
+import "stdlib/demi/record_loader.hexa"
+
+// ── the 7-verb spine (Swift Verb enum · Project.swift) ──────────────────────
+//
+// The HARD spine — index order + labels reproduced EXACTLY (Verb.allCases is
+// the rawValue order 0..6). canonical = English wire form; koreanLabel = the
+// CLI display label (해석⟲ carries the loop-back glyph); plain = the rfc_012
+// §4 non-expert Korean wording shown in parentheses by show-project.
+
+// ps_verb_canonical(i) — Verb.canonical for verb rawValue i (English wire form).
+pub fn ps_verb_canonical(i: int) -> string {
+    if i == 0 { return "specify" }
+    if i == 1 { return "structure" }
+    if i == 2 { return "design" }
+    if i == 3 { return "analyze" }
+    if i == 4 { return "synthesize" }
+    if i == 5 { return "verify" }
+    if i == 6 { return "handoff" }
+    return ""
+}
+
+// ps_verb_korean(i) — Verb.koreanLabel for verb rawValue i (CLI display label).
+pub fn ps_verb_korean(i: int) -> string {
+    if i == 0 { return "명세" }
+    if i == 1 { return "구조" }
+    if i == 2 { return "설계" }
+    if i == 3 { return "해석⟲" }
+    if i == 4 { return "합성" }
+    if i == 5 { return "검증" }
+    if i == 6 { return "인계" }
+    return ""
+}
+
+// ps_verb_plain(i) — Verb.plain for verb rawValue i (non-expert §4 wording).
+pub fn ps_verb_plain(i: int) -> string {
+    if i == 0 { return "무엇을" }
+    if i == 1 { return "어떻게" }
+    if i == 2 { return "설계" }
+    if i == 3 { return "점검" }
+    if i == 4 { return "만들기" }
+    if i == 5 { return "검증" }
+    if i == 6 { return "넘기기" }
+    return ""
+}
+
+// ── one loaded project (the Swift Project model, read-only fields) ──────────
+pub struct PsProject {
+    name:         string,    // user-typed display name
+    target:       string,    // free-text "무엇을 만들고 싶으세요" answer
+    domain:       string,    // domain key (Project.domain)
+    current_verb: int,       // currentVerb.rawValue (0..6)
+    done_verbs:   [int],     // doneVerbs (raw values of measured ✅ stages)
+    created_at:   string,    // createdAt stored ISO8601 (for the sort + render)
+}
+
+// ── projectsRoot (ProjectStore.projectsRoot) ────────────────────────────────
+//
+// FileManager .applicationSupportDirectory in .userDomainMask on macOS is
+// ~/Library/Application Support. The store is that + lab.dancin.demiurge/projects.
+pub fn ps_projects_root() -> string {
+    return env("HOME") + "/Library/Application Support/lab.dancin.demiurge/projects"
+}
+
+// ── createdAt sort key + render ─────────────────────────────────────────────
+//
+// ps_date_desc(iso) — Swift `Date.description` from a manifest's ISO8601
+// createdAt. The Swift JSONDecoder (.iso8601) decodes the stored
+// `YYYY-MM-DDTHH:MM:SSZ` to a Date instant; `Date.description` then renders
+// it in UTC as `YYYY-MM-DD HH:MM:SS +0000`. For the canonical whole-second `Z`
+// form that ProjectStore.save (.iso8601 encoder) writes, that is a pure string
+// transform: `T` → ` `, trailing `Z` → ` +0000`. A non-Z offset / fractional
+// second is NOT produced by the demi writer (PR#13), so it is out of scope —
+// the deterministic golden covers the writer's only output form (@L7).
+pub fn ps_date_desc(iso: string) -> string {
+    let n = len(iso)
+    let mut out = ""
+    let mut i = 0
+    while i < n {
+        let c = iso.substring(i, i + 1)
+        if c == "T" { out = out + " " }
+        else if c == "Z" && i == n - 1 { out = out + " +0000" }
+        else { out = out + c }
+        i = i + 1
+    }
+    return out
+}
+
+// ── load every manifest, oldest-created first (ProjectStore.loadAll) ────────
+//
+// Enumerate <projectsRoot>/*/manifest.json (one per project UUID dir), decode
+// each, SKIP an unreadable / malformed one (a partial read beats a crash —
+// Swift `guard let … else { continue }`), then sort by createdAt ascending.
+// Swift sorts Date instants; the stored ISO8601 `YYYY-MM-DDTHH:MM:SSZ` is
+// lexicographically monotone with the instant for the `Z` form the writer
+// emits, so a string sort on created_at matches the Date sort (and ties keep
+// the enumeration order, like Swift's stable `sorted`).
+pub fn ps_load_all() -> [PsProject] {
+    let root = ps_projects_root()
+    let q = rl_shq(root)
+    // `ls -d <root>/*/manifest.json` — one manifest per uuid dir. 2>/dev/null so
+    // a missing store (no projects yet) yields the empty list (loadAll → []).
+    let listing = exec("ls " + q + "/*/manifest.json 2>/dev/null").trim()
+    let mut projs: [PsProject] = []
+    if len(listing) == 0 { return projs }
+    let files = listing.split("\n")
+    let mut i = 0
+    while i < len(files) {
+        let f = files[i].trim()
+        i = i + 1
+        if len(f) == 0 { continue }
+        let obj = json_parse_object(read_file(f))
+        // malformed / unreadable → skip (Swift's decode-failure continue). A
+        // genuine manifest always carries "name" + "createdAt".
+        if !json_object_has(obj, "name") { continue }
+        if !json_object_has(obj, "createdAt") { continue }
+        let cv = json_object_get_path(obj, "currentVerb")
+        let cv_i = if type_of(cv) == "int" { cv } else { 0 }
+        // doneVerbs — an int array (Set<Int> serialized as a JSON array).
+        let mut dv: [int] = []
+        let dvs = json_object_get_path(obj, "doneVerbs")
+        if type_of(dvs) == "array" {
+            let mut k = 0
+            while k < len(dvs) {
+                if type_of(dvs[k]) == "int" { dv.push(dvs[k]) }
+                k = k + 1
+            }
+        }
+        projs.push(PsProject {
+            name:         json_object_get_str(obj, "name", ""),
+            target:       json_object_get_str(obj, "target", ""),
+            domain:       json_object_get_str(obj, "domain", ""),
+            current_verb: cv_i,
+            done_verbs:   dv,
+            created_at:   json_object_get_str(obj, "createdAt", ""),
+        })
+    }
+    // selection-sort by created_at ascending (small list; push+read only, no
+    // struct-element index assignment) — Swift `sorted { $0.createdAt < $1 }`.
+    let mut sorted: [PsProject] = []
+    let mut used: [bool] = []
+    let mut u = 0
+    while u < len(projs) { used.push(false) ; u = u + 1 }
+    let mut placed = 0
+    while placed < len(projs) {
+        let mut best = -1
+        let mut best_k = ""
+        let mut j = 0
+        while j < len(projs) {
+            if !used[j] {
+                if best < 0 || projs[j].created_at < best_k {
+                    best = j
+                    best_k = projs[j].created_at
+                }
+            }
+            j = j + 1
+        }
+        sorted.push(projs[best])
+        used[best] = true
+        placed = placed + 1
+    }
+    return sorted
+}
+
+// ── per-verb stage state (Project.state(of:)) ───────────────────────────────
+//
+// done if doneVerbs contains the verb · current if verb == currentVerb · else
+// visited if verb < currentVerb · else upcoming (Swift Project.state).
+pub fn ps_state_of(p: PsProject, verb: int) -> string {
+    let mut i = 0
+    while i < len(p.done_verbs) {
+        if p.done_verbs[i] == verb { return "done" }
+        i = i + 1
+    }
+    if verb == p.current_verb { return "current" }
+    if verb < p.current_verb { return "visited" }
+    return "upcoming"
+}
+
+// ── domain label / canvas-mode (the synthetic-fallback subset) ──────────────
+//
+// list-/show-project resolve the domain via Swift `DomainCatalog.domain(for:)`,
+// whose KNOWN-key branch parses domains/INDEX.demi (D83) — that catalog load is
+// the `compose` / domain-loader port (a later stacked PR), NOT this PR. The
+// SYNTHETIC-FALLBACK branch (an unknown key) is self-contained and reproduced
+// here byte-for-byte:  label = (key == "general") ? "일반 공학" : key ·
+// canvasMode = .cohort. The PR#12 parity cells therefore use project domains
+// that are NOT INDEX.demi keys (general + a custom key) so both surfaces take
+// this same synthetic path — an honest, deterministic, machine-independent
+// golden (the INDEX.demi-backed label render is asserted when `compose` lands).
+pub fn ps_domain_label(key: string) -> string {
+    if key == "general" { return "일반 공학" }
+    return key
+}
+
+// ps_domain_canvas(key) — the synthetic-fallback canvasMode rawValue (.cohort).
+pub fn ps_domain_canvas(key: string) -> string {
+    return "cohort"
+}
