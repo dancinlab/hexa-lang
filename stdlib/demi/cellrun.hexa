@@ -81,3 +81,58 @@ pub fn dc_run(verb_canonical: string, domain: string) -> int {
     roots["hexa_lang_root"] = dc_hexa_lang_root()
     return cell_run_with_roots(domain, verb_canonical, roots)
 }
+
+// _dc_split_csv(s) — split a manifest comma-list into trimmed, non-empty,
+// unquoted tokens. Mirrors the engine's private _split_csv (cockpit
+// cellrun.hexa) closely enough for the dep-list rc gate (deps are plain
+// ASCII module names). Only used by dc_run_quiet's deps check.
+fn _dc_split_csv(s: string) -> [string] {
+    let mut out: [string] = []
+    let parts = s.split(",")
+    let mut i = 0
+    while i < len(parts) {
+        let mut t = parts[i].trim()
+        let n = len(t)
+        if n >= 2 && t.substring(0, 1) == "\"" && t.substring(n - 1, n) == "\"" {
+            t = t.substring(1, n - 1)
+        }
+        if len(t) > 0 { out.push(t) }
+        i = i + 1
+    }
+    return out
+}
+
+// dc_run_quiet(verb_canonical, domain) — the SAME (verb, domain) cellrun
+// outcome rc as dc_run(), but WITHOUT printing the `[cellrun]` banner. Used
+// by the `action --converge` loop (handlers.hexa), whose Swift reference
+// (cliActionConvergent) renders ONLY the per-iter ok/skip tag summary — never
+// the per-constituent banners — so the engine must run silently.
+//
+// d3: this does NOT re-author the dispatcher. It reuses the engine's PUBLIC
+// probe primitives (load_manifest_at · dep_check · resolve_substrate_bin) to
+// reproduce the EXACT rc cell_run_with_roots would return for each gate:
+//   manifest missing/unparseable → 2 · missing deps → 3 · no substrate bin
+//   → 3 · else the substrate would spawn (rc 0/4). The deterministic, host-
+//   independent paths (manifest-missing → 2 · missing-deps → 3) are what the
+//   --converge parity cell asserts; the substrate-spawn rc (0/4) is host-
+//   dependent and scoped to a follow-up alongside the compose record path.
+pub fn dc_run_quiet(verb_canonical: string, domain: string) -> int {
+    let demi_root = dc_demi_root()
+    let mf = load_manifest_at(demi_root, domain, verb_canonical)
+    if mf["_ok"] != "true" { return 2 }
+    let dep_str = if has_key(mf, "required_deps") { mf["required_deps"] } else { "" }
+    let deps = _dc_split_csv(dep_str)
+    if len(dep_check(deps)) > 0 { return 3 }
+    let substrate_bin = resolve_substrate_bin(mf)
+    if len(substrate_bin) == 0 { return 3 }
+    // substrate-present path — fall back to the full engine (which spawns +
+    // emits the record + returns 0/4). This branch is NOT reached by the
+    // host-independent --converge parity cell (its constituents all honest-
+    // skip at rc=2 before here); when it IS reached the printed banner is
+    // acceptable (the loop already ran the manifest gates silently).
+    let roots = json_parse("{}")
+    roots["demi_root"] = demi_root
+    roots["exports_root"] = rl_exports_root()
+    roots["hexa_lang_root"] = dc_hexa_lang_root()
+    return cell_run_with_roots(domain, verb_canonical, roots)
+}
