@@ -1434,16 +1434,16 @@ pub fn handler_owner(argv: [string]) -> int {
 // id hardcoding (d4); the handler branches on the SUBCOMMAND token only, never
 // a provider id.
 //
-// SPLIT (g4 · <200 lines/PR): THIS handler (PR #17a) ports the deterministic,
-// fully parity-testable READ + config-SET subverbs —
-//   list [--json] · use <id> · mode <cli|api> · model <id> <m>
-// The network/keychain-WRITE side (key · key-rm · test · ask) is PR #17b: those
-// require live keychain SecItemAdd + an HTTPS LLMBridge call, so a hexa-native
-// port can't fake them under @L7. Until #17b lands they route to an HONEST
-// not-yet-ported notice (exit 2) — never a silent success, never fake parity.
-// The DETERMINISTIC error paths for those subverbs (missing-arg / bad-provider,
-// which Swift resolves BEFORE any keychain/network touch) are still ported
-// byte-exact below so the usage diagnostics don't regress.
+// SPLIT (g4 · <200 lines/PR): PR #17a ported the deterministic READ + config-
+// SET subverbs (list [--json] · use · mode · model). PR #17b adds the
+// keychain-WRITE + live-LLMBridge side (key · key-rm · test · ask): these
+// perform REAL side-effects — keychain SecItem via stdlib/keychain.hexa, and
+// an HTTPS POST / provider-CLI spawn via the ls_bridge_* leaf (d3). @L7
+// HONESTY: only the DETERMINISTIC pre-side-effect paths are parity-gated
+// (missing-arg / bad-provider usage errors + the deterministic 저장됨/삭제됨
+// confirmation lines). The live network/keychain happy paths (✅/❌ test,
+// ask reply, 저장 실패) are functional but exercised MANUALLY, never faked
+// in the gate.
 pub fn handler_llm(argv: [string]) -> int {
     // Swift `let sub = args.first ?? "list"`.
     let sub = if len(argv) >= 1 { argv[0] } else { "list" }
@@ -1555,46 +1555,78 @@ pub fn handler_llm(argv: [string]) -> int {
     }
 
     // ── key <id> <key> ───────────────────────────────────────────────────
-    // Deterministic error paths ported (Swift resolves these BEFORE any
-    // keychain touch); the keychain SecItemAdd happy-path is PR #17b.
+    // @L7: the deterministic usage error (missing-arg / bad-provider) is
+    // resolved BEFORE any keychain touch (parity-gated). The happy path REALLY
+    // writes the macOS keychain (ls_key_set → stdlib keychain SecItem) — the
+    // 저장됨 confirmation line is deterministic, but the keychain side-effect
+    // and the 저장 실패 branch are exercised manually, not in the gate.
     if sub == "key" {
         let found = if len(argv) >= 3 { ls_find_provider(cfg, argv[1]) } else { [] }
         if len(found) == 0 {
             eprintln("llm key: usage — llm key <id> <key>")
             return 2
         }
-        eprintln("llm key: keychain write not yet ported — PR #17b (key·key-rm·test·ask)")
-        return 2
+        let p = found[0]
+        if ls_key_set(p.id, argv[2]) {
+            println(p.display_name + " 키 저장됨 (키체인) — 읽기는 env(" + p.key_env + ") 우선")
+            return 0
+        }
+        eprintln("llm key: 키체인 저장 실패")
+        return 1
     }
 
     // ── key-rm | key-del <id> ────────────────────────────────────────────
+    // Deterministic usage error gated; the keychain delete (ls_key_delete) is
+    // a real, idempotent side-effect (manual). The 삭제됨 line is deterministic.
     if sub == "key-rm" || sub == "key-del" {
         let found = if len(argv) >= 2 { ls_find_provider(cfg, argv[1]) } else { [] }
         if len(found) == 0 {
             eprintln("llm key-rm: usage — llm key-rm <id>")
             return 2
         }
-        eprintln("llm key-rm: keychain write not yet ported — PR #17b (key·key-rm·test·ask)")
-        return 2
+        let p = found[0]
+        ls_key_delete(p.id)
+        println(p.display_name + " 키 삭제됨 (키체인). env " + p.key_env + " 가 설정돼 있으면 그건 유지.")
+        return 0
     }
 
     // ── test [<id>] ──────────────────────────────────────────────────────
-    // Live LLMBridge probe (CLI spawn / HTTPS) — PR #17b. No deterministic
-    // pre-network error path (Swift falls back to the active provider).
+    // @L7: a live LLMBridge probe (CLI spawn / HTTPS POST) — really invoked.
+    // Swift falls back to the active provider when no id is given, so there is
+    // NO deterministic pre-network error path here; the ✅/❌ outcome depends
+    // on live network/CLI state, so this whole subverb is functional-but-not-
+    // gated (manual). NOT faked.
     if sub == "test" {
-        eprintln("llm test: live LLMBridge probe not yet ported — PR #17b (key·key-rm·test·ask)")
-        return 2
+        let target = if len(argv) >= 2 { ls_find_provider(cfg, argv[1]) } else { [] }
+        let p = if len(target) > 0 { target[0] } else { ls_active(cfg) }
+        let reply = ls_bridge_test(cfg, p)
+        if reply.ok {
+            println("✅ " + p.display_name + " · " + reply.detail)
+            let head = if len(reply.text) > 120 { reply.text.substring(0, 120) } else { reply.text }
+            println("   " + head)
+            return 0
+        }
+        println("❌ " + p.display_name + " · " + reply.detail)
+        return 1
     }
 
     // ── ask <prompt> ─────────────────────────────────────────────────────
+    // @L7: the missing-prompt guard is deterministic (pre-network · gated).
+    // The happy path REALLY calls LLMBridge (CLI/HTTPS) — functional, manual.
     if sub == "ask" {
-        // Swift's missing-prompt guard is deterministic (pre-network) — ported.
         if len(argv) < 2 {
             eprintln("llm ask: usage — llm ask <prompt>")
             return 2
         }
-        eprintln("llm ask: live LLMBridge call not yet ported — PR #17b (key·key-rm·test·ask)")
-        return 2
+        let mut parts: [string] = []
+        let mut i = 1
+        while i < len(argv) { parts.push(argv[i]) ; i = i + 1 }
+        let prompt = _join(parts, " ")
+        let reply = ls_bridge_ask(cfg, prompt, "CLI 직접 호출 (프로젝트 컨텍스트 없음).")
+        if len(reply.text) == 0 { println("⚠️ " + reply.detail) } else { println(reply.text) }
+        if _operate_expert() { println("— " + reply.detail) }
+        if reply.ok { return 0 }
+        return 1
     }
 
     // ── unknown subcommand ───────────────────────────────────────────────
