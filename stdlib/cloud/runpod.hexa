@@ -694,6 +694,93 @@ fn runpod_list_pods() -> RunPodList {
     return _runpod_list_old(rpc)
 }
 
+// ── authoritative pod list — myself.pods GraphQL (anima reconcile fix) ─
+//
+// The runpodctl CLI list above can drift (a degraded/old/missing CLI, a host
+// without the binary). The AUTHORITATIVE source of truth for "what pods do I
+// actually have billing right now" is the RunPod GraphQL `myself { pods }`
+// query against api.runpod.io — the exact endpoint a human falls back to when
+// the registry/CLI disagree. The live anima incident (2026-06-04): the local
+// hook showed 3 pods RENTING that did NOT exist in `myself.pods` (real count
+// 1) — ghost drift the CLI list could not authoritatively refute. This query
+// closes that: a pod is REAL iff it is in `myself.pods`, full stop.
+//
+// g63: NEVER fabricate/assume pod state — every id here is one RunPod itself
+// returned. A degraded query (no key / HTTPS failure / non-2xx) returns ok=0
+// so the caller degrades to the CLI list rather than inventing an empty set.
+
+// _runpod_myself_strip_ids — pull every pods[].id out of the
+// data.myself.pods array of a GraphQL response. Defensive: a non-array /
+// missing path yields []. desiredStatus is requested so a future caller can
+// distinguish EXITED from RUNNING without a second round-trip.
+fn _runpod_myself_strip_ids(resp: str) -> [str] {
+    let mut ids = []
+    if len(resp) == 0 {
+        return ids
+    }
+    let parsed = json_parse(resp)
+    let pods_v = json_object_get_path(parsed, "data.myself.pods")
+    if type_of(pods_v) != "array" {
+        return ids
+    }
+    let mut i = 0
+    while i < len(pods_v) {
+        let id_v = json_object_get(pods_v[i], "id")
+        if type_of(id_v) == "string" {
+            let id_s = to_string(id_v)
+            if len(id_s) > 0 {
+                ids.push(id_s)
+            }
+        }
+        i = i + 1
+    }
+    return ids
+}
+
+// runpod_myself_pods — AUTHORITATIVE live pod-id list via the
+// `myself { pods { id desiredStatus } }` GraphQL query. ok=0 on no-key /
+// transport failure / non-array response (caller must NOT treat that as
+// "zero pods" — it is "could not authoritatively determine"). Reuses
+// _runpod_post (the same endpoint podTerminate uses), so the same api_key
+// resolution + 401 hinting applies.
+fn runpod_myself_pods() -> RunPodList {
+    let api_key = runpod_api_key()
+    if len(api_key) == 0 {
+        return _runpod_list_fail("myself.pods: no RunPod api key (RUNPOD_API_KEY)")
+    }
+    let body = "{\"query\":\"query { myself { pods { id desiredStatus } } }\"}"
+    let resp = _runpod_post(api_key, body, 30)
+    if len(resp) == 0 {
+        return _runpod_list_fail("myself.pods: empty response (HTTPS / auth failure)")
+    }
+    // A GraphQL error envelope (no data) must NOT read as zero pods.
+    let parsed = json_parse(resp)
+    let myself_v = json_object_get_path(parsed, "data.myself")
+    if type_of(myself_v) != "object" {
+        return _runpod_list_fail("myself.pods: no data.myself in response" + cloud_runpod_401_hint(resp))
+    }
+    let ids = _runpod_myself_strip_ids(resp)
+    return RunPodList { ok: 1, pod_ids: ids, message: "myself.pods (graphql) - " + to_string(len(ids)) + " pods" }
+}
+
+// runpod_authoritative_pods — the reconcile/reap source of truth. Prefers
+// the GraphQL `myself.pods` query (authoritative); on a degraded query
+// (ok=0) falls back to the runpodctl CLI list so a host without the API key
+// still reconciles against SOMETHING real rather than an empty set. The two
+// agree in the common case; myself.pods wins on disagreement (it is the
+// provider's own ledger). g63: both arms return only ids RunPod reported.
+fn runpod_authoritative_pods() -> RunPodList {
+    let m = runpod_myself_pods()
+    if m.ok == 1 {
+        return m
+    }
+    let c = runpod_list_pods()
+    if c.ok == 1 {
+        return RunPodList { ok: 1, pod_ids: c.pod_ids, message: "cli-fallback (" + m.message + ") - " + c.message }
+    }
+    return _runpod_list_fail("authoritative: both myself.pods + cli list unavailable (" + m.message + " / " + c.message + ")")
+}
+
 // ── env-var passthrough audit (G5 — anima 2026-05-24 cycle 15) ───────
 //
 // Closed-form, LLM-free check that bridges a dispatcher script (bash, the
