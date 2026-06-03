@@ -197,6 +197,73 @@ pub fn handler_verify(argv: [string]) -> int {
     return vr_verify_record(argv[0])
 }
 
+// ── atlas (PR-atlas-refusal · LIVE) ─────────────────────────────────
+//
+// `demi atlas <verb> [args]` — ports the Swift `atlasCmd` (main.swift:688-711).
+// The hexa atlas SSOT is READ-ONLY for external users; WRITE verbs are owner
+// ops (사장실 · M20) unlocked only with the DEMIURGE_OWNER env var:
+//   READ  verbs  lookup|stats|hash|dump        → forward to `hexa atlas` VERBATIM.
+//   WRITE verbs  register|append-witness|pr     → owner-gated:
+//        · DEMIURGE_OWNER unset → REFUSED: stderr line + exit 2 (no forward).
+//        · DEMIURGE_OWNER set   → forward to `hexa atlas` VERBATIM (hexa enforces
+//                                 PR-only landing downstream).
+//   UNKNOWN verb                                → stderr line + exit 2 (no forward).
+// Owner-mode detection mirrors Swift DemiurgeMode.owner EXACTLY: the
+// DEMIURGE_OWNER env var being PRESENT (any value), never its value.
+// The refusal stderr text + the unknown-verb text + the exit codes are
+// byte-for-byte the Swift atlasCmd strings (the @ci_gate parity cells assert it).
+
+// _atlas_is_read(verb) — does `verb` name a READ subverb (free passthrough)?
+fn _atlas_is_read(verb: string) -> bool {
+    return verb == "lookup" || verb == "stats" || verb == "hash" || verb == "dump"
+}
+
+// _atlas_is_write(verb) — does `verb` name a WRITE (owner-gated) subverb?
+fn _atlas_is_write(verb: string) -> bool {
+    return verb == "register" || verb == "append-witness" || verb == "pr"
+}
+
+// _atlas_owner() — owner-mode gate (Swift DemiurgeMode.owner): DEMIURGE_OWNER
+// env var PRESENT. env() returns "" when unset, so non-empty ⇔ present.
+fn _atlas_owner() -> bool {
+    return len(env("DEMIURGE_OWNER")) > 0
+}
+
+pub fn handler_atlas(argv: [string]) -> int {
+    // Swift: `let verb = args.first ?? "stats"` — empty argv defaults to `stats`
+    // (a READ verb → forwarded), so demi atlas with no subverb shows atlas stats.
+    let verb = if len(argv) >= 1 { argv[0] } else { "stats" }
+    if _atlas_is_write(verb) {
+        // M20 owner gate — refuse unless the 사장실 is unlocked.
+        if !_atlas_owner() {
+            eprintln("atlas: '" + verb + "' = owner op (사장실 · M20). Set DEMIURGE_OWNER "
+                     + "to unlock. External read-only: lookup/stats/hash/dump.")
+            return 2
+        }
+    } else if !_atlas_is_read(verb) {
+        eprintln("atlas: unknown verb '" + verb + "' — read: lookup/stats/hash/dump · "
+                 + "owner write: register/append-witness/pr")
+        return 2
+    }
+    // READ (any) or WRITE-with-owner → forward `hexa atlas <argv...>` verbatim
+    // (Swift HexaBridge.run(["atlas"] + args)). Child owns the verdict (@D g5).
+    let hexa = exec("command -v hexa 2>/dev/null || echo hexa").trim()
+    let mut cmd = _shq_h(hexa) + " atlas"
+    let mut i = 0
+    while i < len(argv) {
+        cmd = cmd + " " + _shq_h(argv[i])
+        i = i + 1
+    }
+    cmd = cmd + " 2>&1"
+    let pair = exec_with_status(cmd)
+    let out = to_string(pair[0])
+    print(out)
+    if len(out) > 0 {
+        if !out.ends_with("\n") { println("") }
+    }
+    return pair[1]
+}
+
 // handler_local(target, argv) — generic local-handler entry. Routes by the
 // manifest `target` id to the ported hexa-native handler, else the honest
 // stub. The ONE place the local family fans out — adding a ported handler is
@@ -204,6 +271,7 @@ pub fn handler_verify(argv: [string]) -> int {
 pub fn handler_local(target: string, argv: [string]) -> int {
     if target == "action" { return handler_action(argv) }
     if target == "verify" { return handler_verify(argv) }
+    if target == "atlas"  { return handler_atlas(argv) }
     // every other declared local target is not-yet-ported → honest stub.
     return handler_stub(target, argv)
 }
