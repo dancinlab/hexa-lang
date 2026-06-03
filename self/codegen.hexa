@@ -3483,6 +3483,22 @@ fn _gen2_stmt_inner(node, depth) {
 
     if k == "WhileStmt" {
         let mut chunks = []
+        // MISCOMPILE-ZERO (hexa-run-hang-diag, BUG 1): a plain immutable
+        // `let kk = 0` const-folds `kk → 0`; a `while kk < 4 { kk = kk + 1 }`
+        // then inlined the STALE literal into the CONDITION (`0 < 4`, always
+        // true) while the body incremented the live `kk` → non-terminating loop
+        // (the binary hangs, exit 124). The AssignStmt arm invalidates the fold,
+        // but it runs only when the body is emitted — AFTER the condition was
+        // already folded. Pre-invalidate the fold for every name the loop body
+        // reassigns BEFORE emitting the condition so the cond reads the live
+        // variable. (The for-range arm avoids this via its counter-only fold
+        // invalidate; while loops have no implicit counter, so do it explicitly.)
+        let _w_assigned = _gen2_collect_assigned(node.body, [])
+        let mut _wai = 0
+        while _wai < len(_w_assigned) {
+            _invalidate_comptime_const(_w_assigned[_wai])
+            _wai = _wai + 1
+        }
         // C2 (while-cond specialize): when the condition is a comparison
         // expression, emit a direct C boolean instead of wrapping through
         // hexa_truthy(hexa_cmp_*(...)) — saves tag-check + unbox per iteration.
