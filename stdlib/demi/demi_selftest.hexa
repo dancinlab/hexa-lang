@@ -187,6 +187,62 @@ fn _make_show_fixture(repo: string) {
     exec("printf %s " + _shq2("not json at all") + " > " + _shq2(rdir + "/bad.json"))
 }
 
+// _gate_rec(rid, gate, absorbed) — a fully-decodable F1F2 record JSON literal
+// with the given record_id / measurement_gate / absorbed (every other required
+// field present so rl_f1f2_decodes ⇔ Swift Codable .success).
+fn _gate_rec(rid: string, gate: string, absorbed: string) -> string {
+    return "{\"interface\":\"i\",\"schema_version\":\"1.0\",\"record_id\":" + _shq2_json(rid)
+        + ",\"produced_at_utc\":\"2026-01-01T00:00:00Z\",\"topology\":{\"kind\":\"k\","
+        + "\"degree\":4,\"node_count\":64,\"routing\":\"min\"},\"traffic\":\"t\","
+        + "\"verdict\":{\"f1\":\"a\",\"f2\":\"b\",\"rationale\":\"r\"},"
+        + "\"provenance\":{\"absorbed\":" + absorbed + ",\"measurement_gate\":\"" + gate + "\","
+        + "\"sim_engine\":\"e\",\"sim_commit_hash\":\"abc\",\"gate_failures\":[],"
+        + "\"consumer_target\":\"c\",\"atlas_cite_block\":\"a\",\"scope_caveats\":[]}}\n"
+}
+
+// _shq2_json(s) — JSON-quote a string value (the record ids here are plain
+// ASCII, so a bare `"<s>"` is correct — no escaping needed).
+fn _shq2_json(s: string) -> string { return "\"" + s + "\"" }
+
+// _make_gate_fixture(repo) — a deterministic exports/ tree for the PR#8
+// list-gates / gate-summary parity cells. Exercises EVERY aggregation branch:
+//   · 4 records → GATE_OPEN (absorbed=false) · 2 → GATE_CLOSED_MEASURED
+//     (absorbed=true)  → populated gates with multiple rows.
+//   · 0 records → GATE_B_PINNED_MET · 0 → GATE_FAILED → the empty `(0):`
+//     gate rows + the `0  (0.0%)` summary rows.
+//   · ONE record (zz_skip.json) missing `traffic` → FAILS Codable decode → must
+//     be SKIPPED by both verbs (the on-disk router_*_pnr_sky130hd analogue).
+// Filenames are chosen so the filename-sort places the OPEN rows (o1..o4) before
+// the CLOSED rows (c1,c2) and the skip last; the list-gates within-gate row order
+// is that filename sort. Totals: total=6 · OPEN=4 (66.7%) · CLOSED=2 (33.3%) ·
+// absorbed=true 2 / false 4 — so the %.1f rounding + the pad are both asserted.
+fn _make_gate_fixture(repo: string) {
+    let rdir = repo + "/exports/chip/noc/f1f2/records"
+    exec("rm -rf " + _shq2(repo) + " && mkdir -p " + _shq2(rdir))
+    exec("printf %s " + _shq2(_gate_rec("OPEN_1", "GATE_OPEN", "false")) + " > " + _shq2(rdir + "/o1.json"))
+    exec("printf %s " + _shq2(_gate_rec("OPEN_2", "GATE_OPEN", "false")) + " > " + _shq2(rdir + "/o2.json"))
+    exec("printf %s " + _shq2(_gate_rec("OPEN_3", "GATE_OPEN", "false")) + " > " + _shq2(rdir + "/o3.json"))
+    exec("printf %s " + _shq2(_gate_rec("OPEN_4", "GATE_OPEN", "false")) + " > " + _shq2(rdir + "/o4.json"))
+    exec("printf %s " + _shq2(_gate_rec("CLOSED_1", "GATE_CLOSED_MEASURED", "true")) + " > " + _shq2(rdir + "/p1_closed.json"))
+    exec("printf %s " + _shq2(_gate_rec("CLOSED_2", "GATE_CLOSED_MEASURED", "true")) + " > " + _shq2(rdir + "/p2_closed.json"))
+    // undecodable (missing `traffic`) → skipped by both verbs.
+    let skip = "{\"interface\":\"i\",\"schema_version\":\"1.0\",\"record_id\":\"SKIP_ME\","
+        + "\"produced_at_utc\":\"2026-01-01T00:00:00Z\",\"topology\":{\"kind\":\"k\","
+        + "\"degree\":4,\"node_count\":64,\"routing\":\"min\"},"
+        + "\"verdict\":{\"f1\":\"a\",\"f2\":\"b\",\"rationale\":\"r\"},"
+        + "\"provenance\":{\"absorbed\":false,\"measurement_gate\":\"GATE_OPEN\","
+        + "\"sim_engine\":\"e\",\"sim_commit_hash\":\"abc\",\"gate_failures\":[],"
+        + "\"consumer_target\":\"c\",\"atlas_cite_block\":\"a\",\"scope_caveats\":[]}}\n"
+    exec("printf %s " + _shq2(skip) + " > " + _shq2(rdir + "/zz_skip.json"))
+}
+
+// _make_gate_empty(repo) — empty records dir → both verbs render every gate at
+// (0) and gate-summary `total records: 0` with all `0  (0.0%)` rows + 0 absorbed.
+fn _make_gate_empty(repo: string) {
+    exec("rm -rf " + _shq2(repo)
+         + " && mkdir -p " + _shq2(repo + "/exports/chip/noc/f1f2/records"))
+}
+
 fn _run_swift(bin: string, env_prefix: string, argv_str: string) -> [string] {
     let cmd = env_prefix + " " + _shq2(bin) + " " + argv_str + " 2>&1"
     let pair = exec_with_status(cmd)
@@ -597,6 +653,67 @@ fn main() {
     let g_s_decode_head = "show: Decode failed (" + sroot + "/bad.json)"
     fails = fails + _cell_live_only("show/decode", entry, swift_bin, senv,
                           "show " + _shq2(sroot + "/bad.json"), g_s_decode_head, 2)
+
+    // ── PR#8 list-gates / gate-summary cells — F1F2 records grouped /
+    // aggregated by measurement_gate. Iterate ArtifactRegistry.loadF1F2()
+    // (filename-sorted) skipping any record that does not FULLY decode as an
+    // F1F2Record (rl_f1f2_decodes ⇔ Swift Codable .success). DEMIURGE_REPO is
+    // applied to BOTH surfaces so exportsRoot resolves to the SAME fixture; the
+    // output carries no absolute paths, so the goldens are machine-independent.
+    // The fixture has 4 OPEN + 2 CLOSED decodable records + 1 undecodable
+    // (missing `traffic`) record that BOTH verbs must skip. Goldens captured
+    // byte-for-byte from the Swift DemiurgeCLI reference 2026-06-04.
+    let gfix = home + "/.demi-selftest-gate-fixture"
+    _make_gate_fixture(gfix)
+    let genv = "DEMIURGE_REPO=" + _shq2(gfix)
+    let gempty = home + "/.demi-selftest-gate-empty"
+    _make_gate_empty(gempty)
+    let genv0 = "DEMIURGE_REPO=" + _shq2(gempty)
+
+    // list-gates (populated) — 4 allCases gates in order; OPEN has 4 rows (file-
+    // sorted o1..o4), CLOSED 2 rows (p1,p2); B_PINNED + FAILED empty; the
+    // undecodable zz_skip.json is absent from every gate. title = filename stem.
+    let g_lg = "GATE_OPEN (4):\n"
+        + "  OPEN_1  absorbed=false  o1\n"
+        + "  OPEN_2  absorbed=false  o2\n"
+        + "  OPEN_3  absorbed=false  o3\n"
+        + "  OPEN_4  absorbed=false  o4\n"
+        + "GATE_B_PINNED_MET (0):\n"
+        + "GATE_CLOSED_MEASURED (2):\n"
+        + "  CLOSED_1  absorbed=true  p1_closed\n"
+        + "  CLOSED_2  absorbed=true  p2_closed\n"
+        + "GATE_FAILED (0):\n"
+    fails = fails + _cell("list-gates/populated", entry, swift_bin, genv,
+                          "list-gates", g_lg, 0)
+
+    // gate-summary (populated) — total 6 (skip excluded); OPEN 4 (66.7%),
+    // CLOSED 2 (33.3%); label padded to 22 cols; absorbed true 2 / false 4.
+    let g_gs = "total records: 6\n"
+        + "  GATE_OPEN             4  (66.7%)\n"
+        + "  GATE_B_PINNED_MET     0  (0.0%)\n"
+        + "  GATE_CLOSED_MEASURED  2  (33.3%)\n"
+        + "  GATE_FAILED           0  (0.0%)\n"
+        + "absorbed=true:  2\n"
+        + "absorbed=false: 4\n"
+    fails = fails + _cell("gate-summary/populated", entry, swift_bin, genv,
+                          "gate-summary", g_gs, 0)
+
+    // list-gates (empty) — every gate `(0):`, no rows, rc 0.
+    let g_lg0 = "GATE_OPEN (0):\nGATE_B_PINNED_MET (0):\n"
+        + "GATE_CLOSED_MEASURED (0):\nGATE_FAILED (0):\n"
+    fails = fails + _cell("list-gates/empty", entry, swift_bin, genv0,
+                          "list-gates", g_lg0, 0)
+
+    // gate-summary (empty) — total 0, every gate 0 (0.0%), absorbed both 0.
+    let g_gs0 = "total records: 0\n"
+        + "  GATE_OPEN             0  (0.0%)\n"
+        + "  GATE_B_PINNED_MET     0  (0.0%)\n"
+        + "  GATE_CLOSED_MEASURED  0  (0.0%)\n"
+        + "  GATE_FAILED           0  (0.0%)\n"
+        + "absorbed=true:  0\n"
+        + "absorbed=false: 0\n"
+    fails = fails + _cell("gate-summary/empty", entry, swift_bin, genv0,
+                          "gate-summary", g_gs0, 0)
 
     // ── PR-record-loader self-check (@ci_gate · @L7 spirit) — NOT a verb-
     // parity cell (PR#5 adds NO new user-facing verb; the list-*/show/gate

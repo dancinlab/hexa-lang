@@ -445,6 +445,118 @@ pub fn handler_show(argv: [string]) -> int {
     return 0
 }
 
+// ── list-gates / gate-summary (PR#8 · LIVE) ─────────────────────────
+//
+// `demi list-gates`    — every F1F2 record grouped by measurement_gate.
+// `demi gate-summary`  — one-screen gate counts + percentages + absorbed totals.
+//
+// Both port the Swift listGates / gateSummary (main.swift:448-487). They iterate
+// ArtifactRegistry.loadF1F2() (filename-sorted) and `guard case .success` — i.e.
+// they COUNT only records that fully decode as F1F2Record (rl_f1f2_decodes), and
+// SKIP the rest (e.g. the on-disk router_*_pnr_sky130hd.json, missing `traffic`
+// + `sim_commit_hash`). The gate iteration order is MeasurementGate.allCases:
+//   GATE_OPEN · GATE_B_PINNED_MET · GATE_CLOSED_MEASURED · GATE_FAILED.
+// Within a gate, list-gates prints rows in loadF1F2() order (filename-sorted),
+// because Swift appends to byGate[gate] in iteration order. d3: the per-record
+// stub (id/title/path, filename-sorted) + the full decode gate both come from
+// the #5 RecordLoader (rl_stubs / rl_f1f2_decodes); these handlers add only the
+// grouping + the byte-exact render (gate header `<label> (<n>):`, the
+// `  <rid>  absorbed=<b>  <title>` rows, and the gate-summary 22-col label pad).
+
+// _gate_label(i) — the i-th MeasurementGate.allCases rawValue (displayLabel).
+fn _gate_label(i: int) -> string {
+    if i == 0 { return "GATE_OPEN" }
+    if i == 1 { return "GATE_B_PINNED_MET" }
+    if i == 2 { return "GATE_CLOSED_MEASURED" }
+    return "GATE_FAILED"
+}
+
+// _pct_1f(num, den) — `num/den*100` rendered as Swift String(format:"%.1f")
+// (round-half-away-from-zero; values >= 0). den==0 → "0.0" (Swift's ternary).
+fn _pct_1f(num: int, den: int) -> string {
+    if den <= 0 { return "0.0" }
+    // tenths = round(num*100*10 / den) via integer half-up.
+    let tenths = (num * 1000 + den / 2) / den
+    let whole = tenths / 10
+    let frac = tenths - whole * 10
+    return to_string(whole) + "." + to_string(frac)
+}
+
+pub fn handler_list_gates(argv: [string]) -> int {
+    // rl_stubs("f1f2") = the loadF1F2() stub list (id $R<i> · title · path),
+    // already filename-sorted — the SAME order Swift appends within a gate.
+    let stubs = rl_stubs("f1f2")
+    let mut gi = 0
+    while gi < 4 {
+        let label = _gate_label(gi)
+        let mut rids: [string] = []
+        let mut abss: [string] = []
+        let mut titles: [string] = []
+        let mut si = 0
+        while si < len(stubs) {
+            let s = stubs[si]
+            let obj = json_parse_object(read_file(s.path))
+            if rl_f1f2_decodes(obj) {
+                let g = to_string(json_object_get_path(obj, "provenance.measurement_gate"))
+                if g == label {
+                    rids.push(json_object_get_str(obj, "record_id", ""))
+                    abss.push(to_string(json_object_get_path(obj, "provenance.absorbed")))
+                    titles.push(s.title)
+                }
+            }
+            si = si + 1
+        }
+        println(label + " (" + to_string(len(rids)) + "):")
+        let mut k = 0
+        while k < len(rids) {
+            println("  " + rids[k] + "  absorbed=" + abss[k] + "  " + titles[k])
+            k = k + 1
+        }
+        gi = gi + 1
+    }
+    return 0
+}
+
+pub fn handler_gate_summary(argv: [string]) -> int {
+    let stubs = rl_stubs("f1f2")
+    let mut c0 = 0
+    let mut c1 = 0
+    let mut c2 = 0
+    let mut c3 = 0
+    let mut total = 0
+    let mut absorbedTrue = 0
+    let mut absorbedFalse = 0
+    let mut si = 0
+    while si < len(stubs) {
+        let obj = json_parse_object(read_file(stubs[si].path))
+        if rl_f1f2_decodes(obj) {
+            total = total + 1
+            let g = to_string(json_object_get_path(obj, "provenance.measurement_gate"))
+            if g == "GATE_OPEN" { c0 = c0 + 1 }
+            else if g == "GATE_B_PINNED_MET" { c1 = c1 + 1 }
+            else if g == "GATE_CLOSED_MEASURED" { c2 = c2 + 1 }
+            else { c3 = c3 + 1 }
+            if to_string(json_object_get_path(obj, "provenance.absorbed")) == "true" {
+                absorbedTrue = absorbedTrue + 1
+            } else { absorbedFalse = absorbedFalse + 1 }
+        }
+        si = si + 1
+    }
+    println("total records: " + to_string(total))
+    let mut gi = 0
+    while gi < 4 {
+        let label = _gate_label(gi)
+        let n = if gi == 0 { c0 } else if gi == 1 { c1 } else if gi == 2 { c2 } else { c3 }
+        // Swift: String(repeating:" ", count: max(0, 22 - label.count)).
+        let pad = _spaces(22 - len(label))
+        println("  " + label + pad + to_string(n) + "  (" + _pct_1f(n, total) + "%)")
+        gi = gi + 1
+    }
+    println("absorbed=true:  " + to_string(absorbedTrue))
+    println("absorbed=false: " + to_string(absorbedFalse))
+    return 0
+}
+
 // handler_local(target, argv) — generic local-handler entry. Routes by the
 // manifest `target` id to the ported hexa-native handler, else the honest
 // stub. The ONE place the local family fans out — adding a ported handler is
@@ -459,6 +571,8 @@ pub fn handler_local(target: string, argv: [string]) -> int {
     if target == "list_decisions" { return handler_list("decision") }
     if target == "list_rfcs"      { return handler_list("rfc") }
     if target == "list_domains"   { return handler_list("domain") }
+    if target == "list_gates"     { return handler_list_gates(argv) }
+    if target == "gate_summary"   { return handler_gate_summary(argv) }
     // every other declared local target is not-yet-ported → honest stub.
     return handler_stub(target, argv)
 }

@@ -193,6 +193,82 @@ pub fn rl_enumerate(kind: string) -> [string] {
     return out
 }
 
+// ── full F1F2 Codable-decodability gate (RecordLoader.load .success) ─────────
+//
+// The list-gates / gate-summary verbs (#8) iterate ArtifactRegistry.loadF1F2()
+// then `guard case .success(let r) = RecordLoader.load(...)` — i.e. they SKIP
+// any record that does not fully decode as an F1F2Record (main.swift:452,471).
+// A real on-disk record (exports/.../router_*_pnr_sky130hd.json) is missing
+// `traffic` + `provenance.sim_commit_hash`, so Swift's strict Codable throws
+// and the record is dropped from BOTH the grouping and the totals.
+//
+// The looser rl_load_by_path guard (record_id|provenance present) is enough for
+// the path/id error surface (verify/show), but NOT for gate aggregation — there
+// a record either decodes WHOLLY or is invisible. rl_f1f2_decodes(obj) mirrors
+// the F1F2Record Codable contract field-for-field: every required key present
+// AND of the right kind (string / int / bool / array / map), and the
+// measurement_gate value one of the 4 enum rawValues (a non-enum value makes
+// Swift's MeasurementGate decode throw → .failure → skipped). d3: the decode
+// gate is a loader concern, so it lives here, not in the gate handler.
+
+// _rl_is_str / _rl_is_int / _rl_is_bool / _rl_is_arr — typed terminal checks on
+// a dotted path (Swift Codable requires the EXACT JSON kind; an int where a bool
+// is expected, or a float where an int is expected, throws).
+fn _rl_is_str(obj, path: string) -> bool {
+    return type_of(json_object_get_path(obj, path)) == "string"
+}
+fn _rl_is_int(obj, path: string) -> bool {
+    return type_of(json_object_get_path(obj, path)) == "int"
+}
+fn _rl_is_bool(obj, path: string) -> bool {
+    return type_of(json_object_get_path(obj, path)) == "bool"
+}
+fn _rl_is_arr(obj, path: string) -> bool {
+    return type_of(json_object_get_path(obj, path)) == "array"
+}
+
+// rl_gate_is_known(g) — is `g` one of the 4 MeasurementGate rawValues? A value
+// outside this set makes Swift's enum decode throw (record skipped).
+pub fn rl_gate_is_known(g: string) -> bool {
+    return g == "GATE_OPEN" || g == "GATE_B_PINNED_MET"
+        || g == "GATE_CLOSED_MEASURED" || g == "GATE_FAILED"
+}
+
+// rl_f1f2_decodes(obj) — true iff `obj` (a parsed record) decodes WHOLLY as the
+// Swift F1F2Record (so list-gates/gate-summary count it; else it is skipped).
+pub fn rl_f1f2_decodes(obj) -> bool {
+    if type_of(obj) != "map" { return false }
+    // top-level scalars
+    if !_rl_is_str(obj, "interface") { return false }
+    if !_rl_is_str(obj, "schema_version") { return false }
+    if !_rl_is_str(obj, "record_id") { return false }
+    if !_rl_is_str(obj, "produced_at_utc") { return false }
+    if !_rl_is_str(obj, "traffic") { return false }
+    // topology { kind:str, degree:int, node_count:int, routing:str }
+    if !_rl_is_str(obj, "topology.kind") { return false }
+    if !_rl_is_int(obj, "topology.degree") { return false }
+    if !_rl_is_int(obj, "topology.node_count") { return false }
+    if !_rl_is_str(obj, "topology.routing") { return false }
+    // verdict { f1:str, f2:str, rationale:str }
+    if !_rl_is_str(obj, "verdict.f1") { return false }
+    if !_rl_is_str(obj, "verdict.f2") { return false }
+    if !_rl_is_str(obj, "verdict.rationale") { return false }
+    // provenance — every honesty field required + the gate enum
+    if !_rl_is_bool(obj, "provenance.absorbed") { return false }
+    if !_rl_is_str(obj, "provenance.measurement_gate") { return false }
+    // gate value must be one of the 4 enum rawValues (json_object_get_str does
+    // not split on "." → use the path getter, then string-compare).
+    let g = to_string(json_object_get_path(obj, "provenance.measurement_gate"))
+    if !rl_gate_is_known(g) { return false }
+    if !_rl_is_str(obj, "provenance.sim_engine") { return false }
+    if !_rl_is_str(obj, "provenance.sim_commit_hash") { return false }
+    if !_rl_is_arr(obj, "provenance.gate_failures") { return false }
+    if !_rl_is_str(obj, "provenance.consumer_target") { return false }
+    if !_rl_is_str(obj, "provenance.atlas_cite_block") { return false }
+    if !_rl_is_arr(obj, "provenance.scope_caveats") { return false }
+    return true
+}
+
 // rl_load_by_id(id) — scan f1f2RecordsRoot for a record whose record_id == id
 // (ArtifactRegistry-style enumeration). FIRST match in sorted order wins, then
 // the matched path is re-loaded through rl_load_by_path (so the same invariant-
