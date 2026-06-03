@@ -24,7 +24,7 @@ FORGE-UTILGREEN lever-1~5 가 GEMM repack 을 전부 device 化했어도 util ME
 ### L1 — device-resident (= PyTorch eager 수준, util-GREEN)
 
 - [~] **device-resident tensor lifetime** — param/grad/moment 를 step 전체에 GPU-resident 유지(host roundtrip 0). falsifier: 기존 오라클 byte-eq max|Δ|=0 ∧ nvidia-smi devmem persist across step. **W1-① PARTIAL (PR #2555 m,v + #2559 grad-db + #2561 int4)**: m,v + bias grad db + **int4 quant(W-fwd/dW-STE, 정수-exact)** device-resident 착지(env `CLM_PROD_DEVRESIDENT`, byte-eq ALL-PASS). 잔여: dX col2im transpose(orthogonal) · self-host pod build · devmem/util fire. **③ 정밀화: 텐서 resident 만으론 부족 — op 사이 인터프리트 host glue 도 fuse 해야 util MEAN gap 닫힘**. 상세 = §W1 results.
-- [ ] **async kernel-launch pipeline + inter-op glue fusion** 〔③ 정밀화: 텐서 resident 만으론 부족〕 — step body 가 host 인터프리터 블로킹 없이 device 커널 비동기 디스패치 **AND op 사이 인터프리트 host glue(add·gelu·groupnorm·moe-router 스칼라 루프)를 device 로 fuse**(③ 가 fwd-only 내부 0% floor 로 이게 잔여 병목임을 측정). falsifier: `F-RFC046-GPU-UTILIZATION` util MEAN≥20% @ d1536/T512 (single-driver H100 sm_90 fire).
+- [ ] **async kernel-launch pipeline / per-step driver 제거 — ★ W2-CONFIRMED 진짜 unblock** 〔glue 소진(✅) 후 W2 가 MEAN 0.53% 로 측정: 인터프리트 per-step 드라이버가 floor〕 — step body 가 host 인터프리터 블로킹 없이 device 커널을 비동기 큐(host-sync 제거). glue fusion(⑤*)은 이미 done 이나 W2 가 **불충분 확정** → 핵심은 ~30 커널/step 의 host-sync 디스패치 제거(async queue / CUDA-graph ④ / 단일 fused step). falsifier: `F-RFC046-GPU-UTILIZATION` util MEAN≥20% @ d1536/T512.
 - [x] **fwd-only fused device kernel 프로토타입 + util Δ probe** ✅ W1-③ — H100 fwd-only fire: MEAN 0.56→**2.83%** (5×↑) PEAK 21→**81%**, 여전히 RED. **진단**: device 는 세게 돌 수 있음 + binding = 인터프리트 per-step glue(GEMM 아님). 텐서 resident 만으론 부족 → inter-op glue fusion(⑤) 필요. 상세 = §W1 results.
 
 ### L2 — graph capture (= torch.compile / CUDA-graph 수준)
@@ -252,6 +252,21 @@ emit-Δ: generic fma.rn.f64 count=1 (looped) vs specialized=3 (K straight-line, 
 F-FUSION-GEMM-SHAPE-SPECIALIZE: rc=0
 ```
 verdict: `.verdicts/hexa-fusion/F-FUSION-GEMM-SHAPE-SPECIALIZE.txt`. 잔여: dead-output elim(§5b 2nd) · MIR call-site auto-select · WMMA matmul 경로(`_nvptx_emit_matmul_body` K/16 tile) · silicon. raw-GEMM 우위 주장 0 — 런타임 loop-control + shape param-load 경계 제거(라이브러리는 런타임 dispatch).
+
+## ── W2 util fire verdict — 🔴 CLOSED-NEGATIVE (2026-06-03, g5 verbatim) ──
+
+full fwd+bwd device-resident step (glue 전량 device, byte-eq strict 0) 의 첫 직접 util 측정. pod H100 sm_90, d1536/T512 E2 nsamp32 epochs3, corpus 2MB, CLM_PROD_DEVRESIDENT=1 DEVFEED=1 BATCHED=1.
+
+```
+util MEAN=0.5296%  PEAK=32%  busy_mean=3.51%  pct_ge20=0.13%  n=776
+devmem=28427MiB (28GB device-resident)  peak_power=116.6W
+CE 3.82753 → 2.83301   F-CLM-PROD-DESCENT=1 (descent 🟢)
+```
+verdict: `.verdicts/hexa-fusion-w2-util/` (W2-VERDICT block). **util-GREEN gate = MEAN≥20% → 미달 🔴** (스크립트의 "GREEN(peak≥20%)" 표기는 오류 — gate 는 PEAK 아님 MEAN).
+
+**결정적 CLOSED-NEGATIVE**: util MEAN 비교 — lever-2 0.50% · lever-3 0.56% · fwd-only(③) 2.83% · **W2 full fwd+bwd 0.53%**. glue 를 전량 device 化(byte-eq 검증)했는데도 MEAN floor 가 안 닫힘 ⇒ **병목은 glue op 들이 아니라 인터프리트 per-step 드라이버 루프 자체**(~30 device 커널을 1개씩 host-sync 디스패치). full step(fwd+bwd+adam)이 fwd-only 보다 *더 낮은* 것도 일치(host 오케스트레이션 2배). **"per-op device化" 축을 결정적으로 배제** — HEXA-FUSION device-resident+glue 는 필요 인프라(main landed·byte-eq 검증)이나 util-GREEN 엔 불충분.
+
+**⇒ 다음 진짜 레버 확정**: ② async-launch pipeline(host-sync 없이 커널 큐) · ④ CUDA-graph(step 캡처/replay) · 또는 단일 fused train-step mega-kernel — 인터프리트 per-step 드라이버 제거. ⑤ fwd+bwd autograd fusion 의 "한 device 그래프" 도 이 방향. 정직 caveat: 빌드가 fe2e43a(laneg)+splice(prebuilt 가 forge_dispatch 로워링 미포함)였으나 결과 0.53% 가 전 이전 측정과 일치 → 결론 robust. paper_negative_ok 자격(닫힌 음성: per-op device화 축 배제).
 
 ## ── 전략 정정 (⑧+⑨ 합성) — 2-regime: compute-bound=MATCH · launch-bound=EXCEED ──
 
