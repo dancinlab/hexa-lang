@@ -5387,9 +5387,13 @@ fn main() {
     let argv = real_args()
     let out_path = if argv.len() >= 1 { argv[0] } else { "runtime_cuda.c" }
     let c_text = emit_runtime_cuda_c()
-    let cmd = "cat > \"" + out_path + "\" <<'__HEXA_EMIT_EOF__'\n" +
-              c_text + "__HEXA_EMIT_EOF__"
-    let _ = exec(cmd)
+    // Direct fopen-based write. The old `exec("cat > path <<EOF" + c_text + "EOF")`
+    // path passed the whole emitted C (>128KB once the device runtime grew) as a
+    // single `sh -c` argv string, tripping MAX_ARG_STRLEN (128KB) -> E2BIG, so the
+    // file silently failed to write on a fresh build host. write_file (rt_write_file)
+    // streams the bytes via fopen/fwrite with no arg-length limit; byte-identical
+    // output (same c_text), just a robust write.
+    write_file(out_path, c_text)
     let exists_check = exec("[ -f \"" + out_path + "\" ] && echo y || echo n").trim()
     if exists_check != "y" {
         println("[runtime_cuda_emit] FATAL: failed to write " + out_path)
