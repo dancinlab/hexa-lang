@@ -1,0 +1,40 @@
+C-ZERO milestone-2 — mount byte-equality oracle verdict
+context: self/native/mount.c was graduated (git rm) in commit 7906951c0 (#2065,
+  "tracked .c = 0"). The emit + byte_diff harnesses remain on main. This
+  verdict REPLAYS the byte-equality proof: the hand-written baseline is
+  restored from its pre-deletion parent commit
+  151c52c82502e93d01735c58b43b017d102fee63:self/native/mount.c (loc=55),
+  then self/native/mount_byte_diff.hexa is run with HEXA_HAL_ROOT pointing at a
+  tree containing that restored baseline. The .c is NOT re-committed.
+baseline sha256(.c) = f521136d0f0eef80532bc80640160d5956e712b01bf365dcce44baba13a5de7e
+oracle invocation:
+  HEXA_HAL_ROOT=<tree-with-restored-mount.c> hexa-run self/native/mount_byte_diff.hexa
+raw stdout (verbatim):
+------------------------------------------------------------------------
+========================================================================
+  self/native — mount_byte_diff: B9.C-10 .c-text byte-diff oracle
+========================================================================
+  generator: self/native/mount_emit.hexa
+  oracle:    source-SHA byte-diff vs hand-written mount.c
+  note:      runtime.c #include fragment — .o proof via full hexa_cc build
+
+  scratch: /var/folders/pg/76j9wlc94l13bb2mwp2szvgh0000gn/T/mount_byte_diff.XXXXXX.eUZy87cZUk
+
+  [PASS] hexa emitter self/native/mount_emit.hexa present
+         · /tmp/cz-m2/self/native/mount_emit.hexa
+  [PASS] hand-written self/native/mount.c present
+         · /tmp/cz-m2/self/native/mount.c
+  [PASS] gate-1 source-text byte-identical (sha256(.c))
+         · orig=f521136d0f0eef80532bc80640160d5956e712b01bf365dcce44baba13a5de7e gen=f521136d0f0eef80532bc80640160d5956e712b01bf365dcce44baba13a5de7e
+
+  B9.C-10 mount.c .c-text byte-identity:
+    PROVEN ✓ — hand-written mount.c is fully hexa-emittable.
+    DELETION GATE OPEN — self/native/mount.c may be `git rm` once the
+    full hexa_cc build (regen + runtime.c compile + smoke) also PASSes.
+========================================================================
+  3/3 checks passed
+__HEXA_LANG_MOUNT_BYTE_DIFF__ PASS
+------------------------------------------------------------------------
+VERDICT: BYTE-EQ — emitter self/native/mount_emit.hexa reproduces the
+  hand-written self/native/mount.c byte-for-byte (sha256 match, 3/3 checks).
+  mount C shim is emitter-superseded / oracle-proven-retirable (55 LOC).

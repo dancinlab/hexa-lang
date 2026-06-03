@@ -1,0 +1,40 @@
+C-ZERO milestone-2 — wait byte-equality oracle verdict
+context: self/native/wait.c was graduated (git rm) in commit 7906951c0 (#2065,
+  "tracked .c = 0"). The emit + byte_diff harnesses remain on main. This
+  verdict REPLAYS the byte-equality proof: the hand-written baseline is
+  restored from its pre-deletion parent commit
+  151c52c82502e93d01735c58b43b017d102fee63:self/native/wait.c (loc=67),
+  then self/native/wait_byte_diff.hexa is run with HEXA_HAL_ROOT pointing at a
+  tree containing that restored baseline. The .c is NOT re-committed.
+baseline sha256(.c) = 9c9bc95f9990381aecda8b33733855e1bbbd3553984a741bb34b470f8e0f1838
+oracle invocation:
+  HEXA_HAL_ROOT=<tree-with-restored-wait.c> hexa-run self/native/wait_byte_diff.hexa
+raw stdout (verbatim):
+------------------------------------------------------------------------
+========================================================================
+  self/native — wait_byte_diff: B9.C-10 .c-text byte-diff oracle
+========================================================================
+  generator: self/native/wait_emit.hexa
+  oracle:    source-SHA byte-diff vs hand-written wait.c
+  note:      runtime.c #include fragment — .o proof via full hexa_cc build
+
+  scratch: /var/folders/pg/76j9wlc94l13bb2mwp2szvgh0000gn/T/wait_byte_diff.XXXXXX.Y7ae7yOrbD
+
+  [PASS] hexa emitter self/native/wait_emit.hexa present
+         · /tmp/cz-m2/self/native/wait_emit.hexa
+  [PASS] hand-written self/native/wait.c present
+         · /tmp/cz-m2/self/native/wait.c
+  [PASS] gate-1 source-text byte-identical (sha256(.c))
+         · orig=9c9bc95f9990381aecda8b33733855e1bbbd3553984a741bb34b470f8e0f1838 gen=9c9bc95f9990381aecda8b33733855e1bbbd3553984a741bb34b470f8e0f1838
+
+  B9.C-10 wait.c .c-text byte-identity:
+    PROVEN ✓ — hand-written wait.c is fully hexa-emittable.
+    DELETION GATE OPEN — self/native/wait.c may be `git rm` once the
+    full hexa_cc build (regen + runtime.c compile + smoke) also PASSes.
+========================================================================
+  3/3 checks passed
+__HEXA_LANG_WAIT_BYTE_DIFF__ PASS
+------------------------------------------------------------------------
+VERDICT: BYTE-EQ — emitter self/native/wait_emit.hexa reproduces the
+  hand-written self/native/wait.c byte-for-byte (sha256 match, 3/3 checks).
+  wait C shim is emitter-superseded / oracle-proven-retirable (67 LOC).

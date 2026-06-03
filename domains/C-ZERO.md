@@ -24,8 +24,14 @@ self-host build passes, (3) writing emitters+oracles for the units that still la
       (sha256 match) → `.verdicts/c-zero/fp_init.txt`
 - [ ] rt_* shim sweep — run the remaining 15 `self/native/*_byte_diff.hexa` oracles to verdicts,
       retire each `.c` whose oracle is green AND the full hexa_cc build passes
-- [ ] per-port verdict gate — every retire backed by `.verdicts/c-zero/<module>.txt` (g63)
+      → M2 (2026-06-03): 4/15 done — `proc_fork`·`crypto_openssl`·`mount`·`wait` all BYTE-EQ,
+        verdicts persisted. (These `.c` were already graduated in #2065; oracle replays the proof.)
+- [x] per-port verdict gate — every retire backed by `.verdicts/c-zero/<module>.txt` (g63)
+      → fp_init + proc_fork + crypto_openssl + mount + wait verdicts present; each BYTE-EQ with
+        raw stdout verbatim (backstop holds for the batch retired so far).
 - [ ] C-LOC burn-down ledger — running total of live authored C across the ecosystem
+      → oracle-proven-retirable so far: fp_init 59 + proc_fork 37 + crypto_openssl 47 + mount 55 +
+        wait 67 = **265 LOC** (M2 added 206). Tracked `self/native/*.c` on main = 0 (graduated #2065).
 - [ ] `hexa_cc.c` (28482 LOC) — the dominant remaining authored-C mass; needs an emitter or a
       native-hexa self-host of the cc driver (large; multi-PR)
 

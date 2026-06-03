@@ -1,0 +1,40 @@
+C-ZERO milestone-2 — proc_fork byte-equality oracle verdict
+context: self/native/proc_fork.c was graduated (git rm) in commit 7906951c0 (#2065,
+  "tracked .c = 0"). The emit + byte_diff harnesses remain on main. This
+  verdict REPLAYS the byte-equality proof: the hand-written baseline is
+  restored from its pre-deletion parent commit
+  151c52c82502e93d01735c58b43b017d102fee63:self/native/proc_fork.c (loc=37),
+  then self/native/proc_fork_byte_diff.hexa is run with HEXA_HAL_ROOT pointing at a
+  tree containing that restored baseline. The .c is NOT re-committed.
+baseline sha256(.c) = ba3cf3f1fe7a6f892f9ea8a08c6322c0bd6a21f7f11fe029d43af1a644934400
+oracle invocation:
+  HEXA_HAL_ROOT=<tree-with-restored-proc_fork.c> hexa-run self/native/proc_fork_byte_diff.hexa
+raw stdout (verbatim):
+------------------------------------------------------------------------
+========================================================================
+  self/native — proc_fork_byte_diff: B9.C-10 .c-text byte-diff oracle
+========================================================================
+  generator: self/native/proc_fork_emit.hexa
+  oracle:    source-SHA byte-diff vs hand-written proc_fork.c
+  note:      runtime.c #include fragment — .o proof via full hexa_cc build
+
+  scratch: /var/folders/pg/76j9wlc94l13bb2mwp2szvgh0000gn/T/proc_fork_byte_diff.XXXXXX.Bu4quDkJty
+
+  [PASS] hexa emitter self/native/proc_fork_emit.hexa present
+         · /tmp/cz-m2/self/native/proc_fork_emit.hexa
+  [PASS] hand-written self/native/proc_fork.c present
+         · /tmp/cz-m2/self/native/proc_fork.c
+  [PASS] gate-1 source-text byte-identical (sha256(.c))
+         · orig=ba3cf3f1fe7a6f892f9ea8a08c6322c0bd6a21f7f11fe029d43af1a644934400 gen=ba3cf3f1fe7a6f892f9ea8a08c6322c0bd6a21f7f11fe029d43af1a644934400
+
+  B9.C-10 proc_fork.c .c-text byte-identity:
+    PROVEN ✓ — hand-written proc_fork.c is fully hexa-emittable.
+    DELETION GATE OPEN — self/native/proc_fork.c may be `git rm` once the
+    full hexa_cc build (regen + runtime.c compile + smoke) also PASSes.
+========================================================================
+  3/3 checks passed
+__HEXA_LANG_PROC_FORK_BYTE_DIFF__ PASS
+------------------------------------------------------------------------
+VERDICT: BYTE-EQ — emitter self/native/proc_fork_emit.hexa reproduces the
+  hand-written self/native/proc_fork.c byte-for-byte (sha256 match, 3/3 checks).
+  proc_fork C shim is emitter-superseded / oracle-proven-retirable (37 LOC).
