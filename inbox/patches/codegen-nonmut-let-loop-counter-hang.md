@@ -2,7 +2,7 @@
 
 - **Source**: anima #1795 (OMEGA-C / HEXAD cross-module forward wiring), filed cross-repo per `a_runpod_inbox`.
 - **Toolchain**: `hexa 0.1.0-dispatch`, `hexa run` → `hexat` → clang (compiled codegen path; interp retired).
-- **Status**: ✅ RESOLVED (2026-06-04) — fixed by the **HX2006 immutability diagnostic** at S2 (bind), so the previously-SILENT write is now a VISIBLE compile-time diagnostic instead of a silent runtime hang. See "Resolution" below.
+- **Status**: ✅ RESOLVED (2026-06-04) — PR **#2668** — fixed by the **HX2006 immutability diagnostic** at S2 (bind), so the previously-SILENT write is now a VISIBLE compile-time diagnostic instead of a silent runtime hang. See "Resolution" below.
 - **Severity**: correctness — a loop that should terminate runs forever. No compile-time diagnostic; the failure is silent at runtime.
 
 ## Resolution (2026-06-04)
