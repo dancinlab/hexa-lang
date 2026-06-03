@@ -23,6 +23,7 @@ import "stdlib/demi/cellrun.hexa"
 import "stdlib/demi/domain_composer.hexa"
 import "stdlib/demi/domain_catalog.hexa"
 import "stdlib/demi/operation_registry.hexa"
+import "stdlib/demi/backend_resolver.hexa"
 
 // handler_stub(target, argv) — a DECLARED-but-unported local verb. Prints an
 // honest notice naming the verb + the stacked-PR that will port it, and
@@ -1215,6 +1216,58 @@ pub fn handler_operate(argv: [string]) -> int {
     return 2
 }
 
+// `demi backend [list|current]` — the compute-backend surface (Swift
+// `backend`, CLI+COCKPIT M17). Local default + `DEMIURGE_BACKEND` user
+// remote; owner pool hosts (from ~/.pool/pool.json, NOT hardcoded) only
+// in owner mode. Read-only. Reuses BackendResolver (backend_resolver.hexa)
+// + the operate-family flag/mode helpers (d3 — _operate_first_sub /
+// _operate_owner / _operate_expert: same `--owner` + DEMIURGE_OWNER /
+// DEMIURGE_EXPERT semantics).
+//
+//   list  → one row per visible backend, "▶" marking the active id (else a
+//           leading space). Plain shows the friendly label; expert (M19)
+//           shows "<id>  [<kind>]  <label> — <host>". `🔒` tags owner rows.
+//           When owner pool hosts are hidden, a trailing "(🔒 …)" hint line.
+//           Closes with an "active: <id> …" line. Exit 0.
+//   current → "active backend: <id> · <label> — <host>". Exit 0.
+//   <other> → stderr "backend: unknown subcommand …", exit 2.
+pub fn handler_backend(argv: [string]) -> int {
+    // Swift `args.first(where: { !$0.hasPrefix("--") }) ?? "list"`.
+    let sub = _operate_first_sub(argv)
+    // Swift `args.contains("--owner") || ownerModeEnabled`.
+    let owner = _operate_owner(argv)
+    if sub == "list" {
+        let active = br_active()
+        let expert = _operate_expert()
+        let bks = br_available(owner)
+        let mut i = 0
+        while i < len(bks) {
+            let b = bks[i]
+            i = i + 1
+            let mark = if b.id == active.id { "▶" } else { " " }
+            let gate = if b.owner { " 🔒" } else { "" }
+            if expert {
+                println(mark + " " + b.id + gate + "  [" + b.kind + "]  "
+                        + b.label + " — " + b.host)
+            } else {
+                println(mark + " " + b.label + gate)
+            }
+        }
+        if !owner {
+            println("(🔒 owner pool hosts hidden — DEMIURGE_OWNER + ~/.pool/pool.json)")
+        }
+        println("active: " + active.id + "  (change via DEMIURGE_BACKEND env)")
+        return 0
+    }
+    if sub == "current" {
+        let b = br_active()
+        println("active backend: " + b.id + " · " + b.label + " — " + b.host)
+        return 0
+    }
+    eprintln("backend: unknown subcommand '" + sub + "' — use list | current")
+    return 2
+}
+
 pub fn handler_local(target: string, argv: [string]) -> int {
     if target == "action" { return handler_action(argv) }
     if target == "verify" { return handler_verify(argv) }
@@ -1233,6 +1286,7 @@ pub fn handler_local(target: string, argv: [string]) -> int {
     if target == "list_shelf"     { return handler_list_shelf(argv) }
     if target == "compose"        { return handler_compose(argv) }
     if target == "operate"        { return handler_operate(argv) }
+    if target == "backend"        { return handler_backend(argv) }
     // every other declared local target is not-yet-ported → honest stub.
     return handler_stub(target, argv)
 }
