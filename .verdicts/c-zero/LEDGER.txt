@@ -1,0 +1,80 @@
+C-ZERO — C-LOC BURN-DOWN LEDGER (milestone 5)
+captured 2026-06-03 on host `mini` (hexa 0.1.0, self-host default)
+scope: hexa-lang (~/dancinlab/hexa-lang). Sibling-repo C is vendored / deploy-snapshot /
+  external-fork (anima, void) — not a live hexa-lang build path; see INVENTORY.txt §B.
+
+This ledger is the milestone-5 "C-LOC ledger trending to 0" deliverable. It is HONEST (g63):
+"oracle-proven-retirable" means a green byte-diff verdict (sha256(emitter output) ==
+sha256(authored .c), 3/3 checks) is persisted under .verdicts/c-zero/<mod>.txt. It does NOT
+claim the .c is git-removed-on-HEAD beyond what #2065 already did, nor that the full hexa_cc
+self-host build gate has been re-run this milestone (that gate stays as the final retire step).
+
+════════════════════════════════════════════════════════════════════════════
+1. LIVE AUTHORED-C TOTAL (hexa-lang, excl. emitted runtime)
+════════════════════════════════════════════════════════════════════════════
+  class                                          LOC      note
+  A2 native FFI-shims (17 modules)             32428      16 emitter-backed + hexa_cc.c
+  A3 cuda/forge GPU substrate (3 files)         4925      emitters present; GPU host needed
+  ──────────────────────────────────────────────────────────────────────────
+  TOTAL live authored-C                        37353
+
+  (A1 runtime.c / runtime_core.c / runtime_hi_gen.c = 23651 LOC is EMITTED from *_emit.hexa
+   SSOTs — no authored C — so it is NOT counted as live authored-C burn-down debt.)
+
+════════════════════════════════════════════════════════════════════════════
+2. ORACLE-PROVEN-RETIRABLE (green byte-diff verdict persisted)
+════════════════════════════════════════════════════════════════════════════
+  A2 native FFI-shims — ALL 16 emitter-backed modules now BYTE-EQ:
+
+  module               LOC    verdict                          milestone
+  fp_init               59    BYTE-EQ  fp_init.txt              M1 (#2601)
+  proc_fork             37    BYTE-EQ  proc_fork.txt            M2 (#2604)
+  crypto_openssl        47    BYTE-EQ  crypto_openssl.txt       M2 (#2604)
+  mount                 55    BYTE-EQ  mount.txt                M2 (#2604)
+  wait                  67    BYTE-EQ  wait.txt                 M2 (#2604)
+  exec_argv_sha256     470    BYTE-EQ  exec_argv_sha256.txt     M5 (this PR)
+  exec_pipe            114    BYTE-EQ  exec_pipe.txt            M5 (this PR)
+  namespace            106    BYTE-EQ  namespace.txt            M5 (this PR)
+  net                  661    BYTE-EQ  net.txt                  M5 (this PR)
+  persistent_pipe      427    BYTE-EQ  persistent_pipe.txt      M5 (this PR)
+  pty                  246    BYTE-EQ  pty.txt                  M5 (this PR)
+  signal_flock         304    BYTE-EQ  signal_flock.txt         M5 (this PR)
+  tensor_kernels       306    BYTE-EQ  tensor_kernels.txt       M5 (this PR)
+  term_ffi             434    BYTE-EQ  term_ffi.txt             M5 (this PR)
+  thread               277    BYTE-EQ  thread.txt               M5 (this PR)
+  crypto_sodium        336    BYTE-EQ  crypto_sodium.txt        M5 (this PR)
+  ──────────────────────────────────────────────────────────────────────────
+  prior cumulative (M1+M2, 5 modules)          265 LOC
+  this milestone (M5, 11 modules)             3681 LOC
+  ──────────────────────────────────────────────────────────────────────────
+  CUMULATIVE oracle-proven-retirable          3946 LOC  ← all 16 A2 emitter-backed shims
+
+  ⇒ The ENTIRE A2 emitter-backed FFI-shim mass (16/16 modules, 3946 LOC) is now
+    byte-diff-proven. The non-GPU emitter-backed shim sweep is COMPLETE.
+
+════════════════════════════════════════════════════════════════════════════
+3. REMAINING (named, honest)
+════════════════════════════════════════════════════════════════════════════
+  unit                              LOC     status / owner
+  self/native/hexa_cc.c           28482     NO emitter — the cc driver. OWNED BY a separate
+                                            domain (HEXA-CC-ZERO). Needs an emitter or a
+                                            native-hexa self-host of the cc driver (large,
+                                            multi-PR). NOT in C-ZERO scope.
+  A3 cuda/runtime_bf16.c            787     DEFERRED — GPU substrate. Emitter present, but
+  A3 cuda/runtime_cuda.c           3795     byte/run parity needs a CUDA GPU host (none on
+  A3 forge/forge_tier_v1.c          343     `mini`). Not faked. → re-run on a pool RTX host.
+  ──────────────────────────────────────────────────────────────────────────
+  remaining-named total           33407 LOC  (hexa_cc 28482 + GPU 4925)
+
+════════════════════════════════════════════════════════════════════════════
+4. BURN-DOWN SUMMARY
+════════════════════════════════════════════════════════════════════════════
+  live-C total            : 37353 LOC
+  proven-retirable        :  3946 LOC  (16/16 A2 emitter-backed shims — COMPLETE)
+  remaining-named         : 33407 LOC  (hexa_cc.c 28482 = HEXA-CC-ZERO-owned ;
+                                        GPU shims 4925 = DEFERRED, needs GPU host)
+
+  burn-down %             :  3946 / 37353 = 10.6% of live authored-C oracle-proven-retirable.
+  Of the NON-hexa_cc, NON-GPU surface (the part C-ZERO actually owns and can prove on this
+  host), the sweep is 100% complete (3946 / 3946). The remaining 89.4% is the two named,
+  out-of-this-host blocks above — both explicitly attributed, neither closed nor faked.

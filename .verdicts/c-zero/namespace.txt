@@ -1,0 +1,40 @@
+C-ZERO milestone-5 — namespace byte-equality oracle verdict
+context: self/native/namespace.c was graduated (git rm) in commit 7906951c0 (#2065,
+  "tracked .c = 0"). The emit + byte_diff harnesses remain on main. This
+  verdict REPLAYS the byte-equality proof: the hand-written baseline is
+  restored from its pre-deletion parent commit
+  151c52c82502e93d01735c58b43b017d102fee63:self/native/namespace.c (loc=106),
+  then self/native/namespace_byte_diff.hexa is run with HEXA_HAL_ROOT pointing at a
+  tree containing that restored baseline. The .c is NOT re-committed.
+baseline sha256(.c) = 406864f6bfb11191c65e21778b9ea0d11ae53499dbf2258dcbe954b4959cdc24
+oracle invocation:
+  HEXA_HAL_ROOT=<tree-with-restored-namespace.c> hexa-run self/native/namespace_byte_diff.hexa
+raw stdout (verbatim):
+------------------------------------------------------------------------
+========================================================================
+  self/native — namespace_byte_diff: B9.C-10 .c-text byte-diff oracle
+========================================================================
+  generator: self/native/namespace_emit.hexa
+  oracle:    source-SHA byte-diff vs hand-written namespace.c
+  note:      runtime.c #include fragment — .o proof via full hexa_cc build
+
+  scratch: /var/folders/pg/76j9wlc94l13bb2mwp2szvgh0000gn/T/namespace_byte_diff.XXXXXX.3qB4dN9ofG
+
+  [PASS] hexa emitter self/native/namespace_emit.hexa present
+         · /tmp/cz-hal/self/native/namespace_emit.hexa
+  [PASS] hand-written self/native/namespace.c present
+         · /tmp/cz-hal/self/native/namespace.c
+  [PASS] gate-1 source-text byte-identical (sha256(.c))
+         · orig=406864f6bfb11191c65e21778b9ea0d11ae53499dbf2258dcbe954b4959cdc24 gen=406864f6bfb11191c65e21778b9ea0d11ae53499dbf2258dcbe954b4959cdc24
+
+  B9.C-10 namespace.c .c-text byte-identity:
+    PROVEN ✓ — hand-written namespace.c is fully hexa-emittable.
+    DELETION GATE OPEN — self/native/namespace.c may be `git rm` once the
+    full hexa_cc build (regen + runtime.c compile + smoke) also PASSes.
+========================================================================
+  3/3 checks passed
+__HEXA_LANG_NAMESPACE_BYTE_DIFF__ PASS
+------------------------------------------------------------------------
+VERDICT: BYTE-EQ — emitter self/native/namespace_emit.hexa reproduces the
+  hand-written self/native/namespace.c byte-for-byte (sha256 match, 3/3 checks).
+  namespace C shim is emitter-superseded / oracle-proven-retirable (106 LOC).

@@ -22,18 +22,23 @@ self-host build passes, (3) writing emitters+oracles for the units that still la
       → `.verdicts/c-zero/INVENTORY.txt`
 - [x] first runtime `.c` port w/ RUNEQ — `fp_init.c` (59 LOC) byte-diff oracle GREEN
       (sha256 match) → `.verdicts/c-zero/fp_init.txt`
-- [ ] rt_* shim sweep — run the remaining 15 `self/native/*_byte_diff.hexa` oracles to verdicts,
+- [x] rt_* shim sweep — run the remaining 15 `self/native/*_byte_diff.hexa` oracles to verdicts,
       retire each `.c` whose oracle is green AND the full hexa_cc build passes
-      → M2 (2026-06-03): 4/15 done — `proc_fork`·`crypto_openssl`·`mount`·`wait` all BYTE-EQ,
-        verdicts persisted. (These `.c` were already graduated in #2065; oracle replays the proof.)
+      → DONE (15/15): M2 4 (`proc_fork`·`crypto_openssl`·`mount`·`wait`) + M5 11
+        (`exec_argv_sha256`·`exec_pipe`·`namespace`·`net`·`persistent_pipe`·`pty`·`signal_flock`·
+        `tensor_kernels`·`term_ffi`·`thread`·`crypto_sodium`) — ALL BYTE-EQ, 3/3, verdicts persisted.
+        (These `.c` were already graduated in #2065; oracle replays the proof, .c NOT re-committed.)
 - [x] per-port verdict gate — every retire backed by `.verdicts/c-zero/<module>.txt` (g63)
-      → fp_init + proc_fork + crypto_openssl + mount + wait verdicts present; each BYTE-EQ with
-        raw stdout verbatim (backstop holds for the batch retired so far).
-- [ ] C-LOC burn-down ledger — running total of live authored C across the ecosystem
-      → oracle-proven-retirable so far: fp_init 59 + proc_fork 37 + crypto_openssl 47 + mount 55 +
-        wait 67 = **265 LOC** (M2 added 206). Tracked `self/native/*.c` on main = 0 (graduated #2065).
-- [ ] `hexa_cc.c` (28482 LOC) — the dominant remaining authored-C mass; needs an emitter or a
-      native-hexa self-host of the cc driver (large; multi-PR)
+      → all 16 A2 emitter-backed shims have a BYTE-EQ verdict with raw stdout verbatim
+        (fp_init + the 15 swept). Gate holds for the entire A2 mass.
+- [x] C-LOC burn-down ledger — running total of live authored C across the ecosystem
+      → `.verdicts/c-zero/LEDGER.txt`: live-C 37353 LOC / proven-retirable **3946 LOC**
+        (16/16 A2 shims, COMPLETE) / remaining-named 33407 (`hexa_cc.c` 28482 + GPU 4925).
+- [ ] A3 GPU shims (cuda/forge, 4925 LOC) — DEFERRED: byte/run parity needs a CUDA GPU host
+      (none on `mini`). Emitters present; re-run the oracle on a pool RTX host. Not faked.
+- [ ] `hexa_cc.c` (28482 LOC) — the dominant remaining authored-C mass; OWNED BY a separate
+      domain (HEXA-CC-ZERO). Needs an emitter or a native-hexa self-host of the cc driver
+      (large; multi-PR). Out of C-ZERO scope.
 
 ## scope (reachable repos this run)
 

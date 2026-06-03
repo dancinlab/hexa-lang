@@ -1,5 +1,44 @@
 # C-ZERO — log (append-only)
 
+## 2026-06-03 — milestone: full shim oracle sweep + burn-down ledger
+
+Ran the replay byte-diff oracle for the REMAINING 11 emitter-backed A2 shims (INVENTORY A2 not
+yet done). Recipe (same as M2): restore the authored baseline from pre-deletion parent
+`151c52c82502e93d01735c58b43b017d102fee63:self/native/<mod>.c`, run
+`HEXA_HAL_ROOT=<tree-with-restored-.c> hexa-run self/native/<mod>_byte_diff.hexa`, compare
+`sha256(emitter output)` vs `sha256(authored .c)`. The restored `.c` are NOT re-committed
+(main stays .c-zero). All 11 PASS, 3/3 checks, exit 0. Per-module:
+
+- [x] `exec_argv_sha256` (470 LOC) — BYTE-EQ. sha256(.c)=`df5410aa...ee52a937`. `__HEXA_LANG_EXEC_ARGV_SHA256_BYTE_DIFF__ PASS` (3/3). → `.verdicts/c-zero/exec_argv_sha256.txt`
+- [x] `exec_pipe` (114 LOC) — BYTE-EQ. sha256(.c)=`aa3b15e8...9a4c6cf5`. `__HEXA_LANG_EXEC_PIPE_BYTE_DIFF__ PASS` (3/3). → `.verdicts/c-zero/exec_pipe.txt`
+- [x] `namespace` (106 LOC) — BYTE-EQ. sha256(.c)=`406864f6...959cdc24`. `__HEXA_LANG_NAMESPACE_BYTE_DIFF__ PASS` (3/3). → `.verdicts/c-zero/namespace.txt`
+- [x] `net` (661 LOC) — BYTE-EQ. sha256(.c)=`7926419f...6ab50f2a`. `__HEXA_LANG_NET_BYTE_DIFF__ PASS` (3/3). → `.verdicts/c-zero/net.txt`
+- [x] `persistent_pipe` (427 LOC) — BYTE-EQ. sha256(.c)=`51bb9d4c...45ae8fa1`. `__HEXA_LANG_PERSISTENT_PIPE_BYTE_DIFF__ PASS` (3/3). → `.verdicts/c-zero/persistent_pipe.txt`
+- [x] `pty` (246 LOC) — BYTE-EQ. sha256(.c)=`2a49b477...a24679c4`. `__HEXA_LANG_PTY_BYTE_DIFF__ PASS` (3/3). → `.verdicts/c-zero/pty.txt`
+- [x] `signal_flock` (304 LOC) — BYTE-EQ. sha256(.c)=`c89e3c8c...f444d02d`. `__HEXA_LANG_SIGNAL_FLOCK_BYTE_DIFF__ PASS` (3/3). → `.verdicts/c-zero/signal_flock.txt`
+- [x] `tensor_kernels` (306 LOC) — BYTE-EQ. sha256(.c)=`b201b858...72ec4d99`. `__HEXA_LANG_TENSOR_KERNELS_BYTE_DIFF__ PASS` (3/3). → `.verdicts/c-zero/tensor_kernels.txt`
+- [x] `term_ffi` (434 LOC) — BYTE-EQ. sha256(.c)=`8caa4c13...2457ad91`. `__HEXA_LANG_TERM_FFI_BYTE_DIFF__ PASS` (3/3). → `.verdicts/c-zero/term_ffi.txt`
+- [x] `thread` (277 LOC) — BYTE-EQ. sha256(.c)=`cc5f4bda...35c1b4ac`. `__HEXA_LANG_THREAD_BYTE_DIFF__ PASS` (3/3). → `.verdicts/c-zero/thread.txt`
+- [x] `crypto_sodium` (336 LOC) — BYTE-EQ. sha256(.c)=`d5e0929d...39ba24fa`. `__HEXA_LANG_CRYPTO_SODIUM_BYTE_DIFF__ PASS` (3/3). → `.verdicts/c-zero/crypto_sodium.txt`
+
+A3 GPU shims (DEFERRED — not faked, parity needs a CUDA GPU host, none on `mini`):
+
+- [ ] `cuda/runtime_bf16.c` (787 LOC) — DEFERRED: byte/run parity needs a CUDA GPU host.
+- [ ] `cuda/runtime_cuda.c` (3795 LOC) — DEFERRED: byte/run parity needs a CUDA GPU host.
+- [ ] `forge/forge_tier_v1.c` (343 LOC) — DEFERRED: byte/run parity needs a CUDA GPU host.
+
+**This milestone: 3681 LOC oracle-proven-retirable (11 modules, all BYTE-EQ).**
+**Cumulative (M1 265 + M5 3681): 3946 LOC — the ENTIRE A2 16/16 emitter-backed shim mass.**
+
+C-LOC burn-down ledger published → `.verdicts/c-zero/LEDGER.txt`:
+live-C total 37353 LOC / proven-retirable 3946 LOC (16/16 A2 shims, COMPLETE) /
+remaining-named 33407 LOC (`hexa_cc.c` 28482 = HEXA-CC-ZERO-owned; GPU shims 4925 = DEFERRED).
+
+Honest finding (g63): the INVENTORY "emitter-backed: 8871 LOC" figure folded A3 GPU (4925) into
+the A2 shim count; the actual A2 emitter-backed shim mass is 3946 LOC, and it is now 100%
+byte-diff-proven. The non-GPU, non-`hexa_cc` shim sweep that C-ZERO owns and can prove on this
+host is COMPLETE. Restored `.c` files were NOT re-committed; main stays tracked-.c-zero (#2065).
+
 ## 2026-06-03 — milestone 2: shim oracle batch
 
 Ran the byte-equality oracles for the next-smallest emitter-backed shims. Per-module:

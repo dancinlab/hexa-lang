@@ -1,0 +1,40 @@
+C-ZERO milestone-5 — persistent_pipe byte-equality oracle verdict
+context: self/native/persistent_pipe.c was graduated (git rm) in commit 7906951c0 (#2065,
+  "tracked .c = 0"). The emit + byte_diff harnesses remain on main. This
+  verdict REPLAYS the byte-equality proof: the hand-written baseline is
+  restored from its pre-deletion parent commit
+  151c52c82502e93d01735c58b43b017d102fee63:self/native/persistent_pipe.c (loc=427),
+  then self/native/persistent_pipe_byte_diff.hexa is run with HEXA_HAL_ROOT pointing at a
+  tree containing that restored baseline. The .c is NOT re-committed.
+baseline sha256(.c) = 51bb9d4ca2bc5bd7b2069b6357521aec2c0a39d47ce6cbd84d5ed90545ae8fa1
+oracle invocation:
+  HEXA_HAL_ROOT=<tree-with-restored-persistent_pipe.c> hexa-run self/native/persistent_pipe_byte_diff.hexa
+raw stdout (verbatim):
+------------------------------------------------------------------------
+========================================================================
+  self/native — persistent_pipe_byte_diff: B9.C-10 .c-text byte-diff oracle
+========================================================================
+  generator: self/native/persistent_pipe_emit.hexa
+  oracle:    source-SHA byte-diff vs hand-written persistent_pipe.c
+  note:      runtime.c #include fragment — .o proof via full hexa_cc build
+
+  scratch: /var/folders/pg/76j9wlc94l13bb2mwp2szvgh0000gn/T/persistent_pipe_byte_diff.XXXXXX.KToXiz1hdi
+
+  [PASS] hexa emitter self/native/persistent_pipe_emit.hexa present
+         · /tmp/cz-hal/self/native/persistent_pipe_emit.hexa
+  [PASS] hand-written self/native/persistent_pipe.c present
+         · /tmp/cz-hal/self/native/persistent_pipe.c
+  [PASS] gate-1 source-text byte-identical (sha256(.c))
+         · orig=51bb9d4ca2bc5bd7b2069b6357521aec2c0a39d47ce6cbd84d5ed90545ae8fa1 gen=51bb9d4ca2bc5bd7b2069b6357521aec2c0a39d47ce6cbd84d5ed90545ae8fa1
+
+  B9.C-10 persistent_pipe.c .c-text byte-identity:
+    PROVEN ✓ — hand-written persistent_pipe.c is fully hexa-emittable.
+    DELETION GATE OPEN — self/native/persistent_pipe.c may be `git rm` once the
+    full hexa_cc build (regen + runtime.c compile + smoke) also PASSes.
+========================================================================
+  3/3 checks passed
+__HEXA_LANG_PERSISTENT_PIPE_BYTE_DIFF__ PASS
+------------------------------------------------------------------------
+VERDICT: BYTE-EQ — emitter self/native/persistent_pipe_emit.hexa reproduces the
+  hand-written self/native/persistent_pipe.c byte-for-byte (sha256 match, 3/3 checks).
+  persistent_pipe C shim is emitter-superseded / oracle-proven-retirable (427 LOC).

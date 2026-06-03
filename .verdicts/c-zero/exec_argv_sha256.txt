@@ -1,0 +1,40 @@
+C-ZERO milestone-5 — exec_argv_sha256 byte-equality oracle verdict
+context: self/native/exec_argv_sha256.c was graduated (git rm) in commit 7906951c0 (#2065,
+  "tracked .c = 0"). The emit + byte_diff harnesses remain on main. This
+  verdict REPLAYS the byte-equality proof: the hand-written baseline is
+  restored from its pre-deletion parent commit
+  151c52c82502e93d01735c58b43b017d102fee63:self/native/exec_argv_sha256.c (loc=470),
+  then self/native/exec_argv_sha256_byte_diff.hexa is run with HEXA_HAL_ROOT pointing at a
+  tree containing that restored baseline. The .c is NOT re-committed.
+baseline sha256(.c) = df5410aad6ef48acdd906cd295ee9972b19f71f945143ad2bcf9d57eee52a937
+oracle invocation:
+  HEXA_HAL_ROOT=<tree-with-restored-exec_argv_sha256.c> hexa-run self/native/exec_argv_sha256_byte_diff.hexa
+raw stdout (verbatim):
+------------------------------------------------------------------------
+========================================================================
+  self/native — exec_argv_sha256_byte_diff: B9.C-10 .c-text byte-diff oracle
+========================================================================
+  generator: self/native/exec_argv_sha256_emit.hexa
+  oracle:    source-SHA byte-diff vs hand-written exec_argv_sha256.c
+  note:      runtime.c #include fragment — .o proof via full hexa_cc build
+
+  scratch: /var/folders/pg/76j9wlc94l13bb2mwp2szvgh0000gn/T/exec_argv_sha256_byte_diff.XXXXXX.SqjImcmMG8
+
+  [PASS] hexa emitter self/native/exec_argv_sha256_emit.hexa present
+         · /tmp/cz-hal/self/native/exec_argv_sha256_emit.hexa
+  [PASS] hand-written self/native/exec_argv_sha256.c present
+         · /tmp/cz-hal/self/native/exec_argv_sha256.c
+  [PASS] gate-1 source-text byte-identical (sha256(.c))
+         · orig=df5410aad6ef48acdd906cd295ee9972b19f71f945143ad2bcf9d57eee52a937 gen=df5410aad6ef48acdd906cd295ee9972b19f71f945143ad2bcf9d57eee52a937
+
+  B9.C-10 exec_argv_sha256.c .c-text byte-identity:
+    PROVEN ✓ — hand-written exec_argv_sha256.c is fully hexa-emittable.
+    DELETION GATE OPEN — self/native/exec_argv_sha256.c may be `git rm` once the
+    full hexa_cc build (regen + runtime.c compile + smoke) also PASSes.
+========================================================================
+  3/3 checks passed
+__HEXA_LANG_EXEC_ARGV_SHA256_BYTE_DIFF__ PASS
+------------------------------------------------------------------------
+VERDICT: BYTE-EQ — emitter self/native/exec_argv_sha256_emit.hexa reproduces the
+  hand-written self/native/exec_argv_sha256.c byte-for-byte (sha256 match, 3/3 checks).
+  exec_argv_sha256 C shim is emitter-superseded / oracle-proven-retirable (470 LOC).
