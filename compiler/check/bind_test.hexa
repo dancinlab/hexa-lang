@@ -139,6 +139,39 @@ fn _block(children: [Expr], file: string, line: i64, col: i64) -> Expr {
     }
 }
 
+// `let <name> = <rhs>` (immutable) or `let mut <name> = <rhs>` when is_mut.
+// Mutability is carried in `.text` via the `mut:` prefix, mirroring the
+// parser convention (parse_let_expr / _bind_let_name). #2663.
+fn _let_expr(name: string, is_mut: bool, rhs: Expr, file: string, line: i64, col: i64) -> Expr {
+    let mut t = name
+    if is_mut { t = "mut:" + name }
+    let mut kids = []
+    kids.push(rhs)
+    return Expr {
+        kind: ExprKind::Let,
+        span: _span(file, line, col, len(name)),
+        text: t,
+        annotations: [],
+        children: kids,
+        atlas_ref: _empty_atlas_ref()
+    }
+}
+
+// `<lhs_name> = <rhs>` assignment. children = [lhs_ident, rhs]. #2663.
+fn _assign_expr(name: string, rhs: Expr, file: string, line: i64, col: i64) -> Expr {
+    let mut kids = []
+    kids.push(_ident_expr(name, file, line, col))
+    kids.push(rhs)
+    return Expr {
+        kind: ExprKind::Assign,
+        span: _span(file, line, col, 1),
+        text: "=",
+        annotations: [],
+        children: kids,
+        atlas_ref: _empty_atlas_ref()
+    }
+}
+
 fn _fn_item(name: string, params: [Param], body: Expr, file: string, line: i64) -> Item {
     return Item {
         kind: ItemKind::Fn,
@@ -256,6 +289,43 @@ fn _build_case_c() -> Module {
     return Module { file: f, items: items, imports: [] }
 }
 
+// (d) #2663 — local immutable `let` reassigned inside main → 1 HX2006.
+//     fn main() { let i = 0; i = i + 1 }
+//     The codegen silently dropped this write (→ loop hang); bind now flags it.
+fn _build_case_d() -> Module {
+    let f = "case_d.hexa"
+    let init = _int_expr("0", f, 1, 21)
+    let let_i = _let_expr("i", false, init, f, 1, 13)        // let i = 0
+    let rhs = _bin_expr("+", _ident_expr("i", f, 1, 28), _int_expr("1", f, 1, 32), f, 1, 30)
+    let asn = _assign_expr("i", rhs, f, 1, 24)               // i = i + 1
+    let mut kids = []
+    kids.push(let_i)
+    kids.push(asn)
+    let body = _block(kids, f, 1, 11)
+    let item_main = _fn_item("main", [], body, f, 1)
+    let mut items = []
+    items.push(item_main)
+    return Module { file: f, items: items, imports: [] }
+}
+
+// (e) CONTROL — local `let mut` reassigned → 0 diagnostics.
+//     fn main() { let mut i = 0; i = i + 1 }
+fn _build_case_e() -> Module {
+    let f = "case_e.hexa"
+    let init = _int_expr("0", f, 1, 25)
+    let let_i = _let_expr("i", true, init, f, 1, 13)         // let mut i = 0
+    let rhs = _bin_expr("+", _ident_expr("i", f, 1, 32), _int_expr("1", f, 1, 36), f, 1, 34)
+    let asn = _assign_expr("i", rhs, f, 1, 28)               // i = i + 1
+    let mut kids = []
+    kids.push(let_i)
+    kids.push(asn)
+    let body = _block(kids, f, 1, 11)
+    let item_main = _fn_item("main", [], body, f, 1)
+    let mut items = []
+    items.push(item_main)
+    return Module { file: f, items: items, imports: [] }
+}
+
 // ── Driver ───────────────────────────────────────────────────
 
 fn _run_case(label: string, m: Module) -> array {
@@ -334,6 +404,49 @@ fn main() {
         if ok {
             println("  ok: 1 HX2001 for helpr, suggest=helper")
         }
+    }
+
+    // (d) #2663 — local immutable `let i` reassigned → exactly 1 HX2006 (warn).
+    let diags_d = _run_case("(d) #2663 — non-`mut` `let i` reassigned -> HX2006", _build_case_d())
+    let mut d_hx2006 = 0
+    let mut d_sev_ok = false
+    let mut di = 0
+    while di < len(diags_d) {
+        let dd = diags_d[di]
+        if dd.code == "HX2006" {
+            d_hx2006 = d_hx2006 + 1
+            // default severity is Warning (HEXA_STRICT_LET unset in test env).
+            d_sev_ok = (_sev_str(dd.severity) == "warning") || (_sev_str(dd.severity) == "error")
+            if dd.message != "cannot assign to immutable binding `i` (declared without `mut`)" {
+                println("  FAIL: case (d) message was '" + dd.message + "'")
+                ok = false
+            }
+        }
+        di = di + 1
+    }
+    if d_hx2006 != 1 {
+        println("  FAIL: case (d) expected exactly 1 HX2006, got " + to_string(d_hx2006))
+        ok = false
+    } else if !d_sev_ok {
+        println("  FAIL: case (d) HX2006 severity unexpected")
+        ok = false
+    } else {
+        println("  ok: 1 HX2006 for non-`mut` `let i` reassignment")
+    }
+
+    // (e) CONTROL — `let mut i` reassigned → 0 HX2006.
+    let diags_e = _run_case("(e) CONTROL — `let mut i` reassigned -> no HX2006", _build_case_e())
+    let mut e_hx2006 = 0
+    let mut ei = 0
+    while ei < len(diags_e) {
+        if diags_e[ei].code == "HX2006" { e_hx2006 = e_hx2006 + 1 }
+        ei = ei + 1
+    }
+    if e_hx2006 != 0 {
+        println("  FAIL: case (e) expected 0 HX2006 for `let mut`, got " + to_string(e_hx2006))
+        ok = false
+    } else {
+        println("  ok: 0 HX2006 for `let mut i` reassignment")
     }
 
     println("")

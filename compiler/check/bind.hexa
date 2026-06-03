@@ -38,7 +38,12 @@ import "./resolve.hexa"
 
 pub struct BindFrame {
     defs: [string],
-    def_ids: [DefId]
+    def_ids: [DefId],
+    // Parallel to `defs`: was the binding declared `mut`? Function params,
+    // `for` iterators, match/catch binders and immutable `let` are false;
+    // `let mut` is true. Drives the HX2006 immutable-assignment check
+    // (#2663 — a write to a non-`mut` `let` was silently dropped by codegen).
+    is_mut: [bool]
 }
 
 pub struct BindScope {
@@ -133,7 +138,7 @@ fn _new_scopes() -> BindScope {
 }
 
 fn _push_scope(sc: BindScope) -> BindScope {
-    let frame = BindFrame { defs: [], def_ids: [] }
+    let frame = BindFrame { defs: [], def_ids: [], is_mut: [] }
     let mut frames = sc.frames
     frames.push(frame)
     return BindScope { frames: frames, next_index: sc.next_index }
@@ -156,17 +161,29 @@ fn _pop_scope(sc: BindScope) -> BindScope {
 // Define `name` in the topmost frame and return the freshly allocated DefId.
 // The caller is responsible for module attribution — DefId.module is filled
 // by the bind() entry point; here we only mint the dense index.
-fn _define(sc: BindScope, name: string, mod_file: string) -> BindScope {
+//
+// `is_mut` records whether the binding may be reassigned. Most binders are
+// immutable (params, `for` iterators, match/catch binders, `let`); only
+// `let mut` passes true. _define_mut is the explicit-mutability entry; the
+// legacy `_define` is preserved as the immutable default so existing call
+// sites stay byte-identical.
+fn _define_mut(sc: BindScope, name: string, mod_file: string, is_mut: bool) -> BindScope {
     let n = len(sc.frames)
     if n == 0 { return sc }
     let mut frames = sc.frames
     let top = frames[n - 1]
     let mut new_defs = top.defs
     let mut new_ids = top.def_ids
+    let mut new_mut = top.is_mut
     new_defs.push(name)
     new_ids.push(DefId { module: mod_file, index: sc.next_index })
-    frames[n - 1] = BindFrame { defs: new_defs, def_ids: new_ids }
+    new_mut.push(is_mut)
+    frames[n - 1] = BindFrame { defs: new_defs, def_ids: new_ids, is_mut: new_mut }
     return BindScope { frames: frames, next_index: sc.next_index + 1 }
+}
+
+fn _define(sc: BindScope, name: string, mod_file: string) -> BindScope {
+    return _define_mut(sc, name, mod_file, false)
 }
 
 // Look up `name` walking the frame stack from innermost to outermost. Returns
@@ -187,6 +204,46 @@ fn _bind_lookup(sc: BindScope, name: string) -> DefId {
         i = i - 1
     }
     return _bind_miss_def_id()
+}
+
+// Mutability probe for the innermost binding of `name`. Walks frames inner→
+// outer (same order as _bind_lookup) and returns the mutability of the FIRST
+// match — shadowing semantics: an inner `let x` shadows an outer `let mut x`.
+//   1  = found, declared `mut` (assignment is legal)
+//   0  = found, declared immutable IN A FUNCTION-LOCAL frame — this is the only
+//        case the 0.1.0-dispatch codegen silently miscompiles (a `let` counter
+//        written inside a loop), so it is the only HX2006 error.
+//   2  = found, declared immutable IN THE MODULE/BUILTIN frame (outermost,
+//        index 0). A top-level `let X = …` global is lowered to a global slot,
+//        NOT a stack slot, so the silent-drop bug does NOT apply. The parser
+//        ALSO synthesises one `X = E` init-assign per top-level `let` into the
+//        merged `main` body (parser.hexa ~L2129) — flagging those would reject
+//        every global initialiser in the tree. So a write whose target lives in
+//        frame 0 is NOT an HX2006 error (the global-init synthesis + global
+//        reassign-from-fn are both legitimate / not miscompiled).
+//  -1  = not found in any frame (import, or genuinely unknown — HX2001 handles
+//        those; the mutability check stays silent)
+fn _bind_is_mut(sc: BindScope, name: string) -> i64 {
+    let n = len(sc.frames)
+    let mut i = n - 1
+    while i >= 0 {
+        let fr = sc.frames[i]
+        let m = len(fr.defs)
+        let mut j = 0
+        while j < m {
+            if fr.defs[j] == name {
+                if fr.is_mut[j] { return 1 }
+                // Outermost frame (index 0) holds builtins + module-level
+                // top-level items. An immutable match there is a global, not a
+                // stack-resident local — not the miscompiled case.
+                if i == 0 { return 2 }
+                return 0
+            }
+            j = j + 1
+        }
+        i = i - 1
+    }
+    return -1
 }
 
 // Collect every visible identifier across all frames — used for did-you-mean.
@@ -252,6 +309,40 @@ fn _bind_is_ident_kind(k: ExprKind) -> bool {
         ExprKind::Continue -> false,
         ExprKind::Let -> false,
         ExprKind::Assign -> false,
+        ExprKind::Field -> false,
+        ExprKind::Index -> false,
+        ExprKind::ArrayLit -> false,
+        ExprKind::StructLit -> false,
+        ExprKind::EnumPath -> false,
+        ExprKind::Wildcard -> false,
+        ExprKind::Try -> false,
+        ExprKind::Throw -> false,
+        ExprKind::Closure -> false
+    }
+}
+
+fn _bind_is_assign_kind(k: ExprKind) -> bool {
+    return match k {
+        ExprKind::Assign -> true,
+        ExprKind::Ident -> false,
+        ExprKind::LiteralInt -> false,
+        ExprKind::LiteralFloat -> false,
+        ExprKind::LiteralString -> false,
+        ExprKind::LiteralBool -> false,
+        ExprKind::LiteralChar -> false,
+        ExprKind::AtlasRef -> false,
+        ExprKind::Call -> false,
+        ExprKind::BinOp -> false,
+        ExprKind::UnOp -> false,
+        ExprKind::Block -> false,
+        ExprKind::If -> false,
+        ExprKind::While -> false,
+        ExprKind::For -> false,
+        ExprKind::Match -> false,
+        ExprKind::Return -> false,
+        ExprKind::Break -> false,
+        ExprKind::Continue -> false,
+        ExprKind::Let -> false,
         ExprKind::Field -> false,
         ExprKind::Index -> false,
         ExprKind::ArrayLit -> false,
@@ -637,6 +728,38 @@ fn _emit_hx2004(enum_name: string, variant_name: string, expected: i64, actual: 
     out.push(diag_emit(b))
 }
 
+// #2663 — HX2006 emitter: assignment to an immutable (`let`, no `mut`) binding.
+// Turns the silent codegen drop (→ runtime infinite loop) into a VISIBLE
+// diagnostic. The fix-it (catalog) is to add `mut` to the declaration.
+//
+// Default severity is Warning (catalog) so the ~1033 pre-existing in-tree
+// non-`mut` writes do not brick the self-host build before stdlib migration.
+// `HEXA_STRICT_LET=1` escalates it to a hard Error — same opt-in gate the
+// legacy self/type_checker.hexa already honours — so strict builds / CI can
+// enforce immutability. The escalation rebuilds the emitted Diagnostic with an
+// Error severity (the catalog spec drives the default via diag_emit).
+fn _emit_hx2006(name: string, span: Span, out: array) {
+    let mut b = diag_new("HX2006")
+    b = diag_span(b, span)
+    b = diag_arg(b, "name", name)
+    let d = diag_emit(b)
+    if env("HEXA_STRICT_LET") == "1" {
+        out.push(Diagnostic {
+            code: d.code,
+            severity: Severity::Error,
+            stage: d.stage,
+            span: d.span,
+            message: d.message,
+            note: d.note,
+            suggest: d.suggest,
+            fixit: d.fixit,
+            related: d.related
+        })
+        return
+    }
+    out.push(d)
+}
+
 // ── `let` text decoder ──────────────────────────────────────
 // parse_let_expr stashes the binding name in `text`, prefixed with
 // "mut:" if it was declared mutable. Strip the prefix for binding.
@@ -660,6 +783,17 @@ fn _bind_let_name(t: string) -> string {
         i = i + 1
     }
     return out
+}
+
+// True when the let-text carries the `mut:` prefix (declared `let mut`).
+// Mirror of _bind_let_name's prefix detection so the two stay in lockstep.
+fn _bind_let_is_mut(t: string) -> bool {
+    let chars = t.chars()
+    let n = len(chars)
+    if n >= 4 && chars[0] == 'm' && chars[1] == 'u' && chars[2] == 't' && chars[3] == ':' {
+        return true
+    }
+    return false
 }
 
 // EnumPath text encodes "Enum::Variant"; we only need the "Enum" prefix to
@@ -803,7 +937,7 @@ fn _bind_walk_expr(e: Expr, in_sc: BindScope, mod_file: string, out: array) -> B
         }
         let nm = _bind_let_name(e.text)
         if len(nm) > 0 {
-            sc = _define(sc, nm, mod_file)
+            sc = _define_mut(sc, nm, mod_file, _bind_let_is_mut(e.text))
         }
         return sc
     }
@@ -873,7 +1007,7 @@ fn _bind_walk_expr(e: Expr, in_sc: BindScope, mod_file: string, out: array) -> B
             let pnode = e.children[pi]
             let pname = _bind_let_name(pnode.text)
             if len(pname) > 0 && pname != "_" {
-                sc = _define(sc, pname, mod_file)
+                sc = _define_mut(sc, pname, mod_file, _bind_let_is_mut(pnode.text))
             }
             pi = pi + 1
         }
@@ -918,7 +1052,34 @@ fn _bind_walk_expr(e: Expr, in_sc: BindScope, mod_file: string, out: array) -> B
         return sc
     }
 
-    // Generic recurse (Call, BinOp, UnOp, If, While, Return, Assign, Index,
+    // Assignment (`x = rhs`, `x += rhs`, …): #2663 — a write to a non-`mut`
+    // `let` binding was silently dropped by codegen (no diagnostic, runtime
+    // hang). Enforce immutability HERE, at S2, so the write is a clean compile
+    // error instead. We only flag the simple case the codegen miscompiles: the
+    // LHS is a bare FUNCTION-LOCAL Ident whose innermost binding resolves to an
+    // immutable `let` (_bind_is_mut == 0). Field/index LHS (`p.f = …`,
+    // `a[i] = …`), module-level globals (== 2, lowered to a global slot — not
+    // miscompiled, and the parser's per-global init-assign synthesis lives
+    // there too) and unknown targets (== -1) are all left to other passes.
+    if _bind_is_assign_kind(e.kind) {
+        // Walk both sides first so name-resolution (HX2001) still runs.
+        let mut k = 0
+        while k < len(e.children) {
+            sc = _bind_walk_expr(e.children[k], sc, mod_file, out)
+            k = k + 1
+        }
+        if len(e.children) >= 1 {
+            let lhs = e.children[0]
+            if _bind_is_ident_kind(lhs.kind) && len(lhs.text) > 0 && lhs.text != "_" {
+                if _bind_is_mut(sc, lhs.text) == 0 {
+                    _emit_hx2006(lhs.text, lhs.span, out)
+                }
+            }
+        }
+        return sc
+    }
+
+    // Generic recurse (Call, BinOp, UnOp, If, While, Return, Index,
     // literals — all delegate to children).
     let mut i = 0
     while i < len(e.children) {
@@ -1233,8 +1394,15 @@ pub fn bind(module: Module) -> array {
             let mut p = 0
             while p < len(it.params) {
                 let par = it.params[p]
-                if len(par.name) > 0 {
-                    sc = _define(sc, par.name, mod_file)
+                // Param names may carry the `mut:` prefix (parse_fn_item).
+                // Strip it for the binding name and record the mutability so
+                // an assignment to a non-`mut` param is flagged the same way
+                // a non-`mut` `let` is (#2663). Stripping also fixes the latent
+                // case where a `mut`-prefixed param name failed to resolve
+                // against a clean Ident reference.
+                let pnm = _bind_let_name(par.name)
+                if len(pnm) > 0 {
+                    sc = _define_mut(sc, pnm, mod_file, _bind_let_is_mut(par.name))
                 }
                 p = p + 1
             }
