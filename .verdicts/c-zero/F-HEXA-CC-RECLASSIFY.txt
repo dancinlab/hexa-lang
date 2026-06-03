@@ -1,0 +1,42 @@
+C-ZERO — hexa_cc.c + .hexanoport reclassification verdict (2026-06-03)
+================================================================================
+FINDING: the C-ZERO INVENTORY mis-counted GENERATED ARTIFACTS and IRREDUCIBLE
+  RUNTIME as 'hand-authored C to port'. The repo carries 7 `.hexanoport` markers,
+  each declaring its .c is NOT a hexa-port target. Correct classification below.
+
+A. GENERATED ARTIFACT — not authored C (SSOT is .hexa; .c is compiler OUTPUT)
+   hexa_cc.c (28482 LOC) — boot image emitted by the self-host toolchain:
+     SSOT = self/lexer.hexa (73270B) + self/parser.hexa (258115B) +
+            self/type_checker.hexa (76365B) + self/codegen.hexa (codegen_c2 backend).
+     Marker (self/native/hexa_cc.c.hexanoport): "Cannot be ported to .hexa (it IS
+     the output of porting)." Already git-rm'd + gitignored (.gitignore L286) +
+     absent from origin/main since #2065 — confirmed by HEXA-CC-ZERO P6 half-A
+     (.verdicts/hexa-cc-zero/F-HEXA-CC-ZERO-P6-CLOSURE.txt). Fresh-clone bootstrap
+     via committed cold seed self/native/hexa_cc_seed.c (P5 verdict). The four v2
+     siblings (lexer_v2.c/parser_v2.c/type_checker_v2.c/codegen_c2_v2.c) carry the
+     SAME .hexanoport disposition. The self-host campaign (gen3==gen4 byte-eq,
+     SELFHOST-NEXT) IS the hexa-native compiler — there is no C here to 'port'.
+   => REMOVED from the C-ZERO 'remaining authored-C' column (was a miscount).
+
+B. IRREDUCIBLE RUNTIME — authored C by design (NOT a port target)
+   runtime.c (14919 LOC) — marker (self/runtime.c.hexanoport): "the C runtime
+     (memory, GC, tagged values) that .hexa code compiles against. Cannot be
+     ported to .hexa (it IS the bootstrap runtime)." SSOT = self/runtime.hexa.
+   => This is the deliberate, irreducible primitive layer — out of C-ZERO scope
+      by design (a self-hosting language still needs a C runtime floor).
+
+C. EMITTER-BACKED native shims — already byte-eq proven this session
+   gpu_codegen_stub.c (264) + tensor_kernels.c (306) — BYTE-EQ (#2611 / #2606).
+
+D. PLATFORM FFI shims — irreducible external ABI (formally marked)
+   hxblas_linux.c / hxqwen32b.c / hxvdsp_linux.c — native FFI shims that exist
+     ONLY on Linux x86_64 GPU hosts (H100 pods) to link platform BLAS / vDSP /
+     tensor-parallel libs; absent from this checkout. Per C-ZERO.md deferred:
+     'platform .c shims — port or formally mark as irreducible external ABI'.
+   => FORMALLY MARKED irreducible external ABI (cannot be hexa-native — they ARE
+      the FFI boundary to vendor libraries).
+
+VERDICT: hexa_cc.c is NOT C-ZERO port debt — it is generated compiler output whose
+  SSOT is already .hexa. The only authored C that legitimately remains is the
+  by-design irreducible runtime.c (+ platform FFI shims), both formally marked
+  .hexanoport. C-ZERO's portable-surface burn-down is COMPLETE.

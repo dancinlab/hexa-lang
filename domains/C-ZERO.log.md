@@ -2,6 +2,18 @@
 
 ## 2026-06-03 — milestone: full shim oracle sweep + burn-down ledger
 
+## 2026-06-03 — hexa_cc.c reclassification + portable-surface burn-down COMPLETE
+
+- [x] hexa_cc.c (28482) RECLASSIFIED — generated boot image of the self-host toolchain
+      (SSOT self/{lexer,parser,type_checker,codegen}.hexa), .hexanoport, already git-rm'd
+      (#2065) + cold-seed bootstrap (HEXA-CC-ZERO P6). NOT hand-authored C → removed from
+      'remaining to port'. The INVENTORY had mis-counted compiler OUTPUT as port debt.
+- [x] 7 .hexanoport markers classified (F-HEXA-CC-RECLASSIFY.txt): generated artifact /
+      irreducible runtime (runtime.c 14919) / emitter-backed shims / platform FFI (irreducible ABI).
+- [x] runtime_cuda emitter nvcc-CLEAN on RTX 5070 after 2 emitter fixes (#2612) — emitter-backed.
+- C-ZERO portable-surface burn-down COMPLETE: every .c that can be emitter-backed IS (proven);
+  residual C = bootstrap runtime floor + vendor-FFI boundary, both .hexanoport by design.
+
 ## 2026-06-03 — GPU-substrate shim sweep (pool summer RTX 5070, no rental)
 
 - [x] runtime_bf16 (787) — BYTE-EQ (source-text + .o, 6/6)
