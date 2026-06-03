@@ -263,3 +263,57 @@ fixpoint gate (same gate-class as B1 #2632); ghost selfhost-byteeq-real is the
 parent's merge gate (NOT run here). PR opened base=main, DO-NOT-MERGE.
 With this, the last portable RUNTIME-PORT M2 leaf is closed as a genuine
 hexa-native impl. 5 PORT-EQ landed.
+
+────────────────────────────────────────────────────────────────────────
+## M4 — runtime_core.c CORE-tier portability inventory (2026-06-03, mini LOCAL)
+INVENTORY + FEASIBILITY ONLY · NO codegen/runtime/bind mutation · base 4d341a103
+worktree /tmp/rp-m4i (isolated) · runtime_core.c READ-ONLY (gitignored).
+
+The last un-inventoried runtime frontier. M1 explicitly deferred runtime_core.c
+(8544 LOC) as the CORE tier; M2 drained runtime.c's portable leaf well (5 PORT-EQ,
+0 hard-BLOCKED). M4 asks: does core hold MORE portable leaves or is it all
+irreducible bootstrap/codegen-support?
+
+METHOD: AST-free brace-match extractor (same as M1). 363 fn DEFS, 286 UNIQUE
+names (77 dual-defs — 88 HEXA_HAS_HEXA_RT_STDLIB guards + platform #if share a
+name). Every B-OPEN candidate body READ (dict_keys lesson: classify by reading
+the C body, never by assuming hardness).
+
+TIER COUNTS (unique fns / body-LOC summing dual-defs):
+  A         198 fns  4011 LOC  irreducible bootstrap/GC/codegen-support floor
+  B-OPEN      9 fns   110 LOC  portable pure-logic leaf, unported (real frontier)
+  B-PORTED   57 fns   900 LOC  hexa impl already in rt-stdlib (C body = fallback)
+  C          22 fns   510 LOC  FFI/process/stdio/throw shim (external ABI)
+  TOTAL     286 fns  5531 LOC  (rest of 8544 = structs/macros/globals/comments)
+
+STRUCTURAL FINDING: rt_* delegation is already DEEP in core too — 88
+HEXA_HAS_HEXA_RT_STDLIB guards -> 83 distinct rt_* hexa fns. 57 core hexa_* fns
+are B-PORTED (C is standalone-link fallback only). The portable surface is NOT
+virgin; the rt_* stdlib campaign already drained most of it.
+
+FEASIBILITY FINDING (dict_keys-class): of the 9 B-OPEN leaves, THREE
+(hexa_str_char_code_at · hexa_str_concat · hexa_str_substring) ALREADY HAVE a
+matching hexa impl (rt_str_char_code_at / rt_str_concat / rt_str_substring exist
+in self/rt|runtime|stdlib *.hexa) — they only lack the core-side delegation
+guard. Exactly the dict_keys pattern (leaf looked unported; the hexa walk
+already existed). The builder builtin gap is already CLOSED (B1 str_from_bytes_n
++ hexa_strbuf_alloc, STRBUILDER-FEAS #2632). NO new-builtin (B1-class) leaf and
+NO hard-BLOCKED (Class-C rep/ABI) leaf remains.
+
+RANKED B-OPEN (low-risk-first):
+  1 hexa_str_char_code_at  (8 LOC) A/dict_keys — rt impl exists, wire guard
+  2 hexa_cmd_has_shell_meta(14)    A — pure char-class scan, Class-A today
+  3 utf8_cpcount           (5)     A — pure UTF-8 continuation count
+  4 hexa_null_coal         (5)     A — pure tag/empty predicate
+  5 hexa_str_byte_at       (19)    A — pure bounds+byte+throw, Class-A today
+  6 hexa_str_substring     (13)    B/dict_keys — rt impl exists, B1 builder, guard
+  7 hexa_str_concat        (32)    B/dict_keys — rt impl exists, arena fast-path
+  8 hexa_str_grapheme_count(6)     B — needs _hx_grapheme_walk port first (defer)
+  9 hexa_str_graphemes     (8)     B — pairs with #8 (grapheme-walk dep)
+
+VERDICT: runtime_core.c is ~90% irreducible-or-already-ported. It IS the
+bootstrap/codegen-support floor M1 declared it to be — confirmed by reading
+bodies, not assumed. NO second runtime.c-scale portable well. The residual
+9-leaf / 110-LOC B-OPEN set is small + low-risk + mechanical (delegation-guard
+wiring + Class-A byte loops), carried as optional M5. Full tiering:
+`.verdicts/runtime-port/M4-INVENTORY.txt`.

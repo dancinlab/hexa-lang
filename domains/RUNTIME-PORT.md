@@ -5,7 +5,9 @@
 ## current-state
 - self/runtime.c = 14919 LOC, 606 fn defs (525 unique names; #if/#else dual-defs).
 - CORE tier (HexaVal encode/decode · arena · array store · refcount) lives in
-  the separate self/runtime_core.c (8544 LOC) — out of scope for this domain.
+  the separate self/runtime_core.c (8544 LOC) — inventoried in M4 (2026-06-03):
+  198 A / 57 B-PORTED / 9 B-OPEN / 22 C (286 unique fns). ~90% irreducible or
+  already-ported; only 9 new portable leaves / 110 LOC remain (M5 optional).
 - M1 inventory (2026-06-03) tiers runtime.c's OWN functions:
   - **tier-A irreducible floor = 1547 LOC / 167 fns** (freestanding libc/libm,
     raw syscall trampolines, pthread, math ABI hexa lowers to).
@@ -56,4 +58,24 @@
     (STRBUILDER-FEAS B1). NO remaining hard-BLOCKED portable leaf. Remaining
     B-OPEN leaves carry to M2-followup (see log).
 - [ ] M3 — adjudicate the 151 BORDERLINE fns (numeric CPU kernels: keep vs port)
-- [ ] M4 — extend inventory to self/runtime_core.c (the CORE tier)
+- [x] M4 — extend inventory to self/runtime_core.c (the CORE tier) — DONE 2026-06-03.
+  Tiered all 286 unique fns (363 defs) / 5531 body-LOC of the 8544-line file:
+  - **tier-A irreducible CORE floor = 4011 LOC / 198 fns** (codegen-escape
+    __raw_*, arena/GC/intern/heapify, map-rep hash table, value-tag ctors,
+    array backing store, libm, call/try ABI — the bootstrap bedrock M1 deferred).
+  - **B-PORTED = 900 LOC / 57 fns** — hexa impl ALREADY in rt-stdlib (88
+    HEXA_HAS_HEXA_RT_STDLIB guards -> 83 distinct rt_*; C body is fallback only).
+    The rt_* drainage is already deep in core too; the surface is NOT virgin.
+  - **B-OPEN (NEW portable frontier) = only 110 LOC / 9 fns**, top 7 either
+    Class-A-today (cmd_has_shell_meta · utf8_cpcount · null_coal · byte_at ·
+    char_code_at) or dict_keys-class (str_concat · str_substring · char_code_at
+    already have an rt_ hexa impl — only the delegation guard is missing).
+    NO B1-class new-builtin gap (STRBUILDER-FEAS B1 already closed the builder),
+    NO hard-BLOCKED Class-C leaf.
+  - tier-C FFI/process/stdio/throw shim = 510 LOC / 22 fns.
+  - **VERDICT: runtime_core.c is ~90% irreducible-or-already-ported. It is the
+    bootstrap/codegen-support floor it was declared to be — NOT a second
+    runtime.c-scale portable well.** Full tiering:
+    `.verdicts/runtime-port/M4-INVENTORY.txt`.
+- [ ] M5 (optional) — wire the 9 core B-OPEN leaves (delegation-guard / Class-A
+  byte loops; dict_keys/B1 pattern, RUNEQ-gated). Low-risk mechanical follow-up.

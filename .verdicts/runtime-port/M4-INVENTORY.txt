@@ -1,0 +1,180 @@
+RUNTIME-PORT · Milestone-4 Portability Inventory of self/runtime_core.c
+date: 2026-06-03   host: mini (LOCAL — no ghost/pool)   base: origin/main 4d341a103
+scope: INVENTORY + FEASIBILITY ONLY (NO codegen/runtime/bind mutation this round)
+########################################################################
+
+SCOPE: self/runtime_core.c = 8544 LOC. This is the CORE tier explicitly held
+OUT OF SCOPE by the M1 runtime.c inventory (INVENTORY.txt L7-12): HexaVal tag
+encode/decode, the arena allocator, the array backing store, the open-addressing
+hash-map rep, refcount/heapify, and the codegen-escape primitives that the
+already-ported rt_* hexa fns lower their operators back into. runtime_core.c is
+#include'd by runtime.c at L2149 — it is the deepest tier-A bedrock of the whole
+runtime. This M4 inventory is the LAST un-inventoried runtime frontier and
+answers ONE question: does runtime_core.c hold MORE genuinely-portable leaves
+(another dict_keys / B1), or is it all irreducible bootstrap/codegen-support?
+
+METHOD: AST-free brace-match extractor over the raw text (same as M1).
+363 function DEFINITIONS, 286 UNIQUE names (77 dual-defs: 88 HEXA_HAS_HEXA_RT_
+STDLIB #ifndef/#else guards + platform conditionals share a name). ~5531 of the
+8544 lines are function bodies; the rest are structs/macros/globals/comments.
+Every B-OPEN candidate body was READ (per the dict_keys lesson: a prior BLOCKED
+verdict was a FACTUAL ERROR — classify by reading the C body, not by assuming).
+
+KEY STRUCTURAL FINDING — the rt_* delegation is ALREADY DEEP in core too.
+runtime_core.c carries 88 HEXA_HAS_HEXA_RT_STDLIB guards delegating to 83
+distinct rt_* hexa-native fns. 57 hexa_* core fns are therefore B-PORTED
+(hexa impl already lives in self/rt|runtime + stdlib/runtime *.hexa; the C body
+is a standalone-link FALLBACK only). The "portable surface" of runtime_core.c is
+NOT virgin — most of it was already drained by the rt_* stdlib campaign.
+
+KEY FEASIBILITY FINDING — the remaining B-OPEN set is a dict_keys-class wiring
+gap, NOT a porting frontier. Of the 9 B-OPEN leaves, THREE
+(hexa_str_char_code_at · hexa_str_concat · hexa_str_substring) ALREADY HAVE a
+matching hexa impl in the rt-stdlib (rt_str_char_code_at / rt_str_concat /
+rt_str_substring all exist in self/rt|runtime|stdlib *.hexa) — they simply lack
+the HEXA_HAS_HEXA_RT_STDLIB delegation guard in runtime_core.c. This is exactly
+the dict_keys pattern (the leaf looked un-ported but the hexa walk already
+existed). The required builder builtins also already landed: B1 str_from_bytes_n
++ hexa_strbuf_alloc length-carrying builder (STRBUILDER-FEAS, #2632) covers the
+concat/substring assembly. So the genuine NEW porting yield here is tiny.
+
+########################################################################
+AGGREGATE (unique fns · LOC sums all dual-def bodies)
+------------------------------------------------------------------------
+  A          198 fns   4011 LOC   IRREDUCIBLE bootstrap/GC/codegen-support floor
+  B-OPEN       9 fns    110 LOC   PORTABLE pure-logic leaf, unported (real frontier)
+  B-PORTED    57 fns    900 LOC   PORTABLE, hexa impl already in rt-stdlib (C fallback)
+  C           22 fns    510 LOC   FFI / process / stdio / throw shim (external ABI)
+  TOTAL      286 fns   5531 LOC   (rest of 8544 = structs/macros/globals/comments)
+
+  Irreducible CORE floor (tier-A) ................. 4011 LOC / 198 fns
+  Already-ported portable (B-PORTED, fallback) .... 900 LOC / 57 fns
+  PORTABLE NEW target (B-OPEN, real frontier) ..... 110 LOC / 9 fns
+  FFI/process/IO shim (tier-C) .................... 510 LOC / 22 fns
+
+VERDICT: runtime_core.c is ~90% irreducible (A) or already-ported (B-PORTED).
+The NEW portable yield is 9 leaves / 110 LOC, and 5 of those 9 are Class-A or
+already-have-a-hexa-impl (just need a one-line delegation guard, the proven M2
+pattern). This is NOT a second runtime.c-scale portable well. runtime_core.c is
+the bootstrap/codegen-support floor it was declared to be in M1 — confirmed by
+reading bodies, not assumed.
+
+########################################################################
+TIER B-OPEN — PORTABLE pure-logic leaf, unported  (9 fns, 110 LOC)
+RANKED low-risk-first (yield order, like the M2 leaves)
+########################################################################
+  rank LOC  line     function                feasibility + note
+  ----------------------------------------------------------------------
+  1     8   L5320    hexa_str_char_code_at    A · DICT_KEYS-CLASS. Pure bounds +
+                     single byte read (neg-wrap, OOB -> -1). rt_str_char_code_at
+                     hexa impl ALREADY EXISTS in rt-stdlib — only the
+                     HEXA_HAS_HEXA_RT_STDLIB delegation guard is missing in core.
+                     Wire the guard (zero new builtin) -> RUNEQ. Highest yield.
+  2    14   L5722    hexa_cmd_has_shell_meta  A · Pure char-class scan over a
+                     cstr (returns 0/1). No rep, no rt impl, no builtin needed —
+                     Class-A expressible TODAY as a hexa byte loop. Trivial.
+  3     5   L8062    utf8_cpcount             A · Pure UTF-8 continuation-byte
+                     count (`(b&0xC0)!=0x80`). 4-line loop. Class-A trivial;
+                     used by pad_left/right (themselves already B-PORTED).
+  4     5   L1636    hexa_null_coal           A · Pure tag/empty-string predicate
+                     (VOID or empty-str -> b, else a). Class-A trivial; needs
+                     only HX_IS_VOID/HX_IS_STR tag preds (exist).
+  5    19   L5444    hexa_str_byte_at         A · Pure bounds + byte read + throw
+                     (neg-wrap, OOB throw w/ formatted msg). No rt impl yet but
+                     Class-A; throw-msg formatting is the only wrinkle (snprintf).
+  6    13   L5187    hexa_str_substring       B · rt_str_substring hexa impl
+                     ALREADY EXISTS. Needs hexa_strbuf_alloc length-builder
+                     (B1 landed). Wire guard. dict_keys/B1-class, not virgin.
+  7    32   L4725    hexa_str_concat          B · rt_str_concat hexa impl ALREADY
+                     EXISTS. C body has an arena fast-path (perf); hexa port via
+                     B1 str_from_bytes_n builder. Wire guard. Verify arena-path
+                     byte-eq (stats counters are debug-only, not semantic).
+  8     6   L5116    hexa_str_grapheme_count  B · Pure walk BUT delegates to the
+                     _hx_grapheme_walk C helper (grapheme-cluster boundary
+                     logic). Needs a grapheme-walk port/builtin first. Defer.
+  9     8   L5106    hexa_str_graphemes       B · Same _hx_grapheme_walk dep +
+                     array push. Pairs with #8; port the walk once, both follow.
+
+  FLAGS:
+   * #1/#6/#7 are DICT_KEYS-CLASS mis-labeled-"unported": the hexa impl already
+     exists (rt_str_char_code_at / rt_str_substring / rt_str_concat) and the
+     leaf only lacks the core-side delegation guard. Cheapest real yield.
+   * #2/#3/#4/#5 are CLASS-A-EXPRESSIBLE-TODAY (no new builtin, no rep): plain
+     hexa byte/tag loops. Like the M2 hexa_is_empty / float_to_int leaves.
+   * NO B1-class "needs-a-brand-new-builtin" leaf remains: the one builder gap
+     (length-carrying str builder) was already CLOSED by STRBUILDER-FEAS B1.
+   * NO hard-BLOCKED (Class-C rep/ABI) portable leaf exists in core.
+
+########################################################################
+TIER A — IRREDUCIBLE bootstrap/GC/codegen-support floor  (198 fns, 4011 LOC)
+sub-group breakdown
+########################################################################
+  A1  codegen-escape (__raw_idiv/imod/fmod/d2i/add_f/cmp3/code_is)  7 fns
+        = operator-lowering targets the rt_* hexa ports lower BACK into to
+          avoid infinite self-recursion. Irreducible BY DESIGN (porting these
+          is what would create the recursion). The inverse of a B-OPEN leaf.
+  A2  call/fn-arena/try/last-error ABI trampoline                   11 fns
+  A3  map-rep internal — hmap_find/grow/heapify + __map_* raw ops   12 fns
+  A4  FNV-1a hash (intern table + hash-map)                          2 fns
+  A5  arena/GC/intern/heapify/valstruct rep                         27 fns
+  A6  value-tag ctor/coerce/repr (hexa_int/float/bool/void/str ...) 24 fns
+  A7  libm/transcendental (hexa_exp etc. not under a guard)          2 fns
+  A8  bit/float reinterpret ABI                                      4 fns
+  A9  map-op SSOT — hash-table mutate/lookup (NOT pure)             11 fns
+  A10 array backing-store SSOT (raw store/resize/water/reserve)     19 fns
+  A11 typed f64/i64 box (native array rep)                           8 fns
+  A12 closure/fn obj ctor (codegen-support ABI)                      9 fns
+  A13 enum-rep lowering helper                                       5 fns
+  A14 init/bootstrap one-shot (cache/tuning/stdio/path)             7 fns
+  A15 to-string recursion / float-print repr (display)              7 fns
+  A16 cmp/eq tag-dispatch SSOT (==/< lower to these)                4 fns
+  A17 stream/drain bounded-buffer plumbing                          4 fns
+  A18 utf8/grapheme/strbuf rep helper                               3 fns
+  A19 misc bootstrap/rep                                            54 fns
+
+########################################################################
+TIER B-PORTED — hexa impl already in rt-stdlib (C body = fallback)  (57 fns, 900 LOC)
+hexa_* core fn  ->  rt_* hexa-native impl it delegates to
+########################################################################
+  hexa_abs->rt_abs_int            hexa_add_slow->rt_add_slow
+  hexa_ceil->rt_ceil              hexa_cmp_ge/gt/le/lt->rt_cmp_*
+  hexa_cos/tan/tanh->rt_tan/tanh  hexa_div->rt_div   hexa_mod->rt_mod
+  hexa_floor->rt_floor            hexa_fma->rt_fma_int  hexa_mul->rt_mul
+  hexa_format->rt_format          hexa_format_float(_sci)->rt_format_float_*
+  hexa_log/log10/log2->rt_log*    hexa_pow->rt_pow_int  hexa_round->rt_round
+  hexa_sqrt->rt_sqrt              hexa_sub->rt_sub      hexa_to_float->rt_to_float
+  hexa_to_int->rt_to_int          hexa_u_floor->rt_u_floor
+  hexa_pad_left/right->rt_pad_*   hexa_print->rt_print  hexa_eprint(ln)->rt_eprint*
+  hexa_concat_many->rt_concat_many_arr
+  hexa_map_entries/keys/values/merge/invert/remove/from_array/filter_keys/
+    map_values->rt_map_*  (9 map combinators — pure walks, already hexa)
+  hexa_str_char_at/char_count/char_substring/chars/count_substr/join/nth_char/
+    replace/split->rt_str_*   (10 string ops — already hexa)
+  hexa_str_eq/index_of/index_of_from/last_index_of/contains/starts_with/
+    ends_with/to_lower/to_upper/trim->rt_str_* (guarded int/bool bridges)
+  (full extern set: 83 distinct rt_* — see grep 'extern .* rt_' in core)
+
+########################################################################
+TIER C — FFI / process / stdio / throw shim (external ABI)  (22 fns, 510 LOC)
+########################################################################
+  process/exec: hexa_exec · hexa_exec_replace · hexa_exec_with_status ·
+    hexa_exec_stream_impl · hexa_exec_no_shell_enabled · hexa_spawn_no_shell ·
+    hexa_spawn_reap · hexa_popen_sh · hexa_tokenize_argv · hexa_cmd_*(non-meta)
+  pipe/drain: hexa_pipe_buf_enlarge_full/kernel · hexa_drain_bounded/env_ms/now_ms
+  args/env: hexa_args · hexa_real_args · hexa_set_args · hexa_script_path
+  stdio IO: hexa_print* / hexa_eprint* are routed via rt_ (B-PORTED) but the
+    fd-write floor underneath stays C; the print_val display wrappers are A15.
+  throw: hexa_throw (setjmp/longjmp unwind FFI).
+
+########################################################################
+CONCLUSION
+------------------------------------------------------------------------
+runtime_core.c is the irreducible CORE floor, CONFIRMED by reading bodies:
+198 tier-A (4011 LOC) + 57 already-ported B-PORTED (900 LOC) + 22 FFI shim
+(510 LOC). The NEW portable frontier is just 9 leaves / 110 LOC, and the
+top 7 are either Class-A-today or dict_keys-class (hexa impl already exists,
+guard missing). There is NO second runtime.c-scale well here and NO hard-
+BLOCKED leaf. M2's claim that the portable leaf well is "FULLY exhausted"
+holds for the ECOSYSTEM: the residual core B-OPEN set is small + low-risk +
+mechanical (delegation-guard wiring), to carry as an optional M5 follow-up.
+########################################################################
