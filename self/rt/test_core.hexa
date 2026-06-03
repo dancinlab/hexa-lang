@@ -38,6 +38,16 @@ check("typeof:string",       rt_type_of("s") == "string")
 check("is_type:float",       rt_is_type(1.5, "float"))
 check("is_type:not-int",     !rt_is_type("x", "int"))
 
+// ── is_empty (RUNTIME-PORT M2 — RUNEQ PORT-EQ vs C hexa_is_empty) ───
+// Mirrors runtime.c's array+string-only special-case: every OTHER type
+// (int/float/void/bool/map) reports empty=true.
+check("is_empty:str-empty",  rt_is_empty(""))
+check("is_empty:str-nonemp", !rt_is_empty("x"))
+check("is_empty:arr-empty",  rt_is_empty([]))
+check("is_empty:arr-one",    !rt_is_empty([1]))
+check("is_empty:int-quirk",  rt_is_empty(5))
+check("is_empty:void-quirk", rt_is_empty(void))
+
 // ── abs ─────────────────────────────────────────────────────────────
 check("abs:int-neg",         rt_abs(-7) == 7)
 check("abs:int-pos",         rt_abs(4) == 4)

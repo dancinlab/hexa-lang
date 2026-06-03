@@ -1,0 +1,47 @@
+RUNTIME-PORT · Milestone-2 followup · hexa_is_empty → rt_is_empty
+date: 2026-06-03   host: mini (LOCAL — no ghost/pool)   base: origin/main
+verdict: PORT-EQ   (9/9 inputs value-identical)
+########################################################################
+
+C SSOT  : HexaVal hexa_is_empty(HexaVal v)   self/runtime.c L4809
+hexa port: @pure fn rt_is_empty(v) -> bool   self/rt/core.hexa
+
+METHOD (real RUNEQ, not self-judge)
+------------------------------------------------------------------------
+Same minimal-TU RUNEQ rig as the sibling leaves: transpiled rt_is_empty
+(self/rt/core.hexa) → C via hexat, extracted into runeq_m2b.c, linked vs
+the shipping runtime.o C SSOT hexa_is_empty, compared HX_BOOL results over
+9 inputs covering BOTH special-cases and the catch-all.
+
+FINDING — RUNEQ confirmed a load-bearing C quirk
+------------------------------------------------------------------------
+runtime.c hexa_is_empty ONLY special-cases ARRAY (len==0) and STR
+(empty/NUL); EVERY other tag — int, float, void, bool, AND map — falls
+through to the default 'return hexa_bool(1)', i.e. reports empty=true.
+rt_is_empty mirrors this exactly (int 5 → empty=true, void → empty=true)
+rather than the more intuitive container semantics. RUNEQ confirms the
+quirk is preserved: int-0, int-5, void, bool-t all agree empty=1 on both
+sides. array/string emptiness agrees on the len==0 boundary.
+
+RAW HARNESS OUTPUT (verbatim stdout, is_empty block)
+------------------------------------------------------------------------
+=== is_empty ===
+ok   empty str-empty      C=1 hexa=1
+ok   empty str-nonemp     C=0 hexa=0
+ok   empty str-long       C=0 hexa=0
+ok   empty arr-empty      C=1 hexa=1
+ok   empty arr-one        C=0 hexa=0
+ok   empty int-0          C=1 hexa=1
+ok   empty int-5          C=1 hexa=1
+ok   empty void           C=1 hexa=1
+ok   empty bool-t         C=1 hexa=1
+
+RUNEQ-SUMMARY (this leaf) total=9 fails=0 verdict=PORT-EQ
+
+WIRING
+------------------------------------------------------------------------
+- rt_is_empty lands in committed SSOT self/rt/core.hexa.
+- Surface '.is_empty()' is lowered by codegen.hexa L4545 to the C
+  hexa_is_empty; rt_is_empty is the HEXA_HAS_HEXA_RT_STDLIB delegation
+  target. Committed deliverable = hexa body + verdict + 6 locked
+  test_core.hexa is_empty assertions (incl. the int/void quirk).

@@ -65,6 +65,24 @@
     return rt_type_of(v) == type_name
 }
 
+// is_empty — RUNTIME-PORT M2 (runtime.c L4809 hexa_is_empty).
+// Polymorphic emptiness predicate. The C body ONLY special-cases ARRAY
+// and STR; EVERYTHING else (map, int, float, void, bool, …) falls through
+// to the default `return hexa_bool(1)` — i.e. is unconditionally "empty".
+// We mirror that quirk EXACTLY (notably: a non-empty map reports empty,
+// and any int/float reports empty) rather than the more intuitive
+// container semantics, so the rt path is byte/value-equal to the shipping
+// C dispatch. RUNEQ-gated — see verdict.
+//   array  -> len == 0
+//   string -> len == 0   (C: !s || s[0]=='\0', equivalent for hexa strings)
+//   else   -> true
+@pure fn rt_is_empty(v) -> bool {
+    let t = typeof(v)
+    if t == "array" { return len(v) == 0 }
+    if t == "string" { return len(v) == 0 }
+    return true
+}
+
 // ── Absolute value (polymorphic) ────────────────────────────────────
 
 @pure fn rt_abs(v) {

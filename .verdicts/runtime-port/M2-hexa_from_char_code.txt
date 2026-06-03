@@ -1,0 +1,77 @@
+RUNTIME-PORT · Milestone-2 followup · hexa_from_char_code → rt_from_char_code
+date: 2026-06-03   host: mini (LOCAL — no ghost/pool)   base: origin/main
+verdict: PORT-EQ   (32/32 inputs byte-identical)
+########################################################################
+
+C SSOT  : HexaVal hexa_from_char_code(HexaVal n)   self/runtime.c L6035
+hexa port: @pure fn rt_from_char_code(n: int) -> string   self/rt/string.hexa
+
+METHOD (real RUNEQ, not self-judge)
+------------------------------------------------------------------------
+1. Implemented rt_from_char_code in self/rt/string.hexa (codepoint→UTF-8;
+   assembles raw UTF-8 bytes itself, hands them to rt_str_from_chars which
+   lowers chr()→hexa_chr_byte, masking each byte &0xFF — a no-op since
+   every emitted byte is already 0..255).
+2. Transpiled self/rt/string.hexa → C via the real codegen (hexat, the
+   tool behind 'hexa build --c-only'). Extracted the EXACT generated
+   rt_from_char_code + dep rt_str_from_chars bodies into a minimal TU
+   (runeq_m2b.c) so the link does not pull the whole rt tree.
+3. Linked the SHIPPING runtime.o (~/.hexa-cache/runtime.bbc011c9….o, which
+   contains the C SSOT hexa_from_char_code) + the transpiled hexa port,
+   +brew libsodium/openssl. For each codepoint: byte-exact compare of the
+   two result strings via hexa_len + memcmp (length-header aware, NUL-safe).
+4. 32 inputs spanning all four UTF-8 byte-length tiers + the negative
+   clamp + every tier boundary (0x7F/0x80, 0x7FF/0x800, 0xFFFF/0x10000,
+   max 0x10FFFF), '한' U+D55C, '€', emoji 🚀🌀, a CJK-ext 4-byte cp, etc.
+
+FINDING — Δ vs the broken pre-port path
+------------------------------------------------------------------------
+The codepoint→UTF-8 branch ladder reproduces the C body bit-for-bit
+across all four byte-length tiers. Negative codepoints clamp to 0
+(1-byte NUL) on both sides. No divergence — terminal PORT-EQ.
+
+RAW HARNESS OUTPUT (verbatim stdout, from_char_code block)
+------------------------------------------------------------------------
+ok   fcc code=0  C=C[len=0:] hexa=H[len=0:]
+ok   fcc code=1  C=C[len=1: 01] hexa=H[len=1: 01]
+ok   fcc code=32  C=C[len=1: 20] hexa=H[len=1: 20]
+ok   fcc code=65  C=C[len=1: 41] hexa=H[len=1: 41]
+ok   fcc code=127  C=C[len=1: 7f] hexa=H[len=1: 7f]
+ok   fcc code=128  C=C[len=2: c2 80] hexa=H[len=2: c2 80]
+ok   fcc code=169  C=C[len=2: c2 a9] hexa=H[len=2: c2 a9]
+ok   fcc code=256  C=C[len=2: c4 80] hexa=H[len=2: c4 80]
+ok   fcc code=945  C=C[len=2: ce b1] hexa=H[len=2: ce b1]
+ok   fcc code=2047  C=C[len=2: df bf] hexa=H[len=2: df bf]
+ok   fcc code=2048  C=C[len=3: e0 a0 80] hexa=H[len=3: e0 a0 80]
+ok   fcc code=44032  C=C[len=3: ea b0 80] hexa=H[len=3: ea b0 80]
+ok   fcc code=54620  C=C[len=3: ed 95 9c] hexa=H[len=3: ed 95 9c]
+ok   fcc code=65535  C=C[len=3: ef bf bf] hexa=H[len=3: ef bf bf]
+ok   fcc code=65536  C=C[len=4: f0 90 80 80] hexa=H[len=4: f0 90 80 80]
+ok   fcc code=127744  C=C[len=4: f0 9f 8c 80] hexa=H[len=4: f0 9f 8c 80]
+ok   fcc code=128640  C=C[len=4: f0 9f 9a 80] hexa=H[len=4: f0 9f 9a 80]
+ok   fcc code=1114111  C=C[len=4: f4 8f bf bf] hexa=H[len=4: f4 8f bf bf]
+ok   fcc code=150370  C=C[len=4: f0 a4 ad a2] hexa=H[len=4: f0 a4 ad a2]
+ok   fcc code=-1  C=C[len=0:] hexa=H[len=0:]
+ok   fcc code=-5  C=C[len=0:] hexa=H[len=0:]
+ok   fcc code=127  C=C[len=1: 7f] hexa=H[len=1: 7f]
+ok   fcc code=128  C=C[len=2: c2 80] hexa=H[len=2: c2 80]
+ok   fcc code=255  C=C[len=2: c3 bf] hexa=H[len=2: c3 bf]
+ok   fcc code=256  C=C[len=2: c4 80] hexa=H[len=2: c4 80]
+ok   fcc code=65  C=C[len=1: 41] hexa=H[len=1: 41]
+ok   fcc code=126  C=C[len=1: 7e] hexa=H[len=1: 7e]
+ok   fcc code=2049  C=C[len=3: e0 a0 81] hexa=H[len=3: e0 a0 81]
+ok   fcc code=65537  C=C[len=4: f0 90 80 81] hexa=H[len=4: f0 90 80 81]
+ok   fcc code=8364  C=C[len=3: e2 82 ac] hexa=H[len=3: e2 82 ac]
+ok   fcc code=4096  C=C[len=3: e1 80 80] hexa=H[len=3: e1 80 80]
+ok   fcc code=65534  C=C[len=3: ef bf be] hexa=H[len=3: ef bf be]
+
+RUNEQ-SUMMARY (this leaf) total=32 fails=0 verdict=PORT-EQ
+
+WIRING
+------------------------------------------------------------------------
+- rt_from_char_code lands in committed SSOT self/rt/string.hexa.
+- Surface 'from_char_code(n)' is lowered by codegen.hexa L7142 directly to
+  the C hexa_from_char_code; the rt_* body is the HEXA_HAS_HEXA_RT_STDLIB
+  delegation target (runtime.c's #ifdef guard is emitted locally — see the
+  M2-hexa_float_to_int verdict note). Committed deliverable = the hexa body
+  + verdict + 6 locked test_string.hexa IT6 assertions.

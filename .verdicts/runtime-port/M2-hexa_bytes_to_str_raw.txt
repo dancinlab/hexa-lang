@@ -1,0 +1,56 @@
+RUNTIME-PORT · Milestone-2 followup · hexa_bytes_to_str_raw → rt_bytes_to_str_raw
+date: 2026-06-03   host: mini (LOCAL — no ghost/pool)   base: origin/main
+verdict: DIFFER  (6/9 PORT-EQ · 3/9 DIFFER on embedded NUL — primitive gap)
+########################################################################
+
+C SSOT  : HexaVal hexa_bytes_to_str_raw(HexaVal arr)   self/runtime.c L6105
+hexa port: @pure fn rt_bytes_to_str_raw(arr:[int]) -> string  self/rt/string.hexa
+
+METHOD (real RUNEQ, not self-judge)
+------------------------------------------------------------------------
+Same minimal-TU RUNEQ rig: transpiled rt_bytes_to_str_raw + dep
+rt_str_from_chars → C via hexat, linked vs the shipping runtime.o C SSOT
+hexa_bytes_to_str_raw, byte-exact compare (hexa_len + memcmp, NUL-aware)
+over 9 array inputs: empty, "Hi", a lone NUL, NUL-interleaved, the full
+{0,1,127,128,254,255} byte set, out-of-range (256 / -1 / 300), and the
+raw 3-byte UTF-8 of '한'.
+
+FINDING — RUNEQ FALSIFIED byte-equality; ruled out a pure-body port
+------------------------------------------------------------------------
+PORT-EQ (6): empty→"", "Hi", '한'-raw-bytes, and all three out-of-range
+inputs (256 / -1 / 300) → "" — the range-guard + non-NUL identity path is
+byte-identical to C.
+
+DIFFER (3): any input CONTAINING 0x00 — lone NUL, NUL-interleaved, and
+the full-byte-set case. C returns the full-length string (len 1/5/6 with
+the NUL bytes intact) because its body writes into hexa_strbuf_alloc(n),
+which carries an EXPLICIT length header so HX_STRLEN sees all n bytes. The
+hexa port routes through chr()/join (hexa_str_join), whose result length is
+derived from the NUL-truncated C string, collapsing any NUL-bearing result
+to len 0.
+
+This is the SAME class of primitive gap M2 hit on hexa_dict_keys: it is
+NOT fixable in the rt_bytes_to_str_raw body. Closing it needs a NUL-clean
+string-builder intrinsic exposed to hexa — a length-header-carrying
+analogue of hexa_strbuf_alloc — so the join/chr path stops deriving length
+via strlen. UNTIL that primitive lands, rt_bytes_to_str_raw is NOT wired as
+the live delegation; the C SSOT stays authoritative for NUL-bearing callers
+(e.g. image_read PNG IHDR length fields). The hexa body is kept in-source
+as the proven non-NUL port + the persisted falsifier.
+
+RAW HARNESS OUTPUT (verbatim stdout, bytes_to_str_raw block)
+------------------------------------------------------------------------
+ok   b2s empty          C=C[len=0:] hexa=H[len=0:]
+ok   b2s Hi             C=C[len=2: 48 69] hexa=H[len=2: 48 69]
+FAIL b2s nul            C=C[len=1: 00] hexa=H[len=0:]
+FAIL b2s mix-nul        C=C[len=5: 00 41 00 42 00] hexa=H[len=0:]
+FAIL b2s full           C=C[len=6: 00 01 7f 80 fe ff] hexa=H[len=0:]
+ok   b2s oob256         C=C[len=0:] hexa=H[len=0:]
+ok   b2s oob-neg        C=C[len=0:] hexa=H[len=0:]
+ok   b2s oob-low        C=C[len=0:] hexa=H[len=0:]
+ok   b2s kor-raw        C=C[len=3: ed 95 9c] hexa=H[len=3: ed 95 9c]
+
+RUNEQ-SUMMARY (this leaf) total=9 fails=3 verdict=DIFFER
+
+DISPOSITION: BLOCKED on a NUL-clean string-builder intrinsic. Carry to
+M2-followup / M3 alongside the hexa_dict_keys map-rep gap.

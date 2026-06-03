@@ -75,3 +75,41 @@ Projected irreducible C floor (tier-A) = **1547 LOC** vs current 14919.
 - `hexa_is_empty` (8 LOC, L4809) — len==0 predicate, pure
 - `hexa_array_skip_while` (9 LOC, L5319) — combinator over core push/get
 - `hexa_array_step_by` (9 LOC, L5397) — combinator over core push/get
+
+---
+
+## 2026-06-03 · M2-followup — 3 more B-OPEN leaves (RUNEQ local on mini, no ghost)
+
+Extended M2 (hexa_float_to_int #2626) with 3 more tier-B-OPEN scalar/string
+leaves, same minimal-TU RUNEQ rig (hexat transpile → extract body → link vs
+shipping runtime.o C SSOT → byte/value-exact compare). LOCAL on mini only.
+
+| leaf | C SSOT | hexa port | LOC | RUNEQ | verdict |
+|------|--------|-----------|-----|-------|---------|
+| hexa_from_char_code | runtime.c L6035 | rt_from_char_code (string.hexa) | 35 | 32/32 | **PORT-EQ** |
+| hexa_is_empty | runtime.c L4809 | rt_is_empty (core.hexa) | 17 | 9/9 | **PORT-EQ** |
+| hexa_bytes_to_str_raw | runtime.c L6105 | rt_bytes_to_str_raw (string.hexa) | 30 | 6/9 | **DIFFER** (NUL) |
+
+- **rt_from_char_code** — codepoint→UTF-8. Assembles raw UTF-8 bytes itself
+  and feeds rt_str_from_chars (chr→hexa_chr_byte, &0xFF no-op). Byte-identical
+  across all 4 byte-length tiers + boundaries + negative clamp. 6 locked IT6
+  assertions in test_string.hexa. `.verdicts/runtime-port/M2-hexa_from_char_code.txt`.
+- **rt_is_empty** — array/string len==0; RUNEQ confirmed the load-bearing C
+  quirk that EVERY other tag (int/float/void/bool/MAP) reports empty=true
+  (default fallthrough). 6 locked assertions in test_core.hexa.
+  `.verdicts/runtime-port/M2-hexa_is_empty.txt`.
+- **rt_bytes_to_str_raw** — DIFFER on embedded NUL: C uses hexa_strbuf_alloc(n)
+  (explicit length header → NULs survive, RFC 030 Phase 2); the hexa chr()/join
+  path derives length via strlen and collapses NUL-bearing results to "".
+  Non-NUL identity + range-guard (256/-1/300 → "") are PORT-EQ (6/9). SAME
+  class of primitive gap as M2's hexa_dict_keys — needs a NUL-clean
+  string-builder intrinsic (length-header analogue of hexa_strbuf_alloc
+  exposed to hexa). NOT wired as live delegation; C SSOT stays authoritative
+  for NUL callers (image_read PNG IHDR). Kept in-source as proven non-NUL port
+  + persisted falsifier. DISPOSITION: BLOCKED.
+  `.verdicts/runtime-port/M2-hexa_bytes_to_str_raw.txt`.
+
+Net: M2 now has **3 PORT-EQ leaves landed** (float_to_int + from_char_code +
+is_empty) and **2 BLOCKED** on primitive gaps (dict_keys = map-rep, bytes_to_
+str_raw = NUL-clean builder). RUNEQ method continues to earn its keep — caught
+the NUL divergence honestly rather than waving it through.
