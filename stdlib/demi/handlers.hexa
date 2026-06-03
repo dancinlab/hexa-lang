@@ -1268,6 +1268,42 @@ pub fn handler_backend(argv: [string]) -> int {
     return 2
 }
 
+// `demiurge owner` — the 사장실 status surface (CLI+COCKPIT M20). Mirrors
+// Swift `ownerStatus()`. Shows whether owner-mode is unlocked (env
+// DEMIURGE_OWNER) + the owner-only ops it gates. Unlike operate/backend,
+// this surface keys off `DemiurgeMode.owner` ONLY (env-gated) — it does
+// NOT honor a `--owner` flag (Swift uses `DemiurgeMode.owner`, not the
+// `args.contains("--owner") || ownerModeEnabled` form). Reuses op_registry()
+// (operation_registry.hexa) + op_reach_glyph is not used here (Swift prints
+// a fixed ✅/🔒 per on-state, not the reach glyph). Read-only, always exit 0.
+pub fn handler_owner(argv: [string]) -> int {
+    // Swift `let on = DemiurgeMode.owner` (DEMIURGE_OWNER present).
+    let on = len(env("DEMIURGE_OWNER")) > 0
+    let head = if on { "✅ unlocked (DEMIURGE_OWNER)" } else { "🔒 locked" }
+    println("owner-mode (사장실): " + head)
+    // Swift `OperationRegistry.all.filter { $0.tier == .owner }`.
+    let ops = op_registry()
+    let mut count = 0
+    let mut i = 0
+    while i < len(ops) {
+        if ops[i].tier == "owner" { count = count + 1 }
+        i = i + 1
+    }
+    println("  owner-only ops (" + to_string(count) + "):")
+    let mark = if on { "✅" } else { "🔒" }
+    i = 0
+    while i < len(ops) {
+        if ops[i].tier == "owner" {
+            println("    " + mark + " " + ops[i].title)
+        }
+        i = i + 1
+    }
+    if !on {
+        println("  → unlock: DEMIURGE_OWNER=1 demiurge <cmd>  (외부 사용자에겐 비노출)")
+    }
+    return 0
+}
+
 pub fn handler_local(target: string, argv: [string]) -> int {
     if target == "action" { return handler_action(argv) }
     if target == "verify" { return handler_verify(argv) }
@@ -1287,6 +1323,7 @@ pub fn handler_local(target: string, argv: [string]) -> int {
     if target == "compose"        { return handler_compose(argv) }
     if target == "operate"        { return handler_operate(argv) }
     if target == "backend"        { return handler_backend(argv) }
+    if target == "owner"          { return handler_owner(argv) }
     // every other declared local target is not-yet-ported → honest stub.
     return handler_stub(target, argv)
 }

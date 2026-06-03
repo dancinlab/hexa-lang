@@ -1672,6 +1672,36 @@ fn main() {
     fails = fails + _cell("backend/unknown-subcommand", entry, swift_bin, "",
                           "backend badsub", g_bk_unknown, 2)
 
+    // ── PR#16 owner cells — `owner` renders the 사장실 status surface
+    // (Swift ownerStatus · CLI+COCKPIT M20): the owner-mode lock state +
+    // the 5 owner-only ops it gates, read from op_registry()
+    // (operation_registry.hexa). Unlike operate/backend this surface keys
+    // off DemiurgeMode.owner (env DEMIURGE_OWNER) ONLY — it does NOT honor
+    // a `--owner` flag. The op titles are static manifest text (no machine
+    // state), so the goldens are portable. Goldens captured byte-for-byte
+    // from Swift DemiurgeCLI 2026-06-04. Covers both states: OFF (locked +
+    // 🔒 rows + unlock hint) and ON (unlocked + ✅ rows, no hint).
+    let g_own_ops = "  owner-only ops (5):\n"
+    let g_own_body_off = "    🔒 pool → 내 호스트 라우팅\n"
+        + "    🔒 inbox/patches → hexa-lang 핸드오프\n"
+        + "    🔒 atlas 등록 PR → dancinlab\n"
+        + "    🔒 @D 거버넌스 enforcement\n"
+        + "    🔒 내 연구 domain <NAME>.md 운영\n"
+    // (1) owner OFF (env unset) — locked head + 🔒 rows + unlock hint, rc 0.
+    let g_own_off = "owner-mode (사장실): 🔒 locked\n" + g_own_ops + g_own_body_off
+        + "  → unlock: DEMIURGE_OWNER=1 demiurge <cmd>  (외부 사용자에겐 비노출)\n"
+    fails = fails + _cell("owner/status-locked", entry, swift_bin, "",
+                          "owner", g_own_off, 0)
+    // (2) owner ON (DEMIURGE_OWNER=1) — unlocked head + ✅ rows, NO hint, rc 0.
+    let g_own_body_on = "    ✅ pool → 내 호스트 라우팅\n"
+        + "    ✅ inbox/patches → hexa-lang 핸드오프\n"
+        + "    ✅ atlas 등록 PR → dancinlab\n"
+        + "    ✅ @D 거버넌스 enforcement\n"
+        + "    ✅ 내 연구 domain <NAME>.md 운영\n"
+    let g_own_on = "owner-mode (사장실): ✅ unlocked (DEMIURGE_OWNER)\n" + g_own_ops + g_own_body_on
+    fails = fails + _cell("owner/status-unlocked", entry, swift_bin,
+                          "DEMIURGE_OWNER=1", "owner", g_own_on, 0)
+
     if fails == 0 { println("demi_parity_selftest PASS") }
     else { println("demi_parity_selftest FAIL — " + to_string(fails) + " cell(s)") }
 }
