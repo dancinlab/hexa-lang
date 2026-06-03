@@ -1039,6 +1039,61 @@ fn main() {
     fails = fails + _cell("action/converge-missing-domain", entry, swift_bin, "",
                           "action --converge specify", g_converge_missing, 2)
 
+    // PR #20 (@L6 KEYSTONE) action synthesize rtsc --deck <deck> — the
+    // QFORGE el-ph synthesize cell. The (synthesize, rtsc) special-cell
+    // forwards to `hexa qforge run <deck>` VERBATIM (Swift cliSynthesizeRtsc ·
+    // main.swift:312-319); any other (verb, domain) with --deck, or a missing
+    // /flag-as-value --deck value, is an honest usage error (exit 2).
+    //
+    // @L6 / @D d6 HONESTY: the QFORGE migration gate is HELD (λ·Tc not yet
+    // cross-val'd vs QE). The forward path asserts NO agreement and synthesizes
+    // NO Tc — when a deck has no harvested DFPT el-ph dataset, qforge reports
+    // the cell→|g|² front-end gap honestly (exit 1, no fabricated Tc) and the
+    // CLI surfaces THAT unchanged. The forward GOLDEN is therefore computed
+    // LIVE from the SAME `hexa qforge run` kernel both surfaces spawn (no
+    // brittle hardcoded multi-line string · same pattern as _cell_passthrough),
+    // so the cell proves demi's framing (the `action: 합성 (만들기) …` header +
+    // verbatim child block + trailing "---") + rc are byte-identical to Swift
+    // for a deterministic, host-independent deck path (a fixed /tmp/<x> path
+    // that does not exist → the HELD-gate honest gap, identical on every host).
+    // The LIVE-converged HAPPY path (a deck WITH a harvested DFPT dataset →
+    // real λ·Tc) is NON-deterministic + heavy (it is the gated migration work
+    // itself, currently HELD) — it is NOT run in this cell; it is honestly
+    // scoped to a follow-up once the QFORGE↔QE cross-val gate OPENS.
+    let hexa_bin0 = exec("command -v hexa 2>/dev/null || echo hexa").trim()
+    let qf_deck = "/tmp/.demi-selftest-qforge-noexist-deck"
+    let qfk = exec_with_status(_shq2(hexa_bin0) + " qforge run "
+                               + _shq2(qf_deck) + " 2>&1")
+    let qf_child = to_string(qfk[0])
+    // demi/Swift framing around the verbatim child block: header line + the
+    // child text (already \n-terminated by qforge) + a trailing "---" line.
+    // The child rc (1 on the HELD gap) is propagated as the cell rc.
+    let g_synth_fwd = "action: 합성 (만들기) · domain=rtsc · engine=qforge · deck="
+        + qf_deck + " — qforge run…\n"
+        + qf_child
+        + "---\n"
+    fails = fails + _cell("action/synthesize-rtsc-deck-forward", entry, swift_bin,
+                          "", "action synthesize rtsc --deck " + _shq2(qf_deck),
+                          g_synth_fwd, qfk[1])
+    // --deck with NO value (last token) → byte-exact Swift takeValueFlag error.
+    let g_deck_eoa = "error: flag --deck needs a value, got end-of-args\n"
+    fails = fails + _cell("action/synthesize-deck-no-value", entry, swift_bin, "",
+                          "action synthesize rtsc --deck", g_deck_eoa, 2)
+    // --deck with a flag in the value slot → byte-exact Swift takeValueFlag error.
+    let g_deck_flagval = "error: flag --deck needs a value, got '--foo'\n"
+    fails = fails + _cell("action/synthesize-deck-flag-as-value", entry, swift_bin, "",
+                          "action synthesize rtsc --deck --foo", g_deck_flagval, 2)
+    // --deck on a NON-rtsc synthesize → honest usage error (only rtsc drives QFORGE).
+    let g_deck_nonrtsc = "action --deck: only 'synthesize rtsc --deck <deck>' "
+        + "drives QFORGE el-ph (@L2). got verb='synthesize' domain='chip'.\n"
+    fails = fails + _cell("action/deck-nonrtsc-domain", entry, swift_bin, "",
+                          "action synthesize chip --deck /tmp/d", g_deck_nonrtsc, 2)
+    // --deck on a NON-synthesize verb → same honest usage error.
+    let g_deck_nonsynth = "action --deck: only 'synthesize rtsc --deck <deck>' "
+        + "drives QFORGE el-ph (@L2). got verb='verify' domain='rtsc'.\n"
+    fails = fails + _cell("action/deck-nonsynth-verb", entry, swift_bin, "",
+                          "action verify rtsc --deck /tmp/d", g_deck_nonsynth, 2)
+
     // PR-verify-passthrough — `verify --expr|--fence|rubric` → hexa verify
     // kernel, output forwarded VERBATIM (Swift verifyHexa · @D g5). Golden
     // is the live kernel call (the SSOT both surfaces forward to).

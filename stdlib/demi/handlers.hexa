@@ -103,6 +103,34 @@ pub fn handler_action(argv: [string]) -> int {
     // the REMAINING tokens are [verb, domain?] (Swift actionArgs.first /
     // [1] after remove(at:)). The --producer / --deck value-flags land in
     // their own stacked PR; this PR ports compose/converge only.
+    // --deck <deck> (8VERB Family A · PR #20 · @L2/@L6) has the HIGHEST
+    // precedence — Swift cliAction parses --deck (main.swift:1098,1102) BEFORE
+    // --converge (1114) / --compose (1119). It is a value-flag routed through
+    // the SAME validator as --producer (Swift takeValueFlag): a missing /
+    // flag-as-value value errors cleanly (exit 2) instead of swallowing the
+    // next token. When present, ONLY `synthesize rtsc --deck <deck>` drives
+    // QFORGE el-ph (the (synthesize, rtsc) special-cell); any other (verb,
+    // domain) pairing with --deck is an honest usage error (exit 2). This is a
+    // THIN forwarding cell (like atlas/verify) — NOT a name-branch in the
+    // generic layer: the post-deck argv still flows to the SAME cellrun engine
+    // for every NON-rtsc synthesize (d4 · dispatch.hexa untouched).
+    if _action_has_flag(argv, "--deck") {
+        let parsed = _action_take_value_flag(argv, "--deck")
+        // parsed[0] = rc-sentinel ("0" ok · "2" value error already printed),
+        // parsed[1] = the deck value (when ok), parsed[2..] = remaining argv.
+        if parsed[0] != "0" { return 2 }
+        let deck = parsed[1]
+        let rest = _action_slice_from(parsed, 2)
+        let d_verb = if len(rest) >= 1 { rest[0] } else { "" }
+        let d_domain = if len(rest) >= 2 { rest[1] } else { "" }
+        if _verb_canonical(d_verb) == "synthesize" && d_domain == "rtsc" {
+            return handler_synthesize_rtsc(deck)
+        }
+        eprintln("action --deck: only 'synthesize rtsc --deck <deck>' "
+                 + "drives QFORGE el-ph (@L2). got verb='" + d_verb + "' "
+                 + "domain='" + d_domain + "'.")
+        return 2
+    }
     if _action_has_flag(argv, "--converge") {
         return handler_action_converge(_action_drop_flag(argv, "--converge"))
     }
@@ -226,6 +254,100 @@ fn _action_drop_flag(argv: [string], flag: string) -> [string] {
         i = i + 1
     }
     return out
+}
+
+// _action_take_value_flag(argv, flag) — port of the Swift takeValueFlag
+// (main.swift:1011-1027) for a value-flag like --deck. Returns a packed
+// [string]: result[0] = a rc-sentinel ("0" ok · "2" error-already-printed),
+// result[1] = the consumed value (empty on error), result[2..] = argv with
+// BOTH the flag and its value removed (Swift args.remove(idx+1)+remove(idx)).
+// Byte-for-byte error strings + exit-2 semantics:
+//   · flag is the LAST token (no value) → "error: flag <flag> needs a value,
+//     got end-of-args" (stderr) · sentinel "2".
+//   · the value itself starts with "--" (a flag in value slot) → "error: flag
+//     <flag> needs a value, got '<value>'" (stderr) · sentinel "2".
+// The caller (handler_action) translates sentinel "2" → return 2 (Swift exits
+// 2 inline; in-process we surface the same rc up through demi_dispatch).
+fn _action_take_value_flag(argv: [string], flag: string) -> [string] {
+    let mut idx = -1
+    let mut i = 0
+    while i < len(argv) {
+        if argv[i] == flag { idx = i ; i = len(argv) } else { i = i + 1 }
+    }
+    if idx < 0 { return ["0", ""] }   // flag absent — caller never reaches here
+    if idx + 1 >= len(argv) {
+        eprintln("error: flag " + flag + " needs a value, got end-of-args")
+        return ["2", ""]
+    }
+    let value = argv[idx + 1]
+    if value == "--" || value.starts_with("--") {
+        eprintln("error: flag " + flag + " needs a value, got '" + value + "'")
+        return ["2", ""]
+    }
+    // ok — build [ "0", value, <argv minus flag+value, in order> ].
+    let mut out: [string] = ["0", value]
+    let mut j = 0
+    while j < len(argv) {
+        if j != idx && j != (idx + 1) { out.push(argv[j]) }
+        j = j + 1
+    }
+    return out
+}
+
+// _action_slice_from(arr, k) — arr[k..] (the remaining argv after the packed
+// sentinel+value header of _action_take_value_flag).
+fn _action_slice_from(arr: [string], k: int) -> [string] {
+    let mut out: [string] = []
+    let mut i = k
+    while i < len(arr) {
+        out.push(arr[i])
+        i = i + 1
+    }
+    return out
+}
+
+// handler_synthesize_rtsc(deck) — `action synthesize rtsc --deck <deck>`, the
+// QFORGE el-ph synthesize cell (8VERB Family A · PR #20 · @L2/@L6). Port of
+// the Swift cliSynthesizeRtsc (main.swift:312-319). It drives QFORGE DIRECTLY
+// through the SAME verbatim-forward shape verify/atlas use: spawn `hexa qforge
+// run <deck>`, surface stdout+stderr UNCHANGED (@D g5 — the stdlib QFORGE
+// kernel owns the verdict; demiurge NEVER re-judges), then a trailing "---".
+//
+// @L6 / @D d6 HONESTY: the QFORGE migration gate is HELD (λ·Tc not yet
+// cross-val'd vs QE on LaH10·CaH6·Li2MgH16). The CLI MUST pass QFORGE's honest
+// output through unchanged — it asserts NO convergence, NO agreement, and
+// synthesizes NO λ/Tc of its own. When a deck has no harvested DFPT el-ph
+// dataset, `hexa qforge run` reports the cell→|g|² front-end gap honestly
+// (exit 1, no fabricated Tc) and THIS cell surfaces THAT verbatim. The held
+// gate is never presented as production-validated agreement.
+//
+// Exit code mirrors Swift `r.ran ? r.exitCode : 127`: the qforge child's rc
+// is propagated; a MISSING `hexa` (hx dependency absent) surfaces 127. We
+// detect the missing-binary case the same way the rest of demi does — a
+// `command -v hexa` probe — so a real run propagates the qforge rc while an
+// absent toolchain yields 127 (never a fabricated success).
+pub fn handler_synthesize_rtsc(deck: string) -> int {
+    println("action: 합성 (만들기) · domain=rtsc · engine=qforge · deck="
+            + deck + " — qforge run…")
+    let probe = exec("command -v hexa 2>/dev/null || echo __MISSING__").trim()
+    if probe == "__MISSING__" {
+        // hx dependency missing (Swift ran=false → 127). Honest gap, NOT a
+        // verdict — no fabricated qforge output.
+        println("hexa invocation failed: `hexa` not found on PATH")
+        println("(`hexa` must be installed — hx dependency, CLI+COCKPIT M18)")
+        println("---")
+        return 127
+    }
+    let cmd = _shq_h(probe) + " qforge run " + _shq_h(deck) + " 2>&1"
+    let pair = exec_with_status(cmd)
+    let out = to_string(pair[0])
+    // Swift: print(r.text, terminator: r.text.hasSuffix("\n") ? "" : "\n").
+    // i.e. emit the verbatim text, ensuring EXACTLY one trailing newline (the
+    // empty-text case still yields a lone newline — Swift terminator "\n").
+    print(out)
+    if !out.ends_with("\n") { println("") }
+    println("---")
+    return pair[1]
 }
 
 // _step_tag(rc) — the ok/skip outcome tag for one cellrun step (see above).
