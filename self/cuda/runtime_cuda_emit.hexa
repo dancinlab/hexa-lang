@@ -1027,7 +1027,7 @@ fn emit_runtime_cuda_c() -> str {
             "    const double* DXC = g_slots[dxc_id].d_buf;\n" +
             "    double*       DX  = g_slots[dx_id].d_buf;\n" +
             "    int grid_sz, block_sz; _hx_im2col_grid(T * Cin, &grid_sz, &block_sz);\n" +
-            "    _hx_k_col2im<<<grid_sz, block_sz>>>(DXC, DX, T, Cin, K, dil);\n" +
+            "    _hx_k_col2im<<<grid_sz, block_sz, 0, _forge_stream()>>>(DXC, DX, T, Cin, K, dil);\n" +
             "    cudaError_t er = cudaDeviceSynchronize();\n" +
             "    if (er != cudaSuccess) {\n" +
             "        fprintf(stderr, \"[cuda] col2im launch failed: %s\\n\", cudaGetErrorString(er));\n" +
@@ -1261,7 +1261,7 @@ fn emit_runtime_cuda_c() -> str {
             "    int64_t want = (n + block_sz - 1) / block_sz;\n" +
             "    int grid_sz = (want > 1024) ? 1024 : (int)want;\n" +
             "    if (grid_sz < 1) grid_sz = 1;\n" +
-            "    _hx_k_int4_quant_bwd<<<grid_sz, block_sz>>>(DY, MASK, DW, n);\n" +
+            "    _hx_k_int4_quant_bwd<<<grid_sz, block_sz, 0, _forge_stream()>>>(DY, MASK, DW, n);\n" +
             "    cudaError_t er = cudaDeviceSynchronize();\n" +
             "    if (er != cudaSuccess) {\n" +
             "        fprintf(stderr, \"[cuda] int4_quant_bwd launch failed: %s\\n\",\n" +
@@ -1743,7 +1743,7 @@ fn emit_runtime_cuda_c() -> str {
             "    int64_t want = (n + block_sz - 1) / block_sz;\n" +
             "    int grid_sz = (want > 1024) ? 1024 : (int)want;\n" +
             "    if (grid_sz < 1) grid_sz = 1;\n" +
-            "    _hx_k_gelu_bwd<<<grid_sz, block_sz>>>(G, DA, DG, n);\n" +
+            "    _hx_k_gelu_bwd<<<grid_sz, block_sz, 0, _forge_stream()>>>(G, DA, DG, n);\n" +
             "    cudaError_t er = cudaDeviceSynchronize();\n" +
             "    if (er != cudaSuccess) {\n" +
             "        fprintf(stderr, \"[cuda] gelu_bwd launch failed: %s\\n\",\n" +
@@ -1857,7 +1857,7 @@ fn emit_runtime_cuda_c() -> str {
             "        int64_t want = (C + block_sz - 1) / block_sz;\n" +
             "        int grid_sz = (want > 1024) ? 1024 : (int)want;\n" +
             "        if (grid_sz < 1) grid_sz = 1;\n" +
-            "        _hx_k_groupnorm_bwd_affine<<<grid_sz, block_sz>>>(XHAT, DY,\n" +
+            "        _hx_k_groupnorm_bwd_affine<<<grid_sz, block_sz, 0, _forge_stream()>>>(XHAT, DY,\n" +
             "                                                          DGAMMA, DBETA, T, C);\n" +
             "    }\n" +
             "    {\n" +
@@ -1865,7 +1865,7 @@ fn emit_runtime_cuda_c() -> str {
             "        int64_t want = (G + block_sz - 1) / block_sz;\n" +
             "        int grid_sz = (want > 1024) ? 1024 : (int)want;\n" +
             "        if (grid_sz < 1) grid_sz = 1;\n" +
-            "        _hx_k_groupnorm_bwd_dx<<<grid_sz, block_sz>>>(XHAT, INV, GAMMA, DY,\n" +
+            "        _hx_k_groupnorm_bwd_dx<<<grid_sz, block_sz, 0, _forge_stream()>>>(XHAT, INV, GAMMA, DY,\n" +
             "                                                      DX, T, C, G);\n" +
             "    }\n" +
             "    cudaError_t er = cudaDeviceSynchronize();\n" +
@@ -1927,7 +1927,7 @@ fn emit_runtime_cuda_c() -> str {
             "    int64_t want = (n + block_sz - 1) / block_sz;\n" +
             "    int grid_sz = (want > 1024) ? 1024 : (int)want;\n" +
             "    if (grid_sz < 1) grid_sz = 1;\n" +
-            "    _hx_k_expert_unpack2<<<grid_sz, block_sz>>>(DEX_OUT, DEX0, DEX1, n);\n" +
+            "    _hx_k_expert_unpack2<<<grid_sz, block_sz, 0, _forge_stream()>>>(DEX_OUT, DEX0, DEX1, n);\n" +
             "    cudaError_t er = cudaDeviceSynchronize();\n" +
             "    if (er != cudaSuccess) {\n" +
             "        fprintf(stderr, \"[cuda] expert_unpack2 launch failed: %s\\n\",\n" +
@@ -2003,7 +2003,7 @@ fn emit_runtime_cuda_c() -> str {
             "    int64_t want = (T + block_sz - 1) / block_sz;\n" +
             "    int grid_sz = (want > 1024) ? 1024 : (int)want;\n" +
             "    if (grid_sz < 1) grid_sz = 1;\n" +
-            "    _hx_k_ce_grad<<<grid_sz, block_sz>>>(LOGITS, TARGETS, DLOGITS, T, V);\n" +
+            "    _hx_k_ce_grad<<<grid_sz, block_sz, 0, _forge_stream()>>>(LOGITS, TARGETS, DLOGITS, T, V);\n" +
             "    cudaError_t er = cudaDeviceSynchronize();\n" +
             "    if (er != cudaSuccess) {\n" +
             "        fprintf(stderr, \"[cuda] ce_grad launch failed: %s\\n\",\n" +
@@ -2087,7 +2087,7 @@ fn emit_runtime_cuda_c() -> str {
             "    int64_t want = (T + block_sz - 1) / block_sz;\n" +
             "    int grid_sz = (want > 1024) ? 1024 : (int)want;\n" +
             "    if (grid_sz < 1) grid_sz = 1;\n" +
-            "    _hx_k_moe_router_bwd<<<grid_sz, block_sz>>>(PROBS, EX_OUT, DY,\n" +
+            "    _hx_k_moe_router_bwd<<<grid_sz, block_sz, 0, _forge_stream()>>>(PROBS, EX_OUT, DY,\n" +
             "                                               DLOGITS, DEX_OUT, T, E, C);\n" +
             "    cudaError_t er = cudaDeviceSynchronize();\n" +
             "    if (er != cudaSuccess) {\n" +
@@ -2148,7 +2148,7 @@ fn emit_runtime_cuda_c() -> str {
             "    int64_t want = (n + block_sz - 1) / block_sz;\n" +
             "    int grid_sz = (want > 1024) ? 1024 : (int)want;\n" +
             "    if (grid_sz < 1) grid_sz = 1;\n" +
-            "    _hx_k_grad_sum3<<<grid_sz, block_sz>>>(A, B, C, OUT, n);\n" +
+            "    _hx_k_grad_sum3<<<grid_sz, block_sz, 0, _forge_stream()>>>(A, B, C, OUT, n);\n" +
             "    cudaError_t er = cudaDeviceSynchronize();\n" +
             "    if (er != cudaSuccess) {\n" +
             "        fprintf(stderr, \"[cuda] grad_sum3 launch failed: %s\\n\",\n" +
@@ -2199,7 +2199,7 @@ fn emit_runtime_cuda_c() -> str {
             "    int64_t want = (n + block_sz - 1) / block_sz;\n" +
             "    int grid_sz = (want > 1024) ? 1024 : (int)want;\n" +
             "    if (grid_sz < 1) grid_sz = 1;\n" +
-            "    _hx_k_grad_sum2<<<grid_sz, block_sz>>>(A, B, OUT, n);\n" +
+            "    _hx_k_grad_sum2<<<grid_sz, block_sz, 0, _forge_stream()>>>(A, B, OUT, n);\n" +
             "    cudaError_t er = cudaDeviceSynchronize();\n" +
             "    if (er != cudaSuccess) {\n" +
             "        fprintf(stderr, \"[cuda] grad_sum2 launch failed: %s\\n\",\n" +
@@ -2264,7 +2264,7 @@ fn emit_runtime_cuda_c() -> str {
             "    int64_t want = (V + block_sz - 1) / block_sz;\n" +
             "    int grid_sz = (want > 1024) ? 1024 : (int)want;\n" +
             "    if (grid_sz < 1) grid_sz = 1;\n" +
-            "    _hx_k_embedding_bwd_scatter<<<grid_sz, block_sz>>>(DX, IDS, DTABLE, T, d, V);\n" +
+            "    _hx_k_embedding_bwd_scatter<<<grid_sz, block_sz, 0, _forge_stream()>>>(DX, IDS, DTABLE, T, d, V);\n" +
             "    cudaError_t er = cudaDeviceSynchronize();\n" +
             "    if (er != cudaSuccess) {\n" +
             "        fprintf(stderr, \"[cuda] embedding_bwd_scatter launch failed: %s\\n\",\n" +
@@ -3283,7 +3283,7 @@ fn emit_runtime_cuda_c() -> str {
             "    int grid_sz = (want_blocks > 1024) ? 1024 : (int)want_blocks;\n" +
             "    if (grid_sz < 1) grid_sz = 1;\n" +
             "\n" +
-            "    _hx_k_adamw_step<<<grid_sz, block_sz>>>(W, Mm, Vv, G, O, n,\n" +
+            "    _hx_k_adamw_step<<<grid_sz, block_sz, 0, _forge_stream()>>>(W, Mm, Vv, G, O, n,\n" +
             "                                            lr, b1, b2, eps, wd, c1, c2);\n" +
             "    cudaError_t er = cudaDeviceSynchronize();\n" +
             "    if (er != cudaSuccess) {\n" +
@@ -3341,7 +3341,7 @@ fn emit_runtime_cuda_c() -> str {
             "    int grid_sz = (want_blocks > 1024) ? 1024 : (int)want_blocks;\n" +
             "    if (grid_sz < 1) grid_sz = 1;\n" +
             "\n" +
-            "    _hx_k_adamw_step_inplace<<<grid_sz, block_sz>>>(W, Mm, Vv, G, n,\n" +
+            "    _hx_k_adamw_step_inplace<<<grid_sz, block_sz, 0, _forge_stream()>>>(W, Mm, Vv, G, n,\n" +
             "                                            lr, b1, b2, eps, wd, c1, c2);\n" +
             "    cudaError_t er = cudaDeviceSynchronize();\n" +
             "    if (er != cudaSuccess) {\n" +
@@ -3418,7 +3418,7 @@ fn emit_runtime_cuda_c() -> str {
             "    int grid_sz = (want_blocks > 1024) ? 1024 : (int)want_blocks;\n" +
             "    if (grid_sz < 1) grid_sz = 1;\n" +
             "\n" +
-            "    _hx_k_adamw_step_inplace<<<grid_sz, block_sz>>>(W, Mm, Vv, G, n,\n" +
+            "    _hx_k_adamw_step_inplace<<<grid_sz, block_sz, 0, _forge_stream()>>>(W, Mm, Vv, G, n,\n" +
             "                                            lr, b1, b2, eps, wd, c1, c2);\n" +
             "    cudaError_t er = cudaDeviceSynchronize();\n" +
             "    if (er != cudaSuccess) {\n" +
