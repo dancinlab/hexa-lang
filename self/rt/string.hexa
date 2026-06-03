@@ -435,20 +435,18 @@ fn rt_str_from_chars(codes: [int]) -> string {
 // from rt_str_from_chars: any element <0 or >255 voids the whole result to
 // "" (Phase-1 silent-error policy), and empty / non-array → "".
 //
-// ⚠ RUNEQ status = DIFFER (NUL-clean primitive gap) — see verdict
-//   .verdicts/runtime-port/M2-hexa_bytes_to_str_raw.txt. For inputs with
-//   NO embedded NUL this is byte-identical to the C SSOT (Hi / kör-raw /
-//   range-guard cases all PORT-EQ). For inputs containing 0x00 it DIFFERs:
-//   the C body uses hexa_strbuf_alloc(n) with an explicit length header so
-//   NULs survive (RFC 030 Phase 2), whereas this hexa body routes through
-//   chr()/join → hexa_str_join, which derives length from the NUL-truncated
-//   C string and collapses any NUL-containing result to "". This is the
-//   SAME class of primitive gap M2 hit on hexa_dict_keys: closing it needs
-//   a NUL-clean string builder intrinsic (a length-header-carrying analogue
-//   of hexa_strbuf_alloc exposed to hexa), NOT a body change here. UNTIL
-//   that primitive lands this fn is NOT wired as the live delegation — the
-//   C SSOT stays authoritative for NUL-bearing callers (image_read PNG
-//   IHDR etc.). Kept in-source as the proven non-NUL port + the falsifier.
+// ✅ RUNEQ status = PORT-EQ (NUL-clean, RUNTIME-PORT B1 2026-06-03). The hexa
+//   range-guard loop (Phase-1 silent-error: any element <0 or >255 voids the
+//   whole result to "") stays in source; the final assembly delegates to the
+//   length-carrying builder builtin `str_from_bytes_n`, which lowers to the C
+//   constructor hexa_bytes_to_str_raw. That constructor writes into
+//   hexa_strbuf_alloc(n) — an EXPLICIT length header (perf-31) so HX_STRLEN
+//   sees all n bytes and embedded 0x00 survive (RFC 030 Phase 2). Previously
+//   this body routed through chr()/join → hexa_str_join, which derives length
+//   from the NUL-truncated C string and collapsed any NUL-bearing result to ""
+//   (the persisted falsifier 3/9 DIFFER). The B1 codegen builtin closes that
+//   without an ABI change. RUNEQ-gated 9/9 byte-exact vs C — see verdict
+//   .verdicts/runtime-port/M2-bytes_to_str_raw.txt.
 @pure fn rt_bytes_to_str_raw(arr: [int]) -> string {
     let n = len(arr)
     if n <= 0 { return "" }
@@ -459,7 +457,7 @@ fn rt_str_from_chars(codes: [int]) -> string {
         if b > 255 { return "" }
         i = i + 1
     }
-    return rt_str_from_chars(arr)
+    return str_from_bytes_n(arr)
 }
 
 // ── parse_int (runtime.c L4688) ─────────────────────────────────────
