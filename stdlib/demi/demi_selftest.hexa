@@ -424,6 +424,202 @@ fn _make_project_fixture() {
     exec("printf %s " + _shq2(mb) + " > " + _shq2(db + "/manifest.json"))
 }
 
+// ── PR#13 mutation fixtures + cells (project new | advance | retreat) ───────
+//
+// The mutation verbs WRITE the store, so a plain _cell (which runs hexa AND
+// Swift on the SAME store) would let the second surface observe the first's
+// mutation. The helpers below RE-SEED a single deterministic project before
+// each surface's run, then compare BOTH the stdout/rc AND the resulting
+// manifest BYTES — a true byte-≡ Swift mutation gate (D50). The fixed-uuid +
+// fixed-createdAt seed makes the written manifest fully deterministic for the
+// advance/retreat path; for `new` (fresh uuid + UTC now) those two fields are
+// normalized before the byte-compare and the stdout is asserted verbatim (it
+// carries no uuid/time — @L7: assert only what is faithfully reproducible).
+
+// _seed_one_project(verb) — one project `step-proj` (id STEP… · domain general
+// · walk [] · doneVerbs []) at currentVerb=`verb`. Matches ProjectStore.save
+// byte layout so a step REWRITE round-trips every field.
+fn _seed_one_project(verb: int) {
+    let root = _project_store_root()
+    let d = root + "/51130000-0000-0000-0000-000000000013"
+    exec("rm -rf " + _shq2(root) + " && mkdir -p " + _shq2(d))
+    exec("printf %s " + _shq2(_step_man_at(verb)) + " > " + _shq2(d + "/manifest.json"))
+}
+
+// _step_man_at(verb) — the seeded step-proj manifest at currentVerb=verb (the
+// exact byte layout ps_save_project writes; doneVerbs/walk empty → `[\n\n  ]`).
+fn _step_man_at(verb: int) -> string {
+    return "{\n"
+        + "  \"createdAt\" : \"2026-02-02T02:02:02Z\",\n"
+        + "  \"currentVerb\" : " + to_string(verb) + ",\n"
+        + "  \"domain\" : \"general\",\n"
+        + "  \"doneVerbs\" : [\n\n  ],\n"
+        + "  \"id\" : \"51130000-0000-0000-0000-000000000013\",\n"
+        + "  \"name\" : \"step-proj\",\n"
+        + "  \"target\" : \"a steppable thing\",\n"
+        + "  \"walk\" : [\n\n  ]\n"
+        + "}"
+}
+
+// _step_manifest() — read back the seeded project's manifest bytes (the single
+// store dir). Empty string if absent.
+fn _step_manifest() -> string {
+    let path = _project_store_root() + "/51130000-0000-0000-0000-000000000013/manifest.json"
+    let hit = exec("test -f " + _shq2(path) + " && echo yes || echo no").trim()
+    if hit != "yes" { return "" }
+    return read_file(path)
+}
+
+// _cell_step — an advance/retreat parity cell: re-seed `seed_verb`, run hexa,
+// capture stdout+rc+manifest; re-seed, run Swift; assert stdout≡, rc≡, manifest
+// bytes≡. `want_manifest` is the byte-exact expected manifest after the step
+// (the golden when no Swift bin). A CLAMP cell passes the same verb as seed +
+// expects the manifest UNCHANGED (the clamp path does not write).
+fn _cell_step(name: string, entry: string, swift_bin: string,
+              seed_verb: int, argv_str: string,
+              golden_out: string, want_rc: int, want_manifest: string) -> int {
+    // hexa surface.
+    _seed_one_project(seed_verb)
+    let hx = _run_hexa(entry, "", argv_str)
+    let hx_out = hx[0]
+    let hx_rc = _atoi2(hx[1])
+    let hx_man = _step_manifest()
+    if hx_rc != want_rc {
+        println("FAIL " + name + " — hexa rc=" + to_string(hx_rc) + " want " + to_string(want_rc))
+        return 1
+    }
+    if len(swift_bin) > 0 {
+        _seed_one_project(seed_verb)
+        let sw = _run_swift(swift_bin, "", argv_str)
+        let sw_out = sw[0]
+        let sw_rc = _atoi2(sw[1])
+        let sw_man = _step_manifest()
+        if sw_out != hx_out {
+            println("FAIL " + name + " — stdout DIFFERS from Swift")
+            println("  --- swift ---"); println(sw_out)
+            println("  --- hexa  ---"); println(hx_out)
+            return 1
+        }
+        if sw_rc != hx_rc {
+            println("FAIL " + name + " — rc swift=" + to_string(sw_rc) + " hexa=" + to_string(hx_rc))
+            return 1
+        }
+        if sw_man != hx_man {
+            println("FAIL " + name + " — manifest DIFFERS from Swift")
+            println("  --- swift ---"); println(sw_man)
+            println("  --- hexa  ---"); println(hx_man)
+            return 1
+        }
+        println("PASS " + name + " (stdout+manifest ≡ Swift · rc=" + to_string(hx_rc) + ")")
+        return 0
+    }
+    if hx_out != golden_out {
+        println("FAIL " + name + " — stdout DIFFERS from golden")
+        println("  --- golden ---"); println(golden_out)
+        println("  --- hexa   ---"); println(hx_out)
+        return 1
+    }
+    if hx_man != want_manifest {
+        println("FAIL " + name + " — manifest DIFFERS from golden")
+        println("  --- golden ---"); println(want_manifest)
+        println("  --- hexa   ---"); println(hx_man)
+        return 1
+    }
+    println("PASS " + name + " (stdout+manifest ≡ golden · rc=" + to_string(hx_rc) + ")")
+    return 0
+}
+
+// _norm_manifest(m) — replace the two non-deterministic manifest fields (id +
+// createdAt) with placeholders so a `new`-written manifest is byte-comparable
+// across surfaces (the uuid + UTC timestamp differ per run; everything else —
+// the schema, currentVerb, domain, doneVerbs, name, target, walk — is exact).
+fn _norm_manifest(m: string) -> string {
+    let lines = m.split("\n")
+    let mut out = ""
+    let mut i = 0
+    while i < len(lines) {
+        let ln = lines[i]
+        let mut keep = ln
+        if rl_starts_with(ln.trim(), "\"id\" :") { keep = "  \"id\" : \"<UUID>\"," }
+        else if rl_starts_with(ln.trim(), "\"createdAt\" :") { keep = "  \"createdAt\" : \"<TS>\"," }
+        if i > 0 { out = out + "\n" }
+        out = out + keep
+        i = i + 1
+    }
+    return out
+}
+
+// _new_manifest() — the single manifest written by a `project new` run (there
+// is exactly one project dir under the fresh store). "" if none.
+fn _new_manifest() -> string {
+    let root = _project_store_root()
+    let listing = exec("ls " + _shq2(root) + "/*/manifest.json 2>/dev/null").trim()
+    if len(listing) == 0 { return "" }
+    let files = listing.split("\n")
+    return read_file(files[0].trim())
+}
+
+// _cell_new — a `project new` parity cell. The store is reset fresh, `env_prefix`
+// (DEMIURGE_REPO=<fixture>) feeds the composer, then for the named surface the
+// stdout (deterministic — no uuid/time in it) is asserted byte-≡ and the WRITTEN
+// manifest is asserted byte-≡ after normalizing id+createdAt. The Swift arm
+// re-resets + runs Swift and compares stdout + normalized-manifest. honest @L7:
+// id/createdAt are NOT golden-asserted (run-dependent); the schema + all other
+// fields ARE byte-exact.
+fn _cell_new(name: string, entry: string, swift_bin: string,
+             env_prefix: string, argv_str: string,
+             golden_out: string, want_rc: int, want_manifest_norm: string) -> int {
+    let root = _project_store_root()
+    exec("rm -rf " + _shq2(root))
+    let hx = _run_hexa(entry, env_prefix, argv_str)
+    let hx_out = hx[0]
+    let hx_rc = _atoi2(hx[1])
+    let hx_man = _norm_manifest(_new_manifest())
+    if hx_rc != want_rc {
+        println("FAIL " + name + " — hexa rc=" + to_string(hx_rc) + " want " + to_string(want_rc))
+        return 1
+    }
+    if hx_out != golden_out {
+        println("FAIL " + name + " — stdout DIFFERS from golden")
+        println("  --- golden ---"); println(golden_out)
+        println("  --- hexa   ---"); println(hx_out)
+        return 1
+    }
+    if hx_man != want_manifest_norm {
+        println("FAIL " + name + " — manifest(norm) DIFFERS from golden")
+        println("  --- golden ---"); println(want_manifest_norm)
+        println("  --- hexa   ---"); println(hx_man)
+        return 1
+    }
+    if len(swift_bin) > 0 {
+        exec("rm -rf " + _shq2(root))
+        let sw = _run_swift(swift_bin, env_prefix, argv_str)
+        let sw_out = sw[0]
+        let sw_rc = _atoi2(sw[1])
+        let sw_man = _norm_manifest(_new_manifest())
+        if sw_out != hx_out {
+            println("FAIL " + name + " — stdout DIFFERS Swift vs hexa")
+            println("  --- swift ---"); println(sw_out)
+            println("  --- hexa  ---"); println(hx_out)
+            return 1
+        }
+        if sw_rc != hx_rc {
+            println("FAIL " + name + " — rc swift=" + to_string(sw_rc) + " hexa=" + to_string(hx_rc))
+            return 1
+        }
+        if sw_man != hx_man {
+            println("FAIL " + name + " — manifest(norm) DIFFERS Swift vs hexa")
+            println("  --- swift ---"); println(sw_man)
+            println("  --- hexa  ---"); println(hx_man)
+            return 1
+        }
+        println("PASS " + name + " (stdout+manifest-schema ≡ Swift · uuid/time run-owned · rc=" + to_string(hx_rc) + ")")
+        return 0
+    }
+    println("PASS " + name + " (stdout+manifest-schema ≡ golden · uuid/time run-owned · rc=" + to_string(hx_rc) + ")")
+    return 0
+}
+
 // _cell_live_only — a parity cell whose Swift output is NOT deterministically
 // golden-able (e.g. a Foundation decode error whose tail is locale/machine-
 // dependent). It asserts the hexa exit code unconditionally, and the BYTE
@@ -984,6 +1180,115 @@ fn main() {
     _project_store_empty()
     fails = fails + _cell("list-projects/empty", entry, swift_bin, "",
                           "list-projects", "projects (0):\n", 0)
+
+    // ── PR#13 project new | advance | retreat MUTATION cells ───────────────
+    // These WRITE the store (shared backup pbak above keeps the user's real
+    // store safe). The step cells re-seed a fixed-uuid project before each
+    // surface and assert stdout + the rewritten manifest BYTES ≡ Swift; the
+    // `new` cells assert stdout (uuid/time-free) + the written manifest schema
+    // (id/createdAt normalized — run-owned, @L7). The composer for `new` reads
+    // a deterministic INDEX.demi via DEMIURGE_REPO (the PR#10 compose fixture).
+    // Goldens captured byte-for-byte from the Swift DemiurgeCLI 2026-06-04.
+
+    // advance mid-spine: seed at 3 (해석⟲) → step to 4 (합성). stdout `→ 5/7`.
+    fails = fails + _cell_step("project/advance-mid", entry, swift_bin, 3,
+        "project advance step-proj",
+        "project 'step-proj' → 5/7 합성(만들기)\n", 0, _step_man_at(4))
+
+    // retreat mid-spine: seed at 3 → step to 2 (설계). stdout `→ 3/7`.
+    fails = fails + _cell_step("project/retreat-mid", entry, swift_bin, 3,
+        "project retreat step-proj",
+        "project 'step-proj' → 3/7 설계(설계)\n", 0, _step_man_at(2))
+
+    // advance clamp: seed at 6 (handoff) → `이미 마지막 단계`, rc 0, NO write
+    // (manifest stays at 6).
+    fails = fails + _cell_step("project/advance-clamp", entry, swift_bin, 6,
+        "project advance step-proj",
+        "project 'step-proj' 이미 마지막 단계 (인계)\n", 0, _step_man_at(6))
+
+    // retreat clamp: seed at 0 (specify) → `이미 첫 단계`, rc 0, NO write.
+    fails = fails + _cell_step("project/retreat-clamp", entry, swift_bin, 0,
+        "project retreat step-proj",
+        "project 'step-proj' 이미 첫 단계 (명세)\n", 0, _step_man_at(0))
+
+    // unknown name → stderr line + rc 2 (no write; seed irrelevant).
+    fails = fails + _cell_step("project/step-unknown", entry, swift_bin, 3,
+        "project advance no-such-proj",
+        "project: no project named 'no-such-proj'\n", 2, _step_man_at(3))
+
+    // error surfaces (no store dependence — pure argv guards). Use plain _cell.
+    fails = fails + _cell("project/new-missing-name", entry, swift_bin, "",
+        "project new only-name",
+        "project new: usage — project new <name> <target> [domain]\n", 2)
+    fails = fails + _cell("project/unknown-sub", entry, swift_bin, "",
+        "project frobnicate x",
+        "project: unknown subcommand 'frobnicate' — use new | advance | retreat\n", 2)
+
+    // `project` with NO subcommand → the stderr usage line + rc 2. Swift also
+    // prints the full usage() screen (manifest-rendered, differs by design —
+    // not asserted); the byte-exact surface is the stderr line + rc. The plain
+    // _cell would also compare the usage body, so assert via _cell_live_only's
+    // prefix mode (hexa head == the stderr line) which both surfaces share.
+    fails = fails + _cell_live_only("project/no-sub", entry, swift_bin, "",
+        "project",
+        "project: usage — project new <name> <target> [domain] | project <advance|retreat> <name>\n", 2)
+
+    // `new` with an EXPLICIT domain (atomic) — root from the compose fixture.
+    let cfx = env("HOME") + "/.demi13-compose-fixture"
+    _make_compose_fixture(cfx)
+    let envp = "DEMIURGE_REPO=" + _shq2(cfx)
+    let g_new_root = "project 'newp' 생성 — domain=root · atomic · 구성 1\n"
+        + "  walk (topo): root\n"
+        + "  현재 단계: 1/7 명세(무엇을)\n"
+    let m_new_root = "{\n"
+        + "  \"createdAt\" : \"<TS>\",\n"
+        + "  \"currentVerb\" : 0,\n"
+        + "  \"domain\" : \"root\",\n"
+        + "  \"doneVerbs\" : [\n\n  ],\n"
+        + "  \"id\" : \"<UUID>\",\n"
+        + "  \"name\" : \"newp\",\n"
+        + "  \"target\" : \"my thing\",\n"
+        + "  \"walk\" : [\n    \"root\"\n  ]\n"
+        + "}"
+    fails = fails + _cell_new("project/new-atomic", entry, swift_bin, envp,
+        "project new newp 'my thing' root", g_new_root, 0, m_new_root)
+
+    // `new` with an EXPLICIT meta domain (apex) — multi-id topo walk.
+    let g_new_apex = "project 'metap' 생성 — domain=apex · meta · 구성 3\n"
+        + "  walk (topo): root → mid → apex\n"
+        + "  현재 단계: 1/7 명세(무엇을)\n"
+    let m_new_apex = "{\n"
+        + "  \"createdAt\" : \"<TS>\",\n"
+        + "  \"currentVerb\" : 0,\n"
+        + "  \"domain\" : \"apex\",\n"
+        + "  \"doneVerbs\" : [\n\n  ],\n"
+        + "  \"id\" : \"<UUID>\",\n"
+        + "  \"name\" : \"metap\",\n"
+        + "  \"target\" : \"t\",\n"
+        + "  \"walk\" : [\n    \"root\",\n    \"mid\",\n    \"apex\"\n  ]\n"
+        + "}"
+    fails = fails + _cell_new("project/new-meta", entry, swift_bin, envp,
+        "project new metap t apex", g_new_apex, 0, m_new_apex)
+
+    // `new` with INFERRED domain (omitted) — the fixture INDEX.demi has no
+    // keywords so infer → general (구성 0 · walk falls back to the bare domain).
+    let g_new_inf = "project 'infp' 생성 — domain=general (target에서 추론) · meta · 구성 0\n"
+        + "  walk (topo): general\n"
+        + "  현재 단계: 1/7 명세(무엇을)\n"
+    let m_new_inf = "{\n"
+        + "  \"createdAt\" : \"<TS>\",\n"
+        + "  \"currentVerb\" : 0,\n"
+        + "  \"domain\" : \"general\",\n"
+        + "  \"doneVerbs\" : [\n\n  ],\n"
+        + "  \"id\" : \"<UUID>\",\n"
+        + "  \"name\" : \"infp\",\n"
+        + "  \"target\" : \"anything goes\",\n"
+        + "  \"walk\" : [\n\n  ]\n"
+        + "}"
+    fails = fails + _cell_new("project/new-infer-general", entry, swift_bin, envp,
+        "project new infp 'anything goes'", g_new_inf, 0, m_new_inf)
+
+    exec("rm -rf " + _shq2(cfx))
 
     // restore the user's real store (or its absence) — the cell must not leave
     // a fixture behind in the app-data store.

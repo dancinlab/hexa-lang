@@ -683,6 +683,138 @@ pub fn handler_show_project(argv: [string]) -> int {
     return 0
 }
 
+// ── project new | advance | retreat (PR#13 · LIVE — the MUTATION verbs) ─────
+//
+// `demi project new <name> <target> [domain]` — create a project. domain is
+//   inferred from target (DomainCatalog.infer) when omitted; the topo `walk` +
+//   English kind come from DomainComposer. Writes the SAME ProjectStore manifest
+//   list-/show-project read (D50 byte-identical). Starts at 1/7 명세 (g3 — no ✅).
+// `demi project advance|retreat <name>` — step the 7-verb pointer one stage,
+//   clamped at handoff / specify (the clamp prints `이미 마지막/첫 단계` + rc 0).
+//
+// Ports main.swift projectNew / projectStep (the project command paths) +
+// ProjectStore.save. d3 — the manifest serializer + uuid/time + the load all
+// live in project_store.hexa; infer + walk + kind in domain_composer.hexa; this
+// handler is the byte-exact CLI surface only. argv here = the post-verb tail
+// (argv[0] = the subcommand new|advance|retreat — main.swift args[2]).
+
+// _project_step(direction, name) — Swift projectStep. Loads, finds by name,
+// clamps at the spine ends (rc 0, no write), else steps + saves + prints the
+// new `→ N/7 koreanLabel(plain)` line. Unknown name → stderr + rc 2.
+fn _project_step(direction: string, name: string) -> int {
+    let projs = ps_load_all()
+    let mut found = -1
+    let mut i = 0
+    while i < len(projs) {
+        if projs[i].name == name { found = i ; break }
+        i = i + 1
+    }
+    if found < 0 {
+        eprintln("project: no project named '" + name + "'")
+        return 2
+    }
+    let mut p = projs[found]
+    if direction == "advance" {
+        // canAdvance = currentVerb != handoff(6).
+        if p.current_verb == 6 {
+            println("project '" + name + "' 이미 마지막 단계 (" + ps_verb_korean(6) + ")")
+            return 0
+        }
+        p.current_verb = p.current_verb + 1
+    } else {
+        // retreat — canRetreat = currentVerb != specify(0).
+        if p.current_verb == 0 {
+            println("project '" + name + "' 이미 첫 단계 (" + ps_verb_korean(0) + ")")
+            return 0
+        }
+        p.current_verb = p.current_verb - 1
+    }
+    ps_save_project(p)
+    // `→ (rawValue+1)/7 koreanLabel(plain)`.
+    println("project '" + name + "' → " + to_string(p.current_verb + 1) + "/7 "
+            + ps_verb_korean(p.current_verb) + "(" + ps_verb_plain(p.current_verb) + ")")
+    return 0
+}
+
+// _project_new(name, target, domain_arg, inferred) — Swift projectNew. Builds
+// the manifest (fresh uuid + UTC iso8601 now), writes it, prints the 3-line
+// confirmation. `inferred` toggles the ` (target에서 추론)` tag (domain omitted).
+fn _project_new(name: string, target: string, domain: string, inferred: bool) -> int {
+    let walk = dco_project_walk(domain)
+    let kind = dco_english_kind(domain)
+    let stack_count = len(walk)
+    let p = PsProject {
+        id:           ps_new_uuid(),
+        name:         name,
+        target:       target,
+        domain:       domain,
+        walk:         walk,
+        current_verb: 0,            // starts at 명세 (specify) — g3, no ✅ yet
+        done_verbs:   [],
+        created_at:   ps_now_iso8601(),
+    }
+    ps_save_project(p)
+    let infer_tag = if inferred { " (target에서 추론)" } else { "" }
+    println("project '" + name + "' 생성 — domain=" + domain + infer_tag + " · "
+            + kind + " · 구성 " + to_string(stack_count))
+    // walk render: ids joined ` → `, else the bare domain when the stack is empty.
+    let walk_line = if stack_count == 0 { domain } else { _join_arrow(walk) }
+    println("  walk (topo): " + walk_line)
+    println("  현재 단계: 1/7 " + ps_verb_korean(0) + "(" + ps_verb_plain(0) + ")")
+    return 0
+}
+
+// _join_arrow(xs) — ids joined by ` → ` (Swift comp.ids.joined(separator:)).
+fn _join_arrow(xs: [string]) -> string {
+    let mut out = ""
+    let mut i = 0
+    while i < len(xs) {
+        if i > 0 { out = out + " → " }
+        out = out + xs[i]
+        i = i + 1
+    }
+    return out
+}
+
+// handler_project(argv) — the `project` verb dispatch (main.swift `case
+// "project"`). argv = post-verb tail: argv[0] = subcommand. No subcommand →
+// the stderr usage line + the manifest usage screen + rc 2 (the Swift path
+// also prints usage(); the hexa usage render differs by design and is NOT
+// asserted — only the stderr line + rc are byte-exact). Subcommands:
+//   new <name> <target> [domain] · advance|retreat <name> · else unknown → rc 2.
+pub fn handler_project(argv: [string]) -> int {
+    if len(argv) < 1 {
+        // Swift also prints the full usage() screen here; that is the manifest-
+        // rendered demi_usage in dispatch.hexa (importing it back would cycle —
+        // see _shq_h note), so the byte-exact surface is the stderr line + rc 2.
+        eprintln("project: usage — project new <name> <target> [domain] | project <advance|retreat> <name>")
+        return 2
+    }
+    let sub = argv[0]
+    if sub == "new" {
+        // need <name> + <target> (Swift args.count >= 5 ⇔ tail >= 3).
+        if len(argv) < 3 {
+            eprintln("project new: usage — project new <name> <target> [domain]")
+            return 2
+        }
+        let name = argv[1]
+        let target = argv[2]
+        let has_domain = len(argv) >= 4
+        let domain = if has_domain { argv[3] } else { dco_infer(target) }
+        return _project_new(name, target, domain, !has_domain)
+    }
+    if sub == "advance" || sub == "retreat" {
+        // need <name> (Swift args.count >= 4 ⇔ tail >= 2).
+        if len(argv) < 2 {
+            eprintln("project: usage — project <advance|retreat> <name>")
+            return 2
+        }
+        return _project_step(sub, argv[1])
+    }
+    eprintln("project: unknown subcommand '" + sub + "' — use new | advance | retreat")
+    return 2
+}
+
 // ── list-shelf (PR#11 · LIVE) ────────────────────────────────────────
 //
 // `demi list-shelf <domain>` — render a domain's §6 ingredient-shelf
@@ -775,6 +907,7 @@ pub fn handler_local(target: string, argv: [string]) -> int {
     if target == "gate_summary"   { return handler_gate_summary(argv) }
     if target == "list_projects"  { return handler_list_projects(argv) }
     if target == "show_project"   { return handler_show_project(argv) }
+    if target == "project"        { return handler_project(argv) }
     if target == "list_shelf"     { return handler_list_shelf(argv) }
     if target == "compose"        { return handler_compose(argv) }
     // every other declared local target is not-yet-ported → honest stub.
