@@ -21,6 +21,7 @@ import "stdlib/demi/record_loader.hexa"
 import "stdlib/demi/project_store.hexa"
 import "stdlib/demi/cellrun.hexa"
 import "stdlib/demi/domain_composer.hexa"
+import "stdlib/demi/domain_catalog.hexa"
 
 // handler_stub(target, argv) — a DECLARED-but-unported local verb. Prints an
 // honest notice naming the verb + the stacked-PR that will port it, and
@@ -682,6 +683,80 @@ pub fn handler_show_project(argv: [string]) -> int {
     return 0
 }
 
+// ── list-shelf (PR#11 · LIVE) ────────────────────────────────────────
+//
+// `demi list-shelf <domain>` — render a domain's §6 ingredient-shelf
+// design-option groups, per 7-verb stage. This ports the Swift
+// `listShelf(_:)` (main.swift:264-281) byte-for-byte:
+//
+//   ingredient shelf — domain '<d>' (<label>):
+//     <rawValue+1>. <koreanLabel>:          ← only verbs WITH groups
+//          <title>[ (multi)] = a / b / c    ← 7-space indent, ` / ` join
+//   (no §6 design-options section — domains/<d>.md absent or mapless)
+//                                           ← printed iff NO verb had groups
+//
+// It REUSES dc_shelf_groups (PR#9, domain_catalog.hexa) for the §6 parse
+// (d3 — no re-derivation) and ps_domain_label for the synthetic-fallback
+// domain label (PR#12; the INDEX.demi-backed label lands with the catalog
+// loader — same boundary list-/show-project hold). Always exit 0 (an empty
+// / mapless shelf is the HONEST no-op render, not an error). The missing-arg
+// guard mirrors handler_show_project (stderr line + exit 2; the Swift usage
+// block differs by design — the manifest-rendered hexa usage is not asserted).
+//
+// _VERB_CANON — the 7 verbs in Verb rawValue order (specify=0 … handoff=6).
+// The verb's display index is (rawValue + 1); koreanLabel via _verb_korean.
+fn _shelf_verb_canon(i: int) -> string {
+    if i == 0 { return "specify" }
+    if i == 1 { return "structure" }
+    if i == 2 { return "design" }
+    if i == 3 { return "analyze" }
+    if i == 4 { return "synthesize" }
+    if i == 5 { return "verify" }
+    return "handoff"
+}
+
+pub fn handler_list_shelf(argv: [string]) -> int {
+    if len(argv) < 1 {
+        eprintln("list-shelf: missing <domain> argument")
+        return 2
+    }
+    let domain = argv[0]
+    let label = ps_domain_label(domain)
+    println("ingredient shelf — domain '" + domain + "' (" + label + "):")
+    let mut any = false
+    let mut v = 0
+    while v < 7 {
+        let verb = _shelf_verb_canon(v)
+        let groups = dc_shelf_groups(domain, verb)
+        if len(groups) > 0 {
+            any = true
+            // Swift `verb.rawValue + 1` (1-based) + koreanLabel.
+            println("  " + to_string(v + 1) + ". " + _verb_korean(verb) + ":")
+            let mut gi = 0
+            while gi < len(groups) {
+                let g = groups[gi]
+                let tag = if g.multi_select { " (multi)" } else { "" }
+                // options joined by " / " (Swift options.joined(separator:)).
+                let mut opts = ""
+                let mut oi = 0
+                while oi < len(g.options) {
+                    if oi > 0 { opts = opts + " / " }
+                    opts = opts + g.options[oi]
+                    oi = oi + 1
+                }
+                println("       " + g.title + tag + " = " + opts)
+                gi = gi + 1
+            }
+        }
+        v = v + 1
+    }
+    if !any {
+        println("  (no §6 design-options section — domains/" + domain
+                + ".md absent or mapless)")
+    }
+    return 0
+}
+
 // handler_local(target, argv) — generic local-handler entry. Routes by the
 // manifest `target` id to the ported hexa-native handler, else the honest
 // stub. The ONE place the local family fans out — adding a ported handler is
@@ -700,6 +775,7 @@ pub fn handler_local(target: string, argv: [string]) -> int {
     if target == "gate_summary"   { return handler_gate_summary(argv) }
     if target == "list_projects"  { return handler_list_projects(argv) }
     if target == "show_project"   { return handler_show_project(argv) }
+    if target == "list_shelf"     { return handler_list_shelf(argv) }
     if target == "compose"        { return handler_compose(argv) }
     // every other declared local target is not-yet-ported → honest stub.
     return handler_stub(target, argv)
