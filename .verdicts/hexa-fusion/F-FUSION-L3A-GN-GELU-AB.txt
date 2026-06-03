@@ -1,0 +1,76 @@
+HEXA-FUSION L3-a (groupnorm+gelu op-boundary fusion) — H100_SXM GPU verification
+PR #2669 · branch domain/hexa-fusion-l3a-gn-gelu · 2026-06-03/04
+Pod: vast 39361619 · NVIDIA H100 80GB HBM3 · CUDA 12.4 · gcc 11.4 · clean idle (baseline util 0.00%)
+
+VERDICT: 🔴 INCONCLUSIVE-ON-UTIL / BUILD-GREEN / CALL-SITE WALL.
+  The fused device kernel BUILDS, LINKS, and is numerically sound, BUT the production
+  CLM forward loop NEVER CALLS the fused entry, so the gate never fires. The measured
+  A/B is host-eager vs host-eager (identical path) — NOT fused-vs-eager. The util lever
+  was NOT actually exercised. Reported honestly per g5; NO fusion-win claim is made.
+
+═══ BUILD (GREEN) ═══
+runtime_cuda.c regen from L3-a self/cuda/runtime_cuda_emit.hexa (local hexa run):
+  _hx_k_groupnorm_gelu kernel + _hx_cuda_farr_groupnorm_gelu_gpu launcher present.
+nvcc -DHEXA_CUDA -gencode arch=compute_90,code=compute_90 -I self/cuda -I self -I . :
+  runtime_cuda.o = 59 _hx_cuda_farr launchers (58 + groupnorm_gelu — EXACTLY as expected).
+  nm: _hx_k_groupnorm_gelu (T) · _hx_cuda_farr_groupnorm_gelu_gpu (T) · device-stub (T).
+gcc link (clm_prod.c + l3a self/runtime.c + runtime_cuda.o, -lcudart -lcublas -lcuda):
+  clm_prod_gpu = 763720 bytes, link rc=0. nm: forge_dispatch_groupnorm_gelu (T),
+  hexa_forge_dispatch_groupnorm_gelu (T), _hx_cuda_farr_groupnorm_gelu_gpu (T) — all defined.
+Smoke (D=512 T=128 E=2 NSAMP=8 EPOCHS=2, FUSE=1): CE 4.18549→3.97022 DESCENT=1 PASS.
+
+TRANSPILE (mirror of ④/⑤ recipe, on summer@192.168.50.60):
+  hexa_module_loader stdlib/flame/clm_prod.hexa /tmp/clm_prod_flat.hexa  (9 files, 0 `use` left)
+  build/hexat /tmp/clm_prod_flat.hexa  →  3255-line C.
+  POST-PROCESS (closure→direct): perl -pe 's/hexa_call\w*\(\s*(forge_dispatch_\w+)\s*,\s*/$1(/g'
+    → 0 hexa_callN(forge_dispatch closures remain, 24 direct forge_dispatch_X( calls.
+  forge_dispatch_groupnorm_gelu was ALREADY emitted DIRECT by the frozen hexat (not a
+    closure — frozen hexat has no reg/closure entry for it), resolved by the runtime.c
+    wrapper (a real C fn). No extra sed needed for it.
+
+═══ MEASURE (the decisive A/B — CONFIG: DEVRESIDENT=1 DEVFEED=1 BATCHED=1 D=1536 T=512 E=2 NSAMP=8 EPOCHS=4) ═══
+BASELINE_IDLE MEAN=0.00% PEAK=0% n=16  (clean H100)
+
+  run                                   | util MEAN | PEAK | pct>=20 | median | CE ep1→ep4        | n
+  --------------------------------------|-----------|------|---------|--------|-------------------|----
+  FUSE=0 (HEXA_FUSE_GN_GELU unset)      |   8.62%   | 100% |  13.0%  |   0%   | 4.46624 → 3.64669 | 437
+  FUSE=1 (HEXA_FUSE_GN_GELU=1)          |   8.09%   | 100% |  11.8%  |   0%   | 4.46624 → 3.64669 | 433
+
+  byte-eq: CE BIT-IDENTICAL (4.46624 → 3.64669 in BOTH arms). DESCENT=1 PASS both.
+  util-Δ: -0.53pp (8.62 → 8.09%) — within run-to-run pod noise (cf. ⑤ measured the same
+          eager baseline at 11.85% / 14.87% across instances; the median-0% floor and
+          100% bursty PEAK reproduce the fine-grained-DAG signature).
+
+═══ THE WALL (honest root cause — why the A/B is NOT a fusion test) ═══
+A one-shot stderr marker was inserted in the wrapper at the device-launch line
+  (`[L3A-FIRED] groupnorm_gelu DEVICE path taken`), relinked, and probed under FUSE=1.
+  RESULT: marker fired 0 times. NO cuda error. → the device fused kernel is NEVER invoked.
+
+ROOT CAUSE: the fused entry `nn_gn_gelu_fused` (gn_lib.hexa:379) is DEAD CODE in the
+  production path. In the transpiled clm_prod.c it has exactly 2 occurrences (1 proto +
+  1 definition) and ZERO call sites. The CLM forward loop (clm_prod.hexa:470) calls the
+  SEPARATE `nn_groupnorm_fwd` (plain GN) and applies GELU downstream — it does NOT route
+  through `nn_gn_gelu_fused`. The gate inside `nn_gn_gelu_fused_off`
+  (env HEXA_FUSE_GN_GELU && DEVRESIDENT && goff==0 && boff==0 → forge_dispatch_groupnorm_gelu)
+  is therefore never reached. Both FUSE arms run the IDENTICAL unchanged eager host/GN path,
+  which is why CE is byte-identical and util is flat — that is an ARTIFACT of the call-site
+  gap, NOT evidence the GN→GELU fusion lever raises or fails to raise util.
+
+WHAT IS PROVEN (terminal):
+  ✓ The L3-a fused kernel + launcher + 11-arg wrapper + codegen reg COMPILE, LINK, and run.
+  ✓ The runtime.c wrapper resolves forge_dispatch_groupnorm_gelu as a real C fn (link green).
+  ✓ The env-gate transpiles intact (env() guards + offset==0 + closure→direct all correct).
+WHAT IS NOT PROVEN (blocked):
+  ✗ The util effect of GN→GELU fusion — UNTESTED. The fused device path never executed.
+  ✗ A real byte-eq of the FUSED kernel vs GN-then-gelu — the byte-eq here is host-vs-host,
+    NOT fused-vs-eager, so it does NOT validate the kernel's numerics in situ.
+
+NEXT (to actually verify PR #2669's lever): wire the CLM forward loop to call
+  `nn_gn_gelu_fused` at the GN→GELU op boundary (replace the `nn_groupnorm_fwd` + separate
+  gelu pair in clm_prod.hexa's fwd with the fused entry), re-transpile, and re-run this
+  exact A/B. The marker MUST fire under FUSE=1 for the numbers to mean anything. Only then
+  is the util-Δ (and the in-situ fused-kernel byte-eq) a valid measurement of the lever.
+
+CLOSED-NEGATIVE on the "L3-a is testable as-built" assumption — FALSIFIED: the fused entry
+is unwired in the production path. Ruled-out: this branch's A/B cannot speak to the util
+lever until the call-site is added. No util-GREEN claim. No fusion-win claim.
