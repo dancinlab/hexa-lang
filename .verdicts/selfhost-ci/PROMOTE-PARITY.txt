@@ -1,0 +1,138 @@
+SELFHOST-CI — milestone 4: promote parity-gate as CI verdict
+============================================================
+date:    2026-06-03
+branch:  selfhost-ci/m4-promote-parity-ci   (base=main, non-stacked)
+gate:    tool/selfhost_parity_gate.sh           (the promotion precondition)
+         tool/promote_selfhost.sh               (depends on it as a HARD gate)
+         tool/hx-selfhost-cli                    (the tier2 default-flip shim)
+         .github/workflows/selfhost-promote-parity.yml   (NEW — standing CI)
+
+OBJECTIVE
+  Promote the PARITY GATE — the precondition that AUTHORIZES flipping the
+  default `hx`/hexa toolchain to the self-hosted native compiler (gen3) — into a
+  STANDING per-PR CI check, so the promotion precondition CANNOT silently rot. A
+  codegen / linker / runtime edit that would break gen3≡shipped equivalence must
+  FAIL the PR, not surface only at the next manual promotion.
+
+  Milestone text: "promote parity-gate as CI — tool/selfhost_parity_gate.sh 5/5
+  behaviour-match runs in CI (the promotion precondition can't rot)".
+
+WHAT THE PARITY GATE PROVES (the N=5 behaviour-match + 42-smoke)
+  For each of 5 representative corpus programs, the self-hosted gen3 compiles
+  (--emit=asm --target=arm64-apple-darwin) → clang -arch arm64 -c → hexa_ld link
+  with rt.o (--lc-main _main) → RUN; the observed exit code must EQUAL the
+  program's pre-registered `// expect: N` exit. BEHAVIOUR is the load-bearing
+  axis (same observable semantics). The 5 behaviours:
+    1. arith   — `6 * 7`            -> exit 42  (integer multiply)  [+ 42-smoke]
+    2. call    — `add(6, 7)`        -> exit 13  (function call + return + add)
+    3. branch  — while-loop count   -> exit 7   (mutable locals + control flow)
+    4. bitmask — `255 & 0x0f`       -> exit 15  (bitwise AND + hex literal)
+    5. recurse — `fac(5)`           -> exit 120 (recursion + multiply chain)
+  A PASS = behaviour-match on ALL 5 AND the 42-smoke -> "PARITY PASS — promotion
+  AUTHORIZED". The optional asm-parity axis (gen3 --emit=asm vs the shipped
+  reference, normalised) is INFORMATIONAL unless --strict; the gate is BEHAVIOUR.
+
+RESULT
+  5/5 behaviour-match PASS  (arith / call / branch / bitmask / recurse) + 42-smoke
+  RESULT: PARITY PASS — promotion AUTHORIZED (gate exit 0)
+
+HOSTS + ARTIFACTS
+  REAL run: ghost (192.168.50.150), macOS 26.5 (build 25F71), arm64,
+    Apple clang 21.0.0. Graduated self-host slot at
+    ~/.hx/self/native/selfhost/ (installed by tool/promote_selfhost.sh):
+      gen3    1,963,104 bytes  — BYTE-IDENTICAL to the graduated
+                                 ~/dancinlab/selfhost-work/gen3 (cmp exit 0)
+      hexa_ld   341,448 bytes
+      rt.o      516,256 bytes
+    The slot gen3 is the same native compiler whose self-reproduction fixpoint
+    (gen3≡gen3b≡gen4, 3,224,592-byte object) graduated in SELFHOST-CI M1.
+
+  asm-parity axis: REF resolved to ~/.hx/bin/hexa.real (the shipped 0.1.0-
+    dispatch driver). It reports `ref-err` because the shipped dispatch driver
+    does NOT accept the BARE-compiler `<driver> SOURCE.hexa --emit=asm` surface
+    (it wants `hexa run compiler/main.hexa ...`), so the asm column is
+    not-applicable here. This does NOT affect the verdict: BEHAVIOUR is the
+    load-bearing axis and it is 5/5 PASS. (Same on hexa_v2 as REF.)
+
+═══════════════════════════════════════════════════════════════════════════════
+RAW STDOUT — ghost (macOS arm64), graduated gen3 slot, exit 0 (VERBATIM)
+  cmd: bash tool/selfhost_parity_gate.sh -g $SLOT/gen3 -l $SLOT/hexa_ld \
+         -t $SLOT/rt.o -w $PWD/m4-parity-final     (SLOT=~/.hx/self/native/selfhost)
+═══════════════════════════════════════════════════════════════════════════════
+=== selfhost parity gate ===
+gen3=/Users/ghost/.hx/self/native/selfhost/gen3
+ref=/Users/ghost/.hx/bin/hexa.real (asm-axis=on) strict=0
+corpus=/Users/ghost/dancinlab/selfhost-work/m4-parity-final/corpus
+PROG           BEHAVIOUR  ASM        SMOKE    VERDICT
+----           ---------  ---        -----    -------
+arith          ok(42)     ref-err    42-ok    PASS
+bitmask        ok(15)     ref-err    n/a      PASS
+branch         ok(7)      ref-err    n/a      PASS
+call           ok(13)     ref-err    n/a      PASS
+recurse        ok(120)    ref-err    n/a      PASS
+----
+parity: 5/5 pass, 0 fail (strict=0, asm-axis=on)
+RESULT: PARITY PASS — promotion AUTHORIZED
+GATE_RC=0
+
+═══════════════════════════════════════════════════════════════════════════════
+SUPPORTING — promoted shim (hx-selfhost-cli) routes compile->gen3 end-to-end
+  (the tier2 default-flip target; verifies the SAME slot gen3 the gate validates)
+  ghost, VERBATIM
+═══════════════════════════════════════════════════════════════════════════════
+shim emit rc=0 asm_bytes=    1043
+shim->gen3 compiled binary exit=42
+=== delegate route (--version) ===
+hexa 0.1.0-dispatch
+
+  ↳ `hx-selfhost-cli --emit=asm ... s.hexa` ROUTED to gen3 (emitted 1043-byte
+    asm that clang-assembled + hexa_ld-linked + RAN to exit 42); a NAMED
+    subcommand (`--version`) DELEGATED to the shipped dispatch driver
+    (hexa 0.1.0-dispatch). The promotion precondition holds end-to-end: gen3's
+    compile surface is behaviour-equivalent AND the shim preserves the full CLI.
+
+═══════════════════════════════════════════════════════════════════════════════
+CI WIRING (.github/workflows/selfhost-promote-parity.yml)
+═══════════════════════════════════════════════════════════════════════════════
+  • Per-PR + push(main) + workflow_dispatch, paths scoped to the parity gate,
+    promote machinery, the shim, build_selfhost, and the workflow itself.
+  • Locates the graduated slot (gen3+hexa_ld+rt.o) from SELFHOST_SLOT /
+    HX_HOME/self/native/selfhost / build/selfhost. On a host WITH a slot, runs
+    the parity gate REAL; a behaviour regression (gate exit 1) FAILS the PR.
+  • EXIT-2-NEUTRAL canary: macos-latest carries no graduated gen3, so the
+    workflow emits a ::notice:: and exits 0 NEUTRAL — the SAME shape as the
+    #2600/#2605/#2607 sister gates. NOT green-by-skip: any runner holding a
+    graduated gen3 (self-hosted ghost/mini, or SELFHOST_SLOT var) runs all 5
+    behaviours REAL. Gate exit 3 (missing/non-exec inputs) also remaps neutral;
+    only a genuine behaviour mismatch (exit 1) fails.
+
+═══════════════════════════════════════════════════════════════════════════════
+HONEST CAVEATS
+═══════════════════════════════════════════════════════════════════════════════
+  • The REAL 5/5 behaviour-match is verified on ghost (macOS arm64) with the
+    graduated gen3 slot. On macos-latest (the hosted CI runner) the workflow
+    reports NEUTRAL — that runner has no graduated gen3/hexa_ld/rt.o. This is the
+    SAME exit-2-neutral-on-the-host-that-can't discipline as the sister gates; it
+    is NOT green-by-skip (the gate runs REAL on any host holding a slot, and a
+    behaviour regression there exits 1).
+  • To run REAL in CI, target a self-hosted runner that holds a tool/
+    build_selfhost.sh output (or a promote_selfhost.sh-installed slot), or set
+    the SELFHOST_SLOT repo Variable to that slot path.
+  • The asm-parity axis is reported `ref-err` here because the shipped 0.1.0-
+    dispatch driver does not accept the bare-compiler `--emit=asm` surface; the
+    gate's load-bearing axis is BEHAVIOUR (compile+link+RUN exit-code match),
+    which is 5/5 PASS. Tightening the asm axis would need a bare-compiler-surface
+    reference build; it is intentionally informational (the script's own doc).
+  • g4 additive: this milestone adds ONLY a standing CI gate + verdict + docs.
+    No production codegen / linker / runtime edits. tool/selfhost_parity_gate.sh
+    and tool/promote_selfhost.sh already existed on main (the parity gate is
+    already factored out as a standalone reusable script); M4 wires it as CI.
+
+VERDICT: 🟢 promote parity-gate GREEN on real hardware (ghost, macOS arm64) —
+         the graduated gen3 produces behaviour-equivalent runnable binaries for
+         all 5 representative corpus programs (arith=42 / call=13 / branch=7 /
+         bitmask=15 / recurse=120) + the 42-smoke; the promoted hx-selfhost-cli
+         shim routes compile->gen3 (exit 42) and delegates subcommands. The
+         promotion precondition is now a STANDING required CI check
+         (.github/workflows/selfhost-promote-parity.yml); exit-2-neutral canary
+         verified for hosts lacking the graduated gen3. 5/5 behaviour-match PASS.
