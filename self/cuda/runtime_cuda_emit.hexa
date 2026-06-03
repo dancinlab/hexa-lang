@@ -274,6 +274,95 @@ fn emit_runtime_cuda_c() -> str {
             "    }\n" +
             "    return 0;\n" +
             "}\n" +
+            "\n" +
+            "/* ════════════════════════════════════════════════════════════════════\n" +
+            " * L2 (4) — CUDA Graph capture/replay over the forge stream. Gated by env\n" +
+            " * HEXA_CUDA_GRAPH (implies async: capture is illegal on the default\n" +
+            " * stream in thread-local mode). The interpreted per-step driver is the\n" +
+            " * launch-bound wall (F-FUSION-ASYNC-UTIL-AB verdict: async alone can't\n" +
+            " * raise util because the host stays on the critical path). Capturing the\n" +
+            " * step kernel DAG once and replaying it with ONE cudaGraphLaunch takes\n" +
+            " * the host off the critical path. Graph OFF (default) => every primitive\n" +
+            " * is a no-op / not-ready => the driver keeps the eager path => byte-\n" +
+            " * identical to the verified async substrate. Piecewise: the driver wraps\n" +
+            " * only host-control-flow-free regions (dense/attn/optimizer); a data-\n" +
+            " * dependent MoE dispatch stays eager between a _commit (close the graph)\n" +
+            " * and a fresh _begin (open the next piece).\n" +
+            " * ════════════════════════════════════════════════════════════════════ */\n" +
+            "static cudaGraph_t     g_forge_graph      = NULL;\n" +
+            "static cudaGraphExec_t g_forge_graph_exec = NULL;\n" +
+            "static int             g_forge_graph_on   = -1;  /* -1 uninit, 0 off, 1 on */\n" +
+            "static int             g_forge_graph_st   = 0;   /* 0 idle, 1 capturing, 2 ready */\n" +
+            "\n" +
+            "static int _forge_graph_on(void) {\n" +
+            "    if (g_forge_graph_on < 0) {\n" +
+            "        const char* v = getenv(\"HEXA_CUDA_GRAPH\");\n" +
+            "        g_forge_graph_on = (v && v[0] && v[0] != '0') ? 1 : 0;\n" +
+            "    }\n" +
+            "    return g_forge_graph_on;\n" +
+            "}\n" +
+            "\n" +
+            "/* Begin capturing the forge stream's kernel DAG. Needs the async stream\n" +
+            " * (returns 0 = stay eager if it is the default stream). No-op if graph\n" +
+            " * off or not idle. Returns 0 ok / -1 err. */\n" +
+            "static int _forge_graph_begin(void) {\n" +
+            "    if (!_forge_graph_on()) return 0;\n" +
+            "    if (g_forge_graph_st != 0) return 0;\n" +
+            "    cudaStream_t st = _forge_stream();\n" +
+            "    if (st == 0) return 0;\n" +
+            "    cudaError_t er = cudaStreamBeginCapture(st, cudaStreamCaptureModeThreadLocal);\n" +
+            "    if (er != cudaSuccess) {\n" +
+            "        fprintf(stderr, \"[cuda] graph begin-capture failed: %s\\n\",\n" +
+            "                cudaGetErrorString(er));\n" +
+            "        return -1;\n" +
+            "    }\n" +
+            "    g_forge_graph_st = 1;\n" +
+            "    return 0;\n" +
+            "}\n" +
+            "\n" +
+            "/* End capture + instantiate the executable graph. No-op unless capturing.\n" +
+            " * On success state -> 2 (ready) and the driver replays instead of\n" +
+            " * re-issuing. On any failure: fall back to eager (state -> 0). */\n" +
+            "static int _forge_graph_commit(void) {\n" +
+            "    if (g_forge_graph_st != 1) return 0;\n" +
+            "    cudaStream_t st = _forge_stream();\n" +
+            "    cudaError_t er = cudaStreamEndCapture(st, &g_forge_graph);\n" +
+            "    if (er != cudaSuccess || g_forge_graph == NULL) {\n" +
+            "        fprintf(stderr, \"[cuda] graph end-capture failed: %s\\n\",\n" +
+            "                cudaGetErrorString(er));\n" +
+            "        g_forge_graph_st = 0;\n" +
+            "        return -1;\n" +
+            "    }\n" +
+            "    er = cudaGraphInstantiateWithFlags(&g_forge_graph_exec, g_forge_graph, 0);\n" +
+            "    if (er != cudaSuccess || g_forge_graph_exec == NULL) {\n" +
+            "        fprintf(stderr, \"[cuda] graph instantiate failed: %s\\n\",\n" +
+            "                cudaGetErrorString(er));\n" +
+            "        cudaGraphDestroy(g_forge_graph); g_forge_graph = NULL;\n" +
+            "        g_forge_graph_st = 0;\n" +
+            "        return -1;\n" +
+            "    }\n" +
+            "    g_forge_graph_st = 2;\n" +
+            "    return 0;\n" +
+            "}\n" +
+            "\n" +
+            "/* True once a graph is instantiated — the driver replays the captured\n" +
+            " * region instead of re-issuing its kernels. */\n" +
+            "static int _forge_graph_ready(void) {\n" +
+            "    return (_forge_graph_on() && g_forge_graph_st == 2) ? 1 : 0;\n" +
+            "}\n" +
+            "\n" +
+            "/* Replay the captured kernel DAG with ONE host call. Returns 0 ok / -1. */\n" +
+            "static int _forge_graph_launch(void) {\n" +
+            "    if (g_forge_graph_st != 2) return -1;\n" +
+            "    cudaStream_t st = _forge_stream();\n" +
+            "    cudaError_t er = cudaGraphLaunch(g_forge_graph_exec, st);\n" +
+            "    if (er != cudaSuccess) {\n" +
+            "        fprintf(stderr, \"[cuda] graph launch failed: %s\\n\",\n" +
+            "                cudaGetErrorString(er));\n" +
+            "        return -1;\n" +
+            "    }\n" +
+            "    return 0;\n" +
+            "}\n" +
             "#endif /* __CUDACC__ */\n" +
             "\n" +
             "/* cuBLAS handle — lazy init. */\n" +
