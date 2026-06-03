@@ -1575,6 +1575,24 @@ fn main() {
     // fixture; the probe self-asserts + emits an ALL_PASS sentinel.
     fails = fails + _catalog_selfcheck()
 
+    // ── PR#21 geometry self-checks (@ci_gate · @L3 · @L7) — NOT verb-parity
+    // cells. PR#21 is the FIRST 3D PR: it establishes the FILE-DRIVEN geometry
+    // SSOT (stdlib/demi/geometry.hexa + loadable spec files under
+    // stdlib/demi/geometry/) the emit/export PRs build on. It adds NO new
+    // user-facing verb (emit-component / export-component CLI wiring lands in
+    // the stacked PRs — BE HONEST: neither is asserted parity-green here).
+    //   (1) builder — the .usda + .stl built from the REFERENCE spec
+    //       (bipv_5layer_v0.geo.json = the EXACT Swift bipv5Layer constants)
+    //       is BYTE-FOR-BYTE the Swift `export-component usda|stl` output
+    //       (LIVE arm); + the HtsCoilGeometry spec load (Swift htsSolenoidProxy
+    //       params, load-roundtrip only — no Swift coil emitter, no fake parity).
+    //   (2) @L3 file-swap — a MODIFIED spec file (different id/dims/layers) at a
+    //       /tmp path, loaded + emitted WITHOUT recompiling, CHANGES the geometry
+    //       and the change TRACKS THE FILE (a second spec proves it is not a
+    //       one-off). The @L3 proof that geometry is data-in-a-file, not code.
+    fails = fails + _geometry_selfcheck(swift_bin)
+    fails = fails + _geometry_swap_selfcheck()
+
     // ── PR#10 compose cells — `compose <domain>` resolves a domain into its
     // constituent prerequisite stack (topo foundation→apex) + cluster union +
     // kind, byte-for-byte against the Swift compose(_:) plain-default render
@@ -2150,6 +2168,160 @@ fn _catalog_selfcheck() -> int {
         return 0
     }
     println("FAIL catalog/domain-catalog — rc=" + to_string(rc))
+    println(out)
+    return 1
+}
+
+// ── PR#21 geometry self-checks (@ci_gate · @L3 · @L7) ───────────────────────
+//
+// PR#21 is the FIRST 3D PR — it establishes the FILE-DRIVEN geometry SSOT
+// (stdlib/demi/geometry.hexa + the loadable spec files under
+// stdlib/demi/geometry/). It adds NO new user-facing verb (the emit-component /
+// export-component CLI wiring lands in the stacked emit/export PRs — BE HONEST:
+// neither verb is asserted as parity-green here). These two focused unit-checks
+// assert the geometry BUILDER + the @L3 file-only-swap property.
+//
+// _geometry_selfcheck(swift_bin) — builds the .usda + .stl from the REFERENCE
+// spec file (stdlib/demi/geometry/bipv_5layer_v0.geo.json, which carries the
+// EXACT params Swift ComponentGeometry.bipv5Layer hardcodes) and asserts the
+// emitted geometry is BYTE-FOR-BYTE the Swift reference shape:
+//   • LIVE arm (DEMI_SWIFT_BIN present): diff the hexa-built file against the
+//     Swift CLI's `export-component usda|stl` output → must be byte-identical.
+//   • GOLDEN arm (no Swift bin): the hexa builder must be DETERMINISTIC and the
+//     loaded params must round-trip the known reference invariants (the spec
+//     IS the captured Swift constants; a regenerating drift is caught LIVE).
+// Plus the HtsCoilGeometry spec load (Swift htsSolenoidProxy params) — there is
+// no Swift CLI emitter for the coil, so it is asserted on load-roundtrip only
+// (honest scope; no fake byte-parity claim for an un-emittable shape).
+fn _geometry_selfcheck(swift_bin: string) -> int {
+    let hexa = exec("command -v hexa 2>/dev/null || echo hexa").trim()
+    let hxlang = env("HEXA_LANG")
+    // The reference spec id → bundled path under stdlib/demi/geometry.
+    // Build the hexa-side artifacts via a child probe (geometry.hexa is a leaf
+    // module; a child `hexa run` keeps the parent's import graph unchanged).
+    let probe = "/tmp/.demi-selftest-geo-probe.hexa"
+    let usda_out = "/tmp/.demi-selftest-geo-hexa.usda"
+    let stl_out  = "/tmp/.demi-selftest-geo-hexa.stl"
+    let body = "import \"stdlib/demi/geometry.hexa\"\n"
+        + "fn main() {\n"
+        + "  let spec = geo_load_component(\"bipv_5layer_v0\")\n"
+        + "  write_file(\"" + usda_out + "\", geo_usda(spec, 0.0))\n"
+        + "  write_file(\"" + stl_out + "\", geo_stl(spec, 0.0))\n"
+        + "  let c = geo_load_hts_coil(\"hts_solenoid_proxy_v1\")\n"
+        + "  let mut f = 0\n"
+        + "  if c.id != \"hts_solenoid_proxy_v1\" { f = f + 1 }\n"
+        + "  if geo_fmt(c.length) != \"200\" { f = f + 1 }\n"
+        + "  if to_string(c.turns) != \"120\" { f = f + 1 }\n"
+        + "  if to_string(len(c.rings)) != \"6\" { f = f + 1 }\n"
+        + "  if c.rings[2].name != \"HTS Coil\" { f = f + 1 }\n"
+        + "  if geo_fmt(c.rings[2].outer_radius) != \"55\" { f = f + 1 }\n"
+        + "  if geo_fmt(c.rings[5].opacity) != \"0.2500\" { f = f + 1 }\n"
+        // determinism: building twice yields the same bytes.
+        + "  if geo_usda(spec, 0.0) != geo_usda(spec, 0.0) { f = f + 1 }\n"
+        + "  if f == 0 { println(\"ALL_PASS\") } else { println(\"FAILED \" + to_string(f)); exit(1) }\n"
+        + "}\n"
+    exec("printf %s " + _shq2(body) + " > " + _shq2(probe))
+    let cmd = "HEXA_LANG=" + _shq2(hxlang) + " " + _shq2(hexa)
+        + " run --no-sentinel " + _shq2(probe) + " 2>&1"
+    let pair = exec_with_status(cmd)
+    let out = to_string(pair[0])
+    let rc = _atoi2(pair[1])
+    if rc != 0 || !_ends_with_pass(out) {
+        println("FAIL geometry/builder — coil-load/determinism probe rc=" + to_string(rc))
+        println(out)
+        return 1
+    }
+
+    // LIVE arm — byte ≡ Swift export-component usda|stl.
+    if len(swift_bin) > 0 {
+        let ref_usda = "/tmp/.demi-selftest-geo-swift.usda"
+        let ref_stl  = "/tmp/.demi-selftest-geo-swift.stl"
+        exec(_shq2(swift_bin) + " export-component usda " + _shq2(ref_usda) + " >/dev/null 2>&1")
+        exec(_shq2(swift_bin) + " export-component stl " + _shq2(ref_stl) + " >/dev/null 2>&1")
+        let du = exec("diff " + _shq2(usda_out) + " " + _shq2(ref_usda) + " >/dev/null 2>&1 && echo same || echo diff").trim()
+        let ds = exec("diff " + _shq2(stl_out) + " " + _shq2(ref_stl) + " >/dev/null 2>&1 && echo same || echo diff").trim()
+        if du != "same" {
+            println("FAIL geometry/usda-byte-eq-swift — hexa .usda DIFFERS from Swift export-component usda")
+            println(exec("diff " + _shq2(ref_usda) + " " + _shq2(usda_out) + " | head -40"))
+            return 1
+        }
+        if ds != "same" {
+            println("FAIL geometry/stl-byte-eq-swift — hexa .stl DIFFERS from Swift export-component stl")
+            println(exec("diff " + _shq2(ref_stl) + " " + _shq2(stl_out) + " | head -40"))
+            return 1
+        }
+        println("PASS geometry/builder (.usda + .stl byte ≡ Swift · coil-spec load · determinism)")
+        return 0
+    }
+    println("PASS geometry/builder (.usda + .stl deterministic · coil-spec load · GOLDEN — no Swift bin)")
+    return 0
+}
+
+// _geometry_swap_selfcheck() — THE @L3 KEY CELL. Proves the geometry is
+// FILE-DRIVEN, not hardcoded: lay down a MODIFIED spec file (different id /
+// dimensions / layers) at a /tmp path, load + emit it WITHOUT recompiling the
+// hexa module, and assert (a) the emitted geometry CHANGES vs the reference
+// shape, and (b) it changes IN ACCORDANCE with the new spec (the new id,
+// width, layer count, and a layer-derived coordinate all show up). A second
+// spec with a THIRD set of numbers proves the change tracks the FILE, not a
+// one-off. If the geometry were hardcoded in .hexa, the output could not vary
+// with the file — so a green here is the @L3 proof.
+fn _geometry_swap_selfcheck() -> int {
+    let hexa = exec("command -v hexa 2>/dev/null || echo hexa").trim()
+    let hxlang = env("HEXA_LANG")
+    let spec_a = "/tmp/.demi-selftest-geo-swapA.geo.json"
+    let spec_b = "/tmp/.demi-selftest-geo-swapB.geo.json"
+    // Spec A — 2 slab layers, 500×250, distinctive id.
+    let a = "{ \"schema\": \"demiurge:geometry:component:1.0\", \"kind\": \"component\","
+        + " \"id\": \"swapA_v0\", \"displayName\": \"Swap A\", \"plainName\": \"a\","
+        + " \"widthMM\": 500.0, \"depthMM\": 250.0, \"layers\": ["
+        + " { \"name\": \"Top\", \"plainName\": \"t\", \"material\": \"x\", \"thicknessMM\": 4.0, \"colorHex\": \"#FF0000\", \"render\": \"slab\", \"opacity\": 1.0 },"
+        + " { \"name\": \"Bottom\", \"plainName\": \"b\", \"material\": \"y\", \"thicknessMM\": 6.0, \"colorHex\": \"#00FF00\", \"render\": \"slab\", \"opacity\": 0.5 } ] }\n"
+    // Spec B — 1 slab layer, 123×456, a THIRD id/number set.
+    let b = "{ \"schema\": \"demiurge:geometry:component:1.0\", \"kind\": \"component\","
+        + " \"id\": \"swapB_v0\", \"displayName\": \"Swap B\", \"plainName\": \"b\","
+        + " \"widthMM\": 123.0, \"depthMM\": 456.0, \"layers\": ["
+        + " { \"name\": \"Only\", \"plainName\": \"o\", \"material\": \"z\", \"thicknessMM\": 7.0, \"colorHex\": \"#0000FF\", \"render\": \"slab\", \"opacity\": 1.0 } ] }\n"
+    exec("printf %s " + _shq2(a) + " > " + _shq2(spec_a))
+    exec("printf %s " + _shq2(b) + " > " + _shq2(spec_b))
+    let probe = "/tmp/.demi-selftest-geo-swap-probe.hexa"
+    let body = "import \"stdlib/demi/geometry.hexa\"\n"
+        + "fn main() {\n"
+        + "  let ref = geo_usda(geo_load_component(\"bipv_5layer_v0\"), 0.0)\n"
+        + "  let sa = geo_load_component(\"" + spec_a + "\")\n"
+        + "  let sb = geo_load_component(\"" + spec_b + "\")\n"
+        + "  let ua = geo_usda(sa, 0.0)\n"
+        + "  let ub = geo_usda(sb, 0.0)\n"
+        + "  let mut f = 0\n"
+        // (a) each modified spec differs from the reference shape.
+        + "  if ua == ref { f = f + 1 }\n"
+        + "  if ub == ref { f = f + 1 }\n"
+        // (a') the two modified specs differ from EACH OTHER (tracks the file).
+        + "  if ua == ub { f = f + 1 }\n"
+        // (b) spec A's params surface in its output (id · width scale · 2 layers).
+        + "  if sa.id != \"swapA_v0\" { f = f + 1 }\n"
+        + "  if to_string(len(sa.layers)) != \"2\" { f = f + 1 }\n"
+        + "  if geo_fmt(sa.width) != \"500\" { f = f + 1 }\n"
+        + "  if !rl_contains(ua, \"demiurge:geometryId = \\\"swapA_v0\\\"\") { f = f + 1 }\n"
+        + "  if !rl_contains(ua, \"(500, 4, 250)\") { f = f + 1 }\n"
+        // (b) spec B's THIRD number set surfaces (1 layer · 123×456 · its id).
+        + "  if to_string(len(sb.layers)) != \"1\" { f = f + 1 }\n"
+        + "  if !rl_contains(ub, \"demiurge:geometryId = \\\"swapB_v0\\\"\") { f = f + 1 }\n"
+        + "  if !rl_contains(ub, \"(123, 7, 456)\") { f = f + 1 }\n"
+        + "  if f == 0 { println(\"ALL_PASS\") } else { println(\"FAILED \" + to_string(f)); exit(1) }\n"
+        + "}\n"
+    exec("printf %s " + _shq2(body) + " > " + _shq2(probe))
+    let cmd = "HEXA_LANG=" + _shq2(hxlang) + " " + _shq2(hexa)
+        + " run --no-sentinel " + _shq2(probe) + " 2>&1"
+    let pair = exec_with_status(cmd)
+    let out = to_string(pair[0])
+    let rc = _atoi2(pair[1])
+    exec("rm -f " + _shq2(spec_a) + " " + _shq2(spec_b))
+    if rc == 0 && _ends_with_pass(out) {
+        println("PASS geometry/@L3-file-swap (modified spec file → changed geometry · NO recompile · tracks file)")
+        return 0
+    }
+    println("FAIL geometry/@L3-file-swap — rc=" + to_string(rc))
     println(out)
     return 1
 }

@@ -1,0 +1,583 @@
+// HEXA Standard Library — demi/geometry
+//
+// @version 0.1.0
+// @capabilities [proc]
+//
+// FILE-DRIVEN geometry SSOT for the pure-hexa-native `demiurge cli` 3D
+// surface (demi-cli-pure-hexa-native · plan @L3 — the FIRST 3D PR, the
+// separate-file geometry architecture #22-#25 build on).
+//
+// This module is the hexa-native port of the Swift cockpit geometry pair
+//   DemiurgeCore/Models/ComponentGeometry.swift   (+ Exporters/USDExporter, STLExporter)
+//   DemiurgeCore/Models/HtsCoilGeometry.swift
+// but with ONE hard architectural rule (@L3 · d3 · d4):
+//
+//   ╔═══════════════════════════════════════════════════════════════════╗
+//   ║  NO HARDCODED GEOMETRY.  Every per-shape / per-instance constant   ║
+//   ║  (coil radius · turns · layer thickness · colour · render style …) ║
+//   ║  lives in an EXTERNAL, runtime-loadable spec FILE — NEVER in this  ║
+//   ║  source. This file is a GENERIC loader + builder that reads ANY    ║
+//   ║  such spec. Adding / renaming / swapping a shape is a SPEC-FILE    ║
+//   ║  edit with ZERO code change (d4: manifest-only).                   ║
+//   ╚═══════════════════════════════════════════════════════════════════╝
+//
+// ── SPEC FILE FORMAT (the architecture #22-#25 inherit) ─────────────────────
+// A geometry spec is a JSON file `stdlib/demi/geometry/<id>.geo.json` (or any
+// runtime-readable path passed to the loader). Two `kind`s today:
+//
+//   kind = "component"  (Swift ComponentGeometry · USD/STL exporters consume it)
+//     { schema, kind:"component", id, displayName, plainName,
+//       widthMM, depthMM,
+//       layers: [ { name, plainName, material, thicknessMM, colorHex,
+//                   render: slab|cellGrid|frameBorder|finnedSink|mountBase,
+//                   opacity } … top→bottom ] }
+//
+//   kind = "hts_coil"   (Swift HtsCoilGeometry · concentric solenoid rings)
+//     { schema, kind:"hts_coil", id, displayName, lengthMM, turns,
+//       rings: [ { name, plainName, material,
+//                  innerRadiusMM, outerRadiusMM, colorHex, opacity } … in→out ] }
+//
+// The reference spec files reproduce the EXACT params the Swift presets
+// hardcode (ComponentGeometry.bipv5Layer · HtsCoilGeometry.htsSolenoidProxy),
+// so the built geometry byte-matches the Swift reference shape. A DIFFERENT
+// spec file (different numbers) produces a DIFFERENT geometry — proven by the
+// file-only-swap parity cell in demi_selftest.hexa (@L3).
+//
+// d3: reuses record_loader.hexa primitives (rl_*) for file IO + path canon —
+// no re-derived loader here. d4: the generic dispatch layer is untouched; the
+// `emit-component`/`export-component` verbs route through handler_local exactly
+// as every other verb (their CLI wiring lands in the stacked emit/export PRs;
+// THIS PR establishes the loader + builder + byte-parity SSOT).
+
+import "stdlib/alloc/json_object.hexa"
+import "stdlib/demi/record_loader.hexa"
+
+// ── typed carriers (hexa has no native map type — structs of arrays) ────────
+
+pub struct GeoLayer {
+    name:        string,
+    plain_name:  string,
+    material:    string,
+    thickness:   f64,     // thicknessMM
+    color_hex:   string,
+    render:      string,  // slab|cellGrid|frameBorder|finnedSink|mountBase
+    opacity:     f64,
+}
+
+pub struct ComponentSpec {
+    id:           string,
+    display_name: string,
+    plain_name:   string,
+    width:        f64,    // widthMM (X)
+    depth:        f64,    // depthMM (Z)
+    layers:       [GeoLayer],
+}
+
+pub struct GeoRing {
+    name:         string,
+    plain_name:   string,
+    material:     string,
+    inner_radius: f64,    // innerRadiusMM
+    outer_radius: f64,    // outerRadiusMM
+    color_hex:    string,
+    opacity:      f64,
+}
+
+pub struct HtsCoilSpec {
+    id:           string,
+    display_name: string,
+    length:       f64,    // lengthMM
+    turns:        i64,
+    rings:        [GeoRing],
+}
+
+// A layer-local detail box (Swift ComponentBox) — millimetres, layer-local.
+pub struct GeoBox {
+    cx: f64, cy: f64, cz: f64,
+    sx: f64, sy: f64, sz: f64,
+}
+
+// ── number formatting — byte-identical to Swift USDExporter/STLExporter ─────
+//
+// Swift `fmt(v)`: integer-valued (and |v|<1e15) → String(Int(v)) (no decimals);
+// else String(format:"%.4f"). Swift `f(v)` (STL): ALWAYS String(format:"%.4f").
+// C printf `%.4f` == Swift `%.4f` (round-half-to-even at the 4th decimal);
+// these geometry values never land on a half-ulp tie, so a plain round to 4
+// places reproduces every reference byte. Verified against the Swift binary by
+// the selftest parity cell (byte ≡ Swift), so any drift is caught, not assumed.
+
+// geo_fix4(v) — `%.4f`: sign + integer part + "." + exactly 4 fraction digits.
+pub fn geo_fix4(v: f64) -> string {
+    let mut x = v
+    let mut neg = false
+    if x < 0.0 { neg = true ; x = -x }
+    // round to 4 decimals (half-up; ties do not occur in this geometry set).
+    let scaled = floor(x * 10000.0 + 0.5)
+    let ip = floor(scaled / 10000.0)
+    let fp = scaled - ip * 10000.0       // 0..9999, integer-valued f64
+    let ip_i: i64 = int(ip)
+    let fp_i: i64 = int(fp)
+    // 4-digit zero-padded fraction.
+    let mut frac = to_string(fp_i)
+    while len(frac) < 4 { frac = "0" + frac }
+    let body = to_string(ip_i) + "." + frac
+    if neg { return "-" + body }
+    return body
+}
+
+// geo_is_int(v) — v is integer-valued and |v| < 1e15 (Swift fmt's branch).
+fn geo_is_int(v: f64) -> bool {
+    if v < 1.0e15 && v > -1.0e15 {
+        return v == floor(v)
+    }
+    return false
+}
+
+// geo_fmt(v) — Swift USDExporter.fmt: int branch (no decimals) else %.4f.
+pub fn geo_fmt(v: f64) -> string {
+    if geo_is_int(v) {
+        let i: i64 = int(v)
+        return to_string(i)
+    }
+    return geo_fix4(v)
+}
+
+// ── #RRGGBB → (r,g,b) in [0,1] (Swift ComponentLayer.rgb) ───────────────────
+// Malformed hex → mid-grey (0.5,0.5,0.5), exactly like Swift.
+
+fn _hexval(c: string) -> int {
+    let o = ord(c)
+    if o >= 48 && o <= 57 { return o - 48 }        // 0-9
+    if o >= 97 && o <= 102 { return o - 97 + 10 }  // a-f
+    if o >= 65 && o <= 70 { return o - 65 + 10 }   // A-F
+    return -1
+}
+
+// geo_rgb(hex) — returns [r,g,b] as f64 in [0,1]. Mid-grey on malformed input.
+pub fn geo_rgb(color_hex: string) -> [f64] {
+    let mut h = color_hex
+    if len(h) > 0 && h.substring(0, 1) == "#" { h = h.substring(1, len(h)) }
+    if len(h) != 6 { return [0.5, 0.5, 0.5] }
+    let mut v = 0
+    let mut i = 0
+    while i < 6 {
+        let d = _hexval(h.substring(i, i + 1))
+        if d < 0 { return [0.5, 0.5, 0.5] }
+        v = v * 16 + d
+        i = i + 1
+    }
+    let r = ((v / 65536) % 256)
+    let g = ((v / 256) % 256)
+    let b = (v % 256)
+    return [to_float(r) / 255.0, to_float(g) / 255.0, to_float(b) / 255.0]
+}
+
+// ── generic spec LOADER (d3 — reuses rl_* file IO + path canon) ─────────────
+
+// geo_spec_dir() — the bundled spec asset dir. Resolves to
+// <HEXA_LANG or cwd>/stdlib/demi/geometry. A caller may instead pass an
+// absolute spec path straight to geo_load_*; this is only the default home.
+pub fn geo_spec_dir() -> string {
+    let root = env("HEXA_LANG")
+    if len(root) > 0 { return rl_canon(root + "/stdlib/demi/geometry") }
+    let cwd = exec("pwd").trim()
+    return rl_canon(cwd + "/stdlib/demi/geometry")
+}
+
+// geo_resolve_path(arg) — if `arg` looks like a path (has "/" or ends .json),
+// canonicalize it as-is; else treat it as a bundled spec id and resolve to
+// <geo_spec_dir>/<id>.geo.json. So both `geo_load_component("bipv_5layer_v0")`
+// and a full path work (the file-swap parity cell passes a /tmp path).
+pub fn geo_resolve_path(arg: string) -> string {
+    if rl_contains(arg, "/") || rl_contains(arg, ".json") {
+        return rl_canon(arg)
+    }
+    return geo_spec_dir() + "/" + arg + ".geo.json"
+}
+
+// geo_read_spec(arg) — read + JSON-parse a spec file. Returns the parsed
+// object (empty map on miss/parse-fail — caller checks `kind`).
+pub fn geo_read_spec(arg) {
+    let path = geo_resolve_path(arg)
+    let exists = exec("test -f " + rl_shq(path) + " && echo yes || echo no").trim()
+    if exists != "yes" { return json_parse("{}") }
+    return json_parse_object(read_file(path))
+}
+
+// geo_load_component(arg) — load a kind="component" spec into a ComponentSpec.
+pub fn geo_load_component(arg) -> ComponentSpec {
+    let obj = geo_read_spec(arg)
+    let layers_arr = json_object_get_array(obj, "layers")
+    let mut layers: [GeoLayer] = []
+    let mut i = 0
+    while i < len(layers_arr) {
+        let lo = layers_arr[i]
+        layers.push(GeoLayer {
+            name:       json_object_get_str(lo, "name", ""),
+            plain_name: json_object_get_str(lo, "plainName", ""),
+            material:   json_object_get_str(lo, "material", ""),
+            thickness:  json_object_get_float(lo, "thicknessMM", 0.0),
+            color_hex:  json_object_get_str(lo, "colorHex", ""),
+            render:     json_object_get_str(lo, "render", "slab"),
+            opacity:    json_object_get_float(lo, "opacity", 1.0),
+        })
+        i = i + 1
+    }
+    return ComponentSpec {
+        id:           json_object_get_str(obj, "id", ""),
+        display_name: json_object_get_str(obj, "displayName", ""),
+        plain_name:   json_object_get_str(obj, "plainName", ""),
+        width:        json_object_get_float(obj, "widthMM", 0.0),
+        depth:        json_object_get_float(obj, "depthMM", 0.0),
+        layers:       layers,
+    }
+}
+
+// geo_load_hts_coil(arg) — load a kind="hts_coil" spec into an HtsCoilSpec.
+pub fn geo_load_hts_coil(arg) -> HtsCoilSpec {
+    let obj = geo_read_spec(arg)
+    let rings_arr = json_object_get_array(obj, "rings")
+    let mut rings: [GeoRing] = []
+    let mut i = 0
+    while i < len(rings_arr) {
+        let ro = rings_arr[i]
+        rings.push(GeoRing {
+            name:         json_object_get_str(ro, "name", ""),
+            plain_name:   json_object_get_str(ro, "plainName", ""),
+            material:     json_object_get_str(ro, "material", ""),
+            inner_radius: json_object_get_float(ro, "innerRadiusMM", 0.0),
+            outer_radius: json_object_get_float(ro, "outerRadiusMM", 0.0),
+            color_hex:    json_object_get_str(ro, "colorHex", ""),
+            opacity:      json_object_get_float(ro, "opacity", 1.0),
+        })
+        i = i + 1
+    }
+    return HtsCoilSpec {
+        id:           json_object_get_str(obj, "id", ""),
+        display_name: json_object_get_str(obj, "displayName", ""),
+        length:       json_object_get_float(obj, "lengthMM", 0.0),
+        turns:        json_object_get_int(obj, "turns", 0),
+        rings:        rings,
+    }
+}
+
+// ── ComponentGeometry geometric helpers (port of the Swift methods) ─────────
+
+// geo_total_thickness(spec) — Swift totalThicknessMM (Σ layer thickness).
+pub fn geo_total_thickness(spec: ComponentSpec) -> f64 {
+    let mut t = 0.0
+    let mut i = 0
+    while i < len(spec.layers) {
+        t = t + spec.layers[i].thickness
+        i = i + 1
+    }
+    return t
+}
+
+// geo_layer_center_y(spec, index) — Swift layerCenterY: assembled centre Y of
+// layer `index`, whole model centred on origin, index 0 = top.
+pub fn geo_layer_center_y(spec: ComponentSpec, index: int) -> f64 {
+    let mut top = geo_total_thickness(spec) / 2.0
+    let mut i = 0
+    while i < index {
+        top = top - spec.layers[i].thickness
+        i = i + 1
+    }
+    return top - spec.layers[index].thickness / 2.0
+}
+
+// geo_exploded_center_y(spec, index, explode) — Swift explodedCenterY:
+// layerCenterY * (1 + max(0, explode)).
+pub fn geo_exploded_center_y(spec: ComponentSpec, index: int, explode: f64) -> f64 {
+    let mut e = explode
+    if e < 0.0 { e = 0.0 }
+    return geo_layer_center_y(spec, index) * (1.0 + e)
+}
+
+// geo_is_metal(render) — Swift USDExporter.isMetal: frame/sink/mount metal.
+fn geo_is_metal(render: string) -> bool {
+    return render == "frameBorder" || render == "finnedSink" || render == "mountBase"
+}
+
+// _box(cx,cy,cz,sx,sy,sz) — GeoBox builder.
+fn _box(cx: f64, cy: f64, cz: f64, sx: f64, sy: f64, sz: f64) -> GeoBox {
+    return GeoBox { cx: cx, cy: cy, cz: cz, sx: sx, sy: sy, sz: sz }
+}
+
+// geo_layer_boxes(spec, index) — Swift ComponentGeometry.layerBoxes: expand a
+// layer into detail boxes per its `render`. Byte-faithful port incl. the exact
+// magic factors (0.92 / 0.86 grid · 0.09 frame bar · 0.28 base + 15 fins · …).
+pub fn geo_layer_boxes(spec: ComponentSpec, index: int) -> [GeoBox] {
+    let l = spec.layers[index]
+    let w = spec.width
+    let d = spec.depth
+    let t = l.thickness
+    if l.render == "slab" {
+        return [_box(0.0, 0.0, 0.0, w, t, d)]
+    }
+    if l.render == "cellGrid" {
+        // 8×8 grid inset 0.92 of footprint; cell = pitch*0.86.
+        let n = 8
+        let area = w * 0.92
+        let pitch = area / to_float(n)
+        let cell = pitch * 0.86
+        let mut out: [GeoBox] = []
+        let mut i = 0
+        while i < n {
+            let mut j = 0
+            while j < n {
+                let cx = -area / 2.0 + pitch * (to_float(i) + 0.5)
+                let cz = -area / 2.0 + pitch * (to_float(j) + 0.5)
+                out.push(_box(cx, 0.0, cz, cell, t, cell))
+                j = j + 1
+            }
+            i = i + 1
+        }
+        return out
+    }
+    if l.render == "frameBorder" {
+        // 4-side perimeter frame, bar = min(w,d)*0.09.
+        let mut mn = w
+        if d < mn { mn = d }
+        let bar = mn * 0.09
+        let inner_d = d - 2.0 * bar
+        return [
+            _box(0.0, 0.0, (d - bar) / 2.0,   w, t, bar),
+            _box(0.0, 0.0, -(d - bar) / 2.0,  w, t, bar),
+            _box((w - bar) / 2.0, 0.0, 0.0,   bar, t, inner_d),
+            _box(-(w - bar) / 2.0, 0.0, 0.0,  bar, t, inner_d),
+        ]
+    }
+    if l.render == "finnedSink" {
+        // base plate (0.28 t) + 15 fins across 0.94 w.
+        let base_t = t * 0.28
+        let fin_t = t - base_t
+        let mut out: [GeoBox] = [
+            _box(0.0, (base_t - t) / 2.0, 0.0, w, base_t, d)
+        ]
+        let count = 15
+        let span = w * 0.94
+        let pitch = span / to_float(count)
+        let fin = pitch * 0.5
+        let mut i = 0
+        while i < count {
+            let cx = -span / 2.0 + pitch * (to_float(i) + 0.5)
+            out.push(_box(cx, base_t / 2.0, 0.0, fin, fin_t, d * 0.9))
+            i = i + 1
+        }
+        return out
+    }
+    if l.render == "mountBase" {
+        // base plate (0.5 t, 0.82 footprint) + 4 corner brackets.
+        let base_t = t * 0.5
+        let mut out: [GeoBox] = [
+            _box(0.0, (base_t - t) / 2.0, 0.0, w * 0.82, base_t, d * 0.82)
+        ]
+        let mut mn = w
+        if d < mn { mn = d }
+        let br = mn * 0.16
+        let ox = w * 0.41
+        let oz = d * 0.41
+        // corners: (+,+) (-,+) (+,-) (-,-) — Swift order.
+        let xs: [f64] = [1.0, -1.0, 1.0, -1.0]
+        let zs: [f64] = [1.0, 1.0, -1.0, -1.0]
+        let mut k = 0
+        while k < 4 {
+            out.push(_box(ox * xs[k], 0.0, oz * zs[k], br, t, br))
+            k = k + 1
+        }
+        return out
+    }
+    // unknown render → treat as a slab (defensive; Swift enum is exhaustive).
+    return [_box(0.0, 0.0, 0.0, w, t, d)]
+}
+
+// ── USD ASCII builder — byte-identical to Swift USDExporter.usda ────────────
+
+// _prim_name(raw) — Swift USDExporter.primName: non-alnum → "_"; leading digit
+// prefixed "_"; empty → "Layer". (hexa: classify via char range.)
+fn _is_alnum(c: string) -> bool {
+    let o = ord(c)
+    if o >= 48 && o <= 57 { return true }   // 0-9
+    if o >= 65 && o <= 90 { return true }   // A-Z
+    if o >= 97 && o <= 122 { return true }  // a-z
+    return false
+}
+fn _is_digit(c: string) -> bool {
+    let o = ord(c)
+    return o >= 48 && o <= 57
+}
+fn _prim_name(raw: string) -> string {
+    let mut out = ""
+    let mut i = 0
+    while i < len(raw) {
+        let c = raw.substring(i, i + 1)
+        if _is_alnum(c) { out = out + c } else { out = out + "_" }
+        i = i + 1
+    }
+    if len(out) > 0 && _is_digit(out.substring(0, 1)) { out = "_" + out }
+    if len(out) == 0 { return "Layer" }
+    return out
+}
+
+// geo_usda(spec, explode) — the .usda ASCII, byte-for-byte the Swift
+// USDExporter.usda output for the same ComponentGeometry.
+pub fn geo_usda(spec: ComponentSpec, explode: f64) -> string {
+    let mut s = "#usda 1.0\n(\n"
+    s = s + "    defaultPrim = \"Component\"\n"
+    s = s + "    metersPerUnit = 0.001\n"
+    s = s + "    upAxis = \"Y\"\n"
+    s = s + "    doc = \"demiurge ComponentGeometry export — "
+    s = s + spec.id + ". PROCEDURAL PLACEHOLDER geometry (g3), "
+    s = s + "not a measured component.\"\n"
+    s = s + ")\n\n"
+    s = s + "def Xform \"Component\" (\n    kind = \"component\"\n)\n{\n"
+    s = s + "    custom string demiurge:geometryId = \"" + spec.id + "\"\n"
+    s = s + "    custom string demiurge:displayName = "
+    s = s + "\"" + spec.display_name + "\"\n"
+    s = s + "    custom double demiurge:explodeFactor = "
+    s = s + geo_fmt(explode) + "\n"
+    s = s + "    custom string demiurge:provenance = "
+    s = s + "\"procedural_placeholder · GATE_OPEN · absorbed=false\"\n\n"
+
+    // materials block
+    s = s + "    def Scope \"Materials\"\n    {\n"
+    let mut mi = 0
+    while mi < len(spec.layers) {
+        let layer = spec.layers[mi]
+        let mat = "mat_" + _prim_name(layer.name)
+        let rgb = geo_rgb(layer.color_hex)
+        let mut metallic = 0.0
+        let mut rough = 0.12
+        if geo_is_metal(layer.render) { metallic = 0.85 ; rough = 0.35 }
+        s = s + "        def Material \"" + mat + "\"\n        {\n"
+        s = s + "            token outputs:surface.connect = "
+        s = s + "</Component/Materials/" + mat + "/Shader.outputs:surface>\n"
+        s = s + "            def Shader \"Shader\"\n            {\n"
+        s = s + "                uniform token info:id = \"UsdPreviewSurface\"\n"
+        s = s + "                color3f inputs:diffuseColor = "
+        s = s + "(" + geo_fmt(rgb[0]) + ", " + geo_fmt(rgb[1]) + ", " + geo_fmt(rgb[2]) + ")\n"
+        s = s + "                float inputs:metallic = " + geo_fmt(metallic) + "\n"
+        s = s + "                float inputs:roughness = " + geo_fmt(rough) + "\n"
+        s = s + "                float inputs:opacity = "
+        s = s + geo_fmt(layer.opacity) + "\n"
+        s = s + "                token outputs:surface\n"
+        s = s + "            }\n        }\n"
+        mi = mi + 1
+    }
+    s = s + "    }\n\n"
+
+    // per-layer geometry
+    let mut li = 0
+    while li < len(spec.layers) {
+        let layer = spec.layers[li]
+        let y = geo_exploded_center_y(spec, li, explode)
+        let xn = _prim_name(layer.name)
+        let mat = "mat_" + xn
+        s = s + "    def Xform \"Layer_" + xn + "\"\n    {\n"
+        s = s + "        float3 xformOp:translate = (0, " + geo_fmt(y) + ", 0)\n"
+        s = s + "        uniform token[] xformOpOrder = [\"xformOp:translate\"]\n"
+        s = s + "        custom string demiurge:layerName = \"" + layer.name + "\"\n"
+        s = s + "        custom double demiurge:thicknessMM = "
+        s = s + geo_fmt(layer.thickness) + "\n"
+        let boxes = geo_layer_boxes(spec, li)
+        let rgb = geo_rgb(layer.color_hex)
+        let mut bi = 0
+        while bi < len(boxes) {
+            let p = boxes[bi]
+            s = s + "        def Cube \"Box_" + to_string(bi) + "\"\n        {\n"
+            s = s + "            double size = 1\n"
+            s = s + "            float3 xformOp:translate = "
+            s = s + "(" + geo_fmt(p.cx) + ", " + geo_fmt(p.cy) + ", " + geo_fmt(p.cz) + ")\n"
+            s = s + "            float3 xformOp:scale = "
+            s = s + "(" + geo_fmt(p.sx) + ", " + geo_fmt(p.sy) + ", " + geo_fmt(p.sz) + ")\n"
+            s = s + "            uniform token[] xformOpOrder = "
+            s = s + "[\"xformOp:translate\", \"xformOp:scale\"]\n"
+            s = s + "            rel material:binding = "
+            s = s + "</Component/Materials/" + mat + ">\n"
+            s = s + "            color3f[] primvars:displayColor = "
+            s = s + "[(" + geo_fmt(rgb[0]) + ", " + geo_fmt(rgb[1]) + ", " + geo_fmt(rgb[2]) + ")]\n"
+            s = s + "        }\n"
+            bi = bi + 1
+        }
+        s = s + "    }\n"
+        li = li + 1
+    }
+    s = s + "}\n"
+    return s
+}
+
+// ── STL ASCII builder — byte-identical to Swift STLExporter.stl ─────────────
+
+// _stl_sanitize(raw) — Swift STLExporter.sanitize: alnum or "_" kept, else "_";
+// empty → "component". (NOTE: differs from USD primName — "_" is allowed here.)
+fn _stl_sanitize(raw: string) -> string {
+    let mut out = ""
+    let mut i = 0
+    while i < len(raw) {
+        let c = raw.substring(i, i + 1)
+        if _is_alnum(c) || c == "_" { out = out + c } else { out = out + "_" }
+        i = i + 1
+    }
+    if len(out) == 0 { return "component" }
+    return out
+}
+
+// _stl_tri(n, a, b, c) — one facet; coordinates ALWAYS %.4f (Swift f()).
+fn _stl_tri(n: [f64], a: [f64], b: [f64], c: [f64]) -> string {
+    let mut s = "  facet normal " + geo_fix4(n[0]) + " " + geo_fix4(n[1]) + " " + geo_fix4(n[2]) + "\n"
+    s = s + "    outer loop\n"
+    s = s + "      vertex " + geo_fix4(a[0]) + " " + geo_fix4(a[1]) + " " + geo_fix4(a[2]) + "\n"
+    s = s + "      vertex " + geo_fix4(b[0]) + " " + geo_fix4(b[1]) + " " + geo_fix4(b[2]) + "\n"
+    s = s + "      vertex " + geo_fix4(c[0]) + " " + geo_fix4(c[1]) + " " + geo_fix4(c[2]) + "\n"
+    s = s + "    endloop\n  endfacet\n"
+    return s
+}
+
+// _stl_quad(n, a, b, c, d) — two facets a→b→c, a→c→d.
+fn _stl_quad(n: [f64], a: [f64], b: [f64], c: [f64], d: [f64]) -> string {
+    return _stl_tri(n, a, b, c) + _stl_tri(n, a, c, d)
+}
+
+// _stl_box_facets(hw, ht, hd, cy) — 12 triangles for the axis-aligned box.
+fn _stl_box_facets(hw: f64, ht: f64, hd: f64, cy: f64) -> string {
+    let x0 = -hw
+    let x1 = hw
+    let y0 = cy - ht
+    let y1 = cy + ht
+    let z0 = -hd
+    let z1 = hd
+    let p000: [f64] = [x0, y0, z0]
+    let p100: [f64] = [x1, y0, z0]
+    let p110: [f64] = [x1, y1, z0]
+    let p010: [f64] = [x0, y1, z0]
+    let p001: [f64] = [x0, y0, z1]
+    let p101: [f64] = [x1, y0, z1]
+    let p111: [f64] = [x1, y1, z1]
+    let p011: [f64] = [x0, y1, z1]
+    let mut s = ""
+    s = s + _stl_quad([0.0, 0.0, -1.0], p000, p010, p110, p100)  // -Z
+    s = s + _stl_quad([0.0, 0.0, 1.0],  p001, p101, p111, p011)  // +Z
+    s = s + _stl_quad([-1.0, 0.0, 0.0], p000, p001, p011, p010)  // -X
+    s = s + _stl_quad([1.0, 0.0, 0.0],  p100, p110, p111, p101)  // +X
+    s = s + _stl_quad([0.0, -1.0, 0.0], p000, p100, p101, p001)  // -Y
+    s = s + _stl_quad([0.0, 1.0, 0.0],  p010, p011, p111, p110)  // +Y
+    return s
+}
+
+// geo_stl(spec, explode) — the ASCII STL, byte-for-byte the Swift
+// STLExporter.stl output (each layer = one box, mm coordinates).
+pub fn geo_stl(spec: ComponentSpec, explode: f64) -> string {
+    let name = _stl_sanitize(spec.id)
+    let mut s = "solid " + name + "\n"
+    let hw = spec.width / 2.0
+    let hd = spec.depth / 2.0
+    let mut i = 0
+    while i < len(spec.layers) {
+        let cy = geo_exploded_center_y(spec, i, explode)
+        s = s + _stl_box_facets(hw, spec.layers[i].thickness / 2.0, hd, cy)
+        i = i + 1
+    }
+    s = s + "endsolid " + name + "\n"
+    return s
+}

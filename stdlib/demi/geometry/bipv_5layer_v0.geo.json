@@ -1,0 +1,21 @@
+{
+  "schema": "demiurge:geometry:component:1.0",
+  "kind": "component",
+  "id": "bipv_5layer_v0",
+  "displayName": "BIPV Module (5-layer)",
+  "plainName": "건물일체형 태양광 모듈 (5겹)",
+  "widthMM": 1000.0,
+  "depthMM": 1000.0,
+  "layers": [
+    { "name": "Glass Face", "plainName": "유리 표면", "material": "tempered glass",
+      "thicknessMM": 3.2, "colorHex": "#A8D8E8", "render": "slab", "opacity": 0.32 },
+    { "name": "PV Cells", "plainName": "태양전지 셀", "material": "monocrystalline silicon",
+      "thicknessMM": 0.2, "colorHex": "#1B2A6B", "render": "cellGrid", "opacity": 1.0 },
+    { "name": "Corrosion-Proof Frame", "plainName": "부식 방지 프레임", "material": "anodized aluminium",
+      "thicknessMM": 8.0, "colorHex": "#9AA0A6", "render": "frameBorder", "opacity": 1.0 },
+    { "name": "Thermal Sink", "plainName": "방열판", "material": "finned aluminium plate",
+      "thicknessMM": 12.0, "colorHex": "#FF9500", "render": "finnedSink", "opacity": 1.0 },
+    { "name": "Structural Mount", "plainName": "구조 마운트", "material": "galvanised steel",
+      "thicknessMM": 18.0, "colorHex": "#555555", "render": "mountBase", "opacity": 1.0 }
+  ]
+}
