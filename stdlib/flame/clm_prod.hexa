@@ -870,6 +870,39 @@ fn _adam(W: int, gW: int, m: int, v: int, n: int, t: int) {
     opt_adamw_step(W, gW, m, v, n, 0.05, 0.9, 0.999, 0.00000001, 0.0, t)
 }
 
+// HEXA-FUSION L2 (5): the full 16-call AdamW sweep, factored so the whole-step
+// CUDA-graph driver can issue it either EAGER (after replay/capture) or INSIDE
+// the captured region (env HEXA_CUDA_GRAPH_WHOLESTEP). All args are device-
+// resident tensor ids (DEVRESIDENT); `step` is the host bias-correction t.
+fn _adam_sweep(embed: int, dembed: int, m_embed: int, v_embed: int, vd: int,
+               ecW: int, decW: int, m_ecW: int, v_ecW: int, dd: int,
+               ecB: int, decB: int, m_ecB: int, v_ecB: int, d: int,
+               tcW: int, dtcW: int, m_tcW: int, v_tcW: int,
+               tcB: int, dtcB: int, m_tcB: int, v_tcB: int,
+               tgG: int, dtgG: int, m_tgG: int, v_tgG: int,
+               tgB: int, dtgB: int, m_tgB: int, v_tgB: int,
+               rW: int, drW: int, m_rW: int, v_rW: int, ed: int,
+               rB: int, drB: int, m_rB: int, v_rB: int, E: int,
+               e0W: int, de0W: int, m_e0W: int, v_e0W: int,
+               e0B: int, de0B: int, m_e0B: int, v_e0B: int,
+               e1W: int, de1W: int, m_e1W: int, v_e1W: int,
+               e1B: int, de1B: int, m_e1B: int, v_e1B: int,
+               noG: int, dnoG: int, m_noG: int, v_noG: int,
+               noB: int, dnoB: int, m_noB: int, v_noB: int,
+               roW: int, droW: int, m_roW: int, v_roW: int,
+               roB: int, droB: int, m_roB: int, v_roB: int, V: int,
+               step: int) {
+    _adam(embed, dembed, m_embed, v_embed, vd, step)
+    _adam(ecW, decW, m_ecW, v_ecW, dd, step); _adam(ecB, decB, m_ecB, v_ecB, d, step)
+    _adam(tcW, dtcW, m_tcW, v_tcW, dd, step); _adam(tcB, dtcB, m_tcB, v_tcB, d, step)
+    _adam(tgG, dtgG, m_tgG, v_tgG, d, step);  _adam(tgB, dtgB, m_tgB, v_tgB, d, step)
+    _adam(rW, drW, m_rW, v_rW, ed, step);     _adam(rB, drB, m_rB, v_rB, E, step)
+    _adam(e0W, de0W, m_e0W, v_e0W, dd, step); _adam(e0B, de0B, m_e0B, v_e0B, d, step)
+    _adam(e1W, de1W, m_e1W, v_e1W, dd, step); _adam(e1B, de1B, m_e1B, v_e1B, d, step)
+    _adam(noG, dnoG, m_noG, v_noG, d, step);  _adam(noB, dnoB, m_noB, v_noB, d, step)
+    _adam(roW, droW, m_roW, v_roW, vd, step); _adam(roB, droB, m_roB, v_roB, V, step)
+}
+
 // Load nsamp causal windows of length T from a byte corpus into IDS/TGT.
 // IDS[s*T+p] = byte[off+p], TGT[s*T+p] = byte[off+p+1]; off = s*stride.
 // Returns the number of windows actually filled (<= nsamp if corpus is short).
@@ -1057,10 +1090,31 @@ fn main() {
         // fires once on the first non-metric step; the bulk middle steps replay with
         // one cudaGraphLaunch (host off the critical path). HEXA_CUDA_GRAPH off =>
         // forge_graph_* are no-ops => the eager branch always => byte-identical.
+        // ── HEXA-FUSION L2 (5) WHOLE-STEP: env HEXA_CUDA_GRAPH_WHOLESTEP=1 extends
+        // the captured region to ALSO include the 16-call AdamW sweep, so on replay
+        // the host is FULLY off the per-step critical path (the (4) verdict showed
+        // the eager 28-launch AdamW tail caps util at +1.3pp). PHASE-1 PROBE: c1/c2
+        // bias-correction stays baked at the capture step's t (numerically wrong on
+        // replay — we only want the util ceiling). PHASE-2 makes c1/c2 device-
+        // resident for byte-eq. Whole-step OFF => adam runs eager (the (4) path).
+        let _whole = if env("HEXA_CUDA_GRAPH_WHOLESTEP") != "" { 1 } else { 0 }
         let _g_ready = forge_graph_ready()
         let _need_loss = if (step <= nwin) || (step > steps - nwin) { 1 } else { 0 }
         if (_g_ready != 0) && (_need_loss == 0) {
             forge_graph_launch()
+            // whole-step: the AdamW sweep is INSIDE the replayed graph → do NOT
+            // re-issue it eagerly. Non-whole-step: adam was excluded → run eager.
+            if _whole == 0 {
+                _adam_sweep(embed, dembed, m_embed, v_embed, vd,
+                    ecW, decW, m_ecW, v_ecW, dd, ecB, decB, m_ecB, v_ecB, d,
+                    tcW, dtcW, m_tcW, v_tcW, tcB, dtcB, m_tcB, v_tcB,
+                    tgG, dtgG, m_tgG, v_tgG, tgB, dtgB, m_tgB, v_tgB,
+                    rW, drW, m_rW, v_rW, ed, rB, drB, m_rB, v_rB, E,
+                    e0W, de0W, m_e0W, v_e0W, e0B, de0B, m_e0B, v_e0B,
+                    e1W, de1W, m_e1W, v_e1W, e1B, de1B, m_e1B, v_e1B,
+                    noG, dnoG, m_noG, v_noG, noB, dnoB, m_noB, v_noB,
+                    roW, droW, m_roW, v_roW, roB, droB, m_roB, v_roB, V, step)
+            }
         } else {
             let _do_cap = if (forge_graph_on() != 0) && (_g_ready == 0) && (_need_loss == 0) { 1 } else { 0 }
             if _do_cap != 0 { forge_graph_begin() }
@@ -1083,17 +1137,34 @@ fn main() {
                         xe, xec, xt, hn0, xhat0, inv0, eo0, eo1, probs, ex_out, yn, xhatN, invN,
                         dembed, decW, decB, dtcW, dtcB, dtgG, dtgB, drW, drB, de0W, de0B, de1W, de1B,
                         dnoG, dnoB, droW, droB, T, d, E, V, K)
+            // whole-step capture: issue the AdamW sweep INSIDE the captured region
+            // (before commit) so it is part of the graph and replays. On the eager
+            // (non-capture) branch and non-whole-step path it runs as before.
+            if (_whole != 0) && (_do_cap != 0) {
+                _adam_sweep(embed, dembed, m_embed, v_embed, vd,
+                    ecW, decW, m_ecW, v_ecW, dd, ecB, decB, m_ecB, v_ecB, d,
+                    tcW, dtcW, m_tcW, v_tcW, tcB, dtcB, m_tcB, v_tcB,
+                    tgG, dtgG, m_tgG, v_tgG, tgB, dtgB, m_tgB, v_tgB,
+                    rW, drW, m_rW, v_rW, ed, rB, drB, m_rB, v_rB, E,
+                    e0W, de0W, m_e0W, v_e0W, e0B, de0B, m_e0B, v_e0B,
+                    e1W, de1W, m_e1W, v_e1W, e1B, de1B, m_e1B, v_e1B,
+                    noG, dnoG, m_noG, v_noG, noB, dnoB, m_noB, v_noB,
+                    roW, droW, m_roW, v_roW, roB, droB, m_roB, v_roB, V, step)
+            }
             if _do_cap != 0 { forge_graph_commit() }
+            // non-whole-step OR eager (non-capture) branch: adam runs eagerly here.
+            if (_whole == 0) || (_do_cap == 0) {
+                _adam_sweep(embed, dembed, m_embed, v_embed, vd,
+                    ecW, decW, m_ecW, v_ecW, dd, ecB, decB, m_ecB, v_ecB, d,
+                    tcW, dtcW, m_tcW, v_tcW, tcB, dtcB, m_tcB, v_tcB,
+                    tgG, dtgG, m_tgG, v_tgG, tgB, dtgB, m_tgB, v_tgB,
+                    rW, drW, m_rW, v_rW, ed, rB, drB, m_rB, v_rB, E,
+                    e0W, de0W, m_e0W, v_e0W, e0B, de0B, m_e0B, v_e0B,
+                    e1W, de1W, m_e1W, v_e1W, e1B, de1B, m_e1B, v_e1B,
+                    noG, dnoG, m_noG, v_noG, noB, dnoB, m_noB, v_noB,
+                    roW, droW, m_roW, v_roW, roB, droB, m_roB, v_roB, V, step)
+            }
         }
-        _adam(embed, dembed, m_embed, v_embed, vd, step)
-        _adam(ecW, decW, m_ecW, v_ecW, dd, step); _adam(ecB, decB, m_ecB, v_ecB, d, step)
-        _adam(tcW, dtcW, m_tcW, v_tcW, dd, step); _adam(tcB, dtcB, m_tcB, v_tcB, d, step)
-        _adam(tgG, dtgG, m_tgG, v_tgG, d, step);  _adam(tgB, dtgB, m_tgB, v_tgB, d, step)
-        _adam(rW, drW, m_rW, v_rW, ed, step);     _adam(rB, drB, m_rB, v_rB, E, step)
-        _adam(e0W, de0W, m_e0W, v_e0W, dd, step); _adam(e0B, de0B, m_e0B, v_e0B, d, step)
-        _adam(e1W, de1W, m_e1W, v_e1W, dd, step); _adam(e1B, de1B, m_e1B, v_e1B, d, step)
-        _adam(noG, dnoG, m_noG, v_noG, d, step);  _adam(noB, dnoB, m_noB, v_noB, d, step)
-        _adam(roW, droW, m_roW, v_roW, vd, step); _adam(roB, droB, m_roB, v_roB, V, step)
         step = step + 1
     }
     let first_ce = sum_first / to_float(nwin)
