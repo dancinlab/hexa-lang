@@ -1,0 +1,73 @@
+# SELFHOST-CI M5 — hx-selfhost-cli shim integrity — RAW VERDICT (verbatim stdout)
+#
+# Gate: tool/selfhost_shim_integrity.sh
+# Host: mini (Darwin arm64, bash 3.2.57) — HERMETIC, no host toolchain needed
+# Run date: 2026-06-03T02:07:58Z
+# HEAD: 959e6b5b0c1c59260ab9960719f974fc87550670
+# Exit code: 0 (all assertions PASS)
+#
+# This gate is FULLY HERMETIC: it builds a fake $HX_HOME with instrumented
+# stub gen3 + stub shipped backup, so it runs REAL on ANY host (incl. hosted
+# macos-latest / ubuntu-latest CI) with NO graduated compiler dependency.
+# Therefore there is NO host-bound neutral leg (unlike #2600/#2605/#2607);
+# the exit-2-neutral path exists only for a genuine SETUP/INFRA failure
+# (shim file missing / mktemp fails).
+#
+# Per-assertion result:
+#   compile-routing    : PASS   (--emit=obj/asm, leading/trailing, -o → gen3, argv verbatim)
+#   subcmd-delegation  : PASS   (verify run build atlas loop install fmt test --version --help bare kick → shipped, argv verbatim)
+#   symlink-loop-guard : PASS   (flipped hexa.real→shim + no backup → FATAL rc127, no recursion; WITH backup → delegates, name convention honored)
+#   syntax/lint        : PASS   (bash -n clean; shellcheck absent on this host → bash -n is floor)
+#
+# ── RAW STDOUT (verbatim) ──────────────────────────────────────────────────
+
+── selfhost shim integrity (M5) ──────────────────────────────────
+  shim      : /tmp/sci-m5/tool/hx-selfhost-cli
+  host      : Darwin arm64   HEAD=959e6b5b0
+  bash      : GNU bash, version 3.2.57(1)-release (arm64-apple-darwin25)
+──────────────────────────────────────────────────────────────────
+① COMPILE ROUTING (--emit=* → gen3):
+  PASS  [foo.hexa --emit=obj] → GEN3-REACHED <foo.hexa> <--emit=obj>
+  PASS  [foo.hexa --emit=asm] → GEN3-REACHED <foo.hexa> <--emit=asm>
+  PASS  [--emit=obj bar.hexa] → GEN3-REACHED <--emit=obj> <bar.hexa>
+  PASS  [src.hexa --emit=obj -o out.o] → GEN3-REACHED <src.hexa> <--emit=obj> <-o> <out.o>
+  ↳ compile-routing : PASS
+──────────────────────────────────────────────────────────────────
+② SUBCOMMAND DELEGATION (named subcmd → shipped, argv verbatim):
+  PASS  [verify foo.hexa] → SHIPPED-REACHED <verify> <foo.hexa>
+  PASS  [run prog.hexa] → SHIPPED-REACHED <run> <prog.hexa>
+  PASS  [build proj] → SHIPPED-REACHED <build> <proj>
+  PASS  [atlas lookup P 1] → SHIPPED-REACHED <atlas> <lookup> <P> <1>
+  PASS  [loop --dfs --llm-cmd x] → SHIPPED-REACHED <loop> <--dfs> <--llm-cmd> <x>
+  PASS  [install hexa-lang] → SHIPPED-REACHED <install> <hexa-lang>
+  PASS  [fmt src.hexa] → SHIPPED-REACHED <fmt> <src.hexa>
+  PASS  [test] → SHIPPED-REACHED <test>
+  PASS  [--version] → SHIPPED-REACHED <--version>
+  PASS  [--help] → SHIPPED-REACHED <--help>
+  PASS  [<bare>] → SHIPPED-REACHED
+  PASS  [kick seed] → SHIPPED-REACHED <kick> <seed>
+  ↳ subcmd-delegation : PASS   (delegated: verify run build atlas loop install fmt test --version --help  kick)
+──────────────────────────────────────────────────────────────────
+③ SYMLINK-LOOP GUARD (flipped default → no self-recursion):
+  invoke (no backup, hexa.real→shim): rc=127
+    hx-selfhost-cli: FATAL — no shipped dispatch binary to delegate to
+      (no hexa.real.pre-selfhost.* backup and hexa.real is a symlink)
+      recover: tool/promote_selfhost.sh --revert
+  PASS  loop guard fired (rc 127, no self-recursion)
+  invoke (WITH .pre-selfhost backup): rc=0  out=[SHIPPED-REACHED <verify> <foo.hexa>]
+  PASS  backup-name convention honored (delegates to hexa.real.pre-selfhost.<ts>)
+  ↳ loop-guard : PASS
+──────────────────────────────────────────────────────────────────
+④ SYNTAX / LINT (bash -n + shellcheck):
+  PASS  bash -n clean
+  NOTE  shellcheck absent — bash -n is the syntax floor here (assertion still PASS)
+  ↳ syntax/lint : PASS
+──────────────────────────────────────────────────────────────────
+SUMMARY (HEAD=959e6b5b0, host=Darwin arm64):
+  compile-routing    : PASS
+  subcmd-delegation  : PASS   (delegated: verify run build atlas loop install fmt test --version --help  kick)
+  symlink-loop-guard : PASS
+  syntax/lint        : PASS
+──────────────────────────────────────────────────────────────────
+shim-integrity: PASS — compile→gen3, every subcmd→shipped verbatim,
+  loop-guard fires + backup-name honored, shim syntax clean.
