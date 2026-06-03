@@ -1667,6 +1667,169 @@ pub fn handler_export_component(argv: [string]) -> int {
     return 0
 }
 
+// ── emit-component (3D · LIVE · @L3) ─────────────────────────────────────
+//
+// `demiurge emit-component` — emit the bundled BIPV geometry to
+// `exports/component/geometry/`. Ports the Swift `ComponentEmitter.emitBundled`
+// (DemiurgeCore/Loaders/ComponentEmitter.swift) — but ONLY the procedural
+// path. Swift's emitBundled tries a FreeCAD parametric producer FIRST when
+// `freecadcmd` is locally installed; that path is host-DEPENDENT (needs a
+// FreeCAD install + the bipv.py producer script) and emits a different artifact
+// set (.step/.brep/.stl/.meta.json + a freecad@<v> record). It is NOT a
+// host-independent parity case, so this handler reproduces the PROCEDURAL
+// fallback (the κ-29 path Swift takes when FreeCAD is absent) — .usda + .usdz +
+// a typed record with producer=demiurge_procedural_placeholder. The geometry is
+// NOT hardcoded (@L3 · d3): the file-driven spec bipv_5layer_v0.geo.json is
+// loaded via geo_load_component + emitted via geo_usda (PR#21's builder, byte ≡
+// the Swift USD exporter). This handler is the CLI wiring — output dir · the 3
+// writes (.usda/.usdz/.json) · the stdout confirmation lines · exit code.
+//
+//   stdout (procedural · ok): wrote <id>.usda → (wrote <id>.usdz | usdz
+//     packaging unavailable …) → wrote <id>.json → "---" → 📦 line → GATE line.
+//   record JSON: Swift JSONEncoder [.prettyPrinted .sortedKeys
+//     .withoutEscapingSlashes] (2-space indent · " : " sep · alpha keys · "/"
+//     NOT escaped). produced_at_utc is the only nondeterministic field.
+
+// _ec_json_str(s) — Swift JSONEncoder string escaping WITHOUT slash-escaping
+// (.withoutEscapingSlashes). Same as ps_json_escape minus the "/" → "\/" rule.
+fn _ec_json_str(s: string) -> string {
+    let n = len(s)
+    let mut out = ""
+    let mut i = 0
+    while i < n {
+        let c = s.substring(i, i + 1)
+        if c == "\\" { out = out + "\\\\" }
+        else if c == "\"" { out = out + "\\\"" }
+        else if c == "\n" { out = out + "\\n" }
+        else if c == "\r" { out = out + "\\r" }
+        else if c == "\t" { out = out + "\\t" }
+        else { out = out + c }
+        i = i + 1
+    }
+    return out
+}
+
+// _ec_json_num(v) — Swift JSONEncoder's minimal Double repr for the record's
+// dimension fields: an integer-valued double drops ".0" (1000.0 → "1000"); a
+// non-integer keeps hexa's shortest round-trippable form (41.4 → "41.4"),
+// matching the Swift encoder for this geometry's values.
+fn _ec_json_num(v: f64) -> string {
+    if v < 1.0e15 && v > -1.0e15 && v == floor(v) {
+        let i: i64 = int(v)
+        return to_string(i)
+    }
+    return to_string(v)
+}
+
+// _ec_package_usdz(usda_path, usdz_path) — port of USDExporter.packageUSDZ:
+// locate a system USD tool (usdzip | usdcat), run it, return true iff it exits 0
+// AND the .usdz now exists. No tool / failure → false (honest gap — the .usda
+// still stands). usdzip <out> <in> · usdcat <in> -o <out> (Swift arg order).
+fn _ec_package_usdz(usda_path: string, usdz_path: string) -> bool {
+    let mut tool = ""
+    let cands: [string] = [
+        "/usr/local/bin/usdzip", "/usr/bin/usdzip",
+        "/usr/bin/usdcat", "/usr/local/bin/usdcat",
+    ]
+    let mut i = 0
+    while i < len(cands) {
+        if exec("test -x " + rl_shq(cands[i]) + " && echo y || echo n").trim() == "y" {
+            tool = cands[i] ; i = len(cands)
+        } else { i = i + 1 }
+    }
+    if len(tool) == 0 { return false }
+    exec("rm -f " + rl_shq(usdz_path))
+    let args = if rl_starts_with(_ec_basename(tool), "usdzip") {
+        rl_shq(usdz_path) + " " + rl_shq(usda_path)        // usdzip <out> <in>
+    } else {
+        rl_shq(usda_path) + " -o " + rl_shq(usdz_path)     // usdcat <in> -o <out>
+    }
+    let rc = to_string(exec_with_status(rl_shq(tool) + " " + args + " >/dev/null 2>&1")[1])
+    if rc.trim() != "0" { return false }
+    return exec("test -f " + rl_shq(usdz_path) + " && echo y || echo n").trim() == "y"
+}
+
+// _ec_basename(p) — trailing path component (for the usdzip/usdcat suffix test).
+fn _ec_basename(p: string) -> string {
+    let mut i = len(p) - 1
+    while i >= 0 {
+        if p.substring(i, i + 1) == "/" { return p.substring(i + 1, len(p)) }
+        i = i - 1
+    }
+    return p
+}
+
+// _ec_record_json(spec, iso, usdz_file) — the byte-exact procedural
+// ComponentRecord JSON (ComponentRecord.procedural). Keys alphabetical, 2-space
+// indent, " : " separator, "/" unescaped, NO trailing newline (Swift's encoded
+// Data ends at "}"). usdz_file = the .usdz name, or "" → JSON null.
+fn _ec_record_json(spec: ComponentSpec, iso: string, usdz_file: string) -> string {
+    let usdz_json = if len(usdz_file) > 0 {
+        "\"" + _ec_json_str(usdz_file) + "\""
+    } else { "null" }
+    let c0 = "procedural placeholder geometry — plausible dimensions, NOT a measured component (g3)"
+    let c1 = "geometry being well-formed != thermal / structural / EM verdicts being measured — those are separate gates"
+    let c2 = "a measured component producer lives in hexa-lang/component (P-⑨); demiurge consumes it when it exists"
+    let mut s = "{\n"
+    s = s + "  \"depth_mm\" : " + _ec_json_num(spec.depth) + ",\n"
+    s = s + "  \"display_name\" : \"" + _ec_json_str(spec.display_name) + "\",\n"
+    s = s + "  \"geometry_id\" : \"" + _ec_json_str(spec.id) + "\",\n"
+    s = s + "  \"interface\" : \"hexa-arch:component:geometry-record\",\n"
+    s = s + "  \"layer_count\" : " + to_string(len(spec.layers)) + ",\n"
+    s = s + "  \"produced_at_utc\" : \"" + _ec_json_str(iso) + "\",\n"
+    s = s + "  \"provenance\" : {\n"
+    s = s + "    \"absorbed\" : false,\n"
+    s = s + "    \"measurement_gate\" : \"GATE_OPEN\",\n"
+    s = s + "    \"producer\" : \"demiurge_procedural_placeholder\",\n"
+    s = s + "    \"scope_caveats\" : [\n"
+    s = s + "      \"" + _ec_json_str(c0) + "\",\n"
+    s = s + "      \"" + _ec_json_str(c1) + "\",\n"
+    s = s + "      \"" + _ec_json_str(c2) + "\"\n"
+    s = s + "    ]\n"
+    s = s + "  },\n"
+    s = s + "  \"record_id\" : \"" + _ec_json_str(spec.id) + "\",\n"
+    s = s + "  \"schema_version\" : \"1.0\",\n"
+    s = s + "  \"total_thickness_mm\" : " + _ec_json_num(geo_total_thickness(spec)) + ",\n"
+    s = s + "  \"usda_file\" : \"" + _ec_json_str(spec.id + ".usda") + "\",\n"
+    s = s + "  \"usdz_file\" : " + usdz_json + ",\n"
+    s = s + "  \"width_mm\" : " + _ec_json_num(spec.width) + "\n"
+    s = s + "}"
+    return s
+}
+
+pub fn handler_emit_component(argv: [string]) -> int {
+    let spec = geo_load_component("bipv_5layer_v0")
+    let dir = rl_exports_root() + "/component/geometry"
+    // Swift: createDirectory(withIntermediateDirectories: true) → mkdir failed
+    // branch surfaces a Foundation error (env-owned, not a parity cell). mkdir -p
+    // is the POSIX builtin used across the handlers; a fail leaves the writes to
+    // surface their own error (matches the procedural path's per-write guards).
+    exec("mkdir -p " + rl_shq(dir))
+    let usda_path = dir + "/" + spec.id + ".usda"
+    let usdz_path = dir + "/" + spec.id + ".usdz"
+    let json_path = dir + "/" + spec.id + ".json"
+
+    write_file(usda_path, geo_usda(spec, 0.0))
+    println("emit-component: wrote " + spec.id + ".usda")
+
+    let usdz_ok = _ec_package_usdz(usda_path, usdz_path)
+    if usdz_ok {
+        println("emit-component: wrote " + spec.id + ".usdz")
+    } else {
+        println("emit-component: usdz packaging unavailable — .usda only "
+                + "(honest gap, g3)")
+    }
+
+    let iso = ps_now_iso8601()
+    let usdz_file = if usdz_ok { spec.id + ".usdz" } else { "" }
+    write_file(json_path, _ec_record_json(spec, iso, usdz_file))
+    println("emit-component: wrote " + spec.id + ".json")
+    println("---")
+    println("📦 component artifact → exports/component/geometry/")
+    println("   GATE_OPEN · absorbed=false · procedural placeholder (g3)")
+    return 0
+}
+
 pub fn handler_local(target: string, argv: [string]) -> int {
     if target == "action" { return handler_action(argv) }
     if target == "verify" { return handler_verify(argv) }
@@ -1688,6 +1851,7 @@ pub fn handler_local(target: string, argv: [string]) -> int {
     if target == "backend"        { return handler_backend(argv) }
     if target == "owner"          { return handler_owner(argv) }
     if target == "llm"            { return handler_llm(argv) }
+    if target == "emit_component"   { return handler_emit_component(argv) }
     if target == "export_component" { return handler_export_component(argv) }
     // every other declared local target is not-yet-ported → honest stub.
     return handler_stub(target, argv)
