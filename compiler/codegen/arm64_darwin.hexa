@@ -1376,6 +1376,9 @@ fn _builtin_runtime_sym(name: string) -> string {
     // (cf. `find` → hexa_find_poly).
     if name == "byte_len"      { return "hexa_byte_len" }
     if name == "bytes_to_str_raw" { return "hexa_bytes_to_str_raw" }
+    // RUNTIME-PORT B1 (STRBUILDER-FEAS, 2026-06-03): length-carrying byte→string
+    // builder builtin. Same NUL-clean C constructor as bytes_to_str_raw.
+    if name == "str_from_bytes_n" { return "hexa_bytes_to_str_raw" }
     if name == "list_dir"      { return "hexa_list_dir" }
     if name == "mono_ns"       { return "hexa_mono_ns" }
     if name == "keys"          { return "hexa_map_keys" }

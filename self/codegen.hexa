@@ -7153,6 +7153,18 @@ fn gen2_expr(node) {
                 // concatenation, no UTF-8 codepoint re-encoding. Unblocks
                 // byte_tokenizer.hexa → string round-trip for Korean / emoji.
                 if name == "bytes_to_str_raw" { return "hexa_bytes_to_str_raw(" + a0 + ")" }
+                // RUNTIME-PORT B1 (STRBUILDER-FEAS Class B, 2026-06-03): a
+                // length-carrying byte→string constructor builtin. Maps to the
+                // EXISTING NUL-clean C constructor hexa_bytes_to_str_raw, which
+                // assembles via hexa_strbuf_alloc(n) — an explicit length header
+                // so HX_STRLEN sees all n bytes (embedded 0x00 survive). Lets the
+                // hexa-native rt_bytes_to_str_raw body keep its range-guard loop
+                // yet delegate the final assembly NUL-clean, instead of routing
+                // through chr()/join (hexa_str_join) which derives length via the
+                // NUL-truncated C string and collapses any NUL-bearing result to
+                // "". No new runtime symbol / no ABI change — the constructor and
+                // the length-header rep (perf-31) already exist.
+                if name == "str_from_bytes_n" { return "hexa_bytes_to_str_raw(" + a0 + ")" }
                 // feat/primitive-float-array (2026-05-12): farr_* primitive
                 // (unboxed) packed-double array. 1-arg forms.
                 if name == "farr_zeros"     { return "hexa_farr_zeros(" + a0 + ")" }
