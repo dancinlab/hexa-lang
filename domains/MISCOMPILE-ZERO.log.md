@@ -353,3 +353,10 @@ live the moment that floor lands.
 REAL RUN (ghost, gen2_fix, exit code captured separately): 10/10 corpus
 programs emit clean (0 ENCODE-MISS, 0 udf), tier 🟢 SUPPORTED-NUMERICAL,
 AXIS_RC=0. Verdict: .verdicts/miscompile-zero-verify-axis/VERIFY-MZ-AXIS.txt
+
+## 2026-06-04 — #2650 hang fix VERIFIED end-to-end; anima sgemm RUNEQ = DIFFER + NEW if-body fold miscompile
+- Rebuilt a #2650-fixed `hexat` locally (`hexa cc --regen` with fixed self/codegen.hexa swapped in; install restored). Sanity: the const-fold repro `let s=0; for j in 0..2 {s=s+1}` transpiles cleanly (installed 0.1.0-dispatch still aborts `index 0 out of bounds`) and the binary prints `s=2`. #2650 fix CONFIRMED.
+- anima sgemm port (cport/training-next) now transpiles+compiles+runs in seconds — the hang is gone. 8-case RUNEQ vs C = DIFFER (anima PR NOT merged, g63):
+  1. NEW miscompile (sibling of #2650 WHILE-HANG, uncovered): `let` reassigned in an `if`-body inside a `for` → fold inlined into the `if` CONDITION (always-true) → `maxabs` wrong in all 8 cases (ends at last element). `let mut` fixes it 8/8. FIX = IfStmt/elif pre-invalidation of body-reassigned folds before emitting the cond (mirror the WhileStmt fix). New milestone added.
+  2. fp-CONTRACTION (FMA) DIFFER (not a compiler bug): C `cc -O2` contracts s+=a*b into single-round FMA vs the port's explicit double-round → ~1-ULP sum drift in 4 cases. baseline-fp-flag-dependent (`-ffp-contract=off` shifts C too).
+- cref elements proven byte-identical to C (so the matmul port is correct). Cross-repo C-PORT NOT fully closed. anima commit 667839404, verdict .verdicts/c-port/sgemm-ref-runeq.txt.
