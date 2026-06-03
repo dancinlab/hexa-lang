@@ -25,6 +25,7 @@ import "stdlib/demi/domain_catalog.hexa"
 import "stdlib/demi/operation_registry.hexa"
 import "stdlib/demi/backend_resolver.hexa"
 import "stdlib/demi/llm_settings.hexa"
+import "stdlib/demi/geometry.hexa"
 
 // handler_stub(target, argv) — a DECLARED-but-unported local verb. Prints an
 // honest notice naming the verb + the stacked-PR that will port it, and
@@ -1602,6 +1603,70 @@ pub fn handler_llm(argv: [string]) -> int {
     return 2
 }
 
+// ── export-component (3D · LIVE · @L3) ───────────────────────────────────
+//
+// `demiurge export-component <format> [path]` — write the bundled BIPV
+// geometry to a chosen path/format. Ports the Swift `exportComponent`
+// (main.swift:785) 1:1. The geometry is NOT hardcoded here (@L3 · d3): it is
+// the file-driven spec `stdlib/demi/geometry/bipv_5layer_v0.geo.json` loaded
+// via geo_load_component, emitted via geo_usda / geo_stl (PR#21's loader +
+// builder, already proven byte ≡ the Swift USD/STL exporters). This handler is
+// only the CLI wiring — format/arg parse · output destination · the stdout
+// confirmation · the missing/unknown-format errors + exit codes.
+//
+//   format (case-insensitive, Swift .lowercased()):
+//     usda | usd → geo_usda, ext "usda"
+//     stl        → geo_stl,  ext "stl"
+//     else       → stderr unknown-format line, exit 2 (uses the ORIGINAL arg)
+//   path: pathArg ?? "<id>.<ext>" run through Swift URL(fileURLWithPath:).path —
+//     an absolute arg is kept verbatim; a relative arg (incl. the default) is
+//     resolved against the PHYSICAL cwd (Foundation's currentDirectoryPath is
+//     symlink-resolved, so `pwd -P`, matching Swift's printed outURL.path).
+
+// _ec_out_path(arg) — reproduce Swift `URL(fileURLWithPath: arg).path`: an
+// absolute path is returned verbatim (no symlink resolution — Foundation does
+// not standardize it); a relative path is prefixed with the physical cwd.
+fn _ec_out_path(arg: string) -> string {
+    if len(arg) > 0 && arg.substring(0, 1) == "/" { return arg }
+    let cwd = exec("pwd -P").trim()
+    return cwd + "/" + arg
+}
+
+pub fn handler_export_component(argv: [string]) -> int {
+    // Swift: the dispatcher requires args.count >= 3 (a <format>); on miss it
+    // prints the stderr line, then usage(), then exit 2. The demi usage block is
+    // manifest-rendered in dispatch.hexa (importing it back would cycle), so —
+    // exactly like handler_verify's missing-arg path — this surfaces the demi-
+    // owned stderr line + exit 2 (the usage tail is the usage cell's concern).
+    if len(argv) < 1 {
+        eprintln("export-component: missing <format> argument (usda|stl)")
+        return 2
+    }
+    let format_arg = argv[0]
+    let fmt = format_arg.to_lower()
+    let mut ext = ""
+    let mut body = ""
+    let spec = geo_load_component("bipv_5layer_v0")
+    if fmt == "usda" || fmt == "usd" {
+        ext = "usda" ; body = geo_usda(spec, 0.0)
+    } else if fmt == "stl" {
+        ext = "stl" ; body = geo_stl(spec, 0.0)
+    } else {
+        eprintln("export-component: unknown format '" + format_arg + "' — "
+                 + "use usda | stl  (usdz: emit-component packages it)")
+        return 2
+    }
+    // pathArg ?? "<id>.<ext>"  →  Swift URL(fileURLWithPath:).path.
+    let raw = if len(argv) >= 2 { argv[1] } else { spec.id + "." + ext }
+    let out_path = _ec_out_path(raw)
+    write_file(out_path, body)
+    // Swift's write-failed branch is env-owned (Foundation error text) and not a
+    // parity cell; write_file is the POSIX builtin used across the handlers.
+    println("export-component: wrote " + out_path + " (" + ext + ")")
+    println("   procedural placeholder geometry — GATE_OPEN (g3)")
+    return 0
+}
+
 pub fn handler_local(target: string, argv: [string]) -> int {
     if target == "action" { return handler_action(argv) }
     if target == "verify" { return handler_verify(argv) }
@@ -1623,6 +1688,7 @@ pub fn handler_local(target: string, argv: [string]) -> int {
     if target == "backend"        { return handler_backend(argv) }
     if target == "owner"          { return handler_owner(argv) }
     if target == "llm"            { return handler_llm(argv) }
+    if target == "export_component" { return handler_export_component(argv) }
     // every other declared local target is not-yet-ported → honest stub.
     return handler_stub(target, argv)
 }
