@@ -2556,19 +2556,53 @@ fn main() {
         let ssh_opts = _apply_resolved_port(base_opts, _rh)
         let max_wall = _max_wall_cli(av, si + 2)
         let env_kvs = _env_args_cli(av, si + 2)
+        // gap-2 (cmd-mangle): `--script <file>` delivers an arbitrary command
+        // body over STDIN to a remote `bash -s` — no argv-length limit, no
+        // multiline / `&` corruption (the bytes arrive identical). When set,
+        // it takes precedence over the positional `-- <argv>` path.
+        let script_path = _flag_val(av, si + 2, "--script", "")
+        if len(script_path) > 0 {
+            let body = read_file(script_path)
+            if len(body) == 0 {
+                println("[cloud] run: --script " + script_path + " is empty or unreadable")
+                exit(2)
+            }
+            let rs = cloud_run_script_opts(host, ssh_opts, body)
+            if len(rs.stdout_) > 0 {
+                println(rs.stdout_)
+            }
+            println("[cloud] " + rs.message)
+            _print_fail_tail(rs.stdout_, rs.exit_code, 30)
+            exit(rs.exit_code)
+        }
         let mut argv = _collect_after(av, si + 2)
         if len(argv) == 0 {
-            println("[cloud] run: empty argv — usage: cloud run <host> [--port N] [--insecure] [--max-wall S] [--env K=V] [--source P] -- <argv...>")
+            println("[cloud] run: empty argv — usage: cloud run <host> [--port N] [--insecure] [--max-wall S] [--env K=V] [--source P] [--script F] [--raw-argv] -- <argv...>")
             exit(2)
         }
         argv = _with_env(env_kvs, argv)
         argv = _with_source(_source_args_cli(av, si + 2), argv)
-        let mut r = cloud_run_wall_opts(host, ssh_opts, argv, max_wall)
+        // gap-2 (cmd-mangle): by DEFAULT the positional `-- <cmd>` body is
+        // reassembled and run as `bash -lc <body>` so multiline / `&` /
+        // redirection survive a login shell. `--raw-argv` opts back into the
+        // strict structured-argv path (no shell, L145-class corruption
+        // impossible) for pure program dispatch. --env/--source already wrap
+        // in `bash -c`, so they keep the structured path.
+        let mut r = CloudResult { ok: 0, exit_code: -1, pid: 0, stdout_: "", message: "", logfile: "" }
+        if _has_flag(av, si + 2, "--raw-argv") == 1 || len(env_kvs) > 0 || len(_source_args_cli(av, si + 2)) > 0 {
+            r = cloud_run_wall_opts(host, ssh_opts, argv, max_wall)
+        } else {
+            r = cloud_run_bashlc_opts(host, ssh_opts, argv)
+        }
         // Fix-cloud-1: proxy→direct single retry on a TRANSPORT OUTAGE (255).
         let _fb = _proxy_fallback_direct(_id, _rh, base_opts, r.exit_code)
         if _fb.retry == 1 {
             println("[cloud] run: proxy unreachable (transport 255) → retrying once via direct " + _fb.host)
-            r = cloud_run_wall_opts(_fb.host, _fb.ssh_opts, argv, max_wall)
+            if _has_flag(av, si + 2, "--raw-argv") == 1 || len(env_kvs) > 0 || len(_source_args_cli(av, si + 2)) > 0 {
+                r = cloud_run_wall_opts(_fb.host, _fb.ssh_opts, argv, max_wall)
+            } else {
+                r = cloud_run_bashlc_opts(_fb.host, _fb.ssh_opts, argv)
+            }
         }
         // NOTE (#1229 B): `run` does NOT register the host. The registry holds
         // provider pod-ids (for reconcile vs the provider live set), and `host`
