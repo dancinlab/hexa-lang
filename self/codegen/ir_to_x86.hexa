@@ -412,16 +412,15 @@ fn irx_op_bytes(op: string, is_imm: bool, imm: int, has_cmp: bool,
         return 6
     }
     if op == "shl" || op == "shr" {
-        // SHL/SHR force the shift count into CL (rcx).
-        //   MOV rcx, b_reg (3 bytes; 0 if b already rcx) +
-        //   MOV dst, a_reg (3 bytes; 0 if dst == a) +
-        //   SHL/SHR dst, cl (3 bytes).
-        let rd = irx_reg_for(regalloc_map, dst_logical)
-        let ra = irx_reg_for(regalloc_map, a_logical)
+        // Computed in r11 scratch (outside the 0..7 budget) to dodge rcx
+        // aliasing — see the emitter. Shape:
+        //   MOV r11, a    (3 bytes; r11 never aliases a under the budget) +
+        //   MOV rcx, b    (3 bytes; 0 if b already rcx) +
+        //   SHL/SHR r11   (3 bytes) +
+        //   MOV dst, r11  (3 bytes; r11 never aliases dst).
         let rb = irx_reg_for(regalloc_map, b_logical)
-        let mut sz = 3                      // the SHL/SHR itself
+        let mut sz = 9                      // MOV r11,a + SHIFT r11 + MOV dst,r11
         if rb != 1 { sz = sz + 3 }          // MOV rcx, b (rcx = 1)
-        if rd != ra { sz = sz + 3 }         // MOV dst, a
         return sz
     }
     if op == "branch" {
@@ -584,16 +583,22 @@ fn irx_emit_one(bytes_in: [int], instr, regalloc_map: [int],
         return bytes
     }
 
+    // Aliasing fix: the shift count is hard-wired to CL (rcx = raw 1). The
+    // naive "MOV rcx,b ; MOV dst,a ; SHL dst,cl" miscompiles when a or dst
+    // aliases rcx — ra==1 → the count-load MOV rcx,b clobbers the value
+    // before it reaches dst; rd==1 → SHL dst,cl shifts dst by its OWN low
+    // byte. Compute in r11, a scratch OUTSIDE the bridge's 0..7 logical
+    // budget (irx_reg_enc maps slots 0..7 → raw 0,1,2,3,6,7,8,9; r11 is
+    // never allocated), so it cannot alias rd/ra/rb. irx_op_bytes mirrors
+    // the 4-instr shape (MOV r11,a + MOV rcx,b + SHIFT r11 + MOV dst,r11).
     if instr.op == "shl" {
-        // Shift count must be in CL (rcx = raw reg 1). Preamble handles
-        // both (1) getting b into rcx and (2) getting a into dst, each
-        // skipped when already correct. irx_op_bytes mirrors this.
         let rd = irx_reg_for(regalloc_map, instr.result)
         let ra = irx_reg_for(regalloc_map, instr.a)
         let rb = irx_reg_for(regalloc_map, instr.b)
-        bytes = irx_emit_mov_rr(bytes, 1, rb)   // MOV rcx, b
-        bytes = irx_emit_mov_rr(bytes, rd, ra)  // MOV dst, a
-        bytes = irx_emit_shl_cl(bytes, rd)      // SHL dst, cl
+        bytes = irx_emit_mov_rr(bytes, 11, ra)   // MOV r11, a (scratch)
+        bytes = irx_emit_mov_rr(bytes, 1, rb)    // MOV rcx, b (count)
+        bytes = irx_emit_shl_cl(bytes, 11)       // SHL r11, cl
+        bytes = irx_emit_mov_rr(bytes, rd, 11)   // MOV dst, r11
         return bytes
     }
 
@@ -601,9 +606,10 @@ fn irx_emit_one(bytes_in: [int], instr, regalloc_map: [int],
         let rd = irx_reg_for(regalloc_map, instr.result)
         let ra = irx_reg_for(regalloc_map, instr.a)
         let rb = irx_reg_for(regalloc_map, instr.b)
-        bytes = irx_emit_mov_rr(bytes, 1, rb)
-        bytes = irx_emit_mov_rr(bytes, rd, ra)
-        bytes = irx_emit_shr_cl(bytes, rd)
+        bytes = irx_emit_mov_rr(bytes, 11, ra)   // MOV r11, a (scratch)
+        bytes = irx_emit_mov_rr(bytes, 1, rb)    // MOV rcx, b (count)
+        bytes = irx_emit_shr_cl(bytes, 11)       // SHR r11, cl
+        bytes = irx_emit_mov_rr(bytes, rd, 11)   // MOV dst, r11
         return bytes
     }
 
