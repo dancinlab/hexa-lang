@@ -1,0 +1,52 @@
+// m10_if_body_fold_reassign.hexa — CLASS: comptime-const fold leaking the
+// STALE initializer of a plain `let` into an IF CONDITION whose BODY (inside a
+// FOR loop) reassigns that var.
+// History (MISCOMPILE-ZERO if-body-fold, sibling of #2650 BUG 1; surfaced by
+// the cross-repo C-PORT anima sgemm RUNEQ):
+//   A max-reduction `let maxabs = 0.0; for ... { if av > maxabs { maxabs = av } }`
+//   const-folded `maxabs -> 0.0` and inlined the STALE literal into the IF
+//   CONDITION (`av > 0.0`, always true for positive av) while the body
+//   reassigned the live `maxabs` -> the reduction kept the LAST element instead
+//   of the MAX. The AssignStmt arm invalidates the fold, but only when the
+//   then/else body is emitted — AFTER the condition was already folded.
+//   Fix: the ExprStmt/IfExpr arm pre-invalidates the comptime-const fold for
+//   every name the if's then/elif/else bodies reassign BEFORE emitting (or
+//   comptime-folding) the condition, so the cond reads the live variable.
+//   Mirrors the WhileStmt pre-invalidate (#2650 BUG 1).
+//
+// Behavioral contract: exit 0 = the if-condition reads the LIVE reassigned var,
+// so the reduction returns the MAX (not the stale-folded-literal-driven LAST).
+// A re-regression flips one assert (returns the last element, or always-true
+// condition keeps overwriting).
+
+// max-reduction: the exact shape of the sgemm maxabs reduction.
+// data is descending then a spike, so MAX != last element and MAX != first.
+fn max_reduce() -> i64 {
+    let vals = [3, 9, 2, 7, 1]      // max = 9 (at index 1, neither first nor last)
+    let maxv = 0                    // plain immutable let -> folded, reassigned in if-body
+    for i in 0..5 {
+        let v = vals[i]
+        if v > maxv {               // OLD bug: folded to `v > 0` (always true) -> keeps LAST (=1)
+            maxv = v
+        }
+    }
+    return maxv
+}
+
+// min-reduction via if-body reassign (folded initializer is the SENTINEL).
+fn min_reduce() -> i64 {
+    let vals = [8, 3, 6, 1, 5]      // min = 1 (at index 3, neither first nor last)
+    let minv = 999                  // folded sentinel, reassigned in if-body
+    for i in 0..5 {
+        let v = vals[i]
+        if v < minv {               // OLD bug: folded to `v < 999` (always true) -> keeps LAST (=5)
+            minv = v
+        }
+    }
+    return minv
+}
+
+if max_reduce() != 9 { exit(81) }   // if-body reassign in a for loop -> real MAX
+if min_reduce() != 1 { exit(82) }   // sentinel reassign -> real MIN
+
+println("IF-BODY-FOLD-OK")

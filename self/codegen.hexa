@@ -3436,6 +3436,26 @@ fn _gen2_stmt_inner(node, depth) {
             return gen2_match_stmt(_gen2_iflet_to_match(expr), depth)
         }
         if expr.kind == "IfExpr" {
+            // MISCOMPILE-ZERO (if-body-fold, sibling of #2650 BUG 1): a plain
+            // immutable `let maxabs = 0.0` const-folds `maxabs → 0.0`; an
+            // `if av > maxabs { maxabs = av }` then inlined the STALE literal
+            // into the CONDITION (`av > 0.0`, always true for positive av)
+            // while the body reassigned the live `maxabs` → the reduction
+            // keeps the LAST element instead of the MAX. The AssignStmt arm
+            // invalidates the fold, but it runs only when the then/else body
+            // is emitted — AFTER the condition was already folded. Pre-
+            // invalidate the fold for every name the if's then/elif/else
+            // bodies reassign BEFORE emitting (or comptime-folding) the
+            // condition, so the cond reads the live variable. Mirrors the
+            // WhileStmt pre-invalidate at ~L3496. (collect_assigned recurses
+            // into else_body, so chained elif/else arms are covered too.)
+            let mut _if_assigned = _gen2_collect_assigned(expr.then_body, [])
+            _if_assigned = _gen2_collect_assigned(expr.else_body, _if_assigned)
+            let mut _ifai = 0
+            while _ifai < len(_if_assigned) {
+                _invalidate_comptime_const(_if_assigned[_ifai])
+                _ifai = _ifai + 1
+            }
             // PROBE r11 B4: comptime-fold the condition.  `if false { … }` at
             // statement position now drops the dead branch entirely instead of
             // emitting `if (hexa_truthy(hexa_bool(0))) { … }` which clang would
