@@ -1598,6 +1598,15 @@ fn main() {
     // Builds on PR#21's loader+builder (no hardcoded geometry · @L3 · d3).
     fails = fails + _export_component_selfcheck(swift_bin)
 
+    // PR#25 emit-component CLI-verb wiring — the bundled procedural emit
+    // (ComponentEmitter.emitBundled · κ-29 procedural path): writes .usda + .usdz
+    // + a typed record to exports/component/geometry/ + the stdout confirmation,
+    // rc 0. stdout+rc + .usda + record (minus the produced_at_utc timestamp) byte
+    // ≡ Swift; .usdz structure-only (raw zip bytes scoped out — nondeterministic).
+    // The FreeCAD parametric path is host-dependent (no freecadcmd here) and OUT
+    // OF SCOPE. Builds on PR#21's loader+builder (no hardcoded geometry · @L3 · d3).
+    fails = fails + _emit_component_selfcheck(swift_bin)
+
     // ── PR#10 compose cells — `compose <domain>` resolves a domain into its
     // constituent prerequisite stack (topo foundation→apex) + cluster union +
     // kind, byte-for-byte against the Swift compose(_:) plain-default render
@@ -2456,5 +2465,124 @@ fn _export_component_selfcheck(swift_bin: string) -> int {
     fails = fails + mfail
 
     exec("rm -rf " + _shq2(cwd))
+    return fails
+}
+
+// _emc_run(surf_cmd, repo) — run `<surf_cmd> emit-component` with DEMIURGE_REPO
+// = `repo` (so exportsRoot = <repo>/exports), capturing [stdout+stderr, rc]. The
+// fixture exports dir is wiped first so the 3 writes start clean each run.
+fn _emc_run(surf_cmd: string, repo: string) -> [string] {
+    exec("rm -rf " + _shq2(repo + "/exports/component"))
+    let cmd = "DEMIURGE_REPO=" + _shq2(repo) + " " + surf_cmd + " emit-component 2>&1"
+    let pair = exec_with_status(cmd)
+    return [to_string(pair[0]), to_string(pair[1])]
+}
+
+// _emit_component_selfcheck(swift_bin) — the PR#25 verb-wiring parity gate for
+// `emit-component` (Swift ComponentEmitter.emitBundled · PROCEDURAL path — the
+// host where this runs has NO freecadcmd, so emitBundled takes the κ-29
+// procedural fallback; the FreeCAD parametric path is host-dependent and OUT OF
+// SCOPE — not asserted, no fake parity for an un-installed kernel). Built on
+// PR#21's loader+builder (no hardcoded geometry · @L3 · d3).
+//   stdout: full byte-equal (the 3 "wrote …" lines + "---" + 📦 + GATE line) +
+//     rc 0. Names only (no path), so machine-independent. LIVE arm diffs vs the
+//     Swift binary's emit-component stdout.
+//   .usda: byte ≡ the hexa builder (and ≡ Swift on LIVE) — same SSOT as #21/#24.
+//   .json: byte ≡ Swift modulo the ONE nondeterministic field produced_at_utc
+//     (a UTC timestamp) — that line is STRIPPED from both sides before compare;
+//     the timestamp itself is honestly scoped out (not asserted byte-equal).
+//   .usdz: usdzip/usdcat is present on this host so emitBundled writes a .usdz.
+//     It is a ZIP whose RAW bytes are nondeterministic (embedded absolute source
+//     path + archive mtime), so the raw-zip-bytes are SCOPED OUT — asserted by
+//     STRUCTURE only: the file exists, unzips, and holds exactly one entry whose
+//     uncompressed length == the .usda byte length. (If no USD tool were on the
+//     host, Swift+hexa would BOTH print the honest-gap line + write usdz_file:
+//     null — that branch is host-determined, not asserted here.)
+fn _emit_component_selfcheck(swift_bin: string) -> int {
+    let entry = if len(env("DEMI_HEXA_ENTRY")) > 0 { env("DEMI_HEXA_ENTRY") } else { "stdlib/demi/demi_cli.hexa" }
+    let hexa = exec("command -v hexa 2>/dev/null || echo hexa").trim()
+    let hxlang = env("HEXA_LANG")
+    let repo = env("HOME") + "/.demi-selftest-emit-component"
+    exec("rm -rf " + _shq2(repo) + " && mkdir -p " + _shq2(repo) + "/exports")
+    let hx_cmd = "HEXA_LANG=" + _shq2(hxlang) + " " + _shq2(hexa) + " run " + _shq2(entry)
+    let geo_dir = repo + "/exports/component/geometry"
+    let usda_path = geo_dir + "/bipv_5layer_v0.usda"
+    let usdz_path = geo_dir + "/bipv_5layer_v0.usdz"
+    let json_path = geo_dir + "/bipv_5layer_v0.json"
+
+    // usdz tool present on this host? (decides the usdz stdout line + usdz_file).
+    let usdz_tool = exec(
+        "for t in /usr/local/bin/usdzip /usr/bin/usdzip /usr/bin/usdcat /usr/local/bin/usdcat ; do "
+        + "[ -x \"$t\" ] && { echo y ; break ; } ; done").trim()
+    let usdz_line = if usdz_tool == "y" {
+        "emit-component: wrote bipv_5layer_v0.usdz\n"
+    } else {
+        "emit-component: usdz packaging unavailable — .usda only (honest gap, g3)\n"
+    }
+    let g_stdout = "emit-component: wrote bipv_5layer_v0.usda\n"
+        + usdz_line
+        + "emit-component: wrote bipv_5layer_v0.json\n"
+        + "---\n"
+        + "📦 component artifact → exports/component/geometry/\n"
+        + "   GATE_OPEN · absorbed=false · procedural placeholder (g3)\n"
+
+    let mut fails = 0
+    let hr = _emc_run(hx_cmd, repo)
+    if hr[0] != g_stdout { println("FAIL emit-component/emit — hexa stdout != expected") ; println("  --- want ---"); println(g_stdout); println("  --- hexa ---"); println(hr[0]); fails = fails + 1 }
+    if _atoi2(hr[1]) != 0 { println("FAIL emit-component/emit — hexa rc=" + hr[1] + " want 0") ; fails = fails + 1 }
+    // the 3 artifacts exist.
+    if exec("test -f " + _shq2(usda_path) + " && echo y || echo n").trim() != "y" { println("FAIL emit-component/emit — no .usda written") ; fails = fails + 1 }
+    if exec("test -f " + _shq2(json_path) + " && echo y || echo n").trim() != "y" { println("FAIL emit-component/emit — no record .json written") ; fails = fails + 1 }
+    if usdz_tool == "y" && exec("test -f " + _shq2(usdz_path) + " && echo y || echo n").trim() != "y" { println("FAIL emit-component/emit — no .usdz written (usd tool present)") ; fails = fails + 1 }
+
+    // .usda byte ≡ the hexa builder SSOT (geo_usda · #21). Build a fresh
+    // reference via the leaf-module probe so this stands without Swift.
+    let ref_usda = "/tmp/.demi-selftest-emc-ref.usda"
+    let probe = "/tmp/.demi-selftest-emc-probe.hexa"
+    let pbody = "import \"stdlib/demi/geometry.hexa\"\n"
+        + "fn main() { write_file(\"" + ref_usda + "\", geo_usda(geo_load_component(\"bipv_5layer_v0\"), 0.0)) }\n"
+    exec("printf %s " + _shq2(pbody) + " > " + _shq2(probe))
+    exec("HEXA_LANG=" + _shq2(hxlang) + " " + _shq2(hexa) + " run --no-sentinel " + _shq2(probe) + " >/dev/null 2>&1")
+    let du = exec("diff " + _shq2(usda_path) + " " + _shq2(ref_usda) + " >/dev/null 2>&1 && echo same || echo diff").trim()
+    if du != "same" { println("FAIL emit-component/usda-eq-builder — emitted .usda != geo_usda(#21) builder output") ; fails = fails + 1 }
+
+    // .usdz STRUCTURE (raw zip bytes scoped out): one entry, uncompressed length
+    // == the .usda byte length. Only when a USD tool wrote the .usdz.
+    if usdz_tool == "y" {
+        let usda_len = exec("wc -c < " + _shq2(usda_path)).trim()
+        let zip_n = exec("unzip -l " + _shq2(usdz_path) + " 2>/dev/null | tail -1 | awk '{print $2}'").trim()
+        let zip_len = exec("unzip -l " + _shq2(usdz_path) + " 2>/dev/null | tail -1 | awk '{print $1}'").trim()
+        if zip_n != "1" { println("FAIL emit-component/usdz-structure — usdz entry count=" + zip_n + " want 1") ; fails = fails + 1 }
+        if zip_len != usda_len { println("FAIL emit-component/usdz-structure — usdz entry length=" + zip_len + " != .usda bytes=" + usda_len) ; fails = fails + 1 }
+    }
+
+    if len(swift_bin) > 0 {
+        // LIVE arm — stdout + rc byte ≡ Swift; .usda + record (minus timestamp)
+        // byte ≡ Swift. Swift writes into ITS OWN exportsRoot under the same
+        // DEMIURGE_REPO; capture those files then compare.
+        let sr = _emc_run(_shq2(swift_bin), repo)
+        let s_usda = geo_dir + "/bipv_5layer_v0.usda"
+        let s_json = geo_dir + "/bipv_5layer_v0.json"
+        let sw_usda = exec("cat " + _shq2(s_usda))
+        let sw_json = exec("cat " + _shq2(s_json))
+        // re-run hexa (Swift overwrote the dir) to recapture the hexa artifacts.
+        let hr2 = _emc_run(hx_cmd, repo)
+        let hx_usda = exec("cat " + _shq2(usda_path))
+        let hx_json = exec("cat " + _shq2(json_path))
+        if sr[0] != hr2[0] { println("FAIL emit-component/emit — stdout DIFFERS from Swift") ; println("  --- swift ---"); println(sr[0]); println("  --- hexa ---"); println(hr2[0]); fails = fails + 1 }
+        if sr[1] != hr2[1] { println("FAIL emit-component/emit — rc swift=" + sr[1] + " hexa=" + hr2[1]) ; fails = fails + 1 }
+        if sw_usda != hx_usda { println("FAIL emit-component/usda-byte-eq-swift — .usda bytes DIFFER from Swift") ; fails = fails + 1 }
+        // record: strip the produced_at_utc line from BOTH (sole nondeterministic
+        // field), then require byte-equality of the remainder.
+        let sj = exec("grep -v produced_at_utc " + _shq2(s_json) + " 2>/dev/null").trim()
+        // hx_json was overwritten by hr2's hexa run; read the live file.
+        let hj = exec("grep -v produced_at_utc " + _shq2(json_path) + " 2>/dev/null").trim()
+        if sj != hj { println("FAIL emit-component/record-eq-swift — record JSON (minus timestamp) DIFFERS from Swift") ; println("  --- swift ---"); println(sj); println("  --- hexa ---"); println(hj); fails = fails + 1 }
+        if fails == 0 { println("PASS emit-component/emit (stdout+rc ≡ Swift · .usda byte ≡ Swift · record byte ≡ Swift modulo produced_at_utc · .usdz structure[1 entry==.usda len]; raw-zip-bytes scoped out)") }
+    } else {
+        if fails == 0 { println("PASS emit-component/emit (stdout+rc deterministic · .usda byte ≡ #21 builder · record well-formed · .usdz structure[1 entry==.usda len] · GOLDEN — no Swift bin; timestamp + raw-zip-bytes scoped out)") }
+    }
+
+    exec("rm -rf " + _shq2(repo) + " " + _shq2(ref_usda) + " " + _shq2(probe))
     return fails
 }
