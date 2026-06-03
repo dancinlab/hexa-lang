@@ -3,6 +3,42 @@
 @goal: port self/runtime.c's portable (tier-B) surface to hexa-native, exposing
 the irreducible tier-A bootstrap floor. See RUNTIME-PORT.md for the snapshot.
 
+## 2026-06-03 — M2 leaf ports
+
+Conservative M2 pass — prove the RUNEQ method on the smallest/safest B-OPEN
+leaves. Local-only (mini); no ghost/pool consumed.
+
+Per-fn results:
+
+| C SSOT | hexa port | LOC ported | verdict |
+|--------|-----------|-----------|---------|
+| hexa_float_to_int (runtime.c L5812) | rt_float_to_int (self/rt/convert.hexa) | 14 | **PORT-EQ 32/32** |
+| hexa_dict_keys (runtime.c L11887) | — | 0 | **BLOCKED** |
+
+- **hexa_float_to_int → rt_float_to_int** — saturating float→int64 coerce.
+  RUNEQ = real: transpiled the hexa port via `hexat`, linked it against the
+  SHIPPING runtime.o (which carries the C SSOT hexa_float_to_int), and a C
+  harness fed 32 representative doubles (zero/±0 · frac trunc · large finite ·
+  exact 2^63 boundary · >boundary · NaN · ±Inf · largest-finite-<2^63) to BOTH
+  fns, comparing int64 results. 32/32 identical. The RUNEQ caught TWO real
+  bugs in-flight: (a) ±Inf must return 0 (C's isinf() guard fires before the
+  boundary test — first draft saturated Inf → DIFFER); (b) a constant-folder
+  precision trap that truncated the negated 2^63 bound to 6 sig figs. Both
+  fixed, then re-RUNEQ → PORT-EQ. Wired into the live rt path: rt_to_int()'s
+  float branch now dispatches to rt_float_to_int (was the broken `int_of`
+  stub which returns 0). +5 locked assertions in test_convert.hexa. Verdict:
+  `.verdicts/runtime-port/M2-hexa_float_to_int.txt`.
+- **hexa_dict_keys** — BLOCKED. The "1 LOC dispatch" hides a whole-map-
+  representation gap: hexa_map_keys iterates the NATIVE C hashmap; rt_map_keys
+  iterates a SEPARATE pure-hexa functional map. No same-object RUNEQ possible
+  at the leaf level. Deferred to a map-representation port milestone. Verdict:
+  `.verdicts/runtime-port/M2-hexa_dict_keys.txt`.
+
+M2-followup (carry-over B-OPEN leaves not attempted this pass): hexa_find_poly,
+hexa_contains_poly, hexa_array_position, hexa_array_concat, and the rest of the
+30-fn B-OPEN set. The float_to_int recipe (hexat transpile → link vs shipping
+runtime.o → C-harness value-diff) is the reusable RUNEQ template for them.
+
 ## 2026-06-03 — M1 portability inventory
 
 Classified all 606 function definitions in self/runtime.c (14919 LOC) into

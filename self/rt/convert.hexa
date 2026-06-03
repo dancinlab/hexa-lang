@@ -35,7 +35,10 @@ use self::rt::alloc
 @pure fn rt_to_int(v) -> int {
     let t = typeof(v)
     if t == "int" { return v }
-    if t == "float" { return int_of(v) }
+    // float→int uses the saturating coerce (matches the C to_int() path:
+    // runtime.c hexa_float_to_int is documented "Used by to_int() builtin").
+    // The bare int_of intrinsic does NOT clamp NaN/Inf/overflow.
+    if t == "float" { return rt_float_to_int(v) }
     if t == "string" { return rt_str_parse_int(v) }
     if t == "bool" {
         if v { return 1 }
@@ -188,6 +191,41 @@ fn rt_from_cstring(ptr: int) -> string {
     if t != "string" { return false }
     if len(v) < 4 { return false }
     return v.substring(0, 4) == "ERR:"
+}
+
+// rt_float_to_int — saturating float→int64 coerce. Mirrors runtime.c
+// hexa_float_to_int (self/runtime.c L5812):
+//   NaN  ................. -> 0   (C: isnan first)
+//   ±Inf ................. -> 0   (C: isinf first — BEFORE the boundary
+//                                  test, so Inf never saturates)
+//   f >=  2^63 boundary ... -> INT64_MAX (9223372036854775807)
+//   f <= -2^63 boundary ... -> INT64_MIN (-9223372036854775808)
+//   otherwise ............. -> truncate toward zero via the native
+//                            `as int` cast (lowers to (int64_t)HX_FLOAT,
+//                            byte-identical to the C body's (int64_t)f).
+// Int pass-through is identity (C is double-typed; the HexaVal ABI sees
+// ints too). The 2^63 constant matches the C source exactly.
+// RUNEQ-derived: the isnan/isinf-first ordering is load-bearing — an
+// earlier draft that let Inf fall into the boundary saturation DIFFER'd
+// against C (Inf -> MAX/MIN vs C's 0); see .verdicts M2-hexa_float_to_int.
+@pure fn rt_float_to_int(f) -> int {
+    let t = typeof(f)
+    if t == "int" { return f }
+    if t != "float" { return 0 }
+    // NaN: IEEE-754 NaN != NaN.
+    if f != f { return 0 }
+    // ±Inf: finite*0 == 0 but Inf*0 == NaN (!= itself). Matches C's
+    // isinf() guard which fires BEFORE the boundary saturation.
+    let z = f * 0.0
+    if z != z { return 0 }
+    // 2^63 boundary literal — identical to the C source. We compare the
+    // magnitude against a single positive bound (negating the VARIABLE,
+    // not a constant) so the constant-folder cannot truncate a folded
+    // `0.0 - 9.2233720368547758e+18` down to 6-sig-fig precision.
+    let BOUND = 9.2233720368547758e+18
+    if f >= BOUND { return 9223372036854775807 }
+    if (0.0 - f) >= BOUND { return 0 - 9223372036854775807 - 1 }
+    return f as int
 }
 
 // ═══════════════════════════════════════════════════════════════════

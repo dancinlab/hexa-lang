@@ -26,6 +26,13 @@ check("to_int:float-trunc",    rt_to_int(3.7) == 3)
 check("to_int:string-parse",   rt_to_int("123") == 123)
 check("to_int:bool-true",      rt_to_int(true) == 1)
 
+// ── rt_float_to_int (saturating coerce — RUNEQ'd vs C hexa_float_to_int)
+check("f2i:trunc-pos",         rt_float_to_int(3.9) == 3)
+check("f2i:trunc-neg",         rt_float_to_int(0.0 - 3.9) == -3)
+check("f2i:int-passthru",      rt_float_to_int(42) == 42)
+check("f2i:overflow-max",      rt_float_to_int(1e300) == 9223372036854775807)
+check("f2i:overflow-min",      rt_float_to_int(0.0 - 1e300) == (0 - 9223372036854775807 - 1))
+
 // ── rt_to_float ─────────────────────────────────────────────────────
 check("to_float:int-promote",  rt_to_float(7) == 7.0)
 check("to_float:string-parse", rt_to_float("2.5") == 2.5)

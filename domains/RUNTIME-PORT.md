@@ -19,6 +19,13 @@
 
 ## milestones
 - [x] M1 — portability inventory: A/B/C tiers of self/runtime.c, floor target
-- [ ] M2 — port the top-10 B-OPEN leaf helpers to hexa-native
+- [x] M2 — port B-OPEN leaf helpers to hexa-native (method proven; 1 RUNEQ-EQ landed)
+  - hexa_float_to_int → rt_float_to_int: **PORT-EQ 32/32** (real RUNEQ vs C SSOT;
+    caught+fixed an Inf-semantics + const-fold-precision bug). Wired into
+    rt_to_int's float branch. `.verdicts/runtime-port/M2-hexa_float_to_int.txt`.
+  - hexa_dict_keys: **BLOCKED** — not a true leaf; rt_map_keys consumes a
+    different (pure-hexa) map representation than the native C map, so no
+    apples-to-apples RUNEQ. `.verdicts/runtime-port/M2-hexa_dict_keys.txt`.
+  - remaining B-OPEN leaves carry to M2-followup (see log).
 - [ ] M3 — adjudicate the 151 BORDERLINE fns (numeric CPU kernels: keep vs port)
 - [ ] M4 — extend inventory to self/runtime_core.c (the CORE tier)
