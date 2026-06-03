@@ -24,6 +24,7 @@ import "stdlib/demi/domain_composer.hexa"
 import "stdlib/demi/domain_catalog.hexa"
 import "stdlib/demi/operation_registry.hexa"
 import "stdlib/demi/backend_resolver.hexa"
+import "stdlib/demi/llm_settings.hexa"
 
 // handler_stub(target, argv) — a DECLARED-but-unported local verb. Prints an
 // honest notice naming the verb + the stacked-PR that will port it, and
@@ -1304,6 +1305,181 @@ pub fn handler_owner(argv: [string]) -> int {
     return 0
 }
 
+// `demiurge llm` — the AI-connection surface (D38). Mirrors Swift llmCmd().
+// Reads/writes the SAME ~/.demiurge/llm.json (+ keychain key-source probe) the
+// cockpit settings modal uses. Provider list is the ls_builtins manifest — no
+// id hardcoding (d4); the handler branches on the SUBCOMMAND token only, never
+// a provider id.
+//
+// SPLIT (g4 · <200 lines/PR): THIS handler (PR #17a) ports the deterministic,
+// fully parity-testable READ + config-SET subverbs —
+//   list [--json] · use <id> · mode <cli|api> · model <id> <m>
+// The network/keychain-WRITE side (key · key-rm · test · ask) is PR #17b: those
+// require live keychain SecItemAdd + an HTTPS LLMBridge call, so a hexa-native
+// port can't fake them under @L7. Until #17b lands they route to an HONEST
+// not-yet-ported notice (exit 2) — never a silent success, never fake parity.
+// The DETERMINISTIC error paths for those subverbs (missing-arg / bad-provider,
+// which Swift resolves BEFORE any keychain/network touch) are still ported
+// byte-exact below so the usage diagnostics don't regress.
+pub fn handler_llm(argv: [string]) -> int {
+    // Swift `let sub = args.first ?? "list"`.
+    let sub = if len(argv) >= 1 { argv[0] } else { "list" }
+    let cfg = ls_load()
+
+    // ── list [--json] ────────────────────────────────────────────────────
+    if sub == "list" {
+        let providers = ls_providers(cfg)
+        // Swift `args.contains("--json")`.
+        let mut want_json = false
+        let mut t = 0
+        while t < len(argv) { if argv[t] == "--json" { want_json = true } ; t = t + 1 }
+        if want_json {
+            // Machine-readable (CI / AI surface). Match Swift's pretty +
+            // sortedKeys layout: top key order mode, providers; each provider
+            // object's keys alphabetical (displayName · id · keySource · model
+            // · selected · wireFormat).
+            let active = ls_active(cfg)
+            let mut out = "{\n"
+            out = out + "  \"mode\" : \"" + cfg.mode + "\",\n"
+            out = out + "  \"providers\" : [\n"
+            let mut i = 0
+            while i < len(providers) {
+                let p = providers[i]
+                let sel = if p.id == active.id { "true" } else { "false" }
+                out = out + "    {\n"
+                out = out + "      \"displayName\" : \"" + p.display_name + "\",\n"
+                out = out + "      \"id\" : \"" + p.id + "\",\n"
+                out = out + "      \"keySource\" : \"" + ls_key_source(p) + "\",\n"
+                out = out + "      \"model\" : \"" + p.default_model + "\",\n"
+                out = out + "      \"selected\" : " + sel + ",\n"
+                out = out + "      \"wireFormat\" : \"" + p.wire_format + "\"\n"
+                out = out + "    }"
+                if i < len(providers) - 1 { out = out + "," }
+                out = out + "\n"
+                i = i + 1
+            }
+            out = out + "  ]\n"
+            out = out + "}"
+            println(out)
+            return 0
+        }
+        let active = ls_active(cfg)
+        println("AI 제공자 (활성 모드: " + cfg.mode + " · " + ls_mode_label(cfg.mode) + "):")
+        let expert = _operate_expert()
+        let mut i = 0
+        while i < len(providers) {
+            let p = providers[i]
+            i = i + 1
+            let mark = if p.id == active.id { "▶" } else { " " }
+            let src = ls_key_source(p)
+            if expert {
+                println(mark + " " + p.id + "  [" + p.wire_format + "]  "
+                        + p.display_name + " · 모델 " + p.default_model
+                        + " · 키 " + src + " · cli " + p.cli_command)
+            } else {
+                println(mark + " " + p.display_name + " · 모델 " + p.default_model + " · 키 " + src)
+            }
+        }
+        println("바꾸기: llm use <id> · llm mode <cli|api> · llm key <id> <key> · llm model <id> <model>")
+        return 0
+    }
+
+    // ── use <id> ─────────────────────────────────────────────────────────
+    if sub == "use" {
+        let found = if len(argv) >= 2 { ls_find_provider(cfg, argv[1]) } else { [] }
+        if len(found) == 0 {
+            let ps = ls_providers(cfg)
+            let mut ids: [string] = []
+            let mut i = 0
+            while i < len(ps) { ids.push(ps[i].id) ; i = i + 1 }
+            eprintln("llm use: 알 수 없는 provider — " + _join(ids, " · "))
+            return 2
+        }
+        let p = found[0]
+        let mut c = cfg
+        c.selected_provider = p.id
+        ls_save(c)
+        println("활성 provider → " + p.display_name + " (" + p.id + ")")
+        return 0
+    }
+
+    // ── mode <cli|api> ───────────────────────────────────────────────────
+    if sub == "mode" {
+        let m = if len(argv) >= 2 { argv[1].to_lower() } else { "" }
+        if m != "cli" && m != "api" {
+            eprintln("llm mode: cli | api 중 하나")
+            return 2
+        }
+        let mut c = cfg
+        c.mode = m
+        ls_save(c)
+        println("연결 방식 → " + m + " (" + ls_mode_label(m) + ")")
+        return 0
+    }
+
+    // ── model <id> <m> ───────────────────────────────────────────────────
+    if sub == "model" {
+        let found = if len(argv) >= 3 { ls_find_provider(cfg, argv[1]) } else { [] }
+        if len(found) == 0 {
+            eprintln("llm model: usage — llm model <id> <model>")
+            return 2
+        }
+        let p = found[0]
+        let c = ls_set_model(cfg, p.id, argv[2])
+        ls_save(c)
+        println(p.display_name + " 모델 → " + argv[2])
+        return 0
+    }
+
+    // ── key <id> <key> ───────────────────────────────────────────────────
+    // Deterministic error paths ported (Swift resolves these BEFORE any
+    // keychain touch); the keychain SecItemAdd happy-path is PR #17b.
+    if sub == "key" {
+        let found = if len(argv) >= 3 { ls_find_provider(cfg, argv[1]) } else { [] }
+        if len(found) == 0 {
+            eprintln("llm key: usage — llm key <id> <key>")
+            return 2
+        }
+        eprintln("llm key: keychain write not yet ported — PR #17b (key·key-rm·test·ask)")
+        return 2
+    }
+
+    // ── key-rm | key-del <id> ────────────────────────────────────────────
+    if sub == "key-rm" || sub == "key-del" {
+        let found = if len(argv) >= 2 { ls_find_provider(cfg, argv[1]) } else { [] }
+        if len(found) == 0 {
+            eprintln("llm key-rm: usage — llm key-rm <id>")
+            return 2
+        }
+        eprintln("llm key-rm: keychain write not yet ported — PR #17b (key·key-rm·test·ask)")
+        return 2
+    }
+
+    // ── test [<id>] ──────────────────────────────────────────────────────
+    // Live LLMBridge probe (CLI spawn / HTTPS) — PR #17b. No deterministic
+    // pre-network error path (Swift falls back to the active provider).
+    if sub == "test" {
+        eprintln("llm test: live LLMBridge probe not yet ported — PR #17b (key·key-rm·test·ask)")
+        return 2
+    }
+
+    // ── ask <prompt> ─────────────────────────────────────────────────────
+    if sub == "ask" {
+        // Swift's missing-prompt guard is deterministic (pre-network) — ported.
+        if len(argv) < 2 {
+            eprintln("llm ask: usage — llm ask <prompt>")
+            return 2
+        }
+        eprintln("llm ask: live LLMBridge call not yet ported — PR #17b (key·key-rm·test·ask)")
+        return 2
+    }
+
+    // ── unknown subcommand ───────────────────────────────────────────────
+    eprintln("llm: unknown subcommand '" + sub
+             + "' — use list [--json] | use | mode | model | key | key-rm | test | ask")
+    return 2
+}
+
 pub fn handler_local(target: string, argv: [string]) -> int {
     if target == "action" { return handler_action(argv) }
     if target == "verify" { return handler_verify(argv) }
@@ -1324,6 +1500,7 @@ pub fn handler_local(target: string, argv: [string]) -> int {
     if target == "operate"        { return handler_operate(argv) }
     if target == "backend"        { return handler_backend(argv) }
     if target == "owner"          { return handler_owner(argv) }
+    if target == "llm"            { return handler_llm(argv) }
     // every other declared local target is not-yet-ported → honest stub.
     return handler_stub(target, argv)
 }

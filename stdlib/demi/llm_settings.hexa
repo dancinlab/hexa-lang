@@ -1,0 +1,380 @@
+// llm_settings.hexa — the LLM connection-settings store (CLI+COCKPIT · D38).
+//
+// Pure-hexa-native port of DemiurgeCore/Models/LLMProvider.swift +
+// DemiurgeCore/Loaders/LLMConfig.swift `LLMSettings`. This is the SETTINGS
+// LEAF for the `demiurge llm` surface — it owns the provider seed-manifest,
+// the ~/.demiurge/llm.json read/write, and the (providers · active)
+// resolution. The handler (handlers.hexa handler_llm) is thin on top of it.
+//
+// @D d3 — implementation lives in ONE canonical home; this leaf is reused by
+//          handler_llm (no duplicated store logic in the handler).
+// @D d4 — providers are MANIFEST DATA (ls_builtins), never code branches; the
+//          handler/resolver never special-case a provider id. Adding /
+//          renaming / removing a provider = editing ls_builtins (or the user's
+//          llm.json) — no dispatcher edit.
+//
+// Byte-exactness: llm.json is written by Swift's JSONEncoder with
+// [.prettyPrinted, .sortedKeys] and `.write(…, options: .atomic)` (NO trailing
+// newline). The serializer below reproduces that layout 1:1 — 2-space indent,
+// alphabetical top-level keys (cliOverrides · mode · models · selectedProvider),
+// the empty-object quirk `{\n\n  }`, sorted dict keys, no trailing newline.
+//
+// Reuses the json_object leaf (d3) for parsing the on-disk config and
+// read_file/write_file (POSIX) for IO — same idiom as project_store.hexa.
+
+import "stdlib/alloc/json_object.hexa"
+
+// ── provider descriptor (Swift LLMProvider) ─────────────────────────────────
+struct LlmProvider {
+    id:           string,   // "claude" — stable key (config · keychain account)
+    display_name: string,   // "Claude"
+    key_env:      string,   // "ANTHROPIC_API_KEY" — env read FIRST
+    wire_format:  string,   // "anthropic" | "openai" | "gemini"
+    cli_command:  string,   // joined cliCommand (display-only for expert list)
+    default_model: string,
+}
+
+// ── resolved config (Swift LLMConfig) ───────────────────────────────────────
+// Carries the SELECTION only (provider · mode) + the per-id model overrides.
+// cliOverrides is preserved verbatim on write (the CLI never sets it) so a
+// cockpit-written override survives a CLI save — hence the parallel-array
+// carrier for its arbitrary keys.
+struct LlmConfig {
+    selected_provider: string,
+    mode:              string,           // "cli" | "api"
+    model_keys:        [string],         // provider id → model override (parallel)
+    model_vals:        [string],
+    cli_ovr_keys:      [string],         // provider id → cliCommand override (preserved)
+    cli_ovr_vals:      [[string]],
+}
+
+// ls_builtins() — the built-in provider seed manifest (Swift LLMProvider.builtins).
+// Order is significant: builtins[0] (claude) is the default selection.
+pub fn ls_builtins() -> [LlmProvider] {
+    let mut ps: [LlmProvider] = []
+    ps.push(LlmProvider {
+        id: "claude", display_name: "Claude",
+        key_env: "ANTHROPIC_API_KEY", wire_format: "anthropic",
+        cli_command: "claude -p {prompt}",
+        default_model: "claude-opus-4-7",
+    })
+    ps.push(LlmProvider {
+        id: "codex", display_name: "Codex (OpenAI)",
+        key_env: "OPENAI_API_KEY", wire_format: "openai",
+        cli_command: "codex exec --skip-git-repo-check {prompt}",
+        default_model: "gpt-5-codex",
+    })
+    ps.push(LlmProvider {
+        id: "gemini", display_name: "Gemini",
+        key_env: "GEMINI_API_KEY", wire_format: "gemini",
+        cli_command: "gemini --skip-trust -p {prompt}",
+        default_model: "gemini-2.5-pro",
+    })
+    return ps
+}
+
+// ls_mode_label(m) — Swift LLMMode.label.
+pub fn ls_mode_label(m: string) -> string {
+    if m == "cli" { return "CLI (설치된 명령)" }
+    return "API (키 입력)"
+}
+
+// ls_shq(s) — single-quote a shell argument (local leaf · no back-import,
+// mirrors br_shq / _shq).
+fn ls_shq(s: string) -> string {
+    let mut out = "'"
+    let mut i = 0
+    while i < len(s) {
+        let c = s.substring(i, i + 1)
+        if c == "'" { out = out + "'\\''" } else { out = out + c }
+        i = i + 1
+    }
+    return out + "'"
+}
+
+// ls_config_dir() / ls_config_path() — Swift LLMSettings.configDir/URL
+// (~/.demiurge/llm.json · homeDirectoryForCurrentUser).
+pub fn ls_config_dir() -> string {
+    return env("HOME") + "/.demiurge"
+}
+pub fn ls_config_path() -> string {
+    return ls_config_dir() + "/llm.json"
+}
+
+// ls_default_config() — Swift LLMConfig() default: selected = builtins[0],
+// mode = cli, empty overrides.
+pub fn ls_default_config() -> LlmConfig {
+    let bs = ls_builtins()
+    return LlmConfig {
+        selected_provider: bs[0].id, mode: "cli",
+        model_keys: [], model_vals: [],
+        cli_ovr_keys: [], cli_ovr_vals: [],
+    }
+}
+
+// ls_load() — Swift LLMSettings.load(): decode ~/.demiurge/llm.json, or the
+// sane default on miss / malformed (a default beats a crash). Reads the file
+// via `cat` (no read_file builtin) and parses with the json_object leaf.
+pub fn ls_load() -> LlmConfig {
+    let raw = exec("cat " + ls_shq(ls_config_path()) + " 2>/dev/null").trim()
+    if len(raw) == 0 { return ls_default_config() }
+    let obj = json_parse_object(raw)
+    if type_of(obj) != "map" { return ls_default_config() }
+    // A genuine config carries at least selectedProvider + mode; absent →
+    // treat as malformed and fall back (Swift's decode-failure default).
+    if !json_object_has(obj, "selectedProvider") { return ls_default_config() }
+    if !json_object_has(obj, "mode") { return ls_default_config() }
+    let bs = ls_builtins()
+    let sel = json_object_get_str(obj, "selectedProvider", bs[0].id)
+    let md  = json_object_get_str(obj, "mode", "cli")
+    let mut cfg = LlmConfig {
+        selected_provider: sel, mode: md,
+        model_keys: [], model_vals: [],
+        cli_ovr_keys: [], cli_ovr_vals: [],
+    }
+    // models — provider id → model override (string values).
+    let models = json_object_get(obj, "models")
+    if type_of(models) == "map" {
+        let mks = json_object_keys(models)
+        let mut i = 0
+        while i < len(mks) {
+            let k = mks[i]
+            cfg.model_keys.push(k)
+            cfg.model_vals.push(to_string(models[k]))
+            i = i + 1
+        }
+    }
+    // cliOverrides — provider id → [string] (preserved verbatim on write).
+    let ovr = json_object_get(obj, "cliOverrides")
+    if type_of(ovr) == "map" {
+        let oks = json_object_keys(ovr)
+        let mut j = 0
+        while j < len(oks) {
+            let k = oks[j]
+            let arr = ovr[k]
+            let mut vs: [string] = []
+            if type_of(arr) == "array" {
+                let mut t = 0
+                while t < len(arr) { vs.push(to_string(arr[t])) ; t = t + 1 }
+            }
+            cfg.cli_ovr_keys.push(k)
+            cfg.cli_ovr_vals.push(vs)
+            j = j + 1
+        }
+    }
+    return cfg
+}
+
+// ls_model_for(cfg, id) — the resolved model override for a provider id, or ""
+// if none (caller falls back to the builtin default_model).
+fn ls_model_for(cfg: LlmConfig, id: string) -> string {
+    let mut i = 0
+    while i < len(cfg.model_keys) {
+        if cfg.model_keys[i] == id { return cfg.model_vals[i] }
+        i = i + 1
+    }
+    return ""
+}
+
+// ls_providers(cfg) — Swift LLMSettings.providers(): builtins with the user's
+// per-id model override folded in (cliCommand override display is out of scope
+// for the list view; the resolver keeps the override on disk). d4 — one
+// assembled list, no id-branch.
+pub fn ls_providers(cfg: LlmConfig) -> [LlmProvider] {
+    let bs = ls_builtins()
+    let mut out: [LlmProvider] = []
+    let mut i = 0
+    while i < len(bs) {
+        let p = bs[i]
+        let ovr = ls_model_for(cfg, p.id)
+        let model = if len(ovr) > 0 { ovr } else { p.default_model }
+        out.push(LlmProvider {
+            id: p.id, display_name: p.display_name, key_env: p.key_env,
+            wire_format: p.wire_format, cli_command: p.cli_command,
+            default_model: model,
+        })
+        i = i + 1
+    }
+    return out
+}
+
+// ls_active(cfg) — Swift LLMSettings.active(): the selected provider, or the
+// first builtin if the selection is stale.
+pub fn ls_active(cfg: LlmConfig) -> LlmProvider {
+    let ps = ls_providers(cfg)
+    let mut i = 0
+    while i < len(ps) {
+        if ps[i].id == cfg.selected_provider { return ps[i] }
+        i = i + 1
+    }
+    return ps[0]
+}
+
+// ls_find_provider(cfg, id) — return a 1-element list (found) or empty (none),
+// mirroring Swift `providers.first { $0.id == id }` (hexa has no Optional here).
+pub fn ls_find_provider(cfg: LlmConfig, id: string) -> [LlmProvider] {
+    let ps = ls_providers(cfg)
+    let mut out: [LlmProvider] = []
+    let mut i = 0
+    while i < len(ps) {
+        if ps[i].id == id { out.push(ps[i]) ; return out }
+        i = i + 1
+    }
+    return out
+}
+
+// ls_key_source(p) — Swift LLMKeyStore.keySource(for:). env var first
+// (read-only, no value revealed), then the macOS keychain (account = id,
+// service = lab.dancin.demiurge.llm), else "없음". The keychain probe uses
+// `security find-generic-password` (read membership only — no value print).
+pub fn ls_key_source(p: LlmProvider) -> string {
+    let ev = env(p.key_env).trim()
+    if len(ev) > 0 { return "env (" + p.key_env + ")" }
+    let probe = exec("security find-generic-password -s 'lab.dancin.demiurge.llm' -a "
+                     + ls_shq(p.id) + " >/dev/null 2>&1 && echo yes || echo no").trim()
+    if probe == "yes" { return "키체인" }
+    return "없음"
+}
+
+// ── byte-exact JSON serialization (Swift JSONEncoder pretty + sortedKeys) ────
+
+// ls_json_escape(s) — same escape set as ps_json_escape (Foundation escapes
+// the forward slash too).
+fn ls_json_escape(s: string) -> string {
+    let n = len(s)
+    let mut out = ""
+    let mut i = 0
+    while i < n {
+        let c = s.substring(i, i + 1)
+        if c == "\\" { out = out + "\\\\" }
+        else if c == "\"" { out = out + "\\\"" }
+        else if c == "/" { out = out + "\\/" }
+        else if c == "\n" { out = out + "\\n" }
+        else if c == "\r" { out = out + "\\r" }
+        else if c == "\t" { out = out + "\\t" }
+        else { out = out + c }
+        i = i + 1
+    }
+    return out
+}
+
+// ls_sort_str(xs) — ascii lexicographic sort (insertion; the key sets are tiny
+// — at most the 3 builtin ids). Matches Swift's sortedKeys ordering.
+fn ls_sort_str(xs: [string]) -> [string] {
+    let mut out: [string] = []
+    let mut i = 0
+    while i < len(xs) { out.push(xs[i]) ; i = i + 1 }
+    let mut a = 1
+    while a < len(out) {
+        let key = out[a]
+        let mut b = a - 1
+        while b >= 0 && out[b] > key {
+            out[b + 1] = out[b]
+            b = b - 1
+        }
+        out[b + 1] = key
+        a = a + 1
+    }
+    return out
+}
+
+// ls_str_dict_json(keys, vals) — a {string:string} dict in Swift's pretty
+// layout, keys sorted, indented so the closing `}` sits at 2 spaces. Empty →
+// `{\n\n  }` (Swift's empty-object blank line). Each entry at 4-space indent.
+fn ls_str_dict_json(ks: [string], vs: [string]) -> string {
+    if len(ks) == 0 { return "{\n\n  }" }
+    let sorted = ls_sort_str(ks)
+    let mut out = "{\n"
+    let mut i = 0
+    while i < len(sorted) {
+        let k = sorted[i]
+        // find the value paired with this key
+        let mut v = ""
+        let mut j = 0
+        while j < len(ks) {
+            if ks[j] == k { v = vs[j] }
+            j = j + 1
+        }
+        out = out + "    \"" + ls_json_escape(k) + "\" : \"" + ls_json_escape(v) + "\""
+        if i < len(sorted) - 1 { out = out + "," }
+        out = out + "\n"
+        i = i + 1
+    }
+    return out + "  }"
+}
+
+// ls_str_array_inline(xs) — a [string] array nested one level deeper than the
+// top-level (used inside cliOverrides values). Swift indents the elements at
+// 8 spaces and the closing bracket at 4. Empty → `[\n\n    ]`.
+fn ls_str_array_inline(xs: [string]) -> string {
+    if len(xs) == 0 { return "[\n\n    ]" }
+    let mut out = "[\n"
+    let mut i = 0
+    while i < len(xs) {
+        out = out + "        \"" + ls_json_escape(xs[i]) + "\""
+        if i < len(xs) - 1 { out = out + "," }
+        out = out + "\n"
+        i = i + 1
+    }
+    return out + "    ]"
+}
+
+// ls_cli_ovr_json(keys, vals) — the cliOverrides dict ({string:[string]}).
+// Empty → `{\n\n  }`. Keys sorted; each value an inline string array.
+fn ls_cli_ovr_json(ks: [string], vs: [[string]]) -> string {
+    if len(ks) == 0 { return "{\n\n  }" }
+    let sorted = ls_sort_str(ks)
+    let mut out = "{\n"
+    let mut i = 0
+    while i < len(sorted) {
+        let k = sorted[i]
+        let mut arr: [string] = []
+        let mut j = 0
+        while j < len(ks) {
+            if ks[j] == k { arr = vs[j] }
+            j = j + 1
+        }
+        out = out + "    \"" + ls_json_escape(k) + "\" : " + ls_str_array_inline(arr)
+        if i < len(sorted) - 1 { out = out + "," }
+        out = out + "\n"
+        i = i + 1
+    }
+    return out + "  }"
+}
+
+// ls_config_json(cfg) — the byte-exact llm.json text (NO trailing newline,
+// matching the Swift encoder's Data). Top-level keys alphabetical:
+// cliOverrides · mode · models · selectedProvider.
+pub fn ls_config_json(cfg: LlmConfig) -> string {
+    let mut out = "{\n"
+    out = out + "  \"cliOverrides\" : " + ls_cli_ovr_json(cfg.cli_ovr_keys, cfg.cli_ovr_vals) + ",\n"
+    out = out + "  \"mode\" : \"" + ls_json_escape(cfg.mode) + "\",\n"
+    out = out + "  \"models\" : " + ls_str_dict_json(cfg.model_keys, cfg.model_vals) + ",\n"
+    out = out + "  \"selectedProvider\" : \"" + ls_json_escape(cfg.selected_provider) + "\"\n"
+    out = out + "}"
+    return out
+}
+
+// ls_save(cfg) — Swift LLMSettings.save(): mkdir -p ~/.demiurge (0700) then
+// write llm.json (0600). write_file is the POSIX builtin (same as project_store).
+pub fn ls_save(cfg: LlmConfig) -> bool {
+    exec("mkdir -p " + ls_shq(ls_config_dir()) + " && chmod 700 " + ls_shq(ls_config_dir()))
+    let path = ls_config_path()
+    write_file(path, ls_config_json(cfg))
+    exec("chmod 600 " + ls_shq(path))
+    return true
+}
+
+// ls_set_model(cfg, id, model) — set/replace a provider's model override
+// in-place (parallel-array upsert). Returns the mutated config.
+pub fn ls_set_model(cfg: LlmConfig, id: string, model: string) -> LlmConfig {
+    let mut c = cfg
+    let mut i = 0
+    while i < len(c.model_keys) {
+        if c.model_keys[i] == id { c.model_vals[i] = model ; return c }
+        i = i + 1
+    }
+    c.model_keys.push(id)
+    c.model_vals.push(model)
+    return c
+}

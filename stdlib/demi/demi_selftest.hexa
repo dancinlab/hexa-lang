@@ -470,6 +470,109 @@ fn _step_manifest() -> string {
     return read_file(path)
 }
 
+// ── PR #17a llm-store helpers (settings READ + config-SET parity) ───────────
+// The llm store is ~/.demiurge/llm.json — a FIXED path (Swift LLMSettings uses
+// homeDirectoryForCurrentUser, no env override), so BOTH surfaces read/write
+// the SAME file. The cells BACK UP the user's real llm.json, lay down a
+// deterministic fixture (or clear it), run, then RESTORE — leaving the user's
+// config exactly as found (clean, per the PR contract).
+fn _llm_store_path() -> string { return env("HOME") + "/.demiurge/llm.json" }
+
+// _llm_store_backup() — move a real llm.json aside; "" if none present.
+fn _llm_store_backup() -> string {
+    let path = _llm_store_path()
+    let bak = path + ".selftest-realbak"
+    let exists = exec("test -f " + _shq2(path) + " && echo yes || echo no").trim()
+    exec("rm -f " + _shq2(bak))
+    if exists == "yes" {
+        exec("mv " + _shq2(path) + " " + _shq2(bak))
+        return bak
+    }
+    return ""
+}
+// _llm_store_restore(bak) — remove any fixture; restore the real config (or its
+// original absence).
+fn _llm_store_restore(bak: string) {
+    let path = _llm_store_path()
+    exec("rm -f " + _shq2(path))
+    if len(bak) > 0 { exec("mv " + _shq2(bak) + " " + _shq2(path)) }
+}
+// _llm_store_clear() — no llm.json (the fresh-default state — load() → default).
+fn _llm_store_clear() { exec("rm -f " + _shq2(_llm_store_path())) }
+// _llm_store_seed(text) — write a fixed llm.json fixture (a known starting cfg
+// for the use/mode/model write cells).
+fn _llm_store_seed(text: string) {
+    let dir = env("HOME") + "/.demiurge"
+    exec("mkdir -p " + _shq2(dir))
+    exec("printf %s " + _shq2(text) + " > " + _shq2(_llm_store_path()))
+}
+// _llm_store_read() — the on-disk llm.json bytes, or "" if absent.
+fn _llm_store_read() -> string {
+    let path = _llm_store_path()
+    let hit = exec("test -f " + _shq2(path) + " && echo yes || echo no").trim()
+    if hit != "yes" { return "" }
+    return read_file(path)
+}
+
+// _cell_llm_write — a config-SET parity cell (use / mode / model). Clears the
+// store, runs hexa, captures stdout+rc+the WRITTEN llm.json; clears + runs
+// Swift; asserts stdout≡, rc≡, AND the written-file bytes≡. `want_file` is the
+// byte-exact golden config (when no Swift bin). The store starts CLEARED so the
+// write exercises the from-default path (the deterministic, host-independent
+// case — no pre-existing keychain/override state to vary the file).
+fn _cell_llm_write(name: string, entry: string, swift_bin: string,
+                   argv_str: string, golden_out: string, want_rc: int,
+                   want_file: string) -> int {
+    _llm_store_clear()
+    let hx = _run_hexa(entry, "", argv_str)
+    let hx_out = hx[0]
+    let hx_rc = _atoi2(hx[1])
+    let hx_file = _llm_store_read()
+    if hx_rc != want_rc {
+        println("FAIL " + name + " — hexa rc=" + to_string(hx_rc) + " want " + to_string(want_rc))
+        return 1
+    }
+    if len(swift_bin) > 0 {
+        _llm_store_clear()
+        let sw = _run_swift(swift_bin, "", argv_str)
+        let sw_out = sw[0]
+        let sw_rc = _atoi2(sw[1])
+        let sw_file = _llm_store_read()
+        if sw_out != hx_out {
+            println("FAIL " + name + " — stdout DIFFERS from Swift")
+            println("  --- swift ---"); println(sw_out)
+            println("  --- hexa  ---"); println(hx_out)
+            return 1
+        }
+        if sw_rc != hx_rc {
+            println("FAIL " + name + " — rc swift=" + to_string(sw_rc) + " hexa=" + to_string(hx_rc))
+            return 1
+        }
+        if sw_file != hx_file {
+            println("FAIL " + name + " — llm.json DIFFERS from Swift")
+            println("  --- swift ---"); println(sw_file)
+            println("  --- hexa  ---"); println(hx_file)
+            return 1
+        }
+        println("PASS " + name + " (stdout+llm.json ≡ Swift · rc=" + to_string(hx_rc) + ")")
+        return 0
+    }
+    if hx_out != golden_out {
+        println("FAIL " + name + " — stdout DIFFERS from golden")
+        println("  --- golden ---"); println(golden_out)
+        println("  --- hexa   ---"); println(hx_out)
+        return 1
+    }
+    if hx_file != want_file {
+        println("FAIL " + name + " — llm.json DIFFERS from golden")
+        println("  --- golden ---"); println(want_file)
+        println("  --- hexa   ---"); println(hx_file)
+        return 1
+    }
+    println("PASS " + name + " (stdout+llm.json ≡ golden · rc=" + to_string(hx_rc) + ")")
+    return 0
+}
+
 // _cell_step — an advance/retreat parity cell: re-seed `seed_verb`, run hexa,
 // capture stdout+rc+manifest; re-seed, run Swift; assert stdout≡, rc≡, manifest
 // bytes≡. `want_manifest` is the byte-exact expected manifest after the step
@@ -1701,6 +1804,141 @@ fn main() {
     let g_own_on = "owner-mode (사장실): ✅ unlocked (DEMIURGE_OWNER)\n" + g_own_ops + g_own_body_on
     fails = fails + _cell("owner/status-unlocked", entry, swift_bin,
                           "DEMIURGE_OWNER=1", "owner", g_own_on, 0)
+
+    // ── PR #17a llm — settings READ + config-SET parity (list/use/mode/model) ─
+    // The `llm` verb is the AI-connection surface (D38). PR #17a ports the
+    // deterministic, fully parity-testable subverbs over the LLMSettings store
+    // (~/.demiurge/llm.json) — list [--json] · use · mode · model — plus the
+    // deterministic ERROR paths (missing-arg / bad-provider) of EVERY subverb
+    // including key/key-rm/ask (Swift resolves those guards BEFORE any keychain
+    // or network touch). The keychain-write + live-LLMBridge happy-path of
+    // key/key-rm/test/ask is HONESTLY scoped to PR #17b (those need a live
+    // SecItemAdd + HTTPS call; @L7 forbids faking them). Goldens captured
+    // byte-for-byte from the Swift DemiurgeCLI reference 2026-06-04. The cells
+    // BACK UP + RESTORE the user's real llm.json so the config is left clean.
+    //
+    // keySource note: the list goldens show "없음" (no env key · no keychain
+    // entry). Both surfaces probe the SAME machine state, so a live cross-check
+    // is exact regardless; the GOLDEN-mode fallback assumes the @ci_gate host
+    // carries no ANTHROPIC/OPENAI/GEMINI key for these provider ids.
+    let lbak = _llm_store_backup()
+
+    // list (fresh-default store) — claude active ▶, mode cli, no keys.
+    _llm_store_clear()
+    let g_llm_list = "AI 제공자 (활성 모드: cli · CLI (설치된 명령)):\n"
+        + "▶ Claude · 모델 claude-opus-4-7 · 키 없음\n"
+        + "  Codex (OpenAI) · 모델 gpt-5-codex · 키 없음\n"
+        + "  Gemini · 모델 gemini-2.5-pro · 키 없음\n"
+        + "바꾸기: llm use <id> · llm mode <cli|api> · llm key <id> <key> · llm model <id> <model>\n"
+    fails = fails + _cell("llm/list-default", entry, swift_bin, "",
+                          "llm list", g_llm_list, 0)
+
+    // list --json (fresh-default store) — machine-readable, pretty+sortedKeys.
+    _llm_store_clear()
+    let g_llm_json = "{\n"
+        + "  \"mode\" : \"cli\",\n"
+        + "  \"providers\" : [\n"
+        + "    {\n"
+        + "      \"displayName\" : \"Claude\",\n"
+        + "      \"id\" : \"claude\",\n"
+        + "      \"keySource\" : \"없음\",\n"
+        + "      \"model\" : \"claude-opus-4-7\",\n"
+        + "      \"selected\" : true,\n"
+        + "      \"wireFormat\" : \"anthropic\"\n"
+        + "    },\n"
+        + "    {\n"
+        + "      \"displayName\" : \"Codex (OpenAI)\",\n"
+        + "      \"id\" : \"codex\",\n"
+        + "      \"keySource\" : \"없음\",\n"
+        + "      \"model\" : \"gpt-5-codex\",\n"
+        + "      \"selected\" : false,\n"
+        + "      \"wireFormat\" : \"openai\"\n"
+        + "    },\n"
+        + "    {\n"
+        + "      \"displayName\" : \"Gemini\",\n"
+        + "      \"id\" : \"gemini\",\n"
+        + "      \"keySource\" : \"없음\",\n"
+        + "      \"model\" : \"gemini-2.5-pro\",\n"
+        + "      \"selected\" : false,\n"
+        + "      \"wireFormat\" : \"gemini\"\n"
+        + "    }\n"
+        + "  ]\n"
+        + "}\n"
+    fails = fails + _cell("llm/list-json", entry, swift_bin, "",
+                          "llm list --json", g_llm_json, 0)
+
+    // list EXPERT (DEMIURGE_EXPERT) — wireFormat tag + cli command exposed.
+    _llm_store_clear()
+    let g_llm_le = "AI 제공자 (활성 모드: cli · CLI (설치된 명령)):\n"
+        + "▶ claude  [anthropic]  Claude · 모델 claude-opus-4-7 · 키 없음 · cli claude -p {prompt}\n"
+        + "  codex  [openai]  Codex (OpenAI) · 모델 gpt-5-codex · 키 없음 · cli codex exec --skip-git-repo-check {prompt}\n"
+        + "  gemini  [gemini]  Gemini · 모델 gemini-2.5-pro · 키 없음 · cli gemini --skip-trust -p {prompt}\n"
+        + "바꾸기: llm use <id> · llm mode <cli|api> · llm key <id> <key> · llm model <id> <model>\n"
+    fails = fails + _cell("llm/list-expert", entry, swift_bin, "DEMIURGE_EXPERT=1",
+                          "llm list", g_llm_le, 0)
+
+    // ── config-SET write cells (from cleared store → from-default write) ──────
+    // The from-default written config has BOTH dicts empty → the `{\n\n  }` quirk.
+    let f_use_codex = "{\n"
+        + "  \"cliOverrides\" : {\n\n  },\n"
+        + "  \"mode\" : \"cli\",\n"
+        + "  \"models\" : {\n\n  },\n"
+        + "  \"selectedProvider\" : \"codex\"\n"
+        + "}"
+    fails = fails + _cell_llm_write("llm/use-codex", entry, swift_bin,
+        "llm use codex", "활성 provider → Codex (OpenAI) (codex)\n", 0, f_use_codex)
+
+    let f_mode_api = "{\n"
+        + "  \"cliOverrides\" : {\n\n  },\n"
+        + "  \"mode\" : \"api\",\n"
+        + "  \"models\" : {\n\n  },\n"
+        + "  \"selectedProvider\" : \"claude\"\n"
+        + "}"
+    fails = fails + _cell_llm_write("llm/mode-api", entry, swift_bin,
+        "llm mode api", "연결 방식 → api (API (키 입력))\n", 0, f_mode_api)
+
+    // model set — the `models` dict goes NON-empty (the sorted-key dict path).
+    let f_model = "{\n"
+        + "  \"cliOverrides\" : {\n\n  },\n"
+        + "  \"mode\" : \"cli\",\n"
+        + "  \"models\" : {\n"
+        + "    \"claude\" : \"claude-opus-4-8\"\n"
+        + "  },\n"
+        + "  \"selectedProvider\" : \"claude\"\n"
+        + "}"
+    fails = fails + _cell_llm_write("llm/model-set", entry, swift_bin,
+        "llm model claude claude-opus-4-8", "Claude 모델 → claude-opus-4-8\n", 0, f_model)
+
+    // ── deterministic ERROR paths (pre-keychain / pre-network argv guards) ────
+    // These touch the store only via load() (cleared → default), never write.
+    _llm_store_clear()
+    fails = fails + _cell("llm/use-bad", entry, swift_bin, "",
+        "llm use bogus", "llm use: 알 수 없는 provider — claude · codex · gemini\n", 2)
+    _llm_store_clear()
+    fails = fails + _cell("llm/use-missing", entry, swift_bin, "",
+        "llm use", "llm use: 알 수 없는 provider — claude · codex · gemini\n", 2)
+    _llm_store_clear()
+    fails = fails + _cell("llm/mode-bad", entry, swift_bin, "",
+        "llm mode bogus", "llm mode: cli | api 중 하나\n", 2)
+    _llm_store_clear()
+    fails = fails + _cell("llm/model-missing", entry, swift_bin, "",
+        "llm model claude", "llm model: usage — llm model <id> <model>\n", 2)
+    _llm_store_clear()
+    fails = fails + _cell("llm/key-missing", entry, swift_bin, "",
+        "llm key claude", "llm key: usage — llm key <id> <key>\n", 2)
+    _llm_store_clear()
+    fails = fails + _cell("llm/key-rm-missing", entry, swift_bin, "",
+        "llm key-rm", "llm key-rm: usage — llm key-rm <id>\n", 2)
+    _llm_store_clear()
+    fails = fails + _cell("llm/ask-missing", entry, swift_bin, "",
+        "llm ask", "llm ask: usage — llm ask <prompt>\n", 2)
+    _llm_store_clear()
+    fails = fails + _cell("llm/unknown-sub", entry, swift_bin, "",
+        "llm frobnicate",
+        "llm: unknown subcommand 'frobnicate' — use list [--json] | use | mode | model | key | key-rm | test | ask\n", 2)
+
+    // restore the user's real llm.json (or its original absence).
+    _llm_store_restore(lbak)
 
     if fails == 0 { println("demi_parity_selftest PASS") }
     else { println("demi_parity_selftest FAIL — " + to_string(fails) + " cell(s)") }
