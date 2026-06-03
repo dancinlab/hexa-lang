@@ -156,10 +156,87 @@ fn _make_list_empty(repo: string) {
          + " && mkdir -p " + _shq2(repo + "/exports/chip/noc/f1f2/records"))
 }
 
+// _make_show_fixture(repo) — a deterministic exports/ tree under `repo`
+// (DEMIURGE_REPO) for the PR#7 `show <path>` parity cells. One fully-populated
+// F1F2 record exercising EVERY render branch of the Swift `show`:
+//   - non-empty topology (int degree/node_count) · verdict · all provenance
+//     scalar fields · a sim_commit_hash > 12 chars (so the `.prefix(12)` trim
+//     is asserted) · TWO gate_failures + TWO scope_caveats (the `  [i] <v>`
+//     rows + the counts). $HOME-rooted (non-symlinked) so the canonical-path
+//     error lines stay machine-independent (lexical-canon · see RecordLoader).
+//   + a `bad.json` of non-JSON text for the decode-failure LIVE cell.
+fn _make_show_fixture(repo: string) {
+    let rdir = repo + "/exports/chip/noc/f1f2/records"
+    exec("rm -rf " + _shq2(repo) + " && mkdir -p " + _shq2(rdir))
+    let rec = "{\n"
+        + "  \"interface\": \"hexa-arch:chip:noc:F1F2-record\",\n"
+        + "  \"schema_version\": \"1.0\",\n"
+        + "  \"record_id\": \"SHOW_OK\",\n"
+        + "  \"produced_at_utc\": \"2026-06-03T00:00:00Z\",\n"
+        + "  \"topology\": { \"kind\": \"mesh_2d\", \"degree\": 4, \"node_count\": 64, \"routing\": \"min\" },\n"
+        + "  \"traffic\": \"tornado\",\n"
+        + "  \"verdict\": { \"f1\": \"INCONCLUSIVE\", \"f2\": \"INCONCLUSIVE\", \"rationale\": \"single-topology fixture record for the demi show selftest cell\" },\n"
+        + "  \"provenance\": {\n"
+        + "    \"absorbed\": false, \"measurement_gate\": \"GATE_CLOSED_MEASURED\",\n"
+        + "    \"sim_engine\": \"fixture_engine\", \"sim_commit_hash\": \"deadbeefcafe1234567890\",\n"
+        + "    \"gate_failures\": [\"gf-alpha\", \"gf-beta\"], \"consumer_target\": \"demi:selftest\",\n"
+        + "    \"atlas_cite_block\": \"@cite fixture\", \"scope_caveats\": [\"caveat-one\", \"caveat-two\"]\n"
+        + "  }\n"
+        + "}\n"
+    exec("printf %s " + _shq2(rec) + " > " + _shq2(rdir + "/show_ok.json"))
+    exec("printf %s " + _shq2("not json at all") + " > " + _shq2(rdir + "/bad.json"))
+}
+
 fn _run_swift(bin: string, env_prefix: string, argv_str: string) -> [string] {
     let cmd = env_prefix + " " + _shq2(bin) + " " + argv_str + " 2>&1"
     let pair = exec_with_status(cmd)
     return [to_string(pair[0]), to_string(pair[1])]
+}
+
+// _cell_live_only — a parity cell whose Swift output is NOT deterministically
+// golden-able (e.g. a Foundation decode error whose tail is locale/machine-
+// dependent). It asserts the hexa exit code unconditionally, and the BYTE
+// equivalence ONLY when DEMI_SWIFT_BIN is present (the live Swift binary is the
+// reference). Without the Swift bin it asserts the hexa rc + a `prefix` the
+// output must START with (the deterministic head, e.g. "show: Decode failed (")
+// — never a fabricated full golden (@L7).
+fn _cell_live_only(name: string, entry: string, swift_bin: string,
+                   env_prefix: string, argv_str: string,
+                   prefix: string, want_rc: int) -> int {
+    let hx = _run_hexa(entry, env_prefix, argv_str)
+    let hx_out = hx[0]
+    let hx_rc = _atoi2(hx[1])
+    if hx_rc != want_rc {
+        println("FAIL " + name + " — hexa rc=" + to_string(hx_rc) + " want " + to_string(want_rc))
+        return 1
+    }
+    if len(swift_bin) > 0 {
+        let sw = _run_swift(swift_bin, env_prefix, argv_str)
+        let sw_out = sw[0]
+        let sw_rc = _atoi2(sw[1])
+        if sw_out != hx_out {
+            println("FAIL " + name + " — output DIFFERS from Swift")
+            println("  --- swift ---"); println(sw_out)
+            println("  --- hexa  ---"); println(hx_out)
+            return 1
+        }
+        if sw_rc != hx_rc {
+            println("FAIL " + name + " — rc swift=" + to_string(sw_rc) + " hexa=" + to_string(hx_rc))
+            return 1
+        }
+        println("PASS " + name + " (byte ≡ Swift · rc=" + to_string(hx_rc) + ")")
+        return 0
+    }
+    // No Swift bin — assert the deterministic head only.
+    let head = if len(hx_out) >= len(prefix) { hx_out.substring(0, len(prefix)) } else { hx_out }
+    if head != prefix {
+        println("FAIL " + name + " — output does not start with the expected prefix")
+        println("  --- prefix ---"); println(prefix)
+        println("  --- hexa   ---"); println(hx_out)
+        return 1
+    }
+    println("PASS " + name + " (prefix ≡ golden · rc=" + to_string(hx_rc) + ")")
+    return 0
 }
 
 // One parity cell. `argv` is the demiurge-cli argv tail; `env_prefix` is a
@@ -454,6 +531,63 @@ fn main() {
     let g_l_all_empty = "Records (0):\n\nDecisions (0):\n\nRFCs (0):\n\nDomains (0):\n\n"
     fails = fails + _cell("list-all/empty", entry, swift_bin, lenv0,
                           "list-all", g_l_all_empty, 0)
+
+    // ── PR#7 show cells — `show <path>` record + provenance dump. Reads via
+    // the #5 RecordLoader (load-by-path · invariant-(a) guard). DEMIURGE_REPO
+    // is applied to BOTH surfaces so exportsRoot resolves to the SAME $HOME-
+    // rooted fixture (canonical-path error lines machine-independent). Goldens
+    // captured byte-for-byte from the Swift DemiurgeCLI reference 2026-06-04.
+    let sfix = home + "/.demi-selftest-show-fixture"
+    _make_show_fixture(sfix)
+    let sroot = sfix + "/exports/chip/noc/f1f2/records"
+    let senv = "DEMIURGE_REPO=" + _shq2(sfix)
+
+    // valid record — every field in Swift order/spacing; sim_commit trimmed to
+    // 12 chars; 2 gate_failures + 2 scope_caveats with their `  [i] <v>` rows.
+    let g_s_ok = "record_id:                  SHOW_OK\n"
+        + "interface:                  hexa-arch:chip:noc:F1F2-record\n"
+        + "schema_version:             1.0\n"
+        + "produced_at_utc:            2026-06-03T00:00:00Z\n"
+        + "topology.kind:              mesh_2d\n"
+        + "topology.degree:            4\n"
+        + "topology.node_count:        64\n"
+        + "topology.routing:           min\n"
+        + "traffic:                    tornado\n"
+        + "verdict.f1:                 INCONCLUSIVE\n"
+        + "verdict.f2:                 INCONCLUSIVE\n"
+        + "verdict.rationale:          single-topology fixture record for the demi show selftest cell\n"
+        + "provenance.measurement_gate:GATE_CLOSED_MEASURED\n"
+        + "provenance.absorbed:        false\n"
+        + "provenance.sim_engine:      fixture_engine\n"
+        + "provenance.sim_commit:      deadbeefcafe\n"
+        + "provenance.consumer_target: demi:selftest\n"
+        + "provenance.atlas_cite:      @cite fixture\n"
+        + "provenance.gate_failures:   2\n"
+        + "  [0] gf-alpha\n"
+        + "  [1] gf-beta\n"
+        + "provenance.scope_caveats:   2\n"
+        + "  [0] caveat-one\n"
+        + "  [1] caveat-two\n"
+    fails = fails + _cell("show/record-ok", entry, swift_bin, senv,
+                          "show " + _shq2(sroot + "/show_ok.json"), g_s_ok, 0)
+
+    // path OUTSIDE exports (invariant a) → `show: Refused …` (canonical), rc 2.
+    let g_s_outside = "show: Refused (@D g_cockpit_isolation invariant a): path is outside ../exports/**: " + sfix + "/outside.json\n"
+    fails = fails + _cell("show/outside", entry, swift_bin, senv,
+                          "show " + _shq2(sfix + "/outside.json"), g_s_outside, 2)
+
+    // missing path UNDER exports → `show: Record file not found:` (canon), rc 2.
+    let g_s_missing = "show: Record file not found: " + sroot + "/MISSING.json\n"
+    fails = fails + _cell("show/missing", entry, swift_bin, senv,
+                          "show " + _shq2(sroot + "/MISSING.json"), g_s_missing, 2)
+
+    // unparseable file UNDER exports → `show: Decode failed (<path>): <tail>`,
+    // rc 2. The Foundation decode-error tail is locale/machine-dependent so this
+    // is a LIVE-only cell (byte-≡ Swift when DEMI_SWIFT_BIN present; else the
+    // deterministic head prefix is asserted — never a fabricated full golden).
+    let g_s_decode_head = "show: Decode failed (" + sroot + "/bad.json)"
+    fails = fails + _cell_live_only("show/decode", entry, swift_bin, senv,
+                          "show " + _shq2(sroot + "/bad.json"), g_s_decode_head, 2)
 
     // ── PR-record-loader self-check (@ci_gate · @L7 spirit) — NOT a verb-
     // parity cell (PR#5 adds NO new user-facing verb; the list-*/show/gate
