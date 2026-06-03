@@ -1,0 +1,183 @@
+RUNTIME-PORT · DICTKEYS-FEAS · hexa_dict_keys → rt_dict_keys feasibility
+date: 2026-06-03   host: mini (LOCAL — no ghost/pool)   base: origin/main a564f7155
+scope: FEASIBILITY-ONLY (NO codegen/runtime/bind mutation this round)
+verdict: CLASS A — expressible-in-hexa-TODAY. The prior M2 "BLOCKED (map-rep
+         mismatch)" verdict was based on a FACTUAL ERROR (see CORRECTION). All
+         primitives needed already exist + are registered in all 3 builtin
+         tables. NO new builtin · NO new runtime symbol · NO ABI/rep change.
+         Live-wire is hexa-SOURCE-ONLY but recompiles into the self-host set, so
+         it trips the codegen byte-eq gate (same gate-class as B1 #2632) — hence
+         the ready-to-apply patch is delivered here and deferred to a reviewed
+         implementation PR rather than mutated in this feasibility round.
+########################################################################
+
+QUESTION
+------------------------------------------------------------------------
+Can the key-set extraction of hexa_dict_keys be expressed hexa-native and
+RUNEQ-proven order/bit-exact vs the C SSOT (Class A), or does it need a new
+codegen builtin mapping to an existing C map-iter entry point (Class B), or
+exposure of the whole map iterator/rep to the hexa surface / an ABI change
+(Class C)?
+
+DISPATCH CHAIN (read from the live tree)
+------------------------------------------------------------------------
+  surface  dict_keys(m) / .keys()
+     codegen self/codegen.hexa L6202/L7254 (dict_keys) · L4260/L7199 (keys)
+        -> C  hexa_dict_keys(m)  (self/runtime.c L11887)
+              = thin alias: { return hexa_map_keys(m); }
+        -> C  hexa_map_keys(m)   (self/runtime_core.c L3020, HEXA_HAS_HEXA_RT_STDLIB)
+              = { if (!HX_MAP_TBL(m)) return hexa_array_new(); return rt_map_keys(m); }
+        -> HEXA rt_map_keys(m)   (self/rt/map_ops.hexa L76) = map_keys_pure(m)
+        -> HEXA map_keys_pure(m) (self/runtime/map_pure.hexa L42) = return keys(m)  ← TRAP
+        -> ...lowers `keys(m)` BACK to hexa_map_keys(m) → INFINITE SELF-REFERENCE.
+
+So today's "hexa port" of keys() is `return keys(m)` — it does not port the
+walk at all; it re-enters the C SSOT (or self-recurses if the C shim is gone).
+That is the real reason the leaf never RUNEQ'd, NOT a representation mismatch.
+
+CORRECTION of the prior M2-hexa_dict_keys.txt BLOCKED verdict
+------------------------------------------------------------------------
+The prior verdict claimed: "rt_map_keys (map_keys_pure) operates on a SEPARATE
+pure-hexa functional map representation built via rt_map_new/rt_map_set — a
+different data structure with its own ordering ... no apples-to-apples RUNEQ."
+This is FALSE for the actual code path. map_keys_pure(m) is literally
+`return keys(m)` (self/runtime/map_pure.hexa L42) — it consumes the SAME
+HexaVal map object and the SAME native HexaMapTable as the C SSOT. There is no
+second map type on this path. The rt_map_new/rt_map_set functional builders
+exist but are NOT what rt_map_keys reads. The leaf was mis-classified.
+
+THE NATIVE MAP REP (read from self/runtime_core.c — READ-ONLY, gitignored)
+------------------------------------------------------------------------
+HexaMapTable (runtime_core.c L1048-1065) — open-addressing hash + parallel
+insertion-order arrays:
+    typedef struct {
+        HexaMapSlot* slots;     // power-of-2 hash table (FNV-1a, hmap_find)
+        HexaVal*     vals;      // parallel values (slot-indexed)
+        int          ht_cap;
+        char**       order_keys;// INSERTION-ORDER key ptrs (-> slots[].key, strdup'd)
+        HexaVal*     order_vals;// insertion-order values
+        int          len;       // entry count
+        int          order_cap;
+        int          from_arena;
+    } HexaMapTable;
+  HexaMapSlot (L1042): { char* key (strdup'd, NULL=empty); uint32_t hash; int order_idx; }
+  HexaMap     (L1088): { HexaMapTable* tbl; int len; }
+  HexaVal.map_ptr (L1116) -> HexaMap*;  HX_MAP_TBL(v) (L1147) = (v).map_ptr->tbl.
+
+C SSOT key walk (hexa_map_keys, runtime_core.c L3025-3034, #else branch — the
+canonical body):
+    arr = hexa_array_reserve(arr, t->len);
+    for (i = 0; i < t->len; i++) arr = hexa_array_push(arr, hexa_str(t->order_keys[i]));
+ORDER GUARANTEE: strict insertion order; overwrite of an existing key updates
+order_vals[order_idx] in place and does NOT append (no duplicate key). Keys are
+strdup'd char* in slots[].key; order_keys[i] aliases that pointer; hexa_str()
+re-wraps to a TAG_STR HexaVal. NUL-bearing keys: keys are NUL-terminated char*
+internally so an embedded 0x00 truncates at the slot level (a pre-existing C-rep
+property, NOT introduced by any port — the ported body inherits it identically).
+
+THE ALREADY-EXPOSED ORDER-WALK PRIMITIVES (the unblock — already present)
+------------------------------------------------------------------------
+Three codegen builtins read the EXACT SAME fields the C SSOT loop walks, with
+NO recursion back into the keys()/map_keys family:
+
+  __map_raw_len(m)         self/codegen.hexa L6161 -> "hexa_int((int64_t)HX_MAP_LEN(m))"
+                           (HX_MAP_LEN = (v).map_ptr->len == HexaMapTable.len)
+  __map_order_key_at(m,i)  self/codegen.hexa L6094 -> C __map_order_key_at
+                           (runtime_core.c L2608: bounds-check + hexa_str(t->order_keys[idx]))
+  __map_order_val_at(m,i)  self/codegen.hexa L6097 -> C __map_order_val_at
+                           (runtime_core.c L2616: bounds-check + t->order_vals[idx])
+
+REGISTRATION (all three, ALL TABLES — NO new registration needed):
+  • self/codegen.hexa is_builtin: L12421 __map_order_key_at · L12422 __map_order_val_at
+                                  · L12433 __map_raw_len  (all `return true`)
+  • compiler/check/bind.hexa allow-list: L1059 __map_raw_len · L1156
+    __map_order_key_at/__map_order_val_at (cycle-107 map-op escape comment)
+  • C bodies live in runtime_core.c (de-staticized, visible to transpiled TUs).
+This is the load-bearing piece B1 had to ADD (its bind entry vs HX2001). For
+dict_keys it is ALREADY DONE — strictly less work than B1.
+
+CLASSIFICATION: CLASS A (expressible-in-hexa-today)
+------------------------------------------------------------------------
+NOT Class B: no new codegen builtin is required. The length-carrying / order-
+iterating entry points already exist AND are registered in all three builtin
+tables. (B1 needed +1 builtin + a bind allow-list add; dict_keys needs zero.)
+NOT Class C: no map iterator/rep exposure beyond what exists, no ABI change, no
+HexaVal/HexaMapTable layout change, no caller migration. The native HexaMapTable
+insertion-order arrays ARE the canonical rep and are already index-addressable
+from hexa source via __map_raw_len + __map_order_key_at.
+
+THE PORT (ready to apply — hexa-source only)
+------------------------------------------------------------------------
+Transliteration of the C SSOT loop using the existing primitives. Add to
+self/rt/map_ops.hexa (and point rt_map_keys at it / or fix map_keys_pure):
+
+    @pure pub fn rt_dict_keys(m) {
+        let n = __map_raw_len(m)
+        let mut out = []
+        let mut i = 0
+        while i < n {
+            out.push(__map_order_key_at(m, i))
+            i = i + 1
+        }
+        return out
+    }
+
+To close the leaf at the canonical surface, make the keys() port non-recursive
+by replacing self/runtime/map_pure.hexa L42 body `return keys(m)` with the same
+order-walk (map_values_pure/map_entries_pure should likewise use
+__map_order_val_at instead of re-deriving via keys(m)+m[k], removing their
+hidden re-entry too). Then rt_map_keys → map_keys_pure walks order_keys directly
+= byte/order-identical to hexa_map_keys' C #else body.
+
+DELTA SURFACE (for the implementation PR — NOT this feasibility round):
+  • self/runtime/map_pure.hexa  — map_keys_pure body: `return keys(m)` →
+    order-walk via __map_raw_len + __map_order_key_at (~6 lines). Optionally
+    map_values_pure/map_entries_pure → __map_order_val_at (kill their re-entry).
+  • self/rt/map_ops.hexa        — (optional) expose rt_dict_keys alias.
+  • NO self/codegen.hexa · NO compiler/codegen/arm64_darwin.hexa · NO
+    compiler/check/bind.hexa · NO runtime_core_emit.hexa edit.
+
+RUNEQ EVIDENCE (LOCAL on mini — no ghost/pool)
+------------------------------------------------------------------------
+1. Equivalence-by-construction: __map_order_key_at(m,i) reads t->order_keys[i]
+   via hexa_str(); __map_raw_len(m) reads t->len. These are the IDENTICAL fields
+   the C SSOT hexa_map_keys #else loop reads. The ported body is a structural
+   1:1 transliteration of that loop. They cannot diverge in length, order, or
+   key value (same pointers re-wrapped by the same hexa_str()).
+2. C SSOT ground truth captured via surface keys() (== hexa_map_keys path) on
+   /tmp/runeq_keys_ground.hexa, installed toolchain:
+     many        keys() -> [k1] [k2] [k3] [zzz] [a]          (strict insert order)
+     overwrite   keys() -> [x] [y]                            (no dup on rewrite)
+     forty (0..39) keys() -> [0]..[39]                        (collision-stress, ordered)
+     empty       len(keys()) == 0
+3. Codegen-lowering proof: compiling the rt_dict_keys body emitted, byte-for-
+   byte, direct calls — `HX_MAP_LEN(m)` for __map_raw_len and
+   `__map_order_key_at(m, i)` for the accessor (verified in the emitted .c) —
+   confirming the INSTALLED hexat already recognizes + lowers all three builtins
+   to the SSOT-field accessors. (The local link failed only because the pinned
+   install's runtime.o/runtime.h predate the de-staticized __map_order_* / the
+   HX_MAP_LEN fn-form decl — a STALE-INSTALL artifact, resolved by the standard
+   runtime regen the implementation PR runs, not a representation gap.)
+A full end-to-end numeric RUNEQ (same map → C path vs ported path, both at
+runtime) requires that runtime regen, which is exactly the codegen byte-eq
+gated step (below) and out of scope for a feasibility-only round. The three
+lines of evidence above are conclusive for the feasibility verdict.
+
+WHY DELIVERED AS A DESIGN NOTE (not live-wired this round)
+------------------------------------------------------------------------
+Mandate is FEASIBILITY-ONLY, NO codegen/runtime mutation this round. Although
+the Class A fix is hexa-SOURCE-ONLY (no codegen/runtime/bind table edit),
+self/runtime/map_pure.hexa is compiled INTO the self-host transpiler set, so
+changing map_keys_pure's emitted body trips the codegen byte-eq fixpoint gate
+(gen3→gen4 + ghost selfhost-byteeq-real) — the same non-required ghost gate as
+B1 #2632. That is a deliberate, reviewed implementation PR (parent waits on the
+ghost gate), not a feasibility-round mutation. The patch above is ready to
+apply verbatim.
+
+DISPOSITION: CLASS A. hexa_dict_keys is portable hexa-native TODAY with the
+already-registered __map_raw_len + __map_order_key_at primitives — zero new
+builtins, zero rep/ABI change. The prior BLOCKED (map-rep mismatch) verdict is
+SUPERSEDED/CORRECTED: the path consumes the native HexaMapTable, not a separate
+rep, and the only real defect is the self-referential `return keys(m)` in
+map_keys_pure. Carry the (byte-eq-gated) hexa-source patch to a dedicated
+implementation PR alongside M3.
