@@ -1,5 +1,30 @@
 # C-ZERO — log (append-only)
 
+## 2026-06-03 — milestone 2: shim oracle batch
+
+Ran the byte-equality oracles for the next-smallest emitter-backed shims. Per-module:
+
+- [x] `proc_fork` (37 LOC) — BYTE-EQ. sha256(.c)=`ba3cf3f1...44934400`. `__HEXA_LANG_PROC_FORK_BYTE_DIFF__ PASS` (3/3). → `.verdicts/c-zero/proc_fork.txt`
+- [x] `crypto_openssl` (47 LOC) — BYTE-EQ. sha256(.c)=`c3c8308c...9466c32c`. `__HEXA_LANG_CRYPTO_OPENSSL_BYTE_DIFF__ PASS` (3/3). → `.verdicts/c-zero/crypto_openssl.txt`
+- [x] `mount` (55 LOC) — BYTE-EQ. sha256(.c)=`f521136d...13a5de7e`. `__HEXA_LANG_MOUNT_BYTE_DIFF__ PASS` (3/3). → `.verdicts/c-zero/mount.txt`
+- [x] `wait` (67 LOC) — BYTE-EQ. sha256(.c)=`9c9bc95f...f8e0f1838`. `__HEXA_LANG_WAIT_BYTE_DIFF__ PASS` (3/3). → `.verdicts/c-zero/wait.txt`
+
+**Total: 206 LOC oracle-proven-retirable (all four BYTE-EQ).**
+
+Honest context (g63): on `main` these four `.c` shims are ALREADY graduated — `git rm`'d in
+`7906951c0` (#2065, "tracked .c = 0"); zero `self/native/*.c` are tracked on HEAD. The oracle here
+therefore REPLAYS the proof: the hand-written baseline is restored from the pre-deletion parent
+commit `151c52c82502e93d01735c58b43b017d102fee63:self/native/<mod>.c`, then
+`self/native/<mod>_byte_diff.hexa` runs against a tree containing that restored baseline. All four
+report `sha256(emitter output) == sha256(historical authored .c)`, 3/3 checks, PASS. The restored
+`.c` files are NOT re-committed (main stays .c-zero). Verdict files carry the raw stdout verbatim.
+
+Finding: the emitter (`<mod>_emit.hexa`, the SSOT) still reproduces each graduated baseline
+byte-for-byte — i.e. the #2065 retirement was sound and remains reproducible; these 206 LOC are
+confirmed emitter-superseded, no behavioural drift since graduation.
+
+Toolchain: oracles invoked via `HEXA_HAL_ROOT=<tree-with-restored-.c> hexa-run self/native/<mod>_byte_diff.hexa`.
+
 ## 2026-06-03 · INVENTORY + first port (milestone 1)
 
 ### INVENTORY (reachable repos only — host `mini`)
