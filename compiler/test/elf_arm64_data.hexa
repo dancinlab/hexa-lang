@@ -1,0 +1,208 @@
+// compiler/test/elf_arm64_data.hexa
+//
+// SELFHOST-NEXT / SELFHOST-CI M3 verification harness — exercises the
+// AArch64 PAGE-RELATIVE data-ref path of the in-tree ELF arm64 serializer
+// (`compiler/emit/elf_arm64.hexa`), the arm64 counterpart of
+// compiler/test/elf_x86_64_data.hexa:
+//   * a `.rodata` string literal (`.LCstr0`) referenced via the
+//     ADRP/ADD page pair,
+//   * a `.data` module-global slot (`g0`) referenced via the same pair,
+//   * the matching reloc PAIR — R_AARCH64_ADR_PREL_PG_HI21 (#275, ADRP)
+//     + R_AARCH64_ADD_ABS_LO12_NC (#277, ADD low-12) — emitted by the
+//     pack_lir_arm64_elf walker (merged #2562).
+//
+// Three LModules are built by hand:
+//   (A) "data" — a `main` that ADRP/ADD `.LCstr0` into x1 and ADRP/ADD
+//       `g0` into x2, then returns. Drives the page-reloc PAIR against
+//       BOTH .rodata and .data. `readelf -r` shows
+//       R_AARCH64_ADR_PREL_PG_HI21 + R_AARCH64_ADD_ABS_LO12_NC vs each.
+//   (B) "exit7" — a text-only `main` (mov x0,#7; ret) baseline: NO
+//       .rodata/.data, no page reloc — the pre-data text path.
+//   (C) "start" — a runnable freestanding `_start`: ADRP/ADD `.LCstr0`
+//       to compute the string address page-relatively, write(1,str,3),
+//       exit(7). Linkable with -nostdlib and runnable under
+//       qemu-aarch64-static; proves the page-reloc pair RESOLVES to the
+//       right runtime address (the string is actually printed).
+//
+// Output is written to the relative dir `out_elfa64/` under the process
+// cwd (relative — no machine-absolute path, so no_hardcode_lint passes).
+//
+// Run:  mkdir -p out_elfa64 && hexa run compiler/test/elf_arm64_data.hexa
+
+import "../ir/lir.hexa"               // LFunc / LModule / LSection / PReg / LInstr / LOperand
+import "../emit/macho_arm64.hexa"     // encode_arm64_insn + LIR helpers
+import "../emit/elf_x86_64.hexa"      // shared ELF64 primitives (_ew_*, ElfRel/Sym)
+import "../emit/elf_arm64.hexa"       // the unit under test
+
+fn _areg(name: string) -> PReg {
+    return PReg { name: name, kind: "gpr", frag_role: "", frag_dtype: "", frag_layout: "" }
+}
+fn _aop_reg(name: string) -> LOperand {
+    return LOperand { kind: "reg", reg: _areg(name), imm: 0,
+                      mem_base: _areg(""), mem_offset: 0, label: "" }
+}
+fn _aop_imm(v: i64) -> LOperand {
+    return LOperand { kind: "imm", reg: _areg(""), imm: v,
+                      mem_base: _areg(""), mem_offset: 0, label: "" }
+}
+fn _aop_label(name: string) -> LOperand {
+    return LOperand { kind: "label", reg: _areg(""), imm: 0,
+                      mem_base: _areg(""), mem_offset: 0, label: name }
+}
+fn _ains(op: string, args: [LOperand]) -> LInstr {
+    return LInstr { op: op, args: args, comment: "" }
+}
+fn _anyb(n: i64) -> string {
+    if n < 10 { return to_string(n) }
+    if n == 10 { return "a" }
+    if n == 11 { return "b" }
+    if n == 12 { return "c" }
+    if n == 13 { return "d" }
+    if n == 14 { return "e" }
+    return "f"
+}
+fn _ahex(bytes: [Int]) -> string {
+    let mut s = ""
+    let mut i = 0
+    while i < len(bytes) {
+        let b = bytes[i] & 0xff
+        s = s + _anyb((b >> 4) & 0xf) + _anyb(b & 0xf) + " "
+        i = i + 1
+    }
+    return s
+}
+
+fn main() {
+    let dir = "out_elfa64"
+
+    // ── (A) page-relative data-ref module ────────────────────────
+    // main:
+    //   adrp x1, .LCstr0@PAGE       (R_AARCH64_ADR_PREL_PG_HI21 vs .rodata)
+    //   add  x1, x1, .LCstr0@PAGEOFF(R_AARCH64_ADD_ABS_LO12_NC  vs .rodata)
+    //   adrp x2, g0@PAGE            (R_AARCH64_ADR_PREL_PG_HI21 vs .data)
+    //   add  x2, x2, g0@PAGEOFF     (R_AARCH64_ADD_ABS_LO12_NC  vs .data)
+    //   ret
+    let fa = LFunc {
+        name:         "main",
+        target:       "arm64-linux-gnu",
+        instrs:       [
+            _ains("adrp", [_aop_reg("x1"), _aop_label(".LCstr0@PAGE")]),
+            _ains("add",  [_aop_reg("x1"), _aop_reg("x1"), _aop_label(".LCstr0@PAGEOFF")]),
+            _ains("adrp", [_aop_reg("x2"), _aop_label("g0@PAGE")]),
+            _ains("add",  [_aop_reg("x2"), _aop_reg("x2"), _aop_label("g0@PAGEOFF")]),
+            _ains("ret", [])
+        ],
+        frame_size:   0,
+        callee_saved: [],
+        def_line:     0
+    }
+    // .rodata literal `.LCstr0` = "hi\0" → hex 68 69 00.
+    let ro = LSection { name: ".LCstr0", bytes: "686900", align: 1 }
+    let lm_a = LModule {
+        file:    "elfa64_data.hexa",
+        target:  "arm64-linux-gnu",
+        funcs:   [fa],
+        rodata:  [ro],
+        bss:     [],
+        globals: ["g0"],
+        floats:  []
+    }
+    let obj_a = pack_lir_arm64_elf(lm_a)
+    let bytes_a = serialize_elf_arm64(obj_a)
+    let path_a = dir + "/hexa_elf_arm64_data.o"
+    write_bytes(path_a, bytes_a)
+    println("elf_arm64_data(A): wrote " + to_string(len(bytes_a)) + " bytes to " + path_a)
+    println("  .text bytes = " + to_string(len(obj_a.text)))
+    println("  .rodata     = " + to_string(len(obj_a.rodata)))
+    println("  .data       = " + to_string(len(obj_a.data)))
+    println("  symbols     = " + to_string(len(obj_a.symbols)))
+    println("  nlocal      = " + to_string(obj_a.nlocal))
+    println("  relocs      = " + to_string(len(obj_a.relocs)))
+    println("  .text hex   = " + _ahex(obj_a.text))
+
+    // ── (B) text-only baseline — exit(7) ─────────────────────────
+    // main: mov x0,#7 ; ret  → crt1 turns x0 into rc. No page reloc.
+    let fb = LFunc {
+        name:         "main",
+        target:       "arm64-linux-gnu",
+        instrs:       [
+            _ains("mov", [_aop_reg("x0"), _aop_imm(7)]),
+            _ains("ret", [])
+        ],
+        frame_size:   0,
+        callee_saved: [],
+        def_line:     0
+    }
+    let lm_b = LModule {
+        file:    "elfa64_exit7.hexa",
+        target:  "arm64-linux-gnu",
+        funcs:   [fb],
+        rodata:  [],
+        bss:     [],
+        globals: [],
+        floats:  []
+    }
+    let obj_b = pack_lir_arm64_elf(lm_b)
+    let bytes_b = serialize_elf_arm64(obj_b)
+    let path_b = dir + "/hexa_elf_arm64_exit7.o"
+    write_bytes(path_b, bytes_b)
+    println("elf_arm64_data(B): wrote " + to_string(len(bytes_b)) + " bytes to " + path_b)
+    println("  .text bytes = " + to_string(len(obj_b.text)))
+    println("  nlocal      = " + to_string(obj_b.nlocal))
+    println("  relocs      = " + to_string(len(obj_b.relocs)))
+    println("  .text hex   = " + _ahex(obj_b.text))
+
+    // ── (C) runnable freestanding `_start` — write(1,.LCstr0,3)+exit(7) ─
+    // Proves the ADRP/ADD page reloc PAIR resolves to the right runtime
+    // address (the string is actually printed). Linux AArch64 syscalls:
+    // write=64, exit=93.
+    //   adrp x1, .LCstr0@PAGE        (page-rel — R_AARCH64_ADR_PREL_PG_HI21)
+    //   add  x1, x1, .LCstr0@PAGEOFF (low-12   — R_AARCH64_ADD_ABS_LO12_NC)
+    //   mov  x0, #1                  (fd=stdout)
+    //   mov  x2, #3                  (len "hi\n")
+    //   mov  x8, #64                 (__NR_write)
+    //   svc  #0
+    //   mov  x0, #7                  (rc)
+    //   mov  x8, #93                 (__NR_exit)
+    //   svc  #0
+    let fc = LFunc {
+        name:         "_start",
+        target:       "arm64-linux-gnu",
+        instrs:       [
+            _ains("adrp", [_aop_reg("x1"), _aop_label(".LCstr0@PAGE")]),
+            _ains("add",  [_aop_reg("x1"), _aop_reg("x1"), _aop_label(".LCstr0@PAGEOFF")]),
+            _ains("mov",  [_aop_reg("x0"), _aop_imm(1)]),
+            _ains("mov",  [_aop_reg("x2"), _aop_imm(3)]),
+            _ains("mov",  [_aop_reg("x8"), _aop_imm(64)]),
+            _ains("svc",  [_aop_imm(0)]),
+            _ains("mov",  [_aop_reg("x0"), _aop_imm(7)]),
+            _ains("mov",  [_aop_reg("x8"), _aop_imm(93)]),
+            _ains("svc",  [_aop_imm(0)])
+        ],
+        frame_size:   0,
+        callee_saved: [],
+        def_line:     0
+    }
+    // "hi\n\0" → 68 69 0a 00.
+    let ro_c = LSection { name: ".LCstr0", bytes: "68690a00", align: 1 }
+    let lm_c = LModule {
+        file:    "elfa64_start.hexa",
+        target:  "arm64-linux-gnu",
+        funcs:   [fc],
+        rodata:  [ro_c],
+        bss:     [],
+        globals: [],
+        floats:  []
+    }
+    let obj_c = pack_lir_arm64_elf(lm_c)
+    let bytes_c = serialize_elf_arm64(obj_c)
+    let path_c = dir + "/hexa_elf_arm64_start.o"
+    write_bytes(path_c, bytes_c)
+    println("elf_arm64_data(C): wrote " + to_string(len(bytes_c)) + " bytes to " + path_c)
+    println("  .text bytes = " + to_string(len(obj_c.text)))
+    println("  .rodata     = " + to_string(len(obj_c.rodata)))
+    println("  symbols     = " + to_string(len(obj_c.symbols)))
+    println("  nlocal      = " + to_string(obj_c.nlocal))
+    println("  relocs      = " + to_string(len(obj_c.relocs)))
+    println("  .text hex   = " + _ahex(obj_c.text))
+}
