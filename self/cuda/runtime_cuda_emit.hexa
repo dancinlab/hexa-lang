@@ -92,6 +92,12 @@ fn emit_runtime_cuda_c() -> str {
             "static _CudaFarrSlot* g_slots     = NULL;\n" +
             "static int64_t        g_slot_cap  = 0;\n" +
             "\n" +
+            "/* Forward declarations — these static helpers are defined further down but\n" +
+            " * called earlier (e.g. by _hx_cuda_farr_im2col_gpu); nvcc -x cu compiles as\n" +
+            " * C++ which requires a prior declaration. */\n" +
+            "static int _ensure_dev_alloc_out(int64_t out_id, int64_t need_len);\n" +
+            "static int _d2h_out(int64_t out_id, int64_t copy_len);\n" +
+            "\n" +
             "static int _ensure_slot_cap(int64_t id) {\n" +
             "    if (id < 0) return -1;\n" +
             "    if (id < g_slot_cap) return 0;\n" +
