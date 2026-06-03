@@ -1,0 +1,35 @@
+# selfhost-gates-summary — the SINGLE always-on required check for SELFHOST-CI.
+#
+# Unlike the six path-filtered gate workflows (which can NOT be required without
+# deadlocking PRs that don't touch self/** | compiler/**), this workflow runs on
+# EVERY pull_request with NO path filter, so it ALWAYS reports a status and is
+# safe to mark as a required branch-protection check. It enforces the hermetic
+# shim-integrity gate (real on any host) + gate-script presence/syntax, and
+# upgrades to inline native-emit enforcement on a SELFHOST_SLOT_READY runner.
+name: selfhost-gates-summary
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: selfhost-gates-summary-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  selfhost-gates-summary:
+    name: selfhost-gates-summary
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      SELFHOST_SLOT_READY: ${{ vars.SELFHOST_SLOT_READY || '0' }}
+    steps:
+      - uses: actions/checkout@v6
+      - name: selfhost gates summary (always-on required aggregator)
+        shell: bash
+        run: bash tool/selfhost_gates_summary.sh
