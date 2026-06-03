@@ -1517,6 +1517,95 @@ fn main() {
     fails = fails + _cell("list-shelf/missing-domain", entry, swift_bin, shenv,
                           "list-shelf ghostdom", g_ls_miss, 0)
 
+    // ── PR#14 operate cells — `operate [list|audit]` renders the
+    // OperationRegistry manifest (operation_registry.hexa) + the owner-mode
+    // gate, byte-for-byte against the Swift `operate` reference. The manifest
+    // is static data (no env/path), so the goldens are machine-independent —
+    // owner visibility flips on DEMIURGE_OWNER / --owner, expert bracket flips
+    // on DEMIURGE_EXPERT. Goldens captured byte-for-byte from Swift DemiurgeCLI
+    // 2026-06-04. Covers: list (external-plain · owner-plain · expert ·
+    // owner-expert · owner-via-env), bare→list default, audit (complete), and
+    // the unknown-subcommand stderr+rc=2 path.
+    let g_op_ladder = "8-verb ladder: 0/8 discover → 1/8 specify → 2/8 structure → "
+        + "3/8 design → 4/8 analyze⟲ → 5/8 synthesize → 6/8 verify → 7/8 handoff\n\n"
+    // product section (plain) — 12 rows, all ✅.
+    let g_op_product_plain = "🛒 진열대 (external) — 12:\n"
+        + "  ✅ 프로젝트 생성·목록·전환·삭제\n"
+        + "  ✅ 7단계 앞/뒤 이동\n"
+        + "  ✅ spec 입력 (재료 선반)\n"
+        + "  ✅ structure 구조 분해 뷰\n"
+        + "  ✅ design 옵션 선택\n"
+        + "  ✅ analyze ⟲ 수렴 runner\n"
+        + "  ✅ synthesize 실행 (engine)\n"
+        + "  ✅ verify (5-tier 검증)\n"
+        + "  ✅ record·gate 열람\n"
+        + "  ✅ 결과 export (usd/stl/record)\n"
+        + "  ✅ atlas 조회 (읽기)\n"
+        + "  ✅ compute 백엔드 선택 (로컬/원격)\n\n"
+    // owner section (plain) — 5 rows, all 🔶.
+    let g_op_owner_plain = "🔒 사장실 (owner) — 5:\n"
+        + "  🔶 pool → 내 호스트 라우팅\n"
+        + "  🔶 inbox/patches → hexa-lang 핸드오프\n"
+        + "  🔶 atlas 등록 PR → dancinlab\n"
+        + "  🔶 @D 거버넌스 enforcement\n"
+        + "  🔶 내 연구 domain <NAME>.md 운영\n\n"
+    let g_op_hidden = "(🔒 owner ops hidden — set DEMIURGE_OWNER or pass --owner)\n"
+    // expert brackets — "  <glyph> <id>  [<target> · <verb> · <milestone>]  <title>".
+    let g_op_product_expert = "🛒 진열대 (external) — 12:\n"
+        + "  ✅ project  [swift · specify · M15]  프로젝트 생성·목록·전환·삭제\n"
+        + "  ✅ verb-nav  [swift · — · M15]  7단계 앞/뒤 이동\n"
+        + "  ✅ spec-capture  [swift · specify · M15]  spec 입력 (재료 선반)\n"
+        + "  ✅ structure-view  [swift · structure · M15]  structure 구조 분해 뷰\n"
+        + "  ✅ design-pick  [swift · design · M15]  design 옵션 선택\n"
+        + "  ✅ analyze-loop  [swift · analyze · M15]  analyze ⟲ 수렴 runner\n"
+        + "  ✅ synthesize-run  [swift · synthesize · M15]  synthesize 실행 (engine)\n"
+        + "  ✅ verify  [hexa · verify · M16]  verify (5-tier 검증)\n"
+        + "  ✅ record-view  [swift · verify · M15]  record·gate 열람\n"
+        + "  ✅ export  [swift · handoff · M15]  결과 export (usd/stl/record)\n"
+        + "  ✅ atlas-lookup  [hexa · verify · M16]  atlas 조회 (읽기)\n"
+        + "  ✅ compute-backend  [substrate · synthesize · M17]  compute 백엔드 선택 (로컬/원격)\n\n"
+    let g_op_owner_expert = "🔒 사장실 (owner) — 5:\n"
+        + "  🔶 pool-route  [substrate · synthesize · M20]  pool → 내 호스트 라우팅\n"
+        + "  🔶 inbox-handoff  [substrate · handoff · M20]  inbox/patches → hexa-lang 핸드오프\n"
+        + "  🔶 atlas-register  [substrate · verify · M20]  atlas 등록 PR → dancinlab\n"
+        + "  🔶 governance  [swift · — · M20]  @D 거버넌스 enforcement\n"
+        + "  🔶 owner-domain  [swift · specify · M20]  내 연구 domain <NAME>.md 운영\n\n"
+
+    // (1) list — external (no owner): product + hidden-hint, owner section gone.
+    let g_op_list_ext = g_op_ladder + g_op_product_plain + g_op_hidden
+    fails = fails + _cell("operate/list-external-plain", entry, swift_bin, "",
+                          "operate list", g_op_list_ext, 0)
+    // (2) bare `operate` → defaults to list (Swift `first(where:) ?? "list"`).
+    fails = fails + _cell("operate/bare-defaults-list", entry, swift_bin, "",
+                          "operate", g_op_list_ext, 0)
+    // (3) list --owner — owner section appears, NO hidden-hint.
+    let g_op_list_owner = g_op_ladder + g_op_product_plain + g_op_owner_plain
+    fails = fails + _cell("operate/list-owner-flag-plain", entry, swift_bin, "",
+                          "operate list --owner", g_op_list_owner, 0)
+    // (4) DEMIURGE_OWNER env unlocks the owner section without the flag.
+    fails = fails + _cell("operate/list-owner-env-plain", entry, swift_bin,
+                          "DEMIURGE_OWNER=1", "operate list", g_op_list_owner, 0)
+    // (5) expert register — external bracket form + hidden-hint.
+    let g_op_list_expert = g_op_ladder + g_op_product_expert + g_op_hidden
+    fails = fails + _cell("operate/list-expert-external", entry, swift_bin,
+                          "DEMIURGE_EXPERT=1", "operate list", g_op_list_expert, 0)
+    // (6) expert + owner — both sections in bracket form, no hidden-hint.
+    let g_op_list_expert_owner = g_op_ladder + g_op_product_expert + g_op_owner_expert
+    fails = fails + _cell("operate/list-expert-owner", entry, swift_bin,
+                          "DEMIURGE_EXPERT=1", "operate list --owner",
+                          g_op_list_expert_owner, 0)
+    // (7) audit — all product ✅ → COMPLETE verdict, rc 0 (owner-gate irrelevant).
+    let g_op_audit = "operability audit (CLI+COCKPIT M21):\n"
+        + "  product: 12 ✅ · 0 🔶 · 0 ❌  (of 12)\n"
+        + "  owner:   5 🔒 (env-gated)\n"
+        + "  verdict: ✅ external operability COMPLETE — @goal met\n"
+    fails = fails + _cell("operate/audit-complete", entry, swift_bin, "",
+                          "operate audit", g_op_audit, 0)
+    // (8) unknown subcommand → stderr line + rc 2 (Swift default arm).
+    let g_op_unknown = "operate: unknown subcommand 'badsub' — use list | audit\n"
+    fails = fails + _cell("operate/unknown-subcommand", entry, swift_bin, "",
+                          "operate badsub", g_op_unknown, 2)
+
     if fails == 0 { println("demi_parity_selftest PASS") }
     else { println("demi_parity_selftest FAIL — " + to_string(fails) + " cell(s)") }
 }
