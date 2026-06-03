@@ -1,0 +1,36 @@
+C-ZERO shim — gpu_codegen_stub byte-equality oracle verdict (2026-06-03)
+context: self/native/gpu_codegen_stub.c graduated in ec290df94 (#1879). baseline from
+  ec290df94^:self/native/gpu_codegen_stub.c (264 LOC). harness run on mini. .c NOT re-committed.
+oracle: HEXA_HAL_ROOT=<tree> hexa-run self/native/gpu_codegen_stub_byte_diff.hexa
+raw stdout (verbatim):
+------------------------------------------------------------------------
+========================================================================
+  self/native — gpu_codegen_stub_byte_diff: B9.C-9 .c-text byte-diff oracle
+========================================================================
+  generator: self/native/gpu_codegen_stub_emit.hexa
+  oracle:    cc + otool byte-diff vs hand-written gpu_codegen_stub.c
+  gates:     source-text · whole-file .o (no -g) · __text section (with -g)
+
+  scratch: /var/folders/pg/76j9wlc94l13bb2mwp2szvgh0000gn/T/gpu_codegen_stub_byte_diff.XXXXXX.mwKV1iT4cg
+
+  [PASS] hexa emitter self/native/gpu_codegen_stub_emit.hexa present
+         · /tmp/cz-gpu2/self/native/gpu_codegen_stub_emit.hexa
+  [PASS] hand-written self/native/gpu_codegen_stub.c present
+         · /tmp/cz-gpu2/self/native/gpu_codegen_stub.c
+  [PASS] gate-1 source-text byte-identical (sha256(.c))
+         · orig=4ebe1bc1d652b52991ba8161180a1500fc7156496230818d9d6f31cdfcb6b32f gen=4ebe1bc1d652b52991ba8161180a1500fc7156496230818d9d6f31cdfcb6b32f
+  [PASS] cc + otool present (Mac host toolchain)
+         · cc=y otool=y
+  [PASS] gate-2 whole-file .o byte-identical (no -g)
+         · orig=b8d436913ae0dfa8f790d64a36ce6ee5762bb4379baddb7c6d4a60a5b167bb33 gen=b8d436913ae0dfa8f790d64a36ce6ee5762bb4379baddb7c6d4a60a5b167bb33
+  [PASS] gate-3 __TEXT,__text section byte-identical (with -g)
+         · orig=f252ad25bd2184f76a4fae90b34970308d7a0217a5680809b941f103d3759ca2 gen=f252ad25bd2184f76a4fae90b34970308d7a0217a5680809b941f103d3759ca2
+
+  B9.C-9 gpu_codegen_stub.c .c-text byte-identity:
+    PROVEN ✓ — hand-written gpu_codegen_stub.c is fully hexa-emittable.
+    DELETION GATE OPEN — self/native/gpu_codegen_stub.c may be `git rm`.
+========================================================================
+  6/6 checks passed
+__HEXA_LANG_GPU_CODEGEN_STUB_BYTE_DIFF__ PASS
+------------------------------------------------------------------------
+VERDICT: BYTE-EQ — emitter reproduces gpu_codegen_stub.c (6/6). Retirable (264 LOC).

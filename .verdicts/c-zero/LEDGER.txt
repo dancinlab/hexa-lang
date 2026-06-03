@@ -78,3 +78,40 @@ self-host build gate has been re-run this milestone (that gate stays as the fina
   Of the NON-hexa_cc, NON-GPU surface (the part C-ZERO actually owns and can prove on this
   host), the sweep is 100% complete (3946 / 3946). The remaining 89.4% is the two named,
   out-of-this-host blocks above — both explicitly attributed, neither closed nor faked.
+
+════════════════════════════════════════════════════════════════════════════
+5. GPU-SUBSTRATE UPDATE (2026-06-03, pool summer RTX 5070 — no rental)
+════════════════════════════════════════════════════════════════════════════
+The A3 "GPU host needed" block was re-run on pool host summer (RTX 5070 + nvcc).
+Plus two additional GPU-adjacent self/native shims discovered with byte_diff harnesses.
+
+  module             LOC   verdict                         proof
+  runtime_bf16       787   BYTE-EQ                         source-text + .o (6/6, mini CPU)
+  forge_tier_v1      343   RETIRABLE via .o-IDENTITY       gate-2/3 .o byte-eq; src cosmetic drift
+  lora_cuda_host     185   BYTE-EQ                         source-text (3/3, mini CPU)
+  gpu_codegen_stub   264   BYTE-EQ                         source-text + .o (6/6, mini CPU)
+  ──────────────────────────────────────────────────────────────────────────
+  GPU-substrate newly proven                    1579 LOC
+
+  runtime_cuda      3795   NOT-RETIRABLE-BY-BYTE-DIFF      emitter SSOT diverged from the only
+                                                           restorable baseline (#1884 3dd5b9c93^);
+                                                           gen=241KB vs baseline=145KB, newer
+                                                           F-CLM-DEVFEED content. orig nvcc-compiles
+                                                           (447968B .o on RTX 5070); gen trips nvcc
+                                                           on UTF-8 comment glyphs. .c already git-rm
+                                                           in #1884 — no tracked C to retire. Honest
+                                                           non-pass, not faked. See runtime_cuda.txt.
+
+════════════════════════════════════════════════════════════════════════════
+6. REVISED BURN-DOWN (2026-06-03)
+════════════════════════════════════════════════════════════════════════════
+  prior cumulative (16 A2 shims)               3946 LOC
+  GPU-substrate + adjacent (this update)       1579 LOC
+  ──────────────────────────────────────────────────────────────────────────
+  CUMULATIVE oracle-proven-retirable           5525 LOC
+
+  remaining-named:
+    runtime_cuda.c   3795  emitter live-SSOT, diverged from stale baseline (not byte-comparable)
+    hexa_cc.c       28482  NO emitter — HEXA-CC-ZERO-owned, out of C-ZERO scope
+  All authored GPU-substrate shims with a faithful (non-diverged) emitter are now proven; the only
+  GPU-substrate residual is runtime_cuda, an honestly-attributed live-SSOT divergence (not a fake pass).
