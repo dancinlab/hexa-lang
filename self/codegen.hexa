@@ -3483,6 +3483,22 @@ fn _gen2_stmt_inner(node, depth) {
 
     if k == "WhileStmt" {
         let mut chunks = []
+        // MISCOMPILE-ZERO (hexa-run-hang-diag, BUG 1): a plain immutable
+        // `let kk = 0` const-folds `kk → 0`; a `while kk < 4 { kk = kk + 1 }`
+        // then inlined the STALE literal into the CONDITION (`0 < 4`, always
+        // true) while the body incremented the live `kk` → non-terminating loop
+        // (the binary hangs, exit 124). The AssignStmt arm invalidates the fold,
+        // but it runs only when the body is emitted — AFTER the condition was
+        // already folded. Pre-invalidate the fold for every name the loop body
+        // reassigns BEFORE emitting the condition so the cond reads the live
+        // variable. (The for-range arm avoids this via its counter-only fold
+        // invalidate; while loops have no implicit counter, so do it explicitly.)
+        let _w_assigned = _gen2_collect_assigned(node.body, [])
+        let mut _wai = 0
+        while _wai < len(_w_assigned) {
+            _invalidate_comptime_const(_w_assigned[_wai])
+            _wai = _wai + 1
+        }
         // C2 (while-cond specialize): when the condition is a comparison
         // expression, emit a direct C boolean instead of wrapping through
         // hexa_truthy(hexa_cmp_*(...)) — saves tag-check + unbox per iteration.
@@ -10020,10 +10036,26 @@ fn _comptime_const_scope_restore(mark) {
     // Rebuild both parallel arrays to length `mark` using index+push only
     // (the most portable in-place truncation across compiled-binary vintages —
     // avoids relying on .slice / .truncate codegen branches).
+    //
+    // MISCOMPILE-ZERO (hexa-run-hang-diag): the mark assumes the table only
+    // GREW under it, but a body that reassigns an OUTER-scope folded `let`
+    // (e.g. `let s = 0; for j in 0..n { s = s + 1 }`) calls
+    // _invalidate_comptime_const("s") from inside the loop body — that drops an
+    // entry recorded BELOW the mark, so the live table is now SHORTER than
+    // `mark`. The old `while i < mark` then read `_comptime_const_names[mark-1]`
+    // past the live tail → `index 0 out of bounds (len 0)` (the C transpiler
+    // aborting on its own bounds check, no .c produced → `hexa run` hangs at the
+    // failed-build retry). Clamp the truncation target to the live length: an
+    // entry invalidated inside the scope is STALE and must stay dropped (re-
+    // adding it would inline a reassigned binding's old literal = a miscompile),
+    // so min(mark, len) is the correct floor.
+    let mut _lim = mark
+    let _live = len(_comptime_const_names)
+    if _live < _lim { _lim = _live }
     let mut _names = []
     let mut _nodes = []
     let mut i = 0
-    while i < mark {
+    while i < _lim {
         _names.push(_comptime_const_names[i])
         _nodes.push(_comptime_const_nodes[i])
         i = i + 1

@@ -1,0 +1,37 @@
+// m9_while_cond_fold_reassign.hexa — CLASS: comptime-const fold leaking the
+// STALE initializer of a plain `let` into a WHILE CONDITION that the loop body
+// reassigns.
+// History (MISCOMPILE-ZERO hexa-run-hang-diag, BUG 1):
+//   `let kk = 0; while kk < 4 { kk = kk + 1 }` const-folded `kk -> 0` and
+//   inlined it into the condition (`0 < 4`, always true) while the body
+//   incremented the live `kk` -> NON-TERMINATING loop (binary hung, exit 124).
+//   Fix: the WhileStmt arm pre-invalidates the comptime-const fold for every
+//   name the loop body reassigns BEFORE emitting the condition, so the cond
+//   reads the live variable. A fold of a non-reassigned `let limit` is kept.
+//
+// Behavioral contract: exit 0 = every while loop TERMINATES with the right
+// counter value. A re-regression would hang (no rc) on the reassigned-counter
+// cases. NOTE: this test asserts VALUE; if the fix regresses to an infinite
+// loop the runner's run step never returns rc=0.
+
+fn count_to(n: i64) -> i64 {
+    let kk = 0          // plain immutable let -> folded, then reassigned below
+    while kk < 4 {
+        kk = kk + 1
+    }
+    return kk
+}
+
+fn folded_limit(n: i64) -> i64 {
+    let limit = 3       // folded const — NOT reassigned, must stay folded
+    let mut c = 0
+    while c < limit {
+        c = c + 1
+    }
+    return c
+}
+
+if count_to(0) != 4     { exit(71) }   // reassigned counter in cond
+if folded_limit(0) != 3 { exit(72) }   // non-reassigned folded limit still works
+
+println("WHILE-COND-FOLD-OK")

@@ -1,0 +1,90 @@
+MISCOMPILE-ZERO · HEXA-RUN-HANG-DIAG
+====================================
+Date:    2026-06-04
+Branch:  mczero/hexa-run-hang-diag
+Trigger: cross-repo C-PORT campaign (anima cport/training-next @d9a7291ce)
+Repros:  training/native/repro/hexa_while_hang.hexa     (12 lines, while hang)
+         training/native/repro/hexa_nestfor_parsecrash.hexa (21 lines, parse crash)
+Tool:    installed ~/.hx/bin/hexa (0.1.0-dispatch) → build/hexat (gen2 C transpiler,
+         self-hosted from self/codegen.hexa)
+
+CLASSIFICATION
+--------------
+Both repros: (A) real compiler bug with a clean, low-risk fix. FIXED.
+The two surface symptoms are the SAME root-cause family (comptime-const fold of a
+plain immutable `let` that is reassigned inside a loop), so ONE diagnosis covers both.
+
+PER-REPRO
+---------
+[1] hexa_while_hang.hexa  — HANG CONFIRMED (>45s, 0 stdout; timeout-guarded, killed).
+    Not infinite-in-source: `let kk=0; while kk<4 { kk=kk+1 }` should print kk=4.
+    ROOT CAUSE: self/codegen.hexa WhileStmt arm (was ~L3484). A plain `let kk=0`
+    registers a comptime-const fold kk→0 (PROBE r11 B3). The While arm emitted the
+    condition via _gen2_while_cond(node.cond) WITHOUT invalidating the fold for
+    body-reassigned names, so the cond inlined the STALE literal:
+        while (HX_BOOL(hexa_cmp_lt( {TAG_INT,.i=0}, {TAG_INT,.i=4} )))   // 0<4, always true
+    while the body correctly incremented the live kk → NON-TERMINATING loop.
+    The AssignStmt arm DOES invalidate the fold, but only when the body is emitted,
+    i.e. AFTER the condition was already folded.
+    FIX: WhileStmt pre-invalidates the comptime-const fold for every name the loop
+    body reassigns (via _gen2_collect_assigned) BEFORE emitting the condition.
+    Generated cond after fix:  while (HX_BOOL(hexa_cmp_lt(kk, {TAG_INT,.i=4})))
+
+[2] hexa_nestfor_parsecrash.hexa — PARSE/TRANSPILE CRASH CONFIRMED.
+    Error (verbatim): `index 0 out of bounds (len 0)` from build/hexat → NO .c file
+    produced → `hexa run` then HANGS on the failed-build retry path.
+    The repro's "double-for / flat-for parse cleanly" note is INACCURATE: reduction
+    shows the trigger is NOT nesting depth nor floats. Minimal trigger (5 lines):
+        fn main() { let s = 0; for j in 0..2 { s = s + 1 } }   // CRASH
+    Contrast (all OK): assign in an `if` (not a loop); assign AFTER the loop; `let mut`;
+    `let` read-only in the loop; assign at the same scope as the `let`.
+    Exact trigger: a plain (non-`mut`) `let` declared in an enclosing scope and
+    ASSIGNED from inside a loop body (for OR while; if-inside-for also triggers).
+    ROOT CAUSE: self/codegen.hexa _comptime_const_scope_restore (was ~L10019).
+    The for-range arm does _comptime_const_scope_mark() (snapshots table length),
+    emits the body, then _comptime_const_scope_restore(mark). The body's AssignStmt
+    calls _invalidate_comptime_const("s") on an entry recorded BELOW the mark,
+    shrinking the live table; restore's `while i < mark` then read
+    _comptime_const_names[mark-1] past the live tail → the transpiler's OWN array
+    bounds check fired. (The hazard is documented verbatim at codegen.hexa ~L2066:
+    "invalidating AFTER mark would leave it reading past the live tail (OOB)".)
+    FIX: clamp restore to min(mark, live-len). An entry invalidated inside the scope
+    is STALE and must stay dropped (re-adding it would inline a reassigned binding's
+    old literal = a miscompile), so the clamp is correctness-preserving.
+
+FIX (2 commits, self/codegen.hexa only)
+---------------------------------------
+  bc6957051  _comptime_const_scope_restore → clamp to min(mark, live-len)   [crash]
+  c46a58f37  WhileStmt → pre-invalidate fold for body-reassigned names       [hang]
+
+VERIFICATION (real run — patched hexat built from patched codegen + clang + execute)
+------------------------------------------------------------------------------------
+Patched hexat built by re-transpiling self/codegen.hexa (build/hexat) → merge
+(install awk pipeline) → clang → link runtime.o.
+  while_hang   :  prints `kk=4`        exit 0   (was: hang/timeout)
+  nestfor      :  prints `2.0`×4       exit 0   (was: transpile crash, no .c)
+  m8 corpus    :  FOLD-LOOP-REASSIGN-OK exit 0  (OLD hexat: `index 0 out of bounds`)
+  m9 corpus    :  WHILE-COND-FOLD-OK   exit 0   (OLD hexat: `while 0<4` infinite)
+Regression-safe (still optimized correctly):
+  let x=10; let y=x+5; print(y)              → 15   (const-fold intact)
+  let limit=3; while c<limit {…}             → 3    (non-reassigned fold KEPT)
+  nested while accumulator                    → 6
+generated while cond reads live var (not folded literal): confirmed in emitted C.
+
+CORPUS ADDED
+------------
+  self/test/miscompile_class/m8_comptime_fold_loop_reassign.hexa
+  self/test/miscompile_class/m9_while_cond_fold_reassign.hexa
+Both are genuine regression catchers (crash/hang on OLD hexat, exit 0 on patched).
+
+BYTE-EQ / GHOST GATE
+--------------------
+FLAG: the fix edits self/codegen.hexa (gen2 codegen SSOT). The full self-host
+rebuild + byte-eq parity (selfhost-gates-summary / ghost byte-eq gate) is the
+parent's required-check merge gate — local proof here is functional (transpile→
+clang→run), NOT a full bootstrap fixpoint. Parent merges on the required check.
+
+avoided-ghost: yes — all local hexa runs were timeout-guarded (≤90s; while_hang
+killed at 45s, never allowed the 44min runaway). One hexat at a time, no fork-storm.
+
+HEAD: c46a58f37ea987223059bcbf7a8d9f00dbb013a5
