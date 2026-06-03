@@ -1,0 +1,98 @@
+SELFHOST-CI milestone 6 — DETERMINISM re-confirm (gen3 DEFAULT promoted path)
+============================================================================
+
+CLAIM
+  Emitting the same source twice through the gen3 DEFAULT path (the promoted
+  hx-selfhost-cli compile route — graduated gen3 + hexa_ld + rt.o) produces
+  BYTE-IDENTICAL objects, AND relinking the same object twice (same output
+  basename in two dirs, isolating the path-derived build-id) is BYTE-IDENTICAL.
+  No embedded timestamp / random UUID / unstable-sort / hashmap-iteration leak.
+
+METHOD
+  tool/determinism_gate.sh, EXTENDED to auto-discover the graduated gen3 slot
+  $HX_HOME/self/native/selfhost/{gen3,hexa_ld,rt.o} (the same slot the
+  promote-parity / byte-eq sister gates use) and drive:
+    PHASE 1  gen3 --emit=obj each corpus program TWICE -> cmp byte-identical
+    PHASE 2  hexa_ld -o out prog.o rt.o --lc-main _main TWICE (same basename,
+             two dirs) -> cmp byte-identical
+  Corpus: self/test/miscompile_zero/*.hexa (12 programs).
+  This is the REAL gen3 promoted link route (rt.o appended + --lc-main _main),
+  not the legacy standalone hld_fixed bootstrap link.
+
+HOST
+  ghost (macOS arm64, 192.168.50.150) — the graduated gen3 self-host slot.
+  slot: /Users/ghost/.hx/self/native/selfhost  (gen3 1,963,104 bytes)
+
+============================================================================
+RAW STDOUT (verbatim) — bash tool/determinism_gate.sh ; echo GATE_EXIT=$?
+============================================================================
+── determinism gate ──────────────────────────────────────────────
+  compiler : /Users/ghost/.hx/self/native/selfhost/gen3 _drv.hexa
+  linker   : /Users/ghost/.hx/self/native/selfhost/hexa_ld  [gen3-slot]
+  rt.o     : /Users/ghost/.hx/self/native/selfhost/rt.o
+  slot     : /Users/ghost/.hx/self/native/selfhost  (gen3 DEFAULT promoted path)
+  target   : arm64-apple-darwin
+  corpus   : /Users/ghost/dancinlab/hexa-lang/self/test/miscompile_zero
+  out      : /Users/ghost/dancinlab/hexa-lang/build/determinism-gate-out
+──────────────────────────────────────────────────────────────────
+== PHASE 1 — re-emit (native --emit=obj twice, byte-identical) ==
+  PASS  c1_hex_literal         rcA=0 rcB=0 sz=1600 sha=1deae93c4eed
+  PASS  c10_try_catch          rcA=0 rcB=0 sz=2056 sha=e1b0d2967b63
+  PASS  c2_stack_locals        rcA=0 rcB=0 sz=1816 sha=365a0ef2023f
+  PASS  c3_struct_ctor         rcA=0 rcB=0 sz=2296 sha=e7437791d647
+  PASS  c4_f64_literal         rcA=0 rcB=0 sz=1576 sha=7664df777491
+  PASS  c5_multi_fn_alias      rcA=0 rcB=0 sz=2240 sha=612ccf0e7a04
+  PASS  c6_closures            rcA=0 rcB=0 sz=1408 sha=24498e6a2d78
+  PASS  c7_recursion_arrays    rcA=0 rcB=0 sz=3544 sha=6bdf7589511c
+  PASS  c8_string_methods      rcA=0 rcB=0 sz=2144 sha=c4f13bd82325
+  PASS  c9_match_control       rcA=0 rcB=0 sz=2320 sha=2ee863f1657f
+  PASS  g1_hex_corpus          rcA=0 rcB=0 sz=2584 sha=ef15a9bc0ac6
+  PASS  g2_stp_ldp_corpus      rcA=0 rcB=0 sz=2992 sha=17b0a20565d6
+== PHASE 2 — relink (hexa_ld twice, same basename, byte-identical) ==
+  PASS  c1_hex_literal         r1=0 r2=0 sz=376224 sha=3c592388da0e
+  PASS  c10_try_catch          r1=0 r2=0 sz=376176 sha=295894530c50
+  PASS  c2_stack_locals        r1=0 r2=0 sz=376192 sha=534b148ee4b8
+  PASS  c3_struct_ctor         r1=0 r2=0 sz=376192 sha=5b7320f68abd
+  PASS  c4_f64_literal         r1=0 r2=0 sz=376192 sha=d27b3f8b9dcb
+  PASS  c5_multi_fn_alias      r1=0 r2=0 sz=376240 sha=b3b92862e228
+  PASS  c6_closures            r1=0 r2=0 sz=376176 sha=3448bce4c227
+  PASS  c7_recursion_arrays    r1=0 r2=0 sz=376240 sha=3d4f85e84648
+  PASS  c8_string_methods      r1=0 r2=0 sz=376288 sha=e81aae30eff3
+  PASS  c9_match_control       r1=0 r2=0 sz=376208 sha=0340373208f5
+  PASS  g1_hex_corpus          r1=0 r2=0 sz=376352 sha=ba8c18ef1e3e
+  PASS  g2_stp_ldp_corpus      r1=0 r2=0 sz=376272 sha=a68fcd89bb28
+──────────────────────────────────────────────────────────────────
+determinism-gate: PASS — 12/12 programs re-emit AND relink byte-identically
+  (toolchain byte-determinism floor held).
+GATE_EXIT=0
+
+============================================================================
+EXPLICIT cmp — FIRSTDIFF proof (representative programs, both axes)
+============================================================================
+=== RE-EMIT cmp (A vs B) — FIRSTDIFF proof ===
+  c1_hex_literal: BYTE-EQ (FIRSTDIFF=0)
+  c7_recursion_arrays: BYTE-EQ (FIRSTDIFF=0)
+  g2_stp_ldp_corpus: BYTE-EQ (FIRSTDIFF=0)
+=== RELINK cmp (run1 vs run2) — FIRSTDIFF proof ===
+  c1_hex_literal: BYTE-EQ (FIRSTDIFF=0)
+  c7_recursion_arrays: BYTE-EQ (FIRSTDIFF=0)
+  g2_stp_ldp_corpus: BYTE-EQ (FIRSTDIFF=0)
+
+============================================================================
+RESULT
+  re-emit  : 12/12 BYTE-EQ (FIRSTDIFF=0)
+  relink   : 12/12 BYTE-EQ (FIRSTDIFF=0)
+  gen3 DEFAULT path: COVERED (CC=slot/gen3, linker=slot/hexa_ld + slot/rt.o
+                     + --lc-main _main — the promoted compile+link route)
+  gate exit: 0 (determinism floor held)
+
+CI WIRING
+  .github/workflows/selfhost-determinism-gate.yml — per-PR + push(main) check.
+  Discovers the graduated gen3 slot (SELFHOST_SLOT / HX_HOME / ~/.hx /
+  build/selfhost); when absent (hosted macos-latest carries no graduated gen3)
+  it remaps to NEUTRAL (::notice:: exit 0) — the SAME exit-2-neutral canary
+  discipline as #2600/#2605/#2607/#2608/#2609. NOT green-by-skip: the moment a
+  runner DOES hold a graduated gen3 slot, every leg runs REAL and a true
+  nondeterminism (two runs differ byte-for-byte) exits 1 and fails the PR. A
+  produced-but-different (true nondeterminism) is the only red; both-runs-fail
+  with no ENCODE-MISS is infra (exit 2 -> neutral).

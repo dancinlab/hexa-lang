@@ -34,8 +34,17 @@
 #   ANY byte diff (or nonzero compile/link rc) -> FAIL line + exit NONZERO.
 #
 # CONFIG (env, sane defaults for the proven ghost host)
-#   HEXA_NATIVE_CC   native self-hosted compiler driver (default: gen2_fix in
-#                    ~/dancinlab/selfhost-work, else `hexa` on PATH)
+#   SELFHOST_SLOT    graduated gen3 slot {gen3,hexa_ld,rt.o}. Auto-discovered
+#                    at $HX_HOME/self/native/selfhost, $HOME/.hx/self/native/
+#                    selfhost, or <repo>/build/selfhost — the DEFAULT promoted
+#                    self-host path (tool/promote_selfhost.sh). When found it
+#                    sets CC=gen3, the linker=hexa_ld, rt.o=slot/rt.o so the
+#                    determinism floor is measured on the gen3 DEFAULT route.
+#   HEXA_LD_RT       runtime object appended to each PHASE-2 link (default:
+#                    slot/rt.o on the gen3 path; empty on the legacy bootstrap).
+#   HEXA_NATIVE_CC   native self-hosted compiler driver — OVERRIDES the slot
+#                    (default: slot/gen3, else gen2_fix in ~/dancinlab/
+#                    selfhost-work, else `hexa` on PATH)
 #   HEXA_CC_PREARGS  args after $HEXA_NATIVE_CC, before the emit flags. gen2_fix
 #                    wants a driver-name placeholder ("_drv.hexa", the default);
 #                    a released ./hexa driver wants "run compiler/main.hexa".
@@ -83,16 +92,38 @@ if [ ! -d "$CORPUS" ]; then
   exit 2
 fi
 
+# ── locate the GRADUATED gen3 self-host slot (the DEFAULT promoted path) ──
+# The promoted route (tool/promote_selfhost.sh) installs the graduated native
+# compiler at $HX_HOME/self/native/selfhost/{gen3,hexa_ld,rt.o} — the SAME
+# slot the promote-parity / byte-eq sister gates use. THIS is the default
+# self-host compile route a user hits after promotion. We discover it first so
+# the determinism floor is measured on the gen3 DEFAULT path (gen3 + hexa_ld
+# + rt.o), not only the legacy gen2_fix/hld_fixed bootstrap. An explicit
+# SELFHOST_SLOT (or HX_HOME) wins; HEXA_NATIVE_CC / HEXA_LD still override.
+SLOT=""
+for cand in \
+  "${SELFHOST_SLOT:-}" \
+  "${HX_HOME:-}/self/native/selfhost" \
+  "$HOME/.hx/self/native/selfhost" \
+  "$REPO/build/selfhost"; do
+  [ -n "$cand" ] || continue
+  if [ -x "$cand/gen3" ] && [ -x "$cand/hexa_ld" ] && [ -s "$cand/rt.o" ]; then
+    SLOT="$cand"; break
+  fi
+done
+
 # ── locate the native self-hosted compiler ───────────────────────────────
 if [ -n "${HEXA_NATIVE_CC:-}" ]; then
   CC="$HEXA_NATIVE_CC"
+elif [ -n "$SLOT" ]; then
+  CC="$SLOT/gen3"                  # DEFAULT path: graduated gen3
 elif [ -x "$HOME/dancinlab/selfhost-work/gen2_fix" ]; then
   CC="$HOME/dancinlab/selfhost-work/gen2_fix"
 elif command -v hexa >/dev/null 2>&1; then
   CC="$(command -v hexa)"
 else
   echo "determinism-gate: SETUP ERROR — no native compiler." >&2
-  echo "  set HEXA_NATIVE_CC=<path to gen2_fix / native hexa driver>" >&2
+  echo "  set HEXA_NATIVE_CC=<path to gen3 slot / gen2_fix / native hexa>" >&2
   exit 2
 fi
 
@@ -107,12 +138,24 @@ else
 fi
 
 # ── locate the linker (optional; PHASE 2 skipped if absent) ──────────────
+# On the gen3 DEFAULT path the link is `hexa_ld -o out prog.o rt.o --lc-main
+# _main` (the same form the promote-parity gate uses). HEXA_LD_RT is the
+# runtime object appended to every link; HEXA_LD_MAIN defaults to _main on the
+# slot path so the relink matches the real promoted link route. An explicit
+# HEXA_LD wins; otherwise the discovered slot's hexa_ld+rt.o are used, then the
+# legacy hld_fixed bootstrap.
 LD_WORDS=()
 LD_MODE="none"
+LD_RT="${HEXA_LD_RT:-}"
 if [ -n "${HEXA_LD:-}" ]; then
   # shellcheck disable=SC2206
   LD_WORDS=(${HEXA_LD})
   LD_MODE="env"
+elif [ -n "$SLOT" ]; then
+  LD_WORDS=("$SLOT/hexa_ld")
+  LD_MODE="gen3-slot"
+  [ -n "$LD_RT" ] || LD_RT="$SLOT/rt.o"          # default rt.o for the slot
+  [ -n "${HEXA_LD_MAIN:-}" ] || HEXA_LD_MAIN="_main"
 elif [ -x "$HOME/dancinlab/selfhost-work/hld_fixed" ]; then
   LD_WORDS=("$HOME/dancinlab/selfhost-work/hld_fixed")
   LD_MODE="hld_fixed"
@@ -135,7 +178,9 @@ if [ "$LD_MODE" = "none" ]; then
   echo "  linker   : (none — set HEXA_LD or build hld_fixed; PHASE 2 SKIPPED)"
 else
   echo "  linker   : ${LD_WORDS[*]}  [$LD_MODE]"
+  [ -n "$LD_RT" ] && echo "  rt.o     : $LD_RT"
 fi
+[ -n "$SLOT" ] && echo "  slot     : $SLOT  (gen3 DEFAULT promoted path)"
 echo "  target   : $TARGET"
 echo "  corpus   : $CORPUS"
 echo "  out      : $OUT"
@@ -222,6 +267,10 @@ else
   echo "== PHASE 2 — relink (hexa_ld twice, same basename, byte-identical) =="
   MAIN_ARGS=()
   if [ -n "${HEXA_LD_MAIN:-}" ]; then MAIN_ARGS=(--lc-main "$HEXA_LD_MAIN"); fi
+  # Runtime object appended to each link (gen3 DEFAULT path: rt.o). Empty for
+  # the legacy hld_fixed bootstrap where the corpus links standalone.
+  RT_ARGS=()
+  if [ -n "$LD_RT" ] && [ -s "$LD_RT" ]; then RT_ARGS=("$LD_RT"); fi
   for src in "$CORPUS"/*.hexa; do
     [ -e "$src" ] || continue
     b="$(basename "$src" .hexa)"
@@ -232,8 +281,8 @@ else
     # SAME output basename in two dirs -> path-derived build-id identical,
     # so only a TRUE nondeterminism can make the bytes differ.
     # (${MAIN_ARGS[@]+...} guards the empty-array expansion under `set -u`.)
-    "${LD_WORDS[@]}" ${MAIN_ARGS[@]+"${MAIN_ARGS[@]}"} -o "$d1/out" "$obj" 2>"$d1/log"; r1=$?
-    "${LD_WORDS[@]}" ${MAIN_ARGS[@]+"${MAIN_ARGS[@]}"} -o "$d2/out" "$obj" 2>"$d2/log"; r2=$?
+    "${LD_WORDS[@]}" -o "$d1/out" "$obj" ${RT_ARGS[@]+"${RT_ARGS[@]}"} ${MAIN_ARGS[@]+"${MAIN_ARGS[@]}"} 2>"$d1/log"; r1=$?
+    "${LD_WORDS[@]}" -o "$d2/out" "$obj" ${RT_ARGS[@]+"${RT_ARGS[@]}"} ${MAIN_ARGS[@]+"${MAIN_ARGS[@]}"} 2>"$d2/log"; r2=$?
     sz=0; [ -s "$d1/out" ] && sz=$(wc -c < "$d1/out" | tr -d ' ')
     if [ "$r1" -eq 0 ] && [ "$r2" -eq 0 ] && [ -s "$d1/out" ] && cmp -s "$d1/out" "$d2/out"; then
       printf "  PASS  %-22s r1=%s r2=%s sz=%s sha=%s\n" \
