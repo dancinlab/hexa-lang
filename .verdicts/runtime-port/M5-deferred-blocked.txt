@@ -1,0 +1,106 @@
+RUNTIME-PORT · Milestone-5 · B-OPEN leaves 1-9 feasibility (post-read disposition)
+date: 2026-06-03   host: mini (LOCAL — no ghost/pool)   base: origin/main a827beeb8
+########################################################################
+
+SCOPE: M5 set out to close the 9 M4 B-OPEN leaves as "low-risk/mechanical
+delegation-guard wiring". Reading every C body + every rt_* impl + the
+codegen lowering graph showed the M4 inventory MATERIALLY OVERSTATED
+feasibility: of the 9, only ONE (null_coal) is a clean, byte-equivalent,
+recursion-safe, ABI-surfaced guard-wire. This verdict records the grounded
+per-leaf disposition. (null_coal landed PORT-EQ — see M5-null_coal.txt.)
+
+THE LOAD-BEARING ARCHITECTURE FACTS
+------------------------------------------------------------------------
+A. cg_rt_target() is HARDCODED "c" (self/codegen.hexa L291). The entire
+   rt_target=="rt" branch + the self/rt/* duplicate impls (rt_str_substring,
+   rt_str_concat, rt_str_char_code_at, self/rt/core.hexa rt_null_coal) are a
+   DORMANT migration scaffold, NOT the linked runtime. The LIVE rt-stdlib
+   symbols live in stdlib/runtime/*.hexa + self/runtime/*pure.hexa. M4's
+   "rt impl ALREADY EXISTS" repeatedly pointed at the dormant self/rt/* copy.
+B. Under target "c": .substring()->hexa_str_substring · .join()->hexa_str_join
+   · .byte_at()->hexa_str_byte_at · char_code()->hexa_char_code. A hexa rt
+   impl that uses an operator which lowers back to the SAME core entry it is
+   wired behind = infinite recursion.
+
+PER-LEAF DISPOSITION
+------------------------------------------------------------------------
+1. hexa_str_char_code_at        DEFERRED (semantic-divergence + recursion)
+   M4: "rt_str_char_code_at ALREADY EXISTS, wire guard". FALSE-equivalence:
+   rt/string.hexa rt_str_char_code_at returns 0 on OOB and 0 on negative
+   (NO neg-wrap); the C body returns -1 on OOB and NEG-WRAPS (i+=n). Wiring
+   it would be RUNEQ-DIFFER, not PORT-EQ. A correct port needs a NEW rt fn
+   with C's -1/neg-wrap semantics; the existing rt fn cannot be mutated (its
+   0-semantics are asserted by rt/test_string.hexa). The C body ALSO carries
+   an explicit "intentionally NOT ported — would infinite-recurse through the
+   byte_at builtin" note (cycle 52). Feasible as a NEW byte-eq rt fn (via
+   char_code()->hexa_char_code, safe while byte_at stays C) but it is a real
+   port, not the advertised guard-flip. DEFERRED to a scoped follow-up.
+
+2. hexa_cmd_has_shell_meta       BLOCKED (no ABI surface)
+   `static int hexa_cmd_has_shell_meta(const char*)` — a FILE-INTERNAL C
+   helper called only by the C process path (hexa_spawn_no_shell). It has NO
+   HexaVal ABI entry, NO codegen builtin, NO hexa-source caller, so there is
+   NO HEXA_HAS_HEXA_RT_STDLIB delegation seam to wire. Porting it to hexa
+   would require a NEW C->hexa FFI call inside the spawn path (a Class-C ABI
+   change), not a guard flip. M4 mis-labeled it Class-A. BLOCKED (architectural).
+
+3. utf8_cpcount                  BLOCKED (no ABI surface)
+   `static int utf8_cpcount(const char*)` — file-internal helper used by the
+   C pad fns. Same as #2: no ABI surface, no delegation seam. BLOCKED.
+
+4. hexa_null_coal                PORT-EQ  (LANDED — see M5-null_coal.txt)
+
+5. hexa_str_byte_at              BLOCKED (it IS the primitive)
+   byte_at is the raw single-byte read primitive; there is no LOWER
+   terminating byte-access op for a hexa impl to call. Any hexa rt_str_byte_at
+   would read via .byte_at() -> hexa_str_byte_at = infinite recursion. (Also
+   note char_code_at's recursion-safety DEPENDS on byte_at staying C.) The
+   throw-with-formatted-message path (snprintf OOB msg) is a second wrinkle.
+   BLOCKED.
+
+6. hexa_str_substring            BLOCKED (recursion trap)
+   M4: "rt_str_substring ALREADY EXISTS, wire guard". rt/string.hexa
+   rt_str_substring's body is `return s.substring(a, b)` — .substring() lowers
+   (target "c") to hexa_str_substring. Wiring the guard = hexa_str_substring
+   -> rt_str_substring -> .substring() -> hexa_str_substring = INFINITE
+   RECURSION. The existing rt impl is a self-referential STUB, not a port. A
+   real port must rebuild via byte_at + bytes_to_str_raw (the B1 builder).
+   Feasible but a real port, not a guard flip. BLOCKED as-advertised.
+
+7. hexa_str_concat               DEFERRED (feasible but perf-load-bearing)
+   rt/string.hexa rt_str_concat is recursion-SAFE (.join() -> hexa_str_join
+   -> rt_str_join_str -> byte_at + bytes_to_str_raw, terminating; does NOT
+   call hexa_str_concat). So a guard-wire would LINK + terminate. BUT the C
+   hexa_str_concat is the self-host parser's HOTTEST path: it carries an arena
+   bump-alloc fast-path + empty-elision + stats counters + intern-aware
+   hexa_str_own. Replacing it with the generic byte-walk builder is a real
+   PERF REGRESSION and a non-trivial codegen byte-eq fixpoint risk on the
+   transpiler itself — NOT "low-risk/mechanical". Out of the stated M5
+   risk envelope. DEFERRED to a scoped perf-gated follow-up.
+
+8. hexa_str_grapheme_count       DEFERRED (per M4 — _hx_grapheme_walk dep)
+   Delegates to the _hx_grapheme_walk C helper (UAX-29 cluster boundary
+   logic). Needs that walk ported/builtin'd first. DEFER (as M4 flagged).
+
+9. hexa_str_graphemes            DEFERRED (pairs with #8)
+   Same _hx_grapheme_walk dependency + array push. DEFER with #8.
+
+SUMMARY
+------------------------------------------------------------------------
+  PORT-EQ  : 1  (null_coal)
+  BLOCKED  : 4  (cmd_has_shell_meta, utf8_cpcount, byte_at, substring)
+  DEFERRED : 4  (char_code_at, concat, grapheme_count, graphemes)
+
+FINDING (Δ vs the M4 inventory prediction)
+------------------------------------------------------------------------
+M4 predicted "top 7 either Class-A-today or dict_keys-class (guard flip)".
+Reading the bodies + the recursion/link graph REFUTES that for 6 of 7: two
+are static C-internal helpers with no ABI seam (2,3), one is the raw
+primitive itself (5), one is a self-referential recursion stub (6), one is
+semantically divergent + recursion-noted (1), and one is recursion-safe but
+perf-load-bearing beyond the low-risk envelope (7). The genuine clean
+dict_keys-class yield of runtime_core.c is ONE leaf (null_coal), and even
+that required relocating the impl from the dormant self/rt/ scaffold into the
+LINKED stdlib/runtime/ set. This corrects M4's feasibility class the same way
+DICTKEYS-FEAS (#2633) corrected a prior BLOCKED — by reading, not assuming.
+########################################################################

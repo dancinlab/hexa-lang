@@ -317,3 +317,47 @@ bodies, not assumed. NO second runtime.c-scale portable well. The residual
 9-leaf / 110-LOC B-OPEN set is small + low-risk + mechanical (delegation-guard
 wiring + Class-A byte loops), carried as optional M5. Full tiering:
 `.verdicts/runtime-port/M4-INVENTORY.txt`.
+
+────────────────────────────────────────────────────────────────────────
+2026-06-03 · M5 — adjudicate + wire the 9 core B-OPEN leaves (LOCAL on mini)
+────────────────────────────────────────────────────────────────────────
+Branch runtime-port/m5-leaves off origin/main a827beeb8. Read every C body in
+self/runtime_core.c + every cited rt_* impl + the codegen lowering/recursion
+graph. The M4 "top-7 = easy guard flips" prediction was REFUTED for 6 of 7.
+
+LOAD-BEARING FACTS that reframed the work:
+ · cg_rt_target() is HARDCODED "c" (codegen.hexa L291) — the rt_target=="rt"
+   branch + the self/rt/* duplicate impls are a DORMANT scaffold, NOT linked.
+   The LIVE rt-stdlib symbols are in stdlib/runtime/* + self/runtime/*pure.
+   M4's "rt impl already exists" repeatedly pointed at the dormant copy.
+ · Under target "c": .substring()->hexa_str_substring, .join()->hexa_str_join,
+   .byte_at()->hexa_str_byte_at, char_code()->hexa_char_code. A hexa impl
+   wired behind a core entry whose own body uses the operator that lowers
+   back to that entry = infinite recursion.
+
+DISPOSITION (1 PORT-EQ · 4 BLOCKED · 4 DEFERRED):
+ · null_coal           PORT-EQ  — LANDED. Added rt_null_coal to the LINKED set
+   (stdlib/runtime/numeric.hexa, next to rt_len/rt_map_keys) + wrapped the
+   emitted C body in the #ifdef HEXA_HAS_HEXA_RT_STDLIB delegation guard
+   (self/runtime_core_emit.hexa). RUNEQ 12/12 value-faithful vs the C SSOT
+   (`??` operator) incl the leading-NUL edge (byte_at(0)==0 mirrors
+   HX_STR[0]=='\0'). Verdict M5-null_coal.txt.
+ · cmd_has_shell_meta  BLOCKED  — static C-internal helper, no HexaVal ABI seam.
+ · utf8_cpcount        BLOCKED  — static C-internal helper, no ABI seam.
+ · byte_at             BLOCKED  — IS the raw-byte primitive; no lower op to call
+   (any hexa port recurses). char_code_at's safety depends on it staying C.
+ · substring           BLOCKED  — rt_str_substring is a self-referential stub
+   (`return s.substring()` -> hexa_str_substring); wiring = infinite recursion.
+ · char_code_at        DEFERRED — rt_str_char_code_at is SEMANTICALLY DIVERGENT
+   (OOB->0/no-neg-wrap vs C OOB->-1/neg-wrap); needs a NEW byte-eq rt fn.
+ · concat              DEFERRED — rt_str_concat is recursion-safe (via join_str
+   + bytes_to_str_raw) BUT the C body is the parser-hot arena fast-path; a
+   guard-wire is a real perf regression + byte-eq risk, beyond low-risk.
+ · grapheme_count/graphemes DEFERRED — need _hx_grapheme_walk port first (M4).
+
+Full grounded record: .verdicts/runtime-port/M5-deferred-blocked.txt.
+Files: stdlib/runtime/numeric.hexa (+rt_null_coal), self/runtime_core_emit.hexa
+(+guard). Both compile INTO the self-host transpiler/runtime -> trips the
+gen3->gen4 byte-eq fixpoint + non-required ghost selfhost-byteeq-real check
+(same gate class as B1 #2632 / dict_keys #2634). Ghost NOT run here — PARENT
+watches it before merge. ALL build + RUNEQ LOCAL on mini (no pool/ghost).

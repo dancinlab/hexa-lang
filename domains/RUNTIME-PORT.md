@@ -77,5 +77,16 @@
     bootstrap/codegen-support floor it was declared to be — NOT a second
     runtime.c-scale portable well.** Full tiering:
     `.verdicts/runtime-port/M4-INVENTORY.txt`.
-- [ ] M5 (optional) — wire the 9 core B-OPEN leaves (delegation-guard / Class-A
-  byte loops; dict_keys/B1 pattern, RUNEQ-gated). Low-risk mechanical follow-up.
+- [x] M5 (optional) — adjudicate + wire the 9 core B-OPEN leaves. DONE 2026-06-03.
+  Reading every body + the recursion/link graph REFUTED M4's "7 easy guard
+  flips": of 9, only null_coal is a clean byte-eq recursion-safe ABI-surfaced
+  wire (PORT-EQ, 12/12 RUNEQ incl leading-NUL — M5-null_coal.txt). Disposition:
+  1 PORT-EQ · 4 BLOCKED (cmd_has_shell_meta/utf8_cpcount = static C-internal no
+  ABI seam; byte_at = the raw primitive itself; substring = self-referential
+  recursion stub) · 4 DEFERRED (char_code_at = semantic-divergent + recursion;
+  concat = recursion-safe but parser-hot perf-load-bearing, out of low-risk
+  envelope; grapheme_count/graphemes = need _hx_grapheme_walk port first). Full
+  grounded record: `.verdicts/runtime-port/M5-deferred-blocked.txt`. KEY: the
+  rt_target=="rt" self/rt/* impls M4 cited "already exist" are a DORMANT
+  scaffold (cg_rt_target() hardcoded "c"); the LIVE rt-stdlib is
+  stdlib/runtime/* — null_coal's rt impl was added THERE.
