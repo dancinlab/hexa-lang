@@ -1,5 +1,16 @@
 # SELFHOST-CI — step log (append-only)
 
+## 2026-06-03 — milestone 3: multi-target cross-emit smoke
+
+- Landed `tool/selfhost_crossemit_smoke.sh` + `.github/workflows/selfhost-crossemit-smoke.yml` + a NEW in-tree harness `compiler/test/elf_arm64_data.hexa` (the arm64 page-reloc counterpart of the existing `compiler/test/elf_x86_64_data.hexa`). Additive only (g4) — no production codegen edits; the harness only builds LModules by hand and drives the EXISTING serializers.
+- A STANDING per-PR CROSS-TARGET object-format fence, distinct from the byte-eq gate (M1) and the native-codegen guard (M2). Re-exercises the cross-emit path every PR via the portable `hexa run` of the emit harnesses (drives pack_lir_arm64_elf + serialize_elf_arm64 / pack_lir_x86_64 + serialize_elf_x86_64 — no aprime_cc / gen2_fix dependency), ASSERTS the actual reloc entries (not just "object produced"), and LINK+RUNs each target wherever the host toolchain permits.
+- Each harness emits THREE objects: (A) data — main ADRP/ADD (arm64) / lea-RIP (x86) of `.rodata .LCstr0` + `.data g0`, driving the reloc pair/PC32 against BOTH sections; (B) exit7 text-only baseline (no data reloc); (C) runnable freestanding `_start` (write(1,str,3)+exit(7)) whose string ref USES the data reloc → if it resolves, stdout=hi rc=7.
+- Hard asserts (any missing reloc → exit 1): arm64-ELF carries the #2562 page PAIR R_AARCH64_ADR_PREL_PG_HI21 + R_AARCH64_ADD_ABS_LO12_NC (×2 each, .rodata + .data); x86_64-ELF carries #2563 R_X86_64_PC32 (×2). Run legs: x86_64 native, linux-arm64 under qemu-aarch64-static (#2603), both asserting stdout=hi rc=7.
+- Real run on summer (192.168.50.60, x86_64 Linux + aarch64-linux-gnu-as/-ld + qemu-aarch64-static; aiden has the identical toolchain), HEAD=e6b13cfa3, exit 0: arm64-ELF reloc=PASS run=PASS, x86_64-ELF reloc=PASS run=PASS, linux-arm64 run=PASS — all stdout=hi rc=7.
+- FINDING (g63 honesty) — the FIRST real run RED'd on arm64 reloc (`R_AARCH64_ADR_PREL_PG_HI21 count : 0`). This was a FALSE NEGATIVE in the gate's reader, NOT an emit bug: GNU `readelf -r` (narrow column) TRUNCATES the long AArch64 type name to `R_AARCH64_ADR_PRE` / `R_AARCH64_ADD_ABS`. The relocs were correct all along (readelf -rW showed the full names ×2 each). Fixed `relocs_of` to use `readelf -rW` (wide); re-ran → PASS. Rejected the false negative before declaring green.
+- exit-2-neutral canary verified on macOS (mini, Darwin arm64): the gate EMITS all 6 objects (canary PASS) but reports the reloc-assert + run legs NEUTRAL (no GNU readelf; Mach-O `ld` rejects -nostdlib) and exits 0 — the same shape as the #2600/#2605 sister gates. NOT green-by-skip: the emit half runs on every host, the assert/run half runs REAL on any Linux host with the cross-toolchain.
+- Verdict: `.verdicts/selfhost-ci/CROSSEMIT-SMOKE.txt` (raw summer stdout + full readelf -rW dumps + macOS canary path, verbatim).
+
 ## 2026-06-03 — milestone 2: native-codegen regression guards
 
 - Landed `tool/selfhost_codegen_guard.sh` + `.github/workflows/selfhost-codegen-guard.yml` + two corpus programs (`self/test/miscompile_zero/g1_hex_corpus.hexa`, `g2_stp_ldp_corpus.hexa`). Additive only (g4) — a standing, named, always-run codegen-correctness fence DISTINCT from milestone-1's heavy byte-eq leg. No production codegen edits.

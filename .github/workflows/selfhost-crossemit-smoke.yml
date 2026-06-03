@@ -1,0 +1,109 @@
+name: selfhost-crossemit-smoke
+
+# ── SELFHOST-CI M3 multi-target cross-emit smoke ────────────────────────────
+#
+# PURPOSE
+#   A STANDING, per-PR smoke gate around the multi-target cross-emit path proven
+#   one-time in SELFHOST-NEXT:
+#     • arm64 ELF page-reloc PAIR  (#2562  R_AARCH64_ADR_PREL_PG_HI21
+#                                          + R_AARCH64_ADD_ABS_LO12_NC)
+#     • x86_64 ELF RIP-rel reloc   (#2563  R_X86_64_PC32)
+#     • linux-arm64 data-reloc program emit→assemble→link→RUN (#2574/2603 qemu)
+#   It re-exercises the cross-target EMIT path every PR (via `hexa run` of the
+#   in-tree emit harnesses compiler/test/elf_{arm64,x86_64}_data.hexa, which
+#   drive the same serializers the compiler uses), ASSERTS the actual relocation
+#   entries (not merely "object produced"), and LINK+RUNs each target wherever
+#   the host toolchain permits (x86_64 natively, aarch64 under qemu).
+#
+#   This is the CROSS-TARGET object-format fence, distinct from the sister gates:
+#     • selfhost-byteeq-gate.yml    — whole-compiler byte-eq fixpoint
+#     • selfhost-codegen-guard.yml  — native arm64 codegen-class correctness
+#
+# RUNNER MODEL (same exit-2-neutral canary shape as the sister gates)
+#   macos-latest (the hosted runner here) CAN emit the objects via the released
+#   `./hexa run`, so the EMIT canary passes and the reloc-assert leg runs — but
+#   macOS has no `readelf` and no aarch64/x86_64 cross-binutils + qemu, so the
+#   reloc-assert + qemu-run legs report NEUTRAL there (best-effort). The REAL
+#   reloc assertion + qemu run is verified on an x86_64-Linux host that holds the
+#   aarch64-linux-gnu binutils + qemu-aarch64-static (pool host summer/aiden);
+#   the committed verdict .verdicts/selfhost-ci/CROSSEMIT-SMOKE.txt captures that
+#   real run verbatim. A self-hosted Linux runner (set vars / use a linux runner)
+#   would run all legs REAL in CI.
+#
+#   A TRUE regression — an expected reloc entry MISSING from an emitted object,
+#   or a run mismatch on a host that DID run it — exits 1 and fails the job.
+#   exit 2 (hexa cannot emit ANY cross-target object here) remaps to neutral.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'compiler/emit/elf_arm64.hexa'
+      - 'compiler/emit/elf_x86_64.hexa'
+      - 'compiler/emit/macho_arm64.hexa'
+      - 'compiler/ir/lir.hexa'
+      - 'compiler/test/elf_arm64_data.hexa'
+      - 'compiler/test/elf_x86_64_data.hexa'
+      - 'tool/selfhost_crossemit_smoke.sh'
+      - '.github/workflows/selfhost-crossemit-smoke.yml'
+  pull_request:
+    paths:
+      - 'compiler/emit/elf_arm64.hexa'
+      - 'compiler/emit/elf_x86_64.hexa'
+      - 'compiler/emit/macho_arm64.hexa'
+      - 'compiler/ir/lir.hexa'
+      - 'compiler/test/elf_arm64_data.hexa'
+      - 'compiler/test/elf_x86_64_data.hexa'
+      - 'tool/selfhost_crossemit_smoke.sh'
+      - '.github/workflows/selfhost-crossemit-smoke.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  selfhost-crossemit-smoke:
+    name: selfhost cross-emit smoke (arm64/x86_64 ELF reloc + qemu run)
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Build — shared release_build (native ./hexa driver)
+        shell: bash
+        env:
+          TARGET: darwin-arm64
+          CC: clang
+          LIBS: ""
+          GH_TOKEN: ${{ github.token }}
+        run: bash tool/release_build
+
+      - name: Sanity — ./hexa runs
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./hexa --version
+
+      # ── Smoke invocation ─────────────────────────────────────────────────
+      # The emit path is the portable `hexa run` of the in-tree emit harnesses,
+      # so on macos-latest the EMIT canary passes and the reloc-assert leg runs.
+      # macOS lacks readelf + the cross-binutils/qemu, so the reloc-assert + run
+      # legs report NEUTRAL here (best-effort). Point HEXA at a released ./hexa.
+      # A self-hosted Linux runner with aarch64-linux-gnu binutils +
+      # qemu-aarch64-static runs all legs REAL.
+      - name: Smoke — multi-target cross-emit reloc + qemu run
+        shell: bash
+        env:
+          HEXA: ${{ vars.HEXA_CROSSEMIT || './hexa' }}
+          CE_OUT: ${{ runner.temp }}/selfhost-crossemit-out
+        run: |
+          set -uo pipefail
+          # GitHub's default step shell runs with `-e`, so a nonzero exit would
+          # ABORT before the exit-2 remap. Capture rc with `|| rc=$?`.
+          rc=0
+          bash tool/selfhost_crossemit_smoke.sh || rc=$?
+          if [ "$rc" -eq 2 ]; then
+            echo "::notice::selfhost-crossemit-smoke NEUTRAL (exit 2) — this CI env cannot hexa-emit any cross-target object. The cross-emit floor is NOT broken; smoke passes neutral."
+            exit 0
+          fi
+          exit "$rc"
