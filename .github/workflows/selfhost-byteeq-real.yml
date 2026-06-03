@@ -1,0 +1,71 @@
+# selfhost-byteeq-real — REAL native-emit byte-eq on the ghost self-hosted runner.
+#
+# This is the B2 deliverable: run the byte-eq fixpoint + determinism gates for
+# REAL (not exit-2-neutral) in CI, on the self-hosted runner `ghost-selfhost`
+# which holds the graduated gen3 slot ($HX_HOME/self/native/selfhost/).
+#
+# SAFETY: this workflow is PATH-FILTERED (only compiler-relevant changes) and is
+# NOT a required status check. If ghost is offline its check simply doesn't run /
+# stays pending, which does NOT block merges (the required gate is the always-on
+# ubuntu `selfhost-gates-summary`). Real byte-eq enforcement is best-effort-strong
+# here; the required floor stays deadlock-proof.
+name: selfhost-byteeq-real
+
+on:
+  pull_request:
+    paths:
+      - 'self/**'
+      - 'compiler/**'
+      - 'tool/selfhost_byteeq_gate.sh'
+      - 'tool/determinism_gate.sh'
+      - '.github/workflows/selfhost-byteeq-real.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'self/**'
+      - 'compiler/**'
+      - 'tool/selfhost_byteeq_gate.sh'
+      - 'tool/determinism_gate.sh'
+      - '.github/workflows/selfhost-byteeq-real.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: selfhost-byteeq-real-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  byteeq-real:
+    name: selfhost-byteeq-real
+    runs-on: [self-hosted, macOS, ARM64, selfhost-gen2fix]
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: byte-eq fixpoint — REAL (ghost gen3 slot)
+        shell: bash
+        run: |
+          set -uo pipefail
+          rc=0
+          bash tool/selfhost_byteeq_gate.sh || rc=$?
+          # On THIS runner the graduated gen3 slot is present, so exit 2
+          # (cannot-native-emit) means the slot went missing — a real failure here.
+          if [ "$rc" -eq 2 ]; then
+            echo "::error::byte-eq exit-2 on the slot runner — gen3 slot missing at \$HX_HOME/self/native/selfhost"
+            exit 1
+          fi
+          exit "$rc"
+
+      - name: determinism — REAL (gen3 default path)
+        shell: bash
+        run: |
+          set -uo pipefail
+          rc=0
+          bash tool/determinism_gate.sh || rc=$?
+          if [ "$rc" -eq 2 ]; then
+            echo "::error::determinism exit-2 on the slot runner — gen3 slot missing"
+            exit 1
+          fi
+          exit "$rc"
