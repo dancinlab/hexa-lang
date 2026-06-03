@@ -308,3 +308,25 @@ HEXA 목표             = MATCH (못 이김 ≠ 실패)           = EXCEED (⑧:
 - raw GEMM/커널 한 장으로 cuBLAS 우위 주장 = 즉시 falsified(GPU.md:84 박제). 이 도메인의 win 은 **오직** 경계 제거(launch + op-boundary fusion + compile-time 특화).
 - util≥20% 는 항상 single-driver pod fire verdict 소유 — 소스 단독 주장 금지.
 - byte-eq(max|Δ|=0) 는 모든 fusion milestone 의 hard gate — 정확성 없는 가속은 무효.
+
+## ── ② async-launch pipeline — codegen LANDED · util 측정 BLOCKED (seed-drift) ──
+
+W2 가 지목한 binding constraint(인터프리트 per-step 드라이버: ~30 device 커널을 host-sync 로 1개씩 디스패치 → GPU starve)의 **codegen 해제가 main 에 전량 착지**. 4 슬라이스, 전부 async-off byte-identical(CUDA stream-0 = default 의미) + host-ref oracle 19/19 max|Δ|=0:
+
+```
+② async pipeline (self/cuda/runtime_cuda_emit.hexa) — single g_forge_stream
+├─ #2619 fwd 커널 async (g_forge_stream + _forge_launch_check)      merged
+├─ #2621 GEMM stream  (cublasSetStream + _forge_sync @readback)     merged
+├─ #2622 bwd/opt 14 launch → g_forge_stream (단일스트림 정합)        merged
+└─ #2624 device-resident bwd 9 sync 제거 (cudaDeviceSync→launch_chk) CI
+```
+async-on 시 학습 1스텝 전체(fwd 커널 + cuBLAS GEMM + bwd 커널 + optimizer)가 **단일 forge-stream** 에서 host readback 경계에서만 sync — per-op host barrier 제거. async **off**(기본) 는 byte-identical 이라 회귀 0. 제외: col2im/adamw(host readback `_d2h_out` 후 sync 필수) · softmax/ce_seed/rmsnorm(default stream).
+
+**util A/B 측정(ASYNC=0 vs =1) = 🔴 BLOCKED** — pool RTX 5070(summer/aiden, $0 렌트) 에서 빌드를 끝까지 추적, **4 블로커 해결**(emit write_file·flatten argv placeholder·nvcc `-x cu`·cuda include) 후 **seed-drift 벽**:
+- clm_prod → `nn_gelu_bwd`(hexa) → `forge_dispatch_gelu_bwd`(host C wrapper)
+- 그 host wrapper(gelu_bwd·expert_pack2·expert_unpack2·moe_router_bwd 등 W2 device-resident glue)가 로컬 `self/runtime.c` 시드·emit·브랜치소스 어디에도 없음 — W2 pod runtime.c 에 손스플라이스됐다가 로컬 미저장(gitignored seed). `hexa_call4` 타입에러 = hexa_cc.c↔runtime.c 시드 ABI 불일치까지.
+- ⇒ GPU 경로는 byte-eq oracle 부재 → 손으로 맞춘 wrapper 로 측정 시 **g5 위반(조용한 오염)**. fabricate 거부, 측정은 시드재구성을 갖춘 별도 검증사이클로 분리. 레시피 전문: memory `project_clmprod_gpu_build_seed_drift`.
+
+**부수 발견 (실버그)**: emit 의 device runtime 쓰기가 `exec("cat > path <<EOF" + c_text + "EOF")` 였는데 c_text>128KB(현재 244KB) 이면 단일 `sh -c` argv 가 `MAX_ARG_STRLEN`(128KB) → E2BIG 로 **조용히 실패**. pool 에서 재현(prebuilt interp + 컴파일 바이너리 양쪽). `write_file`(rt_write_file fopen)로 교체 → byte-identical · #2630. fresh 빌드 호스트의 잠재 wall 제거.
+
+verdict: `.verdicts/hexa-fusion-l1-async/` (async byte-eq) · 측정-block 은 음성-결과로 정직 기록(util 수치 미주장 — single-driver pod fire verdict 부재).
