@@ -312,6 +312,39 @@ fn main() {
                           "verify " + _shq2(vfix + "/outside.json"),
                           g_v_outside, 1)
 
+    // ── PR-atlas-refusal cells — owner-gated atlas WRITE refusal (Swift
+    // atlasCmd · main.swift:688-711). Three cases:
+    //   (1) READ subverb (no owner)        → forwards to `hexa atlas` verbatim.
+    //   (2) WRITE subverb without owner     → REFUSED (stderr + exit 2, no fwd).
+    //   (3) WRITE subverb WITH DEMIURGE_OWNER → forwards to `hexa atlas` verbatim.
+    // The (1)/(3) passthrough goldens are computed LIVE from the same `hexa atlas`
+    // kernel both surfaces forward to (no brittle hardcoded atlas output); the
+    // (2) refusal golden is the byte-exact Swift refusal string. atlas READ verbs
+    // need no DEMIURGE_REPO (they read the embedded atlas SSOT), so env is bare
+    // except DEMIURGE_OWNER on case (3).
+    let hexa_bin = exec("command -v hexa 2>/dev/null || echo hexa").trim()
+
+    // (1) READ passthrough — `atlas lookup` (no args) → hexa atlas usage, rc 0.
+    let r_read = exec_with_status(_shq2(hexa_bin) + " atlas lookup 2>&1")
+    let g_atlas_read = to_string(r_read[0])
+    fails = fails + _cell("atlas/read-passthrough", entry, swift_bin, "",
+                          "atlas lookup", g_atlas_read, r_read[1])
+
+    // (2) WRITE without owner → REFUSED (no forward). Byte-exact Swift stderr.
+    let g_atlas_refuse = "atlas: 'register' = owner op (사장실 · M20). Set DEMIURGE_OWNER "
+        + "to unlock. External read-only: lookup/stats/hash/dump.\n"
+    fails = fails + _cell("atlas/write-refused-no-owner", entry, swift_bin, "",
+                          "atlas register", g_atlas_refuse, 2)
+
+    // (3) WRITE WITH owner → gate passes, forwards `hexa atlas register` (no
+    // discovery-arm args) → hexa atlas register usage, rc 3. Golden = live
+    // kernel call (the SSOT both surfaces forward to once unlocked).
+    let r_owner = exec_with_status(_shq2(hexa_bin) + " atlas register 2>&1")
+    let g_atlas_owner = to_string(r_owner[0])
+    fails = fails + _cell("atlas/write-owner-passthrough", entry, swift_bin,
+                          "DEMIURGE_OWNER=1", "atlas register",
+                          g_atlas_owner, r_owner[1])
+
     if fails == 0 { println("demi_parity_selftest PASS") }
     else { println("demi_parity_selftest FAIL — " + to_string(fails) + " cell(s)") }
 }
