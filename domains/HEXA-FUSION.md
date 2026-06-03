@@ -36,10 +36,18 @@ FORGE-UTILGREEN lever-1~5 가 GEMM repack 을 전부 device 化했어도 util ME
   ✅ 정확성: 캡처 건전(race 無) — ②가 깬 byte-eq 회복(②와 달리 정확성 통과한 최초 레버).
   ❌ util-GREEN 미달(+1.32pp, FALSIFIED ≥20%): 그래프가 fwd→bwd 만 — eager 28-launch AdamW + 토큰 H2D 가
   여전히 host 임계경로 고정. ④ = 필요조건이나 불충분.
-- [ ] **⑤ whole-step capture — ★ NEW FRONTIER (④의 잔여 host 제거)** — AdamW 를 그래프 안으로:
-  bias-correction `t` 를 host 가 매 replay 갱신하는 device-resident scalar 로(또는 `cudaGraphExecKernelNodeSetParams`
-  per step) → 28-launch optimizer sweep + 토큰 H2D 까지 캡처해 host 를 완전히 임계경로에서 제거. falsifier:
-  whole-step replay byte-eq ∧ util MEAN≥20%. (④가 fwd/bwd byte-eq 캡처 증명 → ⑤는 optimizer-t 동역학만.)
+- [x] **⑤ whole-step capture — 🔴 CLOSED-NEGATIVE (PR #2658, PHASE-1 PROBE 측정)** — AdamW 16-launch
+  sweep 를 ④ 캡처 영역(fwd→ce_grad→bwd) 안으로 넣어 host 를 per-step 임계경로에서 완전 제거(env
+  `HEXA_CUDA_GRAPH_WHOLESTEP=1`, `_adam_sweep` 를 begin…commit 안에서 issue + replay 에서 skip).
+  PHASE-1: c1/c2 baked(num-wrong OK) — util CEILING 만 측정. H100 NVL @ D1536/T512/EPOCHS4:
+  g0(eager)=**14.87%** · g1(④ fwd/bwd)=**13.19%** · g1ws(⑤ whole-step)=**13.54%**, 셋 다 MEDIAN 2% PINNED.
+  ❌ FALSIFIED util MEAN≥20% (13.54%, ④ 대비 +0.35pp = noise). **결정 게이트: Phase 2(device-t byte-eq)
+  진행 안 함** — host-removal 가설 REJECTED. binding constraint = host launch 가 아니라 **fine-grained
+  serial kernel DAG**(sub-ms 커널이 의존성 체인으로 직렬, SM 이 커널 사이 idle). util-GREEN 은 어떤 캡처
+  영역으로도 도달 불가 — 남은 축은 host-removal 이 아니라 **workload-shape**(larger-tile / 커널 fusion 으로
+  의존성 체인 축소 = L3 ⑤ fwd+bwd autograd fusion 방향). verdict: `.verdicts/hexa-fusion/F-FUSION-GRAPH-WHOLESTEP-AB.txt`.
+  ② async · ④ fwd/bwd graph · ⑤ whole-step 전부 MEDIAN 2% / MEAN ~12-15% 로 bottom-out → "host launch
+  overhead = util ceiling" 축 전체 CLOSED-NEGATIVE TERMINAL. (paper_negative_ok 자격: 닫힌 음성.)
 
 ### L3 — fusion moat (= PyTorch 초과 · 구조적)
 
