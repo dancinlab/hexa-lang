@@ -20,6 +20,7 @@ import "stdlib/demi/verify_record.hexa"
 import "stdlib/demi/record_loader.hexa"
 import "stdlib/demi/project_store.hexa"
 import "stdlib/demi/cellrun.hexa"
+import "stdlib/demi/domain_composer.hexa"
 
 // handler_stub(target, argv) — a DECLARED-but-unported local verb. Prints an
 // honest notice naming the verb + the stacked-PR that will port it, and
@@ -699,6 +700,7 @@ pub fn handler_local(target: string, argv: [string]) -> int {
     if target == "gate_summary"   { return handler_gate_summary(argv) }
     if target == "list_projects"  { return handler_list_projects(argv) }
     if target == "show_project"   { return handler_show_project(argv) }
+    if target == "compose"        { return handler_compose(argv) }
     // every other declared local target is not-yet-ported → honest stub.
     return handler_stub(target, argv)
 }
