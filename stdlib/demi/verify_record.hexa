@@ -1,6 +1,6 @@
 // HEXA Standard Library — demi/verify_record
 //
-// @version 0.1.0
+// @version 0.2.0
 // @capabilities [proc]
 //
 // The pure-hexa-native port of the Swift `verifyRecord` path
@@ -9,11 +9,16 @@
 //
 // `demi verify <path|id>` (bare, NOT --expr/--fence/rubric) runs the
 // provenance / claim-gate CONSISTENCY check the Swift CLI does:
-//   1. resolveRecord(arg) — try `arg` as an exports/-relative path; else as a
+//   1. rl_resolve(arg) — try `arg` as an exports/-relative path; else as a
 //      recordId scanned out of exports/chip/noc/f1f2/records/*.json.
 //   2. on a load failure → stderr `verify: <error>\n` + exit 1.
 //   3. on success → 6 [OK]/[FAIL] checks (recordId · 4 provenance fields ·
 //      verdict-claim-vs-gate); any FAIL → stderr REJECTED line + exit 1.
+//
+// d3 (one canonical home): the record-enumerate / load / path-guard primitives
+// live in stdlib/demi/record_loader.hexa (the SHARED BASE the list-*/show/gate
+// verbs also build on). This module CONSUMES them (rl_resolve · rl_error_line)
+// and adds only the verify-specific consistency gate.
 //
 // BYTE-PARITY (plan @L7): the stdout/stderr text + exit codes match the Swift
 // reference exactly (captured 2026-06-03 against cockpit/.build/release). The
@@ -22,209 +27,10 @@
 // buffered to a pipe and flushed at exit AFTER the immediate stderr write — so
 // this port writes the stderr line FIRST too, then the check lines, matching
 // `2>&1` byte-for-byte.
-//
-// @D g_cockpit_isolation invariant (a) is enforced HERE exactly as Swift's
-// RecordLoader.load does: the canonicalized record path must hasPrefix the
-// canonicalized exportsRoot, else `pathOutsideExports`. Path canonicalization
-// mirrors Foundation's `.standardizedFileURL` — LEXICAL `.`/`..` collapse, NO
-// symlink resolution (so it agrees with the Swift reference on the same tree).
 
 import "stdlib/demi/manifest.hexa"
+import "stdlib/demi/record_loader.hexa"
 import "stdlib/alloc/json_object.hexa"
-
-// ── small string helpers (no extra stdlib import; mirror stdlib_cli idiom) ──
-
-// _vr_index_of(hay, needle, from) — first index of needle at/after `from`, or
-// -1. Byte-wise substring scan (same shape as stdlib_cli _index_of).
-fn _vr_index_of(hay: string, needle: string, from: int) -> int {
-    let hn = len(hay)
-    let nn = len(needle)
-    if nn == 0 { return from }
-    let mut i = from
-    while i + nn <= hn {
-        if hay.substring(i, i + nn) == needle { return i }
-        i = i + 1
-    }
-    return -1
-}
-
-// _vr_contains(hay, needle) — substring membership.
-fn _vr_contains(hay: string, needle: string) -> bool {
-    return _vr_index_of(hay, needle, 0) >= 0
-}
-
-// _vr_starts_with(s, p) — prefix test (string method may not be wired in the
-// nested-run path; keep a local copy so this leaf module is self-contained).
-fn _vr_starts_with(s: string, p: string) -> bool {
-    if len(p) > len(s) { return false }
-    return s.substring(0, len(p)) == p
-}
-
-// ── exports-root + path canonicalization (mirror RecordLoader) ──────────────
-
-// _vr_exports_root() — the exports subtree the CLI reads records from
-// (RecordLoader.exportsRoot). $DEMIURGE_REPO/exports if set, else <cwd>/../exports.
-// Returned canonicalized (lexical), with NO trailing slash.
-fn _vr_exports_root() -> string {
-    let repo = env("DEMIURGE_REPO")
-    if len(repo) > 0 {
-        return _vr_canon(repo + "/exports")
-    }
-    // <cwd>/../exports — `swift run` case (pwd = cockpit/). hexa cwd is the
-    // process cwd; exec(pwd) is the portable read.
-    let cwd = exec("pwd").trim()
-    return _vr_canon(cwd + "/../exports")
-}
-
-// _vr_canon(path) — LEXICAL canonicalization matching Foundation
-// `.standardizedFileURL`: make absolute against cwd if relative, collapse `.`
-// and `..` segments, drop empty segments and any trailing slash. Does NOT
-// resolve symlinks (Foundation's `standardized` does not either), so it agrees
-// with the Swift reference on the same physical tree.
-fn _vr_canon(path: string) -> string {
-    let mut p = path
-    if !_vr_starts_with(p, "/") {
-        let cwd = exec("pwd").trim()
-        p = cwd + "/" + p
-    }
-    let segs = p.split("/")
-    let mut stack: [string] = []
-    let mut i = 0
-    while i < len(segs) {
-        let s = segs[i]
-        if s == "" || s == "." {
-            // skip empty (from leading "/" or "//") and "."
-        } else if s == ".." {
-            if len(stack) > 0 { stack = _vr_pop(stack) }
-        } else {
-            stack.push(s)
-        }
-        i = i + 1
-    }
-    // rebuild with a leading "/"
-    let mut out = ""
-    let mut j = 0
-    while j < len(stack) {
-        out = out + "/" + stack[j]
-        j = j + 1
-    }
-    if out == "" { return "/" }
-    return out
-}
-
-// _vr_pop(xs) — return xs without its last element (no native pop assumed).
-fn _vr_pop(xs: [string]) -> [string] {
-    let mut out: [string] = []
-    let mut i = 0
-    let n = len(xs) - 1
-    while i < n {
-        out.push(xs[i])
-        i = i + 1
-    }
-    return out
-}
-
-// ── record load (mirror RecordLoader.load) ──────────────────────────────────
-//
-// A load result is encoded as a 2-string array [status, payload]:
-//   ["ok",         <canonical-path>]   — file exists under exports/, decodable
-//   ["outside",    <canonical-path>]   — path canonicalizes outside exports/
-//   ["notfound",   <canonical-path>]   — under exports/ but no such file
-//   ["decode",     <canonical-path>]   — read but JSON-undecodable
-// The caller turns a non-"ok" status into the matching Swift error line.
-
-fn _vr_load(path_arg: string) -> [string] {
-    let root = _vr_exports_root()
-    let canon = _vr_canon(path_arg)
-    // invariant (a): canon must be under root (string hasPrefix, like Swift).
-    if !_vr_starts_with(canon, root) {
-        return ["outside", canon]
-    }
-    let q = _vr_shq(canon)
-    let exists = exec("test -f " + q + " && echo yes || echo no").trim()
-    if exists != "yes" {
-        return ["notfound", canon]
-    }
-    let text = read_file(canon)
-    let obj = json_parse_object(text)
-    // json_parse_object returns an empty map on non-object / unparseable text.
-    // A genuine record always carries "record_id"; treat a missing-everything
-    // parse as a decode failure (Swift's decodeFailed — the consumer cannot
-    // read the typed fields).
-    if !json_object_has(obj, "record_id") && !json_object_has(obj, "provenance") {
-        return ["decode", canon]
-    }
-    return ["ok", canon]
-}
-
-// _vr_shq(s) — single-quote shell escaping for exec() argv.
-fn _vr_shq(s: string) -> string {
-    let mut out = "'"
-    let mut i = 0
-    while i < len(s) {
-        let c = s.substring(i, i + 1)
-        if c == "'" { out = out + "'\\''" } else { out = out + c }
-        i = i + 1
-    }
-    return out + "'"
-}
-
-// ── resolveRecord (mirror main.swift resolveRecord) ─────────────────────────
-//
-// Try `arg` as a path; if that loads, use it. Else scan
-// exports/chip/noc/f1f2/records/*.json for a record whose record_id == arg; the
-// FIRST match wins and we re-load it by its path. If no id matches, return the
-// ORIGINAL path-load result (so the error reported is the path error for arg,
-// exactly like Swift returning `byPath`).
-//
-// Returns [status, canonical-path-or-arg]. On an id hit, status="ok" and the
-// path is the matched record's canonical path.
-fn _vr_resolve(arg: string) -> [string] {
-    let by_path = _vr_load(arg)
-    if by_path[0] == "ok" { return by_path }
-    // id scan over the records dir.
-    let root = _vr_exports_root()
-    let records_dir = root + "/chip/noc/f1f2/records"
-    let q_dir = _vr_shq(records_dir)
-    // list *.json (sorted — ArtifactRegistry sorts by lastPathComponent; the
-    // FIRST id match wins, so sorted order makes the pick deterministic).
-    let listing = exec("ls " + q_dir + "/*.json 2>/dev/null | sort").trim()
-    if len(listing) > 0 {
-        let files = listing.split("\n")
-        let mut i = 0
-        while i < len(files) {
-            let f = files[i].trim()
-            if len(f) > 0 {
-                let text = read_file(f)
-                let obj = json_parse_object(text)
-                let rid = json_object_get_str(obj, "record_id", "")
-                if rid == arg {
-                    // re-load by its (already-canonical, under-exports) path.
-                    return _vr_load(f)
-                }
-            }
-            i = i + 1
-        }
-    }
-    // no id hit → original path-load failure (Swift returns `byPath`).
-    return by_path
-}
-
-// _vr_error_line(status, path) — the Swift RecordLoaderError.errorDescription
-// for a failed load, prefixed `verify: ` (the verifyRecord stderr write).
-fn _vr_error_line(status: string, path: string) -> string {
-    if status == "outside" {
-        return "verify: Refused (@D g_cockpit_isolation invariant a): path is outside ../exports/**: " + path
-    }
-    if status == "notfound" {
-        return "verify: Record file not found: " + path
-    }
-    // decode (read OK, JSON undecodable) — Swift prints the underlying decode
-    // error, which is machine/locale dependent; the deterministic, golden-able
-    // cases the @ci_gate asserts are ok/outside/notfound. A decode failure
-    // here still exits 1 (the verifyRecord guard), just with a generic line.
-    return "verify: Decode failed (" + path + ")"
-}
 
 // _vr_path_str(obj, path) — dotted-path lookup → string. "" if the path is
 // absent or the terminal is not a scalar. json_object_get_str only takes a
@@ -253,9 +59,9 @@ fn _vr_check(name: string, pass: bool, detail: string) {
 // vr_verify_record(arg) — THE entry called by handler_verify's bare path.
 // Returns the process exit code (0 ok · 1 reject/load-fail).
 pub fn vr_verify_record(arg: string) -> int {
-    let res = _vr_resolve(arg)
+    let res = rl_resolve(arg)
     if res[0] != "ok" {
-        eprintln(_vr_error_line(res[0], res[1]))
+        eprintln(rl_error_line(res[0], res[1]))
         return 1
     }
     let path = res[1]
@@ -276,11 +82,11 @@ pub fn vr_verify_record(arg: string) -> int {
     let claim_text  = (f1 + " " + f2 + " " + rationale).to_lower()
     // markers (verbatim from Swift): English already-lower + Korean literals.
     let mut claims = false
-    if _vr_contains(claim_text, "absorbed")     { claims = true }
-    if _vr_contains(claim_text, "parity")       { claims = true }
-    if _vr_contains(claim_text, "측정완료")      { claims = true }
-    if _vr_contains(claim_text, "gate_closed")  { claims = true }
-    if _vr_contains(claim_text, "검증완료")      { claims = true }
+    if rl_contains(claim_text, "absorbed")     { claims = true }
+    if rl_contains(claim_text, "parity")       { claims = true }
+    if rl_contains(claim_text, "측정완료")      { claims = true }
+    if rl_contains(claim_text, "gate_closed")  { claims = true }
+    if rl_contains(claim_text, "검증완료")      { claims = true }
     // measured = gate is B_PINNED_MET or CLOSED_MEASURED.
     let measured = (gate == "GATE_B_PINNED_MET") || (gate == "GATE_CLOSED_MEASURED")
 

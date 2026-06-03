@@ -1,0 +1,244 @@
+// HEXA Standard Library — demi/record_loader
+//
+// @version 0.1.0
+// @capabilities [proc]
+//
+// The pure-hexa-native port of the Swift cockpit `RecordLoader` +
+// `ArtifactRegistry` pair (demiurge cockpit/Sources/DemiurgeCore/Loaders/
+// RecordLoader.swift + Artifacts/ArtifactRegistry.swift · demi-cli-pure-hexa-
+// native · plan PR-record-loader). This is the SHARED BASE the later
+// list-*/show/gate verbs (PR#6/#7/#8) build on — it adds NO user-facing verb
+// by itself.
+//
+// Canonical primitives (d3 — one home for the loader; verify_record.hexa now
+// CONSUMES these instead of re-deriving them):
+//   rl_exports_root()          — RecordLoader.exportsRoot (lexical-canon)
+//   rl_f1f2_records_root()     — RecordLoader.f1f2RecordsRoot
+//   rl_load_by_path(arg)       — RecordLoader.load(url:) — invariant (a) guard
+//   rl_load_by_id(id)          — resolveRecord scan over the records dir
+//   rl_resolve(arg)            — try path, else id scan (main.swift resolveRecord)
+//   rl_enumerate(kind)         — ArtifactRegistry.load(kind:) (f1f2 today)
+//   rl_error_line(status,path) — RecordLoaderError.errorDescription, `verify: `-prefixed
+//
+// @D g_cockpit_isolation invariant (a) is enforced in rl_load_by_path exactly
+// as Swift's RecordLoader.load does: the canonicalized path must hasPrefix the
+// canonicalized exportsRoot, else `pathOutsideExports`. Canonicalization
+// mirrors Foundation's `.standardizedFileURL` — LEXICAL `.`/`..` collapse, NO
+// symlink resolution (so it agrees with the Swift reference on the same tree).
+
+import "stdlib/alloc/json_object.hexa"
+
+// ── small string helpers (self-contained leaf module) ──────────────────────
+
+// rl_index_of(hay, needle, from) — first index of needle at/after `from`, or -1.
+pub fn rl_index_of(hay: string, needle: string, from: int) -> int {
+    let hn = len(hay)
+    let nn = len(needle)
+    if nn == 0 { return from }
+    let mut i = from
+    while i + nn <= hn {
+        if hay.substring(i, i + nn) == needle { return i }
+        i = i + 1
+    }
+    return -1
+}
+
+// rl_contains(hay, needle) — substring membership.
+pub fn rl_contains(hay: string, needle: string) -> bool {
+    return rl_index_of(hay, needle, 0) >= 0
+}
+
+// rl_starts_with(s, p) — prefix test (string method may not be wired in the
+// nested-run path; keep a local copy so this leaf module is self-contained).
+pub fn rl_starts_with(s: string, p: string) -> bool {
+    if len(p) > len(s) { return false }
+    return s.substring(0, len(p)) == p
+}
+
+// rl_shq(s) — single-quote shell escaping for exec() argv.
+pub fn rl_shq(s: string) -> string {
+    let mut out = "'"
+    let mut i = 0
+    while i < len(s) {
+        let c = s.substring(i, i + 1)
+        if c == "'" { out = out + "'\\''" } else { out = out + c }
+        i = i + 1
+    }
+    return out + "'"
+}
+
+// ── exports-root + path canonicalization (mirror RecordLoader) ──────────────
+
+// rl_pop(xs) — return xs without its last element (no native pop assumed).
+pub fn rl_pop(xs: [string]) -> [string] {
+    let mut out: [string] = []
+    let mut i = 0
+    let n = len(xs) - 1
+    while i < n {
+        out.push(xs[i])
+        i = i + 1
+    }
+    return out
+}
+
+// rl_canon(path) — LEXICAL canonicalization matching Foundation
+// `.standardizedFileURL`: make absolute against cwd if relative, collapse `.`
+// and `..` segments, drop empty segments and any trailing slash. Does NOT
+// resolve symlinks (Foundation's `standardized` does not either), so it agrees
+// with the Swift reference on the same physical tree.
+pub fn rl_canon(path: string) -> string {
+    let mut p = path
+    if !rl_starts_with(p, "/") {
+        let cwd = exec("pwd").trim()
+        p = cwd + "/" + p
+    }
+    let segs = p.split("/")
+    let mut stack: [string] = []
+    let mut i = 0
+    while i < len(segs) {
+        let s = segs[i]
+        if s == "" || s == "." {
+            // skip empty (from leading "/" or "//") and "."
+        } else if s == ".." {
+            if len(stack) > 0 { stack = rl_pop(stack) }
+        } else {
+            stack.push(s)
+        }
+        i = i + 1
+    }
+    let mut out = ""
+    let mut j = 0
+    while j < len(stack) {
+        out = out + "/" + stack[j]
+        j = j + 1
+    }
+    if out == "" { return "/" }
+    return out
+}
+
+// rl_exports_root() — the exports subtree the CLI reads records from
+// (RecordLoader.exportsRoot). $DEMIURGE_REPO/exports if set, else <cwd>/../exports.
+// Returned canonicalized (lexical), with NO trailing slash.
+pub fn rl_exports_root() -> string {
+    let repo = env("DEMIURGE_REPO")
+    if len(repo) > 0 {
+        return rl_canon(repo + "/exports")
+    }
+    let cwd = exec("pwd").trim()
+    return rl_canon(cwd + "/../exports")
+}
+
+// rl_f1f2_records_root() — RecordLoader.f1f2RecordsRoot (the default F1F2 dir).
+pub fn rl_f1f2_records_root() -> string {
+    return rl_exports_root() + "/chip/noc/f1f2/records"
+}
+
+// ── record load (mirror RecordLoader.load) ──────────────────────────────────
+//
+// A load result is encoded as a 2-string array [status, payload]:
+//   ["ok",       <canonical-path>]   — file exists under exports/, decodable
+//   ["outside",  <canonical-path>]   — path canonicalizes outside exports/
+//   ["notfound", <canonical-path>]   — under exports/ but no such file
+//   ["decode",   <canonical-path>]   — read but JSON-undecodable
+// The caller turns a non-"ok" status into the matching Swift error line.
+
+pub fn rl_load_by_path(path_arg: string) -> [string] {
+    let root = rl_exports_root()
+    let canon = rl_canon(path_arg)
+    // invariant (a): canon must be under root (string hasPrefix, like Swift).
+    if !rl_starts_with(canon, root) {
+        return ["outside", canon]
+    }
+    let q = rl_shq(canon)
+    let exists = exec("test -f " + q + " && echo yes || echo no").trim()
+    if exists != "yes" {
+        return ["notfound", canon]
+    }
+    let text = read_file(canon)
+    let obj = json_parse_object(text)
+    // json_parse_object returns an empty map on non-object / unparseable text.
+    // A genuine record always carries "record_id"; treat a missing-everything
+    // parse as a decode failure (Swift's decodeFailed — the consumer cannot
+    // read the typed fields).
+    if !json_object_has(obj, "record_id") && !json_object_has(obj, "provenance") {
+        return ["decode", canon]
+    }
+    return ["ok", canon]
+}
+
+// rl_enumerate(kind) — ArtifactRegistry.load(kind:). Today only the f1f2 kind
+// (the RecordLoader-anchored, invariant-(a)-strict scan) is implemented — it is
+// the one PR#5 needs to land as the shared base. Returns the SORTED list of
+// canonical *.json record paths under f1f2RecordsRoot (sort by lastPathComponent,
+// matching ArtifactRegistry.loadF1F2's `.sorted { $0.lastPathComponent < ... }`).
+// The metadata kinds (decision/rfc/domain) land with their list-* verbs (#6-#8).
+pub fn rl_enumerate(kind: string) -> [string] {
+    if kind != "f1f2" {
+        return []
+    }
+    let dir = rl_f1f2_records_root()
+    let q_dir = rl_shq(dir)
+    // `ls *.json | sort` == sort by lastPathComponent (all share the same dir).
+    let listing = exec("ls " + q_dir + "/*.json 2>/dev/null | sort").trim()
+    let mut out: [string] = []
+    if len(listing) > 0 {
+        let files = listing.split("\n")
+        let mut i = 0
+        while i < len(files) {
+            let f = files[i].trim()
+            if len(f) > 0 { out.push(rl_canon(f)) }
+            i = i + 1
+        }
+    }
+    return out
+}
+
+// rl_load_by_id(id) — scan f1f2RecordsRoot for a record whose record_id == id
+// (ArtifactRegistry-style enumeration). FIRST match in sorted order wins, then
+// the matched path is re-loaded through rl_load_by_path (so the same invariant-
+// (a) guard applies). Returns the load-result pair; if no id matches, a
+// ["notfound", id] pair (the caller decides how to surface that — resolveRecord
+// prefers the original path error, see rl_resolve).
+pub fn rl_load_by_id(id: string) -> [string] {
+    let files = rl_enumerate("f1f2")
+    let mut i = 0
+    while i < len(files) {
+        let f = files[i]
+        let text = read_file(f)
+        let obj = json_parse_object(text)
+        let rid = json_object_get_str(obj, "record_id", "")
+        if rid == id {
+            return rl_load_by_path(f)
+        }
+        i = i + 1
+    }
+    return ["notfound", id]
+}
+
+// rl_resolve(arg) — main.swift resolveRecord. Try `arg` as a path; if it loads,
+// use it. Else scan for a record_id == arg (the FIRST sorted match). If no id
+// matches, return the ORIGINAL path-load result (so the error reported is the
+// path error for arg, exactly like Swift returning `byPath`).
+pub fn rl_resolve(arg: string) -> [string] {
+    let by_path = rl_load_by_path(arg)
+    if by_path[0] == "ok" { return by_path }
+    let by_id = rl_load_by_id(arg)
+    if by_id[0] == "ok" { return by_id }
+    // no id hit → original path-load failure (Swift returns `byPath`).
+    return by_path
+}
+
+// rl_error_line(status, path) — the Swift RecordLoaderError.errorDescription
+// for a failed load, prefixed `verify: ` (the verifyRecord stderr write).
+pub fn rl_error_line(status: string, path: string) -> string {
+    if status == "outside" {
+        return "verify: Refused (@D g_cockpit_isolation invariant a): path is outside ../exports/**: " + path
+    }
+    if status == "notfound" {
+        return "verify: Record file not found: " + path
+    }
+    // decode (read OK, JSON undecodable) — Swift prints the underlying decode
+    // error, machine/locale dependent; the deterministic, golden-able cases are
+    // ok/outside/notfound. A decode failure still exits 1 with a generic line.
+    return "verify: Decode failed (" + path + ")"
+}

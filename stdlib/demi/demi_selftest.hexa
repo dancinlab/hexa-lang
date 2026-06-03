@@ -345,6 +345,74 @@ fn main() {
                           "DEMIURGE_OWNER=1", "atlas register",
                           g_atlas_owner, r_owner[1])
 
+    // ── PR-record-loader self-check (@ci_gate · @L7 spirit) — NOT a verb-
+    // parity cell (PR#5 adds NO new user-facing verb; the list-*/show/gate
+    // verb parity lands in PR#6-#8). This is a FOCUSED unit-check of the
+    // shared loader primitives (stdlib/demi/record_loader.hexa) that the later
+    // verbs build on: enumerate-by-kind count+sort · load-by-id hit/miss ·
+    // load-by-path under exports · invariant-(a) refusal for outside + `..`-
+    // escape paths. It runs the loader in a CHILD `hexa run` with DEMIURGE_REPO
+    // set in the child's env (the runtime's in-process setenv is a no-op, but a
+    // child reads its own env at startup correctly) against the SAME $HOME-
+    // rooted fixture — so the lexical-canon path guard is asserted machine-
+    // independently. The probe self-asserts and emits one golden line per case
+    // + an `ALL_PASS` sentinel; the parent checks the merged output + rc.
+    fails = fails + _loader_selfcheck(vfix, vroot)
+
     if fails == 0 { println("demi_parity_selftest PASS") }
     else { println("demi_parity_selftest FAIL — " + to_string(fails) + " cell(s)") }
+}
+
+// _loader_selfcheck(vfix, vroot) — write a tiny probe entry that imports the
+// record_loader and self-asserts each primitive, run it as a child with
+// DEMIURGE_REPO=vfix, and assert the child's output + rc. Returns 0 on green.
+fn _loader_selfcheck(vfix: string, vroot: string) -> int {
+    let probe = "/tmp/.demi-selftest-loader-probe.hexa"
+    let ok_path     = vroot + "/fixture_ok.json"
+    let reject_path = vroot + "/fixture_reject.json"
+    // The probe body. It exits 0 iff every assertion holds, printing one
+    // RESULT line plus a final ALL_PASS / FAILED sentinel. Paths are baked in
+    // (the parent already knows the fixture layout) so the probe needs no argv.
+    let body = "import \"stdlib/demi/record_loader.hexa\"\n"
+        + "fn _eq(got: string, want: string, tag: string) -> int {\n"
+        + "  if got == want { println(\"ok \" + tag); return 0 }\n"
+        + "  println(\"NO \" + tag + \" got=[\" + got + \"] want=[\" + want + \"]\"); return 1\n"
+        + "}\n"
+        + "fn main() {\n"
+        + "  let mut f = 0\n"
+        + "  let recs = rl_enumerate(\"f1f2\")\n"
+        + "  f = f + _eq(to_string(len(recs)), \"2\", \"enumerate-count\")\n"
+        + "  if len(recs) == 2 {\n"
+        + "    f = f + _eq(recs[0], \"" + ok_path + "\", \"enumerate-sort0\")\n"
+        + "    f = f + _eq(recs[1], \"" + reject_path + "\", \"enumerate-sort1\")\n"
+        + "  } else { f = f + 2 }\n"
+        + "  f = f + _eq(to_string(len(rl_enumerate(\"decision\"))), \"0\", \"enumerate-unimpl\")\n"
+        + "  let byid = rl_load_by_id(\"FIXTURE_OK\")\n"
+        + "  f = f + _eq(byid[0] + \"|\" + byid[1], \"ok|" + ok_path + "\", \"load-by-id\")\n"
+        + "  f = f + _eq(rl_load_by_id(\"NO_SUCH_ID\")[0], \"notfound\", \"load-by-id-miss\")\n"
+        + "  f = f + _eq(rl_load_by_path(\"" + ok_path + "\")[0], \"ok\", \"load-by-path\")\n"
+        + "  let outside = rl_load_by_path(\"" + vfix + "/outside.json\")\n"
+        + "  f = f + _eq(outside[0] + \"|\" + outside[1], \"outside|" + vfix + "/outside.json\", \"load-outside-refused\")\n"
+        + "  f = f + _eq(rl_load_by_path(\"" + vroot + "/../../../../../escape.json\")[0], \"outside\", \"load-escape-refused\")\n"
+        + "  if f == 0 { println(\"ALL_PASS\") } else { println(\"FAILED \" + to_string(f)); exit(1) }\n"
+        + "}\n"
+    exec("printf %s " + _shq2(body) + " > " + _shq2(probe))
+    let hexa = exec("command -v hexa 2>/dev/null || echo hexa").trim()
+    let cmd = "DEMIURGE_REPO=" + _shq2(vfix) + " " + _shq2(hexa)
+        + " run --no-sentinel " + _shq2(probe) + " 2>&1"
+    let pair = exec_with_status(cmd)
+    let out = to_string(pair[0])
+    let rc = _atoi2(pair[1])
+    if rc == 0 && _ends_with_pass(out) {
+        println("PASS loader/record-loader (enumerate · load-by-id · invariant-a guard)")
+        return 0
+    }
+    println("FAIL loader/record-loader — rc=" + to_string(rc))
+    println(out)
+    return 1
+}
+
+// _ends_with_pass(out) — the probe's last meaningful line is ALL_PASS.
+fn _ends_with_pass(out: string) -> bool {
+    return rl_contains(out, "ALL_PASS")
 }
