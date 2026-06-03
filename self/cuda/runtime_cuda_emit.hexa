@@ -289,6 +289,10 @@ fn emit_runtime_cuda_c() -> str {
             "    }\n" +
             "    /* Default math mode is fp64-strict for Dgemm; do NOT set\n" +
             "     * CUBLAS_TENSOR_OP_MATH (we want bit-reproducible Dgemm). */\n" +
+            "    /* L2-b: fold the cuBLAS GEMMs onto the forge stream when async-on so they\n" +
+            "     * queue with the device kernels (no per-GEMM host barrier). async-off ->\n" +
+            "     * _forge_stream() returns 0 = default stream = byte-identical legacy path. */\n" +
+            "    if (_forge_async_on()) cublasSetStream(g_cublas, _forge_stream());\n" +
             "    return 0;\n" +
             "}\n" +
             "\n" +
@@ -779,6 +783,9 @@ fn emit_runtime_cuda_c() -> str {
             "        fprintf(stderr, \"[cuda] cublasDgemm failed: %d\\n\", (int)st);\n" +
             "        return -1;\n" +
             "    }\n" +
+            "    /* L2-b: sync the forge stream before reading the GEMM result back (async-on);\n" +
+            "     * no-op when async-off (default stream). Keeps D2H race-free + byte-eq. */\n" +
+            "    if (_forge_sync() != 0) return -1;\n" +
             "    /* Copy C device → host so the host-side caller sees the result. */\n" +
             "    cudaError_t er = cudaMemcpy(ce->buf, C_dev,\n" +
             "                                (size_t)(M * N) * sizeof(double),\n" +
@@ -863,6 +870,7 @@ fn emit_runtime_cuda_c() -> str {
             "        fprintf(stderr, \"[cuda] cublasDgemmStridedBatched failed: %d\\n\", (int)st);\n" +
             "        return -1;\n" +
             "    }\n" +
+            "    if (_forge_sync() != 0) return -1;\n" +
             "    cudaError_t er = cudaMemcpy(ce->buf, C_dev,\n" +
             "                                (size_t)(batch * M * N) * sizeof(double),\n" +
             "                                cudaMemcpyDeviceToHost);\n" +
