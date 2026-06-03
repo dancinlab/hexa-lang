@@ -253,6 +253,18 @@ F-FUSION-GEMM-SHAPE-SPECIALIZE: rc=0
 ```
 verdict: `.verdicts/hexa-fusion/F-FUSION-GEMM-SHAPE-SPECIALIZE.txt`. 잔여: dead-output elim(§5b 2nd) · MIR call-site auto-select · WMMA matmul 경로(`_nvptx_emit_matmul_body` K/16 tile) · silicon. raw-GEMM 우위 주장 0 — 런타임 loop-control + shape param-load 경계 제거(라이브러리는 런타임 dispatch).
 
+## ── ② async-launch pipeline — slice 1 ✅ (W2-confirmed lever, 2026-06-03) ──
+
+W2 가 확정한 진짜 unblock(인터프리트 per-step 드라이버 제거)의 첫 codegen 슬라이스. PR #2619 (base main). fwd device-kernel 10개(im2col·im2col_t·db_colsum·int4_quant·residual_add·gelu·groupnorm·expert_pack2·moe_router·embedding)를 **단일 non-blocking CUDA 스트림 `g_forge_stream`** 로 launch + per-call host-sync 제거 → 커널 back-to-back 큐. sync 는 step 경계(D2H readback 전 `cudaStreamSynchronize`)에서만.
+
+`self/cuda/runtime_cuda_emit.hexa`: `g_forge_stream`(lazy) · `_forge_async_on()`(env `HEXA_CUDA_ASYNC` 우선, unset→`CLM_PROD_DEVRESIDENT` 따름, default off→legacy per-call sync) · `_forge_launch_check()`(async=`cudaGetLastError`, legacy=`cudaDeviceSynchronize`) · `_forge_sync()`(`_d2h`/`_d2h_out` 에 주입).
+
+```
+$ hexa run stdlib/flame/clm_conv_devfeed.hexa
+ALL-PASS — 19/19 oracles max|Δ|=0, 0 FAIL
+```
+async-OFF = emitted-C byte-identical(substrate + 10 launch rewrite + 2 D2H sync 주입만, #2571/#2591 byte-eq 유지). async-ON = same kernels·one stream·sync-before-readback 라 **by construction byte-eq**. verdict: `.verdicts/hexa-fusion-l1-async/`. **잔여(②b 진행중)**: bwd-tail+AdamW wrapper 를 스트림에 · `cublasSetStream` 으로 GEMM 큐 합류 → 전체 step 단일 async 스트림 → ④ CUDA-graph 가능. **util MEAN≥20% 검증 = pod fire 필요 (env-congested → DEFERRED, 코드는 byte-eq 검증·landed)**. raw-GEMM 우위 주장 0.
+
 ## ── W2 util fire verdict — 🔴 CLOSED-NEGATIVE (2026-06-03, g5 verbatim) ──
 
 full fwd+bwd device-resident step (glue 전량 device, byte-eq strict 0) 의 첫 직접 util 측정. pod H100 sm_90, d1536/T512 E2 nsamp32 epochs3, corpus 2MB, CLM_PROD_DEVRESIDENT=1 DEVFEED=1 BATCHED=1.
