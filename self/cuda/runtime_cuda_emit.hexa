@@ -177,6 +177,105 @@ fn emit_runtime_cuda_c() -> str {
             "    return prev;\n" +
             "}\n" +
             "\n" +
+            "/* ════════════════════════════════════════════════════════════════════\n" +
+            " * HEXA-FUSION L1-② — async kernel-launch pipeline (per-step driver\n" +
+            " * host-sync removal). W2 CLOSED-NEGATIVE measured util MEAN 0.53%\n" +
+            " * even with the whole fwd+bwd glue device-resident: the binding floor\n" +
+            " * is the INTERPRETED per-step driver dispatching ~30 device kernels\n" +
+            " * one-by-one, each followed by a full `cudaDeviceSynchronize()` host\n" +
+            " * barrier — the GPU drains + idles between every launch.\n" +
+            " *\n" +
+            " * This substrate lets the device-resident chain queue back-to-back on\n" +
+            " * ONE non-blocking stream and sync only at a host READBACK boundary\n" +
+            " * (a _d2h / _d2h_out — the scalar loss or a materialised output). Same\n" +
+            " * kernels, same data-dependent order, ONE stream ⇒ identical numerics\n" +
+            " * (max|Δ|=0): a single-stream queue serialises exactly as the per-call\n" +
+            " * barrier did, only without draining the GPU between launches.\n" +
+            " *\n" +
+            " * Gated by env HEXA_CUDA_ASYNC (read once, cached). Default OFF ⇒\n" +
+            " * g_forge_stream stays the default stream (0) and _forge_launch_check\n" +
+            " * keeps the per-call cudaDeviceSynchronize() — byte-identical to the\n" +
+            " * verified pre-async substrate. The clm_prod driver sets it only under\n" +
+            " * CLM_PROD_DEVRESIDENT (default off → no behaviour change).\n" +
+            " * ════════════════════════════════════════════════════════════════════ */\n" +
+            "static cudaStream_t g_forge_stream = 0;   /* 0 = default (legacy) stream */\n" +
+            "static int          g_forge_async  = -1;  /* -1 = uninit, 0 off, 1 on */\n" +
+            "\n" +
+            "static int _forge_async_on(void) {\n" +
+            "    if (g_forge_async < 0) {\n" +
+            "        /* Explicit HEXA_CUDA_ASYNC wins (1 = force on, 0 = force off /\n" +
+            "         * kill switch). Unset → follow CLM_PROD_DEVRESIDENT: the async\n" +
+            "         * pipeline only helps (and only fires kernels) on the\n" +
+            "         * device-resident chain, which is exactly that gate. A default\n" +
+            "         * (no CLM_PROD_DEVRESIDENT) run has async OFF → byte-identical. */\n" +
+            "        const char* v = getenv(\"HEXA_CUDA_ASYNC\");\n" +
+            "        if (v && v[0]) {\n" +
+            "            g_forge_async = (v[0] != '0') ? 1 : 0;\n" +
+            "        } else {\n" +
+            "            const char* dr = getenv(\"CLM_PROD_DEVRESIDENT\");\n" +
+            "            g_forge_async = (dr && dr[0]) ? 1 : 0;\n" +
+            "        }\n" +
+            "    }\n" +
+            "    return g_forge_async;\n" +
+            "}\n" +
+            "\n" +
+            "#ifdef __CUDACC__\n" +
+            "/* Lazy non-blocking stream for the device-resident chain. When async is\n" +
+            " * off this returns the default stream (0) so launches are byte-identical\n" +
+            " * to legacy. On any stream-create failure we fall back to the default\n" +
+            " * stream (correctness over throughput — never silently wrong). */\n" +
+            "static cudaStream_t _forge_stream(void) {\n" +
+            "    if (!_forge_async_on()) return 0;\n" +
+            "    if (g_forge_stream == 0) {\n" +
+            "        cudaStream_t st = 0;\n" +
+            "        cudaError_t er = cudaStreamCreateWithFlags(&st, cudaStreamNonBlocking);\n" +
+            "        if (er != cudaSuccess || st == 0) {\n" +
+            "            fprintf(stderr, \"[cuda] forge stream create failed: %s\\n\",\n" +
+            "                    cudaGetErrorString(er));\n" +
+            "            return 0; /* fall back to default stream */\n" +
+            "        }\n" +
+            "        g_forge_stream = st;\n" +
+            "    }\n" +
+            "    return g_forge_stream;\n" +
+            "}\n" +
+            "\n" +
+            "/* Post-launch check. Legacy (async off): full cudaDeviceSynchronize() —\n" +
+            " * byte-identical per-call barrier. Async on: cudaGetLastError() only —\n" +
+            " * catches launch-config/resource errors WITHOUT a host barrier, so the\n" +
+            " * next kernel queues immediately behind this one on the same stream.\n" +
+            " * Returns 0 ok / -1 on a launch error (caller propagates -1). */\n" +
+            "static int _forge_launch_check(const char* op) {\n" +
+            "    cudaError_t er;\n" +
+            "    if (_forge_async_on()) {\n" +
+            "        er = cudaGetLastError();\n" +
+            "    } else {\n" +
+            "        er = cudaDeviceSynchronize();\n" +
+            "    }\n" +
+            "    if (er != cudaSuccess) {\n" +
+            "        fprintf(stderr, \"[cuda] %s launch failed: %s\\n\", op,\n" +
+            "                cudaGetErrorString(er));\n" +
+            "        return -1;\n" +
+            "    }\n" +
+            "    return 0;\n" +
+            "}\n" +
+            "\n" +
+            "/* Stream barrier at a host-readback boundary. Async on: wait for every\n" +
+            " * queued kernel on the forge stream to retire before a D2H sees their\n" +
+            " * writes (the keystone that keeps numerics identical). Async off: no-op\n" +
+            " * (each launch already synced). Returns 0 ok / -1 err. */\n" +
+            "static int _forge_sync(void) {\n" +
+            "    if (!_forge_async_on()) return 0;\n" +
+            "    if (g_forge_stream == 0) return 0; /* default stream: nothing queued */\n" +
+            "    cudaError_t er = cudaStreamSynchronize(g_forge_stream);\n" +
+            "    if (er != cudaSuccess) {\n" +
+            "        fprintf(stderr, \"[cuda] forge stream sync failed: %s\\n\",\n" +
+            "                cudaGetErrorString(er));\n" +
+            "        return -1;\n" +
+            "    }\n" +
+            "    return 0;\n" +
+            "}\n" +
+            "#endif /* __CUDACC__ */\n" +
+            "\n" +
             "/* cuBLAS handle — lazy init. */\n" +
             "static cublasHandle_t g_cublas = NULL;\n" +
             "\n" +
@@ -266,6 +365,10 @@ fn emit_runtime_cuda_c() -> str {
             "        fprintf(stderr, \"[cuda] d2h: state mismatch id=%lld\\n\", (long long)id);\n" +
             "        return -1;\n" +
             "    }\n" +
+            "    /* Async pipeline: a host readback is the sync boundary — drain the\n" +
+            "     * forge stream so this D2H sees every queued kernel's writes. No-op\n" +
+            "     * when async is off (each launch already synced). */\n" +
+            "    if (_forge_sync() != 0) return -1;\n" +
             "    cudaError_t er = cudaMemcpy(e->buf, s->d_buf,\n" +
             "                                (size_t)e->len * sizeof(double),\n" +
             "                                cudaMemcpyDeviceToHost);\n" +
@@ -875,12 +978,8 @@ fn emit_runtime_cuda_c() -> str {
             "    const double* X  = g_slots[x_id].d_buf;\n" +
             "    double*       XC = g_slots[xc_id].d_buf;\n" +
             "    int grid_sz, block_sz; _hx_im2col_grid(T * Kdim, &grid_sz, &block_sz);\n" +
-            "    _hx_k_im2col<<<grid_sz, block_sz>>>(X, XC, T, Cin, K, dil);\n" +
-            "    cudaError_t er = cudaDeviceSynchronize();\n" +
-            "    if (er != cudaSuccess) {\n" +
-            "        fprintf(stderr, \"[cuda] im2col launch failed: %s\\n\", cudaGetErrorString(er));\n" +
-            "        return -1;\n" +
-            "    }\n" +
+            "    _hx_k_im2col<<<grid_sz, block_sz, 0, _forge_stream()>>>(X, XC, T, Cin, K, dil);\n" +
+            "    if (_forge_launch_check(\"im2col\") != 0) return -1;\n" +
             "    return _d2h_out(xc_id, T * Kdim);\n" +
             "#else\n" +
             "    (void)x_id; (void)xc_id; (void)T; (void)Cin; (void)K; (void)dil;\n" +
@@ -900,12 +999,8 @@ fn emit_runtime_cuda_c() -> str {
             "    const double* X   = g_slots[x_id].d_buf;\n" +
             "    double*       XCT = g_slots[xct_id].d_buf;\n" +
             "    int grid_sz, block_sz; _hx_im2col_grid(Kdim * T, &grid_sz, &block_sz);\n" +
-            "    _hx_k_im2col_t<<<grid_sz, block_sz>>>(X, XCT, T, Cin, K, dil);\n" +
-            "    cudaError_t er = cudaDeviceSynchronize();\n" +
-            "    if (er != cudaSuccess) {\n" +
-            "        fprintf(stderr, \"[cuda] im2col_t launch failed: %s\\n\", cudaGetErrorString(er));\n" +
-            "        return -1;\n" +
-            "    }\n" +
+            "    _hx_k_im2col_t<<<grid_sz, block_sz, 0, _forge_stream()>>>(X, XCT, T, Cin, K, dil);\n" +
+            "    if (_forge_launch_check(\"im2col_t\") != 0) return -1;\n" +
             "    return _d2h_out(xct_id, Kdim * T);\n" +
             "#else\n" +
             "    (void)x_id; (void)xct_id; (void)T; (void)Cin; (void)K; (void)dil;\n" +
@@ -996,13 +1091,8 @@ fn emit_runtime_cuda_c() -> str {
             "    int64_t want = (Cout + block_sz - 1) / block_sz;\n" +
             "    int grid_sz = (want > 1024) ? 1024 : (int)want;\n" +
             "    if (grid_sz < 1) grid_sz = 1;\n" +
-            "    _hx_k_db_colsum<<<grid_sz, block_sz>>>(DY, DB, T, Cout);\n" +
-            "    cudaError_t er = cudaDeviceSynchronize();\n" +
-            "    if (er != cudaSuccess) {\n" +
-            "        fprintf(stderr, \"[cuda] db_colsum launch failed: %s\\n\",\n" +
-            "                cudaGetErrorString(er));\n" +
-            "        return -1;\n" +
-            "    }\n" +
+            "    _hx_k_db_colsum<<<grid_sz, block_sz, 0, _forge_stream()>>>(DY, DB, T, Cout);\n" +
+            "    if (_forge_launch_check(\"db_colsum\") != 0) return -1;\n" +
             "    /* db stays DEVICE-RESIDENT: mark loc=FARR_DEVICE, dirty_host=0 so the\n" +
             "     * next _adam(W, db, ...) _h2d SKIPs the H2D and reuses the device\n" +
             "     * accumulator in place (host db never read — byte-eq to the host\n" +
@@ -1110,13 +1200,8 @@ fn emit_runtime_cuda_c() -> str {
             "    int64_t want = (Cout + block_sz - 1) / block_sz;\n" +
             "    int grid_sz = (want > 1024) ? 1024 : (int)want;\n" +
             "    if (grid_sz < 1) grid_sz = 1;\n" +
-            "    _hx_k_int4_quant<<<grid_sz, block_sz>>>(W, WQ, SC, QL, MASK, Cout, rest);\n" +
-            "    cudaError_t er = cudaDeviceSynchronize();\n" +
-            "    if (er != cudaSuccess) {\n" +
-            "        fprintf(stderr, \"[cuda] int4_quant launch failed: %s\\n\",\n" +
-            "                cudaGetErrorString(er));\n" +
-            "        return -1;\n" +
-            "    }\n" +
+            "    _hx_k_int4_quant<<<grid_sz, block_sz, 0, _forge_stream()>>>(W, WQ, SC, QL, MASK, Cout, rest);\n" +
+            "    if (_forge_launch_check(\"int4_quant\") != 0) return -1;\n" +
             "    /* wq/sc/ql/mask stay DEVICE-RESIDENT (same residence convention as the\n" +
             "     * keepmv moments / db_colsum). W keeps its existing loc (FARR_DEVICE\n" +
             "     * after _h2d — no D2H, that is the whole point: W stays resident). */\n" +
@@ -1222,13 +1307,8 @@ fn emit_runtime_cuda_c() -> str {
             "    int64_t want = (n + block_sz - 1) / block_sz;\n" +
             "    int grid_sz = (want > 1024) ? 1024 : (int)want;\n" +
             "    if (grid_sz < 1) grid_sz = 1;\n" +
-            "    _hx_k_residual_add<<<grid_sz, block_sz>>>(A, B, OUT, n);\n" +
-            "    cudaError_t er = cudaDeviceSynchronize();\n" +
-            "    if (er != cudaSuccess) {\n" +
-            "        fprintf(stderr, \"[cuda] residual_add launch failed: %s\\n\",\n" +
-            "                cudaGetErrorString(er));\n" +
-            "        return -1;\n" +
-            "    }\n" +
+            "    _hx_k_residual_add<<<grid_sz, block_sz, 0, _forge_stream()>>>(A, B, OUT, n);\n" +
+            "    if (_forge_launch_check(\"residual_add\") != 0) return -1;\n" +
             "    /* OUT stays DEVICE-RESIDENT (loc=FARR_DEVICE, dirty_host=0) so the next\n" +
             "     * conv GEMM that reads it H2D-skips (same residence convention as the\n" +
             "     * keepmv moments / db colsum / int4 quant). */\n" +
@@ -1279,13 +1359,8 @@ fn emit_runtime_cuda_c() -> str {
             "    int64_t want = (n + block_sz - 1) / block_sz;\n" +
             "    int grid_sz = (want > 1024) ? 1024 : (int)want;\n" +
             "    if (grid_sz < 1) grid_sz = 1;\n" +
-            "    _hx_k_gelu<<<grid_sz, block_sz>>>(IN, OUT, n);\n" +
-            "    cudaError_t er = cudaDeviceSynchronize();\n" +
-            "    if (er != cudaSuccess) {\n" +
-            "        fprintf(stderr, \"[cuda] gelu launch failed: %s\\n\",\n" +
-            "                cudaGetErrorString(er));\n" +
-            "        return -1;\n" +
-            "    }\n" +
+            "    _hx_k_gelu<<<grid_sz, block_sz, 0, _forge_stream()>>>(IN, OUT, n);\n" +
+            "    if (_forge_launch_check(\"gelu\") != 0) return -1;\n" +
             "    {\n" +
             "        HexaFarrEntry* e = &_hx_farr_table[out_id];\n" +
             "        e->d_buf      = (void*)g_slots[out_id].d_buf;\n" +
@@ -1384,14 +1459,9 @@ fn emit_runtime_cuda_c() -> str {
             "    int64_t want = (G + block_sz - 1) / block_sz;\n" +
             "    int grid_sz = (want > 1024) ? 1024 : (int)want;\n" +
             "    if (grid_sz < 1) grid_sz = 1;\n" +
-            "    _hx_k_groupnorm<<<grid_sz, block_sz>>>(X, GAMMA, BETA, Y, MEAN, INV, XHAT,\n" +
+            "    _hx_k_groupnorm<<<grid_sz, block_sz, 0, _forge_stream()>>>(X, GAMMA, BETA, Y, MEAN, INV, XHAT,\n" +
             "                                           T, C, G);\n" +
-            "    cudaError_t er = cudaDeviceSynchronize();\n" +
-            "    if (er != cudaSuccess) {\n" +
-            "        fprintf(stderr, \"[cuda] groupnorm launch failed: %s\\n\",\n" +
-            "                cudaGetErrorString(er));\n" +
-            "        return -1;\n" +
-            "    }\n" +
+            "    if (_forge_launch_check(\"groupnorm\") != 0) return -1;\n" +
             "    /* Y/xhat/mean/inv stay DEVICE-RESIDENT so the follow-up conv GEMM / gelu\n" +
             "     * H2D-skip them (same residence convention as residual_add). */\n" +
             "    {\n" +
@@ -1446,13 +1516,8 @@ fn emit_runtime_cuda_c() -> str {
             "    int64_t want = (n + block_sz - 1) / block_sz;\n" +
             "    int grid_sz = (want > 1024) ? 1024 : (int)want;\n" +
             "    if (grid_sz < 1) grid_sz = 1;\n" +
-            "    _hx_k_expert_pack2<<<grid_sz, block_sz>>>(EX0, EX1, OUT, n);\n" +
-            "    cudaError_t er = cudaDeviceSynchronize();\n" +
-            "    if (er != cudaSuccess) {\n" +
-            "        fprintf(stderr, \"[cuda] expert_pack2 launch failed: %s\\n\",\n" +
-            "                cudaGetErrorString(er));\n" +
-            "        return -1;\n" +
-            "    }\n" +
+            "    _hx_k_expert_pack2<<<grid_sz, block_sz, 0, _forge_stream()>>>(EX0, EX1, OUT, n);\n" +
+            "    if (_forge_launch_check(\"expert_pack2\") != 0) return -1;\n" +
             "    {\n" +
             "        HexaFarrEntry* e = &_hx_farr_table[out_id];\n" +
             "        e->d_buf      = (void*)g_slots[out_id].d_buf;\n" +
@@ -1550,13 +1615,8 @@ fn emit_runtime_cuda_c() -> str {
             "    int64_t want = (T + block_sz - 1) / block_sz;\n" +
             "    int grid_sz = (want > 1024) ? 1024 : (int)want;\n" +
             "    if (grid_sz < 1) grid_sz = 1;\n" +
-            "    _hx_k_moe_router<<<grid_sz, block_sz>>>(LOGITS, EX_OUT, PROBS, Y, T, E, C);\n" +
-            "    cudaError_t er = cudaDeviceSynchronize();\n" +
-            "    if (er != cudaSuccess) {\n" +
-            "        fprintf(stderr, \"[cuda] moe_router launch failed: %s\\n\",\n" +
-            "                cudaGetErrorString(er));\n" +
-            "        return -1;\n" +
-            "    }\n" +
+            "    _hx_k_moe_router<<<grid_sz, block_sz, 0, _forge_stream()>>>(LOGITS, EX_OUT, PROBS, Y, T, E, C);\n" +
+            "    if (_forge_launch_check(\"moe_router\") != 0) return -1;\n" +
             "    {\n" +
             "        int64_t outs[2] = { probs_id, y_id };\n" +
             "        for (int k = 0; k < 2; k++) {\n" +
@@ -1615,13 +1675,8 @@ fn emit_runtime_cuda_c() -> str {
             "    int64_t want = (T * d + block_sz - 1) / block_sz;\n" +
             "    int grid_sz = (want > 1024) ? 1024 : (int)want;\n" +
             "    if (grid_sz < 1) grid_sz = 1;\n" +
-            "    _hx_k_embedding<<<grid_sz, block_sz>>>(IDS, TABLE, OUT, T, d);\n" +
-            "    cudaError_t er = cudaDeviceSynchronize();\n" +
-            "    if (er != cudaSuccess) {\n" +
-            "        fprintf(stderr, \"[cuda] embedding launch failed: %s\\n\",\n" +
-            "                cudaGetErrorString(er));\n" +
-            "        return -1;\n" +
-            "    }\n" +
+            "    _hx_k_embedding<<<grid_sz, block_sz, 0, _forge_stream()>>>(IDS, TABLE, OUT, T, d);\n" +
+            "    if (_forge_launch_check(\"embedding\") != 0) return -1;\n" +
             "    {\n" +
             "        HexaFarrEntry* e = &_hx_farr_table[out_id];\n" +
             "        e->d_buf      = (void*)g_slots[out_id].d_buf;\n" +
@@ -2352,6 +2407,10 @@ fn emit_runtime_cuda_c() -> str {
             "        (void)copy_len;\n" +
             "        return 0;\n" +
             "    }\n" +
+            "    /* HOST_NOW path = host readback boundary → drain the forge stream\n" +
+            "     * first (no-op when async off). The DEVICE_KEEP path above returned\n" +
+            "     * without a D2H, so it correctly leaves the kernel queued. */\n" +
+            "    if (_forge_sync() != 0) return -1;\n" +
             "    cudaError_t er = cudaMemcpy(e->buf, s->d_buf,\n" +
             "                                (size_t)copy_len * sizeof(double),\n" +
             "                                cudaMemcpyDeviceToHost);\n" +

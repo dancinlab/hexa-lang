@@ -1,0 +1,52 @@
+HEXA-FUSION L1-② — async kernel-launch pipeline (first slice) byte-eq verdict
+================================================================================
+
+WHAT LANDED
+-----------
+self/cuda/runtime_cuda_emit.hexa: a single forge CUDA stream + env-gated
+async-launch substrate. The fwd device-resident chain (im2col, im2col_t,
+db_colsum, int4_quant, residual_add, gelu, groupnorm, expert_pack2,
+moe_router, embedding — 10 wrappers) now launches on ONE non-blocking
+stream with NO per-dispatch cudaDeviceSynchronize(). The host barrier is
+removed from every per-kernel dispatch and relocated to the host-readback
+boundary: _d2h() and _d2h_out() (HOST_NOW path) call _forge_sync()
+(cudaStreamSynchronize on the forge stream) before any D2H cudaMemcpy.
+
+GATE 1 — async OFF byte-identical (STATIC, proven mac-local)
+-----------------------------------------------------------
+Default (no CLM_PROD_DEVRESIDENT, no HEXA_CUDA_ASYNC) → _forge_async_on()=0:
+  _forge_stream()      → returns 0 (default stream); <<<g,b,0,0>>> ≡ <<<g,b>>>
+  _forge_launch_check  → cudaDeviceSynchronize() (identical per-call barrier)
+  _forge_sync          → returns 0 immediately (no-op)
+⇒ emitted runtime is behaviorally identical to the pre-async substrate for
+every async-off run. The prior verified device byte-eq verdicts (#2571 /
+#2591, all F-CLM-DEVFEED-* max|Δ|=0) hold UNCHANGED on the default path.
+
+Emitted-C diff (hexa-run self/cuda/runtime_cuda_emit.hexa) vs origin/main:
+ONLY the new substrate + the 10 launch-site rewrites + the 2 D2H sync
+injections. No other line changed. (verified by `diff` — see PR body.)
+
+GATE 2 — CPU-local host-reference byte-eq (ran mac-local, $0)
+-------------------------------------------------------------
+`hexa run stdlib/flame/clm_conv_devfeed.hexa` — the host reference the
+device kernels must match — ALL-PASS, 19/19 oracles max|Δ|=0, 0 FAIL:
+  F-CLM-DEVFEED-IM2COL-EQ=1 FWD-EQ=1 BWD-EQ(dW=0 dX≤5.55e-17 db=0)=1
+  GELU-EQ=1 GROUPNORM-EQ=1 EXPACK-EQ=1 MOEROUTER-EQ=1 EMBED-EQ=1
+  GELU-BWD-EQ=1 GROUPNORM-BWD-EQ=1 EXUNPACK-EQ=1 CE-GRAD-EQ=1
+  MOEROUTER-BWD-EQ=1 GRADSUM-EQ=1 EMBSCATTER-EQ=1 ADAM-EQ=1 (+IM2COL,FWD)
+  ALL-PASS (verbatim: F-CLM-DEVFEED-HOSTREF-EQ.txt)
+
+GATE 3 — async ON device byte-eq (DEFERRED to pod fire)
+-------------------------------------------------------
+Async ON exercises nvcc + a real GPU (the device kernels compile only on a
+self-host pod rebuild — runtime_cuda.c is not compiled on the no-CUDA Mac).
+The async-ON path is byte-eq BY CONSTRUCTION (same kernels, same
+data-dependent order, ONE stream that serialises exactly as the per-call
+barrier did, with a stream-sync before every host readback). The EMPIRICAL
+max|Δ|=0 measurement on the F-CLM-DEVFEED-* oracles with HEXA_CUDA_ASYNC=1
+awaits the same pod fire that measures util MEAN — DEFERRED (env-congested;
+no pod rented per the lane gate).
+
+HONEST: NO raw-GEMM-win claim. This slice removes the per-dispatch host
+barrier on the fwd device-resident chain — a launch-boundary removal, not a
+kernel-speed claim. util MEAN≥20% verification is a SEPARATE pod fire.
