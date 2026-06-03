@@ -230,3 +230,36 @@ transpiler set → the codegen byte-eq fixpoint gate (gen3→gen4 + ghost
 selfhost-byteeq-real) applies, same gate-class as B1 #2632 (parent gates merge).
 Verdict: `.verdicts/runtime-port/DICTKEYS-FEAS.txt`. With this, NO portable
 runtime leaf remains hard-BLOCKED — the last one is a known Class-A unblock.
+
+## 2026-06-03 — M2 dict_keys LIVE-WIRE (DICTKEYS-FEAS → PORT-EQ)
+
+Implemented the DICTKEYS Class-A unblock. Rewrote self/runtime/map_pure.hexa
+map_keys_pure from the self-referential `return keys(m)` (which lowered straight
+back to hexa_map_keys and never ported the walk) to an explicit insertion-order
+walk over the native HexaMapTable using the already-registered codegen builtins
+__map_raw_len + __map_order_key_at — a 1:1 transliteration of the C SSOT
+hexa_map_keys #else body. +13/-1 LOC, ONE file. Zero new builtin, zero new
+runtime symbol, zero ABI/rep change (Class A).
+
+RUNEQ (LOCAL on mini, no ghost/pool — B1 self-contained-link pattern): emitted C
+via installed hexat (lowered byte-for-byte to HX_MAP_LEN(m) + __map_order_key_at
+(m,i) as designed), linked against cache runtime.2dc93e6e…o which defines
+___map_order_key_at (nm-verified), with a tiny prelude supplying the HX_MAP_LEN
+macro + __map_order_* extern protos the pinned install's runtime.h predates (the
+STALE-INSTALL header gap FEAS identified — NOT a rep/abi change). Global install
+NOT mutated; no `hexa cc --regen` needed.
+
+Result — ALL PASS, byte/order-identical vs C SSOT keys() path:
+  empty(0) · one[solo] · many[k1 k2 k3 zzz a] · overwrite→[x y] (dedup-on-
+  overwrite, no dup, order unchanged) · forty[0..39] (collision-stress, ordered)
+  · mix[alpha beta gamma delta] (interleaved insert+overwrite) · nul (embedded-
+  NUL key bit-identical both sides).
+
+CORRECTION: the prior M2-hexa_dict_keys.txt BLOCKED (map-rep mismatch) verdict
+was a FACTUAL ERROR — the path consumes the SAME native HexaMapTable, not a
+separate rep. Terminal verdict now `.verdicts/runtime-port/M2-dict_keys.txt`
+(PORT-EQ). map_pure.hexa recompiles into the self-host set → codegen byte-eq
+fixpoint gate (same gate-class as B1 #2632); ghost selfhost-byteeq-real is the
+parent's merge gate (NOT run here). PR opened base=main, DO-NOT-MERGE.
+With this, the last portable RUNTIME-PORT M2 leaf is closed as a genuine
+hexa-native impl. 5 PORT-EQ landed.
