@@ -1,0 +1,78 @@
+F-FUSION-H1B-MEGAKERNEL  ::  device-resident full-step MEGAKERNEL SKELETON (option-B, B1)
+domain: HEXA-FUSION  ·  date: 2026-06-05  ·  method: cooperative-launch persistent kernel + own-GEMM inline + sub-chain rel-RMS A/B + util A/B
+
+────────────────────────────────────────────────────────────────────────────────
+PRE-REGISTERED FALSIFIER
+────────────────────────────────────────────────────────────────────────────────
+A persistent grid-resident megakernel with INLINE own-GEMM (no cuBLAS) runs a
+GEMM → glue(gelu) → GEMM sub-chain in ONE cooperative launch, producing output
+that matches the EAGER same-sub-chain (own-GEMM 3-launch path) within the TF32
+own-GEMM bar (rel-RMS <= 3e-3), AND raises GPU util on the SAME sub-chain vs the
+eager realization (collapsing the two launch-gaps lifts util).
+
+FALSIFIED if: (a) the cooperative launch cannot be co-resident (occupancy=0 /
+register or smem over-subscription), OR (b) [MEGASTEP-FIRED] never fires, OR
+(c) rel-RMS > 3e-3 on the sub-chain, OR (d) util(megakernel) <= util(eager) on
+the SAME sub-chain (the launch-gap collapse buys no occupancy).
+
+SCOPE (honest): this is a SKELETON — the smallest end-to-end witness (GEMM→gelu→
+GEMM), NOT the full ~30-op clm_prod step. NO "full megakernel done" claim is made
+or implied. This verdict establishes whether the STRUCTURE runs at all and what
+remains for the full step.
+
+WHY NOW UNBLOCKED: F-FUSION-MEGAKERNEL-DESIGN ruled the FULL megakernel CLOSED-
+NEGATIVE *for the FP64 + cuBLAS-roofline workload* — a persistent kernel cannot
+call cublasDgemm (nested grid launch), and a hand FP64 GEMM breaks byte-eq +
+forfeits cuBLAS throughput. The own-GEMM stack (#2697 tiled · #2704 WMMA2 ·
+#2714 split-K) removes BOTH walls for the TF32 regime: the persistent kernel
+calls OUR WMMA2 GEMM inline (no cuBLAS dependency), and the correctness bar is
+the approved TF32 own-GEMM rel-RMS <= 3e-3, not FP64 byte-eq. The eager
+reference ALSO uses own-GEMM, so the comparison is own-GEMM-vs-own-GEMM.
+
+────────────────────────────────────────────────────────────────────────────────
+METHOD
+────────────────────────────────────────────────────────────────────────────────
+Artifacts (this branch):
+  megakernel_driver.cu        — driver + _hx_k_clm_megastep (cooperative kernel)
+  gemm_device_extracted.cuh   — _hx_k_sgemm_cm_wmma2 body as a __device__ fn
+                                 (identical math; tile coord from params not blockIdx)
+  build_megastep.sh           — extract own-GEMM kernels from the shipped .cu, nvcc -rdc=true
+  util_megastep.sh            — external nvidia-smi util sampler, eager vs mega, SAME sub-chain
+Structure demonstrated:
+  (1) cudaLaunchCooperativeKernel + cooperative_groups::this_grid().sync() barriers
+      between dependent phases (phase counter == the grid barrier).
+  (2) inline own-GEMM tiles: WMMA2 body reused VERBATIM as a __device__ function;
+      the persistent kernel calls OUR GEMM (the own-GEMM unblock).
+  (3) gelu fused inline between the GEMM phases; intermediate H1/G kept device-
+      resident across grid.sync() — no HBM-to-host round-trip, no relaunch gap.
+Probe: [MEGASTEP-FIRED] printed once when the cooperative launch + grid.sync()
+  path actually runs (env HEXA_CLM_MEGASTEP=1).
+Sub-chain dims: M=1024 K=1536 N1=1536 N2=1024 (clm_prod conv-block-ish, D~1536).
+Hardware: ONE H100 (vast, --owner h1b-mega), down-after, leak 0.
+
+────────────────────────────────────────────────────────────────────────────────
+VERIFICATION  (filled from the pod run)
+────────────────────────────────────────────────────────────────────────────────
+[PENDING POD RUN — verbatim stdout of `HEXA_CLM_MEGASTEP=1 ./megakernel_driver`
+ + util_megastep.sh pasted here on completion.]
+
+────────────────────────────────────────────────────────────────────────────────
+FINDING  (filled from the pod run)
+────────────────────────────────────────────────────────────────────────────────
+[PENDING POD RUN]
+  skeleton compiles+runs : Y/N
+  [MEGASTEP-FIRED]       : Y/N
+  rel-RMS on sub-chain   : <value>  (PASS/FAIL vs 3e-3)
+  util eager -> mega     : <e%> -> <m%>  (Δ = <...>)
+  what remains for full step:
+    - the full clm_prod step is ~30 ops (2 glue blocks + ~6 GEMMs + bwd + AdamW);
+      this skeleton collapses a 3-op forward slice. Remaining: (i) chain ALL fwd
+      GEMMs + both glue blocks (groupnorm cross-thread reduction needs the SAME
+      grid.sync() barrier the skeleton uses — already demonstrated), (ii) the bwd
+      DAG, (iii) keep more intermediates in shared (the skeleton keeps H1/G in
+      device scratch — a tile fits in shared but cross-phase tile reindex makes
+      global scratch the correct skeleton choice), (iv) register-budget: the
+      cooperative grid's resident-block cap (occupancy query in the driver) bounds
+      how much of the step can be one launch before spilling.
+  blockers hit: [verbatim if cooperative-launch / register / grid.sync constraints
+    block even the skeleton — a documented blocker IS a valid result.]
