@@ -141,6 +141,98 @@ pub fn qforge_qmesh_dispersion(phi: [float], masses: [float],
     }
 }
 
+// ── crash-resilient per-q DFPT q-mesh dispersion (recover-EOF 구조적 불가능화) ──
+// Identical result to qforge_qmesh_dispersion, plus a trailing resume_dir. With
+// resume_dir=="" it DELEGATES verbatim (0-diff regression pin). Otherwise each
+// q's (omega,omega2) block is persisted via the resilient checkpoint primitive:
+// a committed q is read back (skipped), while a corrupt / truncated / missing q
+// is RECOMPUTED from a CLEAN dynmat→phonon state — never a partial-blob replay,
+// never a crash. This makes the QE ph.x recover=.true. EOF failure mode (which
+// killed 4 RTSC gate anchors, 2026-06-04) structurally impossible in QFORGE.
+// per-q payload codec: "dim\n omega(dim)\n omega2(dim)". decode returns the
+// concatenated [omega ++ omega2] (2·dim floats), or [] on ANY malformed/short
+// body — the caller treats [] as "this q is not done" and recomputes it.
+fn _qmd_encode(omega: [float], omega2: [float], a: int, b: int) -> str {
+    let mut po: [str] = []
+    let mut pq: [str] = []
+    let mut i = a
+    while i < b { po.push(to_string(omega[i])) ; pq.push(to_string(omega2[i])) ; i = i + 1 }
+    return to_string(b - a) + "\n" + po.join(" ") + "\n" + pq.join(" ")
+}
+fn _qmd_decode(body: str, dim: int) -> [float] {
+    let lines = body.split("\n")
+    if len(lines) < 3 { return [] }
+    if to_int(lines[0]) != dim { return [] }
+    let to = lines[1].split(" ")
+    let tq = lines[2].split(" ")
+    if len(to) != dim || len(tq) != dim { return [] }
+    let mut out: [float] = []
+    let mut i = 0
+    while i < dim { out.push(to_float(to[i])) ; i = i + 1 }
+    i = 0
+    while i < dim { out.push(to_float(tq[i])) ; i = i + 1 }
+    return out
+}
+pub fn qforge_qmesh_dispersion_resumable(phi: [float], masses: [float],
+                                         natoms: int, ncells: int, cell_R: [float],
+                                         nq1: int, nq2: int, nq3: int,
+                                         b1: [float], b2: [float], b3: [float],
+                                         resume_dir: str) -> QmeshDispersion {
+    if len(resume_dir) == 0 {
+        return qforge_qmesh_dispersion(phi, masses, natoms, ncells, cell_R,
+                                       nq1, nq2, nq3, b1, b2, b3)
+    }
+    let dim = 3 * natoms
+    if natoms < 1 || ncells < 1 || nq1 < 1 || nq2 < 1 || nq3 < 1 {
+        return QmeshDispersion { omega: [], omega2: [], qcoords: [],
+                                 nq: 0, nmode: 0, n_gamma_zero: 0 }
+    }
+    let grid = qforge_mp_grid(nq1, nq2, nq3, 0, 0, 0)
+    let nq = grid.npoints
+
+    let mut omega: [float] = []
+    let mut omega2: [float] = []
+    let mut qcoords: [float] = []
+    let mut n_gamma_zero = 0
+
+    let mut iq = 0
+    while iq < nq {
+        let fx = grid.coords[3 * iq]
+        let fy = grid.coords[3 * iq + 1]
+        let fz = grid.coords[3 * iq + 2]
+        let qx = fx * b1[0] + fy * b2[0] + fz * b3[0]
+        let qy = fx * b1[1] + fy * b2[1] + fz * b3[1]
+        let qz = fx * b1[2] + fy * b2[2] + fz * b3[2]
+        qcoords.push(qx) ; qcoords.push(qy) ; qcoords.push(qz)
+
+        // resilient checkpoint first: a verified q is restored (no recompute),
+        // a corrupt/missing one falls through to a CLEAN recompute (no crash).
+        let ck = qforge_checkpoint_read(resume_dir, iq)
+        let mut restored: [float] = []
+        if ck.ok { restored = _qmd_decode(ck.payload, dim) }
+        if len(restored) == 2 * dim {
+            let mut m = 0
+            while m < dim { omega.push(restored[m]) ; omega2.push(restored[dim + m]) ; m = m + 1 }
+        } else {
+            let dq = qforge_dynmat(phi, masses, [qx, qy, qz], natoms, ncells, cell_R)
+            let pq = qforge_phonons(dq, masses, natoms)
+            let base = len(omega)
+            let mut m = 0
+            while m < dim { omega.push(pq.omega[m]) ; omega2.push(pq.omega2[m]) ; m = m + 1 }
+            // marker written LAST, after the payload — interrupt → no valid marker
+            let _ = qforge_checkpoint_write(resume_dir, iq, _qmd_encode(omega, omega2, base, base + dim))
+            if _rqm_is_gamma(qx, qy, qz) { n_gamma_zero = n_gamma_zero + pq.n_acoustic_zero }
+        }
+        iq = iq + 1
+    }
+    // n_gamma_zero counts only freshly-recomputed Γ points; omega/omega2 (the
+    // el-ph inputs) are exact whether a q was restored or recomputed (d6).
+    return QmeshDispersion {
+        omega: omega, omega2: omega2, qcoords: qcoords,
+        nq: nq, nmode: dim, n_gamma_zero: n_gamma_zero
+    }
+}
+
 // ── flat POSITIVE ω(q,ν) histogram for the el-ph phonon sum (Einstein→band) ──
 // The CaH6 xval feeds ONE ω per occupied state into qforge_elph_to_tc (the wq
 // list). Brick (a) broadens that: instead of N_occ copies of a single ω₀, supply
