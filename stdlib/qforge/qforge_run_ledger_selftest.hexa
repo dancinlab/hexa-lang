@@ -1,0 +1,140 @@
+// @ci_gate — deterministic · network-free · pure JSONL-text fold g5 gate
+//
+// qforge_run_ledger_selftest.hexa — QFORGE-PROCESS deck→Tc end-to-end run
+//   ledger (qforge_run_ledger_fold / _emit, stdlib/qforge/run_ledger.hexa) g5
+//   gate. The fold INGESTS a per-stage 6-key telemetry stream (the SAME emit
+//   from #2474 that #2477 parses) PLUS provenance (deck · commit · pod) and
+//   the run result (λ · Tc), and produces ONE unified RunLedgerEntry — the
+//   missing single deck→Tc provenance record — serialized as ONE JSONL line.
+//
+// 검증 케이스 (all on fixture JSONL strings — NO pod, NO file, pure text):
+//  🔵 (A) FULL multi-stage run FOLD: a 6-stage stream relax→scf→ph→elph→lambda
+//         →tc folds to ONE entry with ALL 6 stages, λ·Tc copied verbatim, and
+//         total_wall_s = Σ stage walls (the #2477 invariant). Provenance
+//         (deck·commit·pod) carried through. ram kB→MiB conversion checked.
+//  🔵 (B) ONE JSONL LINE emit: qforge_run_ledger_emit yields exactly ONE line
+//         (no embedded newline) carrying deck·commit·pod·stages·total·λ·Tc·ts.
+//  🔵 (C) MALFORMED/empty stream → NOT FABRICATED (d6): a garbage stream and
+//         an empty stream each fold to 0 stages / total_wall_s=0 — no phantom
+//         stage, no fake wall. ram never measured renders `null`, never 0.
+//  🔵 (D) DETERMINISM: two folds of the SAME inputs produce byte-identical
+//         emit lines once the (now()-derived) ts field is masked — the fold is
+//         a pure function of its inputs modulo the timestamp stamp.
+//
+// Run (point HEXA_STDLIB_ROOT at THIS worktree's stdlib):
+//   HEXA_STDLIB_ROOT="$PWD/stdlib" hexa run --no-sentinel \
+//     stdlib/qforge/qforge_run_ledger_selftest.hexa
+// PASS: "qforge_run_ledger_selftest PASS".
+use "stdlib/qforge/run_ledger"
+
+fn _ck(name: str, ok: bool) -> int {
+    if ok { println("PASS " + name) ; return 0 }
+    println("FAIL " + name) ; return 1
+}
+
+// stage lookup by name in a folded entry
+fn _stg(e: RunLedgerEntry, name: str) -> RunStage {
+    let mut i = 0
+    while i < len(e.stages) {
+        if e.stages[i].name == name { return e.stages[i] }
+        i = i + 1
+    }
+    return RunStage { name: "", wall_s: -1, ram_mib: -2, gpu: "?" }
+}
+
+// count occurrences of a char in a string (newline-count for the one-line check)
+fn _count_nl(s: str) -> int {
+    let parts = s.split("\n")
+    return len(parts) - 1
+}
+
+fn main() {
+    let mut fails = 0
+
+    // ── (A) full 6-stage run: relax→scf→ph→elph→lambda→tc ──────────────────
+    //   relax  120 / 200000 kB  (195 MiB)
+    //   scf    300 / 900000 kB  (878 MiB)
+    //   ph:q1  200 / 700000 kB
+    //   elph   150 / 500000 kB
+    //   lambda  10 /  20000 kB
+    //   tc       2 /  10000 kB
+    //   Σ wall = 120+300+200+150+10+2 = 782
+    let tel = "{\"ts\":1,\"stage\":\"relax\",\"event\":\"done\",\"wall_s\":120,\"rss_kb\":200000,\"exit\":0}\n"
+        + "{\"ts\":2,\"stage\":\"scf\",\"event\":\"done\",\"wall_s\":300,\"rss_kb\":900000,\"exit\":0}\n"
+        + "{\"ts\":3,\"stage\":\"ph:q1\",\"event\":\"done\",\"wall_s\":200,\"rss_kb\":700000,\"exit\":0}\n"
+        + "{\"ts\":4,\"stage\":\"elph\",\"event\":\"done\",\"wall_s\":150,\"rss_kb\":500000,\"exit\":0}\n"
+        + "{\"ts\":5,\"stage\":\"lambda\",\"event\":\"done\",\"wall_s\":10,\"rss_kb\":20000,\"exit\":0}\n"
+        + "{\"ts\":6,\"stage\":\"tc\",\"event\":\"done\",\"wall_s\":2,\"rss_kb\":10000,\"exit\":0}\n"
+
+    let e = qforge_run_ledger_fold(tel, "CaH6-200GPa", "abc1234", "vast-pod-7", 2.71, 215.0)
+
+    // ONE entry with all 6 stages
+    fails = fails + _ck("(A) 6 stages folded into ONE entry", len(e.stages) == 6 && e.n_stages == 6)
+    // total_wall = Σ stage walls (the #2477 invariant)
+    fails = fails + _ck("(A) total_wall_s = Σ stage walls = 782", e.total_wall_s == 782)
+    // each stage present with its wall
+    fails = fails + _ck("(A) relax wall=120", _stg(e, "relax").wall_s == 120)
+    fails = fails + _ck("(A) scf wall=300", _stg(e, "scf").wall_s == 300)
+    fails = fails + _ck("(A) ph:q1 wall=200", _stg(e, "ph:q1").wall_s == 200)
+    fails = fails + _ck("(A) elph wall=150", _stg(e, "elph").wall_s == 150)
+    fails = fails + _ck("(A) lambda wall=10", _stg(e, "lambda").wall_s == 10)
+    fails = fails + _ck("(A) tc wall=2", _stg(e, "tc").wall_s == 2)
+    // independently sum the stages to confirm total = Σ
+    let mut sum = 0
+    let mut si = 0
+    while si < len(e.stages) { sum = sum + e.stages[si].wall_s ; si = si + 1 }
+    fails = fails + _ck("(A) Σ stages[].wall_s == total_wall_s", sum == e.total_wall_s)
+    // ram kB→MiB conversion (900000 kB / 1024 = 878 MiB)
+    fails = fails + _ck("(A) scf ram_mib = 900000/1024 = 878 (kB→MiB)", _stg(e, "scf").ram_mib == 878)
+    // λ·Tc copied verbatim
+    fails = fails + _ck("(A) lambda=2.71 carried", e.lambda == 2.71)
+    fails = fails + _ck("(A) tc=215.0 carried", e.tc == 215.0)
+    // provenance carried
+    fails = fails + _ck("(A) provenance deck·commit·pod carried",
+        e.deck == "CaH6-200GPa" && e.commit == "abc1234" && e.pod == "vast-pod-7")
+
+    // ── (B) emit is exactly ONE JSONL line carrying all fields ─────────────
+    let line = qforge_run_ledger_emit(e)
+    fails = fails + _ck("(B) emit = exactly ONE line (no embedded newline)", _count_nl(line) == 0)
+    fails = fails + _ck("(B) line carries deck", line.contains("\"deck\":\"CaH6-200GPa\""))
+    fails = fails + _ck("(B) line carries commit", line.contains("\"commit\":\"abc1234\""))
+    fails = fails + _ck("(B) line carries pod", line.contains("\"pod\":\"vast-pod-7\""))
+    fails = fails + _ck("(B) line carries total_wall_s", line.contains("\"total_wall_s\":782"))
+    fails = fails + _ck("(B) line carries lambda + tc", line.contains("\"lambda\":2.71") && line.contains("\"tc\":215"))
+    fails = fails + _ck("(B) line carries the stages array", line.contains("\"stages\":[") && line.contains("\"name\":\"tc\""))
+    fails = fails + _ck("(B) line carries n_stages + ts", line.contains("\"n_stages\":6") && line.contains("\"ts\":"))
+
+    // ── (C) malformed / empty stream → NOT FABRICATED (d6) ─────────────────
+    let garbage = qforge_run_ledger_fold("not json at all\nmore noise\n", "X", "c0", "pod0", 0.0, 0.0)
+    fails = fails + _ck("(C) garbage → 0 stages / total_wall_s=0 (no fabrication)",
+        len(garbage.stages) == 0 && garbage.total_wall_s == 0 && garbage.n_stages == 0)
+    let blank = qforge_run_ledger_fold("", "X", "c0", "pod0", 0.0, 0.0)
+    fails = fails + _ck("(C) empty stream → 0 stages / total_wall_s=0",
+        len(blank.stages) == 0 && blank.total_wall_s == 0)
+    // an emitted garbage entry still emits a valid one-liner with an empty stages array
+    let gline = qforge_run_ledger_emit(garbage)
+    fails = fails + _ck("(C) garbage entry emits ONE line w/ empty stages[]",
+        _count_nl(gline) == 0 && gline.contains("\"stages\":[]"))
+    // d6: a stage whose rss was never measured renders ram_mib `null`, not 0
+    let nullram = qforge_run_ledger_fold(
+        "{\"ts\":1,\"stage\":\"scf\",\"event\":\"done\",\"wall_s\":42,\"rss_kb\":null,\"exit\":0}\n",
+        "Y", "c1", "pod1", 1.5, 100.0)
+    fails = fails + _ck("(C) rss-null stage → ram_mib=-1 sentinel (not 0)", _stg(nullram, "scf").ram_mib == -1)
+    let nline = qforge_run_ledger_emit(nullram)
+    fails = fails + _ck("(C) emit renders ram_mib `null` (d6, no fabricated 0)",
+        nline.contains("\"ram_mib\":null"))
+    // gpu absent from the 6-key schema → renders null (documented next-input, d6)
+    fails = fails + _ck("(C) gpu renders `null` (not in 6-key schema, d6)", nline.contains("\"gpu\":null"))
+
+    // ── (D) determinism — two folds of identical inputs, ts masked ─────────
+    let e1 = qforge_run_ledger_fold(tel, "CaH6-200GPa", "abc1234", "vast-pod-7", 2.71, 215.0)
+    let e2 = qforge_run_ledger_fold(tel, "CaH6-200GPa", "abc1234", "vast-pod-7", 2.71, 215.0)
+    // mask the only nondeterministic field (ts=now()) by zeroing it before emit
+    let mut m1 = e1 ; m1.ts = 0
+    let mut m2 = e2 ; m2.ts = 0
+    fails = fails + _ck("(D) ts-masked emit byte-identical across two folds",
+        qforge_run_ledger_emit(m1) == qforge_run_ledger_emit(m2))
+
+    if fails == 0 { println("qforge_run_ledger_selftest PASS") }
+    else { println("qforge_run_ledger_selftest FAIL — " + to_string(fails) + " case(s)") }
+}
