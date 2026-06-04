@@ -1,0 +1,26 @@
+F-FUSION-P1B2-REGTILED  ::  MEASURED (foreground build+4-way, g5-HONEST)
+domain: HEXA-FUSION  ·  date: 2026-06-04  ·  Phase 1b-2 register-tiled FP32 own-GEMM
+GPU: NVIDIA RTX PRO 6000 Blackwell Workstation Edition (vast gave Blackwell, NOT H100 —
+     nvcc 12.4 caps at sm_90, so own kernels ran as compute_90 PTX JIT→Blackwell; cuBLAS used its
+     native Blackwell path). Cross-GPU absolute ms NOT comparable to the H100 p1b/p1d baselines;
+     the SAME-GPU 4-way relative ratios below ARE valid. Build clean (recipe 6 steps), all [FIRED].
+
+CORRECTNESS (LoRA fwd+bwd, M64 N96 K80 R8, rel-RMS vs cuBLAS oracle, tol 1e-4): ALL PASS.
+  naive    : y/dA/dB/dx rel_RMS = 0.000e+00 (bit-identical), PASS  · [OWN-SGEMM-FIRED]
+  tiled    : y/dA/dB/dx rel_RMS = 0.000e+00 (bit-identical), PASS  · [OWN-SGEMM-TILED-FIRED]
+  regtiled : y/dA/dB/dx rel_RMS = 0.000e+00 (bit-identical), PASS  · [OWN-SGEMM-REG-FIRED]
+  → register-tiled kernel is CORRECT (faithful to cublasSgemm semantics).
+
+PERF (M=N=K=2048 R16, 50 iters fwd+bwd, CUDA-event, same Blackwell GPU):
+  cuBLAS   : 0.19039 ms/iter   (1.00× baseline)
+  naive    : 0.59558 ms/iter   (3.13× off cuBLAS)
+  tiled    : 0.53417 ms/iter   (2.81× off cuBLAS; 1.12× faster than naive)
+  regtiled : 1.86481 ms/iter   (9.80× off cuBLAS; 3.13× SLOWER than naive — REGRESSION)
+
+VERDICT: regtiled = CORRECT but a PERF REGRESSION (as-authored). Register-tiling did NOT close the
+gap — it made it ~3× WORSE than even the naive kernel. NO "closes the gap" claim (g5-honest negative).
+Likely cause (hypotheses, unverified): poor tile params (BM/BN/BK/TM/TN) / register spill → low
+occupancy / the compute_90 PTX JIT mishandling a register-heavy kernel on Blackwell. The single-stage
+shared-mem TILED (1b) remains the best own variant so far (1.12× over naive). Closing toward cuBLAS
+needs either a re-tuned register-tile (occupancy-aware, arch-matched) OR WMMA/Tensor-Core (precision
+change). On this Blackwell, even tiled is only 2.81× off cuBLAS (vs 6.25× on H100) — arch-dependent.
