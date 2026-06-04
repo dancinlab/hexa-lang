@@ -1,0 +1,37 @@
+// HEXA Standard Library — cloud/qforge_autosize
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// QFORGE-PROCESS milestone — auto-sizing dispatcher (WIP skeleton).
+//
+// Given a deck shape (atoms, plane-wave basis, ecut), PREDICT the rent shape:
+//   {ram_per_rank_gib, np, gpu_vram_gib, walltime_h, rent_query}
+// and emit a ready `cpu_ram>=N cpu_cores>=M` query so the operator no longer
+// guesses `--query` by hand. Reuses the #2724 budget math whole (d3) —
+// tls_dft_mpi_sweet_spot / tls_dft_rank_memory_gib (stdlib/cloud/preflight_dft).
+//
+// (skeleton — predictor body lands in the next commit.)
+
+use "stdlib/cloud/preflight_dft"
+
+// Prediction returned by qforge_autosize.
+struct QforgeSizing {
+    ram_per_rank_gib: int,  // estimated per-MPI-rank RAM (GiB)
+    np:               int,  // recommended -np (mem · atom · Amdahl bounded)
+    gpu_vram_gib:     int,  // per-GPU VRAM need (0 = CPU-MPI path)
+    walltime_h:       int,  // wall-clock estimate (hours)
+    rent_query:       str   // ready `cpu_ram>=N cpu_cores>=M` rent --query
+}
+
+// stub — replaced in the predictor commit.
+@pure
+pub fn qforge_autosize(atoms: int, pw_basis: int, ecut: int) -> QforgeSizing {
+    return QforgeSizing {
+        ram_per_rank_gib: 0,
+        np:               0,
+        gpu_vram_gib:     0,
+        walltime_h:       0,
+        rent_query:       ""
+    }
+}
