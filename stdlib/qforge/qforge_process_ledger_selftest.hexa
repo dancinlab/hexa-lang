@@ -117,17 +117,17 @@ fn main() {
         "{\"ts\":1,\"stage\":\"scf\",\"event\":\"done\",\"wall_s\":222,\"rss_kb\":null,\"exit\":0}\n",
         "DeckB", "b1")
     let lab0 = qforge_process_ledger_merge("", recA)          // empty ledger → just A
-    fails = fails + _ck("(D) empty ledger + A → one line", lab0.split("\n").length() == 1 && lab0.contains("DeckA"))
+    fails = fails + _ck("(D) empty ledger + A → one line", len(lab0.split("\n")) == 1 && lab0.contains("DeckA"))
     let lab1 = qforge_process_ledger_merge(lab0, recB)        // append B, preserve A
     fails = fails + _ck("(D) append B preserves A (no-omission)",
-        lab1.contains("DeckA") && lab1.contains("DeckB") && lab1.split("\n").length() == 2)
+        lab1.contains("DeckA") && lab1.contains("DeckB") && len(lab1.split("\n")) == 2)
     // re-capture A with a NEW wall → supersede A's line, preserve B
     let recA2 = qforge_process_ledger_capture(
         "{\"ts\":1,\"stage\":\"scf\",\"event\":\"done\",\"wall_s\":999,\"rss_kb\":null,\"exit\":0}\n",
         "DeckA", "a1")
     let lab2 = qforge_process_ledger_merge(lab1, recA2)
     fails = fails + _ck("(D) re-capture A supersedes (still 2 lines, B preserved)",
-        lab2.split("\n").length() == 2 && lab2.contains("DeckB"))
+        len(lab2.split("\n")) == 2 && lab2.contains("DeckB"))
     fails = fails + _ck("(D) superseded A carries NEW wall 999, not old 100",
         lab2.contains("\"wall_s\":999") && lab2.contains("\"deck\":\"DeckA\"") && lab2.contains("100") == false)
 
