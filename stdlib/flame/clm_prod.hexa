@@ -470,6 +470,22 @@ fn _groupnorm(x: int, gamma: int, beta: int, y: int, mean: int, inv: int, xhat: 
     nn_groupnorm_fwd(x, gamma, beta, y, mean, inv, xhat, T, C, G)
 }
 
+// HEXA-FUSION L3-a (op-boundary fusion): groupnorm #1 → gelu #1 in ONE device
+// kernel (y = pre-gelu GN out for bwd, a = gelu out). The GN→GELU pair at the
+// fwd head (h0→hn0→hg0) is the first adjacent small-kernel pair; collapsing the
+// two launches into one raises occupancy (the only remaining util lever after
+// host-removal ②④⑤ bottomed out ~13%). Gated by env HEXA_FUSE_GN_GELU on the
+// device-resident chain; OFF / device-fail → the SEPARATE _groupnorm + _gelu run
+// (byte-identical reference — same erf-gelu, same GN reduction order).
+fn _groupnorm_gelu(x: int, gamma: int, beta: int, y: int, a: int, mean: int, inv: int, xhat: int, T: int, C: int, G: int) {
+    if env("HEXA_FUSE_GN_GELU") != "" && env("CLM_PROD_DEVRESIDENT") != "" {
+        let rc = forge_dispatch_groupnorm_gelu(x, gamma, beta, y, a, mean, inv, xhat, T, C, G)
+        if rc == 0 { return }
+    }
+    _groupnorm(x, gamma, beta, y, mean, inv, xhat, T, C, G)
+    _gelu(y, a, T * C)
+}
+
 // HEXA-FUSION L3 (glue half · final slice ⑤c): device-resident embedding gather.
 // The token-gather at the head of clm_prod_fwd (xe[i·d+c] = embed[tok·d+c]) is
 // interpreted inter-op host glue (the ③ fwd-only 0% floor). Under
@@ -694,10 +710,12 @@ fn clm_prod_fwd(tokens: int,
     // HEXA-FUSION L3 (glue half): groupnorm #1 (h0→hn0) — interpreted inter-op
     // host glue with a per-group reduction. Device path keeps hn0/xhat0/inv0
     // FARR_DEVICE (byte-eq via sequential reduction + NR sqrt); else host loop.
-    _groupnorm(h0, tgG, tgB, hn0, mean0, inv0, xhat0, T, d, 1)
-    // HEXA-FUSION L3 (glue half): gelu #1 (hn0→hg0) — fuses onto the device
-    // under CLM_PROD_DEVRESIDENT (erf-based, byte-eq); else host nn_gelu_fwd.
-    let hg0 = t_zeros(T * d); _gelu(hn0, hg0, T * d)
+    // HEXA-FUSION L3-a: groupnorm #1 → gelu #1 (h0→hn0→hg0) — the adjacent
+    // GN→GELU pair fused into ONE device kernel under HEXA_FUSE_GN_GELU (occupancy
+    // lever). hn0 (= pre-gelu GN) is still written for the bwd. OFF → the original
+    // separate _groupnorm + _gelu run (byte-identical).
+    let hg0 = t_zeros(T * d)
+    _groupnorm_gelu(h0, tgG, tgB, hn0, hg0, mean0, inv0, xhat0, T, d, 1)
     // HEXA-FUSION L3 (glue half): the residual xt = xec + hg0 — the
     // highest-frequency interpreted inter-op host glue in this fwd path (T·d
     // host t_get/t_set per step). Under CLM_PROD_DEVRESIDENT it fuses onto the
