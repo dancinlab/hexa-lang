@@ -3,7 +3,11 @@
 //   • cuBLAS-BF16  : cublasGemmEx(CUDA_R_16BF inputs, CUDA_R_32F compute) — the
 //                    BF16 oracle (faithful bf16 Tensor-Core path).
 //   • BF16-own     : _hx_k_sgemm_cm_bf16  (this PR — bf16 frag, fp32 accum).
-//   • FP32-WMMA2   : _hx_k_sgemm_cm_wmma2 (ref TF32 own-GEMM, the FP32 path).
+//   • FP32-cuBLAS  : cublasSgemm (TF32 math mode) — the FP32 Tensor-Core path
+//                    (the hexa own-GEMM owns this regime via _hx_k_sgemm_cm_wmma2,
+//                    util-parity with cuBLAS confirmed; here cuBLAS-TF32 stands in
+//                    as the FP32 dtype-axis reference so this driver has no
+//                    dependency on the WMMA2 kernel's 48KB static-smem opt-in).
 //   • FP64-cuBLAS  : cublasDgemm (the FP64 baseline the README's 9.67× cites).
 //
 // CORRECTNESS: BF16-own vs the cuBLAS-BF16 oracle, rel-RMS. BF16 tol = 1e-2
@@ -116,14 +120,16 @@ int main(int argc, char** argv) {
     double rms_bf_vs_cublasbf = rel_rms(hRef,hGot,szC);   // vs bf16 oracle (BF16 tol 1e-2)
     double rms_bf_vs_fp64     = rel_rms(hRef64f,hGot,szC); // vs fp64 (context)
 
-    // --- 3) FP32-WMMA2 (ref TF32 own-GEMM) ---
+    // --- 3) FP32-cuBLAS (TF32 math mode) — the FP32 dtype-axis reference ---
+    cublasSetMathMode(h, CUBLAS_TF32_TENSOR_OP_MATH);
     cudaMemset(dC,0,szC*4);
-    dim3 w2blk(256), w2grd((unsigned)((M+HXG_BM-1)/HXG_BM),(unsigned)((N+HXG_BN-1)/HXG_BN));
-    float t_wmma2 = timed([&]{
-        _hx_k_sgemm_cm_wmma2<<<w2grd,w2blk>>>(0,0,M,N,K, alpha, dA,M, dB,K, beta, dC,M);
+    float t_fp32 = timed([&]{
+        cublasSgemm(h, CUBLAS_OP_N, CUBLAS_OP_N, (int)M,(int)N,(int)K,
+                    &alpha, dA,(int)M, dB,(int)K, &beta, dC,(int)M);
     });
     cudaMemcpy(hGot,dC,szC*4,cudaMemcpyDeviceToHost);
-    double rms_wmma2_vs_fp64 = rel_rms(hRef64f,hGot,szC);  // vs fp64 (TF32 tol 3e-3)
+    double rms_fp32_vs_fp64 = rel_rms(hRef64f,hGot,szC);  // vs fp64 (TF32 tol 3e-3)
+    cublasSetMathMode(h, CUBLAS_DEFAULT_MATH);
 
     int dev; cudaGetDevice(&dev); cudaDeviceProp p; cudaGetDeviceProperties(&p,dev);
     printf("GPU: %s (sm_%d%d)\n", p.name, p.major, p.minor);
@@ -132,19 +138,19 @@ int main(int argc, char** argv) {
     printf("\nperf ms/iter (single GEMM, CUDA-event) + dtype-axis throughput:\n");
     printf("  cuBLAS-BF16   : %.5f ms/iter  %8.1f TFLOP/s  (1.00x)\n", t_cublas_bf, tflops(t_cublas_bf));
     printf("  BF16-own      : %.5f ms/iter  %8.1f TFLOP/s  (%.2fx vs cuBLAS-BF16)\n", t_bf_own, tflops(t_bf_own), t_bf_own/t_cublas_bf);
-    printf("  FP32-WMMA2(ref): %.5f ms/iter  %8.1f TFLOP/s  (%.2fx vs cuBLAS-BF16)\n", t_wmma2, tflops(t_wmma2), t_wmma2/t_cublas_bf);
+    printf("  FP32-cuBLAS(TF32): %.5f ms/iter  %8.1f TFLOP/s  (%.2fx vs cuBLAS-BF16)\n", t_fp32, tflops(t_fp32), t_fp32/t_cublas_bf);
     printf("  FP64-cuBLAS   : %.5f ms/iter  %8.1f TFLOP/s  (%.2fx vs cuBLAS-BF16)\n", (float)t_cublas_fp64, tflops((float)t_cublas_fp64), t_cublas_fp64/t_cublas_bf);
 
     printf("\ndtype-axis throughput speedup (the README's 9.67x axis):\n");
     printf("  BF16-own   vs FP64-cuBLAS : %.2fx\n", t_cublas_fp64/t_bf_own);
     printf("  cuBLAS-BF16 vs FP64-cuBLAS: %.2fx\n", t_cublas_fp64/t_cublas_bf);
-    printf("  BF16-own   vs FP32-WMMA2  : %.2fx\n", t_wmma2/t_bf_own);
+    printf("  BF16-own   vs FP32-cuBLAS : %.2fx\n", t_fp32/t_bf_own);
 
     printf("\ncorrectness (rel-RMS):\n");
     printf("  BF16-own  vs cuBLAS-BF16 oracle = %.3e   %s   (BF16 tol 1e-2)\n",
            rms_bf_vs_cublasbf, rms_bf_vs_cublasbf<=1e-2?"PASS":"FAIL");
     printf("  BF16-own  vs fp64 ref           = %.3e   (context: bf16 precision floor)\n", rms_bf_vs_fp64);
-    printf("  FP32-WMMA2 vs fp64 ref          = %.3e   %s   (TF32 tol 3e-3, context)\n",
-           rms_wmma2_vs_fp64, rms_wmma2_vs_fp64<=3e-3?"PASS":"FAIL");
+    printf("  FP32-cuBLAS vs fp64 ref         = %.3e   %s   (TF32 tol 3e-3, context)\n",
+           rms_fp32_vs_fp64, rms_fp32_vs_fp64<=3e-3?"PASS":"FAIL");
     return 0;
 }
