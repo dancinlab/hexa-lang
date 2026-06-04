@@ -627,7 +627,7 @@ __global__ void _hx_k_sgemm_cm_wmma(int tA, int tB, long long M, long long N, lo
 #define HXG_WN (HXG_BN / HXG_WCOLS)   // 32 cols per warp-tile
 #define HXG_FM (HXG_WM / 16)          // 2 frag rows per warp
 #define HXG_FN (HXG_WN / 16)          // 2 frag cols per warp
-#define HXG_FK (HXG_BK / 16)          // 2 K-frags per BK slice
+#define HXG_FK (HXG_BK / 8)           // 4 K-frags per BK slice (TF32 frag K-dim = 8)
 
 #if defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 800)
 #define HXG_CP_ASYNC 1
@@ -727,7 +727,7 @@ __global__ void _hx_k_sgemm_cm_wmma2(int tA, int tB, long long M, long long N, l
             #pragma unroll
             for (int fm=0; fm<HXG_FM; fm++) {
                 int srow = warpRow*HXG_WM + fm*16;       // row in block tile
-                int scol = fk*16;                        // k within BK
+                int scol = fk*8;                         // k within BK (TF32 frag K=8)
                 nvcuda::wmma::load_matrix_sync(a_frag[fm][fk], &As[buf][srow*HXG_BK + scol], HXG_BK);
                 #pragma unroll
                 for (int t=0; t<a_frag[fm][fk].num_elements; t++)
@@ -735,7 +735,7 @@ __global__ void _hx_k_sgemm_cm_wmma2(int tA, int tB, long long M, long long N, l
             }
             #pragma unroll
             for (int fn=0; fn<HXG_FN; fn++) {
-                int srow = fk*16;                        // k within BK
+                int srow = fk*8;                         // k within BK (TF32 frag K=8)
                 int scol = warpCol*HXG_WN + fn*16;       // col in block tile
                 nvcuda::wmma::load_matrix_sync(b_frag[fk][fn], &Bs[buf][srow*HXG_BN + scol], HXG_BN);
                 #pragma unroll
@@ -755,14 +755,12 @@ __global__ void _hx_k_sgemm_cm_wmma2(int tA, int tB, long long M, long long N, l
     }
 
     // Epilogue: store each accumulator frag to shared, then col-major C with alpha/beta.
-    __shared__ float Cs[HXG_FM*16 * HXG_FN*16];   // per-warp scratch is reused round-robin via sync
+    __shared__ float tmp[HXG_WARPS][16*16];   // per-warp 16×16 scratch
     #pragma unroll
     for (int fm=0; fm<HXG_FM; fm++) {
         #pragma unroll
         for (int fn=0; fn<HXG_FN; fn++) {
-            // Stage this frag (16×16) to a small per-warp shared region then scatter.
-            // Use a direct register→global store via store_matrix_sync into a tmp.
-            __shared__ float tmp[HXG_WARPS][16*16];
+            // Stage this frag (16×16) to a per-warp shared region then scatter to C.
             nvcuda::wmma::store_matrix_sync(tmp[warp], acc[fm][fn], 16, nvcuda::wmma::mem_row_major);
             __syncwarp();
             int rowBase = (int)(blockRow) + warpRow*HXG_WM + fm*16;

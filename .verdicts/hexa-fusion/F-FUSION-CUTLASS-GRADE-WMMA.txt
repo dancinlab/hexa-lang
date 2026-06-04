@@ -1,0 +1,63 @@
+F-FUSION-CUTLASS-GRADE-WMMA  ::  MEASURED (foreground build+measure, g5-HONEST)
+domain: HEXA-FUSION · date: 2026-06-04 · CUTLASS-grade tiled TF32 WMMA own-GEMM
+branch: domain/hexa-fusion-cutlass-grade (off domain/hexa-fusion-p1b3-wmma @86ca63283)
+kernel: _hx_k_sgemm_cm_wmma2 (self/native/hxqwen14b_cuda.cu), env HEXA_OWN_GEMM_WMMA2
+GPU: NVIDIA RTX PRO 6000 Blackwell Workstation Edition (sm_120, 96GB) — vast gave Blackwell
+     NOT H100 (consistent with the whole p1b campaign); nvcc 12.4 caps sm_90 so the own kernels
+     run compute_90 PTX-JIT onto Blackwell, cuBLAS native. SAME-GPU relative ratios are valid.
+
+[OWN-SGEMM-WMMA2-FIRED] ✓ — fires ONLY under HEXA_OWN_GEMM_WMMA2=1 (env-gated; OFF == silent,
+  rc=0). Verified through the launcher gate (_hx_own_sgemm_cm_launch, precedence WMMA2>WMMA>TILED>naive).
+
+TECHNIQUES APPLIED (the standard GEMM optimizations the naive WMMA lacked):
+  • Block tile BM=128 × BN=64 × BK=32, computed by an 8-warp (256-thread) block.
+  • Warp tiling: warps laid out 4(row)×2(col); each warp owns a 32×32 warp-tile = a 2×2 grid
+    of 16×16 WMMA frag ops → 4 register accumulator fragments held across the WHOLE K loop
+    (no shared round-trip of partial sums; the naive kernel re-stored C every K-step).
+  • Per-warp A/B fragments: 2×4 (FM×FK) and 4×2 (FK×FN), TF32 frag K-dim = 8 (HXG_FK = BK/8 = 4).
+  • Double-buffered shared-memory pipeline: while WMMA computes on buffer p the next BK-slice is
+    staged into buffer 1-p; on sm_80+ the global→shared copies use cp.async (cp.async.ca + commit/
+    wait_group) to overlap global load with WMMA compute; manual double-buffer fallback otherwise.
+  • op(A)/op(B) transpose (tA/tB) + edge zero-pad handled while STAGING into __shared__ as a fixed
+    row_major layout → one WMMA load path (no 4-variant template), bounds-guarded.
+  • Register accumulators; epilogue applies alpha/beta + COL-MAJOR store (cublasSgemm semantics
+    C[i+j·ldc]=α·Σ op(A)·op(B)+β·C preserved). fp32→tf32 rounding (~10-bit mantissa).
+
+CORRECTNESS (own kernel vs cuBLAS oracle, rel-RMS, TF32 tol 3e-3):
+  @ M=N=K=2048 (col-major, no-transpose):  tiled-WMMA2 rel-RMS = 2.609e-04  PASS  (naive 2.609e-04 PASS)
+  @ M=130 N=70 K=96 (NON-tile-multiple, bounds guard): tiled-WMMA2 rel-RMS = 2.606e-04  PASS
+  → CORRECT at the approved TF32 precision (≪ 3e-3 bar) AND the bounds guard holds on a shape
+    that is a multiple of none of 128/64/32. (rel-RMS ~2.6e-4 == expected TF32 ~10-bit rounding.)
+
+PERF (single GEMM @ M=N=K=2048, CUDA-event, 50 iters, same Blackwell GPU):
+  cuBLAS (TF32)       : 0.67948 ms/iter   (1.00×)
+  naive-WMMA          : 2.07963 ms/iter   (3.06× SLOWER than cuBLAS)
+  tiled-WMMA2(CUTLASS): 0.77047 ms/iter   (1.13× of cuBLAS)
+
+  speedup naive → tiled-WMMA2          : 2.70×
+  remaining gap tiled-WMMA2 → cuBLAS   : 1.13×  (within ~13% of cuBLAS)
+
+GAP CLOSED: naive WMMA sat 3.06× off cuBLAS on this driver; the tiled kernel is 1.13× off.
+  → closed (3.06−1.13)/(3.06−1.00) = ~94% of the naive-WMMA→cuBLAS gap. The CUTLASS-grade
+  schedule (block/warp tiling + register accumulators + double-buffered cp.async pipeline) is
+  what recovers the throughput the naive WMMA's 1-warp/16×16-tile, K-step-8, no-pipeline schedule
+  threw away. A BN=128 (square 128×128) variant measured 1.15× — marginally WORSE, so 128×64 kept.
+
+MEASUREMENT NOTE (honest, vs the prior p1b3 "9.5×"): the earlier WMMA verdict (F-FUSION-P1B3-WMMA)
+  measured the WMMA kernel INSIDE the full hxqwen14b LoRA fwd+bwd build (7 GEMMs of mixed small
+  shapes + host glue), where it was 9.49× off cuBLAS. THIS verdict measures the GEMM DIRECTLY at
+  2048³ via a standalone driver (#include of the SHIPPED kernels verbatim — no copy drift) — the
+  cleaner apples-to-apples comparison the task asked for (3-way ms/iter @2048³). On that same
+  direct driver the NAIVE WMMA is 3.06× off cuBLAS; the tiled-WMMA2 is 1.13×.
+
+VERDICT: CUTLASS-grade tiled TF32 WMMA own-GEMM is CORRECT (rel-RMS 2.6e-4 ≪ 3e-3, bounds-guarded)
+  AND closes ~94% of the naive→cuBLAS gap — 2.70× faster than naive WMMA, landing at 1.13× of
+  cuBLAS (within 13%). This is the FIRST own-GEMM variant in the campaign to approach cuBLAS
+  throughput while staying correct. NOT a "parity"/"beat cuBLAS" claim: cuBLAS is still 1.13×
+  faster — the last ~13% is cuBLAS's deeper multi-stage pipeline, swizzled bank-conflict-free
+  shared layout, and arch-tuned scheduling (CUTLASS/cuBLAS hand-tuned per-SM). REMAINING GAP to
+  truly match/beat cuBLAS: ≥3-stage cp.async pipeline + shared-memory swizzle + warp-specialized
+  producer/consumer (ping-pong) — incremental, GPU-billable, diminishing returns past 1.1×.
+
+POD: rented vast 39459930 (RTX PRO 6000 Blackwell) — DESTROYED at end (0 leak). Two earlier
+  rent attempts (39458119) never came up / were SSH-timeout-destroyed by the rent path itself.
