@@ -1,0 +1,155 @@
+// @ci_gate — deterministic · network-free · ADVERSARIAL crash-resilience g5 gate
+//
+// checkpoint_selftest.hexa — QFORGE per-q checkpoint/resume primitive g5 gate.
+//
+// Proves the recover-EOF crash family (that killed all 4 RTSC gate anchors on
+// 2026-06-04) is STRUCTURALLY impossible in QFORGE. Each requirement is closed
+// by an ADVERSARIAL injection against a throwaway temp dir — we deliberately
+// plant a truncated / corrupt / marker-less checkpoint and assert the reader
+// degrades to "recompute this q", NEVER crashes, NEVER replays a partial blob.
+//
+//   (a) TRUNCATED checkpoint   → read ok=false → resume_scan recomputes that q (no crash)
+//   (b) CORRUPT (bad-checksum)  → read ok=false → recomputed (no crash)
+//   (c) INTERRUPTED write (payload present, marker ABSENT) → q NOT seen as done
+//   (d) COMPLETED q             → skipped / preserved (read ok=true, bytes identical)
+//   (e) ROUND-TRIP              → write→read byte-identical for arbitrary payload
+//
+// No LLM self-judge — every assertion is a deterministic byte/flag compare and
+// the verdict line is printed verbatim ("qforge_checkpoint_selftest PASS").
+//
+// Run (canonical @ci_gate path):
+//   hexa run stdlib/qforge/checkpoint_selftest.hexa
+use "stdlib/qforge/checkpoint"
+use "stdlib/io"
+
+fn _ck_bool(name: str, got: bool, want: bool) -> int {
+    if got == want { println("PASS " + name + " (" + to_string(got) + ")") ; return 0 }
+    println("FAIL " + name + " — got " + to_string(got) + " want " + to_string(want)) ; return 1
+}
+fn _ck_int(name: str, got: int, want: int) -> int {
+    if got == want { println("PASS " + name + " (" + to_string(got) + ")") ; return 0 }
+    println("FAIL " + name + " — got " + to_string(got) + " want " + to_string(want)) ; return 1
+}
+fn _ck_str(name: str, got: str, want: str) -> int {
+    if got == want { println("PASS " + name) ; return 0 }
+    println("FAIL " + name + " — got [" + got + "] want [" + want + "]") ; return 1
+}
+fn _shq(s: str) -> str {
+    let mut out = "'"
+    let mut i = 0
+    while i < len(s) {
+        if s[i] == '\'' { out = out + "'\"'\"'" } else { out = out + s.substring(i, i + 1) }
+        i = i + 1
+    }
+    return out + "'"
+}
+// helper: stem path (mirrors checkpoint.hexa internal layout — selftest needs
+// to plant adversarial files directly, so it reconstructs the paths).
+fn _stem(q: int) -> str {
+    let s = to_string(q)
+    let mut pad = ""
+    let mut k = len(s)
+    while k < 4 { pad = pad + "0" ; k = k + 1 }
+    return "q" + pad + s
+}
+
+fn main() {
+    let mut fails = 0
+    // unique throwaway dir under /tmp — process pid keeps parallel selftests apart.
+    let dir = "/tmp/qfr_ckpt_self_" + exec("echo $$").trim()
+    let _ = exec("rm -rf " + _shq(dir) + " ; mkdir -p " + _shq(dir))
+
+    // ── (e) ROUND-TRIP — arbitrary payload (incl. embedded newlines) ─────
+    let payload0 = "DYNMAT q0\nrow0 1.0 2.0 3.0\nrow1 4.0 5.0 6.0\n"  // multi-line body
+    let w0 = qforge_checkpoint_write(dir, 0, payload0)
+    fails = fails + _ck_bool("(e) write q0 committed", w0, true)
+    let r0 = qforge_checkpoint_read(dir, 0)
+    fails = fails + _ck_bool("(e) read q0 ok", r0.ok, true)
+    fails = fails + _ck_str("(e) round-trip byte-identical", r0.payload, payload0)
+
+    // commit q1 as well (a second genuinely-complete q for the scan).
+    let payload1 = "DYNMAT q1\nrow0 7.0 8.0 9.0\n"
+    let _ = qforge_checkpoint_write(dir, 1, payload1)
+
+    // ── (a) TRUNCATED checkpoint at q2 — body shorter than LEN header ────
+    //   Plant a frame whose LEN claims 99 bytes but the body is 3 bytes, AND
+    //   a (forged) marker so we exercise the integrity path, not just the
+    //   marker gate. The reader MUST reject on the length mismatch (EOF).
+    let trunc = "LEN:99\nCK:12345\nabc"
+    write_file(dir + "/" + _stem(2) + ".ckpt", trunc)
+    write_file(dir + "/" + _stem(2) + ".done", "done\n")
+    let r2 = qforge_checkpoint_read(dir, 2)
+    fails = fails + _ck_bool("(a) truncated q2 rejected (no crash)", r2.ok, false)
+
+    // ── (b) CORRUPT checkpoint at q3 — body intact length, WRONG checksum ─
+    //   Write a real payload, then flip the stored CK so the recomputed
+    //   adler32 disagrees. The reader MUST reject on checksum (corruption).
+    let body3 = "DYNMAT q3 corrupt-target\n"
+    let corrupt = "LEN:" + to_string(len(body3)) + "\nCK:1\n" + body3   // CK:1 is wrong
+    write_file(dir + "/" + _stem(3) + ".ckpt", corrupt)
+    write_file(dir + "/" + _stem(3) + ".done", "done\n")
+    let r3 = qforge_checkpoint_read(dir, 3)
+    fails = fails + _ck_bool("(b) bad-checksum q3 rejected (no crash)", r3.ok, false)
+
+    // ── (c) INTERRUPTED write at q4 — payload present, marker ABSENT ─────
+    //   Simulate a crash strictly between the payload commit and the marker
+    //   commit (@L2). A VALID frame is on disk but no .done marker. The q
+    //   MUST NOT be seen as done (a half-result can't look complete).
+    let body4 = "DYNMAT q4 half-written\n"
+    let frame4 = "LEN:" + to_string(len(body4)) + "\nCK:" + to_string(_self_adler(body4)) + "\n" + body4
+    write_file(dir + "/" + _stem(4) + ".ckpt", frame4)   // payload only, NO marker
+    let r4 = qforge_checkpoint_read(dir, 4)
+    fails = fails + _ck_bool("(c) interrupted-write q4 not done (marker absent)", r4.ok, false)
+
+    // ── (d) COMPLETED q preserved — q0/q1 still verify after the injections ─
+    let r0b = qforge_checkpoint_read(dir, 0)
+    fails = fails + _ck_bool("(d) completed q0 still ok (preserved)", r0b.ok, true)
+    fails = fails + _ck_str("(d) completed q0 bytes preserved", r0b.payload, payload0)
+    let r1b = qforge_checkpoint_read(dir, 1)
+    fails = fails + _ck_bool("(d) completed q1 still ok (preserved)", r1b.ok, true)
+
+    // ── resume_scan over nq=5 — the salvage PLAN the engine acts on ──────
+    //   done = {0,1} (the only verifying q's). next_q = 2 (first incomplete:
+    //   the truncated one) — the engine recomputes 2,3,4 from a clean state
+    //   and skips 0,1. This is exactly the recover=.false.+start_q salvage,
+    //   now the DEFAULT.
+    let scan = qforge_resume_scan(dir, 5)
+    fails = fails + _ck_int("(scan) done count == 2", len(scan.done_q), 2)
+    fails = fails + _ck_int("(scan) done_q[0] == 0", scan.done_q[0], 0)
+    fails = fails + _ck_int("(scan) done_q[1] == 1", scan.done_q[1], 1)
+    fails = fails + _ck_int("(scan) next_q == 2 (first incomplete = truncated)", scan.next_q, 2)
+
+    // ── recompute-then-recommit closes the gap: write a CLEAN q2 → it joins done ─
+    let _ = qforge_checkpoint_write(dir, 2, "DYNMAT q2 recomputed clean\n")
+    let scan2 = qforge_resume_scan(dir, 5)
+    fails = fails + _ck_int("(recompute) after clean q2 next_q == 3", scan2.next_q, 3)
+    fails = fails + _ck_int("(recompute) done count == 3", len(scan2.done_q), 3)
+
+    // ── all-done sentinel: empty dir → next_q==0 (full run, 0-diff baseline) ─
+    let empty = dir + "_empty"
+    let _ = exec("mkdir -p " + _shq(empty))
+    let scan_e = qforge_resume_scan(empty, 5)
+    fails = fails + _ck_int("(baseline) empty dir next_q == 0 (full run)", scan_e.next_q, 0)
+    fails = fails + _ck_int("(baseline) empty dir done count == 0", len(scan_e.done_q), 0)
+
+    // cleanup throwaway dirs (best-effort).
+    let _ = exec("rm -rf " + _shq(dir) + " " + _shq(empty))
+
+    if fails == 0 { println("qforge_checkpoint_selftest PASS") }
+    else { println("qforge_checkpoint_selftest FAIL — " + to_string(fails) + " case(s)") }
+}
+
+// local adler32 mirror (selftest must forge a VALID frame for case (c) without
+// importing the private helper) — identical algorithm to checkpoint.hexa.
+fn _self_adler(s: str) -> int {
+    let mut a = 1
+    let mut b = 0
+    let mut i = 0
+    let n = len(s)
+    while i < n {
+        a = (a + ord(s[i])) % 65521
+        b = (b + a) % 65521
+        i = i + 1
+    }
+    return b * 65536 + a
+}
