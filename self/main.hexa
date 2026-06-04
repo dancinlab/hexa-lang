@@ -7396,6 +7396,25 @@ if len(av) < 3 {
             if file_exists(inst_path) { qf_script = inst_path }
         }
         cmd_run(qf_script, qf_args)
+    } else if sub == "demi" {
+        // DEMI — the pure hexa-native `demiurge cli` surface. The verb
+        // dispatches to stdlib/demi/demi_cli.hexa (THIN main-bearing entry),
+        // which forwards the FULL argv to the generic manifest+dispatcher
+        // (demi_dispatch, argv[1]=verb). Lets `hexa demi <verb> [args]` resolve
+        // the CLI from the INSTALL ROOT (not cwd), so demiurge's bin/demiurge
+        // can be path-free (`exec hexa demi "$@"`). Same install-dir-resolve +
+        // cmd_run pattern as `qforge`/`deck`: av[3..] become args()[1..] in the
+        // demi binary, matching the dispatcher's argv[1]=verb convention.
+        let __inst_d = install_dir_from_argv0()
+        let mut dmi_args = []
+        let mut dmi = 3
+        while dmi < len(av) { dmi_args.push(av[dmi]); dmi = dmi + 1 }
+        let mut dmi_script = "stdlib/demi/demi_cli.hexa"
+        if len(__inst_d) > 0 {
+            let inst_path = __inst_d + "/stdlib/demi/demi_cli.hexa"
+            if file_exists(inst_path) { dmi_script = inst_path }
+        }
+        cmd_run(dmi_script, dmi_args)
     } else if sub == "tool" {
         // CANON M4: go-tool-style drawer. `hexa tool [list]` indexes the
         // specialized verbs by family; `hexa tool <verb> [args]` re-dispatches
