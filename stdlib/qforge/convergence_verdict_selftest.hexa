@@ -1,0 +1,101 @@
+// @ci_gate — pure · deterministic · network-free · NO pod ops
+//
+// convergence_verdict_selftest.hexa — g5 gate for the SCF/DFPT EARLY-STOP
+// CONVERGENCE PREDICTOR (stdlib/qforge/convergence_verdict.hexa).
+//
+// This does NOT LLM-judge anything: it ASSERTS the verdict (state · abort flag ·
+// EARLY flag_iter) on DETERMINISTIC, hand-built residual series modelling the four
+// regimes the predictor must separate:
+//   (a) a clean monotone-decreasing SCF        → CONVERGING, no abort.
+//   (b) the metallic Picard-gain blow-up to NaN → DIVERGING + abort, flagged
+//       BEFORE the series ends (≥2× sooner than the cap).
+//   (c) a plateau-above-tol series              → STALLED + abort.
+//   (d) a noisy-but-decreasing series           → CONVERGING, NO false abort.
+//
+// Run:  HEXA_LANG=. hexa run stdlib/qforge/convergence_verdict_selftest.hexa
+// PASS: exits printing "convergence_verdict_selftest PASS".
+
+use "stdlib/qforge/convergence_verdict"
+
+fn _ck(name: str, cond: bool) -> int {
+    if cond { println("PASS " + name) ; return 0 }
+    println("FAIL " + name) ; return 1
+}
+
+fn main() {
+    let mut fails = 0
+    let tol = 1.0e-6
+
+    // ── (a) clean monotone-decreasing SCF → CONVERGING, no abort ─────────────
+    // A textbook geometric SCF decay 1e-1 · (0.4)^k down toward tol. Strictly
+    // decreasing every step, so neither the rise-window nor the plateau-window
+    // ever fills. Must come back CONVERGING with recommend_abort = false.
+    let conv: [float] = [1.0e-1, 4.0e-2, 1.6e-2, 6.4e-3, 2.56e-3,
+                         1.024e-3, 4.096e-4, 1.6384e-4, 6.55e-5, 2.62e-5]
+    let va = qforge_convergence_verdict(conv, tol)
+    fails = fails + _ck("(a) monotone → CONVERGING", va.state == CV_CONVERGING)
+    fails = fails + _ck("(a) monotone → no abort",   va.recommend_abort == false)
+    println("    (a) " + cv_state_name(va.state) + " · " + va.reason)
+
+    // ── (b) metallic Picard-gain blow-up to NaN → DIVERGING + abort, EARLY ───
+    // The observed pattern: residual settles, then a gain>1 mode takes over and it
+    // climbs super-linearly, finally overflowing to NaN at the LAST step. The
+    // predictor must trip on the RISING WINDOW well before that NaN, ≥2× before
+    // the cap (= series length). 12 iters here; the cap a real run would have set.
+    let nan = 0.0 / 0.0                       // IEEE NaN, deterministic
+    let div: [float] = [3.0e-2, 2.0e-2, 5.0e-2, 1.2e-1, 4.0e-1, 1.5e0,
+                        6.0e0, 3.0e1, 2.0e2, 1.0e4, 1.0e7, nan]
+    let cap = len(div)                        // a run would iterate to here (12)
+    let vb = qforge_convergence_verdict(div, tol)
+    fails = fails + _ck("(b) blow-up → DIVERGING", vb.state == CV_DIVERGING)
+    fails = fails + _ck("(b) blow-up → abort",     vb.recommend_abort == true)
+    // flagged STRICTLY before the series ends AND ≥2× sooner than the cap.
+    fails = fails + _ck("(b) flagged before series end", vb.flag_iter < cap)
+    fails = fails + _ck("(b) flagged >=2x sooner than cap", vb.flag_iter * 2 <= cap)
+    println("    (b) " + cv_state_name(vb.state) + " · flag_iter=" + to_string(vb.flag_iter)
+            + " / cap=" + to_string(cap) + " · " + vb.reason)
+
+    // ── (b2) a series that overflows to NaN with NO prior rise → still caught ─
+    // Hard NaN trips INSTANTLY at its index (the recover-EOF crash-loop residual:
+    // a single corrupt step). flag_iter must equal that index (1-based).
+    let div2: [float] = [5.0e-3, 4.0e-3, nan, 3.0e-3]
+    let vb2 = qforge_convergence_verdict(div2, tol)
+    fails = fails + _ck("(b2) NaN → DIVERGING", vb2.state == CV_DIVERGING)
+    fails = fails + _ck("(b2) NaN flagged at its index (3)", vb2.flag_iter == 3)
+
+    // ── (c) plateau above tol → STALLED + abort ──────────────────────────────
+    // A stuck metal: residual parks at ~5e-3 (≫ tol) and barely moves (<1% drop
+    // per step) for many iterations. After CV_STALL_K such steps → STALLED.
+    let stall: [float] = [5.00e-3, 4.99e-3, 4.985e-3, 4.98e-3, 4.978e-3,
+                          4.977e-3, 4.976e-3, 4.9755e-3, 4.975e-3]
+    let vc = qforge_convergence_verdict(stall, tol)
+    fails = fails + _ck("(c) plateau → STALLED", vc.state == CV_STALLED)
+    fails = fails + _ck("(c) plateau → abort",   vc.recommend_abort == true)
+    println("    (c) " + cv_state_name(vc.state) + " · flag_iter=" + to_string(vc.flag_iter)
+            + " · " + vc.reason)
+
+    // ── (d) noisy-but-decreasing → CONVERGING, NO false abort ────────────────
+    // Real SCF residuals jitter: each step drops on average but occasionally ticks
+    // UP a little (mixing transient). The trend reaches tol. The rise-window must
+    // NOT fill (no 3 consecutive rises) and the plateau-window must NOT fill (the
+    // net decrease keeps resetting it) → CONVERGING, recommend_abort = false.
+    let noisy: [float] = [2.0e-1, 1.3e-1, 1.5e-1, 8.0e-2, 9.0e-2, 4.0e-2,
+                          5.0e-2, 1.8e-2, 2.0e-2, 6.0e-3, 8.0e-3, 1.0e-3,
+                          1.2e-3, 2.0e-4, 5.0e-5, 8.0e-7]
+    let vd = qforge_convergence_verdict(noisy, tol)
+    fails = fails + _ck("(d) noisy-decreasing → CONVERGING", vd.state == CV_CONVERGING)
+    fails = fails + _ck("(d) noisy-decreasing → no false abort", vd.recommend_abort == false)
+    println("    (d) " + cv_state_name(vd.state) + " · " + vd.reason)
+
+    // ── (e) edge: empty history → CONVERGING (nothing to abort on) ───────────
+    let empty: [float] = []
+    let ve = qforge_convergence_verdict(empty, tol)
+    fails = fails + _ck("(e) empty → CONVERGING no abort",
+                        ve.state == CV_CONVERGING && ve.recommend_abort == false)
+
+    if fails == 0 {
+        println("convergence_verdict_selftest PASS")
+    } else {
+        println("convergence_verdict_selftest FAIL — " + to_string(fails) + " case(s)")
+    }
+}
