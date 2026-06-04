@@ -1,0 +1,249 @@
+// HEXA Standard Library — qforge/dtc_dstruct
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// QFORGE-FEATURE — reverse-mode automatic differentiation from Tc back to the
+// structure parameters (atomic positions / cell / pressure), so RTSC inverse
+// design becomes GRADIENT-driven instead of blind screening:
+//
+//     ∂Tc/∂(structure) = (∂Tc/∂λ)·(∂λ/∂struct) + (∂Tc/∂ω_log)·(∂ω_log/∂struct)
+//                         └────── analytic, exact ──────┘ └─ adjoint-DFPT ─┘
+//                                  (this module)            (named remaining)
+//
+// The Allen-Dynes Tc(λ, ω_log) tail is a CLOSED-FORM algebraic expression, so
+// its partials are exact analytic derivatives — no finite difference, no
+// tape. This module hand-differentiates `mcmillan_tc` / `allen_dynes_tc`
+// (stdlib/material/sim, reused per d3 — NO physics re-implementation here) and
+// exposes the gradient as a reverse-mode pullback: seed ∂Tc/∂Tc = 1 and
+// propagate to (λ, ω_log).
+//
+// @L-honesty (CLAUDE.md d6): the FULL ∂λ/∂atom and ∂ω_log/∂atom require the
+// adjoint of the DFPT / el-ph kernels (adjoint-DFPT — a large solve over the
+// screened-response Sternheimer equations). That piece is NOT faked here. We
+// ship the EXACT analytic ∂Tc/∂{λ,ω_log} (validated against finite difference
+// to g5) plus the chain-rule scaffold to structure with the
+// ∂{λ,ω_log}/∂struct Jacobian NAMED as the remaining adjoint-DFPT work —
+// `qforge_dtc_dstruct` reports method="analytic_tc_tail + adjoint_dfpt_pending"
+// and surfaces the missing Jacobian rather than emitting a wrong number.
+//
+// Surface (pure functions, no syscall):
+//   pub fn qforge_dtc_dlambda(lam, omega_log_K, omega2_K, mu_star) -> float
+//   pub fn qforge_dtc_domega_log(lam, omega_log_K, omega2_K, mu_star) -> float
+//   pub fn qforge_dtc_dtail(lam, omega_log_K, omega2_K, mu_star) -> DTcTail
+//   pub fn qforge_dtc_dstruct(deck: StructDeck, param: str) -> DTcStruct
+//
+// d3 (one canonical code home): the Tc forms live ONLY in stdlib/material/sim.
+// This module differentiates them analytically; it does not copy the formula.
+// d4 (generic dispatch): `qforge_dtc_dstruct` is structure-parameter-agnostic
+// — atom / cell / pressure all traverse the SAME chain-rule path; the param is
+// data (a string tag), not a branch in the physics.
+
+use "stdlib/material/sim"
+
+// ── analytic derivative helpers (closed-form, exact) ────────────────────
+
+// d/dλ of the McMillan exponent E(λ) = -1.04(1+λ) / D(λ),  D = λ - μ*(1+0.62λ)
+//   D'(λ) = 1 - 0.62 μ*
+//   E'(λ) = -1.04 [ D - (1+λ) D' ] / D²
+fn _dexp_dlambda(lam: float, mu_star: float) -> float {
+    let d = lam - mu_star * (1.0 + 0.62 * lam)
+    let dprime = 1.0 - 0.62 * mu_star
+    let num = d - (1.0 + lam) * dprime
+    return -1.04 * num / (d * d)
+}
+
+// f1(λ) = (1 + (λ/Λ1)^{3/2})^{1/3}
+//   let u = (λ/Λ1)^{3/2}.  f1 = (1+u)^{1/3}
+//   du/dλ = (3/2)(λ/Λ1)^{1/2} / Λ1
+//   df1/dλ = (1/3)(1+u)^{-2/3} · du/dλ
+fn _f1(lam: float, mu_star: float) -> float {
+    let lambda1 = 2.46 * (1.0 + 3.8 * mu_star)
+    return pow(1.0 + pow(lam / lambda1, 1.5), 1.0 / 3.0)
+}
+fn _df1_dlambda(lam: float, mu_star: float) -> float {
+    let lambda1 = 2.46 * (1.0 + 3.8 * mu_star)
+    let u = pow(lam / lambda1, 1.5)
+    let du = 1.5 * pow(lam / lambda1, 0.5) / lambda1
+    return (1.0 / 3.0) * pow(1.0 + u, -2.0 / 3.0) * du
+}
+
+// f2(λ, r) = 1 + λ²(r-1) / (λ² + Λ2²),   r = ω̄₂/ω_log,  Λ2 = 1.82(1+6.3μ*)r
+// Holding r fixed (∂/∂λ at fixed spectral shape):
+//   N = λ²(r-1),  Dn = λ²+Λ2²
+//   N' = 2λ(r-1),  Dn' = 2λ
+//   df2/dλ = (N' Dn - N Dn') / Dn²
+fn _f2(lam: float, r: float, mu_star: float) -> float {
+    let lambda2 = 1.82 * (1.0 + 6.3 * mu_star) * r
+    let num = (lam * lam) * (r - 1.0)
+    let den = (lam * lam) + (lambda2 * lambda2)
+    return 1.0 + num / den
+}
+fn _df2_dlambda(lam: float, r: float, mu_star: float) -> float {
+    let lambda2 = 1.82 * (1.0 + 6.3 * mu_star) * r
+    let n = (lam * lam) * (r - 1.0)
+    let dn = (lam * lam) + (lambda2 * lambda2)
+    let nprime = 2.0 * lam * (r - 1.0)
+    let dnprime = 2.0 * lam
+    return (nprime * dn - n * dnprime) / (dn * dn)
+}
+
+// ── ∂Tc/∂λ — exact analytic (closed form) ────────────────────────────────
+//
+// Tc = f1(λ) · f2(λ,r) · (ω_log/1.2) · exp(E(λ)),   r = ω̄₂/ω_log fixed.
+// Product rule over the three λ-dependent factors {f1, f2, exp(E)}:
+//   ∂Tc/∂λ = (ω_log/1.2)·exp(E)·[ f1'·f2 + f1·f2' + f1·f2·E' ]
+// Returns 0.0 outside the SC regime (D ≤ 0 or non-positive inputs) — matching
+// the sentinel of the forward `allen_dynes_tc`/`mcmillan_tc`.
+pub fn qforge_dtc_dlambda(lam: float, omega_log_K: float, omega2_K: float,
+                          mu_star: float) -> float {
+    if lam <= 0.0 { return 0.0 }
+    if omega_log_K <= 0.0 { return 0.0 }
+    let d = lam - mu_star * (1.0 + 0.62 * lam)
+    if d <= 0.0 { return 0.0 }
+
+    let r = omega2_K / omega_log_K
+    let prefac = (omega_log_K / 1.2) * exp(-1.04 * (1.0 + lam) / d)
+
+    let f1 = _f1(lam, mu_star)
+    let f2 = _f2(lam, r, mu_star)
+    let df1 = _df1_dlambda(lam, mu_star)
+    let df2 = _df2_dlambda(lam, r, mu_star)
+    let de = _dexp_dlambda(lam, mu_star)
+
+    return prefac * (df1 * f2 + f1 * df2 + f1 * f2 * de)
+}
+
+// ── ∂Tc/∂ω_log — exact analytic (closed form) ───────────────────────────
+//
+// Two ω_log channels: (1) the explicit (ω_log/1.2) prefactor, and (2) the
+// spectral ratio r = ω̄₂/ω_log inside f2 (ω̄₂ held fixed — the mean-square
+// frequency is a separate moment). E(λ) and f1(λ) do NOT depend on ω_log.
+//
+//   Tc = (ω_log/1.2)·exp(E)·f1·f2(r(ω_log))
+//   ∂Tc/∂ω_log = (1/1.2)·exp(E)·f1·f2          [prefactor channel]
+//              + (ω_log/1.2)·exp(E)·f1·(∂f2/∂r)·(∂r/∂ω_log)
+//   ∂r/∂ω_log = -ω̄₂/ω_log² = -r/ω_log
+//   ∂f2/∂r computed analytically below (Λ2 = Λ2(r) also varies with r).
+fn _df2_dr(lam: float, r: float, mu_star: float) -> float {
+    // f2 = 1 + N/Dn,  N = λ²(r-1),  Dn = λ² + Λ2²,  Λ2 = k·r, k = 1.82(1+6.3μ*)
+    // dN/dr = λ²
+    // dΛ2²/dr = 2 k² r  →  dDn/dr = 2 k² r
+    // d(N/Dn)/dr = (N' Dn - N Dn') / Dn²
+    let k = 1.82 * (1.0 + 6.3 * mu_star)
+    let lambda2 = k * r
+    let n = (lam * lam) * (r - 1.0)
+    let dn = (lam * lam) + (lambda2 * lambda2)
+    let nprime = lam * lam
+    let dnprime = 2.0 * k * k * r
+    return (nprime * dn - n * dnprime) / (dn * dn)
+}
+
+pub fn qforge_dtc_domega_log(lam: float, omega_log_K: float, omega2_K: float,
+                             mu_star: float) -> float {
+    if lam <= 0.0 { return 0.0 }
+    if omega_log_K <= 0.0 { return 0.0 }
+    let d = lam - mu_star * (1.0 + 0.62 * lam)
+    if d <= 0.0 { return 0.0 }
+
+    let r = omega2_K / omega_log_K
+    let expE = exp(-1.04 * (1.0 + lam) / d)
+    let f1 = _f1(lam, mu_star)
+    let f2 = _f2(lam, r, mu_star)
+
+    // channel 1 — explicit prefactor ∂(ω_log/1.2)/∂ω_log = 1/1.2
+    let ch1 = (1.0 / 1.2) * expE * f1 * f2
+    // channel 2 — r-dependence of f2 (ω̄₂ fixed): ∂r/∂ω_log = -r/ω_log
+    let dr_dwlog = -r / omega_log_K
+    let ch2 = (omega_log_K / 1.2) * expE * f1 * _df2_dr(lam, r, mu_star) * dr_dwlog
+
+    return ch1 + ch2
+}
+
+// ── reverse-mode pullback over the Tc tail (the analytic adjoint) ────────
+//
+// Carries the value + both adjoints together. Seeding the cotangent
+// ∂Tc/∂Tc = 1 and pulling back through the closed form yields the exact
+// {∂Tc/∂λ, ∂Tc/∂ω_log}. This IS the reverse-mode AD of the Tc tail — it is
+// algebraically identical to forward analytic differentiation because the
+// tail is scalar→scalar, so we expose the exact partials directly (no tape
+// overhead) and the chain rule to structure multiplies them by the
+// (adjoint-DFPT) Jacobian rows.
+pub struct DTcTail {
+    tc: float,             // forward Tc (K)
+    dtc_dlambda: float,    // ∂Tc/∂λ      (exact analytic)
+    dtc_domega_log: float, // ∂Tc/∂ω_log (exact analytic)
+}
+
+pub fn qforge_dtc_dtail(lam: float, omega_log_K: float, omega2_K: float,
+                        mu_star: float) -> DTcTail {
+    let tc = allen_dynes_tc(omega_log_K, lam, mu_star, omega2_K)
+    let dl = qforge_dtc_dlambda(lam, omega_log_K, omega2_K, mu_star)
+    let dw = qforge_dtc_domega_log(lam, omega_log_K, omega2_K, mu_star)
+    return DTcTail { tc: tc, dtc_dlambda: dl, dtc_domega_log: dw }
+}
+
+// ── structure-level entry — chain rule to atomic positions / cell / P ────
+//
+// A minimal structure deck: the Eliashberg moments at the current geometry
+// (λ, ω_log, ω̄₂, μ*) PLUS the per-parameter Jacobian rows ∂λ/∂param and
+// ∂ω_log/∂param IF available. When the adjoint-DFPT Jacobian has NOT been
+// supplied (the default), `jac_available = false` and the structure gradient
+// is reported as PENDING — d6: we surface the missing adjoint solve, we do
+// NOT fabricate a ∂λ/∂atom.
+//
+// d4 generic dispatch: `param` is an opaque tag ("atom_z_3", "cell_a",
+// "pressure", …). The chain rule is the SAME regardless of which structural
+// coordinate it names — the physics of which coordinate moves lives entirely
+// in the (adjoint-DFPT) Jacobian rows, never as a branch here.
+pub struct StructDeck {
+    lam: float,
+    omega_log_K: float,
+    omega2_K: float,
+    mu_star: float,
+    jac_available: bool,      // has the adjoint-DFPT Jacobian been computed?
+    dlambda_dparam: float,    // ∂λ/∂param      (only valid if jac_available)
+    domega_log_dparam: float, // ∂ω_log/∂param (only valid if jac_available)
+}
+
+pub struct DTcStruct {
+    tc: float,
+    dtc_dparam: float,     // total ∂Tc/∂param (valid IFF jac_available)
+    dtc_dlambda: float,    // exact analytic tail partial (always valid)
+    dtc_domega_log: float, // exact analytic tail partial (always valid)
+    method: str,
+    remaining: str,        // named remaining adjoint-DFPT work ("" when none)
+    complete: bool,        // true IFF the full ∂Tc/∂struct is available
+}
+
+pub fn qforge_dtc_dstruct(deck: StructDeck, param: str) -> DTcStruct {
+    let tail = qforge_dtc_dtail(deck.lam, deck.omega_log_K, deck.omega2_K,
+                                deck.mu_star)
+    if deck.jac_available {
+        // full chain rule — exact tail partials × supplied Jacobian rows
+        let total = tail.dtc_dlambda * deck.dlambda_dparam
+                  + tail.dtc_domega_log * deck.domega_log_dparam
+        return DTcStruct {
+            tc: tail.tc,
+            dtc_dparam: total,
+            dtc_dlambda: tail.dtc_dlambda,
+            dtc_domega_log: tail.dtc_domega_log,
+            method: "analytic_tc_tail + supplied_jacobian (full chain)",
+            remaining: "",
+            complete: true,
+        }
+    }
+    // d6 honesty: tail partials are EXACT; the ∂{λ,ω_log}/∂(" + param + ")
+    // Jacobian is the adjoint-DFPT solve — NAMED, not faked. dtc_dparam is the
+    // sentinel 0.0 and complete=false so callers cannot mistake it for a value.
+    return DTcStruct {
+        tc: tail.tc,
+        dtc_dparam: 0.0,
+        dtc_dlambda: tail.dtc_dlambda,
+        dtc_domega_log: tail.dtc_domega_log,
+        method: "analytic_tc_tail (exact) + adjoint_dfpt_pending",
+        remaining: "adjoint-DFPT Jacobian d{lambda,omega_log}/d(" + param + ")"
+                 + " — Sternheimer screened-response adjoint over el-ph kernels",
+        complete: false,
+    }
+}
