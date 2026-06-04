@@ -784,12 +784,34 @@ __global__ void _hx_k_sgemm_cm_wmma2(int tA, int tB, long long M, long long N, l
 // otherwise the naive one-thread-per-output kernel. The outer HEXA_OWN_GEMM
 // gate (in the shims) still chooses own-vs-cuBLAS; this only picks tiled-vs-naive
 // WITHIN the own path. Block is always 16×16, grid covers (M,N) in 16-tiles.
+// THRU-PARITY TUNE (HEXA-FUSION ③ throughput-parity): the WMMA2 path reaches
+// cuBLAS-class util + ~1.13× GEMM-iso step-time, yet the FULL LoRA step ran
+// ~2.2× slower steps/s. Two diagnosed causes, both fixed here:
+//   (1) a per-call cudaDeviceSynchronize() (was below) serialized all 7 LoRA
+//       GEMMs + the glue every step — cuBLAS queues them async, so WMMA2 paid
+//       7 host↔device round-trips/step the cuBLAS arm never pays. We drop the
+//       sync to a non-blocking cudaGetLastError() launch check (env
+//       HEXA_OWN_GEMM_SYNC=1 restores the old per-call sync for debugging).
+//   (2) the R=16 LoRA GEMMs (output dim M or N = R=16, or K = R=16) launch the
+//       big 128×64×32 WMMA2 tile over a 16-tall/16-wide problem → ≥75% of every
+//       threadblock + half the BK K-tile are wasted (a CUTLASS-grade big tile is
+//       the wrong tool for a skinny GEMM). We shape-dispatch: any GEMM whose
+//       output rows m<HXG_BM or cols n<HXG_BN (the skinny LoRA GEMMs) falls back
+//       to the lightweight 16×16 tiled kernel (right-sized grid, no wasted tile);
+//       only the big square GEMMs use WMMA2. Correctness is unchanged (both
+//       paths are the same col-major TF32/fp32 contract; the gate still guards).
+//   Env HEXA_OWN_GEMM_NOSHAPE=1 disables the skinny fallback (always WMMA2).
 int _hx_own_sgemm_cm_launch(int tA, int tB, int m, int n, int k,
                             float alpha, const float* A, int lda,
                             const float* B, int ldb,
                             float beta, float* C, int ldc) {
     dim3 blk(16,16); dim3 grd((unsigned)((m+15)/16),(unsigned)((n+15)/16));
-    if (getenv("HEXA_OWN_GEMM_WMMA2") && getenv("HEXA_OWN_GEMM_WMMA2")[0]) {
+    int want_wmma2 = (getenv("HEXA_OWN_GEMM_WMMA2") && getenv("HEXA_OWN_GEMM_WMMA2")[0]);
+    // Shape gate: a "skinny" GEMM (output < a single WMMA2 block tile in m or n)
+    // wastes the 128×64 tile → route it to the small 16×16 tiled kernel instead.
+    int noshape = (getenv("HEXA_OWN_GEMM_NOSHAPE") && getenv("HEXA_OWN_GEMM_NOSHAPE")[0]);
+    int skinny  = (m < HXG_BM || n < HXG_BN);
+    if (want_wmma2 && !(skinny && !noshape)) {
         static int w2fired = 0; if (!w2fired){w2fired=1; fprintf(stderr,"[OWN-SGEMM-WMMA2-FIRED] _hx_k_sgemm_cm_wmma2 (CUTLASS-grade TF32: 128x64 block, 8-warp, 2x2 warp-tile, double-buffered cp.async)\n");}
         dim3 w2blk(256);  // 8 warps
         dim3 w2grd((unsigned)((m + HXG_BM - 1)/HXG_BM), (unsigned)((n + HXG_BN - 1)/HXG_BN));
@@ -797,6 +819,26 @@ int _hx_own_sgemm_cm_launch(int tA, int tB, int m, int n, int k,
                                               (long long)m,(long long)n,(long long)k,
                                               alpha, A,(long long)lda, B,(long long)ldb,
                                               beta, C,(long long)ldc);
+    } else if (want_wmma2 && skinny && !noshape) {
+        // Skinny LoRA GEMM under WMMA2 mode: use a right-sized small-grid kernel
+        // (no wasted 128×64 tile). Default = the 16×16 shared-mem tiled kernel —
+        // MEASURED best on the R=16 LoRA shapes (337 vs 240 steps/s @M8192 vs the
+        // naive one-thread-per-output kernel): even with a half-wasted 16-wide M
+        // tile, the shared-mem K-reuse wins because K is large (4096-8192).
+        // HEXA_OWN_GEMM_SKINNY_NAIVE=1 selects the naive kernel (measured slower).
+        if (getenv("HEXA_OWN_GEMM_SKINNY_NAIVE") && getenv("HEXA_OWN_GEMM_SKINNY_NAIVE")[0]) {
+            static int snfired = 0; if (!snfired){snfired=1; fprintf(stderr,"[OWN-SGEMM-WMMA2-SKINNY-FIRED] skinny GEMM -> _hx_k_sgemm_cm_v54 (naive)\n");}
+            _hx_k_sgemm_cm_v54<<<grd,blk>>>(tA,tB,
+                                            (long long)m,(long long)n,(long long)k,
+                                            alpha, A,(long long)lda, B,(long long)ldb,
+                                            beta, C,(long long)ldc);
+        } else {
+            static int stfired = 0; if (!stfired){stfired=1; fprintf(stderr,"[OWN-SGEMM-WMMA2-SKINNY-FIRED] skinny GEMM -> _hx_k_sgemm_cm_tiled (16x16, no wasted 128x64 tile)\n");}
+            _hx_k_sgemm_cm_tiled<<<grd,blk>>>(tA,tB,
+                                              (long long)m,(long long)n,(long long)k,
+                                              alpha, A,(long long)lda, B,(long long)ldb,
+                                              beta, C,(long long)ldc);
+        }
     } else if (getenv("HEXA_OWN_GEMM_WMMA") && getenv("HEXA_OWN_GEMM_WMMA")[0]) {
         static int wfired = 0; if (!wfired){wfired=1; fprintf(stderr,"[OWN-SGEMM-WMMA-FIRED] _hx_k_sgemm_cm_wmma (TF32 Tensor-Core)\n");}
         dim3 wblk(32); dim3 wgrd((unsigned)((m+15)/16),(unsigned)((n+15)/16));  // 1 warp / 16×16 C tile
@@ -816,7 +858,16 @@ int _hx_own_sgemm_cm_launch(int tA, int tB, int m, int n, int k,
                                         alpha, A,(long long)lda, B,(long long)ldb,
                                         beta, C,(long long)ldc);
     }
-    cudaError_t e = cudaDeviceSynchronize();
+    // THRU-PARITY: do NOT cudaDeviceSynchronize per call — that serialized all 7
+    // LoRA GEMMs + glue every step (the 2.2× steps/s gap vs async cuBLAS). A
+    // non-blocking launch-error check keeps correctness coverage without forcing
+    // a host↔device round-trip; the caller syncs once at the step boundary (the
+    // glue/CE readback already does). HEXA_OWN_GEMM_SYNC=1 restores the old sync.
+    if (getenv("HEXA_OWN_GEMM_SYNC") && getenv("HEXA_OWN_GEMM_SYNC")[0]) {
+        cudaError_t e = cudaDeviceSynchronize();
+        return (e==cudaSuccess) ? 0 : (int)e;
+    }
+    cudaError_t e = cudaGetLastError();
     return (e==cudaSuccess) ? 0 : (int)e;
 }
 static cublasStatus_t hxqwen_sgemm_base(cublasOperation_t tA, cublasOperation_t tB,

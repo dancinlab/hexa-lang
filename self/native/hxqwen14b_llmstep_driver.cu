@@ -267,6 +267,46 @@ int main(int argc,char**argv){
         }
         printf("GATE-VERDICT: %s (WMMA2 own-GEMM vs cuBLAS oracle, M=%d K=%d N=%d R=%d)\n", fail?"FAIL":"PASS",M,K,N,R);
         return fail?1:0;
+    } else if(!strcmp(mode,"pergemm")){
+        // THRU-PARITY per-GEMM profile: CUDA-event time EACH of the 7 LoRA GEMMs
+        // individually + the glue, so we can see which GEMM(s) dominate the gap.
+        // Reports the shape (M,N,K) of each GEMM as the driver issues it. The
+        // backend (cuBLAS vs WMMA2 / skinny-fallback) is the same env shim.
+        int IT=atoi(argv[6]);
+        cudaEvent_t e0,e1; CK(cudaEventCreate(&e0)); CK(cudaEventCreate(&e1));
+        float one=1.0f,zero=0.0f;
+        // warmup
+        for(int w=0;w<10;w++){ lora_fwd(M,N,K,R,s,x,A,B,y,tmp); lora_bwd(M,N,K,R,s,x,A,B,dy,dA,dB,dx,u,tmp);}
+        CK(cudaDeviceSynchronize());
+        struct G{const char*nm;int tA;int tB;int gm;int gn;int gk;float al;const float*pa;int la;const float*pb;int lb;float be;float*pc;int lc;};
+        // The 7 LoRA GEMMs exactly as lora_fwd/lora_bwd issue them:
+        G gs[7]={
+          {"fwd_tmp(x.At)",  CUBLAS_OP_T,CUBLAS_OP_N, R,M,K, one, A,K, x,K, zero, tmp,R},
+          {"fwd_y(s.tmp.Bt)",CUBLAS_OP_T,CUBLAS_OP_N, N,M,R, s,   B,R, tmp,R,zero, y,N},
+          {"bwd_u(dy.B)",    CUBLAS_OP_N,CUBLAS_OP_N, R,M,N, one, B,R, dy,N, zero, u,R},
+          {"bwd_tmp(x.At)",  CUBLAS_OP_T,CUBLAS_OP_N, R,M,K, one, A,K, x,K, zero, tmp,R},
+          {"bwd_dB(dyt.tmp)",CUBLAS_OP_N,CUBLAS_OP_T, R,N,M, s,   tmp,R, dy,N, zero, dB,R},
+          {"bwd_dA(ut.x)",   CUBLAS_OP_N,CUBLAS_OP_T, K,R,M, s,   x,K, u,R, zero, dA,K},
+          {"bwd_dx(u.A)",    CUBLAS_OP_N,CUBLAS_OP_N, K,M,R, s,   A,K, u,R, zero, dx,K},
+        };
+        printf("PERGEMM M=%d K=%d N=%d R=%d iters=%d\n",M,K,N,R,IT);
+        double tot=0;
+        for(int gi=0;gi<7;gi++){
+            G&g=gs[gi];
+            CK(cudaEventRecord(e0));
+            for(int i=0;i<IT;i++) SGEMM((cublasOperation_t)g.tA,(cublasOperation_t)g.tB,g.gm,g.gn,g.gk,&g.al,g.pa,g.la,g.pb,g.lb,&g.be,g.pc,g.lc);
+            CK(cudaEventRecord(e1)); CK(cudaEventSynchronize(e1));
+            float t; CK(cudaEventElapsedTime(&t,e0,e1)); t/=IT; tot+=t;
+            int sk=(g.gm<128||g.gn<64);
+            printf("  GEMM[%d] %-18s out(m=%d,n=%d) k=%d  %.5f ms/it  %s\n",gi,g.nm,g.gm,g.gn,g.gk,t, sk?"SKINNY":"square");
+        }
+        // glue time
+        CK(cudaEventRecord(e0));
+        for(int i=0;i<IT;i++){ glue_pre(x,xn,wnorm,M,K); glue_swiglu(gate_up,gate_up+(long long)M*N,swout,M,N); glue_post(y,swout,M,N);}
+        CK(cudaEventRecord(e1)); CK(cudaEventSynchronize(e1));
+        float tgl; CK(cudaEventElapsedTime(&tgl,e0,e1)); tgl/=IT;
+        printf("  GLUE (rmsnorm+swiglu+residual)        %.5f ms/it\n",tgl);
+        printf("  SUM 7-GEMM=%.5f ms  glue=%.5f ms  step~=%.5f ms (%.1f steps/s)\n",tot,tgl,tot+tgl,1000.0/(tot+tgl));
     } else { fprintf(stderr,"unknown mode %s\n",mode); return 1; }
     return 0;
 }
