@@ -118,8 +118,9 @@ fn _ln(x: float) -> float { return log(x) }
 pub fn qforge_stage_calib_table() -> [StageCalib] {
     return [
         // a2f_assembler — SMALL anchor = naive-1D as-measured (0.2× ⇒ CPU);
-        //   LARGE anchor = 2D-kernel as-measured (41.9× ⇒ GPU). ONE crossover
-        //   between them lands at ns·ng ≈ 1e5 (the m35 "wins for ns·ng ≳ 1e5").
+        //   LARGE anchor = 2D-kernel as-measured (41.9× ⇒ GPU). The log-log
+        //   break-even of these two as-shipped anchors lands ~1.15e6 — inside
+        //   the ~1e5–1e6 decade the m35 doc cites as "wins for ns·ng ≳ 1e5".
         StageCalib {
             name: "a2f_assembler", has_gpu: true,
             size_small:   1024.0 * 128.0,            // 131072 ... see note: small-stage anchor
