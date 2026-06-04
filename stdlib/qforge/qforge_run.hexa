@@ -75,6 +75,7 @@ pub struct QforgeRunResult {
     err:            str,
     lambda:         float,   // λ the pipeline ASSEMBLED (NOT injected — @L4)
     omega_log:      float,   // ω_log of the assembled α²F (K)
+    omega_bar2:     float,   // ω̄₂ second moment (K) — feeds the AD f2 factor
     tc:             float,   // Tc_AD (Allen-Dynes f1·f2) — the production Tc
     tc_me:          float,   // Tc_ME (Migdal-Eliashberg) — the cross-check estimator
     stages:         [QforgeStage],
@@ -122,7 +123,7 @@ pub struct QforgeDeck {
 
 fn _run_sentinel(err: str, stages: [QforgeStage], note: str) -> QforgeRunResult {
     return QforgeRunResult {
-        ok: 0, err: err, lambda: -1.0, omega_log: -1.0, tc: -1.0, tc_me: -1.0,
+        ok: 0, err: err, lambda: -1.0, omega_log: -1.0, omega_bar2: -1.0, tc: -1.0, tc_me: -1.0,
         stages: stages, screening_note: note
     }
 }
@@ -254,7 +255,7 @@ pub fn qforge_run(h_apply, deck: QforgeDeck) -> QforgeRunResult {
 
     return QforgeRunResult {
         ok: 1, err: "",
-        lambda: tail.lambda, omega_log: tail.omega_log,
+        lambda: tail.lambda, omega_log: tail.omega_log, omega_bar2: tail.omega_bar2,
         tc: tail.tc_ad, tc_me: tail.tc_me,
         stages: stages, screening_note: note
     }

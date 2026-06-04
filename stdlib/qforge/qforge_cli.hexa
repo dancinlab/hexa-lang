@@ -30,6 +30,7 @@
 // el-ph dataset it is handed. This CLI is the thin argv front-end.
 
 use "stdlib/qforge/orchestrator"
+use "stdlib/qforge/qforge_run"          // qforge_run — end-to-end SCF→DFPT→elph→a2f→λ→Tc (@L1/@L2)
 use "stdlib/qforge/migration_scoreboard"
 use "stdlib/qforge/telemetry_cli"      // qf_telemetry — telemetry subverb logic (importable, testable)
 
@@ -85,6 +86,8 @@ fn _qf_run(deck: str) -> int {
     println("[qforge] ph.out present — the el-ph dataset parser (ph.out → per-mode |g|²/ω) is")
     println("[qforge] the next migration step; the chain qforge_elph_to_tc is selftest-green")
     println("[qforge] (hexa qforge selftest). DFPT→QFORGE dataset wiring lands in a follow-up PR.")
+    println("[qforge] the END-TO-END in-repo chain (SCF→DFPT→elph→a2f→λ→Tc, qforge_run) is")
+    println("[qforge] composed + gated: hexa run stdlib/qforge/qforge_run_selftest.hexa (@L1/@L2).")
     return 0
 }
 

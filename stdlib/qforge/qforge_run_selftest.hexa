@@ -1,0 +1,207 @@
+// @ci_gate — pure · network-free · deterministic (stdlib_selftest_aggregate --ci-gate)
+//
+// qforge_run_selftest.hexa — QFORGE END-TO-END ORCHESTRATOR gate (@L1/@L2).
+//
+// Drives `qforge_run(deck)` — the SCF→DFPT→elph→a2f→λ→Tc chain — end-to-end on ONE
+// small SYNTHETIC deck with ZERO Quantum ESPRESSO in any loop, and asserts:
+//
+//   (1) END-TO-END   the chain returns ok==1 with a FINITE λ>0, ω_log>0, Tc>0 —
+//                    every stage ran and produced a result (the `stages` trace has
+//                    scf · dfpt · elph · a2f · moments · tc, each ok==1).
+//   (2) COMPOSITION ≡ PIECES (d4 — the @L4 honesty assertion)
+//                    the COMPOSED McMillan-Tc the chain implies on its OWN computed
+//                    (λ, ω_log) must EQUAL the STANDALONE mcmillan_tc(ω_log, λ, μ*).
+//                    This proves the composition introduces NO drift: the chain's
+//                    moments feed the SAME Tc formula the brick computes in isolation.
+//                    NOTE: this does NOT assert λ/Tc hit any chosen value (@L4 — the
+//                    orchestrator computes whatever the pipeline yields, no forced
+//                    agreement); it asserts the composition is FAITHFUL to the pieces.
+//   (3) DETERMINISM  a second identical run yields bit-identical λ/ω_log/Tc.
+//   (4) @L5 SURFACED the result carries the screening-functional-gap note (the
+//                    Hartree+LDA-exch limitation is reported, not hidden — d6).
+//   (5) GUARD        a malformed deck (n_ef ≤ 0) propagates the sentinel (ok==0,
+//                    λ=-1.0) — the chain refuses to fabricate a Tc (d6).
+//
+// The deck is SYNTHETIC (a small explicit H, a 1-atom force-constant Φ, one bare
+// ΔV mode) — it is NOT a physical material; its purpose is to exercise EVERY stage
+// as a real kernel call and pin composition ≡ pieces. No QE byte is read; no λ/Tc
+// value is injected — the chain ASSEMBLES λ from the el-ph dataset it built itself.
+//
+// Run:  hexa run stdlib/qforge/qforge_run_selftest.hexa
+// PASS: exits printing "qforge_run_selftest PASS".
+
+use "stdlib/qforge/qforge_run"
+use "stdlib/material/sim"
+
+fn _abs(x: float) -> float { if x < 0.0 { return -x } return x }
+
+fn _ck(name: str, got: float, want: float, tol: float) -> int {
+    let w = _abs(want)
+    let d = _abs(got - want)
+    let rel = if w < 1.0e-12 { d } else { d / w }
+    if rel <= tol {
+        println("PASS " + name + " (got=" + to_string(got) + " want=" + to_string(want)
+                + " rel-ε=" + to_string(rel) + ")")
+        return 0
+    }
+    println("FAIL " + name + " (got=" + to_string(got) + " want=" + to_string(want)
+            + " rel-ε=" + to_string(rel) + ")")
+    return 1
+}
+
+fn _ck_pos(name: str, got: float) -> int {
+    if got > 0.0 {
+        println("PASS " + name + " > 0 (got=" + to_string(got) + ")")
+        return 0
+    }
+    println("FAIL " + name + " not > 0 (got=" + to_string(got) + ")")
+    return 1
+}
+
+// ── the synthetic SCF Hamiltonian: H = diag(0.0, 0.0, 1.5, 2.0) with a small ──
+//   off-diagonal coupling (a near-degenerate 2-level occupied manifold at E_F=0).
+//   matrix-free H·v against an explicit 4×4 symmetric matrix.
+let HMAT: [float] = [
+    0.00, 0.02, 0.00, 0.00,
+    0.02, 0.00, 0.00, 0.00,
+    0.00, 0.00, 1.50, 0.00,
+    0.00, 0.00, 0.00, 2.00
+]
+let HN: int = 4
+
+fn h_apply(v: [float]) -> [float] {
+    let mut out: [float] = []
+    let mut i = 0
+    while i < HN {
+        let mut s = 0.0
+        let mut j = 0
+        while j < HN { s = s + HMAT[i * HN + j] * v[j] ; j = j + 1 }
+        out.push(s)
+        i = i + 1
+    }
+    return out
+}
+
+fn _build_deck(n_ef: float) -> QforgeDeck {
+    // ① SCF: diag preconditioner + 2 occupied bands (the near-degenerate pair).
+    let h_diag: [float] = [0.0, 0.0, 1.5, 2.0]
+    let nocc = 2
+    // ② DFPT: a single atom (natoms=1, dim=3·1=3), one real-space cell at R=0.
+    //   Φ = a positive-definite 3×3 force-constant block → 3 real ω(q,ν) at q=Γ.
+    let phi: [float] = [
+        4.0, 0.0, 0.0,
+        0.0, 5.0, 0.0,
+        0.0, 0.0, 6.0
+    ]
+    let masses: [float] = [1.0]          // 1 amu (light — hydride-like ω scale)
+    let qvec: [float] = [0.0, 0.0, 0.0]  // Γ
+    let cell_R: [float] = [0.0, 0.0, 0.0]
+    // ③ el-ph: one phonon mode bundle = bare ΔV|ψ_n⟩ for the 2 occupied bands.
+    //   ΔV applied to ψ_n ≈ a constant scatter into the n-th occupied channel
+    //   (flat nocc×n = 2×4). A finite coupling so Σ|g|² > 0.
+    let dv0: [float] = [
+        0.05, 0.00, 0.00, 0.00,   // ΔV|ψ_0⟩
+        0.00, 0.05, 0.00, 0.00    // ΔV|ψ_1⟩
+    ]
+    let dv_modes: [[float]] = [dv0]
+    // ④⑤⑥ tail params — a uniform ω grid spanning the phonon band (in K).
+    let lo = 100.0
+    let hi = 4000.0
+    let ng = 4001
+    let step = (hi - lo) / to_float(ng - 1)
+    let mut grid: [float] = []
+    let mut g = 0
+    while g < ng { grid.push(lo + step * to_float(g)) ; g = g + 1 }
+    return QforgeDeck {
+        name: "synthetic-2band-1atom",
+        h_diag: h_diag, n: HN, nocc: nocc,
+        phi: phi, masses: masses, qvec: qvec, natoms: 1, ncells: 1, cell_R: cell_R,
+        dv_modes: dv_modes,
+        e_fermi: 0.0, n_ef: n_ef, omega_grid: grid, mode_weight: 0.05,
+        sigma_el: 0.05, sigma_ph: 50.0, mu_star: 0.10, n_mats: 256
+    }
+}
+
+fn main() {
+    let mut fails = 0
+
+    let deck = _build_deck(1.0)
+    let res = qforge_run(h_apply, deck)
+
+    // ── (1) END-TO-END — ok + every stage ran ────────────────────────────────
+    if res.ok == 0 {
+        println("FAIL end-to-end — qforge_run ok==0: " + res.err)
+        println("qforge_run_selftest FAIL — chain did not complete")
+        exit(1)
+    }
+    println("[qforge_run] STAGES (" + to_string(res.stages.len()) + "):")
+    let mut si = 0
+    while si < res.stages.len() {
+        let st = res.stages[si]
+        println("  [" + to_string(si) + "] " + st.name + " ok=" + to_string(st.ok)
+                + " witness=" + to_string(st.witness) + " — " + st.note)
+        if st.ok == 0 { fails = fails + 1 }
+        si = si + 1
+    }
+    // the 6-stage trace must be present (scf·dfpt·elph·a2f·moments·tc).
+    if res.stages.len() != 6 {
+        println("FAIL stage count != 6 (got " + to_string(res.stages.len()) + ")")
+        fails = fails + 1
+    } else {
+        println("PASS stage trace has all 6 stages (scf·dfpt·elph·a2f·moments·tc)")
+    }
+    println("[qforge_run] λ=" + to_string(res.lambda) + " ω_log=" + to_string(res.omega_log)
+            + " K Tc_AD=" + to_string(res.tc) + " K Tc_ME=" + to_string(res.tc_me) + " K")
+    fails = fails + _ck_pos("(1) λ", res.lambda)
+    fails = fails + _ck_pos("(1) ω_log", res.omega_log)
+    fails = fails + _ck_pos("(1) Tc_AD", res.tc)
+
+    // ── (2) COMPOSITION ≡ PIECES (@L4 — the load-bearing assertion) ──────────
+    //   The chain EXPOSES its own assembled moments (λ, ω_log, ω̄₂). Feed those
+    //   moments to the STANDALONE Tc brick (qforge_tc_allen_dynes_full) and the
+    //   chain's `tc` field MUST reproduce — i.e. the orchestrator's Tc is EXACTLY
+    //   the isolated brick applied to the chain's own (λ, ω_log, ω̄₂), with NO
+    //   hidden transform and NO injected target (@L4). composition ≡ pieces.
+    let tc_from_pieces = qforge_tc_allen_dynes_full(res.lambda, res.omega_log,
+                                                    res.omega_bar2, deck.mu_star)
+    // and the McMillan base on the chain's (λ, ω_log) — the strong-coupling floor
+    // the AD form builds on — must itself be finite/positive (the brick agrees).
+    let mcm_standalone = mcmillan_tc(res.omega_log, res.lambda, deck.mu_star)
+    println("[compose≡pieces] chain Tc_AD=" + to_string(res.tc)
+            + " K · standalone AD-Tc(λ,ω_log,ω̄₂)=" + to_string(tc_from_pieces)
+            + " K · standalone McMillan(λ,ω_log)=" + to_string(mcm_standalone) + " K")
+    fails = fails + _ck("(2) composition≡pieces: chain Tc_AD == standalone brick(λ,ω_log,ω̄₂)",
+                        res.tc, tc_from_pieces, 1.0e-12)
+    fails = fails + _ck_pos("(2) standalone McMillan-Tc(λ,ω_log) floor", mcm_standalone)
+
+    // ── (3) DETERMINISM ──────────────────────────────────────────────────────
+    let res2 = qforge_run(h_apply, _build_deck(1.0))
+    fails = fails + _ck("(3) determinism λ", res2.lambda, res.lambda, 0.0)
+    fails = fails + _ck("(3) determinism ω_log", res2.omega_log, res.omega_log, 0.0)
+    fails = fails + _ck("(3) determinism Tc_AD", res2.tc, res.tc, 0.0)
+
+    // ── (4) @L5 screening-gap surfaced ───────────────────────────────────────
+    if res.screening_note.len() > 0 {
+        println("PASS (4) @L5 screening-gap surfaced: " + res.screening_note)
+    } else {
+        println("FAIL (4) @L5 screening-gap NOT surfaced (note empty)")
+        fails = fails + 1
+    }
+
+    // ── (5) GUARD — malformed deck propagates the sentinel ───────────────────
+    let bad = qforge_run(h_apply, _build_deck(-1.0))   // n_ef ≤ 0
+    if bad.ok == 0 && bad.lambda < 0.0 {
+        println("PASS (5) malformed-deck sentinel propagated (ok==0, λ=" + to_string(bad.lambda) + ")")
+    } else {
+        println("FAIL (5) malformed deck did NOT sentinel (ok=" + to_string(bad.ok)
+                + " λ=" + to_string(bad.lambda) + ")")
+        fails = fails + 1
+    }
+
+    if fails == 0 {
+        println("qforge_run_selftest PASS")
+    } else {
+        println("qforge_run_selftest FAIL — " + to_string(fails) + " check(s)")
+        exit(1)
+    }
+}
