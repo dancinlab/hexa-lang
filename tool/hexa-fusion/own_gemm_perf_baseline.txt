@@ -1,0 +1,45 @@
+# own_gemm_perf_baseline.txt — HEXA-FUSION E3 perf-regression gate baseline
+# ============================================================================
+# RATIO-BASED, GPU-PORTABLE baseline for tool/hexa-fusion/own_gemm_perf_gate.sh.
+#
+# The gate compares the own-GEMM (WMMA2-TUNED + split-K) full-step throughput
+# against the cuBLAS-TF32 oracle on the SAME GPU, in the SAME process pair, and
+# checks the RATIO own/cuBLAS — NOT absolute steps/s. Absolute steps/s differ by
+# GPU class (Blackwell B200 vs H100), so a hardcoded absolute number is not
+# portable and would false-fail on a faster/slower runner. The own/cuBLAS RATIO
+# is a property of the KERNEL (how close own-GEMM is to cuBLAS), and is far more
+# GPU-portable than either arm's absolute steps/s.
+#
+# A regression = the own-GEMM arm got RELATIVELY slower vs cuBLAS, i.e. the
+# measured ratio dropped below baseline_ratio * (1 - REL_TOL).
+#
+# Format: KEY=VALUE lines, '#' comments ignored. Required keys:
+#   GATE_M, GATE_R                 — shape the gate measures at (M8192 R16)
+#   BASELINE_OWN_STEPS_PER_S       — reference own-GEMM steps/s (GPU-class noted)
+#   BASELINE_CUBLAS_STEPS_PER_S    — reference cuBLAS steps/s   (GPU-class noted)
+#   BASELINE_RATIO                 — own/cuBLAS at the gate shape (the gate's SSOT)
+#   REL_TOL                        — allowed fractional drop of the ratio (0.15 = 15%)
+#   GPU_CLASS                      — GPU the absolute numbers were measured on
+#
+# Provenance: HEXA-FUSION verdicts (.verdicts/hexa-fusion/), WMMA2-TUNED+splitK
+# full-step driver (self/native/hxqwen14b_llmstep_driver.cu, util mode):
+#   M8192  R16: own 454.9 steps/s  (1.24x cuBLAS-baseline-claim)  cuBLAS 565.2
+#   M16384 R16: own 231.0 steps/s                                cuBLAS 277.4
+#   per-GEMM split-K: dA 0.238 ms / dB 0.252 ms
+# Ratios: M8192 own/cuBLAS = 454.9/565.2 = 0.8048
+#         M16384 own/cuBLAS = 231.0/277.4 = 0.8328
+# The gate measures at M8192 R16, so BASELINE_RATIO uses the M8192 ratio.
+# ============================================================================
+
+GATE_M=8192
+GATE_R=16
+
+GPU_CLASS=H100-class (verdicts measured on H100; absolute steps/s are GPU-class-dependent — gate uses the RATIO, which is portable)
+
+BASELINE_OWN_STEPS_PER_S=454.9
+BASELINE_CUBLAS_STEPS_PER_S=565.2
+BASELINE_RATIO=0.8048
+
+# Allowed fractional drop of the own/cuBLAS ratio before the gate FAILS.
+# 0.15 => fail if measured own/cuBLAS < 0.8048 * (1 - 0.15) = 0.6841.
+REL_TOL=0.15
