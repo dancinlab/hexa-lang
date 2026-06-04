@@ -1,0 +1,25 @@
+// HEXA Standard Library — cloud/dft_oom_ramfloor_selftest
+//
+// g5 selftest for the dft-run OOM-preflight RAM-floor fix (handoff 24ab03f0).
+//
+// BUG: the d11 OOM preflight built DftNodeSpec.total_mem_gib from a FIXED
+// DFT_DETACH_RAM_FLOOR (64 GiB) regardless of the pod's actual RAM, so a
+// 38-atom Li2MgH16-class cell (~10 GiB/rank) ALWAYS clamped -np to ~6
+// (64/10) — renting a 128/384-GiB high-RAM pod gave ZERO extra ranks.
+//
+// FIX: the rent `--query cpu_ram>=N` value (the floor of the ACTUAL rented
+// RAM, pinned into the offer query so the rented node is guaranteed to carry
+// it) drives the budget when it exceeds DFT_DETACH_RAM_FLOOR; an absent /
+// smaller value falls back to the floor (backward-compatible).
+//
+// This selftest exercises the budget math directly via the canonical
+// tls_dft_mpi_sweet_spot (the REUSED preflight engine) with a node whose
+// total_mem_gib is set from the resolved RAM, mirroring _dft_oom_preflight.
+// Deterministic — no real pod, no IO.
+
+use "stdlib/cloud/preflight_dft"  // DftSpec · DftNodeSpec · tls_dft_mpi_sweet_spot
+
+// WIP skeleton — filled in next commit.
+fn main() {
+    println("WIP")
+}
