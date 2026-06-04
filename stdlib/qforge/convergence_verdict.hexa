@@ -41,8 +41,10 @@
 // Run:  HEXA_LANG=. hexa run stdlib/qforge/convergence_verdict_selftest.hexa
 //
 // PURE · DETERMINISTIC · NETWORK-FREE · NO pod ops.
-
-use "stdlib/runtime/numeric"
+//
+// NOTE: the IEEE classifiers below are inlined (mirroring stdlib/runtime/numeric
+// rt_isnan/rt_isinf) rather than imported, so this stays a leaf module with no
+// runtime-intrinsic dependency — `hexa run` builds it standalone.
 
 // ── tunables (see CALIBRATION above) ─────────────────────────────────────────
 pub let CV_DIVERGE_WIN: int   = 3        // strictly-rising steps ⇒ DIVERGING
@@ -63,6 +65,15 @@ pub struct ConvVerdict {
 }
 
 fn _cv_abs(x: float) -> float { if x < 0.0 { return -x } return x }
+
+// IEEE 754 classifiers (inlined; see NOTE above). NaN is the unique value with
+// (x != x); ±Inf exceed DBL_MAX in magnitude.
+fn _cv_isnan(x: float) -> bool { return x != x }
+fn _cv_isinf(x: float) -> bool {
+    if x != x { return false }
+    let big = 1.7976931348623157e308
+    return x > big || x < (0.0 - big)
+}
 
 // state → label, for messages / the selftest.
 pub fn cv_state_name(s: int) -> str {
@@ -98,7 +109,7 @@ pub fn qforge_convergence_verdict(residuals: [float], tol: float) -> ConvVerdict
         let r = residuals[i]
 
         // (1) hard NaN/Inf — the Picard blow-up endgame. Trip immediately.
-        if rt_isnan(r) || rt_isinf(r) {
+        if _cv_isnan(r) || _cv_isinf(r) {
             return ConvVerdict { state: CV_DIVERGING,
                 reason: "residual NaN/Inf at iter " + to_string(i + 1) + " (overflow blow-up)",
                 recommend_abort: true, flag_iter: i + 1 }
@@ -129,8 +140,8 @@ pub fn qforge_convergence_verdict(residuals: [float], tol: float) -> ConvVerdict
             // (3) plateau window — relative step-over-step drop below the bar.
             //   drop = (prev − r)/prev. A meaningful decrease resets the run.
             let denom = if prev > 0.0 { prev } else { 1.0 }
-            let drop = (prev - r) / denom
-            if drop < CV_STALL_REL {
+            let rel_drop = (prev - r) / denom
+            if rel_drop < CV_STALL_REL {
                 plateau_run = plateau_run + 1
                 if plateau_run >= CV_STALL_K {
                     return ConvVerdict { state: CV_STALLED,

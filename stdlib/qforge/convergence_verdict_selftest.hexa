@@ -42,9 +42,9 @@ fn main() {
     // climbs super-linearly, finally overflowing to NaN at the LAST step. The
     // predictor must trip on the RISING WINDOW well before that NaN, ≥2× before
     // the cap (= series length). 12 iters here; the cap a real run would have set.
-    let nan = 0.0 / 0.0                       // IEEE NaN, deterministic
+    let qnan = 0.0 / 0.0                      // IEEE NaN, deterministic
     let div: [float] = [3.0e-2, 2.0e-2, 5.0e-2, 1.2e-1, 4.0e-1, 1.5e0,
-                        6.0e0, 3.0e1, 2.0e2, 1.0e4, 1.0e7, nan]
+                        6.0e0, 3.0e1, 2.0e2, 1.0e4, 1.0e7, qnan]
     let cap = len(div)                        // a run would iterate to here (12)
     let vb = qforge_convergence_verdict(div, tol)
     fails = fails + _ck("(b) blow-up → DIVERGING", vb.state == CV_DIVERGING)
@@ -58,7 +58,7 @@ fn main() {
     // ── (b2) a series that overflows to NaN with NO prior rise → still caught ─
     // Hard NaN trips INSTANTLY at its index (the recover-EOF crash-loop residual:
     // a single corrupt step). flag_iter must equal that index (1-based).
-    let div2: [float] = [5.0e-3, 4.0e-3, nan, 3.0e-3]
+    let div2: [float] = [5.0e-3, 4.0e-3, qnan, 3.0e-3]
     let vb2 = qforge_convergence_verdict(div2, tol)
     fails = fails + _ck("(b2) NaN → DIVERGING", vb2.state == CV_DIVERGING)
     fails = fails + _ck("(b2) NaN flagged at its index (3)", vb2.flag_iter == 3)
