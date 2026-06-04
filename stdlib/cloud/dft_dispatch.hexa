@@ -2162,25 +2162,105 @@ fn _dft_salvage_cmd(np: int, walltime_h: int) -> str {
 // charge/wfc restart artifacts + force a from-scratch SCF (restart_mode=
 // 'from_scratch', startingpot='atomic', startingwfc='atomic+random') and relaunch
 // pw.x. The relax stays done; only the (cheap, regenerable) SCF restarts clean.
-// STUB — filled below.
+//
+// _dft_failure_is_scf_corrupt — PURE sub-classifier: is the `__DFT_FAILED__` crash a
+// CORRUPT SCF-restart read (SALVAGEABLE by a clean from-scratch SCF) rather than a
+// genuine numerical/OOM/segfault fault? The signatures are pw.x's restart-read
+// failures on a half-written `out/<prefix>.save` charge density / wfc:
+//   `error reading file` / `error in reading` (davcio) on a charge/wfc restart,
+//   `wrong dimensions of` (charge density mismatch on a truncated rho), or a pw.x
+//   read of `charge-density` / `data-file-schema.xml` that hit `End of file`/`EOF`.
+//
+// d4/d3 GUARD — the corrupt-SCF class is DISJOINT from the phon corrupt-recover
+// class: a `_ph0` co-signature means it is the PHONON per-q artifact (owned by
+// `_dft_failure_is_corrupt_recover`), NOT the SCF restart, so a `_ph0` present
+// vetoes the SCF classification (the caller also checks phon FIRST). Returns 1 iff
+// an SCF-restart corruption signature is present AND no `_ph0` phon co-signature.
 fn _dft_failure_is_scf_corrupt(out_text: str) -> int {
+    // a phonon `_ph0` artifact is the phon salvage's class, not the SCF restart's.
+    if out_text.contains("_ph0") {
+        return 0
+    }
+    // a davcio/charge-density read error on the SCF restart needs a charge/wfc/save
+    // co-signature so a generic `error reading` on some other file is not stolen.
+    let restart_io = out_text.contains("error reading file")
+        || out_text.contains("error in reading")
+        || out_text.contains("End of file")
+        || out_text.contains("EOF")
+    let restart_artifact = out_text.contains("charge density")
+        || out_text.contains("charge-density")
+        || out_text.contains("data-file-schema.xml")
+        || out_text.contains(".save/")
+        || out_text.contains("wfc")
+    if restart_io && restart_artifact {
+        return 1
+    }
+    // a truncated charge density also reads as a dimension mismatch on the restart.
+    if out_text.contains("wrong dimensions of") && restart_artifact {
+        return 1
+    }
     return 0
 }
 
-// _dft_scf_salvage_marker / _dft_scf_salvage_already_tried — STUBs (one-attempt
-// guard, distinct deck-local key from the phon salvage marker so the two never
-// collide on the same deck). Filled below.
+// _dft_scf_salvage_marker — the deck-LOCAL durable @L3 one-attempt marker for the
+// SCF-restart salvage. Distinct filename from the phon `_dft_salvage.q<N>.done` so
+// the two salvage classes never collide on one deck. There is one SCF restart (not
+// a per-q family) so it is NOT q-keyed: a SECOND SCF corruption after a clean
+// from-scratch SCF is a GENUINE fault → teardown (not a re-salvage loop). Lives
+// next to the state stamp (NOT /tmp — d_defer_no_delete: survives a session restart).
 fn _dft_scf_salvage_marker(deck: str) -> str {
     return deck + "/.dft_scf_salvage.done"
 }
+
+// _dft_scf_salvage_already_tried — PURE @L3 guard: 1 iff the SCF salvage was ALREADY
+// attempted for this deck (the marker exists). A re-corruption after a clean
+// from-scratch SCF means the restart wasn't the cause → fall through to teardown.
 fn _dft_scf_salvage_already_tried(deck: str) -> int {
+    if file_exists(_dft_scf_salvage_marker(deck)) {
+        return 1
+    }
     return 0
 }
 
-// _dft_scf_salvage_cmd — STUB. The pod-side shell that purges the corrupt SCF
-// restart artifacts and relaunches pw.x from scratch. Filled below.
+// _dft_scf_salvage_cmd — the pod-side shell that SALVAGES a corrupt SCF-restart
+// state on the SAME pod WITHOUT a teardown and WITHOUT re-running the relax. GENERIC
+// (d4 — no slug/prefix hardcoded): every value is derived on the pod from the deck.
+//
+//   (a) PURGE the corrupt SCF charge/wfc restart artifacts under `out/*.save/`
+//       (`charge-density.dat*` · `wfc*.dat` · `data-file-schema.xml` · `*.save/`
+//       restart markers) so the from-scratch SCF never reads the truncated state.
+//       The relaxed geometry lives in scf.in (NOT under out/) so it is UNTOUCHED.
+//   (b) WRITE `scf_salvage.in` from scf.in with restart_mode='from_scratch',
+//       startingpot='atomic', startingwfc='atomic+random' injected into &control /
+//       &electrons (replace-or-append each key) — a clean SCF, no restart read.
+//   (c) RELAUNCH the SCF→ph chain: clean pw.x on `scf_salvage.in` (→ scf.out) then
+//       ph.x on ph.in (→ ph.out) — so a clean SCF flows straight into el-ph and the
+//       EXISTING "phon" phase resume harvests terminally (d4 — one generic path, no
+//       new resume phase). ph.x is the LAST proc → the phon probe is the terminal one.
+//
+// Note: an absent `out/` is harmless — the purge is a best-effort rm and the
+// from-scratch SCF runs regardless (an already-clean tree just re-runs cleanly).
 fn _dft_scf_salvage_cmd(np: int, walltime_h: int) -> str {
-    return ""
+    let scf = _dft_mpi_env() + " && setsid timeout " + to_string(walltime_h)
+        + "h mpirun -np " + to_string(np) + " --allow-run-as-root pw.x -ndiag 1 -in scf_salvage.in > scf.out 2>&1"
+    let ph = _dft_mpi_env() + " && setsid timeout " + to_string(walltime_h)
+        + "h mpirun -np " + to_string(np) + " --allow-run-as-root ph.x -in ph.in > ph.out 2>&1"
+    return "cd /root/deck && "
+        // (a) purge the corrupt SCF charge/wfc restart artifacts (relax/scf.in kept)
+        + "echo \"[dft-scf-salvage] purging corrupt SCF restart (out/*.save charge/wfc) — relax + scf.in preserved\"; "
+        + "rm -f ./out/*.save/charge-density.dat* ./out/*.save/wfc*.dat 2>/dev/null; "
+        + "rm -f ./out/*.save/data-file-schema.xml ./out/*.save/data-file*.xml 2>/dev/null; "
+        + "rm -f ./out/*.save/*.recover* ./out/*.restart 2>/dev/null; "
+        // (b) fresh scf_salvage.in: from_scratch + atomic starting pot/wfc (replace-or-append)
+        + "cp scf.in scf_salvage.in; "
+        + "sed -i \"/restart_mode[[:space:]]*=/d; /startingpot[[:space:]]*=/d; /startingwfc[[:space:]]*=/d\" scf_salvage.in; "
+        + "sed -i \"s|^\\([[:space:]]*\\)&control|\\1\\&control\\n  restart_mode = 'from_scratch'|\" scf_salvage.in; "
+        + "sed -i \"s|^\\([[:space:]]*\\)&electrons|\\1\\&electrons\\n  startingpot = 'atomic'\\n  startingwfc = 'atomic+random'|\" scf_salvage.in; "
+        // if the deck has no &electrons namelist, the startingpot/wfc default to atomic
+        // anyway once restart_mode is from_scratch — so the missing-namelist case is safe.
+        + "echo \"[dft-scf-salvage] relaunching SCF (from_scratch) → el-ph chain\"; "
+        // (c) clean SCF then chain into el-ph (terminal probe = ph.x, phon-phase resume)
+        + scf + " && " + ph
 }
 
 // ── d11 pre-rent OOM gate (Fix-deck-1) ───────────────────────────────
@@ -2712,6 +2792,43 @@ fn _dft_resume(deck: str) -> int {
                 let _wsv = _dft_write_state(deck, "phon", iid, host_ip, port, identity, np, walltime_h, relax_name)
                 println("[dft-run] --resume: el-ph SALVAGE-RELAUNCHED detached (pid " + to_string(salvaged.pid) + " · log " + phon_log + ").")
                 println("[dft-run]   monitor: hexa cloud tail " + host + " " + phon_log + "   ·   advance: hexa cloud dft-run " + deck + " --resume")
+                return 0
+            }
+            // CORRUPT SCF-RESTART (follow-on — extends the phon salvage to scf): a
+            // half-written `out/<prefix>.save` charge-density/wfc from a teardown-kill
+            // mid-SCF makes a restarting pw.x die reading the truncated restart. The
+            // relaxed geometry (scf.in) is intact, so SALVAGE on the SAME pod — purge
+            // the corrupt charge/wfc restart + relaunch pw.x from_scratch (no relax
+            // re-run) — NO teardown. Classified on scf.out (the SCF stage's stdout);
+            // ordered AFTER the phon corrupt-recover (a `_ph0` co-signature vetoes the
+            // SCF class). @L3: ONE attempt (durable marker) — a re-corruption after a
+            // clean from-scratch SCF is a GENUINE fault and falls through to teardown.
+            if _dft_failure_is_scf_corrupt(read_file(deck + "/scf.out")) == 1 {
+                if _dft_scf_salvage_already_tried(deck) == 1 {
+                    println("[dft-run] --resume: SCF CORRUPT-RESTART AGAIN after a clean from-scratch SCF — GENUINE fault, no re-salvage (@L3).")
+                    let st2 = cloud_exec_opts(host, ssh_opts, "tail -40 /root/deck/scf.out 2>/dev/null")
+                    println("[dft-run] ── scf.out tail ──\n" + st2.stdout_ + "\n[dft-run] ── end ──")
+                    let _wscf = _dft_write_state(deck, "failed", iid, host_ip, port, identity, np, walltime_h, relax_name)
+                    return _dft_teardown(iid, 1)
+                }
+                println("[dft-run] --resume: SCF CORRUPT restart (truncated out/*.save charge-density/wfc) — NOT a science crash.")
+                println("[dft-run]   SALVAGING on the SAME pod " + iid + " (purge corrupt SCF restart · relaunch pw.x from_scratch · relax preserved) — NO teardown.")
+                // @L3 durable one-attempt marker BEFORE the relaunch (a mid-salvage
+                // crash still records the attempt → no infinite re-fire).
+                let _ssm = write_text(_dft_scf_salvage_marker(deck), "scf-salvaged from_scratch\n")
+                let scf_log = _dft_remote_logfile("phon")
+                let scfsalv_cmd = _dft_scf_salvage_cmd(np, walltime_h)
+                let scfsalv_argv = _dft_detach_argv(scfsalv_cmd)
+                let scfsalvaged = cloud_nohup_opts(host, ssh_opts, scfsalv_argv, scf_log)
+                if scfsalvaged.ok == 0 {
+                    println("[dft-run] --resume: SCF salvage detach FAILED — " + scfsalvaged.message)
+                    println("[dft-run]   leaving pod " + iid + " INTACT (transport fail ≠ science fail) — retry: hexa cloud dft-run " + deck + " --resume")
+                    return 3
+                }
+                // chain ends on ph.x → "phon" phase (one generic resume path, d4).
+                let _wss = _dft_write_state(deck, "phon", iid, host_ip, port, identity, np, walltime_h, relax_name)
+                println("[dft-run] --resume: SCF SALVAGE-RELAUNCHED (from_scratch SCF → el-ph) detached (pid " + to_string(scfsalvaged.pid) + " · log " + scf_log + ").")
+                println("[dft-run]   monitor: hexa cloud tail " + host + " " + scf_log + "   ·   advance: hexa cloud dft-run " + deck + " --resume")
                 return 0
             }
             // GENUINE crash (Error in routine / STOP [1-9] / segfault / OOM — not a

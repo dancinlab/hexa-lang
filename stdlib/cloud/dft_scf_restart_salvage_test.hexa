@@ -1,13 +1,15 @@
 // dft_scf_restart_salvage_test — g5 selftest for the SCF-restart-corruption
-// salvage (follow-on extending the QFORGE-FEATURE dft-run phon salvage to the
-// SCF restart). Deterministic fixtures, NO real pod / no network.
+// salvage (follow-on extending the QFORGE-FEATURE dft-run start_q phon salvage to
+// the SCF restart). Deterministic fixtures, NO real pod / no network.
 //
 // PASS: exits 0, prints "dft_scf_restart_salvage_test PASS".
 //
-// Covers:
-//   (a) a corrupt-SCF-restart marker  → classified SCF_CORRUPT → purge+clean-restart
-//   (b) a healthy SCF restart          → NOT classified (no false purge)
-//   (c) the phon salvage path           → UNCHANGED (regression)
+// Covers the milestone's three g5 assertions:
+//   (a) a corrupt-SCF-restart marker → classified SCF_CORRUPT → purge+clean-restart
+//       plan emitted (purge out/*.save + restart_mode=from_scratch + relaunch).
+//   (b) a healthy SCF restart → NOT classified (no false purge).
+//   (c) the phon salvage path → UNCHANGED (regression — the phon corrupt-recover
+//       classifier still owns its class and the SCF classifier does NOT steal it).
 
 import "./dft_dispatch.hexa"
 
@@ -26,6 +28,92 @@ fn _has(s: str, t: str) -> int {
 
 fn main() {
     println("dft_scf_restart_salvage_test ...")
-    // STUB — assertions filled after the implementation lands.
+
+    // ── (a) corrupt SCF-restart classifier → SCF_CORRUPT (SALVAGE) ──
+    // pw.x reading a truncated `out/<prefix>.save/charge-density.dat` from a
+    // teardown-killed SCF dies on the restart read — distinct from any genuine crash.
+    let charge_eof = "     Reading charge-density from ./out/lah10.save/charge-density.dat\n     error reading file ./out/lah10.save/charge-density.dat\n     End of file\n"
+    _check("classify: 'error reading file' charge-density restart → SCF_CORRUPT (SALVAGE)",
+        _dft_failure_is_scf_corrupt(charge_eof), 1)
+    let datafile_eof = "     reading ./out/cabeh8.save/data-file-schema.xml\n     End of file\n"
+    _check("classify: data-file-schema.xml EOF → SCF_CORRUPT (SALVAGE)",
+        _dft_failure_is_scf_corrupt(datafile_eof), 1)
+    let wfc_io = "     error in reading ./out/scyh9.save/wfc1.dat\n"
+    _check("classify: 'error in reading' wfc restart → SCF_CORRUPT (SALVAGE)",
+        _dft_failure_is_scf_corrupt(wfc_io), 1)
+    let dim_mismatch = "     wrong dimensions of charge density\n     reading ./out/lah10.save/charge-density.dat\n"
+    _check("classify: 'wrong dimensions of' charge density → SCF_CORRUPT (SALVAGE)",
+        _dft_failure_is_scf_corrupt(dim_mismatch), 1)
+
+    // ── (b) healthy / unrelated → NOT classified (no false purge) ──
+    let scf_done = "     convergence has been achieved in  12 iterations\n     JOB DONE.\n"
+    _check("no-false-purge: clean SCF JOB DONE → NOT SCF_CORRUPT",
+        _dft_failure_is_scf_corrupt(scf_done), 0)
+    let scf_running = "     Reading charge-density from ./out/lah10.save/charge-density.dat\n     iteration #  3\n"
+    _check("no-false-purge: a NORMAL restart read (no IO error) → NOT SCF_CORRUPT",
+        _dft_failure_is_scf_corrupt(scf_running), 0)
+    let numeric_crash = "     Error in routine c_bands (1):\n     too many bands are not converged\n     STOP 1\n"
+    _check("no-false-purge: numerical crash (no restart artifact) → NOT SCF_CORRUPT",
+        _dft_failure_is_scf_corrupt(numeric_crash), 0)
+    let oom = "     Out of memory\n     Killed\n"
+    _check("no-false-purge: OOM → NOT SCF_CORRUPT (teardown/defer owns it)",
+        _dft_failure_is_scf_corrupt(oom), 0)
+    let missing_pseudo = "     error reading file ./pseudo/La.upf\n     STOP 1\n"
+    _check("no-false-purge: 'error reading' a deck input (no charge/wfc/save) → NOT SCF_CORRUPT",
+        _dft_failure_is_scf_corrupt(missing_pseudo), 0)
+    _check("no-false-purge: empty stdout → NOT SCF_CORRUPT",
+        _dft_failure_is_scf_corrupt(""), 0)
+
+    // ── (c) phon salvage path UNCHANGED (regression) ──
+    // the phonon per-q corrupt-recover sample is owned by _dft_failure_is_corrupt_recover
+    // and must STILL classify as corrupt-recover; the SCF classifier must NOT steal it
+    // (a `_ph0` co-signature vetoes the SCF class — disjointness in BOTH directions).
+    let phon_parse_err = "     Bands found: reading from ./out/_ph0/lah10.q_4/\n     Reading xml data from directory: ./out/_ph0/lah10.q_4/lah10.save/\nPARSE_ERR\n    81 runParser\n"
+    _check("regression: phon PARSE_ERR sample STILL classifies corrupt-recover (phon path intact)",
+        _dft_failure_is_corrupt_recover(phon_parse_err), 1)
+    _check("disjoint: phon corrupt-recover sample (has _ph0) → NOT SCF_CORRUPT (no steal)",
+        _dft_failure_is_scf_corrupt(phon_parse_err), 0)
+    // and the SCF corrupt sample is NOT a phon corrupt-recover (no PARSE_ERR/_ph0 family).
+    _check("disjoint: SCF-corrupt sample → NOT phon corrupt-recover",
+        _dft_failure_is_corrupt_recover(charge_eof), 0)
+
+    // ── (a) the SCF salvage command shape — purge + from_scratch + relaunch ──
+    let salv = _dft_scf_salvage_cmd(8, 12)
+    _check("scf-salvage cmd: PURGES the corrupt charge-density restart",
+        _has(salv, "rm -f ./out/*.save/charge-density.dat*"), 1)
+    _check("scf-salvage cmd: PURGES the corrupt wfc restart",
+        _has(salv, "wfc*.dat"), 1)
+    _check("scf-salvage cmd: PURGES the restart data-file-schema.xml",
+        _has(salv, "data-file-schema.xml"), 1)
+    _check("scf-salvage cmd: writes a FRESH scf_salvage.in (does not overwrite scf.in)",
+        _has(salv, "cp scf.in scf_salvage.in"), 1)
+    _check("scf-salvage cmd: forces restart_mode = from_scratch (no restart read)",
+        _has(salv, "restart_mode = 'from_scratch'"), 1)
+    _check("scf-salvage cmd: forces startingpot = atomic",
+        _has(salv, "startingpot = 'atomic'"), 1)
+    _check("scf-salvage cmd: forces startingwfc = atomic+random",
+        _has(salv, "startingwfc = 'atomic+random'"), 1)
+    _check("scf-salvage cmd: relaunches pw.x on scf_salvage.in",
+        _has(salv, "pw.x -ndiag 1 -in scf_salvage.in"), 1)
+    _check("scf-salvage cmd: chains into el-ph (ph.x on ph.in) after the clean SCF",
+        _has(salv, "ph.x -in ph.in"), 1)
+    _check("scf-salvage cmd: does NOT touch relax (no rm of relax.out / coords)",
+        _has(salv, "relax.out"), 0)
+    _check("scf-salvage cmd: reuses single-thread MPI env (OMP_NUM_THREADS=1)",
+        _has(salv, "OMP_NUM_THREADS=1"), 1)
+
+    // ── @L3 one-attempt guard (deck-local, distinct key from the phon marker) ──
+    let tdeck = "/tmp/dft_scf_salvage_guard_test"
+    let _mkg = exec("rm -rf '" + tdeck + "' && mkdir -p '" + tdeck + "'")
+    _check("guard: not yet tried (no SCF marker)", _dft_scf_salvage_already_tried(tdeck), 0)
+    let _mk = write_text(_dft_scf_salvage_marker(tdeck), "scf-salvaged from_scratch\n")
+    _check("guard: tried after marker → blocks 2nd SCF salvage", _dft_scf_salvage_already_tried(tdeck), 1)
+    let _rmg = exec("rm -rf '" + tdeck + "'")
+    // marker path is deck-local + DISTINCT from the phon `.dft_salvage.qN.done` key.
+    _check("guard: SCF marker path is deck-local + distinct from phon marker",
+        _has(_dft_scf_salvage_marker("/decks/lah10"), "/decks/lah10/.dft_scf_salvage.done"), 1)
+    _check("guard: SCF marker is NOT the phon q-keyed marker name",
+        _has(_dft_scf_salvage_marker("/decks/lah10"), ".dft_salvage.q"), 0)
+
     println("dft_scf_restart_salvage_test PASS")
 }
