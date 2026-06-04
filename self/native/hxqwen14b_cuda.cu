@@ -500,18 +500,65 @@ __global__ void _hx_k_sgemm_cm_v54(int tA, int tB, long long M, long long N, lon
     float prev = (beta != 0.0f) ? C[i + j*ldc] : 0.0f;
     C[i + j*ldc] = alpha * acc + beta * prev;
 }
+// ═════════════════════════════════════════════════════════════════════
+// Phase 1b — shared-memory TILED variant of _hx_k_sgemm_cm_v54. SAME col-
+// major signature/semantics + transpose handling (faithful to cublasSgemm),
+// but each 16×16 block cooperatively stages a HXTILE×HXTILE sub-tile of
+// op(A) and op(B) into __shared__, reusing each loaded element HXTILE times
+// → cuts global loads ~HXTILE× vs the naive one-thread-per-output kernel.
+// NOT bit-identical to cuBLAS (accumulation order differs) — cuBLAS stays a
+// correctness ORACLE (fp32 tolerance). Selected at launch via HEXA_OWN_GEMM_TILED.
+// ═════════════════════════════════════════════════════════════════════
+#define HXTILE 16
+__global__ void _hx_k_sgemm_cm_tiled(int tA, int tB, long long M, long long N, long long K,
+                                     float alpha, const float* A, long long lda,
+                                     const float* B, long long ldb,
+                                     float beta, float* C, long long ldc) {
+    __shared__ float As[HXTILE][HXTILE];
+    __shared__ float Bs[HXTILE][HXTILE];
+    long long row = (long long)blockIdx.x * HXTILE + threadIdx.x;  // C row i (0..M)
+    long long col = (long long)blockIdx.y * HXTILE + threadIdx.y;  // C col j (0..N)
+    float acc = 0.0f;
+    for (long long t = 0; t < K; t += HXTILE) {
+        long long ak = t + threadIdx.y;
+        As[threadIdx.x][threadIdx.y] =
+            (row < M && ak < K) ? (tA ? A[ak + row*lda] : A[row + ak*lda]) : 0.0f;  // op(A)[row,ak]
+        long long bk = t + threadIdx.x;
+        Bs[threadIdx.x][threadIdx.y] =
+            (bk < K && col < N) ? (tB ? B[col + bk*ldb] : B[bk + col*ldb]) : 0.0f;  // op(B)[bk,col]
+        __syncthreads();
+        for (int l = 0; l < HXTILE; l++) acc += As[threadIdx.x][l] * Bs[l][threadIdx.y];
+        __syncthreads();
+    }
+    if (row < M && col < N) {
+        float prev = (beta != 0.0f) ? C[row + col*ldc] : 0.0f;
+        C[row + col*ldc] = alpha * acc + beta * prev;
+    }
+}
 // Host launcher for the own-GEMM kernel — extern "C" so the gcc-compiled
 // hxqwen14b.c TU (LoRA fwd/bwd) can call it. tA/tB are 1 if op==T else 0.
 // Returns 0 on success, nonzero on a CUDA launch/sync error.
+// HEXA_OWN_GEMM_TILED (set+non-empty) selects the shared-mem tiled kernel;
+// otherwise the naive one-thread-per-output kernel. The outer HEXA_OWN_GEMM
+// gate (in the shims) still chooses own-vs-cuBLAS; this only picks tiled-vs-naive
+// WITHIN the own path. Block is always 16×16, grid covers (M,N) in 16-tiles.
 int _hx_own_sgemm_cm_launch(int tA, int tB, int m, int n, int k,
                             float alpha, const float* A, int lda,
                             const float* B, int ldb,
                             float beta, float* C, int ldc) {
     dim3 blk(16,16); dim3 grd((unsigned)((m+15)/16),(unsigned)((n+15)/16));
-    _hx_k_sgemm_cm_v54<<<grd,blk>>>(tA,tB,
-                                    (long long)m,(long long)n,(long long)k,
-                                    alpha, A,(long long)lda, B,(long long)ldb,
-                                    beta, C,(long long)ldc);
+    if (getenv("HEXA_OWN_GEMM_TILED") && getenv("HEXA_OWN_GEMM_TILED")[0]) {
+        static int tfired = 0; if (!tfired){tfired=1; fprintf(stderr,"[OWN-SGEMM-TILED-FIRED] _hx_k_sgemm_cm_tiled\n");}
+        _hx_k_sgemm_cm_tiled<<<grd,blk>>>(tA,tB,
+                                          (long long)m,(long long)n,(long long)k,
+                                          alpha, A,(long long)lda, B,(long long)ldb,
+                                          beta, C,(long long)ldc);
+    } else {
+        _hx_k_sgemm_cm_v54<<<grd,blk>>>(tA,tB,
+                                        (long long)m,(long long)n,(long long)k,
+                                        alpha, A,(long long)lda, B,(long long)ldb,
+                                        beta, C,(long long)ldc);
+    }
     cudaError_t e = cudaDeviceSynchronize();
     return (e==cudaSuccess) ? 0 : (int)e;
 }
