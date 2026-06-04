@@ -35,16 +35,27 @@ fn main() {
         "/Users/mini/dancinlab/demiurge/exports/rtsc/decks/CaH6_NC" }
     let npw_cap = if len(av) > 2 { to_int(av[2]) } else { 0 }
     let nq      = if len(av) > 3 { to_int(av[3]) } else { 4 }
+    // arg 4: screened-vertex flag (1=screened @L5 closure [default] · 0=bare baseline).
+    // arg 5: Anderson β ∈ (0,1] (default 0.3). arg 6: history depth m (default 5).
+    let screened = if len(av) > 4 { to_int(av[4]) != 0 } else { true }
+    let scr_beta = if len(av) > 5 { to_float(av[5]) } else { 0.3 }
+    let scr_md   = if len(av) > 6 { to_int(av[6]) } else { 5 }
+    let scr_maxit = 40
 
-    println("=== QFORGE MIGRATION GATE — converged-CaH6 full-BZ λ cross-val (d6 VERBATIM) v2 ===")
+    println("=== QFORGE MIGRATION GATE — converged-CaH6 full-BZ λ cross-val (d6 VERBATIM) v3-SCREENED ===")
     println("deck=" + deck_dir + "  npw_cap=" + to_string(npw_cap)
             + " (0=full ecut shell)  q-mesh=" + to_string(nq) + "³ MP")
+    println("vertex=" + (if screened { "SCREENED (Dyson ε⁻¹, Anderson β="
+            + to_string(scr_beta) + " m=" + to_string(scr_md) + ")" } else { "BARE (baseline)" }))
 
     // ── PRODUCTION-DFPT front-end: converged SCF + real Φ + ω(q,ν) + ΔV ──────
     //   xc_mode=1 (LDA-x + PW92-c) · sigma=0.02 Ha (metallic hydride MP smearing,
     //   matches the deck's degauss=0.01 Ry = 0.005 Ha class; 0.02 Ha aids SCF).
+    //   SCREENED el-ph vertex: ΔV_scr = ε⁻¹·ΔV_bare via the Anderson-damped Dyson
+    //   fixed point (the @L5 named breakthrough, screening_anderson.hexa, d2).
     let sigma = 0.02
-    let fe = qforge_pw_frontend_phonons(deck_dir, npw_cap, 1, sigma, nq)
+    let fe = qforge_pw_frontend_phonons_scr(deck_dir, npw_cap, 1, sigma, nq,
+                                            screened, scr_beta, scr_md, scr_maxit)
     if !fe.ok {
         println("DEFER — front-end failed: " + fe.error)
         println("=== DONE (DEFER) ===")
@@ -86,9 +97,13 @@ fn main() {
     println("convergence params : ecutwfc=" + to_string(fe.geom.ecutwfc) + " Ry · npw_cap="
             + to_string(npw_cap) + " · n(PW)=" + to_string(fe.n) + " · q-mesh=" + to_string(nq)
             + "³ MP · sigma=" + to_string(sigma) + " Ha · xc=LDA-x+PW92-c")
-    println("QFORGE λ           = " + to_string(lam))
+    println("vertex             : " + (if screened { "SCREENED ΔV_scr (Dyson ε⁻¹, Anderson β="
+            + to_string(scr_beta) + " m=" + to_string(scr_md) + ")" } else { "BARE |g|²" }))
+    println("BARE baseline λ    = 4.13647  (prior converged run #2768, rel-ε=5.47%)")
+    println("QFORGE λ (this run)= " + to_string(lam))
     println("QE answer-key λ    = " + to_string(QE_LAMBDA) + "  (CaH6 gate anchor, QE cross-val)")
     println("rel-ε              = " + to_string(arel) + "  (" + to_string(arel * 100.0) + " %)")
+    println("Δλ vs 4.137 baseline = " + to_string(lam - 4.13647))
     println("QFORGE ω_log       = " + to_string(res.omega_log) + " K")
     println("QFORGE Tc (Allen-Dynes) = " + to_string(res.tc) + " K")
     println("QFORGE Tc (Eliashberg)  = " + to_string(res.tc_me) + " K")

@@ -84,6 +84,9 @@ use "stdlib/qforge/dfpt_response"
 use "stdlib/qforge/dfpt"
 use "stdlib/qforge/realcell_phonon"
 use "stdlib/qforge/realcell_qmesh"
+use "stdlib/qforge/screening"
+use "stdlib/qforge/screened_dv"
+use "stdlib/qforge/screening_anderson"
 
 let _QPW_2PI: float = 6.28318530717958647692
 
@@ -133,6 +136,11 @@ pub struct QpwFrontendResult {
 let mut QPW_HAM: PwHam = PwHam { h: [], diag: [], n: 0 }
 
 pub fn qpw_h_apply(v: [float]) -> [float] { return qforge_h_apply(QPW_HAM, v) }
+
+// CONVERGED ground-state density ρ(r) staged by qforge_pw_frontend — the XC-kernel
+// evaluation point the screened-vertex Dyson response needs (length = the PW basis
+// n in the (1,1,n) cubic-grid screening convention). Read by qpwd_drho_to_dvscf.
+let mut QPW_RHO: [float] = []
 
 // =============================================================================
 // ① DECK-DIR GEOMETRY PARSER
@@ -527,6 +535,13 @@ pub fn qforge_pw_frontend(deck_dir: str, npw_cap: int, xc_mode: int,
         geom.omega, xc_mode, 1, 1, n, eb1, eb2, eb3,
         nbands, nelec, 0.3, 1.0e-6, 200, sigma, 2.0, 6)
 
+    // stage the converged ρ(r) for the screened-vertex Dyson kernel (d19 — the XC
+    // evaluation point; same length-n (1,1,n) cubic grid the in-loop V_H[ρ] uses).
+    let mut rho_cap: [float] = []
+    let mut rc = 0
+    while rc < len(scf.rho) { rho_cap.push(scf.rho[rc]) ; rc = rc + 1 }
+    QPW_RHO = rho_cap
+
     // ── emit the CONVERGED matrix-free H-apply (qforge_run re-solves it) ──
     //   qforge_h_of_rho_multi(scf.rho) re-stages PWM_* + returns the apply closure;
     //   we capture the assembled PwHam into QPW_HAM so qpw_h_apply is the deck's H.
@@ -731,6 +746,31 @@ fn qpwd_drho_zero(drho: [float]) -> [float] {
     return z
 }
 
+// ── REAL Hartree+XC screening kernel staging (the @L5 closure) ───────────────
+//   The screened el-ph vertex needs the SELF-CONSISTENT dielectric response
+//   ΔV_scr = ΔV_bare + (V_H + f_xc)[Δρ] (the Dyson/RPA+ALDA screening QE applies).
+//   `qpwd_drho_to_dvscf(drho)` is the (V_H+f_xc)[Δρ] kernel — staged from the
+//   CONVERGED ground-state ρ (XC kernel evaluation point) + the FFT/reciprocal
+//   grid of the PW front-end's screening convention (nx=1, ny=1, nz=n with the
+//   cubic Hartree grid eb_i = (2π/a)·ê_i — the SAME convention scf_pw's in-loop
+//   V_H[ρ] uses). drho_to_dvscf returns ΔV_H+xc(r) (length n, local) which the
+//   Anderson screening solver folds into the screened ΔV_scr·ψ columns. d4/d19:
+//   reuses qforge_dvscf_from_drho verbatim — zero new screening physics.
+let mut QPWD_RHO: [float] = []
+let mut QPWD_GRID_N: int = 0
+let mut QPWD_EB1: [float] = []
+let mut QPWD_EB2: [float] = []
+let mut QPWD_EB3: [float] = []
+let mut QPWD_XCMODE: int = 1
+
+pub fn qpwd_drho_to_dvscf(drho: [float]) -> [float] {
+    let n = len(drho)
+    if n != QPWD_GRID_N { return [] }
+    // ΔV_scr-correction(r) = V_H[Δρ] + f_xc[ρ]·Δρ on the (1,1,n) cubic grid.
+    return qforge_dvscf_from_drho(drho, QPWD_RHO, 1, 1, n,
+                                  QPWD_EB1, QPWD_EB2, QPWD_EB3, QPWD_XCMODE)
+}
+
 // ── qforge_pw_frontend_phonons — the PRODUCTION-DFPT front-end entry ──────────
 //
 //   deck_dir : QE-style deck dir (scf.in + pseudo/*.upf) — same as qforge_pw_frontend.
@@ -746,6 +786,32 @@ fn qpwd_drho_zero(drho: [float]) -> [float] {
 //   give — reported VERBATIM by the caller (within or outside the QE 4.376 bar, d6).
 pub fn qforge_pw_frontend_phonons(deck_dir: str, npw_cap: int, xc_mode: int,
                                   sigma: float, nq: int) -> QpwFrontendResult {
+    // default: SCREENED el-ph vertex ON (the @L5 closure), Anderson β=0.3, m=5,
+    // ≤40 SCF passes. The dedicated screened entry below exposes the knobs.
+    return qforge_pw_frontend_phonons_scr(deck_dir, npw_cap, xc_mode, sigma, nq,
+                                          true, 0.3, 5, 40)
+}
+
+// ── qforge_pw_frontend_phonons_scr — the SCREENED-vertex production-DFPT entry ─
+//
+//   Identical to qforge_pw_frontend_phonons but exposes the screened-el-ph-vertex
+//   knobs (the @L5 screening-functional closure — the named migration-gate
+//   breakthrough, d2):
+//     screened : true → el-ph |g|² uses the SELF-CONSISTENT SCREENED ΔV_scr·ψ
+//                (Dyson ε⁻¹·ΔV_bare via qforge_screened_dv_columns_anderson, the
+//                Anderson β-knob that tames the metallic dielectric divergence).
+//                false → BARE |g|² (the prior λ=4.137 baseline, regression path).
+//     scr_beta : Anderson relaxation β ∈ (0,1] (β<1 damps the high-gain metallic
+//                feedback; β=1 = pure Anderson step). 0.3 = the d15-class default.
+//     scr_mdepth : Anderson history window m (≥2 = acceleration; m=1 ≈ Picard).
+//     scr_maxit  : max screening SCF passes.
+//   The screened columns replace the BARE dv_modes feeding qforge_run's el-ph
+//   contraction → |g|² → α²F → λ. λ is reported VERBATIM (d6) — within or outside
+//   the QE 4.376 bar; the screening is NOT tuned to hit it.
+pub fn qforge_pw_frontend_phonons_scr(deck_dir: str, npw_cap: int, xc_mode: int,
+                                      sigma: float, nq: int, screened: bool,
+                                      scr_beta: float, scr_mdepth: int,
+                                      scr_maxit: int) -> QpwFrontendResult {
     // ── ① converged SCF via the keystone front-end (Einstein-default deck) ──
     let fe = qforge_pw_frontend(deck_dir, npw_cap, xc_mode, sigma, 1236.4)
     if !fe.ok { return fe }
@@ -878,9 +944,29 @@ pub fn qforge_pw_frontend_phonons(deck_dir: str, npw_cap: int, xc_mode: int,
     }
     if n_optical < 1 { n_optical = 1 }   // degenerate fallback — keep ≥1 mode (honest)
 
-    // per-direction coupling weight ‖ΔV_bare|ψ⟩‖² (rank the 3 cartesian dirs).
+    // ── stage the REAL Hartree+XC screening kernel (the @L5 closure) ─────────
+    //   The screened-vertex Dyson response evaluates (V_H+f_xc)[Δρ] on the SAME
+    //   (1,1,n) cubic grid the front-end SCF's in-loop V_H[ρ] uses: eb_i=(2π/a)·ê_i.
+    //   ρ(r) = the converged ground-state density staged by qforge_pw_frontend.
+    let tpa_s = _QPW_2PI / geom.a
+    let s_eb1 = [tpa_s, 0.0, 0.0]
+    let s_eb2 = [0.0, tpa_s, 0.0]
+    let s_eb3 = [0.0, 0.0, tpa_s]
+    QPWD_RHO = QPW_RHO ; QPWD_GRID_N = n
+    QPWD_EB1 = s_eb1 ; QPWD_EB2 = s_eb2 ; QPWD_EB3 = s_eb3
+    QPWD_XCMODE = if xc_mode >= 1 { 2 } else { 0 }   // screened: H+x+c (xc_mode≥1) / H-only
+    let kernel_ok = (len(QPW_RHO) == n)              // ρ staged → real screening; else bare
+
+    // per-direction coupling weight ‖ΔV|ψ⟩‖² (rank the 3 cartesian dirs). The bundle
+    // is BARE ΔV_bare|ψ⟩; when `screened` it is replaced IN PLACE by the SCF-screened
+    // ΔV_scr|ψ⟩ (Dyson ε⁻¹ via the Anderson β-knob) — the @L5 closure.
     let mut dv_all: [[float]] = []
     let mut dw: [float] = []
+    let mut scr_iters_tot = 0
+    let mut scr_conv_all = true
+    let mut scr_fpr_max = 0.0
+    let mut scr_ratio_sum = 0.0
+    let mut scr_ratio_cnt = 0
     let mut d = 0
     while d < 3 {
         let bundle = qforge_dvbare_psi_bundle(gvecs, vloc_dg, tau, d, occ)
@@ -888,9 +974,54 @@ pub fn qforge_pw_frontend_phonons(deck_dir: str, npw_cap: int, xc_mode: int,
             return _qpw_fe_err(geom, "DFPT: ΔV bundle dir=" + to_string(d)
                 + " size " + to_string(len(bundle)) + " != nocc·n")
         }
+        // unpack flat [nocc·n] → nocc columns of length n (the screened-DV contract).
+        let mut bare_cols: [[float]] = []
+        let mut cb = 0
+        while cb < nocc {
+            let mut col: [float] = []
+            let mut i = 0
+            while i < n { col.push(bundle[cb * n + i]) ; i = i + 1 }
+            bare_cols.push(col)
+            cb = cb + 1
+        }
+        // the el-ph |g|² vertex bundle (bare OR screened).
+        let mut out_bundle = bundle
+        if screened && kernel_ok && nocc > 0 {
+            // ── SCREENED ΔV_scr·ψ via the Anderson-damped Dyson fixed point ──────
+            //   ΔV_scr = ΔV_bare + v_c·χ₀·ΔV_scr (RPA/DFPT screening); Anderson β-knob
+            //   handles the metallic high-gain divergence that NaN's un-damped Picard
+            //   (d15/d2). g(x)=bare+(V_H+f_xc)[Δρ(x)]⊙ψ; x*=(I−L)⁻¹bare even when ‖L‖>1.
+            let scr = qforge_screened_dv_columns_anderson(
+                qpw_h_apply, occ, eps_occ, bare_cols, qpwd_drho_to_dvscf,
+                1.0e-8, scr_maxit, scr_beta, scr_mdepth)
+            if scr.columns.len() == nocc {
+                // re-flatten the screened columns → [nocc·n] bundle.
+                let mut sb: [float] = []
+                let mut sc = 0
+                while sc < nocc {
+                    if len(scr.columns[sc]) != n {
+                        sb = bundle ; break
+                    }
+                    let mut i = 0
+                    while i < n { sb.push(scr.columns[sc][i]) ; i = i + 1 }
+                    sc = sc + 1
+                }
+                if len(sb) == nocc * n { out_bundle = sb }
+                // ‖ΔV_scr‖/‖ΔV_bare‖ screening witness per band column.
+                let mut wc = 0
+                while wc < nocc {
+                    let r = qforge_screening_ratio(bare_cols[wc], scr.columns[wc])
+                    if r >= 0.0 { scr_ratio_sum = scr_ratio_sum + r ; scr_ratio_cnt = scr_ratio_cnt + 1 }
+                    wc = wc + 1
+                }
+            }
+            scr_iters_tot = scr_iters_tot + scr.scf_iters
+            if !scr.converged { scr_conv_all = false }
+            if scr.fixed_point_res > scr_fpr_max { scr_fpr_max = scr.fixed_point_res }
+        }
         let mut w = 0.0 ; let mut wj = 0
-        while wj < len(bundle) { w = w + bundle[wj] * bundle[wj] ; wj = wj + 1 }
-        dv_all.push(bundle) ; dw.push(w)
+        while wj < len(out_bundle) { w = w + out_bundle[wj] * out_bundle[wj] ; wj = wj + 1 }
+        dv_all.push(out_bundle) ; dw.push(w)
         d = d + 1
     }
     // select the n_optical highest-coupling cartesian directions (selection by ‖·‖²).
@@ -920,12 +1051,23 @@ pub fn qforge_pw_frontend_phonons(deck_dir: str, npw_cap: int, xc_mode: int,
 
     let nb = len(opt_band)
     let wlog = qforge_qmesh_omega_log(opt_band)
+    // screened-vertex witness for the note (the @L5 closure verdict).
+    let scr_ratio = if scr_ratio_cnt > 0 { scr_ratio_sum / to_float(scr_ratio_cnt) } else { -1.0 }
+    let vert_tag = if screened && kernel_ok {
+        "SCREENED ΔV_scr·ψ (Dyson ε⁻¹, Anderson β=" + to_string(scr_beta)
+        + " m=" + to_string(scr_mdepth) + "): " + to_string(scr_iters_tot)
+        + " SCF iters · conv=" + to_string(scr_conv_all) + " · ‖fp_res‖_max="
+        + to_string(scr_fpr_max) + " · ‖ΔV_scr‖/‖ΔV_bare‖="
+        + to_string(scr_ratio) + " (the @L5 screening-XC closure, H+x+c) [d6 VERBATIM]"
+    } else {
+        "BARE (screening = Hartree+LDA-exch only, no correlation XC — the @L5 "
+        + "gate-blocker; QE 4.376 uses ε⁻¹-screened |g|²) [d6 VERBATIM]"
+    }
     let note = "PRODUCTION DFPT: real Φ (Sternheimer FC, bare/@L5) + " + to_string(n_optical)
         + " optical mode(s), " + to_string(nb) + "-pt ω(q,ν) band over " + to_string(nq)
         + "³ MP q-mesh (q-flat ncells=1) · "
         + "ω_log(band)=" + to_string(wlog) + " K (vs single Einstein ω₀); "
-        + "el-ph |g|² = BARE (screening = Hartree+LDA-exch only, no correlation XC "
-        + "— the @L5 gate-blocker; QE 4.376 uses ε⁻¹-screened |g|²) [d6 VERBATIM]"
+        + "el-ph |g|² = " + vert_tag
 
     return QpwFrontendResult {
         ok: true, error: "", geom: geom, n: n, nelec: fe.nelec, nocc: nocc,
