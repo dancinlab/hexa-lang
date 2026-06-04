@@ -857,6 +857,43 @@ fn _registry_resolved_host(ep: PodEndpoint) -> ResolvedHost {
     return ResolvedHost { host: host, port: ep.port, resolved: 1, via: "registry" }
 }
 
+// _resolve_via_provider — last-resort pod-id → ssh endpoint via the LIVE
+// provider API (the same path `hexa cloud ssh-port` runs), used when the M5
+// registry has no host/port for the id. This is the Bug-cloud-resolver fix:
+// a pod registered while still RENTING has an EMPTY ssh_host in the registry,
+// so pod_registry_resolve_endpoint returns resolved=0 and the old resolver fell
+// through to handing the BARE pod-id to ssh → "Could not resolve hostname
+// <pod-id>". `ssh-port` never had this defect because it queries the provider
+// directly; here we reuse _provider_ssh_port_lookup so run/copy-to share that
+// path. On a hit we SELF-HEAL the registry (pod_registry_add upsert: a non-empty
+// ssh_host/ssh_port updates in place, "" project/purpose/status preserve the
+// prior attribution) so the next call is a fast registry hit. resolved=0 (id
+// unchanged) when the provider has not mapped port 22 yet — the caller then
+// fails LOUD rather than ssh-ing the bare id.
+// _strip_user_at — drop a leading `user@` from an ssh dest so the BARE host/IP
+// is stored in the registry (the registry holds bare ssh_host; the read path
+// _registry_resolved_host re-prefixes `root@`). No `@` → returned unchanged.
+fn _strip_user_at(dest: str) -> str {
+    let at = dest.index_of("@")
+    if at < 0 {
+        return dest
+    }
+    return dest.substring(at + 1, len(dest))
+}
+
+fn _resolve_via_provider(h: str) -> ResolvedHost {
+    let provider = _provider_for_id(h)
+    let rh = _provider_ssh_port_lookup(h, provider)
+    if rh.resolved == 1 {
+        // self-heal: write the resolved endpoint back so subsequent calls hit
+        // the registry fast. ssh_host is stored WITHOUT the `root@` prefix to
+        // match _registry_resolved_host's contract (it re-prefixes on read).
+        let bare_host = _strip_user_at(rh.host)
+        let _ = pod_registry_add(h, provider, "", "", bare_host, rh.port, "")
+    }
+    return rh
+}
+
 fn _resolve_cloud_host(h: str) -> ResolvedHost {
     if _is_vast_numeric_id(h) == 0 {
         // #handoff-aad9f4c0: a bare dotted endpoint (direct IP / DNS) with NO
@@ -890,7 +927,12 @@ fn _resolve_cloud_host(h: str) -> ResolvedHost {
         if reg.resolved == 1 {
             return _registry_resolved_host(reg)
         }
-        return ResolvedHost { host: h, port: "", resolved: 0, via: "" }
+        // Bug-cloud-resolver: registry MISS (id untracked OR registered while
+        // still RENTING → empty ssh_host). Don't ssh the bare pod-id — fall
+        // back to the LIVE provider API (the path `ssh-port` uses), self-healing
+        // the registry on a hit. A still-RENTING pod returns resolved=0; the
+        // caller then fails loud instead of `ssh <pod-id>`.
+        return _resolve_via_provider(h)
     }
     let proxy = vast_ssh_endpoint(h)
     if proxy.ok == 1 {
@@ -913,6 +955,22 @@ fn _resolve_cloud_host(h: str) -> ResolvedHost {
     // No live endpoint AND no registry mapping — leave the id as-is so the
     // legacy ~/.ssh/config block path (written by rent/adopt) still applies.
     return ResolvedHost { host: h, port: "", resolved: 0, via: "" }
+}
+
+// _guard_resolved_or_die — fail LOUD when a transport verb's pod-id resolved to
+// NOTHING via either the registry OR the provider API (via="unresolved"),
+// instead of letting ssh attempt the bare pod-id and emit the cryptic
+// "Could not resolve hostname <pod-id>". Only the provider-fallback miss carries
+// via="unresolved"; a real host (dotted IP, user@dest, pool name, or a numeric
+// id falling through to ~/.ssh/config) keeps a different via and is LEFT to its
+// existing path. `verb`/`id` name the surface in the diagnostic.
+fn _guard_resolved_or_die(verb: str, id: str, rh: ResolvedHost) {
+    if rh.resolved == 0 && rh.via == "unresolved" {
+        println("[cloud] " + verb + ": could not resolve '" + id
+            + "' via registry or provider API — pod may still be RENTING (ssh not yet mapped). "
+            + "Check `hexa cloud ssh-port " + id + "` / `hexa cloud pods`.")
+        exit(2)
+    }
 }
 
 // DirectRetry — the result of a proxy→direct fallback decision. `retry=1`
@@ -2055,12 +2113,42 @@ fn _idle_prov_of(id: str, bill_ids, bill_prov) -> str {
     return "vast"
 }
 
+// _provider_ssh_port_lookup — the PROVIDER-API ssh endpoint lookup that
+// `ssh-port`/`resolve` runs, factored out so the run/copy-to RESOLVER can reuse
+// the EXACT same path (Bug-cloud-resolver: a pod registered while still RENTING
+// has no host/port in the registry, so the resolver used to hand the bare
+// pod-id straight to ssh → "Could not resolve hostname <pod-id>"). Returns a
+// ResolvedHost so a registry miss can fall back to the live provider state the
+// same way `ssh-port` already does. resolved=0 (host=id) when the provider has
+// not mapped port 22 yet (still RENTING) or the CLI/key is unavailable. via is
+// "provider" so the run/poll banner names the resolution source. The dest is
+// `root@<ip>` (pods are root), matching _registry_resolved_host + the proxy/
+// direct branches. KEEP the runpod/vast arms byte-identical to the printing
+// _cloud_ssh_port below — they MUST resolve the same endpoint.
+fn _provider_ssh_port_lookup(id: str, provider: str) -> ResolvedHost {
+    if provider == "runpod" {
+        let api_key = cloud_runpod_must_have_api_key("ssh-port")
+        let r = runpod_get_ssh_port(api_key, id)
+        if r.ok == 1 {
+            return ResolvedHost { host: "root@" + r.ip, port: r.port, resolved: 1, via: "provider" }
+        }
+        // via="unresolved" so the run/copy-to call site can fail LOUD instead of
+        // ssh-ing the bare pod-id (it is NOT a real ssh dest).
+        return ResolvedHost { host: id, port: "", resolved: 0, via: "unresolved" }
+    }
+    let v = vast_ssh_endpoint(id)
+    if v.ok == 1 {
+        return ResolvedHost { host: "root@" + v.host, port: v.port, resolved: 1, via: "provider" }
+    }
+    return ResolvedHost { host: id, port: "", resolved: 0, via: "unresolved" }
+}
+
 // _cloud_ssh_port — print the live ssh endpoint (host + port) of an
-// existing pod by id (P4). Wires runpod_get_ssh_port / vast_ssh_endpoint
-// (the fns already exist; this only surfaces them as a verb). --provider
-// default vast; runpod auto-resolves the key via cloud_runpod_must_have_api_key
-// (M7: env-passthrough → Keychain → ~/.runpod/config.toml). Returns 0 when
-// the endpoint is mapped, else 1.
+// existing pod by id (P4). Wires runpod_get_ssh_port / vast_ssh_endpoint via
+// the shared _provider_ssh_port_lookup (the run/copy-to resolver reuses the
+// same fn). --provider default vast; runpod auto-resolves the key via
+// cloud_runpod_must_have_api_key (M7: env-passthrough → Keychain →
+// ~/.runpod/config.toml). Returns 0 when the endpoint is mapped, else 1.
 fn _cloud_ssh_port(id: str, provider: str) -> int {
     if provider == "runpod" {
         let api_key = cloud_runpod_must_have_api_key("ssh-port")
@@ -2430,6 +2518,7 @@ fn main() {
         }
         let _id = _checked_host(av[si + 1])
         let _rh = _resolve_cloud_host(_id)
+        _guard_resolved_or_die("run", _id, _rh)
         let host = _rh.host
         if _rh.resolved == 1 {
             println("[cloud] run: resolved pod-id → " + host + " :" + _rh.port + " (" + _rh.via + ")")
@@ -2471,6 +2560,7 @@ fn main() {
         }
         let _id = _checked_host(av[si + 1])
         let _rh = _resolve_cloud_host(_id)
+        _guard_resolved_or_die("exec", _id, _rh)
         let host = _rh.host
         if _rh.resolved == 1 {
             println("[cloud] exec: resolved vast id → " + host + " :" + _rh.port + " (" + _rh.via + ")")
@@ -2510,7 +2600,9 @@ fn main() {
             println("[cloud] nohup: usage — cloud nohup <host> <logfile> [--port N] [--insecure] [--early-life-check N] [--env K=V] [--source P] [--register [<jid>]] -- <argv...>")
             exit(2)
         }
-        let _rh = _resolve_cloud_host(_checked_host(av[si + 1]))
+        let _id = _checked_host(av[si + 1])
+        let _rh = _resolve_cloud_host(_id)
+        _guard_resolved_or_die("nohup", _id, _rh)
         let host = _rh.host
         if _rh.resolved == 1 {
             println("[cloud] nohup: resolved vast id → " + host + " :" + _rh.port + " (" + _rh.via + ")")
@@ -2571,7 +2663,9 @@ fn main() {
             println("[cloud] fire: usage — cloud fire <host> [--log <path>] [--port N] [--insecure] [--early-life-check N] [--env K=V] [--source P] [--register [<jid>]] -- <argv...>")
             exit(2)
         }
-        let _rh = _resolve_cloud_host(_checked_host(av[si + 1]))
+        let _id = _checked_host(av[si + 1])
+        let _rh = _resolve_cloud_host(_id)
+        _guard_resolved_or_die("fire", _id, _rh)
         let host = _rh.host
         if _rh.resolved == 1 {
             println("[cloud] fire: resolved vast id → " + host + " :" + _rh.port + " (" + _rh.via + ")")
@@ -3057,7 +3151,9 @@ fn main() {
             println("[cloud] copy-to: usage — cloud copy-to <host> <local> <remote> [--port N] [--insecure]")
             exit(2)
         }
-        let _rh = _resolve_cloud_host(_checked_host(av[si + 1]))
+        let _id = _checked_host(av[si + 1])
+        let _rh = _resolve_cloud_host(_id)
+        _guard_resolved_or_die("copy-to", _id, _rh)
         let host = _rh.host
         if _rh.resolved == 1 {
             println("[cloud] copy-to: resolved pod-id → " + host + " :" + _rh.port + " (" + _rh.via + ")")
@@ -3091,7 +3187,9 @@ fn main() {
             println("[cloud] copy-from: usage — cloud copy-from <host> <remote> <local> [--port N] [--insecure]")
             exit(2)
         }
-        let _rh = _resolve_cloud_host(_checked_host(av[si + 1]))
+        let _id = _checked_host(av[si + 1])
+        let _rh = _resolve_cloud_host(_id)
+        _guard_resolved_or_die("copy-from", _id, _rh)
         let host = _rh.host
         if _rh.resolved == 1 {
             println("[cloud] copy-from: resolved pod-id → " + host + " :" + _rh.port + " (" + _rh.via + ")")
