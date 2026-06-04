@@ -1,0 +1,298 @@
+// telemetry.hexa — QFORGE-FEATURE per-stage wall/RAM telemetry EMIT (PRODUCER).
+//
+// This is the PRODUCER half of the QFORGE telemetry loop. QFORGE's OWN pipeline
+// stages (relax · scf · dfpt/qmesh · elph |g| · a2f/lambda · tc) instrument
+// their wall time HERE and EMIT a structured, machine-readable per-stage
+// record. The CONSUMER half (QFORGE-PROCESS: stdlib/qforge/telemetry_report ·
+// telemetry_rollup · telemetry_regress) is a SEPARATE module that INGESTS the
+// emitted text. This module's emitted line format is BYTE-COMPATIBLE with that
+// consumer's 6-key parser, so QFORGE's own runs feed the existing PROCESS tier
+// VERBATIM — no QE-grep, exactly as the QFORGE-PROCESS resource-sizing table's
+// forward-pointer requires.
+//
+// ════════════════════════════════════════════════════════════════════════
+//  SCHEMA — the CONTRACT the consumer reads (stable · documented · versioned)
+// ════════════════════════════════════════════════════════════════════════
+//
+//  (1) THE EMITTED WIRE FORMAT — one JSONL line per stage transition, EXACTLY
+//      the 6-key shape the QE emitter (PR#2474 _dft_telemetry_line) produces
+//      and the consumer (telemetry_report _tr_parse_line) requires:
+//
+//        {"ts":N,"stage":"S","event":"start|done","wall_s":N,"rss_kb":N|null,"exit":N}
+//
+//        ts      : int   — wall-clock epoch SECONDS at the transition (now()).
+//        stage   : str   — the stage label, DATA not a hardcoded branch (d4).
+//                          per-q phonon stages use the consumer's `ph:qN`
+//                          convention (e.g. "dfpt:q1") so telemetry_rollup's
+//                          `_trr_class` split-on-':' collapses them to a class.
+//        event   : str   — "start" (entry; wall_s=0, rss_kb=null, exit=null)
+//                          or "done" (exit; carries the measured wall delta).
+//        wall_s  : int   — SECONDS of wall elapsed for the stage. INTEGER, to
+//                          match the consumer's `_tr_int` (a JSON number → int).
+//                          Measured from mono_ns() (CLOCK_MONOTONIC), floored.
+//        rss_kb  : int|null — peak resident set (kB). HONEST per d6: hexa has
+//                          NO bound peak-RSS builtin today (getrusage exists in
+//                          runtime.c but is NOT in the bind allow-list), so the
+//                          PRODUCER emits the literal `null` and NEVER fabricates
+//                          a number. DOCUMENTED NEXT-INPUT: when a peak-RSS
+//                          builtin is bound, set it on stage_end and this field
+//                          carries the real kB — zero consumer change needed
+//                          (the consumer already does null-passthrough, d6).
+//        exit    : int|null — stage exit code (0 = clean) on `done`; `null` on
+//                          `start`. Defaults to 0 when the caller omits it.
+//
+//  (2) THE STRUCTURED RECORD — the in-memory shape a richer consumer may want
+//      (the wire format above is a PROJECTION of this). Serialized one JSON
+//      object per stage by qforge_telemetry_records():
+//
+//        QForgeStageTelemetry {
+//          deck      : str,            // the deck/run name
+//          candidate : str,            // the candidate id
+//          stage     : str,            // stage label (data, d4)
+//          wall_s    : int,            // wall seconds (mono_ns delta, floored)
+//          cpu_s     : int,            // -1 = NOT MEASURED (no bound cpu-time
+//                                      // builtin; documented next-input, d6)
+//          peak_ram_mib : int,         // -1 = NOT MEASURED (see rss_kb note)
+//          n_q       : int,            // per-q breakdown count (0 = none)
+//          per_q     : [QForgePerQ],   // [{q, wall_s}] when a stage loops over q
+//          exit      : int             // stage exit code (0 = clean)
+//        }
+//        QForgePerQ { q: int, wall_s: int }
+//
+//      cpu_s / peak_ram_mib are -1 ("not measured") rather than a fake 0 — the
+//      consumer reads -1 as the documented next-input sentinel (d6 HONESTY).
+//
+//  SCOPE SHIPPED: wall_s (real, mono_ns) + ts (real, now()) + stage + per_q +
+//  exit + deck/candidate. DEFERRED-pending-a-bound-builtin (emitted as
+//  null / -1, never faked): cpu_s, rss_kb/peak_ram_mib.
+//
+// ════════════════════════════════════════════════════════════════════════
+//  EMIT API (opt-in; a null/absent handle ⇒ 0-diff, exactly like
+//  checkpoint.hexa's resume_dir="" discipline — see qforge_telemetry_off())
+// ════════════════════════════════════════════════════════════════════════
+//   qforge_telemetry_open(deck, candidate) -> QForgeTelemetry   // a LIVE handle
+//   qforge_telemetry_off()                 -> QForgeTelemetry   // the NO-OP handle
+//   qforge_telemetry_stage_begin(h, stage) -> QForgeTelemetry   // stamp wall t0
+//   qforge_telemetry_stage_end(h, stage)   -> QForgeTelemetry   // stamp wall t1
+//   qforge_telemetry_stage_end_q(h, stage, q) -> QForgeTelemetry// + per-q row
+//   qforge_telemetry_emit(h)               -> str               // 6-key JSONL
+//   qforge_telemetry_records(h)            -> str                // structured JSON
+//
+//  EVERY stage rides ONE generic path (d4): the stage label is DATA carried in
+//  parallel arrays — there is NO per-stage branch and NO per-stage function.
+//  A NO-OP handle (active=false, from qforge_telemetry_off() or a caller that
+//  simply never opened one) ignores every begin/end and emits "" — so a driver
+//  that does not opt in is byte-for-byte unchanged.
+//
+//  @L2 — uses the runtime clock (mono_ns/now); pure in-memory accumulation,
+//  no file I/O, no pod ops. The WORKFLOW sandbox forbids Date.now(), but normal
+//  hexa stdlib MAY use the runtime clock (mono_ns is bound: runtime.c
+//  hexa_mono_ns, CLOCK_MONOTONIC TAG_INT ns) — confirmed.
+
+// ── per-q breakdown row ──────────────────────────────────────────────────
+pub struct QForgePerQ {
+    q: int,
+    wall_s: int
+}
+
+// ── one stage's structured telemetry record ──────────────────────────────
+pub struct QForgeStageTelemetry {
+    deck: str,
+    candidate: str,
+    stage: str,
+    wall_s: int,
+    cpu_s: int,           // -1 = not measured (no bound cpu-time builtin)
+    peak_ram_mib: int,    // -1 = not measured (no bound peak-RSS builtin)
+    n_q: int,
+    per_q: [QForgePerQ],
+    exit: int
+}
+
+// ── the live telemetry handle (parallel-array accumulator, d4 generic) ────
+//   active   — false ⇒ NO-OP handle (opt-out / absent → 0-diff, no emit).
+//   stages[] — stage label per recorded stage (DATA, the d4 generic key).
+//   t0_ns[]  — mono_ns at stage_begin (-1 until begun).
+//   wall_s[] — floored wall seconds at stage_end (-1 until ended).
+//   ts0[]    — now() epoch seconds at stage_begin (the start line's ts).
+//   ts1[]    — now() epoch seconds at stage_end (the done line's ts).
+//   exit[]   — stage exit code (0 default).
+//   pq_stage[]/pq_q[]/pq_wall[] — flat per-q rows (joined to a stage by label).
+pub struct QForgeTelemetry {
+    active: bool,
+    deck: str,
+    candidate: str,
+    stages: [str],
+    t0_ns: [int],
+    wall_s: [int],
+    ts0: [int],
+    ts1: [int],
+    exit: [int],
+    pq_stage: [str],
+    pq_q: [int],
+    pq_wall: [int]
+}
+
+// ── open a LIVE handle ────────────────────────────────────────────────────
+pub fn qforge_telemetry_open(deck: str, candidate: str) -> QForgeTelemetry {
+    return QForgeTelemetry {
+        active: true, deck: deck, candidate: candidate,
+        stages: [], t0_ns: [], wall_s: [], ts0: [], ts1: [], exit: [],
+        pq_stage: [], pq_q: [], pq_wall: []
+    }
+}
+
+// ── the canonical NO-OP handle (opt-out; begin/end ignored, emit "") ──────
+pub fn qforge_telemetry_off() -> QForgeTelemetry {
+    return QForgeTelemetry {
+        active: false, deck: "", candidate: "",
+        stages: [], t0_ns: [], wall_s: [], ts0: [], ts1: [], exit: [],
+        pq_stage: [], pq_q: [], pq_wall: []
+    }
+}
+
+// ── internal: index of a stage label in the accumulator, or -1 ────────────
+fn _tel_find(h: QForgeTelemetry, stage: str) -> int {
+    let mut i = 0
+    while i < len(h.stages) {
+        if h.stages[i] == stage { return i }
+        i = i + 1
+    }
+    return -1
+}
+
+// ── stage_begin — stamp t0 (mono_ns) + ts0 (now). NO-OP on an inactive handle.
+//   Generic (d4): the label is data; one path for every stage. Re-begin of an
+//   existing label re-stamps t0 (a fresh attempt), preserving the slot.
+pub fn qforge_telemetry_stage_begin(h: QForgeTelemetry, stage: str) -> QForgeTelemetry {
+    if !h.active { return h }
+    let mut g = h
+    let idx = _tel_find(g, stage)
+    if idx < 0 {
+        g.stages.push(stage)
+        g.t0_ns.push(mono_ns())
+        g.wall_s.push(-1)
+        g.ts0.push(now())
+        g.ts1.push(-1)
+        g.exit.push(0)
+    } else {
+        g.t0_ns[idx] = mono_ns()
+        g.wall_s[idx] = -1
+        g.ts0[idx] = now()
+        g.ts1[idx] = -1
+    }
+    return g
+}
+
+// ── stage_end — stamp t1, record floored wall seconds + exit. NO-OP inactive.
+//   wall_s = (mono_ns - t0_ns) / 1e9, floored to int seconds (matches the
+//   consumer's int `wall_s` contract). monotonic ⇒ wall_s ≥ 0 always.
+pub fn qforge_telemetry_stage_end_exit(h: QForgeTelemetry, stage: str, exit_code: int) -> QForgeTelemetry {
+    if !h.active { return h }
+    let mut g = h
+    let idx = _tel_find(g, stage)
+    if idx < 0 { return g }   // end without begin → ignore (never crash)
+    let dt_ns = mono_ns() - g.t0_ns[idx]
+    let mut secs = dt_ns / 1000000000
+    if secs < 0 { secs = 0 }
+    g.wall_s[idx] = secs
+    g.ts1[idx] = now()
+    g.exit[idx] = exit_code
+    return g
+}
+
+// convenience: stage_end with a clean (0) exit.
+pub fn qforge_telemetry_stage_end(h: QForgeTelemetry, stage: str) -> QForgeTelemetry {
+    return qforge_telemetry_stage_end_exit(h, stage, 0)
+}
+
+// ── stage_end_q — same as stage_end, PLUS append a per-q breakdown row whose
+//   wall is the just-measured stage wall. The driver calls this once per q
+//   inside a DFPT/qmesh loop (stage label e.g. "dfpt:q1") to build per_q.
+pub fn qforge_telemetry_stage_end_q(h: QForgeTelemetry, stage: str, q: int) -> QForgeTelemetry {
+    if !h.active { return h }
+    let mut g = qforge_telemetry_stage_end(h, stage)
+    let idx = _tel_find(g, stage)
+    if idx >= 0 {
+        g.pq_stage.push(stage)
+        g.pq_q.push(q)
+        g.pq_wall.push(g.wall_s[idx])
+    }
+    return g
+}
+
+// ── build the structured record for one ended stage slot ──────────────────
+fn _tel_record_at(h: QForgeTelemetry, idx: int) -> QForgeStageTelemetry {
+    let stage = h.stages[idx]
+    let mut pq = []
+    let mut nq = 0
+    let mut k = 0
+    while k < len(h.pq_stage) {
+        if h.pq_stage[k] == stage {
+            pq.push(QForgePerQ { q: h.pq_q[k], wall_s: h.pq_wall[k] })
+            nq = nq + 1
+        }
+        k = k + 1
+    }
+    return QForgeStageTelemetry {
+        deck: h.deck, candidate: h.candidate, stage: stage,
+        wall_s: h.wall_s[idx],
+        cpu_s: -1,            // not measured — documented next-input (d6)
+        peak_ram_mib: -1,     // not measured — documented next-input (d6)
+        n_q: nq, per_q: pq, exit: h.exit[idx]
+    }
+}
+
+// ── emit — the CONSUMER-COMPATIBLE 6-key JSONL (start+done per ended stage) ─
+//   For each stage that REACHED stage_end (wall_s ≥ 0) emit two lines:
+//     start: ts=ts0, wall_s=0,    rss_kb=null, exit=null
+//     done : ts=ts1, wall_s=wall, rss_kb=null, exit=<code>
+//   plus one extra `done` line per per-q row (stage label already carries qN),
+//   so telemetry_report/rollup bucket the q-breakdown natively. rss_kb is the
+//   literal `null` (d6 — no fabricated RAM). A NO-OP / empty handle emits "".
+pub fn qforge_telemetry_emit(h: QForgeTelemetry) -> str {
+    if !h.active { return "" }
+    let mut out = ""
+    let mut i = 0
+    while i < len(h.stages) {
+        if h.wall_s[i] >= 0 {
+            out = out + "{\"ts\":" + to_string(h.ts0[i]) + ",\"stage\":\"" + h.stages[i]
+                + "\",\"event\":\"start\",\"wall_s\":0,\"rss_kb\":null,\"exit\":null}\n"
+            out = out + "{\"ts\":" + to_string(h.ts1[i]) + ",\"stage\":\"" + h.stages[i]
+                + "\",\"event\":\"done\",\"wall_s\":" + to_string(h.wall_s[i])
+                + ",\"rss_kb\":null,\"exit\":" + to_string(h.exit[i]) + "}\n"
+        }
+        i = i + 1
+    }
+    return out
+}
+
+// ── records — the STRUCTURED record stream, one JSON object per ended stage ─
+//   The richer projection (deck/candidate/cpu_s/peak_ram_mib/n_q/per_q). cpu_s
+//   and peak_ram_mib serialize as -1 (the not-measured sentinel, never faked).
+pub fn qforge_telemetry_records(h: QForgeTelemetry) -> str {
+    if !h.active { return "" }
+    let mut out = ""
+    let mut i = 0
+    while i < len(h.stages) {
+        if h.wall_s[i] >= 0 {
+            let r = _tel_record_at(h, i)
+            let mut pqs = "["
+            let mut j = 0
+            while j < len(r.per_q) {
+                if j > 0 { pqs = pqs + "," }
+                pqs = pqs + "{\"q\":" + to_string(r.per_q[j].q)
+                    + ",\"wall_s\":" + to_string(r.per_q[j].wall_s) + "}"
+                j = j + 1
+            }
+            pqs = pqs + "]"
+            out = out + "{\"deck\":\"" + r.deck + "\",\"candidate\":\"" + r.candidate
+                + "\",\"stage\":\"" + r.stage + "\",\"wall_s\":" + to_string(r.wall_s)
+                + ",\"cpu_s\":" + to_string(r.cpu_s)
+                + ",\"peak_ram_mib\":" + to_string(r.peak_ram_mib)
+                + ",\"n_q\":" + to_string(r.n_q) + ",\"per_q\":" + pqs
+                + ",\"exit\":" + to_string(r.exit) + "}\n"
+        }
+        i = i + 1
+    }
+    return out
+}
