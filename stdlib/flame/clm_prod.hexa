@@ -839,7 +839,10 @@ fn clm_prod_fwd(tokens: int,
     let mega_logits_r = t_zeros(T * E)
     let mega_mean0 = t_zeros(1)
     let mega_y = t_zeros(T * d)
-    let mega_meanN = t_zeros(1)
+    // HEXA-FUSION P1: groupnorm#2 is per-token (G=1 over D), so the megakernel
+    // writes T mean/inv entries (not 1 like the whole-tensor groupnorm#1). The
+    // launcher's _ensure_dev_alloc_out(meanN/invN, T) requires host len >= T.
+    let mega_meanN = t_zeros(T)
     let mrc = _clm_megafwd(xe, ecWq, ecB, tcWq, tcB,
                            tgG, tgB, xec, hn0, mega_hg0, xt,
                            mega_mean0, inv0, xhat0,
@@ -1192,7 +1195,7 @@ fn main() {
     let xe=t_zeros(T*d); let xec=t_zeros(T*d); let xt=t_zeros(T*d)
     let hn0=t_zeros(T*d); let xhat0=t_zeros(T*d); let inv0=t_zeros(1)
     let eo0=t_zeros(T*d); let eo1=t_zeros(T*d); let probs=t_zeros(T*E); let ex_out=t_zeros(E*T*d)
-    let yn=t_zeros(T*d); let xhatN=t_zeros(T*d); let invN=t_zeros(1)
+    let yn=t_zeros(T*d); let xhatN=t_zeros(T*d); let invN=t_zeros(T)
     let logits=t_zeros(T*V); let dlogits=t_zeros(T*V)
     // per-step window buffers
     let tok=t_zeros(T); let tgt=t_zeros(T)
