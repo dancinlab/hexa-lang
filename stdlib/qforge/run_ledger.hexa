@@ -95,7 +95,7 @@ pub fn qforge_run_ledger_fold(
     commit: str,
     pod: str,
     result_lambda: float,
-    result_tc: float,
+    result_tc: float
 ) -> RunLedgerEntry {
     // d3/d19 REUSE — the existing per-stage parser; we do NOT re-implement it.
     let rep = qforge_telemetry_report(telemetry_jsonl)
