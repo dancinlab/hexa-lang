@@ -1,0 +1,136 @@
+// stdlib/qforge/candidate_selector.hexa — CLOSED-LOOP AUTONOMOUS CANDIDATE SELECTION.
+//
+// QFORGE-PROCESS milestone "closed-loop autonomous candidate selection". The RTSC
+// campaign hand-seeds its pool and fires FIFO — maximizing nothing. A closed loop
+// should pick the next candidate by a STATED prior to maximize DISCOVERY RATE
+// (expected superconducting payoff per unit compute). This module orders a pool
+// by an EXPECTED-Tc/cost score and names the highest-value `next`.
+//
+// score(c) = mcmillan_tc(c.omega_log_prior_K, c.est_lambda_prior, MU_STAR) / c.est_cost
+//          = expected-Tc-per-cost   (higher = better discovery ROI)
+//
+// THE PRIOR IS STATED (d6 — no hidden injected Tc): expected-Tc feeds the
+// candidate's λ-PRIOR + ω-PRIOR into mcmillan_tc (stdlib/material/sim, reused
+// verbatim per d3). That is an EXPECTED VALUE from the candidate's own stated
+// priors — NOT a measured Tc, NOT a per-candidate Tc faked/injected. The real Tc
+// still comes from the el-ph run; this only decides WHAT TO RUN NEXT.
+// `score_fn_note` carries the prior verbatim. COST-AWARE: a higher λ-prior but a
+// much higher est_cost can rank BELOW a cheaper moderate one (score / cost).
+// d4: every candidate traverses ONE generic scoring path — pool-data only.
+//
+// Run:  hexa run stdlib/qforge/candidate_selector_selftest.hexa     (g5 gate)
+
+use "stdlib/material/sim"
+
+// μ* (Coulomb pseudopotential) used for the EXPECTED-Tc prior. The conventional
+// hydride-screening value; STATED here so the ranking prior is fully explicit.
+pub let CSEL_MU_STAR: float = 0.10
+
+// a candidate in the pool. est_lambda_prior (el-ph λ) + omega_log_prior_K
+// (phonon ω_log, Kelvin) are ESTIMATED PRIORS — NOT measured. est_cost is the
+// estimated compute cost (any consistent unit: $ or pod-hours); score / cost.
+pub struct Candidate {
+    name: str,
+    atoms: int,
+    est_lambda_prior: float,
+    omega_log_prior_K: float,
+    est_cost: float,
+}
+
+// a scored candidate. exp_tc_K = EXPECTED Tc (K) from the STATED λ/ω priors via
+// mcmillan_tc — an ESTIMATE, NOT a measured Tc. score = exp_tc_K / est_cost (key).
+pub struct ScoredCandidate {
+    name: str,
+    exp_tc_K: float,
+    score: float,
+}
+
+// the selector result. ordered = in-budget pool sorted by score (exp-Tc/cost)
+// DESC. next = highest-score name ("" if empty / all over budget). score_fn_note
+// STATES the scoring fn + prior verbatim (d6). n_eligible = # within budget.
+pub struct SelectorResult {
+    ordered: [ScoredCandidate],
+    next: str,
+    next_score: float,
+    score_fn_note: str,
+    n_eligible: int,
+}
+
+// ── the STATED scoring-function note (d6 — surfaced verbatim) ─────────────────
+// A single source of truth for "what is the prior?". Returned in every result
+// so a reader never has to guess whether the Tc was measured (it is NOT).
+pub fn csel_score_fn_note() -> str {
+    return "score = expected-Tc-per-cost = mcmillan_tc(omega_log_prior_K, "
+         + "est_lambda_prior, mu_star=" + to_string(CSEL_MU_STAR) + ") / est_cost. "
+         + "PRIOR (STATED, d6): est_lambda_prior + omega_log_prior_K are ESTIMATES "
+         + "(heuristic priors), NOT measured. mcmillan_tc reused from "
+         + "stdlib/material/sim (d3). This is an EXPECTED-VALUE ranking to choose "
+         + "the next run; the real Tc still comes from the el-ph run. "
+         + "No per-candidate Tc is injected/faked."
+}
+
+// ── score ONE candidate (PURE — the g5 selftest drives this) ─────────────────
+// expected-Tc via the reused McMillan estimator on the candidate's STATED
+// priors, divided by its estimated cost. Guards: non-positive cost → score 0.0
+// (cannot divide; an un-costed candidate cannot be ranked, never a crash).
+pub fn csel_score_one(c: Candidate) -> ScoredCandidate {
+    let exp_tc = mcmillan_tc(c.omega_log_prior_K, c.est_lambda_prior, CSEL_MU_STAR)
+    let mut s = 0.0
+    if c.est_cost > 0.0 { s = exp_tc / c.est_cost }
+    return ScoredCandidate { name: c.name, exp_tc_K: exp_tc, score: s }
+}
+
+// ── qforge_next_candidate — order a pool by expected-Tc/cost, name `next` ─────
+//
+// Each candidate is scored by the SAME generic path (d4: pool-data only). Only
+// candidates within `budget` (est_cost ≤ budget) are eligible; the rest are
+// dropped from the ranking (they cannot be fired now). The eligible set is
+// sorted by `score` DESC (selection sort — small N, fully verifiable), and the
+// top is `next`. An empty pool / all-over-budget yields next="" (honest, d6).
+//
+// budget: the per-run cost ceiling (same unit as est_cost). Pass a large value
+// (e.g. 1e30) to disable budget filtering and rank the whole pool.
+pub fn qforge_next_candidate(pool: [Candidate], budget: float) -> SelectorResult {
+    // score every IN-BUDGET candidate via the one generic path (d4)
+    let mut scored = []
+    let mut i = 0
+    while i < len(pool) {
+        let c = pool[i]
+        if c.est_cost <= budget {
+            scored = scored + [csel_score_one(c)]
+        }
+        i = i + 1
+    }
+
+    // sort by score DESC (selection sort — deterministic, small N)
+    let mut a = 0
+    while a < len(scored) {
+        let mut best = a
+        let mut b = a + 1
+        while b < len(scored) {
+            if scored[b].score > scored[best].score { best = b }
+            b = b + 1
+        }
+        if best != a {
+            let tmp = scored[a]
+            scored[a] = scored[best]
+            scored[best] = tmp
+        }
+        a = a + 1
+    }
+
+    let mut nxt = ""
+    let mut nxt_score = 0.0
+    if len(scored) > 0 {
+        nxt = scored[0].name
+        nxt_score = scored[0].score
+    }
+
+    return SelectorResult {
+        ordered: scored,
+        next: nxt,
+        next_score: nxt_score,
+        score_fn_note: csel_score_fn_note(),
+        n_eligible: len(scored),
+    }
+}

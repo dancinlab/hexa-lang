@@ -1,0 +1,134 @@
+// @ci_gate — pure · deterministic · network-free · NO pod ops
+//
+// candidate_selector_selftest.hexa — g5 gate for closed-loop autonomous
+// candidate selection (stdlib/qforge/candidate_selector.hexa).
+//
+// This does NOT LLM-judge any arithmetic. It ASSERTS, on KNOWN candidate pools
+// with hand-computed expectations, that:
+//   (a) a pool of 3 candidates with different λ-priors/costs is ordered by
+//       expected-Tc/cost DESCENDING, and `next` = the top.
+//   (b) a candidate with a HIGHER λ-prior but a MUCH higher cost ranks BELOW a
+//       cheaper moderate one (cost-aware — the score divides by cost).
+//   (c) the score_fn_note STATES the prior explicitly (mcmillan + ESTIMATE/prior
+//       wording + "still comes from the run") — no hidden injected Tc (d6).
+//
+// Run:  hexa run stdlib/qforge/candidate_selector_selftest.hexa
+// PASS: exits printing "candidate_selector_selftest PASS".
+
+use "stdlib/qforge/candidate_selector"
+
+fn _abs(x: float) -> float { if x < 0.0 { return -x } return x }
+fn _close(got: float, want: float, tol: float) -> bool { return _abs(got - want) <= tol }
+
+fn main() {
+    let mut fails = 0
+
+    // ── (a) ordering of a 3-candidate pool by expected-Tc/cost DESC ──────────
+    // Hand-computed (μ*=0.10) via mcmillan_tc(ω_log, λ); DESC by score gives
+    // Beta, Alpha, Gamma; next = Beta:
+    //   Beta : mcm(1500, 2.5) = 247.032025 / cost 3 → score 82.344008
+    //   Alpha: mcm(1200, 1.5) = 136.792726 / cost 2 → score 68.396363
+    //   Gamma: mcm( 900, 1.0) =  62.675647 / cost 1 → score 62.675647
+    // FIFO order here is [Alpha, Beta, Gamma]; the selector must REORDER it
+    // (Beta is neither cheapest nor highest exp_tc/atom — it wins on Tc/cost).
+    let pool = [
+        Candidate { name: "Alpha", atoms: 7, est_lambda_prior: 1.5,
+                    omega_log_prior_K: 1200.0, est_cost: 2.0 },
+        Candidate { name: "Beta",  atoms: 7, est_lambda_prior: 2.5,
+                    omega_log_prior_K: 1500.0, est_cost: 3.0 },
+        Candidate { name: "Gamma", atoms: 6, est_lambda_prior: 1.0,
+                    omega_log_prior_K:  900.0, est_cost: 1.0 },
+    ]
+    let res = qforge_next_candidate(pool, 1.0e30)
+
+    if res.n_eligible != 3 { println("FAIL (a) n_eligible = " + to_string(res.n_eligible) + " want 3"); fails = fails + 1 }
+    if len(res.ordered) != 3 { println("FAIL (a) ordered len = " + to_string(len(res.ordered))); fails = fails + 1 }
+
+    // order: ordered[0]=Beta, [1]=Alpha, [2]=Gamma
+    if res.ordered[0].name != "Beta"  { println("FAIL (a) ordered[0] = " + res.ordered[0].name + " want Beta"); fails = fails + 1 }
+    if res.ordered[1].name != "Alpha" { println("FAIL (a) ordered[1] = " + res.ordered[1].name + " want Alpha"); fails = fails + 1 }
+    if res.ordered[2].name != "Gamma" { println("FAIL (a) ordered[2] = " + res.ordered[2].name + " want Gamma"); fails = fails + 1 }
+
+    // next = the top of the order
+    if res.next != "Beta" { println("FAIL (a) next = " + res.next + " want Beta"); fails = fails + 1 }
+
+    // scores monotone DESC + match the hand-computed values
+    if !_close(res.ordered[0].score, 82.344008, 1e-4) { println("FAIL (a) Beta score = " + to_string(res.ordered[0].score)); fails = fails + 1 }
+    if !_close(res.ordered[1].score, 68.396363, 1e-4) { println("FAIL (a) Alpha score = " + to_string(res.ordered[1].score)); fails = fails + 1 }
+    if !_close(res.ordered[2].score, 62.675647, 1e-4) { println("FAIL (a) Gamma score = " + to_string(res.ordered[2].score)); fails = fails + 1 }
+    if !(res.ordered[0].score > res.ordered[1].score) { println("FAIL (a) not DESC at 0>1"); fails = fails + 1 }
+    if !(res.ordered[1].score > res.ordered[2].score) { println("FAIL (a) not DESC at 1>2"); fails = fails + 1 }
+    // exp_tc is an ESTIMATE from the prior (not measured) — sanity, matches mcm
+    if !_close(res.ordered[0].exp_tc_K, 247.032025, 1e-3) { println("FAIL (a) Beta exp_tc = " + to_string(res.ordered[0].exp_tc_K)); fails = fails + 1 }
+
+    // ── (b) cost-aware: higher λ-prior but far costlier ranks BELOW cheaper ──
+    //   Expensive: λ-prior 3.0 (HIGHER), mcm(1500,3.0)=269.9147, cost 50 → 5.398294
+    //   Cheap    : λ-prior 1.6 (moderate), mcm(1200,1.6)=145.1010, cost 2  → 72.55048
+    // Expensive has the higher λ AND the higher raw expected-Tc, yet Cheap wins.
+    let pool2 = [
+        Candidate { name: "Expensive", atoms: 20, est_lambda_prior: 3.0,
+                    omega_log_prior_K: 1500.0, est_cost: 50.0 },
+        Candidate { name: "Cheap",     atoms: 7,  est_lambda_prior: 1.6,
+                    omega_log_prior_K: 1200.0, est_cost: 2.0 },
+    ]
+    let res2 = qforge_next_candidate(pool2, 1.0e30)
+    if res2.next != "Cheap" { println("FAIL (b) next = " + res2.next + " want Cheap (cost-aware)"); fails = fails + 1 }
+    if res2.ordered[0].name != "Cheap"     { println("FAIL (b) ordered[0] = " + res2.ordered[0].name); fails = fails + 1 }
+    if res2.ordered[1].name != "Expensive" { println("FAIL (b) ordered[1] = " + res2.ordered[1].name); fails = fails + 1 }
+    // confirm Expensive REALLY has the higher raw expected-Tc (so the flip is
+    // purely the /cost division, not a smaller exp_tc).
+    if !(res2.ordered[1].exp_tc_K > res2.ordered[0].exp_tc_K) {
+        println("FAIL (b) expected Expensive exp_tc > Cheap exp_tc"); fails = fails + 1
+    }
+    if !(res2.ordered[0].score > res2.ordered[1].score) { println("FAIL (b) Cheap score not > Expensive"); fails = fails + 1 }
+
+    // ── (c) the score_fn_note STATES the prior — no hidden injected Tc (d6) ───
+    let note = csel_score_fn_note()
+    if !note.contains("mcmillan_tc")     { println("FAIL (c) note missing mcmillan_tc"); fails = fails + 1 }
+    if !note.contains("est_lambda_prior"){ println("FAIL (c) note missing est_lambda_prior"); fails = fails + 1 }
+    if !note.contains("ESTIMATE")        { println("FAIL (c) note missing ESTIMATE wording"); fails = fails + 1 }
+    if !note.contains("NOT measured")    { println("FAIL (c) note missing 'NOT measured'"); fails = fails + 1 }
+    if !note.contains("real Tc still comes from the el-ph run") {
+        println("FAIL (c) note missing 'real Tc still comes from the run'"); fails = fails + 1
+    }
+    if !note.contains("No per-candidate Tc is injected/faked") {
+        println("FAIL (c) note missing 'injected/faked' disclaimer"); fails = fails + 1
+    }
+    // the result carries the note verbatim
+    if res.score_fn_note != note { println("FAIL (c) result note != canonical note"); fails = fails + 1 }
+
+    // ── (d) budget filter — over-budget candidates are dropped (deterministic) ─
+    // budget 2.5 excludes Beta(cost 3) → only Alpha(2) + Gamma(1) eligible;
+    // next becomes Alpha (highest score among eligible). No crash, honest.
+    let res3 = qforge_next_candidate(pool, 2.5)
+    if res3.n_eligible != 2 { println("FAIL (d) n_eligible = " + to_string(res3.n_eligible) + " want 2"); fails = fails + 1 }
+    if res3.next != "Alpha" { println("FAIL (d) budget next = " + res3.next + " want Alpha"); fails = fails + 1 }
+
+    // ── (e) empty pool → honest empty result (next="", no crash) ─────────────
+    let res4 = qforge_next_candidate([], 1.0e30)
+    if res4.next != "" { println("FAIL (e) empty next = '" + res4.next + "' want ''"); fails = fails + 1 }
+    if res4.n_eligible != 0 { println("FAIL (e) empty n_eligible = " + to_string(res4.n_eligible)); fails = fails + 1 }
+
+    // ── render the (a) ordering so the verdict SHOWS the result (audit) ──────
+    println("--- ordering (pool a, by expected-Tc/cost DESC) ---")
+    let mut z = 0
+    while z < len(res.ordered) {
+        let sc = res.ordered[z]
+        println("  #" + to_string(z + 1) + " " + sc.name
+              + "  exp_tc=" + to_string(sc.exp_tc_K) + "K"
+              + "  score=" + to_string(sc.score))
+        z = z + 1
+    }
+    println("  next = " + res.next + "  (score " + to_string(res.next_score) + ")")
+    println("--- cost-aware (pool b): next = " + res2.next
+          + "  [Expensive exp_tc=" + to_string(res2.ordered[1].exp_tc_K)
+          + "K > Cheap exp_tc=" + to_string(res2.ordered[0].exp_tc_K) + "K, but cheaper wins] ---")
+    println("--- score_fn_note ---")
+    println("  " + note)
+
+    if fails == 0 {
+        println("candidate_selector_selftest PASS")
+    } else {
+        println("candidate_selector_selftest FAIL — " + to_string(fails) + " case(s)")
+    }
+}
