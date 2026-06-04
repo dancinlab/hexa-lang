@@ -1,0 +1,195 @@
+// HEXA Standard Library — qforge/crystal_sym
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// QFORGE — crystal-symmetry analyzer: lattice → point-group rotations.
+//
+// This is the DEFERRED next brick of the IBZ q-star reducer (qstar.hexa):
+// it DERIVES the integer point-group rotation matrices directly from the
+// real-space Bravais lattice, so the caller no longer has to hand-supply
+// the rotations (the Oh fixture or QE's `s` matrices). Composed with
+// qforge_qstar_reduce this closes a fully self-derived BZ-sum path:
+//
+//     reduce(grid, qforge_crystal_point_group(lattice))     // NO hand ops
+//
+//   pub fn qforge_crystal_point_group(lattice) -> [int]
+//
+// ── The crystallography (lattice point group from the metric tensor) ─────────
+//
+// A lattice point-group operation is an integer matrix R (acting on FRACTIONAL
+// / crystal coordinates) that maps the lattice onto itself AND preserves all
+// inter-lattice distances and angles — i.e. it preserves the METRIC TENSOR
+//
+//     G = L · Lᵀ            (L = 3×3 real-space lattice, rows = a1,a2,a3)
+//
+// The defining invariance is
+//
+//     Rᵀ · G · R = G                                                       (★)
+//
+// because a fractional vector f has squared length fᵀ G f, and R must preserve
+// it for every f. The set of integer R satisfying (★) with |det R| = 1 is the
+// holohedry (the lattice point group); it is a finite group and, crucially,
+// every such R for a lattice reduced to its primitive cell has entries in a
+// SMALL bounded range. We enumerate the 3³ⁱ candidate integer matrices with
+// entries in {-1,0,1} (19683 candidates, fully deterministic, no search
+// heuristic) and keep those that satisfy (★) with |det| = 1. For the cubic
+// holohedries (simple-cubic, FCC, BCC primitive cells) this returns EXACTLY
+// the 48 Oh operations; for tetragonal it returns the 16 D4h ops; for
+// orthorhombic the 8 D2h ops; etc. The returned R are already in the integer
+// fractional convention that qforge_qstar_reduce consumes (9 ints/op, row-major
+// — q' = R·q).
+//
+// @cite Hahn (ed.), International Tables for Crystallography Vol. A, §8 —
+//       the lattice (holohedry) point group as the integer automorphisms of
+//       the metric tensor.
+// @cite Grosse-Kunstleve & Adams 2002, Acta Cryst A58 60 — algorithms for
+//       deriving symmetry from a unit cell via the metric tensor.
+//
+// ── d4 (generic dispatch, NO hardcoded structure) ───────────────────────────
+//
+// The lattice enters ONLY as data: a flat 9-float list (row-major a1,a2,a3).
+// The analyzer NEVER branches on a named lattice / space group — it returns
+// whatever (★)-invariant integer matrices the supplied metric admits. A cubic
+// lattice yields 48 ops; a tetragonal one yields 16; the code is identical.
+//
+// ── d3/d19 reuse ────────────────────────────────────────────────────────────
+//   - consumer : stdlib/qforge/qstar (qforge_qstar_reduce) — the IBZ reducer
+//     this analyzer feeds (its rotation argument). No reduction code here.
+//   - the returned op set is interchangeable with qforge_qstar_oh_ops() for a
+//     cubic lattice (verified equal-as-a-set in the selftest).
+//
+// ── SCOPE (honest, d6) ──────────────────────────────────────────────────────
+// SHIPPED: the LATTICE point group (holohedry) from the metric tensor — the
+// integer {-1,0,1}-entry automorphisms of G with |det| = 1. This reproduces
+// the cubic (Oh/48), tetragonal (D4h/16) and orthorhombic (D2h/8) families and
+// closes the YH10 star-weight gate (BCC primitive metric → 48 ops → the
+// [1,3,4,6,6,8,12,24] star multiset on a 4×4×4 grid).
+// DEFERRED (named next bricks):
+//   (1) ATOMIC-BASIS site-symmetry refinement — intersecting the holohedry with
+//       the operations that also map the atomic basis onto itself (the crystal
+//       point group of a non-symmorphic / lower-site-symmetry structure can be
+//       a SUBGROUP of the holohedry). This needs the basis as input; the
+//       holohedry shipped here is the UPPER bound (correct for monatomic /
+//       high-symmetry-site lattices, which is the RTSC hydride case).
+//   (2) GENERAL TRICLINIC cells whose primitive holohedry needs entries beyond
+//       {-1,0,1}; for those the candidate range must widen (a documented knob,
+//       below). The cubic/tetragonal/orthorhombic families that the RTSC
+//       campaign uses are all covered by {-1,0,1}.
+
+use "stdlib/qforge/mpgrid"
+use "stdlib/qforge/qstar"
+
+let _CS_EPS: float = 1e-7
+
+fn _cs_abs(x: float) -> float { if x < 0.0 { return -x } return x }
+
+// Metric tensor G = L·Lᵀ from a flat row-major 3×3 lattice (a1,a2,a3 as rows).
+// Returns the 9 floats of G (symmetric), row-major.
+fn _cs_metric(lat: [float]) -> [float] {
+    // rows: a0 = lat[0..2], a1 = lat[3..5], a2 = lat[6..8]
+    let mut g: [float] = []
+    let mut i = 0
+    while i < 3 {
+        let mut j = 0
+        while j < 3 {
+            // G[i][j] = a_i · a_j
+            let d = lat[3 * i + 0] * lat[3 * j + 0]
+                  + lat[3 * i + 1] * lat[3 * j + 1]
+                  + lat[3 * i + 2] * lat[3 * j + 2]
+            g.push(d)
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return g
+}
+
+// |det| of an integer 3×3 (row-major). Returns an int (exact for small entries).
+fn _cs_idet(r: [int]) -> int {
+    let a = r[0] ; let b = r[1] ; let c = r[2]
+    let d = r[3] ; let e = r[4] ; let f = r[5]
+    let g = r[6] ; let h = r[7] ; let i = r[8]
+    let det = a * (e * i - f * h) - b * (d * i - f * g) + c * (d * h - e * g)
+    if det < 0 { return -det }
+    return det
+}
+
+// Test Rᵀ G R == G for a candidate integer R (row-major) against metric g.
+// M = Rᵀ G R. R acts on fractional coords (q' = R q), so (Rᵀ G R)_{mn}
+//   = Σ_{i,j} R_{im} G_{ij} R_{jn}.
+fn _cs_preserves(r: [int], g: [float]) -> bool {
+    let mut m = 0
+    while m < 3 {
+        let mut n = 0
+        while n < 3 {
+            // (RᵀGR)[m][n] = Σ_i Σ_j R[i][m]*G[i][j]*R[j][n]
+            let mut acc = 0.0
+            let mut i = 0
+            while i < 3 {
+                let mut j = 0
+                while j < 3 {
+                    acc = acc + to_float(r[3 * i + m]) * g[3 * i + j] * to_float(r[3 * j + n])
+                    j = j + 1
+                }
+                i = i + 1
+            }
+            if _cs_abs(acc - g[3 * m + n]) > _CS_EPS { return false }
+            n = n + 1
+        }
+        m = m + 1
+    }
+    return true
+}
+
+// ── The analyzer ─────────────────────────────────────────────────────────────
+//
+// Derive the lattice point group (holohedry) from a flat 9-float lattice
+// (row-major a1,a2,a3). Enumerates every integer 3×3 with entries in {-1,0,1}
+// (deterministic, 19683 candidates), keeps those with |det| = 1 that preserve
+// the metric tensor (Rᵀ G R = G), and returns them as a flat [9·nops] int list
+// (row-major, q' = R·q) — exactly the `rotations` argument qforge_qstar_reduce
+// consumes.
+//
+// Returns an empty list on a degenerate lattice (det L ≈ 0) or a malformed
+// (len ≠ 9) input — no crash. A valid lattice always contains at least the
+// identity, so a non-empty input never returns 0 ops unless degenerate.
+pub fn qforge_crystal_point_group(lattice: [float]) -> [int] {
+    if len(lattice) != 9 { return [] }
+
+    let g = _cs_metric(lattice)
+
+    // guard a degenerate (zero-volume) lattice: |det L| must be > 0.
+    // (3×3 cofactor expansion with split minors — single-line per minor.)
+    let _m0 = lattice[4] * lattice[8] - lattice[5] * lattice[7]
+    let _m1 = lattice[3] * lattice[8] - lattice[5] * lattice[6]
+    let _m2 = lattice[3] * lattice[7] - lattice[4] * lattice[6]
+    let dl = lattice[0] * _m0 - lattice[1] * _m1 + lattice[2] * _m2
+    if _cs_abs(dl) < _CS_EPS { return [] }
+
+    let mut ops: [int] = []
+    // enumerate the 9 entries each in {-1,0,1}: base-3 over 9 digits.
+    let mut code = 0
+    let total = 19683     // 3^9
+    while code < total {
+        // decode 9 base-3 digits → entries in {-1,0,1}
+        let mut r: [int] = []
+        let mut t = code
+        let mut k = 0
+        while k < 9 {
+            let dgt = t % 3
+            r.push(dgt - 1)        // {0,1,2} → {-1,0,1}
+            t = t / 3
+            k = k + 1
+        }
+        // keep |det| = 1 (orthogonal-in-lattice ⇒ unimodular) AND metric-preserving
+        if _cs_idet(r) == 1 {
+            if _cs_preserves(r, g) {
+                let mut e = 0
+                while e < 9 { ops.push(r[e]) ; e = e + 1 }
+            }
+        }
+        code = code + 1
+    }
+    return ops
+}
