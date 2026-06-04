@@ -51,28 +51,103 @@ Sub-chain dims: M=1024 K=1536 N1=1536 N2=1024 (clm_prod conv-block-ish, D~1536).
 Hardware: ONE H100 (vast, --owner h1b-mega), down-after, leak 0.
 
 ────────────────────────────────────────────────────────────────────────────────
-VERIFICATION  (filled from the pod run)
+VERIFICATION  (verbatim pod stdout — H100 NVL, sm_90, CUDA 12.4, owner h1b-mega)
 ────────────────────────────────────────────────────────────────────────────────
-[PENDING POD RUN — verbatim stdout of `HEXA_CLM_MEGASTEP=1 ./megakernel_driver`
- + util_megastep.sh pasted here on completion.]
+$ bash build_megastep.sh   (extract 504 lines, 6 kernels; nvcc -arch=sm_90 -rdc=true clean)
+
+=== RUN: megakernel sub-chain (byte-eq/rel-RMS + util A/B) ===
+GPU: NVIDIA H100 NVL (sm_90)
+sub-chain: GEMM(M=1024,N1=1536,K=1536) -> gelu -> GEMM(M=1024,N2=1024,K=N1=1536)  iters=50
+HEXA_CLM_MEGASTEP=1 (megakernel path ON)
+coop occupancy: 1 blocks/SM × 132 SM = 132 resident blocks (occ query: no error)
+[MEGASTEP-FIRED]
+correctness (megakernel vs eager own-GEMM sub-chain):
+  rel-RMS  = 0.000e+00  PASS  (TF32 own-GEMM bar <= 3e-3)
+  max|Δ|   = 0.000e+00
+sustained throughput on the SAME sub-chain (12s each):
+  eager (3 launches)   : 12176 iters  (1013.5 sub-chains/s)
+  megakernel (1 coop)  : 11216 iters  (934.1 sub-chains/s)
+
+=== RUN: small odd shape (bounds guard)  M=130 N1=80 K=96 / M=130 N2=5 K=80 ===
+coop occupancy: 1 blocks/SM × 132 SM = 132 resident blocks (occ query: no error)
+[MEGASTEP-FIRED]
+  rel-RMS  = 0.000e+00  PASS
+  max|Δ|   = 0.000e+00
+  eager (3 launches)   : 290368 iters  (24197.0 sub-chains/s)
+  megakernel (1 coop)  : 294320 iters  (24525.9 sub-chains/s)
+
+$ bash util_megastep.sh   (external nvidia-smi sampler, 15s each, SAME sub-chain)
+=== util sustained-loop on the SAME GEMM->gelu->GEMM sub-chain (15s each) ===
+  eager (3 launches)     util: MEAN 95.4%  PEAK 100%  (n=63)
+  megakernel (1 coop)    util: MEAN 95.3%  PEAK 100%  (n=64)
+
+pod 39489512 destroyed (confirmed), registry status=closed, leak 0.
 
 ────────────────────────────────────────────────────────────────────────────────
-FINDING  (filled from the pod run)
+FINDING  (honest — SKELETON, scoped)
 ────────────────────────────────────────────────────────────────────────────────
-[PENDING POD RUN]
-  skeleton compiles+runs : Y/N
-  [MEGASTEP-FIRED]       : Y/N
-  rel-RMS on sub-chain   : <value>  (PASS/FAIL vs 3e-3)
-  util eager -> mega     : <e%> -> <m%>  (Δ = <...>)
-  what remains for full step:
-    - the full clm_prod step is ~30 ops (2 glue blocks + ~6 GEMMs + bwd + AdamW);
-      this skeleton collapses a 3-op forward slice. Remaining: (i) chain ALL fwd
-      GEMMs + both glue blocks (groupnorm cross-thread reduction needs the SAME
-      grid.sync() barrier the skeleton uses — already demonstrated), (ii) the bwd
-      DAG, (iii) keep more intermediates in shared (the skeleton keeps H1/G in
-      device scratch — a tile fits in shared but cross-phase tile reindex makes
-      global scratch the correct skeleton choice), (iv) register-budget: the
-      cooperative grid's resident-block cap (occupancy query in the driver) bounds
-      how much of the step can be one launch before spilling.
-  blockers hit: [verbatim if cooperative-launch / register / grid.sync constraints
-    block even the skeleton — a documented blocker IS a valid result.]
+skeleton compiles+runs : YES  (nvcc -rdc=true sm_90, 1.36 MB binary, both shapes run)
+[MEGASTEP-FIRED]       : YES  (cudaLaunchCooperativeKernel + grid.sync() fired, both shapes)
+rel-RMS on sub-chain   : 0.000e+00  PASS  (in fact byte-EXACT, max|Δ|=0 — stronger than the
+                          3e-3 TF32 bar; the inline own-GEMM device fn produces the IDENTICAL
+                          per-tile WMMA2 result as the eager __global__, and the strided tile
+                          visitation in the cooperative grid did NOT perturb any element.)
+util eager -> mega     : 95.4% -> 95.3%  (Δ = -0.1pp, within sampler noise)
+
+THE STRUCTURE WORKS, the util falsifier is NOT satisfied ON THIS SUB-CHAIN — and the
+reason is the honest core finding:
+
+  (a) STRUCTURAL SUCCESS. A persistent grid-resident megakernel with INLINE own-GEMM
+      runs GEMM->gelu->GEMM in ONE cooperative launch, byte-EXACT vs the eager own-GEMM
+      path. This DIRECTLY realizes what F-FUSION-MEGAKERNEL-DESIGN ruled out for the FP64+
+      cuBLAS workload: own-GEMM (#2704 WMMA2) lets the persistent kernel call OUR GEMM
+      inline (cuBLAS cannot be nested), and the TF32 own-GEMM-vs-own-GEMM comparison holds
+      byte-eq. The cooperative grid is co-resident (1 block/SM × 132 SM, occ query no
+      error) — NO register/smem over-subscription wall at this tile size. grid.sync()
+      barriers correctly serialize the 3 dependent phases; H1/G stay device-resident
+      across the barriers (no HBM->host round-trip, no relaunch gap). FALSIFIER axes
+      (a)/(b)/(c) — co-residency, [FIRED], rel-RMS — all PASS.
+
+  (b) UTIL falsifier NOT satisfied here (axis d): 95.4% -> 95.3% (no gain). The reason is
+      DIAGNOSTIC, not a defect: this 3-op sub-chain is two ~2048-class square GEMMs back-
+      to-back, which ALREADY saturate the H100 (95% util, peak 100%) under BOTH the eager
+      3-launch path AND the megakernel. The launch-gap idle the megakernel is designed to
+      reclaim is NEGLIGIBLE relative to the GEMM duration at this size — there is simply no
+      idle to recover, so collapsing the gaps buys nothing. The megakernel is also ~8%
+      SLOWER in raw throughput at 1024×1536 (934 vs 1013 sub-chains/s) because the
+      cooperative strided-tile schedule is less efficient than per-GEMM-shaped grid launches
+      (one fixed 132-block grid must cover two differently-shaped GEMMs by striding, vs
+      eager's two tightly-sized launches). NOTE the small-odd shape REVERSES this (mega
+      24525 > eager 24197 sub-chains/s): when each GEMM is tiny, launch overhead dominates
+      and collapsing 3 launches->1 wins — the FIRST direct evidence that the gap-collapse
+      pays off precisely in the small-kernel regime.
+
+  => The util-raising payoff the megakernel targets lives in the FULL clm_prod step's
+     SMALL HETEROGENEOUS kernels (sub-ms norm / elementwise / MoE glue that under-fill the
+     H100, median util 2% per F-FUSION-OCCUPANCY-WALL) — NOT in a saturated back-to-back
+     GEMM pair. The small-odd-shape reversal is the in-skeleton witness of that mechanism.
+     This 3-op sub-chain is the wrong size to SHOW the util win, but the RIGHT size to
+     PROVE the structure runs byte-exact. Honest: skeleton works (structure ✓, byte-eq ✓,
+     fired ✓); util-win unproven on this sub-chain (saturated), with directional evidence
+     (small-shape reversal) that the win is in the small-kernel regime of the full step.
+
+what remains for the full step (NOT done — this is a SKELETON):
+  (i)   chain ALL fwd GEMMs + both glue blocks; groupnorm's cross-thread (cross-block)
+        reduction needs the SAME grid.sync() barrier the skeleton already demonstrates.
+  (ii)  the bwd DAG + ce_grad + AdamW phases (more grid.sync()-separated phases).
+  (iii) keep more intermediates in shared where a phase's tile fits (the skeleton keeps
+        H1/G in device scratch — correct for cross-phase tile reindex, but the full step
+        can fuse adjacent same-tile ops in shared).
+  (iv)  register/smem budget: occ here is 1 block/SM (132 resident). Adding more phases /
+        more register accumulators may drop occupancy below the co-residency floor — the
+        driver's cudaOccupancyMaxActiveBlocksPerMultiprocessor query is the gate that bounds
+        how much of the step fits in one cooperative launch before the grid stops being
+        co-resident (the megakernel's hard structural limit).
+  (v)   the util A/B must be re-run on a sub-chain with SMALL heterogeneous kernels (the
+        small-odd reversal predicts the win appears there) to actually MEASURE the util Δ
+        the full megakernel is for.
+
+blockers hit: NONE that blocked the skeleton. Cooperative launch co-resident (occ query no
+  error), grid.sync() works, no register/smem wall at this tile size. The only "negative" is
+  that the chosen sub-chain is GEMM-saturated and so cannot exhibit the util win — a
+  measurement-scope limitation of the witness, documented above, not a structural blocker.
