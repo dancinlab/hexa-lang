@@ -1,0 +1,192 @@
+// @ci_gate — pure · network-free · deterministic (stdlib_selftest_aggregate --ci-gate)
+//
+// dtc_dstruct_selftest.hexa — QFORGE-FEATURE autodiff ∂Tc/∂structure g5 gate.
+//
+// Validates the reverse-mode automatic differentiation of the Allen-Dynes Tc
+// tail (stdlib/qforge/dtc_dstruct), the analytic foundation of gradient-based
+// RTSC inverse design:
+//
+//   (a) ∂Tc/∂λ      matches a central finite-difference of allen_dynes_tc(λ)
+//   (b) ∂Tc/∂ω_log  matches a central finite-difference of allen_dynes_tc(ω_log)
+//   (c) gradient SIGN correct — ↑λ ⇒ ↑Tc (the inverse-design search direction)
+//   (d) the structure-level entry REPORTS the adjoint-DFPT Jacobian as
+//       remaining (d6 honesty — not faked) when no Jacobian is supplied, and
+//       computes the full chain rule exactly when one IS supplied.
+//
+// FD vs AD agreement is checked to g5 (rel-ε ≤ 1e-5) across three regimes:
+// the Nb weak-ish anchor (λ≈1), a strong-coupling hydride point (λ≈2.5), and a
+// spectral-shape-active point (ω̄₂ ≠ ω_log so f2 ≠ 1, exercising both ω_log
+// channels). FD step is the analysis-standard √(machine-ε)·scale.
+//
+// Run:  hexa run stdlib/qforge/dtc_dstruct_selftest.hexa
+// PASS: exits printing "dtc_dstruct_selftest PASS".
+
+use "stdlib/qforge/dtc_dstruct"
+use "stdlib/material/sim"
+
+fn _abs(x: float) -> float { if x < 0.0 { return -x } return x }
+
+// relative-error check to a tolerance (g5 = 1e-5 here for FD-vs-AD)
+fn _ck(name: str, got: float, want: float, tol: float) -> int {
+    let w = _abs(want)
+    let d = _abs(got - want)
+    let rel = if w < 1e-12 { d } else { d / w }
+    if rel <= tol {
+        println("PASS " + name + " (AD=" + to_string(got) + " FD=" + to_string(want)
+                + " rel=" + to_string(rel) + ")")
+        return 0
+    }
+    println("FAIL " + name + " — AD=" + to_string(got) + " FD=" + to_string(want)
+            + " rel=" + to_string(rel))
+    return 1
+}
+
+// central FD of allen_dynes_tc w.r.t. λ at fixed (ω_log, ω̄₂, μ*)
+fn _fd_dtc_dlambda(lam: float, wlog: float, w2: float, mu: float,
+                   h: float) -> float {
+    let tp = allen_dynes_tc(wlog, lam + h, mu, w2)
+    let tm = allen_dynes_tc(wlog, lam - h, mu, w2)
+    return (tp - tm) / (2.0 * h)
+}
+
+// central FD of allen_dynes_tc w.r.t. ω_log at fixed (λ, ω̄₂, μ*).
+// NOTE ω̄₂ is the INDEPENDENT mean-square moment, held fixed — so only the
+// (ω_log/1.2) prefactor and r = ω̄₂/ω_log in f2 vary. Matches the AD partial.
+fn _fd_dtc_domega_log(lam: float, wlog: float, w2: float, mu: float,
+                      h: float) -> float {
+    let tp = allen_dynes_tc(wlog + h, lam, mu, w2)
+    let tm = allen_dynes_tc(wlog - h, lam, mu, w2)
+    return (tp - tm) / (2.0 * h)
+}
+
+fn main() {
+    let mut fails = 0
+    let g5 = 1e-5
+
+    // ── regime 1 — Nb-like anchor: λ=1.0, ω_log=192 K, ω̄₂=ω_log (f2=1), μ*=0.13
+    let lam1 = 1.0
+    let wlog1 = 192.0
+    let w21 = 192.0
+    let mu1 = 0.13
+    // FD step ~ √ε · scale; λ scale O(1), ω_log scale O(100)
+    let hL1 = 1e-4
+    let hW1 = 1e-2
+
+    let ad_dl1 = qforge_dtc_dlambda(lam1, wlog1, w21, mu1)
+    let fd_dl1 = _fd_dtc_dlambda(lam1, wlog1, w21, mu1, hL1)
+    fails = fails + _ck("(a) ∂Tc/∂λ  Nb λ=1.0", ad_dl1, fd_dl1, g5)
+
+    let ad_dw1 = qforge_dtc_domega_log(lam1, wlog1, w21, mu1)
+    let fd_dw1 = _fd_dtc_domega_log(lam1, wlog1, w21, mu1, hW1)
+    fails = fails + _ck("(b) ∂Tc/∂ω_log Nb λ=1.0", ad_dw1, fd_dw1, g5)
+
+    // ── regime 2 — strong-coupling hydride: λ=2.5, ω_log=1200 K, ω̄₂=ω_log, μ*=0.10
+    let lam2 = 2.5
+    let wlog2 = 1200.0
+    let w22 = 1200.0
+    let mu2 = 0.10
+    let hL2 = 1e-4
+    let hW2 = 1e-1
+
+    let ad_dl2 = qforge_dtc_dlambda(lam2, wlog2, w22, mu2)
+    let fd_dl2 = _fd_dtc_dlambda(lam2, wlog2, w22, mu2, hL2)
+    fails = fails + _ck("(a) ∂Tc/∂λ  hydride λ=2.5", ad_dl2, fd_dl2, g5)
+
+    let ad_dw2 = qforge_dtc_domega_log(lam2, wlog2, w22, mu2)
+    let fd_dw2 = _fd_dtc_domega_log(lam2, wlog2, w22, mu2, hW2)
+    fails = fails + _ck("(b) ∂Tc/∂ω_log hydride λ=2.5", ad_dw2, fd_dw2, g5)
+
+    // ── regime 3 — spectral-shape ACTIVE: f2≠1 (ω̄₂ ≠ ω_log) ───────────────
+    // λ=1.8, ω_log=800 K, ω̄₂=1100 K (r=1.375), μ*=0.12. Exercises BOTH ω_log
+    // channels (prefactor + r-in-f2) and df2/dλ, df2/dr — the full closed form.
+    let lam3 = 1.8
+    let wlog3 = 800.0
+    let w23 = 1100.0
+    let mu3 = 0.12
+    let hL3 = 1e-4
+    let hW3 = 5e-2
+
+    let ad_dl3 = qforge_dtc_dlambda(lam3, wlog3, w23, mu3)
+    let fd_dl3 = _fd_dtc_dlambda(lam3, wlog3, w23, mu3, hL3)
+    fails = fails + _ck("(a) ∂Tc/∂λ  f2-active λ=1.8", ad_dl3, fd_dl3, g5)
+
+    let ad_dw3 = qforge_dtc_domega_log(lam3, wlog3, w23, mu3)
+    let fd_dw3 = _fd_dtc_domega_log(lam3, wlog3, w23, mu3, hW3)
+    fails = fails + _ck("(b) ∂Tc/∂ω_log f2-active λ=1.8", ad_dw3, fd_dw3, g5)
+
+    // ── (c) gradient SIGN — ↑λ ⇒ ↑Tc (the inverse-design ascent direction) ──
+    // ∂Tc/∂λ and ∂Tc/∂ω_log must both be strictly positive in every regime
+    // (more coupling ⇒ higher Tc; higher phonon scale ⇒ higher Tc).
+    if ad_dl1 > 0.0 && ad_dl2 > 0.0 && ad_dl3 > 0.0 {
+        println("PASS (c) sign ∂Tc/∂λ > 0 in all 3 regimes (↑λ ⇒ ↑Tc)")
+    } else {
+        println("FAIL (c) sign ∂Tc/∂λ — got " + to_string(ad_dl1) + ", "
+                + to_string(ad_dl2) + ", " + to_string(ad_dl3))
+        fails = fails + 1
+    }
+    if ad_dw1 > 0.0 && ad_dw2 > 0.0 && ad_dw3 > 0.0 {
+        println("PASS (c) sign ∂Tc/∂ω_log > 0 in all 3 regimes (↑ω_log ⇒ ↑Tc)")
+    } else {
+        println("FAIL (c) sign ∂Tc/∂ω_log — got " + to_string(ad_dw1) + ", "
+                + to_string(ad_dw2) + ", " + to_string(ad_dw3))
+        fails = fails + 1
+    }
+
+    // ── (d) structure entry — adjoint-DFPT Jacobian REPORTED as remaining ───
+    // No Jacobian supplied → complete=false, dtc_dparam sentinel 0.0, the
+    // remaining adjoint-DFPT work NAMED, tail partials still exact (d6).
+    let deck_pending = StructDeck {
+        lam: lam2, omega_log_K: wlog2, omega2_K: w22, mu_star: mu2,
+        jac_available: false, dlambda_dparam: 0.0, domega_log_dparam: 0.0,
+    }
+    let r_pending = qforge_dtc_dstruct(deck_pending, "atom_H_z")
+    let mut d_ok = 1
+    if r_pending.complete {
+        println("FAIL (d) pending — complete should be false")
+        d_ok = 0
+    }
+    if r_pending.dtc_dparam != 0.0 {
+        println("FAIL (d) pending — dtc_dparam should be sentinel 0.0")
+        d_ok = 0
+    }
+    if r_pending.remaining == "" {
+        println("FAIL (d) pending — remaining adjoint-DFPT must be NAMED")
+        d_ok = 0
+    }
+    // tail partials still exact even when struct Jacobian is pending
+    if _abs(r_pending.dtc_dlambda - ad_dl2) > 1e-12 {
+        println("FAIL (d) pending — tail ∂Tc/∂λ must stay exact")
+        d_ok = 0
+    }
+    if d_ok == 1 {
+        println("PASS (d) adjoint-DFPT NAMED remaining: " + r_pending.remaining)
+        println("       method: " + r_pending.method)
+    } else {
+        fails = fails + 1
+    }
+
+    // ── (d') full chain rule when a Jacobian IS supplied (generic, d4) ──────
+    // Synthetic Jacobian rows ∂λ/∂param=0.5, ∂ω_log/∂param=10.0 (a stand-in for
+    // the adjoint-DFPT output). Total must equal the exact analytic combination.
+    let dl_dp = 0.5
+    let dw_dp = 10.0
+    let deck_full = StructDeck {
+        lam: lam2, omega_log_K: wlog2, omega2_K: w22, mu_star: mu2,
+        jac_available: true, dlambda_dparam: dl_dp, domega_log_dparam: dw_dp,
+    }
+    let r_full = qforge_dtc_dstruct(deck_full, "pressure")
+    let want_total = ad_dl2 * dl_dp + ad_dw2 * dw_dp
+    if r_full.complete {
+        fails = fails + _ck("(d') full chain ∂Tc/∂param", r_full.dtc_dparam,
+                            want_total, 1e-12)
+    } else {
+        println("FAIL (d') full — complete should be true when Jacobian supplied")
+        fails = fails + 1
+    }
+
+    if fails == 0 {
+        println("dtc_dstruct_selftest PASS")
+    } else {
+        println("dtc_dstruct_selftest FAIL — " + to_string(fails) + " case(s)")
+    }
+}
