@@ -1274,6 +1274,25 @@ HexaVal forge_dispatch_moe_block2(HexaVal eo0_v, HexaVal eo1_v, HexaVal logits_v
                              HexaVal probs_v, HexaVal y_v, HexaVal t_v,
                              HexaVal e_v, HexaVal c_v);                       /* runtime.c — fusion L3-d seam */
 
+/* HEXA-FUSION Phase 2a (WHOLE-STEP MEGAKERNEL · block-2 cooperative slice) —
+ * moe_block2 (gelu2+pack+router) THEN groupnorm #2 fused ACROSS a grid.sync()
+ * barrier in ONE cudaLaunchCooperativeKernel launch. 18 args; calls
+ * _hx_cuda_farr_megakernel_block2_gpu. byte-eq == moe_block2-then-groupnorm
+ * (phase A == _hx_k_moe_block2, phase B == _hx_k_groupnorm, both single-thread
+ * sequential). Env HEXA_MEGAKERNEL; OFF / no-coop -> -1 -> op-by-op fallback. */
+HexaVal hexa_forge_dispatch_megakernel_block2(HexaVal eo0_v, HexaVal eo1_v, HexaVal logits_v,
+                                  HexaVal nog_v, HexaVal nob_v,
+                                  HexaVal ex0_v, HexaVal ex1_v, HexaVal ex_out_v,
+                                  HexaVal probs_v, HexaVal y_v, HexaVal yn_v,
+                                  HexaVal xhatn_v, HexaVal meann_v, HexaVal invn_v,
+                                  HexaVal t_v, HexaVal e_v, HexaVal c_v, HexaVal g_v); /* runtime.c — fusion P2a */
+HexaVal forge_dispatch_megakernel_block2(HexaVal eo0_v, HexaVal eo1_v, HexaVal logits_v,
+                             HexaVal nog_v, HexaVal nob_v,
+                             HexaVal ex0_v, HexaVal ex1_v, HexaVal ex_out_v,
+                             HexaVal probs_v, HexaVal y_v, HexaVal yn_v,
+                             HexaVal xhatn_v, HexaVal meann_v, HexaVal invn_v,
+                             HexaVal t_v, HexaVal e_v, HexaVal c_v, HexaVal g_v);     /* runtime.c — fusion P2a seam */
+
 /* HEXA-FUSION L3 (glue half · final slice ⑤c) — device-resident embedding gather.
  * forge_dispatch_embedding(ids, table, x_out, T, d) -> int rc (0 ok / -1 host).
  * X_OUT[i·d+c]=TABLE[tok·d+c] where tok=(int)IDS[i] — the token-gather host glue

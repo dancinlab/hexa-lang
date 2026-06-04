@@ -595,6 +595,34 @@ fn _moe_block2(eo0: int, eo1: int, logits: int, ex0: int, ex1: int, ex_out: int,
     _moe_router(logits, ex_out, probs, y, T, E, C)
 }
 
+// HEXA-FUSION Phase 2a (WHOLE-STEP MEGAKERNEL · block-2 cooperative slice): fuses
+// the moe_block2 prefix (gelu2 + expert_pack2 + moe_router) AND the immediately-
+// following groupnorm #2 (y -> yn) ACROSS a grid.sync() barrier into ONE
+// cudaLaunchCooperativeKernel launch — the first real persistent/grid-resident
+// megakernel in the campaign. Collapses 4 op-by-op kernels (gelu2, pack, router,
+// groupnorm) into 1 resident launch: op-boundary data (Y) lives in device memory
+// between the two phases, no host round-trip, no relaunch latency. The cooperative
+// grid barrier IS the launch boundary the op-by-op path got for free; crossing it
+// in-kernel is the structural step the prior analysis flagged. Gated by env
+// HEXA_MEGAKERNEL on the device-resident chain; OFF / no-coop-support / device-fail
+// -> the SEPARATE _moe_block2 + _groupnorm run (byte-identical reference: phase A
+// == _hx_k_moe_block2, phase B == _hx_k_groupnorm, both single-thread sequential,
+// max|Δ|=0). ex0/ex1/ex_out/probs/y/yn/xhatn/meann/invn all written byte-for-byte
+// so the bwd graph is UNCHANGED.
+fn _megakernel_block2(eo0: int, eo1: int, logits: int, nog: int, nob: int,
+                      ex0: int, ex1: int, ex_out: int, probs: int, y: int,
+                      yn: int, xhatn: int, meann: int, invn: int,
+                      T: int, E: int, C: int, G: int) {
+    if env("HEXA_MEGAKERNEL") != "" && env("CLM_PROD_DEVRESIDENT") != "" {
+        let rc = forge_dispatch_megakernel_block2(eo0, eo1, logits, nog, nob,
+                                                  ex0, ex1, ex_out, probs, y,
+                                                  yn, xhatn, meann, invn, T, E, C, G)
+        if rc == 0 { return }
+    }
+    _moe_block2(eo0, eo1, logits, ex0, ex1, ex_out, probs, y, T, E, C)
+    _groupnorm(y, nog, nob, yn, meann, invn, xhatn, T, C, G)
+}
+
 // HEXA-FUSION L3 (BWD glue half): device-resident elementwise GELU backward.
 // dg[i] = da[i]·GELU'(g[i]) (g = pre-activation saved from fwd). gelu_bwd ×3 in
 // clm_prod_bwd (deo0/deo1/dhn0) are the bwd MIRROR of the fwd gelu ×3 host glue —
@@ -789,17 +817,18 @@ fn clm_prod_fwd(tokens: int,
     // the two host _gelu calls (byte-eq reference).
     let ex0 = t_zeros(T * d); let ex1 = t_zeros(T * d)
     let y = t_zeros(T * d)
-    // HEXA-FUSION L3-d (glue-block megakernel · block 2): gelu2 + expert_pack2 +
-    // moe_router fused into ONE device launch under HEXA_FUSE_MOE_BLOCK2 (3 launches
-    // -> 1, the grid-sync-free prefix of block 2). ex0/ex1/ex_out/probs/y written
-    // byte-for-byte so the bwd is UNCHANGED. OFF → the 3 separate helpers run
-    // (byte-identical: erf-gelu + hand-rolled _moe_exp softmax + sequential combine).
-    _moe_block2(eo0, eo1, logits_r, ex0, ex1, ex_out, probs, y, T, E, d)
     let meanN = t_zeros(1)
-    // HEXA-FUSION L3 (glue half): groupnorm #2 (norm_out, y→yn) — interpreted
-    // inter-op host glue with a per-group reduction. Device path keeps
-    // yn/xhatN/invN FARR_DEVICE (byte-eq); else host loop.
-    _groupnorm(y, noG, noB, yn, meanN, invN, xhatN, T, d, 1)
+    // HEXA-FUSION Phase 2a (WHOLE-STEP MEGAKERNEL · block-2 cooperative slice):
+    // moe_block2 (gelu2 + expert_pack2 + moe_router) AND the immediately-following
+    // groupnorm #2 (y→yn) fused ACROSS a grid.sync() barrier into ONE
+    // cudaLaunchCooperativeKernel launch under HEXA_MEGAKERNEL (4 op-by-op launches
+    // -> 1 resident kernel; Y lives device-resident between phases, no relaunch).
+    // OFF / no-coop / device-fail → the SEPARATE _moe_block2 (L3-d) + _groupnorm run
+    // (byte-identical: phase A == _hx_k_moe_block2, phase B == _hx_k_groupnorm, both
+    // single-thread sequential, max|Δ|=0). ex0/ex1/ex_out/probs/y/yn/xhatN/meanN/invN
+    // all written byte-for-byte so the bwd is UNCHANGED.
+    _megakernel_block2(eo0, eo1, logits_r, noG, noB, ex0, ex1, ex_out, probs, y,
+                       yn, xhatN, meanN, invN, T, E, d, 1)
     conv1d_via_forge(yn, roWq, roB, out_logits, T, d, V, 1, 1)
 }
 

@@ -67,6 +67,13 @@ fn emit_runtime_cuda_c() -> str {
             " * scalar type visible to the bf16 kernel emitted below). CUDA-toolkit\n" +
             " * header — always present whenever cublas_v2.h is. */\n" +
             "#include <cuda_bf16.h>\n" +
+            "/* HEXA-FUSION Phase 2a (whole-step megakernel) — cooperative-groups header\n" +
+            " * for grid.sync() inside a persistent/grid-resident kernel launched via\n" +
+            " * cudaLaunchCooperativeKernel. Always present with the CUDA toolkit. The\n" +
+            " * cg namespace is C++ but used only inside the __global__ kernel body; the\n" +
+            " * kernel launch symbol stays C-callable. */\n" +
+            "#include <cooperative_groups.h>\n" +
+            "namespace _hx_cg = cooperative_groups;\n" +
             "\n" +
             "/* C linkage for the public surface so that C harnesses (or runtime.c on\n" +
             " * the host build) can call these symbols without C++ name mangling.\n" +
@@ -2111,6 +2118,235 @@ fn emit_runtime_cuda_c() -> str {
             "    (void)eo0_id; (void)eo1_id; (void)logits_id; (void)ex0_id; (void)ex1_id;\n" +
             "    (void)ex_out_id; (void)probs_id; (void)y_id; (void)T; (void)E; (void)C;\n" +
             "    fprintf(stderr, \"[cuda] moe_block2: built without __CUDACC__\\n\");\n" +
+            "    return -1;\n" +
+            "#endif\n" +
+            "}\n" +
+            "\n" +
+            "/* ════════════════════════════════════════════════════════════════════\n" +
+            " * HEXA-FUSION Phase 2a — WHOLE-STEP MEGAKERNEL (cooperative · block-2 slice)\n" +
+            " *\n" +
+            " * The first REAL persistent/grid-resident megakernel in the campaign. It\n" +
+            " * fuses fwd glue block 2 ACROSS the grid-sync barrier the prior analysis\n" +
+            " * flagged (F-FUSION-GN-COOP-KERNEL-CLOSED-NEG): the grid-sync-free prefix\n" +
+            " * (gelu2 + expert_pack2 + moe_router, = L3-d _hx_k_moe_block2) THEN, after\n" +
+            " * ONE grid.sync(), groupnorm #2 (y -> yn) — all in a SINGLE\n" +
+            " * cudaLaunchCooperativeKernel launch. Collapses 4 op-by-op launches\n" +
+            " * (gelu2, pack, router, groupnorm) into 1 resident kernel; op-boundary data\n" +
+            " * (Y) lives in device memory between the two phases, no host round-trip, no\n" +
+            " * relaunch latency.\n" +
+            " *\n" +
+            " * BYTE-EQ CONTRACT (hard gate, max|Δ|=0 vs the op-by-op path):\n" +
+            " *  - PHASE A (one thread per t): identical to _hx_k_moe_block2 — gelu erf +\n" +
+            " *    1/√2 literal, _hx_moe_exp_dev softmax, sequential e-combine. Writes\n" +
+            " *    EX0/EX1/EX_OUT/PROBS byte-for-byte (bwd UNCHANGED) and Y[t,c].\n" +
+            " *  - grid.sync(): every Y[t,c] is committed to global memory before any\n" +
+            " *    thread reads it in phase B (the cooperative-grid barrier IS the\n" +
+            " *    launch-boundary the op-by-op path got for free).\n" +
+            " *  - PHASE B (one thread per group g): the EXACT _hx_k_groupnorm sequential\n" +
+            " *    single-thread reduction (t-outer, c-inner, NO tree re-assoc, same\n" +
+            " *    _hx_gn_sqrt_dev NR-40). For clm_prod G=1 so a SINGLE thread runs the\n" +
+            " *    reduction — this is the byte-eq floor (a parallel/tree reduction would\n" +
+            " *    change summation order -> max|Δ|!=0). Writes YN/XHATN/MEANN/INVN\n" +
+            " *    byte-for-byte == _hx_k_groupnorm.\n" +
+            " *\n" +
+            " * Honest scope: this is the block-2 SLICE of the whole-step megakernel, not\n" +
+            " * the full step. The cuBLAS-free own-GEMM (_hx_k_gemm, on main) makes a FULL\n" +
+            " * whole-step cooperative megakernel reachable (GEMM tiles inline between\n" +
+            " * grid.sync barriers); that full DAG is documented in the verdict and is the\n" +
+            " * next structural step. Env-gated HEXA_MEGAKERNEL; OFF -> the L3-d\n" +
+            " * moe_block2 + separate groupnorm path (byte-identical).\n" +
+            " *\n" +
+            " * Args mirror moe_block2 (eo0,eo1,logits -> ex0,ex1,ex_out,probs,Y) PLUS the\n" +
+            " * groupnorm #2 operands (Y is the GN input; NOG/NOB affine; YN/XHATN out;\n" +
+            " * MEANN/INVN saved for bwd). T,E,C as moe_block2; GN group count G (=1). */\n" +
+            "__global__ void _hx_k_megakernel_block2(const double* __restrict__ EO0,\n" +
+            "                                 const double* __restrict__ EO1,\n" +
+            "                                 const double* __restrict__ LOGITS,\n" +
+            "                                 const double* __restrict__ NOG,\n" +
+            "                                 const double* __restrict__ NOB,\n" +
+            "                                 double* __restrict__ EX0,\n" +
+            "                                 double* __restrict__ EX1,\n" +
+            "                                 double* __restrict__ EX_OUT,\n" +
+            "                                 double* __restrict__ PROBS,\n" +
+            "                                 double* __restrict__ Y,\n" +
+            "                                 double* __restrict__ YN,\n" +
+            "                                 double* __restrict__ XHATN,\n" +
+            "                                 double* __restrict__ MEANN,\n" +
+            "                                 double* __restrict__ INVN,\n" +
+            "                                 int64_t T, int64_t E, int64_t C, int64_t G) {\n" +
+            "    _hx_cg::grid_group _grid = _hx_cg::this_grid();\n" +
+            "    const double inv_sqrt2 = 0.70710678118654752440;\n" +
+            "    int64_t n = T * C;\n" +
+            "    int64_t stride = (int64_t)blockDim.x * (int64_t)gridDim.x;\n" +
+            "    /* ── PHASE A: moe_block2 (gelu2+pack+router+combine), one thread per t ── */\n" +
+            "    for (int64_t t = (int64_t)blockIdx.x * blockDim.x + threadIdx.x;\n" +
+            "         t < T; t += stride) {\n" +
+            "        for (int64_t c = 0; c < C; c++) {\n" +
+            "            int64_t j = t * C + c;\n" +
+            "            double x0 = EO0[j];\n" +
+            "            double g0 = x0 * 0.5 * (1.0 + erf(x0 * inv_sqrt2));\n" +
+            "            EX0[j] = g0; EX_OUT[j] = g0;\n" +
+            "            double x1 = EO1[j];\n" +
+            "            double g1 = x1 * 0.5 * (1.0 + erf(x1 * inv_sqrt2));\n" +
+            "            EX1[j] = g1; EX_OUT[n + j] = g1;\n" +
+            "        }\n" +
+            "        int64_t base = t * E;\n" +
+            "        double mx = LOGITS[base];\n" +
+            "        for (int64_t e = 1; e < E; e++) { double v = LOGITS[base + e]; if (v > mx) mx = v; }\n" +
+            "        double s = 0.0;\n" +
+            "        for (int64_t e = 0; e < E; e++) {\n" +
+            "            double ev = _hx_moe_exp_dev(LOGITS[base + e] - mx);\n" +
+            "            PROBS[base + e] = ev; s += ev;\n" +
+            "        }\n" +
+            "        for (int64_t e = 0; e < E; e++) { PROBS[base + e] = PROBS[base + e] / s; }\n" +
+            "        for (int64_t c = 0; c < C; c++) {\n" +
+            "            double acc = 0.0;\n" +
+            "            for (int64_t e = 0; e < E; e++)\n" +
+            "                acc += PROBS[base + e] * EX_OUT[e * n + t * C + c];\n" +
+            "            Y[t * C + c] = acc;\n" +
+            "        }\n" +
+            "    }\n" +
+            "    /* ── grid barrier: all Y[t,c] committed before phase B reads them ── */\n" +
+            "    _grid.sync();\n" +
+            "    /* ── PHASE B: groupnorm #2 (Y -> YN), one thread per group g ──\n" +
+            "     * byte-eq == _hx_k_groupnorm (same sequential single-thread reduction). */\n" +
+            "    const double eps = 0.00001;\n" +
+            "    int64_t cg = C / G;\n" +
+            "    double m = (double)(cg * T);\n" +
+            "    for (int64_t g = (int64_t)blockIdx.x * blockDim.x + threadIdx.x;\n" +
+            "         g < G; g += stride) {\n" +
+            "        int64_t c0 = g * cg;\n" +
+            "        double sum = 0.0;\n" +
+            "        for (int64_t t = 0; t < T; t++)\n" +
+            "            for (int64_t c = 0; c < cg; c++)\n" +
+            "                sum += Y[t * C + (c0 + c)];\n" +
+            "        double mu = sum / m;\n" +
+            "        double vs = 0.0;\n" +
+            "        for (int64_t t = 0; t < T; t++)\n" +
+            "            for (int64_t c = 0; c < cg; c++) {\n" +
+            "                double dd = Y[t * C + (c0 + c)] - mu;\n" +
+            "                vs += dd * dd;\n" +
+            "            }\n" +
+            "        double var = vs / m;\n" +
+            "        double inv = 1.0 / _hx_gn_sqrt_dev(var + eps);\n" +
+            "        MEANN[g] = mu;\n" +
+            "        INVN[g]  = inv;\n" +
+            "        for (int64_t t = 0; t < T; t++)\n" +
+            "            for (int64_t c = 0; c < cg; c++) {\n" +
+            "                int64_t ch = c0 + c;\n" +
+            "                int64_t idx = t * C + ch;\n" +
+            "                double xh = (Y[idx] - mu) * inv;\n" +
+            "                XHATN[idx] = xh;\n" +
+            "                YN[idx] = NOG[ch] * xh + NOB[ch];\n" +
+            "            }\n" +
+            "    }\n" +
+            "}\n" +
+            "\n" +
+            "/* Phase 2a launcher — cudaLaunchCooperativeKernel of _hx_k_megakernel_block2.\n" +
+            " * Grid size is CAPPED at the device's resident-grid limit\n" +
+            " * (cudaOccupancyMaxActiveBlocksPerMultiprocessor * SM count) — a cooperative\n" +
+            " * launch REQUIRES every block be co-resident (else cudaErrorCooperativeLaunchTooLarge).\n" +
+            " * On failure (no coop support / too large / build w/o CUDA) returns -1 so the\n" +
+            " * caller runs the byte-eq op-by-op fallback (moe_block2 + groupnorm). */\n" +
+            "int _hx_cuda_farr_megakernel_block2_gpu(int64_t eo0_id, int64_t eo1_id, int64_t logits_id,\n" +
+            "                                 int64_t nog_id, int64_t nob_id,\n" +
+            "                                 int64_t ex0_id, int64_t ex1_id, int64_t ex_out_id,\n" +
+            "                                 int64_t probs_id, int64_t y_id,\n" +
+            "                                 int64_t yn_id, int64_t xhatn_id,\n" +
+            "                                 int64_t meann_id, int64_t invn_id,\n" +
+            "                                 int64_t T, int64_t E, int64_t C, int64_t G) {\n" +
+            "#ifdef __CUDACC__\n" +
+            "    if (T <= 0 || E <= 0 || C <= 0 || G <= 0 || (C % G) != 0) return -1;\n" +
+            "    int64_t n = T * C;\n" +
+            "    if (_h2d(eo0_id) != 0) return -1;\n" +
+            "    if (_h2d(eo1_id) != 0) return -1;\n" +
+            "    if (_h2d(logits_id) != 0) return -1;\n" +
+            "    if (_h2d(nog_id) != 0) return -1;\n" +
+            "    if (_h2d(nob_id) != 0) return -1;\n" +
+            "    if (_ensure_dev_alloc_out(ex0_id, n) != 0) return -1;\n" +
+            "    if (_ensure_dev_alloc_out(ex1_id, n) != 0) return -1;\n" +
+            "    if (_ensure_dev_alloc_out(ex_out_id, 2 * n) != 0) return -1;\n" +
+            "    if (_ensure_dev_alloc_out(probs_id, T * E) != 0) return -1;\n" +
+            "    if (_ensure_dev_alloc_out(y_id, n) != 0) return -1;\n" +
+            "    if (_ensure_dev_alloc_out(yn_id, n) != 0) return -1;\n" +
+            "    if (_ensure_dev_alloc_out(xhatn_id, n) != 0) return -1;\n" +
+            "    if (_ensure_dev_alloc_out(meann_id, G) != 0) return -1;\n" +
+            "    if (_ensure_dev_alloc_out(invn_id, G) != 0) return -1;\n" +
+            "    /* coop-launch support probe (Volta+; required for grid.sync). */\n" +
+            "    int _dev = 0; cudaGetDevice(&_dev);\n" +
+            "    int _coop = 0;\n" +
+            "    cudaDeviceGetAttribute(&_coop, cudaDevAttrCooperativeLaunch, _dev);\n" +
+            "    if (!_coop) {\n" +
+            "        fprintf(stderr, \"[MEGAKERNEL] device lacks cooperativeLaunch -> fallback\\n\");\n" +
+            "        return -1;\n" +
+            "    }\n" +
+            "    const double* EO0    = g_slots[eo0_id].d_buf;\n" +
+            "    const double* EO1    = g_slots[eo1_id].d_buf;\n" +
+            "    const double* LOGITS = g_slots[logits_id].d_buf;\n" +
+            "    const double* NOG    = g_slots[nog_id].d_buf;\n" +
+            "    const double* NOB    = g_slots[nob_id].d_buf;\n" +
+            "    double*       EX0    = g_slots[ex0_id].d_buf;\n" +
+            "    double*       EX1    = g_slots[ex1_id].d_buf;\n" +
+            "    double*       EX_OUT = g_slots[ex_out_id].d_buf;\n" +
+            "    double*       PROBS  = g_slots[probs_id].d_buf;\n" +
+            "    double*       Y      = g_slots[y_id].d_buf;\n" +
+            "    double*       YN     = g_slots[yn_id].d_buf;\n" +
+            "    double*       XHATN  = g_slots[xhatn_id].d_buf;\n" +
+            "    double*       MEANN  = g_slots[meann_id].d_buf;\n" +
+            "    double*       INVN   = g_slots[invn_id].d_buf;\n" +
+            "    int block_sz = 64;\n" +
+            "    /* resident-grid cap for a cooperative launch. */\n" +
+            "    int _numSM = 0;\n" +
+            "    cudaDeviceGetAttribute(&_numSM, cudaDevAttrMultiProcessorCount, _dev);\n" +
+            "    int _blocksPerSM = 0;\n" +
+            "    cudaOccupancyMaxActiveBlocksPerMultiprocessor(\n" +
+            "        &_blocksPerSM, (const void*)_hx_k_megakernel_block2, block_sz, 0);\n" +
+            "    int _maxgrid = _numSM * _blocksPerSM;\n" +
+            "    if (_maxgrid < 1) _maxgrid = 1;\n" +
+            "    int64_t want = (T + block_sz - 1) / block_sz;\n" +
+            "    int grid_sz = (int)want;\n" +
+            "    if (grid_sz > _maxgrid) grid_sz = _maxgrid;\n" +
+            "    if (grid_sz < 1) grid_sz = 1;\n" +
+            "    static int _mk_fired = 0;\n" +
+            "    if (!_mk_fired) { _mk_fired = 1;\n" +
+            "        fprintf(stderr, \"[MEGAKERNEL-FIRED] _hx_k_megakernel_block2 cooperative grid=%d blk=%d (SM=%d bpsm=%d)\\n\",\n" +
+            "                grid_sz, block_sz, _numSM, _blocksPerSM); }\n" +
+            "    void* _args[] = { (void*)&EO0, (void*)&EO1, (void*)&LOGITS, (void*)&NOG, (void*)&NOB,\n" +
+            "                      (void*)&EX0, (void*)&EX1, (void*)&EX_OUT, (void*)&PROBS, (void*)&Y,\n" +
+            "                      (void*)&YN, (void*)&XHATN, (void*)&MEANN, (void*)&INVN,\n" +
+            "                      (void*)&T, (void*)&E, (void*)&C, (void*)&G };\n" +
+            "    cudaError_t le = cudaLaunchCooperativeKernel(\n" +
+            "        (const void*)_hx_k_megakernel_block2,\n" +
+            "        dim3((unsigned)grid_sz), dim3((unsigned)block_sz),\n" +
+            "        _args, 0, _forge_stream());\n" +
+            "    if (le != cudaSuccess) {\n" +
+            "        fprintf(stderr, \"[MEGAKERNEL] coop launch failed: %s -> fallback\\n\",\n" +
+            "                cudaGetErrorString(le));\n" +
+            "        return -1;\n" +
+            "    }\n" +
+            "    cudaError_t er = cudaDeviceSynchronize();\n" +
+            "    if (er != cudaSuccess) {\n" +
+            "        fprintf(stderr, \"[MEGAKERNEL] sync failed: %s\\n\", cudaGetErrorString(er));\n" +
+            "        return -1;\n" +
+            "    }\n" +
+            "    {\n" +
+            "        int64_t outs[9] = { ex0_id, ex1_id, ex_out_id, probs_id, y_id,\n" +
+            "                            yn_id, xhatn_id, meann_id, invn_id };\n" +
+            "        for (int k = 0; k < 9; k++) {\n" +
+            "            HexaFarrEntry* e = &_hx_farr_table[outs[k]];\n" +
+            "            e->d_buf      = (void*)g_slots[outs[k]].d_buf;\n" +
+            "            e->loc        = FARR_DEVICE;\n" +
+            "            e->dirty_host = 0;\n" +
+            "            e->dirty_dev  = 0;\n" +
+            "        }\n" +
+            "    }\n" +
+            "    return 0;\n" +
+            "#else\n" +
+            "    (void)eo0_id; (void)eo1_id; (void)logits_id; (void)nog_id; (void)nob_id;\n" +
+            "    (void)ex0_id; (void)ex1_id; (void)ex_out_id; (void)probs_id; (void)y_id;\n" +
+            "    (void)yn_id; (void)xhatn_id; (void)meann_id; (void)invn_id;\n" +
+            "    (void)T; (void)E; (void)C; (void)G;\n" +
+            "    fprintf(stderr, \"[cuda] megakernel_block2: built without __CUDACC__\\n\");\n" +
             "    return -1;\n" +
             "#endif\n" +
             "}\n" +
