@@ -1,0 +1,285 @@
+// HEXA Standard Library — qforge/scratch_bank_store
+//
+// @version 0.1.0
+// @capabilities [io]
+//
+// QFORGE scratch-bank OBJECT-STORE layer — content-addressed put/get + manifest
+// + restore-plan over a PLUGGABLE store, so a fresh pod resumes from a banked
+// SCF `.save` without re-running SCF (the "LaH10 q4 crash → resume" milestone).
+//
+// ── what this adds over scratch_bank.hexa (the primitive) ────────────────
+//   scratch_bank.hexa banks ONE integrity-checked blob to a fixed local path
+//   (<dir>/scratch.bank) and proves the resume baton at the byte level. It is
+//   NOT addressable (one bank per dir) and has no notion of WHICH run a bank
+//   belongs to, nor of a remote store. This module is the object-store layer:
+//
+//     • CONTENT-ADDRESSED key   run_id = deck-hash + commit + stage → one hex
+//       key. The SAME run (same deck, same commit, same stage) always maps to
+//       the SAME key; a DIFFERENT deck-hash → a different key → a get() MISS
+//       (no false resume from an unrelated run's scratch).
+//     • MANIFEST that classifies each banked file as resume-critical
+//       (.save / _ph0/*.phsave — needed to skip SCF) vs cross-check-only
+//       (dynN — DFPT cross-validation data, NOT a baton for the SCF stage).
+//     • RESTORE-PLAN a fresh pod follows: it marks "skip SCF" ONLY when a
+//       valid .save (resume-critical class) is present in the bank.
+//     • PLUGGABLE STORE  put/get talk to a Store interface, not a fixed path.
+//       A local-dir fake store ships here (and drives the g5 selftest). The
+//       PRODUCTION object-store backend (S3 / R2 / rclone) is an INFRA HOOK,
+//       named below as remaining — we do NOT claim real cross-pod resume.
+//
+// ── d6 honesty (real backend is named-remaining) ─────────────────────────
+//   The only store implemented here is `sbstore_local_new(root)` — a
+//   directory-backed fake that writes blobs to <root>/<key>. It exercises the
+//   FULL addressing + manifest + restore-plan contract deterministically with
+//   no network. The production backend is a pluggable seam:
+//       sbstore_remaining_backend() -> str
+//   returns the human-readable name of the unimplemented production store
+//   ("S3 / Cloudflare-R2 / rclone object store — INFRA HOOK, not yet bound").
+//   A real backend implements the same {put_blob, get_blob, has_blob} verbs;
+//   nothing else in this module changes. Cross-pod resume is NOT claimed until
+//   that backend is bound — the local store only proves it within one host.
+//
+// ── d4 generic (no hardcoded QE filenames in the dispatch path) ──────────
+//   put() classifies each file by a caller-supplied / default RULE set, not by
+//   a hardcoded name branch. The default rule recognises QE's `.save` dir,
+//   `_ph0/*.phsave`, and `*.dynN` because those ARE the milestone's concrete
+//   files, but the classifier is data-driven (a list of {glob-substr, class})
+//   so a future engine's scratch layout is a manifest edit, not a code edit.
+//
+// ── reuse (d3/d19 — do NOT reimplement) ──────────────────────────────────
+//   The blob pack / unpack / per-entry integrity / resume-baton check all come
+//   from scratch_bank.hexa. This module is PURELY the addressing + manifest +
+//   restore-plan + store-interface layer on top. The content-address hash
+//   reuses the same adler32 family (deterministic, network-free) the bank
+//   already trusts for integrity.
+use "stdlib/io"
+use "stdlib/qforge/scratch_bank"
+
+// ── file classes (manifest separates resume-critical from cross-check) ───
+//   RESUME_CRITICAL — a fresh pod NEEDS these to skip the SCF re-run
+//                     (QE `.save` contents · `_ph0/*.phsave`).
+//   CROSS_CHECK     — useful for DFPT q-loop cross-validation (dynN), but NOT
+//                     a baton for the SCF stage. Banking them is fine; their
+//                     presence ALONE must never trigger a "skip SCF".
+pub struct SbClassRule {
+    needle: str,     // substring that, if present in the path, assigns `klass`
+    klass: str       // "resume_critical" | "cross_check"
+}
+// ── one classified manifest entry ────────────────────────────────────────
+pub struct SbManifestEntry {
+    name: str,       // path/name as supplied by the caller (d4 — engine-neutral)
+    bytes_len: int,  // payload length (so the manifest is auditable w/o the blob)
+    klass: str       // "resume_critical" | "cross_check"
+}
+// ── put() result ─────────────────────────────────────────────────────────
+pub struct SbPutResult {
+    ok: bool,
+    key: str,                    // content address (deck-hash+commit+stage → hex)
+    size: int,                   // total banked blob size in bytes
+    manifest: [SbManifestEntry], // per-file classification
+    has_save: bool               // ≥1 resume_critical entry banked
+}
+// ── restore-plan (what a fresh pod does on a get) ────────────────────────
+pub struct SbRestorePlan {
+    skip_scf: bool,              // TRUE only when a resume_critical .save present
+    restore_files: [str],       // files to lay back down on the fresh pod
+    resume_critical: [str],     // subset: the SCF baton files
+    cross_check: [str],         // subset: dynN-class (NOT a baton)
+    note: str                   // human-readable plan summary
+}
+// ── get() result ─────────────────────────────────────────────────────────
+pub struct SbGetResult {
+    hit: bool,                   // a bank existed at this key AND verified ok
+    key: str,
+    restore_plan: SbRestorePlan,
+    files: [ScratchFile]         // restored scratch (only meaningful if hit)
+}
+// ── pluggable store handle (d6 — local fake ships; remote is a hook) ─────
+pub struct SbStore {
+    kind: str,                   // "local" (only impl) | future: "s3"/"r2"/"rclone"
+    root: str                    // local: directory the fake store writes under
+}
+
+// ── content-address hash (adler32 family — deterministic, network-free) ──
+//   Two independent 16-bit-ish accumulators folded to a 32-bit int, rendered
+//   as zero-padded lowercase hex. A change in ANY of deck-hash / commit /
+//   stage changes the key → no collision across distinct runs in practice for
+//   the addressing role (this is an ADDRESS, not a security digest — d6: we do
+//   not claim cryptographic collision resistance).
+fn _sbs_adler32(s: str) -> int {
+    let mut a = 1
+    let mut b = 0
+    let mut i = 0
+    let n = len(s)
+    while i < n {
+        a = (a + ord(s[i])) % 65521
+        b = (b + a) % 65521
+        i = i + 1
+    }
+    return b * 65536 + a
+}
+fn _sbs_hex8(v: int) -> str {
+    let digits = "0123456789abcdef"
+    let mut out = ""
+    let mut x = v
+    let mut i = 0
+    while i < 8 {
+        let nyb = x % 16
+        out = digits.substring(nyb, nyb + 1) + out
+        x = x / 16
+        i = i + 1
+    }
+    return out
+}
+fn _sbs_shq(s: str) -> str {
+    let mut out = "'"
+    let mut i = 0
+    while i < len(s) {
+        if s[i] == '\'' { out = out + "'\"'\"'" } else { out = out + s.substring(i, i + 1) }
+        i = i + 1
+    }
+    return out + "'"
+}
+
+// ── qforge_scratch_run_id — content address from (deck-hash, commit, stage) ─
+//   The milestone key recipe. Joins the three identity fields with a separator
+//   that cannot appear ambiguously (NUL-ish "\x1f" unit separator), hashes the
+//   join twice with different salts to widen the address, and renders 16 hex.
+//   Deterministic: same inputs → same key; any field change → a new key.
+pub fn qforge_scratch_run_id(deck_hash: str, commit: str, stage: str) -> str {
+    let joined = deck_hash + "\x1f" + commit + "\x1f" + stage
+    let h1 = _sbs_adler32(joined)
+    let h2 = _sbs_adler32("salt2\x1f" + joined + "\x1f" + stage + commit)
+    return _sbs_hex8(h1) + _sbs_hex8(h2)
+}
+
+// ── default classifier rules (d4 — data-driven, QE layout as the default) ─
+//   resume_critical: anything under a `.save` dir, or a `.phsave` under _ph0.
+//   cross_check:     a per-q `.dynN` file (DFPT cross-check, NOT an SCF baton).
+pub fn qforge_scratch_default_rules() -> [SbClassRule] {
+    let mut rules: [SbClassRule] = []
+    rules.push(SbClassRule { needle: ".save", klass: "resume_critical" })
+    rules.push(SbClassRule { needle: ".phsave", klass: "resume_critical" })
+    rules.push(SbClassRule { needle: ".dyn", klass: "cross_check" })
+    return rules
+}
+// classify ONE path against the rule list; first match wins; default cross_check.
+fn _sbs_classify(name: str, rules: [SbClassRule]) -> str {
+    let mut i = 0
+    while i < len(rules) {
+        if name.contains(rules[i].needle) { return rules[i].klass }
+        i = i + 1
+    }
+    return "cross_check"
+}
+
+// ── local fake store (the ONLY backend implemented — d6) ─────────────────
+pub fn sbstore_local_new(root: str) -> SbStore {
+    return SbStore { kind: "local", root: root }
+}
+// production backend name (d6 — named remaining, NOT implemented).
+pub fn sbstore_remaining_backend() -> str {
+    return "S3 / Cloudflare-R2 / rclone object store — INFRA HOOK, not yet bound (production backend remaining)"
+}
+// store verbs — local writes <root>/<key>; a real backend swaps these three.
+fn _sbstore_put_blob(store: SbStore, key: str, blob: str) -> bool {
+    if store.kind != "local" { return false }   // remote backend: not bound (d6)
+    if len(store.root) == 0 { return false }
+    let _ = exec("mkdir -p " + _sbs_shq(store.root) + " 2>/dev/null")
+    return write_text(store.root + "/" + key, blob)
+}
+fn _sbstore_has_blob(store: SbStore, key: str) -> bool {
+    if store.kind != "local" { return false }
+    return file_exists(store.root + "/" + key)
+}
+fn _sbstore_get_blob(store: SbStore, key: str) -> str {
+    if store.kind != "local" { return "" }
+    if !file_exists(store.root + "/" + key) { return "" }
+    return read_text(store.root + "/" + key)
+}
+
+// ── qforge_scratch_bank_put — bank a scratch SET under a content address ──
+//   d4: the caller supplies the file SET (name+bytes) — it decides what a
+//   `.save` IS (the on-disk-dir → set conversion is engine-specific). put()
+//   classifies each file (manifest), packs them into ONE integrity-checked
+//   blob (reusing scratch_bank.hexa), and writes it to the store at the
+//   content address keyed by (deck_hash, commit, stage). Returns the key,
+//   total size, the manifest, and whether ≥1 resume_critical file was banked.
+pub fn qforge_scratch_bank_put(store: SbStore, deck_hash: str, commit: str, stage: str,
+                               files: [ScratchFile], rules: [SbClassRule]) -> SbPutResult {
+    let empty_m: [SbManifestEntry] = []
+    let key = qforge_scratch_run_id(deck_hash, commit, stage)
+    // build the manifest (classification) + detect a resume-critical presence.
+    let mut manifest: [SbManifestEntry] = []
+    let mut has_save = false
+    let mut i = 0
+    while i < len(files) {
+        let klass = _sbs_classify(files[i].name, rules)
+        if klass == "resume_critical" { has_save = true }
+        manifest.push(SbManifestEntry { name: files[i].name, bytes_len: len(files[i].bytes), klass: klass })
+        i = i + 1
+    }
+    // pack → blob (scratch_bank.hexa primitive, integrity-checked) → store.
+    let blob = qforge_scratch_bank(files)
+    let wrote = _sbstore_put_blob(store, key, blob)
+    if !wrote {
+        return SbPutResult { ok: false, key: key, size: 0, manifest: empty_m, has_save: false }
+    }
+    return SbPutResult { ok: true, key: key, size: len(blob), manifest: manifest, has_save: has_save }
+}
+
+// ── build a restore-plan from a verified file set + manifest ─────────────
+//   skip_scf is TRUE iff ≥1 resume_critical file is present. cross_check files
+//   are listed for restore (cheap) but NEVER, on their own, set skip_scf.
+fn _sbs_make_plan(files: [ScratchFile], rules: [SbClassRule]) -> SbRestorePlan {
+    let mut restore: [str] = []
+    let mut crit: [str] = []
+    let mut xchk: [str] = []
+    let mut i = 0
+    while i < len(files) {
+        let nm = files[i].name
+        restore.push(nm)
+        let klass = _sbs_classify(nm, rules)
+        if klass == "resume_critical" { crit.push(nm) } else { xchk.push(nm) }
+        i = i + 1
+    }
+    let skip = len(crit) > 0
+    let mut note = ""
+    if skip {
+        note = "skip SCF: " + to_string(len(crit)) + " resume-critical file(s) banked; "
+             + to_string(len(xchk)) + " cross-check file(s)"
+    } else {
+        note = "RUN SCF: no resume-critical (.save/.phsave) file in bank; "
+             + to_string(len(xchk)) + " cross-check-only file(s) cannot skip SCF"
+    }
+    return SbRestorePlan { skip_scf: skip, restore_files: restore,
+                           resume_critical: crit, cross_check: xchk, note: note }
+}
+
+// ── qforge_scratch_bank_get — content-addressed fetch + restore-plan ─────
+//   A fresh pod calls this with the SAME (deck_hash, commit, stage). On a
+//   store HIT whose blob verifies ok, it returns hit=true + the restored files
+//   + a restore-plan whose skip_scf is set ONLY when a resume-critical file is
+//   present. A miss (no blob at the key) OR a corrupt blob → hit=false with a
+//   RUN-SCF plan (skip_scf=false) — no false resume.
+pub fn qforge_scratch_bank_get(store: SbStore, deck_hash: str, commit: str, stage: str,
+                               rules: [SbClassRule]) -> SbGetResult {
+    let empty_f: [ScratchFile] = []
+    let key = qforge_scratch_run_id(deck_hash, commit, stage)
+    let miss_plan = SbRestorePlan { skip_scf: false, restore_files: [],
+                                    resume_critical: [], cross_check: [],
+                                    note: "MISS: no bank at this content address — run SCF from scratch" }
+    if !_sbstore_has_blob(store, key) {
+        return SbGetResult { hit: false, key: key, restore_plan: miss_plan, files: empty_f }
+    }
+    let blob = _sbstore_get_blob(store, key)
+    let u = qforge_scratch_unbank(blob)
+    if !u.ok {
+        let corrupt_plan = SbRestorePlan { skip_scf: false, restore_files: [],
+                                           resume_critical: [], cross_check: [],
+                                           note: "CORRUPT: bank failed integrity check — run SCF from scratch" }
+        return SbGetResult { hit: false, key: key, restore_plan: corrupt_plan, files: empty_f }
+    }
+    let plan = _sbs_make_plan(u.files, rules)
+    return SbGetResult { hit: true, key: key, restore_plan: plan, files: u.files }
+}
