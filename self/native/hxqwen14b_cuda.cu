@@ -846,6 +846,93 @@ __global__ void _hx_k_sgemm_cm_splitk(int tA, int tB, long long M, long long N, 
         atomicAdd(&C[row + col*ldc], alpha * acc);
     }
 }
+
+// ═════════════════════════════════════════════════════════════════════
+// STREAM-K (atomic-free two-pass) skinny own-GEMM — env HEXA_OWN_GEMM_STREAMK.
+// HEXA-FUSION A2 frontier. The split-K verdict (F-FUSION-SPLITK-SKINNY)
+// NAMED its residual-of-residual: split-K's atomicAdd into the tiny 16-wide
+// output column SERIALIZES the G writers on the same global cache lines
+// (~2× off cuBLAS per-GEMM on the skinny dA/dB shapes). This kernel removes
+// that contention with an ATOMIC-FREE TWO-PASS:
+//   PASS 1 (_hx_k_sgemm_cm_streamk_partial): identical K-partition to split-K
+//     (G near-equal HXSK-aligned K-chunks, 16×16 output tile, shared-mem
+//     K-reuse), but each (output-tile, k-chunk) block writes its α·partial to
+//     a SEPARATE slice P[chunk] of a partials workspace — NO atomics, NO
+//     shared cache line between the G writers. Each output element's G
+//     partials land in G disjoint, coalesced locations.
+//   PASS 2 (_hx_k_sgemm_cm_streamk_reduce): one thread per output element
+//     tree-sums its G partials in fp32 (a small G-deep reduction, fully
+//     parallel across the m·n outputs, no contention) and writes
+//     C = α·Σpartials + β·C_old in ONE store. β folds in cleanly here (read
+//     C once, no pre-scale kernel needed) — unlike split-K which needs a
+//     separate betascale pass because the atomic accumulation is out-of-order.
+// Partials buffer layout: P[(chunk)*M*N + col*M + row] (col-major per chunk,
+// chunks stacked) → within a chunk the writes are the same coalesced pattern
+// as a normal C store; across chunks they are M·N apart (distinct cache
+// lines) → the G writers NEVER collide. Workspace = M·N·G floats, cached &
+// reused across calls (the LoRA skinny shapes are tiny: 16·4096·16 = 4 MB).
+// Summation order (fp32 partial-then-tree) differs from sequential → NOT
+// bit-identical, but the partials sum in fp32 (the dA/dB GEMMs are the only
+// ones routed here and their reduction is fp32-clean) → same TF32 tol
+// contract (rel-RMS ≤ 3e-3) as split-K/WMMA2. col-major cublasSgemm faithful.
+// Pass-1 probe: [OWN-SGEMM-STREAMK-FIRED].
+// ═════════════════════════════════════════════════════════════════════
+// PASS 1: per-(output-tile, k-chunk) partial → P[chunk*M*N + col*M + row].
+// No atomics: every block owns a disjoint partials slice.
+__global__ void _hx_k_sgemm_cm_streamk_partial(int tA, int tB,
+                                               long long M, long long N, long long K,
+                                               float alpha, const float* A, long long lda,
+                                               const float* B, long long ldb,
+                                               float* P, int G) {
+    __shared__ float As[HXSK][HXSK];
+    __shared__ float Bs[HXSK][HXSK];
+    long long row = (long long)blockIdx.x * HXSK + threadIdx.x;  // C row i
+    long long col = (long long)blockIdx.y * HXSK + threadIdx.y;  // C col j
+    long long tilesK = (K + HXSK - 1) / HXSK;
+    long long perz   = (tilesK + G - 1) / G;
+    long long kbeg   = (long long)blockIdx.z * perz * HXSK;
+    long long kend   = kbeg + perz * HXSK; if (kend > K) kend = K;
+    float acc = 0.0f;
+    for (long long t = kbeg; t < kend; t += HXSK) {
+        long long ak = t + threadIdx.y;
+        As[threadIdx.x][threadIdx.y] =
+            (row < M && ak < K) ? (tA ? A[ak + row*lda] : A[row + ak*lda]) : 0.0f;
+        long long bk = t + threadIdx.x;
+        Bs[threadIdx.x][threadIdx.y] =
+            (bk < K && col < N) ? (tB ? B[col + bk*ldb] : B[bk + col*ldb]) : 0.0f;
+        __syncthreads();
+        #pragma unroll
+        for (int l = 0; l < HXSK; l++) acc += As[threadIdx.x][l] * Bs[l][threadIdx.y];
+        __syncthreads();
+    }
+    if (row < M && col < N) {
+        // Every block writes its OWN slice (no overlap) — empty chunk → write 0
+        // so the reduction sees a clean G-wide partial vector.
+        P[(long long)blockIdx.z * M * N + col * M + row] =
+            (kbeg < kend) ? (alpha * acc) : 0.0f;
+    }
+}
+// PASS 2: tree-sum the G partials per output element (fp32, contention-free)
+// and fold β. One thread per (row,col). C = Σ_g P[g] + β·C_old.
+__global__ void _hx_k_sgemm_cm_streamk_reduce(long long M, long long N,
+                                              const float* P, int G,
+                                              float beta, float* C, long long ldc) {
+    long long row = (long long)blockIdx.x * blockDim.x + threadIdx.x;
+    long long col = (long long)blockIdx.y * blockDim.y + threadIdx.y;
+    if (row >= M || col >= N) return;
+    float s = 0.0f;
+    long long base = col * M + row;
+    for (int g = 0; g < G; g++) s += P[(long long)g * M * N + base];
+    float prev = (beta != 0.0f) ? C[row + col*ldc] : 0.0f;
+    C[row + col*ldc] = s + beta * prev;
+}
+
+// Cached partials workspace for stream-K (grown on demand, freed at exit via
+// the process teardown — these are the only skinny GEMMs, the buffer is small
+// and reused every step so a per-call cudaMalloc/Free is avoided).
+static float*       g_streamk_P    = NULL;
+static long long    g_streamk_Pcap = 0;  // capacity in floats
+
 // Host launcher for the own-GEMM kernel — extern "C" so the gcc-compiled
 // hxqwen14b.c TU (LoRA fwd/bwd) can call it. tA/tB are 1 if op==T else 0.
 // Returns 0 on success, nonzero on a CUDA launch/sync error.
@@ -887,8 +974,37 @@ int _hx_own_sgemm_cm_launch(int tA, int tB, int m, int n, int k,
     // (MEASURED sweet spot on Blackwell: k=4096→G=8, k=8192→G=16; saturates ~16-32),
     // overridable via HEXA_OWN_GEMM_SPLITK_G for on-pod tuning.
     int want_splitk = (getenv("HEXA_OWN_GEMM_SPLITK") && getenv("HEXA_OWN_GEMM_SPLITK")[0]);
+    // STREAM-K atomic-free two-pass (env HEXA_OWN_GEMM_STREAMK): same
+    // skinny+large-K gate as split-K. Removes split-K's atomicAdd serialization
+    // on the tiny output column → each K-chunk writes a disjoint partials slice,
+    // a second tree-reduction kernel sums them in fp32. Takes priority over
+    // split-K when both env are set. G = clamp(k/512,1,32), override
+    // HEXA_OWN_GEMM_STREAMK_G. Probe [OWN-SGEMM-STREAMK-FIRED].
+    int want_streamk = (getenv("HEXA_OWN_GEMM_STREAMK") && getenv("HEXA_OWN_GEMM_STREAMK")[0]);
     int skinny_splitk = ((m <= 64 || n <= 64) && k >= 1024);
-    if (want_wmma2 && want_splitk && skinny_splitk && !noshape) {
+    if (want_wmma2 && want_streamk && skinny_splitk && !noshape) {
+        int G = (int)(k / 512); if (G < 1) G = 1; if (G > 32) G = 32;
+        const char* ge = getenv("HEXA_OWN_GEMM_STREAMK_G");
+        if (ge && ge[0]) { int gv = atoi(ge); if (gv >= 1 && gv <= 64) G = gv; }
+        static int stkfired = 0; if (!stkfired){stkfired=1; fprintf(stderr,"[OWN-SGEMM-STREAMK-FIRED] skinny GEMM -> _hx_k_sgemm_cm_streamk (atomic-free two-pass, G=%d, m=%d n=%d k=%d)\n", G, m, n, k);}
+        // Grow the cached partials workspace if needed (M*N*G floats).
+        long long need = (long long)m * (long long)n * (long long)G;
+        if (need > g_streamk_Pcap) {
+            if (g_streamk_P) cudaFree(g_streamk_P);
+            cudaError_t ae = cudaMalloc((void**)&g_streamk_P, (size_t)need * sizeof(float));
+            if (ae != cudaSuccess) { g_streamk_P = NULL; g_streamk_Pcap = 0; return (int)ae; }
+            g_streamk_Pcap = need;
+        }
+        dim3 sblk(16,16);
+        dim3 sgrd((unsigned)((m+15)/16),(unsigned)((n+15)/16),(unsigned)G);
+        _hx_k_sgemm_cm_streamk_partial<<<sgrd,sblk>>>(tA,tB,
+                                             (long long)m,(long long)n,(long long)k,
+                                             alpha, A,(long long)lda, B,(long long)ldb,
+                                             g_streamk_P, G);
+        dim3 rgrd((unsigned)((m+15)/16),(unsigned)((n+15)/16));
+        _hx_k_sgemm_cm_streamk_reduce<<<rgrd,sblk>>>((long long)m,(long long)n,
+                                             g_streamk_P, G, beta, C,(long long)ldc);
+    } else if (want_wmma2 && want_splitk && skinny_splitk && !noshape) {
         int G = (int)(k / 512); if (G < 1) G = 1; if (G > 32) G = 32;
         const char* ge = getenv("HEXA_OWN_GEMM_SPLITK_G");
         if (ge && ge[0]) { int gv = atoi(ge); if (gv >= 1 && gv <= 64) G = gv; }
