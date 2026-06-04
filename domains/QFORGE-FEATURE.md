@@ -49,3 +49,34 @@
                 bead, parallel over N), V'=−F_DFT from DFPT forces; Tc shift =
                 re-run λ on NQE-broadened ⟨u²⟩ vs classical. NO real hydride Tc
                 shift fabricated — DFT-potential wiring is the downstream engine task.
+
+- [x] resume-bank — resume-in-place across pod teardown (.save/.phsave scratch bank)
+      why     : a free/spot pod can be torn down mid-DFPT (e.g. LaH10 q4 crash);
+                a fresh pod must resume from a banked SCF .save WITHOUT re-running
+                SCF. Object-store addressing/manifest/restore-plan layer on top of
+                the integrity-checked blob primitive (scratch_bank.hexa).
+      module  : stdlib/qforge/scratch_bank_store.hexa
+                — qforge_scratch_bank_put(store,deck_hash,commit,stage,files,rules)
+                  → {ok,key,size,manifest,has_save}: content-addressed key
+                  (deck-hash+commit+stage → 16-hex adler32 family), packs the file
+                  SET into ONE integrity-checked blob, classifies each file.
+                — qforge_scratch_bank_get(store,deck_hash,commit,stage,rules)
+                  → {hit,key,restore_plan,files}: fresh pod re-keys the SAME run;
+                  store HIT + blob verifies → hit=true + restore-plan; miss/corrupt
+                  → hit=false RUN-SCF plan (fail-closed, no false resume).
+      manifest: resume_critical (.save · _ph0/*.phsave = SCF baton) vs cross_check
+                (dynN = DFPT cross-val data, NEVER alone a baton). restore-plan
+                .skip_scf = TRUE iff ≥1 resume_critical present. Classifier is
+                data-driven (SbClassRule list) — d4 (QE layout is the DEFAULT rule,
+                not a hardcoded name branch).
+      store   : pluggable SbStore interface; sbstore_local_new(root) = local-dir
+                FAKE store (the ONLY impl) drives the network-free g5 selftest.
+      backend : PRODUCTION object store NAMED remaining (d6 honest) —
+                sbstore_remaining_backend() → "S3 / Cloudflare-R2 / rclone … not yet
+                bound". Real cross-pod resume NOT claimed until that backend binds;
+                local store proves the full contract within one host only.
+      selftest: stdlib/qforge/scratch_bank_store_selftest.hexa (g5, hexa run PASS —
+                39/39): (a) put→get round-trip hit=true + plan lists all files;
+                (b) different deck-hash → MISS; (c) manifest separates .save/.phsave
+                from dynN; (d) skip-SCF only when .save present; (e) backend named;
+                + corrupt-bank fail-closed guard.
