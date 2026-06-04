@@ -1,0 +1,119 @@
+// @ci_gate — pure · network-free · deterministic
+// stdlib/cloud/no_autorent_test.hexa — the AUTOMATIC-RE-RENT-IS-GONE guard.
+//
+// INCIDENT (2026-06-02): under a server-wide rate-limit storm, dispatched
+// agents kept dying, and the `--force-new` AUTO re-rent rotation (the
+// pod_registry RE-RENT ROTATION CAP backstop) rented a FRESH vast pod on
+// every agent-death retry → THREE orphan SAVANT pods ($2.55 + $5.16 +
+// $5.16/hr) hunted + terminated by hand. The cap bounded the leak to N=3,
+// but the AUTOMATIC re-rent on pod-loss is itself the leak source.
+//
+// FIX (this PR): DEPRECATE the automatic re-rent entirely. A fire that
+// loses its pod NO LONGER auto-rents — pod-loss FAILS LOUD and the user
+// must `cloud rent` again explicitly. `--force-new` survives ONLY as a
+// MANUAL single-rent flag, never auto-invoked. The rotation-cap machinery
+// (pod_registry_rerent_* / _rerent_log_path / HEXA_CLOUD_RERENT_* env /
+// ~/.hx/cloud/rerent-log.jsonl / `--rearm`) is REMOVED dead code.
+//
+// This test binds that removal to SOURCE (the rerent fns no longer exist,
+// so a behavioral fixture cannot call them) and ASSERTS the #2671 orphan-
+// cleanup safety net (reap-guard · heartbeat-TTL · reconcile · persistent
+// /workspace volume default · real-GraphQL podTerminate) is UNTOUCHED.
+//
+//   F-NO-AUTORENT-PURGED   — the rerent rotation-cap machinery is GONE from
+//                            pod_registry.hexa (cap/window/log/guard/record/
+//                            rearm fns + _rerent_log_path all absent).
+//   F-NO-AUTORENT-ENV      — the dead HEXA_CLOUD_RERENT_* env vars + the
+//                            rerent-log.jsonl ledger are gone from source.
+//   F-NO-AUTORENT-CLI      — cloud_cli.hexa no longer auto-invokes a rerent
+//                            guard / `--rearm` on the `--force-new` path.
+//   F-FORCE-NEW-MANUAL     — `--force-new` survives as a MANUAL rent flag.
+//   F-POD-LOSS-FAILLOUD    — pod-loss is documented FAIL-LOUD / DEPRECATED.
+//   F-2671-INTACT          — reap-guard · ttl heartbeat · reconcile ·
+//                            persistent volume · podTerminate still present.
+//
+// Run:   hexa run stdlib/cloud/no_autorent_test.hexa
+// PASS:  exits 0, prints "no_autorent_test PASS".
+
+fn _t_assert(cond: int, label: str) {
+    if cond == 0 {
+        println("FAIL: " + label)
+        exit(1)
+    }
+}
+
+fn _src(path: str) -> str {
+    return exec("cat " + path + " 2>/dev/null")
+}
+
+fn _b(cond: bool) -> int {
+    if cond {
+        return 1
+    }
+    return 0
+}
+
+fn main() {
+    let registry = _src("stdlib/cloud/pod_registry.hexa")
+    let cli = _src("stdlib/cloud/cloud_cli.hexa")
+    let commands = _src("stdlib/cloud/cloud_commands.hexa")
+
+    _t_assert(_b(len(registry) > 0), "could not read pod_registry.hexa")
+    _t_assert(_b(len(cli) > 0), "could not read cloud_cli.hexa")
+    _t_assert(_b(len(commands) > 0), "could not read cloud_commands.hexa")
+
+    // ── F-NO-AUTORENT-PURGED — the rotation-cap machinery is dead-code-purged.
+    println("--- (i) rerent rotation-cap machinery removed from pod_registry ---")
+    _t_assert(_b(!registry.contains("pod_registry_rerent_cap")),    "F-NO-AUTORENT-PURGED: pod_registry_rerent_cap GONE")
+    _t_assert(_b(!registry.contains("pod_registry_rerent_guard")),  "F-NO-AUTORENT-PURGED: pod_registry_rerent_guard GONE")
+    _t_assert(_b(!registry.contains("pod_registry_rerent_record")), "F-NO-AUTORENT-PURGED: pod_registry_rerent_record GONE")
+    _t_assert(_b(!registry.contains("pod_registry_rerent_rearm")),  "F-NO-AUTORENT-PURGED: pod_registry_rerent_rearm GONE")
+    _t_assert(_b(!registry.contains("pod_registry_rerent_count")),  "F-NO-AUTORENT-PURGED: pod_registry_rerent_count GONE")
+    _t_assert(_b(!registry.contains("pod_registry_rerent_window")), "F-NO-AUTORENT-PURGED: pod_registry_rerent_window_sec GONE")
+    _t_assert(_b(!registry.contains("_rerent_log_path")),           "F-NO-AUTORENT-PURGED: _rerent_log_path GONE")
+    _t_assert(_b(!registry.contains("RE-RENT ROTATION CAP")),       "F-NO-AUTORENT-PURGED: rotation-cap block GONE")
+    println("    pod_registry.hexa carries NO rerent rotation-cap function")
+
+    // ── F-NO-AUTORENT-ENV — dead env vars + ledger gone.
+    println("--- (ii) dead HEXA_CLOUD_RERENT_* env + rerent-log ledger removed ---")
+    _t_assert(_b(!registry.contains("HEXA_CLOUD_RERENT_CAP")),        "F-NO-AUTORENT-ENV: HEXA_CLOUD_RERENT_CAP GONE (pod_registry)")
+    _t_assert(_b(!registry.contains("HEXA_CLOUD_RERENT_WINDOW_SEC")), "F-NO-AUTORENT-ENV: HEXA_CLOUD_RERENT_WINDOW_SEC GONE (pod_registry)")
+    _t_assert(_b(!registry.contains("rerent-log.jsonl")),            "F-NO-AUTORENT-ENV: rerent-log.jsonl ledger writer GONE (pod_registry)")
+    println("    no HEXA_CLOUD_RERENT_* env knob, no rerent-log.jsonl ledger writer")
+
+    // ── F-NO-AUTORENT-CLI — no auto rerent guard / --rearm on the rent path.
+    println("--- (iii) cloud_cli rent path no longer auto-invokes a rerent guard / --rearm ---")
+    _t_assert(_b(!cli.contains("pod_registry_rerent_guard")),  "F-NO-AUTORENT-CLI: rent path does NOT call rerent guard")
+    _t_assert(_b(!cli.contains("pod_registry_rerent_rearm")),  "F-NO-AUTORENT-CLI: rent path does NOT call rerent rearm")
+    _t_assert(_b(!cli.contains("--rearm")),                    "F-NO-AUTORENT-CLI: --rearm flag GONE from cli")
+    _t_assert(_b(!commands.contains("--rearm")),               "F-NO-AUTORENT-CLI: --rearm flag GONE from rent command roster")
+    println("    rent path is a plain idempotent dedup — no auto re-rent rotation")
+
+    // ── F-FORCE-NEW-MANUAL — --force-new survives as a manual single-rent flag.
+    println("--- (iv) --force-new survives ONLY as a manual single-rent flag ---")
+    _t_assert(_b(cli.contains("--force-new")),       "F-FORCE-NEW-MANUAL: --force-new still parsed in cli")
+    _t_assert(_b(commands.contains("--force-new")),  "F-FORCE-NEW-MANUAL: --force-new in rent command roster")
+    _t_assert(_b(commands.contains("MANUAL single-rent flag")), "F-FORCE-NEW-MANUAL: documented MANUAL single-rent flag")
+    println("    --force-new is documented manual-only, never auto-invoked")
+
+    // ── F-POD-LOSS-FAILLOUD — pod-loss is documented FAIL-LOUD / DEPRECATED.
+    println("--- (v) automatic re-rent is DEPRECATED — pod-loss FAILS LOUD ---")
+    _t_assert(_b(cli.contains("DEPRECATED")),  "F-POD-LOSS-FAILLOUD: automatic re-rent documented DEPRECATED")
+    _t_assert(_b(cli.contains("FAILS LOUD") || cli.contains("FAIL LOUD") || cli.contains("FAIL_LOUD")), "F-POD-LOSS-FAILLOUD: pod-loss documented FAIL-LOUD")
+    println("    pod-loss does NOT auto-rent — user must `cloud rent` again")
+
+    // ── F-2671-INTACT — the orphan-cleanup safety net is UNTOUCHED.
+    println("--- (vi) #2671 orphan-cleanup safety net intact (reap/ttl/reconcile/vol/terminate) ---")
+    _t_assert(_b(registry.contains("ReapDead")),               "F-2671-INTACT: reap-guard (ReapDead) present")
+    _t_assert(_b(registry.contains("ttl-expired")),            "F-2671-INTACT: heartbeat TTL reap present")
+    let reconcile = _src("stdlib/cloud/reconcile_test.hexa")
+    _t_assert(_b(len(reconcile) > 0),                          "F-2671-INTACT: reconcile test present")
+    let runpod = _src("stdlib/cloud/runpod.hexa")
+    _t_assert(_b(runpod.contains("podTerminate")),             "F-2671-INTACT: real-GraphQL podTerminate present")
+    _t_assert(_b(cli.contains("/workspace") || cli.contains("runpod_default_volume_gb")), "F-2671-INTACT: persistent /workspace volume default present")
+    println("    reap-guard · TTL heartbeat · reconcile · podTerminate · persistent volume all present")
+
+    println("PASS: automatic re-rent DEPRECATED — pod-loss FAILS LOUD, --force-new manual-only, #2671 safety net intact")
+    println("no_autorent_test PASS")
+    exit(0)
+}
