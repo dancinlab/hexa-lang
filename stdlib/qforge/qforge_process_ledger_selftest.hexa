@@ -1,0 +1,178 @@
+// @ci_gate — deterministic · network-free · pure JSONL-text ledger-capture g5 gate
+//
+// qforge_process_ledger_selftest.hexa — QFORGE-PROCESS per-deck process LEDGER
+//   capture (qforge_process_ledger_capture / _serialize / _merge,
+//   stdlib/qforge/process_ledger.hexa) g5 gate. The capture CONSUMES a deck's
+//   6-key telemetry JSONL (the SAME wire PR#2702's producer emits / PR#2474's
+//   parser reads) and PROJECTS it into a durable per-deck ledger record, then
+//   merges it into the lab ledger with read-modify-write supersede semantics.
+//
+//   LOOP CLOSED: EMIT(#2702 telemetry.hexa) → PARSE(#2474 telemetry_report)
+//   → CAPTURE(this PR process_ledger) → durable ledger line.
+//
+// 검증 케이스 (all on fixture / producer-emitted JSONL — NO pod, NO file, pure):
+//  🔵 (A) KNOWN 6-key seq (scf start/done + dfpt:q1 + dfpt:q2 + lambda) →
+//         capture → per-stage wall_s correct · n_q derived from the qN sibling
+//         labels (dfpt:q1, dfpt:q2 → n_q=2 each; scf/lambda → 0) ·
+//         total_wall_s = Σ stage wall.
+//  🟢 (B) serialize → re-parse round-trip stable (the serialized line parses
+//         back to a record with identical deck/total_wall_s/stage walls).
+//  🔵 (C) cpu_s/peak_ram_mib null/-1 PASSTHROUGH (no fabrication, d6): the wire
+//         carries rss_kb=null + no cpu → captured cpu_s=-1, has_ram=false,
+//         peak_ram_mib=-1, and serialize renders the literal `null` (never 0).
+//  🟢 (D) APPEND/MERGE no-omission: capture deck B into a ledger holding deck A
+//         → A's record PRESERVED verbatim, B appended. Re-capture A (new wall)
+//         → A's line SUPERSEDED, B preserved (read-modify-write).
+//  🔵 (E) GUARD malformed/empty telemetry → empty record (valid=false, 0 stages,
+//         0 wall) — no crash; merge of an empty record is a stable no-data line.
+//  🔵 (F) END-TO-END LOOP PROOF: drive the REAL producer (qforge_telemetry_*),
+//         emit its exact 6-key lines, feed them through the #2474 parser via our
+//         capture → assert the ledger record matches the driven stages. Proves
+//         emit(#2702) → parse(#2474) → capture(this PR) end-to-end byte-stable.
+//
+// Run (point HEXA_STDLIB_ROOT at THIS worktree's stdlib):
+//   HEXA_STDLIB_ROOT="$PWD/stdlib" hexa run --no-sentinel \
+//     stdlib/qforge/qforge_process_ledger_selftest.hexa
+// PASS: "qforge_process_ledger_selftest PASS".
+use "stdlib/qforge/process_ledger"
+use "stdlib/qforge/telemetry"
+
+fn _ck(name: str, ok: bool) -> int {
+    if ok { println("PASS " + name) ; return 0 }
+    println("FAIL " + name) ; return 1
+}
+// stage row lookup by label
+fn _stg(rec: LedgerRecord, stage: str) -> LedgerStage {
+    let mut i = 0
+    while i < len(rec.stages) {
+        if rec.stages[i].stage == stage { return rec.stages[i] }
+        i = i + 1
+    }
+    return LedgerStage { stage: "", wall_s: -1, cpu_s: -2, peak_ram_mib: -2, has_ram: false, n_q: -1 }
+}
+
+fn main() {
+    let mut fails = 0
+
+    // ── (A) known 6-key seq → capture: per-stage wall · n_q · total ─────────
+    //   scf 300 · dfpt:q1 200 · dfpt:q2 180 · lambda 10 (start+done pairs).
+    //   n_q: dfpt:q1 & dfpt:q2 share base `dfpt` → n_q=2 each; scf/lambda → 0.
+    //   total = 300+200+180+10 = 690.
+    let jsonl = "{\"ts\":1,\"stage\":\"scf\",\"event\":\"start\",\"wall_s\":0,\"rss_kb\":null,\"exit\":null}\n"
+        + "{\"ts\":2,\"stage\":\"scf\",\"event\":\"done\",\"wall_s\":300,\"rss_kb\":null,\"exit\":0}\n"
+        + "{\"ts\":3,\"stage\":\"dfpt:q1\",\"event\":\"start\",\"wall_s\":0,\"rss_kb\":null,\"exit\":null}\n"
+        + "{\"ts\":4,\"stage\":\"dfpt:q1\",\"event\":\"done\",\"wall_s\":200,\"rss_kb\":null,\"exit\":0}\n"
+        + "{\"ts\":5,\"stage\":\"dfpt:q2\",\"event\":\"start\",\"wall_s\":0,\"rss_kb\":null,\"exit\":null}\n"
+        + "{\"ts\":6,\"stage\":\"dfpt:q2\",\"event\":\"done\",\"wall_s\":180,\"rss_kb\":null,\"exit\":0}\n"
+        + "{\"ts\":7,\"stage\":\"lambda\",\"event\":\"start\",\"wall_s\":0,\"rss_kb\":null,\"exit\":null}\n"
+        + "{\"ts\":8,\"stage\":\"lambda\",\"event\":\"done\",\"wall_s\":10,\"rss_kb\":null,\"exit\":0}\n"
+    let rec = qforge_process_ledger_capture(jsonl, "LaH10", "lah10-c1")
+    fails = fails + _ck("(A) valid record, 4 stages", rec.valid && len(rec.stages) == 4)
+    fails = fails + _ck("(A) scf wall=300", _stg(rec, "scf").wall_s == 300)
+    fails = fails + _ck("(A) dfpt:q1 wall=200", _stg(rec, "dfpt:q1").wall_s == 200)
+    fails = fails + _ck("(A) dfpt:q2 wall=180", _stg(rec, "dfpt:q2").wall_s == 180)
+    fails = fails + _ck("(A) lambda wall=10", _stg(rec, "lambda").wall_s == 10)
+    fails = fails + _ck("(A) n_q derived: dfpt:q1=2 dfpt:q2=2 (qN siblings)",
+        _stg(rec, "dfpt:q1").n_q == 2 && _stg(rec, "dfpt:q2").n_q == 2)
+    fails = fails + _ck("(A) n_q=0 for non-per-q scf/lambda",
+        _stg(rec, "scf").n_q == 0 && _stg(rec, "lambda").n_q == 0)
+    fails = fails + _ck("(A) total_wall_s=690 (Σ stages)", rec.total_wall_s == 690)
+    fails = fails + _ck("(A) deck/candidate carried", rec.deck == "LaH10" && rec.candidate == "lah10-c1")
+
+    // ── (B) serialize → re-parse round-trip stable ──────────────────────────
+    let line = qforge_process_ledger_serialize(rec)
+    let m = json_parse(line)
+    fails = fails + _ck("(B) serialized line parses to a map", type_of(m) == "map")
+    fails = fails + _ck("(B) round-trip deck stable", to_string(m["deck"]) == "LaH10")
+    fails = fails + _ck("(B) round-trip total_wall_s stable", m["total_wall_s"] == 690)
+    fails = fails + _ck("(B) round-trip stages count stable", len(m["stages"]) == 4)
+    // walk the re-parsed stages: scf wall must survive
+    let st = m["stages"]
+    let mut scf_ok = false
+    let mut bi = 0
+    while bi < len(st) {
+        let s = st[bi]
+        if to_string(s["stage"]) == "scf" && s["wall_s"] == 300 { scf_ok = true }
+        bi = bi + 1
+    }
+    fails = fails + _ck("(B) round-trip scf wall=300 survives", scf_ok)
+
+    // ── (C) cpu_s/RAM null/-1 passthrough — NO fabrication (d6) ─────────────
+    fails = fails + _ck("(C) scf cpu_s=-1 (not measured, never 0)", _stg(rec, "scf").cpu_s == -1)
+    fails = fails + _ck("(C) scf peak_ram_mib=-1 has_ram=false (rss_kb=null)",
+        _stg(rec, "scf").peak_ram_mib == -1 && _stg(rec, "scf").has_ram == false)
+    fails = fails + _ck("(C) serialize renders literal null for RAM (no fake 0)",
+        line.contains("\"peak_ram_mib\":null") && line.contains("\"cpu_s\":-1"))
+    // a MEASURED rss DOES flow through (forward-compat): rss_kb=2097152 → 2048 MiB
+    let jram = "{\"ts\":1,\"stage\":\"scf\",\"event\":\"done\",\"wall_s\":5,\"rss_kb\":2097152,\"exit\":0}\n"
+    let recram = qforge_process_ledger_capture(jram, "X", "x1")
+    fails = fails + _ck("(C) measured rss 2097152kB → 2048 MiB, has_ram=true",
+        _stg(recram, "scf").has_ram && _stg(recram, "scf").peak_ram_mib == 2048)
+
+    // ── (D) append/merge no-omission + supersede ────────────────────────────
+    let recA = qforge_process_ledger_capture(
+        "{\"ts\":1,\"stage\":\"scf\",\"event\":\"done\",\"wall_s\":100,\"rss_kb\":null,\"exit\":0}\n",
+        "DeckA", "a1")
+    let recB = qforge_process_ledger_capture(
+        "{\"ts\":1,\"stage\":\"scf\",\"event\":\"done\",\"wall_s\":222,\"rss_kb\":null,\"exit\":0}\n",
+        "DeckB", "b1")
+    let lab0 = qforge_process_ledger_merge("", recA)          // empty ledger → just A
+    fails = fails + _ck("(D) empty ledger + A → one line", lab0.split("\n").length() == 1 && lab0.contains("DeckA"))
+    let lab1 = qforge_process_ledger_merge(lab0, recB)        // append B, preserve A
+    fails = fails + _ck("(D) append B preserves A (no-omission)",
+        lab1.contains("DeckA") && lab1.contains("DeckB") && lab1.split("\n").length() == 2)
+    // re-capture A with a NEW wall → supersede A's line, preserve B
+    let recA2 = qforge_process_ledger_capture(
+        "{\"ts\":1,\"stage\":\"scf\",\"event\":\"done\",\"wall_s\":999,\"rss_kb\":null,\"exit\":0}\n",
+        "DeckA", "a1")
+    let lab2 = qforge_process_ledger_merge(lab1, recA2)
+    fails = fails + _ck("(D) re-capture A supersedes (still 2 lines, B preserved)",
+        lab2.split("\n").length() == 2 && lab2.contains("DeckB"))
+    fails = fails + _ck("(D) superseded A carries NEW wall 999, not old 100",
+        lab2.contains("\"wall_s\":999") && lab2.contains("\"deck\":\"DeckA\"") && lab2.contains("100") == false)
+
+    // ── (E) guard malformed/empty → empty record, no crash ──────────────────
+    let recE = qforge_process_ledger_capture("not json\nmore noise\n", "Bad", "bad1")
+    fails = fails + _ck("(E) malformed → valid=false, 0 stages, 0 wall",
+        recE.valid == false && len(recE.stages) == 0 && recE.total_wall_s == 0)
+    let recEmpty = qforge_process_ledger_capture("", "Empty", "e1")
+    fails = fails + _ck("(E) empty telemetry → valid=false, 0 stages",
+        recEmpty.valid == false && len(recEmpty.stages) == 0)
+    // merging an empty record is a stable no-data line (auditable, not dropped)
+    let labE = qforge_process_ledger_merge("", recE)
+    fails = fails + _ck("(E) empty record serializes/merges stable (valid:false)",
+        labE.contains("\"valid\":false") && labE.contains("\"stages\":[]"))
+
+    // ── (F) END-TO-END LOOP PROOF: real producer → real parser → capture ────
+    //   Drive the #2702 producer over 3 stages, EMIT its 6-key wire, feed the
+    //   wire through OUR capture (which calls the #2474 parser). Wall is real
+    //   (mono_ns), so we assert STRUCTURE not exact seconds: 3 stages present,
+    //   names match, deck/candidate flow through, total = Σ walls, all ≥ 0.
+    let mut h = qforge_telemetry_open("Li2MgH16", "lmh-c1")
+    h = qforge_telemetry_stage_begin(h, "relax")
+    h = qforge_telemetry_stage_end(h, "relax")
+    h = qforge_telemetry_stage_begin(h, "scf")
+    h = qforge_telemetry_stage_end(h, "scf")
+    h = qforge_telemetry_stage_begin(h, "dfpt:q1")
+    h = qforge_telemetry_stage_end_q(h, "dfpt:q1", 1)
+    let wire = qforge_telemetry_emit(h)             // exact 6-key producer wire
+    let recF = qforge_process_ledger_capture(wire, "Li2MgH16", "lmh-c1")
+    fails = fails + _ck("(F) producer wire → capture: valid, 3 stages", recF.valid && len(recF.stages) == 3)
+    fails = fails + _ck("(F) stage labels survive emit→parse→capture",
+        _stg(recF, "relax").wall_s >= 0 && _stg(recF, "scf").wall_s >= 0 && _stg(recF, "dfpt:q1").wall_s >= 0)
+    fails = fails + _ck("(F) deck/candidate flow end-to-end",
+        recF.deck == "Li2MgH16" && recF.candidate == "lmh-c1")
+    // total = Σ stage walls (consistency of the captured projection)
+    let sumF = _stg(recF, "relax").wall_s + _stg(recF, "scf").wall_s + _stg(recF, "dfpt:q1").wall_s
+    fails = fails + _ck("(F) total_wall_s = Σ stage walls", recF.total_wall_s == sumF)
+    // dfpt:q1 is a per-q stage → n_q >= 1 (the qN sibling derivation works on
+    // producer-emitted labels too)
+    fails = fails + _ck("(F) producer dfpt:q1 → n_q derived >=1", _stg(recF, "dfpt:q1").n_q >= 1)
+    // d6 end-to-end: producer emits rss_kb=null → captured RAM stays null
+    let lineF = qforge_process_ledger_serialize(recF)
+    fails = fails + _ck("(F) producer rss=null → captured RAM null end-to-end",
+        lineF.contains("\"peak_ram_mib\":null") && lineF.contains("\"cpu_s\":-1"))
+
+    if fails == 0 { println("qforge_process_ledger_selftest PASS") }
+    else { println("qforge_process_ledger_selftest FAIL — " + to_string(fails) + " case(s)") }
+}
