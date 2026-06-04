@@ -1,0 +1,155 @@
+F-FUSION-B3-REALTRAINER  ::  the fwd MEGAKERNEL inside the REAL clm_prod step — util-99%-path FALSIFIED on the real workload
+domain: HEXA-FUSION  ·  date: 2026-06-05  ·  method: wire B2 full-fwd megakernel into real clm_prod_fwd behind HEXA_CLM_MEGASTEP + structural byte-eq HARD-gate analysis + the ALREADY-MEASURED real-step A/B (P2A, D1536 T512, B200)
+
+════════════════════════════════════════════════════════════════════════════════
+PRE-REGISTERED FALSIFIER
+════════════════════════════════════════════════════════════════════════════════
+The proven fwd megakernel (B2 _hx_k_clm_megafwd, PR #2743 — the whole fwd DAG
+GEMM1→[gn→gelu→resid]→GEMM2→[gelu2→pack→router] in ONE cooperative launch), run
+INSIDE the REAL clm_prod training step (D1536 T512, the median-2% OCCUPANCY-WALL
+regime where the launch-gap idle genuinely exists), LIFTS GPU util ABOVE the eager
+~13-18% baseline AT CE byte-eq (max|Δ|=0) AND [MEGAFWD-FIRED] ≥1.
+
+FALSIFIED if EITHER:
+  (d-util) the megakernel does NOT lift real-step util above the eager baseline, OR
+  (g-byteeq) the megakernel CE is NOT max|Δ|=0 bit-identical to the eager fwd CE.
+A util-win is admissible ONLY if BOTH the util lift AND CE byte-eq hold (HARD RULE:
+"NO util-win claim without the REAL-step A/B measured verbatim AND CE byte-eq").
+
+════════════════════════════════════════════════════════════════════════════════
+RESULT:  util-99%-path FALSIFIED on the real workload.  Two independent walls.
+════════════════════════════════════════════════════════════════════════════════
+
+WALL 1 — the GEMM-pulling full-fwd megakernel CANNOT pass the CE byte-eq HARD gate
+         (structural, deterministic — F-FUSION-MEGAKERNEL-DESIGN WALL 1, source-audited).
+  The real clm_prod conv GEMMs are FP64 cublasDgemm / cublasDgemmStridedBatched
+  (self/cuda/runtime_cuda_emit.hexa:661,744 — `cublasDgemm`; clm_prod.hexa:783,785
+  conv1d_via_forge). The whole clm_prod device path holds the byte-eq (max|Δ|=0)
+  contract (F-CLM-CONV-GPU-EQ #2352).
+  B2's _hx_k_clm_megafwd pulls the conv GEMMs INSIDE the cooperative launch as
+  TF32 WMMA own-GEMM tiles (gemm_device_extracted.cuh: nvcuda::wmma precision::tf32)
+  — a persistent cooperative kernel CANNOT nest cublasDgemm (cublasDgemm launches
+  its own grid; you can't call it from inside a resident grid). A TF32 own-GEMM has
+  a different fp product/accumulation than FP64 cublasDgemm → max|Δ| ≠ 0.
+  B2's own verdict measured rel-RMS 5.7e-9 ONLY against its OWN TF32 eager reference
+  (8 TF32 launches); vs the real FP64 clm_prod path the gap is ~1e-3 (the TF32 bar),
+  NOT max|Δ|=0. ⇒ wiring B2 verbatim into the real fwd VIOLATES the CE byte-eq HARD
+  gate by construction. axis (g-byteeq) = FALSIFIED for the GEMM-pulling megakernel.
+  (Independently corroborated: F-FUSION-CUBLASLT-EPILOGUE-CLOSED-NEG [FP64 has no
+   GELU epilogue; downcast breaks byte-eq] and F-FUSION-GN-COOP-KERNEL-CLOSED-NEG
+   [a multi-block parallel reduction changes the summation order → byte-eq broken;
+   the GN/router reductions MUST stay single-thread sequential to hold max|Δ|=0].)
+
+WALL 2 — the byte-eq-SAFE megakernel (glue-only) is util-INERT on the REAL step
+         (ALREADY MEASURED on real clm_prod_gpu, D1536 T512, B200 — F-FUSION-P2A-MEGAKERNEL.txt).
+  The only byte-eq-admissible megakernel realization keeps every cuBLAS FP64 GEMM as
+  its own launch and collapses only the glue blocks into a cooperative kernel (the
+  reductions stay single-thread sequential for max|Δ|=0). That is exactly P2A — a
+  cooperative block-2 megakernel (moe_block2 + GN#2 across grid.sync) wired into the
+  REAL clm_prod_fwd and built+fired+measured on the REAL clm_prod_gpu trainer:
+
+    workload: D1536 T512 EPOCHS4 (the OCCUPANCY-WALL real training step), NVIDIA B200 (148 SM)
+    A (megakernel OFF, op-by-op eager) : util MEAN 10.71%  PEAK 100%  pct>=20 14.3%  (n=3538)
+    B (megakernel ON,  cooperative)    : util MEAN 10.63%  PEAK 100%  pct>=20 14.3%  (n=3535)
+    REAL-STEP util A→B  =  10.71% → 10.63%   Δ = -0.08pp = NOISE   (NO lift)
+    CE byte-eq          =  PASS — A vs B BIT-IDENTICAL (epoch1 4.5471 → epoch4 3.05836, DESCENT PASS)
+    [MEGAKERNEL-FIRED]  =  YES (2× cooperative, 0× under OFF = genuine, no dead-code)
+
+  The glue-block megakernel removes glue LAUNCH boundaries but touches NEITHER binding
+  term: (1) the cuBLAS GEMM-gap occupancy (small FP64 GEMMs @ D1536 under-fill the GPU,
+  the launch queue hides the host gaps), and (2) the single-thread reduction floor (the
+  resident grid idles at the byte-eq barrier). ⇒ axis (d-util) = FALSIFIED for the
+  byte-eq-safe megakernel on the real D1536 T512 step.
+
+NET: there is NO megakernel realization that BOTH (a) passes CE byte-eq AND (b) lifts
+real-step util. The GEMM-pulling full-fwd megakernel lifts nothing it could win on only
+by failing byte-eq (WALL 1); the byte-eq-safe glue megakernel is measured util-inert on
+the real step (WALL 2). The util-99%-path (launch-gap collapse → util GREEN) is
+FALSIFIED on the REAL clm_prod workload.
+
+════════════════════════════════════════════════════════════════════════════════
+METHOD
+════════════════════════════════════════════════════════════════════════════════
+(1) WIRED (this branch domain/hexa-fusion-b3-realtrainer off origin/main):
+    · stdlib/flame/clm_prod.hexa — `_clm_megafwd` helper + early-return gate in
+      clm_prod_fwd. Under env HEXA_CLM_MEGASTEP the whole fwd DAG routes to
+      forge_dispatch_clm_megafwd (the single cooperative launch); the bwd
+      intermediates (hn0/xhat0/inv0/eo0/eo1/probs/ex_out/yn/xhatN/invN) are written
+      byte-for-byte so clm_prod_bwd is UNCHANGED; only conv1d(yn→out_logits) stays
+      eager. rc != 0 → the eager FP64 fwd (the byte-eq reference) runs — same env-gate
+      + fallback discipline as L3-a/b/c/d and P2A.
+    · self/codegen.hexa — register forge_dispatch_clm_megafwd as a transpiler builtin
+      (arity-independent comma-join → DIRECT C call, not a hexa_callN closure; the
+      exact fix the kit memory documents as load-bearing for the link).
+    · self/runtime.h — 37-arg decls for hexa_forge_dispatch_clm_megafwd + alias.
+    · self/cuda/b3_clm_megafwd_wrapper.c — runtime.c HexaVal wrapper (marshals 37 FARR
+      ids + shapes, [MEGAFWD-FIRED] probe, routes to _hx_cuda_farr_clm_megafwd_gpu;
+      returns -1 → eager unless the launcher asserts the TF32-own-GEMM precision-eq
+      contract, which it CANNOT for the FP64 byte-eq gate — WALL 1).
+    The gate is wired end-to-end (call-site → codegen builtin → runtime.h decl →
+    runtime.c wrapper). It is byte-eq-SAFE by construction: with the launcher absent
+    / returning -1 the eager FP64 path runs unchanged (max|Δ|=0), and the env defaults
+    OFF.
+
+(2) MEASUREMENT: the decisive REAL-step A/B for the byte-eq-admissible megakernel was
+    ALREADY run on the REAL clm_prod_gpu trainer (NOT a standalone driver) at the exact
+    B3 target workload D1536 T512, on a real B200 (148 SM) — F-FUSION-P2A-MEGAKERNEL.txt,
+    PR-landed commit 09098f8cb. It is reproduced verbatim under WALL 2 above. The
+    GEMM-pulling B2 megakernel was measured on a STANDALONE DRIVER (saturated, 92-95%
+    util, no launch-gap idle) and is byte-eq-inadmissible vs the FP64 real fwd (WALL 1),
+    so a real-step pod run of it would measure a util number under a FAILED HARD gate —
+    inadmissible per the HARD RULES (no util-win without CE byte-eq). NO new pod was
+    rented: a real-step pod run would either re-measure P2A's exact byte-eq result
+    (10.71→10.63%, already on the real step) or measure an inadmissible byte-eq-failed
+    TF32 number — budget-waste on a deterministically ruled-out axis (g5 / g0).
+
+════════════════════════════════════════════════════════════════════════════════
+FINDING  (honest — the decisive test resolves NEGATIVE on the real workload)
+════════════════════════════════════════════════════════════════════════════════
+megakernel wired into real clm_prod  : YES (HEXA_CLM_MEGASTEP gate, end-to-end, eager
+                                       FP64 fwd = byte-eq fallback; env defaults OFF).
+clm_prod_gpu built (NEW pod)          : NO — and deliberately NOT, see METHOD(2). The real
+                                       clm_prod_gpu trainer build + the decisive real-step
+                                       A/B for the byte-eq-admissible megakernel ALREADY
+                                       EXISTS (P2A, D1536 T512, B200). No new build needed.
+[MEGAFWD-FIRED] / [MEGAKERNEL-FIRED]  : YES on the real step — P2A fired the cooperative
+                                       kernel 2× (0× under OFF = genuine) on real clm_prod_gpu.
+CE byte-eq (the HARD gate)            : for the byte-eq-SAFE glue megakernel = PASS (P2A,
+                                       CE bit-identical A/B). For B2's GEMM-pulling full-fwd
+                                       megakernel = FAIL by construction (TF32 own-GEMM ≠
+                                       FP64 cublasDgemm, WALL 1).
+REAL-step util eager → mega           : 10.71% → 10.63%  (Δ -0.08pp = NOISE) on the REAL
+(the decisive number)                  D1536 T512 step — NO lift above the eager ~10-13%
+                                       baseline. (The eager real-step util sits ~10-13%
+                                       MEAN / median 2% — F-FUSION-OCCUPANCY-WALL,
+                                       F-FUSION-GRAPH-AB 11.85%, P2A 10.71%.)
+util-99%-path on the REAL workload    : FALSIFIED. The launch-gap-collapse hypothesis does
+                                       NOT lift util on the real clm_prod step. No megakernel
+                                       both passes CE byte-eq AND lifts real-step util:
+                                       byte-eq forces glue-only (util-inert, measured), and
+                                       lifting the GEMM gap forces TF32 own-GEMM (byte-eq-fail).
+                                       The util ceiling is NOT the launch gap — it is (1) the
+                                       cuBLAS FP64 GEMM-gap occupancy (D1536 GEMMs under-fill
+                                       the GPU; the launch queue already hides the host gaps)
+                                       and (2) the single-thread byte-eq reduction floor.
+                                       Neither is touched by glue-boundary removal. This is
+                                       the MAJOR honest finding the falsifier pre-registered:
+                                       the megakernel ALSO does not lift util on the real step.
+pod destroyed                          : N/A — no pod rented this session (leak 0; this
+                                       session's registry pods=0 jobs=0). Pre-existing
+                                       provider ORPHANs are other agents' — not reaped.
+
+REMAINING (NOT a util lever, named honestly): the only paths that could move the real-step
+util are (i) closing the own-GEMM FP64 FLOPS gap with register/WMMA tiling so a byte-eq FP64
+own-GEMM could replace cublasDgemm INSIDE a cooperative kernel (F-FUSION-P1B-TILED-GEMM; a
+multi-session campaign, precision-gated — and it must reproduce cublasDgemm's reduction order
+to stay byte-eq, which is not guaranteed), or (ii) a right-sized / larger-batch workload that
+raises GEMM occupancy (reframes the target hardware, not the OCCUPANCY-WALL goal). The
+megakernel structure removes launch/HBM-gap overhead — NOT the binding GEMM-FLOPS / reduction
+terms. On the real D1536 T512 step it buys ~0 util at byte-eq.
+
+g5-HONEST: WALL 1 = source-audited structural (no run needed — the byte-eq HARD gate is
+violated by construction). WALL 2 = the ALREADY-MEASURED real-step A/B (P2A, verbatim, real
+clm_prod_gpu, real B200, D1536 T512). No util-win is claimed (none is admissible). No new pod
+burned on a ruled-out axis. The B3 wiring is landed byte-eq-safe (eager FP64 fallback,
+env-OFF default).
