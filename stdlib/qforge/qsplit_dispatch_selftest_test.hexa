@@ -184,9 +184,9 @@ fn main() {
                                       _P_NEF, og, _P_SIGEL, _P_SIGPH)
     println("[fail-closed] pod-backend ok=" + to_string(rpod.ok) +
             " err=\"" + rpod.err + "\"  λ_union=" + to_string(rpod.lambda_union))
-    fails = fails + _assert("🔵 FAIL-CLOSED: a failed shard → ok==0 (union refuses)",
+    fails = fails + _assert("🔵 fail-closed: a failed shard → ok==0 (union refuses)",
                             rpod.ok == 0, "(err=" + rpod.err + ")")
-    fails = fails + _assert("🔵 FAIL-CLOSED: failed shard → λ refused (−1.0, never partial-summed)",
+    fails = fails + _assert("🔵 fail-closed: failed shard → λ refused (−1.0, never partial-summed)",
                             rpod.lambda_union < 0.0, "(λ=" + to_string(rpod.lambda_union) + ")")
     // the backend label is HONEST (never claims local when pod was requested)
     fails = fails + _assert("🔵 backend label honest: pod request labeled \"pod\"",
