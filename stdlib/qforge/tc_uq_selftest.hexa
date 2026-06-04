@@ -1,0 +1,173 @@
+// @ci_gate — deterministic Tc uncertainty-quantification closure asserts
+//
+// qforge_tc_uq_selftest.hexa — QFORGE Tc-UQ g5 gate.
+//
+// Closes the QFORGE-FEATURE NOVEL frontier milestone "Tc uncertainty
+// quantification (error bars from convergence)". A bare Tc hides its
+// convergence + μ* risk; this gate pins that qforge_tc_uq (stdlib/qforge/tc_uq)
+// turns a (mesh_density → λ, ω_log) series + a μ*-range into an HONEST Tc ± σ.
+//
+// The gate pins (the milestone's five named checks):
+//
+//   (a) σ SHRINKS MONOTONICALLY WITH MESH DENSITY — the milestone gate. Build a
+//       family of series, each a prefix of the same convergent sequence, so
+//       that adding a denser mesh point can only TIGHTEN the extrapolation
+//       residual. σ(coarse 2-pt) > σ(3-pt) > σ(4-pt) > σ(fully-converged).
+//   (b) WIDENING μ*-RANGE WIDENS σ — at a fixed converged series, a wider
+//       [μ_min, μ_max] band gives a strictly larger tc_sigma (and a larger
+//       sigma_mu specifically).
+//   (c) tc_mean IS THE EXTRAPOLATED LIMIT, NOT THE COARSEST POINT — on a series
+//       that drifts with mesh, tc_mean equals the Tc at the extrapolated
+//       (λ_∞, ω_log_∞) and is CLOSER to the fine-mesh truth than the Tc of the
+//       coarsest raw point.
+//   (d) dominant_source CORRECTLY FLAGS mesh vs μ* — a coarse/scattered series
+//       with a tiny μ*-band → "mesh"; a tightly-converged series with a wide
+//       μ*-band → "mu_star".
+//   (e) σ NEVER FABRICATED TO 0 ON AN UNCONVERGED SERIES (d6) — a scattered /
+//       non-shrinking series yields a STRICTLY POSITIVE, LARGE sigma_mesh; the
+//       honesty floor.
+//
+// @L5/d6 HONEST: every series here is a CONSTRUCTED witness, not a physical
+// material. The gate pins MACHINERY (monotone σ↓mesh · σ↑μ-width · extrapolated
+// mean · dominant-source · honesty floor), not any physical Tc claim. Nothing
+// is tuned toward a QE reference; no migration gate is flipped.
+//
+// Run:  hexa run stdlib/qforge/tc_uq_selftest.hexa
+// PASS: exits printing "qforge_tc_uq_selftest PASS".
+use "stdlib/qforge/tc_uq"
+use "stdlib/material/sim"   // allen_dynes_tc — the coarsest/fine raw-point refs
+
+fn _abs(x: float) -> float { if x < 0.0 { return -x } return x }
+
+fn _ck_true(name: str, cond: bool) -> int {
+    if cond { println("PASS " + name) ; return 0 }
+    println("FAIL " + name)
+    return 1
+}
+fn _ck_lt(name: str, a: float, b: float) -> int {
+    if a < b { println("PASS " + name + " (" + to_string(a) + " < " + to_string(b) + ")") ; return 0 }
+    println("FAIL " + name + " — expected " + to_string(a) + " < " + to_string(b))
+    return 1
+}
+fn _ck_seq(name: str, got: str, want: str) -> int {
+    if got == want { println("PASS " + name + " (" + got + ")") ; return 0 }
+    println("FAIL " + name + " — got " + got + " want " + want)
+    return 1
+}
+
+fn main() {
+    let mut fails = 0
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // (a) σ SHRINKS MONOTONICALLY WITH MESH DENSITY  — the milestone gate
+    // ═══════════════════════════════════════════════════════════════════════
+    // A genuinely convergent λ-series: λ(mesh) = λ_∞ + A·(1/mesh)^2, geometric
+    // mesh refinement 4 → 8 → 16 → 32. λ_∞ = 1.00, A = 12.0 (so the coarse
+    // points are clearly OFF and the fine points clamp onto the limit). ω_log
+    // likewise converges. Each successive series is a PREFIX-PLUS-ONE: adding
+    // the denser point can only shrink the finest-point residual → σ↓.
+    let mesh4: [float] = [4.0, 8.0, 16.0, 32.0]
+    // λ(4)=1+12/16=1.75 ; λ(8)=1+12/64=1.1875 ; λ(16)=1+12/256=1.046875 ; λ(32)=1+12/1024=1.011719
+    let lam4: [float]  = [1.75, 1.1875, 1.046875, 1.01171875]
+    // ω_log(mesh)=400 + 600/mesh² : 437.5, 409.375, 402.34375, 400.5859375
+    let w4: [float]    = [437.5, 409.375, 402.34375, 400.5859375]
+
+    // prefixes of the SAME sequence (coarser truncations).
+    let r2 = qforge_tc_uq([4.0, 8.0],            [1.75, 1.1875],                   [437.5, 409.375],                       0.10, 0.13)
+    let r3 = qforge_tc_uq([4.0, 8.0, 16.0],      [1.75, 1.1875, 1.046875],         [437.5, 409.375, 402.34375],            0.10, 0.13)
+    let r4 = qforge_tc_uq(mesh4,                 lam4,                             w4,                                     0.10, 0.13)
+
+    fails = fails + _ck_true("a.ok_2pt", r2.ok == 1)
+    fails = fails + _ck_true("a.ok_3pt", r3.ok == 1)
+    fails = fails + _ck_true("a.ok_4pt", r4.ok == 1)
+    // the MESH component must shrink monotonically as the series gets finer.
+    fails = fails + _ck_lt("a.sigma_mesh_3pt < 2pt", r3.sigma_mesh, r2.sigma_mesh)
+    fails = fails + _ck_lt("a.sigma_mesh_4pt < 3pt", r4.sigma_mesh, r3.sigma_mesh)
+    // and so must the TOTAL σ (μ* band held identical across the three).
+    fails = fails + _ck_lt("a.sigma_total_3pt < 2pt", r3.tc_sigma, r2.tc_sigma)
+    fails = fails + _ck_lt("a.sigma_total_4pt < 3pt", r4.tc_sigma, r3.tc_sigma)
+    // the finest residual must itself collapse toward 0 (extrapolation working).
+    fails = fails + _ck_lt("a.lambda_resid_4pt < 3pt", r4.lambda_resid, r3.lambda_resid)
+    fails = fails + _ck_true("a.lambda_inf_near_truth (|λ_∞−1.0|<0.05, =" + to_string(r4.lambda_inf) + ")",
+                             _abs(r4.lambda_inf - 1.0) < 0.05)
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // (b) WIDENING μ*-RANGE WIDENS σ
+    // ═══════════════════════════════════════════════════════════════════════
+    // fixed converged 4-pt series; narrow vs wide μ* band.
+    let rNarrow = qforge_tc_uq(mesh4, lam4, w4, 0.110, 0.120)   // width 0.010
+    let rWide   = qforge_tc_uq(mesh4, lam4, w4, 0.080, 0.150)   // width 0.070
+    fails = fails + _ck_lt("b.sigma_mu_narrow < wide", rNarrow.sigma_mu, rWide.sigma_mu)
+    fails = fails + _ck_lt("b.sigma_total_narrow < wide", rNarrow.tc_sigma, rWide.tc_sigma)
+    // a ZERO-width band → sigma_mu == 0 exactly (the only honest μ* zero), but
+    // the total σ still carries the mesh contribution (> 0).
+    let rZeroMu = qforge_tc_uq(mesh4, lam4, w4, 0.12, 0.12)
+    fails = fails + _ck_true("b.sigma_mu_zero_on_zero_band (=" + to_string(rZeroMu.sigma_mu) + ")",
+                             rZeroMu.sigma_mu < 1.0e-12)
+    fails = fails + _ck_true("b.total_sigma_still_positive_via_mesh (=" + to_string(rZeroMu.tc_sigma) + ")",
+                             rZeroMu.tc_sigma > 0.0)
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // (c) tc_mean IS THE EXTRAPOLATED LIMIT, NOT THE COARSEST POINT
+    // ═══════════════════════════════════════════════════════════════════════
+    // On the drifting 4-pt series, compare tc_mean against the Tc of the
+    // COARSEST raw point and against the Tc at the TRUE limit (λ=1.0, ω=400).
+    let mu_mid = 0.115
+    let tc_coarsest = allen_dynes_tc(437.5, 1.75, mu_mid, 437.5)        // raw mesh=4 point
+    let tc_truth    = allen_dynes_tc(400.0, 1.00, mu_mid, 400.0)        // λ_∞=1, ω_∞=400
+    // tc_mean must be FAR from the coarsest and CLOSE to the truth.
+    fails = fails + _ck_lt("c.mean_closer_to_truth_than_coarsest",
+                           _abs(r4.tc_mean - tc_truth), _abs(r4.tc_mean - tc_coarsest))
+    fails = fails + _ck_true("c.mean_near_truth (|Tc_mean−Tc_truth|<2K, mean=" + to_string(r4.tc_mean) +
+                             " truth=" + to_string(tc_truth) + ")",
+                             _abs(r4.tc_mean - tc_truth) < 2.0)
+    fails = fails + _ck_true("c.mean_NOT_coarsest (|Tc_mean−Tc_coarsest|>5K)",
+                             _abs(r4.tc_mean - tc_coarsest) > 5.0)
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // (d) dominant_source CORRECTLY FLAGS mesh vs μ*
+    // ═══════════════════════════════════════════════════════════════════════
+    // mesh-dominated: a COARSE 2-pt series (big extrapolation residual) with a
+    // TINY μ*-band → "mesh".
+    let rMeshDom = qforge_tc_uq([4.0, 8.0], [1.75, 1.1875], [437.5, 409.375], 0.114, 0.116)
+    fails = fails + _ck_seq("d.coarse_series_tiny_muband → mesh", rMeshDom.dominant_source, "mesh")
+    // μ*-dominated: the tightly-CONVERGED 4-pt series with a WIDE μ*-band → mu_star.
+    let rMuDom = qforge_tc_uq(mesh4, lam4, w4, 0.080, 0.160)
+    fails = fails + _ck_seq("d.converged_series_wide_muband → mu_star", rMuDom.dominant_source, "mu_star")
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // (e) σ NEVER FABRICATED TO 0 ON AN UNCONVERGED SERIES  (d6)
+    // ═══════════════════════════════════════════════════════════════════════
+    // A SCATTERED / NON-SHRINKING λ-series: increments do NOT decay (1.4→1.9→
+    // 1.5→2.0 as mesh densifies). The extrapolator must DECLINE to claim a tight
+    // limit and report a LARGE residual → a large, strictly-positive sigma_mesh.
+    let rScatter = qforge_tc_uq([4.0, 8.0, 16.0, 32.0],
+                                [1.40, 1.90, 1.50, 2.00],
+                                [400.0, 420.0, 405.0, 425.0],
+                                0.115, 0.115)   // ZERO μ* band → isolate mesh honesty
+    fails = fails + _ck_true("e.ok_scatter", rScatter.ok == 1)
+    fails = fails + _ck_true("e.sigma_mesh_NOT_zero_on_scatter (>1K, =" + to_string(rScatter.sigma_mesh) + ")",
+                             rScatter.sigma_mesh > 1.0)
+    fails = fails + _ck_true("e.lambda_resid_NOT_zero_on_scatter (>0.1, =" + to_string(rScatter.lambda_resid) + ")",
+                             rScatter.lambda_resid > 0.1)
+    // even with a zero μ*-band the total σ is honest (carried entirely by mesh).
+    fails = fails + _ck_true("e.total_sigma_honest_positive (=" + to_string(rScatter.tc_sigma) + ")",
+                             rScatter.tc_sigma > 1.0)
+    // and the scattered series' σ DWARFS the converged series' σ (no fabrication).
+    fails = fails + _ck_lt("e.converged_sigma_mesh << scatter_sigma_mesh", r4.sigma_mesh, rScatter.sigma_mesh)
+
+    // ── sentinel hygiene (loud, never a silent wrong σ) ──────────────────────
+    let rShort = qforge_tc_uq([4.0], [1.2], [400.0], 0.10, 0.13)
+    fails = fails + _ck_true("z.one_point_sentinel", rShort.ok == 0)
+    let rRagged = qforge_tc_uq([4.0, 8.0], [1.2], [400.0, 410.0], 0.10, 0.13)
+    fails = fails + _ck_true("z.ragged_sentinel", rRagged.ok == 0)
+    let rInvMu = qforge_tc_uq(mesh4, lam4, w4, 0.13, 0.10)
+    fails = fails + _ck_true("z.inverted_muband_sentinel", rInvMu.ok == 0)
+
+    // ═══════════════════════════════════════════════════════════════════════
+    if fails == 0 {
+        println("qforge_tc_uq_selftest PASS")
+    } else {
+        println("qforge_tc_uq_selftest FAIL — " + to_string(fails) + " check(s) failed")
+    }
+}
