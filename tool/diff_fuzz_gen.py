@@ -32,6 +32,7 @@
 # masked) process exit code between gen2 and the oracle. Exit-code mask
 # is identical on both sides, so it is a sound differential signal.
 
+import os
 import sys
 
 class Rng:
@@ -52,15 +53,25 @@ class Gen:
         self.lines = []
         self.head = []    # top-level decls (struct types) emitted before fns
         self.var_ctr = 0
+        self.svar_ctr = 0
         self.fn_ctr = 0
         self.struct_ctr = 0
         self.funcs = []   # (name, arity)
         self.structs = [] # (TypeName, [field_names]) — all i64 fields
         self.depth = 0
+        # opt-in string lane (env DIFF_FUZZ_STR=1), INDEPENDENT of the
+        # float lane. With it OFF the generated source is byte-identical
+        # to the pre-string baseline (no extra rng draws, no wider kind
+        # range), so the existing CLEAN seed sweep reproduces exactly.
+        self.str_on = os.environ.get("DIFF_FUZZ_STR", "") == "1"
 
     def fresh_var(self):
         self.var_ctr += 1
         return "v%d" % self.var_ctr
+
+    def fresh_svar(self):
+        self.svar_ctr += 1
+        return "s%d" % self.svar_ctr
 
     # ---- float expression (pure f64; no var capture — keeps it sound) ----
     def gen_fexpr(self, budget):
@@ -71,6 +82,16 @@ class Gen:
         b = self.gen_fexpr(budget - 1)
         op = self.rng.pick(["+", "-", "*"])
         return "(%s %s %s)" % (a, op, b)
+
+    # ---- string expression (pure str; never mixes str and int operands —
+    #      hexa has no auto-promotion, so a mixed `+` would be invalid) ----
+    SWORDS = ["hex", "ab", "go", "ok", "fn", "let", "x", "yz", "lang", "i64"]
+    def gen_sexpr(self, budget):
+        if budget <= 0 or self.rng.rint(0, 2) == 0:
+            return "\"%s\"" % self.rng.pick(self.SWORDS)
+        a = self.gen_sexpr(budget - 1)
+        b = self.gen_sexpr(budget - 1)
+        return "(%s + %s)" % (a, b)   # string concat
 
     # ---- expression generation (pure i64; closes over in-scope vars) ----
     def gen_expr(self, scope, budget):
@@ -111,7 +132,33 @@ class Gen:
     def gen_body(self, scope, n_stmts):
         scope = list(scope)
         for _ in range(n_stmts):
-            kind = self.rng.rint(0, 8)
+            # string lane (kind 9) only widens the dispatch range when the
+            # env flag is set; otherwise rint(0, 8) draws exactly as before
+            # (same rng call, byte-identical baseline).
+            kind = self.rng.rint(0, 9 if self.str_on else 8)
+            if kind == 9:
+                # string axis (2-register ptr,len value ABI). Build a string
+                # value, then fold it into the i64 scope two ways that the
+                # exit accumulator can consume:
+                #   * len(s)  -> int  (joins the int scope)
+                #   * s == s  -> 0/1  (string equality lowered through an if)
+                # Strings stay PURE (never mixed with int operands).
+                sv = self.fresh_svar()
+                self.emit("let %s = %s" % (sv, self.gen_sexpr(2)))
+                if self.rng.rint(0, 1) == 0:
+                    lv = self.fresh_var()
+                    self.emit("let %s = len(%s)" % (lv, sv))
+                    scope.append(lv)
+                else:
+                    ev = self.fresh_var()
+                    self.emit("let %s = 0" % ev)
+                    self.emit("if %s == %s {" % (sv, sv))
+                    self.indent_in()
+                    self.emit("%s = 1" % ev)
+                    self.indent_out()
+                    self.emit("}")
+                    scope.append(ev)
+                continue
             if kind == 7:
                 # float axis: compute an f64, compare against an f64 literal,
                 # and fold the boolean outcome into an i64 scope var. exit()

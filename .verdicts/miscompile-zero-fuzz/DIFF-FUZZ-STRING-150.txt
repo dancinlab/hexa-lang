@@ -1,0 +1,94 @@
+MISCOMPILE-ZERO differential fuzz — verdict DIFF-FUZZ-STRING-150
+===============================================================
+
+date            : 2026-06-04
+host            : ghost (macOS arm64, 192.168.50.150)
+clone (isolated): ~/dancinlab/wt-fuzz  @ origin/main + mczero/diff-fuzz-string-lane gen
+harness         : tool/diff_fuzz.sh + tool/diff_fuzz_gen.py (DIFF_FUZZ_STR=1 string lane)
+gen lane sha256 : 4ee46afc5bedc594f86d72edf7289080682d647a0aa4f273244855a404b2ff62
+                  (tool/diff_fuzz_gen.py with the string lane — byte-identical
+                   on ghost; base64 transfer verified)
+gen2 (native)   : ~/dancinlab/selfhost-work/gen2_fix   (graduated self-host compiler)
+                  sha256 dce5c1e29541dfdf403809a9b77e677066fefbd31ca102e5dc9904e1968f1e66
+oracle (C/clang): ~/dancinlab/selfhost-work/aprime_fixhex
+                  sha256 c56c641389b367f4b5e3b8bf3ee29b59c9d67f341ca5b1fbe3d7b3b60bb2dd4a
+linker / runtime: hld_fixed + rt_new.o ; atlas = noatlas/ (empty, benign)
+target          : arm64-apple-darwin
+
+METHOD
+------
+Identical 3-axis differential harness as DIFF-FUZZ-120, now with the opt-in
+STRING lane enabled (env DIFF_FUZZ_STR=1). Each deterministic-seeded random
+hexa program (seed -> identical .hexa via an LCG, no platform RNG) is checked
+on three axes vs the C oracle:
+
+  axis 1  --emit=asm  : byte-diff modulo the documented benign per-module
+                        label hash __L<sha4>_  (canonicalized to __L_HASH_).
+  axis 2  --emit=obj  : gen2 must emit 0 "ENCODE-MISS", 0 spurious/unresolved
+                        udf, and a non-empty .o.
+  axis 3  behavior    : link both .o with the runtime, compare process exit
+                        codes (8-bit mask applied identically on both sides).
+
+NEW STRING SURFACE (the 2-register ptr,len string-value ABI) — all idioms
+pre-probed compiling+running on the shipped hexa:
+  * string literals (short words: "hex" "ab" "go" "ok" "fn" "let" ...)
+  * `+` string concat:  ("a" + "b")  (pure-string, recursively nested)
+  * len(s) -> i64       (folds into the int scope / exit accumulator)
+  * s == s in an `if`   (string equality -> 0/1 i64)
+All string outcomes fold into the existing i64 exit-code differential.
+Strings stay PURE — never mixed with int operands (hexa has no
+auto-promotion, so a mixed `+` would be an invalid program, not a signal).
+
+This lane probes the historically-fragile native-codegen surface flagged in
+CC-NATIVE: miscompile_class m3 (_ends_with / == cascade) and m4 (two-register
+value ABI). The #2565 widening covered float/struct/closure but NOT strings;
+this verdict extends the CLEAN frontier to the 2-reg string ABI.
+
+The string lane is env-gated and INDEPENDENT of the float lane. With
+DIFF_FUZZ_STR unset the generator output is BYTE-IDENTICAL to the pre-string
+baseline (no extra rng draws, no wider kind range): verified seed 7 sha
+unchanged (9f113f4c1506882b...) and seeds 1..20 byte-identical to HEAD, so the
+existing 1..120 / 1..500 CLEAN baselines reproduce exactly.
+
+RESULT
+------
+seeds fuzzed     : 1 .. 150  (150 programs, DIFF_FUZZ_STR=1)
+seeds exercising
+  the string lane: 97 / 150  (programs actually contain len(s) and/or s == s)
+asm divergences  : 0   (every program: gen2 asm == oracle asm mod label-hash)
+encode-miss      : 0
+spurious udf     : 0
+empty .o         : 0
+exit mismatches  : 0
+link-only-on-one : 0
+distinct exit codes observed : 105 / 150  (programs exercise real, varied
+                                            computation incl. string len/eq —
+                                            not trivial)
+
+int-only sanity (DIFF_FUZZ_STR unset) seeds 1..5 : ALL CLEAN (harness/clone OK)
+
+VERDICT: 🟢 ALL CLEAN — 150 seeded random programs with the string lane
+active, no miscompile found across asm / obj-encode / behavioral exit-code
+axes. The 2-register (ptr,len) string-value ABI (literals, `+` concat,
+len(s), string `==`) is byte-/behavior-identical between the gen2 native
+self-host compiler and the C oracle. m3 (==/ends_with cascade) and m4
+(two-reg value ABI) show NO divergence across this surface.
+
+REPRODUCE
+---------
+  cd ~/dancinlab/wt-fuzz
+  # install the string-lane gen (origin branch mczero/diff-fuzz-string-lane):
+  git fetch origin mczero/diff-fuzz-string-lane
+  git checkout origin/mczero/diff-fuzz-string-lane -- tool/diff_fuzz_gen.py
+  # int-only baseline (must stay byte-identical / CLEAN):
+  bash tool/diff_fuzz.sh 1 120
+  # string lane:
+  DIFF_FUZZ_STR=1 bash tool/diff_fuzz.sh 1 150
+  # single seed source:
+  DIFF_FUZZ_STR=1 python3 tool/diff_fuzz_gen.py <seed>   # prints the exact .hexa
+  DIFF_FUZZ_STR=1 bash tool/diff_fuzz.sh <seed> <seed>
+
+The harness STOPS on the first divergence and prints seed + program + the
+canonicalized asm diff / encode log / exit pair, so any future string-ABI
+miscompile is reported with an immediate minimal repro. Extend coverage by
+widening the seed range (e.g. `DIFF_FUZZ_STR=1 bash tool/diff_fuzz.sh 151 500`).
