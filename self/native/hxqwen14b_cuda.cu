@@ -1188,7 +1188,17 @@ int _hx_own_sgemm_cm_launch(int tA, int tB, int m, int n, int k,
     // micro-column. Same skinny+large-K trigger as scalar split-K; takes
     // priority when both VEC and SPLITK are set (VEC is the vectorized split-K).
     int want_vec = (getenv("HEXA_OWN_GEMM_VEC") && getenv("HEXA_OWN_GEMM_VEC")[0]);
-    if (want_wmma2 && want_vec && skinny_splitk && !noshape) {
+    // MEASURED shape gate (verdict F-FUSION-AVEC-FLOAT4): the float4 path
+    // register-blocks across the output-ROW dim (m) and needs a LARGE contiguous
+    // m extent to fire (row0+3 < M). It WINS on skinny-N/square (dA m=4096:
+    // 1.11x, square: 1.99x over scalar) but REGRESSES on skinny-M (dB m=16:
+    // 0.68x, -90%) where the float4 load can't fire and 4-row blocking starves
+    // the already-tiny m-occupancy. So VEC only fires when m >= the float4-strip
+    // threshold; on skinny-M it falls through to the scalar split-K below.
+    // HEXA_OWN_GEMM_VEC_MINM overrides the threshold for on-pod tuning.
+    int vec_minm = 64;
+    { const char* vm = getenv("HEXA_OWN_GEMM_VEC_MINM"); if (vm && vm[0]) { int v = atoi(vm); if (v >= 1) vec_minm = v; } }
+    if (want_wmma2 && want_vec && skinny_splitk && m >= vec_minm && !noshape) {
         int G = (int)(k / 512); if (G < 1) G = 1; if (G > 32) G = 32;
         const char* ge = getenv("HEXA_OWN_GEMM_SPLITK_G");
         if (ge && ge[0]) { int gv = atoi(ge); if (gv >= 1 && gv <= 64) G = gv; }
