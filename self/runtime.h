@@ -1274,6 +1274,37 @@ HexaVal forge_dispatch_moe_block2(HexaVal eo0_v, HexaVal eo1_v, HexaVal logits_v
                              HexaVal probs_v, HexaVal y_v, HexaVal t_v,
                              HexaVal e_v, HexaVal c_v);                       /* runtime.c — fusion L3-d seam */
 
+/* HEXA-FUSION B3 (REAL-TRAINER full-fwd megakernel) — the B2-proven full clm_prod
+ * fwd DAG (GEMM1 → [gn→gelu→resid] → GEMM2 → [gelu2→pack→router]) in ONE
+ * cudaLaunchCooperativeKernel persistent grid (B2 _hx_k_clm_megafwd, PR #2743).
+ * 37 args (FARR ids + shapes); calls _hx_cuda_farr_clm_megafwd_gpu, which prints
+ * [MEGAFWD-FIRED] once on the device path. ⚠ The megakernel pulls the conv GEMMs
+ * INSIDE the cooperative launch as TF32 own-GEMM tiles (a persistent kernel cannot
+ * nest cublasDgemm — F-FUSION-MEGAKERNEL-DESIGN WALL 1), so it is NOT max|Δ|=0
+ * byte-eq to the eager FP64 cublasDgemm fwd (rel-RMS ~1e-3, the TF32 own-GEMM bar).
+ * Returns -1 (→ eager fallback) unless the launcher asserts the precision-eq
+ * contract; no-CUDA / no-coop → -1 → eager fwd (the byte-eq FP64 reference). */
+HexaVal hexa_forge_dispatch_clm_megafwd(HexaVal xe_v, HexaVal ecWq_v, HexaVal ecB_v,
+                                  HexaVal tcWq_v, HexaVal tcB_v, HexaVal tgG_v, HexaVal tgB_v,
+                                  HexaVal xec_v, HexaVal hn0_v, HexaVal hg0_v, HexaVal xt_v,
+                                  HexaVal mean0_v, HexaVal inv0_v, HexaVal xhat0_v,
+                                  HexaVal rWq_v, HexaVal rB_v, HexaVal logits_r_v,
+                                  HexaVal e0Wq_v, HexaVal e0B_v, HexaVal e1Wq_v, HexaVal e1B_v,
+                                  HexaVal eo0_v, HexaVal eo1_v, HexaVal ex_out_v, HexaVal probs_v, HexaVal y_v,
+                                  HexaVal noG_v, HexaVal noB_v, HexaVal yn_v, HexaVal meanN_v,
+                                  HexaVal invN_v, HexaVal xhatN_v,
+                                  HexaVal t_v, HexaVal d_v, HexaVal e_v, HexaVal k_v); /* runtime.c — fusion B3 */
+HexaVal forge_dispatch_clm_megafwd(HexaVal xe_v, HexaVal ecWq_v, HexaVal ecB_v,
+                                  HexaVal tcWq_v, HexaVal tcB_v, HexaVal tgG_v, HexaVal tgB_v,
+                                  HexaVal xec_v, HexaVal hn0_v, HexaVal hg0_v, HexaVal xt_v,
+                                  HexaVal mean0_v, HexaVal inv0_v, HexaVal xhat0_v,
+                                  HexaVal rWq_v, HexaVal rB_v, HexaVal logits_r_v,
+                                  HexaVal e0Wq_v, HexaVal e0B_v, HexaVal e1Wq_v, HexaVal e1B_v,
+                                  HexaVal eo0_v, HexaVal eo1_v, HexaVal ex_out_v, HexaVal probs_v, HexaVal y_v,
+                                  HexaVal noG_v, HexaVal noB_v, HexaVal yn_v, HexaVal meanN_v,
+                                  HexaVal invN_v, HexaVal xhatN_v,
+                                  HexaVal t_v, HexaVal d_v, HexaVal e_v, HexaVal k_v); /* runtime.c — fusion B3 seam */
+
 /* HEXA-FUSION L3 (glue half · final slice ⑤c) — device-resident embedding gather.
  * forge_dispatch_embedding(ids, table, x_out, T, d) -> int rc (0 ok / -1 host).
  * X_OUT[i·d+c]=TABLE[tok·d+c] where tok=(int)IDS[i] — the token-gather host glue

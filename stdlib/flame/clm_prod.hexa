@@ -760,6 +760,55 @@ fn _embedding_bwd_scatter(dX: int, ids: int, dtable_inout: int, T: int, d: int, 
 }
 
 // Forward with weight-only int4 QAT (verbatim from clm_qat assembly-3b).
+// HEXA-FUSION B3 (REAL-TRAINER full-fwd MEGAKERNEL): wire the B2-proven
+// `_hx_k_clm_megafwd` cooperative full-fwd megakernel (PR #2743, branch
+// domain/hexa-fusion-b2-megafwd) into the REAL clm_prod_fwd path. Under
+// env HEXA_CLM_MEGASTEP the WHOLE fwd DAG — GEMM1 → [groupnorm→gelu→residual]
+// → GEMM2 → [gelu2→expert_pack→moe_router] — runs in ONE cudaLaunchCooperative
+// Kernel persistent grid (intermediates device-resident across grid.sync(), no
+// relaunch gap), instead of the eager per-op kernel sequence below. The host
+// wrapper forge_dispatch_clm_megafwd marshals the FARR ids + shapes and routes
+// to _hx_cuda_farr_clm_megafwd_gpu (the cooperative launcher emitted into
+// runtime_cuda.c). It writes hn0/xhat0/inv0/eo0/eo1/probs/ex_out/yn/xhatN/invN
+// byte-for-byte so clm_prod_bwd is UNCHANGED, then conv1d(yn→out_logits) is the
+// final eager GEMM (kept outside the megakernel — same boundary as B2 fwd).
+//
+// ⚠ BYTE-EQ NOTE (the decisive structural gate): the megakernel pulls the conv
+// GEMMs INSIDE the cooperative launch as TF32/own-GEMM tiles (a persistent kernel
+// cannot nest cublasDgemm — F-FUSION-MEGAKERNEL-DESIGN WALL 1). The eager fwd
+// uses FP64 cublasDgemm. So the megastep path is NOT max|Δ|=0 byte-eq to the
+// eager FP64 path (rel-RMS ~1e-3, the TF32 own-GEMM bar). It is therefore gated
+// SEPARATELY from CLM_PROD_DEVRESIDENT and returns rc != 0 (falls back to eager)
+// unless the launcher explicitly asserts the own-GEMM precision-eq contract. The
+// byte-eq-SAFE realization is the GLUE-ONLY megakernel (GEMMs kept as separate
+// cublasDgemm launches) already built+fired+measured by P2A
+// (F-FUSION-P2A-MEGAKERNEL.txt: real-step util 10.71→10.63%, Δ -0.08pp NOISE,
+// byte-eq PASS). rc 0 = megakernel ran (out_logits + bwd intermediates filled);
+// else the eager sequence runs (the byte-eq FP64 reference).
+fn _clm_megafwd(xe: int, ecWq: int, ecB: int, tcWq: int, tcB: int,
+                tgG: int, tgB: int, xec: int, hn0: int, hg0: int, xt: int,
+                mean0: int, inv0: int, xhat0: int,
+                rWq: int, rB: int, logits_r: int,
+                e0Wq: int, e0B: int, e1Wq: int, e1B: int, eo0: int, eo1: int,
+                ex_out: int, probs: int, y: int,
+                noG: int, noB: int, yn: int, meanN: int, invN: int, xhatN: int,
+                T: int, d: int, E: int, K: int) -> int {
+    if _fuse_on("HEXA_CLM_MEGASTEP") {
+        let rc = forge_dispatch_clm_megafwd(xe, ecWq, ecB, tcWq, tcB,
+                                            tgG, tgB, xec, hn0, hg0, xt,
+                                            mean0, inv0, xhat0,
+                                            rWq, rB, logits_r,
+                                            e0Wq, e0B, e1Wq, e1B, eo0, eo1,
+                                            ex_out, probs, y,
+                                            noG, noB, yn, meanN, invN, xhatN,
+                                            T, d, E, K)
+        if rc == 0 {
+            return 0
+        }
+    }
+    return -1
+}
+
 fn clm_prod_fwd(tokens: int,
                embed: int, ecW: int, ecB: int, tcW: int, tcB: int, tgG: int, tgB: int,
                rW: int, rB: int, e0W: int, e0B: int, e1W: int, e1B: int,
@@ -780,6 +829,30 @@ fn clm_prod_fwd(tokens: int,
     // interpreted inter-op host glue at the fwd head. Device path keeps xe
     // FARR_DEVICE so the first conv GEMM H2D-skips it (byte-eq); else host loop.
     _embedding(tokens, embed, xe, T, d)
+
+    // HEXA-FUSION B3: full-fwd MEGAKERNEL gate. Under HEXA_CLM_MEGASTEP the whole
+    // fwd DAG (GEMM1 → [gn→gelu→resid] → GEMM2 → [gelu2→pack→router]) runs in ONE
+    // cooperative launch; the bwd intermediates are written byte-for-byte. On
+    // success only the final conv1d(yn→out_logits) GEMM remains. rc != 0 (gate
+    // unset / device lacks coop launch / precision-eq not asserted) → eager path.
+    let mega_hg0 = t_zeros(T * d)
+    let mega_logits_r = t_zeros(T * E)
+    let mega_mean0 = t_zeros(1)
+    let mega_y = t_zeros(T * d)
+    let mega_meanN = t_zeros(1)
+    let mrc = _clm_megafwd(xe, ecWq, ecB, tcWq, tcB,
+                           tgG, tgB, xec, hn0, mega_hg0, xt,
+                           mega_mean0, inv0, xhat0,
+                           rWq, rB, mega_logits_r,
+                           e0Wq, e0B, e1Wq, e1B, eo0, eo1,
+                           ex_out, probs, mega_y,
+                           noG, noB, yn, mega_meanN, invN, xhatN,
+                           T, d, E, K)
+    if mrc == 0 {
+        conv1d_via_forge(yn, roWq, roB, out_logits, T, d, V, 1, 1)
+        return
+    }
+
     conv1d_via_forge(xe, ecWq, ecB, xec, T, d, d, K, 1)
     let h0 = t_zeros(T * d)
     conv1d_via_forge(xec, tcWq, tcB, h0, T, d, d, K, 1)
