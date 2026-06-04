@@ -7893,6 +7893,22 @@ fn gen2_expr(node) {
                         + arg_strs[10] + ", " + arg_strs[11] + ")"
                 }
             }
+            if len(node.args) == 13 {
+                // HEXA-FUSION L3-c (op-boundary fusion): groupnorm+gelu+residual
+                // in ONE device kernel (out = R + gelu(GN(x)), a = gelu out, y =
+                // pre-gelu GN out for bwd). 13 args: x, gamma, beta, r, y, a, out,
+                // mean, inv, xhat, T, C, G. byte-eq == GN-gelu-then-residual_add.
+                if name == "forge_dispatch_groupnorm_gelu_residual" {
+                    return "hexa_forge_dispatch_groupnorm_gelu_residual("
+                        + arg_strs[0] + ", " + arg_strs[1] + ", "
+                        + arg_strs[2] + ", " + arg_strs[3] + ", "
+                        + arg_strs[4] + ", " + arg_strs[5] + ", "
+                        + arg_strs[6] + ", " + arg_strs[7] + ", "
+                        + arg_strs[8] + ", " + arg_strs[9] + ", "
+                        + arg_strs[10] + ", " + arg_strs[11] + ", "
+                        + arg_strs[12] + ")"
+                }
+            }
             let nargs = len(node.args)
             // PROBE r14-G (2026-05-23): `printf` / `sprintf` are not hexa
             // builtins — canonical is `println(...)` for stdout and

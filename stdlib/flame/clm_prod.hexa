@@ -502,6 +502,25 @@ fn _groupnorm_gelu(x: int, gamma: int, beta: int, y: int, a: int, mean: int, inv
     _gelu(y, a, T * C)
 }
 
+// HEXA-FUSION L3-c (op-boundary fusion): groupnorm #1 → gelu #1 → residual-add
+// fused into ONE device kernel (y = pre-gelu GN out for bwd, a = gelu out, out =
+// r + a = the residual xt). Extends L3-a by also folding the immediately-adjacent
+// _residual_add(xec, hg0, xt) at the fwd head — collapsing 2 launches
+// (groupnorm_gelu + residual_add) into 1 raises occupancy (the only remaining util
+// lever after host-removal ②④⑤ bottomed out ~13% and cublasLt epilogue fusion was
+// ruled out — FP64 has no GELU epilogue). Gated by env HEXA_FUSE_GN_GELU_RESID on
+// the device-resident chain; OFF / device-fail → the SEPARATE _groupnorm_gelu +
+// _residual_add run (byte-identical reference — same erf-gelu, same GN reduction
+// order, same residual add order, max|Δ|=0).
+fn _groupnorm_gelu_residual(x: int, gamma: int, beta: int, r: int, y: int, a: int, out: int, mean: int, inv: int, xhat: int, T: int, C: int, G: int) {
+    if env("HEXA_FUSE_GN_GELU_RESID") != "" && env("CLM_PROD_DEVRESIDENT") != "" {
+        let rc = forge_dispatch_groupnorm_gelu_residual(x, gamma, beta, r, y, a, out, mean, inv, xhat, T, C, G)
+        if rc == 0 { return }
+    }
+    _groupnorm_gelu(x, gamma, beta, y, a, mean, inv, xhat, T, C, G)
+    _residual_add(r, a, out, T * C)
+}
+
 // HEXA-FUSION L3 (glue half · final slice ⑤c): device-resident embedding gather.
 // The token-gather at the head of clm_prod_fwd (xe[i·d+c] = embed[tok·d+c]) is
 // interpreted inter-op host glue (the ③ fwd-only 0% floor). Under
@@ -731,13 +750,13 @@ fn clm_prod_fwd(tokens: int,
     // lever). hn0 (= pre-gelu GN) is still written for the bwd. OFF → the original
     // separate _groupnorm + _gelu run (byte-identical).
     let hg0 = t_zeros(T * d)
-    _groupnorm_gelu(h0, tgG, tgB, hn0, hg0, mean0, inv0, xhat0, T, d, 1)
-    // HEXA-FUSION L3 (glue half): the residual xt = xec + hg0 — the
-    // highest-frequency interpreted inter-op host glue in this fwd path (T·d
-    // host t_get/t_set per step). Under CLM_PROD_DEVRESIDENT it fuses onto the
-    // device, leaving the interpreter off the per-step hot path (the ③ fwd-only
-    // 0% floor); else byte-identical host loop.
-    _residual_add(xec, hg0, xt, T * d)
+    // HEXA-FUSION L3-c: groupnorm #1 → gelu #1 → residual (h0→hn0→hg0, xt=xec+hg0)
+    // fused into ONE device kernel under HEXA_FUSE_GN_GELU_RESID (occupancy lever —
+    // collapses the groupnorm_gelu + residual_add launch pair into 1). hn0/hg0 are
+    // still written byte-for-byte so the bwd is UNCHANGED. OFF → the separate
+    // _groupnorm_gelu + _residual_add run (byte-identical). The residual xt = xec +
+    // hg0 is the highest-frequency interpreted inter-op host glue in this fwd path.
+    _groupnorm_gelu_residual(h0, tgG, tgB, xec, hn0, hg0, xt, mean0, inv0, xhat0, T, d, 1)
     let logits_r = t_zeros(T * E)
     conv1d_via_forge(xt, rWq, rB, logits_r, T, d, E, 1, 1)
     // LEVER (b): the 2 identical-shape ConvExperts fused into ONE batched GEMM
