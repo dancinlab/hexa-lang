@@ -1,0 +1,47 @@
+F-QFORGE-M27-NVPTX-A2F-PARITY — NVPTX α²F BZ-sum hot kernel CPU≡GPU on-device parity
+=====================================================================================
+verdict : 🟢 SUPPORTED-NUMERICAL (GPU executed on-device sm_120, parity held)
+date    : 2026-06-05
+engine  : QFORGE L3 α²F(ω) double-delta BZ-sum (qforge_a2f_from_elph_impl)
+
+WHAT
+  Ported the L3 α²F(ω) Brillouin-zone double-delta sum (the el-ph assembler hot
+  kernel, stdlib/qforge/elph.hexa::qforge_a2f_from_elph_impl) to an NVPTX
+  @gpu_kernel `qforge_a2f_bzsum` (stdlib/qforge/nvptx_a2f_kernel.hexa),
+  parallelized over the ω frequency-histogram bins (one thread per bin, no
+  atomics). Emitted PTX with the existing hexa nvptx_emit CLI (RFC 071) — entry
+  qforge_a2f_bzsum, 9 params, 3 exp() via the #1215 f64 polynomial intrinsic
+  (30 fma.rn.f64), ZERO unsupported markers.
+
+GPU EXECUTION (real on-device, NOT a CPU fallback)
+  pod      : vast 39481710 — RTX PRO 6000 Blackwell, compute_cap 12.0 (sm_120)
+  driver   : 580.95.05 ; CUDA 12.4 toolchain (ptxas/nvcc)
+  load     : cuModuleLoadDataEx(CU_JIT_TARGET_FROM_CUCONTEXT) → driver JIT
+             PTX(.target sm_90) → sm_120 SASS at load (forward-compatible PTX).
+             ptxas 12.4 not asked to emit sm_120 directly; the driver JITs PTX.
+  harness  : stdlib/qforge/nvptx_a2f_host.cu (driver-API loader + CPU ref)
+  device print confirmed: "[gpu] NVIDIA RTX PRO 6000 Blackwell Server Edition sm_120"
+
+MEASURED PARITY (GPU bins vs CPU-ref bins, FP64 both sides)
+  dataset  : deterministic synthetic ns=4096 (q,ν) samples × ng=256 ω-bins
+  sum_cpu  : 6.3047386460e+02
+  max_abs_err = 1.199041e-13
+  max_rel_err = 2.455136e-14   (bin 164)
+  GATE     : max_rel_err ≤ 1e-5   →   PARITY: PASS
+  (Full FP64 — well below even the 1e-4 FP32-smear allowance; no tol fudging.)
+
+HONEST FINDING (d6) — #1215 f64 exp() underflow garbage, kernel-side guard
+  The emitted f64 exp() is accurate to ~1e-15 rel down to x≈−700, but for
+  x < ~−745 (f64 underflow boundary) its 2^k bit-pattern path (k+1023 → negative,
+  shl.b64 corruption) returns GARBAGE (~±1e292) where libm returns 0. Measured:
+    exp(-700) gpu=9.86e-305 (rel 0)  vs  exp(-746) gpu=-3.36e+292 (ref 0).
+  A Gaussian δ_σ exponent −0.5·z² routinely reaches −1000s (far δ-tail). FIX:
+  kernel guards `if exponent > -700 { exp() } else { 0 }` — physically correct
+  (a δ-tail that far out IS zero) and matches the CPU-ref libm. This is the
+  right numerics regardless; the codegen-intrinsic gap is filed to
+  inbox/patches/nvptx-expf64-underflow-clamp.md for the upstream exp() fix.
+
+SELFTEST
+  stdlib/qforge/qforge_nvptx_a2f_parity_selftest.hexa — g5, `hexa run` PASS.
+  Pins the CPU-ref ground-truth (sum(a2f)=630.4738646, rel 3.4e-12 stable) the
+  GPU was compared against, so the parity's reference side can't silently drift.

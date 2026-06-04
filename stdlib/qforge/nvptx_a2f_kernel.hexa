@@ -1,0 +1,95 @@
+// stdlib/qforge/nvptx_a2f_kernel.hexa
+// QFORGE M27 — NVPTX el-ph hot kernel: α²F(ω) BZ double-delta assembler.
+//
+// @version 0.0.1
+// @capabilities [pure]
+// @phase("parse_only")
+//
+// GPU port of the L3 hot kernel `qforge_a2f_from_elph_impl`
+// (stdlib/qforge/elph.hexa). The CPU reference is the GROUND TRUTH; this
+// emits the SAME double-delta Brillouin-zone sum as an NVPTX-targetable
+// `@gpu_kernel`, parallelized over the ω frequency-histogram bins.
+//
+// ── The hot kernel (CPU ref `qforge_a2f_from_elph_impl`) ────────────────
+// For each (q,ν) BZ sample i the CPU ref deposits, into every ω-bin j,
+//   a2f[j] += weight·g2[i]·δ_σel(ε_k[i]−E_F)·δ_σel(ε_kq[i]−E_F)/N(E_F)
+//                     · δ_σph(ω_grid[j] − ω_qnu[i])
+// where δ_σ(x) = exp(−x²/2σ²)/(σ√(2π)) is the normalized Gaussian.
+// This is an ns×ng evaluation of the Gaussian δ — the BZ-sum hot kernel.
+//
+// ── Parallelization (no atomics — bin-per-thread, d4-generic) ───────────
+// One thread owns one ω-bin j (gid = ctaid.x·ntid.x + tid.x, bounds gid<ng).
+// That thread walks ALL ns samples, accumulating a private f64 sum, and
+// writes a2f[j] ONCE. Output layout matches the CPU ref array exactly, so
+// the host can compare bins index-for-index. The Fermi double-delta
+// factor (δ_σel·δ_σel·g2/N_EF) is recomputed per (i) inside each thread —
+// O(ns·ng) redundant electron-δ work, but it keeps the kernel atomic-free
+// and bit-comparable to the CPU loop ordering. (A shared-mem prefactor
+// cache is a later optimization; correctness-parity comes first — d6.)
+//
+// Inputs are flat f64 device arrays index-aligned with the CPU ref:
+//   eps_k[ns], eps_kq[ns], g2[ns], omega_qnu[ns]  — the (q,ν) samples
+//   omega_grid[ng]                                 — the ω histogram grid
+//   par[8] scalar pack: [e_fermi, n_ef, weight, sigma_el, sigma_ph,
+//                        inv_sqrt2pi, ns_f, ng_f]  (ns/ng also as i64 args)
+//   a2f[ng]                                        — output histogram
+//
+// par[5] = 1/√(2π) is precomputed on the host (the CPU ref's _ELPH_SQRT2PI
+// reciprocal) so the kernel needs no √ constant; exp() is the #1215 f64
+// polynomial intrinsic. Malformed-input guarding (length/σ checks) is the
+// host's job — the kernel assumes pre-validated, non-degenerate inputs.
+//
+// ── UNDERFLOW GUARD (d6 — honest codegen-intrinsic limitation) ──────────
+// The #1215 f64 exp() intrinsic is accurate to ~1e-15 rel down to x≈−700,
+// but for x < ~−745 (the f64 underflow boundary) its 2^k bit-pattern path
+// (k+1023 going negative → shl.b64 corruption) returns GARBAGE (~±1e292)
+// instead of 0, where libm correctly returns 0. A Gaussian δ_σ argument
+// −0.5·z² routinely reaches −1000s (a far δ-tail). Physically that tail IS
+// zero, so we GUARD: if the exponent < EXP_FLOOR (−700) the Gaussian
+// contributes 0 — matching the CPU-ref libm behavior exactly, NOT fudging.
+// (The codegen gap is filed to hexa-lang/inbox; the kernel-side guard is
+// also the correct numerics regardless of the intrinsic fix.)
+
+@gpu_kernel
+fn qforge_a2f_bzsum(eps_k: [f64], eps_kq: [f64], g2: [f64], omega_qnu: [f64],
+                    omega_grid: [f64], par: [f64], a2f: [f64], ns: i64, ng: i64) {
+    let gid = gpu_block_id_x() * gpu_block_dim_x() + gpu_thread_id_x()
+    if to_i64(gid) < ng {
+        let j = to_i64(gid)
+        let e_fermi = par[0]
+        let n_ef = par[1]
+        let weight = par[2]
+        let sigma_el = par[3]
+        let sigma_ph = par[4]
+        let inv_sqrt2pi = par[5]
+        let inv_nef = 1.0 / n_ef
+        let inv_sel = 1.0 / sigma_el
+        let inv_sph = 1.0 / sigma_ph
+        let norm_el = inv_sel * inv_sqrt2pi   // 1/(σ_el√2π)
+        let norm_ph = inv_sph * inv_sqrt2pi   // 1/(σ_ph√2π)
+        let exp_floor = -700.0          // f64 underflow guard (see header d6)
+        let wj = omega_grid[j]
+        let mut acc: f64 = 0.0
+        let mut i: i64 = 0
+        while i < ns {
+            // δ_σel(ε_k−E_F): exp(−0.5 z²)·norm_el  (guarded — 0 below floor)
+            let xk = (eps_k[i] - e_fermi) * inv_sel
+            let ek = -0.5 * xk * xk
+            let mut dk: f64 = 0.0
+            if ek > exp_floor { dk = exp(ek) * norm_el }
+            let xkq = (eps_kq[i] - e_fermi) * inv_sel
+            let ekq = -0.5 * xkq * xkq
+            let mut dkq: f64 = 0.0
+            if ekq > exp_floor { dkq = exp(ekq) * norm_el }
+            let wgt = weight * g2[i] * dk * dkq * inv_nef
+            // δ_σph(ω_grid[j] − ω_qnu[i])  (guarded)
+            let xp = (wj - omega_qnu[i]) * inv_sph
+            let ep = -0.5 * xp * xp
+            let mut dp: f64 = 0.0
+            if ep > exp_floor { dp = exp(ep) * norm_ph }
+            acc = acc + wgt * dp
+            i = i + 1
+        }
+        a2f[j] = acc
+    }
+}
