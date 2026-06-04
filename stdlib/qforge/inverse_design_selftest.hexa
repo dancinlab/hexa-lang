@@ -1,0 +1,233 @@
+// @ci_gate — deterministic · analytic-validated inverse Tc design ascent asserts
+//
+// inverse_design_selftest.hexa — QFORGE-FEATURE inverse Tc design loop g5 gate.
+//
+// Closes the milestone "inverse Tc design loop (AD gradient-ascent on structure)":
+// use the autodiff gradient ∂Tc/∂structure to OPTIMIZE a candidate structure FOR
+// high Tc at fixed/lower pressure — QFORGE as a DESIGNER, the RTSC end-goal.
+//
+// @L5/d6 HONEST: a REAL ascent needs the true ∂Tc/∂struct Jacobian (the adjoint-
+// DFPT reverse sweep named in the concurrent `qforge_dtc_dstruct` autodiff
+// milestone). This gate therefore validates the ASCENT LOOP on an ANALYTIC
+// surrogate Tc(param) with a KNOWN maximum — the loop PROVABLY climbs it — and
+// names the real-gradient dependency. NO real material's Tc gain is fabricated.
+//
+// Gate pins:
+//   (A) MONOTONE + CONVERGE on a concave surrogate: on Tc(p)=−Σ(p−p*)² (max at
+//       p*, a perfect 1D/2D paraboloid) the recorded Tc is STRICTLY INCREASING
+//       step-to-step AND the final param converges to the known optimum p*.
+//       => the milestone gate: one ascent step provably RAISES predicted Tc.
+//   (B) CONSTRAINTS RESPECTED: (b1) every trajectory param stays inside [lo,hi];
+//       (b2) a FIXED coordinate (lo==hi, = fixed pressure / frozen DOF) is pinned
+//       to its exact value at EVERY recorded step — the optimum that would lie
+//       outside the box is correctly clamped to the box face.
+//   (C) GRADIENT-CALLBACK INTERFACE accepts the AUTODIFF gradient: the loop calls
+//       grad_of(p)->[np] / tc_of(p)->float by NAME. We feed it (c1) an analytic
+//       surrogate gradient AND (c2) a FINITE-DIFFERENCE gradient of the REAL
+//       qforge_tc_allen_dynes predictor — proving the SAME loop drives the actual
+//       QFORGE Tc model uphill via whatever ∂Tc/∂p provider is plugged in. The
+//       autodiff Jacobian has this exact (p)->[np] shape, so it drops in unchanged.
+//   (D) ADJOINT-DFPT DEPENDENCY NAMED (d6): the test prints the named real-
+//       gradient dependency so the honest FULL-vs-REMAINING boundary is explicit.
+//   (E) SENTINEL: malformed input (empty seed · bad bounds · step≤0) → ok==0
+//       (loud, never a silent wrong trajectory).
+//
+// Run:  hexa run stdlib/qforge/inverse_design_selftest.hexa
+// PASS: exits printing "qforge_inverse_design_selftest PASS".
+use "stdlib/qforge/inverse_design"
+use "stdlib/qforge/tc"   // real qforge_tc_allen_dynes for the (c2) FD-gradient
+
+fn _abs(x: float) -> float { if x < 0.0 { return -x } return x }
+
+fn _ck_true(name: str, cond: bool) -> int {
+    if cond { println("PASS " + name) ; return 0 }
+    println("FAIL " + name)
+    return 1
+}
+fn _ck_eq(name: str, got: float, want: float, tol: float) -> int {
+    if _abs(got - want) <= tol {
+        println("PASS " + name + " (" + to_string(got) + ")")
+        return 0
+    }
+    println("FAIL " + name + " — got " + to_string(got) + " want " + to_string(want))
+    return 1
+}
+fn _ck_ieq(name: str, got: int, want: int) -> int {
+    if got == want { println("PASS " + name + " (" + to_string(got) + ")") ; return 0 }
+    println("FAIL " + name + " — got " + to_string(got) + " want " + to_string(want))
+    return 1
+}
+
+// ── (A/C1) analytic CONCAVE surrogate Tc(p) = −((p0−1.5)² + (p1−2.5)²) ────────
+// Maximum at p* = (1.5, 2.5), Tc* = 0. ∂Tc/∂p = (−2(p0−1.5), −2(p1−2.5)).
+// (these module-level providers are passed BY NAME — hexa nested fns don't
+//  capture scope, so the analytic constants live as module literals, the #2596
+//  provider idiom.)
+fn _para_tc(p: [float]) -> float {
+    let d0 = p[0] - 1.5
+    let d1 = p[1] - 2.5
+    return -(d0 * d0 + d1 * d1)
+}
+fn _para_grad(p: [float]) -> [float] {
+    let mut g: [float] = []
+    g.push(-2.0 * (p[0] - 1.5))
+    g.push(-2.0 * (p[1] - 2.5))
+    return g
+}
+
+// ── (C2) the REAL QFORGE Tc predictor as the objective, FD gradient ──────────
+// 1 design param p = λ (the el-ph coupling). Tc(λ) = qforge_tc_allen_dynes(λ,
+// ω_log=1000K, μ*=0.10) — the actual verified Allen-Dynes form. ∂Tc/∂λ by a
+// central finite difference. This proves the SAME ascent loop raises the REAL
+// QFORGE-predicted Tc (within the surrogate's 1-param sandbox); the multi-param
+// adjoint-DFPT Jacobian (named in D) is the real-structure generalization.
+let _FD_WLOG: float = 1000.0
+let _FD_MU:   float = 0.10
+let _FD_H:    float = 1.0e-4
+fn _adtc_tc(p: [float]) -> float {
+    return qforge_tc_allen_dynes(p[0], _FD_WLOG, _FD_MU)
+}
+fn _adtc_grad(p: [float]) -> [float] {
+    let lam = p[0]
+    let fp = qforge_tc_allen_dynes(lam + _FD_H, _FD_WLOG, _FD_MU)
+    let fm = qforge_tc_allen_dynes(lam - _FD_H, _FD_WLOG, _FD_MU)
+    let mut g: [float] = []
+    g.push((fp - fm) / (2.0 * _FD_H))
+    return g
+}
+
+fn main() {
+    let mut fails = 0
+
+    println("== QFORGE-FEATURE inverse Tc design loop — g5 gate ==")
+
+    // ── (A) MONOTONE + CONVERGE on the concave paraboloid ────────────────────
+    // wide box so the optimum p*=(1.5,2.5) is interior; seed far away at origin.
+    let rA = qforge_inverse_design([0.0, 0.0], [-10.0, -10.0], [10.0, 10.0],
+                                   0.30, 40, _para_grad, _para_tc)
+    fails = fails + _ck_ieq("(A) ok", rA.ok, 1)
+
+    // (A) the milestone gate — Tc STRICTLY INCREASES every recorded step.
+    let mut mono = true
+    let mut prev = qforge_inv_traj_tc(rA, 0)
+    let mut k = 1
+    while k < rA.n_rec {
+        let cur = qforge_inv_traj_tc(rA, k)
+        if cur <= prev { mono = false }
+        prev = cur
+        k = k + 1
+    }
+    fails = fails + _ck_true("(A) Tc strictly increases each step (one step RAISES Tc)", mono)
+    fails = fails + _ck_true("(A) best_tc > seed_tc (improved)", rA.best_tc > rA.seed_tc)
+    fails = fails + _ck_ieq("(A) improved flag", rA.improved, 1)
+
+    // (A) converges to the KNOWN optimum p*=(1.5,2.5), Tc*=0.
+    fails = fails + _ck_eq("(A) converge p0 -> 1.5", rA.best_param[0], 1.5, 1.0e-3)
+    fails = fails + _ck_eq("(A) converge p1 -> 2.5", rA.best_param[1], 2.5, 1.0e-3)
+    fails = fails + _ck_eq("(A) best_tc -> known optimum 0", rA.best_tc, 0.0, 1.0e-5)
+
+    // ── (B) CONSTRAINTS RESPECTED ────────────────────────────────────────────
+    // (b2) box pins p1 (fixed pressure / frozen DOF) at lo==hi==2.5 and BOUNDS p0
+    // to [0,1.0] though the true optimum p0*=1.5 lies OUTSIDE — must clamp to 1.0.
+    let rB = qforge_inverse_design([0.0, 2.5], [0.0, 2.5], [1.0, 2.5],
+                                   0.30, 40, _para_grad, _para_tc)
+    fails = fails + _ck_ieq("(B) ok", rB.ok, 1)
+
+    // (b1) every recorded param stays in [lo,hi].
+    let mut inbounds = true
+    let mut pinned = true
+    let mut kb = 0
+    while kb < rB.n_rec {
+        let p0 = qforge_inv_traj_param(rB, kb, 0)
+        let p1 = qforge_inv_traj_param(rB, kb, 1)
+        if p0 < 0.0 || p0 > 1.0 { inbounds = false }
+        if _abs(p1 - 2.5) > 1.0e-12 { pinned = false }   // (b2) fixed coord pinned
+        kb = kb + 1
+    }
+    fails = fails + _ck_true("(B/b1) every param stays within [lo,hi]", inbounds)
+    fails = fails + _ck_true("(B/b2) fixed coord (fixed P) pinned at every step", pinned)
+    // optimum clamped to the bound face p0=1.0 (can't reach 1.5 outside the box).
+    fails = fails + _ck_eq("(B) bounded optimum clamps to box face p0=1.0",
+                           rB.best_param[0], 1.0, 1.0e-6)
+    fails = fails + _ck_eq("(B) fixed coord stays p1=2.5", rB.best_param[1], 2.5, 1.0e-12)
+
+    // ── (C2) the gradient-callback interface accepts a REAL-Tc-model gradient ─
+    // SAME loop, objective = the verified qforge_tc_allen_dynes; grad via FD.
+    // λ grows from a low seed toward the box top — Tc(λ) is monotone increasing
+    // in λ (Allen-Dynes), so the ascent must RAISE the real predicted Tc.
+    let rC = qforge_inverse_design([0.30], [0.30], [2.50],
+                                   0.05, 30, _adtc_grad, _adtc_tc)
+    fails = fails + _ck_ieq("(C2) ok (real qforge_tc_allen_dynes objective)", rC.ok, 1)
+    fails = fails + _ck_true("(C2) REAL predicted Tc raised by ascent (best>seed)",
+                             rC.best_tc > rC.seed_tc)
+    // real-Tc trajectory is monotone NON-decreasing every step, and STRICTLY
+    // increases while the param is still interior to the box. Once projected
+    // ascent clamps λ to the box top (2.50) the param stops moving, so Tc
+    // PLATEAUS at the constrained optimum (a correct projected-ascent fixed
+    // point — NOT a decrease). The milestone gate "one step RAISES Tc" is the
+    // interior-strict + global-non-decrease pair.
+    let mut nondecC = true     // Tc never goes DOWN (projected ascent)
+    let mut interiorStrict = true
+    let mut prevC = qforge_inv_traj_tc(rC, 0)
+    let mut prevLam = qforge_inv_traj_param(rC, 0, 0)
+    let mut kc = 1
+    while kc < rC.n_rec {
+        let curC = qforge_inv_traj_tc(rC, kc)
+        let curLam = qforge_inv_traj_param(rC, kc, 0)
+        if curC < prevC { nondecC = false }
+        // while the step actually MOVED the param (interior, pre-clamp) Tc must
+        // strictly rise; a clamped step (λ unchanged) is allowed to plateau.
+        if _abs(curLam - prevLam) > 1.0e-12 {
+            if curC <= prevC { interiorStrict = false }
+        }
+        prevC = curC
+        prevLam = curLam
+        kc = kc + 1
+    }
+    fails = fails + _ck_true("(C2) real QFORGE Tc non-decreasing every step (no descent)", nondecC)
+    fails = fails + _ck_true("(C2) real QFORGE Tc STRICTLY rises while param interior (one step RAISES Tc)", interiorStrict)
+    fails = fails + _ck_true("(C2) λ stayed within [0.30,2.50] (constraint held)",
+                             rC.best_param[0] >= 0.30 && rC.best_param[0] <= 2.50)
+    println("[C2] seed Tc(λ=0.30)=" + to_string(rC.seed_tc) + " K  ->  best Tc(λ="
+            + to_string(rC.best_param[0]) + ")=" + to_string(rC.best_tc) + " K")
+
+    // ── (C/interface) the callback shape IS the autodiff gradient shape ───────
+    // grad_of: (p:[float]) -> [float] of length np ; tc_of: (p:[float]) -> float.
+    // Both analytic (_para_grad) and FD-of-real (_adtc_grad) plug into the SAME
+    // qforge_inverse_design signature with no change — so the qforge_dtc_dstruct
+    // autodiff Jacobian (same (p)->[np] contract) composes once it lands (d3/d4).
+    println("[C] gradient-callback interface: grad_of(p:[float])->[float](np) ,"
+            + " tc_of(p:[float])->float  — accepts the autodiff ∂Tc/∂p verbatim")
+
+    // ── (E) SENTINELS — malformed input is a LOUD ok==0, never a wrong path ───
+    let rs1 = qforge_inverse_design([], [], [], 0.1, 5, _para_grad, _para_tc)
+    fails = fails + _ck_ieq("(E) empty seed -> ok==0", rs1.ok, 0)
+    let rs2 = qforge_inverse_design([0.0, 0.0], [1.0, 1.0], [0.0, 0.0], 0.1, 5,
+                                    _para_grad, _para_tc)   // lo>hi
+    fails = fails + _ck_ieq("(E) lo>hi -> ok==0", rs2.ok, 0)
+    let rs3 = qforge_inverse_design([0.0], [-1.0], [1.0], 0.0, 5,
+                                    _para_grad, _para_tc)   // step==0
+    fails = fails + _ck_ieq("(E) step<=0 -> ok==0", rs3.ok, 0)
+    let rs4 = qforge_inverse_design([0.0], [-1.0], [1.0], 0.1, 0,
+                                    _para_grad, _para_tc)   // n_steps<1
+    fails = fails + _ck_ieq("(E) n_steps<1 -> ok==0", rs4.ok, 0)
+
+    // ── (D) NAME the real-gradient dependency (d6 — FULL vs REMAINING) ────────
+    println("")
+    println("[D] @L5/d6 HONEST — FULL vs NAMED-REMAINING:")
+    println("    FULL (g5-validated here): projected gradient-ascent loop · monotone")
+    println("      Tc-increase + convergence to a known optimum on an analytic concave")
+    println("      surrogate · box-constraint projection (bounds + fixed P) · the")
+    println("      gradient-callback interface (accepts the autodiff ∂Tc/∂p verbatim).")
+    println("    NAMED-REMAINING (NOT fabricated): the REAL ∂Tc/∂structure Jacobian =")
+    println("      the ADJOINT-DFPT reverse sweep named in the concurrent")
+    println("      `qforge_dtc_dstruct` autodiff milestone (∂λ/∂τ, ∂ω/∂τ -> ∂Tc/∂τ).")
+    println("      Plug it in as grad_of => real-structure designer, ZERO loop change.")
+    println("")
+
+    if fails == 0 {
+        println("qforge_inverse_design_selftest PASS")
+    } else {
+        println("qforge_inverse_design_selftest FAIL (" + to_string(fails) + " checks)")
+    }
+}
