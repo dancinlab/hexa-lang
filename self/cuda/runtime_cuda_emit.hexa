@@ -2186,33 +2186,41 @@ fn emit_runtime_cuda_c() -> str {
             "        Y[idx] = (double)acc + B[co];\n" +
             "    }\n" +
             "}\n" +
-            "/* device groupnorm (single group over D) reproducing _hx_k_groupnorm's\n" +
-            " * sequential per-row reduction (byte-eq math, f64). Writes HN (normed),\n" +
-            " * MEAN, INV, XHAT for the bwd. ONE thread per row t. */\n" +
+            "/* device groupnorm reproducing _hx_k_groupnorm with G=1 (the clm_prod\n" +
+            " * callsite: _groupnorm(..., T, d, 1)) — the reduction spans the WHOLE\n" +
+            " * [T,D] tensor (m = D*T), NOT per-row. Byte-eq math, f64, EXACT host\n" +
+            " * sequential accumulation order (t-outer, c-inner). The global reduction\n" +
+            " * is done by thread 0 only (writes MEAN[0]/INV[0]); a grid.sync() inside\n" +
+            " * the megakernel orders it before the parallel normalize-apply pass. */\n" +
             "__device__ void _hx_dev_groupnorm(_hxcg::grid_group& g,\n" +
             "        const double* __restrict__ Xr, const double* __restrict__ G,\n" +
             "        const double* __restrict__ Bn, double* __restrict__ HN,\n" +
             "        double* __restrict__ MEAN, double* __restrict__ INV,\n" +
             "        double* __restrict__ XHAT, int64_t T, int64_t D) {\n" +
             "    double eps = 1e-5;\n" +
+            "    int64_t N = T * D;\n" +
+            "    double m = (double)N;\n" +
+            "    if (blockIdx.x == 0 && threadIdx.x == 0) {\n" +
+            "        double sum = 0.0;\n" +
+            "        for (int64_t t = 0; t < T; t++)\n" +
+            "            for (int64_t c = 0; c < D; c++) sum += Xr[t * D + c];\n" +
+            "        double mu = sum / m;\n" +
+            "        double vs = 0.0;\n" +
+            "        for (int64_t t = 0; t < T; t++)\n" +
+            "            for (int64_t c = 0; c < D; c++) { double d = Xr[t * D + c] - mu; vs += d * d; }\n" +
+            "        double var = vs / m;\n" +
+            "        double inv = 1.0 / sqrt(var + eps);\n" +
+            "        MEAN[0] = mu; INV[0] = inv;\n" +
+            "    }\n" +
+            "    g.sync();\n" +
+            "    double mu = MEAN[0], inv = INV[0];\n" +
             "    int64_t stride = (int64_t)gridDim.x * blockDim.x;\n" +
-            "    for (int64_t t = (int64_t)blockIdx.x * blockDim.x + threadIdx.x;\n" +
-            "         t < T; t += stride) {\n" +
-            "        const double* xr = Xr + t * D;\n" +
-            "        double m = 0.0;\n" +
-            "        for (int64_t c = 0; c < D; c++) m += xr[c];\n" +
-            "        m /= (double)D;\n" +
-            "        double v = 0.0;\n" +
-            "        for (int64_t c = 0; c < D; c++) { double d = xr[c] - m; v += d * d; }\n" +
-            "        v /= (double)D;\n" +
-            "        double inv = 1.0 / sqrt(v + eps);\n" +
-            "        for (int64_t c = 0; c < D; c++) {\n" +
-            "            double xh = (xr[c] - m) * inv;\n" +
-            "            XHAT[t * D + c] = xh;\n" +
-            "            HN[t * D + c] = xh * G[c] + Bn[c];\n" +
-            "        }\n" +
-            "        if (MEAN) MEAN[t] = m;\n" +
-            "        if (INV) INV[t] = inv;\n" +
+            "    for (int64_t i = (int64_t)blockIdx.x * blockDim.x + threadIdx.x;\n" +
+            "         i < N; i += stride) {\n" +
+            "        int64_t c = i % D;\n" +
+            "        double xh = (Xr[i] - mu) * inv;\n" +
+            "        XHAT[i] = xh;\n" +
+            "        HN[i] = G[c] * xh + Bn[c];\n" +
             "    }\n" +
             "}\n" +
             "__device__ __forceinline__ double _hx_gelu_dev(double x) {\n" +
@@ -2302,8 +2310,8 @@ fn emit_runtime_cuda_c() -> str {
             "    if (_ensure_dev_alloc_out(hn0_id, n) != 0) return -1;\n" +
             "    if (_ensure_dev_alloc_out(hg0_id, n) != 0) return -1;\n" +
             "    if (_ensure_dev_alloc_out(xt_id, n) != 0) return -1;\n" +
-            "    if (_ensure_dev_alloc_out(mean0_id, T) != 0) return -1;\n" +
-            "    if (_ensure_dev_alloc_out(inv0_id, T) != 0) return -1;\n" +
+            "    if (_ensure_dev_alloc_out(mean0_id, 1) != 0) return -1;\n" +
+            "    if (_ensure_dev_alloc_out(inv0_id, 1) != 0) return -1;\n" +
             "    if (_ensure_dev_alloc_out(xhat0_id, n) != 0) return -1;\n" +
             "    if (_ensure_dev_alloc_out(logr_id, T * E) != 0) return -1;\n" +
             "    if (_ensure_dev_alloc_out(eo0_id, n) != 0) return -1;\n" +
