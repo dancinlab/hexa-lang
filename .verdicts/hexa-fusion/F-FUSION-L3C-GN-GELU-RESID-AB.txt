@@ -1,0 +1,52 @@
+HEXA-FUSION L3-c — groupnorm+gelu+residual TRIPLE fusion A/B verdict
+=====================================================================
+Date     : 2026-06-04
+GPU      : NVIDIA H100 80GB HBM3 (idle, baseline util 0.00%), vast instance 39418626 (ssh7.vast.ai:18626)
+Branch   : domain/hexa-fusion-l3d-gelu2pack (build source of truth)
+Build    : flatten (hexa module_loader) -> hexat -> post-process (8x forge_dispatch closure->direct;
+           libm erf already lowered by local hexat) ; runtime_cuda.c regen from runtime_cuda_emit.hexa
+           (62 _hx_cuda_farr launchers incl groupnorm_gelu_residual + moe_block2) ; nvcc -DHEXA_CUDA ;
+           gcc link -lcuda -lcudart -lcublas. clm_prod_gpu = 785440 bytes, link rc=0.
+Config   : CLM_PROD_DEVRESIDENT=1 DEVFEED=1 BATCHED=1 HEXA_CUDA_ASYNC=0 D=1536 T=512 E=2 NSAMP=8 EPOCHS=4.
+Probe    : [L3C-FIRED] stderr marker at the groupnorm_gelu_residual device launch (runtime.c wrapper).
+
+ARMS (cumulative; L3-a GN_GELU + L3-b GELU2 always on):
+  A (base) : HEXA_FUSE_GN_GELU=1 HEXA_FUSE_GELU2=1
+  B (+L3-c): A + HEXA_FUSE_GN_GELU_RESID=1
+
+VERBATIM A/B (from /root/abc.log):
+--- ARM=A rc=0 (GN_GELU=1 GELU2=1 GN_GELU_RESID=unset MOE_BLOCK2=unset) ---
+  util MEAN=11.02% PEAK=100% pct>=20=15.9% median=0% n=391
+  [L3C-FIRED] count: 0  [L3D-FIRED] count: 0
+    epoch-1 mean CE = 4.46624
+    epoch-4 mean CE = 3.64669
+  F-CLM-PROD-DESCENT = 1
+  PASS — real-corpus mean CE descends under int4 envelope
+--- ARM=B rc=0 (GN_GELU=1 GELU2=1 GN_GELU_RESID=1 MOE_BLOCK2=unset) ---
+  util MEAN=12.94% PEAK=100% pct>=20=17.4% median=0% n=391
+  [L3C-FIRED] count: 1  [L3D-FIRED] count: 0
+    epoch-1 mean CE = 4.46624
+    epoch-4 mean CE = 3.64669
+  F-CLM-PROD-DESCENT = 1
+  PASS — real-corpus mean CE descends under int4 envelope
+
+EXECUTION PROOF: [L3C-FIRED] count = 1 under arm B and 0 under arm A. The fused
+device path executed ONLY when HEXA_FUSE_GN_GELU_RESID=1 -> this is a genuine
+fused-vs-eager comparison, NOT host-vs-host. (Contrast the L3-a first attempt
+which fired 0x = dead code.)
+
+BYTE-EQ (HARD GATE): CE trace A vs B.
+  ce_A.txt vs ce_B.txt diff = ONLY the [FIRED] probe marker line (A: "[L3A-FIRED]
+  groupnorm_gelu", B: "[L3C-FIRED] groupnorm_gelu_residual"). The CE numbers are
+  BIT-IDENTICAL: epoch-1=4.46624, epoch-4=3.64669 in BOTH arms. DESCENT=1 PASS both.
+  => byte-eq PASS (max|delta|=0 on the train CE trace; the only textual diff is the
+  fusion's own stderr marker, which is expected to differ).
+
+FINDING: util MEAN +1.92pp (11.02% -> 12.94%), pct>=20 15.9% -> 17.4%, byte-eq PASS,
+[L3C-FIRED] proven. The groupnorm_gelu + residual_add launch pair collapsed into one
+kernel raises occupancy by ~+1.9pp with bit-identical training. Consistent with the
+L3-a/L3-b per-pair ~+1-2pp occupancy-fusion deltas; the mechanism STACKS.
+
+VERDICT: GREEN — L3-c lever CONFIRMED (executed + byte-eq + positive util delta).
+Honest ceiling unchanged: pairwise glue fusion is incremental; util-GREEN (>=20%
+idle H100) not reached by L3-c alone (cuBLAS GEMM-gap occupancy is the binding term).

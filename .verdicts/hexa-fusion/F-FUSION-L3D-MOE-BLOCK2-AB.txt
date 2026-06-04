@@ -1,0 +1,67 @@
+HEXA-FUSION L3-d — moe_block2 glue-block megakernel (gelu2+pack+router -> 1) A/B verdict
+========================================================================================
+Date     : 2026-06-04
+GPU      : NVIDIA H100 80GB HBM3 (idle, baseline util 0.00%), vast instance 39418626 (ssh7.vast.ai:18626)
+Branch   : domain/hexa-fusion-l3d-gelu2pack (build source of truth)
+Build    : flatten (hexa module_loader) -> hexat -> post-process (8x forge_dispatch closure->direct;
+           forge_dispatch_moe_block2 emitted direct by local hexat; libm erf lowered) ; runtime_cuda.c
+           regen (62 _hx_cuda_farr launchers incl moe_block2) ; nvcc -DHEXA_CUDA ; gcc link
+           -lcuda -lcudart -lcublas. clm_prod_gpu = 785440 bytes, link rc=0.
+Config   : CLM_PROD_DEVRESIDENT=1 DEVFEED=1 BATCHED=1 HEXA_CUDA_ASYNC=0 D=1536 T=512 E=2 NSAMP=8 EPOCHS=4.
+Probe    : [L3D-FIRED] stderr marker at the moe_block2 device launch (runtime.c wrapper).
+
+ARMS (cumulative):
+  A (base)  : HEXA_FUSE_GN_GELU=1 HEXA_FUSE_GELU2=1            (L3-a+b)
+  B (+L3-c) : A + HEXA_FUSE_GN_GELU_RESID=1
+  C (+L3-d) : B + HEXA_FUSE_MOE_BLOCK2=1
+
+VERBATIM A/B/C (from /root/abc.log):
+--- ARM=A rc=0 (GN_GELU=1 GELU2=1 GN_GELU_RESID=unset MOE_BLOCK2=unset) ---
+  util MEAN=11.02% PEAK=100% pct>=20=15.9% median=0% n=391
+  [L3C-FIRED] count: 0  [L3D-FIRED] count: 0
+    epoch-1 mean CE = 4.46624
+    epoch-4 mean CE = 3.64669
+  F-CLM-PROD-DESCENT = 1
+  PASS — real-corpus mean CE descends under int4 envelope
+--- ARM=B rc=0 (GN_GELU=1 GELU2=1 GN_GELU_RESID=1 MOE_BLOCK2=unset) ---
+  util MEAN=12.94% PEAK=100% pct>=20=17.4% median=0% n=391
+  [L3C-FIRED] count: 1  [L3D-FIRED] count: 0
+    epoch-1 mean CE = 4.46624
+    epoch-4 mean CE = 3.64669
+  F-CLM-PROD-DESCENT = 1
+  PASS — real-corpus mean CE descends under int4 envelope
+--- ARM=C rc=0 (GN_GELU=1 GELU2=1 GN_GELU_RESID=1 MOE_BLOCK2=1) ---
+  util MEAN=18.33% PEAK=100% pct>=20=24.5% median=1% n=392
+  [L3C-FIRED] count: 1  [L3D-FIRED] count: 1
+    epoch-1 mean CE = 4.46624
+    epoch-4 mean CE = 3.64669
+  F-CLM-PROD-DESCENT = 1
+  PASS — real-corpus mean CE descends under int4 envelope
+
+EXECUTION PROOF: [L3D-FIRED] count = 1 ONLY under arm C (0 under A and B). The fused
+moe_block2 device path executed only when HEXA_FUSE_MOE_BLOCK2=1 -> genuine fused-vs-
+eager, NOT host-vs-host. [L3C-FIRED]=1 in both B and C (L3-c stays on in C).
+
+BYTE-EQ (HARD GATE): CE trace A vs B vs C.
+  ce_A vs ce_B diff = ONLY the [FIRED] marker line. ce_A vs ce_C diff = ONLY the two
+  [FIRED] marker lines (A: L3A+L3B; C: L3C+L3D). The CE numbers are BIT-IDENTICAL across
+  ALL THREE arms: epoch-1=4.46624, epoch-4=3.64669; DESCENT=1 PASS in A, B, and C.
+  => byte-eq PASS (max|delta|=0 on the train CE trace across A/B/C; the only textual
+  diffs are the fusions' own stderr probe markers, expected to differ per arm).
+
+FINDING (per-fusion deltas, isolated):
+  A -> B (+L3-c)         : util MEAN +1.92pp (11.02 -> 12.94)
+  B -> C (+L3-d)         : util MEAN +5.39pp (12.94 -> 18.33)
+  A -> C (L3-c + L3-d)   : util MEAN +7.31pp (11.02 -> 18.33), pct>=20 15.9% -> 24.5%
+  ALL byte-eq PASS, both probes proven. L3-d (collapsing gelu2 + expert_pack2 +
+  moe_router, 3 launches -> 1) is the LARGEST single occupancy lift in the campaign
+  (+5.39pp), larger than the pairwise L3-a/b/c deltas — consistent with it fusing 3
+  glue kernels into one (a bigger serial-chain collapse), not a pair.
+
+VERDICT: GREEN — L3-d lever CONFIRMED (executed + byte-eq + +5.39pp util). The
+glue-block megakernel for fwd block 2 is real and byte-eq-safe. util MEAN reaches
+18.33% (just under the 20% idle-H100 GREEN bar); pct>=20 = 24.5% of samples. The
+honest ceiling holds: cuBLAS GEMMs stay separate -> GEMM-gap occupancy is the binding
+term; the remaining ~+1.7pp to MEAN>=20% on an idle H100 likely needs a right-sized
+GPU or a larger batch (wider GEMMs), NOT more glue fusion. But the occupancy-fusion
+stack (L3-a/b/c/d) is now a measured, byte-eq, +7.31pp-over-base cumulative win.
