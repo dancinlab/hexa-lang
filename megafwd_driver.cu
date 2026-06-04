@@ -100,6 +100,30 @@ __device__ __forceinline__ float megastep_expack(float x) {
 // groupnorm constants: one "group" = the full row (M rows of width D=N1), eps 1e-5.
 #define MEGAFWD_EPS 1e-5f
 
+// Block (256-thread) reductions via WARP-SHUFFLE + an 8-float staging array.
+// This replaces the 256-float __shared__ reduction buffers the naive form would
+// use — CRITICAL on sm_100 (B200): the megafwd already spends the full 49152 B
+// static-smem cap on the inline WMMA2 GEMM (As/Bs/tmp). Any extra 2-4 KB static
+// reduction buffer overflows the per-block static cap. Shuffle needs only 32 B.
+// Math is the SAME tree-sum/tree-max (associativity-identical to the eager
+// gn_reduce_k/router_reduce_k block reductions for these row widths).
+__device__ __forceinline__ float blk_sum256(float v, float* sh /*[8]*/) {
+    for (int o=16;o>0;o>>=1) v += __shfl_down_sync(0xffffffff,v,o);
+    int lane=threadIdx.x&31, warp=threadIdx.x>>5;
+    if (lane==0) sh[warp]=v; __syncthreads();
+    float r = (threadIdx.x<8) ? sh[threadIdx.x] : 0.f;
+    if (warp==0){ for(int o=4;o>0;o>>=1) r += __shfl_down_sync(0x000000ff,r,o); if(lane==0) sh[0]=r; }
+    __syncthreads(); return sh[0];
+}
+__device__ __forceinline__ float blk_max256(float v, float* sh /*[8]*/) {
+    for (int o=16;o>0;o>>=1){ float t=__shfl_down_sync(0xffffffff,v,o); if(t>v)v=t; }
+    int lane=threadIdx.x&31, warp=threadIdx.x>>5;
+    if (lane==0) sh[warp]=v; __syncthreads();
+    float r = (threadIdx.x<8) ? sh[threadIdx.x] : -1e30f;
+    if (warp==0){ for(int o=4;o>0;o>>=1){ float t=__shfl_down_sync(0x000000ff,r,o); if(t>r)r=t; } if(lane==0) sh[0]=r; }
+    __syncthreads(); return sh[0];
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // EAGER reference kernels (each is a SEPARATE launch in the eager path).
 // ─────────────────────────────────────────────────────────────────────────────
@@ -215,15 +239,19 @@ __global__ void _hx_k_clm_megafwd(
     grid.sync();
 
     // ── PHASE 1a: groupnorm reduction (per-row mean/var). One block per row. ──
+    // WARP-SHUFFLE reduction (32 B static smem) — the megafwd cannot afford a
+    // 256-float __shared__ buffer (the inline WMMA2 GEMM already uses the full
+    // 48 KB static cap on sm_100). All 256 threads share the same row r → no
+    // divergence at the reduction barriers.
     {
+        __shared__ float red[8];
         for (long long r=blockIdx.x; r<M; r+=gridDim.x) {
-            // block-stride over the N1 columns, block-local reduce in shared.
-            __shared__ float ssum[256]; __shared__ float ssq[256];
             float s=0.f, sq=0.f;
             for (long long c=tid; c<N1; c+=blockDim.x){ float v=H1[r+c*M]; s+=v; sq+=v*v; }
-            ssum[tid]=s; ssq[tid]=sq; __syncthreads();
-            for (int off=blockDim.x>>1; off>0; off>>=1){ if(tid<off){ ssum[tid]+=ssum[tid+off]; ssq[tid]+=ssq[tid+off]; } __syncthreads(); }
-            if (tid==0){ float mean=ssum[0]/(float)N1; rowMean[r]=mean; rowVar[r]=ssq[0]/(float)N1-mean*mean; }
+            float tot  = blk_sum256(s,  red); __syncthreads();
+            float totq = blk_sum256(sq, red); __syncthreads();
+            if (tid==0){ float mean=tot/(float)N1; rowMean[r]=mean; rowVar[r]=totq/(float)N1-mean*mean; }
+            __syncthreads();
         }
     }
     grid.sync();   // per-row stats now globally visible (cross-block reduction)
@@ -258,19 +286,18 @@ __global__ void _hx_k_clm_megafwd(
     grid.sync();
 
     // ── PHASE 3c: moe_router reduction (per-row max + sumexp). One block/row. ─
+    // WARP-SHUFFLE reduction (32 B static smem), same rationale as PHASE 1a.
     {
+        __shared__ float red[8];
         for (long long r=blockIdx.x; r<M; r+=gridDim.x) {
-            __shared__ float smax[256]; __shared__ float ssum[256];
             float mx=-1e30f;
             for (long long c=tid; c<N2; c+=blockDim.x){ float v=P[r+c*M]; if(v>mx)mx=v; }
-            smax[tid]=mx; __syncthreads();
-            for (int off=blockDim.x>>1; off>0; off>>=1){ if(tid<off && smax[tid+off]>smax[tid]) smax[tid]=smax[tid+off]; __syncthreads(); }
-            float rmax=smax[0]; __syncthreads();
+            float rmax=blk_max256(mx, red); __syncthreads();
             float se=0.f;
             for (long long c=tid; c<N2; c+=blockDim.x) se += expf(P[r+c*M]-rmax);
-            ssum[tid]=se; __syncthreads();
-            for (int off=blockDim.x>>1; off>0; off>>=1){ if(tid<off) ssum[tid]+=ssum[tid+off]; __syncthreads(); }
-            if (tid==0){ rowMax[r]=rmax; rowSum[r]=ssum[0]; }
+            float rsum=blk_sum256(se, red); __syncthreads();
+            if (tid==0){ rowMax[r]=rmax; rowSum[r]=rsum; }
+            __syncthreads();
         }
     }
     grid.sync();

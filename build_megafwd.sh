@@ -24,6 +24,24 @@ sys.stdout.write(src[start:end])
 PY
 echo "=== extracted $(wc -l < gemm_kernels_extracted.cuh) lines, $(grep -c '__global__' gemm_kernels_extracted.cuh) kernels ==="
 
+# SM_100 STATIC-SMEM FIX for the extracted __global__ own-GEMM (same as the
+# device wrapper): the shipped WMMA2 epilogue declares a separate 8 KB `tmp`
+# buffer → 57344 B static > 49152 B per-block cap on sm_100 (nvlink rejects it,
+# even though the eager path launches it normally). Alias tmp onto As (dead in
+# the epilogue) — placement-only, math byte-identical. Applies ONLY to the
+# wmma2 epilogue line; other kernels' tmp (if any) are untouched by the anchor.
+python3 - <<'PY'
+import re
+f="gemm_kernels_extracted.cuh"; s=open(f).read()
+old="    __shared__ float tmp[HXG_WARPS][16*16];"
+new=("    // sm_100 static-smem fit: alias epilogue tmp onto As (dead here).\n"
+     "    float (*tmp)[16*16] = reinterpret_cast<float(*)[16*16]>(&As[0][0]);")
+n=s.count(old)
+s=s.replace(old,new)
+open(f,"w").write(s)
+print(f"  [smem-fix] aliased {n} tmp epilogue buffer(s) onto As in {f}")
+PY
+
 # Arch = the device's real compute capability (sm_90 H100, sm_100 B200, …).
 # Requires a toolkit that knows the arch: CUDA 12.8+ for sm_100 (B200). The build
 # script picks up nvcc from PATH (CUDA 12.8 installed at /usr/local/cuda-12.8).
