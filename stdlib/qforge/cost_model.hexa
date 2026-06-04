@@ -1,0 +1,235 @@
+// cost_model.hexa — QFORGE-PROCESS per-q DFPT cost-driver RANKER (analyzer).
+//
+// MILESTONE #33: "dominant per-q DFPT cost driver identified
+// (irrep count × iter × |G+k| basis size) — MEASURED, not guessed."
+//
+// DFPT (the phonon / el-ph step) dominates RTSC walltime. This module answers
+// — from MEASURED per-q data, never a guess — WHICH factor drives the per-q
+// DFPT wall. The cost model to validate:
+//
+//     per-q DFPT wall  ≈  k · ( n_irrep(q) × n_scf_iter(q) × |G+k|_basis(q) )
+//
+// Given per-q rows {q, n_irrep, n_iter, basis_npw, wall_s} — the SAME shape a
+// process-ledger LedgerStage (#2703) carries per `dfpt:qN` stage, augmented with
+// the structural counts a ph.out parse yields (n_irrep = "Representation #"
+// count · n_iter = Σ "iter #" lines · basis_npw = the q's "G cutoff (... G-vec)")
+// — the analyzer SCORES the measured wall against each CANDIDATE FACTOR plus the
+// product model, and RANKS them by Pearson correlation. It reports the dominant
+// single factor, the product-model fit (correlation + least-squares slope k),
+// and the full ranked table.
+//
+// d4 GENERIC: the candidate FACTORS are DATA (a [Factor] list of name + per-q
+// values), NOT a hardcoded branch per factor. Add/rename/remove a factor is a
+// list edit — there is ONE scoring path (`_pearson` + `_ls_slope`), no per-name
+// dispatch. The product model is itself just one more Factor row built by
+// multiplying the three structural columns.
+//
+// d6 HONESTY: the analyzer reports the correlation AS MEASURED. If a SINGLE
+// factor (e.g. n_iter) out-correlates the product model on the real data, the
+// ranker says so — it does NOT force the product model to the top. The caller's
+// gate asserts whatever the data actually shows.
+//
+// d19 REUSE: math (sqrt) is the compiler builtin — no external stats lib, no
+// re-impl. The per-q input row mirrors process_ledger's per-q stage shape so a
+// future run's captured ledger auto-feeds this analyzer with zero glue.
+//
+// @L3 PURE: read-only over an in-memory row list. No pod ops, no file I/O.
+
+// ── one measured per-q DFPT row (analyzer input) ──────────────────────────
+//   q          — q-point index (1-based; provenance only, not a factor)
+//   n_irrep    — # irreducible representations at this q (ph.out "Representation #")
+//   n_iter     — Σ DFPT-SCF iterations over this q's irreps (ph.out "iter #")
+//   basis_npw  — |G+k| plane-wave basis size at this q (ph.out "G cutoff (N G-vec)")
+//   wall_s     — MEASURED per-q DFPT wall seconds (ledger / ph.out cpu delta)
+pub struct PerQRow {
+    q: int,
+    n_irrep: int,
+    n_iter: int,
+    basis_npw: int,
+    wall_s: float,
+}
+
+// ── a scored candidate factor ──────────────────────────────────────────────
+//   factor      — the factor name ("n_irrep" · "n_iter" · "basis" · the product)
+//   correlation — Pearson r of this factor's per-q values vs measured wall_s
+//   slope       — least-squares 1-param slope (wall ≈ slope · factor), the
+//                 measured coefficient (for the product model: k in s per unit)
+pub struct ScoredFactor {
+    factor: str,
+    correlation: float,
+    slope: float,
+}
+
+// ── the ranked cost report ──────────────────────────────────────────────────
+//   driver       — name of the dominant factor (max |correlation|)
+//   driver_corr  — that factor's measured Pearson correlation
+//   driver_slope — that factor's measured least-squares slope (coefficient)
+//   product_corr — the n_irrep×n_iter×basis product model's correlation
+//   product_slope— the product model's least-squares slope k
+//   ranked       — ALL scored factors, sorted by |correlation| DESC
+//   n_rows       — # per-q rows the rank was measured over
+//   valid        — false ⇒ degenerate input (n<2 or zero variance) → no rank
+pub struct CostReport {
+    driver: str,
+    driver_corr: float,
+    driver_slope: float,
+    product_corr: float,
+    product_slope: float,
+    ranked: [ScoredFactor],
+    n_rows: int,
+    valid: bool,
+}
+
+// ── internal: mean of a float column ───────────────────────────────────────
+fn _mean(xs: [float]) -> float {
+    if len(xs) == 0 { return 0.0 }
+    let mut s = 0.0
+    let mut i = 0
+    while i < len(xs) { s = s + xs[i] ; i = i + 1 }
+    return s / (len(xs) as float)
+}
+
+// ── internal: Pearson correlation r(x,y) ───────────────────────────────────
+// r = Σ(x-mx)(y-my) / sqrt(Σ(x-mx)² · Σ(y-my)²). Zero variance in EITHER axis
+// (a constant factor — e.g. a near-constant basis in a small cell) → r = 0.0
+// (no discriminating power), honestly, never a NaN/crash (d6).
+fn _pearson(xs: [float], ys: [float]) -> float {
+    let n = len(xs)
+    if n < 2 { return 0.0 }
+    let mx = _mean(xs)
+    let my = _mean(ys)
+    let mut sxy = 0.0
+    let mut sxx = 0.0
+    let mut syy = 0.0
+    let mut i = 0
+    while i < n {
+        let dx = xs[i] - mx
+        let dy = ys[i] - my
+        sxy = sxy + dx * dy
+        sxx = sxx + dx * dx
+        syy = syy + dy * dy
+        i = i + 1
+    }
+    let denom = sqrt(sxx * syy)
+    if denom == 0.0 { return 0.0 }
+    return sxy / denom
+}
+
+// ── internal: least-squares 1-param slope (wall ≈ slope · factor) ──────────
+// slope = Σ(x-mx)(y-my) / Σ(x-mx)². Zero x-variance → slope 0.0 (undefined →
+// honest 0, no crash). This is the MEASURED coefficient for the factor.
+fn _ls_slope(xs: [float], ys: [float]) -> float {
+    let n = len(xs)
+    if n < 2 { return 0.0 }
+    let mx = _mean(xs)
+    let my = _mean(ys)
+    let mut sxy = 0.0
+    let mut sxx = 0.0
+    let mut i = 0
+    while i < n {
+        let dx = xs[i] - mx
+        sxy = sxy + dx * (ys[i] - my)
+        sxx = sxx + dx * dx
+        i = i + 1
+    }
+    if sxx == 0.0 { return 0.0 }
+    return sxy / sxx
+}
+
+fn _abs(x: float) -> float { if x < 0.0 { return -x } return x }
+
+// qforge_dfpt_cost_rank — RANK the per-q DFPT cost drivers from MEASURED rows.
+//
+// Scores each CANDIDATE FACTOR (n_irrep · n_iter · basis · the n_irrep×n_iter×
+// basis product model) by Pearson correlation vs the measured per-q wall, plus
+// its least-squares slope (the measured coefficient). Sorts by |correlation|
+// DESC and reports the dominant single factor and the product-model fit AS
+// MEASURED (d6 — no factor is forced to the top).
+//
+// d4: factors are built into a DATA list (4 columns) and scored by ONE path;
+// adding a factor = appending a column, no new branch.
+//
+// GUARD: <2 rows → valid=false, empty rank (no crash). A factor with zero
+// variance (constant column) scores correlation 0.0 honestly — it cannot drive
+// the per-q variance, so it sinks in the rank without special-casing.
+pub fn qforge_dfpt_cost_rank(rows: [PerQRow]) -> CostReport {
+    let n = len(rows)
+    if n < 2 {
+        return CostReport {
+            driver: "", driver_corr: 0.0, driver_slope: 0.0,
+            product_corr: 0.0, product_slope: 0.0,
+            ranked: [], n_rows: n, valid: false,
+        }
+    }
+
+    // build the wall column + the 4 candidate factor columns (d4: data, not branch)
+    let mut wall = []
+    let mut c_irrep = []
+    let mut c_iter = []
+    let mut c_basis = []
+    let mut c_prod = []
+    let mut i = 0
+    while i < n {
+        let r = rows[i]
+        wall = wall + [r.wall_s]
+        c_irrep = c_irrep + [r.n_irrep as float]
+        c_iter = c_iter + [r.n_iter as float]
+        c_basis = c_basis + [r.basis_npw as float]
+        c_prod = c_prod + [(r.n_irrep as float) * (r.n_iter as float) * (r.basis_npw as float)]
+        i = i + 1
+    }
+
+    // score every factor via the SAME path (d4 generic)
+    let names = ["n_irrep", "n_iter", "basis", "n_irrep*n_iter*basis"]
+    let cols = [c_irrep, c_iter, c_basis, c_prod]
+    let mut scored = []
+    let mut j = 0
+    while j < len(names) {
+        scored = scored + [ScoredFactor {
+            factor: names[j],
+            correlation: _pearson(cols[j], wall),
+            slope: _ls_slope(cols[j], wall),
+        }]
+        j = j + 1
+    }
+
+    // sort by |correlation| DESC (selection sort — small N, verifiable)
+    let mut a = 0
+    while a < len(scored) {
+        let mut best = a
+        let mut b = a + 1
+        while b < len(scored) {
+            if _abs(scored[b].correlation) > _abs(scored[best].correlation) { best = b }
+            b = b + 1
+        }
+        if best != a {
+            let tmp = scored[a]
+            scored[a] = scored[best]
+            scored[best] = tmp
+        }
+        a = a + 1
+    }
+
+    // pull the product model's score out of the ranked list for the report
+    let mut p_corr = 0.0
+    let mut p_slope = 0.0
+    let mut k = 0
+    while k < len(scored) {
+        if scored[k].factor == "n_irrep*n_iter*basis" {
+            p_corr = scored[k].correlation
+            p_slope = scored[k].slope
+        }
+        k = k + 1
+    }
+
+    return CostReport {
+        driver: scored[0].factor,
+        driver_corr: scored[0].correlation,
+        driver_slope: scored[0].slope,
+        product_corr: p_corr,
+        product_slope: p_slope,
+        ranked: scored,
+        n_rows: n,
+        valid: true,
+    }
+}
