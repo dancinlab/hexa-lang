@@ -2410,15 +2410,63 @@ fn _dft_isqrt(n: int) -> int {
     return x
 }
 
+// _dft_query_ram_gib — extract the ACTUAL available-RAM signal (GiB) from the
+// rent query's `cpu_ram>=N` token. That value is the FLOOR of the rented node's
+// real RAM (it is pinned into the offer query so the rented pod is GUARANTEED to
+// satisfy it — see the cpu_ram>= pin below), so it is the correct budget to size
+// -np against when a high-RAM node is being rented. Returns 0 when the query
+// carries no cpu_ram>= constraint (unknown RAM → caller falls back to the floor).
+// Scans for the literal "cpu_ram>=" and reads the contiguous digit run after it.
+fn _dft_query_ram_gib(query: str) -> int {
+    let needle = "cpu_ram>="
+    let n = len(query)
+    let m = len(needle)
+    let mut i = 0
+    while i + m <= n {
+        if query.substring(i, i + m) == needle {
+            let mut j = i + m
+            let mut v = 0
+            let mut got = 0
+            while j < n {
+                let cc = char_code(query.substring(j, j + 1))
+                if cc >= 48 && cc <= 57 {
+                    v = v * 10 + (cc - 48)
+                    got = 1
+                    j = j + 1
+                } else {
+                    j = j + 1 - 1
+                    break
+                }
+            }
+            if got == 1 { return v }
+            return 0
+        }
+        i = i + 1
+    }
+    return 0
+}
+
 // _dft_oom_preflight — d11 HARD gate. Sizes the deck's relax (DftSpec) against the
-// RAM floor via tls_dft_mpi_sweet_spot (REUSED budget math) BEFORE the paid rent.
-// Returns the recommended MPI rank count to CLAMP -np to, or 0 to REFUSE the fire
-// (the relax won't fit even one rank on the floor → renting would OOM-kill it, the
-// wave3b pattern). Prints a clear [dft-run] verdict either way.
-fn _dft_oom_preflight(deck: str) -> int {
+// pod's RAM budget via tls_dft_mpi_sweet_spot (REUSED budget math) BEFORE the paid
+// rent. Returns the recommended MPI rank count to CLAMP -np to, or 0 to REFUSE the
+// fire (the relax won't fit even one rank → renting would OOM-kill it, the wave3b
+// pattern). Prints a clear [dft-run] verdict either way.
+//
+// RAM-floor fix (handoff 24ab03f0): the budget = max(actual pod RAM, floor) where
+// "actual pod RAM" is the `cpu_ram>=N` value the campaign pinned into the rent
+// query. The old code used a FIXED DFT_DETACH_RAM_FLOOR (64) regardless, so a
+// 38-atom ~10-GiB/rank cell ALWAYS clamped -np to ~6 (64/10) — a 384-GiB pod got
+// ZERO extra ranks. Threading the query RAM lets high-RAM pods earn more ranks; an
+// absent / smaller cpu_ram>= falls back to the floor (backward-compatible).
+fn _dft_oom_preflight(deck: str, query: str) -> int {
     let spec = _dft_deck_spec(deck)
+    // Resolve the RAM budget: actual pinned cpu_ram>=N when it exceeds the floor,
+    // else the floor (unknown RAM, or a smaller pin → no regression vs old 64).
+    let query_ram = _dft_query_ram_gib(query)
+    let mut budget = DFT_DETACH_RAM_FLOOR
+    if query_ram > budget { budget = query_ram }
     let node = DftNodeSpec {
-        total_mem_gib: DFT_DETACH_RAM_FLOOR,
+        total_mem_gib: budget,
         n_cpu_cores:   16,       // the rent query's cpu_cores_effective>=16 floor
         has_gpu:       0,
         gpu_mem_gib:   0
@@ -2426,10 +2474,10 @@ fn _dft_oom_preflight(deck: str) -> int {
     let rec = tls_dft_mpi_sweet_spot(spec, node)
     println("[dft-run] ⓪ OOM preflight (d11) — " + to_string(spec.n_atoms) + " atoms · ~"
         + to_string(spec.n_basis_pw) + " PW basis · per-rank ~" + to_string(rec.per_rank_mem_gib)
-        + " GiB vs " + to_string(DFT_DETACH_RAM_FLOOR) + " GiB floor")
+        + " GiB vs " + to_string(budget) + " GiB budget")
     if rec.kind == "mem-bound-zero" {
         println("[dft-run] ⓪ ✗ REFUSED — one MPI rank needs ~" + to_string(rec.per_rank_mem_gib)
-            + " GiB but the " + to_string(DFT_DETACH_RAM_FLOOR) + " GiB offer floor can't fit it.")
+            + " GiB but the " + to_string(budget) + " GiB RAM budget can't fit it.")
         println("[dft-run]   renting would OOM-kill the relax (wave3b SIGKILL@iter#2 pattern). NOT firing.")
         println("[dft-run]   reduce ecutwfc / cell size, or rent a larger-RAM node manually (--query cpu_ram>=N).")
         return 0
@@ -2497,15 +2545,20 @@ fn _dft_detach(deck: str, image: str, disk: int, owner: str, query: str, identit
     }
 
     // ⓪ d11 HARD OOM gate (Fix-deck-1) — size the relax BEFORE the paid rent. A
-    // 0 verdict means even one rank won't fit the RAM floor → REFUSE (don't rent
+    // 0 verdict means even one rank won't fit the budget → REFUSE (don't rent
     // an OOM-doomed pod). Otherwise clamp -np to the mem-budget sweet-spot AND pin
-    // cpu_ram>=floor into the offer query so the rented node actually has the RAM
-    // the closed-form fit assumed (the wave3b leak: no enforced RAM floor).
-    let np_cap = _dft_oom_preflight(deck)
+    // cpu_ram>= into the offer query so the rented node actually has the RAM the
+    // closed-form fit assumed (the wave3b leak: no enforced RAM floor). The gate is
+    // sized against the SAME query the rent uses, so a caller's `--query cpu_ram>=N`
+    // (high-RAM pod) drives the budget — not the fixed 64 floor (handoff 24ab03f0).
+    let np_cap = _dft_oom_preflight(deck, query)
     if np_cap <= 0 {
         return 1
     }
-    let ram_query = query + " cpu_ram>=" + to_string(DFT_DETACH_RAM_FLOOR)
+    // Pin the floor ONLY when the caller did not already constrain cpu_ram —
+    // appending a second cpu_ram>=64 would CLOBBER a caller's cpu_ram>=384 under
+    // vastai last-wins (line ~250) and downgrade the rented node back to 64 GiB.
+    let ram_query = if _dft_query_ram_gib(query) > 0 { query } else { query + " cpu_ram>=" + to_string(DFT_DETACH_RAM_FLOOR) }
     println("[dft-run] ① RENT — searching verified offers (CPU-first → GPU fallback)...")
     let offer = _dft_rent_first_offer(ram_query)
     if offer.ok == 0 {

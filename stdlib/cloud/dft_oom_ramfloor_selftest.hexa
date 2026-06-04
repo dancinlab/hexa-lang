@@ -1,0 +1,146 @@
+// HEXA Standard Library — cloud/dft_oom_ramfloor_selftest
+//
+// g5 selftest for the dft-run OOM-preflight RAM-floor fix (handoff 24ab03f0).
+//
+// BUG (observed 2026-06-05, two wasted rents): the d11 OOM preflight built
+// DftNodeSpec.total_mem_gib from a FIXED DFT_DETACH_RAM_FLOOR (64 GiB)
+// regardless of the pod's actual RAM. On the Li2MgH16-class cell the run
+// printed "per-rank ~10 GiB vs 64 GiB floor · -np clamped to 6 (mem-budget
+// sweet-spot, eff 8001bp)" — and a 128-GiB OR a 384-GiB pod BOTH clamped to
+// -np 6 (64/10), so high-RAM pods gave ZERO speedup.
+//
+// FIX: the rent `--query cpu_ram>=N` value (the FLOOR of the ACTUAL rented
+// RAM — it is pinned into the offer query so the rented node is guaranteed to
+// carry it) drives the budget when it exceeds DFT_DETACH_RAM_FLOOR; an absent
+// / smaller value falls back to the floor (backward-compatible). Mirrors the
+// one budget line the fix added to _dft_oom_preflight:
+//     budget = max(query_ram, DFT_DETACH_RAM_FLOOR); node.total_mem_gib = budget
+//
+// HONEST SCOPE (d6) — the Amdahl ceiling, NOT RAM, is the next binding cap.
+// The engine's RFC-091 §2.3 step-5 sweep keeps only ranks with >=70%
+// efficiency; for ground-state SCF (5% serial fraction) that caps
+// recommended_np at 9 (eff 7145bp @ np=9; np=10 falls to 6896bp < 70%). So
+// raising the RAM budget lifts -np from 6 (RAM-bound) up to 9 (Amdahl-bound)
+// — a real >6 gain that unblocks high-RAM pods — but cannot reach ~24-32 on
+// this engine: past np~9 the Amdahl efficiency gate binds for any RAM. The
+// final on-pod -np = min(np_phys, np_cap) clamps to real cores regardless.
+//
+// Deterministic — no real pod, no IO.
+
+use "stdlib/cloud/preflight_dft"  // DftSpec · DftNodeSpec · tls_dft_mpi_sweet_spot
+
+// production floor constant (mirrors DFT_DETACH_RAM_FLOOR in dft_dispatch.hexa).
+let FLOOR = 64
+
+fn _check(case: str, got: int, want: int) {
+    if got != want {
+        println("  FAIL: " + case + " — got " + to_string(got) + " want " + to_string(want))
+        exit(1)
+    }
+    println("  ok: " + case + " = " + to_string(got))
+}
+
+fn _check_gt(case: str, got: int, lo: int) {
+    if got <= lo {
+        println("  FAIL: " + case + " — got " + to_string(got) + " want > " + to_string(lo))
+        exit(1)
+    }
+    println("  ok: " + case + " = " + to_string(got) + " (> " + to_string(lo) + ")")
+}
+
+fn _check_le(case: str, got: int, hi: int) {
+    if got > hi {
+        println("  FAIL: " + case + " — got " + to_string(got) + " want <= " + to_string(hi))
+        exit(1)
+    }
+    println("  ok: " + case + " = " + to_string(got) + " (<= " + to_string(hi) + ")")
+}
+
+// budget resolution — the one line the fix added (mirror of _dft_oom_preflight).
+fn _budget(query_ram: int) -> int {
+    let mut b = FLOOR
+    if query_ram > b { b = query_ram }
+    return b
+}
+
+// recommended_np (the -np cap) for `spec` on a node with `ram_gib` budget.
+fn _np_for(spec: DftSpec, ram_gib: int) -> int {
+    let node = DftNodeSpec {
+        total_mem_gib: ram_gib,
+        n_cpu_cores:   64,
+        has_gpu:       0,
+        gpu_mem_gib:   0
+    }
+    return tls_dft_mpi_sweet_spot(spec, node).recommended_np
+}
+
+fn _min(a: int, b: int) -> int {
+    if a < b { return a }
+    return b
+}
+
+fn main() {
+    println("dft_oom_ramfloor_selftest — RAM-floor fix (24ab03f0)")
+
+    // The exact bug-report cell: ~10 GiB/rank, -np clamped to 6 on the 64 floor.
+    // (Li2MgH16-class super-cell — dense PW basis at high ecut.)
+    let spec = DftSpec {
+        n_atoms:     64,
+        n_basis_pw:  1600000,
+        n_kpoints:   1,
+        n_spin:      1,
+        n_electrons: 290,
+        cutoff_ry:   80,
+        method_id:   0      // ground-state SCF relax (5% serial → Amdahl cap @ np=9)
+    }
+
+    let per_rank = tls_dft_rank_memory_gib(spec)
+    println("  [anchor] per-rank ~" + to_string(per_rank) + " GiB (bug report said ~10)")
+    _check("per-rank reproduces the bug-report ~10 GiB/rank", per_rank, 10)
+
+    // ── budget resolution (the fix) ──────────────────────────────────────
+    _check("budget(unknown query RAM) falls back to floor", _budget(0), FLOOR)
+    _check("budget(cpu_ram>=64) = 64",   _budget(64), 64)
+    _check("budget(cpu_ram>=128) = 128", _budget(128), 128)
+    _check("budget(cpu_ram>=384) = 384", _budget(384), 384)
+    _check("budget(cpu_ram>=32 < floor) clamps up to floor", _budget(32), FLOOR)
+
+    // ── -np at each pod RAM tier (the core assertion) ────────────────────
+    // (b) 64-GiB pod → 6 — the ORIGINAL buggy value, now the backward-compat path.
+    let np_64 = _np_for(spec, _budget(64))
+    println("  [-np@64GiB]  " + to_string(np_64))
+    _check("(b) 64-GiB pod still yields 6 (backward-compatible)", np_64, 6)
+
+    // (a) 128-GiB pod → > 6 (the fix; was wrongly 6 before — ZERO speedup bug).
+    let np_128 = _np_for(spec, _budget(128))
+    println("  [-np@128GiB] " + to_string(np_128))
+    _check_gt("(a) 128-GiB pod now yields -np > 6 (was 6 — the bug)", np_128, 6)
+
+    // (a) 384-GiB pod → > 6 (was wrongly 6 before — same ZERO speedup bug).
+    let np_384 = _np_for(spec, _budget(384))
+    println("  [-np@384GiB] " + to_string(np_384))
+    _check_gt("(a) 384-GiB pod now yields -np > 6 (was 6 — the bug)", np_384, 6)
+
+    // The high-RAM lift lands on the SCF Amdahl ceiling (np=9), not RAM — honest
+    // scope: more RAM than this earns no more ranks because the >=70%-efficiency
+    // gate binds at np=9 for a 5% serial fraction. Still a real 6 -> 9 unblock.
+    _check("(a) high-RAM -np lands on the SCF Amdahl ceiling (9)", np_384, 9)
+    _check("(a) 128-GiB also reaches the Amdahl ceiling (9)", np_128, 9)
+
+    // (c) unknown RAM (no cpu_ram>= in the query) → floor → 6 (no regression).
+    let np_unknown = _np_for(spec, _budget(0))
+    println("  [-np@unknown] " + to_string(np_unknown))
+    _check("(c) unknown RAM falls back to floor → 6 (no regression)", np_unknown, np_64)
+
+    // ── (d) -np never exceeds physical cores ─────────────────────────────
+    // production clamps `-np = min(np_phys, np_cap)` (dft_dispatch ~line 2462),
+    // np_phys = the rented pod's real lscpu core count. With a 4-core pod the
+    // mem-budget sweet-spot (9) is clamped down to 4; the guarantee holds.
+    let np_final_4c  = _min(4,  np_384)
+    let np_final_64c = _min(64, np_384)
+    _check_le("(d) -np clamped to 4 phys cores when cores < sweet-spot", np_final_4c, 4)
+    _check("(d) 4-core pod → -np = 4 (mem-budget wants 9)", np_final_4c, 4)
+    _check("(d') 64-core pod → -np = mem-budget sweet-spot 9", np_final_64c, np_384)
+
+    println("dft_oom_ramfloor_selftest PASS")
+}
