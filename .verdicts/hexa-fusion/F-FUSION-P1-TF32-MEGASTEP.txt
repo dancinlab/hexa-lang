@@ -1,5 +1,5 @@
 F-FUSION-P1-TF32-MEGASTEP  ::  the TF32 GEMM-pulling full-fwd MEGAKERNEL inside the REAL clm_prod step (the B3 byte-eq-blocked path, UNBLOCKED by the user's TF32 authorization)
-domain: HEXA-FUSION  ·  date: 2026-06-05  ·  method: author the missing _hx_k_clm_megafwd TF32 cooperative kernel + _hx_cuda_farr_clm_megafwd_gpu launcher → build the REAL clm_prod_gpu trainer on a fresh H100_NVL pod → real-step A/B (eager FP64 cublas vs HEXA_CLM_MEGASTEP=1 TF32-mega) at D1536 T512, CE convergence as the correctness gate
+domain: HEXA-FUSION  ·  date: 2026-06-05  ·  method: author the missing _hx_k_clm_megafwd TF32 cooperative kernel + _hx_cuda_farr_clm_megafwd_gpu launcher → build the REAL clm_prod_gpu trainer on a fresh CUDA-devel pod (rented H100; vast served a Blackwell RTX PRO 6000 97GB — recorded honestly) → real-step A/B (eager FP64 cublas vs HEXA_CLM_MEGASTEP=1 TF32-mega) at D1536 T512, CE convergence as the correctness gate
 
 ════════════════════════════════════════════════════════════════════════════════
 PRE-REGISTERED FALSIFIER
@@ -52,11 +52,92 @@ This work AUTHORS the launcher (self/cuda/runtime_cuda_emit.hexa, the emitter SS
 ════════════════════════════════════════════════════════════════════════════════
 RESULT  (filled from the REAL-step pod run)
 ════════════════════════════════════════════════════════════════════════════════
-__RESULT__
+GPU (honest): rented `hexa cloud rent vast --gpu H100` but the offer that came up
+was an NVIDIA RTX PRO 6000 Blackwell Workstation Edition (97887 MiB, compute_cap
+12.0 / sm_120). Built with -gencode arch=compute_90,code=compute_90 (sm_90 PTX
+JIT-forwards to Blackwell). A datacenter-class Blackwell card, not literally an
+H100 — recorded verbatim so the number is not over-claimed. The first vast offer
+was a bare Ubuntu image with NO CUDA toolkit (destroyed, leak 0); the second was
+nvidia/cuda:12.4.1-devel-ubuntu22.04 (nvcc 12.4, gcc 11.4) — used for the run.
+
+BUILD (the regen path — the launcher had to be MADE real on this branch):
+  · The committed self/cuda/runtime_cuda.c on the branch did NOT contain the
+    megakernel — only the emitter SSOT (runtime_cuda_emit.hexa) did. Regenerated
+    runtime_cuda.c (285 KB, 5 megafwd refs) by RUNNING the emitter's own main()
+    through the local compiler (deterministic string-emit reads the edited source).
+  · Regenerated clm_prod.c from the megastep-wired clm_prod.hexa via `hexa build
+    --c-only`. The local Jun-1 compiler lacks builtin-recognition for 8 forge
+    dispatchers (db_colsum/gelu/residual_add/gelu_bwd/expert_pack2/expert_unpack2/
+    grad_sum2/int4_quant_bwd) so it emitted hexa_call4(forge_dispatch_X,…) closure
+    calls; rewrote those 8 sites to direct C calls (mechanical, the symbols are
+    C functions). Spliced the B3 megafwd C wrapper + 4 L3 host-fallback stubs
+    (gelu2/groupnorm_gelu/groupnorm_gelu_residual/moe_block2 — separate fusion
+    levers, not under test here) into runtime.c.
+  · DECISIVE BUG FOUND + FIXED (commit fe181b47a): groupnorm#2 is per-token (G=1
+    over D), so the megakernel writes T meanN/invN entries — but mega_meanN and
+    invN were t_zeros(1). The launcher's _ensure_dev_alloc_out(meanN/invN, T)
+    host-len guard rejected them (host len 1 < need T), returned -1, and SILENTLY
+    fell back to eager (no [MEGAFWD-FIRED]). Sizing both to t_zeros(T) let the
+    cooperative megakernel actually launch.
+
+REAL-STEP A/B  (D=1536 T=512 E=2 NSAMP=8 EPOCHS=4 · DEVRESIDENT+DEVFEED+BATCHED ·
+                idle baseline MEAN 0.00%, verbatim ab.log):
+  A  eager FP64 cuBLAS (HEXA_CLM_MEGASTEP unset):
+       util MEAN = 29.03%  PEAK = 100%  pct>=20 = 36.2%  (n=254)
+       CE  epoch-1 = 4.44213  →  epoch-4 = 3.56866   DESCENT = 1   FIRED = 0
+  B  TF32 GEMM-pulling megakernel (HEXA_CLM_MEGASTEP=1):
+       util MEAN = 34.54%  PEAK = 100%  pct>=20 = 41.1%  (n=175)
+       CE  epoch-1 = 4.45845  →  epoch-4 = 3.42097   DESCENT = 1   FIRED = 2
+       launcher: grid=752 blk=128, TF32 coop full-fwd, no cuBLAS, grc=0.
+
+  [MEGAFWD-FIRED] ≥ 1  ✓ (fired twice — wrapper + launcher).
+  CE CONVERGES under TF32-mega ✓ — DESCENT=1, final CE 3.42097 vs eager 3.56866
+  (mega is actually marginally LOWER, no compounding TF32 blow-up; well within
+  the authorized TF32 tol, NOT byte-eq).
+  util LIFT: 29.03% → 34.54%  =  +5.51pp real-step MEAN util.
 
 ════════════════════════════════════════════════════════════════════════════════
 FINDING
 ════════════════════════════════════════════════════════════════════════════════
-__FINDING__
+PARTIAL GREEN — falsifier NOT triggered on either axis, but the headline util-99%
+question stays CLOSED-NEGATIVE.
 
-g5-HONEST: __HONEST__
+(d-util) The TF32 GEMM-pulling megakernel DID lift real-step util: 29.03% → 34.54%
+  MEAN (+5.51pp), with pct>=20 36.2% → 41.1%. So the megakernel is NOT util-neutral
+  — pulling all 4 conv GEMMs inside one cooperative launch + keeping the glue/gn
+  device-resident across grid.sync() measurably raises occupancy on the SAME real
+  step. The falsifier's (d-util) leg ("does NOT lift util above eager") is NOT met.
+
+(c-conv) CE CONVERGED under full-step TF32: 4.458 → 3.421 over 4 epochs, DESCENT=1,
+  final CE marginally BELOW eager FP64 (3.421 vs 3.569). TF32-everywhere did NOT
+  compound through the trainer — the precision relaxation is "free" at this scale
+  on this corpus. The falsifier's (c-conv) leg is NOT met. (Honest caveat: 4 epochs
+  / 8 windows is a short run; CE-equivalence is shown at the bar the falsifier set,
+  not a multi-thousand-step guarantee.)
+
+Δ vs baseline (the finding): +5.51pp real-step MEAN util for the TF32 megakernel,
+  CE-safe. This is the FIRST real-step util lift in the HEXA-FUSION campaign that is
+  NOT a byte-eq-blocked dead end — B3 proved byte-eq ⊥ util-lift under FP64; P1 shows
+  that RELAXING precision to TF32 (so a persistent kernel can host its own GEMMs)
+  buys a genuine, CE-safe util increment.
+
+util-99% path: CLOSED-NEGATIVE. Even with every GEMM pulled into ONE cooperative
+  launch and zero relaunch gaps, real-step util is 34.54% MEAN — bimodal (PEAK 100%,
+  pct>=20 only 41%), not saturation. The remaining idle is NOT launch-gap and NOT
+  precision-bound; it is the serial-DAG dependency floor (each fwd phase grid.syncs
+  on the previous; the per-token glue/groupnorm phases under-fill the SMs between
+  GEMM bursts) PLUS the eager bwd + final conv that stay outside the megakernel.
+  This corroborates P2 (#2752, RTX5070 real-step bimodal MEAN 26%): the util ceiling
+  is the serial-DAG idle floor, deeper than both precision and launch-fusion. To open
+  99% you would need to break the phase serialization itself (overlap independent
+  fwd branches / multi-step pipelining), not just fuse launches or relax precision.
+
+g5-HONEST: [MEGAFWD-FIRED] fired (×2, verbatim). The A/B is a REAL clm_prod step
+  (D1536 T512), not a microbenchmark — eager FP64 vs HEXA_CLM_MEGASTEP=1 TF32 on the
+  identical config, util sampled by external nvidia-smi, CE the convergence gate (NOT
+  byte-eq; the TF32 own-GEMM accumulation is a deliberate, user-authorized precision
+  delta). GPU was a Blackwell RTX PRO 6000 (recorded; the rent asked H100 but vast
+  served Blackwell — stated, not papered over). Build required regenerating the
+  generated C + a real sizing bug-fix; the launcher genuinely RAN (grc=0). Pod
+  destroyed + provider-API GONE (leak 0). The +5.51pp lift is the honest Δ; the
+  util-99% target is honestly CLOSED-NEGATIVE (serial-DAG idle floor).

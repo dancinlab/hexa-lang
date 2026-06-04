@@ -5,3 +5,7 @@
   fired  = "[MEGAFWD-FIRED] CONFIRMED on a Blackwell pod (RTX PRO 6000, sm_120 via sm_90 PTX-JIT): grid=752 blk=128, TF32 coop full-fwd, no cuBLAS, grc=0. CE sensible (TF32 mega 3.954 vs eager 3.946 @ D512 T128 smoke)."
   gpu    = "rented H100 → got Blackwell RTX PRO 6000 97GB (noted honestly); D1536 T512 fits."
   verdict-tier-target = "🟢 numerical A/B (real-step util eager→TF32-mega + CE convergence in TF32 tol) OR 🔴 closed-neg (util floor = serial-DAG idle deeper than precision)."
+
+  RESULT  = "REAL-step A/B (D1536 T512 E2 NSAMP8 EPOCHS4): EAGER FP64 util MEAN 29.03% (PEAK 100% pct>=20 36.2%) CE 4.442→3.569 DESCENT=1 FIRED=0 · TF32-MEGA util MEAN 34.54% (PEAK 100% pct>=20 41.1%) CE 4.458→3.421 DESCENT=1 FIRED=2. Δ util = +5.51pp, CE-safe."
+  finding = "PARTIAL GREEN — neither falsifier leg met: TF32 megakernel LIFTS real-step util +5.51pp AND CE converges (final CE below eager). FIRST non-byte-eq-blocked real-step util lift in the campaign. BUT util-99% CLOSED-NEGATIVE: 34.54% MEAN is bimodal (pct>=20 41%), the residual idle = serial-DAG dependency floor (phase grid.syncs + per-token glue under-fill + eager bwd outside the megakernel), deeper than precision+launch-fusion. Corroborates P2."
+  pod     = "vast 39507342 Blackwell RTX PRO 6000 — DESTROYED + provider-API GONE (leak 0)."
