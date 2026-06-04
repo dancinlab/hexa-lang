@@ -160,10 +160,11 @@ pub fn qforge_crystal_point_group(lattice: [float]) -> [int] {
     let g = _cs_metric(lattice)
 
     // guard a degenerate (zero-volume) lattice: |det L| must be > 0.
-    // reuse the integer det path is not applicable (floats), inline a 3×3 det.
-    let dl = lattice[0] * (lattice[4] * lattice[8] - lattice[5] * lattice[7])
-           - lattice[1] * (lattice[3] * lattice[8] - lattice[5] * lattice[6])
-           + lattice[2] * (lattice[3] * lattice[7] - lattice[4] * lattice[6])
+    // (3×3 cofactor expansion with split minors — single-line per minor.)
+    let _m0 = lattice[4] * lattice[8] - lattice[5] * lattice[7]
+    let _m1 = lattice[3] * lattice[8] - lattice[5] * lattice[6]
+    let _m2 = lattice[3] * lattice[7] - lattice[4] * lattice[6]
+    let dl = lattice[0] * _m0 - lattice[1] * _m1 + lattice[2] * _m2
     if _cs_abs(dl) < _CS_EPS { return [] }
 
     let mut ops: [int] = []
