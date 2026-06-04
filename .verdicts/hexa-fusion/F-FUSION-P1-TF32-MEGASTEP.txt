@@ -1,0 +1,62 @@
+F-FUSION-P1-TF32-MEGASTEP  ::  the TF32 GEMM-pulling full-fwd MEGAKERNEL inside the REAL clm_prod step (the B3 byte-eq-blocked path, UNBLOCKED by the user's TF32 authorization)
+domain: HEXA-FUSION  ·  date: 2026-06-05  ·  method: author the missing _hx_k_clm_megafwd TF32 cooperative kernel + _hx_cuda_farr_clm_megafwd_gpu launcher → build the REAL clm_prod_gpu trainer on a fresh H100_NVL pod → real-step A/B (eager FP64 cublas vs HEXA_CLM_MEGASTEP=1 TF32-mega) at D1536 T512, CE convergence as the correctness gate
+
+════════════════════════════════════════════════════════════════════════════════
+PRE-REGISTERED FALSIFIER
+════════════════════════════════════════════════════════════════════════════════
+The TF32 GEMM-pulling megakernel (whole clm_prod fwd DAG — all conv GEMMs pulled
+INSIDE one cudaLaunchCooperativeKernel as TF32 own-GEMM, glue+gn device-resident
+across grid.sync()) run INSIDE the REAL clm_prod training step (D1536 T512, the
+median-2% OCCUPANCY-WALL regime) LIFTS GPU util ABOVE the eager ~13% baseline
+WHILE CE still CONVERGES within TF32 tol (rel ~1e-3 over the run, NOT bit-exact —
+the precision tradeoff the user authorized) AND [MEGAFWD-FIRED] ≥ 1.
+
+FALSIFIED if EITHER:
+  (d-util) the TF32 megakernel does NOT lift real-step util above the eager baseline, OR
+  (c-conv) CE DIVERGES under the full-step TF32 megakernel (TF32 error compounds
+           through the trainer beyond TF32 tol) — the honest risk that TF32-everywhere
+           isn't free.
+This is NOT byte-eq gated (user authorized TF32). The util-99%-path opens iff the
+util lift holds AND CE converges.
+
+════════════════════════════════════════════════════════════════════════════════
+WHAT WAS BUILT (the engineering the precision-unlock made admissible)
+════════════════════════════════════════════════════════════════════════════════
+B3 (#2750) wired HEXA_CLM_MEGASTEP into clm_prod_fwd + a codegen builtin + runtime.h
+decl + a runtime.c wrapper that all REFERENCE _hx_cuda_farr_clm_megafwd_gpu — but
+that launcher DID NOT EXIST on main (B2's TF32 kernel was a now-gone pod-local
+artifact; the only megafwd .cu on main is an FP64 generic-transformer demonstrator).
+So under FP64 byte-eq the path was inadmissible AND unbuilt.
+
+This work AUTHORS the launcher (self/cuda/runtime_cuda_emit.hexa, the emitter SSOT):
+  · _hx_k_clm_megafwd — ONE cudaLaunchCooperativeKernel persistent grid running the
+    whole fwd DAG: conv(xe→xec) → conv(xec→h0) → [groupnorm#1→gelu→residual] →
+    conv-router(xt→logits_r) → conv-experts×2(xt→eo0,eo1) → [gelu2→pack→softmax-
+    combine] → groupnorm#2. ALL 4 conv GEMMs PULLED INSIDE as TF32 own-GEMM
+    (_hx_dev_conv_tf32: operands rounded f64→TF32 via the 13-low-mantissa-bit mask,
+    f32 FMA accumulation — the authorized precision); im2col folded into the inner
+    loop (causal-dilated). Glue blocks + both groupnorms keep the host SEQUENTIAL
+    reduction order (groupnorm = G=1 whole-[T,D] reduction in thread 0 then grid.sync
+    + parallel apply), so the ONLY precision delta vs eager FP64 is the GEMM
+    accumulation. Intermediates device-resident across grid.sync() — no relaunch gap.
+    Bwd intermediates (hn0/xhat0/inv0/eo0/eo1/probs/ex_out/yn/xhatN/invN) written
+    byte-for-byte so clm_prod_bwd is UNCHANGED; only conv(yn→out_logits) stays eager.
+  · _hx_cuda_farr_clm_megafwd_gpu — the launcher: checks cudaDevAttrCooperativeLaunch,
+    H2Ds inputs, dev-allocs outputs, sizes the grid to fill the SMs
+    (cudaOccupancyMaxActiveBlocksPerMultiprocessor × SM count), cudaLaunchCooperative
+    Kernel, marks outputs FARR_DEVICE. Returns -1 (→ eager FP64 fallback) if no coop
+    launch. assert_eq ignored (TF32 path — the precision relaxation IS the point).
+  · build: nvcc -x cu -DHEXA_CUDA -rdc=true -arch=sm_90 (rdc REQUIRED for
+    cooperative_groups grid.sync) + -dlink + -lcudadevrt.
+
+════════════════════════════════════════════════════════════════════════════════
+RESULT  (filled from the REAL-step pod run)
+════════════════════════════════════════════════════════════════════════════════
+__RESULT__
+
+════════════════════════════════════════════════════════════════════════════════
+FINDING
+════════════════════════════════════════════════════════════════════════════════
+__FINDING__
+
+g5-HONEST: __HONEST__

@@ -1,0 +1,12 @@
+@discovery := "P1 — TF32 GEMM-pulling full-fwd megakernel (the B3 byte-eq-blocked path, now unblocked by the user's TF32 authorization)"
+  id     = "F-FUSION-P1-TF32-MEGASTEP"
+  domain = "HEXA-FUSION"
+  date   = "2026-06-05"
+  seed   = "B3 (#2750) proved byte-eq ⊥ util-lift WHEN FP64 byte-eq required; USER now authorizes TF32 → the GEMM-pulling megakernel is ADMISSIBLE (bar = TF32-tol CE convergence, not max|Δ|=0)"
+  verdict-tier-target = "🟢 numerical real-step A/B (util eager→TF32-mega + CE convergence) OR 🔴 closed-neg (CE diverges through trainer, OR util still flat = OCCUPANCY-WALL deeper than the launch gap)"
+
+  built  = "_hx_k_clm_megafwd cooperative kernel + _hx_cuda_farr_clm_megafwd_gpu launcher AUTHORED in self/cuda/runtime_cuda_emit.hexa — the launcher the on-main B3 wrapper/codegen builtin/HEXA_CLM_MEGASTEP callsite reference but which did NOT exist on main (B2's TF32 kernel was a now-gone pod-local artifact)"
+  design = "ALL 4 fwd conv GEMMs pulled INSIDE one cudaLaunchCooperativeKernel as TF32 own-GEMM (f64→TF32-round operands, f32 FMA accum — the authorized precision); im2col folded into the inner loop; glue blocks + groupnorm#2 keep host SEQUENTIAL reduction order (so the ONLY precision delta vs eager FP64 is the GEMM accumulation); intermediates device-resident across grid.sync()"
+  correctness = "CE CONVERGENCE within TF32 tol (rel ~1e-3 over the run), NOT byte-eq — the precision tradeoff the user authorized. [MEGAFWD-FIRED] must fire"
+  next   = "real-step A/B util eager(FP64 cublas)→TF32-mega @ D1536 T512 H100; if CE diverges through the trainer that is the honest finding that TF32-everywhere isn't free"
+  link   = ".verdicts/hexa-fusion/F-FUSION-P1-TF32-MEGASTEP.txt · F-FUSION-B3-REALTRAINER.txt (the byte-eq-gated predecessor) · branch domain/hexa-fusion-p1-tf32-megastep"

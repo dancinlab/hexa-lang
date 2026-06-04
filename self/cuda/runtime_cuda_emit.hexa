@@ -2234,10 +2234,8 @@ fn emit_runtime_cuda_c() -> str {
             "        HN[i] = G[c] * xh + Bn[c];\n" +
             "    }\n" +
             "}\n" +
-            "__device__ __forceinline__ double _hx_gelu_dev(double x) {\n" +
-            "    const double inv_sqrt2 = 0.70710678118654752440;\n" +
-            "    return x * 0.5 * (1.0 + erf(x * inv_sqrt2));\n" +
-            "}\n" +
+            "/* gelu: reuse the file's existing _hx_gelu_dev (defined above, static\n" +
+            " * __device__ double — same erf / 1/√2 literal). */\n" +
             "/* THE cooperative full-fwd megakernel. Operand farr ids resolved to device\n" +
             " * pointers by the launcher; every intermediate is a device buffer. assert_eq\n" +
             " * is ignored here (TF32 path — the precision relaxation is the whole point). */\n" +
@@ -2379,6 +2377,8 @@ fn emit_runtime_cuda_c() -> str {
             "        cudaFree(d_ex0); cudaFree(d_ex1); return -1;\n" +
             "    }\n" +
             "    if (_forge_launch_check(\"clm_megafwd\") != 0) { cudaFree(d_ex0); cudaFree(d_ex1); return -1; }\n" +
+            "    { static int _mf_fired = 0; if (!_mf_fired) { _mf_fired = 1;\n" +
+            "        fprintf(stderr, \"[MEGAFWD-FIRED] _hx_k_clm_megafwd TF32 coop full-fwd (grid=%d blk=%d, no cuBLAS)\\n\", grid_sz, blk); } }\n" +
             "    cudaFree(d_ex0); cudaFree(d_ex1);\n" +
             "    /* mark device-resident outputs (bwd reads them; final conv reads yn) */\n" +
             "    int64_t outs[16] = { xec_id, hn0_id, hg0_id, xt_id, mean0_id, inv0_id, xhat0_id,\n" +
