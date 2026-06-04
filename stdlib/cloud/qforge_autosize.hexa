@@ -1,0 +1,139 @@
+// HEXA Standard Library — cloud/qforge_autosize
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// QFORGE-PROCESS milestone — auto-sizing dispatcher.
+//
+// Given a deck shape (atoms, plane-wave basis, ecut), PREDICT the rent shape:
+//   {ram_per_rank_gib, np, gpu_vram_gib, walltime_h, rent_query}
+// and emit a ready `cpu_ram>=N cpu_cores>=M` rent --query so the operator no
+// longer guesses `--query` by hand.
+//
+// MOTIVATION (observed 2026-06-05, demiurge RTSC campaign): two rents were
+// wasted because the operator guessed `--query` by core count. A 64-vCPU pod
+// AND a 384-GiB pod BOTH clamped to -np 6 on the 38-atom Li2MgH16 cell, because
+// per-rank RAM (~10 GiB) — not cores — is the binding constraint. The ram-floor
+// fix (#2724: dft-run reads the actual `cpu_ram>=N` pin) + the resource-sizing
+// table (demiurge #582) are the ground truth this predictor encodes.
+//
+// REUSE (d3): the per-rank RAM estimate AND the -np sweet-spot are NOT
+// reimplemented here — they delegate WHOLE to tls_dft_rank_memory_gib /
+// tls_dft_mpi_sweet_spot (stdlib/cloud/preflight_dft, the #2724 budget math).
+// This file only (a) packs the (atoms, pw, ecut) shape into a DftSpec, (b) reads
+// the verdict, and (c) emits the rent-query string + GPU/walltime heuristics.
+//
+// pw_basis CONVENTION — the DENSE FFT-grid plane-wave count (the basis QE's SCF
+// working set is sized against), NOT the smooth-grid G-vec count printed on the
+// `Sum` line of ph.out. For hydrides at 4×ecutrho the dense grid is ~16-18× the
+// smooth count (Li2MgH16: smooth 90777 → dense ~1.6M → ~10 GiB/rank — #582).
+// A caller holding only the smooth count can scale it via qforge_dense_pw_est().
+//
+// Surface (1 fn · 1 struct · 2 helpers):
+//   qforge_autosize(atoms, pw_basis, ecut) -> QforgeSizing
+//   qforge_dense_pw_est(smooth_pw) -> int           — smooth→dense FFT-grid scale
+//   qforge_rent_query(ram_gib, cores) -> str        — the `cpu_ram>= cpu_cores>=` string
+
+use "stdlib/cloud/preflight_dft"
+
+// Prediction returned by qforge_autosize.
+struct QforgeSizing {
+    ram_per_rank_gib: int,  // estimated per-MPI-rank RAM (GiB) — #2724 math
+    np:               int,  // recommended -np (mem · atom · Amdahl bounded)
+    gpu_vram_gib:     int,  // per-GPU VRAM to hold the BZ-sum resident (QFORGE path)
+    walltime_h:       int,  // wall-clock estimate (hours)
+    rent_query:       str   // ready `cpu_ram>=N cpu_cores>=M` rent --query
+}
+
+// The cpu_ram>= floor the query pins so the rented pod has headroom for ALL
+// ranks at the predicted per-rank size, plus a 20% OS/scratch margin. Floor is
+// the production DFT_DETACH_RAM_FLOOR (64) so small cells still land a mid pod.
+let QF_RAM_FLOOR = 64
+
+// dense FFT-grid ≈ smooth-grid PW × this (÷10). Hydride 4×ecutrho ⇒ ~17.6×
+// (Li2MgH16 calibration: dense ~1,600,000 / smooth 90,777 = 17.6).
+let QF_DENSE_SCALE_T = 176
+
+// qforge_dense_pw_est — scale a smooth-grid PW count (ph.out `Sum` line) up to
+// the dense FFT-grid count the SCF working set is actually sized against.
+@pure
+pub fn qforge_dense_pw_est(smooth_pw: int) -> int {
+    let d = smooth_pw * QF_DENSE_SCALE_T / 10
+    if d < smooth_pw { return smooth_pw }
+    return d
+}
+
+// qforge_rent_query — the `cpu_ram>=N cpu_cores>=M` predicate string. Pins RAM
+// to the floor of the rented node so the #2724 OOM-preflight sizes -np against
+// real RAM (the ram-floor fix), and cores to >= the predicted -np so the pod is
+// not core-starved below the mem/Amdahl sweet-spot.
+@pure
+pub fn qforge_rent_query(ram_gib: int, cores: int) -> str {
+    return "cpu_ram>=" + to_string(ram_gib) + " cpu_cores>=" + to_string(cores)
+}
+
+// qforge_autosize — the predictor. atoms · pw_basis (DENSE FFT-grid) · ecut →
+// the full rent shape. Sizes against a high-RAM budget first (so the Amdahl /
+// atom ceiling — not an arbitrarily small RAM floor — sets -np when RAM is not
+// the binding constraint), then pins the rent query to the RAM that actually
+// fits that -np at the predicted per-rank size.
+@pure
+pub fn qforge_autosize(atoms: int, pw_basis: int, ecut: int) -> QforgeSizing {
+    // electrons ≈ 8/atom (hydride valence + buffer) — informational band count.
+    let n_elec = atoms * 8
+    let spec = DftSpec {
+        n_atoms:     atoms,
+        n_basis_pw:  pw_basis,
+        n_kpoints:   1,        // irreducible-k after symmetry (conservative)
+        n_spin:      1,
+        n_electrons: n_elec,
+        cutoff_ry:   ecut,
+        method_id:   0         // SCF — relax/scf per-step cost is SCF-dominated
+    }
+
+    // per-rank RAM — the #2724 closed-form estimate (d3, reused whole).
+    let per_rank = tls_dft_rank_memory_gib(spec)
+
+    // -np — size against a generous RAM budget so the atom/Amdahl ceiling sets
+    // the sweet-spot when RAM is NOT binding; the rent query (below) then pins
+    // the RAM that actually fits that -np. Budget = per_rank × atoms × 1.2 (every
+    // rank resident + 20% margin), but never below the production RAM floor.
+    let mut budget = per_rank * atoms * 12 / 10
+    if budget < QF_RAM_FLOOR { budget = QF_RAM_FLOOR }
+    let node = DftNodeSpec {
+        total_mem_gib: budget,
+        n_cpu_cores:   64,     // generous core budget — Amdahl gate caps below this
+        has_gpu:       0,
+        gpu_mem_gib:   0
+    }
+    let rec = tls_dft_mpi_sweet_spot(spec, node)
+    let np = rec.recommended_np
+
+    // rent RAM floor — fit ALL np ranks at per_rank + 20% margin, ≥ the floor.
+    let mut rent_ram = per_rank * np * 12 / 10
+    if rent_ram < QF_RAM_FLOOR { rent_ram = QF_RAM_FLOOR }
+
+    // GPU-VRAM (QFORGE path) — the whole BZ-sum / wavefunction set held resident
+    // on one device escapes the per-rank CPU clamp (demiurge memory-wall close).
+    // ≈ per_rank × np (the aggregate working set) rounded up, min 16 GiB.
+    let mut vram = per_rank * np
+    if vram < 16 { vram = 16 }
+
+    // walltime — coarse heuristic: SCF relax+ph DFPT cost ~ pw × atoms / np, in
+    // pw·atom·units per rank-hour (calibrated ~2.0e6 unit/h on a mid CPU rank).
+    // hours = pw_basis × atoms / (np × 2,000,000), min 1.
+    let denom = np * 2000000
+    let mut walltime = 1
+    if denom > 0 {
+        walltime = pw_basis * atoms / denom
+        if walltime < 1 { walltime = 1 }
+    }
+
+    return QforgeSizing {
+        ram_per_rank_gib: per_rank,
+        np:               np,
+        gpu_vram_gib:     vram,
+        walltime_h:       walltime,
+        rent_query:       qforge_rent_query(rent_ram, np)
+    }
+}
