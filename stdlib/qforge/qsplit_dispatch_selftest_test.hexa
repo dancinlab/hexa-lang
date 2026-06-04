@@ -1,0 +1,212 @@
+// @ci_gate — pure · network-free · deterministic (stdlib_selftest_aggregate --ci-gate)
+//
+// qsplit_dispatch_selftest_test.hexa — QFORGE-PROCESS multi-pod q-split RUNTIME
+// ORCHESTRATOR g5 gate.
+//
+// #2709 (parallel_q) proved the MATH (split-λ ≡ serial-λ). This closes the gate on
+// the RUNTIME WIRING that #2709 left out: actually FANNING a q-grid across N
+// targets, MONITORING each shard to completion, COLLECTING the per-shard dynN, and
+// UNIONING to λ. The named milestone case is a CaH6-class q-grid fanned across
+// N=2 dispatch targets (the real 2-pod/2-shard demo, here on the LOCAL backend).
+// Honest tier (d6):
+//
+//   🔵 RUNTIME EQUIVALENCE (the milestone gate) — qforge_qsplit_dispatch fans the
+//        grid across N=2 shards, monitors both to completion, collects each
+//        shard's dynN, unions → λ_union, and λ_union == λ_single (the SAME q-set
+//        run as ONE shard), BYTE-IDENTICAL (Δ=0). agree==1. The runtime reproduces
+//        serial — split across pods is the same answer as one pod.
+//   🟢 dispatch coverage — every IBZ q lands in EXACTLY one shard's dynN (Σ dynN
+//        over shards == n_q ; each q exactly once), across n_pods ∈ {1,2,n_q,n_q+1}.
+//   🔵 monitor-to-completion — every shard reports done==1 (the monitor gate) and
+//        dynN == len(q_subset); the orchestrator's monitor_wall == the SLOWEST
+//        shard's wall (the straggler bound a real multi-pod monitor enforces).
+//   🔵 FAIL-CLOSED — the pod backend ($-unwired in the free demo) reports a shard
+//        failed → the union refuses (ok==0, λ never partial-summed, d6). Proves the
+//        runtime's failure path (a dead pod NEVER silently under-counts λ).
+//   guard — empty grid / zero pods / arity mismatch.
+//
+// @L-honesty (d6): this demo runs the LOCAL backend (no paid pods). A REAL multi-
+// pod fan-out additionally exercises network dynN transfer + pod-failure requeue +
+// heterogeneous-wall straggler — modeled in CONTROL FLOW here, not physical cause.
+// The Δ=0 reference is the SAME assembler over the SAME q-set run serially (NOT a
+// hard-wired λ): the test pins split-runtime == serial, exactly #2709's contract
+// now driven through the live dispatch loop.
+//
+// Run:  HEXA_STDLIB_ROOT="$PWD/stdlib" hexa run \
+//         stdlib/qforge/qsplit_dispatch_selftest_test.hexa
+// PASS: exits printing "qsplit_dispatch_selftest PASS".
+
+use "stdlib/qforge/qsplit_dispatch"
+use "stdlib/qforge/parallel_q"
+
+let _P_NEF:   float = 1.0
+let _P_SIGEL: float = 0.05
+let _P_SIGPH: float = 1.5
+let _P_G2:    float = 30.0
+let _P_NK:    int   = 80      // on-shell electrons folded into per-mode |g|²
+
+fn _abs(x: float) -> float { if x < 0.0 { return -x } return x }
+
+fn _assert(name: str, cond: bool, detail: str) -> int {
+    if cond { println("PASS " + name + "  " + detail) ; return 0 }
+    println("FAIL " + name + "  " + detail) ; return 1
+}
+
+fn _grid(wlo: float, whi: float, ng: int) -> [float] {
+    let mut g: [float] = []
+    let step = (whi - wlo) / to_float(ng - 1)
+    let mut j = 0
+    while j < ng { g.push(wlo + step * to_float(j)) ; j = j + 1 }
+    return g
+}
+
+// CaH6-class IBZ q-grid: 4 irreducible reps with star weights summing to a full
+// MP mesh. Distinct dispersing ω per q so the union is a realistic multi-q
+// spectral function (not a degenerate single mode). g2 per-mode |g|² already
+// FS-summed over the _P_NK on-shell electrons (the dynN a shard harvests).
+fn _cah6_grid() -> QGrid {
+    let weights = [1, 6, 8, 12]                       // Σ = 27 (a 3×3×3-class mesh)
+    let omega   = [280.0, 460.0, 690.0, 910.0]        // 4 distinct branches
+    let g2mode  = _P_G2 * to_float(_P_NK)
+    let g2      = [g2mode, g2mode, g2mode, g2mode]
+    return QGrid {
+        deck: "exports/rtsc/cah6/decks/cah6-qsplit-demo",
+        weights: weights, omega: omega, g2: g2, e_fermi: 0.0,
+    }
+}
+
+fn main() {
+    let mut fails = 0
+    let grid = _cah6_grid()
+    let n_q = len(grid.weights)
+    let og = _grid(60.0, 1600.0, 40001)
+
+    println("[setup] CaH6-class q-grid, " + to_string(n_q) +
+            " IBZ reps, star weights [1,6,8,12] (Σ=27=n_full)")
+
+    // ── 🔵 RUNTIME EQUIVALENCE — N=2 shards fanned → union λ == single-pod λ ───
+    // THE MILESTONE GATE. Fan the grid across N=2 dispatch targets (LOCAL backend),
+    // monitor both to completion, collect each shard's dynN, union → λ, and assert
+    // λ_union == λ_single (the SAME q-set run as ONE shard). Δ=0, BYTE-IDENTICAL.
+    let r2 = qforge_qsplit_dispatch(grid, 2, QSPLIT_BACKEND_LOCAL,
+                                    _P_NEF, og, _P_SIGEL, _P_SIGPH)
+    println("")
+    println("════════════════ MILESTONE RUN VERDICT (verbatim) ════════════════")
+    println("[run] backend          = " + r2.backend + "   (LOCAL 2-process sim — NOT paid pods)")
+    println("[run] n_q              = " + to_string(r2.n_q) +
+            "   n_pods(shards) = " + to_string(r2.n_pods))
+    let mut si = 0
+    while si < len(r2.shards) {
+        let sh = r2.shards[si]
+        let mut qss = "["
+        let mut a = 0
+        while a < len(sh.q_subset) {
+            if a > 0 { qss = qss + "," }
+            qss = qss + to_string(sh.q_subset[a])
+            a = a + 1
+        }
+        qss = qss + "]"
+        println("[run]   shard " + to_string(si) + "  pod=" + sh.pod +
+                "  q_subset=" + qss + "  dynN=" + to_string(sh.dynN) +
+                "  done=" + to_string(sh.done) + "  wall_ms=" + to_string(sh.wall_ms))
+        si = si + 1
+    }
+    println("[run] monitor_wall_ms  = " + to_string(r2.monitor_wall_ms) +
+            "   (slowest-shard straggler bound)")
+    println("[run] λ_union          = " + to_string(r2.lambda_union))
+    println("[run] λ_single         = " + to_string(r2.lambda_single))
+    println("[run] Δ                 = " + to_string(r2.delta) +
+            "      agree = " + to_string(r2.agree))
+    println("═══════════════════════════════════════════════════════════════════")
+    println("")
+
+    fails = fails + _assert("🔵 RUNTIME EQUIVALENCE: 2-shard union λ == single-pod λ (Δ=0, byte-identical)",
+                            r2.ok == 1 && r2.agree == 1 && r2.delta == 0.0 && r2.lambda_union > 0.0,
+                            "(λ_union=" + to_string(r2.lambda_union) +
+                            " λ_single=" + to_string(r2.lambda_single) +
+                            " Δ=" + to_string(r2.delta) + ")")
+
+    // ── 🟢 dispatch coverage — every IBZ q in EXACTLY one shard's dynN ────────
+    let pod_variants = [1, 2, n_q, n_q + 1]
+    let mut cover_ok = true
+    let mut vi = 0
+    while vi < len(pod_variants) {
+        let np = pod_variants[vi]
+        let r = qforge_qsplit_dispatch(grid, np, QSPLIT_BACKEND_LOCAL,
+                                       _P_NEF, og, _P_SIGEL, _P_SIGPH)
+        // count each IBZ q's appearance across all shards' q_subset — exactly 1.
+        let mut count: [int] = []
+        let mut c = 0
+        while c < n_q { count.push(0) ; c = c + 1 }
+        let mut sum_dynN = 0
+        let mut sh = 0
+        while sh < len(r.shards) {
+            let qs = r.shards[sh].q_subset
+            sum_dynN = sum_dynN + r.shards[sh].dynN
+            let mut k = 0
+            while k < len(qs) { count[qs[k]] = count[qs[k]] + 1 ; k = k + 1 }
+            sh = sh + 1
+        }
+        let mut once = true
+        let mut a = 0
+        while a < n_q { if count[a] != 1 { once = false } ; a = a + 1 }
+        let ok = once && sum_dynN == n_q && r.ok == 1 && r.agree == 1
+        if !ok { cover_ok = false }
+        println("[coverage] n_pods=" + to_string(np) + " → " + to_string(r.n_pods) +
+                " shards, ΣdynN=" + to_string(sum_dynN) + " each-once=" + to_string(once) +
+                " agree=" + to_string(r.agree))
+        vi = vi + 1
+    }
+    fails = fails + _assert("🟢 dispatch coverage: every IBZ q in EXACTLY one shard's dynN (ΣdynN==n_q)",
+                            cover_ok, "(n_pods ∈ {1,2,n_q,n_q+1})")
+
+    // ── 🔵 monitor-to-completion — every shard done==1, monitor_wall==max-wall ─
+    let mut all_done = true
+    let mut max_wall = 0
+    let mut mi = 0
+    while mi < len(r2.shards) {
+        if r2.shards[mi].done != 1 { all_done = false }
+        if r2.shards[mi].dynN != len(r2.shards[mi].q_subset) { all_done = false }
+        if r2.shards[mi].wall_ms > max_wall { max_wall = r2.shards[mi].wall_ms }
+        mi = mi + 1
+    }
+    fails = fails + _assert("🔵 monitor: every shard done==1 + dynN==|q_subset|",
+                            all_done, "(2 shards monitored to completion)")
+    fails = fails + _assert("🔵 monitor: monitor_wall == slowest-shard wall (straggler bound)",
+                            r2.monitor_wall_ms == max_wall && max_wall > 0,
+                            "(monitor_wall=" + to_string(r2.monitor_wall_ms) +
+                            " max=" + to_string(max_wall) + ")")
+
+    // ── 🔵 FAIL-CLOSED — pod backend ($-unwired) → shard failed → union refuses ─
+    // The pod runner is NOT fired in the free demo; it reports failed. The runtime
+    // MUST fail closed (ok==0, λ never partial-summed) — a dead pod can't under-λ.
+    let rpod = qforge_qsplit_dispatch(grid, 2, QSPLIT_BACKEND_POD,
+                                      _P_NEF, og, _P_SIGEL, _P_SIGPH)
+    println("[fail-closed] pod-backend ok=" + to_string(rpod.ok) +
+            " err=\"" + rpod.err + "\"  λ_union=" + to_string(rpod.lambda_union))
+    fails = fails + _assert("🔵 FAIL-CLOSED: a failed shard → ok==0 (union refuses)",
+                            rpod.ok == 0, "(err=" + rpod.err + ")")
+    fails = fails + _assert("🔵 FAIL-CLOSED: failed shard → λ refused (−1.0, never partial-summed)",
+                            rpod.lambda_union < 0.0, "(λ=" + to_string(rpod.lambda_union) + ")")
+    // the backend label is HONEST (never claims local when pod was requested)
+    fails = fails + _assert("🔵 backend label honest: pod request labeled \"pod\"",
+                            rpod.backend == "pod", "(backend=" + rpod.backend + ")")
+    fails = fails + _assert("🔵 backend label honest: local run labeled \"local\"",
+                            r2.backend == "local", "(backend=" + r2.backend + ")")
+
+    // ── guards — empty / degenerate ──────────────────────────────────────────
+    let g_empty = QGrid { deck: "", weights: [], omega: [], g2: [], e_fermi: 0.0 }
+    let re = qforge_qsplit_dispatch(g_empty, 2, QSPLIT_BACKEND_LOCAL, _P_NEF, og, _P_SIGEL, _P_SIGPH)
+    fails = fails + _assert("guard empty grid → ok==0", re.ok == 0, "(err=" + re.err + ")")
+    let rz = qforge_qsplit_dispatch(grid, 0, QSPLIT_BACKEND_LOCAL, _P_NEF, og, _P_SIGEL, _P_SIGPH)
+    fails = fails + _assert("guard zero pods → ok==0", rz.ok == 0, "(err=" + rz.err + ")")
+    let g_bad = QGrid { deck: "x", weights: [1, 2, 3], omega: [1.0], g2: [1.0], e_fermi: 0.0 }
+    let rb = qforge_qsplit_dispatch(g_bad, 2, QSPLIT_BACKEND_LOCAL, _P_NEF, og, _P_SIGEL, _P_SIGPH)
+    fails = fails + _assert("guard arity mismatch → ok==0", rb.ok == 0, "(err=" + rb.err + ")")
+
+    if fails == 0 {
+        println("qsplit_dispatch_selftest PASS")
+    } else {
+        println("qsplit_dispatch_selftest FAIL — " + to_string(fails) + " case(s)")
+    }
+}
