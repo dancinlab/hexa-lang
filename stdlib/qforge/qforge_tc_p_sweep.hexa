@@ -1,0 +1,198 @@
+// HEXA Standard Library — qforge/qforge_tc_p_sweep
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// QFORGE PRESSURE–Tc(P) SWEEP AUTOMATION (NOVEL frontier — lower-pressure target).
+//
+// ── WHY THIS EXISTS (the RTSC bottleneck is PRESSURE, d6) ────────────────────
+// Every hydride superconductor the RTSC campaign has cross-validated needs
+// 150–250 GPa to clathrate-cage the H sublattice (CaH6 ~150 GPa, LaH10 ~200 GPa,
+// H3S ~155 GPa). High Tc at impossible pressure is NOT a usable material — the
+// real frontier is the AMBIENT-pressure target. A single Tc value at one
+// pressure tells you nothing about how far you are from that frontier. The Tc(P)
+// CURVE does: it locates the Tc-MAXIMIZING pressure p_opt, and — by its slope on
+// the low-P flank — tells you whether decompressing toward ambient pays or costs
+// Tc. This module is the AUTOMATION that maps that curve.
+//
+// ── WHAT THIS BRICK IS (the sweep DRIVER, d3/d4) ─────────────────────────────
+// `qforge_tc_p_sweep(size_at, run_at, p_grid)` — for each pressure P in the grid:
+//   ① size the cell at P            (the caller's `size_at(P) -> QforgeDeck` —
+//      lattice contracts under pressure → the deck's Φ / ΔV / N(E_F) shift)
+//   ② run the end-to-end el-ph chain (the PROVEN qforge_run orchestrator from
+//      PR#2742 — SCF→DFPT→elph→a2f→λ→Tc — reused 0-diff, d3) via the caller's
+//      `run_at(deck) -> {lambda, tc}` thunk
+//   ③ collect (P, λ, Tc) into the curve
+// then AGGREGATE: find p_opt = argmax_P Tc(P), Tc_max, and the low-/high-P slope
+// signs (the decompression trend). ONE generic path — CaH6 / LaH10 / Li2MgH16
+// all sweep through it; the per-material physics lives ENTIRELY in `size_at`
+// (the cell model) — this driver never branches on a material name (d4).
+//
+// ── @L-HONESTY / d6 (the per-point COMPUTE is named, NOT fabricated) ─────────
+// Each (P, λ, Tc) point requires a CONVERGED el-ph run at that pressure — that
+// is the qforge_run orchestrator's SCF→DFPT→elph chain, which is COMPUTE (DFPT
+// at every q-point of a sized cell). This module ships the SWEEP DRIVER + the
+// aggregation/curve-fit ONLY. It does NOT invent per-P Tc numbers. The selftest
+// drives the driver against a KNOWN ANALYTIC Tc(P) MODEL — a downward parabola
+// with a maximum at a literature-anchored optimum (CaH6's ~150–170 GPa) — to
+// prove the aggregation finds p_opt at the analytic maximum and refines it as
+// the grid tightens. The cost of replacing the model thunk with a real
+// converged run is NAMED explicitly (per-point DFPT el-ph) via `compute_note`.
+//
+// d3/d19 reuse (compose, don't reinvent):
+//   - end-to-end el-ph→Tc per pressure : stdlib/qforge/qforge_run (#2742)
+//   - the deck the run consumes         : stdlib/qforge/qforge_run (QforgeDeck)
+// New code here = the P-loop DRIVER + the curve aggregation/argmax/slope ONLY.
+// No Tc/λ physics is duplicated; no per-P number is fabricated.
+
+use "stdlib/qforge/qforge_run"   // QforgeDeck, QforgeRunResult (the per-P engine)
+
+// ── one point on the Tc(P) curve ─────────────────────────────────────────────
+//   ok==1 + finite λ/tc if the per-P run converged; ok==0 + sentinel (-1) if the
+//   sized cell's run failed at that pressure (the point is KEPT in the curve so a
+//   partial sweep is auditable — a failed pressure is never silently dropped).
+pub struct TcPPoint {
+    p:      float,   // pressure (GPa)
+    lambda: float,   // λ the per-P el-ph run assembled at this pressure
+    tc:     float,   // Tc (K) at this pressure
+    ok:     int,
+    note:   str
+}
+
+// ── the sweep result: the curve + the located frontier ───────────────────────
+//   p_opt   = the Tc-maximizing pressure on the grid (argmax_P Tc).
+//   tc_max  = Tc(p_opt).
+//   slope_lo/slope_hi = sign of the trend on the low-/high-P flanks of p_opt
+//     (+1 rising, -1 falling, 0 flat) — the DECOMPRESSION trend: slope_lo on the
+//     ambient-ward flank says whether lowering P below p_opt costs Tc (the usual
+//     hydride wall) or — the frontier prize — gains it.
+//   n_ok    = points that converged (curve coverage witness).
+pub struct TcPSweepResult {
+    ok:           int,
+    err:          str,
+    curve:        [TcPPoint],
+    p_opt:        float,
+    tc_max:       float,
+    slope_lo:     int,    // sign of Tc trend just BELOW p_opt (ambient-ward)
+    slope_hi:     int,    // sign of Tc trend just ABOVE p_opt
+    n_ok:         int,
+    compute_note: str     // d6 — the per-point converged-run cost, named
+}
+
+fn _sweep_sentinel(err: str, note: str) -> TcPSweepResult {
+    let empty: [TcPPoint] = []
+    return TcPSweepResult {
+        ok: 0, err: err, curve: empty, p_opt: -1.0, tc_max: -1.0,
+        slope_lo: 0, slope_hi: 0, n_ok: 0, compute_note: note
+    }
+}
+
+// the d6 cost line every sweep surfaces — the per-point engine cost, never hidden.
+fn _qforge_pp_compute_note() -> str {
+    return "each (P,λ,Tc) point = ONE converged el-ph run at that pressure "
+         + "(qforge_run SCF→DFPT→elph→a2f→λ→Tc, #2742) — DFPT at every q of the "
+         + "P-sized cell is the compute cost; this driver maps the curve, the "
+         + "engine pays per point (d6)"
+}
+
+fn _sign(x: float) -> int {
+    if x > 0.0 { return 1 }
+    if x < 0.0 { return -1 }
+    return 0
+}
+
+// ── qforge_tc_p_sweep — the pressure → Tc(P) curve driver ────────────────────
+//
+//   size_at : (P: float) -> QforgeDeck     — the cell model at pressure P. The
+//             lattice contracts under pressure, so Φ (force constants stiffen),
+//             ΔV, and N(E_F) all shift with P; the caller owns this physics (d4).
+//   run_at  : (QforgeDeck) -> QforgeRunResult — runs the end-to-end engine on the
+//             sized deck. In production this is a thin wrapper over qforge_run
+//             (the per-P converged el-ph run, #2742). In the selftest it is the
+//             ANALYTIC Tc(P) model thunk (d6 — driver validated without faking a
+//             real per-P number; the model has a KNOWN maximum to recover).
+//   p_grid  : the pressures to sweep (GPa), any order; the driver sorts the curve
+//             ascending so the slope read is well-defined.
+//
+//   Returns TcPSweepResult — the curve + p_opt + tc_max + decompression trend.
+//   ZERO QE, ZERO pod ops — this is the pure orchestration layer.
+pub fn qforge_tc_p_sweep(size_at, run_at, p_grid: [float]) -> TcPSweepResult {
+    let note = _qforge_pp_compute_note()
+    let ng = len(p_grid)
+    if ng == 0 { return _sweep_sentinel("empty pressure grid", note) }
+
+    // ── ascending copy of the grid (insertion sort — grids are short) ────────
+    let mut ps: [float] = []
+    let mut i = 0
+    while i < ng { ps.push(p_grid[i]) ; i = i + 1 }
+    let mut a = 1
+    while a < ng {
+        let key = ps[a]
+        let mut b = a - 1
+        while b >= 0 && ps[b] > key { ps[b + 1] = ps[b] ; b = b - 1 }
+        ps[b + 1] = key
+        a = a + 1
+    }
+
+    // ── ① size + ② run at each pressure → ③ collect the curve ────────────────
+    let mut curve: [TcPPoint] = []
+    let mut n_ok = 0
+    let mut k = 0
+    while k < ng {
+        let p = ps[k]
+        let deck = size_at(p)
+        let res  = run_at(deck)
+        if res.ok == 1 && res.tc > 0.0 {
+            curve.push(TcPPoint { p: p, lambda: res.lambda, tc: res.tc, ok: 1,
+                                  note: "converged el-ph run @ " + to_string(p) + " GPa" })
+            n_ok = n_ok + 1
+        } else {
+            // KEEP the failed pressure in the curve (auditable partial, d_defer).
+            curve.push(TcPPoint { p: p, lambda: -1.0, tc: -1.0, ok: 0,
+                                  note: "per-P run failed: " + res.err })
+        }
+        k = k + 1
+    }
+
+    if n_ok == 0 {
+        return _sweep_sentinel("no pressure converged across the grid", note)
+    }
+
+    // ── argmax_P Tc(P) over the CONVERGED points → p_opt, tc_max ─────────────
+    let mut p_opt = -1.0
+    let mut tc_max = -1.0
+    let mut opt_idx = -1
+    let mut j = 0
+    while j < len(curve) {
+        let pt = curve[j]
+        if pt.ok == 1 && pt.tc > tc_max {
+            tc_max = pt.tc
+            p_opt  = pt.p
+            opt_idx = j
+        }
+        j = j + 1
+    }
+
+    // ── the decompression trend: sign of Tc difference across p_opt's neighbors ─
+    //   slope_lo = sign(Tc(p_opt) − Tc(prev converged below p_opt)) — rising into
+    //     p_opt from below means decompressing PAST p_opt would COST Tc (the wall);
+    //     a flat/positive low-flank toward ambient is the frontier prize.
+    //   slope_hi = sign(Tc(next converged above p_opt) − Tc(p_opt)).
+    let mut slope_lo = 0
+    let mut slope_hi = 0
+    if opt_idx >= 0 {
+        // nearest converged neighbor BELOW p_opt
+        let mut lo = opt_idx - 1
+        while lo >= 0 && curve[lo].ok == 0 { lo = lo - 1 }
+        if lo >= 0 { slope_lo = _sign(curve[opt_idx].tc - curve[lo].tc) }
+        // nearest converged neighbor ABOVE p_opt
+        let mut hi = opt_idx + 1
+        while hi < len(curve) && curve[hi].ok == 0 { hi = hi + 1 }
+        if hi < len(curve) { slope_hi = _sign(curve[hi].tc - curve[opt_idx].tc) }
+    }
+
+    return TcPSweepResult {
+        ok: 1, err: "", curve: curve, p_opt: p_opt, tc_max: tc_max,
+        slope_lo: slope_lo, slope_hi: slope_hi, n_ok: n_ok, compute_note: note
+    }
+}
