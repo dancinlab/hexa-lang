@@ -1,0 +1,42 @@
+F-FUSION-P2-RIGHTSIZED-REALSTEP — does the REAL clm_prod training step
+(serial sub-ms kernel DAG) reach util-GREEN on a right-sized RTX 5070?
+
+STATUS: WIP (GPU run pending)
+
+PRE-REGISTERED FALSIFIER
+  The REAL clm_prod training step — with its serial sub-ms kernel DAG
+  (norm/elementwise/MoE glue between the GEMMs, median 2% util on idle H100,
+  F-FUSION-OCCUPANCY-WALL) — reaches util-GREEN (>=20%, ideally >=70%) on a
+  right-sized consumer RTX 5070, vs ~13% (eager) / ~18% (fused) on idle H100.
+  If YES  -> anima's 3B/7B forge gets util-GREEN immediately by running on the
+            right GPU, no code change.
+  If NO   -> even a small GPU idles between the sub-ms kernels; the DAG is the
+            wall regardless of GPU size (only the ISOLATED GEMM saturated, D2).
+
+CONTRAST WITH D2 (#2713, F-FUSION-D2-RIGHTSIZED)
+  D2 saturated an RTX 5070 to ~98% — but D2 was a STANDALONE GEMM/util DRIVER,
+  NOT the real trainer. H1a (#2734) showed the GEMMs saturate the H100 too.
+  P2 measures the REAL TRAINER STEP (the full serial DAG), which is the open
+  question OCCUPANCY-WALL left for the right-sized axis.
+
+WORKLOAD (the OCCUPANCY-WALL workload, verbatim)
+  CLMConvMoE D=1536 T=512 E=2 NSAMP=8 EPOCHS=4
+  DEVRESIDENT=1 DEVFEED=1 BATCHED=1 ASYNC=0
+  binary: clm_prod_gpu from fusion_l3a_wired.tgz (one build; eager when
+  HEXA_FUSE_GN_GELU unset, fused one-kernel GN+GELU when =1)
+
+METHOD
+  nvidia-smi utilization.gpu sampled @ 0.5s over a sustained EPOCHS=4 run;
+  MEAN / PEAK / MEDIAN / pct>=20 reported verbatim for idle baseline, eager,
+  and fused (HEXA_FUSE_GN_GELU=1).
+
+H100 BASELINE (idle, F-FUSION-OCCUPANCY-WALL / GRAPH-AB)
+  eager  MEAN ~11.85-12.50%  median 2%  PEAK 71-100% (brief GEMMs only)
+  graph  MEAN  13.17%        median 2%
+  L3-a fused  +1.01pp stacked (F-FUSION-L3A-GN-GELU-AB)
+
+VERIFICATION (RTX 5070)
+  [pending GPU run]
+
+FINDING
+  [pending]
