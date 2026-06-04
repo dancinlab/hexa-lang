@@ -402,9 +402,13 @@ fn irx_op_bytes(op: string, is_imm: bool, imm: int, has_cmp: bool,
     }
     if op == "band" || op == "bor" || op == "bxor" {
         // Same shape as ADD/SUB: MOV dst,a (3) + AND/OR/XOR dst,b (3).
+        // rd==ra skips the MOV; rd==rb takes the commutative swap (OP
+        // dst,a only) — both collapse to 3 bytes (mirror emitter above).
         let rd = irx_reg_for(regalloc_map, dst_logical)
         let ra = irx_reg_for(regalloc_map, a_logical)
+        let rb = irx_reg_for(regalloc_map, b_logical)
         if rd == ra { return 3 }
+        if rd == rb { return 3 }
         return 6
     }
     if op == "shl" || op == "shr" {
@@ -536,12 +540,21 @@ fn irx_emit_one(bytes_in: [int], instr, regalloc_map: [int],
     }
 
     // ── Bitwise / Shift (P7-6 coverage gap #2) ────────────────
+    // Aliasing fix: AND/OR/XOR are commutative → when rd==rb the naive
+    // MOV rd,ra ; OP rd,rb clobbers rb (now in rd) before OP reads it,
+    // yielding rd OP rd = ra OP ra. Emit OP rd,ra instead (swap). Mirrors
+    // the add/mul/sub fix (2026-04-18); irx_op_bytes must return 3 for
+    // both rd==ra and rd==rb.
     if instr.op == "band" {
         let rd = irx_reg_for(regalloc_map, instr.result)
         let ra = irx_reg_for(regalloc_map, instr.a)
         let rb = irx_reg_for(regalloc_map, instr.b)
-        bytes = irx_emit_mov_rr(bytes, rd, ra)
-        bytes = irx_emit_and_rr(bytes, rd, rb)
+        if rd == rb {
+            bytes = irx_emit_and_rr(bytes, rd, ra)
+        } else {
+            bytes = irx_emit_mov_rr(bytes, rd, ra)
+            bytes = irx_emit_and_rr(bytes, rd, rb)
+        }
         return bytes
     }
 
@@ -549,8 +562,12 @@ fn irx_emit_one(bytes_in: [int], instr, regalloc_map: [int],
         let rd = irx_reg_for(regalloc_map, instr.result)
         let ra = irx_reg_for(regalloc_map, instr.a)
         let rb = irx_reg_for(regalloc_map, instr.b)
-        bytes = irx_emit_mov_rr(bytes, rd, ra)
-        bytes = irx_emit_or_rr(bytes, rd, rb)
+        if rd == rb {
+            bytes = irx_emit_or_rr(bytes, rd, ra)
+        } else {
+            bytes = irx_emit_mov_rr(bytes, rd, ra)
+            bytes = irx_emit_or_rr(bytes, rd, rb)
+        }
         return bytes
     }
 
@@ -558,8 +575,12 @@ fn irx_emit_one(bytes_in: [int], instr, regalloc_map: [int],
         let rd = irx_reg_for(regalloc_map, instr.result)
         let ra = irx_reg_for(regalloc_map, instr.a)
         let rb = irx_reg_for(regalloc_map, instr.b)
-        bytes = irx_emit_mov_rr(bytes, rd, ra)
-        bytes = irx_emit_xor_rr(bytes, rd, rb)
+        if rd == rb {
+            bytes = irx_emit_xor_rr(bytes, rd, ra)
+        } else {
+            bytes = irx_emit_mov_rr(bytes, rd, ra)
+            bytes = irx_emit_xor_rr(bytes, rd, rb)
+        }
         return bytes
     }
 

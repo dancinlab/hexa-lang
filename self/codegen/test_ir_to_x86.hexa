@@ -62,6 +62,18 @@ fn mk_ret(a: int) -> IRI {
     return IRI { result: 0 - 1, op: "ret", ty: "i64", a: a, b: 0, c: 0, imm: 0, is_imm: false, cmp: "" }
 }
 
+fn mk_band(res: int, a: int, b: int) -> IRI {
+    return IRI { result: res, op: "band", ty: "i64", a: a, b: b, c: 0, imm: 0, is_imm: false, cmp: "" }
+}
+
+fn mk_bor(res: int, a: int, b: int) -> IRI {
+    return IRI { result: res, op: "bor", ty: "i64", a: a, b: b, c: 0, imm: 0, is_imm: false, cmp: "" }
+}
+
+fn mk_bxor(res: int, a: int, b: int) -> IRI {
+    return IRI { result: res, op: "bxor", ty: "i64", a: a, b: b, c: 0, imm: 0, is_imm: false, cmp: "" }
+}
+
 fn mk_cmp(res: int, a: int, b: int, cmp: string) -> IRI {
     return IRI { result: res, op: "sub", ty: "bool", a: a, b: b, c: 0, imm: 0, is_imm: false, cmp: cmp }
 }
@@ -193,6 +205,58 @@ fails = fails + expect_bytes_eq("syscall-exit-60",
     lower_ir_to_x86(t6_blocks, t6_regs),
     [0x48, 0xc7, 0xc0, 0x3c, 0x00, 0x00, 0x00,
      0x0f, 0x05])
+
+// ── Test 7/8/9: bitwise aliasing rd==rb — commutative-swap guard ──
+// Custom regalloc map [0,1,1]: v0→rax, v1→rcx, v2→rcx. A band/bor/bxor
+// with result==v2 and b==v1 lands rd==rb==rcx (rd!=ra). The naive
+// MOV rd,ra ; OP rd,rb would clobber rb(==rd), giving OP rd,rd = ra OP ra
+// (wrong, 6 bytes). The fix emits OP rd,ra (commutative swap) → 3 bytes,
+// mirroring add/mul. This pins the swapped 3-byte form; reverting the fix
+// makes it FAIL (g63-discriminating).
+//   load v0=0xF0  → 48 c7 c0 f0 00 00 00
+//   load v1=0x0F  → 48 c7 c1 0f 00 00 00
+//   OP   v2       → 48 <21|09|31> c1   (AND/OR/XOR rcx,rax)
+//   ret  v2       → 48 89 c8 c3        (mov rax,rcx ; ret)
+let alias_map = [0, 1, 1]
+
+let mut t7 = []
+t7.push(mk_load_imm(0, 240))
+t7.push(mk_load_imm(1, 15))
+t7.push(mk_band(2, 0, 1))
+t7.push(mk_ret(2))
+let t7_blocks = [BB { id: 0, instructions: t7 }]
+fails = fails + expect_bytes_eq("band-alias-rd==rb",
+    lower_ir_to_x86(t7_blocks, alias_map),
+    [0x48, 0xc7, 0xc0, 0xf0, 0x00, 0x00, 0x00,
+     0x48, 0xc7, 0xc1, 0x0f, 0x00, 0x00, 0x00,
+     0x48, 0x21, 0xc1,
+     0x48, 0x89, 0xc8, 0xc3])
+
+let mut t8 = []
+t8.push(mk_load_imm(0, 240))
+t8.push(mk_load_imm(1, 15))
+t8.push(mk_bor(2, 0, 1))
+t8.push(mk_ret(2))
+let t8_blocks = [BB { id: 0, instructions: t8 }]
+fails = fails + expect_bytes_eq("bor-alias-rd==rb",
+    lower_ir_to_x86(t8_blocks, alias_map),
+    [0x48, 0xc7, 0xc0, 0xf0, 0x00, 0x00, 0x00,
+     0x48, 0xc7, 0xc1, 0x0f, 0x00, 0x00, 0x00,
+     0x48, 0x09, 0xc1,
+     0x48, 0x89, 0xc8, 0xc3])
+
+let mut t9 = []
+t9.push(mk_load_imm(0, 240))
+t9.push(mk_load_imm(1, 15))
+t9.push(mk_bxor(2, 0, 1))
+t9.push(mk_ret(2))
+let t9_blocks = [BB { id: 0, instructions: t9 }]
+fails = fails + expect_bytes_eq("bxor-alias-rd==rb",
+    lower_ir_to_x86(t9_blocks, alias_map),
+    [0x48, 0xc7, 0xc0, 0xf0, 0x00, 0x00, 0x00,
+     0x48, 0xc7, 0xc1, 0x0f, 0x00, 0x00, 0x00,
+     0x48, 0x31, 0xc1,
+     0x48, 0x89, 0xc8, 0xc3])
 
 if fails > 0 {
     println("=== IR→x86 bridge FAIL: " + str(fails) + " test(s) ===")
