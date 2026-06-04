@@ -1,0 +1,41 @@
+F-QFORGE-M35-GPU-LEVER — α²F BZ-sum GPU-accel lever, measured CPU vs GPU speedup
+================================================================================
+verdict : 🟢 SUPPORTED-NUMERICAL (measured on-device, parity-gated per size)
+date    : 2026-06-05
+pod     : vast 39481710 — RTX PRO 6000 Blackwell sm_120, 188 SMs, CUDA 12.4
+
+MEASURED (kernel-only wall, cuEvent; H2D < 0.3 ms excluded)
+  size(ns×ng)   cpu_ms   gpu1d_ms  gpu2d_ms  sp_1d  sp_2d  gpu2d_GFLOP/s
+  1024×128       0.532    2.358     0.149     0.2×   3.6×    11.4
+  4096×256       4.132    9.263     0.150     0.4×  27.5×    90.7
+  16384×512     33.090   37.677     1.156     0.9×  28.6×    94.3
+  65536×512    134.666  150.666     3.468     0.9×  38.8×   125.8
+  131072×1024  524.337  301.282    12.655     1.7×  41.4×   137.9
+  262144×1024 1052.604  602.582    25.140     1.7×  41.9×   138.8
+
+FINDING (d6 — honest, layout is the lever)
+  • M27 bin-per-thread kernel (qforge_a2f_bzsum) = POOR lever: spawns only ng
+    threads (64..1024) → 0.3% occupancy on 188 SMs → SLOWER than single-core CPU
+    below ns=131072, peaks at 1.7×. This is a real negative on the naive layout.
+  • 2D (sample-tile × bin) kernel (qforge_a2f_bzsum2d, atomic-add reduction) fills
+    the SMs → 27–42× over single-core CPU for ns ≥ 4096, plateau ~138 GFLOP/s.
+  • Roofline: plateau ≪ FP64 FMA peak because the kernel is TRANSCENDENTAL-bound —
+    3 exp() per inner (i,j), each the #1215 ~30-flop polynomial → ~3.5 G exp/s
+    sustained is the real roof (SFU/poly throughput, not FMA).
+  • Crossover ~ns·ng ≳ 10⁵; below that launch overhead dominates even for 2D. A
+    real per-q DFPT α²F assembly (ns ~ 10⁴–10⁶, ng ~ 10²–10³) sits firmly in the
+    40× regime → the lever is worthwhile for the L3 assembler.
+  • Distinct from #2706 (DFPT n_iter-dominant) — this assembler is a dense
+    (sample×bin) histogram, parallelism-limited, not iteration-limited.
+
+CODEGEN GAP (d8 — filed inbox/patches/nvptx-atomic-add-3arg-reg-decl.md)
+  3-arg gpu_atomic_add(base,idx,val) lowering emits %rd_idxs_addr without its
+  .reg .u64 decl → ptxas "Unknown symbol". 2D numbers measured with a 1-line
+  reg-decl PTX patch (build_m35/k2d_patched.ptx, measurement-only workaround);
+  kernel SOURCE is correct, will emit clean once codegen adds the decl.
+
+ARTIFACTS
+  stdlib/qforge/nvptx_a2f_bench.cu       — 1D CPU-vs-GPU sweep harness
+  stdlib/qforge/nvptx_a2f_kernel2d.hexa  — 2D (sample×bin) kernel source
+  stdlib/qforge/nvptx_a2f_bench2d.cu     — 1D-vs-2D-vs-CPU harness (parity-gated)
+  domains/QFORGE-PERF.bench.m35.md       — full ledger + interpretation
