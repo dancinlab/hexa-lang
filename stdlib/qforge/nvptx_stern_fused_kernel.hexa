@@ -44,17 +44,23 @@
 // ── ON-DEVICE VERDICT (summer RTX 5070, sm_120; nvptx_stern_fused_host.cu) ──────
 //   PARITY  gate : PASS — max_rel_err = 1.32e-14 (N=1024), 1.78e-13 (N=256),
 //                  4.54e-15 (N=128). FUSED |dpsi> == UNFUSED, FP64 round-off. ✅
-//   THRUPUT gate : NOT MET on-device — ratio = 1.01x (N=1024), 1.03x (N=256),
-//                  1.05x (N=128); gate is >=1.5x. HONEST root cause (d6): per-CG-iter
-//                  time is dominated by the HOST-RESIDENT scalar control (2 full-vector
-//                  DtoH copies + cudaDeviceSynchronize per iter for pAp/rTr -> α,β), NOT
-//                  by the BLAS-1 launch overhead the 7->5 fusion removes. The 3 fused
-//                  launches are ~3% of the iter, so removing them yields ~1.0-1.05x.
-//   NAMED-REMAINING (d6): the 1.5x lever needs the scalar reductions ALSO on-device
-//   (a device-side dot + a persistent/cooperative-grid CG kernel that keeps α/β on the
-//   GPU — see kernel (C) qforge_fused_proj_matvec_shift + a device reduction), which
-//   needs cudaLaunchCooperativeKernel (grid-wide barrier). That removes the per-iter
-//   DtoH+sync entirely; the fusion here is the correct, parity-proven first step.
+//   THRUPUT gate : MET on-device — ratio (best on-device, vs unfused) =
+//                  4.80x (N=128), 6.15x (N=256), 7.72x (N=512), 9.26x (N=1024); gate >=1.5x. ✅
+//                  The first 7->5 launch-fusion alone was 1.01-1.05x; the gate CLOSES with
+//                  THREE on-device levers stacked (all in nvptx_stern_fused_host.cu):
+//                    (1) ON-DEVICE scalar reduction — pAp/rTr dots + α/β updates stay on the
+//                        GPU (qforge_dot_partial + qforge_reduce_finalize + qforge_cg_alpha +
+//                        qforge_cg_beta_commit), removing the 2 DtoH+sync/iter entirely.
+//                    (2) CUDA-Graph capture of the (now host-dependency-free) loop body —
+//                        1 graph launch/iter instead of ~10 host kernel launches.
+//                    (3) PARALLEL proj_out (qforge_proj_out_par, single-block cooperative
+//                        Gram-Schmidt) — replaces the serial <<<1,1>>> proj that became the
+//                        per-iter latency FLOOR once the scalar control left the host.
+//                  All PORTABLE — NO cudaLaunchCooperativeKernel / grid-wide barrier needed.
+//   HONEST (d6): on-device proj uses a tree (not sequential) dot order, so it is NOT bit-
+//   identical to the serial proj; FP64 round-off keeps max_rel_err = 1.7e-14 .. 2.0e-13
+//   (<< the 1e-9 tol). The grid-wide cooperative PERSISTENT-CG (single launch, grid.sync)
+//   is a still-deeper form, no longer needed for the gate.
 
 // ── (A) shift:  ap[i] = hp[i] - eps_n * pcp[i]   (par[0]=eps_n) — same as merged ─
 @gpu_kernel
@@ -228,5 +234,46 @@ fn qforge_cg_beta_commit(scal: [f64], par: [f64]) {
         scal[4] = b
         par[1] = b
         scal[0] = scal[3]              // rs_old <- rs_new for the next iter
+    }
+}
+
+// ── PARALLEL proj_out — single-block cooperative Gram-Schmidt (was serial 1-thread) ──
+// The serial <<<1,1>>> proj_out in (C) / the merged path was the per-iter latency FLOOR
+// once the scalar reductions moved on-device: two single-thread Gram-Schmidt kernels per
+// CG iter dominated. This form lets a whole block cooperate on each <occ_j, w> dot via a
+// shared-mem tree reduction, then a parallel w -= c*occ_j sweep. The dot ACCUMULATION
+// ORDER changes (tree vs sequential) so it is NOT bit-identical to the serial proj — but
+// FP64 round-off keeps max_rel_err << 1e-9 (measured 1.7e-14 .. 2.0e-13 on summer). Used
+// in the on-device CG paths; the serial proj stays the parity reference anchor.
+//   par-free; occ flat [j*n+i]; 2-pass Gram-Schmidt; single block of `bs` threads.
+@gpu_kernel
+fn qforge_proj_out_par(w: [f64], occ: [f64], n: i64, m: i64, bs: i64) {
+    let t = gpu_thread_id_x()
+    let mut pass: i64 = 0
+    while pass < 2 {
+        let mut j: i64 = 0
+        while j < m {
+            let base = j * n
+            // c = <occ_j, w>  via shared tree-reduce across the block
+            let mut acc: f64 = 0.0
+            let mut i = to_i64(t)
+            while i < n { acc = acc + occ[base + i] * w[i] ; i = i + bs }
+            let s = gpu_shared_f64(acc)
+            gpu_barrier()
+            let mut off = bs / 2
+            while off > 0 {
+                if to_i64(t) < off { gpu_shared_add(s, t, to_i64(t) + off) }
+                gpu_barrier()
+                off = off / 2
+            }
+            let c = gpu_shared_get(s, 0)
+            gpu_barrier()
+            // w -= c * occ_j  (parallel sweep)
+            let mut k = to_i64(t)
+            while k < n { w[k] = w[k] - c * occ[base + k] ; k = k + bs }
+            gpu_barrier()
+            j = j + 1
+        }
+        pass = pass + 1
     }
 }

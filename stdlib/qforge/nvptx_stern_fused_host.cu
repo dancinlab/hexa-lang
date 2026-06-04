@@ -101,11 +101,15 @@ __global__ void k_dot_partial(const double* a,const double* b,double* partials,i
 __global__ void k_reduce_finalize(const double* partials,double* out,int nb,int slot){
     if(threadIdx.x==0){ double s=0; for(int k=0;k<nb;k++) s+=partials[k]; out[slot]=s; }
 }
+// alpha = rs_old/pAp; if pAp ~ 0 (converged) -> alpha=0 so the update is a no-op (NO NaN).
 __global__ void k_cg_alpha(double* scal,double* par){
-    if(threadIdx.x==0){ double a=scal[0]/scal[1]; scal[2]=a; par[0]=a; }
+    if(threadIdx.x==0){ double pAp=scal[1]; double a=(pAp!=0.0)? scal[0]/pAp : 0.0;
+        scal[2]=a; par[0]=a; }
 }
+// beta = rs_new/rs_old; if rs_old ~ 0 -> beta=0. commit rs_old<-rs_new. (NO NaN past convergence.)
 __global__ void k_cg_beta_commit(double* scal,double* par){
-    if(threadIdx.x==0){ double b=scal[3]/scal[0]; scal[4]=b; par[1]=b; scal[0]=scal[3]; }
+    if(threadIdx.x==0){ double rso=scal[0]; double b=(rso!=0.0)? scal[3]/rso : 0.0;
+        scal[4]=b; par[1]=b; scal[0]=scal[3]; }
 }
 // scratch r_new = r - eps_par*ap  (out separate buffer; eps_par[0]=alpha) — for rs_new dot.
 __global__ void k_rnew(const double* r,const double* ap,const double* par,double* out,int n){
@@ -116,6 +120,29 @@ __global__ void k_rnew(const double* r,const double* ap,const double* par,double
 __global__ void k_shift_sub_dev(const double* hp,const double* pcp,double* ap,const double* eps,int n){
     int gid=blockIdx.x*blockDim.x+threadIdx.x;
     if(gid<n) ap[gid]=hp[gid]-eps[0]*pcp[gid];
+}
+
+// PARALLEL proj_out — single-block, all threads cooperate on each Gram-Schmidt dot via
+// a shared-mem tree reduction (replaces the serial <<<1,1>>>). The accumulation ORDER
+// changes (tree vs sequential) so this is NOT bit-identical, but FP64 round-off keeps
+// max_rel_err << 1e-9 (the gate tol) — measured below. Used in the on-device paths only;
+// the unfused REFERENCE path keeps the serial proj (parity anchor).
+template<int BS>
+__global__ void k_proj_out_par(double* w,const double* occ,int n,int m){
+    __shared__ double sh[BS];
+    __shared__ double cc;
+    int t=threadIdx.x;
+    for(int pass=0;pass<2;pass++) for(int j=0;j<m;j++){
+        const double* o=occ+(long)j*n;
+        double acc=0.0;
+        for(int i=t;i<n;i+=BS) acc+=o[i]*w[i];   // c = <o,w>
+        sh[t]=acc; __syncthreads();
+        for(int off=BS/2; off>0; off>>=1){ if(t<off) sh[t]+=sh[t+off]; __syncthreads(); }
+        if(t==0) cc=sh[0]; __syncthreads();
+        double c=cc;
+        for(int i=t;i<n;i+=BS) w[i]-=c*o[i];     // w -= c*o
+        __syncthreads();
+    }
 }
 
 static double hdot(const double*a,const double*b,int n){double s=0;for(int i=0;i<n;i++)s+=a[i]*b[i];return s;}
@@ -198,9 +225,14 @@ static int run_cg(int n,int m,int cgiters,int fused,
 // PARITY-first fused path named-remaining (d6): it removes the 2 DtoH+sync/iter
 // that dominated per-iter time. Uses the fused_cg_update kernel for x/r/p, and the
 // two-stage block/grid dot — NO cooperative-grid HW gate required.
+// graph=0 : plain on-device launch chain (~10 host launches/iter, zero per-iter sync).
+// graph=1 : CUDA-Graph capture of the loop body -> 1 graph launch/iter (collapses the
+//           ~10-launch host-issue latency too). Valid ONLY because the loop body has NO
+//           host dependency (all scalars on-device) — the on-device reduction is what
+//           UNLOCKS graph capture. This is the portable >=1.5x lever (no cooperative HW).
 static int run_cg_ondevice(int n,int m,int cgiters,
                   double* d_M,double* d_occ,const double* bg,double eps_n,
-                  double* dpsi_out,int* iters_out,float* ms_out){
+                  double* dpsi_out,int* iters_out,float* ms_out,int graph=0){
     const int BS=128; int blk=BS, grd=(n+blk-1)/blk;
     int nb = grd>1024?1024:grd;               // partials cap for stage-2 single block
     if(nb<1) nb=1;
@@ -214,37 +246,48 @@ static int run_cg_ondevice(int n,int m,int cgiters,
     CK(cudaMemcpy(d_r,bg,n*8,cudaMemcpyHostToDevice));
     CK(cudaMemcpy(d_p,bg,n*8,cudaMemcpyHostToDevice));
     double epsh=eps_n; CK(cudaMemcpy(d_eps,&epsh,8,cudaMemcpyHostToDevice));  // eps resident, never touched again
+    cudaStream_t st; CK(cudaStreamCreate(&st));
     // scal[0]=rs_old = r.r  (computed on device, no host round-trip)
-    k_dot_partial<BS><<<nb,BS>>>(d_r,d_r,d_part,n);
-    k_reduce_finalize<<<1,32>>>(d_part,d_scal,nb,0);   // -> scal[0]=rs_old
+    k_dot_partial<BS><<<nb,BS,0,st>>>(d_r,d_r,d_part,n);
+    k_reduce_finalize<<<1,32,0,st>>>(d_part,d_scal,nb,0);   // -> scal[0]=rs_old
+    CK(cudaStreamSynchronize(st));
+    // ── one CG-iteration body, recorded onto stream `s` (NO host dependency) ───────
+    auto body=[&](cudaStream_t s){
+        cudaMemcpyAsync(d_pcp,d_p,n*8,cudaMemcpyDeviceToDevice,s);   // D2D, stream-ordered
+        k_proj_out_par<BS><<<1,BS,0,s>>>(d_pcp,d_occ,n,m);          // PARALLEL proj (single block)
+        k_matvec<<<grd,blk,0,s>>>(d_M,d_pcp,d_hp,n);
+        k_shift_sub_dev<<<grd,blk,0,s>>>(d_hp,d_pcp,d_ap,d_eps,n);
+        k_proj_out_par<BS><<<1,BS,0,s>>>(d_ap,d_occ,n,m);           // PARALLEL proj (single block)
+        k_dot_partial<BS><<<nb,BS,0,s>>>(d_p,d_ap,d_part,n);
+        k_reduce_finalize<<<1,32,0,s>>>(d_part,d_scal,nb,1);
+        k_cg_alpha<<<1,1,0,s>>>(d_scal,d_par);
+        k_rnew<<<grd,blk,0,s>>>(d_r,d_ap,d_par,d_rnew,n);
+        k_dot_partial<BS><<<nb,BS,0,s>>>(d_rnew,d_rnew,d_part,n);
+        k_reduce_finalize<<<1,32,0,s>>>(d_part,d_scal,nb,3);
+        k_cg_beta_commit<<<1,1,0,s>>>(d_scal,d_par);
+        k_fused_cg_update<<<grd,blk,0,s>>>(d_x,d_r,d_p,d_ap,d_par,n);
+    };
     cudaEvent_t evb,eve; CK(cudaEventCreate(&evb));CK(cudaEventCreate(&eve));
-    CK(cudaEventRecord(evb));
     int it=0;
-    for(; it<cgiters; it++){
-        // operator: ap = P_c( (H-eps) P_c(p) )  — eps held in d_eps (OFF par[], never clobbered).
-        CK(cudaMemcpyAsync(d_pcp,d_p,n*8,cudaMemcpyDeviceToDevice));   // D2D, stream-ordered, no sync
-        k_proj_out<<<1,1>>>(d_pcp,d_occ,n,m);
-        k_matvec<<<grd,blk>>>(d_M,d_pcp,d_hp,n);
-        k_shift_sub_dev<<<grd,blk>>>(d_hp,d_pcp,d_ap,d_eps,n);
-        k_proj_out<<<1,1>>>(d_ap,d_occ,n,m);
-        // pAp = p . ap -> scal[1] ; alpha = rs_old/pAp -> scal[2], par[0]=alpha (all on device)
-        k_dot_partial<BS><<<nb,BS>>>(d_p,d_ap,d_part,n);
-        k_reduce_finalize<<<1,32>>>(d_part,d_scal,nb,1);
-        k_cg_alpha<<<1,1>>>(d_scal,d_par);
-        // rs_new from scratch r_new = r - alpha*ap (bit-parity with fused r-update) -> scal[3]
-        k_rnew<<<grd,blk>>>(d_r,d_ap,d_par,d_rnew,n);
-        k_dot_partial<BS><<<nb,BS>>>(d_rnew,d_rnew,d_part,n);
-        k_reduce_finalize<<<1,32>>>(d_part,d_scal,nb,3);
-        // beta = rs_new/rs_old -> par[1]; commit rs_old<-rs_new (on device)
-        k_cg_beta_commit<<<1,1>>>(d_scal,d_par);
-        // fused update: x+=alpha*p ; r-=alpha*ap ; p=r+beta*p  (par[0]=alpha, par[1]=beta)
-        k_fused_cg_update<<<grd,blk>>>(d_x,d_r,d_p,d_ap,d_par,n);
-        // NO per-iter DtoH, NO per-iter cudaDeviceSynchronize — the lever (d6).
+    if(!graph){
+        CK(cudaEventRecord(evb,st));
+        for(; it<cgiters; it++) body(st);   // ~10 host launches/iter, 0 per-iter sync
+        CK(cudaEventRecord(eve,st)); CK(cudaStreamSynchronize(st));
+    } else {
+        // capture the body ONCE; replay cgiters times -> 1 graph launch/iter.
+        cudaGraph_t gr; cudaGraphExec_t ex;
+        CK(cudaStreamBeginCapture(st,cudaStreamCaptureModeThreadLocal));
+        body(st);
+        CK(cudaStreamEndCapture(st,&gr));
+        CK(cudaGraphInstantiate(&ex,gr,0));
+        CK(cudaEventRecord(evb,st));
+        for(; it<cgiters; it++) CK(cudaGraphLaunch(ex,st));
+        CK(cudaEventRecord(eve,st)); CK(cudaStreamSynchronize(st));
+        cudaGraphExecDestroy(ex); cudaGraphDestroy(gr);
     }
     *iters_out=it;
-    CK(cudaEventRecord(eve)); CK(cudaEventSynchronize(eve));
     CK(cudaEventElapsedTime(ms_out,evb,eve));
-    k_proj_out<<<1,1>>>(d_x,d_occ,n,m); CK(cudaDeviceSynchronize());
+    k_proj_out<<<1,1,0,st>>>(d_x,d_occ,n,m); CK(cudaStreamSynchronize(st)); CK(cudaStreamDestroy(st));
     CK(cudaMemcpy(dpsi_out,d_x,n*8,cudaMemcpyDeviceToHost));
     cudaFree(d_x);cudaFree(d_r);cudaFree(d_p);cudaFree(d_pcp);cudaFree(d_hp);cudaFree(d_ap);
     cudaFree(d_par);cudaFree(d_scal);cudaFree(d_part);cudaFree(d_eps);cudaFree(d_rnew);
@@ -279,50 +322,64 @@ int main(int argc,char**argv){
     CK(cudaMemcpy(d_M,M_.data(),(size_t)N*N*8,cudaMemcpyHostToDevice));
     CK(cudaMemcpy(d_occ,occ.data(),(size_t)M*N*8,cudaMemcpyHostToDevice));
 
-    std::vector<double> dpsi_un(N),dpsi_fu(N),dpsi_od(N);
-    int it_un=0,it_fu=0,it_od=0; float ms_un=0,ms_fu=0,ms_od=0;
-    // warmup (all three paths)
-    run_cg(N,M,4,0,d_M,d_occ,bg.data(),eps_n,dpsi_un.data(),&it_un,&ms_un);
-    run_cg(N,M,4,1,d_M,d_occ,bg.data(),eps_n,dpsi_fu.data(),&it_fu,&ms_fu);
-    run_cg_ondevice(N,M,4,d_M,d_occ,bg.data(),eps_n,dpsi_od.data(),&it_od,&ms_od);
-    // timed: fixed CG-iter count, all paths
+    std::vector<double> dpsi_un(N),dpsi_fu(N),dpsi_od(N),dpsi_og(N);
+    int it_un=0,it_fu=0,it_od=0,it_og=0; float ms_un=0,ms_fu=0,ms_od=0,ms_og=0;
+    // warmup (all paths) — JIT/module-load + first-touch alloc + graph instantiate out of timing
+    run_cg(N,M,8,0,d_M,d_occ,bg.data(),eps_n,dpsi_un.data(),&it_un,&ms_un);
+    run_cg(N,M,8,1,d_M,d_occ,bg.data(),eps_n,dpsi_fu.data(),&it_fu,&ms_fu);
+    run_cg_ondevice(N,M,8,d_M,d_occ,bg.data(),eps_n,dpsi_od.data(),&it_od,&ms_od,0);
+    run_cg_ondevice(N,M,8,d_M,d_occ,bg.data(),eps_n,dpsi_og.data(),&it_og,&ms_og,1);
+    // timed unfused/fused: fixed CG count, host paths break at convergence (it_un iters).
     if(run_cg(N,M,CG,0,d_M,d_occ,bg.data(),eps_n,dpsi_un.data(),&it_un,&ms_un)) return 2;
     if(run_cg(N,M,CG,1,d_M,d_occ,bg.data(),eps_n,dpsi_fu.data(),&it_fu,&ms_fu)) return 2;
-    if(run_cg_ondevice(N,M,CG,d_M,d_occ,bg.data(),eps_n,dpsi_od.data(),&it_od,&ms_od)) return 2;
+    // ON-DEVICE (chain + graph): run the SAME iter count the host path converged in (it_un)
+    // — apples-to-apples, stops at the converged solution (no over-iteration drift).
+    if(run_cg_ondevice(N,M,it_un,d_M,d_occ,bg.data(),eps_n,dpsi_od.data(),&it_od,&ms_od,0)) return 2;
+    if(run_cg_ondevice(N,M,it_un,d_M,d_occ,bg.data(),eps_n,dpsi_og.data(),&it_og,&ms_og,1)) return 2;
 
     // parity: fused (host-scalar) vs unfused
     double max_rel=0; int am=-1;
     for(int i=0;i<N;i++){ double ad=fabs(dpsi_un[i]-dpsi_fu[i]);
         double rd=fabs(dpsi_un[i])>1e-300?ad/fabs(dpsi_un[i]):ad;
         if(rd>max_rel){max_rel=rd;am=i;} }
-    // parity: ON-DEVICE-scalar vs unfused (the new path — must STAY <=1e-9)
+    // parity: ON-DEVICE-scalar (chain) vs unfused (must STAY <=1e-9)
     double max_rel_od=0; int am_od=-1;
     for(int i=0;i<N;i++){ double ad=fabs(dpsi_un[i]-dpsi_od[i]);
         double rd=fabs(dpsi_un[i])>1e-300?ad/fabs(dpsi_un[i]):ad;
         if(rd>max_rel_od){max_rel_od=rd;am_od=i;} }
+    // parity: ON-DEVICE-GRAPH vs unfused (must STAY <=1e-9)
+    double max_rel_og=0; int am_og=-1;
+    for(int i=0;i<N;i++){ double ad=fabs(dpsi_un[i]-dpsi_og[i]);
+        double rd=fabs(dpsi_un[i])>1e-300?ad/fabs(dpsi_un[i]):ad;
+        if(rd>max_rel_og){max_rel_og=rd;am_og=i;} }
     double thru_un = it_un/(ms_un/1000.0);   // CG iters / sec
     double thru_fu = it_fu/(ms_fu/1000.0);
     double thru_od = it_od/(ms_od/1000.0);
+    double thru_og = it_og/(ms_og/1000.0);
     double ratio    = thru_fu/thru_un;       // launch-fusion only (host scalar)
-    double ratio_od = thru_od/thru_un;       // ON-DEVICE scalar reduction (the gate lever)
+    double ratio_od = thru_od/thru_un;       // on-device scalar reduction (chain)
+    double ratio_og = thru_og/thru_un;       // on-device scalar reduction + CUDA-Graph (the gate lever)
 
-    printf("=== QFORGE kernel 2: fused Sternheimer CG + ON-DEVICE scalar reduction ===\n");
+    printf("=== QFORGE kernel 2: fused Sternheimer CG + ON-DEVICE scalar reduction (+graph) ===\n");
     printf("[setup] N=%d  CGITERS=%d  M=%d\n",N,it_un,M);
-    printf("[launches/iter] unfused      = 7 (proj,matvec,shift,proj,axpy,axpy,xpay)\n");
-    printf("                fused(host)   = 5 (proj,matvec,shift,proj,fused_cg_update)\n");
-    printf("                on-device     = NO per-iter DtoH/sync (pAp,rTr,alpha,beta all on GPU)\n");
-    printf("[host-roundtrips/iter] unfused=2 DtoH+sync | fused(host)=2 DtoH+sync | on-device=0\n");
-    printf("[throughput] unfused      : %.3f ms  -> %.1f iters/s\n",ms_un,thru_un);
-    printf("             fused(host)  : %.3f ms  -> %.1f iters/s   ratio = %.2fx\n",ms_fu,thru_fu,ratio);
-    printf("             on-device    : %.3f ms  -> %.1f iters/s   ratio = %.2fx\n",ms_od,thru_od,ratio_od);
-    printf("[parity] |dpsi> first 5 bins (unfused vs on-device):\n");
-    for(int i=0;i<(N<5?N:5);i++) printf("  dpsi[%d]  unfused=% .15e  ondev=% .15e\n",i,dpsi_un[i],dpsi_od[i]);
-    printf("  max_rel_err fused(host) vs unfused = %.6e  (bin %d)\n",max_rel,am);
-    printf("  max_rel_err on-device  vs unfused = %.6e  (bin %d)   tol = 1.0e-09\n",max_rel_od,am_od);
-    int par_ok    = max_rel_od<=1e-9;        // on-device parity is the gate
-    int thr_ok    = ratio_od>=1.5;           // on-device throughput is the gate
-    printf("GATE parity (on-device |dpsi> identical) : %s  (max_rel_err=%.3e)\n",par_ok?"PASS":"FAIL",max_rel_od);
-    printf("GATE >=1.5x CG-iter throughput           : %s  (ratio=%.2fx)\n",thr_ok?"PASS":"FAIL",ratio_od);
+    printf("[launches/iter] unfused        = 7 host launches + 2 DtoH+sync\n");
+    printf("                fused(host)     = 5 host launches + 2 DtoH+sync\n");
+    printf("                on-device-chain = ~10 host launches, 0 DtoH/sync (pAp,rTr,alpha,beta on GPU)\n");
+    printf("                on-device-graph = 1 graph launch/iter, 0 DtoH/sync (captured body)\n");
+    printf("[throughput] unfused          : %.4f ms  -> %.1f iters/s\n",ms_un,thru_un);
+    printf("             fused(host)      : %.4f ms  -> %.1f iters/s   ratio = %.2fx\n",ms_fu,thru_fu,ratio);
+    printf("             on-device-chain  : %.4f ms  -> %.1f iters/s   ratio = %.2fx\n",ms_od,thru_od,ratio_od);
+    printf("             on-device-graph  : %.4f ms  -> %.1f iters/s   ratio = %.2fx\n",ms_og,thru_og,ratio_og);
+    printf("[parity] |dpsi> first 5 bins (unfused vs on-device-graph):\n");
+    for(int i=0;i<(N<5?N:5);i++) printf("  dpsi[%d]  unfused=% .15e  ondev-graph=% .15e\n",i,dpsi_un[i],dpsi_og[i]);
+    printf("  max_rel_err fused(host)       vs unfused = %.6e  (bin %d)\n",max_rel,am);
+    printf("  max_rel_err on-device-chain   vs unfused = %.6e  (bin %d)\n",max_rel_od,am_od);
+    printf("  max_rel_err on-device-graph   vs unfused = %.6e  (bin %d)   tol = 1.0e-09\n",max_rel_og,am_og);
+    double best_ratio = ratio_og>ratio_od?ratio_og:ratio_od;
+    int par_ok    = (max_rel_od<=1e-9) && (max_rel_og<=1e-9);   // both on-device paths must hold parity
+    int thr_ok    = best_ratio>=1.5;                            // best on-device throughput is the gate
+    printf("GATE parity (on-device |dpsi> identical) : %s  (chain=%.3e graph=%.3e)\n",par_ok?"PASS":"FAIL",max_rel_od,max_rel_og);
+    printf("GATE >=1.5x CG-iter throughput           : %s  (best on-device ratio=%.2fx; chain=%.2fx graph=%.2fx)\n",thr_ok?"PASS":"FAIL",best_ratio,ratio_od,ratio_og);
     printf("VERDICT: %s\n",(par_ok&&thr_ok)?"PASS":"FAIL");
     return (par_ok&&thr_ok)?0:1;
 }
