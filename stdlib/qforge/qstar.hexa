@@ -1,0 +1,254 @@
+// HEXA Standard Library — qforge/qstar
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// QFORGE — irreducible-BZ (IBZ) q-star symmetry reduction.
+//
+// Folds a FULL Monkhorst-Pack q-mesh (from qforge_mp_grid) onto its
+// irreducible set under a caller-supplied crystal point group, producing the
+// IBZ representative q-points plus their INTEGER star weights w_q
+// (multiplicity = how many full-grid points fold onto each representative).
+// This removes QFORGE's dependence on QE-provided star weights for the
+// Brillouin-zone sums in the α²F assembler — a step toward QE independence.
+//
+//   pub fn qforge_qstar_reduce(grid, rotations) -> QStar
+//
+// ── The physics / crystallography ───────────────────────────────────────────
+//
+// The star of a q-point is the set { R·q : R ∈ point group }, reduced modulo a
+// reciprocal lattice vector (i.e. folded back into the first BZ / unit cell of
+// fractional coordinates). All members of one star are symmetry-equivalent and
+// contribute IDENTICALLY to any BZ sum, so the sum over the full grid equals the
+// sum over one representative per star, each weighted by its multiplicity:
+//
+//   Σ_{q ∈ full BZ} f(q)  =  Σ_{q* ∈ IBZ} w_{q*} · f(q*)        Σ w_{q*} = N_full
+//
+// @cite Maradudin & Vosko 1968, RMP 40 1 — symmetry of the BZ sampling and the
+//       star/little-group decomposition used in lattice-dynamics BZ sums.
+// @cite Setyawan & Curtarolo 2010, Comp.Mat.Sci 49 299 — high-symmetry BZ
+//       sampling and irreducible-wedge construction.
+//
+// ── d4 (generic dispatch, NO hardcoded space group) ─────────────────────────
+//
+// The point group enters ONLY as caller-supplied rotation matrices in
+// FRACTIONAL (crystal) coordinates: a flat list of 3×3 integer matrices, 9
+// ints per operation, row-major. The caller derives these from the lattice
+// (the lattice→rotations derivation is the named next brick — see SCOPE). This
+// module NEVER branches on a named group; identity-only input reproduces the
+// uniform-weight full-BZ path (0-diff backward-compat: every point its own
+// star, w=1, Σw=N_full).
+//
+// ── d3/d19 reuse ────────────────────────────────────────────────────────────
+//   - q-mesh generation : stdlib/qforge/mpgrid (qforge_mp_grid) — the FULL BZ
+//     mesh whose points this module folds. No mesh code is reinvented here.
+//
+// ── SCOPE (honest, d6) ──────────────────────────────────────────────────────
+// SHIPPED: the GENERIC reducer (full grid + rotation ops → IBZ reps + integer
+// star weights, Σ w = N_full), exercised by identity-only (backward-compat) and
+// an explicit cubic point-group subset on 2×2×2 / 4×4×4 grids.
+// DEFERRED (named next brick): deriving the point-group rotation matrices FROM
+// the Bravais lattice (the crystal-symmetry analyzer). Until that lands the
+// caller supplies the rotations (e.g. the cubic ops below, or QE's `s` matrices
+// during cross-val). This module is the consumer-side reduction it feeds.
+
+use "stdlib/qforge/mpgrid"
+
+// --- result record -------------------------------------------------------
+//   qibz    : flat 3*n_ibz fractional coords of the IBZ representatives
+//   weights : n_ibz INTEGER star multiplicities (Σ = n_full)
+//   n_ibz   : number of irreducible representatives
+//   n_full  : number of full-grid points folded (= grid.npoints)
+pub struct QStar {
+    n_ibz: int,
+    n_full: int,
+    qibz: [float],       // flat 3*n_ibz: qx,qy,qz per representative
+    weights: [int]       // n_ibz integer star weights, Σ = n_full
+}
+
+let _QS_EPS: float = 1e-9
+
+fn _qs_abs(x: float) -> float { if x < 0.0 { return -x } return x }
+
+// Fold a fractional coordinate into the canonical half-open cell [-0.5, 0.5).
+// Two grid points that differ by an integer reciprocal-lattice vector map to
+// the SAME canonical value, so star membership is a coordinate-equality test.
+fn _qs_wrap(x: float) -> float {
+    let mut u = x
+    // bring into [0,1)
+    while u >= 1.0 - _QS_EPS { u = u - 1.0 }
+    while u < -_QS_EPS { u = u + 1.0 }
+    // shift [0,1) → [-0.5, 0.5) so ±0.5 has one canonical sign
+    if u >= 0.5 - _QS_EPS { u = u - 1.0 }
+    // snap a near-zero residue to exactly 0 (kills -0.0 / ±eps drift)
+    if _qs_abs(u) < _QS_EPS { u = 0.0 }
+    return u
+}
+
+// Apply one 3×3 integer rotation (row-major, 9 ints at offset 9*op) to a
+// fractional q = (qx,qy,qz), returning the wrapped image (3 floats).
+fn _qs_apply(rot: [int], op: int, qx: float, qy: float, qz: float) -> [float] {
+    let b = 9 * op
+    let r0 = to_float(rot[b + 0]) * qx + to_float(rot[b + 1]) * qy + to_float(rot[b + 2]) * qz
+    let r1 = to_float(rot[b + 3]) * qx + to_float(rot[b + 4]) * qy + to_float(rot[b + 5]) * qz
+    let r2 = to_float(rot[b + 6]) * qx + to_float(rot[b + 7]) * qy + to_float(rot[b + 8]) * qz
+    return [_qs_wrap(r0), _qs_wrap(r1), _qs_wrap(r2)]
+}
+
+// Index of the full-grid point matching wrapped (x,y,z), or -1. The grid coords
+// are themselves wrapped to the same canonical cell before comparison so the
+// match is robust to the grid's native ±sign convention.
+fn _qs_find(gx: [float], gy: [float], gz: [float], n: int,
+            x: float, y: float, z: float) -> int {
+    let mut i = 0
+    while i < n {
+        if _qs_abs(gx[i] - x) < _QS_EPS {
+            if _qs_abs(gy[i] - y) < _QS_EPS {
+                if _qs_abs(gz[i] - z) < _QS_EPS { return i }
+            }
+        }
+        i = i + 1
+    }
+    return -1
+}
+
+// ── The IBZ reducer ──────────────────────────────────────────────────────────
+//
+// Fold `grid` (a full MP mesh from qforge_mp_grid) under the point group given
+// as `rotations` (flat 3×3 integer matrices, 9 ints each, FRACTIONAL coords,
+// row-major). Returns the IBZ representatives + integer star weights.
+//
+// Algorithm (O(N · |G|): for each unclaimed grid point, build its star by
+// applying every rotation, mark each distinct full-grid star member claimed,
+// and record the representative with weight = star size. The first unclaimed
+// point (lowest grid index) is the canonical representative of its star.
+//
+// Backward-compat: an empty `rotations` list is treated as identity-only, so
+// every point is its own star (w=1, Σw=N) — the uniform-weight full-BZ path.
+//
+// Returns a QStar with n_ibz = 0 / n_full = 0 on malformed input (empty grid,
+// or a rotations list whose length is not a multiple of 9).
+pub fn qforge_qstar_reduce(grid: MpGrid, rotations: [int]) -> QStar {
+    let n = grid.npoints
+    let nr_raw = len(rotations)
+    // malformed: rotation list must pack whole 3×3 matrices
+    if nr_raw % 9 != 0 {
+        return QStar { n_ibz: 0, n_full: 0, qibz: [], weights: [] }
+    }
+    if n < 1 {
+        return QStar { n_ibz: 0, n_full: 0, qibz: [], weights: [] }
+    }
+
+    // canonicalize the grid coords once (split into x/y/z for cheap matching)
+    let mut gx: [float] = []
+    let mut gy: [float] = []
+    let mut gz: [float] = []
+    let mut p = 0
+    while p < n {
+        gx.push(_qs_wrap(grid.coords[3 * p]))
+        gy.push(_qs_wrap(grid.coords[3 * p + 1]))
+        gz.push(_qs_wrap(grid.coords[3 * p + 2]))
+        p = p + 1
+    }
+
+    // identity-only fallback when no rotations supplied
+    let mut nops = nr_raw / 9
+    let mut rot = rotations
+    if nops == 0 {
+        rot = [1, 0, 0, 0, 1, 0, 0, 0, 1]
+        nops = 1
+    }
+
+    let mut claimed: [bool] = []
+    let mut c = 0
+    while c < n { claimed.push(false) ; c = c + 1 }
+
+    let mut qibz: [float] = []
+    let mut weights: [int] = []
+    let mut n_ibz = 0
+
+    let mut i = 0
+    while i < n {
+        if !claimed[i] {
+            // i is the canonical representative of a new star
+            qibz.push(gx[i])
+            qibz.push(gy[i])
+            qibz.push(gz[i])
+            // build the star: claim every distinct full-grid image under G
+            let mut star_size = 0
+            let mut op = 0
+            while op < nops {
+                let img = _qs_apply(rot, op, gx[i], gy[i], gz[i])
+                let j = _qs_find(gx, gy, gz, n, img[0], img[1], img[2])
+                if j >= 0 {
+                    if !claimed[j] {
+                        claimed[j] = true
+                        star_size = star_size + 1
+                    }
+                }
+                op = op + 1
+            }
+            weights.push(star_size)
+            n_ibz = n_ibz + 1
+        }
+        i = i + 1
+    }
+
+    return QStar {
+        n_ibz: n_ibz,
+        n_full: n,
+        qibz: qibz,
+        weights: weights
+    }
+}
+
+// ── Convenience: the 48 cubic (Oh) point-group operations in FRACTIONAL coords
+//
+// For a CUBIC Bravais lattice the point-group rotations are integer ±permutation
+// matrices: every assignment of (±x,±y,±z) to the three output axes that is a
+// proper-or-improper orthogonal map. There are 6 axis permutations × 8 sign
+// patterns = 48 = |Oh|. Returned as a flat [9·48] row-major int list, suitable
+// as the `rotations` argument. (Provided as a verified fixture so the cubic
+// reduction is exercised end-to-end; the general lattice→rotations analyzer is
+// the deferred next brick — see SCOPE.)
+pub fn qforge_qstar_oh_ops() -> [int] {
+    // the 6 permutations of (0,1,2) as (a,b,c) = which input axis feeds output row
+    let perms = [0,1,2,  0,2,1,  1,0,2,  1,2,0,  2,0,1,  2,1,0]
+    let mut ops: [int] = []
+    let mut pi = 0
+    while pi < 6 {
+        let a = perms[3 * pi]
+        let b = perms[3 * pi + 1]
+        let c = perms[3 * pi + 2]
+        // 8 sign patterns
+        let mut s = 0
+        while s < 8 {
+            let sa = if s % 2 == 0 { 1 } else { -1 }
+            let sb = if (s / 2) % 2 == 0 { 1 } else { -1 }
+            let sc = if (s / 4) % 2 == 0 { 1 } else { -1 }
+            // row 0 has sign sa in column a; row 1 sign sb in column b; row 2 sign sc in column c
+            let mut row = 0
+            while row < 3 {
+                let mut col = 0
+                while col < 3 {
+                    let mut v = 0
+                    if row == 0 {
+                        if col == a { v = sa }
+                    } else {
+                        if row == 1 {
+                            if col == b { v = sb }
+                        } else {
+                            if col == c { v = sc }
+                        }
+                    }
+                    ops.push(v)
+                    col = col + 1
+                }
+                row = row + 1
+            }
+            s = s + 1
+        }
+        pi = pi + 1
+    }
+    return ops
+}

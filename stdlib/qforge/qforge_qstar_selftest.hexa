@@ -1,0 +1,134 @@
+// @ci_gate — deterministic IBZ q-star symmetry-reduction asserts (g5)
+//
+// qforge_qstar_selftest.hexa — closes the QFORGE IBZ-reduction gate.
+//
+// The reducer folds a full Monkhorst-Pack q-mesh (qforge_mp_grid) onto its
+// irreducible set under a caller-supplied point group, returning IBZ
+// representatives + INTEGER star weights w_q (Σ = N_full). The gate asserts:
+//
+//   🔵 (A) IDENTITY-ONLY → IBZ == full grid, every w=1, Σw=N (0-diff
+//          backward-compat with the uniform-weight full-BZ path). Holds for
+//          BOTH an empty rotations list (identity fallback) and an explicit
+//          identity matrix.
+//   🟢 (B) 4×4×4 grid under the 48 Oh cubic ops → n_ibz=4, weights={8,8,24,24},
+//          Σw_q = 64 (weight conservation = grid size).
+//   🟢 (C) 2×2×2 grid under Oh → the (±1/4)³ shell is a single star: n_ibz=1,
+//          w=8, Σ=8 (the correct reduced set; CaH6's QE grid happened not to
+//          merge, but full Oh on this grid DOES — both satisfy Σ=8).
+//   🟢 (D) Oh-ops fixture is well-formed: |Oh| = 48 ops = 432 ints.
+//   ⚪ (E) malformed guard: a rotations list whose length is not a multiple of
+//          9 → empty result (n_ibz=0, n_full=0), no crash.
+//
+// These are exact integer identities (no e²), so every check is exact.
+//
+// Run (installed hexa resolves `use "stdlib/..."` from ~/.hx/src — copy the two
+// new files there first, per the toolchain quirk):
+//   ~/.hx/bin/hexa stdlib/qforge/qforge_qstar_selftest.hexa
+// PASS: exits printing "qforge_qstar_selftest PASS".
+use "stdlib/qforge/mpgrid"
+use "stdlib/qforge/qstar"
+
+fn _ck_int(name: str, got: int, want: int) -> int {
+    if got == want {
+        println("PASS " + name + " (" + to_string(got) + ")")
+        return 0
+    }
+    println("FAIL " + name + " — got " + to_string(got) + " want " + to_string(want))
+    return 1
+}
+
+fn _ck_true(name: str, cond: bool) -> int {
+    if cond {
+        println("PASS " + name)
+        return 0
+    }
+    println("FAIL " + name)
+    return 1
+}
+
+fn _wsum(ws: [int]) -> int {
+    let mut s = 0
+    let mut i = 0
+    while i < len(ws) { s = s + ws[i] ; i = i + 1 }
+    return s
+}
+
+// all weights == 1 ?
+fn _all_w1(ws: [int]) -> bool {
+    let mut i = 0
+    while i < len(ws) { if ws[i] != 1 { return false } ; i = i + 1 }
+    return true
+}
+
+// sort a small int list ascending (selection sort — fixtures are tiny)
+fn _sorted(ws: [int]) -> [int] {
+    let mut a = ws
+    let n = len(a)
+    let mut i = 0
+    while i < n {
+        let mut m = i
+        let mut j = i + 1
+        while j < n {
+            if a[j] < a[m] { m = j }
+            j = j + 1
+        }
+        let t = a[i] ; a[i] = a[m] ; a[m] = t
+        i = i + 1
+    }
+    return a
+}
+
+fn main() {
+    let mut fails = 0
+
+    // ── (A) identity-only → IBZ == full grid, all w=1, Σ=N (0-diff) ──────────
+    let g444 = qforge_mp_grid(4, 4, 4, 0, 0, 0)
+    // (A1) empty rotations → identity fallback
+    let id_empty = qforge_qstar_reduce(g444, [])
+    fails = fails + _ck_int("(A1) empty-rot n_ibz = N_full", id_empty.n_ibz, 64)
+    fails = fails + _ck_int("(A1) empty-rot n_full", id_empty.n_full, 64)
+    fails = fails + _ck_int("(A1) empty-rot Σw", _wsum(id_empty.weights), 64)
+    fails = fails + _ck_true("(A1) empty-rot all w=1", _all_w1(id_empty.weights))
+    // (A2) explicit identity matrix → same
+    let id_one = qforge_qstar_reduce(g444, [1,0,0, 0,1,0, 0,0,1])
+    fails = fails + _ck_int("(A2) identity n_ibz = N_full", id_one.n_ibz, 64)
+    fails = fails + _ck_int("(A2) identity Σw", _wsum(id_one.weights), 64)
+    fails = fails + _ck_true("(A2) identity all w=1", _all_w1(id_one.weights))
+
+    // ── (D) Oh fixture well-formed: 48 ops = 432 ints ───────────────────────
+    let oh = qforge_qstar_oh_ops()
+    fails = fails + _ck_int("(D) Oh ops len = 9*48", len(oh), 432)
+
+    // ── (B) 4×4×4 under Oh → n_ibz=4, w={8,8,24,24}, Σ=64 ───────────────────
+    let red444 = qforge_qstar_reduce(g444, oh)
+    fails = fails + _ck_int("(B) 4x4x4 Oh n_ibz", red444.n_ibz, 4)
+    fails = fails + _ck_int("(B) 4x4x4 Oh Σw = N_full = 64", _wsum(red444.weights), 64)
+    fails = fails + _ck_int("(B) 4x4x4 Oh n_full", red444.n_full, 64)
+    let s444 = _sorted(red444.weights)
+    fails = fails + _ck_int("(B) 4x4x4 Oh w[0]=8", s444[0], 8)
+    fails = fails + _ck_int("(B) 4x4x4 Oh w[1]=8", s444[1], 8)
+    fails = fails + _ck_int("(B) 4x4x4 Oh w[2]=24", s444[2], 24)
+    fails = fails + _ck_int("(B) 4x4x4 Oh w[3]=24", s444[3], 24)
+
+    // ── (C) 2×2×2 under Oh → single star n_ibz=1, w=8, Σ=8 ──────────────────
+    let g222 = qforge_mp_grid(2, 2, 2, 0, 0, 0)
+    let red222 = qforge_qstar_reduce(g222, oh)
+    fails = fails + _ck_int("(C) 2x2x2 Oh n_ibz", red222.n_ibz, 1)
+    fails = fails + _ck_int("(C) 2x2x2 Oh w[0] = 8", red222.weights[0], 8)
+    fails = fails + _ck_int("(C) 2x2x2 Oh Σw = N_full = 8", _wsum(red222.weights), 8)
+    // and its identity-only baseline = 8 distinct stars (backward-compat on 2x2x2)
+    let red222_id = qforge_qstar_reduce(g222, [])
+    fails = fails + _ck_int("(C) 2x2x2 identity n_ibz = 8", red222_id.n_ibz, 8)
+    fails = fails + _ck_true("(C) 2x2x2 identity all w=1", _all_w1(red222_id.weights))
+
+    // ── (E) malformed guard: non-multiple-of-9 rotations → empty result ─────
+    let bad = qforge_qstar_reduce(g444, [1, 0, 0, 0])   // 4 ints, not a 3×3
+    fails = fails + _ck_int("(E) malformed n_ibz = 0", bad.n_ibz, 0)
+    fails = fails + _ck_int("(E) malformed n_full = 0", bad.n_full, 0)
+
+    if fails == 0 {
+        println("qforge_qstar_selftest PASS")
+    } else {
+        println("qforge_qstar_selftest FAIL — " + to_string(fails) + " case(s)")
+    }
+}
