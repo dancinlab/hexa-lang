@@ -74,6 +74,14 @@ fn mk_bxor(res: int, a: int, b: int) -> IRI {
     return IRI { result: res, op: "bxor", ty: "i64", a: a, b: b, c: 0, imm: 0, is_imm: false, cmp: "" }
 }
 
+fn mk_shl(res: int, a: int, b: int) -> IRI {
+    return IRI { result: res, op: "shl", ty: "i64", a: a, b: b, c: 0, imm: 0, is_imm: false, cmp: "" }
+}
+
+fn mk_shr(res: int, a: int, b: int) -> IRI {
+    return IRI { result: res, op: "shr", ty: "i64", a: a, b: b, c: 0, imm: 0, is_imm: false, cmp: "" }
+}
+
 fn mk_cmp(res: int, a: int, b: int, cmp: string) -> IRI {
     return IRI { result: res, op: "sub", ty: "bool", a: a, b: b, c: 0, imm: 0, is_imm: false, cmp: cmp }
 }
@@ -256,6 +264,54 @@ fails = fails + expect_bytes_eq("bxor-alias-rd==rb",
     [0x48, 0xc7, 0xc0, 0xf0, 0x00, 0x00, 0x00,
      0x48, 0xc7, 0xc1, 0x0f, 0x00, 0x00, 0x00,
      0x48, 0x31, 0xc1,
+     0x48, 0x89, 0xc8, 0xc3])
+
+// ── Test 10/11: shift rd==rcx aliasing — r11-scratch guard ───────
+// Same map [0,1,1]: v0→rax, v1→rcx, v2→rcx. shl/shr v2 = v0 << v1 lands
+// rd==rcx AND rb==rcx (dst AND count both rcx). The naive
+// MOV rcx,b ; MOV dst,a ; SHL dst,cl would set rcx=a then SHL rcx by its
+// OWN low byte (a), not the count — wrong. The fix computes in r11 (a
+// scratch outside the 0..7 budget): MOV r11,a ; MOV rcx,b(skip, b==rcx) ;
+// SHL/SHR r11,cl ; MOV dst,r11. This pins the correct r11 form; reverting
+// makes it FAIL (g63-discriminating, length 27 vs buggy 24).
+//   load v0      → 48 c7 c0 <imm32>
+//   load v1      → 48 c7 c1 <imm32>
+//   MOV r11,rax  → 49 89 c3
+//   (MOV rcx,rcx skipped — b already in rcx)
+//   SHL/SHR r11  → 49 d3 e3 / 49 d3 eb
+//   MOV rcx,r11  → 4c 89 d9
+//   ret v2       → 48 89 c8 c3
+
+// Test 10 — shl: 2 << 3 = 16
+let mut t10 = []
+t10.push(mk_load_imm(0, 2))
+t10.push(mk_load_imm(1, 3))
+t10.push(mk_shl(2, 0, 1))
+t10.push(mk_ret(2))
+let t10_blocks = [BB { id: 0, instructions: t10 }]
+fails = fails + expect_bytes_eq("shl-alias-rd==rcx",
+    lower_ir_to_x86(t10_blocks, alias_map),
+    [0x48, 0xc7, 0xc0, 0x02, 0x00, 0x00, 0x00,
+     0x48, 0xc7, 0xc1, 0x03, 0x00, 0x00, 0x00,
+     0x49, 0x89, 0xc3,
+     0x49, 0xd3, 0xe3,
+     0x4c, 0x89, 0xd9,
+     0x48, 0x89, 0xc8, 0xc3])
+
+// Test 11 — shr: 64 >> 2 = 16
+let mut t11 = []
+t11.push(mk_load_imm(0, 64))
+t11.push(mk_load_imm(1, 2))
+t11.push(mk_shr(2, 0, 1))
+t11.push(mk_ret(2))
+let t11_blocks = [BB { id: 0, instructions: t11 }]
+fails = fails + expect_bytes_eq("shr-alias-rd==rcx",
+    lower_ir_to_x86(t11_blocks, alias_map),
+    [0x48, 0xc7, 0xc0, 0x40, 0x00, 0x00, 0x00,
+     0x48, 0xc7, 0xc1, 0x02, 0x00, 0x00, 0x00,
+     0x49, 0x89, 0xc3,
+     0x49, 0xd3, 0xeb,
+     0x4c, 0x89, 0xd9,
      0x48, 0x89, 0xc8, 0xc3])
 
 if fails > 0 {
