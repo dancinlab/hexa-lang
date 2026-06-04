@@ -1,0 +1,135 @@
+F-FUSION-LLM-DEFAULT-UTIL — HEXA-FUSION ①+③: full LLM training-step GPU util
+  @ large batch with WMMA2 own-GEMM + promote WMMA2 to LLM default + CI gate
+================================================================================
+domain: HEXA-FUSION · date: 2026-06-05 · g5-HONEST (every number below is a raw
+measurement; no claim is synthesized beyond the measurement).
+
+POD / GPU
+---------
+Pod:   vast.ai 39470604 (owner llm-util, project hexa-lang; RENTED for this run,
+       DESTROYED after — `hexa cloud down 39470604 --yes` -> confirmed GONE, 0 leak).
+GPU:   NVIDIA RTX PRO 6000 Blackwell Workstation Edition, 97887 MiB, driver 580.82.09.
+       (vast gave Blackwell, NOT H100 — same arch as all prior WMMA2 runs; nvcc 12.4
+        caps -arch=compute_90 so our own kernels run sm_90 PTX-JIT->Blackwell, cuBLAS
+        native Blackwell. Util numbers are Blackwell-relative, consistent w/ the prior
+        B200 89.9% GEMM-iso run.)
+Tool:  CUDA 12.4 (nvcc V12.4.131), gcc 11.4.0, glibc 2.35.
+
+DRIVER (self/native/hxqwen14b_llmstep_driver.cu — committed)
+------------------------------------------------------------
+Standalone driver that #include's the shipped self/native/hxqwen14b_cuda.cu (so the
+EXACT main-branch WMMA2 kernel _hx_k_sgemm_cm_wmma2 + the env-gated dispatch shim
+hxqwen_sgemm_base + the v53/v54 glue kernels are measured, no drift). A "full LoRA
+step" = LoRA fwd (2 GEMMs, = hxqwen14b_lora_fwd_single device path) + LoRA bwd (5
+GEMMs, = lora_bwd_single) + the transformer GLUE that wraps a LoRA-adapted projection
+in a real Qwen block: v53_rmsnorm (pre-norm) + v53_swiglu (FFN activation) +
+v54_residual_add + a softmax-CE loss head. All GEMMs route through hxqwen_sgemm_base,
+which reads HEXA_OWN_GEMM[/_WMMA2] EXACTLY as the shipped trainer does. cuBLAS arm runs
+CUBLAS_TF32_TENSOR_OP_MATH so the compare is cuBLAS-TF32 vs WMMA2-TF32 (fair precision).
+Build: nvcc -O3 -arch=compute_90 -DHXQWEN14B_CUDA -Xcompiler -fPIC
+       hxqwen14b_llmstep_driver.cu -lcuda -lcudart -lcublas -lm -o llmstep  (clean).
+
+--------------------------------------------------------------------------------
+(1) FULL-STEP UTIL @ LARGE BATCH  (sustained 20s loop; nvidia-smi util.gpu @200ms)
+--------------------------------------------------------------------------------
+Each row = the FULL step (GEMM + rmsnorm + swiglu + residual + CE), run sustained
+for 20s, util sampled the whole time.
+
+M=8192  K=4096 N=4096 R=16:
+  cuBLAS-TF32 : util MEAN 91.69%  PEAK 99%  MEDIAN 99%  pct>=80 90.9%  (11280 steps, 563.2 steps/s, n=77)
+  WMMA2-own   : util MEAN 87.44%  PEAK 98%  MEDIAN 97%  pct>=80 89.9%  ( 5136 steps, 256.4 steps/s, n=79)
+                [OWN-SGEMM-WMMA2-FIRED] confirmed (genuine own path, not cuBLAS).
+
+M=16384 K=4096 N=4096 R=16:
+  cuBLAS-TF32 : util MEAN 85.69%  PEAK 99%  MEDIAN 99%  pct>=80 86.2%  ( 5536 steps, 276.8 steps/s, n=80)
+  WMMA2-own   : util MEAN 84.37%  PEAK 99%  MEDIAN 98%  pct>=80 85.5%  ( 2592 steps, 129.0 steps/s, n=83)
+                [OWN-SGEMM-WMMA2-FIRED] confirmed.
+
+FINDING (1): on the REAL full LoRA step (GEMM + glue/norm), WMMA2-own reaches
+cuBLAS-CLASS util — within ~1.3-4.3pp of cuBLAS (87.4 vs 91.7 @M8192; 84.4 vs 85.7
+@M16384), both ~85-92% MEAN, PEAK ~99%. This CONFIRMS the synthesis on the real
+workload, not just GEMM-isolation (the prior 89.9% pure-GEMM-iso B200 number). The
+step is GPU-occupancy-saturated under BOTH backends — the LLM/large-batch regime is
+where util->90% is reachable (vs clm_prod's launch-bound ~10-18%). WMMA2 does ~half
+the steps/s (256 vs 563 @M8192) — i.e. ~2.2x slower per-step (Blackwell; consistent
+with the ~1.13-1.6x GEMM-isolation gap amplified by the smaller R=16 LoRA GEMMs and
+the glue being a fixed cost) — but UTIL parity holds because both keep SMs busy.
+
+GEMM-vs-GLUE FRACTION  (CUDA-event, warmed, M=8192 K=N=4096 R=16, 50 it)
+  cuBLAS-TF32 : gemm 1.1052 ms/it · full 1.7751 ms/it -> GEMM 62.3% / glue 37.7%
+  WMMA2-own   : gemm 3.2022 ms/it · full 3.8725 ms/it -> GEMM 82.7% / glue 17.3%
+  (GEMM is a LARGER fraction under WMMA2 because WMMA2's GEMM is ~2.9x slower than
+   cuBLAS's TC Sgemm while the glue is identical -> glue shrinks as a share. The
+   89.9% pure-GEMM-iso number was a square 2048^3 dense GEMM; the LoRA step's GEMMs
+   are skinny (R=16) so the per-step is NOT 100% GEMM — glue is a real 17-38% slice,
+   which is why full-step util is high but not pinned at the GEMM-iso ceiling.)
+
+--------------------------------------------------------------------------------
+(2) CONVERGENCE — 100 real LoRA steps, WMMA2 vs cuBLAS, within-TF32-tol
+--------------------------------------------------------------------------------
+Real CE-loss descent: minimize CE(softmax(y), tgt) over LoRA A,B via the full
+fwd+bwd path + a deterministic backend-INDEPENDENT host SGD update (so any loss
+difference is purely the GEMM backend, not the optimizer). M=512 K=N=1024 R=16, 100 steps.
+
+  step   cuBLAS-TF32 CE     WMMA2-own CE
+     0   6.939687           6.939687
+    24   0.042013           0.042014
+    49   0.012951           0.012951
+    74   0.007405           0.007405
+    99   0.005114           0.005115
+
+  cuBLAS descent: TRUE (6.939687 -> 0.005114)
+  WMMA2  descent: TRUE (6.939687 -> 0.005115)
+  max|dCE| over 100 steps = 1.280e-04   mean|dCE| = 7.370e-06
+  final |dCE| = 1.000e-06   rel final = 1.955e-04
+
+FINDING (2): WMMA2 tracks cuBLAS loss descent to within max|dCE|=1.28e-4
+(rel ~2e-4), WELL within the TF32 correctness bar (3e-3). Both descend the full
+CE (6.94 -> 0.005). NO divergence, NO TF32-default drift. CONVERGENCE = PASS.
+=> WMMA2 is SAFE to recommend as the LLM GEMM (TF32 precision documented).
+
+--------------------------------------------------------------------------------
+(3) PROMOTION + CI REGRESSION GATE
+--------------------------------------------------------------------------------
+PROMOTION: WMMA2 is documented as the RECOMMENDED own LLM GEMM via the existing
+env gate (NO silent global default flip — convergence is within tol but the GPU is
+billable + Blackwell-only-tested, so we keep cuBLAS as the zero-config default and
+make WMMA2 an opt-in documented flag):
+    HEXA_OWN_GEMM=1 HEXA_OWN_GEMM_WMMA2=1   -> CUTLASS-grade WMMA2 own-GEMM (TF32)
+    (unset)                                 -> cuBLAS Sgemm (default, byte-identical)
+TF32 TRADEOFF (documented): WMMA2 uses TF32 Tensor-Core accumulation (~10-bit
+mantissa input rounding) -> rel-RMS ~4e-4 vs cuBLAS FP32, descent identical to 1e-4.
+This is the approved precision tradeoff; the cuBLAS fallback stays bit-for-bit FP32.
+
+CI GATE: tool/hexa-fusion/llm_own_gemm_gate.sh (committed, standalone). Builds the
+driver, runs ONE process computing y/dA/dB/dx under cuBLAS (oracle) AND WMMA2 (own),
+fails (exit 1) if any output's rel-RMS exceeds tol (default 3e-3, HEXA_GATE_TOL
+overrides). SKIP (exit 0) on a host with no nvcc/GPU so a CPU CI lane is not broken.
+INVOCATION:  bash tool/hexa-fusion/llm_own_gemm_gate.sh
+             HEXA_GATE_TOL=1e-3 GATE_M=512 GATE_K=2048 GATE_N=2048 GATE_R=16 bash .../llm_own_gemm_gate.sh
+GATE RUN (this pod, VERBATIM):
+  default 3e-3, M=256 K=1024 N=1024 R=16:
+    GATE y   n=262144 rel_RMS=4.170e-04 max|D|=1.226e-04 tol=3.0e-03 -> PASS
+    GATE dA  n=16384  rel_RMS=4.129e-04 max|D|=2.135e-04 tol=3.0e-03 -> PASS
+    GATE dB  n=16384  rel_RMS=4.204e-04 max|D|=1.974e-04 tol=3.0e-03 -> PASS
+    GATE dx  n=262144 rel_RMS=4.126e-04 max|D|=3.180e-06 tol=3.0e-03 -> PASS
+    GATE-VERDICT: PASS  ([gate] RESULT: PASS, exit 0)
+  tight 1e-3, M=512 K=2048 N=2048 R=16:
+    GATE y   rel_RMS=4.088e-04 ... GATE dA 4.098e-04 GATE dB 4.075e-04 GATE dx 4.130e-04
+    GATE-VERDICT: PASS  ([gate] RESULT: PASS, exit 0)
+
+--------------------------------------------------------------------------------
+SUMMARY
+--------------------------------------------------------------------------------
+(1) full-step util WMMA2 vs cuBLAS: WMMA2 87.4% vs cuBLAS 91.7% (M8192) /
+   84.4% vs 85.7% (M16384) MEAN — cuBLAS-CLASS util on the REAL full LoRA step,
+   confirming the fast-own-GEMM->high-util synthesis beyond GEMM-isolation.
+   GEMM is 62% (cuBLAS) / 83% (WMMA2) of the step; glue 17-38%.
+(2) convergence: PASS — WMMA2 tracks cuBLAS CE descent within max|dCE|=1.28e-4
+   (rel ~2e-4 << 3e-3 TF32 bar), both descend 6.94->0.005, no drift.
+(3) CI gate: YES — tool/hexa-fusion/llm_own_gemm_gate.sh, PASS @ 3e-3 and 1e-3.
+HONEST SCOPE: GPU was Blackwell (not H100); util is arch-relative but consistent
+with prior runs. WMMA2 is ~2.2x slower per-step than cuBLAS on this skinny-R LoRA
+shape (cuBLAS does more steps/s) — util parity is NOT throughput parity. WMMA2 is
+promoted as a documented opt-in flag (cuBLAS stays the default), NOT a silent
+global default flip. Pod 39470604 DESTROYED (0 leak).
