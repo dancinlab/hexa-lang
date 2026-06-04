@@ -1,0 +1,90 @@
+F-FUSION-C1-BF16  ::  MEASURED (g5-HONEST) — CORRECTNESS GREEN · THROUGHPUT CLOSED-NEGATIVE
+domain: HEXA-FUSION · date: 2026-06-05 · milestone C1 — BF16 (bfloat16) own-GEMM
+GPU: NVIDIA B200 (datacenter Blackwell, sm_100 native BF16 Tensor-Core) · CUDA 12.8 nvcc · -arch=sm_100
+Kernels #include'd verbatim from self/native/hxqwen14b_cuda.cu (no copy drift). Single-GEMM CUDA-event
+timing, 50 iters @2048³ (+ 30 iters @4096³ at scale + a 130×70×96 odd-shape bounds-guard recheck).
+
+PRE-REGISTERED FALSIFIER:
+  "A hexa-native BF16 WMMA own-GEMM (_hx_k_sgemm_cm_bf16: 16×16×16 bf16 fragments, FP32 accumulate,
+   mirroring the WMMA2 128×64 8-warp schedule) matches cuBLAS-BF16 (cublasGemmEx CUDA_R_16BF) within the
+   BF16 tolerance (rel-RMS ≤ 1e-2) AND shows the BF16-vs-FP32/FP64 throughput axis."
+  Split outcome: the CORRECTNESS clause is CONFIRMED (GREEN); the "approaches cuBLAS-BF16 throughput"
+  expectation is FALSIFIED (the own kernel is correct but ~77-85× slower than cuBLAS-BF16) — a
+  CLOSED-NEGATIVE on the throughput axis (publishable per paper_negative_ok).
+
+═══ §METHOD ═══
+  • _hx_k_sgemm_cm_bf16 added to self/native/hxqwen14b_cuda.cu behind env HEXA_OWN_GEMM_BF16 +
+    [OWN-SGEMM-BF16-FIRED] one-shot stderr probe. OFF = byte-identical default dispatch (highest-
+    priority gate at the top of _hx_own_sgemm_cm_launch; returns before any other path is consulted).
+  • Schedule MIRRORS the shipped TF32 WMMA2 kernel: 128×64 block, 8-warp 4×2 layout, 2×2 warp-tile
+    (HXG_FM×HXG_FN register accumulators held across the whole K loop), double-buffered shared staging,
+    col-major alpha/beta epilogue, op(A)/op(B) transpose + edge zero-pad. The dtype swap: WMMA fragment
+    shape 16×16×16 (BF16's native shape; TF32 path is 16×16×8 → K-frags/BK = 2 vs 4); shared staging
+    buffers are __nv_bfloat16 (24KB/block vs the TF32 path's 48KB); fp32 inputs are ROUNDED to bf16 on
+    load (__float2bfloat16) while staging. FP32 accumulator (precision loss confined to inputs + per-mma
+    round). Faithful col-major cublasGemmEx(CUDA_R_16BF): C[i+j·ldc] = α·Σ op(A)·op(B) + β·C.
+  • Oracle = cuBLAS-BF16 (cublasGemmEx, CUDA_R_16BF inputs rounded from the SAME fp32 source,
+    CUBLAS_COMPUTE_32F, CUBLAS_GEMM_DEFAULT_TENSOR_OP). FP32 ref = cuBLAS-TF32 (cublasSgemm,
+    CUBLAS_TF32_TENSOR_OP_MATH); FP64 baseline = cublasDgemm; fp64 = the precision ground-truth.
+
+═══ §VERIFICATION (real run, B200) ═══
+[OWN-SGEMM-BF16-FIRED] _hx_k_sgemm_cm_bf16 (BF16 Tensor-Core: 128x64 block, 8-warp, 2x2 warp-tile,
+                       16x16x16 bf16 frag, fp32 accum; bf16 tol 1e-2)   ← FIRED ✅
+
+CORRECTNESS (rel-RMS) @2048³ (identical @4096³ and @130×70×96):
+  BF16-own  vs cuBLAS-BF16 oracle = 0.000e+00   PASS  (BF16 tol 1e-2)   ← bit-identical to the oracle:
+       both round the same fp32 inputs to bf16 and accumulate in fp32 → same result modulo summation
+       order, which here matches exactly.
+  BF16-own  vs fp64 ref           = 2.085e-03   (the bf16 precision FLOOR — ~8× the TF32 path's 2.6e-4;
+       this IS the bf16 ~8-bit-mantissa precision tradeoff, well within the 1e-2 BF16 bar but NOT the
+       3e-3 TF32 bar — stated explicitly, NOT an fp32-grade claim)
+  FP32-cuBLAS vs fp64 ref         = 2.608e-04   PASS  (TF32 tol 3e-3, context)
+  → CORRECTNESS CLAUSE OF THE FALSIFIER: CONFIRMED GREEN.
+
+PERF ms/iter + dtype-axis throughput:
+  @2048³ (50 iters):
+    cuBLAS-BF16      : 0.01683 ms   1021.0 TFLOP/s  (1.00×)
+    BF16-own         : 1.29176 ms     13.3 TFLOP/s  (76.77× slower than cuBLAS-BF16)
+    FP32-cuBLAS(TF32): 0.02782 ms    617.5 TFLOP/s  (1.65× of cuBLAS-BF16's time)
+    FP64-cuBLAS      : 0.49206 ms     34.9 TFLOP/s  (29.24× of cuBLAS-BF16's time)
+  @4096³ (30 iters, at scale):
+    cuBLAS-BF16      : 0.09650 ms   1424.2 TFLOP/s  (1.00×)
+    BF16-own         : 8.19164 ms     16.8 TFLOP/s  (84.88× slower than cuBLAS-BF16)
+    FP32-cuBLAS(TF32): 0.18192 ms    755.5 TFLOP/s  (1.89× of cuBLAS-BF16's time)
+    FP64-cuBLAS      : 3.90435 ms     35.2 TFLOP/s  (40.46× of cuBLAS-BF16's time)
+
+═══ §FINDING ═══
+(1) CORRECTNESS — GREEN. A hexa-native BF16 WMMA own-GEMM matches cuBLAS-BF16 to rel-RMS 0.000e+00
+    (≤ 1e-2 BF16 tol), across square (2048³, 4096³) and odd bounds-guard (130×70×96) shapes. We now own a
+    BF16 own-GEMM that is numerically faithful to the cublasGemmEx(CUDA_R_16BF) contract — adding the
+    BF16 dtype to the FP32 (WMMA2 TF32) + FP64 (clm) own-GEMM coverage. [FIRED] confirmed; OFF is the
+    byte-identical default.
+
+(2) PRECISION TRADEOFF (named explicitly, per the BF16 bar). BF16-own's error vs fp64 is 2.09e-3 — the
+    bf16 ~8-bit-mantissa floor, ~8× looser than the TF32 path (2.6e-4). This is a PRECISION CHANGE, not
+    a free speedup: usable on the INFERENCE / FORWARD path (logits, FFN/MLP, attention QKV·O projections
+    — bf16 is the industry-standard activation dtype there). It is NOT a drop-in for precision-critical
+    fp32-accumulation paths (e.g. small-Δ optimizer/grad-accumulation or ill-conditioned reductions)
+    without an error-budget check. We do NOT claim fp32-grade precision.
+
+(3) THROUGHPUT — CLOSED-NEGATIVE (the falsified clause, honestly reported). BF16-own does NOT approach
+    cuBLAS-BF16: it sustains only 13-17 TFLOP/s vs cuBLAS-BF16's 1021-1424 TFLOP/s (~77-85× slower),
+    and is actually slower than even FP64-cuBLAS in absolute TFLOP/s. The 128×64 WMMA2-mirrored schedule
+    that reached cuBLAS-CLASS util in the TF32 path does NOT transfer to BF16 here: the binding cost is
+    the staging pipeline — fp32→bf16 must be ROUNDED on a thread before the shared store (cp.async cannot
+    cast fp32→bf16 in-flight), so the BF16 path lost the TF32 path's true cp.async double-buffer overlap
+    (the prefetch degenerates to plain blocking bf16 stores + a per-element scalar __float2bfloat16 of
+    24 elems/thread/K-slice). The result is a correct-but-memory/stage-bound kernel, NOT a TC-peak one.
+    → A clean kernel optimization (a real cp.async-staged bf16 double buffer that hides the fp32→bf16
+      round, or accepting pre-rounded bf16 device buffers so cp.async applies) is the named next step;
+      it is OUT OF SCOPE for C1's "author + correctness-prove the BF16 own-GEMM" milestone.
+
+(4) DTYPE-AXIS (the axis the README's 9.67× is about) — CONFIRMED at the cuBLAS level. The bf16-vs-fp32-
+    vs-fp64 throughput ordering IS real and large: cuBLAS-BF16 is 29-40× FP64-cuBLAS and 1.65-1.89×
+    FP32-cuBLAS(TF32). So the dtype speedup the README headline cites (9.67× over FP64-cuBLAS) is
+    directionally validated by the cuBLAS reference here (cuBLAS-BF16 vs FP64-cuBLAS = 29-40×). The
+    finding is that OUR own BF16 kernel does not yet REALIZE that axis (it's correct but slow); the axis
+    itself is confirmed, the own-kernel realization is the open residual.
+
+NO perf claim is made beyond the measured numbers; the correctness gate (rel-RMS ≤ 1e-2) PASSED before
+any throughput statement. This is NOT a "surpass cuBLAS" result. Pod destroyed (leak 0).

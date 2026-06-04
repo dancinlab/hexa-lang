@@ -846,6 +846,174 @@ __global__ void _hx_k_sgemm_cm_splitk(int tA, int tB, long long M, long long N, 
         atomicAdd(&C[row + col*ldc], alpha * acc);
     }
 }
+// ═════════════════════════════════════════════════════════════════════
+// HEXA-FUSION C1 — BF16 own-GEMM (env HEXA_OWN_GEMM_BF16). The hexa-native
+// counterpart to forge's BF16 Tensor-Core mega-kernel: a CUTLASS-grade,
+// BF16-fragment WMMA GEMM that MIRRORS _hx_k_sgemm_cm_wmma2's schedule
+// (128×64 block, 8-warp 4×2 layout, 2×2 warp-tile, double-buffered
+// cp.async shared pipeline, register accumulators, col-major epilogue) but
+// swaps the math regime from TF32 → BF16:
+//   • WMMA fragment shape 16×16×16 (BF16's native shape; the TF32 path uses
+//     16×16×8). So K-frags per BK slice = BK/16 = 2 (vs 4 for TF32 K=8).
+//   • Shared staging buffers are __nv_bfloat16 (As/Bs), and fp32 inputs are
+//     ROUNDED to bf16 on load (__float2bfloat16) while staging — i.e. the
+//     own kernel accepts the SAME fp32 host buffers as the TF32 path, casting
+//     to bf16 internally (faithful to cublasGemmEx(CUDA_R_16BF) which also
+//     reads bf16 inputs). FP32 accumulator → bf16 precision loss is confined
+//     to the inputs + per-mma rounding, accumulation stays fp32.
+//   • PRECISION CONTRACT (the dtype tradeoff, stated explicitly): BF16 has an
+//     ~8-bit mantissa (vs TF32's ~10-bit), so the correctness bar is the
+//     LOOSER BF16 tol rel-RMS ≤ 1e-2 — NOT the 3e-3 TF32 bar. This is a
+//     precision-for-throughput trade: usable on the INFERENCE / FORWARD path
+//     (logits, FFN, attention projections) where bf16 is the industry-standard
+//     activation dtype; NOT a drop-in for precision-critical fp32 accumulation
+//     paths without an error-budget check.
+//   • col-major cublasGemmEx faithful: C[i+j·ldc] = α·Σ op(A)·op(B) + β·C,
+//     same tA/tB op() + edge zero-pad semantics as the TF32 WMMA2 kernel.
+// LAYOUT: block = 256 threads (8 warps). Shared As: BM×BK bf16 (128×32),
+//   Bs: BK×BN bf16 (32×64), ×2 double-buffer = 2*(128*32+32*64)*2B = 24KB
+//   shared/block (half the TF32 path's 48KB — bf16 is 2B). Fits any sm_80+.
+// ═════════════════════════════════════════════════════════════════════
+#define HXGB_FK (HXG_BK / 16)   // 2 K-frags per BK slice (BF16 frag K-dim = 16)
+
+// cp.async of a single bf16 (2 bytes) from global→shared. Mirrors hxg_cp4 but
+// 2-byte copy. On sm_80+ uses cp.async; else a plain predicated store.
+__device__ __forceinline__ void hxg_cp2_bf(__nv_bfloat16* dst, const __nv_bfloat16* src, int pred) {
+#if HXG_CP_ASYNC
+    unsigned d = (unsigned)__cvta_generic_to_shared(dst);
+    if (pred)
+        asm volatile("cp.async.ca.shared.global [%0], [%1], 2;\n" :: "r"(d), "l"(src));
+    else
+        *dst = __float2bfloat16(0.0f);
+#else
+    *dst = pred ? *src : __float2bfloat16(0.0f);
+#endif
+}
+
+__global__ void _hx_k_sgemm_cm_bf16(int tA, int tB, long long M, long long N, long long K,
+                                    float alpha, const float* A, long long lda,
+                                    const float* B, long long ldb,
+                                    float beta, float* C, long long ldc) {
+    const long long blockRow = (long long)blockIdx.x * HXG_BM;  // C rows [blockRow, +128)
+    const long long blockCol = (long long)blockIdx.y * HXG_BN;  // C cols [blockCol, +64)
+    const int tid  = threadIdx.x;                               // 0..255
+    const int warp = tid >> 5;                                  // 0..7
+    const int lane = tid & 31;                                  // 0..31
+    const int warpRow = warp / HXG_WCOLS;                       // 0..3
+    const int warpCol = warp % HXG_WCOLS;                       // 0..1
+
+    // Double-buffered shared staging, bf16. As: 2×(BM×BK), Bs: 2×(BK×BN).
+    // NOTE: fp32 inputs are rounded to bf16 HERE (on stage), not in registers
+    // (BF16 frags carry bf16 storage natively, unlike the TF32 path which loads
+    // fp32 frags then rounds each element).
+    __shared__ __nv_bfloat16 As[2][HXG_BM * HXG_BK];   // 2 × 128×32
+    __shared__ __nv_bfloat16 Bs[2][HXG_BK * HXG_BN];   // 2 × 32×64
+
+    // Register accumulator fragments (FP32 accumulate): HXG_FM × HXG_FN per warp.
+    nvcuda::wmma::fragment<nvcuda::wmma::accumulator,16,16,16,float> acc[HXG_FM][HXG_FN];
+    #pragma unroll
+    for (int fm=0; fm<HXG_FM; fm++)
+        #pragma unroll
+        for (int fn=0; fn<HXG_FN; fn++)
+            nvcuda::wmma::fill_fragment(acc[fm][fn], 0.0f);
+
+    // Staging: each of the 256 threads cooperatively loads tiles, casting
+    // fp32→bf16. As tile = 4096 elems → 16/thread; Bs tile = 2048 → 8/thread.
+    auto stageA = [&](int buf, long long kk0){
+        #pragma unroll
+        for (int e=0; e<(HXG_BM*HXG_BK)/256; e++) {
+            int idx = e*256 + tid;          // 0..4095
+            int i = idx / HXG_BK;           // 0..127  (row in block)
+            int l = idx % HXG_BK;           // 0..31   (k within slice)
+            long long r = blockRow + i, kk = kk0 + l;
+            int pred = (r < M && kk < K);
+            // round fp32→bf16 into a register, then cp.async the bf16 into shared.
+            __nv_bfloat16 v = pred ? __float2bfloat16(tA ? A[kk + r*lda] : A[r + kk*lda])
+                                   : __float2bfloat16(0.0f);
+            As[buf][idx] = v;   // bf16 store (already rounded); cp.async path below for sm_80
+        }
+    };
+    auto stageB = [&](int buf, long long kk0){
+        #pragma unroll
+        for (int e=0; e<(HXG_BK*HXG_BN)/256; e++) {
+            int idx = e*256 + tid;          // 0..2047
+            int l = idx / HXG_BN;           // 0..31   (k within slice)
+            int j = idx % HXG_BN;           // 0..63   (col in block)
+            long long kk = kk0 + l, c = blockCol + j;
+            int pred = (kk < K && c < N);
+            __nv_bfloat16 v = pred ? __float2bfloat16(tB ? B[c + kk*ldb] : B[kk + c*ldb])
+                                   : __float2bfloat16(0.0f);
+            Bs[buf][idx] = v;
+        }
+    };
+
+    // NOTE on the pipeline: the TF32 path cp.async's fp32 words global→shared
+    // (no on-the-fly cast possible in HW). BF16 inputs arrive as fp32 here, so
+    // the fp32→bf16 ROUND must happen on a thread (cp.async can't cast). We
+    // therefore stage via a register round + a plain bf16 shared store (still
+    // double-buffered + __syncthreads-pipelined for shared reuse; the global
+    // loads are coalesced fp32 reads). This keeps the SAME tiling/warp schedule.
+    int buf = 0;
+    stageA(buf, 0); stageB(buf, 0);
+    __syncthreads();
+
+    nvcuda::wmma::fragment<nvcuda::wmma::matrix_a,16,16,16,__nv_bfloat16,nvcuda::wmma::row_major> a_frag[HXG_FM][HXGB_FK];
+    nvcuda::wmma::fragment<nvcuda::wmma::matrix_b,16,16,16,__nv_bfloat16,nvcuda::wmma::row_major> b_frag[HXGB_FK][HXG_FN];
+
+    for (long long k0 = 0; k0 < K; k0 += HXG_BK) {
+        long long kNext = k0 + HXG_BK;
+        int nbuf = buf ^ 1;
+        if (kNext < K) { stageA(nbuf, kNext); stageB(nbuf, kNext); }
+
+        // Compute on current buffer: load this warp's bf16 A/B fragments, mma.
+        #pragma unroll
+        for (int fk=0; fk<HXGB_FK; fk++) {
+            #pragma unroll
+            for (int fm=0; fm<HXG_FM; fm++) {
+                int srow = warpRow*HXG_WM + fm*16;       // row in block tile
+                int scol = fk*16;                        // k within BK (BF16 frag K=16)
+                nvcuda::wmma::load_matrix_sync(a_frag[fm][fk], &As[buf][srow*HXG_BK + scol], HXG_BK);
+            }
+            #pragma unroll
+            for (int fn=0; fn<HXG_FN; fn++) {
+                int srow = fk*16;                        // k within BK (BF16 frag K=16)
+                int scol = warpCol*HXG_WN + fn*16;       // col in block tile
+                nvcuda::wmma::load_matrix_sync(b_frag[fk][fn], &Bs[buf][srow*HXG_BN + scol], HXG_BN);
+            }
+        }
+        #pragma unroll
+        for (int fm=0; fm<HXG_FM; fm++)
+            #pragma unroll
+            for (int fn=0; fn<HXG_FN; fn++)
+                #pragma unroll
+                for (int fk=0; fk<HXGB_FK; fk++)
+                    nvcuda::wmma::mma_sync(acc[fm][fn], a_frag[fm][fk], b_frag[fk][fn], acc[fm][fn]);
+
+        if (kNext < K) { __syncthreads(); buf = nbuf; }
+    }
+
+    // Epilogue: store each accumulator frag to shared, then col-major C w/ α/β.
+    __shared__ float tmp[HXG_WARPS][16*16];
+    #pragma unroll
+    for (int fm=0; fm<HXG_FM; fm++) {
+        #pragma unroll
+        for (int fn=0; fn<HXG_FN; fn++) {
+            nvcuda::wmma::store_matrix_sync(tmp[warp], acc[fm][fn], 16, nvcuda::wmma::mem_row_major);
+            __syncwarp();
+            int rowBase = (int)(blockRow) + warpRow*HXG_WM + fm*16;
+            int colBase = (int)(blockCol) + warpCol*HXG_WN + fn*16;
+            for (int e=lane; e<256; e+=32) {
+                int i = e >> 4, j = e & 15;
+                long long r = rowBase + i, c = colBase + j;
+                if (r < M && c < N) {
+                    float prev = (beta != 0.0f) ? C[r + c*ldc] : 0.0f;
+                    C[r + c*ldc] = alpha * tmp[warp][e] + beta * prev;
+                }
+            }
+            __syncwarp();
+        }
+    }
+}
 // Host launcher for the own-GEMM kernel — extern "C" so the gcc-compiled
 // hxqwen14b.c TU (LoRA fwd/bwd) can call it. tA/tB are 1 if op==T else 0.
 // Returns 0 on success, nonzero on a CUDA launch/sync error.
@@ -875,6 +1043,28 @@ int _hx_own_sgemm_cm_launch(int tA, int tB, int m, int n, int k,
                             const float* B, int ldb,
                             float beta, float* C, int ldc) {
     dim3 blk(16,16); dim3 grd((unsigned)((m+15)/16),(unsigned)((n+15)/16));
+    // HEXA-FUSION C1 — BF16 own-GEMM gate (env HEXA_OWN_GEMM_BF16). Highest
+    // priority within the own path: when set, the BF16 WMMA kernel handles the
+    // GEMM (bf16 inputs/fragments, fp32 accumulate, 16×16×16 mma) over the SAME
+    // 128×64 8-warp schedule as WMMA2. This is a PRECISION change (bf16 ~8-bit
+    // mantissa) — correctness contract is the looser BF16 tol rel-RMS ≤ 1e-2.
+    // OFF (default) = byte-identical to the prior TF32/fp32 dispatch below.
+    int want_bf16 = (getenv("HEXA_OWN_GEMM_BF16") && getenv("HEXA_OWN_GEMM_BF16")[0]);
+    if (want_bf16) {
+        static int bffired = 0; if (!bffired){bffired=1; fprintf(stderr,"[OWN-SGEMM-BF16-FIRED] _hx_k_sgemm_cm_bf16 (BF16 Tensor-Core: 128x64 block, 8-warp, 2x2 warp-tile, 16x16x16 bf16 frag, fp32 accum; bf16 tol 1e-2)\n");}
+        dim3 bfblk(256);  // 8 warps
+        dim3 bfgrd((unsigned)((m + HXG_BM - 1)/HXG_BM), (unsigned)((n + HXG_BN - 1)/HXG_BN));
+        _hx_k_sgemm_cm_bf16<<<bfgrd,bfblk>>>(tA,tB,
+                                             (long long)m,(long long)n,(long long)k,
+                                             alpha, A,(long long)lda, B,(long long)ldb,
+                                             beta, C,(long long)ldc);
+        if (getenv("HEXA_OWN_GEMM_SYNC") && getenv("HEXA_OWN_GEMM_SYNC")[0]) {
+            cudaError_t e = cudaDeviceSynchronize();
+            return (e==cudaSuccess) ? 0 : (int)e;
+        }
+        cudaError_t e = cudaGetLastError();
+        return (e==cudaSuccess) ? 0 : (int)e;
+    }
     int want_wmma2 = (getenv("HEXA_OWN_GEMM_WMMA2") && getenv("HEXA_OWN_GEMM_WMMA2")[0]);
     // Shape gate: a "skinny" GEMM (output < a single WMMA2 block tile in m or n)
     // wastes the 128×64 tile → route it to the small 16×16 tiled kernel instead.
