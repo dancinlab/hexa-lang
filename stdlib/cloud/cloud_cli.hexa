@@ -473,6 +473,30 @@ fn _rent_register_pods_json(pod_id: str, host: str, provider: str, owner: str) -
     return jid
 }
 
+// _emit_rent_result — OWNERSHIP-SPLIT boundary contract (pod-attribution split).
+// hexa cloud is POD-OPS-ONLY and WRITE-FORBIDDEN to the attribution/label
+// harness; it EMITS raw pod FACTS on a single machine-readable stdout line and
+// stops fabricating a blank/owner attribution row in ./pods.json. The sidecar
+// recorder (sidecar repo) consumes this line + caller context and OWNS the
+// {project · candidate · lane · kind} attribution write (no-omission + fallback).
+//
+// Schema (the contract both repos compose on — fields space-separated, each
+// `key=value`, value is the raw fact verbatim, NO derivation here):
+//   rent-result pod=<id> host=<h> provider=<p> state=<s> [project=<p>] [deck=<prefix>]
+// `project`/`deck` are emitted ONLY when hexa cloud already has them as a
+// pod-op fact (project = the dedup/down-guard key; deck = the dft-run deck
+// dir). hexa cloud NEVER invents a label/candidate — that is sidecar's job.
+fn _emit_rent_result(pod_id: str, host: str, provider: str, state: str, project: str, deck: str) {
+    let mut line = "rent-result pod=" + pod_id + " host=" + host + " provider=" + provider + " state=" + state
+    if len(project) > 0 && project != "unattributed" {
+        line = line + " project=" + project
+    }
+    if len(deck) > 0 {
+        line = line + " deck=" + deck
+    }
+    println(line)
+}
+
 // _teardown_verdict_if_registered — Fix B worker. After `cloud poll`
 // detects DEAD, scan ./pods.json's jobs for one whose `pid` matches the
 // polled pid. On hit, rewrite verdict=FAIL (we do NOT have the remote
@@ -1266,12 +1290,15 @@ fn _cloud_rent_vast(av: [str], start: int) -> int {
     if len(_injected) > 0 {
         println("[cloud] rent vast: ~/.ssh/config Host " + _injected + " → vast identity (auto · zero-flag ssh; #1155)")
     }
-    // Q2 — auto-register a ./pods.json row by default (symmetry with nohup/fire
-    // --register); `--no-register` opts out. Off the registry's billing-leak
-    // defense (M5 global), this is the per-project work-manifest row so a deck-
-    // less rent surfaces as a PENDING job in `cloud pods`.
+    // OWNERSHIP SPLIT — hexa cloud is POD-OPS-ONLY and WRITE-FORBIDDEN to the
+    // attribution harness. It no longer fabricates the ./pods.json attribution
+    // row (the old `_rent_register_pods_json` `--kind=rent` write); instead it
+    // EMITS the raw pod facts on a `rent-result` line. The sidecar recorder
+    // consumes that line + caller context and OWNS the {project·candidate·lane·
+    // kind} attribution write (no-omission + fallback). `--no-register` is kept
+    // as a contract-stable no-op so existing callers / hooks never break.
     if _has_flag(av, start, "--no-register") == 0 {
-        let _ = _rent_register_pods_json(inst.instance_id, ssh.host, "vast", owner)
+        _emit_rent_result(inst.instance_id, ssh.host, "vast", "READY", project, "")
     }
     println("instance_id=" + inst.instance_id)
     println("host=" + ssh.host)
@@ -1399,9 +1426,12 @@ fn _cloud_rent_runpod(av: [str], start: int) -> int {
         let _ = pod_registry_set_limits(pod.pod_id, ttl_sec, max_cost, rate)
         println("[cloud] M2/M3 guard: ttl_sec=" + str(ttl_sec) + " max_cost_usd=" + max_cost + " rate=" + rate + "/hr (enforced by `cloud watchdog`)")
     }
-    // Q2 — auto-register a ./pods.json row by default; `--no-register` opts out.
+    // OWNERSHIP SPLIT — POD-OPS-ONLY. Emit raw `rent-result` facts instead of
+    // fabricating the ./pods.json attribution row; the sidecar recorder OWNS
+    // the attribution write (see _emit_rent_result). `--no-register` kept as a
+    // contract-stable no-op.
     if _has_flag(av, start, "--no-register") == 0 {
-        let _ = _rent_register_pods_json(pod.pod_id, port.ip, "runpod", owner)
+        _emit_rent_result(pod.pod_id, port.ip, "runpod", "READY", project, "")
     }
     println("pod_id=" + pod.pod_id)
     println("host=" + port.ip)
