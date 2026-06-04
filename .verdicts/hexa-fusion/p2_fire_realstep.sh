@@ -37,7 +37,9 @@ fire(){ local f=$1 u="$WORK/util_f$1.csv" t="$WORK/train_f$1.log"; : > "$u"
  ( while true; do nvidia-smi --query-gpu=utilization.gpu --format=csv,noheader,nounits -i 0 >>"$u" 2>/dev/null; sleep 0.5; done ) & local sp=$!
  export CUDA_VISIBLE_DEVICES=0 CLM_PROD_DEVRESIDENT=1 CLM_PROD_DEVFEED=1 CLM_PROD_BATCHED=1 HEXA_CUDA_ASYNC=0
  if [ "$f" = "1" ]; then export HEXA_FUSE_GN_GELU=1; else unset HEXA_FUSE_GN_GELU; fi
- export CLM_PROD_D=1536 CLM_PROD_T=512 CLM_PROD_E=2 CLM_PROD_NSAMP=8 CLM_PROD_EPOCHS=4 CLM_PROD_CORPUS="$WORK/corpus.txt"
+ # D=1536 OOMs at 12 GiB (cudaMalloc fail / rc=137) — D=1024 is the largest
+ # config that FITS 12 GiB and runs the FULL real serial DAG (windows 8/8).
+ export CLM_PROD_D=1024 CLM_PROD_T=512 CLM_PROD_E=2 CLM_PROD_NSAMP=8 CLM_PROD_EPOCHS=8 CLM_PROD_CORPUS="$WORK/corpus.txt"
  timeout 2400 ./clm_prod_gpu >"$t" 2>&1; local rc=$?; kill $sp 2>/dev/null; wait $sp 2>/dev/null
  echo "--- REAL-STEP fuse=$f rc=$rc (HEXA_FUSE_GN_GELU=${HEXA_FUSE_GN_GELU:-unset}) ---"
  python3 -c "$PYUTIL" "$u" 2>/dev/null || echo "  (util parse fail)"
