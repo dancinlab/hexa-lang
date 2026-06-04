@@ -67,6 +67,13 @@ fn emit_runtime_cuda_c() -> str {
             " * scalar type visible to the bf16 kernel emitted below). CUDA-toolkit\n" +
             " * header — always present whenever cublas_v2.h is. */\n" +
             "#include <cuda_bf16.h>\n" +
+            "/* HEXA-FUSION P1: cooperative_groups (C++ templates) — MUST be included at\n" +
+            " * top-level, OUTSIDE the extern \"C\" block below, or its libcxx headers hit\n" +
+            " * 'declaration may not have extern \"C\" linkage'. */\n" +
+            "#ifdef __CUDACC__\n" +
+            "#include <cooperative_groups.h>\n" +
+            "namespace _hxcg = cooperative_groups;\n" +
+            "#endif\n" +
             "\n" +
             "/* C linkage for the public surface so that C harnesses (or runtime.c on\n" +
             " * the host build) can call these symbols without C++ name mangling.\n" +
@@ -2146,10 +2153,14 @@ fn emit_runtime_cuda_c() -> str {
             " * f64 in the farr buffer by _fq), so reading them as f64 reproduces the eager\n" +
             " * conv1d_via_forge input exactly (same farr the eager matmul consumes).\n" +
             " * grid.sync() requires cudaLaunchCooperativeKernel; the launcher checks the\n" +
-            " * cooperativeLaunch device attr and returns -1 (→ eager fallback) if absent. */\n" +
+            " * cooperativeLaunch device attr and returns -1 (→ eager fallback) if absent.\n" +
+            " * The __device__/__global__ helpers below use C++ types (cg::grid_group&,\n" +
+            " * the Bufs struct), so we CLOSE extern \"C\" around them and REOPEN it for the\n" +
+            " * launcher (which must keep C linkage — runtime.c calls it). */\n" +
             "#ifdef __CUDACC__\n" +
-            "#include <cooperative_groups.h>\n" +
-            "namespace _hxcg = cooperative_groups;\n" +
+            "#ifdef __cplusplus\n" +
+            "}  /* close extern \"C\" for the C++ cooperative device code */\n" +
+            "#endif\n" +
             "/* TF32-rounded multiply-accumulate: round each operand to TF32 (10-bit\n" +
             " * mantissa, the Ampere+ tensor-core input format) then accumulate in f32.\n" +
             " * __float_to_tf32 is exposed on sm_80+; fall back to a mask if unavailable. */\n" +
@@ -2276,7 +2287,10 @@ fn emit_runtime_cuda_c() -> str {
             "    /* GROUPNORM #2 (y→yn). */\n" +
             "    _hx_dev_groupnorm(grid, b.Y, b.noG, b.noB, b.YN, b.MEANN, b.INVN, b.XHATN, T, D);\n" +
             "}\n" +
+            "#ifdef __cplusplus\n" +
+            "extern \"C\" {  /* REOPEN — the launcher keeps C linkage (runtime.c calls it) */\n" +
             "#endif\n" +
+            "#endif /* __CUDACC__ (device block) */\n" +
             "\n" +
             "/* P1 launcher — cooperativeLaunch the full-fwd megakernel. Resolves all 37\n" +
             " * farr ids to device buffers (inputs H2D, outputs dev-alloc), launches with\n" +
