@@ -1,0 +1,28 @@
+F-FUSION-P1B3-WMMA  ::  MEASURED (foreground build+measure, g5-HONEST)
+domain: HEXA-FUSION · date: 2026-06-04 · Phase 1b-3 WMMA TF32 Tensor-Core own-GEMM (precision-approved)
+GPU: NVIDIA RTX PRO 6000 Blackwell (vast gave Blackwell, NOT H100; nvcc 12.4 compute_90 PTX-JIT;
+     same-GPU relative ratios valid). [OWN-SGEMM-WMMA-FIRED] ✓ fired.
+
+CORRECTNESS (LoRA fwd+bwd, M64 N96 K80 R8, WMMA TF32 vs cuBLAS oracle, TF32 tol 3e-3): ALL PASS.
+  y   rel_RMS=3.73e-04 (max|Δ|1.99e-3) · dA 3.80e-04 (5.12e-3) · dB 3.63e-04 (4.64e-3) · dx 3.80e-04 (2.10e-3)
+  → WMMA TF32 kernel is CORRECT at the approved TF32 precision (rel_RMS ~4e-4 ≪ 3e-3 bar; the ~5e-3
+    max|Δ| is the expected TF32 ~10-bit-mantissa rounding, not a bug).
+
+PERF (M=N=K=2048 R16, 50 iters fwd+bwd, same Blackwell GPU):
+  cuBLAS : 0.19071 ms/iter   (1.00×)
+  WMMA   : 1.80890 ms/iter   (9.49× SLOWER than cuBLAS)
+
+VERDICT: WMMA TF32 = CORRECT but NOT a perf win — 9.5× off cuBLAS, even SLOWER than the plain shared-mem
+tiled (0.534 ms) and naive (0.596 ms) variants. ROOT: the kernel uses Tensor-Cores but with a NAIVE
+schedule — ONE warp per 16×16 C tile, K stepped by only 8, shared round-trip every step, no warp-level
+output tiling, no multi-stage/double-buffered pipeline, low SM occupancy. It pays the WMMA/staging
+overhead WITHOUT the throughput. cuBLAS (and CUTLASS) reach TC peak via large warp-tiles (e.g. 128×128
+block, 64×64 warp), software-pipelined cp.async double-buffering, and register accumulators — a
+CUTLASS-grade kernel, NOT a single hand-authored function.
+
+CAMPAIGN CONCLUSION (own-GEMM perf-parity): all four own-GEMM variants (naive/tiled/regtiled/WMMA) are
+CORRECT (fp32 or TF32), but NONE approach cuBLAS throughput — closest is tiled at 2.8× off (Blackwell) /
+6.25× (H100). cuBLAS parity is a CUTLASS-grade engineering effort (months), out of scope here. The
+DELIVERED win is OWNERSHIP + CORRECTNESS: clm (FP64) + llm (FP32) train cuBLAS-GEMM-free, landed on main
+(#2697). "Surpass cuBLAS raw GEMM" via hand-authored kernels = NOT reached (honest negative). Keeping
+cuBLAS for the GEMM while owning all glue/everything-else remains the pragmatic roofline-respecting path.
