@@ -3275,3 +3275,51 @@
   raw    = ".verdicts/runtime-floor-closure/F5-vt-byte-diff-rp2040.txt"
   src    = "stdlib/hal/vector_table_emit.hexa (rp2040_emit_vector_table_s) + stdlib/hal/t3/vt_byte_diff_rp2040.hexa + RUNTIME.floor.md §F5 FOUNDATION 증분 (PR1 · 2026-05-28)"
   status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim (6/6 PASS, gen sha == orig sha == 212baeea7479dbac…73d82c2). Foundation for F5 re-open. NOT paper-eligible alone — `git rm` gated on Components 3 + 5 (reset-prologue lowering + numerics_t3 rewire)."
+
+# ═══════════════════════════════════════════════════════════════════════════
+# GPU — hexa-fusion own-GEMM correctness suite (E4 atlas-fold milestone, 2026-06-05)
+# ───────────────────────────────────────────────────────────────────────────
+# The CUDA-OWN campaign replaced the last non-owned device piece (cuBLAS GEMM)
+# with hexa-emitted own kernels and VERIFIED correctness vs a cuBLAS oracle on
+# rented H100 / Blackwell pods. These are GPU MEASUREMENTS (max|ΔCE| · rel-RMS ·
+# steps/s vs cuBLAS), NOT in-process-recomputable closed-form atoms — so they are
+# NOT atlas-fold-shaped (`hexa atlas register --from-verify <fn>` needs a
+# tool/verify_cli.hexa calculator path; a fabricated own_gemm calculator returns
+# 🟠 INSUFFICIENT — refused under g5/h_verify_auto_absorb). They are INDEXED here
+# (claim_manifest) pointing at the verbatim .verdicts/hexa-fusion/*.txt — the
+# audit surface for these facts is the verdict file, not an embedded.gen.hexa node.
+
+@C fusion_own_gemm_fp64_correct := "clm_prod FP64 own-GEMM (_hx_k_gemm + _hx_k_gemm_strided_batched) trains CORRECTLY vs cuBLAS oracle: max|ΔCE| = 0.00000 at 5-dec print (bound <1.4e-6 rel), CE 4.46624→3.64669 bit-identical both arms, DESCENT=1" :: measurement [slug=hexa-fusion-own-gemm group=GPU]
+  method = "fixpoint"
+  cmd    = "clm_prod_gpu A/B (HEXA_OWN_GEMM unset=cuBLAS oracle vs =1=own), D1536 T512 E2 NSAMP8 EPOCHS4, H100 vast 39422621"
+  raw    = ".verdicts/hexa-fusion/F-FUSION-P1-OWN-GEMM-CORRECTNESS.txt"
+  src    = "self/cuda/runtime_cuda_emit.hexa (_hx_k_gemm Phase 1a · _hx_k_gemm_strided_batched Phase 1c) · branch domain/hexa-fusion-p1a-own-gemm @db639eee3 · landed on main"
+  status = "🟢 SUPPORTED-NUMERICAL — REAL verdict persisted verbatim. Both kernels FIRED (own 2× / oracle 0×), CE bit-identical-at-print, descent PASS. GPU measurement (NOT atlas-atom-shaped — indexed here, not folded). terminal."
+
+@C fusion_own_sgemm_fp32_correct := "hxqwen14b LLM FP32 own-GEMM _hx_k_sgemm_cm: rel-RMS ~1e-6 vs cuBLAS oracle on ALL outputs (y/dA/dB/dx) at M=N=K=2048 (worst rel-RMS 9.70e-7; global max|Δ| 4.768e-6 @small shape), within fp32 tol — LoRA fwd/bwd path 100% device-owned" :: measurement [slug=hexa-fusion-own-gemm group=GPU]
+  method = "fixpoint"
+  cmd    = "p1d_driver A/B (HEXA_OWN_GEMM unset=cuBLAS oracle vs =1=own), small M64 N96 K80 + large M=N=K=2048 R16, H100 vast 39427068"
+  raw    = ".verdicts/hexa-fusion/F-FUSION-P1D-LLM-SGEMM.txt"
+  src    = "self/native/hxqwen14b_cuda.cu (_hx_k_sgemm_cm_v54 + _hx_own_sgemm_cm_launch) + hxqwen14b_emit.hexa shim · landed on main"
+  status = "🟢 SUPPORTED-NUMERICAL — REAL verdict persisted verbatim. [OWN-SGEMM-FIRED] 1× own / 0× oracle, rel-RMS ~1e-6 within fp32 tol PASS both shapes. ~7.6× slower wall (naive vs cuBLAS TC — honest, motivates tiling). GPU measurement (NOT atlas-atom-shaped — indexed here). terminal."
+
+@C fusion_wmma2_cutlass_grade := "CUTLASS-grade tiled TF32 WMMA2 own-GEMM _hx_k_sgemm_cm_wmma2 is CORRECT (rel-RMS 2.609e-4 ≪ 3e-3 TF32 bar, bounds-guarded) and lands at 1.13× of cuBLAS @2048³ (0.77047 vs 0.67948 ms/it), closing ~94% of the naive-WMMA→cuBLAS gap (2.70× faster than naive)" :: measurement [slug=hexa-fusion-own-gemm group=GPU]
+  method = "fixpoint"
+  cmd    = "standalone driver #include shipped kernel, single GEMM M=N=K=2048 + M130 N70 K96 bounds, CUDA-event 50it, RTX PRO 6000 Blackwell vast 39459930"
+  raw    = ".verdicts/hexa-fusion/F-FUSION-CUTLASS-GRADE-WMMA.txt"
+  src    = "self/native/hxqwen14b_cuda.cu (_hx_k_sgemm_cm_wmma2, env HEXA_OWN_GEMM_WMMA2, block 128×64×32 · 8-warp · register-accum · double-buffered cp.async) · branch domain/hexa-fusion-cutlass-grade"
+  status = "🟢 SUPPORTED-NUMERICAL — REAL verdict persisted verbatim. First own-GEMM to APPROACH cuBLAS throughput while correct (1.13× = within 13%). NOT a parity claim (cuBLAS still 1.13× faster). GPU measurement (NOT atlas-atom-shaped — indexed here). terminal."
+
+@C fusion_thru_parity_skinny_dispatch := "skinny-GEMM shape-dispatch (skinny R=16 → 16×16 tiled, square → WMMA2) + drop per-call sync closes ~46-48% of the full-step steps/s gap: 2.24×→1.67× @M8192 (251→336 steps/s), correctness rel-RMS ≤3e-4 ≪ 3e-3, CE descent bit-identical" :: measurement [slug=hexa-fusion-own-gemm group=GPU]
+  method = "fixpoint"
+  cmd    = "hxqwen14b_llmstep_driver.cu modes pergemm/util/gate/conv, M8192 + M16384 K=N=4096 R16, RTX PRO 6000 Blackwell vast 39477333"
+  raw    = ".verdicts/hexa-fusion/F-FUSION-THRU-PARITY.txt"
+  src    = "self/native/hxqwen14b_cuda.cu (_hx_own_sgemm_cm_launch shape-dispatch → _hx_k_sgemm_cm_tiled · env HEXA_OWN_GEMM_NOSHAPE/_SYNC) · branch domain/hexa-fusion-thru-parity"
+  status = "🟢 SUPPORTED-NUMERICAL — REAL verdict persisted verbatim. ~46-48% of 2.2× gap CLOSED, byte-eq/TF32-correct, root cause (skinny TC tile-waste) diagnosed+measured. NOT full parity (residual = skinny split-K, NAMED not closed). GPU measurement (NOT atlas-atom-shaped — indexed here). terminal."
+
+@C fusion_llm_fullstep_convergence := "full LLM LoRA training step: WMMA2-own reaches cuBLAS-CLASS util (87.4% vs 91.7% MEAN @M8192) AND tracks cuBLAS CE descent over 100 real steps to max|dCE|=1.280e-4 (rel ~2e-4 ≪ 3e-3 TF32 bar), both descend 6.94→0.005 — convergence PASS, no TF32 drift" :: measurement [slug=hexa-fusion-own-gemm group=GPU]
+  method = "fixpoint"
+  cmd    = "hxqwen14b_llmstep_driver.cu (util 20s loop + conv 100 steps + CI gate), M8192/M16384 + M512 K=N=1024 R16, RTX PRO 6000 Blackwell vast 39470604"
+  raw    = ".verdicts/hexa-fusion/F-FUSION-LLM-DEFAULT-UTIL.txt"
+  src    = "self/native/hxqwen14b_llmstep_driver.cu + tool/hexa-fusion/llm_own_gemm_gate.sh (CI gate PASS @3e-3 and 1e-3) · WMMA2 promoted as documented opt-in flag (cuBLAS stays default)"
+  status = "🟢 SUPPORTED-NUMERICAL — REAL verdict persisted verbatim. util-parity (cuBLAS-class) + convergence PASS (max|dCE|=1.28e-4). HONEST: util-parity is NOT throughput-parity (WMMA2 ~2.2× slower steps/s, skinny-R LoRA). GPU measurement (NOT atlas-atom-shaped — indexed here). terminal."
