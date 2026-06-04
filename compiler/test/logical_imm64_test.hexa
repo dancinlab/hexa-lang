@@ -1,0 +1,43 @@
+// Regression test for compiler/emit/macho_arm64.hexa::_logical_imm64.
+//
+// Guards the immr rotation-drop fix: the encoder's rotation-search loop
+// ends with `rot = size` as a break sentinel, so reading `rot` afterward
+// yielded `size` (immr = size & 0x3f = 0 or 32), silently dropping the
+// rotation for any non-zero-rotated bitmask. The fix saves the discovered
+// rotation in `found_rot`.
+//
+// Ground truth from `clang -target arm64-apple-darwin` + otool, e.g.
+//   and x5, x5, #0x10000000  ->  0x926400a5  (immr 36)
+// pre-fix emitted 0x924000a5 (immr 0). N and imms were always correct;
+// only immr was wrong. Drives the REAL function via the module loader.
+use "compiler/emit/macho_arm64"
+
+fn immr_of(v: i64) -> i64 { return (_logical_imm64(v) >> 6) & 0x3f }
+
+fn expect_imm(label: string, got: i64, want: i64) -> int {
+    if got != want {
+        println("FAIL " + label + ": got=" + str(got) + " want=" + str(want))
+        return 1
+    }
+    return 0
+}
+
+fn main() {
+    let mut fails = 0
+    // bit 28 set (and ...,#0x10000000): ROR(1, 36) over 64 -> immr 36 (was 0)
+    fails = fails + expect_imm("immr 0x10000000", immr_of(0x10000000), 36)
+    // #1 (eor x0,x0,#1): rotation 0 -> must stay correct (rot==0 path)
+    fails = fails + expect_imm("immr 0x1", immr_of(1), 0)
+    // bits 62-63 (#0xC000000000000000): ones=2 -> immr 2
+    fails = fails + expect_imm("immr 0xC000000000000000", immr_of(0 - 0x4000000000000000), 2)
+    // bit 1 (#0x2): ROR(1, 63) -> immr 63
+    fails = fails + expect_imm("immr 0x2", immr_of(2), 63)
+    // 0 / all-ones are not encodable as a logical immediate -> -1
+    fails = fails + expect_imm("0 not encodable", _logical_imm64(0), 0 - 1)
+    fails = fails + expect_imm("-1 not encodable", _logical_imm64(0 - 1), 0 - 1)
+    if fails == 0 {
+        println("=== _logical_imm64 regression: all PASS ===")
+    } else {
+        println("=== _logical_imm64 regression FAIL: " + str(fails) + " test(s) ===")
+    }
+}
