@@ -1,0 +1,181 @@
+// @ci_gate — deterministic · network-free · g5 gate for the scratch-bank
+//            OBJECT-STORE layer (content-addressed put/get + manifest + plan).
+//
+// scratch_bank_store_selftest.hexa — proves the milestone object-store contract
+// of "LaH10 q4 crash → resume from a banked .save without an SCF re-run", at the
+// addressing + manifest + restore-plan level, over a LOCAL FAKE STORE (no pod,
+// no cloud, no network, no LLM self-judge). Verdict printed verbatim.
+//
+//   (a) put→get round-trip  — bank a synthetic save-dir via the fake store,
+//                             get() the SAME run_id → hit=true; the restore-plan
+//                             lists every banked file.
+//   (b) different deck-hash → MISS — a get() at a different deck-hash key finds
+//                             no bank (hit=false) → NO false resume.
+//   (c) manifest classes    — the manifest separates .save / _ph0/*.phsave
+//                             (resume_critical) from *.dynN (cross_check).
+//   (d) skip-SCF gating     — restore-plan.skip_scf is TRUE only when a
+//                             resume_critical (.save) file is present; a bank of
+//                             ONLY cross-check (dynN) files → skip_scf=false.
+//   (e) backend named (d6)  — the production object-store backend is NAMED as
+//                             remaining (S3/R2/rclone) and the only impl is the
+//                             local fake store → no false "real resume" claim.
+//
+// Run (canonical @ci_gate path):
+//   hexa run stdlib/qforge/scratch_bank_store_selftest.hexa
+use "stdlib/qforge/scratch_bank_store"
+use "stdlib/qforge/scratch_bank"
+use "stdlib/io"
+
+fn _ck(name: str, cond: bool) -> int {
+    if cond { println("PASS " + name) ; return 0 }
+    println("FAIL " + name) ; return 1
+}
+fn _ck_int(name: str, got: int, want: int) -> int {
+    if got == want { println("PASS " + name + " (" + to_string(got) + ")") ; return 0 }
+    println("FAIL " + name + " — got " + to_string(got) + " want " + to_string(want)) ; return 1
+}
+fn _ck_str(name: str, got: str, want: str) -> int {
+    if got == want { println("PASS " + name) ; return 0 }
+    println("FAIL " + name + " — got [" + got + "] want [" + want + "]") ; return 1
+}
+fn _shq(s: str) -> str {
+    let mut out = "'"
+    let mut i = 0
+    while i < len(s) {
+        if s[i] == '\'' { out = out + "'\"'\"'" } else { out = out + s.substring(i, i + 1) }
+        i = i + 1
+    }
+    return out + "'"
+}
+// is `nm` present in a [str] list?
+fn _has(list: [str], nm: str) -> bool {
+    let mut i = 0
+    while i < len(list) {
+        if list[i] == nm { return true }
+        i = i + 1
+    }
+    return false
+}
+
+fn main() {
+    let mut fails = 0
+    let root = "/tmp/qfr_sbstore_self_" + exec("echo $$").trim()
+    let _ = exec("rm -rf " + _shq(root) + " ; mkdir -p " + _shq(root))
+    let store = sbstore_local_new(root)
+    let rules = qforge_scratch_default_rules()
+
+    // run identity (deck-hash + commit + stage) — the content-address inputs.
+    let deck = "LaH10_q4_deckhash_abc123"
+    let commit = "414029ecf"
+    let stage = "dfpt_q4"
+
+    // a synthetic LaH10 SCF save-dir SET (caller-supplied; d4 — engine-neutral):
+    //   .save contents (resume_critical) + a _ph0 phsave (resume_critical) +
+    //   two cross-check dynN files (DFPT q-loop cross-val, NOT an SCF baton).
+    let mut save: [ScratchFile] = []
+    save.push(ScratchFile { name: "lah10.save/data-file-schema.xml", bytes: "<qes>\n  <output/>\n</qes>\n" })
+    save.push(ScratchFile { name: "lah10.save/charge-density.dat", bytes: "RHO\x01\x02 1.0 2.0\n3.0 4.0\n" })
+    save.push(ScratchFile { name: "lah10.save/wfc1.dat", bytes: "PSI band1 0.5 0.5\n" })
+    save.push(ScratchFile { name: "_ph0/lah10.phsave/control_ph.xml", bytes: "<ph><done_q>3</done_q></ph>\n" })
+    save.push(ScratchFile { name: "lah10.dyn3", bytes: "DYN q3 modes 0.1 0.2\n" })
+    save.push(ScratchFile { name: "lah10.dyn4", bytes: "DYN q4 modes 0.3 0.4\n" })
+
+    // ── (a) put → get round-trip via the fake store ──────────────────────
+    let put = qforge_scratch_bank_put(store, deck, commit, stage, save, rules)
+    fails = fails + _ck("(a) put ok", put.ok)
+    fails = fails + _ck("(a) put key non-empty (content address)", len(put.key) > 0)
+    fails = fails + _ck("(a) put size > 0", put.size > 0)
+    fails = fails + _ck_int("(a) manifest entry count == 6", len(put.manifest), 6)
+    fails = fails + _ck("(a) put has_save (resume_critical present)", put.has_save)
+    // a fresh pod gets the SAME run_id → hit=true + plan lists every banked file.
+    let get = qforge_scratch_bank_get(store, deck, commit, stage, rules)
+    fails = fails + _ck("(a) get hit=true (resume baton found)", get.hit)
+    fails = fails + _ck_str("(a) get key == put key (stable content address)", get.key, put.key)
+    fails = fails + _ck_int("(a) restore_plan lists ALL 6 banked files",
+                            len(get.restore_plan.restore_files), 6)
+    fails = fails + _ck("(a) restore plan lists the .save density",
+                        _has(get.restore_plan.restore_files, "lah10.save/charge-density.dat"))
+    fails = fails + _ck("(a) restore plan lists the dyn4 cross-check",
+                        _has(get.restore_plan.restore_files, "lah10.dyn4"))
+    fails = fails + _ck_int("(a) restored file bytes count == 6", len(get.files), 6)
+
+    // ── (b) different deck-hash → MISS (no false resume) ─────────────────
+    let get_other = qforge_scratch_bank_get(store, "DIFFERENT_deckhash_zzz999", commit, stage, rules)
+    fails = fails + _ck("(b) different deck-hash → hit=false (MISS)", !get_other.hit)
+    fails = fails + _ck("(b) MISS key differs from the banked key", get_other.key != put.key)
+    fails = fails + _ck("(b) MISS plan → skip_scf=false (run SCF, no false resume)",
+                        !get_other.restore_plan.skip_scf)
+    fails = fails + _ck_int("(b) MISS plan restores nothing", len(get_other.restore_plan.restore_files), 0)
+    // a different STAGE on the same deck is also a distinct address (key sanity).
+    fails = fails + _ck("(b) different stage → different key",
+                        qforge_scratch_run_id(deck, commit, "scf") != qforge_scratch_run_id(deck, commit, stage))
+
+    // ── (c) manifest separates resume_critical (.save/.phsave) vs cross_check (dynN) ─
+    let mut crit_count = 0
+    let mut xchk_count = 0
+    let mut mi = 0
+    while mi < len(put.manifest) {
+        let m = put.manifest[mi]
+        if m.klass == "resume_critical" { crit_count = crit_count + 1 }
+        if m.klass == "cross_check" { xchk_count = xchk_count + 1 }
+        // spot-check the actual classification of the named files.
+        if m.name == "lah10.save/charge-density.dat" {
+            fails = fails + _ck_str("(c) .save density → resume_critical", m.klass, "resume_critical")
+        }
+        if m.name == "_ph0/lah10.phsave/control_ph.xml" {
+            fails = fails + _ck_str("(c) _ph0/.phsave → resume_critical", m.klass, "resume_critical")
+        }
+        if m.name == "lah10.dyn3" {
+            fails = fails + _ck_str("(c) dyn3 → cross_check (NOT an SCF baton)", m.klass, "cross_check")
+        }
+        if m.name == "lah10.dyn4" {
+            fails = fails + _ck_str("(c) dyn4 → cross_check (NOT an SCF baton)", m.klass, "cross_check")
+        }
+        mi = mi + 1
+    }
+    fails = fails + _ck_int("(c) 4 resume_critical (3 .save + 1 .phsave)", crit_count, 4)
+    fails = fails + _ck_int("(c) 2 cross_check (dyn3 + dyn4)", xchk_count, 2)
+    // and the get() plan partitions the SAME way.
+    fails = fails + _ck_int("(c) plan resume_critical count == 4", len(get.restore_plan.resume_critical), 4)
+    fails = fails + _ck_int("(c) plan cross_check count == 2", len(get.restore_plan.cross_check), 2)
+
+    // ── (d) restore-plan marks "skip SCF" ONLY when .save present ─────────
+    fails = fails + _ck("(d) full bank (has .save) → restore_plan.skip_scf=true", get.restore_plan.skip_scf)
+    fails = fails + _ck("(d) skip-SCF plan note says 'skip SCF'", get.restore_plan.note.contains("skip SCF"))
+    // bank ONLY cross-check (dynN) files — NO .save/.phsave → must NOT skip SCF.
+    let mut xonly: [ScratchFile] = []
+    xonly.push(ScratchFile { name: "lah10.dyn1", bytes: "DYN q1 0.0\n" })
+    xonly.push(ScratchFile { name: "lah10.dyn2", bytes: "DYN q2 0.0\n" })
+    let put_x = qforge_scratch_bank_put(store, "xonly_deck", commit, "dfpt_q2", xonly, rules)
+    fails = fails + _ck("(d) cross-check-only put ok", put_x.ok)
+    fails = fails + _ck("(d) cross-check-only put has_save=false", !put_x.has_save)
+    let get_x = qforge_scratch_bank_get(store, "xonly_deck", commit, "dfpt_q2", rules)
+    fails = fails + _ck("(d) cross-check-only bank → hit=true (blob exists)", get_x.hit)
+    fails = fails + _ck("(d) cross-check-only → skip_scf=FALSE (dynN alone is no baton)",
+                        !get_x.restore_plan.skip_scf)
+    fails = fails + _ck("(d) cross-check-only plan note says 'RUN SCF'", get_x.restore_plan.note.contains("RUN SCF"))
+    fails = fails + _ck_int("(d) cross-check-only resume_critical count == 0",
+                            len(get_x.restore_plan.resume_critical), 0)
+
+    // ── (e) object-store backend NAMED as remaining (d6 honesty) ─────────
+    let backend = sbstore_remaining_backend()
+    fails = fails + _ck("(e) remaining backend names a production object store",
+                        backend.contains("object store"))
+    fails = fails + _ck("(e) remaining backend names S3/R2/rclone candidates",
+                        backend.contains("S3") && backend.contains("R2") && backend.contains("rclone"))
+    fails = fails + _ck("(e) remaining backend flagged NOT yet bound (no false resume claim)",
+                        backend.contains("not yet bound"))
+    fails = fails + _ck_str("(e) the only IMPLEMENTED store is the local fake", store.kind, "local")
+
+    // ── corrupt-bank guard — a torn blob at a valid key → hit=false ──────
+    //   overwrite the banked blob with garbage, then get() must fail-closed.
+    let _ = exec("echo garbage > " + _shq(root + "/" + put.key))
+    let get_c = qforge_scratch_bank_get(store, deck, commit, stage, rules)
+    fails = fails + _ck("(guard) corrupt bank → hit=false (fail-closed)", !get_c.hit)
+    fails = fails + _ck("(guard) corrupt bank → skip_scf=false (run SCF)", !get_c.restore_plan.skip_scf)
+
+    let _ = exec("rm -rf " + _shq(root))
+
+    if fails == 0 { println("qforge_scratch_bank_store_selftest PASS") }
+    else { println("qforge_scratch_bank_store_selftest FAIL — " + to_string(fails) + " case(s)") }
+}
