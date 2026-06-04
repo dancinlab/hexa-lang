@@ -27,8 +27,8 @@ fn cloud_commands() -> [CloudCmd] {
     return [
         // ── lifecycle ──────────────────────────────────────────────────
         CloudCmd { name: "rent", group: "lifecycle",
-            args: "<provider> [--gpu T] [--image IMG] [--disk GiB] [--volume-gb N] [--ephemeral] [--owner TAG] [--project NAME] [--query Q] [--max-wait-sec N] [--no-register] [--force-new] [--rearm]",
-            summary: "provision a GPU pod (vast|runpod) — DEFAULTS to a persistent /workspace volume (>=40 GiB, --volume-gb N to size, --ephemeral to opt out + warn); IDEMPOTENT per (project,owner): reuses a live M5 pod unless --force-new; --force-new is rotation-capped (≤N per window; --rearm to continue past the cap); waits ssh-ready, prints host:port + id (alias: up)" },
+            args: "<provider> [--gpu T] [--image IMG] [--disk GiB] [--volume-gb N] [--ephemeral] [--owner TAG] [--project NAME] [--query Q] [--max-wait-sec N] [--no-register] [--force-new]",
+            summary: "provision a GPU pod (vast|runpod) — DEFAULTS to a persistent /workspace volume (>=40 GiB, --volume-gb N to size, --ephemeral to opt out + warn); IDEMPOTENT per (project,owner): reuses a live M5 pod unless --force-new; --force-new is a MANUAL single-rent flag (never auto-invoked — automatic re-rent on pod-loss is DEPRECATED, pod-loss FAILS LOUD); waits ssh-ready, prints host:port + id (alias: up)" },
         CloudCmd { name: "rm", group: "lifecycle",
             args: "<id> [--provider P] [--force]",
             summary: "CANONICAL teardown — confirm + destroy + forget (unifies down/destroy/forget); idempotent" },
