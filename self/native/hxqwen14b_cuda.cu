@@ -777,6 +777,75 @@ __global__ void _hx_k_sgemm_cm_wmma2(int tA, int tB, long long M, long long N, l
         }
     }
 }
+// ═════════════════════════════════════════════════════════════════════
+// SPLIT-K skinny own-GEMM (env HEXA_OWN_GEMM_SPLITK). The thru-parity tune
+// left a NAMED residual: the worst 2 skinny R=16 LoRA GEMMs are
+//   dA: out (4096,16)  K=8192  (tiny N=16, huge K)
+//   dB: out (16,4096)  K=8192  (tiny M=16, huge K)
+// The 16×16 tiled fallback does a SINGLE sequential K-reduction per output
+// element → with K=8192 and only ~16 useful output rows/cols, there are far
+// fewer output tiles than the GPU has SMs → the GPU is under-occupied while
+// each block grinds the full 8192-long K serially. cuBLAS uses SPLIT-K on
+// such tiny-output/large-K shapes: partition K into G chunks, run G× more
+// blocks (one per (output-tile, k-chunk)), each computes a partial dot over
+// its K-slice, then accumulate the G partials into C via atomicAdd.
+//
+// BETA handling with atomics: a pre-kernel sets C = beta*C (or 0 when
+// beta==0), THEN every split block atomicAdds alpha*partial. This is the
+// simplest correct beta+atomic composition (folding beta into "the first
+// partial only" is racy when chunks finish out of order). Summation order
+// differs from sequential → NOT bit-identical, but stays within TF32 tol
+// (rel-RMS ≤ 3e-3), the same contract as the WMMA2/tiled paths.
+// col-major cublasSgemm faithful: C[i+j·ldc] = α·Σ_l op(A)·op(B) + β·C.
+// ═════════════════════════════════════════════════════════════════════
+#define HXSK 16   // 16×16 output tile for split-K (matches _hx_k_sgemm_cm_tiled)
+
+// Pre-kernel: C = beta*C over the (m,n) output region. One thread/element.
+__global__ void _hx_k_sgemm_cm_betascale(long long M, long long N,
+                                         float beta, float* C, long long ldc) {
+    long long row = (long long)blockIdx.x * blockDim.x + threadIdx.x;
+    long long col = (long long)blockIdx.y * blockDim.y + threadIdx.y;
+    if (row < M && col < N) {
+        float* p = &C[row + col*ldc];
+        *p = (beta != 0.0f) ? (beta * (*p)) : 0.0f;
+    }
+}
+
+// Split-K partial kernel. grid.z = G (the K split factor). Block (16×16)
+// owns output tile (blockIdx.x, blockIdx.y); blockIdx.z = which K-chunk.
+// Each thread accumulates alpha·(partial dot over [kbeg,kend)) then
+// atomicAdd's it into C[row+col*ldc]. C must be pre-scaled by beta (above).
+__global__ void _hx_k_sgemm_cm_splitk(int tA, int tB, long long M, long long N, long long K,
+                                      float alpha, const float* A, long long lda,
+                                      const float* B, long long ldb,
+                                      float* C, long long ldc, int G) {
+    __shared__ float As[HXSK][HXSK];
+    __shared__ float Bs[HXSK][HXSK];
+    long long row = (long long)blockIdx.x * HXSK + threadIdx.x;  // C row i
+    long long col = (long long)blockIdx.y * HXSK + threadIdx.y;  // C col j
+    // This block's K-chunk: split [0,K) into G near-equal slices, snapped to
+    // HXSK so the shared-mem staging loop is tile-aligned.
+    long long tilesK = (K + HXSK - 1) / HXSK;                    // # of HXSK K-tiles
+    long long perz   = (tilesK + G - 1) / G;                     // K-tiles per chunk
+    long long kbeg   = (long long)blockIdx.z * perz * HXSK;
+    long long kend   = kbeg + perz * HXSK; if (kend > K) kend = K;
+    float acc = 0.0f;
+    for (long long t = kbeg; t < kend; t += HXSK) {
+        long long ak = t + threadIdx.y;
+        As[threadIdx.x][threadIdx.y] =
+            (row < M && ak < K) ? (tA ? A[ak + row*lda] : A[row + ak*lda]) : 0.0f;  // op(A)[row,ak]
+        long long bk = t + threadIdx.x;
+        Bs[threadIdx.x][threadIdx.y] =
+            (bk < K && col < N) ? (tB ? B[col + bk*ldb] : B[bk + col*ldb]) : 0.0f;  // op(B)[bk,col]
+        __syncthreads();
+        #pragma unroll
+        for (int l = 0; l < HXSK; l++) acc += As[threadIdx.x][l] * Bs[l][threadIdx.y];
+        __syncthreads();
+    }
+    if (row < M && col < N && kbeg < kend) {
+        atomicAdd(&C[row + col*ldc], alpha * acc);
+    }
+}
 // Host launcher for the own-GEMM kernel — extern "C" so the gcc-compiled
 // hxqwen14b.c TU (LoRA fwd/bwd) can call it. tA/tB are 1 if op==T else 0.
 // Returns 0 on success, nonzero on a CUDA launch/sync error.
@@ -811,7 +880,29 @@ int _hx_own_sgemm_cm_launch(int tA, int tB, int m, int n, int k,
     // wastes the 128×64 tile → route it to the small 16×16 tiled kernel instead.
     int noshape = (getenv("HEXA_OWN_GEMM_NOSHAPE") && getenv("HEXA_OWN_GEMM_NOSHAPE")[0]);
     int skinny  = (m < HXG_BM || n < HXG_BN);
-    if (want_wmma2 && !(skinny && !noshape)) {
+    // SPLIT-K skinny path (env HEXA_OWN_GEMM_SPLITK): for a skinny+large-K GEMM
+    // (min(m,n) <= 64 AND k >= 1024) the 16×16 tiled fallback under-occupies the
+    // GPU (too few output tiles, each grinding a huge serial K). Split K into G
+    // chunks → G× more blocks → fills the SMs. G = clamp(k/512,1,32) by default
+    // (MEASURED sweet spot on Blackwell: k=4096→G=8, k=8192→G=16; saturates ~16-32),
+    // overridable via HEXA_OWN_GEMM_SPLITK_G for on-pod tuning.
+    int want_splitk = (getenv("HEXA_OWN_GEMM_SPLITK") && getenv("HEXA_OWN_GEMM_SPLITK")[0]);
+    int skinny_splitk = ((m <= 64 || n <= 64) && k >= 1024);
+    if (want_wmma2 && want_splitk && skinny_splitk && !noshape) {
+        int G = (int)(k / 512); if (G < 1) G = 1; if (G > 32) G = 32;
+        const char* ge = getenv("HEXA_OWN_GEMM_SPLITK_G");
+        if (ge && ge[0]) { int gv = atoi(ge); if (gv >= 1 && gv <= 64) G = gv; }
+        static int skfired = 0; if (!skfired){skfired=1; fprintf(stderr,"[OWN-SGEMM-SPLITK-FIRED] skinny GEMM -> _hx_k_sgemm_cm_splitk (split-K atomicAdd, G=%d, m=%d n=%d k=%d)\n", G, m, n, k);}
+        // Pre-scale C = beta*C (or 0), then atomicAdd alpha*partials.
+        dim3 sblk(16,16);
+        dim3 sgrd_scale((unsigned)((m+15)/16),(unsigned)((n+15)/16));
+        _hx_k_sgemm_cm_betascale<<<sgrd_scale,sblk>>>((long long)m,(long long)n,beta,C,(long long)ldc);
+        dim3 sgrd((unsigned)((m+15)/16),(unsigned)((n+15)/16),(unsigned)G);
+        _hx_k_sgemm_cm_splitk<<<sgrd,sblk>>>(tA,tB,
+                                             (long long)m,(long long)n,(long long)k,
+                                             alpha, A,(long long)lda, B,(long long)ldb,
+                                             C,(long long)ldc, G);
+    } else if (want_wmma2 && !(skinny && !noshape)) {
         static int w2fired = 0; if (!w2fired){w2fired=1; fprintf(stderr,"[OWN-SGEMM-WMMA2-FIRED] _hx_k_sgemm_cm_wmma2 (CUTLASS-grade TF32: 128x64 block, 8-warp, 2x2 warp-tile, double-buffered cp.async)\n");}
         dim3 w2blk(256);  // 8 warps
         dim3 w2grd((unsigned)((m + HXG_BM - 1)/HXG_BM), (unsigned)((n + HXG_BN - 1)/HXG_BN));
