@@ -1182,6 +1182,13 @@ HexaVal hexa_forge_dispatch_gelu(HexaVal in_v, HexaVal out_v,
                                   HexaVal n_v);                              /* runtime.c — fusion L3 glue */
 HexaVal forge_dispatch_gelu(HexaVal in_v, HexaVal out_v,
                              HexaVal n_v);                                    /* runtime.c — fusion L3 glue seam */
+/* HEXA-FUSION L3-b — dual GELU fused (the 2 expert-conv activations
+ * eo0->ex0, eo1->ex1) in ONE device launch. 5 args; calls _hx_cuda_farr_gelu2_gpu.
+ * byte-eq == two separate forge_dispatch_gelu (same erf-based cdf per input). */
+HexaVal hexa_forge_dispatch_gelu2(HexaVal g0_v, HexaVal a0_v, HexaVal g1_v,
+                                  HexaVal a1_v, HexaVal n_v);                /* runtime.c — fusion L3-b */
+HexaVal forge_dispatch_gelu2(HexaVal g0_v, HexaVal a0_v, HexaVal g1_v,
+                             HexaVal a1_v, HexaVal n_v);                     /* runtime.c — fusion L3-b seam */
 
 /* HEXA-FUSION L3 (glue half) — device-resident GroupNorm forward.
  * forge_dispatch_groupnorm(x, gamma, beta, y, mean, inv, xhat, T, C, G) -> int

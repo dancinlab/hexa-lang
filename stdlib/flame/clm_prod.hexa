@@ -453,6 +453,22 @@ fn _gelu(g: int, out: int, n: int) {
     nn_gelu_fwd(g, out, n)
 }
 
+// HEXA-FUSION L3-b (op-boundary fusion): the 2 INDEPENDENT same-shape expert-conv
+// activations (eo0->a0, eo1->a1, both n = T*d) fused into ONE device launch — two
+// micro gelu kernels collapse into a single thread-grid pass to raise H100
+// occupancy. byte-eq to two separate _gelu calls (each write reproduces the same
+// erf-based gelu on its own input, max|Δ|=0). Gated by env HEXA_FUSE_GELU2 on the
+// device-resident chain; OFF / no-CUDA / rc!=0 → the two host _gelu calls run
+// UNCHANGED (byte-eq reference).
+fn _gelu2(g0: int, a0: int, g1: int, a1: int, n: int) {
+    if env("HEXA_FUSE_GELU2") != "" && env("CLM_PROD_DEVRESIDENT") != "" {
+        let rc = forge_dispatch_gelu2(g0, a0, g1, a1, n)
+        if rc == 0 { return }
+    }
+    _gelu(g0, a0, n)
+    _gelu(g1, a1, n)
+}
+
 // HEXA-FUSION L3 (glue half): device-resident GroupNorm forward.
 // groupnorm ×2 in clm_prod_fwd (h0→hn0, y→yn) are interpreted inter-op host
 // glue with a per-group reduction (the ③ fwd-only 0% floor). Under
@@ -728,11 +744,12 @@ fn clm_prod_fwd(tokens: int,
     // (byte-eq to the 2 separate conv1d_via_forge calls — F-CLM-CONV2-BATCHED-
     // FWD-EQ; on a CUDA host = 1 cublasDgemmStridedBatched vs 2 micro-launches).
     conv2_fwd_via_forge_batched(xt, e0Wq, e0B, e1Wq, e1B, eo0, eo1, T, d, d, K, 1)
-    // HEXA-FUSION L3 (glue half): gelu #2/#3 (eo0→ex0, eo1→ex1, the 2 expert
-    // activations) — fused onto the device under CLM_PROD_DEVRESIDENT (byte-eq);
-    // else host nn_gelu_fwd.
-    let ex0 = t_zeros(T * d); _gelu(eo0, ex0, T * d)
-    let ex1 = t_zeros(T * d); _gelu(eo1, ex1, T * d)
+    // HEXA-FUSION L3-b (op-boundary fusion): gelu #2/#3 (eo0→ex0, eo1→ex1, the 2
+    // expert activations) — the 2 INDEPENDENT same-shape gelus fused into ONE
+    // device launch under HEXA_FUSE_GELU2 + CLM_PROD_DEVRESIDENT (byte-eq); else
+    // the two host _gelu calls (byte-eq reference).
+    let ex0 = t_zeros(T * d); let ex1 = t_zeros(T * d)
+    _gelu2(eo0, ex0, eo1, ex1, T * d)
     // HEXA-FUSION L3 (glue half · final ⑤c): expert-pack copy (ex0/ex1→ex_out)
     // — interpreted inter-op host glue (T·d host t_get/t_set per step). Device
     // path keeps ex_out FARR_DEVICE so the moe-router H2D-skips it (byte-eq);
