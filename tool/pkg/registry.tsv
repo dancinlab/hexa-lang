@@ -20,3 +20,4 @@ wilson	0.0.1	bin/wilson	https://github.com/dancinlab/wilson	/Users/ghost/core/wi
 wisp	0.1.0	bin/wisp	https://github.com/dancinlab/wisp		WebKit shell + hexa-native core browser — `hx install wisp` for cold-clone build
 secret	0.1.0	bin/secret	https://github.com/dancinlab/secret		macOS Keychain credential CLI · single bash · iCloud Keychain sync
 sidecar	0.1.0	bin/sidecar	https://github.com/dancinlab/sidecar		sidecar marketplace CLI — mirror/shadow/sign/profile/pool/handoff
+drive	0.2.0	bin/drive	https://github.com/dancinlab/drive		Model test-drive cart — chat a local GGUF turn-by-turn; NL file edits + git, hybrid (keyword + e5-large) RAG grounding
