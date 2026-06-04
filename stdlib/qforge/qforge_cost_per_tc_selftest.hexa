@@ -1,0 +1,137 @@
+// @ci_gate — deterministic · network-free · pure cost-projection g5 gate
+//
+// qforge_cost_per_tc_selftest.hexa — QFORGE-PROCESS $-and-wall-per-converged-Tc
+//   economics metric (qforge_cost_per_tc / _emit, stdlib/qforge/cost_per_tc.hexa)
+//   g5 gate. The projection INGESTS ONE merged deck→Tc RunLedgerEntry (#2739,
+//   run_ledger.hexa) — read VERBATIM, NOT re-defined (d3/d19 REUSE) — plus the
+//   pod price ($/hr) and yields the run's auditable economics: total $ · wall-h
+//   · $/Tc · wall-h/Tc · $/Kelvin, with a d6 converged-Tc guard.
+//
+// 검증 케이스 (all on fixture RunLedgerEntry values via the #2739 fold — NO pod,
+//             NO file, pure arithmetic):
+//  🔵 (A) CaH6-like CONVERGED run: total_wall=782s · tc=215K · $0.4/hr →
+//         usd_total ≈ 0.0869 (0.4 × 782/3600), usd_per_tc ≈ 4.04e-4. converged.
+//  🔵 (B) NON-converged run (tc<=0): tc=-1 AND tc=0 each → INFINITE-cost
+//         sentinel (COST_INF) for EVERY per-Tc ratio, converged=false, and
+//         NO divide-by-zero / NO sign flip. usd_total / wall_h stay REAL (d6).
+//  🔵 (C) wall_h_per_tc MONOTONE in wall: fixed tc·$/hr, a larger total_wall ⇒
+//         strictly larger usd_total · wall_h · wall_h_per_tc · usd_per_tc.
+//  🔵 (D) free-pool ($0/hr) → usd_total=0 · usd_per_tc=0 but wall_h REAL (the
+//         free-pool-vs-paid audit hinges on this); emit = ONE JSONL line; a
+//         non-converged emit renders the per-Tc ratios as "INF" (not a number).
+//  🔵 (E) DETERMINISM: two projections of identical inputs are byte-identical.
+//
+// Run (point HEXA_STDLIB_ROOT at THIS worktree's stdlib):
+//   HEXA_STDLIB_ROOT="$PWD/stdlib" hexa run --no-sentinel \
+//     stdlib/qforge/qforge_cost_per_tc_selftest.hexa
+// PASS: "qforge_cost_per_tc_selftest PASS".
+use "stdlib/qforge/run_ledger"
+use "stdlib/qforge/cost_per_tc"
+
+fn _ck(name: str, ok: bool) -> int {
+    if ok { println("PASS " + name) ; return 0 }
+    println("FAIL " + name) ; return 1
+}
+
+// float-approx check with absolute+relative tolerance
+fn _ckf(name: str, got: float, want: float, tol: float) -> int {
+    let mut d = got - want
+    if d < 0.0 { d = 0.0 - d }
+    let mut scale = want
+    if scale < 0.0 { scale = 0.0 - scale }
+    let bound = tol + tol * scale
+    if d <= bound { println("PASS " + name + " (got=" + to_string(got) + ")") ; return 0 }
+    println("FAIL " + name + " got=" + to_string(got) + " want=" + to_string(want))
+    return 1
+}
+
+fn _count_nl(s: str) -> int {
+    let parts = s.split("\n")
+    return len(parts) - 1
+}
+
+// build a RunLedgerEntry via the merged #2739 fold (d3/d19 — we do NOT
+// hand-construct the schema; we drive it through the real ledger fold so the
+// cost metric is exercised on a genuine ledger record). The 6-key telemetry
+// fixture's wall sum == total_wall_s; λ·Tc are carried verbatim by the fold.
+fn _entry(total_wall_s_via_one_stage: int, lambda: float, tc: float) -> RunLedgerEntry {
+    let tel = "{\"ts\":1,\"stage\":\"run\",\"event\":\"done\",\"wall_s\":"
+        + to_string(total_wall_s_via_one_stage) + ",\"rss_kb\":100000,\"exit\":0}\n"
+    return qforge_run_ledger_fold(tel, "deck", "c0", "pod0", lambda, tc)
+}
+
+fn main() {
+    let mut fails = 0
+
+    // ── (A) CaH6-like converged run: 782s · 215K · $0.4/hr ─────────────────
+    //   wall_h    = 782/3600          = 0.217222…
+    //   usd_total = 0.4 × 0.217222…   = 0.0868889…  (≈ 0.087)
+    //   usd_per_tc= 0.0868889…/215    = 4.0413e-4   (≈ 4e-4)
+    let eA = _entry(782, 2.71, 215.0)
+    // sanity: the fold really carried total_wall_s=782 and tc=215 (ledger reuse)
+    fails = fails + _ck("(A) ledger entry total_wall_s=782 (reused #2739 fold)", eA.total_wall_s == 782)
+    fails = fails + _ck("(A) ledger entry tc=215 (reused #2739 fold)", eA.tc == 215.0)
+    let cA = qforge_cost_per_tc(eA, 0.4)
+    fails = fails + _ck("(A) converged=true", cA.converged)
+    fails = fails + _ckf("(A) wall_h = 782/3600 = 0.21722", cA.wall_h, 0.2172222, 1e-6)
+    fails = fails + _ckf("(A) usd_total = 0.4 × 782/3600 ≈ 0.087", cA.usd_total, 0.0868889, 1e-6)
+    fails = fails + _ckf("(A) usd_per_tc = usd_total/215 ≈ 4.04e-4", cA.usd_per_tc, 4.04134e-4, 1e-8)
+    fails = fails + _ckf("(A) usd_per_kelvin == usd_per_tc (Tc in K)", cA.usd_per_kelvin, cA.usd_per_tc, 1e-12)
+    fails = fails + _ckf("(A) wall_h_per_tc = wall_h/215", cA.wall_h_per_tc, 0.2172222 / 215.0, 1e-9)
+    // usd_total = pod_usd_per_hr × wall_h identity holds exactly
+    fails = fails + _ckf("(A) usd_total == 0.4 × wall_h identity", cA.usd_total, 0.4 * cA.wall_h, 1e-12)
+
+    // ── (B) non-converged (tc<=0) → INFINITE-cost sentinel, NO ÷0 (d6) ─────
+    let eNeg = _entry(500, 1.0, -1.0)     // tc = -1 (failed/garbage Tc)
+    let cNeg = qforge_cost_per_tc(eNeg, 0.4)
+    fails = fails + _ck("(B) tc=-1 → converged=false", !cNeg.converged)
+    fails = fails + _ck("(B) tc=-1 → usd_per_tc = COST_INF sentinel (no ÷0)", cNeg.usd_per_tc == COST_INF)
+    fails = fails + _ck("(B) tc=-1 → wall_h_per_tc = COST_INF sentinel", cNeg.wall_h_per_tc == COST_INF)
+    fails = fails + _ck("(B) tc=-1 → usd_per_kelvin = COST_INF sentinel", cNeg.usd_per_kelvin == COST_INF)
+    // the REAL burned cost/time is still reported truthfully (d6)
+    fails = fails + _ckf("(B) tc=-1 → usd_total STILL real (run burned it)", cNeg.usd_total, 0.4 * 500.0 / 3600.0, 1e-9)
+    fails = fails + _ckf("(B) tc=-1 → wall_h STILL real", cNeg.wall_h, 500.0 / 3600.0, 1e-9)
+
+    let eZero = _entry(500, 1.0, 0.0)     // tc = 0 (exact non-converged)
+    let cZero = qforge_cost_per_tc(eZero, 0.4)
+    fails = fails + _ck("(B) tc=0 → converged=false (no div-by-zero)", !cZero.converged)
+    fails = fails + _ck("(B) tc=0 → usd_per_tc = COST_INF (NOT NaN/Inf from ÷0)", cZero.usd_per_tc == COST_INF)
+    fails = fails + _ck("(B) tc=0 → wall_h_per_tc = COST_INF", cZero.wall_h_per_tc == COST_INF)
+
+    // ── (C) wall_h_per_tc MONOTONE in wall (fixed tc · $/hr) ───────────────
+    let cSmall = qforge_cost_per_tc(_entry(400, 1.0, 100.0), 0.5)
+    let cBig   = qforge_cost_per_tc(_entry(800, 1.0, 100.0), 0.5)
+    fails = fails + _ck("(C) wall_h_per_tc strictly ↑ with wall", cBig.wall_h_per_tc > cSmall.wall_h_per_tc)
+    fails = fails + _ck("(C) usd_per_tc strictly ↑ with wall", cBig.usd_per_tc > cSmall.usd_per_tc)
+    fails = fails + _ck("(C) usd_total strictly ↑ with wall", cBig.usd_total > cSmall.usd_total)
+    fails = fails + _ck("(C) wall_h strictly ↑ with wall", cBig.wall_h > cSmall.wall_h)
+    // doubling wall (fixed tc·$/hr) doubles every per-run AND per-Tc quantity
+    fails = fails + _ckf("(C) 2× wall ⇒ 2× wall_h_per_tc", cBig.wall_h_per_tc, 2.0 * cSmall.wall_h_per_tc, 1e-9)
+    fails = fails + _ckf("(C) 2× wall ⇒ 2× usd_per_tc", cBig.usd_per_tc, 2.0 * cSmall.usd_per_tc, 1e-9)
+
+    // ── (D) free-pool $0/hr · emit one-liner · non-converged emit "INF" ────
+    let cFree = qforge_cost_per_tc(_entry(782, 2.71, 215.0), 0.0)
+    fails = fails + _ckf("(D) free-pool $0/hr → usd_total=0", cFree.usd_total, 0.0, 1e-12)
+    fails = fails + _ckf("(D) free-pool $0/hr → usd_per_tc=0", cFree.usd_per_tc, 0.0, 1e-12)
+    fails = fails + _ck("(D) free-pool wall_h STILL real (audit hinges on this)", cFree.wall_h > 0.2)
+    fails = fails + _ck("(D) free-pool still converged=true", cFree.converged)
+    let lineA = qforge_cost_per_tc_emit(cA)
+    fails = fails + _ck("(D) converged emit = exactly ONE line", _count_nl(lineA) == 0)
+    fails = fails + _ck("(D) emit carries usd_total + usd_per_tc + converged:true",
+        lineA.contains("\"usd_total\":") && lineA.contains("\"usd_per_tc\":") && lineA.contains("\"converged\":true"))
+    let lineNeg = qforge_cost_per_tc_emit(cNeg)
+    fails = fails + _ck("(D) non-converged emit = ONE line", _count_nl(lineNeg) == 0)
+    fails = fails + _ck("(D) non-converged emit renders per-Tc as \"INF\" + converged:false (d6)",
+        lineNeg.contains("\"usd_per_tc\":\"INF\"") && lineNeg.contains("\"converged\":false"))
+    fails = fails + _ck("(D) non-converged emit STILL carries the real usd_total number",
+        lineNeg.contains("\"usd_total\":") && !lineNeg.contains("\"usd_total\":\"INF\""))
+
+    // ── (E) determinism — two projections of identical inputs ──────────────
+    let c1 = qforge_cost_per_tc(_entry(782, 2.71, 215.0), 0.4)
+    let c2 = qforge_cost_per_tc(_entry(782, 2.71, 215.0), 0.4)
+    fails = fails + _ck("(E) emit byte-identical across two projections",
+        qforge_cost_per_tc_emit(c1) == qforge_cost_per_tc_emit(c2))
+
+    if fails == 0 { println("qforge_cost_per_tc_selftest PASS") }
+    else { println("qforge_cost_per_tc_selftest FAIL — " + to_string(fails) + " case(s)") }
+}

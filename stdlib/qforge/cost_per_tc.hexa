@@ -1,0 +1,140 @@
+// cost_per_tc.hexa — QFORGE-PROCESS $-and-wall-time-per-converged-Tc metric.
+//
+// Builds DIRECTLY on the merged deck→Tc run ledger (#2739,
+// stdlib/qforge/run_ledger.hexa): one RunLedgerEntry per FULL run carries the
+// per-stage wall breakdown, the total wall (total_wall_s), and the run's
+// physics result (λ · Tc). This module pairs ONE such ledger entry with the
+// pod price (vast $/hr) and projects out the economics — the $ and wall-clock
+// hours it took to land that run's converged Tc — so the
+// free-pool-vs-paid-GPU tradeoff is AUDITABLE per candidate.
+//
+// d3/d19 REUSE: we do NOT re-define the run schema. We INGEST the merged
+// RunLedgerEntry (struct from run_ledger.hexa) VERBATIM and read its
+// total_wall_s · tc · lambda fields. No re-parse, no re-emit, no new ledger.
+//
+// @L3 READ-only PURE function — no pod ops, no source mutation, no file I/O.
+// The caller supplies the entry + the pod $/hr and prints the returned cost.
+//
+// d6 HONESTY — the converged-Tc guard:
+//   A run that did NOT converge to a positive Tc (tc <= 0 — a non-converged
+//   or failed run carrying tc=0 / tc=-1) has NO converged Tc to amortize the
+//   cost against. Dividing $ by such a tc is meaningless (÷0) or sign-flips
+//   (÷negative). We do NOT fabricate a finite number: usd_per_tc /
+//   wall_h_per_tc / usd_per_kelvin are set to the INFINITE-cost sentinel
+//   COST_INF and `converged` is flagged false. The $ and wall-hours
+//   THEMSELVES (usd_total · wall_h) are still real — the run burned that money
+//   and that time regardless of whether it converged — so they are always
+//   reported truthfully; only the PER-Tc ratios become the sentinel.
+
+use "stdlib/qforge/run_ledger"
+
+// INFINITE-cost sentinel for a run with no converged Tc (tc <= 0). A large
+// finite-but-unmistakable value (NOT a NaN/Inf literal, which would not
+// round-trip through to_string / a JSON consumer). Any consumer reads
+// `converged == false` as the authoritative non-converged flag; COST_INF is
+// the human-visible "this run has no Tc to amortize cost against" marker.
+pub let COST_INF: float = 1.0e30
+
+// guard floor for the converged-Tc ratio denominators (never reached when
+// converged==true, since tc>0 is required for that; documented for symmetry).
+let _TC_EPS: float = 1.0e-9
+
+// ── the per-run cost economics ────────────────────────────────────────────
+//   usd_total      — total $ the run cost = pod_usd_per_hr × wall_h. REAL
+//                    regardless of convergence (the run burned this money).
+//   wall_h         — total wall-clock hours = total_wall_s / 3600. REAL
+//                    regardless of convergence (the run burned this time).
+//   usd_per_tc     — $ per converged Kelvin-of-Tc = usd_total / tc, i.e. the
+//                    dollar cost to land ONE unit of the achieved Tc. COST_INF
+//                    when tc<=0 (non-converged — no Tc to amortize against).
+//   wall_h_per_tc  — wall-hours per converged Kelvin-of-Tc = wall_h / tc.
+//                    MONOTONE in wall (fixed tc → more wall ⇒ more h/Tc).
+//                    COST_INF when tc<=0.
+//   usd_per_kelvin — alias of usd_per_tc (Tc IS in Kelvin); kept as an
+//                    explicit field so an auditor reading the economics does
+//                    not have to know Tc's unit. COST_INF when tc<=0.
+//   converged      — true iff tc>0 (the run landed a positive converged Tc).
+//                    The AUTHORITATIVE non-converged flag (d6): when false,
+//                    every per-Tc ratio is COST_INF and only usd_total/wall_h
+//                    are physically meaningful.
+struct CostPerTc {
+    usd_total: float,
+    wall_h: float,
+    usd_per_tc: float,
+    wall_h_per_tc: float,
+    usd_per_kelvin: float,
+    converged: bool,
+}
+
+// qforge_cost_per_tc — project ONE merged RunLedgerEntry (#2739) + the pod
+// price into the run's $-and-wall-per-converged-Tc economics.
+//
+//   e               — the merged deck→Tc RunLedgerEntry (run_ledger.hexa).
+//                     We read e.total_wall_s (the #2477 wall invariant) and
+//                     e.tc (the run's final converged Tc, K) VERBATIM.
+//   pod_usd_per_hr  — the pod price ($/hr), e.g. a vast.ai GPU offer. 0.0 for
+//                     a free-pool host (then usd_total · usd_per_tc are 0).
+//
+// total $    = pod_usd_per_hr × (total_wall_s / 3600)
+// $/Tc       = usd_total / tc                 (tc>0; else COST_INF — d6)
+// wall_h/Tc  = wall_h   / tc                  (tc>0; else COST_INF — d6)
+//
+// d6: a non-converged run (tc<=0) yields COST_INF for every per-Tc ratio and
+// converged=false — NEVER a divide-by-zero, NEVER a sign-flipped finite cost.
+// usd_total and wall_h stay REAL in every case (the run's actual $ and time).
+pub fn qforge_cost_per_tc(e: RunLedgerEntry, pod_usd_per_hr: float) -> CostPerTc {
+    // wall hours and the real total $ — ALWAYS meaningful (the burned cost),
+    // independent of whether the run converged.
+    let wall_h = (e.total_wall_s as float) / 3600.0
+    let usd_total = pod_usd_per_hr * wall_h
+
+    // d6 converged-Tc guard: only a strictly-positive Tc is a converged result
+    // worth amortizing the cost against. tc<=0 ⇒ INFINITE-cost sentinel for
+    // every per-Tc ratio (no ÷0, no sign flip).
+    if e.tc <= 0.0 {
+        return CostPerTc {
+            usd_total: usd_total,
+            wall_h: wall_h,
+            usd_per_tc: COST_INF,
+            wall_h_per_tc: COST_INF,
+            usd_per_kelvin: COST_INF,
+            converged: false,
+        }
+    }
+
+    // converged path — tc>0 guaranteed, so the divisions are well-defined.
+    let usd_per_tc = usd_total / e.tc
+    let wall_h_per_tc = wall_h / e.tc
+    return CostPerTc {
+        usd_total: usd_total,
+        wall_h: wall_h,
+        usd_per_tc: usd_per_tc,
+        wall_h_per_tc: wall_h_per_tc,
+        usd_per_kelvin: usd_per_tc,   // Tc is in Kelvin — same number, named for the auditor
+        converged: true,
+    }
+}
+
+// qforge_cost_per_tc_emit — serialize a CostPerTc as ONE JSONL line, the
+// auditable per-candidate economics cell. A non-converged run renders its
+// per-Tc ratios as the JSON string "INF" (NOT a fabricated finite number and
+// NOT a non-round-tripping Infinity literal) alongside converged:false; the
+// real usd_total / wall_h render as their actual numbers in every case (d6).
+pub fn qforge_cost_per_tc_emit(c: CostPerTc) -> str {
+    let mut upt = to_string(c.usd_per_tc)
+    let mut whpt = to_string(c.wall_h_per_tc)
+    let mut upk = to_string(c.usd_per_kelvin)
+    if !c.converged {
+        upt = "\"INF\""
+        whpt = "\"INF\""
+        upk = "\"INF\""
+    }
+    let mut conv = "false"
+    if c.converged { conv = "true" }
+    return "{\"usd_total\":" + to_string(c.usd_total)
+        + ",\"wall_h\":" + to_string(c.wall_h)
+        + ",\"usd_per_tc\":" + upt
+        + ",\"wall_h_per_tc\":" + whpt
+        + ",\"usd_per_kelvin\":" + upk
+        + ",\"converged\":" + conv + "}"
+}
