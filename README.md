@@ -128,6 +128,39 @@ A binary appears only when every fatal stage passes. The atlas (4.2 MB) is baked
 
 > Honest scope: flame's `ag_tape` + nn_lib + opt_* are functionally complete and byte-equal-verified; forge's `farr + cuBLAS Dgemm + 11 .cu` substrate is complete with the BF16-TC mega-kernel landing as the cuBLAS-relative wall path. End-to-end flame ↔ PyTorch wall comparison is **pending an apples-to-apples re-fire** — the substantive cuBLAS-relative win currently sits at the forge layer (BF16-TC 9.67× over FP64-cuBLAS on the FFN-shape mega-kernel).
 
+### We now own the GEMM too — the device stack is 100 % hexa-ownable (CUDA-OWN campaign)
+
+The substrate above calls **cuBLAS** for the GEMM itself — the one piece forge did not own. The CUDA-OWN campaign closes that last gap: an **env-gated own-GEMM** (`HEXA_OWN_GEMM` family) routes every matmul through a hexa-emit kernel instead of cuBLAS. **OFF by default → cuBLAS stays the default path**; flip the env and the entire device GEMM is hexa source — FP64, FP32, and a CUTLASS-grade TF32 WMMA2 tiled kernel.
+
+```
+forge GEMM dispatch (env HEXA_OWN_GEMM / _WMMA2 — OFF == cuBLAS default):
+  OFF  → cuBLAS Dgemm / Sgemm                         (vendor, default)
+  ON   → _hx_k_gemm (FP64)  ·  _hx_k_sgemm_cm (FP32)  ·  _hx_k_sgemm_cm_wmma2 (TF32 WMMA2)
+         └─ launcher precedence WMMA2 > WMMA > TILED > naive ─┘   100 % hexa-ownable
+```
+
+**Correctness first (own-GEMM vs cuBLAS oracle):**
+
+| own-GEMM path | shape / harness | correctness vs cuBLAS oracle | verdict |
+|---|---|---|---|
+| FP64 `_hx_k_gemm` (clm_prod train, cuBLAS-GEMM-free) | D1536 real-corpus train, both arms | **max\|Δ CE\| = 0.00000** @ 5-dec, CE descends 4.46624 → 3.64669 | 🟢 `F-FUSION-P1-OWN-GEMM-CORRECTNESS` |
+| FP32 `_hx_k_sgemm_cm` (hxqwen14b train, cuBLAS-GEMM-free) | M=N=K=2048 R=16 GEMM-bound | **rel-RMS ~1e-6** (worst 9.70e-7) all outputs, within fp32 tol | 🟢 `F-FUSION-P1D-LLM-SGEMM` |
+| TF32 `_hx_k_sgemm_cm_wmma2` (CUTLASS-grade tiled) | M=N=K=2048 + non-tile-multiple bounds | **rel-RMS 2.6e-4 ≪ 3e-3** TF32 bar, bounds-guarded | 🟢 `F-FUSION-CUTLASS-GRADE-WMMA` |
+
+**Performance — ≈ cuBLAS-CLASS, NOT superiority (this is parity, stated plainly):**
+
+| measurement | own-GEMM | cuBLAS | gap | verdict |
+|---|---|---|---|---|
+| sustained-loop GPU util (2048³, B200, nvidia-smi) | **89.9 % MEAN** / 100 % PEAK | 88.5 % MEAN / 100 % PEAK | both ~90 %, cuBLAS-class occupancy | 🟢 `F-FUSION-OWN-GEMM-UTIL` |
+| GEMM-iso step-time (2048³ WMMA2 vs cuBLAS) | 0.77047 ms/iter | 0.68 ms/iter ref | **1.13× of cuBLAS** (within ~13 %) | 🟢 `F-FUSION-CUTLASS-GRADE-WMMA` |
+| LLM full-step (LoRA, M=8192, shape-dispatch + split-K) | 454.9 steps/s | 565.2 steps/s | **1.24× of cuBLAS** (down from raw 2.24×) | 🟢 `F-FUSION-THRU-PARITY` · `F-FUSION-SPLITK-SKINNY` |
+
+The full-step gap closed in two landed steps: skinny-shape dispatch (16×16 tiled) took the raw **2.24× → 1.67×** (~46 % of the gap, `F-FUSION-THRU-PARITY`), then a split-K skinny GEMM took **1.67× → 1.24×** (a further 64 % of what remained, `F-FUSION-SPLITK-SKINNY`) — cumulatively ~80 % of the original 2.24× closed.
+
+**Util is a workload-size property, not a defect** (`F-FUSION-D2-RIGHTSIZED`): the *byte-identical* D1536 own-GEMM step that under-fills an idle **H100 to ~13 % MEAN** (median 2 %) **saturates a right-sized RTX 5070 to 98.00 % MEAN** (every sample 98 %, SM 98 %, compute-bound) — the 2048³ large shape gives 99 % on the same 5070. Low util on the H100 is the H100 being too big for a D1536 model, not a codegen flaw; given a GPU sized for the workload, util is at the saturation ceiling.
+
+> Honest limits (g5): the own-GEMM is **≈ PARITY, not superiority** — it is still **1.13× (iso) to 1.24× (full-step) slower than cuBLAS**, never faster. The README's existing honesty that *"a single huge GEMM already ties cuBLAS at roofline"* **still holds** — owning the GEMM does not change that ceiling, it just makes the ceiling hexa-owned. And the **BF16-TC 9.67×** above is a **separate dtype axis** (BF16-TC vs FP64-cuBLAS); it is **NOT** the own-vs-cuBLAS *same-dtype* comparison reported here (TF32-own vs TF32-cuBLAS, FP32-own vs FP32-cuBLAS). The win of owning the GEMM is **ownership + the unblock below**, not a speed beat.
+
 ### Where it beats cuBLAS-using stacks structurally (whole-program fusion · cuBLAS cannot express)
 
 `cuBLAS` ships a champion *part* (the GEMM kernel itself, already at roofline), but cannot fuse adjacent ops — each op pays a separate kernel launch + a full HBM round-trip. hexa codegen sees the whole expression and emits one kernel that keeps intermediates in registers / shared memory:
@@ -145,6 +178,8 @@ hexa fusion (whole-program — one kernel, registers/shmem reused):
 ```
 
 The same mechanic generalises: GEMM-epilogue, norm surface, attention block, autoregressive decode chain — every place where cuBLAS forces "stop the GEMM, write to HBM, hand off to the next op" hexa can keep the value in registers.
+
+**Owning the GEMM unblocks the whole-step megakernel this section gestures at.** The strongest form of the fusion above is a single persistent / cooperative kernel that holds the whole step in registers + shared memory across a grid-wide barrier — but a persistent kernel **cannot call cuBLAS** (you can't make a host library call from inside a running device kernel). That structurally capped fusion at the GEMM boundary. Now that the GEMM is **our own device kernel** (`_hx_k_sgemm_cm_wmma2`, correctness-verified above), the persistent kernel **can call our GEMM in-line** — the GEMM stops being an un-fusable cuBLAS hand-off and becomes just another op the megakernel keeps resident. The block-glue megakernel is already realized except the two grid-sync-walled GroupNorm reductions (`F-FUSION-MEGAKERNEL-DESIGN`); own-GEMM removes the *other* wall the design called out.
 
 | finding | reduction / win | tier |
 |---|---|---|
@@ -358,7 +393,7 @@ Citing a tombstoned `L[id]` fires `HX1099` and fails the build. Bypass is `@grac
 - `hexa build` / `hexa cc` work **out-of-tree** — flattens `use`/`import`, resolves `hexa_cc.c`/SSOT/`-I` via `$HEXA_LANG > install_dir > ./self`; install-relative `stdlib/` discovery means `use "stdlib/*"` works with no env vars (downstream: `wilson` builds end-to-end → `wilson 0.0.1`)
 - stage-1 P0 host-OOM closed at current scale: A1 phase-arena reset + A2 in-place splice accumulator → peak ~782 MB (was 3 510 MB)
 - 14+ pinned decisions in `SPEC.yaml`, every claim traceable to an RFC
-- **`stdlib/flame` + `self/forge` — hexa-native NN training stack + GPU substrate**: compiler-only NN (ag_tape · nn_lib · opt_*) on top of device-resident `farr` + cuBLAS Dgemm + 11 `.cu` kernels + BF16-TC mega-kernel path. **forge BF16-TC = 9.67× faster than FP64 cuBLAS** @ Llama-7B FFN shape (A100, measured). 12 byte-equal substrate fires + 4 byte-equal layer fires. flame ↔ PyTorch wall speedup not yet measured (prior claim RETRACTED). Detail in the flame + forge section above.
+- **`stdlib/flame` + `self/forge` — hexa-native NN training stack + GPU substrate**: compiler-only NN (ag_tape · nn_lib · opt_*) on top of device-resident `farr` + cuBLAS Dgemm + 11 `.cu` kernels + BF16-TC mega-kernel path. **forge BF16-TC = 9.67× faster than FP64 cuBLAS** @ Llama-7B FFN shape (A100, measured). The **CUDA-OWN campaign** now owns the GEMM too (env-gated, OFF = cuBLAS default): FP64/FP32/TF32-WMMA2 own-GEMM, correctness-verified (clm max\|ΔCE\|=0 · llm rel-RMS ~1e-6), at **cuBLAS-CLASS util 89.9 % ≈ 88.5 %** and **near-parity step-time 1.13× iso / 1.24× full-step — ≈ parity, NOT superiority** — making the device stack 100 % hexa-ownable and unblocking the persistent-kernel megakernel (a persistent kernel can't call cuBLAS, but it can call our GEMM). 12 byte-equal substrate fires + 4 byte-equal layer fires. flame ↔ PyTorch wall speedup not yet measured (prior claim RETRACTED). Detail in the flame + forge section above.
 
 * * *
 
