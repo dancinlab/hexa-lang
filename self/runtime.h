@@ -1219,6 +1219,19 @@ HexaVal forge_dispatch_groupnorm_gelu(HexaVal x_v, HexaVal gamma_v, HexaVal beta
                              HexaVal y_v, HexaVal a_v, HexaVal mean_v, HexaVal inv_v,
                              HexaVal xhat_v, HexaVal t_v, HexaVal c_v,
                              HexaVal g_v);                                    /* runtime.c — fusion L3-a seam */
+/* HEXA-FUSION L3-c — groupnorm+gelu+residual fused (out_v = R + gelu(GN(x)), a_v
+ * = gelu out, y_v = pre-gelu GN out for bwd). 13 args; calls
+ * _hx_cuda_farr_groupnorm_gelu_residual_gpu. byte-eq == GN-gelu-then-residual_add. */
+HexaVal hexa_forge_dispatch_groupnorm_gelu_residual(HexaVal x_v, HexaVal gamma_v,
+                                  HexaVal beta_v, HexaVal r_v, HexaVal y_v, HexaVal a_v,
+                                  HexaVal out_v, HexaVal mean_v, HexaVal inv_v,
+                                  HexaVal xhat_v, HexaVal t_v, HexaVal c_v,
+                                  HexaVal g_v);                              /* runtime.c — fusion L3-c */
+HexaVal forge_dispatch_groupnorm_gelu_residual(HexaVal x_v, HexaVal gamma_v,
+                             HexaVal beta_v, HexaVal r_v, HexaVal y_v, HexaVal a_v,
+                             HexaVal out_v, HexaVal mean_v, HexaVal inv_v,
+                             HexaVal xhat_v, HexaVal t_v, HexaVal c_v,
+                             HexaVal g_v);                                    /* runtime.c — fusion L3-c seam */
 
 /* HEXA-FUSION L3 (glue half · final slice ⑤c) — device-resident expert-pack copy.
  * forge_dispatch_expert_pack2(ex0, ex1, ex_out, n) -> int rc (0 ok / -1 host).
@@ -1249,6 +1262,17 @@ HexaVal hexa_forge_dispatch_moe_router(HexaVal logits_v, HexaVal ex_out_v,
 HexaVal forge_dispatch_moe_router(HexaVal logits_v, HexaVal ex_out_v,
                              HexaVal probs_v, HexaVal y_v, HexaVal t_v,
                              HexaVal e_v, HexaVal c_v);                       /* runtime.c — fusion L3 glue seam */
+/* HEXA-FUSION L3-d (glue-block megakernel · fwd block 2) — gelu2 + expert_pack2 +
+ * moe_router fused into ONE kernel. 11 args; calls _hx_cuda_farr_moe_block2_gpu.
+ * byte-eq == gelu2-then-pack-then-router. */
+HexaVal hexa_forge_dispatch_moe_block2(HexaVal eo0_v, HexaVal eo1_v, HexaVal logits_v,
+                                  HexaVal ex0_v, HexaVal ex1_v, HexaVal ex_out_v,
+                                  HexaVal probs_v, HexaVal y_v, HexaVal t_v,
+                                  HexaVal e_v, HexaVal c_v);                  /* runtime.c — fusion L3-d */
+HexaVal forge_dispatch_moe_block2(HexaVal eo0_v, HexaVal eo1_v, HexaVal logits_v,
+                             HexaVal ex0_v, HexaVal ex1_v, HexaVal ex_out_v,
+                             HexaVal probs_v, HexaVal y_v, HexaVal t_v,
+                             HexaVal e_v, HexaVal c_v);                       /* runtime.c — fusion L3-d seam */
 
 /* HEXA-FUSION L3 (glue half · final slice ⑤c) — device-resident embedding gather.
  * forge_dispatch_embedding(ids, table, x_out, T, d) -> int rc (0 ok / -1 host).
