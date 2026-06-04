@@ -1,0 +1,169 @@
+=== nvcc: /usr/local/cuda/bin/nvcc ===
+Cuda compilation tools, release 12.4, V12.4.131
+Build cuda_12.4.r12.4/compiler.34097967_0
+=== GPU ===
+NVIDIA RTX PRO 6000 Blackwell Workstation Edition, 97887 MiB
+NVIDIA RTX PRO 6000 Blackwell Workstation Edition, 97887 MiB
+=== build (arch=compute_90) ===
+hxqwen14b_llmstep_driver.cu(110): warning #177-D: function "ce_loss" was declared but never referenced
+  static double ce_loss(const float* logits,const int32_t* tgt,float* nll,int M,int V){
+                ^
+
+Remark: The warnings can be suppressed with "-diag-suppress <warning-number>"
+
+BUILD OK
+
+================ §1 CORRECTNESS HARD GATE (stream-K vs cuBLAS oracle) ================
+--- stream-K gate (HEXA_OWN_GEMM_STREAMK=1) M8192 K8192 N4096 R16 ---
+[OWN-SGEMM-FIRED] _hx_k_sgemm_cm_v54
+[OWN-SGEMM-STREAMK-FIRED] skinny GEMM -> _hx_k_sgemm_cm_streamk (atomic-free two-pass, G=16, m=16 n=8192 k=8192)
+[OWN-SGEMM-WMMA2-FIRED] _hx_k_sgemm_cm_wmma2 (CUTLASS-grade TF32: 128x64 block, 8-warp, 2x2 warp-tile, double-buffered cp.async)
+GATE y   n=33554432 rel_RMS=2.935e-04 max|D|=3.742e-04 tol=3.0e-03 -> PASS
+GATE dA  n=131072 rel_RMS=8.033e-07 max|D|=4.828e-06 tol=3.0e-03 -> PASS
+GATE dB  n=65536 rel_RMS=8.226e-07 max|D|=5.960e-06 tol=3.0e-03 -> PASS
+GATE dx  n=67108864 rel_RMS=2.937e-04 max|D|=7.039e-06 tol=3.0e-03 -> PASS
+GATE-VERDICT: PASS (WMMA2 own-GEMM vs cuBLAS oracle, M=8192 K=8192 N=4096 R=16)
+--- stream-K gate M512 K4096 N4096 R16 (k=4096 -> G=8) ---
+[OWN-SGEMM-FIRED] _hx_k_sgemm_cm_v54
+[OWN-SGEMM-STREAMK-FIRED] skinny GEMM -> _hx_k_sgemm_cm_streamk (atomic-free two-pass, G=8, m=16 n=512 k=4096)
+[OWN-SGEMM-WMMA2-FIRED] _hx_k_sgemm_cm_wmma2 (CUTLASS-grade TF32: 128x64 block, 8-warp, 2x2 warp-tile, double-buffered cp.async)
+[OWN-SGEMM-WMMA2-SKINNY-FIRED] skinny GEMM -> _hx_k_sgemm_cm_tiled (16x16, no wasted 128x64 tile)
+GATE y   n=2097152 rel_RMS=2.953e-04 max|D|=2.085e-04 tol=3.0e-03 -> PASS
+GATE dA  n=65536 rel_RMS=6.919e-07 max|D|=1.132e-06 tol=3.0e-03 -> PASS
+GATE dB  n=65536 rel_RMS=6.895e-07 max|D|=1.073e-06 tol=3.0e-03 -> PASS
+GATE dx  n=2097152 rel_RMS=2.956e-04 max|D|=5.981e-06 tol=3.0e-03 -> PASS
+GATE-VERDICT: PASS (WMMA2 own-GEMM vs cuBLAS oracle, M=512 K=4096 N=4096 R=16)
+--- (ref) split-K gate same shape M8192 K8192 N4096 R16 ---
+[OWN-SGEMM-FIRED] _hx_k_sgemm_cm_v54
+[OWN-SGEMM-SPLITK-FIRED] skinny GEMM -> _hx_k_sgemm_cm_splitk (split-K atomicAdd, G=16, m=16 n=8192 k=8192)
+[OWN-SGEMM-WMMA2-FIRED] _hx_k_sgemm_cm_wmma2 (CUTLASS-grade TF32: 128x64 block, 8-warp, 2x2 warp-tile, double-buffered cp.async)
+GATE y   n=33554432 rel_RMS=2.935e-04 max|D|=3.742e-04 tol=3.0e-03 -> PASS
+GATE dA  n=131072 rel_RMS=8.033e-07 max|D|=4.828e-06 tol=3.0e-03 -> PASS
+GATE dB  n=65536 rel_RMS=8.226e-07 max|D|=5.960e-06 tol=3.0e-03 -> PASS
+GATE dx  n=67108864 rel_RMS=2.937e-04 max|D|=7.039e-06 tol=3.0e-03 -> PASS
+GATE-VERDICT: PASS (WMMA2 own-GEMM vs cuBLAS oracle, M=8192 K=8192 N=4096 R=16)
+
+================ §1b CONVERGENCE (30 real LoRA SGD steps) ================
+--- cuBLAS ---
+CONV step=0 CE=6.244690
+CONV step=1 CE=5.919245
+CONV step=2 CE=5.505268
+CONV step=3 CE=4.791693
+CONV step=4 CE=3.544398
+CONV step=5 CE=1.839259
+CONV step=6 CE=0.637819
+CONV step=7 CE=0.227260
+CONV step=8 CE=0.123750
+CONV step=9 CE=0.086585
+CONV step=10 CE=0.066373
+CONV step=11 CE=0.053844
+CONV step=12 CE=0.045233
+CONV step=13 CE=0.038932
+CONV step=14 CE=0.034125
+CONV step=15 CE=0.030340
+CONV step=16 CE=0.027285
+CONV step=17 CE=0.024769
+CONV step=18 CE=0.022662
+CONV step=19 CE=0.020874
+CONV step=20 CE=0.019336
+CONV step=21 CE=0.018002
+CONV step=22 CE=0.016832
+CONV step=23 CE=0.015800
+CONV step=24 CE=0.014882
+CONV step=25 CE=0.014061
+CONV step=26 CE=0.013322
+CONV step=27 CE=0.012653
+CONV step=28 CE=0.012046
+CONV step=29 CE=0.011492
+--- stream-K ---
+CONV step=0 CE=6.244691
+CONV step=1 CE=5.919247
+CONV step=2 CE=5.505260
+CONV step=3 CE=4.791701
+CONV step=4 CE=3.544370
+CONV step=5 CE=1.839297
+CONV step=6 CE=0.637814
+CONV step=7 CE=0.227255
+CONV step=8 CE=0.123762
+CONV step=9 CE=0.086586
+CONV step=10 CE=0.066364
+CONV step=11 CE=0.053842
+CONV step=12 CE=0.045235
+CONV step=13 CE=0.038931
+CONV step=14 CE=0.034125
+CONV step=15 CE=0.030342
+CONV step=16 CE=0.027284
+CONV step=17 CE=0.024770
+CONV step=18 CE=0.022662
+CONV step=19 CE=0.020872
+CONV step=20 CE=0.019334
+CONV step=21 CE=0.018001
+CONV step=22 CE=0.016833
+CONV step=23 CE=0.015800
+CONV step=24 CE=0.014881
+CONV step=25 CE=0.014060
+CONV step=26 CE=0.013321
+CONV step=27 CE=0.012652
+CONV step=28 CE=0.012047
+CONV step=29 CE=0.011491
+
+================ §2 PER-GEMM (M8192 K4096 N4096 R16, 200 it) ================
+--- cuBLAS ---
+PERGEMM M=8192 K=4096 N=4096 R=16 iters=200
+  GEMM[0] fwd_tmp(x.At)      out(m=16,n=8192) k=4096  0.11465 ms/it  SKINNY
+  GEMM[1] fwd_y(s.tmp.Bt)    out(m=4096,n=8192) k=16  0.22321 ms/it  square
+  GEMM[2] bwd_u(dy.B)        out(m=16,n=8192) k=4096  0.10684 ms/it  SKINNY
+  GEMM[3] bwd_tmp(x.At)      out(m=16,n=8192) k=4096  0.11542 ms/it  SKINNY
+  GEMM[4] bwd_dB(dyt.tmp)    out(m=16,n=4096) k=8192  0.12207 ms/it  SKINNY
+  GEMM[5] bwd_dA(ut.x)       out(m=4096,n=16) k=8192  0.12278 ms/it  SKINNY
+  GEMM[6] bwd_dx(u.A)        out(m=4096,n=8192) k=16  0.19843 ms/it  square
+  SUM 7-GEMM=1.00341 ms  glue=0.72598 ms  step~=1.72939 ms (578.2 steps/s)
+--- WMMA2+splitK (current main) ---
+[OWN-SGEMM-FIRED] _hx_k_sgemm_cm_v54
+[OWN-SGEMM-SPLITK-FIRED] skinny GEMM -> _hx_k_sgemm_cm_splitk (split-K atomicAdd, G=8, m=16 n=8192 k=4096)
+[OWN-SGEMM-WMMA2-FIRED] _hx_k_sgemm_cm_wmma2 (CUTLASS-grade TF32: 128x64 block, 8-warp, 2x2 warp-tile, double-buffered cp.async)
+  GEMM[0] fwd_tmp(x.At)      out(m=16,n=8192) k=4096  0.24921 ms/it  SKINNY
+  GEMM[1] fwd_y(s.tmp.Bt)    out(m=4096,n=8192) k=16  0.14181 ms/it  square
+  GEMM[2] bwd_u(dy.B)        out(m=16,n=8192) k=4096  0.22515 ms/it  SKINNY
+  GEMM[3] bwd_tmp(x.At)      out(m=16,n=8192) k=4096  0.25020 ms/it  SKINNY
+  GEMM[4] bwd_dB(dyt.tmp)    out(m=16,n=4096) k=8192  0.24621 ms/it  SKINNY
+  GEMM[5] bwd_dA(ut.x)       out(m=4096,n=16) k=8192  0.23204 ms/it  SKINNY
+  GEMM[6] bwd_dx(u.A)        out(m=4096,n=8192) k=16  0.14230 ms/it  square
+  SUM 7-GEMM=1.48692 ms  glue=0.70972 ms  step~=2.19664 ms (455.2 steps/s)
+--- WMMA2+streamK (THIS WORK) ---
+[OWN-SGEMM-FIRED] _hx_k_sgemm_cm_v54
+[OWN-SGEMM-STREAMK-FIRED] skinny GEMM -> _hx_k_sgemm_cm_streamk (atomic-free two-pass, G=8, m=16 n=8192 k=4096)
+[OWN-SGEMM-WMMA2-FIRED] _hx_k_sgemm_cm_wmma2 (CUTLASS-grade TF32: 128x64 block, 8-warp, 2x2 warp-tile, double-buffered cp.async)
+  GEMM[0] fwd_tmp(x.At)      out(m=16,n=8192) k=4096  0.25063 ms/it  SKINNY
+  GEMM[1] fwd_y(s.tmp.Bt)    out(m=4096,n=8192) k=16  0.14173 ms/it  square
+  GEMM[2] bwd_u(dy.B)        out(m=16,n=8192) k=4096  0.22724 ms/it  SKINNY
+  GEMM[3] bwd_tmp(x.At)      out(m=16,n=8192) k=4096  0.25187 ms/it  SKINNY
+  GEMM[4] bwd_dB(dyt.tmp)    out(m=16,n=4096) k=8192  0.25017 ms/it  SKINNY
+  GEMM[5] bwd_dA(ut.x)       out(m=4096,n=16) k=8192  0.23498 ms/it  SKINNY
+  GEMM[6] bwd_dx(u.A)        out(m=4096,n=8192) k=16  0.14228 ms/it  square
+  SUM 7-GEMM=1.49889 ms  glue=0.70924 ms  step~=2.20813 ms (452.9 steps/s)
+
+================ §2b G-SWEEP stream-K dA (M8192 K8192 N4096 -> dA k=8192) ================
+G=2   0.55140 ms
+G=6   0.48465 ms
+G=8   0.46737 ms
+G=12  0.46082 ms
+G=16  0.45971 ms
+G=24  0.45496 ms
+G=32  0.45995 ms
+
+================ §3 STEPS/SEC (util, 12s) ================
+----- M=8192 K=N=4096 R16 -----
+cuBLAS              UTIL-RUN M=8192 K=4096 N=4096 R=16 secs=12.0 iters=6784 (565.0 steps/s)
+WMMA2 (no splitk)   UTIL-RUN M=8192 K=4096 N=4096 R=16 secs=12.0 iters=4080 (338.7 steps/s)
+WMMA2+splitK        UTIL-RUN M=8192 K=4096 N=4096 R=16 secs=12.0 iters=5472 (454.7 steps/s)
+WMMA2+streamK       UTIL-RUN M=8192 K=4096 N=4096 R=16 secs=12.0 iters=5456 (453.6 steps/s)
+----- M=16384 K=N=4096 R16 -----
+cuBLAS              UTIL-RUN M=16384 K=4096 N=4096 R=16 secs=12.0 iters=3328 (277.1 steps/s)
+WMMA2 (no splitk)   UTIL-RUN M=16384 K=4096 N=4096 R=16 secs=12.0 iters=2112 (175.5 steps/s)
+WMMA2+splitK        UTIL-RUN M=16384 K=4096 N=4096 R=16 secs=12.0 iters=2768 (230.6 steps/s)
+WMMA2+streamK       UTIL-RUN M=16384 K=4096 N=4096 R=16 secs=12.1 iters=2768 (229.5 steps/s)
+
+================ FIRED PROBE CHECK ================
+[OWN-SGEMM-STREAMK-FIRED] skinny GEMM -> _hx_k_sgemm_cm_streamk (atomic-free two-pass, G=16, m=16 n=8192 k=8192)
+=== DONE ===
