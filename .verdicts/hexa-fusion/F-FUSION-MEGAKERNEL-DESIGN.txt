@@ -1,0 +1,14 @@
+
+── UPDATE 2026-06-04 (block-2 prefix BUILT as L3-d, PR pending) ──────────────
+Refinement after auditing the existing ⑤c device kernels: block 2's softmax does NOT hit a
+hand-Taylor reproduction wall — the device kernel _hx_moe_exp_dev (runtime_cuda_emit.hexa)
+ALREADY replays moe_lib _moe_exp term-for-term (the standalone _hx_k_moe_router is byte-eq).
+So the grid-sync-FREE prefix of block 2 = gelu2 + expert_pack2 + moe_router fuses cleanly into
+ONE kernel `_hx_k_moe_block2` (one thread per t; gelu per-element, softmax per-row, combine
+per-(t,c) — every op keeps its host accumulation order → byte-eq max|Δ|=0). Built as L3-d
+(branch domain/hexa-fusion-l3d-gelu2pack, env HEXA_FUSE_MOE_BLOCK2, 3 launches → 1). The ONLY
+block-2 op that remains unfused = groupnorm#2 — its full-y reduction (G=1 over all T·C) needs a
+cross-thread barrier = a cooperative/persistent kernel (cudaLaunchCooperativeKernel + grid.sync),
+a step-change from the L3 per-element/per-row pattern → deferred. NET block-2 megakernel status:
+gelu+pack+router = 1 kernel (L3-d, UNMEASURED), GN#2 = grid-sync residual. block-1 = L3-c. The
+glue-block megakernel is now realized except the 2 GN reductions (both grid-sync-walled).

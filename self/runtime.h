@@ -1262,6 +1262,17 @@ HexaVal hexa_forge_dispatch_moe_router(HexaVal logits_v, HexaVal ex_out_v,
 HexaVal forge_dispatch_moe_router(HexaVal logits_v, HexaVal ex_out_v,
                              HexaVal probs_v, HexaVal y_v, HexaVal t_v,
                              HexaVal e_v, HexaVal c_v);                       /* runtime.c — fusion L3 glue seam */
+/* HEXA-FUSION L3-d (glue-block megakernel · fwd block 2) — gelu2 + expert_pack2 +
+ * moe_router fused into ONE kernel. 11 args; calls _hx_cuda_farr_moe_block2_gpu.
+ * byte-eq == gelu2-then-pack-then-router. */
+HexaVal hexa_forge_dispatch_moe_block2(HexaVal eo0_v, HexaVal eo1_v, HexaVal logits_v,
+                                  HexaVal ex0_v, HexaVal ex1_v, HexaVal ex_out_v,
+                                  HexaVal probs_v, HexaVal y_v, HexaVal t_v,
+                                  HexaVal e_v, HexaVal c_v);                  /* runtime.c — fusion L3-d */
+HexaVal forge_dispatch_moe_block2(HexaVal eo0_v, HexaVal eo1_v, HexaVal logits_v,
+                             HexaVal ex0_v, HexaVal ex1_v, HexaVal ex_out_v,
+                             HexaVal probs_v, HexaVal y_v, HexaVal t_v,
+                             HexaVal e_v, HexaVal c_v);                       /* runtime.c — fusion L3-d seam */
 
 /* HEXA-FUSION L3 (glue half · final slice ⑤c) — device-resident embedding gather.
  * forge_dispatch_embedding(ids, table, x_out, T, d) -> int rc (0 ok / -1 host).

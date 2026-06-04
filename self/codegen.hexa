@@ -7846,6 +7846,20 @@ fn gen2_expr(node) {
                         + arg_strs[8] + ", " + arg_strs[9] + ", "
                         + arg_strs[10] + ")"
                 }
+                // HEXA-FUSION L3-d (glue-block megakernel · fwd block 2):
+                // forge_dispatch_moe_block2(eo0, eo1, logits, ex0, ex1, ex_out,
+                // probs, y, T, E, C) -> int rc. Fuses gelu2 + expert_pack2 +
+                // moe_router into ONE kernel (byte-eq == the 3 separate ⑤c/L3-b
+                // device kernels; grid-sync-free prefix of block 2, GN#2 excluded).
+                if name == "forge_dispatch_moe_block2" {
+                    return "hexa_forge_dispatch_moe_block2("
+                        + arg_strs[0] + ", " + arg_strs[1] + ", "
+                        + arg_strs[2] + ", " + arg_strs[3] + ", "
+                        + arg_strs[4] + ", " + arg_strs[5] + ", "
+                        + arg_strs[6] + ", " + arg_strs[7] + ", "
+                        + arg_strs[8] + ", " + arg_strs[9] + ", "
+                        + arg_strs[10] + ")"
+                }
                 // LEVER (a) forge device-feed: on-device AdamW.
                 // forge_dispatch_adamw(W, g, m, v, n, lr, b1, b2, eps, wd, t) ->
                 // int rc (0 ok / -1 fall back to host adamw_step). CUDA build →
