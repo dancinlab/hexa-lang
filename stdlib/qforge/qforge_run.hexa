@@ -141,7 +141,22 @@ fn _qforge_screening_note() -> str {
 //   it is the deck's SCF Hamiltonian). Everything else is the deck (d4 data).
 //
 //   Returns QforgeRunResult — {lambda, omega_log, tc, stages}. NO QE call.
+//
+//   The eigensolver tolerance/max-iter is 1.0e-12 / 300 (the well-separated
+//   synthetic-deck regime). A REAL converged metallic-hydride H (the PW front-end's
+//   deck-dir output) has tightly-clustered near-degenerate occupied bands that do
+//   NOT resolve to 1e-12 in 300 davidson iters — use `qforge_run_tol` to pass a
+//   looser tol / more iters for such a deck (composition with the PW front-end).
 pub fn qforge_run(h_apply, deck: QforgeDeck) -> QforgeRunResult {
+    return qforge_run_tol(h_apply, deck, 1.0e-12, 300)
+}
+
+// ── qforge_run_tol — qforge_run with an explicit eigensolver tol / max-iter ───
+//   Identical chain; only the davidson (SCF) + Sternheimer (el-ph) tol/iter are
+//   parameterised. `qforge_run` is the (1.0e-12, 300) wrapper (no behavior change).
+//   A clustered real-cell spectrum (PW front-end deck) wants e.g. (1e-8, 600).
+pub fn qforge_run_tol(h_apply, deck: QforgeDeck, eig_tol: float,
+                      eig_max_iter: int) -> QforgeRunResult {
     let note = _qforge_screening_note()
     let mut stages: [QforgeStage] = []
 
@@ -151,7 +166,7 @@ pub fn qforge_run(h_apply, deck: QforgeDeck) -> QforgeRunResult {
     //   recovers the occupied manifold. d6: no self-consistency faked — the deck
     //   IS the converged operator (qforge_scf_pw_h is the production stager).
     let nocc = deck.nocc
-    let dav = qforge_davidson(h_apply, deck.h_diag, deck.n, nocc, 1.0e-12, 300)
+    let dav = qforge_davidson(h_apply, deck.h_diag, deck.n, nocc, eig_tol, eig_max_iter)
     if !dav.converged {
         stages.push(QforgeStage { name: "scf", ok: 0, witness: -1.0,
                                   note: "davidson did not converge" })
@@ -219,7 +234,7 @@ pub fn qforge_run(h_apply, deck: QforgeDeck) -> QforgeRunResult {
     let mut mu = 0
     while mu < nmode {
         let er = qforge_elph_g2(h_apply, occ, occ, eps_occ, deck.dv_modes[mu],
-                                _qforge_zero_kernel, deck.n, 1.0e-12, 300)
+                                _qforge_zero_kernel, deck.n, eig_tol, eig_max_iter)
         let mut nn = 0
         while nn < nocc {
             let gv = er.g2[nn * nocc + nn]
