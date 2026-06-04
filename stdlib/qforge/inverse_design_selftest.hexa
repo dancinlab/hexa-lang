@@ -160,17 +160,32 @@ fn main() {
     fails = fails + _ck_ieq("(C2) ok (real qforge_tc_allen_dynes objective)", rC.ok, 1)
     fails = fails + _ck_true("(C2) REAL predicted Tc raised by ascent (best>seed)",
                              rC.best_tc > rC.seed_tc)
-    // real-Tc trajectory also strictly increases (FD gradient drives it up).
-    let mut monoC = true
+    // real-Tc trajectory is monotone NON-decreasing every step, and STRICTLY
+    // increases while the param is still interior to the box. Once projected
+    // ascent clamps λ to the box top (2.50) the param stops moving, so Tc
+    // PLATEAUS at the constrained optimum (a correct projected-ascent fixed
+    // point — NOT a decrease). The milestone gate "one step RAISES Tc" is the
+    // interior-strict + global-non-decrease pair.
+    let mut nondecC = true     // Tc never goes DOWN (projected ascent)
+    let mut interiorStrict = true
     let mut prevC = qforge_inv_traj_tc(rC, 0)
+    let mut prevLam = qforge_inv_traj_param(rC, 0, 0)
     let mut kc = 1
     while kc < rC.n_rec {
         let curC = qforge_inv_traj_tc(rC, kc)
-        if curC <= prevC { monoC = false }
+        let curLam = qforge_inv_traj_param(rC, kc, 0)
+        if curC < prevC { nondecC = false }
+        // while the step actually MOVED the param (interior, pre-clamp) Tc must
+        // strictly rise; a clamped step (λ unchanged) is allowed to plateau.
+        if _abs(curLam - prevLam) > 1.0e-12 {
+            if curC <= prevC { interiorStrict = false }
+        }
         prevC = curC
+        prevLam = curLam
         kc = kc + 1
     }
-    fails = fails + _ck_true("(C2) real QFORGE Tc strictly increases each step", monoC)
+    fails = fails + _ck_true("(C2) real QFORGE Tc non-decreasing every step (no descent)", nondecC)
+    fails = fails + _ck_true("(C2) real QFORGE Tc STRICTLY rises while param interior (one step RAISES Tc)", interiorStrict)
     fails = fails + _ck_true("(C2) λ stayed within [0.30,2.50] (constraint held)",
                              rC.best_param[0] >= 0.30 && rC.best_param[0] <= 2.50)
     println("[C2] seed Tc(λ=0.30)=" + to_string(rC.seed_tc) + " K  ->  best Tc(λ="
