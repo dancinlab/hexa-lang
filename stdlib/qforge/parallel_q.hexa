@@ -1,0 +1,309 @@
+// HEXA Standard Library — qforge/parallel_q
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// QFORGE — PARALLEL-q dispatch math: SPLIT → (dispatch) → COLLECT → UNION → λ.
+//
+// Per-q DFPT cost is dominated by the SCF iteration count, and q-points are
+// INDEPENDENT (PR#2706 cost_model, MEASURED from real CaH6 ph.out). The
+// wall-clock lever is therefore to run each IRREDUCIBLE q-point on its OWN pod
+// IN PARALLEL (one job → one slot, demiurge d_parallel_fire), then MERGE the
+// per-q dynamical-matrix + el-ph results (dynN / elph.N) and run the FINAL
+// λ/Tc assembly on the UNION. QE today runs every q serially on one pod; this
+// module is the pure split/collect/union math that makes free-pool parallel-q
+// possible — N small free pods each do one q (serves "모두 무료 완료 pool 사용").
+//
+// ── The flow ────────────────────────────────────────────────────────────────
+//
+//   qforge_qstar_reduce(full MP grid) ──▶ IBZ q-points + integer star weights
+//                              │  (PR#2700/#2705 — only IRREDUCIBLE q need DFPT)
+//                              ▼
+//   qforge_qsplit(qibz, n_slots) ──▶ [{slot, q_indices}]   one q→one slot, or a
+//                              │       star-weight-balanced bin-pack when slots<q
+//                              ▼
+//          (LAB DISPATCH LAYER — NOT this module: fires one DFPT job per slot,
+//           each pod resumes SCF from a banked .save (PR#2707 resume-bank),
+//           harvests that slot's per-q {ω(q,ν), |g(q,ν)|², star weight})
+//                              ▼
+//   qforge_qcollect_union(per_slot_results) ──▶ ONE flat (q,ν) sample list
+//                              │  (EXACTLY the shape qforge_a2f_from_elph /
+//                              │   qforge_metallic_a2f_mesh already consume —
+//                              │   d4: feed the verified L3 path, don't fork it)
+//                              │  FAIL-CLOSED if any split q is missing (d6 —
+//                              │   never silently λ-sum a partial q-set).
+//                              ▼
+//   qforge_lambda_on_union(union) ──▶ λ   (thin wrapper over the EXISTING
+//                                          qforge_a2f_from_elph + L2 integrator —
+//                                          split-parallel λ == serial λ by
+//                                          construction, d4 reuse of the λ math)
+//
+// ── one-q-one-slot rule (d_parallel_fire) ───────────────────────────────────
+// When n_slots ≥ n_q every IBZ q gets its own slot (the cheapest wall-clock —
+// every independent q fires at once). When n_slots < n_q the q's are bin-packed
+// LPT (longest-processing-time-first) by their STAR MULTIPLICITY as the cost
+// proxy: a q standing for w_q full-BZ points carries ~w_q× the BZ-sum weight, so
+// spreading heavy stars keeps the slots balanced. (When real per-q wall data
+// from cost_model exists, swap the weight cost proxy for measured wall — same
+// bin-pack.) The INVARIANT in every mode: NO overlap, FULL coverage — every IBZ
+// q assigned to EXACTLY one slot.
+//
+// ── how the lab dispatch layer calls this (the dispatch is the lab's job) ─────
+// This module is the PURE split/collect/union math. The lab runtime: (1) calls
+// qforge_qsplit to get the slot→q-indices plan, (2) for each slot fires one DFPT
+// pod (resuming SCF from the resume-bank .save), (3) harvests each slot's per-q
+// {ω, |g|², star weight} into the SlotResult shape, (4) calls
+// qforge_qcollect_union → qforge_lambda_on_union. The live multi-pod dispatch /
+// pod lifecycle is OUT OF SCOPE here (runtime wiring follow-on).
+//
+// ── d3/d4/d19 reuse (compose, don't reinvent) ───────────────────────────────
+//   - IBZ q + star weights : stdlib/qforge/qstar  (QStar — the split distributes
+//     the IRREDUCIBLE set; star weight = the cost proxy AND the BZ-sum weight)
+//   - α²F assembler        : stdlib/qforge/tc     (qforge_a2f_from_elph — L3)
+//   - λ, ω_log             : stdlib/material/sim  (eliashberg_*_from_a2f — L2)
+// New code = the slot split + the union concat + the completeness check ONLY.
+// The MP star weight is folded into g2 (g2·w_q) exactly as the verified
+// qforge_metallic_a2f_mesh does, so the union is byte-identical to the serial
+// flat (q,ν) list. ZERO physics is re-implemented.
+
+use "stdlib/qforge/tc"
+use "stdlib/material/sim"
+
+// ── plan record: which IBZ q-indices a slot owns ─────────────────────────────
+//   slot      : 0-based slot id
+//   q_indices : the IBZ q-indices (into the qibz/weights arrays) on this slot
+pub struct QSlot {
+    slot: int,
+    q_indices: [int]
+}
+
+// ── per-slot harvested result for ONE q-point (the lab hands these back) ──────
+//   q      : the IBZ q-index this result is for (into qibz/weights)
+//   omega  : nmode phonon frequencies ω(q,ν)
+//   g2     : nmode el-ph |g(q,ν)|² (already FS-summed over electrons per mode)
+//   weight : the INTEGER star multiplicity of this q (from qforge_qstar_reduce)
+pub struct SlotResult {
+    q:      int,
+    omega:  [float],
+    g2:     [float],
+    weight: int
+}
+
+// ── the collected union: the flat (q,ν) sample list the L3 assembler consumes ─
+//   ok      : 1 = complete (every split q present) ; 0 = incomplete (fail-closed)
+//   err     : reason when ok==0
+//   eps_k   : flat (q,ν) electron band energies   (on-shell ε=E_F here)
+//   eps_kq  : flat (q,ν) ε_{k+q}                   (on-shell ε=E_F here)
+//   g2      : flat (q,ν) |g|² with the STAR WEIGHT folded in (g2·w_q)
+//   omega   : flat (q,ν) ω(q,ν)
+//   n_q     : number of distinct q-points merged
+pub struct QUnion {
+    ok:     int,
+    err:    str,
+    eps_k:  [float],
+    eps_kq: [float],
+    g2:     [float],
+    omega:  [float],
+    n_q:    int
+}
+
+fn _pq_union_sentinel(reason: str) -> QUnion {
+    return QUnion { ok: 0, err: reason, eps_k: [], eps_kq: [], g2: [], omega: [], n_q: 0 }
+}
+
+// ── qsplit — distribute the IBZ q-indices across n_slots ─────────────────────
+//
+// `weights` = the integer star multiplicities (qforge_qstar_reduce weights), one
+// per IBZ q; its length is n_q. Returns one QSlot per active slot (≤ n_slots).
+//
+// n_slots ≥ n_q : one q → one slot (the first n_q slots each get exactly one q;
+//                 surplus slots are dropped — no empty slots returned).
+// n_slots < n_q : LPT bin-pack — sort q's by descending star weight, greedily
+//                 assign each to the currently-lightest slot. Spreads heavy
+//                 stars so slot loads stay balanced (the cost proxy is the star
+//                 weight until cost_model wall data exists).
+//
+// INVARIANT (the whole point): every IBZ q appears in EXACTLY one slot — no
+// overlap, full coverage. Empty / malformed input → empty plan.
+pub fn qforge_qsplit(weights: [int], n_slots: int) -> [QSlot] {
+    let n_q = len(weights)
+    if n_q < 1 || n_slots < 1 { return [] }
+
+    // one-q-one-slot: the cheapest wall-clock when there are enough slots.
+    if n_slots >= n_q {
+        let mut out: [QSlot] = []
+        let mut i = 0
+        while i < n_q {
+            out.push(QSlot { slot: i, q_indices: [i] })
+            i = i + 1
+        }
+        return out
+    }
+
+    // bin-pack: LPT by star weight. Build a descending-weight order of q-indices
+    // (selection sort — n_q is small, the IBZ set of an el-ph q-mesh).
+    let mut order: [int] = []
+    let mut used: [bool] = []
+    let mut u = 0
+    while u < n_q { used.push(false) ; u = u + 1 }
+    let mut picked = 0
+    while picked < n_q {
+        let mut best = -1
+        let mut best_w = -1
+        let mut j = 0
+        while j < n_q {
+            if !used[j] {
+                if weights[j] > best_w {
+                    best_w = weights[j]
+                    best = j
+                }
+            }
+            j = j + 1
+        }
+        used[best] = true
+        order.push(best)
+        picked = picked + 1
+    }
+
+    // running per-slot load (Σ star weight) — greedily fill the lightest slot.
+    let mut load: [int] = []
+    let mut slot_q: [[int]] = []
+    let mut s = 0
+    while s < n_slots {
+        load.push(0)
+        slot_q.push([])
+        s = s + 1
+    }
+    let mut k = 0
+    while k < n_q {
+        let q = order[k]
+        // find the currently-lightest slot
+        let mut lo = 0
+        let mut lo_load = load[0]
+        let mut t = 1
+        while t < n_slots {
+            if load[t] < lo_load {
+                lo_load = load[t]
+                lo = t
+            }
+            t = t + 1
+        }
+        slot_q[lo].push(q)
+        load[lo] = load[lo] + weights[q]
+        k = k + 1
+    }
+
+    let mut out: [QSlot] = []
+    let mut a = 0
+    while a < n_slots {
+        // skip any slot that ended up empty (more slots than q after packing is
+        // handled by the n_slots≥n_q branch; this only trims pathological cases)
+        if len(slot_q[a]) > 0 {
+            out.push(QSlot { slot: a, q_indices: slot_q[a] })
+        }
+        a = a + 1
+    }
+    return out
+}
+
+// ── qcollect_union — merge per-slot per-q results into the flat (q,ν) list ────
+//
+// `results` = the per-q SlotResult list harvested across all slots (one entry
+// per IBZ q). `n_q_expected` = the number of IBZ q-points that were split (=
+// len(weights) passed to qforge_qsplit). FAIL-CLOSED (ok==0) if any split q is
+// missing OR duplicated OR a result is malformed — NEVER returns a silently
+// partial union that would UNDER-COUNT λ (d6). On success the flat arrays are
+// EXACTLY the shape qforge_a2f_from_elph consumes, with the star weight folded
+// into g2 (g2·w_q) precisely as qforge_metallic_a2f_mesh does → the union is
+// byte-identical to the serial flat (q,ν) list.
+//
+// Electrons are on-shell (ε_k = ε_{k+q} = e_fermi) so the FS double-δ collapses
+// to δ(0)² — the same convention qforge_metallic_a2f's synthetic providers use.
+pub fn qforge_qcollect_union(results: [SlotResult], n_q_expected: int,
+                             e_fermi: float) -> QUnion {
+    if n_q_expected < 1 { return _pq_union_sentinel("empty split (n_q_expected<1)") }
+
+    // presence map over the EXPECTED q-indices [0, n_q_expected) — catches both
+    // a missing slot result and an out-of-range / duplicate q.
+    let mut seen: [bool] = []
+    let mut s = 0
+    while s < n_q_expected { seen.push(false) ; s = s + 1 }
+
+    let nr = len(results)
+    if nr < 1 { return _pq_union_sentinel("no slot results harvested") }
+
+    let mut eps_k:  [float] = []
+    let mut eps_kq: [float] = []
+    let mut g2:     [float] = []
+    let mut omega:  [float] = []
+    let mut n_collected = 0
+
+    let mut i = 0
+    while i < nr {
+        let r = results[i]
+        let q = r.q
+        if q < 0 || q >= n_q_expected {
+            return _pq_union_sentinel("q-index out of range: " + to_string(q))
+        }
+        if seen[q] {
+            return _pq_union_sentinel("duplicate q-index: " + to_string(q))
+        }
+        let nmode = len(r.omega)
+        if nmode < 1 || len(r.g2) != nmode {
+            return _pq_union_sentinel("malformed q result (q=" + to_string(q) + ")")
+        }
+        let wq = to_float(r.weight)
+        let mut m = 0
+        while m < nmode {
+            omega.push(r.omega[m])
+            g2.push(r.g2[m] * wq)        // fold star weight into g2 (linear)
+            eps_k.push(e_fermi)
+            eps_kq.push(e_fermi)
+            m = m + 1
+        }
+        seen[q] = true
+        n_collected = n_collected + 1
+        i = i + 1
+    }
+
+    // FAIL-CLOSED completeness: every expected q must be present.
+    let mut miss = 0
+    let mut c = 0
+    while c < n_q_expected {
+        if !seen[c] { miss = miss + 1 }
+        c = c + 1
+    }
+    if miss > 0 {
+        return _pq_union_sentinel("incomplete union — " + to_string(miss) +
+                                  " of " + to_string(n_q_expected) + " q-points missing")
+    }
+
+    return QUnion {
+        ok: 1, err: "", eps_k: eps_k, eps_kq: eps_kq, g2: g2, omega: omega,
+        n_q: n_collected
+    }
+}
+
+// ── lambda_on_union — run the EXISTING verified assembler on the union ────────
+//
+// Thin wrapper (d4 reuse — NO forked λ math): hands the union's flat (q,ν) list
+// to qforge_a2f_from_elph (weight=1.0 since the star weight is already folded
+// into g2) → α²F(ω) → the L2 moment integrator (K→Ha-scaled, identical to
+// qforge_metallic_lambda_mesh). Returns λ; −1.0 if the union is incomplete (d6 —
+// an incomplete union NEVER yields a λ) or the assembler returns its sentinel.
+//
+// Because the union is the SAME flat list a serial all-q run builds, this λ is
+// IDENTICAL to the serial λ by construction (the EQUIVALENCE the selftest pins).
+pub fn qforge_lambda_on_union(union: QUnion, n_ef: float, omega_grid: [float],
+                              sigma_el: float, sigma_ph: float) -> float {
+    if union.ok != 1 { return -1.0 }
+    // e_fermi=0.0: the on-shell ε in the union are stored as e_fermi already, so
+    // pass the same reference (the FS δ uses ε−E_F → 0 on-shell, σ-independent).
+    let e_fermi = if len(union.eps_k) > 0 { union.eps_k[0] } else { 0.0 }
+    let a2f = qforge_a2f_from_elph(union.eps_k, union.eps_kq, union.g2,
+                                   union.omega, e_fermi, n_ef, omega_grid, 1.0,
+                                   sigma_el, sigma_ph)
+    if len(a2f) < 2 { return -1.0 }
+    let m = eliashberg_moments_from_a2f_scaled(omega_grid, a2f, ha_per_kelvin())
+    return m[0]
+}

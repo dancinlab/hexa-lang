@@ -1,0 +1,239 @@
+// @ci_gate — pure · network-free · deterministic (stdlib_selftest_aggregate --ci-gate)
+//
+// qforge_parallel_q_selftest.hexa — QFORGE PARALLEL-q (split/collect/union) g5 gate.
+//
+// Closes the gate on the SPLIT → COLLECT → UNION → λ math that makes free-pool
+// parallel-q DFPT possible: each IRREDUCIBLE q runs on its OWN slot (pod), the
+// per-q {ω, |g|², star weight} results are merged into ONE flat (q,ν) list, and
+// the FINAL λ is assembled on the UNION. The named milestone case is a 2×2×2
+// q-grid with YH10-style IBZ star weights. Honest tier (d6):
+//
+//   🔵 EQUIVALENCE (the core guarantee) — λ computed SERIALLY (all q in one
+//        union) EQUALS λ computed via qsplit → qcollect_union → lambda_on_union
+//        (split across N slots then merged), BYTE-IDENTICAL. Split-parallel
+//        reproduces serial — the whole point. 2×2×2 grid + YH10 IBZ weights.
+//   🟢 split invariants — every IBZ q assigned EXACTLY once (no overlap, full
+//        coverage), Σ assigned = n_q, across n_slots ∈ {1, n_q, n_q+2, n_q−1}.
+//   🔵 collect FAIL-CLOSED — a missing slot result → qcollect_union flags
+//        incomplete (ok==0) and lambda_on_union returns −1.0 (NEVER a silently
+//        partial union that would under-count λ, d6).
+//   🟢 weight-balanced split — heavier-multiplicity q's spread across slots:
+//        max-slot-load ≤ ceil(Σweight/n_slots) + max_single_weight (LPT bound).
+//   guard — empty weights / zero slots / out-of-range / duplicate q.
+//
+// No QE-anchored λ is hard-wired (d6): the reference is the SERIAL union λ from
+// the SAME verified assembler — the test pins split==serial, not an external
+// number. The live multi-pod dispatch is the lab's runtime job (this module is
+// the pure split/collect/union math).
+//
+// Run:  HEXA_STDLIB_ROOT="$PWD/stdlib" hexa run \
+//         stdlib/qforge/qforge_parallel_q_selftest.hexa
+// PASS: exits printing "qforge_parallel_q_selftest PASS".
+
+use "stdlib/qforge/parallel_q"
+use "stdlib/qforge/tc"
+use "stdlib/material/sim"
+
+let _P_NEF:   float = 1.0
+let _P_SIGEL: float = 0.05
+let _P_SIGPH: float = 1.5
+let _P_G2:    float = 30.0
+let _P_NK:    int   = 80      // on-shell electrons folded into per-mode |g|²
+
+fn _abs(x: float) -> float { if x < 0.0 { return -x } return x }
+
+fn _assert(name: str, cond: bool, detail: str) -> int {
+    if cond { println("PASS " + name + "  " + detail) ; return 0 }
+    println("FAIL " + name + "  " + detail) ; return 1
+}
+
+fn _grid(wlo: float, whi: float, ng: int) -> [float] {
+    let mut g: [float] = []
+    let step = (whi - wlo) / to_float(ng - 1)
+    let mut j = 0
+    while j < ng { g.push(wlo + step * to_float(j)) ; j = j + 1 }
+    return g
+}
+
+// YH10-style IBZ star weights for a 2×2×2 q-mesh: 8 full-BZ points fold onto
+// 3 irreducible reps under a cubic point group — Γ (w=1), the face/edge q (w=3),
+// and the corner q (w=4) → Σw = 8 = n_full. Distinct dispersing ω per q so the
+// union is a realistic multi-q spectral function (not a degenerate single mode).
+let _N_Q: int = 3
+fn _yh10_weights() -> [int] { return [1, 3, 4] }
+fn _yh10_omega(q: int) -> float {
+    if q == 0 { return 300.0 }   // Γ — low branch
+    if q == 1 { return 520.0 }   // face/edge
+    return 740.0                 // corner — high branch
+}
+
+// Build the per-q SlotResult for IBZ q-index `q` (one mode per q, nmode=1).
+// g2 is the per-mode |g|² already FS-summed over the _P_NK on-shell electrons.
+fn _result_for_q(q: int, weights: [int]) -> SlotResult {
+    let g2_mode = _P_G2 * to_float(_P_NK)
+    return SlotResult { q: q, omega: [_yh10_omega(q)], g2: [g2_mode], weight: weights[q] }
+}
+
+// Gather slot results by FOLLOWING the qsplit plan (slot-dispatch order) — this
+// is what the lab does: walk each slot's q_indices and harvest that q's result.
+fn _gather_from_plan(plan: [QSlot], weights: [int]) -> [SlotResult] {
+    let mut out: [SlotResult] = []
+    let mut s = 0
+    while s < len(plan) {
+        let qs = plan[s].q_indices
+        let mut k = 0
+        while k < len(qs) {
+            out.push(_result_for_q(qs[k], weights))
+            k = k + 1
+        }
+        s = s + 1
+    }
+    return out
+}
+
+fn main() {
+    let mut fails = 0
+    let weights = _yh10_weights()
+    let n_q = len(weights)
+    let wlo = 60.0
+    let whi = 1600.0
+    let og = _grid(wlo, whi, 40001)
+
+    println("[setup] 2×2×2 q-mesh, " + to_string(n_q) +
+            " IBZ reps, YH10 star weights [1,3,4] (Σ=8=n_full)")
+
+    // ── 🔵 EQUIVALENCE — split-parallel λ == serial λ (BYTE-IDENTICAL) ────────
+    // SERIAL: collect every q in natural index order (one logical "all-q" run).
+    let mut serial_results: [SlotResult] = []
+    let mut q = 0
+    while q < n_q { serial_results.push(_result_for_q(q, weights)) ; q = q + 1 }
+    let serial_union = qforge_qcollect_union(serial_results, n_q, 0.0)
+    let lam_serial = qforge_lambda_on_union(serial_union, _P_NEF, og, _P_SIGEL, _P_SIGPH)
+
+    // PARALLEL: split across N=2 slots (n_slots < n_q ⇒ bin-pack), then gather
+    // results by following the slot plan and collect the union.
+    let plan2 = qforge_qsplit(weights, 2)
+    let par_results = _gather_from_plan(plan2, weights)
+    let par_union = qforge_qcollect_union(par_results, n_q, 0.0)
+    let lam_parallel = qforge_lambda_on_union(par_union, _P_NEF, og, _P_SIGEL, _P_SIGPH)
+
+    println("[equiv] λ_serial   = " + to_string(lam_serial))
+    println("[equiv] λ_parallel = " + to_string(lam_parallel) +
+            "  (split across 2 slots → collect → union)")
+    fails = fails + _assert("🔵 EQUIVALENCE split-parallel λ == serial λ (byte-identical)",
+                            lam_serial == lam_parallel && lam_serial > 0.0,
+                            "(Δ=" + to_string(_abs(lam_serial - lam_parallel)) + ")")
+
+    // also equivalence at one-q-one-slot (N = n_q) — the cheapest wall-clock mode.
+    let planN = qforge_qsplit(weights, n_q)
+    let oqos_results = _gather_from_plan(planN, weights)
+    let oqos_union = qforge_qcollect_union(oqos_results, n_q, 0.0)
+    let lam_oqos = qforge_lambda_on_union(oqos_union, _P_NEF, og, _P_SIGEL, _P_SIGPH)
+    fails = fails + _assert("🔵 EQUIVALENCE one-q-one-slot λ == serial λ",
+                            lam_oqos == lam_serial,
+                            "(λ_1q1slot=" + to_string(lam_oqos) + ")")
+
+    // ── 🟢 split invariants — exactly-once coverage across n_slots variants ───
+    let slot_variants = [1, n_q, n_q + 2, n_q - 1]
+    let mut inv_ok = true
+    let mut vi = 0
+    while vi < len(slot_variants) {
+        let ns = slot_variants[vi]
+        let plan = qforge_qsplit(weights, ns)
+        // count each IBZ q's assignment across all slots — must be exactly 1.
+        let mut count: [int] = []
+        let mut c = 0
+        while c < n_q { count.push(0) ; c = c + 1 }
+        let mut total = 0
+        let mut s = 0
+        while s < len(plan) {
+            let qs = plan[s].q_indices
+            let mut k = 0
+            while k < len(qs) {
+                count[qs[k]] = count[qs[k]] + 1
+                total = total + 1
+                k = k + 1
+            }
+            s = s + 1
+        }
+        let mut once = true
+        let mut a = 0
+        while a < n_q { if count[a] != 1 { once = false } ; a = a + 1 }
+        let ok = once && total == n_q
+        if !ok { inv_ok = false }
+        println("[split] n_slots=" + to_string(ns) + " → " + to_string(len(plan)) +
+                " active slots, Σassigned=" + to_string(total) +
+                " each-once=" + to_string(once))
+        vi = vi + 1
+    }
+    fails = fails + _assert("🟢 split: every IBZ q assigned EXACTLY once (no overlap, full coverage)",
+                            inv_ok, "(n_slots ∈ {1, n_q, n_q+2, n_q-1})")
+
+    // ── 🔵 collect FAIL-CLOSED — a missing slot result ⇒ incomplete + λ=−1 ────
+    // Drop the heaviest q (corner, q=2) — qcollect_union MUST flag incomplete and
+    // lambda_on_union MUST refuse (NEVER under-count λ on a partial q-set).
+    let mut partial: [SlotResult] = []
+    partial.push(_result_for_q(0, weights))
+    partial.push(_result_for_q(1, weights))   // q=2 (corner) MISSING
+    let partial_union = qforge_qcollect_union(partial, n_q, 0.0)
+    let lam_partial = qforge_lambda_on_union(partial_union, _P_NEF, og, _P_SIGEL, _P_SIGPH)
+    println("[fail-closed] partial union ok=" + to_string(partial_union.ok) +
+            " err=\"" + partial_union.err + "\"  λ=" + to_string(lam_partial))
+    fails = fails + _assert("🔵 collect FAIL-CLOSED: missing q → ok==0 (incomplete)",
+                            partial_union.ok == 0, "(err=" + partial_union.err + ")")
+    fails = fails + _assert("🔵 incomplete union → λ refused (−1.0, never partial-summed)",
+                            lam_partial < 0.0, "(λ=" + to_string(lam_partial) + ")")
+
+    // ── 🟢 weight-balanced split — heavy stars spread (LPT bound) ─────────────
+    // n_slots=2 over weights [1,3,4]: LPT gives {4} | {3,1} → loads 4 and 4.
+    // Bound: max-slot-load ≤ ceil(Σw/n_slots) + max_single_weight.
+    let total_w = 1 + 3 + 4         // 8
+    let n_sl = 2
+    let plan_bal = qforge_qsplit(weights, n_sl)
+    let mut max_load = 0
+    let mut s = 0
+    while s < len(plan_bal) {
+        let qs = plan_bal[s].q_indices
+        let mut ld = 0
+        let mut k = 0
+        while k < len(qs) { ld = ld + weights[qs[k]] ; k = k + 1 }
+        if ld > max_load { max_load = ld }
+        s = s + 1
+    }
+    // ceil(8/2)=4 ; max_single=4 ; bound=8.  LPT actual max_load=4 (well under).
+    let ceil_share = (total_w + n_sl - 1) / n_sl
+    let max_single = 4
+    let bound = ceil_share + max_single
+    println("[balance] n_slots=2 max-slot-load=" + to_string(max_load) +
+            "  bound ceil(8/2)+4=" + to_string(bound))
+    fails = fails + _assert("🟢 weight-balanced: max-slot-load ≤ ceil(Σw/n)+max_single",
+                            max_load <= bound, "(" + to_string(max_load) +
+                            " ≤ " + to_string(bound) + ")")
+    // tighter: LPT keeps the two slots within max_single of each other.
+    fails = fails + _assert("🟢 weight-balanced: LPT actual load ≤ ceil(Σw/n) for [1,3,4]",
+                            max_load <= ceil_share, "(max_load=" + to_string(max_load) +
+                            " ≤ " + to_string(ceil_share) + ")")
+
+    // ── guards — empty / degenerate ──────────────────────────────────────────
+    fails = fails + _assert("guard empty weights → empty plan",
+                            len(qforge_qsplit([], 4)) == 0, "")
+    fails = fails + _assert("guard zero slots → empty plan",
+                            len(qforge_qsplit(weights, 0)) == 0, "")
+    let u_empty = qforge_qcollect_union([], n_q, 0.0)
+    fails = fails + _assert("guard no results → ok==0", u_empty.ok == 0,
+                            "(err=" + u_empty.err + ")")
+    let oor = qforge_qcollect_union([SlotResult { q: 9, omega: [300.0],
+                                     g2: [1.0], weight: 1 }], n_q, 0.0)
+    fails = fails + _assert("guard out-of-range q → ok==0", oor.ok == 0,
+                            "(err=" + oor.err + ")")
+    let dup = qforge_qcollect_union([_result_for_q(0, weights),
+                                     _result_for_q(0, weights)], n_q, 0.0)
+    fails = fails + _assert("guard duplicate q → ok==0", dup.ok == 0,
+                            "(err=" + dup.err + ")")
+
+    if fails == 0 {
+        println("qforge_parallel_q_selftest PASS")
+    } else {
+        println("qforge_parallel_q_selftest FAIL — " + to_string(fails) + " case(s)")
+    }
+}
