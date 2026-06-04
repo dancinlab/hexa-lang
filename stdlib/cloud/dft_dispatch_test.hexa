@@ -89,6 +89,41 @@ fn main() {
     _check("engine case-strict (QFORGE ≠ qforge) → '' (refused)",
         _seq(dft_engine_resolve("QFORGE"), ""), 1)
 
+    // ── --engine DISPATCH ROUTING (@L3) ──────────────────────────────
+    // dft_engine_route(resolved_engine, dispatch) picks the engine PATH a
+    // real dispatch (--go/--detach, dispatch==1) takes. This is the wiring
+    // that makes `--engine qforge` actually diverge from QE. Three required
+    // routing cases (deterministic, network-free, no real dispatch):
+    //
+    //   (a) no --engine / --engine qe  → QE path  (0-diff, backward-compatible)
+    //   (b) --engine qforge            → QFORGE path (qforge_run, NOT QE)
+    //   (c) --engine garbage           → REFUSED at resolve (never routes)
+    //
+    // (a) the DEFAULT/ABSENT engine resolves to "qe" and routes to the QE path —
+    // byte-identical to pre-`--engine` behavior on a dispatch.
+    _check("route (a1) absent engine → qe path (0-diff)",
+        _seq(dft_engine_route(dft_engine_resolve(""), 1), "qe"), 1)
+    _check("route (a2) explicit --engine qe → qe path (0-diff)",
+        _seq(dft_engine_route(dft_engine_resolve("qe"), 1), "qe"), 1)
+    // (b) --engine qforge resolves to "qforge" and routes to the QFORGE engine
+    // path (qforge_run) — QE is bypassed.
+    _check("route (b) --engine qforge → qforge path (QE bypassed)",
+        _seq(dft_engine_route(dft_engine_resolve("qforge"), 1), "qforge"), 1)
+    // (c) an unknown engine resolves to "" → dft_run REFUSES it BEFORE any route
+    // is attempted (no silent default to qe — d6). Assert the resolver gate is
+    // empty (the refusal trigger) AND that, were it routed with the unknown id
+    // passed through, it would NOT silently pick qforge.
+    _check("route (c) --engine garbage → resolver empty (refused, no silent default)",
+        _seq(dft_engine_resolve("garbage"), ""), 1)
+    _check("route (c) unknown id never routes to qforge (no silent fallback)",
+        _seq(dft_engine_route(dft_engine_resolve("garbage"), 1), "qe"), 1)
+    // PREVIEW / --validate are engine-AGNOSTIC: dispatch==0 → no routing decision
+    // (the QE-vs-qforge branch only matters on an actual $-incurring dispatch).
+    _check("route preview (dispatch=0) → no engine route (agnostic)",
+        _seq(dft_engine_route("qforge", 0), ""), 1)
+    _check("route preview (dispatch=0, qe) → no engine route (agnostic)",
+        _seq(dft_engine_route("qe", 0), ""), 1)
+
     // ── ③ relax → scf coordinate parser ──────────────────────────────
     // alat=1.0 → scale = BOHR_ANGSTROM = 0.52917720859, so the x-axis cell
     // vector "1.0 0.0 0.0" → 0.529177..., a robust prefix to assert against.

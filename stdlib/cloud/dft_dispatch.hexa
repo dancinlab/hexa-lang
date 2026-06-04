@@ -221,6 +221,26 @@ pub fn dft_engine_resolve(sel: str) -> str {
     return ""
 }
 
+// dft_engine_route — PURE: given a RESOLVED engine id (from dft_engine_resolve)
+// and whether the caller asked for an actual DISPATCH (dispatch==1 iff --go or
+// --detach — the $-incurring rent paths), return the engine-PATH label the
+// dispatch must take:
+//   "qe"      → the Quantum ESPRESSO rent chain (pw.x/ph.x · _dft_go/_dft_detach)
+//   "qforge"  → the hexa-native QFORGE engine (stdlib/qforge qforge_run · NO rent)
+//   ""        → no dispatch routing needed (dispatch==0 — PREVIEW/--validate are
+//               engine-AGNOSTIC: deck-shape check + plan, no engine invoked)
+// This is the @L3 routing DECISION isolated as a network-free, unit-testable
+// pure function (dft_dispatch_test) — the live `dft_run` consults it to pick the
+// branch. Default/empty/"qe" engine → "qe" (0-diff backward-compatible: the QE
+// chain is selected exactly as before --engine existed). Only an explicit
+// "qforge" on a dispatch routes AWAY from QE. An unresolved ("") engine never
+// reaches here (dft_run REFUSES it up-front, d6 — no silent fallback).
+pub fn dft_engine_route(engine: str, dispatch: int) -> str {
+    if dispatch == 0 { return "" }
+    if engine == "qforge" { return "qforge" }
+    return "qe"
+}
+
 // _dft_pick_transport — PURE transport-selection classifier for the DIRECT->PROXY
 // upload fallback (inbox fix a). Given the three scp outcomes, returns the
 // WINNING transport label: direct when the direct scp succeeded; proxy when
@@ -1499,6 +1519,43 @@ fn _dft_state_field(deck: str, key: str) -> str {
     return ""
 }
 
+// _dft_qforge_run — the QFORGE engine dispatch entry (@L3). When `dft-run` is
+// asked to DISPATCH a deck with `--engine qforge`, control routes HERE instead
+// of the QE rent chain (_dft_go / _dft_detach). This is the routing TARGET that
+// makes `--engine qforge` mean "do NOT run QE" — the deck never reaches pw.x/ph.x.
+//
+// @L4 HONESTY — this entry does NOT force λ·Tc agreement: it routes to the
+// hexa-native engine and runs WHATEVER qforge_run(deck) yields (no target number,
+// no clamp). @L5 / d6 — the screening-functional accuracy gap is SURFACED here,
+// not faked (the in-repo screening is Hartree+LDA-exchange only).
+//
+// HONEST SCOPE (d6) — the QFORGE engine entry `qforge_run(h_apply, deck:
+// QforgeDeck)` (stdlib/qforge/qforge_run, PR#2742) consumes a self-describing
+// QforgeDeck — the converged-cell H closure, the force-constants Φ, and the bare
+// ΔV|ψ⟩ bundles — NOT a QE deck-dir of (vc-relax.in · ph.in · scf.in) plane-wave
+// input files. The deck-dir → QforgeDeck ADAPTER (run the atoms→UPF→PW SCF front-
+// end to materialize H/Φ/ΔV from the .in files) is the remaining migration
+// blocker named in qforge_run.hexa's header — it is NOT yet wired. So this entry
+// makes the ROUTING DECISION terminal (QE is bypassed) and reports the adapter as
+// the unmet plumbing rather than renting a QE pod or fabricating a (λ,Tc). NO pod
+// ops, NO network, NO QE — a documented partial (d6), never a faked route.
+fn _dft_qforge_run(deck: str) -> int {
+    println("[dft-run] ENGINE = qforge — routing the deck to the hexa-native QFORGE")
+    println("[dft-run]   el-ph→Tc chain (stdlib/qforge/qforge_run, PR#2742) — Quantum ESPRESSO")
+    println("[dft-run]   (pw.x/ph.x) is NOT invoked for this deck (@L3 routing terminal).")
+    println("[dft-run]   @L5 screening: Hartree + LDA-exchange only (correlation XC deferred);")
+    println("[dft-run]     production |g|² accuracy is screening-functional-limited (surfaced, not faked).")
+    println("[dft-run]   deck: " + deck)
+    println("[dft-run]   ⚠ REMAINING PLUMBING (d6 honest partial): qforge_run consumes a")
+    println("[dft-run]     QforgeDeck (H closure · Φ force-constants · ΔV|ψ⟩ bundles), NOT a QE")
+    println("[dft-run]     deck-dir of .in files. The deck-dir → QforgeDeck adapter (atoms→UPF→PW")
+    println("[dft-run]     SCF front-end materializing H/Φ/ΔV) is the migration blocker named in")
+    println("[dft-run]     qforge_run.hexa — it is NOT yet wired, so no run is launched here.")
+    println("[dft-run]   → routing decision is CLOSED (QE bypassed); engine invocation awaits the")
+    println("[dft-run]     deck adapter. This routes the instant the adapter + front-end gate land.")
+    return 0
+}
+
 // dft_run — `hexa cloud dft-run <deck-dir> [--validate] [--go] [--force] [...]`.
 // PREVIEW unless --go. --validate runs the FREE dry-run + writes the stamp.
 pub fn dft_run(av: [str], start: int) -> int {
@@ -1556,25 +1613,18 @@ pub fn dft_run(av: [str], start: int) -> int {
     let disk = _dft_atoi(_dft_flag_val(av, start, "--disk", "60"))
     let owner = _dft_flag_val(av, start, "--owner", "(hexa-cloud dft-run)")
 
-    // --engine <qe|qforge> — which el-ph→Tc ENGINE produces the (λ,ω_log,Tc)
-    // result (@L3 migration wiring). DEFAULT = "qe" (Quantum ESPRESSO pw.x/ph.x)
-    // until the QFORGE production gate (g5 λ·Tc agreement on CaH6·LaH10·Li2MgH16)
-    // is green. `--engine qforge` opts the deck into the QFORGE el-ph→Tc chain
-    // (stdlib/qforge/orchestrator qforge_elph_to_tc): the DFPT |g|² stage still
-    // runs on QE (the cell→|g|² plane-wave front-end is the remaining migration
-    // blocker — see orchestrator.hexa header), but the moments→λ→Tc step is then
-    // computed by QFORGE instead of QE's allen-dynes, so a deck can route to the
-    // hexa-native engine the instant the front-end gate closes. An unknown engine
-    // is REFUSED (no silent fallback — d6).
+    // --engine <qe|qforge> — which el-ph→Tc ENGINE the deck DISPATCHES to (@L3
+    // routing wiring). DEFAULT = "qe" (Quantum ESPRESSO pw.x/ph.x) → byte-identical
+    // to the pre-`--engine` behavior. `--engine qforge` routes a DISPATCH (--go /
+    // --detach) to the hexa-native QFORGE engine (stdlib/qforge/qforge_run, PR#2742)
+    // instead of the QE rent chain — QE is NOT invoked for that deck. An unknown
+    // engine is REFUSED up-front (no silent fallback — d6). The ACTUAL branch is
+    // taken at the dispatch site below via the pure dft_engine_route decision, so
+    // that PREVIEW / --validate stay engine-agnostic (deck-shape + plan only).
     let engine = dft_engine_resolve(_dft_flag_val(av, start, "--engine", "qe"))
     if len(engine) == 0 {
         println("[dft-run] ✗ REFUSED — unknown --engine (use `qe` [default] or `qforge`).")
         return 2
-    }
-    if engine == "qforge" {
-        println("[dft-run] --engine qforge: el-ph→Tc routes through the hexa-native QFORGE chain")
-        println("[dft-run]   (qforge_elph_to_tc) once DFPT |g|² is available — DFPT front-end stays QE")
-        println("[dft-run]   until the production gate (g5 λ·Tc vs QE on CaH6·LaH10·Li2MgH16) closes.")
     }
 
     // deck validation — accept BOTH layouts (d4 single generic path):
@@ -1651,6 +1701,16 @@ pub fn dft_run(av: [str], start: int) -> int {
         println("[dft-run] PREVIEW — --go runs the chain SYNCHRONOUSLY (hours, blocks); --detach launches relax")
         println("[dft-run]   detached on the pod + returns 0, then `--resume` advances each terminal step ($-incurring).")
         return 0
+    }
+
+    // @L3 ENGINE ROUTE — past the PREVIEW gate this is a REAL dispatch (--go /
+    // --detach). dft_engine_route picks the engine PATH: "qforge" diverts the deck
+    // to the hexa-native QFORGE engine (_dft_qforge_run — NO QE rent, NO pw.x/ph.x),
+    // "qe" falls through to the QE rent chain UNCHANGED (0-diff for the default).
+    // This is the wiring that makes `--engine qforge` actually mean "do not run QE".
+    let route = dft_engine_route(engine, 1)
+    if route == "qforge" {
+        return _dft_qforge_run(deck)
     }
 
     // FIRE PRECONDITION (d16 gate) — refuse to rent for a deck that has not
