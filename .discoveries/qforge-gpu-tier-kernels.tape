@@ -24,3 +24,15 @@ engine = nvcc -arch=sm_120 ; cuBLAS TF32 tensor-op ; CUDA driver-JIT
   streamed resident = 25% of full-H footprint (double-buffered output-row tiles)
   streamed out == in-core out  max_rel_err = 0.000000e+00  (disjoint rows, no FP reorder)
   completion + footprint + parity all PASS
+
+# ── fused-cg THROUGHPUT gate CLOSED (2026-06-05) ──────────────────────────────
+@discovery fused-cg-ondevice-throughput-gate := "fused Sternheimer CG >=1.5x throughput gate MET"
+  seed     = "PR#2764 left fused-cg throughput at 1.01x — host-resident scalar control (2 DtoH+sync/iter)"
+  fix      = "3 stacked on-device levers: (1) on-device scalar reduction (dot+alpha/beta on GPU) "
+  fix      = "(2) CUDA-Graph capture of host-dep-free loop body (1 launch/iter) (3) parallel proj_out"
+  verdict  = "PASS — summer RTX 5070 sm_120 CUDA12.9 FREE pool (d7). best on-device (graph) ratio:"
+  verdict  = "  4.80x (N=128) · 6.15x (N=256) · 7.72x (N=512) · 9.26-9.28x (N=1024). gate>=1.5x MET."
+  parity   = "max_rel_err on-device-graph vs unfused = 1.70e-14 .. 2.04e-13 (<< 1e-9 tol). PASS."
+  honest   = "(d6) parallel proj uses tree (not sequential) dot order -> not bit-identical; FP64 "
+  honest   = "round-off keeps err <= 2.04e-13. cooperative persistent-CG no longer needed for gate."
+  tier     = "GATE_CLOSED_MEASURED"
