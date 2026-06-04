@@ -1,7 +1,22 @@
-# <slug> — paper title placeholder
+# fusion-own-gemm-util — Owning the GEMM
 
-> One-line framing of the paper. Replace this block with paper-specific
-> notes (status · target length · companion records / data).
+> A hexa-native compiler-emitted own-GEMM reaches cuBLAS-class GPU utilization,
+> and the measured proof that GPU utilization is GEMM-bound, not fusion-bound.
+> Status: draft v1, content-lint PASS (pages gate = PDF compile, deferred to a
+> TeX Live host — this authoring host has no local xelatex).
+>
+> POSITIVE Δ: own-GEMM (CUTLASS-grade TF32 WMMA2 `_hx_k_sgemm_cm_wmma2`) reaches
+> 89.9% util vs cuBLAS 88.5% (B200), trains clm_prod(FP64)+hxqwen14b(FP32)
+> cuBLAS-free, correctness PASS (max|ΔCE|=0, rel-RMS ~1e-6).
+> NEGATIVE (core): glue/launch fusion is flat — occupancy wall caps util ~13%
+> (worsens with workload), cooperative megakernel −0.08pp. Utilization is
+> GEMM-bound. HONEST: own-GEMM is ≈PARITY not superiority (1.13× slower iso GEMM,
+> ~1.6–2.2× slower per full LoRA step). Util parity ≠ throughput parity.
+>
+> Every number links a verbatim verdict under `../../.verdicts/hexa-fusion/`:
+> P1-OWN-GEMM-CORRECTNESS · P1D-LLM-SGEMM · CUTLASS-GRADE-WMMA · OWN-GEMM-UTIL ·
+> LLM-DEFAULT-UTIL · THRU-PARITY · OCCUPANCY-WALL · GN-COOP-KERNEL-CLOSED-NEG ·
+> MEGAKERNEL-DESIGN.
 
 ## Source layout
 

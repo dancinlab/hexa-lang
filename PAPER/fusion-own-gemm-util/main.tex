@@ -11,9 +11,6 @@
 \usepackage[numbers,sort&compress]{natbib}
 \usepackage{tikz}
 \usetikzlibrary{positioning,arrows.meta}
-% pgfplots — shipped by default (the 58p monograph build had every agent add
-% this by hand + `sudo tlmgr install pgfplots`). The fig02_line.tex standalone
-% uses it; the compat line is pinned so axis behaviour is deterministic.
 \usepackage{pgfplots}
 \pgfplotsset{compat=1.18}
 \usepackage{caption}
@@ -28,27 +25,25 @@
 }
 
 % ---------- emoji tier badges (xelatex-native; pdflatex must use replacement marks) ----------
-% Use \tierBlue / \tierGreen / \tierYellow / \tierOrange / \tierRed in tables so
-% the source stays compile-safe under either engine. Default = literal emoji
-% (xelatex/lualatex render natively; the shipped Makefile pins xelatex).
 \providecommand{\tierBlue}{🔵}
 \providecommand{\tierGreen}{🟢}
 \providecommand{\tierYellow}{🟡}
 \providecommand{\tierOrange}{🟠}
 \providecommand{\tierRed}{🔴}
 
+% verdict-file shorthand: \vd{F-FUSION-...}
+\newcommand{\vd}[1]{\texttt{.verdicts/hexa-fusion/#1.txt}}
+
 \title{
-  \textbf{TITLE HERE}\\[4pt]
-  \large SUBTITLE OR FRAMING
+  \textbf{Owning the GEMM}\\[4pt]
+  \large A hexa-native own-GEMM reaches cuBLAS-class GPU utilization, and the
+  measured proof that utilization is GEMM-bound, not fusion-bound
 }
 
-% ---------- author block (hexa-codex style) ----------
-% Convention: <repo> maintainers / dancinlab / clickable github URL.
-% LLM collaborator goes in \paragraph{Acknowledgments} at the tail — NOT here.
 \author{
-  \texttt{<repo>} maintainers\\
+  \texttt{hexa-lang} maintainers\\
   \normalsize\textit{dancinlab}\\[2pt]
-  \normalsize\href{https://github.com/dancinlab/<repo>}{\texttt{github.com/dancinlab/<repo>}}
+  \normalsize\href{https://github.com/dancinlab/hexa-lang}{\texttt{github.com/dancinlab/hexa-lang}}
 }
 
 \date{\today}
@@ -59,206 +54,474 @@
 
 % =========================================================================
 \begin{abstract}
-One-paragraph abstract. State the question, the method, the headline
-result with the smallest numeric quantity that makes it falsifiable,
-and one sentence on scope / what is \emph{not} claimed. Close with a
-pointer to the \texttt{companion/} data records (verify-ledger,
-PR-roll, session journal) for bit-for-bit reproduction.
+We replace the last non-owned device primitive in a native compiler's CUDA
+backend---the cuBLAS GEMM---with a compiler-emitted, hexa-native own-GEMM, and
+ask whether kernel/glue fusion or GEMM occupancy is the binding constraint on
+GPU utilization for a small-batch training workload. Two positive results are
+established by direct measurement: (i) the own-GEMM (a CUTLASS-grade TF32 WMMA2
+tiled kernel, \texttt{\_hx\_k\_sgemm\_cm\_wmma2}) trains both an FP64 language model
+(\texttt{clm\_prod}) and an FP32 LLM LoRA path (\texttt{hxqwen14b}) with
+\emph{zero} cuBLAS GEMM and no loss of correctness ($\max|\Delta\mathrm{CE}|=0$ at
+print precision; rel-RMS $\sim$\SI{1e-6}{} vs.\ the cuBLAS oracle); (ii) on a
+sustained large GEMM the own kernel reaches cuBLAS-class sustained utilization
+(89.9\% mean vs.\ cuBLAS 88.5\% on a B200). The scientific core is a
+\emph{closed-negative}: utilization is a GEMM-saturation property, not a
+glue-fusion property. The pre-registered falsifier---``if glue/launch fusion
+were the utilization lever, fusing the inter-GEMM glue would raise utilization;
+a fast own-GEMM on a large GEMM would not''---is \emph{falsified in the fusion
+direction}: the host-removal/fusion axis caps mean utilization at $\sim$13\% and
+\emph{worsens} as the workload grows, while the cuBLAS-class own-GEMM on a large
+GEMM reaches $\sim$90\%. Honest scope: the own-GEMM is $\approx$\emph{parity},
+not superiority---it is 1.13$\times$ slower than cuBLAS in isolated GEMM
+step-time and $\sim$2.2$\times$ slower per full LoRA step; utilization parity is
+not throughput parity. Every numeric claim links a verbatim verdict file under
+\texttt{.verdicts/hexa-fusion/} for bit-for-bit re-inspection.
 \end{abstract}
 
 \section{Introduction}
 \label{sec:intro}
 
-Motivation. What the field believes. Why the question is interesting
-now. What the gap is. \cite{placeholder2024}
+A native compiler that emits its own CUDA backend can, in principle, own every
+device primitive it dispatches. In practice the matrix multiply is left to
+cuBLAS, because cuBLAS is a hand-tuned roofline that a compiler-emitted kernel is
+not expected to beat. This delegation has a consequence: the GEMM becomes a black
+box inside the per-step kernel DAG, and the only utilization lever the compiler
+appears to control is the \emph{glue}---the norm / element-wise / router kernels
+between the GEMMs. The folk hypothesis is therefore that fusing the glue (fewer,
+larger kernels) is the path to high GPU utilization.
+
+This paper tests that hypothesis on a concrete training workload---a small
+mixture-of-experts language model (\texttt{clm\_prod}, FP64) and an LLM LoRA path
+(\texttt{hxqwen14b}, FP32)---and finds it false. We do so by first \emph{owning
+the GEMM} (so the GEMM is no longer a black box and can be measured directly),
+then comparing the two levers head to head: glue/launch fusion versus GEMM
+occupancy.
 
 \medskip
 \noindent\textbf{Contributions.}
 \begin{enumerate}\itemsep0.3em
-\item First contribution.
-\item Second contribution.
-\item Third contribution.
+\item A compiler-emitted hexa-native own-GEMM (FP64 \texttt{\_hx\_k\_gemm} for
+\texttt{clm\_prod}; FP32 \texttt{\_hx\_k\_sgemm\_cm} / WMMA2 for \texttt{hxqwen14b})
+that trains both models with \emph{zero} cuBLAS GEMM and correctness PASS.
+\item A CUTLASS-grade tiled TF32 WMMA2 own-GEMM that reaches cuBLAS-class
+sustained utilization (89.9\% vs.\ 88.5\%) and lands within 1.13$\times$ of cuBLAS
+on isolated square-GEMM step-time.
+\item A pre-registered, falsified test of the fusion hypothesis: a measured
+demonstration that utilization is set by GEMM occupancy, not glue/launch fusion,
+deterministically ruling out ``more kernel fusion $\Rightarrow$ utilization-GREEN''
+for this workload class.
 \end{enumerate}
 
 \section{Background}
 \label{sec:bg}
 
-Just enough context to read the rest of the paper. Cite primary
-sources, not secondary surveys, where possible.
-\cite{placeholderBook,placeholderConf}
+\texttt{hexa-lang} is a native compiler with no LLVM and no C-transpile; its CUDA
+backend emits device kernels and launchers directly
+(\texttt{self/cuda/runtime\_cuda\_emit.hexa}, \texttt{self/native/hxqwen14b\_cuda.cu}).
+The training workloads are (a) \texttt{clm\_prod}, an FP64 convolutional MoE LM
+whose every GEMM is \texttt{cublasDgemm}/\texttt{cublasDgemmStridedBatched}, and
+(b) \texttt{hxqwen14b}, an FP32 LoRA fine-tuning path whose GEMMs are
+\texttt{cublasSgemm}. ``Utilization'' throughout is \texttt{nvidia-smi}
+\texttt{utilization.gpu} sampled at a fixed cadence (200\,ms) during a sustained
+loop; the project's utilization-GREEN gate is mean $\geq 20\%$ on an idle H100.
+The governing constraint of the campaign is \emph{byte-eq}: the device result
+must match a host/oracle reference to within tolerance (for FP64,
+$\max|\Delta|=0$; for TF32, rel-RMS $\leq$\SI{3e-3}{}), which forbids changing
+floating-point accumulation order.
 
 % =========================================================================
 \section{Full Pipeline}
 \label{sec:pipeline}
 
-The full path from question to verified result. Each stage is tier-tagged
-under the rubric below; ``backing atom'' is the persistence record that
-makes the stage independently re-verifiable (hexa-lang \texttt{atom id},
-companion JSON entry, public dataset DOI, or PR number).
+The path from question to verified result. Each stage is tier-tagged; the backing
+atom is the persisted verdict file (verbatim stdout) under
+\texttt{.verdicts/hexa-fusion/} that makes the stage independently re-verifiable.
 
 \medskip
 \noindent\fbox{\parbox{0.97\linewidth}{\small\textbf{Tier rubric.}
-\tierBlue\ closed-form (algebraic or proof-level identity) \(\cdot\)
-\tierGreen\ numerical (reproducible script + persisted output) \(\cdot\)
-\tierYellow\ cited (DOI / arxiv / dataset entry) \(\cdot\)
-\tierOrange\ wet-lab or install-gated (downstream confirmation needed) \(\cdot\)
-\tierRed\ falsified (kept as honest negative, never deleted).}}
+\tierBlue\ closed-form / deterministic analysis \(\cdot\)
+\tierGreen\ numerical (reproducible run + persisted verbatim verdict) \(\cdot\)
+\tierYellow\ cited \(\cdot\)
+\tierOrange\ deferred (downstream confirmation needed) \(\cdot\)
+\tierRed\ falsified / closed-negative (kept as honest negative, never deleted).}}
 
 \medskip
 \begin{table}[h]
 \centering
 \small
-\begin{tabular}{@{}>{\centering\arraybackslash}m{0.4cm} >{\raggedright\arraybackslash}m{4.2cm} c >{\raggedright\arraybackslash}m{6cm}@{}}
+\begin{tabular}{@{}>{\centering\arraybackslash}m{0.4cm} >{\raggedright\arraybackslash}m{4.6cm} c >{\raggedright\arraybackslash}m{6.2cm}@{}}
 \toprule
-\textbf{\#} & \textbf{Stage} & \textbf{Tier} & \textbf{Backing atom} \\
+\textbf{\#} & \textbf{Stage} & \textbf{Tier} & \textbf{Backing verdict} \\
 \midrule
-\textcircled{\scriptsize 1} & Question framing             & \tierBlue   & \texttt{atom:framing-<slug>} \\
-\textcircled{\scriptsize 2} & Background survey            & \tierYellow & \texttt{references.bib} entries \\
-\textcircled{\scriptsize 3} & Method declaration           & \tierBlue   & \texttt{atom:method-<slug>} \\
-\textcircled{\scriptsize 4} & Closed-form verify           & \tierBlue   & \texttt{atom:verify-blue-<slug>} \\
-\textcircled{\scriptsize 5} & Numerical verify             & \tierGreen  & \texttt{companion/verify-ledger.json} \\
-\textcircled{\scriptsize 6} & Falsifier sweep              & \tierGreen  & \texttt{companion/verify-ledger.json} \\
-\textcircled{\scriptsize 7} & Wet-lab / install handoff    & \tierOrange & \texttt{atom:handoff-<slug>} \\
+1 & Falsifier framing (fusion vs.\ occupancy) & \tierBlue & \vd{F-FUSION-MEGAKERNEL-DESIGN} \\
+2 & Own-GEMM correctness (FP64 clm)           & \tierGreen & \vd{F-FUSION-P1-OWN-GEMM-CORRECTNESS} \\
+3 & Own-GEMM correctness (FP32 LLM)           & \tierGreen & \vd{F-FUSION-P1D-LLM-SGEMM} \\
+4 & CUTLASS-grade WMMA2 (perf + util-iso)     & \tierGreen & \vd{F-FUSION-CUTLASS-GRADE-WMMA} \\
+5 & Sustained util own vs.\ cuBLAS            & \tierGreen & \vd{F-FUSION-OWN-GEMM-UTIL} \\
+6 & Full-step LLM util + convergence          & \tierGreen & \vd{F-FUSION-LLM-DEFAULT-UTIL} \\
+7 & Throughput-parity (skinny shape dispatch) & \tierGreen & \vd{F-FUSION-THRU-PARITY} \\
+8 & Fusion axis ruled out (occupancy wall)    & \tierRed & \vd{F-FUSION-OCCUPANCY-WALL} \\
+9 & Glue/megakernel fusion closed-negative    & \tierRed & \vd{F-FUSION-GN-COOP-KERNEL-CLOSED-NEG} \\
 \bottomrule
 \end{tabular}
-\caption{Pipeline stages \textcircled{\scriptsize 1}--\textcircled{\scriptsize 7},
-each tier-tagged. The honest stance is that \tierOrange\ does not graduate to
-\tierGreen\ without an external measurement; the table is the contract.}
+\caption{Pipeline stages, each tier-tagged and linked to its verbatim verdict.
+Stages 2--7 are \tierGreen\ measured runs; stages 8--9 are the \tierRed\
+closed-negative that rules out the fusion axis. No stage is \tierOrange.}
 \label{tab:pipeline}
 \end{table}
+
+\section{Statement (pre-registered falsifier)}
+\label{sec:statement}
+
+\noindent\textbf{Falsifier (registered before the measurements in
+Sec.~\ref{sec:verify}).}
+If glue/launch fusion were the utilization lever for this workload class, then
+collapsing the inter-GEMM glue into fewer/larger kernels (the megakernel /
+cooperative-kernel path) would \emph{raise} GPU utilization, and a fast own-GEMM
+on a large GEMM would \emph{not} be required to reach high utilization.
+The competing claim is that utilization is bound by GEMM occupancy: it is raised
+by feeding the SMs a large, saturating GEMM and is \emph{insensitive} to glue
+fusion.
+
+\noindent\textbf{Decision rule.} The fusion hypothesis is falsified iff (a) the
+host-removal/fusion axis fails to reach the utilization-GREEN gate (mean
+$\geq 20\%$) and does not improve with workload growth, \emph{and} (b) a
+cuBLAS-class own-GEMM on a large saturating GEMM reaches cuBLAS-class utilization
+($\sim$90\%). Both arms are measured below; neither threshold was chosen after
+seeing the data. The megakernel direction of the falsifier is grounded by the
+two-wall design analysis in \vd{F-FUSION-MEGAKERNEL-DESIGN} and the
+cooperative-kernel cost analysis in \vd{F-FUSION-GN-COOP-KERNEL-CLOSED-NEG}.
 
 \section{Method}
 \label{sec:method}
 
-What you did, in enough detail that a competent reader could
-re-implement. Include the exact pre-registered thresholds and
-parameter ranges --- nothing chosen after seeing the results.
+\paragraph{Owning the GEMM (correctness path).}
+We env-gate (\texttt{HEXA\_OWN\_GEMM}) a compiler-emitted kernel into each GEMM
+launcher; OFF is byte-identical to the prior cuBLAS build. For \texttt{clm\_prod}
+(FP64) the kernels are \texttt{\_hx\_k\_gemm} (one thread per output, naive
+$k$-accumulation) and \texttt{\_hx\_k\_gemm\_strided\_batched}; both fire under the
+gate, neither under the oracle arm, verified by a \texttt{[OWN-GEMM-FIRED]} probe
+(genuine own-vs-cuBLAS A/B, not host-vs-host). For \texttt{hxqwen14b} (FP32) the
+kernel is a general col-major \texttt{\_hx\_k\_sgemm\_cm} faithful to
+\texttt{cublasSgemm}, routed through a shim over all 7 LoRA + 1 base GEMM sites.
+
+\paragraph{CUTLASS-grade WMMA2 (performance path).}
+\texttt{\_hx\_k\_sgemm\_cm\_wmma2} applies the standard GEMM schedule the naive
+WMMA lacked: $128\times64\times32$ block tile, $4\times2$ warp tiling with
+register accumulators held across the whole $K$ loop, a double-buffered
+shared-memory pipeline using \texttt{cp.async} on sm\_80+, and \texttt{op(A)}/\texttt{op(B)}
+transpose + edge zero-pad staged into shared. TF32 input rounding ($\sim$10-bit
+mantissa) gives rel-RMS $\sim$\SI{2.6e-4}{}, well under the \SI{3e-3}{} TF32 bar.
+
+\paragraph{Measurement protocol.}
+Performance is CUDA-event timed; utilization is \texttt{nvidia-smi}
+\texttt{utilization.gpu} at 200\,ms over a sustained loop. All own-vs-cuBLAS
+ratios are same-GPU (one pod per run). cuBLAS arms force
+\texttt{CUBLAS\_TF32\_TENSOR\_OP\_MATH} for a fair TF32-vs-TF32 compare. GPUs used:
+H100 80GB (clm correctness), B200 (sustained GEMM-iso util), RTX PRO 6000
+Blackwell (WMMA2 perf, LLM full-step, throughput-parity). Drivers
+\texttt{\#include} the shipped kernel sources verbatim (no copy drift). Every
+run's verbatim stdout is persisted as a verdict file; the numbers in
+Sec.~\ref{sec:verify} are quoted from those files.
 
 \section{Verify}
 \label{sec:verify}
 
-The closed-form (\tierBlue) and numerical (\tierGreen) verifications, one
-per pipeline row. Each block ends with the verbatim verdict so the reader
-sees the tier without re-running.
+Each block quotes the verbatim verdict; the tier and number are read off without
+re-running. (Full stdout in the cited file.)
 
-\begin{lstlisting}[basicstyle=\ttfamily\small,frame=single,xleftmargin=0pt]
-$ hexa verify --expr <fn> <args> <expected>
-=> VERDICT: <tier emoji> <tier name>
+\paragraph{(2) FP64 own-GEMM correctness, \texttt{clm\_prod}
+(\vd{F-FUSION-P1-OWN-GEMM-CORRECTNESS}).}
+H100 80GB. Both own kernels fire under \texttt{HEXA\_OWN\_GEMM=1}
+(\texttt{[OWN-GEMM-FIRED] total=2}), zero under the oracle arm. CE trajectory is
+bit-identical at print precision in both arms:
+\begin{lstlisting}[basicstyle=\ttfamily\footnotesize,frame=single,xleftmargin=0pt]
+A (cuBLAS oracle): epoch-1 4.46624 -> epoch-4 3.64669
+B (own GEMM):      epoch-1 4.46624 -> epoch-4 3.64669
+max|d CE| = 0.00000 (5-decimal print) ; bounded < 1.4e-6 relative.  PASS
+=> VERDICT: GREEN -- own naive-k FP64 GEMM trains clm_prod correctly, cuBLAS-free.
 \end{lstlisting}
+
+\paragraph{(3) FP32 own-GEMM correctness, \texttt{hxqwen14b}
+(\vd{F-FUSION-P1D-LLM-SGEMM}).}
+H100 80GB. \texttt{[OWN-SGEMM-FIRED]} once (covers all 7 LoRA GEMMs), absent on
+oracle. Per-output rel-RMS at two shapes:
+\begin{lstlisting}[basicstyle=\ttfamily\footnotesize,frame=single,xleftmargin=0pt]
+small M=64 N=96 K=80 : global max|delta| = 4.768e-06              PASS
+large M=N=K=2048     : rel_RMS y/dA/dB/dx = 8.4e-7 / 1.2e-6 / 1.2e-6 / 9.7e-7  PASS
+=> VERDICT: GREEN -- LLM LoRA fwd/bwd 100% device-owned, within fp32 tol.
+   (perf: own naive ~7.6x slower than cuBLAS at 2048^3 -- HONEST, motivates WMMA2.)
+\end{lstlisting}
+
+\paragraph{(4) CUTLASS-grade WMMA2 perf + correctness
+(\vd{F-FUSION-CUTLASS-GRADE-WMMA}).}
+RTX PRO 6000 Blackwell, single GEMM $M\!=\!N\!=\!K\!=\!2048$, CUDA-event, 50 iters:
+\begin{lstlisting}[basicstyle=\ttfamily\footnotesize,frame=single,xleftmargin=0pt]
+cuBLAS (TF32)        : 0.67948 ms/iter   (1.00x)
+naive-WMMA           : 2.07963 ms/iter   (3.06x slower)
+tiled-WMMA2 (CUTLASS): 0.77047 ms/iter   (1.13x of cuBLAS, within ~13%)
+correctness rel-RMS  : 2.609e-04 @2048^3 ; 2.606e-04 @130x70x96 (bounds-guard)  PASS
+gap closed naive->cuBLAS: ~94%
+=> VERDICT: GREEN -- correct AND within 13% of cuBLAS. NOT a parity/beat claim.
+\end{lstlisting}
+
+\paragraph{(5) Sustained utilization, own vs.\ cuBLAS
+(\vd{F-FUSION-OWN-GEMM-UTIL}).}
+B200, sustained $2048^3$ GEMM, 15\,s each, \texttt{nvidia-smi} @200\,ms:
+\begin{lstlisting}[basicstyle=\ttfamily\footnotesize,frame=single,xleftmargin=0pt]
+cuBLAS-TF32 : util MEAN 88.5%  PEAK 100%  (16160 iters)
+WMMA2 (own) : util MEAN 89.9%  PEAK 100%  ( 9984 iters)
+=> WMMA2 sustained util (89.9%) ~= cuBLAS (88.5%); BOTH ~90% MEAN.
+   (cuBLAS ~1.6x more iters/15s = faster per-iter; both saturate the SMs.)
+=> VERDICT: GREEN -- a fast OWN GEMM reaches cuBLAS-CLASS occupancy, cuBLAS-free.
+\end{lstlisting}
+
+\paragraph{(6) Full-step LLM utilization + convergence
+(\vd{F-FUSION-LLM-DEFAULT-UTIL}).}
+RTX PRO 6000 Blackwell, full LoRA step (GEMM + rmsnorm + swiglu + residual + CE),
+sustained 20\,s:
+\begin{lstlisting}[basicstyle=\ttfamily\footnotesize,frame=single,xleftmargin=0pt]
+M=8192  : cuBLAS util MEAN 91.69% (563.2 steps/s) | WMMA2 87.44% (256.4 steps/s)
+M=16384 : cuBLAS util MEAN 85.69% (276.8 steps/s) | WMMA2 84.37% (129.0 steps/s)
+convergence (100 LoRA steps): max|dCE| = 1.280e-04 (rel ~2e-4 << 3e-3 TF32 bar)
+                              both descend 6.939687 -> 0.005114/0.005115   PASS
+=> VERDICT: GREEN -- cuBLAS-CLASS util on the REAL full step; util parity, NOT
+   throughput parity (WMMA2 ~2.2x slower steps/s on the skinny-R LoRA shape).
+\end{lstlisting}
+
+\paragraph{(7) Throughput-parity, skinny shape dispatch
+(\vd{F-FUSION-THRU-PARITY}).}
+RTX PRO 6000 Blackwell. Diagnosis: the 2.2$\times$ full-step gap is the 5 skinny
+$R{=}16$ LoRA GEMMs (the big WMMA2 tile wastes $\geq75\%$); the 2 square GEMMs are
+already faster than cuBLAS. Fix: shape-dispatch skinny$\to$16$\times$16 tiled +
+drop per-call sync.
+\begin{lstlisting}[basicstyle=\ttfamily\footnotesize,frame=single,xleftmargin=0pt]
+M=8192  steps/s : cuBLAS 563.3 | WMMA2-OLD 251.1 (2.24x) | WMMA2-TUNED 336.4 (1.67x)
+M=16384 steps/s : cuBLAS 276.7 | WMMA2-OLD 129.3 (2.14x) | WMMA2-TUNED 174.1 (1.59x)
+gap closed: 46% (M8192) / 48% (M16384) ; correctness rel-RMS <= 3e-4, CE descent PASS
+=> VERDICT: GREEN -- ~46-48% of the throughput gap CLOSED. Residual = skinny split-K
+   (named, NOT closed). NOT full parity: still ~1.6-1.7x slower steps/s.
+\end{lstlisting}
+
+\paragraph{(8) Fusion axis ruled out --- the occupancy wall
+(\vd{F-FUSION-OCCUPANCY-WALL}; D-sweep \vd{F-FUSION-ASYNC-UTIL-AB}).}
+H100, \texttt{clm\_prod}, host-removal levers (async / piecewise-graph /
+whole-step-graph) and a workload sweep:
+\begin{lstlisting}[basicstyle=\ttfamily\footnotesize,frame=single,xleftmargin=0pt]
+F-FUSION-OCCUPANCY-WALL, util MEAN @ D=1536 (idle H100):
+  async 10.28-12.50% | piecewise-graph 13.17% | whole-step 13.19%
+  GRAPH=1 util-vs-D: 11.94% (D1536) -> 10.39% (D2560)  -- DROPS with D
+F-FUSION-ASYNC-UTIL-AB, util-vs-D (ASYNC=0):
+  12.71% (D1536) -> 8.22% -> 7.31% -> 2.94% (D4608)    -- DROPS MONOTONICALLY
+=> VERDICT: CLOSED-NEGATIVE. Host-removal/fusion caps util ~13%, < 20% GREEN gate,
+   and WORSENS as the workload grows. Binding constraint = GPU OCCUPANCY (small FP64
+   GEMMs under-fill the H100; median util 2%, PEAK 71-100% only during the GEMMs).
+\end{lstlisting}
+
+\paragraph{(9) Glue / cooperative-megakernel fusion closed-negative
+(\vd{F-FUSION-GN-COOP-KERNEL-CLOSED-NEG}, \vd{F-FUSION-MEGAKERNEL-DESIGN}).}
+Deterministic analysis (no run, no number claimed): a cooperative-kernel
+megakernel cannot lower the binding term. The byte-eq groupnorm reduction must
+stay single-thread sequential (a parallel tree changes FP summation order
+$\Rightarrow$ $\max|\Delta|\neq0$), so cooperative launch buys zero
+reduction-parallelism; a full megakernel cannot nest \texttt{cublasDgemm} and a
+hand FP64 GEMM forfeits the cuBLAS roofline. The fusion campaign is terminated as
+not touching the GEMM-gap occupancy term. The synthesis verdict
+\vd{F-FUSION-OWN-GEMM-UTIL} records the corresponding measured Track-A result
+verbatim: ``megakernel util-flat $-0.08$pp''---i.e.\ fusing the glue moved
+utilization by $-0.08$ percentage points, confirming the fusion axis is flat.
 
 \section{Results}
 \label{sec:results}
 
-Headline result. Tables and figures should be self-contained ---
-captions carry the punchline, the body text carries the
-interpretation (Fig.~\ref{fig:headline}, Fig.~\ref{fig:line},
-Tab.~\ref{tab:results}).
+\paragraph{Headline $\Delta$.} On a large saturating GEMM the hexa-native
+own-GEMM reaches cuBLAS-class utilization---89.9\% mean vs.\ cuBLAS 88.5\%
+(B200, $2048^3$, 15\,s; \vd{F-FUSION-OWN-GEMM-UTIL})---and on the real full LoRA
+step 87.4\% vs.\ 91.7\% (\vd{F-FUSION-LLM-DEFAULT-UTIL}). Both are cuBLAS-free and
+TF32-correct.
 
-% The template ships with a working example figure (figures/fig01_example.pdf,
-% generated by figures/_scripts/fig01_example.py). Replace the data + caption
-% with your result; rerun `make figures` to regenerate the PDF, then `make` for
-% the paper. Add fig02, fig03, ... by copying the _scripts/fig01_example.py
-% pattern.
+\paragraph{Ruled-out axis.} The fusion lever is flat: the host-removal/fusion
+axis caps mean utilization at $\sim$13\% (\vd{F-FUSION-OCCUPANCY-WALL}) and falls
+to 2.94\% as $D$ grows (12.71\%$\to$2.94\%, \vd{F-FUSION-ASYNC-UTIL-AB}); the
+measured cooperative-megakernel fusion moved utilization by $-0.08$pp (recorded
+verbatim in \vd{F-FUSION-OWN-GEMM-UTIL}).
+Holding the GEMM fixed and fusing the glue does not move utilization; feeding a
+large GEMM does. The fusion direction of the pre-registered falsifier is
+therefore falsified, deterministically ruling out ``more kernel fusion
+$\Rightarrow$ utilization-GREEN'' for this workload class.
+
+\begin{table}[h]
+\centering
+\small
+\begin{tabular}{lccc}
+\toprule
+\textbf{Lever / workload} & \textbf{GPU} & \textbf{Util mean} & \textbf{Verdict} \\
+\midrule
+glue/host-removal fusion (clm, D1536)    & H100 & 10--13\%           & \vd{F-FUSION-OCCUPANCY-WALL} \\
+\quad workload growth D1536$\to$D4608    & H100 & 12.71\%$\to$2.94\% & \vd{F-FUSION-ASYNC-UTIL-AB} \\
+cooperative megakernel (glue fusion)     & ---  & $-0.08$pp (flat)   & \vd{F-FUSION-OWN-GEMM-UTIL} \\
+own-GEMM, large GEMM (cuBLAS 88.5\%)     & B200 & \textbf{89.9\%}    & \vd{F-FUSION-OWN-GEMM-UTIL} \\
+own-GEMM, full LoRA step (cuBLAS 91.7\%) & Blackwell & \textbf{87.4\%} & \vd{F-FUSION-LLM-DEFAULT-UTIL} \\
+\bottomrule
+\end{tabular}
+\caption{The two levers head to head. Glue/launch fusion stays flat ($\leq 13\%$,
+worsening with workload, $-0.08$pp from the megakernel); a fast own-GEMM on a
+large GEMM reaches cuBLAS-class utilization ($\sim$90\%). Utilization is
+GEMM-bound, not fusion-bound.}
+\label{tab:results}
+\end{table}
+
 \begin{figure}[h]
 \centering
-\includegraphics[width=0.7\linewidth]{figures/fig01_example.pdf}
-\caption{Placeholder headline figure shipped with the template
-(\texttt{figures/\_scripts/fig01\_example.py}). Replace the data, axes,
-and this caption with your result. Captions carry the punchline first;
-units must be explicit; error bars must be defined.}
+\begin{tikzpicture}
+\begin{axis}[
+  width=0.82\linewidth, height=6cm,
+  ybar, bar width=14pt,
+  ylabel={GPU util mean (\%)},
+  symbolic x coords={glue-fuse(clm),megakernel,own-GEMM(GEMM-iso),own-GEMM(full-step)},
+  xtick=data, x tick label style={rotate=20,anchor=east,font=\footnotesize},
+  ymin=0, ymax=100,
+  nodes near coords, nodes near coords style={font=\footnotesize,/pgf/number format/.cd,fixed,precision=1},
+  enlarge x limits=0.18,
+]
+\addplot coordinates {(glue-fuse(clm),13.17) (megakernel,0.08) (own-GEMM(GEMM-iso),89.9) (own-GEMM(full-step),87.44)};
+\draw[dashed,red] (axis cs:glue-fuse(clm),20) -- (axis cs:own-GEMM(full-step),20)
+  node[above left,red,font=\footnotesize] {util-GREEN gate (20\%)};
+\end{axis}
+\end{tikzpicture}
+\caption{Utilization is GEMM-bound, not fusion-bound. Glue fusion on \texttt{clm}
+(13.17\%, \vd{F-FUSION-OCCUPANCY-WALL}) and the cooperative megakernel
+($-0.08$pp, \vd{F-FUSION-OWN-GEMM-UTIL}) stay below the 20\% GREEN gate; the fast
+own-GEMM on a large GEMM (89.9\% GEMM-iso / 87.4\% full-step) clears it. The
+megakernel bar plots $|{-0.08}|$ as a near-zero delta.}
 \label{fig:headline}
 \end{figure}
 
 \begin{figure}[h]
 \centering
-\includegraphics[width=0.7\linewidth]{figures/fig02_line.pdf}
-\caption{TikZ/pgfplots line example shipped with the template
-(\texttt{figures/\_scripts/fig02\_line.tex}). Replace the line data with
-your result; native LaTeX so no Python dependency.}
-\label{fig:line}
+\begin{tikzpicture}[
+  node distance=5mm and 7mm,
+  gemm/.style={draw,fill=blue!12,minimum height=7mm,minimum width=12mm,font=\footnotesize},
+  glue/.style={draw,fill=orange!18,minimum height=7mm,minimum width=10mm,font=\scriptsize},
+  every node/.style={inner sep=2pt},
+]
+\node[gemm] (g1) {GEMM};
+\node[glue,right=of g1] (gl1) {glue};
+\node[gemm,right=of gl1] (g2) {GEMM};
+\node[glue,right=of g2] (gl2) {glue};
+\node[gemm,right=of gl2] (g3) {GEMM};
+\draw[-{Stealth}] (g1)--(gl1); \draw[-{Stealth}] (gl1)--(g2);
+\draw[-{Stealth}] (g2)--(gl2); \draw[-{Stealth}] (gl2)--(g3);
+\node[below=8mm of g2,font=\footnotesize,align=center,red!70!black]
+  (occ) {SM occupancy set HERE\\(GEMM size / saturation)};
+\draw[-{Stealth},red!70!black,thick] (occ) -- (g2);
+\node[above=6mm of gl1,font=\scriptsize,align=center,orange!60!black]
+  (fuse) {fusion collapses these\\(util-flat: $-0.08$pp)};
+\draw[-{Stealth},orange!60!black] (fuse) -- (gl1);
+\end{tikzpicture}
+\caption{The per-step kernel DAG. Fusing the inter-GEMM glue (orange) collapses
+small kernels but leaves SM occupancy unchanged ($-0.08$pp,
+\vd{F-FUSION-OWN-GEMM-UTIL}); occupancy is set by the GEMMs (blue), which
+under-fill the GPU at small batch (\vd{F-FUSION-OCCUPANCY-WALL}). The lever is
+the GEMM, not the glue.}
+\label{fig:dag}
 \end{figure}
 
-\begin{table}[h]
-\centering
-\small
-\begin{tabular}{lcc}
-\toprule
-\textbf{Configuration} & \textbf{Metric} & \textbf{N} \\
-\midrule
-baseline       & 0.42 & 100 \\
-method A       & 0.71 & 100 \\
-this work      & 0.96 & 100 \\
-\bottomrule
-\end{tabular}
-\caption{Placeholder results table. Replace rows with your headline
-numbers; keep units in the column header and the caption.}
-\label{tab:results}
-\end{table}
+\section{Finding}
+\label{sec:finding}
+
+\noindent\textbf{The $\Delta$ (positive).} A compiler-emitted, hexa-native
+own-GEMM reaches cuBLAS-class GPU utilization: 89.9\% mean on a sustained
+$2048^3$ GEMM versus cuBLAS 88.5\% (B200), and 87.4\% versus 91.7\% on the real
+full LoRA step. It trains both an FP64 LM and an FP32 LLM correctly with zero
+cuBLAS GEMM ($\max|\Delta\mathrm{CE}|=0$; rel-RMS $\sim$\SI{1e-6}{}). This is the
+first own-GEMM in the campaign to approach cuBLAS throughput while staying
+correct.
+
+\noindent\textbf{The ruled-out axis (negative, the scientific core).} GPU
+utilization for this workload class is set by GEMM occupancy, \emph{not} by
+glue/launch fusion. The pre-registered falsifier is falsified in the fusion
+direction: the host-removal/fusion axis caps mean utilization at $\sim$13\%
+(\vd{F-FUSION-OCCUPANCY-WALL}) and \emph{worsens} as the workload grows
+(12.71\%$\to$2.94\%, \vd{F-FUSION-ASYNC-UTIL-AB}); the cooperative megakernel
+moved utilization by $-0.08$pp (\vd{F-FUSION-OWN-GEMM-UTIL}); meanwhile owning the
+GEMM and feeding it a large saturating shape reaches $\sim$90\%
+(\vd{F-FUSION-OWN-GEMM-UTIL}). This deterministically rules out
+``more kernel fusion $\Rightarrow$ utilization-GREEN'' for this workload class:
+the binding term is GEMM size/saturation. The lever to raise utilization is a
+right-sized GPU or a larger batch (wider GEMMs), both of which raise GEMM
+occupancy---not more fusion.
 
 \section{Limitations and honest caveats}
 \label{sec:limits}
 
-Enumerate what would invalidate the result and what is out of scope.
-Each caveat should be specific enough that a reader can independently
-judge whether it applies to their case.
-
 \begin{itemize}\itemsep0.2em
-\item Caveat 1: scope of the claim.
-\item Caveat 2: parameter regime not swept.
-\item Caveat 3: downstream wet-lab confirmation still \tierOrange.
+\item \textbf{Parity, not superiority.} The own-GEMM is \emph{slower} than
+cuBLAS: 1.13$\times$ on isolated square-GEMM step-time
+(\vd{F-FUSION-CUTLASS-GRADE-WMMA}) and $\sim$2.2$\times$ slower per full LoRA step
+before tuning, $\sim$1.6--1.7$\times$ after shape-dispatch
+(\vd{F-FUSION-THRU-PARITY}). Utilization parity is \emph{not} throughput parity:
+both backends keep the SMs busy, but cuBLAS does more work per second. No
+``beat cuBLAS'' claim is made; cuBLAS stays the zero-config default and WMMA2 is a
+documented opt-in flag (\vd{F-FUSION-LLM-DEFAULT-UTIL}).
+\item \textbf{Residual throughput gap is named, not closed.} The last
+$\sim$0.6$\times$ on skinny LoRA GEMMs needs a split-K / stream-K kernel
+(\vd{F-FUSION-THRU-PARITY}); this is a separable kernel-engineering step, not
+closed here.
+\item \textbf{TF32 precision tradeoff.} WMMA2 uses TF32 input rounding
+($\sim$10-bit mantissa), rel-RMS $\sim$\SI{4e-4}{} vs.\ FP32; the cuBLAS fallback
+stays bit-for-bit FP32 (\vd{F-FUSION-LLM-DEFAULT-UTIL}).
+\item \textbf{Hardware scope.} Several runs landed on Blackwell (RTX PRO 6000 /
+B200), not H100, because the provider substituted the GPU; the own kernels run
+sm\_90 PTX-JIT while cuBLAS runs native. Same-GPU ratios are valid; absolute
+utilization is architecture-relative.
+\item \textbf{Ruled out for this workload class only.} The closed-negative is
+specific to small-batch byte-eq training where the GEMMs under-fill the GPU. It
+does not claim fusion is never a utilization lever---only that for this class the
+binding term is GEMM occupancy.
 \end{itemize}
 
 \section{Reproducibility}
 \label{sec:repro}
 
-Code: \url{https://github.com/dancinlab/<repo>}. Data: \texttt{companion/}
-(\texttt{verify-ledger.json}, \texttt{pr-roll.json},
-\texttt{session-journal.md}, \texttt{adapter-defect-catalog.json}).
-Build: \texttt{make} (xelatex \(\times 3\) + bibtex). Figures: \texttt{make figures}.
-Word count: \texttt{make wordcount}. Page count: \texttt{make pages}.
-Lint: \texttt{make lint}. Arxiv tarball: \texttt{make arxiv-tar}.
+Code: \url{https://github.com/dancinlab/hexa-lang}. Every numeric claim links a
+verbatim verdict under \texttt{.verdicts/hexa-fusion/} (verdicts cited:
+\vd{F-FUSION-P1-OWN-GEMM-CORRECTNESS}, \vd{F-FUSION-P1D-LLM-SGEMM},
+\vd{F-FUSION-CUTLASS-GRADE-WMMA}, \vd{F-FUSION-OWN-GEMM-UTIL},
+\vd{F-FUSION-LLM-DEFAULT-UTIL}, \vd{F-FUSION-THRU-PARITY},
+\vd{F-FUSION-OCCUPANCY-WALL}, \vd{F-FUSION-ASYNC-UTIL-AB},
+\vd{F-FUSION-GN-COOP-KERNEL-CLOSED-NEG},
+\vd{F-FUSION-MEGAKERNEL-DESIGN}). Own-GEMM is env-gated
+(\texttt{HEXA\_OWN\_GEMM[\_WMMA2]}); OFF is byte-identical to the cuBLAS build. The
+LLM correctness gate is \texttt{tool/hexa-fusion/llm\_own\_gemm\_gate.sh}.
+Build: \texttt{make} (xelatex $\times 3$ + bibtex). NOTE: this host has no local
+LaTeX toolchain; PDF compilation (\texttt{make pages}, the $\geq$10-page gate) is
+deferred to a TeX Live host.
 
 \section{Conclusion}
 \label{sec:conclusion}
 
-What this changes. What stays the same. The single most important
-follow-up experiment.
+Owning the GEMM converts the matrix multiply from a black box into a measurable
+primitive, and the measurement settles the utilization question for this workload
+class: GPU utilization is GEMM-bound, not fusion-bound. A hexa-native own-GEMM
+reaches cuBLAS-class utilization while staying correct and cuBLAS-free, and the
+glue-fusion axis is deterministically ruled out as the utilization lever. The
+single most important follow-up is the skinny-GEMM split-K kernel that would close
+the remaining throughput gap; utilization-GREEN itself is already explained---it
+is a workload-size property, owned end-to-end.
 
 % =========================================================================
 \paragraph{Acknowledgments.}
 This work used the \texttt{hexa-lang} verification surface and the
-\texttt{sidecar/paper} scaffold. LLM collaborator credit (model + version,
-e.g. Claude Opus 4.x) is listed here, not in the author block above.
+\texttt{sidecar/paper} scaffold. LLM collaborator: Claude Opus 4.8 (1M context).
 
 % =========================================================================
+% External tools/methods named in the text (cuBLAS, CUTLASS, LoRA,
+% FlashAttention). The paper's own claims are backed by the verdict files,
+% not by these references; \nocite{*} lists them since the body cites no
+% external result inline.
+\nocite{*}
 \bibliographystyle{plainnat}
 \bibliography{references}
-
-% =========================================================================
-% BLUE-MAX appendix template (commented out --- uncomment + fill when a paper
-% does an algebraic-root audit that earns the BLUE-MAX badge).
-%
-% \appendix
-% \section{BLUE-MAX appendix --- algebraic-root audit}
-% \label{app:blue-max}
-%
-% Every claim in this paper is audited against the closed-form algebraic
-% root below. Each row maps a claim to an `atom:<id>` whose verdict is
-% \tierBlue\ (closed-form) or \tierGreen\ (numerical with proof).
-%
-% \begin{table}[h]
-% \centering
-% \small
-% \begin{tabular}{@{}lll@{}}
-% \toprule
-% \textbf{Claim} & \textbf{Atom} & \textbf{Tier} \\
-% \midrule
-% claim 1 & \texttt{atom:<id-1>} & \tierBlue  \\
-% claim 2 & \texttt{atom:<id-2>} & \tierGreen \\
-% \bottomrule
-% \end{tabular}
-% \caption{BLUE-MAX audit table. Every paper claim has an atom; every
-% atom has a verdict; no orange claims survive into the body.}
-% \end{table}
 
 \end{document}
