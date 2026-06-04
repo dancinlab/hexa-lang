@@ -212,8 +212,12 @@ fn emit_runtime_cuda_c() -> str {
             "        if (v && v[0]) {\n" +
             "            g_forge_async = (v[0] != '0') ? 1 : 0;\n" +
             "        } else {\n" +
+            "            /* HEXA-FUSION E2: the HEXA_FUSE_ALL meta-flag turns the\n" +
+            "             * device-resident byte-eq stack on as a whole, so async\n" +
+            "             * follows it too (same coupling as CLM_PROD_DEVRESIDENT). */\n" +
             "            const char* dr = getenv(\"CLM_PROD_DEVRESIDENT\");\n" +
-            "            g_forge_async = (dr && dr[0]) ? 1 : 0;\n" +
+            "            const char* fa = getenv(\"HEXA_FUSE_ALL\");\n" +
+            "            g_forge_async = ((dr && dr[0]) || (fa && fa[0])) ? 1 : 0;\n" +
             "        }\n" +
             "    }\n" +
             "    return g_forge_async;\n" +

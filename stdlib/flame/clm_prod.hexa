@@ -38,6 +38,28 @@ use "stdlib/flame/nn_lib"
 use "stdlib/flame/quant_lib"
 use "stdlib/flame/optim_lib"
 
+// ── HEXA-FUSION E2: HEXA_FUSE_ALL convenience meta-flag ──────────────────────
+// The full landed fusion + device-resident stack is 100% opt-in env flags,
+// default OFF (H1D-ANIMA-ENV-WIRING.md #2727). A consumer (anima clm_prod) must
+// otherwise hand-export ~8 byte-eq levers to escape the un-fused baseline. This
+// helper folds the whole byte-eq stack behind ONE gate:
+//
+//   HEXA_FUSE_ALL=1  ⇒  every CLM_PROD_DEVRESIDENT / DEVFEED / BATCHED and every
+//                       HEXA_FUSE_* lever reads as SET (HEXA_CUDA_ASYNC follows
+//                       CLM_PROD_DEVRESIDENT in the runtime, so it turns on too).
+//
+// ADDITIVE + SAFE: an explicit individual flag still independently turns its own
+// lever on — the meta-flag only ORs an extra "on" source, it never forces a
+// lever OFF. BYTE-EQ ONLY: this gate covers exactly the verified max|Δ|=0 levers
+// (L3-a/b/c/d fusion + device-resident chain, F-FUSION-L3*-AB verdicts). It does
+// NOT touch HEXA_OWN_GEMM* — that is a TF32 precision change and stays an
+// explicit opt-in (see RECOMMENDED-ENV.md / H1D §5).
+fn _fuse_on(flag: string) -> bool {
+    if env(flag) != "" { return true }
+    if env("HEXA_FUSE_ALL") != "" { return true }
+    return false
+}
+
 // conv1d (causal dilated) via im2col + forge matmul — inlined from clm_conv_gpu
 // (clm flame files cannot `use` one another). Mirrors nn_conv1d_fwd's gather
 // exactly: p = t − dil·(K−1−k); rows below p<0 are zero (left causal pad). On a
@@ -52,7 +74,7 @@ use "stdlib/flame/optim_lib"
 // (the dominant Lane-G util peg). rc 0 = done on-device; else the host gather/
 // scatter below runs (byte-eq oracle, clm_conv_devfeed.hexa F-CLM-DEVFEED-*).
 fn _clmp_im2col(x: int, xcol: int, T: int, Cin: int, K: int, dil: int) {
-    if env("CLM_PROD_DEVFEED") != "" {
+    if _fuse_on("CLM_PROD_DEVFEED") {
         let rc = forge_dispatch_im2col(x, xcol, T, Cin, K, dil)
         if rc == 0 { return }
     }
@@ -75,7 +97,7 @@ fn _clmp_im2col(x: int, xcol: int, T: int, Cin: int, K: int, dil: int) {
     }
 }
 fn _clmp_im2col_t(x: int, xcolT: int, T: int, Cin: int, K: int, dil: int) {
-    if env("CLM_PROD_DEVFEED") != "" {
+    if _fuse_on("CLM_PROD_DEVFEED") {
         let rc = forge_dispatch_im2col_t(x, xcolT, T, Cin, K, dil)
         if rc == 0 { return }
     }
@@ -98,7 +120,7 @@ fn _clmp_im2col_t(x: int, xcolT: int, T: int, Cin: int, K: int, dil: int) {
     }
 }
 fn _clmp_col2im(dXcol: int, dX_out: int, T: int, Cin: int, K: int, dil: int) {
-    if env("CLM_PROD_DEVFEED") != "" {
+    if _fuse_on("CLM_PROD_DEVFEED") {
         let rc = forge_dispatch_col2im(dXcol, dX_out, T, Cin, K, dil)
         if rc == 0 { return }
     }
@@ -137,7 +159,7 @@ fn _clmp_col2im(dXcol: int, dX_out: int, T: int, Cin: int, K: int, dil: int) {
 // only in the self-host-rebuilt pod binary (env-gated so the prebuilt mac
 // binary, which lacks the builtin, never link-references it under `hexa run`).
 fn _clmp_db_colsum(dy: int, db_out: int, T: int, Cout: int) {
-    if env("CLM_PROD_DEVRESIDENT") != "" {
+    if _fuse_on("CLM_PROD_DEVRESIDENT") {
         let rc = forge_dispatch_db_colsum(dy, db_out, T, Cout)
         if rc == 0 { return }
     }
@@ -240,7 +262,7 @@ fn _clmp_matmul_batched(a_all: int, M: int, K: int, b_all: int, N: int, batch: i
     // GPU strided-batched path engages only in the self-host-rebuilt pod binary
     // (env-gated so the prebuilt mac binary, which lacks the batched builtin,
     // never link-references it under `hexa run`). rc 0 = done; else CPU oracle.
-    if env("CLM_PROD_BATCHED") != "" {
+    if _fuse_on("CLM_PROD_BATCHED") {
         let rc = forge_dispatch_matmul_batched(a_all, M, K, b_all, N, batch, c_all)
         if rc == 0 { return }
     }
@@ -392,7 +414,7 @@ fn conv2_bwd_via_forge_batched(x: int, w0: int, w1: int, dy0: int, dy1: int,
 // lacks the builtin, never link-references it under `hexa run`).
 fn _fq(w: int, wq: int, mask: int, Cout: int, rest: int) {
     let sc = t_zeros(Cout); let ql = t_zeros(Cout * rest)
-    if env("CLM_PROD_DEVRESIDENT") != "" {
+    if _fuse_on("CLM_PROD_DEVRESIDENT") {
         let rc = forge_dispatch_int4_quant(w, wq, sc, ql, mask, Cout, rest)
         if rc == 0 { return }
     }
@@ -408,7 +430,7 @@ fn _fq(w: int, wq: int, mask: int, Cout: int, rest: int) {
 // reduction) → bit-exact to nn_int4_quant_bwd (max|Δ|=0). rc 0 = done on
 // device; else the host STE runs (byte-eq). Env-gated like _fq above.
 fn _qbwd(dy: int, mask: int, dW: int, Cout: int, rest: int) {
-    if env("CLM_PROD_DEVRESIDENT") != "" {
+    if _fuse_on("CLM_PROD_DEVRESIDENT") {
         let rc = forge_dispatch_int4_quant_bwd(dy, mask, dW, Cout * rest)
         if rc == 0 { return }
     }
@@ -428,7 +450,7 @@ fn _qbwd(dy: int, mask: int, dW: int, Cout: int, rest: int) {
 // (max|Δ|=0). rc 0 = done on device; else the host loop runs (byte-eq).
 // Env-gated like _fq / _qbwd above (no-CUDA / prebuilt mac binary → host loop).
 fn _residual_add(a: int, b: int, out: int, n: int) {
-    if env("CLM_PROD_DEVRESIDENT") != "" {
+    if _fuse_on("CLM_PROD_DEVRESIDENT") {
         let rc = forge_dispatch_residual_add(a, b, out, n)
         if rc == 0 { return }
     }
@@ -446,7 +468,7 @@ fn _residual_add(a: int, b: int, out: int, n: int) {
 // done on device; else the proven host nn_gelu_fwd runs (byte-eq). Env-gated
 // like _residual_add (no-CUDA / prebuilt mac binary → host gelu).
 fn _gelu(g: int, out: int, n: int) {
-    if env("CLM_PROD_DEVRESIDENT") != "" {
+    if _fuse_on("CLM_PROD_DEVRESIDENT") {
         let rc = forge_dispatch_gelu(g, out, n)
         if rc == 0 { return }
     }
@@ -461,7 +483,7 @@ fn _gelu(g: int, out: int, n: int) {
 // device-resident chain; OFF / no-CUDA / rc!=0 → the two host _gelu calls run
 // UNCHANGED (byte-eq reference).
 fn _gelu2(g0: int, a0: int, g1: int, a1: int, n: int) {
-    if env("HEXA_FUSE_GELU2") != "" && env("CLM_PROD_DEVRESIDENT") != "" {
+    if _fuse_on("HEXA_FUSE_GELU2") && _fuse_on("CLM_PROD_DEVRESIDENT") {
         let rc = forge_dispatch_gelu2(g0, a0, g1, a1, n)
         if rc == 0 { return }
     }
@@ -479,7 +501,7 @@ fn _gelu2(g0: int, a0: int, g1: int, a1: int, n: int) {
 // bit-exact to nn_groupnorm_fwd (max|Δ|=0). rc 0 = done on device; else the
 // proven host nn_groupnorm_fwd runs (byte-eq). Env-gated like _gelu above.
 fn _groupnorm(x: int, gamma: int, beta: int, y: int, mean: int, inv: int, xhat: int, T: int, C: int, G: int) {
-    if env("CLM_PROD_DEVRESIDENT") != "" {
+    if _fuse_on("CLM_PROD_DEVRESIDENT") {
         let rc = forge_dispatch_groupnorm(x, gamma, beta, y, mean, inv, xhat, T, C, G)
         if rc == 0 { return }
     }
@@ -494,7 +516,7 @@ fn _groupnorm(x: int, gamma: int, beta: int, y: int, mean: int, inv: int, xhat: 
 // device-resident chain; OFF / device-fail → the SEPARATE _groupnorm + _gelu run
 // (byte-identical reference — same erf-gelu, same GN reduction order).
 fn _groupnorm_gelu(x: int, gamma: int, beta: int, y: int, a: int, mean: int, inv: int, xhat: int, T: int, C: int, G: int) {
-    if env("HEXA_FUSE_GN_GELU") != "" && env("CLM_PROD_DEVRESIDENT") != "" {
+    if _fuse_on("HEXA_FUSE_GN_GELU") && _fuse_on("CLM_PROD_DEVRESIDENT") {
         let rc = forge_dispatch_groupnorm_gelu(x, gamma, beta, y, a, mean, inv, xhat, T, C, G)
         if rc == 0 { return }
     }
@@ -513,7 +535,7 @@ fn _groupnorm_gelu(x: int, gamma: int, beta: int, y: int, a: int, mean: int, inv
 // _residual_add run (byte-identical reference — same erf-gelu, same GN reduction
 // order, same residual add order, max|Δ|=0).
 fn _groupnorm_gelu_residual(x: int, gamma: int, beta: int, r: int, y: int, a: int, out: int, mean: int, inv: int, xhat: int, T: int, C: int, G: int) {
-    if env("HEXA_FUSE_GN_GELU_RESID") != "" && env("CLM_PROD_DEVRESIDENT") != "" {
+    if _fuse_on("HEXA_FUSE_GN_GELU_RESID") && _fuse_on("CLM_PROD_DEVRESIDENT") {
         let rc = forge_dispatch_groupnorm_gelu_residual(x, gamma, beta, r, y, a, out, mean, inv, xhat, T, C, G)
         if rc == 0 { return }
     }
@@ -529,7 +551,7 @@ fn _groupnorm_gelu_residual(x: int, gamma: int, beta: int, r: int, y: int, a: in
 // reduction → bit-exact to nn_embedding_fwd (max|Δ|=0). rc 0 = on device; else
 // the proven host nn_embedding_fwd runs (byte-eq). Env-gated like _gelu above.
 fn _embedding(ids: int, table: int, out: int, T: int, d: int) {
-    if env("CLM_PROD_DEVRESIDENT") != "" {
+    if _fuse_on("CLM_PROD_DEVRESIDENT") {
         let rc = forge_dispatch_embedding(ids, table, out, T, d)
         if rc == 0 { return }
     }
@@ -545,7 +567,7 @@ fn _embedding(ids: int, table: int, out: int, T: int, d: int) {
 // reduction → bit-exact (max|Δ|=0). rc 0 = on device; else the byte-identical
 // host pack loop runs. Env-gated like _gelu above.
 fn _expert_pack2(ex0: int, ex1: int, ex_out: int, n: int) {
-    if env("CLM_PROD_DEVRESIDENT") != "" {
+    if _fuse_on("CLM_PROD_DEVRESIDENT") {
         let rc = forge_dispatch_expert_pack2(ex0, ex1, ex_out, n)
         if rc == 0 { return }
     }
@@ -568,7 +590,7 @@ fn _expert_pack2(ex0: int, ex1: int, ex_out: int, n: int) {
 // (max|Δ|=0). rc 0 = on device; else the proven host nn_moe_router_fwd runs
 // (byte-eq). Env-gated like _gelu above.
 fn _moe_router(logits: int, ex_out: int, probs: int, y: int, T: int, E: int, C: int) {
-    if env("CLM_PROD_DEVRESIDENT") != "" {
+    if _fuse_on("CLM_PROD_DEVRESIDENT") {
         let rc = forge_dispatch_moe_router(logits, ex_out, probs, y, T, E, C)
         if rc == 0 { return }
     }
@@ -586,7 +608,7 @@ fn _moe_router(logits: int, ex_out: int, probs: int, y: int, T: int, E: int, C: 
 // max|Δ|=0). The whole-step megakernel design (FULL = closed: FP64 hand-GEMM
 // breaks byte-eq + roofline) reduces to this achievable GLUE-BLOCK form.
 fn _moe_block2(eo0: int, eo1: int, logits: int, ex0: int, ex1: int, ex_out: int, probs: int, y: int, T: int, E: int, C: int) {
-    if env("HEXA_FUSE_MOE_BLOCK2") != "" && env("CLM_PROD_DEVRESIDENT") != "" {
+    if _fuse_on("HEXA_FUSE_MOE_BLOCK2") && _fuse_on("CLM_PROD_DEVRESIDENT") {
         let rc = forge_dispatch_moe_block2(eo0, eo1, logits, ex0, ex1, ex_out, probs, y, T, E, C)
         if rc == 0 { return }
     }
@@ -604,7 +626,7 @@ fn _moe_block2(eo0: int, eo1: int, logits: int, ex0: int, ex1: int, ex_out: int,
 // elementwise (no reduction) → bit-exact to nn_gelu_bwd (max|Δ|=0). rc 0 = on
 // device; else the proven host nn_gelu_bwd runs (byte-eq). Env-gated like _gelu.
 fn _gelu_bwd(g: int, da: int, dg: int, n: int) {
-    if env("CLM_PROD_DEVRESIDENT") != "" {
+    if _fuse_on("CLM_PROD_DEVRESIDENT") {
         let rc = forge_dispatch_gelu_bwd(g, da, dg, n)
         if rc == 0 { return }
     }
@@ -623,7 +645,7 @@ fn _gelu_bwd(g: int, da: int, dg: int, n: int) {
 // nn_groupnorm_bwd runs (byte-eq). Env-gated like _groupnorm.
 fn _groupnorm_bwd(xhat: int, inv: int, gamma: int, dy: int,
                   dgamma: int, dbeta: int, dX: int, T: int, C: int, G: int) {
-    if env("CLM_PROD_DEVRESIDENT") != "" {
+    if _fuse_on("CLM_PROD_DEVRESIDENT") {
         let rc = forge_dispatch_groupnorm_bwd(xhat, inv, gamma, dy, dgamma, dbeta, dX, T, C, G)
         if rc == 0 { return }
     }
@@ -639,7 +661,7 @@ fn _groupnorm_bwd(xhat: int, inv: int, gamma: int, dy: int,
 // (max|Δ|=0). rc 0 = on device; else the byte-identical host unpack loop runs.
 // Env-gated like _expert_pack2.
 fn _expert_unpack2(dex_out: int, dex0: int, dex1: int, n: int) {
-    if env("CLM_PROD_DEVRESIDENT") != "" {
+    if _fuse_on("CLM_PROD_DEVRESIDENT") {
         let rc = forge_dispatch_expert_unpack2(dex_out, dex0, dex1, n)
         if rc == 0 { return }
     }
@@ -659,7 +681,7 @@ fn _expert_unpack2(dex_out: int, dex0: int, dex1: int, n: int) {
 // device exp() = libm → bit-exact to the host clm_ce_grad (max|Δ|=0). rc 0 = on
 // device; else the proven host loop runs (byte-eq). Env-gated like _gelu.
 fn _ce_grad(logits: int, targets: int, dlogits_out: int, T: int, V: int) {
-    if env("CLM_PROD_DEVRESIDENT") != "" {
+    if _fuse_on("CLM_PROD_DEVRESIDENT") {
         let rc = forge_dispatch_ce_grad(logits, targets, dlogits_out, T, V)
         if rc == 0 { return }
     }
@@ -676,7 +698,7 @@ fn _ce_grad(logits: int, targets: int, dlogits_out: int, T: int, V: int) {
 // rc 0 = on device; else the proven host bwd runs (byte-eq). Env-gated like _moe_router.
 fn _moe_router_bwd(probs: int, ex_out: int, dy: int, dlogits_out: int, dex_out: int,
                    T: int, E: int, C: int) {
-    if env("CLM_PROD_DEVRESIDENT") != "" {
+    if _fuse_on("CLM_PROD_DEVRESIDENT") {
         let rc = forge_dispatch_moe_router_bwd(probs, ex_out, dy, dlogits_out, dex_out, T, E, C)
         if rc == 0 { return }
     }
@@ -690,7 +712,7 @@ fn _moe_router_bwd(probs: int, ex_out: int, dy: int, dlogits_out: int, dex_out: 
 // H2D-skips it. Pure elementwise, fixed (a+b)+c association → bit-exact (max|Δ|=0).
 // rc 0 = on device; else the byte-identical host sum loop runs. Env-gated.
 fn _grad_sum3(a: int, b: int, c: int, out: int, n: int) {
-    if env("CLM_PROD_DEVRESIDENT") != "" {
+    if _fuse_on("CLM_PROD_DEVRESIDENT") {
         let rc = forge_dispatch_grad_sum3(a, b, c, out, n)
         if rc == 0 { return }
     }
@@ -708,7 +730,7 @@ fn _grad_sum3(a: int, b: int, c: int, out: int, n: int) {
 // elementwise → bit-exact (max|Δ|=0). rc 0 = on device; else the byte-identical
 // host sum loop runs. Env-gated.
 fn _grad_sum2(a: int, b: int, out: int, n: int) {
-    if env("CLM_PROD_DEVRESIDENT") != "" {
+    if _fuse_on("CLM_PROD_DEVRESIDENT") {
         let rc = forge_dispatch_grad_sum2(a, b, out, n)
         if rc == 0 { return }
     }
@@ -730,7 +752,7 @@ fn _grad_sum2(a: int, b: int, out: int, n: int) {
 // the caller. rc 0 = on device; else the proven host scatter runs (byte-eq).
 // Env-gated. NOTE the extra V param (vocab rows) the device kernel needs.
 fn _embedding_bwd_scatter(dX: int, ids: int, dtable_inout: int, T: int, d: int, V: int) {
-    if env("CLM_PROD_DEVRESIDENT") != "" {
+    if _fuse_on("CLM_PROD_DEVRESIDENT") {
         let rc = forge_dispatch_embedding_bwd_scatter(dX, ids, dtable_inout, T, d, V)
         if rc == 0 { return }
     }
@@ -928,11 +950,11 @@ fn _adam(W: int, gW: int, m: int, v: int, n: int, t: int) {
     // re-quantizes the conv weights). byte-eq to the always-D2H forge_dispatch_
     // adamw path (same kernel, only the m/v write-back elided). rc 0 = applied
     // on-device; else fall through to forge_dispatch_adamw / host opt_adamw_step.
-    if env("CLM_PROD_DEVRESIDENT") != "" {
+    if _fuse_on("CLM_PROD_DEVRESIDENT") {
         let rc = forge_dispatch_adamw_keepmv(W, gW, m, v, n, 0.05, 0.9, 0.999, 0.00000001, 0.0, t)
         if rc == 0 { return }
     }
-    if env("CLM_PROD_DEVFEED") != "" {
+    if _fuse_on("CLM_PROD_DEVFEED") {
         let rc = forge_dispatch_adamw(W, gW, m, v, n, 0.05, 0.9, 0.999, 0.00000001, 0.0, t)
         if rc == 0 { return }
     }

@@ -1,5 +1,11 @@
 # H1D — anima clm_prod env-wiring audit (HEXA-FUSION fusion + own-GEMM)
 
+> **UPDATE (E2, this domain):** the §3 manual ~8-flag block below is now
+> superseded by a single convenience gate — **`HEXA_FUSE_ALL=1`** fires the whole
+> byte-eq fused + device-resident stack (own-GEMM TF32 stays a separate explicit
+> opt-in). See **`RECOMMENDED-ENV.md`** in this directory. The audit below remains
+> the authoritative per-flag reference (verbatim gate names + own-GEMM dispatch).
+
 **Question:** Does anima's `clm_prod` invocation actually RECEIVE the HEXA-FUSION
 fusion + own-GEMM env flags? If not, the landed levers never fire for anima's
 3B/7B forge and they silently get the un-fused baseline.
