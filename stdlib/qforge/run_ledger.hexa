@@ -1,0 +1,174 @@
+// run_ledger.hexa — QFORGE-PROCESS deck→Tc END-TO-END run ledger (FOLD).
+//
+// The telemetry tier emits/aggregates per-STAGE records:
+//   emit (#2474 / qforge telemetry.hexa)   — one 6-key JSONL line per stage.
+//   report (#2477 telemetry_report.hexa)   — ranked per-stage bottleneck Report.
+//   rollup (telemetry_rollup.hexa)          — campaign-wide cross-deck dashboard.
+// What was MISSING: a SINGLE unified deck→Tc provenance record — one entry per
+// FULL run that captures the deck · commit · pod · the per-stage telemetry
+// breakdown · the total wall · AND the run's physics result (λ · Tc). The
+// per-stage JSONL knows the stages but nothing about WHICH deck/commit/pod
+// produced them or what λ·Tc fell out the far end.
+//
+// qforge_run_ledger_fold FOLDS a per-stage telemetry stream (the SAME 6-key
+// JSONL the #2474 emitter produces and #2477 parses) plus the run's
+// provenance (deck · commit · pod) and result (λ · Tc) into ONE RunLedgerEntry,
+// serialized as ONE JSONL line. This is the unified deck→Tc record: feed the
+// run's telemetry, get back one self-contained provenance line ready to append
+// to a RUN_LEDGER.jsonl.
+//
+// d3/d19 REUSE: the per-stage parse is NOT re-implemented. We call
+// qforge_telemetry_report (#2477) VERBATIM to turn the JSONL stream into the
+// ranked per-stage Report (parse · 6-key guard · wall sum · rss-null
+// passthrough all live there); this module ONLY projects that Report's rows
+// into the ledger entry's `stages[]` and copies in the provenance + result.
+// It does NOT re-parse JSONL and does NOT edit telemetry_report.
+//
+// @L3 READ-only PURE function — no pod ops, no source mutation, no file I/O.
+// The caller supplies the telemetry text + provenance + result and prints/
+// appends the returned JSONL line. d6 HONESTY: a malformed/empty telemetry
+// stream folds to an entry with 0 stages and total_wall=0 — NEVER a fabricated
+// stage or wall; rss that was never measured stays null (inherited from the
+// #2477 report's has_rss), never a fake 0.
+
+use "stdlib/qforge/telemetry_report"
+
+// ── one folded stage row inside the unified entry ─────────────────────────
+//   name    — the stage label (relax · scf · ph:qN · lambda · tc · …), DATA.
+//   wall_s  — summed wall for the stage (s), straight from the #2477 Report.
+//   ram_mib — peak RAM (MiB) for the stage, or -1 when never measured (d6).
+//             The #2477 report carries peak_rss in kB + a has_rss flag; we
+//             convert kB→MiB (÷1024) when real, else carry -1 (NOT a fake 0).
+//   gpu     — GPU descriptor for the stage. NOT in the 6-key telemetry schema
+//             today (no bound GPU-telemetry builtin) → the literal "" (empty),
+//             a DOCUMENTED next-input (d6), never a fabricated device string.
+struct RunStage {
+    name: str,
+    wall_s: int,
+    ram_mib: int,
+    gpu: str,
+}
+
+// ── the unified deck→Tc run ledger entry ──────────────────────────────────
+//   deck         — the deck/run name (provenance, caller-supplied)
+//   commit       — the source commit the run was built from (provenance)
+//   pod          — the pod/host the run executed on (provenance)
+//   stages       — RunStage[] in the #2477 report order (wall DESC), one per
+//                  distinct telemetry stage
+//   total_wall_s — Σ over stages.wall_s (== the #2477 Report.total_wall)
+//   lambda       — the run's final el-ph coupling λ (result, caller-supplied)
+//   tc           — the run's final Tc in K (result, caller-supplied)
+//   ts           — wall-clock epoch seconds the entry was folded (now())
+//   n_stages     — distinct stages folded (mirrors len(stages); explicit for
+//                  a consumer that reads the flat fields without the array)
+struct RunLedgerEntry {
+    deck: str,
+    commit: str,
+    pod: str,
+    stages: [RunStage],
+    total_wall_s: int,
+    lambda: float,
+    tc: float,
+    ts: int,
+    n_stages: int,
+}
+
+// qforge_run_ledger_fold — fold a per-stage telemetry stream + provenance +
+// result into ONE unified deck→Tc RunLedgerEntry.
+//
+//   telemetry_jsonl — the run's 6-key `.dft_telemetry.jsonl` text (the SAME
+//                     stream the #2474 emitter writes / #2477 parses)
+//   deck/commit/pod — run provenance (caller-supplied, data)
+//   result_lambda   — the run's final λ
+//   result_tc       — the run's final Tc (K)
+//
+// d3/d19: the per-stage parse is qforge_telemetry_report (#2477) VERBATIM —
+// we never re-parse the JSONL here. We project its ranked rows into stages[]
+// (kB→MiB for measured rss, -1 + "" for the not-measured RAM/GPU sentinels),
+// copy total_wall, stamp ts=now(), and attach the provenance + result. A
+// malformed/empty stream yields a #2477 Report with 0 stages / 0 wall, which
+// folds to an entry with 0 stages and total_wall_s=0 — NEVER a fabricated
+// stage or wall (d6).
+pub fn qforge_run_ledger_fold(
+    telemetry_jsonl: str,
+    deck: str,
+    commit: str,
+    pod: str,
+    result_lambda: float,
+    result_tc: float
+) -> RunLedgerEntry {
+    // d3/d19 REUSE — the existing per-stage parser; we do NOT re-implement it.
+    let rep = qforge_telemetry_report(telemetry_jsonl)
+
+    let mut stages = []
+    let mut i = 0
+    while i < len(rep.rows) {
+        let r = rep.rows[i]
+        i = i + 1
+        // d6: convert measured rss kB→MiB; carry -1 when the stage never had a
+        // real rss (has_rss=false from #2477) — a not-measured sentinel, NOT 0.
+        let mut ram_mib = -1
+        if r.has_rss { ram_mib = r.peak_rss / 1024 }
+        stages.push(RunStage {
+            name: r.stage,
+            wall_s: r.wall_s,
+            ram_mib: ram_mib,
+            gpu: "",            // not in the 6-key schema — documented next-input (d6)
+        })
+    }
+
+    return RunLedgerEntry {
+        deck: deck,
+        commit: commit,
+        pod: pod,
+        stages: stages,
+        total_wall_s: rep.total_wall,   // == Σ stage walls (the #2477 invariant)
+        lambda: result_lambda,
+        tc: result_tc,
+        ts: now(),
+        n_stages: len(stages),
+    }
+}
+
+// ── internal: a stage's ram cell as a JSON value (`null` when -1, d6) ──────
+fn _rl_ram(s: RunStage) -> str {
+    if s.ram_mib < 0 { return "null" }
+    return to_string(s.ram_mib)
+}
+
+// ── internal: a stage's gpu cell as a JSON value (`null` when "", d6) ──────
+fn _rl_gpu(s: RunStage) -> str {
+    if len(s.gpu) == 0 { return "null" }
+    return "\"" + s.gpu + "\""
+}
+
+// qforge_run_ledger_emit — serialize a RunLedgerEntry as ONE JSONL line (the
+// unified deck→Tc provenance record). The line is self-contained: deck ·
+// commit · pod · the full per-stage breakdown · total_wall · λ · Tc · ts.
+// stages[].ram_mib renders `null` when never measured and gpu renders `null`
+// when absent (d6 — no fabricated RAM/GPU). λ/Tc render via to_string(float).
+// Pure (no I/O); the caller appends the returned line to a RUN_LEDGER.jsonl.
+pub fn qforge_run_ledger_emit(e: RunLedgerEntry) -> str {
+    let mut st = "["
+    let mut i = 0
+    while i < len(e.stages) {
+        let s = e.stages[i]
+        if i > 0 { st = st + "," }
+        st = st + "{\"name\":\"" + s.name + "\""
+            + ",\"wall_s\":" + to_string(s.wall_s)
+            + ",\"ram_mib\":" + _rl_ram(s)
+            + ",\"gpu\":" + _rl_gpu(s) + "}"
+        i = i + 1
+    }
+    st = st + "]"
+
+    return "{\"deck\":\"" + e.deck + "\""
+        + ",\"commit\":\"" + e.commit + "\""
+        + ",\"pod\":\"" + e.pod + "\""
+        + ",\"stages\":" + st
+        + ",\"total_wall_s\":" + to_string(e.total_wall_s)
+        + ",\"lambda\":" + to_string(e.lambda)
+        + ",\"tc\":" + to_string(e.tc)
+        + ",\"ts\":" + to_string(e.ts)
+        + ",\"n_stages\":" + to_string(e.n_stages) + "}"
+}
