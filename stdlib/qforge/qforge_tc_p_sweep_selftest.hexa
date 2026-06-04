@@ -1,0 +1,211 @@
+// @ci_gate — pure · network-free · deterministic (stdlib_selftest_aggregate --ci-gate)
+//
+// qforge_tc_p_sweep_selftest.hexa — QFORGE PRESSURE–Tc(P) SWEEP gate (NOVEL frontier).
+//
+// Drives `qforge_tc_p_sweep(size_at, run_at, p_grid)` — the pressure → Tc(P) curve
+// automation — against a KNOWN ANALYTIC Tc(P) MODEL with ZERO QE and ZERO pod ops,
+// and asserts the four contract points:
+//
+//   (a) ARGMAX AT THE ANALYTIC MAXIMUM — on a downward parabola Tc(P) whose maximum
+//       sits at P★ (literature-anchored to CaH6's ~150–170 GPa optimum), the sweep's
+//       p_opt lands on the grid pressure CLOSEST to the analytic vertex P★, and
+//       tc_max == the parabola evaluated there. The driver FINDS the maximum.
+//   (b) MONOTONE UP-THEN-DOWN THROUGH p_opt — the converged curve rises strictly to
+//       p_opt and falls strictly after it (a single interior maximum — the shape the
+//       argmax read relies on). slope_lo == +1 (rising into p_opt from below) and
+//       slope_hi == -1 (falling above) — the decompression trend is the hydride wall.
+//   (c) FINER GRID REFINES p_opt MONOTONICALLY — a tighter p_grid (same span, more
+//       points straddling P★) moves p_opt STRICTLY CLOSER to the analytic vertex P★
+//       than the coarse grid did (|p_opt_fine − P★| < |p_opt_coarse − P★|). Refining
+//       the sweep refines the located frontier.
+//   (d) PER-POINT COMPUTE NAMED (d6) — the result carries compute_note naming each
+//       point's cost as ONE converged el-ph run (qforge_run) — the model thunk is
+//       declared as a STAND-IN for that compute, not a fabricated physical number.
+//
+// The Tc(P) here is a DELIBERATE ANALYTIC MODEL (a parabola with a known vertex) —
+// it is NOT a physical Tc curve and flips NO migration gate. Its sole purpose is to
+// give the driver a maximum with a KNOWN location so the argmax / monotone-shape /
+// grid-refinement machinery can be pinned exactly. The REAL per-P Tc comes from a
+// converged qforge_run el-ph run at each pressure (the named compute, d6) — this
+// selftest validates the DRIVER + AGGREGATION around that compute, never fakes it.
+//
+// Run:  hexa run stdlib/qforge/qforge_tc_p_sweep_selftest.hexa
+// PASS: exits printing "qforge_tc_p_sweep_selftest PASS".
+
+use "stdlib/qforge/qforge_tc_p_sweep"
+use "stdlib/qforge/qforge_run"          // QforgeDeck, QforgeRunResult (engine I/O)
+
+fn _abs(x: float) -> float { if x < 0.0 { return -x } return x }
+
+// ── the ANALYTIC Tc(P) MODEL (d6 — a stand-in with a KNOWN maximum) ──────────
+//   Tc(P) = TC_PEAK − CURV·(P − P_STAR)²   — a downward parabola with its single
+//   maximum at P = P_STAR. P_STAR is anchored to CaH6's literature optimum band
+//   (~150–170 GPa); we use 160 GPa. CURV>0 makes it strictly concave so the curve
+//   rises to P_STAR and falls after — exactly the up-then-down shape (b) asserts.
+let P_STAR: float = 160.0      // GPa — analytic vertex (CaH6 ~150–170 GPa optimum)
+let TC_PEAK: float = 220.0     // K — Tc at the vertex (hydride-scale, illustrative)
+let CURV: float = 0.02         // K/GPa² — parabola curvature (concave)
+
+fn _tc_model(p: float) -> float {
+    let d = p - P_STAR
+    return TC_PEAK - CURV * d * d
+}
+
+// ── the cell model `size_at(P)` — stashes P into the deck for run_at to read ──
+//   In production this returns a P-sized QforgeDeck (lattice contracted at P → Φ,
+//   ΔV, N(E_F) shifted). Here the only field the MODEL run_at reads back is the
+//   pressure, which we carry in `e_fermi` (a free scalar in the synthetic deck —
+//   the model thunk repurposes it to recover P; a real run_at ignores this and
+//   runs qforge_run on the genuinely P-sized deck). Every other field is inert.
+fn _size_at(p: float) -> QforgeDeck {
+    let h_diag: [float] = [0.0]
+    let phi: [float] = [1.0]
+    let masses: [float] = [1.0]
+    let qvec: [float] = [0.0, 0.0, 0.0]
+    let cell_R: [float] = [0.0, 0.0, 0.0]
+    let dv0: [float] = [0.0]
+    let dv_modes: [[float]] = [dv0]
+    let grid: [float] = [1.0]
+    return QforgeDeck {
+        name: "p-sized-model", h_diag: h_diag, n: 1, nocc: 1,
+        phi: phi, masses: masses, qvec: qvec, natoms: 1, ncells: 1, cell_R: cell_R,
+        dv_modes: dv_modes,
+        e_fermi: p,                 // ← P stashed here for the model run_at (d6 stand-in)
+        n_ef: 1.0, omega_grid: grid, mode_weight: 0.0,
+        sigma_el: 0.0, sigma_ph: 0.0, mu_star: 0.10, n_mats: 1
+    }
+}
+
+// ── the MODEL `run_at(deck)` — returns the analytic Tc(P), NOT a real run ─────
+//   d6 HONEST: a real run_at calls qforge_run(h_apply, deck) here — the per-point
+//   converged el-ph compute. This stand-in instead evaluates the analytic Tc(P)
+//   model so the driver's aggregation can be pinned against a KNOWN maximum. λ is
+//   set to a monotone proxy of Tc (purely to populate the field); no λ claim made.
+fn _run_at_model(deck: QforgeDeck) -> QforgeRunResult {
+    let p = deck.e_fermi              // recover the stashed pressure
+    let tc = _tc_model(p)
+    let empty: [QforgeStage] = []
+    return QforgeRunResult {
+        ok: 1, err: "", lambda: tc / 100.0, omega_log: 1000.0, omega_bar2: 1.0e6,
+        tc: tc, tc_me: tc, stages: empty,
+        screening_note: "MODEL Tc(P) stand-in (d6) — real run = qforge_run el-ph"
+    }
+}
+
+// nearest-converged grid pressure to P_STAR in a sweep result (for (a)/(c)).
+fn _vertex_gap(r: TcPSweepResult) -> float { return _abs(r.p_opt - P_STAR) }
+
+fn main() {
+    let mut fails = 0
+
+    // ── coarse grid straddling P_STAR=160; closest grid point to vertex = 150 ──
+    let coarse: [float] = [100.0, 150.0, 200.0, 250.0]
+    let rc = qforge_tc_p_sweep(_size_at, _run_at_model, coarse)
+    if rc.ok == 0 {
+        println("FAIL sweep ok==0: " + rc.err)
+        println("qforge_tc_p_sweep_selftest FAIL")
+        exit(1)
+    }
+    println("[sweep coarse] p_opt=" + to_string(rc.p_opt) + " GPa  tc_max="
+            + to_string(rc.tc_max) + " K  n_ok=" + to_string(rc.n_ok)
+            + "  slope_lo=" + to_string(rc.slope_lo) + " slope_hi=" + to_string(rc.slope_hi))
+    let mut ci = 0
+    while ci < len(rc.curve) {
+        let pt = rc.curve[ci]
+        println("  P=" + to_string(pt.p) + " GPa  Tc=" + to_string(pt.tc)
+                + " K  ok=" + to_string(pt.ok))
+        ci = ci + 1
+    }
+
+    // ── (a) ARGMAX AT THE ANALYTIC MAXIMUM ───────────────────────────────────
+    //   closest grid point to vertex 160 is 150 (|150-160|=10 < |200-160|=40).
+    if rc.p_opt == 150.0 {
+        println("PASS (a) p_opt at grid-closest-to-vertex (150 GPa, vertex P★=160)")
+    } else {
+        println("FAIL (a) p_opt=" + to_string(rc.p_opt) + " expected 150 (closest to P★=160)")
+        fails = fails + 1
+    }
+    let tc_at_150 = _tc_model(150.0)
+    if _abs(rc.tc_max - tc_at_150) <= 1.0e-9 {
+        println("PASS (a) tc_max == analytic Tc(p_opt) (" + to_string(rc.tc_max) + " K)")
+    } else {
+        println("FAIL (a) tc_max=" + to_string(rc.tc_max) + " != analytic " + to_string(tc_at_150))
+        fails = fails + 1
+    }
+
+    // ── (b) MONOTONE UP-THEN-DOWN THROUGH p_opt ──────────────────────────────
+    //   strictly rising for converged points below p_opt, strictly falling above.
+    let mut shape_ok = 1
+    let mut bi = 1
+    while bi < len(rc.curve) {
+        let prev = rc.curve[bi - 1]
+        let cur  = rc.curve[bi]
+        if prev.ok == 1 && cur.ok == 1 {
+            if cur.p <= rc.p_opt {
+                if !(cur.tc > prev.tc) { shape_ok = 0 }   // rising into p_opt
+            } else {
+                if !(cur.tc < prev.tc) { shape_ok = 0 }   // falling after p_opt
+            }
+        }
+        bi = bi + 1
+    }
+    if shape_ok == 1 {
+        println("PASS (b) curve monotone up→down through p_opt (single interior max)")
+    } else {
+        println("FAIL (b) curve NOT monotone up-then-down through p_opt")
+        fails = fails + 1
+    }
+    if rc.slope_lo == 1 {
+        println("PASS (b) slope_lo == +1 (Tc rising into p_opt from below — decompression wall)")
+    } else {
+        println("FAIL (b) slope_lo=" + to_string(rc.slope_lo) + " expected +1")
+        fails = fails + 1
+    }
+    if rc.slope_hi == -1 {
+        println("PASS (b) slope_hi == -1 (Tc falling above p_opt)")
+    } else {
+        println("FAIL (b) slope_hi=" + to_string(rc.slope_hi) + " expected -1")
+        fails = fails + 1
+    }
+
+    // ── (c) FINER GRID REFINES p_opt MONOTONICALLY toward the vertex P★ ───────
+    //   same [100,250] span, denser straddle of 160; closest point = 160 itself.
+    let fine: [float] = [100.0, 130.0, 145.0, 160.0, 175.0, 190.0, 220.0, 250.0]
+    let rf = qforge_tc_p_sweep(_size_at, _run_at_model, fine)
+    println("[sweep fine] p_opt=" + to_string(rf.p_opt) + " GPa  tc_max="
+            + to_string(rf.tc_max) + " K  n_ok=" + to_string(rf.n_ok))
+    let gap_coarse = _vertex_gap(rc)
+    let gap_fine = _vertex_gap(rf)
+    println("[refine] |p_opt_coarse − P★|=" + to_string(gap_coarse)
+            + "  |p_opt_fine − P★|=" + to_string(gap_fine))
+    if gap_fine < gap_coarse {
+        println("PASS (c) finer grid refines p_opt strictly closer to vertex P★="
+                + to_string(P_STAR) + " (" + to_string(gap_fine) + " < " + to_string(gap_coarse) + ")")
+    } else {
+        println("FAIL (c) finer grid did NOT refine p_opt (gap_fine=" + to_string(gap_fine)
+                + " !< gap_coarse=" + to_string(gap_coarse) + ")")
+        fails = fails + 1
+    }
+    // and the fine grid (which CONTAINS the vertex 160) lands p_opt exactly on it.
+    if rf.p_opt == 160.0 {
+        println("PASS (c) fine grid (contains vertex) lands p_opt == P★ exactly (160 GPa)")
+    } else {
+        println("FAIL (c) fine p_opt=" + to_string(rf.p_opt) + " expected 160 (vertex on grid)")
+        fails = fails + 1
+    }
+
+    // ── (d) PER-POINT CONVERGED-RUN COMPUTE NAMED (d6) ───────────────────────
+    if rc.compute_note.len() > 0 {
+        println("PASS (d) per-point compute named (d6): " + rc.compute_note)
+    } else {
+        println("FAIL (d) per-point compute NOT named (compute_note empty)")
+        fails = fails + 1
+    }
+
+    if fails == 0 {
+        println("qforge_tc_p_sweep_selftest PASS")
+    } else {
+        println("qforge_tc_p_sweep_selftest FAIL — " + to_string(fails) + " check(s)")
+        exit(1)
+    }
+}
