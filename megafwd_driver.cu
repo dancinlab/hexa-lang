@@ -230,11 +230,21 @@ __global__ void _hx_k_clm_megafwd(
     const int tid = threadIdx.x;
     if (blockIdx.x == 0 && tid == 0) *fired_flag = 1;
 
+    // ONE function-scope shared buffer = the FULL 49152 B sm_100 static cap.
+    // EVERY phase reuses it: the GEMM phases pass it to wmma2_tile_device (As/Bs/
+    // tmp), the gn/router phases use its first 8 floats as the warp-shuffle
+    // staging. Because no two phases are live simultaneously (grid.sync between
+    // them) a single shared allocation is correct AND it pins total static shared
+    // at exactly the cap — a second static buffer would push it to 0xc040 > cap
+    // and nvlink would reject the cooperative launch (the sm_100 budget wall).
+    __shared__ float megasmem[2*HXG_BM*HXG_BK + 2*HXG_BK*HXG_BN];  // 12288 floats = 49152 B
+    float* red = megasmem;  // first 8 floats: gn/router shuffle staging
+
     // ── PHASE 0: H1 = A · W1  (conv GEMM1, own-GEMM inline) ─────────────────
     {
         long long tM=(M+HXG_BM-1)/HXG_BM, tN=(N1+HXG_BN-1)/HXG_BN, nT=tM*tN;
         for (long long t=blockIdx.x; t<nT; t+=gridDim.x)
-            wmma2_tile_device(t/tN, t%tN, 0,0, M,N1,K, 1.0f, A,M, W1,K, 0.0f, H1,M);
+            wmma2_tile_device(t/tN, t%tN, 0,0, M,N1,K, 1.0f, A,M, W1,K, 0.0f, H1,M, megasmem);
     }
     grid.sync();
 
@@ -244,7 +254,6 @@ __global__ void _hx_k_clm_megafwd(
     // 48 KB static cap on sm_100). All 256 threads share the same row r → no
     // divergence at the reduction barriers.
     {
-        __shared__ float red[8];
         for (long long r=blockIdx.x; r<M; r+=gridDim.x) {
             float s=0.f, sq=0.f;
             for (long long c=tid; c<N1; c+=blockDim.x){ float v=H1[r+c*M]; s+=v; sq+=v*v; }
@@ -273,7 +282,7 @@ __global__ void _hx_k_clm_megafwd(
     {
         long long tM=(M+HXG_BM-1)/HXG_BM, tN=(N2+HXG_BN-1)/HXG_BN, nT=tM*tN;
         for (long long t=blockIdx.x; t<nT; t+=gridDim.x)
-            wmma2_tile_device(t/tN, t%tN, 0,0, M,N2,N1, 1.0f, R,M, W2,N1, 0.0f, H2,M);
+            wmma2_tile_device(t/tN, t%tN, 0,0, M,N2,N1, 1.0f, R,M, W2,N1, 0.0f, H2,M, megasmem);
     }
     grid.sync();
 
@@ -286,9 +295,8 @@ __global__ void _hx_k_clm_megafwd(
     grid.sync();
 
     // ── PHASE 3c: moe_router reduction (per-row max + sumexp). One block/row. ─
-    // WARP-SHUFFLE reduction (32 B static smem), same rationale as PHASE 1a.
+    // WARP-SHUFFLE reduction (reuses megasmem[0..7]), same rationale as PHASE 1a.
     {
-        __shared__ float red[8];
         for (long long r=blockIdx.x; r<M; r+=gridDim.x) {
             float mx=-1e30f;
             for (long long c=tid; c<N2; c+=blockDim.x){ float v=P[r+c*M]; if(v>mx)mx=v; }
