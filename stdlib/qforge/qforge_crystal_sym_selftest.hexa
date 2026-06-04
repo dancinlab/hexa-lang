@@ -29,6 +29,9 @@
 //   qforge_qstar_reduce(grid, qforge_crystal_point_group(lattice))
 // with NO hand-supplied ops — the lattice is the only symmetry input.
 //
+// (Each case lives in its own helper fn — small local scopes, no monolithic
+// main — both for readability and to keep codegen straightforward.)
+//
 // Run (installed hexa resolves `use "stdlib/..."` from ~/.hx/src — copy the new
 // files there first, per the toolchain quirk):
 //   ~/.hx/bin/hexa stdlib/qforge/qforge_crystal_sym_selftest.hexa
@@ -85,8 +88,7 @@ fn _contains_op(ops: [int], ref: [int], idx: int) -> bool {
     return false
 }
 
-// SET equality of two flat op-lists (both must have equal nops AND every op of
-// `b` must appear in `a`; equal length + subset ⇒ equal set since ops unique).
+// SET equality of two flat op-lists (equal length + every op of b appears in a).
 fn _set_eq(a: [int], b: [int]) -> bool {
     if len(a) != len(b) { return false }
     let nb = len(b) / 9
@@ -98,9 +100,8 @@ fn _set_eq(a: [int], b: [int]) -> bool {
     return true
 }
 
-// metric Rᵀ G R == G for every op in `ops`, against lattice metric of `lat`.
+// metric Rᵀ G R == G for every op in `ops`, against the lattice metric of `lat`.
 fn _all_preserve(ops: [int], lat: [float]) -> bool {
-    // recompute metric inline (G = L Lᵀ)
     let mut g: [float] = []
     let mut a = 0
     while a < 3 {
@@ -141,64 +142,86 @@ fn _all_preserve(ops: [int], lat: [float]) -> bool {
     return true
 }
 
-fn main() {
-    let mut fails = 0
-
-    // ── (A) cubic a·I → 48 ops == Oh fixture as a SET ───────────────────────
+// ── (A) cubic a·I → 48 ops, set-equal to Oh fixture; (D) metric invariant ────
+fn _case_cubic() -> int {
     let cubic: [float] = [1.0,0.0,0.0,  0.0,1.0,0.0,  0.0,0.0,1.0]
-    let pg_cubic = qforge_crystal_point_group(cubic)
-    fails = fails + _ck_int("(A) cubic n_ops = 48", _nops(pg_cubic), 48)
-    let oh = qforge_qstar_oh_ops()
-    fails = fails + _ck_true("(A) cubic analyzer set == Oh fixture", _set_eq(pg_cubic, oh))
+    let pg = qforge_crystal_point_group(cubic)
+    let mut f = 0
+    f = f + _ck_int("(A) cubic n_ops = 48", _nops(pg), 48)
+    f = f + _ck_true("(A) cubic analyzer set == Oh fixture", _set_eq(pg, qforge_qstar_oh_ops()))
+    f = f + _ck_true("(D) cubic: RᵀGR==G for all ops", _all_preserve(pg, cubic))
+    return f
+}
 
-    // ── (D) metric invariant Rᵀ G R == G for every cubic op ─────────────────
-    fails = fails + _ck_true("(D) cubic: RᵀGR==G for all ops", _all_preserve(pg_cubic, cubic))
-
-    // ── (B) THE GATE: YH10 weights from the BCC lattice (no hand ops) ───────
+// ── (B) THE GATE: YH10 star weights from the BCC lattice (no hand ops) ───────
+fn _case_yh10_gate() -> int {
     // BCC primitive lattice (rows): ½(-1,1,1), ½(1,-1,1), ½(1,1,-1).
     let bcc: [float] = [-0.5,0.5,0.5,  0.5,-0.5,0.5,  0.5,0.5,-0.5]
-    let pg_bcc = qforge_crystal_point_group(bcc)
-    fails = fails + _ck_int("(B) BCC n_ops = 48 (Oh)", _nops(pg_bcc), 48)
-    fails = fails + _ck_true("(B) BCC: RᵀGR==G for all ops", _all_preserve(pg_bcc, bcc))
+    let pg = qforge_crystal_point_group(bcc)
+    let mut f = 0
+    f = f + _ck_int("(B) BCC n_ops = 48 (Oh)", _nops(pg), 48)
+    f = f + _ck_true("(B) BCC: RᵀGR==G for all ops", _all_preserve(pg, bcc))
     // 4×4×4 Γ-centred grid: shifted MP (sh=1) → coords {0,¼,½,¾}, contains Γ.
     let g444 = qforge_mp_grid(4, 4, 4, 1, 1, 1)
-    let yh10 = qforge_qstar_reduce(g444, pg_bcc)        // <-- NO hand ops
-    fails = fails + _ck_int("(B-GATE) YH10 n_ibz = 8", yh10.n_ibz, 8)
-    fails = fails + _ck_int("(B-GATE) YH10 Σw = N_full = 64", _wsum(yh10.weights), 64)
-    fails = fails + _ck_int("(B-GATE) YH10 n_full = 64", yh10.n_full, 64)
+    let yh10 = qforge_qstar_reduce(g444, pg)          // <-- NO hand ops
+    f = f + _ck_int("(B-GATE) YH10 n_ibz = 8", yh10.n_ibz, 8)
+    f = f + _ck_int("(B-GATE) YH10 Σw = N_full = 64", _wsum(yh10.weights), 64)
+    f = f + _ck_int("(B-GATE) YH10 n_full = 64", yh10.n_full, 64)
     let sw = _sorted(yh10.weights)
     // target multiset {1,8,4,6,24,12,3,6} sorted = {1,3,4,6,6,8,12,24}
-    fails = fails + _ck_int("(B-GATE) YH10 w[0] = 1",  sw[0], 1)
-    fails = fails + _ck_int("(B-GATE) YH10 w[1] = 3",  sw[1], 3)
-    fails = fails + _ck_int("(B-GATE) YH10 w[2] = 4",  sw[2], 4)
-    fails = fails + _ck_int("(B-GATE) YH10 w[3] = 6",  sw[3], 6)
-    fails = fails + _ck_int("(B-GATE) YH10 w[4] = 6",  sw[4], 6)
-    fails = fails + _ck_int("(B-GATE) YH10 w[5] = 8",  sw[5], 8)
-    fails = fails + _ck_int("(B-GATE) YH10 w[6] = 12", sw[6], 12)
-    fails = fails + _ck_int("(B-GATE) YH10 w[7] = 24", sw[7], 24)
+    f = f + _ck_int("(B-GATE) YH10 w[0] = 1",  sw[0], 1)
+    f = f + _ck_int("(B-GATE) YH10 w[1] = 3",  sw[1], 3)
+    f = f + _ck_int("(B-GATE) YH10 w[2] = 4",  sw[2], 4)
+    f = f + _ck_int("(B-GATE) YH10 w[3] = 6",  sw[3], 6)
+    f = f + _ck_int("(B-GATE) YH10 w[4] = 6",  sw[4], 6)
+    f = f + _ck_int("(B-GATE) YH10 w[5] = 8",  sw[5], 8)
+    f = f + _ck_int("(B-GATE) YH10 w[6] = 12", sw[6], 12)
+    f = f + _ck_int("(B-GATE) YH10 w[7] = 24", sw[7], 24)
+    return f
+}
 
-    // ── (C) tetragonal → 16 ops (D4h); orthorhombic → 8 ops (D2h) ───────────
+// ── (C) tetragonal → 16 ops (D4h); orthorhombic → 8 ops (D2h); not cubic ─────
+fn _case_lower_sym() -> int {
+    let mut f = 0
+    // cubic IBZ count for the comparison baseline (8 from the gate grid)
+    let cubic_nibz = 8
+
     let tetra: [float] = [1.0,0.0,0.0,  0.0,1.0,0.0,  0.0,0.0,1.7]
-    let pg_tetra = qforge_crystal_point_group(tetra)
-    fails = fails + _ck_int("(C) tetragonal n_ops = 16 (D4h)", _nops(pg_tetra), 16)
-    fails = fails + _ck_true("(C) tetragonal: RᵀGR==G for all ops", _all_preserve(pg_tetra, tetra))
-    let red_t = qforge_qstar_reduce(g444, pg_tetra)
-    fails = fails + _ck_int("(C) tetragonal Σw = 64", _wsum(red_t.weights), 64)
-    fails = fails + _ck_true("(C) tetragonal n_ibz > cubic n_ibz", red_t.n_ibz > yh10.n_ibz)
+    let pg_t = qforge_crystal_point_group(tetra)
+    f = f + _ck_int("(C) tetragonal n_ops = 16 (D4h)", _nops(pg_t), 16)
+    f = f + _ck_true("(C) tetragonal: RᵀGR==G for all ops", _all_preserve(pg_t, tetra))
+    let g444 = qforge_mp_grid(4, 4, 4, 1, 1, 1)
+    let red_t = qforge_qstar_reduce(g444, pg_t)
+    f = f + _ck_int("(C) tetragonal Σw = 64", _wsum(red_t.weights), 64)
+    let tetra_nibz = red_t.n_ibz
+    f = f + _ck_true("(C) tetragonal n_ibz > cubic n_ibz", tetra_nibz > cubic_nibz)
 
     let ortho: [float] = [1.0,0.0,0.0,  0.0,1.3,0.0,  0.0,0.0,1.7]
-    let pg_ortho = qforge_crystal_point_group(ortho)
-    fails = fails + _ck_int("(C) orthorhombic n_ops = 8 (D2h)", _nops(pg_ortho), 8)
-    fails = fails + _ck_true("(C) orthorhombic: RᵀGR==G for all ops", _all_preserve(pg_ortho, ortho))
-    let red_o = qforge_qstar_reduce(g444, pg_ortho)
-    fails = fails + _ck_int("(C) orthorhombic Σw = 64", _wsum(red_o.weights), 64)
-    fails = fails + _ck_true("(C) ortho n_ibz > tetragonal n_ibz", red_o.n_ibz > red_t.n_ibz)
+    let pg_o = qforge_crystal_point_group(ortho)
+    f = f + _ck_int("(C) orthorhombic n_ops = 8 (D2h)", _nops(pg_o), 8)
+    f = f + _ck_true("(C) orthorhombic: RᵀGR==G for all ops", _all_preserve(pg_o, ortho))
+    let red_o = qforge_qstar_reduce(g444, pg_o)
+    f = f + _ck_int("(C) orthorhombic Σw = 64", _wsum(red_o.weights), 64)
+    f = f + _ck_true("(C) ortho n_ibz > tetragonal n_ibz", red_o.n_ibz > tetra_nibz)
+    return f
+}
 
-    // ── (E) guards: degenerate + malformed ──────────────────────────────────
+// ── (E) guards: degenerate + malformed ───────────────────────────────────────
+fn _case_guards() -> int {
+    let mut f = 0
     let degen: [float] = [1.0,0.0,0.0,  2.0,0.0,0.0,  0.0,0.0,1.0]   // a2 ∥ a1
-    fails = fails + _ck_int("(E) degenerate lattice → 0 ops", _nops(qforge_crystal_point_group(degen)), 0)
+    f = f + _ck_int("(E) degenerate lattice → 0 ops", _nops(qforge_crystal_point_group(degen)), 0)
     let bad: [float] = [1.0,0.0,0.0,  0.0]                            // len 4 ≠ 9
-    fails = fails + _ck_int("(E) malformed lattice → 0 ops", _nops(qforge_crystal_point_group(bad)), 0)
+    f = f + _ck_int("(E) malformed lattice → 0 ops", _nops(qforge_crystal_point_group(bad)), 0)
+    return f
+}
+
+fn main() {
+    let mut fails = 0
+    fails = fails + _case_cubic()
+    fails = fails + _case_yh10_gate()
+    fails = fails + _case_lower_sym()
+    fails = fails + _case_guards()
 
     if fails == 0 {
         println("qforge_crystal_sym_selftest PASS")
