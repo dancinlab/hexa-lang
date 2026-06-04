@@ -21,6 +21,8 @@
 #include <cublas_v2.h>
 #include <stdint.h>
 #include <math.h>
+#include <stdio.h>
+#include <stdlib.h>
 
 #define HXQ_RC_OK          0
 #define HXQ_RC_KERNEL_FAIL -4
@@ -475,6 +477,57 @@ static int v54_ensure_cublas(void) {
     return HXQ_RC_OK;
 }
 
+// ═════════════════════════════════════════════════════════════════════
+// Phase 1d — HEXA-FUSION CUDA-OWN FP32 GEMM (env HEXA_OWN_GEMM), frozen-base
+// path. Same general column-major Sgemm kernel + dispatch shim as the LoRA
+// path in hxqwen14b_emit.hexa, here over g_cublas_handle. When HEXA_OWN_GEMM
+// is set+non-empty the base/lm_head/input-grad GEMMs run on our own kernel;
+// otherwise cublasSgemm (OFF == byte-identical). cuBLAS = correctness oracle.
+// ═════════════════════════════════════════════════════════════════════
+__global__ void _hx_k_sgemm_cm_v54(int tA, int tB, long long M, long long N, long long K,
+                                   float alpha, const float* A, long long lda,
+                                   const float* B, long long ldb,
+                                   float beta, float* C, long long ldc) {
+    long long i = (long long)blockIdx.x * blockDim.x + threadIdx.x;  // C row 0..M
+    long long j = (long long)blockIdx.y * blockDim.y + threadIdx.y;  // C col 0..N
+    if (i >= M || j >= N) return;
+    float acc = 0.0f;
+    for (long long l = 0; l < K; l++) {
+        float a = tA ? A[l + i*lda] : A[i + l*lda];   // op(A)[i,l], col-major
+        float b = tB ? B[j + l*ldb] : B[l + j*ldb];   // op(B)[l,j], col-major
+        acc += a * b;
+    }
+    float prev = (beta != 0.0f) ? C[i + j*ldc] : 0.0f;
+    C[i + j*ldc] = alpha * acc + beta * prev;
+}
+// Host launcher for the own-GEMM kernel — extern "C" so the gcc-compiled
+// hxqwen14b.c TU (LoRA fwd/bwd) can call it. tA/tB are 1 if op==T else 0.
+// Returns 0 on success, nonzero on a CUDA launch/sync error.
+int _hx_own_sgemm_cm_launch(int tA, int tB, int m, int n, int k,
+                            float alpha, const float* A, int lda,
+                            const float* B, int ldb,
+                            float beta, float* C, int ldc) {
+    dim3 blk(16,16); dim3 grd((unsigned)((m+15)/16),(unsigned)((n+15)/16));
+    _hx_k_sgemm_cm_v54<<<grd,blk>>>(tA,tB,
+                                    (long long)m,(long long)n,(long long)k,
+                                    alpha, A,(long long)lda, B,(long long)ldb,
+                                    beta, C,(long long)ldc);
+    cudaError_t e = cudaDeviceSynchronize();
+    return (e==cudaSuccess) ? 0 : (int)e;
+}
+static cublasStatus_t hxqwen_sgemm_base(cublasOperation_t tA, cublasOperation_t tB,
+                                        int m, int n, int k, const float* alpha,
+                                        const float* A, int lda, const float* B, int ldb,
+                                        const float* beta, float* C, int ldc) {
+    if (getenv("HEXA_OWN_GEMM") && getenv("HEXA_OWN_GEMM")[0]) {
+        static int fired = 0; if (!fired){fired=1; fprintf(stderr,"[OWN-SGEMM-FIRED] _hx_k_sgemm_cm_v54\n");}
+        int rc = _hx_own_sgemm_cm_launch((tA==CUBLAS_OP_T),(tB==CUBLAS_OP_T),
+                                         m,n,k, *alpha, A,lda, B,ldb, *beta, C,ldc);
+        return (rc==0) ? CUBLAS_STATUS_SUCCESS : CUBLAS_STATUS_EXECUTION_FAILED;
+    }
+    return cublasSgemm(g_cublas_handle, tA,tB, m,n,k, alpha,A,lda,B,ldb, beta,C,ldc);
+}
+
 int hxqwen14b_cu_launch_bf16_to_fp32(
     int64_t src_bf16_dev, int64_t dst_fp32_dev, int64_t N
 ) {
@@ -560,8 +613,7 @@ int hxqwen14b_cu_launch_sgemm_rowmajor_xwt(
     if (v54_ensure_cublas() != HXQ_RC_OK) return HXQ_RC_KERNEL_FAIL;
     if (X_dev == 0 || W_dev == 0 || C_dev == 0) return HXQ_RC_KERNEL_FAIL;
     if (M <= 0 || N <= 0 || K <= 0) return HXQ_RC_KERNEL_FAIL;
-    cublasStatus_t st = cublasSgemm(
-        g_cublas_handle,
+    cublasStatus_t st = hxqwen_sgemm_base(
         CUBLAS_OP_T, CUBLAS_OP_N,
         (int)N, (int)M, (int)K,
         &alpha,
@@ -1162,8 +1214,7 @@ int hxqwen14b_cu_launch_sgemm_rowmajor_xw(
     if (v54_ensure_cublas() != HXQ_RC_OK) return HXQ_RC_KERNEL_FAIL;
     if (dy_dev == 0 || W_dev == 0 || dx_dev == 0) return HXQ_RC_KERNEL_FAIL;
     if (M <= 0 || N <= 0 || K <= 0) return HXQ_RC_KERNEL_FAIL;
-    cublasStatus_t st = cublasSgemm(
-        g_cublas_handle,
+    cublasStatus_t st = hxqwen_sgemm_base(
         CUBLAS_OP_N, CUBLAS_OP_N,
         (int)K, (int)M, (int)N,
         &alpha,
