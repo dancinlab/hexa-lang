@@ -107,10 +107,115 @@ pub struct PimdResult {
     ok: bool,
 }
 
-// placeholder — real estimator lands next commit (WIP scaffold for early commit)
+// ── ring-polymer harmonic estimator (DETERMINISTIC, no RNG) ──────────────────
+// For V(x)=½ m ω² x² the finite-N ring-polymer thermal distribution is an exact
+// multivariate Gaussian. In the discrete Fourier (normal-mode) basis the modes
+// DECOUPLE, mode k (k=0..N−1) having stiffness
+//
+//     λ_k = k_N · 4 sin²(πk/N)  +  m ω² / N ,   k_N = m N / (β² ħ²)
+//
+// (spring stiffness + the 1/N-scaled physical curvature). Each mode is an
+// independent Gaussian with ⟨|X_k|²⟩ = 1/(β λ_k). Hence the per-bead position
+// spread (delocalization) is computed in CLOSED FORM as a finite mode sum:
+//
+//     ⟨x²⟩ = (1/N) Σ_k 1/(β λ_k)
+//
+// — no Monte-Carlo sampling, no RNG: a deterministic finite-N value that
+// converges to the analytic ħ/(2mω)·coth(βħω/2) as N↑ (the g5 anchor).
+//
+// Kinetic energy:
+//   · VIRIAL estimator — for HO, ⟨KE⟩ = ⟨PE⟩ = ½ m ω² ⟨x²⟩  (centroid-virial,
+//     exact for the harmonic potential; equals the analytic (ħω/4)coth(βħω/2)).
+//   · PRIMITIVE estimator — ⟨KE⟩_prim = N/(2β) − ⟨spring energy⟩, where the mean
+//     spring energy over the Gaussian is Σ_k k_N·4sin²(πk/N)·⟨|X_k|²⟩ / N. Both
+//     estimate the SAME ⟨KE⟩; agreement is a built-in consistency check.
+//
+// Args (ħ explicit so model-unit ħ=1 selftest and SI hook both work):
+//   omega   : oscillator angular frequency ω (Hartree, or 1/s in SI)
+//   mass    : nuclear mass m (m_e, or kg)  — LIGHTER ⇒ larger delocalization
+//   beta    : inverse temperature 1/(k_B T) (1/Hartree, or 1/J) — HIGHER β ⇒ colder
+//   n_beads : N ring-polymer beads (N→∞ ⇒ exact quantum)
+//   hbar    : ħ (1.0 in QFORGE atomic units)
+// Returns PimdResult{ok=false} on any non-positive input or N<1.
 pub fn qforge_nqe_pimd(omega: float, mass: float, beta: float, n_beads: int, hbar: float) -> PimdResult {
-    return PimdResult {
-        kinetic_q: 0.0, kinetic_q_prim: 0.0, delocalization: 0.0,
-        classical_limit: 0.0, n_beads: n_beads, ok: false,
+    if omega <= 0.0 || mass <= 0.0 || beta <= 0.0 || hbar <= 0.0 || n_beads < 1 {
+        return PimdResult {
+            kinetic_q: 0.0, kinetic_q_prim: 0.0, delocalization: 0.0,
+            classical_limit: 0.0, n_beads: n_beads, ok: false,
+        }
     }
+    let nf = to_float(n_beads)
+    // spring constant k_N = m N / (β² ħ²)
+    let k_spring = mass * nf / (beta * beta * hbar * hbar)
+    let mw2 = mass * omega * omega           // m ω²
+    let pi = 3.14159265358979323846
+
+    // closed-form mode sums
+    let mut sum_x2 = 0.0                       // Σ_k 1/(β λ_k)
+    let mut sum_spring = 0.0                   // Σ_k (spring stiffness_k)·⟨|X_k|²⟩
+    let mut k = 0
+    while k < n_beads {
+        let s = sin_(pi * to_float(k) / nf)
+        let spring_stiff = k_spring * 4.0 * s * s         // k_N·4sin²(πk/N)
+        let lam = spring_stiff + mw2 / nf                 // λ_k
+        let var_k = 1.0 / (beta * lam)                    // ⟨|X_k|²⟩
+        sum_x2 = sum_x2 + var_k
+        sum_spring = sum_spring + spring_stiff * var_k
+        k = k + 1
+    }
+    let deloc = sum_x2 / nf                                // ⟨x²⟩ per bead
+    // virial KE (HO): ⟨KE⟩ = ⟨PE⟩ = ½ m ω² ⟨x²⟩
+    let ke_vir = 0.5 * mw2 * deloc
+    // primitive KE: ⟨KE⟩_prim = N/(2β) − ⟨Σ_s ½ k_N (x_{s+1}−x_s)²⟩. The mean
+    // total spring PE in normal modes = Σ_k ½·spring_stiff_k·⟨|X_k|²⟩ =
+    // ½·sum_spring. So ⟨KE⟩_prim = N/(2β) − ½·sum_spring.
+    let ke_prim = nf / (2.0 * beta) - 0.5 * sum_spring
+    let classical = 1.0 / (2.0 * beta)                    // kT/2 = 1/(2β)
+    return PimdResult {
+        kinetic_q: ke_vir, kinetic_q_prim: ke_prim, delocalization: deloc,
+        classical_limit: classical, n_beads: n_beads, ok: true,
+    }
+}
+
+// ── analytic harmonic-oscillator quantum references (the g5 🔵 targets) ───────
+// ⟨KE⟩ = (ħω/4) coth(βħω/2)   ·   ⟨x²⟩ = (ħ / 2mω) coth(βħω/2)
+//        total ⟨H⟩ = (ħω/2) coth(βħω/2).
+pub fn qforge_nqe_ho_ke_exact(omega: float, beta: float, hbar: float) -> float {
+    let u = 0.5 * beta * hbar * omega
+    return 0.25 * hbar * omega * _coth(u)
+}
+pub fn qforge_nqe_ho_x2_exact(omega: float, mass: float, beta: float, hbar: float) -> float {
+    let u = 0.5 * beta * hbar * omega
+    return (hbar / (2.0 * mass * omega)) * _coth(u)
+}
+
+// ── ab-initio coupling contract (d6: NAMED, not faked) ───────────────────────
+// The production NQE run swaps the harmonic model V for the LIVE DFT potential.
+// Returns the documented engine-hook contract string. NO real Tc shift computed
+// here — wiring N parallel SCF/force evaluations into the estimator is the
+// engine task downstream of this pure module.
+pub fn qforge_nqe_pimd_abinitio_hook() -> str {
+    return "ab-initio NQE hook: per bead s displace nucleus R_s=R_eq+x_s*e_hat; V(x_s)=E_DFT(R_s) via stdlib/qforge/scf_etot (one SCF per bead, parallel over N); V'(x_s)=-F_DFT(R_s)*e_hat from the QFORGE forces DFPT already emits; feed {x_s,V,V'} to the virial/primitive estimator above; Tc shift = re-run lambda on the NQE-broadened <u^2> vs classical <u^2>."
+}
+
+// sin via Taylor with range reduction to [−π,π] (builtin exp is real-only;
+// no builtin trig assumed). Adequate accuracy for the mode sum.
+fn sin_(x: float) -> float {
+    let pi = 3.14159265358979323846
+    let twopi = 2.0 * pi
+    let mut t = x
+    while t > pi { t = t - twopi }
+    while t < -pi { t = t + twopi }
+    // Taylor: t − t³/3! + t⁵/5! − t⁷/7! + t⁹/9! − t¹¹/11!
+    let t2 = t * t
+    let mut term = t
+    let mut sum = t
+    let mut n = 1
+    while n < 12 {
+        let d = to_float((2 * n) * (2 * n + 1))
+        term = -term * t2 / d
+        sum = sum + term
+        n = n + 1
+    }
+    return sum
 }

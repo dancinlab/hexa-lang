@@ -1,0 +1,106 @@
+// @ci_gate — deterministic · network-free · ring-polymer PIMD g5 gate
+//
+// qforge_nqe_pimd_selftest.hexa — QFORGE NOVEL frontier: quantum nuclear effects.
+//
+// The H nucleus is so light its zero-point motion is a large fraction of the
+// bond length — classical-nucleus DFPT understates this delocalization and
+// biases Tc. The ring-polymer (Feynman path-integral) estimator restores the
+// quantum spread. This gate validates the estimator on the HARMONIC OSCILLATOR,
+// whose quantum thermal averages are known in closed form (🔵):
+//
+//     ⟨KE⟩_exact = (ħω/4) coth(βħω/2)        ⟨x²⟩_exact = (ħ/2mω) coth(βħω/2)
+//
+// (a) HO: PIMD ⟨KE⟩ → exact (ħω/4)coth(βħω/2) as n_beads↑ (monotone, within tol) 🔵
+// (b) ⟨x²⟩ → exact quantum (ħ/2mω)coth(βħω/2), and > the classical kT/mω²       🔵
+// (c) high-T (βħω→0): ⟨KE⟩ → equipartition kT/2 = 1/(2β); ⟨x²⟩ → kT/mω²         🔵
+// (d) lighter mass (H vs D, m_D=2m_H): larger delocalization, ⟨x²⟩∝1/m          🔵
+// (e) ab-initio DFT-potential coupling hook NAMED (d6 honest — not faked)        contract
+// (+) virial vs primitive estimator agreement (same physics)                     consistency
+// (+) malformed input (ω/m/β/ħ≤0, N<1) → ok=false                                guard
+//
+// Run:  HEXA_LANG=. hexa run stdlib/qforge/nqe_pimd_selftest.hexa
+// PASS: "qforge_nqe_pimd_selftest PASS".
+use "stdlib/qforge/nqe_pimd"
+
+fn _abs(x: float) -> float { if x < 0.0 { return -x } return x }
+
+fn _ck_close(name: str, got: float, want: float, eps: float) -> int {
+    if _abs(got - want) <= eps { println("PASS " + name + " (" + to_string(got) + ")") ; return 0 }
+    println("FAIL " + name + " — got " + to_string(got) + " want " + to_string(want)) ; return 1
+}
+fn _ck_true(name: str, cond: bool) -> int {
+    if cond { println("PASS " + name) ; return 0 }
+    println("FAIL " + name) ; return 1
+}
+
+fn main() {
+    let mut fails = 0
+    let hb = 1.0   // ħ = 1 (QFORGE Hartree atomic units)
+
+    // ══ (a) HO ⟨KE⟩ → (ħω/4)coth(βħω/2) as N↑, MONOTONE convergence ══════════
+    // ω=1, m=1, β=1 (βħω=1, intermediate regime — quantum, not classical).
+    let om = 1.0
+    let m = 1.0
+    let beta = 1.0
+    let ke_exact = qforge_nqe_ho_ke_exact(om, beta, hb)
+    let x2_exact = qforge_nqe_ho_x2_exact(om, m, beta, hb)
+    fails = fails + _ck_close("(a) analytic ⟨KE⟩=(ħω/4)coth(½) closed-form", ke_exact, 0.25 * 2.163953413738653, 1.0e-12)
+
+    let r4 = qforge_nqe_pimd(om, m, beta, 4, hb)
+    let r16 = qforge_nqe_pimd(om, m, beta, 16, hb)
+    let r64 = qforge_nqe_pimd(om, m, beta, 64, hb)
+    let r256 = qforge_nqe_pimd(om, m, beta, 256, hb)
+    fails = fails + _ck_true("(a) ok flags true", r4.ok && r16.ok && r64.ok && r256.ok)
+    // monotone increase toward the exact value (ring-polymer underestimates KE at finite N)
+    let e4 = _abs(r4.kinetic_q - ke_exact)
+    let e16 = _abs(r16.kinetic_q - ke_exact)
+    let e64 = _abs(r64.kinetic_q - ke_exact)
+    let e256 = _abs(r256.kinetic_q - ke_exact)
+    fails = fails + _ck_true("(a) error shrinks N=4>16>64>256", e4 > e16 && e16 > e64 && e64 > e256)
+    fails = fails + _ck_close("(a) N=256 ⟨KE⟩ → exact coth", r256.kinetic_q, ke_exact, 1.0e-4)
+
+    // ══ (b) ⟨x²⟩ → exact quantum, and > classical kT/mω² ════════════════════
+    fails = fails + _ck_close("(b) N=256 ⟨x²⟩ → (ħ/2mω)coth", r256.delocalization, x2_exact, 1.0e-4)
+    let x2_classical = 1.0 / (beta * m * om * om)   // kT/mω²
+    fails = fails + _ck_true("(b) quantum ⟨x²⟩ > classical kT/mω² (zero-point)", r256.delocalization > x2_classical)
+    fails = fails + _ck_true("(b) quantum ⟨KE⟩ > classical kT/2 (zero-point)", r256.kinetic_q > r256.classical_limit)
+
+    // ══ (c) high-T limit: βħω→0 ⇒ ⟨KE⟩→kT/2, ⟨x²⟩→kT/mω² ════════════════════
+    let bhot = 0.02   // βħω = 0.02 ≪ 1
+    let rhot = qforge_nqe_pimd(om, m, bhot, 256, hb)
+    fails = fails + _ck_close("(c) high-T ⟨KE⟩ → kT/2 = 1/(2β)", rhot.kinetic_q, 1.0 / (2.0 * bhot), 1.0e-2)
+    fails = fails + _ck_close("(c) classical_limit field = 1/(2β)", rhot.classical_limit, 1.0 / (2.0 * bhot), 1.0e-12)
+    fails = fails + _ck_close("(c) high-T ⟨x²⟩ → kT/mω²", rhot.delocalization, 1.0 / (bhot * m * om * om), 5.0e-2)
+    // and the analytic coth agrees with the high-T classical limit
+    fails = fails + _ck_close("(c) analytic ⟨KE⟩ → kT/2 at high T", qforge_nqe_ho_ke_exact(om, bhot, hb), 1.0 / (2.0 * bhot), 1.0e-2)
+
+    // ══ (d) lighter mass ⇒ larger delocalization (H vs D) ═══════════════════
+    // ⟨x²⟩ = (ħ/2mω)coth ∝ 1/m ; m_D = 2 m_H ⇒ x2_H = 2·x2_D exactly.
+    let rH = qforge_nqe_pimd(om, 1.0, beta, 256, hb)
+    let rD = qforge_nqe_pimd(om, 2.0, beta, 256, hb)
+    fails = fails + _ck_true("(d) H more delocalized than D", rH.delocalization > rD.delocalization)
+    fails = fails + _ck_close("(d) ⟨x²⟩ ∝ 1/m (x2_H = 2·x2_D)", rH.delocalization, 2.0 * rD.delocalization, 1.0e-9)
+    // At FIXED ω the HO ⟨KE⟩=(ħω/4)coth is mass-independent (KE=½mω²⟨x²⟩, ⟨x²⟩∝1/m
+    // ⇒ m cancels). The mass signature lives entirely in the delocalization ⟨x²⟩.
+    fails = fails + _ck_close("(d) ⟨KE⟩ mass-independent at fixed ω (m cancels)", rH.kinetic_q, rD.kinetic_q, 1.0e-9)
+
+    // ══ (+) virial vs primitive estimator agreement ════════════════════════
+    fails = fails + _ck_close("(+) virial == primitive KE (N=64)", r64.kinetic_q, r64.kinetic_q_prim, 1.0e-9)
+    fails = fails + _ck_close("(+) virial == primitive KE (N=256)", r256.kinetic_q, r256.kinetic_q_prim, 1.0e-9)
+
+    // ══ (e) ab-initio DFT-potential coupling hook NAMED (d6) ═══════════════
+    let hook = qforge_nqe_pimd_abinitio_hook()
+    fails = fails + _ck_true("(e) ab-initio hook names E_DFT/scf_etot", contains(hook, "scf_etot"))
+    fails = fails + _ck_true("(e) ab-initio hook names per-bead displacement", contains(hook, "displace nucleus"))
+    fails = fails + _ck_true("(e) ab-initio hook names Tc/lambda re-run", contains(hook, "lambda"))
+
+    // ══ (+) malformed guards ════════════════════════════════════════════════
+    fails = fails + _ck_true("(+) ω≤0 → ok=false", !qforge_nqe_pimd(0.0, 1.0, 1.0, 8, hb).ok)
+    fails = fails + _ck_true("(+) m≤0 → ok=false", !qforge_nqe_pimd(1.0, -1.0, 1.0, 8, hb).ok)
+    fails = fails + _ck_true("(+) β≤0 → ok=false", !qforge_nqe_pimd(1.0, 1.0, 0.0, 8, hb).ok)
+    fails = fails + _ck_true("(+) ħ≤0 → ok=false", !qforge_nqe_pimd(1.0, 1.0, 1.0, 8, 0.0).ok)
+    fails = fails + _ck_true("(+) N<1 → ok=false", !qforge_nqe_pimd(1.0, 1.0, 1.0, 0, hb).ok)
+
+    if fails == 0 { println("qforge_nqe_pimd_selftest PASS") }
+    else { println("qforge_nqe_pimd_selftest FAIL — " + to_string(fails) + " case(s)") }
+}

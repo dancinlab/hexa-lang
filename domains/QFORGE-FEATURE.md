@@ -29,3 +29,23 @@
       gap     : 3-arg gpu_atomic_add reg-decl missing in NVPTX codegen → filed
                 inbox/patches/nvptx-atomic-add-3arg-reg-decl.md (2D measured via
                 1-line PTX reg-decl patch; kernel source correct) (d6/d8 honest)
+
+- [x] NOVEL — quantum nuclear effects (path-integral) for H — RING-POLYMER ESTIMATOR
+      why     : light-H zero-point motion is huge; classical-nucleus DFPT
+                understates H delocalization → biases Tc. PIMD (Feynman path
+                integral) restores the true quantum spread of the nucleus.
+      module  : stdlib/qforge/nqe_pimd.hexa — qforge_nqe_pimd(ω,m,β,N,ħ) →
+                {kinetic_q (virial), kinetic_q_prim, delocalization ⟨x²⟩,
+                classical_limit kT/2}. Ring of N beads, spring k_N=m·N/(β²ħ²);
+                harmonic-V solved DETERMINISTICALLY in ring normal modes (no RNG):
+                λ_k = k_N·4sin²(πk/N)+mω²/N, ⟨|X_k|²⟩=1/(βλ_k).
+      selftest: stdlib/qforge/nqe_pimd_selftest.hexa (g5, hexa run PASS — 24/24)
+      anchor  : HO exact ⟨KE⟩=(ħω/4)coth(βħω/2), ⟨x²⟩=(ħ/2mω)coth(βħω/2). N=256
+                PIMD → ⟨KE⟩=0.540988 vs analytic 0.540988 (Δ≤1e-4); error
+                monotone N=4>16>64>256; high-T→kT/2 equipartition; H ⟨x²⟩=2·D ⟨x²⟩
+                (∝1/m); virial≡primitive.
+      hook    : ab-initio coupling NAMED (d6 honest) — qforge_nqe_pimd_abinitio_hook():
+                per-bead V(x_s)=E_DFT(R_eq+x_s·ê) via stdlib/qforge/scf_etot (1 SCF/
+                bead, parallel over N), V'=−F_DFT from DFPT forces; Tc shift =
+                re-run λ on NQE-broadened ⟨u²⟩ vs classical. NO real hydride Tc
+                shift fabricated — DFT-potential wiring is the downstream engine task.
