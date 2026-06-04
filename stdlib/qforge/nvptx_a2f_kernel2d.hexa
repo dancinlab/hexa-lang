@@ -1,0 +1,72 @@
+// stdlib/qforge/nvptx_a2f_kernel2d.hexa
+// QFORGE M35 — 2D-parallel α²F BZ-sum (sample×bin) for GPU occupancy.
+//
+// @version 0.0.1
+// @capabilities [pure]
+// @phase("parse_only")
+//
+// The M27 kernel (qforge_a2f_bzsum, bin-per-thread) spawns only ng threads
+// (64..1024) — far too few to fill a 188-SM Blackwell (measured GFLOP/s 0.4..5.8,
+// GPU slower than CPU below the largest size). This 2D variant adds a SAMPLE
+// axis to the grid: thread (tile, j) sums a CHUNK of `nchunk` samples into
+// ω-bin j, then gpu_atomic_add's the partial into a2f[j]. Total threads =
+// (ns/nchunk)·ng → 10⁴..10⁷, enough to saturate the SMs.
+//
+// grid.x = bin index j (gid_x < ng) · grid.y = sample-tile t (gid_y < ntile).
+// Each (t,j) thread walks samples [t·nchunk, (t+1)·nchunk) for bin j and
+// atomic-adds its partial. The HOST zeroes a2f before launch. Numerics are
+// identical to M27 (same Gaussian, same FP64) — only the reduction is split.
+//
+// par[8] = [e_fermi, n_ef, weight, sigma_el, sigma_ph, inv_sqrt2pi, _, _].
+// nchunk = samples per thread (host-chosen for occupancy). Same exp underflow
+// guard as M27.
+
+@gpu_kernel
+fn qforge_a2f_bzsum2d(eps_k: [f64], eps_kq: [f64], g2: [f64], omega_qnu: [f64],
+                      omega_grid: [f64], par: [f64], a2f: [f64],
+                      ns: i64, ng: i64, nchunk: i64) {
+    let jx = gpu_block_id_x() * gpu_block_dim_x() + gpu_thread_id_x()
+    let ty = gpu_block_id_y() * gpu_block_dim_y() + gpu_thread_id_y()
+    if to_i64(jx) < ng {
+        let j = to_i64(jx)
+        let t = to_i64(ty)
+        let i0 = t * nchunk
+        if i0 < ns {
+            let e_fermi = par[0]
+            let n_ef = par[1]
+            let weight = par[2]
+            let sigma_el = par[3]
+            let sigma_ph = par[4]
+            let inv_sqrt2pi = par[5]
+            let inv_nef = 1.0 / n_ef
+            let inv_sel = 1.0 / sigma_el
+            let inv_sph = 1.0 / sigma_ph
+            let norm_el = inv_sel * inv_sqrt2pi
+            let norm_ph = inv_sph * inv_sqrt2pi
+            let exp_floor = -700.0
+            let wj = omega_grid[j]
+            let mut i1 = i0 + nchunk
+            if i1 > ns { i1 = ns }
+            let mut acc: f64 = 0.0
+            let mut i = i0
+            while i < i1 {
+                let xk = (eps_k[i] - e_fermi) * inv_sel
+                let ek = -0.5 * xk * xk
+                let mut dk: f64 = 0.0
+                if ek > exp_floor { dk = exp(ek) * norm_el }
+                let xkq = (eps_kq[i] - e_fermi) * inv_sel
+                let ekq = -0.5 * xkq * xkq
+                let mut dkq: f64 = 0.0
+                if ekq > exp_floor { dkq = exp(ekq) * norm_el }
+                let wgt = weight * g2[i] * dk * dkq * inv_nef
+                let xp = (wj - omega_qnu[i]) * inv_sph
+                let ep = -0.5 * xp * xp
+                let mut dp: f64 = 0.0
+                if ep > exp_floor { dp = exp(ep) * norm_ph }
+                acc = acc + wgt * dp
+                i = i + 1
+            }
+            let _old = gpu_atomic_add(a2f, j, acc)
+        }
+    }
+}
