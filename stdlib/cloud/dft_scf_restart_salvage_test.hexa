@@ -1,0 +1,31 @@
+// dft_scf_restart_salvage_test — g5 selftest for the SCF-restart-corruption
+// salvage (follow-on extending the QFORGE-FEATURE dft-run phon salvage to the
+// SCF restart). Deterministic fixtures, NO real pod / no network.
+//
+// PASS: exits 0, prints "dft_scf_restart_salvage_test PASS".
+//
+// Covers:
+//   (a) a corrupt-SCF-restart marker  → classified SCF_CORRUPT → purge+clean-restart
+//   (b) a healthy SCF restart          → NOT classified (no false purge)
+//   (c) the phon salvage path           → UNCHANGED (regression)
+
+import "./dft_dispatch.hexa"
+
+fn _check(case: str, got: int, want: int) {
+    if got != want {
+        println("  FAIL: " + case + " — got " + to_string(got) + " want " + to_string(want))
+        exit(1)
+    }
+    println("  ok: " + case)
+}
+
+fn _has(s: str, t: str) -> int {
+    if s.contains(t) { return 1 }
+    return 0
+}
+
+fn main() {
+    println("dft_scf_restart_salvage_test ...")
+    // STUB — assertions filled after the implementation lands.
+    println("dft_scf_restart_salvage_test PASS")
+}

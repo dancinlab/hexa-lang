@@ -2145,6 +2145,44 @@ fn _dft_salvage_cmd(np: int, walltime_h: int) -> str {
         + relaunch
 }
 
+// ── corrupt SCF-restart SALVAGE (follow-on: extends the phon salvage to scf) ──
+//
+// The phon salvage above covers a corrupt PER-Q phonon recover artifact
+// (`_ph0/<prefix>.q_N/<prefix>.save`). The SAME corruption class hits the SCF
+// restart: a teardown-kill (or a session-restart mid-write) can leave the SCF
+// ground-state restart files in `out/<prefix>.save/` half-written — a truncated
+// `charge-density.dat` / a short `wfc*.dat` / an incomplete `data-file-schema.xml`.
+// A subsequent pw.x that reads them (restart_mode='restart', or startingpot/
+// startingwfc='file') dies on the corrupt charge density instead of crashing
+// cleanly. Before this there was NO scf salvage — it fell through to teardown.
+//
+// This is SALVAGEABLE WITHOUT re-running the upstream relax: the relaxed geometry
+// lives in scf.in (assembled from relax.out) and is UNTOUCHED — only the SCF
+// charge/wfc restart scratch is corrupt. Salvage = purge `out/<prefix>.save`
+// charge/wfc restart artifacts + force a from-scratch SCF (restart_mode=
+// 'from_scratch', startingpot='atomic', startingwfc='atomic+random') and relaunch
+// pw.x. The relax stays done; only the (cheap, regenerable) SCF restarts clean.
+// STUB — filled below.
+fn _dft_failure_is_scf_corrupt(out_text: str) -> int {
+    return 0
+}
+
+// _dft_scf_salvage_marker / _dft_scf_salvage_already_tried — STUBs (one-attempt
+// guard, distinct deck-local key from the phon salvage marker so the two never
+// collide on the same deck). Filled below.
+fn _dft_scf_salvage_marker(deck: str) -> str {
+    return deck + "/.dft_scf_salvage.done"
+}
+fn _dft_scf_salvage_already_tried(deck: str) -> int {
+    return 0
+}
+
+// _dft_scf_salvage_cmd — STUB. The pod-side shell that purges the corrupt SCF
+// restart artifacts and relaunches pw.x from scratch. Filled below.
+fn _dft_scf_salvage_cmd(np: int, walltime_h: int) -> str {
+    return ""
+}
+
 // ── d11 pre-rent OOM gate (Fix-deck-1) ───────────────────────────────
 //
 // The whole RTSC wave3b --detach batch SIGKILL'd at SCF iter#2 (~71s, uniform) —
