@@ -361,13 +361,35 @@ pub fn eliashberg_gap_from_a2f(omega: [float], a2f: [float], mu_star: float,
                          mu_star, T_K, n_mats)
 }
 
-// The self-consistent {Z, Δ} Picard iteration. Damped fixed-point: seed Δ with
-// a small uniform value, iterate (a)+(b) to convergence (rel-Δ < 1e-9) or up to
-// a fixed cap. Returns the converged half-axis Δ array (Kelvin), empty on bad
-// input. The lambda lookup table covers ℓ = 0 … 2·n_mats (both |n−m| and n+m+1).
+// Backward-compatible thin wrapper: the canonical {Z,Δ} Picard solve lives in
+// `_eli_gap_core_conv` (which ALSO reports whether the fixed point converged
+// within the iteration cap). This strips the leading converged flag so legacy
+// callers keep the bare half-axis Δ array (Kelvin), empty on bad input. d3 —
+// one implementation, no copy: the unified `qforge_eliashberg_gap` entry reads
+// the flagged form directly so it can surface `converged` honestly.
 fn _eli_gap_core(omega: [float], a2f: [float],
                  lam: float, omega_rep_K: float, use_einstein: bool,
                  mu_star: float, T_K: float, n_mats: int) -> [float] {
+    let r = _eli_gap_core_conv(omega, a2f, lam, omega_rep_K, use_einstein,
+                               mu_star, T_K, n_mats)
+    let empty: [float] = []
+    if len(r) < 1 { return empty }
+    // r = [converged_flag, Δ(0), Δ(1), …, Δ(N−1)] — drop the flag.
+    let mut g: [float] = []
+    let mut i = 1
+    while i < len(r) { g.push(r[i]) ; i = i + 1 }
+    return g
+}
+
+// The self-consistent {Z, Δ} Picard iteration. Damped fixed-point: seed Δ with
+// a small uniform value, iterate (a)+(b) to convergence (rel-Δ < 1e-9) or up to
+// a fixed cap. Returns [converged_flag, Δ(0), …, Δ(N−1)] where converged_flag is
+// 1.0 if the rel-Δ tolerance was met inside the cap and 0.0 if it ran to the cap
+// (Kelvin units throughout), or the EMPTY array on malformed input. The lambda
+// lookup table covers ℓ = 0 … 2·n_mats (both |n−m| and n+m+1).
+fn _eli_gap_core_conv(omega: [float], a2f: [float],
+                      lam: float, omega_rep_K: float, use_einstein: bool,
+                      mu_star: float, T_K: float, n_mats: int) -> [float] {
     let empty: [float] = []
     if n_mats < 1 { return empty }
     if T_K <= 0.0 { return empty }
@@ -476,11 +498,30 @@ fn _eli_gap_core(omega: [float], a2f: [float],
         }
         let denom = if scale < 1.0e-12 { 1.0e-12 } else { scale }
         if maxd / denom < 1.0e-9 {
-            return delta
+            return _eli_prepend(1.0, delta)   // converged inside the cap
         }
         it = it + 1
     }
-    return delta
+    return _eli_prepend(0.0, delta)           // hit the iteration cap
+}
+
+// Prepend a scalar flag to a Δ array → [flag, Δ(0), …]. Used so the gap core can
+// report convergence without a struct allocation per call (the flagged array is
+// unpacked by `_eli_gap_core` and read directly by `qforge_eliashberg_gap`).
+fn _eli_prepend(flag: float, arr: [float]) -> [float] {
+    let mut out: [float] = []
+    out.push(flag)
+    let mut i = 0
+    while i < len(arr) { out.push(arr[i]) ; i = i + 1 }
+    return out
+}
+
+// Public flagged entry — grid α²F. Returns [converged(1.0/0.0), Δ(0), …, Δ(N−1)]
+// (Kelvin), empty on malformed input. This is the honest form the unified
+// `qforge_eliashberg_gap` reads so `converged` is a real solver fact, not a guess.
+pub fn eliashberg_gap_conv_from_a2f(omega: [float], a2f: [float], mu_star: float,
+                                    T_K: float, n_mats: int) -> [float] {
+    return _eli_gap_core_conv(omega, a2f, 0.0, 0.0, false, mu_star, T_K, n_mats)
 }
 
 // ── 2Δ(0)/k_BTc universal ratio — the BCS weak-coupling anchor ────────────
