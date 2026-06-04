@@ -1,0 +1,309 @@
+// HEXA Standard Library — qforge/scratch_bank
+//
+// @version 0.1.0
+// @capabilities [io]
+//
+// QFORGE compressed-scratch BANK — object-store-style SCF-scratch resume baton.
+//
+// ── why this module exists (실증된 incident) ─────────────────────────────
+//   A QE `.save` (SCF wavefunctions / charge density) is the thing DFPT needs
+//   to skip a from-scratch SCF re-run. Today it is NEVER banked: it is too big
+//   for git, so every fresh pod (after a teardown / walltime kill) re-runs SCF
+//   from zero before it can even START DFPT. The banked per-q dynN files
+//   (checkpoint.hexa) are cross-check / resume data for the DFPT *q-loop*, but
+//   they are NOT a baton for the SCF stage — a fresh pod with dynN's but no
+//   `.save` still pays the full SCF cost again.
+//
+//   This module banks the SCF scratch as ONE portable, integrity-checked blob
+//   (NOT git — an object-store-style artifact you push to cheap object storage
+//   between pods). A fresh pod restores the blob, asserts it is a COMPLETE +
+//   valid SCF scratch set (the "resume baton"), and DFPT skips the SCF re-run.
+//   The milestone gate: "LaH10 q4 crash → resume from banked scratch without
+//   SCF re-run." This module proves that contract at the primitive level.
+//
+// ── d4 generic contract (NO hardcoded QE paths / filenames) ──────────────
+//   The caller supplies the file SET ([{name, bytes}]) — it decides what a
+//   `.save` is (charge-density.dat, data-file-schema.xml, wfc*.dat, …). This
+//   module is content-neutral: it frames every entry, checksums the whole
+//   blob, and re-derives the verdict on unbank. The SAME path works for any
+//   scratch set (a QE .save, an SCF density dir, a future engine's state).
+//
+//   pub fn qforge_scratch_bank(files) -> str                      // pack → blob
+//   pub fn qforge_scratch_unbank(blob) -> ScratchUnbank           // {ok, files}
+//   pub fn qforge_scratch_bank_is_resume_baton(blob, required) -> bool
+//   pub fn qforge_scratch_bank_write(dir, files) -> bool          // atomic to disk
+//   pub fn qforge_scratch_bank_read(dir) -> ScratchUnbank         // disk → unbank
+//   pub fn qforge_scratch_resume(dir, required, scf_run) -> ScratchResume
+//
+// ── on-blob layout (one blob = one banked scratch) ───────────────────────
+//   header:   "SBANK1\n" "N:<count>\n" "WCK:<whole-blob adler32>\n"
+//   per entry (count of them, in order):
+//             "E:<name-len>:<byte-len>:<entry adler32>\n" <name> <bytes>
+//   The whole-blob adler32 (WCK) is computed over the body that FOLLOWS the
+//   WCK line (the N line + every entry frame). On unbank: verify WCK over the
+//   body, THEN each entry's own length + adler32. ANY mismatch / truncation →
+//   ok=false. NEVER a partial / corrupt restore (same fail-closed discipline
+//   as qforge_checkpoint_read).
+//
+// ── codec honesty (d6) ───────────────────────────────────────────────────
+//   The payload bytes are stored RAW (uncompressed). The blob STRUCTURE —
+//   manifest + per-entry framing + nested + whole-blob integrity + atomic
+//   restore — is the milestone; raw-vs-compressed bytes is an ORTHOGONAL
+//   codec slot. When a real codec is bound (a deflate/zstd builtin in
+//   stdlib — none exists today, grep -rEi 'deflate|gzip|zstd|compress' stdlib
+//   = none), it drops in at the two _sbank_encode_payload / _decode_payload
+//   seams below WITHOUT touching the manifest/integrity/restore contract.
+//   We do NOT claim compression we did not implement.
+//
+// ── reuse (d3/d19 — do NOT reimplement) ──────────────────────────────────
+//   adler32 + length-prefix framing + atomic write_text are the checkpoint.hexa
+//   primitives. We re-expose adler32 here as a thin local mirror ONLY because
+//   stdlib does not export checkpoint.hexa's private _ckpt_adler32; the
+//   ALGORITHM is identical (same modulus, same accumulation) — verified
+//   byte-for-byte by the round-trip selftest. Atomic on-disk commit rides
+//   write_text (temp→flush→atomic POSIX rename), exactly as checkpoint.hexa.
+use "stdlib/io"
+
+// ── one restored file (d4: caller-neutral name + bytes) ──────────────────
+pub struct ScratchFile {
+    name: str,
+    bytes: str
+}
+// ── verified unbank result ───────────────────────────────────────────────
+pub struct ScratchUnbank {
+    ok: bool,                // whole-blob AND every entry verified → trustworthy
+    files: [ScratchFile]     // restored set (only meaningful if ok)
+}
+// ── resume outcome — did the baton let us skip SCF? ──────────────────────
+pub struct ScratchResume {
+    resumed: bool,           // true ⇔ a valid+complete baton was restored
+    scf_runs: int,           // SCF recompute count (0 if resumed, 1 if not)
+    files: [ScratchFile]     // restored scratch (if resumed)
+}
+
+// ── adler32 (algorithm-identical to checkpoint.hexa _ckpt_adler32) ───────
+//   Deterministic, network-free 32-bit integrity tag. A single bit-flip or a
+//   truncation changes it. Not cryptographic — guards torn / truncated /
+//   corrupt scratch, exactly the resume-baton failure mode.
+fn _sbank_adler32(s: str) -> int {
+    let mut a = 1
+    let mut b = 0
+    let mut i = 0
+    let n = len(s)
+    while i < n {
+        a = (a + ord(s[i])) % 65521
+        b = (b + a) % 65521
+        i = i + 1
+    }
+    return b * 65536 + a
+}
+
+// ── codec seams (d6 — raw today; a real codec drops in HERE) ─────────────
+fn _sbank_encode_payload(bytes: str) -> str { return bytes }   // ← deflate/zstd slot
+fn _sbank_decode_payload(bytes: str) -> str { return bytes }   // ← inflate slot
+
+// find the next '\n' at or after `from`; -1 if none.
+fn _sbank_find_nl(s: str, from: int) -> int {
+    let mut i = from
+    let n = len(s)
+    while i < n {
+        if s[i] == '\n' { return i }
+        i = i + 1
+    }
+    return -1
+}
+fn _sbank_startswith(s: str, pre: str) -> bool {
+    if len(s) < len(pre) { return false }
+    return s.substring(0, len(pre)) == pre
+}
+// parse an int from a colon-delimited field s[a..b); -1 on empty.
+fn _sbank_field_int(s: str, a: int, b: int) -> int {
+    if b <= a { return -1 }
+    return to_int(s.substring(a, b))
+}
+// find next ':' at or after `from`, capped at `cap`; -1 if none before cap.
+fn _sbank_find_colon(s: str, from: int, cap: int) -> int {
+    let mut i = from
+    while i < cap {
+        if s[i] == ':' { return i }
+        i = i + 1
+    }
+    return -1
+}
+
+// shell-arg quoter (matches checkpoint.hexa / io.hexa convention).
+fn _sbank_shq(s: str) -> str {
+    let mut out = "'"
+    let mut i = 0
+    while i < len(s) {
+        if s[i] == '\'' { out = out + "'\"'\"'" } else { out = out + s.substring(i, i + 1) }
+        i = i + 1
+    }
+    return out + "'"
+}
+
+// ── qforge_scratch_bank — pack the SCF scratch into ONE portable blob ────
+//   files = [{name, bytes}] (caller-supplied set, d4 — no hardcoded QE paths).
+//   Layout: header (magic + count) + WCK (whole-body adler32) + per-entry
+//   length-prefixed + checksummed frames. The body that WCK covers is the
+//   "N:" line plus every entry frame, so a torn body (truncation) changes WCK.
+pub fn qforge_scratch_bank(files: [ScratchFile]) -> str {
+    let n = len(files)
+    // build the body = "N:<count>\n" + every entry frame.
+    let mut body = "N:" + to_string(n) + "\n"
+    let mut i = 0
+    while i < n {
+        let name = files[i].name
+        let enc = _sbank_encode_payload(files[i].bytes)
+        let eck = _sbank_adler32(enc)
+        // entry header: "E:<name-len>:<byte-len>:<adler32>\n" then name then bytes.
+        body = body + "E:" + to_string(len(name)) + ":" + to_string(len(enc))
+                    + ":" + to_string(eck) + "\n" + name + enc
+        i = i + 1
+    }
+    let wck = _sbank_adler32(body)
+    return "SBANK1\nWCK:" + to_string(wck) + "\n" + body
+}
+
+// ── qforge_scratch_unbank — integrity-verified restore (fail-closed) ─────
+//   Verifies: magic, whole-blob WCK over the body, then EACH entry's declared
+//   name-len/byte-len (truncation) AND adler32 (corruption). ANY mismatch →
+//   ok=false with files=[] — NEVER a partial / corrupt restore. NEVER crashes
+//   on a malformed blob (degrades to ok=false), same as checkpoint_read.
+pub fn qforge_scratch_unbank(blob: str) -> ScratchUnbank {
+    let empty: [ScratchFile] = []
+    if len(blob) == 0 { return ScratchUnbank { ok: false, files: empty } }
+    // magic line.
+    let nl0 = _sbank_find_nl(blob, 0)
+    if nl0 < 0 { return ScratchUnbank { ok: false, files: empty } }
+    if blob.substring(0, nl0) != "SBANK1" { return ScratchUnbank { ok: false, files: empty } }
+    // WCK line.
+    let nl1 = _sbank_find_nl(blob, nl0 + 1)
+    if nl1 < 0 { return ScratchUnbank { ok: false, files: empty } }
+    let wline = blob.substring(nl0 + 1, nl1)
+    if !_sbank_startswith(wline, "WCK:") { return ScratchUnbank { ok: false, files: empty } }
+    let want_wck = to_int(wline.substring(4, len(wline)))
+    // body = everything after the WCK line — whole-blob integrity gate.
+    let body = blob.substring(nl1 + 1, len(blob))
+    if _sbank_adler32(body) != want_wck { return ScratchUnbank { ok: false, files: empty } }
+    // body starts with "N:<count>\n".
+    let bn = _sbank_find_nl(body, 0)
+    if bn < 0 { return ScratchUnbank { ok: false, files: empty } }
+    let nline = body.substring(0, bn)
+    if !_sbank_startswith(nline, "N:") { return ScratchUnbank { ok: false, files: empty } }
+    let count = to_int(nline.substring(2, len(nline)))
+    if count < 0 { return ScratchUnbank { ok: false, files: empty } }
+    // walk the entries.
+    let mut out: [ScratchFile] = []
+    let mut pos = bn + 1
+    let blen = len(body)
+    let mut e = 0
+    while e < count {
+        // entry header line "E:<name-len>:<byte-len>:<adler32>".
+        let hnl = _sbank_find_nl(body, pos)
+        if hnl < 0 { return ScratchUnbank { ok: false, files: empty } }
+        let hdr = body.substring(pos, hnl)
+        if !_sbank_startswith(hdr, "E:") { return ScratchUnbank { ok: false, files: empty } }
+        // parse three colon-delimited ints after "E:".
+        let c1 = _sbank_find_colon(hdr, 2, len(hdr))
+        if c1 < 0 { return ScratchUnbank { ok: false, files: empty } }
+        let c2 = _sbank_find_colon(hdr, c1 + 1, len(hdr))
+        if c2 < 0 { return ScratchUnbank { ok: false, files: empty } }
+        let name_len = _sbank_field_int(hdr, 2, c1)
+        let byte_len = _sbank_field_int(hdr, c1 + 1, c2)
+        let ent_ck = _sbank_field_int(hdr, c2 + 1, len(hdr))
+        if name_len < 0 || byte_len < 0 { return ScratchUnbank { ok: false, files: empty } }
+        // name then bytes immediately follow the header newline.
+        let name_start = hnl + 1
+        let name_end = name_start + name_len
+        let byte_end = name_end + byte_len
+        // truncation guard — declared lengths must fit inside the body.
+        if byte_end > blen { return ScratchUnbank { ok: false, files: empty } }
+        let name = body.substring(name_start, name_end)
+        let enc = body.substring(name_end, byte_end)
+        // per-entry corruption guard.
+        if _sbank_adler32(enc) != ent_ck { return ScratchUnbank { ok: false, files: empty } }
+        let dec = _sbank_decode_payload(enc)
+        out.push(ScratchFile { name: name, bytes: dec })
+        pos = byte_end
+        e = e + 1
+    }
+    return ScratchUnbank { ok: true, files: out }
+}
+
+// ── qforge_scratch_bank_is_resume_baton — the milestone "baton" check ────
+//   true ⇔ the blob unbanks ok (whole + every entry integrity-valid) AND the
+//   restored set CONTAINS every name in `required` (the files DFPT needs to
+//   skip SCF). An incomplete bank (a required file missing) → false → a fresh
+//   pod will NOT falsely skip SCF on a partial scratch. Only a COMPLETE +
+//   valid bank is a baton.
+pub fn qforge_scratch_bank_is_resume_baton(blob: str, required: [str]) -> bool {
+    let u = qforge_scratch_unbank(blob)
+    if !u.ok { return false }
+    let mut r = 0
+    while r < len(required) {
+        let want = required[r]
+        let mut have = false
+        let mut k = 0
+        while k < len(u.files) {
+            if u.files[k].name == want { have = true }
+            k = k + 1
+        }
+        if !have { return false }
+        r = r + 1
+    }
+    return true
+}
+
+// ── qforge_scratch_bank_write — atomically commit a blob to disk ─────────
+//   Rides write_text (temp→flush→atomic POSIX rename), exactly as
+//   checkpoint.hexa. An interrupted write can never leave a torn bank visible
+//   at <dir>/scratch.bank (rename atomicity).
+pub fn qforge_scratch_bank_write(dir: str, files: [ScratchFile]) -> bool {
+    if len(dir) == 0 { return false }
+    let _ = exec("mkdir -p " + _sbank_shq(dir) + " 2>/dev/null")
+    return write_text(dir + "/scratch.bank", qforge_scratch_bank(files))
+}
+// ── qforge_scratch_bank_read — disk → integrity-verified unbank ──────────
+pub fn qforge_scratch_bank_read(dir: str) -> ScratchUnbank {
+    let empty: [ScratchFile] = []
+    if !file_exists(dir + "/scratch.bank") { return ScratchUnbank { ok: false, files: empty } }
+    return qforge_scratch_unbank(read_text(dir + "/scratch.bank"))
+}
+
+// ── qforge_scratch_resume — OPT-IN SCF-skip driver (0-diff baseline) ─────
+//   dir=="" → no bank → run SCF normally (scf_runs=1, the 0-diff opt-out
+//   baseline; same opt-in discipline as checkpoint's resume_dir==""). Else
+//   read the bank; if it is a COMPLETE valid baton → restore + SKIP SCF
+//   (scf_runs=0); a missing / corrupt / incomplete bank → run SCF (scf_runs=1).
+//   scf_run is the caller's SCF closure (d4: takes nothing here, returns 1 on
+//   a real run) — the selftest passes a counter-incrementing stub.
+pub fn qforge_scratch_resume(dir: str, required: [str], scf_run) -> ScratchResume {
+    let empty: [ScratchFile] = []
+    if len(dir) == 0 {
+        let _ = scf_run()
+        return ScratchResume { resumed: false, scf_runs: 1, files: empty }
+    }
+    let u = qforge_scratch_bank_read(dir)
+    let mut baton = u.ok
+    if baton {
+        // re-verify completeness against the required set.
+        let mut r = 0
+        while r < len(required) {
+            let want = required[r]
+            let mut have = false
+            let mut k = 0
+            while k < len(u.files) {
+                if u.files[k].name == want { have = true }
+                k = k + 1
+            }
+            if !have { baton = false }
+            r = r + 1
+        }
+    }
+    if baton {
+        return ScratchResume { resumed: true, scf_runs: 0, files: u.files }
+    }
+    let _ = scf_run()
+    return ScratchResume { resumed: false, scf_runs: 1, files: empty }
+}

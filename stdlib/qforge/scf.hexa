@@ -37,6 +37,7 @@
 use "stdlib/qforge/davidson"
 use "stdlib/qforge/smearing"
 use "stdlib/qforge/mixing"
+use "stdlib/qforge/checkpoint"
 
 // SCF 결과 묶음: 수렴 밀도 · KS 고유값(오름차순) · 총 에너지 · 반복수 · 수렴 플래그.
 pub struct ScfResult {
@@ -333,6 +334,127 @@ pub fn qforge_scf_smeared_dc(H_of_rho, rho_of_psi, n: int, nbands: int, nelec: i
         e_prev = e_total
         first = false
 
+        if resid < tol {
+            converged = true
+            return ScfResult { rho: rho, evals: evals, e_total: e_total,
+                               iters: iters, converged: true }
+        }
+    }
+    return ScfResult { rho: rho, evals: evals, e_total: e_total,
+                       iters: iters, converged: converged }
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// OPT-IN CRASH-RESILIENT RESUME (qforge/checkpoint, PR2) — recover-EOF 구조적 불가능화
+// ════════════════════════════════════════════════════════════════════════════
+// qforge_scf is an iterative fixed-point loop; a crash mid-convergence restarts
+// from the uniform guess (all progress lost). This OPT-IN entry checkpoints the
+// density ρ after each SCF iteration (atomic + checksummed, qforge_checkpoint),
+// using the iteration index as the checkpoint "q". On restart it resumes from the
+// LAST verified ρ at its iteration offset — never replaying a torn density blob;
+// a corrupt/truncated checkpoint is rejected (integrity) and that iteration is
+// re-driven from the last CLEAN ρ. Same recover=.false. salvage default the gate
+// anchors needed. Mirrors the qforge_scf_smeared opt-in pattern (separate entry →
+// qforge_scf stays bit-identical for every existing caller; resume_dir=="" here
+// delegates VERBATIM to qforge_scf → the non-resumed path is byte-identical).
+
+// per-iteration payload codec (d4 — driver owns its codec). Encodes ρ as
+// "n\nr0 r1 …". The decode re-derives n and validates the length defensively.
+fn _scf_encode_rho(rho: [float]) -> str {
+    let mut parts: [str] = []
+    let mut i = 0
+    let n = len(rho)
+    while i < n { parts.push(to_string(rho[i])) ; i = i + 1 }
+    return to_string(n) + "\n" + parts.join(" ")
+}
+fn _scf_decode_rho(body: str, n: int) -> [float] {
+    let lines = body.split("\n")
+    if len(lines) < 2 { return [] }
+    if to_int(lines[0]) != n { return [] }
+    let toks = lines[1].split(" ")
+    if len(toks) != n { return [] }
+    let mut out: [float] = []
+    let mut i = 0
+    while i < n { out.push(to_float(toks[i])) ; i = i + 1 }
+    return out
+}
+
+// ── qforge_scf_resumable — opt-in crash-resilient linear-mixing SCF ──────────
+//   Identical signature + result to qforge_scf, plus a trailing resume_dir and
+//   max_ckpt (number of checkpoint slots to scan for the resume point — pass
+//   max_iter). resume_dir=="" → delegate to qforge_scf (0-diff). Otherwise the
+//   density at each iteration is checkpointed; on entry we resume from the last
+//   verified ρ. A bad checkpoint is skipped (integrity) — never replayed.
+pub fn qforge_scf_resumable(H_of_rho, rho_of_psi, n: int, nbands: int, nelec: int,
+                            mix: float, tol: float, max_iter: int,
+                            resume_dir: str, max_ckpt: int) -> ScfResult {
+    if len(resume_dir) == 0 {
+        return qforge_scf(H_of_rho, rho_of_psi, n, nbands, nelec, mix, tol, max_iter)
+    }
+    let mut a = mix
+    if a <= 0.0 { a = 0.1 }
+    if a > 1.0 { a = 1.0 }
+
+    // ── resume: take the LAST verified iteration's ρ as the start (clean state) ──
+    let scan = qforge_resume_scan(resume_dir, max_ckpt)
+    let mut rho: [float] = []
+    let mut start_iter = 0
+    if scan.next_q > 0 {
+        let last = scan.next_q - 1            // highest committed iteration
+        let ck = qforge_checkpoint_read(resume_dir, last)
+        if ck.ok {
+            let restored = _scf_decode_rho(ck.payload, n)
+            if len(restored) == n { rho = restored ; start_iter = scan.next_q }
+        }
+    }
+    if len(rho) != n {
+        // no usable checkpoint (fresh run OR all corrupt) → CLEAN uniform guess.
+        rho = []
+        let rho0 = to_float(nelec) / to_float(n)
+        let mut i = 0
+        while i < n { rho.push(rho0) ; i = i + 1 }
+        start_iter = 0
+    }
+
+    let occ = scf_occupations(nbands, nelec)
+    let mut evals = []
+    let mut e_total = 0.0
+    let mut e_prev = 0.0
+    let mut iters = start_iter
+    let mut converged = false
+    let mut first = true
+
+    while iters < max_iter {
+        let H_apply = H_of_rho(rho)
+        let mut diag = []
+        let mut d = 0
+        while d < n {
+            let mut e = []
+            let mut t = 0
+            while t < n { if t == d { e.push(1.0) } else { e.push(0.0) } ; t = t + 1 }
+            let col = H_apply(e)
+            diag.push(col[d])
+            d = d + 1
+        }
+        let dr = qforge_davidson(H_apply, diag, n, nbands, 1.0e-10, 200)
+        evals = dr.evals
+        let psis = scf_slice_psis(dr.evecs, nbands, n)
+        let rho_out = rho_of_psi(psis, occ, nbands)
+        e_total = scf_band_energy(evals, occ, nbands)
+        let dr_rho = scf_dmax(rho, rho_out, n)
+        let dr_e = if first { tol + 1.0 } else { scf_abs(e_total - e_prev) }
+        let resid = if dr_rho > dr_e { dr_rho } else { dr_e }
+        let mut rho_new = []
+        let mut k = 0
+        while k < n { rho_new.push((1.0 - a) * rho[k] + a * rho_out[k]) ; k = k + 1 }
+        rho = rho_new
+        e_prev = e_total
+        first = false
+        iters = iters + 1
+        // atomically checkpoint this iteration's density (payload first, marker last).
+        if iters - 1 < max_ckpt {
+            let _ = qforge_checkpoint_write(resume_dir, iters - 1, _scf_encode_rho(rho))
+        }
         if resid < tol {
             converged = true
             return ScfResult { rho: rho, evals: evals, e_total: e_total,

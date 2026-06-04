@@ -1,0 +1,157 @@
+// @ci_gate — deterministic · network-free · ADVERSARIAL resume-baton g5 gate
+//
+// scratch_bank_selftest.hexa — QFORGE compressed-scratch BANK g5 gate.
+//
+// Proves the SCF-scratch resume baton: a fresh pod, GIVEN a complete+valid
+// banked `.save`, SKIPS the from-scratch SCF re-run (the "LaH10 q4 crash →
+// resume without SCF re-run" milestone, at the primitive level). Every case
+// is a deterministic byte/flag compare against stub scratch — NO pod, NO
+// cloud, NO RTSC/ABFE job, NO LLM self-judge. Verdict printed verbatim.
+//
+//   🔵 round-trip        — bank N stub files → unbank → byte-identical set
+//   🟢 THE GATE (baton)  — complete .save → is_resume_baton=true → resumable
+//                          SCF stub SKIPS recompute (scf_runs==0 with baton
+//                          vs ==1 without) — "resume without SCF re-run"
+//   🔵 integrity         — 1-byte corrupt → ok=false · truncate → ok=false ·
+//                          incomplete bank (missing required) → baton=false
+//   🟢 opt-out           — no bank (dir=="") → SCF runs (scf_runs==1, 0-diff)
+//   guard                — empty / malformed blob → ok=false (no crash)
+//
+// Codec honesty (d6): payloads are stored RAW (uncompressed) — stdlib has no
+// deflate/zstd codec to bind today. The blob STRUCTURE + integrity + restore
+// is what this gate proves; the codec is an orthogonal deferred slot.
+//
+// Run (canonical @ci_gate path):
+//   hexa run stdlib/qforge/scratch_bank_selftest.hexa
+use "stdlib/qforge/scratch_bank"
+use "stdlib/io"
+
+fn _ck_bool(name: str, got: bool, want: bool) -> int {
+    if got == want { println("PASS " + name + " (" + to_string(got) + ")") ; return 0 }
+    println("FAIL " + name + " — got " + to_string(got) + " want " + to_string(want)) ; return 1
+}
+fn _ck_int(name: str, got: int, want: int) -> int {
+    if got == want { println("PASS " + name + " (" + to_string(got) + ")") ; return 0 }
+    println("FAIL " + name + " — got " + to_string(got) + " want " + to_string(want)) ; return 1
+}
+fn _ck_str(name: str, got: str, want: str) -> int {
+    if got == want { println("PASS " + name) ; return 0 }
+    println("FAIL " + name + " — got [" + got + "] want [" + want + "]") ; return 1
+}
+fn _shq(s: str) -> str {
+    let mut out = "'"
+    let mut i = 0
+    while i < len(s) {
+        if s[i] == '\'' { out = out + "'\"'\"'" } else { out = out + s.substring(i, i + 1) }
+        i = i + 1
+    }
+    return out + "'"
+}
+
+// ── stub SCF run closure — increments a global counter on each call ──────
+//   This stands in for the real from-scratch SCF recompute. The baton gate
+//   asserts this counter is 0 when a valid bank is present, 1 when absent.
+let mut SCF_RUNS = 0
+fn scf_stub() -> int { SCF_RUNS = SCF_RUNS + 1 ; return 1 }
+
+fn main() {
+    let mut fails = 0
+    let dir = "/tmp/qfr_sbank_self_" + exec("echo $$").trim()
+    let _ = exec("rm -rf " + _shq(dir) + " ; mkdir -p " + _shq(dir))
+
+    // a COMPLETE stub QE-style .save set (caller-supplied; d4 — no hardcoded paths).
+    // bytes deliberately include newlines + binary-ish chars + an empty file.
+    let mut save: [ScratchFile] = []
+    save.push(ScratchFile { name: "data-file-schema.xml", bytes: "<qes>\n  <output/>\n</qes>\n" })
+    save.push(ScratchFile { name: "charge-density.dat", bytes: "RHO\x01\x02 1.0 2.0\n3.0 4.0\n" })
+    save.push(ScratchFile { name: "wfc1.dat", bytes: "PSI band1 0.5 0.5\n" })
+    save.push(ScratchFile { name: "empty.dat", bytes: "" })
+
+    // ── 🔵 round-trip — bank → unbank → byte-identical set ───────────────
+    let blob = qforge_scratch_bank(save)
+    let u = qforge_scratch_unbank(blob)
+    fails = fails + _ck_bool("[RT] unbank ok", u.ok, true)
+    fails = fails + _ck_int("[RT] entry count == 4", len(u.files), 4)
+    fails = fails + _ck_str("[RT] f0 name", u.files[0].name, "data-file-schema.xml")
+    fails = fails + _ck_str("[RT] f0 bytes byte-identical", u.files[0].bytes, save[0].bytes)
+    fails = fails + _ck_str("[RT] f1 bytes byte-identical (binary+nl)", u.files[1].bytes, save[1].bytes)
+    fails = fails + _ck_str("[RT] f3 empty-file bytes preserved", u.files[3].bytes, save[3].bytes)
+
+    // the files DFPT needs to skip SCF (the baton's required set).
+    let mut required: [str] = []
+    required.push("data-file-schema.xml")
+    required.push("charge-density.dat")
+    required.push("wfc1.dat")
+
+    // ── 🟢 THE GATE — complete .save is a baton → resumable SCF SKIPS recompute ─
+    fails = fails + _ck_bool("[GATE] complete .save is_resume_baton",
+                             qforge_scratch_bank_is_resume_baton(blob, required), true)
+    // bank to disk, then a fresh-pod resume reads it and skips SCF.
+    let w = qforge_scratch_bank_write(dir, save)
+    fails = fails + _ck_bool("[GATE] bank written to disk (atomic)", w, true)
+    SCF_RUNS = 0
+    let res = qforge_scratch_resume(dir, required, scf_stub)
+    fails = fails + _ck_bool("[GATE] resumed from banked scratch", res.resumed, true)
+    fails = fails + _ck_int("[GATE] SCF recompute SKIPPED (scf_runs==0)", res.scf_runs, 0)
+    fails = fails + _ck_int("[GATE] global SCF stub NOT called", SCF_RUNS, 0)
+    fails = fails + _ck_int("[GATE] restored file count == 4", len(res.files), 4)
+
+    // ── 🟢 opt-out — no bank (dir=="") → SCF RUNS (0-diff baseline) ──────
+    SCF_RUNS = 0
+    let res0 = qforge_scratch_resume("", required, scf_stub)
+    fails = fails + _ck_bool("[OPT-OUT] no bank → not resumed", res0.resumed, false)
+    fails = fails + _ck_int("[OPT-OUT] SCF RUNS (scf_runs==1)", res0.scf_runs, 1)
+    fails = fails + _ck_int("[OPT-OUT] global SCF stub called once", SCF_RUNS, 1)
+    // contrast assertion the milestone names: 0 with baton vs 1 without.
+    fails = fails + _ck_int("[CONTRAST] scf_runs(baton)==0 < scf_runs(none)==1", res.scf_runs - res0.scf_runs, -1)
+
+    // ── 🔵 integrity (a) — corrupt ONE byte in the blob → unbank ok=false ─
+    //   flip a byte deep in the body (an entry payload region). adler32
+    //   (whole-blob WCK and/or per-entry) must catch it.
+    let mid = len(blob) / 2
+    let corrupt = blob.substring(0, mid) + "X" + blob.substring(mid + 1, len(blob))
+    fails = fails + _ck_bool("[INTEG-a] 1-byte corrupt → ok=false (no partial restore)",
+                             qforge_scratch_unbank(corrupt).ok, false)
+
+    // ── 🔵 integrity (b) — truncate the blob → ok=false ──────────────────
+    let trunc = blob.substring(0, len(blob) - 12)
+    fails = fails + _ck_bool("[INTEG-b] truncated blob → ok=false", qforge_scratch_unbank(trunc).ok, false)
+
+    // ── 🔵 integrity (c) — INCOMPLETE bank (missing a required file) → baton=false ─
+    //   bank only 2 of the 3 required files — a valid blob, but NOT a baton.
+    let mut partial: [ScratchFile] = []
+    partial.push(ScratchFile { name: "data-file-schema.xml", bytes: "<qes/>\n" })
+    partial.push(ScratchFile { name: "charge-density.dat", bytes: "RHO partial\n" })
+    let pblob = qforge_scratch_bank(partial)
+    fails = fails + _ck_bool("[INTEG-c] partial bank unbanks ok (valid blob)",
+                             qforge_scratch_unbank(pblob).ok, true)
+    fails = fails + _ck_bool("[INTEG-c] partial bank is NOT a baton (missing wfc1.dat)",
+                             qforge_scratch_bank_is_resume_baton(pblob, required), false)
+    // and the resume driver does NOT skip SCF on a partial bank.
+    let _ = exec("rm -rf " + _shq(dir) + " ; mkdir -p " + _shq(dir))
+    let _ = qforge_scratch_bank_write(dir, partial)
+    SCF_RUNS = 0
+    let resp = qforge_scratch_resume(dir, required, scf_stub)
+    fails = fails + _ck_bool("[INTEG-c] partial bank → not resumed", resp.resumed, false)
+    fails = fails + _ck_int("[INTEG-c] partial bank → SCF RUNS (scf_runs==1)", resp.scf_runs, 1)
+
+    // ── guard — empty / malformed blob → ok=false (no crash) ─────────────
+    fails = fails + _ck_bool("[GUARD] empty blob → ok=false", qforge_scratch_unbank("").ok, false)
+    fails = fails + _ck_bool("[GUARD] no-magic blob → ok=false", qforge_scratch_unbank("garbage\nN:0\n").ok, false)
+    fails = fails + _ck_bool("[GUARD] empty blob not a baton", qforge_scratch_bank_is_resume_baton("", required), false)
+    // empty required set against a valid blob → trivially a baton (nothing missing).
+    let mut none: [str] = []
+    fails = fails + _ck_bool("[GUARD] empty required set → baton (vacuous)",
+                             qforge_scratch_bank_is_resume_baton(blob, none), true)
+    // an EMPTY file set banks + unbanks to a valid, empty blob.
+    let mut zero: [ScratchFile] = []
+    let zblob = qforge_scratch_bank(zero)
+    let zu = qforge_scratch_unbank(zblob)
+    fails = fails + _ck_bool("[GUARD] zero-entry bank unbanks ok", zu.ok, true)
+    fails = fails + _ck_int("[GUARD] zero-entry count == 0", len(zu.files), 0)
+
+    let _ = exec("rm -rf " + _shq(dir))
+
+    if fails == 0 { println("qforge_scratch_bank_selftest PASS") }
+    else { println("qforge_scratch_bank_selftest FAIL — " + to_string(fails) + " case(s)") }
+}
