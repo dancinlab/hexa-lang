@@ -1,0 +1,164 @@
+// stdlib/qforge/convergence_verdict.hexa — SCF/DFPT EARLY-STOP CONVERGENCE PREDICTOR.
+//
+// ── PURPOSE (QFORGE-PROCESS · save compute on a dead run) ─────────────────────
+// A QFORGE SCF (scf.hexa : qforge_scf_smeared) or DFPT (dfpt.hexa) iteration
+// emits a per-step residual  resid = max(|Δρ|∞, |ΔE|)  (scf.hexa line ~167) and
+// runs UP TO max_iter. When the run is going nowhere — the metallic Picard /
+// screening-gain mode blows the residual up to NaN/Inf, or a poorly-mixed metal
+// plateaus far above tol — every remaining iteration is wasted pod-$.
+//
+// Observed THIS campaign (the motivation):
+//   • Picard-screening NaN divergence — the residual climbed, then overflowed to
+//     NaN, only detected at the iteration cap → a full deck-length of burned hrs.
+//   • recover-EOF crash-loops — a stalled run re-fired to the cap repeatedly.
+//
+// This module reads the RESIDUAL HISTORY (the signal scf.hexa already produces,
+// so the input is cleanly available — d6 honest scope: this consumes the existing
+// `resid` series, it does not need new instrumentation) and returns an early
+// verdict so an orchestrator can ABORT a divergent/stalled run ~½ or sooner.
+//
+// ── THE THREE STATES (honest, d6 — never a false abort on a healthy run) ──────
+//   DIVERGING — a NaN/Inf appeared, OR the residual is monotone-INCREASING over a
+//               window (the Picard blow-up). recommend_abort = true. Flagged the
+//               FIRST iteration the blow-up window fills — for the metallic
+//               divergent pattern this is ≥2× before the iteration cap.
+//   STALLED   — the residual PLATEAUS above tol for K consecutive iterations with
+//               no meaningful monotone decrease (a stuck metal). recommend_abort
+//               = true (re-tune mixing/smearing rather than burn to the cap).
+//   CONVERGING— the residual trends DOWN toward tol (a healthy run, possibly
+//               noisy). recommend_abort = false. NEVER aborted.
+//
+// ── CALIBRATION (flag ≥2× sooner than the cap) ───────────────────────────────
+// DIVERGE_WIN = 3 : 3 strictly-rising steps (or one NaN/Inf) ⇒ DIVERGING. On a
+//   blow-up that reaches NaN near iter ~N, the rising window fills by ~iter N/2 or
+//   earlier, and a hard NaN/Inf trips INSTANTLY — both ≥2× before a typical cap.
+// STALL_K = 6 : 6 consecutive steps whose relative drop < STALL_REL (plateau).
+// STALL_REL = 0.01 : "no meaningful decrease" = <1% relative drop step-over-step.
+// These windows are deliberately short so a dead run is caught EARLY; the
+// CONVERGING guard (a clear downtrend / approaching tol) protects a healthy run
+// from a false STALL/DIVERGE even when it is noisy.
+//
+// Run:  HEXA_LANG=. hexa run stdlib/qforge/convergence_verdict_selftest.hexa
+//
+// PURE · DETERMINISTIC · NETWORK-FREE · NO pod ops.
+//
+// NOTE: the IEEE classifiers below are inlined (mirroring stdlib/runtime/numeric
+// rt_isnan/rt_isinf) rather than imported, so this stays a leaf module with no
+// runtime-intrinsic dependency — `hexa run` builds it standalone.
+
+// ── tunables (see CALIBRATION above) ─────────────────────────────────────────
+pub let CV_DIVERGE_WIN: int   = 3        // strictly-rising steps ⇒ DIVERGING
+pub let CV_STALL_K: int       = 6        // plateau steps ⇒ STALLED
+pub let CV_STALL_REL: float   = 0.01     // <1% step-over-step drop = "no decrease"
+
+// state codes (avoid a string-enum dep — keep it a plain int the caller maps).
+pub let CV_CONVERGING: int = 0
+pub let CV_STALLED: int    = 1
+pub let CV_DIVERGING: int  = 2
+
+pub struct ConvVerdict {
+    state: int,                 // CV_CONVERGING | CV_STALLED | CV_DIVERGING
+    reason: str,                // human-readable why
+    recommend_abort: bool,      // true ⇔ STALLED or DIVERGING
+    flag_iter: int              // 1-based residual index the verdict was decided
+                                //   at (≤0 ⇒ no early signal; ran clean to end).
+}
+
+fn _cv_abs(x: float) -> float { if x < 0.0 { return -x } return x }
+
+// IEEE 754 classifiers (inlined; see NOTE above). NaN is the unique value with
+// (x != x); ±Inf exceed DBL_MAX in magnitude.
+fn _cv_isnan(x: float) -> bool { return x != x }
+fn _cv_isinf(x: float) -> bool {
+    if x != x { return false }
+    let big = 1.7976931348623157e308
+    return x > big || x < (0.0 - big)
+}
+
+// state → label, for messages / the selftest.
+pub fn cv_state_name(s: int) -> str {
+    if s == CV_DIVERGING { return "DIVERGING" }
+    if s == CV_STALLED   { return "STALLED" }
+    return "CONVERGING"
+}
+
+// ── the predictor ────────────────────────────────────────────────────────────
+// residuals : the per-iteration SCF/DFPT residual history (scf.hexa `resid`),
+//             oldest FIRST. tol : the SCF tolerance the run targets.
+//
+// Decision order (first hit wins, scanning the series left→right so flag_iter is
+// the EARLIEST iteration the signal was unambiguous):
+//   1. any residual NaN/Inf            → DIVERGING (instant, flag_iter = that idx)
+//   2. CV_DIVERGE_WIN strictly-rising  → DIVERGING (flag at the window's end)
+//   3. CV_STALL_K plateau (above tol)  → STALLED   (flag at the window's end)
+//   4. else                            → CONVERGING (flag_iter = 0)
+// A residual that has ALREADY reached tol short-circuits to CONVERGING (a run
+// that converged then we stopped looking — never a false STALL on the tail).
+pub fn qforge_convergence_verdict(residuals: [float], tol: float) -> ConvVerdict {
+    let n = len(residuals)
+    if n == 0 {
+        return ConvVerdict { state: CV_CONVERGING, reason: "no residuals yet",
+                             recommend_abort: false, flag_iter: 0 }
+    }
+
+    // single sweep, oldest→newest, tracking rising-run and plateau-run lengths.
+    let mut rise_run = 0          // consecutive strictly-increasing steps
+    let mut plateau_run = 0       // consecutive <CV_STALL_REL relative-drop steps
+    let mut i = 0
+    while i < n {
+        let r = residuals[i]
+
+        // (1) hard NaN/Inf — the Picard blow-up endgame. Trip immediately.
+        if _cv_isnan(r) || _cv_isinf(r) {
+            return ConvVerdict { state: CV_DIVERGING,
+                reason: "residual NaN/Inf at iter " + to_string(i + 1) + " (overflow blow-up)",
+                recommend_abort: true, flag_iter: i + 1 }
+        }
+
+        // already at/under tol → healthy, done looking.
+        if r <= tol {
+            return ConvVerdict { state: CV_CONVERGING,
+                reason: "reached tol (" + to_string(r) + " <= " + to_string(tol) + ")",
+                recommend_abort: false, flag_iter: 0 }
+        }
+
+        if i > 0 {
+            let prev = residuals[i - 1]
+            // (2) strictly-rising window — the residual is climbing.
+            if r > prev {
+                rise_run = rise_run + 1
+                if rise_run >= CV_DIVERGE_WIN {
+                    return ConvVerdict { state: CV_DIVERGING,
+                        reason: "residual rose " + to_string(rise_run)
+                                + " steps to iter " + to_string(i + 1) + " (diverging)",
+                        recommend_abort: true, flag_iter: i + 1 }
+                }
+            } else {
+                rise_run = 0
+            }
+
+            // (3) plateau window — relative step-over-step drop below the bar.
+            //   drop = (prev − r)/prev. A meaningful decrease resets the run.
+            let denom = if prev > 0.0 { prev } else { 1.0 }
+            let rel_drop = (prev - r) / denom
+            if rel_drop < CV_STALL_REL {
+                plateau_run = plateau_run + 1
+                if plateau_run >= CV_STALL_K {
+                    return ConvVerdict { state: CV_STALLED,
+                        reason: "residual plateaued " + to_string(plateau_run)
+                                + " steps above tol at iter " + to_string(i + 1),
+                        recommend_abort: true, flag_iter: i + 1 }
+                }
+            } else {
+                plateau_run = 0
+            }
+        }
+        i = i + 1
+    }
+
+    // no early signal — the run is trending down (or too short to call). Healthy.
+    return ConvVerdict { state: CV_CONVERGING,
+        reason: "residual trending toward tol (" + to_string(residuals[n - 1])
+                + "), no abort signal",
+        recommend_abort: false, flag_iter: 0 }
+}
