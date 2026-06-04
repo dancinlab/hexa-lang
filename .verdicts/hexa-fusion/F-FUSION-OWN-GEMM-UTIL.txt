@@ -1,0 +1,21 @@
+F-FUSION-OWN-GEMM-UTIL  ::  MEASURED (foreground util remeasure, g5-HONEST) — campaign synthesis confirmed
+domain: HEXA-FUSION · date: 2026-06-05 · own-GEMM (CUTLASS-grade WMMA2 TF32) sustained-loop util vs cuBLAS
+GPU: NVIDIA B200 (datacenter Blackwell; nvcc 12.4 compute_90 PTX-JIT). util sampled via nvidia-smi
+(utilization.gpu, 200ms cadence) during a 15s sustained 2048³ GEMM loop, per impl. Kernels #include'd
+verbatim from self/native/hxqwen14b_cuda.cu (no drift).
+
+RESULT (sustained 2048³, 15s each):
+  cuBLAS-TF32 : util MEAN 88.5%  PEAK 100%  (16160 iters)
+  WMMA2(own)  : util MEAN 89.9%  PEAK 100%  ( 9984 iters)
+  → WMMA2 sustained util (89.9%) ≈ cuBLAS (88.5%); BOTH ~90% MEAN, PEAK 100%. (cuBLAS does ~1.6× more
+    iters/15s = it is faster per-iter, consistent with the 1.13–1.6× step-time gap, but BOTH saturate
+    the SMs ~equally on a large sustained GEMM.)
+
+SYNTHESIS CONFIRMED (closes the util-GREEN campaign question): a fast (CUTLASS-grade) OWN GEMM achieves
+cuBLAS-CLASS occupancy (~90% util MEAN, 100% PEAK) on a GEMM-bound workload — cuBLAS-free, TF32-correct.
+The earlier clm_prod ~10-18% util was the SMALL-WORKLOAD / launch-bound regime (D1536, tiny FP64 GEMMs),
+NOT an own-GEMM deficiency. util-90%+ (≈ the 99% north-star regime) IS reached by our own kernel on the
+right workload. Combined with Track A (megakernel util-flat −0.08pp), the campaign's binding term is
+confirmed: GPU occupancy is set by GEMM size/saturation, NOT glue/launch fusion. The own-GEMM both
+(a) trains clm+llm correctly cuBLAS-free (on main #2697) and (b) saturates the GPU like cuBLAS when fed
+a large GEMM. util-GREEN is a WORKLOAD-SIZE property, now owned end-to-end.

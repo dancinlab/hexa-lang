@@ -19,6 +19,7 @@
 
 #include <cuda_runtime.h>
 #include <cublas_v2.h>
+#include <mma.h>
 #include <stdint.h>
 #include <math.h>
 #include <stdio.h>
@@ -535,6 +536,247 @@ __global__ void _hx_k_sgemm_cm_tiled(int tA, int tB, long long M, long long N, l
         C[row + col*ldc] = alpha * acc + beta * prev;
     }
 }
+// ═════════════════════════════════════════════════════════════════════
+// Phase 1b-3 (CUDA-OWN, precision-approved): TF32 Tensor-Core own-GEMM via
+// the WMMA API — the cuBLAS-parity path. One warp (32 threads) per 16×16 C
+// tile; K stepped by 8 (TF32 frag = 16×16×8). Transpose (tA/tB) + edge
+// zero-pad are handled while STAGING op(A)/op(B) sub-tiles into __shared__,
+// so the WMMA load is a fixed row_major layout regardless of transpose (no
+// 4-variant template). Inputs rounded fp32→tf32 (≈10-bit mantissa) → NOT
+// fp32-exact; correctness bar loosens to TF32 tol (rel-RMS ~1e-3), which is
+// the approved precision tradeoff for Tensor-Core throughput. cublasSgemm
+// column-major semantics preserved: C[i+j·ldc]=α·Σ op(A)·op(B)+β·C.
+// Env HEXA_OWN_GEMM_WMMA selects this within the own path.
+// ═════════════════════════════════════════════════════════════════════
+__global__ void _hx_k_sgemm_cm_wmma(int tA, int tB, long long M, long long N, long long K,
+                                    float alpha, const float* A, long long lda,
+                                    const float* B, long long ldb,
+                                    float beta, float* C, long long ldc) {
+    const long long row0 = (long long)blockIdx.x * 16;   // C row block
+    const long long col0 = (long long)blockIdx.y * 16;   // C col block
+    __shared__ float As[16*8];   // row-major 16×8  (op(A)[row0+i, t+l])
+    __shared__ float Bs[8*16];   // row-major 8×16  (op(B)[t+l, col0+j])
+    __shared__ float Cs[16*16];
+    nvcuda::wmma::fragment<nvcuda::wmma::matrix_a, 16,16,8, nvcuda::wmma::precision::tf32, nvcuda::wmma::row_major> a_frag;
+    nvcuda::wmma::fragment<nvcuda::wmma::matrix_b, 16,16,8, nvcuda::wmma::precision::tf32, nvcuda::wmma::row_major> b_frag;
+    nvcuda::wmma::fragment<nvcuda::wmma::accumulator, 16,16,8, float> c_frag;
+    nvcuda::wmma::fill_fragment(c_frag, 0.0f);
+    int tid = threadIdx.x;   // 0..31 (one warp)
+    for (long long t = 0; t < K; t += 8) {
+        for (int idx = tid; idx < 128; idx += 32) {        // stage As 16×8
+            int i = idx >> 3, l = idx & 7;
+            long long r = row0 + i, kk = t + l;
+            float v = (r < M && kk < K) ? (tA ? A[kk + r*lda] : A[r + kk*lda]) : 0.0f;
+            As[idx] = nvcuda::wmma::__float_to_tf32(v);
+        }
+        for (int idx = tid; idx < 128; idx += 32) {        // stage Bs 8×16
+            int l = idx >> 4, j = idx & 15;
+            long long kk = t + l, c = col0 + j;
+            float v = (kk < K && c < N) ? (tB ? B[c + kk*ldb] : B[kk + c*ldb]) : 0.0f;
+            Bs[idx] = nvcuda::wmma::__float_to_tf32(v);
+        }
+        __syncwarp();
+        nvcuda::wmma::load_matrix_sync(a_frag, As, 8);
+        nvcuda::wmma::load_matrix_sync(b_frag, Bs, 16);
+        nvcuda::wmma::mma_sync(c_frag, a_frag, b_frag, c_frag);
+        __syncwarp();
+    }
+    nvcuda::wmma::store_matrix_sync(Cs, c_frag, 16, nvcuda::wmma::mem_row_major);
+    for (int idx = tid; idx < 256; idx += 32) {
+        int i = idx >> 4, j = idx & 15;
+        long long r = row0 + i, c = col0 + j;
+        if (r < M && c < N) {
+            float prev = (beta != 0.0f) ? C[r + c*ldc] : 0.0f;
+            C[r + c*ldc] = alpha * Cs[idx] + beta * prev;
+        }
+    }
+}
+// ═════════════════════════════════════════════════════════════════════
+// Phase 1b-3 CUTLASS-GRADE (env HEXA_OWN_GEMM_WMMA2): a properly-tiled TF32
+// Tensor-Core GEMM applying the standard throughput optimizations that let
+// cuBLAS/CUTLASS reach TC peak — the naive WMMA above (1 warp / 16×16 C tile,
+// K-step 8, shared round-trip every step) pays TC overhead WITHOUT throughput.
+//
+// TECHNIQUES APPLIED:
+//   • Block-level tile  BM=128 × BN=64 × BK=32 computed by an 8-warp block.
+//   • Warp tiling — warps laid out 4(row)×2(col); each warp owns a 32×32
+//     warp-tile = a 2×2 grid of 16×16 WMMA fragment ops → 4 accumulator
+//     fragments held in registers across the whole K loop (no shared
+//     round-trip of partial sums; the naive kernel re-stored C every step).
+//   • Double-buffered shared-memory pipeline: while WMMA computes on buffer p,
+//     the next BK-slice is staged into buffer 1-p (manual double-buffer; on
+//     sm_80+ the global→shared copies use cp.async to overlap with compute).
+//   • op(A)/op(B) transpose (tA/tB) + edge zero-pad handled while STAGING into
+//     __shared__ as a fixed row_major layout → one WMMA load path (no template
+//     explosion), bounds-guarded for non-128/64/32-multiple shapes.
+//   • Register accumulators; epilogue applies alpha/beta + col-major store.
+//   • TF32 rounding (fp32→tf32 ~10-bit mantissa) — same precision contract as
+//     the naive WMMA (correctness bar = TF32 rel-RMS ≤ 3e-3). cublasSgemm
+//     col-major semantics preserved: C[i+j·ldc]=α·Σ op(A)·op(B)+β·C.
+// LAYOUT: block = 256 threads (8 warps). Shared As: BM×BK row-major (128×32),
+//   Bs: BK×BN row-major (32×64), ×2 for double buffer. Each = 128*32*4=16KB and
+//   32*64*4=8KB → 2*(16+8)=48KB shared/block (fits H100/Blackwell 100KB+ smem).
+// ═════════════════════════════════════════════════════════════════════
+#define HXG_BM 128
+#define HXG_BN 64
+#define HXG_BK 32
+#define HXG_WARPS 8        // 4 (row) × 2 (col)
+#define HXG_WROWS 4
+#define HXG_WCOLS 2
+#define HXG_WM (HXG_BM / HXG_WROWS)   // 32 rows per warp-tile
+#define HXG_WN (HXG_BN / HXG_WCOLS)   // 32 cols per warp-tile
+#define HXG_FM (HXG_WM / 16)          // 2 frag rows per warp
+#define HXG_FN (HXG_WN / 16)          // 2 frag cols per warp
+#define HXG_FK (HXG_BK / 8)           // 4 K-frags per BK slice (TF32 frag K-dim = 8)
+
+#if defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 800)
+#define HXG_CP_ASYNC 1
+#endif
+
+__device__ __forceinline__ void hxg_cp4(float* dst, const float* src, int pred) {
+#if HXG_CP_ASYNC
+    unsigned long long s = pred ? (unsigned long long)(uintptr_t)src : 0ull;
+    unsigned d = (unsigned)__cvta_generic_to_shared(dst);
+    if (pred)
+        asm volatile("cp.async.ca.shared.global [%0], [%1], 4;\n" :: "r"(d), "l"(s));
+    else
+        *dst = 0.0f;
+#else
+    *dst = pred ? *src : 0.0f;
+#endif
+}
+__device__ __forceinline__ void hxg_cp_commit() {
+#if HXG_CP_ASYNC
+    asm volatile("cp.async.commit_group;\n" ::);
+#endif
+}
+__device__ __forceinline__ void hxg_cp_wait() {
+#if HXG_CP_ASYNC
+    asm volatile("cp.async.wait_group 0;\n" ::);
+#endif
+}
+
+__global__ void _hx_k_sgemm_cm_wmma2(int tA, int tB, long long M, long long N, long long K,
+                                     float alpha, const float* A, long long lda,
+                                     const float* B, long long ldb,
+                                     float beta, float* C, long long ldc) {
+    const long long blockRow = (long long)blockIdx.x * HXG_BM;  // C rows [blockRow, +128)
+    const long long blockCol = (long long)blockIdx.y * HXG_BN;  // C cols [blockCol, +64)
+    const int tid  = threadIdx.x;                               // 0..255
+    const int warp = tid >> 5;                                  // 0..7
+    const int lane = tid & 31;                                  // 0..31
+    const int warpRow = warp / HXG_WCOLS;                       // 0..3
+    const int warpCol = warp % HXG_WCOLS;                       // 0..1
+
+    // Double-buffered shared staging. As: 2 × (BM×BK) row-major, Bs: 2 × (BK×BN).
+    __shared__ float As[2][HXG_BM * HXG_BK];   // 2 × 128×32
+    __shared__ float Bs[2][HXG_BK * HXG_BN];   // 2 × 32×64
+
+    // Register accumulator fragments: HXG_FM × HXG_FN per warp (held all K).
+    nvcuda::wmma::fragment<nvcuda::wmma::accumulator,16,16,8,float> acc[HXG_FM][HXG_FN];
+    #pragma unroll
+    for (int fm=0; fm<HXG_FM; fm++)
+        #pragma unroll
+        for (int fn=0; fn<HXG_FN; fn++)
+            nvcuda::wmma::fill_fragment(acc[fm][fn], 0.0f);
+
+    // Staging helpers: each of the 256 threads cooperatively loads the tiles.
+    //   As tile = 128*32 = 4096 elems → 16 per thread.
+    //   Bs tile = 32*64  = 2048 elems →  8 per thread.
+    auto stageA = [&](int buf, long long kk0){
+        #pragma unroll
+        for (int e=0; e<(HXG_BM*HXG_BK)/256; e++) {
+            int idx = e*256 + tid;          // 0..4095
+            int i = idx / HXG_BK;           // 0..127  (row in block)
+            int l = idx % HXG_BK;           // 0..31   (k within slice)
+            long long r = blockRow + i, kk = kk0 + l;
+            int pred = (r < M && kk < K);
+            const float* sp = pred ? (tA ? &A[kk + r*lda] : &A[r + kk*lda]) : (const float*)0; // op(A)[r,kk]
+            hxg_cp4(&As[buf][idx], sp, pred);
+        }
+    };
+    auto stageB = [&](int buf, long long kk0){
+        #pragma unroll
+        for (int e=0; e<(HXG_BK*HXG_BN)/256; e++) {
+            int idx = e*256 + tid;          // 0..2047
+            int l = idx / HXG_BN;           // 0..31   (k within slice)
+            int j = idx % HXG_BN;           // 0..63   (col in block)
+            long long kk = kk0 + l, c = blockCol + j;
+            int pred = (kk < K && c < N);
+            const float* sp = pred ? (tB ? &B[c + kk*ldb] : &B[kk + c*ldb]) : (const float*)0; // op(B)[kk,c]
+            hxg_cp4(&Bs[buf][idx], sp, pred);
+        }
+    };
+
+    int buf = 0;
+    stageA(buf, 0); stageB(buf, 0); hxg_cp_commit(); hxg_cp_wait();
+    __syncthreads();
+
+    nvcuda::wmma::fragment<nvcuda::wmma::matrix_a,16,16,8,nvcuda::wmma::precision::tf32,nvcuda::wmma::row_major> a_frag[HXG_FM][HXG_FK];
+    nvcuda::wmma::fragment<nvcuda::wmma::matrix_b,16,16,8,nvcuda::wmma::precision::tf32,nvcuda::wmma::row_major> b_frag[HXG_FK][HXG_FN];
+
+    for (long long k0 = 0; k0 < K; k0 += HXG_BK) {
+        // Prefetch next BK slice into the other buffer (overlaps with compute).
+        long long kNext = k0 + HXG_BK;
+        int nbuf = buf ^ 1;
+        if (kNext < K) { stageA(nbuf, kNext); stageB(nbuf, kNext); hxg_cp_commit(); }
+
+        // Compute on current buffer: load this warp's A/B fragments, round to TF32, mma.
+        #pragma unroll
+        for (int fk=0; fk<HXG_FK; fk++) {
+            #pragma unroll
+            for (int fm=0; fm<HXG_FM; fm++) {
+                int srow = warpRow*HXG_WM + fm*16;       // row in block tile
+                int scol = fk*8;                         // k within BK (TF32 frag K=8)
+                nvcuda::wmma::load_matrix_sync(a_frag[fm][fk], &As[buf][srow*HXG_BK + scol], HXG_BK);
+                #pragma unroll
+                for (int t=0; t<a_frag[fm][fk].num_elements; t++)
+                    a_frag[fm][fk].x[t] = nvcuda::wmma::__float_to_tf32(a_frag[fm][fk].x[t]);
+            }
+            #pragma unroll
+            for (int fn=0; fn<HXG_FN; fn++) {
+                int srow = fk*8;                         // k within BK (TF32 frag K=8)
+                int scol = warpCol*HXG_WN + fn*16;       // col in block tile
+                nvcuda::wmma::load_matrix_sync(b_frag[fk][fn], &Bs[buf][srow*HXG_BN + scol], HXG_BN);
+                #pragma unroll
+                for (int t=0; t<b_frag[fk][fn].num_elements; t++)
+                    b_frag[fk][fn].x[t] = nvcuda::wmma::__float_to_tf32(b_frag[fk][fn].x[t]);
+            }
+        }
+        #pragma unroll
+        for (int fm=0; fm<HXG_FM; fm++)
+            #pragma unroll
+            for (int fn=0; fn<HXG_FN; fn++)
+                #pragma unroll
+                for (int fk=0; fk<HXG_FK; fk++)
+                    nvcuda::wmma::mma_sync(acc[fm][fn], a_frag[fm][fk], b_frag[fk][fn], acc[fm][fn]);
+
+        if (kNext < K) { hxg_cp_wait(); __syncthreads(); buf = nbuf; }
+    }
+
+    // Epilogue: store each accumulator frag to shared, then col-major C with alpha/beta.
+    __shared__ float tmp[HXG_WARPS][16*16];   // per-warp 16×16 scratch
+    #pragma unroll
+    for (int fm=0; fm<HXG_FM; fm++) {
+        #pragma unroll
+        for (int fn=0; fn<HXG_FN; fn++) {
+            // Stage this frag (16×16) to a per-warp shared region then scatter to C.
+            nvcuda::wmma::store_matrix_sync(tmp[warp], acc[fm][fn], 16, nvcuda::wmma::mem_row_major);
+            __syncwarp();
+            int rowBase = (int)(blockRow) + warpRow*HXG_WM + fm*16;
+            int colBase = (int)(blockCol) + warpCol*HXG_WN + fn*16;
+            for (int e=lane; e<256; e+=32) {
+                int i = e >> 4, j = e & 15;
+                long long r = rowBase + i, c = colBase + j;
+                if (r < M && c < N) {
+                    float prev = (beta != 0.0f) ? C[r + c*ldc] : 0.0f;
+                    C[r + c*ldc] = alpha * tmp[warp][e] + beta * prev;
+                }
+            }
+            __syncwarp();
+        }
+    }
+}
 // Host launcher for the own-GEMM kernel — extern "C" so the gcc-compiled
 // hxqwen14b.c TU (LoRA fwd/bwd) can call it. tA/tB are 1 if op==T else 0.
 // Returns 0 on success, nonzero on a CUDA launch/sync error.
@@ -547,7 +789,22 @@ int _hx_own_sgemm_cm_launch(int tA, int tB, int m, int n, int k,
                             const float* B, int ldb,
                             float beta, float* C, int ldc) {
     dim3 blk(16,16); dim3 grd((unsigned)((m+15)/16),(unsigned)((n+15)/16));
-    if (getenv("HEXA_OWN_GEMM_TILED") && getenv("HEXA_OWN_GEMM_TILED")[0]) {
+    if (getenv("HEXA_OWN_GEMM_WMMA2") && getenv("HEXA_OWN_GEMM_WMMA2")[0]) {
+        static int w2fired = 0; if (!w2fired){w2fired=1; fprintf(stderr,"[OWN-SGEMM-WMMA2-FIRED] _hx_k_sgemm_cm_wmma2 (CUTLASS-grade TF32: 128x64 block, 8-warp, 2x2 warp-tile, double-buffered cp.async)\n");}
+        dim3 w2blk(256);  // 8 warps
+        dim3 w2grd((unsigned)((m + HXG_BM - 1)/HXG_BM), (unsigned)((n + HXG_BN - 1)/HXG_BN));
+        _hx_k_sgemm_cm_wmma2<<<w2grd,w2blk>>>(tA,tB,
+                                              (long long)m,(long long)n,(long long)k,
+                                              alpha, A,(long long)lda, B,(long long)ldb,
+                                              beta, C,(long long)ldc);
+    } else if (getenv("HEXA_OWN_GEMM_WMMA") && getenv("HEXA_OWN_GEMM_WMMA")[0]) {
+        static int wfired = 0; if (!wfired){wfired=1; fprintf(stderr,"[OWN-SGEMM-WMMA-FIRED] _hx_k_sgemm_cm_wmma (TF32 Tensor-Core)\n");}
+        dim3 wblk(32); dim3 wgrd((unsigned)((m+15)/16),(unsigned)((n+15)/16));  // 1 warp / 16×16 C tile
+        _hx_k_sgemm_cm_wmma<<<wgrd,wblk>>>(tA,tB,
+                                           (long long)m,(long long)n,(long long)k,
+                                           alpha, A,(long long)lda, B,(long long)ldb,
+                                           beta, C,(long long)ldc);
+    } else if (getenv("HEXA_OWN_GEMM_TILED") && getenv("HEXA_OWN_GEMM_TILED")[0]) {
         static int tfired = 0; if (!tfired){tfired=1; fprintf(stderr,"[OWN-SGEMM-TILED-FIRED] _hx_k_sgemm_cm_tiled\n");}
         _hx_k_sgemm_cm_tiled<<<grd,blk>>>(tA,tB,
                                           (long long)m,(long long)n,(long long)k,
