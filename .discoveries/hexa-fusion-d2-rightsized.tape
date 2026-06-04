@@ -22,3 +22,8 @@
 
   target = "GREEN — clm-scale util MEAN >=70% on right-sized consumer GPU"
   verdict-ptr = ".verdicts/hexa-fusion/F-FUSION-D2-RIGHTSIZED.txt"
+
+  result = "🟢 CONFIRMED — RTX 5070 12GB: clm-scale 1536³ util MEAN 98.00% (all 102
+            samples =98%, SM 98% compute-bound) vs idle H100 ~13% on the SAME step.
+            large 2048³ = 99.00%. util is workload-size-relative, NOT a code defect.
+            pods 39484047 (RTX 5070) + 39483879 (mis-prov B200) destroyed, leak 0."

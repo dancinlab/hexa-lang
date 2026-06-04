@@ -1,5 +1,5 @@
 F-FUSION-D2-RIGHTSIZED — util is a WORKLOAD-SIZE property (right-sized GPU saturates)
-[WIP — pending measurement on rented consumer GPU]
+HEXA-FUSION frontier milestone D2 — CONFIRMED 🟢
 
 PRE-REGISTERED FALSIFIER:
   The SAME D1536-scale own-GEMM step that gives util MEAN ~13% (10.28-13.19%) on an
@@ -8,16 +8,63 @@ PRE-REGISTERED FALSIFIER:
   If the small GPU ALSO stays low -> FALSIFIED (util would be a code defect).
 
 METHOD:
-  driver self/native/hxqwen14b_llmstep_driver.cu (#includes shipped hxqwen14b_cuda.cu)
-  mode=util M K N R secs, env HEXA_OWN_GEMM=1 HEXA_OWN_GEMM_WMMA2=1 (WMMA2 own-GEMM).
-  nvidia-smi -l sampling during the ~15s sustained loop.
-  Shapes: clm-scale M=K=N=1536 R=16  AND  large M=K=N=2048.
+  driver self/native/hxqwen14b_llmstep_driver.cu (#includes shipped hxqwen14b_cuda.cu
+  byte-identical to origin/main — measured kernels = EXACT main-branch own-GEMM).
+  build: nvcc -O3 -arch=sm_90a -DHEXA_CUDA ... -lcublas -lcuda  (PTX-JIT to Blackwell)
+  mode=util M K N R secs, env HEXA_OWN_GEMM=1 HEXA_OWN_GEMM_WMMA2=1 (CUTLASS-grade
+  WMMA2 own-GEMM: 128x64 block, 8-warp, 2x2 warp-tile, double-buffered cp.async).
+  nvidia-smi utilization.gpu sampled @100ms over the full sustained 15s loop.
+  NO clm_prod rebuild.
+  WMMA2 fired (confirmed at runtime):
+    [OWN-SGEMM-WMMA2-FIRED] _hx_k_sgemm_cm_wmma2 (CUTLASS-grade TF32 ...)
 
-BASELINE (H100, from F-FUSION-OCCUPANCY-WALL, verbatim):
-  util MEAN @ D=1536 idle H100:
+GPU RENTED: NVIDIA GeForce RTX 5070, 12227 MiB (12 GB), driver 580.95.05, CUDA 12.4
+  (vast offer 36027171; a genuinely right-sized consumer GPU, ~1/15th the H100's
+   VRAM and far fewer SMs. NOTE: an initial `--gpu RTX_5070` offer mis-provisioned a
+   B200 183GB — destroyed clean — so the run was re-pinned with gpu_name=RTX_5070.)
+
+================================ MEASURED (verbatim) ===========================
+
+H100 (idle, BASELINE from F-FUSION-OCCUPANCY-WALL):
+  util MEAN @ D=1536:
     async (single stream)      10.28-12.50%
     piecewise graph (fwd->bwd) 13.17%
     whole-step graph           13.19%
   median 2%, PEAK 71-100% only during the brief GEMMs.
 
-MEASUREMENT (this run): [PENDING]
+RTX 5070 (12 GB, THIS RUN):
+  CLM-SCALE  M=K=N=1536 R=16, 15.0s sustained:
+    UTIL-RUN M=1536 K=1536 N=1536 R=16 secs=15.0 iters=24336 (1622.3 steps/s)
+    util samples: n=102  MEAN=98.00%  PEAK=98%  MIN=98%
+    raw histogram: 102 samples ALL = 98%
+    dmon: sm 98% / mem 24% (compute-bound)
+
+  LARGE  M=K=N=2048 R=16, 15.0s sustained:
+    UTIL-RUN M=2048 K=2048 N=2048 R=16 secs=15.0 iters=13520 (901.1 steps/s)
+    util samples: n=102  MEAN=99.00%  PEAK=99%  MIN=99%
+    raw histogram: 102 samples ALL = 99%
+
+================================ SIDE BY SIDE ==================================
+
+  shape          H100 (idle)         RTX 5070 (12 GB)
+  D1536 clm      ~13% MEAN (2% med)  98.00% MEAN / 98% PEAK   <- SAME WORKLOAD
+  2048^3 large   (n/a)               99.00% MEAN / 99% PEAK
+
+VERDICT: 🟢 CONFIRMED — falsifier survived.
+  The byte-identical D1536 own-GEMM step that under-fills an idle H100 to ~13% MEAN
+  (median 2%) SATURATES the right-sized RTX 5070 to 98% MEAN (every sample 98%, SM
+  98%, compute-bound). 98% >> the 70% gate, and >> the H100's 13%. The 2048^3 large
+  shape gives 99% on the same RTX 5070 — i.e. on a right-sized GPU even the small
+  clm shape is already at the saturation ceiling (98 vs 99, a 1pp gap), whereas on
+  the H100 the SAME 1536 shape leaves the device 87% idle.
+
+FINDING (delta vs baseline):
+  util is a WORKLOAD-SIZE / GPU-RELATIVE property, NOT a code defect. The own-GEMM
+  WMMA2 kernel and the CLMConvMoE-style step are not under-occupying due to a bug:
+  given a GPU sized for the workload, util is 98%. The H100's ~13% is the H100 being
+  too big for the D1536 model — exactly lever (B) RIGHT-SIZED GPU in
+  F-FUSION-OCCUPANCY-WALL. This deterministically rules out the "util-low = codegen
+  defect" axis: the kernel saturates a correctly-sized device.
+
+POD: rented RTX 5070 39484047 + (mis-provisioned B200 39483879) BOTH destroyed,
+     leak verified 0 (vastai show instances: neither id present).
