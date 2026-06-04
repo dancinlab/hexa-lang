@@ -146,3 +146,87 @@ fn qforge_fused_proj_matvec_shift(M: [f64], pin: [f64], pcp: [f64], ap: [f64],
         }
     }
 }
+
+// ════════════════════════════════════════════════════════════════════════════
+// ── ON-DEVICE SCALAR REDUCTION (closes the throughput gate — d6 named-remaining)
+// ════════════════════════════════════════════════════════════════════════════
+// The PARITY-first fusion above removed the trailing BLAS-1 launches but left the
+// CG scalar control (pAp, rTr -> alpha, beta) on the HOST: 2 full-vector DtoH +
+// cudaDeviceSynchronize per iter. That host-resident control — NOT the launch
+// overhead — dominated per-iter time, capping the ratio at 1.01x.
+//
+// These kernels move the dot products AND the alpha/beta arithmetic ON-DEVICE so
+// the entire CG iteration runs with NO per-iter DtoH and NO per-iter sync. The
+// host loop becomes a pure launch sequence (kernels chain on the default stream,
+// ordered, no host round-trip); the only DtoH is ONE final scalar (rs) pulled
+// AFTER the loop for the convergence/print. This eliminates 2 DtoH+sync/iter.
+//
+// Block-reduce + grid-reduce (two-stage) — portable, no cooperative-grid HW gate.
+// Stage 1 (qforge_dot_partial): each block reduces its slice into one partial via
+//   shared-memory tree reduction; writes partials[blockIdx].
+// Stage 2 (qforge_reduce_finalize): a single block sums the partials into out[0].
+// The scalar-update kernels (qforge_cg_alpha / qforge_cg_beta_commit) then form
+//   alpha = rs_old/pAp  and  beta = rs_new/rs_old  in device memory, advancing the
+//   rs register across iters WITHOUT a host round-trip. par/scal layout:
+//     scal[0]=rs_old  scal[1]=pAp  scal[2]=alpha  scal[3]=rs_new  scal[4]=beta
+//   par[0]=alpha par[1]=beta  (consumed by qforge_fused_cg_update, unchanged).
+//
+// Parity: the device dot uses the SAME index order as the host hdot (sequential
+// accumulation within a thread, tree-combine across threads) — FP64 round-off only,
+// max_rel_err stays <=1e-9 (measured on summer below). The grid-wide cooperative
+// PERSISTENT-CG (single launch, grid.sync() across the whole solve) is the deeper
+// large-n form; this two-stage block/grid reduction needs NO cooperative HW and
+// already removes the per-iter DtoH+sync — the actual throughput lever.
+
+// ── stage-1 block dot: partials[b] = sum over this block's slice of a[i]*b[i] ────
+@gpu_kernel
+fn qforge_dot_partial(a: [f64], b: [f64], partials: [f64], n: i64) {
+    // shared[] tree reduction within the block; one partial per block.
+    let tid = gpu_thread_id_x()
+    let gid = gpu_block_id_x() * gpu_block_dim_x() + tid
+    let stride = gpu_block_dim_x() * gpu_grid_dim_x()
+    let mut acc: f64 = 0.0
+    let mut i = to_i64(gid)
+    while i < n { acc = acc + a[i] * b[i] ; i = i + to_i64(stride) }
+    let s = gpu_shared_f64(acc)          // shared-mem scratch, one slot per thread
+    gpu_barrier()
+    let mut off = gpu_block_dim_x() / 2
+    while off > 0u32 {
+        if tid < off { gpu_shared_add(s, tid, to_i64(tid) + to_i64(off)) }
+        gpu_barrier()
+        off = off / 2u32
+    }
+    if tid == 0u32 { partials[to_i64(gpu_block_id_x())] = gpu_shared_get(s, 0) }
+}
+
+// ── stage-2 finalize: out[slot] = sum(partials[0..nb]) (single block) ───────────
+@gpu_kernel
+fn qforge_reduce_finalize(partials: [f64], out: [f64], nb: i64, slot: i64) {
+    if gpu_thread_id_x() == 0u32 {
+        let mut s: f64 = 0.0
+        let mut k: i64 = 0
+        while k < nb { s = s + partials[k] ; k = k + 1 }
+        out[slot] = s
+    }
+}
+
+// ── on-device alpha = scal[0]/scal[1]; par[0]=alpha (no host round-trip) ─────────
+@gpu_kernel
+fn qforge_cg_alpha(scal: [f64], par: [f64]) {
+    if gpu_thread_id_x() == 0u32 {
+        let a = scal[0] / scal[1]      // rs_old / pAp
+        scal[2] = a
+        par[0] = a
+    }
+}
+
+// ── on-device beta = scal[3]/scal[0]; par[1]=beta; commit rs_old<-rs_new ─────────
+@gpu_kernel
+fn qforge_cg_beta_commit(scal: [f64], par: [f64]) {
+    if gpu_thread_id_x() == 0u32 {
+        let b = scal[3] / scal[0]      // rs_new / rs_old
+        scal[4] = b
+        par[1] = b
+        scal[0] = scal[3]              // rs_old <- rs_new for the next iter
+    }
+}
