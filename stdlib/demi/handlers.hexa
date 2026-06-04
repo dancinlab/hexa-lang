@@ -96,14 +96,30 @@ fn _verb_plain(verb: string) -> string {
 
 pub fn handler_action(argv: [string]) -> int {
     // argv is the post-verb tail: [<verb>, <domain?>, <flags...>].
-    // --compose / --converge (M15) route ACROSS the domain's constituent
-    // stack before the single-cell path. Swift cliAction (main.swift:1114-
-    // 1123) checks --converge FIRST, then --compose; the flag may appear in
-    // any position (firstIndex search). We mirror that precedence + position-
-    // independence: --converge wins if both present. The flag is removed and
-    // the REMAINING tokens are [verb, domain?] (Swift actionArgs.first /
-    // [1] after remove(at:)). The --producer / --deck value-flags land in
-    // their own stacked PR; this PR ports compose/converge only.
+    // --producer <p> (value-flag · PR value-flags · @L7) is parsed FIRST,
+    // exactly as Swift main.swift:1086-1090 takes it off `actionArgs` BEFORE
+    // the --deck / --converge / --compose checks. Two consequences we mirror
+    // byte-for-byte: (1) the producer value-flag VALIDATOR fires for EVERY
+    // `action` invocation (a missing-value / flag-as-value --producer errors
+    // exit 2 even when --deck / --converge / --compose is also present), and
+    // (2) the flag+value is REMOVED from argv before the routing checks, so a
+    // `--producer p` token never leaks into the verb/domain slot of any path.
+    // The producer value is USED only on the plain single-cell `cliAction`
+    // path (Swift line 1127), where it appends a ` · producer=<p>` note to the
+    // dispatch header (line 343-344). With --deck / --converge / --compose,
+    // Swift removes --producer but passes it to NONE of those handlers — so we
+    // drop it likewise and the producer has NO effect on those surfaces. The
+    // ProducerRegistry variant-SELECTION (Swift ActionDispatch.runEngineTool
+    // producer:) is the engine's concern (d3 · cellrun) — not re-authored here;
+    // the deterministic CLI-surface parity is the header note + the validator.
+    let mut producer = ""
+    let mut args = argv
+    if _action_has_flag(args, "--producer") {
+        let pp = _action_take_value_flag(args, "--producer")
+        if pp[0] != "0" { return 2 }      // value error already printed (exit 2)
+        producer = pp[1]
+        args = _action_slice_from(pp, 2)  // args with --producer + its value gone
+    }
     // --deck <deck> (8VERB Family A · PR #20 · @L2/@L6) has the HIGHEST
     // precedence — Swift cliAction parses --deck (main.swift:1098,1102) BEFORE
     // --converge (1114) / --compose (1119). It is a value-flag routed through
@@ -115,8 +131,8 @@ pub fn handler_action(argv: [string]) -> int {
     // THIN forwarding cell (like atlas/verify) — NOT a name-branch in the
     // generic layer: the post-deck argv still flows to the SAME cellrun engine
     // for every NON-rtsc synthesize (d4 · dispatch.hexa untouched).
-    if _action_has_flag(argv, "--deck") {
-        let parsed = _action_take_value_flag(argv, "--deck")
+    if _action_has_flag(args, "--deck") {
+        let parsed = _action_take_value_flag(args, "--deck")
         // parsed[0] = rc-sentinel ("0" ok · "2" value error already printed),
         // parsed[1] = the deck value (when ok), parsed[2..] = remaining argv.
         if parsed[0] != "0" { return 2 }
@@ -132,17 +148,17 @@ pub fn handler_action(argv: [string]) -> int {
                  + "domain='" + d_domain + "'.")
         return 2
     }
-    if _action_has_flag(argv, "--converge") {
-        return handler_action_converge(_action_drop_flag(argv, "--converge"))
+    if _action_has_flag(args, "--converge") {
+        return handler_action_converge(_action_drop_flag(args, "--converge"))
     }
-    if _action_has_flag(argv, "--compose") {
-        return handler_action_compose(_action_drop_flag(argv, "--compose"))
+    if _action_has_flag(args, "--compose") {
+        return handler_action_compose(_action_drop_flag(args, "--compose"))
     }
-    if len(argv) < 1 {
+    if len(args) < 1 {
         eprintln("action: missing <verb> argument")
         return 2
     }
-    let verb = argv[0]
+    let verb = args[0]
     if _verb_canonical(verb) == "" {
         eprintln("action: unknown verb '" + verb + "' — try one of "
                  + "specify/structure/design/analyze/synthesize/verify/handoff")
@@ -154,8 +170,8 @@ pub fn handler_action(argv: [string]) -> int {
     // token so `action specify --x` does not read "--x" as the domain
     // (mirrors Swift actionArgs[1]).
     let mut domain = "general"
-    if len(argv) >= 2 {
-        if !argv[1].starts_with("--") { domain = argv[1] }
+    if len(args) >= 2 {
+        if !args[1].starts_with("--") { domain = args[1] }
     }
     // HAPPY path (plan @L7 · d6 · PR #18 cellrun engine): the Swift
     // `action <verb> <domain>` routes through ActionDispatch.runEngineTool →
@@ -184,7 +200,12 @@ pub fn handler_action(argv: [string]) -> int {
     // d4 PRESERVED: this routes EVERY (verb, domain) through the one generic
     // manifest-driven engine — no per-instance branch (mirrors the Swift
     // `default` arm). dispatch.hexa is untouched.
-    println("action: " + korean + " (" + plain + ") · domain=" + domain + " — dispatching…")
+    // Swift producerNote = producerArg.map { " · producer=\($0)" } ?? ""
+    // appended AFTER `· domain=<domain>` and BEFORE ` — dispatching…`
+    // (main.swift:343-344). The producer note rides the header ONLY (the
+    // engine producer-SELECTION is d3/cellrun's concern, not re-authored).
+    let producer_note = if producer == "" { "" } else { " · producer=" + producer }
+    println("action: " + korean + " (" + plain + ") · domain=" + domain + producer_note + " — dispatching…")
     let verb_c = _verb_canonical(verb)
     let rc = dc_run(verb_c, domain)
     // Swift cliAction prints `result.text` then `print("---")`. The Swift

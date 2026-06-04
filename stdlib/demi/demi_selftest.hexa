@@ -1120,6 +1120,40 @@ fn main() {
     fails = fails + _cell("action/deck-nonsynth-verb", entry, swift_bin, "",
                           "action verify rtsc --deck /tmp/d", g_deck_nonsynth, 2)
 
+    // PR value-flags (@L7) — `action <verb> <domain> --producer <p>`. Swift
+    // takes --producer off actionArgs FIRST (main.swift:1086-1090), before the
+    // --deck / --converge / --compose routing; on the plain single-cell path it
+    // appends a ` · producer=<p>` note to the dispatch header (line 343-344).
+    // DETERMINISTIC, host-independent parity = the header note (reusing the
+    // cellrun MANIFEST-MISSING fixture so the [cellrun] honest-skip path is the
+    // same host-independent rc=1 surface as action/cellrun-manifest-missing) +
+    // the byte-exact value-flag validator error (shared _action_take_value_flag,
+    // identical to the --deck error cells). The ProducerRegistry variant-
+    // SELECTION effect is the engine's concern (d3) — needs a live registered
+    // substrate, not host-deterministic; honestly scoped out (cf. #18/#20).
+    // (1) --producer EFFECT — ` · producer=foo` header note, flag AFTER args
+    //     (position-independent firstIndex parse), else identical to the
+    //     cellrun-manifest-missing surface (same crfix · rc=1).
+    let g_prod_effect = "action: 명세 (무엇을) · domain=nonesuchdomain · producer=foo — dispatching…\n"
+        + "[cellrun] domain=nonesuchdomain verb=specify\n"
+        + "[cellrun] honest-skip — manifest missing: " + crfix + "/domains/nonesuchdomain.demi\n"
+        + "\n"
+        + "---\n"
+        + "⏳ engine tool gap — no new measured record (g3).\n"
+    fails = fails + _cell("action/producer-effect", entry, swift_bin, crenv,
+                          "action specify nonesuchdomain --producer foo",
+                          g_prod_effect, 1)
+    // (2) --producer with NO value (last token) → byte-exact takeValueFlag error.
+    let g_prod_eoa = "error: flag --producer needs a value, got end-of-args\n"
+    fails = fails + _cell("action/producer-missing-value", entry, swift_bin, "",
+                          "action specify nonesuchdomain --producer",
+                          g_prod_eoa, 2)
+    // (3) --producer with a flag in the value slot → byte-exact takeValueFlag error.
+    let g_prod_flagval = "error: flag --producer needs a value, got '--foo'\n"
+    fails = fails + _cell("action/producer-flag-as-value", entry, swift_bin, "",
+                          "action specify nonesuchdomain --producer --foo",
+                          g_prod_flagval, 2)
+
     // PR-verify-passthrough — `verify --expr|--fence|rubric` → hexa verify
     // kernel, output forwarded VERBATIM (Swift verifyHexa · @D g5). Golden
     // is the live kernel call (the SSOT both surfaces forward to).
