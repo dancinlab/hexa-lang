@@ -1379,6 +1379,69 @@ fn emit_runtime_cuda_c() -> str {
             "#endif\n" +
             "}\n" +
             "\n" +
+            "/* HEXA-FUSION L3-b (OP-BOUNDARY FUSION) — device-resident dual GELU.\n" +
+            " * The two expert-conv activations in clm_prod_fwd (eo0->ex0, eo1->ex1) are\n" +
+            " * INDEPENDENT, same-shape (n = T*d) elementwise gelus that follow the SAME\n" +
+            " * conv2_fwd_via_forge_batched output. Fusing them collapses two micro gelu\n" +
+            " * launches into ONE thread-grid pass (one launch, one sync) to raise H100\n" +
+            " * occupancy. byte-eq by construction: each write reproduces _hx_k_gelu\n" +
+            " * arithmetic CHARACTER-FOR-CHARACTER (same 1/sqrt2 literal, same\n" +
+            " * 0.5*(1+erf(x*inv_sqrt2)) erf-based cdf) on its own input — A0[i]=gelu(G0[i]),\n" +
+            " * A1[i]=gelu(G1[i]) — so max|delta|=0 vs two separate _hx_k_gelu launches.\n" +
+            " * Env-gated HEXA_FUSE_GELU2; no-CUDA -> -1 -> host two _gelu calls. */\n" +
+            "__global__ void _hx_k_gelu2(const double* __restrict__ G0,\n" +
+            "                            double* __restrict__ A0,\n" +
+            "                            const double* __restrict__ G1,\n" +
+            "                            double* __restrict__ A1, int64_t n) {\n" +
+            "    const double inv_sqrt2 = 0.70710678118654752440;\n" +
+            "    int64_t stride = (int64_t)blockDim.x * (int64_t)gridDim.x;\n" +
+            "    for (int64_t i = (int64_t)blockIdx.x * blockDim.x + threadIdx.x;\n" +
+            "         i < n; i += stride) {\n" +
+            "        double x0 = G0[i];\n" +
+            "        double cdf0 = 0.5 * (1.0 + erf(x0 * inv_sqrt2));\n" +
+            "        A0[i] = x0 * cdf0;\n" +
+            "        double x1 = G1[i];\n" +
+            "        double cdf1 = 0.5 * (1.0 + erf(x1 * inv_sqrt2));\n" +
+            "        A1[i] = x1 * cdf1;\n" +
+            "    }\n" +
+            "}\n" +
+            "\n" +
+            "int _hx_cuda_farr_gelu2_gpu(int64_t g0_id, int64_t a0_id,\n" +
+            "                            int64_t g1_id, int64_t a1_id, int64_t n) {\n" +
+            "#ifdef __CUDACC__\n" +
+            "    if (n <= 0) return -1;\n" +
+            "    if (_h2d(g0_id) != 0) return -1;\n" +
+            "    if (_h2d(g1_id) != 0) return -1;\n" +
+            "    if (_ensure_dev_alloc_out(a0_id, n) != 0) return -1;\n" +
+            "    if (_ensure_dev_alloc_out(a1_id, n) != 0) return -1;\n" +
+            "    const double* G0 = g_slots[g0_id].d_buf;\n" +
+            "    double*       A0 = g_slots[a0_id].d_buf;\n" +
+            "    const double* G1 = g_slots[g1_id].d_buf;\n" +
+            "    double*       A1 = g_slots[a1_id].d_buf;\n" +
+            "    int block_sz = 256;\n" +
+            "    int64_t want = (n + block_sz - 1) / block_sz;\n" +
+            "    int grid_sz = (want > 1024) ? 1024 : (int)want;\n" +
+            "    if (grid_sz < 1) grid_sz = 1;\n" +
+            "    _hx_k_gelu2<<<grid_sz, block_sz, 0, _forge_stream()>>>(G0, A0, G1, A1, n);\n" +
+            "    if (_forge_launch_check(\"gelu2\") != 0) return -1;\n" +
+            "    {\n" +
+            "        int64_t outs[2] = { a0_id, a1_id };\n" +
+            "        for (int k = 0; k < 2; k++) {\n" +
+            "            HexaFarrEntry* e = &_hx_farr_table[outs[k]];\n" +
+            "            e->d_buf      = (void*)g_slots[outs[k]].d_buf;\n" +
+            "            e->loc        = FARR_DEVICE;\n" +
+            "            e->dirty_host = 0;\n" +
+            "            e->dirty_dev  = 0;\n" +
+            "        }\n" +
+            "    }\n" +
+            "    return 0;\n" +
+            "#else\n" +
+            "    (void)g0_id; (void)a0_id; (void)g1_id; (void)a1_id; (void)n;\n" +
+            "    fprintf(stderr, \"[cuda] gelu2: built without __CUDACC__\\n\");\n" +
+            "    return -1;\n" +
+            "#endif\n" +
+            "}\n" +
+            "\n" +
             "/* HEXA-FUSION L3 (glue half) — device-resident GroupNorm forward.\n" +
             " * Reproduces stdlib/flame/gn_lib.hexa nn_groupnorm_fwd EXACTLY: per group g,\n" +
             " *   mu  = (Σ_{t,c∈g} X[t,c]) / (Cg·T)\n" +
@@ -1482,6 +1545,126 @@ fn emit_runtime_cuda_c() -> str {
             "    (void)x_id; (void)gamma_id; (void)beta_id; (void)y_id; (void)mean_id;\n" +
             "    (void)inv_id; (void)xhat_id; (void)T; (void)C; (void)G;\n" +
             "    fprintf(stderr, \"[cuda] groupnorm: built without __CUDACC__\\n\");\n" +
+            "    return -1;\n" +
+            "#endif\n" +
+            "}\n" +
+            "\n" +
+            "/* HEXA-FUSION L3 (OP-BOUNDARY FUSION) — device-resident GroupNorm+GELU.\n" +
+            " * The FIRST op-boundary fusion: the adjacent groupnorm #1 → gelu #1 pair in\n" +
+            " * clm_prod_fwd (h0→hn0 then hn0→hg0, gelu consumes the GN output with NOTHING\n" +
+            " * between) collapses into ONE kernel — the post-GN value stays in a REGISTER\n" +
+            " * (no HBM round-trip, no second launch). Reproduces gn_lib.hexa\n" +
+            " * nn_gn_gelu_fused EXACTLY: the GroupNorm half is character-for-character the\n" +
+            " * _hx_k_groupnorm math (same SEQUENTIAL reduction t-outer/c-inner, same\n" +
+            " * Newton-Raphson 40-iter _hx_gn_sqrt_dev, NO tree re-assoc) and the GELU half\n" +
+            " * is the _hx_k_gelu math (yv·0.5·(1+erf(yv·(1/√2))), same 1/√2 literal). Two\n" +
+            " * outputs: Y = pre-GELU GN affine (the bwd cache hn0 nn_gelu_bwd needs — bwd\n" +
+            " * UNCHANGED) and A = GELU(Y). Bit-identical to groupnorm-then-gelu because Y is\n" +
+            " * computed by the IDENTICAL expression and GELU is applied to that SAME double\n" +
+            " * (max|Δ|=0). Env-gated HEXA_FUSE_GN_GELU; no-CUDA → -1 → host nn_gn_gelu_fused. */\n" +
+            "__device__ static double _hx_gelu_dev(double x) {\n" +
+            "    /* byte-identical to _hx_k_gelu / gn_lib.hexa _gn_gelu. */\n" +
+            "    const double inv_sqrt2 = 0.70710678118654752440;\n" +
+            "    double cdf = 0.5 * (1.0 + erf(x * inv_sqrt2));\n" +
+            "    return x * cdf;\n" +
+            "}\n" +
+            "__global__ void _hx_k_groupnorm_gelu(const double* __restrict__ X,\n" +
+            "                                     const double* __restrict__ GAMMA,\n" +
+            "                                     const double* __restrict__ BETA,\n" +
+            "                                     double* __restrict__ Y,\n" +
+            "                                     double* __restrict__ A,\n" +
+            "                                     double* __restrict__ MEAN,\n" +
+            "                                     double* __restrict__ INV,\n" +
+            "                                     double* __restrict__ XHAT,\n" +
+            "                                     int64_t T, int64_t C, int64_t G) {\n" +
+            "    const double eps = 0.00001;\n" +
+            "    int64_t cg = C / G;\n" +
+            "    double m = (double)(cg * T);\n" +
+            "    /* one thread per group → the per-group reduction is the SAME single-thread\n" +
+            "     * sequential loop as _hx_k_groupnorm (host accumulation order). */\n" +
+            "    for (int64_t g = (int64_t)blockIdx.x * blockDim.x + threadIdx.x;\n" +
+            "         g < G; g += (int64_t)blockDim.x * gridDim.x) {\n" +
+            "        int64_t c0 = g * cg;\n" +
+            "        double sum = 0.0;\n" +
+            "        for (int64_t t = 0; t < T; t++)\n" +
+            "            for (int64_t c = 0; c < cg; c++)\n" +
+            "                sum += X[t * C + (c0 + c)];\n" +
+            "        double mu = sum / m;\n" +
+            "        double vs = 0.0;\n" +
+            "        for (int64_t t = 0; t < T; t++)\n" +
+            "            for (int64_t c = 0; c < cg; c++) {\n" +
+            "                double d = X[t * C + (c0 + c)] - mu;\n" +
+            "                vs += d * d;\n" +
+            "            }\n" +
+            "        double var = vs / m;\n" +
+            "        double inv = 1.0 / _hx_gn_sqrt_dev(var + eps);\n" +
+            "        MEAN[g] = mu;\n" +
+            "        INV[g]  = inv;\n" +
+            "        for (int64_t t = 0; t < T; t++)\n" +
+            "            for (int64_t c = 0; c < cg; c++) {\n" +
+            "                int64_t ch = c0 + c;\n" +
+            "                double xh = (X[t * C + ch] - mu) * inv;\n" +
+            "                XHAT[t * C + ch] = xh;\n" +
+            "                /* yv = the EXACT _hx_k_groupnorm output, kept in a register; */\n" +
+            "                double yv = GAMMA[ch] * xh + BETA[ch];\n" +
+            "                Y[t * C + ch] = yv;\n" +
+            "                /* GELU applied to that same register value → no HBM round-trip. */\n" +
+            "                A[t * C + ch] = _hx_gelu_dev(yv);\n" +
+            "            }\n" +
+            "    }\n" +
+            "}\n" +
+            "\n" +
+            "int _hx_cuda_farr_groupnorm_gelu_gpu(int64_t x_id, int64_t gamma_id, int64_t beta_id,\n" +
+            "                                     int64_t y_id, int64_t a_id, int64_t mean_id,\n" +
+            "                                     int64_t inv_id, int64_t xhat_id,\n" +
+            "                                     int64_t T, int64_t C, int64_t G) {\n" +
+            "#ifdef __CUDACC__\n" +
+            "    if (T <= 0 || C <= 0 || G <= 0 || (C % G) != 0) return -1;\n" +
+            "    if (_h2d(x_id) != 0) return -1;\n" +
+            "    if (_h2d(gamma_id) != 0) return -1;\n" +
+            "    if (_h2d(beta_id) != 0) return -1;\n" +
+            "    if (_ensure_dev_alloc_out(y_id, T * C) != 0) return -1;\n" +
+            "    if (_ensure_dev_alloc_out(a_id, T * C) != 0) return -1;\n" +
+            "    if (_ensure_dev_alloc_out(mean_id, G) != 0) return -1;\n" +
+            "    if (_ensure_dev_alloc_out(inv_id, G) != 0) return -1;\n" +
+            "    if (_ensure_dev_alloc_out(xhat_id, T * C) != 0) return -1;\n" +
+            "    const double* X     = g_slots[x_id].d_buf;\n" +
+            "    const double* GAMMA = g_slots[gamma_id].d_buf;\n" +
+            "    const double* BETA  = g_slots[beta_id].d_buf;\n" +
+            "    double*       Y     = g_slots[y_id].d_buf;\n" +
+            "    double*       A     = g_slots[a_id].d_buf;\n" +
+            "    double*       MEAN  = g_slots[mean_id].d_buf;\n" +
+            "    double*       INV   = g_slots[inv_id].d_buf;\n" +
+            "    double*       XHAT  = g_slots[xhat_id].d_buf;\n" +
+            "    int block_sz = 64;\n" +
+            "    int64_t want = (G + block_sz - 1) / block_sz;\n" +
+            "    int grid_sz = (want > 1024) ? 1024 : (int)want;\n" +
+            "    if (grid_sz < 1) grid_sz = 1;\n" +
+            "    _hx_k_groupnorm_gelu<<<grid_sz, block_sz>>>(X, GAMMA, BETA, Y, A, MEAN, INV, XHAT,\n" +
+            "                                                T, C, G);\n" +
+            "    cudaError_t er = cudaDeviceSynchronize();\n" +
+            "    if (er != cudaSuccess) {\n" +
+            "        fprintf(stderr, \"[cuda] groupnorm_gelu launch failed: %s\\n\",\n" +
+            "                cudaGetErrorString(er));\n" +
+            "        return -1;\n" +
+            "    }\n" +
+            "    /* Y/A/xhat/mean/inv stay DEVICE-RESIDENT so the follow-up residual_add /\n" +
+            "     * conv GEMM H2D-skip them (same residence convention as groupnorm). */\n" +
+            "    {\n" +
+            "        int64_t outs[5] = { y_id, a_id, mean_id, inv_id, xhat_id };\n" +
+            "        for (int k = 0; k < 5; k++) {\n" +
+            "            HexaFarrEntry* e = &_hx_farr_table[outs[k]];\n" +
+            "            e->d_buf      = (void*)g_slots[outs[k]].d_buf;\n" +
+            "            e->loc        = FARR_DEVICE;\n" +
+            "            e->dirty_host = 0;\n" +
+            "            e->dirty_dev  = 0;\n" +
+            "        }\n" +
+            "    }\n" +
+            "    return 0;\n" +
+            "#else\n" +
+            "    (void)x_id; (void)gamma_id; (void)beta_id; (void)y_id; (void)a_id;\n" +
+            "    (void)mean_id; (void)inv_id; (void)xhat_id; (void)T; (void)C; (void)G;\n" +
+            "    fprintf(stderr, \"[cuda] groupnorm_gelu: built without __CUDACC__\\n\");\n" +
             "    return -1;\n" +
             "#endif\n" +
             "}\n" +

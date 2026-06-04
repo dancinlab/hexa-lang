@@ -312,6 +312,16 @@ fn _gn_gelu(x: float) -> float {
 pub fn nn_gn_gelu_fused_off(x: int, gamma: int, goff: int, beta: int, boff: int,
                             y_out: int, a_out: int, mean_out: int, inv_out: int, xhat_out: int,
                             T: int, C: int, G: int) {
+    // HEXA-FUSION L3-a (op-boundary fusion): one device kernel does GN + GELU
+    // (a_out = gelu, y_out = pre-gelu GN for bwd) — collapses two inter-GEMM
+    // kernels into one to raise occupancy. Gated by env HEXA_FUSE_GN_GELU; only
+    // on the device-resident chain; offset-0 only (the launcher takes no goff/boff).
+    // OFF / nonzero-offset → the host loop below runs UNCHANGED (byte-eq reference).
+    if env("HEXA_FUSE_GN_GELU") != "" && env("CLM_PROD_DEVRESIDENT") != "" && goff == 0 && boff == 0 {
+        let rc = forge_dispatch_groupnorm_gelu(x, gamma, beta, y_out, a_out,
+                                               mean_out, inv_out, xhat_out, T, C, G)
+        if rc == 0 { return }
+    }
     let eps = 0.00001
     let cg = C / G
     let m = to_float(cg * T)

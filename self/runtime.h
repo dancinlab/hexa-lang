@@ -1182,6 +1182,13 @@ HexaVal hexa_forge_dispatch_gelu(HexaVal in_v, HexaVal out_v,
                                   HexaVal n_v);                              /* runtime.c — fusion L3 glue */
 HexaVal forge_dispatch_gelu(HexaVal in_v, HexaVal out_v,
                              HexaVal n_v);                                    /* runtime.c — fusion L3 glue seam */
+/* HEXA-FUSION L3-b — dual GELU fused (the 2 expert-conv activations
+ * eo0->ex0, eo1->ex1) in ONE device launch. 5 args; calls _hx_cuda_farr_gelu2_gpu.
+ * byte-eq == two separate forge_dispatch_gelu (same erf-based cdf per input). */
+HexaVal hexa_forge_dispatch_gelu2(HexaVal g0_v, HexaVal a0_v, HexaVal g1_v,
+                                  HexaVal a1_v, HexaVal n_v);                /* runtime.c — fusion L3-b */
+HexaVal forge_dispatch_gelu2(HexaVal g0_v, HexaVal a0_v, HexaVal g1_v,
+                             HexaVal a1_v, HexaVal n_v);                     /* runtime.c — fusion L3-b seam */
 
 /* HEXA-FUSION L3 (glue half) — device-resident GroupNorm forward.
  * forge_dispatch_groupnorm(x, gamma, beta, y, mean, inv, xhat, T, C, G) -> int
@@ -1202,6 +1209,16 @@ HexaVal forge_dispatch_groupnorm(HexaVal x_v, HexaVal gamma_v, HexaVal beta_v,
                              HexaVal y_v, HexaVal mean_v, HexaVal inv_v,
                              HexaVal xhat_v, HexaVal t_v, HexaVal c_v,
                              HexaVal g_v);                                    /* runtime.c — fusion L3 glue seam */
+/* HEXA-FUSION L3-a — groupnorm+gelu fused (a_v = gelu out, y_v = pre-gelu GN out
+ * for bwd). 11 args; calls _hx_cuda_farr_groupnorm_gelu_gpu. byte-eq == GN-then-gelu. */
+HexaVal hexa_forge_dispatch_groupnorm_gelu(HexaVal x_v, HexaVal gamma_v, HexaVal beta_v,
+                                  HexaVal y_v, HexaVal a_v, HexaVal mean_v, HexaVal inv_v,
+                                  HexaVal xhat_v, HexaVal t_v, HexaVal c_v,
+                                  HexaVal g_v);                              /* runtime.c — fusion L3-a */
+HexaVal forge_dispatch_groupnorm_gelu(HexaVal x_v, HexaVal gamma_v, HexaVal beta_v,
+                             HexaVal y_v, HexaVal a_v, HexaVal mean_v, HexaVal inv_v,
+                             HexaVal xhat_v, HexaVal t_v, HexaVal c_v,
+                             HexaVal g_v);                                    /* runtime.c — fusion L3-a seam */
 
 /* HEXA-FUSION L3 (glue half · final slice ⑤c) — device-resident expert-pack copy.
  * forge_dispatch_expert_pack2(ex0, ex1, ex_out, n) -> int rc (0 ok / -1 host).
