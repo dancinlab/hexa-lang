@@ -1,0 +1,143 @@
+// HEXA Standard Library — qforge/qsplit_dispatch
+//
+// @version 0.1.0
+// @capabilities [pure, exec]
+//
+// QFORGE-PROCESS — MULTI-POD q-SPLIT RUNTIME ORCHESTRATOR.
+//
+// #2709 proved the MATH: split-λ ≡ serial-λ (Δ=0) for the SPLIT → COLLECT →
+// UNION → λ chain (stdlib/qforge/parallel_q). What that module DELIBERATELY left
+// out (its header: "the live multi-pod dispatch is the lab's runtime job") is the
+// RUNTIME DISPATCH: actually fanning a q-grid across N targets, monitoring each
+// shard to completion, collecting the per-shard dynN, and unioning to λ. This
+// module IS that runtime wiring.
+//
+//   qforge_qsplit_dispatch(deck, q_grid, n_pods)
+//        → {shards:[{pod, q_subset, dynN}], lambda_union, agree}
+//
+// ── what this adds over #2709 (the pure math) ────────────────────────────────
+//   #2709 (parallel_q)         : qsplit (partition) · qcollect_union (merge) ·
+//                                lambda_on_union (assemble) — PURE, no I/O.
+//   this module (qsplit_dispatch): the RUNTIME that DRIVES that math across real
+//                                or simulated targets — partition → DISPATCH one
+//                                shard per target → MONITOR to completion →
+//                                COLLECT per-shard dynN → union → λ → assert Δ=0.
+//
+// ── dispatch backend (d4 — one generic path, backend is DATA) ─────────────────
+// The runtime is backend-pluggable. Every shard traverses ONE generic dispatch
+// path; the backend only changes HOW a shard's per-q DFPT is produced:
+//
+//   QSPLIT_BACKEND_LOCAL  — run each shard as a LOCAL process on the pool host
+//                           (summer free-pool). The per-q {ω,|g|²,weight} are
+//                           produced by the SAME qforge el-ph chain a single-pod
+//                           run uses, so the union is byte-identical to serial.
+//                           NO paid pods. (What this demo ships — see @L-honesty.)
+//   QSPLIT_BACKEND_POD    — fan each shard to its OWN vast pod (cloud dft-run
+//                           --detach per shard, --resume to harvest dynN). The
+//                           dispatch loop, the monitor loop, the dynN collect,
+//                           and the union are IDENTICAL to the local backend; the
+//                           only delta is the shard runner (pod rent/upload/run/
+//                           harvest/teardown vs a local subprocess). NOT exercised
+//                           by the free demo (it costs $); the seam is wired so a
+//                           real fan-out drops in with no change to the union math.
+//
+// ── @L-honesty (d6) — what the LOCAL backend does NOT exercise ────────────────
+// The local-sim backend proves the RUNTIME WIRING — partition, per-shard dispatch,
+// monitor-to-completion, per-shard dynN collect, union→λ, Δ=0 — WITHOUT renting.
+// A REAL multi-pod fan-out additionally exercises, and the local sim does NOT:
+//   (1) NETWORK dynN TRANSFER — scp/copy each pod's dynN+elph artifacts back over
+//       the wire (latency · partial-transfer retry · checksum).
+//   (2) POD-FAILURE REQUEUE — a shard whose pod dies mid-DFPT (preempt · OOM ·
+//       walltime) must be re-dispatched to a fresh pod (d_defer_no_delete), not
+//       silently dropped — the local sim's subprocess "can't be preempted".
+//   (3) HETEROGENEOUS WALL — real pods finish at different times; the monitor must
+//       gate on the SLOWEST shard, and a straggler can hold the union.
+// The local backend models the CONTROL FLOW of all three (a shard CAN report
+// failed → the union FAILS CLOSED), but not their PHYSICAL cause. This module
+// NEVER claims a real 2-pod run when the run was local (the demo prints the
+// backend label verbatim).
+//
+// ── d3/d4/d19 reuse (compose, don't reinvent) ────────────────────────────────
+//   - partition / union / λ : stdlib/qforge/parallel_q  (#2709 — the proven math;
+//     this module calls qforge_qsplit · qforge_qcollect_union ·
+//     qforge_lambda_on_union VERBATIM — ZERO physics re-implemented here).
+//   - IBZ q + star weights  : stdlib/qforge/qstar  (the q-grid the orchestrator
+//     partitions is the IRREDUCIBLE set with integer star weights).
+// New code = the RUNTIME loop (dispatch · monitor · collect) + the Δ=0 gate ONLY.
+
+use "stdlib/qforge/parallel_q"
+
+// ── backend selector (DATA — d4) ─────────────────────────────────────────────
+pub let QSPLIT_BACKEND_LOCAL: int = 0   // local subprocess on the pool host (free)
+pub let QSPLIT_BACKEND_POD:   int = 1   // one vast pod per shard ($-incurring)
+
+// ── shard runtime state (one entry per dispatched target) ────────────────────
+//   pod        — the target label: "local:shard<S>" (local) or the pod
+//                instance-id / endpoint (pod backend). The provenance of WHERE
+//                this shard's per-q DFPT actually ran.
+//   q_subset   — the IBZ q-indices assigned to this shard (qforge_qsplit plan).
+//   dynN       — how many per-q dynamical-matrix results this shard produced
+//                (= len(q_subset) on success; the dynN artifact count). The name
+//                mirrors the QE `*.dynN` per-q dyn files a real shard harvests.
+//   done       — 1 = shard ran to completion and produced every q's result;
+//                0 = still running / never dispatched (monitor not satisfied).
+//   failed     — 1 = the shard reported a terminal FAILURE (pod died, DFPT
+//                error). A failed shard contributes NO results → the union fails
+//                closed (d6 — never under-count λ over a partial q-set).
+//   wall_ms    — modeled/measured shard wall (the monitor's completion signal).
+pub struct QShard {
+    pod:      str,
+    q_subset: [int],
+    dynN:     int,
+    done:     int,
+    failed:   int,
+    wall_ms:  int,
+}
+
+// ── the orchestrator result ──────────────────────────────────────────────────
+//   ok            — 1 = every shard completed AND the union assembled a λ.
+//   backend       — the backend label ("local" | "pod") — provenance (d6).
+//   shards        — per-shard runtime state (pod · q_subset · dynN · done).
+//   n_q           — number of IBZ q-points fanned out.
+//   n_pods        — number of dispatch targets (active shards).
+//   lambda_union  — λ assembled on the UNION of all shards' per-q results.
+//   lambda_single — λ from the SAME q-set run as ONE shard (the serial baseline).
+//   agree         — 1 = lambda_union == lambda_single (Δ=0, the milestone gate).
+//   delta         — |lambda_union − lambda_single| (0.0 on agree).
+//   err           — failure reason when ok==0.
+pub struct QSplitDispatchResult {
+    ok:            int,
+    backend:       str,
+    shards:        [QShard],
+    n_q:           int,
+    n_pods:        int,
+    lambda_union:  float,
+    lambda_single: float,
+    agree:         int,
+    delta:         float,
+    err:           str,
+}
+
+fn _qsd_abs(x: float) -> float { if x < 0.0 { return -x } return x }
+
+fn _qsd_backend_label(backend: int) -> str {
+    if backend == QSPLIT_BACKEND_POD { return "pod" }
+    return "local"
+}
+
+fn _qsd_fail(backend: int, reason: str) -> QSplitDispatchResult {
+    return QSplitDispatchResult {
+        ok: 0, backend: _qsd_backend_label(backend), shards: [], n_q: 0,
+        n_pods: 0, lambda_union: -1.0, lambda_single: -1.0, agree: 0,
+        delta: -1.0, err: reason,
+    }
+}
+
+// ── qforge_qsplit_dispatch — the runtime orchestrator (TODO: body) ───────────
+// WIP skeleton — the runtime loop (dispatch · monitor · collect · union · Δ=0
+// gate) lands in the next commit. Signature pinned now so callers + the selftest
+// can compile against it.
+pub fn qforge_qsplit_dispatch(deck: str, q_grid: QGrid, n_pods: int,
+                              backend: int) -> QSplitDispatchResult {
+    return _qsd_fail(backend, "WIP — runtime loop not yet wired")
+}
