@@ -1,0 +1,120 @@
+// stdlib/qforge/nvptx_sternheimer_kernel.hexa
+// QFORGE — NVPTX DFPT Sternheimer linear-response HOT kernels (GPU-resident).
+//
+// @version 0.0.1
+// @capabilities [pure]
+// @phase("parse_only")
+//
+// GPU port of the per-CG-iteration vector work of `qforge_sternheimer`
+// (stdlib/qforge/sternheimer.hexa). The CPU reference is the GROUND TRUTH;
+// this emits the SAME dense matrix-free H-application + the BLAS-1 CG vector
+// ops (AXPY / dot / scale) + the P_c projection as NVPTX-targetable
+// `@gpu_kernel`s. The host driver (host harness .cu) holds the scalar
+// convergence-control loop (α, β, rs_old, residual) and dispatches these
+// kernels per iteration — the parallelism-rich per-vector work lives on GPU,
+// the few-scalar control flow stays on host (honest scope, d6).
+//
+// ── Why this breaks the DFPT memory wall ──────────────────────────────────
+// On CPU each MPI rank holds the full plane-wave basis × bands → ~10 GiB/rank
+// → QE -np-6 clamp. Holding the wavefunctions + H-application in GPU VRAM
+// (97 GiB Blackwell) means per-rank CPU RAM no longer binds. These kernels
+// are the device-resident inner loop; vectors stay on-device across CG iters
+// (no per-iter HtoD/DtoH of the n-vectors — only scalars cross the bus).
+//
+// ── The CPU reference inner ops (sternheimer.hexa, projected CG) ──────────
+//   H_apply(v)         : dense M·v (selftest) → here matvec_dense kernel
+//   st_dot(a,b)        : Σ a[i]b[i]            → here dot_partial + host finish
+//   AXPY x += α·p ; r -= α·Ap                  → here axpy kernel
+//   p = r + β·p (xpay)                          → here xpay kernel
+//   ap[i] = hp[i] − εₙ·pc_p[i]                  → here shift_sub kernel
+//   st_project_out(w)  : w −= Σ_m ⟨ψₘ|w⟩ ψₘ    → here proj_out kernel (2-pass GS)
+//
+// All arrays are flat f64 device buffers index-aligned with the CPU ref.
+// FP64 throughout — gate = max rel err ≤ 1e-5 (exp-free; pure +/*/dense
+// matvec, so parity is tighter than the a2f kernel which carried exp()).
+
+// ── (1) dense matrix-free H-application:  out = M · v  (n×n flat M) ────────
+// One thread owns one output row i (gid<n), walks the n columns of M.
+// Mirrors selftest h_apply exactly (row-major M[i*n + j]).
+@gpu_kernel
+fn qforge_stern_matvec(M: [f64], v: [f64], out: [f64], n: i64) {
+    let gid = gpu_block_id_x() * gpu_block_dim_x() + gpu_thread_id_x()
+    if to_i64(gid) < n {
+        let i = to_i64(gid)
+        let row = i * n
+        let mut s: f64 = 0.0
+        let mut j: i64 = 0
+        while j < n {
+            s = s + M[row + j] * v[j]
+            j = j + 1
+        }
+        out[i] = s
+    }
+}
+
+// ── (2) ap[i] = hp[i] − eps_n · w[i]   (the (H−εₙ) shift, elementwise) ─────
+// par[0] = eps_n. One thread per component.
+@gpu_kernel
+fn qforge_stern_shift_sub(hp: [f64], w: [f64], out: [f64], par: [f64], n: i64) {
+    let gid = gpu_block_id_x() * gpu_block_dim_x() + gpu_thread_id_x()
+    if to_i64(gid) < n {
+        let i = to_i64(gid)
+        out[i] = hp[i] - par[0] * w[i]
+    }
+}
+
+// ── (3) AXPY family:  y[i] = y[i] + alpha · x[i]   (par[0] = alpha) ────────
+// Drives both x += α·p  and  r −= α·Ap (host passes ±α).
+@gpu_kernel
+fn qforge_stern_axpy(y: [f64], x: [f64], par: [f64], n: i64) {
+    let gid = gpu_block_id_x() * gpu_block_dim_x() + gpu_thread_id_x()
+    if to_i64(gid) < n {
+        let i = to_i64(gid)
+        y[i] = y[i] + par[0] * x[i]
+    }
+}
+
+// ── (4) XPAY:  p[i] = x[i] + beta · p[i]   (par[0] = beta) ─────────────────
+// The CG search-direction update p = r + β·p.
+@gpu_kernel
+fn qforge_stern_xpay(p: [f64], x: [f64], par: [f64], n: i64) {
+    let gid = gpu_block_id_x() * gpu_block_dim_x() + gpu_thread_id_x()
+    if to_i64(gid) < n {
+        let i = to_i64(gid)
+        p[i] = x[i] + par[0] * p[i]
+    }
+}
+
+// ── (5) P_c projection (2-pass classical Gram-Schmidt) ────────────────────
+// w ← w − Σ_m ⟨occ_m|w⟩ occ_m,  occ flat [m*n + i], two passes for stability.
+// Mirrors st_project_out exactly. Single-thread-block (n ≤ basis), the
+// ⟨occ_m|w⟩ reductions run serially per m inside one thread to keep the
+// accumulation order bit-identical to the CPU loop (correctness-parity
+// first, d6 — a tree-reduced variant is a later optimization). gid==0 owns
+// the projection so the dot/subtract order matches the CPU ref exactly.
+@gpu_kernel
+fn qforge_stern_proj_out(w: [f64], occ: [f64], n: i64, m: i64) {
+    let gid = gpu_block_id_x() * gpu_block_dim_x() + gpu_thread_id_x()
+    if to_i64(gid) == 0 {
+        let mut pass: i64 = 0
+        while pass < 2 {
+            let mut jm: i64 = 0
+            while jm < m {
+                let base = jm * n
+                let mut c: f64 = 0.0
+                let mut i: i64 = 0
+                while i < n {
+                    c = c + occ[base + i] * w[i]
+                    i = i + 1
+                }
+                let mut k: i64 = 0
+                while k < n {
+                    w[k] = w[k] - c * occ[base + k]
+                    k = k + 1
+                }
+                jm = jm + 1
+            }
+            pass = pass + 1
+        }
+    }
+}
