@@ -1,0 +1,109 @@
+// stdlib/qforge/fixtures/cah6_fullbz_xval.hexa
+//
+// QFORGE MIGRATION-GATE PHYSICS STEP — converged-CaH6 full-BZ λ cross-val.
+//
+// Drives the PRODUCTION-DFPT PW front-end (qforge_pw_frontend_phonons) on the REAL
+// CaH6 deck (exports/rtsc/decks/CaH6_NC — geometry + ONCV NC pseudos, ecutwfc=80 Ry)
+// at a CONVERGED basis + an nq×nq×nq MP q-mesh, threads the real Φ + ω(q,ν) + per-mode
+// bare ΔV into the deck (NOT the Γ-Einstein placeholder), runs qforge_run end-to-end,
+// and reports the QFORGE λ vs the QE answer-key λ=4.376 VERBATIM.
+//
+// GATE: rel-ε(QFORGE λ, QE 4.376) ≤ 1%.
+//
+// @L4/@L5 HONESTY (d6 / d_qforge_migration_routing): does NOT force λ→4.376. The most
+// likely miss-cause is the SCREENING-FUNCTIONAL GAP (QFORGE screening = Hartree +
+// LDA-exchange only, no correlation XC — the @L5 named gate-blocker; the el-ph |g|² is
+// the BARE matrix element while QE's is ε⁻¹-screened). A truthful "λ=X off by Y% due to
+// screening-XC gap" CLOSES this honestly (🔴/🟠 per g5). A faked 4.376 is a governance
+// violation.
+//
+// args:  <deck_dir> <npw_cap> <nq>   (npw_cap=0 → full ecut shell; nq = MP q divisions)
+// Run (summer GPU): HEXA_STDLIB_ROOT="$PWD/stdlib" hexa run --no-sentinel \
+//        stdlib/qforge/fixtures/cah6_fullbz_xval.hexa <deck> <npw_cap> <nq>
+
+use "stdlib/qforge/pw_frontend"
+use "stdlib/qforge/qforge_run"
+use "stdlib/material/sim"
+
+let QE_LAMBDA: float = 4.376
+
+fn _abs(x: float) -> float { if x < 0.0 { return -x } return x }
+
+fn main() {
+    let av = args()
+    let deck_dir = if len(av) > 1 { av[1] } else {
+        "/Users/mini/dancinlab/demiurge/exports/rtsc/decks/CaH6_NC" }
+    let npw_cap = if len(av) > 2 { to_int(av[2]) } else { 0 }
+    let nq      = if len(av) > 3 { to_int(av[3]) } else { 4 }
+
+    println("=== QFORGE MIGRATION GATE — converged-CaH6 full-BZ λ cross-val (d6 VERBATIM) v2 ===")
+    println("deck=" + deck_dir + "  npw_cap=" + to_string(npw_cap)
+            + " (0=full ecut shell)  q-mesh=" + to_string(nq) + "³ MP")
+
+    // ── PRODUCTION-DFPT front-end: converged SCF + real Φ + ω(q,ν) + ΔV ──────
+    //   xc_mode=1 (LDA-x + PW92-c) · sigma=0.02 Ha (metallic hydride MP smearing,
+    //   matches the deck's degauss=0.01 Ry = 0.005 Ha class; 0.02 Ha aids SCF).
+    let sigma = 0.02
+    let fe = qforge_pw_frontend_phonons(deck_dir, npw_cap, 1, sigma, nq)
+    if !fe.ok {
+        println("DEFER — front-end failed: " + fe.error)
+        println("=== DONE (DEFER) ===")
+        return
+    }
+    println("[front-end] cell=" + fe.geom.species[0] + " n(PW)=" + to_string(fe.n)
+            + " nelec=" + to_string(fe.nelec) + " nocc=" + to_string(fe.nocc)
+            + " SCF-converged=" + to_string(fe.converged) + " iters=" + to_string(fe.iters))
+    println("[front-end] ecutwfc=" + to_string(fe.geom.ecutwfc) + " Ry  e_band="
+            + to_string(fe.e_band) + " Ha")
+    println("[front-end] deck.name=" + fe.deck.name)
+    println("[front-end] note: " + fe.note)
+
+    // ── qforge_run end-to-end: SCF→DFPT→elph→a2f→λ→Tc on the PRODUCTION deck ──
+    //   clustered real-cell spectrum → looser eig tol (1e-8, 600), per qforge_run_tol.
+    let res = qforge_run_tol(qpw_h_apply, fe.deck, 1.0e-8, 600)
+    if res.ok != 1 {
+        println("DEFER — qforge_run failed: " + res.err)
+        println("=== DONE (DEFER) ===")
+        return
+    }
+
+    // ── per-stage trace (audit) ──
+    println("── qforge_run stage trace ──")
+    let mut si = 0
+    while si < res.stages.len() {
+        let st = res.stages[si]
+        println("  [" + st.name + "] ok=" + to_string(st.ok) + " witness="
+                + to_string(st.witness) + " — " + st.note)
+        si = si + 1
+    }
+
+    // ── THE λ VERDICT (VERBATIM) ──
+    let lam = res.lambda
+    let rel = (lam - QE_LAMBDA) / QE_LAMBDA
+    let arel = _abs(rel)
+    println("")
+    println("════════════════════ λ VERDICT (d6 VERBATIM — NOT tuned) ════════════════════")
+    println("convergence params : ecutwfc=" + to_string(fe.geom.ecutwfc) + " Ry · npw_cap="
+            + to_string(npw_cap) + " · n(PW)=" + to_string(fe.n) + " · q-mesh=" + to_string(nq)
+            + "³ MP · sigma=" + to_string(sigma) + " Ha · xc=LDA-x+PW92-c")
+    println("QFORGE λ           = " + to_string(lam))
+    println("QE answer-key λ    = " + to_string(QE_LAMBDA) + "  (CaH6 gate anchor, QE cross-val)")
+    println("rel-ε              = " + to_string(arel) + "  (" + to_string(arel * 100.0) + " %)")
+    println("QFORGE ω_log       = " + to_string(res.omega_log) + " K")
+    println("QFORGE Tc (Allen-Dynes) = " + to_string(res.tc) + " K")
+    println("QFORGE Tc (Eliashberg)  = " + to_string(res.tc_me) + " K")
+    println("screening_note     : " + res.screening_note)
+    if arel <= 0.01 {
+        println("GATE: MET — QFORGE GPU full-BZ CaH6 λ within 1% of QE 4.376 ✅")
+    } else {
+        println("GATE: NOT MET — rel-ε=" + to_string(arel * 100.0) + "% > 1% (HONEST FINDING, d6)")
+        println("DIAGNOSIS: the @L5 screening-functional gap is the named gate-blocker —")
+        println("  QFORGE el-ph |g|² is the BARE matrix element (screening = Hartree +")
+        println("  LDA-exchange only, NO correlation XC). QE's λ=4.376 uses the ε⁻¹-screened")
+        println("  |g|². Closing the gate needs the screened-FC/ΔV path (Anderson/Broyden β")
+        println("  knob for the dielectric-feedback fixed point — screening_anderson.hexa,")
+        println("  the named breakthrough, d2). Reported VERBATIM, not forced to 4.376.")
+    }
+    println("══════════════════════════════════════════════════════════════════════════════")
+    println("=== DONE ===")
+}
