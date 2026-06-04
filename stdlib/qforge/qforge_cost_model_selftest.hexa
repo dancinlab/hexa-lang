@@ -1,0 +1,131 @@
+// @ci_gate — deterministic · network-free · pure in-memory cost-rank g5 gate
+//
+// qforge_cost_model_selftest.hexa — QFORGE-PROCESS per-q DFPT cost-driver RANKER
+//   (qforge_dfpt_cost_rank, stdlib/qforge/cost_model.hexa) g5 gate. The analyzer
+//   answers, FROM MEASURED per-q data (NOT a guess — milestone #33's literal
+//   bar), WHICH factor drives per-q DFPT wall: n_irrep · n_iter · basis · the
+//   n_irrep×n_iter×basis product model.
+//
+// 검증 케이스:
+//  🟢 (MEASURED CaH6) — the 8-q full-grid run's 5 computed irreducible-q rows,
+//     extracted ONCE from the REAL harvested QE ph.out (see fixture comment for
+//     the verbatim provenance: exports/rtsc/CaH6/harvest_snapshot/ph.out q1,q2
+//     + harvest_final/ph.out salvage q6,q7,q8). Per q: n_irrep = count of
+//     "Representation #" · n_iter = Σ "iter #" lines · basis_npw = the q's
+//     "G cutoff (… N G-vectors)" · wall_s = the within-session cumulative-CPU
+//     delta. The analyzer RANKS the drivers; we assert + PRINT the dominant
+//     driver and its correlation AS MEASURED (d6 — whatever the data shows).
+//  🔵 (PRODUCT control) — wall = exactly k·(n_irrep×n_iter×basis) on a fixture
+//     with REAL spread in all three columns → analyzer recovers the product
+//     model as the top driver with correlation = 1.0 and slope = k.
+//  🔵 (SINGLE-FACTOR control) — wall = k·n_iter only → analyzer ranks n_iter
+//     top (discriminates a single-factor regime from the product regime).
+//  🔵 (GUARD) — <2 rows → valid=false, no crash, empty rank.
+//
+// Run (point HEXA_STDLIB_ROOT at THIS worktree's stdlib):
+//   HEXA_STDLIB_ROOT="$PWD/stdlib" hexa run --no-sentinel \
+//     stdlib/qforge/qforge_cost_model_selftest.hexa
+// PASS: "qforge_cost_model_selftest PASS".
+use "stdlib/qforge/cost_model"
+
+fn _ck(name: str, ok: bool) -> int {
+    if ok { println("PASS " + name) ; return 0 }
+    println("FAIL " + name) ; return 1
+}
+fn _abs(x: float) -> float { if x < 0.0 { return -x } return x }
+fn _near(got: float, want: float, tol: float) -> bool { return _abs(got - want) <= tol }
+
+fn main() {
+    let mut fails = 0
+
+    // ── 🟢 MEASURED CaH6 — ground truth extracted from REAL ph.out ──────────
+    // Provenance (read-only LOCAL analysis, ph.out NOT vendored here):
+    //   exports/rtsc/CaH6/harvest_snapshot/ph.out — q1(Γ), q2
+    //   exports/rtsc/CaH6/harvest_final/ph.out    — salvage start_q=6 → q6,q7,q8
+    // Per q: n_irrep = #"Representation #" · n_iter = Σ #"iter #" lines ·
+    //   basis_npw = the q's "G cutoff = … ( N G-vectors)" (Γ uses dense grid) ·
+    //   wall_s = within-session cumulative-CPU delta (monotone "total cpu time").
+    //   q1 Γ : 21 irrep · 162 iter · 1922 npw · 6893.6 s
+    //   q2   : 11 irrep ·  92 iter · 1922 npw · 5269.0 s
+    //   q6   : 21 irrep · 178 iter · 1921 npw · 9762.7 s
+    //   q7   : 21 irrep · 178 iter · 1922 npw · 7976.5 s
+    //   q8   : 21 irrep · 165 iter · 1922 npw · 9143.1 s
+    let cah6 = [
+        PerQRow { q: 1, n_irrep: 21, n_iter: 162, basis_npw: 1922, wall_s: 6893.6 },
+        PerQRow { q: 2, n_irrep: 11, n_iter:  92, basis_npw: 1922, wall_s: 5269.0 },
+        PerQRow { q: 6, n_irrep: 21, n_iter: 178, basis_npw: 1921, wall_s: 9762.7 },
+        PerQRow { q: 7, n_irrep: 21, n_iter: 178, basis_npw: 1922, wall_s: 7976.5 },
+        PerQRow { q: 8, n_irrep: 21, n_iter: 165, basis_npw: 1922, wall_s: 9143.1 },
+    ]
+    let rep = qforge_dfpt_cost_rank(cah6)
+    println("── MEASURED CaH6 (real ph.out, 5 computed irreducible-q) ──")
+    println("  n_rows = " + str(rep.n_rows) + "  valid = " + str(rep.valid))
+    let mut z = 0
+    while z < len(rep.ranked) {
+        let sf = rep.ranked[z]
+        println("  rank[" + str(z) + "] " + sf.factor
+            + "  r=" + str(sf.correlation) + "  slope=" + str(sf.slope))
+        z = z + 1
+    }
+    println("  DOMINANT DRIVER = " + rep.driver + "  (r = " + str(rep.driver_corr) + ")")
+    println("  product-model    r = " + str(rep.product_corr)
+        + "  k = " + str(rep.product_slope) + " s/unit")
+    // ASSERT what the data measurably shows (d6 — honest):
+    //  n_iter is the strongest single driver (basis is ~constant ⇒ no power);
+    //  dominant correlation is strong-positive (> 0.80); product model tracks it.
+    fails = fails + _ck("cah6 valid + 5 rows", rep.valid && rep.n_rows == 5)
+    fails = fails + _ck("cah6 dominant driver = n_iter", rep.driver == "n_iter")
+    fails = fails + _ck("cah6 dominant r > 0.80", rep.driver_corr > 0.80)
+    fails = fails + _ck("cah6 product-model r > 0.80", rep.product_corr > 0.80)
+    // basis is a near-constant column (1921/1922) ⇒ it CANNOT be the driver.
+    fails = fails + _ck("cah6 driver is not the degenerate basis", rep.driver != "basis")
+
+    // ── 🔵 PRODUCT control — wall = k·(irrep×iter×basis), k = 1e-4 ──────────
+    // real spread in every column so the product is non-degenerate & separable.
+    let kp = 0.0001
+    let prod_rows = [
+        PerQRow { q: 1, n_irrep:  3, n_iter:  40, basis_npw: 1000,
+                  wall_s: kp * (3.0 * 40.0 * 1000.0) },
+        PerQRow { q: 2, n_irrep:  6, n_iter:  80, basis_npw: 1500,
+                  wall_s: kp * (6.0 * 80.0 * 1500.0) },
+        PerQRow { q: 3, n_irrep: 12, n_iter: 100, basis_npw: 2000,
+                  wall_s: kp * (12.0 * 100.0 * 2000.0) },
+        PerQRow { q: 4, n_irrep: 21, n_iter: 150, basis_npw: 2500,
+                  wall_s: kp * (21.0 * 150.0 * 2500.0) },
+    ]
+    let pr = qforge_dfpt_cost_rank(prod_rows)
+    println("── PRODUCT control (wall = 1e-4 · irrep·iter·basis) ──")
+    println("  DOMINANT = " + pr.driver + "  r = " + str(pr.driver_corr)
+        + "  slope = " + str(pr.driver_slope))
+    fails = fails + _ck("product control: driver = product model",
+                        pr.driver == "n_irrep*n_iter*basis")
+    fails = fails + _ck("product control: r = 1.0", _near(pr.driver_corr, 1.0, 1.0e-9))
+    fails = fails + _ck("product control: slope = k (1e-4)", _near(pr.driver_slope, kp, 1.0e-12))
+
+    // ── 🔵 SINGLE-FACTOR control — wall = k·n_iter only ─────────────────────
+    // irrep & basis vary INDEPENDENTLY of wall; only n_iter sets the cost.
+    let ks = 50.0
+    let sf_rows = [
+        PerQRow { q: 1, n_irrep: 21, n_iter:  40, basis_npw: 2500, wall_s: ks * 40.0 },
+        PerQRow { q: 2, n_irrep:  3, n_iter:  80, basis_npw: 1000, wall_s: ks * 80.0 },
+        PerQRow { q: 3, n_irrep: 12, n_iter: 120, basis_npw: 2000, wall_s: ks * 120.0 },
+        PerQRow { q: 4, n_irrep:  6, n_iter: 160, basis_npw: 1500, wall_s: ks * 160.0 },
+    ]
+    let sr = qforge_dfpt_cost_rank(sf_rows)
+    println("── SINGLE-FACTOR control (wall = 50 · n_iter) ──")
+    println("  DOMINANT = " + sr.driver + "  r = " + str(sr.driver_corr)
+        + "  slope = " + str(sr.driver_slope))
+    fails = fails + _ck("single-factor control: driver = n_iter", sr.driver == "n_iter")
+    fails = fails + _ck("single-factor control: r = 1.0", _near(sr.driver_corr, 1.0, 1.0e-9))
+    fails = fails + _ck("single-factor control: slope = 50", _near(sr.driver_slope, ks, 1.0e-9))
+
+    // ── 🔵 GUARD — degenerate (<2 rows) → valid=false, no crash ─────────────
+    let one = [ PerQRow { q: 1, n_irrep: 21, n_iter: 100, basis_npw: 1922, wall_s: 5000.0 } ]
+    let gr = qforge_dfpt_cost_rank(one)
+    fails = fails + _ck("guard: 1 row → valid=false", !gr.valid && len(gr.ranked) == 0)
+    let zero = qforge_dfpt_cost_rank([])
+    fails = fails + _ck("guard: 0 rows → valid=false", !zero.valid)
+
+    if fails == 0 { println("qforge_cost_model_selftest PASS") }
+    else { println("qforge_cost_model_selftest FAIL (" + str(fails) + ")") }
+}

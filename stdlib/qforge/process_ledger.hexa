@@ -1,0 +1,223 @@
+// process_ledger.hexa — QFORGE-PROCESS per-deck process LEDGER capture (CONSUMER).
+//
+// The QFORGE telemetry loop today is: EMIT (#2702 telemetry.hexa, the producer)
+// → PARSE/ROLLUP (#2474 telemetry_report · telemetry_rollup) → (nothing
+// durable). The per-stage wall/RAM is computed and ranked, but NO primitive
+// turns it into a DURABLE per-deck process record for the lab ledger / the
+// resource-sizing table read. This module CLOSES that loop: it consumes the
+// SAME 6-key telemetry a deck emits and produces a stable per-deck ledger
+// record + a one-line JSON serializer, with read-modify-write merge so a fresh
+// capture supersedes that deck's prior record while preserving all OTHER decks'
+// records (no-omission, like the sidecar pod-recorder discipline).
+//
+//   EMIT(#2702) → PARSE(#2474) → CAPTURE(this) → durable lab-ledger line
+//
+// d3/d19 REUSE: this module does NOT re-parse JSONL. It calls
+// qforge_telemetry_report (#2474) verbatim — the line parser, the 6-key guard,
+// the wall sum, the rss-null passthrough all live there. We only PROJECT the
+// resulting per-stage Report into a durable, mergeable ledger record.
+//
+// d4 GENERIC: the stage is DATA. There is ONE capture path; no per-stage branch
+// and no per-deck dispatcher — add/rename/remove a stage is parser-side only.
+//
+// d6 HONESTY: cpu_s and peak_ram_mib pass through as the producer's not-measured
+// sentinels (cpu_s = -1 ; peak_ram_mib = -1 / has_ram=false) when the producer
+// did not measure them — NEVER a fabricated 0. The current producer emits
+// rss_kb=null and the structured record's cpu_s=-1/peak_ram_mib=-1, so today
+// every captured stage carries those sentinels honestly; the moment a bound
+// peak-RSS / cpu-time builtin lands upstream, the real numbers flow through with
+// ZERO change here (the parser already does null-passthrough, d6).
+//
+// @L3 READ-only PURE functions over JSONL TEXT + a ledger TEXT — no pod ops, no
+// file I/O. The caller owns reading/writing the ledger file; this module gives
+// the parse→record and the in-memory read-modify-write merge over ledger text.
+
+use "stdlib/qforge/telemetry_report"
+
+// ── one captured stage row (durable projection of a parsed StageRow) ───────
+//   stage        — the transition label (relax · scf · ph:qN · lambda · …)
+//   wall_s       — summed wall over this stage's done events (s)
+//   cpu_s        — -1 = NOT MEASURED (no bound cpu-time builtin upstream, d6).
+//                  The 6-key wire format carries no cpu, so capture from the
+//                  wire always yields -1 — honest, never a fake 0.
+//   peak_ram_mib — peak resident set in MiB iff has_ram; -1 when unmeasured.
+//   has_ram      — false when the producer emitted rss_kb=null (d6 passthrough).
+//   n_q          — per-q breakdown count derived from `…:qN` sibling labels.
+struct LedgerStage {
+    stage: str,
+    wall_s: int,
+    cpu_s: int,
+    peak_ram_mib: int,
+    has_ram: bool,
+    n_q: int,
+}
+
+// ── the durable per-deck ledger record ─────────────────────────────────────
+//   deck         — the deck/run name (the merge key, with candidate)
+//   candidate    — the candidate id
+//   stages       — LedgerStage[] in the parser's ranked (wall DESC) order
+//   total_wall_s — Σ wall over all stages (= Report.total_wall)
+//   captured_ts  — wall-clock epoch seconds the capture was taken
+//   valid        — false ⇒ empty/malformed telemetry yielded NO usable record
+//                  (guard: an empty record, never a crash, never a phantom row)
+struct LedgerRecord {
+    deck: str,
+    candidate: str,
+    stages: [LedgerStage],
+    total_wall_s: int,
+    captured_ts: int,
+    valid: bool,
+}
+
+// ── internal: kB → MiB, floored (1 MiB = 1024 kB) ─────────────────────────
+fn _pl_kb_to_mib(kb: int) -> int {
+    return kb / 1024
+}
+
+// ── internal: count per-q sibling stages for a `base:qN` label ─────────────
+// A per-q stage label is `<base>:qN` (e.g. `dfpt:q1`, `ph:q2`). For a row whose
+// label contains ':', n_q = how many rows share the same `base:` head (incl.
+// itself). For a non-per-q label (no ':'), n_q = 0. Pure over the row list.
+fn _pl_count_nq(rows: [StageRow], stage: str) -> int {
+    let parts = stage.split(":")
+    if len(parts) < 2 { return 0 }            // no ':' → not a per-q stage
+    let base = parts[0]
+    let mut n = 0
+    let mut i = 0
+    while i < len(rows) {
+        let p2 = rows[i].stage.split(":")
+        if len(p2) >= 2 && p2[0] == base { n = n + 1 }
+        i = i + 1
+    }
+    return n
+}
+
+// qforge_process_ledger_capture — consume a deck's 6-key telemetry JSONL →
+// a durable LedgerRecord. d3/d19: parsing is delegated to qforge_telemetry_report
+// (#2474) verbatim; we PROJECT its ranked per-stage Report into LedgerStage rows
+// (cpu_s=-1 always from the wire; peak_ram_mib from rss_kb iff measured, else -1
+// has_ram=false — d6) and derive n_q from `:qN` sibling labels. An empty/
+// malformed telemetry (0 stages AND 0 wall) yields an EMPTY record (valid=false,
+// no stages) — never a crash, never a phantom row. captured_ts stamps now().
+pub fn qforge_process_ledger_capture(jsonl_text: str, deck: str, candidate: str) -> LedgerRecord {
+    // d3/d19: reuse the #2474 parser verbatim (parse · 6-key guard · wall sum ·
+    // rss-null passthrough all happen INSIDE this call — NO reimplementation).
+    let rep = qforge_telemetry_report(jsonl_text)
+
+    // guard: empty/malformed telemetry → empty record, no crash, no phantom row.
+    if rep.n_stages == 0 && rep.total_wall == 0 {
+        return LedgerRecord {
+            deck: deck, candidate: candidate, stages: [],
+            total_wall_s: 0, captured_ts: now(), valid: false,
+        }
+    }
+
+    let mut out_rows = []
+    let mut i = 0
+    while i < len(rep.rows) {
+        let r = rep.rows[i]
+        i = i + 1
+        // d6: cpu is never on the 6-key wire → -1 (not measured). RAM passes
+        // through as MiB iff the parser saw a real rss; else -1 / has_ram=false.
+        let mut ram = -1
+        if r.has_rss { ram = _pl_kb_to_mib(r.peak_rss) }
+        out_rows.push(LedgerStage {
+            stage: r.stage,
+            wall_s: r.wall_s,
+            cpu_s: -1,
+            peak_ram_mib: ram,
+            has_ram: r.has_rss,
+            n_q: _pl_count_nq(rep.rows, r.stage),
+        })
+    }
+
+    return LedgerRecord {
+        deck: deck, candidate: candidate, stages: out_rows,
+        total_wall_s: rep.total_wall, captured_ts: now(), valid: true,
+    }
+}
+
+// ── internal: a RAM cell as a render string (`null` passthrough, d6) ───────
+fn _pl_ram_str(s: LedgerStage) -> str {
+    if !s.has_ram { return "null" }
+    return to_string(s.peak_ram_mib)
+}
+
+// qforge_process_ledger_serialize — serialize a LedgerRecord to ONE durable
+// ledger JSON line (the lab-ledger append unit). Stages serialize as an array;
+// cpu_s/peak_ram_mib carry the honest sentinel (-1 / null) when unmeasured (d6).
+// An INVALID (empty) record still serializes a stable shape (stages:[], valid
+// false) so a malformed capture is auditable, not silently dropped.
+pub fn qforge_process_ledger_serialize(rec: LedgerRecord) -> str {
+    let mut st = "["
+    let mut i = 0
+    while i < len(rec.stages) {
+        if i > 0 { st = st + "," }
+        let s = rec.stages[i]
+        st = st + "{\"stage\":\"" + s.stage + "\",\"wall_s\":" + to_string(s.wall_s)
+            + ",\"cpu_s\":" + to_string(s.cpu_s)
+            + ",\"peak_ram_mib\":" + _pl_ram_str(s)
+            + ",\"n_q\":" + to_string(s.n_q) + "}"
+        i = i + 1
+    }
+    st = st + "]"
+    let mut valid = "false"
+    if rec.valid { valid = "true" }
+    return "{\"deck\":\"" + rec.deck + "\",\"candidate\":\"" + rec.candidate
+        + "\",\"stages\":" + st
+        + ",\"total_wall_s\":" + to_string(rec.total_wall_s)
+        + ",\"captured_ts\":" + to_string(rec.captured_ts)
+        + ",\"valid\":" + valid + "}"
+}
+
+// ── internal: the `deck` field value of a ledger line, or "" if not parseable.
+// Reuses the builtin json map surface (same idiom as telemetry_report's parser);
+// a line that is not a `{…}` map with a `deck` key returns "" (treated as a
+// foreign line — PRESERVED verbatim, never dropped).
+fn _pl_line_deck(line: str) -> str {
+    let t = line.trim()
+    if len(t) < 2 { return "" }
+    if t.substring(0, 1) != "{" { return "" }
+    let m = json_parse(t)
+    if type_of(m) != "map" { return "" }
+    if !has_key(m, "deck") { return "" }
+    return to_string(m["deck"])
+}
+
+// qforge_process_ledger_merge — read-modify-write merge of a freshly-captured
+// record into an existing ledger TEXT (newline-joined JSON lines). The fresh
+// record SUPERSEDES any prior line whose `deck` matches (no-omission: EVERY
+// other deck's line — and any unrecognized/foreign line — is preserved verbatim
+// in its original order). If the deck had no prior line, the fresh record is
+// APPENDED. Returns the new ledger text (no trailing-blank duplication). Pure:
+// the caller owns the file read/write. An empty prior ledger → just the one line.
+pub fn qforge_process_ledger_merge(ledger_text: str, rec: LedgerRecord) -> str {
+    let fresh = qforge_process_ledger_serialize(rec)
+    let lines = ledger_text.split("\n")
+    let mut out = []
+    let mut replaced = false
+    let mut i = 0
+    while i < len(lines) {
+        let raw = lines[i]
+        i = i + 1
+        if len(raw.trim()) == 0 { continue }      // drop blank lines (re-joined clean)
+        let d = _pl_line_deck(raw)
+        if d == rec.deck && d != "" {
+            // supersede THIS deck's prior record (read-modify-write)
+            if !replaced { out.push(fresh) ; replaced = true }
+            // any duplicate prior lines for the same deck collapse into the one
+            continue
+        }
+        out.push(raw.trim())                       // preserve every other line verbatim
+    }
+    if !replaced { out.push(fresh) }               // deck was new → append
+
+    let mut text = ""
+    let mut j = 0
+    while j < len(out) {
+        if j > 0 { text = text + "\n" }
+        text = text + out[j]
+        j = j + 1
+    }
+    return text
+}
