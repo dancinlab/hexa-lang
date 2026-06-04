@@ -1,0 +1,108 @@
+F-FUSION-P1B-TILED-GEMM — HEXA-FUSION Phase 1b: shared-memory TILED FP32 own-GEMM
+================================================================================
+Goal: close the measured 7.6x naive-vs-cuBLAS gap from Phase 1d (the naive
+one-thread-per-output _hx_k_sgemm_cm) with a shared-memory tiled kernel
+(HXTILE=16), faithful to cublasSgemm (same col-major signature/semantics +
+transpose handling). cuBLAS = correctness ORACLE (fp32 tolerance, NOT bit-exact
+— accumulation order differs). g5-HONEST: measured numbers VERBATIM; the tiled
+kernel is markedly faster than naive (shared-mem reuse) but does NOT match
+cuBLAS (no Tensor-Cores, basic single-stage tile) — reported as the remaining gap.
+
+POD / BUILD
+-----------
+Pod:   vast.ai 39446876 (offer 36346704, RENTED for this run, DESTROYED after).
+       (A first rent landed an RTX PRO 6000 Blackwell — destroyed unused, re-rented
+        a true H100 SXM to match the task spec + the p1d baseline pod.)
+GPU:   NVIDIA H100 80GB HBM3 (81559 MiB), driver 580.126.20, CUDA 12.4 (nvcc V12.4.131),
+       glibc 2.35 (Ubuntu 22.04). Same class/toolchain as the Phase 1d pod.
+Build: /root/p1b on pod (verbatim, clean — only pre-existing hxlcl implicit-decl
+       warnings from the gcc host TU, identical to p1d; NOT errors):
+  nvcc -O3 -arch=compute_90 -DHXQWEN14B_CUDA -Xcompiler -fPIC -c hxqwen14b_cuda.cu  -> cu.o
+  gcc  -O3 -fPIC -DHXQWEN14B_CUDA -I$CUDA/include -c hxqwen14b.c                     -> host.o
+  nvcc -O3 -arch=compute_90 -DHXQWEN14B_CUDA -Xcompiler -fPIC -c lora_cuda.cu        -> lora_cu.o
+  gcc  -O3 -fPIC -DHXQWEN14B_CUDA -c lora_cuda_host.c                                -> lora_host.o
+  gcc  -O2 -c hxqwen14b_p1d_hxlcl.c                                                  -> hxlcl.o
+  nvcc -O3 -arch=compute_90 -DHXQWEN14B_CUDA hxqwen14b_p1d_driver.cu host.o cu.o lora_cu.o lora_host.o hxlcl.o \
+       -lcuda -lcudart -lcublas -lm -o p1d_driver   (built clean, 1.82MB)
+  cc -O2 p1b_cmp.c -lm -o p1b_cmp
+  BUILD OK.  tiled-kernel grep in the TU = 3 hits (_hx_k_sgemm_cm_tiled present).
+
+WHAT WAS AUTHORED (Phase 1b, env-gated HEXA_OWN_GEMM_TILED; reuses the p1d driver)
+---------------------------------------------------------------------------------
+- self/native/hxqwen14b_cuda.cu (nvcc TU): a NEW shared-memory tiled kernel
+    __global__ _hx_k_sgemm_cm_tiled(tA,tB,M,N,K,alpha,A,lda,B,ldb,beta,C,ldc)
+    — SAME col-major signature/semantics + transpose handling as the naive
+    _hx_k_sgemm_cm_v54. HXTILE=16: each 16x16 block cooperatively stages a
+    16x16 sub-tile of op(A) and op(B) into __shared__ As/Bs, __syncthreads,
+    accumulates over the tile, __syncthreads, advances over K. Each global
+    element loaded once per tile is reused HXTILE times from shared memory.
+- Wired into the SAME extern "C" launcher _hx_own_sgemm_cm_launch: when env
+    HEXA_OWN_GEMM_TILED is set+non-empty it launches the tiled kernel (with a
+    once-per-process [OWN-SGEMM-TILED-FIRED] stderr probe), else the existing
+    naive kernel. grid=((M+15)/16,(N+15)/16), block=(16,16).
+  Gate nesting: the OUTER HEXA_OWN_GEMM gates own-vs-cuBLAS (the p1d shims,
+    unchanged); HEXA_OWN_GEMM_TILED selects tiled-vs-naive WITHIN the own path.
+    Neither set => cuBLAS, byte-identical to before.
+- Correctness/perf driver REUSED verbatim from p1d (hxqwen14b_p1d_driver.cu):
+    drives hxqwen14b_lora_fwd_single + _bwd_single on device, dumps y/dA/dB/dx,
+    optional CUDA-event timed loop (P1D_ITERS). New rel-RMS cmp (p1b_cmp.c).
+
+3-WAY [FIRED] PROBE COUNTS
+-------------------------
+  oracle (HEXA_OWN_GEMM unset):                    [OWN-SGEMM-FIRED] 0x  [TILED] 0x  -> cuBLAS
+  naive  (HEXA_OWN_GEMM=1):                         [OWN-SGEMM-FIRED] 1x  [TILED] 0x  -> naive kernel
+  tiled  (HEXA_OWN_GEMM=1 HEXA_OWN_GEMM_TILED=1):   [OWN-SGEMM-FIRED] 1x  [TILED] 1x  -> tiled kernel
+  => genuine 3-way (cuBLAS / naive / tiled), not host-vs-host. [OWN-SGEMM-TILED-FIRED]
+     FIRED 1x under the tiled arm at BOTH shapes (small + GEMM-bound). fwd_rc=0 bwd_rc=0 all arms.
+
+CORRECTNESS — TILED vs cuBLAS ORACLE (rel-RMS = ||err||/||signal||, tol_RMS=1e-4)
+--------------------------------------------------------------------------------
+SMALL shape (M=64 N=96 K=80 R=8):
+  y    n=6144      max|Δ|=1.192e-06  RMS_err=2.536e-07  RMS_sig=1.251e+00  rel_RMS=2.03e-07  PASS
+  dA   n=640       max|Δ|=4.768e-06  RMS_err=8.903e-07  RMS_sig=3.773e+00  rel_RMS=2.36e-07  PASS
+  dB   n=768       max|Δ|=3.099e-06  RMS_err=8.150e-07  RMS_sig=3.444e+00  rel_RMS=2.37e-07  PASS
+  dx   n=5120      max|Δ|=1.431e-06  RMS_err=2.560e-07  RMS_sig=1.341e+00  rel_RMS=1.91e-07  PASS
+  VERDICT: PASS
+GEMM-BOUND shape (M=N=K=2048 R=16):
+  y    n=4194304   max|Δ|=2.480e-05  RMS_err=3.676e-06  RMS_sig=4.359e+00  rel_RMS=8.43e-07  PASS
+  dA   n=32768     max|Δ|=4.578e-04  RMS_err=5.963e-05  RMS_sig=4.926e+01  rel_RMS=1.21e-06  PASS
+  dB   n=32768     max|Δ|=4.120e-04  RMS_err=5.843e-05  RMS_sig=4.936e+01  rel_RMS=1.18e-06  PASS
+  dx   n=4194304   max|Δ|=1.953e-03  RMS_err=2.197e-04  RMS_sig=2.264e+02  rel_RMS=9.70e-07  PASS
+  VERDICT: PASS
+NOTE: TILED rel-RMS is IDENTICAL to naive vs the same oracle (both ~1e-6) — the
+  tiled kernel reorders shared-mem loads but keeps the same per-output sequential
+  k-accumulation, so it produces bit-for-bit the SAME result as the naive kernel
+  (cmp naive-vs-oracle and tiled-vs-oracle print identical numbers). max|Δ| up to
+  1.95e-3 on dx is a denom-floored near-zero-element artifact; rel-RMS ~1e-6 is the
+  correct GEMM metric (~sqrt(K)*eps accumulation-order diff vs cuBLAS tiled order).
+CORRECTNESS VERDICT: PASS (TILED within fp32 tolerance vs cuBLAS oracle, both shapes).
+
+PERF — 3-WAY ms/iter (GEMM-BOUND M=N=K=2048 R=16, fwd+bwd LoRA, CUDA-event, 50 iters)
+------------------------------------------------------------------------------------
+  cuBLAS (oracle):  7.1453 ms / 50 = 0.14291 ms/iter
+  naive  (own):    55.3373 ms / 50 = 1.10675 ms/iter
+  tiled  (own):    44.6290 ms / 50 = 0.89258 ms/iter
+
+RATIOS (verbatim arithmetic):
+  naive -> tiled  speedup = 1.10675 / 0.89258 = 1.24x  (tiled is 1.24x FASTER than naive)
+  tiled  vs cuBLAS gap    = 0.89258 / 0.14291 = 6.25x  (tiled still 6.25x SLOWER than cuBLAS)
+  naive  vs cuBLAS gap    = 1.10675 / 0.14291 = 7.74x  (matches p1d's ~7.6x baseline)
+  => the tiled kernel closed the naive-vs-cuBLAS gap from 7.74x to 6.25x
+     (a 1.24x step toward cuBLAS via shared-memory reuse).
+
+OUTCOME (g5-HONEST)
+-------------------
+- TILED-FIRED: YES (1x under the tiled arm, both shapes; 0x oracle/naive arms).
+- CORRECTNESS: PASS — TILED vs cuBLAS rel-RMS ~1e-6 on y/dA/dB/dx, within fp32 tol.
+- PERF: tiled 1.24x faster than naive (0.89258 vs 1.10675 ms/iter), closing the
+  naive->cuBLAS gap from 7.74x to 6.25x. The win is REAL but MODEST — a basic
+  single-stage 16x16 shared-mem tile cuts global-memory traffic (each load reused
+  16x) but does NOT touch the FP32 CUDA-core compute ceiling: no Tensor-Cores, no
+  register-blocking (each thread still computes one output), no double-buffered
+  k-loop / vectorized loads. So it stays 6.25x off cuBLAS's TC-tiled Sgemm. This
+  is the honest measured result, NOT a "matched cuBLAS" claim.
+- NEXT (Phase 1b deeper, gap-driven): register-tiling (e.g. 64x64 block tile with
+  an 8x8 per-thread micro-tile + double-buffered shared loads) is the standard way
+  to lift FP32-CUDA-core GEMM from ~memory-bound toward compute-bound; Tensor-Core
+  (TF32/BF16 WMMA) is the path to actually approach cuBLAS but changes dtype/accuracy.
+- Pod 39446876 (H100 SXM) DESTROYED after the run.
