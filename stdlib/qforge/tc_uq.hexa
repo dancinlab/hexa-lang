@@ -1,0 +1,238 @@
+// HEXA Standard Library — qforge/tc_uq
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// QFORGE Tc UNCERTAINTY QUANTIFICATION — an honest Tc carries an error bar.
+//
+// A bare Tc number hides the convergence risk of the k/q-mesh + plane-wave
+// cutoff it was computed at, and the modelling risk of the Coulomb
+// pseudopotential μ* (which is NOT a first-principles quantity — it is a
+// fitted band, conventionally 0.10–0.13). Reporting Tc without a σ silently
+// asserts both are pinned. They are not. d6: never present an under-converged
+// value as THE result — surface its uncertainty.
+//
+// This module takes a convergence SERIES — a list of (mesh_density → λ, ω_log)
+// points produced by re-running the el-ph engine at progressively denser
+// k/q-meshes (or larger cutoffs; "mesh_density" is the generic refinement
+// knob) — and:
+//
+//   (i)   extrapolates λ and ω_log to the converged limit (mesh → ∞, i.e. the
+//         step h = 1/mesh_density → 0) via a shifted-power / Richardson fit
+//         y(h) = y_∞ + A·h^p;
+//   (ii)  propagates the MESH-extrapolation residual |y(finest) − y_∞| (per
+//         channel) into a Tc spread by re-evaluating allen_dynes_tc at the
+//         residual-perturbed (λ, ω_log);
+//   (iii) propagates the μ*-RANGE [μ_min, μ_max] into a Tc spread by
+//         re-evaluating allen_dynes_tc across the range at the extrapolated
+//         (λ, ω_log);
+//   (iv)  combines the two independent contributions in quadrature into a
+//         single tc_sigma, and flags the DOMINANT source ("mesh" vs "mu_star").
+//
+// d3 (one canonical code home): the Tc itself is NOT re-implemented here. Every
+// Tc evaluation forwards to the verified `allen_dynes_tc` (stdlib/material/sim,
+// Allen & Dynes 1975 PRB 12 905, QE-cross-val-pinned). This module only
+// PROPAGATES uncertainty THROUGH that verified predictor — it adds no physics
+// formula, only an error-propagation wrapper.
+//
+// d6 HONEST: tc_sigma is NEVER fabricated to 0 on an unconverged series. The
+// mesh contribution is the Tc-image of the genuine finest-point extrapolation
+// residual; a coarse / scattered / non-converging series yields a LARGE
+// residual and hence a LARGE σ. Only a series that is genuinely flat at the
+// finest meshes earns a small σ — and even then μ* keeps σ > 0.
+//
+// Surface (pure functions, no syscall):
+//   pub struct TcUqResult { ... }
+//   pub fn qforge_tc_uq(mesh: [float], lam: [float], wlog: [float],
+//                       mu_min: float, mu_max: float) -> TcUqResult
+//
+// Run the gate:  hexa run stdlib/qforge/tc_uq_selftest.hexa
+
+use "stdlib/material/sim"   // allen_dynes_tc (d3 — the verified predictor)
+
+// ── result type ──────────────────────────────────────────────────────────────
+pub struct TcUqResult {
+    ok:              int,     // 1 = a Tc±σ was produced; 0 = loud sentinel
+    err:             str,     // populated when ok==0
+    tc_mean:         float,   // Tc (K) at the EXTRAPOLATED limit, μ* = midpoint
+    tc_sigma:        float,   // combined 1σ Tc uncertainty (K), mesh ⊕ μ* in quad
+    sigma_mesh:      float,   // Tc spread (K) from the mesh-extrapolation residual
+    sigma_mu:        float,   // Tc spread (K) from the μ*-range
+    dominant_source: str,     // "mesh" | "mu_star" — the larger contribution
+    lambda_inf:      float,   // λ extrapolated to mesh → ∞
+    omega_log_inf:   float,   // ω_log extrapolated to mesh → ∞ (K)
+    lambda_resid:    float,   // |λ(finest) − λ_∞|  (the honest mesh residual)
+    omega_log_resid: float    // |ω_log(finest) − ω_log_∞| (K)
+}
+
+fn _uq_sentinel(err: str) -> TcUqResult {
+    return TcUqResult { ok: 0, err: err, tc_mean: -1.0, tc_sigma: -1.0,
+                        sigma_mesh: -1.0, sigma_mu: -1.0, dominant_source: "none",
+                        lambda_inf: -1.0, omega_log_inf: -1.0,
+                        lambda_resid: -1.0, omega_log_resid: -1.0 }
+}
+
+fn _uq_abs(x: float) -> float { if x < 0.0 { return -x } return x }
+
+// ── shifted-power / Richardson extrapolation of one channel to h → 0 ──────────
+//
+// Given the convergence series sorted by ASCENDING mesh_density (so the LAST
+// entry is the finest mesh = the most-converged point), estimate the value at
+// the converged limit mesh → ∞, i.e. step h = 1/mesh_density → 0.
+//
+// Model: y(h) = y_∞ + A·h^p. With the three finest points (h1 > h2 > h3, i.e.
+// the three densest meshes) we solve for (y_∞, A, p) via the classic
+// three-point Aitken/Richardson estimator when the steps are geometric, and
+// fall back to a robust linear-in-h Richardson when they are not (or the
+// triple is degenerate / non-monotone — a sign the series is NOT in its
+// asymptotic regime, which we surface as a LARGE residual, never as a
+// fabricated convergence).
+//
+// Returns [y_inf, resid] where resid = |y(finest) − y_inf| is the honest
+// finest-point extrapolation residual (the uncertainty proxy for THIS channel).
+fn _extrap_channel(h: [float], y: [float], n: int) -> [float] {
+    // n is guaranteed >= 2 by the caller.
+    let y_fine = y[n - 1]          // value at the finest mesh (smallest h)
+
+    if n == 2 {
+        // two points → linear-in-h Richardson: y_∞ = y2 + (y2 − y1)·h2/(h1 − h2).
+        let h1 = h[0]
+        let h2 = h[1]
+        let y1 = y[0]
+        let y2 = y[1]
+        let dh = h1 - h2
+        if _uq_abs(dh) < 1.0e-30 {
+            // identical meshes → cannot extrapolate; residual = full gap (honest).
+            return [y_fine, _uq_abs(y2 - y1)]
+        }
+        let y_inf = y2 + (y2 - y1) * h2 / dh
+        return [y_inf, _uq_abs(y_fine - y_inf)]
+    }
+
+    // n >= 3 → use the three finest points (indices n-3, n-2, n-1).
+    let h1 = h[n - 3]
+    let h2 = h[n - 2]
+    let h3 = h[n - 1]
+    let y1 = y[n - 3]
+    let y2 = y[n - 2]
+    let y3 = y[n - 1]
+
+    let d1 = y2 - y1     // change over the coarser step
+    let d2 = y3 - y2     // change over the finer step
+
+    // Aitken Δ² acceleration: when the series converges geometrically,
+    //   y_∞ = y3 − d2² / (d2 − d1).
+    // Guard the denominator: if (d2 − d1) ≈ 0 the ratio is ill-defined →
+    // fall back to linear Richardson over the two finest points. Also guard
+    // the NON-CONVERGENT case |d2| >= |d1| (the increments are NOT shrinking
+    // — the series is not in its asymptotic tail): Aitken would over-shoot, so
+    // we DECLINE to claim a tight limit and instead report the finest value as
+    // the limit with the finest increment as the honest residual.
+    let denom = d2 - d1
+    if _uq_abs(d2) >= _uq_abs(d1) {
+        // increments NOT shrinking → unconverged. Honest: limit ≈ finest value,
+        // residual = the (non-shrinking) finest increment. This keeps σ LARGE.
+        return [y_fine, _uq_abs(d2)]
+    }
+    if _uq_abs(denom) < 1.0e-30 {
+        // geometric-rate denominator vanished → linear Richardson fallback.
+        let dh = h2 - h3
+        if _uq_abs(dh) < 1.0e-30 { return [y_fine, _uq_abs(d2)] }
+        let y_inf_lin = y3 + (y3 - y2) * h3 / dh
+        return [y_fine, _uq_abs(y_fine - y_inf_lin)]
+    }
+    let y_inf = y3 - (d2 * d2) / denom
+    let resid = _uq_abs(y_fine - y_inf)
+    return [y_inf, resid]
+}
+
+// ── qforge_tc_uq — the milestone entry ───────────────────────────────────────
+//
+//   mesh   : mesh_density per series point (ASCENDING; e.g. [4,8,12,16] for an
+//            N×N×N k/q-mesh, OR a plane-wave cutoff in Ry — any monotone
+//            refinement knob). h = 1/mesh is the extrapolation step.
+//   lam    : QFORGE-NC λ at each mesh point (same length as mesh).
+//   wlog   : ω_log (K) at each mesh point (same length as mesh).
+//   mu_min : low end of the μ* uncertainty band (e.g. 0.10).
+//   mu_max : high end of the μ* uncertainty band (e.g. 0.13).
+//
+// Returns a TcUqResult. Sentinel (ok==0) on: <2 points, ragged arrays, a
+// non-physical extrapolated λ_∞ ≤ 0 / ω_log_∞ ≤ 0, or an inverted μ* band.
+pub fn qforge_tc_uq(mesh: [float], lam: [float], wlog: [float],
+                    mu_min: float, mu_max: float) -> TcUqResult {
+    let n = len(mesh)
+    if n < 2 { return _uq_sentinel("need >= 2 convergence-series points") }
+    if len(lam) != n || len(wlog) != n {
+        return _uq_sentinel("ragged series (mesh/lam/wlog length mismatch)")
+    }
+    if mu_max < mu_min { return _uq_sentinel("inverted mu* band (mu_max < mu_min)") }
+
+    // h = 1/mesh_density (the refinement STEP that → 0 in the converged limit).
+    let mut h: [float] = []
+    let mut i = 0
+    while i < n {
+        let md = mesh[i]
+        if md <= 0.0 { return _uq_sentinel("non-positive mesh_density") }
+        h.push(1.0 / md)
+        i = i + 1
+    }
+
+    // extrapolate each channel to mesh → ∞.
+    let exL = _extrap_channel(h, lam, n)
+    let exW = _extrap_channel(h, wlog, n)
+    let lambda_inf = exL[0]
+    let lam_resid = exL[1]
+    let wlog_inf = exW[0]
+    let wlog_resid = exW[1]
+
+    if lambda_inf <= 0.0 {
+        return _uq_sentinel("non-physical extrapolated lambda_inf <= 0")
+    }
+    if wlog_inf <= 0.0 {
+        return _uq_sentinel("non-physical extrapolated omega_log_inf <= 0")
+    }
+
+    // μ* midpoint → the central Tc estimate at the EXTRAPOLATED limit (NOT the
+    // coarsest, NOT the finest raw point — the convergence-extrapolated value).
+    let mu_mid = 0.5 * (mu_min + mu_max)
+    // ω̄₂ = ω_log → f2 = 1 (the scalar Allen-Dynes entry; a series gives no
+    // independent ω̄₂, so we use the f1-only strong-coupling form, exactly as
+    // qforge_tc_allen_dynes does — d3 forward to the verified atom).
+    let tc_mean = allen_dynes_tc(wlog_inf, lambda_inf, mu_mid, wlog_inf)
+
+    // ── (i) MESH σ — Tc-image of the extrapolation residual ───────────────────
+    // Perturb λ and ω_log by ± their finest-point residual (at fixed mu_mid) and
+    // take the half-spread of the resulting Tc. The two channels are independent
+    // sources of mesh error → combine their half-spreads in quadrature.
+    let tc_lam_hi = allen_dynes_tc(wlog_inf, lambda_inf + lam_resid, mu_mid, wlog_inf)
+    let tc_lam_lo = allen_dynes_tc(wlog_inf, lambda_inf - lam_resid, mu_mid, wlog_inf)
+    let sig_lam = 0.5 * _uq_abs(tc_lam_hi - tc_lam_lo)
+
+    let tc_w_hi = allen_dynes_tc(wlog_inf + wlog_resid, lambda_inf, mu_mid, wlog_inf + wlog_resid)
+    let tc_w_lo = allen_dynes_tc(wlog_inf - wlog_resid, lambda_inf, mu_mid, wlog_inf - wlog_resid)
+    let sig_w = 0.5 * _uq_abs(tc_w_hi - tc_w_lo)
+
+    let sigma_mesh = sqrt(sig_lam * sig_lam + sig_w * sig_w)
+
+    // ── (ii) μ* σ — Tc spread across the μ*-range at the extrapolated limit ────
+    // Half-spread of Tc over [μ_min, μ_max]. Larger μ* → smaller Tc, so this is
+    // 0.5·(Tc(μ_min) − Tc(μ_max)). A zero-width band → 0 (the ONLY honest zero,
+    // and only for THIS channel; the combined σ still carries mesh).
+    let tc_mu_lo = allen_dynes_tc(wlog_inf, lambda_inf, mu_min, wlog_inf)  // higher Tc
+    let tc_mu_hi = allen_dynes_tc(wlog_inf, lambda_inf, mu_max, wlog_inf)  // lower Tc
+    let sigma_mu = 0.5 * _uq_abs(tc_mu_lo - tc_mu_hi)
+
+    // ── combine + flag the dominant source ────────────────────────────────────
+    let tc_sigma = sqrt(sigma_mesh * sigma_mesh + sigma_mu * sigma_mu)
+    let mut dominant = "mu_star"
+    if sigma_mesh > sigma_mu { dominant = "mesh" }
+
+    return TcUqResult {
+        ok: 1, err: "",
+        tc_mean: tc_mean, tc_sigma: tc_sigma,
+        sigma_mesh: sigma_mesh, sigma_mu: sigma_mu,
+        dominant_source: dominant,
+        lambda_inf: lambda_inf, omega_log_inf: wlog_inf,
+        lambda_resid: lam_resid, omega_log_resid: wlog_resid
+    }
+}
