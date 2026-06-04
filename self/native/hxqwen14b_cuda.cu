@@ -19,6 +19,7 @@
 
 #include <cuda_runtime.h>
 #include <cublas_v2.h>
+#include <mma.h>
 #include <stdint.h>
 #include <math.h>
 #include <stdio.h>
@@ -535,6 +536,61 @@ __global__ void _hx_k_sgemm_cm_tiled(int tA, int tB, long long M, long long N, l
         C[row + col*ldc] = alpha * acc + beta * prev;
     }
 }
+// ═════════════════════════════════════════════════════════════════════
+// Phase 1b-3 (CUDA-OWN, precision-approved): TF32 Tensor-Core own-GEMM via
+// the WMMA API — the cuBLAS-parity path. One warp (32 threads) per 16×16 C
+// tile; K stepped by 8 (TF32 frag = 16×16×8). Transpose (tA/tB) + edge
+// zero-pad are handled while STAGING op(A)/op(B) sub-tiles into __shared__,
+// so the WMMA load is a fixed row_major layout regardless of transpose (no
+// 4-variant template). Inputs rounded fp32→tf32 (≈10-bit mantissa) → NOT
+// fp32-exact; correctness bar loosens to TF32 tol (rel-RMS ~1e-3), which is
+// the approved precision tradeoff for Tensor-Core throughput. cublasSgemm
+// column-major semantics preserved: C[i+j·ldc]=α·Σ op(A)·op(B)+β·C.
+// Env HEXA_OWN_GEMM_WMMA selects this within the own path.
+// ═════════════════════════════════════════════════════════════════════
+__global__ void _hx_k_sgemm_cm_wmma(int tA, int tB, long long M, long long N, long long K,
+                                    float alpha, const float* A, long long lda,
+                                    const float* B, long long ldb,
+                                    float beta, float* C, long long ldc) {
+    const long long row0 = (long long)blockIdx.x * 16;   // C row block
+    const long long col0 = (long long)blockIdx.y * 16;   // C col block
+    __shared__ float As[16*8];   // row-major 16×8  (op(A)[row0+i, t+l])
+    __shared__ float Bs[8*16];   // row-major 8×16  (op(B)[t+l, col0+j])
+    __shared__ float Cs[16*16];
+    nvcuda::wmma::fragment<nvcuda::wmma::matrix_a, 16,16,8, nvcuda::wmma::precision::tf32, nvcuda::wmma::row_major> a_frag;
+    nvcuda::wmma::fragment<nvcuda::wmma::matrix_b, 16,16,8, nvcuda::wmma::precision::tf32, nvcuda::wmma::row_major> b_frag;
+    nvcuda::wmma::fragment<nvcuda::wmma::accumulator, 16,16,8, float> c_frag;
+    nvcuda::wmma::fill_fragment(c_frag, 0.0f);
+    int tid = threadIdx.x;   // 0..31 (one warp)
+    for (long long t = 0; t < K; t += 8) {
+        for (int idx = tid; idx < 128; idx += 32) {        // stage As 16×8
+            int i = idx >> 3, l = idx & 7;
+            long long r = row0 + i, kk = t + l;
+            float v = (r < M && kk < K) ? (tA ? A[kk + r*lda] : A[r + kk*lda]) : 0.0f;
+            As[idx] = nvcuda::wmma::__float_to_tf32(v);
+        }
+        for (int idx = tid; idx < 128; idx += 32) {        // stage Bs 8×16
+            int l = idx >> 4, j = idx & 15;
+            long long kk = t + l, c = col0 + j;
+            float v = (kk < K && c < N) ? (tB ? B[c + kk*ldb] : B[kk + c*ldb]) : 0.0f;
+            Bs[idx] = nvcuda::wmma::__float_to_tf32(v);
+        }
+        __syncwarp();
+        nvcuda::wmma::load_matrix_sync(a_frag, As, 8);
+        nvcuda::wmma::load_matrix_sync(b_frag, Bs, 16);
+        nvcuda::wmma::mma_sync(c_frag, a_frag, b_frag, c_frag);
+        __syncwarp();
+    }
+    nvcuda::wmma::store_matrix_sync(Cs, c_frag, 16, nvcuda::wmma::mem_row_major);
+    for (int idx = tid; idx < 256; idx += 32) {
+        int i = idx >> 4, j = idx & 15;
+        long long r = row0 + i, c = col0 + j;
+        if (r < M && c < N) {
+            float prev = (beta != 0.0f) ? C[r + c*ldc] : 0.0f;
+            C[r + c*ldc] = alpha * Cs[idx] + beta * prev;
+        }
+    }
+}
 // Host launcher for the own-GEMM kernel — extern "C" so the gcc-compiled
 // hxqwen14b.c TU (LoRA fwd/bwd) can call it. tA/tB are 1 if op==T else 0.
 // Returns 0 on success, nonzero on a CUDA launch/sync error.
@@ -547,7 +603,14 @@ int _hx_own_sgemm_cm_launch(int tA, int tB, int m, int n, int k,
                             const float* B, int ldb,
                             float beta, float* C, int ldc) {
     dim3 blk(16,16); dim3 grd((unsigned)((m+15)/16),(unsigned)((n+15)/16));
-    if (getenv("HEXA_OWN_GEMM_TILED") && getenv("HEXA_OWN_GEMM_TILED")[0]) {
+    if (getenv("HEXA_OWN_GEMM_WMMA") && getenv("HEXA_OWN_GEMM_WMMA")[0]) {
+        static int wfired = 0; if (!wfired){wfired=1; fprintf(stderr,"[OWN-SGEMM-WMMA-FIRED] _hx_k_sgemm_cm_wmma (TF32 Tensor-Core)\n");}
+        dim3 wblk(32); dim3 wgrd((unsigned)((m+15)/16),(unsigned)((n+15)/16));  // 1 warp / 16×16 C tile
+        _hx_k_sgemm_cm_wmma<<<wgrd,wblk>>>(tA,tB,
+                                           (long long)m,(long long)n,(long long)k,
+                                           alpha, A,(long long)lda, B,(long long)ldb,
+                                           beta, C,(long long)ldc);
+    } else if (getenv("HEXA_OWN_GEMM_TILED") && getenv("HEXA_OWN_GEMM_TILED")[0]) {
         static int tfired = 0; if (!tfired){tfired=1; fprintf(stderr,"[OWN-SGEMM-TILED-FIRED] _hx_k_sgemm_cm_tiled\n");}
         _hx_k_sgemm_cm_tiled<<<grd,blk>>>(tA,tB,
                                           (long long)m,(long long)n,(long long)k,
