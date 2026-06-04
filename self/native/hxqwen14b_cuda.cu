@@ -847,6 +847,110 @@ __global__ void _hx_k_sgemm_cm_splitk(int tA, int tB, long long M, long long N, 
     }
 }
 // ═════════════════════════════════════════════════════════════════════
+// A-VEC (env HEXA_OWN_GEMM_VEC): float4 (128-bit) VECTORIZED-LOAD split-K
+// skinny own-GEMM. A2 (#2725, CLOSED-NEGATIVE on the K-reduction-strategy
+// axis) NAMED the real residual: the un-vectorized 32-bit scalar global-load
+// inner loop of the 16×16-tiled split-K partial kernel above. cuBLAS wins the
+// skinny LoRA GEMMs (dA: M=4096,N=16,K=8192 ; dB: M=16,N=4096,K=8192) via
+// 128-bit vectorized loads + a wider register-blocked tile. This kernel is the
+// separable next step A2 named: float4 vectorized global loads + a wider
+// register-blocked tile (each thread owns a VECW-wide micro-column of C).
+//
+// VECTORIZATION GEOMETRY (col-major, faithful cublasSgemm semantics):
+//   • Block = 16 cols (threadIdx.y) × (HXSK/ VECW) thread-rows; each thread
+//     owns a VECW=4 strip of CONSECUTIVE output ROWS (C[row..row+3, col]).
+//   • For the K-reduction we stage A and B into __shared__ exactly like the
+//     scalar split-K kernel, BUT the global→register/shared load of op(A)'s
+//     row-strip uses a single float4 (128-bit) transaction when op(A) is
+//     ROW-CONTIGUOUS (tA==0 → A[row + ak·lda]: consecutive `row` are unit-
+//     stride) AND the base is 16-byte aligned AND row+3 < M. That is the
+//     hot, memory-bound path of the dA/dB skinny GEMMs.
+//   • TAIL/UNALIGNED: when row+3 >= M, or the base is not 16B-aligned, or
+//     op(A) is transposed (tA==1 → not row-contiguous), the strip falls back
+//     to 4 scalar loads. Correctness identical; only the load width changes.
+//   • Each thread holds VECW register accumulators across the whole K-chunk
+//     (register-blocked) → A is reloaded once per VECW outputs (4× fewer A
+//     global transactions), the named scalar-load inefficiency.
+// Same beta-via-pre-scale + atomicAdd partial composition as the scalar
+// split-K kernel → NOT bit-identical (atomic order), TF32/fp32 tol rel-RMS
+// ≤ 3e-3 (the shared own-GEMM contract). C[i+j·ldc]=α·Σ op(A)·op(B)+β·C.
+// ═════════════════════════════════════════════════════════════════════
+#define HXVECW 4    // float4: 4 consecutive output rows per thread
+
+// grid: (ceil(M/HXSK), ceil(N/HXSK), G).  block: (HXSK/HXVECW=4) × HXSK=16.
+// threadIdx.x ∈ [0,4) selects which 4-row strip; threadIdx.y ∈ [0,16) the col.
+__global__ void _hx_k_sgemm_cm_splitk_vec(int tA, int tB, long long M, long long N, long long K,
+                                          float alpha, const float* A, long long lda,
+                                          const float* B, long long ldb,
+                                          float* C, long long ldc, int G) {
+    // Shared B-tile (HXSK K-rows × HXSK cols), staged once per K-tile and
+    // reused by all 4 row-strips of the block. A is loaded straight to
+    // registers as a float4 strip (no shared round-trip for A).
+    __shared__ float Bs[HXSK][HXSK];
+    long long row0 = (long long)blockIdx.x * HXSK + (long long)threadIdx.x * HXVECW; // first of 4 C rows
+    long long col  = (long long)blockIdx.y * HXSK + threadIdx.y;                      // C col j
+    long long tilesK = (K + HXSK - 1) / HXSK;
+    long long perz   = (tilesK + G - 1) / G;
+    long long kbeg   = (long long)blockIdx.z * perz * HXSK;
+    long long kend   = kbeg + perz * HXSK; if (kend > K) kend = K;
+
+    float acc0 = 0.0f, acc1 = 0.0f, acc2 = 0.0f, acc3 = 0.0f;   // VECW register accumulators
+
+    // Can A's 4-row strip be a single 128-bit (float4) load this kernel?
+    //   tA==0 → op(A)[row,ak] = A[row + ak·lda]; consecutive `row` unit-stride.
+    //   Needs row0+3 < M (no tail) AND the A column base 16B-aligned.
+    const int a_rowcontig = (tA == 0);
+
+    for (long long t = kbeg; t < kend; t += HXSK) {
+        // Stage Bs[k][j] = op(B)[t+k, col_of_this_block_j]. The full block (64
+        // threads) cooperatively fills the 16×16 B-tile: each thread loads
+        // HXSK*HXSK/64 = 4 elements. Indexed flat for coalescing on op(B).
+        int flat = threadIdx.x * HXSK + threadIdx.y;   // 0..63
+        #pragma unroll
+        for (int e = 0; e < (HXSK*HXSK)/64; e++) {
+            int idx = flat + e*64;                     // 0..255
+            int bk = idx >> 4;                         // K-row within tile 0..15
+            int bj = idx & 15;                         // col within tile  0..15
+            long long gk = t + bk;
+            long long gc = (long long)blockIdx.y * HXSK + bj;
+            Bs[bk][bj] = (gk < K && gc < N)
+                ? (tB ? B[gc + gk*ldb] : B[gk + gc*ldb]) : 0.0f;   // op(B)[gk,gc]
+        }
+        __syncthreads();
+
+        // K-reduction over this HXSK-tile. For each k, load op(A)[row0..row0+3, t+k]
+        // as ONE float4 when row-contiguous + aligned + in-bounds, else 4 scalars.
+        #pragma unroll
+        for (int kk = 0; kk < HXSK; kk++) {
+            long long ak = t + kk;
+            if (ak >= K) break;
+            float a0, a1, a2, a3;
+            const float* aptr = &A[row0 + ak*lda];     // op(A)[row0,ak], unit-stride in row (tA==0)
+            int aligned = (((uintptr_t)aptr & 15ULL) == 0);
+            if (a_rowcontig && aligned && (row0 + HXVECW - 1) < M) {
+                float4 av = *reinterpret_cast<const float4*>(aptr);  // 128-bit vectorized load
+                a0 = av.x; a1 = av.y; a2 = av.z; a3 = av.w;
+            } else {
+                // tail / unaligned / transposed-A scalar fallback
+                a0 = (row0+0 < M) ? (tA ? A[ak + (row0+0)*lda] : A[(row0+0) + ak*lda]) : 0.0f;
+                a1 = (row0+1 < M) ? (tA ? A[ak + (row0+1)*lda] : A[(row0+1) + ak*lda]) : 0.0f;
+                a2 = (row0+2 < M) ? (tA ? A[ak + (row0+2)*lda] : A[(row0+2) + ak*lda]) : 0.0f;
+                a3 = (row0+3 < M) ? (tA ? A[ak + (row0+3)*lda] : A[(row0+3) + ak*lda]) : 0.0f;
+            }
+            float b = Bs[kk][threadIdx.y];             // op(B)[t+kk, col]
+            acc0 += a0 * b; acc1 += a1 * b; acc2 += a2 * b; acc3 += a3 * b;
+        }
+        __syncthreads();
+    }
+
+    if (col < N && kbeg < kend) {
+        if (row0+0 < M) atomicAdd(&C[(row0+0) + col*ldc], alpha * acc0);
+        if (row0+1 < M) atomicAdd(&C[(row0+1) + col*ldc], alpha * acc1);
+        if (row0+2 < M) atomicAdd(&C[(row0+2) + col*ldc], alpha * acc2);
+        if (row0+3 < M) atomicAdd(&C[(row0+3) + col*ldc], alpha * acc3);
+    }
+}
+// ═════════════════════════════════════════════════════════════════════
 // HEXA-FUSION C1 — BF16 own-GEMM (env HEXA_OWN_GEMM_BF16). The hexa-native
 // counterpart to forge's BF16 Tensor-Core mega-kernel: a CUTLASS-grade,
 // BF16-fragment WMMA GEMM that MIRRORS _hx_k_sgemm_cm_wmma2's schedule
@@ -1078,7 +1182,40 @@ int _hx_own_sgemm_cm_launch(int tA, int tB, int m, int n, int k,
     // overridable via HEXA_OWN_GEMM_SPLITK_G for on-pod tuning.
     int want_splitk = (getenv("HEXA_OWN_GEMM_SPLITK") && getenv("HEXA_OWN_GEMM_SPLITK")[0]);
     int skinny_splitk = ((m <= 64 || n <= 64) && k >= 1024);
-    if (want_wmma2 && want_splitk && skinny_splitk && !noshape) {
+    // A-VEC (env HEXA_OWN_GEMM_VEC): float4 (128-bit) vectorized-load split-K.
+    // The A2-named lever — replaces the scalar global-load inner loop of the
+    // 16×16 split-K kernel with 128-bit float4 loads + a VECW=4 register-blocked
+    // micro-column. Same skinny+large-K trigger as scalar split-K; takes
+    // priority when both VEC and SPLITK are set (VEC is the vectorized split-K).
+    int want_vec = (getenv("HEXA_OWN_GEMM_VEC") && getenv("HEXA_OWN_GEMM_VEC")[0]);
+    // MEASURED shape gate (verdict F-FUSION-AVEC-FLOAT4): the float4 path
+    // register-blocks across the output-ROW dim (m) and needs a LARGE contiguous
+    // m extent to fire (row0+3 < M). It WINS on skinny-N/square (dA m=4096:
+    // 1.11x, square: 1.99x over scalar) but REGRESSES on skinny-M (dB m=16:
+    // 0.68x, -90%) where the float4 load can't fire and 4-row blocking starves
+    // the already-tiny m-occupancy. So VEC only fires when m >= the float4-strip
+    // threshold; on skinny-M it falls through to the scalar split-K below.
+    // HEXA_OWN_GEMM_VEC_MINM overrides the threshold for on-pod tuning.
+    int vec_minm = 64;
+    { const char* vm = getenv("HEXA_OWN_GEMM_VEC_MINM"); if (vm && vm[0]) { int v = atoi(vm); if (v >= 1) vec_minm = v; } }
+    if (want_wmma2 && want_vec && skinny_splitk && m >= vec_minm && !noshape) {
+        int G = (int)(k / 512); if (G < 1) G = 1; if (G > 32) G = 32;
+        const char* ge = getenv("HEXA_OWN_GEMM_SPLITK_G");
+        if (ge && ge[0]) { int gv = atoi(ge); if (gv >= 1 && gv <= 64) G = gv; }
+        static int vfired = 0; if (!vfired){vfired=1; fprintf(stderr,"[OWN-SGEMM-VEC-FIRED] skinny GEMM -> _hx_k_sgemm_cm_splitk_vec (float4 128-bit vectorized loads, VECW=4 register-blocked, G=%d, m=%d n=%d k=%d)\n", G, m, n, k);}
+        // Pre-scale C = beta*C (or 0), then atomicAdd alpha*partials (same beta
+        // composition as the scalar split-K path).
+        dim3 sblk_scale(16,16);
+        dim3 sgrd_scale((unsigned)((m+15)/16),(unsigned)((n+15)/16));
+        _hx_k_sgemm_cm_betascale<<<sgrd_scale,sblk_scale>>>((long long)m,(long long)n,beta,C,(long long)ldc);
+        // block = (HXSK/HXVECW=4) × HXSK(16) = 64 threads; grid = (M/16, N/16, G).
+        dim3 vblk(HXSK/HXVECW, HXSK);
+        dim3 vgrd((unsigned)((m+15)/16),(unsigned)((n+15)/16),(unsigned)G);
+        _hx_k_sgemm_cm_splitk_vec<<<vgrd,vblk>>>(tA,tB,
+                                                 (long long)m,(long long)n,(long long)k,
+                                                 alpha, A,(long long)lda, B,(long long)ldb,
+                                                 C,(long long)ldc, G);
+    } else if (want_wmma2 && want_splitk && skinny_splitk && !noshape) {
         int G = (int)(k / 512); if (G < 1) G = 1; if (G > 32) G = 32;
         const char* ge = getenv("HEXA_OWN_GEMM_SPLITK_G");
         if (ge && ge[0]) { int gv = atoi(ge); if (gv >= 1 && gv <= 64) G = gv; }

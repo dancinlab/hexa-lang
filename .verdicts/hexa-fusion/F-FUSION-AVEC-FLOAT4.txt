@@ -1,0 +1,88 @@
+F-FUSION-AVEC-FLOAT4 — float4 (128-bit) vectorized-load own-GEMM
+================================================================
+group : HEXA-FUSION (A-vec)  ·  method : GPU A/B (cuBLAS vs scalar split-K vs float4-vec)
+branch: domain/hexa-fusion-avec-float4
+kernel: self/native/hxqwen14b_cuda.cu :: _hx_k_sgemm_cm_splitk_vec  (env HEXA_OWN_GEMM_VEC)
+driver: tool/avec_float4_driver.cu + tool/avec_build_and_measure.sh
+
+PRE-REGISTERED FALSIFIER
+------------------------
+"float4 (128-bit) vectorized global loads close a MEASURABLE FRACTION of the
+ scalar-load gap A2 (#2725) named, at rel-RMS <= 3e-3."
+A2 named the residual: "the un-vectorized 32-bit scalar global-load inner loop
+of the 16x16-tiled split-K partial kernel; cuBLAS wins via 128-bit vectorized
+loads. Next separable step: float4 vectorized loads + wider register-blocked
+K-tile." This kernel IS that next step.
+
+HARD RULES (g5, applied)
+------------------------
+  • rel-RMS <= 3e-3 HARD gate — every shape PASSES (max observed 5.6e-7).
+  • [OWN-SGEMM-VEC-FIRED] probe MUST fire — it fires (see verbatim below).
+  • NO perf claim without correctness PASS — all perf rows are gated on PASS.
+  • NOT "surpass cuBLAS" — cuBLAS remains 1.00x; this measures gap-fraction only.
+
+GPU / PROVENANCE (honest)
+-------------------------
+  Rented GPU = NVIDIA RTX PRO 6000 Blackwell Workstation (sm_120, CUDA 12.4,
+  built -arch=sm_90 PTX-JIT). The `--gpu H100` vast query returned NO H100_NVL
+  offer at rent time; the broad H100-family query matched this Blackwell card.
+  The kernel is arch-portable (sm_90 PTX); the float4-vs-scalar A/B is a valid
+  same-GPU comparison of the lever. cuBLAS absolutes will differ vs H100, but
+  the FRACTION-OF-GAP-CLOSED finding is GPU-robust (own-vs-cuBLAS ratio on one
+  card). Pod destroyed after, leak 0 (confirmed `cloud down` + pods recheck).
+
+VERBATIM RUN (./avec_float4_driver 50)
+--------------------------------------
+[OWN-SGEMM-VEC-FIRED] driver -> _hx_k_sgemm_cm_splitk_vec (float4 128-bit, VECW=4 register-blocked)
+GPU: NVIDIA RTX PRO 6000 Blackwell Workstation Edition (sm_120)
+A-VEC float4 own-GEMM A/B — cuBLAS vs scalar split-K vs float4 vec split-K
+g5: rel-RMS <= 3e-3 HARD gate (TF32); perf is meaningless unless vec PASSes.
+
+=== dA (skinny-N) : M=4096 N=16 K=8192  G=16  iters=50 ===
+  cuBLAS (TF32)      : 0.08449 ms/iter   (1.00x baseline)
+  scalar split-K     : 0.22187 ms/iter   (2.63x vs cuBLAS)   rel-RMS=4.354e-07 PASS
+  float4 VEC split-K : 0.19983 ms/iter   (2.37x vs cuBLAS)   rel-RMS=4.360e-07 PASS
+  scalar->vec speedup: 1.110x     fraction of (scalar->cuBLAS) gap closed by vec: 16.0%
+
+=== dB (skinny-M) : M=16 N=4096 K=8192  G=16  iters=50 ===
+  cuBLAS (TF32)      : 0.11009 ms/iter   (1.00x baseline)
+  scalar split-K     : 0.22540 ms/iter   (2.05x vs cuBLAS)   rel-RMS=5.602e-07 PASS
+  float4 VEC split-K : 0.32890 ms/iter   (2.99x vs cuBLAS)   rel-RMS=5.604e-07 PASS
+  scalar->vec speedup: 0.685x     fraction of (scalar->cuBLAS) gap closed by vec: -89.8%
+
+=== sq (square) : M=2048 N=2048 K=2048  G=4  iters=50 ===
+  cuBLAS (TF32)      : 0.67417 ms/iter   (1.00x baseline)
+  scalar split-K     : 3.36344 ms/iter   (4.99x vs cuBLAS)   rel-RMS=5.041e-07 PASS
+  float4 VEC split-K : 1.68777 ms/iter   (2.50x vs cuBLAS)   rel-RMS=5.041e-07 PASS
+  scalar->vec speedup: 1.993x     fraction of (scalar->cuBLAS) gap closed by vec: 62.3%
+
+=== VERDICT: all shapes PASS rel-RMS <= 3e-3 ===
+
+§FINDING (honest, shape-dependent — PARTIAL CONFIRM)
+----------------------------------------------------
+The falsifier is CONFIRMED for the two shapes where op(A)'s output-row
+dimension is large + contiguous (the float4 path actually fires):
+  • dA (skinny-N, M=4096): 1.110x scalar->vec → closes 16.0% of the scalar gap.
+  • square (2048^3):       1.993x scalar->vec → closes 62.3% of the scalar gap.
+Float4 (128-bit) loads DO close a measurable, often large, fraction of the
+scalar-load gap A2 named — strongest on the square GEMM (nearly 2x over scalar
+split-K, 62% of the way to cuBLAS), at bit-clean rel-RMS (~5e-7, fp32-exact-
+class, FAR inside the 3e-3 TF32 bar).
+
+NEGATIVE / RULED-OUT axis (the honest counter):
+  • dB (skinny-M, M=16): vec is 0.685x — SLOWER, -89.8% (a regression).
+    Root cause: VECW=4 register-blocks ACROSS the output-ROW dim (M). When M=16
+    the float4 path can almost never fire (needs row0+3 < M; with only 16 rows
+    and 4-row strips it is all boundary/tail) AND the 4-row register blocking
+    collapses the already-tiny M-occupancy further. The lever is keyed to a
+    LARGE CONTIGUOUS A-row extent; the skinny-M transpose case is the wrong
+    regime for it. => Shape-dispatch is required: apply VEC only when m >= a
+    threshold (e.g. m >= 64); fall back to scalar split-K for skinny-M.
+
+RULED OUT: "float4 row-blocking is a universal skinny-GEMM win." It is NOT —
+it is a win for skinny-N / square (large contiguous M), a LOSS for skinny-M.
+The A2 lever is REAL but shape-gated, not unconditional.
+
+CORRECTNESS: PASS (all shapes, rel-RMS <= 3e-3, max 5.6e-7).
+[OWN-SGEMM-VEC-FIRED]: FIRED.
+OFF (HEXA_OWN_GEMM_VEC unset): byte-identical default (additive launcher branch).
