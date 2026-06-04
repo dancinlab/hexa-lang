@@ -1,0 +1,17 @@
+F-FUSION-LLM-DEFAULT-UTIL — HEXA-FUSION ①+③: full LLM training-step GPU util
+  @ large batch with WMMA2 own-GEMM, + promote WMMA2 to LLM default + CI gate
+================================================================================
+STATUS: WIP (checkpoint) — GPU run pending. This file will be overwritten
+verbatim with measured results (large-batch util MEAN/PEAK cuBLAS-TF32 vs WMMA2,
+GEMM-vs-glue fraction, N-step convergence loss trace + within-tol verdict,
+CI gate script + invocation).
+
+PLAN
+----
+① FULL-STEP UTIL @ LARGE BATCH: hxqwen14b LoRA fwd+bwd, scaled M=batch*seq large
+  (8192/16384), realistic d/R, sustained multi-step loop. nvidia-smi util MEAN/
+  PEAK: cuBLAS-TF32 vs WMMA2-own (HEXA_OWN_GEMM=1 HEXA_OWN_GEMM_WMMA2=1). Report
+  GEMM-vs-glue fraction of the step vs the 89.9% pure-GEMM-iso number.
+③ PROMOTE + GATE: WMMA2 = recommended LLM GEMM (documented flag, cuBLAS fallback
+  kept); N-step (50-200) real LoRA loss-descent WMMA2 vs cuBLAS within TF32 tol;
+  standalone *_gate.sh CI rel-RMS-vs-cuBLAS compare (<=TOL).
