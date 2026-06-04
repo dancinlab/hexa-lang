@@ -1,0 +1,179 @@
+F-FUSION-B2-MEGAFWD  ::  FULL clm_prod fwd-step MEGAKERNEL — chain the whole fwd DAG in ONE cooperative launch
+domain: HEXA-FUSION  ·  date: 2026-06-05  ·  method: cooperative-launch persistent kernel + inline own-GEMM + full-fwd rel-RMS A/B + util A/B (throughput + nvidia-smi MEAN)
+
+────────────────────────────────────────────────────────────────────────────────
+PRE-REGISTERED FALSIFIER
+────────────────────────────────────────────────────────────────────────────────
+Chaining the clm_prod FORWARD glue+GEMM DAG (2 conv GEMMs + glue block-1
+[groupnorm→gelu→residual] + glue block-2 [gelu2→expert_pack→moe_router]) into ONE
+cooperative persistent megakernel — intermediates device-resident across grid.sync()
+barriers, no HBM-to-host round-trip, no relaunch gap — produces output matching the
+EAGER full fwd (same 8 ops as separate launches) within the TF32 own-GEMM bar
+(rel-RMS <= 3e-3), AND RAISES GPU util vs the eager realization on the FULL fwd
+(where the sub-ms glue the gap-collapse targets lives).
+
+FALSIFIED if: (a) the cooperative launch cannot be co-resident (occupancy=0 /
+register or smem over-subscription by the added phases), OR (b) [MEGAFWD-FIRED]
+never fires, OR (c) rel-RMS > 3e-3 on the full fwd, OR (d) util(megafwd) <=
+util(eager) on the SAME full fwd (the launch-gap collapse buys no occupancy).
+
+SCOPE: this extends the H1b SKELETON (#2735, GEMM→gelu→GEMM witness) to the FULL
+fwd step. It is the FORWARD only — bwd / ce_grad / AdamW remain (named in §finding).
+
+────────────────────────────────────────────────────────────────────────────────
+METHOD
+────────────────────────────────────────────────────────────────────────────────
+Artifacts (branch domain/hexa-fusion-b2-megafwd):
+  megafwd_driver.cu          — driver + _hx_k_clm_megafwd (the full-fwd cooperative kernel)
+  gemm_device_extracted.cuh  — _hx_k_sgemm_cm_wmma2 body as a __device__ fn (now takes a
+                               caller-owned shared buffer; math byte-identical to #2704)
+  build_megafwd.sh           — extract own-GEMM from the shipped .cu, nvcc -rdc=true -Xptxas -v
+  util_megafwd.sh            — external nvidia-smi util sampler, eager vs megafwd, SAME full fwd
+The 11-phase fwd DAG chained in ONE cooperative launch (8 grid.sync() barriers):
+  PHASE 0   H1 = A·W1                              (conv GEMM1, own-GEMM WMMA2 inline)
+  --grid.sync--
+  PHASE 1a  per-row mean/var of H1                 (groupnorm reduction — CROSS-BLOCK)
+  --grid.sync--   (the cross-block reduction the megakernel design names as the unblock)
+  PHASE 1b  N = groupnorm(H1)                       (normalize using the reduced stats)
+  PHASE 1c  E = gelu(N)                             (glue block-1)
+  PHASE 1d  R = E + H1                              (residual add — fused into 1c)
+  --grid.sync--
+  PHASE 2   H2 = R·W2                               (conv GEMM2, own-GEMM WMMA2 inline)
+  --grid.sync--
+  PHASE 3a  G2 = gelu(H2)                           (glue block-2, gelu2)
+  PHASE 3b  P  = expert_pack(G2)                    (per-row gated pack — fused into 3a)
+  --grid.sync--
+  PHASE 3c  per-row max+sumexp of P                 (moe_router softmax reduction — CROSS-BLOCK)
+  --grid.sync--
+  PHASE 3d  Rt = softmax(P)                         (moe_router normalize → FINAL out)
+Intermediates H1/N/R/H2/P + the per-row stats live in DEVICE scratch across every
+barrier — no host round-trip, no relaunch. The gn + router reductions are genuine
+CROSS-BLOCK reductions: pass-1 writes per-row stats to global, grid.sync() makes
+them globally visible, pass-2 reads them — realized with the SAME grid.sync().
+Eager reference = the SAME 8 ops as 8 SEPARATE launches (the serial per-kernel-sync
+DAG that H1a/H1b name as the util wall). Both paths use the identical TF32 own-GEMM
+kernel + identical fp32 glue → bar = rel-RMS <= 3e-3.
+Probe: [MEGAFWD-FIRED] printed once when the cooperative launch fires (HEXA_CLM_MEGASTEP=1).
+Hardware: ONE B200 (vast, --owner b2-megafwd, project hexa-fusion, pod 39493066),
+  sm_100, CUDA 12.8 toolkit installed on-pod, driver CUDA 13.2. down-after, leak 0.
+
+────────────────────────────────────────────────────────────────────────────────
+BUDGET WALL ENCOUNTERED + RESOLVED  (the honest engineering finding)
+────────────────────────────────────────────────────────────────────────────────
+On sm_100 (B200) the per-block STATIC shared cap is 49152 B (0xc000). The shipped
+WMMA2 own-GEMM uses As(32768)+Bs(16384)+tmp(8192 epilogue) = 57344 B static — OVER
+the cap; nvlink rejected BOTH the standalone GEMM and the megakernel. Resolved with
+two PLACEMENT-ONLY (math byte-identical) changes, NOT algorithm changes:
+  (1) alias the GEMM epilogue `tmp` onto `As` (dead during the epilogue) → 49152 B.
+  (2) the megafwd declares ONE function-scope 49152 B shared buffer reused by ALL
+      phases (GEMM As/Bs/tmp AND the gn/router warp-shuffle reduction staging) —
+      no two phases live at once (grid.sync separates them), so a single allocation
+      pins total static shared at EXACTLY the cap. A second static buffer (even 64 B)
+      pushed it to 0xc040 > cap and nvlink rejected the cooperative launch.
+  Plus: gn/router reductions use WARP-SHUFFLE (32 B) not 256-float __shared__ buffers.
+Net: the FULL fwd FITS one cooperative launch — megafwd kernel = 246 registers,
+49152 B smem (exactly the cap), occ = 1 block/SM × 148 SM = 148 co-resident blocks
+(occupancy query: no error). NO prefix-truncation needed: the WHOLE fwd fits.
+
+────────────────────────────────────────────────────────────────────────────────
+VERIFICATION  (verbatim pod stdout — NVIDIA B200, sm_100, CUDA 12.8, owner b2-megafwd)
+────────────────────────────────────────────────────────────────────────────────
+$ bash build_megafwd.sh   (extract 504 lines/6 kernels; tmp-alias 2 buffers; nvcc -arch=sm_100 -rdc=true clean)
+  ptxas: _hx_k_clm_megafwd → Used 246 registers, used 1 barriers, 49152 bytes smem
+
+=== RUN: full-fwd megafwd (rel-RMS + throughput A/B) ===
+GPU: NVIDIA B200 (sm_100)
+FULL fwd: GEMM1(M=1024,N1=1536,K=1536) -> [gn->gelu->resid] -> GEMM2(M=1024,N2=1024,K=1536) -> [gelu2->pack->router]  iters=50
+eager fwd = 8 launches (GEMM,gn-reduce,gn-norm,gelu+resid,GEMM,gelu2+pack,router-reduce,router-norm)
+HEXA_CLM_MEGASTEP=1 (megafwd path ON)
+coop occupancy: 1 blocks/SM × 148 SM = 148 resident blocks (occ query: no error)
+[MEGAFWD-FIRED]
+correctness (megafwd vs eager full-fwd):
+  rel-RMS  = 5.691e-09  PASS  (TF32 own-GEMM bar <= 3e-3)
+  max|Δ|   = 1.192e-07
+sustained throughput on the FULL fwd (12s each):
+  eager  (8 launches)  : 13664 iters  (1138.4 fwd-steps/s)
+  megafwd (1 coop)     : 12384 iters  (1031.5 fwd-steps/s)
+
+=== small odd shape (bounds guard)  M=130 K=96 N1=80 N2=48 ===
+  [MEGAFWD-FIRED]   rel-RMS = 5.405e-08  PASS   max|Δ| = 1.192e-07
+  eager  (8 launches)  : 262896 iters (21907.1 fwd-steps/s)
+  megafwd (1 coop)     : 251520 iters (20959.6 fwd-steps/s)
+
+=== throughput A/B sweep (glue-dominated → GEMM-dominated), all rel-RMS PASS ===
+  shape 128×128×128×128 : rel-RMS 4.886e-08 · eager 14506.7 vs megafwd 13862.1 fwd-steps/s  (mega -4.4%)
+  shape 256×256×256×256 : rel-RMS 3.623e-08 · eager  8504.7 vs megafwd  8105.7 fwd-steps/s  (mega -4.7%)
+  shape 512×512×512×512 : rel-RMS 2.262e-08 · eager  4598.8 vs megafwd  4183.8 fwd-steps/s  (mega -9.0%)
+  shape 1024×1536×1536×1024: rel-RMS 5.691e-09 · eager 1138.4 vs megafwd 1031.5 fwd-steps/s (mega -9.4%)
+
+$ bash util_megafwd.sh   (external nvidia-smi MEAN sampler, 15s each, SAME full fwd, headline shape)
+  eager (8 launches)     util: MEAN 92.6%  PEAK 100%  (n=68)
+  megafwd (1 coop)       util: MEAN 94.1%  PEAK 100%  (n=68)
+  -- replicate 1 --  eager MEAN 92.8% · megafwd MEAN 94.1%   (Δ +1.3pp)
+  -- replicate 2 --  eager MEAN 94.1% · megafwd MEAN 94.1%   (Δ  0.0pp)
+  small/mid shapes: 256⁴ eager 92.8 vs mega 92.5 ; 512⁴ eager 95.5 vs mega 94.1  (no consistent lift)
+
+pod 39493066 destroyed (confirmed below), registry status=closed, leak 0.
+
+────────────────────────────────────────────────────────────────────────────────
+FINDING  (honest — full fwd fits; util falsifier NOT satisfied; throughput regresses)
+────────────────────────────────────────────────────────────────────────────────
+fwd ops chained        : ALL of it — 2 conv GEMMs + glue block-1 (gn→gelu→resid) +
+                         glue block-2 (gelu2→expert_pack→moe_router), 11 phases, 8
+                         grid.sync() barriers, in ONE cooperative launch. No prefix
+                         truncation: the WHOLE fwd fit one co-resident launch.
+[MEGAFWD-FIRED]        : YES (every shape)
+rel-RMS on full fwd    : 5.7e-09 … 5.4e-08  PASS at EVERY shape (≪ the 3e-3 TF32 bar;
+                         effectively exact — the inline own-GEMM device fn + the gn/
+                         residual/router glue reproduce the eager 8-launch path to fp32
+                         round-off). FALSIFIER axes (a) co-residency, (b) [FIRED], (c)
+                         rel-RMS — ALL PASS.
+register/smem budget   : 246 regs, 49152 B smem = EXACTLY the sm_100 static cap; occ
+                         1 block/SM × 148 SM = 148 co-resident. The full fwd fits with
+                         ZERO headroom — see BUDGET WALL above (a real wall, resolved
+                         by single-buffer reuse; any extra static byte FALSIFIES axis a).
+
+util eager → megafwd   : THROUGHPUT — eager WINS at every shape (megafwd -4.4% to -9.4%
+(axis d, FALSIFIED)      fwd-steps/s). nvidia-smi MEAN — eager 92.6/92.8/94.1% vs megafwd
+                         94.1% across replicates: the one +1.5pp reading did NOT replicate
+                         (replicate-2 Δ=0.0pp), so it is SAMPLER NOISE, not a lift. The
+                         util falsifier (megafwd MUST raise util on the full fwd) is NOT
+                         satisfied — and is THROUGHPUT-regressed.
+
+WHY (diagnostic, same mechanism H1b documented, now confirmed on the FULL fwd):
+  Even the FULL fwd at these shapes is GEMM-DOMINATED on a B200 — both paths already
+  sit at 92-95% util (near-saturated). The sub-ms glue (gn/gelu/resid/pack/router) the
+  megakernel is designed to gap-collapse is a SMALL fraction of each fwd step's wall vs
+  the two conv GEMMs, AND the eager path's 8 launches PIPELINE on one stream (the async
+  launch queue hides the host-side launch gaps under the running GEMMs). So there is no
+  idle for the megakernel to reclaim. The megakernel is also consistently SLOWER because
+  a single FIXED 148-block cooperative grid must STRIDE over two differently-shaped GEMMs
+  + serialize the per-row gn/router reductions across only 148 blocks for M rows, whereas
+  eager launches each phase with a right-sized grid; the grid.sync() barriers add real
+  cost. This REGRESSION grows with GEMM size (-4.4% at 128⁴ → -9.4% at 1024×1536),
+  confirming the GEMM-schedule-efficiency loss, not a glue effect.
+
+  => The util-raising payoff the megakernel targets requires a regime where the sub-ms
+     glue actually DOMINATES the step wall and the GPU genuinely idles between launches
+     (the F-FUSION-OCCUPANCY-WALL median-2% regime — many tiny HETEROGENEOUS kernels with
+     real inter-launch host stalls). A B200 running back-to-back conv-block fwds at D∈
+     [128,1536] does NOT idle: the GEMMs fill it and the launch queue hides the gaps. On
+     THIS workload the cooperative-megakernel STRUCTURE is fully realized (full fwd, one
+     launch, byte-exact, co-resident) but the gap-collapse has nothing to reclaim and the
+     fixed-grid striding COSTS throughput. Honest: structure ✓ (full fwd, fits, byte-exact);
+     util-win FALSIFIED on this workload (throughput regresses -4…-9%, util MEAN within noise).
+
+what remains (NOT done — this is the FORWARD only):
+  (i)   bwd DAG + ce_grad + AdamW phases (more grid.sync()-separated phases) — UNTOUCHED.
+  (ii)  to actually MEASURE a util WIN, the A/B must run a glue-DOMINATED step on a GPU
+        that genuinely idles between the sub-ms kernels (small heterogeneous MoE glue with
+        host-stalled launches), not a pipelined back-to-back conv-block fwd that saturates.
+  (iii) the fixed-grid striding penalty could be reduced by per-phase grid re-shaping inside
+        the cooperative launch (persistent-block work-stealing) — but that does not change
+        the core conclusion that the GEMMs leave no idle to reclaim here.
+
+blockers hit: ONE real budget wall — sm_100 49152 B static-shared cap (the shipped own-GEMM
+  alone over-subscribes it at 57344 B). RESOLVED by tmp→As aliasing + single-buffer reuse
+  (both placement-only, byte-exact) → full fwd fits at exactly the cap, 148 co-resident.
+  The pod was a B200 (sm_100), not an H100 — required installing the CUDA 12.8 toolkit
+  on-pod (the rented image was runtime-only) and targeting -arch=sm_100.
