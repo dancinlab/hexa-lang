@@ -1,0 +1,136 @@
+// @ci_gate — pure · network-free · deterministic (stdlib_selftest_aggregate --ci-gate)
+// stdlib/cloud/runexec_provider_fallback_test.hexa — Bug-cloud-resolver: a pod
+// REGISTERED WHILE STILL `RENTING` has an empty ssh_host in the M5 registry, so
+// pod_registry_resolve_endpoint returns resolved=0. The OLD resolver then handed
+// the BARE pod-id straight to ssh →
+//   "ssh: Could not resolve hostname <pod-id>: nodename nor servname ..."
+// (cloud_run / copy-to exit 255). `ssh-port` never had this defect — it queries
+// the PROVIDER API directly. The fix makes `run`/`copy-to`'s resolver fall back
+// to the SAME provider lookup on a registry miss, self-heal the registry on a
+// hit, and FAIL LOUD (not ssh the bare id) when the provider still has no
+// endpoint (pod genuinely still RENTING).
+//
+// MIRROR-TEST (the stdlib/cloud convention — see registry_endpoint_resolve_test
+// / runexec_proxy_resolve_test): the real resolver reads the LIVE
+// $HOME/.hx/cloud/active-pods.json + makes vastai/runpodctl calls, neither of
+// which a CI test may touch, so the pure registry-miss → provider-fallback →
+// self-heal → guard logic is mirrored VERBATIM here over synthetic state. Keep
+// byte-identical to cloud_cli.hexa:_provider_ssh_port_lookup (miss path),
+// _resolve_via_provider, _strip_user_at, and _guard_resolved_or_die; a drift
+// makes this test meaningless, so review them together.
+//
+// Run:   hexa run stdlib/cloud/runexec_provider_fallback_test.hexa
+// PASS:  exits 0, prints "runexec_provider_fallback_test PASS".
+
+struct Resolved {
+    host:     str,
+    port:     str,
+    resolved: int,
+    via:      str
+}
+
+// ── synthetic provider state: pod-id → live ssh endpoint (or NO mapping) ──
+struct ProvState {
+    id:   str,
+    ok:   int,   // 1 iff the provider has mapped port 22 (RENTING → 0)
+    ip:   str,
+    port: str
+}
+
+fn _prov_lookup(state: [ProvState], id: str) -> ProvState {
+    let mut i = 0
+    while i < len(state) {
+        if state[i].id == id {
+            return state[i]
+        }
+        i = i + 1
+    }
+    return ProvState { id: id, ok: 0, ip: "", port: "" }
+}
+
+// mirror of cloud_cli.hexa:_provider_ssh_port_lookup (over synthetic state).
+// runpod/vast arms both: ok=1 → root@<ip>:<port> via="provider"; ok=0 →
+// via="unresolved" so the call site fails loud instead of ssh-ing the bare id.
+fn _provider_ssh_port_lookup(state: [ProvState], id: str) -> Resolved {
+    let p = _prov_lookup(state, id)
+    if p.ok == 1 {
+        return Resolved { host: "root@" + p.ip, port: p.port, resolved: 1, via: "provider" }
+    }
+    return Resolved { host: id, port: "", resolved: 0, via: "unresolved" }
+}
+
+// mirror of cloud_cli.hexa:_strip_user_at — KEEP IN SYNC.
+fn _strip_user_at(dest: str) -> str {
+    let at = dest.index_of("@")
+    if at < 0 {
+        return dest
+    }
+    return dest.substring(at + 1, len(dest))
+}
+
+// mirror of cloud_cli.hexa:_guard_resolved_or_die's PREDICATE (1 = would die).
+// The real fn calls exit(2); here we return the decision so the test can assert
+// it without aborting.
+fn _would_die(rh: Resolved) -> int {
+    if rh.resolved == 0 && rh.via == "unresolved" {
+        return 1
+    }
+    return 0
+}
+
+fn _ck_s(name: str, got: str, want: str) {
+    if got != want {
+        println("  FAIL: " + name + " got '" + got + "' want '" + want + "'")
+        exit(1)
+    }
+    println("  ok: " + name)
+}
+
+fn _ck_i(name: str, got: int, want: int) {
+    if got != want {
+        println("  FAIL: " + name + " got " + to_string(got) + " want " + to_string(want))
+        exit(1)
+    }
+    println("  ok: " + name)
+}
+
+fn main() {
+    // provider state: one pod whose port-22 is mapped (READY at the provider,
+    // even if the registry entry was stamped while RENTING), one still RENTING.
+    let state = [
+        ProvState { id: "8g5r7jup4lw35e", ok: 1, ip: "104.255.9.187", port: "11517" },  // runpod, ssh now ready
+        ProvState { id: "stillrenting01", ok: 0, ip: "",             port: ""      }   // ssh NOT mapped yet
+    ]
+
+    // ── registry MISS + provider HIT → resolves via the provider API ──
+    let r1 = _provider_ssh_port_lookup(state, "8g5r7jup4lw35e")
+    _ck_i("hit resolved",   r1.resolved, 1)
+    _ck_s("hit ssh dest",   r1.host, "root@104.255.9.187")
+    _ck_s("hit port",       r1.port, "11517")
+    _ck_s("hit via",        r1.via, "provider")
+    _ck_i("hit no-die",     _would_die(r1), 0)
+
+    // self-heal write-back stores the BARE host (registry holds ssh_host w/o
+    // user@; _registry_resolved_host re-prefixes root@ on the next read).
+    _ck_s("heal bare host", _strip_user_at(r1.host), "104.255.9.187")
+
+    // ── registry MISS + provider MISS (still RENTING) → FAIL LOUD, never ssh ──
+    let r2 = _provider_ssh_port_lookup(state, "stillrenting01")
+    _ck_i("renting unresolved", r2.resolved, 0)
+    _ck_s("renting via",        r2.via, "unresolved")
+    _ck_i("renting WOULD die",  _would_die(r2), 1)   // the bug: old code ssh'd the bare id here
+
+    // an id absent from provider state behaves like RENTING (no mapping) → die.
+    let r3 = _provider_ssh_port_lookup(state, "neverheardofit")
+    _ck_i("absent WOULD die", _would_die(r3), 1)
+
+    // ── a REAL host must NOT trip the guard (resolved=1 OR a non-unresolved via)
+    let real_resolved = Resolved { host: "root@1.2.3.4", port: "22", resolved: 1, via: "registry" }
+    _ck_i("registry hit no-die", _would_die(real_resolved), 0)
+    // a numeric vast id falling through to ~/.ssh/config keeps via="" (NOT
+    // "unresolved") → the guard leaves it to the legacy ssh-config path.
+    let sshconfig_fallthrough = Resolved { host: "38961119", port: "", resolved: 0, via: "" }
+    _ck_i("ssh-config fallthrough no-die", _would_die(sshconfig_fallthrough), 0)
+
+    println("runexec_provider_fallback_test PASS")
+}
