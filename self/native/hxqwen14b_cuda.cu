@@ -655,6 +655,31 @@ __device__ __forceinline__ void hxg_cp_wait() {
     asm volatile("cp.async.wait_group 0;\n" ::);
 #endif
 }
+// Multi-stage wait: the PTX wait_group operand must be a compile-time
+// immediate, so we map each supported HXG_MS_STAGES to its (STAGES-2) literal.
+//   At the wait point in step s, (STAGES-1)+s groups are committed; leaving the
+//   (STAGES-2) MOST-RECENT in flight guarantees the oldest unconsumed slice
+//   (slice s) has landed (wait_group counts the n newest as still-pending).
+//   STAGES=2 ⇒ wait_group 0 (= the double-buffer base case).
+//   STAGES=3 ⇒ wait_group 1.  STAGES=4 ⇒ wait_group 2.
+#ifndef HXG_MS_STAGES
+#define HXG_MS_STAGES 3
+#endif
+__device__ __forceinline__ void hxg_cp_wait_ms() {
+#if HXG_CP_ASYNC
+#if   HXG_MS_STAGES <= 2
+    asm volatile("cp.async.wait_group 0;\n" ::);
+#elif HXG_MS_STAGES == 3
+    asm volatile("cp.async.wait_group 1;\n" ::);
+#elif HXG_MS_STAGES == 4
+    asm volatile("cp.async.wait_group 2;\n" ::);
+#elif HXG_MS_STAGES == 5
+    asm volatile("cp.async.wait_group 3;\n" ::);
+#else
+    asm volatile("cp.async.wait_group 1;\n" ::);
+#endif
+#endif
+}
 
 __global__ void _hx_k_sgemm_cm_wmma2(int tA, int tB, long long M, long long N, long long K,
                                      float alpha, const float* A, long long lda,
@@ -777,6 +802,203 @@ __global__ void _hx_k_sgemm_cm_wmma2(int tA, int tB, long long M, long long N, l
         }
     }
 }
+
+// ═════════════════════════════════════════════════════════════════════
+// Phase 1b-3 / A3 MULTI-STAGE (env HEXA_OWN_GEMM_WMMA2_MS): deepen the
+// CUTLASS-grade WMMA2 own-GEMM from a 2-buffer double-buffer to an N-STAGE
+// cp.async software pipeline + a bank-conflict-free XOR shared swizzle, to
+// close the residual square-GEMM gap (WMMA2 measured ~1.13× of cuBLAS-TF32).
+//
+// DELTAS vs _hx_k_sgemm_cm_wmma2 (same BM=128·BN=64·BK=32, 8-warp, 2×2 warp
+// tile, register accumulators, TF32 frag K=8 — held FIXED so the measured Δ
+// isolates the pipeline + swizzle, not the tiling):
+//   (1) N-STAGE RING BUFFER (HXG_MS_STAGES, default 3): instead of one
+//       prefetch buffer, we keep (STAGES-1) cp.async groups in flight and
+//       only `cp.async.wait_group STAGES-2` before consuming the oldest —
+//       so the DRAM→shared latency of slice k+STAGES-1 is hidden behind the
+//       Tensor-Core compute of slices k..k+STAGES-2 (cuBLAS/CUTLASS depth).
+//       Ring index = (k-step) % STAGES; shared = STAGES×(As+Bs).
+//   (2) BANK-CONFLICT-FREE SKEWED SHARED LAYOUT: the naive row-major shared
+//       tile makes the 16×16 WMMA load_matrix_sync read 16 rows that all start
+//       at the same 32 banks (each row = 32/64 floats = a multiple of 32 banks)
+//       → up to 4-/8-way bank conflicts per fragment load. We PAD the shared
+//       row stride by HXG_SKEW floats (As: 32→40, Bs: 64→72) so row r begins at
+//       bank ((r*(stride+SKEW)) mod 32) = ((r*SKEW) mod 32) — consecutive rows
+//       are offset by SKEW banks, spreading the 16-row load across all 32 banks
+//       (conflict-free). Crucially this is a UNIFORM leading-dimension stride,
+//       so it is fully compatible with nvcuda::wmma::load_matrix_sync (we pass
+//       the padded ldm); an XOR-swizzle that varies per row would not be (the
+//       WMMA API takes a single base ptr + constant ldm — it cannot express a
+//       per-row column permutation). Math is IDENTICAL — only the shared
+//       address map changes; the (row,col) → value mapping is preserved.
+//   Shared budget @STAGES=3: 3×(128×40 + 32×72)×4B = ~70KB → DYNAMIC shared
+//   (extern __shared__) + cudaFuncAttributeMaxDynamicSharedMemorySize set by
+//   the launcher (H100/Blackwell give 228KB/SM opt-in; ~70KB fits w/ 2 blocks).
+//   TF32 + col-major cublasSgemm semantics IDENTICAL to wmma2 (oracle = same).
+// ═════════════════════════════════════════════════════════════════════
+#ifndef HXG_MS_STAGES
+#define HXG_MS_STAGES 3
+#endif
+#ifndef HXG_SKEW
+#define HXG_SKEW 8            // float-padding per shared row (bank-spread; mult of frag-K=8)
+#endif
+#define HXG_ALD (HXG_BK + HXG_SKEW)   // As padded leading dim = 40
+#define HXG_BLD (HXG_BN + HXG_SKEW)   // Bs padded leading dim = 72
+#define HXG_A_STAGE (HXG_BM * HXG_ALD)  // padded As stage size  = 128*40 = 5120
+#define HXG_B_STAGE (HXG_BK * HXG_BLD)  // padded Bs stage size  =  32*72 = 2304
+// Skewed (padded) shared offsets — uniform stride ⇒ WMMA-load compatible.
+__device__ __forceinline__ int hxg_swz_a(int row, int col) { return row * HXG_ALD + col; }
+__device__ __forceinline__ int hxg_swz_b(int row, int col) { return row * HXG_BLD + col; }
+
+__global__ void _hx_k_sgemm_cm_wmma2_ms(int tA, int tB, long long M, long long N, long long K,
+                                        float alpha, const float* A, long long lda,
+                                        const float* B, long long ldb,
+                                        float beta, float* C, long long ldc) {
+    const long long blockRow = (long long)blockIdx.x * HXG_BM;
+    const long long blockCol = (long long)blockIdx.y * HXG_BN;
+    const int tid  = threadIdx.x;
+    const int warp = tid >> 5;
+    const int lane = tid & 31;
+    const int warpRow = warp / HXG_WCOLS;
+    const int warpCol = warp % HXG_WCOLS;
+
+    // Dynamic shared: STAGES × As(128×HXG_ALD) then STAGES × Bs(32×HXG_BLD),
+    // laid out as one extern blob (padded strides) so STAGES can exceed the
+    // 48KB static cap. A_STAGE/B_STAGE use the PADDED (skewed) stage sizes.
+    extern __shared__ float hxg_ms_smem[];
+    const int A_STAGE = HXG_A_STAGE;   // 128*40 = 5120
+    const int B_STAGE = HXG_B_STAGE;   //  32*72 = 2304
+    float* As = hxg_ms_smem;                          // [STAGES][A_STAGE]
+    float* Bs = hxg_ms_smem + HXG_MS_STAGES*A_STAGE;  // [STAGES][B_STAGE]
+
+    nvcuda::wmma::fragment<nvcuda::wmma::accumulator,16,16,8,float> acc[HXG_FM][HXG_FN];
+    #pragma unroll
+    for (int fm=0; fm<HXG_FM; fm++)
+        #pragma unroll
+        for (int fn=0; fn<HXG_FN; fn++)
+            nvcuda::wmma::fill_fragment(acc[fm][fn], 0.0f);
+
+    // Stage a BK-slice (k index kk0) into ring slot `slot` (skewed layout).
+    auto stageA = [&](int slot, long long kk0){
+        float* dst = As + slot*A_STAGE;
+        #pragma unroll
+        for (int e=0; e<(HXG_BM*HXG_BK)/256; e++) {
+            int idx = e*256 + tid;        // 0..4095
+            int i = idx / HXG_BK;         // row 0..127
+            int l = idx % HXG_BK;         // k 0..31
+            long long r = blockRow + i, kk = kk0 + l;
+            int pred = (r < M && kk < K);
+            const float* sp = pred ? (tA ? &A[kk + r*lda] : &A[r + kk*lda]) : (const float*)0;
+            hxg_cp4(&dst[hxg_swz_a(i, l)], sp, pred);
+        }
+    };
+    auto stageB = [&](int slot, long long kk0){
+        float* dst = Bs + slot*B_STAGE;
+        #pragma unroll
+        for (int e=0; e<(HXG_BK*HXG_BN)/256; e++) {
+            int idx = e*256 + tid;        // 0..2047
+            int l = idx / HXG_BN;         // k 0..31
+            int j = idx % HXG_BN;         // col 0..63
+            long long kk = kk0 + l, c = blockCol + j;
+            int pred = (kk < K && c < N);
+            const float* sp = pred ? (tB ? &B[c + kk*ldb] : &B[kk + c*ldb]) : (const float*)0;
+            hxg_cp4(&dst[hxg_swz_b(l, j)], sp, pred);
+        }
+    };
+
+    // Number of BK steps over K.
+    const int nSteps = (int)((K + HXG_BK - 1) / HXG_BK);
+
+    // Prologue: kick off the first (STAGES-1) slices, each its own cp.async
+    // group, so STAGES-1 groups are in flight before the main loop consumes.
+    #pragma unroll
+    for (int s=0; s<HXG_MS_STAGES-1; s++) {
+        if (s < nSteps) { stageA(s, (long long)s*HXG_BK); stageB(s, (long long)s*HXG_BK); }
+        hxg_cp_commit();
+    }
+
+    nvcuda::wmma::fragment<nvcuda::wmma::matrix_a,16,16,8,nvcuda::wmma::precision::tf32,nvcuda::wmma::row_major> a_frag[HXG_FM][HXG_FK];
+    nvcuda::wmma::fragment<nvcuda::wmma::matrix_b,16,16,8,nvcuda::wmma::precision::tf32,nvcuda::wmma::row_major> b_frag[HXG_FK][HXG_FN];
+
+    for (int step=0; step<nSteps; step++) {
+        // Wait until only (STAGES-2) groups remain in flight ⇒ the slice we
+        // are about to consume (the oldest) has landed. wait_group N leaves N
+        // most-recent groups outstanding.
+        hxg_cp_wait_ms();
+        __syncthreads();
+
+        int cur = step % HXG_MS_STAGES;
+        float* Acur = As + cur*A_STAGE;
+        float* Bcur = Bs + cur*B_STAGE;
+
+        // Prefetch the slice STAGES-1 ahead into the slot freed by `cur`.
+        int pf = step + (HXG_MS_STAGES-1);
+        if (pf < nSteps) {
+            int pslot = pf % HXG_MS_STAGES;
+            stageA(pslot, (long long)pf*HXG_BK);
+            stageB(pslot, (long long)pf*HXG_BK);
+        }
+        hxg_cp_commit();   // keep the pipeline full (empty group if pf>=nSteps)
+
+        // Compute on current slice: WMMA loads from the SKEWED (padded-stride)
+        // shared tile — pass the PADDED leading dim (HXG_ALD/HXG_BLD) so the
+        // uniform-stride addressing matches how we staged it (bank-spread).
+        #pragma unroll
+        for (int fk=0; fk<HXG_FK; fk++) {
+            #pragma unroll
+            for (int fm=0; fm<HXG_FM; fm++) {
+                int srow = warpRow*HXG_WM + fm*16;
+                int scol = fk*8;
+                // 16 rows × 8-wide K run; padded stride HXG_ALD = bank-spread.
+                nvcuda::wmma::load_matrix_sync(a_frag[fm][fk], &Acur[hxg_swz_a(srow, scol)], HXG_ALD);
+                #pragma unroll
+                for (int t=0; t<a_frag[fm][fk].num_elements; t++)
+                    a_frag[fm][fk].x[t] = nvcuda::wmma::__float_to_tf32(a_frag[fm][fk].x[t]);
+            }
+            #pragma unroll
+            for (int fn=0; fn<HXG_FN; fn++) {
+                int srow = fk*8;
+                int scol = warpCol*HXG_WN + fn*16;
+                nvcuda::wmma::load_matrix_sync(b_frag[fk][fn], &Bcur[hxg_swz_b(srow, scol)], HXG_BLD);
+                #pragma unroll
+                for (int t=0; t<b_frag[fk][fn].num_elements; t++)
+                    b_frag[fk][fn].x[t] = nvcuda::wmma::__float_to_tf32(b_frag[fk][fn].x[t]);
+            }
+        }
+        #pragma unroll
+        for (int fm=0; fm<HXG_FM; fm++)
+            #pragma unroll
+            for (int fn=0; fn<HXG_FN; fn++)
+                #pragma unroll
+                for (int fk=0; fk<HXG_FK; fk++)
+                    nvcuda::wmma::mma_sync(acc[fm][fn], a_frag[fm][fk], b_frag[fk][fn], acc[fm][fn]);
+    }
+    // Drain any still-pending prefetch groups before reusing shared.
+    hxg_cp_wait();
+    __syncthreads();
+
+    // Epilogue — identical to wmma2: store frags then col-major C w/ alpha/beta.
+    __shared__ float tmp[HXG_WARPS][16*16];
+    #pragma unroll
+    for (int fm=0; fm<HXG_FM; fm++) {
+        #pragma unroll
+        for (int fn=0; fn<HXG_FN; fn++) {
+            nvcuda::wmma::store_matrix_sync(tmp[warp], acc[fm][fn], 16, nvcuda::wmma::mem_row_major);
+            __syncwarp();
+            int rowBase = (int)(blockRow) + warpRow*HXG_WM + fm*16;
+            int colBase = (int)(blockCol) + warpCol*HXG_WN + fn*16;
+            for (int e=lane; e<256; e+=32) {
+                int i = e >> 4, j = e & 15;
+                long long r = rowBase + i, c = colBase + j;
+                if (r < M && c < N) {
+                    float prev = (beta != 0.0f) ? C[r + c*ldc] : 0.0f;
+                    C[r + c*ldc] = alpha * tmp[warp][e] + beta * prev;
+                }
+            }
+            __syncwarp();
+        }
+    }
+}
 // Host launcher for the own-GEMM kernel — extern "C" so the gcc-compiled
 // hxqwen14b.c TU (LoRA fwd/bwd) can call it. tA/tB are 1 if op==T else 0.
 // Returns 0 on success, nonzero on a CUDA launch/sync error.
@@ -810,8 +1032,28 @@ int _hx_own_sgemm_cm_launch(int tA, int tB, int m, int n, int k,
     // Shape gate: a "skinny" GEMM (output < a single WMMA2 block tile in m or n)
     // wastes the 128×64 tile → route it to the small 16×16 tiled kernel instead.
     int noshape = (getenv("HEXA_OWN_GEMM_NOSHAPE") && getenv("HEXA_OWN_GEMM_NOSHAPE")[0]);
+    // A3 MULTI-STAGE gate: HEXA_OWN_GEMM_WMMA2_MS routes the BIG (non-skinny)
+    // square GEMMs to the N-stage cp.async + skewed-shared kernel; skinny GEMMs
+    // still fall to the right-sized tiled kernel (same shape dispatch as WMMA2).
+    int want_ms = (getenv("HEXA_OWN_GEMM_WMMA2_MS") && getenv("HEXA_OWN_GEMM_WMMA2_MS")[0]);
     int skinny  = (m < HXG_BM || n < HXG_BN);
-    if (want_wmma2 && !(skinny && !noshape)) {
+    if (want_ms && !(skinny && !noshape)) {
+        static int msfired = 0; if (!msfired){msfired=1; fprintf(stderr,"[OWN-SGEMM-WMMA2MS-FIRED] _hx_k_sgemm_cm_wmma2_ms (A3: %d-stage cp.async ring + skewed bank-conflict-free shared, TF32 frag K=8)\n", HXG_MS_STAGES);}
+        dim3 msblk(256);  // 8 warps
+        dim3 msgrd((unsigned)((m + HXG_BM - 1)/HXG_BM), (unsigned)((n + HXG_BN - 1)/HXG_BN));
+        size_t ms_smem = (size_t)HXG_MS_STAGES * (HXG_A_STAGE + HXG_B_STAGE) * sizeof(float);
+        static int ms_attr_set = 0;
+        if (!ms_attr_set) {
+            ms_attr_set = 1;
+            // Opt in to >48KB dynamic shared (H100/Blackwell give up to 228KB/SM).
+            cudaFuncSetAttribute((const void*)_hx_k_sgemm_cm_wmma2_ms,
+                                 cudaFuncAttributeMaxDynamicSharedMemorySize, (int)ms_smem);
+        }
+        _hx_k_sgemm_cm_wmma2_ms<<<msgrd,msblk,ms_smem>>>(tA,tB,
+                                              (long long)m,(long long)n,(long long)k,
+                                              alpha, A,(long long)lda, B,(long long)ldb,
+                                              beta, C,(long long)ldc);
+    } else if (want_wmma2 && !(skinny && !noshape)) {
         static int w2fired = 0; if (!w2fired){w2fired=1; fprintf(stderr,"[OWN-SGEMM-WMMA2-FIRED] _hx_k_sgemm_cm_wmma2 (CUTLASS-grade TF32: 128x64 block, 8-warp, 2x2 warp-tile, double-buffered cp.async)\n");}
         dim3 w2blk(256);  // 8 warps
         dim3 w2grd((unsigned)((m + HXG_BM - 1)/HXG_BM), (unsigned)((n + HXG_BN - 1)/HXG_BN));
@@ -819,7 +1061,7 @@ int _hx_own_sgemm_cm_launch(int tA, int tB, int m, int n, int k,
                                               (long long)m,(long long)n,(long long)k,
                                               alpha, A,(long long)lda, B,(long long)ldb,
                                               beta, C,(long long)ldc);
-    } else if (want_wmma2 && skinny && !noshape) {
+    } else if ((want_wmma2 || want_ms) && skinny && !noshape) {
         // Skinny LoRA GEMM under WMMA2 mode: use a right-sized small-grid kernel
         // (no wasted 128×64 tile). Default = the 16×16 shared-mem tiled kernel —
         // MEASURED best on the R=16 LoRA shapes (337 vs 240 steps/s @M8192 vs the
