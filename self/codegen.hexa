@@ -7011,6 +7011,24 @@ fn gen2_expr(node) {
                 }
                 ai = ai + 1
             }
+            // HEXA-FUSION B3 (REAL-TRAINER full-fwd megakernel): forge_dispatch_
+            // clm_megafwd(...) -> int rc. Routes the WHOLE clm_prod fwd DAG
+            // (GEMM1 → [gn→gelu→resid] → GEMM2 → [gelu2→pack→router]) into ONE
+            // cudaLaunchCooperativeKernel persistent grid (B2 _hx_k_clm_megafwd,
+            // PR #2743). 37 farr/shape args; arity-independent comma-join so the
+            // C call is `hexa_forge_dispatch_clm_megafwd(a0, a1, …, aN)`. CUDA
+            // build → the cooperative launcher; no-CUDA / no-coop → returns -1 so
+            // the .hexa caller runs the eager fwd (the byte-eq FP64 reference).
+            if name == "forge_dispatch_clm_megafwd" {
+                let mut _mf = "hexa_forge_dispatch_clm_megafwd("
+                let mut _mi = 0
+                while _mi < len(arg_strs) {
+                    if _mi > 0 { _mf = _mf + ", " }
+                    _mf = _mf + arg_strs[_mi]
+                    _mi = _mi + 1
+                }
+                return _mf + ")"
+            }
             if _is_known_fn_global(name) {
                 // PROBE r16-T2 + RFC r16 (default args): arity check at the
                 // direct-call codegen site. The C callee is fixed-arity (all
