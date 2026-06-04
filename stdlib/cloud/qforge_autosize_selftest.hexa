@@ -1,0 +1,139 @@
+// HEXA Standard Library — cloud/qforge_autosize_selftest
+//
+// g5 selftest for the QFORGE-PROCESS auto-sizing dispatcher (qforge_autosize).
+//
+// GROUND TRUTH — the demiurge #582 resource-sizing table + the 2026-06-05
+// observed dft-run d11 OOM clamps (two wasted rents). Per anchor: atoms, DENSE
+// FFT-grid PW (smooth ph.out `Sum` × ~17.6), ecut, and the OBSERVED -np clamp:
+//
+//   CaH6      7 at  · dense ~237k   (smooth 13451) · 80 Ry · observed -np 7 (atom-bound)
+//   LaH10    11 at  · dense ~1.285M (smooth 73001) · 80 Ry · observed -np 9 (Amdahl-bound)
+//   ScH9     10 at  · dense ~877k   (smooth 49839) · 80 Ry · observed -np 9 (Amdahl-bound)
+//   Li2MgH16 38 at  · dense ~1.6M   (smooth 90777) · 60 Ry · observed -np 6 (RAM-bound @64 floor)
+//
+// ASSERTIONS (the milestone gate):
+//   (1) qforge_autosize self-sized -np matches the OBSERVED clamp within ±1 on
+//       the 3 RAM-unconstrained anchors (CaH6 7, LaH10 9, ScH9 9).
+//   (2) the RAM-bound anchor (Li2MgH16) reproduces the historical -np 6 clamp at
+//       the 64-GiB floor (the wasted-rent symptom), within ±1.
+//   (3) a 384-GiB pod predicts -np > 6 for Li2MgH16 (the post ram-floor-fix lift).
+//   (4) the per-rank RAM is ~10 GiB for Li2MgH16 (binding constraint), ≤3 for the
+//       small cells (so atom/Amdahl — not RAM — binds them).
+//   (5) the emitted rent_query carries both cpu_ram>= and cpu_cores>= tokens, and
+//       Li2MgH16's query pins cpu_ram high enough to ESCAPE the -np6 clamp.
+//
+// Deterministic — no real pod, no IO, no network.
+
+use "stdlib/cloud/qforge_autosize"   // qforge_autosize · QforgeSizing
+use "stdlib/cloud/preflight_dft"     // tls_dft_mpi_sweet_spot (observed-clamp tier)
+
+fn _check(case: str, got: int, want: int) {
+    if got != want {
+        println("  FAIL: " + case + " — got " + to_string(got) + " want " + to_string(want))
+        exit(1)
+    }
+    println("  ok: " + case + " = " + to_string(got))
+}
+
+fn _check_within(case: str, got: int, want: int, tol: int) {
+    let mut d = got - want
+    if d < 0 { d = 0 - d }
+    if d > tol {
+        println("  FAIL: " + case + " — got " + to_string(got) + " want " + to_string(want)
+            + " ±" + to_string(tol))
+        exit(1)
+    }
+    println("  ok: " + case + " = " + to_string(got) + " (want " + to_string(want)
+        + " ±" + to_string(tol) + ")")
+}
+
+fn _check_gt(case: str, got: int, lo: int) {
+    if got <= lo {
+        println("  FAIL: " + case + " — got " + to_string(got) + " want > " + to_string(lo))
+        exit(1)
+    }
+    println("  ok: " + case + " = " + to_string(got) + " (> " + to_string(lo) + ")")
+}
+
+fn _check_le(case: str, got: int, hi: int) {
+    if got > hi {
+        println("  FAIL: " + case + " — got " + to_string(got) + " want <= " + to_string(hi))
+        exit(1)
+    }
+    println("  ok: " + case + " = " + to_string(got) + " (<= " + to_string(hi) + ")")
+}
+
+fn _check_contains(case: str, hay: str, needle: str) {
+    if !hay.contains(needle) {
+        println("  FAIL: " + case + " — `" + hay + "` lacks `" + needle + "`")
+        exit(1)
+    }
+    println("  ok: " + case + " — `" + hay + "` ⊇ `" + needle + "`")
+}
+
+// sweet-spot -np at a FIXED RAM tier (observed-clamp reproduction).
+fn _np_at(atoms: int, pw: int, ecut: int, ram: int) -> int {
+    let spec = DftSpec {
+        n_atoms: atoms, n_basis_pw: pw, n_kpoints: 1, n_spin: 1,
+        n_electrons: atoms * 8, cutoff_ry: ecut, method_id: 0
+    }
+    let node = DftNodeSpec { total_mem_gib: ram, n_cpu_cores: 64, has_gpu: 0, gpu_mem_gib: 0 }
+    return tls_dft_mpi_sweet_spot(spec, node).recommended_np
+}
+
+fn main() {
+    println("qforge_autosize_selftest — auto-sizing dispatcher (demiurge #582 anchors)")
+
+    // ── (1) self-sized -np vs observed clamp, RAM-unconstrained anchors ──────
+    let cah6 = qforge_autosize(7,  237000,  80)
+    let lah10 = qforge_autosize(11, 1285000, 80)
+    let sch9 = qforge_autosize(10, 877000,  80)
+    println("  [CaH6]     np=" + to_string(cah6.np) + " per-rank=" + to_string(cah6.ram_per_rank_gib)
+        + " GiB  q=[" + cah6.rent_query + "]")
+    println("  [LaH10]    np=" + to_string(lah10.np) + " per-rank=" + to_string(lah10.ram_per_rank_gib)
+        + " GiB  q=[" + lah10.rent_query + "]")
+    println("  [ScH9]     np=" + to_string(sch9.np) + " per-rank=" + to_string(sch9.ram_per_rank_gib)
+        + " GiB  q=[" + sch9.rent_query + "]")
+    _check_within("(1) CaH6 self-sized -np vs observed 7",  cah6.np,  7, 1)
+    _check_within("(1) LaH10 self-sized -np vs observed 9", lah10.np, 9, 1)
+    _check_within("(1) ScH9 self-sized -np vs observed 9",  sch9.np,  9, 1)
+
+    // ── (2) RAM-bound anchor reproduces the historical -np6 clamp @64 floor ──
+    let li = qforge_autosize(38, 1600000, 60)
+    println("  [Li2MgH16] self-sized np=" + to_string(li.np) + " per-rank="
+        + to_string(li.ram_per_rank_gib) + " GiB  q=[" + li.rent_query + "]")
+    let li_np_64 = _np_at(38, 1600000, 60, 64)
+    println("  [Li2MgH16] observed-clamp tier  -np@64GiB = " + to_string(li_np_64))
+    _check_within("(2) Li2MgH16 reproduces observed -np6 @64 floor", li_np_64, 6, 1)
+
+    // ── (3) 384-GiB pod lifts Li2MgH16 above 6 (post ram-floor-fix #2724) ────
+    let li_np_384 = _np_at(38, 1600000, 60, 384)
+    println("  [Li2MgH16] -np@384GiB = " + to_string(li_np_384))
+    _check_gt("(3) 384-GiB pod predicts -np > 6 (ram-floor-fix lift)", li_np_384, 6)
+
+    // ── (4) per-rank RAM — Li2MgH16 ~10 GiB (binding) · small cells ≤3 ───────
+    _check("(4) Li2MgH16 per-rank ~10 GiB (the binding constraint)", li.ram_per_rank_gib, 10)
+    _check_le("(4) CaH6 per-rank small (atom/Amdahl binds, not RAM)",  cah6.ram_per_rank_gib, 3)
+    _check_le("(4) LaH10 per-rank small (Amdahl binds, not RAM)",      lah10.ram_per_rank_gib, 3)
+    _check_le("(4) ScH9 per-rank small (Amdahl binds, not RAM)",       sch9.ram_per_rank_gib, 3)
+
+    // ── (5) rent_query shape + Li2MgH16 escapes the clamp ───────────────────
+    _check_contains("(5) CaH6 query has cpu_ram>=",   cah6.rent_query, "cpu_ram>=")
+    _check_contains("(5) CaH6 query has cpu_cores>=", cah6.rent_query, "cpu_cores>=")
+    _check_contains("(5) Li2MgH16 query has cpu_ram>=",   li.rent_query, "cpu_ram>=")
+    _check_contains("(5) Li2MgH16 query has cpu_cores>=", li.rent_query, "cpu_cores>=")
+    // Li2MgH16 self-sized -np must EXCEED the 64-floor clamp — the predictor's
+    // whole point: it tells the operator to rent enough RAM to escape -np6.
+    _check_gt("(5) Li2MgH16 self-sized -np escapes the -np6 clamp", li.np, 6)
+
+    // ── per-anchor verdict line (predicted vs observed) ─────────────────────
+    println("")
+    println("  ANCHOR        predicted-np  observed-np")
+    println("  CaH6               " + to_string(cah6.np) + "            7")
+    println("  LaH10              " + to_string(lah10.np) + "            9")
+    println("  ScH9               " + to_string(sch9.np) + "            9")
+    println("  Li2MgH16(@64)      " + to_string(li_np_64) + "            6")
+    println("  Li2MgH16(@384)     " + to_string(li_np_384) + "           >6")
+    println("")
+    println("qforge_autosize_selftest PASS")
+}
