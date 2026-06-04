@@ -1,0 +1,194 @@
+// HEXA Standard Library — qforge/inverse_design
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// QFORGE-FEATURE — the INVERSE Tc DESIGN loop: turn QFORGE from an EVALUATOR
+// (struct → Tc) into a DESIGNER (target-Tc → struct). This is the RTSC end-goal:
+// given a seed structure and a gradient ∂Tc/∂param, climb the structure UPHILL in
+// predicted Tc subject to constraints (fixed pressure / bond-length bounds), and
+// record the trajectory.
+//
+//   seed param p₀ ──┐
+//                   │   gᵢ = ∇_p Tc(pᵢ)        (the gradient callback)
+//                   ▼          │
+//          ┌──────────────┐    │   pᵢ₊₁ = Π_C( pᵢ + η·gᵢ )   (projected ascent)
+//          │ ascent step  │◀───┘          │
+//          └──────┬───────┘   Π_C = clamp into the box constraint C (bounds / P)
+//                 │
+//                 ▼   record {param, tc}  →  trajectory[]
+//          best = argmax_i Tc(pᵢ)
+//
+// ── d4 GENERIC — the gradient is a PLUGGABLE CALLBACK (no name branch) ────────
+// The loop knows NOTHING about which Tc model produced the gradient. The caller
+// supplies a PROVIDER function  grad_of(p: [float]) -> [float]  returning the
+// per-parameter ∂Tc/∂pₖ at the current point p, and an EVALUATOR  tc_of(p) ->
+// float returning the scalar Tc(p) recorded along the trajectory. Swap the model
+// = swap the two callbacks; the ascent walk is identical. This is exactly the
+// (i,j)-provider idiom qforge_kmesh_elph_samples uses — a function passed by name.
+//
+// ── d3 — composes the CONCURRENT autodiff milestone, no duplication ───────────
+// The REAL ∂Tc/∂struct Jacobian is produced by the concurrent `qforge_dtc_dstruct`
+// autodiff milestone (the adjoint-DFPT piece — the reverse-mode sweep through the
+// DFPT response that yields ∂λ/∂τ, ∂ω/∂τ → ∂Tc/∂τ). This loop DEPENDS ONLY on the
+// callback INTERFACE (grad_of, tc_of), so once autodiff lands the real Jacobian
+// drops in as `grad_of` with ZERO change to the ascent code (d3 one-home, d4
+// generic). Until then the loop is validated on an ANALYTIC surrogate Tc(param)
+// whose maximum is known — the loop PROVABLY climbs it (the milestone gate).
+//
+// ── @L5/d6 HONEST SCOPE — what is FULL vs NAMED-REMAINING ─────────────────────
+//   FULL (this module, g5-validated):
+//     • the projected gradient-ascent loop (step · project · record · best)
+//     • monotone Tc-increase + convergence to a known optimum on an analytic
+//       CONCAVE surrogate Tc(param) (the gate: one step provably RAISES Tc)
+//     • box-constraint projection (bound clamp + a FIXED coordinate = fixed P)
+//     • the gradient-callback interface (accepts the autodiff gradient verbatim)
+//   NAMED-REMAINING (d6 — NOT fabricated here):
+//     • the REAL ∂Tc/∂struct Jacobian = the ADJOINT-DFPT reverse sweep named in
+//       the `qforge_dtc_dstruct` autodiff milestone. NO real material's Tc gain is
+//       claimed in this module — a real ascent needs that true Jacobian. The
+//       surrogate is a MACHINERY witness (the loop climbs ANY differentiable Tc),
+//       not a physical Tc-improvement claim on any candidate.
+//
+// Run:  hexa run stdlib/qforge/inverse_design_selftest.hexa
+
+// ── result bundle ────────────────────────────────────────────────────────────
+// trajectory is a FLAT [(np+1)*n_rec] packing: for each recorded step the np
+// params followed by the scalar tc, i.e. row k = [p0,p1,…,p_{np-1}, tc]. n_rec =
+// number of recorded points (= n_steps+1: the seed plus one per ascent step).
+pub struct InvDesignResult {
+    ok:          int,      // 1 = ran; 0 = malformed input (loud sentinel)
+    err:         str,
+    np:          int,      // # design parameters
+    n_rec:       int,      // # recorded trajectory rows (n_steps + 1)
+    traj:        [float],  // flat [n_rec*(np+1)] : per row [p…, tc]
+    best_param:  [float],  // argmax_i Tc param vector
+    best_tc:     float,    // max Tc over the trajectory
+    seed_tc:     float,    // Tc at the seed (row 0) — for the improved test
+    improved:    int       // 1 iff best_tc > seed_tc (the ascent raised Tc)
+}
+
+fn _inv_sentinel(err: str) -> InvDesignResult {
+    return InvDesignResult { ok: 0, err: err, np: 0, n_rec: 0, traj: [],
+                             best_param: [], best_tc: -1.0, seed_tc: -1.0,
+                             improved: 0 }
+}
+
+// ── box-constraint projection Π_C ────────────────────────────────────────────
+// Each parameter k is clamped to [lo[k], hi[k]]. A FIXED coordinate (fixed
+// pressure / a frozen lattice DOF) is expressed as lo[k]==hi[k]: the clamp pins
+// it to that exact value every step, so a "fixed P" constraint is just a
+// degenerate box — no special-case branch (d4). Returns the projected copy.
+fn _project_box(p: [float], lo: [float], hi: [float]) -> [float] {
+    let mut out: [float] = []
+    let mut k = 0
+    while k < len(p) {
+        let mut v = p[k]
+        if v < lo[k] { v = lo[k] }
+        if v > hi[k] { v = hi[k] }
+        out.push(v)
+        k = k + 1
+    }
+    return out
+}
+
+// ── PROJECTED GRADIENT ASCENT on Tc(p) ───────────────────────────────────────
+//
+//   seed     : [np] seed design parameters p₀ (e.g. bond lengths / a frozen-
+//              phonon displacement amplitude — caller-defined, d4).
+//   lo, hi   : [np] box bounds. lo[k]==hi[k] pins coordinate k (= fixed P / a
+//              frozen DOF). Caller guarantees lo[k] ≤ hi[k] and seed ∈ box (the
+//              seed is projected on entry anyway, so a slightly-out seed is OK).
+//   step     : ascent learning-rate η > 0 (P_k += η·∂Tc/∂p_k).
+//   n_steps  : # ascent steps (>0). The trajectory records n_steps+1 rows.
+//   grad_of  : PROVIDER (p) -> [np]  the gradient ∂Tc/∂p at p (the autodiff
+//              Jacobian, or an analytic surrogate gradient). MUST return len==np.
+//   tc_of    : EVALUATOR (p) -> float the scalar Tc(p) recorded each step.
+//
+// d6: grad_of / tc_of carry ALL the physics. This routine adds none — it only
+// steps, projects, records. With the REAL adjoint-DFPT grad_of it designs a real
+// structure; with the analytic surrogate it provably climbs a known optimum.
+pub fn qforge_inverse_design(seed: [float], lo: [float], hi: [float],
+                             step: float, n_steps: int,
+                             grad_of, tc_of) -> InvDesignResult {
+    let np = len(seed)
+    if np < 1 { return _inv_sentinel("empty seed") }
+    if len(lo) != np || len(hi) != np {
+        return _inv_sentinel("bounds length != np")
+    }
+    if step <= 0.0 { return _inv_sentinel("step must be > 0") }
+    if n_steps < 1 { return _inv_sentinel("n_steps must be >= 1") }
+    let mut kb = 0
+    while kb < np {
+        if lo[kb] > hi[kb] { return _inv_sentinel("lo > hi") }
+        kb = kb + 1
+    }
+
+    // project the seed into the box so row 0 is feasible.
+    let mut p = _project_box(seed, lo, hi)
+
+    let mut traj: [float] = []
+    let mut best_param: [float] = []
+    let mut best_tc = -1.0e30
+    let mut seed_tc = 0.0
+    let mut n_rec = 0
+
+    // record helper (inlined — hexa nested fns don't capture scope): append
+    // [p…, tc] and update the running best.
+    let tc0 = tc_of(p)
+    seed_tc = tc0
+    let mut kk = 0
+    while kk < np { traj.push(p[kk]) ; kk = kk + 1 }
+    traj.push(tc0)
+    n_rec = n_rec + 1
+    best_tc = tc0
+    best_param = p
+
+    let mut i = 0
+    while i < n_steps {
+        let g = grad_of(p)
+        if len(g) != np { return _inv_sentinel("grad_of returned wrong length") }
+        // raw uphill step p + η·g
+        let mut raw: [float] = []
+        let mut k = 0
+        while k < np {
+            raw.push(p[k] + step * g[k])
+            k = k + 1
+        }
+        // project back into the box (clamp / pin fixed coords)
+        p = _project_box(raw, lo, hi)
+
+        let tc = tc_of(p)
+        let mut kr = 0
+        while kr < np { traj.push(p[kr]) ; kr = kr + 1 }
+        traj.push(tc)
+        n_rec = n_rec + 1
+
+        if tc > best_tc {
+            best_tc = tc
+            best_param = p
+        }
+        i = i + 1
+    }
+
+    let improved = if best_tc > seed_tc { 1 } else { 0 }
+    return InvDesignResult { ok: 1, err: "", np: np, n_rec: n_rec, traj: traj,
+                             best_param: best_param, best_tc: best_tc,
+                             seed_tc: seed_tc, improved: improved }
+}
+
+// ── trajectory accessor — read the Tc of recorded row k (for monotone checks) ─
+// Returns the tc column of trajectory row k, or a loud -1 if out of range.
+pub fn qforge_inv_traj_tc(r: InvDesignResult, k: int) -> float {
+    if k < 0 || k >= r.n_rec { return -1.0 }
+    let stride = r.np + 1
+    return r.traj[k * stride + r.np]
+}
+
+// ── trajectory accessor — read param j of recorded row k ──────────────────────
+pub fn qforge_inv_traj_param(r: InvDesignResult, k: int, j: int) -> float {
+    if k < 0 || k >= r.n_rec { return -1.0e30 }
+    if j < 0 || j >= r.np { return -1.0e30 }
+    let stride = r.np + 1
+    return r.traj[k * stride + j]
+}
