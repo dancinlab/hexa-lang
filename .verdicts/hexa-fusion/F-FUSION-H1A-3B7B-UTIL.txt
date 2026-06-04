@@ -1,0 +1,35 @@
+F-FUSION-H1A-3B7B-UTIL — does a BIGGER (3B/7B-scale) model self-saturate an idle H100?
+HEXA-FUSION frontier milestone H1a — PENDING (scaffold)
+
+PRE-REGISTERED FALSIFIER:
+  As D grows from D1536 (small clm test) to 3B-class (D≈2560-3072) to 7B-class
+  (D≈4096), idle-H100 util climbs toward GREEN (≥20%, ideally ≥70%) — confirming
+  the anima Lane G forge 3B/7B is NOT fundamentally util-blocked, it was just
+  tested too small (D2 proved util is a workload-size / GPU-relative property).
+  If util does NOT climb with D (stays low even at D=4096) -> FALSIFIED:
+  the megakernel (H1b) is genuinely required (valid negative result).
+
+METHOD:
+  driver self/native/hxqwen14b_llmstep_driver.cu mode=util M K N R secs
+  (#includes shipped hxqwen14b_cuda.cu byte-identical to origin/main — measured
+  kernels = EXACT main-branch own-GEMM / cuBLAS shim).
+  build: nvcc -O3 -arch=sm_90a -DHEXA_CUDA ... -lcublas -lcuda (D2 recipe).
+  Sweep D ∈ {1536, 2560, 3072, 4096}, shapes M=K=N=D, R=16, secs=15 sustained.
+  Two arms per D:
+    cuBLAS-TF32  (default env)
+    own-GEMM WMMA2  (HEXA_OWN_GEMM=1 HEXA_OWN_GEMM_WMMA2=1)
+  nvidia-smi utilization.gpu sampled @100ms over the full sustained 15s loop.
+  NO clm_prod rebuild.
+
+GPU RENTED: <pending>
+
+================================ MEASURED (verbatim) ===========================
+
+<pending — util MEAN/PEAK per D, both arms>
+
+================================ FINDING =======================================
+
+<pending — util-vs-D curve; D crossing 20% / 70%; H1a CONFIRMED or FALSIFIED;
+ implication for anima 3B/7B forge>
+
+POD: <pending — id, destroyed, leak verified>
