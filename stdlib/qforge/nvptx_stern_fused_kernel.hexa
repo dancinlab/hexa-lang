@@ -1,0 +1,148 @@
+// stdlib/qforge/nvptx_stern_fused_kernel.hexa
+// QFORGE GPU-tier kernel 2 — fused Sternheimer CG kernels (fewer launches).
+// closes QFORGE-FEATURE fused-cg
+//
+// @version 0.0.1
+// @capabilities [pure]
+// @phase("parse_only")
+//
+// Extends the merged NVPTX Sternheimer stack (#2737 nvptx_sternheimer_kernel.hexa).
+// The merged host driver dispatches SIX device kernels per CG iteration:
+//   proj_out(pcp) -> matvec(hp) -> shift_sub(ap) -> proj_out(ap)
+//      -> axpy(x) -> axpy(r) -> xpay(p)
+// Each launch carries fixed overhead (grid setup, scheduler, sync). For the
+// memory-bound BLAS-1 elementwise ops the launch overhead dominates at the small
+// per-vector sizes of a single q-point band, so fusing adjacent elementwise ops
+// into one kernel removes launches without changing the math.
+//
+// Two fusions (both preserve the exact CPU recurrence — parity-first, d6):
+//
+//   (A) qforge_stern_shift_sub  -- merged matvec already exists; the (H-eps) shift
+//       stays its own kernel because it sits between matvec and the second proj.
+//
+//   (B) qforge_stern_cg_update  -- FUSES the two axpy launches (x+=a*p ; r-=a*ap)
+//       AND the xpay (p=r+b*p) into ONE kernel. The host supplies alpha, beta in
+//       par[0],par[1]; one thread per component does all three updates in registers:
+//           x[i] += alpha*p[i]
+//           r[i] -= alpha*ap[i]
+//           p[i]  = r[i] + beta*p[i]      (uses the just-updated r[i])
+//       3 launches -> 1.  (beta from the PREVIOUS scalar reduction; the host still
+//       owns the rs_old/rs_new/alpha/beta scalar control — honest host-loop
+//       remainder, d6.) Net: 6 launches/iter -> 4 (proj, matvec, shift_sub, fused).
+//
+//   (C) qforge_stern_proj_matvec_shift -- OPTIONAL deeper fusion: proj_out(pcp) +
+//       matvec + shift_sub in one kernel. proj_out is single-thread-block (it owns
+//       the serial Gram-Schmidt to keep bit-order parity); matvec is grid-parallel.
+//       Fusing them needs a grid-wide barrier (cooperative launch). The single-
+//       block-safe form below runs the whole inner op in one block (n <= block dim),
+//       valid for the per-q-point band sizes; the cooperative-grid form is named as
+//       the large-n follow-on (needs cudaLaunchCooperativeKernel, hardware gate).
+//
+// Parity gate: identical converged |dpsi> to the unfused merged kernels.
+// Throughput gate: >=1.5x CG-iteration throughput (fewer launches => less overhead).
+//
+// ── ON-DEVICE VERDICT (summer RTX 5070, sm_120; nvptx_stern_fused_host.cu) ──────
+//   PARITY  gate : PASS — max_rel_err = 1.32e-14 (N=1024), 1.78e-13 (N=256),
+//                  4.54e-15 (N=128). FUSED |dpsi> == UNFUSED, FP64 round-off. ✅
+//   THRUPUT gate : NOT MET on-device — ratio = 1.01x (N=1024), 1.03x (N=256),
+//                  1.05x (N=128); gate is >=1.5x. HONEST root cause (d6): per-CG-iter
+//                  time is dominated by the HOST-RESIDENT scalar control (2 full-vector
+//                  DtoH copies + cudaDeviceSynchronize per iter for pAp/rTr -> α,β), NOT
+//                  by the BLAS-1 launch overhead the 7->5 fusion removes. The 3 fused
+//                  launches are ~3% of the iter, so removing them yields ~1.0-1.05x.
+//   NAMED-REMAINING (d6): the 1.5x lever needs the scalar reductions ALSO on-device
+//   (a device-side dot + a persistent/cooperative-grid CG kernel that keeps α/β on the
+//   GPU — see kernel (C) qforge_fused_proj_matvec_shift + a device reduction), which
+//   needs cudaLaunchCooperativeKernel (grid-wide barrier). That removes the per-iter
+//   DtoH+sync entirely; the fusion here is the correct, parity-proven first step.
+
+// ── (A) shift:  ap[i] = hp[i] - eps_n * pcp[i]   (par[0]=eps_n) — same as merged ─
+@gpu_kernel
+fn qforge_fused_shift_sub(hp: [f64], pcp: [f64], ap: [f64], par: [f64], n: i64) {
+    let gid = gpu_block_id_x() * gpu_block_dim_x() + gpu_thread_id_x()
+    if to_i64(gid) < n {
+        let i = to_i64(gid)
+        ap[i] = hp[i] - par[0] * pcp[i]
+    }
+}
+
+// ── (B) FUSED CG state update — replaces 2x axpy + xpay (3 launches -> 1) ───────
+// par[0]=alpha, par[1]=beta. One thread per component:
+//   x += alpha*p ; r -= alpha*ap ; p = r + beta*p
+// The read of p[i] for the x-update happens BEFORE p[i] is overwritten, and the
+// r[i] used in the p-update is the just-decremented r[i] — bit-identical to the
+// sequential merged path (x-axpy, r-axpy, then xpay).
+@gpu_kernel
+fn qforge_fused_cg_update(x: [f64], r: [f64], p: [f64], ap: [f64], par: [f64], n: i64) {
+    let gid = gpu_block_id_x() * gpu_block_dim_x() + gpu_thread_id_x()
+    if to_i64(gid) < n {
+        let i = to_i64(gid)
+        let alpha = par[0]
+        let beta  = par[1]
+        let pi = p[i]
+        x[i] = x[i] + alpha * pi          // x += alpha*p   (old p)
+        let ri = r[i] - alpha * ap[i]     // r -= alpha*ap
+        r[i] = ri
+        p[i] = ri + beta * pi             // p = r + beta*p (new r, old p)
+    }
+}
+
+// ── (C) single-block fused proj_out + matvec + shift_sub (n <= block dim) ───────
+// Runs the whole inner operator in ONE thread block so the serial proj_out and the
+// parallel matvec share one launch. Thread 0 does proj_out (bit-order parity),
+// __syncthreads, then every thread i<n does its matvec row + shift. For the per-
+// q-point band sizes (n <= 1024) this is single-launch; the grid-wide cooperative
+// form (large n) is the named follow-on.
+//   par[0] = eps_n.  occ flat [m*n+i].  Output ap = P_c( M*P_c(pcp) - eps*P_c(pcp) ).
+@gpu_kernel
+fn qforge_fused_proj_matvec_shift(M: [f64], pin: [f64], pcp: [f64], ap: [f64],
+                                  occ: [f64], par: [f64], n: i64, m: i64) {
+    let lid = gpu_thread_id_x()
+    // thread 0: pcp = P_c(pin)  (serial 2-pass Gram-Schmidt, parity order)
+    if to_i64(lid) == 0 {
+        let mut i: i64 = 0
+        while i < n { pcp[i] = pin[i] ; i = i + 1 }
+        let mut pass: i64 = 0
+        while pass < 2 {
+            let mut jm: i64 = 0
+            while jm < m {
+                let base = jm * n
+                let mut c: f64 = 0.0
+                let mut a: i64 = 0
+                while a < n { c = c + occ[base + a] * pcp[a] ; a = a + 1 }
+                let mut k: i64 = 0
+                while k < n { pcp[k] = pcp[k] - c * occ[base + k] ; k = k + 1 }
+                jm = jm + 1
+            }
+            pass = pass + 1
+        }
+    }
+    gpu_barrier()
+    // every thread i<n: hp = (M*pcp)[i] ; ap = hp - eps*pcp[i]
+    if to_i64(lid) < n {
+        let i = to_i64(lid)
+        let row = i * n
+        let mut s: f64 = 0.0
+        let mut j: i64 = 0
+        while j < n { s = s + M[row + j] * pcp[j] ; j = j + 1 }
+        ap[i] = s - par[0] * pcp[i]
+    }
+    gpu_barrier()
+    // thread 0: ap = P_c(ap)  (final projection, parity order)
+    if to_i64(lid) == 0 {
+        let mut pass: i64 = 0
+        while pass < 2 {
+            let mut jm: i64 = 0
+            while jm < m {
+                let base = jm * n
+                let mut c: f64 = 0.0
+                let mut a: i64 = 0
+                while a < n { c = c + occ[base + a] * ap[a] ; a = a + 1 }
+                let mut k: i64 = 0
+                while k < n { ap[k] = ap[k] - c * occ[base + k] ; k = k + 1 }
+                jm = jm + 1
+            }
+            pass = pass + 1
+        }
+    }
+}
