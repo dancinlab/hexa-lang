@@ -85,6 +85,7 @@ use "stdlib/qforge/dfpt"
 use "stdlib/qforge/realcell_phonon"
 use "stdlib/qforge/realcell_qmesh"
 use "stdlib/qforge/screening"
+use "stdlib/qforge/correlation"
 use "stdlib/qforge/screened_dv"
 use "stdlib/qforge/screening_anderson"
 
@@ -756,19 +757,37 @@ fn qpwd_drho_zero(drho: [float]) -> [float] {
 //   V_H[ρ] uses). drho_to_dvscf returns ΔV_H+xc(r) (length n, local) which the
 //   Anderson screening solver folds into the screened ΔV_scr·ψ columns. d4/d19:
 //   reuses qforge_dvscf_from_drho verbatim — zero new screening physics.
-let mut QPWD_RHO: [float] = []
+//   IMPLEMENTATION — G-SPACE diagonal Hartree (basis-agnostic, ANY n):
+//   The (1,1,n) FFT-Poisson path requires a pow2 n; the converged CaH6 basis is
+//   n=645 (NON-pow2) → fft3_real returns [] → Hartree would SILENTLY DROP (the
+//   scf_pw.hexa:88 non-pow2 wall). Instead we screen DIRECTLY in the PW basis: ψ
+//   and Δρ are PW coefficients indexed by the gvecs, so the Hartree response is
+//   DIAGONAL in G — ΔV_H[i] = 4π·Δρ[i]/|G_i|² (G=0 → 0). This is the exact G-space
+//   Poisson kernel without any FFT, valid for any n. The LDA xc kernel f_xc[ρ̄] is
+//   added as a uniform-gas local term (ρ̄ = nelec/Ω, the basis-decoupled scf_pw
+//   convention) so screening = Hartree + LDA-x(+c). d6: this is RPA-level + ALDA
+//   screening — the QE DFPT screening class, now metallic-stable via Anderson.
+let mut QPWD_G2: [float] = []          // |G_i|² per PW coefficient (length n)
 let mut QPWD_GRID_N: int = 0
-let mut QPWD_EB1: [float] = []
-let mut QPWD_EB2: [float] = []
-let mut QPWD_EB3: [float] = []
-let mut QPWD_XCMODE: int = 1
+let mut QPWD_FXC: float = 0.0          // uniform-gas f_xc[ρ̄] (local kernel coeff)
+
+let _QPWD_4PI: float = 12.5663706143591729539
 
 pub fn qpwd_drho_to_dvscf(drho: [float]) -> [float] {
     let n = len(drho)
-    if n != QPWD_GRID_N { return [] }
-    // ΔV_scr-correction(r) = V_H[Δρ] + f_xc[ρ]·Δρ on the (1,1,n) cubic grid.
-    return qforge_dvscf_from_drho(drho, QPWD_RHO, 1, 1, n,
-                                  QPWD_EB1, QPWD_EB2, QPWD_EB3, QPWD_XCMODE)
+    if n != QPWD_GRID_N || len(QPWD_G2) != n { return [] }
+    // ΔV_scr-correction[i] = 4π·Δρ(G_i)/|G_i|²  (Hartree, G=0→0)  +  f_xc[ρ̄]·Δρ[i].
+    let mut out: [float] = []
+    let mut i = 0
+    while i < n {
+        let g2 = QPWD_G2[i]
+        let mut v = 0.0
+        if g2 > 1.0e-12 { v = _QPWD_4PI * drho[i] / g2 }   // G=0 gauge → 0
+        v = v + QPWD_FXC * drho[i]                          // uniform-gas LDA xc
+        out.push(v)
+        i = i + 1
+    }
+    return out
 }
 
 // ── qforge_pw_frontend_phonons — the PRODUCTION-DFPT front-end entry ──────────
@@ -944,18 +963,25 @@ pub fn qforge_pw_frontend_phonons_scr(deck_dir: str, npw_cap: int, xc_mode: int,
     }
     if n_optical < 1 { n_optical = 1 }   // degenerate fallback — keep ≥1 mode (honest)
 
-    // ── stage the REAL Hartree+XC screening kernel (the @L5 closure) ─────────
-    //   The screened-vertex Dyson response evaluates (V_H+f_xc)[Δρ] on the SAME
-    //   (1,1,n) cubic grid the front-end SCF's in-loop V_H[ρ] uses: eb_i=(2π/a)·ê_i.
-    //   ρ(r) = the converged ground-state density staged by qforge_pw_frontend.
-    let tpa_s = _QPW_2PI / geom.a
-    let s_eb1 = [tpa_s, 0.0, 0.0]
-    let s_eb2 = [0.0, tpa_s, 0.0]
-    let s_eb3 = [0.0, 0.0, tpa_s]
-    QPWD_RHO = QPW_RHO ; QPWD_GRID_N = n
-    QPWD_EB1 = s_eb1 ; QPWD_EB2 = s_eb2 ; QPWD_EB3 = s_eb3
-    QPWD_XCMODE = if xc_mode >= 1 { 2 } else { 0 }   // screened: H+x+c (xc_mode≥1) / H-only
-    let kernel_ok = (len(QPW_RHO) == n)              // ρ staged → real screening; else bare
+    // ── stage the G-SPACE Hartree+XC screening kernel (the @L5 closure) ──────
+    //   ψ/Δρ are PW coefficients indexed by gvecs → the Hartree response is DIAGONAL
+    //   in G: ΔV_H[i]=4π·Δρ[i]/|G_i|². We stage |G_i|² per coefficient (works for any
+    //   n; no pow2-FFT wall). The LDA xc kernel is a uniform-gas f_xc[ρ̄] local term
+    //   (ρ̄=nelec/Ω — the basis-decoupled scf_pw convention) added when xc_mode≥1.
+    let mut g2_stage: [float] = []
+    let mut gi2 = 0
+    while gi2 < n {
+        let gx = gvecs[gi2 * 3] ; let gy = gvecs[gi2 * 3 + 1] ; let gz = gvecs[gi2 * 3 + 2]
+        g2_stage.push(gx * gx + gy * gy + gz * gz)
+        gi2 = gi2 + 1
+    }
+    QPWD_G2 = g2_stage ; QPWD_GRID_N = n
+    // uniform-gas mean density ρ̄ = nelec/Ω → f_xc[ρ̄] = f_x(ρ̄) (+ f_c PW92 if xc≥1).
+    let rho_bar = if geom.omega > 0.0 { to_float(fe.nelec) / geom.omega } else { 0.0 }
+    let mut fxc = qforge_fx_lda(rho_bar)
+    if xc_mode >= 1 { fxc = fxc + qforge_fc_pw92(rho_bar) }
+    QPWD_FXC = fxc
+    let kernel_ok = (n > 0)                          // G-space kernel always available
 
     // per-direction coupling weight ‖ΔV|ψ⟩‖² (rank the 3 cartesian dirs). The bundle
     // is BARE ΔV_bare|ψ⟩; when `screened` it is replaced IN PLACE by the SCF-screened
