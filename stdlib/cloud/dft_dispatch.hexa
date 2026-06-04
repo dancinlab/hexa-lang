@@ -1389,6 +1389,50 @@ fn _dft_endpoint_resolved(host: str, port: str) -> int {
     return 1
 }
 
+// ── first-fire reachability RETRY-ON-LAG guard (orphan-guard) ─────────
+//
+// On a FIRST `--go` / `--detach` fire the freshly-rented vast pod's HostPort
+// map can LAG: the bare-IP sshd endpoint vast_direct_endpoint resolved is not
+// yet routable, so the single `echo REACHABLE` precheck fails — and the pod is
+// (wrongly) judged an orphan and DESTROYED, wasting the whole rent cycle even
+// though the endpoint would have come up seconds later. The fix: probe the
+// endpoint with a BOUNDED retry+backoff BEFORE the teardown-orphan decision,
+// and only tear down when EVERY attempt fails (a genuinely dead / proxy-only
+// pod). Mirrors the resolve/endpoint test discipline — the impure probe is
+// injected, so the retry policy itself is PURE + unit-testable.
+//
+// Policy: DFT_REACH_ATTEMPTS probes, the i-th preceded by i*DFT_REACH_BACKOFF_SEC
+// seconds of sleep (attempt 1 fires immediately; 2 after one backoff, …).
+let DFT_REACH_ATTEMPTS = 3        // total probe attempts before declaring orphan
+let DFT_REACH_BACKOFF_SEC = 8     // base backoff; i-th retry sleeps i*this seconds
+
+// _dft_reach_backoff_for — PURE: seconds to sleep BEFORE attempt `attempt`
+// (1-indexed). Attempt 1 = 0 (fire now); attempt i = (i-1)*base (linear backoff).
+// Negative/zero attempt clamps to 0 so a caller never sleeps on a bad index.
+fn _dft_reach_backoff_for(attempt: int, base: int) -> int {
+    if attempt <= 1 {
+        return 0
+    }
+    return (attempt - 1) * base
+}
+
+// _dft_reach_retry_reached — PURE: given a probe that first SUCCEEDS on its
+// `success_on` attempt (success_on<=0 ⇒ never succeeds — a truly dead endpoint),
+// would a bounded `attempts`-budget retry loop reach it? 1 iff the endpoint
+// comes up within the budget (orphan-guard HELD — no teardown), else 0 (every
+// attempt failed → genuine orphan, teardown licensed). This models the impure
+// `cloud_exec_opts echo REACHABLE` loop so the retry decision is testable with
+// NO network: success_on=2 + attempts=3 ⇒ 1 (held); success_on=0 ⇒ 0 (teardown).
+fn _dft_reach_retry_reached(success_on: int, attempts: int) -> int {
+    if success_on <= 0 {
+        return 0
+    }
+    if success_on <= attempts {
+        return 1
+    }
+    return 0
+}
+
 // --detach idempotency action codes (the pre-rent guard verdict). `--detach`
 // USED to ALWAYS rent a fresh pod — re-firing a deck that already had a live
 // detached pod left the old one idle + billing (the ~12 dup-idle-pod leak,
@@ -1736,10 +1780,12 @@ fn _dft_go(deck: str, image: str, disk: int, owner: str, query: str, identity: s
     // omission. Schema is shared with cloud_cli.hexa `_emit_rent_result`.
     println("rent-result pod=" + inst.instance_id + " host=" + ep.host + " provider=vast state=READY deck=" + deck)
 
-    // ① reachability precheck — TCP echo. unreachable → destroy + abort.
-    let reach = cloud_exec_opts(host, ssh_opts, "echo REACHABLE")
-    if reach.ok == 0 || !reach.stdout_.contains("REACHABLE") {
-        println("[dft-run] ① reachability FAILED (" + reach.message + ") — destroying unreachable pod " + inst.instance_id)
+    // ① reachability precheck — TCP echo, with a bounded RETRY-ON-LAG before any
+    // teardown (orphan-guard): a fresh vast pod's HostPort map can lag, so a
+    // single probe wrongly judges a routable pod an orphan. unreachable after
+    // ALL retries → destroy + abort.
+    if _dft_reach_probe_retry(host, ssh_opts) == 0 {
+        println("[dft-run] ① reachability FAILED after " + to_string(DFT_REACH_ATTEMPTS) + " attempts — destroying unreachable pod " + inst.instance_id)
         let _d = vast_destroy(inst.instance_id)
         pod_registry_forget(inst.instance_id)
         println("[dft-run] re-run `hexa cloud dft-run <deck> --go` to try another offer.")
@@ -2381,10 +2427,14 @@ fn _dft_detach(deck: str, image: str, disk: int, owner: str, query: str, identit
     // omission. Schema is shared with cloud_cli.hexa `_emit_rent_result`.
     println("rent-result pod=" + inst.instance_id + " host=" + ep.host + " provider=vast state=READY deck=" + deck)
 
-    // ① reachability precheck — TCP echo. unreachable → destroy + abort.
-    let reach = cloud_exec_opts(host, ssh_opts, "echo REACHABLE")
-    if reach.ok == 0 || !reach.stdout_.contains("REACHABLE") {
-        println("[dft-run] ① reachability FAILED (" + reach.message + ") — destroying unreachable pod " + inst.instance_id)
+    // ① reachability precheck — TCP echo, with a bounded RETRY-ON-LAG before any
+    // teardown (orphan-guard). On a FIRST detach fire the vast HostPort map can
+    // lag — the resolved bare-IP sshd is not routable yet — so a single probe
+    // wrongly judges a soon-routable pod an orphan and tears it down, wasting the
+    // whole rent cycle. Retry the probe with backoff first; tear down ONLY when
+    // every attempt fails (a genuinely dead / proxy-only pod).
+    if _dft_reach_probe_retry(host, ssh_opts) == 0 {
+        println("[dft-run] ① reachability FAILED after " + to_string(DFT_REACH_ATTEMPTS) + " attempts — destroying unreachable pod " + inst.instance_id)
         let _d = vast_destroy(inst.instance_id)
         pod_registry_forget(inst.instance_id)
         println("[dft-run] re-run `hexa cloud dft-run <deck> --detach` to try another offer.")
@@ -2717,4 +2767,31 @@ fn _dft_teardown(iid: str, rc: int) -> int {
     let _d = vast_destroy(iid)
     pod_registry_forget(iid)
     return rc
+}
+
+// _dft_reach_probe_retry — IO: the first-fire reachability precheck WITH a
+// bounded retry-on-lag BEFORE any orphan teardown. A freshly-rented vast pod's
+// HostPort map can lag (the resolved bare-IP sshd is not routable for a few
+// seconds), so a SINGLE `echo REACHABLE` probe spuriously fails and the pod is
+// torn down as an orphan — wasting the rent. We instead probe up to
+// DFT_REACH_ATTEMPTS times with a linear backoff (_dft_reach_backoff_for) and
+// return 1 the moment one probe lands REACHABLE; 0 only when EVERY attempt
+// failed (a genuinely dead / proxy-only pod → teardown licensed). The pure
+// _dft_reach_retry_reached models this loop for the network-free selftest.
+fn _dft_reach_probe_retry(host: str, ssh_opts: [str]) -> int {
+    let mut attempt = 1
+    while attempt <= DFT_REACH_ATTEMPTS {
+        let wait = _dft_reach_backoff_for(attempt, DFT_REACH_BACKOFF_SEC)
+        if wait > 0 {
+            println("[dft-run] ① reachability lag — retry " + to_string(attempt) + "/"
+                + to_string(DFT_REACH_ATTEMPTS) + " after " + to_string(wait) + "s backoff (vast HostPort map may still be mapping)...")
+            let _s = exec("sleep " + to_string(wait))
+        }
+        let reach = cloud_exec_opts(host, ssh_opts, "echo REACHABLE")
+        if reach.ok == 1 && reach.stdout_.contains("REACHABLE") {
+            return 1
+        }
+        attempt = attempt + 1
+    }
+    return 0
 }
