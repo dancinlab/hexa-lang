@@ -1727,6 +1727,15 @@ fn _dft_go(deck: str, image: str, disk: int, owner: str, query: str, identity: s
     let mut ssh_opts = _dft_ssh_opts(ep.port, identity)
     println("[dft-run] ② direct endpoint " + ep.host + ":" + ep.port + " (identity " + identity + ")")
 
+    // OWNERSHIP SPLIT (pod-attribution) — dft-run is POD-OPS-ONLY: it EMITS the
+    // raw `rent-result` facts (pod-id · host · provider · state) plus the deck
+    // dir as a pod-op fact, and does NOT write the attribution harness itself.
+    // This is the exact line that fixes the "@unattributed / (hexa-cloud rent)"
+    // symptom: the sidecar recorder reads `deck=<dir>` here and derives the
+    // candidate (deck ph.in `prefix=`) + project + lane + kind=dft-run with no
+    // omission. Schema is shared with cloud_cli.hexa `_emit_rent_result`.
+    println("rent-result pod=" + inst.instance_id + " host=" + ep.host + " provider=vast state=READY deck=" + deck)
+
     // ① reachability precheck — TCP echo. unreachable → destroy + abort.
     let reach = cloud_exec_opts(host, ssh_opts, "echo REACHABLE")
     if reach.ok == 0 || !reach.stdout_.contains("REACHABLE") {
@@ -2362,6 +2371,15 @@ fn _dft_detach(deck: str, image: str, disk: int, owner: str, query: str, identit
     let mut host = "root@" + ep.host
     let mut ssh_opts = _dft_ssh_opts(ep.port, identity)
     println("[dft-run] ② direct endpoint " + ep.host + ":" + ep.port + " (identity " + identity + ")")
+
+    // OWNERSHIP SPLIT (pod-attribution) — dft-run is POD-OPS-ONLY: it EMITS the
+    // raw `rent-result` facts (pod-id · host · provider · state) plus the deck
+    // dir as a pod-op fact, and does NOT write the attribution harness itself.
+    // This is the exact line that fixes the "@unattributed / (hexa-cloud rent)"
+    // symptom: the sidecar recorder reads `deck=<dir>` here and derives the
+    // candidate (deck ph.in `prefix=`) + project + lane + kind=dft-run with no
+    // omission. Schema is shared with cloud_cli.hexa `_emit_rent_result`.
+    println("rent-result pod=" + inst.instance_id + " host=" + ep.host + " provider=vast state=READY deck=" + deck)
 
     // ① reachability precheck — TCP echo. unreachable → destroy + abort.
     let reach = cloud_exec_opts(host, ssh_opts, "echo REACHABLE")

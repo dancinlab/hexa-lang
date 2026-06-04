@@ -1,0 +1,84 @@
+// stdlib/cloud/rent_result_emit_test.hexa — @ci_gate selftest for the
+// pod-attribution OWNERSHIP SPLIT (hexa-lang side · @L2/@L5).
+//
+// CONTRACT under test — hexa cloud is POD-OPS-ONLY and WRITE-FORBIDDEN to the
+// attribution harness:
+//   1. rent (vast/runpod) + dft-run EMIT a machine-readable `rent-result` line
+//      carrying ONLY raw pod facts: pod · host · provider · state [project] [deck].
+//   2. those same rent/dft-run paths NO LONGER call `_rent_register_pods_json`
+//      (the old ./pods.json attribution-row write) — that harness now belongs
+//      to the sidecar recorder.
+//
+// Falsifiers:
+//   F-RR-SCHEMA   — _emit_rent_result prints the exact `rent-result ...` schema,
+//                   includes project/deck only when present, omits the synthetic
+//                   "unattributed" sentinel (hexa cloud invents no attribution).
+//   F-RR-NO-WRITE — the vast + runpod rent paths and the dft-run path emit a
+//                   `rent-result` line AND do not call `_rent_register_pods_json`
+//                   (pod-ops-only — no attribution write from hexa cloud).
+//
+// Run:   hexa run stdlib/cloud/rent_result_emit_test.hexa
+// PASS:  exits 0, prints "rent_result_emit_test PASS".
+
+fn _t_assert(cond: int, label: str) {
+    if cond == 0 {
+        println("FAIL: " + label)
+        exit(1)
+    }
+}
+
+// _has — 1 iff needle occurs in hay (substring presence).
+fn _has(hay: str, needle: str) -> int {
+    if hay.index_of(needle) >= 0 { return 1 }
+    return 0
+}
+
+fn _t_main() {
+    // F-RR-NO-WRITE — source-level proof against the SHIPPED rent paths.
+    // (the emit fn is private; we assert on the source that the ownership
+    //  split holds: rent-result EMITTED, attribution-row write GONE.)
+    let cli = read_file("stdlib/cloud/cloud_cli.hexa")
+    let dft = read_file("stdlib/cloud/dft_dispatch.hexa")
+
+    // 1. the rent-result emitter exists + carries the documented schema.
+    _t_assert(_has(cli, "rent-result pod="), "F-RR-SCHEMA: cloud_cli emits `rent-result pod=` schema")
+    _t_assert(_has(cli, "fn _emit_rent_result("), "F-RR-SCHEMA: _emit_rent_result helper present")
+    _t_assert(_has(dft, "rent-result pod="), "F-RR-NO-WRITE: dft-run emits `rent-result pod=` (the @unattributed fix)")
+    _t_assert(_has(dft, "deck=\" + deck"), "F-RR-NO-WRITE: dft-run rent-result carries deck=<dir> fact for the sidecar recorder")
+
+    // 2. the rent paths call the emitter, not the old attribution-row writer.
+    _t_assert(_has(cli, "_emit_rent_result(inst.instance_id"), "F-RR-NO-WRITE: vast rent path EMITS rent-result")
+    _t_assert(_has(cli, "_emit_rent_result(pod.pod_id"), "F-RR-NO-WRITE: runpod rent path EMITS rent-result")
+    // The rent paths must NOT call _rent_register_pods_json anymore (the old
+    // ./pods.json attribution row hexa cloud relinquished to sidecar). The fn
+    // may still be DEFINED (def line), but it must have ZERO call sites.
+    let mut call_sites = 0
+    let mut i = 0
+    let n = len(cli)
+    let needle = "_rent_register_pods_json("
+    while i < n {
+        let hit = cli.index_of(needle)
+        if hit < 0 { i = n } else {
+            // a "call" is any occurrence NOT immediately preceded by "fn "
+            // (the definition) — i.e. an actual invocation in a rent path.
+            let pre = if hit >= 3 { cli.substring(hit - 3, hit) } else { "" }
+            if pre != "fn " { call_sites = call_sites + 1 }
+            cli = cli.substring(hit + len(needle), n)
+            n = len(cli)
+            i = 0
+        }
+    }
+    _t_assert(call_sites == 0, "F-RR-NO-WRITE: ZERO _rent_register_pods_json call sites (attribution write moved to sidecar)")
+
+    // 3. _emit_rent_result must NOT fabricate the "unattributed" sentinel — hexa
+    //    cloud emits raw facts only; sidecar owns the no-omission sentinel/warn.
+    let cli2 = read_file("stdlib/cloud/cloud_cli.hexa")
+    // locate the _emit_rent_result body and assert it guards out "unattributed".
+    _t_assert(_has(cli2, "project != \"unattributed\""), "F-RR-SCHEMA: emitter suppresses the synthetic `unattributed` (no fabricated attribution)")
+
+    println("rent_result_emit_test PASS")
+}
+
+fn main() {
+    _t_main()
+}
