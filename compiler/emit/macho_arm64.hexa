@@ -349,6 +349,7 @@ fn _logical_imm64(val: i64) -> i64 {
                 // that ROR(canonical, rot) == elem over `size` bits.
                 let canon = (1 << ones) - 1
                 let mut rot = 0
+                let mut found_rot = 0
                 let mut found = false
                 while rot < size {
                     // ROR canon right by `rot` within `size` bits. rot==0
@@ -360,7 +361,12 @@ fn _logical_imm64(val: i64) -> i64 {
                         let hi = (canon << (size - rot)) & mask
                         rored = (lo | hi) & mask
                     }
-                    if rored == elem { found = true; rot = size } else { rot = rot + 1 }
+                    // Save the rotation BEFORE the loop-break: `rot = size`
+                    // is only the sentinel that ends the search; reading
+                    // `rot` afterward yields `size` (immr = size & 0x3f =
+                    // 0 or 32), silently dropping the rotation for any
+                    // non-zero-rotated bitmask. found_rot preserves it.
+                    if rored == elem { found = true; found_rot = rot; rot = size } else { rot = rot + 1 }
                 }
                 if found {
                     // immr = rot. imms = ((-(size) << 1) & 0x3f) | (ones-1)
@@ -373,7 +379,7 @@ fn _logical_imm64(val: i64) -> i64 {
                     // for size s, the field is (128 - 2*s) low 6 bits with
                     // (ones-1) OR'd in (only valid because runs are <size).
                     let imms = ((0 - (size << 1)) & 0x3f) | ((ones - 1) & 0x3f)
-                    let immr = rot & 0x3f
+                    let immr = found_rot & 0x3f
                     return (n_bit << 12) | (immr << 6) | (imms & 0x3f)
                 }
             }
