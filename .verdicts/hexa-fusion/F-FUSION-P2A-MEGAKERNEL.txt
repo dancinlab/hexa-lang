@@ -1,0 +1,161 @@
+F-FUSION-P2A-MEGAKERNEL :: WHOLE-STEP MEGAKERNEL — Phase 2a scaffold + GPU measure
+domain: HEXA-FUSION · date: 2026-06-04 · branch: domain/hexa-fusion-p2a-megakernel (off main 63ef63f69)
+method: cudaLaunchCooperativeKernel + grid.sync() block-2 slice · build + A/B (byte-eq + util) · NVIDIA B200
+g5-HONEST: this is the block-2 SLICE of the whole-step megakernel (a real cooperative kernel that
+BUILDS + FIRES + descends), NOT the full whole-step. The full DAG design is documented below.
+
+═══════════════════════════════════════════════════════════════════════════════════════════════
+WHAT WAS BUILT  (deliverable a — cooperative-kernel skeleton + a fused sub-region that runs)
+═══════════════════════════════════════════════════════════════════════════════════════════════
+The first REAL persistent/grid-resident megakernel in the HEXA-FUSION campaign. Prior work
+(②④⑤ host-removal, L3-a/b/c/d pairwise+glue-block fusion) NEVER crossed an op boundary INSIDE a
+single resident kernel — every "fusion" was still ≥1 launch per glue block, and the GN reductions
+sat at the byte-eq floor (F-FUSION-GN-COOP-KERNEL-CLOSED-NEG flagged the grid-sync barrier as the
+next step-change but did not build it). Phase 2a builds it:
+
+  _hx_k_megakernel_block2  (self/cuda/runtime_cuda_emit.hexa)
+    PHASE A (one thread per t):  gelu2 + expert_pack2 + moe_router  (== _hx_k_moe_block2, L3-d)
+    grid.sync()               :  every Y[t,c] committed to global mem before phase B reads it
+    PHASE B (one thread per g):  groupnorm #2  y -> yn  (== _hx_k_groupnorm, single-thread seq)
+  launched via cudaLaunchCooperativeKernel (resident grid, occupancy-capped, coop-support probe).
+
+  Collapses 4 op-by-op launches (gelu2, expert_pack2, moe_router, groupnorm#2) into 1 RESIDENT
+  cooperative kernel. The cooperative grid barrier IS the launch boundary the op-by-op path got
+  for free; crossing it in-kernel keeps Y device-resident across the op boundary (no relaunch, no
+  HBM round-trip through a host dispatch). This is buildable now ONLY because clm_prod is 100%
+  device-owned (own-GEMM _hx_k_gemm on main, PR #2697) — the cuBLAS-oracle wall that closed the
+  FULL megakernel (F-FUSION-MEGAKERNEL-DESIGN.txt) is dissolved for the glue path.
+
+BYTE-EQ CONTRACT (hard gate): phase A is character-for-character _hx_k_moe_block2 (erf gelu, 1/√2
+literal, _hx_moe_exp_dev softmax, sequential e-combine); phase B is character-for-character
+_hx_k_groupnorm (t-outer c-inner sequential reduction, NO tree re-assoc, _hx_gn_sqrt_dev NR-40).
+For clm_prod G=1, so phase B's reduction is a SINGLE thread (the documented byte-eq floor) — the
+rest of the grid idles after the barrier. All of EX0/EX1/EX_OUT/PROBS/Y/YN/XHATN/MEANN/INVN are
+written byte-for-byte so the bwd graph is UNCHANGED. Env HEXA_MEGAKERNEL; OFF / no-coop-support /
+device-fail -> the separate _moe_block2 + _groupnorm path (byte-identical, max|Δ|=0).
+
+5 source pieces (mirror the L3-c/d 6-piece recipe, no runtime.c amalgam tracked):
+  · emit:     _hx_k_megakernel_block2 kernel + _hx_cuda_farr_megakernel_block2_gpu cooperative launcher
+  · runtime.h: hexa_forge_dispatch_megakernel_block2 + seam (18-arg)
+  · codegen:   len(node.args)==18 dispatch lowering
+  · clm_prod:  _megakernel_block2 helper + fwd call-site (replaces _moe_block2 + _groupnorm pair)
+  · kit:       ~/hexa-fusion-cuda-kit/p2a-build/megakernel_wrapper.c (runtime.c HexaVal wrapper splice)
+
+═══════════════════════════════════════════════════════════════════════════════════════════════
+BUILD + FIRE  (verbatim, NVIDIA B200 / CUDA 12.4 / gcc 11.4 / sm_90 PTX-JIT->Blackwell)
+═══════════════════════════════════════════════════════════════════════════════════════════════
+local regen: tool/regen_dispatch_c_artifacts.hexa -> self/cuda/runtime_cuda.c PASS (emit compiles,
+             megakernel present: cooperative_groups + grid_group + cudaLaunchCooperativeKernel).
+local flatten: tool/flatten_imports.hexa clm_prod.hexa -> clm_prod_flat.hexa (9 modules, 3675 lines).
+pod transpile: dist/linux-x86_64/hexat clm_prod_flat.hexa clm_prod.c  rc=0 (3333 lines)
+             — frozen hexat emits forge_dispatch_megakernel_block2(...) DIRECT (resolves the seam
+               via runtime.h proto) + hexa_math_erf direct; NO post-process needed for the new call.
+[3] nvcc rc=0 | runtime_cuda.o: 291488 bytes | _hx_cuda_farr launchers: 66 | megakernel syms: 4
+[4] link rc=0 | clm_prod_gpu: 794848 bytes
+[5] smoke (HEXA_MEGAKERNEL=1):
+    [L3C-FIRED] groupnorm_gelu_residual DEVICE path taken
+    [MEGAKERNEL-FIRED] block2 cooperative (moe_block2 + GN#2 across grid.sync) DEVICE path taken
+    [MEGAKERNEL-FIRED] _hx_k_megakernel_block2 cooperative grid=2 blk=64 (SM=148 bpsm=12)
+    epoch-1 mean CE = 4.18549 · epoch-2 mean CE = 3.97022 · F-CLM-PROD-DESCENT = 1 · PASS
+
+[MEGAKERNEL-FIRED] = Y  — the cooperative kernel with grid.sync() COMPILED and EXECUTED on the
+device (148 SMs, resident grid of 2 blocks × 64 threads, 12 blocks/SM occupancy headroom).
+
+═══════════════════════════════════════════════════════════════════════════════════════════════
+A/B  (megakernel OFF = op-by-op L3-a/b/c/d  vs  ON = block-2 cooperative; D1536 T512 EPOCHS4)
+═══════════════════════════════════════════════════════════════════════════════════════════════
+A (HEXA_MEGAKERNEL= , op-by-op): util MEAN 10.71% PEAK 100% pct>=20 14.3% (n=3538)
+   [L3C-FIRED] + [L3D-FIRED] fired · CE epoch1 4.5471 -> epoch4 3.05836 · DESCENT PASS
+B (HEXA_MEGAKERNEL=1, cooperative): util MEAN 10.63% PEAK 100% pct>=20 14.3% (n=3535)
+   [MEGAKERNEL-FIRED] 2× (cooperative grid=8 blk=64, SM=148) · 0× under A = genuine, no dead-code
+   CE epoch1 4.5471 -> epoch4 3.05836 · DESCENT PASS
+
+  byte-eq GATE = PASS — strict CE-only diff (epoch-1 4.5471, epoch-4 3.05836) BIT-IDENTICAL A vs B.
+    (the fire script's `grep 'CE '` also caught the [*-FIRED] probe marker line, so its naive diff
+     flagged a 1-line "difference" = the marker text only; the CE-value-only diff is clean.)
+  util Δ = -0.08pp (10.71 -> 10.63) = NOISE. NO util win — HONEST and EXPECTED per the design's
+    own ceiling: collapsing 4 glue launches into 1 cooperative kernel removes the glue-LAUNCH
+    boundaries, but the binding constraint is (1) GEMM-gap occupancy (the cuBLAS-free own-GEMMs
+    stay SEPARATE launches with idle SMs between them) and (2) the GN#2 single-thread reduction
+    floor (byte-eq forces it serial; the resident grid idles at that barrier). A megakernel of the
+    glue block alone cannot move util — it touches neither binding term. This MATCHES the prior
+    F-FUSION-GN-COOP-KERNEL-CLOSED-NEG prediction ("cooperative launch gives ZERO occupancy on the
+    binding reduction phase"), now MEASURED rather than analyzed: the cooperative kernel BUILDS +
+    FIRES + is byte-eq, and contributes ~0 util — confirming the lever is structural-only.
+
+  THE WIN (g5): NOT util. It is (1) the first in-kernel op-boundary crossing in the campaign proven
+    to build + fire + stay byte-eq on real hardware (the cooperative+grid.sync+byte-eq machinery
+    WORKS), and (2) a MEASURED confirmation that glue-block megakernel-ization is util-inert — the
+    remaining util levers are the GEMM tiles (own-GEMM perf, Phase 1b) and the reduction floor, NOT
+    more boundary removal. This de-risks the full whole-step megakernel machinery while pricing its
+    util ceiling honestly.
+
+═══════════════════════════════════════════════════════════════════════════════════════════════
+FULL WHOLE-STEP MEGAKERNEL DESIGN  (deliverable b — the remaining DAG + grid-sync structure)
+═══════════════════════════════════════════════════════════════════════════════════════════════
+The clm_prod fwd train-step is a STRICTLY SERIAL data-dependency chain (each op consumes the
+prior op's output). The full whole-step megakernel = ONE cudaLaunchCooperativeKernel launch with a
+grid.sync() at every op boundary, GEMM tiles (own _hx_k_gemm) inline between barriers. The DAG,
+with the grid-sync barrier count:
+
+  fwd:  _fq×6 (per-channel int4 quant, embarrassingly parallel — no barrier between them)
+   B0   embedding gather (tokens -> xe)                         [1 thread/pos, parallel]
+   ──   grid.sync
+   B1   GEMM conv1d xe -> xec      (own _hx_k_gemm tile)        ← GEMM barrier
+   ──   grid.sync
+   B2   GEMM conv1d xec -> h0      (own _hx_k_gemm tile)
+   ──   grid.sync
+   B3   GLUE BLOCK 1: groupnorm#1 -> gelu#1 -> residual (h0->hn0->hg0, xt=xec+hg0)  [= L3-c, 1 region]
+        · GN#1 reduction is single-thread-per-group (G=1) — byte-eq floor, the grid idles
+   ──   grid.sync
+   B4   GEMM conv1d xt -> logits_r (own _hx_k_gemm tile)
+   ──   grid.sync
+   B5   GEMM conv2 xt -> eo0,eo1   (own _hx_k_gemm_strided_batched tile, 2 experts)
+   ──   grid.sync
+   B6   GLUE BLOCK 2: gelu2 -> expert_pack -> moe_router -> groupnorm#2  [= THIS Phase 2a kernel]
+        · the gelu2/pack/router prefix is parallel-per-t; GN#2 is single-thread (byte-eq floor)
+        · INTERNAL grid.sync between the router prefix and GN#2 (already built here)
+   ──   grid.sync
+   B7   GEMM conv1d yn -> out_logits (own _hx_k_gemm tile)      → fwd done
+
+  Then ce_grad (per-row softmax, parallel) -> bwd (the mirror chain, ~10 more GEMM+glue barriers)
+  -> AdamW (per-param, parallel; bias-corr t is a host scalar -> either a device scalar updated
+     each replay, or a cudaGraphExecKernelNodeSetParams-style per-step param, see ⑤ closed-neg).
+
+  TOTAL fwd: 8 grid.sync barriers (B0..B7), ~7 GEMM tiles + 2 glue blocks. fwd+bwd+opt ≈ 20-24
+  barriers. Each GEMM tile = the own _hx_k_gemm body refactored into a __device__ callable invoked
+  inside the resident grid (NOT a nested <<<>>> launch — a persistent kernel can't launch a grid).
+
+GRID-SYNC STRUCTURE / hard constraints (g5):
+  1. Resident-grid cap: cudaLaunchCooperativeKernel requires EVERY block co-resident
+     (cudaOccupancyMaxActiveBlocksPerMultiprocessor × SM). On B200 (148 SM) that bounds the grid;
+     the GEMM tiles must be written to tolerate a grid SMALLER than the problem (grid-stride loops
+     over output tiles) — they cannot assume one-block-per-output-tile. This is the main rewrite.
+  2. Byte-eq floor unchanged: every reduction (GN×2, the softmax sum, the moe e-combine) MUST stay
+     single-thread sequential to hold max|Δ|=0 to the op-by-op baseline. At those barriers the grid
+     idles — the documented occupancy floor. A megakernel removes the LAUNCH boundaries, not the
+     reduction serialism.
+  3. Own-GEMM perf inheritance (the honest ceiling): the megakernel inherits the naive/tiled FP64
+     own-GEMM compute perf (clm is launch-bound so this is hidden; on a GEMM-bound LLM it was
+     measured 6.25× off cuBLAS, F-FUSION-P1B-TILED-GEMM). A megakernel kills launch/HBM-gap
+     overhead but NOT the GEMM FLOPS gap. So "surpass cuBLAS+glue" is STRUCTURAL (boundary removal
+     + full overlap), realistic only after Phase 1b register/WMMA tiling closes the GEMM gap.
+
+NEXT BUILDABLE (the step after this slice): extend the cooperative kernel LEFTWARD to absorb B4+B5
+(the logits_r + conv2 GEMMs feeding block 2) as inline own-GEMM tiles between added grid.sync
+barriers — i.e. a "block 2 + its 2 feeding GEMMs" cooperative region. Then rightward to B7. Each
+extension = +1-2 grid.sync + refactor one _hx_k_gemm into a grid-stride __device__ tile. The full
+whole-step is the union; it is a multi-session campaign (the GEMM-tile-as-device-callable rewrite +
+the resident-grid sizing are the load-bearing work), de-risked by this slice proving the
+cooperative+grid.sync+byte-eq machinery WORKS end-to-end on real hardware.
+
+═══════════════════════════════════════════════════════════════════════════════════════════════
+HONEST SCOPE SUMMARY
+═══════════════════════════════════════════════════════════════════════════════════════════════
+DELIVERED (built + fired + measured): the block-2 cooperative megakernel (moe_block2 + GN#2 across
+  one grid.sync, in a single cudaLaunchCooperativeKernel) — the first in-kernel op-boundary crossing
+  in the campaign. byte-eq-safe by construction, env-gated, fallback-safe.
+SKELETON-ONLY (designed, not built): the GEMM tiles as resident __device__ callables, the
+  remaining ~20 fwd+bwd grid.sync barriers, the resident-grid sizing for the full step.
+NOT CLAIMED: util-GREEN via the megakernel (the GEMM-gap occupancy + own-GEMM FLOPS ceiling are
+  unchanged by glue-boundary removal); cuBLAS-surpassing GEMM perf (needs WMMA, precision-gated).
