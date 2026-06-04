@@ -1669,6 +1669,129 @@ fn emit_runtime_cuda_c() -> str {
             "#endif\n" +
             "}\n" +
             "\n" +
+            "/* HEXA-FUSION L3-c (op-boundary fusion) — groupnorm + gelu + residual-add in\n" +
+            " * ONE kernel. Extends L3-a (_hx_k_groupnorm_gelu) by also taking the residual\n" +
+            " * operand R (= xec) and writing OUT = R + GELU(GN(X)) in the SAME launch — the\n" +
+            " * clm_prod_fwd head h0->hn0->hg0 THEN xt = xec + hg0 collapses from 2 launches\n" +
+            " * (groupnorm_gelu + residual_add) into 1. The GN+GELU half is character-for-\n" +
+            " * character _hx_k_groupnorm_gelu (same sequential reduction, same _hx_gn_sqrt_dev\n" +
+            " * NR-40, same _hx_gelu_dev erf), and the residual is OUT[i] = R[i] + gv with gv\n" +
+            " * the SAME register GELU value -> bit-identical to groupnorm_gelu-then-residual_add\n" +
+            " * (max|Δ|=0). THREE+ outputs preserved byte-for-byte: Y = pre-GELU GN affine (bwd\n" +
+            " * cache hn0, bwd UNCHANGED), A = GELU(Y) (kept so the bwd graph is identical), and\n" +
+            " * OUT = R + A (the fused residual = xt). Env-gated HEXA_FUSE_GN_GELU_RESID; no-CUDA\n" +
+            " * -> -1 -> host groupnorm_gelu + residual_add (byte-eq reference). */\n" +
+            "__global__ void _hx_k_groupnorm_gelu_residual(const double* __restrict__ X,\n" +
+            "                                     const double* __restrict__ GAMMA,\n" +
+            "                                     const double* __restrict__ BETA,\n" +
+            "                                     const double* __restrict__ R,\n" +
+            "                                     double* __restrict__ Y,\n" +
+            "                                     double* __restrict__ A,\n" +
+            "                                     double* __restrict__ OUT,\n" +
+            "                                     double* __restrict__ MEAN,\n" +
+            "                                     double* __restrict__ INV,\n" +
+            "                                     double* __restrict__ XHAT,\n" +
+            "                                     int64_t T, int64_t C, int64_t G) {\n" +
+            "    const double eps = 0.00001;\n" +
+            "    int64_t cg = C / G;\n" +
+            "    double m = (double)(cg * T);\n" +
+            "    for (int64_t g = (int64_t)blockIdx.x * blockDim.x + threadIdx.x;\n" +
+            "         g < G; g += (int64_t)blockDim.x * gridDim.x) {\n" +
+            "        int64_t c0 = g * cg;\n" +
+            "        double sum = 0.0;\n" +
+            "        for (int64_t t = 0; t < T; t++)\n" +
+            "            for (int64_t c = 0; c < cg; c++)\n" +
+            "                sum += X[t * C + (c0 + c)];\n" +
+            "        double mu = sum / m;\n" +
+            "        double vs = 0.0;\n" +
+            "        for (int64_t t = 0; t < T; t++)\n" +
+            "            for (int64_t c = 0; c < cg; c++) {\n" +
+            "                double d = X[t * C + (c0 + c)] - mu;\n" +
+            "                vs += d * d;\n" +
+            "            }\n" +
+            "        double var = vs / m;\n" +
+            "        double inv = 1.0 / _hx_gn_sqrt_dev(var + eps);\n" +
+            "        MEAN[g] = mu;\n" +
+            "        INV[g]  = inv;\n" +
+            "        for (int64_t t = 0; t < T; t++)\n" +
+            "            for (int64_t c = 0; c < cg; c++) {\n" +
+            "                int64_t ch = c0 + c;\n" +
+            "                int64_t idx = t * C + ch;\n" +
+            "                double xh = (X[idx] - mu) * inv;\n" +
+            "                XHAT[idx] = xh;\n" +
+            "                /* yv = the EXACT _hx_k_groupnorm output (bwd cache). */\n" +
+            "                double yv = GAMMA[ch] * xh + BETA[ch];\n" +
+            "                Y[idx] = yv;\n" +
+            "                /* gv = GELU(yv) in a register (same as L3-a). */\n" +
+            "                double gv = _hx_gelu_dev(yv);\n" +
+            "                A[idx] = gv;\n" +
+            "                /* residual fused: OUT = R + gv (= xec + hg0, same add order). */\n" +
+            "                OUT[idx] = R[idx] + gv;\n" +
+            "            }\n" +
+            "    }\n" +
+            "}\n" +
+            "\n" +
+            "int _hx_cuda_farr_groupnorm_gelu_residual_gpu(int64_t x_id, int64_t gamma_id,\n" +
+            "                                     int64_t beta_id, int64_t r_id,\n" +
+            "                                     int64_t y_id, int64_t a_id, int64_t out_id,\n" +
+            "                                     int64_t mean_id, int64_t inv_id, int64_t xhat_id,\n" +
+            "                                     int64_t T, int64_t C, int64_t G) {\n" +
+            "#ifdef __CUDACC__\n" +
+            "    if (T <= 0 || C <= 0 || G <= 0 || (C % G) != 0) return -1;\n" +
+            "    if (_h2d(x_id) != 0) return -1;\n" +
+            "    if (_h2d(gamma_id) != 0) return -1;\n" +
+            "    if (_h2d(beta_id) != 0) return -1;\n" +
+            "    if (_h2d(r_id) != 0) return -1;\n" +
+            "    if (_ensure_dev_alloc_out(y_id, T * C) != 0) return -1;\n" +
+            "    if (_ensure_dev_alloc_out(a_id, T * C) != 0) return -1;\n" +
+            "    if (_ensure_dev_alloc_out(out_id, T * C) != 0) return -1;\n" +
+            "    if (_ensure_dev_alloc_out(mean_id, G) != 0) return -1;\n" +
+            "    if (_ensure_dev_alloc_out(inv_id, G) != 0) return -1;\n" +
+            "    if (_ensure_dev_alloc_out(xhat_id, T * C) != 0) return -1;\n" +
+            "    const double* X     = g_slots[x_id].d_buf;\n" +
+            "    const double* GAMMA = g_slots[gamma_id].d_buf;\n" +
+            "    const double* BETA  = g_slots[beta_id].d_buf;\n" +
+            "    const double* R     = g_slots[r_id].d_buf;\n" +
+            "    double*       Y     = g_slots[y_id].d_buf;\n" +
+            "    double*       A     = g_slots[a_id].d_buf;\n" +
+            "    double*       OUT   = g_slots[out_id].d_buf;\n" +
+            "    double*       MEAN  = g_slots[mean_id].d_buf;\n" +
+            "    double*       INV   = g_slots[inv_id].d_buf;\n" +
+            "    double*       XHAT  = g_slots[xhat_id].d_buf;\n" +
+            "    int block_sz = 64;\n" +
+            "    int64_t want = (G + block_sz - 1) / block_sz;\n" +
+            "    int grid_sz = (want > 1024) ? 1024 : (int)want;\n" +
+            "    if (grid_sz < 1) grid_sz = 1;\n" +
+            "    _hx_k_groupnorm_gelu_residual<<<grid_sz, block_sz>>>(X, GAMMA, BETA, R, Y, A, OUT,\n" +
+            "                                                MEAN, INV, XHAT, T, C, G);\n" +
+            "    cudaError_t er = cudaDeviceSynchronize();\n" +
+            "    if (er != cudaSuccess) {\n" +
+            "        fprintf(stderr, \"[cuda] groupnorm_gelu_residual launch failed: %s\\n\",\n" +
+            "                cudaGetErrorString(er));\n" +
+            "        return -1;\n" +
+            "    }\n" +
+            "    /* Y/A/OUT/xhat/mean/inv stay DEVICE-RESIDENT so the follow-up conv GEMM\n" +
+            "     * (over xt = OUT) H2D-skips them (same residence convention as L3-a). */\n" +
+            "    {\n" +
+            "        int64_t outs[6] = { y_id, a_id, out_id, mean_id, inv_id, xhat_id };\n" +
+            "        for (int k = 0; k < 6; k++) {\n" +
+            "            HexaFarrEntry* e = &_hx_farr_table[outs[k]];\n" +
+            "            e->d_buf      = (void*)g_slots[outs[k]].d_buf;\n" +
+            "            e->loc        = FARR_DEVICE;\n" +
+            "            e->dirty_host = 0;\n" +
+            "            e->dirty_dev  = 0;\n" +
+            "        }\n" +
+            "    }\n" +
+            "    return 0;\n" +
+            "#else\n" +
+            "    (void)x_id; (void)gamma_id; (void)beta_id; (void)r_id; (void)y_id;\n" +
+            "    (void)a_id; (void)out_id; (void)mean_id; (void)inv_id; (void)xhat_id;\n" +
+            "    (void)T; (void)C; (void)G;\n" +
+            "    fprintf(stderr, \"[cuda] groupnorm_gelu_residual: built without __CUDACC__\\n\");\n" +
+            "    return -1;\n" +
+            "#endif\n" +
+            "}\n" +
+            "\n" +
             "/* HEXA-FUSION L3 (glue half · final slice ⑤c) — device-resident expert-pack\n" +
             " * copy. Reproduces the clm_prod_fwd j-loop EXACTLY: for j in 0..n,\n" +
             " *   EX_OUT[0·n + j] = EX0[j] ; EX_OUT[1·n + j] = EX1[j]   (n = T·d)\n" +

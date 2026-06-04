@@ -1,0 +1,46 @@
+F-FUSION-CUBLASLT-EPILOGUE  ::  CLOSED-NEGATIVE (ANALYSIS — deterministic, NOT a measured run)
+domain: HEXA-FUSION  ·  date: 2026-06-04  ·  method: source/dtype audit + cublasLt epilogue capability matrix
+
+CLAIM (falsifier): "cublasLt epilogue fusion (gelu/bias folded INTO the cuBLAS-Lt GEMM)
+can remove the small inter-GEMM activation kernels in clm_prod_fwd while keeping the
+cuBLAS GEMM (roofline unchanged) AND holding byte-eq max|Δ|=0."
+
+RESULT: FALSIFIED — deterministically ruled out for this workload. Two independent walls,
+each alone sufficient; both are hard-gate (byte-eq max|Δ|=0) violations.
+
+EVIDENCE (source-audited, clm_prod.hexa:474-533):
+  fwd GEMM↔kernel adjacency — only ONE GEMM→GELU adjacency exists:
+    conv1d(xe→xec)   [GEMM] → conv1d        (no activation)
+    conv1d(xec→h0)   [GEMM] → groupnorm     (group reduction, NOT a pointwise epilogue)
+    conv1d(xt→logits)[GEMM] → moe_router    (no activation)
+    conv2_batched(→eo0,eo1)[GEMM] → _gelu×2  ← the ONLY epilogue-fusion candidate
+    conv1d(yn→out)   [GEMM] → (none)
+
+  WALL 1 — FP64 has no GELU epilogue.
+    All clm_prod GEMMs are cublasDgemm / cublasDgemmStridedBatched = FP64 (double):
+      self/runtime.c:14369 · self/cuda/runtime_cuda_emit.hexa:661 (cublasDgemm),
+      :744 (cublasDgemmStridedBatched).
+    cuBLAS-Lt fused epilogues (CUBLASLT_EPILOGUE_GELU / _GELU_BIAS / _GELU_AUX) are
+    supported for FP8/FP16/BF16/FP32(TF32) compute only — NOT CUDA_R_64F. FP64 cublasLt
+    supports DEFAULT / (limited) BIAS, no GELU. Downcast FP64→FP32 to reach the epilogue
+    breaks byte-eq (max|Δ|≠0) → hard-gate violation.
+
+  WALL 2 — even if an FP64 GELU epilogue existed, no bit-identity guarantee.
+    hexa _gelu is libm-erf-exact (hexa_math_erf). cuBLAS internal GELU may use a private
+    erf approximation → not guaranteed bit-identical → max|Δ|=0 not provable.
+
+COROLLARIES (also closed by WALL 1):
+  - "int4_quant→GEMM epilogue" (was tentatively L3-c): same FP64-epilogue block; also no
+    quantize-on-write epilogue exists in cublasLt at all.
+  - whole-step megakernel via hand-GEMM: replaces cuBLAS FP64 tuned GEMM → roofline-capped
+    + violates the "no raw-GEMM superiority claim (cuBLAS = roofline)" hard rule.
+
+RULED-OUT AXIS: structural epilogue-fusion as a util lever for this FP64 + byte-eq workload.
+SURVIVING LEVERS: (B) host-side multi-op kernel fusion of OUR OWN _hx_k_* kernels (NOT
+cuBLAS epilogues) — e.g. GN+GELU+residual_add triple (clm_prod.hexa:498-507, adjacent on
+the same data) — proven byte-eq + ~+1pp/fusion but incremental, will not reach ≥20% alone;
+(C) right-sized GPU measurement (util is GPU-relative; goal says "idle H100" so this reframes
+the target hardware, not the same goal).
+
+HARD-RULE COMPLIANCE: no [FIRED] probe + no CE run was performed → this is ANALYSIS, not a
+measured A/B. No util-Δ or byte-eq number is claimed. g5-honest.
