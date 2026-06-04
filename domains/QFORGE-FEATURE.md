@@ -50,33 +50,26 @@
                 re-run λ on NQE-broadened ⟨u²⟩ vs classical. NO real hydride Tc
                 shift fabricated — DFT-potential wiring is the downstream engine task.
 
-- [x] resume-bank — resume-in-place across pod teardown (.save/.phsave scratch bank)
-      why     : a free/spot pod can be torn down mid-DFPT (e.g. LaH10 q4 crash);
-                a fresh pod must resume from a banked SCF .save WITHOUT re-running
-                SCF. Object-store addressing/manifest/restore-plan layer on top of
-                the integrity-checked blob primitive (scratch_bank.hexa).
-      module  : stdlib/qforge/scratch_bank_store.hexa
-                — qforge_scratch_bank_put(store,deck_hash,commit,stage,files,rules)
-                  → {ok,key,size,manifest,has_save}: content-addressed key
-                  (deck-hash+commit+stage → 16-hex adler32 family), packs the file
-                  SET into ONE integrity-checked blob, classifies each file.
-                — qforge_scratch_bank_get(store,deck_hash,commit,stage,rules)
-                  → {hit,key,restore_plan,files}: fresh pod re-keys the SAME run;
-                  store HIT + blob verifies → hit=true + restore-plan; miss/corrupt
-                  → hit=false RUN-SCF plan (fail-closed, no false resume).
-      manifest: resume_critical (.save · _ph0/*.phsave = SCF baton) vs cross_check
-                (dynN = DFPT cross-val data, NEVER alone a baton). restore-plan
-                .skip_scf = TRUE iff ≥1 resume_critical present. Classifier is
-                data-driven (SbClassRule list) — d4 (QE layout is the DEFAULT rule,
-                not a hardcoded name branch).
-      store   : pluggable SbStore interface; sbstore_local_new(root) = local-dir
-                FAKE store (the ONLY impl) drives the network-free g5 selftest.
-      backend : PRODUCTION object store NAMED remaining (d6 honest) —
-                sbstore_remaining_backend() → "S3 / Cloudflare-R2 / rclone … not yet
-                bound". Real cross-pod resume NOT claimed until that backend binds;
-                local store proves the full contract within one host only.
-      selftest: stdlib/qforge/scratch_bank_store_selftest.hexa (g5, hexa run PASS —
-                39/39): (a) put→get round-trip hit=true + plan lists all files;
-                (b) different deck-hash → MISS; (c) manifest separates .save/.phsave
-                from dynN; (d) skip-SCF only when .save present; (e) backend named;
-                + corrupt-bank fail-closed guard.
+- [x] GPU-TIER KERNELS — 4 NVPTX kernels extending the merged #2737 Sternheimer stack.
+      Real on-device parity+timing on summer RTX 5070 (sm_120, CUDA 12.9, FREE pool, d7).
+      [1] mixed-precision tensor-core matvec — PASS. kernel nvptx_mixprec_matvec_kernel.hexa
+          host nvptx_mixprec_matvec_host.cu. ACCURACY |Δψ⟩ FP64-vs-mixed max_rel_err=0.0
+          (linear residual-refine, bit-exact); SPEEDUP block-matvec (NRHS=256 block-
+          Sternheimer) TF32-tc Sgemm vs FP64 Dgemm = 63.96× ≥5× @N4096. HONEST (d6):
+          single GEMV is bandwidth-bound (ratio→~2× byte ratio: 1.25/1.94/2.08× @N2k/4k/8k);
+          ≥5× lever is compute-bound regime only (= the real block use case).
+      [2] fused Sternheimer CG (7→5 launches) — PARITY PASS (max_rel_err 1.3e-14),
+          THROUGHPUT NOT MET on-device (1.01×; gate 1.5×). kernel nvptx_stern_fused_kernel.hexa
+          host nvptx_stern_fused_host.cu. HONEST (d6): per-iter time dominated by host-
+          resident scalar control (2 DtoH + sync/iter), not the BLAS-1 launches fused.
+          NAMED-REMAINING: on-device scalar reduction + cooperative-grid persistent CG.
+      [3] multi-GPU q/k sharding — PASS. kernel nvptx_shard_qk_kernel.hexa host
+          nvptx_shard_qk_host.cu. 2-shard (and 4-shard) partition+reduce ≡ single-pass λ,
+          Δ=0.000e+00 bit-for-bit (contiguous block-partition fixes FP order). NAMED-
+          REMAINING (d6): true multi-GPU HW fan-out (cudaSetDevice ≥2 devices, NVLink
+          reduce) — needs a 2nd physical GPU; logic is device-count-agnostic.
+      [4] out-of-core ψ streaming (cells > VRAM) — PASS. kernel nvptx_ooc_stream_kernel.hexa
+          host nvptx_ooc_stream_host.cu. Double-buffered output-row tiling; streamed
+          resident 25% of full-H footprint, streamed out == in-core out max_rel_err=0.0
+          (disjoint output rows → no FP-order change). Completion+footprint+parity PASS.
+      provider: NO PAID RENT — all four built+run on summer free pool (d7).

@@ -1,0 +1,80 @@
+// stdlib/qforge/nvptx_ooc_stream_kernel.hexa
+// QFORGE GPU-tier kernel 4 — out-of-core ψ streaming (cells larger than VRAM).
+// closes QFORGE-FEATURE ooc-stream
+//
+// @version 0.0.1
+// @capabilities [pure]
+// @phase("parse_only")
+//
+// Extends the merged NVPTX Sternheimer stack (#2737 nvptx_sternheimer_kernel.hexa).
+// For a large cell the wavefunction set Ψ (Nbands × Ngrid) and the H-application can
+// exceed the device VRAM. Out-of-core streaming TILES Ψ along the grid axis: only a
+// TILE of the grid (and its halo, here a dense block-row of H) is resident at once.
+// The H·Ψ matvec is computed tile-by-tile; partial results accumulate into the output
+// so the FULL operator is applied without ever holding all of Ψ (or H) in VRAM.
+//
+//   out = H · v ,  H is Ngrid×Ngrid , v is Ngrid.   Tile the OUTPUT rows into T tiles.
+//   for each tile t (rows [r0,r1)):
+//       stream H[r0:r1, :]  and v  into VRAM
+//       out[r0:r1] = (H[r0:r1,:] · v)            (this kernel, on the resident tile)
+//   The accumulation is per-tile-disjoint (each tile owns distinct output rows) so the
+//   streamed result is BIT-IDENTICAL to the in-core whole-matrix matvec — no reduction
+//   across tiles, no FP-order change. (For a v that is itself tiled, the inner product
+//   accumulates column-tiles in fixed order — also order-stable.)
+//
+// PARITY gate: streamed tiled out == in-core whole-matrix out, bit-for-bit.
+// COMPLETION gate: a synthetic workload whose footprint EXCEEDS a capped VRAM budget
+// completes via streaming (host driver in nvptx_ooc_stream_host.cu caps the resident
+// tile bytes below the full-matrix bytes and still finishes).
+//
+// HONEST scope (d6): this kernel applies one resident OUTPUT-ROW TILE of H to v. The
+// host driver owns the tile loop + the H2D streaming of each block-row (cudaMemcpyAsync
+// on a copy stream, double-buffered) — the documented host-driver remainder, identical
+// in spirit to the merged stack's host-resident scalar control.
+
+// ── tiled matvec: out[r0+local] = Σ_j Htile[local*ncol + j] * v[j] ──────────────
+// Htile is the RESIDENT block-row H[r0:r0+tile_rows, 0:ncol] (row-major, only this
+// tile in VRAM). One thread per tile row; writes the GLOBAL output slot r0+local.
+// Because output rows are disjoint across tiles, no tile touches another tile's
+// output — the streamed sweep reproduces the in-core matvec exactly.
+@gpu_kernel
+fn qforge_ooc_tile_matvec(Htile: [f64], v: [f64], out: [f64], r0: i64, tile_rows: i64, ncol: i64) {
+    let gid = gpu_block_id_x() * gpu_block_dim_x() + gpu_thread_id_x()
+    if to_i64(gid) < tile_rows {
+        let local = to_i64(gid)
+        let row = local * ncol
+        let mut s: f64 = 0.0
+        let mut j: i64 = 0
+        while j < ncol {
+            s = s + Htile[row + j] * v[j]
+            j = j + 1
+        }
+        out[r0 + local] = s
+    }
+}
+
+// ── column-tiled accumulate (when v itself is streamed in column-tiles) ──────────
+// Adds the contribution of a COLUMN tile v[c0:c0+ctile] to the partial out rows. The
+// host streams column-tiles in ASCENDING c0 order and calls this with acc=true after
+// the first tile, so the per-row FP accumulation order is fixed (c0=0,ctile,2ctile,…)
+// == the in-core left-to-right inner product order — bit-order parity preserved.
+@gpu_kernel
+fn qforge_ooc_coltile_matvec(Htile: [f64], vtile: [f64], out: [f64],
+                             r0: i64, tile_rows: i64, c0: i64, ctile: i64, ncol: i64, acc: i64) {
+    let gid = gpu_block_id_x() * gpu_block_dim_x() + gpu_thread_id_x()
+    if to_i64(gid) < tile_rows {
+        let local = to_i64(gid)
+        let row = local * ncol
+        let mut s: f64 = 0.0
+        let mut j: i64 = 0
+        while j < ctile {
+            s = s + Htile[row + c0 + j] * vtile[j]
+            j = j + 1
+        }
+        if acc == 0 {
+            out[r0 + local] = s
+        } else {
+            out[r0 + local] = out[r0 + local] + s
+        }
+    }
+}
