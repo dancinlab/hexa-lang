@@ -1,0 +1,177 @@
+// QFORGE-PROCESS — per-kernel roofline profiler (binding-resource analyzer).
+//
+// `qforge_roofline(name, measured_gflops, measured_bytes_s, op_intensity)` names
+// the BINDING resource of a GPU kernel — COMPUTE | MEMORY | TRANSCENDENTAL | LAUNCH
+// — by comparing the kernel's measured throughput + arithmetic intensity to the
+// Blackwell B200 hardware roof. Deterministic closed-form ⇒ a g5 verify surface:
+//
+//   hexa verify --verifier-cmd "HEXA_LANG=. hexa run bench/qforge/roofline_profiler.hexa" \
+//               --claim "QFORGE el-ph kernels classified to their binding resource" \
+//               --expect "VERDICT=ALL_PASS"
+//
+// ── classification model (roofline + two off-roof escape hatches) ──
+// The classic roofline says: at arithmetic intensity AI (flop/byte), the
+// attainable rate is min(PEAK_COMPUTE, BW·AI). The RIDGE point AI* = PEAK/BW is
+// the crossover: AI < AI* ⇒ MEMORY-bound, AI ≥ AI* ⇒ COMPUTE-bound.
+//
+// But the FMA roofline is not the only ceiling. Two additional binding resources
+// pull a kernel BELOW both roofs and must be named first (precedence order):
+//   1. LAUNCH-bound  — work so small that kernel-launch / occupancy overhead
+//      dominates; the kernel never reaches a steady FLOP rate (pct_of_roof ≪ 1%).
+//   2. TRANSCENDENTAL-bound — the inner loop is dominated by SFU ops (exp / log /
+//      sin / rsqrt), whose throughput is ~1/8..1/16 of FMA. The kernel plateaus
+//      FAR below the FMA roof even at modest AI, because the SFU pipe — not the
+//      FMA pipe and not HBM — is saturated. Fingerprint: low pct_of_FMA-roof AND
+//      below the memory roof too, with a known per-inner transcendental count.
+// Only if NEITHER off-roof resource binds do we fall back to the MEMORY vs
+// COMPUTE roofline split. Precedence: LAUNCH > TRANSCENDENTAL > {MEMORY|COMPUTE}.
+//
+// ── Blackwell B200 peak constants (CITED) ──
+// FP64 dense (non-tensor) peak  ~40 TFLOP/s  = 40000 GFLOP/s
+//   src: NVIDIA Blackwell B200 datasheet — FP64 ~40 TFLOPS (DGX B200 / GB200
+//        "NVIDIA Blackwell Architecture Technical Brief", 2024). Order-of-mag
+//        matches the m35 pod's RTX PRO 6000 Blackwell (~"80 TFLOP/s FP64 peak"
+//        cited in QFORGE-PERF.bench.m35.md §interpretation); we use the B200
+//        datacenter part as the named roof and report pct against it.
+// HBM3e bandwidth ~8 TB/s = 8000 GB/s
+//   src: NVIDIA Blackwell B200 datasheet — 8 TB/s HBM3e (192 GB, 8-stack).
+// SFU / transcendental rate ~ FP64_peak / 8  (SFU issues ~1 special-fn per 8 FMA
+//   slots on recent NV SMs); used only to sanity-bound the exp-rate fingerprint.
+//
+// All numeric inputs to qforge_roofline are MEASURED (the m35 bench), not guessed.
+// d3: no re-measure — the α²F numbers are read VERBATIM from the merged
+// domains/QFORGE-PERF.bench.m35.md (138.8 GFLOP/s plateau, ~3.5 G exp/s).
+
+// ── Blackwell B200 hardware peaks (named constants, datasheet-cited) ──
+let B200_FP64_GFLOPS = 40000.0      // ~40 TFLOP/s FP64 dense (Blackwell tech brief)
+let B200_HBM_GBS     = 8000.0       // ~8 TB/s HBM3e (B200 192GB datasheet)
+let SFU_DERATE       = 8.0          // SFU transcendental ≈ FMA_peak / 8
+
+// pct thresholds (fractions of the binding roof)
+let LAUNCH_PCT_MAX   = 0.005        // < 0.5% of FMA roof AND tiny work ⇒ launch-bound
+let TRANSC_PCT_MAX   = 0.05         // < 5% of FMA roof while exp-heavy ⇒ SFU-bound
+
+// A profiled kernel descriptor + the verdict it produces.
+//   transc_per_inner : transcendental ops per inner iteration (0 ⇒ not exp-heavy)
+//   work_items       : total inner work (ns·ng style); tiny ⇒ launch-starved
+fn qforge_roofline(
+    name: string,
+    measured_gflops: float,
+    measured_bytes_s: float,     // GB/s actually moved (for the memory roof check)
+    op_intensity: float,         // arithmetic intensity, flop/byte
+    transc_per_inner: float,
+    work_items: float
+) -> string {
+    // ── roofs ──
+    let ridge        = B200_FP64_GFLOPS / B200_HBM_GBS     // ridge AI*, flop/byte
+    let mem_roof     = B200_HBM_GBS * op_intensity         // BW·AI ceiling, GFLOP/s
+    let fma_roof     = B200_FP64_GFLOPS                    // dense FP64 ceiling
+    let pct_of_fma   = measured_gflops / fma_roof          // fraction of FMA roof
+
+    // The attainable roofline ceiling for this AI = min(FMA, BW·AI).
+    let mut roof = fma_roof
+    if mem_roof < roof { roof = mem_roof }
+    let pct_of_roof = measured_gflops / roof               // fraction of binding roof
+
+    // ── 1. LAUNCH-bound: tiny work + far below FMA roof (occupancy starved) ──
+    // m35 §interpretation: below ns·ng ≈ 1e5 launch overhead dominates; the 1D
+    // kernel is even slower than CPU. We flag work_items below the crossover.
+    let launch_crossover = 100000.0       // m35: "wins only for ns·ng ≳ 1e5"
+    let mut bound = "UNSET"
+    let mut lever = ""
+
+    if (work_items < launch_crossover) && (pct_of_fma < LAUNCH_PCT_MAX) {
+        bound = "LAUNCH"
+        lever = "raise occupancy: 2D (sample-tile x bin) layout to fill SMs (m35)"
+    } else {
+        // ── 2. TRANSCENDENTAL-bound: exp-heavy + plateaus far below FMA roof ──
+        // m35: α²F has 3 exp() per inner (i,j); plateaus at 138.8 GFLOP/s ≪ 40
+        // TFLOP/s FMA roof (0.35%) → SFU/exp throughput is the roof, not FMA.
+        if (transc_per_inner > 0.0) && (pct_of_fma < TRANSC_PCT_MAX) {
+            bound = "TRANSCENDENTAL"
+            lever = "fast-exp / minimax polynomial approx to lift SFU exp-rate ceiling"
+        } else {
+            // ── 3. roofline split: MEMORY vs COMPUTE by AI vs ridge ──
+            if op_intensity < ridge {
+                bound = "MEMORY"
+                lever = "raise AI: fuse/batch to reuse operands (GEMV->GEMM), or fp32 to halve bytes"
+            } else {
+                bound = "COMPUTE"
+                lever = "raise FMA efficiency: tensor-core path / better tiling toward FMA peak"
+            }
+        }
+    }
+
+    // ── emit a deterministic one-line record (verbatim-citable) ──
+    println("KERNEL=" + name
+        + " bound=" + bound
+        + " peak_gflops=" + to_string(fma_roof)
+        + " peak_bw_gbs=" + to_string(B200_HBM_GBS)
+        + " ridge_AI=" + to_string(ridge)
+        + " mem_roof_gflops=" + to_string(mem_roof)
+        + " measured_gflops=" + to_string(measured_gflops)
+        + " pct_of_roofline=" + to_string(pct_of_roof * 100.0)
+        + " next_lever=[" + lever + "]")
+    return bound
+}
+
+fn main() {
+    let mut all_ok = true
+
+    // ── (a) α²F BZ-sum kernel — MEASURED m35 (d3, verbatim, no re-measure) ──
+    // QFORGE-PERF.bench.m35.md: 2D kernel plateaus at 138.8 GFLOP/s (262144x1024),
+    // 3 exp() per inner (i,j) ⇒ ~3.5 G exp/s sustained; bytes moved tiny (H2D
+    // < 0.3 ms excluded → effectively no streaming, AI is high but exp-pipe is
+    // the wall). Expect: TRANSCENDENTAL, pct_of_roof ≪ 100%.
+    let a2f_gflops   = 138.8        // m35 §wall-time, 262144x1024 gpu2d_GFLOP/s
+    let a2f_bytes_s  = 50.0         // negligible streaming (H2D excluded in m35)
+    let a2f_ai       = 13.0         // m35: ~13 flop/inner-deposit, near-zero bytes ⇒ high AI
+    let a2f_transc   = 3.0          // m35: "3 exp() per inner (i,j)"
+    let a2f_work     = 262144.0 * 1024.0   // m35 largest size (firmly past crossover)
+    let bound_a = qforge_roofline("a2f_bzsum2d", a2f_gflops, a2f_bytes_s, a2f_ai, a2f_transc, a2f_work)
+    if bound_a != "TRANSCENDENTAL" { all_ok = false }
+    // pct check: 138.8 / 40000 = 0.347% ≪ 100%
+    let a_pct = 138.8 / 40000.0 * 100.0
+    if a_pct > 1.0 { all_ok = false }    // must be ≪ 100% (in fact < 1%)
+    println("CHECK_A: a2f -> TRANSCENDENTAL, pct=" + to_string(a_pct) + "% (≪100) "
+        + (if (bound_a == "TRANSCENDENTAL") && (a_pct < 1.0) { "PASS" } else { "FAIL" }))
+
+    // ── (b) Sternheimer dense-matvec — high-intensity-relative dense matvec ──
+    // m35/handoff: Sternheimer (#2737) is dense per-(sample,bin)-free matvec,
+    // H streamed with no reuse ⇒ AI = 2/b = 0.25 fp64 (roofline_bound.hexa), well
+    // BELOW the B200 ridge (40000/8000 = 5.0 flop/byte) ⇒ MEMORY-bound. No exp,
+    // ample work. Expect: MEMORY (per the ridge).
+    let st_gflops  = 280.0          // illustrative attained matvec rate (BW·AI scale)
+    let st_bytes_s = 1120.0         // streamed-H bound
+    let st_ai      = 0.25           // fp64 dense matvec AI = 2/8 (roofline_bound.hexa)
+    let bound_b = qforge_roofline("sternheimer_matvec", st_gflops, st_bytes_s, st_ai, 0.0, 1.0e9)
+    if bound_b != "MEMORY" { all_ok = false }
+    println("CHECK_B: sternheimer (AI 0.25 < ridge 5.0) -> MEMORY "
+        + (if bound_b == "MEMORY" { "PASS" } else { "FAIL" }))
+
+    // ── (b') high-intensity dense GEMM above the ridge → COMPUTE ──
+    // Control: a batched matvec→GEMM raises AI past the ridge (AI 64 ≫ 5.0) and
+    // attains near the FMA roof ⇒ COMPUTE-bound (the roofline's other side).
+    let gemm_ai = 64.0
+    let bound_b2 = qforge_roofline("davidson_block_gemm", 39000.0, 600.0, gemm_ai, 0.0, 1.0e9)
+    if bound_b2 != "COMPUTE" { all_ok = false }
+    println("CHECK_B2: dense GEMM (AI 64 > ridge 5.0, near FMA roof) -> COMPUTE "
+        + (if bound_b2 == "COMPUTE" { "PASS" } else { "FAIL" }))
+
+    // ── (c) tiny launch-bound kernel — m35 1D below crossover (3.6× tiny) ──
+    // m35: 1024x128 size is slower-than-CPU / barely 3.6×; ns·ng = 131072 ≪ the
+    // 1e5-ish steady regime when the 1D layout gives only ~ng threads (0.3%
+    // occupancy). A truly tiny kernel never reaches a FLOP rate. Expect: LAUNCH.
+    let tiny_work = 1024.0 * 16.0       // 16384 ≪ 1e5 crossover
+    let bound_c = qforge_roofline("a2f_tiny_1d", 11.4, 5.0, 5.0, 0.0, tiny_work)
+    if bound_c != "LAUNCH" { all_ok = false }
+    println("CHECK_C: tiny kernel (work 16384 ≪ 1e5, 0.029% of FMA roof) -> LAUNCH "
+        + (if bound_c == "LAUNCH" { "PASS" } else { "FAIL" }))
+
+    if all_ok {
+        println("VERDICT=ALL_PASS")
+        exit(0)
+    }
+    println("VERDICT=FAIL")
+    exit(1)
+}

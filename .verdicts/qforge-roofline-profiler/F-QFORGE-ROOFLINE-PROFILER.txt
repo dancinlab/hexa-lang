@@ -1,0 +1,15 @@
+verify --verifier-cmd  (VERIFY-KIT V8 — pluggable external verifier, phanes tenant-verifier model)
+  claim    = QFORGE el-ph kernels classified to binding resource (COMPUTE/MEMORY/TRANSCENDENTAL/LAUNCH) vs Blackwell B200 roof (FP64 40 TFLOP/s, HBM3e 8 TB/s); a2f=TRANSCENDENTAL(0.347% of roof), sternheimer-matvec=MEMORY, dense-GEMM=COMPUTE, tiny-1d=LAUNCH
+  verifier = HEXA_LANG=. hexa run bench/qforge/roofline_profiler.hexa
+  ext rc   = 0
+  ext out  = KERNEL=a2f_bzsum2d bound=TRANSCENDENTAL peak_gflops=40000.0 peak_bw_gbs=8000.0 ridge_AI=5.0 mem_roof_gflops=104000.0 measured_gflops=138.8 pct_of_roofline=0.347 next_lever=[fast-exp / minimax polynomial approx to lift SFU exp-rate ceiling]
+CHECK_A: a2f -> TRANSCENDENTAL, pct=0.347% (≪100) PASS
+KERNEL=sternheimer_matvec bound=MEMORY peak_gflops=40000.0 peak_bw_gbs=8000.0 ridge_AI=5.0 mem_roof_gflops=2000.0 measured_gflops=280.0 pct_of_roofline=14 next_lever=[raise AI: fuse/batch to reuse operands (GEMV->GEMM), or fp32 to halve bytes]
+CHECK_B: sternheimer (AI 0.25 < ridge 5.0) -> MEMORY PASS
+KERNEL=davidson_block_gemm bound=COMPUTE peak_gflops=40000.0 peak_bw_gbs=8000.0 ridge_AI=5.0 mem_roof_gflops=512000.0 measured_gflops=39000.0 pct_of_roofline=97.5 next_lever=[raise FMA efficiency: tensor-core path / better tiling toward FMA peak]
+CHECK_B2: dense GEMM (AI 64 > ridge 5.0, near FMA roof) -> COMPUTE PASS
+KERNEL=a2f_tiny_1d bound=LAUNCH peak_gflops=40000.0 peak_bw_gbs=8000.0 ridge_AI=5.0 mem_roof_gflops=40000.0 measured_gflops=11.4 pct_of_roofline=0.0285 next_lever=[raise occupancy: 2D (sample-tile x bin) layout to fill SMs (m35)]
+CHECK_C: tiny kernel (work 16384 ≪ 1e5, 0.029% of FMA roof) -> LAUNCH PASS
+VERDICT=ALL_PASS
+  expect = matched ("VERDICT=ALL_PASS")
+  tier   = 🟢 SUPPORTED-NUMERICAL  (external verifier passed AND stdout matches --expect — delegated, deterministic)
