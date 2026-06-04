@@ -820,12 +820,25 @@ int _hx_own_sgemm_cm_launch(int tA, int tB, int m, int n, int k,
                                               alpha, A,(long long)lda, B,(long long)ldb,
                                               beta, C,(long long)ldc);
     } else if (want_wmma2 && skinny && !noshape) {
-        // Skinny LoRA GEMM under WMMA2 mode: use the right-sized tiled kernel.
-        static int sfired = 0; if (!sfired){sfired=1; fprintf(stderr,"[OWN-SGEMM-WMMA2-SKINNY-FIRED] skinny GEMM -> _hx_k_sgemm_cm_tiled (16x16, no wasted 128x64 tile)\n");}
-        _hx_k_sgemm_cm_tiled<<<grd,blk>>>(tA,tB,
-                                          (long long)m,(long long)n,(long long)k,
-                                          alpha, A,(long long)lda, B,(long long)ldb,
-                                          beta, C,(long long)ldc);
+        // Skinny LoRA GEMM under WMMA2 mode: use a right-sized small-grid kernel
+        // (no wasted 128×64 tile). Default = the 16×16 shared-mem tiled kernel —
+        // MEASURED best on the R=16 LoRA shapes (337 vs 240 steps/s @M8192 vs the
+        // naive one-thread-per-output kernel): even with a half-wasted 16-wide M
+        // tile, the shared-mem K-reuse wins because K is large (4096-8192).
+        // HEXA_OWN_GEMM_SKINNY_NAIVE=1 selects the naive kernel (measured slower).
+        if (getenv("HEXA_OWN_GEMM_SKINNY_NAIVE") && getenv("HEXA_OWN_GEMM_SKINNY_NAIVE")[0]) {
+            static int snfired = 0; if (!snfired){snfired=1; fprintf(stderr,"[OWN-SGEMM-WMMA2-SKINNY-FIRED] skinny GEMM -> _hx_k_sgemm_cm_v54 (naive)\n");}
+            _hx_k_sgemm_cm_v54<<<grd,blk>>>(tA,tB,
+                                            (long long)m,(long long)n,(long long)k,
+                                            alpha, A,(long long)lda, B,(long long)ldb,
+                                            beta, C,(long long)ldc);
+        } else {
+            static int stfired = 0; if (!stfired){stfired=1; fprintf(stderr,"[OWN-SGEMM-WMMA2-SKINNY-FIRED] skinny GEMM -> _hx_k_sgemm_cm_tiled (16x16, no wasted 128x64 tile)\n");}
+            _hx_k_sgemm_cm_tiled<<<grd,blk>>>(tA,tB,
+                                              (long long)m,(long long)n,(long long)k,
+                                              alpha, A,(long long)lda, B,(long long)ldb,
+                                              beta, C,(long long)ldc);
+        }
     } else if (getenv("HEXA_OWN_GEMM_WMMA") && getenv("HEXA_OWN_GEMM_WMMA")[0]) {
         static int wfired = 0; if (!wfired){wfired=1; fprintf(stderr,"[OWN-SGEMM-WMMA-FIRED] _hx_k_sgemm_cm_wmma (TF32 Tensor-Core)\n");}
         dim3 wblk(32); dim3 wgrd((unsigned)((m+15)/16),(unsigned)((n+15)/16));  // 1 warp / 16×16 C tile

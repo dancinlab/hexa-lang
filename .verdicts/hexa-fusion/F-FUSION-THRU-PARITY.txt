@@ -1,0 +1,133 @@
+F-FUSION-THRU-PARITY — HEXA-FUSION ③ throughput-parity: close the own-GEMM steps/s gap
+========================================================================================
+DATE: 2026-06-05
+GPU: NVIDIA RTX PRO 6000 Blackwell Workstation Edition (97887 MiB). vast H100-request
+     gave Blackwell again; nvcc 12.4 caps -arch=sm_90 -> own kernels run sm_90 PTX-JIT
+     to Blackwell, cuBLAS native. SAME-GPU ratios (all arms on this one pod) = valid.
+POD: vast 39477333 (ssh4.vast.ai:37332) — RENTED + DESTROYED this session.
+BRANCH: domain/hexa-fusion-thru-parity (base: #2708 LLM-default-util content @ c392187e4).
+DRIVER: self/native/hxqwen14b_llmstep_driver.cu (#include's the shipped hxqwen14b_cuda.cu
+        so the EXACT main WMMA2 kernel is measured — no drift). cuBLAS arm forced
+        CUBLAS_TF32_TENSOR_OP_MATH for a fair TF32-vs-TF32 compare.
+
+PRE-REGISTERED FALSIFIER (g5-HONEST)
+------------------------------------
+The CUTLASS-grade WMMA2 own-GEMM reaches cuBLAS-class util (84-89%) AND is only 1.13x off
+cuBLAS in ISOLATED-GEMM step-time, BUT the full LLM LoRA training step ran ~2.2x SLOWER
+steps/s (256 vs 563 @ M8192, R16, Blackwell). DIAGNOSE WHY, then TUNE. No parity claim
+without the measured ratio. If skinny-GEMM is fundamentally TC-unfriendly, say so.
+
+========================================================================================
+§1  PER-GEMM PROFILE (mode=pergemm, M=8192 K=4096 N=4096 R16, CUDA-event, 200 it/GEMM)
+========================================================================================
+The full LoRA step = fwd 2 GEMMs + bwd 5 GEMMs + glue. 5 of the 7 are SKINNY (R=16
+appears as an output dim OR as K). Per-GEMM ms/it:
+
+  GEMM                out(m,n)      k       cuBLAS    WMMA2-OLD(big-tile)   ratio
+  GEMM[0] fwd_tmp     (16,8192)     4096    0.11357   0.42746              3.8x SKINNY
+  GEMM[1] fwd_y       (4096,8192)   16      0.22307   0.15155              0.7x square (WMMA2 FASTER)
+  GEMM[2] bwd_u       (16,8192)     4096    0.10522   0.43040              4.1x SKINNY
+  GEMM[3] bwd_tmp     (16,8192)     4096    0.11404   0.42912              3.8x SKINNY
+  GEMM[4] bwd_dB      (16,4096)     8192    0.12112   0.68884              5.7x SKINNY
+  GEMM[5] bwd_dA      (4096,16)     8192    0.12029   0.94090              7.8x SKINNY  <- worst
+  GEMM[6] bwd_dx      (4096,8192)   16      0.19773   0.15126              0.8x square (WMMA2 FASTER)
+  ------------------------------------------------------------------------
+  SUM 7-GEMM                                0.99504   3.21953              3.2x
+
+DIAGNOSED BOTTLENECK (measured, not just analyzed):
+  (1) SKINNY-GEMM TILE WASTE = the dominant cause. The two SQUARE GEMMs (fwd_y, bwd_dx)
+      are already FASTER than cuBLAS under WMMA2 (0.15 vs 0.22/0.20 ms). The ENTIRE gap is
+      the 5 skinny GEMMs where the 128x64x32 WMMA2 tile is launched over a 16-tall (or
+      16-wide) output -> >=75% of every threadblock + half the BK K-tile wasted. cuBLAS
+      handles skinny shapes well (0.10-0.12 ms); the big-tile WMMA2 is the WRONG TOOL for a
+      skinny GEMM (3.8x-7.8x slower). 5x0.12 ms (cuBLAS) -> 5x ~0.5 ms (WMMA2) IS the gap.
+  (2) PER-CALL cudaDeviceSynchronize() in _hx_own_sgemm_cm_launch serialized all 7 GEMMs +
+      glue every step (7 host<->device round-trips/step the async cuBLAS arm never pays).
+      Secondary on THIS workload (each skinny GEMM is heavy so launch latency is small vs
+      GEMM time) but a real cost (+~12 steps/s alone @M8192).
+
+  HONEST: the skinny LoRA GEMMs ARE somewhat TC-unfriendly (tiny output dim wastes the
+  TC tile), but they are NOT fundamentally unfixable — the fix is to NOT use the big TC
+  tile on them. A right-sized small-tile (16x16 shared) path recovers most of the loss.
+
+========================================================================================
+§2  TUNE APPLIED (self/native/hxqwen14b_cuda.cu, _hx_own_sgemm_cm_launch)
+========================================================================================
+(a) DROP the per-call cudaDeviceSynchronize() -> non-blocking cudaGetLastError() launch
+    check. The 7 GEMMs + glue now queue async like cuBLAS; the caller syncs once at the
+    step boundary (the glue/CE readback already does). Env HEXA_OWN_GEMM_SYNC=1 restores
+    the old per-call sync for debugging.
+(b) SHAPE-DISPATCH: a "skinny" GEMM (output m<HXG_BM=128 OR n<HXG_BN=64 — i.e. every R=16
+    LoRA GEMM) falls back to the 16x16 shared-mem tiled kernel (_hx_k_sgemm_cm_tiled),
+    which launches a right-sized grid with NO wasted 128x64 tile. Only the big SQUARE
+    GEMMs use WMMA2 (where it is already >= cuBLAS). Env HEXA_OWN_GEMM_NOSHAPE=1 disables.
+    Skinny-fallback choice MEASURED: tiled (16x16) beats naive one-thread-per-output
+    (337 vs 240 steps/s @M8192) because K is large (4096-8192) so shared-mem K-reuse wins
+    even with a half-wasted 16-wide M tile. Env HEXA_OWN_GEMM_SKINNY_NAIVE=1 = naive (slower).
+All gates: env-gated, OFF (default cuBLAS) = byte-identical. Correctness contract unchanged.
+
+WMMA2-TUNED per-GEMM (pergemm, same shapes): SUM 7-GEMM 3.22 -> 2.15 ms (skinny GEMMs
+  drop: dA 0.94->0.44, dB 0.69->0.43, tmp/u 0.43->0.33). Still 2-4x off cuBLAS on skinny
+  (the simple 16x16 tiled kernel is not split-K; cuBLAS uses split-K on tiny-output/large-K)
+  -> a residual gap remains; see §5 honest scope.
+
+========================================================================================
+§3  STEPS/SEC — cuBLAS vs WMMA2-BEFORE vs WMMA2-TUNED (mode=util, sustained 12s loop)
+========================================================================================
+  M=8192  K=N=4096 R16:
+    cuBLAS                563.3 steps/s   (1.00x ref)
+    WMMA2-OLD             251.1 steps/s   2.24x SLOWER  <- reproduces the brief's ~2.2x (256)
+    WMMA2-TUNED           336.4 steps/s   1.67x slower
+  M=16384 K=N=4096 R16:
+    cuBLAS                276.7 steps/s   (1.00x ref)
+    WMMA2-OLD             129.3 steps/s   2.14x SLOWER
+    WMMA2-TUNED           174.1 steps/s   1.59x slower
+
+  GAP CLOSED (M=8192): 2.24x -> 1.67x. Closed (2.24-1.67)/(2.24-1.00) = 46% of the gap.
+  GAP CLOSED (M=16384): 2.14x -> 1.59x. Closed (2.14-1.59)/(2.14-1.00) = 48% of the gap.
+
+  ATTRIBUTION (M=8192, isolating each fix):
+    shape-dispatch ALONE (sync ON):     251 -> 328 steps/s  (+77, DOMINANT)
+    no-sync ALONE (NOSHAPE big-tile):   251 -> 263 steps/s  (+12)
+    BOTH (the tune):                    251 -> 336 steps/s
+
+========================================================================================
+§4  CORRECTNESS (mode=gate, WMMA2-tuned own-GEMM vs cuBLAS-TF32 oracle, 1 process)
+========================================================================================
+  M=64 K=80 N=96 R8 (all-skinny -> tiled path):
+    y/dA/dB/dx  rel_RMS = 0.000e+00  max|D| = 0.000e+00  -> PASS (bit-identical: tiled
+                path is plain fp32, no TF32 rounding on these shapes)
+  M=512 K=4096 N=4096 R16 (square GEMMs go through WMMA2-TF32):
+    y   rel_RMS=2.953e-04  max|D|=2.085e-04  -> PASS
+    dA  rel_RMS=1.303e-06  max|D|=1.729e-06  -> PASS
+    dB  rel_RMS=1.354e-06  max|D|=1.818e-06  -> PASS
+    dx  rel_RMS=2.956e-04  max|D|=5.981e-06  -> PASS
+  ALL rel_RMS <= 3e-4 << 3e-3 TF32 bar. GATE-VERDICT: PASS.
+
+  CONVERGENCE (mode=conv, 40 real LoRA SGD steps, M256 K512 N512 R16):
+    cuBLAS      CE step0=6.241016 step20=0.197936 step39=0.030864
+    WMMA2-TUNED CE step0=6.241016 step20=0.197940 step39=0.030863
+    step-0 bit-identical, final |dCE| ~1e-6 -> NO divergence, NO TF32 drift. PASS.
+
+========================================================================================
+§5  FINDING (honest scope)
+========================================================================================
+DIAGNOSED: the 2.2x full-step steps/s gap (despite 1.13x GEMM-iso) is NOT the dense GEMM
+throughput — it is the 5 SKINNY R=16 LoRA GEMMs, where the 128x64 WMMA2 tile wastes >=75%
+of every threadblock (output dim = R = 16). The 2 SQUARE GEMMs are already faster than
+cuBLAS under WMMA2. A per-call cudaDeviceSynchronize was a secondary serializer.
+
+TUNED: shape-dispatch skinny->16x16 tiled + drop per-call sync. Gap 2.24x -> 1.67x @M8192
+(2.14x -> 1.59x @M16384) = ~46-48% of the gap closed, correctness PASS (rel-RMS <= 3e-4,
+CE descent bit-identical), zero default behavior change (env-gated).
+
+NOT FULL PARITY (honest): WMMA2-tuned is still ~1.6-1.7x slower steps/s. The residual is
+the skinny GEMMs themselves: cuBLAS runs SPLIT-K on tiny-output/large-K GEMMs (dA/dB have
+output 16 with K=8192) — our 16x16 tiled kernel does a single sequential K-reduction per
+output, so it cannot match cuBLAS on these shapes. Closing the last ~0.6x would need a
+split-K (or stream-K) skinny kernel — a real but separable kernel-engineering step, not
+a tuning knob. The brief's "small-tile / non-TC path for skinny GEMMs" diagnosis is
+CONFIRMED CORRECT and is exactly what closed ~half the gap; the rest needs split-K.
+
+VERDICT: 🟢 ~46-48% of the 2.2x throughput gap CLOSED, byte-eq/TF32-correct, root cause
+diagnosed and measured. Residual gap = skinny-GEMM split-K (named, not closed).
