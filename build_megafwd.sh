@@ -24,19 +24,28 @@ sys.stdout.write(src[start:end])
 PY
 echo "=== extracted $(wc -l < gemm_kernels_extracted.cuh) lines, $(grep -c '__global__' gemm_kernels_extracted.cuh) kernels ==="
 
+# Arch = the device's real compute capability (sm_90 H100, sm_100 B200, …).
+# Requires a toolkit that knows the arch: CUDA 12.8+ for sm_100 (B200). The build
+# script picks up nvcc from PATH (CUDA 12.8 installed at /usr/local/cuda-12.8).
 CC=$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader | head -1 | tr -d '.')
-ARCH=90; [ "$CC" -lt 90 ] && ARCH=$CC
-echo "building with -arch=sm_${ARCH}"
+ARCH=$CC
+# nvcc that predates the device arch caps at sm_90 (PTX-JIT). Detect support.
+if ! nvcc --list-gpu-arch 2>/dev/null | grep -q "compute_${ARCH}"; then
+  echo "note: nvcc does not list compute_${ARCH}; falling back to sm_90 (PTX-JIT on newer HW)"
+  ARCH=90
+fi
+echo "building with -arch=sm_${ARCH}  (device CC=${CC})"
 
 # -rdc=true required for cooperative groups grid.sync() (separable compilation).
-nvcc -O3 -arch=sm_${ARCH} -rdc=true -lcublas -lcudadevrt \
+# -Xptxas -v emits the per-kernel register/smem budget (the cooperative co-
+# residency wall) into the build log.
+nvcc -O3 -arch=sm_${ARCH} -rdc=true -Xptxas -v -lcublas -lcudadevrt \
     megafwd_driver.cu -o megafwd_driver 2>&1 | tee build_megafwd.log
 if [ ! -x ./megafwd_driver ]; then echo "BUILD FAILED"; exit 1; fi
 
 # Report register/smem budget (the cooperative co-residency wall).
 echo "=== ptxas register/smem budget for _hx_k_clm_megafwd ==="
-nvcc -O3 -arch=sm_${ARCH} -rdc=true -Xptxas -v -c megafwd_driver.cu -o /dev/null 2>&1 \
-    | grep -A2 "_hx_k_clm_megafwd" | head -8 || true
+grep -iE "_hx_k_clm_megafwd|registers|smem" build_megafwd.log | head -12 || true
 
 echo
 echo "=== RUN: eager-only (no megafwd) sanity ==="
