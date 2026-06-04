@@ -1,0 +1,209 @@
+// HEXA Standard Library — qforge/sscha
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// QFORGE NOVEL frontier — anharmonic phonon renormalization via the
+// Self-Consistent Harmonic Approximation (SSCHA).
+//
+// ── WHY (d6 first-principles, NOT ML) ─────────────────────────────────────
+//   Harmonic DFPT (qforge/dfpt_response) gives ω at the T=0 equilibrium
+//   curvature ∂²V/∂R²|₀.  For HIGH-Tc HYDRIDES (CaH6, H3S, LaH10) the light
+//   H mass + shallow anharmonic wells make the quantum/thermal ionic
+//   fluctuations LARGE — the lattice never sits at the bare minimum.  The
+//   physical (measured) phonon frequency is the curvature AVERAGED over the
+//   ionic probability cloud ⟨∂²V/∂R²⟩, which renormalizes ω by tens of K of
+//   Tc (harmonic DFPT is KNOWN to mis-predict CaH6/H3S Tc — Errea 2015/2020,
+//   Wang-Ma 2012).  SSCHA is the variational machinery that computes that
+//   average self-consistently.
+//
+// ── THE SSCHA FIXED POINT ─────────────────────────────────────────────────
+//   Trial Gaussian density ρ_Φ(R) ∝ exp(−½ (R−R₀)ᵀ Φ_aux M (R−R₀) / ⟨...⟩),
+//   parameterized by the AUXILIARY force-constant Φ (the variational handle).
+//   Minimizing the SSCHA free energy F[Φ] = ⟨V⟩_ρ + ½ Tr(ln ρ-entropy) − TS
+//   makes the auxiliary Φ equal the GAUSSIAN-AVERAGED bare curvature:
+//
+//       Φ_renorm = ⟨ ∂²V/∂R² ⟩_{ρ_Φ}                                    (★)
+//
+//   For one mode (mass m, displacement u) the curvature average closes:
+//       Φ_renorm = m·ω₀² + 3·g·⟨u²⟩_Φ        (quartic V = ½mω₀²u² + ¼ g u⁴)
+//   and the Gaussian spread of mode Ω = sqrt(Φ/m) is the harmonic-oscillator
+//   value (bosonic, T-dependent):
+//       ⟨u²⟩_Φ = (ħ / (2 m Ω)) · coth( ħΩ / (2 kT) )                    (†)
+//   Self-consistency: plug (†) into (★), iterate Φ → ω_renorm = sqrt(Φ/m).
+//   g>0 (hard quartic) HARDENS the mode (Ω > ω₀); higher T grows ⟨u²⟩ → more
+//   renormalization.  This brick implements (★)+(†) as a GENERIC fixed point.
+//
+// ── HONESTY SCOPE (d6 — @L-honesty) ───────────────────────────────────────
+//   A full AB-INITIO SSCHA needs the many-body ⟨∂²V/∂R²⟩ average sampled from
+//   the DFT engine (importance-sample R from ρ_Φ → run DFT forces/energies →
+//   average the Hessian).  That force-sampling is the REMAINING ENGINE HOOK,
+//   named explicitly below as `curvature_average` (caller-supplied, d4).  This
+//   module ships the SELF-CONSISTENCY MACHINERY validated on a MODEL
+//   anharmonic potential with a KNOWN SSCHA answer — it does NOT fabricate a
+//   real CaH6/H3S shift (that requires the DFT hook + a paid el-ph campaign).
+//   The selftest exercises the closed-form quartic curvature average so the
+//   loop's correctness (limits · sign · T-trend · F-monotone) is g5-verified.
+//
+// reuse (d19): same Gaussian-average / fixed-point structure the harmonic
+//   qforge/dfpt_response Φ-assembly produces — SSCHA wraps it in the ⟨·⟩_ρ
+//   self-consistency.  ω_renorm feeds qforge_dynmat → qforge_phonons → tc
+//   exactly like a harmonic Φ (drop-in renormalized force constant).
+
+// ── physical constants (atomic-ish reduced units; see selftest) ────────────
+//   The loop is unit-agnostic: caller passes ħ, k_B in a consistent system.
+//   Defaults below are the reduced units used by the model selftest (ħ=1,
+//   k_B=1, m=1) so the closed-form answer is exact and engine-independent.
+
+// SSCHA result bundle.
+pub struct SschaResult {
+    omega_renorm: [float],   // renormalized ω(q,ν) per mode (sqrt(Φ/m))
+    phi_renorm: [float],     // converged auxiliary force constants Φ (per mode)
+    free_energy: float,      // final SSCHA free energy F[Φ] (sum over modes)
+    free_energy_path: [float], // F[Φ] at each iteration (monotone-decrease witness)
+    iters: int,              // self-consistent iterations taken
+    converged: bool,         // |Δω| < tol on every mode
+    max_domega: float        // max |Δω| at the final step
+}
+
+// coth(x) via builtin exp — coth(x) = (e^x + e^-x)/(e^x − e^-x).
+// Guard the x→0 (high-T / soft-mode) limit: coth(x) ≈ 1/x + x/3 for small x,
+// which keeps ⟨u²⟩ = (ħ/2mΩ)·coth → kT/(mΩ²) classical limit finite.
+fn sscha_coth(x: float) -> float {
+    let ax = if x < 0.0 { -x } else { x }
+    if ax < 1.0e-6 {
+        // Laurent series: coth(x) = 1/x + x/3 − ... (preserve sign via x not ax)
+        return 1.0 / x + x / 3.0
+    }
+    let ep = exp(x)
+    let em = exp(-x)
+    return (ep + em) / (ep - em)
+}
+
+// ── ⟨u²⟩ for a single mode of (auxiliary) frequency Ω at temperature T ──────
+//   Quantum harmonic-oscillator mean-square displacement (bosonic occupation):
+//       ⟨u²⟩ = (ħ / (2 m Ω)) · coth( ħ Ω / (2 k_B T) )
+//   T→0: coth→1 → ⟨u²⟩ = ħ/(2mΩ) (zero-point).  T→∞: → k_BT/(mΩ²) (classical).
+//   This IS the Gaussian spread of the SSCHA trial density ρ_Φ for that mode.
+pub fn sscha_msd(omega: float, m: float, T: float, hbar: float, kB: float) -> float {
+    if omega <= 0.0 { return 0.0 }   // imaginary/zero mode → no Gaussian spread defined here
+    let zpt = hbar / (2.0 * m * omega)
+    if T <= 0.0 {
+        return zpt              // pure zero-point
+    }
+    let arg = hbar * omega / (2.0 * kB * T)
+    return zpt * sscha_coth(arg)
+}
+
+// ── per-mode SSCHA free energy F[Φ] (vibrational, one mode) ─────────────────
+//   F = (ħΩ/2) + kT·ln(1 − e^{−ħΩ/kT})  [harmonic free energy of trial Ω]
+//       + ⟨V − V_harm(Ω)⟩_ρ              [anharmonic correction over the cloud]
+//   For the quartic model V = ½mω₀²u² + ¼ g u⁴ and trial harmonic ½mΩ²u²:
+//       ⟨V⟩  = ½ m ω₀² ⟨u²⟩ + ¾ g ⟨u²⟩²        (⟨u⁴⟩ = 3⟨u²⟩² for a Gaussian)
+//       ⟨V_harm(Ω)⟩ = ½ m Ω² ⟨u²⟩
+//   The SSCHA free energy is variationally minimized at the fixed point (★);
+//   its monotone decrease over the loop is the convergence witness (selftest d).
+fn sscha_free_energy_quartic(omega: float, m: float, omega0: float, g: float,
+                             T: float, hbar: float, kB: float) -> float {
+    let msd = sscha_msd(omega, m, T, hbar, kB)
+    // trial harmonic vibrational free energy
+    let mut f_harm = 0.5 * hbar * omega          // zero-point
+    if T > 0.0 {
+        let x = hbar * omega / (kB * T)
+        // ln(1 − e^{-x}); guard x large → e^{-x}→0 → ln(1)→0
+        let e = exp(-x)
+        if e < 1.0 { f_harm = f_harm + kB * T * log(1.0 - e) }
+    }
+    // anharmonic correction ⟨V − V_harm(Ω)⟩ over the Gaussian cloud
+    let v_full = 0.5 * m * omega0 * omega0 * msd + 0.75 * g * msd * msd
+    let v_harm = 0.5 * m * omega * omega * msd
+    return f_harm + (v_full - v_harm)
+}
+
+// ── public API: SSCHA self-consistent frequency renormalization ─────────────
+//
+//   GENERIC fixed-point loop (d4 — one path, caller supplies the physics):
+//     curvature_average(omega_aux, msd) -> [float]
+//         the ⟨∂²V/∂R²⟩ AVERAGE over the trial Gaussian of current aux Ω.
+//         Returns the renormalized Φ per mode.  THIS IS THE AB-INITIO HOOK:
+//           · model selftest supplies the closed-form quartic Φ = mω₀² + 3g⟨u²⟩
+//           · real CaH6/H3S supplies the DFT-sampled ⟨Hessian⟩ over ρ_Φ
+//         (named-remaining engine hook per d6 / @L-honesty — see header).
+//   free_energy_of(omega_aux, msd) -> float
+//         SSCHA free energy F[Φ] of the trial state — SAME Gaussian cloud.  The
+//         loop records F at each step into free_energy_path so monotone-decrease
+//         is a property of THIS machinery (not the harness).  Model caller =
+//         sscha_free_energy_quartic; the DFT hook = variational F from the
+//         sampled energies (named-remaining engine hook, d6).
+//
+//   harmonic_omega : starting (bare-curvature) ω per mode — the DFPT result.
+//   force_const    : bare harmonic Φ per mode (= m·ω₀²) — initial aux + the
+//                    closed-form caller reads ω₀ from it.  (Carried for the
+//                    free-energy bookkeeping + the harmonic-limit check.)
+//   masses         : mode mass per mode (reduced/effective).
+//   T              : temperature (same units as kB·T below).
+//   hbar,kB        : ħ and k_B in the caller's unit system (reduced: 1.0,1.0).
+//   tol/max_iter   : |Δω| convergence + iteration cap.
+//
+//   Returns SschaResult{ omega_renorm, phi_renorm, free_energy,
+//                        free_energy_path, iters, converged, max_domega }.
+pub fn qforge_sscha_freq(harmonic_omega: [float], force_const: [float],
+                         masses: [float], T: float,
+                         curvature_average, free_energy_of,
+                         hbar: float, kB: float,
+                         tol: float, max_iter: int) -> SschaResult {
+    let nmode = harmonic_omega.len()
+    // aux frequency Ω starts at the harmonic ω (T=0 bare curvature).
+    let mut omega = []
+    let mut phi = []
+    let mut i0 = 0
+    while i0 < nmode { omega.push(harmonic_omega[i0]) ; phi.push(force_const[i0]) ; i0 = i0 + 1 }
+    let mut fe_path = []
+    let mut it = 0
+    let mut max_dw = 0.0
+    let mut conv = false
+    while it < max_iter {
+        // (1) ⟨u²⟩ per mode at the current aux Ω.
+        let mut msd = []
+        let mut mi = 0
+        while mi < nmode {
+            msd.push(sscha_msd(omega[mi], masses[mi], T, hbar, kB))
+            mi = mi + 1
+        }
+        // (1b) record SSCHA free energy F[Φ] of the CURRENT trial state — the
+        //   loop owns the monotone-decrease witness (free_energy_of = model or
+        //   DFT hook, d4/d6). Recorded BEFORE the update so path[0] = harmonic.
+        fe_path.push(free_energy_of(omega, msd))
+        // (2) GAUSSIAN-AVERAGED curvature ⟨∂²V/∂R²⟩ → new Φ (caller / DFT hook).
+        let phi_new = curvature_average(omega, msd)
+        // (3) update aux Ω = sqrt(Φ/m); track max |Δω|.
+        max_dw = 0.0
+        let mut mj = 0
+        while mj < nmode {
+            phi[mj] = phi_new[mj]
+            let mut w = 0.0
+            if phi_new[mj] > 0.0 { w = sqrt(phi_new[mj] / masses[mj]) }
+            let dw = if w > omega[mj] { w - omega[mj] } else { omega[mj] - w }
+            if dw > max_dw { max_dw = dw }
+            omega[mj] = w
+            mj = mj + 1
+        }
+        it = it + 1
+        if max_dw < tol { conv = true ; break }
+    }
+    // record F[Φ] of the FINAL converged trial state (closes the monotone path).
+    let mut msd_f = []
+    let mut mf = 0
+    while mf < nmode { msd_f.push(sscha_msd(omega[mf], masses[mf], T, hbar, kB)) ; mf = mf + 1 }
+    let f_final = free_energy_of(omega, msd_f)
+    fe_path.push(f_final)
+    return SschaResult {
+        omega_renorm: omega,
+        phi_renorm: phi,
+        free_energy: f_final,
+        free_energy_path: fe_path,
+        iters: it,
+        converged: conv,
+        max_domega: max_dw
+    }
+}
