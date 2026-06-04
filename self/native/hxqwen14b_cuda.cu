@@ -535,17 +535,131 @@ __global__ void _hx_k_sgemm_cm_tiled(int tA, int tB, long long M, long long N, l
         C[row + col*ldc] = alpha * acc + beta * prev;
     }
 }
+// ═════════════════════════════════════════════════════════════════════
+// Phase 1b-2 — REGISTER-TILED variant of _hx_k_sgemm_cm_v54. SAME col-major
+// signature/semantics + transpose handling (faithful to cublasSgemm), but
+// each thread computes a TM×TN micro-tile of C accumulated in REGISTERS,
+// staging a BM×BK panel of op(A) and a BK×BN panel of op(B) into __shared__
+// per K-step. This raises arithmetic intensity (each shared element fuels
+// TM or TN FMAs from registers, vs 1 in the single-tile kernel) → pushes the
+// kernel from memory-bound toward compute-bound. NOT bit-identical to cuBLAS
+// (accumulation order differs) — cuBLAS stays a correctness ORACLE (fp32 tol).
+// Block-tile BM×BN, depth BK; thread block = (BN/TN)×(BM/TM) threads. Selected
+// at launch via HEXA_OWN_GEMM_REG (precedence REG > TILED > naive). Bounds-
+// guarded on M/N/K edges (LoRA shapes are not all multiples of the tile).
+// ═════════════════════════════════════════════════════════════════════
+#define RBM 64
+#define RBN 64
+#define RBK 8
+#define RTM 8
+#define RTN 8
+// thread block: (RBN/RTN) x (RBM/RTM) = 8 x 8 = 64 threads
+__global__ void _hx_k_sgemm_cm_regtiled(int tA, int tB, long long M, long long N, long long K,
+                                        float alpha, const float* A, long long lda,
+                                        const float* B, long long ldb,
+                                        float beta, float* C, long long ldc) {
+    __shared__ float As[RBK][RBM];   // op(A) panel: [k-in-tile][row-in-tile]
+    __shared__ float Bs[RBK][RBN];   // op(B) panel: [k-in-tile][col-in-tile]
+
+    const long long blockRow = (long long)blockIdx.x * RBM;  // first C row of this block tile
+    const long long blockCol = (long long)blockIdx.y * RBN;  // first C col of this block tile
+
+    // This thread owns micro-tile at (threadRow*RTM .. +RTM, threadCol*RTN .. +RTN)
+    const int tIdx     = threadIdx.x;                 // 0 .. (RBM/RTM * RBN/RTN - 1)
+    const int threadCol = tIdx / (RBM / RTM);         // 0 .. RBN/RTN-1
+    const int threadRow = tIdx % (RBM / RTM);         // 0 .. RBM/RTM-1
+
+    float acc[RTM][RTN];
+    #pragma unroll
+    for (int a = 0; a < RTM; a++)
+        #pragma unroll
+        for (int b = 0; b < RTN; b++) acc[a][b] = 0.0f;
+
+    float regA[RTM];
+    float regB[RTN];
+
+    const int nThreads = (RBM / RTM) * (RBN / RTN);   // 64
+    for (long long t = 0; t < K; t += RBK) {
+        // Cooperative load of the BM×BK op(A) panel into As[RBK][RBM] (transpose-aware).
+        // RBM*RBK = 512 elements, nThreads=64 → 8 loads/thread.
+        #pragma unroll
+        for (int li = tIdx; li < RBM * RBK; li += nThreads) {
+            int kk = li / RBM;                 // 0..RBK-1 (k within tile)
+            int rr = li % RBM;                 // 0..RBM-1 (row within tile)
+            long long grow = blockRow + rr;    // global C row = op(A) row i
+            long long gk   = t + kk;           // global k
+            float v = 0.0f;
+            if (grow < M && gk < K)
+                v = tA ? A[gk + grow*lda] : A[grow + gk*lda];  // op(A)[grow,gk] col-major
+            As[kk][rr] = v;
+        }
+        // Cooperative load of the BK×BN op(B) panel into Bs[RBK][RBN] (transpose-aware).
+        #pragma unroll
+        for (int li = tIdx; li < RBK * RBN; li += nThreads) {
+            int kk = li / RBN;                 // 0..RBK-1 (k within tile)
+            int cc = li % RBN;                 // 0..RBN-1 (col within tile)
+            long long gcol = blockCol + cc;    // global C col = op(B) col j
+            long long gk   = t + kk;           // global k
+            float v = 0.0f;
+            if (gk < K && gcol < N)
+                v = tB ? B[gcol + gk*ldb] : B[gk + gcol*ldb];  // op(B)[gk,gcol] col-major
+            Bs[kk][cc] = v;
+        }
+        __syncthreads();
+
+        // Compute over this BK slab: each thread does RTM×RTN FMAs per k.
+        #pragma unroll
+        for (int kk = 0; kk < RBK; kk++) {
+            #pragma unroll
+            for (int a = 0; a < RTM; a++) regA[a] = As[kk][threadRow * RTM + a];
+            #pragma unroll
+            for (int b = 0; b < RTN; b++) regB[b] = Bs[kk][threadCol * RTN + b];
+            #pragma unroll
+            for (int a = 0; a < RTM; a++)
+                #pragma unroll
+                for (int b = 0; b < RTN; b++)
+                    acc[a][b] += regA[a] * regB[b];
+        }
+        __syncthreads();
+    }
+
+    // Write back the RTM×RTN micro-tile with alpha/beta, edge-guarded.
+    #pragma unroll
+    for (int a = 0; a < RTM; a++) {
+        long long crow = blockRow + threadRow * RTM + a;
+        if (crow >= M) continue;
+        #pragma unroll
+        for (int b = 0; b < RTN; b++) {
+            long long ccol = blockCol + threadCol * RTN + b;
+            if (ccol >= N) continue;
+            float prev = (beta != 0.0f) ? C[crow + ccol*ldc] : 0.0f;
+            C[crow + ccol*ldc] = alpha * acc[a][b] + beta * prev;
+        }
+    }
+}
 // Host launcher for the own-GEMM kernel — extern "C" so the gcc-compiled
 // hxqwen14b.c TU (LoRA fwd/bwd) can call it. tA/tB are 1 if op==T else 0.
 // Returns 0 on success, nonzero on a CUDA launch/sync error.
-// HEXA_OWN_GEMM_TILED (set+non-empty) selects the shared-mem tiled kernel;
-// otherwise the naive one-thread-per-output kernel. The outer HEXA_OWN_GEMM
-// gate (in the shims) still chooses own-vs-cuBLAS; this only picks tiled-vs-naive
-// WITHIN the own path. Block is always 16×16, grid covers (M,N) in 16-tiles.
+// Kernel selection (within the own path; the outer HEXA_OWN_GEMM gate chooses
+// own-vs-cuBLAS): precedence HEXA_OWN_GEMM_REG > HEXA_OWN_GEMM_TILED > naive.
+//   REG   → _hx_k_sgemm_cm_regtiled  (64×64 block, 8×8 register micro-tile)
+//   TILED → _hx_k_sgemm_cm_tiled     (16×16 single shared-mem tile)
+//   else  → _hx_k_sgemm_cm_v54       (naive one-thread-per-output)
 int _hx_own_sgemm_cm_launch(int tA, int tB, int m, int n, int k,
                             float alpha, const float* A, int lda,
                             const float* B, int ldb,
                             float beta, float* C, int ldc) {
+    if (getenv("HEXA_OWN_GEMM_REG") && getenv("HEXA_OWN_GEMM_REG")[0]) {
+        static int rfired = 0; if (!rfired){rfired=1; fprintf(stderr,"[OWN-SGEMM-REG-FIRED] _hx_k_sgemm_cm_regtiled\n");}
+        dim3 rblk((RBM/RTM)*(RBN/RTN));   // 64 threads, 1-D
+        dim3 rgrd((unsigned)((m+RBM-1)/RBM),(unsigned)((n+RBN-1)/RBN));
+        _hx_k_sgemm_cm_regtiled<<<rgrd,rblk>>>(tA,tB,
+                                               (long long)m,(long long)n,(long long)k,
+                                               alpha, A,(long long)lda, B,(long long)ldb,
+                                               beta, C,(long long)ldc);
+        cudaError_t e = cudaDeviceSynchronize();
+        return (e==cudaSuccess) ? 0 : (int)e;
+    }
     dim3 blk(16,16); dim3 grd((unsigned)((m+15)/16),(unsigned)((n+15)/16));
     if (getenv("HEXA_OWN_GEMM_TILED") && getenv("HEXA_OWN_GEMM_TILED")[0]) {
         static int tfired = 0; if (!tfired){tfired=1; fprintf(stderr,"[OWN-SGEMM-TILED-FIRED] _hx_k_sgemm_cm_tiled\n");}
