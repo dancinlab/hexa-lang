@@ -1,0 +1,682 @@
+// HEXA Standard Library — qforge/pw_frontend
+//
+// @version 0.1.0
+// @capabilities [parse, fs, pure]
+//
+// KEYSTONE — the QFORGE PW FRONT-END ADAPTER: `deck-dir → QforgeDeck`.
+//
+// This is the named-remaining migration blocker called out in qforge_run.hexa's
+// header (@L5): the atoms→UPF→PW-SCF front-end that MATERIALIZES the bundle
+// `qforge_run` (PR#2742) consumes. `qforge_run(h_apply, deck)` today takes a
+// matrix-free H closure + a QforgeDeck directly — the boundary every QFORGE
+// QE-cross-val starts from. The MISSING piece, until now, was the stage that:
+//
+//   ① reads a QE-style deck DIR (scf.in / vc-relax.in geometry + UPF pseudos),
+//   ② builds the plane-wave basis (ecut → G-vectors),
+//   ③ assembles the matrix-free KS H-apply
+//        H|ψ⟩ = (−½∇² + V_loc + V_nl[UPF] + V_H[ρ] + V_xc[ρ])|ψ⟩,
+//   ④ runs the SCF density loop → converged ρ, ψ, ε,
+//   ⑤ EMITS a QforgeDeck (the SCF half) ready for qforge_run.
+//
+// ── d3/d19 REUSE (zero new physics) ──────────────────────────────────────────
+//   This module RE-DRIVES the proven QFORGE PW bricks — it implements NO new
+//   physics. It is a DECK-DIR-DRIVEN composition of:
+//     • upf.upf_parse                      (UPF v2 NC parser — bricks 2)
+//     • assembler.qforge_assemble_h_multi  (multi-species dense H — brick 5)
+//     • scf_pw.qforge_scf_pw_h_multi_smeared (in-loop V_H[ρ] + Fermi-Dirac SCF)
+//     • davidson.qforge_davidson           (the eigensolver)
+//   The CaH6 path that `fixtures/cah6_scf_run.hexa` hardcoded INLINE (geometry,
+//   G-basis, UPF staging, SCF call) is here HOISTED into a reusable, deck-dir-
+//   driven entry so every cell traverses ONE generic path (d4) — add/swap a cell
+//   = change the deck dir, no name branch.
+//
+// ── d4 GENERIC (no material hardcode) ────────────────────────────────────────
+//   The front-end parses the geometry + species→UPF map FROM the deck files; the
+//   element list, Z, positions, cell are DATA. CaH6 / LaH10 / Li2MgH16 all
+//   traverse `qforge_pw_frontend(deck_dir)` — the deck is the manifest.
+//
+// ── @L5 / d6 HONEST SCOPE (what is FULL vs NAMED-REMAINING) ───────────────────
+//   FULL in this PR:
+//     • deck-dir GEOMETRY parse (ibrav=3 BCC-primitive + celldm + ATOMIC_SPECIES
+//       + ATOMIC_POSITIONS crystal — the CaH6/YH6/hydride family). Other ibrav
+//       are NAMED-REMAINING (qpw_parse_geometry returns ok=false with a reason).
+//     • PW G-vector basis at a kinetic cutoff (ecut → lowest-|G|² shell).
+//     • the matrix-free H-apply: kinetic + V_loc(UPF) + V_NL(KB, UPF betas) +
+//       V_H[ρ] (in-loop, screening.hexa) + V_xc(LDA-x; +PW92-c when xc_mode≥1).
+//       SCREENING = Hartree + LDA-exchange per @L5 honesty (correlation optional).
+//     • the SCF density loop to self-consistency (smeared + Anderson — metallic
+//       hydride convergence), emitting converged ρ, ψ, ε and the SCF half of a
+//       QforgeDeck (h_diag, n, nocc + the converged ψ recovered by qforge_run's
+//       own davidson re-solve of the SAME emitted H-apply closure).
+//   NAMED-REMAINING (d6 — surfaced, NOT faked):
+//     • the DFPT half of the QforgeDeck (phi force-constants + the per-mode bare
+//       ΔV|ψ⟩ bundle) is the PHONON path, NOT the SCF front-end. This module
+//       supplies a DOCUMENTED Γ-Einstein default (a single rigid on-site mode at
+//       a caller-supplied ω₀) so the emitted deck COMPOSES with qforge_run end-to-
+//       end (a documented partial that composes is valid; a faked converged-CaH6 λ
+//       is NOT). The PRODUCTION phi/ΔV come from qforge_dynmat ∘ qforge_dfpt — the
+//       caller threads those in via qpw_deck_with_phonons. This is NAMED here and
+//       in the emitted deck's `name` so no run mistakes the Einstein default for a
+//       converged dispersion.
+//     • full PW Ewald (ion-ion Madelung) — the SCF here reports the band-energy
+//       sum; the variational E_tot path (scf_pw.._fdg_etot) is the caller's opt-in.
+//     • US/PAW pseudos — upf_parse rejects them (NC-only); NAMED there.
+//
+// A faked converged CaH6 λ is NOT shipped: the SCF runs the real density loop and
+// reports `converged` honestly; the el-ph half is explicitly the Einstein default
+// until the DFPT bundle is threaded in. The COMPOSITION with qforge_run (PR#2742)
+// is what this front-end closes.
+//
+// Entry:
+//   pub fn qforge_pw_frontend(deck_dir: str) -> QpwFrontendResult
+//   pub fn qpw_h_apply(v: [float]) -> [float]    // the emitted matrix-free H·v
+//
+// Run the gate:  hexa run stdlib/qforge/pw_frontend_selftest.hexa
+
+use "stdlib/qforge/upf"
+use "stdlib/qforge/assembler"
+use "stdlib/qforge/scf_pw"
+use "stdlib/qforge/scf"
+use "stdlib/qforge/davidson"
+use "stdlib/qforge/qforge_run"
+
+let _QPW_2PI: float = 6.28318530717958647692
+
+// ── parsed geometry (the deck-dir → cell + species + positions) ──────────────
+//   A self-describing record; CaH6/LaH10/Li2MgH16 differ only in the data.
+pub struct QpwGeometry {
+    ok:        bool,
+    error:     str,
+    ibrav:     int,
+    a:         float,        // celldm(1) (bohr)
+    omega:     float,        // cell volume Ω (bohr³)
+    a1:        [float],      // real-space lattice vectors (bohr)
+    a2:        [float],
+    a3:        [float],
+    b1:        [float],      // reciprocal basis (2π convention)
+    b2:        [float],
+    b3:        [float],
+    ecutwfc:   float,        // plane-wave kinetic cutoff (Ry, QE convention)
+    nspec:     int,
+    species:   [str],        // element symbols, per species
+    upf_files: [str],        // UPF filename per species (resolved against pseudo/)
+    nat_spec:  [int],        // #atoms of each species
+    frac:      [float]       // flat [3·nat] fractional coords, grouped by species
+}
+
+// ── front-end result: the converged SCF + the emitted QforgeDeck ─────────────
+pub struct QpwFrontendResult {
+    ok:           bool,
+    error:        str,
+    geom:         QpwGeometry,
+    n:            int,           // PW basis dimension
+    nelec:        int,
+    nocc:         int,
+    converged:    bool,          // the SCF self-consistency flag (d6 — honest)
+    iters:        int,
+    e_band:       float,         // Σ occ·ε (band-energy sum, Hartree)
+    evals:        [float],       // KS eigenvalues (ascending)
+    deck:         QforgeDeck,    // the emitted deck (SCF half full · DFPT = Einstein default)
+    note:         str            // @L5 screening-gap + DFPT-default surface
+}
+
+// ── module-global staging for the emitted matrix-free H-apply ────────────────
+//   The emitted H-apply is the CONVERGED multi-species H(ρ*): qforge_run re-solves
+//   it with its OWN davidson to recover ψ. We stage the converged-cell context here
+//   and expose qpw_h_apply (named-fn closure pattern — hexa codegen does not capture
+//   locals in a nested fn, the same pattern scf_pw.hexa uses for qforge_h_of_rho_*).
+let mut QPW_HAM: PwHam = PwHam { h: [], diag: [], n: 0 }
+
+pub fn qpw_h_apply(v: [float]) -> [float] { return qforge_h_apply(QPW_HAM, v) }
+
+// =============================================================================
+// ① DECK-DIR GEOMETRY PARSER
+// =============================================================================
+
+// strip an inline QE comment ('!' to end-of-line) and trim.
+fn _qpw_decomment(line: str) -> str {
+    let b = line.index_of("!")
+    if b < 0 { return line.trim() }
+    return line.substring(0, b).trim()
+}
+
+// whitespace tokeniser (space/tab/CR — newline handled by line split).
+fn _qpw_ws(s: str) -> [str] {
+    let mut out: [str] = []
+    let mut cur = ""
+    let mut i = 0
+    let n = len(s)
+    while i < n {
+        let ch = s.substring(i, i + 1)
+        let is_sp = ch == " " || ch == "\t" || ch == "\r" || ch == "\n"
+        if is_sp { if cur != "" { out.push(cur) } ; cur = "" } else { cur = cur + ch }
+        i = i + 1
+    }
+    if cur != "" { out.push(cur) }
+    return out
+}
+
+// split a file body into lines on '\n'.
+fn _qpw_lines(s: str) -> [str] {
+    let mut out: [str] = []
+    let mut cur = ""
+    let mut i = 0
+    let n = len(s)
+    while i < n {
+        let ch = s.substring(i, i + 1)
+        if ch == "\n" { out.push(cur) ; cur = "" } else { cur = cur + ch }
+        i = i + 1
+    }
+    out.push(cur)
+    return out
+}
+
+// parse a QE Fortran float token ('1.0d-4' / '6.4640' / '1.0e-6') → float.
+fn _qpw_qefloat(tok: str) -> float {
+    let mut s = ""
+    let mut i = 0
+    let n = len(tok)
+    while i < n {
+        let ch = tok.substring(i, i + 1)
+        if ch == "d" || ch == "D" { s = s + "e" } else { s = s + ch }
+        i = i + 1
+    }
+    return to_float(s)
+}
+
+// extract a `key = value` namelist scalar from the deck lines (first match).
+//   QE namelist style: `  celldm(1)  = 6.4640  ! comment`. Returns "" if absent.
+fn _qpw_nml_val(lines: [str], key: str) -> str {
+    let mut li = 0
+    while li < len(lines) {
+        let l = _qpw_decomment(lines[li])
+        let eq = l.index_of("=")
+        if eq > 0 {
+            let lhs = l.substring(0, eq).trim()
+            if lhs == key {
+                return l.substring(eq + 1, len(l)).trim()
+            }
+        }
+        li = li + 1
+    }
+    return ""
+}
+
+// resolve the SCF deck path — prefer scf.in, fall back to vc-relax.in.
+fn _qpw_deck_file(deck_dir: str) -> str {
+    let scf = deck_dir + "/scf.in"
+    let t = read_file(scf)
+    if len(t) > 0 { return scf }
+    return deck_dir + "/vc-relax.in"
+}
+
+// ── public geometry parser ───────────────────────────────────────────────────
+//   FULL for ibrav=3 (BCC-primitive, the CaH6/YH6 hydride family) + ATOMIC_SPECIES
+//   + ATOMIC_POSITIONS crystal. Other ibrav → ok=false (NAMED-REMAINING, d6).
+pub fn qpw_parse_geometry(deck_dir: str) -> QpwGeometry {
+    let mut e_f: [float] = [] ; let mut e_s: [str] = [] ; let mut e_i: [int] = []
+    let bad = QpwGeometry {
+        ok: false, error: "", ibrav: 0, a: 0.0, omega: 0.0,
+        a1: e_f, a2: e_f, a3: e_f, b1: e_f, b2: e_f, b3: e_f, ecutwfc: 0.0,
+        nspec: 0, species: e_s, upf_files: e_s, nat_spec: e_i, frac: e_f
+    }
+    let path = _qpw_deck_file(deck_dir)
+    let text = read_file(path)
+    if len(text) == 0 {
+        return _qpw_geom_err(bad, "cannot read deck file: " + path)
+    }
+    let lines = _qpw_lines(text)
+
+    // ── &SYSTEM scalars ──
+    let ibrav = to_int(_qpw_qefloat(_qpw_nml_val(lines, "ibrav")))
+    if ibrav != 3 {
+        return _qpw_geom_err(bad, "NAMED-REMAINING: ibrav=" + to_string(ibrav)
+            + " unsupported (FULL: ibrav=3 BCC-primitive hydride family). "
+            + "General Bravais lattice construction is the named-remaining geometry piece.")
+    }
+    let a = _qpw_qefloat(_qpw_nml_val(lines, "celldm(1)"))
+    if a <= 0.0 { return _qpw_geom_err(bad, "missing/invalid celldm(1)") }
+    let ecutwfc = _qpw_qefloat(_qpw_nml_val(lines, "ecutwfc"))
+    let ntyp = to_int(_qpw_qefloat(_qpw_nml_val(lines, "ntyp")))
+    let nat = to_int(_qpw_qefloat(_qpw_nml_val(lines, "nat")))
+    if ntyp <= 0 || nat <= 0 { return _qpw_geom_err(bad, "missing/invalid ntyp/nat") }
+
+    // ── BCC-primitive lattice (ibrav=3): a1=(a/2)(1,1,1), a2=(a/2)(-1,1,1),
+    //    a3=(a/2)(-1,-1,1).  Ω = a³/2.  b_i (2π conv): b1=(2π/a)(0,1,1) etc. ──
+    let ha = 0.5 * a
+    let omega = a * a * a * 0.5
+    let a1 = [ha, ha, ha]
+    let a2 = [-ha, ha, ha]
+    let a3 = [-ha, -ha, ha]
+    let tpa = _QPW_2PI / a
+    let b1 = [0.0, tpa, tpa]
+    let b2 = [-tpa, 0.0, tpa]
+    let b3 = [-tpa, -tpa, 0.0]
+
+    // ── ATOMIC_SPECIES → element + UPF map ──
+    let mut species: [str] = []
+    let mut upf_files: [str] = []
+    let mut li = 0
+    let nl = len(lines)
+    while li < nl {
+        let l = _qpw_decomment(lines[li])
+        if l.index_of("ATOMIC_SPECIES") == 0 {
+            let mut s = 0
+            let mut k = li + 1
+            while s < ntyp && k < nl {
+                let row = _qpw_decomment(lines[k])
+                if len(row) > 0 {
+                    let toks = _qpw_ws(row)
+                    if len(toks) >= 3 {
+                        species.push(toks[0])
+                        upf_files.push(deck_dir + "/pseudo/" + toks[2])
+                        s = s + 1
+                    }
+                }
+                k = k + 1
+            }
+        }
+        li = li + 1
+    }
+    if len(species) != ntyp {
+        return _qpw_geom_err(bad, "ATOMIC_SPECIES: parsed " + to_string(len(species))
+            + " of ntyp=" + to_string(ntyp))
+    }
+
+    // ── ATOMIC_POSITIONS crystal → fractional coords, grouped by species ──
+    //   Read all nat rows (element + 3 fracs), then group by the species order.
+    let mut at_el: [str] = []
+    let mut at_f: [float] = []
+    li = 0
+    while li < nl {
+        let l = _qpw_decomment(lines[li])
+        if l.index_of("ATOMIC_POSITIONS") == 0 {
+            let unit = l
+            if unit.index_of("crystal") < 0 {
+                return _qpw_geom_err(bad, "NAMED-REMAINING: ATOMIC_POSITIONS unit '"
+                    + unit + "' — FULL supports 'crystal' (fractional). "
+                    + "angstrom/bohr cartesian conversion is named-remaining.")
+            }
+            let mut cnt = 0
+            let mut k = li + 1
+            while cnt < nat && k < nl {
+                let row = _qpw_decomment(lines[k])
+                if len(row) > 0 {
+                    let toks = _qpw_ws(row)
+                    if len(toks) >= 4 {
+                        at_el.push(toks[0])
+                        at_f.push(_qpw_qefloat(toks[1]))
+                        at_f.push(_qpw_qefloat(toks[2]))
+                        at_f.push(_qpw_qefloat(toks[3]))
+                        cnt = cnt + 1
+                    }
+                }
+                k = k + 1
+            }
+        }
+        li = li + 1
+    }
+    if len(at_el) != nat {
+        return _qpw_geom_err(bad, "ATOMIC_POSITIONS: parsed " + to_string(len(at_el))
+            + " of nat=" + to_string(nat))
+    }
+
+    // group fractional coords by species order (species[0] atoms first, then [1]…).
+    let mut nat_spec: [int] = []
+    let mut frac: [float] = []
+    let mut si = 0
+    while si < ntyp {
+        let el = species[si]
+        let mut c = 0
+        let mut ai = 0
+        while ai < nat {
+            if at_el[ai] == el {
+                frac.push(at_f[ai * 3])
+                frac.push(at_f[ai * 3 + 1])
+                frac.push(at_f[ai * 3 + 2])
+                c = c + 1
+            }
+            ai = ai + 1
+        }
+        nat_spec.push(c)
+        si = si + 1
+    }
+
+    return QpwGeometry {
+        ok: true, error: "", ibrav: ibrav, a: a, omega: omega,
+        a1: a1, a2: a2, a3: a3, b1: b1, b2: b2, b3: b3, ecutwfc: ecutwfc,
+        nspec: ntyp, species: species, upf_files: upf_files,
+        nat_spec: nat_spec, frac: frac
+    }
+}
+
+fn _qpw_geom_err(bad: QpwGeometry, msg: str) -> QpwGeometry {
+    return QpwGeometry {
+        ok: false, error: msg, ibrav: bad.ibrav, a: bad.a, omega: bad.omega,
+        a1: bad.a1, a2: bad.a2, a3: bad.a3, b1: bad.b1, b2: bad.b2, b3: bad.b3,
+        ecutwfc: bad.ecutwfc, nspec: bad.nspec, species: bad.species,
+        upf_files: bad.upf_files, nat_spec: bad.nat_spec, frac: bad.frac
+    }
+}
+
+// =============================================================================
+// ② PW G-VECTOR BASIS at a kinetic cutoff
+// =============================================================================
+
+// Build the PW basis: all G = h·b1 + k·b2 + l·b3 (|h,k,l| ≤ M) with ½|G|² ≤ ecut
+// (Hartree), sorted ascending by |G|². Returns flat [3·n] cartesian G-vectors.
+//
+//   ecut_ha : kinetic cutoff in HARTREE (QE ecutwfc is Ry → caller halves it).
+//   npw_cap : if > 0, truncate to the lowest npw_cap G-vectors (for a tractable
+//             local-verify basis / a pow2 FFT line); 0 = the full shell ≤ ecut.
+pub fn qpw_gvectors(b1: [float], b2: [float], b3: [float],
+                    ecut_ha: float, mmax: int, npw_cap: int) -> [float] {
+    let mut gall: [float] = []
+    let mut g2all: [float] = []
+    let mut gi = -mmax
+    while gi <= mmax {
+        let mut gj = -mmax
+        while gj <= mmax {
+            let mut gk = -mmax
+            while gk <= mmax {
+                let gx = to_float(gi) * b1[0] + to_float(gj) * b2[0] + to_float(gk) * b3[0]
+                let gy = to_float(gi) * b1[1] + to_float(gj) * b2[1] + to_float(gk) * b3[1]
+                let gz = to_float(gi) * b1[2] + to_float(gj) * b2[2] + to_float(gk) * b3[2]
+                let g2 = gx * gx + gy * gy + gz * gz
+                // ½|G|² ≤ ecut_ha (Hartree kinetic cutoff). ecut_ha≤0 → keep all (cap rules).
+                if ecut_ha <= 0.0 || 0.5 * g2 <= ecut_ha {
+                    gall.push(gx) ; gall.push(gy) ; gall.push(gz)
+                    g2all.push(g2)
+                }
+                gk = gk + 1
+            }
+            gj = gj + 1
+        }
+        gi = gi + 1
+    }
+    // selection-sort ascending by |G|² (small n — simple is correct).
+    let ntot = len(g2all)
+    let mut used: [int] = [] ; let mut u = 0 ; while u < ntot { used.push(0) ; u = u + 1 }
+    let target = if npw_cap > 0 && npw_cap < ntot { npw_cap } else { ntot }
+    let mut gvecs: [float] = []
+    let mut picked = 0
+    while picked < target {
+        let mut best = -1 ; let mut bestv = 1.0e30
+        let mut t = 0
+        while t < ntot {
+            if used[t] == 0 { if g2all[t] < bestv { bestv = g2all[t] ; best = t } }
+            t = t + 1
+        }
+        if best < 0 { break }
+        used[best] = 1
+        gvecs.push(gall[best * 3]) ; gvecs.push(gall[best * 3 + 1]) ; gvecs.push(gall[best * 3 + 2])
+        picked = picked + 1
+    }
+    return gvecs
+}
+
+// =============================================================================
+// ③+④ ASSEMBLE H + RUN SCF + ⑤ EMIT QforgeDeck
+// =============================================================================
+
+// ── qforge_pw_frontend(deck_dir) — the KEYSTONE entry ────────────────────────
+//
+//   deck_dir : a QE-style deck directory (scf.in / vc-relax.in + pseudo/*.upf).
+//   npw_cap  : PW basis size cap (pow2 for the in-loop V_H FFT line; 0 = full).
+//   xc_mode  : 0 = LDA-x only · ≥1 = LDA-x + PW92-c (screening = Hartree + LDA-x).
+//   sigma    : Fermi-Dirac smearing width (Ha) — metallic hydride convergence.
+//   omega0_K : the Γ-Einstein phonon ω₀ (K) for the DFPT DEFAULT (NAMED-REMAINING).
+//
+//   Parses geometry+UPF, builds the PW basis at the deck's ecutwfc, runs the
+//   multi-species smeared+Anderson SCF with in-loop V_H[ρ], and EMITS the SCF
+//   half of a QforgeDeck. The DFPT half (phi + ΔV) is the documented Einstein
+//   default — qforge_run composes end-to-end; the production phonon bundle is
+//   threaded in by qpw_deck_with_phonons (NAMED-REMAINING, d6).
+pub fn qforge_pw_frontend(deck_dir: str, npw_cap: int, xc_mode: int,
+                          sigma: float, omega0_K: float) -> QpwFrontendResult {
+    let mut e_f: [float] = []
+    let geom = qpw_parse_geometry(deck_dir)
+    if !geom.ok {
+        return _qpw_fe_err(geom, "geometry: " + geom.error)
+    }
+
+    // ── parse the per-species UPFs (NC) + stage the multi-species arrays ──
+    let mut rs: [float] = [] ; let mut rabs: [float] = [] ; let mut vlocs: [float] = []
+    let mut mlens: [int] = [] ; let mut zs: [float] = []
+    let mut betas: [float] = [] ; let mut ls: [int] = [] ; let mut dij: [float] = []
+    let mut nprojs: [int] = [] ; let mut blens: [int] = [] ; let mut dlens: [int] = []
+    let mut nelec_f = 0.0
+    let mut s = 0
+    while s < geom.nspec {
+        let up = upf_parse(geom.upf_files[s])
+        if !up.ok {
+            return _qpw_fe_err(geom, "UPF[" + geom.species[s] + "]: " + up.error)
+        }
+        let ml = len(up.r)
+        let mut i = 0
+        while i < ml { rs.push(up.r[i]) ; rabs.push(up.rab[i]) ; vlocs.push(up.vloc[i]) ; i = i + 1 }
+        mlens.push(ml)
+        zs.push(up.header.z_valence)
+        nelec_f = nelec_f + up.header.z_valence * to_float(geom.nat_spec[s])
+        // KB nonlocal projectors (UPF betas) — FULL V_NL (no longer local-only).
+        let np = up.header.number_of_proj
+        nprojs.push(np)
+        if np > 0 {
+            let bi0 = len(betas)
+            let mut bi = 0
+            while bi < len(up.betas) { betas.push(up.betas[bi]) ; bi = bi + 1 }
+            blens.push(len(up.betas))
+            let mut li = 0
+            while li < len(up.ls) { ls.push(up.ls[li]) ; li = li + 1 }
+            let mut di = 0
+            while di < len(up.dij) { dij.push(up.dij[di]) ; di = di + 1 }
+            dlens.push(len(up.dij))
+        } else {
+            blens.push(0)
+            dlens.push(0)
+        }
+        s = s + 1
+    }
+    let nelec = to_int(nelec_f)
+    let nocc = nelec / 2
+
+    // ── cartesian atom positions (bohr) from fractional coords, by species ──
+    let mut poss: [float] = []
+    let mut palens: [int] = []
+    let mut foff = 0
+    s = 0
+    while s < geom.nspec {
+        let nas = geom.nat_spec[s]
+        palens.push(nas)
+        let mut ai = 0
+        while ai < nas {
+            let f1 = geom.frac[foff * 3]
+            let f2 = geom.frac[foff * 3 + 1]
+            let f3 = geom.frac[foff * 3 + 2]
+            poss.push(f1 * geom.a1[0] + f2 * geom.a2[0] + f3 * geom.a3[0])
+            poss.push(f1 * geom.a1[1] + f2 * geom.a2[1] + f3 * geom.a3[1])
+            poss.push(f1 * geom.a1[2] + f2 * geom.a2[2] + f3 * geom.a3[2])
+            foff = foff + 1
+            ai = ai + 1
+        }
+        s = s + 1
+    }
+
+    // ── PW G-basis at the deck's ecutwfc (Ry → Ha) ──
+    //   QE ecutwfc is in Ry; the kinetic cutoff ½|G|² is in Ha → ecut_ha = ecutwfc/2.
+    //   npw_cap truncates to a tractable pow2 basis for the in-loop V_H FFT line.
+    let ecut_ha = if geom.ecutwfc > 0.0 { 0.5 * geom.ecutwfc } else { 0.0 }
+    let gvecs = qpw_gvectors(geom.b1, geom.b2, geom.b3, ecut_ha, 4, npw_cap)
+    let n = len(gvecs) / 3
+    if n < 1 { return _qpw_fe_err(geom, "PW basis empty (ecut/cap too small)") }
+
+    // ── SCF: multi-species smeared + Anderson + in-loop V_H[ρ] ──
+    //   FFT line nx=ny=1, nz=n (the scf_pw self-consistent V_H convention).
+    let k0 = [0.0, 0.0, 0.0]
+    let tpa = _QPW_2PI / geom.a
+    let eb1 = [tpa, 0.0, 0.0] ; let eb2 = [0.0, tpa, 0.0] ; let eb3 = [0.0, 0.0, tpa]
+    let nbands = nocc + 4
+    let scf = qforge_scf_pw_h_multi_smeared(
+        k0, gvecs, geom.nspec, rs, rabs, vlocs, mlens, zs,
+        poss, palens, betas, ls, dij, nprojs, blens, dlens,
+        geom.omega, xc_mode, 1, 1, n, eb1, eb2, eb3,
+        nbands, nelec, 0.3, 1.0e-6, 200, sigma, 2.0, 6)
+
+    // ── emit the CONVERGED matrix-free H-apply (qforge_run re-solves it) ──
+    //   qforge_h_of_rho_multi(scf.rho) re-stages PWM_* + returns the apply closure;
+    //   we capture the assembled PwHam into QPW_HAM so qpw_h_apply is the deck's H.
+    let _apply = qforge_h_of_rho_multi(scf.rho)
+    // build the diagonal preconditioner from the converged H (n probes).
+    let mut diag: [float] = []
+    let mut dd = 0
+    while dd < n {
+        let mut col: [float] = [] ; let mut t = 0
+        while t < n { if t == dd { col.push(1.0) } else { col.push(0.0) } ; t = t + 1 }
+        let hc = _apply(col)
+        diag.push(hc[dd])
+        dd = dd + 1
+    }
+    // stage QPW_HAM = the dense converged H (qpw_h_apply applies it for qforge_run).
+    //   Probe the staged apply closure column-by-column: H·e_j = the j-th COLUMN.
+    QPW_HAM = _qpw_capture_ham(_apply, n)
+
+    // ── ⑤ EMIT the QforgeDeck (SCF half FULL · DFPT half = Einstein default) ──
+    let omega0 = if omega0_K > 0.0 { omega0_K } else { 1236.4 }   // CaH6-scale default
+    let deck = _qpw_emit_deck(geom, diag, n, nocc, scf, omega0)
+
+    let note = "screening = Hartree + LDA-exch (correlation optional via xc_mode≥1) "
+        + "[@L5]; DFPT half (phi + ΔV bundle) = Γ-Einstein DEFAULT ω₀=" + to_string(omega0)
+        + " K (NAMED-REMAINING — production phi/ΔV from qforge_dynmat∘qforge_dfpt, "
+        + "thread via qpw_deck_with_phonons); full PW Ewald named-remaining (band-sum E)"
+
+    let mut e_evals: [float] = []
+    let mut q = 0
+    while q < len(scf.evals) { e_evals.push(scf.evals[q]) ; q = q + 1 }
+
+    return QpwFrontendResult {
+        ok: true, error: "", geom: geom, n: n, nelec: nelec, nocc: nocc,
+        converged: scf.converged, iters: scf.iters, e_band: scf.e_total,
+        evals: e_evals, deck: deck, note: note
+    }
+}
+
+// Materialise a dense PwHam by probing the staged H-apply closure column-by-column
+// (H·e_j = the j-th COLUMN of H), so the deck's emitted qpw_h_apply is INDEPENDENT
+// of the scf_pw staging globals being later overwritten by another front-end call.
+// `apply` is the closure qforge_h_of_rho_multi(scf.rho) returned (the converged H).
+fn _qpw_capture_ham(apply, n: int) -> PwHam {
+    let mut hm: [float] = []
+    let mut diag: [float] = []
+    let mut ii = 0
+    while ii < n { let mut jj = 0 ; while jj < n { hm.push(0.0) ; jj = jj + 1 } ; ii = ii + 1 }
+    let mut jc = 0
+    while jc < n {
+        let mut e: [float] = [] ; let mut t = 0
+        while t < n { if t == jc { e.push(1.0) } else { e.push(0.0) } ; t = t + 1 }
+        let hcol = apply(e)                 // H · e_j = the j-th COLUMN of H
+        let mut ir = 0
+        while ir < n { hm[ir * n + jc] = hcol[ir] ; ir = ir + 1 }
+        diag.push(hcol[jc])
+        jc = jc + 1
+    }
+    return PwHam { h: hm, diag: diag, n: n }
+}
+
+// ── emit the QforgeDeck (the SCF half full; DFPT half = documented Einstein) ──
+//   h_diag = the converged-H diagonal (qforge_run's davidson preconditioner).
+//   The DFPT half (phi, masses, qvec, cell_R, dv_modes) is a SINGLE Γ-Einstein
+//   mode: phi = a positive-definite 3×3-per-atom block (mass-1 light-atom scale),
+//   one ΔV mode = a rigid on-site bare scatter on the occupied manifold. This
+//   COMPOSES with qforge_run (a finite λ end-to-end) and is NAMED in the deck's
+//   `name` so it is never mistaken for a converged dispersion (d6).
+fn _qpw_emit_deck(geom: QpwGeometry, h_diag: [float], n: int, nocc: int,
+                  scf: ScfResult, omega0_K: float) -> QforgeDeck {
+    let nat = _qpw_total_nat(geom)
+    // Γ-Einstein phi: block-diagonal 3·nat × 3·nat, a single stiff force constant
+    //   per cartesian DOF → 3·nat real ω(q,ν) at q=Γ. Light hydride mass scale.
+    let dim = 3 * nat
+    let mut phi: [float] = []
+    let mut a = 0
+    while a < dim {
+        let mut b = 0
+        while b < dim {
+            if a == b { phi.push(4.0 + to_float(a % 3)) } else { phi.push(0.0) }
+            b = b + 1
+        }
+        a = a + 1
+    }
+    let mut masses: [float] = []
+    let mut m = 0
+    while m < nat { masses.push(1.0) ; m = m + 1 }   // light-atom (hydride ω scale)
+    let qvec = [0.0, 0.0, 0.0]
+    let cell_R = [0.0, 0.0, 0.0]
+    // one ΔV mode bundle: a rigid on-site bare scatter ΔV|ψ_n⟩ ≈ g·δ_n (flat nocc×n).
+    let g_target = 0.05
+    let mut dv0: [float] = []
+    let mut bnd = 0
+    while bnd < nocc {
+        let mut i = 0
+        while i < n { if i == bnd { dv0.push(g_target) } else { dv0.push(0.0) } ; i = i + 1 }
+        bnd = bnd + 1
+    }
+    let dv_modes: [[float]] = [dv0]
+    // ④⑤⑥ tail params — a uniform ω grid spanning the phonon band (K).
+    let lo = 100.0 ; let hi = 4000.0 ; let ng = 4001
+    let step = (hi - lo) / to_float(ng - 1)
+    let mut grid: [float] = []
+    let mut g = 0
+    while g < ng { grid.push(lo + step * to_float(g)) ; g = g + 1 }
+    let e_fermi = if nocc > 0 && nocc - 1 < len(scf.evals) { scf.evals[nocc - 1] } else { 0.0 }
+
+    return QforgeDeck {
+        name: geom.species[0] + "-pwfrontend-EINSTEIN-DEFAULT(omega0=" + to_string(omega0_K) + "K)",
+        h_diag: h_diag, n: n, nocc: nocc,
+        phi: phi, masses: masses, qvec: qvec, natoms: nat, ncells: 1, cell_R: cell_R,
+        dv_modes: dv_modes,
+        e_fermi: e_fermi, n_ef: 1.0, omega_grid: grid, mode_weight: 0.05,
+        sigma_el: 0.05, sigma_ph: 50.0, mu_star: 0.10, n_mats: 256
+    }
+}
+
+// ── thread the PRODUCTION DFPT bundle into an emitted deck (NAMED-REMAINING) ──
+//   The front-end emits a deck whose DFPT half is the Γ-Einstein DEFAULT. When the
+//   phonon path (qforge_dynmat ∘ qforge_dfpt) has produced the real force-constants
+//   `phi` (flat ncells·(3N)²) + the per-mode bare ΔV|ψ⟩ bundle `dv_modes`, the
+//   caller swaps them in here — the SCF half (h_diag, n, nocc, e_fermi) is kept
+//   verbatim. This is the documented composition point that turns the front-end's
+//   Einstein-default deck into a production deck (d6 — the named-remaining seam).
+pub fn qpw_deck_with_phonons(deck: QforgeDeck, phi: [float], masses: [float],
+                             qvec: [float], natoms: int, ncells: int,
+                             cell_R: [float], dv_modes: [[float]]) -> QforgeDeck {
+    return QforgeDeck {
+        name: deck.name + "+DFPT(production)",
+        h_diag: deck.h_diag, n: deck.n, nocc: deck.nocc,
+        phi: phi, masses: masses, qvec: qvec, natoms: natoms, ncells: ncells,
+        cell_R: cell_R, dv_modes: dv_modes,
+        e_fermi: deck.e_fermi, n_ef: deck.n_ef, omega_grid: deck.omega_grid,
+        mode_weight: deck.mode_weight, sigma_el: deck.sigma_el,
+        sigma_ph: deck.sigma_ph, mu_star: deck.mu_star, n_mats: deck.n_mats
+    }
+}
+
+fn _qpw_total_nat(geom: QpwGeometry) -> int {
+    let mut t = 0
+    let mut s = 0
+    while s < geom.nspec { t = t + geom.nat_spec[s] ; s = s + 1 }
+    return t
+}
+
+fn _qpw_fe_err(geom: QpwGeometry, msg: str) -> QpwFrontendResult {
+    let mut e_f: [float] = []
+    let empty_deck = QforgeDeck {
+        name: "ERR", h_diag: e_f, n: 0, nocc: 0, phi: e_f, masses: e_f,
+        qvec: e_f, natoms: 0, ncells: 0, cell_R: e_f, dv_modes: [],
+        e_fermi: 0.0, n_ef: -1.0, omega_grid: e_f, mode_weight: 0.0,
+        sigma_el: 0.0, sigma_ph: 0.0, mu_star: 0.0, n_mats: 0
+    }
+    return QpwFrontendResult {
+        ok: false, error: msg, geom: geom, n: 0, nelec: 0, nocc: 0,
+        converged: false, iters: 0, e_band: 0.0, evals: e_f,
+        deck: empty_deck, note: ""
+    }
+}
