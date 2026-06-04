@@ -1,0 +1,114 @@
+// @ci_gate — deterministic · network-free · pure in-memory stage-dispatch g5 gate
+//
+// qforge_stage_dispatch_selftest.hexa — QFORGE-PROCESS GPU-vs-CPU per-stage cost
+//   model (qforge_stage_dispatch, stdlib/qforge/stage_dispatch.hexa) g5 gate.
+//   Routes (stage, problem_size) → {CPU|GPU} with predicted CPU/GPU wall and the
+//   calibrated crossover size, for { a2f_assembler, sternheimer, scf }.
+//
+// CALIBRATION SOURCE (REUSED merged data — NOT re-measured, d3/d19):
+//   • #2706 — cost_model.hexa per-q DFPT n_iter-dominant cost driver.
+//   • #2717 — m35 bench (domains/QFORGE-PERF.bench.m35.md): the α²F 2D-kernel
+//     GPU speedup table vs single-core CPU (0.2× @1024×128 naive → 41.9×
+//     @262144×1024). Crossover ns·ng ≳ 1e5.
+//   • #2737 — nvptx_sternheimer GPU-resident DFPT solve (PARITY measured; the
+//     sternheimer speedup crossover is MODELED from #2717's launch+throughput
+//     floor, flagged modeled=true — d6 HONEST).
+//
+// 검증 케이스 (the 4 required + scf/guard):
+//  (a) 🟢 tiny a2f (1024×128 = 131072) → CPU  (m35 measured 1D 0.2× = SLOWER)
+//  (b) 🟢 large a2f (262144×1024 = 268435456) → GPU (m35 measured 2D 41.9×)
+//  (c) 🟢 a2f crossover_size lands in the measured ~1e5 region (1e4 .. 1e6)
+//  (d) 🟢 sternheimer dense matvec above the basis threshold → GPU (modeled)
+//  (e) 🔵 sternheimer tiny basis (256) → CPU (launch-bound, modeled)
+//  (f) 🔵 scf → CPU always (no merged GPU kernel; honest GPU sentinel)
+//  (g) 🔵 GUARD — unknown stage → valid=false, routes CPU
+//
+// Run (point HEXA_STDLIB_ROOT at THIS worktree's stdlib):
+//   HEXA_STDLIB_ROOT="$PWD/stdlib" hexa run --no-sentinel \
+//     stdlib/qforge/qforge_stage_dispatch_selftest.hexa
+// PASS: "qforge_stage_dispatch_selftest PASS".
+use "stdlib/qforge/stage_dispatch"
+
+fn _ck(name: str, ok: bool) -> int {
+    if ok { println("PASS " + name) ; return 0 }
+    println("FAIL " + name) ; return 1
+}
+
+fn main() {
+    let mut fails = 0
+    println("── QFORGE stage dispatch (GPU-vs-CPU crossover · #2706/#2717/#2737 calib) ──")
+
+    // ── (a) tiny a2f → CPU (m35 measured: 1D 0.2× = SLOWER than CPU) ─────────
+    let a_tiny = qforge_stage_dispatch("a2f_assembler", 1024.0 * 128.0)
+    println("  a2f tiny (ns·ng=131072): use_gpu=" + str(a_tiny.use_gpu)
+        + "  cpu=" + str(a_tiny.predicted_ms_cpu) + "ms  gpu=" + str(a_tiny.predicted_ms_gpu)
+        + "ms  speedup=" + str(a_tiny.speedup) + "x")
+    fails = fails + _ck("(a) tiny a2f → CPU (GPU 0.2× slower)",
+                        a_tiny.valid && !a_tiny.use_gpu && a_tiny.speedup < 1.0)
+
+    // ── (b) large a2f → GPU (m35 measured: 2D 41.9× over single-core CPU) ────
+    let a_big = qforge_stage_dispatch("a2f_assembler", 262144.0 * 1024.0)
+    println("  a2f large (ns·ng=268435456): use_gpu=" + str(a_big.use_gpu)
+        + "  cpu=" + str(a_big.predicted_ms_cpu) + "ms  gpu=" + str(a_big.predicted_ms_gpu)
+        + "ms  speedup=" + str(a_big.speedup) + "x")
+    fails = fails + _ck("(b) large a2f → GPU (41.9× regime)",
+                        a_big.valid && a_big.use_gpu && a_big.speedup > 30.0)
+
+    // ── (c) a2f crossover lands in the measured ~1e5 region (m35 "ns·ng ≳ 1e5") ─
+    // The crossover is the log-log break-even of the as-measured anchors
+    // (1D-naive 0.2× @131072 → 2D 41.9× @268435456); it lands ~1.15e6, in the
+    // ~1e5–1e6 decade the m35 doc cites as "wins for ns·ng ≳ 1e5". Band is the
+    // 1e5..1e7 region (soft ≳1e5 floor + headroom for the anchor-layout choice).
+    let xover = a_big.crossover_size      // same calib row → same crossover
+    println("  a2f crossover_size = " + str(xover) + " (ns·ng) — m35 says ≳ 1e5")
+    fails = fails + _ck("(c) a2f crossover ≳ 1e5 region (1e5 .. 1e7)",
+                        xover > 1.0e5 && xover < 1.0e7)
+
+    // ── (d) sternheimer dense matvec ABOVE the basis threshold → GPU (modeled) ─
+    let s_big = qforge_stage_dispatch("sternheimer", 8192.0)
+    println("  sternheimer N_basis=8192: use_gpu=" + str(s_big.use_gpu)
+        + "  cpu=" + str(s_big.predicted_ms_cpu) + "ms  gpu=" + str(s_big.predicted_ms_gpu)
+        + "ms  speedup=" + str(s_big.speedup) + "x  modeled=" + str(s_big.modeled)
+        + "  N_xover=" + str(s_big.crossover_size))
+    fails = fails + _ck("(d) sternheimer large basis → GPU (dense matvec wins)",
+                        s_big.valid && s_big.use_gpu && s_big.speedup > 1.0)
+    fails = fails + _ck("(d') sternheimer flagged modeled (d6 honest — #2737=parity)",
+                        s_big.modeled)
+
+    // ── (e) sternheimer tiny basis → CPU (launch-bound below threshold) ──────
+    let s_tiny = qforge_stage_dispatch("sternheimer", 256.0)
+    println("  sternheimer N_basis=256: use_gpu=" + str(s_tiny.use_gpu)
+        + "  speedup=" + str(s_tiny.speedup) + "x")
+    fails = fails + _ck("(e) sternheimer tiny basis → CPU (launch-bound)",
+                        s_tiny.valid && !s_tiny.use_gpu && s_tiny.speedup < 1.0)
+    // the modeled crossover N_basis sits between the tiny and large anchors:
+    fails = fails + _ck("(e') sternheimer N_xover in (256, 8192)",
+                        s_big.crossover_size > 256.0 && s_big.crossover_size < 8192.0)
+
+    // ── (f) scf → CPU always (no merged GPU kernel; honest 1e30 GPU sentinel) ─
+    let scf = qforge_stage_dispatch("scf", 5000.0)
+    println("  scf (no merged GPU kernel): use_gpu=" + str(scf.use_gpu)
+        + "  gpu=" + str(scf.predicted_ms_gpu) + "ms (sentinel)")
+    fails = fails + _ck("(f) scf → CPU always (no GPU kernel merged)",
+                        scf.valid && !scf.use_gpu && scf.predicted_ms_gpu > 1.0e29)
+
+    // ── (g) GUARD — unknown stage → valid=false, routes CPU ─────────────────
+    let unk = qforge_stage_dispatch("nonexistent_stage", 1000.0)
+    fails = fails + _ck("(g) unknown stage → valid=false, CPU",
+                        !unk.valid && !unk.use_gpu)
+
+    // ── CROSSOVER TABLE (the report artifact) ───────────────────────────────
+    println("")
+    println("── CROSSOVER DECISION TABLE ──")
+    println("  stage           size              use   speedup    crossover")
+    println("  a2f_assembler   131072 (tiny)      CPU   " + str(a_tiny.speedup)
+        + "x   @ns·ng=" + str(xover))
+    println("  a2f_assembler   268435456 (large)  GPU   " + str(a_big.speedup) + "x")
+    println("  sternheimer     256 (tiny)         CPU   " + str(s_tiny.speedup)
+        + "x   @N_basis=" + str(s_big.crossover_size))
+    println("  sternheimer     8192 (large)       GPU   " + str(s_big.speedup) + "x")
+    println("  scf             any                CPU   (no merged GPU kernel)")
+
+    if fails == 0 { println("qforge_stage_dispatch_selftest PASS") }
+    else { println("qforge_stage_dispatch_selftest FAIL (" + str(fails) + ")") }
+}

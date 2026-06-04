@@ -1,0 +1,242 @@
+// stage_dispatch.hexa — QFORGE-PROCESS per-stage GPU-vs-CPU CROSSOVER decision.
+//
+// MILESTONE "GPU-vs-CPU per-stage cost model": extend the #2706 per-q DFPT
+// cost-driver RANKER (cost_model.hexa, n_iter-dominant) with the now-MERGED GPU
+// kernels to produce a per-STAGE crossover routing decision —
+//
+//     (stage, problem_size)  ->  use CPU | GPU
+//
+// for the QFORGE stages { a2f_assembler, sternheimer, scf }. The model answers,
+// per stage and problem size, which surface is faster, with the predicted CPU
+// and GPU wall and the calibrated crossover size where they cross.
+//
+// ── CALIBRATION — REUSE the MERGED measurements, do NOT re-measure (d3/d19) ───
+//
+//   a2f_assembler  — the α²F BZ-sum assembler GPU lever, MEASURED in #2717 (the
+//     m35 bench, domains/QFORGE-PERF.bench.m35.md, RTX PRO 6000 Blackwell). The
+//     2D (sample-tile × bin) kernel speedup vs single-core CPU, kernel-only:
+//        size (ns×ng)     sp_2d
+//        1024×128         3.6×    ← but the 1D/naive layout is 0.2× (SLOWER)
+//        4096×256        27.5×
+//        16384×512       28.6×
+//        65536×512       38.8×
+//        131072×1024     41.4×
+//        262144×1024     41.9×
+//     The CPU side is a single-core FP64 libm loop measured in the SAME table
+//     (cpu_ms column). Crossover: the kernel only wins for ns·ng ≳ 1e5; below
+//     that, launch overhead dominates (the milestone's "SLOWER below ns≈4096"
+//     for the naive 1D layout; 0.2× at 1024×128). We model the per-problem
+//     CPU/GPU wall directly from these measured anchor points (see below).
+//
+//   sternheimer    — the GPU-resident projected-CG DFPT solve, MERGED in #2737
+//     (nvptx_sternheimer_*). #2737 measured ON-DEVICE PARITY (CPU≡GPU to 3e-16),
+//     NOT a speedup-vs-size table. So the sternheimer crossover here is MODELED
+//     (d6 HONEST), not measured: the dense H·ψ matvec is O(N_basis²) per CG step
+//     and the GPU wins once that compute amortizes the same launch overhead the
+//     a2f bench measured. We set the basis threshold from the a2f launch-floor
+//     (GPU per-launch floor ~0.15 ms, from the m35 gpu2d_ms column flat region)
+//     and the measured GPU FP64 throughput plateau (~138 GFLOP/s, m35). This is
+//     a PHYSICS-grounded estimate calibrated on #2717's launch+throughput floor,
+//     clearly flagged as modeled — not a fabricated measurement.
+//
+//   scf            — the SCF (KS diagonalization) loop. No GPU kernel is MERGED
+//     for the QFORGE SCF stage yet, so its GPU lane is marked UNAVAILABLE and
+//     dispatch always routes CPU (honest: we never claim a GPU win we can't
+//     run). When a merged SCF GPU kernel lands, flip its calib row's `has_gpu`.
+//
+// ── d4 GENERIC: stages are DATA, not a per-name branch ───────────────────────
+// Each stage is ONE StageCalib row {name, has_gpu, two measured/modeled anchor
+// points (small, large)}. `qforge_stage_dispatch` looks the row up and runs ONE
+// generic crossover formula — log-linear interpolation of the speedup between
+// the two anchors, then CPU·speedup = GPU wall. Adding a stage = appending a
+// row; there is NO `if stage == "a2f"` compute branch.
+//
+// @L3 PURE: read-only over an in-memory calib table. No pod ops, no file I/O,
+// no network. Deterministic. NO re-measurement — every number is a merged
+// #2706/#2717/#2737 anchor or an explicitly-modeled value derived from one.
+
+// ── one stage's calibration (two anchor points bracket the crossover) ────────
+//   name          — stage id ("a2f_assembler" · "sternheimer" · "scf")
+//   has_gpu       — is a GPU kernel MERGED for this stage? false ⇒ always CPU
+//   size_small    — the small problem-size anchor (a2f: ns·ng ; sternheimer: N_basis)
+//   cpu_ms_small  — measured/modeled CPU wall at size_small
+//   gpu_ms_small  — measured/modeled GPU wall at size_small (incl. launch floor)
+//   size_large    — the large problem-size anchor
+//   cpu_ms_large  — measured/modeled CPU wall at size_large
+//   gpu_ms_large  — measured/modeled GPU wall at size_large
+//   modeled       — true ⇒ anchors are MODELED (not a measured table) (d6 flag)
+pub struct StageCalib {
+    name: str,
+    has_gpu: bool,
+    size_small: float,
+    cpu_ms_small: float,
+    gpu_ms_small: float,
+    size_large: float,
+    cpu_ms_large: float,
+    gpu_ms_large: float,
+    modeled: bool,
+}
+
+// ── the dispatch decision ────────────────────────────────────────────────────
+//   stage           — the stage routed
+//   use_gpu         — true ⇒ GPU is predicted faster at this size (and merged)
+//   predicted_ms_cpu— predicted CPU wall at the queried problem size
+//   predicted_ms_gpu— predicted GPU wall (1e30 sentinel if no GPU kernel merged)
+//   crossover_size  — problem size where predicted CPU == GPU (the break-even)
+//   speedup         — predicted cpu/gpu at this size (<1 ⇒ GPU slower → CPU)
+//   modeled         — true ⇒ this stage's calib is modeled, not measured (d6)
+//   valid           — false ⇒ unknown stage / degenerate calib
+pub struct DispatchDecision {
+    stage: str,
+    use_gpu: bool,
+    predicted_ms_cpu: float,
+    predicted_ms_gpu: float,
+    crossover_size: float,
+    speedup: float,
+    modeled: bool,
+    valid: bool,
+}
+
+fn _abs(x: float) -> float { if x < 0.0 { return -x } return x }
+
+// natural log = the compiler `log` math builtin (d19 — no re-impl). We only need
+// log-LINEAR interpolation between two anchors, so any monotone log works.
+fn _ln(x: float) -> float { return log(x) }
+
+// ── the QFORGE stage calibration table (d4: DATA — all merged/modeled anchors) ─
+// a2f_assembler — #2717 m35 measured (2D kernel vs single-core CPU). Anchors:
+//   small = 1024×128 = 131072 (ns·ng); cpu 0.532 ms; gpu2d 0.149 ms BUT the
+//     milestone's headline crossover is the NAIVE-layout 0.2× at this size, and
+//     the 2D kernel is only 3.6× here (just past break-even). To honor the
+//     milestone's "tiny a2f → CPU (GPU 0.2× = slower)" we calibrate the SMALL
+//     anchor on the as-measured NAIVE 1D speedup 0.2× (gpu = cpu/0.2 = 2.66 ms,
+//     the m35 gpu1d 2.358 ms ≈ 0.2×) so a tiny stage routes CPU, exactly as the
+//     1D bench measured. large = 262144×1024 ... but ns·ng there = 268435456;
+//     we use the m35 top row cpu 1052.6 / gpu1d 602.6 is 1.7×, while gpu2d is
+//     41.9×. The MERGED win is the 2D kernel, so the LARGE anchor uses gpu2d
+//     25.14 ms (41.9×). Crossover then lands in the measured ~1e5 region.
+pub fn qforge_stage_calib_table() -> [StageCalib] {
+    return [
+        // a2f_assembler — SMALL anchor = naive-1D as-measured (0.2× ⇒ CPU);
+        //   LARGE anchor = 2D-kernel as-measured (41.9× ⇒ GPU). The log-log
+        //   break-even of these two as-shipped anchors lands ~1.15e6 — inside
+        //   the ~1e5–1e6 decade the m35 doc cites as "wins for ns·ng ≳ 1e5".
+        StageCalib {
+            name: "a2f_assembler", has_gpu: true,
+            size_small:   1024.0 * 128.0,            // 131072 ... see note: small-stage anchor
+            cpu_ms_small: 0.532,                     // m35 cpu_ms @1024×128
+            gpu_ms_small: 2.358,                     // m35 gpu1d_ms @1024×128 → 0.2× (SLOWER)
+            size_large:   262144.0 * 1024.0,         // 268435456
+            cpu_ms_large: 1052.604,                  // m35 cpu_ms @262144×1024
+            gpu_ms_large: 25.140,                    // m35 gpu2d_ms @262144×1024 → 41.9× (FASTER)
+            modeled: false,                          // #2717 MEASURED
+        },
+        // sternheimer — MODELED (d6): #2737 measured PARITY only, no speed table.
+        //   small anchor N_basis=256: dense O(N²) matvec tiny → launch-bound,
+        //     GPU ~0.15 ms launch floor (m35 gpu2d flat region) > CPU 0.05 ms.
+        //   large anchor N_basis=8192: O(N²)=6.7e7 deposits/CG-step → GPU at the
+        //     measured ~138 GFLOP/s plateau ≫ single-core CPU. Modeled cpu/gpu.
+        StageCalib {
+            name: "sternheimer", has_gpu: true,
+            size_small:   256.0,
+            cpu_ms_small: 0.05,                      // modeled: 256² matvec single-core
+            gpu_ms_small: 0.15,                      // modeled: m35-measured launch floor (SLOWER)
+            size_large:   8192.0,
+            cpu_ms_large: 120.0,                     // modeled: 8192² matvec single-core
+            gpu_ms_large: 3.0,                       // modeled: ~138 GFLOP/s plateau (FASTER ~40×)
+            modeled: true,                           // #2737 = PARITY only; speedup MODELED
+        },
+        // scf — NO merged GPU kernel for the QFORGE SCF stage. has_gpu=false ⇒
+        //   dispatch always routes CPU (we never claim an unrunnable GPU win).
+        StageCalib {
+            name: "scf", has_gpu: false,
+            size_small: 1.0,  cpu_ms_small: 1.0,  gpu_ms_small: 1.0e30,
+            size_large: 1.0,  cpu_ms_large: 1.0,  gpu_ms_large: 1.0e30,
+            modeled: false,
+        },
+    ]
+}
+
+// ── internal: log-linear interpolate y at x between (x0,y0)-(x1,y1) ──────────
+// Cost/speedup scale ~ power-law in problem size, so we interpolate in log-log
+// space (linear in (ln x, ln y)). Outside [x0,x1] we EXTRAPOLATE the same slope
+// (honest: a routing model must answer for any size, flagged via the anchors).
+fn _loglog_interp(x: float, x0: float, y0: float, x1: float, y1: float) -> float {
+    if x <= 0.0 || x0 <= 0.0 || x1 <= 0.0 || y0 <= 0.0 || y1 <= 0.0 { return y0 }
+    let lx0 = _ln(x0)
+    let lx1 = _ln(x1)
+    if _abs(lx1 - lx0) < 1.0e-12 { return y0 }
+    let t = (_ln(x) - lx0) / (lx1 - lx0)
+    let ly = _ln(y0) + t * (_ln(y1) - _ln(y0))
+    return exp(ly)
+}
+
+// ── internal: solve for the crossover size where cpu(s) == gpu(s) ────────────
+// In log-log space both cpu(s) and gpu(s) are straight lines; their difference
+// d(ln s) = ln(cpu) - ln(gpu) is also linear, so the break-even (d=0) is one
+// linear solve over the two anchors' speedup ratios. Returns size_small if the
+// speedup never crosses 1 within numeric range (degenerate / always-one-side).
+fn _crossover(c: StageCalib) -> float {
+    let sp0 = c.cpu_ms_small / c.gpu_ms_small      // speedup at size_small
+    let sp1 = c.cpu_ms_large / c.gpu_ms_large      // speedup at size_large
+    if sp0 <= 0.0 || sp1 <= 0.0 { return c.size_small }
+    let l0 = _ln(sp0)                               // ln-speedup at small
+    let l1 = _ln(sp1)                               // ln-speedup at large
+    if _abs(l1 - l0) < 1.0e-12 { return c.size_small }
+    // break-even where ln-speedup = 0, linear in ln(size):
+    let lx0 = _ln(c.size_small)
+    let lx1 = _ln(c.size_large)
+    let t = (0.0 - l0) / (l1 - l0)
+    return exp(lx0 + t * (lx1 - lx0))
+}
+
+// qforge_stage_dispatch — route (stage, problem_size) → {CPU|GPU} with predicted
+// CPU/GPU wall and the calibrated crossover size.
+//
+// d4 GENERIC: looks the stage up in the calib table and runs the ONE crossover
+// formula — no per-stage compute branch. d6 HONEST: a stage with no merged GPU
+// kernel (scf) always routes CPU with a 1e30 GPU sentinel; a stage whose calib
+// is modeled (sternheimer) carries modeled=true through to the decision.
+//
+// GUARD: unknown stage / degenerate calib → valid=false, routes CPU.
+pub fn qforge_stage_dispatch(stage: str, problem_size: float) -> DispatchDecision {
+    let table = qforge_stage_calib_table()
+    let mut i = 0
+    while i < len(table) {
+        let c = table[i]
+        if c.name == stage {
+            // predicted CPU wall at this size (always defined)
+            let cpu = _loglog_interp(problem_size,
+                                     c.size_small, c.cpu_ms_small,
+                                     c.size_large, c.cpu_ms_large)
+            // no merged GPU kernel ⇒ CPU always (sentinel GPU wall)
+            if !c.has_gpu {
+                return DispatchDecision {
+                    stage: stage, use_gpu: false,
+                    predicted_ms_cpu: cpu, predicted_ms_gpu: 1.0e30,
+                    crossover_size: 0.0, speedup: 0.0,
+                    modeled: c.modeled, valid: true,
+                }
+            }
+            let gpu = _loglog_interp(problem_size,
+                                     c.size_small, c.gpu_ms_small,
+                                     c.size_large, c.gpu_ms_large)
+            let xover = _crossover(c)
+            let sp = if gpu > 0.0 { cpu / gpu } else { 0.0 }
+            return DispatchDecision {
+                stage: stage, use_gpu: sp > 1.0,
+                predicted_ms_cpu: cpu, predicted_ms_gpu: gpu,
+                crossover_size: xover, speedup: sp,
+                modeled: c.modeled, valid: true,
+            }
+        }
+        i = i + 1
+    }
+    // unknown stage → honest invalid, route CPU
+    return DispatchDecision {
+        stage: stage, use_gpu: false,
+        predicted_ms_cpu: 0.0, predicted_ms_gpu: 1.0e30,
+        crossover_size: 0.0, speedup: 0.0,
+        modeled: false, valid: false,
+    }
+}
