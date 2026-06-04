@@ -1,0 +1,122 @@
+// backend_resolver.hexa — where heavy compute runs (CLI+COCKPIT M17).
+//
+// Pure-hexa-native port of DemiurgeCore/Loaders/ComputeBackend.swift
+// `BackendResolver`. @goal: external users operate with NO owner infra,
+// so the default backend is `local` (this machine); an optional user
+// remote comes from the `DEMIURGE_BACKEND` env. Owner pool hosts are NOT
+// hardcoded (the @goal forbids `ubu-1`/`mini` literals) — they are read
+// at runtime from the owner's OWN `~/.pool/pool.json`, and only when
+// DEMIURGE_OWNER is set. External users never see them.
+//
+// This is the backend-SELECTION surface; the actual dispatch-to-backend
+// execution is the 7-verb wiring (out of scope here · read-only).
+//
+// d4: the backend set is DATA (a [Backend] list assembled by rule), never
+// a name-branch. d3: reuses json_object + record_loader leaf helpers.
+
+import "stdlib/alloc/json_object.hexa"
+
+// Backend — one compute-backend descriptor (Swift `ComputeBackend`).
+//   id   = "local" · "remote:<host>" · "pool:<name>"
+//   kind = "local" | "remote" | "pool" (Swift BackendKind.rawValue)
+//   host = ssh target ("this machine" for local)
+//   owner = owner-gated (사장실)
+struct Backend {
+    id:    string,
+    label: string,
+    kind:  string,
+    host:  string,
+    owner: bool,
+}
+
+// br_local() — the always-present local default (Swift BackendResolver.local).
+pub fn br_local() -> Backend {
+    return Backend {
+        id: "local", label: "내 컴퓨터 (local)", kind: "local",
+        host: "this machine", owner: false,
+    }
+}
+
+// br_user_remote() — the user remote from `DEMIURGE_BACKEND`, mirroring
+// Swift userRemote(): trim whitespace; empty OR lowercased == "local" → none;
+// else strip a leading "ssh:" and build a remote descriptor. Returns a
+// 1-element list (present) or empty list (none) — hexa has no Optional here.
+pub fn br_user_remote() -> [Backend] {
+    let mut out: [Backend] = []
+    let spec = env("DEMIURGE_BACKEND").trim()
+    if len(spec) == 0 { return out }
+    if spec.to_lower() == "local" { return out }
+    let host = if spec.starts_with("ssh:") { spec.substring(4, len(spec)) } else { spec }
+    out.push(Backend {
+        id: "remote:" + host, label: "원격 백엔드 (" + host + ")",
+        kind: "remote", host: host, owner: false,
+    })
+    return out
+}
+
+// br_pool_hosts() — owner pool hosts read from `$HOME/.pool/pool.json`
+// (Swift poolHosts() · NOT hardcoded). Absent / malformed file → empty
+// (the external case). Each `hosts[]` row → a pool Backend, owner=true.
+pub fn br_pool_hosts() -> [Backend] {
+    let mut out: [Backend] = []
+    let path = env("HOME") + "/.pool/pool.json"
+    let raw = exec("cat " + br_shq(path) + " 2>/dev/null").trim()
+    if len(raw) == 0 { return out }
+    let obj = json_parse_object(raw)
+    let hosts = json_object_get_path(obj, "hosts")
+    if type_of(hosts) != "array" { return out }
+    let mut i = 0
+    while i < len(hosts) {
+        let h = hosts[i]
+        i = i + 1
+        if type_of(h) != "map" { continue }
+        let name = json_object_get_str(h, "name", "")
+        let ssh  = json_object_get_str(h, "ssh", "")
+        let os   = json_object_get_str(h, "os", "")
+        if len(name) == 0 { continue }
+        out.push(Backend {
+            id: "pool:" + name, label: "pool · " + name + " (" + os + ")",
+            kind: "pool", host: ssh, owner: true,
+        })
+    }
+    return out
+}
+
+// br_available(owner) — backends visible to the current process (Swift
+// available(ownerMode:)). Always `local`; the user remote if configured;
+// owner pool hosts only in owner mode. ONE assembled list (d4 · no branch
+// on backend id).
+pub fn br_available(owner: bool) -> [Backend] {
+    let mut out: [Backend] = [br_local()]
+    let r = br_user_remote()
+    let mut i = 0
+    while i < len(r) { out.push(r[i]) ; i = i + 1 }
+    if owner {
+        let p = br_pool_hosts()
+        let mut j = 0
+        while j < len(p) { out.push(p[j]) ; j = j + 1 }
+    }
+    return out
+}
+
+// br_active() — the active backend: the user remote if configured, else
+// local (Swift `active`). Selecting an owner pool host is an explicit owner
+// action (M20), never the default — so the active set is local|remote only.
+pub fn br_active() -> Backend {
+    let r = br_user_remote()
+    if len(r) > 0 { return r[0] }
+    return br_local()
+}
+
+// br_shq(s) — single-quote a shell argument (local leaf; mirrors the
+// _shq_h in handlers.hexa — kept here so this leaf has no back-import).
+fn br_shq(s: string) -> string {
+    let mut out = "'"
+    let mut i = 0
+    while i < len(s) {
+        let c = s.substring(i, i + 1)
+        if c == "'" { out = out + "'\\''" } else { out = out + c }
+        i = i + 1
+    }
+    return out + "'"
+}

@@ -1,0 +1,123 @@
+// HEXA Standard Library — demi/verify_record
+//
+// @version 0.2.0
+// @capabilities [proc]
+//
+// The pure-hexa-native port of the Swift `verifyRecord` path
+// (demiurge cockpit/Sources/DemiurgeCLI/main.swift:733 + RecordLoader +
+// ArtifactRegistry · demi-cli-pure-hexa-native · plan PR-verify-record).
+//
+// `demi verify <path|id>` (bare, NOT --expr/--fence/rubric) runs the
+// provenance / claim-gate CONSISTENCY check the Swift CLI does:
+//   1. rl_resolve(arg) — try `arg` as an exports/-relative path; else as a
+//      recordId scanned out of exports/chip/noc/f1f2/records/*.json.
+//   2. on a load failure → stderr `verify: <error>\n` + exit 1.
+//   3. on success → 6 [OK]/[FAIL] checks (recordId · 4 provenance fields ·
+//      verdict-claim-vs-gate); any FAIL → stderr REJECTED line + exit 1.
+//
+// d3 (one canonical home): the record-enumerate / load / path-guard primitives
+// live in stdlib/demi/record_loader.hexa (the SHARED BASE the list-*/show/gate
+// verbs also build on). This module CONSUMES them (rl_resolve · rl_error_line)
+// and adds only the verify-specific consistency gate.
+//
+// BYTE-PARITY (plan @L7): the stdout/stderr text + exit codes match the Swift
+// reference exactly (captured 2026-06-03 against cockpit/.build/release). The
+// merged-output ordering of the REJECTED case (stderr line FIRST, then the
+// buffered [OK]/[FAIL] stdout) is the Swift behavior — stdout is fully
+// buffered to a pipe and flushed at exit AFTER the immediate stderr write — so
+// this port writes the stderr line FIRST too, then the check lines, matching
+// `2>&1` byte-for-byte.
+
+import "stdlib/demi/manifest.hexa"
+import "stdlib/demi/record_loader.hexa"
+import "stdlib/alloc/json_object.hexa"
+
+// _vr_path_str(obj, path) — dotted-path lookup → string. "" if the path is
+// absent or the terminal is not a scalar. json_object_get_str only takes a
+// single key (it does NOT split on "."), so a nested field MUST go through
+// json_object_get_path first, then to_string.
+fn _vr_path_str(obj, path: string) -> string {
+    let v = json_object_get_path(obj, path)
+    if type_of(v) == "void" { return "" }
+    return to_string(v)
+}
+
+// ── the 6-check consistency gate (mirror verifyRecord) ──────────────────────
+
+// _vr_check(name, pass, detail) — print one [OK]/[FAIL] line EXACTLY as Swift's
+// nested `check()` does: tag is "[OK]  " (two trailing spaces) or "[FAIL]";
+// " — <detail>" appended only when detail is non-empty.
+fn _vr_check(name: string, pass: bool, detail: string) {
+    let tag = if pass { "[OK]  " } else { "[FAIL]" }
+    if len(detail) == 0 {
+        println(tag + " " + name)
+    } else {
+        println(tag + " " + name + " — " + detail)
+    }
+}
+
+// vr_verify_record(arg) — THE entry called by handler_verify's bare path.
+// Returns the process exit code (0 ok · 1 reject/load-fail).
+pub fn vr_verify_record(arg: string) -> int {
+    let res = rl_resolve(arg)
+    if res[0] != "ok" {
+        eprintln(rl_error_line(res[0], res[1]))
+        return 1
+    }
+    let path = res[1]
+    let obj = json_parse_object(read_file(path))
+
+    let record_id   = json_object_get_str(obj, "record_id", "")
+    let sim_engine  = _vr_path_str(obj, "provenance.sim_engine")
+    let sim_commit  = _vr_path_str(obj, "provenance.sim_commit_hash")
+    let consumer    = _vr_path_str(obj, "provenance.consumer_target")
+    let atlas_cite  = _vr_path_str(obj, "provenance.atlas_cite_block")
+    let gate        = _vr_path_str(obj, "provenance.measurement_gate")
+
+    let f1          = _vr_path_str(obj, "verdict.f1")
+    let f2          = _vr_path_str(obj, "verdict.f2")
+    let rationale   = _vr_path_str(obj, "verdict.rationale")
+
+    // claimText = "<f1> <f2> <rationale>".lowercased() (Swift verifyRecord).
+    let claim_text  = (f1 + " " + f2 + " " + rationale).to_lower()
+    // markers (verbatim from Swift): English already-lower + Korean literals.
+    let mut claims = false
+    if rl_contains(claim_text, "absorbed")     { claims = true }
+    if rl_contains(claim_text, "parity")       { claims = true }
+    if rl_contains(claim_text, "측정완료")      { claims = true }
+    if rl_contains(claim_text, "gate_closed")  { claims = true }
+    if rl_contains(claim_text, "검증완료")      { claims = true }
+    // measured = gate is B_PINNED_MET or CLOSED_MEASURED.
+    let measured = (gate == "GATE_B_PINNED_MET") || (gate == "GATE_CLOSED_MEASURED")
+
+    // The consistency rule: a measurement claim with a non-measured gate fails.
+    let consistent = !(claims && !measured)
+    // detail string (gate displayLabel = the raw value).
+    let consistency_detail = if claims && !measured {
+        "verdict asserts a measurement but gate = " + gate
+    } else { "" }
+
+    // REJECTED stderr line is written FIRST when any check fails (mirrors the
+    // Swift merged-output ordering: stderr unbuffered, stdout flushed at exit).
+    let mut ok = true
+    if record_id == ""  { ok = false }
+    if sim_engine == "" { ok = false }
+    if sim_commit == "" { ok = false }
+    if consumer == ""   { ok = false }
+    if atlas_cite == "" { ok = false }
+    if !consistent      { ok = false }
+    if !ok {
+        eprintln("verify: REJECTED — record inconsistent (rfc_011 §4.2 / @F f6)")
+    }
+
+    // then the 6 check lines (stdout), in Swift order.
+    _vr_check("recordId", record_id != "", "")
+    _vr_check("provenance.simEngine non-empty", sim_engine != "", "")
+    _vr_check("provenance.simCommitHash non-empty", sim_commit != "", "")
+    _vr_check("provenance.consumerTarget non-empty", consumer != "", "")
+    _vr_check("provenance.atlasCiteBlock non-empty", atlas_cite != "", "")
+    _vr_check("verdict claim vs gate consistent", consistent, consistency_detail)
+
+    if ok { return 0 }
+    return 1
+}

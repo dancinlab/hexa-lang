@@ -1,0 +1,594 @@
+// HEXA Standard Library — demi/record_loader
+//
+// @version 0.1.0
+// @capabilities [proc]
+//
+// The pure-hexa-native port of the Swift cockpit `RecordLoader` +
+// `ArtifactRegistry` pair (demiurge cockpit/Sources/DemiurgeCore/Loaders/
+// RecordLoader.swift + Artifacts/ArtifactRegistry.swift · demi-cli-pure-hexa-
+// native · plan PR-record-loader). This is the SHARED BASE the later
+// list-*/show/gate verbs (PR#6/#7/#8) build on — it adds NO user-facing verb
+// by itself.
+//
+// Canonical primitives (d3 — one home for the loader; verify_record.hexa now
+// CONSUMES these instead of re-deriving them):
+//   rl_exports_root()          — RecordLoader.exportsRoot (lexical-canon)
+//   rl_f1f2_records_root()     — RecordLoader.f1f2RecordsRoot
+//   rl_load_by_path(arg)       — RecordLoader.load(url:) — invariant (a) guard
+//   rl_load_by_id(id)          — resolveRecord scan over the records dir
+//   rl_resolve(arg)            — try path, else id scan (main.swift resolveRecord)
+//   rl_enumerate(kind)         — ArtifactRegistry.load(kind:) (f1f2 today)
+//   rl_error_line(status,path) — RecordLoaderError.errorDescription, `verify: `-prefixed
+//
+// @D g_cockpit_isolation invariant (a) is enforced in rl_load_by_path exactly
+// as Swift's RecordLoader.load does: the canonicalized path must hasPrefix the
+// canonicalized exportsRoot, else `pathOutsideExports`. Canonicalization
+// mirrors Foundation's `.standardizedFileURL` — LEXICAL `.`/`..` collapse, NO
+// symlink resolution (so it agrees with the Swift reference on the same tree).
+
+import "stdlib/alloc/json_object.hexa"
+
+// ── small string helpers (self-contained leaf module) ──────────────────────
+
+// rl_index_of(hay, needle, from) — first index of needle at/after `from`, or -1.
+pub fn rl_index_of(hay: string, needle: string, from: int) -> int {
+    let hn = len(hay)
+    let nn = len(needle)
+    if nn == 0 { return from }
+    let mut i = from
+    while i + nn <= hn {
+        if hay.substring(i, i + nn) == needle { return i }
+        i = i + 1
+    }
+    return -1
+}
+
+// rl_contains(hay, needle) — substring membership.
+pub fn rl_contains(hay: string, needle: string) -> bool {
+    return rl_index_of(hay, needle, 0) >= 0
+}
+
+// rl_starts_with(s, p) — prefix test (string method may not be wired in the
+// nested-run path; keep a local copy so this leaf module is self-contained).
+pub fn rl_starts_with(s: string, p: string) -> bool {
+    if len(p) > len(s) { return false }
+    return s.substring(0, len(p)) == p
+}
+
+// rl_shq(s) — single-quote shell escaping for exec() argv.
+pub fn rl_shq(s: string) -> string {
+    let mut out = "'"
+    let mut i = 0
+    while i < len(s) {
+        let c = s.substring(i, i + 1)
+        if c == "'" { out = out + "'\\''" } else { out = out + c }
+        i = i + 1
+    }
+    return out + "'"
+}
+
+// ── exports-root + path canonicalization (mirror RecordLoader) ──────────────
+
+// rl_pop(xs) — return xs without its last element (no native pop assumed).
+pub fn rl_pop(xs: [string]) -> [string] {
+    let mut out: [string] = []
+    let mut i = 0
+    let n = len(xs) - 1
+    while i < n {
+        out.push(xs[i])
+        i = i + 1
+    }
+    return out
+}
+
+// rl_canon(path) — LEXICAL canonicalization matching Foundation
+// `.standardizedFileURL`: make absolute against cwd if relative, collapse `.`
+// and `..` segments, drop empty segments and any trailing slash. Does NOT
+// resolve symlinks (Foundation's `standardized` does not either), so it agrees
+// with the Swift reference on the same physical tree.
+pub fn rl_canon(path: string) -> string {
+    let mut p = path
+    if !rl_starts_with(p, "/") {
+        let cwd = exec("pwd").trim()
+        p = cwd + "/" + p
+    }
+    let segs = p.split("/")
+    let mut stack: [string] = []
+    let mut i = 0
+    while i < len(segs) {
+        let s = segs[i]
+        if s == "" || s == "." {
+            // skip empty (from leading "/" or "//") and "."
+        } else if s == ".." {
+            if len(stack) > 0 { stack = rl_pop(stack) }
+        } else {
+            stack.push(s)
+        }
+        i = i + 1
+    }
+    let mut out = ""
+    let mut j = 0
+    while j < len(stack) {
+        out = out + "/" + stack[j]
+        j = j + 1
+    }
+    if out == "" { return "/" }
+    return out
+}
+
+// rl_exports_root() — the exports subtree the CLI reads records from
+// (RecordLoader.exportsRoot). $DEMIURGE_REPO/exports if set, else <cwd>/../exports.
+// Returned canonicalized (lexical), with NO trailing slash.
+pub fn rl_exports_root() -> string {
+    let repo = env("DEMIURGE_REPO")
+    if len(repo) > 0 {
+        return rl_canon(repo + "/exports")
+    }
+    let cwd = exec("pwd").trim()
+    return rl_canon(cwd + "/../exports")
+}
+
+// rl_f1f2_records_root() — RecordLoader.f1f2RecordsRoot (the default F1F2 dir).
+pub fn rl_f1f2_records_root() -> string {
+    return rl_exports_root() + "/chip/noc/f1f2/records"
+}
+
+// ── record load (mirror RecordLoader.load) ──────────────────────────────────
+//
+// A load result is encoded as a 2-string array [status, payload]:
+//   ["ok",       <canonical-path>]   — file exists under exports/, decodable
+//   ["outside",  <canonical-path>]   — path canonicalizes outside exports/
+//   ["notfound", <canonical-path>]   — under exports/ but no such file
+//   ["decode",   <canonical-path>]   — read but JSON-undecodable
+// The caller turns a non-"ok" status into the matching Swift error line.
+
+pub fn rl_load_by_path(path_arg: string) -> [string] {
+    let root = rl_exports_root()
+    let canon = rl_canon(path_arg)
+    // invariant (a): canon must be under root (string hasPrefix, like Swift).
+    if !rl_starts_with(canon, root) {
+        return ["outside", canon]
+    }
+    let q = rl_shq(canon)
+    let exists = exec("test -f " + q + " && echo yes || echo no").trim()
+    if exists != "yes" {
+        return ["notfound", canon]
+    }
+    let text = read_file(canon)
+    let obj = json_parse_object(text)
+    // json_parse_object returns an empty map on non-object / unparseable text.
+    // A genuine record always carries "record_id"; treat a missing-everything
+    // parse as a decode failure (Swift's decodeFailed — the consumer cannot
+    // read the typed fields).
+    if !json_object_has(obj, "record_id") && !json_object_has(obj, "provenance") {
+        return ["decode", canon]
+    }
+    return ["ok", canon]
+}
+
+// rl_enumerate(kind) — ArtifactRegistry.load(kind:). Today only the f1f2 kind
+// (the RecordLoader-anchored, invariant-(a)-strict scan) is implemented — it is
+// the one PR#5 needs to land as the shared base. Returns the SORTED list of
+// canonical *.json record paths under f1f2RecordsRoot (sort by lastPathComponent,
+// matching ArtifactRegistry.loadF1F2's `.sorted { $0.lastPathComponent < ... }`).
+// The metadata kinds (decision/rfc/domain) land with their list-* verbs (#6-#8).
+pub fn rl_enumerate(kind: string) -> [string] {
+    if kind != "f1f2" {
+        return []
+    }
+    let dir = rl_f1f2_records_root()
+    let q_dir = rl_shq(dir)
+    // `ls *.json | sort` == sort by lastPathComponent (all share the same dir).
+    let listing = exec("ls " + q_dir + "/*.json 2>/dev/null | sort").trim()
+    let mut out: [string] = []
+    if len(listing) > 0 {
+        let files = listing.split("\n")
+        let mut i = 0
+        while i < len(files) {
+            let f = files[i].trim()
+            if len(f) > 0 { out.push(rl_canon(f)) }
+            i = i + 1
+        }
+    }
+    return out
+}
+
+// ── full F1F2 Codable-decodability gate (RecordLoader.load .success) ─────────
+//
+// The list-gates / gate-summary verbs (#8) iterate ArtifactRegistry.loadF1F2()
+// then `guard case .success(let r) = RecordLoader.load(...)` — i.e. they SKIP
+// any record that does not fully decode as an F1F2Record (main.swift:452,471).
+// A real on-disk record (exports/.../router_*_pnr_sky130hd.json) is missing
+// `traffic` + `provenance.sim_commit_hash`, so Swift's strict Codable throws
+// and the record is dropped from BOTH the grouping and the totals.
+//
+// The looser rl_load_by_path guard (record_id|provenance present) is enough for
+// the path/id error surface (verify/show), but NOT for gate aggregation — there
+// a record either decodes WHOLLY or is invisible. rl_f1f2_decodes(obj) mirrors
+// the F1F2Record Codable contract field-for-field: every required key present
+// AND of the right kind (string / int / bool / array / map), and the
+// measurement_gate value one of the 4 enum rawValues (a non-enum value makes
+// Swift's MeasurementGate decode throw → .failure → skipped). d3: the decode
+// gate is a loader concern, so it lives here, not in the gate handler.
+
+// _rl_is_str / _rl_is_int / _rl_is_bool / _rl_is_arr — typed terminal checks on
+// a dotted path (Swift Codable requires the EXACT JSON kind; an int where a bool
+// is expected, or a float where an int is expected, throws).
+fn _rl_is_str(obj, path: string) -> bool {
+    return type_of(json_object_get_path(obj, path)) == "string"
+}
+fn _rl_is_int(obj, path: string) -> bool {
+    return type_of(json_object_get_path(obj, path)) == "int"
+}
+fn _rl_is_bool(obj, path: string) -> bool {
+    return type_of(json_object_get_path(obj, path)) == "bool"
+}
+fn _rl_is_arr(obj, path: string) -> bool {
+    return type_of(json_object_get_path(obj, path)) == "array"
+}
+
+// rl_gate_is_known(g) — is `g` one of the 4 MeasurementGate rawValues? A value
+// outside this set makes Swift's enum decode throw (record skipped).
+pub fn rl_gate_is_known(g: string) -> bool {
+    return g == "GATE_OPEN" || g == "GATE_B_PINNED_MET"
+        || g == "GATE_CLOSED_MEASURED" || g == "GATE_FAILED"
+}
+
+// rl_f1f2_decodes(obj) — true iff `obj` (a parsed record) decodes WHOLLY as the
+// Swift F1F2Record (so list-gates/gate-summary count it; else it is skipped).
+pub fn rl_f1f2_decodes(obj) -> bool {
+    if type_of(obj) != "map" { return false }
+    // top-level scalars
+    if !_rl_is_str(obj, "interface") { return false }
+    if !_rl_is_str(obj, "schema_version") { return false }
+    if !_rl_is_str(obj, "record_id") { return false }
+    if !_rl_is_str(obj, "produced_at_utc") { return false }
+    if !_rl_is_str(obj, "traffic") { return false }
+    // topology { kind:str, degree:int, node_count:int, routing:str }
+    if !_rl_is_str(obj, "topology.kind") { return false }
+    if !_rl_is_int(obj, "topology.degree") { return false }
+    if !_rl_is_int(obj, "topology.node_count") { return false }
+    if !_rl_is_str(obj, "topology.routing") { return false }
+    // verdict { f1:str, f2:str, rationale:str }
+    if !_rl_is_str(obj, "verdict.f1") { return false }
+    if !_rl_is_str(obj, "verdict.f2") { return false }
+    if !_rl_is_str(obj, "verdict.rationale") { return false }
+    // provenance — every honesty field required + the gate enum
+    if !_rl_is_bool(obj, "provenance.absorbed") { return false }
+    if !_rl_is_str(obj, "provenance.measurement_gate") { return false }
+    // gate value must be one of the 4 enum rawValues (json_object_get_str does
+    // not split on "." → use the path getter, then string-compare).
+    let g = to_string(json_object_get_path(obj, "provenance.measurement_gate"))
+    if !rl_gate_is_known(g) { return false }
+    if !_rl_is_str(obj, "provenance.sim_engine") { return false }
+    if !_rl_is_str(obj, "provenance.sim_commit_hash") { return false }
+    if !_rl_is_arr(obj, "provenance.gate_failures") { return false }
+    if !_rl_is_str(obj, "provenance.consumer_target") { return false }
+    if !_rl_is_str(obj, "provenance.atlas_cite_block") { return false }
+    if !_rl_is_arr(obj, "provenance.scope_caveats") { return false }
+    return true
+}
+
+// rl_load_by_id(id) — scan f1f2RecordsRoot for a record whose record_id == id
+// (ArtifactRegistry-style enumeration). FIRST match in sorted order wins, then
+// the matched path is re-loaded through rl_load_by_path (so the same invariant-
+// (a) guard applies). Returns the load-result pair; if no id matches, a
+// ["notfound", id] pair (the caller decides how to surface that — resolveRecord
+// prefers the original path error, see rl_resolve).
+pub fn rl_load_by_id(id: string) -> [string] {
+    let files = rl_enumerate("f1f2")
+    let mut i = 0
+    while i < len(files) {
+        let f = files[i]
+        let text = read_file(f)
+        let obj = json_parse_object(text)
+        let rid = json_object_get_str(obj, "record_id", "")
+        if rid == id {
+            return rl_load_by_path(f)
+        }
+        i = i + 1
+    }
+    return ["notfound", id]
+}
+
+// rl_resolve(arg) — main.swift resolveRecord. Try `arg` as a path; if it loads,
+// use it. Else scan for a record_id == arg (the FIRST sorted match). If no id
+// matches, return the ORIGINAL path-load result (so the error reported is the
+// path error for arg, exactly like Swift returning `byPath`).
+pub fn rl_resolve(arg: string) -> [string] {
+    let by_path = rl_load_by_path(arg)
+    if by_path[0] == "ok" { return by_path }
+    let by_id = rl_load_by_id(arg)
+    if by_id[0] == "ok" { return by_id }
+    // no id hit → original path-load failure (Swift returns `byPath`).
+    return by_path
+}
+
+// rl_error_line(status, path) — the Swift RecordLoaderError.errorDescription
+// for a failed load, prefixed `verify: ` (the verifyRecord stderr write).
+pub fn rl_error_line(status: string, path: string) -> string {
+    if status == "outside" {
+        return "verify: Refused (@D g_cockpit_isolation invariant a): path is outside ../exports/**: " + path
+    }
+    if status == "notfound" {
+        return "verify: Record file not found: " + path
+    }
+    // decode (read OK, JSON undecodable) — Swift prints the underlying decode
+    // error, machine/locale dependent; the deterministic, golden-able cases are
+    // ok/outside/notfound. A decode failure still exits 1 with a generic line.
+    return "verify: Decode failed (" + path + ")"
+}
+
+// ── ArtifactRegistry stub enumeration (list-* verbs · PR#6) ─────────────────
+//
+// The list-*/show verbs (#6+) need, per artifact, the THREE display fields the
+// Swift ArtifactStub carries: the `$<id>` display token, the human title, and
+// the source path. `rl_enumerate(kind)` above intentionally returns f1f2 PATHS
+// only (its contract is the RecordLoader-anchored path scan that load-by-id
+// reuses). So the richer list view gets its own typed carrier here, mirroring
+// ArtifactRegistry.load(kind:) for all FOUR kinds:
+//   f1f2     → exports/chip/noc/f1f2/records/*.json  ($R<i>, 1-based load index)
+//   decision → <repo>/design.md  `### Decision N — title`  ($D<n>, numeric sort)
+//   rfc      → <repo>/proposals/rfc_*.md              ($RFC<n>, n = 2nd `_` field)
+//   domain   → <repo>/domains/*.md (README excluded) + matter/README pointer
+// projectRoot == parent of exportsRoot (Swift ArtifactRegistry.projectRoot),
+// i.e. exports-root with its last path segment dropped.
+
+// A single list-row stub: the `$<id>` display token, human title, source path.
+pub struct RlStub {
+    id_display: string,   // "$R1" · "$D29" · "$RFC011" · "$DOM:chip"
+    title:      string,   // sidebar/list human label
+    path:       string,   // absolute source path (pseudo for decisions)
+}
+
+// rl_project_root() — ArtifactRegistry.projectRoot: exportsRoot with its last
+// segment removed (exportsRoot is <repo>/exports → projectRoot is <repo>).
+pub fn rl_project_root() -> string {
+    let root = rl_exports_root()
+    let segs = root.split("/")
+    let mut stack: [string] = []
+    let mut i = 0
+    while i < len(segs) {
+        if len(segs[i]) > 0 { stack.push(segs[i]) }
+        i = i + 1
+    }
+    if len(stack) > 0 { stack = rl_pop(stack) }
+    let mut out = ""
+    let mut j = 0
+    while j < len(stack) {
+        out = out + "/" + stack[j]
+        j = j + 1
+    }
+    if out == "" { return "/" }
+    return out
+}
+
+// rl_basename(p) — last path segment.
+fn rl_basename(p: string) -> string {
+    let segs = p.split("/")
+    if len(segs) == 0 { return p }
+    return segs[len(segs) - 1]
+}
+
+// rl_drop_ext(name) — strip the final `.<ext>` (lastPathComponent without the
+// extension — matches URL.deletingPathExtension().lastPathComponent).
+fn rl_drop_ext(name: string) -> string {
+    let mut dot = -1
+    let mut i = 0
+    while i < len(name) {
+        if name.substring(i, i + 1) == "." { dot = i }
+        i = i + 1
+    }
+    if dot < 0 { return name }
+    return name.substring(0, dot)
+}
+
+// rl_atoi(s) — parse a leading non-negative integer; non-numeric → 0 (matches
+// the Swift `Int(key) ?? 0` decision-sort fallback).
+fn rl_atoi(s: string) -> int {
+    let t = s.trim()
+    if len(t) == 0 { return 0 }
+    let mut n = 0
+    let mut i = 0
+    while i < len(t) {
+        let d = ord(t.substring(i, i + 1)) - 48
+        if d < 0 || d > 9 { return 0 }
+        n = n * 10 + d
+        i = i + 1
+    }
+    return n
+}
+
+// rl_records_dir_list(dir, pat) — `ls <dir>/<pat> | sort` → basenames sorted by
+// lastPathComponent (ArtifactRegistry sorts F1F2/RFC/domain by lastPathComponent).
+fn rl_dir_files_sorted(dir: string, pat: string) -> [string] {
+    let listing = exec("ls " + rl_shq(dir) + "/" + pat + " 2>/dev/null | sort").trim()
+    let mut out: [string] = []
+    if len(listing) > 0 {
+        let lines = listing.split("\n")
+        let mut i = 0
+        while i < len(lines) {
+            let f = lines[i].trim()
+            if len(f) > 0 { out.push(f) }
+            i = i + 1
+        }
+    }
+    return out
+}
+
+// ── f1f2 stubs (reuses rl_enumerate path scan) ──────────────────────────────
+fn rl_stubs_f1f2() -> [RlStub] {
+    let files = rl_enumerate("f1f2")
+    let mut out: [RlStub] = []
+    let mut i = 0
+    while i < len(files) {
+        let title = rl_drop_ext(rl_basename(files[i]))
+        out.push(RlStub { id_display: "$R" + to_string(i + 1),
+                          title: title, path: files[i] })
+        i = i + 1
+    }
+    return out
+}
+
+// ── decision stubs (parse <repo>/design.md `### Decision N — title`) ─────────
+// Dedup by number (keep first), then sort numerically by N (Swift loadDecisions).
+fn rl_stubs_decision() -> [RlStub] {
+    let path = rl_project_root() + "/design.md"
+    let exists = exec("test -f " + rl_shq(path) + " && echo yes || echo no").trim()
+    if exists != "yes" { return [] }
+    let content = read_file(path)
+    let lines = content.split("\n")
+    let head = "### Decision "
+    let mut nums: [string] = []
+    let mut stubs: [RlStub] = []
+    let mut i = 0
+    while i < len(lines) {
+        let line = lines[i]
+        if rl_starts_with(line, head) {
+            // rest = "<N> — <title>"; N = the leading digit run.
+            let rest = line.substring(len(head), len(line))
+            let mut k = 0
+            while k < len(rest) {
+                let d = ord(rest.substring(k, k + 1)) - 48
+                if d < 0 || d > 9 { break }
+                k = k + 1
+            }
+            if k > 0 {
+                let n = rest.substring(0, k)
+                // separator is " — " (space em-dash space); title = after it.
+                let sep = " — "
+                let si = rl_index_of(rest, sep, k)
+                if si >= 0 {
+                    let title = rest.substring(si + len(sep), len(rest))
+                    // dedupe by N (first wins).
+                    let mut seen = false
+                    let mut j = 0
+                    while j < len(nums) {
+                        if nums[j] == n { seen = true }
+                        j = j + 1
+                    }
+                    if !seen {
+                        nums.push(n)
+                        stubs.push(RlStub { id_display: "$D" + n,
+                                            title: "D" + n + " — " + title,
+                                            path: path })
+                    }
+                }
+            }
+        }
+        i = i + 1
+    }
+    // numeric selection-sort by N (small list) — build a fresh array so we
+    // never need struct-element index assignment (only push + read).
+    let mut sorted: [RlStub] = []
+    let mut used: [bool] = []
+    let mut u = 0
+    while u < len(stubs) { used.push(false) ; u = u + 1 }
+    let mut placed = 0
+    while placed < len(stubs) {
+        let mut best = -1
+        let mut best_n = 0
+        let mut k = 0
+        while k < len(stubs) {
+            if !used[k] {
+                let nk = rl_atoi(nums[k])
+                if best < 0 || nk < best_n {
+                    best = k
+                    best_n = nk
+                }
+            }
+            k = k + 1
+        }
+        sorted.push(stubs[best])
+        used[best] = true
+        placed = placed + 1
+    }
+    return sorted
+}
+
+// ── rfc stubs (<repo>/proposals/rfc_*.md, sorted by lastPathComponent) ───────
+// key = the 2nd `_`-field of the stem (rfc_<N>_<slug> → N), title = full stem.
+fn rl_stubs_rfc() -> [RlStub] {
+    let dir = rl_project_root() + "/proposals"
+    let files = rl_dir_files_sorted(dir, "rfc_*.md")
+    let mut out: [RlStub] = []
+    let mut i = 0
+    while i < len(files) {
+        let stem = rl_drop_ext(rl_basename(files[i]))
+        // split on "_", maxSplits=2 → need >= 2 parts (rfc, N[, slug]).
+        let parts = stem.split("_")
+        if len(parts) >= 2 {
+            let n = parts[1]
+            out.push(RlStub { id_display: "$RFC" + n,
+                              title: stem, path: dir + "/" + rl_basename(files[i]) })
+        }
+        i = i + 1
+    }
+    return out
+}
+
+// ── domain stubs (<repo>/domains/*.md minus README + matter pointer) ─────────
+// Built sorted-by-lastPathComponent, matter appended, THEN re-sorted by key
+// (the filename stem) — matching Swift loadDomains' final `.sorted { key }`.
+fn rl_stubs_domain() -> [RlStub] {
+    let dir = rl_project_root() + "/domains"
+    let files = rl_dir_files_sorted(dir, "*.md")
+    let mut keys: [string] = []
+    let mut stubs: [RlStub] = []
+    let mut i = 0
+    while i < len(files) {
+        let base = rl_basename(files[i])
+        if base != "README.md" {
+            let name = rl_drop_ext(base)
+            keys.push(name)
+            stubs.push(RlStub { id_display: "$DOM:" + name,
+                                title: name, path: dir + "/" + base })
+        }
+        i = i + 1
+    }
+    // matter pointer (D17) — domains/matter/README.md if present.
+    let matter = dir + "/matter/README.md"
+    let mhit = exec("test -f " + rl_shq(matter) + " && echo yes || echo no").trim()
+    if mhit == "yes" {
+        keys.push("matter")
+        stubs.push(RlStub { id_display: "$DOM:matter",
+                            title: "matter (pointer — D17 hexa-lang absorbed)",
+                            path: matter })
+    }
+    // final sort by key (string compare) — selection sort into a fresh array
+    // (push + read only; no struct-element index assignment).
+    let mut sorted: [RlStub] = []
+    let mut used: [bool] = []
+    let mut u = 0
+    while u < len(stubs) { used.push(false) ; u = u + 1 }
+    let mut placed = 0
+    while placed < len(stubs) {
+        let mut best = -1
+        let mut best_k = ""
+        let mut k = 0
+        while k < len(stubs) {
+            if !used[k] {
+                if best < 0 || keys[k] < best_k {
+                    best = k
+                    best_k = keys[k]
+                }
+            }
+            k = k + 1
+        }
+        sorted.push(stubs[best])
+        used[best] = true
+        placed = placed + 1
+    }
+    return sorted
+}
+
+// rl_stubs(kind) — ArtifactRegistry.load(kind:) for ALL four kinds, as typed
+// RlStub rows the list-* handlers render. (rl_enumerate stays the path-only
+// f1f2 scan that load-by-id reuses; this is the richer list-facing view.)
+pub fn rl_stubs(kind: string) -> [RlStub] {
+    if kind == "f1f2"     { return rl_stubs_f1f2() }
+    if kind == "decision" { return rl_stubs_decision() }
+    if kind == "rfc"      { return rl_stubs_rfc() }
+    if kind == "domain"   { return rl_stubs_domain() }
+    return []
+}

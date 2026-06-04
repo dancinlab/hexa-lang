@@ -16,6 +16,16 @@
 // one-per-PR in the plan's `## handoff` stack.
 
 import "stdlib/demi/manifest.hexa"
+import "stdlib/demi/verify_record.hexa"
+import "stdlib/demi/record_loader.hexa"
+import "stdlib/demi/project_store.hexa"
+import "stdlib/demi/cellrun.hexa"
+import "stdlib/demi/domain_composer.hexa"
+import "stdlib/demi/domain_catalog.hexa"
+import "stdlib/demi/operation_registry.hexa"
+import "stdlib/demi/backend_resolver.hexa"
+import "stdlib/demi/llm_settings.hexa"
+import "stdlib/demi/geometry.hexa"
 
 // handler_stub(target, argv) — a DECLARED-but-unported local verb. Prints an
 // honest notice naming the verb + the stacked-PR that will port it, and
@@ -86,11 +96,69 @@ fn _verb_plain(verb: string) -> string {
 
 pub fn handler_action(argv: [string]) -> int {
     // argv is the post-verb tail: [<verb>, <domain?>, <flags...>].
-    if len(argv) < 1 {
+    // --producer <p> (value-flag · PR value-flags · @L7) is parsed FIRST,
+    // exactly as Swift main.swift:1086-1090 takes it off `actionArgs` BEFORE
+    // the --deck / --converge / --compose checks. Two consequences we mirror
+    // byte-for-byte: (1) the producer value-flag VALIDATOR fires for EVERY
+    // `action` invocation (a missing-value / flag-as-value --producer errors
+    // exit 2 even when --deck / --converge / --compose is also present), and
+    // (2) the flag+value is REMOVED from argv before the routing checks, so a
+    // `--producer p` token never leaks into the verb/domain slot of any path.
+    // The producer value is USED only on the plain single-cell `cliAction`
+    // path (Swift line 1127), where it appends a ` · producer=<p>` note to the
+    // dispatch header (line 343-344). With --deck / --converge / --compose,
+    // Swift removes --producer but passes it to NONE of those handlers — so we
+    // drop it likewise and the producer has NO effect on those surfaces. The
+    // ProducerRegistry variant-SELECTION (Swift ActionDispatch.runEngineTool
+    // producer:) is the engine's concern (d3 · cellrun) — not re-authored here;
+    // the deterministic CLI-surface parity is the header note + the validator.
+    let mut producer = ""
+    let mut args = argv
+    if _action_has_flag(args, "--producer") {
+        let pp = _action_take_value_flag(args, "--producer")
+        if pp[0] != "0" { return 2 }      // value error already printed (exit 2)
+        producer = pp[1]
+        args = _action_slice_from(pp, 2)  // args with --producer + its value gone
+    }
+    // --deck <deck> (8VERB Family A · PR #20 · @L2/@L6) has the HIGHEST
+    // precedence — Swift cliAction parses --deck (main.swift:1098,1102) BEFORE
+    // --converge (1114) / --compose (1119). It is a value-flag routed through
+    // the SAME validator as --producer (Swift takeValueFlag): a missing /
+    // flag-as-value value errors cleanly (exit 2) instead of swallowing the
+    // next token. When present, ONLY `synthesize rtsc --deck <deck>` drives
+    // QFORGE el-ph (the (synthesize, rtsc) special-cell); any other (verb,
+    // domain) pairing with --deck is an honest usage error (exit 2). This is a
+    // THIN forwarding cell (like atlas/verify) — NOT a name-branch in the
+    // generic layer: the post-deck argv still flows to the SAME cellrun engine
+    // for every NON-rtsc synthesize (d4 · dispatch.hexa untouched).
+    if _action_has_flag(args, "--deck") {
+        let parsed = _action_take_value_flag(args, "--deck")
+        // parsed[0] = rc-sentinel ("0" ok · "2" value error already printed),
+        // parsed[1] = the deck value (when ok), parsed[2..] = remaining argv.
+        if parsed[0] != "0" { return 2 }
+        let deck = parsed[1]
+        let rest = _action_slice_from(parsed, 2)
+        let d_verb = if len(rest) >= 1 { rest[0] } else { "" }
+        let d_domain = if len(rest) >= 2 { rest[1] } else { "" }
+        if _verb_canonical(d_verb) == "synthesize" && d_domain == "rtsc" {
+            return handler_synthesize_rtsc(deck)
+        }
+        eprintln("action --deck: only 'synthesize rtsc --deck <deck>' "
+                 + "drives QFORGE el-ph (@L2). got verb='" + d_verb + "' "
+                 + "domain='" + d_domain + "'.")
+        return 2
+    }
+    if _action_has_flag(args, "--converge") {
+        return handler_action_converge(_action_drop_flag(args, "--converge"))
+    }
+    if _action_has_flag(args, "--compose") {
+        return handler_action_compose(_action_drop_flag(args, "--compose"))
+    }
+    if len(args) < 1 {
         eprintln("action: missing <verb> argument")
         return 2
     }
-    let verb = argv[0]
+    let verb = args[0]
     if _verb_canonical(verb) == "" {
         eprintln("action: unknown verb '" + verb + "' — try one of "
                  + "specify/structure/design/analyze/synthesize/verify/handoff")
@@ -102,23 +170,326 @@ pub fn handler_action(argv: [string]) -> int {
     // token so `action specify --x` does not read "--x" as the domain
     // (mirrors Swift actionArgs[1]).
     let mut domain = "general"
-    if len(argv) >= 2 {
-        if !argv[1].starts_with("--") { domain = argv[1] }
+    if len(args) >= 2 {
+        if !args[1].starts_with("--") { domain = args[1] }
     }
-    // HONESTY (plan @L7 · d6): the Swift `action <verb> <domain>` HAPPY path
-    // routes through ActionDispatch.runEngineTool → the `cellrun` engine,
-    // which reads domains/<domain>.demi manifests + a python substrate and
-    // emits multi-line [cellrun] output with exit 1 on an engine gap. That
-    // engine is NOT yet ported; reproducing only the framing lines would be a
-    // FAKE parity (the middle [cellrun] block + the exit code would diverge).
-    // So the dispatch header is printed (it IS exact), then the happy path
-    // routes to the honest stub — the cellrun engine port is the `action`
-    // stacked PR (plan ## handoff §action). The DETERMINISTIC, byte-matchable
-    // PROOF cell for `action` is the unknown-verb / missing-verb ERROR path
-    // above (exit 2, stderr identical to Swift) — that is what the @ci_gate
-    // parity smoke asserts GREEN this PR.
-    println("action: " + korean + " (" + plain + ") · domain=" + domain + " — dispatching…")
-    return handler_stub("action.cellrun", argv)
+    // HAPPY path (plan @L7 · d6 · PR #18 cellrun engine): the Swift
+    // `action <verb> <domain>` routes through ActionDispatch.runEngineTool →
+    // the generic `default → CellrunDispatch.run(...)` arm → the cellrun
+    // engine, which reads domains/<domain>.demi + dispatches the substrate,
+    // emitting the multi-line [cellrun] banner (exit 1 on an engine gap).
+    // The Swift CellrunDispatch is a THIN WRAPPER over `hexa run
+    // stdlib/cockpit/cellrun.hexa <domain> <verb>` (CellrunDispatch.swift) —
+    // the engine is hexa-native already, so dc_run() DELEGATES to that
+    // canonical engine (d3 · no re-author) which PRINTS the [cellrun] lines
+    // itself (byte-identical to the block the Swift wrapper surfaced).
+    //
+    // Output framing mirrors Swift cliAction (main.swift:344-359):
+    //   1. the dispatch header (exact),
+    //   2. the engine's [cellrun] banner (printed by dc_run → the engine),
+    //   3. a "---" separator,
+    //   4. the engine-gap / new-record line,
+    //   5. exit = engineToolSucceeded==false ? 1 : 0, where
+    //      engineToolSucceeded = (rc==0 && record emitted). The cellrun
+    //      engine returns rc=0 ONLY when it both ran the substrate AND wrote
+    //      a record (it prints "[cellrun] record → ..." on that path), so
+    //      rc==0 ⇔ engineToolSucceeded — no separate record-path reparse is
+    //      needed (Swift parsed the banner only because it ran the engine as
+    //      a SUBPROCESS; in-process we own the rc directly).
+    //
+    // d4 PRESERVED: this routes EVERY (verb, domain) through the one generic
+    // manifest-driven engine — no per-instance branch (mirrors the Swift
+    // `default` arm). dispatch.hexa is untouched.
+    // Swift producerNote = producerArg.map { " · producer=\($0)" } ?? ""
+    // appended AFTER `· domain=<domain>` and BEFORE ` — dispatching…`
+    // (main.swift:343-344). The producer note rides the header ONLY (the
+    // engine producer-SELECTION is d3/cellrun's concern, not re-authored).
+    let producer_note = if producer == "" { "" } else { " · producer=" + producer }
+    println("action: " + korean + " (" + plain + ") · domain=" + domain + producer_note + " — dispatching…")
+    let verb_c = _verb_canonical(verb)
+    let rc = dc_run(verb_c, domain)
+    // Swift cliAction prints `result.text` then `print("---")`. The Swift
+    // CellrunDispatch builds `result.text` by re-splitting the engine
+    // SUBPROCESS stdout with omittingEmptySubsequences:false — the engine's
+    // trailing "\n" yields a trailing EMPTY element, so `result.text` ends
+    // with a newline and the following `print()` adds one more → a BLANK
+    // line lands between the [cellrun] banner and "---". In-process the
+    // engine's last println already terminated its line, so we replicate
+    // that one Swift subprocess-capture artifact explicitly to stay
+    // byte-identical with the reference.
+    println("")
+    println("---")
+    if rc == 0 {
+        // engineToolSucceeded — the engine wrote a record. The record id is
+        // the engine's own banner line; the dispatch surface mirrors Swift's
+        // "📸 new record ID(s): ..." only when a record landed. The engine
+        // already printed the absolute record path on the [cellrun] record →
+        // line above, so we surface the success marker without re-deriving it.
+        println("📸 new record emitted (see [cellrun] record → line above).")
+        return 0
+    }
+    // engine gap (rc 2/3/4/5) — usedEngineTool && engineToolSucceeded==false.
+    println("⏳ engine tool gap — no new measured record (g3).")
+    return 1
+}
+
+// ── action --compose / --converge (PR#19 · LIVE) ─────────────────────
+//
+// Port of the Swift cliActionComposite / cliActionConvergent
+// (main.swift:362-433) + ActionDispatch.runComposite / runConvergent
+// (ActionDispatch.swift:497-551). Dispatch a verb ACROSS a domain's
+// topo-ordered constituent stack (--compose) or convergently (--converge).
+//
+// d3: the constituent stack comes from domain_composer.hexa (#10) and each
+// per-step run delegates to the SAME cellrun engine dc_run() (#18) — no
+// re-authored dispatch here. d4: every constituent routes through the one
+// generic (verb, domain) cellrun path; no per-instance branch.
+//
+// Per-step outcome tag (Swift convergenceSignature / the --converge tags):
+//   engineToolSucceeded==true  → "ok"   (cellrun rc==0 · record emitted)
+//   engineToolSucceeded==false → "skip" (cellrun rc!=0 · honest-skip/gap)
+//   nil → "gap" — the LLM-fallback path; the cellrun engine NEVER returns
+//   nil (CellrunDispatch.run always sets a Bool), so a cellrun-routed cell
+//   is ALWAYS "ok"/"skip", never "gap". We therefore map rc==0→ok, else→skip,
+//   matching the Swift tag verbatim for every constituent.
+
+// _action_has_flag(argv, flag) — is `flag` present anywhere in argv (Swift
+// firstIndex(of:) test)?
+fn _action_has_flag(argv: [string], flag: string) -> bool {
+    let mut i = 0
+    while i < len(argv) {
+        if argv[i] == flag { return true }
+        i = i + 1
+    }
+    return false
+}
+
+// _action_drop_flag(argv, flag) — argv with the FIRST occurrence of `flag`
+// removed (Swift actionArgs.remove(at: idx)). The remaining tokens are
+// [verb?, domain?] in order.
+fn _action_drop_flag(argv: [string], flag: string) -> [string] {
+    let mut out: [string] = []
+    let mut dropped = false
+    let mut i = 0
+    while i < len(argv) {
+        if !dropped && argv[i] == flag { dropped = true } else { out.push(argv[i]) }
+        i = i + 1
+    }
+    return out
+}
+
+// _action_take_value_flag(argv, flag) — port of the Swift takeValueFlag
+// (main.swift:1011-1027) for a value-flag like --deck. Returns a packed
+// [string]: result[0] = a rc-sentinel ("0" ok · "2" error-already-printed),
+// result[1] = the consumed value (empty on error), result[2..] = argv with
+// BOTH the flag and its value removed (Swift args.remove(idx+1)+remove(idx)).
+// Byte-for-byte error strings + exit-2 semantics:
+//   · flag is the LAST token (no value) → "error: flag <flag> needs a value,
+//     got end-of-args" (stderr) · sentinel "2".
+//   · the value itself starts with "--" (a flag in value slot) → "error: flag
+//     <flag> needs a value, got '<value>'" (stderr) · sentinel "2".
+// The caller (handler_action) translates sentinel "2" → return 2 (Swift exits
+// 2 inline; in-process we surface the same rc up through demi_dispatch).
+fn _action_take_value_flag(argv: [string], flag: string) -> [string] {
+    let mut idx = -1
+    let mut i = 0
+    while i < len(argv) {
+        if argv[i] == flag { idx = i ; i = len(argv) } else { i = i + 1 }
+    }
+    if idx < 0 { return ["0", ""] }   // flag absent — caller never reaches here
+    if idx + 1 >= len(argv) {
+        eprintln("error: flag " + flag + " needs a value, got end-of-args")
+        return ["2", ""]
+    }
+    let value = argv[idx + 1]
+    if value == "--" || value.starts_with("--") {
+        eprintln("error: flag " + flag + " needs a value, got '" + value + "'")
+        return ["2", ""]
+    }
+    // ok — build [ "0", value, <argv minus flag+value, in order> ].
+    let mut out: [string] = ["0", value]
+    let mut j = 0
+    while j < len(argv) {
+        if j != idx && j != (idx + 1) { out.push(argv[j]) }
+        j = j + 1
+    }
+    return out
+}
+
+// _action_slice_from(arr, k) — arr[k..] (the remaining argv after the packed
+// sentinel+value header of _action_take_value_flag).
+fn _action_slice_from(arr: [string], k: int) -> [string] {
+    let mut out: [string] = []
+    let mut i = k
+    while i < len(arr) {
+        out.push(arr[i])
+        i = i + 1
+    }
+    return out
+}
+
+// handler_synthesize_rtsc(deck) — `action synthesize rtsc --deck <deck>`, the
+// QFORGE el-ph synthesize cell (8VERB Family A · PR #20 · @L2/@L6). Port of
+// the Swift cliSynthesizeRtsc (main.swift:312-319). It drives QFORGE DIRECTLY
+// through the SAME verbatim-forward shape verify/atlas use: spawn `hexa qforge
+// run <deck>`, surface stdout+stderr UNCHANGED (@D g5 — the stdlib QFORGE
+// kernel owns the verdict; demiurge NEVER re-judges), then a trailing "---".
+//
+// @L6 / @D d6 HONESTY: the QFORGE migration gate is HELD (λ·Tc not yet
+// cross-val'd vs QE on LaH10·CaH6·Li2MgH16). The CLI MUST pass QFORGE's honest
+// output through unchanged — it asserts NO convergence, NO agreement, and
+// synthesizes NO λ/Tc of its own. When a deck has no harvested DFPT el-ph
+// dataset, `hexa qforge run` reports the cell→|g|² front-end gap honestly
+// (exit 1, no fabricated Tc) and THIS cell surfaces THAT verbatim. The held
+// gate is never presented as production-validated agreement.
+//
+// Exit code mirrors Swift `r.ran ? r.exitCode : 127`: the qforge child's rc
+// is propagated; a MISSING `hexa` (hx dependency absent) surfaces 127. We
+// detect the missing-binary case the same way the rest of demi does — a
+// `command -v hexa` probe — so a real run propagates the qforge rc while an
+// absent toolchain yields 127 (never a fabricated success).
+pub fn handler_synthesize_rtsc(deck: string) -> int {
+    println("action: 합성 (만들기) · domain=rtsc · engine=qforge · deck="
+            + deck + " — qforge run…")
+    let probe = exec("command -v hexa 2>/dev/null || echo __MISSING__").trim()
+    if probe == "__MISSING__" {
+        // hx dependency missing (Swift ran=false → 127). Honest gap, NOT a
+        // verdict — no fabricated qforge output.
+        println("hexa invocation failed: `hexa` not found on PATH")
+        println("(`hexa` must be installed — hx dependency, CLI+COCKPIT M18)")
+        println("---")
+        return 127
+    }
+    let cmd = _shq_h(probe) + " qforge run " + _shq_h(deck) + " 2>&1"
+    let pair = exec_with_status(cmd)
+    let out = to_string(pair[0])
+    // Swift: print(r.text, terminator: r.text.hasSuffix("\n") ? "" : "\n").
+    // i.e. emit the verbatim text, ensuring EXACTLY one trailing newline (the
+    // empty-text case still yields a lone newline — Swift terminator "\n").
+    print(out)
+    if !out.ends_with("\n") { println("") }
+    println("---")
+    return pair[1]
+}
+
+// _step_tag(rc) — the ok/skip outcome tag for one cellrun step (see above).
+fn _step_tag(rc: int) -> string {
+    if rc == 0 { return "ok" }
+    return "skip"
+}
+
+// handler_action_compose(rest) — `action <verb> <domain> --compose`. `rest`
+// is argv with --compose removed → [verb?, domain?]. Swift cliActionComposite.
+pub fn handler_action_compose(rest: [string]) -> int {
+    let verb = if len(rest) >= 1 { rest[0] } else { "" }
+    if _verb_canonical(verb) == "" {
+        eprintln("action --compose: unknown verb '" + verb + "'")
+        return 2
+    }
+    if len(rest) < 2 {
+        eprintln("action --compose: missing <domain>")
+        return 2
+    }
+    let domain = rest[1]
+    let plain = _verb_plain(verb)
+    let korean = _verb_korean(verb)
+    let verb_c = _verb_canonical(verb)
+    let stack = dco_project_walk(domain)
+    let kind = dco_english_kind(domain)
+    // header (note: NO space between koreanLabel and "(plain)" — distinct
+    // from the single-cell `action: <k> (<p>)` framing).
+    println("action " + korean + "(" + plain + ") · domain=" + domain + " · "
+            + "COMPOSE " + kind + " (구성 " + to_string(len(stack)) + " · topo):")
+    let ids_line = if len(stack) == 0 { "(none)" } else { dco_join(stack, " → ") }
+    println("  " + ids_line)
+    // each constituent IN ORDER — render the `── [id] ──` marker, then the
+    // cellrun engine prints its banner inline (Swift captures the subprocess
+    // text and re-prints; here the engine prints directly). dc_run's trailing
+    // line + the Swift omittingEmptySubsequences:false capture artifact → a
+    // blank line after each step's banner (cf. handler_action).
+    let mut any_record = false
+    let mut i = 0
+    while i < len(stack) {
+        println("── [" + stack[i] + "] ──")
+        let rc = dc_run(verb_c, stack[i])
+        if rc == 0 { any_record = true }
+        println("")
+        i = i + 1
+    }
+    println("---")
+    if any_record {
+        // Swift surfaces "📸 합성 records: <ids>" — the record ids are the
+        // engine's own `[cellrun] record → ` banner lines (printed inline
+        // above). The deterministic, host-independent parity path is the
+        // all-skip case (no record); the substrate-present record path is
+        // scoped to a follow-up (it needs a live substrate · cf. #18).
+        println("📸 합성 records: (see [cellrun] record → lines above).")
+    } else {
+        println("⏳ 합성 실행 — 새 측정 record 없음 (구성 " + to_string(len(stack)) + " 단계 · g3).")
+    }
+    return 0
+}
+
+// handler_action_converge(rest) — `action <verb> <domain> --converge`. The
+// analyze ⟲ loop: re-run the composite until the outcome PATTERN reaches a
+// fixpoint (Swift runConvergent · maxIter=3, loop bound max(2,3)=3). Since
+// the cellrun outcome signature is deterministic per (verb, stack), iter 2
+// always equals iter 1 → converges at iter 2 (g3 honest — judged on the
+// ok/skip pattern, NOT on record ids which carry fresh timestamps).
+pub fn handler_action_converge(rest: [string]) -> int {
+    let verb = if len(rest) >= 1 { rest[0] } else { "" }
+    if _verb_canonical(verb) == "" {
+        eprintln("action --converge: unknown verb '" + verb + "'")
+        return 2
+    }
+    if len(rest) < 2 {
+        eprintln("action --converge: missing <domain>")
+        return 2
+    }
+    let domain = rest[1]
+    let plain = _verb_plain(verb)
+    let korean = _verb_korean(verb)
+    let verb_c = _verb_canonical(verb)
+    let stack = dco_project_walk(domain)
+    println("action " + korean + "(" + plain + ") · domain=" + domain + " · "
+            + "CONVERGE ⟲ (구성 " + to_string(len(stack)) + " · max 3 iter):")
+    // The --converge surface prints ONLY the per-iter tag summary, NOT the
+    // per-constituent cellrun banners (Swift renders iter.steps tags only).
+    // So we run the engine SILENTLY here — but dc_run() always prints the
+    // banner. To keep the convergence summary byte-clean we recompute the
+    // outcome via cell_run_quiet (no banner): a deterministic rc per cell.
+    let mut prev_sig = ""
+    let mut converged_at = 0
+    let mut iter = 1
+    while iter <= 3 {
+        // build the per-iter tag list + the timestamp-agnostic signature
+        // (Swift convergenceSignature — sorted "id:tag" join).
+        let mut tags: [string] = []
+        let mut sig_parts: [string] = []
+        let mut rec_count = 0
+        let mut i = 0
+        while i < len(stack) {
+            let rc = dc_run_quiet(verb_c, stack[i])
+            let tag = _step_tag(rc)
+            if rc == 0 { rec_count = rec_count + 1 }
+            tags.push(stack[i] + ":" + tag)
+            sig_parts.push(stack[i] + ":" + tag)
+            i = i + 1
+        }
+        println("  iter " + to_string(iter) + " [" + to_string(rec_count)
+                + " rec]: " + dco_join(tags, " · "))
+        let sig = dco_join(dco_sort_strings(sig_parts), ",")
+        if iter > 1 && sig == prev_sig { converged_at = iter; break }
+        prev_sig = sig
+        iter = iter + 1
+    }
+    println("---")
+    if converged_at > 0 {
+        println("✅ 수렴 — iter " + to_string(converged_at) + "에서 outcome 패턴 fixpoint 도달.")
+        return 0
+    }
+    println("🔶 max iter 도달 — 미수렴 (패턴 변동 지속).")
+    return 1
 }
 
 // ── verify (PR-verify-passthrough · LIVE) ───────────────────────────
@@ -131,9 +502,10 @@ pub fn handler_action(argv: [string]) -> int {
 //        re-judges). A missing `hexa` on PATH → exit 127 (honest gap, not a
 //        fabricated verdict; mirrors HexaBridge.run ran=false).
 //   <path|id> (bare)           → the local record provenance/claim-gate check
-//        (Swift verifyRecord). That reads exports/** records + an artifact
-//        registry which are NOT yet ported (PR-verify-record stacked PR), so
-//        the bare path routes to the honest stub — NEVER a fake parity (@L7).
+//        (Swift verifyRecord), now LIVE (PR-verify-record). vr_verify_record()
+//        in verify_record.hexa reads exports/** records + scans the F1F2
+//        records dir for an id, then runs the 6-check consistency gate —
+//        byte-parity with the Swift reference (see verify_record.hexa header).
 // Missing arg → Swift parity: stderr line + usage + exit 2. The usage screen
 // itself is the manifest-rendered demi_usage (d4); the deterministic,
 // byte-matchable parity cell registered this PR is the --fence/--expr/rubric
@@ -189,17 +561,1351 @@ pub fn handler_verify(argv: [string]) -> int {
         }
         return pair[1]
     }
-    // Bare <path|id> → local record check (PR-verify-record). Honest stub.
-    return handler_stub("verify.record", argv)
+    // Bare <path|id> → local record provenance/claim-gate check (PR-verify-
+    // record · LIVE). The Swift verifyRecord resolves arg as a path then an id;
+    // vr_verify_record mirrors that + the 6-check gate byte-for-byte.
+    return vr_verify_record(argv[0])
+}
+
+// ── atlas (PR-atlas-refusal · LIVE) ─────────────────────────────────
+//
+// `demi atlas <verb> [args]` — ports the Swift `atlasCmd` (main.swift:688-711).
+// The hexa atlas SSOT is READ-ONLY for external users; WRITE verbs are owner
+// ops (사장실 · M20) unlocked only with the DEMIURGE_OWNER env var:
+//   READ  verbs  lookup|stats|hash|dump        → forward to `hexa atlas` VERBATIM.
+//   WRITE verbs  register|append-witness|pr     → owner-gated:
+//        · DEMIURGE_OWNER unset → REFUSED: stderr line + exit 2 (no forward).
+//        · DEMIURGE_OWNER set   → forward to `hexa atlas` VERBATIM (hexa enforces
+//                                 PR-only landing downstream).
+//   UNKNOWN verb                                → stderr line + exit 2 (no forward).
+// Owner-mode detection mirrors Swift DemiurgeMode.owner EXACTLY: the
+// DEMIURGE_OWNER env var being PRESENT (any value), never its value.
+// The refusal stderr text + the unknown-verb text + the exit codes are
+// byte-for-byte the Swift atlasCmd strings (the @ci_gate parity cells assert it).
+
+// _atlas_is_read(verb) — does `verb` name a READ subverb (free passthrough)?
+fn _atlas_is_read(verb: string) -> bool {
+    return verb == "lookup" || verb == "stats" || verb == "hash" || verb == "dump"
+}
+
+// _atlas_is_write(verb) — does `verb` name a WRITE (owner-gated) subverb?
+fn _atlas_is_write(verb: string) -> bool {
+    return verb == "register" || verb == "append-witness" || verb == "pr"
+}
+
+// _atlas_owner() — owner-mode gate (Swift DemiurgeMode.owner): DEMIURGE_OWNER
+// env var PRESENT. env() returns "" when unset, so non-empty ⇔ present.
+fn _atlas_owner() -> bool {
+    return len(env("DEMIURGE_OWNER")) > 0
+}
+
+pub fn handler_atlas(argv: [string]) -> int {
+    // Swift: `let verb = args.first ?? "stats"` — empty argv defaults to `stats`
+    // (a READ verb → forwarded), so demi atlas with no subverb shows atlas stats.
+    let verb = if len(argv) >= 1 { argv[0] } else { "stats" }
+    if _atlas_is_write(verb) {
+        // M20 owner gate — refuse unless the 사장실 is unlocked.
+        if !_atlas_owner() {
+            eprintln("atlas: '" + verb + "' = owner op (사장실 · M20). Set DEMIURGE_OWNER "
+                     + "to unlock. External read-only: lookup/stats/hash/dump.")
+            return 2
+        }
+    } else if !_atlas_is_read(verb) {
+        eprintln("atlas: unknown verb '" + verb + "' — read: lookup/stats/hash/dump · "
+                 + "owner write: register/append-witness/pr")
+        return 2
+    }
+    // READ (any) or WRITE-with-owner → forward `hexa atlas <argv...>` verbatim
+    // (Swift HexaBridge.run(["atlas"] + args)). Child owns the verdict (@D g5).
+    let hexa = exec("command -v hexa 2>/dev/null || echo hexa").trim()
+    let mut cmd = _shq_h(hexa) + " atlas"
+    let mut i = 0
+    while i < len(argv) {
+        cmd = cmd + " " + _shq_h(argv[i])
+        i = i + 1
+    }
+    cmd = cmd + " 2>&1"
+    let pair = exec_with_status(cmd)
+    let out = to_string(pair[0])
+    print(out)
+    if len(out) > 0 {
+        if !out.ends_with("\n") { println("") }
+    }
+    return pair[1]
+}
+
+// ── list-* (PR#6 · LIVE) ─────────────────────────────────────────────
+//
+// `demi list-records|list-decisions|list-rfcs|list-domains|list-all` — ports
+// the Swift `list(kind:)` + `listAll()` (main.swift:162-181) reading through
+// the #5 RecordLoader/ArtifactRegistry (rl_stubs in record_loader.hexa). All
+// five share ONE renderer (_list_render) — exactly the Swift `list(kind:)`
+// body: a `<rawValue> (<count>):` header, then each row `  <id><pad>  <title>`
+// where pad aligns every id to the LONGEST id.display in the batch. Exit 0.
+//
+// The kind rawValues are the Swift ArtifactKind rawValues (the header text):
+//   f1f2 → "Records" · decision → "Decisions" · rfc → "RFCs" · domain → "Domains".
+
+// _kind_header(kind) — the Swift ArtifactKind.rawValue printed as the header.
+fn _kind_header(kind: string) -> string {
+    if kind == "f1f2"     { return "Records" }
+    if kind == "decision" { return "Decisions" }
+    if kind == "rfc"      { return "RFCs" }
+    if kind == "domain"   { return "Domains" }
+    return kind
+}
+
+// _spaces(n) — n spaces (String(repeating:count:) — clamped at 0).
+fn _spaces(n: int) -> string {
+    let mut out = ""
+    let mut i = 0
+    while i < n {
+        out = out + " "
+        i = i + 1
+    }
+    return out
+}
+
+// _list_render(kind) — the Swift `list(kind:)` body, byte-for-byte: header
+// `<rawValue> (<count>):` then each stub padded to the longest id.display.
+fn _list_render(kind: string) -> int {
+    let stubs = rl_stubs(kind)
+    println(_kind_header(kind) + " (" + to_string(len(stubs)) + "):")
+    // pad to the longest id in this batch (Swift `maxLen`).
+    let mut maxLen = 0
+    let mut i = 0
+    while i < len(stubs) {
+        let l = len(stubs[i].id_display)
+        if l > maxLen { maxLen = l }
+        i = i + 1
+    }
+    let mut j = 0
+    while j < len(stubs) {
+        let s = stubs[j]
+        let pad = _spaces(maxLen - len(s.id_display))
+        println("  " + s.id_display + pad + "  " + s.title)
+        j = j + 1
+    }
+    return 0
+}
+
+// handler_list(kind) — the four single-kind list verbs.
+pub fn handler_list(kind: string) -> int {
+    return _list_render(kind)
+}
+
+// handler_list_all() — Swift listAll(): each kind in ArtifactKind.allCases
+// order (f1f2, decision, rfc, domain), each followed by a blank line (so the
+// output ends with a trailing blank line, matching Swift's per-iteration
+// `print("")`).
+pub fn handler_list_all() -> int {
+    _list_render("f1f2")
+    println("")
+    _list_render("decision")
+    println("")
+    _list_render("rfc")
+    println("")
+    _list_render("domain")
+    println("")
+    return 0
+}
+
+// ── show (PR#7 · LIVE) ───────────────────────────────────────────────
+//
+// `demi show <path>` — the record + provenance dump. Ports the Swift `show`
+// (main.swift:183-218): `RecordLoader.load(relativePath:)` (LOAD-BY-PATH only,
+// NOT resolveRecord — id resolution is `verify`'s; `show` takes a literal path)
+// → on failure a `show: <error>\n` stderr line + exit 2; on success the typed
+// fields in the EXACT Swift order/spacing, with the gate-failure / scope-caveat
+// counts followed by their `  [i] <value>` rows. d3: the load + invariant-(a)
+// guard come from the #5 RecordLoader (rl_load_by_path / rl_error_line); this
+// handler adds only the field-render.
+//
+// rl_error_line() prefixes `verify: ` (its first consumer was verifyRecord);
+// the Swift `show` prefix is `show: ` and the failure exit code is 2 (verify's
+// is 1). So _show_err re-derives the SAME message body with the show prefix,
+// rather than thread a prefix param through the shared primitive.
+fn _show_err(status: string, path: string) -> string {
+    if status == "outside" {
+        return "show: Refused (@D g_cockpit_isolation invariant a): path is outside ../exports/**: " + path
+    }
+    if status == "notfound" {
+        return "show: Record file not found: " + path
+    }
+    // decode (read OK, JSON undecodable) — Swift appends the locale/machine-
+    // dependent Foundation decode message after "Decode failed (<path>): "; the
+    // deterministic, golden-able cases are outside/notfound. A decode failure
+    // still exits 2 with the path-prefixed line (its tail is matched only LIVE
+    // against the Swift binary, never as a hardcoded golden).
+    return "show: Decode failed (" + path + ")"
+}
+
+// _show_path_str(obj, path) — dotted-path lookup → string ("" if absent / not a
+// scalar). Mirrors verify_record's _vr_path_str (json_object_get_str does not
+// split on "."). int/bool terminals render via to_string EXACTLY as Swift
+// prints them (4 · 64 · true · false) — verified against the Swift reference.
+fn _show_path_str(obj, path: string) -> string {
+    let v = json_object_get_path(obj, path)
+    if type_of(v) == "void" { return "" }
+    return to_string(v)
+}
+
+// handler_show(argv) — `demi show <path>`.
+pub fn handler_show(argv: [string]) -> int {
+    // Swift requires the path arg; the manifest-rendered usage covers the
+    // missing-arg case (not a registered parity cell), so keep it honest with
+    // a `show: ` stderr line + exit 2 (Swift's failure exit code).
+    if len(argv) < 1 {
+        eprintln("show: missing <path> argument")
+        return 2
+    }
+    let res = rl_load_by_path(argv[0])
+    if res[0] != "ok" {
+        eprintln(_show_err(res[0], res[1]))
+        return 2
+    }
+    let path = res[1]
+    let obj = json_parse_object(read_file(path))
+
+    // sim_commit = first 12 chars of sim_commit_hash (Swift `.prefix(12)`).
+    let sim_commit_full = _show_path_str(obj, "provenance.sim_commit_hash")
+    let sim_commit = if len(sim_commit_full) > 12 {
+        sim_commit_full.substring(0, 12)
+    } else { sim_commit_full }
+
+    // Fields in the EXACT Swift print order + the byte-exact label padding.
+    // (provenance.measurement_gate: has NO pad before the value — Swift parity.)
+    println("record_id:                  " + json_object_get_str(obj, "record_id", ""))
+    println("interface:                  " + json_object_get_str(obj, "interface", ""))
+    println("schema_version:             " + json_object_get_str(obj, "schema_version", ""))
+    println("produced_at_utc:            " + json_object_get_str(obj, "produced_at_utc", ""))
+    println("topology.kind:              " + _show_path_str(obj, "topology.kind"))
+    println("topology.degree:            " + _show_path_str(obj, "topology.degree"))
+    println("topology.node_count:        " + _show_path_str(obj, "topology.node_count"))
+    println("topology.routing:           " + _show_path_str(obj, "topology.routing"))
+    println("traffic:                    " + json_object_get_str(obj, "traffic", ""))
+    println("verdict.f1:                 " + _show_path_str(obj, "verdict.f1"))
+    println("verdict.f2:                 " + _show_path_str(obj, "verdict.f2"))
+    println("verdict.rationale:          " + _show_path_str(obj, "verdict.rationale"))
+    println("provenance.measurement_gate:" + _show_path_str(obj, "provenance.measurement_gate"))
+    println("provenance.absorbed:        " + _show_path_str(obj, "provenance.absorbed"))
+    println("provenance.sim_engine:      " + _show_path_str(obj, "provenance.sim_engine"))
+    println("provenance.sim_commit:      " + sim_commit)
+    println("provenance.consumer_target: " + _show_path_str(obj, "provenance.consumer_target"))
+    println("provenance.atlas_cite:      " + _show_path_str(obj, "provenance.atlas_cite_block"))
+
+    let gfs = json_object_get_path(obj, "provenance.gate_failures")
+    let gf_n = if type_of(gfs) == "array" { len(gfs) } else { 0 }
+    println("provenance.gate_failures:   " + to_string(gf_n))
+    let mut gi = 0
+    while gi < gf_n {
+        println("  [" + to_string(gi) + "] " + to_string(gfs[gi]))
+        gi = gi + 1
+    }
+
+    let scs = json_object_get_path(obj, "provenance.scope_caveats")
+    let sc_n = if type_of(scs) == "array" { len(scs) } else { 0 }
+    println("provenance.scope_caveats:   " + to_string(sc_n))
+    let mut si = 0
+    while si < sc_n {
+        println("  [" + to_string(si) + "] " + to_string(scs[si]))
+        si = si + 1
+    }
+    return 0
+}
+
+// ── list-gates / gate-summary (PR#8 · LIVE) ─────────────────────────
+//
+// `demi list-gates`    — every F1F2 record grouped by measurement_gate.
+// `demi gate-summary`  — one-screen gate counts + percentages + absorbed totals.
+//
+// Both port the Swift listGates / gateSummary (main.swift:448-487). They iterate
+// ArtifactRegistry.loadF1F2() (filename-sorted) and `guard case .success` — i.e.
+// they COUNT only records that fully decode as F1F2Record (rl_f1f2_decodes), and
+// SKIP the rest (e.g. the on-disk router_*_pnr_sky130hd.json, missing `traffic`
+// + `sim_commit_hash`). The gate iteration order is MeasurementGate.allCases:
+//   GATE_OPEN · GATE_B_PINNED_MET · GATE_CLOSED_MEASURED · GATE_FAILED.
+// Within a gate, list-gates prints rows in loadF1F2() order (filename-sorted),
+// because Swift appends to byGate[gate] in iteration order. d3: the per-record
+// stub (id/title/path, filename-sorted) + the full decode gate both come from
+// the #5 RecordLoader (rl_stubs / rl_f1f2_decodes); these handlers add only the
+// grouping + the byte-exact render (gate header `<label> (<n>):`, the
+// `  <rid>  absorbed=<b>  <title>` rows, and the gate-summary 22-col label pad).
+
+// _gate_label(i) — the i-th MeasurementGate.allCases rawValue (displayLabel).
+fn _gate_label(i: int) -> string {
+    if i == 0 { return "GATE_OPEN" }
+    if i == 1 { return "GATE_B_PINNED_MET" }
+    if i == 2 { return "GATE_CLOSED_MEASURED" }
+    return "GATE_FAILED"
+}
+
+// _pct_1f(num, den) — `num/den*100` rendered as Swift String(format:"%.1f")
+// (round-half-away-from-zero; values >= 0). den==0 → "0.0" (Swift's ternary).
+fn _pct_1f(num: int, den: int) -> string {
+    if den <= 0 { return "0.0" }
+    // tenths = round(num*100*10 / den) via integer half-up.
+    let tenths = (num * 1000 + den / 2) / den
+    let whole = tenths / 10
+    let frac = tenths - whole * 10
+    return to_string(whole) + "." + to_string(frac)
+}
+
+pub fn handler_list_gates(argv: [string]) -> int {
+    // rl_stubs("f1f2") = the loadF1F2() stub list (id $R<i> · title · path),
+    // already filename-sorted — the SAME order Swift appends within a gate.
+    let stubs = rl_stubs("f1f2")
+    let mut gi = 0
+    while gi < 4 {
+        let label = _gate_label(gi)
+        let mut rids: [string] = []
+        let mut abss: [string] = []
+        let mut titles: [string] = []
+        let mut si = 0
+        while si < len(stubs) {
+            let s = stubs[si]
+            let obj = json_parse_object(read_file(s.path))
+            if rl_f1f2_decodes(obj) {
+                let g = to_string(json_object_get_path(obj, "provenance.measurement_gate"))
+                if g == label {
+                    rids.push(json_object_get_str(obj, "record_id", ""))
+                    abss.push(to_string(json_object_get_path(obj, "provenance.absorbed")))
+                    titles.push(s.title)
+                }
+            }
+            si = si + 1
+        }
+        println(label + " (" + to_string(len(rids)) + "):")
+        let mut k = 0
+        while k < len(rids) {
+            println("  " + rids[k] + "  absorbed=" + abss[k] + "  " + titles[k])
+            k = k + 1
+        }
+        gi = gi + 1
+    }
+    return 0
+}
+
+pub fn handler_gate_summary(argv: [string]) -> int {
+    let stubs = rl_stubs("f1f2")
+    let mut c0 = 0
+    let mut c1 = 0
+    let mut c2 = 0
+    let mut c3 = 0
+    let mut total = 0
+    let mut absorbedTrue = 0
+    let mut absorbedFalse = 0
+    let mut si = 0
+    while si < len(stubs) {
+        let obj = json_parse_object(read_file(stubs[si].path))
+        if rl_f1f2_decodes(obj) {
+            total = total + 1
+            let g = to_string(json_object_get_path(obj, "provenance.measurement_gate"))
+            if g == "GATE_OPEN" { c0 = c0 + 1 }
+            else if g == "GATE_B_PINNED_MET" { c1 = c1 + 1 }
+            else if g == "GATE_CLOSED_MEASURED" { c2 = c2 + 1 }
+            else { c3 = c3 + 1 }
+            if to_string(json_object_get_path(obj, "provenance.absorbed")) == "true" {
+                absorbedTrue = absorbedTrue + 1
+            } else { absorbedFalse = absorbedFalse + 1 }
+        }
+        si = si + 1
+    }
+    println("total records: " + to_string(total))
+    let mut gi = 0
+    while gi < 4 {
+        let label = _gate_label(gi)
+        let n = if gi == 0 { c0 } else if gi == 1 { c1 } else if gi == 2 { c2 } else { c3 }
+        // Swift: String(repeating:" ", count: max(0, 22 - label.count)).
+        let pad = _spaces(22 - len(label))
+        println("  " + label + pad + to_string(n) + "  (" + _pct_1f(n, total) + "%)")
+        gi = gi + 1
+    }
+    println("absorbed=true:  " + to_string(absorbedTrue))
+    println("absorbed=false: " + to_string(absorbedFalse))
+    return 0
+}
+
+// ── list-projects / show-project (PR#12 · LIVE) ─────────────────────
+//
+// `demi list-projects`        — every workbench project, createdAt-sorted.
+// `demi show-project <name>`   — one project's manifest + 7-verb progress.
+//
+// Both port the Swift listProjects / showProject (main.swift:223-259) reading
+// through the #12 ProjectStore (ps_load_all · the fixed app-data store dir).
+// list-projects:  `projects (<n>):` header, then per project a row
+//   `  <name>  —  <domainLabel> · <verb+1>/7 <koreanLabel>`  (rc 0).
+// show-project:   a field block (name/target/domain/canvas_mode/created_at),
+//   then `7-verb progress:` and the 7 spine rows
+//   `  <i+1>. <koreanLabel> (<plain>)  <mark>`  where mark ∈
+//   `[x] done (measured)` · `[>] current` · `[~] visited (unmeasured)` ·
+//   `[ ] upcoming` (Project.state). A missing name → `show-project: no project
+//   named '<name>'` stderr + exit 2 (Swift parity). d3: the load + the verb
+//   spine + the state machine + the domain-label fallback all come from the
+//   #12 project_store; these handlers add only the byte-exact render. The
+//   project new|advance|retreat MUTATION is the separate PR#13 (NOT here).
+
+pub fn handler_list_projects(argv: [string]) -> int {
+    let projs = ps_load_all()
+    println("projects (" + to_string(len(projs)) + "):")
+    let mut i = 0
+    while i < len(projs) {
+        let p = projs[i]
+        let label = ps_domain_label(p.domain)
+        // `<verb+1>/7 <koreanLabel>` — Swift `verb.rawValue + 1` (1-based).
+        println("  " + p.name + "  —  " + label + " · "
+                + to_string(p.current_verb + 1) + "/7 " + ps_verb_korean(p.current_verb))
+        i = i + 1
+    }
+    return 0
+}
+
+// _ps_mark(state) — the show-project progress mark for a stage state (Swift's
+// switch over VerbState). Kept verbatim — the parenthetical qualifiers are
+// part of the byte-exact contract.
+fn _ps_mark(state: string) -> string {
+    if state == "done"    { return "[x] done (measured)" }
+    if state == "current" { return "[>] current" }
+    if state == "visited" { return "[~] visited (unmeasured)" }
+    return "[ ] upcoming"
+}
+
+pub fn handler_show_project(argv: [string]) -> int {
+    // Swift requires the <name> arg; the manifest-rendered usage covers the
+    // missing-arg case (dispatched in main.swift before showProject), so keep
+    // it honest with a `show-project: ` stderr line + exit 2.
+    if len(argv) < 1 {
+        eprintln("show-project: missing <name> argument")
+        return 2
+    }
+    let name = argv[0]
+    let projs = ps_load_all()
+    // first project whose name == arg (Swift `first(where:)`).
+    let mut found = -1
+    let mut i = 0
+    while i < len(projs) {
+        if projs[i].name == name { found = i ; break }
+        i = i + 1
+    }
+    if found < 0 {
+        eprintln("show-project: no project named '" + name + "'")
+        return 2
+    }
+    let p = projs[found]
+    let label = ps_domain_label(p.domain)
+    println("name:        " + p.name)
+    println("target:      " + p.target)
+    println("domain:      " + p.domain + " (" + label + ")")
+    println("canvas_mode: " + ps_domain_canvas(p.domain))
+    println("created_at:  " + ps_date_desc(p.created_at))
+    println("7-verb progress:")
+    let mut v = 0
+    while v < 7 {
+        let mark = _ps_mark(ps_state_of(p, v))
+        println("  " + to_string(v + 1) + ". " + ps_verb_korean(v)
+                + " (" + ps_verb_plain(v) + ")  " + mark)
+        v = v + 1
+    }
+    return 0
+}
+
+// ── project new | advance | retreat (PR#13 · LIVE — the MUTATION verbs) ─────
+//
+// `demi project new <name> <target> [domain]` — create a project. domain is
+//   inferred from target (DomainCatalog.infer) when omitted; the topo `walk` +
+//   English kind come from DomainComposer. Writes the SAME ProjectStore manifest
+//   list-/show-project read (D50 byte-identical). Starts at 1/7 명세 (g3 — no ✅).
+// `demi project advance|retreat <name>` — step the 7-verb pointer one stage,
+//   clamped at handoff / specify (the clamp prints `이미 마지막/첫 단계` + rc 0).
+//
+// Ports main.swift projectNew / projectStep (the project command paths) +
+// ProjectStore.save. d3 — the manifest serializer + uuid/time + the load all
+// live in project_store.hexa; infer + walk + kind in domain_composer.hexa; this
+// handler is the byte-exact CLI surface only. argv here = the post-verb tail
+// (argv[0] = the subcommand new|advance|retreat — main.swift args[2]).
+
+// _project_step(direction, name) — Swift projectStep. Loads, finds by name,
+// clamps at the spine ends (rc 0, no write), else steps + saves + prints the
+// new `→ N/7 koreanLabel(plain)` line. Unknown name → stderr + rc 2.
+fn _project_step(direction: string, name: string) -> int {
+    let projs = ps_load_all()
+    let mut found = -1
+    let mut i = 0
+    while i < len(projs) {
+        if projs[i].name == name { found = i ; break }
+        i = i + 1
+    }
+    if found < 0 {
+        eprintln("project: no project named '" + name + "'")
+        return 2
+    }
+    let mut p = projs[found]
+    if direction == "advance" {
+        // canAdvance = currentVerb != handoff(6).
+        if p.current_verb == 6 {
+            println("project '" + name + "' 이미 마지막 단계 (" + ps_verb_korean(6) + ")")
+            return 0
+        }
+        p.current_verb = p.current_verb + 1
+    } else {
+        // retreat — canRetreat = currentVerb != specify(0).
+        if p.current_verb == 0 {
+            println("project '" + name + "' 이미 첫 단계 (" + ps_verb_korean(0) + ")")
+            return 0
+        }
+        p.current_verb = p.current_verb - 1
+    }
+    ps_save_project(p)
+    // `→ (rawValue+1)/7 koreanLabel(plain)`.
+    println("project '" + name + "' → " + to_string(p.current_verb + 1) + "/7 "
+            + ps_verb_korean(p.current_verb) + "(" + ps_verb_plain(p.current_verb) + ")")
+    return 0
+}
+
+// _project_new(name, target, domain_arg, inferred) — Swift projectNew. Builds
+// the manifest (fresh uuid + UTC iso8601 now), writes it, prints the 3-line
+// confirmation. `inferred` toggles the ` (target에서 추론)` tag (domain omitted).
+fn _project_new(name: string, target: string, domain: string, inferred: bool) -> int {
+    let walk = dco_project_walk(domain)
+    let kind = dco_english_kind(domain)
+    let stack_count = len(walk)
+    let p = PsProject {
+        id:           ps_new_uuid(),
+        name:         name,
+        target:       target,
+        domain:       domain,
+        walk:         walk,
+        current_verb: 0,            // starts at 명세 (specify) — g3, no ✅ yet
+        done_verbs:   [],
+        created_at:   ps_now_iso8601(),
+    }
+    ps_save_project(p)
+    let infer_tag = if inferred { " (target에서 추론)" } else { "" }
+    println("project '" + name + "' 생성 — domain=" + domain + infer_tag + " · "
+            + kind + " · 구성 " + to_string(stack_count))
+    // walk render: ids joined ` → `, else the bare domain when the stack is empty.
+    let walk_line = if stack_count == 0 { domain } else { _join_arrow(walk) }
+    println("  walk (topo): " + walk_line)
+    println("  현재 단계: 1/7 " + ps_verb_korean(0) + "(" + ps_verb_plain(0) + ")")
+    return 0
+}
+
+// _join_arrow(xs) — ids joined by ` → ` (Swift comp.ids.joined(separator:)).
+fn _join_arrow(xs: [string]) -> string {
+    let mut out = ""
+    let mut i = 0
+    while i < len(xs) {
+        if i > 0 { out = out + " → " }
+        out = out + xs[i]
+        i = i + 1
+    }
+    return out
+}
+
+// handler_project(argv) — the `project` verb dispatch (main.swift `case
+// "project"`). argv = post-verb tail: argv[0] = subcommand. No subcommand →
+// the stderr usage line + the manifest usage screen + rc 2 (the Swift path
+// also prints usage(); the hexa usage render differs by design and is NOT
+// asserted — only the stderr line + rc are byte-exact). Subcommands:
+//   new <name> <target> [domain] · advance|retreat <name> · else unknown → rc 2.
+pub fn handler_project(argv: [string]) -> int {
+    if len(argv) < 1 {
+        // Swift also prints the full usage() screen here; that is the manifest-
+        // rendered demi_usage in dispatch.hexa (importing it back would cycle —
+        // see _shq_h note), so the byte-exact surface is the stderr line + rc 2.
+        eprintln("project: usage — project new <name> <target> [domain] | project <advance|retreat> <name>")
+        return 2
+    }
+    let sub = argv[0]
+    if sub == "new" {
+        // need <name> + <target> (Swift args.count >= 5 ⇔ tail >= 3).
+        if len(argv) < 3 {
+            eprintln("project new: usage — project new <name> <target> [domain]")
+            return 2
+        }
+        let name = argv[1]
+        let target = argv[2]
+        let has_domain = len(argv) >= 4
+        let domain = if has_domain { argv[3] } else { dco_infer(target) }
+        return _project_new(name, target, domain, !has_domain)
+    }
+    if sub == "advance" || sub == "retreat" {
+        // need <name> (Swift args.count >= 4 ⇔ tail >= 2).
+        if len(argv) < 2 {
+            eprintln("project: usage — project <advance|retreat> <name>")
+            return 2
+        }
+        return _project_step(sub, argv[1])
+    }
+    eprintln("project: unknown subcommand '" + sub + "' — use new | advance | retreat")
+    return 2
+}
+
+// ── list-shelf (PR#11 · LIVE) ────────────────────────────────────────
+//
+// `demi list-shelf <domain>` — render a domain's §6 ingredient-shelf
+// design-option groups, per 7-verb stage. This ports the Swift
+// `listShelf(_:)` (main.swift:264-281) byte-for-byte:
+//
+//   ingredient shelf — domain '<d>' (<label>):
+//     <rawValue+1>. <koreanLabel>:          ← only verbs WITH groups
+//          <title>[ (multi)] = a / b / c    ← 7-space indent, ` / ` join
+//   (no §6 design-options section — domains/<d>.md absent or mapless)
+//                                           ← printed iff NO verb had groups
+//
+// It REUSES dc_shelf_groups (PR#9, domain_catalog.hexa) for the §6 parse
+// (d3 — no re-derivation) and ps_domain_label for the synthetic-fallback
+// domain label (PR#12; the INDEX.demi-backed label lands with the catalog
+// loader — same boundary list-/show-project hold). Always exit 0 (an empty
+// / mapless shelf is the HONEST no-op render, not an error). The missing-arg
+// guard mirrors handler_show_project (stderr line + exit 2; the Swift usage
+// block differs by design — the manifest-rendered hexa usage is not asserted).
+//
+// _VERB_CANON — the 7 verbs in Verb rawValue order (specify=0 … handoff=6).
+// The verb's display index is (rawValue + 1); koreanLabel via _verb_korean.
+fn _shelf_verb_canon(i: int) -> string {
+    if i == 0 { return "specify" }
+    if i == 1 { return "structure" }
+    if i == 2 { return "design" }
+    if i == 3 { return "analyze" }
+    if i == 4 { return "synthesize" }
+    if i == 5 { return "verify" }
+    return "handoff"
+}
+
+pub fn handler_list_shelf(argv: [string]) -> int {
+    if len(argv) < 1 {
+        eprintln("list-shelf: missing <domain> argument")
+        return 2
+    }
+    let domain = argv[0]
+    let label = ps_domain_label(domain)
+    println("ingredient shelf — domain '" + domain + "' (" + label + "):")
+    let mut any = false
+    let mut v = 0
+    while v < 7 {
+        let verb = _shelf_verb_canon(v)
+        let groups = dc_shelf_groups(domain, verb)
+        if len(groups) > 0 {
+            any = true
+            // Swift `verb.rawValue + 1` (1-based) + koreanLabel.
+            println("  " + to_string(v + 1) + ". " + _verb_korean(verb) + ":")
+            let mut gi = 0
+            while gi < len(groups) {
+                let g = groups[gi]
+                let tag = if g.multi_select { " (multi)" } else { "" }
+                // options joined by " / " (Swift options.joined(separator:)).
+                let mut opts = ""
+                let mut oi = 0
+                while oi < len(g.options) {
+                    if oi > 0 { opts = opts + " / " }
+                    opts = opts + g.options[oi]
+                    oi = oi + 1
+                }
+                println("       " + g.title + tag + " = " + opts)
+                gi = gi + 1
+            }
+        }
+        v = v + 1
+    }
+    if !any {
+        println("  (no §6 design-options section — domains/" + domain
+                + ".md absent or mapless)")
+    }
+    return 0
 }
 
 // handler_local(target, argv) — generic local-handler entry. Routes by the
 // manifest `target` id to the ported hexa-native handler, else the honest
 // stub. The ONE place the local family fans out — adding a ported handler is
 // one branch here + flipping its manifest row off the stub (d4).
+// ── operate (PR#14 · LIVE) ───────────────────────────────────────────
+//
+// `demi operate [list|audit]` — the operability surface (Swift `operate`,
+// main.swift:618). Reads the SAME OperationRegistry manifest the cockpit
+// renders (D50 byte-identical), via op_registry() (operation_registry.hexa).
+// Owner 사장실 ops show only with `--owner` OR DEMIURGE_OWNER set; external
+// users never see them (M0 §1 / M20). Expert register (DEMIURGE_EXPERT)
+// reveals the [target · verb · milestone] bracket (Swift DemiurgeMode.expert).
+//
+//   list  → 8-verb ladder banner, then per-tier sections (product, then
+//           owner when visible). Plain = "  <glyph> <title>"; expert =
+//           "  <glyph> <id>  [<target> · <verb> · <milestone>]  <title>".
+//           When owner ops are hidden, a trailing "(🔒 …)" hint line. Exit 0.
+//   audit → OperabilityAudit snapshot: product OK/🔶/❌ counts + owner total +
+//           a verdict. productComplete (no 🔶/❌) → ✅ verdict, exit 0; else
+//           ⏳ pending with the non-ok product ids, exit 1.
+//   <other> → stderr "operate: unknown subcommand …", exit 2.
+
+// _operate_owner() — Swift `args.contains("--owner") || ownerModeEnabled`.
+// ownerModeEnabled = DEMIURGE_OWNER present (mirrors DemiurgeMode.owner).
+fn _operate_owner(argv: [string]) -> bool {
+    let mut i = 0
+    while i < len(argv) {
+        if argv[i] == "--owner" { return true }
+        i = i + 1
+    }
+    return len(env("DEMIURGE_OWNER")) > 0
+}
+
+// _operate_expert() — Swift DemiurgeMode.expert: DEMIURGE_EXPERT present.
+fn _operate_expert() -> bool {
+    return len(env("DEMIURGE_EXPERT")) > 0
+}
+
+// _operate_first_sub(argv) — Swift `args.first(where: { !$0.hasPrefix("--") })
+// ?? "list"`: first non-flag token, else "list".
+fn _operate_first_sub(argv: [string]) -> string {
+    let mut i = 0
+    while i < len(argv) {
+        if !argv[i].starts_with("--") { return argv[i] }
+        i = i + 1
+    }
+    return "list"
+}
+
+// _operate_render_tier(ops, tier, owner, expert) — render one tier's section
+// (header + rows + trailing blank), or nothing when the tier is empty/hidden.
+fn _operate_render_tier(ops: [Operation], tier: string, owner: bool, expert: bool) {
+    // visible(): product always; owner only when unlocked.
+    if tier == "owner" && !owner { return }
+    // Count this tier's rows first (Swift `guard !rows.isEmpty`).
+    let mut count = 0
+    let mut i = 0
+    while i < len(ops) {
+        if ops[i].tier == tier { count = count + 1 }
+        i = i + 1
+    }
+    if count == 0 { return }
+    let label = if tier == "product" { "🛒 진열대 (external)" } else { "🔒 사장실 (owner)" }
+    println(label + " — " + to_string(count) + ":")
+    i = 0
+    while i < len(ops) {
+        let o = ops[i]
+        if o.tier == tier {
+            if expert {
+                println("  " + op_reach_glyph(o.reach) + " " + o.id + "  ["
+                        + o.target + " · " + op_verb_display(o.verb) + " · "
+                        + o.milestone + "]  " + o.title)
+            } else {
+                println("  " + op_reach_glyph(o.reach) + " " + o.title)
+            }
+        }
+        i = i + 1
+    }
+    println("")
+}
+
+pub fn handler_operate(argv: [string]) -> int {
+    let sub = _operate_first_sub(argv)
+    let owner = _operate_owner(argv)
+    if sub == "list" {
+        // 8VERB — `discover` is stage 0 of the 8-verb ladder (label only).
+        println("8-verb ladder: 0/8 discover → 1/8 specify → 2/8 structure → "
+                + "3/8 design → 4/8 analyze⟲ → 5/8 synthesize → 6/8 verify → 7/8 handoff")
+        println("")
+        let expert = _operate_expert()
+        let ops = op_registry()
+        _operate_render_tier(ops, "product", owner, expert)
+        _operate_render_tier(ops, "owner", owner, expert)
+        if !owner {
+            println("(🔒 owner ops hidden — set DEMIURGE_OWNER or pass --owner)")
+        }
+        return 0
+    }
+    if sub == "audit" {
+        let ops = op_registry()
+        let mut p_ok = 0
+        let mut p_partial = 0
+        let mut p_blocked = 0
+        let mut owner_total = 0
+        let mut i = 0
+        while i < len(ops) {
+            let o = ops[i]
+            if o.tier == "product" {
+                if o.reach == "ok"      { p_ok = p_ok + 1 }
+                if o.reach == "partial" { p_partial = p_partial + 1 }
+                if o.reach == "blocked" { p_blocked = p_blocked + 1 }
+            } else {
+                owner_total = owner_total + 1
+            }
+            i = i + 1
+        }
+        let p_total = p_ok + p_partial + p_blocked
+        println("operability audit (CLI+COCKPIT M21):")
+        println("  product: " + to_string(p_ok) + " ✅ · " + to_string(p_partial)
+                + " 🔶 · " + to_string(p_blocked) + " ❌  (of " + to_string(p_total) + ")")
+        println("  owner:   " + to_string(owner_total) + " 🔒 (env-gated)")
+        // productComplete = no 🔶 and no ❌ in the product tier.
+        if p_blocked == 0 && p_partial == 0 {
+            println("  verdict: ✅ external operability COMPLETE — @goal met")
+            return 0
+        }
+        // pending = product ops with reach != ok, as "<id>(<milestone>)".
+        let mut pend = ""
+        i = 0
+        let mut first = true
+        while i < len(ops) {
+            let o = ops[i]
+            if o.tier == "product" && o.reach != "ok" {
+                if !first { pend = pend + ", " }
+                pend = pend + o.id + "(" + o.milestone + ")"
+                first = false
+            }
+            i = i + 1
+        }
+        println("  verdict: ⏳ pending — " + pend)
+        return 1
+    }
+    eprintln("operate: unknown subcommand '" + sub + "' — use list | audit")
+    return 2
+}
+
+// `demi backend [list|current]` — the compute-backend surface (Swift
+// `backend`, CLI+COCKPIT M17). Local default + `DEMIURGE_BACKEND` user
+// remote; owner pool hosts (from ~/.pool/pool.json, NOT hardcoded) only
+// in owner mode. Read-only. Reuses BackendResolver (backend_resolver.hexa)
+// + the operate-family flag/mode helpers (d3 — _operate_first_sub /
+// _operate_owner / _operate_expert: same `--owner` + DEMIURGE_OWNER /
+// DEMIURGE_EXPERT semantics).
+//
+//   list  → one row per visible backend, "▶" marking the active id (else a
+//           leading space). Plain shows the friendly label; expert (M19)
+//           shows "<id>  [<kind>]  <label> — <host>". `🔒` tags owner rows.
+//           When owner pool hosts are hidden, a trailing "(🔒 …)" hint line.
+//           Closes with an "active: <id> …" line. Exit 0.
+//   current → "active backend: <id> · <label> — <host>". Exit 0.
+//   <other> → stderr "backend: unknown subcommand …", exit 2.
+pub fn handler_backend(argv: [string]) -> int {
+    // Swift `args.first(where: { !$0.hasPrefix("--") }) ?? "list"`.
+    let sub = _operate_first_sub(argv)
+    // Swift `args.contains("--owner") || ownerModeEnabled`.
+    let owner = _operate_owner(argv)
+    if sub == "list" {
+        let active = br_active()
+        let expert = _operate_expert()
+        let bks = br_available(owner)
+        let mut i = 0
+        while i < len(bks) {
+            let b = bks[i]
+            i = i + 1
+            let mark = if b.id == active.id { "▶" } else { " " }
+            let gate = if b.owner { " 🔒" } else { "" }
+            if expert {
+                println(mark + " " + b.id + gate + "  [" + b.kind + "]  "
+                        + b.label + " — " + b.host)
+            } else {
+                println(mark + " " + b.label + gate)
+            }
+        }
+        if !owner {
+            println("(🔒 owner pool hosts hidden — DEMIURGE_OWNER + ~/.pool/pool.json)")
+        }
+        println("active: " + active.id + "  (change via DEMIURGE_BACKEND env)")
+        return 0
+    }
+    if sub == "current" {
+        let b = br_active()
+        println("active backend: " + b.id + " · " + b.label + " — " + b.host)
+        return 0
+    }
+    eprintln("backend: unknown subcommand '" + sub + "' — use list | current")
+    return 2
+}
+
+// `demiurge owner` — the 사장실 status surface (CLI+COCKPIT M20). Mirrors
+// Swift `ownerStatus()`. Shows whether owner-mode is unlocked (env
+// DEMIURGE_OWNER) + the owner-only ops it gates. Unlike operate/backend,
+// this surface keys off `DemiurgeMode.owner` ONLY (env-gated) — it does
+// NOT honor a `--owner` flag (Swift uses `DemiurgeMode.owner`, not the
+// `args.contains("--owner") || ownerModeEnabled` form). Reuses op_registry()
+// (operation_registry.hexa) + op_reach_glyph is not used here (Swift prints
+// a fixed ✅/🔒 per on-state, not the reach glyph). Read-only, always exit 0.
+pub fn handler_owner(argv: [string]) -> int {
+    // Swift `let on = DemiurgeMode.owner` (DEMIURGE_OWNER present).
+    let on = len(env("DEMIURGE_OWNER")) > 0
+    let head = if on { "✅ unlocked (DEMIURGE_OWNER)" } else { "🔒 locked" }
+    println("owner-mode (사장실): " + head)
+    // Swift `OperationRegistry.all.filter { $0.tier == .owner }`.
+    let ops = op_registry()
+    let mut count = 0
+    let mut i = 0
+    while i < len(ops) {
+        if ops[i].tier == "owner" { count = count + 1 }
+        i = i + 1
+    }
+    println("  owner-only ops (" + to_string(count) + "):")
+    let mark = if on { "✅" } else { "🔒" }
+    i = 0
+    while i < len(ops) {
+        if ops[i].tier == "owner" {
+            println("    " + mark + " " + ops[i].title)
+        }
+        i = i + 1
+    }
+    if !on {
+        println("  → unlock: DEMIURGE_OWNER=1 demiurge <cmd>  (외부 사용자에겐 비노출)")
+    }
+    return 0
+}
+
+// `demiurge llm` — the AI-connection surface (D38). Mirrors Swift llmCmd().
+// Reads/writes the SAME ~/.demiurge/llm.json (+ keychain key-source probe) the
+// cockpit settings modal uses. Provider list is the ls_builtins manifest — no
+// id hardcoding (d4); the handler branches on the SUBCOMMAND token only, never
+// a provider id.
+//
+// SPLIT (g4 · <200 lines/PR): PR #17a ported the deterministic READ + config-
+// SET subverbs (list [--json] · use · mode · model). PR #17b adds the
+// keychain-WRITE + live-LLMBridge side (key · key-rm · test · ask): these
+// perform REAL side-effects — keychain SecItem via stdlib/keychain.hexa, and
+// an HTTPS POST / provider-CLI spawn via the ls_bridge_* leaf (d3). @L7
+// HONESTY: only the DETERMINISTIC pre-side-effect paths are parity-gated
+// (missing-arg / bad-provider usage errors + the deterministic 저장됨/삭제됨
+// confirmation lines). The live network/keychain happy paths (✅/❌ test,
+// ask reply, 저장 실패) are functional but exercised MANUALLY, never faked
+// in the gate.
+pub fn handler_llm(argv: [string]) -> int {
+    // Swift `let sub = args.first ?? "list"`.
+    let sub = if len(argv) >= 1 { argv[0] } else { "list" }
+    let cfg = ls_load()
+
+    // ── list [--json] ────────────────────────────────────────────────────
+    if sub == "list" {
+        let providers = ls_providers(cfg)
+        // Swift `args.contains("--json")`.
+        let mut want_json = false
+        let mut t = 0
+        while t < len(argv) { if argv[t] == "--json" { want_json = true } ; t = t + 1 }
+        if want_json {
+            // Machine-readable (CI / AI surface). Match Swift's pretty +
+            // sortedKeys layout: top key order mode, providers; each provider
+            // object's keys alphabetical (displayName · id · keySource · model
+            // · selected · wireFormat).
+            let active = ls_active(cfg)
+            let mut out = "{\n"
+            out = out + "  \"mode\" : \"" + cfg.mode + "\",\n"
+            out = out + "  \"providers\" : [\n"
+            let mut i = 0
+            while i < len(providers) {
+                let p = providers[i]
+                let sel = if p.id == active.id { "true" } else { "false" }
+                out = out + "    {\n"
+                out = out + "      \"displayName\" : \"" + p.display_name + "\",\n"
+                out = out + "      \"id\" : \"" + p.id + "\",\n"
+                out = out + "      \"keySource\" : \"" + ls_key_source(p) + "\",\n"
+                out = out + "      \"model\" : \"" + p.default_model + "\",\n"
+                out = out + "      \"selected\" : " + sel + ",\n"
+                out = out + "      \"wireFormat\" : \"" + p.wire_format + "\"\n"
+                out = out + "    }"
+                if i < len(providers) - 1 { out = out + "," }
+                out = out + "\n"
+                i = i + 1
+            }
+            out = out + "  ]\n"
+            out = out + "}"
+            println(out)
+            return 0
+        }
+        let active = ls_active(cfg)
+        println("AI 제공자 (활성 모드: " + cfg.mode + " · " + ls_mode_label(cfg.mode) + "):")
+        let expert = _operate_expert()
+        let mut i = 0
+        while i < len(providers) {
+            let p = providers[i]
+            i = i + 1
+            let mark = if p.id == active.id { "▶" } else { " " }
+            let src = ls_key_source(p)
+            if expert {
+                println(mark + " " + p.id + "  [" + p.wire_format + "]  "
+                        + p.display_name + " · 모델 " + p.default_model
+                        + " · 키 " + src + " · cli " + p.cli_command)
+            } else {
+                println(mark + " " + p.display_name + " · 모델 " + p.default_model + " · 키 " + src)
+            }
+        }
+        println("바꾸기: llm use <id> · llm mode <cli|api> · llm key <id> <key> · llm model <id> <model>")
+        return 0
+    }
+
+    // ── use <id> ─────────────────────────────────────────────────────────
+    if sub == "use" {
+        let found = if len(argv) >= 2 { ls_find_provider(cfg, argv[1]) } else { [] }
+        if len(found) == 0 {
+            let ps = ls_providers(cfg)
+            let mut ids: [string] = []
+            let mut i = 0
+            while i < len(ps) { ids.push(ps[i].id) ; i = i + 1 }
+            eprintln("llm use: 알 수 없는 provider — " + _join(ids, " · "))
+            return 2
+        }
+        let p = found[0]
+        let mut c = cfg
+        c.selected_provider = p.id
+        ls_save(c)
+        println("활성 provider → " + p.display_name + " (" + p.id + ")")
+        return 0
+    }
+
+    // ── mode <cli|api> ───────────────────────────────────────────────────
+    if sub == "mode" {
+        let m = if len(argv) >= 2 { argv[1].to_lower() } else { "" }
+        if m != "cli" && m != "api" {
+            eprintln("llm mode: cli | api 중 하나")
+            return 2
+        }
+        let mut c = cfg
+        c.mode = m
+        ls_save(c)
+        println("연결 방식 → " + m + " (" + ls_mode_label(m) + ")")
+        return 0
+    }
+
+    // ── model <id> <m> ───────────────────────────────────────────────────
+    if sub == "model" {
+        let found = if len(argv) >= 3 { ls_find_provider(cfg, argv[1]) } else { [] }
+        if len(found) == 0 {
+            eprintln("llm model: usage — llm model <id> <model>")
+            return 2
+        }
+        let p = found[0]
+        let c = ls_set_model(cfg, p.id, argv[2])
+        ls_save(c)
+        println(p.display_name + " 모델 → " + argv[2])
+        return 0
+    }
+
+    // ── key <id> <key> ───────────────────────────────────────────────────
+    // @L7: the deterministic usage error (missing-arg / bad-provider) is
+    // resolved BEFORE any keychain touch (parity-gated). The happy path REALLY
+    // writes the macOS keychain (ls_key_set → stdlib keychain SecItem) — the
+    // 저장됨 confirmation line is deterministic, but the keychain side-effect
+    // and the 저장 실패 branch are exercised manually, not in the gate.
+    if sub == "key" {
+        let found = if len(argv) >= 3 { ls_find_provider(cfg, argv[1]) } else { [] }
+        if len(found) == 0 {
+            eprintln("llm key: usage — llm key <id> <key>")
+            return 2
+        }
+        let p = found[0]
+        if ls_key_set(p.id, argv[2]) {
+            println(p.display_name + " 키 저장됨 (키체인) — 읽기는 env(" + p.key_env + ") 우선")
+            return 0
+        }
+        eprintln("llm key: 키체인 저장 실패")
+        return 1
+    }
+
+    // ── key-rm | key-del <id> ────────────────────────────────────────────
+    // Deterministic usage error gated; the keychain delete (ls_key_delete) is
+    // a real, idempotent side-effect (manual). The 삭제됨 line is deterministic.
+    if sub == "key-rm" || sub == "key-del" {
+        let found = if len(argv) >= 2 { ls_find_provider(cfg, argv[1]) } else { [] }
+        if len(found) == 0 {
+            eprintln("llm key-rm: usage — llm key-rm <id>")
+            return 2
+        }
+        let p = found[0]
+        ls_key_delete(p.id)
+        println(p.display_name + " 키 삭제됨 (키체인). env " + p.key_env + " 가 설정돼 있으면 그건 유지.")
+        return 0
+    }
+
+    // ── test [<id>] ──────────────────────────────────────────────────────
+    // @L7: a live LLMBridge probe (CLI spawn / HTTPS POST) — really invoked.
+    // Swift falls back to the active provider when no id is given, so there is
+    // NO deterministic pre-network error path here; the ✅/❌ outcome depends
+    // on live network/CLI state, so this whole subverb is functional-but-not-
+    // gated (manual). NOT faked.
+    if sub == "test" {
+        let target = if len(argv) >= 2 { ls_find_provider(cfg, argv[1]) } else { [] }
+        let p = if len(target) > 0 { target[0] } else { ls_active(cfg) }
+        let reply = ls_bridge_test(cfg, p)
+        if reply.ok {
+            println("✅ " + p.display_name + " · " + reply.detail)
+            let head = if len(reply.text) > 120 { reply.text.substring(0, 120) } else { reply.text }
+            println("   " + head)
+            return 0
+        }
+        println("❌ " + p.display_name + " · " + reply.detail)
+        return 1
+    }
+
+    // ── ask <prompt> ─────────────────────────────────────────────────────
+    // @L7: the missing-prompt guard is deterministic (pre-network · gated).
+    // The happy path REALLY calls LLMBridge (CLI/HTTPS) — functional, manual.
+    if sub == "ask" {
+        if len(argv) < 2 {
+            eprintln("llm ask: usage — llm ask <prompt>")
+            return 2
+        }
+        let mut parts: [string] = []
+        let mut i = 1
+        while i < len(argv) { parts.push(argv[i]) ; i = i + 1 }
+        let prompt = _join(parts, " ")
+        let reply = ls_bridge_ask(cfg, prompt, "CLI 직접 호출 (프로젝트 컨텍스트 없음).")
+        if len(reply.text) == 0 { println("⚠️ " + reply.detail) } else { println(reply.text) }
+        if _operate_expert() { println("— " + reply.detail) }
+        if reply.ok { return 0 }
+        return 1
+    }
+
+    // ── unknown subcommand ───────────────────────────────────────────────
+    eprintln("llm: unknown subcommand '" + sub
+             + "' — use list [--json] | use | mode | model | key | key-rm | test | ask")
+    return 2
+}
+
+// ── export-component (3D · LIVE · @L3) ───────────────────────────────────
+//
+// `demiurge export-component <format> [path]` — write the bundled BIPV
+// geometry to a chosen path/format. Ports the Swift `exportComponent`
+// (main.swift:785) 1:1. The geometry is NOT hardcoded here (@L3 · d3): it is
+// the file-driven spec `stdlib/demi/geometry/bipv_5layer_v0.geo.json` loaded
+// via geo_load_component, emitted via geo_usda / geo_stl (PR#21's loader +
+// builder, already proven byte ≡ the Swift USD/STL exporters). This handler is
+// only the CLI wiring — format/arg parse · output destination · the stdout
+// confirmation · the missing/unknown-format errors + exit codes.
+//
+//   format (case-insensitive, Swift .lowercased()):
+//     usda | usd → geo_usda, ext "usda"
+//     stl        → geo_stl,  ext "stl"
+//     else       → stderr unknown-format line, exit 2 (uses the ORIGINAL arg)
+//   path: pathArg ?? "<id>.<ext>" run through Swift URL(fileURLWithPath:).path —
+//     an absolute arg is kept verbatim; a relative arg (incl. the default) is
+//     resolved against the PHYSICAL cwd (Foundation's currentDirectoryPath is
+//     symlink-resolved, so `pwd -P`, matching Swift's printed outURL.path).
+
+// _ec_out_path(arg) — reproduce Swift `URL(fileURLWithPath: arg).path`: an
+// absolute path is returned verbatim (no symlink resolution — Foundation does
+// not standardize it); a relative path is prefixed with the physical cwd.
+fn _ec_out_path(arg: string) -> string {
+    if len(arg) > 0 && arg.substring(0, 1) == "/" { return arg }
+    let cwd = exec("pwd -P").trim()
+    return cwd + "/" + arg
+}
+
+pub fn handler_export_component(argv: [string]) -> int {
+    // Swift: the dispatcher requires args.count >= 3 (a <format>); on miss it
+    // prints the stderr line, then usage(), then exit 2. The demi usage block is
+    // manifest-rendered in dispatch.hexa (importing it back would cycle), so —
+    // exactly like handler_verify's missing-arg path — this surfaces the demi-
+    // owned stderr line + exit 2 (the usage tail is the usage cell's concern).
+    if len(argv) < 1 {
+        eprintln("export-component: missing <format> argument (usda|stl)")
+        return 2
+    }
+    let format_arg = argv[0]
+    let fmt = format_arg.to_lower()
+    let mut ext = ""
+    let mut body = ""
+    let spec = geo_load_component("bipv_5layer_v0")
+    if fmt == "usda" || fmt == "usd" {
+        ext = "usda" ; body = geo_usda(spec, 0.0)
+    } else if fmt == "stl" {
+        ext = "stl" ; body = geo_stl(spec, 0.0)
+    } else {
+        eprintln("export-component: unknown format '" + format_arg + "' — "
+                 + "use usda | stl  (usdz: emit-component packages it)")
+        return 2
+    }
+    // pathArg ?? "<id>.<ext>"  →  Swift URL(fileURLWithPath:).path.
+    let raw = if len(argv) >= 2 { argv[1] } else { spec.id + "." + ext }
+    let out_path = _ec_out_path(raw)
+    write_file(out_path, body)
+    // Swift's write-failed branch is env-owned (Foundation error text) and not a
+    // parity cell; write_file is the POSIX builtin used across the handlers.
+    println("export-component: wrote " + out_path + " (" + ext + ")")
+    println("   procedural placeholder geometry — GATE_OPEN (g3)")
+    return 0
+}
+
+// ── emit-component (3D · LIVE · @L3) ─────────────────────────────────────
+//
+// `demiurge emit-component` — emit the bundled BIPV geometry to
+// `exports/component/geometry/`. Ports the Swift `ComponentEmitter.emitBundled`
+// (DemiurgeCore/Loaders/ComponentEmitter.swift) — but ONLY the procedural
+// path. Swift's emitBundled tries a FreeCAD parametric producer FIRST when
+// `freecadcmd` is locally installed; that path is host-DEPENDENT (needs a
+// FreeCAD install + the bipv.py producer script) and emits a different artifact
+// set (.step/.brep/.stl/.meta.json + a freecad@<v> record). It is NOT a
+// host-independent parity case, so this handler reproduces the PROCEDURAL
+// fallback (the κ-29 path Swift takes when FreeCAD is absent) — .usda + .usdz +
+// a typed record with producer=demiurge_procedural_placeholder. The geometry is
+// NOT hardcoded (@L3 · d3): the file-driven spec bipv_5layer_v0.geo.json is
+// loaded via geo_load_component + emitted via geo_usda (PR#21's builder, byte ≡
+// the Swift USD exporter). This handler is the CLI wiring — output dir · the 3
+// writes (.usda/.usdz/.json) · the stdout confirmation lines · exit code.
+//
+//   stdout (procedural · ok): wrote <id>.usda → (wrote <id>.usdz | usdz
+//     packaging unavailable …) → wrote <id>.json → "---" → 📦 line → GATE line.
+//   record JSON: Swift JSONEncoder [.prettyPrinted .sortedKeys
+//     .withoutEscapingSlashes] (2-space indent · " : " sep · alpha keys · "/"
+//     NOT escaped). produced_at_utc is the only nondeterministic field.
+
+// _ec_json_str(s) — Swift JSONEncoder string escaping WITHOUT slash-escaping
+// (.withoutEscapingSlashes). Same as ps_json_escape minus the "/" → "\/" rule.
+fn _ec_json_str(s: string) -> string {
+    let n = len(s)
+    let mut out = ""
+    let mut i = 0
+    while i < n {
+        let c = s.substring(i, i + 1)
+        if c == "\\" { out = out + "\\\\" }
+        else if c == "\"" { out = out + "\\\"" }
+        else if c == "\n" { out = out + "\\n" }
+        else if c == "\r" { out = out + "\\r" }
+        else if c == "\t" { out = out + "\\t" }
+        else { out = out + c }
+        i = i + 1
+    }
+    return out
+}
+
+// _ec_json_num(v) — Swift JSONEncoder's minimal Double repr for the record's
+// dimension fields: an integer-valued double drops ".0" (1000.0 → "1000"); a
+// non-integer keeps hexa's shortest round-trippable form (41.4 → "41.4"),
+// matching the Swift encoder for this geometry's values.
+fn _ec_json_num(v: f64) -> string {
+    if v < 1.0e15 && v > -1.0e15 && v == floor(v) {
+        let i: i64 = int(v)
+        return to_string(i)
+    }
+    return to_string(v)
+}
+
+// _ec_package_usdz(usda_path, usdz_path) — port of USDExporter.packageUSDZ:
+// locate a system USD tool (usdzip | usdcat), run it, return true iff it exits 0
+// AND the .usdz now exists. No tool / failure → false (honest gap — the .usda
+// still stands). usdzip <out> <in> · usdcat <in> -o <out> (Swift arg order).
+fn _ec_package_usdz(usda_path: string, usdz_path: string) -> bool {
+    let mut tool = ""
+    let cands: [string] = [
+        "/usr/local/bin/usdzip", "/usr/bin/usdzip",
+        "/usr/bin/usdcat", "/usr/local/bin/usdcat",
+    ]
+    let mut i = 0
+    while i < len(cands) {
+        if exec("test -x " + rl_shq(cands[i]) + " && echo y || echo n").trim() == "y" {
+            tool = cands[i] ; i = len(cands)
+        } else { i = i + 1 }
+    }
+    if len(tool) == 0 { return false }
+    exec("rm -f " + rl_shq(usdz_path))
+    let args = if rl_starts_with(_ec_basename(tool), "usdzip") {
+        rl_shq(usdz_path) + " " + rl_shq(usda_path)        // usdzip <out> <in>
+    } else {
+        rl_shq(usda_path) + " -o " + rl_shq(usdz_path)     // usdcat <in> -o <out>
+    }
+    let rc = to_string(exec_with_status(rl_shq(tool) + " " + args + " >/dev/null 2>&1")[1])
+    if rc.trim() != "0" { return false }
+    return exec("test -f " + rl_shq(usdz_path) + " && echo y || echo n").trim() == "y"
+}
+
+// _ec_basename(p) — trailing path component (for the usdzip/usdcat suffix test).
+fn _ec_basename(p: string) -> string {
+    let mut i = len(p) - 1
+    while i >= 0 {
+        if p.substring(i, i + 1) == "/" { return p.substring(i + 1, len(p)) }
+        i = i - 1
+    }
+    return p
+}
+
+// _ec_record_json(spec, iso, usdz_file) — the byte-exact procedural
+// ComponentRecord JSON (ComponentRecord.procedural). Keys alphabetical, 2-space
+// indent, " : " separator, "/" unescaped, NO trailing newline (Swift's encoded
+// Data ends at "}"). usdz_file = the .usdz name, or "" → JSON null.
+fn _ec_record_json(spec: ComponentSpec, iso: string, usdz_file: string) -> string {
+    let usdz_json = if len(usdz_file) > 0 {
+        "\"" + _ec_json_str(usdz_file) + "\""
+    } else { "null" }
+    let c0 = "procedural placeholder geometry — plausible dimensions, NOT a measured component (g3)"
+    let c1 = "geometry being well-formed != thermal / structural / EM verdicts being measured — those are separate gates"
+    let c2 = "a measured component producer lives in hexa-lang/component (P-⑨); demiurge consumes it when it exists"
+    let mut s = "{\n"
+    s = s + "  \"depth_mm\" : " + _ec_json_num(spec.depth) + ",\n"
+    s = s + "  \"display_name\" : \"" + _ec_json_str(spec.display_name) + "\",\n"
+    s = s + "  \"geometry_id\" : \"" + _ec_json_str(spec.id) + "\",\n"
+    s = s + "  \"interface\" : \"hexa-arch:component:geometry-record\",\n"
+    s = s + "  \"layer_count\" : " + to_string(len(spec.layers)) + ",\n"
+    s = s + "  \"produced_at_utc\" : \"" + _ec_json_str(iso) + "\",\n"
+    s = s + "  \"provenance\" : {\n"
+    s = s + "    \"absorbed\" : false,\n"
+    s = s + "    \"measurement_gate\" : \"GATE_OPEN\",\n"
+    s = s + "    \"producer\" : \"demiurge_procedural_placeholder\",\n"
+    s = s + "    \"scope_caveats\" : [\n"
+    s = s + "      \"" + _ec_json_str(c0) + "\",\n"
+    s = s + "      \"" + _ec_json_str(c1) + "\",\n"
+    s = s + "      \"" + _ec_json_str(c2) + "\"\n"
+    s = s + "    ]\n"
+    s = s + "  },\n"
+    s = s + "  \"record_id\" : \"" + _ec_json_str(spec.id) + "\",\n"
+    s = s + "  \"schema_version\" : \"1.0\",\n"
+    s = s + "  \"total_thickness_mm\" : " + _ec_json_num(geo_total_thickness(spec)) + ",\n"
+    s = s + "  \"usda_file\" : \"" + _ec_json_str(spec.id + ".usda") + "\",\n"
+    s = s + "  \"usdz_file\" : " + usdz_json + ",\n"
+    s = s + "  \"width_mm\" : " + _ec_json_num(spec.width) + "\n"
+    s = s + "}"
+    return s
+}
+
+pub fn handler_emit_component(argv: [string]) -> int {
+    let spec = geo_load_component("bipv_5layer_v0")
+    let dir = rl_exports_root() + "/component/geometry"
+    // Swift: createDirectory(withIntermediateDirectories: true) → mkdir failed
+    // branch surfaces a Foundation error (env-owned, not a parity cell). mkdir -p
+    // is the POSIX builtin used across the handlers; a fail leaves the writes to
+    // surface their own error (matches the procedural path's per-write guards).
+    exec("mkdir -p " + rl_shq(dir))
+    let usda_path = dir + "/" + spec.id + ".usda"
+    let usdz_path = dir + "/" + spec.id + ".usdz"
+    let json_path = dir + "/" + spec.id + ".json"
+
+    write_file(usda_path, geo_usda(spec, 0.0))
+    println("emit-component: wrote " + spec.id + ".usda")
+
+    let usdz_ok = _ec_package_usdz(usda_path, usdz_path)
+    if usdz_ok {
+        println("emit-component: wrote " + spec.id + ".usdz")
+    } else {
+        println("emit-component: usdz packaging unavailable — .usda only "
+                + "(honest gap, g3)")
+    }
+
+    let iso = ps_now_iso8601()
+    let usdz_file = if usdz_ok { spec.id + ".usdz" } else { "" }
+    write_file(json_path, _ec_record_json(spec, iso, usdz_file))
+    println("emit-component: wrote " + spec.id + ".json")
+    println("---")
+    println("📦 component artifact → exports/component/geometry/")
+    println("   GATE_OPEN · absorbed=false · procedural placeholder (g3)")
+    return 0
+}
+
 pub fn handler_local(target: string, argv: [string]) -> int {
     if target == "action" { return handler_action(argv) }
     if target == "verify" { return handler_verify(argv) }
+    if target == "atlas"  { return handler_atlas(argv) }
+    if target == "show"           { return handler_show(argv) }
+    if target == "list_all"       { return handler_list_all() }
+    if target == "list_records"   { return handler_list("f1f2") }
+    if target == "list_decisions" { return handler_list("decision") }
+    if target == "list_rfcs"      { return handler_list("rfc") }
+    if target == "list_domains"   { return handler_list("domain") }
+    if target == "list_gates"     { return handler_list_gates(argv) }
+    if target == "gate_summary"   { return handler_gate_summary(argv) }
+    if target == "list_projects"  { return handler_list_projects(argv) }
+    if target == "show_project"   { return handler_show_project(argv) }
+    if target == "project"        { return handler_project(argv) }
+    if target == "list_shelf"     { return handler_list_shelf(argv) }
+    if target == "compose"        { return handler_compose(argv) }
+    if target == "operate"        { return handler_operate(argv) }
+    if target == "backend"        { return handler_backend(argv) }
+    if target == "owner"          { return handler_owner(argv) }
+    if target == "llm"            { return handler_llm(argv) }
+    if target == "emit_component"   { return handler_emit_component(argv) }
+    if target == "export_component" { return handler_export_component(argv) }
     // every other declared local target is not-yet-ported → honest stub.
     return handler_stub(target, argv)
 }

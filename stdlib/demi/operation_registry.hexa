@@ -1,0 +1,74 @@
+// HEXA Standard Library — demi/operation_registry
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// THE OPERATION MANIFEST for the `demiurge cli operate` surface
+// (demi-cli-pure-hexa-native · PR#14 · ports Swift DemiurgeCore
+// OperationRegistry.swift + OperabilityAudit byte-for-byte).
+//
+// This is the SINGLE d4-generic enumeration of every operation the product
+// surface (app + CLI) exposes — classified so we can prove the @goal
+// "an external user can fully operate demiurge from app + CLI alone".
+// The data lives HERE; handler_operate (handlers.hexa) renders it. Neither
+// the CLI nor the cockpit hardcodes an op — add/rename/remove is a table edit
+// in op_registry() below, never a name-branch in a surface (@D d4).
+//
+// Tier model (M0_operate.md §1, 3-layer ownership):
+//   • "product" — 진열대: visible to external users. The @goal target.
+//   • "owner"   — 사장실: owner-only, env-gated (DEMIURGE_OWNER), never shown
+//                 to external users (M20).
+// Target (who does the leaf work): "swift" | "hexa" | "substrate".
+// Reach (current reachability FROM the two surfaces):
+//   "ok" → ✅ · "partial" → 🔶 · "blocked" → ❌  (audit drives @goal off this).
+
+// One row of the operation manifest (Swift Operation struct).
+pub struct Operation {
+    id:        string,   // kebab op id (stable)
+    title:     string,   // Korean display label
+    tier:      string,   // "product" | "owner"
+    verb:      string,   // owning 7-verb canonical (or "" = cross-cutting → "—")
+    target:    string,   // "swift" | "hexa" | "substrate"
+    reach:     string,   // "ok" | "partial" | "blocked"
+    milestone: string,   // owning milestone (e.g. "M16")
+}
+
+// op_registry() — the 17-op census (Swift OperationRegistry.all). Order =
+// product first, then owner. EDIT HERE to add/rename/remove an op (@D d4).
+pub fn op_registry() -> [Operation] {
+    let mut ops: [Operation] = []
+    // ── 진열대 (product · external) — 12 ──
+    ops.push(Operation { id: "project",         title: "프로젝트 생성·목록·전환·삭제",        tier: "product", verb: "specify",    target: "swift",     reach: "ok",      milestone: "M15" })
+    ops.push(Operation { id: "verb-nav",        title: "7단계 앞/뒤 이동",                  tier: "product", verb: "",           target: "swift",     reach: "ok",      milestone: "M15" })
+    ops.push(Operation { id: "spec-capture",    title: "spec 입력 (재료 선반)",              tier: "product", verb: "specify",    target: "swift",     reach: "ok",      milestone: "M15" })
+    ops.push(Operation { id: "structure-view",  title: "structure 구조 분해 뷰",             tier: "product", verb: "structure",  target: "swift",     reach: "ok",      milestone: "M15" })
+    ops.push(Operation { id: "design-pick",     title: "design 옵션 선택",                  tier: "product", verb: "design",     target: "swift",     reach: "ok",      milestone: "M15" })
+    ops.push(Operation { id: "analyze-loop",    title: "analyze ⟲ 수렴 runner",            tier: "product", verb: "analyze",    target: "swift",     reach: "ok",      milestone: "M15" })
+    ops.push(Operation { id: "synthesize-run",  title: "synthesize 실행 (engine)",          tier: "product", verb: "synthesize", target: "swift",     reach: "ok",      milestone: "M15" })
+    ops.push(Operation { id: "verify",          title: "verify (5-tier 검증)",              tier: "product", verb: "verify",     target: "hexa",      reach: "ok",      milestone: "M16" })
+    ops.push(Operation { id: "record-view",     title: "record·gate 열람",                 tier: "product", verb: "verify",     target: "swift",     reach: "ok",      milestone: "M15" })
+    ops.push(Operation { id: "export",          title: "결과 export (usd/stl/record)",      tier: "product", verb: "handoff",    target: "swift",     reach: "ok",      milestone: "M15" })
+    ops.push(Operation { id: "atlas-lookup",    title: "atlas 조회 (읽기)",                 tier: "product", verb: "verify",     target: "hexa",      reach: "ok",      milestone: "M16" })
+    ops.push(Operation { id: "compute-backend", title: "compute 백엔드 선택 (로컬/원격)",    tier: "product", verb: "synthesize", target: "substrate", reach: "ok",      milestone: "M17" })
+    // ── 사장실 (owner · env-gated DEMIURGE_OWNER) — 5 ──
+    ops.push(Operation { id: "pool-route",      title: "pool → 내 호스트 라우팅",            tier: "owner",   verb: "synthesize", target: "substrate", reach: "partial", milestone: "M20" })
+    ops.push(Operation { id: "inbox-handoff",   title: "inbox/patches → hexa-lang 핸드오프", tier: "owner",   verb: "handoff",    target: "substrate", reach: "partial", milestone: "M20" })
+    ops.push(Operation { id: "atlas-register",  title: "atlas 등록 PR → dancinlab",         tier: "owner",   verb: "verify",     target: "substrate", reach: "partial", milestone: "M20" })
+    ops.push(Operation { id: "governance",      title: "@D 거버넌스 enforcement",           tier: "owner",   verb: "",           target: "swift",     reach: "partial", milestone: "M20" })
+    ops.push(Operation { id: "owner-domain",    title: "내 연구 domain <NAME>.md 운영",      tier: "owner",   verb: "specify",    target: "swift",     reach: "partial", milestone: "M20" })
+    return ops
+}
+
+// op_reach_glyph(reach) — Swift OperationReach.glyph.
+pub fn op_reach_glyph(reach: string) -> string {
+    if reach == "ok"      { return "✅" }
+    if reach == "partial" { return "🔶" }
+    if reach == "blocked" { return "❌" }
+    return "?"
+}
+
+// op_verb_display(verb) — Swift `o.verb?.canonical ?? "—"`: "" → "—".
+pub fn op_verb_display(verb: string) -> string {
+    if len(verb) == 0 { return "—" }
+    return verb
+}

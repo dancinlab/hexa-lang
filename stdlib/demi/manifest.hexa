@@ -111,11 +111,16 @@ pub fn demi_manifest() -> Manifest {
     //   --expr | --fence | rubric → hexa verify KERNEL passthrough (LIVE,
     //                               PR-verify-passthrough · verbatim · @D g5);
     //   <path|id> (bare)          → local record check (PR-verify-record stub).
-    // atlas forwards to the hexa stdlib kernel (subprocess kind).
     vs.push(Verb { name: "verify",          kind: "local", target: "verify",
                    summary: "Provenance/claim-gate check · --expr forwards to hexa verify" })
-    vs.push(Verb { name: "atlas",           kind: "subprocess", target: "hexa",
-                   summary: "Read the hexa atlas SSOT (lookup/stats/hash/dump)" })
+    // atlas — local handler (PR-atlas-refusal · LIVE). READ subverbs
+    // (lookup/stats/hash/dump) forward to `hexa atlas` VERBATIM; WRITE subverbs
+    // (register/append-witness/pr) are owner ops (사장실 · M20) refused unless
+    // DEMIURGE_OWNER is set (Swift atlasCmd parity). NOT a bare subprocess row:
+    // the owner-gate is verb-specific logic, so it lives in handler_atlas — the
+    // generic dispatcher still branches only on `kind` (d4), never the verb name.
+    vs.push(Verb { name: "atlas",           kind: "local", target: "atlas",
+                   summary: "Read the hexa atlas SSOT (lookup/stats/hash/dump) · owner write gated" })
     // 3D exporters (plan @L3) — local hexa-native USD/STL emit.
     vs.push(Verb { name: "emit-component",  kind: "local", target: "emit_component",
                    summary: "Emit the procedural BIPV artifact (.usda/.usdz)" })

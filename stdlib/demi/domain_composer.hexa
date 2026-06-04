@@ -1,0 +1,565 @@
+// HEXA Standard Library — demi/domain_composer
+//
+// @version 0.1.0
+// @capabilities [proc]
+//
+// The pure-hexa-native port of the Swift cockpit `DomainComposer` +
+// `DomainGraph` + the `compose <domain>` CLI command (demiurge
+// cockpit/Sources/DemiurgeCore/Loaders/DomainComposition.swift +
+// Models/DomainGraph.swift + DemiurgeCLI/main.swift `compose(_:)` ·
+// demi-cli-pure-hexa-native · plan PR#10 compose). Builds on #9's
+// domain_catalog (shares the domains-dir resolution + the rl_* leaf
+// helpers) — d3, no re-derivation.
+//
+// 선행도메인 = 구성도메인: a domain is COMPOSED of its prerequisite
+// domains, recursively (M0_operate.md §8). This resolver loads the
+// `domains/INDEX.demi` DAG SSOT (D83), computes the transitive
+// prerequisite closure, topo-sorts it (foundation→apex), and renders
+// the constituent stack + cluster union + kind, byte-for-byte against
+// the Swift reference:
+//
+//   compose <id> — <label> · <kind>[ · 결합]
+//     구성 도메인 (N):
+//       a → b → c                  (or "(none)" when empty)
+//     성격: cl1 · cl2 · ...
+//
+// kind = 단일 (atomic · stack==1, scale!=system) | 구성형 (composite ·
+// stack>1, scale!=system) | 메타(통합) (meta · scale==system). 결합 iff
+// the START domain's OWN clusters touch BOTH the life-side {bio chem
+// life} AND the tech-side {engineering physical propulsion sensing
+// matter system}. An unknown domain degrades to a synthetic node
+// (scale=system → 메타(통합), empty stack → "(none)", empty 성격, rc 0).
+//
+// NOTE: this is the M19 PLAIN-default render (Korean kind labels, no
+// substrate SSOT line). DemiurgeMode.expert is OFF for the hexa-native
+// CLI (no env toggle ported here), so the plain branch is canonical —
+// matching the Swift reference run WITHOUT DEMIURGE_EXPERT.
+//
+// INDEX.demi parse mirrors DemiParser.parse byte-for-byte for the
+// fields compose needs: id (section header) · label (scalar) ·
+// prerequisites (list) · facets.scale (dotted scalar) · facets.cluster
+// (dotted list). Trailing `#` comments stripped; whitespace trimmed;
+// quoted scalars/list items unquoted.
+
+import "stdlib/demi/domain_catalog.hexa"
+
+// ── one parsed INDEX.demi domain record ─────────────────────────────────────
+pub struct DcDomain {
+    id:            string,
+    label:         string,
+    prerequisites: [string],
+    clusters:      [string],   // facts.cluster, unknown rawValues dropped (compactMap)
+    scale:         string,     // facets.scale (default "system")
+    substrate:     string,     // substrate_ssot ("" if absent)
+    keywords:      [string],   // free-text → domain key match (DomainCatalog.infer · PR#13)
+}
+
+// dco_trim(s) — whitespace-trim (space + tab), matching DemiParser's
+// `.whitespaces` trimming. Local copy so this leaf stays self-contained (#9's
+// dc_trim is private — d3: no #9 edit just to widen its visibility).
+fn dco_trim(s: string) -> string {
+    let mut a = 0
+    let mut b = len(s)
+    while a < b {
+        let c = s.substring(a, a + 1)
+        if c == " " || c == "\t" { a = a + 1 } else { break }
+    }
+    while b > a {
+        let c = s.substring(b - 1, b)
+        if c == " " || c == "\t" { b = b - 1 } else { break }
+    }
+    return s.substring(a, b)
+}
+
+// ── valid DomainCluster rawValues (Swift enum DomainCluster) ────────────────
+// Swift `clusters = nestedList.compactMap { DomainCluster(rawValue:) }` drops
+// any rawValue not in this set, so we filter identically.
+fn dco_is_cluster(c: string) -> bool {
+    return c == "matter" || c == "bio" || c == "chem" || c == "physical"
+        || c == "propulsion" || c == "sensing" || c == "engineering"
+        || c == "life" || c == "system"
+}
+
+// ── INDEX.demi path (DomainLoader.indexPath · $DEMIURGE_REPO branch) ────────
+// dc_domains_dir() == <projectRoot>/domains == $DEMIURGE_REPO/domains when set
+// (rl_project_root drops the exports tail off $DEMIURGE_REPO/exports). The
+// Swift loader's first-priority path is $DEMIURGE_REPO/domains/INDEX.demi, so
+// the two agree on the same tree.
+fn dco_index_path() -> string {
+    return dc_domains_dir() + "/INDEX.demi"
+}
+
+// ── value parse helpers (DemiParser.parseValue / unquote / splitList) ───────
+
+// dco_unquote(s) — strip surrounding double-quotes if BOTH ends carry one and
+// length>=2 (Swift unquote). Trims first.
+fn dco_unquote(s: string) -> string {
+    let t = dco_trim(s)
+    let n = len(t)
+    if n >= 2 && t.substring(0, 1) == "\"" && t.substring(n - 1, n) == "\"" {
+        return t.substring(1, n - 1)
+    }
+    return t
+}
+
+// dco_split_list(body) — comma-split honoring quoted commas (Swift splitList),
+// trim each, drop empties, unquote each.
+fn dco_split_list(body: string) -> [string] {
+    let mut out: [string] = []
+    let mut current = ""
+    let mut in_quotes = false
+    let mut i = 0
+    while i < len(body) {
+        let ch = body.substring(i, i + 1)
+        if ch == "\"" {
+            in_quotes = !in_quotes
+            current = current + ch
+        } else if ch == "," && !in_quotes {
+            let trimmed = dco_trim(current)
+            if len(trimmed) > 0 { out.push(dco_unquote(trimmed)) }
+            current = ""
+        } else {
+            current = current + ch
+        }
+        i = i + 1
+    }
+    let last = dco_trim(current)
+    if len(last) > 0 { out.push(dco_unquote(last)) }
+    return out
+}
+
+// dco_is_list(v) — RHS is a `[ ... ]` list literal (Swift parseValue).
+fn dco_is_list(v: string) -> bool {
+    let t = dco_trim(v)
+    let n = len(t)
+    return n >= 2 && t.substring(0, 1) == "[" && t.substring(n - 1, n) == "]"
+}
+
+// dco_list_inner(v) — the body inside `[ ... ]`.
+fn dco_list_inner(v: string) -> string {
+    let t = dco_trim(v)
+    return t.substring(1, len(t) - 1)
+}
+
+// dco_strip_comment(line) — drop a trailing `#`-to-EOL comment (DemiParser:
+// first `#` wins, even mid-line). Returns the pre-`#` portion (untrimmed).
+fn dco_strip_comment(line: string) -> string {
+    let h = rl_index_of(line, "#", 0)
+    if h < 0 { return line }
+    return line.substring(0, h)
+}
+
+// ── parse INDEX.demi → DcDomain[] (DemiParser.parse + DomainLoader.project) ──
+// Section header `[id]` opens a record; `key = value` scalar; `key.sub = ...`
+// dotted (only facets.scale / facets.cluster matter to compose). Malformed
+// lines (no `=`, not a header) skipped. A record is emitted on the NEXT header
+// or at EOF (flush). Order = source order (irrelevant — topoSort re-orders).
+pub fn dco_load_domains() -> [DcDomain] {
+    let mut out: [DcDomain] = []
+    let path = dco_index_path()
+    let hit = exec("test -f " + rl_shq(path) + " && echo yes || echo no").trim()
+    if hit != "yes" { return out }
+    let content = read_file(path)
+    let lines = content.split("\n")
+
+    let mut have = false
+    let mut cur_id = ""
+    let mut cur_label = ""
+    let mut cur_prereqs: [string] = []
+    let mut cur_clusters: [string] = []
+    let mut cur_scale = "system"
+    let mut cur_sub = ""
+    let mut cur_keywords: [string] = []
+
+    let mut i = 0
+    while i <= len(lines) {
+        // flush trigger: a new header OR EOF (i == len)
+        let mut is_header = false
+        let mut header_id = ""
+        let mut raw = ""
+        if i < len(lines) {
+            raw = dco_strip_comment(lines[i])
+            let line = dco_trim(raw)
+            if len(line) == 0 { i = i + 1; continue }
+            let n = len(line)
+            if line.substring(0, 1) == "[" && line.substring(n - 1, n) == "]" {
+                is_header = true
+                header_id = dco_trim(line.substring(1, n - 1))
+            }
+        }
+        if i == len(lines) || is_header {
+            // flush the in-progress record (DomainLoader.project: label required)
+            if have && len(cur_label) > 0 {
+                out.push(DcDomain {
+                    id: cur_id, label: cur_label,
+                    prerequisites: cur_prereqs, clusters: cur_clusters,
+                    scale: cur_scale, substrate: cur_sub,
+                    keywords: cur_keywords })
+            }
+            if i == len(lines) { break }
+            // open the new section
+            have = true
+            cur_id = header_id
+            cur_label = ""
+            cur_prereqs = []
+            cur_clusters = []
+            cur_scale = "system"
+            cur_sub = ""
+            cur_keywords = []
+            i = i + 1
+            continue
+        }
+        // key = value
+        let line = dco_trim(raw)
+        let eq = rl_index_of(line, "=", 0)
+        if eq < 0 { i = i + 1; continue }
+        let key = dco_trim(line.substring(0, eq))
+        let val = dco_trim(line.substring(eq + 1, len(line)))
+        if key == "label" {
+            cur_label = dco_unquote(val)
+        } else if key == "prerequisites" {
+            if dco_is_list(val) { cur_prereqs = dco_split_list(dco_list_inner(val)) }
+        } else if key == "substrate_ssot" {
+            cur_sub = dco_unquote(val)
+        } else if key == "keywords" {
+            if dco_is_list(val) { cur_keywords = dco_split_list(dco_list_inner(val)) }
+        } else if key == "facets.scale" {
+            cur_scale = dco_unquote(val)
+        } else if key == "facets.cluster" {
+            if dco_is_list(val) {
+                let raw_cl = dco_split_list(dco_list_inner(val))
+                let mut keep: [string] = []
+                let mut k = 0
+                while k < len(raw_cl) {
+                    if dco_is_cluster(raw_cl[k]) { keep.push(raw_cl[k]) }
+                    k = k + 1
+                }
+                cur_clusters = keep
+            }
+        }
+        i = i + 1
+    }
+    return out
+}
+
+// ── index lookup helpers ────────────────────────────────────────────────────
+fn dco_find(doms: [DcDomain], id: string) -> int {
+    let mut i = 0
+    while i < len(doms) {
+        if doms[i].id == id { return i }
+        i = i + 1
+    }
+    return -1
+}
+
+fn dco_in_set(set: [string], id: string) -> bool {
+    let mut i = 0
+    while i < len(set) {
+        if set[i] == id { return true }
+        i = i + 1
+    }
+    return false
+}
+
+// ── transitive closure (DomainGraph.transitiveClosure · BFS over prereqs) ───
+// Returns the set of constituent ids (start included). Unknown ids that appear
+// as a prereq but have no record are skipped (Swift `guard let d = idx[id]`),
+// matching the reference. The start itself, if unknown, yields an empty set
+// (idx miss on the queue head → no collected node) — but the CLI handles the
+// unknown-start synthetic node separately (Swift compose uses the closure of a
+// real id; an unknown start has no INDEX.demi record so the closure is empty).
+fn dco_closure(doms: [DcDomain], start: string) -> [string] {
+    let mut visited: [string] = []
+    let mut queue: [string] = [start]
+    let mut collected: [string] = []
+    let mut qi = 0
+    while qi < len(queue) {
+        let id = queue[qi]
+        qi = qi + 1
+        if dco_in_set(visited, id) { continue }
+        visited.push(id)
+        let idx = dco_find(doms, id)
+        if idx < 0 { continue }
+        collected.push(id)
+        let pr = doms[idx].prerequisites
+        let mut p = 0
+        while p < len(pr) {
+            if !dco_in_set(visited, pr[p]) { queue.push(pr[p]) }
+            p = p + 1
+        }
+    }
+    return collected
+}
+
+// dco_sort_strings(xs) — ascending lexicographic sort (Swift `.sorted()` on
+// String uses Unicode scalar ordering; all domain ids are ASCII so a byte
+// compare agrees). Simple insertion sort (id sets are small).
+pub fn dco_sort_strings(xs: [string]) -> [string] {
+    let mut a: [string] = []
+    let mut i = 0
+    while i < len(xs) { a.push(xs[i]); i = i + 1 }
+    let mut j = 1
+    while j < len(a) {
+        let key = a[j]
+        let mut k = j - 1
+        while k >= 0 && a[k] > key {
+            a[k + 1] = a[k]
+            k = k - 1
+        }
+        a[k + 1] = key
+        j = j + 1
+    }
+    return a
+}
+
+// ── topological sort (DomainGraph.topologicalSort · Kahn + alpha tie-break) ─
+// foundation (no prereq within the subgraph) first, apex last; ties broken by
+// id (alphabetical), kept sorted as the ready set grows. `ids` is the closure.
+fn dco_toposort(doms: [DcDomain], ids: [string]) -> [string] {
+    // in-degree within the induced subgraph: count of prereqs that are in `ids`
+    let mut indeg_id: [string] = []
+    let mut indeg_n: [int] = []
+    let mut i = 0
+    while i < len(ids) { indeg_id.push(ids[i]); indeg_n.push(0); i = i + 1 }
+    i = 0
+    while i < len(ids) {
+        let idx = dco_find(doms, ids[i])
+        if idx >= 0 {
+            let pr = doms[idx].prerequisites
+            let mut p = 0
+            while p < len(pr) {
+                if dco_in_set(ids, pr[p]) {
+                    // edge pr -> ids[i]; ids[i]'s in-degree++
+                    indeg_n[i] = indeg_n[i] + 1
+                }
+                p = p + 1
+            }
+        }
+        i = i + 1
+    }
+    // remaining[] tracks not-yet-emitted in-degree; removed[] marks emitted.
+    let mut removed: [string] = []
+    // ready = sorted ids with in-degree 0
+    let mut ready: [string] = []
+    i = 0
+    while i < len(ids) {
+        if indeg_n[i] == 0 { ready.push(indeg_id[i]) }
+        i = i + 1
+    }
+    ready = dco_sort_strings(ready)
+
+    let mut result: [string] = []
+    while len(ready) > 0 {
+        let next = ready[0]
+        // pop front
+        let mut nr: [string] = []
+        let mut r = 1
+        while r < len(ready) { nr.push(ready[r]); r = r + 1 }
+        ready = nr
+        result.push(next)
+        removed.push(next)
+        // decrement successors: any node in ids whose prereqs contain `next`
+        let mut s = 0
+        while s < len(ids) {
+            let id = ids[s]
+            if !dco_in_set(removed, id) {
+                let idx = dco_find(doms, id)
+                if idx >= 0 && dco_in_set(doms[idx].prerequisites, next) {
+                    // find its slot in indeg
+                    let mut t = 0
+                    while t < len(indeg_id) {
+                        if indeg_id[t] == id {
+                            indeg_n[t] = indeg_n[t] - 1
+                            if indeg_n[t] == 0 {
+                                ready.push(id)
+                                ready = dco_sort_strings(ready)
+                            }
+                        }
+                        t = t + 1
+                    }
+                }
+            }
+            s = s + 1
+        }
+    }
+    // remaining (cycle) nodes appended in id order (DAG invariant → empty)
+    let mut leftover: [string] = []
+    let mut u = 0
+    while u < len(ids) {
+        if !dco_in_set(removed, ids[u]) { leftover.push(ids[u]) }
+        u = u + 1
+    }
+    leftover = dco_sort_strings(leftover)
+    let mut v = 0
+    while v < len(leftover) { result.push(leftover[v]); v = v + 1 }
+    return result
+}
+
+// dco_cluster_union(doms, stack) — first-seen union of clusters across the
+// topo-ordered stack (DomainComposer.orderedClusterUnion · stable order).
+fn dco_cluster_union(doms: [DcDomain], stack: [string]) -> [string] {
+    let mut seen: [string] = []
+    let mut out: [string] = []
+    let mut i = 0
+    while i < len(stack) {
+        let idx = dco_find(doms, stack[i])
+        if idx >= 0 {
+            let cl = doms[idx].clusters
+            let mut c = 0
+            while c < len(cl) {
+                if !dco_in_set(seen, cl[c]) { seen.push(cl[c]); out.push(cl[c]) }
+                c = c + 1
+            }
+        }
+        i = i + 1
+    }
+    return out
+}
+
+// dco_join(xs, sep)
+pub fn dco_join(xs: [string], sep: string) -> string {
+    let mut out = ""
+    let mut i = 0
+    while i < len(xs) {
+        if i > 0 { out = out + sep }
+        out = out + xs[i]
+        i = i + 1
+    }
+    return out
+}
+
+// dco_kind_label(scale, stack_count) — Swift compose plain-default kind label.
+//   scale==system → 메타(통합) ; else stack>1 → 구성형 ; else → 단일.
+fn dco_kind_label(scale: string, stack_count: int) -> string {
+    if scale == "system" { return "메타(통합)" }
+    if stack_count > 1 { return "구성형" }
+    return "단일"
+}
+
+// dco_crosses(clusters) — the START domain's OWN clusters touch both the
+// life-side AND the tech-side (DomainComposer crossesDiscipline). 결합.
+fn dco_crosses(clusters: [string]) -> bool {
+    let mut life = false
+    let mut tech = false
+    let mut i = 0
+    while i < len(clusters) {
+        let c = clusters[i]
+        if c == "bio" || c == "chem" || c == "life" { life = true }
+        if c == "engineering" || c == "physical" || c == "propulsion"
+           || c == "sensing" || c == "matter" || c == "system" { tech = true }
+        i = i + 1
+    }
+    return life && tech
+}
+
+// ── project new resolver (PR#13 — DomainCatalog.infer + DomainComposer kind) ──
+//
+// `project new` needs three composer derivations the `compose` render did not
+// surface as pub: the inferred domain key (when omitted), the topo `walk` ids,
+// and the ENGLISH kind rawValue (atomic/composite/meta) — note `compose` prints
+// the KOREAN plain-default label (dco_kind_label) while `projectNew` prints
+// `comp.kind.rawValue`. Same module, so these reuse the private graph walkers.
+
+// dco_lower_ascii(s) — ASCII A-Z → a-z (Swift `.lowercased()` for the infer
+// keyword match; INDEX.demi keywords are stored lowercase, Korean is case-less).
+fn dco_lower_ascii(s: string) -> string {
+    let mut out = ""
+    let mut i = 0
+    while i < len(s) {
+        let c = s.substring(i, i + 1)
+        if c >= "A" && c <= "Z" {
+            // shift by the A→a gap via the byte code (char_code(s,i) reads byte i).
+            out = out + from_char_code(char_code(c, 0) + 32)
+        } else {
+            out = out + c
+        }
+        i = i + 1
+    }
+    return out
+}
+
+// dco_infer(target) — DomainCatalog.infer: first domain whose keyword the
+// lowercased target contains; else "general". Catalog order = INDEX.demi order.
+pub fn dco_infer(target: string) -> string {
+    let t = dco_lower_ascii(target)
+    let doms = dco_load_domains()
+    let mut di = 0
+    while di < len(doms) {
+        let kw = doms[di].keywords
+        let mut ki = 0
+        while ki < len(kw) {
+            if rl_contains(t, kw[ki]) { return doms[di].id }
+            ki = ki + 1
+        }
+        di = di + 1
+    }
+    return "general"
+}
+
+// dco_english_kind(start) — DomainComposition.kind.rawValue for the start key:
+//   start scale==system → meta ; else stack.count>1 → composite ; else atomic.
+pub fn dco_english_kind(start: string) -> string {
+    let doms = dco_load_domains()
+    let known = dco_find(doms, start)
+    let scale = if known >= 0 { doms[known].scale } else { "system" }
+    let stack = dco_toposort(doms, dco_closure(doms, start))
+    if scale == "system" { return "meta" }
+    if len(stack) > 1 { return "composite" }
+    return "atomic"
+}
+
+// dco_project_walk(start) — DomainComposition.ids (topo-ordered constituent
+// stack). For a synthetic / no-prereq start this is just [start].
+pub fn dco_project_walk(start: string) -> [string] {
+    let doms = dco_load_domains()
+    return dco_toposort(doms, dco_closure(doms, start))
+}
+
+// dco_project_stack_count(start) — DomainComposition.stack.count (구성 N).
+pub fn dco_project_stack_count(start: string) -> int {
+    return len(dco_project_walk(start))
+}
+
+// ── handler_compose(argv) — the `compose <domain>` CLI verb ──────────────────
+// Swift compose(_:): resolve the constituent stack + cluster union + kind for
+// `argv[0]` and print the 3-line (+optional substrate) render. An unknown
+// domain degrades to the synthetic node (label==key, scale=system → meta,
+// empty stack/union). Missing arg → the dispatcher prints usage (handled in
+// the generic layer); here argv is guaranteed non-empty by the caller, but we
+// guard defensively (stderr + rc 2, matching the Swift missing-arg branch).
+pub fn handler_compose(argv: [string]) -> int {
+    if len(argv) < 1 {
+        eprintln("compose: missing <domain> argument")
+        return 2
+    }
+    let start = argv[0]
+    let doms = dco_load_domains()
+    let known = dco_find(doms, start)
+
+    // resolve label + scale + own-clusters from the catalog (synthetic node
+    // when the start id has no INDEX.demi record — Swift DomainCatalog.domain).
+    let mut label = start
+    let mut own_scale = "system"
+    let mut own_clusters: [string] = []
+    if known >= 0 {
+        label = doms[known].label
+        own_scale = doms[known].scale
+        own_clusters = doms[known].clusters
+    } else {
+        if start == "general" { label = "일반 공학" }
+        own_clusters = ["engineering"]
+    }
+
+    let closure = dco_closure(doms, start)
+    let stack = dco_toposort(doms, closure)
+    let union = dco_cluster_union(doms, stack)
+    let kind = dco_kind_label(own_scale, len(stack))
+    let combined = if dco_crosses(own_clusters) { " · 결합" } else { "" }
+
+    println("compose " + start + " — " + label + " · " + kind + combined)
+    println("  구성 도메인 (" + to_string(len(stack)) + "):")
+    let ids_line = if len(stack) == 0 { "(none)" } else { dco_join(stack, " → ") }
+    println("    " + ids_line)
+    println("  성격: " + dco_join(union, " · "))
+    return 0
+}
