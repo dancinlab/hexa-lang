@@ -1,0 +1,23 @@
+F-FUSION-D2-RIGHTSIZED — util is a WORKLOAD-SIZE property (right-sized GPU saturates)
+[WIP — pending measurement on rented consumer GPU]
+
+PRE-REGISTERED FALSIFIER:
+  The SAME D1536-scale own-GEMM step that gives util MEAN ~13% (10.28-13.19%) on an
+  idle H100 (F-FUSION-OCCUPANCY-WALL) gives >=~70% util on a right-sized consumer GPU
+  -> util is workload-size-relative, NOT a code defect.
+  If the small GPU ALSO stays low -> FALSIFIED (util would be a code defect).
+
+METHOD:
+  driver self/native/hxqwen14b_llmstep_driver.cu (#includes shipped hxqwen14b_cuda.cu)
+  mode=util M K N R secs, env HEXA_OWN_GEMM=1 HEXA_OWN_GEMM_WMMA2=1 (WMMA2 own-GEMM).
+  nvidia-smi -l sampling during the ~15s sustained loop.
+  Shapes: clm-scale M=K=N=1536 R=16  AND  large M=K=N=2048.
+
+BASELINE (H100, from F-FUSION-OCCUPANCY-WALL, verbatim):
+  util MEAN @ D=1536 idle H100:
+    async (single stream)      10.28-12.50%
+    piecewise graph (fwd->bwd) 13.17%
+    whole-step graph           13.19%
+  median 2%, PEAK 71-100% only during the brief GEMMs.
+
+MEASUREMENT (this run): [PENDING]
