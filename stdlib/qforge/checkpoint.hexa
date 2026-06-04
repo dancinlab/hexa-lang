@@ -1,0 +1,204 @@
+// HEXA Standard Library — qforge/checkpoint
+//
+// @version 0.1.0
+// @capabilities [io]
+//
+// QFORGE crash-resilient per-q checkpoint/resume primitive.
+//
+// ── why this module exists (실증된 incident) ─────────────────────────────
+//   2026-06-04: ALL FOUR RTSC gate anchors (CaH6 · LaH10 · Li2MgH16 · ScH9)
+//   crashed under QE ph.x `recover=.true.` — each burned 8/8 self-resume
+//   cycles BLINDLY replaying a CORRUPT recover scratch (EOF marker →
+//   `Sequential READ after EOF` → mpirun exit-2). The single-path recover
+//   had no integrity check: a truncated/torn scratch looked resumable and
+//   was replayed straight into a crash. The hand-salvage was
+//   `recover=.false.` + `start_q=<first incomplete>`: completed q skipped
+//   via a dynmat done-marker, the corrupt q recomputed from a CLEAN state.
+//   Root-cause handoff: hexa-lang `fc2331a3` (QE-side no-recover gap).
+//
+//   QFORGE makes THAT salvage the ENGINE DEFAULT so the same crash family is
+//   STRUCTURALLY impossible:
+//     1. per-q ATOMIC done-marker  — a completed q is skipped via a durable
+//        marker; an interrupted/partial write can NEVER produce a valid
+//        marker (POSIX rename atomicity is the guarantee).
+//     2. resume = recompute ONLY the incomplete q from a clean state — a
+//        corrupt blob is NEVER replayed.
+//     3. checkpoint read INTEGRITY — a length-prefix + trailing checksum is
+//        verified on every read; truncation / EOF / corruption → that q is
+//        treated as INCOMPLETE → recomputed (NEVER a crash, NEVER a
+//        partial-blob replay).
+//
+// ── d4 generic contract (NO hardcoded q/struct names) ────────────────────
+//   The caller supplies the payload BYTES (its own codec — serialize a
+//   DynMat row, an a²F brick, an SCF density, anything). This module is
+//   content-neutral: it frames + checksums + atomically commits the bytes
+//   and re-derives the verdict on read. Both the DFPT multi-q loop and the
+//   SCF iteration loop ride the SAME path.
+//
+//   pub fn qforge_checkpoint_write(dir, q, payload) -> bool
+//   pub fn qforge_checkpoint_read(dir, q) -> CheckpointRead   {ok, payload}
+//   pub fn qforge_resume_scan(dir, nq) -> ResumeScan          {done_q[], next_q}
+//
+// ── on-disk layout (one dir per run) ─────────────────────────────────────
+//   <dir>/q<NNNN>.ckpt    framed payload:  "LEN:<n>\nCK:<adler32>\n" + bytes
+//   <dir>/q<NNNN>.done    done-marker (written LAST, atomic) — its presence
+//                         is the ONLY "this q is committed" signal.
+//   A q is DONE  ⇔  the .done marker exists AND the .ckpt frame verifies.
+//   (marker present but frame corrupt → still INCOMPLETE → recompute.)
+//
+// ── atomic-write primitive (reuse d19) ───────────────────────────────────
+//   We ride stdlib/io.write_text, which itself does the temp→flush→atomic
+//   POSIX rename(2) dance (write_file to <path>.tmp, then `mv` = rename(2),
+//   atomic on the same filesystem). No lower-level rename builtin is exposed
+//   in stdlib today, so io.write_text IS the lowest atomic-rename primitive
+//   available — documented here per the plan's fs-primitive note.
+use "stdlib/io"
+
+// ── verified read result (d4: caller-neutral payload bytes) ──────────────
+pub struct CheckpointRead {
+    ok: bool,            // length AND checksum verified → payload is trustworthy
+    payload: str         // the caller's original bytes (only meaningful if ok)
+}
+// ── resume plan over an nq-point run ─────────────────────────────────────
+pub struct ResumeScan {
+    done_q: [int],       // q indices whose checkpoint is committed AND verifies
+    next_q: int          // first q index that is NOT done (= where to resume); nq if all done
+}
+
+// ── adler32 over the payload bytes (deterministic, network-free) ─────────
+//   ord(c) yields the byte code (probed). a in [1,65520], b accumulates a.
+//   Returns b*65536 + a — a 32-bit integrity tag; a single bit-flip or a
+//   truncation changes it. (Not cryptographic — this guards against torn /
+//   truncated / corrupt scratch, exactly the recover-EOF failure mode.)
+fn _ckpt_adler32(s: str) -> int {
+    let mut a = 1
+    let mut b = 0
+    let mut i = 0
+    let n = len(s)
+    while i < n {
+        a = (a + ord(s[i])) % 65521
+        b = (b + a) % 65521
+        i = i + 1
+    }
+    return b * 65536 + a
+}
+
+// ── zero-padded q index → stable filename stem (q0000 … q9999+) ──────────
+fn _ckpt_qstem(q: int) -> str {
+    let s = to_string(q)
+    let mut pad = ""
+    let mut k = len(s)
+    while k < 4 { pad = pad + "0" ; k = k + 1 }
+    return "q" + pad + s
+}
+fn _ckpt_path(dir: str, q: int) -> str { return dir + "/" + _ckpt_qstem(q) + ".ckpt" }
+fn _ckpt_marker(dir: str, q: int) -> str { return dir + "/" + _ckpt_qstem(q) + ".done" }
+
+// shell-arg quoter (single-quote wrap; embedded ' → '"'"') — dependency-free,
+// matches the io.hexa / portable_fs.hexa convention.
+fn _ckpt_shq(s: str) -> str {
+    let mut out = "'"
+    let mut i = 0
+    while i < len(s) {
+        let c = s[i]
+        if c == '\'' { out = out + "'\"'\"'" } else { out = out + s.substring(i, i + 1) }
+        i = i + 1
+    }
+    return out + "'"
+}
+
+// ── qforge_checkpoint_write — atomically commit one q's payload (@L2) ────
+//   1. frame  = "LEN:<n>\nCK:<adler32>\n" + payload  (length-prefix + checksum, @L3)
+//   2. payload file written via io.write_text  (temp→flush→atomic rename)
+//   3. DONE-MARKER written LAST, also atomic — ONLY after the payload is
+//      durably committed. A crash between (2) and (3) leaves a payload with
+//      NO marker → the q is NOT seen as done → recomputed (NEVER a half
+//      result that looks complete).
+//   Returns true iff both the payload AND the marker materialised.
+pub fn qforge_checkpoint_write(dir: str, q: int, payload: str) -> bool {
+    if len(dir) == 0 || q < 0 { return false }
+    // ensure the run dir exists (idempotent; -p never errors if present).
+    let _ = exec("mkdir -p " + _ckpt_shq(dir) + " 2>/dev/null")
+    let ck = _ckpt_adler32(payload)
+    let frame = "LEN:" + to_string(len(payload)) + "\nCK:" + to_string(ck) + "\n" + payload
+    // (2) payload first — atomic rename inside write_text.
+    let p_ok = write_text(_ckpt_path(dir, q), frame)
+    if !p_ok { return false }
+    // (3) marker LAST — its own atomic rename. Tiny sentinel; presence == committed.
+    let m_ok = write_text(_ckpt_marker(dir, q), "done\n")
+    return m_ok
+}
+
+// ── qforge_checkpoint_read — integrity-verified read (@L3) ───────────────
+//   Returns {ok=false} on ANY of: missing marker, missing/empty frame,
+//   malformed header, length mismatch (truncation), checksum mismatch
+//   (corruption). The caller treats ok=false as "this q is incomplete →
+//   recompute". This function NEVER throws / crashes on a bad frame — it
+//   degrades to ok=false, which is the whole point (no partial-blob replay).
+pub fn qforge_checkpoint_read(dir: str, q: int) -> CheckpointRead {
+    // marker gate first — no marker ⇒ the write never reached step (3).
+    if !file_exists(_ckpt_marker(dir, q)) {
+        return CheckpointRead { ok: false, payload: "" }
+    }
+    let raw = read_text(_ckpt_path(dir, q))
+    if len(raw) == 0 { return CheckpointRead { ok: false, payload: "" } }
+    // header = first two lines: "LEN:<n>" , "CK:<adler32>" ; then the body.
+    // We split on the FIRST two newlines only (the payload may itself contain
+    // newlines), so locate the two header line-breaks by hand.
+    let nl1 = _ckpt_find_nl(raw, 0)
+    if nl1 < 0 { return CheckpointRead { ok: false, payload: "" } }
+    let nl2 = _ckpt_find_nl(raw, nl1 + 1)
+    if nl2 < 0 { return CheckpointRead { ok: false, payload: "" } }
+    let line1 = raw.substring(0, nl1)
+    let line2 = raw.substring(nl1 + 1, nl2)
+    if !_ckpt_startswith(line1, "LEN:") { return CheckpointRead { ok: false, payload: "" } }
+    if !_ckpt_startswith(line2, "CK:") { return CheckpointRead { ok: false, payload: "" } }
+    let want_len = to_int(line1.substring(4, len(line1)))
+    let want_ck = to_int(line2.substring(3, len(line2)))
+    let body = raw.substring(nl2 + 1, len(raw))
+    // (i) length check — catches truncation / EOF (the recover-EOF crash).
+    if len(body) != want_len { return CheckpointRead { ok: false, payload: "" } }
+    // (ii) checksum check — catches in-place corruption / bit-flip.
+    if _ckpt_adler32(body) != want_ck { return CheckpointRead { ok: false, payload: "" } }
+    return CheckpointRead { ok: true, payload: body }
+}
+
+// find the next '\n' at or after `from`; -1 if none.
+fn _ckpt_find_nl(s: str, from: int) -> int {
+    let mut i = from
+    let n = len(s)
+    while i < n {
+        if s[i] == '\n' { return i }
+        i = i + 1
+    }
+    return -1
+}
+fn _ckpt_startswith(s: str, pre: str) -> bool {
+    if len(s) < len(pre) { return false }
+    return s.substring(0, len(pre)) == pre
+}
+
+// ── qforge_resume_scan — the resume PLAN over an nq-point run (@L4) ───────
+//   Walks q = 0 .. nq-1; a q counts as done ONLY if its checkpoint READS
+//   ok (marker present AND frame verifies). next_q = the FIRST q that is
+//   not done (where the engine resumes from a clean state). With an empty/
+//   absent dir every q is incomplete → done_q=[] , next_q=0 (full run, the
+//   0-diff baseline). With all q committed → next_q = nq (nothing to do).
+//   A corrupt q in the middle is NOT counted done — so the engine recomputes
+//   exactly it, never replays its blob.
+pub fn qforge_resume_scan(dir: str, nq: int) -> ResumeScan {
+    let mut done: [int] = []
+    let mut next = nq
+    let mut found_gap = false
+    let mut q = 0
+    while q < nq {
+        let r = qforge_checkpoint_read(dir, q)
+        if r.ok {
+            done.push(q)
+        } else {
+            if !found_gap { next = q ; found_gap = true }
+        }
+        q = q + 1
+    }
+    return ResumeScan { done_q: done, next_q: next }
+}
