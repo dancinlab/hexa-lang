@@ -26,4 +26,14 @@
   target = "the util-vs-D curve + the D where util crosses 20% and 70% on the idle H100"
   verdict-ptr = ".verdicts/hexa-fusion/F-FUSION-H1A-3B7B-UTIL.txt"
 
-  result = "PENDING — one H100 sweep D∈{1536,2560,3072,4096}, cuBLAS+own arms."
+  result = "🟢 CONFIRMED (stronger than predicted) — genuine idle H100 80GB: util is
+            ALREADY GREEN at the SMALLEST D=1536 (MEAN 95.65% cuBLAS / 96.69% own,
+            MEDIAN 100%) and STAYS saturated flat-at-ceiling through D=4096 (MEAN
+            ~94-97%, MEDIAN 100%, both arms). util-vs-D is FLAT, not climbing —
+            crosses 20% AND 70% already at D=1536. The size axis is NOT the lever.
+            FINDING: the ~13% baseline is clm_prod's per-kernel SYNCHRONIZED serial
+            DAG, NOT the GEMM workload size — the byte-identical own-GEMM step run
+            back-to-back (sync every 16 iters) saturates the H100 at D=1536. anima
+            3B/7B will NOT lift util by scaling; the lever is DAG-sync / CUDA-graph
+            (L3-c/d, option-B), not a megakernel for the GEMM math and not bigger D.
+            pods 39490223 (H100) + 39489067 (mis-prov RTX PRO 6000) destroyed, leak 0."

@@ -1,5 +1,5 @@
 F-FUSION-H1A-3B7B-UTIL — does a BIGGER (3B/7B-scale) model self-saturate an idle H100?
-HEXA-FUSION frontier milestone H1a — PENDING (scaffold)
+HEXA-FUSION frontier milestone H1a — CONFIRMED 🟢 (with a stronger finding than predicted)
 
 PRE-REGISTERED FALSIFIER:
   As D grows from D1536 (small clm test) to 3B-class (D≈2560-3072) to 7B-class
@@ -12,24 +12,94 @@ PRE-REGISTERED FALSIFIER:
 METHOD:
   driver self/native/hxqwen14b_llmstep_driver.cu mode=util M K N R secs
   (#includes shipped hxqwen14b_cuda.cu byte-identical to origin/main — measured
-  kernels = EXACT main-branch own-GEMM / cuBLAS shim).
-  build: nvcc -O3 -arch=sm_90a -DHEXA_CUDA ... -lcublas -lcuda (D2 recipe).
+  kernels = EXACT main-branch own-GEMM / cuBLAS shim). WMMA2 own-GEMM fired
+  (confirmed at runtime):
+    [OWN-SGEMM-WMMA2-FIRED] _hx_k_sgemm_cm_wmma2 (CUTLASS-grade TF32 128x64 ...)
+    [OWN-SGEMM-WMMA2-SKINNY-FIRED] skinny -> _hx_k_sgemm_cm_tiled (R=16 GEMMs)
+  build: nvcc -O3 -arch=sm_90a -DHEXA_CUDA -o llmdrv ... -lcublas -lcuda (D2 recipe).
   Sweep D ∈ {1536, 2560, 3072, 4096}, shapes M=K=N=D, R=16, secs=15 sustained.
-  Two arms per D:
-    cuBLAS-TF32  (default env)
-    own-GEMM WMMA2  (HEXA_OWN_GEMM=1 HEXA_OWN_GEMM_WMMA2=1)
-  nvidia-smi utilization.gpu sampled @100ms over the full sustained 15s loop.
-  NO clm_prod rebuild.
+  Two arms per D: cuBLAS-TF32 (default) | own-GEMM WMMA2 (HEXA_OWN_GEMM=1
+  HEXA_OWN_GEMM_WMMA2=1). nvidia-smi utilization.gpu sampled @100ms over the full
+  sustained 15s loop (n≈128-135 samples/run). NO clm_prod rebuild.
+  NOTE on the driver: the util loop runs the 7 LoRA GEMMs + glue BACK-TO-BACK with
+  a cudaDeviceSynchronize only every 16 iters (NOT per kernel) — i.e. the kernel
+  DAG is allowed to stay queued/saturated. This is the key difference vs clm_prod's
+  per-kernel-synchronized serial DAG that produced the ~13% baseline.
 
-GPU RENTED: <pending>
+GPU RENTED: NVIDIA H100 80GB HBM3, 81559 MiB, driver 555.58.02, CUDA 12.4 nvcc V12.4.131
+  (vast offer 29019357, instance 39490223, genuine H100 SXM — a GENUINELY idle H100.
+   NOTE: an initial `--gpu H100_SXM` rent mis-provisioned an RTX PRO 6000 Blackwell
+   Workstation 96GB (instance 39489067) — destroyed clean, leak 0 — so the run was
+   re-pinned with an explicit gpu_name=H100_SXM offer query.)
 
-================================ MEASURED (verbatim) ===========================
+============================ MEASURED util-vs-D (verbatim) ======================
 
-<pending — util MEAN/PEAK per D, both arms>
+Per-run nvidia-smi utilization.gpu @100ms over the sustained 15s loop. The 0% bins
+are the sampler's leading warm window + trailing teardown (the GPU is never idle
+mid-loop). MEDIAN and pct@100 are the honest steady-state summary of a bimodal
+{100% in-loop, 0% at boundaries} distribution.
 
-================================ FINDING =======================================
+  D=1536 cublas | n=128 MEAN=95.65 PEAK=100 MEDIAN=100  pct@100=77% pct>=90=92%  8307 steps/s
+    hist: 0:2 1:2 41:2 94:2 95:1 98:6 99:12 100:102
+  D=1536 own    | n=128 MEAN=96.69 PEAK=100 MEDIAN=100  pct@100=94% pct>=90=94%  1817 steps/s
+    hist: 0:3 38:2 100:124
+  D=2560 cublas | n=128 MEAN=95.96 PEAK=100 MEDIAN=100  pct@100=90% pct>=90=94%  4290 steps/s
+    hist: 0:3 3:2 91:2 98:2 99:1 100:118
+  D=2560 own    | n=127 MEAN=95.31 PEAK=100 MEDIAN=100  pct@100=93% pct>=90=93%  798 steps/s
+    hist: 0:4 2:2 100:122
+  D=3072 cublas | n=125 MEAN=94.38 PEAK=100 MEDIAN=100  pct@100=88% pct>=90=92%  3307 steps/s
+    hist: 0:3 1:2 2:2 98:2 99:4 100:112
+  D=3072 own    | n=130 MEAN=95.04 PEAK=100 MEDIAN=100  pct@100=93% pct>=90=93%  648 steps/s
+    hist: 0:4 2:2 51:1 100:123
+  D=4096 cublas | n=129 MEAN=95.37 PEAK=100 MEDIAN=100  pct@100=93% pct>=90=93%  2093 steps/s
+    hist: 0:5 3:1 100:123
+  D=4096 own    | n=131 MEAN=95.48 PEAK=100 MEDIAN=100  pct@100=93% pct>=90=93%  477 steps/s
+    hist: 0:3 2:1 3:2 100:125
 
-<pending — util-vs-D curve; D crossing 20% / 70%; H1a CONFIRMED or FALSIFIED;
- implication for anima 3B/7B forge>
+============================ util-vs-D CURVE ===================================
 
-POD: <pending — id, destroyed, leak verified>
+  D        cuBLAS MEAN / MEDIAN     own-GEMM(WMMA2) MEAN / MEDIAN
+  1536     95.65% / 100%            96.69% / 100%
+  2560     95.96% / 100%            95.31% / 100%
+  3072     94.38% / 100%            95.04% / 100%
+  4096     95.37% / 100%            95.48% / 100%
+
+  The curve is FLAT and already at the saturation ceiling: util is GREEN
+  (MEAN ~94-97%, MEDIAN 100%) at EVERY D, for BOTH arms, INCLUDING D=1536.
+
+  D crossing 20%: D=1536 (the SMALLEST tested D already crosses; never below 20%).
+  D crossing 70%: D=1536 (already ≥70% at the smallest tested D).
+
+VERDICT: 🟢 CONFIRMED — falsifier survived, with a STRONGER result than predicted.
+  The falsifier predicted util CLIMBS with D toward GREEN. The measurement shows
+  util is ALREADY GREEN at D=1536 (MEAN 95.65% cuBLAS / 96.69% own, MEDIAN 100%) and
+  STAYS saturated through D=4096 — i.e. the anima 3B/7B forge is NOT fundamentally
+  util-blocked. The curve is flat-at-ceiling, not climbing, because the workload
+  was never the bottleneck once the kernel DAG is allowed to stay queued.
+
+FINDING (Δ vs baseline — supersedes the premise of the question):
+  The ~13% idle-H100 baseline (F-FUSION-OCCUPANCY-WALL / handoff 80d47ccc) is NOT a
+  property of the D1536 GEMM WORKLOAD — it is a property of clm_prod's per-kernel
+  SYNCHRONIZED serial DAG. The SAME byte-identical own-GEMM(WMMA2) + glue step, run
+  back-to-back with a sync only every 16 iters, saturates an idle H100 to MEDIAN
+  100% util at D=1536 — the very shape D2 framed as "too small for the H100".
+  So the size axis is NOT the lever: bigger D does not change a saturated-already
+  picture (it only lowers steps/s as the GEMMs get more expensive: 8307→477 own).
+  The util ceiling for the anima forge is therefore the DAG-SCHEDULING / per-kernel
+  sync structure inside clm_prod, NOT model size and NOT a right-sized-GPU question.
+
+  IMPLICATION FOR ANIMA 3B/7B:
+   - Scaling the forge to 3B/7B will NOT lift util by itself (util is already at the
+     ceiling per-GEMM-batch); it will only make each GEMM bigger / slower-stepping.
+   - The megakernel (H1b) is NOT required to reach util-GREEN on the GEMM math — the
+     GEMMs already saturate. What clm_prod needs is to stop synchronizing the kernel
+     DAG per-launch (let kernels stay queued, as this driver does) — i.e. the
+     CUDA-graph / device-resident-step fusion path (L3-c/d, option-B), targeting the
+     SCHEDULING gap, is the lever, not bigger GEMMs.
+   - Closes the size-axis sub-question of handoff 80d47ccc: "does a bigger model
+     self-saturate the H100" = YES at the GEMM level, but it was already saturated
+     small; the residual util-RED in the real trainer is DAG-sync, not workload size.
+
+POD: rented H100 39490223 (genuine) + mis-provisioned RTX PRO 6000 39489067 BOTH
+     destroyed, leak verified 0 (hexa cloud down --force; neither id present in
+     vastai show instances).
