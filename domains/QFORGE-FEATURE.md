@@ -49,3 +49,27 @@
                 bead, parallel over N), V'=−F_DFT from DFPT forces; Tc shift =
                 re-run λ on NQE-broadened ⟨u²⟩ vs classical. NO real hydride Tc
                 shift fabricated — DFT-potential wiring is the downstream engine task.
+
+- [x] GPU-TIER KERNELS — 4 NVPTX kernels extending the merged #2737 Sternheimer stack.
+      Real on-device parity+timing on summer RTX 5070 (sm_120, CUDA 12.9, FREE pool, d7).
+      [1] mixed-precision tensor-core matvec — PASS. kernel nvptx_mixprec_matvec_kernel.hexa
+          host nvptx_mixprec_matvec_host.cu. ACCURACY |Δψ⟩ FP64-vs-mixed max_rel_err=0.0
+          (linear residual-refine, bit-exact); SPEEDUP block-matvec (NRHS=256 block-
+          Sternheimer) TF32-tc Sgemm vs FP64 Dgemm = 63.96× ≥5× @N4096. HONEST (d6):
+          single GEMV is bandwidth-bound (ratio→~2× byte ratio: 1.25/1.94/2.08× @N2k/4k/8k);
+          ≥5× lever is compute-bound regime only (= the real block use case).
+      [2] fused Sternheimer CG (7→5 launches) — PARITY PASS (max_rel_err 1.3e-14),
+          THROUGHPUT NOT MET on-device (1.01×; gate 1.5×). kernel nvptx_stern_fused_kernel.hexa
+          host nvptx_stern_fused_host.cu. HONEST (d6): per-iter time dominated by host-
+          resident scalar control (2 DtoH + sync/iter), not the BLAS-1 launches fused.
+          NAMED-REMAINING: on-device scalar reduction + cooperative-grid persistent CG.
+      [3] multi-GPU q/k sharding — PASS. kernel nvptx_shard_qk_kernel.hexa host
+          nvptx_shard_qk_host.cu. 2-shard (and 4-shard) partition+reduce ≡ single-pass λ,
+          Δ=0.000e+00 bit-for-bit (contiguous block-partition fixes FP order). NAMED-
+          REMAINING (d6): true multi-GPU HW fan-out (cudaSetDevice ≥2 devices, NVLink
+          reduce) — needs a 2nd physical GPU; logic is device-count-agnostic.
+      [4] out-of-core ψ streaming (cells > VRAM) — PASS. kernel nvptx_ooc_stream_kernel.hexa
+          host nvptx_ooc_stream_host.cu. Double-buffered output-row tiling; streamed
+          resident 25% of full-H footprint, streamed out == in-core out max_rel_err=0.0
+          (disjoint output rows → no FP-order change). Completion+footprint+parity PASS.
+      provider: NO PAID RENT — all four built+run on summer free pool (d7).

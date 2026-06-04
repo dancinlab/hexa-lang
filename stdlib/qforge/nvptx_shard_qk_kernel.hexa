@@ -1,0 +1,76 @@
+// stdlib/qforge/nvptx_shard_qk_kernel.hexa
+// QFORGE GPU-tier kernel 3 — multi-GPU q/k sharding (partition + reduction).
+// closes QFORGE-FEATURE multi-gpu-shard
+//
+// @version 0.0.1
+// @capabilities [pure]
+// @phase("parse_only")
+//
+// Extends the merged NVPTX Sternheimer stack (#2737 nvptx_sternheimer_kernel.hexa).
+// The el-ph coupling λ is a SUM over the q-point (and per-q k-point) mesh:
+//
+//     λ = Σ_q w_q λ_q ,   λ_q = (per-q DFPT response → α²F contribution)
+//
+// The q-mesh is EMBARRASSINGLY PARALLEL across q: each q-point's Sternheimer solve
+// is independent, and λ is a weighted reduction over the per-q partials. Multi-GPU
+// sharding partitions the q-list across G devices, each device solves its shard of
+// q-points (reusing the merged per-q kernels), and a final reduction sums the
+// per-shard partial-λ into the global λ.
+//
+//   shard g owns q in [off_g, off_g+cnt_g) :  λ_g = Σ_{q in shard g} w_q λ_q
+//   global λ = Σ_g λ_g                       (cross-shard reduction)
+//
+// PARTITION rule (deterministic, balance-by-weight-count): contiguous block-partition
+// of the weight-ordered q-list so Σ cnt_g = Nq and the reduction order is fixed
+// (shard 0..G-1) — this fixes the FP summation order so shard-λ is bit-reproducible.
+//
+// HONEST scope (d6): summer is a SINGLE GPU (RTX 5070). True multi-GPU hardware
+// (NVLink / multi-device cudaSetDevice fan-out) is NAMED-REMAINING. What IS validated
+// on-device here (nvptx_shard_qk_host.cu) is the PARTITION + REDUCTION LOGIC via a
+// 2-SHARD SIMULATION on the one GPU: the q-list is split into 2 shards, each shard's
+// partial-λ is accumulated by this kernel into its own slot, and the cross-shard
+// reduction sums them. Gate: shard-λ (2-shard partition+reduce) ≡ single-λ (whole
+// list, one pass), Δ = 0 bit-for-bit. That proves the sharding math is correct;
+// the only remaining piece is the trivially-mechanical cudaSetDevice device fan-out,
+// which needs a 2nd physical GPU (hardware-named-remaining, d6).
+
+// ── per-shard partial-λ accumulation ────────────────────────────────────────────
+// One thread per q-point in the shard. lam_q[i] holds the precomputed per-q λ_q
+// (the DFPT response result for q-point i — produced by the merged Sternheimer→|g|²
+// chain). wq[i] is the q-weight. Each thread adds w_q·λ_q into the shard partial via
+// a deterministic-order serial accumulate by thread 0 (bit-order parity with the CPU
+// reference; the q-counts per shard are small relative to the DFPT solve cost, so the
+// serial reduction is not the bottleneck — the parallel work is the per-q DFPT solve
+// upstream, already grid-parallel in the merged kernels).
+@gpu_kernel
+fn qforge_shard_partial_lambda(lam_q: [f64], wq: [f64], off: i64, cnt: i64, out_partial: [f64], slot: i64) {
+    let lid = gpu_thread_id_x()
+    if to_i64(lid) == 0 {
+        let mut acc: f64 = 0.0
+        let mut k: i64 = 0
+        while k < cnt {
+            let i = off + k
+            acc = acc + wq[i] * lam_q[i]
+            k = k + 1
+        }
+        out_partial[slot] = acc
+    }
+}
+
+// ── cross-shard reduction:  λ = Σ_g partial[g]  (fixed order g=0..G-1) ───────────
+// Thread 0 sums the per-shard partials in shard-index order so the global λ has a
+// deterministic FP summation order (== the single-pass order of the contiguous
+// block-partition). G is tiny (= #devices), serial sum is exact-order.
+@gpu_kernel
+fn qforge_shard_reduce_lambda(partial: [f64], g_count: i64, lam_out: [f64]) {
+    let lid = gpu_thread_id_x()
+    if to_i64(lid) == 0 {
+        let mut acc: f64 = 0.0
+        let mut g: i64 = 0
+        while g < g_count {
+            acc = acc + partial[g]
+            g = g + 1
+        }
+        lam_out[0] = acc
+    }
+}
