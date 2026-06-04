@@ -24,7 +24,8 @@ __device__ __forceinline__ void wmma2_tile_device(
         int tA, int tB, long long M, long long N, long long K,
         float alpha, const float* __restrict__ A, long long lda,
         const float* __restrict__ B, long long ldb,
-        float beta, float* __restrict__ C, long long ldc) {
+        float beta, float* __restrict__ C, long long ldc,
+        float* __restrict__ smem_ext /*[2*HXG_BM*HXG_BK + 2*HXG_BK*HXG_BN] = 49152 B*/) {
     const long long blockRow = tileRow * HXG_BM;  // C rows [blockRow, +128)
     const long long blockCol = tileCol * HXG_BN;  // C cols [blockCol, +64)
     const int tid  = threadIdx.x;                 // 0..255
@@ -33,8 +34,15 @@ __device__ __forceinline__ void wmma2_tile_device(
     const int warpRow = warp / HXG_WCOLS;         // 0..3
     const int warpCol = warp % HXG_WCOLS;         // 0..1
 
-    __shared__ float As[2][HXG_BM * HXG_BK];   // 2 × 128×32
-    __shared__ float Bs[2][HXG_BK * HXG_BN];   // 2 × 32×64
+    // The 48 KB GEMM staging lives in a CALLER-OWNED shared buffer (smem_ext),
+    // so the persistent megakernel can REUSE this exact memory for its glue-phase
+    // reductions (the GEMM and the gn/router phases are never live at the same
+    // time). This is what keeps total STATIC shared at exactly the 49152 B sm_100
+    // cap — a second static buffer would overflow it. As/Bs/tmp are laid out in
+    // smem_ext at the SAME offsets the original __shared__ arrays had, so the
+    // staging+mma+epilogue math is byte-identical.
+    float (*As)[HXG_BM * HXG_BK] = reinterpret_cast<float(*)[HXG_BM*HXG_BK]>(smem_ext);
+    float (*Bs)[HXG_BK * HXG_BN] = reinterpret_cast<float(*)[HXG_BK*HXG_BN]>(smem_ext + 2*HXG_BM*HXG_BK);
 
     nvcuda::wmma::fragment<nvcuda::wmma::accumulator,16,16,8,float> acc[HXG_FM][HXG_FN];
     #pragma unroll
@@ -112,7 +120,18 @@ __device__ __forceinline__ void wmma2_tile_device(
         if (kNext < K) { hxg_cp_wait(); __syncthreads(); buf = nbuf; }
     }
 
-    __shared__ float tmp[HXG_WARPS][16*16];
+    // SM_100 STATIC-SMEM BUDGET FIX (placement-only, math byte-identical):
+    // the shipped GEMM declares a separate 8 KB epilogue buffer `tmp`, pushing
+    // total STATIC shared to 57344 B > the 49152 B per-block static cap on
+    // sm_100 (B200) — nvlink rejects it inside the cooperative megakernel. `tmp`
+    // is live ONLY in the epilogue, AFTER the K-loop fully consumes the `As`
+    // staging buffer (`As` is dead here — guaranteed by the loop-exit
+    // __syncthreads at line 112). We therefore ALIAS `tmp` onto `As` storage
+    // (As = 2×128×32 floats = 32 KB ⊇ tmp = 8×256 floats = 8 KB). This removes
+    // tmp from the static tally (57344 → 49152 B, exactly the cap) WITHOUT
+    // touching the WMMA store/load math — every tmp[warp][e] read/write is the
+    // identical value at the identical index, just in reused memory.
+    float (*tmp)[16*16] = reinterpret_cast<float(*)[16*16]>(&As[0][0]);
     #pragma unroll
     for (int fm=0; fm<HXG_FM; fm++) {
         #pragma unroll
