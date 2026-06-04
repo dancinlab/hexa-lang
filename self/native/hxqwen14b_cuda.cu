@@ -883,12 +883,13 @@ int _hx_own_sgemm_cm_launch(int tA, int tB, int m, int n, int k,
     // SPLIT-K skinny path (env HEXA_OWN_GEMM_SPLITK): for a skinny+large-K GEMM
     // (min(m,n) <= 64 AND k >= 1024) the 16×16 tiled fallback under-occupies the
     // GPU (too few output tiles, each grinding a huge serial K). Split K into G
-    // chunks → G× more blocks → fills the SMs. G = clamp(k/1024,1,16) by default,
+    // chunks → G× more blocks → fills the SMs. G = clamp(k/512,1,32) by default
+    // (MEASURED sweet spot on Blackwell: k=4096→G=8, k=8192→G=16; saturates ~16-32),
     // overridable via HEXA_OWN_GEMM_SPLITK_G for on-pod tuning.
     int want_splitk = (getenv("HEXA_OWN_GEMM_SPLITK") && getenv("HEXA_OWN_GEMM_SPLITK")[0]);
     int skinny_splitk = ((m <= 64 || n <= 64) && k >= 1024);
     if (want_wmma2 && want_splitk && skinny_splitk && !noshape) {
-        int G = (int)(k / 1024); if (G < 1) G = 1; if (G > 16) G = 16;
+        int G = (int)(k / 512); if (G < 1) G = 1; if (G > 32) G = 32;
         const char* ge = getenv("HEXA_OWN_GEMM_SPLITK_G");
         if (ge && ge[0]) { int gv = atoi(ge); if (gv >= 1 && gv <= 64) G = gv; }
         static int skfired = 0; if (!skfired){skfired=1; fprintf(stderr,"[OWN-SGEMM-SPLITK-FIRED] skinny GEMM -> _hx_k_sgemm_cm_splitk (split-K atomicAdd, G=%d, m=%d n=%d k=%d)\n", G, m, n, k);}
