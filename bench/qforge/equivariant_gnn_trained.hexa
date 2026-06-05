@@ -295,8 +295,8 @@ fn main() {
     let N  = 4                 // atoms per structure (complete graph → 12 edges)
     let E  = n_edges(N)        // = 12
 
-    let n_train = 24
-    let n_test  = 12
+    let n_train = 8
+    let n_test  = 6
 
     // ── build train + held-out STRUCTURES (disjoint random clouds) ──
     // each structure = N points in a box; same distribution train/test.
@@ -371,8 +371,8 @@ fn main() {
     let mut mWn = _const_fill([Hm+1, 1], 0.0);   let mut vWn = _const_fill([Hm+1, 1], 0.0)
     let mut mWg = _const_fill([Hm+1, 1], 0.0);   let mut vWg = _const_fill([Hm+1, 1], 0.0)
     let beta1 = 0.9; let beta2 = 0.999; let eps = 0.00000001
-    let lr = 0.02
-    let epochs = 3000
+    let lr = 0.03
+    let epochs = 1200
 
     // precompute per-structure packed inputs (constant across epochs).
     let mut tr_xaug = []; let mut tr_ones = []
@@ -465,8 +465,8 @@ fn main() {
         ag_backward(mloss)
         let lossv = ag_value(mloss).data[0]
 
-        let show = (ep == 0) || (ep == 10) || (ep == 50) || (ep == 200) || (ep == 500)
-                   || (ep == 1000) || (ep == 2000) || (ep == 3000)
+        let show = (ep == 0) || (ep == 10) || (ep == 50) || (ep == 150) || (ep == 300)
+                   || (ep == 600) || (ep == 900) || (ep == 1200)
         if show { println("  epoch " + to_string(ep) + "\tloss = " + to_string(lossv)) }
 
         // ── Adam update via ag_grad ──
