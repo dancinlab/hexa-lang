@@ -1,0 +1,36 @@
+=== QFORGE MIGRATION GATE — converged-CaH6 full-BZ λ cross-val (d6 VERBATIM) v3-SCREENED ===
+deck=/Users/mini/dancinlab/demiurge/exports/rtsc/decks/CaH6_NC  npw_cap=64 (0=full ecut shell)  q-mesh=2³ MP
+vertex=SCREENED (Dyson ε⁻¹, Anderson β=0.3 m=4)
+[front-end] cell=Ca n(PW)=64 nelec=16 nocc=8 SCF-converged=true iters=112
+[front-end] ecutwfc=80.0 Ry  e_band=-22.0847 Ha
+[front-end] deck.name=Ca-pwfrontend-EINSTEIN-DEFAULT(omega0=1236.4K)+DFPT(production)
+[front-end] note: PRODUCTION DFPT: real Φ (Sternheimer FC, bare/@L5) + 2 optical mode(s), 16-pt ω(q,ν) band over 2³ MP q-mesh (q-flat ncells=1) · ω_log(band)=1041.47 K (vs single Einstein ω₀); el-ph |g|² = SCREENED ΔV_scr·ψ (Dyson ε⁻¹, Anderson β=0.3 m=4, POW2-FFT-POISSON grid=32x32x32 folds=3 last_err=0 (genuine real-space convolution ENGAGED)): 0 SCF iters · conv=true · ‖fp_res‖_max=6.74492e-10 · ‖ΔV_scr‖/‖ΔV_bare‖=1.0 (the @L5 screening-XC closure, H+x+c) [d6 VERBATIM]
+── qforge_run stage trace ──
+  [scf] ok=1 witness=-7.33998 — qforge_davidson ψ,ε (Hartree+LDA-exch H)
+  [dfpt] ok=1 witness=1143.1 — qforge_phonons ω(q,ν) — 0 acoustic zero(s)
+  [elph] ok=1 witness=2.41702 — qforge_elph_g2 Σ|g|² (bare — screening @L5-limited)
+  [a2f] ok=1 witness=0.00832898 — qforge_a2f_from_elph → α²F(ω) (L3 assembler)
+  [moments] ok=1 witness=0.00832898 — eliashberg_moments [λ, ω_log, ω̄₂] (L2)
+  [tc] ok=1 witness=0.0 — Allen-Dynes f1·f2 Tc (λ,ω_log computed — not injected, @L4)
+
+════════════════════ λ VERDICT (d6 VERBATIM — NOT tuned) ════════════════════
+convergence params : ecutwfc=80.0 Ry · npw_cap=64 · n(PW)=64 · q-mesh=2³ MP · sigma=0.02 Ha · xc=LDA-x+PW92-c
+vertex             : SCREENED ΔV_scr (Dyson ε⁻¹, Anderson β=0.3 m=4)
+BARE baseline λ    = 4.13647  (prior converged run #2768, rel-ε=5.47%)
+QFORGE λ (this run)= 0.00832898
+QE answer-key λ    = 4.376  (CaH6 gate anchor, QE cross-val)
+rel-ε              = 0.998097  (99.8097 %)
+Δλ vs 4.137 baseline = -4.12814
+QFORGE ω_log       = 1243.66 K
+QFORGE Tc (Allen-Dynes) = 0.0 K
+QFORGE Tc (Eliashberg)  = 0.0 K
+screening_note     : screening = Hartree + LDA-exchange only (correlation XC deferred); production |g|² accuracy is screening-functional-limited (@L5)
+GATE: NOT MET — rel-ε=99.8097% > 1% (HONEST FINDING, d6)
+DIAGNOSIS: the @L5 screening-functional gap is the named gate-blocker —
+  QFORGE el-ph |g|² is the BARE matrix element (screening = Hartree +
+  LDA-exchange only, NO correlation XC). QE's λ=4.376 uses the ε⁻¹-screened
+  |g|². Closing the gate needs the screened-FC/ΔV path (Anderson/Broyden β
+  knob for the dielectric-feedback fixed point — screening_anderson.hexa,
+  the named breakthrough, d2). Reported VERBATIM, not forced to 4.376.
+══════════════════════════════════════════════════════════════════════════════
+=== DONE ===

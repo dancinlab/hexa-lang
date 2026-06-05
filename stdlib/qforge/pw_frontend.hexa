@@ -88,6 +88,7 @@ use "stdlib/qforge/screening"
 use "stdlib/qforge/correlation"
 use "stdlib/qforge/screened_dv"
 use "stdlib/qforge/screening_anderson"
+use "stdlib/qforge/screening_pwfft"
 
 let _QPW_2PI: float = 6.28318530717958647692
 
@@ -427,6 +428,64 @@ pub fn qpw_gvectors(b1: [float], b2: [float], b3: [float],
         picked = picked + 1
     }
     return gvecs
+}
+
+// ── qpw_gvectors_miller — SAME basis + SAME selection order as qpw_gvectors, but ALSO
+//    emits the INTEGER Miller indices (gi,gj,gk) per coefficient (flat 3·n). The
+//    screening FFT-Poisson grid needs the Miller indices; recovering them by inverting
+//    the reciprocal matrix B FAILS when B is singular (the BCC primitive b-vectors at
+//    this module's geom construction are coplanar → det(B)=0 → the inverse returns
+//    (0,0,0) for every G → a degenerate 1×1×1 grid). Here the indices are CARRIED from
+//    the generator (they ARE gi,gj,gk), so the grid is exact at any cell. d4/d6.
+//    Returns [gvecs(3n), miller(3n)] as a 2-list bundle so the caller threads both.
+pub fn qpw_gvectors_miller(b1: [float], b2: [float], b3: [float],
+                           ecut_ha: float, mmax: int, npw_cap: int) -> [[float]] {
+    let mut gall: [float] = []
+    let mut mall: [float] = []          // integer Miller (as float) per candidate
+    let mut g2all: [float] = []
+    let mut gi = -mmax
+    while gi <= mmax {
+        let mut gj = -mmax
+        while gj <= mmax {
+            let mut gk = -mmax
+            while gk <= mmax {
+                let gx = to_float(gi) * b1[0] + to_float(gj) * b2[0] + to_float(gk) * b3[0]
+                let gy = to_float(gi) * b1[1] + to_float(gj) * b2[1] + to_float(gk) * b3[1]
+                let gz = to_float(gi) * b1[2] + to_float(gj) * b2[2] + to_float(gk) * b3[2]
+                let g2 = gx * gx + gy * gy + gz * gz
+                if ecut_ha <= 0.0 || 0.5 * g2 <= ecut_ha {
+                    gall.push(gx) ; gall.push(gy) ; gall.push(gz)
+                    mall.push(to_float(gi)) ; mall.push(to_float(gj)) ; mall.push(to_float(gk))
+                    g2all.push(g2)
+                }
+                gk = gk + 1
+            }
+            gj = gj + 1
+        }
+        gi = gi + 1
+    }
+    // selection-sort ascending by |G|² — IDENTICAL tie/order to qpw_gvectors so the
+    // emitted Miller indices align 1:1 with the screening loop's gvecs basis.
+    let ntot = len(g2all)
+    let mut used: [int] = [] ; let mut u = 0 ; while u < ntot { used.push(0) ; u = u + 1 }
+    let target = if npw_cap > 0 && npw_cap < ntot { npw_cap } else { ntot }
+    let mut gvecs: [float] = []
+    let mut miller: [float] = []
+    let mut picked = 0
+    while picked < target {
+        let mut best = -1 ; let mut bestv = 1.0e30
+        let mut t = 0
+        while t < ntot {
+            if used[t] == 0 { if g2all[t] < bestv { bestv = g2all[t] ; best = t } }
+            t = t + 1
+        }
+        if best < 0 { break }
+        used[best] = 1
+        gvecs.push(gall[best * 3]) ; gvecs.push(gall[best * 3 + 1]) ; gvecs.push(gall[best * 3 + 2])
+        miller.push(mall[best * 3]) ; miller.push(mall[best * 3 + 1]) ; miller.push(mall[best * 3 + 2])
+        picked = picked + 1
+    }
+    return [gvecs, miller]
 }
 
 // =============================================================================
@@ -840,9 +899,14 @@ pub fn qforge_pw_frontend_phonons_scr(deck_dir: str, npw_cap: int, xc_mode: int,
     let nocc = fe.nocc
 
     // ── rebuild the PW G-basis (same path as the front-end — DATA, not recompute
-    //    of physics) so the bare ΔV operator has the cartesian G-vectors. ──
+    //    of physics) so the bare ΔV operator has the cartesian G-vectors. We use the
+    //    Miller-emitting variant so the screening FFT-Poisson grid gets the EXACT
+    //    integer (h,k,l) per coefficient (the BCC reciprocal is singular → recovering
+    //    them by inverting B collapses the grid to 1×1×1; carrying them is exact). ──
     let ecut_ha = if geom.ecutwfc > 0.0 { 0.5 * geom.ecutwfc } else { 0.0 }
-    let gvecs = qpw_gvectors(geom.b1, geom.b2, geom.b3, ecut_ha, 4, npw_cap)
+    let gvm = qpw_gvectors_miller(geom.b1, geom.b2, geom.b3, ecut_ha, 4, npw_cap)
+    let gvecs = gvm[0]
+    let gmiller = gvm[1]
     if len(gvecs) / 3 != n {
         return _qpw_fe_err(geom, "DFPT: G-basis size " + to_string(len(gvecs) / 3)
             + " != front-end n=" + to_string(n))
@@ -981,6 +1045,14 @@ pub fn qforge_pw_frontend_phonons_scr(deck_dir: str, npw_cap: int, xc_mode: int,
     let mut fxc = qforge_fx_lda(rho_bar)
     if xc_mode >= 1 { fxc = fxc + qforge_fc_pw92(rho_bar) }
     QPWD_FXC = fxc
+    // ── stage the POW2-PADDED REAL-SPACE FFT-POISSON grid (the migration-gate fix) ──
+    //   The diagonal QPWD kernel above is the FALLBACK; when this stages OK the
+    //   Anderson map (ad_map) screens via the GENUINE real-space convolution
+    //   (screening_pwfft.qpwfft_dvscr_from_dpsi) — non-zero at the converged n=645
+    //   basis where the coefficient-space diagonal vanishes. ρ̄-uniform f_xc is the
+    //   same local kernel coeff as the diagonal path (consistency). d4/d6.
+    qpwfft_reset_witness()                           // fold/err counters per-run (d6)
+    let pwfft_ok = qpwfft_stage_miller(gvecs, gmiller, geom.b1, geom.b2, geom.b3, fxc)
     let kernel_ok = (n > 0)                          // G-space kernel always available
 
     // per-direction coupling weight ‖ΔV|ψ⟩‖² (rank the 3 cartesian dirs). The bundle
@@ -1079,9 +1151,22 @@ pub fn qforge_pw_frontend_phonons_scr(deck_dir: str, npw_cap: int, xc_mode: int,
     let wlog = qforge_qmesh_omega_log(opt_band)
     // screened-vertex witness for the note (the @L5 closure verdict).
     let scr_ratio = if scr_ratio_cnt > 0 { scr_ratio_sum / to_float(scr_ratio_cnt) } else { -1.0 }
+    let pwfft_grid = qpwfft_grid_dims()
+    // d6 routing witness: FOLDS = #genuine convolution folds inside ad_map; err = the
+    // guard that fired on the last kernel call (0=ok). FOLDS=0 with pwfft_ok=true ⇒ the
+    // FFT path silently fell back to the diagonal (the n=645 0-iter root-cause signal).
+    let pwfft_folds = qpwfft_folds()
+    let pwfft_err = qpwfft_last_err()
+    let pwfft_tag = if pwfft_ok {
+        "POW2-FFT-POISSON grid=" + to_string(pwfft_grid[0]) + "x"
+        + to_string(pwfft_grid[1]) + "x" + to_string(pwfft_grid[2])
+        + " folds=" + to_string(pwfft_folds) + " last_err=" + to_string(pwfft_err)
+        + (if pwfft_folds > 0 { " (genuine real-space convolution ENGAGED)" }
+           else { " (FFT staged but 0 folds → DIAGONAL FALLBACK, err-code above)" })
+    } else { "diagonal-fallback (FFT-Poisson grid NOT staged)" }
     let vert_tag = if screened && kernel_ok {
         "SCREENED ΔV_scr·ψ (Dyson ε⁻¹, Anderson β=" + to_string(scr_beta)
-        + " m=" + to_string(scr_mdepth) + "): " + to_string(scr_iters_tot)
+        + " m=" + to_string(scr_mdepth) + ", " + pwfft_tag + "): " + to_string(scr_iters_tot)
         + " SCF iters · conv=" + to_string(scr_conv_all) + " · ‖fp_res‖_max="
         + to_string(scr_fpr_max) + " · ‖ΔV_scr‖/‖ΔV_bare‖="
         + to_string(scr_ratio) + " (the @L5 screening-XC closure, H+x+c) [d6 VERBATIM]"
