@@ -1,0 +1,7 @@
+=== IMMERSION (F-CLM-H911-IMMERSION) ===
+  LEARNED-semantic paired mean (parallel-favoring) = -0.0480772
+  LEARNED 95% CI = [-0.208859, 0.137964]
+  NULL (within-concept-shuffle) paired mean = -0.374639
+  NULL 95% CI = [-0.392472, -0.356273]
+F-CLM-H911-IMMERSION = 0
+TIER 🔴 — closed-negative: parallel>concat does NOT separate on the LEARNED-semantic axis (CI straddles/≤0)
