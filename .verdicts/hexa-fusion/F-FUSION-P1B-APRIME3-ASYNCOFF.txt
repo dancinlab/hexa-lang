@@ -1,0 +1,40 @@
+F-FUSION-P1B-APRIME3-ASYNCOFF — the byte-eq megakernel CAPSTONE re-run with the async
+race CURED. N1N2 (#2789) proved the ~1e-1 device-glue non-determinism that blocked the
+P1B-a' capstone is an ASYNC CROSS-STREAM RACE (_forge_async_on glue on a non-blocking
+forge_stream racing default-stream _h2d / _ensure_dev_alloc_out / conv GEMM-C buffer ops),
+NOT a transcendental or glue bug — and HEXA_CUDA_ASYNC=0 makes the device forward
+BIT-REPRODUCIBLE (CE 4.4662394504526679 x5 identical). With the race off and both arms
+sharing CUDA erf + identical naive-k own-GEMM + deterministic glue, this re-runs the
+P1B-a' comparison (device-eager vs device-mega) and asks whether max|Δ| now reaches 0.
+domain: HEXA-FUSION · date: 2026-06-05 · branch domain/hexa-fusion-p1b-aprime3-asyncoff (off main #2789)
+method: real clm_prod step A/B on a rented H100 pod. BOTH arms = own-GEMM (HEXA_OWN_GEMM=1)
+        + DEVRESIDENT chain + **HEXA_CUDA_ASYNC=0** (the N1N2 cure — hard kill switch forcing
+        the synchronous default-stream path on BOTH arms). A = device-EAGER (HEXA_EAGER_DEVRESIDENT=1,
+        megastep OFF → fwd glue on-device as SEPARATE launches, CUDA erf). B = device-MEGA
+        (HEXA_CLM_MEGASTEP=1 FP64, cooperative full-fwd megakernel, CUDA erf). max|Δ| on the
+        17-digit [B6-CE-HIPREC] CE, device-eager vs device-mega. D=1536 T=512 E=2 EPOCHS=4 NSAMP=8.
+
+════════════════════════════════════════════════════════════════════════════════
+BYTE-EQ FRAMING (g5 HARD GATE — STATED EXPLICITLY)
+════════════════════════════════════════════════════════════════════════════════
+The byte-eq gate is max|Δ|=0 device-eager-vs-device-mega under HEXA_CUDA_ASYNC=0 (verbatim
+17-digit CE diff), NOT cublasDgemm. Both arms use the IDENTICAL FP64 naive-sequential-k
+own-GEMM (#2697) + CUDA erf glue. PREREQUISITE (Gate 1): each arm must FIRST be run-to-run
+reproducible under async-OFF (x3 → Δ=0) — else the cross-arm diff is meaningless. N1N2
+proved the partial in-kernel _forge_sync fix did NOT fully close, but the HEXA_CUDA_ASYNC=0
+env DID give x5 bit-identical; this verdict re-confirms run-to-run Δ=0 on BOTH arms.
+
+════════════════════════════════════════════════════════════════════════════════
+PRE-REGISTERED FALSIFIER
+════════════════════════════════════════════════════════════════════════════════
+"With the async race cured (HEXA_CUDA_ASYNC=0), device-eager vs device-mega reaches
+ max|Δ|=0 = byte-eq megakernel CAPSTONE."
+FALSIFIED if max|Δ| ≠ 0 device-eager vs device-mega under HEXA_CUDA_ASYNC=0 once both
+arms are confirmed run-to-run reproducible (Gate 1 Δ=0).
+
+════════════════════════════════════════════════════════════════════════════════
+VERDICT: <PENDING POD RUN>
+════════════════════════════════════════════════════════════════════════════════
+<filled verbatim from the pod run: Gate-1 reproducibility ladder x3 both arms,
+ Gate-2 max|Δ| device-eager vs device-mega, util, [MEGAFWD-FIRED], [EAGER-DEVGLUE-FIRED],
+ CE descent, CAPSTONE ACHIEVED Y/N, pod id + actual GPU, pod destroyed Y/N>
