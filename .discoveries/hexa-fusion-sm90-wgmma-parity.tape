@@ -72,3 +72,34 @@
 #   remaining 8.39x is OCCUPANCY/TILE-SIZE bound (cuBLAS proves the silicon reaches peak).
 #
 # verdict: .verdicts/hexa-fusion/F-FUSION-SM90-WGMMA-WARPSPEC.txt (verbatim sweep, pod destroyed leak 0)
+
+# ============================================================================
+# === UPDATE 2026-06-06 — W7 dual-consumer-WG warpspec MEASURED (CLOSED-NEGATIVE)
+# ============================================================================
+# Branch domain/hexa-fusion-sm90-wgmma-warpspec, kernel MODE 3 = gemm_ws2.
+# H100 sm_90a (vast 39651872, DESTROYED leak 0), nvcc 12.5.82, verdict
+# .verdicts/hexa-fusion/F-FUSION-SM90-WGMMA-W7.txt (verbatim sweep).
+#
+# W7 LEVER BUILT: dual-consumer-warpgroup warp-spec. 384 thr = 3 WG. WG0 producer
+#   cp.async-loads FULL A 128x8 (two gmma bands As0/As1) + B 8x128 into the NST ring;
+#   WG1+WG2 = 2 consumer warpgroups each wgmma over its 64-row band x the SHARED B
+#   tile (loaded ONCE). mbarrier full[](prod arrives 128)/empty[](both consumers 256).
+#
+# RESULT: BIT-EXACT (rel_rms=0, S=2048/4096, NST=2..5) — the dual-consumer mainloop
+#   is CORRECT. But SLOWER: 32.0 TFLOP/s @ S=4096 (ratio 13.2x) vs MODE 1 async-pipe
+#   50.7 (8.39x) and even vs MODE 2 single-consumer 35.0. W7 hypothesis FALSIFIED.
+#
+# ROOT CAUSE (on-pod cudaOccupancyMaxActiveBlocksPerMultiprocessor):
+#   apipe(128t) = 4 blk/SM = 512 ALL-compute thr/SM.
+#   ws2(384t)   = 1 blk/SM (REGISTER-bound: 90 regs * 384 = 34560/CTA; 2 CTAs=69120 > 65536
+#     regs/SM), of which 1/3 (the cp.async producer WG) issue ZERO wgmma -> 256 compute
+#     thr/SM = HALF the apipe occupancy. NOT shared-mem bound (24KB << 233KB/SM).
+#   => a 128-thread cp.async producer WG is the WRONG production engine for sm_90a warp-spec.
+#
+# === NEW NAMED RESIDUAL (next-cycle claim) ===
+#   W8  TMA-DRIVEN production: cp.async.bulk.tensor + a SINGLE elected producer thread
+#       (freeing the other 127) so a dual/quad-consumer-WG warp-spec keeps FULL compute
+#       occupancy. This is how cuBLAS reaches sm_90a peak — producer is HARDWARE TMA, not
+#       a 128-thread cp.async WG. Bring-over the W6 TMA kit (self/native/wgmma/wgmma_tma_gemm.cu).
+#   STOP reason = honest occupancy/production-engine wall, NOT impossibility. own wgmma bit-exact;
+#   frontier kernel remains MODE 1 async-pipe (50.7, 8.39x) until the TMA producer lands.

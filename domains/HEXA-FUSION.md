@@ -454,3 +454,28 @@ instruction class (wgmma+TMA) and the emit path are proven feasible; the single
 remaining wall is the CUTLASS core-matrix layout above. No perf number is
 reported on any non-bit-correct kernel (g5). cuBLAS = roofline; no superiority
 claim. Kit: `self/native/wgmma/`. Pods all destroyed across every run (leak 0).
+
+## ── wgmma own-GEMM W1→W7 — layout RESOLVED (bit-exact) + warp-spec measured · sm_90a (2026-06-06, g5 verbatim) ──
+
+The rung-3 "BLOCKED rel-RMS 1.309" residual above is **RESOLVED**: W1's GMMA INTER
+8×4-core TF32 builder + `fence.proxy.async.shared` makes own-source wgmma **BIT-EXACT**
+(rel_rms 0 @ 2048³/4096³; landed on main #2819). The remaining gap is now purely
+**occupancy/tile-size**, not correctness or emit-path. The measured progression
+(each rung a real on-silicon H100 sm_90a run, bit-exact gate before any perf, pod
+destroyed leak 0):
+
+- [x] **W5 baseline** — synchronous wide-N TN=128 = **38.0 TFLOP/s = 9.35×** off cuBLAS-TF32, rel_rms 0.
+- [x] **W6 async-pipe** (`cp.async.cg` ring + SW pipeline, MODE 1) = **50.7 TFLOP/s = 8.39×**, rel_rms 0 (+33%, ~11.5% of the gap closed). NST 2→5 saturates → ring depth NOT the wall. ★ frontier kernel.
+- [x] **W6 single-consumer-WG warp-spec** (MODE 2) = 35.0 (12.1×), bit-exact but starves TC (1 consumer WG).
+- [x] **W7 dual-consumer-WG warp-spec** (MODE 3 `gemm_ws2`, TM=128: 2 consumer WGs + 1 producer WG, shared B) — **CLOSED-NEGATIVE**: BIT-EXACT (rel_rms 0, S=2048/4096, NST=2..5) but **32.0 TFLOP/s (13.2×) — SLOWER**, not faster. Root cause (on-pod occupancy calc): a 128-thread cp.async producer WG at TM=128 is **register-bound to 1 block/SM** (90 regs × 384 thr; 2 CTAs = 69120 > 65536 regs/SM), netting 256 compute-thr/SM vs async-pipe's 4×128=512. More consumer WGs cannot win while the producer eats a full WG AND evicts the 2nd resident CTA. verdict: `.verdicts/hexa-fusion/F-FUSION-SM90-WGMMA-W7.txt`.
+
+**Updated ladder (own GFLOP/s, bit-exact, S=4096):** 38.0 → 50.7 (W6 async-pipe, frontier)
+→ W7 dual-consumer regressed to 32.0. **ratio vs cuBLAS unchanged at 8.39×; % gap closed
+held at ~11.5% (W7 added none).** PARITY: NO.
+
+**NAMED RESIDUAL (W8, next-cycle):** TMA-driven production — `cp.async.bulk.tensor` +
+a SINGLE elected producer thread (freeing the other 127) so a dual/quad-consumer-WG
+warp-spec keeps FULL compute occupancy. cuBLAS reaches sm_90a peak exactly this way
+(hardware TMA producer, not a 128-thread cp.async WG). Bring-over: `self/native/wgmma/wgmma_tma_gemm.cu`.
+STOP reason = honest occupancy/production-engine wall, NOT impossibility. cuBLAS = roofline;
+no superiority claim. Pods destroyed leak 0.

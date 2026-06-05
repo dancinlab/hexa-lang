@@ -1,0 +1,111 @@
+F-FUSION-SM90-WGMMA-W7 — dual-consumer-warpgroup warp-specialized own-GEMM on native sm_90a
+=============================================================================================
+verdict-tier: 🟢 numerical — BIT-EXACT GATE PASSED (rel_rms=0), real perf Δ measured;
+              PARITY=NO; W7 lever (dual-consumer-WG) CLOSED-NEGATIVE w/ exact root cause.
+date: 2026-06-06
+GPU: NVIDIA H100 80GB HBM3 (81559 MiB), compute_cap 9.0, driver 555.58.02
+     (vast pod 39651872, ssh1.vast.ai, DESTROYED immediately after capture — leak 0)
+toolchain: nvcc 12.5.82 (cuda_12.5.r12.5), -O3 -arch=sm_90a -lcublas -lcuda
+kernel: self/native/wgmma/wgmma_tf32_warpspec.cu — MODE 3 = gemm_ws2 (NEW W7 kernel)
+baseline carried from W6 (F-FUSION-SM90-WGMMA-WARPSPEC):
+   MODE 1 async-pipe = 50.7 TFLOP/s = 8.39x off cuBLAS-TF32 (~425), rel_rms=0  ★ best-to-date
+   MODE 2 single-consumer-WG warp-spec = 35.0 = 12.1x (bit-exact, starves tensor cores)
+
+GATE: bit-exact FIRST. cuBLAS-TF32 (CUBLAS_TF32_TENSOR_OP_MATH) = ROOFLINE; ratio = cuBLAS/own.
+      NO superiority claim. g5: NO perf number emitted on any rel_rms > 3e-3 kernel.
+
+================= W7 LEVER LANDED — MODE 3 DUAL-CONSUMER-WARPGROUP (TM=128) =================
+Design: 384 threads = 3 warpgroups. WG0 = PRODUCER (cp.async-loads the FULL A 128x8 band as two
+  gmma sub-tiles As0[rows0..63]+As1[rows64..127] + B 8x128 into the NST ring; cp.async.wait_group;
+  bar.sync-gated Braw->B0/B1 gmma permute; fence.proxy.async; mbar_arrive(full)). WG1+WG2 = TWO
+  CONSUMER warpgroups, each issuing wgmma.m64n64k8 over its own 64-row A band x the SHARED B tile
+  (loaded ONCE by the producer), then mbar_arrive(empty). mbarrier full[](producer arrives 128) /
+  empty[](BOTH consumers arrive 256). This is exactly the geometry W6 diagnosed the single-consumer
+  WG lacked — 2 consumer WGs issuing wgmma while 1 WG produces.
+
+RESULT (bit-exact, rel_rms=0 at every point — the dual-consumer-WG mainloop is CORRECT):
+  S=2048  NST=2  own=30.1  cuBLAS=341.7  ratio=11.35x  rel_rms=0.000e+00
+  S=2048  NST=3  own=30.4  cuBLAS=341.7  ratio=11.23x  rel_rms=0.000e+00
+  S=2048  NST=4  own=30.0  cuBLAS=341.6  ratio=11.38x  rel_rms=0.000e+00
+  S=2048  NST=5  own=30.0  cuBLAS=341.1  ratio=11.39x  rel_rms=0.000e+00
+  S=4096  NST=2  own=31.9  cuBLAS=421.4  ratio=13.22x  rel_rms=0.000e+00
+  S=4096  NST=3  own=32.0  cuBLAS=424.7  ratio=13.28x  rel_rms=0.000e+00   ★ best MODE 3
+  S=4096  NST=4  own=31.6  cuBLAS=421.7  ratio=13.34x  rel_rms=0.000e+00
+  S=4096  NST=5  own=31.7  cuBLAS=423.6  ratio=13.36x  rel_rms=0.000e+00
+
+================= APPLES-TO-APPLES (same pod, S=4096) =================
+  MODE 1 async-pipe (NST=4)         own=50.7  ratio= 8.40x  rel_rms=0   [4 blk/SM]
+  MODE 2 single-consumer-WG (NST=4) own=35.0  ratio=12.11x  rel_rms=0
+  MODE 3 dual-consumer-WG (NST=3)   own=32.0  ratio=13.18x  rel_rms=0   [1 blk/SM]
+  => MORE consumer warpgroups made it SLOWER, not faster. W7 hypothesis FALSIFIED.
+
+================= ROOT CAUSE (cudaOccupancyMaxActiveBlocksPerMultiprocessor, on-pod) =================
+  H100: SMs=132, maxThr/SM=2048, smem/SM=233472 B, regs/SM=65536.
+  gemm_apipe (MODE 1, 128 thr): 4 blk/SM   (20480 B smem @ NST=2)  -> 512 ALL-compute thr/SM
+  gemm_ws2   (MODE 3, 384 thr): 1 blk/SM   (24608 B smem @ NST=2)  -> 256 compute thr/SM (WG0 = producer, no math)
+  ws2 numRegs/thread = 90  ->  90 * 384 = 34,560 regs/CTA  ->  2 CTAs = 69,120 > 65,536 regs/SM.
+  => ws2 is REGISTER-BOUND to 1 CTA/SM (NOT shared-mem bound: 24 KB << 233 KB/SM).
+  Net: the dual-consumer-WG CTA fills an SM with 384 threads of which 1/3 (the cp.async producer WG)
+  issue ZERO wgmma, AND it cannot co-reside a second CTA. So it nets 256 compute-threads/SM vs the
+  async-pipe's 512. HALF the compute occupancy -> exactly the 50.7 -> 32.0 drop.
+  NST>=4 (49216 B): MODE 3 still 1 blk/SM; ring depth was never the wall (consistent with W5/W6).
+
+================= HEADLINE =================
+  own GFLOP/s: 50.7 (W6 best, async-pipe)  ->  32.0 (W7 MODE 3 dual-consumer-WG)  [REGRESSION]
+  cuBLAS-TF32 roofline: ~422-425 TFLOP/s (S=4096)
+  ratio vs cuBLAS: 8.39x (W6 best, UNCHANGED — MODE 1 remains the frontier) ; MODE 3 = 13.2x
+  rel_rms: 0.000e+00 (EXACT — the new dual-consumer-WG kernel is bit-correct)
+  % of the 9.35x->1.0x gap closed: still ~11.5% (held by W6 MODE 1; W7 added NO closure)
+  PARITY (<=1.3x): NO
+
+================= FINDING (CLOSED-NEGATIVE, publishable per paper_negative_ok) =================
+  Pre-registered falsifier (W6): "dual-consumer-warpgroup warp-spec at TM=128 overtakes the
+  async-pipe toward cuBLAS parity." MEASURED: FALSIFIED. The dual-consumer-WG kernel is BIT-EXACT
+  (rel_rms=0 across S=2048/4096, NST=2..5) but ~37% SLOWER (50.7 -> 32.0).
+  RULED-OUT AXIS (deterministic, from on-pod occupancy calculator): a cp.async-driven producer
+  warpgroup is the wrong production engine for warp-spec on sm_90a. A 128-thread cp.async producer
+  WG at TM=128 pins the CTA to 1 block/SM (register-bound: 90 regs * 384 thr), giving only 256
+  compute-threads/SM vs the simple async-pipe's 512 (4 CTAs * 128). More consumer warpgroups cannot
+  win while the producer consumes a full warpgroup AND the larger CTA evicts the second resident block.
+  This is NOT a correctness or emit-path wall — own-source wgmma is bit-exact and the silicon reaches
+  peak (cuBLAS proves it). It is an OCCUPANCY/PRODUCTION-ENGINE wall.
+
+================= NAMED RESIDUAL (next-cycle claim) =================
+  W8  TMA-DRIVEN production (cp.async.bulk.tensor + a SINGLE elected producer thread, freeing the
+      other 127) so a dual/quad-consumer-WG warp-spec keeps full compute occupancy. This is exactly
+      how cuBLAS reaches sm_90a peak — the producer is hardware TMA, not a 128-thread cp.async WG.
+      The W6 TMA kit (self/native/wgmma/wgmma_tma_gemm.cu) is the bring-over to fuse here.
+      Prediction is GATED on TMA-bulk-tensor production, not on more consumer warpgroups.
+  Frontier kernel remains MODE 1 async-pipe (50.7, 8.39x) until the TMA producer lands.
+
+================= HONESTY (g5) =================
+  - Bit-exact GATE before every perf number; rel_rms printed verbatim (all 0.000e+00 here).
+  - PARITY framing only; cuBLAS = roofline; NO superiority claim.
+  - W7 is an HONEST CLOSED-NEGATIVE: the named lever was BUILT, is CORRECT, and is SLOWER, with a
+    deterministic root cause (register-bound 1 blk/SM) ruling out the cp.async-producer warp-spec path.
+    This is real (a working bit-exact 2-consumer-WG overlap + a measured falsification), not a parity
+    claim and not an impossibility verdict — the residual (TMA production) is named and concrete.
+  - pod 39651872 DESTROYED immediately after capture (leak 0; only protected rtsc-anchor 39610026 left).
+
+RAW STDOUT (verbatim) — on-pod sweep:
+-------------------------------------
+ENV: Build cuda_12.5.r12.5/compiler.34385749_0 | NVIDIA H100 80GB HBM3, 9.0, 555.58.02
+WS S=2048 MODE=3 NST=2 own=30.1 TFLOP/s cuBLAS-TF32=341.7 ratio(cuBLAS/own)=11.35x rel_rms=0.000e+00 PARITY=NO
+WS S=2048 MODE=3 NST=3 own=30.4 TFLOP/s cuBLAS-TF32=341.7 ratio(cuBLAS/own)=11.23x rel_rms=0.000e+00 PARITY=NO
+WS S=2048 MODE=3 NST=4 own=30.0 TFLOP/s cuBLAS-TF32=341.6 ratio(cuBLAS/own)=11.38x rel_rms=0.000e+00 PARITY=NO
+WS S=2048 MODE=3 NST=5 own=30.0 TFLOP/s cuBLAS-TF32=341.1 ratio(cuBLAS/own)=11.39x rel_rms=0.000e+00 PARITY=NO
+WS S=4096 MODE=3 NST=2 own=31.9 TFLOP/s cuBLAS-TF32=421.4 ratio(cuBLAS/own)=13.22x rel_rms=0.000e+00 PARITY=NO
+WS S=4096 MODE=3 NST=3 own=32.0 TFLOP/s cuBLAS-TF32=424.7 ratio(cuBLAS/own)=13.28x rel_rms=0.000e+00 PARITY=NO
+WS S=4096 MODE=3 NST=4 own=31.6 TFLOP/s cuBLAS-TF32=421.7 ratio(cuBLAS/own)=13.34x rel_rms=0.000e+00 PARITY=NO
+WS S=4096 MODE=3 NST=5 own=31.7 TFLOP/s cuBLAS-TF32=423.6 ratio(cuBLAS/own)=13.36x rel_rms=0.000e+00 PARITY=NO
+# apples-to-apples (same pod, S=4096):
+WS S=4096 MODE=1 NST=4 own=50.7 cuBLAS-TF32=425.5 ratio=8.40x  rel_rms=0.000e+00 PARITY=NO
+WS S=4096 MODE=2 NST=4 own=35.0 cuBLAS-TF32=424.1 ratio=12.11x rel_rms=0.000e+00 PARITY=NO
+WS S=4096 MODE=3 NST=2 own=31.8 cuBLAS-TF32=421.2 ratio=13.23x rel_rms=0.000e+00 PARITY=NO
+WS S=4096 MODE=3 NST=3 own=32.0 cuBLAS-TF32=421.6 ratio=13.18x rel_rms=0.000e+00 PARITY=NO
+# occupancy calculator (on-pod, cudaOccupancyMaxActiveBlocksPerMultiprocessor):
+H100 SMs=132 maxThr/SM=2048 maxSmem/SM=233472 regs/SM=65536
+gemm_apipe(128t,20480B) = 4 blk/SM   (MODE 1)
+gemm_ws2  (384t,24608B) = 1 blk/SM   (MODE 3, NST=2)   numRegs/thread=90 -> 2 CTAs = 69120 > 65536 regs/SM
+gemm_ws2  (384t,36912B) = 1 blk/SM   (MODE 3, NST=3)
+gemm_ws2  (384t,49216B) = 1 blk/SM   (MODE 3, NST=4)
