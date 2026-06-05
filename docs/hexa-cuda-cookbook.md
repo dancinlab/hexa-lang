@@ -184,7 +184,7 @@ hexa-native PTX; the launch plumbing is a thin C binding.
 
 | gap | status |
 |---|---|
-| `hexa build --target=nvptx…` end-to-end in the **bootstrap binary** | ✅ UN-GATED (HEXA-CUDA D2) — `_build_nvptx_emit_driver` now runs the inline lex→parse→lower→lower_hir→`codegen_emit_ptx_for_sm` pipeline and writes `<src>.ptx`. The old `[nvptx] GATED RFC071-P3-PathB` fence was stale (the codegen + pipeline modules were already imported into `self/main.hexa`). vec-add emits a 59-line source-derived PTX (`.visible .entry vec_add`, `.target sm_90`). ptxas/device validation deferred (no local CUDA toolkit). See §5. |
+| `hexa build --target=nvptx…` end-to-end in the **bootstrap binary** | ✅ UN-GATED (HEXA-CUDA D2) — `_build_nvptx_emit_driver` now runs the inline lex→parse→lower→lower_hir→`codegen_emit_ptx_for_sm` pipeline and writes `<src>.ptx`. The old `[nvptx] GATED RFC071-P3-PathB` fence was stale (the codegen + pipeline modules were already imported into `self/main.hexa`). vec-add + SAXPY emit source-derived PTX (`.visible .entry vec_add`/`saxpy`, `.target sm_90`). ✅ SILICON-VALIDATED on a real H100: a fresh self-host-built `hexa` re-emitted both, `ptxas -arch=sm_90` exit 0 (clean), and a CUDA Driver-API launch matched the CPU reference (maxerr 0.0, 0/2^20 mismatches). Verdict `.verdicts/hexa-cuda/F-HEXACUDA-PTXAS-DEVICE.txt`. See §5. |
 | `gpu_shared_f64/_add/_get` | ❌ not codegen intrinsics — use `@shared let` (§3.6) |
 | `gpu_tf32_round` (qforge mixprec kernel) | ❌ not a codegen intrinsic — TF32 in that harness is host cuBLAS, not device PTX |
 | f64 `exp()` below x≈−745 | ⚠️ underflows to garbage instead of 0 — guard in-kernel (see `nvptx_a2f_kernel.hexa` d6) |
@@ -226,8 +226,10 @@ gpu_launch(vec_add, grid, 1, 1, block, 1, 1, a, b, out, n)
 **Build:** `hexa build vecadd.hexa --target=nvptx64-nvidia-cuda-sm80`
 (`sm90` / `sm120` for Hopper / Blackwell).
 
-**Build-verified:** pending (driver gate, §5). Syntax matches
-`nvptx_sternheimer_kernel.hexa` (the `axpy`/`xpay` kernels are the same shape).
+**Build-verified:** ✅ SILICON-VALIDATED on H100 (sm_90). Fresh-built `hexa
+build … --target=nvptx64-nvidia-cuda-sm90` → source-derived PTX → `ptxas
+-arch=sm_90` exit 0 (clean) → CUDA Driver-API launch → maxerr 0.0, 0/2^20
+mismatches vs CPU ref. Verdict: `.verdicts/hexa-cuda/F-HEXACUDA-PTXAS-DEVICE.txt`.
 
 ### 4.2 SAXPY — `y = α·x + y`
 
@@ -257,7 +259,10 @@ gpu_launch(saxpy, grid, 1, 1, block, 1, 1, y, x, par, n)
 ```
 
 **Build:** `hexa build saxpy.hexa --target=nvptx64-nvidia-cuda-sm80`
-**Build-verified:** pending (§5). This is `qforge_stern_axpy` with `α` instead of
+**Build-verified:** ✅ SILICON-VALIDATED on H100 (sm_90) — fresh `hexa build`
+→ PTX → `ptxas -arch=sm_90` clean → Driver-API launch → maxerr 0.0, 0/2^20
+mismatches vs CPU ref. Verdict: `.verdicts/hexa-cuda/F-HEXACUDA-PTXAS-DEVICE.txt`.
+This is `qforge_stern_axpy` with `α` instead of
 `±α`; that kernel is part of the stack validated on an RTX 5070.
 
 ### 4.3 Parallel reduction — `s = Σ a[i]·b[i]` (dot product)

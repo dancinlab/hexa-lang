@@ -35,18 +35,21 @@ intrinsic/launch surface the compiler supports today — honest gaps marked.
           intrinsic — TF32 is host-side cuBLAS in that harness, not device PTX.
       (d) FP64 `exp()` intrinsic underflow bug below x≈−745 (qforge a2f d6 note)
           — kernel-side guard documented; codegen fix is a separate inbox item.
-- [x] D2 — DONE (driver un-gated, emit verified). `hexa build --target=nvptx`
-      now emits SOURCE-DERIVED PTX end-to-end: the cookbook vec-add @gpu_kernel
-      compiles to a 59-line PTX with `.visible .entry vec_add` (source kernel
-      name, not the hand-MIR `vadd` fallback), `.target sm_90`, `.version 7.8`,
-      4× `.param .u64`, and real index-math + bounds-check + ld/st.global.f64
-      + ret. Verified via a standalone harness running the IDENTICAL inline
-      pipeline (the stale local Jun-1 hexa hangs flattening full self/main.hexa
-      on macOS, so the live `hexa build` path is re-verified on a fresh
-      bootstrap / CUDA host). ptxas-clean + device run = PENDING (no local
-      ptxas/CUDA toolkit; codegen is the RFC 055 §7 RTX-5070-validated entry).
-      Per-example "build-verified" tags: vec-add CONFIRMED (emit); SAXPY /
-      reduce / matmul re-emit + ptxas on a CUDA host = deferred follow-up.
+- [x] D2 — DONE + SILICON-VALIDATED on a real H100 (sm_90). `hexa build
+      --target=nvptx` emits SOURCE-DERIVED PTX end-to-end (`.visible .entry
+      vec_add`/`saxpy`, `.target sm_90`, `.version 7.8`, 4× `.param .u64`, real
+      index-math + bounds-check + ld/st.global.f64 + ret). Both cookbook
+      vec-add AND SAXPY @gpu_kernel were re-emitted by a FRESH self-host-built
+      `hexa` (`tool/release_build`, Stage 0/1/2) on an H100 80GB HBM3 pod, then:
+        · `ptxas -arch=sm_90` → exit 0, EMPTY stderr (CLEAN) — both kernels.
+        · device run via the CUDA Driver API (cuModuleLoad → cuLaunchKernel,
+          grid=ceil(2^20/256), block=256) → maxerr 0.000e+00, 0 mismatches
+          over 1,048,576 f64 elements vs CPU reference — both kernels.
+      D2 is fully silicon-PROVEN: .hexa @gpu_kernel → hexa build → PTX → ptxas
+      cubin → driver-API launch → bit-exact result, no .cu / nvcc.
+      Verdict (verbatim ptxas + device output): .verdicts/hexa-cuda/
+      F-HEXACUDA-PTXAS-DEVICE.txt. Harness + PTX artifacts in
+      tools/hexa-cuda-validate/.
 
 ## adoption — steer devs to `.hexa` GPU kernels over py/.cu (the funnel)
 
