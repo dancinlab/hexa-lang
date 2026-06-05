@@ -108,5 +108,23 @@ int main(int argc, char** argv) {
     printf("\ncorrectness (own vs cuBLAS oracle, rel-RMS, TF32 tol 3e-3):\n");
     printf("  naive-WMMA  rel-RMS = %.3e  %s\n", rms_naive, rms_naive<=3e-3?"PASS":"FAIL");
     printf("  tiled-WMMA2 rel-RMS = %.3e  %s\n", rms_wmma2, rms_wmma2<=3e-3?"PASS":"FAIL");
+
+    // GFLOP/s = 2*M*N*K / (ms*1e-3) / 1e9. Required by the SM90-VERIFY verdict.
+    double flop = 2.0*(double)M*(double)N*(double)K;
+    double g_cublas = flop / (t_cublas*1e-3) / 1e9;
+    double g_naive  = flop / (t_naive *1e-3) / 1e9;
+    double g_wmma2  = flop / (t_wmma2 *1e-3) / 1e9;
+    printf("\nGFLOP/s (2*M*N*K / time):\n");
+    printf("  cuBLAS (TF32)       : %.1f GFLOP/s   (1.00x)\n", g_cublas);
+    printf("  naive-WMMA          : %.1f GFLOP/s   (%.4fx vs cuBLAS)\n", g_naive, g_naive/g_cublas);
+    printf("  tiled-WMMA2(CUTLASS): %.1f GFLOP/s   (%.4fx vs cuBLAS)\n", g_wmma2, g_wmma2/g_cublas);
+    // Tensor-Core engagement test: H100 FP32 CUDA-core peak ~67 TFLOP/s.
+    // own >> 67 TFLOP/s  => Tensor Cores engaged; ~2.5 TFLOP/s => CUDA-core FMA floor.
+    double tflops_wmma2 = g_wmma2/1000.0;
+    printf("\nTensor-Core engagement (H100 FP32 CUDA-core peak ~67 TFLOP/s):\n");
+    printf("  tiled-WMMA2 = %.2f TFLOP/s -> %s\n", tflops_wmma2,
+        tflops_wmma2 > 67.0 ? "TENSOR CORES ENGAGED (>67 TFLOP/s CUDA-core peak)"
+      : (tflops_wmma2 < 10.0 ? "CUDA-CORE FMA FLOOR (TC NOT engaged)"
+                             : "AMBIGUOUS (between FMA floor and TC peak)"));
     return 0;
 }
