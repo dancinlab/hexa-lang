@@ -1,0 +1,64 @@
+F-FUSION-N1N2-DETERMINISM — HEXA-FUSION N1+N2: pin the ~1e-1 device-resident
+glue NON-DETERMINISM. N1 = a reusable per-glue-kernel run-to-run determinism
+harness (which kernel + which buffer races). N2 = diagnose the INPUT/_h2d path
+(uninitialized read / non-det reduction / device-eager-glue numerical bug) and
+apply the minimal fix where the cause is clear.
+domain: HEXA-FUSION · date: 2026-06-05 · branch domain/hexa-fusion-n1n2-determinism (off main #2784)
+
+════════════════════════════════════════════════════════════════════════════════
+THE FINDING THIS ACTS ON (P1B-a'' #2783)
+════════════════════════════════════════════════════════════════════════════════
+The byte-eq megakernel's residual is a ~1e-1 RUN-TO-RUN non-determinism in the
+device-resident glue path — NOT the GEMM order, NOT erf, NOT the output tail
+(zero-on-alloc FALSIFIED). The jitter is 4 orders larger than the ~7e-6 P1B-a'
+saw → PRIMARY-DATA non-determinism (uninitialized INPUT read / non-deterministic
+upstream reduction). Determinism ladder fact: pure-host Δ=0, +device-own-GEMM
+Δ=0, +device-GLUE ~1e-1. ALSO: the device-resident eager path's CE RISES
+(DESCENT=0) = a correctness bug, not just byte-eq.
+
+════════════════════════════════════════════════════════════════════════════════
+N1 — DETERMINISM HARNESS (reusable infra)
+════════════════════════════════════════════════════════════════════════════════
+.verdicts/hexa-fusion/n1n2-determinism-build/devglue_determinism.c
+  Standalone C driver linked against the PRODUCTION runtime (self/runtime.c) +
+  the SAME runtime_cuda.o the real clm_prod_gpu uses. Drives each device glue
+  kernel ISOLATED ×N through the real farr ABI:
+    gelu · residual_add · groupnorm · moe_router · embedding · expert_pack2
+    · own_gemm (the conv GEMM, HEXA_OWN_GEMM=1)
+  Per run: RE-FILL every INPUT farr from a fixed deterministic seed; ZERO every
+  OUTPUT farr + dirty_host (clean H2D, no stale-device cross-run residue); launch;
+  hexa_farr_get forces lazy-D2H; snapshot. Reports run-to-run max|Δ| PER KERNEL
+  and PER BUFFER-CLASS (INPUT-read vs OUTPUT-write). This permanently tools what
+  P1B-a'' did ad-hoc → instantly pins WHICH kernel + WHICH buffer carries jitter.
+  fire_n1_determinism.sh: builds the harness on-pod, fires 4 probes
+  (baseline / own-GEMM / racefix-OFF / racefix-ON).
+
+HARNESS BUILT: <PENDING POD BUILD>
+
+════════════════════════════════════════════════════════════════════════════════
+N1 — PER-KERNEL RUN-TO-RUN Δ TABLE (verbatim, g5 HARD GATE)
+════════════════════════════════════════════════════════════════════════════════
+<PENDING — verbatim stdout of devglue_determinism inserted here>
+
+════════════════════════════════════════════════════════════════════════════════
+N2 — THE ~1e-1 SOURCE (kernel + buffer + mechanism)
+════════════════════════════════════════════════════════════════════════════════
+<PENDING>
+
+════════════════════════════════════════════════════════════════════════════════
+N2 — FIX APPLIED? + POST-FIX PER-KERNEL Δ
+════════════════════════════════════════════════════════════════════════════════
+<PENDING>
+
+════════════════════════════════════════════════════════════════════════════════
+DEVICE-RESIDENT-GLUE CE-CORRECTNESS (the DESCENT=0 / CE-rise question)
+════════════════════════════════════════════════════════════════════════════════
+<PENDING — is the device-eager glue numerically OK or buggy?>
+
+════════════════════════════════════════════════════════════════════════════════
+POD / BUILD
+════════════════════════════════════════════════════════════════════════════════
+<PENDING — actual GPU served, pod id, DESTROYED leak 0>
+
+NO byte-eq claim is made here — this verdict is about run-to-run DETERMINISM and
+glue CE-correctness, the prerequisites byte-eq depends on.
