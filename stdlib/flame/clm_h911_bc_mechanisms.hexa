@@ -1,0 +1,359 @@
+// ════════════════════════════════════════════════════════════════════════════
+//  clm_h911_bc_mechanisms.hexa — H_911 hypotheses B1·B2·B3·B4·B5·C
+//
+//  SIX deterministic biological / measurement mechanisms tested on the SAME
+//  5-concept × 5-lang parallel/concat corpora (identical bytes, ORDER differs).
+//  Each asks: does the mechanism RECOVER a parallel>concat cross-lingual binding
+//  signal that AKD1000 last-layer rate-Hebbian could not? Paired over the 5
+//  concepts (the natural pairing unit — the same concept appears in both orderings
+//  in the same 5 languages), bootstrap 95% CI (deterministic LCG, B=2000).
+//
+//  Convention: paired statistic = (parallel binding) - (concat binding), per
+//  concept. 🟢 iff bootstrap CI_lo > 0 (mechanism recovers H_911). 🔴 iff straddles
+//  /≤0 (closed-negative — that mechanism does NOT recover it). g63 honest.
+//
+//  Feature model (shared, deterministic): each corpus LINE = one (concept, lang)
+//  token. We build a D-dim byte-feature vector per line from its raw UTF-8 bytes
+//  (bag-of-byte projected through a fixed random basis). The 25 lines are then
+//  PRESENTED in corpus order (parallel: concept-major adjacency; concat:
+//  language-major). Order-sensitive mechanisms (STDP, neuromod-coincidence,
+//  replay-interleave) bind cross-lingual same-concept tokens only when they fall
+//  in a tight presentation window — which parallel ordering supplies and concat
+//  does not. The 5×5 layout is the H_911 substrate (#1652/#1653).
+// ════════════════════════════════════════════════════════════════════════════
+
+use "stdlib/flame/tensor_lib"
+
+let NLINE = 25
+let NCONC = 5
+let NLANG = 5
+let D     = 16
+
+// ── deterministic LCG ──
+fn h911_lcg_next(state: int) -> int {
+    return (state * 1103515245 + 12345) % 2147483648
+}
+fn h911_lcg_idx(state: int, n: int) -> int {
+    let p = if state < 0 { 0 - state } else { state }
+    return p % n
+}
+
+// Build per-line D-dim feature vectors into FEAT (NLINE*D), from raw bytes of `path`.
+// Lines are split on '\n' (byte 10). Feature = sign-projected byte-bag through a
+// fixed pseudo-random basis (seed-fixed -> deterministic, same basis both corpora).
+fn build_feats(path: string, FEAT: int) -> int {
+    let bytes_arr = read_file_bytes(path)
+    let n = len(bytes_arr)
+    // zero feats
+    let mut z = 0
+    while z < NLINE * D { t_set(FEAT, z, 0.0); z = z + 1 }
+    let mut line = 0
+    let mut i = 0
+    while i < n && line < NLINE {
+        let bb = bytes_arr[i]
+        if bb == 10 {
+            line = line + 1
+        } else {
+            // project byte bb into D dims via fixed basis (deterministic)
+            let mut k = 0
+            while k < D {
+                let h = ((bb + 1) * (k * 131 + 7) * 2654435761) % 2147483648
+                let sgn = if (h % 2) == 0 { 1.0 } else { 0.0 - 1.0 }
+                let mag = to_float((bb % 17) + 1) / 17.0
+                t_set(FEAT, line * D + k, t_get(FEAT, line * D + k) + sgn * mag)
+                k = k + 1
+            }
+        }
+        i = i + 1
+    }
+    // L2-normalize each line's feature
+    let mut ln = 0
+    while ln < NLINE {
+        let mut nrm = 0.0; let mut a = 0
+        while a < D { let v = t_get(FEAT, ln * D + a); nrm = nrm + v * v; a = a + 1 }
+        nrm = sqrt(nrm)
+        if nrm < 0.000001 { nrm = 1.0 }
+        let mut b = 0
+        while b < D { t_set(FEAT, ln * D + b, t_get(FEAT, ln * D + b) / nrm); b = b + 1 }
+        ln = ln + 1
+    }
+    return line + 1
+}
+
+// presentation order -> line index. ord=0 parallel(concept-major): pos p -> line p
+//   (file IS concept-major in parallel.txt: concept0 in 5 langs, then concept1 ...)
+// ord=1 concat(language-major): the file is language-major; line index = p.
+// In BOTH files the lines are already in the file's native order, so presented
+// order = file line order. The DIFFERENCE is the (concept,lang) identity of each
+// slot, captured by the maps below.
+//
+// parallel.txt line p: concept = p / NLANG, lang = p % NLANG
+// concat.txt   line p: lang = p / NCONC,  concept = p % NCONC
+fn concept_of(ord: int, p: int) -> int {
+    if ord == 0 { return p / NLANG }
+    return p % NCONC
+}
+fn lang_of(ord: int, p: int) -> int {
+    if ord == 0 { return p % NLANG }
+    return p / NCONC
+}
+
+fn dot(FEAT: int, a: int, b: int) -> float {
+    let mut s = 0.0; let mut k = 0
+    while k < D { s = s + t_get(FEAT, a * D + k) * t_get(FEAT, b * D + k); k = k + 1 }
+    return s
+}
+
+// ─────────────────────────── B1 · STDP ───────────────────────────
+// Spike-timing kernel over the presentation sequence: pair (pre@i, post@j>i)
+// potentiates by exp(-(j-i)/tau). For each concept c, binding(c) =
+// sum over its 5-lang token positions of cross-lingual (different lang) STDP
+// potentiation weighted by feature similarity. Parallel puts the 5 langs in a
+// window of 5; concat scatters them 5 apart -> STDP kernel decays them away.
+fn stdp_binding(FEAT: int, ord: int, c: int, tau: float) -> float {
+    let mut s = 0.0
+    let mut i = 0
+    while i < NLINE {
+        if concept_of(ord, i) == c {
+            let mut j = i + 1
+            while j < NLINE {
+                if concept_of(ord, j) == c && lang_of(ord, j) != lang_of(ord, i) {
+                    let dt = to_float(j - i)
+                    let kern = exp((0.0 - dt) / tau)
+                    let sim = (dot(FEAT, i, j) + 1.0) / 2.0
+                    s = s + kern * sim
+                }
+                j = j + 1
+            }
+        }
+        i = i + 1
+    }
+    return s
+}
+
+// ─────────────────────── B2 · NEUROMOD GATE ──────────────────────
+// Third-factor salience gate: a cross-lingual coincidence detector opens the
+// gate only when a same-concept cross-lingual pair co-occurs within a short
+// salience window (W). Gated update writes feature-similarity; ungated averages
+// it into the running rate. binding(c) = gated cross-lingual write minus the
+// ungated rate baseline. Parallel keeps pairs inside W; concat does not.
+fn neuromod_binding(FEAT: int, ord: int, c: int, W: int) -> float {
+    let mut gated = 0.0
+    let mut i = 0
+    while i < NLINE {
+        if concept_of(ord, i) == c {
+            let mut j = i + 1
+            while j < NLINE {
+                if concept_of(ord, j) == c && lang_of(ord, j) != lang_of(ord, i) {
+                    let gap = j - i
+                    let gate = if gap <= W { 1.0 } else { 0.0 }
+                    let sim = (dot(FEAT, i, j) + 1.0) / 2.0
+                    gated = gated + gate * sim
+                }
+                j = j + 1
+            }
+        }
+        i = i + 1
+    }
+    return gated
+}
+
+// ─────────────────────────── B3 · HUB ────────────────────────────
+// Convergence-hub recurrent rep: instead of reading the last token (output
+// layer), accumulate a HIDDEN recurrent state h that decays and integrates each
+// presented token. After the full sequence, the hub state for concept c is the
+// time-decayed sum of its tokens' features; cross-lingual integration = the hub's
+// internal coherence (sum of pairwise feature dot within concept c WEIGHTED by
+// co-residence in the recurrent window). Parallel keeps a concept's langs
+// co-resident in the leaky hub; concat lets the state decay between them.
+fn hub_binding(FEAT: int, ord: int, c: int, lam: float) -> float {
+    // leaky integrator over presentation; measure coherence of concept-c tokens
+    // by how much each later token aligns with the DECAYED running hub built from
+    // earlier same-concept tokens.
+    let hub = t_zeros(D)
+    let mut k0 = 0; while k0 < D { t_set(hub, k0, 0.0); k0 = k0 + 1 }
+    let mut coher = 0.0
+    let mut i = 0
+    while i < NLINE {
+        // decay hub
+        let mut dk = 0
+        while dk < D { t_set(hub, dk, t_get(hub, dk) * lam); dk = dk + 1 }
+        if concept_of(ord, i) == c {
+            // align current token with current hub (cross-lingual integration)
+            let mut al = 0.0; let mut ak = 0
+            while ak < D { al = al + t_get(hub, ak) * t_get(FEAT, i * D + ak); ak = ak + 1 }
+            coher = coher + al
+            // write token into hub
+            let mut wk = 0
+            while wk < D { t_set(hub, wk, t_get(hub, wk) + t_get(FEAT, i * D + wk)); wk = wk + 1 }
+        }
+        i = i + 1
+    }
+    return coher
+}
+
+// ────────────────────────── B4 · REPLAY ──────────────────────────
+// Offline interleaved replay/consolidation: R passes that re-expose the
+// sequence; each pass strengthens a synapse S[c] for concept c by the
+// CONTIGUOUS cross-lingual co-activation it sees, with per-pass noise that
+// averages out over passes (consolidation). Parallel's contiguous 5-lang block
+// gives consistent co-activation each pass; concat's scattered layout gives
+// noise that the averaging cannot rescue. binding = consolidated S[c].
+fn replay_binding(FEAT: int, ord: int, c: int, R: int) -> float {
+    let mut S = 0.0
+    let mut r = 0
+    let mut state = 424242 + c * 99
+    while r < R {
+        // one replay pass: reward contiguous same-concept cross-lingual adjacency
+        let mut pass = 0.0
+        let mut i = 0
+        while i < NLINE - 1 {
+            let cc = concept_of(ord, i)
+            let cn = concept_of(ord, i + 1)
+            if cc == c && cn == c && lang_of(ord, i) != lang_of(ord, i + 1) {
+                let sim = (dot(FEAT, i, i + 1) + 1.0) / 2.0
+                pass = pass + sim
+            }
+            i = i + 1
+        }
+        // per-pass zero-mean noise (averages out across R passes -> consolidation)
+        state = h911_lcg_next(state)
+        let noise = (to_float(h911_lcg_idx(state, 2001)) - 1000.0) / 1000.0 * 0.5
+        S = S + pass + noise
+        r = r + 1
+    }
+    return S / to_float(R)
+}
+
+// ────────────────────────── B5 · SPARSE ──────────────────────────
+// k-WTA sparse readout vs dense: build a population code for concept c by summing
+// its tokens' features AS PRESENTED through a leaky window (so order matters via
+// which tokens co-reside), then keep only top-k dims (k-WTA). binding = energy of
+// the sparse code that is cross-lingually shared. Parallel co-resident langs
+// reinforce shared dims -> a few strong winners; concat spreads -> washed out.
+fn sparse_binding(FEAT: int, ord: int, c: int, kkeep: int, lam: float) -> float {
+    let pop = t_zeros(D)
+    let mut z = 0; while z < D { t_set(pop, z, 0.0); z = z + 1 }
+    let mut i = 0
+    while i < NLINE {
+        let mut dk = 0
+        while dk < D { t_set(pop, dk, t_get(pop, dk) * lam); dk = dk + 1 }
+        if concept_of(ord, i) == c {
+            let mut wk = 0
+            while wk < D { t_set(pop, wk, t_get(pop, wk) + t_get(FEAT, i * D + wk)); wk = wk + 1 }
+        }
+        i = i + 1
+    }
+    // k-WTA on |pop|: energy of top-k magnitudes
+    let mag = t_zeros(D)
+    let mut m = 0
+    while m < D { let v = t_get(pop, m); t_set(mag, m, if v < 0.0 { 0.0 - v } else { v }); m = m + 1 }
+    // sort mag desc (insertion)
+    let mut ii = 1
+    while ii < D {
+        let key = t_get(mag, ii); let mut jj = ii - 1
+        while jj >= 0 && t_get(mag, jj) < key { t_set(mag, jj + 1, t_get(mag, jj)); jj = jj - 1 }
+        t_set(mag, jj + 1, key); ii = ii + 1
+    }
+    let mut e = 0.0; let mut t = 0
+    while t < kkeep { e = e + t_get(mag, t) * t_get(mag, t); t = t + 1 }
+    return e
+}
+
+// ─────────────────────────── C · MI ──────────────────────────────
+// Direct cross-lingual mutual information (H_911's native quantity). Build a
+// co-activation joint over a leaky presentation window: for concept c, estimate
+// MI between "a same-concept cross-lingual token is currently active in the hub"
+// and "the hub feature is positive on dim d", binned. Parallel co-residence
+// raises the joint dependence; concat decorrelates it. We use a closed-form
+// proxy: MI ~ sum_d p_d * ln(p_d / (pbar)) style coherence over co-resident
+// cross-lingual tokens. binding = cross-lingual MI estimate for concept c.
+fn mi_binding(FEAT: int, ord: int, c: int, lam: float) -> float {
+    // joint counts: for each presented same-concept token, accumulate co-active
+    // sign pattern with the decayed hub of OTHER-language same-concept tokens.
+    let hub = t_zeros(D)
+    let mut z = 0; while z < D { t_set(hub, z, 0.0); z = z + 1 }
+    // per-dim agreement counts a (both positive or both negative) vs disagreement b
+    let agree = t_zeros(D); let disag = t_zeros(D)
+    let mut q = 0; while q < D { t_set(agree, q, 0.0); t_set(disag, q, 0.0); q = q + 1 }
+    let mut hubpop = 0.0
+    let mut i = 0
+    while i < NLINE {
+        let mut dk = 0
+        while dk < D { t_set(hub, dk, t_get(hub, dk) * lam); dk = dk + 1 }
+        hubpop = hubpop * lam
+        if concept_of(ord, i) == c {
+            if hubpop > 0.001 {
+                let mut k = 0
+                while k < D {
+                    let hv = t_get(hub, k)
+                    let fv = t_get(FEAT, i * D + k)
+                    let hs = if hv >= 0.0 { 1.0 } else { 0.0 - 1.0 }
+                    let fs = if fv >= 0.0 { 1.0 } else { 0.0 - 1.0 }
+                    if hs * fs > 0.0 { t_set(agree, k, t_get(agree, k) + 1.0) }
+                    else { t_set(disag, k, t_get(disag, k) + 1.0) }
+                    k = k + 1
+                }
+            }
+            let mut wk = 0
+            while wk < D { t_set(hub, wk, t_get(hub, wk) + t_get(FEAT, i * D + wk)); wk = wk + 1 }
+            hubpop = hubpop + 1.0
+        }
+        i = i + 1
+    }
+    // MI proxy: sum_d binary MI of (agree vs disag) against 0.5 baseline
+    let mut mi = 0.0
+    let mut d2 = 0
+    while d2 < D {
+        let na = t_get(agree, d2); let nd = t_get(disag, d2)
+        let tot = na + nd
+        if tot > 0.0 {
+            let pa = na / tot
+            let pd = nd / tot
+            // binary "information" = 1 - H(pa)  (deviation from chance = dependence)
+            let mut h = 0.0
+            if pa > 0.000001 { h = h - pa * (ln(pa) / ln(2.0)) }
+            if pd > 0.000001 { h = h - pd * (ln(pd) / ln(2.0)) }
+            mi = mi + (1.0 - h) * (tot / to_float(NLANG))
+        }
+        d2 = d2 + 1
+    }
+    return mi
+}
+
+// ───────────── paired bootstrap CI over the 5 concepts ─────────────
+fn report(name: string, id: string, diffs: int, n: int) {
+    let mut mean = 0.0; let mut a = 0
+    while a < n { mean = mean + t_get(diffs, a); a = a + 1 }
+    mean = mean / to_float(n)
+    let B = 2000
+    let boot = t_zeros(B)
+    let mut state = 13572468
+    let mut bi = 0
+    while bi < B {
+        let mut acc = 0.0; let mut k = 0
+        while k < n {
+            state = h911_lcg_next(state)
+            acc = acc + t_get(diffs, h911_lcg_idx(state, n))
+            k = k + 1
+        }
+        t_set(boot, bi, acc / to_float(n)); bi = bi + 1
+    }
+    let mut ii = 1
+    while ii < B {
+        let key = t_get(boot, ii); let mut jj = ii - 1
+        while jj >= 0 && t_get(boot, jj) > key { t_set(boot, jj + 1, t_get(boot, jj)); jj = jj - 1 }
+        t_set(boot, jj + 1, key); ii = ii + 1
+    }
+    let ci_lo = t_get(boot, to_int(0.025 * to_float(B)))
+    let ci_hi = t_get(boot, to_int(0.975 * to_float(B)))
+    print("  ["); print(name); print("] paired mean diff (parallel-concat) = "); println(to_string(mean))
+    print("  ["); print(name); print("] bootstrap 95% CI = ["); print(to_string(ci_lo)); print(", "); print(to_string(ci_hi)); println("]")
+    if ci_lo > 0.0 {
+        print(id); println(" = 1")
+        print("TIER 🟢 — "); print(name); println(" RECOVERS the parallel>concat H_911 cross-lingual binding (paired CI>0)")
+    } else {
+        print(id); println(" = 0")
+        print("TIER 🔴 — "); print(name); println(" does NOT recover it (paired CI straddles/≤0, closed-negative)")
+    }
+}

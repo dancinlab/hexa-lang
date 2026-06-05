@@ -1,0 +1,8 @@
+=== SEMCTRL (F-CLM-H911-SEMCTRL) ===
+  LEARNED-semantic paired mean (parallel-favoring) = 0.233699
+  LEARNED 95% CI = [0.0682807, 0.436537]
+  NULL (within-concept-shuffle) paired mean = -0.303018
+  NULL 95% CI = [-0.310818, -0.295656]
+F-CLM-H911-SEMCTRL = 1
+  NULL-probe: PASS (shuffle CI_lo=-0.310818 ≤ 0 → effect is semantic, not order)
+TIER 🟢 — parallel>concat recovers on the LEARNED-semantic axis AND survives the within-concept-shuffle NULL

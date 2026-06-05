@@ -1,0 +1,27 @@
+// F-CLM-H911-REPLAY driver — offline interleaved replay/consolidation vs single-pass.
+use "stdlib/flame/clm_h911_bc_mechanisms"
+
+fn main() {
+    println("clm_h911_B4 — F-CLM-H911-REPLAY (offline consolidation vs single-pass)")
+    let FP = t_zeros(NLINE * D); let FC = t_zeros(NLINE * D)
+    build_feats("stdlib/flame/testdata/clm_semantic_parallel.txt", FP)
+    build_feats("stdlib/flame/testdata/clm_semantic_concat.txt", FC)
+    let R = 64
+    let diffs = t_zeros(NCONC)
+    // single-pass control (R=1): noise dominates, no consolidation
+    let mut sp_par = 0.0; let mut sp_con = 0.0
+    let mut c = 0
+    while c < NCONC {
+        let bp = replay_binding(FP, 0, c, R)
+        let bc = replay_binding(FC, 1, c, R)
+        t_set(diffs, c, bp - bc)
+        print("  concept "); print(to_string(c)); print(": replay par="); print(to_string(bp))
+        print(" con="); print(to_string(bc)); print(" diff="); println(to_string(bp - bc))
+        sp_par = sp_par + replay_binding(FP, 0, c, 1)
+        sp_con = sp_con + replay_binding(FC, 1, c, 1)
+        c = c + 1
+    }
+    print("  SINGLE-PASS control (R=1): par="); print(to_string(sp_par))
+    print(" con="); print(to_string(sp_con)); print(" gap="); println(to_string(sp_par - sp_con))
+    report("REPLAY", "F-CLM-H911-REPLAY", diffs, NCONC)
+}

@@ -1,0 +1,11 @@
+clm_h911_B5 — F-CLM-H911-SPARSE (k-WTA sparse readout vs dense)
+  concept 0: sparse par=3.18589e-09 con=0.00922516 diff=-0.00922516
+  concept 1: sparse par=5.35574e-07 con=0.0255912 diff=-0.0255907
+  concept 2: sparse par=8.5294e-05 con=0.0601482 diff=-0.0600629
+  concept 3: sparse par=0.0149154 con=0.192387 diff=-0.177471
+  concept 4: sparse par=2.21074 con=0.426693 diff=1.78404
+  DENSE control (keep all D): par=4.67053 con=1.75779 gap=2.91274
+  [SPARSE] paired mean diff (parallel-concat) = 0.302339
+  [SPARSE] bootstrap 95% CI = [-0.116719, 1.05657]
+F-CLM-H911-SPARSE = 0
+TIER 🔴 — SPARSE does NOT recover it (paired CI straddles/≤0, closed-negative)

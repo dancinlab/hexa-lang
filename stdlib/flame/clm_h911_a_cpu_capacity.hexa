@@ -1,0 +1,324 @@
+// ════════════════════════════════════════════════════════════════════════════
+//  clm_h911_a_cpu_capacity.hexa — H_911 hypothesis A (F-CLM-H911-CPU-CAPACITY)
+//
+//  Full-capacity deterministic learner (int4-QAT CLMConvMoE backprop, the SAME
+//  substrate as clm_multiling_semantic.hexa) on the SAME 5-concept × 5-lang
+//  parallel/concat corpora. The prior recompute reported a single-point gap
+//  (parallel mean CE < concat mean CE). Hypothesis A demands a PAIRED statistic
+//  with a separated CI: per training window w, pair concat_CE[w] - parallel_CE[w]
+//  (matched window slot), bootstrap-resample the paired diffs (deterministic LCG)
+//  for a 95% CI.
+//
+//  Falsifier (frozen): parallel final CE < concat final CE with paired CI>0.
+//    🟢 (CI_lo > 0) ⇒ H_911 is real GIVEN CAPACITY → the AKD1000 #1652/#1653 🔴
+//       is an edge-learn-capacity limit, NOT H_911 falsity (bounds the negative).
+//    🔴 (CI straddles/≤0) ⇒ even a full-capacity host can't separate the corpus.
+//
+//  Paired & honest (g63): every window pairs by matched slot, no cherry-pick.
+// ════════════════════════════════════════════════════════════════════════════
+
+use "stdlib/flame/tensor_lib"
+use "stdlib/flame/conv_lib"
+use "stdlib/flame/gn_lib"
+use "stdlib/flame/moe_lib"
+use "stdlib/flame/nn_lib"
+use "stdlib/flame/quant_lib"
+use "stdlib/flame/optim_lib"
+
+fn _fq(w: int, wq: int, mask: int, Cout: int, rest: int) {
+    let sc = t_zeros(Cout); let ql = t_zeros(Cout * rest)
+    nn_int4_quant_fwd(w, wq, sc, ql, mask, Cout, rest)
+}
+
+fn sem_fwd(tokens: int,
+           embed: int, ecW: int, ecB: int, tcW: int, tcB: int, tgG: int, tgB: int,
+           rW: int, rB: int, e0W: int, e0B: int, e1W: int, e1B: int,
+           noG: int, noB: int, roW: int, roB: int,
+           ecWq: int, ecM: int, tcWq: int, tcM: int, e0Wq: int, e0M: int,
+           e1Wq: int, e1M: int, rWq: int, rM: int, roWq: int, roM: int,
+           xe: int, xec: int, xt: int, hn0: int, xhat0: int, inv0: int,
+           eo0: int, eo1: int, probs: int, ex_out: int, yn: int, xhatN: int, invN: int,
+           out_logits: int, T: int, d: int, E: int, V: int, K: int) {
+    _fq(ecW, ecWq, ecM, d, d * K); _fq(tcW, tcWq, tcM, d, d * K)
+    _fq(e0W, e0Wq, e0M, d, d * K); _fq(e1W, e1Wq, e1M, d, d * K)
+    _fq(rW, rWq, rM, E, d); _fq(roW, roWq, roM, V, d)
+    nn_embedding_fwd(tokens, embed, xe, T, d)
+    nn_conv1d_fwd(xe, ecWq, ecB, xec, T, d, d, K, 1)
+    let h0 = t_zeros(T * d)
+    nn_conv1d_fwd(xec, tcWq, tcB, h0, T, d, d, K, 1)
+    let mean0 = t_zeros(1)
+    nn_groupnorm_fwd(h0, tgG, tgB, hn0, mean0, inv0, xhat0, T, d, 1)
+    let hg0 = t_zeros(T * d); nn_gelu_fwd(hn0, hg0, T * d)
+    let mut i = 0
+    while i < T * d { t_set(xt, i, t_get(xec, i) + t_get(hg0, i)); i = i + 1 }
+    let logits_r = t_zeros(T * E)
+    nn_conv1d_fwd(xt, rWq, rB, logits_r, T, d, E, 1, 1)
+    nn_conv1d_fwd(xt, e0Wq, e0B, eo0, T, d, d, K, 1)
+    nn_conv1d_fwd(xt, e1Wq, e1B, eo1, T, d, d, K, 1)
+    let ex0 = t_zeros(T * d); nn_gelu_fwd(eo0, ex0, T * d)
+    let ex1 = t_zeros(T * d); nn_gelu_fwd(eo1, ex1, T * d)
+    let mut j = 0
+    while j < T * d {
+        t_set(ex_out, 0 * T * d + j, t_get(ex0, j))
+        t_set(ex_out, 1 * T * d + j, t_get(ex1, j)); j = j + 1
+    }
+    let y = t_zeros(T * d)
+    nn_moe_router_fwd(logits_r, ex_out, probs, y, T, E, d)
+    let meanN = t_zeros(1)
+    nn_groupnorm_fwd(y, noG, noB, yn, meanN, invN, xhatN, T, d, 1)
+    nn_conv1d_fwd(yn, roWq, roB, out_logits, T, d, V, 1, 1)
+}
+
+fn sem_ce_grad(logits: int, targets: int, dlogits_out: int, T: int, V: int) {
+    let mut t = 0
+    while t < T {
+        let base = t * V
+        let mut mx = t_get(logits, base); let mut i = 1
+        while i < V { let v = t_get(logits, base + i); if v > mx { mx = v }; i = i + 1 }
+        let mut sm = 0.0; let mut i2 = 0
+        while i2 < V { sm = sm + exp(t_get(logits, base + i2) - mx); i2 = i2 + 1 }
+        let invT = 1.0 / to_float(T); let mut v3 = 0
+        while v3 < V {
+            let p = exp(t_get(logits, base + v3) - mx) / sm
+            t_set(dlogits_out, base + v3, p * invT); v3 = v3 + 1
+        }
+        let tgt = to_int(t_get(targets, t))
+        t_set(dlogits_out, base + tgt, t_get(dlogits_out, base + tgt) - invT)
+        t = t + 1
+    }
+}
+
+fn sem_bwd(dlogits: int, tokens: int,
+           embed: int, ecWq: int, tcWq: int, tgG: int, rWq: int, e0Wq: int, e1Wq: int, noG: int, roWq: int,
+           ecM: int, tcM: int, e0M: int, e1M: int, rM: int, roM: int,
+           xe: int, xec: int, xt: int, hn0: int, xhat0: int, inv0: int,
+           eo0: int, eo1: int, probs: int, ex_out: int, yn: int, xhatN: int, invN: int,
+           dembed: int, decW: int, decB: int, dtcW: int, dtcB: int, dtgG: int, dtgB: int,
+           drW: int, drB: int, de0W: int, de0B: int, de1W: int, de1B: int,
+           dnoG: int, dnoB: int, droW: int, droB: int,
+           T: int, d: int, E: int, V: int, K: int) {
+    let dynorm = t_zeros(T * d); let droWq = t_zeros(V * d)
+    nn_conv1d_bwd(yn, roWq, dlogits, droWq, dynorm, droB, T, d, V, 1, 1)
+    nn_int4_quant_bwd(droWq, roM, droW, V, d)
+    let dy = t_zeros(T * d)
+    nn_groupnorm_bwd(xhatN, invN, noG, dynorm, dnoG, dnoB, dy, T, d, 1)
+    let dlogits_r = t_zeros(T * E); let dex_out = t_zeros(E * T * d)
+    nn_moe_router_bwd(probs, ex_out, dy, dlogits_r, dex_out, T, E, d)
+    let dxt_r = t_zeros(T * d); let drWq = t_zeros(E * d)
+    nn_conv1d_bwd(xt, rWq, dlogits_r, drWq, dxt_r, drB, T, d, E, 1, 1)
+    nn_int4_quant_bwd(drWq, rM, drW, E, d)
+    let dex0 = t_zeros(T * d); let dex1 = t_zeros(T * d); let mut ei = 0
+    while ei < T * d {
+        t_set(dex0, ei, t_get(dex_out, 0 * T * d + ei))
+        t_set(dex1, ei, t_get(dex_out, 1 * T * d + ei)); ei = ei + 1
+    }
+    let deo0 = t_zeros(T * d); nn_gelu_bwd(eo0, dex0, deo0, T * d)
+    let deo1 = t_zeros(T * d); nn_gelu_bwd(eo1, dex1, deo1, T * d)
+    let dxt_e0 = t_zeros(T * d); let de0Wq = t_zeros(d * d * K)
+    nn_conv1d_bwd(xt, e0Wq, deo0, de0Wq, dxt_e0, de0B, T, d, d, K, 1)
+    nn_int4_quant_bwd(de0Wq, e0M, de0W, d, d * K)
+    let dxt_e1 = t_zeros(T * d); let de1Wq = t_zeros(d * d * K)
+    nn_conv1d_bwd(xt, e1Wq, deo1, de1Wq, dxt_e1, de1B, T, d, d, K, 1)
+    nn_int4_quant_bwd(de1Wq, e1M, de1W, d, d * K)
+    let dxt = t_zeros(T * d); let mut xi = 0
+    while xi < T * d {
+        t_set(dxt, xi, t_get(dxt_r, xi) + t_get(dxt_e0, xi) + t_get(dxt_e1, xi)); xi = xi + 1
+    }
+    let dhn0 = t_zeros(T * d); nn_gelu_bwd(hn0, dxt, dhn0, T * d)
+    let dh0 = t_zeros(T * d)
+    nn_groupnorm_bwd(xhat0, inv0, tgG, dhn0, dtgG, dtgB, dh0, T, d, 1)
+    let dxec_b = t_zeros(T * d); let dtcWq = t_zeros(d * d * K)
+    nn_conv1d_bwd(xec, tcWq, dh0, dtcWq, dxec_b, dtcB, T, d, d, K, 1)
+    nn_int4_quant_bwd(dtcWq, tcM, dtcW, d, d * K)
+    let dxec = t_zeros(T * d); let mut ci = 0
+    while ci < T * d { t_set(dxec, ci, t_get(dxt, ci) + t_get(dxec_b, ci)); ci = ci + 1 }
+    let dxe = t_zeros(T * d); let decWq = t_zeros(d * d * K)
+    nn_conv1d_bwd(xe, ecWq, dxec, decWq, dxe, decB, T, d, d, K, 1)
+    nn_int4_quant_bwd(decWq, ecM, decW, d, d * K)
+    let mut zi = 0
+    while zi < V * d { t_set(dembed, zi, 0.0); zi = zi + 1 }
+    nn_embedding_bwd_scatter(dxe, tokens, dembed, T, d)
+}
+
+fn _adam(W: int, gW: int, m: int, v: int, n: int, t: int) {
+    opt_adamw_step(W, gW, m, v, n, 0.05, 0.9, 0.999, 0.00000001, 0.0, t)
+}
+
+fn windows(bytes_arr: int, n_bytes: int, IDS: int, TGT: int, nsamp: int, T: int, stride: int) -> int {
+    let mut filled = 0; let mut s = 0
+    while s < nsamp {
+        let off = s * stride
+        if off + T + 1 <= n_bytes {
+            let mut p = 0
+            while p < T {
+                t_set(IDS, s * T + p, to_float(bytes_arr[off + p]))
+                t_set(TGT, s * T + p, to_float(bytes_arr[off + p + 1])); p = p + 1
+            }
+            filled = filled + 1
+        }
+        s = s + 1
+    }
+    return filled
+}
+
+// Train a fresh model on one corpus (fixed seed init); write last-epoch
+// per-window CE into ce_out[0..nwin). Returns nwin.
+fn train_corpus_perwin(path: string, epochs: int, ce_out: int) -> int {
+    let T = 24; let d = 8; let E = 2; let V = 256; let K = 3
+    let nsamp = 12
+    let dd = d * d * K; let ed = E * d; let vd = V * d
+    let bytes_arr = read_file_bytes(path)
+    let n_bytes = len(bytes_arr)
+    let mut stride = (n_bytes - T - 1) / nsamp
+    if stride < 1 { stride = 1 }
+    let IDS = t_zeros(nsamp * T); let TGT = t_zeros(nsamp * T)
+    let nwin = windows(bytes_arr, n_bytes, IDS, TGT, nsamp, T, stride)
+    if nwin < 2 { return 0 }
+
+    let embed=t_zeros(vd); t_fill_lcg(embed, vd, 1, 0.3)
+    let ecW=t_zeros(dd); t_fill_lcg(ecW, dd, 2, 0.2); let ecB=t_zeros(d); t_fill_lcg(ecB, d, 3, 0.1)
+    let tcW=t_zeros(dd); t_fill_lcg(tcW, dd, 4, 0.2); let tcB=t_zeros(d); t_fill_lcg(tcB, d, 5, 0.1)
+    let tgG=t_zeros(d); t_fill_lcg(tgG, d, 6, 0.5); let tgB=t_zeros(d); t_fill_lcg(tgB, d, 7, 0.1)
+    let rW=t_zeros(ed); t_fill_lcg(rW, ed, 12, 0.2); let rB=t_zeros(E); t_fill_lcg(rB, E, 13, 0.1)
+    let e0W=t_zeros(dd); t_fill_lcg(e0W, dd, 14, 0.2); let e0B=t_zeros(d); t_fill_lcg(e0B, d, 15, 0.1)
+    let e1W=t_zeros(dd); t_fill_lcg(e1W, dd, 16, 0.2); let e1B=t_zeros(d); t_fill_lcg(e1B, d, 17, 0.1)
+    let noG=t_zeros(d); t_fill_lcg(noG, d, 18, 0.5); let noB=t_zeros(d); t_fill_lcg(noB, d, 19, 0.1)
+    let roW=t_zeros(vd); t_fill_lcg(roW, vd, 20, 0.2); let roB=t_zeros(V); t_fill_lcg(roB, V, 21, 0.1)
+    let dembed=t_zeros(vd); let decW=t_zeros(dd); let decB=t_zeros(d)
+    let dtcW=t_zeros(dd); let dtcB=t_zeros(d); let dtgG=t_zeros(d); let dtgB=t_zeros(d)
+    let drW=t_zeros(ed); let drB=t_zeros(E)
+    let de0W=t_zeros(dd); let de0B=t_zeros(d); let de1W=t_zeros(dd); let de1B=t_zeros(d)
+    let dnoG=t_zeros(d); let dnoB=t_zeros(d); let droW=t_zeros(vd); let droB=t_zeros(V)
+    let m_embed=t_zeros(vd); let v_embed=t_zeros(vd)
+    let m_ecW=t_zeros(dd); let v_ecW=t_zeros(dd); let m_ecB=t_zeros(d); let v_ecB=t_zeros(d)
+    let m_tcW=t_zeros(dd); let v_tcW=t_zeros(dd); let m_tcB=t_zeros(d); let v_tcB=t_zeros(d)
+    let m_tgG=t_zeros(d); let v_tgG=t_zeros(d); let m_tgB=t_zeros(d); let v_tgB=t_zeros(d)
+    let m_rW=t_zeros(ed); let v_rW=t_zeros(ed); let m_rB=t_zeros(E); let v_rB=t_zeros(E)
+    let m_e0W=t_zeros(dd); let v_e0W=t_zeros(dd); let m_e0B=t_zeros(d); let v_e0B=t_zeros(d)
+    let m_e1W=t_zeros(dd); let v_e1W=t_zeros(dd); let m_e1B=t_zeros(d); let v_e1B=t_zeros(d)
+    let m_noG=t_zeros(d); let v_noG=t_zeros(d); let m_noB=t_zeros(d); let v_noB=t_zeros(d)
+    let m_roW=t_zeros(vd); let v_roW=t_zeros(vd); let m_roB=t_zeros(V); let v_roB=t_zeros(V)
+    let ecWq=t_zeros(dd); let ecM=t_zeros(dd); let tcWq=t_zeros(dd); let tcM=t_zeros(dd)
+    let e0Wq=t_zeros(dd); let e0M=t_zeros(dd); let e1Wq=t_zeros(dd); let e1M=t_zeros(dd)
+    let rWq=t_zeros(ed); let rM=t_zeros(ed); let roWq=t_zeros(vd); let roM=t_zeros(vd)
+    let xe=t_zeros(T*d); let xec=t_zeros(T*d); let xt=t_zeros(T*d)
+    let hn0=t_zeros(T*d); let xhat0=t_zeros(T*d); let inv0=t_zeros(1)
+    let eo0=t_zeros(T*d); let eo1=t_zeros(T*d); let probs=t_zeros(T*E); let ex_out=t_zeros(E*T*d)
+    let yn=t_zeros(T*d); let xhatN=t_zeros(T*d); let invN=t_zeros(1)
+    let logits=t_zeros(T*V); let dlogits=t_zeros(T*V)
+    let tok=t_zeros(T); let tgt=t_zeros(T)
+
+    let steps = epochs * nwin
+    let mut step = 1
+    while step <= steps {
+        let w = (step - 1) % nwin
+        let mut p = 0
+        while p < T {
+            t_set(tok, p, t_get(IDS, w * T + p)); t_set(tgt, p, t_get(TGT, w * T + p)); p = p + 1
+        }
+        sem_fwd(tok, embed, ecW, ecB, tcW, tcB, tgG, tgB, rW, rB,
+                e0W, e0B, e1W, e1B, noG, noB, roW, roB,
+                ecWq, ecM, tcWq, tcM, e0Wq, e0M, e1Wq, e1M, rWq, rM, roWq, roM,
+                xe, xec, xt, hn0, xhat0, inv0, eo0, eo1, probs, ex_out, yn, xhatN, invN,
+                logits, T, d, E, V, K)
+        let loss = nn_ce_loss_allpos(logits, tgt, T, V)
+        // last epoch: record per-window CE at its matched slot
+        if step > steps - nwin { t_set(ce_out, w, loss) }
+        sem_ce_grad(logits, tgt, dlogits, T, V)
+        sem_bwd(dlogits, tok, embed, ecWq, tcWq, tgG, rWq, e0Wq, e1Wq, noG, roWq,
+                ecM, tcM, e0M, e1M, rM, roM,
+                xe, xec, xt, hn0, xhat0, inv0, eo0, eo1, probs, ex_out, yn, xhatN, invN,
+                dembed, decW, decB, dtcW, dtcB, dtgG, dtgB, drW, drB, de0W, de0B, de1W, de1B,
+                dnoG, dnoB, droW, droB, T, d, E, V, K)
+        _adam(embed, dembed, m_embed, v_embed, vd, step)
+        _adam(ecW, decW, m_ecW, v_ecW, dd, step); _adam(ecB, decB, m_ecB, v_ecB, d, step)
+        _adam(tcW, dtcW, m_tcW, v_tcW, dd, step); _adam(tcB, dtcB, m_tcB, v_tcB, d, step)
+        _adam(tgG, dtgG, m_tgG, v_tgG, d, step);  _adam(tgB, dtgB, m_tgB, v_tgB, d, step)
+        _adam(rW, drW, m_rW, v_rW, ed, step);     _adam(rB, drB, m_rB, v_rB, E, step)
+        _adam(e0W, de0W, m_e0W, v_e0W, dd, step); _adam(e0B, de0B, m_e0B, v_e0B, d, step)
+        _adam(e1W, de1W, m_e1W, v_e1W, dd, step); _adam(e1B, de1B, m_e1B, v_e1B, d, step)
+        _adam(noG, dnoG, m_noG, v_noG, d, step);  _adam(noB, dnoB, m_noB, v_noB, d, step)
+        _adam(roW, droW, m_roW, v_roW, vd, step); _adam(roB, droB, m_roB, v_roB, V, step)
+        step = step + 1
+    }
+    return nwin
+}
+
+// deterministic LCG -> int in [0, n)
+fn lcg_idx(state: int, n: int) -> int {
+    let s = (state * 1103515245 + 12345) % 2147483648
+    let pos = if s < 0 { 0 - s } else { s }
+    return pos % n
+}
+
+fn main() {
+    println("clm_h911_A — F-CLM-H911-CPU-CAPACITY (full-capacity, paired CI)")
+    let epochs = 12
+    let MAXW = 12
+    let ce_par = t_zeros(MAXW)
+    let ce_con = t_zeros(MAXW)
+    let nwp = train_corpus_perwin("stdlib/flame/testdata/clm_semantic_parallel.txt", epochs, ce_par)
+    let nwc = train_corpus_perwin("stdlib/flame/testdata/clm_semantic_concat.txt", epochs, ce_con)
+    let n = if nwp < nwc { nwp } else { nwc }
+    print("  n_paired_windows = "); println(to_string(n))
+
+    // paired diff d[w] = concat_CE[w] - parallel_CE[w]  (>0 favors H_911)
+    let diff = t_zeros(n)
+    let mut mean = 0.0
+    let mut w = 0
+    while w < n {
+        let dv = t_get(ce_con, w) - t_get(ce_par, w)
+        t_set(diff, w, dv)
+        mean = mean + dv
+        w = w + 1
+    }
+    mean = mean / to_float(n)
+    print("  parallel mean CE = ")
+    let mut sp = 0.0; let mut a = 0; while a < n { sp = sp + t_get(ce_par, a); a = a + 1 }
+    println(to_string(sp / to_float(n)))
+    print("  concat   mean CE = ")
+    let mut sc = 0.0; let mut b = 0; while b < n { sc = sc + t_get(ce_con, b); b = b + 1 }
+    println(to_string(sc / to_float(n)))
+    print("  paired mean diff (concat - parallel) = "); println(to_string(mean))
+
+    // bootstrap CI on the paired diffs (deterministic LCG, B=2000, 95%)
+    let B = 2000
+    let boot = t_zeros(B)
+    let mut state = 987654321
+    let mut bi = 0
+    while bi < B {
+        let mut acc = 0.0
+        let mut k = 0
+        while k < n {
+            state = (state * 1103515245 + 12345) % 2147483648
+            let idx = lcg_idx(state, n)
+            acc = acc + t_get(diff, idx)
+            k = k + 1
+        }
+        t_set(boot, bi, acc / to_float(n))
+        bi = bi + 1
+    }
+    // insertion sort boot
+    let mut ii = 1
+    while ii < B {
+        let key = t_get(boot, ii)
+        let mut jj = ii - 1
+        while jj >= 0 && t_get(boot, jj) > key {
+            t_set(boot, jj + 1, t_get(boot, jj)); jj = jj - 1
+        }
+        t_set(boot, jj + 1, key); ii = ii + 1
+    }
+    let lo_i = to_int(0.025 * to_float(B))
+    let hi_i = to_int(0.975 * to_float(B))
+    let ci_lo = t_get(boot, lo_i)
+    let ci_hi = t_get(boot, hi_i)
+    print("  bootstrap 95% CI = ["); print(to_string(ci_lo)); print(", "); print(to_string(ci_hi)); println("]")
+
+    if ci_lo > 0.0 {
+        println("F-CLM-H911-CPU-CAPACITY = 1")
+        println("TIER 🟢 — full-capacity learner separates parallel<concat, paired CI>0 (H_911 real given capacity; AKD1000 #1652/#1653 🔴 = edge-learn-capacity limit)")
+        return
+    }
+    println("F-CLM-H911-CPU-CAPACITY = 0")
+    println("TIER 🔴 — paired CI straddles/≤0; even full-capacity host cannot separate (corpus/measure problem)")
+}
