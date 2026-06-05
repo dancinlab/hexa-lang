@@ -56,6 +56,8 @@
 //   not alias when the grid contains 2·max|h| per axis — we size for it).
 
 use "stdlib/signal/core_fft"
+use "stdlib/qforge/screening"      // qforge_fx_lda — LDA-exchange kernel f_x[ρ]
+use "stdlib/qforge/correlation"    // qforge_fc_pw92 — PW92 correlation kernel f_c[ρ]
 
 let PWFFT_PI: float = 3.14159265358979323846
 let PWFFT_4PI: float = 12.5663706143591729539
@@ -83,8 +85,26 @@ let mut PWFFT_NZ: int = 0
 let mut PWFFT_B1: [float] = []      // reciprocal basis (for |G|² on the grid)
 let mut PWFFT_B2: [float] = []
 let mut PWFFT_B3: [float] = []
-let mut PWFFT_FXC: float = 0.0      // uniform-gas f_xc[ρ̄] local kernel coeff
+let mut PWFFT_FXC: float = 0.0      // uniform-gas f_xc[ρ̄] local kernel coeff (FALLBACK)
 let mut PWFFT_LIN: [int] = []       // precomputed grid linear index per coefficient
+
+// ── LOCAL-ALDA (Adler-Wiser local-field) kernel state — the RPA+ALDA closure ─────
+//   The uniform-gas PWFFT_FXC above is a SINGLE scalar f_xc[ρ̄] at the MEAN density —
+//   the QE-miss residual the gate isolated (screened CaH6 λ=5.05, 15.44% off QE
+//   4.376). The GENUINE adiabatic-LDA local-field kernel is SPATIALLY LOCAL:
+//       ΔV_xc(r) = f_xc[ρ(r)]·Δρ(r),   f_xc[ρ] = dV_xc/dρ |_{ρ(r)}
+//   evaluated at the LOCAL ground-state density ρ(r) on the real-space grid (NOT ρ̄).
+//   ρ(r) is reconstructed from the SAME ψ_n columns the convolution already FFTs
+//   (ρ(r)=Σ_n 2ψ_n(r)², spin-degenerate occ=2) and normalized to a physical density
+//   by the cell volume Ω / Ntot (the real-space cube's volume element). This is the
+//   beyond-uniform-gas correction QE's ε⁻¹-screened |g|² carries. d6 — reported as a
+//   witness (PWFFT_LOCAL_XC count) so a run shows whether the local kernel fired.
+let mut PWFFT_LOCAL: bool = false   // local-ALDA mode (vs uniform-gas scalar fallback)
+let mut PWFFT_OMEGA: float = 0.0    // cell volume Ω (bohr³) — ρ(r) physical normalization
+let mut PWFFT_XCMODE: int = 1       // 0=Hartree-only · 1=+LDA-x · 2=+LDA-x+PW92-c
+let mut PWFFT_LOCAL_XC: int = 0     // witness: #folds that used the local-ALDA kernel
+pub fn qpwfft_local_xc_folds() -> int { return PWFFT_LOCAL_XC }
+pub fn qpwfft_is_local() -> bool { return PWFFT_LOCAL }
 
 // ── recover the integer Miller index of a cartesian G against the reciprocal basis
 //   Solve G = h·b1 + k·b2 + l·b3 for integer (h,k,l) by the closed-form inverse of
@@ -220,6 +240,20 @@ fn _qpwfft_stage_core(n: int, hh: [int], kk: [int], ll: [int],
 pub fn qpwfft_is_on() -> bool { return PWFFT_ON }
 pub fn qpwfft_grid_dims() -> [int] { return [PWFFT_NX, PWFFT_NY, PWFFT_NZ] }
 
+// ── qpwfft_enable_local_alda — switch the screening kernel from the uniform-gas
+//    scalar f_xc[ρ̄] to the SPATIALLY-LOCAL adiabatic-LDA f_xc[ρ(r)]·Δρ(r) (the
+//    Adler-Wiser local-field / RPA+ALDA closure). Call AFTER qpwfft_stage(_miller).
+//      omega   : cell volume Ω (bohr³) — physical ρ(r) normalization (ρ = weight·Ntot/Ω).
+//      xc_mode : 0=Hartree-only · 1=+LDA-exchange · 2=+LDA-x+PW92-correlation.
+//    The local kernel is evaluated per real-space grid point from ρ(r)=Σ_n 2ψ_n(r)²
+//    reconstructed inside qpwfft_dvscr_from_dpsi (the ψ columns are already FFT'd
+//    there for Δρ — zero extra transforms beyond the ground-state |ψ|² accumulation).
+//    d4 GENERIC — Ω + xc_mode are DATA; d6 — PWFFT_LOCAL_XC witnesses the engage.
+pub fn qpwfft_enable_local_alda(omega: float, xc_mode: int) {
+    if omega > 0.0 { PWFFT_LOCAL = true ; PWFFT_OMEGA = omega ; PWFFT_XCMODE = xc_mode }
+}
+pub fn qpwfft_disable_local_alda() { PWFFT_LOCAL = false }
+
 // ── ROUTING WITNESS (d6) — observability for the ad_map→FFT engage path ──────────
 //   PWFFT_FOLDS counts how many times qpwfft_dvscr_from_dpsi returned a VALID length-n
 //   correction (the genuine convolution actually folded). PWFFT_LAST_ERR records the
@@ -231,7 +265,27 @@ let mut PWFFT_FOLDS: int = 0
 let mut PWFFT_LAST_ERR: int = 0
 pub fn qpwfft_folds() -> int { return PWFFT_FOLDS }
 pub fn qpwfft_last_err() -> int { return PWFFT_LAST_ERR }
-pub fn qpwfft_reset_witness() { PWFFT_FOLDS = 0 ; PWFFT_LAST_ERR = 0 }
+pub fn qpwfft_reset_witness() { PWFFT_FOLDS = 0 ; PWFFT_LAST_ERR = 0 ; PWFFT_LOCAL_XC = 0 }
+
+// ── REUSABLE SCRATCH (memory-efficiency, the n=645 DEFER retry-recipe #1) ─────────
+//   The per-fold convolution allocated ~20 fresh Ntot grids PER CALL × nb bands ×
+//   {6,40} Anderson iters × 3 dirs at the converged basis → OOM-killed mid-screening
+//   (RSS 4-5 GB, jetsam). These module-level buffers are sized once per cell (in
+//   qpwfft_*_stage_core) and CLEARED (not reallocated) per use, eliminating the
+//   N×folds allocation churn. d4/d6 — pure scratch, zero physics change.
+let mut PWFFT_ZIM: [float] = []          // reusable zero-imaginary Ntot buffer
+fn _qpwfft_zim() -> [float] {
+    let ntot = PWFFT_NX * PWFFT_NY * PWFFT_NZ
+    if len(PWFFT_ZIM) != ntot {
+        PWFFT_ZIM = []
+        let mut p = 0
+        while p < ntot { PWFFT_ZIM.push(0.0) ; p = p + 1 }
+    } else {
+        let mut p = 0
+        while p < ntot { PWFFT_ZIM[p] = 0.0 ; p = p + 1 }
+    }
+    return PWFFT_ZIM
+}
 
 // ── scatter a PW-coefficient vector c (length n) onto the (Nx,Ny,Nz) reciprocal
 //    grid as a split complex field [re(Ntot), im(Ntot)] (coefficients are REAL → im=0).
@@ -248,10 +302,7 @@ fn _qpwfft_scatter(c: [float]) -> [float] {
 // ── inverse-FFT a scattered reciprocal field → real-space field (real part, length Ntot)
 fn _qpwfft_to_real(re_grid: [float]) -> [float] {
     let ntot = PWFFT_NX * PWFFT_NY * PWFFT_NZ
-    let mut im: [float] = []
-    let mut p = 0
-    while p < ntot { im.push(0.0) ; p = p + 1 }
-    let inter = ifft3(re_grid, im, PWFFT_NX, PWFFT_NY, PWFFT_NZ)
+    let inter = ifft3(re_grid, _qpwfft_zim(), PWFFT_NX, PWFFT_NY, PWFFT_NZ)
     if len(inter) != 2 * ntot { return [] }
     let mut out: [float] = []
     p = 0
@@ -270,10 +321,14 @@ pub fn qpwfft_dvscr_from_dpsi(psis: [[float]], dpsi: [[float]]) -> [float] {
     if nb < 1 || len(dpsi) != nb { PWFFT_LAST_ERR = 2 ; return [] }
     let n = PWFFT_N
     let ntot = PWFFT_NX * PWFFT_NY * PWFFT_NZ
-    // ⑤ accumulate Δρ(r) = Σ_n 2·ψ_n(r)·Δψ_n(r) on the real-space cube.
+    // ⑤ accumulate Δρ(r) = Σ_n 2·ψ_n(r)·Δψ_n(r) on the real-space cube. When the
+    //   LOCAL-ALDA kernel is on, ALSO accumulate the ground-state ρ(r)=Σ_n 2·ψ_n(r)²
+    //   from the SAME ψ_n(r) transforms (zero extra FFTs) — the LOCAL density at
+    //   which f_xc[ρ(r)] is evaluated (the Adler-Wiser local-field, beyond ρ̄).
     let mut drho_r: [float] = []
+    let mut rho_r: [float] = []
     let mut p = 0
-    while p < ntot { drho_r.push(0.0) ; p = p + 1 }
+    while p < ntot { drho_r.push(0.0) ; rho_r.push(0.0) ; p = p + 1 }
     let mut nbnd = 0
     while nbnd < nb {
         if len(psis[nbnd]) != n || len(dpsi[nbnd]) != n { PWFFT_LAST_ERR = 3 ; return [] }
@@ -281,7 +336,11 @@ pub fn qpwfft_dvscr_from_dpsi(psis: [[float]], dpsi: [[float]]) -> [float] {
         let dps_r = _qpwfft_to_real(_qpwfft_scatter(dpsi[nbnd]))
         if len(psi_r) != ntot || len(dps_r) != ntot { PWFFT_LAST_ERR = 4 ; return [] }
         let mut r = 0
-        while r < ntot { drho_r[r] = drho_r[r] + 2.0 * psi_r[r] * dps_r[r] ; r = r + 1 }
+        while r < ntot {
+            drho_r[r] = drho_r[r] + 2.0 * psi_r[r] * dps_r[r]
+            if PWFFT_LOCAL { rho_r[r] = rho_r[r] + 2.0 * psi_r[r] * psi_r[r] }
+            r = r + 1
+        }
         nbnd = nbnd + 1
     }
     // ── FFT-NORMALIZATION FIX (the migration-gate magnitude bug, d6 — DERIVED) ────────
@@ -299,10 +358,7 @@ pub fn qpwfft_dvscr_from_dpsi(psis: [[float]], dpsi: [[float]]) -> [float] {
     let mut rsc = 0
     while rsc < ntot { drho_r[rsc] = drho_r[rsc] * nt2 ; rsc = rsc + 1 }
     // ⑥ forward-FFT Δρ(r) → Δρ̂(G); apply Poisson V_H(G)=4π Δρ̂(G)/|G|² (G=0→0).
-    let mut zim: [float] = []
-    p = 0
-    while p < ntot { zim.push(0.0) ; p = p + 1 }
-    let spec = fft3(drho_r, zim, PWFFT_NX, PWFFT_NY, PWFFT_NZ)
+    let spec = fft3(drho_r, _qpwfft_zim(), PWFFT_NX, PWFFT_NY, PWFFT_NZ)
     if len(spec) != 2 * ntot { PWFFT_LAST_ERR = 5 ; return [] }
     let mut vh_re: [float] = [] ; let mut vh_im: [float] = []
     let mut ix = 0
@@ -331,17 +387,35 @@ pub fn qpwfft_dvscr_from_dpsi(psis: [[float]], dpsi: [[float]]) -> [float] {
         }
         ix = ix + 1
     }
-    // inverse-FFT V_H(G) → V_H(r) (real part), then add the local LDA f_xc[ρ̄]·Δρ(r).
+    // inverse-FFT V_H(G) → V_H(r), then add the adiabatic-LDA xc kernel ΔV_xc(r).
+    //   ── LOCAL-ALDA (the RPA+ALDA / Adler-Wiser local-field closure, d2/d6) ──
+    //   ΔV_xc(r) = f_xc[ρ(r)]·Δρ(r) with f_xc evaluated at the LOCAL physical density
+    //   ρ_phys(r) = ρ_weight(r)·Ntot/Ω (the |ψ|² FFT round-trip carries a 1/Ntot grid
+    //   normalization; ×Ntot/Ω restores the physical density in bohr⁻³). f_x[ρ] (LDA-
+    //   exchange, xc_mode≥1) + f_c[ρ] (PW92 correlation, xc_mode≥2). This REPLACES the
+    //   single uniform-gas scalar PWFFT_FXC·Δρ — the QE-miss residual the gate isolated.
+    //   ── FALLBACK (PWFFT_LOCAL off): the prior uniform-gas scalar f_xc[ρ̄] term. ──
     let vh_back = ifft3(vh_re, vh_im, PWFFT_NX, PWFFT_NY, PWFFT_NZ)
     if len(vh_back) != 2 * ntot { PWFFT_LAST_ERR = 6 ; return [] }
     let mut dvscr_r: [float] = []
-    p = 0
-    while p < ntot { dvscr_r.push(vh_back[p * 2] + PWFFT_FXC * drho_r[p]) ; p = p + 1 }
+    if PWFFT_LOCAL && PWFFT_OMEGA > 0.0 {
+        let dens_scale = to_float(ntot) / PWFFT_OMEGA   // grid weight → physical ρ(r)
+        p = 0
+        while p < ntot {
+            let rho_phys = rho_r[p] * dens_scale
+            let mut fxc = 0.0
+            if PWFFT_XCMODE >= 1 { fxc = fxc + qforge_fx_lda(rho_phys) }   // LDA exchange
+            if PWFFT_XCMODE >= 2 { fxc = fxc + qforge_fc_pw92(rho_phys) }  // PW92 correlation
+            dvscr_r.push(vh_back[p * 2] + fxc * drho_r[p])                 // f_xc[ρ(r)]·Δρ(r)
+            p = p + 1
+        }
+        PWFFT_LOCAL_XC = PWFFT_LOCAL_XC + 1                                // d6 engage witness
+    } else {
+        p = 0
+        while p < ntot { dvscr_r.push(vh_back[p * 2] + PWFFT_FXC * drho_r[p]) ; p = p + 1 }
+    }
     // ⑦ forward-FFT ΔV_scr(r) → ΔV_scr(G); GATHER onto the PW coefficients.
-    let mut zim2: [float] = []
-    p = 0
-    while p < ntot { zim2.push(0.0) ; p = p + 1 }
-    let vspec = fft3(dvscr_r, zim2, PWFFT_NX, PWFFT_NY, PWFFT_NZ)
+    let vspec = fft3(dvscr_r, _qpwfft_zim(), PWFFT_NX, PWFFT_NY, PWFFT_NZ)
     if len(vspec) != 2 * ntot { PWFFT_LAST_ERR = 7 ; return [] }
     let inv_ntot = 1.0 / to_float(ntot)
     let mut out: [float] = []

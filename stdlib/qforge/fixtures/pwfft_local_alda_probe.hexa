@@ -1,0 +1,52 @@
+// Quick probe: does the LOCAL-ALDA kernel produce a NON-ZERO, DIFFERENT screening
+// correction vs the uniform-gas scalar fallback? Synthetic ψ/Δψ on a small basis —
+// confirms the engage path without the full converged SCF (fast diagnostic).
+use "stdlib/qforge/screening_pwfft"
+
+fn _norm(v: [float]) -> float {
+    let mut s = 0.0 ; let mut i = 0
+    while i < len(v) { s = s + v[i] * v[i] ; i = i + 1 }
+    return sqrt(s)
+}
+
+fn main() {
+    // a tiny cubic reciprocal basis (b = 2π/a · ê, a=4 bohr) with a handful of G's.
+    let tp = 1.5707963267948966   // 2π/4
+    let b1 = [tp, 0.0, 0.0] ; let b2 = [0.0, tp, 0.0] ; let b3 = [0.0, 0.0, tp]
+    // 4 plane waves: (0,0,0),(1,0,0),(0,1,0),(1,1,0) — exact Miller indices.
+    let gvecs = [0.0,0.0,0.0,  tp,0.0,0.0,  0.0,tp,0.0,  tp,tp,0.0]
+    let miller = [0.0,0.0,0.0,  1.0,0.0,0.0,  0.0,1.0,0.0,  1.0,1.0,0.0]
+    let n = 4
+    // mean f_xc scalar (uniform-gas fallback coeff).
+    let fxc_scalar = -0.5
+    let ok = qpwfft_stage_miller(gvecs, miller, b1, b2, b3, fxc_scalar)
+    println("stage_miller ok=" + to_string(ok) + " grid=" + to_string(qpwfft_grid_dims()[0])
+            + "x" + to_string(qpwfft_grid_dims()[1]) + "x" + to_string(qpwfft_grid_dims()[2]))
+
+    // one occupied band + one Δψ (synthetic, non-orthogonal so Δρ≠0).
+    let psi = [0.8, 0.3, 0.2, 0.1]
+    let dpsi = [0.1, 0.4, 0.05, 0.2]
+    let psis = [psi]
+    let dpsis = [dpsi]
+
+    // (A) uniform-gas scalar path (PWFFT_LOCAL off — default).
+    qpwfft_reset_witness()
+    let dv_scalar = qpwfft_dvscr_from_dpsi(psis, dpsis)
+    println("[scalar] len=" + to_string(len(dv_scalar)) + " ‖dv‖=" + to_string(_norm(dv_scalar))
+            + " folds=" + to_string(qpwfft_folds()) + " local-folds=" + to_string(qpwfft_local_xc_folds())
+            + " err=" + to_string(qpwfft_last_err()))
+
+    // (B) LOCAL-ALDA path (enable with Ω, xc_mode=2 = x+c).
+    qpwfft_reset_witness()
+    qpwfft_enable_local_alda(64.0, 2)   // Ω=64 bohr³ (a=4)
+    let dv_local = qpwfft_dvscr_from_dpsi(psis, dpsis)
+    println("[local ] len=" + to_string(len(dv_local)) + " ‖dv‖=" + to_string(_norm(dv_local))
+            + " folds=" + to_string(qpwfft_folds()) + " local-folds=" + to_string(qpwfft_local_xc_folds())
+            + " err=" + to_string(qpwfft_last_err()) + " is_local=" + to_string(qpwfft_is_local()))
+
+    // difference (the beyond-uniform-gas correction).
+    let mut diff = 0.0 ; let mut i = 0
+    while i < len(dv_local) && i < len(dv_scalar) { let d = dv_local[i] - dv_scalar[i] ; diff = diff + d*d ; i = i + 1 }
+    println("‖local − scalar‖ = " + to_string(sqrt(diff)) + "  (non-zero ⟹ local-field correction is real)")
+    println("=== PROBE DONE ===")
+}

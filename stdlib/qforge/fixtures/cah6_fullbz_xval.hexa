@@ -18,8 +18,10 @@
 // violation.
 //
 // args:  <deck_dir> <npw_cap> <nq>   (npw_cap=0 → full ecut shell; nq = MP q divisions)
-// Run (summer GPU): HEXA_STDLIB_ROOT="$PWD/stdlib" hexa run --no-sentinel \
+// Run: HEXA_LANG="$PWD" hexa run --no-sentinel \
 //        stdlib/qforge/fixtures/cah6_fullbz_xval.hexa <deck> <npw_cap> <nq>
+//   (HEXA_LANG = the repo-root override the loader honors; HEXA_STDLIB_ROOT is NOT
+//    a real loader var — a run with it silently resolves the STALE ~/.hx/src stdlib.)
 
 use "stdlib/qforge/pw_frontend"
 use "stdlib/qforge/qforge_run"
@@ -40,7 +42,7 @@ fn main() {
     let screened = if len(av) > 4 { to_int(av[4]) != 0 } else { true }
     let scr_beta = if len(av) > 5 { to_float(av[5]) } else { 0.3 }
     let scr_md   = if len(av) > 6 { to_int(av[6]) } else { 5 }
-    let scr_maxit = 40
+    let scr_maxit = 6
 
     println("=== QFORGE MIGRATION GATE — converged-CaH6 full-BZ λ cross-val (d6 VERBATIM) v3-SCREENED ===")
     println("deck=" + deck_dir + "  npw_cap=" + to_string(npw_cap)
