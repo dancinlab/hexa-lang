@@ -86,3 +86,26 @@ verdict .verdicts/hexa-cuda/F-HEXACUDA-ADOPTION-DX.txt.)
       at gpu/gpu_intrinsics.lsp.json (29 items, validated). self/lsp.hexa
       parse-checks clean; in-tree bin/hexa-lsp rebuild build-verify pending (fresh
       worktree lacks the bootstrap self/native/hexat artifact).
+- [x] D10 — DOJO (learn-by-doing): `hexa dojo hexa-cuda <slug> '<spec>'` emits
+      `@gpu_kernel` authoring katas — a 4-rung ladder (vec-add · reduction ·
+      tiled-gemm · wmma) of kernel.hexa + CPU oracle + host gpu_launch shape +
+      run.sh parse-gate + README, with a `--lang=both` `.cu`/ctypes contrast.
+      REAL intrinsics only (gpu/SPEC.md §5/§6; wmma kept parse-clean — the
+      gpu_wmma_* family is codegen-level/RFC 067, documented not source-called).
+      Sibling track `hexa dojo flame-forge` emits flame `.hexa` trainers (linreg ·
+      mlp · tiny-clm) with a descent gate. All 7 emitted katas hexa-parse clean;
+      all 3 flame-forge trainers RUN + PASS the descent gate (local CPU).
+      PREFLIGHT-HARDENED: the flame-forge run.sh cloud path (DOJO_CLOUD=1) sources
+      tool/dojo_rent_preflight.sh — the 6-fix "no-troubleshoot" RunPod rent/preflight
+      helper (image-tag validation · PUBLIC_KEY inject · supply ladder 8→4→2 /
+      SECURE→COMMUNITY / H200→H100→A100 · failure classification · per-GPU mem
+      OOM-block via stdlib/cloud/preflight.hexa · torchrun --tee/--redirect log
+      harvest), reflecting sidecar handoff 4474f21b (anima 7B DDP fire). Helper
+      self-tests GREEN (all 6 fixes, no rental); OOM-block + auth fail-fast verified
+      locally — NO silent dead pods. Docs: docs/hexa-dojo.md (incl. the
+      no-troubleshoot preflight section). Verdict:
+      .verdicts/hexa-cuda/F-HEXACUDA-DOJO.txt (GREEN). Build-verify pending:
+      `hexa dojo domains` listing both [full] via the INSTALLED binary (Jun-1
+      binary caches a precompiled stdlib/dojo snapshot — SOURCE verified via
+      self-contained compile) · NVPTX PTX emission (needs a CUDA host) · a live
+      multi-GPU DDP rent (preflight LOGIC locally verified).
