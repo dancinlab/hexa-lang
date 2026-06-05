@@ -484,12 +484,20 @@ the own-GEMM gap lifts the whole stack automatically.
 - [x] **W6 cp.async multi-stage ring (async-pipe)** ✅ (#2833) — own **38.0 → 50.7 TFLOP/s** @4096³, rel-RMS **0**
       (+33%) → **8.39× off** cuBLAS-TF32 (~422). ~11.5% of gap closed. warp-spec first pass: race fixed
       (`wg_bar`) → rel-RMS 0 but 35.0 only (a SINGLE consumer warpgroup STARVES the tensor cores at TM=64).
-- [ ] **W7 dual-consumer-warpgroup warp-spec (TM=128)** ★ NEXT — ≥2 consumer warpgroups issue `wgmma` while
-      1 produces (TMA) + register-blocked accumulation. **This is the parallelism the single-WG warp-spec lacked
-      — and it is the OWN-GEMM kernel's own breakthrough** (forge `.cu`, expressible per W6's bit-exact surface,
-      and cuBLAS proves the silicon reaches peak this way). Target: **8.39× → toward strict ≤1.3× parity**.
-      GPU sm_90a; bit-exact GATE before any perf number. verdict (W6): `.verdicts/hexa-fusion/F-FUSION-SM90-WGMMA-WARPSPEC.txt`.
+- [x] **W7 dual-consumer-warpgroup warp-spec (TM=128)** — 🔴 CLOSED-NEGATIVE (bit-exact, occupancy-bound).
+      BUILT (MODE 3 `gemm_ws2`, 384 thr = 3 WG: 1 cp.async producer WG + 2 consumer WGs each `wgmma` over its
+      64-row band × the SHARED B tile) + run on native sm_90a H100 (vast 39651872, DESTROYED leak 0, nvcc 12.5.82).
+      **BIT-EXACT** (rel_rms **0** @ S=2048/4096, NST=2..5) but **32.0 TFLOP/s (13.2×) — SLOWER** than W6 async-pipe
+      50.7 (8.39×). W7 hypothesis FALSIFIED. Root cause (on-pod `cudaOccupancyMaxActiveBlocksPerMultiprocessor`):
+      a 128-thread cp.async producer WG at TM=128 is **register-bound to 1 block/SM** (90 regs × 384 thr;
+      2 CTAs = 69120 > 65536 regs/SM) → 256 compute-thr/SM vs async-pipe's 4×128 = 512. More consumer WGs cannot win
+      while the producer eats a full WG AND evicts the 2nd resident CTA. verdict: `.verdicts/hexa-fusion/F-FUSION-SM90-WGMMA-W7.txt`.
+- [ ] **W8 TMA-driven production** ★ NEXT — `cp.async.bulk.tensor` + a SINGLE elected producer thread (freeing the
+      other 127) so a dual/quad-consumer-WG warp-spec keeps FULL compute occupancy. cuBLAS reaches sm_90a peak exactly
+      this way (hardware TMA producer, not a 128-thread cp.async WG). Bring-over: `self/native/wgmma/wgmma_tma_gemm.cu`.
+      Target: **8.39× → toward strict ≤1.3× parity**. GPU sm_90a; bit-exact GATE before any perf number.
 
-**STATE**: correctness is CLOSED (W2/W3 bit-exact 2048³/4096³); the residual is now PURELY occupancy /
-warpgroup-parallelism (W7), NOT layout / NOT emit-path / NOT 불가 — cuBLAS reaches peak on the SAME sm_90a
-silicon via more warpgroup parallelism. Parity OPEN, de-risked, own-GEMM-owned. cuBLAS = roofline, no superiority claim.
+**STATE**: correctness is CLOSED (W2/W3 bit-exact 2048³/4096³). W7 sharpened the residual: warp-spec
+parity is NOT achievable with a cp.async-producer WG (register-bound 1 CTA/SM, measured) — it requires
+**TMA-driven production** (W8, near-zero producer threads), NOT layout / NOT emit-path / NOT 불가. Frontier
+kernel = W6 async-pipe (50.7, 8.39×). Parity OPEN, de-risked, own-GEMM-owned. cuBLAS = roofline, no superiority claim.
