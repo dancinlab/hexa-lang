@@ -1,0 +1,9 @@
+// vecadd.hexa — HEXA-CUDA D2 silicon-validation kernel (cookbook §4.1)
+@gpu_kernel
+fn vec_add(a: [f64], b: [f64], out: [f64], n: i64) {
+    let gid = gpu_block_id_x() * gpu_block_dim_x() + gpu_thread_id_x()
+    if to_i64(gid) < n {
+        let i = to_i64(gid)
+        out[i] = a[i] + b[i]
+    }
+}

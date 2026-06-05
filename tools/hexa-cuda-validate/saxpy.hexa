@@ -1,0 +1,9 @@
+// saxpy.hexa — HEXA-CUDA D2 silicon-validation kernel (cookbook §4.2)
+@gpu_kernel
+fn saxpy(y: [f64], x: [f64], par: [f64], n: i64) {
+    let gid = gpu_block_id_x() * gpu_block_dim_x() + gpu_thread_id_x()
+    if to_i64(gid) < n {
+        let i = to_i64(gid)
+        y[i] = par[0] * x[i] + y[i]     // par[0] = alpha
+    }
+}
