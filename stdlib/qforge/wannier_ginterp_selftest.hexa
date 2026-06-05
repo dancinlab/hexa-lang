@@ -1,0 +1,250 @@
+// @ci_gate — pure · network-free · deterministic (stdlib_selftest_aggregate --ci-gate)
+//
+// wannier_ginterp_selftest.hexa — QFORGE L4.w (EPW-style Wannier |g|
+// q-interpolation) g5 gate.
+//
+// Pins the central EPW claim: the el-ph matrix elements can be computed on a
+// SMALL COARSE q-mesh, Fourier-transformed to real-space g(R), and inverse-
+// transformed to ANY DENSE q — EXACTLY — when g(R) is short-ranged (contained
+// in the coarse mesh's Wigner-Seitz R-box). We do NOT run DFPT; we build a
+// SYNTHETIC g(q) with a KNOWN short-range real-space decay
+//
+//     g(q) = Σ_{R∈S}  c_R · e^{ +i 2π q·R }     (S = a few short-range R-vectors)
+//
+// whose g(R) is, by construction, EXACTLY {c_R : R∈S} and ZERO elsewhere. The
+// gate then shows the Wannier-interpolated λ from a COARSE q-mesh REPRODUCES the
+// direct dense-DFPT λ (same dense q-mesh, same α²F→λ driver) to machine tol.
+//
+// g5 CHECKS (numerical identity — NO LLM judge):
+//  (1) ROUND-TRIP IDENTITY (🔵) — forward∘inverse on the COARSE q-points returns
+//      the original g(q): |g_interp(q_c) − g_true(q_c)| < 1e-10 ∀ coarse q.
+//  (2) g(R) RECOVERY (🔵) — the forward DFT recovers the planted c_R at the
+//      seeded R-vectors and ~0 at the unseeded ones (short-range fingerprint).
+//  (3) COARSE→DENSE EXACTNESS (🟢, the headline) — the Wannier-interpolated λ
+//      on a DENSE 8×8×8 mesh (interp from a COARSE 4×4×4) matches the DIRECT
+//      dense λ (true g(q) on every dense q) to rel-ε < 1e-9. This is the
+//      "coarse→dense interpolation is exact for short-ranged g(R)" verdict.
+//  (4) DENSE ≠ COARSE λ (🟢 distinctness) — the dense λ differs materially from
+//      the coarse-only λ (the dense mesh genuinely samples NEW q-points the
+//      coarse run never had), so (3) is a real interpolation, not a tautology.
+//  (5) NEGATIVE CONTROL (🔴/d6 honest) — a LONG-ranged g(R) (R-vectors OUTSIDE
+//      the coarse box, |R|=3 vs coarse rbox=1) is ALIASED by the coarse 3×3×3
+//      forward DFT, so the interpolated λ does NOT reproduce the dense λ
+//      (rel-ε ≫ 1%). Proves the exactness is CONDITIONAL on short-rangedness —
+//      the d6 honest caveat (a polar-Fröhlich tail would need a larger mesh /
+//      polar subtraction, exactly as EPW does).
+//
+// Run:  HEXA_STDLIB_ROOT="$PWD/stdlib" hexa run \
+//         stdlib/qforge/wannier_ginterp_selftest.hexa
+// PASS: exits printing "wannier_ginterp_selftest PASS".
+
+use "stdlib/qforge/wannier_ginterp"
+use "stdlib/qforge/metallic_a2f"
+use "stdlib/qforge/mpgrid"
+use "stdlib/material/sim"
+
+let _W_TWOPI: float = 6.28318530717958647692
+let _W_NEF:   float = 1.0
+let _W_SIGEL: float = 0.05
+let _W_SIGPH: float = 1.5
+let _W_W0:    float = 300.0   // base phonon freq (K) for the dispersion ω(q)
+
+fn _abs(x: float) -> float { if x < 0.0 { return -x } return x }
+
+fn _ck(name: str, got: float, want: float, tol: float) -> int {
+    let w = _abs(want)
+    let d = _abs(got - want)
+    let rel = if w < 1e-12 { d } else { d / w }
+    if rel <= tol {
+        println("PASS " + name + " (got " + to_string(got) + " · rel " + to_string(rel) + ")")
+        return 0
+    }
+    println("FAIL " + name + " — got " + to_string(got) + " want " + to_string(want) +
+            " (rel " + to_string(rel) + ")")
+    return 1
+}
+
+fn _assert(name: str, cond: bool, detail: str) -> int {
+    if cond { println("PASS " + name + "  " + detail) ; return 0 }
+    println("FAIL " + name + "  " + detail) ; return 1
+}
+
+fn _grid(wlo: float, whi: float, ng: int) -> [float] {
+    let mut g: [float] = []
+    let step = (whi - wlo) / to_float(ng - 1)
+    let mut j = 0
+    while j < ng { g.push(wlo + step * to_float(j)) ; j = j + 1 }
+    return g
+}
+
+// dispersion ω(q) — a real metallic branch disperses; same form both runs use.
+fn _omega_of_q(qx: float, qy: float, qz: float) -> float {
+    let aq = _abs(qx) + _abs(qy) + _abs(qz)
+    return _W_W0 * (1.0 + 0.6 * aq)
+}
+
+// ── SHORT-RANGE synthetic g(q): g(q)=Σ_R c_R e^{i2π q·R} over a few |R|≤1 R ──
+// Planted real-space content (the "Wannier" g(R)): a Γ term + 3 nearest-shell
+// terms. By construction g(R) is EXACTLY these c_R and ZERO for all other R, so
+// a coarse mesh with rbox≥1 contains the full decay range ⇒ interpolation exact.
+//   R=(0,0,0): c=1.0    R=(1,0,0): c=0.4   R=(0,1,0): c=0.3   R=(0,0,1): c=0.2
+fn _g_short(qx: float, qy: float, qz: float) -> [float] {
+    let mut re = 1.0   // Γ (R=0): c=1, phase 0
+    let mut im = 0.0
+    // R=(1,0,0) c=0.4
+    let p1 = _W_TWOPI * qx ;  re = re + 0.4 * cos(p1) ; im = im + 0.4 * sin(p1)
+    // R=(0,1,0) c=0.3
+    let p2 = _W_TWOPI * qy ;  re = re + 0.3 * cos(p2) ; im = im + 0.3 * sin(p2)
+    // R=(0,0,1) c=0.2
+    let p3 = _W_TWOPI * qz ;  re = re + 0.2 * cos(p3) ; im = im + 0.2 * sin(p3)
+    return [re, im]
+}
+
+// ── LONG-RANGE synthetic g(q): adds an R=(3,0,0) term OUTSIDE a rbox=1 box ──
+// g(R) now has weight at |R|=3, which a coarse 3×3×3 mesh (rbox=1) CANNOT see
+// without aliasing — the negative-control case (long-ranged / polar tail).
+fn _g_long(qx: float, qy: float, qz: float) -> [float] {
+    let g = _g_short(qx, qy, qz)
+    let p = _W_TWOPI * 3.0 * qx
+    return [g[0] + 0.5 * cos(p), g[1] + 0.5 * sin(p)]
+}
+
+// sample a complex g closure over an MpGrid → flat g_re[], g_im[] (q-order).
+fn _sample(grid: MpGrid, gfn) -> [[float]] {
+    let mut gre: [float] = []
+    let mut gim: [float] = []
+    let mut i = 0
+    while i < grid.npoints {
+        let qx = grid.coords[3 * i]
+        let qy = grid.coords[3 * i + 1]
+        let qz = grid.coords[3 * i + 2]
+        let g = gfn(qx, qy, qz)
+        gre.push(g[0]) ; gim.push(g[1])
+        i = i + 1
+    }
+    return [gre, gim]
+}
+
+// DIRECT-dense λ: provider evaluates the TRUE complex g(q) on every dense q and
+// squares it — the dense-DFPT reference (NO interpolation). Same metallic-a2f
+// driver, same ω(q), same on-shell electrons as the Wannier path → λ diff is
+// the interpolation error alone.
+fn _direct_lambda(dense: MpGrid, gfn, og: [float]) -> float {
+    let prov = fn(qx: float, qy: float, qz: float) -> [float] {
+        let g = gfn(qx, qy, qz)
+        let g2 = g[0] * g[0] + g[1] * g[1]
+        return [_omega_of_q(qx, qy, qz), g2, 0.0, 0.0]
+    }
+    return qforge_metallic_lambda_mesh(dense, prov, 1, 0.0, _W_NEF, og,
+                                       _W_SIGEL, _W_SIGPH)
+}
+
+fn main() {
+    let mut fails = 0
+
+    // coarse 4×4×4 (the EXPENSIVE DFPT mesh) · dense 8×8×8 (the target)
+    let coarse = qforge_mp_grid(4, 4, 4, 0, 0, 0)
+    let dense  = qforge_mp_grid(8, 8, 8, 0, 0, 0)
+    let rbox   = 1   // |R|≤1 box — contains the short-range g(R) exactly
+    println("[mesh] coarse nq=" + to_string(coarse.npoints) +
+            " (4×4×4)  dense nq=" + to_string(dense.npoints) +
+            " (8×8×8)  rbox=" + to_string(rbox))
+
+    // sample the COARSE complex g(q) (this is the only "DFPT" data the method gets)
+    let cs = _sample(coarse, _g_short)
+    let gre = cs[0] ; let gim = cs[1]
+
+    // ── build g(R) from the coarse samples (forward DFT) ──────────────────────
+    let greal = qforge_g_to_real(coarse, gre, gim, rbox)
+    fails = fails + _assert("greal ok==1", greal.ok == 1, "(err=" + greal.err + ")")
+
+    // ── 🔵 (1) ROUND-TRIP: interp at coarse q == true g(q) ───────────────────
+    let mut maxrt = 0.0
+    let mut i = 0
+    while i < coarse.npoints {
+        let qx = coarse.coords[3 * i]
+        let qy = coarse.coords[3 * i + 1]
+        let qz = coarse.coords[3 * i + 2]
+        let gi = qforge_g_at_q(greal, qx, qy, qz)
+        let dre = _abs(gi[0] - gre[i])
+        let dim = _abs(gi[1] - gim[i])
+        if dre > maxrt { maxrt = dre }
+        if dim > maxrt { maxrt = dim }
+        i = i + 1
+    }
+    println("[roundtrip] max|g_interp(q_c) − g_true(q_c)| = " + to_string(maxrt))
+    fails = fails + _assert("🔵 round-trip identity at coarse q (<1e-10)",
+                            maxrt < 1e-10, "(max " + to_string(maxrt) + ")")
+
+    // ── 🔵 (2) g(R) RECOVERY: planted c_R at seeded R, ~0 elsewhere ───────────
+    // find R=(0,0,0) [c=1], R=(1,0,0) [c=0.4], and an UNSEEDED R=(1,1,0) [~0].
+    let mut c000 = -9.0 ; let mut c100 = -9.0 ; let mut c110 = -9.0
+    let mut ir = 0
+    while ir < greal.nshell {
+        let rx = greal.rvecs[3 * ir]
+        let ry = greal.rvecs[3 * ir + 1]
+        let rz = greal.rvecs[3 * ir + 2]
+        if rx == 0.0 && ry == 0.0 && rz == 0.0 { c000 = greal.gR_re[ir] }
+        if rx == 1.0 && ry == 0.0 && rz == 0.0 { c100 = greal.gR_re[ir] }
+        if rx == 1.0 && ry == 1.0 && rz == 0.0 { c110 = _abs(greal.gR_re[ir]) + _abs(greal.gR_im[ir]) }
+        ir = ir + 1
+    }
+    println("[g(R)] c(000)=" + to_string(c000) + " c(100)=" + to_string(c100) +
+            " |c(110)|=" + to_string(c110))
+    fails = fails + _ck("🔵 g(R) recovers planted c(000)=1.0", c000, 1.0, 1e-10)
+    fails = fails + _ck("🔵 g(R) recovers planted c(100)=0.4", c100, 0.4, 1e-10)
+    fails = fails + _assert("🔵 g(R) ~0 at unseeded R(110) (short-range)",
+                            c110 < 1e-10, "(|c(110)|=" + to_string(c110) + ")")
+
+    // ── the λ comparison: dense-direct vs Wannier-interpolated ───────────────
+    let og = _grid(60.0, 1600.0, 40001)
+
+    let lam_dense = _direct_lambda(dense, _g_short, og)        // direct dense-DFPT
+    let lam_wann  = qforge_wann_lambda_dense(coarse, gre, gim, rbox, dense,
+                                             _omega_of_q, 0.0, _W_NEF, og,
+                                             _W_SIGEL, _W_SIGPH)  // EPW interp
+    let lam_coarse = _direct_lambda(coarse, _g_short, og)     // coarse-only (distinctness ref)
+    let rel = _abs(lam_wann - lam_dense) / _abs(lam_dense)
+    let relcd = _abs(lam_dense - lam_coarse) / _abs(lam_dense)
+    println("")
+    println("[VERBATIM] coarse-nq=" + to_string(coarse.npoints) +
+            "  dense-nq=" + to_string(dense.npoints))
+    println("[VERBATIM] direct dense-DFPT λ   = " + to_string(lam_dense))
+    println("[VERBATIM] Wannier-interp     λ   = " + to_string(lam_wann))
+    println("[VERBATIM] rel-ε (interp vs dense) = " + to_string(rel))
+    println("[VERBATIM] coarse-only        λ   = " + to_string(lam_coarse) +
+            "  (rel-Δ vs dense = " + to_string(relcd) + ")")
+
+    // ── 🟢 (3) COARSE→DENSE EXACTNESS (headline) ─────────────────────────────
+    fails = fails + _assert("🟢 coarse→dense interp λ == dense-DFPT λ (rel-ε<1e-9)",
+                            rel < 1e-9, "(rel-ε=" + to_string(rel) + ")")
+
+    // ── 🟢 (4) DENSE ≠ COARSE (real interpolation, not a tautology) ──────────
+    fails = fails + _assert("🟢 dense λ ≠ coarse-only λ (dense samples NEW q)",
+                            relcd > 0.001, "(rel-Δ=" + to_string(relcd) + ")")
+
+    // ── 🔴 (5) NEGATIVE CONTROL — long-ranged g(R) on too-coarse mesh ────────
+    let coarse3 = qforge_mp_grid(3, 3, 3, 0, 0, 0)   // rbox=1 box, but g(R) has |R|=3
+    let dense6  = qforge_mp_grid(6, 6, 6, 0, 0, 0)
+    let csl = _sample(coarse3, _g_long)
+    let lam_dense_long = _direct_lambda(dense6, _g_long, og)
+    let lam_wann_long  = qforge_wann_lambda_dense(coarse3, csl[0], csl[1], 1,
+                                                  dense6, _omega_of_q, 0.0,
+                                                  _W_NEF, og, _W_SIGEL, _W_SIGPH)
+    let rel_long = _abs(lam_wann_long - lam_dense_long) / _abs(lam_dense_long)
+    println("")
+    println("[VERBATIM·neg] long-range g(R), coarse 3×3×3 (rbox=1), |R|=3 term aliased")
+    println("[VERBATIM·neg] direct dense-DFPT λ = " + to_string(lam_dense_long))
+    println("[VERBATIM·neg] Wannier-interp   λ = " + to_string(lam_wann_long))
+    println("[VERBATIM·neg] rel-ε              = " + to_string(rel_long))
+    fails = fails + _assert("🔴 NEG control: long-range g(R) does NOT reproduce (rel-ε≫1%)",
+                            rel_long > 0.05,
+                            "(rel-ε=" + to_string(rel_long) + " — exactness is conditional, d6)")
+
+    println("")
+    if fails == 0 {
+        println("wannier_ginterp_selftest PASS")
+    } else {
+        println("wannier_ginterp_selftest FAIL (" + to_string(fails) + " checks)")
+    }
+}
