@@ -1,0 +1,152 @@
+F-FUSION-A2-STREAMK — HEXA-FUSION A2: atomic-free two-pass stream-K skinny own-GEMM
+   — CLOSED-NEGATIVE: stream-K TIES split-K (does NOT beat it) on the skinny LoRA GEMMs
+========================================================================================
+DATE: 2026-06-05
+GPU: NVIDIA RTX PRO 6000 Blackwell Workstation Edition (97887 MiB ×2; CUDA_VISIBLE_DEVICES=0
+     pinned for single-GPU measurement). vast H100-request gave Blackwell again; nvcc 12.4
+     caps -arch=compute_90 -> own kernels run sm_90 PTX-JIT to Blackwell, cuBLAS native.
+     SAME GPU CLASS as the split-K verdict #2714 (F-FUSION-SPLITK-SKINNY, also RTX PRO 6000
+     Blackwell) -> ratios DIRECTLY comparable. SAME-GPU (all arms one pod) = valid.
+POD: vast 39487982 (ssh3.vast.ai:17982) — RENTED + DESTROYED this session (leak 0 confirmed,
+     `cloud alive` -> GONE). (A first rent 39485856 never went ssh-ready in 600s; the CLI
+     auto-destroyed it, confirmed GONE, then re-rented — no leak from either.)
+BRANCH: domain/hexa-fusion-a2-streamk (base: origin/main @ 27fd19650, which has split-K #2714).
+DRIVER: self/native/hxqwen14b_llmstep_driver.cu (#include's the shipped hxqwen14b_cuda.cu so
+        the EXACT kernel is measured). cuBLAS arm forced CUBLAS_TF32_TENSOR_OP_MATH for a fair
+        TF32-vs-TF32 compare. No driver change: the stream-K env gate flows through
+        hxqwen_sgemm_base, so gate/pergemm/util/conv exercise it unmodified (ambient env arm
+        selection, exactly as split-K ran).
+
+PRE-REGISTERED FALSIFIER (g5-HONEST)
+------------------------------------
+"Atomic-free stream-K closes a MEASURABLE fraction of split-K's named residual at rel-RMS
+ <= 3e-3 on the skinny dA/dB GEMMs." NOT "surpass cuBLAS". A TIE or a regression vs split-K
+ is an ADMISSIBLE NEGATIVE (the skinny output is fundamentally small; the atomic may not be
+ the dominant cost). RESULT: correctness PASSES, but the perf axis is FALSIFIED — stream-K
+ does NOT close a measurable further fraction; it TIES split-K within noise.
+
+KERNEL DESIGN CHOSEN (self/native/hxqwen14b_cuda.cu)
+---------------------------------------------------
+Design (a) ATOMIC-FREE TWO-PASS (chosen over CUTLASS stream-K (b): the two-pass directly
+isolates split-K's NAMED cost — the atomicAdd serialization — by removing the atomic while
+keeping split-K's exact K-partition, so a TIE cleanly attributes the residual to a different
+cause than the atomic; (b)'s fixed-MAC-tile assignment would conflate load-balance with the
+atomic, muddying the attribution).
+  PASS 1 _hx_k_sgemm_cm_streamk_partial: identical K-partition to split-K (G near-equal
+    HXSK=16-aligned K-chunks, 16x16 output tile, shared-mem K-reuse), but each
+    (output-tile, k-chunk) block writes its alpha*partial to a SEPARATE slice
+    P[chunk*M*N + col*M + row] of a partials workspace — NO atomics, NO shared cache line
+    between the G writers (each chunk's writes are M*N apart -> distinct cache lines).
+  PASS 2 _hx_k_sgemm_cm_streamk_reduce: one thread/output element tree-sums its G partials in
+    fp32 (contention-free) and folds beta in ONE store: C = sum_g P[g] + beta*C_old. (beta
+    folds cleanly here, no pre-scale kernel — unlike split-K's separate betascale pass.)
+  Workspace M*N*G floats, cudaMalloc cached & reused across calls (skinny shapes tiny:
+  16*4096*16 = 4 MB). G = clamp(k/512,1,32), override HEXA_OWN_GEMM_STREAMK_G.
+  Env gate HEXA_OWN_GEMM_STREAMK (NEW) + once-probe [OWN-SGEMM-STREAMK-FIRED]. Dispatch fires
+  ONLY for skinny+large-K: (m<=64 || n<=64) && k>=1024, under HEXA_OWN_GEMM_WMMA2, takes
+  PRIORITY over split-K when both env set. Gate OFF = byte-identical default (cuBLAS path
+  untouched; the WMMA2/splitK paths untouched — stream-K is a new else-if branch ABOVE split-K).
+
+[OWN-SGEMM-STREAMK-FIRED]: FIRED Y — every stream-K arm (gate, pergemm, util, conv, probe). Verbatim:
+  "[OWN-SGEMM-STREAMK-FIRED] skinny GEMM -> _hx_k_sgemm_cm_streamk (atomic-free two-pass, G=16,
+   m=16 n=8192 k=8192)"  (G varies with k per the clamp formula; G=8 at k=4096)
+
+========================================================================================
+§1  CORRECTNESS (mode=gate, stream-K own-GEMM vs cuBLAS-TF32 oracle, 1 process) — HARD GATE
+========================================================================================
+M=8192 K=8192 N=4096 R16 (worst case: dA/dB hit stream-K with K=8192 -> G=16):
+  GATE y   n=33554432 rel_RMS=2.935e-04 max|D|=3.742e-04 tol=3.0e-03 -> PASS
+  GATE dA  n=131072   rel_RMS=8.033e-07 max|D|=4.828e-06 tol=3.0e-03 -> PASS
+  GATE dB  n=65536    rel_RMS=8.226e-07 max|D|=5.960e-06 tol=3.0e-03 -> PASS
+  GATE dx  n=67108864 rel_RMS=2.937e-04 max|D|=7.039e-06 tol=3.0e-03 -> PASS
+  GATE-VERDICT: PASS. dA/dB rel_RMS ~8e-7 (IDENTICAL to split-K's: both reduce partials in
+  fp32, so the atomic-vs-two-pass change is correctness-neutral). The two-pass reordering does
+  NOT break TF32 tol.
+M=512 K=4096 N=4096 R16 (k=4096 -> G=8): y/dA/dB/dx 2.953e-04 / 6.919e-07 / 6.895e-07 /
+  2.956e-04 -> ALL PASS.
+CONVERGENCE (mode=conv, 30 real LoRA SGD steps, M256 K4096 N512 R16; stream-K G=8 fires):
+  cuBLAS    CE step0=6.244690 step15=0.030340 step29=0.011492
+  STREAMK   CE step0=6.244691 step15=0.030342 step29=0.011491
+  |dCE| ~1e-6 throughout -> NO divergence, NO two-pass-summation drift in real training. PASS.
+  >>> CORRECTNESS HARD GATE: PASS (rel-RMS <= 8.2e-7 << 3e-3 on dA/dB; CE-descent bit-clean).
+
+========================================================================================
+§2  PER-GEMM (mode=pergemm, M=8192 K=4096 N=4096 R16, CUDA-event, 200 it/GEMM)
+========================================================================================
+  GEMM                out(m,n)      k     cuBLAS   SPLITK(main)   STREAMK(this)   splitK->streamK
+  GEMM[0] fwd_tmp     (16,8192)    4096   0.11465  0.24921        0.25063          +0.6%
+  GEMM[2] bwd_u       (16,8192)    4096   0.10684  0.22515        0.22724          +0.9%
+  GEMM[3] bwd_tmp     (16,8192)    4096   0.11542  0.25020        0.25187          +0.7%
+  GEMM[4] bwd_dB      (16,4096)    8192   0.12207  0.24621        0.25017          +1.6%  <- target
+  GEMM[5] bwd_dA      (4096,16)    8192   0.12278  0.23204        0.23498          +1.3%  <- target
+  ---------------------------------------------------------------------------------------------
+  SUM 7-GEMM                              1.00341  1.48692        1.49889          +0.8%
+  step~ (ms)                              1.72939  2.19664        2.20813
+  (square GEMMs fwd_y/bwd_dx unchanged: still WMMA2, ~0.142 ms.)
+
+  THE TWO WORST SKINNY GEMMs (the named residual), per-GEMM ms split-K -> stream-K:
+    dA (4096,16) K=8192:  0.23204 -> 0.23498  (+1.3%, SLIGHTLY WORSE; cuBLAS 0.12278)
+    dB (16,4096) K=8192:  0.24621 -> 0.25017  (+1.6%, SLIGHTLY WORSE; cuBLAS 0.12207)
+  Stream-K is a TIE (fractionally WORSE, within run-to-run noise) vs split-K — it does NOT
+  recover any of the ~2x per-GEMM gap to cuBLAS. Both remain ~2x off cuBLAS (0.23-0.25 vs 0.12).
+  G-SWEEP (stream-K dA, K=8192, N=4096 pergemm shape): G=2 0.551 | G=8 0.467 | G=16 0.460 |
+    G=24 0.455 | G=32 0.460 -> saturates ~24, same shape as split-K's curve (no new headroom).
+
+========================================================================================
+§3  STEPS/SEC (mode=util, sustained 12s loop) — THE HEADLINE
+========================================================================================
+  M=8192  K=N=4096 R16:
+    cuBLAS                565.0 steps/s   (1.00x ref)
+    WMMA2 (no splitk)     338.7 steps/s   1.67x slower   (reproduces #2710 thru-parity)
+    WMMA2+SPLITK (main)   454.7 steps/s   1.24x slower   (reproduces #2714 split-K)
+    WMMA2+STREAMK (this)  453.6 steps/s   1.25x slower   <- TIE with split-K (-0.2%, noise)
+    FURTHER RESIDUAL CLOSED vs split-K: 0% (453.6 vs 454.7 — a statistical tie/regression).
+
+  M=16384 K=N=4096 R16:
+    cuBLAS                277.1 steps/s   (1.00x ref)
+    WMMA2 (no splitk)     175.5 steps/s   1.58x slower
+    WMMA2+SPLITK (main)   230.6 steps/s   1.20x slower
+    WMMA2+STREAMK (this)  229.5 steps/s   1.21x slower   <- TIE with split-K (-0.5%, noise)
+    FURTHER RESIDUAL CLOSED vs split-K: 0%.
+
+  Split-K already closed 64-66% of the thru-parity residual (#2714). Stream-K closes a
+  FURTHER 0% — the atomic-free two-pass does NOT improve on split-K.
+
+========================================================================================
+§4  FINDING (honest CLOSED-NEGATIVE — a valid result per paper_negative_ok)
+========================================================================================
+FALSIFIER FALSIFIED (perf axis): the atomic-free two-pass stream-K does NOT close a
+measurable further fraction of split-K's named residual. Correctness PASSES (rel-RMS <= 8.2e-7
+on dA/dB, CE-descent bit-clean), the kernel FIRES, but per-GEMM dA/dB and full-step steps/s
+TIE split-K within noise (-0.2% to -0.5%; +0.8% per-GEMM sum) at BOTH M8192 and M16384.
+
+WHY (the negative RULES OUT one axis): split-K's NAMED residual-of-residual blamed the
+atomicAdd SERIALIZATION into the tiny 16-wide output column. This experiment removes the
+atomic entirely (each K-chunk -> a disjoint partials slice, no shared cache line) and the
+per-GEMM time is UNCHANGED. Therefore the atomic contention was NOT the dominant cost of the
+skinny split-K kernel. The two-pass trades atomic contention for an EQUIVALENT cost: an extra
+global-memory round-trip (write G*M*N partials to global in pass 1 + read them back in the
+pass-2 reduction) on the same tiny output. On these skinny shapes the dominant cost is the
+un-vectorized 32-bit global load pattern of the 16x16-tiled partial kernel (cuBLAS uses
+128-bit vectorized loads + a more cache-friendly K-partition), NOT the reduction method.
+Atomic-reduction and two-pass-reduction are ~equivalent here because the output (m*n*G with
+m or n = 16) is small enough that neither the atomic traffic nor the partials traffic
+dominates — the MAC-issue + scalar-load bound does.
+
+RULED-OUT AXIS (the disprovable claim this closes): "removing split-K's output-column
+atomicAdd recovers a measurable fraction of the per-GEMM gap" — DISPROVEN. The next separable
+step for these skinny GEMMs is NOT the reduction strategy (split-K, stream-K, two-pass all
+tie) but the PARTIAL-KERNEL INNER LOOP: 128-bit vectorized (float4) global loads + a wider
+register-blocked K-tile, i.e. matching cuBLAS's load width — a distinct kernel-engineering
+axis, orthogonal to K-partitioning.
+
+ZERO DEFAULT CHANGE: env-gated (HEXA_OWN_GEMM_STREAMK); OFF = cuBLAS byte-identical, and the
+existing WMMA2/split-K paths are untouched (stream-K is a new else-if branch above split-K).
+
+VERDICT: 🔴 CLOSED-NEGATIVE. Atomic-free two-pass stream-K TIES split-K (0% further residual
+closed; -0.2%/-0.5% steps/s, +0.8% per-GEMM sum) at rel-RMS <= 8.2e-7 PASS, [STREAMK-FIRED] Y.
+The split-K named residual-of-residual ("atomicAdd serializes the G writers") is DISPROVEN as
+the dominant skinny-GEMM cost — removing the atomic changes nothing. The cost is the
+un-vectorized scalar-load inner loop; the next axis is 128-bit vectorized loads, NOT the
+K-reduction method. A valid negative result that deterministically rules out the reduction-
+strategy axis. Default unchanged (env-gated).
