@@ -1,0 +1,37 @@
+############ TIGHT ASYNC=0 capstone (EPOCHS=2; eager x2, mega x2) ############
+=== A1 device-EAGER ===
+--- eager1 rc=0 ---
+  util MEAN=11.22% PEAK=68% pct>=20=19.8% n=172
+  [EAGER-DEVGLUE-FIRED]=1  [MEGAFWD-FIRED]=0  [OWN-GEMM-FIRED]=2
+  [B6-CE-HIPREC] first_ce=4.4662394504526679 last_ce=4.1840272133280685
+  DESCENT=F-CLM-PROD-DESCENT = 1
+=== B1 device-MEGA ===
+--- mega1 rc=0 ---
+  util MEAN=15.70% PEAK=80% pct>=20=25.7% n=109
+  [EAGER-DEVGLUE-FIRED]=0  [MEGAFWD-FIRED]=2  [OWN-GEMM-FIRED]=2
+  [B6-CE-HIPREC] first_ce=4.4662394504526679 last_ce=4.1840272133280685
+  DESCENT=F-CLM-PROD-DESCENT = 1
+=== A2 device-EAGER (repro) ===
+--- eager2 rc=0 ---
+  util MEAN=10.67% PEAK=68% pct>=20=19.2% n=167
+  [EAGER-DEVGLUE-FIRED]=1  [MEGAFWD-FIRED]=0  [OWN-GEMM-FIRED]=2
+  [B6-CE-HIPREC] first_ce=4.4662394504526679 last_ce=4.1840272133280685
+  DESCENT=F-CLM-PROD-DESCENT = 1
+=== B2 device-MEGA (repro) ===
+--- mega2 rc=0 ---
+  util MEAN=14.55% PEAK=74% pct>=20=23.4% n=107
+  [EAGER-DEVGLUE-FIRED]=0  [MEGAFWD-FIRED]=2  [OWN-GEMM-FIRED]=2
+  [B6-CE-HIPREC] first_ce=4.4662394504526679 last_ce=4.1840272133280685
+  DESCENT=F-CLM-PROD-DESCENT = 1
+
+############ BYTE-EQ DIFF (verbatim 17-digit CE) ############
+eager1: ('4.4662394504526679', '4.1840272133280685')
+eager2: ('4.4662394504526679', '4.1840272133280685')
+mega1:  ('4.4662394504526679', '4.1840272133280685')
+mega2:  ('4.4662394504526679', '4.1840272133280685')
+[LADDER eager] run-to-run Δ0: True
+[LADDER mega ] run-to-run Δ0: True
+max|Δ first_ce| eager-vs-mega = 0.000000e+00
+max|Δ last_ce|  eager-vs-mega = 0.000000e+00
+BYTE-EQ MEGAKERNEL CAPSTONE ACHIEVED (string-identical CE)
+=== DONE ===
