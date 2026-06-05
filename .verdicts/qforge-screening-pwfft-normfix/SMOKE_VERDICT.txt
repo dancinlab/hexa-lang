@@ -1,0 +1,18 @@
+F-QFORGE-PWFFT-NORMFIX — 🟢 SUPPORTED-NUMERICAL (smoke g5, VERBATIM)
+
+BUG (derived): qpwfft_dvscr_from_dpsi built Δρ(r)=Σ2ψ_n·Δψ_n from _qpwfft_to_real (ifft3,
+÷Ntot convention), so ψ_code = ψ_phys/Ntot and the ψ·Δψ product carried a spurious 1/Ntot²
+→ the screening correction was ~1/Ntot² (≈1e-9 at a 32³ grid) of bare → 0 Anderson iters →
+screened==bare → λ stuck at 4.137 (the #2771/#2781 0-iter symptom). FIX: restore physical
+ψ(r)=Σc·e^{iGr} by ×Ntot² on Δρ(r) (DFT convention factor, DERIVED not tuned).
+
+SMOKE (screening_pwfft_smoke.hexa, n=27 synthetic PW, grid 8x8x8) — BEFORE→AFTER:
+  ‖ΔV_scr(G)‖           : ~0        → 2.55658   (kernel folds non-zero)
+  Anderson iters        : 0         → 28        (loop engages)
+  ‖ΔV_scr‖/‖ΔV_bare‖    : 1.0       → 0.812208  (≠1.0 — FFT screening active)
+  VERDICT ①: KERNEL FOLDS (non-zero) — FFT-Poisson convolution works.
+  VERDICT ②: ANDERSON ENGAGES (iters>0) — ad_map routes through the FFT path.
+
+This is a REAL verified magnitude bug the #2781 grid-collapse fix did not reach. The
+converged n=645 λ re-measurement (cache-cleared) is downstream; this fix makes the FFT
+screening physically engage regardless of the final λ value (d6).
