@@ -669,6 +669,19 @@ __device__ __forceinline__ void hxg_cp_wait() {
     asm volatile("cp.async.wait_group 0;\n" ::);
 #endif
 }
+// Wait until at most N cp.async groups remain in flight (deep-pipeline lever).
+// N must be an immediate for the PTX, so we dispatch a small fixed ladder
+// (HXG_CB_STAGES is ≤4 in practice → N ∈ {0,1,2}).
+__device__ __forceinline__ void hxg_cp_wait_n(int n) {
+#if HXG_CP_ASYNC
+    switch (n) {
+        case 0:  asm volatile("cp.async.wait_group 0;\n" ::); break;
+        case 1:  asm volatile("cp.async.wait_group 1;\n" ::); break;
+        case 2:  asm volatile("cp.async.wait_group 2;\n" ::); break;
+        default: asm volatile("cp.async.wait_group 3;\n" ::); break;
+    }
+#endif
+}
 
 __global__ void _hx_k_sgemm_cm_wmma2(int tA, int tB, long long M, long long N, long long K,
                                      float alpha, const float* A, long long lda,
@@ -946,6 +959,233 @@ _hx_k_sgemm_cm_wmma2_rr(int tA, int tB, long long M, long long N, long long K,
                 }
             }
             __syncwarp();
+        }
+    }
+}
+// ═════════════════════════════════════════════════════════════════════
+// HEXA-FUSION SM90 cuBLAS-CLASS MAINLOOP (env HEXA_OWN_GEMM_WMMA2_CB).
+// FINDING #2800 (F-FUSION-SM90-WARPTILE-RETUNE) ruled out occupancy: on native
+// sm_90 the WMMA2 own-GEMM launches + is correct (rel-RMS 4.8e-6) but is ~31×
+// off cuBLAS (own 11.1 vs cuBLAS 349 TFLOP/s), and DOUBLING blocks/SM regressed
+// it. The binding constraint is the inner-loop MATH PIPELINE, not block count.
+// This variant reworks that mainloop toward a cuBLAS/CUTLASS-class TC loop:
+//
+//   LEVER 1 (biggest) — HARDWARE TF32 mma.sync, no per-element software round.
+//     Parent: nvcuda::wmma::load_matrix_sync THEN a scalar loop doing
+//       frag.x[t] = __float_to_tf32(frag.x[t]) over EVERY fragment element each
+//       K-step (software rounding on the critical path). Here: raw PTX
+//       mma.sync.aligned.m16n8k8.row.col.f32.tf32.tf32.f32 with the TF32 round
+//       fused into the register load via cvt.rna.tf32.f32 (the hardware TF32
+//       path the tensor cores expose) — one cvt per operand register, issued by
+//       the LSU/ALU, not a per-fragment-element software sweep. m16n8k8 also
+//       issues a single native HMMA vs wmma 16x16x8's 2 → fewer, wider TC ops.
+//
+//   LEVER 2 — DEEP cp.async pipeline (HXG_CB_STAGES=3, default). Parent uses a
+//     depth-1 double buffer (stage next, wait_group 0, compute). Here a 3-stage
+//     ring: prefetch STAGES-1 K-slices ahead, cp.async.wait_group keeps only the
+//     oldest in-flight group blocking, so global→shared latency is hidden behind
+//     ≥2 slices of TC compute (the classic CUTLASS software pipeline).
+//
+//   LEVER 4 — VECTORIZED / register-blocked epilogue. Parent stages each 16×16
+//     accumulator frag to shared then scatters scalar to C. Here each thread
+//     owns its m16n8 accumulator in 4 .f32 registers (the native mma D layout)
+//     and writes them DIRECTLY to col-major C with the documented thread→(row,col)
+//     map — no shared round-trip, no per-frag __syncwarp barrier.
+//
+//   LEVER 3 (ldmatrix) — NOT landed here: ldmatrix.x4 is a 16-bit-element op
+//     (.b16); the TF32 operands are 32-bit, so the portable CUTLASS-TF32 path
+//     loads A/B fragments with indexed shared loads (done here) rather than
+//     ldmatrix. Reported as the named residual lever (a 32-bit ldmatrix.trans
+//     swizzle is the next step). This is an HONEST codegen/path-coverage note.
+//
+// CONTRACT: same col-major cublasSgemm semantics C[i+j·ldc]=α·Σop(A)·op(B)+β·C,
+//   same TF32 precision class (rel-RMS bar ≤ 3e-3), same dynamic-shared opt-in
+//   (HXG_CB_SMEM bytes), default OFF ⇒ parent path byte-identical. HONEST: this
+//   is parity-SEEKING (cuBLAS = roofline, no superiority claim); the verdict
+//   reports REAL own GFLOP/s before→after + ratio + % of the 31× gap closed.
+//
+// TILE GEOMETRY (mma.sync m16n8k8, BM×BN×BK = 128×64×32, 8 warps 4row×2col):
+//   warp-tile 32×32 ⇒ per warp  WM_MMA = 32/16 = 2  (m-frags, 16 rows each)
+//                                WN_MMA = 32/8  = 4  (n-frags,  8 cols each)
+//                                WK_MMA = BK/8  = 4  (k-frags,  8 deep each)
+//   A frag/thread = 4×.b32 (tf32), B frag/thread = 2×.b32, D/thread = 4×.f32.
+// ═════════════════════════════════════════════════════════════════════
+#ifndef HXG_CB_STAGES
+#define HXG_CB_STAGES 3
+#endif
+#define HXG_CB_WM_MMA (HXG_WM / 16)   // 2  (warp-tile rows / 16)
+#define HXG_CB_WN_MMA (HXG_WN / 8)    // 4  (warp-tile cols / 8)
+#define HXG_CB_WK_MMA (HXG_BK / 8)    // 4  (BK / 8)
+// Dynamic shared = STAGES × (As 128×32 + Bs 32×64) floats. No epilogue scratch
+// (lever-4 writes registers straight to C). = STAGES·(4096+2048)·4 bytes.
+#define HXG_CB_SMEM (HXG_CB_STAGES * (HXG_BM*HXG_BK + HXG_BK*HXG_BN) * 4)
+
+// Round an fp32 in a register to TF32 using the HARDWARE cvt (round-to-nearest-
+// even), returning the .b32 tf32 bit pattern for an mma.sync operand register.
+__device__ __forceinline__ unsigned hxg_f2tf32(float v) {
+#if defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 800)
+    unsigned r;
+    asm volatile("cvt.rna.tf32.f32 %0, %1;\n" : "=r"(r) : "f"(v));
+    return r;
+#else
+    unsigned u; memcpy(&u, &v, 4); return u & 0xffffe000u;  // emulate tf32 trunc
+#endif
+}
+
+__global__ void __launch_bounds__(256, 2)
+_hx_k_sgemm_cm_wmma2_cb(int tA, int tB, long long M, long long N, long long K,
+                        float alpha, const float* A, long long lda,
+                        const float* B, long long ldb,
+                        float beta, float* C, long long ldc) {
+    const long long blockRow = (long long)blockIdx.x * HXG_BM;
+    const long long blockCol = (long long)blockIdx.y * HXG_BN;
+    const int tid  = threadIdx.x;
+    const int warp = tid >> 5;
+    const int lane = tid & 31;
+    const int warpRow = warp / HXG_WCOLS;   // 0..3
+    const int warpCol = warp % HXG_WCOLS;   // 0..1
+
+    // m16n8k8 canonical thread layout (PTX ISA 9.7.13.4.x):
+    //   A(16×8 row): a-row group = lane>>2 (+8 for the upper half), a-col = (lane&3)*2.
+    //   B(8×8 col) : b operand indexed lane>>2 / (lane&3).
+    //   D(16×8)    : d-row group = lane>>2 (+8), d-col = (lane&3)*2.
+    const int gid = lane >> 2;     // 0..7  (row group)
+    const int tig = lane & 3;      // 0..3  (thread in group → col pair)
+
+    // STAGES× double/triple-buffered dynamic shared (lever 2).
+    extern __shared__ float hxg_smem[];
+    const int AS = HXG_BM * HXG_BK;          // 4096 floats per stage
+    const int BS = HXG_BK * HXG_BN;          // 2048 floats per stage
+    float* Asp = hxg_smem;                   // [STAGES][AS]
+    float* Bsp = hxg_smem + HXG_CB_STAGES * AS;  // [STAGES][BS]
+    auto As = [&](int s)->float*{ return Asp + s*AS; };
+    auto Bs = [&](int s)->float*{ return Bsp + s*BS; };
+
+    // Register accumulators: per warp WM_MMA×WN_MMA mma tiles, 4 f32 each (lever 4).
+    float d[HXG_CB_WM_MMA][HXG_CB_WN_MMA][4];
+    #pragma unroll
+    for (int im=0; im<HXG_CB_WM_MMA; im++)
+        #pragma unroll
+        for (int in=0; in<HXG_CB_WN_MMA; in++)
+            #pragma unroll
+            for (int t=0; t<4; t++) d[im][in][t] = 0.0f;
+
+    auto stageA = [&](int s, long long kk0){
+        #pragma unroll
+        for (int e=0; e<AS/256; e++) {
+            int idx = e*256 + tid;
+            int i = idx / HXG_BK, l = idx % HXG_BK;
+            long long r = blockRow + i, kk = kk0 + l;
+            int pred = (r < M && kk < K);
+            const float* sp = pred ? (tA ? &A[kk + r*lda] : &A[r + kk*lda]) : (const float*)0;
+            hxg_cp4(&As(s)[idx], sp, pred);
+        }
+    };
+    auto stageB = [&](int s, long long kk0){
+        #pragma unroll
+        for (int e=0; e<BS/256; e++) {
+            int idx = e*256 + tid;
+            int l = idx / HXG_BN, j = idx % HXG_BN;
+            long long kk = kk0 + l, c = blockCol + j;
+            int pred = (kk < K && c < N);
+            const float* sp = pred ? (tB ? &B[c + kk*ldb] : &B[kk + c*ldb]) : (const float*)0;
+            hxg_cp4(&Bs(s)[idx], sp, pred);
+        }
+    };
+
+    // Prologue: prefetch STAGES-1 K-slices, each its own cp.async group (lever 2).
+    const int nK = (int)((K + HXG_BK - 1) / HXG_BK);
+    int stagesPrefetch = HXG_CB_STAGES - 1; if (stagesPrefetch > nK) stagesPrefetch = nK;
+    #pragma unroll 1
+    for (int s=0; s<stagesPrefetch; s++) {
+        stageA(s, (long long)s*HXG_BK);
+        stageB(s, (long long)s*HXG_BK);
+        hxg_cp_commit();
+    }
+
+    // Per-warp shared base for this warp's 32×32 tile.
+    const int aRowBase = warpRow*HXG_WM;     // 0,32,64,96  (row in 128-tile)
+    const int bColBase = warpCol*HXG_WN;     // 0,64        (col in 64-tile)
+
+    int kslice = 0;
+    for (long long k0 = 0; k0 < K; k0 += HXG_BK, kslice++) {
+        // Wait until the slice we're about to compute is resident: keep at most
+        // STAGES-1 groups in flight (block on the oldest). Lever 2 deep pipeline.
+        hxg_cp_wait_n(HXG_CB_STAGES - 2 >= 0 ? HXG_CB_STAGES - 2 : 0);
+        __syncthreads();
+        int cur = kslice % HXG_CB_STAGES;
+
+        // ---- compute this slice: load fragments from shared, HW-TF32 mma.sync ----
+        #pragma unroll
+        for (int kf=0; kf<HXG_CB_WK_MMA; kf++) {
+            int kk = kf*8;
+            // B fragments (one per n-tile): b operand = 2×.b32 tf32.
+            unsigned bf[HXG_CB_WN_MMA][2];
+            #pragma unroll
+            for (int in=0; in<HXG_CB_WN_MMA; in++) {
+                int col = bColBase + in*8;
+                // B(8row=k × 8col=n) for m16n8k8 .col operand, 2 regs/thread:
+                //   b[0] = op(B)[k = kk+tig*2,   n = col+gid]
+                //   b[1] = op(B)[k = kk+tig*2+1, n = col+gid]
+                // Bs is BK×BN row-major in shared → index (k)*HXG_BN + (n).
+                bf[in][0] = hxg_f2tf32(Bs(cur)[(kk+tig*2  )*HXG_BN + (col+gid)]);
+                bf[in][1] = hxg_f2tf32(Bs(cur)[(kk+tig*2+1)*HXG_BN + (col+gid)]);
+            }
+            // A fragments (one per m-tile): a operand = 4×.b32 tf32.
+            unsigned af[HXG_CB_WM_MMA][4];
+            #pragma unroll
+            for (int im=0; im<HXG_CB_WM_MMA; im++) {
+                int row = aRowBase + im*16;
+                // A(16row×8col=k) row-major-in-shared (As is BM×BK row-major):
+                //   a[0]=op(A)[row+gid,     kk+tig*2  ]
+                //   a[1]=op(A)[row+gid,     kk+tig*2+1]
+                //   a[2]=op(A)[row+gid+8,   kk+tig*2  ]
+                //   a[3]=op(A)[row+gid+8,   kk+tig*2+1]
+                af[im][0] = hxg_f2tf32(As(cur)[(row+gid  )*HXG_BK + (kk+tig*2  )]);
+                af[im][1] = hxg_f2tf32(As(cur)[(row+gid  )*HXG_BK + (kk+tig*2+1)]);
+                af[im][2] = hxg_f2tf32(As(cur)[(row+gid+8)*HXG_BK + (kk+tig*2  )]);
+                af[im][3] = hxg_f2tf32(As(cur)[(row+gid+8)*HXG_BK + (kk+tig*2+1)]);
+            }
+            #pragma unroll
+            for (int im=0; im<HXG_CB_WM_MMA; im++)
+                #pragma unroll
+                for (int in=0; in<HXG_CB_WN_MMA; in++) {
+                    asm volatile(
+                      "mma.sync.aligned.m16n8k8.row.col.f32.tf32.tf32.f32 "
+                      "{%0,%1,%2,%3}, {%4,%5,%6,%7}, {%8,%9}, {%0,%1,%2,%3};\n"
+                      : "+f"(d[im][in][0]), "+f"(d[im][in][1]),
+                        "+f"(d[im][in][2]), "+f"(d[im][in][3])
+                      : "r"(af[im][0]), "r"(af[im][1]), "r"(af[im][2]), "r"(af[im][3]),
+                        "r"(bf[in][0]), "r"(bf[in][1]));
+                }
+        }
+
+        // Prefetch the slice STAGES-1 ahead into the ring (lever 2).
+        long long kPre = k0 + (long long)stagesPrefetch*HXG_BK;
+        if (kPre < K) {
+            int ps = (kslice + stagesPrefetch) % HXG_CB_STAGES;
+            stageA(ps, kPre);
+            stageB(ps, kPre);
+        }
+        hxg_cp_commit();
+    }
+
+    // ---- epilogue: write the 4 D registers per (im,in) straight to col-major C ----
+    // m16n8 D layout: d0,d1 → row (gid, gid)   col (tig*2, tig*2+1)
+    //                 d2,d3 → row (gid+8,gid+8) col (tig*2, tig*2+1)
+    #pragma unroll
+    for (int im=0; im<HXG_CB_WM_MMA; im++) {
+        int rowBase = (int)blockRow + aRowBase + im*16;
+        #pragma unroll
+        for (int in=0; in<HXG_CB_WN_MMA; in++) {
+            int colBase = (int)blockCol + bColBase + in*8;
+            int r0 = rowBase + gid,     r1 = rowBase + gid + 8;
+            int c0 = colBase + tig*2,   c1 = colBase + tig*2 + 1;
+            // (r0,c0)=d0  (r0,c1)=d1  (r1,c0)=d2  (r1,c1)=d3
+            if (r0 < M && c0 < N) { float p=(beta!=0.0f)?C[r0+(long long)c0*ldc]:0.0f; C[r0+(long long)c0*ldc]=alpha*d[im][in][0]+beta*p; }
+            if (r0 < M && c1 < N) { float p=(beta!=0.0f)?C[r0+(long long)c1*ldc]:0.0f; C[r0+(long long)c1*ldc]=alpha*d[im][in][1]+beta*p; }
+            if (r1 < M && c0 < N) { float p=(beta!=0.0f)?C[r1+(long long)c0*ldc]:0.0f; C[r1+(long long)c0*ldc]=alpha*d[im][in][2]+beta*p; }
+            if (r1 < M && c1 < N) { float p=(beta!=0.0f)?C[r1+(long long)c1*ldc]:0.0f; C[r1+(long long)c1*ldc]=alpha*d[im][in][3]+beta*p; }
         }
     }
 }
@@ -1407,14 +1647,36 @@ int _hx_own_sgemm_cm_launch(int tA, int tB, int m, int n, int k,
         // streamed input frags) so ≥2 blocks/SM fit on native sm_90. Same
         // dynamic-shared opt-in + same math contract; default OFF = parent path.
         int want_rr = (getenv("HEXA_OWN_GEMM_WMMA2_RR") && getenv("HEXA_OWN_GEMM_WMMA2_RR")[0]);
+        // SM90 cuBLAS-CLASS MAINLOOP (env HEXA_OWN_GEMM_WMMA2_CB): route the big
+        // square-tile path to the hardware-TF32 mma.sync + deep cp.async pipeline
+        // + register-blocked epilogue kernel. Highest priority within the WMMA2
+        // big-tile branch; default OFF = parent path byte-identical. Opts into the
+        // dynamic-shared pool (HXG_CB_SMEM) once before first launch.
+        int want_cb = (getenv("HEXA_OWN_GEMM_WMMA2_CB") && getenv("HEXA_OWN_GEMM_WMMA2_CB")[0]);
         // sm_90 DYNAMIC-SHARED OPT-IN (PR #2796 fix): the 57344 B staging exceeds
         // the 49152 B per-block STATIC cap on Hopper, so the WMMA2 kernel uses
         // EXTERN (dynamic) shared and must opt into the larger dynamic pool ONCE
         // before the first launch. Without this the launch fails with
         // cudaErrorInvalidValue on native sm_90 (it succeeded on Blackwell sm_120
         // only because its bigger static admit absorbed the old static tally).
-        static int w2attr = 0, rrattr = 0;
-        if (want_rr) {
+        static int w2attr = 0, rrattr = 0, cbattr = 0;
+        if (want_cb) {
+            if (!cbattr) {
+                cbattr = 1;
+                cudaError_t ae = cudaFuncSetAttribute(_hx_k_sgemm_cm_wmma2_cb,
+                    cudaFuncAttributeMaxDynamicSharedMemorySize, HXG_CB_SMEM);
+                if (ae != cudaSuccess)
+                    fprintf(stderr, "[OWN-SGEMM-WMMA2-CB] cudaFuncSetAttribute(maxDynSmem=%d) -> %s\n",
+                            HXG_CB_SMEM, cudaGetErrorString(ae));
+            }
+            static int cbfired = 0; if (!cbfired){cbfired=1; fprintf(stderr,"[OWN-SGEMM-WMMA2-CB-FIRED] _hx_k_sgemm_cm_wmma2_cb (cuBLAS-class: HW-TF32 mma.sync m16n8k8, %d-stage cp.async pipeline, register-blocked epilogue; smem=%d B)\n", HXG_CB_STAGES, HXG_CB_SMEM);}
+            dim3 cbblk(256);
+            dim3 cbgrd((unsigned)((m + HXG_BM - 1)/HXG_BM), (unsigned)((n + HXG_BN - 1)/HXG_BN));
+            _hx_k_sgemm_cm_wmma2_cb<<<cbgrd,cbblk,HXG_CB_SMEM>>>(tA,tB,
+                                                  (long long)m,(long long)n,(long long)k,
+                                                  alpha, A,(long long)lda, B,(long long)ldb,
+                                                  beta, C,(long long)ldc);
+        } else if (want_rr) {
             if (!rrattr) {
                 rrattr = 1;
                 cudaError_t ae = cudaFuncSetAttribute(_hx_k_sgemm_cm_wmma2_rr,
