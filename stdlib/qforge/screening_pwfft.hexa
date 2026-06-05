@@ -184,6 +184,19 @@ pub fn qpwfft_stage(gvecs: [float], b1: [float], b2: [float], b3: [float],
 pub fn qpwfft_is_on() -> bool { return PWFFT_ON }
 pub fn qpwfft_grid_dims() -> [int] { return [PWFFT_NX, PWFFT_NY, PWFFT_NZ] }
 
+// ── ROUTING WITNESS (d6) — observability for the ad_map→FFT engage path ──────────
+//   PWFFT_FOLDS counts how many times qpwfft_dvscr_from_dpsi returned a VALID length-n
+//   correction (the genuine convolution actually folded). PWFFT_LAST_ERR records the
+//   guard that fired on the LAST call (0=ok · 1=off · 2=nb-bad · 3=col-len · 4=ifft
+//   psi · 5=fft drho · 6=ifft vh · 7=fft vscr). At the converged n=645 a 0-fold /
+//   nonzero-err witness PROVES the FFT path silently fell back to the diagonal — the
+//   precise root-cause signal the 0-iter verdict lacked.
+let mut PWFFT_FOLDS: int = 0
+let mut PWFFT_LAST_ERR: int = 0
+pub fn qpwfft_folds() -> int { return PWFFT_FOLDS }
+pub fn qpwfft_last_err() -> int { return PWFFT_LAST_ERR }
+pub fn qpwfft_reset_witness() { PWFFT_FOLDS = 0 ; PWFFT_LAST_ERR = 0 }
+
 // ── scatter a PW-coefficient vector c (length n) onto the (Nx,Ny,Nz) reciprocal
 //    grid as a split complex field [re(Ntot), im(Ntot)] (coefficients are REAL → im=0).
 fn _qpwfft_scatter(c: [float]) -> [float] {
@@ -216,9 +229,9 @@ fn _qpwfft_to_real(re_grid: [float]) -> [float] {
 //   Returns ΔV_scr(G_i) on the PW basis (length n) — the (V_H+f_xc)[Δρ] screening
 //   correction, computed by the REAL convolution. [] on malformed / grid off.
 pub fn qpwfft_dvscr_from_dpsi(psis: [[float]], dpsi: [[float]]) -> [float] {
-    if !PWFFT_ON { return [] }
+    if !PWFFT_ON { PWFFT_LAST_ERR = 1 ; return [] }
     let nb = len(psis)
-    if nb < 1 || len(dpsi) != nb { return [] }
+    if nb < 1 || len(dpsi) != nb { PWFFT_LAST_ERR = 2 ; return [] }
     let n = PWFFT_N
     let ntot = PWFFT_NX * PWFFT_NY * PWFFT_NZ
     // ⑤ accumulate Δρ(r) = Σ_n 2·ψ_n(r)·Δψ_n(r) on the real-space cube.
@@ -227,10 +240,10 @@ pub fn qpwfft_dvscr_from_dpsi(psis: [[float]], dpsi: [[float]]) -> [float] {
     while p < ntot { drho_r.push(0.0) ; p = p + 1 }
     let mut nbnd = 0
     while nbnd < nb {
-        if len(psis[nbnd]) != n || len(dpsi[nbnd]) != n { return [] }
+        if len(psis[nbnd]) != n || len(dpsi[nbnd]) != n { PWFFT_LAST_ERR = 3 ; return [] }
         let psi_r = _qpwfft_to_real(_qpwfft_scatter(psis[nbnd]))
         let dps_r = _qpwfft_to_real(_qpwfft_scatter(dpsi[nbnd]))
-        if len(psi_r) != ntot || len(dps_r) != ntot { return [] }
+        if len(psi_r) != ntot || len(dps_r) != ntot { PWFFT_LAST_ERR = 4 ; return [] }
         let mut r = 0
         while r < ntot { drho_r[r] = drho_r[r] + 2.0 * psi_r[r] * dps_r[r] ; r = r + 1 }
         nbnd = nbnd + 1
@@ -240,7 +253,7 @@ pub fn qpwfft_dvscr_from_dpsi(psis: [[float]], dpsi: [[float]]) -> [float] {
     p = 0
     while p < ntot { zim.push(0.0) ; p = p + 1 }
     let spec = fft3(drho_r, zim, PWFFT_NX, PWFFT_NY, PWFFT_NZ)
-    if len(spec) != 2 * ntot { return [] }
+    if len(spec) != 2 * ntot { PWFFT_LAST_ERR = 5 ; return [] }
     let mut vh_re: [float] = [] ; let mut vh_im: [float] = []
     let mut ix = 0
     while ix < PWFFT_NX {
@@ -270,7 +283,7 @@ pub fn qpwfft_dvscr_from_dpsi(psis: [[float]], dpsi: [[float]]) -> [float] {
     }
     // inverse-FFT V_H(G) → V_H(r) (real part), then add the local LDA f_xc[ρ̄]·Δρ(r).
     let vh_back = ifft3(vh_re, vh_im, PWFFT_NX, PWFFT_NY, PWFFT_NZ)
-    if len(vh_back) != 2 * ntot { return [] }
+    if len(vh_back) != 2 * ntot { PWFFT_LAST_ERR = 6 ; return [] }
     let mut dvscr_r: [float] = []
     p = 0
     while p < ntot { dvscr_r.push(vh_back[p * 2] + PWFFT_FXC * drho_r[p]) ; p = p + 1 }
@@ -279,7 +292,7 @@ pub fn qpwfft_dvscr_from_dpsi(psis: [[float]], dpsi: [[float]]) -> [float] {
     p = 0
     while p < ntot { zim2.push(0.0) ; p = p + 1 }
     let vspec = fft3(dvscr_r, zim2, PWFFT_NX, PWFFT_NY, PWFFT_NZ)
-    if len(vspec) != 2 * ntot { return [] }
+    if len(vspec) != 2 * ntot { PWFFT_LAST_ERR = 7 ; return [] }
     let inv_ntot = 1.0 / to_float(ntot)
     let mut out: [float] = []
     let mut i = 0
@@ -290,6 +303,7 @@ pub fn qpwfft_dvscr_from_dpsi(psis: [[float]], dpsi: [[float]]) -> [float] {
         out.push(vspec[PWFFT_LIN[i] * 2] * inv_ntot)
         i = i + 1
     }
+    PWFFT_LAST_ERR = 0 ; PWFFT_FOLDS = PWFFT_FOLDS + 1   // genuine fold succeeded (d6 witness)
     return out
 }
 
