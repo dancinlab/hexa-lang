@@ -28,6 +28,8 @@
 #include <cstring>
 #include <cmath>
 #include <cstdint>
+#include <cuda.h>          // driver API: CUtensorMap, cuTensorMapEncodeTiled types
+#include <cudaTypedefs.h>  // CUtensorMapDataType / enums
 #include <cuda_runtime.h>
 #include <cublas_v2.h>
 

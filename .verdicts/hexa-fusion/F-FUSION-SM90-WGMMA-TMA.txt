@@ -1,0 +1,75 @@
+F-FUSION-SM90-WGMMA-TMA — wgmma.mma_async + TMA own-GEMM on native sm_90 H100
+================================================================================
+Falsifier (pre-registered): "An env-gated own-source wgmma.mma_async + TMA GEMM
+  reaches cuBLAS parity (<=~1.3x) on native sm_90 H100, closing the 29.4x gap
+  left by the mma.sync CB mainloop (F-FUSION-SM90-CUBLAS-MAINLOOP, 11.55 TFLOP/s)."
+
+Hardware: NVIDIA H100 80GB HBM3, compute_cap 9.0, driver 580.159.03 (vast 39628805,
+  adopted from a leaked orphan, DESTROYED after capture — leak 0).
+Toolchain: nvcc 12.6.77 (CUDA 12.6.r12.6), -arch=sm_90a.
+Date: 2026-06-06.
+
+PROBE FEASIBLE (Y/N): YES.
+  sm_90a builds cleanly (BUILD-EXIT=0) and wgmma.mma_async EXECUTES CORRECTLY on
+  native H100 — the gating unknown is resolved POSITIVE. This is a strict advance
+  over the prior bc4-r15 closed-negative (F-FUSION-ATTN-WGMMA-WALL, 2026-05-28):
+  there the SAME wgmma kernel was sm_90a-clean at ptxas but SILENTLY NOP'd on
+  Blackwell sm_120 (output all-zero). On real Hopper it runs:
+
+    === STAGE 1a — f16 m64n32k16 wgmma probe (PASS) ===
+    Launch verdict: OK
+    GPU outputs: nonzero=2048/2048  max_abs=1.2799  sum=1962.4888
+    CPU ref:                                 sum=1956.8679
+    WGMMA_NUMERIC_PROBE: PASS — wgmma executes correctly
+
+STAGES LANDED (of 1-4):
+  Stage 1 (feasibility): PASS — sm_90a + wgmma builds AND runs correct (f16 probe,
+    sum 1962.49 vs ref 1956.87, 0.3% / f16 tol). TF32 single-warpgroup wgmma also
+    builds + launches (4067/4096 nonzero).
+  Stage 2 (TMA): code complete + BUILD-VALIDATED on H100 (TMA-BUILD=0).
+    cuTensorMapEncodeTiled (driver API) + cp.async.bulk.tensor.2d.shared::cluster
+    .global.mbarrier::complete_tx::bytes + mbarrier.init/arrive.expect_tx/try_wait
+    .parity PTX all ACCEPTED by ptxas 12.6 on sm_90a. The integrated TMA pipeline
+    LAUNCHES but faults at runtime (illegal memory access) — TMA coordinate /
+    mbarrier-phase addressing bug (named residual).
+  Stage 3 (warpgroup mainloop): wgmma.m64n128k8 + NSTAGES=3 ring builds + runs.
+  Stage 4 (measure): NO own GFLOP/s reported — correctness bar NOT met, and the
+    g5 hard rule forbids reporting perf on a wrong-result kernel.
+
+CORRECTNESS (TF32 single-warpgroup, the gate for scaling):
+    lboA=128 sboA=256 lboB=128 sboB=256  nz=4067/4096 rel_rms=1.309e+00
+    WGMMA_TF32_PROBE3: FAIL  (bar rel-RMS <= 3e-3)
+  An isolated, process-safe (LBO,SBO) descriptor sweep over {16,32,64,128,256,512}
+  found NO combo below rel_rms 1.309 — i.e. the descriptor byte-offsets are NOT
+  the binding error. A structured-input diagnostic (C[m][n]=n) confirmed the
+  ACCUMULATOR-register -> C(row,col) epilogue mapping is CORRECT (thread 0 receives
+  the right column-octet values 8,16,24,...,56). The binding residual is the
+  no-swizzle CORE-MATRIX (8x16B) input tiling of A/B in shared memory: a
+  permutation/transpose in the shared staging leaves the contraction partly
+  uncorrelated (rel_rms ~= sqrt(2)). Getting this bit-exact requires the precise
+  CUTLASS-3.x swizzle/core-matrix interleave (multi-day CUTLASS-internals effort).
+
+OWN GFLOP/s:        NOT-REPORTED (kernel not bit-correct — honest g5).
+cuBLAS GFLOP/s:     ~340 TFLOP/s (roofline, from F-FUSION-SM90-CUBLAS-MAINLOOP).
+RATIO vs cuBLAS:    N/A (no honest own number).
+% of 29.4x gap closed: 0% measured (perf not claimable on a wrong-result kernel).
+PARITY REACHED (Y/N): NO — not measured.
+rel-RMS: 1.309e+00 (FAIL vs 3e-3) for the TF32 single-warpgroup mainloop.
+
+FINDING (Delta vs the bc4 closed-negative + the named residual):
+  POSITIVE Delta: wgmma.mma_async + the full Hopper TMA PTX surface (cuTensorMap
+    + cp.async.bulk.tensor + mbarrier) are BUILD- and (for wgmma) RUN-feasible on
+    native sm_90 H100 with the in-tree nvcc-12.6 emit path — converting the prior
+    "hardware-blocked, cannot-test" closed-negative into "testable, builds+runs."
+    The own-GEMM emit path (hand-written .cu via nvcc sm_90a) is NOT the blocker.
+  NAMED RESIDUAL (the ruled-IN axis): the binding constraint to parity is the
+    no-swizzle core-matrix shared-memory LAYOUT correctness of the wgmma operands
+    (NOT the instruction, NOT the descriptor offsets, NOT the epilogue mapping,
+    NOT the emit path) + the TMA coordinate/mbarrier-phase addressing. This is the
+    exact CUTLASS-3.x complexity wedge; pinning it is the next-cycle claim.
+
+HONEST: parity-seeking. cuBLAS is the roofline; NO superiority claim. No perf
+  number reported on a non-bit-correct kernel (g5). Pod destroyed, leak 0.
+
+Evidence kit: self/native/wgmma/{wgmma_f16_probe,wgmma_tf32_probe3,wgmma_diag,
+  wgmma_tma_gemm}.cu + build_and_measure.sh (this branch).
