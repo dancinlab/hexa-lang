@@ -267,6 +267,26 @@ pub fn qpwfft_folds() -> int { return PWFFT_FOLDS }
 pub fn qpwfft_last_err() -> int { return PWFFT_LAST_ERR }
 pub fn qpwfft_reset_witness() { PWFFT_FOLDS = 0 ; PWFFT_LAST_ERR = 0 ; PWFFT_LOCAL_XC = 0 }
 
+// ── REUSABLE SCRATCH (memory-efficiency, the n=645 DEFER retry-recipe #1) ─────────
+//   The per-fold convolution allocated ~20 fresh Ntot grids PER CALL × nb bands ×
+//   {6,40} Anderson iters × 3 dirs at the converged basis → OOM-killed mid-screening
+//   (RSS 4-5 GB, jetsam). These module-level buffers are sized once per cell (in
+//   qpwfft_*_stage_core) and CLEARED (not reallocated) per use, eliminating the
+//   N×folds allocation churn. d4/d6 — pure scratch, zero physics change.
+let mut PWFFT_ZIM: [float] = []          // reusable zero-imaginary Ntot buffer
+fn _qpwfft_zim() -> [float] {
+    let ntot = PWFFT_NX * PWFFT_NY * PWFFT_NZ
+    if len(PWFFT_ZIM) != ntot {
+        PWFFT_ZIM = []
+        let mut p = 0
+        while p < ntot { PWFFT_ZIM.push(0.0) ; p = p + 1 }
+    } else {
+        let mut p = 0
+        while p < ntot { PWFFT_ZIM[p] = 0.0 ; p = p + 1 }
+    }
+    return PWFFT_ZIM
+}
+
 // ── scatter a PW-coefficient vector c (length n) onto the (Nx,Ny,Nz) reciprocal
 //    grid as a split complex field [re(Ntot), im(Ntot)] (coefficients are REAL → im=0).
 fn _qpwfft_scatter(c: [float]) -> [float] {
@@ -282,10 +302,7 @@ fn _qpwfft_scatter(c: [float]) -> [float] {
 // ── inverse-FFT a scattered reciprocal field → real-space field (real part, length Ntot)
 fn _qpwfft_to_real(re_grid: [float]) -> [float] {
     let ntot = PWFFT_NX * PWFFT_NY * PWFFT_NZ
-    let mut im: [float] = []
-    let mut p = 0
-    while p < ntot { im.push(0.0) ; p = p + 1 }
-    let inter = ifft3(re_grid, im, PWFFT_NX, PWFFT_NY, PWFFT_NZ)
+    let inter = ifft3(re_grid, _qpwfft_zim(), PWFFT_NX, PWFFT_NY, PWFFT_NZ)
     if len(inter) != 2 * ntot { return [] }
     let mut out: [float] = []
     p = 0
@@ -327,10 +344,7 @@ pub fn qpwfft_dvscr_from_dpsi(psis: [[float]], dpsi: [[float]]) -> [float] {
         nbnd = nbnd + 1
     }
     // ⑥ forward-FFT Δρ(r) → Δρ̂(G); apply Poisson V_H(G)=4π Δρ̂(G)/|G|² (G=0→0).
-    let mut zim: [float] = []
-    p = 0
-    while p < ntot { zim.push(0.0) ; p = p + 1 }
-    let spec = fft3(drho_r, zim, PWFFT_NX, PWFFT_NY, PWFFT_NZ)
+    let spec = fft3(drho_r, _qpwfft_zim(), PWFFT_NX, PWFFT_NY, PWFFT_NZ)
     if len(spec) != 2 * ntot { PWFFT_LAST_ERR = 5 ; return [] }
     let mut vh_re: [float] = [] ; let mut vh_im: [float] = []
     let mut ix = 0
@@ -387,10 +401,7 @@ pub fn qpwfft_dvscr_from_dpsi(psis: [[float]], dpsi: [[float]]) -> [float] {
         while p < ntot { dvscr_r.push(vh_back[p * 2] + PWFFT_FXC * drho_r[p]) ; p = p + 1 }
     }
     // ⑦ forward-FFT ΔV_scr(r) → ΔV_scr(G); GATHER onto the PW coefficients.
-    let mut zim2: [float] = []
-    p = 0
-    while p < ntot { zim2.push(0.0) ; p = p + 1 }
-    let vspec = fft3(dvscr_r, zim2, PWFFT_NX, PWFFT_NY, PWFFT_NZ)
+    let vspec = fft3(dvscr_r, _qpwfft_zim(), PWFFT_NX, PWFFT_NY, PWFFT_NZ)
     if len(vspec) != 2 * ntot { PWFFT_LAST_ERR = 7 ; return [] }
     let inv_ntot = 1.0 / to_float(ntot)
     let mut out: [float] = []
