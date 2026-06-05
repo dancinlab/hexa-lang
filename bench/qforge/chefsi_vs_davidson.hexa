@@ -1,0 +1,343 @@
+// QFORGE-PERF — CLOSE "Chebyshev-filtered subspace iteration (CheFSI)" (🧮 LANE B)
+// with a real measured Δ vs the engine Davidson on a synthetic symmetric H.
+//
+// PRIOR ART (lit-grounded · d18):
+//   Y. Zhou, Y. Saad, M. L. Tiago, J. R. Chelikowsky,
+//   "Self-consistent-field calculations using Chebyshev-filtered subspace
+//    iteration", J. Comp. Phys. 219 (2006) 172–184  (the CheFSI method paper)
+//   — companion: Phys. Rev. E 74, 066704 (2006) (parallel SCF via CheFSI).
+//   The ChASE line (Winkelmann et al., ACM TOMS 2019) is the same family.
+//
+// IDEA: a degree-m Chebyshev polynomial p_m(H), mapped so the UNWANTED upper
+//   spectrum interval [a,b] lands on [-1,1] (where |T_m| ≤ 1, damped) while the
+//   WANTED lower eigenvalues (< a) land OUTSIDE [-1,1] (where T_m grows ~2^m,
+//   AMPLIFIED). Filtering a block X = p_m(H)·X drives X toward the occupied
+//   subspace WITHOUT ever forming explicit eigenvectors of H. A single small
+//   Rayleigh-Ritz (project H onto the filtered block → dense eigh, reuse d19)
+//   then recovers the occupied eigenpairs. This AVOIDS Davidson's per-restart
+//   O(N³)-heavy orthogonalization of a growing subspace: CheFSI keeps a FIXED
+//   block width (= nocc) and re-orthonormalizes ONLY that block once per outer
+//   iter, the matvecs living in the cheap 3-term recurrence.
+//
+// FILTER RECURRENCE (Zhou-Saad-Tiago-Chelikowsky, mapped to unwanted [a,b]):
+//   c = (b + a) / 2     (center of the unwanted/upper interval)
+//   e = (b - a) / 2     (half-width)
+//   t_0 = X
+//   t_1 = (H·X − c·X) / e
+//   t_{k+1} = 2·(H·t_k − c·t_k) / e − t_{k-1}      , k = 1..m-1
+//   X_filtered = t_m
+//   For an eigenvalue λ < a the argument (λ−c)/e < −1, so T_k there grows like
+//   cosh(k·acosh(|·|)) ≈ 2^{k-1}|·|^k → the lowest λ is amplified the MOST.
+//
+// docs-only: implements CheFSI HERE (bench/), reads the engine Davidson + eigh
+//   read-only, edits NOTHING under stdlib/qforge (d3 canonical home · this is a
+//   PROPOSAL bench-driver per the QFORGE-PERF docs-only scope). Both run on the
+//   SAME deterministic synthetic symmetric H → apples-to-apples (d6 honest).
+//
+// FALSIFIER (board): CheFSI recovers the SAME lowest-nocc eigenvalues as the
+//   reference (dense eigh + engine Davidson) to tol, ELSE report the honest
+//   grounded result + the filter degree needed (d6 — no forcing).
+//
+//   hexa verify --verifier-cmd "HEXA_LANG=. hexa run bench/qforge/chefsi_vs_davidson.hexa" \
+//               --claim "CheFSI recovers the lowest-nocc spectrum to tol vs reference" \
+//               --expect "VERDICT_CHEFSI=MATCH"
+use "stdlib/qforge/davidson"
+use "stdlib/alloc/math/eigen"
+
+// ── synthetic symmetric H (matrix-free matvec) ──────────────────────────────
+let mut G_MAT: [float] = []
+let mut G_N = 0
+let mut G_MATVECS = 0
+
+fn h_apply(v: [float]) -> [float] {
+    G_MATVECS = G_MATVECS + 1
+    let mut out: [float] = []
+    let mut i = 0
+    while i < G_N {
+        let mut s = 0.0
+        let mut j = 0
+        while j < G_N { s = s + G_MAT[i * G_N + j] * v[j] ; j = j + 1 }
+        out.push(s)
+        i = i + 1
+    }
+    return out
+}
+
+// Deterministic real-symmetric, diagonally-dominant H (well-separated lower
+// spectrum): diag = 2(i+1) ascending, off-diag = 1/(|i-j|+1). Same family the
+// Davidson/Lanczos benches use, so it is a known-hard but solvable testbed.
+fn _build_flat(n: int) -> [float] {
+    let mut m: [float] = []
+    let mut a = 0
+    while a < n {
+        let mut b = 0
+        while b < n {
+            if a == b { m.push(2.0 * to_float(a + 1)) }
+            else {
+                let d = a - b
+                let ad = if d < 0 { 0 - d } else { d }
+                m.push(1.0 / to_float(ad + 1))
+            }
+            b = b + 1
+        }
+        a = a + 1
+    }
+    return m
+}
+
+// ── small vector helpers (local — stdlib has no public dot/axpy; d19 grep) ──
+fn _dot(a: [float], b: [float], n: int) -> float {
+    let mut s = 0.0 ; let mut i = 0
+    while i < n { s = s + a[i] * b[i] ; i = i + 1 }
+    return s
+}
+
+// Modified Gram-Schmidt orthonormalization of a block (rows = vectors).
+// Returns the orthonormal block (drops any near-dependent direction by
+// reseeding it from a shifted unit vector so the block width is preserved).
+fn _ortho_block(block: [[float]], k: int, n: int) -> [[float]] {
+    let mut out: [[float]] = []
+    let mut j = 0
+    while j < k {
+        let mut v: [float] = []
+        let mut t = 0
+        while t < n { v.push(block[j][t]) ; t = t + 1 }
+        let mut p = 0
+        while p < j {
+            let proj = _dot(out[p], v, n)
+            let mut i = 0
+            while i < n { v[i] = v[i] - proj * out[p][i] ; i = i + 1 }
+            p = p + 1
+        }
+        let nrm = sqrt(_dot(v, v, n))
+        if nrm < 1.0e-12 {
+            // reseed dependent direction with a fresh unit vector, re-orthogonalize
+            let mut w: [float] = []
+            let mut q = 0
+            while q < n { if q == (j % n) { w.push(1.0) } else { w.push(0.0) } ; q = q + 1 }
+            let mut pp = 0
+            while pp < j {
+                let pr = _dot(out[pp], w, n)
+                let mut i2 = 0
+                while i2 < n { w[i2] = w[i2] - pr * out[pp][i2] ; i2 = i2 + 1 }
+                pp = pp + 1
+            }
+            let nw = sqrt(_dot(w, w, n))
+            let mut i3 = 0
+            while i3 < n { w[i3] = w[i3] / nw ; i3 = i3 + 1 }
+            out.push(w)
+        } else {
+            let mut i4 = 0
+            while i4 < n { v[i4] = v[i4] / nrm ; i4 = i4 + 1 }
+            out.push(v)
+        }
+        j = j + 1
+    }
+    return out
+}
+
+// ── Chebyshev filter: X_filtered = p_m(H)·X over the block (rows = vectors) ──
+// Maps the UNWANTED upper interval [a,b] to [-1,1] (damped), amplifying the
+// wanted lower eigenspace (λ < a). 3-term recurrence per Zhou-Saad-Tiago-Chelikowsky.
+fn _cheb_filter(block: [[float]], k: int, n: int, m: int, a: float, b: float) -> [[float]] {
+    let c = (b + a) / 2.0          // center of unwanted interval
+    let e = (b - a) / 2.0          // half-width
+    // t0 = X ; t1 = (H·X − c·X)/e , per row
+    let mut t0: [[float]] = []
+    let mut t1: [[float]] = []
+    let mut r = 0
+    while r < k {
+        let hv = h_apply(block[r])
+        let mut row0: [float] = []
+        let mut row1: [float] = []
+        let mut i = 0
+        while i < n {
+            row0.push(block[r][i])
+            row1.push((hv[i] - c * block[r][i]) / e)
+            i = i + 1
+        }
+        t0.push(row0)
+        t1.push(row1)
+        r = r + 1
+    }
+    // t_{p+1} = 2(H·t_p − c·t_p)/e − t_{p-1}
+    let mut p = 1
+    while p < m {
+        let mut t2: [[float]] = []
+        let mut rr = 0
+        while rr < k {
+            let hv = h_apply(t1[rr])
+            let mut row: [float] = []
+            let mut i = 0
+            while i < n {
+                row.push(2.0 * (hv[i] - c * t1[rr][i]) / e - t0[rr][i])
+                i = i + 1
+            }
+            t2.push(row)
+            rr = rr + 1
+        }
+        t0 = t1
+        t1 = t2
+        p = p + 1
+    }
+    return t1
+}
+
+// ── CheFSI: outer subspace iteration with one Rayleigh-Ritz per pass ─────────
+// Returns the lowest-nocc Ritz values (ascending). Block stays width = nocc.
+fn chefsi_lowest(n: int, nocc: int, m: int, a: float, b: float,
+                 tol: float, max_outer: int) -> [float] {
+    // initial block = deterministic shifted unit vectors (cheap, no random)
+    let mut X: [[float]] = []
+    let mut s = 0
+    while s < nocc {
+        let mut e: [float] = []
+        let mut i = 0
+        while i < n { if i == s { e.push(1.0) } else { e.push(0.0) } ; i = i + 1 }
+        X.push(e)
+        s = s + 1
+    }
+    X = _ortho_block(X, nocc, n)
+
+    let mut prev: [float] = []
+    let mut q = 0
+    while q < nocc { prev.push(0.0) ; q = q + 1 }
+
+    let mut outer = 0
+    while outer < max_outer {
+        outer = outer + 1
+        // (1) Chebyshev-filter the block → amplify wanted lower eigenspace.
+        let Xf = _cheb_filter(X, nocc, n, m, a, b)
+        // (2) re-orthonormalize the filtered block (keeps width = nocc).
+        let Q = _ortho_block(Xf, nocc, n)
+        // (3) Rayleigh-Ritz: Hs = Qᵀ H Q (nocc×nocc dense), small eigh (d19).
+        let mut HQ: [[float]] = []
+        let mut j = 0
+        while j < nocc { HQ.push(h_apply(Q[j])) ; j = j + 1 }
+        let mut Hs: [float] = []
+        let mut r = 0
+        while r < nocc {
+            let mut cc = 0
+            while cc < nocc { Hs.push(_dot(Q[r], HQ[cc], n)) ; cc = cc + 1 }
+            r = r + 1
+        }
+        let eg = eigh(Hs, nocc)         // vals descending, vecs rows
+        let vals = eg[0]
+        let vecs = eg[1]
+        // (4) rotate block to the Ritz basis: X_new[k] = Σ_j vecs[k][j] Q[j]
+        let mut Xnew: [[float]] = []
+        let mut k = 0
+        while k < nocc {
+            let mut row: [float] = []
+            let mut i = 0
+            while i < n {
+                let mut acc = 0.0
+                let mut jj = 0
+                while jj < nocc { acc = acc + vecs[k][jj] * Q[jj][i] ; jj = jj + 1 }
+                row.push(acc)
+                i = i + 1
+            }
+            Xnew.push(row)
+            k = k + 1
+        }
+        X = Xnew
+        // (5) convergence on the lowest-nocc Ritz values (eigh descending →
+        //     lowest are the last nocc; collect ascending).
+        let mut cur: [float] = []
+        let mut t = nocc - 1
+        while t >= 0 { cur.push(vals[t]) ; t = t - 1 }
+        let mut maxd = 0.0
+        let mut u = 0
+        while u < nocc {
+            let d = if cur[u] > prev[u] { cur[u] - prev[u] } else { prev[u] - cur[u] }
+            if d > maxd { maxd = d }
+            u = u + 1
+        }
+        prev = cur
+        if outer > 1 && maxd < tol { return cur }
+    }
+    return prev
+}
+
+fn main() {
+    let n = 64
+    let nocc = 6                  // wanted lowest-nocc eigenpairs
+    let tol = 1.0e-8
+
+    G_MAT = _build_flat(n)
+    G_N = n
+
+    // ── REFERENCE: dense Jacobi eigh on the explicit H (ground truth) ────────
+    let ref_eg = eigvalsh(G_MAT, n)          // descending
+    let mut ref_low: [float] = []            // lowest-nocc ascending
+    let mut t = n - 1
+    while t >= n - nocc { ref_low.push(ref_eg[t]) ; t = t - 1 }
+
+    // ── REFERENCE 2: engine Davidson (the solver CheFSI would replace) ───────
+    let mut diag: [float] = []
+    let mut i = 0
+    while i < n { diag.push(G_MAT[i * n + i]) ; i = i + 1 }
+    G_MATVECS = 0
+    let dres = qforge_davidson(h_apply, diag, n, nocc, tol, 300)
+    let dav_mv = G_MATVECS
+    let dav_low = dres.evals                 // ascending, nocc
+
+    // estimate the unwanted upper interval [a,b] for the filter.
+    // a = upper bound of the WANTED window (just above the nocc-th eigenvalue);
+    // b = spectrum max (Gershgorin upper bound — cheap, no eig needed).
+    // Honest: a is taken between the nocc-th and (nocc+1)-th REFERENCE values to
+    // place the cut; in production a comes from the previous SCF Ritz values
+    // (Zhou et al.) — here we use the reference gap, the method itself is the test.
+    let a_cut = (ref_eg[n - nocc] + ref_eg[n - nocc - 1]) / 2.0
+    let mut b_max = 0.0
+    let mut g = 0
+    while g < n {
+        let mut rowsum = 0.0
+        let mut h = 0
+        while h < n {
+            let v = G_MAT[g * n + h]
+            rowsum = rowsum + (if v < 0.0 { 0.0 - v } else { v })
+            h = h + 1
+        }
+        if rowsum > b_max { b_max = rowsum }      // Gershgorin: |λ| ≤ max row 1-norm
+        g = g + 1
+    }
+
+    // ── CheFSI at degree m (sweep to find the degree that recovers spectrum) ─
+    let m_deg = 18
+    G_MATVECS = 0
+    let che_low = chefsi_lowest(n, nocc, m_deg, a_cut, b_max, tol, 60)
+    let che_mv = G_MATVECS
+
+    println("n=" + to_string(n) + " nocc=" + to_string(nocc)
+            + " cheb_degree=" + to_string(m_deg)
+            + " a_cut=" + to_string(a_cut) + " b_max=" + to_string(b_max))
+    println("--- lowest-" + to_string(nocc) + " eigenvalues (ascending) ---")
+    let mut maxd = 0.0
+    let mut k = 0
+    while k < nocc {
+        let d = if che_low[k] > ref_low[k] { che_low[k] - ref_low[k] }
+                else { ref_low[k] - che_low[k] }
+        if d > maxd { maxd = d }
+        println("  k=" + to_string(k)
+                + "  ref=" + to_string(ref_low[k])
+                + "  davidson=" + to_string(dav_low[k])
+                + "  chefsi=" + to_string(che_low[k])
+                + "  |dref|=" + to_string(d))
+        k = k + 1
+    }
+    println("max|dlambda| (CheFSI vs dense-ref) = " + to_string(maxd))
+    println("matvecs:  davidson=" + to_string(dav_mv)
+            + "  chefsi=" + to_string(che_mv))
+
+    if maxd < 1.0e-6 {
+        println("VERDICT_CHEFSI=MATCH max_dlambda=" + to_string(maxd)
+                + " chebyshev_degree=" + to_string(m_deg)
+                + " chefsi_matvecs=" + to_string(che_mv)
+                + " davidson_matvecs=" + to_string(dav_mv))
+        exit(0)
+    }
+    println("VERDICT_CHEFSI=REFUTED max_dlambda=" + to_string(maxd)
+            + " (filter degree " + to_string(m_deg) + " insufficient)")
+    exit(1)
+}
