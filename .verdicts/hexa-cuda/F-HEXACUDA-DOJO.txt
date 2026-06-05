@@ -1,5 +1,6 @@
 === F-HEXACUDA-DOJO — dojo hexa-cuda + flame-forge emit · parse-clean · descent-gate ===
 date: 2026-06-05T21:05:47Z  ·  method: g5 (real local emit + hexa parse + hexa run)
+        recipe-hardened: 2026-06-06 (handoff a10891bc training-recipe lessons)
 binary: hexa 0.1.0-dispatch
 
 ── (1) hexa-cuda kernels — hexa parse (emitted @gpu_kernel katas) ──
@@ -35,7 +36,8 @@ flame-forge/tiny-clm/train.hexa          OK: flame-forge/tiny-clm/train.hexa par
   hexa-cuda/vecadd-both:  driver.py kernel.cu kernel.hexa README.md run.sh 
   flame-forge/linreg-both: README.md ref.py run.sh train.hexa 
 
-── (5) preflight/rent helper — 6 no-troubleshoot fixes (handoff 4474f21b) self-test ──
+── (5) preflight/rent helper — 6 infra fixes (handoff 4474f21b) + recipe advisory
+       (handoff a10891bc) self-test ──
   == dojo_rent_preflight self-test (no rental) ==
     [ok] fix#1 known-good image accepted
     [ok] fix#1 bogus 2.4.1 tag rejected
@@ -46,7 +48,12 @@ flame-forge/tiny-clm/train.hexa          OK: flame-forge/tiny-clm/train.hexa par
     [ok] fix#5 7B fp32 OOMs H100-80GB (blocked)
     [ok] fix#5 7B fp32 fits H200-141GB
     [ok] fix#6 torchrun cmd has --tee 3 --redirect 3 --log-dir
-  == ALL 6 FIXES VERIFIED (pure logic) ==
+    [ok] recipe lesson#3 optim8bit 2^31 element-limit BLOCKS (3.47B-elem tensor)
+    [ok] recipe lesson#3 optim8bit within 2^31 limit passes (100M-elem tensor)
+    [ok] recipe lesson#4 recommends --bf16-weights for 7B fp32
+    [ok] recipe lesson#6 DDP-won't-help-if-model-bound advisory present
+    [ok] recipe lesson#4 bf16-already-selected acknowledged
+  == ALL 6 FIXES + RECIPE ADVISORY VERIFIED (pure logic) ==
 
 ── (6) flame-forge run.sh cloud path — fix #5 BLOCKS OOM before any rental ──
   $ DOJO_CLOUD=1 DOJO_PARAMS=7e9 DOJO_DTYPE=f32 DOJO_GPU=h100-80gb bash run.sh
@@ -55,10 +62,32 @@ flame-forge/tiny-clm/train.hexa          OK: flame-forge/tiny-clm/train.hexa par
     → H200-141GB: verdict PASS (134.30 GiB fits 141.00 GiB) → proceeds to dojo_rent
     NO POD RENTED on the OOM path — the no-troubleshoot deliverable.
 
+── (7) training-recipe advisory (handoff a10891bc) — bf16 rec · optim8bit limit · DDP ──
+  bench-before-vectorize NOTE: emitted into the tiny-clm README (the CLMConvMoE bridge
+    rung) — do NOT auto-fuse the expert loop (grouped Conv1d w/ 30 groups ~14min/step vs
+    ModuleList ~74s/step). flame_forge.hexa parses cleanly after the edit.
+  preflight dojo_recipe_advisory (folded into the fix#5 mem gate) — block demo:
+    $ dojo_recipe_advisory --params 7e9 --param-dtype bf16 --optimizer adamw-8bit \
+                           --ddp 8 --max-tensor-elems 3.47e9
+    ✗ optim8bit but a single tensor has 3470000000 elements > 2^31 — bitsandbytes will
+      fail 'invalid configuration argument at ops.cu:226' (lesson#3) → returns rc=1 (BLOCK)
+    ✓ bf16 weights already selected — the anima 7B winner ~70GB (lesson#4)
+    ⚠ DDP x8 replicates the FULL model per GPU; model/compute-bound never beats single-GPU
+      (lesson#6 — single-H200 ModuleList trained M13 fine, ~74s/step)
+  For a >=3B-param fp32 spec the advisory WARNs --bf16-weights (lesson#4) + that fp32-AdamW
+    (~112GB on 141GB H200) allocator-thrashes 96-99% near the cap.
+  CITED: all numbers are anima H200 observations (handoff a10891bc) — attributed, NOT
+    re-measured here. The advisory's element-limit + bf16-rec logic is pure-arithmetic
+    self-tested above; the underlying anima 7B timings are not reproduced.
+
 VERDICT: 🟢 GREEN — both dojo domains emit; all 7 emitted katas hexa parse cleanly;
 all 3 flame-forge trainers RUN + PASS the descent gate; --lang=both emits the contrast
 surfaces; the 6-fix preflight/rent helper self-tests GREEN + is wired into the emitted
 flame-forge run.sh (blocks OOM before rental, classifies failures, fails fast on auth).
+RECIPE-HARDENED (handoff a10891bc): the preflight now folds a training-recipe advisory
+(--bf16-weights rec for >=3B params · optim8bit 2^31 element-limit BLOCK · DDP-model-bound
+advisory) self-testing GREEN (5 new cases), and the tiny-clm README carries the
+bench-before-vectorize note; docs/hexa-dojo.md gains the optimization-gotchas section.
 
 BUILD-VERIFY-PENDING (needs a real GPU pod — honest g5):
   · 'hexa dojo domains' listing both [full] via the INSTALLED binary — the Jun-1 local
@@ -69,3 +98,7 @@ BUILD-VERIFY-PENDING (needs a real GPU pod — honest g5):
     the emitted run.sh parse-gates today and degrades gracefully when ptxas is absent.
   · An actual multi-GPU DDP rent+run — the preflight LOGIC is locally verified (self-test
     + OOM-block + auth fail-fast, NO rental); a live pod exercises the rent ladder end-to-end.
+  · Re-EMIT of the tiny-clm README carrying the bench-before-vectorize note via the INSTALLED
+    binary — same stale-Jun-1 snapshot limitation as above (the binary doesn't know
+    'flame-forge'); the flame_forge.hexa SOURCE edit is parse-clean (verified above). A binary
+    rebuild surfaces the new README body.

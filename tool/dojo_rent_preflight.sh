@@ -22,6 +22,15 @@
 #   6. torchrun log harvest        — DDP launcher defaults --tee 3 + harvests
 #                                    per-rank stderr.log on ChildFailedError.
 #
+# Plus the TRAINING-RECIPE advisory (sidecar handoff a10891bc — anima 7B
+# CLMConvMoE DDP), folded into the fix #5 mem gate via dojo_recipe_advisory:
+#   • recommend --bf16-weights for a >=~3B-param model (fp32-AdamW thrashes
+#     near the cap; bf16 weights+grad+state is the anima 7B winner ~70GB).
+#   • BLOCK adamw-8bit when a single tensor exceeds 2^31 elements (bitsandbytes
+#     'invalid configuration argument ops.cu:226').
+#   • advise that DDP won't help a model/compute-bound run (single-GPU can win).
+# These are CITED anima observations — attributed, not re-measured here.
+#
 # Pure POSIX-ish bash. Drives `runpodctl` if present, else the RunPod GraphQL
 # API. No external LLM. shellcheck-clean (sourced or executed).
 #
@@ -222,7 +231,7 @@ _dojo_find_preflight() {
 # coarse fallback estimate keeps the gate alive.
 dojo_preflight_mem() {
     local params="" pdt="bf16" gdt="" opt="adamw" ddp="1" gpu="h100-80gb"
-    local grad_ckpt="0" bsz="1" seq="2048" dmodel="4096" nlayer="32"
+    local grad_ckpt="0" bsz="1" seq="2048" dmodel="4096" nlayer="32" max_elems="0"
     while [ $# -gt 0 ]; do
         case "$1" in
             --params)     params="$2"; shift 2 ;;
@@ -236,12 +245,24 @@ dojo_preflight_mem() {
             --seq)        seq="$2"; shift 2 ;;
             --d-model)    dmodel="$2"; shift 2 ;;
             --n-layer)    nlayer="$2"; shift 2 ;;
+            --max-tensor-elems) max_elems="$2"; shift 2 ;;
             *) shift ;;
         esac
     done
     [ -z "$gdt" ] && gdt="$pdt"
     if [ -z "$params" ]; then
         _dojo_err "dojo_preflight_mem needs --params" "pass the model param count, e.g. --params 7000000000"
+        return 1
+    fi
+
+    # training-recipe advisory (handoff a10891bc) BEFORE the OOM gate: a real
+    # optim8bit element-limit violation BLOCKS (returns non-zero); bf16 + DDP
+    # advisories are warnings. Runs first so the operator sees the recipe
+    # guidance even when the spec also OOMs.
+    if ! dojo_recipe_advisory --params "$params" --param-dtype "$pdt" \
+            --optimizer "$opt" --ddp "$ddp" --max-tensor-elems "$max_elems"; then
+        _dojo_err "training-recipe advisory BLOCKED: optim8bit per-tensor element limit (2^31) violated" \
+                  "see the fix above — drop adamw-8bit for the oversized tensor (anima a10891bc)"
         return 1
     fi
 
@@ -308,6 +329,73 @@ dojo_preflight_mem_coarse() {
     fi
     _dojo_ok "fits — proceed"
     return 0
+}
+
+# ── training-recipe advisory (sidecar handoff a10891bc) ──────────────────
+# dojo_recipe_advisory --params N --param-dtype DT --optimizer OPT --ddp NGPU
+#                      [--max-tensor-elems E]
+# Emits the anima-7B training-recipe guidance the *infra* fixes don't cover:
+#   • lesson #4 — recommend --bf16-weights for a >=~3B-param model (fp32-AdamW
+#     allocator-thrashes near the cap; bf16 weights+grad+state ~= 0.6x mem).
+#   • lesson #3 — BLOCK adamw-8bit when a single tensor exceeds the 2^31
+#     element limit (bitsandbytes: "invalid configuration argument ops.cu:226").
+#   • lesson #6 — print a "DDP won't help if you are model/compute-bound" line.
+# Returns 0 (advisory) UNLESS the optim8bit element-limit is actually violated,
+# in which case it returns 1 (a real, blocking misconfiguration). All numbers
+# are CITED anima H200 observations — attributed, not re-measured here.
+DOJO_OPT8BIT_ELEM_LIMIT=2147483648   # 2^31 — bitsandbytes per-tensor limit
+DOJO_BF16_PARAM_REC=3000000000       # ~3B params: recommend --bf16-weights at/above
+dojo_recipe_advisory() {
+    local params="" pdt="bf16" opt="adamw" ddp="1" max_elems="0"
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --params)           params="$2"; shift 2 ;;
+            --param-dtype)      pdt="$2"; shift 2 ;;
+            --optimizer)        opt="$2"; shift 2 ;;
+            --ddp)              ddp="$2"; shift 2 ;;
+            --max-tensor-elems) max_elems="$2"; shift 2 ;;
+            *) shift ;;
+        esac
+    done
+    if [ -z "$params" ]; then
+        _dojo_err "dojo_recipe_advisory needs --params" "pass the model param count, e.g. --params 7000000000"
+        return 1
+    fi
+    local rc=0
+
+    # lesson #3 — optim8bit 2^31 per-tensor element limit (HARD: a real break).
+    case "$opt" in
+        adamw-8bit|paged-adamw-8bit|*8bit*)
+            if [ "$max_elems" != "0" ] && [ "$max_elems" -gt "$DOJO_OPT8BIT_ELEM_LIMIT" ]; then
+                _dojo_err "optim8bit ($opt) but a single tensor has $max_elems elements > 2^31 ($DOJO_OPT8BIT_ELEM_LIMIT) — bitsandbytes will fail: 'Error invalid configuration argument at ops.cu:226' (anima a10891bc)" \
+                          "keep fp32/bf16 AdamW for that tensor (do NOT use adamw-8bit), or split the giant tensor — a >2.1B-element fused weight is exactly what NOT to build (see bench-before-vectorize)"
+                rc=1
+            elif [ "$max_elems" = "0" ]; then
+                _dojo_warn "optim8bit ($opt) requested but --max-tensor-elems not declared — bitsandbytes breaks on any single tensor > 2^31 (2.1B) elements (anima a10891bc); declare your largest parameter tensor with --max-tensor-elems N"
+            else
+                _dojo_ok "optim8bit ($opt): largest tensor $max_elems elems <= 2^31 — within the bitsandbytes per-tensor limit"
+            fi
+            ;;
+    esac
+
+    # lesson #4 — recommend --bf16-weights for a >=~3B-param model.
+    if [ "$params" -ge "$DOJO_BF16_PARAM_REC" ]; then
+        case "$pdt" in
+            bf16|f16|fp16)
+                _dojo_ok "bf16 weights already selected — the anima a10891bc 7B winner (model+grad+AdamW-state bf16 ~= 70GB; add DDP gradient_as_bucket_view=True for ~-28GB more)"
+                ;;
+            *)
+                _dojo_warn "model has $params params (>= ~3B) with $pdt weights — RECOMMEND --bf16-weights: the anima a10891bc 7B winner was bf16 model+grad+AdamW-state (~70GB) + DDP gradient_as_bucket_view=True (~-28GB). fp32-AdamW (~112GB on 141GB H200) allocator-thrashes 96-99% (step0 ~7min); bf16-autocast ALONE does NOT help (weights stay fp32)"
+                ;;
+        esac
+    fi
+
+    # lesson #6 — DDP-won't-help-if-model-bound advisory.
+    if [ "$ddp" -gt 1 ] 2>/dev/null; then
+        _dojo_warn "DDP x$ddp replicates the FULL model on every GPU (per-GPU memory unchanged). If you are MODEL/COMPUTE-bound (a big conv/GEMM per step), multi-GPU NEVER beats single-GPU — anima a10891bc: 4xH200 DDP did not beat single H200; the single-H200 ModuleList run trained fine (~74s/step). Scale to multi-GPU ONLY when data-throughput-bound; fix per-step model cost on ONE GPU first"
+    fi
+
+    return "$rc"
 }
 
 # ── fix #6: torchrun launch with log harvest ─────────────────────────────
@@ -431,7 +519,33 @@ _dojo_self_test() {
     if printf '%s' "$tc" | grep -q -- '--tee 3' && printf '%s' "$tc" | grep -q -- '--redirect 3' && printf '%s' "$tc" | grep -q -- '--log-dir'; then
         printf '  [ok] fix#6 torchrun cmd has --tee 3 --redirect 3 --log-dir\n'; else printf '  [FAIL] fix#6 cmd=%s\n' "$tc"; fail=1; fi
 
-    if [ "$fail" = "0" ]; then printf '== ALL 6 FIXES VERIFIED (pure logic) ==\n'; else printf '== SELF-TEST FAILED ==\n'; fi
+    # ── training-recipe advisory (handoff a10891bc) ──
+    # lesson #3 — a >2^31-element tensor under adamw-8bit must BLOCK (return 1).
+    if dojo_recipe_advisory --params 7000000000 --param-dtype bf16 \
+            --optimizer adamw-8bit --ddp 1 --max-tensor-elems 3470000000 >/dev/null 2>&1; then
+        printf '  [FAIL] recipe optim8bit >2^31 elems should BLOCK\n'; fail=1
+    else printf '  [ok] recipe lesson#3 optim8bit 2^31 element-limit BLOCKS (3.47B-elem tensor)\n'; fi
+    # a within-limit tensor under adamw-8bit must PASS.
+    if dojo_recipe_advisory --params 1000000000 --param-dtype bf16 \
+            --optimizer adamw-8bit --ddp 1 --max-tensor-elems 100000000 >/dev/null 2>&1; then
+        printf '  [ok] recipe lesson#3 optim8bit within 2^31 limit passes (100M-elem tensor)\n'
+    else printf '  [FAIL] recipe optim8bit within-limit should pass\n'; fail=1; fi
+    # lesson #4 — a >=3B-param fp32 model should emit the --bf16-weights rec (on stderr).
+    local adv; adv=$(dojo_recipe_advisory --params 7000000000 --param-dtype fp32 --optimizer adamw --ddp 8 2>&1)
+    if printf '%s' "$adv" | grep -q -- '--bf16-weights'; then
+        printf '  [ok] recipe lesson#4 recommends --bf16-weights for 7B fp32\n'
+    else printf '  [FAIL] recipe lesson#4 missing --bf16-weights rec\n'; fail=1; fi
+    # lesson #6 — DDP>1 should emit the model-bound advisory line.
+    if printf '%s' "$adv" | grep -qi 'DDP'; then
+        printf '  [ok] recipe lesson#6 DDP-won'\''t-help-if-model-bound advisory present\n'
+    else printf '  [FAIL] recipe lesson#6 missing DDP advisory\n'; fail=1; fi
+    # bf16 already selected at >=3B → no bf16 WARNING (already-winner OK line).
+    local advb; advb=$(dojo_recipe_advisory --params 7000000000 --param-dtype bf16 --optimizer adamw --ddp 1 2>&1)
+    if printf '%s' "$advb" | grep -q 'bf16 weights already selected'; then
+        printf '  [ok] recipe lesson#4 bf16-already-selected acknowledged\n'
+    else printf '  [FAIL] recipe lesson#4 bf16-selected ack missing\n'; fail=1; fi
+
+    if [ "$fail" = "0" ]; then printf '== ALL 6 FIXES + RECIPE ADVISORY VERIFIED (pure logic) ==\n'; else printf '== SELF-TEST FAILED ==\n'; fi
     return "$fail"
 }
 

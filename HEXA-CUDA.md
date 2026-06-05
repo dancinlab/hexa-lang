@@ -102,8 +102,18 @@ verdict .verdicts/hexa-cuda/F-HEXACUDA-ADOPTION-DX.txt.)
       OOM-block via stdlib/cloud/preflight.hexa · torchrun --tee/--redirect log
       harvest), reflecting sidecar handoff 4474f21b (anima 7B DDP fire). Helper
       self-tests GREEN (all 6 fixes, no rental); OOM-block + auth fail-fast verified
-      locally — NO silent dead pods. Docs: docs/hexa-dojo.md (incl. the
-      no-troubleshoot preflight section). Verdict:
+      locally — NO silent dead pods. RECIPE-HARDENED (sidecar handoff a10891bc — the
+      anima 7B CLMConvMoE DDP *training-recipe* lessons): the preflight now folds a
+      training-recipe advisory into the mem gate — RECOMMEND --bf16-weights for ≥~3B-param
+      models (the anima 7B winner ~70GB; fp32-AdamW thrashes 96-99% near the 141GB cap),
+      BLOCK adamw-8bit when a single tensor > 2^31 elements (the bitsandbytes ops.cu:226
+      break), + a "DDP-won't-help-if-model-bound" advisory (single-GPU can beat multi-GPU
+      when conv/GEMM-bound). The tiny-clm README carries a bench-before-vectorize note
+      (grouped-conv 14min/step vs ModuleList 74s/step — fewer launches ≠ faster), and
+      docs/hexa-dojo.md gains a "Training recipe — optimization gotchas" section. Advisory
+      self-tests GREEN (+5 cases). CITED anima observations — attributed, not re-measured.
+      Docs: docs/hexa-dojo.md (incl. the no-troubleshoot preflight + the training-recipe
+      gotchas sections). Verdict:
       .verdicts/hexa-cuda/F-HEXACUDA-DOJO.txt (GREEN). Build-verify pending:
       `hexa dojo domains` listing both [full] via the INSTALLED binary (Jun-1
       binary caches a precompiled stdlib/dojo snapshot — SOURCE verified via
