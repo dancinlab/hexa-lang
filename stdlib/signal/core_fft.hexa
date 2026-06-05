@@ -103,37 +103,21 @@ pub fn fft_native(real: [float], imag: [float], n: int) -> [float] {
                 // Complex multiply: tw * b
                 let tb_re = tw_re * re[b_idx] - tw_im * im[b_idx]
                 let tb_im = tw_re * im[b_idx] + tw_im * re[b_idx]
-                // Butterfly: a' = a + tw*b, b' = a - tw*b
+                // Butterfly: a' = a + tw*b, b' = a - tw*b — TRUE in-place.
+                //   The original code rebuilt the ENTIRE re/im array (n pushes) on
+                //   EVERY butterfly because of a stale "hexa lists are pass-by-value,
+                //   cannot mutate" assumption. hexa arrays DO support index assignment
+                //   (arr[i] = v, used throughout the stdlib), so the textbook radix-2
+                //   in-place butterfly is just 4 element writes — O(1) instead of O(n).
+                //   This removes the O(n²·log n) per-FFT allocation churn that OOM'd
+                //   the converged screened el-ph (3³q · 8 bands · 32³ grid). Output is
+                //   byte-identical (verified by the fft3 selftest). d4/d6, perf-only.
                 let a_re = re[a_idx]
                 let a_im = im[a_idx]
-                // hexa lists are pass-by-value, so we rebuild with updated values
-                // We must build new arrays for each swap to avoid mutation issues.
-                // For efficiency we build temporary copies only of the two elements.
-                let new_a_re = a_re + tb_re
-                let new_a_im = a_im + tb_im
-                let new_b_re = a_re - tb_re
-                let new_b_im = a_im - tb_im
-                // Rebuild re and im with updated values at a_idx and b_idx.
-                // Since hexa arrays are pass-by-value and we cannot mutate in place,
-                // we rebuild the entire array. For small N (<=512) this is acceptable.
-                let mut re_new = []
-                let mut im_new = []
-                let mut q = 0
-                while q < n {
-                    if q == a_idx {
-                        re_new = re_new.push(new_a_re)
-                        im_new = im_new.push(new_a_im)
-                    } else if q == b_idx {
-                        re_new = re_new.push(new_b_re)
-                        im_new = im_new.push(new_b_im)
-                    } else {
-                        re_new = re_new.push(re[q])
-                        im_new = im_new.push(im[q])
-                    }
-                    q = q + 1
-                }
-                re = re_new
-                im = im_new
+                re[a_idx] = a_re + tb_re
+                im[a_idx] = a_im + tb_im
+                re[b_idx] = a_re - tb_re
+                im[b_idx] = a_im - tb_im
                 k = k + 1
             }
             j = j + stride
