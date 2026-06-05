@@ -2288,7 +2288,7 @@ fn main() {
     while i < len(av) {
         let t = av[i]
         if si < 0 {
-            if t == "rent" || t == "up" || t == "rm" || t == "down" || t == "destroy" || t == "reboot" || t == "list" || t == "status" || t == "preflight" || t == "watchdog" || t == "run" || t == "exec" || t == "nohup" || t == "fire" || t == "poll" || t == "tail" || t == "watch" || t == "ssh-port" || t == "resolve" || t == "alive" || t == "probe" || t == "copy-to" || t == "copy-from" || t == "orphans" || t == "reconcile" || t == "reap" || t == "idle-reap" || t == "adopt" || t == "attribute" || t == "forget" || t == "api" || t == "provider-cli" || t == "dft-run" || t == "parallel-audit" || t == "pods" || t == "dispatch" || t == "providers" || t == "help" || t == "--help" || t == "-h" || t == "version" || t == "--version" || t == "-v" {
+            if t == "rent" || t == "up" || t == "rm" || t == "down" || t == "destroy" || t == "reboot" || t == "list" || t == "status" || t == "preflight" || t == "watchdog" || t == "run" || t == "exec" || t == "nohup" || t == "fire" || t == "poll" || t == "tail" || t == "watch" || t == "ssh-port" || t == "resolve" || t == "alive" || t == "probe" || t == "copy-to" || t == "copy-from" || t == "orphans" || t == "reconcile" || t == "reap" || t == "idle-reap" || t == "adopt" || t == "attribute" || t == "forget" || t == "api" || t == "provider-cli" || t == "dft-run" || t == "dft-fanout" || t == "parallel-audit" || t == "pods" || t == "dispatch" || t == "providers" || t == "help" || t == "--help" || t == "-h" || t == "version" || t == "--version" || t == "-v" {
                 si = i
                 sub = t
             }
@@ -2481,6 +2481,14 @@ fn main() {
         // billing pod and runs the rent/transport/chain/monitor-guarded chain.
         // Encodes the demiurge RTSC checklist (dft_dispatch.hexa, INBOX #1249).
         let rc = dft_run(av, si + 1)
+        exit(rc)
+    }
+    if sub == "dft-fanout" {
+        // §4b SEPARATE-PODS-PER-CANDIDATE executor (PR #2125 follow-up, handoff
+        // 22486f26): fan N candidate decks onto N pods, exactly one deck per pod
+        // (project.tape d_parallel_fire 1순위 + d17). PREVIEW roll-call by default
+        // ($0); --go rents one pod per READY deck and dispatches each chain.
+        let rc = dft_fanout(av, si + 1)
         exit(rc)
     }
     if sub == "pods" {
