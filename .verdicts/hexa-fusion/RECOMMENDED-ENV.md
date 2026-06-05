@@ -21,6 +21,7 @@ hexa run stdlib/flame/clm_prod.hexa
 | lever (gated via `_fuse_on`) | what it turns on |
 |---|---|
 | `CLM_PROD_DEVRESIDENT` | MASTER device-resident chain (param/grad/moment/act FARR_DEVICE, host roundtrip 0) |
+| `HEXA_EAGER_DEVRESIDENT` | P1B-a' byte-eq capstone: fwd glue (gelu/groupnorm/softmax) device-resident as SEPARATE launches WITHOUT the megastep — makes the eager byte-eq oracle share the megakernel's CUDA erf (`[EAGER-DEVGLUE-FIRED]`) |
 | `CLM_PROD_DEVFEED` | device feed + device AdamW (`forge_dispatch_adamw`) |
 | `CLM_PROD_BATCHED` | batched expert matmul (`forge_dispatch_matmul_batched`) |
 | `HEXA_FUSE_GN_GELU` | L3-a groupnorm#1 → gelu#1 (one kernel) |

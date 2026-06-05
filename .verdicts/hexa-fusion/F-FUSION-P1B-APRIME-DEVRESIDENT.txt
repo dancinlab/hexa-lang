@@ -1,0 +1,155 @@
+F-FUSION-P1B-APRIME-DEVRESIDENT — the byte-eq CAPSTONE attempt: make the EAGER
+reference fully DEVICE-RESIDENT (fwd glue gelu/groupnorm/softmax ON DEVICE, SEPARATE
+launches, the SAME CUDA erf the megakernel uses) so both byte-eq arms share CUDA erf,
+then ask whether the cooperative own-GEMM megakernel reaches max|Δ|=0 vs that
+device-eager reference while lifting util.
+domain: HEXA-FUSION · date: 2026-06-05 · branch domain/hexa-fusion-p1b-aprime-devresident (off main #2777)
+method: real clm_prod step A/B on a rented datacenter-Blackwell pod. BOTH arms own-GEMM
+        (HEXA_OWN_GEMM=1) + DEVRESIDENT chain. A = device-EAGER (HEXA_EAGER_DEVRESIDENT=1,
+        megastep OFF → fwd glue on-device as SEPARATE launches, CUDA erf). B = device-MEGA
+        (HEXA_CLM_MEGASTEP=1 HEXA_CLM_MEGASTEP_FP64=1 → cooperative full-fwd megakernel,
+        CUDA erf). max|Δ| on the 17-digit [B6-CE-HIPREC] CE, device-eager vs device-mega.
+
+════════════════════════════════════════════════════════════════════════════════
+PRE-REGISTERED FALSIFIER
+════════════════════════════════════════════════════════════════════════════════
+"A device-resident eager reference (CUDA erf on BOTH sides — gelu/groupnorm/softmax
+run on-device as separate launches via HEXA_EAGER_DEVRESIDENT) makes the cooperative
+own-GEMM megakernel reach max|Δ|=0 vs that reference while lifting util."
+FALSIFIED if max|Δ| ≠ 0 device-eager vs device-mega after the eager glue is made
+device-resident (both arms CUDA erf, identical naive-k own-GEMM).
+
+════════════════════════════════════════════════════════════════════════════════
+VERDICT: 🔴 CLOSED-NEGATIVE on the byte-eq leg, 🟢 on the util leg. The capstone
+         hypothesis FALSIFIED — but NOT for the predicted reason (host↔device erf).
+         The decisive finding: the DEVICE-RESIDENT GLUE PATH IS RUN-TO-RUN
+         NON-DETERMINISTIC (~7e-6 first_ce jitter on a SINGLE forward pass, same
+         config, same fixed weight-init seeds), so max|Δ|=0 is UNREACHABLE for ANY
+         two device-glue runs — including device-eager vs device-mega. The erf axis
+         the P1B re-baseline (#2777) pinned is actually CLEAN at ULP scale; it is
+         masked by a larger, previously-unseen device-glue non-determinism wall.
+         The util lift holds (device-mega > device-eager).
+
+════════════════════════════════════════════════════════════════════════════════
+POD / BUILD (g5-honest)
+════════════════════════════════════════════════════════════════════════════════
+GPU (HONEST): rented `hexa cloud rent vast --gpu H100` — vast AGAIN served an NVIDIA
+  B200 (183359 MiB, compute_cap 10.0 / sm_100, datacenter Blackwell, NOT a literal
+  H100). Same mis-serve the P1B verdict flagged; recorded, not papered over. The
+  byte-eq question is algorithmic/arch-independent (sm_90 PTX JIT-forwards to
+  Blackwell), so B200 is a valid substrate. nvcc 12.4 V12.4.131, gcc 11.4.0, glibc
+  2.35, Ubuntu 22.04. Pod 39578235 DESTROYED + verified GONE (cloud alive → GONE),
+  leak 0; `cloud reap` → 0 orphans.
+WIRING (branch off main #2777): stdlib/flame/clm_prod.hexa adds HEXA_EAGER_DEVRESIDENT
+  via _devres_glue_on() (= CLM_PROD_DEVRESIDENT OR HEXA_EAGER_DEVRESIDENT) gating the
+  fwd glue (_gelu/_groupnorm/_moe_router + _residual_add/_embedding/_expert_pack2) onto
+  the device kernels as SEPARATE launches WITHOUT the cooperative megastep.
+  self/cuda/runtime_cuda_emit.hexa adds a one-shot [EAGER-DEVGLUE-FIRED] marker in
+  _hx_cuda_farr_gelu_gpu (proves the eager ref ran device CUDA-erf gelu, not host libm).
+BUILD: runtime_cuda.c reconstructed from the edited emit SSOT by extract_runtime_cuda.py
+  (the local/pool hexa toolchain miscompiles the emitter — drops the FP64 megafwd block;
+  the emit body is pure string concat, so the extractor faithfully reproduces it). 282KB,
+  _hx_k_clm_megafwd_fp64 x3 + MEGAFWD-FIRED x2 + EAGER-DEVGLUE-FIRED x1 + OWN-GEMM x2,
+  braces balanced 619/619. nvcc -x cu -DHEXA_CUDA -rdc=true -gencode compute_90 (grid.sync
+  needs rdc) → runtime_cuda.o 364416 B (megafwd launcher present) → -dlink -lcudadevrt →
+  gcc link clm_prod_gpu = 2500672 B (byte-identical size to the P1B-c1 FP64 build). clm_prod.c
+  = device-eager gates + a [B6-CE-HIPREC] %.17g first_ce/last_ce stderr line. BUILD OK.
+
+════════════════════════════════════════════════════════════════════════════════
+STAGE 1 — REAL A/B  (device-EAGER vs device-MEGA, both own-GEMM)
+   clm_prod, D=1536 T=512 E=2 NSAMP=8 EPOCHS=4, DEVRESIDENT+DEVFEED+BATCHED.
+   raw FP64 CE at 17 sig digits ([B6-CE-HIPREC], stderr, VERBATIM):
+════════════════════════════════════════════════════════════════════════════════
+  A  device-EAGER (HEXA_EAGER_DEVRESIDENT=1; EAGER-DEVGLUE-FIRED=1, MEGAFWD-FIRED=0, OWN-GEMM-FIRED=2):
+       [B6-CE-HIPREC] first_ce=4.4662405539761751 last_ce=3.6810950291377695
+       util MEAN=9.04% PEAK=100% pct>=20=12.6% n=413 ; DESCENT=1
+  B  device-MEGA (HEXA_CLM_MEGASTEP_FP64=1; MEGAFWD-FIRED=2, EAGER-DEVGLUE-FIRED=0, OWN-GEMM-FIRED=2):
+       [B6-CE-HIPREC] first_ce=4.469535603345645  last_ce=3.6842409161748995
+       util MEAN=11.53% PEAK=100% pct>=20=15.5% n=264 ; DESCENT=1
+  max|Δ first_ce| = |4.4662405539761751 - 4.469535603345645| = 3.295e-03   ≠ 0
+  max|Δ last_ce|  = |3.6810950291377695 - 3.6842409161748995| = 3.146e-03   ≠ 0
+  → FALSIFIED (max|Δ| ≠ 0). But the 3e-3 magnitude is FAR larger than an erf ULP and
+    larger than P1B's 8.882e-16 — flagging that the delta is NOT a fixed numerical gap.
+    Escalated to a determinism + op-isolation sweep (single-forward, EPOCHS=1).
+
+════════════════════════════════════════════════════════════════════════════════
+STAGE 2 — DETERMINISM + OP ISOLATION (EPOCHS=1, single forward, fixed LCG weight seeds)
+════════════════════════════════════════════════════════════════════════════════
+The clm_prod weight init is FULLY DETERMINISTIC (t_fill_lcg with fixed integer seeds
+1,2,3,…; no time()/clock()/getpid/urandom anywhere in clm_prod.c). So any run-to-run CE
+variation = a DEVICE-COMPUTE non-determinism. Sweep (each x3, same config, VERBATIM):
+
+  PURE-HOST (no DEVRESIDENT, no OWN_GEMM — host glue + cuBLAS):
+     first_ce = 4.4093347854616027 / 4.4093347854616027 / 4.4093347854616027  → DETERMINISTIC (Δ=0)
+  OWN_GEMM only (device naive-k GEMM, host glue):
+     first_ce = 4.4093347854606373 / 4.4093347854606373 / 4.4093347854606373  → DETERMINISTIC (Δ=0)
+     (differs from host by 9.7e-13 — the device-GEMM reduction-order ULP, but STABLE run-to-run)
+  DEVRESIDENT GLUE (cuBLAS GEMM + device gelu/groupnorm/moe/residual/embedding):
+     first_ce = 4.4662399010511589 / 4.4662327811330895 / 4.4662394915213550  → NON-DETERMINISTIC
+     run-to-run spread ≈ 7.1e-6   ← the wall.
+
+  Cross-check (erf axis, the P1B-predicted binder), single forward:
+     HOST-eager (host libm erf)      first_ce = 4.4093347854606364
+     DEVICE-eager (CUDA erf glue)    first_ce = 4.4093347854597047
+     |Δ| = 9.3e-13  → the host↔device erf gap is ~1 ULP and DETERMINISTIC. It is NOT
+     the byte-eq wall; it is swamped by the 7e-6 device-glue non-determinism above.
+
+════════════════════════════════════════════════════════════════════════════════
+ROOT-CAUSE ISOLATION
+════════════════════════════════════════════════════════════════════════════════
+The non-determinism is introduced EXACTLY when the device GLUE kernels engage
+(groupnorm/gelu/moe-router/residual/embedding), and ONLY then:
+  · host-only forward          → deterministic (Δ=0 over 3 runs, 17 digits)
+  · + device naive-k own-GEMM  → STILL deterministic (Δ=0; the GEMM is NOT the culprit)
+  · + device-resident glue     → non-deterministic (~7e-6 run-to-run)
+So the binding term is NOT the GEMM reduction order (P1B already closed that) and NOT
+the erf transcendental (clean at 9.3e-13, deterministic) — it is a RACE / async-ordering
+non-determinism in the device GLUE path (the kernels share _forge_stream(); a missing
+sync, an atomic-order reduction, or an uninitialized device-output-padding read in one
+of groupnorm/moe/residual makes the per-forward result vary by ~7e-6). Because device-MEGA
+AND device-EAGER BOTH route through device glue, BOTH are non-deterministic by ~the same
+magnitude, and their EPOCHS=4 max|Δ| (3.3e-3) is dominated by that jitter compounding over
+the step, NOT by any megakernel-vs-eager algorithmic difference.
+
+════════════════════════════════════════════════════════════════════════════════
+FINDING
+════════════════════════════════════════════════════════════════════════════════
+WHICH STAGE ACHIEVED max|Δ|=0: NONE. device-eager vs device-mega max|Δ first_ce| =
+  3.295e-03 (verbatim) ≠ 0. byte-eq megakernel NOT achieved.
+
+THE RULED-OUT AXIS (the negative result, SHARPER than P1B): making the eager reference
+  device-resident (HEXA_EAGER_DEVRESIDENT — fwd glue on-device, CUDA erf, separate launches)
+  does NOT yield a byte-eq megakernel, and the wall is NOT the host↔device erf the P1B
+  re-baseline predicted. P1B-a' deterministically isolates a DEEPER wall: the device-resident
+  GLUE PATH is RUN-TO-RUN NON-DETERMINISTIC (~7.1e-6 first_ce jitter on a SINGLE forward,
+  fixed weight seeds), proven by a 3-run determinism ladder — host forward Δ=0, +device
+  own-GEMM Δ=0, +device glue ≈7e-6. With a non-deterministic device forward, max|Δ|=0 is
+  IMPOSSIBLE for ANY two device-glue runs, so the byte-eq capstone is unreachable until the
+  glue race is fixed. The erf gap the prior verdict pinned is real but tiny (9.3e-13,
+  deterministic) and is MASKED by this larger non-determinism. This RE-CLASSIFIES the byte-eq
+  blocker: it was thought to be an irreducible-but-deterministic transcendental ULP (host vs
+  device erf); it is actually a FIXABLE device-glue race that must be closed FIRST before the
+  erf question is even observable. P1B's 8.882e-16 was a single-process A/B that happened to
+  catch both arms on the same draw; the determinism ladder here shows the device-glue forward
+  is not reproducible across processes.
+
+Δ vs baseline: P1B (#2777) measured own-mega vs own-eager (8.882e-16, attributed to host↔
+  device erf, eager glue ON HOST). P1B-a' makes the eager glue DEVICE-RESIDENT (CUDA erf both
+  sides) as the next re-baseline and finds the residual is NOT erf — it is a 7e-6 device-glue
+  non-determinism that P1B's host-eager arm could not expose (host glue is deterministic). The
+  re-baseline closes the erf hypothesis (clean ULP, deterministic) and surfaces the true
+  remaining wall: a device-glue race. Negative result that deterministically rules out
+  "device-resident eager ⇒ byte-eq megakernel" AND re-points the next fix at the glue race,
+  not the erf.
+
+UTIL leg — 🟢 confirmed (the falsifier's util condition met): device-mega lifts util above
+  device-eager. device-eager 9.04% → device-mega 11.53% MEAN (+2.49pp), pct>=20 12.6% → 15.5%
+  (+2.9pp), PEAK 100% both, MEGAFWD-FIRED=2, EAGER-DEVGLUE-FIRED=1, CE descends (DESCENT=1
+  both). The cooperative full-fwd megakernel raises occupancy regardless of byte-eq.
+
+g5-HONEST: [MEGAFWD-FIRED] fp64 fired (B arm, verbatim). [EAGER-DEVGLUE-FIRED] fired (A arm —
+  proves the eager ref ran device CUDA-erf gelu, NOT host libm). [OWN-GEMM-FIRED] fired (both).
+  REAL clm_prod step (D1536 T512). max|Δ| on the raw FP64 CE at 17 digits. NO byte-eq claim —
+  the verbatim nonzero max|Δ| (3.295e-03) + the determinism ladder (host Δ=0, own-GEMM Δ=0,
+  device-glue ≈7e-6) IS the result. GPU was a B200 (asked H100; vast served Blackwell — stated).
+  Pod destroyed + verified GONE, leak 0.
