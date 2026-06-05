@@ -52,6 +52,9 @@ extern "C" __global__ void gemm(const float* __restrict__ gA,const float* __rest
         // stage A tile (TM x TK) and B tile (TK x TN) in GMMA core layout
         for(int i=tid;i<TM*TK;i+=128){int m=i/TK,kk=i%TK; As[gmma_phys(m,kk)]=gA[(bm+m)*K+(k0+kk)];}
         for(int i=tid;i<TK*TN;i+=128){int kk=i/TN,n=i%TN; Bs[gmma_phys(n,kk)]=gB[(k0+kk)*N+(bn+n)];}
+        // generic shared stores are made visible to the ASYNC PROXY that wgmma reads
+        // through — ordinary __syncthreads does NOT order generic-vs-async-proxy.
+        asm volatile("fence.proxy.async.shared::cta;\n":::"memory");
         __syncthreads();
         uint32_t aA=(uint32_t)__cvta_generic_to_shared(As), aB=(uint32_t)__cvta_generic_to_shared(Bs);
         uint64_t dA=mk(aA,128,256), dB=mk(aB,128,256);
@@ -66,9 +69,10 @@ extern "C" __global__ void gemm(const float* __restrict__ gA,const float* __rest
            "+f"(d[16]),"+f"(d[17]),"+f"(d[18]),"+f"(d[19]),"+f"(d[20]),"+f"(d[21]),"+f"(d[22]),"+f"(d[23]),
            "+f"(d[24]),"+f"(d[25]),"+f"(d[26]),"+f"(d[27]),"+f"(d[28]),"+f"(d[29]),"+f"(d[30]),"+f"(d[31])
           :"l"(dA),"l"(dB));
-        asm volatile("wgmma.commit_group.sync.aligned;\n":::"memory");
-        asm volatile("wgmma.wait_group.sync.aligned 0;\n":::"memory");
-        __syncthreads();   // reuse shared next K-step
+        asm volatile("wgmma.commit_group.sync.aligned;\n"
+                     "wgmma.wait_group.sync.aligned 0;\n":::"memory");
+        __threadfence_block();
+        __syncthreads();   // wgmma shared-reads retired before next-step overwrite
     }
     int w=tid>>5,l=tid&31,rb=w*16+(l>>2),cb=(l&3)*2;
     #pragma unroll
