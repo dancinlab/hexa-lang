@@ -1,0 +1,33 @@
+P1B-a' raw pod results (B200, vast 39578235, nvcc 12.4 / gcc 11.4 / glibc 2.35) — VERBATIM.
+
+=== STAGE 1: REAL A/B (D1536 T512 E2 NSAMP8 EPOCHS4) ===
+A device-EAGER  (HEXA_EAGER_DEVRESIDENT=1; EAGER-DEVGLUE-FIRED=1 MEGAFWD=0 OWN-GEMM=2):
+   first_ce=4.4662405539761751 last_ce=3.6810950291377695
+   util MEAN=9.04% PEAK=100% pct>=20=12.6% n=413 DESCENT=1
+B device-MEGA   (HEXA_CLM_MEGASTEP_FP64=1; MEGAFWD=2 EAGER-DEVGLUE=0 OWN-GEMM=2):
+   first_ce=4.469535603345645  last_ce=3.6842409161748995
+   util MEAN=11.53% PEAK=100% pct>=20=15.5% n=264 DESCENT=1
+max|Δ first_ce| = 3.295e-03 ; max|Δ last_ce| = 3.146e-03   (≠ 0 → FALSIFIED)
+
+=== STAGE 2: DETERMINISM LADDER (EPOCHS=1, single forward, fixed LCG seeds, x3 each) ===
+PURE-HOST (host glue + cuBLAS):
+   4.4093347854616027 / 4.4093347854616027 / 4.4093347854616027   → DETERMINISTIC (Δ=0)
+OWN_GEMM only (device naive-k GEMM, host glue):
+   4.4093347854606373 / 4.4093347854606373 / 4.4093347854606373   → DETERMINISTIC (Δ=0)
+DEVRESIDENT GLUE (cuBLAS GEMM + device gelu/groupnorm/moe/residual/embedding):
+   4.4662399010511589 / 4.4662327811330895 / 4.4662394915213550   → NON-DETERMINISTIC (~7.1e-6)
+
+=== erf cross-check (single forward) ===
+HOST-eager   (host libm erf):  first_ce=4.4093347854606364
+DEVICE-eager (CUDA erf glue):  first_ce=4.4093347854597047
+|Δ| = 9.3e-13  → erf gap is ~1 ULP, DETERMINISTIC; NOT the wall.
+
+=== additional determinism evidence (devres-eager + mega, x2) ===
+devres-eager run1 4.4704976732165775 / run2 4.4662394504526679   (Δ ≈ 4.3e-3 run-to-run)
+mega-fp64    run1 4.4671267551715479 / run2 4.470450596495362     (Δ ≈ 3.3e-3 run-to-run)
+→ same-config run-to-run spread ≈ the A/B "delta" → the 3e-3 A/B gap is device-glue
+  non-determinism, NOT a megakernel-vs-eager algorithmic difference.
+
+CONCLUSION: byte-eq max|Δ|=0 is unreachable while the device GLUE path is non-deterministic
+(~7e-6/forward). Root = a race/async-order in the device glue kernels (groupnorm/gelu/moe/
+residual/embedding share _forge_stream()); the GEMM and erf are both deterministic + clean.
