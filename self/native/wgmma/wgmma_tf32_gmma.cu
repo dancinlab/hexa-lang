@@ -1,143 +1,141 @@
-commit c546172502a0dd8f86f89bea46f57ca2d04a1bed
-Author: nbcorr-agent <nbcorr@local>
-Date:   Sat Jun 6 05:09:57 2026 +0900
+// wgmma_tf32_gmma.cu — W1/W2: the REAL CUTLASS-3.x GMMA::Layout core-matrix builder
+// for TF32 wgmma.mma_async.m64n64k8, no-swizzle (INTERLEAVE / SWIZZLE_NONE) mode.
+//
+// ============================ THE CORRECTED MODEL ============================
+// Authoritative facts (PTX ISA 9.7.16.5.1.2 + CUTLASS cute/arch/mma_sm90_desc.hpp +
+// Colfax WGMMA tutorial):
+//
+//   * A "core matrix" is 8 ROWS (strided dir) x 16 BYTES (contiguous dir).
+//     For TF32 (4 bytes/elem) => 16 bytes = 4 ELEMENTS. So a core matrix is 8x4 TF32.
+//     (The prior kit assumed 8x8 K core strips — THIS WAS THE BUG: defects (1)+(2).)
+//
+//   * GmmaDescriptor 64-bit bit fields (cute/arch/mma_sm90_desc.hpp):
+//       start_address_      : bits [ 0,14)   (value>>4)
+//       leading_byte_offset_: bits [16,30)   (LBO>>4)
+//       stride_byte_offset_ : bits [32,46)   (SBO>>4)
+//       base_offset_        : bits [49,52)   (swizzle only)
+//       layout_type_        : bits [62,64)   INTERLEAVE=0,B128=1,B64=2,B32=3
+//
+//   * No-swizzle K-major canonical INTER layout: the (8 x 4-elem) core matrices are
+//     laid CONTIGUOUS (32 elems = 128 bytes each). LBO = stride between core matrices
+//     along the contiguous (K) walk; SBO = stride between core matrices along the
+//     strided (M for A / N for B) walk. Colfax K-major example: LBO=128B, SBO=256B.
+//
+// For m64n64k8 (K=8 => 2 K-core-matrices; M=64 => 8 M-core-rows; N=64 => 8 N-strips):
+//   A (M=64 x K=8): M-major-of-8 x K. Core layout: for each (mo in 0..7, ko in 0..1):
+//        a core matrix of 8 rows (m in mo*8..+8) x 4 cols (k in ko*4..+4).
+//   B (K=8  x N=64): K x N-major-of-8. Core layout: for each (no in 0..7, ko in 0..1):
+//        a core matrix of 8 rows (n in no*8..+8) x 4 cols (k in ko*4..+4).
+//
+// We provide several candidate core orderings (how core matrices are concatenated:
+// K-inner vs strided-inner) selected by ALO/BLO, and a small descriptor sweep, but
+// the PRINCIPLED default (ALO=BLO=0) is the CUTLASS INTER layout with LBO/SBO matched.
+//
+// MODE 0 (default): full random GEMM, rel_rms vs CPU ref  (W3 gate at 2048 is a separate
+//   tiled kernel; this validates the single-tile correctness — W2 gate).
+// MODE 1: single-tile identity probe — A,B chosen so D must equal a known integer ramp;
+//   reports exact-match count and rel_rms 0 target (the W2 gate).
+//
+// argv: mode ALO BLO lA sA lB sB
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <cmath>
+#include <cstdint>
+#include <cuda_runtime.h>
+#define CK(x) do{cudaError_t e=(x); if(e!=cudaSuccess){printf("CUDA-ERR %s @%d:%s\n",#x,__LINE__,cudaGetErrorString(e));return 3;}}while(0)
 
-    domain(HEXA-FUSION sm90): wgmma TF32 BIT-CORRECT via real GMMA::Layout — swizzle SOLVED 🟢
-    
-    Verdict + discovery tape (W1-W5 flipped) + README sm_90 caveat for
-    F-FUSION-SM90-WGMMA-GMMA-LAYOUT.
-    
-    W1 built · W2 single-tile rel-RMS 0 (SWIZZLE SOLVED) · W3 full 2048^3 rel-RMS 0
-    (bit-correct, fence.proxy.async fix) · W4 own 20.2 TFLOP/s 17.67x PARITY=NO ·
-    W5 best TN=128 38.0 TFLOP/s 9.35x bit-exact. Residual = warp-specialized TMA
-    multi-stage pipeline (perf only; layout + correctness solved). pod destroyed, leak 0.
-    
-    Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+__device__ __forceinline__ uint64_t mk(uint32_t s,uint32_t lbo,uint32_t sbo){
+    uint64_t d=0;
+    d |= (uint64_t)((s   >> 4) & 0x3FFF);
+    d |= ((uint64_t)((lbo >> 4) & 0x3FFF)) << 16;
+    d |= ((uint64_t)((sbo >> 4) & 0x3FFF)) << 32;
+    return d; // layout_type=0 (INTERLEAVE / no-swizzle), base_offset=0
+}
 
-diff --git a/.discoveries/hexa-fusion-sm90-wgmma-parity.tape b/.discoveries/hexa-fusion-sm90-wgmma-parity.tape
-new file mode 100644
-index 000000000..c8b3df254
---- /dev/null
-+++ b/.discoveries/hexa-fusion-sm90-wgmma-parity.tape
-@@ -0,0 +1,50 @@
-+# discovery: hexa-fusion-sm90-wgmma-parity
-+# id: F-FUSION-SM90-WGMMA-PARITY
-+# seed: native sm_90(a) H100 own-GEMM forge parity vs cuBLAS (~340 TFLOP/s).
-+#       NOT an impossibility verdict — the silicon demonstrably reaches peak via
-+#       wgmma+TMA (cuBLAS proves it); the residual is a known CUTLASS layout builder.
-+# verdict-tier-target: 🟢 numerical (bit-correct rel-RMS<=3e-3 → own GFLOP/s + ratio vs cuBLAS)
-+#
-+# === STATE (2026-06-06, after the GMMA::Layout pass — SWIZZLE SOLVED, BIT-CORRECT) ===
-+#   ladder: 30.4x (parent WMMA2 software-TF32)
-+#         → 29.4x (mma.sync cuBLAS-mainloop, bit-exact #2805)  [mma.sync CEILING — ruled out]
-+#         → wgmma.mma_async + TMA FEASIBLE on sm_90a (#2808): builds + runs, f16 probe correct.
-+#         → wgmma bit-correctness BLOCKED (#2812): rel-RMS 1.309, >2300-config sweep nothing<1.36.
-+#         → **SOLVED (2026-06-06, F-FUSION-SM90-WGMMA-GMMA-LAYOUT):** the real CUTLASS GMMA
-+#           INTER core-matrix layout makes wgmma TF32 BIT-EXACT.
-+#           ROOT CAUSE: a wgmma core matrix is 8 ROWS x 16 BYTES = for TF32 (4B) 8x4 ELEMENTS,
-+#           NOT the 8x8 K-strip the prior sweep assumed. That 8-vs-4 IS defects (1)+(2).
-+#           W2 single-tile rel-RMS = 0.000e+00 · W3 full 2048^3 rel-RMS = 0.000e+00 (after the
-+#           fence.proxy.async.shared::cta ordering fix — wgmma reads shared via async proxy).
-+#
-+# === CLOSED-NEGATIVE (ruled out, do not re-attempt) ===
-+#   - mma.sync reaching parity (29x ceiling, deterministic)
-+#   - plain row/col-major + descriptor LBO/SBO offset + epilogue-permutation swizzle (>2300 sweep)
-+#   - the 8x8 K-core assumption (the actual TF32 core is 8x4 — this WAS the layout bug)
-+#
-+# === MILESTONES (W-ladder, this pass) ===
-+#   W1  GMMA::Layout B-core-matrix builder       DONE — built, 8x4 TF32 INTER core layout.
-+#   W2  single-tile identity verify (GATE)       DONE — rel-RMS 0.000e+00 (SWIZZLE SOLVED ★).
-+#   W3  full wgmma GEMM bit-correct (GATE)        DONE — rel-RMS 0.000e+00 @2048^3 (proxy-fence fix).
-+#   W4  sm_90 parity measure                     DONE (honest) — own 20.2 TFLOP/s 2048^3,
-+#                                                  cuBLAS-TF32 357.5, ratio 17.67x, PARITY=NO.
-+#   W5  pipeline tune                            NARROWED — wide-N TN=128 → 38.0 TFLOP/s (9.35x),
-+#                                                  bit-exact. TN=256 slower (reg/occupancy).
-+#
-+# === OPEN — the one named residual ===
-+#   PARITY (strict <=1.3x): needs the full warp-specialized TMA multi-stage CUTLASS mainloop
-+#     (cp.async.bulk.tensor producer + wgmma consumer, deep software pipeline). Multi-session
-+#     build. It is a LATENCY-HIDING residual — NOT the layout (W2 solved) and NOT correctness
-+#     (W3 bit-exact 2048^3). The own-GEMM is now provably CORRECT on sm_90a; the gap is pure perf.
-+#
-+# === ARTIFACTS ===
-+#   kit (new): self/native/wgmma/wgmma_tf32_gmma.cu (W1/W2), wgmma_tf32_gemm2048.cu (W3/W4),
-+#              wgmma_tf32_gemm_w5.cu (W5 TN=128), wgmma_tf32_gemm_w5b.cu (W5 TN=256), gmma_run.sh
-+#   kit (prior): self/native/wgmma/{wgmma_tf32_decode,_bdecode,_full,_swz}.cu + sweep_fast.sh
-+#   verdict: .verdicts/hexa-fusion/F-FUSION-SM90-WGMMA-GMMA-LAYOUT.txt
-+#   PRs: #2805 · #2808 (MERGED) · #2812 · #2815 (consolidation) · <this PR> (GMMA layout)
-+#   handoffs: 2e4438a7 reply chain
-+#
-+# next-cycle claim: W5+ warp-specialized TMA multi-stage mainloop toward strict parity.
-+#   The layout + correctness are SOLVED; the remaining work is a pure pipeline-engineering
-+#   perf climb (9.35x → <=1.3x), gated on a fresh multi-session GPU budget.
-diff --git a/.verdicts/hexa-fusion/F-FUSION-SM90-WGMMA-GMMA-LAYOUT.txt b/.verdicts/hexa-fusion/F-FUSION-SM90-WGMMA-GMMA-LAYOUT.txt
-new file mode 100644
-index 000000000..aed055493
---- /dev/null
-+++ b/.verdicts/hexa-fusion/F-FUSION-SM90-WGMMA-GMMA-LAYOUT.txt
-@@ -0,0 +1,52 @@
-+F-FUSION-SM90-WGMMA-GMMA-LAYOUT — wgmma TF32 GMMA::Layout core-matrix builder
-+sm_90a H100 SXM (compute_cap 9.0), CUDA 12.6, -arch=sm_90a. vast 39639304 (destroyed, leak 0).
-+date 2026-06-06. branch domain/hexa-fusion-sm90-wgmma-gmma-layout.
-+
-+=== W1 — wgmma GMMA::Layout B-core-matrix builder: BUILT = YES ===
-+Implemented the real CUTLASS-3.x GMMA INTER (no-swizzle) shared-memory core-matrix
-+layout for TF32 wgmma.mma_async.m64n64k8.
-+ROOT CAUSE of the prior >2300-config dead end: a wgmma core matrix is 8 ROWS x 16 BYTES
-+= for TF32 (4B/elem) 8 rows x 4 ELEMENTS, NOT the 8x8 K-strip the prior kit assumed.
-+That 8-vs-4 mismatch IS pinned defects (1) K-stride collapse + (2) N-octet interleave.
-+Layout: gmma_phys(s,k) = (strip*2 + kcore)*32 + sr*4 + kc  (8x4 cores laid contiguous).
-+Descriptor (cute/arch/mma_sm90_desc.hpp): start[0,14) LBO[16,30) SBO[32,46)
-+layout_type[62,64)=INTERLEAVE(0); LBO=128B SBO=256B inter-core strides.
-+artifact: self/native/wgmma/wgmma_tf32_gmma.cu
-+
-+=== W2 — single-tile identity verify (GATE): PASS, rel_rms = 0.000e+00 ===
-+mode=1 ALO=0 BLO=0 lA=128 sA=256 lB=128 sB=256 : exact=4096/4096 rel_rms=0.000e+00 PASS
-+full random single-tile (mode=0) same config: exact=4096/4096 rel_rms=0.000e+00.
-+=> THE SWIZZLE IS SOLVED. The single 64x64x8 wgmma tile is bit-exact.
-+
-+=== W3 — full wgmma+TMA GEMM bit-correct (GATE): PASS at 2048^3, rel_rms = 0.000e+00 ===
-+Tiled 64x64 GEMM, K-loop wgmma accumulation, double-buffered shared.
-+Initial cliff: bit-exact <=K1536 but non-deterministic 3e-2..1e-1 at K>=1792.
-+ROOT CAUSE: wgmma reads shared through the ASYNC PROXY; ordinary __syncthreads does
-+NOT order generic shared stores vs the async-proxy read. FIX: fence.proxy.async.shared::cta
-+after staging. Then 2048^3 own vs cuBLAS-TF32 = 0.000e+00, own vs CPU-f64 = 0.000e+00,
-+DETERMINISTIC across runs. (no TMA in this kernel; cp.async/TMA reserved for W5 pipeline.)
-+artifact: self/native/wgmma/wgmma_tf32_gemm2048.cu
-+
-+=== W4 — sm_90 parity measure (HONEST, bit-correct kernel, g5) ===
-+naive single-wgmma-per-block (64x64 tile, wait_group 0 every step):
-+  2048^3: own=20.2 TFLOP/s  cuBLAS-TF32=357.5  ratio(cuBLAS/own)=17.67x  rel_rms=0.000e+00  PARITY=NO
-+  4096^3: own=25.9 TFLOP/s  cuBLAS-TF32=440.4  ratio=16.99x              rel_rms=0.000e+00  PARITY=NO
-+cuBLAS-TF32 = roofline; NO superiority claim. Sub-parity (expected: zero latency hiding).
-+
-+=== W5 — pipeline tune (W4 sub-parity) ===
-+wide-N TN=128 (2 wgmma/K-step, reuse A):  own=38.0 TFLOP/s 2048^3  ratio 9.35x  rel_rms=0.000e+00
-+  -> ~1.9x over W4 single-wgmma; bit-exact preserved.
-+wide-N TN=256 (4 wgmma/K-step):           own=26.7 TFLOP/s         ratio 13.26x (SLOWER —
-+  128 accum regs + larger shared cut occupancy). TN=128 is the sweet spot here.
-+HONEST STOP: best real sm_90 own-wgmma number = 38.0 TFLOP/s bit-exact, 9.35x off cuBLAS.
-+NAMED RESIDUAL: strict <=1.3x parity needs the full warp-specialized TMA multi-stage
-+CUTLASS mainloop (cp.async.bulk.tensor producer + wgmma consumer, deep pipeline) — a
-+multi-session build. NOT the layout (W2 SOLVED) and NOT correctness (W3 bit-exact 2048^3).
-+artifacts: self/native/wgmma/wgmma_tf32_gemm_w5.cu (TN=128), wgmma_tf32_gemm_w5b.cu (TN=256)
-+
-+=== TIER ===
-+W1 BUILT · W2 PASS (rel_rms 0 — SWIZZLE SOLVED) · W3 PASS (rel_rms 0 @2048^3 — bit-correct)
-+· W4 measured (20.2 TFLOP/s, 17.7x, PARITY=NO) · W5 best 38.0 TFLOP/s (9.35x, PARITY=NO).
-+🟢 numerical: own-GEMM on sm_90a is now BIT-CORRECT via the real GMMA layout. Parity gap
-+narrowed from "wrong result" to a named latency-hiding pipeline residual (9.35x, honest).
-+pod destroyed YES (leak 0).
-diff --git a/README.md b/README.md
-index a5a6f4fee..c503372fe 100644
---- a/README.md
-+++ b/README.md
-@@ -166,6 +166,8 @@ The full-step gap closed in two landed steps: skinny-shape dispatch (16×16 tile
- > **↳ wgmma + TMA rewrite — FEASIBILITY PASS, layout residual (`F-FUSION-SM90-WGMMA-TMA`).** The named wgmma/TMA lever is now **build- and run-feasible on native sm_90 H100**: with `-arch=sm_90a` (nvcc 12.6), **`wgmma.mma_async` executes correctly** (f16 probe: nonzero 2048/2048, sum 1962.49 vs ref 1956.87) and the **entire Hopper async PTX surface compiles** — `cuTensorMapEncodeTiled` (TMA) + `cp.async.bulk.tensor.2d.shared::cluster.global.mbarrier::complete_tx::bytes` + `mbarrier.*`. This **converts** the prior `F-FUSION-ATTN-WGMMA-WALL` hardware-blocked closed-negative (same kernel silently NOP'd on Blackwell sm_120) into testable-on-Hopper. **The own-source emit path is NOT the blocker.** The standalone TF32 warpgroup mainloop builds + launches but is **not yet bit-correct** (rel-RMS **1.309e+00** vs 3e-3); an isolated descriptor sweep + a structured-input diagnostic proved the binding residual is the wgmma **no-swizzle 8×16B core-matrix shared-memory layout** of the operands (NOT the instruction, descriptor offsets, or the verified-correct epilogue register→C mapping). **No own GFLOP/s is reported** — g5 forbids perf on a wrong-result kernel; **parity NOT measured**. Kit: `self/native/wgmma/`. Honest scope: parity-seeking, cuBLAS = roofline, no superiority claim.
- >
- > **↳ swizzle wedge — residual PINNED to the B-operand K-core stride, NOT a permutation (`F-FUSION-SM90-WGMMA-SWIZZLE`, closed-negative this pass).** An on-hardware reverse-engineering (distinct-ramp operand + one-hot selector; native H200 sm_90a, nvcc 12.6, pod DESTROYED leak 0) isolated the rel-RMS 1.309 residual to **two superimposed defects in the wgmma B no-swizzle core-matrix layout**: (1) a **K-stride collapse** — for contraction index k=1..7 wgmma re-reads B's K=0 core-matrix (the decoded k′ is pinned to 0 for every K-selector), the dominant ≈√2 error; (2) an **N-octet interleave** (output col n reads logical col ≈4n within an 8-wide octet). A **>2300-config exhaustive sweep** — A/B shared layout ∈ {plain row-major, two 8-row-strip core tilings, col-major-B} × descriptor (LBO,SBO) ∈ {16…512} for both operands × 3 epilogue register-maps, fault-isolated per-process — found **no config below rel-RMS 1.36**, **deterministically ruling out** the hypothesis that the residual is a plain-layout/offset/epilogue permutation. The fix **requires the genuine CUTLASS `GMMA::Layout` core-matrix builder** (B's 8 K-values forming a contiguous 8-row core-matrix, descriptor LBO = one-core-matrix stride, swizzle field matched to the TMA `cuTensorMapEncodeTiled` swizzle mode), verified FIRST on the single-tile decode probe to k′==KSEL identity before any 2048³ run. Kit: `self/native/wgmma/{wgmma_tf32_decode,wgmma_tf32_bdecode,wgmma_tf32_full}.cu`. Still **parity-seeking, no perf number on a non-bit-correct kernel (g5)**.
-+>
-+> **↳ GMMA::Layout core-matrix builder — wgmma TF32 is now BIT-CORRECT on native sm_90a (`F-FUSION-SM90-WGMMA-GMMA-LAYOUT`, 🟢 numerical).** The swizzle is **SOLVED**. The root cause of the >2300-config dead end was a single wrong constant: a wgmma core matrix is **8 rows × 16 bytes = for TF32 (4 B/elem) 8 rows × 4 ELEMENTS**, not the **8×8 K-strip** the prior kit assumed — that 8-vs-4 mismatch **is** both pinned defects (K-stride collapse + N-octet interleave). Implementing the real CUTLASS-3.x **GMMA INTER (no-swizzle) 8×4 core-matrix layout** (`gmma_phys = (strip*2+kcore)*32 + sr*4 + kc`, descriptor `start[0,14) LBO[16,30) SBO[32,46) layout_type[62,64)=INTERLEAVE`, LBO=128 B / SBO=256 B inter-core strides) made the **single 64×64×8 wgmma tile bit-exact** (**W2 rel-RMS 0.000e+00**, native H100 SXM cc 9.0, `-arch=sm_90a`, nvcc 12.6, pod DESTROYED leak 0). Scaling to the full **2048³** GEMM revealed a second, *separate* defect — a K-loop **async-proxy ordering** bug (`wgmma` reads shared through the async proxy, which ordinary `__syncthreads` does **not** order against generic stores; non-deterministic 3e-2…1e-1 past K≈1536). Adding **`fence.proxy.async.shared::cta`** after staging makes the K-loop **bit-exact at 2048³** (**W3 own-vs-cuBLAS-TF32 & own-vs-CPU-f64 both rel-RMS 0.000e+00, deterministic**). **Parity is now MEASURABLE** (g5 satisfied): the naive single-wgmma-per-block kernel runs **20.2 TFLOP/s @ 2048³** (cuBLAS-TF32 357.5, **17.67× off**, PARITY=NO); a first pipeline tune (wide-N **TN=128**, 2 wgmma/K-step reusing A) nearly doubles it to **38.0 TFLOP/s (9.35× off)**, still bit-exact (TN=256 is slower — register/occupancy bound). **The own-GEMM is now provably CORRECT on sm_90a; the remaining gap is a pure latency-hiding residual** — a full **warp-specialized TMA multi-stage** CUTLASS mainloop (`cp.async.bulk.tensor` producer + `wgmma` consumer, deep pipeline), a multi-session build — **NOT the layout (solved) and NOT correctness (bit-exact 2048³)**. cuBLAS = roofline, no superiority claim. Kit: `self/native/wgmma/{wgmma_tf32_gmma,wgmma_tf32_gemm2048,wgmma_tf32_gemm_w5,wgmma_tf32_gemm_w5b}.cu`.
- 
- **Util is a workload-size property, not a defect** (`F-FUSION-D2-RIGHTSIZED`): the *byte-identical* D1536 own-GEMM step that under-fills an idle **H100 to ~13 % MEAN** (median 2 %) **saturates a right-sized RTX 5070 to 98.00 % MEAN** (every sample 98 %, SM 98 %, compute-bound) — the 2048³ large shape gives 99 % on the same 5070. Low util on the H100 is the H100 being too big for a D1536 model, not a codegen flaw; given a GPU sized for the workload, util is at the saturation ceiling.
- 
+// ---- GMMA INTER (no-swizzle) core-matrix physical index ----
+// Core matrix = 8 strided-rows x 4 contiguous-cols (TF32). 32 elems contiguous each.
+// strided dim S (M for A, N for B), contiguous dim K. S=64 -> 8 strips ; K=8 -> 2 cores.
+// LO selects concatenation order of the (strip, kcore) core matrices:
+//   LO==0: K-core inner  -> core_id = strip*2 + kcore        (CUTLASS INTER canonical)
+//   LO==1: strip inner   -> core_id = kcore*8 + strip
+__device__ __forceinline__ int gmma_phys(int s,int k,int /*S*/,int /*K*/,int LO){
+    int strip = s>>3, sr = s&7;        // 8 strips of 8 strided rows
+    int kcore = k>>2, kc = k&3;        // 2 core matrices of 4 contiguous (K) elems
+    int core_id = (LO==0)? (strip*2 + kcore) : (kcore*8 + strip);
+    // within a core matrix: 8 rows x 4 cols, row-major contiguous (32 elems)
+    return core_id*32 + sr*4 + kc;
+}
+
+extern "C" __global__ void kern(const float* gA,const float* gB,float* gD,int ALO,int BLO,
+                             uint32_t lA,uint32_t sA,uint32_t lB,uint32_t sB){
+    const int M=64,K=8,N=64;
+    extern __shared__ __align__(128) float sm[];
+    float* As=sm; float* Bs=sm+M*K;
+    int tid=threadIdx.x;
+    // A logical [m][k] (M strided, K contiguous) -> GMMA core layout
+    for(int i=tid;i<M*K;i+=128){int m=i/K,kk=i%K; As[gmma_phys(m,kk,M,K,ALO)]=gA[m*K+kk];}
+    // B logical [k][n]; for wgmma B operand the strided dim is N, contiguous is K.
+    for(int i=tid;i<K*N;i+=128){int kk=i/N,n=i%N; Bs[gmma_phys(n,kk,N,K,BLO)]=gB[kk*N+n];}
+    __syncthreads();
+    uint32_t aA=(uint32_t)__cvta_generic_to_shared(As), aB=(uint32_t)__cvta_generic_to_shared(Bs);
+    uint64_t dA=mk(aA,lA,sA), dB=mk(aB,lB,sB);
+    float d[32];
+    #pragma unroll
+    for(int i=0;i<32;++i)d[i]=0.f;
+    asm volatile("wgmma.fence.sync.aligned;\n":::"memory");
+    asm volatile(
+      "wgmma.mma_async.sync.aligned.m64n64k8.f32.tf32.tf32 "
+      "{%0,%1,%2,%3,%4,%5,%6,%7,%8,%9,%10,%11,%12,%13,%14,%15,"
+      "%16,%17,%18,%19,%20,%21,%22,%23,%24,%25,%26,%27,%28,%29,%30,%31}, "
+      "%32,%33, 1,1,1;\n"
+      :"+f"(d[0]),"+f"(d[1]),"+f"(d[2]),"+f"(d[3]),"+f"(d[4]),"+f"(d[5]),"+f"(d[6]),"+f"(d[7]),
+       "+f"(d[8]),"+f"(d[9]),"+f"(d[10]),"+f"(d[11]),"+f"(d[12]),"+f"(d[13]),"+f"(d[14]),"+f"(d[15]),
+       "+f"(d[16]),"+f"(d[17]),"+f"(d[18]),"+f"(d[19]),"+f"(d[20]),"+f"(d[21]),"+f"(d[22]),"+f"(d[23]),
+       "+f"(d[24]),"+f"(d[25]),"+f"(d[26]),"+f"(d[27]),"+f"(d[28]),"+f"(d[29]),"+f"(d[30]),"+f"(d[31])
+      :"l"(dA),"l"(dB));
+    asm volatile("wgmma.commit_group.sync.aligned;\n":::"memory");
+    asm volatile("wgmma.wait_group.sync.aligned 0;\n":::"memory");
+    // wgmma m64nNk f32 accumulator -> register layout (PTX ISA):
+    int w=tid>>5,l=tid&31,rb=w*16+(l>>2),cb=(l&3)*2;
+    #pragma unroll
+    for(int c=0;c<8;++c)for(int r=0;r<2;++r)for(int p=0;p<2;++p){
+        int idx=c*4+r*2+p,row=rb+r*8,col=cb+p+c*8;
+        if(row<64&&col<64)gD[row*64+col]=d[idx];
+    }
+}
+static inline float tf(float x){uint32_t u;memcpy(&u,&x,4);u=(u+0x1000u)&0xFFFFE000u;float r;memcpy(&r,&u,4);return r;}
+static const int M=64,N=64,K=8;
+int main(int argc,char**argv){
+    int mode=argc>1?atoi(argv[1]):0;
+    int ALO=argc>2?atoi(argv[2]):0, BLO=argc>3?atoi(argv[3]):0;
+    // CUTLASS INTER K-major canonical: LBO/SBO between contiguous core matrices.
+    // Default candidates derived from Colfax (LBO=128, SBO=256) scaled to this tile.
+    uint32_t lA=argc>4?atoi(argv[4]):128, sA=argc>5?atoi(argv[5]):256;
+    uint32_t lB=argc>6?atoi(argv[6]):128, sB=argc>7?atoi(argv[7]):256;
+    float *hA=new float[M*K],*hB=new float[K*N],*hD=new float[M*N],*Dr=new float[M*N];
+    if(mode==1){
+        // single-tile identity probe: A = identity-ish ramp, B = ramp, decode exact.
+        // Use A[m][k]=(m==k? small)  -> instead use full ramp & rel_rms-0 target via int.
+        for(int m=0;m<M;++m)for(int kk=0;kk<K;++kk)hA[m*K+kk]=tf((float)((m+kk)%4)-1.5f);
+        for(int kk=0;kk<K;++kk)for(int n=0;n<N;++n)hB[kk*N+n]=tf((float)((kk+n)%4)-1.5f);
+    } else {
+        srand(1);
+        for(int i=0;i<M*K;++i)hA[i]=tf(((rand()%17)-8)*0.125f);
+        for(int i=0;i<K*N;++i)hB[i]=tf(((rand()%17)-8)*0.125f);
+    }
+    for(int m=0;m<M;++m)for(int n=0;n<N;++n){float a=0;for(int kk=0;kk<K;++kk)a+=hA[m*K+kk]*hB[kk*N+n];Dr[m*N+n]=a;}
+    float *dA,*dB,*dD;CK(cudaMalloc(&dA,M*K*4));CK(cudaMalloc(&dB,K*N*4));CK(cudaMalloc(&dD,M*N*4));
+    CK(cudaMemcpy(dA,hA,M*K*4,cudaMemcpyHostToDevice));CK(cudaMemcpy(dB,hB,K*N*4,cudaMemcpyHostToDevice));
+    CK(cudaMemset(dD,0,M*N*4));
+    size_t smsz=(M*K+K*N)*4;
+    kern<<<1,128,smsz>>>(dA,dB,dD,ALO,BLO,lA,sA,lB,sB);
+    cudaError_t e=cudaGetLastError(); if(e==cudaSuccess)e=cudaDeviceSynchronize();
+    if(e!=cudaSuccess){printf("mode=%d ALO=%d BLO=%d lA=%u sA=%u lB=%u sB=%u FAULT %s\n",mode,ALO,BLO,lA,sA,lB,sB,cudaGetErrorString(e));return 4;}
+    CK(cudaMemcpy(hD,dD,M*N*4,cudaMemcpyDeviceToHost));
+    double se=0,sr=0;int nz=0,exact=0;for(int i=0;i<M*N;++i){double dd=hD[i]-Dr[i];se+=dd*dd;sr+=Dr[i]*Dr[i];if(hD[i]!=0)nz++;if(fabs(dd)<1e-4)exact++;}
+    double rr=sqrt(se/fmax(1e-12,sr));
+    printf("mode=%d ALO=%d BLO=%d lA=%u sA=%u lB=%u sB=%u : nz=%d exact=%d/%d rel_rms=%.3e %s\n",
+           mode,ALO,BLO,lA,sA,lB,sB,nz,exact,M*N,rr, rr<=3e-3?"PASS":"");
+    return rr<=3e-3?0:2;
+}
