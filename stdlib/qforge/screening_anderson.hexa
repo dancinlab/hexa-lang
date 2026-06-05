@@ -48,6 +48,7 @@
 // path, so a missing kernel can never inject NaN.
 
 use "stdlib/qforge/sternheimer"
+use "stdlib/qforge/screening_pwfft"
 
 // result bundle — mirror of ScreenedDvResult so callers can swap solvers freely.
 pub struct AndersonDvResult {
@@ -120,8 +121,29 @@ fn ad_map(H_apply, states: [[float]], eps: [float], bare: [float],
         while i < n { drho[i] = drho[i] + 2.0 * states[nd][i] * dpsi_all[nd * n + i] ; i = i + 1 }
         nd = nd + 1
     }
-    // (4) screening correction ΔV_corr(r) = (V_H + f_xc)[Δρ].  EMPTY → zero (d4 limit).
-    let dvscr = drho_to_dvscf(drho)
+    // (4) screening correction ΔV_corr = (V_H + f_xc)[Δρ].
+    //   GENUINE PATH (the migration-gate fix, screening_pwfft.hexa): when the pow2
+    //   real-space FFT-Poisson grid is staged, compute Δρ̂(G) by the REAL convolution
+    //   (ψ_n(r)·Δψ_n(r) FFT round-trip) instead of the coefficient-space G-diagonal
+    //   proxy that vanishes on the converged basis. The diagonal `drho` above is then
+    //   unused; the real-space kernel takes the ψ + Δψ columns directly. d4/d19.
+    //   FALLBACK: the caller-supplied diagonal drho_to_dvscf (the unstaged / generic
+    //   selftest path) — empty → zero (d4 limit).
+    let mut dvscr = []
+    if qpwfft_is_on() {
+        // unpack dpsi_all (flat nb*n) → per-band Δψ columns for the real convolution.
+        let mut dpsi_cols: [[float]] = []
+        let mut db = 0
+        while db < nb {
+            let mut col = []
+            let mut w2 = 0
+            while w2 < n { col.push(dpsi_all[db * n + w2]) ; w2 = w2 + 1 }
+            dpsi_cols.push(col)
+            db = db + 1
+        }
+        dvscr = qpwfft_dvscr_from_dpsi(states, dpsi_cols)
+    }
+    if len(dvscr) != n { dvscr = drho_to_dvscf(drho) }   // diagonal fallback / generic
     let has_corr = (len(dvscr) == n)
     // (1) rebuild target g(x) = bare + ΔV_corr ⊙ ψ.
     let mut gx = []
