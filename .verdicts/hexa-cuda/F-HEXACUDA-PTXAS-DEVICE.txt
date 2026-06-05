@@ -1,0 +1,17 @@
+F-HEXACUDA-PTXAS-DEVICE — WIP checkpoint (in progress)
+=======================================================
+GOAL: prove un-gated `hexa build --target=nvptx` PTX (PR #2799) is silicon-valid:
+  ptxas-assembles for sm_90 AND runs correct on a real H100.
+
+STATUS: WIP — checkpoint commit. Validation pending (rate-limit storm active).
+
+PLAN:
+  1. Reap leaked vast H100/H200 (non-EDGE-FLEET / non-rtsc-anchor-39610026 / non-@convmoe-7b).
+  2. Rent ONE H100_SXM (compute_cap 9.0).
+  3. Build fresh hexa compiler on Linux pod (or inline NVPTX pipeline / build_nvptx.hexa harness).
+  4. Emit PTX for cookbook vec-add @gpu_kernel (+ SAXPY if easy).
+  5. ptxas -arch=sm_90 -o k.cubin k.ptx  -> must be CLEAN (verbatim).
+  6. Device run via CUDA driver API (cuModuleLoad/cuLaunchKernel) -> output == CPU ref.
+  7. Destroy pod (leak 0).
+
+Verdict to be filled with VERBATIM ptxas output + device-run result.
