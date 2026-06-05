@@ -651,7 +651,7 @@ fn _ff_readme_body(kata: string) -> string {
         return "A 2-layer MLP `h = relu(X·W1 + b1)`, `yhat = h·W2 + b2`, MSE loss.\nFull backprop: the layer-2 vjp, then `relu'` masking into the hidden\ngradient, then the layer-1 vjp. Four `opt_adamw_step` updates. Adds\nthe hidden layer + the nonlinearity over the linreg rung.\n"
     }
     if kata == "tiny-clm" {
-        return "A minimal causal LM: a byte-vocab embedding → a linear head →\nsoftmax cross-entropy on next-token prediction. Closed softmax-CE\nbackward (`dlogits = probs - onehot`) scatters into the head + the\nembedding row. The bridge toward the full `dojo/clm` CLMConvMoE\ntrainer — same descent discipline, a fraction of the model.\n"
+        return "A minimal causal LM: a byte-vocab embedding → a linear head →\nsoftmax cross-entropy on next-token prediction. Closed softmax-CE\nbackward (`dlogits = probs - onehot`) scatters into the head + the\nembedding row. The bridge toward the full `dojo/clm` CLMConvMoE\ntrainer — same descent discipline, a fraction of the model.\n\n> **bench before you vectorize (anima a10891bc).** When you scale this\n> toward the real CLMConvMoE, do NOT auto-fuse the expert loop. Fusing\n> 30 ConvExperts into one grouped `Conv1d(E·d, E·d, K, groups=30)` ran\n> ~14 min/step on an H200 vs the plain `ModuleList` of 30 small convs at\n> ~74 s/step — a grouped conv with many groups defeats GPU\n> group-parallelism and cuDNN can't pick a fast algo. **Fewer kernel\n> launches ≠ faster.** BENCH the fused form against the loop on ONE step\n> first. (Also: a >2.1B-element fused weight breaks `optim8bit`.) See\n> `docs/hexa-dojo.md` → Training recipe — optimization gotchas.\n"
     }
     return "linreg floor rung.\n"
 }
