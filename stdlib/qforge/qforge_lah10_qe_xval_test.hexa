@@ -1,0 +1,334 @@
+// @ci_gate — pure(+fs read of checked-in QE fixtures) · deterministic
+//
+// qforge_lah10_qe_xval_test.hexa — QFORGE L3 α²F(ω) ASSEMBLER ↔ Quantum ESPRESSO
+// ISOLATED-LAYER CROSS-VALIDATION on the LaH10 gate-anchor el-ph run.
+//
+// PURPOSE. The L3 |g|/α²F cross-val gate first closed on YH10 (PR#2380), then
+// added CaH6 as the first real-QE-data anchor (rel-ε 5.47% vs QE 8.516825 —
+// CaH6 = anchor 1). This adds the SECOND real-QE-data anchor — LaH10 (the
+// canonical ~250K-class RTSC sodalite, La + 10H = 11 atoms = 33 modes,
+// Fm-3m clathrate, harvested 2026-06-05). We feed the per-mode LaH10 QE el-ph
+// output into QFORGE's a2f→λ TAIL (the deposit kernel `qforge_gaussian_delta`
+// + the verified L2 integrator `qforge_a2f_lambda` = 2∫α²F/ω) and assert the
+// assembled-then-integrated λ reproduces the QE-recorded BZ-summed λ to
+// rel-ε ≤ 1%. This isolates the a2f/λ/Tc TAIL accuracy on REAL screened |g|²
+// input — the bare→screened |g|² question is the CaH6 finding; here we use QE's
+// already-screened elph as input so only the tail (q-weight · deposit ·
+// integration · Allen-Dynes/McMillan) is under test.
+//
+// ── PROVENANCE — REAL QE BYTES, NO FABRICATION (g5/g6/g63) ──────────────────
+// fixtures stdlib/qforge/fixtures/lah10_elph/lah10.dyn{1..8}.elph.{1..8} are the
+// VERBATIM QE ph.x electron_phonon='simple' output for LaH10 (Fm-3m sodalite
+// clathrate, 11 atoms = La + 10H, ~170 GPa, NC pseudos), harvested read-only
+// from the RTSC campaign (mini · vast.ai) terminal run — the same run whose
+// light xval set lives at exports/rtsc/LaH10/harvest_final/ in demiurge. Each
+// file is one q-point of the 2×2×2 grid: a header (qvec + nk + nmodes=33), the
+// nmodes SQUARED phonon frequencies ω²(q,ν) [Ry²], then 10 Gaussian-broadening
+// blocks each carrying N(E_F) and the per-mode λ(q,ν) + linewidth.
+// lah10.ph.out (the salvage q4-8 run) is co-archived: its FULLY-printed q4/q5
+// lambda sections (3.9314 / 2.7266 at 0.010 Ry) match elph.4/elph.5 EXACTLY,
+// independently validating the elph parse against ph.out itself.
+//
+// ── THE q-GRID & STAR WEIGHTS (verified by crystal-coord analysis) ──────────
+// lah10.dyn0 declares a 2×2×2 uniform grid (8 q-points). Each elph file's qvec
+// header matches dyn0 rows 1..8 EXACTLY — Γ + 7 others, NONE merged by symmetry
+// at the grid level. Each q-point tiles the full BZ once: w_q = 1 ∀q,
+// Σ w_q = W = 8. (Same unreduced 2×2×2 structure as the CaH6 anchor.)
+//
+// ── THE PRIMARY BROADENING ──────────────────────────────────────────────────
+// The .elph files hold 10 Gaussian broadenings (0.005..0.050 Ry). The PRIMARY
+// one = the scf Methfessel-Paxton degauss (0.010 Ry, read from scf.out), the
+// self-consistent smearing — same logic as CaH6 (scf MP degauss 0.010 Ry).
+// QE's BZ-summed coupling at the primary broadening is
+//     λ_BZ = Σ_q (w_q/W) Σ_ν λ(q,ν) = 4.315662   (parsed from the raw bytes).
+// QE does not print a single BZ-summed λ in this ph.out (no matdyn/lambda.x
+// post-step), so the answer-key IS this parsed BZ sum — exactly the CaH6/YH10
+// protocol (parser independently re-validated below + against ph.out q4/q5).
+//
+// ── THE ASSEMBLY (QFORGE L3 path, Allen 1972) ──────────────────────────────
+// QE's α²F (Allen) is  α²F(ω) = (1/2) Σ_{q,ν} (w_q/W) λ(q,ν) ω(q,ν) δ(ω−ω(q,ν))
+// so that 2∫α²F/ω = Σ (w_q/W) λ(q,ν) = λ_BZ. We deposit, per mode, the spectral
+// weight onto a uniform ω grid via QFORGE's OWN normalized phonon delta
+// `qforge_gaussian_delta`, then integrate with the verified L2 integrator
+// `qforge_a2f_lambda` (= 2∫α²F/ω). As σ_ph → 0 the assembler converges to λ_BZ.
+//
+// ── UNIT CONTRACT (matches the post-#2502 Hartree-scaled λ integrator) ──────
+// `qforge_a2f_lambda` (post-#2502 F2 fix) divides the integrand by ω in the
+// α²F numerator's ENERGY unit (Hartree) via ha_per_kelvin(): it treats the
+// ω-grid as Kelvin and converts the divisor K→Ha. For the round-trip to return
+// λ exactly, the per-mode spectral-weight deposit must be in that SAME energy
+// unit: A = ½ (w_q/W) λ(q,ν) · ω_K · ha_per_kelvin(). (Identical contract to the
+// post-#2502-consistent CaH6 anchor deposit.)
+//
+// ── HONEST FINDING (g6) — acoustic-leakage band ─────────────────────────────
+// A WIDE σ_ph deposit does NOT converge: Gaussian tails of finite-ω modes leak
+// into ω→0 where the 1/ω moment weight diverges, biasing λ LOW. The faithful
+// σ_ph→0 (per-mode-resolved) deposit eliminates it: λ converges MONOTONICALLY
+// to QE's λ_BZ. The test PINS the monotone convergence — same as CaH6.
+//
+// Run:  hexa run stdlib/qforge/qforge_lah10_qe_xval_test.hexa
+// PASS: exits printing "qforge_lah10_qe_xval_test PASS".
+
+use "stdlib/qforge/elph"
+use "stdlib/material/sim"
+
+let _RY2K: float = 157887.51        // 1 Ry → K (phonon ω unit convert)
+
+fn _abs(x: float) -> float { if x < 0.0 { return -x } return x }
+
+fn _sqrt(x: float) -> float {
+    if x <= 0.0 { return 0.0 }
+    let mut g = x
+    let mut i = 0
+    while i < 60 { g = 0.5 * (g + x / g) ; i = i + 1 }
+    return g
+}
+
+fn _rel(got: float, want: float) -> float {
+    let w = _abs(want)
+    let d = _abs(got - want)
+    if w < 1e-12 { return d }
+    return d / w
+}
+
+// ── minimal .elph parser ───────────────────────────────────────────────────
+fn _split_ws(s: str) -> [str] {
+    let mut out: [str] = []
+    let mut cur = ""
+    let mut i = 0
+    let n = len(s)
+    while i < n {
+        let ch = s.substring(i, i + 1)
+        let is_sp = ch == " " || ch == "\t" || ch == "\n" || ch == "\r"
+        if is_sp {
+            if cur != "" { out = out.push(cur) }
+            cur = ""
+        } else {
+            cur = cur + ch
+        }
+        i = i + 1
+    }
+    if cur != "" { out = out.push(cur) }
+    return out
+}
+
+fn _val_after_eq(line: str) -> float {
+    let e = line.index_of("=")
+    if e < 0 { return -999.0 }
+    let rest = line.substring(e + 1, len(line))
+    let toks = _split_ws(rest)
+    if len(toks) < 1 { return -999.0 }
+    return to_float(toks[0])
+}
+
+// Parse one lah10.dynN.elph.N file at the target broadening → flat (lambda,
+// omega_K) packing. File layout (identical to QE 'simple' el-ph):
+//   line0 : qx qy qz nk nmodes
+//   freqs : nmodes SQUARED frequencies ω²(q,ν) [Ry²]  (until first "Gaussian")
+//   blocks: 10× { "Gaussian Broadening: S Ry", "DOS = …", nmodes× "lambda(i)=…" }
+// ω(q,ν) in K = sqrt(ω²[Ry²]) · _RY2K.  (QE writes w2, NOT w, in this block.)
+fn _parse_elph_primary(path: str, target_sigma: str) -> [float] {
+    let text = read_file(path)
+    if len(text) < 8 { return [-1.0] }
+    let toks = _split_ws(text)
+    if len(toks) < 5 { return [-1.0] }
+    let nmodes = to_int(to_float(toks[4]))
+    // collect the nmodes ω²(q,ν) [Ry²]: tokens 5 .. 5+nmodes-1
+    let mut w2: [float] = []
+    let mut t = 5
+    while len(w2) < nmodes {
+        w2 = w2.push(to_float(toks[t]))
+        t = t + 1
+    }
+    // line scan for the target-broadening block's lambda lines.
+    let mut lams: [float] = []
+    let mut in_target = false
+    let mut start = 0
+    let nlen = len(text)
+    let mut i = 0
+    while i <= nlen {
+        let at_end = i == nlen
+        let ch = if at_end { "\n" } else { text.substring(i, i + 1) }
+        if ch == "\n" || ch == "\r" {
+            if i > start {
+                let line = text.substring(start, i)
+                if line.index_of("Gaussian Broadening") >= 0 {
+                    in_target = line.index_of(target_sigma + " Ry") >= 0
+                } else if in_target && line.index_of("lambda(") >= 0 {
+                    let v = _val_after_eq(line)
+                    if v > -900.0 { lams = lams.push(v) }
+                }
+            }
+            start = i + 1
+        }
+        i = i + 1
+    }
+    if len(lams) != nmodes { return [-2.0] }
+    // pack (lambda, omega_K) pairs:  ω_K = sqrt(ω²[Ry²]) · RY2K
+    let mut packed: [float] = []
+    let mut m = 0
+    while m < nmodes {
+        packed = packed.push(lams[m])
+        let omk = _sqrt(w2[m]) * _RY2K
+        packed = packed.push(omk)
+        m = m + 1
+    }
+    return packed
+}
+
+fn main() {
+    let mut fails = 0
+    let base = "stdlib/qforge/fixtures/lah10_elph/lah10.dyn"
+    let target = "0.010"            // PRIMARY broadening (= scf MP degauss 0.010 Ry)
+    let qe_lambda = 4.315662        // BZ-summed λ parsed from raw .elph bytes
+    let w = 8.0                     // Σ w_q (full 2×2×2 BZ; every q-pt w_q=1)
+
+    // ── parse all 8 IBZ q-points → flat (w_q/W, λ, ω_K) sample stream ────────
+    let mut s_wnorm: [float] = []
+    let mut s_lam: [float] = []
+    let mut s_om: [float] = []
+    let mut omax = 0.0
+    let mut parsed_lambda_bz = 0.0
+    let mut qi = 0
+    while qi < 8 {
+        let n = qi + 1
+        let path = base + to_string(n) + ".elph." + to_string(n)
+        let packed = _parse_elph_primary(path, target)
+        if len(packed) < 2 {
+            println("FAIL parse " + path + " sentinel=" + to_string(packed[0]))
+            fails = fails + 1
+            qi = qi + 1
+            continue
+        }
+        let nm = len(packed) / 2
+        let wn = 1.0 / w                // w_q = 1 ∀q  →  w_q/W = 1/8
+        let mut k = 0
+        while k < nm {
+            let lam = packed[2 * k]
+            let om = packed[2 * k + 1]
+            s_wnorm = s_wnorm.push(wn)
+            s_lam = s_lam.push(lam)
+            s_om = s_om.push(om)
+            parsed_lambda_bz = parsed_lambda_bz + wn * lam
+            if om > omax { omax = om }
+            k = k + 1
+        }
+        qi = qi + 1
+    }
+    let nsamp = len(s_lam)
+
+    // ── (1) parser re-validation: parsed λ_BZ == QE-recorded 4.315662 ────────
+    println("── parser: BZ-summed λ from raw QE LaH10 .elph bytes ──")
+    let prel = _rel(parsed_lambda_bz, qe_lambda)
+    if prel <= 1e-4 {
+        println("PASS parsed λ_BZ=" + to_string(parsed_lambda_bz)
+                + " == QE 4.315662 (rel-ε=" + to_string(prel) + ", " + to_string(nsamp)
+                + " modes)")
+    } else {
+        println("FAIL parsed λ_BZ=" + to_string(parsed_lambda_bz) + " ≠ QE 4.315662 (rel-ε="
+                + to_string(prel) + ")")
+        fails = fails + 1
+    }
+
+    // ── (2) QFORGE L3 assembler: 2∫α²F/ω → QE λ_BZ, σ_ph→0 convergence ───────
+    // Per mode deposit A = ½ (w_q/W) λ ω_K · ha_per_kelvin() onto a uniform grid
+    // via QFORGE's own normalized phonon delta (qforge_gaussian_delta). The
+    // ha_per_kelvin() factor matches the energy-unit divisor in qforge_a2f_lambda
+    // (post-#2502 F2 Hartree-scaling) so the round-trip 2∫α²F/ω = λ is exact.
+    println("── QFORGE assembler: λ = 2∫α²F/ω from assembled α²F (σ_ph→0) ──")
+    let hak = ha_per_kelvin()
+    let gmax = omax * 1.05
+    let mut prev_rel = 9.99
+    let mut grids: [int] = []
+    grids = grids.push(1000); grids = grids.push(4000); grids = grids.push(8000)
+    let mut gi = 0
+    let mut final_rel = 9.99
+    while gi < len(grids) {
+        let ng = grids[gi]
+        let dw = gmax / to_float(ng)
+        let sph = dw * 1.2          // σ_ph ~ 1.2 cells: resolves, no ω→0 leak
+        // build the uniform ω grid (strictly > 0; grid[0]=dw)
+        let mut grid: [float] = []
+        let mut j = 0
+        while j < ng {
+            grid = grid.push(gmax * (to_float(j + 1)) / to_float(ng))
+            j = j + 1
+        }
+        // accumulate α²F over the grid
+        let mut a2f: [float] = []
+        j = 0
+        while j < ng { a2f = a2f.push(0.0); j = j + 1 }
+        let mut si = 0
+        while si < nsamp {
+            let lam = s_lam[si]
+            let om = s_om[si]
+            if lam > 0.0 && om > 0.0 {
+                let dep = 0.5 * s_wnorm[si] * lam * om * hak
+                let jc = to_int(om / gmax * to_float(ng)) - 1
+                let lo = if jc - 10 < 0 { 0 } else { jc - 10 }
+                let hi = if jc + 11 > ng { ng } else { jc + 11 }
+                let mut jj = lo
+                while jj < hi {
+                    a2f[jj] = a2f[jj] + dep * qforge_gaussian_delta(grid[jj] - om, sph)
+                    jj = jj + 1
+                }
+            }
+            si = si + 1
+        }
+        let lam_qf = qforge_a2f_lambda(grid, a2f)
+        let rel = _rel(lam_qf, qe_lambda)
+        println("ng=" + to_string(ng) + " σ_ph=" + to_string(sph)
+                + "K  λ_QFORGE=" + to_string(lam_qf) + "  rel-ε=" + to_string(rel))
+        if rel < prev_rel {
+            println("PASS ng=" + to_string(ng) + " residual shrank ("
+                    + to_string(rel) + " < " + to_string(prev_rel) + ")")
+        } else {
+            println("FAIL ng=" + to_string(ng) + " residual NOT shrinking ("
+                    + to_string(rel) + " ≥ " + to_string(prev_rel) + ")")
+            fails = fails + 1
+        }
+        prev_rel = rel
+        final_rel = rel
+        gi = gi + 1
+    }
+
+    // ── (3) the L3 GATE: finest-grid λ within 1% of QE (milestone target) ────
+    println("── L3 GATE: QFORGE α²F assembler vs QE λ_BZ, rel-ε ≤ 1% ──")
+    if final_rel <= 0.01 {
+        println("PASS L3 |g|/α²F cross-val — QFORGE λ within 1% of QE 4.315662 (rel-ε="
+                + to_string(final_rel) + ")")
+    } else {
+        println("FAIL L3 cross-val — QFORGE λ rel-ε=" + to_string(final_rel) + " > 1%")
+        fails = fails + 1
+    }
+
+    // ── (4) the Tc TAIL: ω_log (λ-weighted log-mean) + McMillan Tc ───────────
+    // ω_log = exp[ (1/λ) Σ (w_q/W) λ(q,ν) ln ω(q,ν) ] — the Allen-Dynes log-mean.
+    // Feed (λ_BZ, ω_log) through QFORGE's Tc tail (mcmillan_tc / allen_dynes_tc).
+    // This carries the el-ph→Tc tail all the way to a Tc number on REAL data.
+    let mut lnsum = 0.0
+    let mut si2 = 0
+    while si2 < nsamp {
+        let lam = s_lam[si2]
+        let om = s_om[si2]
+        if lam > 0.0 && om > 0.0 {
+            // ln(om): the compiler `log` math builtin (d19 — no re-impl).
+            lnsum = lnsum + s_wnorm[si2] * lam * log(om)
+        }
+        si2 = si2 + 1
+    }
+    let omega_log = exp(lnsum / parsed_lambda_bz)
+    let mu_star = 0.10
+    let tc_mc = mcmillan_tc(omega_log, parsed_lambda_bz, mu_star)
+    let tc_ad = allen_dynes_tc(omega_log, parsed_lambda_bz, mu_star, omega_log)
+    println("── Tc tail (QFORGE moments → McMillan/Allen-Dynes, μ*=0.10) ──")
+    println("ω_log=" + to_string(omega_log) + " K  λ=" + to_string(parsed_lambda_bz)
+            + "  Tc_McMillan=" + to_string(tc_mc) + " K  Tc_AllenDynes(f1)="
+            + to_string(tc_ad) + " K")
+
+    if fails == 0 {
+        println("qforge_lah10_qe_xval_test PASS")
+    } else {
+        println("qforge_lah10_qe_xval_test FAIL — " + to_string(fails) + " case(s)")
+    }
+}
