@@ -2397,12 +2397,56 @@ fn _build_nvptx_emit_driver(src_path, sm_arch) {
     // Pre-check source exists (cmd_build already ran the same check
     // above; duplicate for direct-callers in future tests).
     if !file_exists(src_path) { return 1 }
-    // iter-2b/2e GATE: live pipeline calls lex/parse/static_atlas/lower/
-    // lower_hir/codegen_emit_ptx_for_sm; bodies live in compiler/ modules
-    // NOT linked by bootstrap Stage 1 -> 6 undefined symbols. Gated until
-    // Path C. Standalone driver at compiler/cli/build_nvptx.hexa.
-    println("[nvptx] GATED RFC071-P3-PathB src=" + src_path + " sm=" + sm_arch)
-    return 1
+    // ─── RFC 071 P3 PATH-B — UN-GATED (HEXA-CUDA D2) ──────────────────
+    // The historical gate ("6 undefined symbols; compiler/ bodies NOT
+    // linked by bootstrap Stage 1") is STALE: self/main.hexa now imports
+    // every pipeline module at the file head (lines 10-16) —
+    //   use compiler/lex/lexer · compiler/parse/parser ·
+    //   compiler/lower/ast_to_hir · compiler/lower/hir_to_mir ·
+    //   compiler/atlas/static_index · compiler/ir/mir ·
+    //   compiler/codegen/nvptx_target
+    // so lex/parse/lower/lower_hir/static_atlas/codegen_emit_ptx_for_sm
+    // and the MIR shapes + GPU_KIND_KERNEL are all in scope in the
+    // bootstrap host. We compose the pipeline INLINE here (the docstring
+    // above, lines 2356-2382, records that the `use compiler/cli/
+    // build_nvptx.hexa` indirection is NOT needed — re-importing the same
+    // modules through that sibling would dup the struct defs). This is a
+    // 1:1 mirror of compiler/cli/build_nvptx.hexa::build_nvptx_emit_driver
+    // (the verified P3 spec sibling).
+    //
+    // OFF-SAFE: this fn is reached ONLY from cmd_build's nvptx dispatch
+    // branch (target == one of the 3 nvptx64-nvidia-cuda-sm* strings).
+    // The default (non-nvptx) build path never touches it — byte-identical.
+    //
+    // Pipeline: read → lex → parse → static_atlas → lower(ast→HIR) →
+    // lower_hir(HIR→MIR) → codegen_emit_ptx_for_sm(MIR, sm_arch). The
+    // @gpu_kernel annotation → gpu_kind=GPU_KIND_KERNEL mapping is
+    // inherited from hir_to_mir.hexa:2749-2770; _nvptx_codegen filters
+    // MFuncs by gpu_kind so the PTX text contains ONLY the kernels.
+    let source     = to_string(read_file(src_path))
+    let tokens     = lex(source, src_path)
+    let module_ast = parse(tokens, src_path)
+    let atlas      = static_atlas()
+    let hmodule    = lower(module_ast, atlas)
+    let mmodule    = lower_hir(hmodule)
+    // Count @gpu_kernel entry points; a source with no kernel has nothing
+    // to launch — refuse loudly rather than emit an empty/CPU-only PTX.
+    let mut _kcount = 0
+    let mut _ki = 0
+    while _ki < len(mmodule.funcs) {
+        if mmodule.funcs[_ki].gpu_kind == GPU_KIND_KERNEL { _kcount = _kcount + 1 }
+        _ki = _ki + 1
+    }
+    if _kcount == 0 {
+        println("[nvptx] no @gpu_kernel found in " + src_path + " — nothing to emit")
+        return 1
+    }
+    let ptx_text = codegen_emit_ptx_for_sm(mmodule, sm_arch)
+    let out_path = src_path + ".ptx"
+    write_file(out_path, ptx_text)
+    if !file_exists(out_path) { return 1 }
+    println("[nvptx] target=" + sm_arch + " src=" + src_path + " out=" + out_path + " phase=P3")
+    return 0
 }
 
 // Source-block fork-storm — cross-process clang concurrency cap.

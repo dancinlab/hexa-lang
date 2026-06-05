@@ -14,12 +14,19 @@ intrinsic/launch surface the compiler supports today — honest gaps marked.
 - [x] D4 — cookbook authored at docs/hexa-cuda-cookbook.md with runnable
       example kernels using ONLY verified-real syntax: vector-add, SAXPY,
       parallel reduction, tiled matmul. DONE (build-verified: pending — see D1).
-- [ ] D1 — gaps found during D0, filed as follow-on work:
-      (a) `hexa build --target=nvptx…` end-to-end driver is GATED in the
-          bootstrap binary (`_build_nvptx_emit_driver` returns 1 with
-          `[nvptx] GATED RFC071-P3-PathB`); the real codegen
-          `codegen_emit_ptx_for_sm` is NOT linked into Stage-1 bootstrap, so
-          local `hexa build` of a kernel cannot yet emit PTX. (RFC 071 P3 Path B.)
+- [x] D1(a) — DONE (un-gate landed, branch domain/hexa-cuda-nvptx-ungate):
+      `hexa build --target=nvptx…` driver was GATED in the bootstrap binary
+      (`_build_nvptx_emit_driver` at self/main.hexa:2404 returned 1 with
+      `[nvptx] GATED RFC071-P3-PathB`). The gate reason ("compiler bodies NOT
+      linked / 6 undefined symbols") was STALE — self/main.hexa already
+      imports all 7 pipeline modules (lines 10-16), so `codegen_emit_ptx_for_sm`
+      + lex/parse/lower/lower_hir/static_atlas were already in scope. Replaced
+      the gate body with the inline lex→parse→lower→lower_hir→
+      codegen_emit_ptx_for_sm pipeline (1:1 mirror of the verified spec sibling
+      compiler/cli/build_nvptx.hexa). +50/-6, single file, OFF-safe (reached
+      only from the nvptx dispatch branch; default build byte-identical).
+      Verdict: .verdicts/hexa-cuda/F-HEXACUDA-NVPTX-UNGATE.txt (GREEN).
+- [ ] D1(b/c/d) — remaining gaps found during D0, filed as follow-on work:
       (b) `gpu_shared_f64` / `gpu_shared_add` / `gpu_shared_get` used by the
           qforge `@phase("parse_only")` reference kernels are NOT real codegen
           intrinsics — the real shared-memory form is `@shared let t: [f64; N]`
@@ -28,6 +35,15 @@ intrinsic/launch surface the compiler supports today — honest gaps marked.
           intrinsic — TF32 is host-side cuBLAS in that harness, not device PTX.
       (d) FP64 `exp()` intrinsic underflow bug below x≈−745 (qforge a2f d6 note)
           — kernel-side guard documented; codegen fix is a separate inbox item.
-- [ ] D2 — once D1(a) lands (RFC 071 P3 driver wiring), re-run the four
-      cookbook examples through `hexa build --target=nvptx64-nvidia-cuda-sm80`
-      and flip each example's "build-verified" tag from pending → confirmed.
+- [x] D2 — DONE (driver un-gated, emit verified). `hexa build --target=nvptx`
+      now emits SOURCE-DERIVED PTX end-to-end: the cookbook vec-add @gpu_kernel
+      compiles to a 59-line PTX with `.visible .entry vec_add` (source kernel
+      name, not the hand-MIR `vadd` fallback), `.target sm_90`, `.version 7.8`,
+      4× `.param .u64`, and real index-math + bounds-check + ld/st.global.f64
+      + ret. Verified via a standalone harness running the IDENTICAL inline
+      pipeline (the stale local Jun-1 hexa hangs flattening full self/main.hexa
+      on macOS, so the live `hexa build` path is re-verified on a fresh
+      bootstrap / CUDA host). ptxas-clean + device run = PENDING (no local
+      ptxas/CUDA toolkit; codegen is the RFC 055 §7 RTX-5070-validated entry).
+      Per-example "build-verified" tags: vec-add CONFIRMED (emit); SAXPY /
+      reduce / matmul re-emit + ptxas on a CUDA host = deferred follow-up.

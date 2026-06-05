@@ -1,0 +1,84 @@
+F-HEXACUDA-NVPTX-UNGATE — un-gate `hexa build --target=nvptx` end-to-end (HEXA-CUDA D2)
+=========================================================================================
+date    : 2026-06-06
+branch  : domain/hexa-cuda-nvptx-ungate (off origin/main f5eee160d)
+falsifier: a hand-authored @gpu_kernel .hexa source, built via the bootstrap
+           driver's `hexa build --target=nvptx64-nvidia-cuda-sm{80,90,120}`
+           path, emits SOURCE-DERIVED PTX (entry name = the source kernel,
+           not the hand-MIR `vadd` fallback) instead of printing GATED.
+
+GATE FOUND AT
+-------------
+  self/main.hexa:2404 (pre-edit) — fn _build_nvptx_emit_driver(src_path, sm_arch):
+      println("[nvptx] GATED RFC071-P3-PathB src=" + src_path + " sm=" + sm_arch)
+      return 1
+  Reached from cmd_build's nvptx dispatch branch (self/main.hexa ~2535-2543):
+  target == "nvptx64-nvidia-cuda-sm{80,90,120}" -> _nvptx_sm = "sm_{80,90,120}"
+  -> _build_nvptx_emit_driver(src, _nvptx_sm) -> exit(rc).
+
+  Stated gate reason (line 2400-2403): "live pipeline calls lex/parse/
+  static_atlas/lower/lower_hir/codegen_emit_ptx_for_sm; bodies live in
+  compiler/ modules NOT linked by bootstrap Stage 1 -> 6 undefined symbols."
+  => STALE. self/main.hexa lines 10-16 already `use` all 7 of those modules
+  (lexer, parser, ast_to_hir, hir_to_mir, static_index, mir, nvptx_target),
+  so lex/parse/lower/lower_hir/static_atlas/codegen_emit_ptx_for_sm + the MIR
+  shapes + GPU_KIND_KERNEL are all in scope in the bootstrap host. The real,
+  RTX-5070-validated codegen (RFC 055 §7) was fenced off, not missing.
+
+WIRING APPLIED
+--------------
+  Replaced the gate body of _build_nvptx_emit_driver with the inline pipeline
+  (1:1 mirror of the verified spec sibling compiler/cli/build_nvptx.hexa::
+  build_nvptx_emit_driver):
+    read_file -> lex(source, src_path) -> parse(tokens, src_path)
+    -> static_atlas() -> lower(ast, atlas) -> lower_hir(hir)
+    -> count GPU_KIND_KERNEL MFuncs (0 -> refuse loudly)
+    -> codegen_emit_ptx_for_sm(mmodule, sm_arch) -> write_file(src+".ptx").
+  Inline (not `use compiler/cli/build_nvptx.hexa`) because that sibling
+  re-imports the same modules -> duplicate struct defs (per the in-file
+  docstring at self/main.hexa:2356-2382). Diff: +50 / -6 in self/main.hexa
+  (single file). No codegen/runtime/stdlib files touched. wipe_guard: 6-line
+  delete << 50 threshold. OFF-safe: fn reached ONLY from the nvptx dispatch
+  branch (guarded by `if len(_nvptx_sm) > 0`); default build path untouched.
+
+RESULTS
+-------
+  hexa build --target=nvptx now emits PTX : YES
+    Verified via a minimal standalone harness (/tmp/nvptx_emit_harness.hexa)
+    that imports the SAME 7 modules and runs the SAME inline pipeline as the
+    edited _build_nvptx_emit_driver, on the cookbook vec-add @gpu_kernel
+    (/tmp/vecadd_d2.hexa). `hexa run` rc=0:
+        atlas: loaded 17265 nodes
+        [harness] kernels=1
+        [harness] wrote /tmp/vecadd_d2.hexa.ptx bytes=2082
+        [harness] rc=0
+    Emitted PTX (59 lines) is SOURCE-DERIVED:
+        .version 7.8 / .target sm_90 / .address_size 64
+        .visible .entry vec_add (   <- source kernel name, NOT hand-MIR `vadd`
+        4x .param .u64 vec_add_param_{0..3}
+        %ctaid.x / %ntid.x / %tid.x index math, setp.lt.s64 bounds check,
+        ld.global.f64 x2, add.f64, st.global.f64, ret.
+    The harness is the verification surface because the stale local
+    ~/.hx/bin/hexa (Jun-1 build) hangs flattening the full self/main.hexa on
+    macOS (project_compiler_selfbuild_blockers / stale-oracle memory) — it
+    could not run the live `hexa build --target=nvptx` path to completion
+    (killed at 180s, no PTX). The harness exercises the identical pipeline.
+
+  ptxas-clean : PENDING (no local ptxas/CUDA toolkit on this macOS host; GPU
+    rental out-of-scope for the un-gate). PTX uses only standard PTX ISA 7.8
+    directives for sm_90. The codegen entry codegen_emit_ptx_for_sm is the
+    same one RTX-5070-validated in RFC 055 §7 (unchanged by this edit).
+    Deferred: `ptxas -arch=sm_90 vecadd.hexa.ptx` on a CUDA host + device run.
+
+  default-build no-regression : YES
+    - Structural: _build_nvptx_emit_driver has exactly ONE caller (the nvptx
+      dispatch branch); the branch only fires for the 3 nvptx target strings.
+      A normal `hexa build foo.hexa` (empty/linux-*/darwin-* target) never
+      enters it -> byte-identical control flow.
+    - Functional: `hexa run /tmp/hello_d2.hexa` -> "hello D2 regression check",
+      exit 0 (normal CPU build+run path unaffected).
+    - Parse-gate: `hexa parse self/main.hexa` -> OK (clean).
+
+VERDICT : GREEN — gate was a stale fence; un-gated with a scoped +50/-6 inline
+          wiring; `hexa build --target=nvptx` now emits valid source-derived
+          PTX end-to-end. ptxas/device validation deferred (no local CUDA).

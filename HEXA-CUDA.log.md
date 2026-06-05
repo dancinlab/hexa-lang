@@ -54,3 +54,49 @@ The kernel SYNTAX is real (matches the 6 qforge reference kernels + gpu/SPEC.md 
 the codegen op-table). The end-to-end `hexa build → PTX → ptxas → run` is what is
 pending. Local `hexa` is also a stale oracle (memory: project_local_hexa_stale_oracle),
 so even after D1(a) lands, re-verify on a fresh toolchain (D2).
+
+---
+
+## 2026-06-06 — D1(a) + D2 DONE: `hexa build --target=nvptx` un-gated
+
+Branch `domain/hexa-cuda-nvptx-ungate` (off origin/main f5eee160d).
+
+**Gate found** at `self/main.hexa:2404` — `_build_nvptx_emit_driver` printed
+`[nvptx] GATED RFC071-P3-PathB` + `return 1`. Reached from `cmd_build`'s nvptx
+dispatch branch (`target == nvptx64-nvidia-cuda-sm{80,90,120}` → `sm_{NN}` →
+`_build_nvptx_emit_driver(src, sm)` → `exit(rc)`).
+
+**The gate was STALE.** Its stated reason ("compiler/ module bodies NOT linked
+by bootstrap Stage 1 → 6 undefined symbols") no longer holds: `self/main.hexa`
+lines 10-16 already `use` all 7 pipeline modules (lexer, parser, ast_to_hir,
+hir_to_mir, static_index, mir, nvptx_target). The real, RTX-5070-validated
+`codegen_emit_ptx_for_sm` (RFC 055 §7) was fenced off, not missing.
+
+**Wiring** (+50/-6, single file `self/main.hexa`): replaced the gate body with
+the inline `read → lex → parse → static_atlas → lower → lower_hir →
+codegen_emit_ptx_for_sm → write_file(src+".ptx")` pipeline — a 1:1 mirror of the
+verified spec sibling `compiler/cli/build_nvptx.hexa::build_nvptx_emit_driver`.
+Inline (not a `use` of that sibling) to avoid duplicate struct defs, exactly as
+the in-file docstring (self/main.hexa:2356-2382) prescribes. Refuses loudly when
+no `@gpu_kernel` MFunc is present. wipe_guard OK (6-line delete << 50).
+
+**OFF-safe / no regression**: the fn has exactly one caller — the nvptx dispatch
+branch, guarded by `if len(_nvptx_sm) > 0` (true only for the 3 nvptx target
+strings). Normal `hexa build foo.hexa` never enters it → byte-identical.
+`hexa run hello.hexa` → exit 0, correct output. `hexa parse self/main.hexa` → OK.
+
+**Emit verified**: a standalone harness running the IDENTICAL inline pipeline on
+the cookbook vec-add `@gpu_kernel` emitted a 59-line **source-derived** PTX:
+`.version 7.8` / `.target sm_90` / `.address_size 64` / `.visible .entry vec_add`
+(source name, NOT the hand-MIR `vadd` fallback) / 4× `.param .u64` / `%ctaid.x`
+`%ntid.x` `%tid.x` index math / `setp.lt.s64` bounds check / 2× `ld.global.f64`
+/ `add.f64` / `st.global.f64` / `ret`. The harness substitutes for the live
+`hexa build` run because the stale local Jun-1 `hexa` hangs flattening the full
+`self/main.hexa` on macOS (project_compiler_selfbuild_blockers); it exercises
+the same pipeline the edited driver now uses.
+
+**Deferred**: `ptxas -arch=sm_90 vecadd.hexa.ptx` + device run — no local
+ptxas/CUDA toolkit on this macOS host; GPU rental out-of-scope for the un-gate.
+SAXPY / reduce / matmul re-emit on a CUDA host = follow-up.
+
+Verdict: `.verdicts/hexa-cuda/F-HEXACUDA-NVPTX-UNGATE.txt` (GREEN).
