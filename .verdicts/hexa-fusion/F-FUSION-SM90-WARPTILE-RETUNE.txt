@@ -1,0 +1,45 @@
+F-FUSION-SM90-WARPTILE-RETUNE  ::  CLOSED-NEGATIVE (g5-HONEST) — occupancy axis ruled out
+domain: HEXA-FUSION · date: 2026-06-06 · register-reduced WMMA2 own-GEMM on NATIVE sm_90 (H100)
+GPU: NVIDIA H100 80GB HBM3 (compute_cap 9.0, native sm_90; vast 39626665) · nvcc 12.4.131 · -arch=sm_90
+harness: self/native/bench/wmma2_rr_bench.cu (square 2048³ col-major Sgemm, cuBLAS-TF32 oracle + GFLOP/s
+baseline, 20-iter timed, HEXA_OWN_GEMM_SYNC=1). kernels compiled verbatim from self/native/hxqwen14b_cuda.cu
+(no drift). register usage via cuobjdump -res-usage. pod DESTROYED after measure (leak 0).
+
+PRE-REGISTERED FALSIFIER (#2798): "On native sm_90 the WMMA2 own-GEMM is register/occupancy-bound
+(REG:236/thread → ~1 block/SM → 11.5 TFLOP/s = 29.5× off cuBLAS). Cutting register pressure so ≥2
+blocks/SM fit will lift own GFLOP/s and close a meaningful fraction of the cuBLAS gap."
+FIX: _hx_k_sgemm_cm_wmma2_rr (env HEXA_OWN_GEMM_WMMA2_RR, default OFF) = parent WMMA2 with
+  (A) __launch_bounds__(256, 2)  → force the compiler to fit ≥2 blocks/SM
+  (B) streamed input fragments (per-fk: 4 live frags vs the parent's 16) — math-identical
+      (same TF32 round, same fk=0..3 in-order accumulation, same dynamic-shared staging/epilogue).
+
+REGISTER / OCCUPANCY (cuobjdump -res-usage, sm_90):
+  parent _hx_k_sgemm_cm_wmma2     : REG:236  STACK:0    → blocks/SM = floor(65536/(236·256)) = 1
+  RR     _hx_k_sgemm_cm_wmma2_rr  : REG:128  STACK:184  → blocks/SM = floor(65536/(128·256)) = 2
+  → register goal ACHIEVED: 236 → 128 reg/thread (-46%, hit the launch_bounds(.,2) cap exactly);
+    occupancy DOUBLED 1 → 2 blocks/SM. (note: 184 B of stack-spill appeared in the RR variant.)
+
+THROUGHPUT (square 2048³, native sm_90 H100, 2 confirming runs each):
+  cuBLAS-TF32         : 0.049 ms   ~349.4 TFLOP/s   (baseline)
+  parent WMMA2 (own)  : 1.54 ms     11.1 TFLOP/s    ratio own/cuBLAS = 0.0318   cuBLAS/own = 31.4×
+  RR variant   (own)  : 1.60 ms     10.7 TFLOP/s    ratio own/cuBLAS = 0.0307   cuBLAS/own = 32.5×
+  rel-RMS (own vs cuBLAS oracle): 4.766e-06 for BOTH  (bar ≤ 3e-3 : PASS — correctness preserved)
+
+FINDING (CLOSED-NEGATIVE — the occupancy axis is deterministically ruled out):
+  Doubling occupancy (1 → 2 blocks/SM via a 46% register cut) did NOT raise own throughput — it
+  REGRESSED slightly (11.1 → 10.7 TFLOP/s, -4%) and the cuBLAS gap WIDENED (31.4× → 32.5×). Reproduced
+  across 2 independent runs (stable, not noise). Therefore register pressure / SM occupancy is NOT the
+  binding constraint on the WMMA2 own-GEMM. The kernel is bound by its inner-loop MATH PIPELINE, not by
+  block count: per-element __float_to_tf32 software rounding on every fragment load, a depth-1 cp.async
+  prefetch (no deep multi-stage pipeline), a scalar shared-staged epilogue, and no register-blocked
+  double-buffered mainloop. Adding a second resident block cannot hide that latency when one block
+  already under-utilizes the tensor cores; it adds scheduling pressure (and the spill) instead.
+  % of the 29.5× (here 31.4×) gap closed by the register-reduction axis: 0% (negative).
+  PARITY: N (own-GEMM remains ~31× off cuBLAS on native sm_90; this attempt did not move it).
+
+RULED-OUT SPACE: "WMMA2 own-GEMM is occupancy/register-bound on sm_90" is FALSE. Closing the gap is NOT
+a register-pressure problem — it requires a cuBLAS-class TC mainloop rework (deep cp.async pipelining,
+ldmatrix/mma.sync without per-element software TF32 rounding, register-blocked accumulation, vectorized
+epilogue), i.e. effectively reimplementing the CUTLASS-grade inner loop. That is a multi-session pipeline
+rewrite, not a one-knob retune. HONEST framing: this is parity-seeking, no superiority claim; the RR
+variant ships env-gated + default-OFF (parent path byte-identical) as a verified negative datapoint.
