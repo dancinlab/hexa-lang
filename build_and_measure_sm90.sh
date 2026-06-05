@@ -44,18 +44,32 @@ cuobjdump cutlass_driver 2>/dev/null | grep -i 'arch\|sm_' | head -5 || echo "(c
 echo "=== SASS Tensor-Core instruction scan in _hx_k_sgemm_cm_wmma2 (sm_90) ==="
 cuobjdump -sass -fun _Z19_hx_k_sgemm_cm_wmma2iixxxfPKfxS0_xfPfx cutlass_driver > wmma2_sass.txt 2>/dev/null \
   || cuobjdump -sass cutlass_driver > wmma2_sass.txt 2>/dev/null || true
-# Demangled fallback: dump all SASS, isolate the wmma2 function block.
+# Dump all SASS, then isolate ONLY the _hx_k_sgemm_cm_wmma2 function block
+# (the TU also contains a BF16 kernel whose HMMA must NOT contaminate the scan).
 cuobjdump -sass cutlass_driver 2>/dev/null > all_sass.txt || true
-HMMA=$(grep -cE 'HMMA|IMMA|OMMA|\.MMA' all_sass.txt 2>/dev/null || echo 0)
-FFMA=$(grep -cE 'FFMA' all_sass.txt 2>/dev/null || echo 0)
-echo "SASS HMMA/IMMA/OMMA (Tensor-Core MMA) count = $HMMA"
-echo "SASS FFMA (CUDA-core FMA) count             = $FFMA"
-if [ "$HMMA" -gt 0 ]; then
-  echo ">> Tensor-Core MMA instructions PRESENT in sm_90 SASS — WMMA2 emits TC ops."
-else
-  echo ">> NO Tensor-Core MMA in sm_90 SASS — WMMA2 fell to CUDA-core FFMA (NOT engaged)."
-fi
-grep -m6 -E 'HMMA|IMMA|OMMA' all_sass.txt 2>/dev/null || true
+python3 - <<'PY'
+import re
+txt=open('all_sass.txt').read()
+# Split into per-function blocks on the ".text._Z..." or "Function : " headers.
+# cuobjdump marks each kernel with a "		Function : <mangled>" line.
+blocks=re.split(r'(?m)^\s*Function : ', txt)
+def scan(name_substr):
+    for b in blocks:
+        head=b.splitlines()[0] if b else ''
+        if name_substr in head:
+            hmma=len(re.findall(r'\b(HMMA|IMMA|OMMA)\b', b))
+            ffma=len(re.findall(r'\bFFMA\b', b))
+            return head.strip(), hmma, ffma
+    return None,0,0
+h,hm,ff = scan('_hx_k_sgemm_cm_wmma2')
+print(f"WMMA2 func: {h}")
+print(f"  HMMA/IMMA/OMMA (Tensor-Core MMA) = {hm}")
+print(f"  FFMA (CUDA-core FMA)             = {ff}")
+if hm>0:
+    print(">> WMMA2 sm_90 SASS CONTAINS Tensor-Core MMA ops — TC path compiled in.")
+else:
+    print(">> WMMA2 sm_90 SASS has NO Tensor-Core MMA — CUDA-core FFMA only.")
+PY
 
 echo "=== RUN @2048^3 (own-GEMM WMMA2 fires inside the driver) ==="
 # The driver launches wmma2 directly; the launcher marker is emitted only via

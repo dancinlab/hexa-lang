@@ -88,6 +88,20 @@ int main(int argc, char** argv) {
     // 3) CUTLASS-grade tiled WMMA2
     cudaMemset(dC,0,szC*4);
     dim3 w2blk(256), w2grd((unsigned)((M+HXG_BM-1)/HXG_BM),(unsigned)((N+HXG_BN-1)/HXG_BN));
+    // Launch-error capture: the wmma2 block uses ~48KB static __shared__ (As[2][128*32]
+    // + Bs[2][32*64]); if that exceeds the device static-shared cap the launch errors
+    // out and C stays at the memset 0 (rel-RMS=1.0). Report the error explicitly.
+    cudaFuncAttributes w2a;
+    cudaError_t w2attr = cudaFuncGetAttributes(&w2a, (const void*)_hx_k_sgemm_cm_wmma2);
+    fprintf(stderr,"[wmma2-attr] getattr=%s numRegs=%d staticShared=%zuB maxThreadsPerBlock=%d ptx=%d bin=%d\n",
+            cudaGetErrorString(w2attr), w2a.numRegs, w2a.sharedSizeBytes,
+            w2a.maxThreadsPerBlock, w2a.ptxVersion, w2a.binaryVersion);
+    cudaGetLastError(); // clear
+    _hx_k_sgemm_cm_wmma2<<<w2grd,w2blk>>>(0,0,M,N,K, alpha, dA,M, dB,K, beta, dC,M);
+    cudaError_t w2launch = cudaGetLastError();
+    cudaError_t w2run = cudaDeviceSynchronize();
+    fprintf(stderr,"[wmma2] launch=%s  run=%s\n",
+            cudaGetErrorString(w2launch), cudaGetErrorString(w2run));
     float t_wmma2 = timed("wmma2", [&]{
         _hx_k_sgemm_cm_wmma2<<<w2grd,w2blk>>>(0,0,M,N,K, alpha, dA,M, dB,K, beta, dC,M);
     });

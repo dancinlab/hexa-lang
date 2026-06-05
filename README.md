@@ -152,10 +152,12 @@ forge GEMM dispatch (env HEXA_OWN_GEMM / _WMMA2 — OFF == cuBLAS default):
 | measurement | own-GEMM | cuBLAS | gap | verdict |
 |---|---|---|---|---|
 | sustained-loop GPU util (2048³, B200, nvidia-smi) | **89.9 % MEAN** / 100 % PEAK | 88.5 % MEAN / 100 % PEAK | both ~90 %, cuBLAS-class occupancy | 🟢 `F-FUSION-OWN-GEMM-UTIL` |
-| GEMM-iso step-time (2048³ WMMA2 vs cuBLAS) | 0.77047 ms/iter | 0.68 ms/iter ref | **1.13× of cuBLAS** (within ~13 %) | 🟢 `F-FUSION-CUTLASS-GRADE-WMMA` |
+| GEMM-iso step-time (2048³ WMMA2 vs cuBLAS, **Blackwell sm_120**) | 0.77047 ms/iter | 0.68 ms/iter ref | **1.13× of cuBLAS** (within ~13 %) | 🟢 `F-FUSION-CUTLASS-GRADE-WMMA` |
 | LLM full-step (LoRA, M=8192, shape-dispatch + split-K) | 454.9 steps/s | 565.2 steps/s | **1.24× of cuBLAS** (down from raw 2.24×) | 🟢 `F-FUSION-THRU-PARITY` · `F-FUSION-SPLITK-SKINNY` |
 
 The full-step gap closed in two landed steps: skinny-shape dispatch (16×16 tiled) took the raw **2.24× → 1.67×** (~46 % of the gap, `F-FUSION-THRU-PARITY`), then a split-K skinny GEMM took **1.67× → 1.24×** (a further 64 % of what remained, `F-FUSION-SPLITK-SKINNY`) — cumulatively ~80 % of the original 2.24× closed.
+
+> ⚠️ **Caveat — the 1.13× WMMA2 parity row is Blackwell-specific, NOT native-H100 (`F-FUSION-WMMA2-SM90-VERIFY`).** That figure was measured on an **RTX PRO 6000 Blackwell (sm_120)** running the `compute_90` kernel via PTX-JIT. Re-run on a **genuine native sm_90 H100** (compute-cap 9.0, `-gencode arch=compute_90,code=sm_90`), the `_hx_k_sgemm_cm_wmma2` kernel **does not launch** — its **56 KB static `__shared__` exceeds the sm_90 48 KB static-shared per-block cap** (`cudaErrorInvalidValue`), so it executes **no Tensor Cores** on Hopper. The Tensor-Core MMA ops **are** compiled into the sm_90 SASS (64 HMMA) — the gap is purely a launch-config / shared-memory limit, not missing TC codegen. To run on native H100 the kernel needs a dynamic-shared opt-in (`cudaFuncSetAttribute`, sm_90 optin cap = 227 KB) or a BM/BN/BK re-tile under 48 KB static. Until then the only own-GEMM that runs on native H100 is the naive WMMA at **0.0225× of cuBLAS (44× slower)**.
 
 **Util is a workload-size property, not a defect** (`F-FUSION-D2-RIGHTSIZED`): the *byte-identical* D1536 own-GEMM step that under-fills an idle **H100 to ~13 % MEAN** (median 2 %) **saturates a right-sized RTX 5070 to 98.00 % MEAN** (every sample 98 %, SM 98 %, compute-bound) — the 2048³ large shape gives 99 % on the same 5070. Low util on the H100 is the H100 being too big for a D1536 model, not a codegen flaw; given a GPU sized for the workload, util is at the saturation ceiling.
 
