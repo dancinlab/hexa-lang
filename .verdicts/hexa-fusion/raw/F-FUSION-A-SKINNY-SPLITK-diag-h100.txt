@@ -1,0 +1,7 @@
+G-sweep on dB (m16,n4096,k8192) scalar split-K:
+  G= 4  0.46679 ms  blocks=1024
+  G= 8  0.44712 ms  blocks=2048
+  G=16  0.43590 ms  blocks=4096
+  G=32  0.42651 ms  blocks=8192
+  G=64  0.42273 ms  blocks=16384
+split-K kernel: 8 blocks/SM x 132 SM = 1056 max resident blocks (256 thr/blk)

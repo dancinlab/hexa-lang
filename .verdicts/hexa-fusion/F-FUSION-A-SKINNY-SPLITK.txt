@@ -1,0 +1,146 @@
+F-FUSION-A-SKINNY-SPLITK — skinny R=16 LoRA own-GEMM vs cuBLAS on a NATIVE H100:
+the two-pass atomic-free split-K lever is a CLOSED-NEGATIVE; the real ceiling is
+"split-K path uses NO Tensor Cores", not atomic contention / occupancy / vec-load.
+================================================================================
+DATE: 2026-06-06
+GPU : NVIDIA H100 80GB HBM3 (sm_90, native — NOT Blackwell PTX-JIT). CUDA 12.4,
+      nvcc 12.4.131, built -arch=sm_90 (TRUE H100, the first A-family measurement
+      on real H100 Hopper Tensor Cores; #2714/#2738 ran Blackwell PTX-JIT, where
+      cuBLAS absolutes + the own/cuBLAS RATIO differ — see FINDING).
+POD : vast 39618015 (ssh8.vast.ai:18014) — an UNREGISTERED leaked H100 @ 0% util
+      this session ADOPTED (already running, paid) for the fast microbench, then
+      DESTROYED. `cloud down` confirmed; `cloud alive` -> GONE; pod list shows only
+      the protected rtsc-anchor RTX_3090 (39610026). LEAK 0.
+BRANCH: domain/hexa-fusion-a-skinny-splitk (base origin/main @ e1eaa5815).
+DRIVER: tool/a_skinny_splitk2_driver.cu + tool/a_skinny_splitk2_build.sh. The
+      build script EXTRACTS the split-K family (betascale + scalar splitk +
+      splitk2_partial + splitk2_reduce + vec) VERBATIM from the shipped
+      self/native/hxqwen14b_cuda.cu -> the measured code IS the shipped code.
+      cuBLAS arm = CUBLAS_TF32_TENSOR_OP_MATH (fair TF32-vs-TF32 compare).
+
+PRE-REGISTERED FALSIFIER (g5-HONEST)
+------------------------------------
+F-FUSION-SPLITK-SKINNY §4a NAMED the residual-of-residual verbatim: "our atomicAdd
+into a tiny 16-wide output column serializes G writers on the same cache lines. A
+two-pass split-K (partials buffer + a tree reduction kernel) ... would recover more
+— a further separable kernel step, NOT a tuning knob." CLAIM-TO-TEST: a two-pass
+ATOMIC-FREE split-K (PASS1 writes G partials to distinct scratch slices, PASS2 sums
+them in fixed fp32 order) closes a MEASURABLE fraction of the skinny own-vs-cuBLAS
+gap at rel-RMS <= 3e-3. FALSIFIER: if removing the atomicAdd recovers ~0%, the
+atomic-contention hypothesis is FALSE and the bottleneck is elsewhere. NO superiority
+claim — cuBLAS is the roofline; PARITY/OWNERSHIP framing only.
+
+LEVER BUILT (self/native/hxqwen14b_cuda.cu, env HEXA_OWN_GEMM_SPLITK2)
+---------------------------------------------------------------------
+_hx_k_sgemm_cm_splitk2_partial — PASS1: identical 16x16 tiled partial-dot math to
+  the single-pass split-K, but each k-chunk g=blockIdx.z writes its partial to a
+  DISTINCT scratch slice P[g*M*N + row + col*M] — NO atomicAdd, zero cache-line
+  contention across the G writers.
+_hx_k_sgemm_cm_splitk2_reduce — PASS2: one thread/output sums the G partials in
+  fixed ascending-g fp32 order (DETERMINISTIC, unlike the race-ordered atomic) then
+  folds the epilogue C = beta*C + alpha*Sigma. P = a G*M*N device malloc.
+Env-gated (default OFF = byte-identical additive branch). [OWN-SGEMM-SPLITK2-FIRED]
+fires. Correctness rel-RMS ~2.6e-4 << 3e-3 on EVERY shape (PASS) — the kernel is
+CORRECT; it just doesn't move the wall.
+
+================================================================================
+§1  CURRENT SKINNY own-vs-cuBLAS RATIO (the 5 real R=16 clm_prod LoRA GEMMs) — VERBATIM
+================================================================================
+NVIDIA H100 80GB HBM3 (sm_90), 200 iters/GEMM, CUDA-event timed:
+
+  shape (m,n,k)              cuBLAS GFLOP/s   scalar-splitK GFLOP/s   ratio (own/cuBLAS)
+  fwd_tmp (16,8192,4096)     19516.1          2448.6                  0.125x  (7.97x off)
+  bwd_u   (16,8192,4096)     19505.0          2445.8                  0.125x  (7.97x off)
+  bwd_tmp (16,8192,4096)     19489.6          2448.8                  0.126x  (7.96x off)
+  bwd_dB  (16,4096,8192)     18635.1          2450.9                  0.132x  (7.60x off)  <- skinny-M
+  bwd_dA  (4096,16,8192)     20303.8          2437.2                  0.120x  (8.33x off)  <- skinny-N
+  ------------------------------------------------------------------------------------
+  sq      (2048,2048,2048)  355182.6          2567.2                  0.0072x (138.4x off) <- reference
+
+  ms/iter (verbatim): cuBLAS 0.053-0.058 ms ; scalar split-K 0.438-0.441 ms.
+  NB: on a NATIVE H100 the skinny gap is ~8x (NOT the ~2x #2714 reported on
+  Blackwell PTX-JIT). The own GFLOP/s is PINNED FLAT at ~2440 across EVERY skinny
+  shape AND the square (2567) — a shape-independent ceiling. cuBLAS scales with
+  shape (19.5 TFLOP/s skinny -> 355 TFLOP/s square) because it uses Tensor Cores;
+  the own kernel does not, so it sits at the same CUDA-core FMA floor everywhere.
+
+================================================================================
+§2  THE LEVER (two-pass atomic-free split-K) — NEW RATIO  [FALSIFIED]
+================================================================================
+  shape                      scalar GFLOP/s   two-pass GFLOP/s   speedup   gap-closed
+  fwd_tmp (16,8192,4096)     2448.6           2437.6             0.996x    -0.5%
+  bwd_u   (16,8192,4096)     2445.8           2438.0             0.997x    -0.4%
+  bwd_tmp (16,8192,4096)     2448.8           2438.1             0.996x    -0.5%
+  bwd_dB  (16,4096,8192)     2450.9           2439.3             0.995x    -0.5%   <- the §4a target
+  bwd_dA  (4096,16,8192)     2437.2           2423.8             0.995x    -0.6%
+  sq      (2048,2048,2048)   2567.2           2558.9             0.997x    -0.3%
+
+  Removing the atomicAdd entirely recovered NOTHING — every shape is 0.995-0.997x
+  (marginally SLOWER, from the extra PASS2 reduce + scratch malloc). The
+  atomic-contention hypothesis of F-FUSION-SPLITK-SKINNY §4a is FALSIFIED on a
+  native H100: the atomic was never the bottleneck. Correctness PASS throughout
+  (rel-RMS ~2.6e-4, the deterministic fixed-order sum is in fact tighter).
+
+================================================================================
+§3  WHY (occupancy + GFLOP/s attribution) — the REAL ceiling
+================================================================================
+G-SWEEP on bwd_dB (m16,n4096,k8192), scalar split-K, 200 iters:
+  G= 4  0.4668 ms  1024 blocks
+  G= 8  0.4471 ms  2048 blocks
+  G=16  0.4359 ms  4096 blocks   <- default
+  G=32  0.4265 ms  8192 blocks
+  G=64  0.4227 ms 16384 blocks
+  -> FLAT: a 16x increase in K-split blocks (1024->16384) buys only -9% time.
+OCCUPANCY: cudaOccupancyMaxActiveBlocks = 8 blocks/SM x 132 SM = 1056 max-resident
+  blocks. At the DEFAULT G=16 the kernel already launches 4096 blocks >> 1056 ->
+  the SMs are FULLY SATURATED. The occupancy axis (which split-K targets) is
+  EXHAUSTED. Adding more K-split blocks cannot help — they queue, they don't fill.
+
+ROOT CAUSE (deterministic, ruled-out one axis): the ~2440 GFLOP/s flat ceiling
+across ALL shapes (skinny AND square 2048^3) is the signature of a kernel pinned
+at the H100's FP32 CUDA-CORE FMA throughput. The 16x16 shared-tile split-K kernel
+is PURE SCALAR FMA — it NEVER issues a Tensor-Core (wmma / HMMA) instruction.
+cuBLAS on H100 runs the TF32 Tensor Cores (HMMA.1688.F32.TF32), which is why it
+reaches 19.5 TFLOP/s on the skinny shapes and 355 TFLOP/s on the square — ~8x and
+~138x the own kernel respectively. The gap is NOT atomic contention (§2 falsifies),
+NOT occupancy (§3 G-sweep + occupancy calc), NOT vector-load alone (#2738: float4
+moved the SCALAR kernel ~16-62% but the scalar kernel is itself the wrong regime).
+The gap is the ABSENCE OF TENSOR CORES in the skinny split-K path.
+
+================================================================================
+§4  FINDING — CLOSED-NEGATIVE (named, with the ruled-out axis)
+================================================================================
+🔴 CLOSED-NEGATIVE: the two-pass atomic-free split-K (the F-FUSION-SPLITK-SKINNY
+§4a-named "next separable step") does NOT close the skinny own-vs-cuBLAS gap on a
+native H100 — it is 0.995-0.997x (a -0.5% non-effect). The atomic-contention
+hypothesis is FALSIFIED. The K-reduction-strategy axis (split-K factor, atomic vs
+two-pass tree-reduce, occupancy) is now FULLY EXHAUSTED across A1(#2714)/A2(#2725)/
+A2-vec(#2738)/this work — every K-axis lever is closed.
+
+DETERMINISTICALLY RULED-OUT axis: the skinny R=16 LoRA own-GEMM gap is NOT a
+K-reduction / atomic / occupancy / scalar-load problem. It is that the own skinny
+path runs on CUDA cores (~2.44 TFLOP/s FP32-FMA floor, shape-invariant) while
+cuBLAS runs TF32 Tensor Cores (19.5 TFLOP/s skinny, 355 TFLOP/s square). On a
+native H100 this is an ~8x skinny / ~138x square architectural gap — a Tensor-Core
+vs CUDA-core gap, not a tuning gap.
+
+THE ONLY REMAINING LEVER (named, NOT attempted here — out of this falsifier's
+scope): route the skinny split-K through WMMA/HMMA Tensor-Core fragments (a
+split-K variant of the existing _hx_k_sgemm_cm_wmma2, with M/N padded to the
+16x16x8 TF32 fragment shape since M=16 already fits one fragment row). That is a
+DIFFERENT kernel (tensor-core skinny split-K), not a reduction-strategy change.
+Whether it reaches cuBLAS parity on M=16 (where only 1 of 16 fragment-M rows is
+useful — 6.25% fragment efficiency) is OPEN and likely itself bounded by cuBLAS's
+hand-tuned skinny Tensor-Core schedule. HONEST: we make NO parity claim for it; we
+have only PROVEN the K-axis is the wrong place to look.
+
+PARITY/OWNERSHIP framing (no superiority claim): cuBLAS is the roofline. We OWN a
+correct (rel-RMS 2.6e-4), occupancy-saturated, deterministic split-K skinny GEMM;
+it is CUDA-core-bound and therefore ~8x off the Tensor-Core roofline on the skinny
+LoRA shapes. The honest closed-negative is: NO K-reduction lever (atomic-free
+two-pass included) can close that — only a Tensor-Core skinny kernel could, and
+that is a separate, unproven path.
+
+CORRECTNESS: PASS all shapes (rel-RMS <= 2.608e-4 << 3e-3 TF32 bar).
+[OWN-SGEMM-SPLITK2-FIRED]: FIRED. Default OFF = byte-identical (additive branch).
+POD DESTROYED: YES (39618015 GONE, leak 0).

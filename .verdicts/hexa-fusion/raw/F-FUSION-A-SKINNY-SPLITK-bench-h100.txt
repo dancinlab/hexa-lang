@@ -1,0 +1,48 @@
+[OWN-SGEMM-SPLITK2-FIRED] driver -> _hx_k_sgemm_cm_splitk2 (TWO-PASS atomic-free partials buffer + fixed-order reduce)
+GPU: NVIDIA H100 80GB HBM3 (sm_90)
+A-SKINNY two-pass atomic-free split-K A/B — cuBLAS vs scalar split-K vs two-pass
+g5: rel-RMS <= 3e-3 HARD gate (TF32); PARITY/OWNERSHIP framing only, NO superiority claim.
+
+=== fwd_tmp  (m16,n8192,k4096) : M=16 N=8192 K=4096  G=8  iters=200 ===
+  cuBLAS (TF32)        : 0.05502 ms/iter   (1.00x baseline)
+  scalar split-K       : 0.43851 ms/iter   (7.97x vs cuBLAS)   rel-RMS=2.600e-04 PASS
+  two-pass split-K     : 0.44048 ms/iter   (8.01x vs cuBLAS)   rel-RMS=2.600e-04 PASS
+  scalar->2pass speedup: 0.996x     fraction of (scalar->cuBLAS) gap closed by 2pass: -0.5%
+  GFLOP/s  cuBLAS=19516.1  scalar=2448.6  two-pass=2437.6
+
+=== bwd_u    (m16,n8192,k4096) : M=16 N=8192 K=4096  G=8  iters=200 ===
+  cuBLAS (TF32)        : 0.05505 ms/iter   (1.00x baseline)
+  scalar split-K       : 0.43901 ms/iter   (7.97x vs cuBLAS)   rel-RMS=2.600e-04 PASS
+  two-pass split-K     : 0.44042 ms/iter   (8.00x vs cuBLAS)   rel-RMS=2.600e-04 PASS
+  scalar->2pass speedup: 0.997x     fraction of (scalar->cuBLAS) gap closed by 2pass: -0.4%
+  GFLOP/s  cuBLAS=19505.0  scalar=2445.8  two-pass=2438.0
+
+=== bwd_tmp  (m16,n8192,k4096) : M=16 N=8192 K=4096  G=8  iters=200 ===
+  cuBLAS (TF32)        : 0.05509 ms/iter   (1.00x baseline)
+  scalar split-K       : 0.43847 ms/iter   (7.96x vs cuBLAS)   rel-RMS=2.600e-04 PASS
+  two-pass split-K     : 0.44041 ms/iter   (7.99x vs cuBLAS)   rel-RMS=2.600e-04 PASS
+  scalar->2pass speedup: 0.996x     fraction of (scalar->cuBLAS) gap closed by 2pass: -0.5%
+  GFLOP/s  cuBLAS=19489.6  scalar=2448.8  two-pass=2438.1
+
+=== bwd_dB   (m16,n4096,k8192) : M=16 N=4096 K=8192  G=16  iters=200 ===
+  cuBLAS (TF32)        : 0.05762 ms/iter   (1.00x baseline)
+  scalar split-K       : 0.43810 ms/iter   (7.60x vs cuBLAS)   rel-RMS=2.599e-04 PASS
+  two-pass split-K     : 0.44018 ms/iter   (7.64x vs cuBLAS)   rel-RMS=2.599e-04 PASS
+  scalar->2pass speedup: 0.995x     fraction of (scalar->cuBLAS) gap closed by 2pass: -0.5%
+  GFLOP/s  cuBLAS=18635.1  scalar=2450.9  two-pass=2439.3
+
+=== bwd_dA   (m4096,n16,k8192) : M=4096 N=16 K=8192  G=16  iters=200 ===
+  cuBLAS (TF32)        : 0.05288 ms/iter   (1.00x baseline)
+  scalar split-K       : 0.44056 ms/iter   (8.33x vs cuBLAS)   rel-RMS=2.608e-04 PASS
+  two-pass split-K     : 0.44299 ms/iter   (8.38x vs cuBLAS)   rel-RMS=2.608e-04 PASS
+  scalar->2pass speedup: 0.995x     fraction of (scalar->cuBLAS) gap closed by 2pass: -0.6%
+  GFLOP/s  cuBLAS=20303.8  scalar=2437.2  two-pass=2423.8
+
+=== sq       (2048^3) : M=2048 N=2048 K=2048  G=4  iters=200 ===
+  cuBLAS (TF32)        : 0.04837 ms/iter   (1.00x baseline)
+  scalar split-K       : 6.69203 ms/iter   (138.35x vs cuBLAS)   rel-RMS=2.608e-04 PASS
+  two-pass split-K     : 6.71364 ms/iter   (138.80x vs cuBLAS)   rel-RMS=2.608e-04 PASS
+  scalar->2pass speedup: 0.997x     fraction of (scalar->cuBLAS) gap closed by 2pass: -0.3%
+  GFLOP/s  cuBLAS=355182.6  scalar=2567.2  two-pass=2558.9
+
+=== VERDICT: all shapes PASS rel-RMS <= 3e-3 ===
