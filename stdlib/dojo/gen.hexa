@@ -38,6 +38,8 @@
 
 import "stdlib/dojo/llm.hexa"
 import "stdlib/dojo/clm.hexa"
+import "stdlib/dojo/hexa_cuda.hexa"
+import "stdlib/dojo/flame_forge.hexa"
 
 // ── data types ───────────────────────────────────────────────────────
 
@@ -123,6 +125,8 @@ pub fn lang_keep(lang: string, kind: string) -> bool {
 pub fn gen_dojo(domain: string, slug: string, spec: DojoSpec, lang: string) -> [DojoFile] {
     if domain == "llm" { return emit_llm(slug, spec, lang) }
     if domain == "clm" { return emit_clm(slug, spec, lang) }
+    if domain == "hexa-cuda"   { return emit_hexa_cuda(slug, spec, lang) }
+    if domain == "flame-forge" { return emit_flame_forge(slug, spec, lang) }
     // d6 honest stub: vision / rl / tabular have NO emitter yet. The CLI
     // surfaces these via dojo_domains()/dojo_is_stub() and exits with a
     // clear TODO rather than pretending a full emit.
@@ -133,7 +137,7 @@ pub fn gen_dojo(domain: string, slug: string, spec: DojoSpec, lang: string) -> [
 // dojo_domains() — known dojo domains (full + stub). Single source for
 // the `dojo domains` CLI listing.
 pub fn dojo_domains() -> [string] {
-    return ["llm", "clm", "vision", "rl", "tabular"]
+    return ["llm", "clm", "hexa-cuda", "flame-forge", "vision", "rl", "tabular"]
 }
 
 // dojo_is_stub(domain) — true for a registered-but-unimplemented domain
