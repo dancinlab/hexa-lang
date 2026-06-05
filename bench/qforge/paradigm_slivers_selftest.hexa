@@ -1,1 +1,157 @@
-// WIP — paradigm ML probe tractable-sliver verifications
+// HEXA bench — QFORGE-PERF paradigm-probe tractable-sliver verifications
+//
+// The four 🧠paradigm research-probes are ⚪speculative: a FULL implementation of
+// each needs an ML training stack + dataset that is OUT of QFORGE's current scope.
+// What IS verifiable now — and is the defining correctness primitive each method
+// rests on — is implemented + g5-checked here. Each verdict is honest (d6): the
+// sliver math MATCHES its closed-form answer; the milestone stays [ ] ⚪ grounded.
+//
+//   3 Δ-ML correction       — ridge Δ-model inference recovers a held-out target
+//   4 MLIP pre-screen       — dynamical-stability classifier (ω²<0 ⇒ unstable)
+//   5 active-learning       — D-optimal acquisition maximizes det(XᵀX) (info gain)
+//   6 transfer/reuse        — warm-start converges in fewer iters, same fixed point
+//
+// Citations (per probe): Ramakrishnan-vonLilienfeld JCTC 11 2087 (2015, Δ-ML) ·
+// MACE-MP arXiv:2401.00096 / CHGNet Nat.Mach.Intell. 5 1031 (2023) · Halko-
+// Martinsson-Tropp SIAM Rev. 53 217 (2011) / MacKay Neural Comp. 4 590 (1992,
+// info-based AL) · EPW Wannier-reuse Noffsinger CPC 181 2140 (2010) + d19.
+
+fn _ps_abs(x: float) -> float { if x < 0.0 { return -x } return x }
+fn _ps_sqrt(x: float) -> float {
+    if x <= 0.0 { return 0.0 }
+    let mut g = x
+    let mut i = 0
+    while i < 60 { g = 0.5 * (g + x / g) ; i = i + 1 }
+    return g
+}
+
+// ── 3 · Δ-ML : 2-feature ridge Δ-model, closed-form normal equations ──────────
+//   target Δλ(x) = β0·x0 + β1·x1 (a known linear cheap→accurate correction).
+//   Fit β̂ = (XᵀX + αI)⁻¹ Xᵀy on TRAIN points, predict a HELD-OUT point, compare
+//   to the true Δλ. With α→0 and a well-posed design the fit is exact.
+fn _sliver_dml() -> float {
+    // true model
+    let b0 = 1.7 ; let b1 = -0.9
+    // train design (4 points, 2 features) — well-conditioned
+    let x0 = [1.0, 2.0, 0.5, 1.5]
+    let x1 = [0.3, 1.0, 2.0, 0.7]
+    let mut y: [float] = []
+    let mut i = 0
+    while i < 4 { y.push(b0 * x0[i] + b1 * x1[i]) ; i = i + 1 }
+    // normal equations XᵀX (2x2 symmetric) + Xᵀy, ridge α tiny
+    let alpha = 0.0000001
+    let mut s00 = alpha ; let mut s01 = 0.0 ; let mut s11 = alpha
+    let mut t0 = 0.0 ; let mut t1 = 0.0
+    i = 0
+    while i < 4 {
+        s00 = s00 + x0[i] * x0[i]
+        s01 = s01 + x0[i] * x1[i]
+        s11 = s11 + x1[i] * x1[i]
+        t0 = t0 + x0[i] * y[i]
+        t1 = t1 + x1[i] * y[i]
+        i = i + 1
+    }
+    // 2x2 inverse · solve β̂
+    let det = s00 * s11 - s01 * s01
+    let bh0 = (s11 * t0 - s01 * t1) / det
+    let bh1 = (s00 * t1 - s01 * t0) / det
+    // held-out point
+    let hx0 = 3.1 ; let hx1 = 1.2
+    let pred = bh0 * hx0 + bh1 * hx1
+    let truth = b0 * hx0 + b1 * hx1
+    return _ps_abs(pred - truth) / _ps_abs(truth)   // rel-eps
+}
+
+// ── 4 · MLIP pre-screen : dynamical-stability classifier ──────────────────────
+//   given a 2x2 dynamical matrix D (mass-weighted Hessian), eigenvalues ω² ;
+//   ANY ω²<0 ⇒ imaginary mode ⇒ dynamically UNSTABLE (kill before DFPT).
+//   2x2 symmetric eigenvalues closed-form: (tr ± √(tr²−4det))/2.
+fn _eig2_min(a: float, b: float, d: float) -> float {
+    let tr = a + d
+    let det = a * d - b * b
+    let disc = _ps_sqrt(tr * tr - 4.0 * det)
+    let l1 = 0.5 * (tr - disc)
+    let l2 = 0.5 * (tr + disc)
+    if l1 < l2 { return l1 }
+    return l2
+}
+// returns 1.0 if classified STABLE (min ω²>0), 0.0 if UNSTABLE
+fn _classify_stable(a: float, b: float, d: float) -> float {
+    if _eig2_min(a, b, d) > 0.0 { return 1.0 }
+    return 0.0
+}
+
+// ── 5 · active-learning : D-optimal acquisition ───────────────────────────────
+//   1-feature-with-intercept linear model, design rows [1, x]. Information matrix
+//   M = XᵀX. Adding a candidate point x* raises det(M) most when x* is FARTHEST
+//   from the current design's x-mean (D-optimality). Verify the greedy argmax over
+//   candidate det-increase equals the analytically-farthest candidate, and that
+//   det(M) strictly INCREASES after adding it.
+fn _design_det(xs: [float]) -> float {
+    let n = len(xs)
+    let mut sx = 0.0 ; let mut sxx = 0.0
+    let mut i = 0
+    while i < n { sx = sx + xs[i] ; sxx = sxx + xs[i] * xs[i] ; i = i + 1 }
+    // M = [[n, sx],[sx, sxx]] ; det = n·sxx − sx²
+    return to_float(n) * sxx - sx * sx
+}
+
+// ── 6 · transfer/reuse : warm-start vs cold-start convergence ─────────────────
+//   contraction x_{k+1} = r·x_k + c  (fixed point x* = c/(1−r)). Count iters to
+//   |x−x*|<tol from cold (x=0) vs warm (x near x*, e.g. a similar candidate's soln).
+fn _iters_to_fix(x0: float, r: float, c: float, tol: float) -> int {
+    let xstar = c / (1.0 - r)
+    let mut x = x0
+    let mut k = 0
+    while k < 100000 {
+        if _ps_abs(x - xstar) < tol { return k }
+        x = r * x + c
+        k = k + 1
+    }
+    return k
+}
+
+fn main() {
+    println("=== QFORGE-PERF paradigm-probe tractable-sliver g5 ===")
+    let mut ok = true
+
+    // 3 · Δ-ML
+    let dml = _sliver_dml()
+    println("[3 Δ-ML] ridge Δ-model held-out rel-eps = " + to_string(dml))
+    if dml < 0.000001 { println("  PASS — recovers held-out Δλ") } else { println("  FAIL") ; ok = false }
+
+    // 4 · MLIP stability
+    // stable: D=[[2,0.3],[0.3,3]] (pos-def) ; unstable: soft mode D=[[2,0.3],[0.3,-1]]
+    let st = _classify_stable(2.0, 0.3, 3.0)
+    let un = _classify_stable(2.0, 0.3, -1.0)
+    println("[4 MLIP] stable-case verdict=" + to_string(st) + " (want 1) · unstable-case verdict=" + to_string(un) + " (want 0)")
+    if st > 0.5 && un < 0.5 { println("  PASS — classifier separates stable/unstable") } else { println("  FAIL") ; ok = false }
+
+    // 5 · active-learning D-optimal
+    // current design x in {-1,0,1} (mean 0). candidates {0.2, -0.9, 2.5} → farthest=2.5.
+    let base = [0.0 - 1.0, 0.0, 1.0]
+    let cands = [0.2, 0.0 - 0.9, 2.5]
+    let det0 = _design_det(base)
+    let mut best_i = 0 ; let mut best_det = 0.0 - 1.0
+    let mut i = 0
+    while i < 3 {
+        let aug = [base[0], base[1], base[2], cands[i]]
+        let d = _design_det(aug)
+        if d > best_det { best_det = d ; best_i = i }
+        i = i + 1
+    }
+    // analytic farthest-from-mean(0) candidate = index 2 (|2.5| largest)
+    println("[5 AL] D-optimal pick index=" + to_string(best_i) + " (want 2 = farthest) · det " + to_string(det0) + " -> " + to_string(best_det))
+    if best_i == 2 && best_det > det0 { println("  PASS — greedy = analytic D-optimal, det increased") } else { println("  FAIL") ; ok = false }
+
+    // 6 · transfer warm-start
+    let r = 0.85 ; let c = 0.3 ; let tol = 0.000000001
+    let cold = _iters_to_fix(0.0, r, c, tol)
+    let xstar = c / (1.0 - r)
+    let warm = _iters_to_fix(xstar - 0.01, r, c, tol)   // warm = near a similar candidate's soln
+    println("[6 transfer] cold-start iters=" + to_string(cold) + " · warm-start iters=" + to_string(warm) + " · fixed point=" + to_string(xstar))
+    if warm < cold { println("  PASS — warm-start converges in fewer iters, same fixed point") } else { println("  FAIL") ; ok = false }
+
+    if ok { println("paradigm_slivers_selftest PASS (4/4 slivers)") }
+    else { println("paradigm_slivers_selftest FAIL") }
+}
