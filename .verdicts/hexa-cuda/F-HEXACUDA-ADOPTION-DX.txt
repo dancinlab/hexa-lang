@@ -1,0 +1,77 @@
+F-HEXACUDA-ADOPTION-DX — HEXA-CUDA adoption DX (levers D6-D9)
+=============================================================
+Branch : domain/hexa-cuda-adoption-dx  (worktree off origin/main)
+Date   : 2026-06-06
+Goal   : friction-down + STEERING — make devs reach for `.hexa` @gpu_kernel
+         instead of py/.cu. NO perf claims; this is code + docs + tooling.
+
+Ground truth (read before authoring, NOT invented):
+  gpu/SPEC.md §5 (intrinsic contract) · compiler/codegen/nvptx_target.hexa
+  (op-table = what actually lowers) · stdlib/qforge/nvptx_*_kernel.hexa (6
+  reference kernels) · docs/hexa-cuda-cookbook.md §3 (intrinsic matrix).
+  Every intrinsic used in every artifact below was checked against these.
+
+-------------------------------------------------------------------------
+LEVER-BY-LEVER STATE (honest)
+-------------------------------------------------------------------------
+
+D6  scaffolding — `hexa new gpu-kernel <name>`            STATE: WIRED
+    self/main.hexa: cmd_new + _new_gpu_kernel_template (pure-builtin inline,
+    cmd_init style). Emits <name>.hexa = a minimal COMPILING vec-add kernel
+    (gpu_block_id_x/gpu_block_dim_x/gpu_thread_id_x + to_i64 guard + gpu_launch
+    host shape + `hexa build --target=nvptx` hint). `new` dispatch branch +
+    top-level help catalog line + core_commands() SSOT row (S5 drift-test safe).
+    VERIFIED: generated kernel output parse-checks clean (`hexa parse`).
+    PENDING: full self/main.hexa self-build (stale local oracle hangs flattening
+    main.hexa — project_compiler_selfbuild_blockers). The CLI surgery is additive
+    + off-safe (reached only from the `new` branch).
+
+D7  porting guide — .cu/py → .hexa                        STATE: WRITTEN (Y)
+    docs/hexa-cuda-porting-guide.md. The CUDA→hexa intrinsic mapping table
+    (threadIdx.x→gpu_thread_id_x · __syncthreads→gpu_barrier · __shared__→
+    @shared let · atomicAdd→gpu_atomic_add · __shfl_*_sync→gpu_warp_shuffle_* ·
+    nvcuda::wmma→gpu_wmma_* · <<<>>>→gpu_launch). Line-by-line side-by-side
+    ports: vec-add, SAXPY, parallel reduction, tiled FP64 matmul (hexa mirrors
+    the cookbook's verified recipes). 10-step mechanical translation checklist +
+    honest end-to-end build status. Cross-linked both ways with the cookbook.
+
+D8  nudge-lint — soft steer off FFI-ing a .cu             STATE: PROTOTYPE + HOOK
+    tool/lint_cu_nudge.hexa — report-only, NEVER blocks (always exit 0). Scans a
+    dir for hand-written `.cu` files + nvcc build-script invocations; on a hit
+    emits ONE friendly advisory → cookbook / porting-guide / `hexa new`.
+    VERIFIED: nudge fires correctly on a .cu+nvcc fixture (RC=0); parses clean.
+    HONEST: standalone tool + documented integration points (pre-commit hook ·
+    build wrapper · future in-compiler .cu-FFI link path behind HEXA_CU_NUDGE=1,
+    default off). NOT wired into `hexa build` — there is NO user-facing .cu
+    FFI/link path in the compiler today to hook into (the only in-tree nvcc use
+    is the `hexa gpu fire` REMOTE dispatcher, not a user FFI-link). The
+    advisory() string is the canonical message to emit when such a path lands.
+
+D9  LSP/DX — @gpu_kernel intrinsic completion + hover     STATE: WIRED + DATA FILE
+    self/lsp.hexa: get_gpu_intrinsics() = 29-row SSOT (name|signature|doc) folded
+    into handle_completion (CompletionItemKind 3 + signature in detail),
+    handle_hover (markdown sig+doc), all_global_names (`hexa-lsp complete` CLI).
+    gpu_intrinsics_export() + `hexa-lsp gpu-intrinsics` CLI verb emit a
+    machine-readable completion-items JSON for an EXTERNAL LSP/editor.
+    Static artifact checked in: gpu/gpu_intrinsics.lsp.json (29 items, JSON-valid).
+    VERIFIED: self/lsp.hexa parse-checks clean.
+    PENDING: in-tree bin/hexa-lsp rebuild — the fresh worktree lacks the bootstrap
+    self/native/hexat artifact (build hook failed for that reason, not a source
+    error). The static JSON gives external editors the data regardless.
+
+-------------------------------------------------------------------------
+SUMMARY
+-------------------------------------------------------------------------
+  D6  WIRED         (CLI subcommand; self-build verify pending)
+  D7  WRITTEN (Y)   (guide complete, cross-linked)
+  D8  PROTOTYPE     (standalone nudge-lint + documented hook; fires on fixture)
+  D9  WIRED + DATA  (LSP completion/hover wired; static JSON artifact shipped)
+
+Build-verify-pending items (all due to the stale local macOS oracle / fresh
+worktree lacking bootstrap artifacts — flagged honestly, NOT faked):
+  - D6 full self/main.hexa self-build (CLI subcommand runtime)
+  - D9 in-tree bin/hexa-lsp rebuild
+Both have clean `hexa parse` passes; both edits are purely additive.
+
+g5 honesty: REAL syntax only (no invented intrinsics) · no perf claims ·
+every build-verify-pending or prototype-not-wired item marked explicitly.

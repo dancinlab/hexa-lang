@@ -100,3 +100,48 @@ ptxas/CUDA toolkit on this macOS host; GPU rental out-of-scope for the un-gate.
 SAXPY / reduce / matmul re-emit on a CUDA host = follow-up.
 
 Verdict: `.verdicts/hexa-cuda/F-HEXACUDA-NVPTX-UNGATE.txt` (GREEN).
+
+## 2026-06-06 — D6-D9 adoption DX (one delegated pass)
+
+Branch `domain/hexa-cuda-adoption-dx` (worktree). Goal: steer devs to write
+`.hexa` @gpu_kernel over py/.cu. Four levers, committed separately. REAL syntax
+only — every intrinsic verified vs gpu/SPEC.md §5 + the cookbook §3 matrix +
+the six stdlib/qforge/nvptx_*_kernel.hexa reference kernels. No invented names.
+
+### D6 — `hexa new gpu-kernel <name>` scaffolder  [WIRED]
+- `cmd_new` + `_new_gpu_kernel_template` in self/main.hexa (pure-builtin inline,
+  same style as cmd_init). Emits `<name>.hexa`: a minimal *compiling* vec-add
+  @gpu_kernel (gpu_block_id_x · gpu_block_dim_x · gpu_thread_id_x · to_i64 guard)
+  + host launch shape (gpu_launch) + `hexa build --target=nvptx` hint.
+- `new` dispatch branch + top-level catalog line + `core_commands()` SSOT row
+  (keeps the S5 help-drift test green).
+- Generated kernel output parse-checks clean (`hexa parse`, small-file path).
+- Build-verify of the full self/main.hexa self-build PENDING (stale local oracle).
+
+### D7 — .cu/py → .hexa porting guide  [WRITTEN]
+- docs/hexa-cuda-porting-guide.md: the CUDA→hexa intrinsic mapping table +
+  line-by-line side-by-side ports (vec-add · SAXPY · parallel reduction · tiled
+  FP64 matmul) + a 10-step mechanical translation checklist + honest build status.
+- Cross-linked both ways with the cookbook; cookbook also points at `hexa new`.
+
+### D8 — nudge-lint (soft steer off FFI-ing a .cu)  [PROTOTYPE + HOOK]
+- tool/lint_cu_nudge.hexa: report-only (always exit 0, NEVER blocks). Scans a dir
+  for hand-written `.cu` + nvcc build-script invocations; on a hit emits ONE
+  friendly advisory pointing at the cookbook / porting-guide / `hexa new`.
+- Nudge fires correctly on a `.cu`+nvcc fixture (verified, RC=0).
+- HONEST: standalone tool + documented integration points (pre-commit · build
+  wrapper · future in-compiler .cu-FFI hook behind HEXA_CU_NUDGE=1). NOT wired
+  into `hexa build` — there is no user-facing .cu FFI/link path in the compiler
+  today (the only in-tree nvcc use is the `hexa gpu fire` REMOTE dispatcher).
+
+### D9 — LSP @gpu_kernel intrinsic completion + hover  [WIRED + DATA FILE]
+- self/lsp.hexa: `get_gpu_intrinsics()` SSOT (29 real intrinsics, name|sig|doc) →
+  folded into handle_completion (Kind 3 + signature detail), handle_hover
+  (markdown sig+doc), all_global_names (CLI `hexa-lsp complete`).
+- `gpu_intrinsics_export()` + `hexa-lsp gpu-intrinsics` CLI verb emit a
+  machine-readable completion-items JSON for an external editor/LSP.
+- Static artifact checked in: gpu/gpu_intrinsics.lsp.json (29 items, JSON-valid).
+- self/lsp.hexa parse-checks clean. In-tree bin/hexa-lsp rebuild build-verify
+  PENDING (fresh worktree lacks the bootstrap self/native/hexat artifact).
+
+Verdict: `.verdicts/hexa-cuda/F-HEXACUDA-ADOPTION-DX.txt`.
