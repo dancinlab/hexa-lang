@@ -27,21 +27,33 @@ CUDA_LIB=$(dirname "$(find /usr/local/cuda* -name libcudart.so 2>/dev/null | hea
 DCFG=${DCFG:-1536}; TCFG=${TCFG:-512}; EPO=${EPO:-4}; NS=${NS:-8}
 
 echo "=== GPU ==="; nvidia-smi --query-gpu=name,memory.total,compute_cap --format=csv,noheader -i 0
+echo "=== inject 5 fusion dispatcher protos into self/runtime.h (idempotent) ==="
+# clm_prod.c calls bare forge_dispatch_{gelu2,groupnorm_gelu,groupnorm_gelu_residual,
+# moe_block2,clm_megafwd} but the l3d runtime.h lacks their protos -> implicit-int
+# -> "invalid initializer". This adds them; bodies are in fusion_dispatch.c.
+python3 insert_fusion_protos.py self/runtime.h \
+  && echo "  fusion protos in runtime.h: $(grep -cE '^HexaVal forge_dispatch_(gelu2|groupnorm_gelu|groupnorm_gelu_residual|moe_block2|clm_megafwd)\(' self/runtime.h)" \
+  || { echo "PROTO INSERT FAIL (anchor missing)"; exit 1; }
 echo "=== nvcc compile runtime_cuda.c (racefix) ==="
 # -rdc=true + compute_90 (grid.sync in the megafwd needs rdc); -DHEXA_CUDA mandatory.
 nvcc -x cu -DHEXA_CUDA -rdc=true -gencode arch=compute_90,code=sm_90 -O2 -w \
-     -I self -I . -c runtime_cuda.c -o runtime_cuda.o 2>/tmp/nvcc.err \
+     -I self/cuda -I self -I . -c runtime_cuda.c -o runtime_cuda.o 2>/tmp/nvcc.err \
   && echo "  runtime_cuda.o: $(stat -c%s runtime_cuda.o) bytes" \
   || { echo "NVCC FAIL"; tail -30 /tmp/nvcc.err; exit 1; }
 nvcc -dlink -arch=sm_90 runtime_cuda.o -o runtime_cuda_dlink.o 2>/tmp/dlink.err \
   && echo "  dlink ok" || { echo "DLINK FAIL"; tail -20 /tmp/dlink.err; exit 1; }
 echo "  MEGAFWD launchers: $(grep -c '_hx_k_clm_megafwd_fp64' runtime_cuda.c)  EAGER-DEVGLUE marker: $(grep -c 'EAGER-DEVGLUE-FIRED' runtime_cuda.c)  RACEFIX memset: $(grep -c 'P1B-a.. RACEFIX' runtime_cuda.c)"
 
-echo "=== relink clm_prod_gpu ==="
-gcc -O2 -std=gnu11 -D_GNU_SOURCE -DHEXA_CUDA -w -I self -I . \
-    clm_prod.c self/runtime.c runtime_cuda.o runtime_cuda_dlink.o \
+echo "=== relink clm_prod_gpu (l3d self/runtime.c base + reconstructed L3-fusion dispatchers) ==="
+# self/runtime.c is the L3D tree (has every PER-OP dispatcher this clm_prod.c
+# needs) but NOT the 5 FUSED ops (gelu2/groupnorm_gelu/groupnorm_gelu_residual/
+# moe_block2/clm_megafwd) — fusion_dispatch.c supplies those bare wrappers (the
+# matching _hx_cuda_farr_<op>_gpu launchers are in the racefix runtime_cuda.o).
+echo "  fusion_dispatch.c dispatchers: $(grep -cE '^HexaVal forge_dispatch_' fusion_dispatch.c)"
+gcc -O2 -std=gnu11 -D_GNU_SOURCE -DHEXA_CUDA -w -I self/cuda -I self -I . \
+    clm_prod.c fusion_dispatch.c self/runtime.c runtime_cuda.o runtime_cuda_dlink.o \
     -L"$CUDA_LIB" -lcudart -lcublas -lcuda -lcudadevrt -lm -ldl -lpthread -o clm_prod_gpu 2>/tmp/relink.err \
-  && echo "  clm_prod_gpu: $(stat -c%s clm_prod_gpu) bytes" || { echo "RELINK FAIL"; grep -i error /tmp/relink.err|head; exit 1; }
+  && echo "  clm_prod_gpu: $(stat -c%s clm_prod_gpu) bytes" || { echo "RELINK FAIL"; grep -iE 'error|undefined' /tmp/relink.err|head -20; exit 1; }
 
 ce1(){ # single-forward first_ce (EPOCHS=1), echo verbatim 17-digit value
   env CUDA_VISIBLE_DEVICES=0 CLM_PROD_DEVRESIDENT=1 CLM_PROD_DEVFEED=1 CLM_PROD_BATCHED=1 \
