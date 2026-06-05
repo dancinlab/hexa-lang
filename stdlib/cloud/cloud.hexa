@@ -405,6 +405,84 @@ fn cloud_run(host: str, argv: [str]) -> CloudResult {
     return cloud_run_opts(host, [], argv)
 }
 
+// ── robust command delivery (gap-2 cmd-mangle) ───────────────────────
+//
+// The structured-argv path (cloud_run_opts) is correct for PROGRAM dispatch
+// but cannot carry an arbitrary SHELL BODY: a multiline relaunch, a `&`
+// background, a redirection, or a >8KB base64 blob either blows the argv
+// length limit (each token re-quoted + joined) or loses its newlines when a
+// watcher hand-wrapped it. Two delivery primitives close the gap:
+//
+//   1. positional `-- <cmd>` → _bashlc_wrap joins the tokens back into ONE
+//      command body and runs it as `bash -lc <body>`. A LOGIN shell (-l)
+//      sources the profile (conda/module PATH) and a single quoted argument
+//      preserves newlines, `&`, pipes, redirection verbatim — the body is
+//      one literal word to the remote shell, never re-split.
+//   2. `--script <file>` → the file body is piped over STDIN to a remote
+//      `bash -s`. Nothing about the body touches argv, so there is no length
+//      limit and the bytes arrive identical (stdin is a byte stream). This is
+//      the path for a >8KB body or anything argv quoting would mangle.
+
+// _bashlc_remote — build the remote command that runs `body` under a login
+// shell. `body` is POSIX-quoted as a SINGLE argument to `bash -lc`, so the
+// remote shell receives it as one literal word (newlines / `&` / pipes /
+// redirection all survive) and only re-parses it INSIDE the login shell.
+fn _bashlc_remote(body: str) -> str {
+    return "bash -lc " + _shq(body)
+}
+
+// _join_cmd_body — join positional `-- <cmd>` tokens back into one command
+// body with single spaces. The CLI word-split the body across argv; this
+// reassembles it so _bashlc_remote can deliver it as one shell command.
+fn _join_cmd_body(argv: [str]) -> str {
+    let mut out = ""
+    let mut i = 0
+    while i < len(argv) {
+        if i > 0 {
+            out = out + " "
+        }
+        out = out + argv[i]
+        i = i + 1
+    }
+    return out
+}
+
+// cloud_run_script_opts — deliver an arbitrary command body (read from a
+// local file by the CLI) over STDIN to a remote `bash -s`, with the same
+// __CLOUD_RC__ exit-code marker as cloud_run_wall_opts. `body` is piped raw,
+// so a multiline / `&` / >8KB body arrives byte-identical (no argv quoting,
+// no length limit). The local pipe is `printf %s <shq(body)> | ssh ... bash`.
+fn cloud_run_script_opts(host: str, ssh_opts: [str], body: str) -> CloudResult {
+    if len(body) == 0 {
+        return _cloud_fail("cloud_run_script: empty script body")
+    }
+    // Remote: read the whole stdin into bash -s, run it, append the marker.
+    // The marker is echoed by the OUTER shell after `bash -s` returns so a
+    // body that itself calls `exit` still yields a recoverable code.
+    let remote = "bash -s 2>&1; echo __CLOUD_RC__=$?"
+    // Local delivery: feed `body` to ssh's stdin via `printf %s`. The body is
+    // _shq-quoted for the LOCAL /bin/sh -c so it reaches printf as one literal
+    // (newlines preserved), then flows over the ssh stdin byte-for-byte.
+    let local = "printf '%s' " + _shq_local(body) + " | " + _ssh_cmd(host, ssh_opts, remote)
+    let res = exec_capture(local)
+    let out = res[0]
+    let rc = _parse_uint_after(out, "__CLOUD_RC__=")
+    let body_out = _strip_marker(out, "__CLOUD_RC__=")
+    if rc < 0 {
+        if res[2] == 255 {
+            return _ssh_transport_outage("cloud_run_script", body_out, res[1])
+        }
+        return CloudResult { ok: 0, exit_code: -1, pid: 0, stdout_: body_out,
+            message: "cloud_run_script: no exit-code marker — ssh transport failure or remote shell died", logfile: "" }
+    }
+    let mut ok = 0
+    if rc == 0 {
+        ok = 1
+    }
+    return CloudResult { ok: ok, exit_code: rc, pid: 0, stdout_: body_out,
+        message: "remote exit " + str(rc) + " (script stdin)", logfile: "" }
+}
+
 // cloud_exec_opts — shell-mode dispatch (NOT structured-argv). `cmd_str`
 // is sent to the remote login shell AS-IS — pipes / globs / redirects /
 // shell variables all parse on the remote side. Use for ad-hoc 1-liners
@@ -439,6 +517,20 @@ fn cloud_exec_opts(host: str, ssh_opts: [str], cmd_str: str) -> CloudResult {
 // cloud_exec — cloud_exec_opts with no extra ssh flags.
 fn cloud_exec(host: str, cmd_str: str) -> CloudResult {
     return cloud_exec_opts(host, [], cmd_str)
+}
+
+// cloud_run_bashlc_opts — run the positional `-- <cmd>` body under a remote
+// login shell (`bash -lc <body>`). Reassembles the word-split tokens, then
+// reuses cloud_exec_opts (shell-string transport) — the body is delivered as
+// the single `bash -lc` argument so multiline / `&` / redirection survive.
+// (Defined AFTER cloud_exec_opts: the single-pass codegen needs the callee
+// declared before this call site, else it falls back to an indirect call.)
+fn cloud_run_bashlc_opts(host: str, ssh_opts: [str], argv: [str]) -> CloudResult {
+    if len(argv) == 0 {
+        return _cloud_fail("cloud_run_bashlc: empty argv")
+    }
+    let body = _join_cmd_body(argv)
+    return cloud_exec_opts(host, ssh_opts, _bashlc_remote(body))
 }
 
 // cloud_nohup_opts — start `argv` on `host` detached (nohup, output to
@@ -649,6 +741,67 @@ fn cloud_tail_cmd_taxonomy_opts(host: str, ssh_opts: [str], logfile: str, grep_r
     let prog = _cloud_tail_sed_prog(grep_re, "", 1)
     let remote = "tail -F -n +1 " + _shq(logfile) + " 2>/dev/null | sed -E -un " + _shq(prog)
     return _ssh_cmd(host, ssh_opts, remote)
+}
+
+// ── session-independent detached watch (gap-3, watch-detach) ─────────
+//
+// A poll-loop / `cloud tail` watcher runs as a child of the SESSION shell, so
+// when the session is reaped (a `/login` re-auth this campaign) the whole
+// process group takes SIGHUP and the watcher dies — exit 144 (128+SIGHUP), the
+// mass watcher death this session. The fix is a truly session-independent
+// watcher: `setsid` puts it in its OWN session (no controlling terminal, so a
+// parent SIGHUP cannot reach it), `nohup` ignores SIGHUP belt-and-suspenders,
+// stdin is detached from the tty, and stdout/stderr go to a DURABLE log file.
+// On the inner tail returning, its 3-tier verdict (0/3/4/255) is appended as
+// `__WATCH_RC__=<code>` so a later reader recovers the terminal class without
+// having been attached. The watcher PID is echoed (`__WATCH_PID__=<pid>`) so
+// the caller can poll/await it; after the parent dies the watcher reparents to
+// init (ppid=1) and keeps writing — the selftest's falsifier.
+
+// _cloud_watch_detach_cmd — wrap an arbitrary inner command (`inner`, e.g. a
+// `cloud_tail_cmd_taxonomy_opts` ssh pipeline) into the session-independent
+// form, logging to `durable_log`. PURE string builder — no spawn — so the
+// falsifier suite pins the exact shape (setsid · nohup · </dev/null · the
+// __WATCH_RC__ verdict capture · __WATCH_PID__ handle) with no live process.
+// The inner command's exit code is preserved across the `bash -c` so the
+// 3-tier tail taxonomy (0 DONE / 3 TIMEOUT / 4 CRASH / 255 transport) survives
+// into `__WATCH_RC__`. The `&` backgrounds the setsid leader; `$!` is its PID.
+fn _cloud_watch_detach_cmd(inner: str, durable_log: str) -> str {
+    // The inner runs under `bash -c`; on return its $? is appended to the log
+    // as the verdict marker. setsid puts the watcher in its OWN session (Linux);
+    // nohup ignores SIGHUP (the campaign's exit-144 failure mode) on BOTH Linux
+    // and macOS (which ships no setsid); </dev/null detaches stdin; >>log 2>&1
+    // makes the log durable + append-only. Backgrounding from the launching
+    // shell + the parent's exit reparents the watcher to init (ppid=1).
+    // PORTABLE: use setsid when present (Linux), else plain nohup (macOS) — the
+    // SIGHUP immunity comes from nohup either way.
+    let body = "{ " + inner + "; echo __WATCH_RC__=$? >> " + _shq(durable_log) + "; }"
+    let sid_prefix = "$(command -v setsid || true)"
+    return sid_prefix + " nohup bash -c " + _shq(body)
+        + " < /dev/null >> " + _shq(durable_log) + " 2>&1 & echo __WATCH_PID__=$!"
+}
+
+// cloud_watch_detach_opts — IO: spawn the session-independent watcher LOCALLY
+// (the local shell launches the setsid leader, which then holds the ssh tail
+// pipeline). Returns the watcher PID via the __WATCH_PID__ marker. The watcher
+// outlives this process AND the session shell (setsid + nohup), writing its
+// 3-tier verdict to `durable_log`. `inner` is the remote tail command (built by
+// the caller from cloud_tail_cmd_*_opts) — passing it lets the selftest inject
+// a local stub command instead of a live ssh hop.
+fn cloud_watch_detach_opts(inner: str, durable_log: str) -> CloudResult {
+    if len(inner) == 0 {
+        return _cloud_fail("cloud_watch_detach: empty inner command")
+    }
+    let cmd = _cloud_watch_detach_cmd(inner, durable_log)
+    let res = exec_capture(cmd)
+    let pid = _parse_uint_after(res[0], "__WATCH_PID__=")
+    if pid < 0 {
+        return CloudResult { ok: 0, exit_code: -1, pid: 0, stdout_: res[0],
+            message: "cloud_watch_detach: no __WATCH_PID__ marker — setsid/nohup spawn failed", logfile: durable_log }
+    }
+    return CloudResult { ok: 1, exit_code: 0, pid: pid, stdout_: res[0],
+        message: "detached watcher pid " + str(pid) + " · durable log " + durable_log
+            + " (session-independent: survives parent SIGHUP / re-auth)", logfile: durable_log }
 }
 
 // _cloud_tail_sed_prog — assemble the remote sed program from the grep
