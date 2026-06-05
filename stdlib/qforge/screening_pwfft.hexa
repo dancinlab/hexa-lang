@@ -287,26 +287,52 @@ fn _qpwfft_zim() -> [float] {
     return PWFFT_ZIM
 }
 
-// ── scatter a PW-coefficient vector c (length n) onto the (Nx,Ny,Nz) reciprocal
-//    grid as a split complex field [re(Ntot), im(Ntot)] (coefficients are REAL → im=0).
-fn _qpwfft_scatter(c: [float]) -> [float] {
-    let ntot = PWFFT_NX * PWFFT_NY * PWFFT_NZ
-    let mut re: [float] = []
+// ── reusable scratch (OOM fix, d4/d6 — pure-memory, zero physics change): the
+//    converged n=645 fold churn (per-band scatter + 2 real-space transforms × 8
+//    bands × Anderson iters × 3 dirs) allocated a fresh Ntot grid each call → 4-5GB
+//    RSS → jetsam. These module buffers are resized once then CLEARED in place.
+//    REAL0/REAL1 are TWO distinct real-space slots so psi_r (slot 0) and dps_r
+//    (slot 1) — used together in the ψ·Δψ product — never alias.
+let mut PWFFT_SCAT: [float] = []
+let mut PWFFT_REAL0: [float] = []
+let mut PWFFT_REAL1: [float] = []
+let mut PWFFT_DRHO: [float] = []         // reusable Δρ(r) accumulator (per-fold)
+let mut PWFFT_RHO: [float] = []          // reusable ρ(r) accumulator (local-ALDA)
+fn _qpwfft_grid_zeroed(buf: [float], ntot: int) -> [float] {
+    if len(buf) != ntot {
+        let mut nb: [float] = []
+        let mut p = 0
+        while p < ntot { nb.push(0.0) ; p = p + 1 }
+        return nb
+    }
     let mut p = 0
-    while p < ntot { re.push(0.0) ; p = p + 1 }
-    let mut i = 0
-    while i < PWFFT_N { re[PWFFT_LIN[i]] = re[PWFFT_LIN[i]] + c[i] ; i = i + 1 }
-    return re
+    while p < ntot { buf[p] = 0.0 ; p = p + 1 }
+    return buf
 }
 
-// ── inverse-FFT a scattered reciprocal field → real-space field (real part, length Ntot)
-fn _qpwfft_to_real(re_grid: [float]) -> [float] {
+// ── scatter a PW-coefficient vector c (length n) onto the (Nx,Ny,Nz) reciprocal
+//    grid (re part; im supplied separately as the zeroed PWFFT_ZIM). Reuses PWFFT_SCAT
+//    — SAFE because the result is consumed by ifft3 immediately, before the next scatter.
+fn _qpwfft_scatter(c: [float]) -> [float] {
+    let ntot = PWFFT_NX * PWFFT_NY * PWFFT_NZ
+    PWFFT_SCAT = _qpwfft_grid_zeroed(PWFFT_SCAT, ntot)
+    let mut i = 0
+    while i < PWFFT_N { PWFFT_SCAT[PWFFT_LIN[i]] = PWFFT_SCAT[PWFFT_LIN[i]] + c[i] ; i = i + 1 }
+    return PWFFT_SCAT
+}
+
+// ── inverse-FFT a scattered reciprocal field → real-space field (real part, length Ntot).
+//    slot 0/1 selects a distinct module scratch buffer so two concurrently-live results
+//    (psi_r + dps_r) never alias. [] on dim mismatch.
+fn _qpwfft_to_real(re_grid: [float], slot: int) -> [float] {
     let ntot = PWFFT_NX * PWFFT_NY * PWFFT_NZ
     let inter = ifft3(re_grid, _qpwfft_zim(), PWFFT_NX, PWFFT_NY, PWFFT_NZ)
     if len(inter) != 2 * ntot { return [] }
-    let mut out: [float] = []
-    p = 0
-    while p < ntot { out.push(inter[p * 2]) ; p = p + 1 }   // real part
+    let mut out = if slot == 0 { _qpwfft_grid_zeroed(PWFFT_REAL0, ntot) }
+                  else { _qpwfft_grid_zeroed(PWFFT_REAL1, ntot) }
+    let mut p = 0
+    while p < ntot { out[p] = inter[p * 2] ; p = p + 1 }   // real part
+    if slot == 0 { PWFFT_REAL0 = out } else { PWFFT_REAL1 = out }
     return out
 }
 
@@ -325,15 +351,16 @@ pub fn qpwfft_dvscr_from_dpsi(psis: [[float]], dpsi: [[float]]) -> [float] {
     //   LOCAL-ALDA kernel is on, ALSO accumulate the ground-state ρ(r)=Σ_n 2·ψ_n(r)²
     //   from the SAME ψ_n(r) transforms (zero extra FFTs) — the LOCAL density at
     //   which f_xc[ρ(r)] is evaluated (the Adler-Wiser local-field, beyond ρ̄).
-    let mut drho_r: [float] = []
-    let mut rho_r: [float] = []
+    PWFFT_DRHO = _qpwfft_grid_zeroed(PWFFT_DRHO, ntot)
+    PWFFT_RHO = _qpwfft_grid_zeroed(PWFFT_RHO, ntot)
+    let drho_r = PWFFT_DRHO
+    let rho_r = PWFFT_RHO
     let mut p = 0
-    while p < ntot { drho_r.push(0.0) ; rho_r.push(0.0) ; p = p + 1 }
     let mut nbnd = 0
     while nbnd < nb {
         if len(psis[nbnd]) != n || len(dpsi[nbnd]) != n { PWFFT_LAST_ERR = 3 ; return [] }
-        let psi_r = _qpwfft_to_real(_qpwfft_scatter(psis[nbnd]))
-        let dps_r = _qpwfft_to_real(_qpwfft_scatter(dpsi[nbnd]))
+        let psi_r = _qpwfft_to_real(_qpwfft_scatter(psis[nbnd]), 0)
+        let dps_r = _qpwfft_to_real(_qpwfft_scatter(dpsi[nbnd]), 1)
         if len(psi_r) != ntot || len(dps_r) != ntot { PWFFT_LAST_ERR = 4 ; return [] }
         let mut r = 0
         while r < ntot {
