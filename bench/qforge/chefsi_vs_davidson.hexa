@@ -38,6 +38,20 @@
 //   reference (dense eigh + engine Davidson) to tol, ELSE report the honest
 //   grounded result + the filter degree needed (d6 — no forcing).
 //
+// MEASURED (n=64 · nocc=6 · synthetic diag-dominant symmetric H):
+//   degree-convergence (max|Δλ| CheFSI vs dense-ref) — monotone, as theory:
+//     m= 4 → 1.27e-08    m= 8 → 1.49e-09    m=12 → 1.55e-10
+//     m=16 → 2.14e-11    m=18 → 5.83e-13 (used)
+//   gate (1e-6) cleared from m≥8 already. RECOVERS spectrum: MATCH.
+//   matvecs: davidson=66  chefsi=570 (m=18). HONEST (d6): on this SMALL dense
+//   64×64 with a well-separated low spectrum + Jacobi-preconditioned Davidson,
+//   CheFSI is NOT matvec-cheaper — its win is at LARGE bases where Davidson's
+//   growing-subspace explicit-orthogonalization is O(N³) per restart while
+//   CheFSI keeps a FIXED block width (= nocc) and pushes work into the cheap
+//   3-term recurrence (Zhou et al. §4-5). The g5 claim here is SPECTRUM
+//   RECOVERY (the correctness gate); the asymptotic matvec/orthogonalization
+//   advantage is the documented large-N rationale, not claimed on n=64.
+//
 //   hexa verify --verifier-cmd "HEXA_LANG=. hexa run bench/qforge/chefsi_vs_davidson.hexa" \
 //               --claim "CheFSI recovers the lowest-nocc spectrum to tol vs reference" \
 //               --expect "VERDICT_CHEFSI=MATCH"
