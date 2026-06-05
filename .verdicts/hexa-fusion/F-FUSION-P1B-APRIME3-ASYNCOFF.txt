@@ -1,0 +1,120 @@
+F-FUSION-P1B-APRIME3-ASYNCOFF — the byte-eq megakernel CAPSTONE, re-run with the async
+race CURED. N1N2 (#2789) proved the ~1e-1 device-glue non-determinism that blocked the
+P1B-a' capstone is an ASYNC CROSS-STREAM RACE (_forge_async_on glue on a non-blocking
+forge_stream racing default-stream _h2d / _ensure_dev_alloc_out / conv GEMM-C buffer ops),
+NOT a transcendental or glue bug — and HEXA_CUDA_ASYNC=0 makes the device forward
+BIT-REPRODUCIBLE (CE 4.4662394504526679 x5 identical). With the race off and both arms
+sharing CUDA erf + identical naive-k own-GEMM + deterministic glue, this re-runs the
+P1B-a' comparison (device-eager vs device-mega) and asks whether max|Δ| now reaches 0.
+domain: HEXA-FUSION · date: 2026-06-06 · branch domain/hexa-fusion-p1b-aprime3-asyncoff (off main #2789)
+method: real clm_prod step A/B on a rented H100. BOTH arms = own-GEMM (HEXA_OWN_GEMM=1) +
+        DEVRESIDENT chain + **HEXA_CUDA_ASYNC=0** (the N1N2 cure — a hard kill switch:
+        _forge_async_on() reads HEXA_CUDA_ASYNC and v[0]=='0' forces the synchronous
+        default-stream path on BOTH arms even under CLM_PROD_DEVRESIDENT). A = device-EAGER
+        (HEXA_EAGER_DEVRESIDENT=1, megastep OFF → fwd glue on-device as SEPARATE launches,
+        CUDA erf). B = device-MEGA (HEXA_CLM_MEGASTEP=1 FP64, cooperative full-fwd megakernel,
+        CUDA erf). max|Δ| on the 17-digit [B6-CE-HIPREC] CE, device-eager vs device-mega.
+        D=1536 T=512 E=2 NSAMP=8. Each arm run x2 as a FRESH process (within-arm reproducibility
+        ladder) — EPOCHS=2 (host-loss-tight; the byte-eq question + within-arm Δ0 are
+        EPOCHS-independent). Gate 1 (reproducibility) precedes Gate 2 (cross-arm byte-eq).
+
+════════════════════════════════════════════════════════════════════════════════
+BYTE-EQ FRAMING (g5 HARD GATE — STATED EXPLICITLY)
+════════════════════════════════════════════════════════════════════════════════
+The byte-eq gate is max|Δ|=0 device-eager-vs-device-mega under HEXA_CUDA_ASYNC=0 (verbatim
+17-digit CE diff), NOT cublasDgemm. Both arms use the IDENTICAL FP64 naive-sequential-k
+own-GEMM (#2697) + CUDA erf glue. PREREQUISITE (Gate 1): each arm run-to-run reproducible
+under async-OFF (x2 → Δ=0) — confirmed before the cross-arm diff is read.
+
+════════════════════════════════════════════════════════════════════════════════
+PRE-REGISTERED FALSIFIER
+════════════════════════════════════════════════════════════════════════════════
+"With the async race cured (HEXA_CUDA_ASYNC=0), device-eager vs device-mega reaches
+ max|Δ|=0 = byte-eq megakernel CAPSTONE."
+FALSIFIED if max|Δ| ≠ 0 device-eager vs device-mega under HEXA_CUDA_ASYNC=0 once both
+arms are confirmed run-to-run reproducible (Gate 1 Δ=0).
+
+════════════════════════════════════════════════════════════════════════════════
+VERDICT: 🟢 CONFIRMED — BYTE-EQ MEGAKERNEL CAPSTONE ACHIEVED.
+         max|Δ| = 0 (EXACT, string-identical 17-digit CE) device-eager vs device-mega
+         under HEXA_CUDA_ASYNC=0. The async race was the ENTIRE byte-eq wall: once it is
+         off, the device-resident eager reference and the cooperative own-GEMM megakernel
+         produce BIT-IDENTICAL cross-entropy — the +util megakernel is byte-equivalent to
+         the eager reference. The earlier P1B-a' ~3e-3 "device-glue non-determinism" was
+         the cross-stream race, fully cured by HEXA_CUDA_ASYNC=0 (N1N2 mechanism confirmed).
+         No erf residual remained — between two DEVICE runs both using CUDA erf, max|Δ|=0.
+════════════════════════════════════════════════════════════════════════════════
+
+POD / BUILD (g5-honest)
+  GPU: rented `hexa cloud rent vast --gpu H100 --query gpu_name=H100_SXM`. THREE vast hosts
+    were consumed: 39610216 (ssh8, ACTUAL NVIDIA H100 80GB HBM3 sm_90 — built clm_prod_gpu
+    2500672 B, ran eager arm bit-reproducible, then RECLAIMED mid-ladder = pod-loss);
+    39613781 (ssh3, ACTUAL H100 80GB HBM3 sm_90 — eager arm reproduced, RECLAIMED mid-ladder);
+    39615975 (SSH-never-ready, auto-destroyed). FINAL measurement on 39616726 (ssh8, ACTUAL
+    NVIDIA H100 80GB HBM3 sm_90 — note: vast served a REAL H100 this run, not a B200). nvcc
+    12.4 V12.4.131, gcc 11.4.0, glibc 2.35, Ubuntu 22.04. ALL FOUR pods DESTROYED (confirmed
+    GONE via provider API; leak 0).
+  BUILD: p1bundle self/ tree (CURRENT transpiled self/runtime.c, 15592 lines, DEFINES the 5
+    fused dispatchers incl forge_dispatch_clm_megafwd) + the P1B-a' device-eager clm_prod.c
+    (EAGER-DEVGLUE marker) + FP64-megafwd runtime_cuda.c.
+      nvcc -x cu -DHEXA_CUDA -rdc=true -gencode arch=compute_90,code=compute_90 -I self
+        -I self/cuda -c runtime_cuda.c   (megafwd_fp64 syms=2, EAGER-DEVGLUE marker present)
+      nvcc -dlink … runtime_cuda.o -o runtime_cuda_dlink.o -lcudadevrt   (grid.sync needs rdc)
+      gcc … clm_prod.c self/runtime.c runtime_cuda.o runtime_cuda_dlink.o -lcudart -lcublas
+        -lcuda -lcudadevrt → clm_prod_gpu (2500672 B). BUILD OK on all 3 real-H100 pods.
+
+════════════════════════════════════════════════════════════════════════════════
+STAGE 1 — REPRODUCIBILITY LADDER + CAPSTONE A/B (ASYNC=0), VERBATIM
+   clm_prod, D=1536 T=512 E=2 NSAMP=8 EPOCHS=2, DEVRESIDENT+DEVFEED+BATCHED, HEXA_CUDA_ASYNC=0.
+   raw FP64 CE at 17 sig digits ([B6-CE-HIPREC], VERBATIM):
+════════════════════════════════════════════════════════════════════════════════
+  A1 device-EAGER  (HEXA_EAGER_DEVRESIDENT=1; EAGER-DEVGLUE-FIRED=1, MEGAFWD-FIRED=0, OWN-GEMM-FIRED=2):
+       [B6-CE-HIPREC] first_ce=4.4662394504526679 last_ce=4.1840272133280685
+       util MEAN=11.22% PEAK=68% pct>=20=19.8% n=172 ; DESCENT=1
+  B1 device-MEGA   (HEXA_CLM_MEGASTEP_FP64=1; MEGAFWD-FIRED=2, EAGER-DEVGLUE-FIRED=0, OWN-GEMM-FIRED=2):
+       [B6-CE-HIPREC] first_ce=4.4662394504526679 last_ce=4.1840272133280685
+       util MEAN=15.70% PEAK=80% pct>=20=25.7% n=109 ; DESCENT=1
+  A2 device-EAGER (repro):
+       [B6-CE-HIPREC] first_ce=4.4662394504526679 last_ce=4.1840272133280685
+       util MEAN=10.67% PEAK=68% pct>=20=19.2% n=167 ; DESCENT=1
+  B2 device-MEGA (repro):
+       [B6-CE-HIPREC] first_ce=4.4662394504526679 last_ce=4.1840272133280685
+       util MEAN=14.55% PEAK=74% pct>=20=23.4% n=107 ; DESCENT=1
+
+  GATE 1 — RUN-TO-RUN REPRODUCIBILITY (HEXA_CUDA_ASYNC=0):
+     [LADDER eager] eager1 == eager2  → run-to-run Δ0 = TRUE
+     [LADDER mega ] mega1  == mega2   → run-to-run Δ0 = TRUE
+     Both arms are BIT-REPRODUCIBLE run-to-run under async-OFF. (Confirms N1N2: the
+     HEXA_CUDA_ASYNC=0 env fully closes the cross-stream race; no residual jitter.)
+
+  GATE 2 — CAPSTONE BYTE-EQ (device-eager vs device-mega, both ASYNC=0):
+     max|Δ first_ce| eager-vs-mega = 0.000000e+00
+     max|Δ last_ce|  eager-vs-mega = 0.000000e+00
+     → max|Δ| = 0 EXACT (string-identical 17-digit CE on BOTH first_ce and last_ce).
+       BYTE-EQ MEGAKERNEL CAPSTONE ACHIEVED.
+
+════════════════════════════════════════════════════════════════════════════════
+FINDING
+════════════════════════════════════════════════════════════════════════════════
+The async cross-stream race (N1N2 #2789) was the ENTIRE byte-eq wall. With HEXA_CUDA_ASYNC=0:
+  · HEXA_CUDA_ASYNC=0 reproducible: YES — both arms bit-reproducible run-to-run (Δ0, eager
+    and mega), the N1N2 cure fully closes the race (no residual jitter).
+  · max|Δ| device-eager-vs-device-mega = 0.000000e+00 (VERBATIM, both first_ce and last_ce
+    string-identical at 17 digits) = the clean ULP floor collapses to EXACTLY 0 between two
+    DEVICE runs both using CUDA erf + identical own-GEMM + deterministic glue. No erf
+    residual (the predicted ~1 ULP host↔device erf gap does not apply: both arms are DEVICE
+    CUDA-erf).
+  · [MEGAFWD-FIRED]=2 (mega arms) + [EAGER-DEVGLUE-FIRED]=1 (eager arms) + OWN-GEMM-FIRED=2 (all)
+    — the cooperative megakernel AND the device-resident eager glue both fired as intended.
+  · CE DESCENT=1 on every arm (correct learning, not a degenerate constant).
+  · util: device-mega MEAN ~14.6-15.7% vs device-eager MEAN ~10.7-11.2% → the megakernel
+    lifts util +~4pp over the eager reference while being BYTE-IDENTICAL.
+  · BYTE-EQ MEGAKERNEL CAPSTONE ACHIEVED: YES. The cooperative own-GEMM megakernel is
+    byte-equivalent (max|Δ|=0) to the device-resident eager reference once the async race is
+    off — the +util megakernel is correct to the last bit. This is the HEXA-FUSION campaign
+    capstone: byte-eq via a device-resident reproducible reference + the +util megakernel.
+
+  RULED-OUT AXES (closed): the prior P1B-a' ~3e-3 and P1B-a'' ~1e-1 "device-glue
+  non-determinism" were NOT a transcendental, NOT a glue-kernel bug, NOT a GEMM
+  reduction-order issue — they were the auto-ON async cross-stream race. async-OFF cures it
+  completely (max|Δ|=0), confirming the N1N2 mechanism deterministically.
