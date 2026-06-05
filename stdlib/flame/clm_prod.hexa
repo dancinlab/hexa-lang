@@ -1176,7 +1176,23 @@ fn main() {
     // amortizes the host im2col/col2im/adam feed over a longer sequence (fewer
     // steps per token budget). Env CLM_PROD_T overrides; empty keeps the byte-eq
     // T=24 verify config (back-compat).
-    let T = if _envt == "" { 24 } else { to_int(_envt) }
+    let Tw = if _envt == "" { 24 } else { to_int(_envt) }
+    // HEXA-FUSION M5 (BATCH-FILL): true data-batch lever. The M2 full-step verdict
+    // (F-FUSION-M2-FULLSTEP) pinned the util-low cause as a FILL problem — at
+    // batch=1/D1536 the cooperative grid (≈528-660 blocks) UNDER-FILLS the H100's
+    // 132 SMs. Every conv GEMM has M = (sequence length) rows; a true data-batch of
+    // B independent windows stacks them into M = B*Tw rows, so a single launch's
+    // grid grows ≈linearly with B and fills more SMs. CLM_PROD_BATCH=B concatenates
+    // B consecutive DISTINCT windows per step into one length-(B*Tw) buffer; every
+    // op is per-position (ConvMoE — no attention, no cross-position mixing except the
+    // causal conv's K-1 receptive field, whose only effect is a tiny value perturbation
+    // at the B-1 window seams that does NOT change any GEMM shape and keeps CE
+    // descending). T below = the EFFECTIVE per-step sequence length = B*Tw, which
+    // flows identically through conv1d / nn_ce_loss_allpos / clm_prod_bwd (the same
+    // GRAD-EXACT path the T-lever already documents). B=1 = exact prior behavior.
+    let _envb = env("CLM_PROD_BATCH")
+    let B = if _envb == "" { 1 } else { to_int(_envb) }
+    let T = Tw * B
     let V = 256; let K = 3
     let dd = d * d * K; let ed = E * d; let vd = V * d
 
@@ -1193,15 +1209,19 @@ fn main() {
     let n_bytes = len(bytes_arr)
     // stride spans the WHOLE corpus so the nsamp windows are spread across every
     // language section (multilingual: en·zh·ru·ja·ko), not just the head.
-    let mut stride = (n_bytes - T - 1) / nsamp
+    // windows are built at the BASE window length Tw (one causal sequence each);
+    // the per-step batch concatenates B of them into the effective length T = B*Tw.
+    let mut stride = (n_bytes - Tw - 1) / nsamp
     if stride < 1 { stride = 1 }
     print("  corpus: "); print(path); print("  ("); print(n_bytes); println(" bytes, V=256)")
-    let IDS = t_zeros(nsamp * T)
-    let TGT = t_zeros(nsamp * T)
-    let nwin = clm_corpus_windows(bytes_arr, n_bytes, IDS, TGT, nsamp, T, stride)
+    let IDS = t_zeros(nsamp * Tw)
+    let TGT = t_zeros(nsamp * Tw)
+    let nwin = clm_corpus_windows(bytes_arr, n_bytes, IDS, TGT, nsamp, Tw, stride)
     print("  windows: "); print(nwin); print("/"); print(nsamp)
-    print("  (T="); print(T); print(" stride="); print(stride); println(")")
+    print("  (Tw="); print(Tw); print(" B="); print(B); print(" T_eff="); print(T)
+    print(" stride="); print(stride); println(")")
     if nwin < 2 { println("F-CLM-PROD-DESCENT = 0"); println("FAIL — corpus too short"); return }
+    if nwin < B { println("F-CLM-PROD-DESCENT = 0"); println("FAIL — fewer windows than batch B"); return }
 
     // ---- weights (LCG init, same scheme as clm_qat) ----
     let embed=t_zeros(vd); t_fill_lcg(embed, vd, 1, 0.3)
@@ -1278,17 +1298,28 @@ fn main() {
     // ---- round-robin multi-window loop; epochs full passes over nwin ----
     let _enve2 = env("CLM_PROD_EPOCHS")
     let epochs = if _enve2 == "" { 12 } else { to_int(_enve2) }
-    let steps = epochs * nwin
+    // M5: one STEP now processes one BATCH of B windows. nbatch = floor(nwin / B)
+    // batches per epoch (B=1 → nbatch=nwin → exact prior behavior). Each step fills
+    // the length-T=B*Tw buffer with B distinct consecutive windows (wrap-around).
+    let mut nbatch = nwin / B
+    if nbatch < 1 { nbatch = 1 }
+    let steps = epochs * nbatch
     let mut sum_first = 0.0
     let mut sum_last = 0.0
     let mut step = 1
     while step <= steps {
-        let w = (step - 1) % nwin
-        let mut p = 0
-        while p < T {
-            t_set(tok, p, t_get(IDS, w * T + p))
-            t_set(tgt, p, t_get(TGT, w * T + p))
-            p = p + 1
+        // batch start window index (round-robin over the nbatch batches)
+        let b0 = ((step - 1) % nbatch) * B
+        let mut bj = 0
+        while bj < B {
+            let w = (b0 + bj) % nwin
+            let mut q = 0
+            while q < Tw {
+                t_set(tok, bj * Tw + q, t_get(IDS, w * Tw + q))
+                t_set(tgt, bj * Tw + q, t_get(TGT, w * Tw + q))
+                q = q + 1
+            }
+            bj = bj + 1
         }
         clm_prod_fwd(tok, embed, ecW, ecB, tcW, tcB, tgG, tgB, rW, rB,
                     e0W, e0B, e1W, e1B, noG, noB, roW, roB,
@@ -1296,8 +1327,8 @@ fn main() {
                     xe, xec, xt, hn0, xhat0, inv0, eo0, eo1, probs, ex_out, yn, xhatN, invN,
                     logits, T, d, E, V, K)
         let loss = nn_ce_loss_allpos(logits, tgt, T, V)
-        if step <= nwin { sum_first = sum_first + loss }
-        if step > steps - nwin { sum_last = sum_last + loss }
+        if step <= nbatch { sum_first = sum_first + loss }
+        if step > steps - nbatch { sum_last = sum_last + loss }
         // HEXA-FUSION L3 (BWD glue half · ⑤-bwd2): CE softmax grad (logits/tgt →
         // dlogits) — interpreted host glue at the head of the bwd. Device path keeps
         // dlogits FARR_DEVICE so clm_prod_bwd's first conv-bwd GEMM H2D-skips it
@@ -1326,10 +1357,14 @@ fn main() {
         }
         step = step + 1
     }
-    let first_ce = sum_first / to_float(nwin)
-    let last_ce = sum_last / to_float(nwin)
+    let first_ce = sum_first / to_float(nbatch)
+    let last_ce = sum_last / to_float(nbatch)
     print("  epoch-1 mean CE = "); println(to_string(first_ce))
     print("  epoch-"); print(epochs); print(" mean CE = "); println(to_string(last_ce))
+    // M5 batch-fill diagnostic — verbatim so the util run can correlate util vs B.
+    print("  [M5-BATCH] B="); print(B); print(" Tw="); print(Tw);
+    print(" T_eff="); print(T); print(" nbatch="); print(nbatch);
+    print(" steps="); print(steps); println("")
 
     // ---- PR4: serialize the 6 trained CLMConvMoE conv weights to .clm ----
     // (a_fire_recover_complete) — the trained model is now a real artifact.
