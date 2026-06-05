@@ -1,0 +1,122 @@
+// stdlib/qforge/screening_pwfft_smoke — small-basis smoke for the pow2-FFT-Poisson
+// screening kernel routing (the migration-gate ad_map→qpwfft engage check, d6).
+//
+// Stages a TINY synthetic G-basis (a 3×3×3 Miller cube → 27 PWs, all pow2-paddable),
+// builds simple ψ/Δψ columns, and:
+//   ① calls qpwfft_dvscr_from_dpsi directly → MUST be non-zero (kernel folds the
+//      genuine real-space convolution Δρ=Σ2ψ·Δψ).
+//   ② runs qforge_screened_dv_columns_anderson with the staged grid + a trivial
+//      diagonal fallback → witness MUST show Anderson iters>0 and ratio≠1.0 (the
+//      FFT path engages inside ad_map).
+// If ① is non-zero but ② is 0-iter, the bug is in the ANDERSON SEED (f_0≈0); if ①
+// is zero, the bug is in the KERNEL. This localizes the n=645 0-iter failure.
+
+use "stdlib/qforge/screening_pwfft"
+use "stdlib/qforge/screening_anderson"
+
+// trivial diagonal fallback (so a non-staged path is distinguishable): zero kernel.
+fn diag_zero(drho: [float]) -> [float] {
+    let mut o: [float] = []
+    let mut i = 0
+    while i < len(drho) { o.push(0.0) ; i = i + 1 }
+    return o
+}
+
+// trivial H_apply: H = diag(1,2,3,...) so Sternheimer has a well-posed nonzero response.
+let mut HDIAG: [float] = []
+fn h_apply(v: [float]) -> [float] {
+    let mut o: [float] = []
+    let mut i = 0
+    while i < len(v) { o.push(HDIAG[i] * v[i]) ; i = i + 1 }
+    return o
+}
+
+fn norm(v: [float]) -> float {
+    let mut s = 0.0
+    let mut i = 0
+    while i < len(v) { s = s + v[i] * v[i] ; i = i + 1 }
+    return sqrt(s)
+}
+
+fn main() {
+    // ── build a 3×3×3 Miller cube of G-vectors on an orthorhombic reciprocal cell ──
+    let b1 = [1.0, 0.0, 0.0]
+    let b2 = [0.0, 1.0, 0.0]
+    let b3 = [0.0, 0.0, 1.0]
+    let mut gvecs: [float] = []
+    let mut h = -1
+    while h <= 1 {
+        let mut k = -1
+        while k <= 1 {
+            let mut l = -1
+            while l <= 1 {
+                gvecs.push(to_float(h)) ; gvecs.push(to_float(k)) ; gvecs.push(to_float(l))
+                l = l + 1
+            }
+            k = k + 1
+        }
+        h = h + 1
+    }
+    let n = len(gvecs) / 3
+    println("=== pow2-FFT-Poisson SMOKE — n=" + to_string(n) + " synthetic PWs ===")
+
+    // stage the FFT-Poisson grid (fxc=0.5 nonzero local kernel).
+    let ok = qpwfft_stage(gvecs, b1, b2, b3, 0.5)
+    let dims = qpwfft_grid_dims()
+    println("qpwfft_stage ok=" + to_string(ok) + " is_on=" + to_string(qpwfft_is_on())
+        + " grid=" + to_string(dims[0]) + "x" + to_string(dims[1]) + "x" + to_string(dims[2]))
+
+    // ── ① direct kernel call: 2 bands, simple coefficient columns ──
+    let mut psi0: [float] = [] ; let mut dps0: [float] = []
+    let mut psi1: [float] = [] ; let mut dps1: [float] = []
+    let mut i = 0
+    while i < n {
+        psi0.push(1.0 / to_float(i + 1))
+        dps0.push(0.1 / to_float(i + 2))
+        psi1.push(0.5 / to_float(i + 3))
+        dps1.push(0.05 / to_float(i + 1))
+        i = i + 1
+    }
+    let psis = [psi0, psi1]
+    let dpsi = [dps0, dps1]
+    let dvscr = qpwfft_dvscr_from_dpsi(psis, dpsi)
+    println("① qpwfft_dvscr_from_dpsi len=" + to_string(len(dvscr))
+        + " ‖ΔV_scr(G)‖=" + to_string(norm(dvscr)) + "  (MUST be > 0 if kernel folds)")
+
+    // ── ② Anderson screened-DV with the staged grid (real run through ad_map) ──
+    HDIAG = []
+    i = 0
+    while i < n { HDIAG.push(to_float(i + 1)) ; i = i + 1 }
+    // eigenpairs: occ = the 2 ψ columns above; eps = small offsets.
+    let occ = [psi0, psi1]
+    let eps = [0.5, 0.7]
+    // bare ΔV·ψ columns = some nonzero bundle.
+    let mut bare0: [float] = [] ; let mut bare1: [float] = []
+    i = 0
+    while i < n { bare0.push(0.2 / to_float(i + 1)) ; bare1.push(0.15 / to_float(i + 2)) ; i = i + 1 }
+    let bare_cols = [bare0, bare1]
+
+    let scr = qforge_screened_dv_columns_anderson(
+        h_apply, occ, eps, bare_cols, diag_zero,
+        1.0e-8, 30, 0.3, 4)
+    println("② Anderson: iters=" + to_string(scr.scf_iters)
+        + " converged=" + to_string(scr.converged)
+        + " fp_res=" + to_string(scr.fixed_point_res))
+    // witness ratio ‖scr‖/‖bare‖ on band 0.
+    let rb = norm(bare0)
+    let rs = if scr.columns.len() > 0 { norm(scr.columns[0]) } else { -1.0 }
+    let ratio = if rb > 0.0 { rs / rb } else { -1.0 }
+    println("   witness ‖ΔV_scr‖/‖ΔV_bare‖(band0) = " + to_string(ratio)
+        + "  (MUST be != 1.0 if FFT path engages)")
+
+    if len(dvscr) == n && norm(dvscr) > 1.0e-12 {
+        println("VERDICT ①: KERNEL FOLDS (non-zero) — FFT-Poisson convolution works.")
+    } else {
+        println("VERDICT ①: KERNEL ZERO/EMPTY — kernel-side bug.")
+    }
+    if scr.scf_iters > 0 {
+        println("VERDICT ②: ANDERSON ENGAGES (iters>0) — ad_map routes through FFT.")
+    } else {
+        println("VERDICT ②: ANDERSON 0-ITER — seed residual f_0≈0 (the n=645 failure mode).")
+    }
+}
