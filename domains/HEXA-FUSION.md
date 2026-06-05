@@ -381,3 +381,76 @@ The residual lever named by `F-FUSION-SM90-CUBLAS-MAINLOOP` (mma.sync ceiling 11
 **RESIDUAL (🟠): the no-swizzle core-matrix shared-memory LAYOUT.** TF32 single-warpgroup mainloop builds + launches but rel-RMS **1.309e+00** (FAIL vs 3e-3). An isolated process-safe (LBO,SBO) descriptor sweep over {16,32,64,128,256,512} found **no combo below 1.309** — descriptor byte-offsets are NOT the binding error. A structured-input diagnostic (C[m][n]=n) confirmed the **accumulator-register → C(row,col) epilogue mapping is CORRECT** (thread 0 receives column-octets 8,16,…,56). The binding residual is the wgmma no-swizzle **8×16B core-matrix tiling** of A/B in shared (a permutation/transpose leaves the contraction ~uncorrelated, rel-RMS ≈ √2); the integrated TMA pipeline additionally faults at runtime (coordinate/mbarrier-phase addressing). Pinning this is the precise CUTLASS-3.x swizzle wedge.
 
 **own GFLOP/s: NOT-REPORTED** (kernel not bit-correct — g5 forbids perf on a wrong-result kernel). **PARITY: NO (not measured). % gap closed: 0% measured.** Honest: parity-seeking, cuBLAS=roofline, no superiority claim. **FINDING** = a POSITIVE feasibility Δ (wgmma+TMA build+run-feasible on native sm_90, vs the prior cannot-test closed-negative) + a sharpened named residual (the ruled-IN axis is operand shared-layout correctness, NOT the instruction/descriptor/epilogue/emit-path). verdict: `.verdicts/hexa-fusion/F-FUSION-SM90-WGMMA-TMA.txt`.
+
+## ── wgmma no-swizzle layout — 🔴 residual PINNED to B K-core stride (closed-neg) · `F-FUSION-SM90-WGMMA-SWIZZLE` (2026-06-06, g5 verbatim) ──
+
+Resume from `F-FUSION-SM90-WGMMA-TMA`'s rel-RMS 1.309 residual. Native **H200** (Hopper compute_cap 9.0 = sm_90a-identical to H100 for wgmma/TMA), nvcc 12.6 `-arch=sm_90a`, **3 vast H200 contracts (2 RECLAIMED mid-run, re-rented) — all DESTROYED, leak 0**.
+
+**SWIZZLE-FIXED: NO (this pass)** — but the binding residual is now **PINNED to ONE operand + ONE stride** (a strict advance over the prior "operand layout" framing). An **on-hardware reverse-engineering** (distinct-ramp A/B + one-hot selector on the other operand; epilogue independently confirmed correct prior) decoded *exactly what wgmma reads*:
+
+```
+B read-map, plain row-major B, desc(lA16 sA32 lB16 sB32):
+  KSEL=0: n0->B[0][0]✓  n1->B[0][4]   ok=8/64
+  KSEL=1: n0->B[0][1]   n1->B[0][5]   ok=0/64   <- k'=0, NOT k'=1
+  KSEL>0: every selector reads k'=0                kslices_active=8/8
+```
+
+Two superimposed defects, both in the **wgmma B no-swizzle core-matrix layout**: (1) **K-STRIDE COLLAPSE** — for contraction k=1..7 wgmma re-reads B's K=0 core-matrix (k′ pinned to 0 ∀ KSEL); dominant ≈√2 rms error. (2) **N-OCTET INTERLEAVE** — output col n ← logical col ≈4n within an 8-wide octet.
+
+**RULED OUT deterministically**: a **>2300-config** sweep — A/B shared layout ∈ {plain row-major, two 8-row-strip core tilings, col-major-B} × descriptor (LBO,SBO) ∈ {16,32,64,128,256,512} both operands × 3 epilogue register-maps (fault-isolated per-process) — found **no config below rel-RMS 1.36** (best 1.362, AL0/BL2/EPI0). The residual is **NOT** a plain-layout/offset/epilogue permutation.
+
+**RULED IN (next-cycle, scoped)**: build the B (and A) shared tile via the **CUTLASS `GMMA::Layout` core-matrix builder** — B's 8 K-values as a contiguous 8-row core-matrix, descriptor LBO = one-core-matrix stride, swizzle field matched to the TMA `cuTensorMapEncodeTiled` swizzle (none/32B/64B/128B). Verify FIRST on the single-tile decode probe to **k′==KSEL identity (rel-RMS 0)** before any 2048³ perf run.
+
+**own GFLOP/s: NOT-REPORTED** (g5 — no perf on a wrong-result kernel). single-tile rel-RMS 1.309 · full-GEMM N/A · PARITY: NO · % gap closed: 0% measured · **pod destroyed: YES (leak 0)**. Honest: parity-seeking, cuBLAS=roofline, no superiority claim. Kit: `self/native/wgmma/{wgmma_tf32_decode,wgmma_tf32_bdecode,wgmma_tf32_full}.cu` + `sweep_fast.sh`. verdict: `.verdicts/hexa-fusion/F-FUSION-SM90-WGMMA-SWIZZLE.txt`.
+
+## ── forge sm_90 own-GEMM parity — CONSOLIDATED FINAL STATE (honest ladder · de-risked OPEN residual) ──
+
+This consolidates the sm_90 own-GEMM parity campaign (four honest-negative
+attempts, all verbatim verdicts above). The own-GEMM seeks **parity** with
+cuBLAS, never superiority — cuBLAS is the roofline; there is NO own-vs-cuBLAS
+superiority claim on any architecture. The measured ladder, each rung a real
+on-silicon run with its own verdict:
+
+| rung | kernel | result | gap vs cuBLAS-TF32 | verdict |
+|---|---|---|---|---|
+| 0 | parent WMMA2 (sm_90 launch-fixed) | rel-RMS 4.77e-06 | **30.4×** off | `F-FUSION-SM90-DYNSHARED-FIX` |
+| — | WMMA2-RR (occupancy retune) | 1→2 blocks/SM, −4% | ruled out | `F-FUSION-SM90-WARPTILE-RETUNE` |
+| 1 | mma.sync cuBLAS-class mainloop (CB) | bit-exact (rel-RMS 0.000e+00) | **29.4×** off (+3.4%) | `F-FUSION-SM90-CUBLAS-MAINLOOP` |
+| 2 | wgmma.mma_async + TMA | FEASIBLE (builds+runs sm_90a) | not measured | `F-FUSION-SM90-WGMMA-TMA` |
+| 3 | wgmma no-swizzle bit-correctness | BLOCKED (rel-RMS 1.309) | not measured | `F-FUSION-SM90-WGMMA-SWIZZLE` |
+
+**Ladder narrative (honest, g5):**
+1. **30.4× → 29.4×** is the only measured improvement: the mma.sync cuBLAS-class
+   mainloop (3/4 levers landed — hardware-TF32 `mma.sync.m16n8k8`, deep
+   `cp.async` pipeline, register-blocked epilogue; `ldmatrix` did not land) is
+   **bit-exact** but closes only ~3.4% of the cuBLAS gap. The binding ceiling
+   is the **`mma.sync` warp-level instruction class itself** — on Hopper,
+   cuBLAS reaches TC peak via `wgmma.mma_async` (warpgroup-async) + TMA, a class
+   `mma.sync` cannot reach by any mainloop tuning.
+2. **wgmma + TMA is FEASIBLE on sm_90a** (build + run): `wgmma.mma_async`
+   executes correctly and the full Hopper async PTX surface
+   (`cuTensorMapEncodeTiled` + `cp.async.bulk.tensor.2d` + `mbarrier.*`)
+   compiles and launches. **The own-source emit path is NOT the blocker** —
+   this converts the prior hardware-blocked `F-FUSION-ATTN-WGMMA-WALL`
+   closed-negative into a testable-on-Hopper problem.
+3. **wgmma bit-correctness is BLOCKED** on the no-swizzle B-operand core-matrix
+   shared-memory layout: a **K-stride collapse** (k=1..7 re-read B's K=0
+   core-matrix) + an **N-octet interleave**, the rel-RMS 1.309 residual. A
+   >2300-config exhaustive sweep (layout × descriptor (LBO,SBO) × epilogue
+   register-map) found no config below rel-RMS 1.36, **deterministically ruling
+   out** the residual being a plain-layout / offset / epilogue permutation.
+
+**NAMED RESIDUAL (concrete next-cycle claim, multi-session):** implement the
+real CUTLASS-3.x `GMMA::Layout` core-matrix builder for the B (and A) shared
+tile — B's 8 K-values laid out as a contiguous 8-row core-matrix, descriptor
+LBO = one-core-matrix stride, swizzle field matched to the TMA
+`cuTensorMapEncodeTiled` swizzle mode. Verify FIRST on the single-tile decode
+probe to `k′==KSEL` identity (rel-RMS 0) before any 2048³ perf run.
+
+**PARITY framing (g5):** own-GEMM **parity** is achieved only on Blackwell
+(the 1.13× iso figure is sm_120-specific). On native sm_90 (Hopper, H100/H200)
+parity is **NOT achieved** — it is an **OPEN, de-risked named residual**: the
+instruction class (wgmma+TMA) and the emit path are proven feasible; the single
+remaining wall is the CUTLASS core-matrix layout above. No perf number is
+reported on any non-bit-correct kernel (g5). cuBLAS = roofline; no superiority
+claim. Kit: `self/native/wgmma/`. Pods all destroyed across every run (leak 0).

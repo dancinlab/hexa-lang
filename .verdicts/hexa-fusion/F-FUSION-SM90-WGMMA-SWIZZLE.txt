@@ -1,0 +1,92 @@
+F-FUSION-SM90-WGMMA-SWIZZLE — fix the wgmma no-swizzle core-matrix tiling to reach
+  TF32 bit-correctness on native sm_90a H100/H200, then measure vs cuBLAS
+================================================================================
+Falsifier (pre-registered): "The rel-RMS 1.309 residual of the own-source wgmma+TMA
+  TF32 GEMM (F-FUSION-SM90-WGMMA-TMA) is a fixable shared-memory LAYOUT/descriptor
+  permutation: laying A/B in the correct no-swizzle core-matrix tiling (+ matching
+  the TMA/descriptor swizzle mode) yields a bit-correct single-wgmma-tile probe
+  (rel-RMS 0) and then a bit-correct full 2048^3 GEMM (rel-RMS <= 3e-3 TF32),
+  enabling the first honest own-source sm_90 GFLOP/s vs cuBLAS (~340 TFLOP/s)."
+
+Hardware: NVIDIA H200 (Hopper, compute_cap 9.0 — architecturally identical sm_90a
+  to H100 for wgmma/TMA), vast contract 39636936 (also probed 39632362, 39635174 —
+  both vast-RECLAIMED mid-run, re-rented). ALL pods DESTROYED after capture — leak 0.
+Toolchain: nvcc 12.6.77 (CUDA 12.6.r12.6), -arch=sm_90a.
+Date: 2026-06-06.
+
+SWIZZLE-FIXED (Y/N): NO (this pass) — the residual is NOT a simple permutation; the
+  binding constraint is precisely pinned to the wgmma B-operand K-core advancement,
+  the genuine CUTLASS-3.x core-matrix interleave (a deeper wedge than offset/layout
+  re-tiling). Narrowed to a single exact mechanism below (a strict advance).
+
+WHAT WAS RE-CONFIRMED (sanity, on fresh H200):
+  - f16 m64n32k16 wgmma probe: PASS (GPU sum 1962.49 vs ref 1956.87, 0.3% / f16 tol)
+    — wgmma EXECUTES CORRECTLY on this hardware; emit path is not the blocker.
+  - TF32 probe3 (prior kit): rel_rms 1.309e+00 reproduced EXACTLY. Floor is stable.
+
+THE BINDING RESIDUAL — PINNED EXACTLY (the advance over the prior verdict):
+  A direct on-hardware REVERSE-ENGINEERING of what wgmma reads (distinct-ramp operand
+  + one-hot selector on the OTHER operand; epilogue independently confirmed correct in
+  the prior verdict) isolated the exact failure to the B-operand K-stride:
+
+    === B read-map, plain row-major B, desc(lA16 sA32 lB16 sB32) ===
+      KSEL=0: n0->B[0][0] (ok)  n1->B[0][4]        ok=8/64
+      KSEL=1: n0->B[0][1]       n1->B[0][5]        ok=0/64   <- k'=0, NOT k'=1
+      KSEL=2: n0->B[0][2]       n1->B[0][6]        ok=0/64   <- k'=0, NOT k'=2
+      ...     (every KSEL>0 reads k'=0)                       kslices_active=8/8
+
+  TWO superimposed defects, both localized to the B no-swizzle core-matrix layout:
+   (1) K-STRIDE COLLAPSE: for the contraction index k=1..7 wgmma re-reads B's K=0
+       core-matrix (k' is pinned to 0 for every KSEL). The descriptor's K-direction
+       core-matrix walk is mis-encoded against a plain row-major B — wgmma never
+       advances through B's 8 K-rows. This is the dominant error (≈ sqrt(2) ~ 1.41
+       rms = a half-decorrelated contraction).
+   (2) N-OCTET INTERLEAVE: output column n receives logical column ~4n within an
+       8-wide octet (n0<-col0, n1<-col4) — the no-swizzle N core-matrix is 8x4(tf32)
+       sub-tiled, and plain row-major N ordering is the wrong interleave.
+
+  An exhaustive sweep this pass — A/B shared layout in {plain row-major, two 8-row-
+  strip core-matrix tilings, col-major-B} x descriptor (LBO,SBO) in {16,32,64,128,
+  256,512} for BOTH operands x epilogue-register-map in {3 variants} (>2300 configs
+  across two grids, fault-isolated per-process) — found NO config below rel_rms 1.36.
+  Best observed: 1.362e+00 (AL=0 BL=2 ... EPI=0). This DETERMINISTICALLY RULES OUT
+  the hypothesis that the residual is a permutation of {plain layout x descriptor
+  offset x epilogue map}: it is NOT. The fix REQUIRES the true core-matrix interleave
+  where B's 8 K-values of a core-matrix form a contiguous 8-row block AND the
+  descriptor's leading-byte-offset advances by exactly one core-matrix per K-tile,
+  with the swizzle field set to match (none/32B/64B/128B) — i.e. the CUTLASS
+  GMMA::Layout core-matrix builder, not a hand-tiled buffer.
+
+SINGLE-TILE rel-RMS: 1.309e+00 (m64n64k8 single-warpgroup; the gate before scaling —
+  NOT reached, so the full 2048^3 was correctly NOT attempted under g5).
+FULL-GEMM rel-RMS:   N/A — gate not met; per g5 a perf run on a wrong-result kernel
+  is forbidden, so the 2048^3 measure was NOT executed.
+OWN GFLOP/s:         NOT-REPORTED (kernel not bit-correct — honest g5).
+cuBLAS GFLOP/s:      ~340 TFLOP/s (roofline, F-FUSION-SM90-CUBLAS-MAINLOOP).
+RATIO vs cuBLAS:     N/A (no honest own number).
+% of 29.4x gap closed: 0% measured (perf not claimable on a wrong-result kernel).
+PARITY REACHED (Y/N): NO — not measured (correctness gate unmet).
+POD DESTROYED (Y/N): YES — all three rented H200 contracts destroyed, leak 0.
+
+FINDING (negative result that narrows the axis):
+  RULED OUT (this pass, deterministically): the rel-RMS 1.309 residual is NOT a
+  plain-layout/descriptor-offset/epilogue permutation. A >2300-config exhaustive
+  sweep over those three axes has no member below 1.36.
+  RULED IN (the binding mechanism, now pinned to ONE operand and ONE stride): the
+  wgmma B-operand no-swizzle CORE-MATRIX K-advancement. On-hardware decode shows
+  wgmma re-reads B's K=0 core-matrix for every contraction step (k' pinned to 0) and
+  N is read in an 8x4-tf32 octet interleave. The next-cycle fix is concrete and
+  scoped: build the B (and A) shared tile via the CUTLASS GMMA core-matrix layout
+  (8-row K-contiguous core-matrices, descriptor LBO = one-core-matrix stride, swizzle
+  field matched to the TMA cuTensorMapEncodeTiled swizzle), verified FIRST on this
+  single-tile probe to k'==KSEL identity (rel-RMS 0) before any 2048^3 perf run.
+
+HONEST: parity-seeking; cuBLAS is the roofline; NO superiority claim; NO perf number
+  on a non-bit-correct kernel (g5); rel-RMS reported verbatim. Pod destroyed, leak 0.
+
+Evidence kit (this branch, self/native/wgmma/):
+  wgmma_tf32_swz.cu (plain-rowmajor + desc sweep),
+  wgmma_tf32_decode.cu / wgmma_tf32_bdecode.cu (per-process on-HW A/B read-map decode
+  — the diagnostic that pinned the K-stride collapse),
+  wgmma_tf32_full.cu (parametrized full-GEMM config sweep), sweep_fast.sh driver,
+  + the carried-forward wgmma_tf32_probe3.cu / wgmma_f16_probe.cu (1.309 / f16 PASS).
