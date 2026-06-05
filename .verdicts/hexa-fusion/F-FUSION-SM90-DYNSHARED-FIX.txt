@@ -1,0 +1,63 @@
+F-FUSION-SM90-DYNSHARED-FIX — sm_90 (Hopper H100) own-GEMM WMMA2 dynamic-shared launch fix
+==========================================================================================
+Follow-up to verdict F-FUSION-WMMA2-SM90-VERIFY (#2796): on native sm_90 the own-GEMM
+_hx_k_sgemm_cm_wmma2 kernel did NOT launch — cudaErrorInvalidValue — because its STATIC
+__shared__ staging (As 32768 + Bs 16384 + tmp 8192 = 57344 B) exceeds the sm_90 per-block
+STATIC shared cap (49152 B). It launched on Blackwell sm_120 only because the larger static
+admit absorbed the tally (that is where the README's 1.13x was measured). The Tensor-Core
+codegen was always fine; the failure was purely launch-config/shared-mem.
+
+FIX APPLIED: (a) dynamic-shared opt-in (NOT re-tile — keeps the exact 128x64 tile).
+  - As/Bs/tmp -> `extern __shared__ float hxg_smem[]`, carved at the SAME offsets the old
+    static arrays had (As[0..8192) Bs[8192..12288) tmp[12288..14336) floats = 57344 B).
+  - launcher (self/native/hxqwen14b_cuda.cu) + bench driver (cutlass_driver.cu):
+    cudaFuncSetAttribute(_hx_k_sgemm_cm_wmma2, cudaFuncAttributeMaxDynamicSharedMemorySize,
+    57344) once, then pass 57344 as the 3rd <<<grid,block,smem>>> launch-config arg.
+  - OFF-safe: only the HEXA_OWN_GEMM_WMMA2 path changed; default cuBLAS path untouched.
+
+GPU (VERIFIED native, NOT Blackwell):
+  nvidia-smi: NVIDIA H100 80GB HBM3, compute_cap 9.0, driver 560.35.03
+  nvcc release 12.4, V12.4.131
+  built: nvcc -gencode arch=compute_90,code=sm_90  (real native sm_90 SASS, no PTX-JIT)
+  HMMA in cutlass_driver SASS: 84  (Tensor-Core path present)
+  vast contract 39622686 — DESTROYED after capture (leak 0, verified GONE).
+
+RESULT — WMMA2 LAUNCHES ON sm_90: YES.
+  wmma2 cudaFuncSetAttribute(maxDynSmem=57344) -> no error
+  wmma2 launch status: launch=no error  sync=no error
+  (previously: cudaErrorInvalidValue on sm_90 — the fix REMOVES the launch failure.)
+
+VERBATIM 3-way ms/iter @ M=N=K=2048, 50 iters (col-major, no-transpose, alpha=1 beta=0):
+  cuBLAS (TF32)       : 0.05072 ms/iter   (1.00x)            [~339 TFLOP/s]
+  naive-WMMA          : 2.24949 ms/iter   (44.35x vs cuBLAS)
+  tiled-WMMA2(CUTLASS): 1.49432 ms/iter   (29.46x vs cuBLAS) [~11.5 TFLOP/s]
+  speedup naive->tiled-WMMA2          : 1.51x
+  remaining gap tiled-WMMA2 -> cuBLAS : 29.46x
+Stability re-run (100 iters): cuBLAS 0.05042 / WMMA2 1.48678 ms/iter (29.49x) — stable.
+
+CORRECTNESS (own vs cuBLAS oracle, rel-RMS, TF32 tol 3e-3):
+  tiled-WMMA2 rel-RMS = 4.766e-06  PASS  (well under 3e-3)
+  small odd shape 130x70x96: tiled-WMMA2 rel-RMS = 2.197e-07  PASS (bounds guard OK)
+
+own GFLOP/s (2*2048^3 = 17.18 GFLOP): WMMA2 ~11.5 TFLOP/s ; cuBLAS ~339 TFLOP/s.
+ratio vs cuBLAS native-H100: WMMA2 / cuBLAS = 1 / 29.46  (cuBLAS 29.46x faster).
+
+PARITY-RESTORED: NO.
+  The launch fix SUCCEEDS (sm_90 now launches, correctness PASS), but native-H100 PARITY
+  is NOT restored — WMMA2 is 29.46x SLOWER than cuBLAS on Hopper, far from the README's
+  Blackwell 1.13x. ROOT CAUSE of the residual (cuobjdump -res-usage): the WMMA2 kernel is
+  REG:236 per thread (60416 regs/256-thread block) + 57344 B dynamic shared/block. On H100
+  (65536 regs/SM) registers cap occupancy at ~1 block/SM — the kernel is REGISTER/occupancy-
+  bound on Hopper. The Blackwell 1.13x did NOT transfer; it appears to have relied on
+  Blackwell's larger register file / occupancy headroom, not just the bigger static cap.
+
+HONEST FRAMING (g5): cuBLAS = roofline; NO raw-GEMM superiority claim. The own WMMA2 GEMM
+is a correctness-passing, now-launchable Tensor-Core kernel on sm_90, but is 29.5x off the
+cuBLAS roofline on native Hopper. CLOSED-NEGATIVE on the parity axis for sm_90: the
+dynamic-shared opt-in is NECESSARY (and sufficient) to LAUNCH, but NOT sufficient for parity;
+the residual is occupancy (REG:236 / 1-block-per-SM), a separate register-pressure axis.
+
+README CAVEAT UPDATE: sm_90 now LAUNCHES (cudaErrorInvalidValue removed via dynamic opt-in),
+but the 1.13x parity figure is Blackwell-sm_120-ONLY; on native sm_90 H100 the own WMMA2
+GEMM runs at ~1/29.5 of cuBLAS (register/occupancy-bound), so native-H100 parity is NOT
+achieved by this fix.

@@ -85,12 +85,27 @@ int main(int argc, char** argv) {
     cudaMemcpy(hGot,dC,szC*4,cudaMemcpyDeviceToHost);
     double rms_naive = rel_rms(hRef,hGot,szC);
 
-    // 3) CUTLASS-grade tiled WMMA2
+    // 3) CUTLASS-grade tiled WMMA2.
+    // sm_90 DYNAMIC-SHARED OPT-IN (PR #2796 fix): the 57344 B staging > the
+    // 49152 B per-block STATIC cap on Hopper, so the kernel uses EXTERN dynamic
+    // shared. Opt into the bigger dynamic pool ONCE, then pass HXG_SMEM_BYTES as
+    // the 3rd launch-config arg. Mirrors the shipped own-GEMM launcher exactly.
     cudaMemset(dC,0,szC*4);
+    {
+        cudaError_t ae = cudaFuncSetAttribute(_hx_k_sgemm_cm_wmma2,
+            cudaFuncAttributeMaxDynamicSharedMemorySize, HXG_SMEM_BYTES);
+        printf("wmma2 cudaFuncSetAttribute(maxDynSmem=%d) -> %s\n",
+               HXG_SMEM_BYTES, cudaGetErrorString(ae));
+    }
     dim3 w2blk(256), w2grd((unsigned)((M+HXG_BM-1)/HXG_BM),(unsigned)((N+HXG_BN-1)/HXG_BN));
     float t_wmma2 = timed("wmma2", [&]{
-        _hx_k_sgemm_cm_wmma2<<<w2grd,w2blk>>>(0,0,M,N,K, alpha, dA,M, dB,K, beta, dC,M);
+        _hx_k_sgemm_cm_wmma2<<<w2grd,w2blk,HXG_SMEM_BYTES>>>(0,0,M,N,K, alpha, dA,M, dB,K, beta, dC,M);
     });
+    // Explicit launch-error capture so a cudaErrorInvalidValue is reported, not silent.
+    cudaError_t w2err = cudaGetLastError();
+    cudaError_t w2sync = cudaDeviceSynchronize();
+    printf("wmma2 launch status: launch=%s  sync=%s\n",
+           cudaGetErrorString(w2err), cudaGetErrorString(w2sync));
     cudaMemcpy(hGot,dC,szC*4,cudaMemcpyDeviceToHost);
     double rms_wmma2 = rel_rms(hRef,hGot,szC);
 

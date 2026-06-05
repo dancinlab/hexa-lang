@@ -629,6 +629,20 @@ __global__ void _hx_k_sgemm_cm_wmma(int tA, int tB, long long M, long long N, lo
 #define HXG_FN (HXG_WN / 16)          // 2 frag cols per warp
 #define HXG_FK (HXG_BK / 8)           // 4 K-frags per BK slice (TF32 frag K-dim = 8)
 
+// SM_90 (Hopper H100) DYNAMIC-SHARED OPT-IN (PR #2796 fix).
+// The WMMA2 staging needs As(2×128×32) + Bs(2×32×64) + tmp(8×16×16) =
+//   32768 + 16384 + 8192 = 57344 B of shared. As a STATIC __shared__ tally
+// that EXCEEDS the sm_90 per-block STATIC cap (49152 B), so the kernel
+// launched fine on Blackwell sm_120 (larger static admit) but failed with
+// cudaErrorInvalidValue on native sm_90 H100 — the Tensor-Core codegen was
+// always correct (64 HMMA in the SASS); the failure was purely the static
+// shared budget. Moving the staging to EXTERN (dynamic) shared + opting the
+// kernel into the 227 KB dynamic pool via cudaFuncAttributeMaxDynamicShared-
+// MemorySize lets the SAME 128×64 tile (the one that hits parity on Blackwell)
+// launch on sm_90. Layout/offsets/indices are byte-identical to the old static
+// arrays, so the staging+mma+epilogue math is unchanged.
+#define HXG_SMEM_BYTES 57344   // 2*128*32*4 + 2*32*64*4 + 8*16*16*4
+
 #if defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 800)
 #define HXG_CP_ASYNC 1
 #endif
@@ -669,8 +683,15 @@ __global__ void _hx_k_sgemm_cm_wmma2(int tA, int tB, long long M, long long N, l
     const int warpCol = warp % HXG_WCOLS;                       // 0..1
 
     // Double-buffered shared staging. As: 2 × (BM×BK) row-major, Bs: 2 × (BK×BN).
-    __shared__ float As[2][HXG_BM * HXG_BK];   // 2 × 128×32
-    __shared__ float Bs[2][HXG_BK * HXG_BN];   // 2 × 32×64
+    // DYNAMIC (extern) shared so the 57344 B staging opts into the sm_90 dynamic
+    // pool (it overflows the 49152 B static cap — see HXG_SMEM_BYTES note above).
+    // Carved at the SAME offsets the old static arrays had → byte-identical math.
+    //   As : [0,        8192) floats  (2 × 128×32)
+    //   Bs : [8192,    12288) floats  (2 ×  32×64)
+    //   tmp: [12288,   14336) floats  (8 ×  16×16)  — see epilogue
+    extern __shared__ float hxg_smem[];
+    float (*As)[HXG_BM * HXG_BK] = reinterpret_cast<float(*)[HXG_BM * HXG_BK]>(hxg_smem);
+    float (*Bs)[HXG_BK * HXG_BN] = reinterpret_cast<float(*)[HXG_BK * HXG_BN]>(hxg_smem + 2 * HXG_BM * HXG_BK);
 
     // Register accumulator fragments: HXG_FM × HXG_FN per warp (held all K).
     nvcuda::wmma::fragment<nvcuda::wmma::accumulator,16,16,8,float> acc[HXG_FM][HXG_FN];
@@ -755,7 +776,10 @@ __global__ void _hx_k_sgemm_cm_wmma2(int tA, int tB, long long M, long long N, l
     }
 
     // Epilogue: store each accumulator frag to shared, then col-major C with alpha/beta.
-    __shared__ float tmp[HXG_WARPS][16*16];   // per-warp 16×16 scratch
+    // tmp lives in the dynamic buffer at the offset AFTER As+Bs (12288 floats);
+    // total dynamic = 14336 floats = HXG_SMEM_BYTES. Same per-warp 16×16 layout.
+    float (*tmp)[16*16] = reinterpret_cast<float(*)[16*16]>(
+        hxg_smem + 2 * HXG_BM * HXG_BK + 2 * HXG_BK * HXG_BN);
     #pragma unroll
     for (int fm=0; fm<HXG_FM; fm++) {
         #pragma unroll
@@ -1231,9 +1255,24 @@ int _hx_own_sgemm_cm_launch(int tA, int tB, int m, int n, int k,
                                              C,(long long)ldc, G);
     } else if (want_wmma2 && !(skinny && !noshape)) {
         static int w2fired = 0; if (!w2fired){w2fired=1; fprintf(stderr,"[OWN-SGEMM-WMMA2-FIRED] _hx_k_sgemm_cm_wmma2 (CUTLASS-grade TF32: 128x64 block, 8-warp, 2x2 warp-tile, double-buffered cp.async)\n");}
+        // sm_90 DYNAMIC-SHARED OPT-IN (PR #2796 fix): the 57344 B staging exceeds
+        // the 49152 B per-block STATIC cap on Hopper, so the WMMA2 kernel uses
+        // EXTERN (dynamic) shared and must opt into the larger dynamic pool ONCE
+        // before the first launch. Without this the launch fails with
+        // cudaErrorInvalidValue on native sm_90 (it succeeded on Blackwell sm_120
+        // only because its bigger static admit absorbed the old static tally).
+        static int w2attr = 0;
+        if (!w2attr) {
+            w2attr = 1;
+            cudaError_t ae = cudaFuncSetAttribute(_hx_k_sgemm_cm_wmma2,
+                cudaFuncAttributeMaxDynamicSharedMemorySize, HXG_SMEM_BYTES);
+            if (ae != cudaSuccess)
+                fprintf(stderr, "[OWN-SGEMM-WMMA2] cudaFuncSetAttribute(maxDynSmem=%d) -> %s\n",
+                        HXG_SMEM_BYTES, cudaGetErrorString(ae));
+        }
         dim3 w2blk(256);  // 8 warps
         dim3 w2grd((unsigned)((m + HXG_BM - 1)/HXG_BM), (unsigned)((n + HXG_BN - 1)/HXG_BN));
-        _hx_k_sgemm_cm_wmma2<<<w2grd,w2blk>>>(tA,tB,
+        _hx_k_sgemm_cm_wmma2<<<w2grd,w2blk,HXG_SMEM_BYTES>>>(tA,tB,
                                               (long long)m,(long long)n,(long long)k,
                                               alpha, A,(long long)lda, B,(long long)ldb,
                                               beta, C,(long long)ldc);

@@ -330,3 +330,21 @@ async-on 시 학습 1스텝 전체(fwd 커널 + cuBLAS GEMM + bwd 커널 + optim
 **부수 발견 (실버그)**: emit 의 device runtime 쓰기가 `exec("cat > path <<EOF" + c_text + "EOF")` 였는데 c_text>128KB(현재 244KB) 이면 단일 `sh -c` argv 가 `MAX_ARG_STRLEN`(128KB) → E2BIG 로 **조용히 실패**. pool 에서 재현(prebuilt interp + 컴파일 바이너리 양쪽). `write_file`(rt_write_file fopen)로 교체 → byte-identical · #2630. fresh 빌드 호스트의 잠재 wall 제거.
 
 verdict: `.verdicts/hexa-fusion-l1-async/` (async byte-eq) · 측정-block 은 음성-결과로 정직 기록(util 수치 미주장 — single-driver pod fire verdict 부재).
+
+## ── own-GEMM WMMA2 sm_90 (Hopper H100) launch fix — ✅ LAUNCHES · 🔴 PARITY CLOSED-NEG (2026-06-06, g5 verbatim) ──
+
+verdict F-FUSION-WMMA2-SM90-VERIFY(#2796) 진단: own-GEMM `_hx_k_sgemm_cm_wmma2` 가 native **sm_90** 에서 launch 안 됨 — `cudaErrorInvalidValue`. 근인 = STATIC `__shared__` 합 **57344 B**(As 32768 + Bs 16384 + tmp 8192) > sm_90 per-block static cap **49152 B**. Blackwell sm_120 은 더 큰 static admit 으로 통과(README 1.13× = 거기서 측정). Tensor-Core codegen 은 정상(sm_90 SASS HMMA 84) — 실패는 순수 launch-config/shared-mem.
+
+**FIX (dynamic-shared opt-in, 128×64 타일 유지, math byte-identical)**: As/Bs/tmp → `extern __shared__ float hxg_smem[]`(옛 static 과 동일 offset) + launcher/driver 에 `cudaFuncSetAttribute(_hx_k_sgemm_cm_wmma2, cudaFuncAttributeMaxDynamicSharedMemorySize, 57344)` 1회 + `<<<grid,block,57344>>>` 3rd arg. OFF-safe(HEXA_OWN_GEMM_WMMA2 경로만, default cuBLAS 무변).
+
+**native sm_90 측정** (vast 39622686, nvidia-smi `NVIDIA H100 80GB HBM3, compute_cap 9.0`, nvcc 12.4, `-gencode arch=compute_90,code=sm_90`, pod DESTROYED leak 0):
+```
+wmma2 cudaFuncSetAttribute(maxDynSmem=57344) -> no error
+wmma2 launch status: launch=no error  sync=no error   ← LAUNCHES YES (cudaErrorInvalidValue 제거)
+3-way ms/iter @ M=N=K=2048, 50 iters:
+  cuBLAS (TF32)       : 0.05072 ms/iter   (1.00x)            [~339 TFLOP/s]
+  tiled-WMMA2(CUTLASS): 1.49432 ms/iter   (29.46x vs cuBLAS) [~11.5 TFLOP/s]
+  tiled-WMMA2 rel-RMS = 4.766e-06  PASS  (TF32 tol 3e-3)
+stability re-run 100it: cuBLAS 0.05042 / WMMA2 1.48678 (29.49x) — stable
+```
+**PARITY-RESTORED: NO**. launch fix 는 성공(sm_90 launch + correctness PASS)이나 native-H100 parity 미회복 — WMMA2 가 cuBLAS 대비 **29.46× 느림**, Blackwell 1.13× 와 무관. 근인(cuobjdump -res-usage): **REG:236/thread**(60416 regs/256-thread block) + 57344 B dyn-smem → H100 65536 regs/SM 에서 **~1 block/SM** = register/occupancy-bound. Blackwell 1.13× 는 sm_120 의 더 큰 레지스터 파일/occupancy 헤드룸에 의존했고 sm_90 으로 **transfer 안 됨**. 정직(g5): cuBLAS = roofline, raw-GEMM 우위 주장 0. **CLOSED-NEGATIVE on sm_90 parity axis** — dynamic-shared opt-in 은 launch 에 필요(충분)하나 parity 엔 불충분; 잔여는 별개 occupancy(레지스터-압) 축. verdict: `.verdicts/hexa-fusion/F-FUSION-SM90-DYNSHARED-FIX.txt`.
