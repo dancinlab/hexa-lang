@@ -230,7 +230,7 @@ fn main() {
     let mut mW2 = _const_fill([H + 1, 1], 0.0); let mut vW2 = _const_fill([H + 1, 1], 0.0)
     let beta1 = 0.9; let beta2 = 0.999; let eps = 0.00000001
     let lr = 0.02
-    let epochs = 5000
+    let epochs = 12000
 
     println("--- TRAINING LOSS CURVE (full-batch ENERGY MSE, Adam lr=" + to_string(lr) + " via ag_grad) ---")
 
@@ -251,6 +251,7 @@ fn main() {
 
         let show = (ep == 0) || (ep == 10) || (ep == 50) || (ep == 200) || (ep == 500)
                    || (ep == 1000) || (ep == 2000) || (ep == 3500) || (ep == 5000)
+                   || (ep == 8000) || (ep == 12000)
         if show {
             println("  epoch " + to_string(ep) + "\tMSE = " + to_string(lossv))
         }
