@@ -1,0 +1,76 @@
+F-FUSION-SM90-CUBLAS-MAINLOOP  ::  CLOSED-NEGATIVE (g5-HONEST) — mma.sync warp-level ceiling
+domain: HEXA-FUSION · date: 2026-06-06 · cuBLAS-class mainloop own-GEMM on NATIVE sm_90 (H100)
+GPU: NVIDIA H100 80GB HBM3 (compute_cap 9.0, native sm_90; vast 39628863, machine 32302) · nvcc 12.6.77
+  · -arch=sm_90 -gencode compute_90,code=sm_90. harness: self/native/bench/wmma2_rr_bench.cu
+  (square 2048³ col-major Sgemm, cuBLAS-TF32 oracle baseline, 20-iter timed, HEXA_OWN_GEMM_SYNC=1).
+  Kernels compiled verbatim from self/native/hxqwen14b_cuda.cu (no drift). Register usage via
+  cuobjdump -res-usage. m16n8k8 fragment layout validated by a standalone mma probe (probe V0 →
+  rel-RMS 0.000e+00). pod DESTROYED after measure (leak 0).
+
+PRE-REGISTERED FALSIFIER (#2800): "On native sm_90 the WMMA2 own-GEMM is bound by its inner-loop MATH
+PIPELINE, not occupancy (occupancy axis ruled out by F-FUSION-SM90-WARPTILE-RETUNE, 0% gap closed).
+Applying the cuBLAS/CUTLASS-class techniques — hardware TF32 mma.sync (no per-element software round),
+a deep multi-stage cp.async pipeline, and a register-blocked epilogue — will lift own GFLOP/s and close
+a MEANINGFUL fraction of the ~31× cuBLAS gap."
+
+NEW KERNEL: _hx_k_sgemm_cm_wmma2_cb (env HEXA_OWN_GEMM_WMMA2_CB, default OFF = parent byte-identical).
+LEVERS APPLIED (3 of 4 landed; 1 named residual):
+  L1 ✓ HARDWARE TF32 mma.sync — raw PTX mma.sync.aligned.m16n8k8.row.col.f32.tf32.tf32.f32 with the
+       TF32 round fused via cvt.rna.tf32.f32 on the operand register (the hardware round-to-nearest-even
+       path), REPLACING the parent's per-element software nvcuda::wmma::__float_to_tf32 fragment sweep.
+       m16n8k8 also issues a single native HMMA vs the wmma 16x16x8's 2.
+  L2 ✓ DEEP cp.async PIPELINE — HXG_CB_STAGES-deep ring buffer (default 3), prefetch STAGES-1 K-slices
+       ahead, cp.async.wait_group N keeps only the oldest group blocking (vs the parent's depth-1
+       double-buffer). Stage-depth swept on-pod: 2→11.65, 3→11.55, 4→11.50, 5→10.99 TFLOP/s.
+  L4 ✓ REGISTER-BLOCKED EPILOGUE — each thread holds its m16n8 accumulator in 4 .f32 registers (the
+       native mma D layout) and writes them DIRECTLY to col-major C with the verified thread→(row,col)
+       map — NO shared round-trip, no per-frag __syncwarp barrier (parent staged each 16×16 frag to
+       shared then scattered scalar).
+  L3 ✗ ldmatrix — NOT landed. ldmatrix.x4 is a 16-bit-element (.b16) op; the TF32 operands are 32-bit,
+       so the portable CUTLASS-TF32 path uses indexed shared loads (done here). A 32-bit ldmatrix.trans
+       swizzle is the named residual lever. HONEST codegen/path-coverage note, not a silent omission.
+
+CORRECTNESS (the load-bearing fix): the initial CB build measured rel-RMS 1.0 (garbage) — the m16n8k8
+.tf32 A/B operand k-index maps as {tig, tig+4} (NOT the fp16-style {tig*2, tig*2+1}). A standalone
+mma probe on sm_90 confirmed the canonical layout: A a0=(gid,tig) a1=(gid+8,tig) a2=(gid,tig+4)
+a3=(gid+8,tig+4); B b0=(k=tig,n=gid) b1=(k=tig+4,n=gid); D d0=(gid,2t) d1=(gid,2t+1) d2=(gid+8,2t)
+d3=(gid+8,2t+1). With the fix → rel-RMS EXACTLY 0.000e+00 (BIT-EXACT to the cuBLAS-TF32 oracle on
+this seed; parent WMMA2 is 4.766e-06 — the CB path's single cvt.rna matches cuBLAS's TF32 rounding
+exactly here). bar ≤ 3e-3 : PASS.
+
+REGISTER / OCCUPANCY (cuobjdump -res-usage, sm_90):
+  parent _hx_k_sgemm_cm_wmma2      : REG:240  STACK:0    (1 block/SM)
+  RR     _hx_k_sgemm_cm_wmma2_rr   : REG:128  STACK:184  (2 blocks/SM)
+  CB     _hx_k_sgemm_cm_wmma2_cb   : REG:128  STACK:56   (2 blocks/SM target; less spill than RR)
+
+THROUGHPUT (square 2048³, native sm_90 H100, confirmed across runs):
+  cuBLAS-TF32         : 0.051 ms   ~339.7 TFLOP/s   (baseline / roofline — NOT a superiority target)
+  parent WMMA2 (own)  : 1.538 ms     11.17 TFLOP/s   ratio own/cuBLAS = 0.0329   cuBLAS/own = 30.4×
+  CB variant   (own)  : 1.488 ms     11.55 TFLOP/s   ratio own/cuBLAS = 0.0340   cuBLAS/own = 29.4×
+                        (run2: 11.54 TFLOP/s, 29.36× — stable, not noise)
+  rel-RMS (own vs cuBLAS oracle): 0.000e+00 (CB) — correctness preserved/improved.
+
+OWN GFLOP/s BEFORE→AFTER: 11,167 → 11,546 GFLOP/s  (+3.4%).
+% OF THE ~31× (here 30.4×) GAP CLOSED: gap 30.4× → 29.4× ⇒ ≈ 3.4% of the cuBLAS gap closed.
+PARITY REACHED: N. The own-GEMM remains ~29× off cuBLAS on native sm_90 — far from the ≤~1.3× parity bar.
+
+FINDING (CLOSED-NEGATIVE — the mma.sync warp-level axis is the ceiling, not the technique set):
+  All three expressible cuBLAS-class mainloop levers (hardware-TF32 mma.sync, deep cp.async pipeline,
+  register-blocked epilogue) LANDED and are correct, but together moved own throughput only +3.4%
+  (11.17 → 11.55 TFLOP/s) — a real but small gain that closes ~3% of the 30× gap. Crucially, the
+  on-pod stage-depth sweep showed throughput SATURATES at 2 stages and REGRESSES beyond — independently
+  confirming (a 2nd time, a different axis) that global→shared latency is NOT the binding constraint.
+  The binding constraint is the warp-level mma.sync instruction class itself: on Hopper, cuBLAS reaches
+  TC peak via wgmma.mma_async (warpgroup-level 64×N×16 async MMA) fed by TMA (cp.async.bulk.tensor),
+  a DIFFERENT instruction class that mma.sync cannot reach regardless of pipelining/epilogue tuning. A
+  warp-level mma.sync kernel — even a clean CUTLASS-grade one — tops out roughly here on sm_90 because
+  it issues one HMMA per warp per step while wgmma issues a warpgroup-wide async MMA. The remaining
+  ~29× is a wgmma+TMA rewrite (a different kernel, sm_90a-specific intrinsics), not a mainloop retune.
+
+RULED-OUT SPACE: "the ~31× sm_90 own-GEMM gap is closable by applying cuBLAS-class mainloop techniques
+to the mma.sync warp-level kernel (HW-TF32 round + deep pipeline + register epilogue)" is FALSE — those
+techniques are correct and land, but yield only +3.4%. Closing the gap requires moving OFF mma.sync onto
+the sm_90 wgmma.mma_async + TMA path (warpgroup async MMA), i.e. a CUTLASS-3.x-class kernel, not an
+mma.sync mainloop. HONEST framing: parity-seeking, NO superiority claim (cuBLAS = roofline). The CB
+variant ships env-gated (HEXA_OWN_GEMM_WMMA2_CB) + default-OFF (parent path byte-identical) as a verified
+positive-but-small datapoint + a sharpened negative: the next lever is wgmma/TMA, named explicitly.
