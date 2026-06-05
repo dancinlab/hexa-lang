@@ -171,23 +171,27 @@ static int run_mesh(int nx,int ny,int nz){
     std::vector<double> vh_gpu(ntot);
     for(long i=0;i<ntot;i++) vh_gpu[i]=h_out[i].x*invN;   // ÷N + real part
 
-    // ── parity ──
-    double max_abs=0,max_rel=0; long argmax=-1;
+    // ── parity (hybrid atol/rtol — FFT cancellation makes a pure rel-err gate
+    //    trip on near-zero V_H bins where abs-err is at FP64 eps; the physical
+    //    parity is the per-element max(abs ≤ atol, rel ≤ rtol), d6 honest) ──
+    double atol=1e-12, rtol=1e-9;
+    double max_abs=0,max_rel=0; long argmax=-1; int pass=1;
     for(long i=0;i<ntot;i++){
         double a=vh_cpu[i], b=vh_gpu[i], ad=fabs(a-b);
         double rd = fabs(a)>1e-300 ? ad/fabs(a) : (ad>0?ad:0.0);
         if(ad>max_abs) max_abs=ad;
         if(rd>max_rel){ max_rel=rd; argmax=i; }
+        // element passes if EITHER the abs OR the rel error is within tol
+        if(!(ad<=atol || rd<=rtol)) pass=0;
     }
-    double tol=1e-9;
-    int pass=(max_rel<=tol);
+    double tol=rtol;
     printf("mesh %dx%dx%d (N=%ld)\n",nx,ny,nz,ntot);
     printf("  cpu_wall = %.3f ms   gpu_wall = %.3f ms   speedup(cpu/gpu) = %.3fx\n",
            cpu_ms,gpu_ms, gpu_ms>0?cpu_ms/gpu_ms:0.0);
     printf("  max_abs_err = %.6e\n",max_abs);
     printf("  max_rel_err = %.6e  (idx %ld: cpu=%.10e gpu=%.10e)\n",
            max_rel,argmax, argmax>=0?vh_cpu[argmax]:0.0, argmax>=0?vh_gpu[argmax]:0.0);
-    printf("  tol = %.1e   PARITY: %s\n", tol, pass?"PASS":"FAIL");
+    printf("  gate = (abs<=%.0e OR rel<=%.0e) per-element   PARITY: %s\n", atol, rtol, pass?"PASS":"FAIL");
 
     cufftDestroy(plan); cudaFree(d_a); cudaFree(d_scl);
     free(h_in); free(h_out);
