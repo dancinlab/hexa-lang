@@ -1,0 +1,13 @@
+=== DESCENT check: EPOCHS=4 async-OFF racefix-ON (CE-correctness) ===
+clm_prod — CLMConvMoE production corpus loop (PR1)
+  corpus: /root/work/corpus.txt  (402270 bytes, V=256)
+  windows: 8/8  (T=512 stride=50219)
+[OWN-GEMM-FIRED] _hx_k_gemm DEVICE path (no cuBLAS)
+[EAGER-DEVGLUE-FIRED] _hx_k_gelu device CUDA-erf GELU (separate launch, P1B-a' device-resident eager ref)
+[OWN-GEMM-FIRED] _hx_k_gemm_strided_batched DEVICE path (no cuBLAS)
+[B6-CE-HIPREC] first_ce=4.4662394504526679 last_ce=3.646692309276176
+  epoch-1 mean CE = 4.46624
+  epoch-4 mean CE = 3.64669
+F-CLM-PROD-DESCENT = 1
+PASS — real-corpus mean CE descends under int4 envelope
+EXIT=0
