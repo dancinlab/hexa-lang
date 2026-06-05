@@ -332,6 +332,16 @@ static int _h2d(int64_t id) {
         e->dirty_dev = 0;
         return 0; /* SKIP cudaMemcpy HostToDevice */
     }
+    /* HEXA-FUSION N2 RACEFIX (F-FUSION-N1N2-DETERMINISM): when async is ON the
+     * glue kernels run on the non-blocking g_forge_stream and are NOT host-synced
+     * per launch. The cudaFree/cudaMalloc/cudaMemcpy H2D below mutate device
+     * memory on the DEFAULT stream, which a cudaStreamNonBlocking stream does NOT
+     * order against — so this H2D could free/overwrite a buffer a still-queued
+     * forge-stream kernel is reading/writing -> the measured ~4.6e-2 run-to-run
+     * jitter (N1 proved every glue kernel is deterministic in ISOLATION; the race
+     * is here on the _h2d path, async-OFF is bit-reproducible). _d2h already
+     * drains; mirror it. No-op when async off => byte-identical legacy path. */
+    if (_forge_sync() != 0) return -1;
     if (!s->d_buf || s->len != e->len) {
         if (s->d_buf) cudaFree(s->d_buf);
         cudaError_t er = cudaMalloc((void**)&s->d_buf,
@@ -769,6 +779,11 @@ int _hx_cuda_farr_matmul_gpu(int64_t a_id, int64_t M, int64_t K,
                 (long long)ce->len, (long long)(M*N));
         return -1;
     }
+    /* HEXA-FUSION N2 RACEFIX (F-FUSION-N1N2-DETERMINISM, 3rd hazard): the
+     * GEMM-C cudaFree/cudaMalloc/cudaMemset run on the DEFAULT stream; when async
+     * is ON a queued forge-stream kernel may still reference cs->d_buf -> free-
+     * under-use / concurrent memset. Drain first (no-op async-off => byte-eq). */
+    if (_forge_sync() != 0) return -1;
     if (!cs->d_buf || cs->len != ce->len) {
         if (cs->d_buf) cudaFree(cs->d_buf);
         cudaError_t er = cudaMalloc((void**)&cs->d_buf,
@@ -893,6 +908,10 @@ int _hx_cuda_farr_matmul_batched_gpu(int64_t a_id, int64_t M, int64_t K,
                 (long long)ce->len, (long long)(batch*M*N));
         return -1;
     }
+    /* HEXA-FUSION N2 RACEFIX (F-FUSION-N1N2-DETERMINISM, 3rd hazard, batched):
+     * same default-stream cudaFree/cudaMalloc/cudaMemset race as the single GEMM-C.
+     * Drain the forge stream first (no-op async-off => byte-eq legacy). */
+    if (_forge_sync() != 0) return -1;
     if (!cs->d_buf || cs->len != ce->len) {
         if (cs->d_buf) cudaFree(cs->d_buf);
         cudaError_t er = cudaMalloc((void**)&cs->d_buf,
@@ -3183,6 +3202,12 @@ static int _ensure_dev_alloc_out(int64_t out_id, int64_t need_len) {
                 (long long)e->len, (long long)need_len);
         return -1;
     }
+    /* HEXA-FUSION N2 RACEFIX (F-FUSION-N1N2-DETERMINISM, 2nd hazard): same
+     * cross-stream race as _h2d. The cudaFree/cudaMalloc/cudaMemset below run on
+     * the DEFAULT stream; when async is ON a still-queued forge-stream kernel may
+     * reference this slot's old d_buf -> cudaFree-under-use / concurrent memset.
+     * Drain the forge stream first (no-op async-off => byte-eq legacy). */
+    if (_forge_sync() != 0) return -1;
     if (!s->d_buf || s->len != e->len) {
         if (s->d_buf) cudaFree(s->d_buf);
         cudaError_t er = cudaMalloc((void**)&s->d_buf,

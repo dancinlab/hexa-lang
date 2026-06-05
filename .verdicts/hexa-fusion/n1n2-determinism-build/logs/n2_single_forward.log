@@ -1,0 +1,11 @@
+clm_prod — CLMConvMoE production corpus loop (PR1)
+  corpus: /root/work/corpus.txt  (402270 bytes, V=256)
+  windows: 8/8  (T=512 stride=50219)
+[OWN-GEMM-FIRED] _hx_k_gemm DEVICE path (no cuBLAS)
+[EAGER-DEVGLUE-FIRED] _hx_k_gelu device CUDA-erf GELU (separate launch, P1B-a' device-resident eager ref)
+[OWN-GEMM-FIRED] _hx_k_gemm_strided_batched DEVICE path (no cuBLAS)
+[B6-CE-HIPREC] first_ce=4.9147686043046424 last_ce=4.9147686043046424
+  epoch-1 mean CE = 4.91477
+  epoch-1 mean CE = 4.91477
+F-CLM-PROD-DESCENT = 0
+FAIL

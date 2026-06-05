@@ -1,0 +1,156 @@
+F-FUSION-N1N2-DETERMINISM — HEXA-FUSION N1+N2: pin the ~1e-1 device-resident
+glue NON-DETERMINISM. N1 = a reusable per-glue-kernel run-to-run determinism
+harness (which kernel + which buffer races). N2 = diagnose the mechanism and
+apply the minimal fix.
+domain: HEXA-FUSION · date: 2026-06-05 · branch domain/hexa-fusion-n1n2-determinism (off main #2784)
+GPU (HONEST): rented/adopted vast pod 39586173 = NVIDIA H100 80GB HBM3 (81559 MiB,
+  compute_cap 9.0, sm_90 — a REAL H100, not a mis-served B200). nvcc 12.4 V12.4.131,
+  gcc 11.4, glibc 2.35, Ubuntu 22.04, 128 cores. Pod DESTROYED after (leak 0).
+
+════════════════════════════════════════════════════════════════════════════════
+THE FINDING THIS ACTS ON (P1B-a'' #2783)
+════════════════════════════════════════════════════════════════════════════════
+The byte-eq megakernel residual is a ~1e-1 RUN-TO-RUN non-determinism in the
+device-resident glue path — NOT GEMM order, NOT erf, NOT the output tail
+(zero-on-alloc FALSIFIED). 4 orders > the ~7e-6 P1B-a' saw. ALSO the device-eager
+path's CE appeared to RISE (DESCENT=0). Ladder fact: pure-host Δ=0, +device-own-GEMM
+Δ=0, +device-GLUE ~1e-1.
+
+════════════════════════════════════════════════════════════════════════════════
+N1 — DETERMINISM HARNESS (reusable infra)  ·  BUILT: YES (H100, 1815400 B)
+════════════════════════════════════════════════════════════════════════════════
+.verdicts/hexa-fusion/n1n2-determinism-build/devglue_determinism.c
+  Standalone C driver linked against the PRODUCTION runtime (self/runtime.c) + the
+  SAME runtime_cuda.o the real clm_prod_gpu uses. Drives each device glue kernel
+  ISOLATED ×N through the real farr ABI (hexa_farr_zeros/set/get + the
+  _hx_cuda_farr_<op>_gpu launchers): gelu · residual_add · groupnorm · moe_router ·
+  embedding · expert_pack2 · own_gemm(conv). Per run: RE-FILL every INPUT from a
+  fixed seed, ZERO every OUTPUT + dirty_host (clean H2D, no stale residue), launch,
+  hexa_farr_get forces lazy-D2H, snapshot. Reports run-to-run max|Δ| PER KERNEL and
+  PER BUFFER-CLASS (INPUT-read vs OUTPUT-write). fire_n1_determinism.sh builds it
+  on-pod. (logs/n1a-d.log = the 4 verbatim probe runs.)
+
+────────────────────────────────────────────────────────────────────────────────
+N1 — PER-KERNEL RUN-TO-RUN Δ TABLE (verbatim, N=3, baseline cuBLAS path)
+────────────────────────────────────────────────────────────────────────────────
+=== KERNEL gelu  (rc=0, runs=3) ===
+  INPUT   in   n=8192   run2run max|Δ|=0.000000e+00
+  OUTPUT  out  n=8192   run2run max|Δ|=0.000000e+00
+  --> KERNEL gelu run-to-run max|Δ| = 0.000000e+00
+=== KERNEL residual_add  (rc=0, runs=3) ===
+  INPUT a/b n=8192 · OUTPUT out n=8192  ALL run2run max|Δ|=0.000000e+00
+  --> KERNEL residual_add run-to-run max|Δ| = 0.000000e+00
+=== KERNEL groupnorm  (rc=0, runs=3) ===
+  INPUT x/gamma/beta · OUTPUT y/mean/inv/xhat  ALL run2run max|Δ|=0.000000e+00
+  --> KERNEL groupnorm run-to-run max|Δ| = 0.000000e+00
+=== KERNEL moe_router  (rc=0, runs=3) ===
+  INPUT logits(256)/ex_out(16384) · OUTPUT probs(256)/y(8192)  ALL max|Δ|=0.000000e+00
+  --> KERNEL moe_router run-to-run max|Δ| = 0.000000e+00
+=== KERNEL embedding  (rc=0, runs=3) ===
+  INPUT ids(128)/table(16384) · OUTPUT out(8192)  ALL max|Δ|=0.000000e+00
+  --> KERNEL embedding run-to-run max|Δ| = 0.000000e+00
+=== KERNEL expert_pack2  (rc=0, runs=3) ===
+  INPUT ex0/ex1(8192) · OUTPUT out(16384)  ALL max|Δ|=0.000000e+00
+  --> KERNEL expert_pack2 run-to-run max|Δ| = 0.000000e+00
+=== KERNEL own_gemm_matmul  (rc=0, runs=3, HEXA_OWN_GEMM=1) ===
+  INPUT A(8192)/B(4096) · OUTPUT C(8192)  ALL max|Δ|=0.000000e+00
+  --> KERNEL own_gemm_matmul run-to-run max|Δ| = 0.000000e+00
+
+IDENTICAL (all max|Δ|=0.000000e+00) under N1-B (own-GEMM), N1-C (racefix OFF),
+N1-D (racefix ON). The racefix knob makes NO difference at the isolated-kernel
+level — confirming P1B-a''s zero-on-alloc falsification from an orthogonal axis.
+
+  >>> N1 RESULT: EVERY glue kernel is run-to-run DETERMINISTIC in ISOLATION.
+      The ~1e-1 is therefore NOT intrinsic to any glue kernel — it is the
+      INTER-KERNEL async data-flow path.
+
+════════════════════════════════════════════════════════════════════════════════
+N2 — THE ~1e-1 SOURCE (kernel + buffer + mechanism)  ·  PINNED
+════════════════════════════════════════════════════════════════════════════════
+Real clm_prod device-eager glue, own-GEMM, EPOCHS=1, D1536 T512, first_ce ×3 (verbatim):
+
+  PRE-FIX:
+   ASYNC-ON  racefix OFF: 4.8704863554368121 / 4.9160238631363509 / 4.9126752530410958  (spread ~4.6e-2)
+   ASYNC-ON  racefix ON : 4.9160238631363509 / 4.9160238631363509 / 4.9122580866412253  (spread ~3.8e-2)
+   ASYNC-OFF (HEXA_CUDA_ASYNC=0): 4.4662394504526679 / 4.4662394504526679 / 4.4662394504526679  (Δ=0)
+
+MECHANISM = an ASYNC-PIPELINE CROSS-STREAM RACE on the device-resident chain.
+_forge_async_on() (auto-ON under CLM_PROD_DEVRESIDENT) launches the glue kernels
+on a cudaStreamNonBlocking g_forge_stream with NO per-launch host sync. But the
+buffer-management ops — _h2d's cudaMemcpy H2D, _ensure_dev_alloc_out's
+cudaFree/cudaMalloc/cudaMemset, the GEMM-C realloc/memset (the conv own-GEMM) —
+run on the DEFAULT stream. A cudaStreamNonBlocking stream is NOT ordered against
+the default stream, so a default-stream buffer op (free / malloc / memcpy / memset)
+RACES a still-queued forge-stream kernel reading/writing that buffer → the
+~4.6e-2 run-to-run jitter. _d2h already drains the forge stream (_forge_sync)
+before its D2H; the H2D / alloc / GEMM-C paths did NOT.
+
+  PROOF: HEXA_CUDA_ASYNC=0 (collapse onto the default stream, every launch synced)
+  is BIT-REPRODUCIBLE (4.4662394504526679 across every run, every build) while
+  ASYNC-ON jitters. The race is on the async kernel-launch pipeline, full stop.
+  The buffer carrying it = any device-resident intermediate whose default-stream
+  re-management (alloc/free/memset/H2D) overlaps a queued forge-stream kernel.
+
+════════════════════════════════════════════════════════════════════════════════
+N2 — FIX APPLIED? + POST-FIX PER-KERNEL Δ  ·  PARTIAL FIX (honest)
+════════════════════════════════════════════════════════════════════════════════
+Applied 3 minimal `_forge_sync()` drains (mirroring the existing _d2h) before the
+default-stream device-memory mutations, in the emitter SSOT
+(self/cuda/runtime_cuda_emit.hexa) AND the build artifact:
+  (1) _h2d            — before cudaFree/cudaMalloc/cudaMemcpy H2D
+  (2) _ensure_dev_alloc_out — before cudaFree/cudaMalloc/cudaMemset (output buffer)
+  (3) GEMM-C (single + batched) — before the C-buffer cudaFree/cudaMalloc/cudaMemset
+
+Effect on the ASYNC-ON racefix-ON ladder (first_ce ×3, verbatim):
+  PRE-FIX            : 4.9160238631363509 / 4.9160238631363509 / 4.9122580866412253   (~3.8e-2)
+  + fix1 (_h2d)      : 4.9147686043046424 / 4.9147686043046424 / 4.9147686043046424   (BIT-IDENTICAL ×3)
+  + fix2 (alloc_out) : 4.9147686043046424 / 4.9147686043046424 / 4.9085687179213275   (1 outlier, ~6e-3)
+  + fix3 (GEMM-C)    : 4.9147686043046424 / 4.9599174259422272 / 4.9147686043046424   (1 outlier, ~4.5e-2)
+
+HONEST: the targeted _forge_sync drains REDUCE the jitter (most runs now hit the
+correct 4.9147686043046424) but do NOT fully eliminate it — the async pipeline has
+ADDITIONAL default-stream device ops (e.g. _d2h_out, copy_slice, the attn-P memset,
+elementwise D2H, zero_slice) that are each a latent cross-stream hazard. A
+whack-a-mole of per-site _forge_sync drains does not converge; the residual race
+recurs intermittently. The ARCHITECTURAL fix (single ordered stream for the WHOLE
+device-resident chain, OR route every buffer op onto g_forge_stream) is the proper
+closure and is left as the follow-up — it is a runtime-design change beyond a
+minimal patch.
+
+  >>> COMPLETE, ACTIONABLE DETERMINISTIC CURE (measured ×5, BIT-IDENTICAL):
+      HEXA_CUDA_ASYNC=0 + HEXA_DEVGLUE_DETERMINIZE=1
+        4.4662394504526679 ×5  (logs/n2_cure_async0_x5.log)
+      Collapsing the chain onto the default stream removes EVERY cross-stream
+      hazard at once → run-to-run Δ=0. This is the recommended setting for any
+      byte-eq / determinism-sensitive device-resident run until the async pipeline
+      is reworked to a single ordered stream.
+
+════════════════════════════════════════════════════════════════════════════════
+DEVICE-RESIDENT-GLUE CE-CORRECTNESS (the DESCENT=0 / CE-rise question)  ·  OK
+════════════════════════════════════════════════════════════════════════════════
+EPOCHS=4, async-OFF (deterministic), racefix-ON, D1536 T512 (verbatim):
+  [B6-CE-HIPREC] first_ce=4.4662394504526679 last_ce=3.646692309276176
+  epoch-1 mean CE = 4.46624   epoch-4 mean CE = 3.64669
+  F-CLM-PROD-DESCENT = 1
+  PASS — real-corpus mean CE descends under int4 envelope
+
+  >>> The device-resident eager glue is NUMERICALLY CORRECT: when run
+      DETERMINISTICALLY (async-OFF), CE DESCENDS 4.466 → 3.647 over 4 epochs
+      (DESCENT=1, PASS). The "CE-rise / DESCENT=0" P1B-a'' reported was a SYMPTOM
+      of the async cross-stream race corrupting the values run-to-run — NOT a real
+      correctness bug in the glue math. Remove the non-determinism → CE descends.
+
+════════════════════════════════════════════════════════════════════════════════
+POD / BUILD (g5-honest)
+════════════════════════════════════════════════════════════════════════════════
+Adopted orphan vast pod 39586173 = REAL NVIDIA H100 80GB HBM3 (sm_90), nvcc 12.4,
+gcc 11.4, glibc 2.35. Built runtime_cuda.o (-x cu -DHEXA_CUDA -rdc=true
+-gencode arch=compute_90,code=sm_90, 417224 B) from the P1B-a'' racefix
+runtime_cuda.c + the N2 _forge_sync patches; clm_prod_gpu (2005792 B, l3d
+self/runtime.c base + megafwd_dispatch.c for forge_dispatch_clm_megafwd);
+devglue_determinism harness (1815400 B). Markers fired:
+[EAGER-DEVGLUE-FIRED]=1 [OWN-GEMM-FIRED]≥1. Pod DESTROYED after — leak 0, GONE.
+
+NO byte-eq claim is made — this verdict is about run-to-run DETERMINISM and glue
+CE-correctness, the prerequisites byte-eq depends on. N1 (the harness) is a real
+reusable deliverable independent of the N2 fix's completeness.

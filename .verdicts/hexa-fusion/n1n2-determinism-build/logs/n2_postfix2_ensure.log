@@ -1,0 +1,13 @@
+=== A: ASYNC-ON racefix OFF x3 ===
+  off1: 4.9160238631363509
+  off2: 4.9099721156917191
+  off3: 4.9089778757384934
+=== B: ASYNC-ON racefix ON x3 ===
+  on1:  4.9147686043046424
+  on2:  4.9147686043046424
+  on3:  4.9085687179213275
+=== C: ASYNC-OFF (HEXA_CUDA_ASYNC=0) x3  [cross-stream race test] ===
+  noasync1: 4.4662394504526679
+  noasync2: 4.4662394504526679
+  noasync3: 4.4662394504526679
+=== DONE ===

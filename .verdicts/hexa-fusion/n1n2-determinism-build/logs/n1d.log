@@ -1,0 +1,58 @@
+[EAGER-DEVGLUE-FIRED] _hx_k_gelu device CUDA-erf GELU (separate launch, P1B-a' device-resident eager ref)
+[OWN-GEMM-FIRED] _hx_k_gemm DEVICE path (no cuBLAS)
+############################################################
+### HEXA-FUSION N1 — per-glue-kernel run-to-run DETERMINISM PROBE
+###   N=3 isolated runs/kernel · fixed-seed input · max|Δ| per buffer-class
+###   INPUT=read-buffer  OUTPUT=write-buffer (the N2 buffer-class split)
+############################################################
+
+=== KERNEL gelu  (rc=0, runs=3) ===
+  INPUT   in         n=8192      run2run max|Δ|=0.000000e+00  @i=-1  (r0=0)
+  OUTPUT  out        n=8192      run2run max|Δ|=0.000000e+00  @i=-1  (r0=0)
+  --> KERNEL gelu run-to-run max|Δ| = 0.000000e+00  (carried by INPUT buffer '-')
+
+=== KERNEL residual_add  (rc=0, runs=3) ===
+  INPUT   a          n=8192      run2run max|Δ|=0.000000e+00  @i=-1  (r0=0)
+  INPUT   b          n=8192      run2run max|Δ|=0.000000e+00  @i=-1  (r0=0)
+  OUTPUT  out        n=8192      run2run max|Δ|=0.000000e+00  @i=-1  (r0=0)
+  --> KERNEL residual_add run-to-run max|Δ| = 0.000000e+00  (carried by INPUT buffer '-')
+
+=== KERNEL groupnorm  (rc=0, runs=3) ===
+  INPUT   x          n=8192      run2run max|Δ|=0.000000e+00  @i=-1  (r0=0)
+  INPUT   gamma      n=64        run2run max|Δ|=0.000000e+00  @i=-1  (r0=0)
+  INPUT   beta       n=64        run2run max|Δ|=0.000000e+00  @i=-1  (r0=0)
+  OUTPUT  y          n=8192      run2run max|Δ|=0.000000e+00  @i=-1  (r0=0)
+  OUTPUT  mean       n=8         run2run max|Δ|=0.000000e+00  @i=-1  (r0=0)
+  OUTPUT  inv        n=8         run2run max|Δ|=0.000000e+00  @i=-1  (r0=0)
+  OUTPUT  xhat       n=8192      run2run max|Δ|=0.000000e+00  @i=-1  (r0=0)
+  --> KERNEL groupnorm run-to-run max|Δ| = 0.000000e+00  (carried by INPUT buffer '-')
+
+=== KERNEL moe_router  (rc=0, runs=3) ===
+  INPUT   logits     n=256       run2run max|Δ|=0.000000e+00  @i=-1  (r0=0)
+  INPUT   ex_out     n=16384     run2run max|Δ|=0.000000e+00  @i=-1  (r0=0)
+  OUTPUT  probs      n=256       run2run max|Δ|=0.000000e+00  @i=-1  (r0=0)
+  OUTPUT  y          n=8192      run2run max|Δ|=0.000000e+00  @i=-1  (r0=0)
+  --> KERNEL moe_router run-to-run max|Δ| = 0.000000e+00  (carried by INPUT buffer '-')
+
+=== KERNEL embedding  (rc=0, runs=3) ===
+  INPUT   ids        n=128       run2run max|Δ|=0.000000e+00  @i=-1  (r0=0)
+  INPUT   table      n=16384     run2run max|Δ|=0.000000e+00  @i=-1  (r0=0)
+  OUTPUT  out        n=8192      run2run max|Δ|=0.000000e+00  @i=-1  (r0=0)
+  --> KERNEL embedding run-to-run max|Δ| = 0.000000e+00  (carried by INPUT buffer '-')
+
+=== KERNEL expert_pack2  (rc=0, runs=3) ===
+  INPUT   ex0        n=8192      run2run max|Δ|=0.000000e+00  @i=-1  (r0=0)
+  INPUT   ex1        n=8192      run2run max|Δ|=0.000000e+00  @i=-1  (r0=0)
+  OUTPUT  out        n=16384     run2run max|Δ|=0.000000e+00  @i=-1  (r0=0)
+  --> KERNEL expert_pack2 run-to-run max|Δ| = 0.000000e+00  (carried by INPUT buffer '-')
+
+=== KERNEL own_gemm_matmul  (rc=0, runs=3) ===
+  INPUT   A          n=8192      run2run max|Δ|=0.000000e+00  @i=-1  (r0=0)
+  INPUT   B          n=4096      run2run max|Δ|=0.000000e+00  @i=-1  (r0=0)
+  OUTPUT  C          n=8192      run2run max|Δ|=0.000000e+00  @i=-1  (r0=0)
+  --> KERNEL own_gemm_matmul run-to-run max|Δ| = 0.000000e+00  (carried by INPUT buffer '-')
+
+############################################################
+### N1 PROBE COMPLETE. Any kernel with run2run max|Δ| > 0 is NON-DETERMINISTIC.
+### OUTPUT-carried Δ = the kernel itself races; INPUT-carried Δ = upstream/read corruption.
+############################################################
