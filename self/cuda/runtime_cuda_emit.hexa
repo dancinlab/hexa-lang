@@ -791,6 +791,11 @@ fn emit_runtime_cuda_c() -> str {
             "                (long long)ce->len, (long long)(M*N));\n" +
             "        return -1;\n" +
             "    }\n" +
+            "    /* HEXA-FUSION N2 RACEFIX (F-FUSION-N1N2-DETERMINISM, 3rd hazard):\n" +
+            "     * GEMM-C cudaFree/cudaMalloc/cudaMemset run on the DEFAULT stream;\n" +
+            "     * when async is ON a queued forge-stream kernel may still reference\n" +
+            "     * cs->d_buf -> free-under-use. Drain first (no-op async-off). */\n" +
+            "    if (_forge_sync() != 0) return -1;\n" +
             "    if (!cs->d_buf || cs->len != ce->len) {\n" +
             "        if (cs->d_buf) cudaFree(cs->d_buf);\n" +
             "        cudaError_t er = cudaMalloc((void**)&cs->d_buf,\n" +
@@ -912,6 +917,9 @@ fn emit_runtime_cuda_c() -> str {
             "                (long long)ce->len, (long long)(batch*M*N));\n" +
             "        return -1;\n" +
             "    }\n" +
+            "    /* HEXA-FUSION N2 RACEFIX (F-FUSION-N1N2-DETERMINISM, 3rd hazard,\n" +
+            "     * batched): same default-stream GEMM-C realloc race. Drain first. */\n" +
+            "    if (_forge_sync() != 0) return -1;\n" +
             "    if (!cs->d_buf || cs->len != ce->len) {\n" +
             "        if (cs->d_buf) cudaFree(cs->d_buf);\n" +
             "        cudaError_t er = cudaMalloc((void**)&cs->d_buf,\n" +
