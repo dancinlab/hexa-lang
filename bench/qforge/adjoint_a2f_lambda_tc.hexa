@@ -1,0 +1,239 @@
+// QFORGE-PERF — 🧠 LANE C "differentiable-DFT reverse-mode LR": the TRACTABLE
+// TAIL verified.  Reverse-mode (adjoint) gradient of the α²F → λ → Tc closed-form
+// chain, validated component-by-component against central finite difference (g5).
+//
+//   hexa verify --verifier-cmd "HEXA_LANG=. hexa run bench/qforge/adjoint_a2f_lambda_tc.hexa" \
+//               --claim "adjoint dLambda/d(a2f) and dTc/d(a2f) match FD to 1e-6" \
+//               --expect "VERDICT_ADJOINT_A2F=MATCH"
+//
+// ── WHAT THIS IS (honest scope, CLAUDE.md d6) ────────────────────────────────
+// The full differentiable-DFT milestone = reverse-mode AD THROUGH the SCF
+// fixed-point AND the Sternheimer linear-response solve, so ∂(λ,Tc)/∂(structure,
+// U, pseudo-params) comes out analytically.  That is a large paradigm build
+// (the adjoint of two coupled fixed points — see the design doc
+// `bench/qforge/adjoint_dfpt_design.md`).  It is NOT claimed closed here.
+//
+// What IS tractable inline — and is the BOUNDARY where the el-ph data (the
+// DFPT/Sternheimer output α²F samples) hands off to the algebraic Tc tail — is
+// the reverse-mode adjoint of that CLOSED-FORM tail:
+//
+//        α²F samples ──(λ-integral)──► λ ──(Allen-Dynes)──► Tc
+//          (DFPT out)    trapezoid       ω_log                 K
+//
+// The Tc(λ,ω_log) algebraic partials are ALREADY verified (stdlib/qforge/
+// dtc_dstruct, g5 — reused here, d3, NOT re-implemented).  The NEW verified
+// piece is the adjoint of the QUADRATURE: ∂λ/∂α²F[i] and ∂ω_log/∂α²F[i] — the
+// pullback from the scalar moments back onto the sampled spectral function.
+// Composed by the chain rule this gives the full reverse-mode gradient
+// ∂Tc/∂α²F[i], the el-ph → Tc sensitivity the inverse-design loop wants without
+// re-running the whole α²F→Tc forward map per perturbed sample (one adjoint
+// sweep returns the WHOLE gradient vector vs n forward re-evaluations).
+//
+// d3: λ uses eliashberg_moments_from_a2f_scaled; ∂Tc/∂λ uses qforge_dtc_dlambda
+//     — the canonical homes.  This driver differentiates the QUADRATURE only.
+
+use "stdlib/material/sim"
+use "stdlib/qforge/dtc_dstruct"
+
+fn _abs(x: float) -> float { if x < 0.0 { return -x } return x }
+
+// ── forward maps (thin reuse of the canonical engine forms) ──────────────────
+// s = omega_to_energy = ha_per_kelvin() so the K-grid / Ha-numerator unit
+// convention matches qforge_a2f_lambda (elph.hexa).
+fn _lambda_of(omega: [float], a2f: [float], s: float) -> float {
+    let m = eliashberg_moments_from_a2f_scaled(omega, a2f, s)
+    return m[0]
+}
+fn _omegalog_of(omega: [float], a2f: [float], s: float) -> float {
+    let m = eliashberg_moments_from_a2f_scaled(omega, a2f, s)
+    return m[1]
+}
+// Tc with ω̄₂ pinned to a FIXED reference (= the unperturbed ω_log, captured by
+// the caller) so f2 is held at its baseline value and the ONLY moment paths that
+// vary with α²F are λ and ω_log — the two pullbacks this g5 driver verifies.
+// The ω̄₂ = m[2] path is a THIRD quadrature pullback of identical algebraic form
+// (named in the design doc), held out here to keep the verified claim TIGHT and
+// EXACT rather than padded with an unverified third term.  d3: canonical
+// allen_dynes_tc, no fork.
+fn _tc_fixed_w2(omega: [float], a2f: [float], s: float, mu: float, w2: float) -> float {
+    let m = eliashberg_moments_from_a2f_scaled(omega, a2f, s)
+    return allen_dynes_tc(m[1], m[0], mu, w2)
+}
+
+// ── REVERSE-MODE ADJOINT of the trapezoid λ-integral (the new piece) ─────────
+// λ = 2 ∫ α²F/ω_E dω  with ω_E = ω·s, trapezoid on the grid.  In discrete form
+//   λ = 2 Σ_{k=0}^{n-2} 0.5 (a[k]/E[k] + a[k+1]/E[k+1]) (ω[k+1]-ω[k]),  E=ω·s.
+// Seeding λ̄ = ∂L/∂λ and pulling back to each a[i]:
+//   ∂λ/∂a[i] = (1/E[i]) · Σ (half-interval widths touching node i)
+//            = (1/E[i]) · w_i,   w_i = trapezoid node weight (×2 from the λ=2∫):
+//     interior i: w_i = (ω[i+1]-ω[i-1])
+//     left  end : w_0 = (ω[1]-ω[0])
+//     right end : w_{n-1} = (ω[n-1]-ω[n-2])
+// (the outer 2 and inner 0.5 cancel for interior; endpoints keep one half ×2 = 1×width)
+fn _grad_lambda_wrt_a2f(omega: [float], s: float) -> [float] {
+    let n = len(omega)
+    let mut g: [float] = []
+    let mut i = 0
+    while i < n {
+        let ei = omega[i] * s
+        let mut w = 0.0
+        if i == 0 {
+            w = omega[1] - omega[0]
+        } else if i == n - 1 {
+            w = omega[n - 1] - omega[n - 2]
+        } else {
+            w = omega[i + 1] - omega[i - 1]
+        }
+        g.push(w / ei)        // ∂λ/∂a[i]  (the 2∫ and 0.5-trapezoid factors cancelled)
+        i = i + 1
+    }
+    return g
+}
+
+fn main() {
+    // ── a representative α²F(ω) (hydride-like, λ≈O(1), Tc in its valid regime) ─
+    // Single-peak Gaussian spectral function on a positive grid.  Units are
+    // SELF-CONSISTENT (ω-grid IS the α²F numerator's energy unit) → s = 1.0, the
+    // dimensionless analytic contract λ = 2∫α²F/ω the canonical selftests pin.
+    // The α²F amplitude is tuned so λ ≈ 1.6 (strong-coupling, f1·f2 active) —
+    // the physical regime where the Allen-Dynes tail derivatives are well-posed.
+    let s = 1.0
+    let mut omega: [float] = []
+    let mut a2f: [float] = []
+    let n = 24
+    let w_lo = 0.005         // grid units (e.g. meV-scaled); kept > 0 (1/ω, lnω)
+    let w_hi = 0.090
+    let dw = (w_hi - w_lo) / to_float(n - 1)
+    let peak = 0.040
+    let width = 0.016
+    let mut i = 0
+    while i < n {
+        let w = w_lo + dw * to_float(i)
+        omega.push(w)
+        let z = (w - peak) / width
+        a2f.push(0.65 * exp(-0.5 * z * z))    // α²F shape; amplitude → λ≈1.6
+        i = i + 1
+    }
+    let mu = 0.13
+
+    let lam0 = _lambda_of(omega, a2f, s)
+    let wlog0 = _omegalog_of(omega, a2f, s)
+    let w2_ref = wlog0                       // ω̄₂ pinned at baseline (f2 frozen)
+    let tc0 = _tc_fixed_w2(omega, a2f, s, mu, w2_ref)
+    println("=== QFORGE adjoint α²F→λ→Tc reverse-mode gradient (g5 vs FD) ===")
+    println("n_samples = " + to_string(n) + "  mu* = " + to_string(mu))
+    println("forward:  lambda = " + to_string(lam0)
+            + "  omega_log(K) = " + to_string(wlog0)
+            + "  Tc(K) = " + to_string(tc0))
+
+    // ── adjoint gradients ───────────────────────────────────────────────────
+    // ∂λ/∂a[i] : exact quadrature adjoint (this driver).
+    let glam = _grad_lambda_wrt_a2f(omega, s)
+    // ∂Tc/∂λ , ∂Tc/∂ω_log : exact algebraic tail (reuse qforge_dtc, d3).
+    // ω̄₂ arg = w2_ref (frozen) so these are the partials at fixed f2 — matching
+    // the _tc_fixed_w2 forward map below (apples-to-apples with the FD truth).
+    let dtc_dlam = qforge_dtc_dlambda(lam0, wlog0, w2_ref, mu)
+    // NOTE: full ∂Tc/∂ω_log·∂ω_log/∂a[i] term is included by the FD ground-truth
+    // automatically; for the adjoint we compose BOTH paths.  ∂ω_log/∂a[i] is also
+    // a closed-form quadrature pullback — to keep the boundary HONEST and the
+    // verified claim TIGHT we validate the two clean pieces directly:
+    //   (1) ∂λ/∂a[i]              vs central FD of λ
+    //   (2) ∂Tc/∂a[i] (FULL)      vs central FD of Tc, with the adjoint Tc grad
+    //       built from the full closed-form pullback (λ AND ω_log paths).
+
+    // full adjoint ∂Tc/∂a[i] needs ∂ω_log/∂a[i] too; derive it by the same
+    // quadrature-pullback principle but obtain it cleanly via a directional
+    // closed-form: ω_log = exp( (2/λ_disp) ∫ (a/ω) ln ω dω ).  Rather than
+    // hand-expand (error-prone), we VALIDATE ∂λ/∂a analytically (the milestone's
+    // named tractable piece) and CROSS-CHECK the composed Tc gradient using the
+    // analytic ∂λ-path PLUS a verified ω_log-path adjoint computed below.
+    let dtc_dwlog = qforge_dtc_domega_log(lam0, wlog0, w2_ref, mu)
+    // ∂ω_log/∂a[i] closed-form pullback (trapezoid of (a/ω)·lnω and (a/ω)):
+    //   let A = (2/λ_disp) ∫ (a/ω) ln ω dω,  ω_log = exp(A).
+    //   λ_disp = s·λ ;  ∂λ_disp/∂a[i] = s·glam[i].
+    //   ∂A/∂a[i] = (2/λ_disp)·P_i  −  (A/λ_disp)·(s·glam[i])
+    //     where P_i = ∂/∂a[i] ∫ (a/ω) lnω dω = (lnω_i/ω_i)·(node weight, half-trapz)
+    //   ∂ω_log/∂a[i] = ω_log · ∂A/∂a[i].
+    let lam_disp = s * lam0
+    // recompute A and the node weights for the log-integrand
+    let mut intlog = 0.0
+    let mut k = 0
+    while k < n - 1 {
+        let g0 = a2f[k] / omega[k]
+        let g1 = a2f[k + 1] / omega[k + 1]
+        intlog = intlog + 0.5 * (g0 * log(omega[k]) + g1 * log(omega[k + 1])) * (omega[k + 1] - omega[k])
+        k = k + 1
+    }
+    let bigA = (2.0 / lam_disp) * intlog
+    // build full adjoint ∂Tc/∂a[i]
+    let mut gtc_adj: [float] = []
+    i = 0
+    while i < n {
+        // half-trapezoid node weight for the log-integrand (NO ×2 here)
+        let mut wlw = 0.0
+        if i == 0 {
+            wlw = 0.5 * (omega[1] - omega[0])
+        } else if i == n - 1 {
+            wlw = 0.5 * (omega[n - 1] - omega[n - 2])
+        } else {
+            wlw = 0.5 * (omega[i + 1] - omega[i - 1])
+        }
+        let p_i = (log(omega[i]) / omega[i]) * wlw                 // ∂(∫)/∂a[i]
+        let dA = (2.0 / lam_disp) * p_i - (bigA / lam_disp) * (s * glam[i])
+        let dwlog_da = wlog0 * dA                                  // ∂ω_log/∂a[i]
+        let dtc_da = dtc_dlam * glam[i] + dtc_dwlog * dwlog_da     // full chain
+        gtc_adj.push(dtc_da)
+        i = i + 1
+    }
+
+    // ── finite-difference ground truth (central, per component) ──────────────
+    let h = 1.0e-6
+    let mut max_rel_lam = 0.0
+    let mut max_rel_tc = 0.0
+    i = 0
+    while i < n {
+        // perturb a2f[i] ± h
+        let mut ap: [float] = []
+        let mut am: [float] = []
+        let mut j = 0
+        while j < n {
+            if j == i {
+                ap.push(a2f[j] + h)
+                am.push(a2f[j] - h)
+            } else {
+                ap.push(a2f[j])
+                am.push(a2f[j])
+            }
+            j = j + 1
+        }
+        // FD ∂λ/∂a[i]
+        let fd_lam = (_lambda_of(omega, ap, s) - _lambda_of(omega, am, s)) / (2.0 * h)
+        let dl = _abs(fd_lam - glam[i])
+        let rl = dl / (_abs(fd_lam) + 1.0e-30)
+        if rl > max_rel_lam { max_rel_lam = rl }
+        // FD ∂Tc/∂a[i] — fixed-ω̄₂ Tc, matching the adjoint's two-path scope.
+        let fd_tc = (_tc_fixed_w2(omega, ap, s, mu, w2_ref) - _tc_fixed_w2(omega, am, s, mu, w2_ref)) / (2.0 * h)
+        let dt = _abs(fd_tc - gtc_adj[i])
+        let rt = dt / (_abs(fd_tc) + 1.0e-30)
+        if rt > max_rel_tc { max_rel_tc = rt }
+        i = i + 1
+    }
+
+    // print a few representative components (verbatim record)
+    println("--- per-component (i : adjoint dλ/da   FD dλ/da) ---")
+    let probe0 = 0
+    let probe1 = n / 2
+    let probe2 = n - 1
+    println("i=" + to_string(probe0) + "  adj=" + to_string(glam[probe0]))
+    println("i=" + to_string(probe1) + "  adj=" + to_string(glam[probe1]))
+    println("i=" + to_string(probe2) + "  adj=" + to_string(glam[probe2]))
+    println("max rel-eps  dLambda/d(a2f)  adjoint vs FD = " + to_string(max_rel_lam))
+    println("max rel-eps  dTc/d(a2f)      adjoint vs FD = " + to_string(max_rel_tc))
+
+    let tol = 1.0e-6
+    if max_rel_lam < tol && max_rel_tc < tol {
+        println("VERDICT_ADJOINT_A2F=MATCH")
+    } else {
+        println("VERDICT_ADJOINT_A2F=REFUTE")
+    }
+}
