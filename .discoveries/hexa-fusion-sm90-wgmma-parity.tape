@@ -48,3 +48,25 @@
 # next-cycle claim: W5+ warp-specialized TMA multi-stage mainloop toward strict parity.
 #   The layout + correctness are SOLVED; the remaining work is a pure pipeline-engineering
 #   perf climb (9.35x → <=1.3x), gated on a fresh multi-session GPU budget.
+
+# ============================================================================
+# === UPDATE 2026-06-06 — W6 async-pipe (50.7) + W7 dual-consumer-WG CLOSED-NEG
+# ============================================================================
+# W6 (#2833): cp.async async-pipe ring = 50.7 TFLOP/s bit-exact (rel_rms 0) = 8.39x off
+#   cuBLAS-TF32 (+33% over 38.0; ~11.5% of gap closed). NST 2..5 saturates → ring depth
+#   not the wall. single-consumer-WG warp-spec = 35.0 (starves TC at TM=64).
+#
+# W7 dual-consumer-WG warp-spec (MODE 3 gemm_ws2, TM=128: 1 cp.async producer WG + 2
+#   consumer WGs each wgmma over its 64-row band x SHARED B tile). H100 sm_90a, vast
+#   39651872 DESTROYED leak 0, nvcc 12.5.82. verdict F-FUSION-SM90-WGMMA-W7.txt.
+#   RESULT: BIT-EXACT (rel_rms 0, S=2048/4096, NST=2..5) but SLOWER = 32.0 (13.2x).
+#   W7 hypothesis FALSIFIED. ROOT CAUSE (on-pod occupancy calc): 128-thread cp.async
+#   producer WG @ TM=128 is REGISTER-bound to 1 blk/SM (90 regs * 384 = 34560/CTA;
+#   2 CTAs=69120 > 65536 regs/SM) -> 256 compute-thr/SM vs apipe 4*128=512. NOT smem
+#   bound (24KB << 233KB/SM). More consumer WGs cannot win w/ a full-WG cp.async producer.
+#
+# === NAMED RESIDUAL (W8, next-cycle) ===
+#   TMA-driven production: cp.async.bulk.tensor + 1 elected producer thread (freeing 127)
+#   so warp-spec keeps FULL occupancy — how cuBLAS reaches sm_90a peak. Bring-over the W6
+#   TMA kit self/native/wgmma/wgmma_tma_gemm.cu. Frontier kernel = W6 async-pipe (50.7, 8.39x).
+#   STOP = honest occupancy/production-engine wall, NOT impossibility. cuBLAS=roofline.
