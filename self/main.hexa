@@ -71,6 +71,7 @@ fn cmd_help() {
     println("  cc                                      Rebuild transpiler (hexa_cc)")
     println("  lsp                                     Start LSP server (stdin/stdout JSON-RPC)")
     println("  init <dir> [--name N]                   Scaffold <dir>/project.hexa")
+    println("  new gpu-kernel <name>                   Scaffold a @gpu_kernel skeleton (HEXA-CUDA D6)")
     println("  status                                  Toolchain status")
     println("  version                                 Print version")
     println("")
@@ -730,6 +731,118 @@ fn cmd_init(av_init: array) {
     println("next:")
     println("  hexa build " + dir + "/main.hexa -o " + dir + "/" + name)
     println("  " + dir + "/" + name)
+}
+
+// ─────────────────────────────────────────────────────────────────────
+//  cmd_new — `hexa new gpu-kernel <name>` (HEXA-CUDA D6)
+//
+//  One-command @gpu_kernel skeleton generator (cargo-new / go-tool style)
+//  to kill blank-page friction for the "I just want to write a CUDA
+//  kernel, in hexa" persona. Emits a minimal *compiling* vec-add kernel
+//  using ONLY real codegen intrinsics (verified against gpu/SPEC.md +
+//  the six stdlib/qforge/nvptx_*_kernel.hexa reference kernels +
+//  docs/hexa-cuda-cookbook.md §4.1) — no invented syntax.
+//
+//  Writes <name>.hexa in the current dir (refuses to clobber). The file
+//  carries the kernel body, a host-side launch shape, and the build hint
+//  comment (`hexa build <name>.hexa --target=nvptx64-nvidia-cuda-sm80`).
+//
+//  Inlined here in the same pure-builtin style as cmd_init (write_file /
+//  file_exists / println only — no interp dep, feedback_no_interp_use_
+//  compiled). Additive: reached ONLY from the `new` dispatch branch.
+//
+//  Templates available: `gpu-kernel` (vec-add). Future templates fold in
+//  here behind the same `kind` switch (saxpy / reduction / tiled-gemm
+//  mirror the cookbook recipes).
+// ─────────────────────────────────────────────────────────────────────
+fn _new_gpu_kernel_template(name: string) -> string {
+    // A minimal, compiling @gpu_kernel vec-add — the hello-world of the
+    // hand-authored GPU path. Every intrinsic used here is real (lowers
+    // to PTX per compiler/codegen/nvptx_target.hexa op-table):
+    //   gpu_block_id_x / gpu_block_dim_x / gpu_thread_id_x  → %ctaid/%ntid/%tid
+    //   to_i64(...)  — index math wants i64 (intrinsics return i32)
+    let p = []
+    p.push("// ")
+    p.push(name)
+    p.push(" — a hand-authored @gpu_kernel (scaffolded by `hexa new gpu-kernel`)\n")
+    p.push("//\n")
+    p.push("// This is the \"just write CUDA in hexa\" path: you own the thread\n")
+    p.push("// indexing, the shared memory, the barriers — like a CUDA __global__.\n")
+    p.push("// Contract: gpu/SPEC.md   Recipes: docs/hexa-cuda-cookbook.md\n")
+    p.push("//\n")
+    p.push("// Build (hexa-native NVPTX codegen, LLVM-free):\n")
+    p.push("//   hexa build ")
+    p.push(name)
+    p.push(".hexa --target=nvptx64-nvidia-cuda-sm80   // sm90 / sm120 too\n")
+    p.push("\n")
+    p.push("// A @gpu_kernel MUST return void — a PTX .entry returns no value;\n")
+    p.push("// results go to a caller-provided array the host reads back (gpu/SPEC.md §2).\n")
+    p.push("@gpu_kernel\n")
+    p.push("fn ")
+    p.push(name)
+    p.push("(a: [f64], b: [f64], out: [f64], n: i64) {\n")
+    p.push("    // flat global thread id, composed in hexa (not magic)\n")
+    p.push("    let gid = gpu_block_id_x() * gpu_block_dim_x() + gpu_thread_id_x()\n")
+    p.push("    // ragged-tail guard: the last block may overrun n\n")
+    p.push("    if to_i64(gid) < n {\n")
+    p.push("        let i = to_i64(gid)        // intrinsics return i32; index math wants i64\n")
+    p.push("        out[i] = a[i] + b[i]\n")
+    p.push("    }\n")
+    p.push("}\n")
+    p.push("\n")
+    p.push("// ── Host-side launch shape (run this from CPU hexa code) ──────────────\n")
+    p.push("// One thread per element; 256 threads/block; ceil-div blocks.\n")
+    p.push("//\n")
+    p.push("//   let block = 256\n")
+    p.push("//   let grid  = (n + block - 1) / block\n")
+    p.push("//   gpu_launch(")
+    p.push(name)
+    p.push(", grid, 1, 1, block, 1, 1, a, b, out, n)\n")
+    p.push("//\n")
+    p.push("// gpu_launch lowers to a thin cudart wrapper (gpu/SPEC.md §7). The\n")
+    p.push("// *compute* (this kernel body) is hexa-native PTX; only the launch\n")
+    p.push("// plumbing is a C binding.\n")
+    p.push("//\n")
+    p.push("// Next steps:\n")
+    p.push("//   - swap the body for your algorithm (keep the gid guard)\n")
+    p.push("//   - shared memory:  @shared let tile: [f64; 256]   (fixed extent)\n")
+    p.push("//   - barrier:        gpu_barrier()                  (publish @shared writes)\n")
+    p.push("//   - more recipes:   docs/hexa-cuda-cookbook.md (saxpy · reduction · tiled GEMM)\n")
+    return p.join("")
+}
+
+fn cmd_new(av_new: array) {
+    // av_new is the post-`new` argv slice (e.g. ["gpu-kernel", "vadd"]).
+    if len(av_new) < 1 {
+        println("error: `hexa new` requires a template kind")
+        println("usage: hexa new gpu-kernel <name>")
+        println("  gpu-kernel <name>   scaffold a minimal compiling @gpu_kernel (vec-add)")
+        exit(2)
+    }
+    let kind = av_new[0]
+    if kind != "gpu-kernel" {
+        println("error: unknown template kind: " + kind)
+        println("usage: hexa new gpu-kernel <name>")
+        exit(2)
+    }
+    if len(av_new) < 2 {
+        println("error: `hexa new gpu-kernel` requires <name>")
+        println("usage: hexa new gpu-kernel <name>")
+        exit(2)
+    }
+    let name = av_new[1]
+    let out_path = name + ".hexa"
+    if file_exists(out_path) {
+        println("error: refusing to clobber existing file — " + out_path)
+        exit(2)
+    }
+    write_file(out_path, _new_gpu_kernel_template(name))
+    println("scaffolded: " + out_path + " (kind=gpu-kernel, kernel=" + name + ")")
+    println("")
+    println("next:")
+    println("  hexa build " + out_path + " --target=nvptx64-nvidia-cuda-sm80")
+    println("  # (sm90 / sm120 for Hopper / Blackwell)")
+    println("  # recipes + intrinsic table: docs/hexa-cuda-cookbook.md")
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -6737,6 +6850,21 @@ if len(av) < 3 {
                 ai = ai + 1
             }
             cmd_init(init_args)
+        }
+    } else if sub == "new" {
+        // HEXA-CUDA D6 — `hexa new gpu-kernel <name>` scaffolder (cmd_new
+        // above). Pure-builtin inline (same rationale as `init`): emits a
+        // minimal compiling @gpu_kernel using only real codegen intrinsics.
+        if len(av) >= 4 && (av[3] == "--help" || av[3] == "-h") {
+            cmd_verb_help("new")
+        } else {
+            let mut new_args: [string] = []
+            let mut ni = 3
+            while ni < len(av) {
+                new_args.push(av[ni])
+                ni = ni + 1
+            }
+            cmd_new(new_args)
         }
     } else if sub == "url" {
         if len(av) >= 4 && (av[3] == "--help" || av[3] == "-h") {

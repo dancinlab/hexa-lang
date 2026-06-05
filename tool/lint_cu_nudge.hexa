@@ -1,0 +1,117 @@
+// tool/lint_cu_nudge.hexa — HEXA-CUDA D8 nudge-lint (report-only, never blocks).
+//
+// Soft-steer off FFI-ing / building a hand-written CUDA `.cu`: when a hexa
+// project carries a hand-written `.cu` kernel (or a build script that shells out
+// to `nvcc`), emit ONE friendly line — "this kernel can be authored as a
+// @gpu_kernel — see docs/hexa-cuda-cookbook.md" — so the dev sees the native
+// hexa GPU path exists. It is a NUDGE, not a gate.
+//
+// Design (matches tool/lint_raw_write.hexa):
+//   - report-only: ALWAYS exits 0. It never fails a build, never blocks a commit.
+//   - OPT-IN: nothing runs this automatically. You invoke it, or wire it into a
+//     pre-commit / CI step yourself (see "Integration point" below). The default
+//     posture is OFF.
+//   - the walk is a single `grep` pipeline so the interpreter never loads the
+//     tree into VM memory (feedback_interp_push_quadratic).
+//
+// Usage:
+//   hexa run tool/lint_cu_nudge.hexa [<dir>]     # default dir = "."
+//   hexa run tool/lint_cu_nudge.hexa --selftest
+//
+// Integration point (how to wire it, when you want the nudge):
+//   - pre-commit hook: append to `.githooks/pre-commit` a line that runs this
+//     tool on the staged tree and prints its advisory (the tool's exit 0 keeps
+//     the commit flowing).
+//   - build wrapper: a project that drives `nvcc` from a Makefile / shell can
+//     call this first to surface the nudge before the .cu build.
+//   - compiler hook (future): if a real in-compiler `.cu` FFI-link path is added
+//     to `hexa build` (it does not exist today — the only in-tree nvcc use is the
+//     `hexa gpu fire` REMOTE dispatcher, not a user FFI-link), the advisory below
+//     is the message to emit from that link path, behind an env flag
+//     (HEXA_CU_NUDGE=1, default off / info-level), so it stays non-blocking.
+//
+// Honest scope: this is a STANDALONE nudge-lint + a documented integration point.
+// It is NOT wired into `hexa build` — there is no user-facing .cu FFI/link path in
+// the compiler today to hook into. When that path lands, the advisory string here
+// is the canonical message.
+
+fn advisory() -> string {
+    return "this kernel can be authored as a @gpu_kernel in .hexa (typed · 8-stage-linted · single binary, no .cu/nvcc/FFI) — see docs/hexa-cuda-cookbook.md (port an existing .cu: docs/hexa-cuda-porting-guide.md · scaffold one: `hexa new gpu-kernel <name>`)"
+}
+
+// Scan <dir> for hand-written `.cu` source files. We exclude build/ and .git/.
+fn scan_cu_files(dir: string) -> string {
+    let cmd = "find '" + dir + "' -type f -name '*.cu' -not -path '*/build/*' -not -path '*/.git/*' 2>/dev/null"
+    try { return exec(cmd) } catch e { return "" }
+}
+
+// Scan <dir> for build scripts / Makefiles that shell out to `nvcc`. Restrict to
+// likely build-driver files so we do not flag docs/comments mentioning nvcc.
+fn scan_nvcc_invocations(dir: string) -> string {
+    let cmd = "grep -rnE '(^|[^A-Za-z0-9_])nvcc([^A-Za-z0-9_]|$)' --include='Makefile' --include='*.mk' --include='*.sh' --include='*.bash' --exclude-dir=build --exclude-dir=.git '" + dir + "' 2>/dev/null"
+    try { return exec(cmd) } catch e { return "" }
+}
+
+fn _count_nonempty(out: string) -> int {
+    if out.trim() == "" { return 0 }
+    let lines = out.split("\n")
+    let mut count = 0
+    let mut i = 0
+    while i < len(lines) {
+        if lines[i].trim() != "" { count = count + 1 }
+        i = i + 1
+    }
+    return count
+}
+
+fn _selftest_cu_nudge() -> int {
+    println("[lint_cu_nudge selftest]")
+    // 1) advisory is a non-empty steering string
+    if len(advisory()) == 0 { eprintln("FAIL: empty advisory"); return 1 }
+    // 2) scanners return strings (may be empty); _count_nonempty handles empty
+    if _count_nonempty("") != 0 { eprintln("FAIL: empty count != 0"); return 1 }
+    if _count_nonempty("a.cu\nb.cu") != 2 { eprintln("FAIL: count mismatch"); return 1 }
+    // 3) a clean trim identity (mirrors lint_raw_write selftest)
+    if "".trim() != "" { eprintln("FAIL: trim identity"); return 1 }
+    println("[lint_cu_nudge selftest] OK")
+    return 0
+}
+
+fn main() {
+    let av = argv()
+    let mut dir = "."
+    let mut i = 2
+    while i < len(av) {
+        if av[i] == "--selftest" || av[i] == "selftest" {
+            exit(_selftest_cu_nudge())
+        }
+        // first non-flag arg = directory
+        if !av[i].starts_with("--") { dir = av[i] }
+        i = i + 1
+    }
+
+    let cu = scan_cu_files(dir)
+    let nvcc = scan_nvcc_invocations(dir)
+    let n_cu = _count_nonempty(cu)
+    let n_nvcc = _count_nonempty(nvcc)
+
+    if n_cu == 0 && n_nvcc == 0 {
+        println("lint_cu_nudge: CLEAN — no hand-written .cu or nvcc build step under " + dir)
+        return   // exit 0
+    }
+
+    // The nudge — friendly, one headline line, then the evidence. Never blocks.
+    println("note (hexa-cuda nudge): " + advisory())
+    println("")
+    if n_cu > 0 {
+        println("  " + to_string(n_cu) + " hand-written .cu file(s):")
+        println(cu.trim())
+    }
+    if n_nvcc > 0 {
+        println("  " + to_string(n_nvcc) + " nvcc invocation(s) in build scripts:")
+        println(nvcc.trim())
+    }
+    println("")
+    println("  (report-only — this nudge never blocks your build or commit)")
+    // exit 0 — report-only by contract
+}

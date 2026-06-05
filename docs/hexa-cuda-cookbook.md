@@ -18,6 +18,13 @@ recipes):
   op-table there is the ground truth for *which* intrinsics actually lower.
 - `stdlib/qforge/nvptx_*_kernel.hexa` — six real hand-authored reference kernels.
 
+**Porting an existing CUDA `.cu` / Python kernel?** See the companion
+[`docs/hexa-cuda-porting-guide.md`](hexa-cuda-porting-guide.md) — line-by-line
+`.cu → .hexa` translations + the full CUDA→hexa intrinsic mapping table.
+
+**Starting from scratch?** `hexa new gpu-kernel <name>` scaffolds a minimal
+compiling `@gpu_kernel` vec-add to edit (HEXA-CUDA D6).
+
 ---
 
 ## 1. When to use this path (vs auto-fusion flame/forge)
