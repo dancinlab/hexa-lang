@@ -1,0 +1,42 @@
+# C1-GROUND-TRUTH — HEXA-C-ZERO C1 ground-truth verbatim capture
+# captured: 2026-05-30T12:12:23Z
+# fresh /tmp clone of origin/main (HEAD 5561241c8)
+
+=== HEAD ===
+5561241c8d525ef4b33c49092a3ecc0559e32f8c
+
+=== git cat-file -e HEAD:self/native/hexa_cc_seed.c  (cold-seed presence) ===
+fatal: path 'self/native/hexa_cc_seed.c' does not exist in 'HEAD'
+(exit nonzero = seed ABSENT)
+
+=== git cat-file -e HEAD:self/native/hexa_cc.c  (warm transpiler .c presence) ===
+fatal: path 'self/native/hexa_cc.c' does not exist in 'HEAD'
+(exit nonzero = ABSENT — gitignored build artifact)
+
+=== git ls-files self/native/ | grep .c  (any committed transpiler .c) ===
+self/native/native_gate.c
+(native_gate.c = non-transpiler; m7-probe .c handled by C2)
+
+=== bootstrap.yml trigger (DISABLED — workflow_dispatch only) ===
+1:# bootstrap.yml — DISABLED (cold-seed removed by user decision 2026-05-30).
+3:# WHY DISABLED
+27:name: bootstrap
+32:on:
+33:  workflow_dispatch:
+40:    name: bootstrap (DISABLED — cold-seed removed by user decision)
+44:      - name: Explain
+47:          echo "bootstrap is DISABLED (cold-seed removed by user decision 2026-05-30)."
+
+=== codegen-bootstrap-sync.yml trigger (RETIRED — workflow_dispatch only) ===
+1:# codegen-bootstrap-sync.yml — RETIRED (HEXA-CC-ZERO P6).
+24:name: codegen-bootstrap-sync
+29:on:
+30:  workflow_dispatch:
+37:    name: codegen-bootstrap-sync (RETIRED — hexa_cc.c removed in #2065)
+41:      - name: Explain retirement
+44:          echo "codegen-bootstrap-sync is RETIRED (HEXA-CC-ZERO P6)."
+
+=== CONCLUSION ===
+Committed transpiler .c = 0 (cold-seed hexa_cc_seed.c absent · warm hexa_cc.c gitignored).
+Both bootstrap workflows are workflow_dispatch-only no-ops (no push/PR auto-runs).
+C1 git-rm half = DONE on origin/main.
