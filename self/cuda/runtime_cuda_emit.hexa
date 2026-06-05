@@ -2250,7 +2250,12 @@ fn emit_runtime_cuda_c() -> str {
             "        for (int64_t t = 0; t < T; t++)\n" +
             "            for (int64_t c = 0; c < D; c++) { double d = Xr[t * D + c] - mu; vs += d * d; }\n" +
             "        double var = vs / m;\n" +
-            "        double inv = 1.0 / sqrt(var + eps);\n" +
+            "        /* P1B-c1 (byte-eq re-baseline): use the SAME NR-40 software sqrt as the\n" +
+            "         * eager device-resident groupnorm (_hx_k_groupnorm via _hx_gn_sqrt_dev),\n" +
+            "         * NOT the CUDA intrinsic sqrt. The intrinsic differs ~1 ULP from the\n" +
+            "         * hand-rolled NR-40 sqrt that is byte-identical to the host reference, and\n" +
+            "         * that 1 ULP was the megakernel-vs-own-eager divergence (F-FUSION-P1B-REBASELINE). */\n" +
+            "        double inv = 1.0 / _hx_gn_sqrt_dev(var + eps);\n" +
             "        MEAN[0] = mu; INV[0] = inv;\n" +
             "    }\n" +
             "    g.sync();\n" +
@@ -2306,7 +2311,11 @@ fn emit_runtime_cuda_c() -> str {
             "        int64_t base=t*E; double mx=b.LOGR[base];\n" +
             "        for(int64_t e=1;e<E;e++){ double vv=b.LOGR[base+e]; if(vv>mx)mx=vv; }\n" +
             "        double s=0.0;\n" +
-            "        for(int64_t e=0;e<E;e++){ double ev=exp(b.LOGR[base+e]-mx); b.PROBS[base+e]=ev; s+=ev; }\n" +
+            "        /* P1B-c1 (byte-eq re-baseline): scaled-Taylor _hx_moe_exp_dev — the SAME\n" +
+            "         * hand-rolled exp moe_lib uses (eager device moe-router via _hx_moe_exp_dev),\n" +
+            "         * NOT CUDA exp. CUDA exp differs ~1 ULP from the Taylor exp byte-identical to\n" +
+            "         * the host nn_moe_router_fwd reference — the 2nd megakernel-vs-own-eager term. */\n" +
+            "        for(int64_t e=0;e<E;e++){ double ev=_hx_moe_exp_dev(b.LOGR[base+e]-mx); b.PROBS[base+e]=ev; s+=ev; }\n" +
             "        for(int64_t e=0;e<E;e++) b.PROBS[base+e]/=s;\n" +
             "        for(int64_t c=0;c<D;c++){ double acc=0.0;\n" +
             "          for(int64_t e=0;e<E;e++) acc+=b.PROBS[base+e]*b.EXOUT[e*n+t*D+c];\n" +
@@ -2348,7 +2357,11 @@ fn emit_runtime_cuda_c() -> str {
             "        int64_t base=t*E; double mx=b.LOGR[base];\n" +
             "        for(int64_t e=1;e<E;e++){ double vv=b.LOGR[base+e]; if(vv>mx)mx=vv; }\n" +
             "        double s=0.0;\n" +
-            "        for(int64_t e=0;e<E;e++){ double ev=exp(b.LOGR[base+e]-mx); b.PROBS[base+e]=ev; s+=ev; }\n" +
+            "        /* P1B-c1 (byte-eq re-baseline): scaled-Taylor _hx_moe_exp_dev — the SAME\n" +
+            "         * hand-rolled exp moe_lib uses (eager device moe-router via _hx_moe_exp_dev),\n" +
+            "         * NOT CUDA exp. CUDA exp differs ~1 ULP from the Taylor exp byte-identical to\n" +
+            "         * the host nn_moe_router_fwd reference — the 2nd megakernel-vs-own-eager term. */\n" +
+            "        for(int64_t e=0;e<E;e++){ double ev=_hx_moe_exp_dev(b.LOGR[base+e]-mx); b.PROBS[base+e]=ev; s+=ev; }\n" +
             "        for(int64_t e=0;e<E;e++) b.PROBS[base+e]/=s;\n" +
             "        for(int64_t c=0;c<D;c++){ double acc=0.0;\n" +
             "          for(int64_t e=0;e<E;e++) acc+=b.PROBS[base+e]*b.EXOUT[e*n+t*D+c];\n" +
