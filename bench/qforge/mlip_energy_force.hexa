@@ -1,0 +1,421 @@
+// ═══════════════════════════════════════════════════════════════════════════
+//  QFORGE-PERF — MLIP foundation pre-screen: TRAINED energy + force (g5 bench)
+//
+//  Lifts the "MLIP foundation-model pre-screen" probe ⚪ grounded → TRAINED by
+//  REUSING hexa's EXISTING ML stack (d19) — stdlib/autograd reverse-mode AD over
+//  Tensor:  ag_var / ag_const / ag_add / ag_sub / ag_mul / ag_matmul / ag_exp /
+//           ag_pow / ag_backward / ag_grad / ag_value / ag_zero_grad / ag_tape_reset
+//  NO autograd is built from scratch (d19); this file only USES the stack and
+//  hand-rolls a plain Adam update via ag_grad (no engine file touched — d3).
+//  Same MLP+Adam train pattern as bench/qforge/delta_ml_correction.hexa (#2816),
+//  including the bias-into-weights augmentation that dodges the autograd
+//  broadcast bug.
+//
+//  ── WHAT MAKES AN MLIP AN MLIP ───────────────────────────────────────────
+//  The energy E(structure) is a learned SCALAR.  The FORCE is
+//      F = −∇_structure E
+//  computed by AUTODIFF *through the SAME energy network* (not a separately-
+//  trained head).  We train ONLY on energies; the force comes out of the same
+//  ag_backward pass via ag_grad on the INPUT tensor.  That force-from-autodiff
+//  parity vs the analytic −dE_true/dr is the real "MLIP works" result.
+//
+//  ── PROBLEM (toy structure → scalar energy) ──────────────────────────────
+//  A 1-D toy "structure" is D=2 interatomic distances r=(r0,r1).  The TRUE
+//  potential is a sum of Morse-like terms with KNOWN energy AND KNOWN analytic
+//  force:
+//      E_true(r) = Σ_k D_k [1 − e^{−a_k (r_k − re_k)}]²            (Morse pair)
+//                  + c · e^{−(r0−r1)²}                              (coupling)
+//  Analytic force on coordinate k:  F_k = −∂E_true/∂r_k, with
+//      ∂/∂r_k  D_k[1−e^{−a_k(r_k−re_k)}]² = 2 D_k a_k e^{−a_k(r_k−re_k)}·
+//                                            [1−e^{−a_k(r_k−re_k)}]
+//      ∂/∂r0 c·e^{−(r0−r1)²} = c·e^{−(r0−r1)²}·(−2(r0−r1))   (and +2(r0−r1) for r1)
+//  This is nonlinear with a coordinate-coupling term → a real test of the net.
+//
+//  ── MODEL ────────────────────────────────────────────────────────────────
+//  Energy MLP:  D-input → H-hidden (tanh) → 1-output scalar energy.
+//  tanh is built from autograd primitives (exp) so the WHOLE net is traced:
+//      tanh(z) = (e^{2z} − 1)/(e^{2z} + 1),  the "/" via ag_pow(den,−1).
+//  Biases folded into weights via a ones-column augmentation (no broadcast add
+//  inside the graph — same trick as #2816).
+//
+//  ── TRAIN ────────────────────────────────────────────────────────────────
+//  Full-batch MSE on ENERGY only; hand-rolled Adam via ag_grad for the params.
+//
+//  ── FORCE via autodiff (the MLIP-defining step) ──────────────────────────
+//  After training, run a forward+backward with the INPUT structure as an
+//  ag_var (requires_grad).  ag_grad(input) = ∂(Σ_b E_b)/∂r = the per-sample
+//  ∂E_b/∂r_b (the cross terms ∂E_b/∂r_{b'≠b} are exactly 0 — each row's energy
+//  depends only on its own row through the dense net), so reading row b of the
+//  input grad gives ∇_r E for sample b.  The MLIP force is F = −that.
+//
+//  ── g5 VERIFY (printed VERBATIM) ─────────────────────────────────────────
+//  (a) training-loss curve (decreasing)
+//  (b) trained held-out ENERGY MAE + rel-ε
+//  (c) THE KEY CHECK — autodiff FORCE F=−∇_r E parity on held-out points:
+//        • vs ANALYTIC −dE_true/dr     (max + mean rel-ε)
+//        • vs FINITE-DIFF of the net's OWN energy (max rel-ε) — proves the
+//          autodiff force == the net's true gradient, independent of training.
+//  d6: actual numbers printed; if force parity is loose, say so honestly.
+//
+//  Run:  HEXA_LANG=. hexa run bench/qforge/mlip_energy_force.hexa
+// ═══════════════════════════════════════════════════════════════════════════
+
+use "stdlib/tensor/mod"
+use "stdlib/tensor/shape"
+use "stdlib/tensor/ops"
+use "stdlib/autograd"
+
+fn abs_f(x: float) -> float { if x < 0.0 { return 0.0 - x } else { return x } }
+
+// ── true Morse-sum potential parameters (D=2 coordinates) ─────────────────
+//   term k:  D_k [1 − e^{−a_k (r_k − re_k)}]²
+let Dk0 = 1.0;  let ak0 = 1.2;  let re0 = 0.0
+let Dk1 = 0.8;  let ak1 = 1.5;  let re1 = 0.3
+let Ccpl = 0.5    // coupling strength c · e^{−(r0−r1)²}
+
+fn true_energy(r0: float, r1: float) -> float {
+    let e0 = 1.0 - exp(0.0 - ak0 * (r0 - re0))
+    let e1 = 1.0 - exp(0.0 - ak1 * (r1 - re1))
+    let cpl = Ccpl * exp(0.0 - (r0 - r1) * (r0 - r1))
+    return Dk0 * e0 * e0 + Dk1 * e1 * e1 + cpl
+}
+
+// analytic force F = −∂E/∂r  (returns [F0, F1])
+fn true_force(r0: float, r1: float) -> array {
+    let ex0 = exp(0.0 - ak0 * (r0 - re0))
+    let ex1 = exp(0.0 - ak1 * (r1 - re1))
+    // ∂/∂r_k D_k[1−e^{−a(r−re)}]² = 2 D_k a_k e^{−a(r−re)} [1 − e^{−a(r−re)}]
+    let dE0_pair = 2.0 * Dk0 * ak0 * ex0 * (1.0 - ex0)
+    let dE1_pair = 2.0 * Dk1 * ak1 * ex1 * (1.0 - ex1)
+    let g = Ccpl * exp(0.0 - (r0 - r1) * (r0 - r1))
+    let dE0_cpl = g * (0.0 - 2.0 * (r0 - r1))     // ∂/∂r0
+    let dE1_cpl = g * (2.0 * (r0 - r1))           // ∂/∂r1
+    let dE0 = dE0_pair + dE0_cpl
+    let dE1 = dE1_pair + dE1_cpl
+    return [0.0 - dE0, 0.0 - dE1]                 // F = −∇E
+}
+
+// ── deterministic LCG → reproducible dataset + weight init ────────────────
+let mut _seed = 20260606
+fn rng() -> float {
+    _seed = (_seed * 1103515245 + 12345) % 2147483648
+    return to_float(_seed) / 2147483648.0   // ∈ [0,1)
+}
+fn runi(lo: float, hi: float) -> float { return lo + (hi - lo) * rng() }
+
+fn _const_fill(shape, v: float) -> array {
+    let n = tensor_size(shape)
+    let mut out = []
+    let mut i = 0
+    while i < n { out.push(v); i = i + 1 }
+    return out
+}
+
+// ── tanh as a traced autograd subgraph: (e^{2z}-1)/(e^{2z}+1) ─────────────
+fn ag_tanh(z) {
+    let two = ag_const(tensor_from_array(z["tensor"].shape, _const_fill(z["tensor"].shape, 2.0)))
+    let one = ag_const(tensor_from_array(z["tensor"].shape, _const_fill(z["tensor"].shape, 1.0)))
+    let e2z = ag_exp(ag_mul(two, z))             // e^{2z}
+    let num = ag_sub(e2z, one)                   // e^{2z} - 1
+    let den = ag_add(e2z, one)                   // e^{2z} + 1
+    let inv = ag_pow(den, 0.0 - 1.0)             // 1/den  (fully traced)
+    return ag_mul(num, inv)
+}
+
+// selector [H, H+1] with S[i,i]=1 (i<H), last column all 0.
+fn _selector_HxHp1(H: int) -> Tensor {
+    let mut d = []
+    let mut i = 0
+    while i < H {
+        let mut j = 0
+        while j < H + 1 {
+            if j == i { d.push(1.0) } else { d.push(0.0) }
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return tensor_from_array([H, H + 1], d)
+}
+
+// ── Energy-MLP forward (all ag_*, bias-augmented; xaug is the augmented
+//    INPUT [B, D+1] with a trailing ones column; W1 [D+1,H]; W2 [H+1,1]) ──
+//    Returns the scalar-per-row energy [B,1].
+fn energy_forward(xaug, haug_ones, W1, W2, B: int, H: int) {
+    let z1 = ag_matmul(xaug, W1)      // [B,H]
+    let h  = ag_tanh(z1)              // [B,H]
+    let S = ag_const(_selector_HxHp1(H))            // [H,H+1]
+    let hsel = ag_matmul(h, S)                       // [B,H+1], last col=0
+    let z2 = ag_matmul(ag_add(hsel, haug_ones), W2)  // + ones-col, then @W2
+    return z2                                        // [B,1] energies
+}
+
+// MSE loss over [B,1] pred vs [B,1] target → scalar ag handle (mean).
+fn mse_loss(pred, target, B: int) {
+    let diff = ag_sub(pred, target)
+    let sq   = ag_mul(diff, diff)
+    let onesT = ag_const(tensor_from_array([1, B], _const_fill([1, B], 1.0 / to_float(B))))
+    return ag_matmul(onesT, sq)                  // [1,1] = mean MSE
+}
+
+// SUM of energies over the batch → scalar ag handle.  Used for the FORCE pass:
+// d(Σ_b E_b)/d r = per-row ∂E_b/∂r_b (cross terms are 0), so ag_grad(input)
+// row b is exactly ∇_r E for sample b.
+fn sum_energy(pred, B: int) {
+    let onesT = ag_const(tensor_from_array([1, B], _const_fill([1, B], 1.0)))
+    return ag_matmul(onesT, pred)                // [1,1] = Σ_b E_b
+}
+
+// pack augmented input [B, D+1] (cols r0, r1, 1).
+fn pack_aug(c0, c1, n: int) -> array {
+    let mut out = []; let mut j = 0
+    while j < n { out.push(c0[j]); out.push(c1[j]); out.push(1.0); j = j + 1 }
+    return out
+}
+// ones-in-last-column const [B,H+1].
+fn ones_lastcol(n: int, Hp1: int) -> array {
+    let mut out = []; let mut r = 0
+    while r < n {
+        let mut c = 0
+        while c < Hp1 {
+            if c == Hp1 - 1 { out.push(1.0) } else { out.push(0.0) }
+            c = c + 1
+        }
+        r = r + 1
+    }
+    return out
+}
+
+fn main() {
+    println("=== QFORGE-PERF MLIP pre-screen: TRAINED energy + force (F=-grad E autodiff · stdlib/autograd · g5) ===")
+    println("model: 2-input(distances) -> 8-hidden(tanh) -> 1-output(scalar ENERGY)  ·  bias-augmented")
+    println("loss: MSE on ENERGY only  ·  optim: Adam (ag_grad)  ·  FORCE = -grad_r E via ag_grad on the INPUT")
+    println("true E(r) = Morse(r0) + Morse(r1) + 0.5*exp(-(r0-r1)^2)   [nonlinear + coordinate coupling]")
+    println("")
+
+    let D = 2
+    let H = 8
+    let Btr = 80      // train samples
+    let Bte = 40      // held-out samples
+
+    // ── build disjoint train + held-out structures (distances in a window) ──
+    let lo = 0.0 - 1.0; let hi = 1.5
+    let mut xtr0 = []; let mut xtr1 = []; let mut etr = []
+    let mut i = 0
+    while i < Btr {
+        let a = runi(lo, hi); let b = runi(lo, hi)
+        xtr0.push(a); xtr1.push(b); etr.push(true_energy(a, b)); i = i + 1
+    }
+    let mut xte0 = []; let mut xte1 = []; let mut ete = []
+    i = 0
+    while i < Bte {
+        let a = runi(lo, hi); let b = runi(lo, hi)
+        xte0.push(a); xte1.push(b); ete.push(true_energy(a, b)); i = i + 1
+    }
+
+    let Xtr = pack_aug(xtr0, xtr1, Btr)   // [Btr, D+1]
+    let Xte = pack_aug(xte0, xte1, Bte)   // [Bte, D+1]
+    let onesTr = ones_lastcol(Btr, H + 1)
+    let onesTe = ones_lastcol(Bte, H + 1)
+
+    // ── weight init (small uniform, deterministic) ──
+    // W1=[D+1,H] (incl bias row), W2=[H+1,1] (incl bias row).
+    let mut w1 = []; i = 0
+    while i < (D + 1) * H { w1.push(runi(0.0 - 0.5, 0.5)); i = i + 1 }
+    let mut w2 = []; i = 0
+    while i < (H + 1) * 1 { w2.push(runi(0.0 - 0.5, 0.5)); i = i + 1 }
+
+    // ── hand-rolled Adam moment buffers (pure stdlib/autograd reuse: forward+
+    //    backward via ag_*; only the param UPDATE rule is hand-rolled). ──
+    let mut mW1 = _const_fill([D + 1, H], 0.0); let mut vW1 = _const_fill([D + 1, H], 0.0)
+    let mut mW2 = _const_fill([H + 1, 1], 0.0); let mut vW2 = _const_fill([H + 1, 1], 0.0)
+    let beta1 = 0.9; let beta2 = 0.999; let eps = 0.00000001
+    let lr = 0.02
+    let epochs = 12000
+
+    println("--- TRAINING LOSS CURVE (full-batch ENERGY MSE, Adam lr=" + to_string(lr) + " via ag_grad) ---")
+
+    let mut ep = 0
+    while ep <= epochs {
+        let t = ep + 1
+        ag_tape_reset()
+        let W1 = ag_var(tensor_from_array([D + 1, H], w1))
+        let W2 = ag_var(tensor_from_array([H + 1, 1], w2))
+        let xb = ag_const(tensor_from_array([Btr, D + 1], Xtr))
+        let hones = ag_const(tensor_from_array([Btr, H + 1], onesTr))
+        let eb = ag_const(tensor_from_array([Btr, 1], etr))
+
+        let pred = energy_forward(xb, hones, W1, W2, Btr, H)
+        let loss = mse_loss(pred, eb, Btr)
+        ag_backward(loss)
+        let lossv = ag_value(loss).data[0]
+
+        let show = (ep == 0) || (ep == 10) || (ep == 50) || (ep == 200) || (ep == 500)
+                   || (ep == 1000) || (ep == 2000) || (ep == 3500) || (ep == 5000)
+                   || (ep == 8000) || (ep == 12000)
+        if show {
+            println("  epoch " + to_string(ep) + "\tMSE = " + to_string(lossv))
+        }
+
+        // ── Adam update via ag_grad ──
+        let gW1 = ag_grad(W1); let gW2 = ag_grad(W2)
+        let bc1 = 1.0 - pow(beta1, to_float(t))
+        let bc2 = 1.0 - pow(beta2, to_float(t))
+        let mut k = 0
+        while k < (D + 1) * H {
+            let gg = gW1.data[k]
+            mW1[k] = beta1 * mW1[k] + (1.0 - beta1) * gg
+            vW1[k] = beta2 * vW1[k] + (1.0 - beta2) * gg * gg
+            w1[k] = w1[k] - lr * (mW1[k] / bc1) / (sqrt(vW1[k] / bc2) + eps)
+            k = k + 1
+        }
+        k = 0
+        while k < H + 1 {
+            let gg = gW2.data[k]
+            mW2[k] = beta1 * mW2[k] + (1.0 - beta1) * gg
+            vW2[k] = beta2 * vW2[k] + (1.0 - beta2) * gg * gg
+            w2[k] = w2[k] - lr * (mW2[k] / bc1) / (sqrt(vW2[k] / bc2) + eps)
+            k = k + 1
+        }
+        ep = ep + 1
+    }
+    println("")
+
+    // ════════════════════════════════════════════════════════════════════
+    //  (b) HELD-OUT ENERGY accuracy
+    // ════════════════════════════════════════════════════════════════════
+    ag_tape_reset()
+    let W1e = ag_var(tensor_from_array([D + 1, H], w1))
+    let W2e = ag_var(tensor_from_array([H + 1, 1], w2))
+    let xbe = ag_const(tensor_from_array([Bte, D + 1], Xte))
+    let honesE = ag_const(tensor_from_array([Bte, H + 1], onesTe))
+    let predE = energy_forward(xbe, honesE, W1e, W2e, Bte, H)
+    let pv = ag_value(predE).data
+
+    let mut e_abs = 0.0; let mut sum_abs_e = 0.0
+    i = 0
+    while i < Bte {
+        e_abs = e_abs + abs_f(pv[i] - ete[i])
+        sum_abs_e = sum_abs_e + abs_f(ete[i])
+        i = i + 1
+    }
+    let e_mae = e_abs / to_float(Bte)
+    let e_rel = e_abs / sum_abs_e
+    println("--- (b) HELD-OUT ENERGY (" + to_string(Bte) + " disjoint structures) ---")
+    println("  ENERGY MAE = " + to_string(e_mae) + "   rel-eps = " + to_string(e_rel))
+    println("")
+
+    // ════════════════════════════════════════════════════════════════════
+    //  (c) THE MLIP KEY CHECK — FORCE F = -grad_r E via autodiff on the INPUT
+    //      Make the held-out structure an ag_var, forward Σ_b E_b, backward,
+    //      read ag_grad(input) → row b = ∂E_b/∂r_b.  F = -that.
+    // ════════════════════════════════════════════════════════════════════
+    ag_tape_reset()
+    let W1f = ag_const(tensor_from_array([D + 1, H], w1))   // frozen weights
+    let W2f = ag_const(tensor_from_array([H + 1, 1], w2))
+    let xin = ag_var(tensor_from_array([Bte, D + 1], Xte))  // INPUT requires_grad
+    let honesF = ag_const(tensor_from_array([Bte, H + 1], onesTe))
+    let predF = energy_forward(xin, honesF, W1f, W2f, Bte, H)
+    let etot = sum_energy(predF, Bte)        // Σ_b E_b
+    ag_backward(etot)
+    let gin = ag_grad(xin).data              // [Bte, D+1], cols: dE/dr0, dE/dr1, dE/d(bias=1)
+
+    // autodiff force F_k = -∂E/∂r_k  vs analytic true force.
+    // rel-ε per coordinate = |F_ad − F_true| / (|F_true| + eta) ; report max+mean,
+    // and a magnitude-normalised global rel-ε = Σ|ΔF| / Σ|F_true|.
+    let eta = 0.0001
+    let mut max_rel = 0.0; let mut sum_rel = 0.0; let mut cnt = 0
+    let mut sum_dF = 0.0; let mut sum_absF = 0.0
+    let mut worst_b = 0; let mut worst_k = 0
+    i = 0
+    while i < Bte {
+        let tf = true_force(xte0[i], xte1[i])      // [F0, F1] analytic
+        let fad0 = 0.0 - gin[i * (D + 1) + 0]      // -dE/dr0 from autodiff
+        let fad1 = 0.0 - gin[i * (D + 1) + 1]      // -dE/dr1 from autodiff
+        // coord 0
+        let d0 = abs_f(fad0 - tf[0]); let r0e = d0 / (abs_f(tf[0]) + eta)
+        if r0e > max_rel { max_rel = r0e; worst_b = i; worst_k = 0 }
+        sum_rel = sum_rel + r0e; cnt = cnt + 1
+        sum_dF = sum_dF + d0; sum_absF = sum_absF + abs_f(tf[0])
+        // coord 1
+        let d1 = abs_f(fad1 - tf[1]); let r1e = d1 / (abs_f(tf[1]) + eta)
+        if r1e > max_rel { max_rel = r1e; worst_b = i; worst_k = 1 }
+        sum_rel = sum_rel + r1e; cnt = cnt + 1
+        sum_dF = sum_dF + d1; sum_absF = sum_absF + abs_f(tf[1])
+        i = i + 1
+    }
+    let mean_rel = sum_rel / to_float(cnt)
+    let global_rel = sum_dF / sum_absF
+
+    // ── finite-difference of the NET's OWN energy → independent gradient check.
+    //    For a few held-out points, perturb r_k by ±δ, recompute net energy
+    //    (forward only), compare central-difference dEnet/dr_k to ag_grad. This
+    //    proves the autodiff gradient == the net's true gradient irrespective of
+    //    how well the net matches E_true.
+    let delta = 0.001
+    let mut max_fd_rel = 0.0
+    let nfd = 8           // first 8 held-out points
+    let mut p = 0
+    while p < nfd {
+        let mut kk = 0
+        while kk < D {
+            // build single-point augmented inputs for r and r±δ
+            let r0 = xte0[p]; let r1 = xte1[p]
+            let mut r0p = r0; let mut r1p = r1; let mut r0m = r0; let mut r1m = r1
+            if kk == 0 { r0p = r0 + delta; r0m = r0 - delta }
+            if kk == 1 { r1p = r1 + delta; r1m = r1 - delta }
+            // forward net energy at + and − (B=1 forward, frozen weights)
+            ag_tape_reset()
+            let W1n = ag_const(tensor_from_array([D + 1, H], w1))
+            let W2n = ag_const(tensor_from_array([H + 1, 1], w2))
+            let onep = ones_lastcol(1, H + 1)
+            let xp = ag_const(tensor_from_array([1, D + 1], [r0p, r1p, 1.0]))
+            let hp = ag_const(tensor_from_array([1, H + 1], onep))
+            let ep_pred = energy_forward(xp, hp, W1n, W2n, 1, H)
+            let enp = ag_value(ep_pred).data[0]
+            ag_tape_reset()
+            let W1n2 = ag_const(tensor_from_array([D + 1, H], w1))
+            let W2n2 = ag_const(tensor_from_array([H + 1, 1], w2))
+            let xm = ag_const(tensor_from_array([1, D + 1], [r0m, r1m, 1.0]))
+            let hm = ag_const(tensor_from_array([1, H + 1], onep))
+            let em_pred = energy_forward(xm, hm, W1n2, W2n2, 1, H)
+            let enm = ag_value(em_pred).data[0]
+            let fd_grad = (enp - enm) / (2.0 * delta)          // dEnet/dr_k (central diff)
+            let ad_grad = gin[p * (D + 1) + kk]                // dEnet/dr_k (autodiff)
+            let fd_rel = abs_f(fd_grad - ad_grad) / (abs_f(fd_grad) + eta)
+            if fd_rel > max_fd_rel { max_fd_rel = fd_rel }
+            kk = kk + 1
+        }
+        p = p + 1
+    }
+
+    println("--- (c) FORCE  F = -grad_r E  via autodiff on the INPUT (the MLIP-defining check) ---")
+    println("  autodiff-force vs ANALYTIC -dE_true/dr  (over " + to_string(Bte) + " structs x " + to_string(D) + " coords):")
+    println("    max  rel-eps = " + to_string(max_rel) + "   (worst @ struct " + to_string(worst_b) + ", coord " + to_string(worst_k) + ")")
+    println("    mean rel-eps = " + to_string(mean_rel))
+    println("    magnitude-normalised global rel-eps (sum|dF|/sum|F_true|) = " + to_string(global_rel))
+    println("  autodiff-force vs FINITE-DIFF of the NET's OWN energy  (" + to_string(nfd) + " structs x " + to_string(D) + " coords):")
+    println("    max rel-eps = " + to_string(max_fd_rel) + "   <- proves F = -grad E is the net's TRUE gradient")
+    println("")
+
+    // ════════════════════════════════════════════════════════════════════
+    //  PASS gate (d6 honest)
+    //   - energy learned (held-out rel-ε small)
+    //   - autodiff force == net's own gradient (FD parity tight) — the AD is correct
+    //   - autodiff force tracks the analytic physical force (global rel-ε small)
+    // ════════════════════════════════════════════════════════════════════
+    let energy_ok = e_rel < 0.05
+    let ad_correct = max_fd_rel < 0.01            // autodiff == finite-diff of net (the AD machinery)
+    let force_phys_ok = global_rel < 0.10         // trained net's force tracks the analytic force
+    println("--- g5 GATE ---")
+    println("  energy_ok (held-out rel-eps < 0.05)            = " + to_string(energy_ok) + "  [" + to_string(e_rel) + "]")
+    println("  ad_correct (force==FD-of-net, max rel < 0.01)  = " + to_string(ad_correct) + "  [" + to_string(max_fd_rel) + "]")
+    println("  force_phys_ok (global force rel-eps < 0.10)    = " + to_string(force_phys_ok) + "  [" + to_string(global_rel) + "]")
+    let all_pass = energy_ok && ad_correct && force_phys_ok
+    if all_pass {
+        println("F-QFORGE-MLIP-ENERGY-FORCE = 1")
+        println("VERDICT=PASS — TRAINED energy MLP + autodiff force F=-grad E (MLIP-defining property) verified")
+    } else {
+        println("F-QFORGE-MLIP-ENERGY-FORCE = 0")
+        println("VERDICT=FAIL — honest d6 report; numbers above")
+    }
+}
