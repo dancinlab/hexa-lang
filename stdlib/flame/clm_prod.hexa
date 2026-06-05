@@ -60,6 +60,26 @@ fn _fuse_on(flag: string) -> bool {
     return false
 }
 
+// HEXA-FUSION P1B-a' (byte-eq capstone): device-resident EAGER reference. The
+// P1B re-baseline (#2777) closed the GEMM reduction-order axis (own-mega vs
+// own-eager max|Δ|=8.882e-16, NOT the conv k-order) and pinned the residual to
+// a host↔device TRANSCENDENTAL: the eager reference's gelu ran on HOST (libm
+// erf) while the megakernel's gelu runs on DEVICE (CUDA erf). erf is a libm
+// builtin (stdlib_trig_libm: no hand-rolled Taylor erf to port), so the only way
+// to share the SAME erf is to make the EAGER reference itself device-resident —
+// run the fwd glue (gelu/groupnorm/softmax) ON DEVICE as SEPARATE launches (NOT
+// the cooperative megakernel), with the SAME CUDA erf. HEXA_EAGER_DEVRESIDENT
+// turns the fwd glue device-resident WITHOUT the megastep, so the byte-eq oracle
+// becomes device-eager (CUDA erf, separate launches) — both arms then share CUDA
+// erf + identical naive-k own-GEMM + order-independent elementwise glue.
+// _devres_glue_on() = the fwd-glue device gate: ON under either the standard
+// CLM_PROD_DEVRESIDENT chain OR the P1B-a' HEXA_EAGER_DEVRESIDENT capstone flag.
+fn _devres_glue_on() -> bool {
+    if _fuse_on("CLM_PROD_DEVRESIDENT") { return true }
+    if _fuse_on("HEXA_EAGER_DEVRESIDENT") { return true }
+    return false
+}
+
 // conv1d (causal dilated) via im2col + forge matmul — inlined from clm_conv_gpu
 // (clm flame files cannot `use` one another). Mirrors nn_conv1d_fwd's gather
 // exactly: p = t − dil·(K−1−k); rows below p<0 are zero (left causal pad). On a
@@ -450,7 +470,7 @@ fn _qbwd(dy: int, mask: int, dW: int, Cout: int, rest: int) {
 // (max|Δ|=0). rc 0 = done on device; else the host loop runs (byte-eq).
 // Env-gated like _fq / _qbwd above (no-CUDA / prebuilt mac binary → host loop).
 fn _residual_add(a: int, b: int, out: int, n: int) {
-    if _fuse_on("CLM_PROD_DEVRESIDENT") {
+    if _devres_glue_on() {
         let rc = forge_dispatch_residual_add(a, b, out, n)
         if rc == 0 { return }
     }
@@ -468,7 +488,7 @@ fn _residual_add(a: int, b: int, out: int, n: int) {
 // done on device; else the proven host nn_gelu_fwd runs (byte-eq). Env-gated
 // like _residual_add (no-CUDA / prebuilt mac binary → host gelu).
 fn _gelu(g: int, out: int, n: int) {
-    if _fuse_on("CLM_PROD_DEVRESIDENT") {
+    if _devres_glue_on() {
         let rc = forge_dispatch_gelu(g, out, n)
         if rc == 0 { return }
     }
@@ -501,7 +521,7 @@ fn _gelu2(g0: int, a0: int, g1: int, a1: int, n: int) {
 // bit-exact to nn_groupnorm_fwd (max|Δ|=0). rc 0 = done on device; else the
 // proven host nn_groupnorm_fwd runs (byte-eq). Env-gated like _gelu above.
 fn _groupnorm(x: int, gamma: int, beta: int, y: int, mean: int, inv: int, xhat: int, T: int, C: int, G: int) {
-    if _fuse_on("CLM_PROD_DEVRESIDENT") {
+    if _devres_glue_on() {
         let rc = forge_dispatch_groupnorm(x, gamma, beta, y, mean, inv, xhat, T, C, G)
         if rc == 0 { return }
     }
@@ -551,7 +571,7 @@ fn _groupnorm_gelu_residual(x: int, gamma: int, beta: int, r: int, y: int, a: in
 // reduction → bit-exact to nn_embedding_fwd (max|Δ|=0). rc 0 = on device; else
 // the proven host nn_embedding_fwd runs (byte-eq). Env-gated like _gelu above.
 fn _embedding(ids: int, table: int, out: int, T: int, d: int) {
-    if _fuse_on("CLM_PROD_DEVRESIDENT") {
+    if _devres_glue_on() {
         let rc = forge_dispatch_embedding(ids, table, out, T, d)
         if rc == 0 { return }
     }
@@ -567,7 +587,7 @@ fn _embedding(ids: int, table: int, out: int, T: int, d: int) {
 // reduction → bit-exact (max|Δ|=0). rc 0 = on device; else the byte-identical
 // host pack loop runs. Env-gated like _gelu above.
 fn _expert_pack2(ex0: int, ex1: int, ex_out: int, n: int) {
-    if _fuse_on("CLM_PROD_DEVRESIDENT") {
+    if _devres_glue_on() {
         let rc = forge_dispatch_expert_pack2(ex0, ex1, ex_out, n)
         if rc == 0 { return }
     }
@@ -590,7 +610,7 @@ fn _expert_pack2(ex0: int, ex1: int, ex_out: int, n: int) {
 // (max|Δ|=0). rc 0 = on device; else the proven host nn_moe_router_fwd runs
 // (byte-eq). Env-gated like _gelu above.
 fn _moe_router(logits: int, ex_out: int, probs: int, y: int, T: int, E: int, C: int) {
-    if _fuse_on("CLM_PROD_DEVRESIDENT") {
+    if _devres_glue_on() {
         let rc = forge_dispatch_moe_router(logits, ex_out, probs, y, T, E, C)
         if rc == 0 { return }
     }

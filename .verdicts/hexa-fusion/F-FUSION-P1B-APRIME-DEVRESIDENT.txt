@@ -1,0 +1,33 @@
+F-FUSION-P1B-APRIME-DEVRESIDENT — the byte-eq CAPSTONE: make the EAGER reference
+fully DEVICE-RESIDENT (fwd glue gelu/groupnorm/softmax ON DEVICE, SEPARATE launches,
+the SAME CUDA erf the megakernel uses) so both byte-eq arms share CUDA erf, then ask
+whether the cooperative own-GEMM megakernel reaches max|Δ|=0 vs that device-eager
+reference while lifting util.
+domain: HEXA-FUSION · date: 2026-06-05 · branch domain/hexa-fusion-p1b-aprime-devresident (off main #2777)
+
+[STUB — measurement pending the real H100/datacenter-Blackwell clm_prod run. The
+verdict body below is filled VERBATIM from the pod run, then committed.]
+
+════════════════════════════════════════════════════════════════════════════════
+PRE-REGISTERED FALSIFIER
+════════════════════════════════════════════════════════════════════════════════
+"A device-resident eager reference (CUDA erf on BOTH sides — gelu/groupnorm/softmax
+run on-device as separate launches via HEXA_EAGER_DEVRESIDENT) makes the cooperative
+own-GEMM megakernel reach max|Δ|=0 vs that reference while lifting util."
+FALSIFIED if max|Δ| ≠ 0 device-eager vs device-mega after the eager glue is made
+device-resident (both arms CUDA erf, identical naive-k own-GEMM, order-independent
+elementwise glue).
+
+GATE (g5 HARD): byte-eq = max|Δ|=0 device-eager vs device-mega on the 17-digit
+[B6-CE-HIPREC] CE, verbatim diff. [MEGAFWD-FIRED] must fire (B arm). [EAGER-DEVGLUE-FIRED]
+must fire (A arm — proves the eager ref ran device CUDA-erf gelu, not host libm).
+
+WIRING (this branch, off main): stdlib/flame/clm_prod.hexa — new HEXA_EAGER_DEVRESIDENT
+gate (`_devres_glue_on()` = CLM_PROD_DEVRESIDENT OR HEXA_EAGER_DEVRESIDENT) routes the
+fwd glue (_gelu/_groupnorm/_moe_router + _residual_add/_embedding/_expert_pack2) onto
+the device kernels WITHOUT the megastep. self/cuda/runtime_cuda_emit.hexa — one-shot
+[EAGER-DEVGLUE-FIRED] marker in _hx_cuda_farr_gelu_gpu (device CUDA-erf GELU launcher).
+
+VERDICT: [pending pod run]
+FINDING: [pending pod run — max|Δ| device-eager-vs-device-mega verbatim; =0 CAPSTONE
+         or ≠0 + which op carries the residual; + util Δ]

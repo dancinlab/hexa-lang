@@ -1436,6 +1436,9 @@ fn emit_runtime_cuda_c() -> str {
             "    int64_t want = (n + block_sz - 1) / block_sz;\n" +
             "    int grid_sz = (want > 1024) ? 1024 : (int)want;\n" +
             "    if (grid_sz < 1) grid_sz = 1;\n" +
+            "    { static int _eager_devglue_fired = 0;\n" +
+            "      if (!_eager_devglue_fired) { _eager_devglue_fired = 1;\n" +
+            "        fprintf(stderr, \"[EAGER-DEVGLUE-FIRED] _hx_k_gelu device CUDA-erf GELU (separate launch, P1B-a' device-resident eager ref)\\n\"); } }\n" +
             "    _hx_k_gelu<<<grid_sz, block_sz, 0, _forge_stream()>>>(IN, OUT, n);\n" +
             "    if (_forge_launch_check(\"gelu\") != 0) return -1;\n" +
             "    {\n" +
