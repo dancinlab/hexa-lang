@@ -1111,7 +1111,13 @@ _hx_k_sgemm_cm_wmma2_cb(int tA, int tB, long long M, long long N, long long K,
     for (long long k0 = 0; k0 < K; k0 += HXG_BK, kslice++) {
         // Wait until the slice we're about to compute is resident: keep at most
         // STAGES-1 groups in flight (block on the oldest). Lever 2 deep pipeline.
+        // HXG_CB_DRAIN=1 (compile-time) forces a full drain (wait_group 0) each
+        // iter — a correctness-isolation fallback that disables the deep overlap.
+#ifdef HXG_CB_DRAIN
+        hxg_cp_wait_n(0);
+#else
         hxg_cp_wait_n(HXG_CB_STAGES - 2 >= 0 ? HXG_CB_STAGES - 2 : 0);
+#endif
         __syncthreads();
         int cur = kslice % HXG_CB_STAGES;
 
@@ -1120,31 +1126,30 @@ _hx_k_sgemm_cm_wmma2_cb(int tA, int tB, long long M, long long N, long long K,
         for (int kf=0; kf<HXG_CB_WK_MMA; kf++) {
             int kk = kf*8;
             // B fragments (one per n-tile): b operand = 2×.b32 tf32.
+            // CANONICAL TF32 m16n8k8 .col B layout (verified on sm_90, probe V0):
+            //   b[0] = op(B)[k = kk+tig,   n = col+gid]
+            //   b[1] = op(B)[k = kk+tig+4, n = col+gid]
+            // Bs is BK×BN row-major in shared → index (k)*HXG_BN + (n).
             unsigned bf[HXG_CB_WN_MMA][2];
             #pragma unroll
             for (int in=0; in<HXG_CB_WN_MMA; in++) {
                 int col = bColBase + in*8;
-                // B(8row=k × 8col=n) for m16n8k8 .col operand, 2 regs/thread:
-                //   b[0] = op(B)[k = kk+tig*2,   n = col+gid]
-                //   b[1] = op(B)[k = kk+tig*2+1, n = col+gid]
-                // Bs is BK×BN row-major in shared → index (k)*HXG_BN + (n).
-                bf[in][0] = hxg_f2tf32(Bs(cur)[(kk+tig*2  )*HXG_BN + (col+gid)]);
-                bf[in][1] = hxg_f2tf32(Bs(cur)[(kk+tig*2+1)*HXG_BN + (col+gid)]);
+                bf[in][0] = hxg_f2tf32(Bs(cur)[(kk+tig  )*HXG_BN + (col+gid)]);
+                bf[in][1] = hxg_f2tf32(Bs(cur)[(kk+tig+4)*HXG_BN + (col+gid)]);
             }
             // A fragments (one per m-tile): a operand = 4×.b32 tf32.
+            // CANONICAL TF32 m16n8k8 .row A layout (verified on sm_90, probe V0):
+            //   a[0]=op(A)[row+gid,   kk+tig  ]   a[1]=op(A)[row+gid+8, kk+tig  ]
+            //   a[2]=op(A)[row+gid,   kk+tig+4]   a[3]=op(A)[row+gid+8, kk+tig+4]
+            // As is BM×BK row-major in shared → index (row)*HXG_BK + (k).
             unsigned af[HXG_CB_WM_MMA][4];
             #pragma unroll
             for (int im=0; im<HXG_CB_WM_MMA; im++) {
                 int row = aRowBase + im*16;
-                // A(16row×8col=k) row-major-in-shared (As is BM×BK row-major):
-                //   a[0]=op(A)[row+gid,     kk+tig*2  ]
-                //   a[1]=op(A)[row+gid,     kk+tig*2+1]
-                //   a[2]=op(A)[row+gid+8,   kk+tig*2  ]
-                //   a[3]=op(A)[row+gid+8,   kk+tig*2+1]
-                af[im][0] = hxg_f2tf32(As(cur)[(row+gid  )*HXG_BK + (kk+tig*2  )]);
-                af[im][1] = hxg_f2tf32(As(cur)[(row+gid  )*HXG_BK + (kk+tig*2+1)]);
-                af[im][2] = hxg_f2tf32(As(cur)[(row+gid+8)*HXG_BK + (kk+tig*2  )]);
-                af[im][3] = hxg_f2tf32(As(cur)[(row+gid+8)*HXG_BK + (kk+tig*2+1)]);
+                af[im][0] = hxg_f2tf32(As(cur)[(row+gid  )*HXG_BK + (kk+tig  )]);
+                af[im][1] = hxg_f2tf32(As(cur)[(row+gid+8)*HXG_BK + (kk+tig  )]);
+                af[im][2] = hxg_f2tf32(As(cur)[(row+gid  )*HXG_BK + (kk+tig+4)]);
+                af[im][3] = hxg_f2tf32(As(cur)[(row+gid+8)*HXG_BK + (kk+tig+4)]);
             }
             #pragma unroll
             for (int im=0; im<HXG_CB_WM_MMA; im++)
