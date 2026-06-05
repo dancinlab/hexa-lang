@@ -17,8 +17,11 @@ use "stdlib/qforge/adaptive_qgrid"
 
 let _AQ_BG: float = 0.20            // flat background λ_q
 let _AQ_AMP: float = 3.0           // peak amplitude
-let _AQ_Q0: float = 0.5            // nesting wavevector (peak center)
-let _AQ_W: float = 0.02           // peak width (sharp)
+let _AQ_Q0: float = 0.37173        // nesting wavevector — OFF any coarse grid node
+                                   // (a real nesting q is incommensurate with the
+                                   //  mesh; a peak sitting exactly on q=0.5 would
+                                   //  let a uniform grid cheat — this is the fair case)
+let _AQ_W: float = 0.008          // peak width (sharp — sub-grid)
 
 // synthetic per-q λ contribution (the callback the refiner samples).
 fn _aq_lambda_q(q: float) -> float {
@@ -56,7 +59,7 @@ fn main() {
             + "  rel-eps=" + to_string(rel_coarse))
 
     // ADAPTIVE: coarse seed of 20 intervals, refine to <=80 q-points.
-    let res = qforge_aq_adaptive(_aq_lambda_q, 0.0, 1.0, 20, 0.002, 80)
+    let res = qforge_aq_adaptive(_aq_lambda_q, 0.0, 1.0, 24, 0.0006, 160)
     let lam_adapt = res[0]
     let nq_adapt = to_int(res[1])
     let rel_adapt = _aq_abs(lam_adapt - lam_true) / lam_true
