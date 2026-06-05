@@ -76,14 +76,43 @@ fn _const_fill(shape, v: float) -> array {
     return out
 }
 
-// ── MLP forward (all ag_*): x[B,2] → h=tanh(x@W1+b1)[B,8] → y=h@W2+b2[B,1] ─
-// W1,b1,W2,b2 are ag handles (leaves). xb is an ag_const input.
-// b1/b2 broadcast: tensor_add_ref supports row-broadcast [B,H]+[1,H].
-fn mlp_forward(xb, W1, b1, W2, b2) {
-    let z1 = ag_add(ag_matmul(xb, W1), b1)   // [B,8]
-    let h  = ag_tanh(z1)                      // [B,8]
-    let z2 = ag_add(ag_matmul(h, W2), b2)    // [B,1]
+// ── MLP forward (all ag_*, BIAS-AUGMENTED so every tensor shape is EXACT) ─
+// Biases are folded into the weight matrices via a constant ones-column on
+// the inputs (standard augmentation). This avoids any broadcast add inside
+// the autograd graph — stdlib/autograd's backward has no broadcast-reduce, so
+// a mismatched-shape ag_add would corrupt the bias grad. All ops here are
+// matmul on exactly-matching shapes → backward is exact.
+//   xaug : [B, 3]  (cols x0, x1, 1)
+//   W1   : [3, H]            z1 = xaug @ W1            -> [B, H]
+//   h    = tanh(z1)                                    -> [B, H]
+//   haug : [B, H+1]  (h with an appended ones column)
+//   W2   : [H+1, 1]         y  = haug @ W2            -> [B, 1]
+fn mlp_forward(xaug, haug_ones, W1, W2, B: int, H: int) {
+    let z1 = ag_matmul(xaug, W1)      // [B,H]
+    let h  = ag_tanh(z1)              // [B,H]
+    // Build haug=[B,H+1] (h | ones-col) entirely inside the autograd graph so
+    // grads flow back into h. haug = (h @ S) + ones_lastcol, where S=[H,H+1]
+    // is the identity-in-first-H-cols selector and ones_lastcol (haug_ones)
+    // is a CONST [B,H+1] (zero except last col=1). All shapes match exactly.
+    let S = ag_const(_selector_HxHp1(H))          // [H, H+1]
+    let hsel = ag_matmul(h, S)                     // [B,H+1], last col = 0
+    let z2 = ag_matmul(ag_add(hsel, haug_ones), W2) // + ones in last col, then @W2
     return z2
+}
+
+// selector [H, H+1] with S[i,i]=1 (i<H), last column all 0.
+fn _selector_HxHp1(H: int) -> Tensor {
+    let mut d = []
+    let mut i = 0
+    while i < H {
+        let mut j = 0
+        while j < H + 1 {
+            if j == i { d.push(1.0) } else { d.push(0.0) }
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return tensor_from_array([H, H + 1], d)
 }
 
 // MSE loss over [B,1] pred vs [B,1] target → scalar ag handle (sum/B).
@@ -138,7 +167,7 @@ fn ridge_fit(X0, X1, Y, n: int, lam: float) -> array {
 
 fn main() {
     println("=== QFORGE-PERF Δ-ML TRAINED neural correction (stdlib/autograd reuse · g5) ===")
-    println("model: 2-input -> 8-hidden(tanh) -> 1-output  ·  loss: MSE  ·  optim: SGD (ag_grad)")
+    println("model: 2-input -> 8-hidden(tanh) -> 1-output (bias-augmented)  ·  loss: MSE  ·  optim: Adam (ag_grad)")
     println("true Δλ(x) = 0.6 sin(1.3 x0) + 0.5 x1^2 - 0.4 x0 x1 + 0.2 exp(0.5 x1)  [NONLINEAR + cross-term]")
     println("")
 
@@ -160,65 +189,97 @@ fn main() {
         xte0.push(a); xte1.push(b); yte.push(true_delta(a, b)); i = i + 1
     }
 
-    // flat row-major design buffers [B,2] and targets [B,1]
-    fn pack_x(c0, c1, n: int) -> array {
+    // augmented design buffers [B,3] (cols x0,x1,1) — bias folded into W1.
+    fn pack_aug(c0, c1, n: int) -> array {
         let mut out = []; let mut j = 0
-        while j < n { out.push(c0[j]); out.push(c1[j]); j = j + 1 }
+        while j < n { out.push(c0[j]); out.push(c1[j]); out.push(1.0); j = j + 1 }
         return out
     }
-    let Xtr = pack_x(xtr0, xtr1, Btr)
-    let Xte = pack_x(xte0, xte1, Bte)
+    let Xtr = pack_aug(xtr0, xtr1, Btr)   // [Btr,3]
+    let Xte = pack_aug(xte0, xte1, Bte)   // [Bte,3]
+
+    // ones-in-last-column const [B,H+1] (the haug bias column carrier).
+    fn ones_lastcol(n: int, Hp1: int) -> array {
+        let mut out = []; let mut r = 0
+        while r < n {
+            let mut c = 0
+            while c < Hp1 {
+                if c == Hp1 - 1 { out.push(1.0) } else { out.push(0.0) }
+                c = c + 1
+            }
+            r = r + 1
+        }
+        return out
+    }
+    let onesTr = ones_lastcol(Btr, H + 1)
+    let onesTe = ones_lastcol(Bte, H + 1)
 
     // ── weight init (small uniform, deterministic) ──
+    // W1=[3,H] (incl bias row), W2=[H+1,1] (incl bias row).
     let mut w1 = []; i = 0
-    while i < 2 * H { w1.push(runi(-0.6, 0.6)); i = i + 1 }
-    let mut b1 = []; i = 0
-    while i < H { b1.push(0.0); i = i + 1 }
+    while i < 3 * H { w1.push(runi(-0.6, 0.6)); i = i + 1 }
     let mut w2 = []; i = 0
-    while i < H { w2.push(runi(-0.6, 0.6)); i = i + 1 }
-    let mut b2 = [0.0]
+    while i < (H + 1) * 1 { w2.push(runi(-0.6, 0.6)); i = i + 1 }
 
-    // const input/target tensors (rebuilt as ag_const each epoch via tape)
-    let lr = 0.08
-    let epochs = 400
+    // ── hand-rolled Adam moment buffers (m,v) per parameter group ──
+    // (Adam, not vanilla SGD — still pure stdlib/autograd reuse: forward+
+    //  backward go through ag_*; only the param UPDATE rule is hand-rolled,
+    //  exactly as the task permits "hand-roll ... with ag_grad". Adam breaks
+    //  the curvature-induced plateau that stalls plain SGD on this target.)
+    let mut mW1 = _const_fill([3, H], 0.0); let mut vW1 = _const_fill([3, H], 0.0)
+    let mut mW2 = _const_fill([H + 1, 1], 0.0); let mut vW2 = _const_fill([H + 1, 1], 0.0)
+    let beta1 = 0.9; let beta2 = 0.999; let eps = 0.00000001
 
-    println("--- TRAINING LOSS CURVE (full-batch MSE, SGD lr=" + to_string(lr) + ") ---")
+    let lr = 0.02
+    let epochs = 4000
+
+    println("--- TRAINING LOSS CURVE (full-batch MSE, Adam lr=" + to_string(lr) + " via ag_grad) ---")
 
     let mut ep = 0
     while ep <= epochs {
+        let t = ep + 1   // 1-based step for Adam bias correction
         ag_tape_reset()
-        // leaves (current weights)
-        let W1 = ag_var(tensor_from_array([2, H], w1))
-        let B1 = ag_var(tensor_from_array([1, H], b1))
-        let W2 = ag_var(tensor_from_array([H, 1], w2))
-        let B2 = ag_var(tensor_from_array([1, 1], b2))
+        // leaves (current weights, bias folded in)
+        let W1 = ag_var(tensor_from_array([3, H], w1))
+        let W2 = ag_var(tensor_from_array([H + 1, 1], w2))
         // inputs
-        let xb = ag_const(tensor_from_array([Btr, 2], Xtr))
+        let xb = ag_const(tensor_from_array([Btr, 3], Xtr))
+        let hones = ag_const(tensor_from_array([Btr, H + 1], onesTr))
         let yb = ag_const(tensor_from_array([Btr, 1], ytr))
 
-        let pred = mlp_forward(xb, W1, B1, W2, B2)
+        let pred = mlp_forward(xb, hones, W1, W2, Btr, H)
         let loss = mse_loss(pred, yb, Btr)
         ag_backward(loss)
 
         let lossv = ag_value(loss).data[0]
 
         // print a sparse, readable curve
-        let show = (ep == 0) || (ep == 1) || (ep == 2) || (ep == 5) || (ep == 10)
-                   || (ep == 25) || (ep == 50) || (ep == 100) || (ep == 200) || (ep == 400)
+        let show = (ep == 0) || (ep == 5) || (ep == 25) || (ep == 100) || (ep == 250)
+                   || (ep == 500) || (ep == 1000) || (ep == 2000) || (ep == 3000) || (ep == 4000)
         if show {
             println("  epoch " + to_string(ep) + "\tMSE = " + to_string(lossv))
         }
 
-        // ── SGD update via ag_grad (plain, no optimizer-file dep) ──
-        let gW1 = ag_grad(W1); let gB1 = ag_grad(B1)
-        let gW2 = ag_grad(W2); let gB2 = ag_grad(B2)
+        // ── Adam update via ag_grad (hand-rolled, no optimizer-file dep) ──
+        let gW1 = ag_grad(W1); let gW2 = ag_grad(W2)
+        let bc1 = 1.0 - pow(beta1, to_float(t))   // bias-correction denoms
+        let bc2 = 1.0 - pow(beta2, to_float(t))
         let mut k = 0
-        while k < 2 * H { w1[k] = w1[k] - lr * gW1.data[k]; k = k + 1 }
+        while k < 3 * H {
+            let gg = gW1.data[k]
+            mW1[k] = beta1 * mW1[k] + (1.0 - beta1) * gg
+            vW1[k] = beta2 * vW1[k] + (1.0 - beta2) * gg * gg
+            w1[k] = w1[k] - lr * (mW1[k] / bc1) / (sqrt(vW1[k] / bc2) + eps)
+            k = k + 1
+        }
         k = 0
-        while k < H { b1[k] = b1[k] - lr * gB1.data[k]; k = k + 1 }
-        k = 0
-        while k < H { w2[k] = w2[k] - lr * gW2.data[k]; k = k + 1 }
-        b2[0] = b2[0] - lr * gB2.data[0]
+        while k < H + 1 {
+            let gg = gW2.data[k]
+            mW2[k] = beta1 * mW2[k] + (1.0 - beta1) * gg
+            vW2[k] = beta2 * vW2[k] + (1.0 - beta2) * gg * gg
+            w2[k] = w2[k] - lr * (mW2[k] / bc1) / (sqrt(vW2[k] / bc2) + eps)
+            k = k + 1
+        }
 
         ep = ep + 1
     }
@@ -226,12 +287,11 @@ fn main() {
 
     // ── evaluate TRAINED MLP on held-out set ──
     ag_tape_reset()
-    let W1f = ag_var(tensor_from_array([2, H], w1))
-    let B1f = ag_var(tensor_from_array([1, H], b1))
-    let W2f = ag_var(tensor_from_array([H, 1], w2))
-    let B2f = ag_var(tensor_from_array([1, 1], b2))
-    let xbe = ag_const(tensor_from_array([Bte, 2], Xte))
-    let predE = mlp_forward(xbe, W1f, B1f, W2f, B2f)
+    let W1f = ag_var(tensor_from_array([3, H], w1))
+    let W2f = ag_var(tensor_from_array([H + 1, 1], w2))
+    let xbe = ag_const(tensor_from_array([Bte, 3], Xte))
+    let honesE = ag_const(tensor_from_array([Bte, H + 1], onesTe))
+    let predE = mlp_forward(xbe, honesE, W1f, W2f, Bte, H)
     let pv = ag_value(predE).data
 
     let mut mlp_abs = 0.0; let mut sum_abs_y = 0.0
