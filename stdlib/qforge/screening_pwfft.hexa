@@ -142,16 +142,52 @@ pub fn qpwfft_stage(gvecs: [float], b1: [float], b2: [float], b3: [float],
         PWFFT_ON = false
         return false
     }
+    // recover the integer Miller index per coefficient by inverting B (the legacy path).
+    // ⚠ FAILS for a SINGULAR reciprocal matrix (det(B)=0 → every G maps to (0,0,0) → a
+    // degenerate 1×1×1 grid that collapses the spatial Poisson convolution to a single
+    // point). When the caller knows the integer Miller indices (qpw_gvectors_miller),
+    // prefer qpwfft_stage_miller — it carries them exactly and is singular-B-immune.
     let mut hh: [int] = [] ; let mut kk: [int] = [] ; let mut ll: [int] = []
-    let mut hmax = 0 ; let mut kmax = 0 ; let mut lmax = 0
     let mut i = 0
     while i < n {
         let m = qpwfft_miller(gvecs[i * 3], gvecs[i * 3 + 1], gvecs[i * 3 + 2], b1, b2, b3)
-        let h = m[0] ; let k = m[1] ; let l = m[2]
-        hh.push(h) ; kk.push(k) ; ll.push(l)
-        let ah = if h < 0 { -h } else { h }
-        let ak = if k < 0 { -k } else { k }
-        let al = if l < 0 { -l } else { l }
+        hh.push(m[0]) ; kk.push(m[1]) ; ll.push(m[2])
+        i = i + 1
+    }
+    return _qpwfft_stage_core(n, hh, kk, ll, b1, b2, b3, fxc)
+}
+
+// ── qpwfft_stage_miller — stage from the EXACT integer Miller indices (no matrix
+//    inverse). miller = flat 3·n [(h0,k0,l0),(h1,k1,l1),…] aligned 1:1 with gvecs.
+//    This is the SINGULAR-B-SAFE staging path (the BCC primitive's coplanar reciprocal
+//    has det(B)=0; the inverse-based qpwfft_stage collapses to 1×1×1, this does NOT).
+//    d4 GENERIC — the Miller indices are DATA carried from the generator. d6.
+pub fn qpwfft_stage_miller(gvecs: [float], miller: [float],
+                           b1: [float], b2: [float], b3: [float], fxc: float) -> bool {
+    let n = len(gvecs) / 3
+    if n < 1 || len(miller) != 3 * n || len(b1) != 3 || len(b2) != 3 || len(b3) != 3 {
+        PWFFT_ON = false
+        return false
+    }
+    let mut hh: [int] = [] ; let mut kk: [int] = [] ; let mut ll: [int] = []
+    let mut i = 0
+    while i < n {
+        hh.push(to_int(miller[i * 3])) ; kk.push(to_int(miller[i * 3 + 1]))
+        ll.push(to_int(miller[i * 3 + 2]))
+        i = i + 1
+    }
+    return _qpwfft_stage_core(n, hh, kk, ll, b1, b2, b3, fxc)
+}
+
+// ── shared staging core: size the pow2 Miller grid + precompute linear indices ──
+fn _qpwfft_stage_core(n: int, hh: [int], kk: [int], ll: [int],
+                      b1: [float], b2: [float], b3: [float], fxc: float) -> bool {
+    let mut hmax = 0 ; let mut kmax = 0 ; let mut lmax = 0
+    let mut i = 0
+    while i < n {
+        let ah = if hh[i] < 0 { -hh[i] } else { hh[i] }
+        let ak = if kk[i] < 0 { -kk[i] } else { kk[i] }
+        let al = if ll[i] < 0 { -ll[i] } else { ll[i] }
         if ah > hmax { hmax = ah }
         if ak > kmax { kmax = ak }
         if al > lmax { lmax = al }
