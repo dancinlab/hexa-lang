@@ -118,6 +118,76 @@ fn get_builtins() -> [string] {
     ]
 }
 
+// ── @gpu_kernel intrinsic vocabulary (HEXA-CUDA D9) ──────────
+// The device-intrinsic surface a @gpu_kernel author writes, sourced from the
+// gpu/SPEC.md §5 contract + the codegen op-table in
+// compiler/codegen/nvptx_target.hexa (the ground truth for what actually lowers
+// to PTX). Surfacing these in completion + hover makes writing a kernel feel
+// native and STEERS the editor toward the hexa GPU path (vs a .cu).
+//
+// Each row: "name|signature|doc". Kept as a flat string list so the data is
+// trivially exportable (see gpu_intrinsics_export() — the machine-readable
+// completion-items file an external LSP can load). REAL intrinsics only — no
+// invented names; verified against gpu/SPEC.md + the cookbook §3 matrix.
+fn get_gpu_intrinsics() -> [string] {
+    return [
+        // thread / block / grid indexing — return i32, one mov from a PTX sreg
+        "gpu_thread_id_x|gpu_thread_id_x() -> i32|threadIdx.x — thread index in its block (%tid.x)",
+        "gpu_thread_id_y|gpu_thread_id_y() -> i32|threadIdx.y — thread index in its block (%tid.y)",
+        "gpu_thread_id_z|gpu_thread_id_z() -> i32|threadIdx.z — thread index in its block (%tid.z)",
+        "gpu_block_id_x|gpu_block_id_x() -> i32|blockIdx.x — block index in the grid (%ctaid.x)",
+        "gpu_block_id_y|gpu_block_id_y() -> i32|blockIdx.y — block index in the grid (%ctaid.y)",
+        "gpu_block_id_z|gpu_block_id_z() -> i32|blockIdx.z — block index in the grid (%ctaid.z)",
+        "gpu_block_dim_x|gpu_block_dim_x() -> i32|blockDim.x — block dimensions (%ntid.x)",
+        "gpu_block_dim_y|gpu_block_dim_y() -> i32|blockDim.y — block dimensions (%ntid.y)",
+        "gpu_block_dim_z|gpu_block_dim_z() -> i32|blockDim.z — block dimensions (%ntid.z)",
+        "gpu_grid_dim_x|gpu_grid_dim_x() -> i32|gridDim.x — grid dimensions (%nctaid.x)",
+        "gpu_grid_dim_y|gpu_grid_dim_y() -> i32|gridDim.y — grid dimensions (%nctaid.y)",
+        "gpu_grid_dim_z|gpu_grid_dim_z() -> i32|gridDim.z — grid dimensions (%nctaid.z)",
+        "gpu_global_thread_id_x|gpu_global_thread_id_x() -> i32|fused ctaid.x*ntid.x+tid.x — flat global id",
+        "gpu_global_thread_id_y|gpu_global_thread_id_y() -> i32|fused ctaid.y*ntid.y+tid.y — flat global id",
+        "gpu_global_thread_id_z|gpu_global_thread_id_z() -> i32|fused ctaid.z*ntid.z+tid.z — flat global id",
+        // synchronization
+        "gpu_barrier|gpu_barrier()|__syncthreads — block-wide barrier (bar.sync 0); publish @shared writes",
+        // atomics — f64, return the old value
+        "gpu_atomic_add|gpu_atomic_add(addr, v: f64) -> f64|atomicAdd — atom.add, returns the old value",
+        "gpu_atomic_min|gpu_atomic_min(addr, v: f64) -> f64|atomicMin — atom.min, returns the old value",
+        "gpu_atomic_max|gpu_atomic_max(addr, v: f64) -> f64|atomicMax — atom.max, returns the old value",
+        "gpu_atomic_cas|gpu_atomic_cas(addr, cmp, v: f64) -> f64|atomicCAS — atom.cas, returns the old value",
+        // warp shuffle — f64 via two .b32 halves; full-warp mask (no mask arg)
+        "gpu_warp_shuffle|gpu_warp_shuffle(v: f64, lane: i32) -> f64|__shfl_sync — shfl.sync warp-lane exchange",
+        "gpu_warp_shuffle_down|gpu_warp_shuffle_down(v: f64, delta: i32) -> f64|__shfl_down_sync — shfl.sync.down",
+        "gpu_warp_shuffle_up|gpu_warp_shuffle_up(v: f64, delta: i32) -> f64|__shfl_up_sync — shfl.sync.up",
+        "gpu_warp_shuffle_xor|gpu_warp_shuffle_xor(v: f64, mask: i32) -> f64|__shfl_xor_sync — shfl.sync.bfly",
+        // tensor-core WMMA (advanced — f16/bf16 in, f32 accumulate)
+        "gpu_wmma_load_a|gpu_wmma_load_a(...)|wmma.load.a.sync m16n16k16 — load A fragment (advanced)",
+        "gpu_wmma_load_b|gpu_wmma_load_b(...)|wmma.load.b.sync m16n16k16 — load B fragment (advanced)",
+        "gpu_wmma_mma|gpu_wmma_mma(...)|wmma.mma.sync — tensor-core matrix multiply-accumulate (advanced)",
+        "gpu_wmma_store_c|gpu_wmma_store_c(...)|wmma.store.d.sync — store C fragment (advanced)",
+        // host-side launch (lowers to a thin cudart wrapper)
+        "gpu_launch|gpu_launch(kernel, gx,gy,gz, bx,by,bz, args...)|launch a @gpu_kernel from host code (gpu/SPEC.md §7)"
+    ]
+}
+
+// Split a "name|sig|doc" row at its first two '|' separators.
+fn _gpu_row_field(row: string, idx: int) -> string {
+    let parts = row.split("|")
+    if idx < len(parts) { return parts[idx] }
+    return ""
+}
+
+// Hover doc for a gpu_* intrinsic name, or "" if not one.
+fn gpu_intrinsic_doc(name: string) -> string {
+    for row in get_gpu_intrinsics() {
+        if _gpu_row_field(row, 0) == name {
+            let sig = _gpu_row_field(row, 1)
+            let doc = _gpu_row_field(row, 2)
+            return "`" + sig + "`\\n\\n" + doc
+        }
+    }
+    return ""
+}
+
 // ── Semantic Token Types (LSP spec order) ────────────────
 // Index in this array = tokenType id sent to client.
 // https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#semanticTokenTypes
@@ -583,6 +653,11 @@ fn handle_hover(source: string, line: int, character: int) -> string {
     if bdoc != "" {
         return "{\"contents\":{\"kind\":\"markdown\",\"value\":\"**builtin**\\n\\n```\\n" + bdoc + "\\n```\"}}"
     }
+    // HEXA-CUDA D9 — @gpu_kernel device-intrinsic hover (gpu/SPEC.md §5)
+    let gdoc = gpu_intrinsic_doc(word)
+    if gdoc != "" {
+        return "{\"contents\":{\"kind\":\"markdown\",\"value\":\"**gpu intrinsic** `" + word + "`\\n\\n" + gdoc + "\"}}"
+    }
     // User symbol — look up via find_symbol
     let loc = find_symbol(source, word)
     if loc != "" {
@@ -826,6 +901,16 @@ fn handle_completion(source: string) -> string {
     for b in get_builtins() {
         if !has_key(seen, b) { seen[b] = true; items.push(completion_item(b, 3, "builtin")) }
     }
+    // HEXA-CUDA D9 — @gpu_kernel device intrinsics (CompletionItemKind 3=Function).
+    // Detail carries the signature so the editor shows it inline; these steer the
+    // author toward the native hexa GPU path.
+    for g in get_gpu_intrinsics() {
+        let gn = _gpu_row_field(g, 0)
+        if !has_key(seen, gn) {
+            seen[gn] = true
+            items.push(completion_item(gn, 3, "gpu intrinsic — " + _gpu_row_field(g, 1)))
+        }
+    }
     for s in scan_stdlib_pub_fns() {
         if !has_key(seen, s) { seen[s] = true; items.push(completion_item(s, 3, "stdlib pub fn")) }
     }
@@ -884,8 +969,26 @@ fn all_global_names() -> [string] {
     let mut out = []
     for kw in get_keywords() { out.push(kw) }
     for b in get_builtins() { out.push(b) }
+    // HEXA-CUDA D9 — gpu_* intrinsics surface in the `hexa-lsp complete` CLI too.
+    for g in get_gpu_intrinsics() { out.push(_gpu_row_field(g, 0)) }
     for s in scan_stdlib_pub_fns() { out.push(s) }
     return out
+}
+
+// HEXA-CUDA D9 — machine-readable @gpu_kernel intrinsic completion-items, for an
+// EXTERNAL LSP / editor that cannot link the hexa LSP directly. Emits one JSON
+// object per intrinsic (label · kind · detail-signature · documentation) — the
+// same data handle_completion/handle_hover use, so the two never drift. Printed
+// to stdout by `hexa-lsp gpu-intrinsics`; redirect to a data file the editor loads.
+fn gpu_intrinsics_export() -> string {
+    let mut objs = []
+    for row in get_gpu_intrinsics() {
+        let name = _gpu_row_field(row, 0)
+        let sig = _gpu_row_field(row, 1)
+        let doc = _gpu_row_field(row, 2)
+        objs.push("{\"label\":\"" + escape_json_str(name) + "\",\"kind\":3,\"detail\":\"" + escape_json_str(sig) + "\",\"documentation\":\"" + escape_json_str(doc) + "\"}")
+    }
+    return "{\"gpu_intrinsics\":[" + join(objs, ",") + "]}"
 }
 
 fn cli_complete(prefix: string) {
@@ -902,7 +1005,8 @@ fn lsp_cli(a: [string]) {
     else if sub == "sig" { cli_def(arg) }
     else if sub == "sym" { cli_sym(arg) }
     else if sub == "complete" { cli_complete(arg) }
-    else { println("usage: hexa-lsp <def|refs|sig|sym|complete> [name]") }
+    else if sub == "gpu-intrinsics" { println(gpu_intrinsics_export()) }  // HEXA-CUDA D9
+    else { println("usage: hexa-lsp <def|refs|sig|sym|complete|gpu-intrinsics> [name]") }
 }
 
 // ── Main LSP loop ──────────────────────────────────────────
