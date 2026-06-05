@@ -1,0 +1,339 @@
+// QFORGE-PERF — CLOSE "randomized / sketched eigensolver" (🧮 LANE B) with a real
+// measured Δ vs a dense reference (and the engine Davidson) on a synthetic
+// symmetric H. Status in the demiurge doc was ⚪speculative / GATED-IMPL — this
+// docs-only bench-driver closes it g5 (spectrum recovery) or returns an honest
+// grounded verdict (d6 — randomized methods are PROBABILISTIC).
+//
+// PRIOR ART (lit-grounded · d18):
+//   N. Halko, P. G. Martinsson, J. A. Tropp, "Finding Structure with Randomness:
+//   Probabilistic Algorithms for Constructing Approximate Matrix Decompositions",
+//   SIAM Review 53 (2011) 217–288  (the randomized range-finder / randomized SVD
+//   reference; Algorithm 4.3 = randomized SUBSPACE ITERATION, Alg. 5.3 = the
+//   Rayleigh-Ritz "direct eigenvalue" post-process for a Hermitian matrix).
+//
+// IDEA & THE EIGENSOLVER CATCH (d6 honest):
+//   A random Gaussian sketch Ω (n × (nocc+p)) followed by Y = A·Ω, QR(Y)=Q,
+//   Rayleigh-Ritz Hs = QᵀAQ → small eigh recovers the DOMINANT (largest-|λ|)
+//   invariant subspace of A. For the LOWEST occupied eigenvalues of the QFORGE
+//   Hamiltonian H this is the WRONG end of the spectrum. So we SPECTRALLY
+//   TRANSFORM: apply the sketch to A = (c·I − H). The lowest H-eigenvalues λ_i
+//   become the LARGEST A-eigenvalues (c − λ_i) (c = Gershgorin upper bound ≥ λ_max
+//   so every c − λ_i > 0 and the lowest λ map to the top of A). A few power
+//   iterations Y = A^q·Ω (q = 1..2, Halko Alg. 4.4) sharpen the spectral gap so
+//   the wanted subspace dominates. CRUCIALLY the Rayleigh-Ritz step projects the
+//   ORIGINAL H (not A): Hs = Qᵀ H Q → the Ritz values are H-eigenvalues directly,
+//   so no inverse map of (c−λ) is needed (Q spans the right subspace either way).
+//
+// ALGORITHM (Halko-Martinsson-Tropp randomized subspace iteration, eig variant):
+//   Ω = deterministic Gaussian, n × (nocc+p)         (oversampling p)
+//   Y = (cI − H)^q · Ω                                (q power iters; re-ortho each)
+//   Q = QR(Y)  (modified Gram-Schmidt, width nocc+p)
+//   Hs = Qᵀ H Q   (small (nocc+p)² dense)
+//   (θ, Z) = eigh(Hs)  → lowest-nocc Ritz pairs are the occupied eigenpairs.
+//
+// REPRODUCIBLE RANDOMNESS (g5 · hexa has NO Math.random):
+//   the Gaussian is derived from a DETERMINISTIC hashed-index linear-congruential
+//   PRNG (LCG splitmix-style index hash → two uniforms → Box-Muller normal), with
+//   a FIXED seed. Re-running reproduces the SAME sketch and the SAME eigenvalues.
+//
+// docs-only: implements the randomized solver HERE (bench/), reads the engine
+//   Davidson + eigh read-only, edits NOTHING under stdlib/qforge (d3 · this is a
+//   PROPOSAL bench-driver per the QFORGE-PERF docs-only scope). Same deterministic
+//   synthetic symmetric H as the Davidson/Lanczos/CheFSI benches → apples-to-apples.
+//
+// FALSIFIER (board): the randomized sketch recovers the SAME lowest-nocc
+//   eigenvalues as the dense reference to tol, ELSE report the honest grounded
+//   accuracy + whether oversampling/power-iteration was needed (d6 — no forcing).
+//   ⚪speculative: a grounded result EITHER WAY is a valid close.
+//
+//   hexa verify --verifier-cmd "HEXA_LANG=. hexa run bench/qforge/randomized_eig.hexa" \
+//               --claim "randomized sketch recovers the lowest-nocc spectrum to tol" \
+//               --expect "VERDICT_RANDEIG=MATCH"
+use "stdlib/qforge/davidson"
+use "stdlib/alloc/math/eigen"
+
+// ── synthetic symmetric H (matrix-free matvec, shared global) ───────────────
+let mut G_MAT: [float] = []
+let mut G_N = 0
+let mut G_MATVECS = 0
+
+fn h_apply(v: [float]) -> [float] {
+    G_MATVECS = G_MATVECS + 1
+    let mut out: [float] = []
+    let mut i = 0
+    while i < G_N {
+        let mut s = 0.0
+        let mut j = 0
+        while j < G_N { s = s + G_MAT[i * G_N + j] * v[j] ; j = j + 1 }
+        out.push(s)
+        i = i + 1
+    }
+    return out
+}
+
+// Deterministic real-symmetric, diagonally-dominant H (well-separated lower
+// spectrum): diag = 2(i+1) ascending, off-diag = 1/(|i-j|+1). Same family the
+// Davidson/Lanczos/CheFSI benches use — a known-hard but solvable testbed.
+fn _build_flat(n: int) -> [float] {
+    let mut m: [float] = []
+    let mut a = 0
+    while a < n {
+        let mut b = 0
+        while b < n {
+            if a == b { m.push(2.0 * to_float(a + 1)) }
+            else {
+                let d = a - b
+                let ad = if d < 0 { 0 - d } else { d }
+                m.push(1.0 / to_float(ad + 1))
+            }
+            b = b + 1
+        }
+        a = a + 1
+    }
+    return m
+}
+
+// ── small vector helpers (local — stdlib has no public dot/axpy; d19 grep) ──
+fn _dot(a: [float], b: [float], n: int) -> float {
+    let mut s = 0.0 ; let mut i = 0
+    while i < n { s = s + a[i] * b[i] ; i = i + 1 }
+    return s
+}
+
+// ── deterministic PRNG: hashed-index LCG → uniform → Box-Muller normal ──────
+// hexa has no Math.random; derive a reproducible Gaussian from a fixed seed and
+// the flat index. splitmix64-style avalanche on (seed + idx) for decorrelation,
+// then a 53-bit mantissa uniform in (0,1).
+fn _hash_u64(x: int) -> int {
+    // splitmix64 finalizer (wrapping int arithmetic). Mask to 62 bits to stay in
+    // safe positive int range across backends; quality ample for a test sketch.
+    let mask = 4611686018427387903          // 2^62 - 1
+    let mut z = (x + 2654435769) & mask
+    z = ((z ^ (z / 65536)) * 2246822519) & mask
+    z = ((z ^ (z / 8192)) * 3266489917) & mask
+    z = (z ^ (z / 32768)) & mask
+    return z
+}
+fn _uniform(seed: int, idx: int) -> float {
+    // two independent hashed draws → a (0,1) uniform; +1 avoids exact 0.
+    let h = _hash_u64(seed * 1000003 + idx)
+    let denom = 4611686018427387904.0       // 2^62
+    let u = (to_float(h) + 1.0) / (denom + 2.0)
+    return u
+}
+fn _gauss(seed: int, idx: int) -> float {
+    // Box-Muller from two decorrelated uniforms keyed by (seed, 2*idx[, +1]).
+    let u1 = _uniform(seed, 2 * idx)
+    let u2 = _uniform(seed + 7919, 2 * idx + 1)
+    let r = sqrt(-2.0 * ln(u1))
+    return r * cos(6.283185307179586 * u2)
+}
+
+// build the n × k Gaussian sketch as a block (rows = the k sketch vectors of len n)
+fn _gauss_sketch(n: int, k: int, seed: int) -> [[float]] {
+    let mut blk: [[float]] = []
+    let mut c = 0
+    while c < k {
+        let mut col: [float] = []
+        let mut i = 0
+        while i < n { col.push(_gauss(seed, c * n + i)) ; i = i + 1 }
+        blk.push(col)
+        c = c + 1
+    }
+    return blk
+}
+
+// modified Gram-Schmidt QR (rows = vectors → orthonormal rows). Reseeds a
+// near-dependent direction from a shifted unit vector so the width is preserved.
+fn _ortho_block(block: [[float]], k: int, n: int) -> [[float]] {
+    let mut out: [[float]] = []
+    let mut j = 0
+    while j < k {
+        let mut v: [float] = []
+        let mut t = 0
+        while t < n { v.push(block[j][t]) ; t = t + 1 }
+        let mut p = 0
+        while p < j {
+            let proj = _dot(out[p], v, n)
+            let mut i = 0
+            while i < n { v[i] = v[i] - proj * out[p][i] ; i = i + 1 }
+            p = p + 1
+        }
+        let nrm = sqrt(_dot(v, v, n))
+        if nrm < 1.0e-12 {
+            let mut w: [float] = []
+            let mut q = 0
+            while q < n { if q == (j % n) { w.push(1.0) } else { w.push(0.0) } ; q = q + 1 }
+            let mut pp = 0
+            while pp < j {
+                let pr = _dot(out[pp], w, n)
+                let mut i2 = 0
+                while i2 < n { w[i2] = w[i2] - pr * out[pp][i2] ; i2 = i2 + 1 }
+                pp = pp + 1
+            }
+            let nw = sqrt(_dot(w, w, n))
+            let mut i3 = 0
+            while i3 < n { w[i3] = w[i3] / nw ; i3 = i3 + 1 }
+            out.push(w)
+        } else {
+            let mut i4 = 0
+            while i4 < n { v[i4] = v[i4] / nrm ; i4 = i4 + 1 }
+            out.push(v)
+        }
+        j = j + 1
+    }
+    return out
+}
+
+// apply A = (c·I − H) to a single vector (so the LOWEST H-eigenvalues become the
+// LARGEST A-eigenvalues — the dominant subspace the random sketch finds).
+fn _apply_shift(v: [float], n: int, c: float) -> [float] {
+    let hv = h_apply(v)
+    let mut out: [float] = []
+    let mut i = 0
+    while i < n { out.push(c * v[i] - hv[i]) ; i = i + 1 }
+    return out
+}
+
+// ── randomized subspace iteration for the lowest-nocc eigenpairs (HMT) ──────
+// Ω Gaussian (n×L, L=nocc+p) → Y=(cI−H)^q·Ω (re-ortho each power step) → QR=Q →
+// Rayleigh-Ritz Hs=QᵀHQ → eigh → lowest-nocc Ritz values (ascending).
+fn randomized_lowest(n: int, nocc: int, p: int, q: int, c: float, seed: int) -> [float] {
+    let L = nocc + p
+    // Ω → Y0 = A·Ω (the first sketch application).
+    let omega = _gauss_sketch(n, L, seed)
+    let mut Y: [[float]] = []
+    let mut r = 0
+    while r < L { Y.push(_apply_shift(omega[r], n, c)) ; r = r + 1 }
+    Y = _ortho_block(Y, L, n)
+    // q-1 further power iterations: Y ← orth(A·Y) (Halko Alg. 4.4 stabilized).
+    let mut it = 1
+    while it < q {
+        let mut Yn: [[float]] = []
+        let mut s = 0
+        while s < L { Yn.push(_apply_shift(Y[s], n, c)) ; s = s + 1 }
+        Y = _ortho_block(Yn, L, n)
+        it = it + 1
+    }
+    let Q = Y
+    // Rayleigh-Ritz on the ORIGINAL H: Hs = Qᵀ H Q (L×L dense).
+    let mut HQ: [[float]] = []
+    let mut j = 0
+    while j < L { HQ.push(h_apply(Q[j])) ; j = j + 1 }
+    let mut Hs: [float] = []
+    let mut a = 0
+    while a < L {
+        let mut b = 0
+        while b < L { Hs.push(_dot(Q[a], HQ[b], n)) ; b = b + 1 }
+        a = a + 1
+    }
+    let eg = eigh(Hs, L)        // vals DESCENDING
+    let vals = eg[0]
+    // lowest-nocc H-eigenvalues = the last nocc of the descending Ritz values.
+    let mut low: [float] = []
+    let mut t = L - 1
+    while t >= L - nocc { low.push(vals[t]) ; t = t - 1 }
+    return low
+}
+
+fn main() {
+    let n = 64
+    let nocc = 6                  // wanted lowest-nocc occupied eigenpairs
+    let tol = 1.0e-8
+    let seed = 1234567            // FIXED deterministic seed (reproducible g5)
+
+    G_MAT = _build_flat(n)
+    G_N = n
+
+    // ── REFERENCE: dense Jacobi eigh on the explicit H (ground truth) ────────
+    let ref_eg = eigvalsh(G_MAT, n)          // descending
+    let mut ref_low: [float] = []            // lowest-nocc ascending
+    let mut t = n - 1
+    while t >= n - nocc { ref_low.push(ref_eg[t]) ; t = t - 1 }
+
+    // ── REFERENCE 2: engine Davidson (the solver the sketch would replace) ───
+    let mut diag: [float] = []
+    let mut i = 0
+    while i < n { diag.push(G_MAT[i * n + i]) ; i = i + 1 }
+    let dres = qforge_davidson(h_apply, diag, n, nocc, tol, 300)
+    let dav_low = dres.evals                 // ascending, nocc
+
+    // spectral-shift constant c = Gershgorin upper bound (max row 1-norm) ≥ λ_max,
+    // so every (c − λ_i) > 0 and the lowest λ_i map to the LARGEST A-eigenvalues.
+    let mut c = 0.0
+    let mut g = 0
+    while g < n {
+        let mut rowsum = 0.0
+        let mut h = 0
+        while h < n {
+            let v = G_MAT[g * n + h]
+            rowsum = rowsum + (if v < 0.0 { 0.0 - v } else { v })
+            h = h + 1
+        }
+        if rowsum > c { c = rowsum }
+        g = g + 1
+    }
+
+    // ── randomized sketch sweep over power-iters q at fixed oversampling p ────
+    // report accuracy vs q so the d6 probabilistic / power-iter dependence is visible.
+    let p = 6
+    println("n=" + to_string(n) + " nocc=" + to_string(nocc)
+            + " oversampling_p=" + to_string(p)
+            + " shift_c=" + to_string(c) + " seed=" + to_string(seed))
+
+    let mut best_low: [float] = []
+    let mut best_maxd = 1.0e30
+    let mut best_q = 0
+    let qs = [0, 1, 2, 3, 4]      // q=0 → pure sketch (no power iter), 1..4 power iters
+    let mut qi = 0
+    while qi < 5 {
+        let qq = qs[qi]
+        // q=0 means a single A·Ω application with no further power steps; encode as
+        // randomized_lowest with q>=1 (one apply); q here counts TOTAL A-applies.
+        let applyq = qq + 1
+        let low = randomized_lowest(n, nocc, p, applyq, c, seed)
+        let mut maxd = 0.0
+        let mut k = 0
+        while k < nocc {
+            let d = if low[k] > ref_low[k] { low[k] - ref_low[k] } else { ref_low[k] - low[k] }
+            if d > maxd { maxd = d }
+            k = k + 1
+        }
+        println("  power_iters_q=" + to_string(qq)
+                + " (A-applies=" + to_string(applyq) + ")"
+                + "  max|dlambda|=" + to_string(maxd))
+        if maxd < best_maxd { best_maxd = maxd ; best_low = low ; best_q = qq }
+        qi = qi + 1
+    }
+
+    // ── per-eigenvalue table at the best q (VERBATIM g5 evidence) ────────────
+    println("--- lowest-" + to_string(nocc) + " eigenvalues (ascending) at q="
+            + to_string(best_q) + " ---")
+    let mut k = 0
+    while k < nocc {
+        let d = if best_low[k] > ref_low[k] { best_low[k] - ref_low[k] }
+                else { ref_low[k] - best_low[k] }
+        println("  k=" + to_string(k)
+                + "  ref=" + to_string(ref_low[k])
+                + "  davidson=" + to_string(dav_low[k])
+                + "  randomized=" + to_string(best_low[k])
+                + "  |dref|=" + to_string(d))
+        k = k + 1
+    }
+    println("max|dlambda| (randomized vs dense-ref) = " + to_string(best_maxd)
+            + "  oversampling_p=" + to_string(p)
+            + "  power_iters_q=" + to_string(best_q))
+
+    if best_maxd < 1.0e-6 {
+        println("VERDICT_RANDEIG=MATCH max_dlambda=" + to_string(best_maxd)
+                + " oversampling_p=" + to_string(p)
+                + " power_iters_q=" + to_string(best_q))
+        exit(0)
+    }
+    // ⚪speculative · d6: a grounded NON-match is still a valid close. Report it.
+    println("VERDICT_RANDEIG=GROUNDED-NOMATCH max_dlambda=" + to_string(best_maxd)
+            + " oversampling_p=" + to_string(p)
+            + " power_iters_q=" + to_string(best_q)
+            + " (sketch under-resolved the occupied gap at this p,q — honest d6)")
+    exit(1)
+}
