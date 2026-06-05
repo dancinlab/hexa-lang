@@ -1,0 +1,276 @@
+// ═══════════════════════════════════════════════════════════════════════════
+//  QFORGE-PERF — Δ-ML TRAINED neural correction (g5 bench)
+//
+//  Lifts the "Δ-ML correction" probe ⚪ grounded → TRAINED by REUSING hexa's
+//  EXISTING ML stack (d19) — stdlib/autograd reverse-mode AD over Tensor:
+//      ag_var / ag_const / ag_add / ag_sub / ag_mul / ag_matmul / ag_exp
+//      ag_backward / ag_grad / ag_value / ag_zero_grad / ag_tape_reset
+//  NO autograd is built from scratch here; this file only USES the stack and
+//  hand-rolls a plain SGD update via ag_grad (no engine file touched — d3).
+//
+//  ── PROBLEM ──────────────────────────────────────────────────────────────
+//  A cheap el-ph method (coarse k/q grid, low cutoff) gives features x∈R².
+//  The TRUE correction Δλ(x) (cheap→accurate) is a KNOWN NONLINEAR function:
+//      Δλ(x) = 0.6·sin(1.3·x0) + 0.5·x1² − 0.4·x0·x1 + 0.2·exp(0.5·x1)
+//  This is deliberately nonlinear + with a cross-term, so a LINEAR ridge
+//  model (the prior #2813 sliver) CANNOT fit it — but a small trained MLP can.
+//
+//  ── MODEL ────────────────────────────────────────────────────────────────
+//  MLP:  2-input → 8-hidden (tanh) → 1-output.
+//  tanh is built from autograd primitives (exp): a fully-traced activation.
+//      tanh(z) = (e^{2z} − 1) / (e^{2z} + 1)
+//  The "/(…)" is realised as mul by the elementwise reciprocal, which we form
+//  with ag ops via pow(·,−1). All forward math goes through ag_* so backward
+//  differentiates the WHOLE network — weights AND activations.
+//
+//  ── TRAIN ────────────────────────────────────────────────────────────────
+//  Plain SGD over MSE loss, full-batch, using ag_grad for every parameter.
+//  The tape is reset each epoch (rebuild graph), grads read post-backward.
+//
+//  ── g5 VERIFY (printed VERBATIM) ─────────────────────────────────────────
+//  1. training-loss curve (a few epochs, decreasing)
+//  2. trained held-out MAE + rel-ε
+//  3. linear-ridge baseline held-out MAE + rel-ε on the SAME nonlinear set
+//  PASS iff trained-MLP rel-ε << linear rel-ε  (d6: else honest FAIL + numbers).
+//
+//  Run:  HEXA_LANG=. hexa run bench/qforge/delta_ml_correction.hexa
+// ═══════════════════════════════════════════════════════════════════════════
+
+use "stdlib/tensor/mod"
+use "stdlib/tensor/shape"
+use "stdlib/tensor/ops"
+use "stdlib/autograd"
+
+fn abs_f(x: float) -> float { if x < 0.0 { return 0.0 - x } else { return x } }
+
+// ── true nonlinear Δλ(x) the model must learn ────────────────────────────
+fn true_delta(x0: float, x1: float) -> float {
+    return 0.6 * sin(1.3 * x0) + 0.5 * x1 * x1 - 0.4 * x0 * x1 + 0.2 * exp(0.5 * x1)
+}
+
+// ── deterministic LCG → reproducible dataset + weight init ────────────────
+let mut _seed = 1234567
+fn rng() -> float {
+    _seed = (_seed * 1103515245 + 12345) % 2147483648
+    return to_float(_seed) / 2147483648.0   // ∈ [0,1)
+}
+fn runi(lo: float, hi: float) -> float { return lo + (hi - lo) * rng() }
+
+// ── tanh as a traced autograd subgraph: (e^{2z}-1)/(e^{2z}+1) ─────────────
+// z : ag handle (any shape). returns an ag handle for tanh(z).
+fn ag_tanh(z) {
+    let two   = ag_const(tensor_from_array(z["tensor"].shape, _const_fill(z["tensor"].shape, 2.0)))
+    let one   = ag_const(tensor_from_array(z["tensor"].shape, _const_fill(z["tensor"].shape, 1.0)))
+    let e2z   = ag_exp(ag_mul(two, z))           // e^{2z}
+    let num   = ag_sub(e2z, one)                 // e^{2z} - 1
+    let den   = ag_add(e2z, one)                 // e^{2z} + 1
+    let inv   = ag_pow(den, 0.0 - 1.0)           // 1/den  (pow(-1), fully traced)
+    return ag_mul(num, inv)
+}
+
+fn _const_fill(shape, v: float) -> array {
+    let n = tensor_size(shape)
+    let mut out = []
+    let mut i = 0
+    while i < n { out.push(v); i = i + 1 }
+    return out
+}
+
+// ── MLP forward (all ag_*): x[B,2] → h=tanh(x@W1+b1)[B,8] → y=h@W2+b2[B,1] ─
+// W1,b1,W2,b2 are ag handles (leaves). xb is an ag_const input.
+// b1/b2 broadcast: tensor_add_ref supports row-broadcast [B,H]+[1,H].
+fn mlp_forward(xb, W1, b1, W2, b2) {
+    let z1 = ag_add(ag_matmul(xb, W1), b1)   // [B,8]
+    let h  = ag_tanh(z1)                      // [B,8]
+    let z2 = ag_add(ag_matmul(h, W2), b2)    // [B,1]
+    return z2
+}
+
+// MSE loss over [B,1] pred vs [B,1] target → scalar ag handle (sum/B).
+// loss = mean( (pred - target)^2 ).  Reduce by matmul with ones for a sum.
+fn mse_loss(pred, target, B: int) {
+    let diff = ag_sub(pred, target)              // [B,1]
+    let sq   = ag_mul(diff, diff)                // [B,1]
+    // sum over batch: onesᵀ[1,B] @ sq[B,1] = [1,1]
+    let onesT = ag_const(tensor_from_array([1, B], _const_fill([1, B], 1.0 / to_float(B))))
+    return ag_matmul(onesT, sq)                  // [1,1] = mean MSE
+}
+
+// ── linear ridge baseline (closed form, normal equations w/ L2) ───────────
+// Fit  y ≈ X·w + b   with feature matrix [x0, x1, 1] and ridge λ on w only.
+// Solve the 3×3 normal system (Xᵀ X + λI) θ = Xᵀ y by Gauss elimination.
+fn ridge_fit(X0, X1, Y, n: int, lam: float) -> array {
+    // design columns: c0=x0, c1=x1, c2=1
+    // Build A = DᵀD + λ·diag(1,1,0)  (no reg on bias), g = Dᵀy
+    let mut A = [0.0,0.0,0.0, 0.0,0.0,0.0, 0.0,0.0,0.0]
+    let mut g = [0.0,0.0,0.0]
+    let mut i = 0
+    while i < n {
+        let d0 = X0[i]; let d1 = X1[i]; let d2 = 1.0; let yi = Y[i]
+        A[0] = A[0] + d0*d0; A[1] = A[1] + d0*d1; A[2] = A[2] + d0*d2
+        A[3] = A[3] + d1*d0; A[4] = A[4] + d1*d1; A[5] = A[5] + d1*d2
+        A[6] = A[6] + d2*d0; A[7] = A[7] + d2*d1; A[8] = A[8] + d2*d2
+        g[0] = g[0] + d0*yi; g[1] = g[1] + d1*yi; g[2] = g[2] + d2*yi
+        i = i + 1
+    }
+    A[0] = A[0] + lam; A[4] = A[4] + lam   // ridge on slopes only
+    // Gauss elimination on the 3×3 augmented system.
+    let mut M = [A[0],A[1],A[2],g[0],  A[3],A[4],A[5],g[1],  A[6],A[7],A[8],g[2]]
+    let mut col = 0
+    while col < 3 {
+        // pivot
+        let piv = M[col*4 + col]
+        let mut k = 0
+        while k < 4 { M[col*4 + k] = M[col*4 + k] / piv; k = k + 1 }
+        let mut r = 0
+        while r < 3 {
+            if r != col {
+                let f = M[r*4 + col]
+                let mut c = 0
+                while c < 4 { M[r*4 + c] = M[r*4 + c] - f * M[col*4 + c]; c = c + 1 }
+            }
+            r = r + 1
+        }
+        col = col + 1
+    }
+    return [M[3], M[7], M[11]]   // [w0, w1, b]
+}
+
+fn main() {
+    println("=== QFORGE-PERF Δ-ML TRAINED neural correction (stdlib/autograd reuse · g5) ===")
+    println("model: 2-input -> 8-hidden(tanh) -> 1-output  ·  loss: MSE  ·  optim: SGD (ag_grad)")
+    println("true Δλ(x) = 0.6 sin(1.3 x0) + 0.5 x1^2 - 0.4 x0 x1 + 0.2 exp(0.5 x1)  [NONLINEAR + cross-term]")
+    println("")
+
+    let H = 8
+    let Btr = 60      // train samples
+    let Bte = 40      // held-out samples
+
+    // ── build train + held-out datasets (disjoint draws from same dist) ──
+    let mut xtr0 = []; let mut xtr1 = []; let mut ytr = []
+    let mut i = 0
+    while i < Btr {
+        let a = runi(-1.5, 1.5); let b = runi(-1.5, 1.5)
+        xtr0.push(a); xtr1.push(b); ytr.push(true_delta(a, b)); i = i + 1
+    }
+    let mut xte0 = []; let mut xte1 = []; let mut yte = []
+    i = 0
+    while i < Bte {
+        let a = runi(-1.5, 1.5); let b = runi(-1.5, 1.5)
+        xte0.push(a); xte1.push(b); yte.push(true_delta(a, b)); i = i + 1
+    }
+
+    // flat row-major design buffers [B,2] and targets [B,1]
+    fn pack_x(c0, c1, n: int) -> array {
+        let mut out = []; let mut j = 0
+        while j < n { out.push(c0[j]); out.push(c1[j]); j = j + 1 }
+        return out
+    }
+    let Xtr = pack_x(xtr0, xtr1, Btr)
+    let Xte = pack_x(xte0, xte1, Bte)
+
+    // ── weight init (small uniform, deterministic) ──
+    let mut w1 = []; i = 0
+    while i < 2 * H { w1.push(runi(-0.6, 0.6)); i = i + 1 }
+    let mut b1 = []; i = 0
+    while i < H { b1.push(0.0); i = i + 1 }
+    let mut w2 = []; i = 0
+    while i < H { w2.push(runi(-0.6, 0.6)); i = i + 1 }
+    let mut b2 = [0.0]
+
+    // const input/target tensors (rebuilt as ag_const each epoch via tape)
+    let lr = 0.08
+    let epochs = 400
+
+    println("--- TRAINING LOSS CURVE (full-batch MSE, SGD lr=" + to_string(lr) + ") ---")
+
+    let mut ep = 0
+    while ep <= epochs {
+        ag_tape_reset()
+        // leaves (current weights)
+        let W1 = ag_var(tensor_from_array([2, H], w1))
+        let B1 = ag_var(tensor_from_array([1, H], b1))
+        let W2 = ag_var(tensor_from_array([H, 1], w2))
+        let B2 = ag_var(tensor_from_array([1, 1], b2))
+        // inputs
+        let xb = ag_const(tensor_from_array([Btr, 2], Xtr))
+        let yb = ag_const(tensor_from_array([Btr, 1], ytr))
+
+        let pred = mlp_forward(xb, W1, B1, W2, B2)
+        let loss = mse_loss(pred, yb, Btr)
+        ag_backward(loss)
+
+        let lossv = ag_value(loss).data[0]
+
+        // print a sparse, readable curve
+        let show = (ep == 0) || (ep == 1) || (ep == 2) || (ep == 5) || (ep == 10)
+                   || (ep == 25) || (ep == 50) || (ep == 100) || (ep == 200) || (ep == 400)
+        if show {
+            println("  epoch " + to_string(ep) + "\tMSE = " + to_string(lossv))
+        }
+
+        // ── SGD update via ag_grad (plain, no optimizer-file dep) ──
+        let gW1 = ag_grad(W1); let gB1 = ag_grad(B1)
+        let gW2 = ag_grad(W2); let gB2 = ag_grad(B2)
+        let mut k = 0
+        while k < 2 * H { w1[k] = w1[k] - lr * gW1.data[k]; k = k + 1 }
+        k = 0
+        while k < H { b1[k] = b1[k] - lr * gB1.data[k]; k = k + 1 }
+        k = 0
+        while k < H { w2[k] = w2[k] - lr * gW2.data[k]; k = k + 1 }
+        b2[0] = b2[0] - lr * gB2.data[0]
+
+        ep = ep + 1
+    }
+    println("")
+
+    // ── evaluate TRAINED MLP on held-out set ──
+    ag_tape_reset()
+    let W1f = ag_var(tensor_from_array([2, H], w1))
+    let B1f = ag_var(tensor_from_array([1, H], b1))
+    let W2f = ag_var(tensor_from_array([H, 1], w2))
+    let B2f = ag_var(tensor_from_array([1, 1], b2))
+    let xbe = ag_const(tensor_from_array([Bte, 2], Xte))
+    let predE = mlp_forward(xbe, W1f, B1f, W2f, B2f)
+    let pv = ag_value(predE).data
+
+    let mut mlp_abs = 0.0; let mut sum_abs_y = 0.0
+    i = 0
+    while i < Bte {
+        mlp_abs = mlp_abs + abs_f(pv[i] - yte[i])
+        sum_abs_y = sum_abs_y + abs_f(yte[i])
+        i = i + 1
+    }
+    let mlp_mae = mlp_abs / to_float(Bte)
+    let mlp_rel = mlp_abs / sum_abs_y
+
+    // ── linear ridge baseline on the SAME held-out set ──
+    let theta = ridge_fit(xtr0, xtr1, ytr, Btr, 0.01)
+    let mut lin_abs = 0.0
+    i = 0
+    while i < Bte {
+        let yp = theta[0] * xte0[i] + theta[1] * xte1[i] + theta[2]
+        lin_abs = lin_abs + abs_f(yp - yte[i])
+        i = i + 1
+    }
+    let lin_mae = lin_abs / to_float(Bte)
+    let lin_rel = lin_abs / sum_abs_y
+
+    println("--- HELD-OUT RESULTS (" + to_string(Bte) + " disjoint samples) ---")
+    println("  TRAINED MLP   :  MAE = " + to_string(mlp_mae) + "   rel-eps = " + to_string(mlp_rel))
+    println("  LINEAR ridge  :  MAE = " + to_string(lin_mae) + "   rel-eps = " + to_string(lin_rel)
+            + "   theta=[" + to_string(theta[0]) + ", " + to_string(theta[1]) + ", " + to_string(theta[2]) + "]")
+    let improve = lin_rel / mlp_rel
+    println("  improvement (lin_rel / mlp_rel) = " + to_string(improve) + "x")
+    println("")
+
+    // ── PASS gate (d6 honest) ──
+    let beats = mlp_rel < lin_rel * 0.5   // require a clear margin, not a tie
+    if beats {
+        println("F-QFORGE-DELTA-ML-BEATS-LINEAR = 1")
+        println("VERDICT=PASS — TRAINED MLP beats linear-ridge on the nonlinear held-out set")
+    } else {
+        println("F-QFORGE-DELTA-ML-BEATS-LINEAR = 0")
+        println("VERDICT=FAIL — MLP did not clearly beat linear (honest d6 report; numbers above)")
+    }
+}
