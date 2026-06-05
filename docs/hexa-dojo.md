@@ -144,6 +144,54 @@ bash tool/dojo_rent_preflight.sh --self-test    # verifies all 6 fixes
 - A detached fire over ssh with a bg job holding the stdout fd → ssh hangs
   (exit 255). Wrap: `setsid bash -c '…' </dev/null >/dev/null 2>&1 & disown`.
 
+> The **training-recipe** lessons (bench-before-vectorize, the bf16-weights
+> memory recipe, the `optim8bit` element limit, the single-vs-multi-GPU
+> decision rule — handoff `a10891bc`) have their own section below:
+> **[Training recipe — optimization gotchas](#training-recipe--optimization-gotchas-dont-repeat-these)**.
+
+## Training recipe — optimization gotchas (don't repeat these)
+
+The 4474f21b preflight above hardens the **infra** path (renting + launching).
+This section hardens the **training-recipe** path: six expensive lessons the
+anima 7B `CLMConvMoE` DDP fire paid for, reflected here so a dojo user does not
+re-pay them. These are **cited anima lessons** (sidecar handoff `a10891bc`) —
+attributed, not re-measured here; the numbers are anima's H200 observations.
+
+When a kata says "optimize the model" or "scale to multi-GPU", consult this
+table **first** — the intuitive move is often the slower or the broken one.
+
+| # | lesson | the dojo rule |
+|---|---|---|
+| **1** | **bench before you vectorize** — fusing 30 `ConvExpert` modules into one grouped `nn.Conv1d(E·d, E·d, K, groups=30)` (186 240 channels) ran **~14 min/step** on an H200, vs the plain `ModuleList` of 30 small convs at **~74 s/step**. A grouped conv with many groups *defeats* GPU group-parallelism and cuDNN can't pick a fast algo for that shape. | **Fewer kernel launches ≠ faster.** BENCH the grouped/fused form against the loop on **one step** before adopting it. Do **not** auto-vectorize an expert loop. |
+| **2** | **DDP + grad-checkpoint + bitsandbytes `AdamW8bit`, all three on = silent child crash.** Each *pair* works; single-GPU works. torchrun *hides* it (only `rank N exitcode 1`). | Use `no-ckpt + optim8bit` **or** `ckpt + fp32` — not all three. If you must debug, launch via the 4474f21b fix #6 `--tee 3` harvest (see the preflight section) to see the real child traceback. |
+| **3** | **`optim8bit` has a 2³¹ per-tensor element limit.** A single tensor with >2.1 B elements (e.g. the vectorized fused weight at 3.47 B) breaks bitsandbytes: `Error invalid configuration argument at ops.cu:226`. | If any **single** parameter tensor exceeds ~2.1 B elements, `adamw-8bit` is **out** — keep fp32/bf16 AdamW for that tensor. (This is a *second* reason not to build the giant fused weight in lesson #1.) |
+| **4** | **7B memory recipe (H200, 141 GB).** fp32-AdamW = ~112 GB and allocator-thrashes at 96–99 % (step 0 took ~7 min); `optim8bit` is broken by #3; bf16-autocast *alone* doesn't help (weights stay fp32). | **WINNER = `--bf16-weights`** (model + grad + AdamW state all bf16 → ~70 GB) **plus** DDP `gradient_as_bucket_view=True` (−28 GB more). This is the recipe the preflight now *recommends* for ≥~3B-param models. |
+| **5** | **`CLM_NO_CUDNN=1` is naive-slow** (minutes/step); cuDNN **on** is needed — but cuDNN still can't rescue the grouped-conv shape from lesson #1. | Leave cuDNN **on**. It is necessary but **not** sufficient; it does not make the wrong model shape fast. |
+| **6** | **single-GPU can BEAT multi-GPU.** DDP replicates the *full* model on every GPU (per-GPU memory unchanged), so when the **model** (here, the conv) is the bottleneck — not data throughput — 4×H200 DDP **never** beats a single H200. The single-H200 `ModuleList` run trained M13 fine (CE 5.64→2.38 over step 0→200, ~74 s/step). | **DDP-decision rule:** scale to multi-GPU only when you are **data-throughput-bound**. If you are **model/compute-bound** (a big conv/GEMM per step), more GPUs don't help — fix the per-step model cost first, on **one** GPU. |
+
+### how the dojo enforces this
+
+- The flame-forge **README** for a model-authoring kata carries a
+  **"bench-before-vectorize"** note (lesson #1) — the dojo does **not**
+  auto-vectorize an expert loop for you.
+- `tool/dojo_rent_preflight.sh` (the same fix #5 helper) now also:
+  - **recommends `--bf16-weights`** for a model with ≥~3 B params (lesson #4),
+  - **warns** that fp32-AdamW thrashes the allocator when the estimate lands
+    near the cap (lesson #4),
+  - **blocks/warns `optim8bit`** when any single tensor would exceed the 2³¹
+    element limit (lesson #3) — pass `--max-tensor-elems N` to declare your
+    largest parameter tensor,
+  - prints a **"DDP won't help if model-bound"** advisory line (lesson #6).
+
+  Self-test it with no rental: `bash tool/dojo_rent_preflight.sh --self-test`.
+
+> **honesty:** these six are **cited** anima H200 observations (handoff
+> `a10891bc`), not hexa-lang re-measurements. The dojo reflects them as
+> *guidance + a preflight advisory*; it does not re-run the 7B job. The
+> preflight's element-limit and bf16 recommendation logic is locally
+> self-tested (pure arithmetic, no GPU); the underlying anima timings are
+> not reproduced here.
+
 ## references
 
 - [`HEXA-CUDA.md`](../HEXA-CUDA.md) — the GPU-native domain home
@@ -153,3 +201,5 @@ bash tool/dojo_rent_preflight.sh --self-test    # verifies all 6 fixes
 - [`stdlib/cloud/preflight.hexa`](../stdlib/cloud/preflight.hexa) — the closed-form GPU mem-budget SSOT (fix #5)
 - [`tool/dojo_rent_preflight.sh`](../tool/dojo_rent_preflight.sh) — the shared 6-fix rent/preflight helper
 - `.verdicts/hexa-cuda/F-HEXACUDA-DOJO.txt` — the g5 verdict (emit · parse · descent gate · preflight self-test)
+- sidecar handoff `4474f21b` — the 6-fix **infra** preflight (rent + launch) reflected in the "no-troubleshoot preflight" section
+- sidecar handoff `a10891bc` — the 6 **training-recipe** lessons reflected in the "Training recipe — optimization gotchas" section
