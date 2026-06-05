@@ -73,3 +73,29 @@
           resident 25% of full-H footprint, streamed out == in-core out max_rel_err=0.0
           (disjoint output rows → no FP-order change). Completion+footprint+parity PASS.
       provider: NO PAID RENT — all four built+run on summer free pool (d7).
+
+- [x] DISSOLUTION-MAP — "QE scaling walls are architecture, not physics" made a
+      CHECKABLE ARTIFACT. The 3 QE el-ph scaling walls are MPI/data-layout
+      architecture limits (not physics); each maps to a MERGED-and-MEASURED
+      QFORGE lever. g5 selftest encodes a structured table (wall·lever·pr·metric·
+      status) and asserts every DISSOLVED row is merged AND measured.
+      selftest: stdlib/qforge/dissolution_map_selftest.hexa (hexa run → PASS)
+      verdict : .verdicts/qforge-dissolution-map/F-QFORGE-DISSOLUTION-MAP.txt (🟢)
+      map     :
+        [1] DFPT core-ceiling (Sternheimer CPU-rank-bound) → GPU-offload block
+            matvec + GPU-resident DFPT · #2764 · block-matvec 63.96× ≥5×, |dψ⟩
+            max_rel_err=0.0 · DISSOLVED
+        [2] memory-per-rank clamp (cell ≤ one rank RAM) → GPU-VRAM-resident +
+            out-of-core ψ stream (cells>VRAM) · #2764 · streamed==in-core
+            max_rel_err=0.0 · DISSOLVED
+        [3] monolithic per-q serialization (no native q fan-out) → parallel-q
+            split/collect/union + multi-pod q-split orchestrator · #2765 ·
+            2/4-shard==single-pass λ, Δ=0.000e+00 bit-for-bit · DISSOLVED
+      caveat  : (d6 HONEST · no double-count) closes the DISSOLUTION-LEVER half
+                only. The gate's "λ within 1% of QE" sub-clause is NOT met —
+                converged-CaH6 rel-ε=5.47% (>1%), screening-XC blocker (bare |g|²
+                vs QE ε⁻¹-screened). That sub-gate ROUTES to the pow2-FFT-Poisson
+                + converged-CaH6 milestones (domains/QFORGE-PERF.md), NOT here.
+                d_qforge_migration_routing: gate anchors finish on QE; this map
+                speeds POST-gate candidates. Supporting merged PRs: #2764 #2737
+                #2730 #2765 #2742 #2766 #2767.

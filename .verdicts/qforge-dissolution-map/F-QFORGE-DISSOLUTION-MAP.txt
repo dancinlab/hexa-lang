@@ -1,0 +1,73 @@
+F-QFORGE-DISSOLUTION-MAP — "QE scaling walls are architecture, not physics"
+================================================================================
+verdict : 🟢 SUPPORTED — 3/3 QE walls map to a MERGED-and-MEASURED QFORGE lever
+          (checkable artifact, g5 selftest; λ-within-1% sub-gate ROUTES elsewhere)
+date    : 2026-06-05
+selftest: stdlib/qforge/dissolution_map_selftest.hexa  (hexa run → PASS, exit 0)
+scope   : DISSOLUTION-LEVER half of the QFORGE-FEATURE migration milestone.
+          Does NOT claim the full gate met — see ROUTES row + CAVEAT below.
+
+CLAIM (made checkable, not prose)
+  The three QE el-ph scaling walls are MPI / data-layout ARCHITECTURE limits,
+  not physics. QFORGE dissolves each with a lever that is both MERGED (a real
+  PR# on main this session) AND MEASURED (Δ=0 bit-parity / measured speedup /
+  bit-for-bit parity). The selftest encodes a structured table
+  (wall · lever · pr · metric · status) and asserts every DISSOLVED row is
+  merged-and-measured, exactly 3 walls dissolve, and the λ-accuracy sub-gate is
+  carried as a non-closure ROUTES row (no PR, not counted).
+
+DISSOLUTION MAP (selftest output, VERBATIM)
+  WALL -> LEVER -> PR -> METRIC -> STATUS
+  ---------------------------------------------------------------
+  [1] WALL  : DFPT core-ceiling (Sternheimer solve CPU-rank-bound)
+      LEVER : GPU-offload block-Sternheimer matvec (mixed-precision TF32-tc) + GPU-resident DFPT
+      PR    : #2764
+      METRIC: block-matvec 63.96x >= 5x @N4096 (FP64 |dpsi> max_rel_err=0.0, bit-exact)
+      STATUS: DISSOLVED
+  [2] WALL  : memory-per-rank clamp (cell capped at one rank's RAM)
+      LEVER : GPU-VRAM-resident state + out-of-core psi streaming (cells > VRAM)
+      PR    : #2764
+      METRIC: streamed (25% resident) == in-core out, max_rel_err=0.0 (disjoint output rows)
+      STATUS: DISSOLVED
+  [3] WALL  : monolithic per-q serialization (no native q fan-out)
+      LEVER : native parallel-q split/collect/union + multi-pod q-split runtime orchestrator
+      PR    : #2765
+      METRIC: 2/4-shard partition+reduce == single-pass lambda, Delta=0.000e+00 bit-for-bit
+      STATUS: DISSOLVED
+  [4] WALL  : lambda-accuracy sub-gate (screening-XC: bare |g|2 vs QE eps^-1-screened)
+      LEVER : ROUTES -> pow2-FFT-Poisson + converged-CaH6 milestones (SEPARATE, OPEN)
+      PR    : n/a
+      METRIC: converged-CaH6 rel-eps=5.47% > 1% (.verdicts/qforge-cah6-fullbz-xval) — NOT met
+      STATUS: ROUTES
+  ---------------------------------------------------------------
+  DISSOLUTION-MAP: PASS — 3/3 QE walls map to a merged-and-measured QFORGE lever.
+    (gate's lambda-within-1% sub-clause ROUTES to pow2-FFT-Poisson + converged-CaH6, d6 — NOT claimed.)
+
+SUPPORTING MERGED PRs (all MERGED on main, 2026-06-04)
+  #2764 — GPU-tier kernels (mixed-precision matvec 63.96×, out-of-core ψ stream Δ=0)
+  #2737 — GPU-resident Sternheimer DFPT (on-device parity; memory-wall solve piece)
+  #2730 — parallel-q split/collect/union (Δ=0)
+  #2765 — multi-pod q-split RUNTIME orchestrator (fan→monitor→collect→union→λ, Δ=0)
+  #2742 — end-to-end qforge_run production orchestrator (@L1/@L2)
+  #2766 — KEYSTONE PW front-end adapter (deck-dir→QforgeDeck, unblocks converged-CaH6)
+  #2767 — fused Sternheimer CG (on-device scalar reduction → throughput gate)
+
+CAVEAT (d6 — honest, no double-count, no over-claim)
+  The migration GATE's full text is "a gate-anchor-class el-ph run completes
+  end-to-end on QFORGE FASTER than QE, λ within 1% of QE". This map closes the
+  DISSOLUTION-LEVER part only: the levers are all proven (Δ=0 / speedup
+  measured) and the orchestrator RUNS end-to-end. The "λ within 1%" sub-clause
+  is NOT met — converged-CaH6 measured rel-ε = 5.47% (> 1%), recorded verbatim
+  in .verdicts/qforge-cah6-fullbz-xval/cah6_fullbz_converged.log. Its blocker is
+  the screening-XC functional gap (QFORGE |g|² is BARE; QE λ=4.376 uses the
+  ε⁻¹-screened |g|²). That sub-gate ROUTES to the pow2-FFT-Poisson +
+  converged-CaH6 milestones (domains/QFORGE-PERF.md) — a SEPARATE open track,
+  not closed here.
+  Routing note (d_qforge_migration_routing): gate anchors (CaH6·LaH10·Li2MgH16)
+  FINISH on QE as the QFORGE cross-val ground-truth. This dissolution map speeds
+  the POST-gate candidates — it does not move the gate anchors off QE.
+
+ARTIFACTS
+  stdlib/qforge/dissolution_map_selftest.hexa     — g5 selftest (structured table + asserts)
+  .verdicts/qforge-dissolution-map/F-QFORGE-DISSOLUTION-MAP.txt — this verdict
+  domains/QFORGE-FEATURE.md                        — milestone annotation row
