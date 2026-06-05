@@ -1,0 +1,45 @@
+QFORGE-FEATURE multi-GPU q/k sharding — REAL 2-PHYSICAL-GPU on-device verdict
+=============================================================================
+Pod   : vast.ai instance 39570814 — 2× NVIDIA RTX A4000 (sm_86, 16.9 GB each)
+        topo PHB (PCIe host bridge, NO NVLink) · P2P peer-access 1/1
+        image nvidia/cuda:12.4.1-devel · nvcc 12.4 · cost $0.32663/hr
+        TORN DOWN (vastai destroy instance 39570814 -y) immediately after the run.
+Build : nvcc -O2 nvptx_shard_qk_multigpu.cu -o nvptx_shard_qk_multigpu  (RC=0)
+
+--- run 1  (Nq=4096, REPEAT=20000)  VERBATIM ---
+[node] cudaGetDeviceCount = 2
+[gpu 0] NVIDIA RTX A4000 sm_86  (16.9 GB)
+[gpu 1] NVIDIA RTX A4000 sm_86  (16.9 GB)
+[p2p] dev0->dev1 = 1  dev1->dev0 = 1  (0 = PCIe-host reduce, 1 = direct peer)
+=== QFORGE kernel 3: REAL 2-physical-GPU q/k sharding (partition + cross-device reduce) ===
+[node] GPUs: dev0 = NVIDIA RTX A4000 sm_86 ; dev1 = NVIDIA RTX A4000 sm_86 ; P2P(0<->1)=1/1
+[setup] Nq=4096  G=2 shards on 2 PHYSICAL GPUs  (REPEAT=20000 for wall timing)
+  shard 0 -> dev0 : q[0..2048)  partial_lambda = 2.22077020986935325e-01
+  shard 1 -> dev1 : q[2048..4096)  partial_lambda = 2.26049819956779807e-01
+[lambda] 1-GPU single-pass (whole list, dev0) : 4.48126840943715132e-01
+[lambda] 2-GPU shard partition+reduce         : 4.48126840943715132e-01
+  shard-lambda(2GPU) - single-lambda(1GPU) = 0.000e+00   (gate: Delta == 0)
+[wall ] 1-GPU whole-list  : 4.535187 s  (20000 passes of Nq=4096)
+[wall ] 2-GPU half-each   : 2.355674 s  (20000 passes, each dev does Nq/2)
+[wall ] speedup 1GPU/2GPU = 1.9252 x   (ideal embarrassingly-parallel = 2.0)
+GATE A  2-GPU shard-lambda == 1-GPU single-lambda (Delta=0): PASS
+GATE B  wall-ratio (reported VERBATIM, d6): 1.9252 x  (>=1.8x, near-ideal)
+VERDICT: PASS-2GPU
+EXIT_RC=0
+
+--- run 2 confirm  (Nq=16384, REPEAT=20000)  VERBATIM tail ---
+[lambda] 2-GPU shard partition+reduce         : 3.75741130307527871e-01
+  shard-lambda(2GPU) - single-lambda(1GPU) = 0.000e+00   (gate: Delta == 0)
+[wall ] 1-GPU whole-list  : 17.932574 s  (20000 passes of Nq=16384)
+[wall ] 2-GPU half-each   : 9.189909 s  (20000 passes, each dev does Nq/2)
+[wall ] speedup 1GPU/2GPU = 1.9513 x   (ideal embarrassingly-parallel = 2.0)
+GATE A  2-GPU shard-lambda == 1-GPU single-lambda (Delta=0): PASS
+GATE B  wall-ratio (reported VERBATIM, d6): 1.9513 x  (>=1.8x, near-ideal)
+VERDICT: PASS-2GPU
+
+=== GATE SUMMARY ===
+  Δ (shard vs single)  = 0.000e+00  (bit-for-bit, both runs)  -> GATE A MET
+  wall-ratio 1GPU/2GPU = 1.9252× (Nq=4096) / 1.9513× (Nq=16384)  -> ~2× MET (near-ideal)
+  honesty note (d6): <2.0× = per-device launch/sync + H2D-slice overhead over PHB/PCIe
+                     (no NVLink) on a serial-accumulate kernel — REAL ratio, not rounded.
+  NAMED-REMAINING (true multi-device hardware fan-out) -> CLOSED.
