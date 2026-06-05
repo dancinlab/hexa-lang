@@ -1,0 +1,641 @@
+// ═══════════════════════════════════════════════════════════════════════════
+//  QFORGE-PERF — LANE C 🧠paradigm — equivariant GNN TRAINED (g5 bench)
+//
+//  Lifts the "equivariant GNN phonons" probe ⚪ research-grounded → TRAINED by
+//  REUSING hexa's EXISTING ML stack (d19):
+//    · stdlib/autograd        — ag_var/ag_const/ag_add/ag_sub/ag_mul/ag_matmul
+//                               /ag_exp/ag_pow/ag_backward/ag_grad/ag_value
+//                               /ag_zero_grad/ag_tape_reset  (reverse-mode AD)
+//    · bench/qforge/equivariant_edge_feature.hexa  (#2811) — the E(3)-equivariant
+//      edge-feature kernel (l=1 vector message m_ij = f(|r_ij|)·r̂_ij, real
+//      spherical harmonics; equivariance verified to 3.33e-15). Its l=1 edge
+//      vectors are REUSED here as the GNN's geometric (covariant) input.
+//  NO autograd / NO equivariance kernel is built from scratch; this file only
+//  USES the two stacks. NO edit under stdlib/qforge (d3). CPU-only, NO rent.
+//
+//  ── THE EQUIVARIANT-GNN CLAIM ────────────────────────────────────────────
+//  A trainable 1-layer E(3)-equivariant message-passing net, built on the #2811
+//  edge features, predicts a rotation-COVARIANT target AND STAYS EQUIVARIANT
+//  after training (rotating the input rotates the output correctly). We verify
+//  this for BOTH readout types on one shared message-passing trunk:
+//
+//   (A) INVARIANT readout — a learned scalar potential / phonon-energy proxy
+//       E(x). Built ONLY from rotation-INVARIANT features (|r_ij| → MLP), so
+//       it is an O(3) scalar by construction:  E(R·x) == E(x).
+//
+//   (B) EQUIVARIANT readout — per-node force vector F_i(x). Built as a
+//       sum over neighbours of (learned invariant scalar gate) · (l=1 edge
+//       vector m_ij from #2811). A scalar·vector product of an O(3) scalar and
+//       an l=1 vector is itself l=1, so:  F_i(R·x) == R · F_i(x).
+//
+//  The gates and the scalar head are TRAINABLE MLPs over the invariant edge
+//  embedding (autograd-traced). Equivariance is preserved BY CONSTRUCTION —
+//  invariance/covariance is structural, not learned — so it survives training
+//  EXACTLY (to autograd/FP round-off, not a learned tolerance). Demonstrating
+//  "trained AND still equivariant with the trained weights" is the real win.
+//
+//  ── MODEL (1-layer equivariant message passing) ──────────────────────────
+//   nodes i, neighbours j; edge vector r_ij, length L_ij=|r_ij|, dir r̂_ij.
+//   invariant edge embedding  q_ij = MLP_msg(L_ij)            (autograd, [.,Hm])
+//   gate scalar               g_ij = MLP_gate(q_ij)           (autograd, scalar)
+//   l=1 edge vector (#2811)   m_ij = f(L_ij)·r̂_ij             (REUSED kernel)
+//   --- invariant readout ---
+//     node scalar  s_i = Σ_j q_ij  (sum-pool, permutation+rotation invariant)
+//     energy proxy E   = Σ_i MLP_head(s_i)  →  O(3) SCALAR.
+//   --- equivariant readout ---
+//     node force   F_i = Σ_j g_ij · m_ij    →  l=1 VECTOR (covariant).
+//
+//  ── TRAIN ────────────────────────────────────────────────────────────────
+//  Two synthetic datasets with the CORRECT symmetry, learned by the same trunk:
+//   (A) invariant target  E*(x) = a known O(3)-scalar function of the pair
+//       lengths (Σ pair energies of a Morse-like radial law) — must be matched
+//       by the invariant head.
+//   (B) equivariant target F*_i(x) = Σ_j w(L_ij)·r̂_ij, a known l=1 vector field
+//       (a radial-law force) — must be matched by the equivariant head.
+//  Full-batch MSE, Adam via ag_grad (forward+backward through ag_*; only the
+//  param UPDATE is hand-rolled — same pattern as #2816 delta_ml). Biases are
+//  folded into the weight matrices (ones-augmented inputs) to dodge the
+//  stdlib/autograd broadcast-reduce gap — every ag op runs on exact shapes.
+//
+//  ── g5 VERIFY (printed VERBATIM) ─────────────────────────────────────────
+//   (a) training loss DECREASING (both heads);
+//   (b) trained HELD-OUT prediction rel-ε (disjoint structures, both heads);
+//   (c) THE KEY CHECK — post-training EQUIVARIANCE with the TRAINED weights:
+//       feed a rotated structure R·x and verify
+//         invariant head :  pred(R·x) == pred(x)          (max |Δ|)
+//         equivariant head:  pred(R·x) == R · pred(x)      (max |Δ|)
+//       to a tol — the pasted number is the equivariance error of the TRAINED
+//       net. d6: actual numbers, no forcing.
+//
+//  Run:  HEXA_LANG=. hexa run bench/qforge/equivariant_gnn_trained.hexa
+//  expect: VERDICT_GNN=TRAINED_EQUIVARIANT
+//
+//  Lit (grounded): Batatia et al. MACE (arXiv:2206.07697); Batzner et al.
+//  NequIP (Nat. Commun. 13, 2453, 2022); Geiger & Smidt e3nn (arXiv:2207.09453).
+// ═══════════════════════════════════════════════════════════════════════════
+
+use "stdlib/tensor/mod"
+use "stdlib/tensor/shape"
+use "stdlib/tensor/ops"
+use "stdlib/autograd"
+
+fn abs_f(x: float) -> float { if x < 0.0 { return 0.0 - x } else { return x } }
+
+// ── small math helpers (mirror the #2811 kernel; self-contained, no d3 edit) ──
+fn vlen3(v: [float]) -> float { return sqrt(v[0]*v[0] + v[1]*v[1] + v[2]*v[2]) }
+
+// matrix(3x3 row-major) · vector(3)
+fn mv3(M: [float], v: [float]) -> [float] {
+    let mut o: [float] = []
+    let mut r = 0
+    while r < 3 {
+        o.push(M[r*3+0]*v[0] + M[r*3+1]*v[1] + M[r*3+2]*v[2])
+        r = r + 1
+    }
+    return o
+}
+
+// 3x3 · 3x3 (row-major)
+fn mm3(A: [float], B: [float]) -> [float] {
+    let mut o: [float] = []
+    let mut i = 0
+    while i < 3 {
+        let mut j = 0
+        while j < 3 {
+            let mut s = 0.0
+            let mut k = 0
+            while k < 3 { s = s + A[i*3+k]*B[k*3+j] ; k = k + 1 }
+            o.push(s)
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return o
+}
+
+// proper rotation Rz·Ry·Rx (det=+1, R^T R = I) — identical builder to #2811.
+fn euler_R(ax: float, ay: float, az: float) -> [float] {
+    let cx = cos(ax) let sx = sin(ax)
+    let cy = cos(ay) let sy = sin(ay)
+    let cz = cos(az) let sz = sin(az)
+    let Rx: [float] = [ 1.0,0.0,0.0,  0.0,cx,(0.0-sx),  0.0,sx,cx ]
+    let Ry: [float] = [ cy,0.0,sy,  0.0,1.0,0.0,  (0.0-sy),0.0,cy ]
+    let Rz: [float] = [ cz,(0.0-sz),0.0,  sz,cz,0.0,  0.0,0.0,1.0 ]
+    return mm3(Rz, mm3(Ry, Rx))
+}
+
+// ── #2811 REUSE: l=1 equivariant edge vector m_ij = f(|r|)·r̂_ij ──
+// f is an O(3) SCALAR (depends only on |r|), so m(Rr)=R·m(r). Verbatim from the
+// merged kernel's feat_vec; this is the covariant geometric input to the GNN.
+fn feat_vec(r: [float]) -> [float] {
+    let L = vlen3(r)
+    let f = exp(0.0 - 0.5*L) * (1.0 + 0.3*L)
+    let inv = 1.0 / L
+    let mut o: [float] = []
+    o.push(f * r[0] * inv)
+    o.push(f * r[1] * inv)
+    o.push(f * r[2] * inv)
+    return o
+}
+
+// ── deterministic LCG → reproducible dataset + weight init (same as #2816) ──
+let mut _seed = 20260606
+fn rng() -> float {
+    _seed = (_seed * 1103515245 + 12345) % 2147483648
+    return to_float(_seed) / 2147483648.0
+}
+fn runi(lo: float, hi: float) -> float { return lo + (hi - lo) * rng() }
+
+fn _const_fill(shape, v: float) -> array {
+    let n = tensor_size(shape)
+    let mut out = []
+    let mut i = 0
+    while i < n { out.push(v); i = i + 1 }
+    return out
+}
+
+// ── tanh as a traced autograd subgraph: (e^{2z}-1)/(e^{2z}+1)  (from #2816) ──
+fn ag_tanh(z) {
+    let two = ag_const(tensor_from_array(z["tensor"].shape, _const_fill(z["tensor"].shape, 2.0)))
+    let one = ag_const(tensor_from_array(z["tensor"].shape, _const_fill(z["tensor"].shape, 1.0)))
+    let e2z = ag_exp(ag_mul(two, z))
+    let num = ag_sub(e2z, one)
+    let den = ag_add(e2z, one)
+    let inv = ag_pow(den, 0.0 - 1.0)
+    return ag_mul(num, inv)
+}
+
+// selector [H, H+1] with S[i,i]=1 (i<H), last col all 0 — appends a bias slot.
+fn _selector_HxHp1(H: int) -> Tensor {
+    let mut d = []
+    let mut i = 0
+    while i < H {
+        let mut j = 0
+        while j < H + 1 {
+            if j == i { d.push(1.0) } else { d.push(0.0) }
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return tensor_from_array([H, H + 1], d)
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  GRAPH STRUCTURE
+//  A structure = N nodes at 3D positions. We use a complete graph (every
+//  ordered pair i≠j is an edge). Per structure we precompute the EDGE TABLE:
+//    rows = edges (i,j); each row carries  [L_ij, mx, my, mz]
+//    where L_ij = |r_ij| (the invariant scalar input) and (mx,my,mz)=feat_vec
+//    (the #2811 l=1 vector). These are the ONLY geometric inputs the net sees,
+//    so equivariance is structural.
+// ═══════════════════════════════════════════════════════════════════════════
+
+// number of ordered edges for N nodes (complete graph) = N*(N-1).
+fn n_edges(N: int) -> int { return N * (N - 1) }
+
+// Build the edge table for ONE structure (positions = flat [N*3]).
+// Returns a dict: { "L":[E], "m":[E*3], "src":[E], "dst":[E] }.
+fn build_edges(pos: [float], N: int) {
+    let mut L = []
+    let mut m = []
+    let mut src = []
+    let mut dst = []
+    let mut i = 0
+    while i < N {
+        let mut j = 0
+        while j < N {
+            if i != j {
+                let r: [float] = [ pos[j*3+0]-pos[i*3+0], pos[j*3+1]-pos[i*3+1], pos[j*3+2]-pos[i*3+2] ]
+                L.push(vlen3(r))
+                let mv = feat_vec(r)
+                m.push(mv[0]); m.push(mv[1]); m.push(mv[2])
+                src.push(i); dst.push(j)
+            }
+            j = j + 1
+        }
+        i = i + 1
+    }
+    let h = #{}
+    h["L"] = L; h["m"] = m; h["src"] = src; h["dst"] = dst
+    return h
+}
+
+// ── known O(3)-symmetric ground-truth fields the net must learn ──
+// (A) invariant target: total energy = Σ_pairs Morse-like radial energy.
+//     E*(x) = Σ_{i<j} [ (1 - exp(-1.1*(L-0.9)))^2 - 1 ]   (a smooth O(3) scalar)
+fn true_energy(edt, E: int) -> float {
+    let L = edt["L"]
+    let mut tot = 0.0
+    let mut e = 0
+    while e < E {
+        let t = 1.0 - exp(0.0 - 1.1*(L[e] - 0.9))
+        tot = tot + (t*t - 1.0)
+        e = e + 1
+    }
+    // each unordered pair counted twice (ordered edges) → halve.
+    return 0.5 * tot
+}
+
+// (B) equivariant target: per-node force F*_i = Σ_j w(L_ij)·r̂_ij with a radial
+//     law w(L) = 2.2*(L-0.9)*exp(-0.8*(L-0.9)^2). Returns flat [N*3].
+//     r̂_ij is recovered from m_ij / f(L_ij) — but to stay independent of the
+//     learned model we recompute r̂ directly here from L and m's direction:
+//     feat_vec already = f(L)·r̂, so r̂ = m / f(L); we just rescale by w/ f.
+fn true_force(edt, N: int, E: int) -> [float] {
+    let L = edt["L"]; let m = edt["m"]; let src = edt["src"]
+    let mut F = _const_fill([N, 3], 0.0)
+    let mut e = 0
+    while e < E {
+        let l = L[e]
+        let fL = exp(0.0 - 0.5*l) * (1.0 + 0.3*l)   // the #2811 envelope f(L)
+        let w  = 2.2*(l - 0.9)*exp(0.0 - 0.8*(l-0.9)*(l-0.9))
+        let scale = w / fL    // so scale * m = w * r̂
+        let i = src[e]
+        F[i*3+0] = F[i*3+0] + scale * m[e*3+0]
+        F[i*3+1] = F[i*3+1] + scale * m[e*3+1]
+        F[i*3+2] = F[i*3+2] + scale * m[e*3+2]
+        e = e + 1
+    }
+    return F
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  MLPs over the invariant edge embedding (all autograd-traced).
+//  Inputs are PACKED as [E,2] augmented rows (col0 = L_ij, col1 = 1.0 bias).
+//  msg : [E,2] -> [E,Hm]  (tanh)         invariant edge embedding q_ij
+//  We then read TWO heads off q (each a small linear map, bias-augmented):
+//    gate head  : q -> [E,1] scalar gate g_ij  (for the equivariant force)
+//    nrg  head  : q -> [E,1] scalar per-edge energy contribution; summed = E.
+//  Using ONE shared msg-MLP for both heads = one message-passing trunk.
+// ═══════════════════════════════════════════════════════════════════════════
+
+// forward of the shared msg-MLP: xaug[E,2] @ W1[2,Hm] -> tanh -> [E,Hm]
+fn msg_forward(xaug, W1) {
+    let z1 = ag_matmul(xaug, W1)     // [E,Hm]
+    return ag_tanh(z1)               // [E,Hm]
+}
+
+// append a ones-bias column to an [E,Hm] ag handle → [E,Hm+1] (graph-internal,
+// same trick as #2816's haug): hsel = h@S (S=[Hm,Hm+1]) then + ones_lastcol.
+fn aug_cols(h, ones_lastcol_const, Hm: int) {
+    let S = ag_const(_selector_HxHp1(Hm))      // [Hm,Hm+1]
+    let hsel = ag_matmul(h, S)                  // [E,Hm+1], last col 0
+    return ag_add(hsel, ones_lastcol_const)     // + ones in last col
+}
+
+fn main() {
+    println("=== QFORGE-PERF — equivariant GNN TRAINED (stdlib/autograd + #2811 kernel · g5) ===")
+    println("model: 1-layer E(3)-equivariant message passing  ·  trunk: msg-MLP(|r_ij|)->tanh->[E,Hm]")
+    println("  invariant head  E(x)   = Σ_edges nrg(q_ij)            → O(3) SCALAR  (pred(Rx)==pred(x))")
+    println("  equivariant head F_i(x)= Σ_j gate(q_ij)·m_ij(#2811)   → l=1 VECTOR  (pred(Rx)==R·pred(x))")
+    println("  optim: Adam via ag_grad  ·  bias-folded shapes (autograd broadcast-safe)")
+    println("")
+
+    let Hm = 8                 // msg-MLP hidden width
+    let N  = 4                 // atoms per structure (complete graph → 12 edges)
+    let E  = n_edges(N)        // = 12
+
+    let n_train = 24
+    let n_test  = 12
+
+    // ── build train + held-out STRUCTURES (disjoint random clouds) ──
+    // each structure = N points in a box; same distribution train/test.
+    fn make_structure() -> [float] {
+        let mut p = []
+        let mut k = 0
+        while k < 4 {   // N=4 hardcoded box draw
+            p.push(runi(-1.2, 1.2)); p.push(runi(-1.2, 1.2)); p.push(runi(-1.2, 1.2))
+            k = k + 1
+        }
+        return p
+    }
+
+    let mut train_pos = []      // list of [N*3]
+    let mut test_pos  = []
+    let mut s = 0
+    while s < n_train { train_pos.push(make_structure()); s = s + 1 }
+    s = 0
+    while s < n_test  { test_pos.push(make_structure());  s = s + 1 }
+
+    // precompute edge tables + targets for every structure.
+    fn pack_xaug(edt, E: int) -> array {
+        // [E,2] rows = [L_ij, 1.0]
+        let L = edt["L"]
+        let mut out = []
+        let mut e = 0
+        while e < E { out.push(L[e]); out.push(1.0); e = e + 1 }
+        return out
+    }
+    fn ones_lastcol(E: int, Hp1: int) -> array {
+        let mut out = []; let mut r = 0
+        while r < E {
+            let mut c = 0
+            while c < Hp1 { if c == Hp1 - 1 { out.push(1.0) } else { out.push(0.0) }; c = c + 1 }
+            r = r + 1
+        }
+        return out
+    }
+
+    let mut tr_edt = []; let mut tr_E = []; let mut tr_F = []
+    s = 0
+    while s < n_train {
+        let edt = build_edges(train_pos[s], N)
+        tr_edt.push(edt)
+        tr_E.push(true_energy(edt, E))
+        tr_F.push(true_force(edt, N, E))
+        s = s + 1
+    }
+    let mut te_edt = []; let mut te_E = []; let mut te_F = []
+    s = 0
+    while s < n_test {
+        let edt = build_edges(test_pos[s], N)
+        te_edt.push(edt)
+        te_E.push(true_energy(edt, E))
+        te_F.push(true_force(edt, N, E))
+        s = s + 1
+    }
+
+    // ── trainable weights (bias folded into each matrix) ──
+    //  W1   [2, Hm]            shared msg-MLP
+    //  Wnrg [Hm+1, 1]          invariant energy head (per-edge scalar)
+    //  Wg   [Hm+1, 1]          equivariant gate head (per-edge scalar)
+    let mut w1 = []; let mut i = 0
+    while i < 2 * Hm { w1.push(runi(-0.7, 0.7)); i = i + 1 }
+    let mut wn = []; i = 0
+    while i < (Hm + 1) * 1 { wn.push(runi(-0.7, 0.7)); i = i + 1 }
+    let mut wg = []; i = 0
+    while i < (Hm + 1) * 1 { wg.push(runi(-0.7, 0.7)); i = i + 1 }
+
+    // Adam moment buffers per group.
+    let mut mW1 = _const_fill([2, Hm], 0.0);     let mut vW1 = _const_fill([2, Hm], 0.0)
+    let mut mWn = _const_fill([Hm+1, 1], 0.0);   let mut vWn = _const_fill([Hm+1, 1], 0.0)
+    let mut mWg = _const_fill([Hm+1, 1], 0.0);   let mut vWg = _const_fill([Hm+1, 1], 0.0)
+    let beta1 = 0.9; let beta2 = 0.999; let eps = 0.00000001
+    let lr = 0.02
+    let epochs = 3000
+
+    // precompute per-structure packed inputs (constant across epochs).
+    let mut tr_xaug = []; let mut tr_ones = []
+    s = 0
+    while s < n_train {
+        tr_xaug.push(pack_xaug(tr_edt[s], E))
+        tr_ones.push(ones_lastcol(E, Hm + 1))
+        s = s + 1
+    }
+
+    println("--- TRAINING LOSS CURVE (full-batch MSE over " + to_string(n_train) + " structures, Adam lr=" + to_string(lr) + ") ---")
+    println("  (loss = MSE_energy + MSE_force, both heads trained jointly on the shared trunk)")
+
+    let mut ep = 0
+    while ep <= epochs {
+        let t = ep + 1
+        ag_tape_reset()
+        let W1 = ag_var(tensor_from_array([2, Hm], w1))
+        let Wn = ag_var(tensor_from_array([Hm+1, 1], wn))
+        let Wg = ag_var(tensor_from_array([Hm+1, 1], wg))
+
+        // accumulate scalar loss across all training structures by building the
+        // full graph each epoch (tape reset above). loss is a [1,1] ag scalar.
+        let mut loss = ag_const(tensor_from_array([1,1], [0.0]))
+        s = 0
+        while s < n_train {
+            let edt = tr_edt[s]
+            let xaug = ag_const(tensor_from_array([E, 2], tr_xaug[s]))
+            let hones = ag_const(tensor_from_array([E, Hm+1], tr_ones[s]))
+
+            let q  = msg_forward(xaug, W1)          // [E,Hm]
+            let qa = aug_cols(q, hones, Hm)         // [E,Hm+1]
+
+            // --- invariant energy head: per-edge scalar, summed over edges ---
+            let enrg = ag_matmul(qa, Wn)            // [E,1]
+            let onesE = ag_const(tensor_from_array([1, E], _const_fill([1, E], 1.0)))
+            let Epred = ag_matmul(onesE, enrg)      // [1,1] = Σ edges
+            let Etgt  = ag_const(tensor_from_array([1,1], [tr_E[s]]))
+            let dE = ag_sub(Epred, Etgt)
+            let lE = ag_mul(dE, dE)                 // [1,1]
+
+            // --- equivariant force head: F_i = Σ_j gate(q_ij)·m_ij ---
+            // gate g = [E,1]; broadcast-free: build per-axis force by matmul.
+            // Force-axis a: F[i,a] = Σ_e (src[e]==i) g[e] * m[e,a].
+            // Implement Σ via a [N,E] scatter matrix Pscatter (const) times
+            // (g ⊙ m_axis). m_axis is const, g is the trained scalar → g⊙m_a is
+            // ag_mul of [E,1]·[E,1]. Pscatter @ that = [N,1] per axis.
+            let g = ag_matmul(qa, Wg)               // [E,1] gate
+            // scatter matrix [N,E]: Pscatter[i,e]=1 if src[e]==i else 0.
+            let src = edt["src"]; let mvec = edt["m"]
+            let mut psc = []
+            let mut ii = 0
+            while ii < N {
+                let mut ee = 0
+                while ee < E { if src[ee] == ii { psc.push(1.0) } else { psc.push(0.0) } ; ee = ee + 1 }
+                ii = ii + 1
+            }
+            let Psc = ag_const(tensor_from_array([N, E], psc))
+            // per-axis target + pred, accumulate force MSE.
+            let mut lF = ag_const(tensor_from_array([1,1], [0.0]))
+            let Ftgt = tr_F[s]
+            let mut axis = 0
+            while axis < 3 {
+                // m column for this axis as [E,1] const
+                let mut mcol = []
+                let mut ee2 = 0
+                while ee2 < E { mcol.push(mvec[ee2*3 + axis]); ee2 = ee2 + 1 }
+                let mC = ag_const(tensor_from_array([E,1], mcol))
+                let gm = ag_mul(g, mC)              // [E,1] = g_e * m_e,axis
+                let Fpred = ag_matmul(Psc, gm)      // [N,1] node force axis
+                // target node force axis as [N,1]
+                let mut ftc = []
+                let mut nn = 0
+                while nn < N { ftc.push(Ftgt[nn*3 + axis]); nn = nn + 1 }
+                let Ft = ag_const(tensor_from_array([N,1], ftc))
+                let dF = ag_sub(Fpred, Ft)          // [N,1]
+                let sqF = ag_mul(dF, dF)            // [N,1]
+                let onesN = ag_const(tensor_from_array([1, N], _const_fill([1, N], 1.0)))
+                let sumF = ag_matmul(onesN, sqF)    // [1,1]
+                lF = ag_add(lF, sumF)
+                axis = axis + 1
+            }
+
+            loss = ag_add(loss, ag_add(lE, lF))
+            s = s + 1
+        }
+        // mean over structures (scalar scale — fold into a const mul).
+        let invn = ag_const(tensor_from_array([1,1], [1.0 / to_float(n_train)]))
+        let mloss = ag_mul(loss, invn)
+        ag_backward(mloss)
+        let lossv = ag_value(mloss).data[0]
+
+        let show = (ep == 0) || (ep == 10) || (ep == 50) || (ep == 200) || (ep == 500)
+                   || (ep == 1000) || (ep == 2000) || (ep == 3000)
+        if show { println("  epoch " + to_string(ep) + "\tloss = " + to_string(lossv)) }
+
+        // ── Adam update via ag_grad ──
+        let gW1 = ag_grad(W1); let gWn = ag_grad(Wn); let gWg = ag_grad(Wg)
+        let bc1 = 1.0 - pow(beta1, to_float(t))
+        let bc2 = 1.0 - pow(beta2, to_float(t))
+        let mut k = 0
+        while k < 2 * Hm {
+            let gg = gW1.data[k]
+            mW1[k] = beta1*mW1[k] + (1.0-beta1)*gg
+            vW1[k] = beta2*vW1[k] + (1.0-beta2)*gg*gg
+            w1[k] = w1[k] - lr*(mW1[k]/bc1)/(sqrt(vW1[k]/bc2)+eps)
+            k = k + 1
+        }
+        k = 0
+        while k < Hm + 1 {
+            let gn = gWn.data[k]
+            mWn[k] = beta1*mWn[k] + (1.0-beta1)*gn
+            vWn[k] = beta2*vWn[k] + (1.0-beta2)*gn*gn
+            wn[k] = wn[k] - lr*(mWn[k]/bc1)/(sqrt(vWn[k]/bc2)+eps)
+            let gq = gWg.data[k]
+            mWg[k] = beta1*mWg[k] + (1.0-beta1)*gq
+            vWg[k] = beta2*vWg[k] + (1.0-beta2)*gq*gq
+            wg[k] = wg[k] - lr*(mWg[k]/bc1)/(sqrt(vWg[k]/bc2)+eps)
+            k = k + 1
+        }
+        ep = ep + 1
+    }
+    println("")
+
+    // ═══════════════════════════════════════════════════════════════════════
+    //  FORWARD with TRAINED weights — pure (no tape needed for eval).
+    //  Returns { "E":scalar, "F":[N*3] } for a given edge table.
+    // ═══════════════════════════════════════════════════════════════════════
+    fn predict(edt, w1: [float], wn: [float], wg: [float], N: int, E: int, Hm: int) {
+        let L = edt["L"]; let m = edt["m"]; let src = edt["src"]
+        // forward msg-MLP per edge → q[E,Hm], then heads.
+        let mut Epred = 0.0
+        let mut F = _const_fill([N, 3], 0.0)
+        let mut e = 0
+        while e < E {
+            // z1 = [L,1] @ w1  → Hm ; tanh
+            let mut q = []
+            let mut hcol = 0
+            while hcol < Hm {
+                let z = L[e]*w1[0*Hm + hcol] + 1.0*w1[1*Hm + hcol]
+                // tanh
+                let e2 = exp(2.0*z)
+                q.push((e2 - 1.0)/(e2 + 1.0))
+                hcol = hcol + 1
+            }
+            // augmented q with bias slot
+            // energy head: Σ_h q_h*wn[h] + 1*wn[Hm]
+            let mut en = 0.0
+            let mut gg = 0.0
+            let mut hh = 0
+            while hh < Hm {
+                en = en + q[hh]*wn[hh]
+                gg = gg + q[hh]*wg[hh]
+                hh = hh + 1
+            }
+            en = en + wn[Hm]   // bias
+            gg = gg + wg[Hm]   // bias
+            Epred = Epred + en
+            // force scatter: F[src] += gg * m_e
+            let i = src[e]
+            F[i*3+0] = F[i*3+0] + gg * m[e*3+0]
+            F[i*3+1] = F[i*3+1] + gg * m[e*3+1]
+            F[i*3+2] = F[i*3+2] + gg * m[e*3+2]
+            e = e + 1
+        }
+        let h = #{}
+        h["E"] = Epred; h["F"] = F
+        return h
+    }
+
+    // ── (b) held-out rel-ε for BOTH heads ──
+    let mut e_abs = 0.0; let mut e_den = 0.0
+    let mut f_abs = 0.0; let mut f_den = 0.0
+    s = 0
+    while s < n_test {
+        let pr = predict(te_edt[s], w1, wn, wg, N, E, Hm)
+        e_abs = e_abs + abs_f(pr["E"] - te_E[s])
+        e_den = e_den + abs_f(te_E[s])
+        let Fp = pr["F"]; let Ft = te_F[s]
+        let mut c = 0
+        while c < N*3 {
+            f_abs = f_abs + abs_f(Fp[c] - Ft[c])
+            f_den = f_den + abs_f(Ft[c])
+            c = c + 1
+        }
+        s = s + 1
+    }
+    let e_rel = e_abs / e_den
+    let f_rel = f_abs / f_den
+    println("--- HELD-OUT RESULTS (" + to_string(n_test) + " disjoint structures) ---")
+    println("  invariant  head  E  : rel-eps = " + to_string(e_rel))
+    println("  equivariant head F  : rel-eps = " + to_string(f_rel))
+    println("")
+
+    // ═══════════════════════════════════════════════════════════════════════
+    //  (c) THE KEY CHECK — POST-TRAINING EQUIVARIANCE with the TRAINED weights.
+    //  Pick a held-out structure x, a generic O(3) rotation R, build x' = R·x,
+    //  predict on both, and measure:
+    //    invariant :  | E(x') - E(x) |
+    //    equivariant: max_i | F_i(x') - R·F_i(x) |
+    //  These use the SAME trained w1/wn/wg — the equivariance must survive.
+    // ═══════════════════════════════════════════════════════════════════════
+    let R = euler_R(0.61547970867, 1.10714871779, 0.46364760900)  // generic angles
+
+    let mut max_inv = 0.0
+    let mut max_equ = 0.0
+    s = 0
+    while s < n_test {
+        let pos = test_pos[s]
+        // rotated structure x' = R · x (each atom position rotated)
+        let mut rpos = []
+        let mut a = 0
+        while a < N {
+            let p: [float] = [ pos[a*3+0], pos[a*3+1], pos[a*3+2] ]
+            let rp = mv3(R, p)
+            rpos.push(rp[0]); rpos.push(rp[1]); rpos.push(rp[2])
+            a = a + 1
+        }
+        let edt0 = build_edges(pos,  N)
+        let edt1 = build_edges(rpos, N)
+        let pr0 = predict(edt0, w1, wn, wg, N, E, Hm)
+        let pr1 = predict(edt1, w1, wn, wg, N, E, Hm)
+
+        // invariant: |E(Rx) - E(x)|
+        let dinv = abs_f(pr1["E"] - pr0["E"])
+        if dinv > max_inv { max_inv = dinv }
+
+        // equivariant: max_i | F_i(Rx) - R·F_i(x) |
+        let F0 = pr0["F"]; let F1 = pr1["F"]
+        let mut a2 = 0
+        while a2 < N {
+            let f0: [float] = [ F0[a2*3+0], F0[a2*3+1], F0[a2*3+2] ]
+            let RF0 = mv3(R, f0)
+            let mut ax = 0
+            while ax < 3 {
+                let d = abs_f(F1[a2*3+ax] - RF0[ax])
+                if d > max_equ { max_equ = d }
+                ax = ax + 1
+            }
+            a2 = a2 + 1
+        }
+        s = s + 1
+    }
+
+    println("--- POST-TRAINING EQUIVARIANCE (TRAINED weights · " + to_string(n_test) + " structures · generic O(3) R) ---")
+    println("  invariant  head : max | E(R·x) - E(x) |          = " + to_string(max_inv))
+    println("  equivariant head: max_i | F_i(R·x) - R·F_i(x) |   = " + to_string(max_equ))
+    println("")
+
+    // ── g5 PASS gate (d6 honest) ──
+    let tol_equiv = 1e-10                 // FP/round-off tolerance for the trained net
+    let train_ok  = (e_rel < 0.10) && (f_rel < 0.10)   // both heads actually learned
+    let equiv_ok  = (max_inv < tol_equiv) && (max_equ < tol_equiv)
+
+    println("gate: trained (both rel-eps<0.10) = " + to_string(train_ok)
+            + "  ·  equivariance (max<1e-10) = " + to_string(equiv_ok))
+    if train_ok && equiv_ok {
+        println("F-QFORGE-GNN-TRAINED-EQUIVARIANT = 1")
+        println("VERDICT_GNN=TRAINED_EQUIVARIANT  e_rel=" + to_string(e_rel) + " f_rel=" + to_string(f_rel)
+                + " equiv_inv=" + to_string(max_inv) + " equiv_vec=" + to_string(max_equ))
+    } else {
+        println("F-QFORGE-GNN-TRAINED-EQUIVARIANT = 0")
+        println("VERDICT_GNN=PARTIAL  (honest d6 — numbers above)  train_ok=" + to_string(train_ok)
+                + " equiv_ok=" + to_string(equiv_ok))
+    }
+}
