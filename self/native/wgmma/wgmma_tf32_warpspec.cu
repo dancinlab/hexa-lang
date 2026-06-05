@@ -207,6 +207,13 @@ __device__ __forceinline__ void mbar_wait(uint64_t* b,uint32_t phase){
     asm volatile("{\n.reg .pred P;\nLAB_%=:\n"
                  "mbarrier.try_wait.parity.shared::cta.b64 P, [%0], %1;\n"
                  "@!P bra LAB_%=;\n}\n"::"r"(s),"r"(phase));}
+// named-barrier sync over a single warpgroup (128 thr). barrier id `bid`, 128 thr.
+// PRODUCER uses this to synchronize ITS OWN 128 threads between the cp.async loads
+// and the cross-thread Braw->gmma permute (cp.async.wait_group is PER-THREAD only;
+// thread i's permute reads Braw written by OTHER threads' cp.async — without a WG
+// barrier that read races the still-in-flight sibling copies). bar.sync N,128.
+__device__ __forceinline__ void wg_bar(int bid){
+    asm volatile("bar.sync %0, 128;\n"::"r"(bid):"memory");}
 
 // ======================================================================
 // MODE 2 — WARPSPEC: true producer/consumer warp specialization (256 thr = 2 WG).
@@ -254,9 +261,14 @@ extern "C" __global__ void gemm_ws(const float* __restrict__ gA,const float* __r
             for(int q=lt;q<TK*TN/4;q+=128){int kk=q/(TN/4), nq=(q%(TN/4))*4;
                 cpasync16(Braw+kk*TN+nq, &gB[(ki*TK+kk)*N + bn+nq]); }
             cp_commit(); cp_wait<0>();
+            // ALL 128 producer threads must have landed their cp.async (incl. Braw)
+            // before ANY thread reads sibling-written Braw in the permute. bar id 1.
+            wg_bar(1);
             float* B0=As+AB; float* B1=B0+BB;
             for(int i=lt;i<TK*64;i+=128){int kk=i/64,n=i%64; B0[gmma_phys(n,kk)]=Braw[kk*TN+n];}
             for(int i=lt;i<TK*64;i+=128){int kk=i/64,n=i%64; B1[gmma_phys(n,kk)]=Braw[kk*TN+64+n];}
+            // permute writes must be complete + async-proxy-visible before release.
+            wg_bar(1);
             asm volatile("fence.proxy.async.shared::cta;\n":::"memory");
             mbar_arrive(&full[st]);
         }
