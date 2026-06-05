@@ -1,0 +1,103 @@
+F-HEXACUDA-PTXAS-DEVICE — 🟢 GREEN (D2 silicon-PROVEN)
+=======================================================
+CLAIM: the un-gated `hexa build --target=nvptx` PTX (landed #2799) is
+  SILICON-VALID — it ptxas-assembles for sm_90 AND runs correct on a real H100.
+
+FALSIFIER (pre-registered): emit PTX for the cookbook vec-add + SAXPY @gpu_kernel
+  from a FRESH-built hexa compiler; if `ptxas -arch=sm_90` errors, OR the device
+  run output != CPU reference, the silicon-valid claim is FALSIFIED.
+
+RESULT: NOT FALSIFIED. Both kernels ptxas-CLEAN (exit 0, empty stderr) AND
+  device-correct (maxerr 0.000e+00, 0 mismatches / 2^20 elements) on a real
+  NVIDIA H100 80GB HBM3 (sm_90). D2 is fully silicon-PROVEN.
+
+──────────────────────────────────────────────────────────────────────────────
+METHOD (all run ON the H100 pod — vast contract 39628805, H100 80GB HBM3, sm_90)
+──────────────────────────────────────────────────────────────────────────────
+  branch  : domain/hexa-cuda-ptxas-validate @ 8ee63e2 (on top of #2799)
+  toolkit : CUDA 12.6.2-devel (ptxas, gcc 11, libcuda driver API)
+  GPU     : NVIDIA H100 80GB HBM3, compute capability 9.0
+
+  1. FRESH BUILD — `bash tool/release_build` (TARGET=linux-x86_64 CC=gcc
+     LIBS="-lm -ldl"): Stage 0b runtime.a → Stage 0a-pre hexat → Stage 0/1/2
+     self-host. Produced ./hexa (2,402,344 B ELF x86-64 pie), `hexa 0.1.0-dispatch`.
+     This is the #2799 un-gated `_build_nvptx_emit_driver` built from source —
+     NOT a stale local oracle.  (local macOS hexa NOT used.)
+
+  2. EMIT — `hexa build vecadd.hexa --target=nvptx64-nvidia-cuda-sm90` and the
+     same for saxpy.hexa.  Driver ran lex→parse→lower→lower_hir→
+     codegen_emit_ptx_for_sm and wrote <src>.ptx.  Source-derived PTX
+     (`.target sm_90`, `.visible .entry vec_add`/`saxpy`, %ctaid/%ntid/%tid
+     intrinsics, ld/st.global.f64).  61-line / 68-line PTX respectively.
+
+  3. PTXAS — `ptxas -arch=sm_90 -o k.cubin k.ptx` for each.  See VERBATIM below.
+
+  4. DEVICE RUN — device_run.c: CUDA Driver API cuInit → cuModuleLoad(<ptx>) →
+     cuModuleGetFunction(entry) → cuLaunchKernel(grid=ceil(N/256), block=256) →
+     cuCtxSynchronize → cuMemcpyDtoH → compare vs CPU reference. N = 2^20.
+
+──────────────────────────────────────────────────────────────────────────────
+VERBATIM — vecadd
+──────────────────────────────────────────────────────────────────────────────
+[nvptx] target=sm_90 src=.../vecadd.hexa out=.../vecadd.hexa.ptx phase=P3
+
+========== PTXAS — vecadd (ptxas -arch=sm_90, VERBATIM) ==========
+ptxas exit=0
+--- ptxas stderr verbatim ---
+--- end ptxas stderr ---
+-rw-r--r-- 1 root root 3152 .../vecadd.cubin
+[vecadd] PTXAS CLEAN -> cubin produced
+
+========== DEVICE RUN — vecadd (CUDA driver API on real H100) ==========
+DEVICE: NVIDIA H100 80GB HBM3  sm_90
+LOADED: entry=vec_add from .../vecadd.hexa.ptx
+CHECK: N=1048576 kernel=vecadd maxerr=0.000e+00 mismatches=0
+SAMPLE: out[0]=-2.000000 ref[0]=-2.000000  out[N-1]=313.250000 ref[N-1]=313.250000
+RESULT: vecadd DEVICE-CORRECT (output == CPU reference)
+[vecadd] device_run exit=0
+
+──────────────────────────────────────────────────────────────────────────────
+VERBATIM — saxpy
+──────────────────────────────────────────────────────────────────────────────
+[nvptx] target=sm_90 src=.../saxpy.hexa out=.../saxpy.hexa.ptx phase=P3
+
+========== PTXAS — saxpy (ptxas -arch=sm_90, VERBATIM) ==========
+ptxas exit=0
+--- ptxas stderr verbatim ---
+--- end ptxas stderr ---
+-rw-r--r-- 1 root root 3152 .../saxpy.cubin
+[saxpy] PTXAS CLEAN -> cubin produced
+
+========== DEVICE RUN — saxpy (CUDA driver API on real H100) ==========
+DEVICE: NVIDIA H100 80GB HBM3  sm_90
+LOADED: entry=saxpy from .../saxpy.hexa.ptx
+CHECK: N=1048576 kernel=saxpy maxerr=0.000e+00 mismatches=0
+SAMPLE: out[0]=-6.500000 ref[0]=-6.500000  out[N-1]=350.375000 ref[N-1]=350.375000
+RESULT: saxpy DEVICE-CORRECT (output == CPU reference)
+[saxpy] device_run exit=0
+
+========== SUMMARY ==========
+vecadd_result_exit=0  saxpy_result_exit=0
+OVERALL: BOTH KERNELS ptxas-CLEAN + DEVICE-CORRECT on sm_90 — D2 SILICON-PROVEN
+
+──────────────────────────────────────────────────────────────────────────────
+FINDING (Δ vs baseline)
+──────────────────────────────────────────────────────────────────────────────
+  - Baseline (#2799 verdict F-HEXACUDA-NVPTX-UNGATE): emit YES, ptxas PENDING,
+    device PENDING ("no local CUDA toolkit").
+  - This run closes BOTH residuals on real Hopper silicon:
+      ptxas -arch=sm_90  : exit 0, ZERO diagnostics (CLEAN) — for both kernels.
+      device correctness : maxerr 0.000e+00, 0 / 1,048,576 mismatches — both.
+  - The hexa-emitted PTX is therefore not merely ptxas-text-plausible but
+    ptxas-assemblable AND numerically correct when launched on an H100.
+    HEXA-CUDA D2 (launch ergonomics → silicon) is fully validated end-to-end:
+    .hexa @gpu_kernel → fresh hexa build → PTX → ptxas cubin → driver-API launch
+    → bit-exact result. No .cu / nvcc; single source-derived PTX.
+
+ARTIFACTS (in repo): tools/hexa-cuda-validate/{vecadd,saxpy}.hexa,
+  device_run.c, pod_validate.sh, artifacts/{vecadd,saxpy}.sm90.ptx.
+
+POD HYGIENE: H100 contract 39628805 — vast reclaimed it during artifact pull
+  (lookup 404'd); explicit destroy returned "404 not found" (already gone). A
+  stray unlabeled RTX_3090 spawn (39631800) was reaped. Only the protected
+  rtsc-li2mgh16-anchor (39610026) remains. LEAK 0.

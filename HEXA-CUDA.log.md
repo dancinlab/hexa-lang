@@ -145,3 +145,22 @@ the six stdlib/qforge/nvptx_*_kernel.hexa reference kernels. No invented names.
   PENDING (fresh worktree lacks the bootstrap self/native/hexat artifact).
 
 Verdict: `.verdicts/hexa-cuda/F-HEXACUDA-ADOPTION-DX.txt`.
+
+## 2026-06-06 — D2 SILICON-VALIDATED on a real H100 (ptxas + device run)
+
+Closed the two residuals the #2799 un-gate left open (ptxas-clean + device
+run). On a vast H100 80GB HBM3 pod (sm_90, CUDA 12.6.2-devel):
+
+1. **Fresh build** — `bash tool/release_build` (Stage 0/1/2 self-host) built
+   `./hexa` 0.1.0-dispatch from branch source (NOT the stale macOS oracle).
+2. **Emit** — `hexa build {vecadd,saxpy}.hexa --target=nvptx64-nvidia-cuda-sm90`
+   → source-derived PTX (`.visible .entry vec_add`/`saxpy`, `.target sm_90`).
+3. **ptxas** — `ptxas -arch=sm_90` → exit 0, EMPTY stderr (CLEAN), both kernels.
+4. **Device run** — CUDA Driver API (cuModuleLoad → cuLaunchKernel) on the H100:
+   maxerr 0.000e+00, 0 mismatches / 2^20 f64 elements vs CPU ref, both kernels.
+
+D2 fully silicon-PROVEN: .hexa @gpu_kernel → hexa build → PTX → ptxas cubin →
+driver-API launch → bit-exact. Pod destroyed (leak 0; only rtsc-anchor remains).
+
+Harness + PTX artifacts: `tools/hexa-cuda-validate/`.
+Verdict: `.verdicts/hexa-cuda/F-HEXACUDA-PTXAS-DEVICE.txt` (🟢 GREEN).
