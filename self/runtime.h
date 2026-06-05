@@ -1966,7 +1966,26 @@ int     hexa_str_eq(HexaVal a, HexaVal b);              /* runtime_core.c:4446 *
  *   [rss-trace] step-free N: uordblks=A hblkhd=B trimmed=D (bytes)
  */
 #if defined(__GLIBC__)
+/* clang-18 / glibc-2.39 fix: the libc-rename shims (`#define malloc(n)
+   hxlcl_malloc(...)` etc. in runtime.c / runtime_core.c) rewrite glibc's
+   <malloc.h> prototypes when this header is included with the shims in scope
+   → "function cannot return function type" on a runtime.o source-recompile
+   (latent until a .hexa-cache GC). Isolate the system header from the shims:
+   push+undef the 4 shim macros, include, then pop_macro restores them so the
+   rest of the TU keeps the libc-rename. push_macro/pop_macro are clang+gcc. */
+#pragma push_macro("malloc")
+#pragma push_macro("free")
+#pragma push_macro("realloc")
+#pragma push_macro("calloc")
+#undef malloc
+#undef free
+#undef realloc
+#undef calloc
 #include <malloc.h>   /* mallinfo2, malloc_trim -- glibc only */
+#pragma pop_macro("calloc")
+#pragma pop_macro("realloc")
+#pragma pop_macro("free")
+#pragma pop_macro("malloc")
 static inline void hexa_rss_trace_on_free(void) {
     static int     _hx_rss_trace_on  = -1;   /* -1=unprobed 0=off 1=on */
     static long long _hx_rss_free_seq = 0;
