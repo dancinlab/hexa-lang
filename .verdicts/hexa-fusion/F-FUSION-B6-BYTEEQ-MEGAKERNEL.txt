@@ -1,0 +1,157 @@
+F-FUSION-B6-BYTEEQ-MEGAKERNEL — the byte-eq-PRESERVING util path: pull the FP64-exact
+own-GEMM (#2697) INTO P1's (#2769) cooperative full-fwd megakernel, ask whether it keeps
+max|Δ|=0 vs eager cublasDgemm AND lifts real-step util above the eager baseline.
+domain: HEXA-FUSION · date: 2026-06-05 · branch domain/hexa-fusion-b6-byteeq-megakernel
+method: author _hx_k_clm_megafwd_fp64 (P1's cooperative megakernel with the 4 conv GEMMs
+        swapped TF32→FP64-exact own-GEMM, env HEXA_CLM_MEGASTEP_FP64) → build the REAL
+        clm_prod_gpu on a rented datacenter-Blackwell pod → real-step A/B (eager cublasDgemm
+        vs FP64-mega) at D1536 T512 AND D512 T128, max|Δ| measured on the FP64 CE at 17 sig
+        digits (the byte-eq HARD gate) + f32 checkpoint byte-diff + nvidia-smi util.
+
+════════════════════════════════════════════════════════════════════════════════
+PRE-REGISTERED FALSIFIER
+════════════════════════════════════════════════════════════════════════════════
+The FP64 own-GEMM pulled INTO the cooperative persistent megakernel keeps max|Δ|=0
+(byte-identical to the eager cublasDgemm path) AND lifts real-step GPU util above the
+eager baseline. Byte-eq is the HARD gate: a deviation of even 1 ULP from eager BREAKS it.
+
+FALSIFIED (byte-eq leg) if max|Δ| ≠ 0 — i.e. the cooperative pull changes the GEMM
+reduction order so the FP64 own-GEMM no longer bit-matches cublasDgemm.
+
+════════════════════════════════════════════════════════════════════════════════
+VERDICT: 🔴 CLOSED-NEGATIVE on the byte-eq leg (max|Δ| ≠ 0 — byte-eq BROKEN), 🟢 on
+         the util leg (FP64-mega DID lift real-step util above eager). The
+         byte-eq-PRESERVING util-lift target is CLOSED: you cannot get BOTH with this
+         own-GEMM, because the FP64 own-GEMM ≠ cublasDgemm at the bit level by
+         construction (different k-reduction order). This is the honest closed-negative
+         the falsifier was built to surface — it deterministically rules out the
+         "own-GEMM in megakernel = free byte-eq util-lift" path.
+
+════════════════════════════════════════════════════════════════════════════════
+WHAT WAS BUILT
+════════════════════════════════════════════════════════════════════════════════
+self/cuda/runtime_cuda_emit.hexa (emitter SSOT):
+  · _hx_dev_conv_fp64 — FP64-exact device conv. Byte-for-byte _hx_dev_conv_tf32 EXCEPT
+    the accumulator is `double acc` (NO TF32 operand rounding, NO f32 FMA). One thread per
+    output cell (t,co), SEQUENTIAL k=0..Kdim accumulation — the SAME naive own-GEMM order
+    as _hx_k_gemm (#2697 F-FUSION-P1-OWN-GEMM).
+  · _hx_k_clm_megafwd_fp64 — the FP64 cooperative full-fwd megakernel. IDENTICAL DAG /
+    grid.sync() structure / glue blocks / both groupnorms as _hx_k_clm_megafwd (P1); the
+    ONLY difference is the 4 conv GEMMs call _hx_dev_conv_fp64 instead of the TF32 conv.
+    The glue + groupnorms were ALREADY f64 host-order in P1, so this megakernel is f64
+    end-to-end — the byte-eq CANDIDATE.
+  · launcher _hx_cuda_farr_clm_megafwd_gpu: env HEXA_CLM_MEGASTEP_FP64 selects the fp64
+    kernel (occupancy + cudaLaunchCooperativeKernel + [MEGAFWD-FIRED] marker all branch on
+    it); default unset → P1 TF32 kernel UNCHANGED. B6 path = HEXA_CLM_MEGASTEP=1
+    HEXA_CLM_MEGASTEP_FP64=1.
+
+SMEM BUDGET MATH (the task's risk #1 — RESOLVED, no overflow):
+  P1's _hx_dev_conv_tf32 uses ZERO __shared__ — it accumulates each output cell in a
+  per-thread REGISTER (`float acc`) reading A and B directly from global memory; there is
+  no smem tiling. So the 49152B "FP64 tiles are 2× TF32 → overflow" concern does NOT apply:
+  the FP64 swap turns the 4-byte register `float acc` into an 8-byte register `double acc`
+  (register file, NOT shared memory). __shared__ bytes in the megafwd region: 0 (TF32) → 0
+  (FP64). No smem overflow, no tile shrink, no extra grid.syncs. The register-resident
+  naive-conv scheme is exactly WHY byte-eq breaks (sequential k-order ≠ cublasDgemm tiled
+  k-order) — the smem-free design that dodges risk #1 is the same design that triggers
+  risk #2.
+
+════════════════════════════════════════════════════════════════════════════════
+POD / BUILD (g5-honest)
+════════════════════════════════════════════════════════════════════════════════
+GPU (honest, recorded verbatim): rented `hexa cloud rent vast --gpu H100` but vast served
+  an NVIDIA B200 (183359 MiB, compute_cap 10.0 / sm_100 — a datacenter Blackwell, NOT
+  literally an H100; the task flagged vast mis-serving Blackwell and it happened again).
+  Built with -gencode arch=compute_90,code=compute_90 (sm_90 PTX JIT-forwards to Blackwell,
+  same as P1). The byte-eq question (GEMM reduction order) is algorithmic / arch-independent,
+  so B200 is a valid substrate for the max|Δ| gate. CUDA 12.4 (nvcc V12.4.131), gcc 11.4,
+  glibc 2.35. Idle baseline clean. Pod 39564792 (vast), DESTROYED after (alive→GONE, list=0,
+  leak 0).
+BUILD: regenerated runtime_cuda.c from the B6 emitter (deterministic string-emit, 12 B6 FP64
+  symbol hits); regenerated clm_prod.c from main's megastep-wired clm_prod.hexa via
+  `hexa build --c-only` (HEXA_MAC_BUILD_OK=1), rewrote the same 8 forge builtin closure-calls
+  P1 documented (hexa_call4(forge_dispatch_X,…) → direct C call) since the local Jun-1
+  compiler lacks builtin recognition; spliced the megafwd HexaVal wrapper + 4 L3
+  host-fallback stubs (gelu2/groupnorm_gelu/groupnorm_gelu_residual/moe_block2 — separate
+  fusion levers, OFF here) into the kit runtime.c. Cooperative build flags:
+    nvcc -x cu -DHEXA_CUDA -rdc=true -gencode arch=compute_90,code=compute_90 -O2 -c
+       runtime_cuda.c   (66 _hx_cuda_farr launchers)
+    nvcc -dlink … runtime_cuda.o -o runtime_cuda_dlink.o -lcudadevrt   (grid.sync needs rdc)
+    gcc … clm_prod.o runtime.o runtime_cuda.o runtime_cuda_dlink.o -lcudart -lcudadevrt
+       -lcublas -lcuda -lstdc++ → clm_prod_gpu (2496464 B). BUILD OK.
+
+════════════════════════════════════════════════════════════════════════════════
+MEASURE — byte-eq A/B (eager cublasDgemm  vs  FP64-megakernel)
+   raw FP64 CE at 17 sig digits ([B6-CE-HIPREC], stderr, VERBATIM):
+════════════════════════════════════════════════════════════════════════════════
+clm_prod, E=2 NSAMP=8 EPOCHS=4, DEVRESIDENT+DEVFEED+BATCHED, HEXA_CUDA_ASYNC=0.
+
+── D=512 T=128 ─────────────────────────────────────────────────────────────────
+  A  eager cuBLAS (no MEGAFWD/OWN-GEMM fired — eager confirmed):
+       [B6-CE-HIPREC] first_ce=4.1854864332367185 last_ce=2.9417341477326922
+  B  FP64-mega (HEXA_CLM_MEGASTEP=1 HEXA_CLM_MEGASTEP_FP64=1, [MEGAFWD-FIRED] fp64 ×2):
+       [B6-CE-HIPREC] first_ce=4.1854864332367194 last_ce=2.9417341477327885
+  max|Δ first_ce| = |4.1854864332367194 - 4.1854864332367185| = 9.0e-16   (≈ 2 ULP)  ≠ 0
+  max|Δ last_ce|  = |2.9417341477327885 - 2.9417341477326922| = 9.63e-14            ≠ 0
+
+── D=1536 T=512 (the REAL median-2% occupancy-wall step) ───────────────────────
+  A  eager cuBLAS:  [B6-CE-HIPREC] first_ce=4.4662394504526652 last_ce=3.6466923092769212
+       util MEAN=9.13% PEAK=100% pct>=20=13.2% n=400 ; CE 4.46624→3.64669 DESCENT=1
+  B  FP64-mega ([MEGAFWD-FIRED] _hx_k_clm_megafwd_fp64 grid=740 blk=128, no cuBLAS):
+       [B6-CE-HIPREC] first_ce=4.466239450452667  last_ce=3.6466923092762875
+       util MEAN=12.57% PEAK=100% pct>=20=18.5% n=275 ; CE 4.46624→3.64669 DESCENT=1
+  max|Δ first_ce| = |4.466239450452667 - 4.4662394504526652| = 1.8e-15  (≈ 4 ULP)  ≠ 0
+  max|Δ last_ce|  = |3.6466923092769212 - 3.6466923092762875| = 6.34e-13           ≠ 0
+
+  f32-checkpoint byte-diff (CLM_PROD_OUT, 16002678 B each):
+    D512:  IDENTICAL (the 9.6e-14 CE delta is below f32 epsilon → rounds away in the f32 dump)
+    D1536: DIFFER — 36 differing bytes (first diff char 14637119); at D1536 the 6.3e-13 CE
+           delta is large enough to perturb even the f32-rounded trained weights.
+
+  [MEGAFWD-FIRED] (fp64) ≥ 1  ✓ (fired in every B arm — the fp64 megakernel genuinely ran).
+
+════════════════════════════════════════════════════════════════════════════════
+FINDING
+════════════════════════════════════════════════════════════════════════════════
+BYTE-EQ leg — FALSIFIED (🔴 CLOSED-NEGATIVE). max|Δ| ≠ 0 at EVERY config:
+  D512 first_ce Δ = 9.0e-16, D1536 first_ce Δ = 1.8e-15 — and CRUCIALLY this delta is
+  already present at EPOCH-1 first_ce, i.e. after ONE forward pass, before any training
+  compounding. That isolates the cause unambiguously to the GEMM REDUCTION ORDER: the FP64
+  own-GEMM accumulates k sequentially (one thread per output), cublasDgemm accumulates k in
+  tiled/blocked order; the two produce different IEEE-754 last-bit roundings. This is NOT a
+  bug to fix at the wiring level — it is structural: the eager path IS cublasDgemm, and any
+  GEMM that fits inside a persistent cooperative kernel (a kernel cannot call cuBLAS) uses a
+  DIFFERENT summation order, so max|Δ|=0 vs cublasDgemm is unreachable for the own-GEMM
+  family. (Corroborates F-FUSION-P1B-TILED-GEMM, which measured own-vs-cuBLAS GEMM-element
+  max|Δ| of 1e-6…1e-3 directly — cuBLAS is a correctness ORACLE within fp tol, never the
+  byte-eq roofline.) The B6 premise — that the #2697 FP64 own-GEMM "passes max|Δ|=0 vs
+  cublasDgemm" — is the honest correction here: #2697 passed CORRECTNESS within fp tol (CE
+  equal to 5-decimal PRINT precision), NOT bit-equality; the 17-digit CE exposes the
+  nonzero delta the 5-decimal print masked.
+
+UTIL leg — confirmed (🟢, falsifier's util condition met): the FP64 megakernel DID lift
+  real-step util above eager: D1536 MEAN 9.13% → 12.57% (+3.44pp), pct>=20 13.2% → 18.5%,
+  [MEGAFWD-FIRED] ≥1. So pulling the GEMMs into the cooperative launch lifts occupancy even
+  in FP64 (less than P1's TF32 +5.51pp — FP64 conv is heavier per element and under-fills
+  differently — but a genuine, real-step lift). CE descends identically (4.46624→3.64669,
+  DESCENT=1) — the FP64-mega trains correctly.
+
+Δ vs baseline (the finding): the byte-eq-PRESERVING util-lift is CLOSED. B3 proved
+  byte-eq ⊥ util-lift under eager FP64 (megakernel can't host cuBLAS). B6 tested the
+  remaining hope — that the FP64 OWN-GEMM (which DOES fit in the megakernel) could be BOTH
+  byte-eq AND util-lifting — and the falsifier fires: the own-GEMM lifts util (+3.44pp) but
+  is NOT byte-eq to cublasDgemm (max|Δ| 9e-16…1.8e-15 at the first forward pass). The two
+  remain mutually exclusive. The ruled-out axis: "own-GEMM-in-megakernel" does not escape
+  the byte-eq ⊥ util-lift wall; it only moves the precision delta from TF32-scale (~1e-3,
+  P1) down to FP64-last-bit-scale (~1e-15), which is far better numerically but STILL not
+  zero, so the max|Δ|=0 HARD gate stays broken. The residual — a megakernel-resident GEMM
+  whose k-reduction order BIT-reproduces cublasDgemm's tiling — is the deeper
+  reduction-order-reproduction problem (F-FUSION-P1B-TILED-GEMM's open frontier), a
+  multi-session effort, not a wiring change.
+
+g5-HONEST: [MEGAFWD-FIRED] fp64 fired (verbatim, every B arm). REAL clm_prod step (D1536
+  T512 + D512 cross-check), eager cublasDgemm vs HEXA_CLM_MEGASTEP_FP64 on identical config,
+  util by external nvidia-smi, max|Δ| on the raw FP64 CE at 17 digits (NOT the 5-decimal
+  print that masked #2697's delta). NO byte-eq claim is made — the verbatim nonzero max|Δ|
+  IS the result. GPU was a B200 (rent asked H100; vast served Blackwell — stated, not
+  papered over). Pod destroyed, leak 0.

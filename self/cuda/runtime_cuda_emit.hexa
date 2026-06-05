@@ -2197,6 +2197,36 @@ fn emit_runtime_cuda_c() -> str {
             "        Y[idx] = (double)acc + B[co];\n" +
             "    }\n" +
             "}\n" +
+            "/* ── HEXA-FUSION B6 (byte-eq path) ── FP64-EXACT device conv. Identical to\n" +
+            " * _hx_dev_conv_tf32 EXCEPT the accumulator is double (NO TF32 operand\n" +
+            " * rounding, NO f32 FMA). Each output cell (t,co) accumulates k=0..Kdim in a\n" +
+            " * single thread, SEQUENTIAL k-order (naive own-GEMM order). This is the SAME\n" +
+            " * accumulation pattern as _hx_k_gemm (#2697 F-FUSION-P1-OWN-GEMM): correct in\n" +
+            " * FP64, but the naive sequential k-reduction is NOT bit-identical to\n" +
+            " * cublasDgemm's tiled/blocked k-reduction (different summation order →\n" +
+            " * different IEEE-754 rounding). B6's pre-registered question is exactly\n" +
+            " * whether this survives the byte-eq gate vs the eager cublasDgemm path. */\n" +
+            "__device__ void _hx_dev_conv_fp64(_hxcg::grid_group& g,\n" +
+            "        const double* __restrict__ X, const double* __restrict__ W,\n" +
+            "        const double* __restrict__ B, double* __restrict__ Y,\n" +
+            "        int64_t T, int64_t Cin, int64_t Cout, int64_t K, int64_t dil) {\n" +
+            "    int64_t Kdim = Cin * K;\n" +
+            "    int64_t total = T * Cout;\n" +
+            "    int64_t stride = (int64_t)gridDim.x * blockDim.x;\n" +
+            "    for (int64_t idx = (int64_t)blockIdx.x * blockDim.x + threadIdx.x;\n" +
+            "         idx < total; idx += stride) {\n" +
+            "        int64_t t  = idx / Cout;\n" +
+            "        int64_t co = idx - t * Cout;\n" +
+            "        double acc = 0.0;\n" +
+            "        for (int64_t j = 0; j < Kdim; j++) {\n" +
+            "            int64_t ci = j / K, k = j - ci * K;\n" +
+            "            int64_t p = t - dil * (K - 1 - k);\n" +
+            "            double xv = (p >= 0) ? X[p * Cin + ci] : 0.0;\n" +
+            "            acc += xv * W[co * Kdim + j];\n" +
+            "        }\n" +
+            "        Y[idx] = acc + B[co];\n" +
+            "    }\n" +
+            "}\n" +
             "/* device groupnorm reproducing _hx_k_groupnorm with G=1 (the clm_prod\n" +
             " * callsite: _groupnorm(..., T, d, 1)) — the reduction spans the WHOLE\n" +
             " * [T,D] tensor (m = D*T), NOT per-row. Byte-eq math, f64, EXACT host\n" +
@@ -2285,6 +2315,47 @@ fn emit_runtime_cuda_c() -> str {
             "    /* GROUPNORM #2 (y→yn). */\n" +
             "    _hx_dev_groupnorm(grid, b.Y, b.noG, b.noB, b.YN, b.MEANN, b.INVN, b.XHATN, T, D);\n" +
             "}\n" +
+            "/* ── HEXA-FUSION B6 ── FP64-EXACT cooperative full-fwd megakernel. BYTE FOR\n" +
+            " * BYTE the same DAG / grid.sync() structure / glue+groupnorm code as\n" +
+            " * _hx_k_clm_megafwd ABOVE, the ONLY difference being the 4 conv GEMMs call\n" +
+            " * _hx_dev_conv_fp64 (FP64 own-GEMM accumulation) instead of _hx_dev_conv_tf32.\n" +
+            " * The glue blocks + both groupnorms are ALREADY f64 host-order in the TF32\n" +
+            " * kernel, so swapping the conv to FP64 makes EVERY op in this megakernel f64.\n" +
+            " * This is the B6 candidate: keep the cooperative-megakernel util structure of\n" +
+            " * P1 but with the byte-eq FP64 GEMM (#2697) pulled inside. Whether it matches\n" +
+            " * the eager cublasDgemm path to max|Δ|=0 is the open question — the conv uses\n" +
+            " * naive sequential k-order, cublasDgemm uses tiled k-order. */\n" +
+            "__global__ void _hx_k_clm_megafwd_fp64(_HxClmMegaBufs b,\n" +
+            "        int64_t T, int64_t D, int64_t E, int64_t K) {\n" +
+            "    _hxcg::grid_group grid = _hxcg::this_grid();\n" +
+            "    int64_t n = T * D;\n" +
+            "    _hx_dev_conv_fp64(grid, b.XE, b.ecW, b.ecB, b.XEC, T, D, D, K, 1); grid.sync();\n" +
+            "    _hx_dev_conv_fp64(grid, b.XEC, b.tcW, b.tcB, b.H0, T, D, D, K, 1); grid.sync();\n" +
+            "    _hx_dev_groupnorm(grid, b.H0, b.tgG, b.tgB, b.HN0, b.MEAN0, b.INV0, b.XHAT0, T, D);\n" +
+            "    grid.sync();\n" +
+            "    { int64_t stride=(int64_t)gridDim.x*blockDim.x;\n" +
+            "      for(int64_t i=(int64_t)blockIdx.x*blockDim.x+threadIdx.x;i<n;i+=stride){\n" +
+            "        double hg=_hx_gelu_dev(b.HN0[i]); b.HG0[i]=hg; b.XT[i]=b.XEC[i]+hg; } }\n" +
+            "    grid.sync();\n" +
+            "    _hx_dev_conv_fp64(grid, b.XT, b.rW, b.rB, b.LOGR, T, D, E, 1, 1); grid.sync();\n" +
+            "    _hx_dev_conv_fp64(grid, b.XT, b.e0W, b.e0B, b.EO0, T, D, D, K, 1); grid.sync();\n" +
+            "    _hx_dev_conv_fp64(grid, b.XT, b.e1W, b.e1B, b.EO1, T, D, D, K, 1); grid.sync();\n" +
+            "    { int64_t stride=(int64_t)gridDim.x*blockDim.x;\n" +
+            "      for(int64_t t=(int64_t)blockIdx.x*blockDim.x+threadIdx.x;t<T;t+=stride){\n" +
+            "        for(int64_t c=0;c<D;c++){ int64_t j=t*D+c;\n" +
+            "          double g0=_hx_gelu_dev(b.EO0[j]); b.EX0[j]=g0; b.EXOUT[j]=g0;\n" +
+            "          double g1=_hx_gelu_dev(b.EO1[j]); b.EX1[j]=g1; b.EXOUT[n+j]=g1; }\n" +
+            "        int64_t base=t*E; double mx=b.LOGR[base];\n" +
+            "        for(int64_t e=1;e<E;e++){ double vv=b.LOGR[base+e]; if(vv>mx)mx=vv; }\n" +
+            "        double s=0.0;\n" +
+            "        for(int64_t e=0;e<E;e++){ double ev=exp(b.LOGR[base+e]-mx); b.PROBS[base+e]=ev; s+=ev; }\n" +
+            "        for(int64_t e=0;e<E;e++) b.PROBS[base+e]/=s;\n" +
+            "        for(int64_t c=0;c<D;c++){ double acc=0.0;\n" +
+            "          for(int64_t e=0;e<E;e++) acc+=b.PROBS[base+e]*b.EXOUT[e*n+t*D+c];\n" +
+            "          b.Y[t*D+c]=acc; } } }\n" +
+            "    grid.sync();\n" +
+            "    _hx_dev_groupnorm(grid, b.Y, b.noG, b.noB, b.YN, b.MEANN, b.INVN, b.XHATN, T, D);\n" +
+            "}\n" +
             "#ifdef __cplusplus\n" +
             "extern \"C\" {  /* REOPEN — the launcher keeps C linkage (runtime.c calls it) */\n" +
             "#endif\n" +
@@ -2361,16 +2432,21 @@ fn emit_runtime_cuda_c() -> str {
             "     * (writes hn0) BEFORE block-2 overwrites EX0; the grid.sync() between\n" +
             "     * them orders the reuse. */\n" +
             "    int blk = 128;\n" +
+            "    /* B6: HEXA_CLM_MEGASTEP_FP64 selects the FP64-exact megakernel (byte-eq\n" +
+            "     * candidate own-GEMM) instead of the P1 TF32 megakernel. Default (env\n" +
+            "     * unset/empty) keeps the P1 TF32 kernel — unchanged behaviour. */\n" +
+            "    int _b6_fp64 = (getenv(\"HEXA_CLM_MEGASTEP_FP64\") && getenv(\"HEXA_CLM_MEGASTEP_FP64\")[0]) ? 1 : 0;\n" +
+            "    void* _mk = _b6_fp64 ? (void*)_hx_k_clm_megafwd_fp64 : (void*)_hx_k_clm_megafwd;\n" +
             "    int numBlocksPerSm = 0;\n" +
             "    cudaOccupancyMaxActiveBlocksPerMultiprocessor(&numBlocksPerSm,\n" +
-            "        (void*)_hx_k_clm_megafwd, blk, 0);\n" +
+            "        _mk, blk, 0);\n" +
             "    if (numBlocksPerSm < 1) numBlocksPerSm = 1;\n" +
             "    int numSm = 0; cudaDeviceGetAttribute(&numSm, cudaDevAttrMultiProcessorCount, dev);\n" +
             "    if (numSm < 1) numSm = 1;\n" +
             "    int grid_sz = numSm * numBlocksPerSm;\n" +
             "    dim3 gdim(grid_sz), bdim(blk);\n" +
             "    void* args[] = { (void*)&bb, (void*)&T, (void*)&D, (void*)&E, (void*)&K };\n" +
-            "    cudaError_t le = cudaLaunchCooperativeKernel((void*)_hx_k_clm_megafwd,\n" +
+            "    cudaError_t le = cudaLaunchCooperativeKernel(_mk,\n" +
             "                        gdim, bdim, args, 0, _forge_stream());\n" +
             "    if (le != cudaSuccess) {\n" +
             "        fprintf(stderr, \"[cuda] clm_megafwd coop launch: %s\\n\", cudaGetErrorString(le));\n" +
@@ -2378,7 +2454,10 @@ fn emit_runtime_cuda_c() -> str {
             "    }\n" +
             "    if (_forge_launch_check(\"clm_megafwd\") != 0) { cudaFree(d_ex0); cudaFree(d_ex1); return -1; }\n" +
             "    { static int _mf_fired = 0; if (!_mf_fired) { _mf_fired = 1;\n" +
-            "        fprintf(stderr, \"[MEGAFWD-FIRED] _hx_k_clm_megafwd TF32 coop full-fwd (grid=%d blk=%d, no cuBLAS)\\n\", grid_sz, blk); } }\n" +
+            "        if (_b6_fp64)\n" +
+            "          fprintf(stderr, \"[MEGAFWD-FIRED] _hx_k_clm_megafwd_fp64 FP64-EXACT coop full-fwd (grid=%d blk=%d, no cuBLAS, byte-eq candidate)\\n\", grid_sz, blk);\n" +
+            "        else\n" +
+            "          fprintf(stderr, \"[MEGAFWD-FIRED] _hx_k_clm_megafwd TF32 coop full-fwd (grid=%d blk=%d, no cuBLAS)\\n\", grid_sz, blk); } }\n" +
             "    cudaFree(d_ex0); cudaFree(d_ex1);\n" +
             "    /* mark device-resident outputs (bwd reads them; final conv reads yn) */\n" +
             "    int64_t outs[16] = { xec_id, hn0_id, hg0_id, xt_id, mean0_id, inv0_id, xhat0_id,\n" +
