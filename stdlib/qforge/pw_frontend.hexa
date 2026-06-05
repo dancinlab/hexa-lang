@@ -1053,6 +1053,13 @@ pub fn qforge_pw_frontend_phonons_scr(deck_dir: str, npw_cap: int, xc_mode: int,
     //   same local kernel coeff as the diagonal path (consistency). d4/d6.
     qpwfft_reset_witness()                           // fold/err counters per-run (d6)
     let pwfft_ok = qpwfft_stage_miller(gvecs, gmiller, geom.b1, geom.b2, geom.b3, fxc)
+    // ── enable the LOCAL-ALDA (Adler-Wiser local-field) screening kernel — the
+    //   RPA+ALDA closure: ΔV_xc(r)=f_xc[ρ(r)]·Δρ(r) at the LOCAL ground-state ρ(r)
+    //   (reconstructed inside qpwfft from the ψ_n columns), REPLACING the uniform-gas
+    //   scalar f_xc[ρ̄]. xc_mode≥1 → +LDA-x; the deck's xc_mode≥2 path adds PW92-c. The
+    //   converged-CaH6 gate needs xc_mode=2 (H+x+c); the fixture passes xc_mode=1 to the
+    //   front-end SCF but the screening kernel runs the FULL x+c (the el-ph vertex XC).
+    if pwfft_ok && geom.omega > 0.0 { qpwfft_enable_local_alda(geom.omega, 2) }
     let kernel_ok = (n > 0)                          // G-space kernel always available
 
     // per-direction coupling weight ‖ΔV|ψ⟩‖² (rank the 3 cartesian dirs). The bundle
@@ -1157,12 +1164,16 @@ pub fn qforge_pw_frontend_phonons_scr(deck_dir: str, npw_cap: int, xc_mode: int,
     // FFT path silently fell back to the diagonal (the n=645 0-iter root-cause signal).
     let pwfft_folds = qpwfft_folds()
     let pwfft_err = qpwfft_last_err()
+    let pwfft_local = qpwfft_local_xc_folds()        // #folds that used the LOCAL-ALDA kernel
     let pwfft_tag = if pwfft_ok {
         "POW2-FFT-POISSON grid=" + to_string(pwfft_grid[0]) + "x"
         + to_string(pwfft_grid[1]) + "x" + to_string(pwfft_grid[2])
-        + " folds=" + to_string(pwfft_folds) + " last_err=" + to_string(pwfft_err)
-        + (if pwfft_folds > 0 { " (genuine real-space convolution ENGAGED)" }
-           else { " (FFT staged but 0 folds → DIAGONAL FALLBACK, err-code above)" })
+        + " folds=" + to_string(pwfft_folds) + " local-ALDA-folds=" + to_string(pwfft_local)
+        + " last_err=" + to_string(pwfft_err)
+        + (if pwfft_folds > 0 {
+             if pwfft_local > 0 { " (genuine RPA+ALDA local-field convolution ENGAGED — f_xc[ρ(r)])" }
+             else { " (convolution ENGAGED, uniform-gas f_xc[ρ̄] fallback)" }
+           } else { " (FFT staged but 0 folds → DIAGONAL FALLBACK, err-code above)" })
     } else { "diagonal-fallback (FFT-Poisson grid NOT staged)" }
     let vert_tag = if screened && kernel_ok {
         "SCREENED ΔV_scr·ψ (Dyson ε⁻¹, Anderson β=" + to_string(scr_beta)
