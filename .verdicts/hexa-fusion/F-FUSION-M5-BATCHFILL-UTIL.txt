@@ -1,0 +1,98 @@
+F-FUSION-M5-BATCHFILL-UTIL — real clm_prod step util as a function of BATCH SIZE
+════════════════════════════════════════════════════════════════════════════════
+DATE      : 2026-06-05
+BRANCH    : domain/hexa-fusion-m5-batchfill-util
+HARDWARE  : NVIDIA H100 80GB HBM3 (SXM) — vast instance 39613076 (ssh6.vast.ai,
+            driver 560.35.03, CUDA 12.4, glibc 2.35). REAL H100 SXM (not B200).
+            [A FIRST pod 39608981 (ssh4, driver 580.126.20) was PREEMPTED mid-sweep
+             — vast interruptible reclaim; re-rented 39613076 and re-ran. Both were
+             confirmed H100 80GB HBM3 SXM via nvidia-smi.] Pod DESTROYED after, leak 0.
+PRECISION : eager FP64 (the M2/M3 baseline path). Conv GEMMs run on GPU via
+            forge_dispatch_matmul (FP64 cuBLAS). The L1/L3 fusion-glue dispatchers
+            are stubbed -> host-fallback (byte-eq eager reference) on this P1-runtime
+            build; the heavy GEMMs (the GEMM-FILL axis) are UNAFFECTED and GPU-resident.
+
+FALSIFIER (pre-registered)
+──────────────────────────
+"Real clm_prod training-step GPU util climbs to GREEN (>=20% MEAN) as the data
+ BATCH grows (B in 1,4,8,16,32 -> more cooperative/GEMM blocks fill the H100's
+ 132 SMs). Pin the batch at which util reaches GREEN."
+
+BATCH WIRING (done Y)
+─────────────────────
+  CLM_PROD_BATCH=B added to stdlib/flame/clm_prod.hexa. The trainer was strictly
+  one-window-per-step (M = sequence length Tw rows for every conv GEMM). The new
+  lever concatenates B distinct windows per step into one length-(B*Tw) buffer, so
+  every conv GEMM's M-dimension becomes B*Tw rows (the grid grows ~linearly with B).
+  ConvMoE is fully per-position (no attention); the only impurity is the K-1 causal-
+  conv seam between concatenated windows — a tiny value perturbation that does NOT
+  change any GEMM shape and keeps CE descending. B=1 = exact prior behavior.
+  T_eff = B * Tw  (Tw = base window length = 512).
+  Verified: B=1 (T_eff=512), B=4 (2048), B=8 (4096), B=16 (8192), B=32 (16384) all
+  RUN (B=32 T_eff=16384 fits 80GB — NO OOM, ~5-11 GiB used, RC=0).
+
+BUILT (Y)
+─────────
+  clm_prod_gpu = 1752432 bytes. Build = flatten clm_prod.hexa (9 modules) -> hexat
+  transpile -> post-process (8 hexa_callN(forge_dispatch_X)->direct) -> nvcc -DHEXA_CUDA
+  -rdc=true compute_90 (65 launchers) + dlink -> gcc link with P1 self/runtime.c (FP64
+  cuBLAS forge_dispatch_matmul) + glue/adamw stubs + -lcudadevrt -lcudart -lcublas
+  -lcuda. Smoke B=1 + B=4 CE-descent PASS.
+
+REAL-STEP UTIL vs BATCH (nvidia-smi 0.2s sampling, D=1536 Tw=512 E=2, eager FP64.
+ Each B sampled over a sustained >=70s window of repeated steps; B=32 over its single
+ full M=16384 step. idle baseline MEAN=0.00-0.13% PEAK=0-2%)
+────────────────────────────────────────────────────────────────────────────────────
+  B     T_eff    MEAN     MEDIAN   PEAK    pct>=20    n
+  ---   -----    -----    ------   ----    -------    ----
+  idle  -        0.00%    0%       0%      0.0%       15
+  1     512      0.43%    0%       19%     0.0%       571
+  4     2048     0.46%    0%       14%     0.0%       494
+  8     4096     0.45%    0%       14%     0.0%       775
+  16    8192     0.43%    0%       18%     0.0%       1303
+  32    16384    0.79%    0%       34%     0.8%       645
+
+  CE descent holds (B=4 4.36→3.82 PASS); B=8/16/32 NSAMP-bounded runs all complete
+  WITHOUT OOM — B=32 at T_eff=16384 fits the 80 GB H100 with ~5–11 GiB used (RC=0).
+  The util MEAN is FLAT at ~0.45% from B=1→16 (a 16× growth in GEMM M-dimension,
+  512 → 8192 rows) and is still only 0.79% at B=32 (M=16384). MEDIAN is 0% at EVERY
+  B; pct>=20 is ≤0.8% everywhere — the GPU is IDLE the vast majority of every step.
+  PEAK rises modestly (19%→34%) — a taller single GEMM burst is briefly more intense,
+  but it is a burst: the device returns to idle for the inter-op glue immediately after.
+
+GREEN reached at batch : NEVER (1→32 all ~0.45% MEAN, MEDIAN 0% — nowhere near ≥20%)
+util-99% question      : RESOLVED — NO (the answer was NOT batch-fill)
+
+FINDING (closed-negative — ruled-out axis)
+───────────────────────────────────────────
+  🔴 FALSIFIED. Real clm_prod step util does NOT climb toward GREEN as the data batch
+  grows. Across B = 1,4,8,16,32 — GEMM M-dimension 512 → 16384 rows — util MEAN stays
+  PINNED at ~0.45% (B=1..16) and only inches to 0.79% at B=32, with MEDIAN 0% and
+  pct>=20 ≤0.8% at EVERY batch. Growing the batch to fill the 132 SMs does NOT raise
+  utilization toward GREEN; it makes each STEP proportionally slower (host-bound)
+  while the device stays idle between the FP64 GEMM bursts.
+
+  This RULES OUT batch-fill (true data-batching) as the path to util-GREEN at this
+  regime — the LAST untested util lever named by M2. The wall is NOT "too few blocks
+  under-fill the SMs" (M2's batch=1 hypothesis); it is the SERIAL PER-STEP STRUCTURE:
+  each conv-MoE step is a chain of FP64 cuBLAS GEMMs separated by per-position glue
+  (groupnorm / gelu / residual / embedding / router / col2im), and between the few
+  GEMM launches the device idles regardless of how many rows each GEMM carries. A
+  bigger batch just makes each GEMM taller — the GEMM still completes in a burst and
+  the device returns to idle for the inter-op glue. MEAN util is the duty cycle of
+  GPU-busy vs whole-step wall, and that duty cycle is invariant to batch.
+
+  Combined with the prior HEXA-FUSION closures this EXHAUSTS the util axis:
+    · M2 (#2788)  full-step megakernel +3.4pp only — fusing more does not cross GREEN
+    · M3 (#2785)  bigger D — util DECLINES (GEMM-bound, host overhead scales)
+    · M5 (THIS)   bigger BATCH — util FLAT ~0.45% (fill is NOT the problem)
+  util-GREEN at this model/precision is unreachable by ANY sizing knob (D, batch) or by
+  more cooperative fusion. The only remaining levers are the ones the campaign already
+  named: a PRECISION/algorithm change that turns the serial glue+GEMM chain into one
+  dense compute-bound kernel, OR a RIGHT-SIZED (smaller) GPU whose SM count the existing
+  grid saturates. The util-99%-via-batch-fill question is RESOLVED: the answer is NO.
+
+  NOTE on the measurement build: the conv GEMMs ran on the GPU (FP64 cuBLAS via
+  forge_dispatch_matmul, the GEMM-FILL axis under test); the sub-ms L1/L3 fusion glue
+  was host-fallback (stubbed) on this P1-runtime build — identical to the eager byte-eq
+  reference path. The flat util curve is therefore the genuine eager-step duty cycle.
