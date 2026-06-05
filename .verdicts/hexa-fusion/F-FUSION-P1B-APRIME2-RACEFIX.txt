@@ -1,0 +1,115 @@
+F-FUSION-P1B-APRIME2-RACEFIX — device-glue RACEFIX (zero-on-alloc) — 🔴 CLOSED-NEGATIVE
+================================================================================
+Falsifier (pre-registered):
+  H1 (root cause): the P1B-a' (#2779) device-resident-glue run-to-run
+     NON-DETERMINISM is an UNINITIALIZED-TAIL read — a glue kernel writes the
+     live `need_len` region of a fresh cudaMalloc'd OUTPUT buffer, a downstream
+     op / D2H copies the full host `e->len` (≥ need_len), and the driver-garbage
+     TAIL (varies process-to-process) leaks into a reduction.
+  H2 (fix): zero-on-alloc — cudaMemset every freshly cudaMalloc'd OUTPUT buffer
+     (_ensure_dev_alloc_out + GEMM-C + batched-C), gated HEXA_DEVGLUE_DETERMINIZE
+     (default ON). PREDICTION: live region fully overwritten → CE byte-unchanged
+     for a correct kernel; tail = deterministic 0.0 → device-glue becomes
+     run-to-run DETERMINISTIC (Δ → 0, from the reported ~7e-6).
+  Byte-eq capstone gate (g5): max|Δ first_ce| = 0 between device-eager (CUDA erf,
+     own-GEMM) and device-mega (CUDA erf, own-GEMM), D1536 T512 17-digit CE.
+
+Method:
+  Pod vast 39583913 (H100 NVL 95830 MiB, cc 9.0, CUDA 12.4.1), ~/work.
+  Built clm_prod_gpu WITH the racefix runtime_cuda.c:
+    nvcc -x cu -DHEXA_CUDA -rdc=true -gencode arch=compute_90,code=sm_90 -O2 -c
+      runtime_cuda.c  (runtime_cuda.o 417256 B; RACEFIX memset markers = 4;
+      MEGAFWD launchers = 3; EAGER-DEVGLUE marker = 1)
+    gcc clm_prod.c fusion_dispatch.c self/runtime.c runtime_cuda.o
+      runtime_cuda_dlink.o -lcudart -lcublas -lcuda -lcudadevrt
+      → clm_prod_gpu 2005520 B
+  BUILD-FIX (this resume): the l3d-base self/runtime.{c,h} lacks the 5 FUSED-op
+  dispatchers clm_prod.c calls (gelu2 / groupnorm_gelu / groupnorm_gelu_residual
+  / moe_block2 / clm_megafwd) — the prior agent's clm_megafwd_dispatch.c only
+  supplied 1 (hexa_-prefixed) and the bare protos were absent → "invalid
+  initializer" RELINK FAIL. Supplied fusion_dispatch.c (5 bare forge_dispatch_*
+  wrappers → the _hx_cuda_farr_<op>_gpu launchers already in runtime_cuda.o) +
+  insert_fusion_protos.py (5 protos into runtime.h). The racefix runtime itself
+  was UNCHANGED — the zero-on-alloc is exactly the committed code.
+  All runs: CLM_PROD_DEVRESIDENT=1 DEVFEED=1 BATCHED=1 HEXA_OWN_GEMM=1
+            D=1536 T=512 E=2 NSAMP=8, corpus.txt, fixed LCG weight seeds (1..21).
+
+Verification (VERBATIM stdout):
+  STAGE A — full-fwd determinism ladder (EPOCHS=1, x3 per knob, first_ce):
+    FIX OFF (HEXA_DEVGLUE_DETERMINIZE=0, legacy garbage-tail):
+      off run1: 4.8643970429393288
+      off run2: 4.5054363184284378
+      off run3: 4.769647455243323
+    FIX ON  (HEXA_DEVGLUE_DETERMINIZE=1, zero-on-alloc racefix):
+      on  run1: 4.6409832986593962
+      on  run2: 4.7549433084026687
+      on  run3: 4.8314606648714928
+    device-MEGA fp64, FIX ON:
+      mega run1: 4.9370248776438368
+      mega run2: 4.7156189422038244
+      mega run3: 4.8229926070723916
+
+  STAGE B — CAPSTONE A/B (EPOCHS=4, racefix ON):
+    A = device-EAGER (HEXA_EAGER_DEVRESIDENT=1):
+      util MEAN=13.75% PEAK=100% pct>=20=21.0% n=281
+      [EAGER-DEVGLUE-FIRED]=1  [MEGAFWD-FIRED]=0  [OWN-GEMM-FIRED]=2
+      [B6-CE-HIPREC] first_ce=4.7202069431223919 last_ce=5.043153455609545
+      DESCENT=F-CLM-PROD-DESCENT = 0   (CE rose 4.72 → 5.04)
+    B = device-MEGA (HEXA_CLM_MEGASTEP=1 FP64):
+      util MEAN=20.92% PEAK=100% pct>=20=24.7% n=186
+      [EAGER-DEVGLUE-FIRED]=0  [MEGAFWD-FIRED]=1  [OWN-GEMM-FIRED]=2
+      [B6-CE-HIPREC] first_ce=4.7934985509316776 last_ce=4.7573240338075928
+      DESCENT=F-CLM-PROD-DESCENT = 1
+    byte-eq diff (verbatim 17-digit CE):
+      A device-eager first/last: (4.720206943122392, 5.043153455609545)
+      B device-mega  first/last: (4.793498550931678, 4.757324033807593)
+      max|Δ first_ce| = 7.329161e-02
+      max|Δ last_ce|  = 2.858294e-01
+      RESIDUAL = 7.329161e-02   (NOT byte-eq)
+
+Finding (🔴 CLOSED-NEGATIVE — H1 + H2 both FALSIFIED):
+  1. The zero-on-alloc fix DID NOT TAKE. With the racefix ON (default), three
+     repeats of the SAME single forward (fixed weight seeds, fixed corpus) still
+     scatter across [4.641, 4.755, 4.831] — a run-to-run spread of ~1.9e-1 in
+     first_ce. FIX OFF scatters [4.505, 4.864] (~3.6e-1) and device-MEGA scatters
+     [4.716, 4.937] (~2.2e-1). The ON / OFF / MEGA spreads are the SAME order of
+     magnitude → cudaMemset-on-output-alloc changed NOTHING.
+  2. H1 (uninitialized-TAIL) is FALSIFIED. A tail leak into a reduction is a
+     TINY perturbation; the P1B-a' wall was reported as ~7.1e-6. The OBSERVED
+     run-to-run jitter is ~2e-1 — FOUR ORDERS OF MAGNITUDE larger. This is
+     PRIMARY-DATA non-determinism, not a garbage tail: some kernel reads
+     uninitialized device memory AS LIVE INPUT (or an upstream host buffer /
+     reduction is itself non-deterministic), NOT merely an over-long D2H tail.
+     Zeroing OUTPUT buffers (the only thing the fix does) cannot fix an
+     uninitialized INPUT read, which is why the ON spread ≈ the OFF spread.
+  3. The byte-eq megakernel CAPSTONE is NOT achieved. max|Δ first_ce| = 7.33e-2
+     is dominated by the run-to-run NON-DETERMINISM (≈1.9e-1), not by the
+     eager-vs-mega algorithmic difference — with the device path non-deterministic
+     at ~1e-1, a 0-or-1-ULP erf comparison is not even measurable. NOT the 9.3e-13
+     erf floor; NOT 0. Zero-on-alloc was NOT the byte-eq blocker.
+  4. The non-determinism CORRUPTS training: device-EAGER DESCENT=0 (CE rose
+     4.72 → 5.04 over 4 epochs); device-MEGA happened to DESCEND this run
+     (4.79 → 4.76, DESCENT=1) but on a non-deterministic substrate that is not
+     a reproducible result.
+
+Ruled-out axis: the P1B-a'' "device-glue non-determinism = uninitialized-tail,
+  fixable by zero-on-OUTPUT-alloc" hypothesis is DEAD. The real wall is an
+  uninitialized-INPUT read (or a genuinely non-deterministic upstream
+  reduction / host buffer) in the device-resident eager-glue chain, ~1e-1
+  in magnitude — a far larger defect than P1B-a' characterized. The next probe
+  must zero/initialize INPUT scratch buffers (the _h2d path + any device-only
+  scratch that is read before fully written) and re-pin the ladder, NOT chase
+  the erf ULP floor. Until the device path is run-to-run deterministic, NO
+  device-eager-vs-device-mega byte-eq capstone is meaningful.
+
+Markers: [EAGER-DEVGLUE-FIRED]=1 (A), [MEGAFWD-FIRED]=1 (B), [OWN-GEMM-FIRED]=2
+  (both) — all fired. RACEFIX memset present (=4 sites). util eager 13.75% /
+  mega 20.92% mean (PEAK 100% both).
+
+Pod: vast 39583913 (H100 NVL) reused from the orphaned rent; DESTROYED after
+  measurement (verified GONE, leak 0).
+
+Status: 🔴 CLOSED-NEGATIVE. zero-on-alloc fix confirmed PRESENT but INEFFECTIVE;
+  byte-eq megakernel capstone NOT achieved; uninitialized-tail root cause
+  FALSIFIED; the device-glue non-determinism is ~1e-1 (not ~7e-6) and lives on
+  an INPUT/upstream path the output-zeroing does not touch.
