@@ -1,0 +1,32 @@
+F-FUSION-OCCUPANCY-WALL — host-removal lever family EXHAUSTED, occupancy is the wall
+host: vast H100_NVL (idle), clm_prod CLMConvMoE D varies T=512 EPOCHS=2-4
+
+util MEAN @ D=1536 (idle H100), by lever:
+  ② async (single stream)        10.28-12.50%   byte-eq BROKEN (race)
+  ④ piecewise graph (fwd→bwd)    13.17%         byte-eq PASS (CE bit-identical)
+  ⑤ whole-step graph (probe)     13.19%         (AdamW in graph)
+  GRAPH=1 util-vs-D: 11.94% (D1536) -> 10.39% (D2560)  -- DROPS with D
+
+VERDICT (CLOSED-NEGATIVE, host-removal axis):
+  Removing the host from the per-step critical path — async (②), piecewise graph
+  (④), whole-step graph (⑤) — caps util MEAN at ~13% on the H100 and does NOT
+  reach the >=20% GREEN gate. Growing the workload (D) makes it WORSE under BOTH
+  eager and graph. The binding constraint is NOT host launch overhead — it is GPU
+  OCCUPANCY: the CLMConvMoE step is a chain of MANY SMALL, largely sequential
+  kernels (norm / element-wise / MoE glue between the GEMMs) that under-fill the
+  H100 (median util 2%, PEAK 71-100% only during the brief GEMMs). The H100 is
+  too big for this model/T. Host-removal was necessary (④ recovers byte-eq that ②
+  broke, the first correct lever) but is NOT sufficient for util-GREEN.
+  Two genuine remaining levers to RAISE util:
+   (A) KERNEL FUSION (the domain moat, L3 §5d) — merge the small inter-GEMM ops
+       into fewer/larger kernels (or GEMM epilogues) to raise per-kernel occupancy.
+   (B) RIGHT-SIZED GPU — the same workload saturates a smaller GPU (early RTX 5070
+       showed ~90% util at D=1536); util is GPU-relative.
+
+--- GRAPH=1 (whole-step, host removed) util-vs-D ---
+  D=1536  util MEAN 11.94%  median 2  n=179
+  D=2560  util MEAN 10.39%  median 0  n=415   (DROPS even with the graph)
+=> sizing up does not help even with the host fully off the critical path:
+   bigger D = bigger but still-serial kernels = more idle waiting. Confirms the
+   wall is the serial fine-grained kernel DAG, not launch overhead. util-GREEN on
+   H100 needs L3 kernel fusion (shorten the dependency chain) or a right-sized GPU.
