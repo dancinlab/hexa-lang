@@ -348,3 +348,36 @@ wmma2 launch status: launch=no error  sync=no error   ← LAUNCHES YES (cudaErro
 stability re-run 100it: cuBLAS 0.05042 / WMMA2 1.48678 (29.49x) — stable
 ```
 **PARITY-RESTORED: NO**. launch fix 는 성공(sm_90 launch + correctness PASS)이나 native-H100 parity 미회복 — WMMA2 가 cuBLAS 대비 **29.46× 느림**, Blackwell 1.13× 와 무관. 근인(cuobjdump -res-usage): **REG:236/thread**(60416 regs/256-thread block) + 57344 B dyn-smem → H100 65536 regs/SM 에서 **~1 block/SM** = register/occupancy-bound. Blackwell 1.13× 는 sm_120 의 더 큰 레지스터 파일/occupancy 헤드룸에 의존했고 sm_90 으로 **transfer 안 됨**. 정직(g5): cuBLAS = roofline, raw-GEMM 우위 주장 0. **CLOSED-NEGATIVE on sm_90 parity axis** — dynamic-shared opt-in 은 launch 에 필요(충분)하나 parity 엔 불충분; 잔여는 별개 occupancy(레지스터-압) 축. verdict: `.verdicts/hexa-fusion/F-FUSION-SM90-DYNSHARED-FIX.txt`.
+
+## ── own-GEMM cuBLAS-class mainloop sm_90 — ✅ 3/4 levers landed · 🔴 PARITY CLOSED-NEG (mma.sync ceiling) (2026-06-06, g5 verbatim) ──
+
+`F-FUSION-SM90-WARPTILE-RETUNE`(#2800) 가 occupancy 축을 닫고 진단을 inner-loop **math pipeline** 으로 좁힌 뒤, cuBLAS/CUTLASS-class mainloop 기법을 직접 적용. 새 커널 `_hx_k_sgemm_cm_wmma2_cb`(env `HEXA_OWN_GEMM_WMMA2_CB`, default OFF = parent byte-identical).
+
+**LEVERS (3/4 landed, 1 named residual):**
+- **L1 ✓ 하드웨어 TF32 mma.sync** — raw PTX `mma.sync.aligned.m16n8k8.row.col.f32.tf32.tf32.f32`, round 는 operand 레지스터에서 `cvt.rna.tf32.f32` 로 fuse (parent 의 per-element software `__float_to_tf32` 프래그먼트 스윕 제거). m16n8k8 = 1 native HMMA vs wmma 16x16x8 의 2.
+- **L2 ✓ 깊은 cp.async 파이프라인** — HXG_CB_STAGES-deep 링(default 3), wait_group N. on-pod 스윕: 2→11.65, 3→11.55, 4→11.50, 5→10.99 TFLOP/s ⇒ **2-stage 에서 포화**(global→shared latency 가 binding 아님을 2차 확인).
+- **L4 ✓ register-blocked epilogue** — thread 당 m16n8 accumulator 4×.f32 레지스터를 col-major C 로 직접 store (shared round-trip/`__syncwarp` 제거).
+- **L3 ✗ ldmatrix** — `ldmatrix.x4` 는 `.b16`(16-bit) op, TF32 operand 는 32-bit ⇒ indexed shared load 사용. 32-bit `ldmatrix.trans` swizzle 이 named residual.
+
+**correctness 핵심 수정**: 초기 빌드 rel-RMS 1.0(garbage). m16n8k8 `.tf32` A/B operand k-index 는 `{tig, tig+4}`(fp16-style `{tig*2, tig*2+1}` 아님). standalone mma probe(sm_90)로 canonical layout 확정 → **rel-RMS EXACTLY 0.000e+00**(이 seed 에서 cuBLAS-TF32 oracle 과 bit-exact; parent 는 4.766e-06).
+
+**native sm_90 측정** (vast 39628863, `NVIDIA H100 80GB HBM3, compute_cap 9.0`, nvcc 12.6, `-arch=sm_90`, pod DESTROYED leak 0):
+```
+cuBLAS-TF32   : 0.051 ms   ~339.7 TFLOP/s   (roofline baseline)
+parent WMMA2  : 1.538 ms     11.17 TFLOP/s   30.4× off cuBLAS   rel-RMS 4.77e-06
+CB variant    : 1.488 ms     11.55 TFLOP/s   29.4× off cuBLAS   rel-RMS 0.000e+00 (run2 11.54, stable)
+REG: parent 240/thr · CB 128/thr (STACK 56)
+```
+**own GFLOP/s before→after: 11,167 → 11,546 (+3.4%) · gap 30.4× → 29.4× ⇒ ~3.4% of cuBLAS gap closed · PARITY: N.**
+
+**FINDING (CLOSED-NEGATIVE — mma.sync warp-level = ceiling)**: 3개 표현가능 lever 전부 landed + correct 이나 합산 +3.4% 에 그침. stage-depth 가 2 에서 포화(축2 재확인)하는 것과 합쳐, binding constraint 는 **mma.sync 명령어 클래스 자체**. Hopper 에서 cuBLAS 는 **wgmma.mma_async**(warpgroup-level async MMA) + **TMA**(`cp.async.bulk.tensor`)로 TC peak 도달 — mma.sync 가 pipelining/epilogue 튜닝과 무관하게 닿을 수 없는 별개 클래스. 잔여 ~29× 는 wgmma+TMA rewrite(sm_90a-specific, CUTLASS-3.x-class kernel)이지 mainloop retune 아님. 정직(g5): parity-seeking, cuBLAS=roofline, 우위 주장 0. CB 는 env-gated default-OFF 로 ship(parent byte-identical) — 검증된 작은-양성 datapoint + 날카로워진 negative(다음 lever = wgmma/TMA, 명시). verdict: `.verdicts/hexa-fusion/F-FUSION-SM90-CUBLAS-MAINLOOP.txt`.
+
+## ── wgmma.mma_async + TMA own-GEMM sm_90 — ✅ FEASIBILITY PASS · 🟠 layout residual (2026-06-06, g5 verbatim) ──
+
+The residual lever named by `F-FUSION-SM90-CUBLAS-MAINLOOP` (mma.sync ceiling 11.55 TFLOP/s = 29.4× off cuBLAS): the warpgroup-async class. Standalone kit `self/native/wgmma/` — f16 + tf32 wgmma probes, a `cuTensorMapEncodeTiled` + `cp.async.bulk.tensor.2d` + mbarrier TMA pipeline feeding a `wgmma.m64n128k8` warpgroup mainloop, + `build_and_measure.sh`. Native sm_90 H100 (vast 39628805, `NVIDIA H100 80GB HBM3, compute_cap 9.0`, nvcc 12.6, `-arch=sm_90a`, pod DESTROYED leak 0).
+
+**PROBE FEASIBLE: YES.** sm_90a builds clean and **wgmma.mma_async EXECUTES CORRECTLY on native H100** (f16 m64n32k16 probe: nonzero 2048/2048, sum 1962.49 vs ref 1956.87). This converts the prior `F-FUSION-ATTN-WGMMA-WALL` (bc4-r15, 2026-05-28) **hardware-blocked closed-negative** — same wgmma kernel silently NOP'd on Blackwell sm_120 (output all-zero) — into **testable + builds + runs** on real Hopper. The whole Hopper async PTX surface (`cuTensorMapEncodeTiled` driver API + `cp.async.bulk.tensor.2d.shared::cluster.global.mbarrier::complete_tx::bytes` + `mbarrier.init`/`arrive.expect_tx`/`try_wait.parity`) is **ptxas-accepted on sm_90a** (TMA GEMM TMA-BUILD=0). **The own-source emit path is NOT the blocker.**
+
+**RESIDUAL (🟠): the no-swizzle core-matrix shared-memory LAYOUT.** TF32 single-warpgroup mainloop builds + launches but rel-RMS **1.309e+00** (FAIL vs 3e-3). An isolated process-safe (LBO,SBO) descriptor sweep over {16,32,64,128,256,512} found **no combo below 1.309** — descriptor byte-offsets are NOT the binding error. A structured-input diagnostic (C[m][n]=n) confirmed the **accumulator-register → C(row,col) epilogue mapping is CORRECT** (thread 0 receives column-octets 8,16,…,56). The binding residual is the wgmma no-swizzle **8×16B core-matrix tiling** of A/B in shared (a permutation/transpose leaves the contraction ~uncorrelated, rel-RMS ≈ √2); the integrated TMA pipeline additionally faults at runtime (coordinate/mbarrier-phase addressing). Pinning this is the precise CUTLASS-3.x swizzle wedge.
+
+**own GFLOP/s: NOT-REPORTED** (kernel not bit-correct — g5 forbids perf on a wrong-result kernel). **PARITY: NO (not measured). % gap closed: 0% measured.** Honest: parity-seeking, cuBLAS=roofline, no superiority claim. **FINDING** = a POSITIVE feasibility Δ (wgmma+TMA build+run-feasible on native sm_90, vs the prior cannot-test closed-negative) + a sharpened named residual (the ruled-IN axis is operand shared-layout correctness, NOT the instruction/descriptor/epilogue/emit-path). verdict: `.verdicts/hexa-fusion/F-FUSION-SM90-WGMMA-TMA.txt`.
