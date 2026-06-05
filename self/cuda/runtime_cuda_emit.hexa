@@ -4179,6 +4179,136 @@ fn emit_runtime_cuda_c() -> str {
             "#endif\n" +
             "}\n" +
             "\n" +
+            "/* ════════════════════════════════════════════════════════════════════════\n" +
+            " * HEXA-FUSION M2 (FULL-STEP) — fused cooperative AdamW over ALL params.\n" +
+            " * ════════════════════════════════════════════════════════════════════════\n" +
+            " * The clm_prod training step ends with ~36 SEPARATE _adam(W_i,...) calls,\n" +
+            " * each a distinct <<<>>> kernel launch with its own launch+sync gap. With\n" +
+            " * the host on the critical path between every micro-launch, the optimizer\n" +
+            " * TAIL of the step under-fills the H100 exactly like the fwd glue DAG P1\n" +
+            " * attacked. M2 collapses ALL param updates into ONE cooperativeLaunch:\n" +
+            " * the grid strides over the CONCATENATION of every param tensor (prefix-\n" +
+            " * offset lookup per global index), so 36 launches → 1 persistent grid,\n" +
+            " * host fully off the optimizer critical path. Arithmetic is BYTE-IDENTICAL\n" +
+            " * to _hx_k_adamw_step_inplace (same per-element AdamW; each tensor carries\n" +
+            " * its own bias-correction c1/c2 since they share the same global step_t).\n" +
+            " * This is the M2 full-step lever's first landed chunk — the optimizer step\n" +
+            " * fused inside a cooperative launch alongside P1's fwd megakernel. */\n" +
+            "#ifdef __CUDACC__\n" +
+            "#define HX_FS_MAXP 64   /* max param tensors in one fused AdamW launch */\n" +
+            "struct _HxAdamFused {\n" +
+            "    double* W[HX_FS_MAXP];\n" +
+            "    double* Mm[HX_FS_MAXP];\n" +
+            "    double* Vv[HX_FS_MAXP];\n" +
+            "    const double* G[HX_FS_MAXP];\n" +
+            "    int64_t off[HX_FS_MAXP + 1];  /* prefix-sum offsets; off[np]=total */\n" +
+            "    int np;\n" +
+            "    double lr, b1, b2, eps, wd, c1, c2;\n" +
+            "};\n" +
+            "/* Cooperative fused-AdamW. ONE persistent grid strides over off[np] total\n" +
+            " * elements; for each global idx, find the owning tensor p (off[p]<=idx<\n" +
+            " * off[p+1]) then run the IDENTICAL AdamW update on element (idx-off[p]).\n" +
+            " * grid.sync() is unnecessary (no cross-element dependency) but the launch\n" +
+            " * is cooperative so it composes with the full-step megakernel chain and\n" +
+            " * incurs exactly ONE launch for the whole optimizer tail. */\n" +
+            "__global__ void _hx_k_adamw_fused(_HxAdamFused f) {\n" +
+            "    int64_t total = f.off[f.np];\n" +
+            "    int64_t stride = (int64_t)gridDim.x * blockDim.x;\n" +
+            "    for (int64_t idx = (int64_t)blockIdx.x * blockDim.x + threadIdx.x;\n" +
+            "         idx < total; idx += stride) {\n" +
+            "        /* linear scan np<=64 — cheap, branch-coherent within a warp for the\n" +
+            "         * large contiguous tensors that dominate the element count. */\n" +
+            "        int p = 0;\n" +
+            "        while (p + 1 < f.np && idx >= f.off[p + 1]) p++;\n" +
+            "        int64_t i = idx - f.off[p];\n" +
+            "        double g    = f.G[p][i];\n" +
+            "        double mi   = f.b1 * f.Mm[p][i] + (1.0 - f.b1) * g;\n" +
+            "        double vi   = f.b2 * f.Vv[p][i] + (1.0 - f.b2) * g * g;\n" +
+            "        double mhat = mi / f.c1;\n" +
+            "        double vhat = vi / f.c2;\n" +
+            "        double denom = sqrt(vhat) + f.eps;\n" +
+            "        double wi   = f.W[p][i] - f.lr * f.wd * f.W[p][i] - f.lr * mhat / denom;\n" +
+            "        f.Mm[p][i] = mi;\n" +
+            "        f.Vv[p][i] = vi;\n" +
+            "        f.W[p][i]  = wi;\n" +
+            "    }\n" +
+            "}\n" +
+            "#endif /* __CUDACC__ */\n" +
+            "/* Launcher — accepts up to HX_FS_MAXP (w,m,v,g,n) quintuples flattened into\n" +
+            " * parallel id arrays + a count. Resolves all to device buffers (H2D each),\n" +
+            " * builds the prefix-offset table, cooperativeLaunch ONE _hx_k_adamw_fused,\n" +
+            " * then D2H W/m/v for every tensor (same write-back contract as the per-\n" +
+            " * param inplace path). Returns 0 ok / -1 (→ caller falls back to the per-\n" +
+            " * param _adam loop, byte-eq). step_t/lr/b1/b2/eps/wd shared (clm uses one\n" +
+            " * global schedule). assert_eq unused (arithmetic is byte-eq by construction). */\n" +
+            "int _hx_cuda_farr_adamw_fused_gpu(const int64_t* w_ids, const int64_t* m_ids,\n" +
+            "                                  const int64_t* v_ids, const int64_t* g_ids,\n" +
+            "                                  const int64_t* ns, int np,\n" +
+            "                                  double lr, double b1, double b2,\n" +
+            "                                  double eps, double wd, int64_t step_t) {\n" +
+            "#ifdef __CUDACC__\n" +
+            "    if (np <= 0 || np > HX_FS_MAXP || step_t < 1) {\n" +
+            "        fprintf(stderr, \"[cuda] adamw_fused: bad np=%d step_t=%lld\\n\",\n" +
+            "                np, (long long)step_t);\n" +
+            "        return -1;\n" +
+            "    }\n" +
+            "    int dev = 0; cudaGetDevice(&dev);\n" +
+            "    int coop = 0;\n" +
+            "    cudaDeviceGetAttribute(&coop, cudaDevAttrCooperativeLaunch, dev);\n" +
+            "    if (!coop) { fprintf(stderr, \"[cuda] adamw_fused: no cooperativeLaunch\\n\"); return -1; }\n" +
+            "    for (int p = 0; p < np; p++) {\n" +
+            "        if (ns[p] <= 0) { fprintf(stderr, \"[cuda] adamw_fused: bad n[%d]\\n\", p); return -1; }\n" +
+            "        if (_h2d(w_ids[p]) != 0) return -1;\n" +
+            "        if (_h2d(m_ids[p]) != 0) return -1;\n" +
+            "        if (_h2d(v_ids[p]) != 0) return -1;\n" +
+            "        if (_h2d(g_ids[p]) != 0) return -1;\n" +
+            "    }\n" +
+            "    double b1t = 1.0, b2t = 1.0;\n" +
+            "    for (int64_t e = 0; e < step_t; e++) { b1t *= b1; b2t *= b2; }\n" +
+            "    _HxAdamFused f;\n" +
+            "    f.np = np; f.lr = lr; f.b1 = b1; f.b2 = b2; f.eps = eps; f.wd = wd;\n" +
+            "    f.c1 = 1.0 - b1t; f.c2 = 1.0 - b2t;\n" +
+            "    f.off[0] = 0;\n" +
+            "    for (int p = 0; p < np; p++) {\n" +
+            "        f.W[p]  = g_slots[w_ids[p]].d_buf;\n" +
+            "        f.Mm[p] = g_slots[m_ids[p]].d_buf;\n" +
+            "        f.Vv[p] = g_slots[v_ids[p]].d_buf;\n" +
+            "        f.G[p]  = g_slots[g_ids[p]].d_buf;\n" +
+            "        f.off[p + 1] = f.off[p] + ns[p];\n" +
+            "    }\n" +
+            "    int blk = 256;\n" +
+            "    int numBlocksPerSm = 0;\n" +
+            "    cudaOccupancyMaxActiveBlocksPerMultiprocessor(&numBlocksPerSm,\n" +
+            "        (void*)_hx_k_adamw_fused, blk, 0);\n" +
+            "    if (numBlocksPerSm < 1) numBlocksPerSm = 1;\n" +
+            "    int numSm = 0; cudaDeviceGetAttribute(&numSm, cudaDevAttrMultiProcessorCount, dev);\n" +
+            "    if (numSm < 1) numSm = 1;\n" +
+            "    int grid_sz = numSm * numBlocksPerSm;\n" +
+            "    dim3 gdim(grid_sz), bdim(blk);\n" +
+            "    void* args[] = { (void*)&f };\n" +
+            "    cudaError_t le = cudaLaunchCooperativeKernel((void*)_hx_k_adamw_fused,\n" +
+            "                        gdim, bdim, args, 0, _forge_stream());\n" +
+            "    if (le != cudaSuccess) {\n" +
+            "        fprintf(stderr, \"[cuda] adamw_fused coop launch: %s\\n\", cudaGetErrorString(le));\n" +
+            "        return -1;\n" +
+            "    }\n" +
+            "    if (_forge_launch_check(\"adamw_fused\") != 0) return -1;\n" +
+            "    { static int _af_fired = 0; if (!_af_fired) { _af_fired = 1;\n" +
+            "        fprintf(stderr, \"[FULLSTEP-FIRED] _hx_k_adamw_fused cooperative AdamW over %d params in ONE launch (grid=%d blk=%d, optimizer tail collapsed)\\n\", np, grid_sz, blk); } }\n" +
+            "    for (int p = 0; p < np; p++) {\n" +
+            "        if (_d2h(w_ids[p]) != 0) return -1;\n" +
+            "        if (_d2h(m_ids[p]) != 0) return -1;\n" +
+            "        if (_d2h(v_ids[p]) != 0) return -1;\n" +
+            "    }\n" +
+            "    return 0;\n" +
+            "#else\n" +
+            "    (void)w_ids;(void)m_ids;(void)v_ids;(void)g_ids;(void)ns;(void)np;\n" +
+            "    (void)lr;(void)b1;(void)b2;(void)eps;(void)wd;(void)step_t;\n" +
+            "    fprintf(stderr, \"[cuda] adamw_fused: built without __CUDACC__\\n\");\n" +
+            "    return -1;\n" +
+            "#endif\n" +
+            "}\n" +
+            "\n" +
             "/* ════════════════════════════════════════════════════════════════════\n" +
             " * HEXA-FUSION L1 — device-resident moment lifetime (m, v).\n" +
             " *\n" +

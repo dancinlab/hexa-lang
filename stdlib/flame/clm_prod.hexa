@@ -1057,6 +1057,29 @@ fn _adam(W: int, gW: int, m: int, v: int, n: int, t: int) {
     opt_adamw_step(W, gW, m, v, n, 0.05, 0.9, 0.999, 0.00000001, 0.0, t)
 }
 
+// HEXA-FUSION M2 (FULL-STEP): fused cooperative AdamW over ALL params in ONE
+// cudaLaunchCooperativeKernel. The clm_prod step ends with 18 separate _adam
+// calls (each its own kernel launch + launch/sync gap with the host on the
+// critical path). Under env HEXA_CLM_FULLSTEP, this packs the 18 param tensors'
+// (W, grad, m, v) farr-ids + lengths into FIVE packed-id farrs and dispatches
+// forge_dispatch_adamw_fused -> _hx_cuda_farr_adamw_fused_gpu, which collapses
+// the whole optimizer tail into ONE cooperative launch (host off the critical
+// path between every micro-update). Arithmetic is BYTE-IDENTICAL to the per-
+// param _adam (same elementwise AdamW; shared step_t bias-correction). rc 0 =
+// fused launch applied; rc != 0 (gate unset / no-CUDA / no-coop) -> the caller
+// runs the per-param _adam loop (byte-eq reference). The packed-id farrs
+// w_ids/m_ids/v_ids/g_ids/ns are pre-built ONCE by the caller (their contents
+// are step-invariant — same tensors every step); only `t` changes per step.
+fn _adam_fused(w_ids: int, g_ids: int, m_ids: int, v_ids: int, ns: int,
+               np: int, t: int) -> int {
+    if _fuse_on("HEXA_CLM_FULLSTEP") {
+        let rc = forge_dispatch_adamw_fused(w_ids, m_ids, v_ids, g_ids, ns, np,
+                                            0.05, 0.9, 0.999, 0.00000001, 0.0, t)
+        if rc == 0 { return 0 }
+    }
+    return -1
+}
+
 // Load nsamp causal windows of length T from a byte corpus into IDS/TGT.
 // IDS[s*T+p] = byte[off+p], TGT[s*T+p] = byte[off+p+1]; off = s*stride.
 // Returns the number of windows actually filled (<= nsamp if corpus is short).
@@ -1220,6 +1243,38 @@ fn main() {
     // per-step window buffers
     let tok=t_zeros(T); let tgt=t_zeros(T)
 
+    // HEXA-FUSION M2 (FULL-STEP): pack the 18 param tensors' (W, grad, m, v)
+    // farr-ids + lengths into FIVE packed-id farrs (built ONCE — the tensor set
+    // is step-invariant). Under env HEXA_CLM_FULLSTEP the step's optimizer tail
+    // (18 separate _adam launches) collapses into ONE cooperative AdamW launch
+    // (_adam_fused → forge_dispatch_adamw_fused). Ids stored as doubles; the C
+    // wrapper reads them back and builds the device pointer table. NOTE: the
+    // ROUTER bias rB (E) and the LCG-init E=2 → tiny tensors are included — the
+    // fused kernel grid-strides over their concatenation, so heterogeneous
+    // lengths are handled by the prefix-offset lookup (byte-eq per element).
+    let _NP = 17
+    let fs_w  = t_zeros(_NP); let fs_g  = t_zeros(_NP)
+    let fs_m  = t_zeros(_NP); let fs_v  = t_zeros(_NP); let fs_n = t_zeros(_NP)
+    t_set(fs_w,0,to_float(embed)); t_set(fs_g,0,to_float(dembed)); t_set(fs_m,0,to_float(m_embed)); t_set(fs_v,0,to_float(v_embed)); t_set(fs_n,0,to_float(vd))
+    t_set(fs_w,1,to_float(ecW));   t_set(fs_g,1,to_float(decW));   t_set(fs_m,1,to_float(m_ecW));   t_set(fs_v,1,to_float(v_ecW));   t_set(fs_n,1,to_float(dd))
+    t_set(fs_w,2,to_float(ecB));   t_set(fs_g,2,to_float(decB));   t_set(fs_m,2,to_float(m_ecB));   t_set(fs_v,2,to_float(v_ecB));   t_set(fs_n,2,to_float(d))
+    t_set(fs_w,3,to_float(tcW));   t_set(fs_g,3,to_float(dtcW));   t_set(fs_m,3,to_float(m_tcW));   t_set(fs_v,3,to_float(v_tcW));   t_set(fs_n,3,to_float(dd))
+    t_set(fs_w,4,to_float(tcB));   t_set(fs_g,4,to_float(dtcB));   t_set(fs_m,4,to_float(m_tcB));   t_set(fs_v,4,to_float(v_tcB));   t_set(fs_n,4,to_float(d))
+    t_set(fs_w,5,to_float(tgG));   t_set(fs_g,5,to_float(dtgG));   t_set(fs_m,5,to_float(m_tgG));   t_set(fs_v,5,to_float(v_tgG));   t_set(fs_n,5,to_float(d))
+    t_set(fs_w,6,to_float(tgB));   t_set(fs_g,6,to_float(dtgB));   t_set(fs_m,6,to_float(m_tgB));   t_set(fs_v,6,to_float(v_tgB));   t_set(fs_n,6,to_float(d))
+    t_set(fs_w,7,to_float(rW));    t_set(fs_g,7,to_float(drW));    t_set(fs_m,7,to_float(m_rW));    t_set(fs_v,7,to_float(v_rW));    t_set(fs_n,7,to_float(ed))
+    t_set(fs_w,8,to_float(rB));    t_set(fs_g,8,to_float(drB));    t_set(fs_m,8,to_float(m_rB));    t_set(fs_v,8,to_float(v_rB));    t_set(fs_n,8,to_float(E))
+    t_set(fs_w,9,to_float(e0W));   t_set(fs_g,9,to_float(de0W));   t_set(fs_m,9,to_float(m_e0W));   t_set(fs_v,9,to_float(v_e0W));   t_set(fs_n,9,to_float(dd))
+    t_set(fs_w,10,to_float(e0B));  t_set(fs_g,10,to_float(de0B));  t_set(fs_m,10,to_float(m_e0B));  t_set(fs_v,10,to_float(v_e0B));  t_set(fs_n,10,to_float(d))
+    t_set(fs_w,11,to_float(e1W));  t_set(fs_g,11,to_float(de1W));  t_set(fs_m,11,to_float(m_e1W));  t_set(fs_v,11,to_float(v_e1W));  t_set(fs_n,11,to_float(dd))
+    t_set(fs_w,12,to_float(e1B));  t_set(fs_g,12,to_float(de1B));  t_set(fs_m,12,to_float(m_e1B));  t_set(fs_v,12,to_float(v_e1B));  t_set(fs_n,12,to_float(d))
+    t_set(fs_w,13,to_float(noG));  t_set(fs_g,13,to_float(dnoG));  t_set(fs_m,13,to_float(m_noG));  t_set(fs_v,13,to_float(v_noG));  t_set(fs_n,13,to_float(d))
+    t_set(fs_w,14,to_float(noB));  t_set(fs_g,14,to_float(dnoB));  t_set(fs_m,14,to_float(m_noB));  t_set(fs_v,14,to_float(v_noB));  t_set(fs_n,14,to_float(d))
+    t_set(fs_w,15,to_float(roW));  t_set(fs_g,15,to_float(droW));  t_set(fs_m,15,to_float(m_roW));  t_set(fs_v,15,to_float(v_roW));  t_set(fs_n,15,to_float(vd))
+    t_set(fs_w,16,to_float(roB));  t_set(fs_g,16,to_float(droB));  t_set(fs_m,16,to_float(m_roB));  t_set(fs_v,16,to_float(v_roB));  t_set(fs_n,16,to_float(V))
+    // 17 distinct param tensors (slots 0..16). The fused kernel applies AdamW to
+    // each EXACTLY ONCE — byte-eq to the 17 per-param _adam calls below.
+
     // ---- round-robin multi-window loop; epochs full passes over nwin ----
     let _enve2 = env("CLM_PROD_EPOCHS")
     let epochs = if _enve2 == "" { 12 } else { to_int(_enve2) }
@@ -1253,6 +1308,12 @@ fn main() {
                     xe, xec, xt, hn0, xhat0, inv0, eo0, eo1, probs, ex_out, yn, xhatN, invN,
                     dembed, decW, decB, dtcW, dtcB, dtgG, dtgB, drW, drB, de0W, de0B, de1W, de1B,
                     dnoG, dnoB, droW, droB, T, d, E, V, K)
+        // HEXA-FUSION M2 (FULL-STEP): collapse the 17 per-param AdamW launches
+        // into ONE cooperative launch under HEXA_CLM_FULLSTEP. rc 0 = fused
+        // applied (optimizer tail off the host critical path); else the per-param
+        // _adam loop runs (byte-eq reference).
+        let _fs_rc = _adam_fused(fs_w, fs_g, fs_m, fs_v, fs_n, _NP, step)
+        if _fs_rc != 0 {
         _adam(embed, dembed, m_embed, v_embed, vd, step)
         _adam(ecW, decW, m_ecW, v_ecW, dd, step); _adam(ecB, decB, m_ecB, v_ecB, d, step)
         _adam(tcW, dtcW, m_tcW, v_tcW, dd, step); _adam(tcB, dtcB, m_tcB, v_tcB, d, step)
@@ -1262,6 +1323,7 @@ fn main() {
         _adam(e1W, de1W, m_e1W, v_e1W, dd, step); _adam(e1B, de1B, m_e1B, v_e1B, d, step)
         _adam(noG, dnoG, m_noG, v_noG, d, step);  _adam(noB, dnoB, m_noB, v_noB, d, step)
         _adam(roW, droW, m_roW, v_roW, vd, step); _adam(roB, droB, m_roB, v_roB, V, step)
+        }
         step = step + 1
     }
     let first_ce = sum_first / to_float(nwin)

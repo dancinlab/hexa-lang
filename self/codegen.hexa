@@ -7912,6 +7912,24 @@ fn gen2_expr(node) {
                 }
             }
             if len(node.args) == 12 {
+                // HEXA-FUSION M2 (FULL-STEP): forge_dispatch_adamw_fused(w_ids,
+                // m_ids, v_ids, g_ids, n, np, lr, b1, b2, eps, wd, t) -> int rc.
+                // Collapses the ~36 separate per-param AdamW launches into ONE
+                // cudaLaunchCooperativeKernel (_hx_k_adamw_fused). The first 5
+                // args are PACKED id/len farrs (np ids/lens as doubles in their
+                // host buffers); the wrapper reads them, builds the device
+                // pointer table, and cooperative-launches. CUDA build → the
+                // fused launcher; no-CUDA / no-coop → -1 so the .hexa caller
+                // runs the per-param _adam loop (byte-eq reference).
+                if name == "forge_dispatch_adamw_fused" {
+                    return "hexa_forge_dispatch_adamw_fused("
+                        + arg_strs[0] + ", " + arg_strs[1] + ", "
+                        + arg_strs[2] + ", " + arg_strs[3] + ", "
+                        + arg_strs[4] + ", " + arg_strs[5] + ", "
+                        + arg_strs[6] + ", " + arg_strs[7] + ", "
+                        + arg_strs[8] + ", " + arg_strs[9] + ", "
+                        + arg_strs[10] + ", " + arg_strs[11] + ")"
+                }
                 // anima RFC 035 (2026-05-16): loss-scaled mixed-precision
                 // AdamW (param, grad, m, v, n, lr, b1, b2, eps, wd, t,
                 // loss_scale). Returns 1 if applied, 0 if AMP-overflow skip.

@@ -1,0 +1,112 @@
+F-FUSION-M2-FULLSTEP-MEGAKERNEL — full-step cooperative megakernel real-step util
+══════════════════════════════════════════════════════════════════════════════
+DATE      : 2026-06-05
+BRANCH    : domain/hexa-fusion-m2-fullstep-megakernel  (HEAD a24ca2157 + this verdict)
+HARDWARE  : NVIDIA H100 80GB HBM3 (vast 39604788, India host 169960, driver 580.159.03,
+            CUDA 12.4, glibc 2.35) — REAL H100 SXM confirmed (not B200). DESTROYED after,
+            leak 0 (verified GONE from instance list).
+PRECISION : TF32 own-GEMM (user-authorized). Correctness gate = CE CONVERGENCE in TF32
+            tolerance (NOT byte-eq).
+
+FALSIFIER (pre-registered)
+──────────────────────────
+"The full-step TF32 megakernel (fwd MEGASTEP + device-glue bwd + FULLSTEP cooperative
+ AdamW tail, host fully off the critical path) lifts real-step GPU util SIGNIFICANTLY
+ above P1's fwd-only 34.54% toward GREEN (≥20% MEAN) while CE converges in TF32 tol."
+
+RESULT : 🔴 FALSIFIED (closed-negative). The full-step megakernel reaches only
+         ~13–14% MEAN util (MEDIAN 1–2%) — a +3.4pp lift over the 10–11% eager
+         baseline, NOT a climb toward GREEN, and well BELOW the cited 34.54%.
+         The serial-DAG / GPU-occupancy floor is intrinsic at this model size.
+
+OPS FUSED (what the full-step megakernel collapses)
+───────────────────────────────────────────────────
+  fwd      : YES — HEXA_CLM_MEGASTEP. Whole fwd DAG (GEMM1 → [groupnorm→gelu→residual]
+             → GEMM2 → [gelu2→pack→router]) in ONE cudaLaunchCooperativeKernel
+             (_hx_k_clm_megafwd, TF32 own-GEMM, no cuBLAS). grid=528 blk=128.
+             [MEGAFWD-FIRED] ×2 (fwd + a 2nd megafwd site).
+  ce_grad  : device-resident glue (L3 BWD-glue half; dlogits FARR_DEVICE, per-row
+             softmax-grad). Already in tree.
+  bwd      : device-resident L3 glue (gelu_bwd, groupnorm_bwd, expert (un)pack2,
+             moe_router_bwd, grad_sum, embedding_bwd_scatter — direct forge_dispatch).
+  AdamW    : YES — HEXA_CLM_FULLSTEP (THIS milestone, M2 HEAD a24ca2157). The 17 per-
+             param _adam launches collapse into ONE cudaLaunchCooperativeKernel
+             (_hx_k_adamw_fused): one persistent grid strides over the concatenation of
+             all param tensors via a prefix-offset table. Host off the optimizer
+             critical path. grid=660 blk=256.
+             [FULLSTEP-FIRED] ×1.
+  → ALL FOUR fused (fwd + ce_grad + bwd + AdamW). Not a partial.
+
+BUILT : YES. clm_prod_gpu = 882000 bytes, links libcudart/libcublas/libcuda.
+        runtime_cuda.o = 357528 bytes, 69 _hx_cuda_farr_*_gpu launchers incl.
+        _hx_cuda_farr_adamw_fused_gpu (M2) + _hx_cuda_farr_clm_megafwd_gpu (B3).
+        Build = transpile (hexat self-hosted: flatten 8 flame modules → clm_prod.c,
+        0 use-externs, 8 hexa_callN→direct post-process) + emit runtime_cuda.c from
+        runtime_cuda_emit.hexa (compile+run emit_gen) + nvcc -DHEXA_CUDA compute_90 +
+        gcc -lcuda. M2 wrapper m2_adamw_fused_wrapper.c + B3 wrapper spliced into
+        runtime.c (l3d base).
+
+[FULLSTEP-FIRED] : YES — verbatim:
+  [FULLSTEP-FIRED] _hx_k_adamw_fused cooperative AdamW over 17 params in ONE launch
+  (grid=660 blk=256, optimizer tail collapsed)
+[MEGAFWD-FIRED]  : YES — verbatim:
+  [MEGAFWD-FIRED] _hx_k_clm_megafwd TF32 coop full-fwd (grid=528 blk=128, no cuBLAS)
+
+CE CONVERGES (TF32 tol) : YES.
+  eager          : epoch-1 CE 4.46624 → epoch-4 CE 3.64669   (DESCENT=1, PASS)
+  full-step-mega : epoch-1 CE 4.45986 → epoch-4 CE 3.42401   (DESCENT=1, PASS)
+  Both descend; the TF32 own-GEMM full-step path converges slightly FURTHER (3.424 vs
+  3.647). Not byte-eq (TF32 ≠ FP64 eager) — but CE-convergence correctness HOLDS, which
+  is the authorized gate.
+
+REAL-STEP UTIL (nvidia-smi 0.2s sampling, D=1536 T=512 E=2 NSAMP=8 EPOCHS=4, idle baseline 0.00%)
+────────────────────────────────────────────────────────────────────────────────────────────────
+                    MEAN     MEDIAN   PEAK    pct>=20    n      FIRED
+  EAGER (rep1)     10.38%    1%       62%     18.7%      466    megafwd=0 fullstep=0
+  EAGER (rep2)     10.83%    1%       62%     21.0%      706    megafwd=0 fullstep=0
+  FULLSTEP-MEGA r1 13.79%    1%       73%     26.1%      476    megafwd=2 fullstep=1
+  FULLSTEP-MEGA r2 14.27%    2%       73%     26.8%      467    megafwd=2 fullstep=1
+
+  eager → fullstep-mega : MEAN 10.4% → 13.9% (+3.4pp).  MEDIAN 1% → 1–2% (unmoved).
+
+  NOTE on the gate semantics: _fuse_on() treats ANY non-empty env value as ON, so the
+  eager baseline must UNSET HEXA_CLM_MEGASTEP/FULLSTEP (setting them to "0" still fires
+  the megakernel — an initial mis-measurement, corrected). The numbers above are with
+  the gates UNSET for eager (FIRED=0 confirms).
+
+HOW FAR TOWARD GREEN
+────────────────────
+  GREEN threshold = ≥20% MEAN util. Full-step-mega MEAN ≈ 14% — short of GREEN by ~6pp,
+  and the MEDIAN is 1–2% (the GPU is IDLE for the majority of every step). The +3.4pp
+  is real but marginal; it does NOT approach the cited fwd-only 34.54% (that figure is
+  not reproduced here — at D=1536/T=512 even the fwd megakernel alone leaves the host on
+  the critical path between the few cooperative launches).
+
+FINDING (closed-negative — ruled-out axis)
+───────────────────────────────────────────
+  Collapsing the WHOLE step (fwd + bwd glue + the entire optimizer tail) into a handful
+  of cooperative launches — host fully off the critical path between micro-updates — is
+  NECESSARY but NOT SUFFICIENT to cross util-GREEN. The wall is the SERIAL-DAG OCCUPANCY
+  FLOOR, intrinsic at batch=1 / D=1536 / T=512: each cooperative launch (grid≈528–660,
+  one persistent grid) under-fills an H100's 132 SMs, and the residual per-token host
+  glue + cuBLAS-shaped GEMM gaps + grid.sync barriers leave the device idle (MEDIAN 1–2%)
+  between launches. Adding the AdamW-tail fusion on top of the fwd megakernel moves MEAN
+  only +3.4pp because the tail was already a small slice of wall.
+
+  This deterministically rules out "fuse more of the step into cooperative launches" as a
+  path to util-99% at this regime. util-GREEN needs a DIFFERENT regime, not more fusion:
+    (a) a larger problem (bigger D / true data-batching) so a single launch fills the SMs,
+    OR (b) a right-sized GPU (smaller device where grid≈600 saturates),
+    OR (c) a precision/algorithm change that turns the serial glue into one dense kernel.
+  Consistent with the prior HEXA-FUSION closure (util-99%-via-megakernel: byte-eq ⊥
+  util-lift; the remaining levers are precision-change OR right-sized GPU).
+
+REPRODUCE
+─────────
+  Bundle = full flame stdlib + self/ amalgam (runtime.c spliced: l3d base + B3 megafwd
+  wrapper + M2 adamw_fused wrapper) + hexat_linux + corpus. On a CUDA-devel H100:
+    flatten 8 modules → hexat → clm_prod.c (8 hexa_callN→direct) ;
+    compile+run emit_gen → runtime_cuda.c ;
+    nvcc -x cu -DHEXA_CUDA -gencode arch=compute_90,code=compute_90 -c runtime_cuda.c ;
+    gcc -DHEXA_CUDA clm_prod.c self/runtime.c runtime_cuda.o -lcudart -lcublas -lcuda ;
+    A/B: unset gates (eager) vs HEXA_CLM_MEGASTEP=1 HEXA_CLM_FULLSTEP=1, D=1536 T=512.
