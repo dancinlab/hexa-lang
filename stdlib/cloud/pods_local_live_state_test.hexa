@@ -1,0 +1,59 @@
+// @ci_gate — pure · network-free · deterministic (stdlib_selftest_aggregate --ci-gate)
+// stdlib/cloud/pods_local_live_state_test.hexa — falsifiers for the
+// provider-liveness classifier pods_local_job_live_state, the join `cloud
+// pods` now uses so a job's REAL state comes from the provider-alive id set
+// (runpod myself.pods + vast), not the stale ./pods.json `stage`.
+//
+// The phantom-pod bug (2026-06-05): `cloud pods` rendered 8× edge-vllm-serve,
+// edge-genall, rent-vast rows as `running` while `cloud probe` returned GONE
+// for every one (only 39565855 was actually RUNNING on the provider). This
+// classifier is the closed-form core of the fix: a job is RUNNING iff its
+// pinned pod is in the provider-alive set; provider-confirmed-absent → GONE;
+// provider-unreachable (ok=0) → UNKNOWN (NEVER a fabricated GONE — g63).
+//
+// Run: hexa run stdlib/cloud/pods_local_live_state_test.hexa → ... PASS — N/N.
+
+use "stdlib/cloud/pods_local"
+
+fn _fail(case: str, msg: str) {
+    println("FAIL " + case + ": " + msg)
+    exit(1)
+}
+
+fn _eq_str(case: str, got: str, want: str) {
+    if got != want { _fail(case, "got '" + got + "' want '" + want + "'") }
+}
+
+// Signature: pods_local_job_live_state(has_pod, in_alive, provider_ok) -> str
+// (closed-form int inputs; the caller resolves pod-id membership against the
+// provider-alive set and passes has_pod/in_alive flags in).
+fn main() {
+    let mut n = 0
+
+    // c1 — pinned pod present in the provider-alive set → RUNNING (the
+    // 39565855 class: the ONE pod `cloud probe` confirmed live this session).
+    _eq_str("c1: has_pod + in_alive → RUNNING", pods_local_job_live_state(1, 1, 1), "RUNNING"); n = n + 1
+
+    // c2 — pinned pod ABSENT from the alive set, provider reachable (ok=1) →
+    // GONE (the exact edge-vllm-serve/edge-genall phantom class this fix hides).
+    _eq_str("c2: has_pod + absent + ok → GONE", pods_local_job_live_state(1, 0, 1), "GONE"); n = n + 1
+
+    // c3 — provider UNREACHABLE (ok=0) + absent → UNKNOWN, NEVER GONE (g63: a
+    // blind probe must not paint a real pod dead).
+    _eq_str("c3: absent + provider-down → UNKNOWN", pods_local_job_live_state(1, 0, 0), "UNKNOWN"); n = n + 1
+
+    // c4 — membership wins even when provider degraded (ok=0): an id confirmed
+    // in the (nonempty) alive set is RUNNING regardless of ok.
+    _eq_str("c4: in_alive + ok=0 → RUNNING (membership wins)", pods_local_job_live_state(1, 1, 0), "RUNNING"); n = n + 1
+
+    // c5 — job not pinned to any pod ("" / "-" → has_pod=0) → NO-POD (not GONE),
+    // for any provider/alive combination.
+    _eq_str("c5: no-pod + ok → NO-POD", pods_local_job_live_state(0, 0, 1), "NO-POD"); n = n + 1
+    _eq_str("c6: no-pod + provider-down → NO-POD", pods_local_job_live_state(0, 0, 0), "NO-POD"); n = n + 1
+
+    // c7 — the resolution order: has_pod==0 short-circuits before the in_alive
+    // / provider_ok axes (a jobless row is never RUNNING/GONE/UNKNOWN).
+    _eq_str("c7: no-pod dominates in_alive", pods_local_job_live_state(0, 1, 1), "NO-POD"); n = n + 1
+
+    println("pods_local_live_state_test PASS — " + str(n) + "/" + str(n) + " cases")
+}

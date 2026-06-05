@@ -2490,19 +2490,33 @@ fn main() {
         // (in registry, absent from the provider's own ledger) and surface
         // real orphans. `--no-reconcile` opts out (offline / no-key hosts).
         let mut do_reconcile = 1
+        let mut show_all = 0
         let mut pi = si + 1
         while pi < len(av) {
             if av[pi] == "--no-reconcile" { do_reconcile = 0 }
+            if av[pi] == "--all" { show_all = 1 }
             pi = pi + 1
         }
         if do_reconcile == 1 {
             let _ = cloud_pods_reconcile_prune()
         }
-        // Per-project active pod/job work manifest at cwd's ./pods.json.
-        // Bare form = full table render (operator's "what is running here
-        // right now?" view). Distinct from `cloud orphans` / pod_registry
-        // (global ~/.hexa-cloud/pods.jsonl — billing/orphan defense).
-        exit(pods_local_print_table(false))
+        // Per-project active pod/job work manifest at cwd's ./pods.json — but
+        // LIVENESS is the PROVIDER's, not the manifest's (anima phantom-pod
+        // fix). The manifest used to render every job as `running` even after
+        // the provider reclaimed its pod (8× edge-vllm-serve, edge-genall,
+        // rent-vast GONE rows shown alive). We now resolve the AUTHORITATIVE
+        // provider-alive set (the SAME runpod myself.pods + vast path that
+        // probe/reap/idle-reap trust) and LEFT-JOIN it onto the manifest:
+        // provider-confirmed-GONE phantoms are dropped (--all to list them),
+        // real pods show their true provider state. When BOTH providers are
+        // unreachable (ok=0) we DON'T hide rows — liveness is UNKNOWN, not
+        // dead (g63: never invent GONE from a blind probe).
+        let pa = cloud_provider_alive_ids()
+        if pa.ok == 0 {
+            println("[cloud] pods: provider liveness UNREACHABLE (" + pa.message
+                + ") — showing tracked jobs UNVERIFIED (not confirmed alive)")
+        }
+        exit(pods_local_print_table_live(false, pa.ok, pa.ids, show_all))
     }
     if sub == "dispatch" {
         // Manage the per-project ./pods.json manifest:
