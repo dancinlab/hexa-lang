@@ -303,6 +303,107 @@ extern "C" __global__ void gemm_ws(const float* __restrict__ gA,const float* __r
     }
 }
 
+// ----- named-barrier sync over a SINGLE warpgroup (128 thr) at a chosen bar id.
+//   bar.sync id, 128 — only the 128 threads of one warpgroup participate. Used by
+//   the producer WG (MODE 3) exactly as in MODE 2: gate the Braw->gmma permute so a
+//   thread never reads a sibling's still-in-flight cp.async. id is per-warpgroup.
+__device__ __forceinline__ void wg_bar_id(int bid){
+    asm volatile("bar.sync %0, 128;\n"::"r"(bid):"memory");}
+
+// ======================================================================
+// MODE 3 — DUAL-CONSUMER-WARPGROUP WARPSPEC (W7, the big lever).
+//   384 threads = 3 warpgroups. TM=128, TN=128, TK=8.
+//     WG0 (thr   0..127) = PRODUCER: per K-step cp.async-loads the FULL A 128x8 band
+//        (two gmma sub-tiles As0[rows0..63], As1[rows64..127]) + B (Braw 8x128) into the
+//        ring stage, drains its cp.async, permutes Braw->B0/B1 gmma, fence.proxy.async,
+//        then mbar_arrive(full[stage]) to release BOTH consumer warpgroups. Before reuse
+//        it mbar_wait(empty[stage]) (both consumers signalled done — arrive count 256).
+//     WG1 (thr 128..255) = CONSUMER band-0: wgmma over As0 x {B0,B1} -> rows  0..63.
+//     WG2 (thr 256..383) = CONSUMER band-1: wgmma over As1 x {B0,B1} -> rows 64..127.
+//   The TWO consumer warpgroups SHARE the single B tile loaded once by the producer —
+//   so the tensor cores stay fed (2 consumer WGs issuing wgmma) while 1 WG produces.
+//   This is the geometry W6 diagnosed the single-consumer-WG (TM=64) lacked: there half
+//   the warps never issued wgmma. cuBLAS reaches sm_90a peak exactly this way.
+//   mbarrier full[]: producer arrives (128); both consumers wait the SAME full[] phase.
+//   mbarrier empty[]: BOTH consumer WGs arrive (256 total); producer waits.
+// ======================================================================
+extern "C" __global__ void gemm_ws2(const float* __restrict__ gA,const float* __restrict__ gB,
+                                     float* __restrict__ gD,int M,int N,int K,int NST){
+    const int TM=128,TN=128,TK=8;
+    int bm=blockIdx.y*TM, bn=blockIdx.x*TN;
+    extern __shared__ __align__(128) float sm[];
+    // per-stage: As0(64*8) As1(64*8) B0(8*64) B1(8*64) gmma-laid + Braw(8*128 scratch).
+    const int ABND=TM*TK/2;            // one 64x8 A band = 512 floats
+    const int BB=TK*64, BRAW=TK*TN;
+    const int BUF=2*ABND + 2*BB + BRAW;
+    uint64_t* full=(uint64_t*)(sm + (size_t)NST*BUF);
+    uint64_t* empty=full+NST;
+    int tid=threadIdx.x; int wg=tid>>7; int lt=tid&127;
+    int nk=K/TK;
+    if(tid<2*NST){
+        if(tid<NST) mbar_init(&full[tid],128);     // producer (128) arrives full
+        else        mbar_init(&empty[tid-NST],256); // BOTH consumer WGs (256) arrive empty
+    }
+    __syncthreads();
+    if(wg==0){
+        // ---------------- PRODUCER ----------------
+        uint32_t eph=0;
+        for(int ki=0;ki<nk;++ki){
+            int st=ki%NST;
+            if(ki>=NST){ mbar_wait(&empty[st], eph); if(st==NST-1) eph^=1; }
+            float* base=sm+(size_t)st*BUF;
+            float* As0=base; float* As1=base+ABND; float* Braw=base+2*ABND+2*BB;
+            // A band-0 rows 0..63 + band-1 rows 64..127. 64*8/4=128 quads each = 1/thread.
+            { int q=lt; int m=q/2, qk=(q%2)*4;
+              cpasync16(As0+gmma_phys(m,qk),     &gA[(bm+m)*K     + ki*TK+qk]);
+              cpasync16(As1+gmma_phys(m,qk),     &gA[(bm+64+m)*K  + ki*TK+qk]); }
+            // Braw row-major [kk][n], 8*128/4=256 quads, 2/thread, coalesced in n.
+            for(int q=lt;q<TK*TN/4;q+=128){int kk=q/(TN/4), nq=(q%(TN/4))*4;
+                cpasync16(Braw+kk*TN+nq, &gB[(ki*TK+kk)*N + bn+nq]); }
+            cp_commit(); cp_wait<0>();
+            wg_bar_id(1); // all producer cp.async landed before reading sibling Braw
+            float* B0=base+2*ABND; float* B1=B0+BB;
+            for(int i=lt;i<TK*64;i+=128){int kk=i/64,n=i%64; B0[gmma_phys(n,kk)]=Braw[kk*TN+n];}
+            for(int i=lt;i<TK*64;i+=128){int kk=i/64,n=i%64; B1[gmma_phys(n,kk)]=Braw[kk*TN+64+n];}
+            wg_bar_id(1);
+            asm volatile("fence.proxy.async.shared::cta;\n":::"memory");
+            mbar_arrive(&full[st]);
+        }
+    } else {
+        // ---------------- CONSUMER (band = wg-1: 0 -> rows0..63, 1 -> rows64..127) ----------------
+        int band=wg-1;
+        float d0[32],d1[32];
+        #pragma unroll
+        for(int i=0;i<32;++i){d0[i]=0.f;d1[i]=0.f;}
+        uint32_t fph=0;
+        for(int ki=0;ki<nk;++ki){
+            int st=ki%NST;
+            mbar_wait(&full[st], fph); if(st==NST-1) fph^=1;
+            float* base=sm+(size_t)st*BUF;
+            float* As=base+band*ABND; float* B0=base+2*ABND; float* B1=B0+BB;
+            uint32_t aA=(uint32_t)__cvta_generic_to_shared(As);
+            uint32_t a0=(uint32_t)__cvta_generic_to_shared(B0), a1=(uint32_t)__cvta_generic_to_shared(B1);
+            uint64_t dA=mk(aA,128,256), dB0=mk(a0,128,256), dB1=mk(a1,128,256);
+            asm volatile("wgmma.fence.sync.aligned;\n":::"memory");
+            WG(d0,dA,dB0);
+            WG(d1,dA,dB1);
+            asm volatile("wgmma.commit_group.sync.aligned;\n"
+                         "wgmma.wait_group.sync.aligned 0;\n":::"memory");
+            mbar_arrive(&empty[st]);
+        }
+        // epilogue: this consumer WG writes its 64-row band (rows bm + band*64 + ...).
+        int rbase=bm+band*64;
+        int w=lt>>5,l=lt&31,rb=w*16+(l>>2),cb=(l&3)*2;
+        #pragma unroll
+        for(int c=0;c<8;++c)for(int r=0;r<2;++r)for(int p=0;p<2;++p){
+            int idx=c*4+r*2+p,row=rbase+rb+r*8;
+            int col0=bn+cb+p+c*8, col1=bn+64+cb+p+c*8;
+            if(row<M&&col0<N)gD[row*N+col0]=d0[idx];
+            if(row<M&&col1<N)gD[row*N+col1]=d1[idx];
+        }
+    }
+}
+
 static inline float tf(float x){uint32_t u;memcpy(&u,&x,4);u=(u+0x1000u)&0xFFFFE000u;float r;memcpy(&r,&u,4);return r;}
 
 int main(int argc,char**argv){
@@ -323,22 +424,30 @@ int main(int argc,char**argv){
     CB(cublasSgemm(h,CUBLAS_OP_N,CUBLAS_OP_N,N,M,K,&al,dB,N,dA,K,&be,dR,N));CK(cudaDeviceSynchronize());
     CK(cudaMemcpy(hR,dR,szD*4,cudaMemcpyDeviceToHost));
 
-    dim3 grid(N/128,(M+63)/64);
-    int blk = (MODE==2)?256:128;
+    // MODE 3 tiles M by 128 (dual-consumer-WG); all others by 64.
+    int TMm = (MODE==3)?128:64;
+    dim3 grid(N/128,(M+TMm-1)/TMm);
+    int blk = (MODE==3)?384:(MODE==2)?256:128;
+    // MODE 3 per-stage shared = 2*(64*8) + 2*(8*64) + 8*128 floats, + 2*NST mbarriers.
+    size_t ws2_sm = (size_t)NST*((size_t)2*64*8 + 2*8*64 + 8*128)*4 + (size_t)2*NST*8;
     size_t smsz;
     auto launch=[&](){
         if(MODE==0){ smsz=2*((size_t)64*8+2*8*64)*4;
             gemm_w5<<<grid,blk,smsz>>>(dA,dB,dD,M,N,K); }
         else if(MODE==1){ smsz=(size_t)NST*((size_t)64*8+2*8*64+8*128)*4;
             gemm_apipe<<<grid,blk,smsz>>>(dA,dB,dD,M,N,K,NST); }
-        else { smsz=(size_t)NST*((size_t)64*8+2*8*64+8*128)*4 + (size_t)2*NST*8;
+        else if(MODE==2){ smsz=(size_t)NST*((size_t)64*8+2*8*64+8*128)*4 + (size_t)2*NST*8;
             gemm_ws<<<grid,blk,smsz>>>(dA,dB,dD,M,N,K,NST); }
+        else { smsz=ws2_sm;
+            gemm_ws2<<<grid,blk,smsz>>>(dA,dB,dD,M,N,K,NST); }
     };
     CK(cudaMemset(dD,0,szD*4));
     if(MODE==1){ CK(cudaFuncSetAttribute(gemm_apipe,cudaFuncAttributeMaxDynamicSharedMemorySize,
         (int)((size_t)NST*((size_t)64*8+2*8*64+8*128)*4))); }
     if(MODE==2){ CK(cudaFuncSetAttribute(gemm_ws,cudaFuncAttributeMaxDynamicSharedMemorySize,
         (int)((size_t)NST*((size_t)64*8+2*8*64+8*128)*4 + (size_t)2*NST*8))); }
+    if(MODE==3){ CK(cudaFuncSetAttribute(gemm_ws2,cudaFuncAttributeMaxDynamicSharedMemorySize,
+        (int)ws2_sm)); }
     launch();
     cudaError_t e=cudaGetLastError();if(e==cudaSuccess)e=cudaDeviceSynchronize();
     if(e!=cudaSuccess){printf("OWN-FAULT MODE=%d %s\n",MODE,cudaGetErrorString(e));return 4;}

@@ -29,8 +29,13 @@ for S in 2048 4096; do
   for NST in 2 3 4 5; do /tmp/ws $S 1 $NST; echo "exit=$?"; done
 done
 echo
-echo "================= MODE 2 — WARPSPEC (producer/consumer) ================="
+echo "================= MODE 2 — WARPSPEC single-consumer-WG (producer/consumer) ================="
 for S in 2048 4096; do
   for NST in 2 3 4; do /tmp/ws $S 2 $NST; echo "exit=$?"; done
+done
+echo
+echo "================= MODE 3 — DUAL-CONSUMER-WG WARPSPEC (W7 big lever, TM=128) ================="
+for S in 2048 4096; do
+  for NST in 2 3 4 5; do /tmp/ws $S 3 $NST; echo "exit=$?"; done
 done
 echo "================= DONE ================="
