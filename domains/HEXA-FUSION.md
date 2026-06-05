@@ -19,17 +19,30 @@ FORGE-UTILGREEN lever-1~5 가 GEMM repack 을 전부 device 化했어도 util ME
 - PyTorch 약점 = **library-call 경계**(cuBLAS/cuDNN monolithic black-box, op-by-op dispatch). torch.compile/Inductor 가 일부 fuse 하나 Python tracing + Triton 한계.
 - hexa 강점 = 컴파일러가 train step 전체를 **한 IR** 로 봄 → op 경계 넘는 fusion + compile-time 특화 가능.
 
+## 측정 닫힘 (2026-06-04 — 빌드벽 SOLVED · ② CLOSED-NEGATIVE · research → ④)
+
+- **빌드벽 SOLVED** (이전 "유지자/CI 에만 존재" 결론 번복): 신규 임대 idle H100_NVL pod 에서
+  frozen-seed 번들(self/ 전체)로 clm_prod_gpu 빌드+학습 성공. KEY = nvcc 에도 `-DHEXA_CUDA`
+  (없으면 58→40 launcher), `-lcuda`, glibc2.35 pod 재빌드(summer .o 는 `__isoc23_strtol` 비이식).
+- **util A/B (clean idle, baseline 0.00%)**: ASYNC=0 12.50% (CE 4.47→3.65 PASS) vs ASYNC=1 10.28%.
+  ② async = 🔴 CLOSED-NEGATIVE (util 안 오름 + byte-eq 깸). sizing 도 역효과(12.71→2.94%).
+- **research(web+arxiv)**: launch-bound 진단 확정 → 유일 해법 = ④ CUDA Graph(host 임계경로 제거).
+- **빌드/측정 킷** (repo-외 durable): `~/hexa-fusion-cuda-kit/` — `rebuild.sh`(신규 pod 원샷),
+  `work/clm_prod_gpu`·`runtime_cuda.o`(-DHEXA_CUDA), `fusion_build_sources.tgz`, 측정로그.
+  메모리 = `project_hexa_fusion_util_green` + `project_clmprod_gpu_build_seed_drift`(SOLVED).
+- **현 활성 프론티어 = L2 ④ CUDA-graph piecewise** (아래 L2). ① device-resident + ② async 닫힘.
+
 ## ── 사다리: match (L1) → graph (L2) → exceed (L3) ──
 
 ### L1 — device-resident (= PyTorch eager 수준, util-GREEN)
 
 - [~] **device-resident tensor lifetime** — param/grad/moment 를 step 전체에 GPU-resident 유지(host roundtrip 0). falsifier: 기존 오라클 byte-eq max|Δ|=0 ∧ nvidia-smi devmem persist across step. **W1-① PARTIAL (PR #2555 m,v + #2559 grad-db + #2561 int4)**: m,v + bias grad db + **int4 quant(W-fwd/dW-STE, 정수-exact)** device-resident 착지(env `CLM_PROD_DEVRESIDENT`, byte-eq ALL-PASS). 잔여: dX col2im transpose(orthogonal) · self-host pod build · devmem/util fire. **③ 정밀화: 텐서 resident 만으론 부족 — op 사이 인터프리트 host glue 도 fuse 해야 util MEAN gap 닫힘**. 상세 = §W1 results.
-- [ ] **async kernel-launch pipeline / per-step driver 제거 — ★ W2-CONFIRMED 진짜 unblock** 〔glue 소진(✅) 후 W2 가 MEAN 0.53% 로 측정: 인터프리트 per-step 드라이버가 floor〕 — step body 가 host 인터프리터 블로킹 없이 device 커널을 비동기 큐(host-sync 제거). glue fusion(⑤*)은 이미 done 이나 W2 가 **불충분 확정** → 핵심은 ~30 커널/step 의 host-sync 디스패치 제거(async queue / CUDA-graph ④ / 단일 fused step). falsifier: `F-RFC046-GPU-UTILIZATION` util MEAN≥20% @ d1536/T512.
+- [x] **async kernel-launch pipeline / per-step driver 제거 — 🔴 CLOSED-NEGATIVE (2026-06-04 측정)** — ② async 머지(#2619-2624)를 idle H100_NVL 에서 A/B 측정: ASYNC=0 util MEAN **12.50%** vs ASYNC=1 **10.28%** → async 가 util 을 **안 올림(오히려 ↓)** + ASYNC=1 byte-eq 깸(CE 4.89→4.86 vs 4.47→3.65, ②d sync제거 race). 워크로드 sizing 도 역효과(util 단조감소 12.71→2.94% @ D 1536→4608). falsifier `util MEAN≥20%` = FALSIFIED. 진단(research): 단일-스트림 async 는 host 를 임계경로에서 못 뺌 → 구조적으로 불가. verdict `.verdicts/hexa-fusion/F-FUSION-ASYNC-UTIL-AB.txt`.
 - [x] **fwd-only fused device kernel 프로토타입 + util Δ probe** ✅ W1-③ — H100 fwd-only fire: MEAN 0.56→**2.83%** (5×↑) PEAK 21→**81%**, 여전히 RED. **진단**: device 는 세게 돌 수 있음 + binding = 인터프리트 per-step glue(GEMM 아님). 텐서 resident 만으론 부족 → inter-op glue fusion(⑤) 필요. 상세 = §W1 results.
 
 ### L2 — graph capture (= torch.compile / CUDA-graph 수준)
 
-- [ ] **per-step CUDA-graph capture/replay** — step 커널 시퀀스를 1회 캡처 → 매 step replay 로 launch overhead ~0. falsifier: replay 출력 byte-eq ∧ per-step launch-count Δ(측정).
+- [ ] **per-step CUDA-graph capture/replay 〔★ ACTIVE FRONTIER — research-confirmed canonical 해법〕** — step 커널 시퀀스를 1회 캡처 → 매 step `cudaGraphLaunch`(~10µs) replay 로 launch+인터프리터 dispatch 를 상각, host 를 임계경로에서 제거(② async 가 못 한 것). **int4 MoE 주의**: 동적 expert 라우팅 → 전체-step 정적캡처 불가 → **piecewise**(dense/attn/optimizer 캡처 + MoE eager split + 라우팅 토큰 capacity 버킷 패딩 = vLLM/SGLang `FULL_AND_PIECEWISE`). graph replay 가 순서복원 → ②가 깬 byte-eq 회복. env `HEXA_CUDA_GRAPH` graph-off byte-eq 선랜딩. 빌드/측정 = CUDA 킷 `~/hexa-fusion-cuda-kit/rebuild.sh`. 기대 ~1.7× step(graphable ~5×). falsifier: replay byte-eq ∧ util MEAN≥20%. 출처: PyTorch CUDA Graphs · Mirage MPK arxiv:2512.22219 · vLLM/SGLang piecewise.
 
 ### L3 — fusion moat (= PyTorch 초과 · 구조적)
 
