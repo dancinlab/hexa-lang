@@ -467,3 +467,29 @@ instruction class (wgmma+TMA) and the emit path are proven feasible; the single
 remaining wall is the CUTLASS core-matrix layout above. No perf number is
 reported on any non-bit-correct kernel (g5). cuBLAS = roofline; no superiority
 claim. Kit: `self/native/wgmma/`. Pods all destroyed across every run (leak 0).
+
+## ── own-GEMM sm_90a W-ladder: BIT-CORRECT achieved · perf W6 → W7 (2026-06-06, g5) ──
+
+The breakthrough route is the **own-GEMM** itself (forge's `self/native/wgmma/*` .cu) —
+NOT a separate flame/forge mechanism. flame rides forge rides this kernel, so closing
+the own-GEMM gap lifts the whole stack automatically.
+
+- [x] **W1 GMMA::Layout B-core-matrix builder** ✅ (#2819) — INTER 8×4 TF32 core layout (LBO 128B/SBO 256B).
+- [x] **W2 single-tile identity verify** ✅ (#2819) — rel-RMS **0.000e+00** — the swizzle is SOLVED ★ (the
+      no-swizzle 8×16B core-matrix wall above is now CLOSED — the residual was one constant: 8×4 elems, not 8×8).
+- [x] **W3 full wgmma+TMA GEMM bit-correct** ✅ (#2819) — rel-RMS **0 @ 2048³** (own == cuBLAS == CPU-f64);
+      2nd bug fixed: wgmma reads shared via the async proxy → needs `fence.proxy.async.shared::cta`.
+- [x] **W4 sm_90 parity measure** ✅ honest — naive single-wgmma/block own **20.2 TFLOP/s**, 17.67× off.
+- [x] **W5 pipeline tune** ✅ — wide-N TN=128 → **38.0 TFLOP/s** (9.35× off), bit-exact.
+- [x] **W6 cp.async multi-stage ring (async-pipe)** ✅ (#2833) — own **38.0 → 50.7 TFLOP/s** @4096³, rel-RMS **0**
+      (+33%) → **8.39× off** cuBLAS-TF32 (~422). ~11.5% of gap closed. warp-spec first pass: race fixed
+      (`wg_bar`) → rel-RMS 0 but 35.0 only (a SINGLE consumer warpgroup STARVES the tensor cores at TM=64).
+- [ ] **W7 dual-consumer-warpgroup warp-spec (TM=128)** ★ NEXT — ≥2 consumer warpgroups issue `wgmma` while
+      1 produces (TMA) + register-blocked accumulation. **This is the parallelism the single-WG warp-spec lacked
+      — and it is the OWN-GEMM kernel's own breakthrough** (forge `.cu`, expressible per W6's bit-exact surface,
+      and cuBLAS proves the silicon reaches peak this way). Target: **8.39× → toward strict ≤1.3× parity**.
+      GPU sm_90a; bit-exact GATE before any perf number. verdict (W6): `.verdicts/hexa-fusion/F-FUSION-SM90-WGMMA-WARPSPEC.txt`.
+
+**STATE**: correctness is CLOSED (W2/W3 bit-exact 2048³/4096³); the residual is now PURELY occupancy /
+warpgroup-parallelism (W7), NOT layout / NOT emit-path / NOT 불가 — cuBLAS reaches peak on the SAME sm_90a
+silicon via more warpgroup parallelism. Parity OPEN, de-risked, own-GEMM-owned. cuBLAS = roofline, no superiority claim.
