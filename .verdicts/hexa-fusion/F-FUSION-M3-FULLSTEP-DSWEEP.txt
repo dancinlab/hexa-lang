@@ -1,0 +1,139 @@
+F-FUSION-M3-FULLSTEP-DSWEEP — does the REAL clm_prod FULL training step reach
+util-GREEN at GEMM-bound model size D on an idle H100?
+HEXA-FUSION milestone M3 (the practical util-99% path) — CLOSED-NEGATIVE 🔴
+
+This fills anima handoff 2e4438a7's #1 request and supersedes the premise of the
+"plausible path-(a)" optimism: it measures the REAL full clm_prod training step
+(not the isolated GEMM of H1A #2734) across the GEMM-bound size sweep
+D ∈ {1536, 2560, 3072, 4096} on a genuinely idle H100.
+
+PRE-REGISTERED FALSIFIER:
+  "the REAL full clm_prod training-step GPU util climbs to GREEN (≥20%, ideally
+   ≥70%) at GEMM-bound D (2560-4096) on an idle H100."
+  If util does NOT climb with D (stays launch-bound-low even at D=4096, i.e. the
+  serial sub-ms glue DAG idles the GPU regardless of GEMM size) → FALSIFIED:
+  the simple "bigger D → GREEN on the real step" hope is refuted, and anima
+  path-(a) needs the megakernel / device-resident-step fusion (NOT just scale).
+
+GPU RENTED (genuine, idle):
+  NVIDIA H100 80GB HBM3, 81559 MiB, driver 560.35.03, CUDA 12.4 nvcc V12.4.131,
+  gcc 11.4, glibc 2.35. vast offer 28762957, instance 39596084 (1× H100_SXM,
+  pinned via gpu_name=H100_SXM query — a real SXM H100, NOT a Blackwell/B200
+  mis-serve). Baseline idle util 0%.
+
+BUILT: YES. clm_prod_gpu (755184 B) rebuilt on-pod from the kit source bundle
+  (fusion_build_sources.tgz + rebuild.sh, the ② recipe — eager FP64 default).
+  runtime_cuda.o = 58/58 `_hx_cuda_farr_*_gpu` launchers (the -DHEXA_CUDA flag is
+  load-bearing; without it only 40/58). Smoke (D512 T128, 2 epochs): real-corpus
+  mean CE 4.18549 → 3.97022, F-CLM-PROD-DESCENT=1 PASS (device path is sound).
+
+METHOD:
+  Per D: launch the REAL train loop
+    CLM_PROD_DEVRESIDENT=1 DEVFEED=1 BATCHED=1 HEXA_CUDA_ASYNC=0 (eager FP64,
+    per-op sync = the canonical "real full step"), T=512, E=4 experts,
+    NSAMP=64 windows, EPOCHS=6, real clm_mid_5lang_c4 corpus (402270 B, V=256).
+  Sample nvidia-smi utilization.gpu @100ms over the whole sustained loop window
+  (the trainer is left running for the full window; each D ≈ 2080 samples).
+  CUDA_VISIBLE_DEVICES=0. No FUSE arm: this ② kit binary exposes no HEXA_FUSE_ALL
+  knob (the L3-fused step is a separate source set) — the eager arm IS the
+  headline "real full step", matching the F-FUSION-ASYNC-UTIL-AB D1536 baseline.
+  rc=124 per D = the 300s sampling-window timeout (BY DESIGN — sustained window;
+  the heavy FP64 GEMMs at large D do not complete an epoch inside 300s, but the
+  kernel DAG fires continuously, as the per-D 100% bursts confirm). NO OOM at any
+  D (every size fit in 80GB; peak RSS ≈ 86 GB host at D3072, device fit fine).
+
+==================== MEASURED util-vs-D (verbatim, eager FP64) ==================
+
+nvidia-smi utilization.gpu @100ms over the sustained loop. The distribution is
+BIMODAL — a dense 0-2% mass (the serial glue DAG idling the GPU between the
+sub-ms launches) plus sparse bursts to the GEMM peak. MEAN and MEDIAN are the
+honest steady-state summary.
+
+  D=1536 | n=2080 MEAN=10.57 PEAK=62  MEDIAN=1.0 pct>=20=20%
+    hist: 0:839 1:319 2:288 3:2 4:9 5:6 6:8 7:16 9:25 10:12 11:28 12:26 13:14
+          14:8 15:17 16:12 17:10 18:9 19:8 20:9 21:4 22:9 23:5 24:12 25:5 26:10
+          27:4 28:10 29:6 30:7 31:7 32:6 33:11 34:14 35:5 36:6 37:8 38:10 39:7
+          40:6 41:10 42:11 43:17 44:10 45:6 46:8 47:19 48:4 49:5 50:28 51:14
+          52:5 53:3 54:2 55:5 56:15 57:20 58:15 59:3 60:8 61:32 62:23
+
+  D=2560 | n=2079 MEAN=8.11  PEAK=100 MEDIAN=0.0 pct>=20=13%
+    hist: 0:1317 1:31 2:206 3:56 4:65 5:30 6:3 7:14 8:26 9:16 10:5 11:11 12:1
+          13:6 14:7 15:4 16:6 17:7 18:2 19:2 20:4 21:6 22:8 23:3 24:9 25:12 26:4
+          27:4 28:6 30:7 31:1 32:5 33:6 34:1 35:2 37:1 38:4 40:7 41:4 42:2 43:4
+          44:8 46:1 47:1 48:2 49:4 50:6 51:2 53:3 54:8 55:2 56:2 57:9 61:2 62:5
+          64:2 65:3 66:9 67:5 68:1 69:1 70:5 71:2 73:3 75:2 76:4 77:5 78:5 79:6
+          80:3 81:2 82:2 83:5 84:1 85:3 86:5 87:5 88:1 89:2 90:3 91:1 92:5 93:2
+          95:3 96:1 97:4 98:2 100:6
+
+  D=3072 | n=2096 MEAN=7.73  PEAK=100 MEDIAN=0.0 pct>=20=11%
+    hist: 0:1456 1:35 2:49 3:112 4:18 5:24 6:83 7:23 8:17 9:17 10:18 12:11 13:2
+          14:1 15:2 16:2 17:2 18:2 20:3 21:4 22:2 23:1 25:3 26:2 27:4 28:6 29:1
+          30:2 31:1 32:5 33:5 34:2 35:9 36:6 39:1 40:2 43:3 44:5 45:4 46:2 47:1
+          48:2 49:1 50:8 52:6 53:5 54:2 56:6 58:3 59:2 61:2 65:5 67:7 68:1 69:2
+          71:4 72:2 74:2 75:2 77:7 78:2 80:3 81:1 82:2 83:5 84:1 85:2 86:2 87:1
+          89:2 90:5 91:3 92:3 94:2 95:2 98:4 99:2 100:37
+
+  D=4096 | n=2080 MEAN=6.64  PEAK=100 MEDIAN=0.0 pct>=20=8%
+    hist: 0:1518 1:60 2:13 3:18 4:30 5:72 6:21 7:49 8:16 9:20 10:49 11:21 12:8
+          14:2 15:3 16:4 17:4 18:6 19:5 21:2 22:2 24:2 25:3 27:2 30:2 32:4 33:3
+          34:2 35:3 36:1 37:2 38:6 39:2 40:1 41:1 42:4 44:1 47:3 48:1 50:2 51:2
+          52:1 53:2 55:2 56:2 59:3 60:3 63:1 64:4 65:1 66:3 68:4 69:3 72:2 73:3
+          77:1 79:4 80:7 84:1 85:1 86:1 87:1 88:2 91:2 94:3 95:2 96:1 97:2 98:3
+          100:45
+
+============================ util-vs-D CURVE ===================================
+
+  D        MEAN util   PEAK   MEDIAN   pct>=20   (eager FP64 real full step)
+  1536     10.57%      62     1.0%     20%
+  2560      8.11%     100     0.0%     13%
+  3072      7.73%     100     0.0%     11%
+  4096      6.64%     100     0.0%      8%
+
+  The curve DECLINES monotonically as D grows (10.57 → 8.11 → 7.73 → 6.64% MEAN).
+  MEDIAN is pinned at 0-1% at every D (the modal state is an IDLE GPU). Util never
+  crosses 20% MEAN, let alone 70%, at ANY D — and gets WORSE at the GEMM-bound
+  sizes (2560-4096), not better. pct>=20 falls from 20% (D1536) to 8% (D4096).
+
+VERDICT: 🔴 CLOSED-NEGATIVE — falsifier FALSIFIED.
+  The pre-registered falsifier predicted the REAL full-step util CLIMBS to GREEN
+  at GEMM-bound D. The measurement shows the OPPOSITE: MEAN util DROPS with D
+  (10.57% → 6.64%), MEDIAN stays at 0-1% (GPU idle most of the wall), and GREEN
+  (≥20% MEAN) is never reached at any size. Bigger D does NOT lift the real-step
+  util — it lowers it (the per-step host-driver / serial-glue-DAG overhead is a
+  larger fraction of the longer-but-still-launch-bound step, and the dense 0%
+  mass grows: 839/2080 zeros at D1536 → 1518/2080 at D4096).
+
+FINDING (Δ vs baseline — refutes anima path-(a) at GEMM-bound scale):
+  - ANIMA PATH-(a) IS REFUTED at the real full step. "Scale the forge to 3B/7B
+    (D 2560-4096) and the idle-H100 util self-climbs to GREEN" is FALSE for the
+    REAL clm_prod training step. Util stays launch-bound-LOW (MEAN 6.6-10.6%,
+    MEDIAN 0%) and DECLINES with D. The serial sub-ms glue DAG idles the H100
+    regardless of GEMM size.
+  - RECONCILES with H1A (#2734) — NO contradiction, it SHARPENS it. H1A showed the
+    ISOLATED own-GEMM/cuBLAS kernel batch saturates the H100 to ~95% MEAN / 100%
+    MEDIAN at all D (flat-at-ceiling), when the kernel DAG is left QUEUED (sync
+    only every 16 iters). THIS run shows the SAME GEMM math, embedded in the REAL
+    per-op-SYNCHRONIZED full step, idles the GPU to 0% median at all D. The GEMMs
+    are not the bottleneck and never were; the bottleneck is the PER-KERNEL SYNC /
+    host-on-critical-path STRUCTURE of clm_prod's step — and that structure does
+    NOT improve (it worsens) with D.
+  - DECISION FOR ANIMA: the path to util-GREEN on the real 3B/7B forge step is NOT
+    "make D bigger" (this refutes it) and NOT "rent a bigger GPU" (H1A already
+    closed the right-sized-GPU axis). It is to take the host OFF the critical path
+    — whole-step CUDA-graph capture / device-resident optimizer-t / megakernel
+    fusion (HEXA-FUSION L3-c/d / ⑤). The prior ④ fwd/bwd-only graph capture
+    (F-FUSION-GRAPH-AB, +1.32pp to 13.17% at D1536) is necessary but not
+    sufficient; the eager AdamW sweep + token H2D still pin the host. The SIZE
+    axis is dead for the real step.
+  - Closes the size-axis sub-question of handoff 2e4438a7 #1: "does a bigger
+    (GEMM-bound) model reach util-GREEN on the REAL full step?" = NO,
+    deterministically, monotonically the wrong way.
+
+POD: rented H100_SXM instance 39596084 (vast offer 28762957, genuine SXM) —
+  DESTROYED (`hexa cloud down --force`, registry status=closed), verified GONE
+  (absent from `vastai show instances`). Leak 0. (The other H100_SXM / A100 /
+  A6000 instances visible on the account are pre-existing FOREIGN orphans from
+  other projects — never touched; one is at 77% util = an active foreign job.)
+
+RAW LOGS: .discoveries/m3-rawlogs/ (m3_sweep.out + util_{1536,2560,3072,4096}.txt,
+  ~2080 verbatim @100ms samples per D).

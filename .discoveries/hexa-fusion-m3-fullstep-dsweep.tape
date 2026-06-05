@@ -6,3 +6,7 @@
   method = "build clm_prod_gpu (kit fusion_build_sources.tgz + rebuild.sh, ② ASYNC=0 eager FP64), T512, sweep D=1536/2560/3072/4096; nvidia-smi utilization.gpu @100ms sustained → MEAN/PEAK/MEDIAN/pct>=20 per D. Watch OOM at large D. Optional HEXA_FUSE_ALL=1 arm."
   verdict-tier-target = "🟢 numerical (the util-vs-D curve on the REAL step) — likely CLOSED-NEGATIVE (the serial DAG idles any D; bigger D only lowers steps/s)"
   prior  = ".verdicts/hexa-fusion/F-FUSION-ASYNC-UTIL-AB.txt (D1536 ASYNC=0 12.50%) · README sweep 12.71→2.94% (ASYNC=0, drops with D) · F-FUSION-H1A-3B7B-UTIL.txt (isolated GEMM flat-95%)"
+  verdict = "🔴 CLOSED-NEGATIVE — falsifier FALSIFIED. .verdicts/hexa-fusion/F-FUSION-M3-FULLSTEP-DSWEEP.txt"
+  result  = "REAL full-step MEAN util DECLINES with D (10.57%/D1536 → 8.11/2560 → 7.73/3072 → 6.64/4096), MEDIAN pinned 0-1% (idle GPU is the modal state). GREEN never reached. anima path-(a) REFUTED at GEMM-bound scale."
+  gpu     = "genuine NVIDIA H100 80GB HBM3 SXM (vast offer 28762957, instance 39596084), driver 560.35.03 CUDA 12.4 — DESTROYED, leak 0"
+  next    = "size axis dead for real step → host-off-critical-path (whole-step CUDA-graph / device-resident-t / megakernel, L3-c/d / ⑤). ④ fwd/bwd graph (+1.32pp) necessary-not-sufficient."
