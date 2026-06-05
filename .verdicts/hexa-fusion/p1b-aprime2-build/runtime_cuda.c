@@ -3193,6 +3193,12 @@ static int _ensure_dev_alloc_out(int64_t out_id, int64_t need_len) {
                 (long long)e->len, (long long)need_len);
         return -1;
     }
+    /* HEXA-FUSION N2 RACEFIX (F-FUSION-N1N2-DETERMINISM, 2nd hazard): same
+     * cross-stream race as _h2d. The cudaFree/cudaMalloc/cudaMemset below run on
+     * the DEFAULT stream; when async is ON a still-queued forge-stream kernel may
+     * reference this slot's old d_buf -> cudaFree-under-use / concurrent memset.
+     * Drain the forge stream first (no-op async-off => byte-eq legacy). */
+    if (_forge_sync() != 0) return -1;
     if (!s->d_buf || s->len != e->len) {
         if (s->d_buf) cudaFree(s->d_buf);
         cudaError_t er = cudaMalloc((void**)&s->d_buf,
