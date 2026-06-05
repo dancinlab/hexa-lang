@@ -302,6 +302,30 @@ fn main() {
         fails = fails + 1
     }
 
+    // ── (4) the Tc TAIL: ω_log (λ-weighted log-mean) + McMillan Tc ───────────
+    // ω_log = exp[ (1/λ) Σ (w_q/W) λ(q,ν) ln ω(q,ν) ] — the Allen-Dynes log-mean.
+    // Feed (λ_BZ, ω_log) through QFORGE's Tc tail (mcmillan_tc / allen_dynes_tc).
+    // This carries the el-ph→Tc tail all the way to a Tc number on REAL data.
+    let mut lnsum = 0.0
+    let mut si2 = 0
+    while si2 < nsamp {
+        let lam = s_lam[si2]
+        let om = s_om[si2]
+        if lam > 0.0 && om > 0.0 {
+            // ln(om): the compiler `log` math builtin (d19 — no re-impl).
+            lnsum = lnsum + s_wnorm[si2] * lam * log(om)
+        }
+        si2 = si2 + 1
+    }
+    let omega_log = exp(lnsum / parsed_lambda_bz)
+    let mu_star = 0.10
+    let tc_mc = mcmillan_tc(omega_log, parsed_lambda_bz, mu_star)
+    let tc_ad = allen_dynes_tc(omega_log, parsed_lambda_bz, mu_star, omega_log)
+    println("── Tc tail (QFORGE moments → McMillan/Allen-Dynes, μ*=0.10) ──")
+    println("ω_log=" + to_string(omega_log) + " K  λ=" + to_string(parsed_lambda_bz)
+            + "  Tc_McMillan=" + to_string(tc_mc) + " K  Tc_AllenDynes(f1)="
+            + to_string(tc_ad) + " K")
+
     if fails == 0 {
         println("qforge_lah10_qe_xval_test PASS")
     } else {
