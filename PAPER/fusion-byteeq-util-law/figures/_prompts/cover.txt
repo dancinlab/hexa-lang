@@ -1,0 +1,9 @@
+A technical schematic, dark slate background, depicting a "wall" that
+relocates as it is struck five times. Five vertically-stacked translucent
+glass barriers, each labelled with a shrinking numerical gap
+(4 ULP -> 2 ULP -> 7e-6 -> 1e-1 -> 0), a beam of light passing through the
+first four and stopping at the fifth which is labelled "async cross-stream
+race / HEXA_CUDA_ASYNC=0". To the right, a GPU die outline with 132 small
+square SMs, most of them dim and only a few lit, captioned "utilisation =
+fill, not fusion". Minimal, blueprint-cyan line art, no text artifacts,
+crisp vector feel, suitable as an academic paper teaser figure.
