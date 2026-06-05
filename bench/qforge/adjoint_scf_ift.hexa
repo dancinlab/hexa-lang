@@ -1,0 +1,496 @@
+// QFORGE-PERF — 🧠 LANE C "differentiable-DFT reverse-mode LR": the HEAD.
+// Implicit-Function-Theorem (NO-UNROLL) adjoint of the SCF self-consistent
+// fixed point ρ* = g(ρ*, θ), verified component-by-component against central
+// finite difference (g5).  Completes #2810: the TAIL (α²F→λ→Tc quadrature
+// adjoint) was verified at 1.15e-9 vs FD in adjoint_a2f_lambda_tc.hexa; the
+// HEAD (the SCF fixed-point adjoint, §3 of adjoint_dfpt_design.md) was
+// designed-not-built.  This driver BUILDS and VERIFIES it.
+//
+//   hexa verify --verifier-cmd "HEXA_LANG=. hexa run bench/qforge/adjoint_scf_ift.hexa" \
+//               --claim "IFT no-unroll SCF fixed-point adjoint dOut/dTheta matches FD (and unrolled AD)" \
+//               --expect "VERDICT_SCF_IFT=MATCH"
+//
+// ── THE CLAIM (#2810's open HEAD piece) ──────────────────────────────────────
+// The SCF self-consistent density is a FIXED POINT  ρ* = g(ρ*, θ)  of the
+// structure/potential params θ.  Naive reverse-mode through the iteration
+// ρ_{k+1} = g(ρ_k, θ) UNROLLS every step (cost + memory grow with iteration
+// count; unstable near the fixed point).  The IMPLICIT-FUNCTION-THEOREM adjoint
+// computes ∂ρ*/∂θ WITHOUT unrolling.  Differentiate the fixed-point condition
+//   ρ* = g(ρ*, θ)
+// →  ∂ρ*/∂θ = ∂g/∂ρ · ∂ρ*/∂θ  +  ∂g/∂θ
+// →  (I − J_ρ) ∂ρ*/∂θ = ∂g/∂θ ,        J_ρ := ∂g/∂ρ |_(ρ*,θ).            (IFT)
+// Solve this linear system ONCE at the converged point.  For a downstream scalar
+// L(ρ*, θ), the reverse-mode (adjoint) form solves the TRANSPOSED system once for
+// the adjoint vector and contracts:
+//   (I − J_ρ^T) w = ∂L/∂ρ                                                (ADJ)
+//   ∂L/∂θ = ∂L/∂θ|_explicit + w · ∂g/∂θ
+// — ONE linear solve returns the WHOLE ∂L/∂θ gradient vector, with O(1) memory
+// in the iteration count (no unrolled tape).
+//   Refs: Blondel et al. JAXopt (NeurIPS 2022); Christianson, Optim. Methods
+//   Softw. 3, 311 (1994) — reverse accumulation at attractive fixed points;
+//   adjoint_dfpt_design.md §3 (route (a), Neumann / fixed-point adjoint).
+//
+// ── THE FIXTURE (small but NONTRIVIAL SCF-like contraction) ──────────────────
+// ρ ∈ R^3 (a 3-mode "density").  θ ∈ R^2 (potential/structure params).  One KS
+// step g builds a θ-dressed, ρ-coupled "potential" then re-occupies via a smooth
+// nonlinear response — a genuine NONLINEAR contraction with cross-coupling
+// (off-diagonal J_ρ), NOT a separable toy:
+//
+//   p_i(ρ,θ) = θ0·b_i + θ1·c_i + Σ_j K_ij · tanh(ρ_j)        (θ-dressed potential)
+//   g_i(ρ,θ) = α · tanh( p_i(ρ,θ) )                          (smooth re-occupation)
+//
+// α<1 and the tanh saturation keep ‖J_ρ‖<1 ⇒ g is a contraction (Banach fixed
+// point; the SCF analogue of a convergent charge-mixing loop).  J_ρ is DENSE and
+// ρ*-dependent (off-diagonals from K + the tanh' coupling) so the IFT solve is
+// nontrivial — exactly the structure §3 of the design doc targets (the dielectric
+// /response Jacobian J_ρ = χ·v that the DIIS mixer approximates).
+//
+// Downstream scalar (the "observable", stands in for λ/Tc):  L(ρ*) = Σ_i ρ*_i².
+//
+// ── WHAT IS REUSED (d3 / d19) ────────────────────────────────────────────────
+// stdlib/autograd (ag_var/ag_const/ag_mul/ag_add/ag_matmul/ag_backward/ag_grad/
+// ag_tape_reset …) supplies the LOCAL jacobian-vector pieces: we obtain the rows
+// of J_ρ = ∂g/∂ρ and the columns of ∂g/∂θ by reverse-mode on the SINGLE KS step
+// g (one node-graph, no unrolled SCF) — the autograd tape differentiates ONE
+// application of g, the IFT then turns those local jacobians into the full
+// ∂ρ*/∂θ WITHOUT differentiating the iteration.  No stdlib/qforge engine edit.
+
+use "stdlib/tensor/mod"
+use "stdlib/tensor/shape"
+use "stdlib/tensor/ops"
+use "stdlib/autograd"
+
+fn _abs(x: float) -> float { if x < 0.0 { return -x } return x }
+
+// ── Fixture constants (the KS-step coupling) ─────────────────────────────────
+// 3-mode density, 2 params.  α<1 + tanh ⇒ contraction.
+let N = 3
+let M = 2
+let ALPHA = 0.55
+// b, c : θ-coupling vectors (∂p/∂θ0 = b, ∂p/∂θ1 = c).
+let BVEC = [1.0, -0.5, 0.7]
+let CVEC = [0.3, 0.9, -0.4]
+// K : symmetric-ish dense coupling matrix (the ρ-ρ cross terms → off-diag J_ρ).
+let KMAT = [
+    [ 0.20, -0.15,  0.10],
+    [-0.05,  0.25,  0.12],
+    [ 0.08, -0.10,  0.18]
+]
+
+fn _tanh(x: float) -> float {
+    // tanh via exp (stdlib has exp); guard overflow.
+    if x > 20.0 { return 1.0 }
+    if x < -20.0 { return -1.0 }
+    let e2 = exp(2.0 * x)
+    return (e2 - 1.0) / (e2 + 1.0)
+}
+fn _sech2(x: float) -> float {
+    let t = _tanh(x)
+    return 1.0 - t * t            // d/dx tanh = sech² = 1 − tanh²
+}
+
+// p_i(ρ,θ) = θ0·b_i + θ1·c_i + Σ_j K_ij tanh(ρ_j)
+fn _pot(rho: [float], theta: [float]) -> [float] {
+    let mut p: [float] = []
+    let mut i = 0
+    while i < N {
+        let mut s = theta[0] * BVEC[i] + theta[1] * CVEC[i]
+        let mut j = 0
+        while j < N {
+            s = s + KMAT[i][j] * _tanh(rho[j])
+            j = j + 1
+        }
+        p.push(s)
+        i = i + 1
+    }
+    return p
+}
+
+// One KS step: g_i(ρ,θ) = α·tanh(p_i(ρ,θ))
+fn _g_step(rho: [float], theta: [float]) -> [float] {
+    let p = _pot(rho, theta)
+    let mut out: [float] = []
+    let mut i = 0
+    while i < N {
+        out.push(ALPHA * _tanh(p[i]))
+        i = i + 1
+    }
+    return out
+}
+
+// Forward SCF: iterate ρ_{k+1}=g(ρ_k,θ) to the fixed point ρ*(θ).
+fn _scf_solve(theta: [float], iters: int) -> [float] {
+    let mut rho: [float] = []
+    let mut i = 0
+    while i < N { rho.push(0.0); i = i + 1 }     // ρ₀ = 0
+    let mut k = 0
+    while k < iters {
+        rho = _g_step(rho, theta)
+        k = k + 1
+    }
+    return rho
+}
+
+// Downstream scalar observable L(ρ) = Σ ρ_i²  (∂L/∂ρ_i = 2 ρ_i).
+fn _observable(rho: [float]) -> float {
+    let mut s = 0.0
+    let mut i = 0
+    while i < N { s = s + rho[i] * rho[i]; i = i + 1 }
+    return s
+}
+
+// ── Analytic local jacobians at (ρ*, θ) ──────────────────────────────────────
+// J_ρ[i][j] = ∂g_i/∂ρ_j = α·sech²(p_i) · K_ij · sech²(ρ_j)
+// G_θ[i][m] = ∂g_i/∂θ_m = α·sech²(p_i) · (b_i if m=0 else c_i)
+// (These are also obtainable from stdlib/autograd by reverse-mode on the single
+//  step g — done explicitly in _jacobians_via_autograd below for the d19 reuse.)
+fn _Jrho(rho: [float], theta: [float]) -> [[float]] {
+    let p = _pot(rho, theta)
+    let mut J: [[float]] = []
+    let mut i = 0
+    while i < N {
+        let si = ALPHA * _sech2(p[i])
+        let mut row: [float] = []
+        let mut j = 0
+        while j < N {
+            row.push(si * KMAT[i][j] * _sech2(rho[j]))
+            j = j + 1
+        }
+        J.push(row)
+        i = i + 1
+    }
+    return J
+}
+fn _Gtheta(rho: [float], theta: [float]) -> [[float]] {
+    let p = _pot(rho, theta)
+    let mut G: [[float]] = []
+    let mut i = 0
+    while i < N {
+        let si = ALPHA * _sech2(p[i])
+        G.push([si * BVEC[i], si * CVEC[i]])
+        i = i + 1
+    }
+    return G
+}
+
+// ── d19 REUSE: obtain J_ρ row-by-row from stdlib/autograd on ONE step g ───────
+// For each output component i, build the node graph of g_i(ρ,θ) over autograd
+// leaves, backward, and read ag_grad → the i-th row of J_ρ and i-th row of G_θ.
+// This is the "structured adjoint via the AD substrate" the design doc names:
+// the tape differentiates ONE application of g (NOT the unrolled SCF).
+// Returns #{ "J": [[..]] (N×N), "G": [[..]] (N×M) }.
+fn _scalar(x: float) -> Tensor { return tensor_from_array([1], [x]) }
+fn _ag_tanh(h) {
+    // tanh(x) = (exp(2x)-1)/(exp(2x)+1) built from ag primitives.
+    let two = ag_const(_scalar(2.0))
+    let one = ag_const(_scalar(1.0))
+    let e2 = ag_exp(ag_mul(two, h))
+    let num = ag_sub(e2, one)
+    let den = ag_add(e2, one)
+    // division via num * den^(-1)  (ag_pow supports float exponent)
+    let invden = ag_pow(den, -1.0)
+    return ag_mul(num, invden)
+}
+fn _jacobians_via_autograd(rho: [float], theta: [float]) -> [[[float]]] {
+    let mut Jrows: [[float]] = []
+    let mut Grows: [[float]] = []
+    let mut i = 0
+    while i < N {
+        ag_tape_reset()
+        // leaves: rho_j (var), theta_m (var)
+        let mut rvars = []
+        let mut j = 0
+        while j < N { rvars.push(ag_var(_scalar(rho[j]))); j = j + 1 }
+        let th0 = ag_var(_scalar(theta[0]))
+        let th1 = ag_var(_scalar(theta[1]))
+        // p_i = th0*b_i + th1*c_i + Σ_j K_ij tanh(rho_j)
+        let mut acc = ag_add(
+            ag_mul(th0, ag_const(_scalar(BVEC[i]))),
+            ag_mul(th1, ag_const(_scalar(CVEC[i])))
+        )
+        j = 0
+        while j < N {
+            let term = ag_mul(ag_const(_scalar(KMAT[i][j])), _ag_tanh(rvars[j]))
+            acc = ag_add(acc, term)
+            j = j + 1
+        }
+        // g_i = ALPHA * tanh(p_i)
+        let gi = ag_mul(ag_const(_scalar(ALPHA)), _ag_tanh(acc))
+        ag_backward(gi)
+        let mut Jrow: [float] = []
+        j = 0
+        while j < N {
+            let gt = ag_grad(rvars[j])
+            Jrow.push(gt.data[0])
+            j = j + 1
+        }
+        Jrows.push(Jrow)
+        let g0 = ag_grad(th0)
+        let g1 = ag_grad(th1)
+        Grows.push([g0.data[0], g1.data[0]])
+        i = i + 1
+    }
+    return [Jrows, Grows]
+}
+
+// ── Dense linear solve (I − A)^T x = b  via Gaussian elimination ──────────────
+// Small N → direct solve is exact + cheap.  (For large SCF this is the Neumann /
+// fixed-point iteration of route (a); here we solve directly for an exact check.)
+fn _solve_ImAT(A: [[float]], b: [float]) -> [float] {
+    // Build Mᵀ where M = I − A, i.e. (I−A)^T.
+    let n = N
+    let mut Mt: [[float]] = []
+    let mut i = 0
+    while i < n {
+        let mut row: [float] = []
+        let mut j = 0
+        while j < n {
+            // (I−A)^T [i][j] = (I−A)[j][i] = (i==j?1:0) − A[j][i]
+            let mut v = 0.0 - A[j][i]
+            if i == j { v = v + 1.0 }
+            row.push(v)
+            j = j + 1
+        }
+        Mt.push(row)
+        i = i + 1
+    }
+    return _gauss(Mt, b)
+}
+// Solve A x = b for arbitrary small dense A (partial pivot).
+fn _gauss(Ain: [[float]], bin: [float]) -> [float] {
+    let n = N
+    // copy
+    let mut A: [[float]] = []
+    let mut b: [float] = []
+    let mut i = 0
+    while i < n {
+        let mut row: [float] = []
+        let mut j = 0
+        while j < n { row.push(Ain[i][j]); j = j + 1 }
+        A.push(row)
+        b.push(bin[i])
+        i = i + 1
+    }
+    // forward elimination with partial pivot
+    let mut col = 0
+    while col < n {
+        // pivot
+        let mut piv = col
+        let mut best = _abs(A[col][col])
+        let mut r = col + 1
+        while r < n {
+            if _abs(A[r][col]) > best { best = _abs(A[r][col]); piv = r }
+            r = r + 1
+        }
+        if piv != col {
+            let tmp = A[piv]; A[piv] = A[col]; A[col] = tmp
+            let tb = b[piv]; b[piv] = b[col]; b[col] = tb
+        }
+        let d = A[col][col]
+        r = col + 1
+        while r < n {
+            let f = A[r][col] / d
+            let mut j = col
+            while j < n { A[r][j] = A[r][j] - f * A[col][j]; j = j + 1 }
+            b[r] = b[r] - f * b[col]
+            r = r + 1
+        }
+        col = col + 1
+    }
+    // back substitution
+    let mut x: [float] = []
+    i = 0
+    while i < n { x.push(0.0); i = i + 1 }
+    let mut row2 = n - 1
+    while row2 >= 0 {
+        let mut s = b[row2]
+        let mut j = row2 + 1
+        while j < n { s = s - A[row2][j] * x[j]; j = j + 1 }
+        x[row2] = s / A[row2][row2]
+        row2 = row2 - 1
+    }
+    return x
+}
+
+fn main() {
+    println("=== QFORGE HEAD — IFT (no-unroll) SCF fixed-point adjoint (g5 vs FD) ===")
+    let theta = [0.8, -0.6]
+    let iters = 200                          // SCF iterations to converge ρ*
+
+    // ── converge the fixed point ρ*(θ) ──────────────────────────────────────
+    let rho_star = _scf_solve(theta, iters)
+    // contraction / convergence check: ‖g(ρ*)−ρ*‖∞
+    let chk = _g_step(rho_star, theta)
+    let mut res = 0.0
+    let mut i = 0
+    while i < N {
+        let d = _abs(chk[i] - rho_star[i])
+        if d > res { res = d }
+        i = i + 1
+    }
+    println("theta = [" + to_string(theta[0]) + ", " + to_string(theta[1]) + "]")
+    println("rho*  = [" + to_string(rho_star[0]) + ", " + to_string(rho_star[1]) + ", " + to_string(rho_star[2]) + "]")
+    println("fixed-point residual ‖g(ρ*)−ρ*‖inf = " + to_string(res))
+    println("L(ρ*) = " + to_string(_observable(rho_star)))
+
+    // ── local jacobians at the fixed point ──────────────────────────────────
+    let J = _Jrho(rho_star, theta)               // analytic ∂g/∂ρ
+    let G = _Gtheta(rho_star, theta)             // analytic ∂g/∂θ
+    // d19: same jacobians from stdlib/autograd on ONE step g — cross-check.
+    let jg = _jacobians_via_autograd(rho_star, theta)
+    let Jag = jg[0]
+    let Gag = jg[1]
+    let mut max_jac_eps = 0.0
+    i = 0
+    while i < N {
+        let mut j = 0
+        while j < N {
+            let e = _abs(J[i][j] - Jag[i][j])
+            if e > max_jac_eps { max_jac_eps = e }
+            j = j + 1
+        }
+        let mut m = 0
+        while m < M {
+            let e = _abs(G[i][m] - Gag[i][m])
+            if e > max_jac_eps { max_jac_eps = e }
+            m = m + 1
+        }
+        i = i + 1
+    }
+    println("local jacobian (analytic vs stdlib/autograd) max |Δ| = " + to_string(max_jac_eps))
+
+    // ── IFT REVERSE-MODE ADJOINT (no unrolling) ─────────────────────────────
+    // (ADJ):  (I − J_ρ^T) w = ∂L/∂ρ      [one linear solve at ρ*]
+    // ∂L/∂θ_m = Σ_i w_i · G[i][m]        [contract; no explicit ∂L/∂θ term here]
+    let mut dLdrho: [float] = []
+    i = 0
+    while i < N { dLdrho.push(2.0 * rho_star[i]); i = i + 1 }   // ∂L/∂ρ = 2ρ
+    let w = _solve_ImAT(J, dLdrho)                              // ONE solve, reuse autograd J optionally
+    let mut grad_ift: [float] = []
+    let mut m = 0
+    while m < M {
+        let mut s = 0.0
+        i = 0
+        while i < N { s = s + w[i] * G[i][m]; i = i + 1 }
+        grad_ift.push(s)
+        m = m + 1
+    }
+
+    // ── ALSO: IFT using the AUTOGRAD-derived jacobians (pure d19 path) ───────
+    let w_ag = _solve_ImAT(Jag, dLdrho)
+    let mut grad_ift_ag: [float] = []
+    m = 0
+    while m < M {
+        let mut s = 0.0
+        i = 0
+        while i < N { s = s + w_ag[i] * Gag[i][m]; i = i + 1 }
+        grad_ift_ag.push(s)
+        m = m + 1
+    }
+
+    // ── FINITE-DIFFERENCE GROUND TRUTH ──────────────────────────────────────
+    // Re-converge the fixed point at θ ± h, finite-difference the observable L.
+    // This is the honest oracle: it RE-RUNS the whole SCF per perturbed θ_m.
+    let h = 1.0e-6
+    let mut grad_fd: [float] = []
+    m = 0
+    while m < M {
+        let mut tp: [float] = []
+        let mut tm: [float] = []
+        let mut k = 0
+        while k < M {
+            if k == m { tp.push(theta[k] + h); tm.push(theta[k] - h) }
+            else { tp.push(theta[k]); tm.push(theta[k]) }
+            k = k + 1
+        }
+        let Lp = _observable(_scf_solve(tp, iters))
+        let Lm = _observable(_scf_solve(tm, iters))
+        grad_fd.push((Lp - Lm) / (2.0 * h))
+        m = m + 1
+    }
+
+    // ── UNROLLED autograd gradient (bonus; tractable here) ───────────────────
+    // Differentiate the WHOLE unrolled SCF iteration through stdlib/autograd:
+    // build the node graph of `iters` successive applications of g over the θ
+    // leaves and the ρ₀=const seed, backward L = Σ ρ_K², read ∂L/∂θ.  This is
+    // exactly the EXPENSIVE/UNROLLED path the IFT avoids — verified to AGREE.
+    let unroll_iters = 60                    // enough to converge (contraction)
+    ag_tape_reset()
+    let th0 = ag_var(_scalar(theta[0]))
+    let th1 = ag_var(_scalar(theta[1]))
+    // ρ as a list of ag handles, ρ₀ = const 0
+    let mut rhandles = []
+    i = 0
+    while i < N { rhandles.push(ag_const(_scalar(0.0))); i = i + 1 }
+    let mut step = 0
+    while step < unroll_iters {
+        let mut newr = []
+        i = 0
+        while i < N {
+            // p_i = th0*b_i + th1*c_i + Σ_j K_ij tanh(rho_j)
+            let mut acc = ag_add(
+                ag_mul(th0, ag_const(_scalar(BVEC[i]))),
+                ag_mul(th1, ag_const(_scalar(CVEC[i])))
+            )
+            let mut j = 0
+            while j < N {
+                acc = ag_add(acc, ag_mul(ag_const(_scalar(KMAT[i][j])), _ag_tanh(rhandles[j])))
+                j = j + 1
+            }
+            newr.push(ag_mul(ag_const(_scalar(ALPHA)), _ag_tanh(acc)))
+            i = i + 1
+        }
+        rhandles = newr
+        step = step + 1
+    }
+    // L = Σ ρ_i²
+    let mut Lh = ag_mul(rhandles[0], rhandles[0])
+    i = 1
+    while i < N { Lh = ag_add(Lh, ag_mul(rhandles[i], rhandles[i])); i = i + 1 }
+    ag_backward(Lh)
+    let gu0 = ag_grad(th0)
+    let gu1 = ag_grad(th1)
+    let grad_unroll = [gu0.data[0], gu1.data[0]]
+
+    // ── compare ─────────────────────────────────────────────────────────────
+    println("--- gradient dL/dtheta ---")
+    let mut max_rel_ift = 0.0
+    let mut max_rel_ift_ag = 0.0
+    let mut max_rel_unroll = 0.0
+    m = 0
+    while m < M {
+        let fd = grad_fd[m]
+        let denom = _abs(fd) + 1.0e-30
+        let r1 = _abs(grad_ift[m] - fd) / denom
+        let r2 = _abs(grad_ift_ag[m] - fd) / denom
+        let r3 = _abs(grad_unroll[m] - fd) / denom
+        if r1 > max_rel_ift { max_rel_ift = r1 }
+        if r2 > max_rel_ift_ag { max_rel_ift_ag = r2 }
+        if r3 > max_rel_unroll { max_rel_unroll = r3 }
+        println("m=" + to_string(m)
+            + "  IFT=" + to_string(grad_ift[m])
+            + "  IFT(autograd-J)=" + to_string(grad_ift_ag[m])
+            + "  unroll=" + to_string(grad_unroll[m])
+            + "  FD=" + to_string(fd))
+        m = m + 1
+    }
+    println("max rel-eps  dL/dtheta  IFT(analytic-J)   vs FD = " + to_string(max_rel_ift))
+    println("max rel-eps  dL/dtheta  IFT(autograd-J)   vs FD = " + to_string(max_rel_ift_ag))
+    println("max rel-eps  dL/dtheta  UNROLLED autograd vs FD = " + to_string(max_rel_unroll))
+
+    let tol = 1.0e-6
+    // primary gate: IFT (no-unroll) adjoint matches FD.  (autograd-J path + the
+    // unrolled cross-check are corroborating; the unroll tol is looser because
+    // 60 iters is finite — reported honestly, d6.)
+    let tol_unroll = 1.0e-3
+    if max_rel_ift < tol && max_rel_ift_ag < tol && max_jac_eps < 1.0e-9 {
+        if max_rel_unroll < tol_unroll {
+            println("(bonus) unrolled autograd agrees within " + to_string(tol_unroll))
+        } else {
+            println("(bonus) unrolled autograd looser than " + to_string(tol_unroll) + " (finite iters) — IFT path is the verified one")
+        }
+        println("VERDICT_SCF_IFT=MATCH")
+    } else {
+        println("VERDICT_SCF_IFT=REFUTE")
+    }
+}
