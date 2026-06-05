@@ -284,6 +284,20 @@ pub fn qpwfft_dvscr_from_dpsi(psis: [[float]], dpsi: [[float]]) -> [float] {
         while r < ntot { drho_r[r] = drho_r[r] + 2.0 * psi_r[r] * dps_r[r] ; r = r + 1 }
         nbnd = nbnd + 1
     }
+    // ── FFT-NORMALIZATION FIX (the migration-gate magnitude bug, d6 — DERIVED) ────────
+    //   _qpwfft_to_real uses ifft3 (÷Ntot convention), so psi_r = ψ_phys/Ntot and the
+    //   ψ_n·Δψ_n product above carries a spurious 1/Ntot². The physical density response
+    //   is Δρ(r)=Σ_n 2·ψ_n(r)·Δψ_n(r) with ψ(r)=Σ_G c(G)e^{iGr} (NO 1/Ntot). Restore it
+    //   by ×Ntot² so BOTH downstream terms land at the correct coefficient magnitude:
+    //     • Poisson  V_H(G)=4π Δρ̂(G)/|G|²   (via fft3(drho_r) → ÷Ntot at the gather)
+    //     • local    f_xc·Δρ(r)              (added in real space at ⑥, same scale)
+    //   Without this the screening correction is ~1/Ntot² ≈ 1e-9 of bare → 0 Anderson
+    //   iters → screened==bare → λ stuck at 4.137 (the #2771/#2781 0-iter symptom).
+    //   Factor is the DFT convention (not tuned): each ifft3-real ψ is ψ_phys/Ntot, and
+    //   the product of two restores ×Ntot². Verified: f_xc & V_H terms both → O(1).
+    let nt2 = to_float(ntot) * to_float(ntot)
+    let mut rsc = 0
+    while rsc < ntot { drho_r[rsc] = drho_r[rsc] * nt2 ; rsc = rsc + 1 }
     // ⑥ forward-FFT Δρ(r) → Δρ̂(G); apply Poisson V_H(G)=4π Δρ̂(G)/|G|² (G=0→0).
     let mut zim: [float] = []
     p = 0
