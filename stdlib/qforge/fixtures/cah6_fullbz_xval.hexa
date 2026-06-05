@@ -42,7 +42,7 @@ fn main() {
     let screened = if len(av) > 4 { to_int(av[4]) != 0 } else { true }
     let scr_beta = if len(av) > 5 { to_float(av[5]) } else { 0.3 }
     let scr_md   = if len(av) > 6 { to_int(av[6]) } else { 5 }
-    let scr_maxit = 40
+    let scr_maxit = 6
 
     println("=== QFORGE MIGRATION GATE — converged-CaH6 full-BZ λ cross-val (d6 VERBATIM) v3-SCREENED ===")
     println("deck=" + deck_dir + "  npw_cap=" + to_string(npw_cap)
