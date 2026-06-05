@@ -177,7 +177,7 @@ hexa-native PTX; the launch plumbing is a thin C binding.
 
 | gap | status |
 |---|---|
-| `hexa build --target=nvptx…` end-to-end in the **bootstrap binary** | ❌ GATED — `_build_nvptx_emit_driver` returns 1 with `[nvptx] GATED RFC071-P3-PathB`. The codegen (`codegen_emit_ptx_for_sm`) is real and was validated on an RTX 5070 (RFC 055 §7), but it is not linked into Stage-1 bootstrap. See §5. |
+| `hexa build --target=nvptx…` end-to-end in the **bootstrap binary** | ✅ UN-GATED (HEXA-CUDA D2) — `_build_nvptx_emit_driver` now runs the inline lex→parse→lower→lower_hir→`codegen_emit_ptx_for_sm` pipeline and writes `<src>.ptx`. The old `[nvptx] GATED RFC071-P3-PathB` fence was stale (the codegen + pipeline modules were already imported into `self/main.hexa`). vec-add emits a 59-line source-derived PTX (`.visible .entry vec_add`, `.target sm_90`). ptxas/device validation deferred (no local CUDA toolkit). See §5. |
 | `gpu_shared_f64/_add/_get` | ❌ not codegen intrinsics — use `@shared let` (§3.6) |
 | `gpu_tf32_round` (qforge mixprec kernel) | ❌ not a codegen intrinsic — TF32 in that harness is host cuBLAS, not device PTX |
 | f64 `exp()` below x≈−745 | ⚠️ underflows to garbage instead of 0 — guard in-kernel (see `nvptx_a2f_kernel.hexa` d6) |
