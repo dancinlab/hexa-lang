@@ -1,0 +1,300 @@
+// HEXA Standard Library — qforge/screening_pwfft
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// QFORGE migration-gate breakthrough — the POW2-PADDED REAL-SPACE FFT POISSON for
+// the screened el-ph vertex (the scf_pw.hexa:88 non-pow2 FFT-Poisson wall, the
+// precisely-localized migration-gate blocker).
+//
+// ── THE WALL (d2/d6, exposed on the CONVERGED CaH6 cell n=645) ────────────────────
+//   The screened-ΔV Dyson loop (qforge_screened_dv_columns_anderson) folds a
+//   screening kernel (V_H+f_xc)[Δρ] over the 1st-order density response Δρ. The
+//   prior kernel (qpwd_drho_to_dvscf, pw_frontend.hexa) screens in COEFFICIENT
+//   space with a G-DIAGONAL proxy:
+//       drho[i]      = Σ_n 2·c_n(G_i)·Δc_n(G_i)          (the G-DIAGONAL of the
+//                                                          density-matrix response)
+//       ΔV_H[i]      = 4π·drho[i]/|G_i|²
+//   This proxy is NOT the physical density response Δρ̂(G). The true Fourier
+//   component is the AUTOCORRELATION (a convolution in G):
+//       Δρ̂(G) = Σ_n 2·Σ_{G'} c_n(G')·Δc_n(G'−G)          (≠ the diagonal G'=G term)
+//   On the under-converged basis (n=16) the diagonal proxy happened to carry a
+//   metallic-stable signal (ratio≈1.82, Anderson iterated); on the CONVERGED basis
+//   (n=645) the diagonal term vanishes (orthogonality of the converged manifold) →
+//   the kernel returns ≈0 → Anderson sees f_0≈0 → 0 iters → screened == bare → λ
+//   stuck at the BARE 4.137 (the #2771 honest-negative finding).
+//
+// ── THE FIX — GENUINE REAL-SPACE FFT POISSON (this module) ────────────────────────
+//   Compute the density response by the REAL convolution, on a pow2-PADDED grid so
+//   the radix-2 core_fft (each axis must be a power of two) ALWAYS applies, at ANY
+//   PW count n (not just pow2 n):
+//       ① recover the integer Miller indices (h,k,l) of every PW coefficient from
+//          its cartesian G = h·b1+k·b2+l·b3 (the qpw_gvectors basis).
+//       ② size a regular Miller grid that contains every (h,k,l), then PAD each axis
+//          up to the next power of two (Nx,Ny,Nz) — the pow2 FFT requirement met for
+//          an ARBITRARY converged basis.
+//       ③ scatter c_n(G_i) and Δc_n(G_i) onto the (Nx,Ny,Nz) reciprocal grid.
+//       ④ inverse-FFT each → ψ_n(r), Δψ_n(r) on the real-space cube.
+//       ⑤ Δρ(r) = Σ_n 2·ψ_n(r)·Δψ_n(r)        (the REAL pointwise product = the
+//                                               convolution theorem applied genuinely).
+//       ⑥ forward-FFT Δρ(r) → Δρ̂(G), apply the Poisson kernel V_H(G)=4π Δρ̂(G)/|G|²
+//          (G=0 → 0, neutral-cell gauge), inverse-FFT → V_H(r); plus the local LDA
+//          f_xc[ρ̄]·Δρ(r) term (uniform-gas, the basis-decoupled scf_pw convention).
+//       ⑦ forward-FFT ΔV_scr(r) → ΔV_scr(G), GATHER back onto the PW coefficients.
+//   The screening correction on coefficient i is ΔV_scr(G_i) — the genuine RPA+ALDA
+//   dielectric response, non-zero at ANY n.
+//
+// d4 GENERIC — the Miller grid + reciprocal basis + ρ̄ are DATA; CaH6/LaH10/Li2MgH16
+//   all traverse this one path. d19 REUSE — stdlib/signal/core_fft fft3/ifft3 (the
+//   verified radix-2 3D FFT) verbatim; ZERO FFT re-implementation.
+//
+// d6 HONEST — at Γ with a real local potential the PW coefficients are REAL
+//   (assembler.hexa:17). We carry the imaginary channel through the FFTs (it is
+//   produced by e^{iG·r}); the physical V_H(r) and Δρ(r) are real → we take the real
+//   part on the way back, and the gathered ΔV_scr(G_i) real part is the screening
+//   correction. The pow2 padding is EXACT (zero-padding a band-limited spectrum does
+//   not alias when the grid contains 2·max|h| per axis — we size for it).
+
+use "stdlib/signal/core_fft"
+
+let PWFFT_PI: float = 3.14159265358979323846
+let PWFFT_4PI: float = 12.5663706143591729539
+
+// ── next power of two ≥ m (m≤1 → 1) ─────────────────────────────────────────────
+pub fn qpwfft_next_pow2(m: int) -> int {
+    if m <= 1 { return 1 }
+    let mut p = 1
+    while p < m { p = p * 2 }
+    return p
+}
+
+// ── staged Miller grid for the PW-coefficient FFT-Poisson screening ──────────────
+//   Filled once per cell by qpwfft_stage from the gvecs + reciprocal basis. The
+//   per-coefficient Miller indices (hh,kk,ll) and the pow2 grid dims (Nx,Ny,Nz) let
+//   the kernel scatter/gather between the PW basis and the real-space cube.
+let mut PWFFT_ON: bool = false
+let mut PWFFT_N: int = 0            // number of PW coefficients
+let mut PWFFT_HH: [int] = []        // Miller h per coefficient
+let mut PWFFT_KK: [int] = []        // Miller k per coefficient
+let mut PWFFT_LL: [int] = []        // Miller l per coefficient
+let mut PWFFT_NX: int = 0           // pow2 grid dims
+let mut PWFFT_NY: int = 0
+let mut PWFFT_NZ: int = 0
+let mut PWFFT_B1: [float] = []      // reciprocal basis (for |G|² on the grid)
+let mut PWFFT_B2: [float] = []
+let mut PWFFT_B3: [float] = []
+let mut PWFFT_FXC: float = 0.0      // uniform-gas f_xc[ρ̄] local kernel coeff
+let mut PWFFT_LIN: [int] = []       // precomputed grid linear index per coefficient
+
+// ── recover the integer Miller index of a cartesian G against the reciprocal basis
+//   Solve G = h·b1 + k·b2 + l·b3 for integer (h,k,l) by the closed-form inverse of
+//   the 3×3 reciprocal matrix B = [b1 b2 b3] (columns). Robust for the small integer
+//   combinations qpw_gvectors emits; rounds to the nearest integer. det≈0 → (0,0,0).
+fn qpwfft_miller(gx: float, gy: float, gz: float,
+                 b1: [float], b2: [float], b3: [float]) -> [int] {
+    // B columns: b1,b2,b3. Solve B·m = G.
+    let a11 = b1[0] ; let a12 = b2[0] ; let a13 = b3[0]
+    let a21 = b1[1] ; let a22 = b2[1] ; let a23 = b3[1]
+    let a31 = b1[2] ; let a32 = b2[2] ; let a33 = b3[2]
+    let det = a11 * (a22 * a33 - a23 * a32)
+            - a12 * (a21 * a33 - a23 * a31)
+            + a13 * (a21 * a32 - a22 * a31)
+    if det < 1.0e-30 && det > -1.0e-30 { return [0, 0, 0] }
+    let inv = 1.0 / det
+    // Cramer's rule (det of B with the respective column replaced by G).
+    let dh = gx * (a22 * a33 - a23 * a32)
+           - a12 * (gy * a33 - a23 * gz)
+           + a13 * (gy * a32 - a22 * gz)
+    let dk = a11 * (gy * a33 - a23 * gz)
+           - gx * (a21 * a33 - a23 * a31)
+           + a13 * (a21 * gz - gy * a31)
+    let dl = a11 * (a22 * gz - gy * a32)
+           - a12 * (a21 * gz - gy * a31)
+           + gx * (a21 * a32 - a22 * a31)
+    let h = _qpwfft_round(dh * inv)
+    let k = _qpwfft_round(dk * inv)
+    let l = _qpwfft_round(dl * inv)
+    return [h, k, l]
+}
+
+fn _qpwfft_round(x: float) -> int {
+    if x >= 0.0 { return to_int(x + 0.5) }
+    return to_int(x - 0.5)
+}
+
+// ── wrap a signed Miller index onto the [0,N) FFT grid (negative → N+idx) ─────────
+fn _qpwfft_wrap(idx: int, n: int) -> int {
+    let mut w = idx
+    while w < 0 { w = w + n }
+    while w >= n { w = w - n }
+    return w
+}
+
+// ── stage the cell's Miller grid (call once per cell before the screening loop) ──
+//   gvecs : flat cartesian G (length 3n) — the qpw_gvectors basis.
+//   b1,b2,b3 : reciprocal basis (each 3 floats) — physical |G|².
+//   fxc   : uniform-gas f_xc[ρ̄] local kernel coefficient (0 → Hartree-only).
+//   Returns true on success (grid sized + Miller recovered), false on malformed.
+pub fn qpwfft_stage(gvecs: [float], b1: [float], b2: [float], b3: [float],
+                    fxc: float) -> bool {
+    let n = len(gvecs) / 3
+    if n < 1 || len(b1) != 3 || len(b2) != 3 || len(b3) != 3 {
+        PWFFT_ON = false
+        return false
+    }
+    let mut hh: [int] = [] ; let mut kk: [int] = [] ; let mut ll: [int] = []
+    let mut hmax = 0 ; let mut kmax = 0 ; let mut lmax = 0
+    let mut i = 0
+    while i < n {
+        let m = qpwfft_miller(gvecs[i * 3], gvecs[i * 3 + 1], gvecs[i * 3 + 2], b1, b2, b3)
+        let h = m[0] ; let k = m[1] ; let l = m[2]
+        hh.push(h) ; kk.push(k) ; ll.push(l)
+        let ah = if h < 0 { -h } else { h }
+        let ak = if k < 0 { -k } else { k }
+        let al = if l < 0 { -l } else { l }
+        if ah > hmax { hmax = ah }
+        if ak > kmax { kmax = ak }
+        if al > lmax { lmax = al }
+        i = i + 1
+    }
+    // grid must hold the full signed range [−max,+max] AND the Δρ=ψ·Δψ product whose
+    // spectrum doubles the band limit → size for 2·max+1 to avoid product aliasing,
+    // then pad each axis to the next power of two.
+    let nx = qpwfft_next_pow2(4 * hmax + 1)
+    let ny = qpwfft_next_pow2(4 * kmax + 1)
+    let nz = qpwfft_next_pow2(4 * lmax + 1)
+    // precompute the grid linear index of each coefficient (row-major (ix·Ny+iy)·Nz+iz).
+    let mut lin: [int] = []
+    i = 0
+    while i < n {
+        let ix = _qpwfft_wrap(hh[i], nx)
+        let iy = _qpwfft_wrap(kk[i], ny)
+        let iz = _qpwfft_wrap(ll[i], nz)
+        lin.push((ix * ny + iy) * nz + iz)
+        i = i + 1
+    }
+    PWFFT_N = n ; PWFFT_HH = hh ; PWFFT_KK = kk ; PWFFT_LL = ll
+    PWFFT_NX = nx ; PWFFT_NY = ny ; PWFFT_NZ = nz
+    PWFFT_B1 = b1 ; PWFFT_B2 = b2 ; PWFFT_B3 = b3
+    PWFFT_FXC = fxc ; PWFFT_LIN = lin
+    PWFFT_ON = true
+    return true
+}
+
+pub fn qpwfft_is_on() -> bool { return PWFFT_ON }
+pub fn qpwfft_grid_dims() -> [int] { return [PWFFT_NX, PWFFT_NY, PWFFT_NZ] }
+
+// ── scatter a PW-coefficient vector c (length n) onto the (Nx,Ny,Nz) reciprocal
+//    grid as a split complex field [re(Ntot), im(Ntot)] (coefficients are REAL → im=0).
+fn _qpwfft_scatter(c: [float]) -> [float] {
+    let ntot = PWFFT_NX * PWFFT_NY * PWFFT_NZ
+    let mut re: [float] = []
+    let mut p = 0
+    while p < ntot { re.push(0.0) ; p = p + 1 }
+    let mut i = 0
+    while i < PWFFT_N { re[PWFFT_LIN[i]] = re[PWFFT_LIN[i]] + c[i] ; i = i + 1 }
+    return re
+}
+
+// ── inverse-FFT a scattered reciprocal field → real-space field (real part, length Ntot)
+fn _qpwfft_to_real(re_grid: [float]) -> [float] {
+    let ntot = PWFFT_NX * PWFFT_NY * PWFFT_NZ
+    let mut im: [float] = []
+    let mut p = 0
+    while p < ntot { im.push(0.0) ; p = p + 1 }
+    let inter = ifft3(re_grid, im, PWFFT_NX, PWFFT_NY, PWFFT_NZ)
+    if len(inter) != 2 * ntot { return [] }
+    let mut out: [float] = []
+    p = 0
+    while p < ntot { out.push(inter[p * 2]) ; p = p + 1 }   // real part
+    return out
+}
+
+// ── THE KERNEL: genuine real-space FFT-Poisson screening correction ──────────────
+//   psis : ground-state ψ_n PW-coefficient columns (nb × n, the converged manifold).
+//   dpsi : 1st-order Δψ_n PW-coefficient columns (nb × n, from Sternheimer).
+//   Returns ΔV_scr(G_i) on the PW basis (length n) — the (V_H+f_xc)[Δρ] screening
+//   correction, computed by the REAL convolution. [] on malformed / grid off.
+pub fn qpwfft_dvscr_from_dpsi(psis: [[float]], dpsi: [[float]]) -> [float] {
+    if !PWFFT_ON { return [] }
+    let nb = len(psis)
+    if nb < 1 || len(dpsi) != nb { return [] }
+    let n = PWFFT_N
+    let ntot = PWFFT_NX * PWFFT_NY * PWFFT_NZ
+    // ⑤ accumulate Δρ(r) = Σ_n 2·ψ_n(r)·Δψ_n(r) on the real-space cube.
+    let mut drho_r: [float] = []
+    let mut p = 0
+    while p < ntot { drho_r.push(0.0) ; p = p + 1 }
+    let mut nbnd = 0
+    while nbnd < nb {
+        if len(psis[nbnd]) != n || len(dpsi[nbnd]) != n { return [] }
+        let psi_r = _qpwfft_to_real(_qpwfft_scatter(psis[nbnd]))
+        let dps_r = _qpwfft_to_real(_qpwfft_scatter(dpsi[nbnd]))
+        if len(psi_r) != ntot || len(dps_r) != ntot { return [] }
+        let mut r = 0
+        while r < ntot { drho_r[r] = drho_r[r] + 2.0 * psi_r[r] * dps_r[r] ; r = r + 1 }
+        nbnd = nbnd + 1
+    }
+    // ⑥ forward-FFT Δρ(r) → Δρ̂(G); apply Poisson V_H(G)=4π Δρ̂(G)/|G|² (G=0→0).
+    let mut zim: [float] = []
+    p = 0
+    while p < ntot { zim.push(0.0) ; p = p + 1 }
+    let spec = fft3(drho_r, zim, PWFFT_NX, PWFFT_NY, PWFFT_NZ)
+    if len(spec) != 2 * ntot { return [] }
+    let mut vh_re: [float] = [] ; let mut vh_im: [float] = []
+    let mut ix = 0
+    while ix < PWFFT_NX {
+        let mut iy = 0
+        while iy < PWFFT_NY {
+            let mut iz = 0
+            while iz < PWFFT_NZ {
+                let h = _qpwfft_freq(ix, PWFFT_NX)
+                let k = _qpwfft_freq(iy, PWFFT_NY)
+                let l = _qpwfft_freq(iz, PWFFT_NZ)
+                let gx = to_float(h) * PWFFT_B1[0] + to_float(k) * PWFFT_B2[0] + to_float(l) * PWFFT_B3[0]
+                let gy = to_float(h) * PWFFT_B1[1] + to_float(k) * PWFFT_B2[1] + to_float(l) * PWFFT_B3[1]
+                let gz = to_float(h) * PWFFT_B1[2] + to_float(k) * PWFFT_B2[2] + to_float(l) * PWFFT_B3[2]
+                let g2 = gx * gx + gy * gy + gz * gz
+                let lin = (ix * PWFFT_NY + iy) * PWFFT_NZ + iz
+                if g2 < 1.0e-12 {
+                    vh_re.push(0.0) ; vh_im.push(0.0)            // G=0 gauge
+                } else {
+                    let f = PWFFT_4PI / g2
+                    vh_re.push(f * spec[lin * 2]) ; vh_im.push(f * spec[lin * 2 + 1])
+                }
+                iz = iz + 1
+            }
+            iy = iy + 1
+        }
+        ix = ix + 1
+    }
+    // inverse-FFT V_H(G) → V_H(r) (real part), then add the local LDA f_xc[ρ̄]·Δρ(r).
+    let vh_back = ifft3(vh_re, vh_im, PWFFT_NX, PWFFT_NY, PWFFT_NZ)
+    if len(vh_back) != 2 * ntot { return [] }
+    let mut dvscr_r: [float] = []
+    p = 0
+    while p < ntot { dvscr_r.push(vh_back[p * 2] + PWFFT_FXC * drho_r[p]) ; p = p + 1 }
+    // ⑦ forward-FFT ΔV_scr(r) → ΔV_scr(G); GATHER onto the PW coefficients.
+    let mut zim2: [float] = []
+    p = 0
+    while p < ntot { zim2.push(0.0) ; p = p + 1 }
+    let vspec = fft3(dvscr_r, zim2, PWFFT_NX, PWFFT_NY, PWFFT_NZ)
+    if len(vspec) != 2 * ntot { return [] }
+    let inv_ntot = 1.0 / to_float(ntot)
+    let mut out: [float] = []
+    let mut i = 0
+    while i < n {
+        // ΔV_scr(G_i) = spectrum at the coefficient's grid line; fft3 is UNnormalized
+        // forward (Σ, no 1/N), so the coefficient amplitude is the spectrum ÷ Ntot
+        // (matching the scatter→ifft round-trip normalization). Real part is physical.
+        out.push(vspec[PWFFT_LIN[i] * 2] * inv_ntot)
+        i = i + 1
+    }
+    return out
+}
+
+// ── signed FFT frequency index: 0..N/2 = +, N/2<..<N = (k−N) ─────────────────────
+fn _qpwfft_freq(k: int, n: int) -> int {
+    if k > n / 2 { return k - n }
+    return k
+}

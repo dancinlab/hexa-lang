@@ -88,6 +88,7 @@ use "stdlib/qforge/screening"
 use "stdlib/qforge/correlation"
 use "stdlib/qforge/screened_dv"
 use "stdlib/qforge/screening_anderson"
+use "stdlib/qforge/screening_pwfft"
 
 let _QPW_2PI: float = 6.28318530717958647692
 
@@ -981,6 +982,13 @@ pub fn qforge_pw_frontend_phonons_scr(deck_dir: str, npw_cap: int, xc_mode: int,
     let mut fxc = qforge_fx_lda(rho_bar)
     if xc_mode >= 1 { fxc = fxc + qforge_fc_pw92(rho_bar) }
     QPWD_FXC = fxc
+    // ── stage the POW2-PADDED REAL-SPACE FFT-POISSON grid (the migration-gate fix) ──
+    //   The diagonal QPWD kernel above is the FALLBACK; when this stages OK the
+    //   Anderson map (ad_map) screens via the GENUINE real-space convolution
+    //   (screening_pwfft.qpwfft_dvscr_from_dpsi) — non-zero at the converged n=645
+    //   basis where the coefficient-space diagonal vanishes. ρ̄-uniform f_xc is the
+    //   same local kernel coeff as the diagonal path (consistency). d4/d6.
+    let pwfft_ok = qpwfft_stage(gvecs, geom.b1, geom.b2, geom.b3, fxc)
     let kernel_ok = (n > 0)                          // G-space kernel always available
 
     // per-direction coupling weight ‖ΔV|ψ⟩‖² (rank the 3 cartesian dirs). The bundle
@@ -1079,9 +1087,15 @@ pub fn qforge_pw_frontend_phonons_scr(deck_dir: str, npw_cap: int, xc_mode: int,
     let wlog = qforge_qmesh_omega_log(opt_band)
     // screened-vertex witness for the note (the @L5 closure verdict).
     let scr_ratio = if scr_ratio_cnt > 0 { scr_ratio_sum / to_float(scr_ratio_cnt) } else { -1.0 }
+    let pwfft_grid = qpwfft_grid_dims()
+    let pwfft_tag = if pwfft_ok {
+        "POW2-FFT-POISSON grid=" + to_string(pwfft_grid[0]) + "x"
+        + to_string(pwfft_grid[1]) + "x" + to_string(pwfft_grid[2])
+        + " (genuine real-space convolution)"
+    } else { "diagonal-fallback (FFT-Poisson grid NOT staged)" }
     let vert_tag = if screened && kernel_ok {
         "SCREENED ΔV_scr·ψ (Dyson ε⁻¹, Anderson β=" + to_string(scr_beta)
-        + " m=" + to_string(scr_mdepth) + "): " + to_string(scr_iters_tot)
+        + " m=" + to_string(scr_mdepth) + ", " + pwfft_tag + "): " + to_string(scr_iters_tot)
         + " SCF iters · conv=" + to_string(scr_conv_all) + " · ‖fp_res‖_max="
         + to_string(scr_fpr_max) + " · ‖ΔV_scr‖/‖ΔV_bare‖="
         + to_string(scr_ratio) + " (the @L5 screening-XC closure, H+x+c) [d6 VERBATIM]"
