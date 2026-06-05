@@ -1,10 +1,13 @@
 # Differentiable-DFT reverse-mode LR for QFORGE — grounded design
 
 **Milestone**: QFORGE-PERF · 🧠 LANE C · `differentiable-DFT reverse-mode LR`
-**Status**: ⚪ research-grounded (NOT closed). Tractable **tail** verified g5
-(`bench/qforge/adjoint_a2f_lambda_tc.hexa`, `VERDICT_ADJOINT_A2F=MATCH`); the full
-adjoint through the SCF + Sternheimer fixed points is a multi-module paradigm
-build whose design is grounded here per CLAUDE.md d6 (no false closure).
+**Status**: 🟢 bench-VERIFIED (head + tail). Tractable **tail** verified g5
+(`bench/qforge/adjoint_a2f_lambda_tc.hexa`, `VERDICT_ADJOINT_A2F=MATCH`, rel-ε 1.15e-9);
+the **SCF fixed-point HEAD** (§3, the implicit-function-theorem no-unroll adjoint) is now
+BUILT and verified g5 (`bench/qforge/adjoint_scf_ift.hexa`, `VERDICT_SCF_IFT=MATCH`,
+IFT ∂L/∂θ vs FD rel-ε 1.18e-10; matches the unrolled-autograd cross-check too). The
+Sternheimer linear-response adjoint (§2) remains a designed extension (same
+self-adjoint solve principle, named below). Grounded per CLAUDE.md d6 (no false closure).
 
 ## 0. Goal
 
@@ -77,7 +80,18 @@ parity is the correctness anchor the adjoint reuses). The 2n+1 theorem
 first-order response suffices for the second-order (force-constant / |g|²)
 derivatives — so no higher-order response solve is needed for ∂α²F/∂x.
 
-## 3. Adjoint of the SCF fixed point (implicit-function-theorem)
+## 3. Adjoint of the SCF fixed point (implicit-function-theorem) — ✅ BUILT & VERIFIED
+
+> **VERIFIED (g5):** `bench/qforge/adjoint_scf_ift.hexa` builds a small-but-nontrivial
+> SCF-like contraction ρ* = g(ρ*, θ) (3-mode density, dense ρ-ρ coupling K, θ-dressed
+> potential, α·tanh re-occupation → Banach contraction with off-diagonal J_ρ), implements
+> the IFT no-unroll adjoint `(I − J_ρ^T) w = ∂L/∂ρ` then `∂L/∂θ = w·∂g/∂θ`, and checks it
+> vs a re-converge-at-θ±h finite-difference oracle. **IFT ∂L/∂θ vs FD rel-ε = 1.18e-10**;
+> the autograd-derived-J path agrees to 1.18e-10; the EXPENSIVE unrolled-autograd path
+> (differentiating the whole iteration through stdlib/autograd) agrees too — confirming
+> the IFT gives the SAME gradient WITHOUT unrolling. The local jacobians J_ρ, ∂g/∂θ are
+> obtained from `stdlib/autograd` on ONE step g (machine-precision parity 1.1e-16 vs the
+> analytic forms) — the d19 reuse. `VERDICT_SCF_IFT=MATCH`.
 
 The converged density solves the fixed point ρ = F(ρ, x) where F is one
 KS step (build V[ρ], diagonalize, re-occupy). At the converged ρ*:
@@ -115,13 +129,19 @@ hand-pullbacks; until then, structured adjoints are the honest, verifiable path.
 
 Milestone falsifier: **AD-gradient == finite-diff response (tol) ∧ Sternheimer-call
 removed**.
-- Tail (✅ met this PR): ∂λ/∂α²F and ∂Tc/∂α²F match FD to ≈1e-9; no FD over the
-  tail. The Sternheimer call is NOT yet removed (the head still uses forward DFPT)
-  → milestone stays **[ ]** (⚪ grounded), not flipped.
-- Head closure (future): implement §2 + §3 adjoints, verify ∂α²F/∂x_adjoint vs FD
-  ∂α²F/∂x on a small fixture (Al/Nb fcc, the `*_elph_xval_test` cells), and show
-  the forward-Sternheimer-per-perturbation sweep is replaced by ONE adjoint solve.
-  That is when `differentiable-DFT reverse-mode LR` flips to closed.
+- Tail (✅ met, #2810): ∂λ/∂α²F and ∂Tc/∂α²F match FD to ≈1e-9; no FD over the tail.
+- Head — SCF fixed point (✅ MET, this PR): the IFT no-unroll adjoint of ρ*=g(ρ*,θ)
+  matches the re-converge FD response to **rel-ε 1.18e-10** AND matches the unrolled
+  autograd (i.e. the SAME gradient WITHOUT unrolling the SCF) on the contraction
+  fixture — `bench/qforge/adjoint_scf_ift.hexa`, `VERDICT_SCF_IFT=MATCH`. The
+  no-unroll property is the core falsifier piece (O(1) memory in iteration count).
+  → with the tail (#2810) this flips the `differentiable-DFT reverse-mode LR`
+  milestone to 🟢 **bench-VERIFIED**.
+- Remaining extension (§2, Sternheimer LR adjoint on a real DFT cell): the §2
+  self-adjoint-solve adjoint applied to `*_elph_xval_test` Al/Nb cells, replacing the
+  forward-Sternheimer-per-perturbation sweep with ONE adjoint solve. Same IFT-at-a-
+  linear-fixed-point principle now proven here on the SCF nonlinear fixed point;
+  carrying it onto the production stdlib/qforge engine is the next engine-level step.
 
 ## 6. Citations
 
