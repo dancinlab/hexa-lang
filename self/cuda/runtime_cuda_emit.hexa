@@ -343,6 +343,17 @@ fn emit_runtime_cuda_c() -> str {
             "        e->dirty_dev = 0;\n" +
             "        return 0; /* SKIP cudaMemcpy HostToDevice */\n" +
             "    }\n" +
+            "    /* HEXA-FUSION N2 RACEFIX (F-FUSION-N1N2-DETERMINISM): when async\n" +
+            "     * is ON the glue kernels run on the non-blocking g_forge_stream and\n" +
+            "     * are NOT host-synced per launch. The cudaFree/cudaMalloc/cudaMemcpy\n" +
+            "     * H2D below mutate device memory on the DEFAULT stream, which a\n" +
+            "     * cudaStreamNonBlocking stream does NOT order against — so this H2D\n" +
+            "     * could free/overwrite a buffer a still-queued forge-stream kernel is\n" +
+            "     * reading/writing -> the measured ~4.6e-2 run-to-run jitter (N1 proved\n" +
+            "     * every glue kernel is deterministic in ISOLATION; the race is here on\n" +
+            "     * the _h2d path, async-OFF is bit-reproducible). _d2h already drains;\n" +
+            "     * mirror it. No-op when async is off => byte-identical legacy path. */\n" +
+            "    if (_forge_sync() != 0) return -1;\n" +
             "    if (!s->d_buf || s->len != e->len) {\n" +
             "        if (s->d_buf) cudaFree(s->d_buf);\n" +
             "        cudaError_t er = cudaMalloc((void**)&s->d_buf,\n" +
