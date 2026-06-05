@@ -802,6 +802,154 @@ __global__ void _hx_k_sgemm_cm_wmma2(int tA, int tB, long long M, long long N, l
     }
 }
 // ═════════════════════════════════════════════════════════════════════
+// HEXA-FUSION SM90 WARP-TILE RETUNE (env HEXA_OWN_GEMM_WMMA2_RR) — a
+// REGISTER-REDUCED variant of _hx_k_sgemm_cm_wmma2. FINDING #2798: on native
+// sm_90 (H100) the WMMA2 kernel launches + is numerically correct (rel-RMS
+// 4.8e-6) but parity is NOT restored — 11.5 vs cuBLAS 339 TFLOP/s (29.5× off)
+// because the kernel compiles to ~236 regs/thread → only ~1 block/SM fits
+// (occupancy/register-bound, the H100 SMs stay under-filled).
+//
+// FIX AXIS = cut register pressure so ≥2 blocks/SM fit. TWO levers, both
+// math-identical to the parent kernel (same TF32 round, same fk=0..3 in-order
+// accumulation per (fm,fn) accumulator, same dynamic-shared staging/epilogue):
+//
+//   (A) __launch_bounds__(256, HXG_RR_MINBLK): tells nvcc to size the register
+//       allocation so HXG_RR_MINBLK blocks (default 2) co-reside per SM. On
+//       sm_90 the max is 65536 regs/SM, so 2 blocks × 256 thr ⇒ ≤128 regs/thr.
+//   (B) STREAM the input fragments: the parent holds all HXG_FM·HXG_FK (=8)
+//       a_frag + HXG_FK·HXG_FN (=8) b_frag live at once (16 input frags). Here
+//       only the CURRENT fk slice's a_frag[HXG_FM] + b_frag[HXG_FN] (=4 frags)
+//       are live — load+round+mma per fk inside the K loop, then reuse. Cuts
+//       live input-fragment registers ~4×. The accumulators (HXG_FM·HXG_FN=4
+//       frags) stay live across all K, exactly as the parent.
+//
+// HONEST: this trades single-block ILP/throughput for occupancy. It may NOT
+// fully restore parity (a cuBLAS-class TC pipeline does deeper staging). The
+// verdict reports the REAL register-before→after, blocks/SM, own GFLOP/s, the
+// ratio vs cuBLAS, and the % of the 29.5× gap closed — no superiority claim.
+// Default OFF ⇒ the parent path stays byte-identical. HXG_RR_MINBLK overridable
+// at compile time (-DHXG_RR_MINBLK=N) for on-pod occupancy tuning.
+// ═════════════════════════════════════════════════════════════════════
+#ifndef HXG_RR_MINBLK
+#define HXG_RR_MINBLK 2
+#endif
+__global__ void __launch_bounds__(256, HXG_RR_MINBLK)
+_hx_k_sgemm_cm_wmma2_rr(int tA, int tB, long long M, long long N, long long K,
+                        float alpha, const float* A, long long lda,
+                        const float* B, long long ldb,
+                        float beta, float* C, long long ldc) {
+    const long long blockRow = (long long)blockIdx.x * HXG_BM;
+    const long long blockCol = (long long)blockIdx.y * HXG_BN;
+    const int tid  = threadIdx.x;
+    const int warp = tid >> 5;
+    const int lane = tid & 31;
+    const int warpRow = warp / HXG_WCOLS;
+    const int warpCol = warp % HXG_WCOLS;
+
+    // SAME dynamic-shared layout/offsets as _hx_k_sgemm_cm_wmma2 (byte-eq math).
+    extern __shared__ float hxg_smem[];
+    float (*As)[HXG_BM * HXG_BK] = reinterpret_cast<float(*)[HXG_BM * HXG_BK]>(hxg_smem);
+    float (*Bs)[HXG_BK * HXG_BN] = reinterpret_cast<float(*)[HXG_BK * HXG_BN]>(hxg_smem + 2 * HXG_BM * HXG_BK);
+
+    nvcuda::wmma::fragment<nvcuda::wmma::accumulator,16,16,8,float> acc[HXG_FM][HXG_FN];
+    #pragma unroll
+    for (int fm=0; fm<HXG_FM; fm++)
+        #pragma unroll
+        for (int fn=0; fn<HXG_FN; fn++)
+            nvcuda::wmma::fill_fragment(acc[fm][fn], 0.0f);
+
+    auto stageA = [&](int buf, long long kk0){
+        #pragma unroll
+        for (int e=0; e<(HXG_BM*HXG_BK)/256; e++) {
+            int idx = e*256 + tid;
+            int i = idx / HXG_BK;
+            int l = idx % HXG_BK;
+            long long r = blockRow + i, kk = kk0 + l;
+            int pred = (r < M && kk < K);
+            const float* sp = pred ? (tA ? &A[kk + r*lda] : &A[r + kk*lda]) : (const float*)0;
+            hxg_cp4(&As[buf][idx], sp, pred);
+        }
+    };
+    auto stageB = [&](int buf, long long kk0){
+        #pragma unroll
+        for (int e=0; e<(HXG_BK*HXG_BN)/256; e++) {
+            int idx = e*256 + tid;
+            int l = idx / HXG_BN;
+            int j = idx % HXG_BN;
+            long long kk = kk0 + l, c = blockCol + j;
+            int pred = (kk < K && c < N);
+            const float* sp = pred ? (tB ? &B[c + kk*ldb] : &B[kk + c*ldb]) : (const float*)0;
+            hxg_cp4(&Bs[buf][idx], sp, pred);
+        }
+    };
+
+    int buf = 0;
+    stageA(buf, 0); stageB(buf, 0); hxg_cp_commit(); hxg_cp_wait();
+    __syncthreads();
+
+    for (long long k0 = 0; k0 < K; k0 += HXG_BK) {
+        long long kNext = k0 + HXG_BK;
+        int nbuf = buf ^ 1;
+        if (kNext < K) { stageA(nbuf, kNext); stageB(nbuf, kNext); hxg_cp_commit(); }
+
+        // STREAMED input fragments: only the current fk slice is live (HXG_FM
+        // a_frag + HXG_FN b_frag), load+round+mma per fk. Accumulation over
+        // fk=0..HXG_FK-1 in order ⇒ identical math to the parent's batched form.
+        #pragma unroll
+        for (int fk=0; fk<HXG_FK; fk++) {
+            nvcuda::wmma::fragment<nvcuda::wmma::matrix_a,16,16,8,nvcuda::wmma::precision::tf32,nvcuda::wmma::row_major> a_frag[HXG_FM];
+            nvcuda::wmma::fragment<nvcuda::wmma::matrix_b,16,16,8,nvcuda::wmma::precision::tf32,nvcuda::wmma::row_major> b_frag[HXG_FN];
+            #pragma unroll
+            for (int fm=0; fm<HXG_FM; fm++) {
+                int srow = warpRow*HXG_WM + fm*16;
+                int scol = fk*8;
+                nvcuda::wmma::load_matrix_sync(a_frag[fm], &As[buf][srow*HXG_BK + scol], HXG_BK);
+                #pragma unroll
+                for (int t=0; t<a_frag[fm].num_elements; t++)
+                    a_frag[fm].x[t] = nvcuda::wmma::__float_to_tf32(a_frag[fm].x[t]);
+            }
+            #pragma unroll
+            for (int fn=0; fn<HXG_FN; fn++) {
+                int srow = fk*8;
+                int scol = warpCol*HXG_WN + fn*16;
+                nvcuda::wmma::load_matrix_sync(b_frag[fn], &Bs[buf][srow*HXG_BN + scol], HXG_BN);
+                #pragma unroll
+                for (int t=0; t<b_frag[fn].num_elements; t++)
+                    b_frag[fn].x[t] = nvcuda::wmma::__float_to_tf32(b_frag[fn].x[t]);
+            }
+            #pragma unroll
+            for (int fm=0; fm<HXG_FM; fm++)
+                #pragma unroll
+                for (int fn=0; fn<HXG_FN; fn++)
+                    nvcuda::wmma::mma_sync(acc[fm][fn], a_frag[fm], b_frag[fn], acc[fm][fn]);
+        }
+
+        if (kNext < K) { hxg_cp_wait(); __syncthreads(); buf = nbuf; }
+    }
+
+    float (*tmp)[16*16] = reinterpret_cast<float(*)[16*16]>(
+        hxg_smem + 2 * HXG_BM * HXG_BK + 2 * HXG_BK * HXG_BN);
+    #pragma unroll
+    for (int fm=0; fm<HXG_FM; fm++) {
+        #pragma unroll
+        for (int fn=0; fn<HXG_FN; fn++) {
+            nvcuda::wmma::store_matrix_sync(tmp[warp], acc[fm][fn], 16, nvcuda::wmma::mem_row_major);
+            __syncwarp();
+            int rowBase = (int)(blockRow) + warpRow*HXG_WM + fm*16;
+            int colBase = (int)(blockCol) + warpCol*HXG_WN + fn*16;
+            for (int e=lane; e<256; e+=32) {
+                int i = e >> 4, j = e & 15;
+                long long r = rowBase + i, c = colBase + j;
+                if (r < M && c < N) {
+                    float prev = (beta != 0.0f) ? C[r + c*ldc] : 0.0f;
+                    C[r + c*ldc] = alpha * tmp[warp][e] + beta * prev;
+                }
+            }
+            __syncwarp();
+        }
+    }
+}
+// ═════════════════════════════════════════════════════════════════════
 // SPLIT-K skinny own-GEMM (env HEXA_OWN_GEMM_SPLITK). The thru-parity tune
 // left a NAMED residual: the worst 2 skinny R=16 LoRA GEMMs are
 //   dA: out (4096,16)  K=8192  (tiny N=16, huge K)
@@ -1254,14 +1402,36 @@ int _hx_own_sgemm_cm_launch(int tA, int tB, int m, int n, int k,
                                              alpha, A,(long long)lda, B,(long long)ldb,
                                              C,(long long)ldc, G);
     } else if (want_wmma2 && !(skinny && !noshape)) {
-        static int w2fired = 0; if (!w2fired){w2fired=1; fprintf(stderr,"[OWN-SGEMM-WMMA2-FIRED] _hx_k_sgemm_cm_wmma2 (CUTLASS-grade TF32: 128x64 block, 8-warp, 2x2 warp-tile, double-buffered cp.async)\n");}
+        // SM90 WARP-TILE RETUNE (env HEXA_OWN_GEMM_WMMA2_RR): route the big
+        // square-tile path to the register-reduced kernel (__launch_bounds__ +
+        // streamed input frags) so ≥2 blocks/SM fit on native sm_90. Same
+        // dynamic-shared opt-in + same math contract; default OFF = parent path.
+        int want_rr = (getenv("HEXA_OWN_GEMM_WMMA2_RR") && getenv("HEXA_OWN_GEMM_WMMA2_RR")[0]);
         // sm_90 DYNAMIC-SHARED OPT-IN (PR #2796 fix): the 57344 B staging exceeds
         // the 49152 B per-block STATIC cap on Hopper, so the WMMA2 kernel uses
         // EXTERN (dynamic) shared and must opt into the larger dynamic pool ONCE
         // before the first launch. Without this the launch fails with
         // cudaErrorInvalidValue on native sm_90 (it succeeded on Blackwell sm_120
         // only because its bigger static admit absorbed the old static tally).
-        static int w2attr = 0;
+        static int w2attr = 0, rrattr = 0;
+        if (want_rr) {
+            if (!rrattr) {
+                rrattr = 1;
+                cudaError_t ae = cudaFuncSetAttribute(_hx_k_sgemm_cm_wmma2_rr,
+                    cudaFuncAttributeMaxDynamicSharedMemorySize, HXG_SMEM_BYTES);
+                if (ae != cudaSuccess)
+                    fprintf(stderr, "[OWN-SGEMM-WMMA2-RR] cudaFuncSetAttribute(maxDynSmem=%d) -> %s\n",
+                            HXG_SMEM_BYTES, cudaGetErrorString(ae));
+            }
+            static int rrfired = 0; if (!rrfired){rrfired=1; fprintf(stderr,"[OWN-SGEMM-WMMA2-RR-FIRED] _hx_k_sgemm_cm_wmma2_rr (register-reduced: __launch_bounds__(256,%d) + streamed input frags, ≥2 blk/SM target)\n", HXG_RR_MINBLK);}
+            dim3 rrblk(256);
+            dim3 rrgrd((unsigned)((m + HXG_BM - 1)/HXG_BM), (unsigned)((n + HXG_BN - 1)/HXG_BN));
+            _hx_k_sgemm_cm_wmma2_rr<<<rrgrd,rrblk,HXG_SMEM_BYTES>>>(tA,tB,
+                                                  (long long)m,(long long)n,(long long)k,
+                                                  alpha, A,(long long)lda, B,(long long)ldb,
+                                                  beta, C,(long long)ldc);
+        } else {
+        static int w2fired = 0; if (!w2fired){w2fired=1; fprintf(stderr,"[OWN-SGEMM-WMMA2-FIRED] _hx_k_sgemm_cm_wmma2 (CUTLASS-grade TF32: 128x64 block, 8-warp, 2x2 warp-tile, double-buffered cp.async)\n");}
         if (!w2attr) {
             w2attr = 1;
             cudaError_t ae = cudaFuncSetAttribute(_hx_k_sgemm_cm_wmma2,
@@ -1276,6 +1446,7 @@ int _hx_own_sgemm_cm_launch(int tA, int tB, int m, int n, int k,
                                               (long long)m,(long long)n,(long long)k,
                                               alpha, A,(long long)lda, B,(long long)ldb,
                                               beta, C,(long long)ldc);
+        }
     } else if (want_wmma2 && skinny && !noshape) {
         // Skinny LoRA GEMM under WMMA2 mode: use a right-sized small-grid kernel
         // (no wasted 128×64 tile). Default = the 16×16 shared-mem tiled kernel —
