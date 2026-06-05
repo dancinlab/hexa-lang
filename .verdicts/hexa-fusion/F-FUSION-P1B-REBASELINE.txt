@@ -1,0 +1,168 @@
+F-FUSION-P1B-REBASELINE — the byte-eq RE-BASELINE: assert the megakernel own-GEMM's
+max|Δ| against the OWN-GEMM-EAGER reference (HEXA_OWN_GEMM), NOT cublasDgemm. Industry-
+confirmed path (.discoveries/hexa-fusion-p1b-reduction-order.tape): bit-matching cuBLAS is
+the WRONG target; make our deterministic own-GEMM the SSOT oracle and ask whether a
+megakernel-resident own-GEMM reaches max|Δ|=0 vs that re-baselined reference while lifting util.
+domain: HEXA-FUSION · date: 2026-06-05 · branch qforge-feature-telemetry-emit (off main #2772)
+method: real clm_prod step A/B on a rented datacenter-Blackwell pod. BOTH arms use the SAME
+        FP64 naive-sequential-k own-GEMM (#2697). A = own-GEMM EAGER (HEXA_OWN_GEMM=1),
+        B = own-GEMM MEGAKERNEL (HEXA_CLM_MEGASTEP=1 HEXA_CLM_MEGASTEP_FP64=1). max|Δ| on the
+        17-digit [B6-CE-HIPREC] CE, own-mega vs own-eager. Stages P1B-d → P1B-c1.
+
+════════════════════════════════════════════════════════════════════════════════
+BYTE-EQ FRAMING (g5 HARD GATE — STATED EXPLICITLY)
+════════════════════════════════════════════════════════════════════════════════
+The byte-eq gate here is max|Δ|=0 vs the OWN-GEMM-EAGER reference (HEXA_OWN_GEMM, the
+re-baselined deterministic own-GEMM SSOT), **NOT** cublasDgemm. cuBLAS is deliberately NOT
+the roofline — research (web + arXiv) confirmed no method bit-matches an arbitrary
+cublasDgemm and it is the wrong target; the re-baseline asserts the megakernel own-GEMM
+against the standalone own-GEMM-eager path, which uses the IDENTICAL naive-k summation order.
+
+════════════════════════════════════════════════════════════════════════════════
+PRE-REGISTERED FALSIFIER
+════════════════════════════════════════════════════════════════════════════════
+"A megakernel own-GEMM reaches max|Δ|=0 vs the own-GEMM-EAGER reference while lifting util."
+FALSIFIED if max|Δ| ≠ 0 own-mega vs own-eager after the re-baseline + the order-fix (P1B-c1).
+
+════════════════════════════════════════════════════════════════════════════════
+VERDICT: 🔴 CLOSED-NEGATIVE on the byte-eq leg (max|Δ| ≠ 0 vs own-eager, even after
+         re-baseline AND the P1B-c1 software-transcendental fix), 🟢 on the util leg
+         (own-mega lifts util above own-eager). The re-baseline did NOT give max|Δ|=0.
+         The residual is an IRREDUCIBLE host↔device transcendental: the megakernel's
+         device gelu uses CUDA `erf`, the eager reference's gelu uses host libm `erf`
+         (stdlib_trig_libm policy — no hand-rolled erf to port to the device), and the
+         two differ at the last ULP. This is NOT a GEMM reduction-order problem (both
+         arms use the identical naive-k own-GEMM) — the conv k-reduction order matches
+         exactly; it is a host-vs-device erf difference in the activation.
+
+════════════════════════════════════════════════════════════════════════════════
+POD / BUILD (g5-honest)
+════════════════════════════════════════════════════════════════════════════════
+GPU (HONEST): rented `hexa cloud rent vast --gpu H100` — vast served an NVIDIA B200
+  (183359 MiB, compute_cap 10.0 / sm_100, datacenter Blackwell, NOT literally an H100).
+  The task flagged vast mis-serving Blackwell; it happened again — recorded, not papered over.
+  First rent (39569562) was a runtime-only image (no nvcc/gcc) — destroyed, re-rented
+  39571743 with nvidia/cuda:12.4.1-devel-ubuntu22.04. Built -gencode arch=compute_90,
+  code=compute_90 (sm_90 PTX JIT-forwards to Blackwell). The byte-eq question is
+  algorithmic/arch-independent, so B200 is a valid substrate. nvcc 12.4 V12.4.131, gcc
+  11.4.0, glibc 2.35, Ubuntu 22.04. BOTH pods DESTROYED (39569562 + 39571743 → GONE,
+  confirmed; leak 0).
+BUILD: regenerated runtime_cuda.c from self/cuda/runtime_cuda_emit.hexa (SSOT). The local +
+  pool hexa toolchains (0.1.0-dispatch, Jun-1 / #2505-era) MISCOMPILE the emitter — they
+  silently DROP the megafwd string-concat block (0 FP64 symbols, truncated mid-file). The
+  emit body is PURE string concatenation (no control flow), so runtime_cuda.c was
+  reconstructed deterministically by extracting + unescaping every C string literal from the
+  emit source (Python extractor, validated: byte-reproduces the committed P1 runtime_cuda.c
+  EXACTLY except the known B6 FP64 megafwd delta — 82 lines added, 3 launcher lines swapped).
+  clm_prod.c = the kit megastep-wired build + a [B6-CE-HIPREC] %.17g first_ce/last_ce
+  fprintf injected after the CE reduction. Cooperative flags:
+    nvcc -x cu -DHEXA_CUDA -rdc=true -gencode arch=compute_90,code=compute_90 -O2 -c
+       runtime_cuda.c   (megafwd_fp64 device sym present, megafwd launcher present)
+    nvcc -dlink … -o runtime_cuda_dlink.o -lcudadevrt   (grid.sync needs rdc)
+    gcc … clm_prod.c self/runtime.c runtime_cuda.o runtime_cuda_dlink.o -lcudart -lcublas
+       -lcuda -lcudadevrt → clm_prod_gpu (P1B-d 2496464 B / P1B-c1 2500560 B). BUILD OK.
+
+════════════════════════════════════════════════════════════════════════════════
+STAGE 1 — P1B-d  (own-mega vs OWN-EAGER, no fix) — the decisive cheap test
+   clm_prod, D=1536 T=512 E=2 NSAMP=8 EPOCHS=4, DEVRESIDENT+DEVFEED+BATCHED, ASYNC=0.
+   raw FP64 CE at 17 sig digits ([B6-CE-HIPREC], stderr, VERBATIM):
+════════════════════════════════════════════════════════════════════════════════
+  A  own-GEMM EAGER  (HEXA_OWN_GEMM=1; OWN-GEMM-FIRED=2, MEGAFWD-FIRED=0):
+       [B6-CE-HIPREC] first_ce=4.4662394504526679 last_ce=3.646692309276176
+       util MEAN=9.03% PEAK=100% pct>=20=11.9% n=395 ; DESCENT=1
+  B  own-GEMM MEGAKERNEL (HEXA_CLM_MEGASTEP_FP64=1; MEGAFWD-FIRED=2, OWN-GEMM-FIRED=0):
+       [B6-CE-HIPREC] first_ce=4.466239450452667  last_ce=3.6466923092762875
+       util MEAN=10.65% PEAK=100% pct>=20=15.0% n=267 ; DESCENT=1
+  max|Δ first_ce| = |4.466239450452667 - 4.4662394504526679| = 8.882e-16   (≈ 2 ULP)  ≠ 0
+  max|Δ last_ce|  = |3.6466923092762875 - 3.646692309276176|  = 1.115e-13            ≠ 0
+  → P1B-d FALSIFIED: max|Δ| ≠ 0 even own-mega vs OWN-EAGER. The re-baseline did NOT make
+    it free. CRITICAL: delta present at EPOCH-1 first_ce (one forward pass) AND both arms use
+    the IDENTICAL naive-k own-GEMM → the divergence is NOT the GEMM k-order. Escalate to P1B-c1.
+
+════════════════════════════════════════════════════════════════════════════════
+ROOT-CAUSE ISOLATION (forward-pass divergence, both arms same own-GEMM)
+════════════════════════════════════════════════════════════════════════════════
+Audited every op the megakernel reproduces vs the eager full-fwd reference:
+  · conv (GEMM): IDENTICAL. eager conv1d_via_forge → im2col + _hx_k_gemm (naive seq-k);
+    megakernel _hx_dev_conv_fp64 (one thread/output, seq j=0..Kdim). Same operands, same
+    order, same FP64 accumulation → byte-eq by construction. NOT the divergence.
+  · MoE combine + softmax max-subtract: IDENTICAL element/reduction order (acc += probs·ex,
+    e=0..E sequential, base=t*E, n=T*D). NOT the divergence.
+  · groupnorm sqrt: eager device _hx_k_groupnorm uses _hx_gn_sqrt_dev (NR-40 software sqrt,
+    byte-identical to host gn_lib _gn_sqrt); the megakernel _hx_dev_groupnorm used the CUDA
+    INTRINSIC sqrt → ~1 ULP mismatch.  ← FIXED in P1B-c1
+  · softmax exp: eager device moe-router uses _hx_moe_exp_dev (scaled-Taylor, byte-identical
+    to host moe_lib _moe_exp); the megakernel used CUDA INTRINSIC exp → ~1 ULP mismatch.
+    ← FIXED in P1B-c1
+  · gelu erf: BOTH the eager device gelu (_hx_k_gelu) and the megakernel gelu (_hx_gelu_dev)
+    call CUDA `erf`. BUT in this run the eager arm runs gelu/groupnorm/moe glue ON HOST
+    (only OWN-GEMM-FIRED markers; no device-glue dispatch), so the eager reference gelu uses
+    HOST libm erf, while the megakernel uses CUDA device erf. There is NO host-faithful
+    software erf device helper (CLAUDE.md stdlib_trig_libm: erf is a libm builtin, no
+    hand-rolled Taylor) → IRREDUCIBLE host↔device erf gap. ← THE binding term.
+
+════════════════════════════════════════════════════════════════════════════════
+STAGE 2 — P1B-c1  (the order-fix: software transcendentals in the megakernel)
+   Edited self/cuda/runtime_cuda_emit.hexa (SSOT): _hx_dev_groupnorm sqrt → _hx_gn_sqrt_dev
+   (NR-40), megafwd softmax exp → _hx_moe_exp_dev (Taylor). Re-extract, rebuild, re-fire.
+════════════════════════════════════════════════════════════════════════════════
+  A  own-GEMM EAGER  : [B6-CE-HIPREC] first_ce=4.4662394504526679 last_ce=3.646692309276176
+       util MEAN=10.15% PEAK=100% pct>=20=13.6% n=405 ; DESCENT=1
+  B  own-GEMM MEGA   : [B6-CE-HIPREC] first_ce=4.466239450452667  last_ce=3.6466923092762613
+       util MEAN=14.19% PEAK=100% pct>=20=20.5% n=264 ; DESCENT=1 ; MEGAFWD-FIRED=2
+  max|Δ first_ce| = |4.466239450452667 - 4.4662394504526679| = 8.882e-16   (≈ 2 ULP)  ≠ 0
+  max|Δ last_ce|  = |3.6466923092762613 - 3.646692309276176|  = 8.527e-14            ≠ 0
+  → P1B-c1: first_ce max|Δ| UNCHANGED to all digits (8.882e-16) — the sqrt+exp fix did NOT
+    move the first-forward-pass delta. last_ce shrank 1.115e-13 → 8.527e-14 (training
+    compounding only). CONFIRMS: groupnorm-sqrt and softmax-exp were NOT the first_ce binding
+    term — the gelu host-libm-erf vs CUDA-device-erf gap is, and it is irreducible for a
+    megakernel-resident gelu (a __global__ kernel cannot call host libm).
+
+════════════════════════════════════════════════════════════════════════════════
+FINDING
+════════════════════════════════════════════════════════════════════════════════
+WHICH STAGE ACHIEVED max|Δ|=0: NONE. The re-baseline to own-GEMM-eager does NOT give
+  max|Δ|=0, at neither P1B-d (no fix) nor P1B-c1 (software-transcendental fix). Verbatim
+  first_ce max|Δ| = 8.882e-16 (≈2 ULP) at BOTH stages.
+
+THE RULED-OUT AXIS (the negative result): re-baselining the byte-eq reference from cuBLAS to
+  own-GEMM-eager does NOT make a megakernel-resident full-fwd byte-eq, because the binding
+  divergence is NOT the GEMM reduction order (which the re-baseline equalizes — both arms run
+  the identical naive-k own-GEMM, the conv k-order matches by construction) but a host↔device
+  TRANSCENDENTAL difference in the activation: host libm `erf` (the eager reference's gelu)
+  vs CUDA device `erf` (the megakernel's gelu). Two of the three transcendentals (groupnorm
+  sqrt, softmax exp) DO have host-faithful software device twins (NR-40 _hx_gn_sqrt_dev,
+  Taylor _hx_moe_exp_dev) and were matched in P1B-c1; the third, gelu's erf, does NOT
+  (CLAUDE.md stdlib_trig_libm forbids hand-rolled erf — host erf IS the hardware libm
+  builtin), so a megakernel gelu CANNOT bit-match a host-eager gelu. This deterministically
+  rules out "re-baseline to own-eager ⇒ free byte-eq megakernel": the wall is the same class
+  the discovery's web research flagged (NVIDIA-unspecified device transcendental rounding),
+  just relocated from the GEMM to the erf-activation. It is sharper than B6's cuBLAS result:
+  the delta shrank from FP64-last-bit-vs-cuBLAS to a SINGLE residual host/device erf ULP,
+  and we now know EXACTLY which op carries it.
+
+UTIL leg — 🟢 confirmed (the falsifier's util condition met): own-mega lifts util above
+  own-eager at BOTH stages. P1B-c1 (the byte-eq-best variant): own-eager 10.15% → own-mega
+  14.19% MEAN (+4.04pp), pct>=20 13.6% → 20.5% (+6.9pp), PEAK 100%, MEGAFWD-FIRED=2, CE
+  descends identically (DESCENT=1 both). P1B-d: 9.03% → 10.65% (+1.62pp). The cooperative
+  full-fwd megakernel raises occupancy whether or not byte-eq holds.
+
+Δ vs baseline: B6 (#2772) measured own-mega vs cuBLAS-eager (max|Δ| 1.8e-15, ruled out
+  "own-GEMM-in-megakernel = free byte-eq"). P1B re-baselines the reference to own-GEMM-eager
+  (the research-confirmed correct target) and tests the remaining hope — that own-vs-own is
+  trivially 0. The falsifier fires: own-mega vs own-eager is STILL ≠ 0 (8.882e-16 first_ce),
+  and P1B-c1 pins the cause to the irreducible host/device erf in gelu (NOT the GEMM). The
+  re-baseline closes the GEMM-reduction-order axis (conv k-order proven identical) but exposes
+  the deeper binding term. The byte-eq-PRESERVING util-lift remains CLOSED for a
+  megakernel-resident gelu; reaching max|Δ|=0 would require either (a) a host-faithful
+  software erf device kernel (against stdlib_trig_libm policy) OR (b) re-baselining the
+  reference ITSELF to a fully-device-resident own-GEMM forward (eager DEVRESIDENT glue ON
+  device, CUDA erf everywhere) so both sides share CUDA erf — a further re-baseline (P1B-a')
+  that would make the device gelu the oracle. The util lift (+4.04pp at the byte-eq-best
+  variant) is real and stands regardless.
+
+g5-HONEST: [MEGAFWD-FIRED] fp64 fired (verbatim, every B arm). [OWN-GEMM-FIRED] fired (every
+  A arm). REAL clm_prod step (D1536 T512), own-mega vs OWN-GEMM-EAGER (re-baselined reference,
+  NOT cuBLAS — stated). util by external nvidia-smi. max|Δ| on the raw FP64 CE at 17 digits.
+  NO byte-eq claim — the verbatim nonzero max|Δ| (8.882e-16) IS the result. GPU was a B200
+  (asked H100; vast served Blackwell — stated). Both pods destroyed, leak 0.
