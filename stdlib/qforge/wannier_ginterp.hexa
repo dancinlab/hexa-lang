@@ -1,0 +1,264 @@
+// HEXA Standard Library — qforge/wannier_ginterp
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// QFORGE L4.w — EPW-style Wannier interpolation of the electron-phonon matrix
+// elements |g(k,q)|. This is the field's single-largest el-ph speedup: instead
+// of running a DENSE per-q DFPT sweep (the O(N_q) cost that drove the 29-pod
+// teardown), it computes |g| on a SMALL COARSE q-mesh, Fourier-transforms it to
+// REAL SPACE g(R), and inverse-transforms g(R) to ANY DENSE q-point — exactly,
+// when g(R) is short-ranged enough to be contained in the coarse mesh's
+// Wigner-Seitz R-shell.
+//
+//   coarse N×N×N q-mesh  g(q_c)          (DFPT, the EXPENSIVE step — N_c small)
+//        │  ── forward DFT (this module) ──▶
+//        ▼
+//   real-space g(R)  on the coarse-mesh R-grid   (short-ranged ⇒ few R matter)
+//        │  ── inverse DFT to ANY q' (dense) ──▶
+//        ▼
+//   g(q')  on a DENSE mesh (NO new DFPT)   ──▶ qforge_metallic_lambda_mesh ──▶ λ
+//
+// ── The EPW method (Noffsinger / Giustino) ──────────────────────────────────
+//
+// @cite Noffsinger, Giustino, Malone, Park, Louie, Cohen 2010, Comput. Phys.
+//       Commun. 181, 2140 (arXiv:1005.4418) — "EPW: a program for calculating
+//       the electron-phonon coupling using maximally localized Wannier
+//       functions." §2: g is transformed to a Wannier/real-space representation
+//       g(R_e, R_p) on the COARSE el-ph (k,q) grids, then interpolated to dense
+//       grids by the inverse generalized Fourier transform. The interpolation is
+//       EXACT when the coarse grid is dense enough that g(R) has decayed to zero
+//       at the boundary of the Wigner-Seitz supercell of the coarse mesh.
+// @cite Giustino, Cohen, Louie 2007, PRB 76 165108 — the original Wannier
+//       interpolation of g via the el-ph vertex localization.
+// @cite Giustino 2017, RMP 89 015003, Eq. 78-82 — the el-ph Wannier-Fourier
+//       interpolation g_{mn,ν}(k,q) = Σ_{R_e,R_p} e^{i(k·R_e + q·R_p)} g(R_e,R_p).
+//
+// THE q-ONLY KERNEL (what this module implements). The full EPW double
+// (k,q)→(R_e,R_p) machinery interpolates BOTH the electron k and phonon q. The
+// q-mesh is the one that costs a DFPT run per point (k is free post-SCF), so the
+// dense-DFPT killer is the q-interpolation. We implement the q-axis Fourier pair
+// at fixed phonon branch / fixed (k, band) channel:
+//
+//   FORWARD (coarse q-mesh → real space):
+//       g(R) = (1/N_q) Σ_{q∈coarse}  g(q) · e^{ -i q·R }
+//   INVERSE (real space → any q'):
+//       g(q') =        Σ_{R∈WS}      g(R) · e^{ +i q'·R }
+//
+// with q, q', R in CRYSTAL (fractional) coordinates so q·R is a plain dot over
+// the integer R-lattice vectors of the coarse-mesh supercell. For a uniform
+// N×N×N coarse q-mesh the natural R-set is the N×N×N integer box centred at the
+// origin (the Wigner-Seitz cell of the q-mesh's reciprocal supercell). When the
+// true g(R) is contained in that box (short-ranged), forward∘inverse on the
+// coarse q-points is the IDENTITY, and the inverse evaluated at a DENSE q'
+// REPRODUCES the true g(q') to machine precision — the exactness this module's
+// g5 gate pins.
+//
+// ── HONEST SCOPE (d6 — what is and is NOT claimed) ──────────────────────────
+// The g5 gate proves the COARSE→DENSE interpolation is EXACT for a g(q) whose
+// real-space content is short-ranged (a few R-vectors inside the coarse box),
+// by matching the Wannier-interpolated λ to the DIRECT dense-DFPT λ (same
+// dense q-mesh, same α²F→λ path) to a tight rel-ε. It does NOT run DFT/DFPT and
+// does NOT fabricate a CaH6/LaH10 λ. The exactness claim is conditional on
+// short-rangedness — the d6 honest caveat is that for a g(R) NOT contained in
+// the coarse box (long-ranged, e.g. a polar Fröhlich tail), the interpolation is
+// only approximate and the coarse mesh must be enlarged (or the polar term
+// subtracted, as EPW does). The gate also includes a NEGATIVE control showing a
+// too-coarse mesh for a longer-ranged g(R) does NOT reproduce dense λ.
+//
+// d3/d19 reuse (compose, don't reinvent):
+//   - q-mesh generator   : stdlib/qforge/mpgrid   (qforge_mp_grid)
+//   - dense λ from a per-q provider : stdlib/qforge/metallic_a2f
+//                          (qforge_metallic_lambda_mesh — the SAME α²F→λ path)
+//   - λ moment integrator : stdlib/material/sim (via metallic_a2f)
+// New code here = the q-axis forward/inverse Fourier transform of |g| only;
+// the λ assembly reuses the verified metallic-a2f driver unchanged. The
+// interpolated dense |g| is fed back through the IDENTICAL driver the direct
+// dense run uses, so any λ difference is the interpolation error alone.
+//
+// Surface (pure functions, no syscall):
+//   pub struct GReal      { ok, err, nshell, rvecs:[float](3·nR), gR_re, gR_im }
+//   pub fn qforge_g_to_real(coarse, g_re, g_im, rbox) -> GReal      // forward
+//   pub fn qforge_g_at_q(greal, qx, qy, qz) -> [float]              // inverse → [re,im]
+//   pub fn qforge_g2_at_q(greal, qx, qy, qz) -> float               // |g(q')|²
+//   pub fn qforge_wann_lambda_dense(coarse_g2_re/im, …) -> float    // end-to-end λ
+
+use "stdlib/qforge/mpgrid"
+use "stdlib/qforge/metallic_a2f"
+
+// ── small local helpers (the engine has no complex type wired here) ──────────
+fn _wg_floor(x: float) -> float {
+    // truncate toward -inf for the R-box centering; x assumed |x|<2^52.
+    let t = to_float(to_int(x))
+    if t > x { return t - 1.0 }
+    return t
+}
+
+// crystal-coordinate dot q·R (R integer-valued, q fractional) — a plain 3-dot.
+fn _wg_dot(qx: float, qy: float, qz: float,
+           rx: float, ry: float, rz: float) -> float {
+    return qx * rx + qy * ry + qz * rz
+}
+
+// cos/sin via the stdlib intrinsics (math is wired in the engine prelude).
+// We keep the 2π factor explicit: crystal phase = 2π (q·R).
+fn _wg_twopi() -> float { return 6.28318530717958647692 }
+
+// ── the forward transform g(q_coarse) → g(R) ────────────────────────────────
+//
+// GReal carries the real-space el-ph content on the integer R-box. `rbox` is the
+// half-width per axis (R ∈ {-rbox..+rbox}³), so nR = (2·rbox+1)³ R-vectors. For
+// a uniform N×N×N coarse q-mesh the EXACT (aliasing-free) box is rbox = (N-1)/2
+// (odd N) — the Wigner-Seitz cell of the q-supercell. The caller passes the
+// coarse MpGrid (its fractional q-coords + uniform weights 1/N_q) and the flat
+// g(q) sampled in the SAME q-order (g_re[i], g_im[i] for coarse point i).
+pub struct GReal {
+    ok:     int,
+    err:    str,
+    nshell: int,         // number of R-vectors (= (2·rbox+1)^3)
+    rvecs:  [float],     // flat 3·nshell integer R-vectors (crystal)
+    gR_re:  [float],     // Re g(R), len nshell
+    gR_im:  [float]      // Im g(R), len nshell
+}
+
+fn _greal_err(msg: str) -> GReal {
+    return GReal { ok: 0, err: msg, nshell: 0, rvecs: [], gR_re: [], gR_im: [] }
+}
+
+// Build the integer R-box {-rbox..rbox}^3 (flat 3·nR crystal vectors).
+fn _wg_rbox(rbox: int) -> [float] {
+    let mut out: [float] = []
+    let mut a = -rbox
+    while a <= rbox {
+        let mut b = -rbox
+        while b <= rbox {
+            let mut c = -rbox
+            while c <= rbox {
+                out.push(to_float(a))
+                out.push(to_float(b))
+                out.push(to_float(c))
+                c = c + 1
+            }
+            b = b + 1
+        }
+        a = a + 1
+    }
+    return out
+}
+
+// g(R) = (1/N_q) Σ_q g(q) e^{-i 2π q·R}. Coarse weights are uniform 1/N_q, so we
+// divide by N_q explicitly (the MP weights already encode 1/N_q but we use the
+// raw count here for the clean DFT normalization the inverse undoes exactly).
+pub fn qforge_g_to_real(coarse: MpGrid, g_re: [float], g_im: [float],
+                        rbox: int) -> GReal {
+    let nq = coarse.npoints
+    if nq < 1 { return _greal_err("empty coarse q-mesh") }
+    if len(g_re) != nq || len(g_im) != nq {
+        return _greal_err("g(q) length != coarse npoints")
+    }
+    if rbox < 0 { return _greal_err("negative rbox") }
+
+    let rvecs = _wg_rbox(rbox)
+    let nR = len(rvecs) / 3
+    let invN = 1.0 / to_float(nq)
+    let twopi = _wg_twopi()
+
+    let mut gR_re: [float] = []
+    let mut gR_im: [float] = []
+    let mut ir = 0
+    while ir < nR {
+        let rx = rvecs[3 * ir]
+        let ry = rvecs[3 * ir + 1]
+        let rz = rvecs[3 * ir + 2]
+        let mut acc_re = 0.0
+        let mut acc_im = 0.0
+        let mut iq = 0
+        while iq < nq {
+            let qx = coarse.coords[3 * iq]
+            let qy = coarse.coords[3 * iq + 1]
+            let qz = coarse.coords[3 * iq + 2]
+            let ph = -twopi * _wg_dot(qx, qy, qz, rx, ry, rz)  // e^{-i 2π q·R}
+            let cw = cos(ph)
+            let sw = sin(ph)
+            // (g_re + i g_im)(cw + i sw)
+            acc_re = acc_re + g_re[iq] * cw - g_im[iq] * sw
+            acc_im = acc_im + g_re[iq] * sw + g_im[iq] * cw
+            iq = iq + 1
+        }
+        gR_re.push(acc_re * invN)
+        gR_im.push(acc_im * invN)
+        ir = ir + 1
+    }
+    return GReal { ok: 1, err: "", nshell: nR, rvecs: rvecs,
+                   gR_re: gR_re, gR_im: gR_im }
+}
+
+// ── the inverse transform g(R) → g(q') at ANY q' ────────────────────────────
+//
+// g(q') = Σ_R g(R) e^{+i 2π q'·R}. Returns [re, im]. This is the interpolant —
+// evaluate it at a DENSE q' that was NEVER in the coarse DFPT set.
+pub fn qforge_g_at_q(greal: GReal, qx: float, qy: float, qz: float) -> [float] {
+    if greal.ok == 0 { return [0.0, 0.0] }
+    let nR = greal.nshell
+    let twopi = _wg_twopi()
+    let mut acc_re = 0.0
+    let mut acc_im = 0.0
+    let mut ir = 0
+    while ir < nR {
+        let rx = greal.rvecs[3 * ir]
+        let ry = greal.rvecs[3 * ir + 1]
+        let rz = greal.rvecs[3 * ir + 2]
+        let ph = twopi * _wg_dot(qx, qy, qz, rx, ry, rz)        // e^{+i 2π q'·R}
+        let cw = cos(ph)
+        let sw = sin(ph)
+        let gre = greal.gR_re[ir]
+        let gim = greal.gR_im[ir]
+        acc_re = acc_re + gre * cw - gim * sw
+        acc_im = acc_im + gre * sw + gim * cw
+        ir = ir + 1
+    }
+    return [acc_re, acc_im]
+}
+
+// |g(q')|² — the quantity α²F consumes. g is the el-ph amplitude; the spectral
+// function uses its modulus-squared, so interpolating g (complex, smooth in R)
+// and squaring at the end is the EPW-correct order (squaring before interpolat-
+// ing would alias — |g|² is not band-limited the way g is).
+pub fn qforge_g2_at_q(greal: GReal, qx: float, qy: float, qz: float) -> float {
+    let g = qforge_g_at_q(greal, qx, qy, qz)
+    return g[0] * g[0] + g[1] * g[1]
+}
+
+// ── end-to-end: coarse |g| samples → dense λ (no dense DFPT) ─────────────────
+//
+// The production path. Given the COARSE q-mesh + the complex g sampled on it
+// (one band/branch channel), build g(R), then sweep a DENSE q-mesh whose per-q
+// provider INTERPOLATES |g(q')|² from g(R) — and feed it through the SAME
+// metallic-a2f λ driver the direct dense-DFPT run uses. On-shell electrons
+// (ε=E_F) and a single dispersing mode are the synthetic channel the g5 gate
+// drives; a real cell supplies ω(q) + ε from its phonon/band providers.
+//
+//   coarse_g_re/im : complex g on the coarse mesh (len = coarse.npoints)
+//   dense          : the dense MpGrid to interpolate onto
+//   omega_of_q     : caller closure q→ω(q) (phonon dispersion; synthetic here)
+//   e_fermi,n_ef,omega_grid,sigma_el,sigma_ph : the α²F assembly knobs (reused)
+pub fn qforge_wann_lambda_dense(coarse: MpGrid,
+                                coarse_g_re: [float], coarse_g_im: [float],
+                                rbox: int,
+                                dense: MpGrid, omega_of_q,
+                                e_fermi: float, n_ef: float,
+                                omega_grid: [float],
+                                sigma_el: float, sigma_ph: float) -> float {
+    let greal = qforge_g_to_real(coarse, coarse_g_re, coarse_g_im, rbox)
+    if greal.ok == 0 { return -1.0 }
+
+    // dense per-q provider: ONE mode, |g|² interpolated from g(R), on-shell e⁻.
+    // (nmode=1 channel — the synthetic gate's structure; a real run packs 3·nat.)
+    let provider = fn(qx: float, qy: float, qz: float) -> [float] {
+        let w = omega_of_q(qx, qy, qz)
+        let g2 = qforge_g2_at_q(greal, qx, qy, qz)
+        return [w, g2, 0.0, 0.0]   // [ω, |g|², ε_k, ε_{k+q}] on-shell
+    }
+    return qforge_metallic_lambda_mesh(dense, provider, 1, e_fermi, n_ef,
+                                       omega_grid, sigma_el, sigma_ph)
+}
