@@ -1,0 +1,87 @@
+F-FUSION-WMMA2-SM90-VERIFY  ::  MEASURED (foreground build+measure on NATIVE sm_90 H100, g5-HONEST)
+domain: HEXA-FUSION · date: 2026-06-06 · own-GEMM WMMA2 Tensor-Core engagement on native Hopper
+branch: domain/hexa-fusion-wmma2-sm90-verify (off origin/main @7730fbba3)
+kernel: _hx_k_sgemm_cm_wmma2 (self/native/hxqwen14b_cuda.cu), env HEXA_OWN_GEMM_WMMA2
+driver: cutlass_driver.cu (standalone 3-way A/B, #includes the SHIPPED kernels verbatim)
+build : nvcc 12.5 -gencode arch=compute_90,code=sm_90  (NATIVE SASS — no compute_80/PTX-forward)
+
+THE DISCREPANCY (resolved):
+  README.md:155 cites F-FUSION-CUTLASS-GRADE-WMMA for "square 2048³ WMMA2 = 1.13× of cuBLAS,
+  util 89.9%". That verdict was measured on an RTX PRO 6000 BLACKWELL (sm_120), with the own
+  kernels running compute_90 PTX-JIT onto Blackwell — NOT a native sm_90 H100. This verdict
+  re-runs the IDENTICAL driver on a GENUINE native sm_90 H100 to test whether WMMA2 actually
+  engages Tensor Cores there or hits the CUDA-core floor.
+
+GPU IDENTITY (honesty-critical, verbatim nvidia-smi):
+  NVIDIA H100 80GB HBM3, compute_cap 9.0, driver 555.58.02, 81559 MiB
+  → GENUINE native Hopper sm_90 (NOT Blackwell). nvcc release 12.5, V12.5.82.
+  cuobjdump on the built binary: "arch = sm_90" (native SASS confirmed, no JIT-only PTX).
+
+WHICH LAUNCHER FIRED (precedence WMMA2>WMMA>TILED>naive):
+  The driver launches _hx_k_sgemm_cm_wmma2 directly (the exact kernel the launcher
+  _hx_own_sgemm_cm_launch selects for a square, non-skinny 2048³ GEMM under HEXA_OWN_GEMM_WMMA2=1,
+  with no BF16/SPLITK/VEC set — branch at hxqwen14b_cuda.cu:1232). Result on native sm_90:
+
+  [wmma2-attr] getattr=no error numRegs=236 staticShared=57344B maxThreadsPerBlock=256 ptx=90 bin=90
+  [wmma2]      launch=invalid argument  run=no error
+
+  → THE WMMA2 KERNEL FAILS TO LAUNCH ON NATIVE sm_90 ("invalid argument"). It never executes.
+
+ROOT CAUSE (definitive, device-queried):
+  WMMA2 kernel STATIC __shared__ = 57344 B (56 KB)   [As[2][128*32] + Bs[2][32*64], padded]
+  sm_90 device sharedMemPerBlock (STATIC cap)        = 49152 B (48 KB)
+  sm_90 device sharedMemPerBlockOptin (DYNAMIC cap)  = 232448 B (227 KB)
+  56 KB static > 48 KB static cap  =>  CUDA rejects the launch with cudaErrorInvalidValue.
+  The kernel uses STATIC __shared__ and does NOT call cudaFuncSetAttribute(
+  cudaFuncAttributeMaxDynamicSharedMemorySize, ...), so it cannot opt into the 227 KB dynamic
+  pool. On Blackwell sm_120 (where the 1.13× was measured) the static cap is larger / the
+  PTX-JIT path admitted it, so it launched there — on native sm_90 it is un-launchable as shipped.
+
+TENSOR-CORE SASS (the kernel CODE is correct; only the launch config is rejected):
+  cuobjdump -sass of _Z20_hx_k_sgemm_cm_wmma2... : 64 HMMA (Tensor-Core MMA) + 116 FFMA.
+  → The WMMA2 kernel DOES compile Tensor-Core MMA ops into native sm_90 SASS. The TC path is
+    present in the binary; it simply never runs because the block can't be launched.
+
+VERBATIM PERF @ square 2048³ (CUDA-event, 50 iters, col-major, TF32, native H100):
+  cuBLAS (TF32)        : 0.05153 ms/iter   333377 GFLOP/s   (1.00×)
+  naive-WMMA           : 2.28649 ms/iter     7514 GFLOP/s   (0.0225× of cuBLAS — runs, correct)
+  tiled-WMMA2(CUTLASS) : 0.00016 ms/iter  (PHANTOM)         DID NOT RUN — see below
+  tiled-WMMA2 correctness: rel-RMS = 1.000e+00  FAIL  (C left at memset 0 ⇒ kernel never wrote)
+
+  The "0.00016 ms / 109565491 GFLOP/s / 109565 TFLOP/s" reported for WMMA2 is a PHANTOM: the
+  launch is rejected, so the timing loop only measures empty-enqueue latency and C stays zeroed
+  (rel-RMS 1.0). It is NOT a real throughput. The driver's "TENSOR CORES ENGAGED" auto-print for
+  WMMA2 is therefore an ARTIFACT of dividing by ~zero time on a kernel that did not execute —
+  the [wmma2] launch=invalid argument line is the ground truth.
+
+DOES WMMA2 ENGAGE TENSOR CORES ON sm_90? : NO — the kernel does not even launch (static-shared
+  56 KB > 48 KB sm_90 static cap). The only own-GEMM that runs on native sm_90 here is naive-WMMA,
+  at 7514 GFLOP/s = 0.0225× of cuBLAS (44× slower).
+
+OWN square 2048³ GFLOP/s + ratio vs cuBLAS on native H100:
+  WMMA2 : N/A — does not launch on sm_90 (invalid argument).
+  naive : 7514 GFLOP/s vs cuBLAS 333377 GFLOP/s = 0.0225× (44× slower). [the only own path that runs]
+
+ON THE SKINNY AGENT'S "~2567 GFLOP/s / 138× slower / 2.5 TFLOP/s floor":
+  Consistent with THIS finding. WMMA2 silently no-ops on sm_90 (launch rejected, OFF==rc 0 path),
+  so any "own-GEMM" measured under HEXA_OWN_GEMM_WMMA2 on native sm_90 was the FALLBACK, not WMMA2.
+  The flat ~2.5 TFLOP/s the skinny agent saw is the CUDA-core/naive floor — NOT the WMMA2 path,
+  which never executed. So the 138× is real for whatever ran, but it was never WMMA2 Tensor Cores.
+
+CONCLUSION (g5, parity-framed, no superiority claim):
+  README 1.13× is NOT reproduced on native H100. The own-GEMM WMMA2 kernel CANNOT LAUNCH on
+  native sm_90 (56 KB static __shared__ > 48 KB sm_90 static cap), so it engages NO Tensor Cores
+  there. The 1.13×/util-89.9% figure is BLACKWELL-SPECIFIC (sm_120, where the larger static-shared
+  cap admitted the same static-shared block). README.md:155 / :164 / :419 need a caveat: the
+  own-GEMM WMMA2 parity was measured on Blackwell (RTX PRO 6000, sm_120 PTX-JIT), and as shipped
+  the kernel does not launch on native sm_90 H100 (needs a dynamic-shared opt-in or BM/BN/BK
+  re-tile to fit the 48 KB static cap to run on Hopper).
+
+VERDICT: 🔴 NATIVE-sm_90 NEGATIVE — WMMA2 does NOT engage on native H100 (un-launchable: 56 KB
+  static shared > 48 KB cap). README 1.13× is Blackwell-only; a caveat is required. Tensor-Core
+  MMA ops ARE compiled into the sm_90 SASS (64 HMMA) — the gap is purely a launch-config/shared-mem
+  limit, not a missing TC codegen. (Closed-negative: deterministically rules out "WMMA2 ≈ cuBLAS
+  on native H100" as currently shipped.)
+
+POD: rented vast 39620619 (H100 SXM, $2.34/hr), measured, DESTROYED immediately. Leak 0
+  (verified: 0 H100/H200 instances remain; the rtsc-anchor RTX_3090 39610026 left untouched).
