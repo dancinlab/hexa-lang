@@ -1,0 +1,87 @@
+// HEXA Standard Library — qforge/adaptive_qgrid_selftest
+//
+// g5 acceptance gate for the QFORGE-PERF "adaptive q-grid sampling" milestone.
+//
+// Synthetic per-q λ model: a sharp nesting peak (Gaussian, width 0.02) on a flat
+// background over the reduced q-axis [0,1]. A UNIFORM mesh must be fine enough to
+// resolve the 0.02-wide peak everywhere; the ADAPTIVE refiner concentrates points
+// at the peak and leaves the flat region coarse → same λ, far fewer q-points.
+//
+//   λ_q(q) = 0.20 + 3.0 · exp(−((q−0.5)/0.02)²)
+//   λ_true = ∫₀¹ λ_q dq  (reference = a very fine uniform mesh, nq=8001)
+//
+// Gate: adaptive λ within 1% of the dense reference, with materially fewer q-points
+// than a uniform mesh needs for the SAME 1% accuracy. d6 — numbers printed verbatim.
+
+use "stdlib/qforge/adaptive_qgrid"
+
+let _AQ_BG: float = 0.20            // flat background λ_q
+let _AQ_AMP: float = 3.0           // peak amplitude
+let _AQ_Q0: float = 0.5            // nesting wavevector (peak center)
+let _AQ_W: float = 0.02           // peak width (sharp)
+
+// synthetic per-q λ contribution (the callback the refiner samples).
+fn _aq_lambda_q(q: float) -> float {
+    let z = (q - _AQ_Q0) / _AQ_W
+    return _AQ_BG + _AQ_AMP * exp(0.0 - z * z)
+}
+
+fn _aq_abs(x: float) -> float { if x < 0.0 { return -x } return x }
+
+// smallest uniform node count that reaches `tol` relative accuracy vs lam_true
+// (scanned in steps — the conventional non-adaptive cost for the same accuracy).
+fn _aq_uniform_nq_for_tol(lam_true: float, tol: float) -> int {
+    let mut nq = 11
+    while nq <= 20001 {
+        let lam = qforge_aq_uniform(_aq_lambda_q, 0.0, 1.0, nq)
+        let rel = _aq_abs(lam - lam_true) / lam_true
+        if rel < tol { return nq }
+        nq = nq + 10
+    }
+    return -1
+}
+
+fn main() {
+    println("=== QFORGE-PERF adaptive q-grid selftest (synthetic nesting peak) ===")
+
+    // reference "dense" λ — a very fine uniform mesh (the ground truth).
+    let lam_true = qforge_aq_uniform(_aq_lambda_q, 0.0, 1.0, 8001)
+    println("lambda_true (dense uniform nq=8001) = " + to_string(lam_true))
+
+    // a COARSE uniform mesh that misses the peak (the failure mode adaptivity fixes).
+    let nq_coarse = 41
+    let lam_coarse = qforge_aq_uniform(_aq_lambda_q, 0.0, 1.0, nq_coarse)
+    let rel_coarse = _aq_abs(lam_coarse - lam_true) / lam_true
+    println("lambda_uniform(nq=" + to_string(nq_coarse) + ") = " + to_string(lam_coarse)
+            + "  rel-eps=" + to_string(rel_coarse))
+
+    // ADAPTIVE: coarse seed of 20 intervals, refine to <=80 q-points.
+    let res = qforge_aq_adaptive(_aq_lambda_q, 0.0, 1.0, 20, 0.002, 80)
+    let lam_adapt = res[0]
+    let nq_adapt = to_int(res[1])
+    let rel_adapt = _aq_abs(lam_adapt - lam_true) / lam_true
+    println("lambda_adaptive          = " + to_string(lam_adapt)
+            + "  nq=" + to_string(nq_adapt) + "  rel-eps=" + to_string(rel_adapt))
+
+    // the uniform node count needed for the SAME accuracy the adaptive mesh hit.
+    let nq_uni_same = _aq_uniform_nq_for_tol(lam_true, rel_adapt + 1.0e-6)
+    println("uniform nq for same accuracy = " + to_string(nq_uni_same))
+
+    let mut speedup = 0.0
+    if nq_adapt > 0 && nq_uni_same > 0 { speedup = to_float(nq_uni_same) / to_float(nq_adapt) }
+    println("q-point reduction (uniform/adaptive) = " + to_string(speedup) + "x")
+
+    // ── gate ──────────────────────────────────────────────────────────────────
+    let mut ok = true
+    if rel_adapt < 0.01 { println("PASS (A) adaptive lambda within 1% of dense (" + to_string(rel_adapt) + ")") }
+    else { println("FAIL (A) adaptive lambda NOT within 1% (" + to_string(rel_adapt) + ")") ; ok = false }
+
+    if nq_uni_same > nq_adapt { println("PASS (B) adaptive uses FEWER q than uniform-for-same-acc (" + to_string(nq_adapt) + " < " + to_string(nq_uni_same) + ")") }
+    else { println("FAIL (B) adaptive did NOT save q-points") ; ok = false }
+
+    if rel_coarse > rel_adapt { println("PASS (C) coarse-uniform is WORSE than adaptive at comparable cost (" + to_string(rel_coarse) + " > " + to_string(rel_adapt) + ")") }
+    else { println("FAIL (C) coarse-uniform not worse") ; ok = false }
+
+    if ok { println("qforge_adaptive_qgrid_selftest PASS") }
+    else { println("qforge_adaptive_qgrid_selftest FAIL") }
+}
