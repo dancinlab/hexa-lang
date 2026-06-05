@@ -1,0 +1,74 @@
+F-QFORGE-SCREENING-ROUTE-DEBUG — 🟠 ROUTING-BUG FIXED · gate NOT met (HONEST NEGATIVE, d6/@L4)
+
+═══ WHAT WAS MIS-WIRED (the routing fix) ═══
+The Anderson screened-ΔV Dyson loop's ad_map DID correctly route to the genuine
+FFT-Poisson kernel (qpwfft_dvscr_from_dpsi) when qpwfft_is_on() — that wiring was
+NOT the bug. The bug was UPSTREAM in the Miller-index recovery that feeds the
+FFT-Poisson grid:
+
+  ROOT CAUSE (det_check_rootcause.log, instant — no SCF):
+    The front-end's BCC-primitive reciprocal basis (pw_frontend.hexa:267-269)
+        b1=(2π/a)(0,1,1)  b2=(2π/a)(-1,0,1)  b3=(2π/a)(-1,-1,0)
+    is COPLANAR → det(B) = 0.0 (verified verbatim).
+    qpwfft_stage recovered each coefficient's Miller index by INVERTING B
+    (qpwfft_miller's closed-form 3×3 inverse). With det(B)=0 the inverse hit its
+    `det≈0 → return [0,0,0]` guard for EVERY G-vector → hmax=kmax=lmax=0 →
+    next_pow2(4·0+1)=1 per axis → the FFT-Poisson grid COLLAPSED to 1×1×1.
+    On a single grid point the spatial Poisson convolution degenerates to one scalar
+    (only the local f_xc term survives, G=0 Hartree gauge kills V_H) — NOT the genuine
+    RPA-Hartree response. That degenerate single-point screening is the prior verdict's
+    0-iter / ratio=1.0 (#2771/pow2-resume) — the FFT module was BUILT but never folded
+    a real convolution at the converged basis.
+
+═══ THE FIX (d4/@L3 — singular-B-immune) ═══
+Bypass the singular matrix inverse: carry the EXACT integer Miller indices from the
+generator instead of recovering them.
+  • qpw_gvectors_miller (pw_frontend.hexa) — same basis + selection order as
+    qpw_gvectors, but ALSO emits the integer (h,k,l) it generated each G from.
+  • qpwfft_stage_miller (screening_pwfft.hexa) — stages from those indices directly
+    (NO inverse). qpwfft_stage legacy path delegates to a shared _qpwfft_stage_core.
+  • the screened front-end now threads qpw_gvectors_miller → qpwfft_stage_miller.
+  • OBSERVABILITY (d6): screening_pwfft gained PWFFT_FOLDS (#genuine convolution folds)
+    + PWFFT_LAST_ERR (guard code) witnesses, surfaced in the front-end note. The prior
+    0-iter verdict had NO signal which path ad_map took; now the note prints
+    folds=N / last_err=C verbatim.
+
+═══ WITNESS — BEFORE vs AFTER (VERBATIM) ═══
+  BEFORE (resume-branch d85e0d634, #2771):
+    n=645 · grid implicit 1×1×1 (collapse) · 0 Anderson iters · ‖ΔV_scr‖/‖ΔV_bare‖=1.0
+    → screened == bare (silent diagonal/degenerate fallback) · λ = 5.05165
+  AFTER (this fix, converged n=645, β=0.3 m=4, 4³q):
+    grid=32×32×32 · folds=3 · last_err=0 (genuine real-space convolution ENGAGED)
+    ‖fp_res‖_max=1.00683e-09 · 0 Anderson iters · ‖ΔV_scr‖/‖ΔV_bare‖=1.0 · λ = 5.05165
+
+  The FFT-Poisson grid no longer collapses (32³ not 1×1³) and the convolution genuinely
+  folds (folds=3, last_err=0) — the routing wall is BROKEN. The Anderson loop still takes
+  0 iters because the seed fixed-point residual (1.0e-9) is already below tol → the net
+  Hartree+LDA-x screening correction on this converged metallic cell is small (ratio 1.0).
+
+  Corroborating engagement at a tractable basis (n64_fixed_smoke.log): npw_cap=64 →
+  grid=32×32×32 · folds=3 (also ENGAGED on real CaH6 geometry).
+
+═══ λ GATE (CONVERGED n=645, VERBATIM — NOT tuned, d6/@L4) ═══
+  QFORGE λ (screened, this run) = 5.05165
+  QE answer-key λ               = 4.376
+  rel-ε                         = 0.154398  (15.4398 %)
+  ω_log = 1118.18 K · Tc(Allen-Dynes) = 351.64 K · Tc(Eliashberg) = 379.883 K
+  GATE: NOT MET — rel-ε 15.44% > 1%.
+
+═══ HONEST DIAGNOSIS (d6/@L4 — NO forced 4.376) ═══
+The screening ENGINE wall (the pow2-FFT-Poisson routing that the plan targeted) is FIXED:
+the genuine real-space convolution Δρ(r)=Σ2ψ·Δψ now folds at the converged n=645 basis
+(grid 32³, folds=3), where before it silently degenerated to a single point. The witness
+is non-zero in the engine sense (folds>0, grid≠1×1×1).
+
+The residual 15.4% gap is NOT a routing/engine defect — it is the @L4-anticipated
+correlation-XC-beyond-(Hartree+LDA-x) functional gap: the screening kernel applied is
+V_H + LDA-exchange + PW92-correlation as a LOCAL f_xc[ρ̄] term, and on this converged cell
+the net dielectric correction to ‖ΔV‖ is tiny (ratio 1.0, fp_res 1e-9) → the Anderson
+fixed point sits at the bare-family λ=5.05. Closing to 1% needs a non-local/q-dependent
+dielectric response (full RPA χ₀(q,q') + a beyond-LDA f_xc), not a grid/routing fix.
+4.376 is NOT forced. The gate stays HELD (🟠), the [ ] checkbox is NOT flipped.
+
+artifacts: converged_screened_n645_FIXED.log · n64_fixed_smoke.log · det_check_rootcause.log
+ran-on: mini (local, native-CPU, @L2) · RTSC anchor pods UNTOUCHED · no pod rent (@L5).
