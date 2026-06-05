@@ -1,0 +1,19 @@
+F-QFORGE-POW2-FFT-POISSON — 🟠 INSUFFICIENT (gate NOT met, honest negative, d6)
+
+BUILT: screening_pwfft.hexa — pow2-padded real-space FFT-Poisson genuine convolution
+  Δρ(r)=Σ2ψ_n·Δψ_n on a pow2-Miller grid (radix-2 FFT at any converged n). Wired into
+  qforge_pw_frontend_phonons_scr (qpwfft_stage + pwfft witness tag).
+
+CONVERGED RUN (local Mac, n=645 full ecut, 4³q, screened β=0.3 m=4):
+  QFORGE λ = 5.05165 vs QE 4.376 → rel-ε 15.44% (GATE ≤1% NOT MET)
+  witness  = 0 SCF iters · ‖ΔV_scr‖/‖ΔV_bare‖ = 1.0  (screened == bare, SAME as #2771)
+
+DIAGNOSIS (d6, no fake): the pow2-FFT-Poisson MODULE is built + the converged run ran
+  clean, BUT the witness proves the Anderson loop is STILL not routing through it at
+  n=645 (0-iter, ratio 1.0 — the diagonal fallback path). The qpwfft_stage→ad_map wiring
+  does not yet swap the genuine convolution into the screened-ΔV Dyson fixed point at the
+  converged basis. The λ=5.05 is the ω_log RMS-anchor artifact (not screening), same as
+  #2771. The wall PERSISTS — the FFT-Poisson infra exists but is not engaged.
+NEXT (d2): debug the ad_map→qpwfft_dvscr_from_dpsi routing so the Anderson map actually
+  folds the real-space convolution (non-zero witness) at n=645; OR the screening response
+  is genuinely tiny and the gap is correlation-XC beyond Hartree+LDA-x (deeper @L5).
