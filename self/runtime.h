@@ -1305,6 +1305,22 @@ HexaVal forge_dispatch_clm_megafwd(HexaVal xe_v, HexaVal ecWq_v, HexaVal ecB_v,
                                   HexaVal invN_v, HexaVal xhatN_v,
                                   HexaVal t_v, HexaVal d_v, HexaVal e_v, HexaVal k_v); /* runtime.c — fusion B3 seam */
 
+/* HEXA-FUSION M2 (FULL-STEP) — fused cooperative AdamW over ALL params (~36
+ * per-param launches → 1 cudaLaunchCooperativeKernel). The 5 packed-id farrs
+ * hold the np tensor ids/lens as doubles; routes to _hx_cuda_farr_adamw_fused_
+ * gpu. Env HEXA_CLM_FULLSTEP gates the .hexa caller (_adam_fused). -1 → per-
+ * param _adam loop (byte-eq reference). */
+HexaVal hexa_forge_dispatch_adamw_fused(HexaVal w_ids_v, HexaVal m_ids_v,
+                                  HexaVal v_ids_v, HexaVal g_ids_v, HexaVal n_v,
+                                  HexaVal np_v, HexaVal lr_v, HexaVal b1_v,
+                                  HexaVal b2_v, HexaVal eps_v, HexaVal wd_v,
+                                  HexaVal t_v); /* runtime.c — fusion M2 seam */
+HexaVal forge_dispatch_adamw_fused(HexaVal w_ids_v, HexaVal m_ids_v,
+                                  HexaVal v_ids_v, HexaVal g_ids_v, HexaVal n_v,
+                                  HexaVal np_v, HexaVal lr_v, HexaVal b1_v,
+                                  HexaVal b2_v, HexaVal eps_v, HexaVal wd_v,
+                                  HexaVal t_v); /* runtime.c — fusion M2 seam */
+
 /* HEXA-FUSION L3 (glue half · final slice ⑤c) — device-resident embedding gather.
  * forge_dispatch_embedding(ids, table, x_out, T, d) -> int rc (0 ok / -1 host).
  * X_OUT[i·d+c]=TABLE[tok·d+c] where tok=(int)IDS[i] — the token-gather host glue
