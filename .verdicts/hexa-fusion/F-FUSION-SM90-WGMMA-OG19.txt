@@ -1,0 +1,17 @@
+F-FUSION-SM90-WGMMA-OG19 — WIP: apply OG17's relaxed-wait_group ping-pong pipeline (MODE 6
+gemm_og18_f16_pipe) to the OG18 FP16 canonical-atom kernel in the regime OG17 actually crossed
+parity (S=2048 NST=3), plus a deeper async ring (NST=4 now SMEM-viable since the decode band is
+gone), to push FP16 1.64x off cuBLAS-FP16 toward PARITY (<=1.3x).
+=============================================================================================
+verdict-tier: 🟠 WIP — pod run pending. Gate (rel_rms <= 1e-2 vs same-dtype cuBLAS-FP16) FIRST,
+              then perf. Numbers to be filled from on-pod stdout.
+
+LEVER: OG17 relaxed wgmma.wait_group 1 ping-pong (next K-slab's wgmma ISSUE overlaps this slab's
+       tensor-core drain; mbarrier ring data-safe; NO smem growth -> 2 CTA/SM held). Already
+       ported as MODE 6 (gemm_og18_f16_pipe) in OG18 but run ONLY at S=4096 (1.64x). OG19 drives
+       it at S=2048 (OG17's TF32 parity sweet spot, 1.24x there) + NST=2/3/4 ring sweep.
+
+baseline (OG18, NOT to regress): own 504.3 TFLOP/s @4096 MODE5 NST3, ratio 1.64x, rel_rms 0.
+
+PENDING: single-tile rel_rms, full-GEMM rel_rms @2048/4096, own FP16 GFLOP/s 504->?, ratio
+         1.64x->?, PARITY (<=1.3x) Y/N, pod destroyed Y/N.
