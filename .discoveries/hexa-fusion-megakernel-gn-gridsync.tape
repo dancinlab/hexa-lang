@@ -1,4 +1,4 @@
-@discovery := "HEXA-FUSION megakernel 2nd wall — GroupNorm full-Y reduction via cooperative grid-sync" :: lane [active]
+@disc hexa-fusion-megakernel-gn-gridsync := "HEXA-FUSION megakernel 2nd wall — GroupNorm full-Y reduction via cooperative grid-sync" :: gpu [active]
   id     = "F-FUSION-MEGAKERNEL-GN-GRIDSYNC"
   seed   = "own-GEMM removed the 1st megakernel wall (persistent kernel calls device _hx_k_gemm in-line, no un-fusable cuBLAS host call). F-FUSION-MEGAKERNEL-DESIGN: whole-step glue megakernel realized EXCEPT the 2 GN reductions (GN#1 L3-c, GN#2 L3-d), both grid-sync-walled — G=1 mean/var over ALL T·C needs a cross-block barrier a plain kernel lacks. Prior F-FUSION-GN-COOP-KERNEL-CLOSED-NEG was ANALYSIS-only ('don't build it' on cost/benefit) — never measured. HYPOTHESIS: a cooperative kernel CAN fuse GN while holding byte-eq if the reduction stays single-thread sequential (the grid.sync only broadcasts mu/inv, never re-associates the sum)."
   target = "🟢 numerical — byte-eq max|Δ|=0 vs the sequential _hx_k_groupnorm oracle (HARD GATE first) + cooperative-launch GPU-confirmed (cudaDevAttrCooperativeLaunch + one-wave fit) on a real sm_80/90 GPU"
