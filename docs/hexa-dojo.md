@@ -338,6 +338,44 @@ build never re-hits them. Each is a [[HEXA-DOJO]] LAYER-A milestone.
     # → [runtime_cuda_emit] wrote /tmp/runtime_cuda.c   (≈308 KB; rc 0; 1 proc)
     ```
 
+### forge-CUDA build traps (DOJO-A2 / DOJO-A3 — build the toolchain, don't get SIGKILLed)
+
+Two build-time walls that bite **before any training starts** — when you put
+the hexa toolchain itself onto a fresh CUDA pod and transpile a large program.
+Both are now reflected as preflight advisories you can run on-pod.
+
+| # | trap | symptom | the fix the dojo advises |
+|---|------|---------|--------------------------|
+| **A2** | **prebuilt hexa needs `GLIBC_2.38`, but the CUDA `-devel` base ships an older glibc.** `nvidia/cuda:12.4.1-devel-ubuntu22.04` (and the RunPod `…ubuntu22.04` images) ship **glibc 2.35**; Ubuntu **24.04** ships **glibc 2.39**. (handoff `4a7841fe`) | the prebuilt binary fails to load with `` version `GLIBC_2.38' not found `` — looks like a corrupt download | **use an ubuntu24.04 CUDA base** (`nvidia/cuda:12.4.1-devel-ubuntu24.04`, glibc 2.39 ≥ 2.38) **OR build hexa from source** on-pod so it links against the pod's local glibc |
+| **A3** | **a large `main_expanded.hexa` SIGKILLs the Stage-1 transpiler on the default 8 MB stack.** Deep recursion overruns `ulimit -s 8192`; the process is killed mid-transpile. (handoff `d751e2c4`) | `stage_build_hexa` dies with no diagnostic (SIGKILL = no traceback), looking like an OOM or a crash | **raise the stack ulimit BEFORE the build:** run `ulimit -s 65536` (64 MB) — or `ulimit -s unlimited` where the shell permits — in the **same shell**, then invoke `tool/stage_build_hexa` |
+
+How the dojo reflects these (the same `tool/dojo_rent_preflight.sh` helper):
+
+- **A2 — `dojo_glibc_advisory`** detects the base glibc two ways: pre-rental
+  it infers from the image tag (`…ubuntu22.04` → glibc ≤ 2.35 → WARN + the
+  24.04/from-source recommendation), and on-pod it reads the **live** glibc via
+  `ldd --version` and **BLOCKS** (returns non-zero) on a real `< GLIBC_2.38`
+  mismatch. An ubuntu24.04 base (glibc 2.39) clears the check.
+- **A3 — `dojo_stack_advisory`** reads the current `ulimit -s`; at the default
+  ~8 MB it WARNs and prints the exact `ulimit -s 65536` raise to run **before**
+  `tool/stage_build_hexa`. It is advisory-only (never blocks); it just makes
+  sure the stack is raised before the large-main transpile.
+
+```bash
+# pre-rental: catch the glibc mismatch before you even spin up the pod
+bash -c 'source tool/dojo_rent_preflight.sh
+         dojo_glibc_advisory --image runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04'
+
+# on-pod, right before building the toolchain:
+source tool/dojo_rent_preflight.sh
+dojo_glibc_advisory          # live ldd check → BLOCKS on < GLIBC_2.38
+dojo_stack_advisory          # prints the `ulimit -s 65536` raise
+ulimit -s 65536              # raise BEFORE the build (same shell)
+bash tool/stage_build_hexa   # large main_expanded.hexa transpiles without SIGKILL
+```
+
+Both advisories are covered by `bash tool/dojo_rent_preflight.sh --self-test`.
+
 ## Training recipe — optimization gotchas (don't repeat these)
 
 The 4474f21b preflight above hardens the **infra** path (renting + launching).
@@ -637,6 +675,8 @@ saturated → **weight-reuse GEMM recast**. Picking fill at saturation is the
 - `.verdicts/hexa-fusion/F-FUSION-SM90-WGMMA-W8.txt` · `…-W10.txt` · `.verdicts/hexa-fusion/F-FUSION-MEGAKERNEL-GN-GRIDSYNC.txt` — the landed own-GEMM W-ladder + grid-sync GroupNorm verdicts the track-1 "GPU own-GEMM parity & the persistent megakernel" lesson reflects (PRs #2841/#2847/#2845)
 - [`docs/research/sm90-wgmma-parity-litscan.md`](research/sm90-wgmma-parity-litscan.md) — the `wgmma`/TMA/`SWIZZLE_128B` literature scan (#2846) behind the lesson's gotchas (a)/(d)
 - sidecar handoff `4474f21b` — the 6-fix **infra** preflight (rent + launch) reflected in the "no-troubleshoot preflight" section
+- sidecar handoff `4a7841fe` (DOJO-A2) — the **`GLIBC_2.38` vs CUDA-`devel` base glibc** build trap, reflected as `dojo_glibc_advisory` + the [forge-CUDA build traps](#forge-cuda-build-traps-dojo-a2--dojo-a3--build-the-toolchain-dont-get-sigkilled) subsection
+- sidecar handoff `d751e2c4` (DOJO-A3) — the **Stage-1 transpile SIGKILL on the 8 MB stack** build trap, reflected as `dojo_stack_advisory` + the same forge-CUDA build-traps subsection
 - sidecar handoff `a10891bc` — the 6 **training-recipe** lessons reflected in the "Training recipe — optimization gotchas" section
 - sidecar handoff `f5e18a0f` — the **decision/algorithm root cause** ("WHY parallel was the wrong path") reflected in the [decision-grade subsection](#why-parallel-was-the-wrong-path--root-cause-decision-grade): the 11× grouped-conv regression · DDP multiplies a pathological op · vectorization crosses the 2³¹ ceiling · the canonical 7B-ENGINE `ModuleList`/H200/~74 s recipe
 - `.verdicts/hexa-fusion/F-FUSION-SM90-WGMMA-OG16.txt` · `.verdicts/hexa-fusion/F-FUSION-MOE-CONV-PROD-KERNEL.txt` — the two byte-exact-gated GPU-kernel parity breakthroughs (canonical-atom own-GEMM 6.09× → 1.37× · weight-reuse GEMM-conv 6.57× @d=6208) reflected in the [GPU kernel parity recipes](#gpu-kernel-parity-recipes--canonical-atom-gemm--weight-reuse-conv--the-under-fillsaturated-regime-law) subsection (PRs #2866/#2867); the regime-law sweeps `OG-FUSE-OPT`/`XOVER`/`RIGHTSIZE` (#2862/#2865/#2863)
