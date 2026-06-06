@@ -38,9 +38,27 @@
   locality, NOT fill (util 98.7% for A/C/D alike — already saturated); weights are unique/touched-once so
   fusion can't shrink weight traffic. Fusion remains an UNDER-FILL-only cure.
   verdict: .verdicts/hexa-fusion/F-FUSION-MOE-CONV-OPT.txt
-- [ ] **OG-FUSE-XOVER — d=6208/H200 production crossover** — measure the actual under-fill->saturated
-  boundary at the PRODUCTION shape (d=6208, E=30, H200 132 SMs) to confirm the cure applies to the real
-  7B CLMConvMoE step. Blocked on H100/H200 access (unresolved); deliberate, no auto-fire.
+- [x] **OG-FUSE-PROD-KERNEL — weight-bandwidth-optimal GEMM-conv kernel BEATS ModuleList at the
+  production wall** — 🟢 the OG-FUSE-OPT closed-negative REVERSED. (2026-06-07, H100 80GB, vast 39761793
+  DESTROYED leak 0.) The OPT verdict pinned the saturated d=6208 wall as WEIGHT-bandwidth bound (weights
+  touched once, no reuse → fusion/fill can't help, tiled-D still loses to ModuleList) and named the cure:
+  weight REUSE. Path (E) k_moe_conv_gemm recasts each expert Conv1d as an implicit GEMM
+  (Y[t,co]=Σ_k Σ_ci Xshift_k[t,ci]·W_k[ci,co]) and REGISTER-TILES it (BM=64 time × BN=64 outch, BK=16,
+  4×4 micro-tile): the weight smem tile is loaded ONCE and reused across all BM time-rows → BM-fold weight
+  reuse, weight HBM traffic cut ~BM×. ci-ascending k-inner accumulation preserved → **byte-eq max|Δ|=0 vs
+  ModuleList-30** (device-vs-device, gate FIRST + perf-shape cross-check at every d). PERF (H100 132 SMs):
+  d=4096 E=249.7 vs A=1649.2 ms (6.60x); **d=6208 (THE measured wall) E=568.1 vs A=3734.5 ms (6.57x)**;
+  d=8192 E=982.9 vs A=13466.6 ms (13.70x). Util @d=6208 BOTH ~92% saturated → the win is NOT fill (the OPT
+  closed-neg regime) but pure WORK-REDUCTION via weight reuse (same FLOPs, less HBM). tiled-D LOSES to A at
+  d=6208 (3997 vs 3734 ms) confirming OPT. cuBLAS roofline (F) stays ~15x below E — no superiority claim,
+  E reaches a far better roofline point. The production cure is "replace ModuleList+fused/tiled with the
+  GEMM-conv kernel", NOT "the wall is fundamental". verdict: .verdicts/hexa-fusion/F-FUSION-MOE-CONV-PROD-KERNEL.txt
+- [x] **OG-FUSE-XOVER — d=6208/H200 production crossover** — 🟢 MEASURED at d=6208 on H100 (132 SMs, same
+  saturated regime as the H200 wall; vast 39761793 DESTROYED). ModuleList-30 = 3734.5 ms reproduces anima's
+  H200 ~3736 ms/step wall. The under-fill->saturated crossover is moot for the CURE: at d=6208 ALL paths are
+  ~92% saturated yet the GEMM-conv (E) still wins 6.57x via weight reuse (work-reduction, not fill). The
+  prior fused/tiled (C/D) lose at saturation (D 3997 ms > A 3734) — fusion was the wrong lever, weight reuse
+  is the right one. Subsumed by OG-FUSE-PROD-KERNEL. verdict: .verdicts/hexa-fusion/F-FUSION-MOE-CONV-PROD-KERNEL.txt
 - [ ] **OG-FUSE-FOLD — fold the fused kernel into the flame CLMConvMoE trainer** — wire
   tool/gpu_moe_conv_fuse.cu into stdlib/flame as the device MoE-conv path (env-gated, byte-eq ModuleList
   fallback) so the cure reaches the real trainer step. The application path for the f5e18a0f cure.
