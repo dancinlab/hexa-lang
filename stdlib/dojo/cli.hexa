@@ -34,6 +34,11 @@ fn _usage() {
     println("")
     println("spec keys (llm): model · dataset · dataset_config · epochs · batch_size · lr · max_steps · host · output_dir")
     println("spec keys (clm): kosmos_dataset · d · layers · T · experts · host · output_dir  (hexa-native CLMConvMoE, NOT HF Trainer)")
+    println("spec keys (hexa-cuda): kata(vec-add|reduction|tiled-gemm|wmma) · n · dtype(f32|f64|tf32) · sm(sm_90|sm_90a) · output_dir")
+    println("spec keys (flame-forge): kata(linreg|mlp|tiny-clm) · d · T · epochs · lr · host · output_dir")
+    println("spec keys (vision): kata(softmax-clf|patch-mlp) · px · classes · T · d · epochs · lr · host · output_dir")
+    println("spec keys (rl): kata(bandit-pg|gridworld-pg) · states · actions · T · d · epochs · lr · host · output_dir")
+    println("spec keys (tabular): kata(logreg|mlp-tab) · features · classes · T · d · epochs · lr · host · output_dir")
 }
 
 // ── minimal JSON field scanners (interp-safe · cert/json_scan style) ──
@@ -92,7 +97,9 @@ fn _json_field(body: string, key: string) -> string {
 fn _spec_from_json(body: string) -> DojoSpec {
     let spec = dojo_spec_new()
     let keys = ["model", "dataset", "dataset_config", "epochs", "batch_size", "lr", "max_steps", "host", "output_dir",
-                "kosmos_dataset", "d", "layers", "T", "experts"]
+                "kosmos_dataset", "d", "layers", "T", "experts",
+                "kata", "n", "dtype", "sm",
+                "px", "classes", "states", "actions", "features"]
     let mut i = 0
     while i < len(keys) {
         let needle = "\"" + keys[i] + "\""

@@ -1233,7 +1233,22 @@ fn _cloud_rent_vast(av: [str], start: int) -> int {
     // Project attribution (down-guard source) — explicit --project, else
     // cwd git-repo basename, else "unattributed". `owner` doubles as purpose.
     let project = _resolve_project(av, start)
-    let query = _flag_val(av, start, "--query", "")
+    let raw_query = _flag_val(av, start, "--query", "")
+    // --gpu FAMILY|VARIANT — was declared in help but NEVER read, so an empty
+    // --query searched with NO gpu filter and rented an arbitrary GPU (a B200
+    // for `--gpu H100`). Convert it to a vast predicate (exact `gpu_name=` for
+    // a variant/unknown, `gpu_name in [...]` for a known family) and prepend
+    // it so a caller --query token can still override (vastai last-wins).
+    let gpu = _flag_val(av, start, "--gpu", "")
+    let gpu_pred = vast_gpu_predicate(gpu)
+    let mut query = raw_query
+    if len(gpu_pred) > 0 {
+        if len(raw_query) > 0 {
+            query = gpu_pred + " " + raw_query
+        } else {
+            query = gpu_pred
+        }
+    }
     // M1 — bounded SSH-readiness gate. Default 180s; 0/negative = legacy
     // unbounded (opt-in). Caps the rent so a ghost-RUNNING pod whose ssh
     // transport never comes up (exit 255 forever) can't bleed billing.
@@ -2273,7 +2288,7 @@ fn main() {
     while i < len(av) {
         let t = av[i]
         if si < 0 {
-            if t == "rent" || t == "up" || t == "rm" || t == "down" || t == "destroy" || t == "reboot" || t == "list" || t == "status" || t == "preflight" || t == "watchdog" || t == "run" || t == "exec" || t == "nohup" || t == "fire" || t == "poll" || t == "tail" || t == "watch" || t == "ssh-port" || t == "resolve" || t == "alive" || t == "probe" || t == "copy-to" || t == "copy-from" || t == "orphans" || t == "reconcile" || t == "reap" || t == "idle-reap" || t == "adopt" || t == "attribute" || t == "forget" || t == "api" || t == "provider-cli" || t == "dft-run" || t == "parallel-audit" || t == "pods" || t == "dispatch" || t == "providers" || t == "help" || t == "--help" || t == "-h" || t == "version" || t == "--version" || t == "-v" {
+            if t == "rent" || t == "up" || t == "rm" || t == "down" || t == "destroy" || t == "reboot" || t == "list" || t == "status" || t == "preflight" || t == "watchdog" || t == "run" || t == "exec" || t == "nohup" || t == "fire" || t == "poll" || t == "tail" || t == "watch" || t == "ssh-port" || t == "resolve" || t == "alive" || t == "probe" || t == "copy-to" || t == "copy-from" || t == "orphans" || t == "reconcile" || t == "reap" || t == "idle-reap" || t == "adopt" || t == "attribute" || t == "forget" || t == "api" || t == "provider-cli" || t == "dft-run" || t == "dft-fanout" || t == "parallel-audit" || t == "pods" || t == "dispatch" || t == "providers" || t == "help" || t == "--help" || t == "-h" || t == "version" || t == "--version" || t == "-v" {
                 si = i
                 sub = t
             }
@@ -2468,6 +2483,14 @@ fn main() {
         let rc = dft_run(av, si + 1)
         exit(rc)
     }
+    if sub == "dft-fanout" {
+        // §4b SEPARATE-PODS-PER-CANDIDATE executor (PR #2125 follow-up, handoff
+        // 22486f26): fan N candidate decks onto N pods, exactly one deck per pod
+        // (project.tape d_parallel_fire 1순위 + d17). PREVIEW roll-call by default
+        // ($0); --go rents one pod per READY deck and dispatches each chain.
+        let rc = dft_fanout(av, si + 1)
+        exit(rc)
+    }
     if sub == "pods" {
         // ACTIVE reconcile FIRST (anima ghost-drift fix, plan @L2): before
         // rendering anything, reconcile the global M5 registry against the
@@ -2475,19 +2498,33 @@ fn main() {
         // (in registry, absent from the provider's own ledger) and surface
         // real orphans. `--no-reconcile` opts out (offline / no-key hosts).
         let mut do_reconcile = 1
+        let mut show_all = 0
         let mut pi = si + 1
         while pi < len(av) {
             if av[pi] == "--no-reconcile" { do_reconcile = 0 }
+            if av[pi] == "--all" { show_all = 1 }
             pi = pi + 1
         }
         if do_reconcile == 1 {
             let _ = cloud_pods_reconcile_prune()
         }
-        // Per-project active pod/job work manifest at cwd's ./pods.json.
-        // Bare form = full table render (operator's "what is running here
-        // right now?" view). Distinct from `cloud orphans` / pod_registry
-        // (global ~/.hexa-cloud/pods.jsonl — billing/orphan defense).
-        exit(pods_local_print_table(false))
+        // Per-project active pod/job work manifest at cwd's ./pods.json — but
+        // LIVENESS is the PROVIDER's, not the manifest's (anima phantom-pod
+        // fix). The manifest used to render every job as `running` even after
+        // the provider reclaimed its pod (8× edge-vllm-serve, edge-genall,
+        // rent-vast GONE rows shown alive). We now resolve the AUTHORITATIVE
+        // provider-alive set (the SAME runpod myself.pods + vast path that
+        // probe/reap/idle-reap trust) and LEFT-JOIN it onto the manifest:
+        // provider-confirmed-GONE phantoms are dropped (--all to list them),
+        // real pods show their true provider state. When BOTH providers are
+        // unreachable (ok=0) we DON'T hide rows — liveness is UNKNOWN, not
+        // dead (g63: never invent GONE from a blind probe).
+        let pa = cloud_provider_alive_ids()
+        if pa.ok == 0 {
+            println("[cloud] pods: provider liveness UNREACHABLE (" + pa.message
+                + ") — showing tracked jobs UNVERIFIED (not confirmed alive)")
+        }
+        exit(pods_local_print_table_live(false, pa.ok, pa.ids, show_all))
     }
     if sub == "dispatch" {
         // Manage the per-project ./pods.json manifest:
@@ -2527,19 +2564,53 @@ fn main() {
         let ssh_opts = _apply_resolved_port(base_opts, _rh)
         let max_wall = _max_wall_cli(av, si + 2)
         let env_kvs = _env_args_cli(av, si + 2)
+        // gap-2 (cmd-mangle): `--script <file>` delivers an arbitrary command
+        // body over STDIN to a remote `bash -s` — no argv-length limit, no
+        // multiline / `&` corruption (the bytes arrive identical). When set,
+        // it takes precedence over the positional `-- <argv>` path.
+        let script_path = _flag_val(av, si + 2, "--script", "")
+        if len(script_path) > 0 {
+            let body = read_file(script_path)
+            if len(body) == 0 {
+                println("[cloud] run: --script " + script_path + " is empty or unreadable")
+                exit(2)
+            }
+            let rs = cloud_run_script_opts(host, ssh_opts, body)
+            if len(rs.stdout_) > 0 {
+                println(rs.stdout_)
+            }
+            println("[cloud] " + rs.message)
+            _print_fail_tail(rs.stdout_, rs.exit_code, 30)
+            exit(rs.exit_code)
+        }
         let mut argv = _collect_after(av, si + 2)
         if len(argv) == 0 {
-            println("[cloud] run: empty argv — usage: cloud run <host> [--port N] [--insecure] [--max-wall S] [--env K=V] [--source P] -- <argv...>")
+            println("[cloud] run: empty argv — usage: cloud run <host> [--port N] [--insecure] [--max-wall S] [--env K=V] [--source P] [--script F] [--raw-argv] -- <argv...>")
             exit(2)
         }
         argv = _with_env(env_kvs, argv)
         argv = _with_source(_source_args_cli(av, si + 2), argv)
-        let mut r = cloud_run_wall_opts(host, ssh_opts, argv, max_wall)
+        // gap-2 (cmd-mangle): by DEFAULT the positional `-- <cmd>` body is
+        // reassembled and run as `bash -lc <body>` so multiline / `&` /
+        // redirection survive a login shell. `--raw-argv` opts back into the
+        // strict structured-argv path (no shell, L145-class corruption
+        // impossible) for pure program dispatch. --env/--source already wrap
+        // in `bash -c`, so they keep the structured path.
+        let mut r = CloudResult { ok: 0, exit_code: -1, pid: 0, stdout_: "", message: "", logfile: "" }
+        if _has_flag(av, si + 2, "--raw-argv") == 1 || len(env_kvs) > 0 || len(_source_args_cli(av, si + 2)) > 0 {
+            r = cloud_run_wall_opts(host, ssh_opts, argv, max_wall)
+        } else {
+            r = cloud_run_bashlc_opts(host, ssh_opts, argv)
+        }
         // Fix-cloud-1: proxy→direct single retry on a TRANSPORT OUTAGE (255).
         let _fb = _proxy_fallback_direct(_id, _rh, base_opts, r.exit_code)
         if _fb.retry == 1 {
             println("[cloud] run: proxy unreachable (transport 255) → retrying once via direct " + _fb.host)
-            r = cloud_run_wall_opts(_fb.host, _fb.ssh_opts, argv, max_wall)
+            if _has_flag(av, si + 2, "--raw-argv") == 1 || len(env_kvs) > 0 || len(_source_args_cli(av, si + 2)) > 0 {
+                r = cloud_run_wall_opts(_fb.host, _fb.ssh_opts, argv, max_wall)
+            } else {
+                r = cloud_run_bashlc_opts(_fb.host, _fb.ssh_opts, argv)
+            }
         }
         // NOTE (#1229 B): `run` does NOT register the host. The registry holds
         // provider pod-ids (for reconcile vs the provider live set), and `host`
@@ -2800,7 +2871,47 @@ fn main() {
     if sub == "watch" {
         if si + 2 >= len(av) {
             println("[cloud] watch: usage — cloud watch <host> <pid> [--port N] [--insecure] [--interval N] [--max-wait S] [--then-down <id> [--provider P]]")
+            println("[cloud]        OR — cloud watch <host> <logfile> --until <marker> --detach [--grep RE]  (session-independent durable watcher)")
             exit(2)
+        }
+        // gap-3 (watch-detach): `cloud watch <host> <log> --until <marker>
+        // --detach` spawns a SESSION-INDEPENDENT watcher (setsid + nohup,
+        // durable log) over the `cloud tail` 3-tier failure-first exit taxonomy
+        // (0 DONE / 3 TIMEOUT / 4 CRASH / 255 transport). It survives the
+        // parent shell SIGHUP / session re-auth (the exit-144 mass-death this
+        // campaign). The 2nd positional is a LOGFILE here, not a pid.
+        if _has_flag(av, si + 3, "--detach") == 1 {
+            let _rhd = _resolve_cloud_host(_checked_host(av[si + 1]))
+            let host_d = _rhd.host
+            let logfile = av[si + 2]
+            let ssh_opts_d = _apply_resolved_port(_ssh_opts_cli(av, si + 3), _rhd)
+            let grep_re = _flag_val(av, si + 3, "--grep", "")
+            // Build the inner tail command: an explicit --until uses the legacy
+            // single terminal block; absent --until uses the 3-tier taxonomy.
+            let mut inner = ""
+            if _has_flag(av, si + 3, "--until") == 1 {
+                let until_re = _flag_val(av, si + 3, "--until", "")
+                inner = cloud_tail_cmd_opts(host_d, ssh_opts_d, logfile, grep_re, until_re)
+            } else {
+                inner = cloud_tail_cmd_taxonomy_opts(host_d, ssh_opts_d, logfile, grep_re)
+            }
+            // Durable log: explicit --log, else canonical /tmp/cloud-watch-<ts>.log.
+            let mut durable = _flag_val(av, si + 3, "--log", "")
+            if durable == "" {
+                durable = "/tmp/cloud-watch-" + str(timestamp()) + ".log"
+            }
+            let wr = cloud_watch_detach_opts(inner, durable)
+            println("[cloud] " + wr.message)
+            if wr.ok == 1 {
+                // __MONITOR_HANDLE__= JSON: a harness picks up the durable log +
+                // watcher pid without parsing the human line (mirrors nohup/fire).
+                println("__MONITOR_HANDLE__={"
+                    + "\"watcher_pid\":" + str(wr.pid)
+                    + ",\"log\":" + _mh_json_str(durable)
+                    + ",\"detached\":1}")
+                exit(0)
+            }
+            exit(1)
         }
         let _rh = _resolve_cloud_host(_checked_host(av[si + 1]))
         let host = _rh.host

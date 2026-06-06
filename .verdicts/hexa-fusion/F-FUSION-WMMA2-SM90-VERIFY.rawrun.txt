@@ -1,0 +1,65 @@
+=== GPU IDENTITY (honesty-critical) ===
+NVIDIA H100 80GB HBM3, 9.0, 555.58.02, 81559 MiB
+name=NVIDIA H100 80GB HBM3 compute_cap=90
+Cuda compilation tools, release 12.5, V12.5.82
+=== extracted 609 lines, 7 kernels ===
+=== BUILD: -gencode arch=compute_90,code=sm_90 (NATIVE SASS, no PTX-forward) ===
+=== cuobjdump arch (native sm_90 confirmation) ===
+arch = sm_90
+arch = sm_90
+=== SASS Tensor-Core instruction scan in _hx_k_sgemm_cm_wmma2 (sm_90) ===
+WMMA2 func: _Z20_hx_k_sgemm_cm_wmma2iixxxfPKfxS0_xfPfx
+  HMMA/IMMA/OMMA (Tensor-Core MMA) = 64
+  FFMA (CUDA-core FMA)             = 116
+>> WMMA2 sm_90 SASS CONTAINS Tensor-Core MMA ops — TC path compiled in.
+=== RUN @2048^3 (own-GEMM WMMA2 fires inside the driver) ===
+GPU: NVIDIA H100 80GB HBM3 (sm_90)
+shape: M=2048 N=2048 K=2048  iters=50  (col-major, no-transpose, alpha=1 beta=0)
+
+3-way ms/iter (single GEMM, CUDA-event):
+  cuBLAS (TF32)      : 0.05153 ms/iter   (1.00x)
+  naive-WMMA         : 2.28649 ms/iter   (44.37x vs cuBLAS)
+  tiled-WMMA2(CUTLASS): 0.00016 ms/iter   (0.00x vs cuBLAS)
+
+speedup naive->tiled-WMMA2 : 14582.18x
+remaining gap tiled-WMMA2 -> cuBLAS : 0.00x
+
+correctness (own vs cuBLAS oracle, rel-RMS, TF32 tol 3e-3):
+  naive-WMMA  rel-RMS = 4.766e-06  PASS
+  tiled-WMMA2 rel-RMS = 1.000e+00  FAIL
+
+GFLOP/s (2*M*N*K / time):
+  cuBLAS (TF32)       : 333377.4 GFLOP/s   (1.00x)
+  naive-WMMA          : 7513.7 GFLOP/s   (0.0225x vs cuBLAS)
+  tiled-WMMA2(CUTLASS): 109565491.8 GFLOP/s   (328.6530x vs cuBLAS)
+
+Tensor-Core engagement (H100 FP32 CUDA-core peak ~67 TFLOP/s):
+  tiled-WMMA2 = 109565.49 TFLOP/s -> TENSOR CORES ENGAGED (>67 TFLOP/s CUDA-core peak)
+--- stderr (FIRED marker / precedence) ---
+[wmma2-attr] getattr=no error numRegs=236 staticShared=57344B maxThreadsPerBlock=256 ptx=90 bin=90
+[wmma2] launch=invalid argument  run=no error
+=== bounds-guard recheck @ non-tile-multiple shape ===
+[wmma2-attr] getattr=no error numRegs=236 staticShared=57344B maxThreadsPerBlock=256 ptx=90 bin=90
+[wmma2] launch=invalid argument  run=no error
+GPU: NVIDIA H100 80GB HBM3 (sm_90)
+shape: M=130 N=70 K=96  iters=5  (col-major, no-transpose, alpha=1 beta=0)
+
+3-way ms/iter (single GEMM, CUDA-event):
+  cuBLAS (TF32)      : 0.00913 ms/iter   (1.00x)
+  naive-WMMA         : 0.02029 ms/iter   (2.22x vs cuBLAS)
+  tiled-WMMA2(CUTLASS): 0.00054 ms/iter   (0.06x vs cuBLAS)
+
+speedup naive->tiled-WMMA2 : 37.75x
+remaining gap tiled-WMMA2 -> cuBLAS : 0.06x
+
+correctness (own vs cuBLAS oracle, rel-RMS, TF32 tol 3e-3):
+  naive-WMMA  rel-RMS = 2.197e-07  PASS
+  tiled-WMMA2 rel-RMS = 1.000e+00  FAIL
+
+GFLOP/s (2*M*N*K / time):
+  cuBLAS (TF32)       : 191.3 GFLOP/s   (1.00x)
+  naive-WMMA          : 86.1 GFLOP/s   (0.4500x vs cuBLAS)
+  tiled-WMMA2(CUTLASS): 3250.0 GFLOP/s   (16.9881x vs cuBLAS)
+
+Tensor-Core engagement (H100 FP32 CUDA-core peak ~67 TFLOP/s):
+  tiled-WMMA2 = 3.25 TFLOP/s -> CUDA-CORE FMA FLOOR (TC NOT engaged)

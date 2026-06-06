@@ -1,0 +1,128 @@
+% references.bib — fusion-byteeq-util-law
+% Every entry carries a DOI / arXiv id / URL for provenance.
+
+@misc{hexalang2026gpu,
+  title        = {hexa-lang: a native compiler with atlas-bound theorems and an
+                  LLVM-free NVPTX backend},
+  author       = {{dancinlab / hexa-lang}},
+  year         = {2026},
+  howpublished = {\url{https://github.com/dancinlab/hexa-lang}},
+  note         = {Accessed 2026-06-05}
+}
+
+@misc{nvidia2024cublas,
+  title        = {cuBLAS Library User Guide --- {\S}Reproducibility},
+  author       = {{NVIDIA Corporation}},
+  year         = {2024},
+  howpublished = {\url{https://docs.nvidia.com/cuda/cublas/index.html#reproducibility}},
+  note         = {cuBLAS is bitwise-deterministic run-to-run only within a fixed
+                  \{version, architecture, SM-count, single-stream, fixed workspace\};
+                  the accumulation order is not specified across configurations.}
+}
+
+@misc{nvidia2024cuda,
+  title        = {{CUDA} C++ Programming Guide},
+  author       = {{NVIDIA Corporation}},
+  year         = {2024},
+  howpublished = {\url{https://docs.nvidia.com/cuda/cuda-c-programming-guide/}},
+  note         = {Cooperative groups, \texttt{grid.sync()}, and cross-stream
+                  ordering semantics. Accessed 2026-06-05.}
+}
+
+@article{neal2015superaccumulator,
+  title   = {Fast exact summation using small and large superaccumulators},
+  author  = {Neal, Radford M.},
+  journal = {arXiv preprint arXiv:1505.05571},
+  year    = {2015},
+  eprint  = {1505.05571},
+  archivePrefix = {arXiv},
+  note    = {Order-independent exact summation at $<2\times$ cost; the practical
+            Kulisch complete-register for a reproducible K-reduction.}
+}
+
+@article{ozaki2025exactgemm,
+  title   = {Ozaki Scheme II: an exact and order-independent matrix multiply via
+             integer/CRT decomposition},
+  author  = {Ozaki, Katsuhisa and collaborators},
+  journal = {arXiv preprint arXiv:2504.08009},
+  year    = {2025},
+  eprint  = {2504.08009},
+  archivePrefix = {arXiv},
+  note    = {Exact product makes any two implementations bit-identical; provable
+            $\max|\Delta|=0$ versus a correctly-rounded reference.}
+}
+
+@article{iakymchuk2020exblas,
+  title   = {{ExBLAS}: reproducible and accurate {BLAS} via long accumulators},
+  author  = {Iakymchuk, Roman and Collange, Sylvain and Defour, David and Graillat, Stef},
+  journal = {arXiv preprint arXiv:2005.07282},
+  year    = {2020},
+  eprint  = {2005.07282},
+  archivePrefix = {arXiv}
+}
+
+@article{demmel2018reproblas,
+  title   = {Reproducible {BLAS}: binned summation for bitwise-reproducible reductions},
+  author  = {Demmel, James and Ahrens, Peter and Nguyen, Hong Diep},
+  journal = {arXiv preprint arXiv:1802.09883},
+  year    = {2018},
+  eprint  = {1802.09883},
+  archivePrefix = {arXiv},
+  note    = {Reproducible-not-exact; the cheapest fallback K-reduction.
+            See also bebop.cs.berkeley.edu/reproblas.}
+}
+
+@article{thinkingmachines2025batchinvariant,
+  title   = {Batch-invariant operations and fixed-order tree {MatMul} (TBIK)},
+  author  = {{Thinking Machines}},
+  journal = {arXiv preprint arXiv:2511.17826},
+  year    = {2025},
+  eprint  = {2511.17826},
+  archivePrefix = {arXiv},
+  note    = {Fixed-order tree-MatMul at ${\sim}63\%$ of cuBLAS throughput,
+            explicitly NOT matching cuBLAS bits --- the industry re-baseline path.}
+}
+
+@article{mukunoki2025fp8ozaki,
+  title   = {{FP8} tensor-core exact matrix multiply via the Ozaki scheme},
+  author  = {Mukunoki, Daichi and collaborators},
+  journal = {arXiv preprint arXiv:2508.00441},
+  year    = {2025},
+  eprint  = {2508.00441},
+  archivePrefix = {arXiv}
+}
+
+@article{ootomo2022splitcorrect,
+  title   = {Recovering single-precision accuracy from tensor cores via
+             split-and-correct},
+  author  = {Ootomo, Hiroyuki and Yokota, Rio},
+  journal = {arXiv preprint arXiv:2203.03341},
+  year    = {2022},
+  eprint  = {2203.03341},
+  archivePrefix = {arXiv},
+  note    = {Explicitly disclaims bit-exactness --- not a $\max|\Delta|=0$ method.}
+}
+
+@article{williams2009roofline,
+  title   = {Roofline: an insightful visual performance model for multicore
+             architectures},
+  author  = {Williams, Samuel and Waterman, Andrew and Patterson, David},
+  journal = {Communications of the ACM},
+  volume  = {52},
+  number  = {4},
+  pages   = {65--76},
+  year    = {2009},
+  doi     = {10.1145/1498765.1498785}
+}
+
+@article{dao2022flashattention,
+  title   = {{FlashAttention}: fast and memory-efficient exact attention with
+             {IO}-awareness},
+  author  = {Dao, Tri and Fu, Daniel Y. and Ermon, Stefano and Rudra, Atri and
+             R{\'e}, Christopher},
+  journal = {arXiv preprint arXiv:2205.14135},
+  year    = {2022},
+  eprint  = {2205.14135},
+  archivePrefix = {arXiv},
+  doi     = {10.48550/arXiv.2205.14135}
+}

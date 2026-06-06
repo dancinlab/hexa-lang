@@ -4,3 +4,5 @@
 @paper rtsc-ambient-roadmap := "./rtsc-ambient-roadmap"
 @paper bc4-attention-bm32-capstone := "./PAPER/bc4-attention-bm32-capstone"
 @paper complexity-integration-triad := "./PAPER/complexity-integration-triad"
+@paper fusion-byteeq-util-law := "./PAPER/fusion-byteeq-util-law"
+@paper fusion-own-gemm-util := "./PAPER/fusion-own-gemm-util"

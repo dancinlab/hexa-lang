@@ -1,0 +1,38 @@
+F-FUSION-GN-COOP-KERNEL  ::  CLOSED-NEGATIVE (ANALYSIS — deterministic, NOT a measured run)
+domain: HEXA-FUSION  ·  date: 2026-06-04  ·  method: byte-eq vs reduction-order + cooperative-launch cost analysis
+
+QUESTION: can the groupnorm reductions (GN#1 in L3-c, GN#2 the last unfused block-2 op) be folded
+into the glue-block megakernel via a cooperative kernel (cudaLaunchCooperativeKernel + grid.sync())
+to complete the "whole-step" fusion, while holding byte-eq max|Δ|=0?
+
+RESULT: FALSIFIED on cost/benefit — effectively CLOSED-NEGATIVE.
+
+EVIDENCE:
+  - The device _hx_k_groupnorm (and the L3-c fused variant) computes the per-group reduction with
+    ONE thread per group, SEQUENTIALLY (t-outer, c-inner) with NO tree re-association — that
+    sequential order is WHY it is byte-identical to the host nn_groupnorm (max|Δ|=0). With G=1 the
+    whole T·C tensor is one group → one thread reduces the entire tensor.
+  - A cooperative-kernel GN inside the megakernel would need: [all y[t,c] computed] -> grid.sync()
+    -> [reduce mean/var over all T·C] -> grid.sync() -> [per-element normalize].
+  - WALL (byte-eq): a multi-block parallel reduction (tree / atomics / warp-partials) changes the
+    floating-point summation order vs the host -> max|Δ| != 0 -> byte-eq HARD GATE BROKEN. Changing
+    the HOST reference to the same tree order would move the established baseline CE
+    (4.46624->3.64669) -> breaks byte-eq-to-baseline. So the reduction MUST stay single-thread
+    sequential -> cooperative launch buys ZERO occupancy on the reduction (the binding phase);
+    every other thread idles at the barrier. Net: grid.sync() + cooperative-launch overhead for no
+    reduction-parallelism gain.
+  - COST: cooperative launch constraints (whole grid must be device-resident simultaneously =
+    occupancy-capped grid; register/shared budget for a kernel already doing gelu+pack+router+GN ->
+    spill risk) = a step-change in complexity outside the L3 per-element/per-row pattern.
+  - DOESN'T ADDRESS THE BINDING TERM: the honest ceiling (F-FUSION-OCCUPANCY-WALL,
+    F-FUSION-MEGAKERNEL-DESIGN) is that util is bound by cuBLAS GEMM-gap occupancy (small FP64 GEMMs
+    @D1536 under-fill the H100). GN fusion touches none of it.
+
+VERDICT: GN-into-megakernel via cooperative kernel is the worst remaining lever — high complexity,
+byte-eq forces zero reduction-parallelism, and it doesn't move the binding GEMM-gap term. DON'T build it.
+
+CONSEQUENCE: this TERMINATES the glue-fusion campaign. The glue-block megakernel is complete up to
+the 2 GN reductions (block-1 = L3-c #2687, block-2 prefix = L3-d #2689); the GN reductions are the
+byte-eq floor and are not worth fusing. The ONLY remaining lever for the actual goal (>=20% util on
+idle H100) is NON-FUSION: a right-sized GPU (RTX 5070 ~90% @D1536) or a larger batch (wider GEMMs)
+— both raise GEMM occupancy, the binding term. ANALYSIS only — no run, no number claimed (g5-honest).

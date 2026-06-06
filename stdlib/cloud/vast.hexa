@@ -297,6 +297,85 @@ fn _vast_build_query(query: str, verified_only: int) -> str {
     return out
 }
 
+// _vast_gpu_variants — GPU-FAMILY → vast `gpu_name` exact-variant list.
+// vast.ai's query DSL has NO partial-match (`~` is REJECTED) — `gpu_name`
+// must match an exact variant. A user typing `--gpu H100` means "any H100
+// SKU", which is several distinct vast names. This table maps the common
+// family keys to their exact variant set so `--gpu H100` can become a vast
+// `in [...]` predicate. Unknown keys return [] (caller treats as exact).
+// Names are the underscore form vast's query DSL expects (the --raw JSON
+// output prints the spaced form, e.g. "H100 NVL", but the query key uses
+// "H100_NVL"). Verified against `vastai search offers 'gpu_name in [...]'`.
+fn _vast_gpu_variants(family: str) -> [str] {
+    if family == "H100" {
+        return ["H100_SXM5", "H100_PCIE", "H100_NVL", "H100_SXM"]
+    }
+    if family == "A100" {
+        return ["A100_SXM4", "A100_PCIE", "A100X", "A100_SXM4_80GB"]
+    }
+    if family == "H200" {
+        return ["H200", "H200_NVL"]
+    }
+    if family == "B200" {
+        return ["B200"]
+    }
+    if family == "A40" {
+        return ["A40"]
+    }
+    if family == "RTX_4090" {
+        return ["RTX_4090"]
+    }
+    if family == "RTX_5090" {
+        return ["RTX_5090"]
+    }
+    return []
+}
+
+// _vast_contains_underscore — 1 iff `s` has an `_` (already an exact vast
+// variant name like `H100_NVL`). Char-walk to avoid a stdlib `index_of`
+// dependency this module does not otherwise use.
+fn _vast_contains_underscore(s: str) -> int {
+    let mut i = 0
+    while i < len(s) {
+        if s.substring(i, i + 1) == "_" {
+            return 1
+        }
+        i = i + 1
+    }
+    return 0
+}
+
+// vast_gpu_predicate — turn a `--gpu` value into a vast query predicate.
+//   empty            -> "" (no filter)
+//   already exact    -> gpu_name=<v> (contains `_`, e.g. H100_NVL)
+//   known family     -> gpu_name in [V1,V2,...] (vast `in` list; verified to
+//                       parse + return offers; vast has NO `~` partial match)
+//   unknown (no `_`) -> gpu_name=<v> (exact; non-silent, never `~`)
+// The in-list keeps the search to ONE call across all SKUs of a family,
+// fixing `--gpu H100` silently renting an arbitrary GPU (an observed B200).
+pub fn vast_gpu_predicate(gpu: str) -> str {
+    if len(gpu) == 0 {
+        return ""
+    }
+    if _vast_contains_underscore(gpu) == 1 {
+        return "gpu_name=" + gpu
+    }
+    let variants = _vast_gpu_variants(gpu)
+    if len(variants) == 0 {
+        return "gpu_name=" + gpu
+    }
+    let mut list = ""
+    let mut i = 0
+    while i < len(variants) {
+        if i > 0 {
+            list = list + ","
+        }
+        list = list + variants[i]
+        i = i + 1
+    }
+    return "gpu_name in [" + list + "]"
+}
+
 // _vast_collect_offer_ids — parse a `vastai search offers --raw` JSON
 // array into the list of offer ids (the `id` field of each element).
 fn _vast_collect_offer_ids(out: str) -> [str] {

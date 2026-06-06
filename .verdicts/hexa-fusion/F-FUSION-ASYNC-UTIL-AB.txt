@@ -1,0 +1,43 @@
+F-FUSION-ASYNC-UTIL-AB — HEXA-FUSION ② async-pipeline util A/B
+host: vast H100_NVL (idle, glibc 2.35, nvcc 12.4) instance 39318618
+build: frozen-seed bundle (self/ full tree) + nvcc -DHEXA_CUDA (58/58 launchers) + gcc -lcuda
+config: CLM_PROD_DEVRESIDENT=1 DEVFEED=1 BATCHED=1 D=1536 T=512 E=2 NSAMP=8 EPOCHS=4
+corpus: clm_mid_5lang_c4.txt (402270 bytes, V=256)
+
+BASELINE_IDLE MEAN=0.00% PEAK=0% n=16
+
+--- ASYNC=0 (per-op sync; W2-baseline path) rc=0 ---
+  util MEAN=12.50% PEAK=100% pct>=20=18.6% n=307
+  epoch-1 mean CE = 4.46624
+  epoch-4 mean CE = 3.64669
+  F-CLM-PROD-DESCENT = 1
+  PASS — real-corpus mean CE descends under int4 envelope
+
+--- ASYNC=1 (async pipeline; single g_forge_stream) rc=0 ---
+  util MEAN=10.28% PEAK=100% pct>=20=15.2% n=310
+  epoch-1 mean CE = 4.8859
+  epoch-4 mean CE = 4.86298
+  F-CLM-PROD-DESCENT = 1
+  PASS — real-corpus mean CE descends under int4 envelope
+
+VERDICT (CLOSED-NEGATIVE):
+  - util-GREEN (MEAN>=20%) NOT achieved by either path; async LOWERS util
+    (10.28% < 12.50%) -> the async lever does not unblock utilization on H100.
+  - byte-eq SUSPECT: ASYNC=1 CE trajectory diverges from ASYNC=0 (ep1 4.89 vs 4.47,
+    Delta 0.02 vs 0.82) -> async-on is NOT byte-identical; the ##2d sync->launch_check
+    conversion likely introduces a device race. Needs fixed-seed re-run to confirm.
+  - The pre-registered falsifier "async raises util MEAN>=20%" is FALSIFIED.
+
+--- util-vs-D sweep (ASYNC=0, idle H100, EPOCHS=2) ---
+D=1536 T=512  util MEAN=12.71% PEAK=100% pct>=20=20.3% n=187
+D=2560 T=512  util MEAN= 8.22% PEAK=100% pct>=20=11.2% n=445
+D=3584 T=512  util MEAN= 7.31% PEAK=100% pct>=20= 7.6% n=813
+D=4608 T=512  util MEAN= 2.94% PEAK=100% pct>=20= 3.2% n=2088 (rc=124 timeout)
+
+SWEEP VERDICT: util MEAN DECREASES MONOTONICALLY as workload D grows
+(12.71% -> 2.94%), while wall-clock (sample count n) explodes ~11x. The
+host-side per-op overhead of the interpreted per-step driver scales WITH the
+workload and outpaces GPU compute -> larger D => GPU waits longer on host.
+=> util-GREEN (MEAN>=20%) is UNREACHABLE by workload sizing; it gets WORSE.
+The ONLY path is removing the host from the critical path = CUDA Graph capture
+(milestone 4). Corroborates the launch-bound diagnosis and the research.

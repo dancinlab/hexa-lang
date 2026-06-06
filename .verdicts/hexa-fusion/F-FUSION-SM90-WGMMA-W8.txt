@@ -1,0 +1,96 @@
+F-FUSION-SM90-WGMMA-W8 — TMA-producer dual-consumer-warpgroup own-GEMM on native sm_90a
+=============================================================================================
+verdict-tier: 🟢 numerical — BIT-EXACT GATE PASSED (rel_rms=0), real perf Δ measured;
+              PARITY=NO; W8 TMA-producer lever LANDED — frontier lifted 50.7 -> 66.5 TFLOP/s
+              (+31%), gap 8.39x -> 6.44x; the diagnosed-correct occupancy fix CONFIRMED.
+date: 2026-06-06
+GPU: NVIDIA H100 80GB HBM3, compute_cap 9.0, driver 560.35.03
+     (vast pod 39701877, ssh2.vast.ai, DESTROYED immediately after capture — leak 0)
+toolchain: nvcc 12.6 (cuda_12.6.r12.6, V12.6.77), -O3 -arch=sm_90a -lcublas -lcuda
+kernel: self/native/wgmma/wgmma_tf32_warpspec.cu — MODE 4 = gemm_ws_tma (NEW W8 kernel)
+
+baseline carried from W6/W7:
+   MODE 1 async-pipe        = 50.7 TFLOP/s = 8.39x off cuBLAS-TF32 (~425)  ★ prior frontier
+   MODE 3 dual-consumer-WG  = 32.0 = 13.2x (W7 — bit-exact but occupancy-bound, 1 CTA/SM)
+
+GATE: bit-exact FIRST. cuBLAS-TF32 (CUBLAS_TF32_TENSOR_OP_MATH) = ROOFLINE; ratio = cuBLAS/own.
+      NO superiority claim — parity-seeking. g5: NO perf number on any rel_rms > 3e-3 kernel.
+
+================= W8 LEVER LANDED — MODE 4 TMA-PRODUCER DUAL-CONSUMER-WG =================
+THE W7 DIAGNOSIS (F-FUSION-SM90-WGMMA-W7): MODE 3 regressed 50.7->32.0 because its PRODUCER
+is a full 128-thread cp.async warpgroup. That 384-thread CTA is REGISTER-BOUND to 1 block/SM
+(90 regs * 384 = 34,560 regs/CTA; 2 CTAs = 69,120 > 65,536 regs/SM), netting only 256
+compute-thr/SM vs the simple async-pipe's 512 (4 CTAs * 128). HALF the compute occupancy.
+
+THE W8 FIX (diagnosed-correct lever): replace the thread-heavy cp.async producer warpgroup
+with a HARDWARE TMA producer driven by a SINGLE ELECTED THREAD.
+  GEOMETRY: TM=128, TN=128, TK=8. 256 threads = 2 warpgroups, BOTH consumers (NO dedicated
+    producer WG). thread 0 (elected) issues cp.async.bulk.tensor.2d for the A-band (128x8) +
+    B (8x128) into an NST-deep ring; mbarrier.arrive.expect_tx tracks the TMA byte count;
+    the TMA HW engine does the global->shared copy with ~0 consumer threads spent on the load.
+  All 256 threads then mbar_wait(full[stage]) on TMA arrival, cooperatively permute the TMA-
+    landed row-major Araw/Braw -> gmma INTER 8x4 layout (the W1/W2-proven bit-exact layout —
+    same mk/gmma_phys/WG descriptors as MODE 0..3, ONLY the production engine changed), then
+    each warpgroup issues its 2 wgmma.mma_async over its 64-row A band x the SHARED B tile.
+  empty[] mbarrier (arrive count 256) lets the elected thread re-arm each ring stage's next
+    TMA load after both WGs finished the wgmma.
+
+================= OCCUPANCY — THE W8 SUCCESS PROXY (cudaOccupancyMaxActiveBlocksPerMultiprocessor, on-pod) =================
+  gemm_ws_tma (MODE 4): Used 120 registers, 1 barrier. 120*256 = 30,720 regs/CTA
+    -> 2 CTAs = 61,440 < 65,536 regs/SM  ->  2 CTA/SM = 512 compute-thr/SM  ✅ (target >=2)
+  gemm_ws2    (MODE 3): Used  90 registers. 90*384 = 34,560 regs/CTA
+    -> 2 CTAs = 69,120 > 65,536           ->  1 CTA/SM  = 384 compute-thr/SM
+  => the single-elected-thread TMA producer freed the producer warpgroup AND shrank the CTA
+     (384->256 thr), DOUBLING resident CTAs/SM. OCCUPANCY ROSE 1 -> 2 CTA/SM as predicted.
+
+================= RESULT (bit-exact, rel_rms=0 at every point — MODE 4 is CORRECT) =================
+  S=2048  NST=2  own=63.3  cuBLAS=344.6  ratio= 5.45x  rel_rms=0.000e+00  [2 CTA/SM]
+  S=2048  NST=3  own=63.3  cuBLAS=347.5  ratio= 5.49x  rel_rms=0.000e+00  [2 CTA/SM]
+  S=2048  NST=4  own=63.2  cuBLAS=344.7  ratio= 5.45x  rel_rms=0.000e+00  [2 CTA/SM]
+  S=4096  NST=2  own=66.5  cuBLAS=434.3  ratio= 6.53x  rel_rms=0.000e+00  [2 CTA/SM]  ★ best ratio-context
+  S=4096  NST=3  own=66.4  cuBLAS=428.0  ratio= 6.45x  rel_rms=0.000e+00  [2 CTA/SM]
+  S=4096  NST=4  own=66.3  cuBLAS=427.5  ratio= 6.44x  rel_rms=0.000e+00  [2 CTA/SM]
+  S=6144  NST=3  own=68.0  cuBLAS=456.5  ratio= 6.71x  rel_rms=0.000e+00  [2 CTA/SM]
+  S=8192  NST=3  own=69.6  cuBLAS=455.8  ratio= 6.55x  rel_rms=0.000e+00  [2 CTA/SM]  ★ best own TFLOP/s
+  (NST 2/3/4 indistinguishable — ring depth was never the wall, consistent with W5/W6/W7.)
+
+================= APPLES-TO-APPLES (same pod, S=4096) =================
+  MODE 1 async-pipe       (NST=4)  own=50.8  ratio= 8.54x  rel_rms=0  [4 CTA/SM, 512 thr/SM]
+  MODE 3 dual-consumer-WG (NST=3)  own=32.0  ratio=13.67x  rel_rms=0  [1 CTA/SM, 384 thr/SM]
+  MODE 4 TMA-producer     (NST=3)  own=66.4  ratio= 6.45x  rel_rms=0  [2 CTA/SM, 512 thr/SM]
+  => the TMA producer RECOVERED the W7 regression AND OVERTOOK the W6 frontier:
+     50.7 -> 66.5 TFLOP/s (+31%). The dual-consumer-WG geometry W7 wanted FINALLY pays off
+     once the producer stops consuming a whole warpgroup + register-evicting the 2nd CTA.
+
+================= HEADLINE =================
+  own GFLOP/s: 50.7 (W6/W7 frontier)  ->  66.5 (W8 MODE 4, S=4096; 69.6 @ S=8192)  [+31% LIFT]
+  cuBLAS-TF32 roofline: ~428-456 TFLOP/s
+  ratio vs cuBLAS: 8.39x (prior frontier)  ->  6.44x (W8 MODE 4)  [gap NARROWED]
+  rel_rms: 0.000e+00 (EXACT — the TMA-producer kernel is bit-correct, same gmma layout)
+  occupancy: 1 CTA/SM (W7)  ->  2 CTA/SM (W8)  [the success proxy — ACHIEVED, >=2]
+  % of the 8.39x->1.0x parity gap closed: (8.39-6.44)/(8.39-1.0) = 1.95/7.39 = ~26%
+  PARITY (<=1.3x): NO (6.44x) — BIG-PROGRESS, not summit.
+
+================= FINDING (BIG-PROGRESS, real number + named residual) =================
+  Pre-registered falsifier (W7 residual): "a HARDWARE TMA producer driven by a SINGLE elected
+  thread (freeing the other 127) lets a dual-consumer-WG warp-spec keep full compute occupancy
+  and lift the frontier toward cuBLAS parity." MEASURED: CONFIRMED (partially — lift real, not
+  yet parity). The TMA-producer kernel is BIT-EXACT (rel_rms=0, S=2048..8192, NST=2..4) and
+  ~31% FASTER than the prior frontier (50.7 -> 66.5), with occupancy restored 1 -> 2 CTA/SM
+  exactly as the W7 occupancy calculator predicted.
+  CONFIRMED AXIS (deterministic): the W7 occupancy wall WAS the production engine. A single-
+  elected-thread TMA producer fixes it — the producer warpgroup is freed (now both WGs consume),
+  the CTA shrinks 384->256 thr, register pressure drops the resident-CTA evict, and CTAs/SM
+  doubles 1 -> 2. This is the cuBLAS production class (HW TMA), not a 128-thread cp.async WG.
+
+================= NAMED RESIDUAL (next-cycle claim, W9) — the remaining 6.44x =================
+  The frontier is now COMPUTE/MAINLOOP-bound, not occupancy-bound. Remaining levers toward parity:
+  (1) SWIZZLED TMA descriptors (CU_TENSOR_MAP_SWIZZLE_128B): land the tile directly in a wgmma-
+      readable swizzle so the cooperative Araw/Braw -> gmma PERMUTE (run every K-step by all 256
+      thr) is ELIMINATED. The permute + its 2 __syncthreads per K-step are the prime suspect for
+      the residual; cuBLAS never permutes — TMA swizzle feeds wgmma directly.
+  (2) DEEPER TK per wgmma group + register-resident accumulator double-buffering to overlap
+      wgmma latency across stages (the mainloop currently wgmma.wait_group 0 every K-step).
+  (3) wider N-tile (n=256 m64n256k8 wgmma) to amortize the B-load + raise arithmetic intensity.
+  Prediction (W9): SWIZZLED-TMA (no permute) is the single highest-value lever on the 6.44x.
+  Frontier kernel is now MODE 4 gemm_ws_tma (66.5 TFLOP/s, 6.44x, 2 CTA/SM) until W9 lands.

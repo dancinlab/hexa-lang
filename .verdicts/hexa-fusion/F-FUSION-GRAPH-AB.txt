@@ -1,0 +1,61 @@
+F-FUSION-GRAPH-AB — HEXA-FUSION L2 ④ CUDA-graph capture/replay util A/B
+host: vast H100_NVL (idle, glibc 2.35, nvcc 12.4, gcc 11.4) instance 39342863
+build: frozen-seed bundle (self/ full tree, runtime.c UNCHANGED 15479L) +
+       module_loader flatten of the NEW graph clm_prod.hexa (whole-program, all
+       imported-module bodies inlined) + frozen hexat transpile + post-process +
+       nvcc -DHEXA_CUDA (58/58 farr launchers, 5 _forge_graph_* T-syms) + gcc -lcuda
+config: CLM_PROD_DEVRESIDENT=1 DEVFEED=1 BATCHED=1 D=1536 T=512 E=2 NSAMP=8 EPOCHS=4
+corpus: clm_mid_5lang_c4.txt (402270 bytes, V=256)
+graph: fwd→ce_grad→bwd region captured once (first non-metric step) + replayed for the
+       bulk non-metric steps via one cudaGraphLaunch; AdamW stays EAGER (host-dependent
+       bias-correction t); metric steps (first/last nwin) take the eager branch.
+       HEXA_CUDA_GRAPH=0 => forge_graph_* are no-ops => always the eager branch.
+
+BASELINE_IDLE MEAN=0.00% PEAK=0% n=16
+
+--- GRAPH=0 (eager baseline; HEXA_CUDA_GRAPH unset) rc=0 ---
+  util MEAN=11.85% PEAK=71% pct>=20=23.9% n=293  (median 2%, wall ~146s)
+  epoch-1 mean CE = 4.46624
+  epoch-4 mean CE = 3.64669
+  F-CLM-PROD-DESCENT = 1
+  PASS — real-corpus mean CE descends under int4 envelope
+
+--- GRAPH=1 (capture/replay; HEXA_CUDA_GRAPH=1) rc=0 ---
+  util MEAN=13.17% PEAK=77% pct>=20=24.1% n=291  (median 2%, wall ~146s)
+  epoch-1 mean CE = 4.46624
+  epoch-4 mean CE = 3.64669
+  F-CLM-PROD-DESCENT = 1
+  PASS — real-corpus mean CE descends under int4 envelope
+
+VERDICT:
+  CORRECTNESS — PASS (byte-eq). GRAPH=1 CE trajectory is BIT-IDENTICAL to GRAPH=0
+    (epoch-1 4.46624 == 4.46624, epoch-4 3.64669 == 3.64669, all digits). The
+    capture/replay reproduces the eager kernel sequence exactly — token feed is
+    device-resident (DEVFEED), no host dependency leaked into the captured graph,
+    AdamW correctly excluded (kept eager). The graph lever is NOT a race (unlike the
+    ② async lever, whose ASYNC=1 CE diverged 4.89 vs 4.47). Capture is SOUND.
+  UTIL — GREEN NOT reached. MEAN 11.85% -> 13.17% (+1.32pp, +11% relative). The
+    graph replay raises util in the predicted direction (host partially off the
+    critical path) but the gain is small and falls FAR short of the >=20% GREEN gate.
+    pct>=20 barely moves (23.9% -> 24.1%); median util stays 2% (the launch floor);
+    PEAK 71% -> 77%. Wall-clock is unchanged (~146s both, n 293 vs 291).
+  Pre-registered falsifier "graph replay raises util MEAN >= 20%" is FALSIFIED.
+
+ROOT-CAUSE / WHY GREEN IS STILL UNREACHED (honest diagnosis):
+  The graph captures ONLY the fwd→ce_grad→bwd region and replays it for the bulk
+  middle steps, but the AdamW optimizer (28 _adam calls/step) stays EAGER — each
+  is a separate host-driven forge_dispatch_adamw launch with a per-op host round-trip.
+  So per step the host is OFF the critical path for fwd/bwd (graph) but STILL ON it
+  for the entire 28-launch AdamW sweep. The remaining launch-bound tail (AdamW +
+  the H2D token feed + the eager metric steps) dominates, capping the util gain at
+  ~1.3pp. To cross GREEN the AdamW sweep must ALSO be captured (needs a step-counter
+  that is a device buffer, not the host `step` int the static graph would bake wrong),
+  OR fused into a single device kernel. That is milestone ⑤ (whole-step capture /
+  device-resident optimizer-t). The ④ lever is byte-eq CORRECT and a real (if small)
+  util gain, but does not by itself unblock utilization on H100.
+
+NET vs the ② async closed-negative: graph capture is the FIRST lever that is BOTH
+byte-eq correct AND moves util in the right direction (async was neither). It is a
+necessary, not sufficient, step toward GREEN. CLOSED on the >=20% falsifier; the
+ruled-out axis = "fwd/bwd-only graph capture suffices for GREEN" (it does not — the
+eager AdamW tail dominates).

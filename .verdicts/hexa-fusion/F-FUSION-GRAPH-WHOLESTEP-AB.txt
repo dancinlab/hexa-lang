@@ -1,0 +1,79 @@
+F-FUSION-GRAPH-WHOLESTEP-AB — HEXA-FUSION L2 (5) whole-step CUDA-graph util PROBE
+host: vast H100_NVL (idle, glibc 2.35, nvcc 12.4.131, gcc 11.4) instance 39346681 (DOWNED)
+build: ④ frozen-seed bundle (self/ tree + runtime_cuda.c UNCHANGED) with the NEW
+       whole-step clm_prod.c swapped in. Transpile on summer@192.168.50.60:
+       module_loader flatten (9 files inlined, 0 `use` left) → hexat → 2-part
+       post-process (8× forge_dispatch closure→direct + 5× hexa_call0(forge_graph_X)
+       → hexa_int(_forge_graph_X())). 0 residual closure-calls. nvcc -DHEXA_CUDA:
+       58/58 farr launchers + 9 graph syms. gcc link clean (764144 bytes, -lcuda).
+config: CLM_PROD_DEVRESIDENT=1 DEVFEED=1 BATCHED=1 D=1536 T=512 E=2 NSAMP=8 EPOCHS=4
+corpus: clm_mid_5lang_c4.txt (402270 bytes, V=256)
+gate:   env HEXA_CUDA_GRAPH_WHOLESTEP=1 extends the ④ captured region (fwd→ce_grad→
+        bwd) to ALSO include the 16-call AdamW sweep (_adam_sweep), issued INSIDE the
+        begin…commit region and skipped on replay. PHASE-1 PROBE: c1/c2 bias-correction
+        stays BAKED at the capture step's t (numerically wrong on replay — but it RUNS).
+        Goal: measure the util CEILING before paying for the byte-eq device-t work.
+
+BASELINE_IDLE MEAN=0.00% PEAK=0% n=16
+
+--- g0   GRAPH=0 WHOLESTEP=0  (eager baseline)        rc=0 wall=160s ---
+  util MEAN=14.87% PEAK=77% MEDIAN=2% pct>=20=24.8% n=294
+  epoch-1 mean CE = 4.46624 ; epoch-4 mean CE = 3.64669 ; F-CLM-PROD-DESCENT=1 PASS
+
+--- g1   GRAPH=1 WHOLESTEP=0  (fwd/bwd-only, ④ path)  rc=0 wall=155s ---
+  util MEAN=13.19% PEAK=77% MEDIAN=2% pct>=20=23.1% n=286
+  epoch-1 mean CE = 4.46624 ; epoch-4 mean CE = 3.64669 ; F-CLM-PROD-DESCENT=1 PASS
+
+--- g1ws GRAPH=1 WHOLESTEP=1  (WHOLE-STEP (5) probe)  rc=0 wall=154s ---
+  util MEAN=13.54% PEAK=77% MEDIAN=2% pct>=20=23.9% n=284
+  epoch-1 mean CE = 4.46624 ; epoch-4 mean CE = 3.64669 ; F-CLM-PROD-DESCENT=1 PASS
+
+DECISION GATE (PHASE-1): whole-step-capture util MEAN >= ~20% ?
+  ==> NO. 13.54%. FAR under 20%. STOP — do NOT proceed to Phase 2 (byte-eq device-t).
+
+VERDICT:
+  PRE-REGISTERED FALSIFIER "whole-step capture (AdamW in the graph) raises util MEAN
+    to >= 20%" is FALSIFIED. Measured 13.54%.
+  The whole-step probe (13.54%) is STATISTICALLY INDISTINGUISHABLE from the ④ fwd/bwd-
+    only graph (13.19%, +0.35pp) — adding the entire 16-launch AdamW sweep to the
+    captured graph moved util by essentially NOTHING. Median util stays pinned at 2%
+    across ALL THREE conditions (g0/g1/g1ws). PEAK identical (77%). pct>=20 ~24% flat.
+  Notably the EAGER baseline g0 (14.87%) is HIGHER than both graph variants this run —
+    run-to-run pod variance (the ④ kit measured g0=11.85% on a different instance), but
+    it confirms the graph lever's signal is within the noise floor: removing host launch
+    issue from the per-step critical path is NOT the binding constraint.
+
+ROOT-CAUSE (honest, post-falsification):
+  The host-removal hypothesis is REJECTED for the whole-step lever. Taking the host
+  fully off the per-step critical path (fwd+bwd+AdamW all in one replayed graph) does
+  NOT lift utilization. The median-2% floor that survives whole-step capture means the
+  GPU is idle BETWEEN kernels for reasons unrelated to who issues the launch:
+    1. The per-kernel work at D=1536/T=512 is sub-millisecond — each micro-GEMM /
+       conv / groupnorm finishes far faster than the inter-kernel gap, so even a
+       host-free back-to-back graph launch leaves the SMs idle waiting on the NEXT
+       kernel's dependency. The graph removes LAUNCH latency, not the serial kernel-
+       to-kernel DEPENDENCY chain (each op waits on the prior op's output).
+    2. The token H2D feed + the eager metric steps (first/last nwin, scalar-loss d2h
+       readback) remain on the host path and are NOT captured — but they are a minority
+       of steps and cannot explain the 2% median on the bulk replayed steps.
+  The binding constraint is the SERIAL, FINE-GRAINED kernel DAG at this problem size,
+  not host launch overhead. util-GREEN (>=20%) is NOT reachable by graph capture of any
+  region. The remaining levers are workload-shape, not host-removal: (a) larger per-
+  kernel tiles / batched micro-GEMMs so each kernel saturates the SMs longer, or (b)
+  kernel FUSION (collapse the dependency chain into fewer, bigger kernels) so there are
+  fewer inter-kernel idle gaps. Both are codegen/kernel-authoring work, not a capture
+  env flag.
+
+CLOSED-NEGATIVE on the >=20% falsifier. Ruled-out axis = "host launch overhead is the
+util ceiling on H100" — FALSIFIED across the full lever family (② async, ④ fwd/bwd
+graph, ⑤ whole-step graph all bottom out at median 2% / MEAN ~12-15%). The util wall
+is the fine-grained serial kernel DAG, not the host.
+
+CORRECTNESS NOTE: all three conditions produced BIT-IDENTICAL CE (4.46624 → 3.64669).
+The whole-step PROBE was expected to be numerically wrong on replay (baked c1/c2), yet
+CE is byte-eq — because at D=1536/T=512/EPOCHS=4 the capture fires on step 2 and the
+nwin=8 windows mean the bulk replayed steps reuse a near-converged bias-correction whose
+c1/c2 (t≈2: c1=1-0.9^2=0.19, c2=1-0.999^2≈0.002) round-trip to the same fp print at
+5 sig-figs. This is a measurement artifact of the small EPOCHS, NOT a correctness proof —
+Phase 2 (device-resident t) would be REQUIRED for a real byte-eq guarantee at scale, but
+Phase 2 is NOT WORTH RUNNING because Phase 1 falsified the util premise.

@@ -1,0 +1,227 @@
+=== F-HEXACUDA-DOJO — dojo hexa-cuda + flame-forge emit · parse-clean · descent-gate ===
+date: 2026-06-05T21:05:47Z  ·  method: g5 (real local emit + hexa parse + hexa run)
+        recipe-hardened: 2026-06-06 (handoff a10891bc training-recipe lessons)
+binary: hexa 0.1.0-dispatch
+
+── (1) hexa-cuda kernels — hexa parse (emitted @gpu_kernel katas) ──
+hexa-cuda/vec-add/kernel.hexa            OK: hexa-cuda/vec-add/kernel.hexa parses cleanly
+hexa-cuda/reduction/kernel.hexa          OK: hexa-cuda/reduction/kernel.hexa parses cleanly
+hexa-cuda/tiled-gemm/kernel.hexa         OK: hexa-cuda/tiled-gemm/kernel.hexa parses cleanly
+hexa-cuda/wmma/kernel.hexa               OK: hexa-cuda/wmma/kernel.hexa parses cleanly
+hexa-cuda/vecadd-both/kernel.hexa        OK: hexa-cuda/vecadd-both/kernel.hexa parses cleanly
+
+── (2) flame-forge trainers — hexa parse ──
+flame-forge/linreg/train.hexa            OK: flame-forge/linreg/train.hexa parses cleanly
+flame-forge/mlp/train.hexa               OK: flame-forge/mlp/train.hexa parses cleanly
+flame-forge/tiny-clm/train.hexa          OK: flame-forge/tiny-clm/train.hexa parses cleanly
+
+── (3) flame-forge trainers — hexa run (DESCENT GATE) ──
+  $ hexa run flame-forge/linreg/train.hexa
+      epoch-1 MSE   = 1.40643
+      epoch-50 MSE = 0.231536
+    F-FLAMEFORGE-LINREG = 1
+    PASS — loss strictly descends over training
+  $ hexa run flame-forge/mlp/train.hexa
+      epoch-1 MSE   = 17.5556
+      epoch-50 MSE = 0.388822
+    F-FLAMEFORGE-MLP = 1
+    PASS — loss strictly descends over training
+  $ hexa run flame-forge/tiny-clm/train.hexa
+      epoch-1 mean CE   = 2.77568
+      epoch-50 mean CE = 0.169722
+    F-FLAMEFORGE-TINYCLM = 1
+    PASS — loss strictly descends over training
+
+── (4) --lang=both contrast surfaces emitted ──
+  hexa-cuda/vecadd-both:  driver.py kernel.cu kernel.hexa README.md run.sh 
+  flame-forge/linreg-both: README.md ref.py run.sh train.hexa 
+
+── (5) preflight/rent helper — 6 infra fixes (handoff 4474f21b) + recipe advisory
+       (handoff a10891bc) self-test ──
+  == dojo_rent_preflight self-test (no rental) ==
+    [ok] fix#1 known-good image accepted
+    [ok] fix#1 bogus 2.4.1 tag rejected
+    [ok] fix#3 ladder = 18 rungs (8/4/2 × 3 gpu × 2 cloud)
+    [ok] fix#4 SUPPLY_CONSTRAINT classified
+    [ok] fix#4 IMAGE_OR_INIT (EXITED+runtime=null) classified
+    [ok] fix#4 PORT_CLOSED (RUNNING+no-sshd) classified
+    [ok] fix#5 7B fp32 OOMs H100-80GB (blocked)
+    [ok] fix#5 7B fp32 fits H200-141GB
+    [ok] fix#6 torchrun cmd has --tee 3 --redirect 3 --log-dir
+    [ok] recipe lesson#3 optim8bit 2^31 element-limit BLOCKS (3.47B-elem tensor)
+    [ok] recipe lesson#3 optim8bit within 2^31 limit passes (100M-elem tensor)
+    [ok] recipe lesson#4 recommends --bf16-weights for 7B fp32
+    [ok] recipe lesson#6 DDP-won't-help-if-model-bound advisory present
+    [ok] recipe lesson#4 bf16-already-selected acknowledged
+  == ALL 6 FIXES + RECIPE ADVISORY VERIFIED (pure logic) ==
+
+── (6) flame-forge run.sh cloud path — fix #5 BLOCKS OOM before any rental ──
+  $ DOJO_CLOUD=1 DOJO_PARAMS=7e9 DOJO_DTYPE=f32 DOJO_GPU=h100-80gb bash run.sh
+    verdict: FAIL — total 134.30 GiB exceeds cap 80.00 GiB
+    ✗ flame-forge: preflight BLOCKED the launch (would OOM) — fix the spec above before renting
+    → H200-141GB: verdict PASS (134.30 GiB fits 141.00 GiB) → proceeds to dojo_rent
+    NO POD RENTED on the OOM path — the no-troubleshoot deliverable.
+
+── (7) training-recipe advisory (handoff a10891bc) — bf16 rec · optim8bit limit · DDP ──
+  bench-before-vectorize NOTE: emitted into the tiny-clm README (the CLMConvMoE bridge
+    rung) — do NOT auto-fuse the expert loop (grouped Conv1d w/ 30 groups ~14min/step vs
+    ModuleList ~74s/step). flame_forge.hexa parses cleanly after the edit.
+  preflight dojo_recipe_advisory (folded into the fix#5 mem gate) — block demo:
+    $ dojo_recipe_advisory --params 7e9 --param-dtype bf16 --optimizer adamw-8bit \
+                           --ddp 8 --max-tensor-elems 3.47e9
+    ✗ optim8bit but a single tensor has 3470000000 elements > 2^31 — bitsandbytes will
+      fail 'invalid configuration argument at ops.cu:226' (lesson#3) → returns rc=1 (BLOCK)
+    ✓ bf16 weights already selected — the anima 7B winner ~70GB (lesson#4)
+    ⚠ DDP x8 replicates the FULL model per GPU; model/compute-bound never beats single-GPU
+      (lesson#6 — single-H200 ModuleList trained M13 fine, ~74s/step)
+  For a >=3B-param fp32 spec the advisory WARNs --bf16-weights (lesson#4) + that fp32-AdamW
+    (~112GB on 141GB H200) allocator-thrashes 96-99% near the cap.
+  CITED: all numbers are anima H200 observations (handoff a10891bc) — attributed, NOT
+    re-measured here. The advisory's element-limit + bf16-rec logic is pure-arithmetic
+    self-tested above; the underlying anima 7B timings are not reproduced.
+
+── (8) DOJO-IMPROVE (branch domain/hexa-dojo-improve, 2026-06-06) — dtype-alias fix
+       + vision/rl/tabular promoted stub → [full] ──
+  method: g5 (real local emit + hexa parse + hexa run), via a localized-import harness
+  against the worktree modules (the Jun-1 binary resolves the install SSOT, not the
+  worktree — same stale-oracle limitation as section (7)'s build-verify-pending).
+
+  (8a) DTYPE ALIAS — fp32/f32 mismatch FIXED end-to-end:
+    BEFORE: $ hexa run stdlib/cloud/preflight.hexa --param-dtype fp32 ...
+            [preflight] error: unknown --param-dtype `fp32`     ← user-facing error
+    AFTER : $ hexa run stdlib/cloud/preflight.hexa --params 7e9 --param-dtype fp32 \
+                       --grad-dtype fp32 --optimizer adamw --gpu h200-141gb
+            param_dtype    = fp32 (4 B)                          ← maps cleanly
+            verdict: PASS — but within 15% of cap, OOM risk elevated
+    _dtype_bytes now accepts fp64=f64 · fp32=f32 · fp16=f16 (symmetric w/ the prior
+    fp16 alias); the shell coarse-mem gate case-arm gains f64|fp64 / f32|fp32 too.
+    NEW self-test cases (bash tool/dojo_rent_preflight.sh --self-test):
+      [ok] dtype-alias fp32 == f32 (OOMs H100-80GB)
+      [ok] dtype-alias fp32 == f32 (fits H200-141GB)
+      == ALL 6 FIXES + RECIPE ADVISORY VERIFIED (pure logic) ==   ← stays GREEN
+
+  (8b) dojo domains — all SIX now [full]:
+      llm [full] · clm [full] · hexa-cuda [full] · flame-forge [full] ·
+      vision [full] · rl [full] · tabular [full]
+    dojo_is_stub() returns the empty set.
+
+  (8c) vision/rl/tabular — emit (4 files each) + emitted train.hexa hexa parse + hexa run:
+      vision/softmax-clf  parses clean · epoch-1 CE 1.55644 → epoch-60 0.996485
+                          F-VISION-SOFTMAXCLF = 1  PASS (CE descends)
+      vision/patch-mlp    parses clean · epoch-1 CE 1.44371 → epoch-60 0.524801
+                          F-VISION-PATCHMLP = 1    PASS (CE descends)
+      rl/bandit-pg        parses clean · epoch-1 reward 0.203125 → epoch-80 0.953125
+                          F-RL-BANDITPG = 1        PASS (reward ascends)
+      rl/gridworld-pg     parses clean · epoch-1 reward 0.203125 → epoch-80 0.984375
+                          F-RL-GRIDWORLDPG = 1     PASS (reward ascends)
+      tabular/logreg      parses clean · epoch-1 CE 1.1755 → epoch-60 0.00225554
+                          F-TABULAR-LOGREG = 1     PASS (CE descends)
+      tabular/mlp-tab     parses clean · epoch-1 CE 1.14173 → epoch-60 3.47726e-09
+                          F-TABULAR-MLPTAB = 1     PASS (CE descends)
+    --lang filter: hexa→train.hexa only · py→ref.py only · both→all 4 (verified).
+    emitted run.sh passes `bash -n`; emitted ref.py passes `python3 -m py_compile`.
+
+  (8d) vision scope honesty: flame has a forge matmul + 1-D conv (conv_lib.nn_conv1d_*)
+    but NO 2-D conv backward for a self-contained trainer — so the hexa vision path is
+    the patch-MLP FLOOR (flatten → MLP → softmax-CE, a real descending classifier, NOT a
+    faked conv trainer); ref.py uses a real nn.Conv2d. Stated plainly in the README + docs.
+
+VERDICT: 🟢 GREEN — both dojo domains emit; all 7 emitted katas hexa parse cleanly;
+all 3 flame-forge trainers RUN + PASS the descent gate; --lang=both emits the contrast
+surfaces; the 6-fix preflight/rent helper self-tests GREEN + is wired into the emitted
+flame-forge run.sh (blocks OOM before rental, classifies failures, fails fast on auth).
+RECIPE-HARDENED (handoff a10891bc): the preflight now folds a training-recipe advisory
+(--bf16-weights rec for >=3B params · optim8bit 2^31 element-limit BLOCK · DDP-model-bound
+advisory) self-testing GREEN (5 new cases), and the tiny-clm README carries the
+bench-before-vectorize note; docs/hexa-dojo.md gains the optimization-gotchas section.
+DOJO-IMPROVE (section 8): the fp32/f32 dtype mismatch is fixed end-to-end (fp-prefixed
+aliases on both the hexa preflight + the shell gate, self-test stays GREEN with 2 new
+cases), and vision/rl/tabular are promoted stub → [full] — six [full] domains, each new
+kata emits + parses + RUNs with its gate GREEN (vision/tabular CE descends, rl reward
+ascends), --lang filter correct, run.sh/ref.py syntax-clean.
+
+BUILD-VERIFY-PENDING (needs a real GPU pod / a current binary rebuild — honest g5):
+  · 'hexa dojo domains' listing all SIX [full] via the INSTALLED binary — the Jun-1 local
+    binary caches a precompiled stdlib/dojo/gen.hexa snapshot and ignores the new source;
+    the dispatch + dojo_domains() SOURCE is correct (verified via a self-contained compile:
+    section 8 ran the worktree modules through a localized-import harness → six [full]).
+    A binary rebuild surfaces it through the real `hexa dojo` CLI. Emit/parse/run logic is
+    fully verified locally (above) — only the INSTALLED-binary CLI surface is pending.
+  · 'hexa build --target=nvptx kernel.hexa' (PTX emission) — needs a CUDA host (ptxas);
+    the emitted run.sh parse-gates today and degrades gracefully when ptxas is absent.
+  · An actual multi-GPU DDP rent+run — the preflight LOGIC is locally verified (self-test
+    + OOM-block + auth fail-fast, NO rental); a live pod exercises the rent ladder end-to-end.
+  · Re-EMIT of the tiny-clm README carrying the bench-before-vectorize note via the INSTALLED
+    binary — same stale-Jun-1 snapshot limitation as above (the binary doesn't know
+    'flame-forge'); the flame_forge.hexa SOURCE edit is parse-clean (verified above). A binary
+    rebuild surfaces the new README body.
+
+── (9) DOJO REFLECTS THE OWN-GEMM / MEGAKERNEL ARC (branch
+       domain/dojo-reflect-owngemm, 2026-06-06) — docs-only, NO GPU ──
+  method: g5 documentation reflection — CITE the landed sm_90a own-GEMM W-ladder +
+    persistent-megakernel verdicts (NO new perf claim authored here; every number is
+    quoted verbatim from a landed fusion verdict + attributed to its PR). The deliverable
+    is a TEACHING ARTIFACT, not a new measurement.
+
+  (9a) track-1 hexa-cuda dojo gains a READING LESSON (docs/hexa-dojo.md, §"track 1"):
+       "GPU own-GEMM parity & the persistent megakernel (a war story)". Explicitly a
+       reading lesson, NOT a kata — the primitives (wgmma · TMA cp.async.bulk.tensor ·
+       grid-sync) are CODEGEN/.cu-level, NOT source-callable from .hexa today. The
+       source-callable @gpu set stays §5/§6 (gpu_thread_id_x · @shared let · gpu_barrier ·
+       gpu_atomic_add · gpu_warp_shuffle · gpu_wmma_*). NO invented source calls (same
+       honesty discipline as the wmma kata's codegen-level framing). → docs-only; no new
+       .hexa fixture, so no parse gate applies to this unit (the 7 existing katas remain
+       parse-clean per §1; unchanged).
+
+  (9b) the W-ladder reflected (all bit-exact rel-RMS 0 — lift is OCCUPANCY, not precision):
+       W6 async-pipe        = 50.7 TFLOP/s = 8.39x off cuBLAS-TF32
+       W8 HW-TMA-producer   = 66.5 TFLOP/s = 6.44x  (occupancy 1->2 CTA/SM)
+       W10 composed-swizzle = 70.7 TFLOP/s = 6.09x  (frontier)
+       CITED verbatim from .verdicts/hexa-fusion/F-FUSION-SM90-WGMMA-W8.txt (66.5, 6.44x,
+       rel_rms=0, occupancy 1->2 CTA/SM, on-pod H100, PR #2841). W10 (70.7, 6.09x) + PR
+       #2847 attributed; the gridsync GroupNorm (byte-eq max|Δ|=0, PR #2845) attributed.
+       NOTE: F-FUSION-SM90-WGMMA-W10.txt + F-FUSION-MEGAKERNEL-GN-GRIDSYNC.txt are on
+       the auto-merging PRs #2847/#2845 (not yet on the origin/main base of this branch);
+       the lesson + this verdict CITE them by id + PR (verbatim numbers carried from the
+       task hand-off), and the cross-links resolve once those PRs land. W8 verdict IS
+       present on this base and was read verbatim (above).
+
+  (9c) the FOUR named gotchas documented as .cu/codegen-level engineering lessons:
+       (a) wgmma needs the GMMA INTER 8x4 TF32 core layout (the W2 swizzle solve).
+       (b) fence.proxy.async.shared::cta orders the async-proxy shared read (a plain
+           __syncthreads is NOT sufficient — separate memory proxies).
+       (c) a single-elected-thread HW TMA producer (cp.async.bulk.tensor) frees a whole
+           producer warpgroup -> CTA 384->256 thr -> occupancy 1->2 CTA/SM (the W6->W8 lift).
+       (d) SWIZZLE_128B is textbook `g XOR (r&7)` (CuTe Swizzle<3,4,3>) but must be
+           SOFTWARE-composed with the 8x4 core packing; the in-place HW swizzle descriptor
+           is a CLOSED-NEGATIVE (naive HW-swizzle failed bit-exact, rel-RMS 1.392).
+       gotchas (a)/(d) cross-link docs/research/sm90-wgmma-parity-litscan.md (#2846).
+
+  (9d) the persistent-megakernel TWO-WALL story documented:
+       wall 1 (cuBLAS-call) — a persistent kernel can't call cuBLAS; own-GEMM removes it
+         (the persistent kernel calls our DEVICE GEMM in-line).
+       wall 2 (GroupNorm full-y reduction) — a cross-block barrier; a grid-sync cooperative
+         kernel (cudaLaunchCooperativeKernel + cooperative_groups::this_grid().sync(),
+         deterministic fixed-order reduction, NO float atomics) closes it, byte-eq max|Δ|=0.
+
+  (9e) HONEST FRAMING stated explicitly (g5):
+       · cuBLAS-TF32 is the ROOFLINE (~431 TFLOP/s @4096³).
+       · PARITY is NOT achieved — frontier 70.7 TFLOP/s = 6.09x off.
+       · util-via-megakernel is a CLOSED-NEGATIVE — fusing the whole step into one
+         persistent kernel does NOT win utilization/wall-time vs the serial kernel DAG.
+       · the WIN is OWNERSHIP/COMPLETENESS (full stack owned, bit-exact, no vendor call),
+         NOT a perf/util brag.
+
+  (9f) HEXA-CUDA.md gains milestone D11 (the "dojo reflects the own-GEMM/megakernel arc"
+       milestone), and docs/hexa-dojo.md §references cross-links the W8/W10/gridsync
+       verdicts + the lit scan.
+
+VERDICT (§9): 🟢 GREEN (docs reflection) — the landed sm_90a own-GEMM W-ladder + the
+two-wall persistent megakernel are reflected into the track-1 hexa-cuda dojo as a reading
+lesson with HONEST framing (roofline / parity-NOT-achieved 6.09x / util-megakernel
+closed-neg / win=ownership), the 4 named gotchas documented as codegen-level lessons (NO
+invented source calls), and every perf number CITED verbatim from a landed fusion verdict
++ attributed to its PR (NO new perf claim authored). Docs-only, NO GPU rented (vast leak
+sweep: 0 leaked H100/H200 — the only vast instance is the spared rtsc-39610026 anchor, an
+RTX 3090). Pending: the W10 + gridsync verdict FILES land with PRs #2847/#2845 (cited by
+id+PR until then); the W8 verdict file is present on this base and was read verbatim.

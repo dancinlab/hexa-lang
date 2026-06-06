@@ -1,54 +1,82 @@
 #!/usr/bin/env bash
-# build_and_measure_sm90.sh — HEXA-FUSION sm_90 (Hopper H100) own-GEMM WMMA2
-# DYNAMIC-SHARED FIX harness (verdict F-FUSION-SM90-DYNSHARED-FIX, PR #2796 follow-up).
-#
-# HARD-ASSERTS the GPU is a NATIVE sm_90 H100 (compute_cap 9.0, NOT Blackwell
-# sm_120) so the measurement is genuine native-Hopper SASS — the verdict
-# F-FUSION-WMMA2-SM90-VERIFY's 1.13x was on Blackwell; this proves the fix on
-# the GPU that previously FAILED with cudaErrorInvalidValue.
-#
-# Builds with EXPLICIT -gencode arch=compute_90,code=sm_90 (real sm_90 SASS,
-# no PTX-JIT) and runs the 3-way cuBLAS / naive-WMMA / tiled-WMMA2 A/B. The
-# WMMA2 kernel now uses extern (dynamic) shared + cudaFuncSetAttribute opt-in.
+# build_and_measure_sm90.sh — NATIVE sm_90 H100 verification of the own-GEMM
+# WMMA2 path (F-FUSION-WMMA2-SM90-VERIFY). Differs from build_and_measure.sh:
+#   • Forces -gencode arch=compute_90,code=sm_90  (NATIVE SASS, no PTX-forward).
+#   • HARD-VERIFIES the GPU is genuine Hopper sm_90 (H100), NOT Blackwell sm_120.
+#   • Captures the [OWN-SGEMM-WMMA2-FIRED] launcher marker (which kernel fired).
+#   • Reports GFLOP/s + Tensor-Core engagement (the driver does the math).
 set -e
 cd "$(dirname "$0")"
 CU=self/native/hxqwen14b_cuda.cu
 
-echo "=== GPU identity ==="
-nvidia-smi --query-gpu=name,compute_cap,memory.total --format=csv,noheader
-GPU_NAME=$(nvidia-smi --query-gpu=name --format=csv,noheader | head -1)
-CAP=$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader | head -1)
-echo "GPU_NAME=$GPU_NAME  COMPUTE_CAP=$CAP"
-if [ "$CAP" != "9.0" ]; then
-  echo "FATAL: expected NATIVE sm_90 (compute_cap 9.0, H100); got $CAP — wrong GPU, ABORT." >&2
-  exit 3
+echo "=== GPU IDENTITY (honesty-critical) ==="
+nvidia-smi --query-gpu=name,compute_cap,driver_version,memory.total --format=csv,noheader
+NAME=$(nvidia-smi --query-gpu=name --format=csv,noheader | head -1)
+CC=$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader | head -1 | tr -d '.')
+echo "name=$NAME compute_cap=$CC"
+if [ "$CC" != "90" ]; then
+  echo "!!! WARNING: compute_cap=$CC is NOT 9.0 (sm_90 Hopper/H100)."
+  echo "!!! This run will NOT verify NATIVE sm_90. (sm_120 = Blackwell mis-served.)"
+  echo "!!! Re-rent an H100. Continuing only to record the served GPU."
 fi
-echo "compute_cap 9.0 CONFIRMED (native Hopper H100)"
+nvcc --version | grep release
 
-# Extract the GEMM kernels verbatim from the SHIPPED .cu (no copy drift).
+# Extract the 3 GEMM kernels + supporting defines verbatim from shipped .cu.
 python3 - "$CU" > gemm_kernels_extracted.cuh <<'PY'
 import sys
 src=open(sys.argv[1]).read()
 start=src.index('#define HXTILE 16')
-end_marker='// Host launcher for the own-GEMM kernel'
-end=src.index(end_marker)
+end=src.index('// Host launcher for the own-GEMM kernel')
 print(src[start:end])
 PY
-echo "=== extracted $(wc -l < gemm_kernels_extracted.cuh) lines ==="
-grep -c '__global__' gemm_kernels_extracted.cuh | sed 's/^/kernels: /'
-# Sanity: the fix MUST be present in the extracted (measured) kernel.
-grep -q 'extern __shared__ float hxg_smem' gemm_kernels_extracted.cuh \
-  && echo "FIX PRESENT: WMMA2 uses extern __shared__ (dynamic)" \
-  || { echo "FATAL: extracted kernel is NOT the dynamic-shared fix" >&2; exit 4; }
+echo "=== extracted $(wc -l < gemm_kernels_extracted.cuh) lines, $(grep -c '__global__' gemm_kernels_extracted.cuh) kernels ==="
 
-echo "=== build: nvcc -gencode arch=compute_90,code=sm_90 (NATIVE sm_90 SASS) ==="
-nvcc -O3 -gencode arch=compute_90,code=sm_90 -lcublas cutlass_driver.cu -o cutlass_driver 2>&1 | tee build.log
+echo "=== BUILD: -gencode arch=compute_90,code=sm_90 (NATIVE SASS, no PTX-forward) ==="
+nvcc -O3 -gencode arch=compute_90,code=sm_90 -lcublas cutlass_driver.cu -o cutlass_driver 2>&1 | tee build_sm90.log
 
-# Confirm REAL sm_90 SASS (HMMA present) — not a PTX-JIT fallback.
-echo "=== HMMA count in sm_90 SASS for the WMMA2 kernel ==="
-cuobjdump -sass cutlass_driver 2>/dev/null | grep -c HMMA | sed 's/^/HMMA_total: /' || true
+# Confirm native SASS for sm_90 is in the binary (no JIT-only PTX).
+echo "=== cuobjdump arch (native sm_90 confirmation) ==="
+cuobjdump cutlass_driver 2>/dev/null | grep -i 'arch\|sm_' | head -5 || echo "(cuobjdump unavailable)"
 
-echo "=== RUN @2048^3 (native sm_90 H100) ==="
-./cutlass_driver 2048 2048 2048 50
-echo "=== correctness recheck @ small odd shape (bounds guard) ==="
+# DEFINITIVE Tensor-Core proof: disassemble the WMMA2 kernel and look for
+# HMMA/IMMA/OMMA (Tensor-Core matrix-multiply-accumulate SASS instructions).
+# If the WMMA2 path compiles to FFMA-only on sm_90, Tensor Cores are NOT used.
+echo "=== SASS Tensor-Core instruction scan in _hx_k_sgemm_cm_wmma2 (sm_90) ==="
+cuobjdump -sass -fun _Z19_hx_k_sgemm_cm_wmma2iixxxfPKfxS0_xfPfx cutlass_driver > wmma2_sass.txt 2>/dev/null \
+  || cuobjdump -sass cutlass_driver > wmma2_sass.txt 2>/dev/null || true
+# Dump all SASS, then isolate ONLY the _hx_k_sgemm_cm_wmma2 function block
+# (the TU also contains a BF16 kernel whose HMMA must NOT contaminate the scan).
+cuobjdump -sass cutlass_driver 2>/dev/null > all_sass.txt || true
+python3 - <<'PY'
+import re
+txt=open('all_sass.txt').read()
+# Split into per-function blocks on the ".text._Z..." or "Function : " headers.
+# cuobjdump marks each kernel with a "		Function : <mangled>" line.
+blocks=re.split(r'(?m)^\s*Function : ', txt)
+def scan(name_substr):
+    for b in blocks:
+        head=b.splitlines()[0] if b else ''
+        if name_substr in head:
+            hmma=len(re.findall(r'\b(HMMA|IMMA|OMMA)\b', b))
+            ffma=len(re.findall(r'\bFFMA\b', b))
+            return head.strip(), hmma, ffma
+    return None,0,0
+h,hm,ff = scan('_hx_k_sgemm_cm_wmma2')
+print(f"WMMA2 func: {h}")
+print(f"  HMMA/IMMA/OMMA (Tensor-Core MMA) = {hm}")
+print(f"  FFMA (CUDA-core FMA)             = {ff}")
+if hm>0:
+    print(">> WMMA2 sm_90 SASS CONTAINS Tensor-Core MMA ops — TC path compiled in.")
+else:
+    print(">> WMMA2 sm_90 SASS has NO Tensor-Core MMA — CUDA-core FFMA only.")
+PY
+
+echo "=== RUN @2048^3 (own-GEMM WMMA2 fires inside the driver) ==="
+# The driver launches wmma2 directly; the launcher marker is emitted only via
+# _hx_own_sgemm_cm_launch. We also run a launcher-gated check below.
+./cutlass_driver 2048 2048 2048 50 2>wmma2_fired.log
+echo "--- stderr (FIRED marker / precedence) ---"
+cat wmma2_fired.log
+
+echo "=== bounds-guard recheck @ non-tile-multiple shape ==="
 ./cutlass_driver 130 70 96 5

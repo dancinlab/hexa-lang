@@ -1264,6 +1264,82 @@ __global__ void _hx_k_sgemm_cm_splitk(int tA, int tB, long long M, long long N, 
     }
 }
 // ═════════════════════════════════════════════════════════════════════
+// A-SKINNY (env HEXA_OWN_GEMM_SPLITK2): TWO-PASS, ATOMIC-FREE split-K.
+// The split-K verdict (F-FUSION-SPLITK-SKINNY §4a) NAMED the residual-of-
+// residual on the worst skinny-M shape dB (out 16×N, K=8192, G=16): the
+// single-pass split-K atomicAdds each of the G K-chunk partials into the
+// SAME tiny 16-row output column. With G=16 writers hammering the same
+// 16-wide cache lines per column, the global atomicAdd SERIALIZES on cache-
+// line contention — the un-fixed cost cuBLAS avoids. The verdict named the
+// fix verbatim: "A two-pass split-K (partials buffer + a tree reduction
+// kernel) ... would recover more — a further separable kernel step, NOT a
+// tuning knob." This is that step, never built until now.
+//
+// PASS 1 (_hx_k_sgemm_cm_splitk2_partial): identical partial-dot math to the
+// single-pass kernel, BUT each (output-tile, k-chunk=blockIdx.z) writes its
+// partial to a DISTINCT slice of a scratch buffer P[g·(M·N) + row + col·M]
+// (g = blockIdx.z). NO atomic — every write address is unique across g, so
+// G blocks for one output element touch G separate cache lines. Zero
+// contention. P is a plain device malloc of G·M·N floats.
+// PASS 2 (_hx_k_sgemm_cm_splitk2_reduce): one thread per output element sums
+// the G partials P[g·MN + idx] in fp32 (ascending g — DETERMINISTIC order,
+// unlike the race-ordered atomicAdd) then writes C = beta·C_old + alpha·Σ.
+// Because the reduce is the ONLY writer of C and reads the pre-scale C value
+// itself, NO separate betascale pre-kernel is needed (fold beta in here).
+// Summation is fp32 over G≤32 terms in fixed order → rel-RMS ≤ 3e-3 (same
+// own-GEMM contract; in fact MORE deterministic than the atomic path).
+// col-major faithful: C[i+j·ldc] = α·Σ_l op(A)·op(B) + β·C.
+// ═════════════════════════════════════════════════════════════════════
+// PASS 1: partial dots → distinct scratch slices (atomic-free). Same tile
+// math as _hx_k_sgemm_cm_splitk; only the epilogue store differs (no atomic).
+__global__ void _hx_k_sgemm_cm_splitk2_partial(int tA, int tB, long long M, long long N, long long K,
+                                               const float* A, long long lda,
+                                               const float* B, long long ldb,
+                                               float* P, int G) {
+    __shared__ float As[HXSK][HXSK];
+    __shared__ float Bs[HXSK][HXSK];
+    long long row = (long long)blockIdx.x * HXSK + threadIdx.x;  // C row i
+    long long col = (long long)blockIdx.y * HXSK + threadIdx.y;  // C col j
+    long long tilesK = (K + HXSK - 1) / HXSK;
+    long long perz   = (tilesK + G - 1) / G;
+    long long kbeg   = (long long)blockIdx.z * perz * HXSK;
+    long long kend   = kbeg + perz * HXSK; if (kend > K) kend = K;
+    float acc = 0.0f;
+    for (long long t = kbeg; t < kend; t += HXSK) {
+        long long ak = t + threadIdx.y;
+        As[threadIdx.x][threadIdx.y] =
+            (row < M && ak < K) ? (tA ? A[ak + row*lda] : A[row + ak*lda]) : 0.0f;
+        long long bk = t + threadIdx.x;
+        Bs[threadIdx.x][threadIdx.y] =
+            (bk < K && col < N) ? (tB ? B[col + bk*ldb] : B[bk + col*ldb]) : 0.0f;
+        __syncthreads();
+        #pragma unroll
+        for (int l = 0; l < HXSK; l++) acc += As[threadIdx.x][l] * Bs[l][threadIdx.y];
+        __syncthreads();
+    }
+    if (row < M && col < N) {
+        // DISTINCT slice per k-chunk g=blockIdx.z → no two blocks share an
+        // address → atomic-free. Write 0 when this chunk was empty (kbeg>=kend)
+        // so PASS 2's fixed-length Σ over [0,G) is correct.
+        long long mn = M * N;
+        P[(long long)blockIdx.z * mn + row + col * M] = (kbeg < kend) ? acc : 0.0f;
+    }
+}
+// PASS 2: reduce G partials per output element in fixed fp32 order + epilogue.
+__global__ void _hx_k_sgemm_cm_splitk2_reduce(long long M, long long N,
+                                              float alpha, float beta,
+                                              const float* P, float* C, long long ldc, int G) {
+    long long row = (long long)blockIdx.x * blockDim.x + threadIdx.x;
+    long long col = (long long)blockIdx.y * blockDim.y + threadIdx.y;
+    if (row >= M || col >= N) return;
+    long long mn = M * N;
+    long long idx = row + col * M;        // partials are stored ldP = M (packed)
+    float s = 0.0f;
+    for (int g = 0; g < G; g++) s += P[(long long)g * mn + idx];   // fixed ascending order
+    float* c = &C[row + col * ldc];
+    *c = (beta != 0.0f) ? (beta * (*c) + alpha * s) : (alpha * s);
+}
+// ═════════════════════════════════════════════════════════════════════
 // A-VEC (env HEXA_OWN_GEMM_VEC): float4 (128-bit) VECTORIZED-LOAD split-K
 // skinny own-GEMM. A2 (#2725, CLOSED-NEGATIVE on the K-reduction-strategy
 // axis) NAMED the real residual: the un-vectorized 32-bit scalar global-load
@@ -1615,6 +1691,37 @@ int _hx_own_sgemm_cm_launch(int tA, int tB, int m, int n, int k,
     // HEXA_OWN_GEMM_VEC_MINM overrides the threshold for on-pod tuning.
     int vec_minm = 64;
     { const char* vm = getenv("HEXA_OWN_GEMM_VEC_MINM"); if (vm && vm[0]) { int v = atoi(vm); if (v >= 1) vec_minm = v; } }
+    // A-SKINNY two-pass atomic-free split-K (env HEXA_OWN_GEMM_SPLITK2). The
+    // verdict-named fix for the skinny-M dB residual: PASS 1 writes G partials to
+    // distinct scratch slices (no atomicAdd cache-line contention), PASS 2
+    // reduces them in deterministic fp32 order + epilogue. Same skinny+large-K
+    // trigger; takes priority over scalar split-K when set (it IS the split-K
+    // path, contention-free). Falls through if the scratch malloc fails.
+    int want_splitk2 = (getenv("HEXA_OWN_GEMM_SPLITK2") && getenv("HEXA_OWN_GEMM_SPLITK2")[0]);
+    if (want_wmma2 && want_splitk2 && skinny_splitk && !noshape) {
+        int G = (int)(k / 512); if (G < 1) G = 1; if (G > 32) G = 32;
+        const char* ge = getenv("HEXA_OWN_GEMM_SPLITK_G");
+        if (ge && ge[0]) { int gv = atoi(ge); if (gv >= 1 && gv <= 64) G = gv; }
+        long long mn = (long long)m * (long long)n;
+        float* P = nullptr;
+        cudaError_t pe = cudaMalloc((void**)&P, (size_t)G * (size_t)mn * sizeof(float));
+        if (pe == cudaSuccess && P) {
+            static int sk2fired = 0; if (!sk2fired){sk2fired=1; fprintf(stderr,"[OWN-SGEMM-SPLITK2-FIRED] skinny GEMM -> _hx_k_sgemm_cm_splitk2 (TWO-PASS atomic-free, partials buffer + fixed-order reduce, G=%d, m=%d n=%d k=%d)\n", G, m, n, k);}
+            dim3 sblk(16,16);
+            dim3 sgrd((unsigned)((m+15)/16),(unsigned)((n+15)/16),(unsigned)G);
+            _hx_k_sgemm_cm_splitk2_partial<<<sgrd,sblk>>>(tA,tB,
+                                                          (long long)m,(long long)n,(long long)k,
+                                                          A,(long long)lda, B,(long long)ldb, P, G);
+            dim3 rblk(16,16);
+            dim3 rgrd((unsigned)((m+15)/16),(unsigned)((n+15)/16));
+            _hx_k_sgemm_cm_splitk2_reduce<<<rgrd,rblk>>>((long long)m,(long long)n,
+                                                         alpha, beta, P, C,(long long)ldc, G);
+            cudaError_t se = cudaGetLastError();
+            cudaFree(P);
+            return (se==cudaSuccess) ? 0 : (int)se;
+        }
+        // malloc failed → fall through to the scalar split-K path below.
+    }
     if (want_wmma2 && want_vec && skinny_splitk && m >= vec_minm && !noshape) {
         int G = (int)(k / 512); if (G < 1) G = 1; if (G > 32) G = 32;
         const char* ge = getenv("HEXA_OWN_GEMM_SPLITK_G");

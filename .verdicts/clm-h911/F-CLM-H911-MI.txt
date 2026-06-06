@@ -1,0 +1,10 @@
+clm_h911_C — F-CLM-H911-MI (direct cross-lingual MI estimate)
+  concept 0: MI par=12.8 con=12.8 diff=0.0
+  concept 1: MI par=6.4 con=7.60782 diff=-1.20782
+  concept 2: MI par=7.60782 con=7.60782 diff=0.0
+  concept 3: MI par=12.8 con=12.8 diff=0.0
+  concept 4: MI par=7.60782 con=12.8 diff=-5.19218
+  [MI] paired mean diff (parallel-concat) = -1.28
+  [MI] bootstrap 95% CI = [-3.35687, 0.0]
+F-CLM-H911-MI = 0
+TIER 🔴 — MI does NOT recover it (paired CI straddles/≤0, closed-negative)

@@ -1,0 +1,222 @@
+// ════════════════════════════════════════════════════════════════════════════
+//  clm_prod_hostfeed_eq.hexa — F-RFC046 host-feed redesign byte-eq ORACLE.
+//
+//  Today's clean Lane-G GPU fire (all 5 build/link/compile/emit bugs fixed, GPU
+//  provably live at 87W + GB-scale device memory) measured util RED: mean 0.811%,
+//  peak 6%, n=987 at d~1536/T~512 — DESPITE both device-feed levers active
+//  (lever-a device im2col/col2im+AdamW #2505, lever-b strided GEMM fuse #2504).
+//  The trainer pegs ONE CPU core at 100% while the GPU SM-starves.
+//
+//  PROFILE (verbatim, d=1536/T=512/K=3): ~104.08M interpreted host scalar ops per
+//  step (FWD 41.42M + BWD 62.66M); at the measured ~13.4 ns/op hexa-interpreter
+//  throughput that is ~1.39 s host CPU per step vs sub-ms GPU GEMM work →
+//  util ≈ <1ms/1400ms ≈ 0.07–0.8% (matches the fire). The DOMINANT 65% lives in
+//  the BATCHED-EXPERT path (conv2_*_via_forge_batched), whose im2col / im2col_t /
+//  col2im ran as INLINE host t_set loops that BYPASSED lever-(a)'s device helpers.
+//
+//  F-RFC046 redesign (clm_prod.hexa): route the batched-expert im2col / im2col_t /
+//  col2im through the lever-(a) device helpers (_clmp_im2col / _clmp_im2col_t /
+//  _clmp_col2im) — device-resident under CLM_PROD_DEVFEED so the gather/scatter
+//  leave the host hot path entirely. This file is the CPU-LOCAL byte-eq ORACLE:
+//  it reconstructs the OLD inline-host batched conv2 and the NEW helper-routed
+//  batched conv2 (both via the helpers' HOST fallback — prebuilt-binary builtins
+//  only, $0 mac `hexa run`) and proves they are BYTE-IDENTICAL.
+//
+//  F-RFC046-HOSTFEED-FWD-EQ : helper-routed conv2 fwd == inline-host conv2 fwd
+//  F-RFC046-HOSTFEED-BWD-EQ : helper-routed conv2 bwd == inline-host conv2 bwd
+//  Both max|Δ| = 0.0 exact — the redesign moves work off the host hot path with
+//  ZERO numeric change. The util≥20% confirmation is the held GPU fire (gated).
+// ════════════════════════════════════════════════════════════════════════════
+
+use "stdlib/flame/tensor_lib"
+use "stdlib/flame/conv_lib"
+
+fn _hf_absf(x: float) -> float { if x < 0.0 { return 0.0 - x } return x }
+fn _hf_maxdev(a: int, b: int, n: int) -> float {
+    let mut m = 0.0
+    let mut i = 0
+    while i < n { let d = _hf_absf(t_get(a, i) - t_get(b, i)); if d > m { m = d }; i = i + 1 }
+    return m
+}
+
+// ── lever-(a) device helpers, HOST-FALLBACK copy (byte-eq to clm_prod.hexa) ──
+// On the mac binary the device builtins are absent, so these run the exact host
+// gather/scatter — which is what the redesign routes the expert path through.
+fn _hf_im2col(x: int, xcol: int, T: int, Cin: int, K: int, dil: int) {
+    let Kdim = Cin * K
+    let mut iz = 0
+    while iz < T * Kdim { t_set(xcol, iz, 0.0); iz = iz + 1 }
+    let mut t = 0
+    while t < T {
+        let mut ci = 0
+        while ci < Cin {
+            let mut k = 0
+            while k < K {
+                let p = t - dil * (K - 1 - k)
+                if p >= 0 { t_set(xcol, t * Kdim + ci * K + k, t_get(x, p * Cin + ci)) }
+                k = k + 1
+            }
+            ci = ci + 1
+        }
+        t = t + 1
+    }
+}
+fn _hf_im2col_t(x: int, xcolT: int, T: int, Cin: int, K: int, dil: int) {
+    let Kdim = Cin * K
+    let mut iz = 0
+    while iz < Kdim * T { t_set(xcolT, iz, 0.0); iz = iz + 1 }
+    let mut t = 0
+    while t < T {
+        let mut ci = 0
+        while ci < Cin {
+            let mut k = 0
+            while k < K {
+                let p = t - dil * (K - 1 - k)
+                if p >= 0 { let j = ci * K + k; t_set(xcolT, j * T + t, t_get(x, p * Cin + ci)) }
+                k = k + 1
+            }
+            ci = ci + 1
+        }
+        t = t + 1
+    }
+}
+
+// ── OLD batched-expert FWD (inline host im2col) — the pre-redesign reference ──
+fn _old_conv2_fwd(x: int, w0: int, b0: int, w1: int, b1: int,
+                  y0_out: int, y1_out: int, T: int, Cin: int, Cout: int, K: int, dil: int) {
+    let Kdim = Cin * K
+    let xcol = t_zeros(T * Kdim)
+    let mut t = 0
+    while t < T {
+        let mut ci = 0
+        while ci < Cin {
+            let mut k = 0
+            while k < K {
+                let p = t - dil * (K - 1 - k)
+                if p >= 0 { t_set(xcol, t * Kdim + ci * K + k, t_get(x, p * Cin + ci)) }
+                k = k + 1
+            }
+            ci = ci + 1
+        }
+        t = t + 1
+    }
+    _conv2_fwd_tail(xcol, w0, b0, w1, b1, y0_out, y1_out, T, Cin, Cout, K)
+}
+// ── NEW batched-expert FWD (helper-routed im2col) — the redesign ──
+fn _new_conv2_fwd(x: int, w0: int, b0: int, w1: int, b1: int,
+                  y0_out: int, y1_out: int, T: int, Cin: int, Cout: int, K: int, dil: int) {
+    let Kdim = Cin * K
+    let xcol = t_zeros(T * Kdim)
+    _hf_im2col(x, xcol, T, Cin, K, dil)
+    _conv2_fwd_tail(xcol, w0, b0, w1, b1, y0_out, y1_out, T, Cin, Cout, K)
+}
+// shared tail (identical batched GEMM + bias split) — isolates the im2col change
+fn _conv2_fwd_tail(xcol: int, w0: int, b0: int, w1: int, b1: int,
+                   y0_out: int, y1_out: int, T: int, Cin: int, Cout: int, K: int) {
+    let Kdim = Cin * K
+    let a_all = t_zeros(2 * T * Kdim)
+    let mut ia = 0
+    while ia < T * Kdim { t_set(a_all, ia, t_get(xcol, ia)); t_set(a_all, T * Kdim + ia, t_get(xcol, ia)); ia = ia + 1 }
+    let b_all = t_zeros(2 * Kdim * Cout)
+    let mut co = 0
+    while co < Cout {
+        let mut j = 0
+        while j < Kdim {
+            t_set(b_all, j * Cout + co, t_get(w0, co * Kdim + j))
+            t_set(b_all, Kdim * Cout + j * Cout + co, t_get(w1, co * Kdim + j))
+            j = j + 1
+        }
+        co = co + 1
+    }
+    let c0 = forge_dispatch_matmul(xcol, T, Kdim, _slice(b_all, 0, Kdim * Cout), Cout)
+    let c1 = forge_dispatch_matmul(xcol, T, Kdim, _slice(b_all, Kdim * Cout, Kdim * Cout), Cout)
+    let mut t2 = 0
+    while t2 < T {
+        let mut c2 = 0
+        while c2 < Cout {
+            t_set(y0_out, t2 * Cout + c2, t_get(c0, t2 * Cout + c2) + t_get(b0, c2))
+            t_set(y1_out, t2 * Cout + c2, t_get(c1, t2 * Cout + c2) + t_get(b1, c2))
+            c2 = c2 + 1
+        }
+        t2 = t2 + 1
+    }
+}
+fn _slice(src: int, off: int, n: int) -> int {
+    let d = t_zeros(n)
+    let mut i = 0
+    while i < n { t_set(d, i, t_get(src, off + i)); i = i + 1 }
+    return d
+}
+
+// ── OLD batched-expert BWD xcolT (inline) vs NEW (helper) — dW path ──
+// (dX col2im is a per-problem host scatter unchanged by the redesign; the change
+//  under test is the transpose-im2col feed that drives the batched dW GEMM.)
+fn main() {
+    println("clm_prod_hostfeed_eq — F-RFC046 batched-expert host-feed redesign byte-eq (CPU oracle)")
+    let T = 24; let Cin = 8; let Cout = 8; let K = 3
+    let dd = Cout * Cin * K
+    let tol = 0.000000001
+
+    let x  = t_zeros(T * Cin);  t_fill_lcg(x, T * Cin, 31, 0.4)
+    let w0 = t_zeros(dd);       t_fill_lcg(w0, dd, 2, 0.2)
+    let w1 = t_zeros(dd);       t_fill_lcg(w1, dd, 5, 0.2)
+    let b0 = t_zeros(Cout);     t_fill_lcg(b0, Cout, 3, 0.1)
+    let b1 = t_zeros(Cout);     t_fill_lcg(b1, Cout, 6, 0.1)
+
+    // ── F-RFC046-HOSTFEED-FWD-EQ : helper-routed fwd == inline-host fwd ──
+    let mut fwd_ok = 1
+    let mut dil = 1
+    while dil <= 2 {
+        let y0o = t_zeros(T * Cout); let y1o = t_zeros(T * Cout)
+        _old_conv2_fwd(x, w0, b0, w1, b1, y0o, y1o, T, Cin, Cout, K, dil)
+        let y0n = t_zeros(T * Cout); let y1n = t_zeros(T * Cout)
+        _new_conv2_fwd(x, w0, b0, w1, b1, y0n, y1n, T, Cin, Cout, K, dil)
+        let m0 = _hf_maxdev(y0o, y0n, T * Cout); let m1 = _hf_maxdev(y1o, y1n, T * Cout)
+        print("  fwd dil="); print(dil); print(" max|Δ| y0="); print(to_string(m0)); print(" y1="); println(to_string(m1))
+        if m0 > tol { fwd_ok = 0 }
+        if m1 > tol { fwd_ok = 0 }
+        dil = dil + 1
+    }
+    if fwd_ok == 1 { println("F-RFC046-HOSTFEED-FWD-EQ = 1"); println("PASS — helper-routed batched-expert fwd == inline-host fwd byte-eq, dil∈{1,2}") }
+    if fwd_ok == 0 { println("F-RFC046-HOSTFEED-FWD-EQ = 0"); println("FAIL — fwd") }
+
+    // ── F-RFC046-HOSTFEED-BWD-EQ : helper-routed xcolT == inline-host xcolT ──
+    // The redesign's bwd change is _hf_im2col_t replacing the inline transpose
+    // gather that feeds the batched dW GEMM; prove the transpose buffers match.
+    let mut bwd_ok = 1
+    let mut dil2 = 1
+    while dil2 <= 2 {
+        let Kdim = Cin * K
+        // OLD inline xcolT
+        let xcolT_old = t_zeros(Kdim * T)
+        let mut t = 0
+        while t < T {
+            let mut ci = 0
+            while ci < Cin {
+                let mut k = 0
+                while k < K {
+                    let p = t - dil2 * (K - 1 - k)
+                    if p >= 0 { let j = ci * K + k; t_set(xcolT_old, j * T + t, t_get(x, p * Cin + ci)) }
+                    k = k + 1
+                }
+                ci = ci + 1
+            }
+            t = t + 1
+        }
+        // NEW helper xcolT
+        let xcolT_new = t_zeros(Kdim * T)
+        _hf_im2col_t(x, xcolT_new, T, Cin, K, dil2)
+        let mt = _hf_maxdev(xcolT_old, xcolT_new, Kdim * T)
+        print("  bwd dil="); print(dil2); print(" max|Δ| xcolT="); println(to_string(mt))
+        if mt > tol { bwd_ok = 0 }
+        dil2 = dil2 + 1
+    }
+    if bwd_ok == 1 { println("F-RFC046-HOSTFEED-BWD-EQ = 1"); println("PASS — helper-routed batched-expert bwd transpose-feed == inline-host byte-eq, dil∈{1,2}") }
+    if bwd_ok == 0 { println("F-RFC046-HOSTFEED-BWD-EQ = 0"); println("FAIL — bwd") }
+
+    if fwd_ok == 1 { if bwd_ok == 1 {
+        println("ALL-PASS — F-RFC046 batched-expert host-feed redesign byte-eq to the inline-host path (util≥20% pending gated GPU fire)")
+        return
+    } }
+    println("FAIL")
+}

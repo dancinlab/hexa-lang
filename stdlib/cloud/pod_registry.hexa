@@ -591,6 +591,44 @@ fn cloud_reconcile_print() -> int {
     return drift
 }
 
+// ── shared provider-alive set (the single liveness source of truth) ──────
+// ProviderAlive — the merged authoritative provider-live id set + an `ok`
+// flag. `ok == 1` iff AT LEAST ONE provider query returned (so an empty
+// `ids` is a trustworthy "provider reports none"); `ok == 0` iff BOTH the
+// runpod (myself.pods, CLI-fallback) and vast (show instances) queries were
+// degraded → callers must NOT treat the empty set as "everything is dead".
+struct ProviderAlive {
+    ok:      int,
+    ids:     [str],
+    message: str
+}
+
+// cloud_provider_alive_ids — resolve the merged provider-alive id set the way
+// `probe`/`reap`/`idle-reap`/reconcile already do: runpod authoritative
+// (myself.pods GraphQL, CLI-fallback) ∪ vast show instances. This is the ONE
+// helper `cloud pods` joins against so the table can no longer trust a stale
+// local manifest. ok=0 ONLY when BOTH providers are unreachable.
+pub fn cloud_provider_alive_ids() -> ProviderAlive {
+    let rl = runpod_authoritative_pods()
+    let vl = vast_list_instances()
+    let mut ids = []
+    let mut ri = 0
+    while ri < len(rl.pod_ids) { ids.push(rl.pod_ids[ri]); ri = ri + 1 }
+    let mut vi = 0
+    while vi < len(vl.instance_ids) { ids.push(vl.instance_ids[vi]); vi = vi + 1 }
+    let mut ok = 1
+    let mut msg = "runpod: " + rl.message + " · vast: " + vl.message
+    if rl.ok == 0 && vl.ok == 0 {
+        ok = 0
+        msg = "BOTH providers unreachable — " + msg
+    } else if rl.ok == 0 {
+        msg = "vast-only (runpod degraded) — " + msg
+    } else if vl.ok == 0 {
+        msg = "runpod-only (vast degraded) — " + msg
+    }
+    return ProviderAlive { ok: ok, ids: ids, message: msg }
+}
+
 // cloud_pods_reconcile_prune — ACTIVE reconcile pass for `cloud pods` (anima
 // ghost-drift fix, plan @L2). Fetches the AUTHORITATIVE merged provider-alive
 // id set (runpod myself.pods GraphQL + vast), then over the M5 registry:

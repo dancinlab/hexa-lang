@@ -1,0 +1,7 @@
+=== GWT (F-CLM-H911-GWT) ===
+  LEARNED-semantic paired mean (parallel-favoring) = -0.843474
+  LEARNED 95% CI = [-0.939785, -0.718769]
+  NULL (within-concept-shuffle) paired mean = -0.940478
+  NULL 95% CI = [-0.972337, -0.909005]
+F-CLM-H911-GWT = 0
+TIER 🔴 — closed-negative: parallel>concat does NOT separate on the LEARNED-semantic axis (CI straddles/≤0)

@@ -1,0 +1,79 @@
+// stdlib/cloud/vast_gpu_predicate_test.hexa — unit tests for the
+// GPU-family → vast `gpu_name` predicate builder (vast.hexa
+// vast_gpu_predicate / _vast_gpu_variants).
+//
+// Background: `hexa cloud rent vast --gpu H100` used to ignore --gpu
+// entirely (it was declared in help but never read) and rent an arbitrary
+// GPU. vast's query DSL has NO partial match (`~` is rejected) and matches
+// `gpu_name` exactly, while a family like "H100" spans several exact SKUs
+// (H100_SXM5/PCIE/NVL/SXM). vast_gpu_predicate maps a family to a vast
+// `in [...]` list (verified to parse), passes an exact variant through, and
+// NEVER emits `~`. These are pure string transforms exercised here.
+//
+// vast.hexa is a library (no top-level main), so `use` is side-effect free.
+//
+// Run:   hexa run stdlib/cloud/vast_gpu_predicate_test.hexa
+// PASS:  exits 0, prints "vast_gpu_predicate_test PASS".
+
+use "stdlib/cloud/vast"
+
+// _check — established stdlib-cloud test shape (got/want ints).
+fn _check(case: str, got: int, want: int) {
+    if got != want {
+        println("  FAIL: " + case + " — got " + to_string(got) + " want " + to_string(want))
+        exit(1)
+    }
+    println("  ok: " + case)
+}
+
+// _has — 1 iff substring `t` occurs in `s`.
+fn _has(s: str, t: str) -> int {
+    let mut i = 0
+    let n = len(s) - len(t)
+    while i <= n {
+        if s.substring(i, i + len(t)) == t {
+            return 1
+        }
+        i = i + 1
+    }
+    return 0
+}
+
+// _seq — 1 iff the two strings are exactly equal.
+fn _seq(a: str, b: str) -> int {
+    if a == b {
+        return 1
+    }
+    return 0
+}
+
+fn main() {
+    // (1) known family -> vast `in [...]` list (the H100 fix)
+    let h = vast_gpu_predicate("H100")
+    _check("H100: uses the in[] list operator (not =)", _has(h, "gpu_name in ["), 1)
+    _check("H100: includes the NVL variant", _has(h, "H100_NVL"), 1)
+    _check("H100: includes the SXM5 variant", _has(h, "H100_SXM5"), 1)
+    _check("H100: NEVER emits the rejected ~ operator", _has(h, "~"), 0)
+
+    // (2) already-exact variant (has `_`) -> exact gpu_name= pass-through.
+    _check("H100_NVL: exact pass-through",
+        _seq(vast_gpu_predicate("H100_NVL"), "gpu_name=H100_NVL"), 1)
+    _check("RTX_4090: exact pass-through (has _)",
+        _seq(vast_gpu_predicate("RTX_4090"), "gpu_name=RTX_4090"), 1)
+
+    // (3) empty / absent -> NO gpu_name predicate at all.
+    _check("empty: no gpu_name predicate", _has(vast_gpu_predicate(""), "gpu_name"), 0)
+    _check("empty: returns the empty string", _seq(vast_gpu_predicate(""), ""), 1)
+
+    // (4) unknown family (no `_`) -> treat as exact, never ~ (non-silent).
+    _check("unknown Foo: exact gpu_name=Foo", _seq(vast_gpu_predicate("Foo"), "gpu_name=Foo"), 1)
+    _check("unknown Foo: no ~ operator", _has(vast_gpu_predicate("Foo"), "~"), 0)
+
+    // (5) other known families resolve to in[] lists too.
+    _check("A100: in[] list", _has(vast_gpu_predicate("A100"), "gpu_name in ["), 1)
+    _check("A100: includes SXM4 variant", _has(vast_gpu_predicate("A100"), "A100_SXM4"), 1)
+    _check("H200: in[] list", _has(vast_gpu_predicate("H200"), "gpu_name in ["), 1)
+    _check("B200: in[] list (single SKU)", _has(vast_gpu_predicate("B200"), "gpu_name in ["), 1)
+
+    println("vast_gpu_predicate_test PASS")
+}

@@ -86,3 +86,67 @@ verdict .verdicts/hexa-cuda/F-HEXACUDA-ADOPTION-DX.txt.)
       at gpu/gpu_intrinsics.lsp.json (29 items, validated). self/lsp.hexa
       parse-checks clean; in-tree bin/hexa-lsp rebuild build-verify pending (fresh
       worktree lacks the bootstrap self/native/hexat artifact).
+- [x] D10 — DOJO (learn-by-doing): `hexa dojo hexa-cuda <slug> '<spec>'` emits
+      `@gpu_kernel` authoring katas — a 4-rung ladder (vec-add · reduction ·
+      tiled-gemm · wmma) of kernel.hexa + CPU oracle + host gpu_launch shape +
+      run.sh parse-gate + README, with a `--lang=both` `.cu`/ctypes contrast.
+      REAL intrinsics only (gpu/SPEC.md §5/§6; wmma kept parse-clean — the
+      gpu_wmma_* family is codegen-level/RFC 067, documented not source-called).
+      Sibling track `hexa dojo flame-forge` emits flame `.hexa` trainers (linreg ·
+      mlp · tiny-clm) with a descent gate. All 7 emitted katas hexa-parse clean;
+      all 3 flame-forge trainers RUN + PASS the descent gate (local CPU).
+      PREFLIGHT-HARDENED: the flame-forge run.sh cloud path (DOJO_CLOUD=1) sources
+      tool/dojo_rent_preflight.sh — the 6-fix "no-troubleshoot" RunPod rent/preflight
+      helper (image-tag validation · PUBLIC_KEY inject · supply ladder 8→4→2 /
+      SECURE→COMMUNITY / H200→H100→A100 · failure classification · per-GPU mem
+      OOM-block via stdlib/cloud/preflight.hexa · torchrun --tee/--redirect log
+      harvest), reflecting sidecar handoff 4474f21b (anima 7B DDP fire). Helper
+      self-tests GREEN (all 6 fixes, no rental); OOM-block + auth fail-fast verified
+      locally — NO silent dead pods. RECIPE-HARDENED (sidecar handoff a10891bc — the
+      anima 7B CLMConvMoE DDP *training-recipe* lessons): the preflight now folds a
+      training-recipe advisory into the mem gate — RECOMMEND --bf16-weights for ≥~3B-param
+      models (the anima 7B winner ~70GB; fp32-AdamW thrashes 96-99% near the 141GB cap),
+      BLOCK adamw-8bit when a single tensor > 2^31 elements (the bitsandbytes ops.cu:226
+      break), + a "DDP-won't-help-if-model-bound" advisory (single-GPU can beat multi-GPU
+      when conv/GEMM-bound). The tiny-clm README carries a bench-before-vectorize note
+      (grouped-conv 14min/step vs ModuleList 74s/step — fewer launches ≠ faster), and
+      docs/hexa-dojo.md gains a "Training recipe — optimization gotchas" section. Advisory
+      self-tests GREEN (+5 cases). CITED anima observations — attributed, not re-measured.
+      Docs: docs/hexa-dojo.md (incl. the no-troubleshoot preflight + the training-recipe
+      gotchas sections). DOJO-IMPROVE (branch domain/hexa-dojo-improve): (a) the fp32/f32
+      dtype mismatch is FIXED end-to-end — DOJO_DTYPE=fp32 (docs + emitted run.sh) used to
+      error `unknown --param-dtype fp32` on the hexa preflight path; _dtype_bytes +
+      the shell coarse-mem gate now accept fp64=f64 / fp32=f32 / fp16=f16 aliases, self-test
+      stays GREEN (+2 dtype-alias cases). (b) vision · rl · tabular PROMOTED stub → [full]:
+      real flame trainers over the same stdlib/flame substrate as flame-forge — vision
+      (softmax-clf · patch-mlp, softmax-CE descent; patch-MLP floor since flame has no 2-D
+      conv backward yet — honest, ref.py uses nn.Conv2d) · rl (bandit-pg · gridworld-pg
+      REINFORCE + baseline, deterministic inline-LCG sampling, reward-ASCENT gate) · tabular
+      (logreg · mlp-tab, softmax-CE descent). All SIX domains now [full]; every new kata
+      emits 4 files + emitted train.hexa parses clean + RUNs with its gate GREEN + run.sh
+      bash -n clean + ref.py py_compile clean + --lang filter correct (verified via a
+      localized-import harness against the worktree modules). Verdict:
+      .verdicts/hexa-cuda/F-HEXACUDA-DOJO.txt (GREEN, §8). Build-verify pending:
+      `hexa dojo domains` listing all SIX [full] via the INSTALLED binary (Jun-1
+      binary caches a precompiled stdlib/dojo snapshot — SOURCE verified via
+      self-contained compile) · NVPTX PTX emission (needs a CUDA host) · a live
+      multi-GPU DDP rent (preflight LOGIC locally verified).
+- [x] D11 — DOJO reflects the own-GEMM / megakernel arc (branch
+      domain/dojo-reflect-owngemm): the landed `sm_90a` `wgmma`+TMA own-GEMM
+      W-ladder (W6 50.7 → W8 66.5 → W10 70.7 TFLOP/s, all bit-exact rel-RMS 0,
+      ~6.09× off cuBLAS-TF32 roofline @4096³) + the persistent whole-step
+      megakernel (both walls closed — own-GEMM removes the cuBLAS-call wall;
+      a grid-sync cooperative kernel closes the GroupNorm full-y reduction wall,
+      byte-eq max|Δ|=0) are reflected into the track-1 hexa-cuda dojo as a
+      READING LESSON ("GPU own-GEMM parity & the persistent megakernel" in
+      docs/hexa-dojo.md). HONEST FRAMING throughout: cuBLAS = roofline, parity
+      NOT achieved (6.09×), util-via-megakernel is a CLOSED-NEGATIVE — the win is
+      OWNERSHIP/completeness, not a perf/util brag. The 4 named gotchas (GMMA 8×4
+      INTER layout · `fence.proxy.async.shared::cta` · single-elected-thread HW
+      TMA producer for occupancy · software-composed `SWIZZLE_128B` w/ HW-swizzle
+      closed-neg) are documented as `.cu`/codegen-level engineering lessons — NOT
+      source-callable `@gpu` intrinsics (no invented source calls). CITES the
+      landed verdicts verbatim (F-FUSION-SM90-WGMMA-W8/W10 · MEGAKERNEL-GN-GRIDSYNC,
+      PRs #2841/#2847/#2845) + the lit scan (docs/research/sm90-wgmma-parity-litscan.md,
+      #2846). No new perf claims of our own. Verdict:
+      .verdicts/hexa-cuda/F-HEXACUDA-DOJO.txt (§9). Docs-only, no GPU.
