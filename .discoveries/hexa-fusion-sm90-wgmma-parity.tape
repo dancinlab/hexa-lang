@@ -218,3 +218,46 @@
 #   unexplored), OR a 32-K half-atom slab so the band IS 16 KB (half the wgmma per decode).
 #   Either is a fresh sub-axis. Frontier (this dtype): gemm_f16_w14 71.6 @4096, 2 CTA/SM,
 #   bit-exact-vs-same-dtype. cuBLAS-FP16 = roofline. TF32 W10 70.7/6.09x untouched.
+
+# ============================================================================
+# === UPDATE 2026-06-06 — W15 DESCRIPTOR-DIRECT = CLOSED-NEGATIVE (research #2854 FALSIFIED)
+# ============================================================================
+# W15 (gemm_w15/probe_desc/probe_localize of wgmma_tf32_w15.cu): the research-#2854 breakthrough
+#   — feed wgmma DIRECTLY from the SWIZZLE_128B-TMA tile via the corrected GMMA descriptor
+#   (layout_type_=1, SBO=1024B, base_offset_=phase) and DELETE the W10 32KB software decode band,
+#   expecting the W11 single-tile differential to reach rel-RMS 0 — is FALSIFIED BY MEASUREMENT.
+#   H100 sm_90a, vast 39738178 DESTROYED leak 0, nvcc 12.6.77 driver 560.35.05 (W10-apples).
+#   verdict F-...-W15.txt.
+#
+#   MODE2 oracle: landed SWIZZLE_128B = g_phys = g XOR (r&7) (TEXTBOOK), atom-major (atom a@a*256).
+#   MODE6 localizer: composed_rel=0.000 (W10 composed-decode wgmma BIT-EXACT) but desc_rel=1.107
+#     (layout_type_=1 in-place read UNCORRELATED) -> defect isolated to TMA-swizzle↔wgmma-swizzle.
+#   MODE9 3200-cfg in-process sweep (swm·sbo·boff·lbo): FLOOR rel_rms 1.000 @ swm=1 sbo=1024 boff=2.
+#     base_offset_ DID move it 1.107->1.000 (phase axis real) but NO config reaches 0.
+#   MODE4 full GEMM desc-direct: rel_rms 1.392 (= the W9/W10 in-place floor) -> GATE FAIL, NO perf.
+#
+#   SMEM — the decode band IS removable (the one mechanical positive): W15 desc-direct NST=2 =
+#     64.0 KB/CTA vs W10 NST=2 96.0 KB/CTA = a 32 KB DROP, 2 CTA/SM held. But UNUSABLE (read not
+#     bit-exact, g5 forbids perf). W10 frontier re-measured same-pod: 71.0 TFLOP/s, 6.06x, rel 0.
+#
+#   FINDING (closed-negative, precise): the 3 named field fixes are necessary-DIRECTION-correct
+#     (best basin IS swm=1/sbo=1024; base_offset_ moves the residual) but INSUFFICIENT. The
+#     research's load-bearing claim "TMA-SWIZZLE_128B ≡ wgmma GMMA Swizzle<3,4,3> BY CONSTRUCTION"
+#     does NOT hold for our hand-rolled cuTensorMapEncodeTiled box (atom-major stacking ≠ the
+#     CuTe tile_to_shape(Layout_K_SW128_Atom) canonical byte pattern). The research conflated
+#     "TMA lands a 128B-swizzled tile" with "TMA lands the EXACT canonical atom" — equivalence
+#     holds only when the SMEM layout is BUILT from the atom and the TMA from THAT layout.
+#
+#   THE W11-W14 "EXHAUSTED" VERDICTS STAND: the exhaustion was NOT merely a descriptor bug —
+#     the descriptor-direct alternative is itself blocked by the same swizzle-interaction wall,
+#     now measured at 3200-config resolution. Frontier UNCHANGED = W10 gemm_w10 (70.7, 6.09x,
+#     2 CTA/SM, bit-exact). cuBLAS=roofline, parity-seeking, NO superiority claim.
+#
+# === NAMED RESIDUAL (W16, next-cycle) ===
+#   The 32KB decode-band removal is the prize and is REAL — but needs the canonical atom MATCHED:
+#   (a) re-encode A/B in GLOBAL so SWIZZLE_128B TMA lands the canonical Layout_K_SW128_Atom byte
+#       pattern (then the field-fix applies), OR (b) port make_gmma_desc's EXACT LBO/SBO FOR THE
+#       atom-major layout (a different descriptor than the canonical one). Both = net-new kernel
+#       structure, NOT a field sweep. Until one is bit-exact, W10 composed software decode is the
+#       frontier. (Other reopened levers — 128x256 / deep-ring / warp-spec setmaxnreg / persistent
+#       -collective / split-K / FP16-reopen — all remain occupancy-gated behind decode removal.)
