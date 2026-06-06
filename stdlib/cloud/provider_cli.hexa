@@ -84,27 +84,40 @@ fn _pcli_ports_has_22(val: str) -> int {
 // `--ports` exposes 22/tcp (RunPod maps ONLY explicitly-exposed ports; without
 // this the pod's SSH 22 is never mapped and `port 22 not yet mapped` persists
 // forever — the exact stuck-pod incident). PURE / argv-in-argv-out:
-//   • runpod create with NO --ports         → append `--ports 22/tcp`
-//   • runpod create with `--ports V`        → rewrite V to merge 22/tcp (no dup)
-//   • runpod create with `--ports=V`        → rewrite the inline form likewise
-//   • non-runpod / non-create               → argv returned UNCHANGED
+//   • runpod `pod create` with NO --ports   → append `--ports 22/tcp`
+//   • runpod `pod create` with `--ports V`   → rewrite V to merge 22/tcp (no dup)
+//   • runpod `pod create` with `--ports=V`   → rewrite the inline form likewise
+//   • non-runpod / not exactly `pod create`  → argv returned UNCHANGED
 // This is the passthrough twin of the `--ports 22/tcp` already forced in
-// runpod.hexa::_runpod_create_cli, so BOTH create routes expose 22/tcp.
+// runpod.hexa::_runpod_create_cli, so BOTH `pod create` routes expose 22/tcp.
+//
+// GATE (regression fix): the subcommand must be EXACTLY `pod create`. The old
+// gate fired on a bare `create` token ANYWHERE in the non-flag argv, so the
+// SIBLING runpodctl groups — `serverless create`, `template create`,
+// `network-volume create` — wrongly got `--ports 22/tcp` injected and failed
+// with `unknown flag: --ports` (those groups have no --ports). Only `pod`
+// objects carry a --ports flag, so the gate is scoped to that path: the first
+// non-flag token must be `pod` AND the second must be `create`.
 fn _pcli_force_ssh_ports(provider: str, args: [str]) -> [str] {
     if provider != "runpod" { return args }
     if _pcli_is_mutating(args) == 0 { return args }
-    // confirm the mutating verb is specifically `create` (start/stop/rm carry
-    // no ports flag) — scan the non-flag tokens for "create".
-    let mut is_create = 0
+    // confirm the subcommand is specifically `pod create` (and NOT
+    // serverless/template/network-volume create, which reject --ports) — take
+    // the ORDERED non-flag tokens and require [0]=="pod" && [1]=="create".
+    let mut nonflag = []
     let mut k = 0
     while k < len(args) {
         let a = args[k]
-        if len(a) > 0 && a.substring(0, 1) != "-" && a.to_lower() == "create" {
-            is_create = 1
+        if len(a) > 0 && a.substring(0, 1) != "-" {
+            nonflag.push(a.to_lower())
         }
         k = k + 1
     }
-    if is_create == 0 { return args }
+    let mut is_pod_create = 0
+    if len(nonflag) >= 2 && nonflag[0] == "pod" && nonflag[1] == "create" {
+        is_pod_create = 1
+    }
+    if is_pod_create == 0 { return args }
 
     let mut out = []
     let mut saw_ports = 0
