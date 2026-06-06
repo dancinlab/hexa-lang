@@ -161,3 +161,56 @@ pay off (a swizzle stall would otherwise mask their gains).
 - Colfax Research — "CUTLASS Tutorial: GEMM kernel design with Pipelining" (mbarrier pipeline depth, double buffering): https://research.colfax-intl.com/cutlass-tutorial-design-of-a-gemm-kernel/
 
 ---
+
+## Q3 — arXiv: Hopper GEMM / attention kernel design principles
+
+### Synthesis
+
+**FlashAttention-3 (arXiv:2407.08608)** is the canonical demonstration that the *same*
+three Hopper levers from Q2 apply to a fused kernel: (i) **producer-consumer warp
+specialization** — one warpgroup runs TMA, another runs async WGMMA, overlapping without
+explicit sync; (ii) **ping-pong interleaving** of the two GEMMs and softmax (block-wise,
+so tensor cores never wait on the softmax); (iii) exploiting **TMA + WGMMA asynchrony** to
+overlap compute and data movement. Result: 75% H100 FP16 utilization (740 TFLOP/s),
+1.5–2.0× over FA2 (which only reached 35%). The headline lesson for us: the jump from
+~35% to ~75% of peak came *entirely* from async warp-spec + overlap, **not** from any new
+math — exactly the regime our 66.5 (post-tensor-core, pre-warp-spec) sits in.
+
+**ThunderKittens (arXiv:2410.20399)** distills the design into a 3-level abstraction:
+warp-level 16×16 tiles, a **block-level template for overlapping async operations across
+warps** (the warp-spec scaffold), and grid-level launch/teardown hiding. It claims to
+**match cuBLAS on GEMM and FlashAttention-3 on attention**. The takeaway: cuBLAS-parity is
+reachable from a small fixed set of abstractions (tile + async-overlap template +
+swizzled SMEM layouts), confirming the parity gap is *engineering of the async pipeline*,
+not an exotic algorithm.
+
+**"Optimal Software Pipelining and Warp Specialization for Tensor Core GPUs"
+(arXiv:2512.18134, "Twill")** treats pipeline depth (SWP stages) and warp specialization
+(WS) as a *joint* optimization, and reports rediscovering — and proving optimal — the
+exact SWP+WS schedules experts hand-wrote for FlashAttention on Hopper and Blackwell.
+Implication: pipeline depth and the producer/consumer split are coupled and have an
+*optimal* setting per problem shape — i.e. our "how many mbarrier stages" question is not
+a free knob but a solvable trade-off (deeper hides more latency but costs SMEM/occupancy).
+
+(Secondary, noted not deep-read: **Tawa (arXiv:2510.14719)** and **Task-Based Tensor
+Computations (arXiv:2504.07004)** both automate warp specialization / task scheduling for
+Hopper — corroborating that WS is the dominant lever but not adding a new principle.)
+
+**Design principles applicable to our TF32 own-GEMM:**
+1. **Async-everything** — TMA load and WGMMA must run concurrently via mbarrier, never
+   serialized; this alone is the 35%→75% lever (FA3).
+2. **Warp specialization** producer/consumer with `setmaxnreg` asymmetry (FA3 + Q2).
+3. **Overlap the epilogue** with the mainloop via a second consumer (ping-pong) so tensor
+   cores never idle (FA3 ping-pong, PyTorch ping-pong in Q2).
+4. **Swizzled SMEM layouts feed WGMMA directly** with no bank conflicts (TK, FA3) — this
+   is precisely our W9 swizzle work, and the literature treats it as table-stakes for the
+   async pipeline to not stall.
+
+### Sources
+- FlashAttention-3 — Shah et al., arXiv:2407.08608 (warp-spec, ping-pong GEMM/softmax, async TMA+WGMMA, 75% H100 util / 740 TFLOP/s FP16, 1.5–2.0× over FA2): https://arxiv.org/abs/2407.08608
+- ThunderKittens — Spector et al., arXiv:2410.20399 (16×16 tile, block-level async-overlap template, matches cuBLAS GEMM + FA3 attention): https://arxiv.org/abs/2410.20399
+- "Optimal Software Pipelining and Warp Specialization for Tensor Core GPUs" (Twill) — arXiv:2512.18134 (joint SWP+WS optimization, rediscovers expert FA schedules on Hopper/Blackwell): https://arxiv.org/abs/2512.18134
+- Tawa: Automatic Warp Specialization for Modern GPUs — arXiv:2510.14719 (secondary; WS automation): https://arxiv.org/pdf/2510.14719
+- Task-Based Tensor Computations on Modern GPUs — arXiv:2504.07004 (secondary; task scheduling on Hopper): https://arxiv.org/abs/2504.07004
+
+---
