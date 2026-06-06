@@ -1603,6 +1603,21 @@ fn emit_runtime_cuda_c() -> str {
             "                                int64_t xhat_id, int64_t T, int64_t C, int64_t G) {\n" +
             "#ifdef __CUDACC__\n" +
             "    if (T <= 0 || C <= 0 || G <= 0 || (C % G) != 0) return -1;\n" +
+            "    /* HEXA-FUSION MEGAKERNEL-GN-GRIDSYNC: when HEXA_FUSE_GN_COOP is set, route to\n" +
+            "     * the cooperative grid-synced GN (fuse-able mid-megakernel). On -2 (no coop\n" +
+            "     * support / launch miss) fall THROUGH to the sequential path below — which is\n" +
+            "     * the byte-eq oracle this coop kernel must reproduce. */\n" +
+            "    {\n" +
+            "        extern int _hx_cuda_farr_groupnorm_coop_gpu(int64_t, int64_t, int64_t,\n" +
+            "            int64_t, int64_t, int64_t, int64_t, int64_t, int64_t, int64_t);\n" +
+            "        const char* gc = getenv(\"HEXA_FUSE_GN_COOP\");\n" +
+            "        if (gc && gc[0] != '0' && gc[0] != '\\0') {\n" +
+            "            int crc = _hx_cuda_farr_groupnorm_coop_gpu(x_id, gamma_id, beta_id,\n" +
+            "                          y_id, mean_id, inv_id, xhat_id, T, C, G);\n" +
+            "            if (crc == 0) return 0;\n" +
+            "            /* crc==-2 → device/launch unsupported → sequential fallback below. */\n" +
+            "        }\n" +
+            "    }\n" +
             "    if (_h2d(x_id) != 0) return -1;\n" +
             "    if (_h2d(gamma_id) != 0) return -1;\n" +
             "    if (_h2d(beta_id) != 0) return -1;\n" +
@@ -1884,6 +1899,173 @@ fn emit_runtime_cuda_c() -> str {
             "    (void)a_id; (void)out_id; (void)mean_id; (void)inv_id; (void)xhat_id;\n" +
             "    (void)T; (void)C; (void)G;\n" +
             "    fprintf(stderr, \"[cuda] groupnorm_gelu_residual: built without __CUDACC__\\n\");\n" +
+            "    return -1;\n" +
+            "#endif\n" +
+            "}\n" +
+            "\n" +
+            "/* HEXA-FUSION MEGAKERNEL-GN-GRIDSYNC — the SECOND megakernel wall.\n" +
+            " * GroupNorm needs a FULL-Y reduction (G=1 → mean/var over ALL T·C). In a plain\n" +
+            " * kernel that reduction is single-block-walled: the existing _hx_k_groupnorm puts\n" +
+            " * ONE thread per group, so with G=1 ONE thread reduces the whole tensor — it can\n" +
+            " * never participate in a persistent whole-grid megakernel (no cross-block barrier).\n" +
+            " * This COOPERATIVE variant lifts GN into the grid-synced regime so it can FUSE into\n" +
+            " * the persistent megakernel (cudaLaunchCooperativeKernel + cooperative_groups\n" +
+            " * this_grid().sync()), WITHOUT breaking byte-eq.\n" +
+            " *\n" +
+            " * BYTE-EQ DISCIPLINE (the wall): a multi-block PARALLEL reduction (tree/atomic/warp\n" +
+            " * partials) re-associates the FP64 sum vs the host nn_groupnorm → max|Δ|!=0. So the\n" +
+            " * reduction here is NOT parallelized: per group g, the canonical reducer thread\n" +
+            " * (grid-rank == g, i.e. block g·... ) runs the IDENTICAL sequential t-outer/c-inner\n" +
+            " * accumulation as _hx_k_groupnorm (same order, same _hx_gn_sqrt_dev NR-40, NO\n" +
+            " * re-assoc), publishes mu/inv to MEAN[g]/INV[g], then grid.sync() broadcasts them.\n" +
+            " * The ONLY parallel phase is the embarrassingly-parallel per-element normalize\n" +
+            " * (xhat = (x-mu)·inv ; Y = gamma·xhat+beta) — no reduction, so bit-identical. The\n" +
+            " * grid.sync() PAIR (reduce → sync → normalize) is what makes this fuse-able mid-\n" +
+            " * megakernel while staying max|Δ|=0 vs the sequential _hx_k_groupnorm oracle.\n" +
+            " *\n" +
+            " * HONEST FRAMING (g5): this closes a STRUCTURAL-COMPLETENESS wall (the whole-step\n" +
+            " * megakernel is now 100% hexa-owned, cuBLAS-call-free, no un-fusable GN host op) —\n" +
+            " * NOT a util/throughput win. byte-eq FORCES the reduction single-thread, so the\n" +
+            " * coop launch buys ZERO reduction-parallelism; idle threads wait at the barrier.\n" +
+            " * The binding util term remains GEMM-gap occupancy (F-FUSION-OCCUPANCY-WALL),\n" +
+            " * untouched here. Env-gated HEXA_FUSE_GN_COOP; no-CUDA / no-coop-support → -1 →\n" +
+            " * host falls back to the sequential _hx_k_groupnorm path (byte-eq reference). */\n" +
+            "__global__ void _hx_k_groupnorm_coop(const double* __restrict__ X,\n" +
+            "                                     const double* __restrict__ GAMMA,\n" +
+            "                                     const double* __restrict__ BETA,\n" +
+            "                                     double* __restrict__ Y,\n" +
+            "                                     double* __restrict__ MEAN,\n" +
+            "                                     double* __restrict__ INV,\n" +
+            "                                     double* __restrict__ XHAT,\n" +
+            "                                     int64_t T, int64_t C, int64_t G) {\n" +
+            "#ifdef __CUDACC__\n" +
+            "    _hxcg::grid_group grid = _hxcg::this_grid();\n" +
+            "    const double eps = 0.00001;\n" +
+            "    int64_t cg = C / G;\n" +
+            "    double m = (double)(cg * T);\n" +
+            "    int64_t rank = (int64_t)blockIdx.x * blockDim.x + threadIdx.x;\n" +
+            "    int64_t gridsz = (int64_t)blockDim.x * gridDim.x;\n" +
+            "    /* PHASE 1 — reduction. EXACTLY one thread per group does the SEQUENTIAL host-\n" +
+            "     * order reduction (t-outer, c-inner, NO tree re-assoc). With G=1 that is the\n" +
+            "     * single canonical reducer (grid-rank 0) summing the whole T·C tensor — the\n" +
+            "     * IDENTICAL accumulation order as _hx_k_groupnorm → bit-identical mu/var/inv. */\n" +
+            "    for (int64_t g = rank; g < G; g += gridsz) {\n" +
+            "        int64_t c0 = g * cg;\n" +
+            "        double sum = 0.0;\n" +
+            "        for (int64_t t = 0; t < T; t++)\n" +
+            "            for (int64_t c = 0; c < cg; c++)\n" +
+            "                sum += X[t * C + (c0 + c)];\n" +
+            "        double mu = sum / m;\n" +
+            "        double vs = 0.0;\n" +
+            "        for (int64_t t = 0; t < T; t++)\n" +
+            "            for (int64_t c = 0; c < cg; c++) {\n" +
+            "                double d = X[t * C + (c0 + c)] - mu;\n" +
+            "                vs += d * d;\n" +
+            "            }\n" +
+            "        double var = vs / m;\n" +
+            "        double inv = 1.0 / _hx_gn_sqrt_dev(var + eps);\n" +
+            "        MEAN[g] = mu;\n" +
+            "        INV[g]  = inv;\n" +
+            "    }\n" +
+            "    /* GRID BARRIER — mu/inv now visible to EVERY block (this is the cross-block\n" +
+            "     * barrier a plain kernel lacks; it is why GN can live mid-megakernel). */\n" +
+            "    grid.sync();\n" +
+            "    /* PHASE 2 — normalize. Embarrassingly parallel over all T·C elements; no\n" +
+            "     * reduction → no re-assoc → bit-identical to the sequential normalize loop. */\n" +
+            "    int64_t TC = T * C;\n" +
+            "    for (int64_t idx = rank; idx < TC; idx += gridsz) {\n" +
+            "        int64_t ch = idx % C;\n" +
+            "        int64_t g  = ch / cg;\n" +
+            "        double mu  = MEAN[g];\n" +
+            "        double inv = INV[g];\n" +
+            "        double xh  = (X[idx] - mu) * inv;\n" +
+            "        XHAT[idx]  = xh;\n" +
+            "        Y[idx]     = GAMMA[ch] * xh + BETA[ch];\n" +
+            "    }\n" +
+            "#else\n" +
+            "    (void)X; (void)GAMMA; (void)BETA; (void)Y; (void)MEAN; (void)INV; (void)XHAT;\n" +
+            "    (void)T; (void)C; (void)G;\n" +
+            "#endif\n" +
+            "}\n" +
+            "\n" +
+            "/* Cooperative-launch wrapper for _hx_k_groupnorm_coop. Mirrors the\n" +
+            " * _hx_cuda_farr_groupnorm_gpu surface (same farr ids / residence convention) but\n" +
+            " * launches via cudaLaunchCooperativeKernel so this_grid().sync() is legal. Gates\n" +
+            " * on cudaDevAttrCooperativeLaunch AND sizes the grid to ONE WAVE\n" +
+            " * (cudaOccupancyMaxActiveBlocksPerMultiprocessor × SM count) so the whole grid is\n" +
+            " * co-resident (a cooperative-launch hard requirement). On any miss → return -2 so\n" +
+            " * the caller falls back to the sequential _hx_cuda_farr_groupnorm_gpu (byte-eq). */\n" +
+            "int _hx_cuda_farr_groupnorm_coop_gpu(int64_t x_id, int64_t gamma_id, int64_t beta_id,\n" +
+            "                                     int64_t y_id, int64_t mean_id, int64_t inv_id,\n" +
+            "                                     int64_t xhat_id, int64_t T, int64_t C, int64_t G) {\n" +
+            "#ifdef __CUDACC__\n" +
+            "    if (T <= 0 || C <= 0 || G <= 0 || (C % G) != 0) return -1;\n" +
+            "    int dev = 0; cudaGetDevice(&dev);\n" +
+            "    int coop = 0;\n" +
+            "    cudaDeviceGetAttribute(&coop, cudaDevAttrCooperativeLaunch, dev);\n" +
+            "    if (!coop) {\n" +
+            "        fprintf(stderr, \"[cuda] groupnorm_coop: device lacks cooperative launch -> fallback\\n\");\n" +
+            "        return -2;\n" +
+            "    }\n" +
+            "    if (_h2d(x_id) != 0) return -1;\n" +
+            "    if (_h2d(gamma_id) != 0) return -1;\n" +
+            "    if (_h2d(beta_id) != 0) return -1;\n" +
+            "    if (_ensure_dev_alloc_out(y_id, T * C) != 0) return -1;\n" +
+            "    if (_ensure_dev_alloc_out(mean_id, G) != 0) return -1;\n" +
+            "    if (_ensure_dev_alloc_out(inv_id, G) != 0) return -1;\n" +
+            "    if (_ensure_dev_alloc_out(xhat_id, T * C) != 0) return -1;\n" +
+            "    const double* X     = g_slots[x_id].d_buf;\n" +
+            "    const double* GAMMA = g_slots[gamma_id].d_buf;\n" +
+            "    const double* BETA  = g_slots[beta_id].d_buf;\n" +
+            "    double*       Y     = g_slots[y_id].d_buf;\n" +
+            "    double*       MEAN  = g_slots[mean_id].d_buf;\n" +
+            "    double*       INV   = g_slots[inv_id].d_buf;\n" +
+            "    double*       XHAT  = g_slots[xhat_id].d_buf;\n" +
+            "    int block_sz = 64;\n" +
+            "    int numSM = 0;\n" +
+            "    cudaDeviceGetAttribute(&numSM, cudaDevAttrMultiProcessorCount, dev);\n" +
+            "    int blocksPerSM = 0;\n" +
+            "    cudaOccupancyMaxActiveBlocksPerMultiprocessor(&blocksPerSM,\n" +
+            "        (const void*)_hx_k_groupnorm_coop, block_sz, 0);\n" +
+            "    if (blocksPerSM < 1) blocksPerSM = 1;\n" +
+            "    /* one wave = the MAX co-resident grid; the cooperative grid must NOT exceed it. */\n" +
+            "    int max_grid = numSM * blocksPerSM;\n" +
+            "    if (max_grid < 1) max_grid = 1;\n" +
+            "    int64_t want = (T * C + block_sz - 1) / block_sz;\n" +
+            "    int grid_sz = (want > (int64_t)max_grid) ? max_grid : (int)want;\n" +
+            "    if (grid_sz < 1) grid_sz = 1;\n" +
+            "    void* args[] = { (void*)&X, (void*)&GAMMA, (void*)&BETA, (void*)&Y,\n" +
+            "                     (void*)&MEAN, (void*)&INV, (void*)&XHAT,\n" +
+            "                     (void*)&T, (void*)&C, (void*)&G };\n" +
+            "    dim3 gdim(grid_sz, 1, 1), bdim(block_sz, 1, 1);\n" +
+            "    cudaError_t le = cudaLaunchCooperativeKernel((const void*)_hx_k_groupnorm_coop,\n" +
+            "                                                 gdim, bdim, args, 0, _forge_stream());\n" +
+            "    if (le != cudaSuccess) {\n" +
+            "        fprintf(stderr, \"[cuda] groupnorm_coop launch failed: %s -> fallback\\n\",\n" +
+            "                cudaGetErrorString(le));\n" +
+            "        return -2;\n" +
+            "    }\n" +
+            "    cudaError_t er = cudaDeviceSynchronize();\n" +
+            "    if (er != cudaSuccess) {\n" +
+            "        fprintf(stderr, \"[cuda] groupnorm_coop sync failed: %s\\n\",\n" +
+            "                cudaGetErrorString(er));\n" +
+            "        return -1;\n" +
+            "    }\n" +
+            "    {\n" +
+            "        int64_t outs[4] = { y_id, mean_id, inv_id, xhat_id };\n" +
+            "        for (int k = 0; k < 4; k++) {\n" +
+            "            HexaFarrEntry* e = &_hx_farr_table[outs[k]];\n" +
+            "            e->d_buf      = (void*)g_slots[outs[k]].d_buf;\n" +
+            "            e->loc        = FARR_DEVICE;\n" +
+            "            e->dirty_host = 0;\n" +
+            "            e->dirty_dev  = 0;\n" +
+            "        }\n" +
+            "    }\n" +
+            "    return 0;\n" +
+            "#else\n" +
+            "    (void)x_id; (void)gamma_id; (void)beta_id; (void)y_id; (void)mean_id;\n" +
+            "    (void)inv_id; (void)xhat_id; (void)T; (void)C; (void)G;\n" +
+            "    fprintf(stderr, \"[cuda] groupnorm_coop: built without __CUDACC__\\n\");\n" +
             "    return -1;\n" +
             "#endif\n" +
             "}\n" +
