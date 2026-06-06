@@ -1,4 +1,54 @@
 F-DDP-M4-TRAIN-BYTEEQ — HEXA-DDP DDP-M4
 End-to-end data-parallel TRAINING byte-eq: 1-GPU step == 2-GPU DDP step.
 
-STATUS: WIP — harness pushed, GPU run pending (verdict to be filled inline).
+GATE (g5): W_ref == W_ddp byte-eq max|Δ|=0 (every parameter, FP64), AND loss match.
+RESULT: GREEN — weights, loss, grad, and rank-agreement all max|Δ|=0 (byte-exact).
+
+Hardware: 2x NVIDIA GeForce RTX 3060 (vast.ai instance 39793396, label hexa-ddp-m4,
+DESTROYED after capture — leak 0). Transport = staged-host cudaMemcpyPeer (P2P
+disabled on this PCIe/PHB node); correctness is transport-independent (the ring
+all-reduce sums the same grad partials regardless of the wire).
+
+──────────────────────────── VERBATIM ON-POD STDOUT ────────────────────────────
+######## DDP-M4 data-parallel training byte-eq :: 2026-06-06T23:13:10Z ########
+
+==== nvidia-smi -L ====
+GPU 0: NVIDIA GeForce RTX 3060 (UUID: GPU-b93749da-64b5-a078-a37e-a6a9396b37bf)
+GPU 1: NVIDIA GeForce RTX 3060 (UUID: GPU-8ad742d8-40f1-7de9-9cd6-6895a5af1349)
+
+==== nvidia-smi topo -m (VERBATIM SSOT) ====
+	GPU0	GPU1	CPU Affinity	NUMA Affinity	GPU NUMA ID
+GPU0	 X 	PHB	0-3	0		N/A
+GPU1	PHB	 X 	0-3	0		N/A
+
+Legend:
+
+  X    = Self
+  SYS  = Connection traversing PCIe as well as the SMP interconnect between NUMA nodes (e.g., QPI/UPI)
+  NODE = Connection traversing PCIe as well as the interconnect between PCIe Host Bridges within a NUMA node
+  PHB  = Connection traversing PCIe as well as a PCIe Host Bridge (typically the CPU)
+  PXB  = Connection traversing multiple PCIe bridges (without traversing the PCIe Host Bridge)
+  PIX  = Connection traversing at most a single PCIe bridge
+  NV#  = Connection traversing a bonded set of # NVLinks
+
+==== building (nvcc -arch=sm_86) ====
+build ok
+
+==== running ddp_train ====
+=== ddp_train :: visible CUDA devices = 2 ===
+cudaDeviceCanAccessPeer(0->1)=0  (1->0)=0
+transport = staged-host cudaMemcpyPeer (P2P disabled; correctness identical)
+model: MLP 16->32->32->8 (ReLU,ReLU,linear), NPARAM=1864, FP64
+global batch B=64, world_size=2 (shard=32 each), LR=0.01
+
+--- DDP-M4 training byte-eq gate ---
+loss_ref (mean)        = 2.1718481686851199
+loss_ddp (mean,global) = 2.1718481686851199
+loss match max|delta|  = 0  BYTE-EQ
+grad  g_ddp vs g_ref   max|delta| = 0  BYTE-EQ
+rank-agreement (W1==W0) max|delta| = 0  ALL RANKS IDENTICAL
+WEIGHTS W_ddp vs W_ref  max|delta| = 0  BYTE-EQ PASS
+
+=== DDP-M4 verdict: GREEN - data-parallel TRAINING byte-eq — 1-GPU train == 2-GPU DDP train (transport=staged-host fallback, world_size=2) ===
+
+==== exit code: 0 ====
