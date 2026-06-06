@@ -1,0 +1,86 @@
+F-FUSION-MEGAKERNEL-GN-GRIDSYNC  ::  🟢 GREEN (byte-eq max|Δ|=0, cooperative-launch GPU-CONFIRMED)
+domain: HEXA-FUSION  ·  date: 2026-06-06  ·  device: NVIDIA A100-SXM4-40GB (sm_80) · CUDA 12.4
+method: byte-eq vs sequential GroupNorm oracle + real cooperative-launch (cudaLaunchCooperativeKernel)
+
+QUESTION (pre-registered falsifier): can the GroupNorm full-Y reduction (G=1, mean/var over ALL
+T·C) be folded into the persistent whole-step megakernel via a COOPERATIVE kernel
+(cudaLaunchCooperativeKernel + cooperative_groups::this_grid().sync()) — closing the SECOND and
+final megakernel wall — WHILE holding byte-eq max|Δ|=0 vs the existing sequential GroupNorm?
+FALSIFIER: if the cooperative reduction RE-ASSOCIATES the FP64 sum (tree/atomic/warp partials),
+max|Δ| != 0 → byte-eq HARD GATE BROKEN → that re-assoc IS the wall (report as closed-negative).
+
+RESULT: 🟢 CONFIRMED. The cooperative grid-synced GN reproduces the sequential GN BIT-FOR-BIT.
+Both megakernel walls are now closed.
+
+═══════════════════════════════════════════════════════════════════════════════════════════════
+HARD GATE (g5) — byte-eq max|Δ|=0 vs the host/sequential GroupNorm oracle — PASSED FIRST:
+═══════════════════════════════════════════════════════════════════════════════════════════════
+  REAL A100 run (gn_coop_byteeq.cu — _hx_k_groupnorm oracle vs _hx_k_groupnorm_coop, identical
+  random input, compared on Y / XHAT / MEAN / INV via fabs-delta AND bit-exact memcmp):
+
+  device: NVIDIA A100-SXM4-40GB  sm_80
+    [case T=1536 C=1536 G=1] coop_supported=1 numSM=108 blocks/SM=18 max_wave_grid=1944 coop_grid=1944 (fits_one_wave=1)
+    -> max|delta|=0  bitdiff_words=0  BYTE-EQ PASS          ← THE megakernel case (full-Y over 2.36M elems)
+    [case T=256 C=512 G=1] coop_supported=1 ... coop_grid=1944 (fits_one_wave=1)
+    -> max|delta|=0  bitdiff_words=0  BYTE-EQ PASS
+    [case T=128 C=256 G=4] coop_supported=1 ... coop_grid=512 (fits_one_wave=1)
+    -> max|delta|=0  bitdiff_words=0  BYTE-EQ PASS          ← G>1 multi-group sanity
+    [case T=64  C=128 G=1] coop_supported=1 ... coop_grid=128 (fits_one_wave=1)
+    -> max|delta|=0  bitdiff_words=0  BYTE-EQ PASS
+  ALL CASES BYTE-EQ PASS (max|delta|=0)  ·  RUN EXIT 0
+
+  WHY byte-eq holds (the wall, SOLVED): the reduction is NOT parallelized across the grid. Per
+  group g, the canonical reducer thread (grid-rank == g; for G=1 that is rank 0) runs the
+  IDENTICAL sequential t-outer/c-inner accumulation as _hx_k_groupnorm — same order, same NR-40
+  _hx_gn_sqrt_dev, NO tree re-assoc — then publishes mu/inv to MEAN[g]/INV[g]. grid.sync() then
+  BROADCASTS mu/inv to every block, and the ONLY parallel phase is the embarrassingly-parallel
+  per-element normalize (xhat=(x-mu)·inv ; Y=γ·xhat+β) — no reduction, so bit-identical. The
+  grid.sync() PAIR (reduce → sync → normalize) is exactly what makes GN fuse-able mid-megakernel
+  while staying max|Δ|=0.
+
+═══════════════════════════════════════════════════════════════════════════════════════════════
+COOPERATIVE-LAUNCH VALIDATED ON GPU — YES:
+═══════════════════════════════════════════════════════════════════════════════════════════════
+  - cudaDevAttrCooperativeLaunch = 1 on A100-SXM4 (sm_80) — cooperative launch SUPPORTED.
+  - cudaLaunchCooperativeKernel(_hx_k_groupnorm_coop, ...) returned cudaSuccess; grid.sync()
+    executed correctly (byte-eq output proves the cross-block barrier worked).
+  - one-wave fit: cudaOccupancyMaxActiveBlocksPerMultiprocessor = 18 blocks/SM × 108 SM =
+    1944 max co-resident blocks; every case's cooperative grid ≤ 1944 (fits_one_wave=1) — the
+    hard cooperative-launch co-residency requirement is satisfied (grid clamped to one wave).
+  - compiled with -arch=sm_80 -rdc=true -lcudadevrt (relocatable device code required for
+    grid.sync). Built + ran on a real A100; pod destroyed (leak 0).
+
+═══════════════════════════════════════════════════════════════════════════════════════════════
+BOTH-WALLS-CLOSED — YES:
+═══════════════════════════════════════════════════════════════════════════════════════════════
+  WALL 1 (own-GEMM, previously closed): a persistent kernel can now call the device _hx_k_gemm
+    in-line instead of an un-fusable cuBLAS host call (own-GEMM stack, #2697).
+  WALL 2 (GN grid-sync, CLOSED HERE): the two GroupNorm full-Y reductions (GN#1 in block-1/L3-c,
+    GN#2 in block-2 after gelu+pack+router/L3-d) — the only un-fused ops, both grid-sync-walled —
+    now fuse via the cooperative grid-synced GN. The glue-block whole-step megakernel is FULLY
+    REALIZED: 100% hexa-owned, cuBLAS-call-free, no un-fusable GN host op remaining.
+
+═══════════════════════════════════════════════════════════════════════════════════════════════
+HONEST SCOPE (g5) — COMPLETENESS, NOT PERF:
+═══════════════════════════════════════════════════════════════════════════════════════════════
+  This closes a STRUCTURAL-COMPLETENESS wall — it is NOT a util/throughput win, and NO util or
+  throughput superiority is claimed. byte-eq FORCES the reduction single-thread sequential, so the
+  cooperative launch buys ZERO reduction-parallelism (idle threads wait at the barrier during the
+  G=1 reduction phase). The binding util term is unchanged: util remains bound by GEMM-gap GPU
+  occupancy (F-FUSION-OCCUPANCY-WALL; small FP64 GEMMs @D1536 under-fill the H100/A100) — GN
+  fusion touches none of it. The VALUE delivered is COMPLETENESS + OWN-ABILITY: the whole-step
+  megakernel is now fully realized with both walls gone, fully hexa-owned and cuBLAS-call-free.
+
+  SUPERSEDES F-FUSION-GN-COOP-KERNEL-CLOSED-NEG.txt (2026-06-04), which was ANALYSIS-ONLY and
+  argued "don't build it" on cost/benefit. That cost analysis stands for the UTIL goal (correct:
+  zero util lift), but its premise — that byte-eq is impossible/not-worth-it for the cooperative
+  GN — is now MEASURED FALSE for the COMPLETENESS goal: the cooperative GN holds max|Δ|=0 by
+  keeping the reduction single-thread sequential. The structural wall is closed without breaking
+  byte-eq; only the (separately-closed-negative) util lever remains absent, as expected.
+
+ARTIFACTS:
+  - device emit:   self/cuda/runtime_cuda_emit.hexa  (_hx_k_groupnorm_coop +
+                   _hx_cuda_farr_groupnorm_coop_gpu launcher; HEXA_FUSE_GN_COOP env-gate inside
+                   _hx_cuda_farr_groupnorm_gpu with -2 → sequential byte-eq fallback)
+  - byte-eq gate:  .verdicts/hexa-fusion/gn-gridsync-build/gn_coop_byteeq.cu (the harness above)
+  - real run:      A100-SXM4-40GB sm_80, CUDA 12.4, vast instance 39704955 (DESTROYED, leak 0)

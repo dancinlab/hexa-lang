@@ -3303,6 +3303,13 @@
   src    = "self/native/hxqwen14b_cuda.cu (_hx_k_sgemm_cm_v54 + _hx_own_sgemm_cm_launch) + hxqwen14b_emit.hexa shim · landed on main"
   status = "🟢 SUPPORTED-NUMERICAL — REAL verdict persisted verbatim. [OWN-SGEMM-FIRED] 1× own / 0× oracle, rel-RMS ~1e-6 within fp32 tol PASS both shapes. ~7.6× slower wall (naive vs cuBLAS TC — honest, motivates tiling). GPU measurement (NOT atlas-atom-shaped — indexed here). terminal."
 
+@C fusion_megakernel_gn_gridsync := "cooperative grid-synced GroupNorm (_hx_k_groupnorm_coop + cudaLaunchCooperativeKernel + this_grid().sync()) fuses the GN full-Y reduction (G=1 over all T·C) into the persistent megakernel while holding byte-eq max|Δ|=0 vs the sequential _hx_k_groupnorm oracle — closing the 2nd (final) megakernel wall" :: measurement [slug=hexa-fusion-megakernel-gn-gridsync group=GPU]
+  method = "fixpoint"
+  cmd    = "gn_coop_byteeq.cu: _hx_k_groupnorm (oracle) vs _hx_k_groupnorm_coop on identical input, compare Y/XHAT/MEAN/INV (fabs + bit-exact memcmp); 4 cases incl T1536 C1536 G1; A100-SXM4-40GB sm_80 vast 39704955 (destroyed, leak 0)"
+  raw    = ".verdicts/hexa-fusion/F-FUSION-MEGAKERNEL-GN-GRIDSYNC.txt"
+  src    = "self/cuda/runtime_cuda_emit.hexa (_hx_k_groupnorm_coop + _hx_cuda_farr_groupnorm_coop_gpu launcher; env HEXA_FUSE_GN_COOP, -2 → sequential fallback) · branch hexa-fusion-gn-gridsync"
+  status = "🟢 SUPPORTED-NUMERICAL — REAL verdict persisted verbatim. 4/4 cases max|Δ|=0 bitdiff=0; cudaDevAttrCooperativeLaunch=1, grid fits one wave (1944 max-coresident). HONEST (g5): STRUCTURAL-COMPLETENESS (whole-step megakernel fully realized, cuBLAS-call-free) NOT a util/perf win — byte-eq forces single-thread reduction → zero reduction-parallelism. GPU measurement (indexed here). terminal."
+
 @C fusion_wmma2_cutlass_grade := "CUTLASS-grade tiled TF32 WMMA2 own-GEMM _hx_k_sgemm_cm_wmma2 is CORRECT (rel-RMS 2.609e-4 ≪ 3e-3 TF32 bar, bounds-guarded) and lands at 1.13× of cuBLAS @2048³ (0.77047 vs 0.67948 ms/it), closing ~94% of the naive-WMMA→cuBLAS gap (2.70× faster than naive)" :: measurement [slug=hexa-fusion-own-gemm group=GPU]
   method = "fixpoint"
   cmd    = "standalone driver #include shipped kernel, single GEMM M=N=K=2048 + M130 N70 K96 bounds, CUDA-event 50it, RTX PRO 6000 Blackwell vast 39459930"
