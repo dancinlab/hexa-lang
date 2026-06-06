@@ -1,0 +1,23 @@
+F-DDP-M6-MULTINODE — ring all-reduce across a node boundary (TCP socket transport)
+=================================================================================
+STATUS: WIP (skeleton pushed; loopback + 2-host runs pending)
+
+Falsifier (g5): 2-node ring all-reduce result == serial elementwise sum,
+byte-eq max|delta|=0 (FP64), for S%2!=0 (boundary, S=7) AND large S (1<<20).
+The FP64 bytes cross the wire and must arrive bit-identical (TCP is reliable +
+ordered, so byte-eq should hold; this proves it on real transport).
+
+Method: stdlib/ddp/m6_multinode/ring_tcp_m6.c — the EXACT M1/M3/M5 canonical
+ring schedule (2(N-1) steps, chunk_start partition), per-step transport swapped
+from cudaMemcpyPeer (intra-node GPU, M5) to host-to-host TCP sendall/recvall on
+a ring socket. Each rank is a separate process; rank r listens for predecessor
+and connects to successor. Parity ordering (even send-then-recv / odd
+recv-then-send) makes the 2-cycle deadlock-free without threads.
+
+Transport: TCP (socket sendall/recvall). [pending: loopback / 2-host]
+Node count: [pending]
+Cross-node byte-eq max|delta|: [pending]
+Pods destroyed: [pending]
+
+This skeleton was pushed FIRST per worktree-durability discipline. Loopback
+and real 2-host results are appended verbatim below as they land.
