@@ -1,0 +1,7 @@
+clm_moe_conv_fused — OG-FUSE-PROD-FOLD: GEMM-conv weight-reuse (PR #2867 path E)
+  E=30 T=16 d=8 K=3 dil=1  max|Δ| GEMM-conv(E)-vs-ModuleList = 0.0   fused-vs-ModuleList = 0.0
+  E=30 T=16 d=8 K=3 dil=2  max|Δ| GEMM-conv(E)-vs-ModuleList = 0.0   fused-vs-ModuleList = 0.0
+  E=4 T=24 d=8 K=3 dil=1  max|Δ| GEMM-conv(E)-vs-ModuleList = 0.0   fused-vs-ModuleList = 0.0
+F-CLM-MOE-CONV-GEMM-FOLD-EQ = 1
+PASS — GEMM-conv path E == E× ModuleList byte-eq (max|Δ|=0); fused-path also eq
+OG-FUSE-PROD-FOLD CODE FOLD GREEN — HEXA_FUSE_MOE_CONV routes path E (6.57× @d=6208)

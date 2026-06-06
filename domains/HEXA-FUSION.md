@@ -72,6 +72,28 @@
   {E=30 dil=1, E=30 dil=2, E=4 dil=1} on Mac CPU (`hexa run`, no link dep). verdict:
   .verdicts/hexa-fusion/F-CLM-MOE-CONV-FUSE-FOLD-EQ.txt. DEFERRED: the full 7B clm_prod_gpu on-pod build +
   the own-device-kernel util Δ at production shape (d=6208, E=30, H100/H200) — NO full train was run.
+- [x] **OG-FUSE-PROD-FOLD — route the flame MoE-conv to the GEMM-conv weight-reuse path E** — the
+  PRODUCTION fold. OG-FUSE-FOLD wired the strided-batched FUSED path (moe_conv_fused_fwd), which is the
+  UNDER-FILL kernel — it LOSES at production d=6208 (saturated, memory-roofline bound). OG-FUSE-PROD-KERNEL
+  then found the real winner: path E k_moe_conv_gemm (6.57× vs ModuleList-30 at d=6208/H100, byte-exact).
+  This fold makes the production path = path E. (2026-06-07, CODE FOLD GREEN — standalone byte-eq validated,
+  full-trainer build DEFERRED.) stdlib/flame/clm_moe_conv_fused.hexa adds moe_conv_gemm_fwd: per-expert
+  register-tiled GEMM with weight-tile reuse across the T time-rows. The conv is recast as an implicit GEMM
+  (Y[t,co]=Σ_k Σ_ci Xshift_k[t,ci]·W_k[ci,co]); the shared im2col xcol[T·(d·K)] is built ONCE (all experts
+  read the SAME X — NO E× xcol replication, unlike the batched fused path's [E·T·Kdim] blowup that costs at
+  d=6208), then ONE forge_dispatch_matmul(xcol, T, Kdim, Wt_e, d) per expert reuses the shared xcol while
+  the weight tile streams. The im2col contraction index j=ci·K+k (ascending) IS the ci-outer/k-inner order
+  the device kernel k_moe_conv_gemm accumulates in (lines 346-363) → byte-IDENTICAL to moe_conv_modulelist_fwd
+  / nn_conv1d_fwd (weight reuse is a SCHEDULING property of the device GEMM, NOT a math re-association; this
+  is the path-E own-GEMM, NOT the cuBLAS path-F roofline which reorders ci and is only rel-RMS-eq).
+  moe_conv_fwd_dispatch now routes path E under HEXA_FUSE_MOE_CONV (or HEXA_FUSE_ALL); default OFF →
+  moe_conv_modulelist_fwd (the byte-eq oracle). GATE F-CLM-MOE-CONV-GEMM-FOLD-EQ = 1: GEMM-conv path E ==
+  E× ModuleList max|Δ| = 0.0 over {E=30 dil=1, E=30 dil=2, E=4 dil=1} on Mac CPU (`hexa run`, no link dep);
+  the legacy strided-batched fused path also stays max|Δ|=0. verdict:
+  .verdicts/hexa-fusion/F-CLM-MOE-CONV-GEMM-FOLD-EQ.txt. The fold makes the 6.57× REACHABLE by the trainer;
+  it does NOT itself measure a trainer speedup. DEFERRED: the full 7B clm_prod_gpu on-pod build + the
+  GEMM-conv util Δ / step-time at production shape (d=6208, E=30, H100/H200) — NO full train was run; the
+  6.57× is the KERNEL benchmark (PR #2867), the on-trainer measurement is the next step.
 - [ ] **OG-FUSE-RIGHTSIZE — right-sized-GPU per-regime validation** — validate the cure on a right-sized
   GPU (RTX 5070 / L40S) per regime to dodge big-GPU contention + the access-unresolved blocker; the
   byte-eq D1536-saturates-5070-to-98% fact already shows right-sizing is the practical lever.
