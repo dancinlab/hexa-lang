@@ -662,6 +662,43 @@ saturated → **weight-reuse GEMM recast**. Picking fill at saturation is the
 > not vendor superiority. The preflight `dojo_recipe_advisory` carries the one-line regime hint
 > (*saturated → weight-reuse GEMM · under-fill → fusion-fill*) — see [how the dojo enforces this](#how-the-dojo-enforces-this).
 
+### DDP (multi-GPU data-parallel) — the verified recipe (HEXA-DDP M1·M2·M3 🟢)
+
+How to train across 2+ GPUs the hexa-native way (no NCCL). The collective is a
+ring all-reduce; you verify it byte-exact FIRST in a hardware-free sim, then swap
+only the transport for real GPU-to-GPU copies. **Honest scope (commons g83)**:
+collective-GREEN ≠ training-GREEN — M1/M3 prove the *all-reduce*; end-to-end
+parallel TRAINING (1-GPU vs 2-GPU same-model byte-eq over a real flame step) is
+DDP-M4, 4-GPU speedup is DDP-M5. N-GPU speedup is ALWAYS < N× (Amdahl + comm).
+
+```
+ring all-reduce — transport swapped in stages, schedule FIXED at 2(N-1) steps
+ [ M1 sim ] ─ in-process N-rank array-copy ─ byte-eq vs serial sum (NO hardware) 🟢
+ [ M3 real ] ─ cudaMemcpyPeer over 2 GPUs ── same byte-eq gate 🟢
+ [ M4/M5 ]  ─ real flame step · 4-GPU scale ─ TODO
+```
+
+- **gate FIRST (g5)**: ring all-reduce result == serial elementwise sum, byte-eq
+  max|Δ|=0 (FP64), test N∈{2,4} AND S-not-a-multiple-of-N (boundary) + a large S.
+  Verified: M1 sim (`stdlib/ddp/ring_all_reduce.hexa`) + M3 real
+  (`stdlib/ddp/m3_p2p/ring_p2p.cu`), both max|Δ|=0.
+- **transport**: `cudaMemcpyPeer`. ALWAYS check `cudaDeviceCanAccessPeer(a,b)` BOTH
+  directions first. ⚠ GeForce (RTX 3090/4090) on a PHB/PCIe-host-bridge topology
+  has direct P2P **driver-disabled** (canAccessPeer=0) → falls back to a staged
+  host copy (correct, but NO direct bandwidth). For the direct NVLink path rent a
+  **datacenter card** (2× A100_SXM4 ≈ $1.47/hr, NV# bond in `nvidia-smi topo -m`).
+- **rent multi-GPU**: `DDP_NUM_GPUS=N` (`tool/ddp_rent_lib.sh`, default 1 = the
+  legacy single-GPU path byte-unchanged). `vastai search offers 'num_gpus>=2 ...'`
+  — 2-GPU is cheap & plentiful (~$1.20–1.47/hr; a correctness run costs cents).
+- **topology probe**: `tool/ddp_topo_probe.sh` runs `nvidia-smi topo -m` on-pod and
+  classifies each pair NVLink(NV#) / PCIe(PIX/PXB/PHB) / SYS(cross-NUMA) → tells
+  M3 which transport the pair actually supports.
+- **env gotchas (recorded from the M3 fire)**: (1) a stale forward-compat `libcuda`
+  on the rented image → `export LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu` before the
+  CUDA build/run. (2) inline `ssh -o ...` flag mangling → use an SSH **config file**,
+  not inline `-o`. (3) git-guard hard-blocks `--force`/`--force-with-lease` here —
+  to update a stale branch, rebase onto a fresh branch + new PR, never force-push.
+
 ## references
 
 - [`HEXA-CUDA.md`](../HEXA-CUDA.md) — the GPU-native domain home
