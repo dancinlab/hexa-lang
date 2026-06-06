@@ -66,16 +66,23 @@ fn _ports_has_22(val: str) -> int {
 fn _force_ssh_ports(provider: str, args: [str]) -> [str] {
     if provider != "runpod" { return args }
     if _is_mutating(args) == 0 { return args }
-    let mut is_create = 0
+    // gate scoped to EXACTLY `pod create` (mirror of stdlib gate): the ordered
+    // non-flag tokens must be [0]=="pod" && [1]=="create". serverless/template/
+    // network-volume `create` reject --ports, so they must pass through.
+    let mut nonflag = []
     let mut k = 0
     while k < len(args) {
         let a = args[k]
-        if len(a) > 0 && a.substring(0, 1) != "-" && a.to_lower() == "create" {
-            is_create = 1
+        if len(a) > 0 && a.substring(0, 1) != "-" {
+            nonflag.push(a.to_lower())
         }
         k = k + 1
     }
-    if is_create == 0 { return args }
+    let mut is_pod_create = 0
+    if len(nonflag) >= 2 && nonflag[0] == "pod" && nonflag[1] == "create" {
+        is_pod_create = 1
+    }
+    if is_pod_create == 0 { return args }
     let mut out = []
     let mut saw_ports = 0
     let mut i = 0
@@ -200,6 +207,18 @@ fn main() {
     _ck("vast create untouched",
         _join_args(_force_ssh_ports("vast", ["create", "instance", "1"])),
         "'create' 'instance' '1'")
+    // (h) REGRESSION: sibling `<group> create` groups reject --ports and MUST
+    // pass through untouched (the bug forced --ports onto serverless create →
+    // `unknown flag: --ports`). Only `pod create` carries a --ports flag.
+    _ck("serverless create untouched",
+        _join_args(_force_ssh_ports("runpod", ["serverless", "create", "--name", "x"])),
+        "'serverless' 'create' '--name' 'x'")
+    _ck("template create untouched",
+        _join_args(_force_ssh_ports("runpod", ["template", "create", "--name", "x"])),
+        "'template' 'create' '--name' 'x'")
+    _ck("network-volume create untouched",
+        _join_args(_force_ssh_ports("runpod", ["network-volume", "create", "--size", "80"])),
+        "'network-volume' 'create' '--size' '80'")
 
     println("provider_cli_test PASS")
 }
