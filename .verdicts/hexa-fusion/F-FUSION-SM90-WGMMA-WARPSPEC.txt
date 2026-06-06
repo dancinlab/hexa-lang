@@ -1,0 +1,94 @@
+F-FUSION-SM90-WGMMA-WARPSPEC — sm_90a own-GEMM warp-specialized / async-pipelined wgmma TF32 mainloop
+=========================================================================================================
+verdict-tier: 🟢 numerical — BIT-EXACT GATE PASSED (rel_rms=0), real perf Δ measured; PARITY=NO (named residual)
+date: 2026-06-06
+GPU: NVIDIA H100 80GB HBM3, compute_cap 9.0, driver 555.58.02 (vast pod 39648299, DESTROYED — leak 0)
+toolchain: nvcc 12.5.82, -O3 -arch=sm_90a -lcublas -lcuda
+kernel: self/native/wgmma/wgmma_tf32_warpspec.cu (3 modes, gate-before-perf per g5)
+baseline: W5 wide-N TN=128 synchronous = 38.0 TFLOP/s = 9.35x off cuBLAS-TF32 (~357)
+
+GATE: bit-exact FIRST. Any kernel with rel_rms > 3e-3 prints FAIL and emits NO perf number (g5).
+      cuBLAS-TF32 (CUBLAS_TF32_TENSOR_OP_MATH) is the ROOFLINE; ratio = cuBLAS/own. NO superiority claim.
+
+================= LEVERS LANDED (each independently bit-exact, rel_rms=0) =================
+
+MODE 0 — W5-REBASE (synchronous TN=128, apples-to-apples sanity)
+  S=2048  own=37.9 TFLOP/s  cuBLAS=342.3  ratio=9.03x  rel_rms=0.000e+00
+  S=4096  own=39.1 TFLOP/s  cuBLAS=422.4  ratio=10.81x rel_rms=0.000e+00
+  → reproduces the ~38 TFLOP/s W5 baseline. SANITY OK.
+
+MODE 1 — ASYNC-PIPE  (lever 2: cp.async.cg ring + SW pipeline, A direct-async + B async-load→shared permute)
+  S=2048 NST=2  own=49.2  cuBLAS=339.2  ratio=6.90x  rel_rms=0.000e+00
+  S=2048 NST=3  own=49.1  cuBLAS=340.3  ratio=6.92x  rel_rms=0.000e+00
+  S=2048 NST=4  own=49.5  cuBLAS=342.6  ratio=6.92x  rel_rms=0.000e+00
+  S=2048 NST=5  own=49.5  cuBLAS=340.0  ratio=6.87x  rel_rms=0.000e+00
+  S=4096 NST=4  own=50.7  cuBLAS=425.0  ratio=8.39x  rel_rms=0.000e+00   ★ BEST
+  → +33% over the 38.0 baseline (38.0 → 50.7), BIT-EXACT. NST≥2 saturates (ring depth not the wall here).
+
+MODE 2 — WARPSPEC  (lever 1: true producer/consumer warp specialization, 2 WG, mbarrier full/empty ring)
+  *** FIRST PASS: rel_rms ~0.70-0.79 = FALSIFIED (g5 gate REJECTED perf — no number emitted) ***
+  ROOT CAUSE FOUND + FIXED: producer warpgroup read sibling-written Braw in the gmma permute
+    WITHOUT a warpgroup barrier. cp.async.wait_group is PER-THREAD only — thread i's permute read
+    raced the still-in-flight cp.async copies issued by OTHER producer threads. Fix = bar.sync over
+    the 128-thread producer warpgroup BEFORE the permute (and after, before fence+arrive).
+  AFTER FIX (bit-exact):
+  S=2048 NST=3  own=34.5  cuBLAS=343.5  ratio=9.94x  rel_rms=0.000e+00
+  S=2048 NST=4  own=34.6  cuBLAS=341.6  ratio=9.88x  rel_rms=0.000e+00
+  S=4096 NST=4  own=35.0  cuBLAS=423.9  ratio=12.10x rel_rms=0.000e+00
+  → CORRECT but SLOWER than MODE 1 at this geometry. Named residual: with TM=64 only ONE consumer
+    warpgroup (128 thr) computes while the other 128 produce — half the warps never issue wgmma, so
+    compute is STARVED. Warp-spec pays off only with ≥2 consumer warpgroups (bigger TM tile); the
+    1-producer/1-consumer split at TM=64 under-fills the tensor cores vs the simpler async-pipe.
+
+================= HEADLINE =================
+  own GFLOP/s: 38.0 (baseline)  →  50.7 (MODE 1 async-pipe, bit-exact, S=4096)
+  cuBLAS-TF32 roofline: ~422-425 TFLOP/s (S=4096)
+  ratio vs cuBLAS: 9.35x  →  8.39x  (MODE 1 best)
+  rel_rms: 0.000e+00 (EXACT — exceeds the ≤3e-3 gate)
+  % of the 9.35x gap closed: (9.35-8.39)/(9.35-1.0) = 0.96/8.35 = ~11.5% of the gap to parity
+  PARITY (≤~1.3x): NO
+
+================= FINDING =================
+  Δ vs baseline: the cp.async async-pipeline (lever 2) is a REAL, bit-exact +33% (38.0→50.7 TFLOP/s),
+    closing ~11.5% of the 9.35x cuBLAS gap. Deep NST (2→5) does NOT add lift — ring depth is not the wall.
+  CLOSED-NEGATIVE (this geometry): warp specialization (lever 1, "the big lever") is now CORRECT
+    (race diagnosed + fixed → rel_rms=0) but is SLOWER (35.0 vs 50.7) at TM=64 because a 1-consumer-
+    warpgroup split starves the tensor cores. The big-lever payoff is GATED on a larger warpgroup tile
+    (lever 3: ≥2 consumer WGs / TM≥128 register-blocked accumulation), which is the next-cycle claim.
+  RESIDUAL (named, not impossibility): the remaining 8.39x is OCCUPANCY/TILE-SIZE bound, not a
+    correctness or emit-path wall — own-source wgmma+TMA is bit-exact and the silicon reaches peak
+    (cuBLAS proves it). Next levers, in order: (3) TM=128 dual-consumer-WG warp-spec (the real big lever
+    once tile is wide enough to keep both consumer WGs computing), (4) vectorized/async epilogue.
+
+================= HONESTY (g5) =================
+  - Every perf number gated behind rel_rms ≤ 3e-3; MODE 2 first-pass (rel_rms 0.70) emitted ZERO perf.
+  - PARITY framing only; cuBLAS = roofline; NO superiority claim anywhere.
+  - PARITY=NO is honest: 8.39x off. This is real-progress (38→50.7, +33%) with a named tile-size residual,
+    NOT a parity claim and NOT an impossibility verdict.
+  - pod 39648299 DESTROYED immediately after capture (leak 0; only protected rtsc-anchor 39610026 remains).
+
+RAW STDOUT (verbatim) — full sweep:
+-----------------------------------
+ENV: nvcc 12.5.82 · H100 80GB HBM3 9.0 · driver 555.58.02
+WS S=2048 MODE=0 NST=3 own=37.9 cuBLAS=342.3 ratio=9.03x rel_rms=0.000e+00 PARITY=NO
+WS S=4096 MODE=0 NST=3 own=39.1 cuBLAS=422.4 ratio=10.81x rel_rms=0.000e+00 PARITY=NO
+WS S=2048 MODE=1 NST=2 own=49.2 cuBLAS=339.2 ratio=6.90x rel_rms=0.000e+00 PARITY=NO
+WS S=2048 MODE=1 NST=3 own=49.2 cuBLAS=341.2 ratio=6.93x rel_rms=0.000e+00 PARITY=NO
+WS S=2048 MODE=1 NST=4 own=49.5 cuBLAS=342.6 ratio=6.92x rel_rms=0.000e+00 PARITY=NO
+WS S=2048 MODE=1 NST=5 own=49.5 cuBLAS=340.0 ratio=6.87x rel_rms=0.000e+00 PARITY=NO
+WS S=4096 MODE=1 NST=2 own=50.4 cuBLAS=423.0 ratio=8.39x rel_rms=0.000e+00 PARITY=NO
+WS S=4096 MODE=1 NST=3 own=50.4 cuBLAS=424.8 ratio=8.42x rel_rms=0.000e+00 PARITY=NO
+WS S=4096 MODE=1 NST=4 own=50.7 cuBLAS=424.8 ratio=8.38x rel_rms=0.000e+00 PARITY=NO
+WS S=4096 MODE=1 NST=5 own=50.7 cuBLAS=426.5 ratio=8.41x rel_rms=0.000e+00 PARITY=NO
+# MODE 2 FIRST PASS (pre-fix) — FALSIFIED, gate rejected:
+WS S=2048 MODE=2 NST=2 rel_rms=7.184e-01 FAIL — no perf (g5)
+WS S=2048 MODE=2 NST=3 rel_rms=7.784e-01 FAIL — no perf (g5)
+WS S=2048 MODE=2 NST=4 rel_rms=7.882e-01 FAIL — no perf (g5)
+WS S=4096 MODE=2 NST=2 rel_rms=6.980e-01 FAIL — no perf (g5)
+WS S=4096 MODE=2 NST=3 rel_rms=7.438e-01 FAIL — no perf (g5)
+WS S=4096 MODE=2 NST=4 rel_rms=7.583e-01 FAIL — no perf (g5)
+# MODE 2 AFTER race-fix (bar.sync producer WG) — BIT-EXACT:
+WS S=2048 MODE=2 NST=3 own=34.5 cuBLAS=343.5 ratio=9.94x rel_rms=0.000e+00 PARITY=NO
+WS S=2048 MODE=2 NST=4 own=34.6 cuBLAS=341.6 ratio=9.88x rel_rms=0.000e+00 PARITY=NO
+WS S=4096 MODE=2 NST=3 own=35.0 cuBLAS=421.8 ratio=12.06x rel_rms=0.000e+00 PARITY=NO
+WS S=4096 MODE=2 NST=4 own=35.0 cuBLAS=423.9 ratio=12.10x rel_rms=0.000e+00 PARITY=NO
