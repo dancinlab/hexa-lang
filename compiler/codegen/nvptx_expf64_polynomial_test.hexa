@@ -213,6 +213,12 @@ fn _test_expf64_polynomial() -> bool {
     ok = _check(ok, ptx, "cvt.rni.s64.f64",
         "k = (s64) kf → cvt.rni.s64.f64")
 
+    // Underflow clamp (DOJO-A4 / d631a08f): b = max(k+1023, 0) so that for
+    // k <= -1023 (x <~ -745.13) the bit-trick yields +0.0 (0<<52) instead of
+    // garbage from the shifted-negative exponent overflowing the sign bit.
+    ok = _check(ok, ptx, "max.s64",
+        "underflow clamp b = max(k+1023, 0) → max.s64 (x<~-745 → +0.0)")
+
     // 2^k bit-pattern construction.
     ok = _check(ok, ptx, "shl.b64",
         "(k + 1023) << 52 → shl.b64")
