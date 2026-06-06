@@ -13,6 +13,8 @@
 //   F-PCLI-MUTATE-CREATE— create/destroy/remove/rm/stop/start are MUTATING
 //   F-PCLI-MUTATE-FLAGS — leading flags don't hide the mutating verb
 //   F-PCLI-QUOTE        — argv is POSIX-quoted (injection-safe join)
+//   F-PCLI-SSH-PORTS    — runpod `pod create` passthrough ALWAYS exposes 22/tcp
+//                         (append if absent · merge no-dup if present · idempotent)
 //
 // The MISSING-CLI (binary absent → 127) and MISSING-CRED (empty key → 255)
 // RUNTIME paths are exercised by the live provider_cli_run flow; here we assert
@@ -49,6 +51,71 @@ fn _is_mutating(args: [str]) -> int {
         j = j + 1
     }
     return 0
+}
+
+fn _ports_has_22(val: str) -> int {
+    let parts = val.split(",")
+    let mut i = 0
+    while i < len(parts) {
+        if parts[i].trim() == "22/tcp" { return 1 }
+        i = i + 1
+    }
+    return 0
+}
+
+fn _force_ssh_ports(provider: str, args: [str]) -> [str] {
+    if provider != "runpod" { return args }
+    if _is_mutating(args) == 0 { return args }
+    let mut is_create = 0
+    let mut k = 0
+    while k < len(args) {
+        let a = args[k]
+        if len(a) > 0 && a.substring(0, 1) != "-" && a.to_lower() == "create" {
+            is_create = 1
+        }
+        k = k + 1
+    }
+    if is_create == 0 { return args }
+    let mut out = []
+    let mut saw_ports = 0
+    let mut i = 0
+    while i < len(args) {
+        let a = args[i]
+        if a == "--ports" {
+            saw_ports = 1
+            out.push(a)
+            if i + 1 < len(args) {
+                let v = args[i + 1]
+                if _ports_has_22(v) == 1 {
+                    out.push(v)
+                } else {
+                    if len(v) > 0 { out.push("22/tcp," + v) } else { out.push("22/tcp") }
+                }
+                i = i + 2
+                continue
+            }
+            i = i + 1
+            continue
+        }
+        if len(a) >= 8 && a.substring(0, 8) == "--ports=" {
+            saw_ports = 1
+            let v = a.substring(8, len(a))
+            if _ports_has_22(v) == 1 {
+                out.push(a)
+            } else {
+                if len(v) > 0 { out.push("--ports=22/tcp," + v) } else { out.push("--ports=22/tcp") }
+            }
+            i = i + 1
+            continue
+        }
+        out.push(a)
+        i = i + 1
+    }
+    if saw_ports == 0 {
+        out.push("--ports")
+        out.push("22/tcp")
+    }
+    return out
 }
 
 fn _shq(s: str) -> str {
@@ -103,6 +170,36 @@ fn main() {
     _ck("simple join",  _join_args(["show", "instances"]),  "'show' 'instances'")
     _ck("quote escape", _join_args(["a'b"]),                "'a'\\''b'")
     _ck("empty argv",   _join_args([]),                      "")
+
+    // ── F-PCLI-SSH-PORTS — runpod `pod create` ALWAYS exposes 22/tcp ──
+    // (a) no --ports → flag appended (the stuck-pod regression).
+    _ck("create no-ports → 22/tcp appended",
+        _join_args(_force_ssh_ports("runpod", ["pod", "create", "--gpu-id", "X"])),
+        "'pod' 'create' '--gpu-id' 'X' '--ports' '22/tcp'")
+    // (b) existing --ports value merges 22/tcp (no dup of other ports).
+    _ck("create --ports merge",
+        _join_args(_force_ssh_ports("runpod", ["pod", "create", "--ports", "8888/http"])),
+        "'pod' 'create' '--ports' '22/tcp,8888/http'")
+    // (c) already has 22/tcp → unchanged (idempotent, no dup).
+    _ck("create --ports already has 22",
+        _join_args(_force_ssh_ports("runpod", ["pod", "create", "--ports", "22/tcp,8888/http"])),
+        "'pod' 'create' '--ports' '22/tcp,8888/http'")
+    // (d) inline --ports=V form merges too.
+    _ck("create --ports=inline merge",
+        _join_args(_force_ssh_ports("runpod", ["pod", "create", "--ports=8888/http"])),
+        "'pod' 'create' '--ports=22/tcp,8888/http'")
+    // (e) substring guard: 122/tcp must NOT count as 22/tcp.
+    _ck("create ports 122/tcp not 22",
+        _join_args(_force_ssh_ports("runpod", ["pod", "create", "--ports", "122/tcp"])),
+        "'pod' 'create' '--ports' '22/tcp,122/tcp'")
+    // (f) non-create runpod verb untouched (start/stop carry no ports).
+    _ck("runpod start untouched",
+        _join_args(_force_ssh_ports("runpod", ["pod", "stop", "abc"])),
+        "'pod' 'stop' 'abc'")
+    // (g) non-runpod provider untouched.
+    _ck("vast create untouched",
+        _join_args(_force_ssh_ports("vast", ["create", "instance", "1"])),
+        "'create' 'instance' '1'")
 
     println("provider_cli_test PASS")
 }

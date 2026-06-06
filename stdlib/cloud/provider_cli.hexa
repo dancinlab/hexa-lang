@@ -67,6 +67,88 @@ fn _pcli_is_mutating(args: [str]) -> int {
     return 0
 }
 
+// _pcli_ports_has_22 — does a runpodctl --ports value (e.g. "8888/http" or
+// "22/tcp,8888/http") already expose 22/tcp? PURE. Matches the `22/tcp` token
+// on a comma-split so a substring like "122/tcp" never false-positives.
+fn _pcli_ports_has_22(val: str) -> int {
+    let parts = val.split(",")
+    let mut i = 0
+    while i < len(parts) {
+        if parts[i].trim() == "22/tcp" { return 1 }
+        i = i + 1
+    }
+    return 0
+}
+
+// _pcli_force_ssh_ports — for a runpod `pod create` argv, guarantee that
+// `--ports` exposes 22/tcp (RunPod maps ONLY explicitly-exposed ports; without
+// this the pod's SSH 22 is never mapped and `port 22 not yet mapped` persists
+// forever — the exact stuck-pod incident). PURE / argv-in-argv-out:
+//   • runpod create with NO --ports         → append `--ports 22/tcp`
+//   • runpod create with `--ports V`        → rewrite V to merge 22/tcp (no dup)
+//   • runpod create with `--ports=V`        → rewrite the inline form likewise
+//   • non-runpod / non-create               → argv returned UNCHANGED
+// This is the passthrough twin of the `--ports 22/tcp` already forced in
+// runpod.hexa::_runpod_create_cli, so BOTH create routes expose 22/tcp.
+fn _pcli_force_ssh_ports(provider: str, args: [str]) -> [str] {
+    if provider != "runpod" { return args }
+    if _pcli_is_mutating(args) == 0 { return args }
+    // confirm the mutating verb is specifically `create` (start/stop/rm carry
+    // no ports flag) — scan the non-flag tokens for "create".
+    let mut is_create = 0
+    let mut k = 0
+    while k < len(args) {
+        let a = args[k]
+        if len(a) > 0 && a.substring(0, 1) != "-" && a.to_lower() == "create" {
+            is_create = 1
+        }
+        k = k + 1
+    }
+    if is_create == 0 { return args }
+
+    let mut out = []
+    let mut saw_ports = 0
+    let mut i = 0
+    while i < len(args) {
+        let a = args[i]
+        if a == "--ports" {
+            saw_ports = 1
+            out.push(a)
+            // the NEXT token is the value — merge 22/tcp into it.
+            if i + 1 < len(args) {
+                let v = args[i + 1]
+                if _pcli_ports_has_22(v) == 1 {
+                    out.push(v)
+                } else {
+                    if len(v) > 0 { out.push("22/tcp," + v) } else { out.push("22/tcp") }
+                }
+                i = i + 2
+                continue
+            }
+            i = i + 1
+            continue
+        }
+        if len(a) >= 8 && a.substring(0, 8) == "--ports=" {
+            saw_ports = 1
+            let v = a.substring(8, len(a))
+            if _pcli_ports_has_22(v) == 1 {
+                out.push(a)
+            } else {
+                if len(v) > 0 { out.push("--ports=22/tcp," + v) } else { out.push("--ports=22/tcp") }
+            }
+            i = i + 1
+            continue
+        }
+        out.push(a)
+        i = i + 1
+    }
+    if saw_ports == 0 {
+        out.push("--ports")
+        out.push("22/tcp")
+    }
+    return out
+}
+
 // _pcli_shq — single-quote shell escape (mirror of cloud _shq_local contract).
 fn _pcli_shq(s: str) -> str {
     return "'" + s.replace("'", "'\\''") + "'"
@@ -149,7 +231,12 @@ fn provider_cli_run(provider: str, args: [str], allow_mutate: int) -> int {
     // local-exec-with-status idiom (mirror cloud.hexa:_ssh_capture_status).
     // Print both streams so the proxied CLI's output reaches the user, then
     // propagate the child's exit code VERBATIM (@L2/d6 — never faked).
-    let cmd = env_prefix + _pcli_shq(bin) + " " + _pcli_join_args(args)
+    // FORCE SSH: a runpod `pod create` here MUST expose 22/tcp or RunPod never
+    // maps SSH (`port 22 not yet mapped` forever — the stuck-pod incident). The
+    // registry-aware `cloud rent` already forces it; this closes the raw
+    // passthrough hole so BOTH create routes are SSH-able.
+    let proxied = _pcli_force_ssh_ports(provider, args)
+    let cmd = env_prefix + _pcli_shq(bin) + " " + _pcli_join_args(proxied)
     let res = exec_capture(cmd)
     let out = res[0]
     let err = res[1]
