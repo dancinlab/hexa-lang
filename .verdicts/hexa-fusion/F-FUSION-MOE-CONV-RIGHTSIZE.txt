@@ -1,0 +1,20 @@
+F-FUSION-MOE-CONV-RIGHTSIZE — fused multi-expert Conv1d MoE cure on a RIGHT-SIZED GPU
+                               (per-regime validation of the OG-FUSE-RIGHTSIZE thesis)
+================================================================================================
+STATUS: WIP — worktree pushed before GPU rental (durable-worktree rule). Numbers pending.
+
+THESIS UNDER TEST (OG-FUSE-RIGHTSIZE, HEXA-FUSION.md milestone):
+  Validate the f5e18a0f conv-under-fill cure (tool/gpu_moe_conv_fuse.cu) on a RIGHT-SIZED
+  (small-SM) GPU per regime. Right-sizing dodges big-GPU contention + the H100/H200
+  access-unresolved blocker. The question: where does the under-fill -> saturated boundary
+  sit on a SMALL-SM GPU vs the L40S (142 SMs) baseline?
+
+BASELINE (F-FUSION-MOE-CONV-FUSE.txt, L40S 142 SMs):
+  under-fill (fused WINS): d=512 T=64  -> fused 2.68x faster than ModuleList-30
+  saturated (fused LOSES): d>=1024     -> ModuleList already ~98% util, fused 0.48x-0.20x
+  boundary: between d=512 and d=1024 (ModuleList CTAs/launch crosses ~142 SMs).
+
+GATE (g5, FIRST): byte-eq max|Δ|=0 fused vs 30-conv ref (device-vs-device).
+PERF: util MEAN/PEAK + cuEvent step-time fused vs ModuleList vs grouped across d-sweep.
+
+(populated inline after GPU harvest)
