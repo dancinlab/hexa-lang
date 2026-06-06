@@ -439,6 +439,7 @@ on-silicon run with its own verdict:
 | W8 | TMA-producer dual-consumer-WG | bit-exact, **66.9 TFLOP/s** | **6.43×** off (2 CTA/SM) | `F-FUSION-SM90-WGMMA-W8` |
 | W10 | composed swizzle-decode (permute-free) | bit-exact, **70.7 TFLOP/s** ★ TF32 summit | **6.09×** off cuBLAS-TF32 (2 CTA/SM, +5.7%) | `F-FUSION-SM90-WGMMA-W10` |
 | W14 | **FP16/BF16** own-GEMM (NEW dtype axis) | bit-exact-vs-same-dtype, **71.6 TFLOP/s** (2 CTA/SM) | **11.5×** off cuBLAS-**FP16** — PARITY NO; W13 16KB-band overlap REFUTED (.k16 band still 32KB) | `F-FUSION-SM90-WGMMA-W14-FP16` |
+| W15 | descriptor-direct (delete 32KB decode band) | 🔴 **CLOSED-NEG** — single-tile rel-RMS floor **1.000** / GEMM **1.392** (3200-cfg sweep, none 0) → GATE FAIL, no perf | research #2854 FALSIFIED: TMA-SWIZZLE_128B ≢ wgmma Swizzle<3,4,3> for atom-major box. smem 96→**64 KB/CTA** (32KB band IS removable, but read not bit-exact). W10 70.7 KEPT | `F-FUSION-SM90-WGMMA-W15` |
 
 **Ladder narrative (honest, g5):**
 1. **30.4× → 29.4×** is the only measured improvement: the mma.sync cuBLAS-class
@@ -475,6 +476,50 @@ instruction class (wgmma+TMA) and the emit path are proven feasible; the single
 remaining wall is the CUTLASS core-matrix layout above. No perf number is
 reported on any non-bit-correct kernel (g5). cuBLAS = roofline; no superiority
 claim. Kit: `self/native/wgmma/`. Pods all destroyed across every run (leak 0).
+
+## ── W15 descriptor-direct — 🔴 CLOSED-NEG (research #2854 FALSIFIED) · `F-FUSION-SM90-WGMMA-W15` (2026-06-06, g5 verbatim) ──
+
+The research deep-dive `#2854` (docs/research/sm90-wgmma-parity-rewrite-deepdive.md) predicted the
+W10/W11 in-place swizzle floor (rel-RMS 1.392) was a fixable **descriptor-encoding bug** (nonexistent
+"MODE5" / compact SBO / dropped base_offset_ phase), and that building the GMMA descriptor with
+`layout_type_=1`, `SBO=1024B`, `base_offset_=phase` pointing DIRECTLY at the SWIZZLE_128B-TMA tile
+would reach **rel-RMS 0** and let us DELETE the W10 32KB software decode band — reopening the campaign.
+W15 tested this falsifier on native H100 sm_90a (vast 39738178 DESTROYED leak 0, nvcc 12.6.77 driver
+560.35.05 — W10-apples).
+
+**RESULT: FALSIFIED.** A 3200-config in-process descriptor sweep (layout_type_∈{0,1,2,3} × SBO∈{0..4096}B
+× base_offset_∈{0..7} × LBO∈{0..2048}B) **FLOORS at single-tile rel-RMS 1.000** (best @ swm=1 sbo=1024
+boff=2) and **full-GEMM rel-RMS 1.392** — NO config reaches 0. The 3 named fixes are each
+necessary-DIRECTION-correct (best basin IS swm=1/sbo=1024; base_offset_ moves the residual 1.107→1.000,
+confirming the phase axis is real) but **INSUFFICIENT**. A MODE6 localizer (descriptor-direct AND W10
+composed-decode wgmma in the SAME kernel) measured composed_rel=**0.000** (the wgmma+descriptor mechanism
+is correct) but desc_rel=**1.107** (the swizzle-mode-1 in-place read is uncorrelated) — pinning the defect
+to the **TMA-swizzle ↔ wgmma-swizzle interaction**, exactly the "3rd interaction" W10 named.
+
+**THE GAP IN THE RESEARCH (precise):** the load-bearing claim "the TMA box swizzle and the wgmma
+descriptor swizzle are the SAME `Layout_K_SW128_Atom` (`Swizzle<3,4,3>`) BY CONSTRUCTION" holds **only when
+the SMEM layout is BUILT from the atom via `tile_to_shape(Layout_K_SW128_Atom)` and the TMA from THAT SAME
+layout** (CuTe's path). Our hand-rolled `cuTensorMapEncodeTiled` box ({32,64} A / {32,32} per B atom) lands
+an **atom-major stacking** (MODE2 oracle: g XOR (r&7), atom a @ a*256 floats) — a DIFFERENT byte
+permutation than the canonical atom, so `layout_type_=1`'s fixed HW de-swizzle reads the wrong
+core-matrices. The research conflated "TMA lands a 128B-swizzled tile" with "TMA lands the EXACT canonical
+atom."
+
+**THE DECODE-BAND REMOVAL IS REAL (the one mechanical positive):** W15 desc-direct smem = **64.0 KB/CTA
+@NST=2** vs W10 **96.0 KB/CTA** = a **32 KB drop**, 2 CTA/SM held. But UNUSABLE — g5 forbids perf on a
+wrong-result kernel. own GFLOP/s **NOT-REPORTED**. W10 frontier re-measured same-pod: **71.0 TFLOP/s, 6.06×,
+rel-RMS 0** — KEPT, NO regression. PARITY=NO, cuBLAS=roofline, no superiority claim.
+
+**THE W11–W14 "EXHAUSTED" VERDICTS STAND (NOT superseded).** The exhaustion was NOT merely a descriptor
+bug — the descriptor-direct alternative is itself blocked by the same swizzle-interaction wall, now measured
+at 3200-config resolution. **W16 frontier** to claim the 32KB prize: MATCH the canonical atom — either (a)
+re-encode A/B in GLOBAL so the SWIZZLE_128B TMA lands the canonical `Layout_K_SW128_Atom` byte pattern (then
+the field-fix applies), or (b) port `make_gmma_desc`'s EXACT LBO/SBO computation FOR the atom-major layout (a
+DIFFERENT descriptor than the canonical one). Both = net-new kernel structure, not a field sweep. The other
+reopened levers (128×256 tile / deep-ring / warp-spec setmaxnreg / persistent-collective / split-K /
+FP16-reopen) all remain occupancy-gated BEHIND the decode-removal, which is itself gated on canonical-atom
+match. Frontier UNCHANGED = W10 `gemm_w10` (70.7, 6.09×, 2 CTA/SM, bit-exact). verdict:
+`.verdicts/hexa-fusion/F-FUSION-SM90-WGMMA-W15.txt`.
 
 ## ── own-GEMM sm_90a W-ladder: BIT-CORRECT achieved · perf W6 → W7 (2026-06-06, g5) ──
 
