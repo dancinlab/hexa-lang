@@ -501,3 +501,15 @@ the own-GEMM gap lifts the whole stack automatically.
 parity is NOT achievable with a cp.async-producer WG (register-bound 1 CTA/SM, measured) — it requires
 **TMA-driven production** (W8, near-zero producer threads), NOT layout / NOT emit-path / NOT 불가. Frontier
 kernel = W6 async-pipe (50.7, 8.39×). Parity OPEN, de-risked, own-GEMM-owned. cuBLAS = roofline, no superiority claim.
+
+## 🎯 Session north-star — the 5 axes (2026-06-06)
+
+Pinned by the user as this session's tracked axes. Two upstream "make it work" axes (1,2) + three downstream "reflect it everywhere" axes (3,4,5) that fold the results of 1+2 into the dojo / README / commons. Honest framing throughout: bit-exact gate before perf · cuBLAS = roofline · no superiority claim · util-via-megakernel is already a closed-negative (value = ownership/completeness, not a util win).
+
+| # | axis | what | status |
+|---|---|---|---|
+| 1 | own-GEMM perf — util on H100 too | sm_90a own-GEMM W-ladder toward cuBLAS parity (H100 low-util on D1536 = right-sizing: byte-eq D1536 saturates an RTX 5070 to 98%, an H100 to ~13%). W6 async-pipe 50.7 (8.39x) -> W7 dual-consumer closed-neg -> W8 TMA-producer 66.5 (6.44x, occupancy 1->2 CTA/SM) -> W9 swizzled-TMA | W9 in flight (W8 PR #2841) |
+| 2 | cuBLAS-impossible parallel | persistent whole-step megakernel: a persistent kernel CANNOT call cuBLAS, so cuBLAS structurally caps fusion at the GEMM boundary. own-GEMM removed THAT wall (megakernel calls our device GEMM in-line); 2nd wall = the 2 GroupNorm full-y reductions need a grid-sync cooperative kernel (cudaLaunchCooperativeKernel + grid.sync) | GN grid-sync in flight |
+| 3 | reflect 1+2 -> dojo | fold the own-GEMM ladder + megakernel-wall story into stdlib/dojo (hexa-cuda track) | downstream of 1,2 |
+| 4 | reflect 1+2 -> README | flame.forge.hexa-cuda trinity GPU section (PR #2842 reorganized it); fold the W8/W9 numbers + both-walls-closed story | #2842 = 1st pass, numbers TODO |
+| 5 | reflect 1+2 -> commons.tape | governance directive capturing own-GEMM-parity + cuBLAS-impossible-megakernel — sign-gated (sidecar sign commons, user-only) | downstream, needs sign |
