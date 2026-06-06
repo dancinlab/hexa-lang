@@ -522,16 +522,35 @@ the own-GEMM gap lifts the whole stack automatically.
       TFLOP/s (6.09×) @S=4096** (+5.7%, 75.5 @8192), ~6.3% of the gap closed. In-place wgmma HW swizzle descriptor =
       **CLOSED-NEG** (floor 1.392 ~40 cfgs, a 3rd interaction — HW de-swizzle ≠ TMA atom stacking). native sm_90a
       H100 (vast 39707146, DESTROYED leak 0, nvcc 12.6 driver 560.35.05). verdict `.verdicts/hexa-fusion/F-FUSION-SM90-WGMMA-W10.txt`.
-- [ ] **W11 deeper pipeline / decode elimination** ★ NEXT — the W10 decode is still a software shared→shared index
-      copy per K-slab (the +5.7%). Remaining 6.09× = (a) the decode copy (HW in-place RULED OUT — needs a wgmma
-      operand layout matching the TMA atom stacking) + (b) deeper warp-spec multi-stage (NST>2 regresses occupancy
-      at the current tile). Target: 6.09× toward ≤1.3× parity, bit-exact gate first.
+- [x] **W11 research-named top levers** — 🔴 LEVER-1 CLOSED-NEGATIVE (occupancy-coupled) + frontier KEPT (#2850).
+      Applied the litscan top-3 levers on the W10 composed-decode. native sm_90a H100 (vast 39717398, DESTROYED leak
+      0). bit-exact rel_rms 0 throughout. **LEVER 1 (128×256 tile, the named +34% jump) REGRESSED**: smem 98→147
+      KB/CTA collapses occupancy **2→1 CTA/SM**, own 65.5–66.4 (< 70.6 same-binary baseline, -6.0%); the accumulator-
+      reuse gain does NOT cover the halved residency (the litscan Q2-step5 tile↔warp-spec coupling CONFIRMED by
+      measurement). LEVER 3 (ping-pong) cannot rescue it. **W10 70.7/6.09× frontier KEPT — no regression shipped.**
+      verdict `.verdicts/hexa-fusion/F-FUSION-SM90-WGMMA-W11.txt`. kernel `self/native/wgmma/wgmma_tf32_w11.cu`.
+- [x] **W12 tile + warp-spec register-realloc (coupled)** — 🔴 CLOSED-NEGATIVE (#2851) — the coupled lever does NOT
+      close on this TF32 kernel, on TWO grounds. native sm_90a H100 (vast 39719243, DESTROYED leak 0, nvcc 12.6,
+      driver 580.95.05). bit-exact rel_rms 0 throughout. **(b) MODE10 per-K8-sub decode** shrinks the decode scratch
+      48KB→12KB → smem 147→**108.0 KB/CTA → 2 CTA/SM RESTORED** (the W11-pinned occupancy gate MET, 108<114) but own
+      **COLLAPSES to 26.1 TFLOP/s** @4096 (ptxas C7511 wgmma serialized; the sub-decode forces a __syncthreads +
+      fresh decode per K8 sub-step → serializes decode↔MMA — occupancy was NEVER the wall, decode/MMA OVERLAP is).
+      **(a) MODE9 warp-spec setmaxnreg 40/232 UNREALIZABLE**: ptxas C7507 IGNORES it (the 128×256 tile's 128 accum
+      regs/thr force min regs) AND the separate-producer-WG mbarrier handshake DEADLOCKED (timeout exit 124). The
+      register-realloc the litscan needs is DENIED by the bigger tile's own accumulator footprint. **128×256 output
+      tile = DEAD AXIS for this kernel. W10 70.7/6.09× frontier KEPT — no regression shipped.** verdict
+      `.verdicts/hexa-fusion/F-FUSION-SM90-WGMMA-W12.txt`. kernel `self/native/wgmma/wgmma_tf32_w12.cu`.
 
 **STATE**: correctness CLOSED (W2/W3 bit-exact). Occupancy CLOSED (W8/W10 2 CTA/SM). **Frontier = W10 `gemm_w10`
-70.7 TFLOP/s, 6.09×, 2 CTA/SM, bit-exact** (beats W8 66.5/6.44× by +5.7%). W9 proved the swizzle removes the
-per-K-step permute (SASS 28→0); W10 corrected the law to textbook g XOR r and **composed it with gmma_phys in
-software** to land a permute-free bit-exact GEMM that lifts the frontier. The in-place HW-descriptor path is
-CLOSED-NEG (3rd interaction). Parity OPEN, de-risked, own-GEMM-owned. cuBLAS = roofline, no superiority claim.
+70.7 TFLOP/s, 6.09×, 2 CTA/SM, bit-exact** (beats W8 66.5/6.44× by +5.7%). W11→W12 EXHAUSTED the litscan
+tile↔warp-spec coupling axis: lever 1 (128×256 tile) regresses alone (2→1 CTA/SM, W11), and **W12 closed the
+coupling negative** — the smem CAN meet the 114KB ceiling (108KB, 2 CTA/SM) but ONLY via a per-K8-sub decode that
+serializes decode↔MMA (70.3→26.1), and the warp-spec register realloc that would hide it is ungrantable under the
+bigger tile's accumulator regs (ptxas ignores setmaxnreg). **The 128×256 output-tile axis is CLOSED-NEGATIVE.**
+Remaining parity levers are OTHER axes: (i) the W5-class perf-only warp-spec TMA pipeline (hide the decode via a deep
+async producer ring WITHOUT shrinking the scratch); (ii) the precision axis (FP16/BF16 wgmma, where the litscan
+ladder was actually measured). The in-place HW-descriptor path stays CLOSED-NEG (W10). Parity OPEN on those axes;
+the output-tile axis is exhausted. cuBLAS = roofline, no superiority claim.
 
 ## 🎯 Session north-star — the 5 axes (2026-06-06)
 
@@ -539,7 +558,7 @@ Pinned by the user as this session's tracked axes. Two upstream "make it work" a
 
 | # | axis | what | status |
 |---|---|---|---|
-| 1 | own-GEMM perf — util on H100 too | sm_90a own-GEMM W-ladder toward cuBLAS parity (H100 low-util on D1536 = right-sizing: byte-eq D1536 saturates an RTX 5070 to 98%, an H100 to ~13%). W6 async-pipe 50.7 (8.39x) -> W7 dual-consumer closed-neg -> W8 TMA-producer 66.5 (6.44x, occupancy 1->2 CTA/SM) -> W9 swizzled-TMA | W9 in flight (W8 PR #2841) |
+| 1 | own-GEMM perf — util on H100 too | sm_90a own-GEMM W-ladder toward cuBLAS parity (H100 low-util on D1536 = right-sizing: byte-eq D1536 saturates an RTX 5070 to 98%, an H100 to ~13%). W6 50.7 (8.39x) -> W8 TMA-producer 66.5 (6.44x, 1->2 CTA/SM) -> W9 swizzled-TMA -> **W10 composed-decode 70.7 (6.09x, 2 CTA/SM, bit-exact) = FRONTIER**. W11 128x256-tile-alone closed-neg (2->1 CTA/SM). **W12 the tile↔warp-spec coupling closed-neg** (smem shrink to 108KB restores 2 CTA/SM but per-K8-sub decode serializes decode↔MMA 70->26; setmaxnreg ignored under the tile's accum regs). **Output-tile axis EXHAUSTED — frontier KEPT at W10 70.7/6.09x.** | W10 frontier LANDED; output-tile axis closed-neg (W11/W12); residual = perf-only warp-spec TMA pipeline OR precision axis |
 | 2 | cuBLAS-impossible parallel | persistent whole-step megakernel: a persistent kernel CANNOT call cuBLAS, so cuBLAS structurally caps fusion at the GEMM boundary. own-GEMM removed THAT wall (megakernel calls our device GEMM in-line); 2nd wall = the 2 GroupNorm full-y reductions need a grid-sync cooperative kernel (cudaLaunchCooperativeKernel + grid.sync) | GN grid-sync in flight |
 | 3 | reflect 1+2 -> dojo | fold the own-GEMM ladder + megakernel-wall story into stdlib/dojo (hexa-cuda track) | downstream of 1,2 |
 | 4 | reflect 1+2 -> README | flame.forge.hexa-cuda trinity GPU section (PR #2842 reorganized it); fold the W8/W9 numbers + both-walls-closed story | #2842 = 1st pass, numbers TODO |
