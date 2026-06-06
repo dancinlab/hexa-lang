@@ -363,6 +363,100 @@ extern "C" __global__ void gemm_og16(const __grid_constant__ CUtensorMap tmapA,
 }
 
 // ======================================================================
+// MODE 6 — OG17 LEVER 3: 128x128 (OG16 tile, 2 CTA/SM) with a RELAXED-wait_group software
+//   pipeline — the W11 "ping-pong epilogue overlap" lever, dead on the decode band, reopened.
+//   OG16 does `wgmma.wait_group 0` (FULL drain) + __syncthreads EVERY K-slab: the next slab's
+//   wgmma cannot ISSUE until the current slab's tensor-core work has fully drained. MODE 6 keeps
+//   the OG16 tile/occupancy (90 regs, 2 CTA/SM) but issues TWO commit groups deep: after slab
+//   ki's wgmma it only `wait_group 1` (one group still in flight), so slab ki+1's wgmma ISSUE
+//   overlaps slab ki's tensor-core compute. The smem-buffer reuse is gated by the per-buffer
+//   mbarrier (ki and ki+1 read DIFFERENT ring buffers) so the overlap is data-safe; the
+//   accumulator RMW dependency is tracked by wgmma itself. NO smem growth -> 2 CTA/SM HELD.
+//   The __syncthreads is moved to gate ONLY the TMA-prefetch buffer reuse (every NST slabs).
+// ======================================================================
+extern "C" __global__ void gemm_og17_pipe(const __grid_constant__ CUtensorMap tmapA,
+                                      const __grid_constant__ CUtensorMap tmapB,
+                                      float* __restrict__ gD,int M,int N,int K,int NST,
+                                      int lbo,int sbo,int boff,int swmode){
+    const int TM=128,TN=128,TKSW=32,TK=8;
+    int bm=blockIdx.y*TM, bn=blockIdx.x*TN;
+    extern __shared__ __align__(128) float sm[];
+    const int ASW=TM*TKSW, BSW=TN*TKSW;
+    const int SWBUF=ASW+BSW;
+    uint64_t* full =(uint64_t*)(sm + (size_t)NST*SWBUF);
+    int tid=threadIdx.x; int wg=tid>>7; int band=wg; int lt=tid&127;
+    int nks=K/TKSW;
+    const int NATOM=TN/TKSW;
+    const uint32_t bytesA=ASW*4, bytesB=BSW*4;
+    if(tid<NST){ mbar_init_tx(&full[tid],1); }
+    __syncthreads();
+    float d0[32],d1[32];
+    #pragma unroll
+    for(int i=0;i<32;++i){d0[i]=0.f;d1[i]=0.f;}
+    uint32_t fph=0;
+    int stages=NST<nks?NST:nks;
+    if(tid==0){
+        for(int st=0;st<stages;++st){
+            float* base=sm+(size_t)st*SWBUF; float* Asw=base; float* Bsw=base+ASW;
+            mbar_expect_tx(&full[st], bytesA+bytesB);
+            tma_load_2d(Asw,&tmapA,st*TKSW,bm,&full[st]);
+            #pragma unroll
+            for(int c=0;c<NATOM;++c)
+                tma_load_2d(Bsw+(size_t)c*(TKSW*TKSW),&tmapB,bn+c*TKSW,st*TKSW,&full[st]);
+        }
+    }
+    for(int ki=0;ki<nks;++ki){
+        int st=ki%NST;
+        mbar_wait(&full[st], fph); if(st==NST-1) fph^=1;
+        float* base=sm+(size_t)st*SWBUF; float* Asw=base; float* Bsw=base+ASW;
+        float* Aband=Asw + band*64*TKSW;
+        float* B0=Bsw;
+        float* B1=Bsw + 2*(TKSW*TKSW);
+        uint32_t aAb=(uint32_t)__cvta_generic_to_shared(Aband);
+        uint32_t a0b=(uint32_t)__cvta_generic_to_shared(B0);
+        uint32_t a1b=(uint32_t)__cvta_generic_to_shared(B1);
+        asm volatile("wgmma.fence.sync.aligned;\n":::"memory");
+        #pragma unroll
+        for(int kk=0;kk<TKSW;kk+=TK){
+            uint32_t off=(uint32_t)((kk>>3)*64*4);
+            uint64_t dA =mk_desc(aAb+off,(uint32_t)lbo,(uint32_t)sbo,(uint32_t)boff,(uint32_t)swmode);
+            uint64_t dB0=mk_desc(a0b+off,(uint32_t)lbo,(uint32_t)sbo,(uint32_t)boff,(uint32_t)swmode);
+            uint64_t dB1=mk_desc(a1b+off,(uint32_t)lbo,(uint32_t)sbo,(uint32_t)boff,(uint32_t)swmode);
+            WG(d0,dA,dB0);
+            WG(d1,dA,dB1);
+        }
+        // RELAXED pipeline: commit this slab as its own group; keep at most 1 group in flight so
+        // the NEXT slab's wgmma issue overlaps THIS slab's tensor-core drain. Only the SMEM buffer
+        // about to be OVERWRITTEN by the prefetch must be drained -> wait_group 1 + a per-iter
+        // sync that gates the prefetch (below). Prologue already filled `stages` buffers.
+        asm volatile("wgmma.commit_group.sync.aligned;\nwgmma.wait_group.sync.aligned 1;\n":::"memory");
+        __syncthreads();
+        if(tid==0){
+            int load_ki=ki+stages;
+            if(load_ki<nks){
+                int lst=load_ki%NST;
+                float* lb=sm+(size_t)lst*SWBUF; float* lAsw=lb; float* lBsw=lb+ASW;
+                mbar_expect_tx(&full[lst], bytesA+bytesB);
+                tma_load_2d(lAsw,&tmapA,load_ki*TKSW,bm,&full[lst]);
+                #pragma unroll
+                for(int c=0;c<NATOM;++c)
+                    tma_load_2d(lBsw+(size_t)c*(TKSW*TKSW),&tmapB,bn+c*TKSW,load_ki*TKSW,&full[lst]);
+            }
+        }
+    }
+    asm volatile("wgmma.wait_group.sync.aligned 0;\n":::"memory"); // drain the last in-flight group
+    int rbase=bm+band*64;
+    int w=lt>>5,l=lt&31,rb=w*16+(l>>2),cb=(l&3)*2;
+    #pragma unroll
+    for(int c=0;c<8;++c)for(int r=0;r<2;++r)for(int p=0;p<2;++p){
+        int idx=c*4+r*2+p,row=rbase+rb+r*8;
+        int col0=bn+cb+p+c*8, col1=bn+64+cb+p+c*8;
+        if(row<M&&col0<N)gD[row*N+col0]=d0[idx];
+        if(row<M&&col1<N)gD[row*N+col1]=d1[idx];
+    }
+}
+
+// ======================================================================
 // MODE 5 — OG17 LEVER 1: FULL GEMM with the 128x256 OUTPUT TILE (band-free, route-a global).
 //   Identical mechanism to gemm_og16 (descriptor-direct, NO decode band, gmma-INTER pre-laid
 //   global) but TN=256: each warpgroup holds FOUR 32-elt accumulators d0..d3 (64x256) and the
@@ -471,6 +565,95 @@ int main(int argc,char**argv){
     int S=argc>1?atoi(argv[1]):2048; int MODE=argc>2?atoi(argv[2]):10;
     Enc_t enc=get_enc();
     if(!enc){printf("cuTensorMapEncodeTiled unavailable (CUDA<12?)\n");return 4;}
+
+    if(MODE==6){
+        // ---- OG17 LEVER 3: 128x128 (OG16 tile, 2 CTA/SM) + relaxed wait_group software pipeline.
+        // Bit-exact gate is the arbiter: if wait_group 1 races the ring buffer, rel-RMS != 0 ->
+        // closed-negative (report). If rel-RMS 0 AND faster -> the overlap lever crosses parity.
+        int NST =argc>3?atoi(argv[3]):3;
+        int SWM =argc>4?atoi(argv[4]):0;
+        int SBO =argc>5?atoi(argv[5]):1024;
+        int BOFF=argc>6?atoi(argv[6]):0;
+        int LBO =128;
+        int Mx=S,Nx=S,Kx=S;
+        if(Nx%128||Kx%32||Mx%128){printf("MODE6 needs M,N%%128==0 && K%%32==0\n");return 1;}
+        size_t szA=(size_t)Mx*Kx,szB=(size_t)Kx*Nx,szD=(size_t)Mx*Nx;
+        float *hA=(float*)malloc(szA*4),*hB=(float*)malloc(szB*4),*hD=(float*)malloc(szD*4),*hR=(float*)malloc(szD*4);
+        srand(7);
+        for(size_t i=0;i<szA;++i)hA[i]=tf(((rand()%17)-8)*0.0625f);
+        for(size_t i=0;i<szB;++i)hB[i]=tf(((rand()%17)-8)*0.0625f);
+        float *dA,*dB,*dD,*dR;
+        CK(cudaMalloc(&dA,szA*4));CK(cudaMalloc(&dB,szB*4));CK(cudaMalloc(&dD,szD*4));CK(cudaMalloc(&dR,szD*4));
+        float *dAo,*dBo; CK(cudaMalloc(&dAo,szA*4));CK(cudaMalloc(&dBo,szB*4));
+        CK(cudaMemcpy(dAo,hA,szA*4,cudaMemcpyHostToDevice));CK(cudaMemcpy(dBo,hB,szB*4,cudaMemcpyHostToDevice));
+        cublasHandle_t h;CB(cublasCreate(&h));CB(cublasSetMathMode(h,CUBLAS_TF32_TENSOR_OP_MATH));
+        float al=1.f,be=0.f;
+        CB(cublasSgemm(h,CUBLAS_OP_N,CUBLAS_OP_N,Nx,Mx,Kx,&al,dBo,Nx,dAo,Kx,&be,dR,Nx));CK(cudaDeviceSynchronize());
+        CK(cudaMemcpy(hR,dR,szD*4,cudaMemcpyDeviceToHost));
+        // pre-lay A,B IDENTICAL to MODE 4 (128x32 gmma-INTER, B 128-N tiles of 4 atoms).
+        float *hAp=(float*)calloc(szA,4),*hBp=(float*)calloc(szB,4);
+        for(int m=0;m<Mx;++m)for(int k=0;k<Kx;++k){
+            int tile=m>>7, mloc=m&127, a=mloc>>3, r=mloc&7;
+            int katom=k>>5, kk=k&31;
+            int p = a*256 + gmma_phys(r,kk);
+            int srow = tile*128 + (p>>5);
+            int scol = katom*32 + (p&31);
+            hAp[(size_t)srow*Kx + scol] = hA[(size_t)m*Kx + k];
+        }
+        for(int k=0;k<Kx;++k)for(int n=0;n<Nx;++n){
+            int tile=n>>7, nloc=n&127, c=nloc>>5, na=(nloc&31)>>3, r=nloc&7;
+            int katom=k>>5, kk=k&31;
+            int p = na*256 + gmma_phys(r,kk);
+            int gN = tile*128 + c*32 + (p&31);
+            int gK = katom*32 + (p>>5);
+            hBp[(size_t)gK*Nx + gN] = hB[(size_t)k*Nx + n];
+        }
+        CK(cudaMemcpy(dA,hAp,szA*4,cudaMemcpyHostToDevice));CK(cudaMemcpy(dB,hBp,szB*4,cudaMemcpyHostToDevice));
+        CUtensorMap tmapA{},tmapB{};
+        { cuuint64_t gd[2]={(cuuint64_t)Kx,(cuuint64_t)Mx}; cuuint64_t gs[1]={(cuuint64_t)Kx*4};
+          cuuint32_t bd[2]={32,128}; cuuint32_t es[2]={1,1};
+          CUresult r=enc(&tmapA,CU_TENSOR_MAP_DATA_TYPE_FLOAT32,2,dA,gd,gs,bd,es,
+            CU_TENSOR_MAP_INTERLEAVE_NONE,CU_TENSOR_MAP_SWIZZLE_NONE,
+            CU_TENSOR_MAP_L2_PROMOTION_NONE,CU_TENSOR_MAP_FLOAT_OOB_FILL_NONE);
+          if(r!=CUDA_SUCCESS){printf("MODE6 encodeA r=%d\n",(int)r);return 4;} }
+        { cuuint64_t gd[2]={(cuuint64_t)Nx,(cuuint64_t)Kx}; cuuint64_t gs[1]={(cuuint64_t)Nx*4};
+          cuuint32_t bd[2]={32,32}; cuuint32_t es[2]={1,1};
+          CUresult r=enc(&tmapB,CU_TENSOR_MAP_DATA_TYPE_FLOAT32,2,dB,gd,gs,bd,es,
+            CU_TENSOR_MAP_INTERLEAVE_NONE,CU_TENSOR_MAP_SWIZZLE_NONE,
+            CU_TENSOR_MAP_L2_PROMOTION_NONE,CU_TENSOR_MAP_FLOAT_OOB_FILL_NONE);
+          if(r!=CUDA_SUCCESS){printf("MODE6 encodeB r=%d\n",(int)r);return 4;} }
+        const int TM=128,TN=128,TKSW=32;
+        size_t SWBUF=(size_t)(TM*TKSW + TN*TKSW);
+        size_t smsz=(size_t)NST*SWBUF*4 + (size_t)NST*8;
+        dim3 grid(Nx/128,(Mx+TM-1)/TM); int blk=256;
+        CK(cudaFuncSetAttribute(gemm_og17_pipe,cudaFuncAttributeMaxDynamicSharedMemorySize,(int)smsz));
+        auto launch=[&](){ gemm_og17_pipe<<<grid,blk,smsz>>>(tmapA,tmapB,dD,Mx,Nx,Kx,NST,LBO,SBO,BOFF,SWM); };
+        { int occ=0; cudaOccupancyMaxActiveBlocksPerMultiprocessor(&occ,(const void*)gemm_og17_pipe,blk,smsz);
+          printf("OCCUPANCY MODE=6 blk=%d dynsmem=%zuB (%.1f KB/CTA) -> %d CTA/SM\n",blk,smsz,smsz/1024.0,occ); }
+        CK(cudaMemset(dD,0,szD*4));
+        launch();
+        cudaError_t e=cudaGetLastError(); if(e==cudaSuccess)e=cudaDeviceSynchronize();
+        if(e!=cudaSuccess){printf("MODE6 OWN-FAULT swm=%d sbo=%d boff=%d %s\n",SWM,SBO,BOFF,cudaGetErrorString(e));return 4;}
+        CK(cudaMemcpy(hD,dD,szD*4,cudaMemcpyDeviceToHost));
+        double se=0,sr=0;for(size_t i=0;i<szD;++i){double dd=(double)hD[i]-hR[i];se+=dd*dd;sr+=(double)hR[i]*hR[i];}
+        double rr=sqrt(se/fmax(1e-30,sr));
+        if(rr>3e-3){printf("OG17 S=%d MODE=6 NST=%d pipe swm=%d sbo=%d boff=%d rel_rms=%.3e FAIL — wait_group1 races ring (closed-neg), no perf (g5)\n",
+            S,NST,SWM,SBO,BOFF,rr);return 2;}
+        cudaEvent_t s0,s1;CK(cudaEventCreate(&s0));CK(cudaEventCreate(&s1));int it=20;
+        launch();CK(cudaDeviceSynchronize());
+        CK(cudaEventRecord(s0));for(int i=0;i<it;++i)launch();
+        CK(cudaEventRecord(s1));CK(cudaEventSynchronize(s1));
+        float mo;CK(cudaEventElapsedTime(&mo,s0,s1));mo/=it;
+        double fl=2.0*(double)Mx*Nx*Kx,tfo=fl/(mo*1e-3)/1e12;
+        cublasSgemm(h,CUBLAS_OP_N,CUBLAS_OP_N,Nx,Mx,Kx,&al,dBo,Nx,dAo,Kx,&be,dR,Nx);CK(cudaDeviceSynchronize());
+        CK(cudaEventRecord(s0));for(int i=0;i<it;++i)cublasSgemm(h,CUBLAS_OP_N,CUBLAS_OP_N,Nx,Mx,Kx,&al,dBo,Nx,dAo,Kx,&be,dR,Nx);
+        CK(cudaEventRecord(s1));CK(cudaEventSynchronize(s1));
+        float mc;CK(cudaEventElapsedTime(&mc,s0,s1));mc/=it;
+        double tfc=fl/(mc*1e-3)/1e12,ratio=tfc/tfo;
+        printf("OG17 S=%d MODE=6 NST=%d pipe swm=%d sbo=%d boff=%d own=%.1f TFLOP/s cuBLAS-TF32=%.1f ratio(cuBLAS/own)=%.2fx rel_rms=%.3e PARITY=%s\n",
+               S,NST,SWM,SBO,BOFF,tfo,tfc,ratio,rr,ratio<=1.3?"YES":"NO");
+        return 0;
+    }
 
     if(MODE==5){
         // ---- OG17 LEVER 1: 128x256 output tile, route-(a) pre-permuted global, band-free.
