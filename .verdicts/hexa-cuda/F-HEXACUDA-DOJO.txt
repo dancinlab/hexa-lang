@@ -186,6 +186,79 @@ BUILD-VERIFY-PENDING (needs a real GPU pod / a current binary rebuild — honest
        task hand-off), and the cross-links resolve once those PRs land. W8 verdict IS
        present on this base and was read verbatim (above).
 
+── (10) DOJO REFLECTS THE DECISION/ALGORITHM ROOT CAUSE — "WHY the 7B parallel path
+        FAILED" (branch domain/dojo-parallel-rootcause, 2026-06-06) — docs+tool, NO GPU ──
+  method: g5 documentation + preflight reflection — CITE the anima M13 7B CLMConvMoE
+    (~7.06B) measurement (handoff f5e18a0f, the decision/algorithm companion to the infra
+    handoff 4474f21b + the recipe handoff a10891bc, BOTH already reflected). NO new perf
+    claim authored here; every number is a quoted anima H200 observation, attributed.
+
+  (10a) docs/hexa-dojo.md "Training recipe — optimization gotchas" gains a decision-grade
+        subsection "WHY parallel was the wrong path — root cause (decision-grade)":
+        · THE TRAP — vectorize 30 ConvExpert ModuleList → ONE grouped
+          nn.Conv1d(E*d, E*d, K, groups=30), E*d = 30 × 6208 = 186 240 channels, to be a
+          "good multi-GPU-DDP citizen" and cut 30 launches → 1. (before/after code shown.)
+        · THE 11× MEASUREMENT (H200, cuDNN on OR off):
+            ModuleList of 30 small convs ......... ~74 s/step
+            grouped Conv1d(E*d,E*d,K,groups=30) .. ~14 min/step (~11× slower)
+        · THE ROOT CAUSE — a grouped conv with groups=30 and 186 240 channels DEFEATS GPU
+          group-parallelism; cuDNN cannot pick an optimized algo for that shape and falls
+          to a NAIVE path. The 30 separate small (d=6208) convs map to fast cuDNN kernels
+          and run concurrently on the SM scheduler. Fewer launches ≠ faster.
+        · THE CASCADE (why PARALLEL failed) — DDP replicates the FULL model per GPU, so
+          each GPU re-pays the same 11×-inflated grouped conv; 4×H200 DDP was SLOWER
+          wall-clock than 1×H200 on the ModuleList model AT 4× THE COST. a_wall_first only
+          fires if parallel is actually faster — the honest measurement showed it was not,
+          so single-GPU won on WALL TIME too. DDP multiplies a pathological op.
+        · THE SECONDARY 2^31 TRIP-WIRE — the fused weight (E*d, d, K) = 3.47B elements >
+          bitsandbytes' 2^31 per-tensor limit → AdamW8bit 'invalid configuration argument
+          at ops.cu:226'. VECTORIZATION is what crosses the ceiling (surfaced only via
+          torchrun --tee 3).
+        · THE WORKING PRODUCTION PATH (canonical 7B-ENGINE recipe) — single 141GB H200,
+          ModuleList experts, grad-ckpt + AdamW8bit, ~74 s/step, CE 5.64 → 1.87 over
+          step 0 → 1000 descending cleanly.
+        · a before→after decision table + the 4 PRESCRIPTIONS (ModuleList+bench-first ·
+          MEASURE single-GPU on the ACTUAL kernels before DDP / don't parallelize a
+          pathological op · gate vectorization on the 2^31 ceiling · the canonical recipe).
+
+  (10b) tool/dojo_rent_preflight.sh dojo_recipe_advisory carries the two causal lines
+        cleanly (kept the self-test GREEN, bash -n clean):
+        $ dojo_recipe_advisory --params 7e9 --param-dtype bf16 --optimizer adamw --ddp 8
+          ⚠ DON'T PARALLELIZE A PATHOLOGICAL OP (f5e18a0f): MEASURE single-GPU step time on
+            the ACTUAL kernels FIRST — DDP MULTIPLIES a pathological op per replica (the
+            ~11× grouped-conv regression got 4×-replicated → DDP slower wall-clock AND 4× cost).
+        $ dojo_recipe_advisory ... --optimizer adamw-8bit --max-tensor-elems 3.47e9
+          ⚠ CAUSAL (f5e18a0f): VECTORIZATION is what crosses the 2^31 ceiling — fusing the
+            expert loop into one grouped weight (3.47B-elem fused conv) is what makes a
+            tensor > 2^31; keeping a ModuleList of small convs avoids BOTH the break AND the
+            ~11× slowdown.   (and the optim8bit element-limit still BLOCKS, rc=1.)
+
+  (10c) self-test (no rental, no network) — TWO new f5e18a0f assertions, stays GREEN:
+        $ bash tool/dojo_rent_preflight.sh --self-test
+          [ok] recipe f5e18a0f prescription2 don't-parallelize-a-pathological-op line present
+          [ok] recipe f5e18a0f prescription3 vectorization-crosses-2^31 causal line present
+          == ALL 6 FIXES + RECIPE ADVISORY VERIFIED (pure logic) ==   ← stays GREEN
+        bash -n tool/dojo_rent_preflight.sh → SYNTAX OK.
+
+  (10d) HONESTY (g5): every figure (the ~11×, ~74 s/step vs ~14 min/step, the 186 240
+        channels, the 3.47B fused-weight elems, the 4×H200-vs-1×H200 comparison, CE
+        5.64→1.87) is a CITED anima H200 observation (handoff f5e18a0f) — attributed,
+        NOT re-measured here. NO new perf claim of our own is authored. The dojo reflects
+        the decision as guidance + a preflight advisory; the only thing re-verified locally
+        is the preflight's pure logic (self-test GREEN, bash -n clean).
+
+VERDICT (§10): 🟢 GREEN (docs + tool reflection) — the anima decision/algorithm root cause
+"WHY the 7B parallel (multi-GPU DDP + MoE vectorization) path FAILED" is reflected into the
+dojo: a decision-grade subsection in docs/hexa-dojo.md (the trap → the 11× measurement →
+the root cause = grouped conv defeats GPU group-parallelism → the cascade = DDP multiplies a
+pathological op → the secondary 2^31 trip-wire → the 4 prescriptions, before/after), and the
+preflight dojo_recipe_advisory carries the two causal lines ("don't parallelize a pathological
+op" + "vectorization crosses the 2^31 ceiling") with the self-test staying GREEN (+2 cases,
+bash -n clean). Complements the already-landed infra (4474f21b) + recipe (a10891bc) handoffs.
+CITED anima H200 observations — attributed, NOT re-measured; no new perf claim authored.
+Docs/tool only, NO GPU rented (leaked-pod sweep by exact id: 0 leaked — only the spared
+rtsc-39610026 anchor + known owned campaign pods; rented nothing).
+
   (9c) the FOUR named gotchas documented as .cu/codegen-level engineering lessons:
        (a) wgmma needs the GMMA INTER 8x4 TF32 core layout (the W2 swizzle solve).
        (b) fence.proxy.async.shared::cta orders the async-proxy shared read (a plain
