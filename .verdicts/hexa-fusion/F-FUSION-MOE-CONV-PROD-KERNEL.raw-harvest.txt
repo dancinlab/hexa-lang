@@ -1,0 +1,70 @@
+Warning: Permanently added '[ssh7.vast.ai]:11792' (ED25519) to the list of known hosts.
+===== d=4096 (from earlier sweep, recompute quick) =====
+(captured: A=1649.2 D=1829.1 E=249.7 F=16.2 ms, gate PASS)
+===== FULL d=6208 LOG =====
+# gpu_moe_conv_fuse — fused multi-expert Conv1d MoE kernel (f5e18a0f cure)
+# perf shape: E=30 d=6208 T=256 K=3 dil=1
+# device: NVIDIA H100 80GB HBM3  SMs=132  cap=9.0
+
+# ── CORRECTNESS GATE (vs CPU op-by-op 30-conv reference) ──
+# gate shape: E=30 d=192 T=32 K=3 dil=1 (small → CPU oracle tractable)
+[GATE-FUSED]   max|Δ| vs CPU = 2.980e-07
+[GATE-TILED]   max|Δ| vs CPU = 2.980e-07
+[GATE-GEMM]    max|Δ| vs CPU = 2.980e-07
+[GATE-CUBLAS]  rel-RMS vs CPU = 4.881e-07 (GEMM reorders ci → rel-RMS, not byte-eq; tol 1e-3)
+[GATE-MLIST30] max|Δ| vs CPU = 2.980e-07
+[GATE-GROUPED] max|Δ| vs CPU = 2.980e-07
+[GATE-DEV-EQ]  max|Δ|(fused vs ModuleList) = 0.000e+00   max|Δ|(grouped vs ModuleList) = 0.000e+00
+[GATE-DEV-EQ]  max|Δ|(TILED vs ModuleList) = 0.000e+00  <= THE OG-FUSE-OPT CONTRACT (must be 0)
+[GATE-DEV-EQ]  max|Δ|(GEMM  vs ModuleList) = 0.000e+00  <= THE OG-FUSE-PROD-KERNEL CONTRACT (must be 0)
+# GATE (1) device-vs-device byte-exact (max|Δ|=0): PASS
+# GATE (2) device-vs-CPU within fp32 FMA tol=6.0e-06: PASS
+# GATE OVERALL => PASS
+
+# weight bank = 13.87 GB (E·d·d·K fp32), output = 0.19 GB
+# perf-shape cross-check  max|Δ|(fused vs ModuleList) = 0.000e+00 (expect 0)
+# perf-shape cross-check  max|Δ|(TILED vs ModuleList) = 0.000e+00 (expect 0)
+# perf-shape cross-check  max|Δ|(GEMM  vs ModuleList) = 0.000e+00 (expect 0)
+
+# ── PERF (median of timed iters, cuEvent) ──
+[A] ModuleList-30  step = 3734.521 ms  (E separate launches — under-fill baseline)
+[D] TILED-FUSED    step = 3997.584 ms  (1 launch, 47040 CTAs, smem=1280B — OG-FUSE-OPT cure)
+[E] GEMM-CONV      step = 568.136 ms  (1 launch, 11640 CTAs, 64x64x16 tile, BM-fold weight reuse — PROD-KERNEL)
+[F] cuBLAS-GEMM    step = 36.099 ms  (K strided-batched GEMM — VENDOR ROOFLINE, not byte-eq)
+# CTA counts: A=1568/launch ×30 launches  B=30  C=D=47040  E=11640 (one launch)
+# (run under: nvidia-smi --query-gpu=utilization.gpu --format=csv -lms 50  for util MEAN/PEAK)
+
+[T] DONE — gate PASS, perf captured.
+===== FULL d=8192 LOG =====
+# gpu_moe_conv_fuse — fused multi-expert Conv1d MoE kernel (f5e18a0f cure)
+# perf shape: E=30 d=8192 T=256 K=3 dil=1
+# device: NVIDIA H100 80GB HBM3  SMs=132  cap=9.0
+
+# ── CORRECTNESS GATE (vs CPU op-by-op 30-conv reference) ──
+# gate shape: E=30 d=192 T=32 K=3 dil=1 (small → CPU oracle tractable)
+[GATE-FUSED]   max|Δ| vs CPU = 2.980e-07
+[GATE-TILED]   max|Δ| vs CPU = 2.980e-07
+[GATE-GEMM]    max|Δ| vs CPU = 2.980e-07
+[GATE-CUBLAS]  rel-RMS vs CPU = 4.881e-07 (GEMM reorders ci → rel-RMS, not byte-eq; tol 1e-3)
+[GATE-MLIST30] max|Δ| vs CPU = 2.980e-07
+[GATE-GROUPED] max|Δ| vs CPU = 2.980e-07
+[GATE-DEV-EQ]  max|Δ|(fused vs ModuleList) = 0.000e+00   max|Δ|(grouped vs ModuleList) = 0.000e+00
+[GATE-DEV-EQ]  max|Δ|(TILED vs ModuleList) = 0.000e+00  <= THE OG-FUSE-OPT CONTRACT (must be 0)
+[GATE-DEV-EQ]  max|Δ|(GEMM  vs ModuleList) = 0.000e+00  <= THE OG-FUSE-PROD-KERNEL CONTRACT (must be 0)
+# GATE (1) device-vs-device byte-exact (max|Δ|=0): PASS
+# GATE (2) device-vs-CPU within fp32 FMA tol=6.0e-06: PASS
+# GATE OVERALL => PASS
+
+# weight bank = 24.16 GB (E·d·d·K fp32), output = 0.25 GB
+# perf-shape cross-check  max|Δ|(fused vs ModuleList) = 0.000e+00 (expect 0)
+# perf-shape cross-check  max|Δ|(TILED vs ModuleList) = 0.000e+00 (expect 0)
+# perf-shape cross-check  max|Δ|(GEMM  vs ModuleList) = 0.000e+00 (expect 0)
+
+# ── PERF (median of timed iters, cuEvent) ──
+[A] ModuleList-30  step = 13466.635 ms  (E separate launches — under-fill baseline)
+[E] GEMM-CONV      step = 982.906 ms  (1 launch, 15360 CTAs, 64x64x16 tile, BM-fold weight reuse — PROD-KERNEL)
+[F] cuBLAS-GEMM    step = 59.681 ms  (K strided-batched GEMM — VENDOR ROOFLINE, not byte-eq)
+# CTA counts: A=2048/launch ×30 launches  B=30  C=D=61440  E=15360 (one launch)
+# (run under: nvidia-smi --query-gpu=utilization.gpu --format=csv -lms 50  for util MEAN/PEAK)
+
+[T] DONE — gate PASS, perf captured.
