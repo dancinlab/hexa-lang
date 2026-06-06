@@ -1,0 +1,7 @@
+clm_moe_conv_fused — OG-FUSE-FOLD: fused E-expert MoE-conv (PR #2859 fold)
+  E=30 T=16 d=8 K=3 dil=1  max|Δ| fused-vs-ModuleList = 0.0
+  E=30 T=16 d=8 K=3 dil=2  max|Δ| fused-vs-ModuleList = 0.0
+  E=4 T=24 d=8 K=3 dil=1  max|Δ| fused-vs-ModuleList = 0.0
+F-CLM-MOE-CONV-FUSE-FOLD-EQ = 1
+PASS — fused E-expert MoE-conv == E× ModuleList byte-eq (max|Δ|=0)
+OG-FUSE-FOLD CODE FOLD GREEN — HEXA_FUSE_MOE_CONV routes the fused path

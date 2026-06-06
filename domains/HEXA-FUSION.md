@@ -39,6 +39,16 @@
 - [ ] **OG-FUSE-FOLD — fold the fused kernel into the flame CLMConvMoE trainer** — wire
   tool/gpu_moe_conv_fuse.cu into stdlib/flame as the device MoE-conv path (env-gated, byte-eq ModuleList
   fallback) so the cure reaches the real trainer step. The application path for the f5e18a0f cure.
+  (2026-06-07, CODE FOLD GREEN — standalone byte-eq validated, full-trainer build DEFERRED):
+  stdlib/flame/clm_moe_conv_fused.hexa folds the fused E-expert MoE-conv into flame. moe_conv_fwd_dispatch
+  routes on env HEXA_FUSE_MOE_CONV (or HEXA_FUSE_ALL): SET → moe_conv_fused_fwd (ALL E experts in ONE
+  strided-batched GEMM, the one-launch own-kernel analogue); default OFF → moe_conv_modulelist_fwd (E
+  separate forge convs = the under-fill baseline). Both byte-eq. Mirrors the .cu k_moe_conv_fused layout
+  (X[T·d] shared · W[E·d·d·K] · b[E·d] · Y[E·T·d]) and the clm_conv_batched.hexa E=2 precedent generalized
+  to E experts. GATE F-CLM-MOE-CONV-FUSE-FOLD-EQ = 1: fused == E× ModuleList max|Δ| = 0.0 over
+  {E=30 dil=1, E=30 dil=2, E=4 dil=1} on Mac CPU (`hexa run`, no link dep). verdict:
+  .verdicts/hexa-fusion/F-CLM-MOE-CONV-FUSE-FOLD-EQ.txt. DEFERRED: the full 7B clm_prod_gpu on-pod build +
+  the own-device-kernel util Δ at production shape (d=6208, E=30, H100/H200) — NO full train was run.
 - [ ] **OG-FUSE-RIGHTSIZE — right-sized-GPU per-regime validation** — validate the cure on a right-sized
   GPU (RTX 5070 / L40S) per regime to dodge big-GPU contention + the access-unresolved blocker; the
   byte-eq D1536-saturates-5070-to-98% fact already shows right-sizing is the practical lever.
