@@ -561,6 +561,7 @@ extern "C" __global__ void gemm_og17_t256(const __grid_constant__ CUtensorMap tm
     }
 }
 
+#ifndef MEGA_PROBE
 int main(int argc,char**argv){
     int S=argc>1?atoi(argv[1]):2048; int MODE=argc>2?atoi(argv[2]):10;
     Enc_t enc=get_enc();
@@ -970,3 +971,4 @@ int main(int argc,char**argv){
     }
     printf("unknown MODE %d\n",MODE); return 1;
 }
+#endif /* MEGA_PROBE */
