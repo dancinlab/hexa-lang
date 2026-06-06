@@ -172,3 +172,49 @@
 #   layout matching the TMA atom stacking directly), + (b) deeper warp-spec multi-stage pipeline
 #   (NST>2 currently regresses occupancy). Frontier kernel = W10 gemm_w10 (70.7, 6.09x, 2 CTA/SM,
 #   bit-exact). cuBLAS=roofline, no superiority claim.
+
+# ============================================================================
+# === UPDATE 2026-06-06 — W14 PRECISION AXIS: FP16/BF16 wgmma own-GEMM (NEW dtype sub-ladder)
+# ============================================================================
+# W14 (wgmma_f16_w14.cu): the user-opted-into SEPARATE dtype campaign opened after W13 closed
+#   the TF32 async-pipeline axis. Port the W10 composed-swizzle-decode own-GEMM to 16-bit
+#   operands + f32 accumulate. H100 sm_90a, vast 39729157 DESTROYED leak 0, nvcc 12.6
+#   driver 560.35.03 (EXACT apples to W10/W13). verdict F-...-W14-FP16.txt.
+#
+#   GATE CHANGE (g5, STATED): NOT bit-exact-vs-FP64 (a 16-bit operand + f32 accum is a
+#     different numeric). Gate = precision-appropriate rel_rms <= 1e-2 vs SAME-DTYPE oracle
+#     (f16/bf16 operands; cuBLAS-FP16/BF16 via cublasGemmEx CUDA_R_16F + COMPUTE_32F = the
+#     same f32 accumulate). cuBLAS comparison SAME-DTYPE (cuBLAS-FP16, NOT cuBLAS-TF32),
+#     roofline, NO superiority claim. TF32 summit (W10 70.7, 6.09x) STAYS the TF32 frontier.
+#
+#   f16 GMMA LAYOUT RE-DERIVED (differs from TF32 8x4): f16/bf16 wgmma is .k16 with an 8-row x
+#     8-K-elem core (8*8*2B = 128B). gmma_phys16(s,k)=((strip*KCORES+kcore)*64)+(s&7)*8+(k&7),
+#     KCORES=K_TILE/8. SWIZZLE_128B granule = 8 f16 (16B); ON-GPU MODE2/3 dump MEASURED the law
+#     = TEXTBOOK g XOR (r&7), row-preserving, atom-major (512 f16/atom). Composed decode:
+#       A: atom*512 + (m&7)*64 + ((k>>3)^(m&7))*8 + (k&7)
+#       B: k*64 + ((n>>3)^(k&7))*8 + (n&7)
+#
+#   GATES (g5, before any big run): MODE0 f16 decode rel_rms 0.000e+00 exact 8192/8192;
+#     MODE1 f16 wgmma rel_rms 0.000e+00 exact 4096/4096; MODE7 bf16 wgmma rel_rms 0.000e+00. PASS.
+#
+#   FULL GEMM (rel_rms 0.000e+00 at every S, both dtypes — far inside the 1e-2 same-dtype gate):
+#     F16 gemm_f16_w14 NST=2 (96.0 KB/CTA -> 2 CTA/SM):
+#       S=2048 own 66.5 cuBLAS-FP16 644.3 ratio 9.69x
+#       S=4096 own 71.6 cuBLAS-FP16 827.2 ratio 11.55x ★ f16 frontier
+#       S=8192 own 76.4 cuBLAS-FP16 857.9 ratio 11.22x
+#     BF16 gemm_bf16_w14 NST=2: own 71.1 @4096 (11.48x), 76.1 @8192. cuBLAS-BF16 816.1 @4096.
+#     PARITY-vs-FP16 = NO. own ~71-76 TFLOP/s ≈ TF32 W10 ABSOLUTE, but cuBLAS-FP16 roofline
+#     DOUBLED (827 vs cuBLAS-TF32 431) -> same-dtype ratio WIDENED (11.5x vs TF32 6.09x).
+#
+#   W13 OVERLAP THESIS REFUTED (deterministic closed-negative): "16-bit band = 16 KB -> 2 bands
+#     at 2 CTA/SM reopens the overlap" is FALSE for .k16. A natural f16 K-slab is 64-wide (one
+#     128B atom), so the decode band holds 2x K-elements -> 32 KB = SAME KB as TF32. NO 16-KB
+#     band. MODE6 ring bit-exact but every 2nd-band config -> 1 CTA/SM -> regress (50.9 @4096,
+#     -29%). Identical to the W13 TF32 occupancy wall, NOT reopened.
+#
+# === NAMED RESIDUAL (W15-precision, next-cycle) ===
+#   To exploit the 16-bit 2x TC the OWN kernel must escape the software decode: an f16 wgmma
+#   HW-swizzle-descriptor in-place read (W10 MODE5 was a TF32 closed-neg; f16 re-derivation
+#   unexplored), OR a 32-K half-atom slab so the band IS 16 KB (half the wgmma per decode).
+#   Either is a fresh sub-axis. Frontier (this dtype): gemm_f16_w14 71.6 @4096, 2 CTA/SM,
+#   bit-exact-vs-same-dtype. cuBLAS-FP16 = roofline. TF32 W10 70.7/6.09x untouched.
