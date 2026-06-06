@@ -40,6 +40,9 @@ import "stdlib/dojo/llm.hexa"
 import "stdlib/dojo/clm.hexa"
 import "stdlib/dojo/hexa_cuda.hexa"
 import "stdlib/dojo/flame_forge.hexa"
+import "stdlib/dojo/vision.hexa"
+import "stdlib/dojo/rl.hexa"
+import "stdlib/dojo/tabular.hexa"
 
 // ── data types ───────────────────────────────────────────────────────
 
@@ -127,9 +130,10 @@ pub fn gen_dojo(domain: string, slug: string, spec: DojoSpec, lang: string) -> [
     if domain == "clm" { return emit_clm(slug, spec, lang) }
     if domain == "hexa-cuda"   { return emit_hexa_cuda(slug, spec, lang) }
     if domain == "flame-forge" { return emit_flame_forge(slug, spec, lang) }
-    // d6 honest stub: vision / rl / tabular have NO emitter yet. The CLI
-    // surfaces these via dojo_domains()/dojo_is_stub() and exits with a
-    // clear TODO rather than pretending a full emit.
+    if domain == "vision"      { return emit_vision(slug, spec, lang) }
+    if domain == "rl"          { return emit_rl(slug, spec, lang) }
+    if domain == "tabular"     { return emit_tabular(slug, spec, lang) }
+    // unknown domain — caller checks len() == 0 and reports.
     let none: [DojoFile] = []
     return none
 }
@@ -144,9 +148,10 @@ pub fn dojo_domains() -> [string] {
 // (d6 honest stub). A domain not in dojo_domains() is "unknown", not a
 // stub — the CLI distinguishes the two.
 pub fn dojo_is_stub(domain: string) -> bool {
-    if domain == "vision"  { return true }
-    if domain == "rl"      { return true }
-    if domain == "tabular" { return true }
+    // All six domains now ship a full emitter (vision · rl · tabular
+    // graduated from stub → full), so the stub set is empty. Kept so the
+    // CLI can still distinguish stub vs unknown if a future domain
+    // registers in dojo_domains() before its emitter lands.
     return false
 }
 
