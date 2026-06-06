@@ -412,7 +412,12 @@ int main(int argc, char** argv) {
     if (dmax_cc != 0.0) { printf("[T] perf-shape cross-check FAILED — abort.\n"); return 1; }
 
     printf("\n# ── PERF (median of timed iters, cuEvent) ──\n");
-    const int WARMUP = 3, ITERS = 20;
+    /* WARMUP/ITERS are measurement-harness loop counts (NOT correctness). Made
+     * env-overridable so the heavy naive-MAC kernel stays tractable at the large
+     * production d-sweep (d=8192 grouped ~ tens of s/iter). Median is robust at
+     * ITERS=5. Defaults preserve the original 3/20 when unset. */
+    const int WARMUP = (getenv("MOEFUSE_WARMUP") ? atoi(getenv("MOEFUSE_WARMUP")) : 3);
+    const int ITERS  = (getenv("MOEFUSE_ITERS")  ? atoi(getenv("MOEFUSE_ITERS"))  : 20);
     double* samp = (double*)malloc(ITERS * sizeof(double));
     cudaEvent_t e0, e1;
     CK(cudaEventCreate(&e0)); CK(cudaEventCreate(&e1));
