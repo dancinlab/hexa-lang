@@ -292,9 +292,12 @@ extern "C" __global__ void gemm_og16(const __grid_constant__ CUtensorMap tmapA,
         uint32_t a0b=(uint32_t)__cvta_generic_to_shared(B0);
         uint32_t a1b=(uint32_t)__cvta_generic_to_shared(B1);
         asm volatile("wgmma.fence.sync.aligned;\n":::"memory");
+        // gmma-INTER pre-laid (route-a): per 8-row atom (256 floats), K=8 sub s=k>>3 occupies
+        // the contiguous 64-float region [s*64, s*64+64). atoms stack at SBO=1024B (256 floats).
+        // So the K=8 sub-step bumps START by s*64 floats = s*256 bytes; SBO addresses the stack.
         #pragma unroll
         for(int kk=0;kk<TKSW;kk+=TK){
-            uint32_t off=(uint32_t)(kk*4);
+            uint32_t off=(uint32_t)((kk>>3)*64*4);
             uint64_t dA =mk_desc(aAb+off,(uint32_t)lbo,(uint32_t)sbo,(uint32_t)boff,(uint32_t)swmode);
             uint64_t dB0=mk_desc(a0b+off,(uint32_t)lbo,(uint32_t)sbo,(uint32_t)boff,(uint32_t)swmode);
             uint64_t dB1=mk_desc(a1b+off,(uint32_t)lbo,(uint32_t)sbo,(uint32_t)boff,(uint32_t)swmode);
@@ -336,11 +339,12 @@ int main(int argc,char**argv){
         // ---- FULL GEMM: route-(a) pre-permuted global, descriptor-direct, bit-exact then perf.
         // The winning (pm,swm,sbo,boff) come from MODE 10. Defaults = best-expected (pm1/swm1/
         // sbo1024/boff0); override via argv for the gated re-run.
+        // WINNING route-(a) config from MODE 10: gmma-INTER pre-laid global + NO-swizzle TMA +
+        // descriptor swm=0 sbo=1024 boff=0 -> single-tile rel-RMS 0. Defaults set to that.
         int NST =argc>3?atoi(argv[3]):3;
-        int PM  =argc>4?atoi(argv[4]):1;
-        int SWM =argc>5?atoi(argv[5]):1;
-        int SBO =argc>6?atoi(argv[6]):1024;
-        int BOFF=argc>7?atoi(argv[7]):0;
+        int SWM =argc>4?atoi(argv[4]):0;
+        int SBO =argc>5?atoi(argv[5]):1024;
+        int BOFF=argc>6?atoi(argv[6]):0;
         int LBO =128;
         int Mx=S,Nx=S,Kx=S;
         if(Nx%128||Kx%32||Mx%128){printf("MODE4 needs M,N%%128==0 && K%%32==0\n");return 1;}
@@ -358,38 +362,52 @@ int main(int argc,char**argv){
         float al=1.f,be=0.f;
         CB(cublasSgemm(h,CUBLAS_OP_N,CUBLAS_OP_N,Nx,Mx,Kx,&al,dBo,Nx,dAo,Kx,&be,dR,Nx));CK(cudaDeviceSynchronize());
         CK(cudaMemcpy(hR,dR,szD*4,cudaMemcpyDeviceToHost));
-        // PRE-PERMUTE A,B into global per pm (one-time; in a real GEMM amortized over reuse).
-        // A is M-major(Kx wide); permute applies per 128B K-atom (KSW=32) independently.
-        float *hAp=(float*)malloc(szA*4),*hBp=(float*)malloc(szB*4);
-        memcpy(hAp,hA,szA*4); memcpy(hBp,hB,szB*4);
+        // PRE-LAY A,B into gmma-INTER GLOBAL (route-a, one-time; amortized over K-reuse in a real
+        // GEMM). The kernel reads each K=32 slab as a per-8-row-atom gmma-INTER block (atom a at
+        // a*256, gmma_phys(r,k) within), stacked at SBO=1024B. A: M-major Kx-wide. The TMA box
+        // {32(K),128(M)} lands SMEM[m_loc*32+k] = global -> we write global so that = gmma-INTER.
+        // We must lay PER (bm-block, K-slab): the 128-row tile's atom a' = (m within tile)>>3.
+        // A global row-major slot for logical (m,k): tile-relative atom a=(m&127)>>3, r=m&7,
+        // K-slab katom=k>>5, kk=k&31. SMEM tile per slab is 128*32 floats indexed (atom-major):
+        //   smem = a*256 + gmma_phys(r,kk). The no-swizzle TMA copies global[box] -> smem 1:1,
+        //   box reads global row-major (m'*32 + kk) within the (bm,katom) tile. So set
+        //   global[ (bm+ a*8 + r)*Kx + katom*32 + (a*256 + gmma_phys(r,kk)) - ... ]: simplest is
+        //   to write directly into the global slot the box will fetch for smem index p.
+        // The box {32,128} fetches, for smem linear p (0..128*32-1): global row (tilebase_m +
+        //   p/32), col (katom*32 + p%32). We want smem[p] = gmma value, i.e. for p = a*256 +
+        //   gmma_phys(r,kk): the logical (m=tilebase+a*8+r, k=katom*32+kk). Invert below.
+        float *hAp=(float*)calloc(szA,4),*hBp=(float*)calloc(szB,4);
         const int KSW=32;
-        if(PM!=0){
-            for(int m=0;m<Mx;++m)for(int katom=0;katom<Kx/KSW;++katom)for(int k=0;k<KSW;++k){
-                int r=m&7, a=m>>3; int g=k>>2,wv=k&3,gp;
-                if(PM==1) gp=g^(r&7); else if(PM==2) gp=g^(a&7); else gp=g^((r+1)&7);
-                hAp[(size_t)m*Kx + katom*KSW + (gp*4+wv)] = hA[(size_t)m*Kx + katom*KSW + k];
-            }
-            // B is K-major(Nx wide). For pm>=1 we want B's strided dim (N) swizzled like A's M.
-            // B atom = 32(N) x 32(K); permute the K-granule per N-row-atom.
-            for(int kk=0;kk<Kx;++kk)for(int n=0;n<Nx;++n){
-                int kb=kk&(KSW-1); int r=n&7,a=n>>3; int g=kb>>2,wv=kb&3,gp;
-                if(PM==1) gp=g^(r&7); else if(PM==2) gp=g^(a&7); else gp=g^((r+1)&7);
-                int kbase=kk-(kb); // keep within atom
-                hBp[(size_t)(kbase+(gp*4+wv))*Nx + n] = hB[(size_t)kk*Nx + n];
-            }
+        for(int m=0;m<Mx;++m)for(int k=0;k<Kx;++k){
+            int tile=m>>7, mloc=m&127, a=mloc>>3, r=mloc&7;
+            int katom=k>>5, kk=k&31;
+            int p = a*256 + gmma_phys(r,kk);          // smem slot within the 128x32 slab tile
+            int srow = tile*128 + (p>>5);             // box row = global m for this smem slot
+            int scol = katom*32 + (p&31);             // box col = global k
+            hAp[(size_t)srow*Kx + scol] = hA[(size_t)m*Kx + k];
+        }
+        for(int k=0;k<Kx;++k)for(int n=0;n<Nx;++n){
+            int tile=n>>7, nloc=n&127, c=nloc>>5, na=(nloc&31)>>3, r=nloc&7;
+            int katom=k>>5, kk=k&31;
+            // B per 128-N tile = 4 32-N atoms (c). within a 32-N atom: na (8-row sub), r. gmma
+            // layout per 32-N atom = na*256 + gmma_phys(r,kk); the 4 atoms concatenated.
+            int p = c*(32*KSW) + na*256 + gmma_phys(r,kk);  // smem slot in the 128(N)x32(K) slab
+            int srow = tile*128 + (p>>5);             // box maps N-major: row=global N
+            int scol = katom*32 + (p&31);             // col = global K
+            hBp[(size_t)scol*Nx + (srow)] = hB[(size_t)k*Nx + n]; // B global K-major(Nx wide)
         }
         CK(cudaMemcpy(dA,hAp,szA*4,cudaMemcpyHostToDevice));CK(cudaMemcpy(dB,hBp,szB*4,cudaMemcpyHostToDevice));
         CUtensorMap tmapA{},tmapB{};
         { cuuint64_t gd[2]={(cuuint64_t)Kx,(cuuint64_t)Mx}; cuuint64_t gs[1]={(cuuint64_t)Kx*4};
           cuuint32_t bd[2]={32,128}; cuuint32_t es[2]={1,1};
           CUresult r=enc(&tmapA,CU_TENSOR_MAP_DATA_TYPE_FLOAT32,2,dA,gd,gs,bd,es,
-            CU_TENSOR_MAP_INTERLEAVE_NONE,CU_TENSOR_MAP_SWIZZLE_128B,
+            CU_TENSOR_MAP_INTERLEAVE_NONE,CU_TENSOR_MAP_SWIZZLE_NONE,
             CU_TENSOR_MAP_L2_PROMOTION_NONE,CU_TENSOR_MAP_FLOAT_OOB_FILL_NONE);
           if(r!=CUDA_SUCCESS){printf("MODE4 encodeA r=%d\n",(int)r);return 4;} }
         { cuuint64_t gd[2]={(cuuint64_t)Nx,(cuuint64_t)Kx}; cuuint64_t gs[1]={(cuuint64_t)Nx*4};
           cuuint32_t bd[2]={32,32}; cuuint32_t es[2]={1,1};
           CUresult r=enc(&tmapB,CU_TENSOR_MAP_DATA_TYPE_FLOAT32,2,dB,gd,gs,bd,es,
-            CU_TENSOR_MAP_INTERLEAVE_NONE,CU_TENSOR_MAP_SWIZZLE_128B,
+            CU_TENSOR_MAP_INTERLEAVE_NONE,CU_TENSOR_MAP_SWIZZLE_NONE,
             CU_TENSOR_MAP_L2_PROMOTION_NONE,CU_TENSOR_MAP_FLOAT_OOB_FILL_NONE);
           if(r!=CUDA_SUCCESS){printf("MODE4 encodeB r=%d\n",(int)r);return 4;} }
         const int TM=128,TN=128,TKSW=32;
