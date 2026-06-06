@@ -231,22 +231,110 @@ pub fn moe_conv_fused_fwd(x: int, w_bank: int, b_bank: int, y_out: int,
     t_free(xcol); t_free(a_all); t_free(b_all); t_free(c_all)
 }
 
+// ── Path E (PRODUCTION): GEMM-conv weight-reuse — OG-FUSE-PROD-FOLD ───────────
+// The REAL production winner (PR #2867 F-FUSION-PROD-KERNEL 🟢, 6.57× faster than
+// ModuleList-30 at d=6208/H100, byte-exact max|Δ|=0). The under-fill fused path
+// above (moe_conv_fused_fwd) LOSES at production d=6208 (memory-roofline bound,
+// per the d≥1024 SATURATED regime in #2859); the GEMM-conv recast is the cure.
+//
+// ── The path-E algorithm (mirrors .cu k_moe_conv_gemm, the deliverable) ───────
+// The conv IS an implicit GEMM. For each tap k:
+//   Y[t,co] += Σ_ci Xshift_k[t,ci] · W_k[ci,co],   Xshift_k[t,ci] = X[t−dil·(K−1−k),ci]
+// The device kernel loads a weight tile Ws[BK][BN] into smem ONCE and REUSES it
+// across ALL BM time-rows in the CTA's output tile → BM-fold weight reuse. This
+// converts the weight-bandwidth-bound MAC (each W[co,ci,k] touched ONCE in the
+// fused/tiled paths) into a compute-bound register-tiled GEMM — directly attacks
+// the OG-FUSE-OPT-closed wall (saturated-regime weight bandwidth + L2 locality).
+//
+// ── Byte-eq contract (g5, gated FIRST — the #2867 device gate, max|Δ|=0) ──────
+// The kernel accumulates ci ASCENDING, k INNER (k_moe_conv_gemm lines 346-363:
+// `for cl … for k`), the EXACT order of the ModuleList reference / nn_conv1d_fwd.
+// The im2col contraction index j = ci·K + k (ascending j) IS that ci-outer/k-inner
+// order, so a SINGLE per-expert GEMM xcol[T×Kdim] @ Wt_e[Kdim×d] is byte-IDENTICAL
+// to the kernel's register accumulation AND to moe_conv_modulelist_fwd — the
+// weight reuse across BM time-rows is a SCHEDULING property of the device GEMM,
+// not a math re-association (so CPU max|Δ|=0 holds, NOT a cuBLAS reorder — cuBLAS
+// is the path-F roofline reference, which reorders ci and is only rel-RMS-eq).
+//
+// vs the strided-batched fused path (moe_conv_fused_fwd): path E does NOT
+// replicate xcol E times into an [E·T·Kdim] batch buffer — it reuses the SHARED
+// xcol directly, ONE register-tiled GEMM per expert (grid over E, weight tile
+// streamed). At d=6208 the E× im2col replication of the batched path is the
+// memory blowup the GEMM-conv recast avoids. forge_dispatch_matmul is the
+// natural primitive (the per-expert GEMM = cuBLAS/own-GEMM seam on a CUDA host);
+// on CPU it is byte-eq to t_matmul → byte-eq to the ModuleList oracle.
+pub fn moe_conv_gemm_fwd(x: int, w_bank: int, b_bank: int, y_out: int,
+                         E: int, T: int, d: int, K: int, dil: int) {
+    let Kdim = d * K
+    // shared im2col, built ONCE (every expert reads the SAME X): xcol[t, ci·K+k]
+    // = (p>=0) ? X[p,ci] : 0,  p = t − dil·(K−1−k). j = ci·K+k ascending = the
+    // ci-outer/k-inner contraction order the path-E kernel accumulates in.
+    let xcol = t_zeros(T * Kdim)
+    let mut t = 0
+    while t < T {
+        let mut ci = 0
+        while ci < d {
+            let mut k = 0
+            while k < K {
+                let p = t - dil * (K - 1 - k)
+                if p >= 0 { t_set(xcol, t * Kdim + ci * K + k, t_get(x, p * d + ci)) }
+                k = k + 1
+            }
+            ci = ci + 1
+        }
+        t = t + 1
+    }
+    // per-expert register-tiled GEMM with weight-tile reuse across the T time-rows.
+    // Wt_e[j, co] = W_e[co·Kdim + j]  (transpose of the per-expert weight bank);
+    // the SAME shared xcol is the left operand for every expert (no E× replication).
+    let mut e = 0
+    while e < E {
+        let woff = e * d * d * K
+        let boff = e * d
+        let yoff = e * T * d
+        let Wt = t_zeros(Kdim * d)
+        let mut co = 0
+        while co < d {
+            let mut j = 0
+            while j < Kdim { t_set(Wt, j * d + co, t_get(w_bank, woff + co * Kdim + j)); j = j + 1 }
+            co = co + 1
+        }
+        let mm = forge_dispatch_matmul(xcol, T, Kdim, Wt, d)
+        let mut t2 = 0
+        while t2 < T {
+            let mut c2 = 0
+            while c2 < d {
+                t_set(y_out, yoff + t2 * d + c2, t_get(mm, t2 * d + c2) + t_get(b_bank, boff + c2))
+                c2 = c2 + 1
+            }
+            t2 = t2 + 1
+        }
+        t_free(Wt); t_free(mm)
+        e = e + 1
+    }
+    t_free(xcol)
+}
+
 // ── Dispatch selector (the trainer call site) ─────────────────────────────────
-// HEXA_FUSE_MOE_CONV=1 (or HEXA_FUSE_ALL) → the fused one-launch path; else the
-// E-conv ModuleList fallback. Both are byte-eq (max|Δ|=0), so the descent is
-// identical regardless of the flag — the flag only selects fill/occupancy.
+// HEXA_FUSE_MOE_CONV=1 (or HEXA_FUSE_ALL) → the PRODUCTION GEMM-conv weight-reuse
+// path (E, the #2867 6.57×-at-d=6208 winner); default OFF → the E-conv ModuleList
+// fallback (the byte-eq oracle). Both are byte-eq (max|Δ|=0), so the descent is
+// identical regardless of the flag — the flag only selects fill/occupancy/perf.
+// (OG-FUSE-PROD-FOLD: routed to path E, the production winner, NOT the under-fill
+// strided-batched fused path moe_conv_fused_fwd which loses at d=6208.)
 pub fn moe_conv_fwd_dispatch(x: int, w_bank: int, b_bank: int, y_out: int,
                              E: int, T: int, d: int, K: int, dil: int) {
     if _mcf_fuse_on() {
-        moe_conv_fused_fwd(x, w_bank, b_bank, y_out, E, T, d, K, dil)
+        moe_conv_gemm_fwd(x, w_bank, b_bank, y_out, E, T, d, K, dil)
     } else {
         moe_conv_modulelist_fwd(x, w_bank, b_bank, y_out, E, T, d, K, dil)
     }
 }
 
 // ════════════════════════════════════════════════════════════════════════════
-//  byte-eq selftest: fused E-expert MoE-conv == E× ModuleList nn_conv1d_fwd_off.
-//  F-CLM-MOE-CONV-FUSE-FOLD-EQ — the OG-FUSE-FOLD gate. max|Δ| must be 0.
+//  byte-eq selftest: PRODUCTION GEMM-conv path E == E× ModuleList (the oracle).
+//  F-CLM-MOE-CONV-GEMM-FOLD-EQ — the OG-FUSE-PROD-FOLD gate (max|Δ| must be 0),
+//  plus the legacy F-CLM-MOE-CONV-FUSE-FOLD-EQ (strided-batched path) as a check.
 // ════════════════════════════════════════════════════════════════════════════
 
 fn _mcf_maxdev(a: int, b: int, n: int) -> float {
@@ -274,24 +362,29 @@ fn _run_fold_gate(E: int, T: int, d: int, K: int, dil: int) -> int {
         e = e + 1
     }
 
-    // reference: E× ModuleList
+    // reference: E× ModuleList (the byte-eq oracle)
     let y_ref = t_zeros(E * T * d)
     moe_conv_modulelist_fwd(x, w_bank, b_bank, y_ref, E, T, d, K, dil)
-    // fused (one strided-batched GEMM)
+    // PRODUCTION path E: GEMM-conv weight-reuse (the #2867 winner the fold routes to)
+    let y_gemm = t_zeros(E * T * d)
+    moe_conv_gemm_fwd(x, w_bank, b_bank, y_gemm, E, T, d, K, dil)
+    // legacy strided-batched fused path (kept as a secondary byte-eq check)
     let y_fused = t_zeros(E * T * d)
     moe_conv_fused_fwd(x, w_bank, b_bank, y_fused, E, T, d, K, dil)
 
-    let md = _mcf_maxdev(y_ref, y_fused, E * T * d)
+    let md_gemm  = _mcf_maxdev(y_ref, y_gemm,  E * T * d)
+    let md_fused = _mcf_maxdev(y_ref, y_fused, E * T * d)
     print("  E="); print(E); print(" T="); print(T); print(" d="); print(d)
     print(" K="); print(K); print(" dil="); print(dil)
-    print("  max|Δ| fused-vs-ModuleList = "); println(to_string(md))
+    print("  max|Δ| GEMM-conv(E)-vs-ModuleList = "); print(to_string(md_gemm))
+    print("   fused-vs-ModuleList = "); println(to_string(md_fused))
     let tol = 0.000000001
-    if md <= tol { return 1 }
+    if md_gemm <= tol { if md_fused <= tol { return 1 } }
     return 0
 }
 
 fn main() {
-    println("clm_moe_conv_fused — OG-FUSE-FOLD: fused E-expert MoE-conv (PR #2859 fold)")
+    println("clm_moe_conv_fused — OG-FUSE-PROD-FOLD: GEMM-conv weight-reuse (PR #2867 path E)")
 
     // E=30 (the measured CLMConvMoE expert count) at a CPU-tractable d, plus a
     // dilated case (dil=2) and a small-E sanity, to exercise the fold byte-eq.
@@ -300,11 +393,11 @@ fn main() {
     let g3 = _run_fold_gate(4,  24, 8, 3, 1)
 
     if g1 == 1 { if g2 == 1 { if g3 == 1 {
-        println("F-CLM-MOE-CONV-FUSE-FOLD-EQ = 1")
-        println("PASS — fused E-expert MoE-conv == E× ModuleList byte-eq (max|Δ|=0)")
-        println("OG-FUSE-FOLD CODE FOLD GREEN — HEXA_FUSE_MOE_CONV routes the fused path")
+        println("F-CLM-MOE-CONV-GEMM-FOLD-EQ = 1")
+        println("PASS — GEMM-conv path E == E× ModuleList byte-eq (max|Δ|=0); fused-path also eq")
+        println("OG-FUSE-PROD-FOLD CODE FOLD GREEN — HEXA_FUSE_MOE_CONV routes path E (6.57× @d=6208)")
         return
     } } }
-    println("F-CLM-MOE-CONV-FUSE-FOLD-EQ = 0")
-    println("FAIL — fold byte-eq broken")
+    println("F-CLM-MOE-CONV-GEMM-FOLD-EQ = 0")
+    println("FAIL — production GEMM-conv fold byte-eq broken")
 }
