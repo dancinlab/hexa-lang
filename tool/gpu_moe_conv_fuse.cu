@@ -103,7 +103,6 @@ __global__ void k_moe_conv_fused(const float* __restrict__ X,
 
     const float* We = W + (size_t)e * d * d * K + (size_t)co * d * K; /* W_e[co, :, :] */
     float bias = b[(size_t)e * d + co];
-    int dK = d * K;
 
     #pragma unroll
     for (int tt = 0; tt < TT_TILE; ++tt) {
@@ -232,48 +231,127 @@ static int cmp_d(const void* a, const void* b) {
     return (x < y) ? -1 : (x > y) ? 1 : 0;
 }
 
-int main(int argc, char** argv) {
-    int E   = (argc > 1) ? atoi(argv[1]) : 30;
-    int d   = (argc > 2) ? atoi(argv[2]) : 6208;
-    int T   = (argc > 3) ? atoi(argv[3]) : 256;
-    int K   = (argc > 4) ? atoi(argv[4]) : 3;
-    int dil = (argc > 5) ? atoi(argv[5]) : 1;
-
-    printf("# gpu_moe_conv_fuse — fused multi-expert Conv1d MoE kernel (f5e18a0f cure)\n");
-    printf("# shape: E=%d d=%d T=%d K=%d dil=%d\n", E, d, T, K, dil);
-
-    int dev = 0; cudaDeviceProp prop;
-    CK(cudaGetDeviceProperties(&prop, dev));
-    printf("# device: %s  SMs=%d  cap=%d.%d\n", prop.name, prop.multiProcessorCount,
-           prop.major, prop.minor);
-
-    size_t nX = (size_t)T * d;
-    size_t nW = (size_t)E * d * d * K;
-    size_t nB = (size_t)E * d;
-    size_t nY = (size_t)E * T * d;
-    double gbW = (double)nW * sizeof(float) / 1e9;
-    printf("# weight bank = %.2f GB (E·d·d·K fp32), output = %.2f GB\n",
-           gbW, (double)nY * sizeof(float) / 1e9);
+/* ════════════════════════════════════════════════════════════════════════════
+ * GATE — correctness vs CPU op-by-op reference. Run at a SMALL shape (CPU oracle
+ * is E·T·d·d·K MACs — only tractable for small d). Proves all three device
+ * kernels are byte-exact vs the 30-separate-conv reference; the SAME kernels then
+ * run at the representative perf shape (their correctness is shape-independent).
+ * Returns 1 on any gate failure.
+ * ════════════════════════════════════════════════════════════════════════════ */
+static int run_gate(int E, int d, int T, int K, int dil) {
+    printf("\n# ── CORRECTNESS GATE (vs CPU op-by-op 30-conv reference) ──\n");
+    printf("# gate shape: E=%d d=%d T=%d K=%d dil=%d (small → CPU oracle tractable)\n",
+           E, d, T, K, dil);
+    size_t nX = (size_t)T * d, nW = (size_t)E * d * d * K, nB = (size_t)E * d, nY = (size_t)E * T * d;
 
     float* hX = (float*)malloc(nX * sizeof(float));
     float* hW = (float*)malloc(nW * sizeof(float));
     float* hB = (float*)malloc(nB * sizeof(float));
     float* hY_ref = (float*)malloc(nY * sizeof(float));
     float* hY_gpu = (float*)malloc(nY * sizeof(float));
-    if (!hX || !hW || !hB || !hY_ref || !hY_gpu) {
+    if (!hX || !hW || !hB || !hY_ref || !hY_gpu) { fprintf(stderr, "[T] gate malloc failed\n"); return 2; }
+
+    uint64_t s = 0x1234567890abcdefULL;
+    for (size_t i = 0; i < nX; ++i) hX[i] = (lcg_next(&s) - 0.5f) * 2.0f;
+    for (size_t i = 0; i < nW; ++i) hW[i] = (lcg_next(&s) - 0.5f) * 0.05f;
+    for (size_t i = 0; i < nB; ++i) hB[i] = (lcg_next(&s) - 0.5f) * 0.1f;
+
+    cpu_moe_conv(hX, hW, hB, hY_ref, E, T, d, K, dil);
+
+    float *dX, *dW, *dB, *dY;
+    CK(cudaMalloc(&dX, nX * sizeof(float))); CK(cudaMalloc(&dW, nW * sizeof(float)));
+    CK(cudaMalloc(&dB, nB * sizeof(float))); CK(cudaMalloc(&dY, nY * sizeof(float)));
+    CK(cudaMemcpy(dX, hX, nX * sizeof(float), cudaMemcpyHostToDevice));
+    CK(cudaMemcpy(dW, hW, nW * sizeof(float), cudaMemcpyHostToDevice));
+    CK(cudaMemcpy(dB, hB, nB * sizeof(float), cudaMemcpyHostToDevice));
+
+    int n_co_blk = (d + CO_TILE - 1) / CO_TILE, n_tt_blk = (T + TT_TILE - 1) / TT_TILE;
+
+    /* (C) fused */
+    CK(cudaMemset(dY, 0, nY * sizeof(float)));
+    { dim3 grid(E, n_co_blk, n_tt_blk), blk(CO_TILE);
+      k_moe_conv_fused<<<grid, blk>>>(dX, dW, dB, dY, E, T, d, K, dil);
+      CK(cudaGetLastError()); CK(cudaDeviceSynchronize()); }
+    CK(cudaMemcpy(hY_gpu, dY, nY * sizeof(float), cudaMemcpyDeviceToHost));
+    double dmax_fused = max_abs_diff(hY_ref, hY_gpu, nY);
+    printf("[GATE-FUSED]   max|Δ| vs ref = %.3e\n", dmax_fused);
+
+    /* (A) ModuleList-30 */
+    CK(cudaMemset(dY, 0, nY * sizeof(float)));
+    { dim3 grid(n_co_blk, n_tt_blk), blk(CO_TILE);
+      for (int e = 0; e < E; ++e)
+        k_conv_single<<<grid, blk>>>(dX, dW + (size_t)e*d*d*K, dB + (size_t)e*d, dY + (size_t)e*T*d, T, d, K, dil);
+      CK(cudaGetLastError()); CK(cudaDeviceSynchronize()); }
+    CK(cudaMemcpy(hY_gpu, dY, nY * sizeof(float), cudaMemcpyDeviceToHost));
+    double dmax_mlist = max_abs_diff(hY_ref, hY_gpu, nY);
+    printf("[GATE-MLIST30] max|Δ| vs ref = %.3e\n", dmax_mlist);
+
+    /* (B) grouped */
+    CK(cudaMemset(dY, 0, nY * sizeof(float)));
+    { dim3 grid(E), blk(CO_TILE);
+      k_moe_conv_grouped<<<grid, blk>>>(dX, dW, dB, dY, E, T, d, K, dil);
+      CK(cudaGetLastError()); CK(cudaDeviceSynchronize()); }
+    CK(cudaMemcpy(hY_gpu, dY, nY * sizeof(float), cudaMemcpyDeviceToHost));
+    double dmax_grp = max_abs_diff(hY_ref, hY_gpu, nY);
+    printf("[GATE-GROUPED] max|Δ| vs ref = %.3e\n", dmax_grp);
+
+    double GATE_TOL = 0.0;  /* same accum order (ci outer, k inner) as CPU ref → byte-exact */
+    int pass = (dmax_fused <= GATE_TOL) && (dmax_mlist <= GATE_TOL) && (dmax_grp <= GATE_TOL);
+    printf("# GATE TOL=%.1e (fp32, identical accum order → byte-exact)  =>  %s\n",
+           GATE_TOL, pass ? "PASS" : "FAIL");
+
+    cudaFree(dX); cudaFree(dW); cudaFree(dB); cudaFree(dY);
+    free(hX); free(hW); free(hB); free(hY_ref); free(hY_gpu);
+    return pass ? 0 : 1;
+}
+
+int main(int argc, char** argv) {
+    int E   = (argc > 1) ? atoi(argv[1]) : 30;
+    int d   = (argc > 2) ? atoi(argv[2]) : 2048;
+    int T   = (argc > 3) ? atoi(argv[3]) : 256;
+    int K   = (argc > 4) ? atoi(argv[4]) : 3;
+    int dil = (argc > 5) ? atoi(argv[5]) : 1;
+    /* gate dimension (CPU-oracle tractable). Override: argv[6]. */
+    int gate_d = (argc > 6) ? atoi(argv[6]) : 192;
+    int gate_T = 32;
+
+    printf("# gpu_moe_conv_fuse — fused multi-expert Conv1d MoE kernel (f5e18a0f cure)\n");
+    printf("# perf shape: E=%d d=%d T=%d K=%d dil=%d\n", E, d, T, K, dil);
+
+    int dev = 0; cudaDeviceProp prop;
+    CK(cudaGetDeviceProperties(&prop, dev));
+    printf("# device: %s  SMs=%d  cap=%d.%d\n", prop.name, prop.multiProcessorCount,
+           prop.major, prop.minor);
+
+    /* ════════════ GATE FIRST — no perf number before this passes ════════════ */
+    int gate_rc = run_gate(E, gate_d, gate_T, K, dil);
+    if (gate_rc != 0) {
+        printf("[T] CORRECTNESS GATE FAILED (rc=%d) — no perf reported.\n", gate_rc);
+        return 1;
+    }
+
+    /* ════════════ PERF — representative shape, device-vs-device check ════════ */
+    size_t nX = (size_t)T * d;
+    size_t nW = (size_t)E * d * d * K;
+    size_t nB = (size_t)E * d;
+    size_t nY = (size_t)E * T * d;
+    printf("\n# weight bank = %.2f GB (E·d·d·K fp32), output = %.2f GB\n",
+           (double)nW * sizeof(float) / 1e9, (double)nY * sizeof(float) / 1e9);
+
+    float* hX = (float*)malloc(nX * sizeof(float));
+    float* hW = (float*)malloc(nW * sizeof(float));
+    float* hB = (float*)malloc(nB * sizeof(float));
+    float* hY_a = (float*)malloc(nY * sizeof(float));
+    float* hY_c = (float*)malloc(nY * sizeof(float));
+    if (!hX || !hW || !hB || !hY_a || !hY_c) {
         fprintf(stderr, "[T] host malloc failed (need ~%.1f GB host)\n",
                 (double)(nW + nY * 2) * sizeof(float) / 1e9);
         return 2;
     }
     uint64_t s = 0x1234567890abcdefULL;
     for (size_t i = 0; i < nX; ++i) hX[i] = (lcg_next(&s) - 0.5f) * 2.0f;
-    /* small weights so fp32 accumulation over d=6208 stays well-conditioned */
     for (size_t i = 0; i < nW; ++i) hW[i] = (lcg_next(&s) - 0.5f) * 0.05f;
     for (size_t i = 0; i < nB; ++i) hB[i] = (lcg_next(&s) - 0.5f) * 0.1f;
-
-    /* CPU op-by-op reference (the 30-separate-conv oracle). */
-    printf("# computing CPU op-by-op reference (E·T·d·d·K MACs)...\n"); fflush(stdout);
-    cpu_moe_conv(hX, hW, hB, hY_ref, E, T, d, K, dil);
 
     float *dX, *dW, *dB, *dY;
     CK(cudaMalloc(&dX, nX * sizeof(float)));
@@ -287,66 +365,23 @@ int main(int argc, char** argv) {
     int n_co_blk = (d + CO_TILE - 1) / CO_TILE;
     int n_tt_blk = (T + TT_TILE - 1) / TT_TILE;
 
-    /* ════════════════════════════════════════════════════════════════════════
-     * GATE FIRST — correctness. NO perf number before this passes.
-     * ════════════════════════════════════════════════════════════════════════ */
-    printf("\n# ── CORRECTNESS GATE (vs CPU op-by-op reference) ──\n");
-
-    /* (C) fused */
+    /* device-vs-device cross-check at perf shape: fused (C) vs ModuleList (A)
+     * must agree byte-exact (same accum order) — guards the perf-shape kernels. */
     CK(cudaMemset(dY, 0, nY * sizeof(float)));
-    {
-        dim3 grid(E, n_co_blk, n_tt_blk), blk(CO_TILE);
-        k_moe_conv_fused<<<grid, blk>>>(dX, dW, dB, dY, E, T, d, K, dil);
-        CK(cudaGetLastError());
-        CK(cudaDeviceSynchronize());
-    }
-    CK(cudaMemcpy(hY_gpu, dY, nY * sizeof(float), cudaMemcpyDeviceToHost));
-    double dmax_fused = max_abs_diff(hY_ref, hY_gpu, nY);
-    printf("[GATE-FUSED]   max|Δ| vs ref = %.3e\n", dmax_fused);
-
-    /* (A) ModuleList-30 — E separate launches */
+    { dim3 grid(n_co_blk, n_tt_blk), blk(CO_TILE);
+      for (int e = 0; e < E; ++e)
+        k_conv_single<<<grid, blk>>>(dX, dW + (size_t)e*d*d*K, dB + (size_t)e*d, dY + (size_t)e*T*d, T, d, K, dil);
+      CK(cudaGetLastError()); CK(cudaDeviceSynchronize()); }
+    CK(cudaMemcpy(hY_a, dY, nY * sizeof(float), cudaMemcpyDeviceToHost));
     CK(cudaMemset(dY, 0, nY * sizeof(float)));
-    {
-        dim3 grid(n_co_blk, n_tt_blk), blk(CO_TILE);
-        for (int e = 0; e < E; ++e) {
-            const float* dWe = dW + (size_t)e * d * d * K;
-            const float* dBe = dB + (size_t)e * d;
-            float* dYe = dY + (size_t)e * T * d;
-            k_conv_single<<<grid, blk>>>(dX, dWe, dBe, dYe, T, d, K, dil);
-        }
-        CK(cudaGetLastError());
-        CK(cudaDeviceSynchronize());
-    }
-    CK(cudaMemcpy(hY_gpu, dY, nY * sizeof(float), cudaMemcpyDeviceToHost));
-    double dmax_mlist = max_abs_diff(hY_ref, hY_gpu, nY);
-    printf("[GATE-MLIST30] max|Δ| vs ref = %.3e\n", dmax_mlist);
+    { dim3 grid(E, n_co_blk, n_tt_blk), blk(CO_TILE);
+      k_moe_conv_fused<<<grid, blk>>>(dX, dW, dB, dY, E, T, d, K, dil);
+      CK(cudaGetLastError()); CK(cudaDeviceSynchronize()); }
+    CK(cudaMemcpy(hY_c, dY, nY * sizeof(float), cudaMemcpyDeviceToHost));
+    double dmax_cc = max_abs_diff(hY_a, hY_c, nY);
+    printf("# perf-shape cross-check  max|Δ|(fused vs ModuleList) = %.3e (expect 0)\n", dmax_cc);
+    if (dmax_cc != 0.0) { printf("[T] perf-shape cross-check FAILED — abort.\n"); return 1; }
 
-    /* (B) grouped anti-pattern */
-    CK(cudaMemset(dY, 0, nY * sizeof(float)));
-    {
-        dim3 grid(E), blk(CO_TILE);
-        k_moe_conv_grouped<<<grid, blk>>>(dX, dW, dB, dY, E, T, d, K, dil);
-        CK(cudaGetLastError());
-        CK(cudaDeviceSynchronize());
-    }
-    CK(cudaMemcpy(hY_gpu, dY, nY * sizeof(float), cudaMemcpyDeviceToHost));
-    double dmax_grp = max_abs_diff(hY_ref, hY_gpu, nY);
-    printf("[GATE-GROUPED] max|Δ| vs ref = %.3e\n", dmax_grp);
-
-    /* fp32 gate: all three share the SAME accumulation order as the CPU ref
-     * (ci outer, k inner) → expect bit-exact 0. Any nonzero is a real bug. */
-    double GATE_TOL = 0.0;
-    int gate_pass = (dmax_fused <= GATE_TOL) && (dmax_mlist <= GATE_TOL) && (dmax_grp <= GATE_TOL);
-    printf("# GATE TOL=%.1e (fp32, same accum order → byte-exact)  =>  %s\n",
-           GATE_TOL, gate_pass ? "PASS" : "FAIL");
-    if (!gate_pass) {
-        printf("[T] CORRECTNESS GATE FAILED — no perf reported.\n");
-        return 1;
-    }
-
-    /* ════════════════════════════════════════════════════════════════════════
-     * PERF — only reached after the gate passes.
-     * ════════════════════════════════════════════════════════════════════════ */
     printf("\n# ── PERF (median of timed iters, cuEvent) ──\n");
     const int WARMUP = 3, ITERS = 20;
     double* samp = (double*)malloc(ITERS * sizeof(double));
@@ -414,9 +449,36 @@ int main(int argc, char** argv) {
            n_co_blk * n_tt_blk, E, E, E * n_co_blk * n_tt_blk);
     printf("# (run under: nvidia-smi --query-gpu=utilization.gpu --format=csv -lms 50  for util MEAN/PEAK)\n");
 
+    /* ── sustained per-path loop for the util sampler ─────────────────────────
+     * If MOEFUSE_ONLY=A|B|C, run ~2.5s of repeated launches of just that path so
+     * a background nvidia-smi sampler gets a clean utilization window. The script
+     * wraps each with its own sampler → per-path util MEAN/PEAK captured inline. */
+    const char* only = getenv("MOEFUSE_ONLY");
+    if (only && (only[0]=='A'||only[0]=='B'||only[0]=='C')) {
+        printf("# sustained loop path=%s (~2.5s) for util capture\n", only);
+        dim3 gA(n_co_blk, n_tt_blk), gB(E), gC(E, n_co_blk, n_tt_blk), blk(CO_TILE);
+        cudaEvent_t t0, t1; CK(cudaEventCreate(&t0)); CK(cudaEventCreate(&t1));
+        CK(cudaEventRecord(t0, 0));
+        float elapsed = 0.0f;
+        long reps = 0;
+        while (elapsed < 2500.0f) {
+            for (int r = 0; r < 5; ++r) {
+                if (only[0]=='A') { for (int e=0;e<E;++e) k_conv_single<<<gA,blk>>>(dX, dW+(size_t)e*d*d*K, dB+(size_t)e*d, dY+(size_t)e*T*d, T, d, K, dil); }
+                else if (only[0]=='B') k_moe_conv_grouped<<<gB,blk>>>(dX, dW, dB, dY, E, T, d, K, dil);
+                else k_moe_conv_fused<<<gC,blk>>>(dX, dW, dB, dY, E, T, d, K, dil);
+                reps++;
+            }
+            CK(cudaDeviceSynchronize());
+            CK(cudaEventRecord(t1, 0)); CK(cudaEventSynchronize(t1));
+            CK(cudaEventElapsedTime(&elapsed, t0, t1));
+        }
+        printf("# sustained loop done: %ld reps in %.0f ms\n", reps, elapsed);
+        cudaEventDestroy(t0); cudaEventDestroy(t1);
+    }
+
     cudaEventDestroy(e0); cudaEventDestroy(e1);
     cudaFree(dX); cudaFree(dW); cudaFree(dB); cudaFree(dY);
-    free(hX); free(hW); free(hB); free(hY_ref); free(hY_gpu); free(samp);
+    free(hX); free(hW); free(hB); free(hY_a); free(hY_c); free(samp);
     printf("\n[T] DONE — gate PASS, perf captured.\n");
     return 0;
 }
