@@ -438,6 +438,7 @@ on-silicon run with its own verdict:
 | W2/3 | wgmma GMMA INTER 8×4 layout | bit-exact (rel-RMS 0) @2048³ | layout SOLVED | `F-FUSION-SM90-WGMMA-GMMA-LAYOUT` |
 | W8 | TMA-producer dual-consumer-WG | bit-exact, **66.9 TFLOP/s** | **6.43×** off (2 CTA/SM) | `F-FUSION-SM90-WGMMA-W8` |
 | W10 | composed swizzle-decode (permute-free) | bit-exact, **70.7 TFLOP/s** ★ TF32 summit | **6.09×** off cuBLAS-TF32 (2 CTA/SM, +5.7%) | `F-FUSION-SM90-WGMMA-W10` |
+| W13 | deep async decode ring (NSTG-deep gmma scratch) | bit-exact, 51.9 TFLOP/s @NSTG≥2 | 🔴 CLOSED-NEG — 1 CTA/SM (regresses 70.7); **TF32 async-pipeline axis EXHAUSTED** | `F-FUSION-SM90-WGMMA-W13` |
 | W14 | **FP16/BF16** own-GEMM (NEW dtype axis) | bit-exact-vs-same-dtype, **71.6 TFLOP/s** (2 CTA/SM) | **11.5×** off cuBLAS-**FP16** — PARITY NO; W13 16KB-band overlap REFUTED (.k16 band still 32KB) | `F-FUSION-SM90-WGMMA-W14-FP16` |
 | W15 | descriptor-direct (delete 32KB decode band) | 🔴 **CLOSED-NEG** — single-tile rel-RMS floor **1.000** / GEMM **1.392** (3200-cfg sweep, none 0) → GATE FAIL, no perf | research #2854 FALSIFIED: TMA-SWIZZLE_128B ≢ wgmma Swizzle<3,4,3> for atom-major box. smem 96→**64 KB/CTA** (32KB band IS removable, but read not bit-exact). W10 70.7 KEPT | `F-FUSION-SM90-WGMMA-W15` |
 
@@ -586,6 +587,14 @@ the own-GEMM gap lifts the whole stack automatically.
       register-realloc the litscan needs is DENIED by the bigger tile's own accumulator footprint. **128×256 output
       tile = DEAD AXIS for this kernel. W10 70.7/6.09× frontier KEPT — no regression shipped.** verdict
       `.verdicts/hexa-fusion/F-FUSION-SM90-WGMMA-W12.txt`. kernel `self/native/wgmma/wgmma_tf32_w12.cu`.
+- [x] **W13 deep async decode ring** 🔴 CLOSED-NEG — attacked residual (b): ring the gmma decode scratch NSTG-deep
+      so decode(N+1) overlaps wgmma(N) (producer-ahead software pipeline, KEEP the W10 decode-copy per W12). BIT-EXACT
+      at NSTG≥2 (rel_rms 0) but ONE added 32 KB gmma band pushes smem 96→128 KB/CTA → occupancy **2→1 CTA/SM**, and
+      the overlap gain does NOT recover the halved occupancy: own **70.7 → 51.9 TFLOP/s @4096 (−27%)**. NSTG 2/3/4 flat
+      at 1 CTA/SM. The SAME wall W12 hit from the other side (W12 serializes to hold 2 CTA/SM; W13 overlaps but loses
+      it): **2 CTA/SM and decode/MMA overlap are MUTUALLY EXCLUSIVE** for this 128×128 FP32-scratch TF32 kernel. W10
+      70.7 frontier **KEPT (no regression)**. H100 (vast 39725711, DESTROYED leak 0, nvcc 12.6 driver 560.35.03).
+      verdict `.verdicts/hexa-fusion/F-FUSION-SM90-WGMMA-W13.txt`.
 - [x] **W14 PRECISION axis — FP16/BF16 own-GEMM (NEW dtype campaign)** ✅ landed correct, 🔴 W13 thesis refuted
       (2026-06-06). The user-opted-into separate dtype axis after W13 closed the TF32 async-pipeline. Ported the W10
       composed-swizzle-decode own-GEMM to 16-bit operands + f32 accumulate (`wgmma.mma_async...m64n64k16.f32.f16.f16`
@@ -603,6 +612,14 @@ the own-GEMM gap lifts the whole stack automatically.
       artifact). native sm_90a H100 (vast 39729157, DESTROYED leak 0, nvcc 12.6 driver 560.35.03). Residual: escape
       the software decode (f16 HW-swizzle in-place — TF32 W10 MODE5 was closed-neg, f16 unexplored) OR 32-K half-atom
       slab (band → 16 KB). verdict `.verdicts/hexa-fusion/F-FUSION-SM90-WGMMA-W14-FP16.txt`.
+
+- [x] **TF32 async-pipeline axis EXHAUSTED** — W8 (TMA-producer) + W9 (permute-removal) + W10 (composed decode) +
+      W12 (output-tile DEAD, decode/MMA overlap = wall) + W13 (deeper ring regresses occupancy) collectively close the
+      TF32 own-GEMM perf axis at **W10 70.7 TFLOP/s, 6.09× off cuBLAS-TF32, 2 CTA/SM, bit-exact**. The ONLY remaining
+      axis is the **precision change (FP16/BF16 wgmma)** — doubles tensor-core throughput AND a 16-bit gmma band is
+      16 KB (could fit 2 bands at 2 CTA/SM, reopening W13's overlap) — a SEPARATE dtype campaign with a non-bit-exact
+      (FP16 accumulation) gate. **RECOMMEND STOP on the TF32 perf axis.**
+
 
 **STATE**: correctness CLOSED (W2/W3 bit-exact). Occupancy CLOSED (W8/W10 2 CTA/SM). **Frontier = W10 `gemm_w10`
 70.7 TFLOP/s, 6.09×, 2 CTA/SM, bit-exact** (beats W8 66.5/6.44× by +5.7%). W11→W12 EXHAUSTED the litscan

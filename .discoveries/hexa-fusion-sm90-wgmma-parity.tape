@@ -250,6 +250,50 @@
 #   the 128x256 output-tile axis is exhausted.
 
 # ============================================================================
+# === UPDATE 2026-06-06 — W13 DEEP ASYNC DECODE RING = CLOSED-NEGATIVE (axis exhausted)
+# ============================================================================
+# W13 (gemm_w13, MODE 6 of wgmma_tf32_w13.cu): attack residual (b) of the W10 handoff — the
+#   deeper warp-spec multi-stage pipeline. W12 (#2851) root-caused the wall as decode<->MMA
+#   OVERLAP (NOT occupancy): the 128x256 output-tile axis is DEAD; shrinking the W10 decode
+#   scratch restores 2 CTA/SM but SERIALIZES decode<->MMA. W13 is the OPPOSITE: KEEP the W10
+#   decode-copy (W12 proved removal kills it) and DEEPEN the gmma decode ring NSTG-deep so
+#   decode(N+1) writes a DIFFERENT band while wgmma(N) reads band N — a producer-ahead software
+#   pipeline that HIDES the decode latency behind the prior wgmma.
+#   H100 sm_90a, vast 39725711 DESTROYED leak 0, nvcc 12.6 driver 560.35.03 (apples to W10).
+#   verdict F-FUSION-SM90-WGMMA-W13.txt.
+#
+#   SINGLE-TILE GATES (reused W10 decode law): MODE0 rel_rms 0.000e+00 exact 4096/4096;
+#     MODE1 composed-decode->wgmma rel_rms 0.000e+00 exact 4096/4096. PASS.
+#   APPLES BASELINE (same binary, same pod): W10 gemm_w10 MODE4 NST=2 @4096 = 70.7 TFLOP/s,
+#     2 CTA/SM, 6.10x, rel_rms 0 — the frontier re-confirmed exactly on this pod.
+#
+#   NSTG SWEEP (all NSTG>=2 BIT-EXACT rel_rms 0.000e+00; gate before every perf number):
+#     NSTG  smem/CTA  CTA/SM  own@4096  ratio   vs W10 70.7
+#      1    96.0KB     2      FAIL(1.198e-2)  --  (degenerate: producer-ahead decode RACES the
+#                                                  consumer at depth 1 — proves the overlap is
+#                                                  REAL; not a valid config)
+#      2   128.0KB     1      51.9      8.36x   -26.6% REGRESSION
+#      3   160.0KB     1      51.9      8.37x   -26.6% REGRESSION
+#      4   192.0KB     1      51.6      8.29x   -27.0% REGRESSION
+#     confirm @2048 own 48.3 (7.16x) | @8192 own 54.6 (8.36x) — all 1 CTA/SM; deeper = flat.
+#
+#   THE EXACT WALL (closed-negative, deterministic): the gmma decode band is 32KB. W10 fits
+#     exactly ONE band at 96KB/CTA -> 2 CTA/SM (H100 228KB/SM: 2x96=192 fits, 2x128=256 does
+#     NOT). The SECOND band the overlap REQUIRES (NSTG=2) costs 32KB -> 128KB/CTA -> occupancy
+#     HALVES to 1 CTA/SM, and the ~26% occupancy loss SWAMPS the decode-hiding gain (51.9 vs
+#     70.7). 2 CTA/SM and decode/MMA overlap are MUTUALLY EXCLUSIVE for this 128x128 FP32-scratch
+#     TF32 kernel — the SAME wall W12 hit from the other side (W12 serializes to hold 2 CTA/SM;
+#     W13 overlaps but loses 2 CTA/SM). No NSTG both holds 2 CTA/SM and overlaps.
+#
+# === AXIS EXHAUSTED ===
+#   The TF32 async-pipeline-depth axis is CLOSED. W10 gemm_w10 (70.7, 6.09x, 2 CTA/SM, bit-exact)
+#   is the TF32 SUMMIT and is KEPT (no regression shipped). The ONLY remaining axis to close the
+#   6.09x gap is the PRECISION change (FP16/BF16 wgmma — doubles tensor-core throughput AND a
+#   16-bit gmma band is 16KB, potentially fitting 2 bands at 2 CTA/SM), a SEPARATE dtype campaign
+#   with its own non-bit-exact (FP16 accumulation) gate. RECOMMEND STOP on the TF32 perf axis.
+#   cuBLAS-TF32 = roofline throughout; no superiority claim.
+
+# ============================================================================
 # === UPDATE 2026-06-06 — W14 PRECISION AXIS: FP16/BF16 wgmma own-GEMM (NEW dtype sub-ladder)
 # ============================================================================
 # W14 (wgmma_f16_w14.cu): the user-opted-into SEPARATE dtype campaign opened after W13 closed
