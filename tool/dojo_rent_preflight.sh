@@ -417,6 +417,95 @@ dojo_recipe_advisory() {
     return "$rc"
 }
 
+# ── build-trap advisory: GLIBC base mismatch (DOJO-A2, handoff 4a7841fe) ──
+# dojo_glibc_advisory [--need MAJ.MIN] [--image IMG]
+# The prebuilt hexa toolchain is linked against a newer glibc than the stock
+# CUDA -devel base ships. Concretely (4a7841fe): the prebuilt binary needs
+# GLIBC_2.38, but nvidia/cuda:12.4.1-devel-ubuntu22.04 (and the runpod
+# pytorch ...ubuntu22.04 images) ship glibc 2.35 — so the install fails with
+# "version `GLIBC_2.38' not found". Ubuntu 24.04 ships glibc 2.39.
+# Detects the LIVE base glibc via `ldd --version` (when run on-pod) and/or
+# infers it from an ubuntu22.04 image tag, then advises a 24.04 base OR a
+# from-source build. Returns 0 (advisory) unless a hard mismatch is detected
+# on the LIVE host, in which case it returns 1 (a real, blocking gap).
+DOJO_GLIBC_NEED="2.38"   # prebuilt hexa toolchain min glibc (4a7841fe)
+# _dojo_glibc_lt A.B C.D → 0 (true) if A.B < C.D, else 1. Numeric major/minor.
+_dojo_glibc_lt() {
+    local a_maj="${1%%.*}" a_min="${1#*.}" b_maj="${2%%.*}" b_min="${2#*.}"
+    [ "$a_maj" -lt "$b_maj" ] 2>/dev/null && return 0
+    [ "$a_maj" -gt "$b_maj" ] 2>/dev/null && return 1
+    [ "$a_min" -lt "$b_min" ] 2>/dev/null && return 0
+    return 1
+}
+dojo_glibc_advisory() {
+    local need="$DOJO_GLIBC_NEED" image="" live=""
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --need)  need="$2"; shift 2 ;;
+            --image) image="$2"; shift 2 ;;
+            *) shift ;;
+        esac
+    done
+    local rc=0
+
+    # 1) LIVE detection (on-pod): ldd --version → "ldd (Ubuntu GLIBC 2.35-...) 2.35"
+    if command -v ldd >/dev/null 2>&1; then
+        live="$(ldd --version 2>/dev/null | head -1 | grep -oE '[0-9]+\.[0-9]+' | tail -1)"
+    fi
+    if [ -n "$live" ]; then
+        if _dojo_glibc_lt "$live" "$need"; then
+            _dojo_err "live base glibc is $live but the prebuilt hexa toolchain needs GLIBC_$need (4a7841fe) — installing the prebuilt here fails: \"version \`GLIBC_$need' not found\"" \
+                      "use an ubuntu24.04 CUDA base (glibc 2.39 — e.g. nvidia/cuda:12.4.1-devel-ubuntu24.04) OR build hexa FROM SOURCE on this pod so it links against the local glibc $live"
+            rc=1
+        else
+            _dojo_ok "live base glibc $live >= required GLIBC_$need — prebuilt hexa toolchain will load here"
+        fi
+    fi
+
+    # 2) STATIC inference from the image tag (pre-rental, no pod yet): the
+    # ubuntu22.04 family ships glibc 2.35 < 2.38, so flag it before deploy.
+    if [ -n "$image" ]; then
+        case "$image" in
+            *ubuntu22.04*|*ubuntu-22.04*|*ubuntu20.04*|*ubuntu18.04*)
+                _dojo_warn "image '$image' is an ubuntu22.04-or-older base (glibc <= 2.35) but the prebuilt hexa toolchain needs GLIBC_$need (4a7841fe) — the install will fail with \"GLIBC_$need not found\". RECOMMEND an ubuntu24.04 CUDA base (glibc 2.39, e.g. nvidia/cuda:12.4.1-devel-ubuntu24.04) OR build hexa from source on-pod"
+                ;;
+            *ubuntu24.04*|*ubuntu-24.04*)
+                _dojo_ok "image '$image' is ubuntu24.04 (glibc 2.39 >= GLIBC_$need) — prebuilt hexa toolchain installs cleanly"
+                ;;
+        esac
+    fi
+
+    if [ -z "$live" ] && [ -z "$image" ]; then
+        _dojo_warn "dojo_glibc_advisory: no --image and no live ldd — pass --image <tag> pre-rental, or run on-pod to detect the base glibc (prebuilt hexa needs GLIBC_$need, 4a7841fe)"
+    fi
+    return "$rc"
+}
+
+# ── build-trap advisory: Stage-1 transpile stack SIGKILL (DOJO-A3, d751e2c4) ─
+# dojo_stack_advisory  — emit the guidance + the exact command to RAISE the
+# stack ulimit before invoking tool/stage_build_hexa.
+# A large main_expanded.hexa drives the Stage-1 transpiler into deep recursion
+# that overruns the default 8 MB stack (ulimit -s 8192) → the process is
+# SIGKILLed mid-transpile (d751e2c4), looking like a crash with no diagnostic.
+# Raising the soft stack limit (or unlimited, where permitted) before the build
+# lets the large-main transpile complete. This is ADVISORY (always returns 0);
+# the caller should run the printed `ulimit -s` BEFORE tool/stage_build_hexa.
+DOJO_STACK_REC_KB="65536"   # 64 MB soft stack — clears the deep-recursion SIGKILL (d751e2c4)
+dojo_stack_advisory() {
+    local cur
+    cur="$(ulimit -s 2>/dev/null)"
+    if [ "$cur" = "unlimited" ]; then
+        _dojo_ok "stack ulimit is already unlimited — Stage-1 transpile of a large main_expanded.hexa won't be SIGKILLed (d751e2c4)"
+        return 0
+    fi
+    if [ -n "$cur" ] && [ "$cur" -ge "$DOJO_STACK_REC_KB" ] 2>/dev/null; then
+        _dojo_ok "stack ulimit is ${cur} KB (>= ${DOJO_STACK_REC_KB} KB) — large Stage-1 transpile has headroom (d751e2c4)"
+        return 0
+    fi
+    _dojo_warn "stack ulimit is ${cur:-unknown} KB (default ~8192 KB) — a large main_expanded.hexa SIGKILLs the Stage-1 transpiler at this limit (d751e2c4: deep recursion overruns the 8 MB stack, killed mid-transpile with no diagnostic). RAISE it BEFORE tool/stage_build_hexa: run \`ulimit -s ${DOJO_STACK_REC_KB}\` (or \`ulimit -s unlimited\` where the shell permits) in the SAME shell, then invoke the build"
+    return 0
+}
+
 # ── fix #6: torchrun launch with log harvest ─────────────────────────────
 # dojo_torchrun_cmd <nproc> <script> [args...] → echoes a torchrun command
 # that DEFAULTS --tee 3 + --redirect 3 --log-dir, so per-rank stdout/stderr
@@ -593,7 +682,39 @@ _dojo_self_test() {
         printf '  [ok] recipe g82 regime hint names BOTH levers (weight-reuse GEMM + fusion-fill)\n'
     else printf '  [FAIL] recipe g82 regime hint missing a lever\n'; fail=1; fi
 
-    if [ "$fail" = "0" ]; then printf '== ALL 6 FIXES + RECIPE ADVISORY VERIFIED (pure logic) ==\n'; else printf '== SELF-TEST FAILED ==\n'; fi
+    # ── build-trap advisory: GLIBC base mismatch (DOJO-A2, 4a7841fe) ──
+    # static inference: an ubuntu22.04 image (glibc 2.35) must WARN about
+    # the GLIBC_2.38 prebuilt-toolchain requirement (advisory, returns 0).
+    local advg; advg=$(dojo_glibc_advisory --image "runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04" 2>&1)
+    if printf '%s' "$advg" | grep -q 'GLIBC_2.38' && printf '%s' "$advg" | grep -qi 'ubuntu24.04'; then
+        printf '  [ok] A2 glibc advisory flags ubuntu22.04 (glibc 2.35) vs GLIBC_2.38, recommends 24.04\n'
+    else printf '  [FAIL] A2 glibc advisory missing 22.04-vs-2.38 mismatch / 24.04 rec\n'; fail=1; fi
+    # an ubuntu24.04 image (glibc 2.39) must NOT flag a mismatch (OK line).
+    local advg2; advg2=$(dojo_glibc_advisory --image "nvidia/cuda:12.4.1-devel-ubuntu24.04" 2>&1)
+    if printf '%s' "$advg2" | grep -qi 'ubuntu24.04' && printf '%s' "$advg2" | grep -q '✓'; then
+        printf '  [ok] A2 glibc advisory clears ubuntu24.04 (glibc 2.39 >= 2.38)\n'
+    else printf '  [FAIL] A2 glibc advisory should clear ubuntu24.04\n'; fail=1; fi
+    # numeric comparator: 2.35 < 2.38 (true), 2.39 < 2.38 (false).
+    if _dojo_glibc_lt 2.35 2.38 && ! _dojo_glibc_lt 2.39 2.38; then
+        printf '  [ok] A2 _dojo_glibc_lt orders 2.35<2.38 and 2.39>=2.38\n'
+    else printf '  [FAIL] A2 _dojo_glibc_lt mis-orders glibc versions\n'; fail=1; fi
+
+    # ── build-trap advisory: Stage-1 transpile stack SIGKILL (DOJO-A3, d751e2c4) ─
+    # the advisory must name the raise-before-build command + the d751e2c4 cite.
+    local advs; advs=$(dojo_stack_advisory 2>&1)
+    if printf '%s' "$advs" | grep -q 'd751e2c4'; then
+        printf '  [ok] A3 stack advisory cites d751e2c4 (Stage-1 SIGKILL)\n'
+    else printf '  [FAIL] A3 stack advisory missing d751e2c4 cite\n'; fail=1; fi
+    # at the default 8 MB stack it must WARN and print the `ulimit -s` raise.
+    if ( ulimit -S -s 8192 2>/dev/null; dojo_stack_advisory 2>&1 ) | grep -q 'ulimit -s 65536'; then
+        printf '  [ok] A3 stack advisory warns at 8 MB + prints `ulimit -s 65536` raise\n'
+    else printf '  [FAIL] A3 stack advisory missing ulimit raise at 8 MB default\n'; fail=1; fi
+    # always advisory (returns 0) — it never blocks the build itself.
+    if dojo_stack_advisory >/dev/null 2>&1; then
+        printf '  [ok] A3 stack advisory is non-blocking (returns 0)\n'
+    else printf '  [FAIL] A3 stack advisory should be advisory (return 0)\n'; fail=1; fi
+
+    if [ "$fail" = "0" ]; then printf '== ALL 6 FIXES + RECIPE + A2/A3 BUILD-TRAP ADVISORIES VERIFIED (pure logic) ==\n'; else printf '== SELF-TEST FAILED ==\n'; fi
     return "$fail"
 }
 
