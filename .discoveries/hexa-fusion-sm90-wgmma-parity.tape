@@ -132,3 +132,43 @@
 #   land that (or emit into shared at it) — the CUTLASS GMMA::Layout derivation with the
 #   on-pod-measured constant. Frontier kernel UNTIL W10 = W8 gemm_ws_tma (66.9, 6.41x, 2 CTA/SM,
 #   bit-exact). cuBLAS=roofline, no superiority claim.
+
+# ============================================================================
+# === UPDATE 2026-06-06 — W10 COMPOSED-DECODE = BIG-PROGRESS LIFT (beats W8)
+# ============================================================================
+# W10 (gemm_w10, MODE 4 of wgmma_tf32_w10.cu): compose the SWIZZLE_128B law with gmma_phys
+#   so the consumer reads the swizzled-TMA tile in wgmma order PERMUTE-FREE. H100 sm_90a,
+#   vast 39707146 DESTROYED leak 0, nvcc 12.6 driver 560.35.05. verdict F-...-W10.txt.
+#
+#   GROUND-TRUTH RE-MEASURE (MODE2 A-dump + MODE3 B-dump, unique-id, full 128x32 & 32x32 box):
+#     CORRECTED the W9 handoff — the FP32 SWIZZLE_128B law is the TEXTBOOK g XOR (r&7), NOT
+#     g XOR ((r+1)&7) (W9's (r+1)&7 was a partial-8-row-probe artifact). Row-preserving,
+#     atom-major. A: granule pg holds global (pg XOR pr); B (contig=N): same on the N-granule.
+#
+#   COMPOSED DECODE (proven bit-exact): read gmma_phys(m,k) FROM swizzled slot
+#     A: atom*256 + (m&7)*32 + ((k>>2)^(m&7))*4 + (k&3)
+#     B: atomN*1024 + k*32 + ((nn>>2)^(k&7))*4 + (nn&3)
+#   A pure index composition (no transpose, no Braw row-major scratch). SWIZZLE_128B TMA lands
+#   A/B directly; one indexed shared->shared copy emits the gmma INTER band; wgmma reads it.
+#
+#   SINGLE-TILE GATES (the W10 GATE, before any big run, g5): MODE0 pure decode rel_rms 0.000e+00
+#     exact 4096/4096; MODE1 composed-decode->wgmma rel_rms 0.000e+00 exact 4096/4096. PASS.
+#
+#   FULL GEMM (gemm_w10): KEY = gmma scratch is a SINGLE shared buffer (NOT NST-ring-staged) ->
+#     smem 131KB->98KB/CTA -> 2 CTA/SM restored (was 1). NST=2, all rel_rms 0.000e+00:
+#       S=2048 own 64.4 cuBLAS 344.9 ratio 5.35x
+#       S=4096 own 70.7 cuBLAS 430.8 ratio 6.09x  ★ (stable 70.7-70.9 x3)
+#       S=8192 own 75.5 cuBLAS 445.1 ratio 5.90x
+#     APPLES same-pod S=4096: W8 66.9 (6.43x) -> W10 70.7 (6.09x) = +5.7%, ~6.3% of gap closed.
+#
+#   IN-PLACE swizzle-descriptor (gemm_w10_inplace, MODE5) = CLOSED-NEGATIVE: the wgmma HW
+#     swizzle-mode-1 descriptor does NOT decode the atom-major SWIZZLE_128B TMA tile (floor
+#     1.392 across ~40 lbo/sbo/boff; lbo inert) = a 3rd interaction (HW de-swizzle core layout
+#     != TMA atom stacking). Software composed decode required; in-place path RULED OUT.
+#
+# === NAMED RESIDUAL (W11, next-cycle) ===
+#   The W10 decode is still a software shared->shared index copy per K-slab (the ~5.7% lift).
+#   Remaining 6.09x to parity = (a) the decode copy (HW in-place RULED OUT; needs a wgmma operand
+#   layout matching the TMA atom stacking directly), + (b) deeper warp-spec multi-stage pipeline
+#   (NST>2 currently regresses occupancy). Frontier kernel = W10 gemm_w10 (70.7, 6.09x, 2 CTA/SM,
+#   bit-exact). cuBLAS=roofline, no superiority claim.

@@ -1,0 +1,99 @@
+F-FUSION-SM90-WGMMA-W10 — composed swizzle-decode permute-free own-GEMM on native sm_90a
+=============================================================================================
+verdict-tier: 🟢 NUMERICAL (bit-exact rel_rms 0) + BIG-PROGRESS LIFT over the W8 frontier.
+              The W10 COMPOSED DECODE (compose the FP32 SWIZZLE_128B law with the GMMA INTER
+              8x4 core packing) is BIT-EXACT (single-tile rel_rms 0 GATES + full-GEMM rel_rms
+              0 @2048/4096/8192) AND BEATS the W8 66.9 frontier permute-free at full 2 CTA/SM
+              occupancy: own 70.7 TFLOP/s @S=4096 (+5.7% over W8 same-pod 66.9), ratio 6.43x
+              -> 6.09x. PARITY=NO (cuBLAS=roofline, no superiority claim). The in-place wgmma
+              swizzle-descriptor path is a CLOSED-NEGATIVE (a genuine 3rd interaction).
+date: 2026-06-06
+GPU: NVIDIA H100 80GB HBM3, compute_cap 9.0, driver 560.35.05
+     (vast pod 39707146, ssh3.vast.ai, DESTROYED immediately after capture — leak 0)
+toolchain: nvcc 12.6 (V12.6.77), -O3 -arch=sm_90a -lcublas -lcuda
+kernel: self/native/wgmma/wgmma_tf32_w10.cu (gemm_w10 = MODE 4 composed-decode GEMM;
+        gemm_w10_inplace = MODE 5 in-place swizzle-descriptor, CLOSED-NEG)
+
+================= THE W9 RESIDUAL W10 ATTACKED =================
+W9 (F-FUSION-SM90-WGMMA-W9, #2844): SWIZZLE_128B TMA removes the W8 per-K-step cooperative
+permute (SASS 28 STS -> 0, occupancy 2 CTA/SM preserved) but the naive linear-swizzle wgmma
+descriptor FAILED rel_rms (floor 1.392, ~100 configs) because the descriptor<->layout mapping
+is a TWO-LAYER permutation a single linear lbo/sbo cannot express. W9 measured (on a partial
+8-row probe) the swizzle as g XOR ((r+1)&7) and handed it off. W10 GOAL: compose the measured
+swizzle with gmma_phys so the consumer reads the swizzled tile in wgmma order permute-free.
+
+================= GROUND-TRUTH RE-MEASUREMENT (W10 MODE 2/3 dumps) =================
+A direct shared dump of the FULL 128x32 A box (MODE 2) AND the 32(N)x32(K) B box (MODE 3),
+unique-id global, on THIS GPU, MEASURED the true landed layout — and CORRECTED the W9 handoff:
+  A box{32(K),128(M)} (contiguous=K): phys row pr holds logical m=atom*8+pr (row-preserving,
+    atom-major stacking); within a row, granule pg holds global k-granule (pg XOR pr). MASK=pr.
+  B box{32(N),32(K)} (contiguous=N): phys row pr holds logical k=pr; within a row, N-granule
+    pg holds global n-granule (pg XOR pr). MASK=pr.
+  => the FP32 SWIZZLE_128B law is the TEXTBOOK g_phys = g XOR (r&7), NOT g XOR ((r+1)&7).
+     (The W9 (r+1)&7 was a partial-probe / 8-row-window artifact.) This is the whole wall —
+     same shape as the W2 swizzle-solve (one constant was the whole dead end).
+
+================= THE COMPOSED DECODE (the W10 fix) =================
+final(m,k) reads gmma INTER slot gmma_phys(m,k) FROM swizzled physical slot
+  A: atom*256 + (m&7)*32 + ((k>>2) XOR (m&7))*4 + (k&3)
+  B: atomN*(32*32) + k*32 + ((n_in_atom>>2) XOR (k&7))*4 + (n_in_atom&3)
+A pure INDEX composition (no transpose, no row-major Braw scratch). The SWIZZLE_128B TMA lands
+A/B directly; one indexed shared->shared copy emits the gmma INTER band; wgmma reads that band.
+
+================= SINGLE-TILE GATES — PASS (the W10 GATE, BEFORE any big run, g5) =================
+  GATE 1 (MODE 0, pure composed decode 128x32):   exact 4096/4096   rel_rms 0.000e+00  PASS
+  GATE 2 (MODE 1, composed decode -> wgmma m64n64k8): exact 4096/4096 rel_rms 0.000e+00 PASS
+  => the two-layer permute (the W9 wall) IS expressible as a pure index composition. The big
+     run was NOT started until both single-tile gates were rel_rms 0 (g5 honored).
+
+================= FULL GEMM — BIT-EXACT (gate) + PERF (lifts the frontier) =================
+  gemm_w10 (MODE 4): TM=128 TN=128 TKSW=32, 256 thr = 2 consumer WG + 1 elected TMA producer.
+  KEY occupancy fix: the gmma decode scratch is a SINGLE shared buffer (NOT NST-ring-staged) —
+  decoded fresh each K-slab. smem 131KB -> 98KB/CTA -> 2 CTA/SM restored (was 1, the bottleneck).
+  Same pod, NST=2, all rel_rms 0.000e+00 (full bit-exact gate PASS):
+    S=2048  own 64.4  cuBLAS-TF32 344.9  ratio 5.35x
+    S=4096  own 70.7  cuBLAS-TF32 430.8  ratio 6.09x   ★ W10 frontier (stable 70.7-70.9 x3)
+    S=8192  own 75.5  cuBLAS-TF32 445.1  ratio 5.90x
+  APPLES (same pod, S=4096): W8 MODE4 gemm_ws_tma own 66.9 ratio 6.43x | W10 own 70.7 ratio 6.09x.
+
+================= IN-PLACE SWIZZLE-DESCRIPTOR — CLOSED-NEGATIVE (a 3rd interaction) =================
+  gemm_w10_inplace (MODE 5): point the wgmma swizzle-mode-1 descriptor AT the swizzled tile
+  (no decode buffer -> 64KB/CTA, would give 3+ CTA/SM) and let the wgmma HW de-swizzle. Swept
+  ~40 (lbo in {16,128,256,1024} x sbo in {16,32,128,256,512,1024} x boff in 0..7): rel_rms
+  FLOOR 1.392 (lbo INERT, sbo/boff weakly vary), identical to the W9 wall. DETERMINISTICALLY
+  RULED OUT: the wgmma HW swizzle descriptor's expected within-swizzle CORE layout does NOT
+  coincide with the atom-major SWIZZLE_128B TMA stacking — a genuine THIRD interaction the
+  composed-decode path side-steps by decoding in software. The composed decode is the frontier.
+
+================= HEADLINE =================
+  composed decode bit-exact:    YES (single-tile rel_rms 0 x2 GATES + full-GEMM rel_rms 0)
+  single-tile rel_rms:          0.000e+00 (MODE 0 decode AND MODE 1 composed-wgmma)
+  full-GEMM rel-RMS:            0.000e+00 (S=2048, 4096, 8192)
+  own GFLOP/s:                  66.5 (W8) -> 70.7 TFLOP/s @S=4096 (75.5 @8192)  [+5.7% over W8]
+  cuBLAS-TF32 GFLOP/s:          430.8 (S=4096) — roofline
+  ratio vs cuBLAS:              6.43x (W8) -> 6.09x (W10)  [permute-free + full occupancy]
+  % of 6.44x gap closed (W10):  ~6.3% of the remaining W8 gap (5.43x -> 5.09x off parity)
+  occupancy:                    2 CTA/SM (512 compute-thr/SM) — preserved/restored
+  PARITY (<=1.3x):              NO
+  pod destroyed:                YES (39707146, leak 0)
+
+================= FINDING (BIG-PROGRESS LIFT + named residual + closed-negative sub-axis) =================
+  Pre-registered falsifier (the W9 residual): "composing the MEASURED swizzle law with gmma_phys
+  yields a PERMUTE-FREE bit-exact swizzled-TMA own-GEMM that BEATS the W8 66.5 frontier."
+  MEASURED: CONFIRMED. (1) The composed law is bit-exact (single-tile rel_rms 0 GATES then
+  full-GEMM rel_rms 0). (2) It LIFTS the frontier: 66.9 -> 70.7 TFLOP/s same-pod (+5.7%), gap
+  6.43x -> 6.09x, at full 2 CTA/SM occupancy. The honest real number is 70.7 @S=4096 (75.5 @8192).
+  CORRECTED SUB-FINDING: the FP32 SWIZZLE_128B law is the TEXTBOOK g XOR (r&7) (the W9 (r+1)&7
+  was a partial-probe artifact); the W9 wall was NOT the swizzle law but the SECOND layer (the
+  gmma INTER core packing) — composing the two in software closes it.
+  CLOSED-NEGATIVE SUB-AXIS (ruled out, do not re-attempt): the IN-PLACE wgmma HW swizzle
+  descriptor does NOT decode the atom-major SWIZZLE_128B TMA tile (floor 1.392, ~40 configs) —
+  a 3rd interaction (HW de-swizzle core layout != TMA atom stacking). Software composed decode
+  is required; the in-place path is dead.
+  NAMED RESIDUAL (W11, next-cycle): the W10 decode is still a software shared->shared index copy
+  (one per K-slab, ~5.7% lift). The remaining 6.09x to parity is now (a) the decode copy itself
+  (eliminable only via the HW in-place path, which is RULED OUT, OR via a wgmma operand layout
+  that matches the TMA atom stacking directly), and (b) the deeper warp-spec TMA multi-stage
+  pipeline (NST>2 currently regresses occupancy — needs the smaller in-place tile to go deeper).
+  cuBLAS = roofline, NO superiority claim. The own-GEMM is provably CORRECT and now the fastest
+  bit-exact native-sm_90a own-GEMM in the ladder (70.7, beats W8 66.5).
