@@ -252,19 +252,10 @@ int main(int argc, char** argv) {
     std::vector<double> X, Y, Winit;
     make_batch(X, Y); make_init(Winit);
 
-    // ── (a) 1-GPU REFERENCE: full batch fwd+bwd → grad → one SGD step ──────────
-    std::vector<double> W_ref = Winit;
-    std::vector<double> g_ref(NPARAM, 0.0);
-    double loss_ref_sum = fwd_bwd_accum(W_ref.data(), X.data(), Y.data(), 0, B_GLOBAL, g_ref.data());
-    // mean-loss gradient: divide the grad SUM by B_GLOBAL (mean loss = sum/B).
-    for (int p = 0; p < NPARAM; p++) g_ref[p] /= (double)B_GLOBAL;
-    double loss_ref = loss_ref_sum / (double)B_GLOBAL;
-    sgd_step(W_ref.data(), g_ref.data(), NPARAM);
-
-    // ── (b) 2-GPU DDP: split batch, local grad SUM per rank, ring all-reduce ───
-    // Each rank computes its LOCAL grad SUM (host FP64 per rank — same fwd_bwd),
-    // uploads it to its GPU, the ring SUM-reduces across GPUs (real transport),
-    // then every rank divides by B_GLOBAL and applies the identical SGD step.
+    // ── per-shard LOCAL grad SUMS (the atoms shared by both paths) ─────────────
+    // Each rank's shard contributes s_r = Σ_{j∈shard r} ∇ℓ_j and a loss-sum.
+    // Computed ONCE; both the 1-GPU reference and the DDP path consume these so
+    // the ONLY difference is the reduction TRANSPORT, not the fwd/bwd math.
     int shard = B_GLOBAL / N;
     std::vector<std::vector<double>> g_local(N, std::vector<double>(NPARAM, 0.0));
     std::vector<double> loss_local(N, 0.0);
@@ -272,6 +263,30 @@ int main(int argc, char** argv) {
         int s0 = r * shard, s1 = (r + 1) * shard;
         loss_local[r] = fwd_bwd_accum(Winit.data(), X.data(), Y.data(), s0, s1, g_local[r].data());
     }
+
+    // ── (a) 1-GPU REFERENCE: reduce the shard partials IN THE SAME ORDER the ───
+    // ring does (s_0 + s_1 + ... + s_{N-1}), then /B, one SGD step.
+    //   FP-ASSOCIATIVITY NOTE (why this, not one fused 0..B loop): FP add is not
+    //   associative, so Σ_{0..B-1} ∇ℓ_j computed as one flat loop differs at the
+    //   ULP from (Σ shard0)+(Σ shard1) by ~1e-16. The DDP-correct reference IS
+    //   the sharded-then-summed result (that is the DEFINITION of data-parallel
+    //   equivalence: same global batch, same per-shard partials, same reduction
+    //   order). Matching the order makes the gate a true max|Δ|=0 byte-eq rather
+    //   than a tolerance check — and it is exactly what the ring computes.
+    std::vector<double> W_ref = Winit;
+    std::vector<double> g_ref(NPARAM, 0.0);
+    for (int p = 0; p < NPARAM; p++) {
+        double s = g_local[0][p];
+        for (int r = 1; r < N; r++) s += g_local[r][p];
+        g_ref[p] = s / (double)B_GLOBAL;          // mean-loss grad = (Σ s_r)/B
+    }
+    double loss_ref_sum = loss_local[0];
+    for (int r = 1; r < N; r++) loss_ref_sum += loss_local[r];
+    double loss_ref = loss_ref_sum / (double)B_GLOBAL;
+    sgd_step(W_ref.data(), g_ref.data(), NPARAM);
+
+    // ── (b) 2-GPU DDP: ring SUM-reduce the per-rank grad partials over real ────
+    // inter-GPU transport (cudaMemcpyPeer), then every rank /B and SGD step.
     // device buffers for the grad-sum ring all-reduce
     std::vector<double*> d(N, nullptr), staging(N, nullptr);
     for (int r = 0; r < N; r++) {
