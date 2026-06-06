@@ -377,6 +377,163 @@ __global__ void k_moe_conv_gemm(const float* __restrict__ X,
     }
 }
 
+/* ── GEMM-conv DOUBLE-BUFFERED (G): the PROD-PERF lever (cp.async multi-stage) ──
+ *
+ * Path (E) k_moe_conv_gemm is register-tiled (BM-fold weight reuse) and byte-eq,
+ * but its K-loop is SERIAL: stage Xs+Ws (global→smem) → __syncthreads → register
+ * MAC → __syncthreads → next chunk. The two HBM-load phases (Xs and Ws) BLOCK the
+ * MAC: every CTA stalls on global latency before each chunk's compute. On H100 the
+ * fix is the same lever the own-GEMM ladder used — cp.async (`cp.async.cg.shared`)
+ * + a multi-stage smem RING so the NEXT chunk's loads are IN FLIGHT while THIS
+ * chunk's MAC runs. Load latency is hidden behind compute → the weight-bandwidth
+ * stream (the OG-FUSE-OPT-pinned wall) is consumed without the per-chunk stall.
+ *
+ * STAGES smem buffers (a ring). Steady state: issue cp.async for chunk (i+STAGES-1),
+ * cp.async.wait_group to the stage that's about to be consumed, MAC chunk i. The
+ * MAC reads from buffer (i % STAGES); loads land into ((i+STAGES-1) % STAGES).
+ *
+ * BYTE-EQ CONTRACT (g5) — UNCHANGED from (E): the MAC still visits ci ASCENDING
+ * (cb ascending across chunks, cl ascending within), k INNER. cp.async only moves
+ * WHEN bytes arrive in smem, NOT the arithmetic order — the register accumulation
+ * sequence is BIT-IDENTICAL to (E)/(A). Gate target: max|Δ|=0 vs ModuleList-30.
+ *
+ * cp.async requires sm_80+. The bytes copied per element = 4 (float). The
+ * causal-left-pad (p<0) and ci-tail (cl>=cw) zero-fill cannot use cp.async (it
+ * copies from global unconditionally), so those slots are zeroed by a plain store
+ * BEFORE the cp.async of the valid slots — identical smem contents to (E).
+ */
+#define GM_STAGES 3     /* smem ring depth (prefetch distance) */
+__device__ __forceinline__ void cp_async_f4(float* smem_dst, const float* gmem_src) {
+#if __CUDA_ARCH__ >= 800
+    unsigned s = (unsigned)__cvta_generic_to_shared(smem_dst);
+    asm volatile("cp.async.ca.shared.global [%0], [%1], 4;\n" :: "r"(s), "l"(gmem_src));
+#else
+    *smem_dst = *gmem_src;
+#endif
+}
+__device__ __forceinline__ void cp_async_commit() {
+#if __CUDA_ARCH__ >= 800
+    asm volatile("cp.async.commit_group;\n" ::: "memory");
+#endif
+}
+template<int N> __device__ __forceinline__ void cp_async_wait() {
+#if __CUDA_ARCH__ >= 800
+    asm volatile("cp.async.wait_group %0;\n" :: "n"(N) : "memory");
+#endif
+}
+__global__ void k_moe_conv_gemm_db(const float* __restrict__ X,
+                                   const float* __restrict__ W,
+                                   const float* __restrict__ b,
+                                   float* __restrict__ Y,
+                                   int E, int T, int d, int K, int dil) {
+    /* ring of STAGES buffers: each = Xs[WROWS][GM_BK] + Ws[K][GM_BK][GM_BN]. */
+    const int XS_ROWS = GM_BM + (GM_KMAX - 1) * 1;     /* dil==1 sizing (host-checked) */
+    __shared__ float Xs[GM_STAGES][GM_BM + (GM_KMAX - 1) * 1][GM_BK];
+    __shared__ float Ws[GM_STAGES][GM_KMAX][GM_BK][GM_BN];
+
+    int e   = blockIdx.x;
+    int co0 = blockIdx.y * GM_BN;
+    int t0  = blockIdx.z * GM_BM;
+
+    int tid = threadIdx.x;
+    int tn  = tid % (GM_BN / GM_TN);
+    int tm  = tid / (GM_BN / GM_TN);
+
+    int wrows = GM_BM + (K - 1) * dil;
+    int wbase = t0 - (K - 1) * dil;
+
+    const float* We = W + (size_t)e * d * d * K;
+    const float* be = b + (size_t)e * d;
+
+    float acc[GM_TM][GM_TN];
+    #pragma unroll
+    for (int im = 0; im < GM_TM; ++im)
+        #pragma unroll
+        for (int in = 0; in < GM_TN; ++in) {
+            int co = co0 + tn * GM_TN + in;
+            acc[im][in] = (co < d) ? be[co] : 0.0f;
+        }
+
+    int nchunks = (d + GM_BK - 1) / GM_BK;
+
+    /* stage a chunk's Xs+Ws into ring buffer `buf` via cp.async (zero-fill the
+     * invalid slots first with a plain store — IDENTICAL smem to path E). */
+    auto stage_chunk = [&](int chunk, int buf) {
+        int cb = chunk * GM_BK;
+        int cw = (cb + GM_BK <= d) ? GM_BK : (d - cb);
+        /* Xs[wrows][GM_BK] */
+        for (int idx = tid; idx < XS_ROWS * GM_BK; idx += blockDim.x) {
+            int r  = idx / GM_BK;
+            int cl = idx % GM_BK;
+            int p  = wbase + r;
+            bool valid = (r < wrows && cl < cw && p >= 0 && p < T);
+            if (valid) cp_async_f4(&Xs[buf][r][cl], &X[(size_t)p * d + (cb + cl)]);
+            else       Xs[buf][r][cl] = 0.0f;
+        }
+        /* Ws[K][GM_BK][GM_BN] */
+        for (int idx = tid; idx < K * GM_BK * GM_BN; idx += blockDim.x) {
+            int kk = idx / (GM_BK * GM_BN);
+            int rem = idx % (GM_BK * GM_BN);
+            int cl = rem / GM_BN;
+            int nn = rem % GM_BN;
+            int co = co0 + nn;
+            bool valid = (cl < cw && co < d);
+            if (valid) cp_async_f4(&Ws[buf][kk][cl][nn],
+                                   &We[(size_t)co * d * K + (size_t)(cb + cl) * K + kk]);
+            else       Ws[buf][kk][cl][nn] = 0.0f;
+        }
+        cp_async_commit();
+    };
+
+    /* prologue: kick off the first (STAGES-1) chunks' loads. */
+    int prefetch = (GM_STAGES - 1 < nchunks) ? (GM_STAGES - 1) : nchunks;
+    #pragma unroll 1
+    for (int s = 0; s < prefetch; ++s) stage_chunk(s, s);
+
+    /* steady-state: consume chunk i from buffer (i%STAGES); the (STAGES-1) loads
+     * ahead are in flight. After committing chunk i+STAGES-1's loads, wait until
+     * only (STAGES-1) groups remain → buffer (i%STAGES) is fully arrived. */
+    for (int i = 0; i < nchunks; ++i) {
+        int load = i + (GM_STAGES - 1);
+        if (load < nchunks) stage_chunk(load, load % GM_STAGES);
+        cp_async_wait<GM_STAGES - 1>();
+        __syncthreads();
+
+        int buf = i % GM_STAGES;
+        int cb  = i * GM_BK;
+        int cw  = (cb + GM_BK <= d) ? GM_BK : (d - cb);
+        for (int cl = 0; cl < cw; ++cl) {
+            #pragma unroll
+            for (int im = 0; im < GM_TM; ++im) {
+                int t = t0 + tm * GM_TM + im;
+                if (t >= T) continue;
+                #pragma unroll
+                for (int in = 0; in < GM_TN; ++in) {
+                    float a = acc[im][in];
+                    for (int k = 0; k < K; ++k) {
+                        int p  = t - dil * (K - 1 - k);
+                        int sr = p - wbase;
+                        if (sr >= 0) a += Ws[buf][k][cl][tn * GM_TN + in] * Xs[buf][sr][cl];
+                    }
+                    acc[im][in] = a;
+                }
+            }
+        }
+        __syncthreads();   /* protect buf before the ring reuses it */
+    }
+
+    #pragma unroll
+    for (int im = 0; im < GM_TM; ++im) {
+        int t = t0 + tm * GM_TM + im;
+        if (t >= T) continue;
+        #pragma unroll
+        for (int in = 0; in < GM_TN; ++in) {
+            int co = co0 + tn * GM_TN + in;
+            if (co < d) Y[((size_t)e * T + t) * d + co] = acc[im][in];
+        }
+    }
+}
+
 /* ── ModuleList-30 path (A): per-expert launch.
  * IDENTICAL math to the fused kernel, but ONE expert per launch → grid is
  * E× smaller per launch → each launch under-fills. grid = (⌈d/CO⌉, ⌈T/TT⌉).
@@ -630,7 +787,8 @@ static int run_gate(int E, int d, int T, int K, int dil) {
     float* hY_mlist = (float*)malloc(nY * sizeof(float));
     float* hY_tiled = (float*)malloc(nY * sizeof(float));
     float* hY_gemm  = (float*)malloc(nY * sizeof(float));
-    if (!hY_fused || !hY_mlist || !hY_tiled || !hY_gemm) { fprintf(stderr,"[T] gate buf malloc failed\n"); return 2; }
+    float* hY_gdb   = (float*)malloc(nY * sizeof(float));
+    if (!hY_fused || !hY_mlist || !hY_tiled || !hY_gemm || !hY_gdb) { fprintf(stderr,"[T] gate buf malloc failed\n"); return 2; }
 
     /* smem bytes for the tiled kernel: wrows·CI_TILE floats. */
     int g_wrows = TT_TILE + (K - 1) * dil;
@@ -665,6 +823,14 @@ static int run_gate(int E, int d, int T, int K, int dil) {
     CK(cudaMemcpy(hY_gemm, dY, nY * sizeof(float), cudaMemcpyDeviceToHost));
     double dmax_gemm_cpu = max_abs_diff(hY_ref, hY_gemm, nY);
     printf("[GATE-GEMM]    max|Δ| vs CPU = %.3e\n", dmax_gemm_cpu);
+
+    /* (G) GEMM-conv double-buffered (cp.async multi-stage) — PROD-PERF lever */
+    CK(cudaMemset(dY, 0, nY * sizeof(float)));
+    { k_moe_conv_gemm_db<<<gemm_grid, gemm_blk>>>(dX, dW, dB, dY, E, T, d, K, dil);
+      CK(cudaGetLastError()); CK(cudaDeviceSynchronize()); }
+    CK(cudaMemcpy(hY_gdb, dY, nY * sizeof(float), cudaMemcpyDeviceToHost));
+    double dmax_gdb_cpu = max_abs_diff(hY_ref, hY_gdb, nY);
+    printf("[GATE-GEMM-DB] max|Δ| vs CPU = %.3e\n", dmax_gdb_cpu);
 
 #ifdef USE_CUBLAS
     /* (F) cuBLAS roofline — rel-RMS only (GEMM reorders ci sum, not byte-exact) */
@@ -710,14 +876,18 @@ static int run_gate(int E, int d, int T, int K, int dil) {
     double dmax_grp_vs_mlist   = max_abs_diff(hY_gpu,   hY_mlist, nY);
     double dmax_tiled_vs_mlist = max_abs_diff(hY_tiled, hY_mlist, nY);
     double dmax_gemm_vs_mlist  = max_abs_diff(hY_gemm,  hY_mlist, nY);
+    double dmax_gdb_vs_mlist   = max_abs_diff(hY_gdb,   hY_mlist, nY);
     printf("[GATE-DEV-EQ]  max|Δ|(fused vs ModuleList) = %.3e   max|Δ|(grouped vs ModuleList) = %.3e\n",
            dmax_fused_vs_mlist, dmax_grp_vs_mlist);
     printf("[GATE-DEV-EQ]  max|Δ|(TILED vs ModuleList) = %.3e  <= THE OG-FUSE-OPT CONTRACT (must be 0)\n",
            dmax_tiled_vs_mlist);
     printf("[GATE-DEV-EQ]  max|Δ|(GEMM  vs ModuleList) = %.3e  <= THE OG-FUSE-PROD-KERNEL CONTRACT (must be 0)\n",
            dmax_gemm_vs_mlist);
+    printf("[GATE-DEV-EQ]  max|Δ|(GEMM-DB vs ModuleList) = %.3e  <= THE PROD-PERF cp.async CONTRACT (must be 0)\n",
+           dmax_gdb_vs_mlist);
     int dev_eq_pass = (dmax_fused_vs_mlist == 0.0) && (dmax_grp_vs_mlist == 0.0)
-                      && (dmax_tiled_vs_mlist == 0.0) && (dmax_gemm_vs_mlist == 0.0);
+                      && (dmax_tiled_vs_mlist == 0.0) && (dmax_gemm_vs_mlist == 0.0)
+                      && (dmax_gdb_vs_mlist == 0.0);
 
     /* sub-gate (2): device-vs-CPU within fp32 FMA-contraction tolerance.
      * Bound: with |W|≤0.025, |X|≤1, d=192 taps → |y|≲5; fp32 eps≈1.2e-7 →
@@ -726,7 +896,7 @@ static int run_gate(int E, int d, int T, int K, int dil) {
     double FMA_TOL = 6e-6;
     int cpu_tol_pass = (dmax_fused_cpu <= FMA_TOL) && (dmax_mlist_cpu <= FMA_TOL)
                        && (dmax_grp_cpu <= FMA_TOL) && (dmax_tiled_cpu <= FMA_TOL)
-                       && (dmax_gemm_cpu <= FMA_TOL);
+                       && (dmax_gemm_cpu <= FMA_TOL) && (dmax_gdb_cpu <= FMA_TOL);
 
     int pass = dev_eq_pass && cpu_tol_pass;
     printf("# GATE (1) device-vs-device byte-exact (max|Δ|=0): %s\n", dev_eq_pass ? "PASS" : "FAIL");
@@ -734,7 +904,7 @@ static int run_gate(int E, int d, int T, int K, int dil) {
     printf("# GATE OVERALL => %s\n", pass ? "PASS" : "FAIL");
 
     cudaFree(dX); cudaFree(dW); cudaFree(dB); cudaFree(dY);
-    free(hX); free(hW); free(hB); free(hY_ref); free(hY_gpu); free(hY_fused); free(hY_mlist); free(hY_tiled); free(hY_gemm);
+    free(hX); free(hW); free(hB); free(hY_ref); free(hY_gpu); free(hY_fused); free(hY_mlist); free(hY_tiled); free(hY_gemm); free(hY_gdb);
     return pass ? 0 : 1;
 }
 
@@ -837,6 +1007,15 @@ int main(int argc, char** argv) {
     double dmax_gc = max_abs_diff(hY_a, hY_c, nY);
     printf("# perf-shape cross-check  max|Δ|(GEMM  vs ModuleList) = %.3e (expect 0)\n", dmax_gc);
     if (dmax_gc != 0.0) { printf("[T] perf-shape GEMM cross-check FAILED — abort.\n"); return 1; }
+
+    /* GEMM-conv-DB (G) perf-shape cross-check vs ModuleList — same byte-eq contract. */
+    CK(cudaMemset(dY, 0, nY * sizeof(float)));
+    { k_moe_conv_gemm_db<<<p_gemm_grid, p_gemm_blk>>>(dX, dW, dB, dY, E, T, d, K, dil);
+      CK(cudaGetLastError()); CK(cudaDeviceSynchronize()); }
+    CK(cudaMemcpy(hY_c, dY, nY * sizeof(float), cudaMemcpyDeviceToHost));
+    double dmax_gdbc = max_abs_diff(hY_a, hY_c, nY);
+    printf("# perf-shape cross-check  max|Δ|(GEMM-DB vs ModuleList) = %.3e (expect 0)\n", dmax_gdbc);
+    if (dmax_gdbc != 0.0) { printf("[T] perf-shape GEMM-DB cross-check FAILED — abort.\n"); return 1; }
 
     printf("\n# ── PERF (median of timed iters, cuEvent) ──\n");
     const int WARMUP = 3, ITERS = 20;
@@ -946,6 +1125,28 @@ int main(int argc, char** argv) {
                samp[ITERS/2], gemm_ctas, GM_BM, GM_BN, GM_BK);
     }
 
+    /* (G) GEMM-conv DOUBLE-BUFFERED — PROD-PERF lever: cp.async %d-stage smem ring
+     * hides the per-chunk weight/input HBM load latency behind the register MAC.
+     * Byte-identical to (E); aims to close the (E)→cuBLAS gap by removing the
+     * per-chunk global-load stall the OG-FUSE-OPT verdict pinned. */
+    if (!SKIP('G')) {
+        for (int w = 0; w < WARMUP; ++w)
+            k_moe_conv_gemm_db<<<p_gemm_grid, p_gemm_blk>>>(dX, dW, dB, dY, E, T, d, K, dil);
+        CK(cudaDeviceSynchronize());
+        for (int it = 0; it < ITERS; ++it) {
+            CK(cudaEventRecord(e0, 0));
+            k_moe_conv_gemm_db<<<p_gemm_grid, p_gemm_blk>>>(dX, dW, dB, dY, E, T, d, K, dil);
+            CK(cudaEventRecord(e1, 0));
+            CK(cudaEventSynchronize(e1));
+            float ms; CK(cudaEventElapsedTime(&ms, e0, e1));
+            samp[it] = ms;
+        }
+        qsort(samp, ITERS, sizeof(double), cmp_d);
+        int gemm_ctas = E * ((d + GM_BN - 1) / GM_BN) * ((T + GM_BM - 1) / GM_BM);
+        printf("[G] GEMM-CONV-DB   step = %.3f ms  (1 launch, %d CTAs, %dx%dx%d tile, cp.async %d-stage — PROD-PERF lever)\n",
+               samp[ITERS/2], gemm_ctas, GM_BM, GM_BN, GM_BK, GM_STAGES);
+    }
+
 #ifdef USE_CUBLAS
     /* (F) cuBLAS strided-batched GEMM — the ROOFLINE ceiling (vendor GEMM). */
     if (!SKIP('F')) {
@@ -983,7 +1184,7 @@ int main(int argc, char** argv) {
      * a background nvidia-smi sampler gets a clean utilization window. The script
      * wraps each with its own sampler → per-path util MEAN/PEAK captured inline. */
     const char* only = getenv("MOEFUSE_ONLY");
-    if (only && (only[0]=='A'||only[0]=='B'||only[0]=='C'||only[0]=='D'||only[0]=='E')) {
+    if (only && (only[0]=='A'||only[0]=='B'||only[0]=='C'||only[0]=='D'||only[0]=='E'||only[0]=='G')) {
         printf("# sustained loop path=%s (~2.5s) for util capture\n", only);
         dim3 gA(n_co_blk, n_tt_blk), gB(E), gC(E, n_co_blk, n_tt_blk), blk(CO_TILE);
         cudaEvent_t t0, t1; CK(cudaEventCreate(&t0)); CK(cudaEventCreate(&t1));
@@ -996,6 +1197,7 @@ int main(int argc, char** argv) {
                 else if (only[0]=='B') k_moe_conv_grouped<<<gB,blk>>>(dX, dW, dB, dY, E, T, d, K, dil);
                 else if (only[0]=='D') k_moe_conv_tiled<<<gC,blk,p_smem>>>(dX, dW, dB, dY, E, T, d, K, dil);
                 else if (only[0]=='E') k_moe_conv_gemm<<<p_gemm_grid,p_gemm_blk>>>(dX, dW, dB, dY, E, T, d, K, dil);
+                else if (only[0]=='G') k_moe_conv_gemm_db<<<p_gemm_grid,p_gemm_blk>>>(dX, dW, dB, dY, E, T, d, K, dil);
                 else k_moe_conv_fused<<<gC,blk>>>(dX, dW, dB, dY, E, T, d, K, dil);
                 reps++;
             }
