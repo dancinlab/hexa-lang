@@ -160,7 +160,12 @@ extern "C" __global__ void probe_a16(const __grid_constant__ CUtensorMap tmapA,
     __half* sm_raw=(__half*)smem_raw;
     __half* sm=sm_raw+PAD;
     int tid=threadIdx.x;
-    for(int i=tid;i<PAD;i+=blockDim.x){ sm_raw[i]=__float2half(0.f); sm_raw[PAD+TM*TK+2*(TK*TN)+i]=__float2half(0.f); }
+    // total f16 buffer = 2*PAD + data; data = Asw(TM*TK)+Bsw(TK*TN)+bar(4 f16). Upper pad base =
+    // PAD+DATA, must not exceed TOTAL. Zero lower pad fully; zero upper pad only what fits (W15).
+    const int DATA=TM*TK + TK*TN + 4;          // 1024+1024+4 f16
+    const int TOTAL=2*PAD + TM*TK + TK*TN + 8; // matches host smsz (in f16 elems)
+    for(int i=tid;i<PAD;i+=blockDim.x){ sm_raw[i]=__float2half(0.f); }
+    for(int i=PAD+DATA+tid;i<TOTAL;i+=blockDim.x){ sm_raw[i]=__float2half(0.f); }
     __syncthreads();
     __half* Asw=sm;                       // 64(M) x 16(K) gmma-laid = 1024 f16
     __half* Bsw=Asw + TM*TK;              // 64(N) x 16(K) gmma-laid = 1024 f16
