@@ -131,3 +131,114 @@ tile were compact/row-major. With `layout_type_=1`, `SBO=1024B`, 128B-aligned
 decode↔MMA overlap are no longer mutually exclusive (the contradiction that pinned
 W11–W14 dissolves).**
 
+### The single most load-bearing primary fact (CUTLASS Hopper tutorial, verbatim)
+
+The canonical CuTe Hopper example (`examples/cute/tutorial/hopper/wgmma_tma_sm90.cu`)
+makes the no-decode-copy path explicit in three lines:
+
+```cuda
+// build the SMEM layout WITH the 128B swizzle baked in:
+auto sA = tile_to_shape(GMMA::Layout_K_SW128_Atom<TA>{}, make_shape(bM,bK,bP));
+// build the TMA from THAT SAME swizzled layout — lands the tile in the swizzle wgmma wants:
+Copy_Atom tmaA = make_tma_atom(SM90_TMA_LOAD{}, mA, sA(_,_,0), make_shape(bM,bK));
+// consume directly — the comment in the file:  "there is no need for copy(tCsA, tCrA)"
+Tensor tCrA = thr_mma.make_fragment_A( thr_mma.partition_A(sA) );  // an MMA descriptor VIEWING sA
+```
+
+Because the **TMA box swizzle and the wgmma descriptor swizzle are the SAME
+`Layout_K_SW128_Atom` (`Swizzle<3,4,3>`) by construction**, the bytes the TMA lands ARE
+the bytes the descriptor addresses. The fragment is a *descriptor view of SMEM*, not a
+register/scratch copy. This is the architecture our own-GEMM must adopt; it is the inverse
+of "TMA-land → decode into a separate gmma-layout scratch → MMA."
+
+
+---
+
+## §2 — The canonical CUTLASS Hopper warp-specialized collective mainloop (architecture spec)
+
+This is the structure the rewrite must reproduce. All facts are from primary CUTLASS
+source (`sm90_mma_tma_gmma_ss_warpspecialized.hpp`, `sm90_gemm_tma_warpspecialized_pingpong.hpp`,
+the CuTe Hopper tutorial) + the NVIDIA "Efficient GEMM" doc; secondary corroboration from
+the PyTorch ping-pong deep-dive and the FA3 paper.
+
+### 2.1 Warpgroup roles (PRIMARY: `sm90_gemm_tma_warpspecialized_pingpong.hpp`)
+
+```c++
+enum class WarpGroupRole { Producer = 0, Consumer0 = 1, Consumer1 = 2 };
+```
+- **3 warpgroups, 384 threads/CTA.** 1 Producer warpgroup (issues ONLY TMA) +
+  2 Consumer warpgroups (issue ONLY `wgmma.mma_async`).
+- The producer DMA loop issues TMA with a single elected lane
+  (`lane_predicate = cute::elect_one_sync()`); the consumer MMA loop runs all 128 threads
+  per warpgroup and does `warpgroup_arrive() → cute::gemm(tiled_mma, tCrA, tCrB, accum) →
+  warpgroup_commit_batch() → warpgroup_wait<K_PIPE_MMAS>()`.
+
+### 2.2 Register asymmetry — `setmaxnreg` (PRIMARY: same kernel file)
+
+```c++
+LoadRegisterRequirement = !HeavyRegisterPressure ? 40  : 24;   // producer
+MmaRegisterRequirement  = !HeavyRegisterPressure ? 232 : 240;  // consumer
+cutlass::arch::warpgroup_reg_dealloc<LoadRegisterRequirement>();  // producer drops to 40
+cutlass::arch::warpgroup_reg_alloc <MmaRegisterRequirement>();    // consumer raises to 232
+```
+The producer is deliberately register-starved (40 regs — it only issues TMA) so the
+math-heavy consumers can hold 232 regs each (large accumulator tile + many in-flight
+MMAs). This asymmetry is what lifts occupancy/ILP from "tensor cores working" to
+"tensor cores never idle."
+
+### 2.3 The async mbarrier pipeline (PRIMARY: `sm90_mma_tma_gmma_ss_warpspecialized.hpp`)
+
+```
+K_PIPE_MAX = DispatchPolicy::Stages          // circular SMEM buffer depth
+producer:  producer_acquire(write) → TMA into stage → ++write → producer_tail(write)
+consumer:  consumer_try_wait(read) → consumer_wait(read) → wgmma → consumer_release(...)
+```
+Stages cycle modulo `DispatchPolicy::Stages`; depth is chosen to hide TMA latency
+(typically 3–8 stages on H100, bounded by SMEM). The producer and consumer never
+serialize — TMA(stage k+1) overlaps wgmma(stage k). The `K_PIPE_MMAS` constant keeps
+N GMMAs in flight before the consumer releases a stage.
+
+### 2.4 NO software copy post-TMA (PRIMARY: collective + tutorial)
+
+The collective **asserts `SmemCopyAtomA`/`SmemCopyAtomB` are `void`** — i.e. there is no
+SMEM→register staging copy. The fragments are descriptor views:
+```c++
+Tensor tCsA = thread_mma.partition_A(sA);            // partition the swizzled SMEM tile
+Tensor tCrA = thread_mma.make_fragment_A(tCsA);      // a GmmaDescriptor VIEWING sA — no copy
+// tutorial comment: "there is no need for copy(tCsA, tCrA)"
+```
+This is the §1 crux in the mainloop: the swizzled SMEM tile is consumed in place.
+
+### 2.5 SMEM layout atom + TMA box (PRIMARY: CuTe Hopper tutorial)
+
+```cuda
+auto sA = tile_to_shape(GMMA::Layout_K_SW128_Atom<TA>{}, make_shape(bM,bK,bP));  // SW128 baked in
+Copy_Atom tmaA = make_tma_atom(SM90_TMA_LOAD{}, mA, sA(_,_,0), make_shape(bM,bK));// same swizzle
+TiledMMA tiled_mma = make_tiled_mma(SM90_64x64x16_..._SS<GMMA::Major::K,GMMA::Major::K>{});
+```
+- `GMMA::Layout_K_SW128_Atom` = `Swizzle<3,4,3>` (for `half_t` a 64×8 atom; the atom tile
+  sizes must DIVIDE the SMEM shape `(bM,bK,bP)` — "a constraint on the SMEM shape caused by
+  the choice of swizzling mode").
+- The TMA box's inner contiguous dim ≤ 128 B with `CU_TENSOR_MAP_SWIZZLE_128B`, matching
+  the atom. **TMA-swizzle ≡ wgmma-descriptor-swizzle by construction**, which is exactly
+  why no decode-copy is needed.
+
+### 2.6 Persistent tile scheduler + ping-pong epilogue (PRIMARY: pingpong kernel)
+
+```c++
+while (work_tile_info.is_valid()) { mainloop.load(...); scheduler.advance_to_next_work(); }
+```
+One CTA lives for many output tiles (amortizes prologue). The two consumer warpgroups
+alternate via a `math_wg_order_barrier` so that while Consumer0 runs the epilogue,
+Consumer1 runs the mainloop MMA, and vice-versa — **tensor cores never idle during the
+epilogue.** TMA multicast across the thread-block cluster cuts redundant HBM traffic.
+
+### 2.7 The lever ladder (carried from PR #2846 litscan; relative jumps transfer to TF32)
+
+From the `cudaforfun` H100 worklog (SECONDARY but directly applicable): naive 32 → TMA+TC
+317 (10×) → 128×128 tiles 423 (+34%) → warp-spec 498 (+18%) → 128×256 + 2 consumers 631
+(+27%) → clustering 660 → raw-PTX barriers 704 → TMA multicast 734 → micro 764 (107% of
+its cuBLAS). The dominant compounding jumps are **bigger tiles + warp-spec + 2 consumers**
+(~2× before diminishing returns). Our 70.7 TF32 sits at the "TMA+TC working" rung — i.e.
+right before the big mainloop levers, AND gated on removing the decode-copy (§1) so those
+levers are not masked by a swizzle stall / occupancy cap.
