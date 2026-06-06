@@ -1,0 +1,107 @@
+F-FUSION-SM90-WGMMA-W9 — swizzled-TMA own-GEMM on native sm_90a (drop the per-K-step permute)
+=============================================================================================
+verdict-tier: 🟡 CLOSED-NEGATIVE (naive-swizzle path) + 🟢 mechanism CONFIRMED + frontier KEPT.
+              The SWIZZLE_128B TMA path ENCODES, LAUNCHES at full 2 CTA/SM occupancy, and
+              PROVABLY removes the per-K-step cooperative permute (SASS: 28 STS -> 0, one
+              __syncthreads dropped). BUT the swizzled-tile <-> wgmma-8x4-INTER descriptor
+              mapping does NOT bit-match the naive linear-swizzle descriptor: rel_rms floor
+              = 1.392 across ALL ~100 (lbo x sbo x kstep) descriptor configs -> GATE FAIL ->
+              NO perf number (g5). The exact swizzle LAW is now measured (recoverable next
+              step). W8 MODE 4 frontier (66.9 TFLOP/s, 6.41x) is KEPT — NO regression.
+              PARITY=NO. cuBLAS=roofline, no superiority claim.
+date: 2026-06-06
+GPU: NVIDIA H100 80GB HBM3, compute_cap 9.0, driver 560.35.03
+     (vast pod 39704602, ssh8.vast.ai, DESTROYED immediately after capture — leak 0)
+toolchain: nvcc 12.6 (V12.6.77), -O3 -arch=sm_90a -lcublas -lcuda
+kernel: self/native/wgmma/wgmma_tf32_warpspec.cu — MODE 5 = gemm_ws_tma_sw (NEW W9 kernel)
+
+================= THE W8 DIAGNOSIS W9 ATTACKED =================
+W8 (F-FUSION-SM90-WGMMA-W8): MODE 4 gemm_ws_tma lands the TMA tile in a GENERIC row-major
+layout (Araw/Braw), then ALL 256 threads COOPERATIVELY PERMUTE it into the gmma INTER 8x4
+layout EVERY K-step (+2 __syncthreads/K-step) — a cost cuBLAS never pays. W9 hypothesis:
+a SWIZZLED TMA descriptor (CU_TENSOR_MAP_SWIZZLE_128B) lands the tile ALREADY wgmma-readable,
+eliminating the permute + its syncs -> the residual 6.44x gap.
+
+================= W9 BUILD — SWIZZLED-TMA MODE 5 (gemm_ws_tma_sw) =================
+GEOMETRY: TM=128, TN=128, TKSW=32 (a 32-wide K slab = one 128B swizzle atom), 4 wgmma k8
+  sub-steps per slab. 256 thr = 2 consumer warpgroups (W8 occupancy geometry kept). The
+  swizzled TMA lands A (128x32) + B (4 side-by-side 32-N atoms) directly; NO permute scratch.
+RUNTIME-TUNABLE descriptor (swm, TKSW, lbo, sbo, kstep) so the swizzle<->8x4-INTER mapping
+  (the W8-named risk) could be swept WITHOUT recompiling.
+
+================= ENCODE CONSTRAINT DISCOVERED (closed sub-finding) =================
+cuTensorMapEncodeTiled with a swizzle REQUIRES the CONTIGUOUS box dim == swizzle atom width
+(128B = 32 f32 for SWIZZLE_128B). A (contiguous=K, box {32,128}) encodes; B (contiguous=N,
+box {128,32}) FAILS r=1 (INVALID_VALUE) because N=128 (512B) > the 128B atom. FIX (landed):
+B is loaded as NATOM=TN/TKSW=4 side-by-side 32-N swizzled atoms (box {32,32}); wgmma n64
+dB0->atoms{0,1}, dB1->atoms{2,3}. After the fix BOTH operands encode + the kernel launches.
+
+================= OCCUPANCY — PRESERVED (the W8 success proxy held) =================
+  gemm_ws_tma_sw (MODE 5): blk=256, dynsmem=65,568B -> 2 CTA/SM (512 compute-thr/SM) ✅
+  (Same 2 CTA/SM as W8 MODE 4 — the swizzled kernel did NOT regress occupancy.)
+
+================= PERMUTE-REMOVAL — CONFIRMED (the W9 mechanism, SASS evidence) =================
+  cuobjdump -sass, per-function:
+    gemm_ws_tma    (MODE 4): STS=28 (the cooperative Araw/Braw->gmma permute stores), BAR.SYNC=3
+    gemm_ws_tma_sw (MODE 5): STS= 0                                            , BAR.SYNC=2
+  => the per-K-step permute (28 shared stores) is GONE, and one __syncthreads is dropped.
+     The W9 mechanism WORKS at the instruction level — exactly as designed.
+
+================= BIT-EXACT GATE — FAILED (the wall, g5 honest) =================
+  rel_rms floor across the FULL descriptor sweep (S=2048, NST=2):
+    lbo in {16,32,64,128,256,512,1024} x sbo in {16..2048} x kstep in {0,1}  (~100 configs)
+    BEST rel_rms = 1.392e+00 (achieved at sbo=1024, ANY lbo — lbo is INERT).
+    kstep=1 variants fault silently (byte-offset overruns the atom). NO config <= 3e-3.
+  rel_rms ~1.39 ≈ output uncorrelated with truth: the wgmma is reading a layout the naive
+  swizzle-mode-1 descriptor de-swizzles WRONG. g5 honored: NO perf number on a failing kernel.
+
+================= ROOT CAUSE — MEASURED SWIZZLE LAW (the recoverable residual) =================
+  Direct shared-memory dump of a SWIZZLE_128B-landed 8x32-f32 atom (probe3) shows the actual
+  swizzle is NOT the textbook g_phys = g XOR r. The measured granule (16B) permutation per
+  row r is a CONSTANT XOR mask equal to ((r+1) & 7):
+    row0 mask=1  row1 mask=2  row2 mask=3  row3 mask=4
+    row4 mask=5  row5 mask=6  row6 mask=7  row7 mask=0
+  i.e. landed_granule[r][g] = global_granule[r][ g XOR ((r+1)&7) ].
+  TWO-LAYER mismatch vs the bit-exact W2/W3 path: (1) the TMA swizzle is g XOR ((r+1)&7),
+  not g XOR r; (2) the wgmma swizzle-mode-1 descriptor's own de-swizzle assumes g XOR r AND
+  the 8x4 INTER core packing (gmma_phys, W2/W3-proven) is a further non-linear permutation
+  the linear swizzle does not reproduce. The naive descriptor matches NEITHER layer -> 1.392.
+
+================= BASELINE CARRY — W8 FRONTIER REPRODUCED + KEPT =================
+  MODE 4 gemm_ws_tma (no swizzle, permute present), same pod, bit-exact rel_rms=0:
+    S=2048 own=63.7  cuBLAS=345.5  ratio=5.42x
+    S=4096 own=66.9  cuBLAS=429.1  ratio=6.41x   ★ frontier
+    S=8192 own=69.3  cuBLAS=460.0  ratio=6.64x
+  => the W8 66.5-class frontier is intact. W9 did NOT regress the shipped number.
+
+================= HEADLINE =================
+  swizzle mode landed:    CU_TENSOR_MAP_SWIZZLE_128B (TMA encodes A + 4x32-N B atoms) ✅
+  permute removed:        YES — SASS STS 28->0, one __syncthreads dropped (mechanism proven)
+  occupancy:              2 CTA/SM preserved (no regression)
+  rel_rms:                1.392e+00 (FLOOR, all ~100 descriptor configs) — GATE FAIL
+  own GFLOP/s 66.5->?:    UNCHANGED — MODE 5 has no valid perf number (gate failed, g5);
+                          W8 MODE 4 frontier KEPT (66.9 @ S=4096, 69.3 @ S=8192)
+  cuBLAS-TF32:            ~429 (S=4096) — roofline
+  ratio vs cuBLAS:        6.41x (W8 frontier, KEPT) — W9 did not move it
+  % of 6.44x gap closed:  0% (the swizzle path did not reach bit-exact -> cannot claim perf)
+  PARITY (<=1.3x):        NO
+  pod destroyed:          YES (39704602, leak 0)
+
+================= FINDING (CLOSED-NEGATIVE for naive-swizzle + named recoverable residual) =================
+  Pre-registered falsifier (W8 residual): "a SWIZZLED TMA descriptor (SWIZZLE_128B) that
+  lands the tile wgmma-ready ELIMINATES the per-K-step permute and lifts the frontier toward
+  parity." MEASURED: PARTIALLY FALSIFIED. The swizzle DOES eliminate the permute (SASS-proven,
+  28 STS -> 0) at full occupancy — but the NAIVE linear-swizzle wgmma descriptor does not
+  bit-match the swizzled tile (rel_rms floor 1.392, all configs). The perf-lift cannot be
+  claimed because the gate fails (g5).
+  CLOSED-NEGATIVE (deterministic): the textbook g_phys = g XOR r swizzle model is WRONG for
+  FP32 SWIZZLE_128B on sm_90a — the real law is g XOR ((r+1)&7), AND it composes with the
+  8x4 INTER core packing the wgmma descriptor expects. A single linear descriptor constant
+  (lbo/sbo) cannot express this two-layer permutation -> this naive path is ruled out.
+  RECOVERABLE RESIDUAL (next-cycle claim, W10): the swizzle law is now MEASURED EXACTLY
+  (g XOR ((r+1)&7)). W10 should (a) compose it with gmma_phys to derive the EXACT swizzled
+  layout the wgmma descriptor needs, then (b) emit A/B into shared at that composed layout
+  (or pick the matching cuTensorMap swizzle+box that makes TMA land it directly) — this is the
+  CUTLASS GMMA::Layout derivation, now with the on-pod-measured swizzle constant in hand.
+  Until W10 lands the composed layout, the W8 MODE 4 frontier (66.9 TFLOP/s, 6.41x, 2 CTA/SM,
+  bit-exact) remains the shipped own-GEMM number.
