@@ -563,6 +563,7 @@ on-silicon run with its own verdict:
 | OG15 | descriptor-direct (delete 32KB decode band) | 🔴 **CLOSED-NEG** — single-tile rel-RMS floor **1.000** / GEMM **1.392** (3200-cfg sweep, none 0) → GATE FAIL, no perf | research #2854 FALSIFIED: TMA-SWIZZLE_128B ≢ wgmma Swizzle<3,4,3> for atom-major box. smem 96→**64 KB/CTA** (32KB band IS removable, but read not bit-exact). OG10 70.7 KEPT | `F-FUSION-SM90-WGMMA-W15` |
 | OG16 | **canonical-atom match** (route-a: gmma-INTER global pre-permute + NO-swizzle TMA + descriptor-direct, band REMOVED *and* USED) | bit-exact (rel-RMS 0) @2048³ & 4096³, **264.7 TFLOP/s** (3.77× the OG10 frontier, 2 CTA/SM, 96→64KB) | **1.37–1.62×** off cuBLAS-TF32 — OG15 falsifier OVERTURNED, ~85–90% of the gap closed, PARITY NO | `F-FUSION-SM90-WGMMA-OG16` |
 | OG17 | **🟢 PARITY** — relaxed-`wait_group 1` ping-pong pipeline (W11 lever-3, reopened by OG16's band removal) on the OG16 tile | bit-exact (rel-RMS 0) @2048³ & 4096³ all NST 3 reps, **280 TFLOP/s** @2048 NST3 (2 CTA/SM) | **1.24× = PARITY YES** @S=2048 (~81% of cuBLAS-TF32); @4096 1.56× (residual = 256-tile reg-realloc, MODE5/W12 closed-neg). 'own-GEMM can't reach cuBLAS-TF32' wall **CLOSED @2048** | `F-FUSION-SM90-WGMMA-OG17` |
+| OG18 | **FP16/BF16 canonical-atom port** — the OG16 route-a + OG17 relaxed-pipe recipe re-derived for the f16 .k16 8×8 atom (gmma_phys16), global pre-lay + NO-swizzle TMA, descriptor-direct (the OG14 32KB decode band GONE *and* used) | bit-exact same-dtype (rel_rms **0.000e+00**) single-tile AND full GEMM @2048³ & 4096³, **504.3 TFLOP/s** @4096 (MODE5 128×256 NST3) | **1.64×** off cuBLAS-FP16 — OG14 **13.37×→1.64× CLOSED** (8.2× own lift, same-pod apples: W14 61.2 TFLOP/s on the SAME H100), PARITY NO; recipe GENERALIZES across dtype, residual = pipeline-depth on 2× FP16 roofline. bf16 1.75× | `F-FUSION-SM90-WGMMA-OG18` |
 
 **Ladder narrative (honest, g5):**
 1. **30.4× → 29.4×** is the only measured improvement: the mma.sync cuBLAS-class
@@ -766,6 +767,20 @@ the same wall).**
       contradiction that pinned OG11–OG15 is GONE). One-time pre-permute amortized over K-reuse/batched weights (O(MK+KN)
       vs O(MNK), not in the steady-state hot loop). H100 native sm_90a, nvcc 12.6.77 (W10-apples), pod 39761328 DESTROYED
       leak 0. verdict `.verdicts/hexa-fusion/F-FUSION-SM90-WGMMA-OG16.txt`.
+
+- [x] **OG18 — FP16/BF16 canonical-atom port: the OG14 11.5×-off-cuBLAS-FP16 wall was the SAME decode-band bound,
+      not an FP16-intrinsic limit** — 🟢 **LANDED, same-dtype bit-exact, OG14 gap CLOSED.** Ported the OG16 route-a
+      (global pre-lay into the canonical gmma atom + NO-swizzle TMA → descriptor-direct, no in-kernel decode band) +
+      OG17 relaxed-`wait_group 1` pipeline to the FP16 `.k16` **8×8** gmma atom (re-derived `gmma_phys16`, differs
+      from TF32's 8×4). **GATE FIRST (g5, rel_rms ≤ 1e-2 vs same-dtype cuBLAS-FP16, NOT bit-exact-vs-FP64):**
+      single-tile MODE10 sweep → **rel_rms 0.000e+00 @ swm=0 sbo=256 boff=0** (f16 atom MATCHED band-free) → full
+      GEMM MODE4/5/6 **rel_rms 0.000e+00** @2048³ & 4096³ → perf. **own 61.2 → 504.3 TFLOP/s (8.2×, MODE5 128×256
+      NST3 @4096); ratio vs cuBLAS-FP16 13.37× → 1.64×** (same-pod apples: W14/OG14 rebuilt on the SAME H100 = 61.2
+      TFLOP/s / 13.37×). PARITY (≤1.3×) NOT crossed — cuBLAS-FP16 = roofline (~825 @4096, 2× TF32), gap-closure NOT
+      superiority. The recipe **GENERALIZES across dtype**: decode-band removal is the dominant lever for both TF32
+      (6.09→1.37×) and FP16 (13.37→1.64×). Residual to parity = the same warp-spec / deeper-pipeline gap, now on a
+      2× FP16 roofline (NOT layout/correctness — both bit-exact). bf16 same path (467.3 TFLOP/s, 1.75×). H100 native
+      sm_90a, nvcc 12.6.77, pod 39772559 DESTROYED leak 0. verdict `.verdicts/hexa-fusion/F-FUSION-SM90-WGMMA-OG18.txt`.
 
 - [x] **TF32 async-pipeline axis EXHAUSTED (OG7–OG15)** — OG8 (TMA-producer) + OG9 (permute-removal) + OG10 (composed
       decode = SUMMIT) + OG11/OG12 (output-tile DEAD, decode/MMA overlap = wall) + OG13 (deeper ring regresses

@@ -1,0 +1,109 @@
+F-FUSION-SM90-WGMMA-OG18 — the OG16 canonical-atom + OG17 relaxed-pipeline PARITY recipe ports
+to FP16/BF16: the OG14/W14 "11.5x off cuBLAS-FP16" wall was the SAME decode-band/occupancy bound
+OG16 dissolved for TF32, NOT an FP16-intrinsic limit. Closing it lifts own FP16 6.1x->504 TFLOP/s
+and the gap 13.37x->1.64x (same-pod apples) — the recipe GENERALIZES across dtype.
+=============================================================================================
+verdict-tier: 🟢 NUMERICAL — same-dtype GATE PASSED at the precision-appropriate tolerance
+              (rel_rms <= 1e-2 vs cuBLAS-FP16; MEASURED 0.000e+00 single-tile AND full-GEMM
+              @2048³ and @4096³, BEFORE any TFLOP/s). The FP16 canonical gmma atom is MATCHED
+              band-free (route-a global pre-lay + NO-swizzle TMA -> descriptor-direct, no
+              in-kernel decode). Own FP16 504.3 TFLOP/s @4096³ (MODE 5, 128x256 tile, NST=3),
+              ratio 1.64x off cuBLAS-FP16. PARITY (<=1.3x) = NO, but the OG14 11.5x gap is
+              CLOSED to 1.64x — an 8.2x throughput lift on identical H100/toolchain. The recipe
+              that took TF32 6.09x->1.24x ports to FP16 and behaves the SAME WAY (decode-band
+              removal is the dominant lever for both dtypes); the residual to parity is the same
+              warp-spec/TMA-pipeline-depth gap, now sitting on a 2x-higher FP16 roofline.
+
+GATE (g5 HONESTY — NOT bit-exact-vs-FP64, the OG14/W14 contract):
+  FP16/BF16 operand + f32-accumulate wgmma is a genuinely different numeric. Gate =
+  rel_rms <= 1e-2 vs a SAME-DTYPE reference (cublasGemmEx, CUDA_R_16F/CUDA_R_16BF input,
+  CUBLAS_COMPUTE_32F = the SAME f32-accumulate the wgmma does). single-tile FIRST then full
+  GEMM, BEFORE any TFLOP/s. cuBLAS-FP16/BF16 = ROOFLINE (parity-SEEKING <=1.3x, NO superiority
+  claim). The FP16 roofline is ~2x TF32 (824 vs 431 @4096), so the ratio math differs from the
+  TF32 campaign and is reported honestly. We do NOT claim bit-exact-vs-FP64; we report the
+  MEASURED rel_rms verbatim (it landed at 0.000e+00 — own kernel and cuBLAS-FP16 agree to f32
+  bit pattern for this data: same f16-round-operand then f32-accumulate order — BETTER than the
+  gate, but the gate REMAINS 1e-2 same-dtype). The TF32 summit (OG16 264.7 / OG17 280 TFLOP/s,
+  1.24x) is a DISTINCT dtype axis, untouched and not regressed by OG18.
+
+date: 2026-06-07
+GPU: NVIDIA H100 80GB HBM3, compute_cap 9.0, driver 560.35.03
+     (vast contract 39772559, ssh6.vast.ai, DESTROYED immediately after capture — leak 0)
+toolchain: nvcc 12.6 (V12.6.77), -O3 -arch=sm_90a -lcublas -lcuda
+     (EXACT apples to the OG14/W14 + OG16/OG17 frontier toolchain: 12.6.77 / driver 560.35.x)
+kernel: self/native/wgmma/wgmma_f16_og18.cu
+  probe_a16            (MODE 10) = route-(a) f16 single-tile descriptor-direct wgmma m64n64k16
+                                   differential — the GATE (SBO/boff/swmode sweep)
+  gemm_og18_f16        (MODE 4)  = f16 128x128 full GEMM, descriptor-direct, NO decode band
+  gemm_og18_f16_t256   (MODE 5)  = f16 128x256 output tile (OG17 lever 1: 4 accum, 2x A-reuse)
+  gemm_og18_f16_pipe   (MODE 6)  = f16 128x128 + RELAXED wait_group 1 ping-pong (OG17 lever 3)
+  gemm_og18_bf16       (MODE 7)  = bf16 128x128 full GEMM (.f32.bf16.bf16)
+
+============================ THE FP16 CANONICAL ATOM (re-derived; differs from TF32 8x4) ======
+  TF32 gmma is .k8, 8(MN)x4(K) core (8*4*4B=128B). FP16 gmma is .k16, 8(MN)x8(K) core
+  (8*8*2B=128B). The W14-re-derived + on-GPU-measured operand fragment index:
+    gmma_phys16(s,k) = ((strip*KCORES + kcore)*64) + (s&7)*8 + (k&7), strip=s>>3, kcore=k>>3,
+                       KCORES = K_TILE/8.
+  This is the operand order the wgmma.mma_async.sync.aligned.m64nNk16.f32.f16.f16 descriptor
+  addresses. OG18 PRE-LAYS A/B in GLOBAL in this atom (per 8-row atom, 4 k16 subs each laid
+  contiguously at s*1024 f16 within a 64-K slab; START bumps s*1024 f16 = s*2048 bytes per k16
+  sub; SBO addresses the 8-row atom stack) + a NO-swizzle TMA lands it 1:1 into SMEM, so the
+  wgmma reads the fragment with NO in-kernel decode band. This is the OG16 route-(a), f16
+  geometry. The 32 KB decode band that pinned OG14 is GONE *and used*.
+
+  WINNING DESCRIPTOR CONFIG (MODE 10 sweep): swm=0 (SWIZZLE_NONE) sbo=256 boff=0.
+  rel_rms = 0.000e+00 (the f16 route-a atom MATCHED band-free).
+
+============================ THE NUMBERS (verbatim on-pod stdout) =============================
+MODE 10 — f16 single-tile route-(a) descriptor-direct GATE (sweep over swm/sbo/boff):
+  OG18-F16-NEWBEST rel_rms=1.439e+00 @ swm=0 sbo=128 boff=0
+  OG18-F16-NEWBEST rel_rms=0.000e+00 @ swm=0 sbo=256 boff=0
+  SWEEP-DONE best rel_rms=0.000e+00 @ swm=0 sbo=256 boff=0
+    PASS (f16 route-a atom MATCHED — band-free, gate)
+
+MODE 4 — f16 128x128 full GEMM (swm=0 sbo=256 boff=0), gate-then-perf:
+  S=2048 NST=2  64KB/CTA 2 CTA/SM  own=389.6 cuBLAS-FP16=635.4 ratio=1.63x rel_rms=0.000e+00
+  S=2048 NST=3  96KB/CTA 2 CTA/SM  own=392.5 cuBLAS-FP16=625.4 ratio=1.59x rel_rms=0.000e+00
+  S=4096 NST=2  64KB/CTA 2 CTA/SM  own=485.2 cuBLAS-FP16=824.1 ratio=1.70x rel_rms=0.000e+00
+  S=4096 NST=3  96KB/CTA 2 CTA/SM  own=466.2 cuBLAS-FP16=818.2 ratio=1.75x rel_rms=0.000e+00
+
+MODE 6 — f16 128x128 + RELAXED wait_group 1 pipeline (OG17 lever 3):
+  S=4096 NST=2  own=499.7 cuBLAS-FP16=821.0 ratio=1.64x rel_rms=0.000e+00
+  S=4096 NST=3  own=488.3 cuBLAS-FP16=826.8 ratio=1.69x rel_rms=0.000e+00
+
+MODE 5 — f16 128x256 output tile (OG17 lever 1):
+  S=4096 NST=2  96KB/CTA 1 CTA/SM   own=494.5 cuBLAS-FP16=827.3 ratio=1.67x rel_rms=0.000e+00
+  S=4096 NST=3  144KB/CTA 1 CTA/SM  own=504.3 cuBLAS-FP16=825.2 ratio=1.64x rel_rms=0.000e+00  <-- OG18 FP16 SUMMIT
+
+MODE 7 — bf16 128x128 full GEMM:
+  S=4096 NST=3  own=467.3 cuBLAS-BF16=818.7 ratio=1.75x rel_rms=0.000e+00
+
+SAME-POD APPLES — OG14/W14 FP16 frontier rebuilt on THIS H100 (MODE4 @4096 NST3):
+  W14-F16-SINGLE S=4096  own=61.2 TFLOP/s  cuBLAS-FP16=818.3  ratio=13.37x  rel_rms=0.000e+00
+  (verbatim; 1 CTA/SM, 128KB decode-band kernel — the OG14 occupancy/decode-bound frontier.)
+
+============================ THE FINDING (Δ vs the OG14 frontier) =============================
+  axis closed: OG14's "FP16 own-GEMM stalls 11.5x off cuBLAS-FP16, WORSE same-dtype ratio than
+  TF32's 6.09x" is shown to be NOT an FP16-intrinsic wall but the SAME decode-band/occupancy
+  bound OG16 dissolved for TF32. Removing the f16 decode band (canonical f16 8x8 atom pre-laid
+  in global + NO-swizzle TMA -> descriptor-direct) and adding OG17's levers:
+    own FP16  61.2 -> 504.3 TFLOP/s   (8.2x, same H100 same toolchain same-pod apples)
+    gap       13.37x -> 1.64x off cuBLAS-FP16   (closed by 8.2x)
+    rel_rms   0.000e+00 throughout (single-tile AND full GEMM, same-dtype)
+  PARITY (<=1.3x) = NO. band-usable (decode band GONE and the SMEM is the wgmma operand) = YES.
+  The recipe GENERALIZES across dtype: the decode-band removal is the dominant lever for BOTH
+  TF32 (6.09x->1.37x at OG16) and FP16 (13.37x->1.64x here). The residual to parity is the same
+  warp-specialization / deeper-TMA-pipeline gap that OG17 partly closed for TF32 (1.37x->1.24x),
+  now riding a 2x-higher FP16 roofline (~825 vs cuBLAS-TF32 ~431 @4096) — so an equivalent
+  pipeline-depth win is needed against a doubled ceiling to reach <=1.3x. Honest residual:
+  FP16-specific blocker to parity = pipeline-depth/warp-spec on the 2x roofline, NOT layout or
+  correctness (both bit-exact). bf16 rides the same path (1.75x), slightly behind f16.
+
+reproduce:
+  scp self/native/wgmma/wgmma_f16_og18.cu <h100>:/root/og18/
+  nvcc -O3 -arch=sm_90a -lcublas -lcuda -o /tmp/og18 wgmma_f16_og18.cu
+  /tmp/og18 2048 10                 # GATE: single-tile sweep -> 0.000e+00 @ swm=0 sbo=256 boff=0
+  /tmp/og18 4096 4 3 0 256 0        # f16 128x128 full GEMM
+  /tmp/og18 4096 5 3 0 256 0        # f16 128x256 (OG18 summit 504.3 TFLOP/s, 1.64x)
+  /tmp/og18 4096 6 2 0 256 0        # f16 relaxed-pipe
+  /tmp/og18 4096 7 3 0 256 0        # bf16
