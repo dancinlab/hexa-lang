@@ -1,17 +1,78 @@
-F-FUSION-SM90-WGMMA-OG19 — WIP: apply OG17's relaxed-wait_group ping-pong pipeline (MODE 6
+F-FUSION-SM90-WGMMA-OG19 — apply OG17's relaxed-wait_group ping-pong pipeline (MODE 6,
 gemm_og18_f16_pipe) to the OG18 FP16 canonical-atom kernel in the regime OG17 actually crossed
-parity (S=2048 NST=3), plus a deeper async ring (NST=4 now SMEM-viable since the decode band is
-gone), to push FP16 1.64x off cuBLAS-FP16 toward PARITY (<=1.3x).
+parity (S=2048) + a deeper async ring (NST=4, now SMEM-viable since the decode band is gone),
+to push FP16 1.64x off cuBLAS-FP16 toward PARITY (<=1.3x).
 =============================================================================================
-verdict-tier: 🟠 WIP — pod run pending. Gate (rel_rms <= 1e-2 vs same-dtype cuBLAS-FP16) FIRST,
-              then perf. Numbers to be filled from on-pod stdout.
+verdict-tier: 🟢 NUMERICAL — same-dtype GATE PASSED at the precision-appropriate tolerance
+              (rel_rms <= 1e-2 vs cuBLAS-FP16; MEASURED 0.000e+00 single-tile AND at EVERY
+              full-GEMM config @2048³ and @4096³, BEFORE any TFLOP/s). The relaxed-pipeline
+              lever GENERALIZES to FP16 (it improves the ratio at S=2048 exactly as OG17 saw
+              for TF32) but FP16 PARITY (<=1.3x) = NO. The 2x-higher FP16 roofline (~825 vs
+              ~431 TFLOP/s @4096) leaves a residual the pipeline + tile + ring sweep cannot
+              fully close. This is an HONEST FP16-CEILING result: OG19 FP16 best ratio = 1.56x
+              (MODE 6 relaxed pipe, S=2048 NST=3), best throughput = 505.3 TFLOP/s (MODE 5,
+              S=4096 NST=4) — a NEW FP16 throughput peak, NOT a regression below OG18 504.3.
+              TF32 PARITY (OG17 1.24x) stays banked; FP16 characterized at its best ratio.
 
-LEVER: OG17 relaxed wgmma.wait_group 1 ping-pong (next K-slab's wgmma ISSUE overlaps this slab's
-       tensor-core drain; mbarrier ring data-safe; NO smem growth -> 2 CTA/SM held). Already
-       ported as MODE 6 (gemm_og18_f16_pipe) in OG18 but run ONLY at S=4096 (1.64x). OG19 drives
-       it at S=2048 (OG17's TF32 parity sweet spot, 1.24x there) + NST=2/3/4 ring sweep.
+LEVER (OG17 → FP16): RELAXED wgmma.wait_group 1 ping-pong (MODE 6, gemm_og18_f16_pipe). The
+       next K-slab's wgmma ISSUE overlaps this slab's tensor-core drain; the mbarrier ring
+       (full[]) still gates SMEM reuse so the overlap is DATA-SAFE (rel_rms 0); NO smem growth
+       -> 2 CTA/SM held. OG18 ran this ONLY at S=4096 (1.64x). OG19's contribution = driving it
+       at S=2048 (OG17's TF32 parity sweet spot) + the NST=2/3/4 ring across both regimes.
 
-baseline (OG18, NOT to regress): own 504.3 TFLOP/s @4096 MODE5 NST3, ratio 1.64x, rel_rms 0.
+THE KEY FINDING — WHY THE PIPELINE GENERALIZES BUT FP16 PARITY DOES NOT:
+  * The pipe LIFTS the S=2048 ratio (MODE 6 NST=3 = 1.56x) vs the S=2048 128x128 baseline
+    (MODE 4 NST=3 = 1.63x) — SAME DIRECTION OG17 saw for TF32 (1.37x -> 1.24x). The overlap
+    is real and data-safe at every NST.
+  * But FP16's roofline is ~2x TF32. OG17's TF32 pipe landed at 1.24x; the IDENTICAL lever on
+    FP16 lands at 1.56x because the same own-kernel TFLOP/s is measured against a 2x-larger
+    cuBLAS-FP16 denominator. cuBLAS-FP16 is closer to its roofline than our hand-built kernel,
+    and the gap WIDENS in ratio terms on the doubled roofline.
+  * Deeper async ring (NST=4) does NOT help: at NST=4 the smem (128KB for 128x128, 192KB for
+    128x256) drops occupancy to 1 CTA/SM, so the ring-depth gain is cancelled by halved
+    occupancy. The ring is occupancy-bound, NOT latency-bound, at these tiles. NST=3 is the
+    sweet spot for 2 CTA/SM (96KB); NST=2 (64KB) also holds 2 CTA/SM.
 
-PENDING: single-tile rel_rms, full-GEMM rel_rms @2048/4096, own FP16 GFLOP/s 504->?, ratio
-         1.64x->?, PARITY (<=1.3x) Y/N, pod destroyed Y/N.
+date: 2026-06-07
+GPU: NVIDIA H100 80GB HBM3, compute_cap 9.0, driver 560.35.03
+     (vast contract 39774499, ssh4.vast.ai, DESTROYED immediately after capture — leak 0;
+      sibling PROD-PERF2 pod + foreign li2mgh16/edge-video fleet NOT touched)
+toolchain: nvcc 12.6 (V12.6.77, cuda_12.6.r12.6/compiler.34841621_0), -O3 -arch=sm_90a -lcublas
+     -lcuda  (EXACT apples to OG17/OG18: 12.6.77 / driver 560.35.03 / H100 80GB HBM3)
+kernel: self/native/wgmma/wgmma_f16_og18.cu (OG18 canonical-atom binary, reused verbatim)
+driver: self/native/wgmma/og19_run.sh (NST ring + S=2048/4096 regime sweep for MODE 5/6)
+
+WINNING DESCRIPTOR CONFIG (MODE 10 single-tile gate, re-confirmed): swm=0 sbo=256 boff=0,
+  rel_rms = 0.000e+00 (the f16 route-a canonical atom MATCHED band-free).
+
+============================ THE NUMBERS (verbatim on-pod stdout) =============================
+MODE 10 — f16 single-tile route-(a) descriptor-direct GATE:
+  SWEEP-DONE best rel_rms=0.000e+00 @ swm=0 sbo=256 boff=0  PASS (band-free)
+
+MODE 6 — f16 128x128 + RELAXED wait_group 1 pipeline (OG17 LEVER 3), NST ring x both regimes:
+  S=2048 NST=2  64KB  2 CTA/SM  own=400.5  cuBLAS-FP16=634.9  ratio=1.59x  rel_rms=0
+  S=2048 NST=3  96KB  2 CTA/SM  own=410.1  cuBLAS-FP16=641.8  ratio=1.56x  rel_rms=0  <-- BEST RATIO
+  S=2048 NST=4 128KB  1 CTA/SM  own=347.6  cuBLAS-FP16=635.6  ratio=1.83x  rel_rms=0  (occ regress)
+  S=4096 NST=2  64KB  2 CTA/SM  own=502.7  cuBLAS-FP16=824.3  ratio=1.64x  rel_rms=0
+  S=4096 NST=3  96KB  2 CTA/SM  own=489.3  cuBLAS-FP16=827.0  ratio=1.69x  rel_rms=0
+  S=4096 NST=4 128KB  1 CTA/SM  own=472.7  cuBLAS-FP16=821.1  ratio=1.74x  rel_rms=0  (occ regress)
+
+MODE 5 — f16 128x256 output tile (OG17 LEVER 1), NST ring x both regimes:
+  S=2048 NST=2  96KB  1 CTA/SM  own=367.3  cuBLAS-FP16=639.7  ratio=1.74x  rel_rms=0
+  S=2048 NST=3 144KB  1 CTA/SM  own=363.7  cuBLAS-FP16=645.4  ratio=1.77x  rel_rms=0
+  S=2048 NST=4 192KB  1 CTA/SM  own=366.6  cuBLAS-FP16=632.0  ratio=1.72x  rel_rms=0
+  S=4096 NST=2  96KB  1 CTA/SM  own=494.2  cuBLAS-FP16=824.7  ratio=1.67x  rel_rms=0
+  S=4096 NST=3 144KB  1 CTA/SM  own=504.8  cuBLAS-FP16=824.0  ratio=1.63x  rel_rms=0
+  S=4096 NST=4 192KB  1 CTA/SM  own=505.3  cuBLAS-FP16=825.6  ratio=1.63x  rel_rms=0  <-- OG19 THROUGHPUT PEAK
+
+MODE 4 — f16 128x128 baseline (same-pod apples @ S=2048):
+  S=2048 NST=2  64KB  2 CTA/SM  own=386.1  cuBLAS-FP16=640.9  ratio=1.66x  rel_rms=0
+  S=2048 NST=3  96KB  2 CTA/SM  own=389.7  cuBLAS-FP16=636.0  ratio=1.63x  rel_rms=0
+
+============================ SUMMARY (vs OG18 504.3 / 1.64x) ==================================
+  own GFLOP/s:  504.3 (OG18) -> 505.3 (OG19 MODE5 S=4096 NST4)   — new peak, NOT regressed
+  ratio:        1.64x (OG18) -> 1.56x (OG19 MODE6 S=2048 NST3)   — best ratio, the pipe lever
+  PARITY (<=1.3x): NO. The relaxed-pipeline lever GENERALIZES (same direction as TF32) but the
+                   2x FP16 roofline + the k16 occupancy/ring bound leave a residual the pipeline
+                   cannot fully close. HONEST FP16-CEILING: best ratio 1.56x at S=2048.
+  pod destroyed: YES (39774499, leak 0).

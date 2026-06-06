@@ -564,6 +564,7 @@ on-silicon run with its own verdict:
 | OG16 | **canonical-atom match** (route-a: gmma-INTER global pre-permute + NO-swizzle TMA + descriptor-direct, band REMOVED *and* USED) | bit-exact (rel-RMS 0) @2048³ & 4096³, **264.7 TFLOP/s** (3.77× the OG10 frontier, 2 CTA/SM, 96→64KB) | **1.37–1.62×** off cuBLAS-TF32 — OG15 falsifier OVERTURNED, ~85–90% of the gap closed, PARITY NO | `F-FUSION-SM90-WGMMA-OG16` |
 | OG17 | **🟢 PARITY** — relaxed-`wait_group 1` ping-pong pipeline (W11 lever-3, reopened by OG16's band removal) on the OG16 tile | bit-exact (rel-RMS 0) @2048³ & 4096³ all NST 3 reps, **280 TFLOP/s** @2048 NST3 (2 CTA/SM) | **1.24× = PARITY YES** @S=2048 (~81% of cuBLAS-TF32); @4096 1.56× (residual = 256-tile reg-realloc, MODE5/W12 closed-neg). 'own-GEMM can't reach cuBLAS-TF32' wall **CLOSED @2048** | `F-FUSION-SM90-WGMMA-OG17` |
 | OG18 | **FP16/BF16 canonical-atom port** — the OG16 route-a + OG17 relaxed-pipe recipe re-derived for the f16 .k16 8×8 atom (gmma_phys16), global pre-lay + NO-swizzle TMA, descriptor-direct (the OG14 32KB decode band GONE *and* used) | bit-exact same-dtype (rel_rms **0.000e+00**) single-tile AND full GEMM @2048³ & 4096³, **504.3 TFLOP/s** @4096 (MODE5 128×256 NST3) | **1.64×** off cuBLAS-FP16 — OG14 **13.37×→1.64× CLOSED** (8.2× own lift, same-pod apples: W14 61.2 TFLOP/s on the SAME H100), PARITY NO; recipe GENERALIZES across dtype, residual = pipeline-depth on 2× FP16 roofline. bf16 1.75× | `F-FUSION-SM90-WGMMA-OG18` |
+| OG19 | **FP16 relaxed-pipe in the OG17 parity regime** — drive the MODE6 relaxed-`wait_group 1` ping-pong (OG18's f16 pipe, run only @4096 before) at **S=2048** (OG17's TF32 parity spot) + the **NST=2/3/4 ring** across both regimes (deeper ring now band-free) | bit-exact same-dtype (rel_rms **0.000e+00**) at EVERY config @2048³ & 4096³, **505.3 TFLOP/s** @4096 (MODE5 NST4 — new peak) | **best ratio 1.56×** (MODE6 S=2048 NST3) off cuBLAS-FP16 — the relaxed-pipe lever GENERALIZES (same direction as TF32 1.37→1.24×) but **FP16 PARITY NO** (honest **FP16-ceiling**: 2× FP16 roofline + k16 occupancy/ring bound leave a residual the pipeline can't close; NST=4 drops to 1 CTA/SM). NOT regressed below OG18; TF32 PARITY stays banked | `F-FUSION-SM90-WGMMA-OG19` |
 
 **Ladder narrative (honest, g5):**
 1. **30.4× → 29.4×** is the only measured improvement: the mma.sync cuBLAS-class
@@ -781,6 +782,18 @@ the same wall).**
       (6.09→1.37×) and FP16 (13.37→1.64×). Residual to parity = the same warp-spec / deeper-pipeline gap, now on a
       2× FP16 roofline (NOT layout/correctness — both bit-exact). bf16 same path (467.3 TFLOP/s, 1.75×). H100 native
       sm_90a, nvcc 12.6.77, pod 39772559 DESTROYED leak 0. verdict `.verdicts/hexa-fusion/F-FUSION-SM90-WGMMA-OG18.txt`.
+- [x] **OG19 — apply OG17's relaxed-pipe to FP16 in the OG17 parity regime: does the lever cross FP16 PARITY?**
+      🟢 **LANDED, same-dtype bit-exact — HONEST FP16-CEILING, PARITY NO.** OG18 ran the f16 relaxed-`wait_group 1`
+      pipe (MODE6) ONLY @S=4096 (1.64×); OG17 crossed TF32 parity (1.24×) specifically @S=2048 NST3. OG19 drives
+      MODE6 @S=2048 (the unexplored OG17 sweet spot) + the NST=2/3/4 ring across BOTH regimes (deeper ring now
+      band-free). **GATE FIRST (g5):** single-tile + EVERY full-GEMM config **rel_rms 0.000e+00** @2048³ & 4096³.
+      **FINDING:** the relaxed-pipe lever GENERALIZES — it LIFTS the S=2048 ratio (MODE6 NST3 **1.56×** vs MODE4
+      baseline 1.63×), the SAME direction OG17 saw for TF32 (1.37→1.24×). But **FP16 PARITY NOT crossed**: the
+      identical lever lands at 1.56× (not 1.24×) because FP16's roofline is ~2× TF32 — same own TFLOP/s ÷ 2× larger
+      cuBLAS-FP16 denominator. Deeper ring (NST=4) drops to 1 CTA/SM (occupancy-bound, not latency-bound) so does NOT
+      help. **own 504.3 → 505.3 TFLOP/s (new peak, MODE5 NST4); best ratio 1.64× → 1.56×.** NOT regressed below OG18;
+      TF32 PARITY (OG17 1.24×) stays banked; FP16 characterized at its honest best ratio. H100 native sm_90a, nvcc
+      12.6.77, pod 39774499 DESTROYED leak 0. verdict `.verdicts/hexa-fusion/F-FUSION-SM90-WGMMA-OG19.txt`.
 
 - [x] **TF32 async-pipeline axis EXHAUSTED (OG7–OG15)** — OG8 (TMA-producer) + OG9 (permute-removal) + OG10 (composed
       decode = SUMMIT) + OG11/OG12 (output-tile DEAD, decode/MMA overlap = wall) + OG13 (deeper ring regresses
