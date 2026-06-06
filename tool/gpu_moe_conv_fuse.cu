@@ -844,8 +844,14 @@ int main(int argc, char** argv) {
     cudaEvent_t e0, e1;
     CK(cudaEventCreate(&e0)); CK(cudaEventCreate(&e1));
 
+    /* MOEFUSE_SKIP: chars of paths to skip in the perf loop (e.g. "BC" skips the
+     * pathological grouped + naive-fused paths that take minutes at large d).
+     * The byte-eq gate already ran for ALL paths; this only trims the perf timing. */
+    const char* skip = getenv("MOEFUSE_SKIP"); if (!skip) skip = "";
+    #define SKIP(ch) (strchr(skip, ch) != NULL)
+
     /* (A) ModuleList-30 */
-    {
+    if (!SKIP('A')) {
         dim3 grid(n_co_blk, n_tt_blk), blk(CO_TILE);
         for (int w = 0; w < WARMUP; ++w)
             for (int e = 0; e < E; ++e)
@@ -865,7 +871,7 @@ int main(int argc, char** argv) {
     }
 
     /* (B) grouped */
-    {
+    if (!SKIP('B')) {
         dim3 grid(E), blk(CO_TILE);
         for (int w = 0; w < WARMUP; ++w)
             k_moe_conv_grouped<<<grid, blk>>>(dX, dW, dB, dY, E, T, d, K, dil);
@@ -883,7 +889,7 @@ int main(int argc, char** argv) {
     }
 
     /* (C) fused */
-    {
+    if (!SKIP('C')) {
         dim3 grid(E, n_co_blk, n_tt_blk), blk(CO_TILE);
         for (int w = 0; w < WARMUP; ++w)
             k_moe_conv_fused<<<grid, blk>>>(dX, dW, dB, dY, E, T, d, K, dil);
@@ -902,7 +908,7 @@ int main(int argc, char** argv) {
     }
 
     /* (D) tiled-fused — OG-FUSE-OPT: smem-staged input window, register-blocked */
-    {
+    if (!SKIP('D')) {
         dim3 grid(E, n_co_blk, n_tt_blk), blk(CO_TILE);
         for (int w = 0; w < WARMUP; ++w)
             k_moe_conv_tiled<<<grid, blk, p_smem>>>(dX, dW, dB, dY, E, T, d, K, dil);
@@ -922,7 +928,7 @@ int main(int argc, char** argv) {
 
     /* (E) GEMM-conv weight-reuse — OG-FUSE-PROD-KERNEL: register-tiled, BM-fold
      * weight reuse. The deliverable aimed at the saturated WEIGHT-bandwidth wall. */
-    {
+    if (!SKIP('E')) {
         for (int w = 0; w < WARMUP; ++w)
             k_moe_conv_gemm<<<p_gemm_grid, p_gemm_blk>>>(dX, dW, dB, dY, E, T, d, K, dil);
         CK(cudaDeviceSynchronize());
@@ -942,7 +948,7 @@ int main(int argc, char** argv) {
 
 #ifdef USE_CUBLAS
     /* (F) cuBLAS strided-batched GEMM — the ROOFLINE ceiling (vendor GEMM). */
-    {
+    if (!SKIP('F')) {
         cublasHandle_t hbl; cublasCreate(&hbl);
         float *dApack, *dBk;
         CK(cudaMalloc(&dApack, (size_t)E * K * d * d * sizeof(float)));
