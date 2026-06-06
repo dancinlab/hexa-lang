@@ -505,13 +505,34 @@ the own-GEMM gap lifts the whole stack automatically.
       ROOT CAUSE measured: the FP32 128B-swizzle is **g_phys = g XOR ((r+1)&7)** (NOT textbook g XOR r), and it must
       STILL compose with the 8×4 INTER core (gmma_phys) — a two-layer permutation one linear descriptor can't express.
       W8 66.9/6.41× frontier **KEPT (no regression)**. verdict `.verdicts/hexa-fusion/F-FUSION-SM90-WGMMA-W9.txt`.
-- [ ] **W10 composed swizzle layout** ★ NEXT — compose the W9-MEASURED swizzle (g XOR ((r+1)&7)) with `gmma_phys`
-      to derive the EXACT shared layout the wgmma swizzle-mode-1 descriptor needs; make TMA land it (CUTLASS
-      GMMA::Layout derivation, now with the on-pod constant in hand). Verify on a single-tile decode probe to
-      rel_rms 0 BEFORE any 2048³ perf run. Target: drop the permute bit-exact → 6.44× toward ≤1.3× parity.
+- [x] **W10 composed swizzle layout** ✅ BIG-PROGRESS (#2847) — composed the on-pod RE-MEASURED FP32 SWIZZLE_128B
+      law (TEXTBOOK g XOR (r&7), correcting W9's partial-probe (r+1)&7) with the 8×4 INTER `gmma_phys` core packing
+      as a PURE INDEX composition (no transpose, no row-major scratch). `gemm_w10` MODE4. native sm_90a H100 (vast
+      39707146, DESTROYED leak 0, nvcc 12.6). Single-tile GATES rel_rms **0** (MODE0+MODE1) BEFORE any perf (g5).
+      KEY: gmma scratch is a SINGLE shared buffer (not NST-ring-staged) → smem 131KB→98KB/CTA → **2 CTA/SM restored**.
+      **BIT-EXACT** rel_rms **0** @2048/4096/8192. own **66.9 → 70.7 TFLOP/s** @4096 (+5.7% same-pod) → **6.09×**.
+      In-place wgmma swizzle-descriptor (MODE5) = CLOSED-NEG (HW de-swizzle ≠ TMA atom stacking, floor 1.392).
+      verdict `.verdicts/hexa-fusion/F-FUSION-SM90-WGMMA-W10.txt`. kernel `self/native/wgmma/wgmma_tf32_w10.cu`.
+- [~] **W11 research-named top levers** — 🔴 LEVER-1 CLOSED-NEGATIVE (occupancy-coupled) + frontier KEPT. Applied
+      the litscan top-3 levers on the W10 composed-decode. native sm_90a H100 (vast 39717398, DESTROYED leak 0,
+      nvcc 12.6, driver 580.159.03). Single-tile gates rel_rms **0** (composed law intact); same-binary baseline
+      W10 MODE4 @4096 = 70.6 (6.12×, 2 CTA/SM). **LEVER 1 (128×256 tile, the named +34% jump) REGRESSED**: smem
+      98KB→147KB/CTA → **occupancy 2→1 CTA/SM**, own best 66.4 @4096 (6.44×), -6.0% vs frontier — the FP16 reuse
+      gain does NOT cover the halved residency on TF32. **LEVER 3 (ping-pong epilogue)** also below (64.5–66.3,
+      cannot return the smem). ALL rel_rms **0** (bit-exact). RULED OUT: "bigger tile alone" — it is occupancy-
+      coupled; pays off ONLY after lever 2 (warp-spec setmaxnreg) + a smem shrink hold 2 CTA/SM (litscan's own
+      Q2-step5 coupling CONFIRMED by measurement). **W10 70.7/6.09× frontier KEPT — no regression shipped.**
+      verdict `.verdicts/hexa-fusion/F-FUSION-SM90-WGMMA-W11.txt`. kernel `self/native/wgmma/wgmma_tf32_w11.cu`.
+- [ ] **W12 tile + warp-spec register-realloc (coupled)** ★ NEXT — make the W11 128×256 tile pay off by BOTH (a)
+      lever 2 setmaxnreg producer-40/consumer-232 warp-spec (promote the elected TMA thread to a producer WG) AND
+      (b) shrink the 128×256 smem under the 114KB/CTA ceiling for 2 CTA/SM (eliminate the W10 software decode copy
+      via a wgmma operand layout matching the TMA atom stacking — HW in-place RULED OUT, so a layout-emit). Only
+      with BOTH does the bigger tile hold 2 CTA/SM and the +34% reuse become visible. Tile-alone is closed-neg (W11).
 
-**STATE**: correctness CLOSED (W2/W3 bit-exact). Occupancy CLOSED (W8 2 CTA/SM, **66.5 TFLOP/s, 6.44×**). W9 PROVED
-the swizzle mechanically removes the per-K-step permute (SASS 28→0 STS) at full occupancy, but the naive linear-
-swizzle descriptor is bit-wrong (rel_rms 1.392) — the residual is now a MEASURED, recoverable layout-composition
-(W10: g XOR ((r+1)&7) ∘ gmma_phys), NOT emit-path / NOT occupancy / NOT 불가. Frontier kernel = W8 `gemm_ws_tma`
-(66.5, 6.44×, 2 CTA/SM, bit-exact). Parity OPEN, de-risked, own-GEMM-owned. cuBLAS = roofline, no superiority claim.
+**STATE**: correctness CLOSED (W2/W3 bit-exact). Occupancy CLOSED (W8→W10 2 CTA/SM). Permute-free composed decode
+LANDED (W10 **70.7 TFLOP/s, 6.09×**, bit-exact, #2847). W11 isolated the litscan top levers: **lever 1 (128×256
+tile) is occupancy-coupled and regresses alone** (2→1 CTA/SM, -6.0%) — a CLEAN closed-negative confirming the
+litscan's tile↔warp-spec coupling by measurement; lever 3 (ping-pong) cannot rescue it. Frontier kernel = W10
+`gemm_w10` (70.7, 6.09×, 2 CTA/SM, bit-exact) — **KEPT, no W11 regression shipped**. The bigger tile is correct
++ bit-exact; its payoff is GATED on W12 (warp-spec register realloc + smem shrink → restore 2 CTA/SM). Parity OPEN,
+de-risked, own-GEMM-owned. cuBLAS = roofline, no superiority claim.
