@@ -134,7 +134,7 @@ __device__ __forceinline__ uint64_t mk(uint32_t s,uint32_t lbo,uint32_t sbo){
 extern "C" __global__ void dump_a16(const __grid_constant__ CUtensorMap tmapA,
                                      float* __restrict__ gOut,int M,int K){
     const int TM=128, TKSW=64;
-    extern __shared__ __align__(128) __half sm[];
+    extern __shared__ __align__(128) unsigned char smem[]; __half* sm=(__half*)smem;
     __half* As=sm; uint64_t* bar=(uint64_t*)(As+TM*TKSW);
     int tid=threadIdx.x;
     if(tid==0){ mbar_init_tx(bar,1); }
@@ -150,7 +150,7 @@ extern "C" __global__ void dump_a16(const __grid_constant__ CUtensorMap tmapA,
 // ======================================================================
 extern "C" __global__ void dump_b16(const __grid_constant__ CUtensorMap tmapB,
                                      float* __restrict__ gOut,int nfloat){
-    extern __shared__ __align__(128) __half sm[];
+    extern __shared__ __align__(128) unsigned char smem[]; __half* sm=(__half*)smem;
     __half* Bs=sm; uint64_t* bar=(uint64_t*)(Bs+nfloat);
     int tid=threadIdx.x;
     if(tid==0){ mbar_init_tx(bar,1); }
@@ -173,7 +173,7 @@ extern "C" __global__ void probe_decode16(const __grid_constant__ CUtensorMap tm
                                            float* __restrict__ gOutSw, float* __restrict__ gOutGm,
                                            int M,int K){
     const int TM=128, TKSW=64;
-    extern __shared__ __align__(128) __half sm[];
+    extern __shared__ __align__(128) unsigned char smem[]; __half* sm=(__half*)smem;
     __half* As=sm; uint64_t* bar=(uint64_t*)(As + TM*TKSW);
     int tid=threadIdx.x;
     if(tid==0){ mbar_init_tx(bar,1); }
@@ -200,7 +200,7 @@ extern "C" __global__ void probe_wgmma16(const __grid_constant__ CUtensorMap tma
                                           const __grid_constant__ CUtensorMap tmapB,
                                           float* __restrict__ gD,int M,int N,int K){
     const int TM=64, TN=64, TKSW=64;   // TMA tile K is one 64-f16 atom (use first 16 K cols)
-    extern __shared__ __align__(128) __half sm[];
+    extern __shared__ __align__(128) unsigned char smem[]; __half* sm=(__half*)smem;
     __half* Asw=sm;                       // swizzled A 64x64
     __half* Bsw=Asw + TM*TKSW;            // swizzled B atom: 64(N) x 64(K) (use first 16 K)
     __half* Ag =Bsw + TN*TKSW;            // gmma-laid A 64x16
@@ -210,10 +210,11 @@ extern "C" __global__ void probe_wgmma16(const __grid_constant__ CUtensorMap tma
     if(tid==0){ mbar_init_tx(bar,1); }
     __syncthreads();
     if(tid==0){
-        uint32_t bytes = (uint32_t)((TM*TKSW + TN*TKSW)*2);
+        // A box {64(K),64(M)} = 64*64 f16. B box {64(N),16(K)} = 64*16 f16. exact tx bytes.
+        uint32_t bytes = (uint32_t)((TM*TKSW + TN*16)*2);
         mbar_expect_tx(bar,bytes);
         tma_load_2d(Asw,&tmapA,0,0,bar);
-        tma_load_2d(Bsw,&tmapB,0,0,bar);   // B atom: N 0..63 (box {64(N),64(K)} use first 16 K)
+        tma_load_2d(Bsw,&tmapB,0,0,bar);   // B atom: N 0..63, K 0..15
     }
     __syncthreads();
     if(tid==0) mbar_wait(bar,0);
@@ -262,7 +263,7 @@ extern "C" __global__ void probe_wgmma_bf16(const __grid_constant__ CUtensorMap 
                                             const __grid_constant__ CUtensorMap tmapB,
                                             float* __restrict__ gD,int M,int N,int K){
     const int TM=64, TN=64, TKSW=64;
-    extern __shared__ __align__(128) __nv_bfloat16 sm[];
+    extern __shared__ __align__(128) unsigned char smem[]; __nv_bfloat16* sm=(__nv_bfloat16*)smem;
     __nv_bfloat16* Asw=sm;
     __nv_bfloat16* Bsw=Asw + TM*TKSW;
     __nv_bfloat16* Ag =Bsw + TN*TKSW;
@@ -272,7 +273,7 @@ extern "C" __global__ void probe_wgmma_bf16(const __grid_constant__ CUtensorMap 
     if(tid==0){ mbar_init_tx(bar,1); }
     __syncthreads();
     if(tid==0){
-        uint32_t bytes = (uint32_t)((TM*TKSW + TN*TKSW)*2);
+        uint32_t bytes = (uint32_t)((TM*TKSW + TN*16)*2);
         mbar_expect_tx(bar,bytes);
         tma_load_2d(Asw,&tmapA,0,0,bar);
         tma_load_2d(Bsw,&tmapB,0,0,bar);
@@ -320,7 +321,7 @@ extern "C" __global__ void gemm_f16_w14(const __grid_constant__ CUtensorMap tmap
                                         float* __restrict__ gD,int M,int N,int K,int NST){
     const int TM=128,TN=128,TKSW=64,TK=16;
     int bm=blockIdx.y*TM, bn=blockIdx.x*TN;
-    extern __shared__ __align__(128) __half sm[];
+    extern __shared__ __align__(128) unsigned char smem[]; __half* sm=(__half*)smem;
     const int ASW=TM*TKSW, BSW=TN*TKSW;          // swizzled landings (f16, ring NST-deep)
     const int ABND=64*TKSW, BB=TKSW*64;           // gmma-laid bands (single)
     const int SWBUF=ASW+BSW;
@@ -425,7 +426,7 @@ extern "C" __global__ void gemm_f16_w14_ring(const __grid_constant__ CUtensorMap
                                              float* __restrict__ gD,int M,int N,int K,int NST,int NSTG){
     const int TM=128,TN=128,TKSW=64,TK=16;
     int bm=blockIdx.y*TM, bn=blockIdx.x*TN;
-    extern __shared__ __align__(128) __half sm[];
+    extern __shared__ __align__(128) unsigned char smem[]; __half* sm=(__half*)smem;
     const int ASW=TM*TKSW, BSW=TN*TKSW;
     const int ABND=64*TKSW, BB=TKSW*64;
     const int SWBUF=ASW+BSW;
@@ -546,7 +547,7 @@ extern "C" __global__ void gemm_bf16_w14(const __grid_constant__ CUtensorMap tma
                                          float* __restrict__ gD,int M,int N,int K,int NST){
     const int TM=128,TN=128,TKSW=64,TK=16;
     int bm=blockIdx.y*TM, bn=blockIdx.x*TN;
-    extern __shared__ __align__(128) __nv_bfloat16 sm[];
+    extern __shared__ __align__(128) unsigned char smem[]; __nv_bfloat16* sm=(__nv_bfloat16*)smem;
     const int ASW=TM*TKSW, BSW=TN*TKSW;
     const int ABND=64*TKSW, BB=TKSW*64;
     const int SWBUF=ASW+BSW;

@@ -437,7 +437,8 @@ on-silicon run with its own verdict:
 | 3 | wgmma no-swizzle bit-correctness | BLOCKED (rel-RMS 1.309) | not measured | `F-FUSION-SM90-WGMMA-SWIZZLE` |
 | W2/3 | wgmma GMMA INTER 8×4 layout | bit-exact (rel-RMS 0) @2048³ | layout SOLVED | `F-FUSION-SM90-WGMMA-GMMA-LAYOUT` |
 | W8 | TMA-producer dual-consumer-WG | bit-exact, **66.9 TFLOP/s** | **6.43×** off (2 CTA/SM) | `F-FUSION-SM90-WGMMA-W8` |
-| W10 | composed swizzle-decode (permute-free) | bit-exact, **70.7 TFLOP/s** ★ | **6.09×** off (2 CTA/SM, +5.7%) | `F-FUSION-SM90-WGMMA-W10` |
+| W10 | composed swizzle-decode (permute-free) | bit-exact, **70.7 TFLOP/s** ★ TF32 summit | **6.09×** off cuBLAS-TF32 (2 CTA/SM, +5.7%) | `F-FUSION-SM90-WGMMA-W10` |
+| W14 | **FP16/BF16** own-GEMM (NEW dtype axis) | bit-exact-vs-same-dtype, **71.6 TFLOP/s** (2 CTA/SM) | **11.5×** off cuBLAS-**FP16** — PARITY NO; W13 16KB-band overlap REFUTED (.k16 band still 32KB) | `F-FUSION-SM90-WGMMA-W14-FP16` |
 
 **Ladder narrative (honest, g5):**
 1. **30.4× → 29.4×** is the only measured improvement: the mma.sync cuBLAS-class
@@ -526,6 +527,23 @@ the own-GEMM gap lifts the whole stack automatically.
       copy per K-slab (the +5.7%). Remaining 6.09× = (a) the decode copy (HW in-place RULED OUT — needs a wgmma
       operand layout matching the TMA atom stacking) + (b) deeper warp-spec multi-stage (NST>2 regresses occupancy
       at the current tile). Target: 6.09× toward ≤1.3× parity, bit-exact gate first.
+- [x] **W14 PRECISION axis — FP16/BF16 own-GEMM (NEW dtype campaign)** ✅ landed correct, 🔴 W13 thesis refuted
+      (2026-06-06). The user-opted-into separate dtype axis after W13 closed the TF32 async-pipeline. Ported the W10
+      composed-swizzle-decode own-GEMM to 16-bit operands + f32 accumulate (`wgmma.mma_async...m64n64k16.f32.f16.f16`
+      and `.bf16.bf16`). **f16 GMMA layout RE-DERIVED** (8×8 core, 128B, vs TF32 8×4); on-GPU MODE2/3 dump confirms
+      the SWIZZLE_128B law = textbook g XOR (r&7) on 8-f16 granules, atom-major. **GATE CHANGE (g5, STATED): NOT
+      bit-exact-vs-FP64** — precision-appropriate rel_rms ≤1e-2 vs SAME-DTYPE oracle (cuBLAS-FP16/BF16, NOT TF32).
+      GATES PASS: MODE0/1/7 rel_rms **0.000e+00**; full GEMM rel_rms **0** (far inside 1e-2). **f16 frontier
+      `gemm_f16_w14` NST=2: own 71.6 TFLOP/s @4096 (76.4 @8192), 96 KB/CTA → 2 CTA/SM, cuBLAS-FP16 827.2, ratio
+      11.55×, PARITY=NO**. BF16 mirrors (71.1 @4096, 11.48× off cuBLAS-BF16). **🔴 W13 "16KB band → 2 bands at
+      2 CTA/SM reopens the overlap" REFUTED**: f16 wgmma is .k16, so a natural K-slab is 64-wide (one 128B atom),
+      band holds 2× K-elems → **32 KB = SAME as TF32**; MODE6 ring bit-exact but every 2nd-band config → 1 CTA/SM →
+      regress (50.9 @4096, −29%). The own kernel stays decode/occupancy-bound at ~71-76 TFLOP/s (≈ TF32 W10 absolute)
+      while cuBLAS-FP16 roofline DOUBLED (827 vs 431) → same-dtype ratio WIDENED. **TF32 W10 70.7/6.09× summit stays
+      the TF32 frontier — W14 is a separate dtype axis, untouched.** NOT the forge BF16-TC megakernel (different
+      artifact). native sm_90a H100 (vast 39729157, DESTROYED leak 0, nvcc 12.6 driver 560.35.03). Residual: escape
+      the software decode (f16 HW-swizzle in-place — TF32 W10 MODE5 was closed-neg, f16 unexplored) OR 32-K half-atom
+      slab (band → 16 KB). verdict `.verdicts/hexa-fusion/F-FUSION-SM90-WGMMA-W14-FP16.txt`.
 
 **STATE**: correctness CLOSED (W2/W3 bit-exact). Occupancy CLOSED (W8/W10 2 CTA/SM). **Frontier = W10 `gemm_w10`
 70.7 TFLOP/s, 6.09×, 2 CTA/SM, bit-exact** (beats W8 66.5/6.44× by +5.7%). W9 proved the swizzle removes the
@@ -539,7 +557,7 @@ Pinned by the user as this session's tracked axes. Two upstream "make it work" a
 
 | # | axis | what | status |
 |---|---|---|---|
-| 1 | own-GEMM perf — util on H100 too | sm_90a own-GEMM W-ladder toward cuBLAS parity (H100 low-util on D1536 = right-sizing: byte-eq D1536 saturates an RTX 5070 to 98%, an H100 to ~13%). W6 async-pipe 50.7 (8.39x) -> W7 dual-consumer closed-neg -> W8 TMA-producer 66.5 (6.44x, occupancy 1->2 CTA/SM) -> W9 swizzled-TMA | W9 in flight (W8 PR #2841) |
+| 1 | own-GEMM perf — util on H100 too | sm_90a own-GEMM W-ladder toward cuBLAS parity (H100 low-util on D1536 = right-sizing: byte-eq D1536 saturates an RTX 5070 to 98%, an H100 to ~13%). W6 async-pipe 50.7 (8.39x) -> W7 dual-consumer closed-neg -> W8 TMA-producer 66.5 (6.44x, occupancy 1->2 CTA/SM) -> W9 swizzled-TMA -> **W10 composed-decode 70.7 (6.09x) = TF32 SUMMIT** -> W11/12/13 TF32-async-pipe axis EXHAUSTED (closed-neg). **NEW dtype axis: W14 FP16/BF16 own-GEMM** — landed bit-exact-vs-same-dtype, own 71.6 (2 CTA/SM) but **11.5x off cuBLAS-FP16** (roofline doubled, ratio WIDENED); W13's 16KB-band-overlap thesis REFUTED for .k16 (band still 32KB). TF32 summit=70.7 UNTOUCHED (separate dtype). | **W14 done** (`F-FUSION-SM90-WGMMA-W14-FP16`); residual = escape software decode |
 | 2 | cuBLAS-impossible parallel | persistent whole-step megakernel: a persistent kernel CANNOT call cuBLAS, so cuBLAS structurally caps fusion at the GEMM boundary. own-GEMM removed THAT wall (megakernel calls our device GEMM in-line); 2nd wall = the 2 GroupNorm full-y reductions need a grid-sync cooperative kernel (cudaLaunchCooperativeKernel + grid.sync) | GN grid-sync in flight |
 | 3 | reflect 1+2 -> dojo | fold the own-GEMM ladder + megakernel-wall story into stdlib/dojo (hexa-cuda track) | downstream of 1,2 |
 | 4 | reflect 1+2 -> README | flame.forge.hexa-cuda trinity GPU section (PR #2842 reorganized it); fold the W8/W9 numbers + both-walls-closed story | #2842 = 1st pass, numbers TODO |
