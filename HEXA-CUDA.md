@@ -131,3 +131,22 @@ verdict .verdicts/hexa-cuda/F-HEXACUDA-ADOPTION-DX.txt.)
       binary caches a precompiled stdlib/dojo snapshot — SOURCE verified via
       self-contained compile) · NVPTX PTX emission (needs a CUDA host) · a live
       multi-GPU DDP rent (preflight LOGIC locally verified).
+- [x] D11 — DOJO reflects the own-GEMM / megakernel arc (branch
+      domain/dojo-reflect-owngemm): the landed `sm_90a` `wgmma`+TMA own-GEMM
+      W-ladder (W6 50.7 → W8 66.5 → W10 70.7 TFLOP/s, all bit-exact rel-RMS 0,
+      ~6.09× off cuBLAS-TF32 roofline @4096³) + the persistent whole-step
+      megakernel (both walls closed — own-GEMM removes the cuBLAS-call wall;
+      a grid-sync cooperative kernel closes the GroupNorm full-y reduction wall,
+      byte-eq max|Δ|=0) are reflected into the track-1 hexa-cuda dojo as a
+      READING LESSON ("GPU own-GEMM parity & the persistent megakernel" in
+      docs/hexa-dojo.md). HONEST FRAMING throughout: cuBLAS = roofline, parity
+      NOT achieved (6.09×), util-via-megakernel is a CLOSED-NEGATIVE — the win is
+      OWNERSHIP/completeness, not a perf/util brag. The 4 named gotchas (GMMA 8×4
+      INTER layout · `fence.proxy.async.shared::cta` · single-elected-thread HW
+      TMA producer for occupancy · software-composed `SWIZZLE_128B` w/ HW-swizzle
+      closed-neg) are documented as `.cu`/codegen-level engineering lessons — NOT
+      source-callable `@gpu` intrinsics (no invented source calls). CITES the
+      landed verdicts verbatim (F-FUSION-SM90-WGMMA-W8/W10 · MEGAKERNEL-GN-GRIDSYNC,
+      PRs #2841/#2847/#2845) + the lit scan (docs/research/sm90-wgmma-parity-litscan.md,
+      #2846). No new perf claims of our own. Verdict:
+      .verdicts/hexa-cuda/F-HEXACUDA-DOJO.txt (§9). Docs-only, no GPU.
