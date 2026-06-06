@@ -29,6 +29,8 @@
 #include <cstring>
 #include <cmath>
 #include <cstdint>
+#include <cuda.h>          // driver API: CUtensorMap, cuTensorMapEncodeTiled (MODE 4 TMA)
+#include <cudaTypedefs.h>  // CUtensorMapDataType / enums
 #include <cuda_runtime.h>
 #include <cublas_v2.h>
 #define CK(x) do{cudaError_t e=(x); if(e!=cudaSuccess){printf("CUDA-ERR %s @%d:%s\n",#x,__LINE__,cudaGetErrorString(e));return 3;}}while(0)
@@ -404,6 +406,132 @@ extern "C" __global__ void gemm_ws2(const float* __restrict__ gA,const float* __
     }
 }
 
+// ======================================================================
+// MODE 4 — TMA-PRODUCER DUAL-CONSUMER-WARPGROUP WARPSPEC (W8, the diagnosed lever).
+//   The W7 diagnosis (F-FUSION-SM90-WGMMA-W7): MODE 3 regressed 50.7->32.0 because its
+//   PRODUCER is a full 128-thread cp.async warpgroup — that 384-thread CTA is register-
+//   bound to 1 block/SM (90 regs*384 > 65536), netting only 256 compute-thr/SM vs the
+//   simple async-pipe's 512. The fix is to make the producer a HARDWARE TMA engine driven
+//   by a SINGLE ELECTED THREAD (cp.async.bulk.tensor.2d), freeing the other 255 threads so
+//   BOTH warpgroups are CONSUMERS issuing wgmma at full occupancy — exactly how cuBLAS
+//   reaches sm_90a peak.
+//
+//   GEOMETRY: TM=128, TN=128, TK=8. 256 threads = 2 warpgroups, BOTH consumers.
+//     thread 0 (elected) issues the TMA bulk loads for A-band (128x8, row-major) + B
+//       (8x128, row-major) into the ring stage; mbarrier.expect_tx tracks the byte count;
+//       TMA HW does the global->shared copy with NO consumer threads spent on the load.
+//     All 256 threads then mbar_wait(full[stage]) (TMA arrival), cooperatively permute the
+//       TMA-landed row-major Araw/Braw -> gmma INTER 8x4 layout (As0/As1/B0/B1), then each
+//       warpgroup issues its 2 wgmma over its 64-row A band x the SHARED B tile.
+//     A "tail" thread (elected) re-arms the stage for the next ring trip after both WGs
+//       finished the wgmma (tracked by an empty[] mbarrier, arrive count = 256).
+//   This keeps the SAME bit-exact gmma layout + descriptors (mk / gmma_phys / WG) as
+//   MODE 0..3 — only the PRODUCTION ENGINE changes (cp.async WG -> single-thread TMA).
+//   The B descriptor / wgmma path is byte-identical to MODE 3, so rel_rms must stay 0.
+//
+//   TMA descriptors (CUtensorMap) for A (MxK) and B (KxN) row-major are built host-side
+//   and passed __grid_constant__. tma_load_2d(dst, &tmap, x, y, bar): coord {x,y} indexes
+//   the tiled tensor map (x=fastest dim). For A row-major MxK, fastest=K, so {k0, bm}
+//   loads tile rows bm.. , cols k0.. into a BK-fast row-major staging buffer. For B row-
+//   major KxN, fastest=N, so {bn, k0} loads the 8x128 B band into row-major [kk][n].
+// ======================================================================
+__device__ __forceinline__ void mbar_init_tx(uint64_t* b,int cnt){
+    uint32_t s=(uint32_t)__cvta_generic_to_shared(b);
+    asm volatile("mbarrier.init.shared::cta.b64 [%0], %1;\n"::"r"(s),"r"(cnt));}
+__device__ __forceinline__ void mbar_expect_tx(uint64_t* b,uint32_t bytes){
+    uint32_t s=(uint32_t)__cvta_generic_to_shared(b);
+    asm volatile("mbarrier.arrive.expect_tx.shared::cta.b64 _, [%0], %1;\n"::"r"(s),"r"(bytes));}
+__device__ __forceinline__ void tma_load_2d(void* dst,const void* tmap,int x,int y,uint64_t* bar){
+    uint32_t d=(uint32_t)__cvta_generic_to_shared(dst);
+    uint32_t b=(uint32_t)__cvta_generic_to_shared(bar);
+    asm volatile(
+      "cp.async.bulk.tensor.2d.shared::cluster.global.mbarrier::complete_tx::bytes"
+      " [%0], [%1, {%2, %3}], [%4];\n"
+      ::"r"(d),"l"(tmap),"r"(x),"r"(y),"r"(b):"memory");}
+
+extern "C" __global__ void gemm_ws_tma(const __grid_constant__ CUtensorMap tmapA,
+                                        const __grid_constant__ CUtensorMap tmapB,
+                                        float* __restrict__ gD,int M,int N,int K,int NST){
+    const int TM=128,TN=128,TK=8;
+    int bm=blockIdx.y*TM, bn=blockIdx.x*TN;
+    extern __shared__ __align__(128) float sm[];
+    // per-stage: Araw(128*8 row-major TMA dst) + Braw(8*128 row-major TMA dst)
+    //          + As0(64*8) As1(64*8) B0(8*64) B1(8*64) gmma-laid.
+    const int ARAW=TM*TK, BRAW=TK*TN, ABND=64*TK, BB=TK*64;
+    const int BUF=ARAW+BRAW+2*ABND+2*BB;
+    uint64_t* full =(uint64_t*)(sm + (size_t)NST*BUF);
+    uint64_t* empty=full+NST;
+    int tid=threadIdx.x; int wg=tid>>7; int band=wg; int lt=tid&127;
+    int nk=K/TK;
+    const uint32_t bytesA=ARAW*4, bytesB=BRAW*4;
+    if(tid<NST){ mbar_init_tx(&full[tid],1); }      // TMA tx-complete arrives the barrier
+    else if(tid<2*NST){ mbar_init_tx(&empty[tid-NST],256); } // both WGs (256) arrive empty
+    __syncthreads();
+
+    float d0[32],d1[32];
+    #pragma unroll
+    for(int i=0;i<32;++i){d0[i]=0.f;d1[i]=0.f;}
+    uint32_t fph=0, eph=0;
+    // prologue: elected thread 0 kicks the first min(NST,nk) TMA loads.
+    int stages=NST<nk?NST:nk;
+    if(tid==0){
+        for(int st=0;st<stages;++st){
+            float* base=sm+(size_t)st*BUF; float* Araw=base; float* Braw=base+ARAW;
+            mbar_expect_tx(&full[st], bytesA+bytesB);
+            tma_load_2d(Araw,&tmapA,/*x=k*/st*TK,/*y=m*/bm,&full[st]);
+            tma_load_2d(Braw,&tmapB,/*x=n*/bn,/*y=k*/st*TK,&full[st]);
+        }
+    }
+    for(int ki=0;ki<nk;++ki){
+        int st=ki%NST;
+        mbar_wait(&full[st], fph); if(st==NST-1) fph^=1;
+        float* base=sm+(size_t)st*BUF;
+        float* Araw=base; float* Braw=base+ARAW;
+        float* As0=base+ARAW+BRAW; float* As1=As0+ABND;
+        float* B0=As1+ABND; float* B1=B0+BB;
+        // cooperative permute (all 256 thr): row-major Araw[m][kk] -> gmma As0/As1,
+        // row-major Braw[kk][n] -> gmma B0/B1. n is 's', kk is 'k' for B; m is 's' for A.
+        for(int i=tid;i<64*TK;i+=256){int m=i/TK,kk=i%TK; As0[gmma_phys(m,kk)]=Araw[m*TK+kk];}
+        for(int i=tid;i<64*TK;i+=256){int m=i/TK,kk=i%TK; As1[gmma_phys(m,kk)]=Araw[(64+m)*TK+kk];}
+        for(int i=tid;i<TK*64;i+=256){int kk=i/64,n=i%64; B0[gmma_phys(n,kk)]=Braw[kk*TN+n];}
+        for(int i=tid;i<TK*64;i+=256){int kk=i/64,n=i%64; B1[gmma_phys(n,kk)]=Braw[kk*TN+64+n];}
+        asm volatile("fence.proxy.async.shared::cta;\n":::"memory");
+        __syncthreads();
+        // each warpgroup consumes its own 64-row A band x the SHARED B tile.
+        float* As=(band==0)?As0:As1;
+        uint32_t aA=(uint32_t)__cvta_generic_to_shared(As);
+        uint32_t a0=(uint32_t)__cvta_generic_to_shared(B0), a1=(uint32_t)__cvta_generic_to_shared(B1);
+        uint64_t dA=mk(aA,128,256), dB0=mk(a0,128,256), dB1=mk(a1,128,256);
+        asm volatile("wgmma.fence.sync.aligned;\n":::"memory");
+        WG(d0,dA,dB0);
+        WG(d1,dA,dB1);
+        asm volatile("wgmma.commit_group.sync.aligned;\n"
+                     "wgmma.wait_group.sync.aligned 0;\n":::"memory");
+        __syncthreads(); // all 256 done reading this stage before re-arm
+        // elected thread re-arms this stage's NEXT TMA load (ring) if K remains.
+        if(tid==0){
+            int load_ki=ki+stages;
+            if(load_ki<nk){
+                int lst=load_ki%NST;
+                float* lb=sm+(size_t)lst*BUF; float* lAraw=lb; float* lBraw=lb+ARAW;
+                mbar_expect_tx(&full[lst], bytesA+bytesB);
+                tma_load_2d(lAraw,&tmapA,load_ki*TK,bm,&full[lst]);
+                tma_load_2d(lBraw,&tmapB,bn,load_ki*TK,&full[lst]);
+            }
+        }
+    }
+    // epilogue: each consumer WG writes its own 64-row band.
+    int rbase=bm+band*64;
+    int w=lt>>5,l=lt&31,rb=w*16+(l>>2),cb=(l&3)*2;
+    #pragma unroll
+    for(int c=0;c<8;++c)for(int r=0;r<2;++r)for(int p=0;p<2;++p){
+        int idx=c*4+r*2+p,row=rbase+rb+r*8;
+        int col0=bn+cb+p+c*8, col1=bn+64+cb+p+c*8;
+        if(row<M&&col0<N)gD[row*N+col0]=d0[idx];
+        if(row<M&&col1<N)gD[row*N+col1]=d1[idx];
+    }
+}
+
 static inline float tf(float x){uint32_t u;memcpy(&u,&x,4);u=(u+0x1000u)&0xFFFFE000u;float r;memcpy(&r,&u,4);return r;}
 
 int main(int argc,char**argv){
@@ -424,12 +552,40 @@ int main(int argc,char**argv){
     CB(cublasSgemm(h,CUBLAS_OP_N,CUBLAS_OP_N,N,M,K,&al,dB,N,dA,K,&be,dR,N));CK(cudaDeviceSynchronize());
     CK(cudaMemcpy(hR,dR,szD*4,cudaMemcpyDeviceToHost));
 
-    // MODE 3 tiles M by 128 (dual-consumer-WG); all others by 64.
-    int TMm = (MODE==3)?128:64;
+    // ---- MODE 4 TMA tensor maps for A (MxK) and B (KxN), row-major ----
+    CUtensorMap tmapA{}, tmapB{};
+    if(MODE==4){
+        void* fn=nullptr; cudaDriverEntryPointQueryResult q;
+        cudaGetDriverEntryPoint("cuTensorMapEncodeTiled",&fn,cudaEnableDefault,&q);
+        typedef CUresult (*Enc_t)(CUtensorMap*,CUtensorMapDataType,cuuint32_t,void*,
+            const cuuint64_t*,const cuuint64_t*,const cuuint32_t*,const cuuint32_t*,
+            CUtensorMapInterleave,CUtensorMapSwizzle,CUtensorMapL2promotion,CUtensorMapFloatOOBfill);
+        Enc_t enc=(Enc_t)fn;
+        if(!enc){printf("MODE4: cuTensorMapEncodeTiled unavailable (CUDA<12?)\n");return 4;}
+        // A row-major MxK: global dims {K,M} (fastest=K), box tile {TK=8, TM=128}.
+        { cuuint64_t gd[2]={(cuuint64_t)K,(cuuint64_t)M}; cuuint64_t gs[1]={(cuuint64_t)K*4};
+          cuuint32_t bd[2]={8,128}; cuuint32_t es[2]={1,1};
+          CUresult r=enc(&tmapA,CU_TENSOR_MAP_DATA_TYPE_FLOAT32,2,dA,gd,gs,bd,es,
+            CU_TENSOR_MAP_INTERLEAVE_NONE,CU_TENSOR_MAP_SWIZZLE_NONE,
+            CU_TENSOR_MAP_L2_PROMOTION_NONE,CU_TENSOR_MAP_FLOAT_OOB_FILL_NONE);
+          if(r!=CUDA_SUCCESS){printf("MODE4: encodeA r=%d\n",(int)r);return 4;} }
+        // B row-major KxN: global dims {N,K} (fastest=N), box tile {TN=128, TK=8}.
+        { cuuint64_t gd[2]={(cuuint64_t)N,(cuuint64_t)K}; cuuint64_t gs[1]={(cuuint64_t)N*4};
+          cuuint32_t bd[2]={128,8}; cuuint32_t es[2]={1,1};
+          CUresult r=enc(&tmapB,CU_TENSOR_MAP_DATA_TYPE_FLOAT32,2,dB,gd,gs,bd,es,
+            CU_TENSOR_MAP_INTERLEAVE_NONE,CU_TENSOR_MAP_SWIZZLE_NONE,
+            CU_TENSOR_MAP_L2_PROMOTION_NONE,CU_TENSOR_MAP_FLOAT_OOB_FILL_NONE);
+          if(r!=CUDA_SUCCESS){printf("MODE4: encodeB r=%d\n",(int)r);return 4;} }
+    }
+
+    // MODE 3/4 tile M by 128 (dual-consumer-WG); all others by 64.
+    int TMm = (MODE==3||MODE==4)?128:64;
     dim3 grid(N/128,(M+TMm-1)/TMm);
-    int blk = (MODE==3)?384:(MODE==2)?256:128;
+    int blk = (MODE==3)?384:(MODE==2||MODE==4)?256:128;
     // MODE 3 per-stage shared = 2*(64*8) + 2*(8*64) + 8*128 floats, + 2*NST mbarriers.
     size_t ws2_sm = (size_t)NST*((size_t)2*64*8 + 2*8*64 + 8*128)*4 + (size_t)2*NST*8;
+    // MODE 4 per-stage = Araw(128*8)+Braw(8*128)+2*(64*8)+2*(8*64) floats, + 2*NST mbarriers.
+    size_t tma_sm = (size_t)NST*((size_t)128*8 + 8*128 + 2*64*8 + 2*8*64)*4 + (size_t)2*NST*8;
     size_t smsz;
     auto launch=[&](){
         if(MODE==0){ smsz=2*((size_t)64*8+2*8*64)*4;
@@ -438,8 +594,10 @@ int main(int argc,char**argv){
             gemm_apipe<<<grid,blk,smsz>>>(dA,dB,dD,M,N,K,NST); }
         else if(MODE==2){ smsz=(size_t)NST*((size_t)64*8+2*8*64+8*128)*4 + (size_t)2*NST*8;
             gemm_ws<<<grid,blk,smsz>>>(dA,dB,dD,M,N,K,NST); }
-        else { smsz=ws2_sm;
+        else if(MODE==3){ smsz=ws2_sm;
             gemm_ws2<<<grid,blk,smsz>>>(dA,dB,dD,M,N,K,NST); }
+        else { smsz=tma_sm;
+            gemm_ws_tma<<<grid,blk,smsz>>>(tmapA,tmapB,dD,M,N,K,NST); }
     };
     CK(cudaMemset(dD,0,szD*4));
     if(MODE==1){ CK(cudaFuncSetAttribute(gemm_apipe,cudaFuncAttributeMaxDynamicSharedMemorySize,
@@ -448,6 +606,19 @@ int main(int argc,char**argv){
         (int)((size_t)NST*((size_t)64*8+2*8*64+8*128)*4 + (size_t)2*NST*8))); }
     if(MODE==3){ CK(cudaFuncSetAttribute(gemm_ws2,cudaFuncAttributeMaxDynamicSharedMemorySize,
         (int)ws2_sm)); }
+    if(MODE==4){ CK(cudaFuncSetAttribute(gemm_ws_tma,cudaFuncAttributeMaxDynamicSharedMemorySize,
+        (int)tma_sm)); }
+    // ---- occupancy proxy (the W8 success metric): CTAs/SM for the launched kernel ----
+    { int occ=0; int dynsm=(int)(MODE==0?2*((size_t)64*8+2*8*64)*4:
+        MODE==1?(size_t)NST*((size_t)64*8+2*8*64+8*128)*4:
+        MODE==2?(size_t)NST*((size_t)64*8+2*8*64+8*128)*4+(size_t)2*NST*8:
+        MODE==3?ws2_sm:tma_sm);
+      const void* kf=(MODE==0?(const void*)gemm_w5:MODE==1?(const void*)gemm_apipe:
+        MODE==2?(const void*)gemm_ws:MODE==3?(const void*)gemm_ws2:(const void*)gemm_ws_tma);
+      cudaOccupancyMaxActiveBlocksPerMultiprocessor(&occ,kf,blk,(size_t)dynsm);
+      printf("OCCUPANCY MODE=%d blk=%d dynsmem=%dB -> %d CTA/SM (%d compute-thr/SM)\n",
+             MODE,blk,dynsm,occ,occ*blk);
+    }
     launch();
     cudaError_t e=cudaGetLastError();if(e==cudaSuccess)e=cudaDeviceSynchronize();
     if(e!=cudaSuccess){printf("OWN-FAULT MODE=%d %s\n",MODE,cudaGetErrorString(e));return 4;}
