@@ -421,12 +421,12 @@ int main(int argc,char**argv){
         CK(cudaMemset(dD,0,szD*4));
         launch();
         cudaError_t e=cudaGetLastError(); if(e==cudaSuccess)e=cudaDeviceSynchronize();
-        if(e!=cudaSuccess){printf("MODE4 OWN-FAULT pm=%d swm=%d sbo=%d boff=%d %s\n",PM,SWM,SBO,BOFF,cudaGetErrorString(e));return 4;}
+        if(e!=cudaSuccess){printf("MODE4 OWN-FAULT pm=%d swm=%d sbo=%d boff=%d %s\n",1,SWM,SBO,BOFF,cudaGetErrorString(e));return 4;}
         CK(cudaMemcpy(hD,dD,szD*4,cudaMemcpyDeviceToHost));
         double se=0,sr=0;for(size_t i=0;i<szD;++i){double dd=(double)hD[i]-hR[i];se+=dd*dd;sr+=(double)hR[i]*hR[i];}
         double rr=sqrt(se/fmax(1e-30,sr));
         if(rr>3e-3){printf("OG16 S=%d MODE=4 NST=%d pm=%d swm=%d sbo=%d boff=%d rel_rms=%.3e FAIL — no perf (g5)\n",
-            S,NST,PM,SWM,SBO,BOFF,rr);return 2;}
+            S,NST,1,SWM,SBO,BOFF,rr);return 2;}
         cudaEvent_t s0,s1;CK(cudaEventCreate(&s0));CK(cudaEventCreate(&s1));int it=20;
         launch();CK(cudaDeviceSynchronize());
         CK(cudaEventRecord(s0));for(int i=0;i<it;++i)launch();
@@ -439,7 +439,7 @@ int main(int argc,char**argv){
         float mc;CK(cudaEventElapsedTime(&mc,s0,s1));mc/=it;
         double tfc=fl/(mc*1e-3)/1e12,ratio=tfc/tfo;
         printf("OG16 S=%d MODE=4 NST=%d pm=%d swm=%d sbo=%d boff=%d own=%.1f TFLOP/s cuBLAS-TF32=%.1f ratio(cuBLAS/own)=%.2fx rel_rms=%.3e PARITY=%s\n",
-               S,NST,PM,SWM,SBO,BOFF,tfo,tfc,ratio,rr,ratio<=1.3?"YES":"NO");
+               S,NST,1,SWM,SBO,BOFF,tfo,tfc,ratio,rr,ratio<=1.3?"YES":"NO");
         return 0;
     }
 
