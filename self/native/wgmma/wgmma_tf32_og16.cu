@@ -144,21 +144,25 @@ static int perm_global_slot(int pm,int m,int k,int TM,int KSW){
     // row-major (box {KSW, TM}) into SMEM with its OWN K-granule swizzle g^(r&7), placing the
     // value at the right GLOBAL slot makes the landed SMEM hold it where the descriptor reads.
     int r=m&7, a=m>>3;
-    if(pm==0){ return m*KSW + k; }                       // identity
+    // KEY INSIGHT (MODE2 oracle confirmed): TMA lands SMEM[r*32+(g^(r&7))*4+w]=global gran g.
+    // The layout_type_=1 descriptor de-swizzle UNDOES the XOR -> descriptor-direct reads the
+    // GLOBAL LOGICAL layout (row-major within the atom). But wgmma m64n64k8 expects the operand
+    // fragment in GMMA-INTER 8x4 core order (gmma_phys). So the net requirement is: pre-permute
+    // GLOBAL so that the logical (m,k) value sits where gmma-INTER wants it -> write value of
+    // (m,k) to the global slot whose row-major index EQUALS gmma_phys(m_in_atom, k) within the
+    // atom's 8x32 (=256) block, atom-major stacked (atom a at a*256).
+    if(pm==0){ return m*KSW + k; }                       // identity (W15 baseline, floor 1.0)
     if(pm==1){
-        // target: descriptor reads gmma INTER. gmma_phys gives the within-64x8 slot; map it
-        // back through the TMA K-swizzle (g^(r&7)) so the landed byte sits where gmma wants.
-        int g=k>>2, w=k&3; int gp=g^(r&7);
-        return m*KSW + gp*4 + w;                          // pre-XOR cancels the TMA swizzle
+        // gmma_phys over an 8(row)x32(K) atom: row-in-atom r, K k. gmma wants 8x4 INTER cores.
+        return a*256 + gmma_phys(r,k);
     }
     if(pm==2){
-        // MN-granule swizzle variant: XOR the row-atom index into the granule.
-        int g=k>>2, w=k&3; int gp=g^(a&7);
-        return m*KSW + gp*4 + w;
+        // transpose variant: gmma_phys with (k,r) swapped role (in case operand is N-major).
+        return a*256 + gmma_phys(r,k);                    // same here; B path differs in host
     }
     if(pm==3){
-        int g=k>>2, w=k&3; int gp=g^((r+1)&7);            // +1 phase
-        return m*KSW + gp*4 + w;
+        // pm=1 + carry the +1 alignment phase in the row index (base_offset_ sweeps it too).
+        int rr=(r+1)&7; return a*256 + gmma_phys(rr,k);
     }
     return m*KSW + k;
 }
@@ -171,9 +175,15 @@ static int perm_global_slot(int pm,int m,int k,int TM,int KSW){
 // ======================================================================
 extern "C" __global__ void probe_a(const __grid_constant__ CUtensorMap tmapA,
                                     const __grid_constant__ CUtensorMap tmapB,
-                                    float* __restrict__ gD,int lbo,int sbo,int boff,int swmode){
+                                    float* __restrict__ gD,int lbo,int sbo,int boff,int swmode,int bload){
     const int TM=64, TN=64, TKSW=32;
-    extern __shared__ __align__(128) float sm[];
+    extern __shared__ __align__(128) float sm_raw[];
+    // PAD both sides (8K floats) so a mis-strided descriptor reads valid garbage, never faults
+    // -> the whole pm x descriptor family sweeps in one CUDA context (W15 MODE9 technique).
+    const int PAD=8192;
+    float* sm=sm_raw+PAD;
+    for(int i=threadIdx.x;i<PAD;i+=blockDim.x){ sm_raw[i]=0.f; sm_raw[PAD+TM*TKSW+TN*TKSW+i]=0.f; }
+    __syncthreads();
     float* Asw=sm;                       // 64*32
     float* Bsw=Asw + TM*TKSW;             // 2*(32*32)
     uint64_t* bar=(uint64_t*)(Bsw + TN*TKSW);
@@ -184,8 +194,13 @@ extern "C" __global__ void probe_a(const __grid_constant__ CUtensorMap tmapA,
         uint32_t bytes=(uint32_t)((TM*TKSW + TN*TKSW)*4);
         mbar_expect_tx(bar,bytes);
         tma_load_2d(Asw,        &tmapA,0,0,bar);
-        tma_load_2d(Bsw,        &tmapB,0, 0,bar);
-        tma_load_2d(Bsw+32*TKSW,&tmapB,32,0,bar);
+        if(bload==0){ // W15 B box {32(N),32(K)}: atoms along N = the x coord
+            tma_load_2d(Bsw,        &tmapB,0, 0,bar);
+            tma_load_2d(Bsw+32*TKSW,&tmapB,32,0,bar);
+        } else {      // gmma-INTER B box {32(K),32(N)}: atoms along N = the y coord
+            tma_load_2d(Bsw,        &tmapB,0, 0,bar);
+            tma_load_2d(Bsw+32*TKSW,&tmapB,0,32,bar);
+        }
     }
     __syncthreads();
     if(tid==0) mbar_wait(bar,0);
@@ -419,68 +434,79 @@ int main(int argc,char**argv){
         for(int i=0;i<M*K;++i)hA[i]=tf(((rand()%17)-8)*0.125f);
         for(int i=0;i<K*N;++i)hB[i]=tf(((rand()%17)-8)*0.125f);
         for(int m=0;m<M;++m)for(int n=0;n<N;++n){float a=0;for(int kk=0;kk<K;++kk)a+=hA[m*K+kk]*hB[kk*N+n];hR[m*N+n]=a;}
-        // device buffers (encode once; we re-fill per pm)
         float *dA,*dB,*dD; CK(cudaMalloc(&dA,(size_t)M*KSW*4));CK(cudaMalloc(&dB,(size_t)KSW*N*4));CK(cudaMalloc(&dD,(size_t)M*N*4));
         float *hApad=(float*)calloc((size_t)M*KSW,4), *hBpad=(float*)calloc((size_t)KSW*N,4);
-        // B path: identity (B uses its own box; route-(a) is about A's landing — but we also
-        // pre-permute B symmetrically so the SAME descriptor reads both). For the differential
-        // we apply pm to BOTH A and B (gmma_phys is symmetric in the strided dim).
-        CUtensorMap tmapA{},tmapB{};
-        { cuuint64_t gd[2]={(cuuint64_t)KSW,(cuuint64_t)M}; cuuint64_t gs[1]={(cuuint64_t)KSW*4};
-          cuuint32_t bd[2]={32,64}; cuuint32_t es[2]={1,1};
-          CUresult r=enc(&tmapA,CU_TENSOR_MAP_DATA_TYPE_FLOAT32,2,dA,gd,gs,bd,es,
-            CU_TENSOR_MAP_INTERLEAVE_NONE,CU_TENSOR_MAP_SWIZZLE_128B,
-            CU_TENSOR_MAP_L2_PROMOTION_NONE,CU_TENSOR_MAP_FLOAT_OOB_FILL_NONE);
-          if(r!=CUDA_SUCCESS){printf("MODE10 encodeA r=%d\n",(int)r);return 4;} }
-        { cuuint64_t gd[2]={(cuuint64_t)N,(cuuint64_t)KSW}; cuuint64_t gs[1]={(cuuint64_t)N*4};
-          cuuint32_t bd[2]={32,32}; cuuint32_t es[2]={1,1};
-          CUresult r=enc(&tmapB,CU_TENSOR_MAP_DATA_TYPE_FLOAT32,2,dB,gd,gs,bd,es,
-            CU_TENSOR_MAP_INTERLEAVE_NONE,CU_TENSOR_MAP_SWIZZLE_128B,
-            CU_TENSOR_MAP_L2_PROMOTION_NONE,CU_TENSOR_MAP_FLOAT_OOB_FILL_NONE);
-          if(r!=CUDA_SUCCESS){printf("MODE10 encodeB r=%d\n",(int)r);return 4;} }
-        size_t smsz=(size_t)(M*KSW + N*KSW)*4 + 8;
+        size_t smsz=(size_t)(2*8192 + M*KSW + N*KSW)*4 + 8;   // padded both sides (fault-proof)
         CK(cudaFuncSetAttribute(probe_a,cudaFuncAttributeMaxDynamicSharedMemorySize,(int)smsz));
-        // sweep: pm x swmode x sbo x boff
-        int pml[4]={0,1,2,3};
-        int swl[3]={1,0,2};
-        int sbl[5]={1024,256,512,128,2048};
+        // ===== route-(a) sweep: pm (global pre-permute) x tsw (TMA box swizzle) x swm/sbo/boff.
+        //   pm=0 identity (W15 baseline, expect floor 1.0 with SWIZZLE+swm1).
+        //   pm=1 gmma-INTER pre-laid global. With tsw=NONE + swm=0: descriptor reads gmma INTER
+        //        directly -> EXPECT 0 (this is the W10 composed-decode result moved to global, no
+        //        in-kernel decode band). With tsw=128B + swm=1: tests if HW de-swizzle ALSO
+        //        recovers gmma INTER (keeps swizzle bandwidth). The arbiter is bit-exact.
+        // A box: K-contiguous {32(K),64(M)}. B box: K-contiguous-as-strided {32(N),32(K)} per atom.
+        int pml[4]={1,3,2,0};
+        int tswl[2]={0,1};   // 0=CU_TENSOR_MAP_SWIZZLE_NONE, 1=SWIZZLE_128B
+        int swl[3]={0,1,2};  // descriptor layout_type_
+        int sbl[4]={256,1024,512,128};
         int bol[8]={0,1,2,3,4,5,6,7};
-        double best=1e9; int bP=0,bW=0,bS=0,bB=0;
+        double best=1e9; int bP=0,bT=0,bW=0,bS=0,bB=0;
         for(int pi=0;pi<4;++pi){
             int pm=pml[pi];
-            // pre-permute A (and B symmetrically) into global per pm
+            // pre-permute A into global per pm. A logical (m 0..63, k 0..7) -> KSW-wide row-major.
             memset(hApad,0,(size_t)M*KSW*4); memset(hBpad,0,(size_t)KSW*N*4);
             for(int m=0;m<M;++m)for(int k=0;k<K;++k) hApad[ perm_global_slot(pm,m,k,M,KSW) ] = hA[m*K+k];
-            // B is K-major-on-N (strided dim = N). symmetric permute on (n,k):
+            // B logical (k 0..7, n 0..63). Mirror A: lay B N-major KSW-wide, box {32(K),32(N)}
+            // landing SMEM[n_local*32 + k] per 32-N atom. pm-permute into gmma-INTER like A so
+            // the descriptor reads the B operand fragment in gmma_phys order. Atom c=n>>5.
             for(int k=0;k<K;++k)for(int n=0;n<N;++n){
-                int nn=n, slot;
-                int g=k>>2,w=k&3,rr=nn&7,aa=nn>>3;
-                if(pm==0) slot = k*N + nn;
-                else if(pm==1){ int gp=g^(rr&7); slot = nn*KSW + gp*4 + w; }  // B stored (n-major,KSW)
-                else if(pm==2){ int gp=g^(aa&7); slot = nn*KSW + gp*4 + w; }
-                else { int gp=g^((rr+1)&7); slot = nn*KSW + gp*4 + w; }
-                // Note: for pm>=1 B global is n-major KSW-wide (box {32,32} reads it). For pm=0
-                // B is k-major N-wide (the W15 layout). We re-encode B box accordingly below.
-                if(pm==0) hBpad[slot]=hB[k*N+n];
-                else      hBpad[slot]=hB[k*N+n];
+                int c=n>>5, nn=n&31, slot;
+                if(pm==0) slot = k*N + n;                         // W15 baseline (K-major N-wide)
+                else {                                            // gmma-INTER, N-major KSW-wide
+                    int r=nn&7, a=nn>>3; int rr=(pm==3)?((r+1)&7):r;
+                    slot = c*(32*KSW) + a*256 + gmma_phys(rr,k);
+                }
+                hBpad[slot]=hB[k*N+n];
             }
             CK(cudaMemcpy(dA,hApad,(size_t)M*KSW*4,cudaMemcpyHostToDevice));
             CK(cudaMemcpy(dB,hBpad,(size_t)KSW*N*4,cudaMemcpyHostToDevice));
-            for(int wi=0;wi<3;++wi)for(int si=0;si<5;++si)for(int bi=0;bi<8;++bi){
-                int SWM=swl[wi],SBO=sbl[si],BOFF=bol[bi];
-                CK(cudaMemset(dD,0,(size_t)M*N*4));
-                probe_a<<<1,128,smsz>>>(tmapA,tmapB,dD,128,SBO,BOFF,SWM);
-                cudaError_t e=cudaDeviceSynchronize();
-                if(e!=cudaSuccess){ printf("MODE10 FAULT pm=%d swm=%d sbo=%d boff=%d %s\n",pm,SWM,SBO,BOFF,cudaGetErrorString(e)); return 4; }
-                CK(cudaMemcpy(hD,dD,(size_t)M*N*4,cudaMemcpyDeviceToHost));
-                double se=0,sr=0;for(int i=0;i<M*N;++i){double dd=(double)hD[i]-hR[i];se+=dd*dd;sr+=(double)hR[i]*hR[i];}
-                double rr=sqrt(se/fmax(1e-30,sr));
-                if(rr<best){best=rr;bP=pm;bW=SWM;bS=SBO;bB=BOFF;
-                    printf("OG16-NEWBEST rel_rms=%.3e @ pm=%d swm=%d sbo=%d boff=%d\n",rr,pm,SWM,SBO,BOFF);}
+            for(int ti=0;ti<2;++ti){
+                CUtensorMap tmapA{},tmapB{};
+                CUtensorMapSwizzle SW = tswl[ti]?CU_TENSOR_MAP_SWIZZLE_128B:CU_TENSOR_MAP_SWIZZLE_NONE;
+                { cuuint64_t gd[2]={(cuuint64_t)KSW,(cuuint64_t)M}; cuuint64_t gs[1]={(cuuint64_t)KSW*4};
+                  cuuint32_t bd[2]={32,64}; cuuint32_t es[2]={1,1};
+                  if(enc(&tmapA,CU_TENSOR_MAP_DATA_TYPE_FLOAT32,2,dA,gd,gs,bd,es,
+                     CU_TENSOR_MAP_INTERLEAVE_NONE,SW,CU_TENSOR_MAP_L2_PROMOTION_NONE,
+                     CU_TENSOR_MAP_FLOAT_OOB_FILL_NONE)!=CUDA_SUCCESS){ continue; } }
+                if(pm==0){ // W15 baseline: B K-major(N wide), box {32(N),32(K)}
+                  cuuint64_t gd[2]={(cuuint64_t)N,(cuuint64_t)KSW}; cuuint64_t gs[1]={(cuuint64_t)N*4};
+                  cuuint32_t bd[2]={32,32}; cuuint32_t es[2]={1,1};
+                  if(enc(&tmapB,CU_TENSOR_MAP_DATA_TYPE_FLOAT32,2,dB,gd,gs,bd,es,
+                     CU_TENSOR_MAP_INTERLEAVE_NONE,SW,CU_TENSOR_MAP_L2_PROMOTION_NONE,
+                     CU_TENSOR_MAP_FLOAT_OOB_FILL_NONE)!=CUDA_SUCCESS){ continue; }
+                } else {   // gmma-INTER: B N-major(KSW wide), box {32(K),32(N)} -> SMEM[n_loc*32+k]
+                  cuuint64_t gd[2]={(cuuint64_t)KSW,(cuuint64_t)N}; cuuint64_t gs[1]={(cuuint64_t)KSW*4};
+                  cuuint32_t bd[2]={32,32}; cuuint32_t es[2]={1,1};
+                  if(enc(&tmapB,CU_TENSOR_MAP_DATA_TYPE_FLOAT32,2,dB,gd,gs,bd,es,
+                     CU_TENSOR_MAP_INTERLEAVE_NONE,SW,CU_TENSOR_MAP_L2_PROMOTION_NONE,
+                     CU_TENSOR_MAP_FLOAT_OOB_FILL_NONE)!=CUDA_SUCCESS){ continue; }
+                }
+                for(int wi=0;wi<3;++wi)for(int si=0;si<4;++si)for(int bi=0;bi<8;++bi){
+                    int SWM=swl[wi],SBO=sbl[si],BOFF=bol[bi];
+                    CK(cudaMemset(dD,0,(size_t)M*N*4));
+                    probe_a<<<1,128,smsz>>>(tmapA,tmapB,dD,128,SBO,BOFF,SWM,(pm!=0)?1:0);
+                    cudaError_t e=cudaDeviceSynchronize();
+                    if(e!=cudaSuccess){ cudaGetLastError(); continue; }
+                    CK(cudaMemcpy(hD,dD,(size_t)M*N*4,cudaMemcpyDeviceToHost));
+                    double se=0,sr=0;for(int i=0;i<M*N;++i){double dd=(double)hD[i]-hR[i];se+=dd*dd;sr+=(double)hR[i]*hR[i];}
+                    double rr=sqrt(se/fmax(1e-30,sr));
+                    if(rr<best){best=rr;bP=pm;bT=tswl[ti];bW=SWM;bS=SBO;bB=BOFF;
+                        printf("OG16-NEWBEST rel_rms=%.3e @ pm=%d tsw=%d swm=%d sbo=%d boff=%d\n",rr,pm,tswl[ti],SWM,SBO,BOFF);}
+                }
             }
         }
-        printf("OG16 MODE10 SWEEP-DONE best rel_rms=%.3e @ pm=%d swm=%d sbo=%d boff=%d %s\n",
-               best,bP,bW,bS,bB, best<=3e-3?"PASS (route-a atom MATCHED — band usable)":"FAIL (atom not matchable by this family)");
+        printf("OG16 MODE10 SWEEP-DONE best rel_rms=%.3e @ pm=%d tsw=%d swm=%d sbo=%d boff=%d %s\n",
+               best,bP,bT,bW,bS,bB, best<=3e-3?"PASS (route-a atom MATCHED — band usable)":"FAIL (atom not matchable by this family)");
         return best<=3e-3?0:2;
     }
 
