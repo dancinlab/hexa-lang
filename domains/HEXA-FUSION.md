@@ -33,9 +33,19 @@
   loop with a shared-mem-tiled conv so the fused kernel ALSO wins in the SATURATED regime (d>=1024), not
   only under-fill. Gate: byte-eq max|D|=0 vs the 30-conv reference; target: beat ModuleList-30 step-time
   at d>=1024 too. GPU run access-gated (deliberate, no auto-fire).
-- [ ] **OG-FUSE-XOVER — d=6208/H200 production crossover** — measure the actual under-fill->saturated
-  boundary at the PRODUCTION shape (d=6208, E=30, H200 132 SMs) to confirm the cure applies to the real
-  7B CLMConvMoE step. Blocked on H100/H200 access (unresolved); deliberate, no auto-fire.
+- [x] **OG-FUSE-XOVER — d=6208/H200 production crossover** ✅ (2026-06-07, F-FUSION-MOE-CONV-XOVER 🔴
+  closed-negative): measured on the EXACT production GPU (NVIDIA H200, 132 SMs, sm_90, vast 39749545
+  DESTROYED leak-0). GATE FIRST PASS at every swept d — byte-eq max|Δ|(fused/grouped vs ModuleList-30)=0,
+  device-vs-CPU 2.98e-7 fp32-FMA. d-sweep {4096,6208,8192} median step (ms), winner=ModuleList-30 EVERY d:
+  d=4096 A=1648.8 / C-fused=3132.7 / B-grouped=16134 · **d=6208(PROD) A=3736.1 / C=7076.2 / B=37921** ·
+  d=8192 A=8902.1 / C=12660.6 / B=64351.7. util MEAN 96-97% / PEAK 100% on ALL 3 paths at ALL d (saturated).
+  **VERDICT: d=6208/H200 is in the SATURATED regime — the f5e18a0f fused-conv launch cure DOES NOT APPLY
+  to the real 7B CLMConvMoE step.** ModuleList-30 already issues 1568 CTAs/launch at d=6208 (~12× the 132
+  SMs) → no under-fill headroom → fused loses 1.89×. The #2859 "d=6208 lives in under-fill" conjecture is
+  FALSIFIED; under-fill on a 132-SM GPU needs d≲384 (below any real MoE width). The ~74s/step production
+  wall is therefore a roofline/memory problem (→ OG-FUSE-OPT tiled kernel), NOT a launch-fill problem. The
+  cure stays valid only for genuinely small-d under-fill (L40S d=512). verdict:
+  .verdicts/hexa-fusion/F-FUSION-MOE-CONV-XOVER.txt (+ .raw.txt verbatim).
 - [ ] **OG-FUSE-FOLD — fold the fused kernel into the flame CLMConvMoE trainer** — wire
   tool/gpu_moe_conv_fuse.cu into stdlib/flame as the device MoE-conv path (env-gated, byte-eq ModuleList
   fallback) so the cure reaches the real trainer step. The application path for the f5e18a0f cure.

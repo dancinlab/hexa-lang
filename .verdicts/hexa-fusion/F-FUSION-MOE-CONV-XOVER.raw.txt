@@ -1,0 +1,112 @@
+=== nvidia-smi ===
+name, memory.total [MiB], utilization.gpu [%]
+NVIDIA H200, 143771 MiB, 0 %
+=== build (nvcc -arch=sm_90 -O3) ===
+build OK
+
+########################################################################
+### SWEEP d=4096  (E=30 T=256 K=3 dil=1)  ARCH=sm_90
+########################################################################
+=== RUN (gate + perf) d=4096 ===
+# gpu_moe_conv_fuse — fused multi-expert Conv1d MoE kernel (f5e18a0f cure)
+# perf shape: E=30 d=4096 T=256 K=3 dil=1
+# device: NVIDIA H200  SMs=132  cap=9.0
+
+# ── CORRECTNESS GATE (vs CPU op-by-op 30-conv reference) ──
+# gate shape: E=30 d=192 T=32 K=3 dil=1 (small → CPU oracle tractable)
+[GATE-FUSED]   max|Δ| vs CPU = 2.980e-07
+[GATE-MLIST30] max|Δ| vs CPU = 2.980e-07
+[GATE-GROUPED] max|Δ| vs CPU = 2.980e-07
+[GATE-DEV-EQ]  max|Δ|(fused vs ModuleList) = 0.000e+00   max|Δ|(grouped vs ModuleList) = 0.000e+00
+# GATE (1) device-vs-device byte-exact (max|Δ|=0): PASS
+# GATE (2) device-vs-CPU within fp32 FMA tol=6.0e-06: PASS
+# GATE OVERALL => PASS
+
+# weight bank = 6.04 GB (E·d·d·K fp32), output = 0.13 GB
+# perf-shape cross-check  max|Δ|(fused vs ModuleList) = 0.000e+00 (expect 0)
+
+# ── PERF (median of timed iters, cuEvent) ──
+[A] ModuleList-30  step = 1648.790 ms  (E separate launches — under-fill baseline)
+[B] grouped        step = 16134.032 ms  (1 launch, channel-serial — regression anti-pattern)
+[C] FUSED          step = 3132.707 ms  (1 launch, 30720 CTAs — the cure)
+# CTA counts: A=1024/launch ×30 launches  B=30  C=30720 (one launch)
+# (run under: nvidia-smi --query-gpu=utilization.gpu --format=csv -lms 50  for util MEAN/PEAK)
+
+[T] DONE — gate PASS, perf captured.
+run rc=0 (d=4096)
+=== UTIL capture d=4096 (A=ModuleList-30 · B=grouped · C=FUSED) ===
+[UTIL d4096_path_A    ] mean=96.1% peak=100% (n=3331)
+[UTIL d4096_path_B    ] mean=97.2% peak=100% (n=4773)
+[UTIL d4096_path_C    ] mean=96.2% peak=100% (n=3476)
+
+########################################################################
+### SWEEP d=6208  (E=30 T=256 K=3 dil=1)  ARCH=sm_90
+########################################################################
+=== RUN (gate + perf) d=6208 ===
+# gpu_moe_conv_fuse — fused multi-expert Conv1d MoE kernel (f5e18a0f cure)
+# perf shape: E=30 d=6208 T=256 K=3 dil=1
+# device: NVIDIA H200  SMs=132  cap=9.0
+
+# ── CORRECTNESS GATE (vs CPU op-by-op 30-conv reference) ──
+# gate shape: E=30 d=192 T=32 K=3 dil=1 (small → CPU oracle tractable)
+[GATE-FUSED]   max|Δ| vs CPU = 2.980e-07
+[GATE-MLIST30] max|Δ| vs CPU = 2.980e-07
+[GATE-GROUPED] max|Δ| vs CPU = 2.980e-07
+[GATE-DEV-EQ]  max|Δ|(fused vs ModuleList) = 0.000e+00   max|Δ|(grouped vs ModuleList) = 0.000e+00
+# GATE (1) device-vs-device byte-exact (max|Δ|=0): PASS
+# GATE (2) device-vs-CPU within fp32 FMA tol=6.0e-06: PASS
+# GATE OVERALL => PASS
+
+# weight bank = 13.87 GB (E·d·d·K fp32), output = 0.19 GB
+# perf-shape cross-check  max|Δ|(fused vs ModuleList) = 0.000e+00 (expect 0)
+
+# ── PERF (median of timed iters, cuEvent) ──
+[A] ModuleList-30  step = 3736.056 ms  (E separate launches — under-fill baseline)
+[B] grouped        step = 37921.133 ms  (1 launch, channel-serial — regression anti-pattern)
+[C] FUSED          step = 7076.230 ms  (1 launch, 47040 CTAs — the cure)
+# CTA counts: A=1568/launch ×30 launches  B=30  C=47040 (one launch)
+# (run under: nvidia-smi --query-gpu=utilization.gpu --format=csv -lms 50  for util MEAN/PEAK)
+
+[T] DONE — gate PASS, perf captured.
+run rc=0 (d=6208)
+=== UTIL capture d=6208 (A=ModuleList-30 · B=grouped · C=FUSED) ===
+[UTIL d6208_path_A    ] mean=96.4% peak=100% (n=7657)
+[UTIL d6208_path_B    ] mean=97.5% peak=100% (n=11047)
+[UTIL d6208_path_C    ] mean=96.6% peak=100% (n=7984)
+
+########################################################################
+### SWEEP d=8192  (E=30 T=256 K=3 dil=1)  ARCH=sm_90
+########################################################################
+=== RUN (gate + perf) d=8192 ===
+# gpu_moe_conv_fuse — fused multi-expert Conv1d MoE kernel (f5e18a0f cure)
+# perf shape: E=30 d=8192 T=256 K=3 dil=1
+# device: NVIDIA H200  SMs=132  cap=9.0
+
+# ── CORRECTNESS GATE (vs CPU op-by-op 30-conv reference) ──
+# gate shape: E=30 d=192 T=32 K=3 dil=1 (small → CPU oracle tractable)
+[GATE-FUSED]   max|Δ| vs CPU = 2.980e-07
+[GATE-MLIST30] max|Δ| vs CPU = 2.980e-07
+[GATE-GROUPED] max|Δ| vs CPU = 2.980e-07
+[GATE-DEV-EQ]  max|Δ|(fused vs ModuleList) = 0.000e+00   max|Δ|(grouped vs ModuleList) = 0.000e+00
+# GATE (1) device-vs-device byte-exact (max|Δ|=0): PASS
+# GATE (2) device-vs-CPU within fp32 FMA tol=6.0e-06: PASS
+# GATE OVERALL => PASS
+
+# weight bank = 24.16 GB (E·d·d·K fp32), output = 0.25 GB
+# perf-shape cross-check  max|Δ|(fused vs ModuleList) = 0.000e+00 (expect 0)
+
+# ── PERF (median of timed iters, cuEvent) ──
+[A] ModuleList-30  step = 8902.122 ms  (E separate launches — under-fill baseline)
+[B] grouped        step = 64351.652 ms  (1 launch, channel-serial — regression anti-pattern)
+[C] FUSED          step = 12660.616 ms  (1 launch, 61440 CTAs — the cure)
+# CTA counts: A=2048/launch ×30 launches  B=30  C=61440 (one launch)
+# (run under: nvidia-smi --query-gpu=utilization.gpu --format=csv -lms 50  for util MEAN/PEAK)
+
+[T] DONE — gate PASS, perf captured.
+run rc=0 (d=8192)
+=== UTIL capture d=8192 (A=ModuleList-30 · B=grouped · C=FUSED) ===
+[UTIL d8192_path_A    ] mean=96.6% peak=100% (n=13781)
+[UTIL d8192_path_B    ] mean=97.3% peak=100% (n=19417)
+[UTIL d8192_path_C    ] mean=95.8% peak=100% (n=14197)
+
+=== XOVER DONE — all d in {4096 6208 8192} swept ===
