@@ -177,3 +177,31 @@ verdict .verdicts/hexa-cuda/F-HEXACUDA-ADOPTION-DX.txt.)
       claims authored. Verdict: .verdicts/hexa-cuda/F-HEXACUDA-DOJO.txt (§10).
       Docs/tool only, NO GPU (leaked-pod sweep: 0 leaked — only the spared
       rtsc-39610026 anchor + known owned campaign pods; rented nothing).
+- [x] D13 — DOJO reflects this session's TWO byte-exact-gated GPU-kernel PARITY
+      breakthroughs + the regime law (branch domain/dojo-parity-recipes). A new
+      decision-grade reading-lesson subsection "GPU kernel parity recipes —
+      canonical-atom GEMM · weight-reuse conv · the under-fill/saturated regime
+      law" lands in docs/hexa-dojo.md (in the GPU/kernel area, after the parallel
+      root-cause subsection): (a) own-GEMM stuck off cuBLAS → RE-ENCODE the operand
+      in GLOBAL to the canonical CuTe Layout_K_SW128 / gmma-INTER atom + NO-swizzle
+      TMA so the landed SMEM tile IS wgmma-ready (descriptor-direct, NO 32KB decode
+      band) — single-tile rel-RMS 1.000 → 0.000, smem 96→64KB (2 CTA/SM), own-GEMM
+      70.2 → 264.7 TFLOP/s, ratio 6.09× → 1.37× (~85–90% of the gap closed,
+      bit-exact; PARITY ≤1.3× NOT quite reached — OG16, #2866); (b) conv/grouped-conv
+      at a SATURATED shape → recast as IMPLICIT-GEMM + WEIGHT-REUSE register tiling
+      (CTA owns BM time-rows × BN out-ch, stage weight tile to smem ONCE + reuse
+      across all BM rows → weight HBM traffic cut ~BM-fold), NOT fusion-fill — byte-eq
+      max|Δ|=0, 6.57× vs ModuleList-30 @d=6208 (6.6–13.7× across the sweep; util
+      ~92% on both paths so it is WORK-REDUCTION not fill — PROD-KERNEL, #2867);
+      (c) the REGIME LAW (under-fill, idle SMs → fusion-fill · saturated, ≥98% util,
+      d≥1024 → weight-reuse GEMM recast) as an ASCII decision tree, from the
+      OG-FUSE-OPT/XOVER/RIGHTSIZE sweeps (#2862/#2865/#2863). HONEST FRAMING
+      throughout: cuBLAS/cuDNN = ROOFLINE, the wins are reach-roofline /
+      boundary-removal NOT raw-math superiority, parity NOT claimed (OG16 best
+      1.37×), byte-exact gate FIRST. The preflight tool/dojo_rent_preflight.sh
+      dojo_recipe_advisory carries a one-line regime hint (saturated →
+      weight-reuse-GEMM / under-fill → fusion-fill) — self-test stays GREEN (+2
+      cases, bash -n clean). Mirrored to commons g82; CITES the verdicts verbatim
+      (F-FUSION-SM90-WGMMA-OG16 · F-FUSION-MOE-CONV-PROD-KERNEL) + attributes the
+      PRs. Verdict: .verdicts/hexa-cuda/F-HEXACUDA-DOJO.txt (§11). Docs/tool only,
+      NO GPU (cited verbatim from landed fusion verdicts — rented nothing).

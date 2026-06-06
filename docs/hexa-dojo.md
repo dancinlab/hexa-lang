@@ -458,6 +458,143 @@ is the *consequence* of the lesson-#1 mistake).
 > the underlying anima timings (the ~11×, ~74 s/step, the 4×H200-vs-1×H200
 > comparison) are **not** reproduced here.
 
+### GPU kernel parity recipes — canonical-atom GEMM · weight-reuse conv · the under-fill/saturated regime law
+
+> This is a **reading lesson, not a kata** (same scope as the track-1 own-GEMM war
+> story above) — the levers are `.cu`/codegen-level, **not** source-callable from
+> `.hexa` today. **Do not invent source calls for any of it.** Every number below
+> is a **cited, byte-exact-gated** measurement from a landed HEXA-FUSION verdict;
+> the gate is **correctness FIRST** (a perf number is reported only after the
+> byte-exact gate passes). cuBLAS/cuDNN are the **roofline** throughout — the wins
+> here are **reach-roofline / boundary-removal**, **not** raw-math superiority.
+
+Three decision-grade recipes came out of this session's GPU-kernel work. The
+first two are the two levers that actually move a stuck kernel; the third is the
+**regime law** that tells you *which* lever to reach for. Mirrored to **commons
+g82** (the cross-project GPU-kernel-recipe directive) so the rule travels.
+
+**Recipe (a) — own-GEMM stuck off cuBLAS? Re-encode the operand in GLOBAL to the
+canonical CuTe atom, so the TMA-landed SMEM tile is `wgmma`-ready (no decode band).**
+
+The TF32 own-GEMM was pinned at **70.2 TFLOP/s, ~6.09× off** cuBLAS for five rungs
+(OG11–OG15). The wall was a **contradiction**: a hand-rolled `cuTensorMapEncodeTiled`
+box landed an **atom-major** `SWIZZLE_128B` SMEM tile that a descriptor-direct
+`wgmma` could not read bit-exact, so the kernel needed a **32 KB software decode
+band** in the hot loop — and that band ⊥ occupancy (it blew the SMEM budget, so you
+could not also hold 2 CTA/SM). A 3200-config sweep of `(LBO, SBO, base_offset,
+layout_type)` floored at rel-RMS **1.000** — no HW de-swizzle field combo matches a
+hand-rolled box.
+
+The fix (OG16) inverts the question. **Instead of asking a fixed HW de-swizzle to
+match your box, pre-lay the operand in GLOBAL in the canonical CuTe
+`Layout_K_SW128` / gmma-`INTER` (8×4 core) order and use a NO-swizzle TMA.** Now the
+tile the TMA lands in SMEM **IS** the `wgmma`-ready layout the descriptor addresses
+(`layout_type_=0`, descriptor-direct) — **no in-kernel decode band at all**. The
+one-time global pre-permute amortizes over the K-slab reuse of a real GEMM (and over
+batched/persistent weights).
+
+| axis | stuck (OG11–OG15) | canonical-atom (OG16) |
+|---|---|---|
+| SMEM tile | hand-rolled atom-major box | canonical `Layout_K_SW128` (TMA-landed) |
+| in-kernel decode | **32 KB software band** (⊥ occupancy) | **none** (descriptor-direct) |
+| single-tile rel-RMS | 1.000 (no field combo matches) | **0.000** (bit-exact) |
+| SMEM/CTA | 96 KB | **64 KB** (holds 2 CTA/SM) |
+| own-GEMM | 70.2 TFLOP/s | **264.7 TFLOP/s** (3.77×) |
+| gap vs cuBLAS-TF32 | 6.09× | **1.37×** (~85–90% of the gap closed) |
+
+Honest: **parity (≤1.3×) is NOT quite reached** (best 1.37×); cuBLAS is the roofline
+and no superiority is claimed. The remaining ~5% is a perf-only frontier (OG17:
+warp-spec / larger tile / ping-pong, now **un-gated** since the band is gone), **not**
+a layout or correctness question. The lever is: *make the landed tile the canonical
+atom, don't decode it in the kernel.*
+
+**Recipe (b) — conv / grouped-conv at a SATURATED shape? Recast as an implicit GEMM
+and weight-reuse register-tile it — do NOT reach for fusion-fill.**
+
+The d=6208 / H200 production MoE step (~74 s/step — the `f5e18a0f` wall) is **already
+GPU-saturated (~92–96% util)**. The earlier `OG-FUSE-OPT` closed-negative proved
+fusion-FILL **loses** there: a tiled-fused kernel still runs **3997 ms vs ModuleList's
+3734 ms** at d=6208 — no under-fill headroom to recover, and every `(co,ci,k)` weight
+is touched exactly once (no reuse), so fusion cannot shrink weight traffic. But that
+closed-neg also named the **right** residual — **weight bandwidth** — and the **right**
+cure: **weight reuse**.
+
+The PROD-KERNEL fix supplies exactly that reuse. **Recast each expert's Conv1d as an
+implicit GEMM** (`Y[t,co] = Σ_k Σ_ci Xshift_k[t,ci]·W_k[ci,co]`) and **register-tile**
+it: a CTA owns `BM=64` time-steps × `BN=64` out-channels, stages a weight tile into
+SMEM **once**, and **reuses it across all `BM` time-rows**. Each weight HBM byte now
+amortizes over `BM=64` time outputs instead of being read once → the weight-bandwidth
+roofline the OPT verdict pinned is **lifted**. Accumulation visits `ci` ascending, `k`
+inner — the **exact** order of the 30-separate-conv reference, so the gate is byte-exact.
+
+| d | ModuleList-30 | tiled-FUSED (fill) | GEMM-conv (weight-reuse) | speedup vs ModuleList |
+|---|---|---|---|---|
+| 4096 | 1649 ms | 1829 ms (**loses**) | **250 ms** | **6.60×** |
+| 6208 (the wall) | 3734 ms | 3997 ms (**loses**) | **568 ms** | **6.57×** |
+| 8192 | 13467 ms | — | **983 ms** | **13.70×** |
+
+Byte-exact gate FIRST: **max|Δ| = 0** vs ModuleList-30 (device-vs-device at every
+shape; 2.98e-7 vs a CPU fp32-FMA oracle). Util stays ~92% on **both** paths — so the
+6.57× is **NOT** a fill/occupancy effect; it is pure **work-reduction via weight
+reuse** (same FLOPs, weight HBM traffic cut ~`BM`-fold). cuBLAS stays ~15× below the
+GEMM-conv (no superiority claim — we reach a much better point on the road to the
+vendor ceiling, not past it). The lever is: *at saturation, cut weight traffic with a
+GEMM recast, not launches with fusion.*
+
+**Recipe (c) — the regime law: pick the lever by regime FIRST.**
+
+Recipes (a) and (b) are not competing tricks — they apply in **different regimes**,
+and reaching for the wrong one wastes a GPU session. The unifying law (from the
+`OG-FUSE-OPT` / `XOVER` / `RIGHTSIZE` sweeps, #2862/#2865/#2863):
+
+```
+                    ┌─────────────────────────────────────────────────────────┐
+   regime?          │  measure single-kernel util on the ACTUAL shape FIRST    │
+                    └─────────────────────────────────────────────────────────┘
+                              │                               │
+            UNDER-FILL  ◄─────┘                               └─────►  SATURATED
+   (small d · small/right-sized GPU ·                   (big GPU · d ≥ 1024 ·
+    SMs idle · launch-count/boundary                     ≥ 98% util · no fill
+    overhead dominates)                                  headroom · BW-bound)
+                              │                               │
+                              ▼                               ▼
+   LEVER:  fusion-FILL — one saturating kernel       LEVER:  weight-reuse GEMM recast
+           (fuse the op DAG / experts into a                 (implicit GEMM + register-
+           single launch; remove launch +                    tile so each SMEM weight
+           boundary overhead, fill idle SMs)                 tile is reused over BM rows;
+                                                             cut weight HBM traffic ~BM×)
+   evidence: RTX4070 (right-sized) won 3/4 fill       evidence: H100/H200 d=6208 saturated
+             cases; under-fill d=512 fused 2.68×                — fill LOSES (tiled-D 3997 >
+             vs ModuleList                                        ML 3734), GEMM-recast WINS 6.57×
+
+   In BOTH regimes: cuDNN/cuBLAS = ROOFLINE. The win is reach-roofline /
+   boundary-removal, NOT raw-math superiority. Byte-exact gate FIRST, always.
+```
+
+So the **first** question on any stuck conv/GEMM kernel is *which regime?* — measure
+single-kernel util on the **actual** shape. Idle SMs → **fusion-fill**. Already
+saturated → **weight-reuse GEMM recast**. Picking fill at saturation is the
+`OG-FUSE-OPT` closed-negative; picking GEMM-recast at under-fill is wasted complexity.
+
+> **cite (verbatim verdicts + PRs):**
+> - `.verdicts/hexa-fusion/F-FUSION-SM90-WGMMA-OG16.txt` — canonical-atom descriptor-direct
+>   own-GEMM (single-tile rel-RMS 0.000, 70.2 → 264.7 TFLOP/s, 6.09× → 1.37×, smem 96 → 64 KB)
+>   · **PR #2866** [recipe (a)]
+> - `.verdicts/hexa-fusion/F-FUSION-MOE-CONV-PROD-KERNEL.txt` — weight-reuse GEMM-conv MoE
+>   (byte-eq max|Δ| = 0, 6.57× vs ModuleList-30 @d=6208, 6.6–13.7× across the sweep) · **PR #2867**
+>   [recipe (b)]
+> - the regime law sweeps: `OG-FUSE-OPT` (saturated fill closed-neg, **#2862**) · `XOVER`
+>   (the under-fill ↔ saturated crossover, **#2865**) · `RIGHTSIZE` (right-sized-GPU fill wins,
+>   **#2863**) [recipe (c)]
+> - **commons g82** — the cross-project mirror of these three GPU-kernel-recipe rules.
+
+> **honesty:** these are this-session HEXA-FUSION measurements (H100/H200, byte-exact-gated),
+> cited verbatim from the verdicts above and attributed to their PRs — the dojo reflects them
+> as decision-grade guidance and does **not** re-run the GPU jobs. cuBLAS/cuDNN remain the
+> roofline; parity is **not** claimed (OG16 best 1.37×), and the conv win is **work-reduction**,
+> not vendor superiority. The preflight `dojo_recipe_advisory` carries the one-line regime hint
+> (*saturated → weight-reuse GEMM · under-fill → fusion-fill*) — see [how the dojo enforces this](#how-the-dojo-enforces-this).
+
 ## references
 
 - [`HEXA-CUDA.md`](../HEXA-CUDA.md) — the GPU-native domain home
@@ -473,3 +610,5 @@ is the *consequence* of the lesson-#1 mistake).
 - sidecar handoff `4474f21b` — the 6-fix **infra** preflight (rent + launch) reflected in the "no-troubleshoot preflight" section
 - sidecar handoff `a10891bc` — the 6 **training-recipe** lessons reflected in the "Training recipe — optimization gotchas" section
 - sidecar handoff `f5e18a0f` — the **decision/algorithm root cause** ("WHY parallel was the wrong path") reflected in the [decision-grade subsection](#why-parallel-was-the-wrong-path--root-cause-decision-grade): the 11× grouped-conv regression · DDP multiplies a pathological op · vectorization crosses the 2³¹ ceiling · the canonical 7B-ENGINE `ModuleList`/H200/~74 s recipe
+- `.verdicts/hexa-fusion/F-FUSION-SM90-WGMMA-OG16.txt` · `.verdicts/hexa-fusion/F-FUSION-MOE-CONV-PROD-KERNEL.txt` — the two byte-exact-gated GPU-kernel parity breakthroughs (canonical-atom own-GEMM 6.09× → 1.37× · weight-reuse GEMM-conv 6.57× @d=6208) reflected in the [GPU kernel parity recipes](#gpu-kernel-parity-recipes--canonical-atom-gemm--weight-reuse-conv--the-under-fillsaturated-regime-law) subsection (PRs #2866/#2867); the regime-law sweeps `OG-FUSE-OPT`/`XOVER`/`RIGHTSIZE` (#2862/#2865/#2863)
+- **commons g82** — the cross-project mirror of the three GPU-kernel-recipe rules (canonical-atom GEMM · weight-reuse conv · the under-fill/saturated regime law)
