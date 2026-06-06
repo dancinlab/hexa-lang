@@ -409,6 +409,11 @@ dojo_recipe_advisory() {
         _dojo_warn "DON'T PARALLELIZE A PATHOLOGICAL OP (f5e18a0f): MEASURE single-GPU step time on the ACTUAL kernels FIRST — DDP MULTIPLIES a pathological op per replica (anima: the ~11x grouped-conv regression got 4x-replicated, so DDP was slower wall-clock AND 4x cost). Parallel is 'wall-first' only when the per-replica step is already healthy"
     fi
 
+    # GPU-kernel-recipe regime hint (commons g82 / PRs #2866/#2867; verdicts
+    # F-FUSION-SM90-WGMMA-OG16 + F-FUSION-MOE-CONV-PROD-KERNEL). Pick the lever
+    # by REGIME: measure single-kernel util on the ACTUAL shape first.
+    _dojo_warn "GPU-KERNEL REGIME (g82): measure single-kernel util on the ACTUAL shape FIRST — SATURATED (>=98% util, big GPU, d>=1024) => WEIGHT-REUSE GEMM recast (implicit-GEMM + register-tile, cut weight HBM ~BM-fold: PROD-KERNEL 6.57x @d=6208 byte-eq, #2867); UNDER-FILL (idle SMs, small/right-sized GPU) => FUSION-FILL (one saturating kernel). cuBLAS/cuDNN=roofline (reach-roofline, NOT superiority); byte-exact gate FIRST"
+
     return "$rc"
 }
 
@@ -578,6 +583,15 @@ _dojo_self_test() {
     if printf '%s' "$advb" | grep -q 'bf16 weights already selected'; then
         printf '  [ok] recipe lesson#4 bf16-already-selected acknowledged\n'
     else printf '  [FAIL] recipe lesson#4 bf16-selected ack missing\n'; fail=1; fi
+    # g82 GPU-kernel regime hint (#2866/#2867) — every advisory invocation should
+    # carry the "saturated => weight-reuse GEMM / under-fill => fusion-fill" line.
+    if printf '%s' "$advb" | grep -qi 'GPU-KERNEL REGIME'; then
+        printf '  [ok] recipe g82 GPU-kernel regime hint present\n'
+    else printf '  [FAIL] recipe g82 GPU-kernel regime hint missing\n'; fail=1; fi
+    if printf '%s' "$advb" | grep -qi 'WEIGHT-REUSE GEMM' && \
+       printf '%s' "$advb" | grep -qi 'FUSION-FILL'; then
+        printf '  [ok] recipe g82 regime hint names BOTH levers (weight-reuse GEMM + fusion-fill)\n'
+    else printf '  [FAIL] recipe g82 regime hint missing a lever\n'; fail=1; fi
 
     if [ "$fail" = "0" ]; then printf '== ALL 6 FIXES + RECIPE ADVISORY VERIFIED (pure logic) ==\n'; else printf '== SELF-TEST FAILED ==\n'; fi
     return "$fail"
