@@ -48,10 +48,12 @@ __device__ __host__ __forceinline__ int gmma_phys(int s,int k){
     int strip=s>>3,sr=s&7,kcore=k>>2,kc=k&3; return (strip*2+kcore)*32+sr*4+kc;
 }
 // ---- W9-MEASURED 128B-swizzle physical index inside an 8-row x 32-f32 (128B) atom. ----
-// granule g=c>>2 (0..7), within-granule w=c&3. The MEASURED law: g_phys = g XOR ((r+1)&7).
-// phys = r*32 + g_phys*4 + w.   (W9 dump: row r mask = ((r+1)&7).)
+// granule g=c>>2 (0..7), within-granule w=c&3. The W10 RE-MEASURED law (MODE2 dump on the
+// FULL 128x32 box, this GPU): landed[pr][pg] holds global granule (pg XOR pr), row-preserving,
+// atom-major. So the TEXTBOOK g_phys = g XOR (r&7) IS correct for FP32 SWIZZLE_128B (the W9
+// (r+1)&7 reading came from a partial/8-row probe). phys = r*32 + (g XOR (r&7))*4 + w.
 __device__ __host__ __forceinline__ int sw128_measured(int r,int c){
-    int g=c>>2, w=c&3, gp=g^(((r+1)&7)); return r*32 + gp*4 + w;
+    int g=c>>2, w=c&3, gp=g^(r&7); return r*32 + gp*4 + w;
 }
 
 // ---- mbarrier + TMA helpers (sm_90) ----
@@ -173,13 +175,16 @@ extern "C" __global__ void probe_wgmma(const __grid_constant__ CUtensorMap tmapA
         int sw_phys = a*256 + sw128_measured(r,k);
         Ag[gmma_phys(m,k)] = Asw[sw_phys];
     }
-    // COMPOSED decode B: logical (k,n). For B the strided dim is N, contiguous is K -> the
-    // swizzled atom rows are N (32 of them), cols are K. atom-N c=n>>5 (which 32-N atom),
-    // within-atom nn=n&31 -> that is the atom ROW; k is the atom COLUMN (0..31, use 0..7).
+    // COMPOSED decode B: logical (k,n). W10 B-DUMP (MODE 3) MEASURED the box{32(N),32(K)}
+    // layout: physical ROW pr == logical k; within row, the N-granule gp holds logical
+    // n-granule (gp XOR (k&7)). So global (k, n_in_atom) lives at physical
+    //   k*32 + ((n_in_atom>>2) XOR (k&7))*4 + (n_in_atom&3)   inside its 32-N atom.
+    // 2 atoms across N (c=n>>5), each atom = 32*32 floats. wgmma B operand wants gmma_phys(n,k).
     for(int i=tid;i<8*TN;i+=blockDim.x){
         int k=i/TN, n=i%TN;
-        int c=n>>5, nn=n&31;                 // c = which 32-N atom (0 or 1), nn = row in atom
-        int sw_phys = c*(32*TKSW) + sw128_measured(nn,k);
+        int c=n>>5, nn=n&31;                 // c = which 32-N atom (0/1), nn = N within atom
+        int gN=nn>>2, w=nn&3, gp=gN^(k&7);
+        int sw_phys = c*(32*TKSW) + k*32 + gp*4 + w;
         Bg[gmma_phys(n,k)] = Bsw[sw_phys];
     }
     asm volatile("fence.proxy.async.shared::cta;\n":::"memory");
@@ -199,6 +204,42 @@ extern "C" __global__ void probe_wgmma(const __grid_constant__ CUtensorMap tmapA
         int idx=c*4+r*2+p,row=rb+r*8,col=cb+p+c*8;
         if(row<64&&col<64)gD[row*64+col]=d[idx];
     }
+}
+
+// ======================================================================
+// MODE 2 — RAW SWIZZLE DUMP. Land a 128x32 SWIZZLE_128B tile where global A[m][k]=m*32+k
+//   (a unique integer id per logical element). Copy shared[p] verbatim to global so the
+//   HOST can read, for every physical slot p, which logical (m,k) landed there. This
+//   MEASURES the true TMA-landed layout for THIS box on THIS GPU (no guessing) — the W9
+//   dump done properly + at the full 128-row box W10 needs.
+// ======================================================================
+extern "C" __global__ void dump_layout(const __grid_constant__ CUtensorMap tmapA,
+                                        float* __restrict__ gOut,int M,int K){
+    const int TM=128, TKSW=32;
+    extern __shared__ __align__(128) float sm[];
+    float* As=sm; uint64_t* bar=(uint64_t*)(As+TM*TKSW);
+    int tid=threadIdx.x;
+    if(tid==0){ mbar_init_tx(bar,1); }
+    __syncthreads();
+    if(tid==0){ mbar_expect_tx(bar,(uint32_t)(TM*TKSW*4)); tma_load_2d(As,&tmapA,0,0,bar); }
+    __syncthreads();
+    if(tid==0) mbar_wait(bar,0);
+    __syncthreads();
+    for(int p=tid;p<TM*TKSW;p+=blockDim.x) gOut[p]=As[p];   // physical slot p -> its landed id
+}
+// generic dump: nfloat total floats in one swizzled tile (box defined host-side).
+extern "C" __global__ void dump_gen(const __grid_constant__ CUtensorMap tmap,
+                                    float* __restrict__ gOut,int nfloat){
+    extern __shared__ __align__(128) float sm[];
+    float* As=sm; uint64_t* bar=(uint64_t*)(As+nfloat);
+    int tid=threadIdx.x;
+    if(tid==0){ mbar_init_tx(bar,1); }
+    __syncthreads();
+    if(tid==0){ mbar_expect_tx(bar,(uint32_t)(nfloat*4)); tma_load_2d(As,&tmap,0,0,bar); }
+    __syncthreads();
+    if(tid==0) mbar_wait(bar,0);
+    __syncthreads();
+    for(int p=tid;p<nfloat;p+=blockDim.x) gOut[p]=As[p];
 }
 
 static inline float tf(float x){uint32_t u;memcpy(&u,&x,4);u=(u+0x1000u)&0xFFFFE000u;float r;memcpy(&r,&u,4);return r;}
@@ -294,6 +335,88 @@ int main(int argc,char**argv){
         printf("W10-PROBE MODE=1 composed-wgmma: exact=%d/%d rel_rms=%.3e %s\n",
                exact,M*N,rr, rr<=3e-3?"PASS (composed decode feeds wgmma)":"FAIL");
         return rr<=3e-3?0:2;
+    }
+    if(MODE==3){
+        // ---- RAW B-DUMP: measure the true B 32(N)x32(K) SWIZZLE_128B landed layout ----
+        // B row-major KxN, contiguous=N. One swizzle atom box {32(N),32(K)}. global B[k][n]=k*32+n.
+        const int KK=32, NN=32;
+        float* hB=(float*)malloc((size_t)KK*NN*4);
+        for(int k=0;k<KK;++k)for(int n=0;n<NN;++n)hB[k*NN+n]=(float)(k*32+n);
+        float *dB,*dO; CK(cudaMalloc(&dB,(size_t)KK*NN*4)); CK(cudaMalloc(&dO,(size_t)KK*NN*4));
+        CK(cudaMemcpy(dB,hB,(size_t)KK*NN*4,cudaMemcpyHostToDevice));
+        CUtensorMap tmapB{};
+        cuuint64_t gd[2]={(cuuint64_t)NN,(cuuint64_t)KK}; cuuint64_t gs[1]={(cuuint64_t)NN*4};
+        cuuint32_t bd[2]={32,32}; cuuint32_t es[2]={1,1};
+        CUresult r=enc(&tmapB,CU_TENSOR_MAP_DATA_TYPE_FLOAT32,2,dB,gd,gs,bd,es,
+            CU_TENSOR_MAP_INTERLEAVE_NONE,CU_TENSOR_MAP_SWIZZLE_128B,
+            CU_TENSOR_MAP_L2_PROMOTION_NONE,CU_TENSOR_MAP_FLOAT_OOB_FILL_NONE);
+        if(r!=CUDA_SUCCESS){printf("MODE3 encodeB r=%d\n",(int)r);return 4;}
+        size_t smsz=(size_t)(KK*NN)*4 + 8;
+        CK(cudaFuncSetAttribute(dump_gen,cudaFuncAttributeMaxDynamicSharedMemorySize,(int)smsz));
+        dump_gen<<<1,128,smsz>>>(tmapB,dO,KK*NN);
+        cudaError_t e=cudaGetLastError(); if(e==cudaSuccess)e=cudaDeviceSynchronize();
+        if(e!=cudaSuccess){printf("MODE3 FAULT %s\n",cudaGetErrorString(e));return 4;}
+        float* hO=(float*)malloc((size_t)KK*NN*4);
+        CK(cudaMemcpy(hO,dO,(size_t)KK*NN*4,cudaMemcpyDeviceToHost));
+        printf("W10-BDUMP 32(N)x32(K) SWIZZLE_128B (phys slot -> landed k*32+n):\n");
+        for(int pr=0;pr<8;++pr){              // physical row 0..7 of the single atom
+            printf("pr=%d: ",pr);
+            for(int pg=0;pg<8;++pg){ int p=pr*32+pg*4; int id=(int)hO[p]; printf("[g%d:k%d,n%d] ",pg,id/32,id%32); }
+            printf("\n");
+        }
+        return 0;
+    }
+    if(MODE==2){
+        // ---- RAW SWIZZLE DUMP: measure the true 128x32 landed layout ----
+        const int M=128,K=32;
+        float* hA=(float*)malloc((size_t)M*K*4);
+        for(int m=0;m<M;++m)for(int k=0;k<K;++k)hA[m*K+k]=(float)(m*32+k); // unique id
+        float *dA,*dO; CK(cudaMalloc(&dA,(size_t)M*K*4)); CK(cudaMalloc(&dO,(size_t)M*K*4));
+        CK(cudaMemcpy(dA,hA,(size_t)M*K*4,cudaMemcpyHostToDevice));
+        CUtensorMap tmapA{};
+        cuuint64_t gd[2]={(cuuint64_t)K,(cuuint64_t)M}; cuuint64_t gs[1]={(cuuint64_t)K*4};
+        cuuint32_t bd[2]={32,128}; cuuint32_t es[2]={1,1};
+        CUresult r=enc(&tmapA,CU_TENSOR_MAP_DATA_TYPE_FLOAT32,2,dA,gd,gs,bd,es,
+            CU_TENSOR_MAP_INTERLEAVE_NONE,CU_TENSOR_MAP_SWIZZLE_128B,
+            CU_TENSOR_MAP_L2_PROMOTION_NONE,CU_TENSOR_MAP_FLOAT_OOB_FILL_NONE);
+        if(r!=CUDA_SUCCESS){printf("MODE2 encodeA r=%d\n",(int)r);return 4;}
+        size_t smsz=(size_t)(M*K)*4 + 8;
+        CK(cudaFuncSetAttribute(dump_layout,cudaFuncAttributeMaxDynamicSharedMemorySize,(int)smsz));
+        dump_layout<<<1,128,smsz>>>(tmapA,dO,M,K);
+        cudaError_t e=cudaGetLastError(); if(e==cudaSuccess)e=cudaDeviceSynchronize();
+        if(e!=cudaSuccess){printf("MODE2 FAULT %s\n",cudaGetErrorString(e));return 4;}
+        float* hO=(float*)malloc((size_t)M*K*4);
+        CK(cudaMemcpy(hO,dO,(size_t)M*K*4,cudaMemcpyDeviceToHost));
+        // For physical slot p, hO[p] = (m*32+k) of the logical element that landed there.
+        // Print the within-atom permutation for the first 8 atoms (rows 0..63) compactly:
+        // for each physical row pr in 0..7 of atom 0, list the landed (m,k) per granule.
+        printf("W10-DUMP 128x32 SWIZZLE_128B landed layout (phys slot -> landed m*32+k):\n");
+        // Atom 0 = physical floats 0..255 (8 rows x 32). Show landed k-granule per (pr,pg).
+        for(int atom=0; atom<2; ++atom){
+            printf("--- atom %d (phys rows %d..%d) ---\n",atom,atom*8,atom*8+7);
+            for(int pr=0;pr<8;++pr){
+                printf("pr=%d: ",pr);
+                for(int pg=0;pg<8;++pg){
+                    int p=atom*256 + pr*32 + pg*4;        // physical slot, granule start
+                    int id=(int)hO[p]; int m=id/32,k=id%32;
+                    printf("[g%d:m%d,k%d] ",pg,m,k);
+                }
+                printf("\n");
+            }
+        }
+        // Also derive, per physical (pr,pg) in atom 0, the XOR mask = landed_g XOR pg and
+        // whether landed row == pr (is the swizzle row-preserving?).
+        printf("--- atom0 granule XOR-mask table (landed_k_granule XOR phys_granule) per row ---\n");
+        for(int pr=0;pr<8;++pr){
+            printf("pr=%d masks: ",pr);
+            for(int pg=0;pg<8;++pg){
+                int p=pr*32+pg*4; int id=(int)hO[p]; int k=id%32; int lg=k>>2;
+                printf("%d ",lg^pg);
+            }
+            // landed m for this physical row (should be constant == pr if row-preserving)
+            int id0=(int)hO[pr*32]; printf(" | landed_m@g0=%d\n",id0/32);
+        }
+        return 0;
     }
     printf("unknown MODE %d\n",MODE); return 1;
 }
