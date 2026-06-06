@@ -568,21 +568,24 @@ the own-GEMM gap lifts the whole stack automatically.
       TFLOP/s (6.09×) @S=4096** (+5.7%, 75.5 @8192), ~6.3% of the gap closed. In-place wgmma HW swizzle descriptor =
       **CLOSED-NEG** (floor 1.392 ~40 cfgs, a 3rd interaction — HW de-swizzle ≠ TMA atom stacking). native sm_90a
       H100 (vast 39707146, DESTROYED leak 0, nvcc 12.6 driver 560.35.05). verdict `.verdicts/hexa-fusion/F-FUSION-SM90-WGMMA-W10.txt`.
-- [~] **W11 research-named top levers** — 🔴 LEVER-1 CLOSED-NEGATIVE (occupancy-coupled) + frontier KEPT. Applied
-      the litscan top-3 levers on the W10 composed-decode. native sm_90a H100 (vast 39717398, DESTROYED leak 0,
-      nvcc 12.6, driver 580.159.03). Single-tile gates rel_rms **0** (composed law intact); same-binary baseline
-      W10 MODE4 @4096 = 70.6 (6.12×, 2 CTA/SM). **LEVER 1 (128×256 tile, the named +34% jump) REGRESSED**: smem
-      98KB→147KB/CTA → **occupancy 2→1 CTA/SM**, own best 66.4 @4096 (6.44×), -6.0% vs frontier — the FP16 reuse
-      gain does NOT cover the halved residency on TF32. **LEVER 3 (ping-pong epilogue)** also below (64.5–66.3,
-      cannot return the smem). ALL rel_rms **0** (bit-exact). RULED OUT: "bigger tile alone" — it is occupancy-
-      coupled; pays off ONLY after lever 2 (warp-spec setmaxnreg) + a smem shrink hold 2 CTA/SM (litscan's own
-      Q2-step5 coupling CONFIRMED by measurement). **W10 70.7/6.09× frontier KEPT — no regression shipped.**
+- [x] **W11 research-named top levers** — 🔴 LEVER-1 CLOSED-NEGATIVE (occupancy-coupled) + frontier KEPT (#2850).
+      Applied the litscan top-3 levers on the W10 composed-decode. native sm_90a H100 (vast 39717398, DESTROYED leak
+      0). bit-exact rel_rms 0 throughout. **LEVER 1 (128×256 tile, the named +34% jump) REGRESSED**: smem 98→147
+      KB/CTA collapses occupancy **2→1 CTA/SM**, own 65.5–66.4 (< 70.6 same-binary baseline, -6.0%); the accumulator-
+      reuse gain does NOT cover the halved residency (the litscan Q2-step5 tile↔warp-spec coupling CONFIRMED by
+      measurement). LEVER 3 (ping-pong) cannot rescue it. **W10 70.7/6.09× frontier KEPT — no regression shipped.**
       verdict `.verdicts/hexa-fusion/F-FUSION-SM90-WGMMA-W11.txt`. kernel `self/native/wgmma/wgmma_tf32_w11.cu`.
-- [ ] **W12 tile + warp-spec register-realloc (coupled)** ★ NEXT — make the W11 128×256 tile pay off by BOTH (a)
-      lever 2 setmaxnreg producer-40/consumer-232 warp-spec (promote the elected TMA thread to a producer WG) AND
-      (b) shrink the 128×256 smem under the 114KB/CTA ceiling for 2 CTA/SM (eliminate the W10 software decode copy
-      via a wgmma operand layout matching the TMA atom stacking — HW in-place RULED OUT, so a layout-emit). Only
-      with BOTH does the bigger tile hold 2 CTA/SM and the +34% reuse become visible. Tile-alone is closed-neg (W11).
+- [x] **W12 tile + warp-spec register-realloc (coupled)** — 🔴 CLOSED-NEGATIVE (#2851) — the coupled lever does NOT
+      close on this TF32 kernel, on TWO grounds. native sm_90a H100 (vast 39719243, DESTROYED leak 0, nvcc 12.6,
+      driver 580.95.05). bit-exact rel_rms 0 throughout. **(b) MODE10 per-K8-sub decode** shrinks the decode scratch
+      48KB→12KB → smem 147→**108.0 KB/CTA → 2 CTA/SM RESTORED** (the W11-pinned occupancy gate MET, 108<114) but own
+      **COLLAPSES to 26.1 TFLOP/s** @4096 (ptxas C7511 wgmma serialized; the sub-decode forces a __syncthreads +
+      fresh decode per K8 sub-step → serializes decode↔MMA — occupancy was NEVER the wall, decode/MMA OVERLAP is).
+      **(a) MODE9 warp-spec setmaxnreg 40/232 UNREALIZABLE**: ptxas C7507 IGNORES it (the 128×256 tile's 128 accum
+      regs/thr force min regs) AND the separate-producer-WG mbarrier handshake DEADLOCKED (timeout exit 124). The
+      register-realloc the litscan needs is DENIED by the bigger tile's own accumulator footprint. **128×256 output
+      tile = DEAD AXIS for this kernel. W10 70.7/6.09× frontier KEPT — no regression shipped.** verdict
+      `.verdicts/hexa-fusion/F-FUSION-SM90-WGMMA-W12.txt`. kernel `self/native/wgmma/wgmma_tf32_w12.cu`.
 - [x] **W14 PRECISION axis — FP16/BF16 own-GEMM (NEW dtype campaign)** ✅ landed correct, 🔴 W13 thesis refuted
       (2026-06-06). The user-opted-into separate dtype axis after W13 closed the TF32 async-pipeline. Ported the W10
       composed-swizzle-decode own-GEMM to 16-bit operands + f32 accumulate (`wgmma.mma_async...m64n64k16.f32.f16.f16`
@@ -602,10 +605,15 @@ the own-GEMM gap lifts the whole stack automatically.
       slab (band → 16 KB). verdict `.verdicts/hexa-fusion/F-FUSION-SM90-WGMMA-W14-FP16.txt`.
 
 **STATE**: correctness CLOSED (W2/W3 bit-exact). Occupancy CLOSED (W8/W10 2 CTA/SM). **Frontier = W10 `gemm_w10`
-70.7 TFLOP/s, 6.09×, 2 CTA/SM, bit-exact** (beats W8 66.5/6.44× by +5.7%). W9 proved the swizzle removes the
-per-K-step permute (SASS 28→0); W10 corrected the law to textbook g XOR r and **composed it with gmma_phys in
-software** to land a permute-free bit-exact GEMM that lifts the frontier. The in-place HW-descriptor path is
-CLOSED-NEG (3rd interaction). Parity OPEN, de-risked, own-GEMM-owned. cuBLAS = roofline, no superiority claim.
+70.7 TFLOP/s, 6.09×, 2 CTA/SM, bit-exact** (beats W8 66.5/6.44× by +5.7%). W11→W12 EXHAUSTED the litscan
+tile↔warp-spec coupling axis: lever 1 (128×256 tile) regresses alone (2→1 CTA/SM, W11), and **W12 closed the
+coupling negative** — the smem CAN meet the 114KB ceiling (108KB, 2 CTA/SM) but ONLY via a per-K8-sub decode that
+serializes decode↔MMA (70.3→26.1), and the warp-spec register realloc that would hide it is ungrantable under the
+bigger tile's accumulator regs (ptxas ignores setmaxnreg). **The 128×256 output-tile axis is CLOSED-NEGATIVE.**
+Remaining parity levers are OTHER axes: (i) the W5-class perf-only warp-spec TMA pipeline (hide the decode via a deep
+async producer ring WITHOUT shrinking the scratch); (ii) the precision axis (FP16/BF16 wgmma, where the litscan
+ladder was actually measured). The in-place HW-descriptor path stays CLOSED-NEG (W10). Parity OPEN on those axes;
+the output-tile axis is exhausted. cuBLAS = roofline, no superiority claim.
 
 ## 🎯 Session north-star — the 5 axes (2026-06-06)
 

@@ -212,6 +212,43 @@
 #       layout-emit not a descriptor) removes the gmma scratch. Only with BOTH does 128x256 hold
 #       2 CTA/SM and the +34% reuse become visible. Tile-alone is closed-negative (W11 verdict).
 
+# === W12 — the COUPLED LEVER tested + CLOSED-NEGATIVE (#2851, 2026-06-06) ===
+#   native sm_90a H100 (vast 39719243, ssh8, DESTROYED leak 0). nvcc 12.6 V12.6.77, driver 580.95.05.
+#   Same-binary baseline: W10 MODE4 @4096 = 70.3 (6.10x, 2 CTA/SM, smem 98KB). Gates rel_rms 0.
+#
+#   (b) MODE10 — per-K8-sub decode (shrink the W10 full-slab decode scratch 48KB -> 12KB):
+#     smem 147KB -> 108.0KB/CTA -> 2 CTA/SM RESTORED (the W11-pinned occupancy gate MET, 108<114).
+#     BUT own COLLAPSES: S4096 NST2 26.1 (16.66x), NST3 26.0 (1 CTA/SM), S2048 18.8, S8192 26.7.
+#     rel_rms 0 throughout (bit-exact). ptxas C7511 = wgmma serialized (insufficient regs). The
+#     sub-tile decode forces a __syncthreads + fresh 6-buffer decode PER K8 sub-step (4x the
+#     full-slab sync/decode) -> serializes decode<->MMA. Occupancy was NEVER the W10 wall;
+#     decode/MMA OVERLAP is, and the scratch-shrink directly destroys it. -63% vs frontier.
+#
+#   (a) MODE9 — separate producer WG + setmaxnreg 40/232 + sub-decode: UNREALIZABLE.
+#     ptxas C7507 IGNORES setmaxnreg (the 128x256 tile's d0..d3 = 128 accum regs/thr force min
+#     regs, asymmetry cannot be granted). RUN DEADLOCKED (timeout -k5 90 -> exit 124 both NST).
+#     The register-realloc the litscan needs to hide the bigger-tile cost is DENIED by that same
+#     bigger tile's accumulator footprint. 90s timeout guard prevented any pod hang (storm-safe).
+#
+#   RULED-OUT AXIS (deterministic closed-negative, TWO grounds): the litscan tile<->warp-spec
+#     coupling does NOT close on the W10 TF32 composed-decode kernel. (1) smem CAN meet the ceiling
+#     (108KB, 2 CTA/SM) but only via a decode-serialization costing ~2.7x more than the occupancy
+#     win; (2) the warp-spec register realloc that would hide it is ungrantable under the bigger
+#     tile's accumulator regs. The 128x256 output tile is a DEAD AXIS for this kernel.
+#
+#   DECISION (W12 hard rules): both levers regressed/unrealizable -> KEEP W10 70.7 frontier,
+#     NO regression shipped. Frontier kernel UNCHANGED = W10 gemm_w10 (70.7, 6.09x, 2 CTA/SM,
+#     bit-exact). cuBLAS-TF32 = ROOFLINE, no superiority claim.
+#   verdict .verdicts/hexa-fusion/F-FUSION-SM90-WGMMA-W12.txt. kernel self/native/wgmma/wgmma_tf32_w12.cu.
+#
+# === NAMED RESIDUAL (post-W12) ===
+#   Axis-1 (forge TF32 wgmma parity via bigger tile) is CLOSED-NEGATIVE through W12. Remaining
+#   parity levers are NOT tile/occupancy: (i) the W5-class perf-only warp-spec TMA pipeline (deep
+#   async producer ring overlapping the decode itself, not just register split) so decode is hidden
+#   WITHOUT shrinking the scratch; (ii) precision-axis (the campaign-closed lever: FP16/BF16 wgmma
+#   where the litscan ladder was actually measured, vs this TF32 kernel). Both are separate axes;
+#   the 128x256 output-tile axis is exhausted.
+
 # ============================================================================
 # === UPDATE 2026-06-06 — W14 PRECISION AXIS: FP16/BF16 wgmma own-GEMM (NEW dtype sub-ladder)
 # ============================================================================
