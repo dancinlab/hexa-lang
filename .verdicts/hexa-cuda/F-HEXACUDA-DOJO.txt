@@ -155,3 +155,73 @@ BUILD-VERIFY-PENDING (needs a real GPU pod / a current binary rebuild — honest
     binary — same stale-Jun-1 snapshot limitation as above (the binary doesn't know
     'flame-forge'); the flame_forge.hexa SOURCE edit is parse-clean (verified above). A binary
     rebuild surfaces the new README body.
+
+── (9) DOJO REFLECTS THE OWN-GEMM / MEGAKERNEL ARC (branch
+       domain/dojo-reflect-owngemm, 2026-06-06) — docs-only, NO GPU ──
+  method: g5 documentation reflection — CITE the landed sm_90a own-GEMM W-ladder +
+    persistent-megakernel verdicts (NO new perf claim authored here; every number is
+    quoted verbatim from a landed fusion verdict + attributed to its PR). The deliverable
+    is a TEACHING ARTIFACT, not a new measurement.
+
+  (9a) track-1 hexa-cuda dojo gains a READING LESSON (docs/hexa-dojo.md, §"track 1"):
+       "GPU own-GEMM parity & the persistent megakernel (a war story)". Explicitly a
+       reading lesson, NOT a kata — the primitives (wgmma · TMA cp.async.bulk.tensor ·
+       grid-sync) are CODEGEN/.cu-level, NOT source-callable from .hexa today. The
+       source-callable @gpu set stays §5/§6 (gpu_thread_id_x · @shared let · gpu_barrier ·
+       gpu_atomic_add · gpu_warp_shuffle · gpu_wmma_*). NO invented source calls (same
+       honesty discipline as the wmma kata's codegen-level framing). → docs-only; no new
+       .hexa fixture, so no parse gate applies to this unit (the 7 existing katas remain
+       parse-clean per §1; unchanged).
+
+  (9b) the W-ladder reflected (all bit-exact rel-RMS 0 — lift is OCCUPANCY, not precision):
+       W6 async-pipe        = 50.7 TFLOP/s = 8.39x off cuBLAS-TF32
+       W8 HW-TMA-producer   = 66.5 TFLOP/s = 6.44x  (occupancy 1->2 CTA/SM)
+       W10 composed-swizzle = 70.7 TFLOP/s = 6.09x  (frontier)
+       CITED verbatim from .verdicts/hexa-fusion/F-FUSION-SM90-WGMMA-W8.txt (66.5, 6.44x,
+       rel_rms=0, occupancy 1->2 CTA/SM, on-pod H100, PR #2841). W10 (70.7, 6.09x) + PR
+       #2847 attributed; the gridsync GroupNorm (byte-eq max|Δ|=0, PR #2845) attributed.
+       NOTE: F-FUSION-SM90-WGMMA-W10.txt + F-FUSION-MEGAKERNEL-GN-GRIDSYNC.txt are on
+       the auto-merging PRs #2847/#2845 (not yet on the origin/main base of this branch);
+       the lesson + this verdict CITE them by id + PR (verbatim numbers carried from the
+       task hand-off), and the cross-links resolve once those PRs land. W8 verdict IS
+       present on this base and was read verbatim (above).
+
+  (9c) the FOUR named gotchas documented as .cu/codegen-level engineering lessons:
+       (a) wgmma needs the GMMA INTER 8x4 TF32 core layout (the W2 swizzle solve).
+       (b) fence.proxy.async.shared::cta orders the async-proxy shared read (a plain
+           __syncthreads is NOT sufficient — separate memory proxies).
+       (c) a single-elected-thread HW TMA producer (cp.async.bulk.tensor) frees a whole
+           producer warpgroup -> CTA 384->256 thr -> occupancy 1->2 CTA/SM (the W6->W8 lift).
+       (d) SWIZZLE_128B is textbook `g XOR (r&7)` (CuTe Swizzle<3,4,3>) but must be
+           SOFTWARE-composed with the 8x4 core packing; the in-place HW swizzle descriptor
+           is a CLOSED-NEGATIVE (naive HW-swizzle failed bit-exact, rel-RMS 1.392).
+       gotchas (a)/(d) cross-link docs/research/sm90-wgmma-parity-litscan.md (#2846).
+
+  (9d) the persistent-megakernel TWO-WALL story documented:
+       wall 1 (cuBLAS-call) — a persistent kernel can't call cuBLAS; own-GEMM removes it
+         (the persistent kernel calls our DEVICE GEMM in-line).
+       wall 2 (GroupNorm full-y reduction) — a cross-block barrier; a grid-sync cooperative
+         kernel (cudaLaunchCooperativeKernel + cooperative_groups::this_grid().sync(),
+         deterministic fixed-order reduction, NO float atomics) closes it, byte-eq max|Δ|=0.
+
+  (9e) HONEST FRAMING stated explicitly (g5):
+       · cuBLAS-TF32 is the ROOFLINE (~431 TFLOP/s @4096³).
+       · PARITY is NOT achieved — frontier 70.7 TFLOP/s = 6.09x off.
+       · util-via-megakernel is a CLOSED-NEGATIVE — fusing the whole step into one
+         persistent kernel does NOT win utilization/wall-time vs the serial kernel DAG.
+       · the WIN is OWNERSHIP/COMPLETENESS (full stack owned, bit-exact, no vendor call),
+         NOT a perf/util brag.
+
+  (9f) HEXA-CUDA.md gains milestone D11 (the "dojo reflects the own-GEMM/megakernel arc"
+       milestone), and docs/hexa-dojo.md §references cross-links the W8/W10/gridsync
+       verdicts + the lit scan.
+
+VERDICT (§9): 🟢 GREEN (docs reflection) — the landed sm_90a own-GEMM W-ladder + the
+two-wall persistent megakernel are reflected into the track-1 hexa-cuda dojo as a reading
+lesson with HONEST framing (roofline / parity-NOT-achieved 6.09x / util-megakernel
+closed-neg / win=ownership), the 4 named gotchas documented as codegen-level lessons (NO
+invented source calls), and every perf number CITED verbatim from a landed fusion verdict
++ attributed to its PR (NO new perf claim authored). Docs-only, NO GPU rented (vast leak
+sweep: 0 leaked H100/H200 — the only vast instance is the spared rtsc-39610026 anchor, an
+RTX 3090). Pending: the W10 + gridsync verdict FILES land with PRs #2847/#2845 (cited by
+id+PR until then); the W8 verdict file is present on this base and was read verbatim.
