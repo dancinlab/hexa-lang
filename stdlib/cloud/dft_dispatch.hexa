@@ -2008,6 +2008,10 @@ pub fn dft_fanout(av: [str], start: int) -> int {
     let image = _dft_flag_val(av, start, "--image", "ubuntu:22.04")
     let disk = _dft_atoi(_dft_flag_val(av, start, "--disk", "60"))
     let owner = _dft_flag_val(av, start, "--owner", "(hexa-cloud dft-fanout)")
+    // gap-1 parity: resolve the QE version selector for the fanout pods too, so
+    // every rented pod pins the same QE version the single-deck dft-run path
+    // does (and so the _dft_go 9-arg signature is satisfied — was an 8-arg call).
+    let qe_version = dft_qe_version_resolve(_dft_flag_val(av, start, "--qe-version", ""))
 
     // ① roll-call — classify each candidate (pure over fs + stamp; $0).
     let mut tags: [str] = []
@@ -2034,7 +2038,7 @@ pub fn dft_fanout(av: [str], start: int) -> int {
             let deck = decks[k]
             let relax_name = dft_relax_input_name(deck)
             println("[dft-fanout] -- firing pod for candidate: " + deck + " --")
-            let rc = _dft_go(deck, image, disk, owner, query, identity, walltime_h, relax_name)
+            let rc = _dft_go(deck, image, disk, owner, query, identity, walltime_h, relax_name, qe_version)
             if rc == 0 { fired = fired + 1 } else { failed = failed + 1 }
         }
         k = k + 1
@@ -3224,7 +3228,7 @@ fn _dft_resume(deck: str) -> int {
                     println("[dft-run] --resume: SCF CORRUPT-RESTART AGAIN after a clean from-scratch SCF — GENUINE fault, no re-salvage (@L3).")
                     let st2 = cloud_exec_opts(host, ssh_opts, "tail -40 /root/deck/scf.out 2>/dev/null")
                     println("[dft-run] ── scf.out tail ──\n" + st2.stdout_ + "\n[dft-run] ── end ──")
-                    let _wscf = _dft_write_state(deck, "failed", iid, host_ip, port, identity, np, walltime_h, relax_name)
+                    let _wscf = _dft_write_state(deck, "failed", iid, host_ip, port, identity, np, walltime_h, relax_name, qe_version)
                     return _dft_teardown(iid, 1)
                 }
                 println("[dft-run] --resume: SCF CORRUPT restart (truncated out/*.save charge-density/wfc) — NOT a science crash.")
@@ -3242,7 +3246,7 @@ fn _dft_resume(deck: str) -> int {
                     return 3
                 }
                 // chain ends on ph.x → "phon" phase (one generic resume path, d4).
-                let _wss = _dft_write_state(deck, "phon", iid, host_ip, port, identity, np, walltime_h, relax_name)
+                let _wss = _dft_write_state(deck, "phon", iid, host_ip, port, identity, np, walltime_h, relax_name, qe_version)
                 println("[dft-run] --resume: SCF SALVAGE-RELAUNCHED (from_scratch SCF → el-ph) detached (pid " + to_string(scfsalvaged.pid) + " · log " + scf_log + ").")
                 println("[dft-run]   monitor: hexa cloud tail " + host + " " + scf_log + "   ·   advance: hexa cloud dft-run " + deck + " --resume")
                 return 0

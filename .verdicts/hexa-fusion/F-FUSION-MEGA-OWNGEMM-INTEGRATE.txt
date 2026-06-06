@@ -1,0 +1,97 @@
+F-FUSION-MEGA-OWNGEMM-INTEGRATE  (g5)  [TERMINAL — 🔴 CLOSED-NEGATIVE, H100 sm_90a measured]
+
+GOAL: wire the OG17 TF32-PARITY wgmma own-GEMM into the persistent whole-step
+cooperative megakernel (_hx_k_clm_megafwd), replacing the naive grid-stride device
+GEMM (_hx_dev_conv_tf32), so the cuBLAS-free whole-step runs a parity-class in-kernel
+GEMM. VALUE = COMPLETENESS / own-ability, NOT util/perf (util-via-megakernel is a
+CLOSED-NEGATIVE: byte-eq perp util-lift). cuBLAS = roofline, no superiority claim.
+
+PRE-REGISTERED FALSIFIER: if OG17's per-CTA occupancy (256 thr warpgroup + 64-96KB
+dynamic smem) cannot co-reside as ONE cooperative wave at the grid the whole-step
+megakernel needs, OR the wgmma warpgroup / host-built TMA-descriptor model is
+incompatible with the megakernel's blockDim=64 __device__/grid.sync() in-line call,
+then the OG17 parity kernel and the coop whole-step megakernel are MUTUALLY EXCLUSIVE
+on occupancy/structure -> HONEST CLOSED-NEGATIVE.
+
+APPROACH: probe (self/native/wgmma/mega_owngemm_integrate.cu) measures on real sm_90a:
+  PROBE-A  OG17 wgmma GEMM occupancy (blocks/SM @256 thr + dyn smem, NST 2/3)
+  PROBE-B  GEMM output-tile grid vs the coop one-wave ceiling (all tiles in one wave?)
+  PROBE-C  warpgroup/blockDim mismatch (megakernel 64 thr vs wgmma's 128-thr warpgroup)
+  PROBE-D  OG17 byte-eq vs cuBLAS-TF32 (the parity kernel we WOULD wire — rel-RMS)
+
+================================ RAW H100 RUN (verbatim stdout) ================================
+DEVICE NVIDIA H100 80GB HBM3 sm_90 numSM=132 cooperativeLaunch=1 smemPerSM=228KB smemOptin=227KB
+
+-- S=2048 NST=3 --
+PROBE-A og17_pipe thr=256 NST=3 dynsmem=96KB setAttr=no error
+PROBE-A occ: blocksPerSM(og17 wgmma)=2 (no error) -> one_wave_grid=264 CTAs
+PROBE-B GEMM output tiles @S=2048 = 16x16=256 ; coop one-wave ceiling(wgmma)=264
+PROBE-B co-reside-all-tiles-in-one-wave = YES
+PROBE-C megakernel blockDim=64 ; wgmma.m64n64k8 requires a 128-thread warpgroup; OG17 uses 256-thread (2 warpgroup) CTAs. blockDim=64 CANNOT issue wgmma = STRUCTURAL MISMATCH
+PROBE-D og17_pipe @S=2048 NST=3 launch=no error rel_rms=0.000e+00 BIT-EXACT ; 262.2 TFLOP/s
+
+-- S=2048 NST=2 --
+PROBE-A og17_pipe thr=256 NST=2 dynsmem=64KB setAttr=no error
+PROBE-A occ: blocksPerSM(og17 wgmma)=2 (no error) -> one_wave_grid=264 CTAs
+PROBE-B GEMM output tiles @S=2048 = 16x16=256 ; coop one-wave ceiling(wgmma)=264
+PROBE-B co-reside-all-tiles-in-one-wave = YES
+PROBE-C ... blockDim=64 CANNOT issue wgmma = STRUCTURAL MISMATCH
+PROBE-D og17_pipe @S=2048 NST=2 launch=no error rel_rms=0.000e+00 BIT-EXACT ; 259.0 TFLOP/s
+
+-- S=4096 NST=3 (production CLM shape) --
+PROBE-A og17_pipe thr=256 NST=3 dynsmem=96KB setAttr=no error
+PROBE-A occ: blocksPerSM(og17 wgmma)=2 (no error) -> one_wave_grid=264 CTAs
+PROBE-B GEMM output tiles @S=4096 = 32x32=1024 ; coop one-wave ceiling(wgmma)=264
+PROBE-B co-reside-all-tiles-in-one-wave = NO (GEMM grid EXCEEDS coop wave -> needs >1 wave -> grid.sync DEADLOCK)
+PROBE-C ... blockDim=64 CANNOT issue wgmma = STRUCTURAL MISMATCH
+PROBE-D og17_pipe @S=4096 NST=3 launch=no error rel_rms=0.000e+00 BIT-EXACT ; 267.1 TFLOP/s
+
+================================ RESULTS ================================
+  in-kernel approach            : NOT WIRED — falsifier triggered (two independent structural exclusions)
+  whole-step byte-eq max|delta| : N/A — in-kernel GEMM never produced (kernel cannot be co-resident)
+  in-kernel GEMM TFLOP/s vs OG17 280 : OG17 standalone CONFIRMED bit-exact 259-267 TFLOP/s (~OG17 ref);
+                                       BUT this is the STANDALONE launch, NOT an in-megakernel call
+  coop-grid x OG17-occupancy compatible Y/N : NO (terminal)
+  completeness-achieved Y/N     : NO (own-GEMM cannot replace _hx_dev_conv_tf32 inside the coop megakernel)
+  pod destroyed Y/N             : YES (own instance 39780203 destroyed; leak 0)
+
+================================ FINDING (🔴 CLOSED-NEGATIVE) ================================
+The OG17 parity wgmma own-GEMM and the persistent whole-step COOPERATIVE megakernel are
+MUTUALLY EXCLUSIVE on TWO independent, deterministic axes — the pre-registered falsifier
+fires on BOTH:
+
+(1) WARPGROUP/blockDim STRUCTURAL EXCLUSION (PROBE-C, all S, compile/launch fact):
+    wgmma.m64n64k8 REQUIRES a full 128-thread warpgroup; OG17 issues from 256-thread
+    (2-warpgroup) CTAs. The megakernel is one uniform <gridDim, blockDim=64> geometry and
+    calls its GEMM as an in-line __device__ fn under grid.sync(). blockDim=64 < 128 CANNOT
+    issue wgmma — the in-kernel GEMM physically cannot be the OG17 wgmma kernel without
+    re-architecting the ENTIRE megakernel to blockDim>=128 (which would re-cost every other
+    fused stage's occupancy).
+
+(2) TILE-GRID vs ONE-WAVE-CEILING EXCLUSION (PROBE-B, scale-dependent, the decisive axis):
+    cudaLaunchCooperativeKernel requires EVERY block co-resident for grid.sync(). The wgmma
+    GEMM co-residency ceiling is FIXED: 2 blocks/SM x 132 SM = 264 CTAs (independent of NST
+    at 64-96KB smem). The OG17 GEMM output-tile grid scales as (S/128)^2:
+        S=2048 -> 256 tiles <= 264  => fits one wave (YES, but only at this sub-production size)
+        S=4096 -> 1024 tiles > 264  => EXCEEDS the wave => requires >1 wave => grid.sync DEADLOCK
+    Production CLM shapes are S>=4096, so a tiled wgmma GEMM CANNOT cover all output tiles in
+    the single cooperative wave the whole-step megakernel mandates. A grid-stride wgmma loop
+    would serialize tiles within 264 resident CTAs — but the megakernel's one-wave model is
+    precisely what enables its grid.sync() pipeline; folding a multi-wave GEMM inside it
+    reintroduces the very launch boundary the megakernel exists to remove.
+
+OG10 (1-CTA/SM, 70.7 TFLOP/s) FALLBACK — RULED OUT: 1 CTA/SM gives a ceiling of 132 CTAs
+(WORSE than OG17's 264), so it fails the tile-grid exclusion (2) even harder, and still
+needs blockDim>=128 (fails (1)). The fallback does not escape either exclusion.
+
+RULED-OUT AXIS: "a parity-class wgmma own-GEMM can be folded as an in-line GEMM inside the
+cooperative whole-step megakernel at production CLM shapes" is DISPROVEN. The own-GEMM
+parity (bit-exact 259-267 TFLOP/s) is REAL and remains available as a STANDALONE cuBLAS-free
+launch (own-ability holds at the launch granularity), but NOT as an in-megakernel call.
+This is consistent with — and strengthens — the prior util-megakernel CLOSED-NEGATIVE:
+the cooperative one-wave residency model that the megakernel needs is structurally
+incompatible with the tiled, warpgroup-heavy, multi-wave wgmma GEMM that delivers parity.
+
+COMPLETENESS NOTE (honest): the whole-step is cuBLAS-free at the LAUNCH-SEQUENCE level
+(own-GEMM standalone + own conv/GN/gelu kernels exist), but a SINGLE-LAUNCH cuBLAS-free
+coop megakernel with parity-class in-kernel GEMM is NOT achievable — terminal.

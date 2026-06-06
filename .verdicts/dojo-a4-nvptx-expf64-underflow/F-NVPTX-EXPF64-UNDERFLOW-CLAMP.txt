@@ -1,0 +1,72 @@
+F-NVPTX-EXPF64-UNDERFLOW-CLAMP — DOJO-A4 closure verdict
+========================================================
+Date:    2026-06-07
+Tier:    🟢 SUPPORTED-NUMERICAL (CPU model vs libm; GPU ptxas round-trip = TODO)
+Branch:  domain/dojo-a4-nvptx-exp
+Bug:     d631a08f — nvptx f64 exp() intrinsic returns GARBAGE below x≈-745.13
+
+ROOT CAUSE
+----------
+The #1215 f64 exp() codegen (compiler/codegen/nvptx_target.hexa) builds
+2^k via the bit-trick `pow2k = bits_to_float((k + 1023) << 52)`. When
+k <= -1023 (x*log2(e) <= -1023, i.e. x <~ -709, deep underflow by
+x≈-745.13) the biased exponent b = k+1023 goes <= 0, so `b << 52`
+shifts a negative two's-complement value into the SIGN + exponent bits
+and yields garbage (a huge ± value) instead of the IEEE underflow
+result +0.0.
+
+FIX (file+line)
+---------------
+compiler/codegen/nvptx_target.hexa, between the existing `add.s64`
+(b = k + 1023) and `shl.b64` (b <<= 52) in the f64 exp arm of
+_nvptx_lower_stmt (around line 2008), INSERT a single instruction:
+
+    out.push(_nvptx_instr(PTX_OP_MAX_S64, ec,
+        "exp f64: clamp b>=0 (underflow -> +0.0)"))   // max.s64 b, b, 0
+
+b clamped to >= 0: b=0 -> 0<<52 = 0x0 bit-pattern = +0.0, then
+dst = p * +0.0 = +0.0 (p is a finite positive poly value ~[0.7,1.4],
+no NaN). One instruction, no branch, no new scratch register.
+
+PRE-REGISTERED FALSIFIER
+------------------------
+F-NVPTX-EXPF64-UNDERFLOW-CLAMP: the nvptx f64 exp algorithm, replayed
+in CPU f64 with the bits_to_float IEEE-754 reinterpret builtin, must
+satisfy exp(-800) == 0.0  AND  exp(0) == 1.0  AND  exp(1) ≈ 2.71828
+with NO normal-range regression. probe:
+compiler/codegen/nvptx_expf64_underflow_clamp_probe.hexa
+
+EVIDENCE — local numerical run (macOS arm64, hexa 2026-06-03 selfhost)
+---------------------------------------------------------------------
+$ hexa run compiler/codegen/nvptx_expf64_underflow_clamp_probe.hexa
+exp(-800) = 0.0   (expect 0.0)
+exp(0)    = 1.0   |delta| = 0.0   (expect 1.0)
+exp(1)    = 2.71828   rel = 7.29752e-09   (expect e=2.718281828459045)
+OK: nvptx exp f64 underflow-clamp PASS (no normal-range regression)
+
+DISCRIMINATION — same probe with the clamp REMOVED (bug repro)
+--------------------------------------------------------------
+exp(-800) = -1.18535e+269   (expect 0.0)     <-- garbage: b<<52 into sign bit
+exp(0)    = 1.0   |delta| = 0.0
+exp(1)    = 2.71828   rel = 7.29752e-09
+FAIL: exp(-800) != 0.0 (UNDERFLOW BUG present)
+
+The falsifier flips: garbage -1.18e+269 without the clamp, +0.0 with
+it. exp(0) and exp(1) are byte-identical across both — no normal-range
+regression. The ~7e-9 residual on exp(1) is a CPU-model artifact (the
+probe uses mul+add; the real codegen uses fma.rn.f64 → ~1e-15) and is
+well within the "exp(1) ≈ 2.71828" gate.
+
+STRUCTURAL GUARD
+----------------
+compiler/codegen/nvptx_expf64_polynomial_test.hexa now asserts the
+emitted PTX contains `max.s64` (the clamp), so the codegen guard
+catches any regression that drops it.
+
+GPU CONFIRM — TODO (honest)
+---------------------------
+No GPU pod was safely rentable for this unit; a ptxas+driver-JIT
+round-trip on sm_80+ confirming exp(-800)==+0.0 on silicon is the
+open follow-up. The CPU model replays the EXACT instruction sequence
+(same coeffs, same bit-trick, same clamp) so the numerical verdict is
+load-bearing; the TODO is silicon attestation only, NOT correctness.

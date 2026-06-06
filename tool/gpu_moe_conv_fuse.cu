@@ -30,14 +30,24 @@
  * own weight bank W_e[d, d, K] and bias b_e[d]. (This matches CLMConvMoE: the
  * router gates, but every ConvExpert is fed the block input.)
  *
- * ── Three paths benchmarked (same pod, same shape) ──────────────────────────
+ * ── Four paths benchmarked (same pod, same shape) ───────────────────────────
  *   (A) ModuleList-30  : E separate kernel launches (the under-fill baseline).
  *   (B) grouped        : ONE launch, but ONE block per expert iterates ALL
  *                        out-channels serially (the naive grouped-conv regression
  *                        anti-pattern: group-parallel, channel-serial → starves SMs).
  *   (C) fused          : ONE launch, grid = (E × out-blocks × time-blocks) →
  *                        every (expert, out-block, time-block) tile is an
- *                        independent CTA → fills the SM scheduler. THE CURE.
+ *                        independent CTA → fills the SM scheduler. THE FILL CURE,
+ *                        but a NAIVE per-channel MAC inner loop → at d>=1024 every
+ *                        CTA re-reads X CO_TILE×-redundantly from global → loses to
+ *                        (A) in the SATURATED regime (input-bandwidth-bound).
+ *   (D) tiled-fused    : (C)'s grid (same fill) BUT the input time-window is staged
+ *                        into SHARED memory once per CTA (coalesced) → the ci inner
+ *                        loop reads X from smem (broadcast, zero redundant global
+ *                        traffic) + register-blocked time accumulators. THE
+ *                        OG-FUSE-OPT cure: keeps the under-fill win AND aims to
+ *                        win the saturated regime too. Same accum order (ci outer,
+ *                        k inner) → byte-eq max|Δ|=0 vs (A).
  *
  * Correctness GATE (g5, FIRST — no perf number before this passes):
  *   max|Δ| of (B) and (C) vs the (A) op-by-op reference, over Y for all E experts.
@@ -50,6 +60,16 @@
  * FUSION / FILL: (C) fills the GPU where (A) under-fills (too-small launches) and
  * (B) regresses (channel-serial). If (C) does not beat (A) step-time/util on the
  * rented GPU → honest closed-negative + the exact wall.
+ *
+ * ── OG-FUSE-OPT measured finding (L40S, sm_89, .verdicts/.../F-FUSION-MOE-CONV-OPT.txt)
+ * Path (D) smem-tiling REMOVED (C)'s redundant input reads → fused-vs-fused 1.61x
+ * faster at d=2048 (1662→1034 ms), byte-eq max|Δ|=0 held. BUT (D) STILL loses to
+ * (A) ModuleList at d=2048 (1034 vs 333 ms). Residual roofline = WEIGHT bandwidth +
+ * L2-weight-locality, NOT fill: util is 98.7% for A/C/D alike (the GPU is already
+ * saturated). Weights are unique per (co,ci,k), touched once, no reuse — kernel
+ * fusion can't shrink weight traffic, and the single fused launch interleaves 30
+ * experts' weight streams → worse L2 locality than A's clean per-expert stream.
+ * => fusion remains an UNDER-FILL-only cure; the saturated-win falsifier FALSIFIED.
  *
  * Build (CUDA host):
  *   nvcc -arch=sm_XX -O3 -o gpu_moe_conv_fuse gpu_moe_conv_fuse.cu
@@ -64,6 +84,9 @@
 #include <string.h>
 #include <math.h>
 #include <cuda_runtime.h>
+#ifdef USE_CUBLAS
+#include <cublas_v2.h>
+#endif
 
 #define CK(call) do { \
     cudaError_t _e = (call); \
@@ -119,6 +142,524 @@ __global__ void k_moe_conv_fused(const float* __restrict__ X,
         }
         Y[((size_t)e * T + t) * d + co] = acc;
     }
+}
+
+/* ── Tiled fused kernel (D): the OG-FUSE-OPT cure for the SATURATED regime ─────
+ * Same grid as (C) — grid = (E × ⌈d/CO_TILE⌉ × ⌈T/TT_TILE⌉), one CTA per
+ * (expert, out-channel-block, time-block) → the SM scheduler is saturated.
+ *
+ * Why (C) loses at d>=1024 (the measured roofline): in (C) every one of the
+ * CO_TILE threads in a CTA re-reads the SAME X[p, ci] for all ci from GLOBAL
+ * memory — CO_TILE-fold redundant input traffic. At large d the X gathers
+ * dominate and (C) is input-bandwidth-bound (it loses to ModuleList-30 there).
+ *
+ * The fix (this kernel): stage the input time-window into SHARED memory ONCE
+ * per CTA, cooperatively + coalesced, then the per-out-channel ci inner loop
+ * reads X from smem (a broadcast, zero extra global traffic). Input global
+ * traffic drops by CO_TILE×. Weights W_e[co,ci,k] are unique per thread so they
+ * still stream from global, but with a coalesced ci-block layout they hit L2.
+ *
+ * smem budget: stage a CI_TILE-wide slice of the time window at a time. The
+ * window spans rows [t0-(K-1)·dil .. t0+TT_TILE-1] → WROWS = TT_TILE+(K-1)·dil
+ * time positions. smem tile = WROWS × CI_TILE floats. We loop ci in CI_TILE
+ * chunks so smem stays bounded for ANY d. CRITICAL for byte-eq: the
+ * accumulation visits ci in ascending order, k inner — IDENTICAL order to the
+ * reference (ci outer, k inner) → byte-exact max|Δ|=0 vs ModuleList-30.
+ */
+#define CI_TILE 32
+#define WROWS   (TT_TILE + (3 - 1) * 1)   /* upper bound for K<=3, dil==1 smem sizing */
+__global__ void k_moe_conv_tiled(const float* __restrict__ X,
+                                 const float* __restrict__ W,
+                                 const float* __restrict__ b,
+                                 float* __restrict__ Y,
+                                 int E, int T, int d, int K, int dil) {
+    /* smem: dynamically sized window slice, [wrows][CI_TILE] row-major.
+     * wrows = TT_TILE + (K-1)*dil time positions, base = t0 - (K-1)*dil. */
+    extern __shared__ float sX[];
+    int e   = blockIdx.x;
+    int cob = blockIdx.y * CO_TILE;
+    int co  = cob + threadIdx.x;                 /* this thread's out-channel  */
+    int t0  = blockIdx.z * TT_TILE;
+    int wrows = TT_TILE + (K - 1) * dil;         /* time positions to stage    */
+    int wbase = t0 - (K - 1) * dil;              /* first window time position */
+
+    const float* We = (co < d) ? (W + (size_t)e * d * d * K + (size_t)co * d * K) : 0;
+    float bias = (co < d) ? b[(size_t)e * d + co] : 0.0f;
+
+    /* register-blocked accumulators: one per time-step in this CTA's tile */
+    float acc[TT_TILE];
+    #pragma unroll
+    for (int tt = 0; tt < TT_TILE; ++tt) acc[tt] = bias;
+
+    /* ── stream over input channels in CI_TILE chunks (ci ascending) ──────── */
+    for (int cb = 0; cb < d; cb += CI_TILE) {
+        int cw = (cb + CI_TILE <= d) ? CI_TILE : (d - cb);   /* live ci in chunk */
+
+        /* cooperatively stage the window slice X[wbase..wbase+wrows-1, cb..cb+cw)
+         * into smem. Coalesced: consecutive threads load consecutive ci. Causal
+         * left-pad (p<0) → 0, matching xin(p,ci)=0 for p<0. */
+        for (int idx = threadIdx.x; idx < wrows * cw; idx += blockDim.x) {
+            int r  = idx / cw;          /* window row (time offset)  */
+            int cl = idx % cw;          /* local ci within chunk     */
+            int p  = wbase + r;
+            sX[idx] = (p >= 0 && p < T) ? X[(size_t)p * d + (cb + cl)] : 0.0f;
+        }
+        __syncthreads();
+
+        /* accumulate this chunk's contribution. ci ascending, k inner — EXACT
+         * reference order → byte-eq. Only active out-channels write. */
+        if (co < d) {
+            for (int cl = 0; cl < cw; ++cl) {
+                const float* Wc = We + (size_t)(cb + cl) * K;
+                #pragma unroll
+                for (int tt = 0; tt < TT_TILE; ++tt) {
+                    int t = t0 + tt;
+                    if (t >= T) break;
+                    float a = acc[tt];
+                    for (int k = 0; k < K; ++k) {
+                        int p = t - dil * (K - 1 - k);
+                        /* smem row for time p = p - wbase; valid by construction.
+                         * p<0 staged as 0 already, so the MAC is a no-op there. */
+                        int sr = p - wbase;
+                        if (sr >= 0) a += Wc[k] * sX[sr * cw + cl];
+                    }
+                    acc[tt] = a;
+                }
+            }
+        }
+        __syncthreads();   /* protect sX before next chunk overwrites it */
+    }
+
+    if (co < d) {
+        #pragma unroll
+        for (int tt = 0; tt < TT_TILE; ++tt) {
+            int t = t0 + tt;
+            if (t >= T) break;
+            Y[((size_t)e * T + t) * d + co] = acc[tt];
+        }
+    }
+}
+
+/* ── GEMM-conv WEIGHT-REUSE kernel (E): the OG-FUSE-PROD-KERNEL deliverable ────
+ *
+ * The OG-FUSE-OPT closed-negative pinned the SATURATED-regime residual: WEIGHT
+ * bandwidth + L2-weight-locality. In (C)/(D) every weight W_e[co,ci,k] is read
+ * from HBM EXACTLY ONCE and is UNIQUE per (co,ci,k) — there is NO weight reuse,
+ * so the kernel is weight-bandwidth-bound and smem-tiling the INPUT cannot help.
+ *
+ * The structural fix: the conv IS an implicit GEMM. For each tap k,
+ *   Y[t, co] += Σ_ci Xshift_k[t, ci] · W_k[ci, co]
+ * is a [T×d_in]·[d_in×d_out] matmul. A REGISTER-TILED GEMM loads a weight tile
+ * Ws[BK][BN] into smem ONCE and REUSES it across ALL BM time-rows in the CTA's
+ * output tile → BM-fold weight reuse. That converts the weight-bandwidth-bound
+ * MAC into a compute-bound tiled GEMM: each weight HBM byte now amortises over BM
+ * time outputs instead of being touched once. This directly attacks the wall the
+ * OPT verdict proved (weights touched once → now reused BM×).
+ *
+ * Tile: CTA owns BM time-steps × BN out-channels for ONE expert.
+ *   grid = (E, ⌈d/BN⌉, ⌈T/BM⌉).  block = (BN/TN)×(BM/TM) threads.
+ *   Each thread owns a TM×TN register micro-tile (classic GEMM register blocking).
+ *
+ * smem per CTA: Xs[BM+(K-1)dil][BK] (the causal time-window for BK input chans)
+ *             + Ws[K][BK][BN]       (the K weight slabs for BK in-chans × BN out).
+ * Loop ci in BK chunks (ascending) → cooperatively stage Xs+Ws → register MAC.
+ *
+ * BYTE-EQ CONTRACT (g5, gated FIRST): the accumulation visits ci ASCENDING, k
+ * INNER — the EXACT order of the reference (cpu_moe_conv / k_conv_single). Within
+ * a thread's micro-tile, for each output (t,co) the running acc sums
+ *   Σ_{cb} Σ_{cl in chunk} Σ_k Ws[k][cl][n]·Xs[...]   (cb ascending, cl ascending,
+ * k ascending) == Σ_ci Σ_k W[co,ci,k]·X[...]. SAME ORDER → byte-exact max|Δ|=0
+ * vs ModuleList-30 (device-vs-device), and the same single-fma-vs-mul-add fp32
+ * tolerance vs the CPU oracle as every other path. (NOT a cuBLAS GEMM call —
+ * cuBLAS GEMM = the roofline reference, see path F; THIS is the hexa-ownable
+ * weight-reuse kernel, the actual deliverable.)
+ */
+#define GM_BM 64        /* time-steps per CTA tile  */
+#define GM_BN 64        /* out-channels per CTA tile */
+#define GM_BK 16        /* in-channels staged per chunk */
+#define GM_TM 4         /* time-steps per thread (register) */
+#define GM_TN 4         /* out-channels per thread (register) */
+/* threads = (GM_BM/GM_TM) * (GM_BN/GM_TN) = 16*16 = 256. */
+#define GM_KMAX 3       /* causal taps supported in smem layout (K<=3) */
+__global__ void k_moe_conv_gemm(const float* __restrict__ X,
+                                const float* __restrict__ W,
+                                const float* __restrict__ b,
+                                float* __restrict__ Y,
+                                int E, int T, int d, int K, int dil) {
+    /* smem: Xs window [WROWS][GM_BK], Ws [K][GM_BK][GM_BN]. */
+    __shared__ float Xs[GM_BM + (GM_KMAX - 1) * 1][GM_BK];   /* dil==1 sizing; checked at host */
+    __shared__ float Ws[GM_KMAX][GM_BK][GM_BN];
+
+    int e   = blockIdx.x;
+    int co0 = blockIdx.y * GM_BN;          /* first out-channel of this CTA tile */
+    int t0  = blockIdx.z * GM_BM;          /* first time-step of this CTA tile   */
+
+    int tid = threadIdx.x;                  /* 0 .. 255 */
+    int tn  = tid % (GM_BN / GM_TN);        /* micro-tile col index (out-chan)  */
+    int tm  = tid / (GM_BN / GM_TN);        /* micro-tile row index (time-step) */
+
+    int wrows = GM_BM + (K - 1) * dil;      /* time positions to stage          */
+    int wbase = t0 - (K - 1) * dil;         /* first staged window time         */
+
+    const float* We = W + (size_t)e * d * d * K;   /* W_e[co, ci, k]            */
+    const float* be = b + (size_t)e * d;
+
+    /* register accumulators: TM time-steps × TN out-channels, init to bias.    */
+    float acc[GM_TM][GM_TN];
+    #pragma unroll
+    for (int im = 0; im < GM_TM; ++im)
+        #pragma unroll
+        for (int in = 0; in < GM_TN; ++in) {
+            int co = co0 + tn * GM_TN + in;
+            acc[im][in] = (co < d) ? be[co] : 0.0f;
+        }
+
+    /* ── stream input channels in GM_BK chunks (ci ASCENDING — byte-eq order) ─ */
+    for (int cb = 0; cb < d; cb += GM_BK) {
+        int cw = (cb + GM_BK <= d) ? GM_BK : (d - cb);
+
+        /* stage Xs[wrows][GM_BK]: window time × this chunk's in-channels.
+         * Coalesced over ci (innermost). Causal left-pad p<0 → 0. */
+        for (int idx = tid; idx < wrows * GM_BK; idx += blockDim.x) {
+            int r  = idx / GM_BK;            /* window row (time offset) */
+            int cl = idx % GM_BK;            /* local ci within chunk    */
+            int p  = wbase + r;
+            Xs[r][cl] = (cl < cw && p >= 0 && p < T) ? X[(size_t)p * d + (cb + cl)] : 0.0f;
+        }
+        /* stage Ws[k][GM_BK][GM_BN]: weights for this chunk's in-chans × the
+         * CTA's BN out-channels, all K taps. W layout = W_e[co·d·K + ci·K + k]. */
+        for (int idx = tid; idx < K * GM_BK * GM_BN; idx += blockDim.x) {
+            int kk = idx / (GM_BK * GM_BN);
+            int rem = idx % (GM_BK * GM_BN);
+            int cl = rem / GM_BN;            /* local ci */
+            int nn = rem % GM_BN;            /* local out-channel */
+            int co = co0 + nn;
+            float wv = 0.0f;
+            if (cl < cw && co < d)
+                wv = We[(size_t)co * d * K + (size_t)(cb + cl) * K + kk];
+            Ws[kk][cl][nn] = wv;
+        }
+        __syncthreads();
+
+        /* register MAC: for each local ci (ascending), each k (inner), update the
+         * TM×TN micro-tile. SAME order as the reference: ci outer, k inner.       */
+        for (int cl = 0; cl < cw; ++cl) {
+            #pragma unroll
+            for (int im = 0; im < GM_TM; ++im) {
+                int t = t0 + tm * GM_TM + im;
+                if (t >= T) continue;
+                /* window rows for this t's K taps */
+                #pragma unroll
+                for (int in = 0; in < GM_TN; ++in) {
+                    float a = acc[im][in];
+                    for (int k = 0; k < K; ++k) {
+                        int p  = t - dil * (K - 1 - k);
+                        int sr = p - wbase;          /* window row */
+                        if (sr >= 0) a += Ws[k][cl][tn * GM_TN + in] * Xs[sr][cl];
+                    }
+                    acc[im][in] = a;
+                }
+            }
+        }
+        __syncthreads();
+    }
+
+    /* write the micro-tile */
+    #pragma unroll
+    for (int im = 0; im < GM_TM; ++im) {
+        int t = t0 + tm * GM_TM + im;
+        if (t >= T) continue;
+        #pragma unroll
+        for (int in = 0; in < GM_TN; ++in) {
+            int co = co0 + tn * GM_TN + in;
+            if (co < d) Y[((size_t)e * T + t) * d + co] = acc[im][in];
+        }
+    }
+}
+
+/* ── GEMM-conv DOUBLE-BUFFERED (G): the PROD-PERF lever (cp.async multi-stage) ──
+ *
+ * Path (E) k_moe_conv_gemm is register-tiled (BM-fold weight reuse) and byte-eq,
+ * but its K-loop is SERIAL: stage Xs+Ws (global→smem) → __syncthreads → register
+ * MAC → __syncthreads → next chunk. The two HBM-load phases (Xs and Ws) BLOCK the
+ * MAC: every CTA stalls on global latency before each chunk's compute. On H100 the
+ * fix is the same lever the own-GEMM ladder used — cp.async (`cp.async.cg.shared`)
+ * + a multi-stage smem RING so the NEXT chunk's loads are IN FLIGHT while THIS
+ * chunk's MAC runs. Load latency is hidden behind compute → the weight-bandwidth
+ * stream (the OG-FUSE-OPT-pinned wall) is consumed without the per-chunk stall.
+ *
+ * STAGES smem buffers (a ring). Steady state: issue cp.async for chunk (i+STAGES-1),
+ * cp.async.wait_group to the stage that's about to be consumed, MAC chunk i. The
+ * MAC reads from buffer (i % STAGES); loads land into ((i+STAGES-1) % STAGES).
+ *
+ * BYTE-EQ CONTRACT (g5) — UNCHANGED from (E): the MAC still visits ci ASCENDING
+ * (cb ascending across chunks, cl ascending within), k INNER. cp.async only moves
+ * WHEN bytes arrive in smem, NOT the arithmetic order — the register accumulation
+ * sequence is BIT-IDENTICAL to (E)/(A). Gate target: max|Δ|=0 vs ModuleList-30.
+ *
+ * cp.async requires sm_80+. The bytes copied per element = 4 (float). The
+ * causal-left-pad (p<0) and ci-tail (cl>=cw) zero-fill cannot use cp.async (it
+ * copies from global unconditionally), so those slots are zeroed by a plain store
+ * BEFORE the cp.async of the valid slots — identical smem contents to (E).
+ */
+/* smem ring depth (prefetch distance). 2-stage keeps the ring's STATIC __shared__
+ * footprint (Xs+Ws = STAGES·(8448+12288) B) under the 48 KB static-smem hard cap
+ * (49152 B): STAGES=2 → 33024 B fits; STAGES=3 → 49536 B exceeds it and the launch
+ * fails with cudaErrorInvalidValue. A single-prefetch (2-stage) ring already hides
+ * the per-chunk Xs+Ws HBM load latency behind the register MAC of the prior chunk. */
+#define GM_STAGES 2
+__device__ __forceinline__ void cp_async_f4(float* smem_dst, const float* gmem_src) {
+#if __CUDA_ARCH__ >= 800
+    unsigned s = (unsigned)__cvta_generic_to_shared(smem_dst);
+    asm volatile("cp.async.ca.shared.global [%0], [%1], 4;\n" :: "r"(s), "l"(gmem_src));
+#else
+    *smem_dst = *gmem_src;
+#endif
+}
+__device__ __forceinline__ void cp_async_commit() {
+#if __CUDA_ARCH__ >= 800
+    asm volatile("cp.async.commit_group;\n" ::: "memory");
+#endif
+}
+template<int N> __device__ __forceinline__ void cp_async_wait() {
+#if __CUDA_ARCH__ >= 800
+    asm volatile("cp.async.wait_group %0;\n" :: "n"(N) : "memory");
+#endif
+}
+__global__ void k_moe_conv_gemm_db(const float* __restrict__ X,
+                                   const float* __restrict__ W,
+                                   const float* __restrict__ b,
+                                   float* __restrict__ Y,
+                                   int E, int T, int d, int K, int dil) {
+    /* ring of STAGES buffers: each = Xs[WROWS][GM_BK] + Ws[K][GM_BK][GM_BN]. */
+    const int XS_ROWS = GM_BM + (GM_KMAX - 1) * 1;     /* dil==1 sizing (host-checked) */
+    __shared__ float Xs[GM_STAGES][GM_BM + (GM_KMAX - 1) * 1][GM_BK];
+    __shared__ float Ws[GM_STAGES][GM_KMAX][GM_BK][GM_BN];
+
+    int e   = blockIdx.x;
+    int co0 = blockIdx.y * GM_BN;
+    int t0  = blockIdx.z * GM_BM;
+
+    int tid = threadIdx.x;
+    int tn  = tid % (GM_BN / GM_TN);
+    int tm  = tid / (GM_BN / GM_TN);
+
+    int wrows = GM_BM + (K - 1) * dil;
+    int wbase = t0 - (K - 1) * dil;
+
+    const float* We = W + (size_t)e * d * d * K;
+    const float* be = b + (size_t)e * d;
+
+    float acc[GM_TM][GM_TN];
+    #pragma unroll
+    for (int im = 0; im < GM_TM; ++im)
+        #pragma unroll
+        for (int in = 0; in < GM_TN; ++in) {
+            int co = co0 + tn * GM_TN + in;
+            acc[im][in] = (co < d) ? be[co] : 0.0f;
+        }
+
+    int nchunks = (d + GM_BK - 1) / GM_BK;
+
+    /* stage a chunk's Xs+Ws into ring buffer `buf` via cp.async (zero-fill the
+     * invalid slots first with a plain store — IDENTICAL smem to path E). */
+    auto stage_chunk = [&](int chunk, int buf) {
+        int cb = chunk * GM_BK;
+        int cw = (cb + GM_BK <= d) ? GM_BK : (d - cb);
+        /* Xs[wrows][GM_BK] */
+        for (int idx = tid; idx < XS_ROWS * GM_BK; idx += blockDim.x) {
+            int r  = idx / GM_BK;
+            int cl = idx % GM_BK;
+            int p  = wbase + r;
+            bool valid = (r < wrows && cl < cw && p >= 0 && p < T);
+            if (valid) cp_async_f4(&Xs[buf][r][cl], &X[(size_t)p * d + (cb + cl)]);
+            else       Xs[buf][r][cl] = 0.0f;
+        }
+        /* Ws[K][GM_BK][GM_BN] */
+        for (int idx = tid; idx < K * GM_BK * GM_BN; idx += blockDim.x) {
+            int kk = idx / (GM_BK * GM_BN);
+            int rem = idx % (GM_BK * GM_BN);
+            int cl = rem / GM_BN;
+            int nn = rem % GM_BN;
+            int co = co0 + nn;
+            bool valid = (cl < cw && co < d);
+            if (valid) cp_async_f4(&Ws[buf][kk][cl][nn],
+                                   &We[(size_t)co * d * K + (size_t)(cb + cl) * K + kk]);
+            else       Ws[buf][kk][cl][nn] = 0.0f;
+        }
+        cp_async_commit();
+    };
+
+    /* prologue: kick off the first (STAGES-1) chunks' loads. */
+    int prefetch = (GM_STAGES - 1 < nchunks) ? (GM_STAGES - 1) : nchunks;
+    #pragma unroll 1
+    for (int s = 0; s < prefetch; ++s) stage_chunk(s, s);
+
+    /* steady-state: consume chunk i from buffer (i%STAGES); the (STAGES-1) loads
+     * ahead are in flight. After committing chunk i+STAGES-1's loads, wait until
+     * only (STAGES-1) groups remain → buffer (i%STAGES) is fully arrived. */
+    for (int i = 0; i < nchunks; ++i) {
+        int load = i + (GM_STAGES - 1);
+        if (load < nchunks) stage_chunk(load, load % GM_STAGES);
+        cp_async_wait<GM_STAGES - 1>();
+        __syncthreads();
+
+        int buf = i % GM_STAGES;
+        int cb  = i * GM_BK;
+        int cw  = (cb + GM_BK <= d) ? GM_BK : (d - cb);
+        for (int cl = 0; cl < cw; ++cl) {
+            #pragma unroll
+            for (int im = 0; im < GM_TM; ++im) {
+                int t = t0 + tm * GM_TM + im;
+                if (t >= T) continue;
+                #pragma unroll
+                for (int in = 0; in < GM_TN; ++in) {
+                    float a = acc[im][in];
+                    for (int k = 0; k < K; ++k) {
+                        int p  = t - dil * (K - 1 - k);
+                        int sr = p - wbase;
+                        if (sr >= 0) a += Ws[buf][k][cl][tn * GM_TN + in] * Xs[buf][sr][cl];
+                    }
+                    acc[im][in] = a;
+                }
+            }
+        }
+        __syncthreads();   /* protect buf before the ring reuses it */
+    }
+
+    #pragma unroll
+    for (int im = 0; im < GM_TM; ++im) {
+        int t = t0 + tm * GM_TM + im;
+        if (t >= T) continue;
+        #pragma unroll
+        for (int in = 0; in < GM_TN; ++in) {
+            int co = co0 + tn * GM_TN + in;
+            if (co < d) Y[((size_t)e * T + t) * d + co] = acc[im][in];
+        }
+    }
+}
+
+/* ── GEMM-conv WIDE register tile (H): the OG-FUSE-PROD-PERF2 lever ────────────
+ *
+ * PROD-PERF (cp.async, path G) was CLOSED-NEG: it attacks LATENCY, but path E's
+ * wall is weight/L2 BANDWIDTH (E is ~15.7× above the cuBLAS roofline at d=6208).
+ * The verdict named the correct residual lever: raise ARITHMETIC INTENSITY — a
+ * WIDER register micro-tile so each Xs/Ws smem byte feeds MORE output elements
+ * (higher FLOP/byte) and the kernel is less bandwidth-starved.
+ *
+ * Path E is BM=BN=64, TM=TN=4, BK=16. This kernel templates (BM,BN,BK,TM,TN) so
+ * we can SWEEP wider tiles (128×64, 128×128, larger TM×TN micro-tiles). A wider
+ * BN means each staged Xs column feeds BN out-channels → more weight reuse PER
+ * staged input byte; a wider BM means each staged Ws row feeds BM time-rows →
+ * more reuse PER staged weight byte. Both raise the GEMM's arithmetic intensity.
+ *
+ * BYTE-EQ CONTRACT (g5) — UNCHANGED from (E): the register MAC visits ci
+ * ASCENDING (cb across chunks ascending, cl within ascending), k INNER. A wider
+ * tile only RE-BLOCKS the SAME contraction across more threads/registers; the
+ * per-output accumulation SEQUENCE is bit-identical to (E)/(A). Gate: max|Δ|=0.
+ *
+ * smem is DYNAMIC (extern __shared__) so the wide Ws[K][BK][BN] + Xs window can
+ * exceed the 48 KB static cap via cudaFuncAttributeMaxDynamicSharedMemorySize.
+ * Layout: [ Xs : (BM+(K-1)*dil)*BK floats ][ Ws : K*BK*BN floats ].
+ */
+template<int BM, int BN, int BK, int TM, int TN>
+__global__ void k_moe_conv_gemm_wide(const float* __restrict__ X,
+                                     const float* __restrict__ W,
+                                     const float* __restrict__ b,
+                                     float* __restrict__ Y,
+                                     int E, int T, int d, int K, int dil) {
+    extern __shared__ float smem[];
+    const int XS_ROWS = BM + (GM_KMAX - 1) * 1;   /* dil==1 sizing (host-checked) */
+    float* Xs = smem;                              /* [XS_ROWS][BK]   */
+    float* Ws = smem + (size_t)XS_ROWS * BK;       /* [K][BK][BN]     */
+    #define XSW(r,cl)     Xs[(size_t)(r) * BK + (cl)]
+    #define WSW(kk,cl,nn) Ws[((size_t)(kk) * BK + (cl)) * BN + (nn)]
+
+    int e   = blockIdx.x;
+    int co0 = blockIdx.y * BN;
+    int t0  = blockIdx.z * BM;
+
+    int tid = threadIdx.x;                          /* 0 .. (BM/TM)*(BN/TN)-1 */
+    const int NTN = BN / TN;
+    int tn  = tid % NTN;                            /* micro-tile col (out-chan) */
+    int tm  = tid / NTN;                            /* micro-tile row (time)     */
+
+    int wrows = BM + (K - 1) * dil;
+    int wbase = t0 - (K - 1) * dil;
+
+    const float* We = W + (size_t)e * d * d * K;
+    const float* be = b + (size_t)e * d;
+
+    float acc[TM][TN];
+    #pragma unroll
+    for (int im = 0; im < TM; ++im)
+        #pragma unroll
+        for (int in = 0; in < TN; ++in) {
+            int co = co0 + tn * TN + in;
+            acc[im][in] = (co < d) ? be[co] : 0.0f;
+        }
+
+    for (int cb = 0; cb < d; cb += BK) {
+        int cw = (cb + BK <= d) ? BK : (d - cb);
+
+        for (int idx = tid; idx < wrows * BK; idx += blockDim.x) {
+            int r  = idx / BK;
+            int cl = idx % BK;
+            int p  = wbase + r;
+            XSW(r, cl) = (cl < cw && p >= 0 && p < T) ? X[(size_t)p * d + (cb + cl)] : 0.0f;
+        }
+        for (int idx = tid; idx < K * BK * BN; idx += blockDim.x) {
+            int kk = idx / (BK * BN);
+            int rem = idx % (BK * BN);
+            int cl = rem / BN;
+            int nn = rem % BN;
+            int co = co0 + nn;
+            float wv = 0.0f;
+            if (cl < cw && co < d)
+                wv = We[(size_t)co * d * K + (size_t)(cb + cl) * K + kk];
+            WSW(kk, cl, nn) = wv;
+        }
+        __syncthreads();
+
+        /* register MAC — SAME order as (E): cl (ci) outer ascending, k inner. */
+        for (int cl = 0; cl < cw; ++cl) {
+            #pragma unroll
+            for (int im = 0; im < TM; ++im) {
+                int t = t0 + tm * TM + im;
+                if (t >= T) continue;
+                #pragma unroll
+                for (int in = 0; in < TN; ++in) {
+                    float a = acc[im][in];
+                    for (int k = 0; k < K; ++k) {
+                        int p  = t - dil * (K - 1 - k);
+                        int sr = p - wbase;
+                        if (sr >= 0) a += WSW(k, cl, tn * TN + in) * XSW(sr, cl);
+                    }
+                    acc[im][in] = a;
+                }
+            }
+        }
+        __syncthreads();
+    }
+
+    #pragma unroll
+    for (int im = 0; im < TM; ++im) {
+        int t = t0 + tm * TM + im;
+        if (t >= T) continue;
+        #pragma unroll
+        for (int in = 0; in < TN; ++in) {
+            int co = co0 + tn * TN + in;
+            if (co < d) Y[((size_t)e * T + t) * d + co] = acc[im][in];
+        }
+    }
+    #undef XSW
+    #undef WSW
+}
+
+/* Host-side smem byte requirement for a wide-tile config (dil==1 sizing). */
+static inline size_t wide_smem_bytes(int BM, int BN, int BK, int K) {
+    int xs_rows = BM + (GM_KMAX - 1) * 1;
+    return ((size_t)xs_rows * BK + (size_t)K * BK * BN) * sizeof(float);
 }
 
 /* ── ModuleList-30 path (A): per-expert launch.
@@ -185,6 +726,86 @@ __global__ void k_moe_conv_grouped(const float* __restrict__ X,
     }
 }
 
+#ifdef USE_CUBLAS
+/* ── cuBLAS strided-batched GEMM roofline path (F) ────────────────────────────
+ * The HONEST ROOFLINE reference. The conv = K implicit GEMMs; this calls cuBLAS
+ * (the vendor GEMM = roofline) so we can see the ceiling the weight-reuse kernel
+ * aims at. NOT a hexa-ownable kernel and NOT byte-exact vs the naive MAC (cuBLAS
+ * accumulates ci in a DIFFERENT, blocked order → rel-RMS reported, not max|Δ|=0).
+ *
+ * Per tap k: Y_e[t,co] += Σ_ci Xsh_k[t,ci]·W_e[co,ci,k]. Store Y_e as a d×T
+ * COLUMN-MAJOR matrix Yt (Yt[co + t·d]) — which is exactly the row-major [T][d]
+ * layout the rest of the harness uses. Then
+ *   Yt (d_out×T) = A_e (d_out×d_in) · Bk (d_in×T),  A_e = W_e[:,:,k], Bk = Xsh_k^T.
+ * cuBLAS col-major: C(m×n)=A(m×k)·B(k×n) with m=d_out, k=d_in, n=T, all NN.
+ *   - A_e packed contiguous col-major [E][K] banks: Apack[e][k][co + ci·d]  (ld=d)
+ *   - Bk = X^T shifted: Bk[ci + t·d] = xin(t-off_k, ci). Build per-k (ld=d).
+ *   - C  = Yt, accumulate over k with beta=1 after the first (beta=0) tap.
+ */
+__global__ void k_pack_weights(const float* __restrict__ W, float* __restrict__ Apack,
+                               int E, int d, int K) {
+    /* Apack[e][k] is d×d col-major: Apack[((e*K+k)*d + ci)*d + co] = W[e,co,ci,k]. */
+    size_t total = (size_t)E * K * d * d;
+    for (size_t idx = blockIdx.x * (size_t)blockDim.x + threadIdx.x; idx < total;
+         idx += (size_t)gridDim.x * blockDim.x) {
+        int co = idx % d;
+        size_t r = idx / d;
+        int ci = r % d;
+        r /= d;
+        int k = r % K;
+        int e = r / K;
+        Apack[idx] = W[((size_t)e * d + co) * d * K + (size_t)ci * K + k];
+    }
+}
+/* Build Bk = shifted X^T (d×T col-major): Bk[ci + t·d] = X[t-off, ci] (0 if p<0). */
+__global__ void k_build_shiftedXT(const float* __restrict__ X, float* __restrict__ Bk,
+                                  int T, int d, int off) {
+    size_t total = (size_t)T * d;
+    for (size_t idx = blockIdx.x * (size_t)blockDim.x + threadIdx.x; idx < total;
+         idx += (size_t)gridDim.x * blockDim.x) {
+        int ci = idx % d;
+        int t  = idx / d;
+        int p  = t - off;
+        Bk[(size_t)t * d + ci] = (p >= 0 && p < T) ? X[(size_t)p * d + ci] : 0.0f;
+    }
+}
+__global__ void k_add_bias(float* __restrict__ Y, const float* __restrict__ b,
+                           int E, int T, int d) {
+    size_t total = (size_t)E * T * d;
+    for (size_t idx = blockIdx.x * (size_t)blockDim.x + threadIdx.x; idx < total;
+         idx += (size_t)gridDim.x * blockDim.x) {
+        int co = idx % d;
+        size_t r = idx / d;
+        int e = r / T;
+        Y[idx] += b[(size_t)e * d + co];
+    }
+}
+/* Run the cuBLAS conv: dY = conv(dX, dW) + dB. dApack/dBk are scratch (caller-owned). */
+static void cublas_moe_conv(cublasHandle_t h, const float* dX, float* dApack,
+                            float* dBk, const float* dB, float* dY,
+                            int E, int T, int d, int K, int dil) {
+    int blocks = 256, threads = 256;
+    /* C = Yt (d×T) col-major, ld=d. A = Apack (d×d), ld=d. B = Bk (d×T), ld=d. */
+    for (int k = 0; k < K; ++k) {
+        int off = dil * (K - 1 - k);
+        k_build_shiftedXT<<<blocks, threads>>>(dX, dBk, T, d, off);
+        float alpha = 1.0f, beta = (k == 0) ? 0.0f : 1.0f;
+        /* batched over E experts: A stride = d*d, C stride = T*d, B shared (stride 0). */
+        cublasStatus_t st = cublasSgemmStridedBatched(
+            h, CUBLAS_OP_N, CUBLAS_OP_N,
+            d, T, d,                         /* m=d_out, n=T, k=d_in */
+            &alpha,
+            dApack + (size_t)k * d * d, d, (long long)K * d * d,   /* A_e[k], strideA = K*d*d */
+            dBk, d, 0,                        /* B shared across experts */
+            &beta,
+            dY, d, (long long)T * d,          /* C_e stride = T*d */
+            E);
+        if (st != CUBLAS_STATUS_SUCCESS) { fprintf(stderr, "[T] cublas gemm st=%d\n", st); exit(2); }
+    }
+    k_add_bias<<<blocks, threads>>>(dY, dB, E, T, d);
+}
+#endif /* USE_CUBLAS */
+
 /* ── CPU reference (op-by-op, mirrors conv_lib.hexa nn_conv1d_fwd EXACTLY) ──── */
 static void cpu_moe_conv(const float* X, const float* W, const float* b,
                          float* Y, int E, int T, int d, int K, int dil) {
@@ -225,10 +846,76 @@ static double max_abs_diff(const float* a, const float* b, size_t n) {
     return m;
 }
 
+/* relative RMS = ||a-b|| / ||b|| — the honest metric when accumulation ORDER
+ * differs (cuBLAS GEMM reorders the ci sum) so byte-exact is not expected. */
+static double rel_rms(const float* a, const float* b, size_t n) {
+    double num = 0.0, den = 0.0;
+    for (size_t i = 0; i < n; ++i) {
+        double diff = (double)a[i] - (double)b[i];
+        num += diff * diff;
+        den += (double)b[i] * (double)b[i];
+    }
+    return (den > 0.0) ? sqrt(num / den) : sqrt(num);
+}
+
 /* ── timing harness: median of ITERS, cuEvent ─────────────────────────────── */
 static int cmp_d(const void* a, const void* b) {
     double x = *(const double*)a, y = *(const double*)b;
     return (x < y) ? -1 : (x > y) ? 1 : 0;
+}
+
+/* ── OG-FUSE-PROD-PERF2 wide-tile SWEEP table ─────────────────────────────────
+ * Each row is a (BM,BN,BK,TM,TN) register-tile config for path H. Higher BM·BN
+ * per CTA = more output elements fed per staged smem byte = higher arithmetic
+ * intensity (FLOP/byte). threads = (BM/TM)*(BN/TN) must be <=1024 and BK divides
+ * the staging cleanly. Row 0 reproduces path E (64×64,4×4) as a control. The
+ * launcher below dispatches an index → the matching template instantiation
+ * (templates are compile-time, so a switch is required). */
+typedef struct { int BM, BN, BK, TM, TN; const char* tag; } wide_cfg_t;
+static const wide_cfg_t WIDE_CFGS[] = {
+    {  64,  64, 16, 4, 4, "E-control 64x64 t4x4" },  /* == path E */
+    { 128,  64, 16, 8, 4, "128x64 t8x4"          },  /* 2x BM: more Ws reuse  */
+    {  64, 128, 16, 4, 8, "64x128 t4x8"          },  /* 2x BN: more Xs reuse  */
+    { 128, 128, 16, 8, 8, "128x128 t8x8"         },  /* 4x area: max intensity */
+    { 128, 128, 16, 8, 4, "128x128 t8x4 (512thr)"},  /* same tile, finer micro */
+    {  64,  64, 16, 8, 8, "64x64 t8x8 (64thr)"   },  /* fat micro, fewer thr  */
+    { 128, 128,  8, 8, 8, "128x128 t8x8 BK8"     },  /* smaller BK chunk      */
+};
+#define N_WIDE_CFGS ((int)(sizeof(WIDE_CFGS)/sizeof(WIDE_CFGS[0])))
+
+/* Launch path H for config index ci. Sets dynamic-smem opt-in for big tiles.
+ * Returns 0 on a launchable config, -1 if the device can't fit its smem. */
+static int launch_wide(int ci, const float* dX, const float* dW, const float* dB,
+                       float* dY, int E, int T, int d, int K, int dil) {
+    const wide_cfg_t* c = &WIDE_CFGS[ci];
+    size_t smem = wide_smem_bytes(c->BM, c->BN, c->BK, K);
+    dim3 grid(E, (d + c->BN - 1) / c->BN, (T + c->BM - 1) / c->BM);
+    dim3 blk((c->BM / c->TM) * (c->BN / c->TN));
+#define LWIDE(BM_,BN_,BK_,TM_,TN_)                                                 \
+    do {                                                                           \
+        cudaFuncSetAttribute(k_moe_conv_gemm_wide<BM_,BN_,BK_,TM_,TN_>,            \
+            cudaFuncAttributeMaxDynamicSharedMemorySize, (int)smem);              \
+        k_moe_conv_gemm_wide<BM_,BN_,BK_,TM_,TN_><<<grid, blk, smem>>>(           \
+            dX, dW, dB, dY, E, T, d, K, dil);                                      \
+    } while (0)
+    switch (ci) {
+        case 0: LWIDE( 64, 64,16,4,4); break;
+        case 1: LWIDE(128, 64,16,8,4); break;
+        case 2: LWIDE( 64,128,16,4,8); break;
+        case 3: LWIDE(128,128,16,8,8); break;
+        case 4: LWIDE(128,128,16,8,4); break;
+        case 5: LWIDE( 64, 64,16,8,8); break;
+        case 6: LWIDE(128,128, 8,8,8); break;
+        default: return -1;
+    }
+#undef LWIDE
+    cudaError_t err = cudaGetLastError();
+    if (err != cudaSuccess) {
+        printf("    [H cfg %d %s] LAUNCH-ERR %s (smem=%zuB)\n", ci, c->tag,
+               cudaGetErrorString(err), smem);
+        return -1;
+    }
+    return 0;
 }
 
 /* ════════════════════════════════════════════════════════════════════════════
@@ -280,7 +967,18 @@ static int run_gate(int E, int d, int T, int K, int dil) {
      *      stated explicitly (flame byte-eq contract: FMA-contraction case). */
     float* hY_fused = (float*)malloc(nY * sizeof(float));
     float* hY_mlist = (float*)malloc(nY * sizeof(float));
-    if (!hY_fused || !hY_mlist) { fprintf(stderr,"[T] gate buf malloc failed\n"); return 2; }
+    float* hY_tiled = (float*)malloc(nY * sizeof(float));
+    float* hY_gemm  = (float*)malloc(nY * sizeof(float));
+    float* hY_gdb   = (float*)malloc(nY * sizeof(float));
+    if (!hY_fused || !hY_mlist || !hY_tiled || !hY_gemm || !hY_gdb) { fprintf(stderr,"[T] gate buf malloc failed\n"); return 2; }
+
+    /* smem bytes for the tiled kernel: wrows·CI_TILE floats. */
+    int g_wrows = TT_TILE + (K - 1) * dil;
+    size_t g_smem = (size_t)g_wrows * CI_TILE * sizeof(float);
+
+    /* GEMM-conv (E) grid/block: BN/TN × BM/TM threads. dil==1 smem layout. */
+    dim3 gemm_grid(E, (d + GM_BN - 1) / GM_BN, (T + GM_BM - 1) / GM_BM);
+    dim3 gemm_blk((GM_BM / GM_TM) * (GM_BN / GM_TN));
 
     /* (C) fused */
     CK(cudaMemset(dY, 0, nY * sizeof(float)));
@@ -290,6 +988,59 @@ static int run_gate(int E, int d, int T, int K, int dil) {
     CK(cudaMemcpy(hY_fused, dY, nY * sizeof(float), cudaMemcpyDeviceToHost));
     double dmax_fused_cpu = max_abs_diff(hY_ref, hY_fused, nY);
     printf("[GATE-FUSED]   max|Δ| vs CPU = %.3e\n", dmax_fused_cpu);
+
+    /* (D) tiled-fused (OG-FUSE-OPT) */
+    CK(cudaMemset(dY, 0, nY * sizeof(float)));
+    { dim3 grid(E, n_co_blk, n_tt_blk), blk(CO_TILE);
+      k_moe_conv_tiled<<<grid, blk, g_smem>>>(dX, dW, dB, dY, E, T, d, K, dil);
+      CK(cudaGetLastError()); CK(cudaDeviceSynchronize()); }
+    CK(cudaMemcpy(hY_tiled, dY, nY * sizeof(float), cudaMemcpyDeviceToHost));
+    double dmax_tiled_cpu = max_abs_diff(hY_ref, hY_tiled, nY);
+    printf("[GATE-TILED]   max|Δ| vs CPU = %.3e\n", dmax_tiled_cpu);
+
+    /* (E) GEMM-conv weight-reuse (OG-FUSE-PROD-KERNEL deliverable) */
+    CK(cudaMemset(dY, 0, nY * sizeof(float)));
+    { k_moe_conv_gemm<<<gemm_grid, gemm_blk>>>(dX, dW, dB, dY, E, T, d, K, dil);
+      CK(cudaGetLastError()); CK(cudaDeviceSynchronize()); }
+    CK(cudaMemcpy(hY_gemm, dY, nY * sizeof(float), cudaMemcpyDeviceToHost));
+    double dmax_gemm_cpu = max_abs_diff(hY_ref, hY_gemm, nY);
+    printf("[GATE-GEMM]    max|Δ| vs CPU = %.3e\n", dmax_gemm_cpu);
+
+    /* (G) GEMM-conv double-buffered (cp.async multi-stage) — PROD-PERF lever */
+    CK(cudaMemset(dY, 0, nY * sizeof(float)));
+    { k_moe_conv_gemm_db<<<gemm_grid, gemm_blk>>>(dX, dW, dB, dY, E, T, d, K, dil);
+      CK(cudaGetLastError()); CK(cudaDeviceSynchronize()); }
+    CK(cudaMemcpy(hY_gdb, dY, nY * sizeof(float), cudaMemcpyDeviceToHost));
+    double dmax_gdb_cpu = max_abs_diff(hY_ref, hY_gdb, nY);
+    printf("[GATE-GEMM-DB] max|Δ| vs CPU = %.3e\n", dmax_gdb_cpu);
+
+    /* (H) GEMM-conv WIDE-tile sweep (OG-FUSE-PROD-PERF2) — every config must be
+     * byte-exact vs the SAME ModuleList-30 reference. A wider tile only re-blocks
+     * the same ci-ascending/k-inner contraction → max|Δ|=0 is the contract. */
+    int wide_gate_pass = 1;
+    float* hY_wide = (float*)malloc(nY * sizeof(float));
+    if (!hY_wide) { fprintf(stderr, "[T] gate wide buf malloc failed\n"); return 2; }
+    printf("# ── OG-FUSE-PROD-PERF2 wide-tile gate (%d configs, byte-eq vs CPU+ModuleList) ──\n", N_WIDE_CFGS);
+
+#ifdef USE_CUBLAS
+    /* (F) cuBLAS roofline — rel-RMS only (GEMM reorders ci sum, not byte-exact) */
+    {
+        cublasHandle_t hbl; cublasCreate(&hbl);
+        float *dApack, *dBk;
+        CK(cudaMalloc(&dApack, (size_t)E * K * d * d * sizeof(float)));
+        CK(cudaMalloc(&dBk, (size_t)T * d * sizeof(float)));
+        k_pack_weights<<<256,256>>>(dW, dApack, E, d, K);
+        CK(cudaDeviceSynchronize());
+        CK(cudaMemset(dY, 0, nY * sizeof(float)));
+        cublas_moe_conv(hbl, dX, dApack, dBk, dB, dY, E, T, d, K, dil);
+        CK(cudaDeviceSynchronize());
+        float* hY_cub = (float*)malloc(nY * sizeof(float));
+        CK(cudaMemcpy(hY_cub, dY, nY * sizeof(float), cudaMemcpyDeviceToHost));
+        double rr = rel_rms(hY_cub, hY_ref, nY);
+        printf("[GATE-CUBLAS]  rel-RMS vs CPU = %.3e (GEMM reorders ci → rel-RMS, not byte-eq; tol 1e-3)\n", rr);
+        free(hY_cub); cudaFree(dApack); cudaFree(dBk); cublasDestroy(hbl);
+    }
+#endif
 
     /* (A) ModuleList-30 */
     CK(cudaMemset(dY, 0, nY * sizeof(float)));
@@ -310,27 +1061,59 @@ static int run_gate(int E, int d, int T, int K, int dil) {
     double dmax_grp_cpu = max_abs_diff(hY_ref, hY_gpu, nY);
     printf("[GATE-GROUPED] max|Δ| vs CPU = %.3e\n", dmax_grp_cpu);
 
+    /* (H) wide-tile configs — byte-eq vs CPU AND vs ModuleList (hY_mlist ready). */
+    for (int ci = 0; ci < N_WIDE_CFGS; ++ci) {
+        CK(cudaMemset(dY, 0, nY * sizeof(float)));
+        if (launch_wide(ci, dX, dW, dB, dY, E, T, d, K, dil) != 0) {
+            printf("[GATE-WIDE-%d]  %-22s SKIP (unlaunchable on this device)\n", ci, WIDE_CFGS[ci].tag);
+            continue;
+        }
+        CK(cudaGetLastError()); CK(cudaDeviceSynchronize());
+        CK(cudaMemcpy(hY_wide, dY, nY * sizeof(float), cudaMemcpyDeviceToHost));
+        double dcpu  = max_abs_diff(hY_ref,   hY_wide, nY);
+        double dmlst = max_abs_diff(hY_mlist, hY_wide, nY);
+        int ok = (dmlst == 0.0) && (dcpu <= 6e-6);
+        if (!ok) wide_gate_pass = 0;
+        printf("[GATE-WIDE-%d]  %-22s max|Δ|vsCPU=%.3e  max|Δ|vsMList=%.3e  %s\n",
+               ci, WIDE_CFGS[ci].tag, dcpu, dmlst, ok ? "OK" : "FAIL");
+    }
+    free(hY_wide);
+
     /* sub-gate (1): device-vs-device byte-exact (the contract that matters) */
     double dmax_fused_vs_mlist = max_abs_diff(hY_fused, hY_mlist, nY);
     double dmax_grp_vs_mlist   = max_abs_diff(hY_gpu,   hY_mlist, nY);
+    double dmax_tiled_vs_mlist = max_abs_diff(hY_tiled, hY_mlist, nY);
+    double dmax_gemm_vs_mlist  = max_abs_diff(hY_gemm,  hY_mlist, nY);
+    double dmax_gdb_vs_mlist   = max_abs_diff(hY_gdb,   hY_mlist, nY);
     printf("[GATE-DEV-EQ]  max|Δ|(fused vs ModuleList) = %.3e   max|Δ|(grouped vs ModuleList) = %.3e\n",
            dmax_fused_vs_mlist, dmax_grp_vs_mlist);
-    int dev_eq_pass = (dmax_fused_vs_mlist == 0.0) && (dmax_grp_vs_mlist == 0.0);
+    printf("[GATE-DEV-EQ]  max|Δ|(TILED vs ModuleList) = %.3e  <= THE OG-FUSE-OPT CONTRACT (must be 0)\n",
+           dmax_tiled_vs_mlist);
+    printf("[GATE-DEV-EQ]  max|Δ|(GEMM  vs ModuleList) = %.3e  <= THE OG-FUSE-PROD-KERNEL CONTRACT (must be 0)\n",
+           dmax_gemm_vs_mlist);
+    printf("[GATE-DEV-EQ]  max|Δ|(GEMM-DB vs ModuleList) = %.3e  <= THE PROD-PERF cp.async CONTRACT (must be 0)\n",
+           dmax_gdb_vs_mlist);
+    int dev_eq_pass = (dmax_fused_vs_mlist == 0.0) && (dmax_grp_vs_mlist == 0.0)
+                      && (dmax_tiled_vs_mlist == 0.0) && (dmax_gemm_vs_mlist == 0.0)
+                      && (dmax_gdb_vs_mlist == 0.0);
 
     /* sub-gate (2): device-vs-CPU within fp32 FMA-contraction tolerance.
      * Bound: with |W|≤0.025, |X|≤1, d=192 taps → |y|≲5; fp32 eps≈1.2e-7 →
      * worst-case FMA-vs-mul-add divergence over the sum is O(d·eps·|term|).
      * 6e-6 is a safe abs bound (observed ~3e-7). */
     double FMA_TOL = 6e-6;
-    int cpu_tol_pass = (dmax_fused_cpu <= FMA_TOL) && (dmax_mlist_cpu <= FMA_TOL) && (dmax_grp_cpu <= FMA_TOL);
+    int cpu_tol_pass = (dmax_fused_cpu <= FMA_TOL) && (dmax_mlist_cpu <= FMA_TOL)
+                       && (dmax_grp_cpu <= FMA_TOL) && (dmax_tiled_cpu <= FMA_TOL)
+                       && (dmax_gemm_cpu <= FMA_TOL) && (dmax_gdb_cpu <= FMA_TOL);
 
-    int pass = dev_eq_pass && cpu_tol_pass;
+    int pass = dev_eq_pass && cpu_tol_pass && wide_gate_pass;
     printf("# GATE (1) device-vs-device byte-exact (max|Δ|=0): %s\n", dev_eq_pass ? "PASS" : "FAIL");
     printf("# GATE (2) device-vs-CPU within fp32 FMA tol=%.1e: %s\n", FMA_TOL, cpu_tol_pass ? "PASS" : "FAIL");
+    printf("# GATE (3) PROD-PERF2 wide-tile configs byte-eq (max|Δ|=0 vs ModuleList): %s\n", wide_gate_pass ? "PASS" : "FAIL");
     printf("# GATE OVERALL => %s\n", pass ? "PASS" : "FAIL");
 
     cudaFree(dX); cudaFree(dW); cudaFree(dB); cudaFree(dY);
-    free(hX); free(hW); free(hB); free(hY_ref); free(hY_gpu); free(hY_fused); free(hY_mlist);
+    free(hX); free(hW); free(hB); free(hY_ref); free(hY_gpu); free(hY_fused); free(hY_mlist); free(hY_tiled); free(hY_gemm); free(hY_gdb);
     return pass ? 0 : 1;
 }
 
@@ -411,14 +1194,68 @@ int main(int argc, char** argv) {
     printf("# perf-shape cross-check  max|Δ|(fused vs ModuleList) = %.3e (expect 0)\n", dmax_cc);
     if (dmax_cc != 0.0) { printf("[T] perf-shape cross-check FAILED — abort.\n"); return 1; }
 
+    /* tiled (D) perf-shape cross-check vs ModuleList — same byte-eq contract. */
+    int p_wrows = TT_TILE + (K - 1) * dil;
+    size_t p_smem = (size_t)p_wrows * CI_TILE * sizeof(float);
+    CK(cudaMemset(dY, 0, nY * sizeof(float)));
+    { dim3 grid(E, n_co_blk, n_tt_blk), blk(CO_TILE);
+      k_moe_conv_tiled<<<grid, blk, p_smem>>>(dX, dW, dB, dY, E, T, d, K, dil);
+      CK(cudaGetLastError()); CK(cudaDeviceSynchronize()); }
+    CK(cudaMemcpy(hY_c, dY, nY * sizeof(float), cudaMemcpyDeviceToHost));
+    double dmax_tc = max_abs_diff(hY_a, hY_c, nY);
+    printf("# perf-shape cross-check  max|Δ|(TILED vs ModuleList) = %.3e (expect 0)\n", dmax_tc);
+    if (dmax_tc != 0.0) { printf("[T] perf-shape TILED cross-check FAILED — abort.\n"); return 1; }
+
+    /* GEMM-conv (E) perf-shape cross-check vs ModuleList — same byte-eq contract. */
+    dim3 p_gemm_grid(E, (d + GM_BN - 1) / GM_BN, (T + GM_BM - 1) / GM_BM);
+    dim3 p_gemm_blk((GM_BM / GM_TM) * (GM_BN / GM_TN));
+    CK(cudaMemset(dY, 0, nY * sizeof(float)));
+    { k_moe_conv_gemm<<<p_gemm_grid, p_gemm_blk>>>(dX, dW, dB, dY, E, T, d, K, dil);
+      CK(cudaGetLastError()); CK(cudaDeviceSynchronize()); }
+    CK(cudaMemcpy(hY_c, dY, nY * sizeof(float), cudaMemcpyDeviceToHost));
+    double dmax_gc = max_abs_diff(hY_a, hY_c, nY);
+    printf("# perf-shape cross-check  max|Δ|(GEMM  vs ModuleList) = %.3e (expect 0)\n", dmax_gc);
+    if (dmax_gc != 0.0) { printf("[T] perf-shape GEMM cross-check FAILED — abort.\n"); return 1; }
+
+    /* GEMM-conv-DB (G) perf-shape cross-check vs ModuleList — same byte-eq contract. */
+    CK(cudaMemset(dY, 0, nY * sizeof(float)));
+    { k_moe_conv_gemm_db<<<p_gemm_grid, p_gemm_blk>>>(dX, dW, dB, dY, E, T, d, K, dil);
+      CK(cudaGetLastError()); CK(cudaDeviceSynchronize()); }
+    CK(cudaMemcpy(hY_c, dY, nY * sizeof(float), cudaMemcpyDeviceToHost));
+    double dmax_gdbc = max_abs_diff(hY_a, hY_c, nY);
+    printf("# perf-shape cross-check  max|Δ|(GEMM-DB vs ModuleList) = %.3e (expect 0)\n", dmax_gdbc);
+    if (dmax_gdbc != 0.0) { printf("[T] perf-shape GEMM-DB cross-check FAILED — abort.\n"); return 1; }
+
+    /* WIDE-tile (H) perf-shape cross-check vs ModuleList — byte-eq at the BIG shape
+     * too (the wide tile must reproduce the contraction exactly at d=6208). */
+    for (int ci = 0; ci < N_WIDE_CFGS; ++ci) {
+        CK(cudaMemset(dY, 0, nY * sizeof(float)));
+        if (launch_wide(ci, dX, dW, dB, dY, E, T, d, K, dil) != 0) {
+            printf("# perf-shape WIDE[%d] %-22s SKIP (unlaunchable)\n", ci, WIDE_CFGS[ci].tag);
+            cudaGetLastError(); continue;
+        }
+        CK(cudaGetLastError()); CK(cudaDeviceSynchronize());
+        CK(cudaMemcpy(hY_c, dY, nY * sizeof(float), cudaMemcpyDeviceToHost));
+        double dw = max_abs_diff(hY_a, hY_c, nY);
+        printf("# perf-shape cross-check  max|Δ|(WIDE[%d] %-22s vs ModuleList) = %.3e (expect 0)\n",
+               ci, WIDE_CFGS[ci].tag, dw);
+        if (dw != 0.0) { printf("[T] perf-shape WIDE[%d] cross-check FAILED — abort.\n", ci); return 1; }
+    }
+
     printf("\n# ── PERF (median of timed iters, cuEvent) ──\n");
     const int WARMUP = 3, ITERS = 20;
     double* samp = (double*)malloc(ITERS * sizeof(double));
     cudaEvent_t e0, e1;
     CK(cudaEventCreate(&e0)); CK(cudaEventCreate(&e1));
 
+    /* MOEFUSE_SKIP: chars of paths to skip in the perf loop (e.g. "BC" skips the
+     * pathological grouped + naive-fused paths that take minutes at large d).
+     * The byte-eq gate already ran for ALL paths; this only trims the perf timing. */
+    const char* skip = getenv("MOEFUSE_SKIP"); if (!skip) skip = "";
+    #define SKIP(ch) (strchr(skip, ch) != NULL)
+
     /* (A) ModuleList-30 */
-    {
+    if (!SKIP('A')) {
         dim3 grid(n_co_blk, n_tt_blk), blk(CO_TILE);
         for (int w = 0; w < WARMUP; ++w)
             for (int e = 0; e < E; ++e)
@@ -438,7 +1275,7 @@ int main(int argc, char** argv) {
     }
 
     /* (B) grouped */
-    {
+    if (!SKIP('B')) {
         dim3 grid(E), blk(CO_TILE);
         for (int w = 0; w < WARMUP; ++w)
             k_moe_conv_grouped<<<grid, blk>>>(dX, dW, dB, dY, E, T, d, K, dil);
@@ -456,7 +1293,7 @@ int main(int argc, char** argv) {
     }
 
     /* (C) fused */
-    {
+    if (!SKIP('C')) {
         dim3 grid(E, n_co_blk, n_tt_blk), blk(CO_TILE);
         for (int w = 0; w < WARMUP; ++w)
             k_moe_conv_fused<<<grid, blk>>>(dX, dW, dB, dY, E, T, d, K, dil);
@@ -470,12 +1307,134 @@ int main(int argc, char** argv) {
             samp[it] = ms;
         }
         qsort(samp, ITERS, sizeof(double), cmp_d);
-        printf("[C] FUSED          step = %.3f ms  (1 launch, %d CTAs — the cure)\n",
+        printf("[C] FUSED          step = %.3f ms  (1 launch, %d CTAs — naive per-channel MAC)\n",
                samp[ITERS/2], E * n_co_blk * n_tt_blk);
     }
 
-    printf("# CTA counts: A=%d/launch ×%d launches  B=%d  C=%d (one launch)\n",
-           n_co_blk * n_tt_blk, E, E, E * n_co_blk * n_tt_blk);
+    /* (D) tiled-fused — OG-FUSE-OPT: smem-staged input window, register-blocked */
+    if (!SKIP('D')) {
+        dim3 grid(E, n_co_blk, n_tt_blk), blk(CO_TILE);
+        for (int w = 0; w < WARMUP; ++w)
+            k_moe_conv_tiled<<<grid, blk, p_smem>>>(dX, dW, dB, dY, E, T, d, K, dil);
+        CK(cudaDeviceSynchronize());
+        for (int it = 0; it < ITERS; ++it) {
+            CK(cudaEventRecord(e0, 0));
+            k_moe_conv_tiled<<<grid, blk, p_smem>>>(dX, dW, dB, dY, E, T, d, K, dil);
+            CK(cudaEventRecord(e1, 0));
+            CK(cudaEventSynchronize(e1));
+            float ms; CK(cudaEventElapsedTime(&ms, e0, e1));
+            samp[it] = ms;
+        }
+        qsort(samp, ITERS, sizeof(double), cmp_d);
+        printf("[D] TILED-FUSED    step = %.3f ms  (1 launch, %d CTAs, smem=%zuB — OG-FUSE-OPT cure)\n",
+               samp[ITERS/2], E * n_co_blk * n_tt_blk, p_smem);
+    }
+
+    /* (E) GEMM-conv weight-reuse — OG-FUSE-PROD-KERNEL: register-tiled, BM-fold
+     * weight reuse. The deliverable aimed at the saturated WEIGHT-bandwidth wall. */
+    if (!SKIP('E')) {
+        for (int w = 0; w < WARMUP; ++w)
+            k_moe_conv_gemm<<<p_gemm_grid, p_gemm_blk>>>(dX, dW, dB, dY, E, T, d, K, dil);
+        CK(cudaDeviceSynchronize());
+        for (int it = 0; it < ITERS; ++it) {
+            CK(cudaEventRecord(e0, 0));
+            k_moe_conv_gemm<<<p_gemm_grid, p_gemm_blk>>>(dX, dW, dB, dY, E, T, d, K, dil);
+            CK(cudaEventRecord(e1, 0));
+            CK(cudaEventSynchronize(e1));
+            float ms; CK(cudaEventElapsedTime(&ms, e0, e1));
+            samp[it] = ms;
+        }
+        qsort(samp, ITERS, sizeof(double), cmp_d);
+        int gemm_ctas = E * ((d + GM_BN - 1) / GM_BN) * ((T + GM_BM - 1) / GM_BM);
+        printf("[E] GEMM-CONV      step = %.3f ms  (1 launch, %d CTAs, %dx%dx%d tile, BM-fold weight reuse — PROD-KERNEL)\n",
+               samp[ITERS/2], gemm_ctas, GM_BM, GM_BN, GM_BK);
+    }
+
+    /* (H) GEMM-conv WIDE-tile SWEEP — OG-FUSE-PROD-PERF2 arithmetic-intensity lever.
+     * Each config widens the register micro-tile so each staged smem byte feeds more
+     * outputs (higher FLOP/byte). Perf-shape cross-check already ran the configs;
+     * here we time each and report ms/step. Skip with MOEFUSE_SKIP containing 'H'. */
+    if (!SKIP('H')) {
+        printf("# ── (H) WIDE-TILE SWEEP (OG-FUSE-PROD-PERF2 arithmetic intensity) ──\n");
+        for (int ci = 0; ci < N_WIDE_CFGS; ++ci) {
+            const wide_cfg_t* c = &WIDE_CFGS[ci];
+            /* warmup + probe launch viability */
+            int bad = 0;
+            for (int w = 0; w < WARMUP && !bad; ++w)
+                if (launch_wide(ci, dX, dW, dB, dY, E, T, d, K, dil) != 0) bad = 1;
+            if (bad) { printf("[H%d] %-22s SKIP (unlaunchable)\n", ci, c->tag); cudaGetLastError(); continue; }
+            CK(cudaDeviceSynchronize());
+            for (int it = 0; it < ITERS; ++it) {
+                CK(cudaEventRecord(e0, 0));
+                launch_wide(ci, dX, dW, dB, dY, E, T, d, K, dil);
+                CK(cudaEventRecord(e1, 0));
+                CK(cudaEventSynchronize(e1));
+                float ms; CK(cudaEventElapsedTime(&ms, e0, e1));
+                samp[it] = ms;
+            }
+            qsort(samp, ITERS, sizeof(double), cmp_d);
+            int ctas = E * ((d + c->BN - 1) / c->BN) * ((T + c->BM - 1) / c->BM);
+            int thr  = (c->BM / c->TM) * (c->BN / c->TN);
+            size_t sm = wide_smem_bytes(c->BM, c->BN, c->BK, K);
+            /* arithmetic intensity proxy: outputs per staged byte = BM*BN / (smem bytes) */
+            double ai = (double)c->BM * c->BN / (double)sm;
+            printf("[H%d] %-22s step = %.3f ms  (%d CTAs, %d thr, smem=%zuB, AI=%.3f out/B)\n",
+                   ci, c->tag, samp[ITERS/2], ctas, thr, sm, ai);
+        }
+    }
+
+    /* (G) GEMM-conv DOUBLE-BUFFERED — PROD-PERF lever: cp.async %d-stage smem ring
+     * hides the per-chunk weight/input HBM load latency behind the register MAC.
+     * Byte-identical to (E); aims to close the (E)→cuBLAS gap by removing the
+     * per-chunk global-load stall the OG-FUSE-OPT verdict pinned. */
+    if (!SKIP('G')) {
+        for (int w = 0; w < WARMUP; ++w)
+            k_moe_conv_gemm_db<<<p_gemm_grid, p_gemm_blk>>>(dX, dW, dB, dY, E, T, d, K, dil);
+        CK(cudaDeviceSynchronize());
+        for (int it = 0; it < ITERS; ++it) {
+            CK(cudaEventRecord(e0, 0));
+            k_moe_conv_gemm_db<<<p_gemm_grid, p_gemm_blk>>>(dX, dW, dB, dY, E, T, d, K, dil);
+            CK(cudaEventRecord(e1, 0));
+            CK(cudaEventSynchronize(e1));
+            float ms; CK(cudaEventElapsedTime(&ms, e0, e1));
+            samp[it] = ms;
+        }
+        qsort(samp, ITERS, sizeof(double), cmp_d);
+        int gemm_ctas = E * ((d + GM_BN - 1) / GM_BN) * ((T + GM_BM - 1) / GM_BM);
+        printf("[G] GEMM-CONV-DB   step = %.3f ms  (1 launch, %d CTAs, %dx%dx%d tile, cp.async %d-stage — PROD-PERF lever)\n",
+               samp[ITERS/2], gemm_ctas, GM_BM, GM_BN, GM_BK, GM_STAGES);
+    }
+
+#ifdef USE_CUBLAS
+    /* (F) cuBLAS strided-batched GEMM — the ROOFLINE ceiling (vendor GEMM). */
+    if (!SKIP('F')) {
+        cublasHandle_t hbl; cublasCreate(&hbl);
+        float *dApack, *dBk;
+        CK(cudaMalloc(&dApack, (size_t)E * K * d * d * sizeof(float)));
+        CK(cudaMalloc(&dBk, (size_t)T * d * sizeof(float)));
+        k_pack_weights<<<256,256>>>(dW, dApack, E, d, K);
+        CK(cudaDeviceSynchronize());
+        for (int w = 0; w < WARMUP; ++w)
+            cublas_moe_conv(hbl, dX, dApack, dBk, dB, dY, E, T, d, K, dil);
+        CK(cudaDeviceSynchronize());
+        for (int it = 0; it < ITERS; ++it) {
+            CK(cudaEventRecord(e0, 0));
+            cublas_moe_conv(hbl, dX, dApack, dBk, dB, dY, E, T, d, K, dil);
+            CK(cudaEventRecord(e1, 0));
+            CK(cudaEventSynchronize(e1));
+            float ms; CK(cudaEventElapsedTime(&ms, e0, e1));
+            samp[it] = ms;
+        }
+        qsort(samp, ITERS, sizeof(double), cmp_d);
+        printf("[F] cuBLAS-GEMM    step = %.3f ms  (K strided-batched GEMM — VENDOR ROOFLINE, not byte-eq)\n",
+               samp[ITERS/2]);
+        cudaFree(dApack); cudaFree(dBk); cublasDestroy(hbl);
+    }
+#endif
+
+    printf("# CTA counts: A=%d/launch ×%d launches  B=%d  C=D=%d  E=%d (one launch)\n",
+           n_co_blk * n_tt_blk, E, E, E * n_co_blk * n_tt_blk,
+           E * ((d + GM_BN - 1) / GM_BN) * ((T + GM_BM - 1) / GM_BM));
     printf("# (run under: nvidia-smi --query-gpu=utilization.gpu --format=csv -lms 50  for util MEAN/PEAK)\n");
 
     /* ── sustained per-path loop for the util sampler ─────────────────────────
@@ -483,7 +1442,7 @@ int main(int argc, char** argv) {
      * a background nvidia-smi sampler gets a clean utilization window. The script
      * wraps each with its own sampler → per-path util MEAN/PEAK captured inline. */
     const char* only = getenv("MOEFUSE_ONLY");
-    if (only && (only[0]=='A'||only[0]=='B'||only[0]=='C')) {
+    if (only && (only[0]=='A'||only[0]=='B'||only[0]=='C'||only[0]=='D'||only[0]=='E'||only[0]=='G')) {
         printf("# sustained loop path=%s (~2.5s) for util capture\n", only);
         dim3 gA(n_co_blk, n_tt_blk), gB(E), gC(E, n_co_blk, n_tt_blk), blk(CO_TILE);
         cudaEvent_t t0, t1; CK(cudaEventCreate(&t0)); CK(cudaEventCreate(&t1));
@@ -494,6 +1453,9 @@ int main(int argc, char** argv) {
             for (int r = 0; r < 5; ++r) {
                 if (only[0]=='A') { for (int e=0;e<E;++e) k_conv_single<<<gA,blk>>>(dX, dW+(size_t)e*d*d*K, dB+(size_t)e*d, dY+(size_t)e*T*d, T, d, K, dil); }
                 else if (only[0]=='B') k_moe_conv_grouped<<<gB,blk>>>(dX, dW, dB, dY, E, T, d, K, dil);
+                else if (only[0]=='D') k_moe_conv_tiled<<<gC,blk,p_smem>>>(dX, dW, dB, dY, E, T, d, K, dil);
+                else if (only[0]=='E') k_moe_conv_gemm<<<p_gemm_grid,p_gemm_blk>>>(dX, dW, dB, dY, E, T, d, K, dil);
+                else if (only[0]=='G') k_moe_conv_gemm_db<<<p_gemm_grid,p_gemm_blk>>>(dX, dW, dB, dY, E, T, d, K, dil);
                 else k_moe_conv_fused<<<gC,blk>>>(dX, dW, dB, dY, E, T, d, K, dil);
                 reps++;
             }

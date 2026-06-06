@@ -1,0 +1,90 @@
+F-FUSION-MOE-CONV-PROD-PERF — OG-FUSE-PROD-PERF
+═══════════════════════════════════════════════════════════════════════════════
+Close the path-E GEMM-conv MoE kernel toward the cuBLAS roofline via standard
+GEMM perf levers, WITHOUT losing weight-reuse + byte-eq (the 6.57x cure).
+
+LEVER APPLIED (a): cp.async multi-stage smem double-buffer on the K-loop of the
+register-tiled GEMM-conv weight-reuse kernel (path E, k_moe_conv_gemm). New path
+G = k_moe_conv_gemm_db: a STAGES-deep smem ring (Xs window + Ws weight slabs)
+prefetched via cp.async.ca.shared.global + commit_group/wait_group, so the next
+chunk's Xs+Ws HBM loads are in flight while this chunk's register MAC runs. The
+arithmetic order is BIT-IDENTICAL to path E (ci ascending, k inner) — cp.async
+moves WHEN bytes land in smem, not the accumulation order.
+
+  Lever (b) wgmma TF32 (OG16 m64n64k8) — NOT applied. Out of scope for a short
+  bench: the OG16 atom is itself still at the swizzle-layout parity frontier
+  (OG15 3200-cfg closed-neg, OG16/OG17 active), it breaks byte-eq (rel-RMS
+  reframe), and the conv's K=3 / BK=16 contraction does not map to the K-major
+  SWIZZLE_128B-TMA m64n64k8 wgmma tile. Honest residual, see FINDING.
+  Lever (c) wider register tile / coalesced xcol — deferred; (a) result below
+  shows the wall is bandwidth, not load-latency, so tile-widening is the lever
+  most likely to move it (next cycle).
+
+───────────────────────────────────────────────────────────────────────────────
+GATE (g5) — BYTE-EQ FIRST. H100 80GB HBM3 (SMs=132, cap 9.0), nvcc 12.6, sm_90.
+gate shape E=8 d=192 T=32 K=3 dil=1 (CPU-oracle tractable) AND at prod shape:
+
+  [GATE-GEMM-DB] max|Δ| vs CPU      = 2.980e-07  (fp32 FMA-contraction tol 6e-6)
+  [GATE-DEV-EQ]  max|Δ|(GEMM-DB vs ModuleList-30) = 0.000e+00  <= byte-exact
+  perf-shape cross-check max|Δ|(GEMM-DB vs ModuleList) = 0.000e+00  (d=6208)
+  # GATE OVERALL => PASS
+
+  Path G is byte-exact (max|Δ|=0) vs the 30-separate-conv ModuleList reference,
+  exactly like path E. The cp.async lever preserves the byte-eq contract. PASS.
+
+───────────────────────────────────────────────────────────────────────────────
+PERF — median of 20 timed iters (cuEvent), H100 80GB. E=30 K=3 dil=1 T=256.
+weight bank @d=6208 = 13.87 GB fp32, output 0.19 GB.
+
+  d=6208 (PRODUCTION SHAPE):
+    [A] ModuleList-30   = 3709.291 ms   (under-fill baseline)
+    [E] GEMM-CONV       =  563.886 ms   = 6.58x over A   (PROD kernel, byte-eq)
+    [G] GEMM-CONV-DB    =  602.731 ms   = 6.15x over A   (cp.async 2-stage)  <-- LEVER
+    [F] cuBLAS roofline =   35.855 ms   (E is 15.72x above roofline)
+
+  sweep:
+    d=2048:  A=422.679  E=64.446  G=68.954  F=4.236    (E 6.56x A, 15.2x roof)
+    d=4096:  A=1636.490 E=247.829 G=265.080 F=16.097   (E 6.60x A, 15.4x roof)
+
+───────────────────────────────────────────────────────────────────────────────
+FINDING — 🔴 CLOSED-NEGATIVE for lever (a). cp.async double-buffer does NOT close
+the path-E → cuBLAS gap; it REGRESSES path E uniformly by ~7%:
+
+    d=2048: 64.4 → 69.0 ms  (+7.0%)
+    d=4096: 247.8 → 265.1 ms (+7.0%)
+    d=6208: 563.9 → 602.7 ms (+6.9%)
+
+  Falsifier (pre-registered): "cp.async multi-stage prefetch hides the per-chunk
+  Xs+Ws HBM load latency the OG-FUSE-OPT verdict pinned, closing E→cuBLAS."
+  FALSIFIED — path G is slower at every measured d, byte-eq held.
+
+  Mechanism (deterministic ruling-out): the GEMM-conv K-loop uses GM_BK=16, so
+  d/16 = up to 388 chunks. Per chunk the cp.async pipeline pays commit_group +
+  wait_group + an extra __syncthreads, while the per-chunk compute (16 ci × K=3
+  over a 4×4 register tile) is tiny → async-pipeline bookkeeping > the latency it
+  hides. Path E already overlaps loads via OCCUPANCY (many CTAs/SM, the warp
+  scheduler hides global latency), so explicit cp.async prefetch adds overhead
+  without adding overlap. The OG-FUSE-OPT-pinned wall is L2/WEIGHT BANDWIDTH (each
+  weight byte amortised BM=64-fold but still streamed once from HBM), which is a
+  BANDWIDTH bound — cp.async addresses LATENCY, not bandwidth, so it structurally
+  cannot move this wall. (Forced GM_STAGES 3→2: the 3-stage static __shared__
+  ring = 49536 B exceeds the 48KB/49152 B per-block STATIC smem hard cap and the
+  launch failed with cudaErrorInvalidValue; 2-stage = 33024 B fits. A deeper ring
+  is impossible in static smem and dynamic smem would not change the bandwidth
+  conclusion.)
+
+  Ruled-out axis: latency-hiding (cp.async / multi-stage prefetch) is NOT the
+  lever for this kernel. Path E at 6.58x / 15.7x-from-roofline is at its design
+  ceiling on the LATENCY axis. The remaining gap to cuBLAS is BANDWIDTH +
+  arithmetic-intensity: cuBLAS reuses each weight tile across a far larger output
+  tile (higher AI) AND uses wgmma. Closing it requires raising arithmetic
+  intensity (wider BM/BN register or wgmma tiles — lever c / b), NOT prefetch.
+
+  HONEST: path E's 6.58x cure over ModuleList-30 (the delivered f5e18a0f wall
+  fix) is UNCHANGED and NOT regressed. The 15.7x E→cuBLAS gap stands; this verdict
+  rules out the cp.async latency-hiding path to closing it. NOT a regression of
+  any delivered result — a negative result that prunes one lever from the search.
+
+POD: vast H100 SXM id 39771465 (label prod-perf-gemm-conv-MINE-1780772351) —
+     rented, gated, measured, DESTROYED. Leak 0 (verified: 20→19 instances, my
+     id absent; foreign li2mgh16 fleet + edge-video pod untouched).

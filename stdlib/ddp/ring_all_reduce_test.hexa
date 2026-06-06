@@ -1,0 +1,127 @@
+// ════════════════════════════════════════════════════════════════════════════
+//  ring_all_reduce_test.hexa — in-process sim self-test for DDP-M1.
+//
+//  Falsifiers (pre-registered):
+//    F-DDP-RING-BYTEEQ   sim ring all-reduce result == serial elementwise sum,
+//                        byte-exact max|Δ|=0 (FP64), for N∈{2,4} with S NOT a
+//                        multiple of N (boundary: uneven last chunk).
+//    F-DDP-RING-STEPS    ring schedule step count == 2(N-1) (canonical optimum).
+//
+//  HARDWARE-FREE: the N ranks are N rows of one host buffer; the ring
+//  "transport" is in-process array copy. M1 proves COLLECTIVE CORRECTNESS
+//  only — real multi-GPU P2P is M3, multi-GPU hardware is M2.
+//
+//  Build: HEXA_MAC_BUILD_OK=1 ./hexa build \
+//           stdlib/ddp/ring_all_reduce_test.hexa -o build/ddp_ring \
+//         && ./build/ddp_ring
+// ════════════════════════════════════════════════════════════════════════════
+
+use "stdlib/flame/tensor_lib"
+use "stdlib/ddp/ring_all_reduce"
+
+let mut pass_count = 0
+let mut total_count = 0
+let mut failed = ""
+
+fn check(name: string, cond: bool) {
+    total_count = total_count + 1
+    if cond {
+        pass_count = pass_count + 1
+    } else {
+        if failed == "" { failed = name }
+    }
+}
+
+fn _abs(x: float) -> float { if x < 0.0 { return 0.0 - x } return x }
+
+// Deterministic, distinct per-(rank,index) value so a wrong chunk/offset
+// surfaces as a non-zero Δ rather than coincidentally cancelling.
+fn _seed(rank: int, i: int) -> float {
+    let r = float(rank)
+    let idx = float(i)
+    return 1.0 + r * 100.0 + idx * 0.5 - r * idx * 0.25
+}
+
+// Run the sim for given N,S and return max|sim - serial_sum| over the whole
+// buffer (every rank must hold the identical full sum). 0.0 == byte-exact.
+fn run_case(N: int, S: int) -> float {
+    let buf = t_zeros(N * S)
+    let mut r = 0
+    while r < N {
+        let mut i = 0
+        while i < S {
+            t_set(buf, r * S + i, _seed(r, i))
+            i = i + 1
+        }
+        r = r + 1
+    }
+
+    // serial reference: expected[i] = Σ_r seed(r,i).
+    let expect = t_zeros(S)
+    let mut i = 0
+    while i < S {
+        let mut acc = 0.0
+        r = 0
+        while r < N {
+            acc = acc + _seed(r, i)
+            r = r + 1
+        }
+        t_set(expect, i, acc)
+        i = i + 1
+    }
+
+    ring_all_reduce(buf, N, S)
+
+    // every rank's row must equal the serial sum, byte-exact.
+    let mut maxd = 0.0
+    r = 0
+    while r < N {
+        i = 0
+        while i < S {
+            let d = _abs(t_get(buf, r * S + i) - t_get(expect, i))
+            if d > maxd { maxd = d }
+            i = i + 1
+        }
+        r = r + 1
+    }
+    return maxd
+}
+
+fn main() {
+    // F-DDP-RING-STEPS — canonical optimum 2(N-1).
+    check("steps(N=2) == 2", ring_step_count(2) == 2)
+    check("steps(N=4) == 6", ring_step_count(4) == 6)
+
+    // chunk partition sanity: chunks tile [0,S) exactly, last boundary == S.
+    check("chunk_start(S=10,N=4,0) == 0", ring_chunk_start(10, 4, 0) == 0)
+    check("chunk_start(S=10,N=4,4) == 10", ring_chunk_start(10, 4, 4) == 10)
+    check("chunk_start(S=7,N=2,2) == 7", ring_chunk_start(7, 2, 2) == 7)
+
+    // F-DDP-RING-BYTEEQ — N=2, S not a multiple of N (S=7 → chunks 4,3).
+    let d2 = run_case(2, 7)
+    check("N=2 S=7 byte-eq (max|d|==0)", d2 == 0.0)
+
+    // F-DDP-RING-BYTEEQ — N=4, S not a multiple of N (S=10 → chunks 3,3,2,2).
+    let d4 = run_case(4, 10)
+    check("N=4 S=10 byte-eq (max|d|==0)", d4 == 0.0)
+
+    // extra boundary: N=4, S=13 (chunks 4,3,3,3) and a larger even case.
+    let d4b = run_case(4, 13)
+    check("N=4 S=13 byte-eq (max|d|==0)", d4b == 0.0)
+    let d2b = run_case(2, 64)
+    check("N=2 S=64 byte-eq (max|d|==0)", d2b == 0.0)
+
+    print("DDP-M1 ring-all-reduce in-process sim\n")
+    print("  steps: N=2 -> " + str(ring_step_count(2)) +
+          " , N=4 -> " + str(ring_step_count(4)) + "  (expect 2(N-1) = 2,6)\n")
+    print("  N=2 S=7  max|d| = " + str(d2) + "\n")
+    print("  N=4 S=10 max|d| = " + str(d4) + "\n")
+    print("  N=4 S=13 max|d| = " + str(d4b) + "\n")
+    print("  N=2 S=64 max|d| = " + str(d2b) + "\n")
+    print("  passed " + str(pass_count) + " / " + str(total_count) + "\n")
+    if pass_count == total_count {
+        print("RESULT: GREEN — all-reduce == serial sum, byte-eq max|d|=0; steps=2(N-1)\n")
+    } else {
+        print("RESULT: RED — first failure: " + failed + "\n")
+    }
+}

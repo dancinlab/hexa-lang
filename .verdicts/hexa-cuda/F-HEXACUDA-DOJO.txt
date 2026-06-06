@@ -298,3 +298,94 @@ invented source calls), and every perf number CITED verbatim from a landed fusio
 sweep: 0 leaked H100/H200 — the only vast instance is the spared rtsc-39610026 anchor, an
 RTX 3090). Pending: the W10 + gridsync verdict FILES land with PRs #2847/#2845 (cited by
 id+PR until then); the W8 verdict file is present on this base and was read verbatim.
+
+================================================================================
+§11 — DOJO reflects this session's TWO GPU-kernel PARITY breakthroughs + regime law
+================================================================================
+(branch domain/dojo-parity-recipes — docs/tool only, NO GPU)
+
+This session landed two MEASURED, byte-exact-gated GPU-kernel breakthroughs (on
+main / open PRs). They are reflected into the hexa dojo (docs/hexa-dojo.md) as a
+new decision-grade READING-LESSON subsection — "GPU kernel parity recipes —
+canonical-atom GEMM · weight-reuse conv · the under-fill/saturated regime law" —
+placed in the GPU/kernel area after the parallel root-cause subsection. CITED
+verbatim from the landed HEXA-FUSION verdicts; NO new perf claim authored here.
+
+  (11a) RECIPE (a) — canonical-atom own-GEMM (verdict F-FUSION-SM90-WGMMA-OG16,
+        PR #2866). The TF32 own-GEMM was pinned 70.2 TFLOP/s / 6.09x off cuBLAS
+        for 5 rungs (OG11-OG15) by a CONTRADICTION: a hand-rolled
+        cuTensorMapEncodeTiled box landed an ATOM-MAJOR SWIZZLE_128B SMEM tile a
+        descriptor-direct wgmma could not read bit-exact, forcing a 32KB software
+        DECODE BAND in the hot loop — and that band ⊥ occupancy (blew the smem
+        budget, could not also hold 2 CTA/SM). A 3200-cfg (LBO,SBO,base_offset,
+        layout_type) sweep floored at rel-RMS 1.000. FIX inverts the question:
+        instead of asking a fixed HW de-swizzle to match the box, PRE-LAY the
+        operand in GLOBAL in the canonical CuTe Layout_K_SW128 / gmma-INTER (8x4
+        core) order + use a NO-swizzle TMA, so the landed SMEM tile IS the
+        wgmma-ready layout the descriptor addresses (layout_type_=0,
+        descriptor-direct) — NO in-kernel decode band. Result (measured H100):
+        single-tile rel-RMS 1.000 -> 0.000 (bit-exact), smem 96 -> 64 KB/CTA
+        (2 CTA/SM held), own-GEMM 70.2 -> 264.7 TFLOP/s (3.77x), ratio vs
+        cuBLAS-TF32 6.09x -> 1.37x (~85-90% of the gap closed). PARITY (<=1.3x)
+        NOT quite reached (best 1.37x); the remaining ~5% is a perf-only frontier
+        (OG17 warp-spec/larger-tile/ping-pong, now un-gated since the band is gone).
+
+  (11b) RECIPE (b) — weight-reuse GEMM-conv MoE (verdict F-FUSION-MOE-CONV-PROD-
+        KERNEL, PR #2867). The d=6208/H200 production MoE step (~74s/step, the
+        f5e18a0f wall) is GPU-SATURATED (~92-96% util), so fusion-FILL LOSES there
+        (the OG-FUSE-OPT closed-neg: tiled-fused 3997 ms vs ModuleList 3734 ms @
+        d=6208 — no fill headroom, every weight touched once = no reuse). But the
+        closed-neg named the RIGHT residual (weight bandwidth) + RIGHT cure (weight
+        reuse). FIX: recast each expert's Conv1d as an IMPLICIT GEMM
+        (Y[t,co]=Σ_k Σ_ci Xshift_k[t,ci]·W_k[ci,co]) + REGISTER-TILE it — a CTA
+        owns BM=64 time-steps × BN=64 out-channels, stages a weight tile to smem
+        ONCE + REUSES it across all BM time-rows -> weight HBM traffic cut ~BM-fold.
+        ci ascending, k inner = the EXACT order of the 30-separate-conv reference,
+        so the gate is byte-exact. Result (measured H100): byte-eq max|Δ|=0 vs
+        ModuleList-30 (dev-vs-dev all shapes; 2.98e-7 vs CPU fp32-FMA oracle),
+        6.60x @d=4096 / 6.57x @d=6208 (the wall) / 13.70x @d=8192 vs ModuleList-30.
+        Util ~92% on BOTH paths -> the win is pure WORK-REDUCTION via weight reuse,
+        NOT a fill/occupancy effect. cuBLAS stays ~15x below (no superiority claim).
+
+  (11c) RECIPE (c) — the REGIME LAW (sweeps OG-FUSE-OPT #2862 / XOVER #2865 /
+        RIGHTSIZE #2863). Recipes (a)/(b) are NOT competing tricks — they apply in
+        DIFFERENT regimes, and the wrong lever wastes a GPU session. The law,
+        documented as an ASCII decision tree: measure single-kernel util on the
+        ACTUAL shape FIRST. UNDER-FILL (small d, small/right-sized GPU, idle SMs,
+        launch/boundary overhead dominates) => FUSION-FILL (one saturating kernel;
+        evidence: RTX4070 right-sized won 3/4, under-fill d=512 fused 2.68x).
+        SATURATED (big GPU, d>=1024, >=98% util, BW-bound, no fill headroom) =>
+        WEIGHT-REUSE GEMM RECAST (11b's lever; fill LOSES here — the OG-FUSE-OPT
+        closed-neg). In BOTH regimes cuDNN/cuBLAS = ROOFLINE; the win is
+        reach-roofline / boundary-removal, NOT raw-math superiority.
+
+  (11d) PREFLIGHT HINT: tool/dojo_rent_preflight.sh dojo_recipe_advisory carries a
+        one-line GPU-kernel regime hint (commons g82) — "measure single-kernel util
+        on the ACTUAL shape first: SATURATED => weight-reuse GEMM recast; UNDER-FILL
+        => fusion-fill; cuBLAS/cuDNN=roofline; byte-exact gate first". Self-test
+        stays GREEN (+2 cases: hint present · names BOTH levers); bash -n clean.
+
+  (11e) HONEST FRAMING (g5), stated explicitly:
+        · cuBLAS/cuDNN are the ROOFLINE in every regime.
+        · the wins are REACH-ROOFLINE / boundary-removal, NOT raw-math superiority.
+        · PARITY is NOT claimed — OG16 best 1.37x (not <=1.3x); cuBLAS stays ~15x
+          below the GEMM-conv.
+        · byte-exact gate FIRST — a perf number is reported only after the
+          rel-RMS/max|Δ| gate passes (OG16 single-tile rel-RMS 0.000; PROD-KERNEL
+          max|Δ|=0 vs ModuleList-30).
+
+  (11f) HEXA-CUDA.md gains milestone D13; docs/hexa-dojo.md §references cross-links
+        the OG16 + PROD-KERNEL verdicts (PRs #2866/#2867) + the regime-law sweeps
+        (#2862/#2865/#2863) + commons g82.
+
+VERDICT (§11): 🟢 GREEN (docs + tool reflection) — this session's two byte-exact-
+gated GPU-kernel parity breakthroughs (canonical-atom own-GEMM 6.09x -> 1.37x,
+bit-exact; weight-reuse GEMM-conv 6.57x @d=6208, byte-eq) + the unifying regime law
+(under-fill => fusion-fill · saturated => weight-reuse GEMM) are reflected into the
+hexa dojo as a decision-grade reading lesson with HONEST framing (cuBLAS/cuDNN =
+roofline, reach-roofline NOT superiority, parity NOT claimed, byte-exact gate first),
+the preflight dojo_recipe_advisory carries the one-line regime hint (self-test GREEN,
+bash -n clean), mirrored to commons g82, with every perf number CITED verbatim from
+a landed fusion verdict (F-FUSION-SM90-WGMMA-OG16 · F-FUSION-MOE-CONV-PROD-KERNEL)
+and attributed to its PR (#2866/#2867; sweeps #2862/#2865/#2863) — NO new perf claim
+authored. Docs/tool only, NO GPU rented (pure reflection of already-measured results).

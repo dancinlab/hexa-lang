@@ -2006,6 +2006,22 @@ fn _nvptx_lower_stmt(buf: [LInstr], s: Stmt, kinds: [PReg], shared_idx_off: [i64
                     e8.push(_nvptx_op(k_reg))
                     e8.push(_nvptx_op("1023"))
                     out.push(_nvptx_instr("add.s64", e8, "exp f64: b = k + 1023 (IEEE bias)"))
+                    // UNDERFLOW CLAMP (DOJO-A4 / d631a08f): when k <= -1023 the
+                    // biased exponent b = k+1023 goes <= 0, so the bit-trick
+                    // `b << 52` overflows the exponent field into the sign/
+                    // mantissa bits and yields GARBAGE (a huge or NaN value)
+                    // instead of the IEEE underflow result +0.0. exp(x) for
+                    // x <~ -745.13 is below double min-normal and flushes to
+                    // +0.0. Clamp `b` to >= 0 with max.s64: b=0 -> 0<<52 = 0x0
+                    // bit-pattern = +0.0, then dst = p * +0.0 = +0.0 (p is a
+                    // finite positive poly value in ~[0.7,1.4], so no NaN).
+                    // Single instruction, no branch, no new scratch reg.
+                    //   ref: PTX ISA 8.7 §9.7.3.2 max.s64; IEEE-754 underflow.
+                    let mut ec = []
+                    ec.push(_nvptx_op(b_reg))
+                    ec.push(_nvptx_op(b_reg))
+                    ec.push(_nvptx_op("0"))
+                    out.push(_nvptx_instr(PTX_OP_MAX_S64, ec, "exp f64: clamp b>=0 (underflow -> +0.0)"))
                     let mut e9 = []
                     e9.push(_nvptx_op(b_reg))
                     e9.push(_nvptx_op(b_reg))

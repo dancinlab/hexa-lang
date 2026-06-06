@@ -48,6 +48,8 @@
 
 @domain FORGE-UTILGREEN := "domains/FORGE-UTILGREEN.md"
 @domain HEXA-FUSION := "domains/HEXA-FUSION.md"
+@domain HEXA-DDP := "domains/HEXA-DDP.md"
+@domain HEXA-DOJO := "domains/HEXA-DOJO.md"
 
 # FORGE-UTILGREEN refines FLAME-PERF's F-RFC046-GPU-UTILIZATION into the focused
 # util-GREEN endgame lever chain (host per-step orchestration → device).

@@ -1,0 +1,82 @@
+F-FUSION-MOE-CONV-PROD-KERNEL — weight-bandwidth-optimal multi-expert Conv1d MoE kernel
+========================================================================================
+domain: HEXA-FUSION / OG-FUSE-PROD-KERNEL
+device: NVIDIA H100 80GB HBM3, SMs=132, cap 9.0, CUDA 12.6, driver 580.95.05
+pod:    vast 39761793 (H100 SXM) — RENTED, MEASURED, DESTROYED (leak 0)
+shape:  E=30 experts, K=3 causal, dil=1, T=256; production d-sweep {4096, 6208, 8192}
+build:  nvcc -arch=sm_90 -O3 -DUSE_CUBLAS -lcublas
+
+PRE-REGISTERED FALSIFIER
+------------------------
+The OG-FUSE-OPT verdict (F-FUSION-MOE-CONV-OPT) closed-negatively pinned the SATURATED
+d=6208/H200 production wall as WEIGHT-bandwidth + L2-weight-locality bound, NOT fill:
+"every (co,ci,k) weight is touched exactly once and is UNIQUE per thread — no weight
+reuse — so kernel fusion cannot shrink weight traffic." Falsifier: a weight-bandwidth-
+optimal kernel that REUSES each loaded weight across many time positions can match/beat
+ModuleList-30 in the saturated regime where the prior fused/tiled kernels (C/D) LOSE.
+
+THE KERNEL (path E — the deliverable, hexa-ownable, no vendor lib)
+-----------------------------------------------------------------
+Each expert's Conv1d is an implicit GEMM: Y[t,co] = Σ_k Σ_ci Xshift_k[t,ci]·W_k[ci,co].
+k_moe_conv_gemm is a REGISTER-TILED GEMM-conv: CTA owns BM=64 time-steps × BN=64
+out-channels for one expert; loops ci in BK=16 chunks staging a weight tile Ws[K][BK][BN]
+into smem ONCE and REUSING it across ALL BM time-rows (BM-fold weight reuse). Each weight
+HBM byte now amortises over BM=64 time outputs instead of being touched once → the
+weight-bandwidth roofline the OPT verdict pinned is LIFTED. Accumulation visits ci
+ASCENDING, k INNER — the EXACT order of the 30-separate-conv reference.
+
+GATE 1 (g5, FIRST — correctness before any perf) : byte-eq max|Δ|=0 vs ModuleList-30
+-----------------------------------------------------------------------------------
+At the CPU-oracle gate shape AND device-vs-device at every perf shape:
+  [GATE-DEV-EQ]  max|Δ|(GEMM vs ModuleList) = 0.000e+00   <= PROD-KERNEL CONTRACT (PASS)
+  [GATE-GEMM]    max|Δ| vs CPU = 2.980e-07  (fp32 single-fma vs CPU mul-add, within 6e-6)
+  perf-shape cross-check max|Δ|(GEMM vs ModuleList) = 0.000e+00 at d=4096, 6208, 8192
+  # GATE OVERALL => PASS  (all paths A/C/D/E byte-exact; cuBLAS-F rel-RMS 4.9e-7)
+=> The GEMM-conv kernel reproduces the 30-separate-conv reference BIT-EXACTLY. Gate is
+   the same accumulation order, so the FMA-contraction is identical to the naive MAC.
+
+GATE 2 — perf (median of 20 timed iters, cuEvent) + util, vs ModuleList-30
+--------------------------------------------------------------------------
+d=4096:  [A] ModuleList-30 = 1649.20 ms   [D] TILED-FUSED = 1829.14 ms (LOSES to A)
+         [E] GEMM-CONV     =  249.71 ms   [F] cuBLAS roofline = 16.21 ms
+         => E is 6.60x FASTER than ModuleList-30 (and 7.3x vs tiled-D, 17x vs naive-C)
+
+d=6208:  [A] ModuleList-30 = 3734.52 ms   [D] TILED-FUSED = 3997.58 ms (LOSES to A 1.07x)
+  (THE     [E] GEMM-CONV     =  568.14 ms   [F] cuBLAS roofline = 36.10 ms
+  WALL)    => E is 6.57x FASTER than ModuleList-30 at the EXACT measured production shape.
+         util @d=6208: [A] mean 92.1% peak 100%   [E] mean 91.3% peak 100%
+         => BOTH paths are GPU-SATURATED (~92%). The 6.57x is NOT a fill/occupancy effect
+            (no under-fill headroom — the OPT closed-neg regime). It is pure WORK-REDUCTION
+            via weight reuse: same FLOPs, weight HBM traffic cut ~BM-fold → roofline lifted.
+         The measured ModuleList 3734.52 ms reproduces anima's H200 wall (~3736 ms/step).
+
+d=8192:  [A] ModuleList-30 = 13466.64 ms  [E] GEMM-CONV = 982.91 ms  [F] cuBLAS = 59.68 ms
+         => E is 13.70x FASTER than ModuleList-30. Win GROWS with d (weight bank dominates).
+
+(B grouped + C naive-fused skipped at d>=6208 perf via MOEFUSE_SKIP — minutes-long; the
+ gate already proved them byte-exact. B at d=4096 = 16266 ms confirms the 11x regression.)
+
+BEATS-MODULELIST-AT-PROD : YES (6.57x at d=6208, the measured wall; 6.6x–13.7x across sweep)
+
+FINDING (honest)
+----------------
+The SATURATED-regime production wall IS ADDRESSABLE. The OG-FUSE-OPT closed-negative was
+correct that FUSION/FILL is the wrong lever at saturation (tiled-D still loses to
+ModuleList at d=6208, 3997 vs 3734 ms) — but it identified the RIGHT residual (weight
+bandwidth) and the RIGHT cure (weight reuse), which the prior kernels structurally could
+not deliver (one out-channel per thread → no reuse). The GEMM recast supplies exactly that
+reuse: BM-fold weight amortisation turns the weight-bandwidth-bound depthwise-style MAC
+into a compute-bound tiled GEMM. Same util (~92%), 6.57x less time → the weight-bandwidth
+roofline is lifted, bit-exactly. cuBLAS (roofline) stays ~15x below E (no superiority claim
+— E reaches a much better point on the roadmap to the vendor ceiling, not past it). The
+remaining E-vs-cuBLAS gap is the perf frontier (smem double-buffer, wider register tile,
+cp.async / wgmma TF32 from the OG10 summit machinery), NOT a correctness or wall question.
+
+PRODUCTION PATH: fold k_moe_conv_gemm into the flame device conv path (the OG-FUSE-FOLD
+device-path hook) as the MoE-block forward — a drop-in 6.6x step-time cut at d=6208 with
+byte-exact outputs (no trainer-numerics change). The conclusion REVERSES the OPT residual
+prognosis: the production cure is NOT "keep ModuleList, the wall is fundamental" — it is
+"replace ModuleList AND the fused/tiled kernels with the GEMM-conv weight-reuse kernel".
+
+verdict tier: 🟢 byte-eq=0 (PASS) · 🟢 6.57x vs ModuleList at d=6208 production wall
+              (saturated, util-matched) · 🟢 sweep 6.6x–13.7x · roofline-honest (cuBLAS=ceiling)

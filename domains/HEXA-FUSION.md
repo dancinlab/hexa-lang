@@ -29,13 +29,36 @@
   removal where under-fill exists, NOT raw-conv superiority (cuDNN conv = roofline). The d=6208/H200 production
   shape lives in the under-fill regime on a big-SM GPU but that crossover is not re-measured here (H100/H200
   access unresolved, out of scope). verdict: .verdicts/hexa-fusion/F-FUSION-MOE-CONV-FUSE.txt
-- [ ] **OG-FUSE-OPT — tiled/shared-mem fused MoE-conv kernel** — replace the naive per-channel MAC inner
-  loop with a shared-mem-tiled conv so the fused kernel ALSO wins in the SATURATED regime (d>=1024), not
-  only under-fill. Gate: byte-eq max|D|=0 vs the 30-conv reference; target: beat ModuleList-30 step-time
-  at d>=1024 too. GPU run access-gated (deliberate, no auto-fire).
-- [ ] **OG-FUSE-XOVER — d=6208/H200 production crossover** — measure the actual under-fill->saturated
-  boundary at the PRODUCTION shape (d=6208, E=30, H200 132 SMs) to confirm the cure applies to the real
-  7B CLMConvMoE step. Blocked on H100/H200 access (unresolved); deliberate, no auto-fire.
+- [x] **OG-FUSE-OPT — tiled/shared-mem fused MoE-conv kernel** — added path (D): stage the input
+  time-window into smem once per CTA (CI_TILE-chunked, coalesced) + register-blocked time accumulators,
+  removing path (C)'s CO_TILE-fold redundant global X reads. L40S sm_89 (vast 39749770, DESTROYED leak 0):
+  byte-eq max|D|=0 vs the 30-conv reference HELD both regimes (gate + perf-shape cross-check). Tiling gave
+  a real 1.61x fused-vs-fused speedup at d=2048 (C 1662→D 1034 ms). BUT (D) STILL loses to ModuleList-30
+  at d=2048 (1034 vs 333 ms) → saturated-win FALSIFIED. Residual roofline = WEIGHT bandwidth + L2-weight-
+  locality, NOT fill (util 98.7% for A/C/D alike — already saturated); weights are unique/touched-once so
+  fusion can't shrink weight traffic. Fusion remains an UNDER-FILL-only cure.
+  verdict: .verdicts/hexa-fusion/F-FUSION-MOE-CONV-OPT.txt
+- [x] **OG-FUSE-PROD-KERNEL — weight-bandwidth-optimal GEMM-conv kernel BEATS ModuleList at the
+  production wall** — 🟢 the OG-FUSE-OPT closed-negative REVERSED. (2026-06-07, H100 80GB, vast 39761793
+  DESTROYED leak 0.) The OPT verdict pinned the saturated d=6208 wall as WEIGHT-bandwidth bound (weights
+  touched once, no reuse → fusion/fill can't help, tiled-D still loses to ModuleList) and named the cure:
+  weight REUSE. Path (E) k_moe_conv_gemm recasts each expert Conv1d as an implicit GEMM
+  (Y[t,co]=Σ_k Σ_ci Xshift_k[t,ci]·W_k[ci,co]) and REGISTER-TILES it (BM=64 time × BN=64 outch, BK=16,
+  4×4 micro-tile): the weight smem tile is loaded ONCE and reused across all BM time-rows → BM-fold weight
+  reuse, weight HBM traffic cut ~BM×. ci-ascending k-inner accumulation preserved → **byte-eq max|Δ|=0 vs
+  ModuleList-30** (device-vs-device, gate FIRST + perf-shape cross-check at every d). PERF (H100 132 SMs):
+  d=4096 E=249.7 vs A=1649.2 ms (6.60x); **d=6208 (THE measured wall) E=568.1 vs A=3734.5 ms (6.57x)**;
+  d=8192 E=982.9 vs A=13466.6 ms (13.70x). Util @d=6208 BOTH ~92% saturated → the win is NOT fill (the OPT
+  closed-neg regime) but pure WORK-REDUCTION via weight reuse (same FLOPs, less HBM). tiled-D LOSES to A at
+  d=6208 (3997 vs 3734 ms) confirming OPT. cuBLAS roofline (F) stays ~15x below E — no superiority claim,
+  E reaches a far better roofline point. The production cure is "replace ModuleList+fused/tiled with the
+  GEMM-conv kernel", NOT "the wall is fundamental". verdict: .verdicts/hexa-fusion/F-FUSION-MOE-CONV-PROD-KERNEL.txt
+- [x] **OG-FUSE-XOVER — d=6208/H200 production crossover** — 🟢 MEASURED at d=6208 on H100 (132 SMs, same
+  saturated regime as the H200 wall; vast 39761793 DESTROYED). ModuleList-30 = 3734.5 ms reproduces anima's
+  H200 ~3736 ms/step wall. The under-fill->saturated crossover is moot for the CURE: at d=6208 ALL paths are
+  ~92% saturated yet the GEMM-conv (E) still wins 6.57x via weight reuse (work-reduction, not fill). The
+  prior fused/tiled (C/D) lose at saturation (D 3997 ms > A 3734) — fusion was the wrong lever, weight reuse
+  is the right one. Subsumed by OG-FUSE-PROD-KERNEL. verdict: .verdicts/hexa-fusion/F-FUSION-MOE-CONV-PROD-KERNEL.txt
 - [ ] **OG-FUSE-FOLD — fold the fused kernel into the flame CLMConvMoE trainer** — wire
   tool/gpu_moe_conv_fuse.cu into stdlib/flame as the device MoE-conv path (env-gated, byte-eq ModuleList
   fallback) so the cure reaches the real trainer step. The application path for the f5e18a0f cure.
@@ -53,6 +76,88 @@
   saturates 100% in both regimes (can't resolve occupancy) → cuEvent step-time is the authoritative fill
   proxy. Right-sizing dodges big-GPU contention + the H100/H200 access-unresolved blocker AND structurally
   favors fusion. pod RTX 4070 39749656 DESTROYED leak-0. verdict: .verdicts/hexa-fusion/F-FUSION-MOE-CONV-RIGHTSIZE.txt
+  (2026-06-07, CODE FOLD GREEN — standalone byte-eq validated, full-trainer build DEFERRED):
+  stdlib/flame/clm_moe_conv_fused.hexa folds the fused E-expert MoE-conv into flame. moe_conv_fwd_dispatch
+  routes on env HEXA_FUSE_MOE_CONV (or HEXA_FUSE_ALL): SET → moe_conv_fused_fwd (ALL E experts in ONE
+  strided-batched GEMM, the one-launch own-kernel analogue); default OFF → moe_conv_modulelist_fwd (E
+  separate forge convs = the under-fill baseline). Both byte-eq. Mirrors the .cu k_moe_conv_fused layout
+  (X[T·d] shared · W[E·d·d·K] · b[E·d] · Y[E·T·d]) and the clm_conv_batched.hexa E=2 precedent generalized
+  to E experts. GATE F-CLM-MOE-CONV-FUSE-FOLD-EQ = 1: fused == E× ModuleList max|Δ| = 0.0 over
+  {E=30 dil=1, E=30 dil=2, E=4 dil=1} on Mac CPU (`hexa run`, no link dep). verdict:
+  .verdicts/hexa-fusion/F-CLM-MOE-CONV-FUSE-FOLD-EQ.txt. DEFERRED: the full 7B clm_prod_gpu on-pod build +
+  the own-device-kernel util Δ at production shape (d=6208, E=30, H100/H200) — NO full train was run.
+- [x] **OG-FUSE-PROD-FOLD — route the flame MoE-conv to the GEMM-conv weight-reuse path E** — the
+  PRODUCTION fold. OG-FUSE-FOLD wired the strided-batched FUSED path (moe_conv_fused_fwd), which is the
+  UNDER-FILL kernel — it LOSES at production d=6208 (saturated, memory-roofline bound). OG-FUSE-PROD-KERNEL
+  then found the real winner: path E k_moe_conv_gemm (6.57× vs ModuleList-30 at d=6208/H100, byte-exact).
+  This fold makes the production path = path E. (2026-06-07, CODE FOLD GREEN — standalone byte-eq validated,
+  full-trainer build DEFERRED.) stdlib/flame/clm_moe_conv_fused.hexa adds moe_conv_gemm_fwd: per-expert
+  register-tiled GEMM with weight-tile reuse across the T time-rows. The conv is recast as an implicit GEMM
+  (Y[t,co]=Σ_k Σ_ci Xshift_k[t,ci]·W_k[ci,co]); the shared im2col xcol[T·(d·K)] is built ONCE (all experts
+  read the SAME X — NO E× xcol replication, unlike the batched fused path's [E·T·Kdim] blowup that costs at
+  d=6208), then ONE forge_dispatch_matmul(xcol, T, Kdim, Wt_e, d) per expert reuses the shared xcol while
+  the weight tile streams. The im2col contraction index j=ci·K+k (ascending) IS the ci-outer/k-inner order
+  the device kernel k_moe_conv_gemm accumulates in (lines 346-363) → byte-IDENTICAL to moe_conv_modulelist_fwd
+  / nn_conv1d_fwd (weight reuse is a SCHEDULING property of the device GEMM, NOT a math re-association; this
+  is the path-E own-GEMM, NOT the cuBLAS path-F roofline which reorders ci and is only rel-RMS-eq).
+  moe_conv_fwd_dispatch now routes path E under HEXA_FUSE_MOE_CONV (or HEXA_FUSE_ALL); default OFF →
+  moe_conv_modulelist_fwd (the byte-eq oracle). GATE F-CLM-MOE-CONV-GEMM-FOLD-EQ = 1: GEMM-conv path E ==
+  E× ModuleList max|Δ| = 0.0 over {E=30 dil=1, E=30 dil=2, E=4 dil=1} on Mac CPU (`hexa run`, no link dep);
+  the legacy strided-batched fused path also stays max|Δ|=0. verdict:
+  .verdicts/hexa-fusion/F-CLM-MOE-CONV-GEMM-FOLD-EQ.txt. The fold makes the 6.57× REACHABLE by the trainer;
+  it does NOT itself measure a trainer speedup. DEFERRED: the full 7B clm_prod_gpu on-pod build + the
+  GEMM-conv util Δ / step-time at production shape (d=6208, E=30, H100/H200) — NO full train was run; the
+  6.57× is the KERNEL benchmark (PR #2867), the on-trainer measurement is the next step.
+- [x] **OG-FUSE-PROD-PERF — close path E → cuBLAS roofline via GEMM perf levers** — 🔴 CLOSED-NEGATIVE for
+  the cp.async double-buffer lever. (2026-06-07, H100 80GB HBM3, vast 39771465 DESTROYED leak 0.) Goal: push
+  path E (k_moe_conv_gemm, 6.57× over ModuleList-30, byte-eq) CLOSER to the cuBLAS strided-batched roofline
+  (path F, ~15× below E) WITHOUT losing weight-reuse / byte-eq. Lever (a) APPLIED: new path G
+  k_moe_conv_gemm_db — a STAGES-deep smem RING (Xs window + Ws weight slabs) prefetched via
+  cp.async.ca.shared.global + commit_group/wait_group so the next K-chunk's HBM loads are in flight while this
+  chunk's register MAC runs. Accumulation order BIT-IDENTICAL to E (ci asc, k inner) → **GATE byte-eq
+  max|Δ|=0 vs ModuleList-30** (gate FIRST at d=192 AND perf-shape cross-check at d=6208, both 0.0). PERF
+  (H100 132 SMs, median 20 iters): **path G is UNIFORMLY ~7% SLOWER than path E** — d=2048 G=68.95 vs
+  E=64.45; d=4096 G=265.1 vs E=247.8; **d=6208 (prod) G=602.7 vs E=563.9 ms** (A=3709, F-roofline=35.9 →
+  E 6.58× over A, 15.7× from roofline). FALSIFIER (pre-registered): "cp.async prefetch hides the per-chunk
+  Xs+Ws load latency the OG-FUSE-OPT verdict pinned, closing E→cuBLAS" — FALSIFIED. MECHANISM: GM_BK=16 →
+  d/16≈388 chunks; per chunk cp.async pays commit/wait + an extra __syncthreads while the per-chunk compute
+  (16 ci × K=3 over a 4×4 tile) is tiny → pipeline bookkeeping > latency hidden. Path E already overlaps
+  loads via OCCUPANCY (many CTAs/SM, warp scheduler hides latency), so explicit prefetch adds overhead w/o
+  adding overlap. The OPT-pinned wall is L2/WEIGHT BANDWIDTH (a bandwidth bound) — cp.async addresses LATENCY,
+  so it structurally cannot move it. RULED-OUT AXIS: latency-hiding is NOT the lever; path E is at its design
+  ceiling on the latency axis. The remaining E→cuBLAS gap = arithmetic-intensity + wgmma (levers c/b, next
+  cycle). (Forced GM_STAGES 3→2: 3-stage static __shared__ ring = 49536 B > 48KB/49152 B static-smem hard cap
+  → cudaErrorInvalidValue; 2-stage = 33024 B fits. Deeper static ring impossible; dynamic smem wouldn't
+  change the bandwidth conclusion.) Lever (b) wgmma TF32 NOT applied — OG16 atom still at swizzle-parity
+  frontier, breaks byte-eq, K=3/BK=16 doesn't map to m64n64k8 K-major TMA tile. HONEST: path E's 6.57× cure
+  is UNCHANGED / NOT regressed; this prunes the cp.async lever from the gap-closing search. PR #2871.
+  verdict: .verdicts/hexa-fusion/F-FUSION-MOE-CONV-PROD-PERF.txt
+- [x] **OG-FUSE-PROD-PERF2 — close path E → cuBLAS via wider register tile (arithmetic intensity)** —
+  🔴 CLOSED-NEGATIVE for the wider-register-tile / arithmetic-intensity lever. (2026-06-07, H100 80GB
+  HBM3, vast 39774277 RENTED+DESTROYED leak 0.) The PROD-PERF verdict named the correct residual lever:
+  raise ARITHMETIC INTENSITY (wider register micro-tile → more FLOPs per staged smem byte → less
+  bandwidth-starved). Lever (c) APPLIED: new templated path H k_moe_conv_gemm_wide<BM,BN,BK,TM,TN>
+  (dynamic smem so wide tiles exceed the 48KB static cap) + a 7-config sweep (64×64 control → 128×128
+  t8×8 → 128×128 BK8). Accumulation order BIT-IDENTICAL to E (ci asc, k inner) → **GATE byte-eq
+  max|Δ|=0 vs ModuleList-30 for ALL 7 configs** (gate FIRST at d=192 AND perf-shape cross-check at
+  d=6208, all 0.0; NO reorder forced). PERF (H100 132 SMs, median 20 iters, d=6208): **EVERY wider tile
+  REGRESSED.** 64×64 t4×4 (= path E, dynamic-smem) 514ms (BEST, ties E); 128×64 t8×4 616ms (+20%);
+  64×128 t4×8 745ms (+45%); 128×128 t8×8 919ms (+79%); 128×128 t8×4-512thr 868ms (+69%); 64×64 t8×8-64thr
+  993ms (+93%); 128×128 BK8 (AI=0.996, 4× path E's 0.248) **920ms — the highest-intensity config is the
+  SLOWEST.** cuBLAS-F roofline 34.6ms → ratio E/F = 16.4×, best-wide/F = 14.9× (just path E). FALSIFIER
+  (pre-registered): "wider tile raises FLOP/byte → E→cuBLAS ratio drops below ~10×" — FALSIFIED;
+  ratio did NOT move, throughput regressed monotonically with intensity. MECHANISM (the W12/OG17-256-tile
+  failure mode CONFIRMED here): wider tile → bigger register accumulator (up to 8×8=64 acc/thread) +
+  bigger Ws smem → OCCUPANCY collapses → fewer warps to hide the WEIGHT-stream HBM latency; and K=3/BK=16
+  is a SHALLOW contraction with NO deep-K reuse for a fat micro-tile to amortise (the conv's 13.87GB
+  weight bank is touched ~once). SAME wall the cp.async probe hit from the other side: weight/L2 BANDWIDTH
+  + reuse-poverty — NEITHER latency-hiding NOR arithmetic-intensity moves it. RULED-OUT AXIS: register-tile
+  width. STANDS: path E (64×64 t4×4) = the production deliverable (6.57× over ModuleList, byte-exact); the
+  E→cuBLAS gap is a fundamental register-vs-bandwidth wall. HONEST: nothing shipped regresses the cure
+  (H0 ties E exactly). PR pending. verdict: .verdicts/hexa-fusion/F-FUSION-MOE-CONV-PROD-PERF2.txt
+- [ ] **OG-FUSE-RIGHTSIZE — right-sized-GPU per-regime validation** — validate the cure on a right-sized
+  GPU (RTX 5070 / L40S) per regime to dodge big-GPU contention + the access-unresolved blocker; the
+  byte-eq D1536-saturates-5070-to-98% fact already shows right-sizing is the practical lever.
 
 ## 전제 — 왜 fusion 인가 (host-feed 축이 닫힌 뒤)
 
@@ -104,6 +209,7 @@ FORGE-UTILGREEN lever-1~5 가 GEMM repack 을 전부 device 化했어도 util ME
 ### L3 — whole-step megakernel: BOTH WALLS CLOSED (2026-06-06, g5 verbatim)
 
 - [x] **glue-block megakernel — 2nd wall (GroupNorm grid-sync) CLOSED · 🟢 byte-eq A100-confirmed** — own-GEMM removed the FIRST wall (persistent kernel calls device `_hx_k_gemm` in-line, no un-fusable cuBLAS host call, #2697). The SECOND wall = the two GroupNorm full-Y reductions (GN#1 block-1/L3-c, GN#2 block-2/L3-d; G=1 mean/var over ALL T·C) needed a cross-block barrier a plain kernel lacks. **NOW CLOSED** via a cooperative grid-synced GN (`_hx_k_groupnorm_coop` + `cudaLaunchCooperativeKernel` + `cooperative_groups::this_grid().sync()`, env `HEXA_FUSE_GN_COOP`, -2 → sequential byte-eq fallback). Two-phase: ONE thread per group runs the IDENTICAL sequential t-outer/c-inner reduction (no tree re-assoc, same NR-40 `_hx_gn_sqrt_dev`) → `grid.sync()` broadcasts mu/inv → embarrassingly-parallel normalize. **byte-eq HARD GATE (g5) PASSED on real A100-SXM4-40GB (sm_80)**: 4/4 cases incl. T=1536 C=1536 G=1 (whole-tensor, 2.36M elems) → **max|Δ|=0, bitdiff_words=0**. cudaDevAttrCooperativeLaunch=1, grid fits one wave (108 SM × 18 blk/SM = 1944 max-coresident, coop_grid≤1944). **정직 경계 (g5)**: this is STRUCTURAL-COMPLETENESS, NOT a util/perf win — byte-eq FORCES the reduction single-thread so the coop launch buys ZERO reduction-parallelism; binding util term = GEMM-gap occupancy (F-FUSION-OCCUPANCY-WALL), untouched. VALUE = the whole-step megakernel is now FULLY realized: 100% hexa-owned, cuBLAS-call-free, no un-fusable GN host op. **SUPERSEDES** F-FUSION-GN-COOP-KERNEL-CLOSED-NEG.txt (that ANALYSIS-only "don't build it" verdict stands for the UTIL goal — correct, zero util lift — but its byte-eq-impossible premise is now MEASURED FALSE for the COMPLETENESS goal). verdict `.verdicts/hexa-fusion/F-FUSION-MEGAKERNEL-GN-GRIDSYNC.txt`. pod destroyed, leak 0.
+- [x] **MEGA-OWNGEMM-INTEGRATE — 🔴 CLOSED-NEGATIVE (H100 sm_90a measured)** — wiring the OG17 TF32-PARITY wgmma own-GEMM as an IN-KERNEL GEMM inside the persistent whole-step COOPERATIVE megakernel is structurally IMPOSSIBLE at production CLM shapes. Falsifier fired on TWO independent axes: (1) wgmma needs a 128-thr warpgroup but the megakernel is uniform blockDim=64 → blockDim<128 CANNOT issue wgmma (STRUCTURAL, all S); (2) the wgmma coop one-wave residency ceiling is FIXED at 2 CTA/SM × 132 = 264 CTAs, while the GEMM output-tile grid scales (S/128)² — S=2048→256 tiles fits but S=4096→1024 tiles EXCEEDS the wave → grid.sync DEADLOCK (the decisive axis). OG10 1-CTA/SM fallback RULED OUT (132-CTA ceiling, worse). OG17 parity itself CONFIRMED bit-exact rel_rms=0 @ 259-267 TFLOP/s STANDALONE (own-ability holds at launch granularity), but a single-launch cuBLAS-free coop megakernel with a parity in-kernel GEMM is NOT achievable. Verdict .verdicts/hexa-fusion/F-FUSION-MEGA-OWNGEMM-INTEGRATE.txt. Strengthens the prior util-megakernel closed-neg.
 
 ### closure — vs PyTorch+CUDA 벤치
 
@@ -493,6 +599,10 @@ on-silicon run with its own verdict:
 | OG13 | deep async decode ring (NSTG-deep gmma scratch) | bit-exact, 51.9 TFLOP/s @NSTG≥2 | 🔴 CLOSED-NEG — 1 CTA/SM (regresses 70.7); **TF32 async-pipeline axis EXHAUSTED** | `F-FUSION-SM90-WGMMA-W13` |
 | OG14 | **FP16/BF16** own-GEMM (NEW dtype axis) | bit-exact-vs-same-dtype, **71.6 TFLOP/s** (2 CTA/SM) | **11.5×** off cuBLAS-**FP16** — PARITY NO; OG13 16KB-band overlap REFUTED (.k16 band still 32KB) | `F-FUSION-SM90-WGMMA-W14-FP16` |
 | OG15 | descriptor-direct (delete 32KB decode band) | 🔴 **CLOSED-NEG** — single-tile rel-RMS floor **1.000** / GEMM **1.392** (3200-cfg sweep, none 0) → GATE FAIL, no perf | research #2854 FALSIFIED: TMA-SWIZZLE_128B ≢ wgmma Swizzle<3,4,3> for atom-major box. smem 96→**64 KB/CTA** (32KB band IS removable, but read not bit-exact). OG10 70.7 KEPT | `F-FUSION-SM90-WGMMA-W15` |
+| OG16 | **canonical-atom match** (route-a: gmma-INTER global pre-permute + NO-swizzle TMA + descriptor-direct, band REMOVED *and* USED) | bit-exact (rel-RMS 0) @2048³ & 4096³, **264.7 TFLOP/s** (3.77× the OG10 frontier, 2 CTA/SM, 96→64KB) | **1.37–1.62×** off cuBLAS-TF32 — OG15 falsifier OVERTURNED, ~85–90% of the gap closed, PARITY NO | `F-FUSION-SM90-WGMMA-OG16` |
+| OG17 | **🟢 PARITY** — relaxed-`wait_group 1` ping-pong pipeline (W11 lever-3, reopened by OG16's band removal) on the OG16 tile | bit-exact (rel-RMS 0) @2048³ & 4096³ all NST 3 reps, **280 TFLOP/s** @2048 NST3 (2 CTA/SM) | **1.24× = PARITY YES** @S=2048 (~81% of cuBLAS-TF32); @4096 1.56× (residual = 256-tile reg-realloc, MODE5/W12 closed-neg). 'own-GEMM can't reach cuBLAS-TF32' wall **CLOSED @2048** | `F-FUSION-SM90-WGMMA-OG17` |
+| OG18 | **FP16/BF16 canonical-atom port** — the OG16 route-a + OG17 relaxed-pipe recipe re-derived for the f16 .k16 8×8 atom (gmma_phys16), global pre-lay + NO-swizzle TMA, descriptor-direct (the OG14 32KB decode band GONE *and* used) | bit-exact same-dtype (rel_rms **0.000e+00**) single-tile AND full GEMM @2048³ & 4096³, **504.3 TFLOP/s** @4096 (MODE5 128×256 NST3) | **1.64×** off cuBLAS-FP16 — OG14 **13.37×→1.64× CLOSED** (8.2× own lift, same-pod apples: W14 61.2 TFLOP/s on the SAME H100), PARITY NO; recipe GENERALIZES across dtype, residual = pipeline-depth on 2× FP16 roofline. bf16 1.75× | `F-FUSION-SM90-WGMMA-OG18` |
+| OG19 | **FP16 relaxed-pipe in the OG17 parity regime** — drive the MODE6 relaxed-`wait_group 1` ping-pong (OG18's f16 pipe, run only @4096 before) at **S=2048** (OG17's TF32 parity spot) + the **NST=2/3/4 ring** across both regimes (deeper ring now band-free) | bit-exact same-dtype (rel_rms **0.000e+00**) at EVERY config @2048³ & 4096³, **505.3 TFLOP/s** @4096 (MODE5 NST4 — new peak) | **best ratio 1.56×** (MODE6 S=2048 NST3) off cuBLAS-FP16 — the relaxed-pipe lever GENERALIZES (same direction as TF32 1.37→1.24×) but **FP16 PARITY NO** (honest **FP16-ceiling**: 2× FP16 roofline + k16 occupancy/ring bound leave a residual the pipeline can't close; NST=4 drops to 1 CTA/SM). NOT regressed below OG18; TF32 PARITY stays banked | `F-FUSION-SM90-WGMMA-OG19` |
 
 **Ladder narrative (honest, g5):**
 1. **30.4× → 29.4×** is the only measured improvement: the mma.sync cuBLAS-class
@@ -683,13 +793,45 @@ the same wall).**
       Full writeup in the OG15 section above. verdict `.verdicts/hexa-fusion/F-FUSION-SM90-WGMMA-W15.txt`.
 
 **The next net-new frontier (the ONLY remaining lever to claim the removable 32KB band):**
-- [ ] **OG16 — match the canonical CuTe `Layout_K_SW128_Atom`** — re-encode A/B in GLOBAL so the SWIZZLE_128B TMA
-      lands the canonical atom (or port `make_gmma_desc`'s EXACT LBO/SBO for the atom-major layout). **Net-new kernel
-      structure, NOT a descriptor-field sweep** (OG15 already exhausted the 3200-config field space). This is the only
-      remaining lever to make the 32KB decode band (OG15-proven removable) actually USABLE bit-exact. *Unblocked-BY-OG16
-      (NOT separate milestones — they all depend on the band becoming usable first): 128×256 tile / deep-ring /
-      warp-spec setmaxnreg / persistent-collective / split-K / FP16-reopen.* A deliberate future GPU decision, not an
-      auto-fire (OG15 was closed-neg).
+- [x] **OG16 — match the canonical CuTe `Layout_K_SW128_Atom`** — 🟢 **LANDED, bit-exact, the wall CRACKS.** Route (a):
+      re-encode A/B in GLOBAL into the canonical **gmma-INTER** layout + a **NO-swizzle TMA** so the SMEM tile IS the
+      wgmma-ready layout the descriptor addresses, then descriptor-direct (layout_type_=0, SBO=1024B) reads it with **NO
+      in-kernel decode band**. The winning member is the cleaner sub-variant the OG15 field-sweep could not reach (the W10
+      composed-decode MOVED from the hot loop into a one-time global transform). **single-tile rel-RMS 0.000e+00** (OG15
+      floored 1.000) → **full-GEMM rel-RMS 0.000e+00** (@2048³ & @4096³) → perf. **smem 96→64 KB/CTA @NST=2, 2 CTA/SM**
+      (the OG15-proven-removable 32KB band now REMOVED **AND USABLE**). **own 70.2 → 264.7 TFLOP/s (3.77×); ratio vs
+      cuBLAS-TF32 6.09× → 1.37× (best, S=2048 NST=3) / 1.62× (S=4096 NST=2) = ~85–90% of the gap closed, bit-exact.**
+      PARITY (≤1.3×) NOT crossed (best 1.37×) — cuBLAS = roofline, gap-closure NOT superiority. Residual = the now-UNGATED
+      perf axis (warp-spec setmaxnreg / larger tile / ping-pong epilogue / deeper ring — the decode⊥occupancy
+      contradiction that pinned OG11–OG15 is GONE). One-time pre-permute amortized over K-reuse/batched weights (O(MK+KN)
+      vs O(MNK), not in the steady-state hot loop). H100 native sm_90a, nvcc 12.6.77 (W10-apples), pod 39761328 DESTROYED
+      leak 0. verdict `.verdicts/hexa-fusion/F-FUSION-SM90-WGMMA-OG16.txt`.
+
+- [x] **OG18 — FP16/BF16 canonical-atom port: the OG14 11.5×-off-cuBLAS-FP16 wall was the SAME decode-band bound,
+      not an FP16-intrinsic limit** — 🟢 **LANDED, same-dtype bit-exact, OG14 gap CLOSED.** Ported the OG16 route-a
+      (global pre-lay into the canonical gmma atom + NO-swizzle TMA → descriptor-direct, no in-kernel decode band) +
+      OG17 relaxed-`wait_group 1` pipeline to the FP16 `.k16` **8×8** gmma atom (re-derived `gmma_phys16`, differs
+      from TF32's 8×4). **GATE FIRST (g5, rel_rms ≤ 1e-2 vs same-dtype cuBLAS-FP16, NOT bit-exact-vs-FP64):**
+      single-tile MODE10 sweep → **rel_rms 0.000e+00 @ swm=0 sbo=256 boff=0** (f16 atom MATCHED band-free) → full
+      GEMM MODE4/5/6 **rel_rms 0.000e+00** @2048³ & 4096³ → perf. **own 61.2 → 504.3 TFLOP/s (8.2×, MODE5 128×256
+      NST3 @4096); ratio vs cuBLAS-FP16 13.37× → 1.64×** (same-pod apples: W14/OG14 rebuilt on the SAME H100 = 61.2
+      TFLOP/s / 13.37×). PARITY (≤1.3×) NOT crossed — cuBLAS-FP16 = roofline (~825 @4096, 2× TF32), gap-closure NOT
+      superiority. The recipe **GENERALIZES across dtype**: decode-band removal is the dominant lever for both TF32
+      (6.09→1.37×) and FP16 (13.37→1.64×). Residual to parity = the same warp-spec / deeper-pipeline gap, now on a
+      2× FP16 roofline (NOT layout/correctness — both bit-exact). bf16 same path (467.3 TFLOP/s, 1.75×). H100 native
+      sm_90a, nvcc 12.6.77, pod 39772559 DESTROYED leak 0. verdict `.verdicts/hexa-fusion/F-FUSION-SM90-WGMMA-OG18.txt`.
+- [x] **OG19 — apply OG17's relaxed-pipe to FP16 in the OG17 parity regime: does the lever cross FP16 PARITY?**
+      🟢 **LANDED, same-dtype bit-exact — HONEST FP16-CEILING, PARITY NO.** OG18 ran the f16 relaxed-`wait_group 1`
+      pipe (MODE6) ONLY @S=4096 (1.64×); OG17 crossed TF32 parity (1.24×) specifically @S=2048 NST3. OG19 drives
+      MODE6 @S=2048 (the unexplored OG17 sweet spot) + the NST=2/3/4 ring across BOTH regimes (deeper ring now
+      band-free). **GATE FIRST (g5):** single-tile + EVERY full-GEMM config **rel_rms 0.000e+00** @2048³ & 4096³.
+      **FINDING:** the relaxed-pipe lever GENERALIZES — it LIFTS the S=2048 ratio (MODE6 NST3 **1.56×** vs MODE4
+      baseline 1.63×), the SAME direction OG17 saw for TF32 (1.37→1.24×). But **FP16 PARITY NOT crossed**: the
+      identical lever lands at 1.56× (not 1.24×) because FP16's roofline is ~2× TF32 — same own TFLOP/s ÷ 2× larger
+      cuBLAS-FP16 denominator. Deeper ring (NST=4) drops to 1 CTA/SM (occupancy-bound, not latency-bound) so does NOT
+      help. **own 504.3 → 505.3 TFLOP/s (new peak, MODE5 NST4); best ratio 1.64× → 1.56×.** NOT regressed below OG18;
+      TF32 PARITY (OG17 1.24×) stays banked; FP16 characterized at its honest best ratio. H100 native sm_90a, nvcc
+      12.6.77, pod 39774499 DESTROYED leak 0. verdict `.verdicts/hexa-fusion/F-FUSION-SM90-WGMMA-OG19.txt`.
 
 - [x] **TF32 async-pipeline axis EXHAUSTED (OG7–OG15)** — OG8 (TMA-producer) + OG9 (permute-removal) + OG10 (composed
       decode = SUMMIT) + OG11/OG12 (output-tile DEAD, decode/MMA overlap = wall) + OG13 (deeper ring regresses
