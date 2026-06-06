@@ -206,6 +206,130 @@ void gemm_w12(const __grid_constant__ CUtensorMap tmapA,
 }
 
 // ======================================================================
+// MODE 10 — W12-B: ROBUST 128x256 + (b) per-K8-sub decode ONLY (no separate producer WG).
+//   Reuses the W11 MODE6 PROVEN structure VERBATIM (256 thr = 2 consumer warpgroups,
+//   band=wg, in-loop elected-thread tid==0 TMA producer) so it RUNS + is bit-exact, and
+//   applies ONLY the (b) smem shrink: decode ONE K8 sub-tile at a time into a SUB-sized
+//   scratch (2 A-bands + 4 B-blocks, 512 floats each = 3072 floats = 12KB) instead of the
+//   W11 full-slab GMMA scratch (12288 floats = 48KB). This reclaims 36KB -> smem
+//   98304+12288+16 = 110608B (110.9KB) -> target 2 CTA/SM RESTORED (W11 was 147KB->1 CTA/SM).
+//   The composed-decode index is IDENTICAL to W10/W11; only the scratch footprint shrinks.
+//   This isolates the OCCUPANCY lever (b) — the W11-pinned gating dependency — cleanly.
+//   (Lever (a) separate-producer-WG + setmaxnreg was IGNORED by ptxas here (C7507) due to the
+//    d0..d3 accumulator register pressure; MODE 10 is the realizable form of the coupled lever:
+//    bigger tile + restored occupancy via the decode-scratch shrink.)
+// ======================================================================
+extern "C" __global__ __launch_bounds__(256,2)
+void gemm_w12b(const __grid_constant__ CUtensorMap tmapA,
+               const __grid_constant__ CUtensorMap tmapB,
+               float* __restrict__ gD,int M,int N,int K,int NST){
+    const int TM=128,TN=256,TKSW=32,TK=8;
+    int bm=blockIdx.y*TM, bn=blockIdx.x*TN;
+    extern __shared__ __align__(128) float sm[];
+    const int ASW=TM*TKSW, BSW=TN*TKSW;
+    const int SWBUF=ASW+BSW;
+    const int SUB=64*8;                            // one K8 gmma sub-tile = 512 floats
+    const int NBLK=TN/64;                          // 4 N-blocks
+    const int GMMA=2*SUB + NBLK*SUB;               // 2 A-bands + 4 B-blocks, ONE sub each = 3072
+    float* gmma=sm + (size_t)NST*SWBUF;
+    uint64_t* full =(uint64_t*)(gmma + GMMA);
+    int tid=threadIdx.x; int wg=tid>>7; int band=wg; int lt=tid&127;
+    int nks=K/TKSW;
+    const int NATOM=TN/TKSW;
+    const uint32_t bytesA=ASW*4, bytesB=BSW*4;
+    if(tid<NST){ mbar_init_tx(&full[tid],1); }
+    __syncthreads();
+    float d0[32],d1[32],d2[32],d3[32];
+    #pragma unroll
+    for(int i=0;i<32;++i){d0[i]=0.f;d1[i]=0.f;d2[i]=0.f;d3[i]=0.f;}
+    uint32_t fph=0;
+    int stages=NST<nks?NST:nks;
+    if(tid==0){
+        for(int st=0;st<stages;++st){
+            float* base=sm+(size_t)st*SWBUF; float* Asw=base; float* Bsw=base+ASW;
+            mbar_expect_tx(&full[st], bytesA+bytesB);
+            tma_load_2d(Asw,&tmapA,st*TKSW,bm,&full[st]);
+            #pragma unroll
+            for(int c=0;c<NATOM;++c)
+                tma_load_2d(Bsw+(size_t)c*(TKSW*TKSW),&tmapB,bn+c*TKSW,st*TKSW,&full[st]);
+        }
+    }
+    // (b) SUB-tile scratch: 2 A-bands + 4 B-blocks, ONE K8 sub each. Reused per sub-step.
+    float* As0=gmma; float* As1=As0+SUB;
+    float* Bb[4]; Bb[0]=As1+SUB; Bb[1]=Bb[0]+SUB; Bb[2]=Bb[1]+SUB; Bb[3]=Bb[2]+SUB;
+    for(int ki=0;ki<nks;++ki){
+        int st=ki%NST;
+        mbar_wait(&full[st], fph); if(st==NST-1) fph^=1;
+        float* base=sm+(size_t)st*SWBUF;
+        float* Asw=base; float* Bsw=base+ASW;
+        asm volatile("wgmma.fence.sync.aligned;\n":::"memory");
+        // (b) per-K8-sub: decode sub s, wgmma it, reuse scratch for next sub.
+        #pragma unroll
+        for(int s=0;s<TKSW/TK;++s){
+            int kbase=s*TK;
+            // A composed-decode (IDENTICAL law to W10/W11), only this sub's 8 K-cols, both bands.
+            for(int i=tid;i<TM*TK;i+=256){
+                int m=i/TK, kk=i%TK; int k=kbase+kk;
+                int a=m>>3, r=m&7;
+                int sw = a*256 + r*32 + (((k>>2)^(r&7))<<2) + (k&3);
+                float v=Asw[sw];
+                int mm=(m&63); float* dst=(m<64)?As0:As1;
+                dst[gmma_phys(mm,kk)]=v;
+            }
+            // B composed-decode, only this sub's 8 K-cols, all 4 N-blocks.
+            for(int i=tid;i<TK*TN;i+=256){
+                int kk=i/TN, n=i%TN; int k=kbase+kk;
+                int c=n>>5, nn=n&31, gp=(nn>>2)^(k&7);
+                int sw = c*(TKSW*TKSW) + k*32 + (gp<<2) + (nn&3);
+                float v=Bsw[sw];
+                int blk=n>>6, n64=(n&63);
+                Bb[blk][gmma_phys(n64,kk)]=v;
+            }
+            asm volatile("fence.proxy.async.shared::cta;\n":::"memory");
+            __syncthreads();
+            float* As=(band==0)?As0:As1;
+            uint32_t aAb=(uint32_t)__cvta_generic_to_shared(As);
+            uint32_t b0=(uint32_t)__cvta_generic_to_shared(Bb[0]);
+            uint32_t b1=(uint32_t)__cvta_generic_to_shared(Bb[1]);
+            uint32_t b2=(uint32_t)__cvta_generic_to_shared(Bb[2]);
+            uint32_t b3=(uint32_t)__cvta_generic_to_shared(Bb[3]);
+            uint64_t dA=mk(aAb,128,256);
+            WG(d0,dA,mk(b0,128,256));
+            WG(d1,dA,mk(b1,128,256));
+            WG(d2,dA,mk(b2,128,256));
+            WG(d3,dA,mk(b3,128,256));
+            asm volatile("wgmma.commit_group.sync.aligned;\nwgmma.wait_group.sync.aligned 0;\n":::"memory");
+            __syncthreads();   // sub scratch reused next iter; no thread overwrites a live sub
+        }
+        if(tid==0){
+            int load_ki=ki+stages;
+            if(load_ki<nks){
+                int lst=load_ki%NST;
+                float* lb=sm+(size_t)lst*SWBUF; float* lAsw=lb; float* lBsw=lb+ASW;
+                mbar_expect_tx(&full[lst], bytesA+bytesB);
+                tma_load_2d(lAsw,&tmapA,load_ki*TKSW,bm,&full[lst]);
+                #pragma unroll
+                for(int c=0;c<NATOM;++c)
+                    tma_load_2d(lBsw+(size_t)c*(TKSW*TKSW),&tmapB,bn+c*TKSW,load_ki*TKSW,&full[lst]);
+            }
+        }
+    }
+    int rbase=bm+band*64;
+    int w=lt>>5,l=lt&31,rb=w*16+(l>>2),cb=(l&3)*2;
+    float* dd[4]={d0,d1,d2,d3};
+    #pragma unroll
+    for(int blk=0;blk<4;++blk){
+        float* D=dd[blk]; int nbase=bn+blk*64;
+        #pragma unroll
+        for(int c=0;c<8;++c)for(int r=0;r<2;++r)for(int p=0;p<2;++p){
+            int idx=c*4+r*2+p,row=rbase+rb+r*8;
+            int col=nbase+cb+p+c*8;
+            if(row<M&&col<N)gD[row*N+col]=D[idx];
+        }
+    }
+}
+
+// ======================================================================
 // W12 main: cuBLAS gate+perf harness for MODE 9. argv: S MODE [NST].
 // Single-tile bit-exact (the W10 GATE) is run via the W10 binary in w12_run.sh BEFORE this
 // is built; the full-GEMM rel_rms gate runs here BEFORE any perf number (g5).
@@ -241,16 +365,22 @@ static int run_w12(int S,int MODE,int NST,Enc_t enc){
     const int TM=128,TN=256,TKSW=32;
     size_t SWBUF=(size_t)(TM*TKSW + TN*TKSW);
     size_t GMMA=(size_t)(2*64*8 + (TN/64)*64*8);   // sub-tile scratch: 2 A-bands + 4 B-blocks, 512 each
-    size_t smsz=(size_t)NST*SWBUF*4 + GMMA*4 + (size_t)2*NST*8;
-    dim3 grid(Nx/TN,(Mx+TM-1)/TM); int blk=384;     // 3 warpgroups (1 producer + 2 consumers)
-    void* kern=(void*)gemm_w12;
-    CK(cudaFuncSetAttribute((const void*)gemm_w12,
-        cudaFuncAttributeMaxDynamicSharedMemorySize,(int)smsz));
-    { int occ=0; cudaOccupancyMaxActiveBlocksPerMultiprocessor(&occ,(const void*)kern,blk,smsz);
+    // MODE 9 needs 2*NST mbar (full+empty); MODE 10 needs NST (full only).
+    size_t nbar=(MODE==9)?(size_t)2*NST:(size_t)NST;
+    size_t smsz=(size_t)NST*SWBUF*4 + GMMA*4 + nbar*8;
+    dim3 grid(Nx/TN,(Mx+TM-1)/TM);
+    int blk=(MODE==9)?384:256;                       // MODE9 = 1 prod + 2 cons WG; MODE10 = 2 cons WG
+    const void* kern=(MODE==9)?(const void*)gemm_w12:(const void*)gemm_w12b;
+    CK(cudaFuncSetAttribute(kern,cudaFuncAttributeMaxDynamicSharedMemorySize,(int)smsz));
+    { int occ=0; cudaOccupancyMaxActiveBlocksPerMultiprocessor(&occ,kern,blk,smsz);
       printf("OCCUPANCY MODE=%d blk=%d dynsmem=%zuB(%.1fKB) -> %d CTA/SM (%d thr/SM)\n",
              MODE,blk,smsz,smsz/1024.0,occ,occ*blk); }
+    auto launch=[&](){
+        if(MODE==9) gemm_w12 <<<grid,blk,smsz>>>(tmapA,tmapB,dD,Mx,Nx,Kx,NST);
+        else        gemm_w12b<<<grid,blk,smsz>>>(tmapA,tmapB,dD,Mx,Nx,Kx,NST);
+    };
     CK(cudaMemset(dD,0,szD*4));
-    gemm_w12<<<grid,blk,smsz>>>(tmapA,tmapB,dD,Mx,Nx,Kx,NST);
+    launch();
     cudaError_t e=cudaGetLastError(); if(e==cudaSuccess)e=cudaDeviceSynchronize();
     if(e!=cudaSuccess){printf("MODE%d OWN-FAULT %s\n",MODE,cudaGetErrorString(e));return 4;}
     CK(cudaMemcpy(hD,dD,szD*4,cudaMemcpyDeviceToHost));
@@ -258,8 +388,8 @@ static int run_w12(int S,int MODE,int NST,Enc_t enc){
     double rr=sqrt(se/fmax(1e-30,sr));
     if(rr>3e-3){printf("W12 S=%d MODE=%d NST=%d rel_rms=%.3e FAIL — no perf (g5)\n",S,MODE,NST,rr);return 2;}
     cudaEvent_t s0,s1;CK(cudaEventCreate(&s0));CK(cudaEventCreate(&s1));int it=20;
-    gemm_w12<<<grid,blk,smsz>>>(tmapA,tmapB,dD,Mx,Nx,Kx,NST);CK(cudaDeviceSynchronize());
-    CK(cudaEventRecord(s0));for(int i=0;i<it;++i)gemm_w12<<<grid,blk,smsz>>>(tmapA,tmapB,dD,Mx,Nx,Kx,NST);
+    launch();CK(cudaDeviceSynchronize());
+    CK(cudaEventRecord(s0));for(int i=0;i<it;++i)launch();
     CK(cudaEventRecord(s1));CK(cudaEventSynchronize(s1));
     float mo;CK(cudaEventElapsedTime(&mo,s0,s1));mo/=it;
     double fl=2.0*(double)Mx*Nx*Kx,tfo=fl/(mo*1e-3)/1e12;
@@ -278,6 +408,6 @@ int main(int argc,char**argv){
     int NST=argc>3?atoi(argv[3]):2;
     Enc_t enc=get_enc();
     if(!enc){printf("cuTensorMapEncodeTiled unavailable (CUDA<12?)\n");return 4;}
-    if(MODE==9) return run_w12(S,MODE,NST,enc);
-    printf("W12 unknown MODE %d (use 9 = warp-spec + sub-decode 128x256)\n",MODE); return 1;
+    if(MODE==9||MODE==10) return run_w12(S,MODE,NST,enc);
+    printf("W12 unknown MODE %d (9=warp-spec+sub-decode, 10=sub-decode-only 128x256)\n",MODE); return 1;
 }

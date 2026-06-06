@@ -42,10 +42,16 @@ if $NVCC -O3 -arch=sm_90a -lcuda -lcublas -o /tmp/w12 wgmma_tf32_w12.cu 2>&1; th
   echo "W12-BUILD: OK"; else echo "W12-BUILD: FAIL"; exit 1; fi
 echo
 
-echo "================= MODE 9 — occupancy + bit-exact gate + perf ================="
-echo "----- MODE9 NST=2 (PRIMARY: occupancy must be 2 CTA/SM, rel_rms 0) -----"; /tmp/w12 "$S" 9 2 || true
-echo "----- MODE9 NST=3 -----"; /tmp/w12 "$S" 9 3 || true
-echo "----- MODE9 S=2048 NST=2 -----"; /tmp/w12 2048 9 2 || true
-echo "----- MODE9 S=8192 NST=2 -----"; /tmp/w12 8192 9 2 || true
+# timeout guard: a deadlocked warp-spec handshake must NOT hang the pod (storm-safe).
+TO="timeout -k 5 90"
+echo "================= MODE 10 — (b) sub-decode ONLY (PRIMARY: isolate occupancy lever) ========"
+echo "----- MODE10 NST=2 (occupancy must be 2 CTA/SM, rel_rms 0) -----"; $TO /tmp/w12 "$S" 10 2; echo "[exit=$?]"
+echo "----- MODE10 NST=3 -----"; $TO /tmp/w12 "$S" 10 3; echo "[exit=$?]"
+echo "----- MODE10 S=2048 NST=2 -----"; $TO /tmp/w12 2048 10 2; echo "[exit=$?]"
+echo "----- MODE10 S=8192 NST=2 -----"; $TO /tmp/w12 8192 10 2; echo "[exit=$?]"
+echo
+echo "================= MODE 9 — (a)+(b) warp-spec + sub-decode (coupled) ================="
+echo "----- MODE9 NST=2 (90s timeout guard; deadlock -> skip, KEEP MODE10/W10) -----"; $TO /tmp/w12 "$S" 9 2; echo "[exit=$?]"
+echo "----- MODE9 NST=3 -----"; $TO /tmp/w12 "$S" 9 3; echo "[exit=$?]"
 echo
 echo "W12 RUN COMPLETE — cuBLAS-TF32 = ROOFLINE, no superiority claim. KEEP W10 70.7 if any regress."
