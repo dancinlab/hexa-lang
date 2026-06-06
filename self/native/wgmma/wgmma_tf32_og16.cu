@@ -228,10 +228,187 @@ extern "C" __global__ void dump_layout(const __grid_constant__ CUtensorMap tmapA
     for(int p=tid;p<TM*TKSW;p+=blockDim.x) gOut[p]=As[p];
 }
 
+// ======================================================================
+// MODE 4 — FULL GEMM descriptor-direct over the route-(a) PRE-PERMUTED global (NO decode band).
+//   Identical hot-loop structure to W15 gemm_w15 (the no-decode kernel that measured the 32KB
+//   drop) — the ONLY difference is the global operand was pre-permuted (host, MODE 4 setup) so
+//   the SWIZZLE_128B landing IS the canonical atom the layout_type_=1 descriptor reads bit-exact.
+//   smem = swizzled ring only -> ~32KB/CTA less than W10. Measure GFLOP/s + occupancy + ratio.
+// ======================================================================
+extern "C" __global__ void gemm_og16(const __grid_constant__ CUtensorMap tmapA,
+                                      const __grid_constant__ CUtensorMap tmapB,
+                                      float* __restrict__ gD,int M,int N,int K,int NST,
+                                      int lbo,int sbo,int boff,int swmode){
+    const int TM=128,TN=128,TKSW=32,TK=8;
+    int bm=blockIdx.y*TM, bn=blockIdx.x*TN;
+    extern __shared__ __align__(128) float sm[];
+    const int ASW=TM*TKSW, BSW=TN*TKSW;
+    const int SWBUF=ASW+BSW;
+    uint64_t* full =(uint64_t*)(sm + (size_t)NST*SWBUF);
+    int tid=threadIdx.x; int wg=tid>>7; int band=wg; int lt=tid&127;
+    int nks=K/TKSW;
+    const int NATOM=TN/TKSW;
+    const uint32_t bytesA=ASW*4, bytesB=BSW*4;
+    if(tid<NST){ mbar_init_tx(&full[tid],1); }
+    __syncthreads();
+    float d0[32],d1[32];
+    #pragma unroll
+    for(int i=0;i<32;++i){d0[i]=0.f;d1[i]=0.f;}
+    uint32_t fph=0;
+    int stages=NST<nks?NST:nks;
+    if(tid==0){
+        for(int st=0;st<stages;++st){
+            float* base=sm+(size_t)st*SWBUF; float* Asw=base; float* Bsw=base+ASW;
+            mbar_expect_tx(&full[st], bytesA+bytesB);
+            tma_load_2d(Asw,&tmapA,st*TKSW,bm,&full[st]);
+            #pragma unroll
+            for(int c=0;c<NATOM;++c)
+                tma_load_2d(Bsw+(size_t)c*(TKSW*TKSW),&tmapB,bn+c*TKSW,st*TKSW,&full[st]);
+        }
+    }
+    for(int ki=0;ki<nks;++ki){
+        int st=ki%NST;
+        mbar_wait(&full[st], fph); if(st==NST-1) fph^=1;
+        float* base=sm+(size_t)st*SWBUF; float* Asw=base; float* Bsw=base+ASW;
+        float* Aband=Asw + band*64*TKSW;
+        float* B0=Bsw;
+        float* B1=Bsw + 2*(TKSW*TKSW);
+        uint32_t aAb=(uint32_t)__cvta_generic_to_shared(Aband);
+        uint32_t a0b=(uint32_t)__cvta_generic_to_shared(B0);
+        uint32_t a1b=(uint32_t)__cvta_generic_to_shared(B1);
+        asm volatile("wgmma.fence.sync.aligned;\n":::"memory");
+        #pragma unroll
+        for(int kk=0;kk<TKSW;kk+=TK){
+            uint32_t off=(uint32_t)(kk*4);
+            uint64_t dA =mk_desc(aAb+off,(uint32_t)lbo,(uint32_t)sbo,(uint32_t)boff,(uint32_t)swmode);
+            uint64_t dB0=mk_desc(a0b+off,(uint32_t)lbo,(uint32_t)sbo,(uint32_t)boff,(uint32_t)swmode);
+            uint64_t dB1=mk_desc(a1b+off,(uint32_t)lbo,(uint32_t)sbo,(uint32_t)boff,(uint32_t)swmode);
+            WG(d0,dA,dB0);
+            WG(d1,dA,dB1);
+        }
+        asm volatile("wgmma.commit_group.sync.aligned;\nwgmma.wait_group.sync.aligned 0;\n":::"memory");
+        __syncthreads();
+        if(tid==0){
+            int load_ki=ki+stages;
+            if(load_ki<nks){
+                int lst=load_ki%NST;
+                float* lb=sm+(size_t)lst*SWBUF; float* lAsw=lb; float* lBsw=lb+ASW;
+                mbar_expect_tx(&full[lst], bytesA+bytesB);
+                tma_load_2d(lAsw,&tmapA,load_ki*TKSW,bm,&full[lst]);
+                #pragma unroll
+                for(int c=0;c<NATOM;++c)
+                    tma_load_2d(lBsw+(size_t)c*(TKSW*TKSW),&tmapB,bn+c*TKSW,load_ki*TKSW,&full[lst]);
+            }
+        }
+    }
+    int rbase=bm+band*64;
+    int w=lt>>5,l=lt&31,rb=w*16+(l>>2),cb=(l&3)*2;
+    #pragma unroll
+    for(int c=0;c<8;++c)for(int r=0;r<2;++r)for(int p=0;p<2;++p){
+        int idx=c*4+r*2+p,row=rbase+rb+r*8;
+        int col0=bn+cb+p+c*8, col1=bn+64+cb+p+c*8;
+        if(row<M&&col0<N)gD[row*N+col0]=d0[idx];
+        if(row<M&&col1<N)gD[row*N+col1]=d1[idx];
+    }
+}
+
 int main(int argc,char**argv){
     int S=argc>1?atoi(argv[1]):2048; int MODE=argc>2?atoi(argv[2]):10;
     Enc_t enc=get_enc();
     if(!enc){printf("cuTensorMapEncodeTiled unavailable (CUDA<12?)\n");return 4;}
+
+    if(MODE==4){
+        // ---- FULL GEMM: route-(a) pre-permuted global, descriptor-direct, bit-exact then perf.
+        // The winning (pm,swm,sbo,boff) come from MODE 10. Defaults = best-expected (pm1/swm1/
+        // sbo1024/boff0); override via argv for the gated re-run.
+        int NST =argc>3?atoi(argv[3]):3;
+        int PM  =argc>4?atoi(argv[4]):1;
+        int SWM =argc>5?atoi(argv[5]):1;
+        int SBO =argc>6?atoi(argv[6]):1024;
+        int BOFF=argc>7?atoi(argv[7]):0;
+        int LBO =128;
+        int Mx=S,Nx=S,Kx=S;
+        if(Nx%128||Kx%32||Mx%128){printf("MODE4 needs M,N%%128==0 && K%%32==0\n");return 1;}
+        size_t szA=(size_t)Mx*Kx,szB=(size_t)Kx*Nx,szD=(size_t)Mx*Nx;
+        float *hA=(float*)malloc(szA*4),*hB=(float*)malloc(szB*4),*hD=(float*)malloc(szD*4),*hR=(float*)malloc(szD*4);
+        srand(7);
+        for(size_t i=0;i<szA;++i)hA[i]=tf(((rand()%17)-8)*0.0625f);
+        for(size_t i=0;i<szB;++i)hB[i]=tf(((rand()%17)-8)*0.0625f);
+        // cuBLAS reference on the ORIGINAL (un-permuted) operands.
+        float *dA,*dB,*dD,*dR;
+        CK(cudaMalloc(&dA,szA*4));CK(cudaMalloc(&dB,szB*4));CK(cudaMalloc(&dD,szD*4));CK(cudaMalloc(&dR,szD*4));
+        float *dAo,*dBo; CK(cudaMalloc(&dAo,szA*4));CK(cudaMalloc(&dBo,szB*4));
+        CK(cudaMemcpy(dAo,hA,szA*4,cudaMemcpyHostToDevice));CK(cudaMemcpy(dBo,hB,szB*4,cudaMemcpyHostToDevice));
+        cublasHandle_t h;CB(cublasCreate(&h));CB(cublasSetMathMode(h,CUBLAS_TF32_TENSOR_OP_MATH));
+        float al=1.f,be=0.f;
+        CB(cublasSgemm(h,CUBLAS_OP_N,CUBLAS_OP_N,Nx,Mx,Kx,&al,dBo,Nx,dAo,Kx,&be,dR,Nx));CK(cudaDeviceSynchronize());
+        CK(cudaMemcpy(hR,dR,szD*4,cudaMemcpyDeviceToHost));
+        // PRE-PERMUTE A,B into global per pm (one-time; in a real GEMM amortized over reuse).
+        // A is M-major(Kx wide); permute applies per 128B K-atom (KSW=32) independently.
+        float *hAp=(float*)malloc(szA*4),*hBp=(float*)malloc(szB*4);
+        memcpy(hAp,hA,szA*4); memcpy(hBp,hB,szB*4);
+        const int KSW=32;
+        if(PM!=0){
+            for(int m=0;m<Mx;++m)for(int katom=0;katom<Kx/KSW;++katom)for(int k=0;k<KSW;++k){
+                int r=m&7, a=m>>3; int g=k>>2,wv=k&3,gp;
+                if(PM==1) gp=g^(r&7); else if(PM==2) gp=g^(a&7); else gp=g^((r+1)&7);
+                hAp[(size_t)m*Kx + katom*KSW + (gp*4+wv)] = hA[(size_t)m*Kx + katom*KSW + k];
+            }
+            // B is K-major(Nx wide). For pm>=1 we want B's strided dim (N) swizzled like A's M.
+            // B atom = 32(N) x 32(K); permute the K-granule per N-row-atom.
+            for(int kk=0;kk<Kx;++kk)for(int n=0;n<Nx;++n){
+                int kb=kk&(KSW-1); int r=n&7,a=n>>3; int g=kb>>2,wv=kb&3,gp;
+                if(PM==1) gp=g^(r&7); else if(PM==2) gp=g^(a&7); else gp=g^((r+1)&7);
+                int kbase=kk-(kb); // keep within atom
+                hBp[(size_t)(kbase+(gp*4+wv))*Nx + n] = hB[(size_t)kk*Nx + n];
+            }
+        }
+        CK(cudaMemcpy(dA,hAp,szA*4,cudaMemcpyHostToDevice));CK(cudaMemcpy(dB,hBp,szB*4,cudaMemcpyHostToDevice));
+        CUtensorMap tmapA{},tmapB{};
+        { cuuint64_t gd[2]={(cuuint64_t)Kx,(cuuint64_t)Mx}; cuuint64_t gs[1]={(cuuint64_t)Kx*4};
+          cuuint32_t bd[2]={32,128}; cuuint32_t es[2]={1,1};
+          CUresult r=enc(&tmapA,CU_TENSOR_MAP_DATA_TYPE_FLOAT32,2,dA,gd,gs,bd,es,
+            CU_TENSOR_MAP_INTERLEAVE_NONE,CU_TENSOR_MAP_SWIZZLE_128B,
+            CU_TENSOR_MAP_L2_PROMOTION_NONE,CU_TENSOR_MAP_FLOAT_OOB_FILL_NONE);
+          if(r!=CUDA_SUCCESS){printf("MODE4 encodeA r=%d\n",(int)r);return 4;} }
+        { cuuint64_t gd[2]={(cuuint64_t)Nx,(cuuint64_t)Kx}; cuuint64_t gs[1]={(cuuint64_t)Nx*4};
+          cuuint32_t bd[2]={32,32}; cuuint32_t es[2]={1,1};
+          CUresult r=enc(&tmapB,CU_TENSOR_MAP_DATA_TYPE_FLOAT32,2,dB,gd,gs,bd,es,
+            CU_TENSOR_MAP_INTERLEAVE_NONE,CU_TENSOR_MAP_SWIZZLE_128B,
+            CU_TENSOR_MAP_L2_PROMOTION_NONE,CU_TENSOR_MAP_FLOAT_OOB_FILL_NONE);
+          if(r!=CUDA_SUCCESS){printf("MODE4 encodeB r=%d\n",(int)r);return 4;} }
+        const int TM=128,TN=128,TKSW=32;
+        size_t SWBUF=(size_t)(TM*TKSW + TN*TKSW);
+        size_t smsz=(size_t)NST*SWBUF*4 + (size_t)NST*8;
+        dim3 grid(Nx/128,(Mx+TM-1)/TM); int blk=256;
+        CK(cudaFuncSetAttribute(gemm_og16,cudaFuncAttributeMaxDynamicSharedMemorySize,(int)smsz));
+        auto launch=[&](){ gemm_og16<<<grid,blk,smsz>>>(tmapA,tmapB,dD,Mx,Nx,Kx,NST,LBO,SBO,BOFF,SWM); };
+        { int occ=0; cudaOccupancyMaxActiveBlocksPerMultiprocessor(&occ,(const void*)gemm_og16,blk,smsz);
+          printf("OCCUPANCY MODE=4 blk=%d dynsmem=%zuB (%.1f KB/CTA) -> %d CTA/SM\n",blk,smsz,smsz/1024.0,occ); }
+        CK(cudaMemset(dD,0,szD*4));
+        launch();
+        cudaError_t e=cudaGetLastError(); if(e==cudaSuccess)e=cudaDeviceSynchronize();
+        if(e!=cudaSuccess){printf("MODE4 OWN-FAULT pm=%d swm=%d sbo=%d boff=%d %s\n",PM,SWM,SBO,BOFF,cudaGetErrorString(e));return 4;}
+        CK(cudaMemcpy(hD,dD,szD*4,cudaMemcpyDeviceToHost));
+        double se=0,sr=0;for(size_t i=0;i<szD;++i){double dd=(double)hD[i]-hR[i];se+=dd*dd;sr+=(double)hR[i]*hR[i];}
+        double rr=sqrt(se/fmax(1e-30,sr));
+        if(rr>3e-3){printf("OG16 S=%d MODE=4 NST=%d pm=%d swm=%d sbo=%d boff=%d rel_rms=%.3e FAIL — no perf (g5)\n",
+            S,NST,PM,SWM,SBO,BOFF,rr);return 2;}
+        cudaEvent_t s0,s1;CK(cudaEventCreate(&s0));CK(cudaEventCreate(&s1));int it=20;
+        launch();CK(cudaDeviceSynchronize());
+        CK(cudaEventRecord(s0));for(int i=0;i<it;++i)launch();
+        CK(cudaEventRecord(s1));CK(cudaEventSynchronize(s1));
+        float mo;CK(cudaEventElapsedTime(&mo,s0,s1));mo/=it;
+        double fl=2.0*(double)Mx*Nx*Kx,tfo=fl/(mo*1e-3)/1e12;
+        cublasSgemm(h,CUBLAS_OP_N,CUBLAS_OP_N,Nx,Mx,Kx,&al,dBo,Nx,dAo,Kx,&be,dR,Nx);CK(cudaDeviceSynchronize());
+        CK(cudaEventRecord(s0));for(int i=0;i<it;++i)cublasSgemm(h,CUBLAS_OP_N,CUBLAS_OP_N,Nx,Mx,Kx,&al,dBo,Nx,dAo,Kx,&be,dR,Nx);
+        CK(cudaEventRecord(s1));CK(cudaEventSynchronize(s1));
+        float mc;CK(cudaEventElapsedTime(&mc,s0,s1));mc/=it;
+        double tfc=fl/(mc*1e-3)/1e12,ratio=tfc/tfo;
+        printf("OG16 S=%d MODE=4 NST=%d pm=%d swm=%d sbo=%d boff=%d own=%.1f TFLOP/s cuBLAS-TF32=%.1f ratio(cuBLAS/own)=%.2fx rel_rms=%.3e PARITY=%s\n",
+               S,NST,PM,SWM,SBO,BOFF,tfo,tfc,ratio,rr,ratio<=1.3?"YES":"NO");
+        return 0;
+    }
 
     if(MODE==10){
         // ---- ROUTE-(a) single-tile differential over the pre-permute x descriptor family ----
