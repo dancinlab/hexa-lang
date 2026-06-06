@@ -438,6 +438,7 @@ on-silicon run with its own verdict:
 | W2/3 | wgmma GMMA INTER 8×4 layout | bit-exact (rel-RMS 0) @2048³ | layout SOLVED | `F-FUSION-SM90-WGMMA-GMMA-LAYOUT` |
 | W8 | TMA-producer dual-consumer-WG | bit-exact, **66.9 TFLOP/s** | **6.43×** off (2 CTA/SM) | `F-FUSION-SM90-WGMMA-W8` |
 | W10 | composed swizzle-decode (permute-free) | bit-exact, **70.7 TFLOP/s** ★ | **6.09×** off (2 CTA/SM, +5.7%) | `F-FUSION-SM90-WGMMA-W10` |
+| W13 | deep async decode ring (NSTG-deep gmma scratch) | bit-exact, 51.9 TFLOP/s @NSTG≥2 | 🔴 CLOSED-NEG — 1 CTA/SM (regresses 70.7); **TF32 async-pipeline axis EXHAUSTED** | `F-FUSION-SM90-WGMMA-W13` |
 
 **Ladder narrative (honest, g5):**
 1. **30.4× → 29.4×** is the only measured improvement: the mma.sync cuBLAS-class
@@ -522,16 +523,27 @@ the own-GEMM gap lifts the whole stack automatically.
       TFLOP/s (6.09×) @S=4096** (+5.7%, 75.5 @8192), ~6.3% of the gap closed. In-place wgmma HW swizzle descriptor =
       **CLOSED-NEG** (floor 1.392 ~40 cfgs, a 3rd interaction — HW de-swizzle ≠ TMA atom stacking). native sm_90a
       H100 (vast 39707146, DESTROYED leak 0, nvcc 12.6 driver 560.35.05). verdict `.verdicts/hexa-fusion/F-FUSION-SM90-WGMMA-W10.txt`.
-- [ ] **W11 deeper pipeline / decode elimination** ★ NEXT — the W10 decode is still a software shared→shared index
-      copy per K-slab (the +5.7%). Remaining 6.09× = (a) the decode copy (HW in-place RULED OUT — needs a wgmma
-      operand layout matching the TMA atom stacking) + (b) deeper warp-spec multi-stage (NST>2 regresses occupancy
-      at the current tile). Target: 6.09× toward ≤1.3× parity, bit-exact gate first.
+- [x] **W13 deep async decode ring** 🔴 CLOSED-NEG — attacked residual (b): ring the gmma decode scratch NSTG-deep
+      so decode(N+1) overlaps wgmma(N) (producer-ahead software pipeline, KEEP the W10 decode-copy per W12). BIT-EXACT
+      at NSTG≥2 (rel_rms 0) but ONE added 32 KB gmma band pushes smem 96→128 KB/CTA → occupancy **2→1 CTA/SM**, and
+      the overlap gain does NOT recover the halved occupancy: own **70.7 → 51.9 TFLOP/s @4096 (−27%)**. NSTG 2/3/4 flat
+      at 1 CTA/SM. The SAME wall W12 hit from the other side (W12 serializes to hold 2 CTA/SM; W13 overlaps but loses
+      it): **2 CTA/SM and decode/MMA overlap are MUTUALLY EXCLUSIVE** for this 128×128 FP32-scratch TF32 kernel. W10
+      70.7 frontier **KEPT (no regression)**. H100 (vast 39725711, DESTROYED leak 0, nvcc 12.6 driver 560.35.03).
+      verdict `.verdicts/hexa-fusion/F-FUSION-SM90-WGMMA-W13.txt`.
+- [x] **TF32 async-pipeline axis EXHAUSTED** — W8 (TMA-producer) + W9 (permute-removal) + W10 (composed decode) +
+      W12 (output-tile DEAD, decode/MMA overlap = wall) + W13 (deeper ring regresses occupancy) collectively close the
+      TF32 own-GEMM perf axis at **W10 70.7 TFLOP/s, 6.09× off cuBLAS-TF32, 2 CTA/SM, bit-exact**. The ONLY remaining
+      axis is the **precision change (FP16/BF16 wgmma)** — doubles tensor-core throughput AND a 16-bit gmma band is
+      16 KB (could fit 2 bands at 2 CTA/SM, reopening W13's overlap) — a SEPARATE dtype campaign with a non-bit-exact
+      (FP16 accumulation) gate. **RECOMMEND STOP on the TF32 perf axis.**
 
 **STATE**: correctness CLOSED (W2/W3 bit-exact). Occupancy CLOSED (W8/W10 2 CTA/SM). **Frontier = W10 `gemm_w10`
-70.7 TFLOP/s, 6.09×, 2 CTA/SM, bit-exact** (beats W8 66.5/6.44× by +5.7%). W9 proved the swizzle removes the
-per-K-step permute (SASS 28→0); W10 corrected the law to textbook g XOR r and **composed it with gmma_phys in
-software** to land a permute-free bit-exact GEMM that lifts the frontier. The in-place HW-descriptor path is
-CLOSED-NEG (3rd interaction). Parity OPEN, de-risked, own-GEMM-owned. cuBLAS = roofline, no superiority claim.
+70.7 TFLOP/s, 6.09×, 2 CTA/SM, bit-exact** (beats W8 66.5/6.44× by +5.7%) — the **TF32 SUMMIT**. W9 proved the
+swizzle removes the per-K-step permute (SASS 28→0); W10 corrected the law to textbook g XOR r and **composed it
+with gmma_phys in software** to land a permute-free bit-exact GEMM that lifts the frontier. The in-place HW-descriptor
+path (W10 MODE5) and the deeper async ring (W13) are both CLOSED-NEG. **TF32 async-pipeline axis EXHAUSTED** — only
+the precision-change (FP16/BF16) axis remains, a separate dtype campaign. cuBLAS = roofline, no superiority claim.
 
 ## 🎯 Session north-star — the 5 axes (2026-06-06)
 
@@ -539,7 +551,7 @@ Pinned by the user as this session's tracked axes. Two upstream "make it work" a
 
 | # | axis | what | status |
 |---|---|---|---|
-| 1 | own-GEMM perf — util on H100 too | sm_90a own-GEMM W-ladder toward cuBLAS parity (H100 low-util on D1536 = right-sizing: byte-eq D1536 saturates an RTX 5070 to 98%, an H100 to ~13%). W6 async-pipe 50.7 (8.39x) -> W7 dual-consumer closed-neg -> W8 TMA-producer 66.5 (6.44x, occupancy 1->2 CTA/SM) -> W9 swizzled-TMA | W9 in flight (W8 PR #2841) |
+| 1 | own-GEMM perf — util on H100 too | sm_90a own-GEMM W-ladder toward cuBLAS parity (H100 low-util on D1536 = right-sizing: byte-eq D1536 saturates an RTX 5070 to 98%, an H100 to ~13%). W6 50.7 (8.39x) -> W7 dual-consumer closed-neg -> W8 TMA-producer 66.5 (6.44x, 1->2 CTA/SM) -> W9 permute-removal proven -> **W10 composed-decode 70.7 (6.09x, 2 CTA/SM, bit-exact) ★ TF32 SUMMIT** -> W12 output-tile DEAD (wall = decode/MMA overlap) -> W13 deeper async ring 🔴 CLOSED-NEG (NSTG≥2 → 1 CTA/SM, 70.7→51.9). **TF32 async-pipeline axis EXHAUSTED — only FP16/BF16 precision-change axis remains (separate dtype campaign). RECOMMEND STOP on TF32.** | 🔴 axis EXHAUSTED at W10 70.7; W13 PR open |
 | 2 | cuBLAS-impossible parallel | persistent whole-step megakernel: a persistent kernel CANNOT call cuBLAS, so cuBLAS structurally caps fusion at the GEMM boundary. own-GEMM removed THAT wall (megakernel calls our device GEMM in-line); 2nd wall = the 2 GroupNorm full-y reductions need a grid-sync cooperative kernel (cudaLaunchCooperativeKernel + grid.sync) | GN grid-sync in flight |
 | 3 | reflect 1+2 -> dojo | fold the own-GEMM ladder + megakernel-wall story into stdlib/dojo (hexa-cuda track) | downstream of 1,2 |
 | 4 | reflect 1+2 -> README | flame.forge.hexa-cuda trinity GPU section (PR #2842 reorganized it); fold the W8/W9 numbers + both-walls-closed story | #2842 = 1st pass, numbers TODO |
