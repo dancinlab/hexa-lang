@@ -81,31 +81,39 @@ A binary appears only when every fatal stage passes. The atlas (4.2 MB) is baked
 
 * * *
 
-## 🔥 flame + 🔧 forge — hexa-native NN training stack + GPU substrate
+## 🔥 flame · 🔧 forge · ⚡ hexa-cuda — the hexa GPU stack (train · substrate · kernel-authoring)
 
 `stdlib/flame` is what you build *with* hexa-lang: a compiler-only neural-network training stdlib (autograd tape · layers · optimizers · tensor primitives) lowered through the same 8-stage strict-lint gate that compiles the compiler itself. No PyTorch wrapping, no ATen import, no Python in the trained binary.
 
 `self/forge` is what flame calls into: a GPU substrate that pairs device-resident hexa arrays (`farr`) with vendor-grade kernels (cuBLAS Dgemm + 11 hand-emit `.cu` kernels covering the elementwise / reduction / norm surface) under a byte-equal correctness contract, plus a BF16 Tensor-Core "mega-kernel" path (RFC 049/060) for the in-kernel-GEMM regime where vendor libs are reachable.
 
-**Architecture analogy** (`flame:forge :: torch:ATen`):
+`@gpu_kernel → nvptx` (**hexa-cuda**) is how you author a GPU kernel *without leaving hexa*: annotate a function `@gpu_kernel`, write it with the device intrinsics (`gpu_thread_id_x` · `@shared let` · `gpu_barrier` · `gpu_atomic_add` · `gpu_warp_shuffle`), and `hexa build --target=nvptx` emits ptxas-clean PTX for `sm_80` / `sm_90` — no `.cu`, no `nvcc`, no CUDA-C transpile (silicon-proven: vec-add / saxpy run bit-exact on a native H100). It is the kernel-authoring primitive that **forge**'s own device kernels and your own custom kernels both share; you practice it in `hexa dojo`.
+
+**The three pillars** (`flame:forge :: torch:ATen`, with hexa-cuda as the kernel-authoring leg both rest on):
 
 ```
               hexa source (.hexa)
                      │
-   ┌─────────────────┼─────────────────┐
-   │ flame stdlib (compiler-only NN)   │   ← what users write
-   │   t_* tensor · ag_tape autograd   │     (no Python in trained binary)
-   │   nn_lib layers · opt_* optimizer │
-   └─────────────────┬─────────────────┘
-                     │   hexa build (8-stage strict-lint gate)
+   ┌─────────────────┴───────────────────┐
+   │ 🔥 flame — NN training stdlib       │   ← what you TRAIN with
+   │   t_* tensor · ag_tape autograd     │     (no Python in the binary)
+   │   nn_lib layers · opt_* optimizer   │
+   └─────────────────┬───────────────────┘
+                     │  rides
                      ▼
-   ┌─────────────────────────────────┐
-   │ forge GPU substrate             │   ← what flame calls into
-   │   farr device-resident array    │     RFC 040
-   │   cuBLAS Dgemm  +  11 .cu       │     RFC 041
-   │   BF16-TC mega-kernel path      │     RFC 049 / 060
-   └─────────────────────────────────┘
-                     │
+   ┌─────────────────────────────────────┐
+   │ 🔧 forge — GPU substrate            │   ← what flame CALLS INTO
+   │   farr device array · own-GEMM      │     cuBLAS Dgemm + 11 .cu
+   │   BF16-TC mega-kernel               │     RFC 040/041/049/060
+   └─────────────────┬───────────────────┘
+                     │  device kernels authored in
+                     ▼
+   ┌─────────────────────────────────────┐
+   │ ⚡ hexa-cuda — @gpu_kernel → nvptx  │   ← how you WRITE a GPU kernel
+   │   gpu_thread_id · @shared · barrier │     hexa → PTX → sm_80 / sm_90
+   │   no .cu · no nvcc · compiler emits │     practice: `hexa dojo`
+   └─────────────────┬───────────────────┘
+                     │   hexa build (8-stage strict-lint gate)
                      ▼
               A100 / H100 native
 ```
