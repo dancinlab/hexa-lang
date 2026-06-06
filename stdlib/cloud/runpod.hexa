@@ -318,11 +318,18 @@ fn _runpod_create_api(api_key: str, gpu_type: str, image: str, pubkey: str, name
 fn runpod_create_vol(api_key: str, gpu_type: str, image: str, pubkey: str, name: str, volume_gb: int) -> RunPodPod {
     let rpc = _runpodctl_path()
     if len(rpc) > 0 {
-        let r = _runpod_create_cli(rpc, gpu_type, image, pubkey, name, volume_gb)
-        if r.ok == 1 {
-            return r
-        }
+        // runpodctl `pod create` is the SUPPORTED deploy path. RunPod retired
+        // the GraphQL `podFindAndDeployOnDemand` mutation (api.runpod.io →
+        // rest.runpod.io migration), so the API fallback below can no longer
+        // create pods — it only MASKS the CLI's real error (e.g. capacity
+        // "no longer any instances available", or a bad flag) behind a generic
+        // "no id (no capacity / bad input)". When runpodctl is present it is
+        // authoritative: surface ITS result — success OR the actual error — so
+        // the caller can react (switch GPU / cloud-type) instead of guessing.
+        return _runpod_create_cli(rpc, gpu_type, image, pubkey, name, volume_gb)
     }
+    // No runpodctl on this host — last-resort legacy GraphQL (likely dead;
+    // returns a clear failure that points at installing runpodctl).
     return _runpod_create_api(api_key, gpu_type, image, pubkey, name, volume_gb)
 }
 

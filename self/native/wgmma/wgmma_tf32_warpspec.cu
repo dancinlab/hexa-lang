@@ -532,13 +532,188 @@ extern "C" __global__ void gemm_ws_tma(const __grid_constant__ CUtensorMap tmapA
     }
 }
 
+// ======================================================================
+// MODE 5 — SWIZZLED-TMA DUAL-CONSUMER-WG WARPSPEC (W9, the diagnosed lever).
+//   W8 DIAGNOSIS (F-FUSION-SM90-WGMMA-W8): MODE 4 lands the TMA tile in a GENERIC
+//   row-major layout (Araw/Braw), then ALL 256 threads COOPERATIVELY PERMUTE it into
+//   the gmma INTER 8x4 layout EVERY K-step (+2 __syncthreads/K-step). cuBLAS never
+//   pays this — its TMA descriptor is SWIZZLED so the bulk copy LANDS the tile already
+//   in a wgmma-readable layout. The permute + its syncs are the prime suspect for the
+//   remaining 6.44x gap (the mainloop is now compute/permute-bound, not occupancy-bound).
+//
+//   THE W9 FIX: encode the A/B TMA descriptors with CU_TENSOR_MAP_SWIZZLE_128B and set
+//   the wgmma MATRIX DESCRIPTOR's swizzle-mode field to 128B so wgmma reads the swizzled
+//   shared tile DIRECTLY. The cooperative Araw/Braw->gmma permute + its 2 __syncthreads
+//   per K-step are ELIMINATED. The tile lands wgmma-ready; the mainloop is just
+//   {mbar_wait -> wgmma -> commit/wait -> re-arm TMA}.
+//
+//   SWIZZLE MATH (128B, TF32 4B): the TMA 128B-swizzle atom is 8 rows x 128 bytes =
+//   8 rows x 32 float32. Within the atom, the 16-byte granule column index g (0..7) is
+//   XORed with the row index r (0..7): g_phys = g XOR r. The wgmma 128B-swizzle
+//   descriptor (swizzle field = 1) applies the SAME g^r de-swizzle when reading core
+//   matrices, so a SWIZZLE_128B-landed tile is consumed natively — provided the
+//   descriptor's LBO (leading-dim byte offset between core-matrix columns) and SBO
+//   (stride byte offset between core-matrix rows along K) match the swizzled box.
+//   For the 128B-swizzle GMMA "K-major" canonical layout (the operand laid K-contiguous,
+//   which is exactly what a row-major-K TMA tile of A is, and N-contiguous for B):
+//     - leading byte offset (LBO) and stride byte offset (SBO) are the canonical
+//       128B-swizzle values; the descriptor START is the swizzled tile base.
+//   BOX GEOMETRY: TMA box for A = {TK_SW, TM} with the SWIZZLE-defining inner dim a
+//   multiple of the 128B atom (32 f32). With TK=8 the inner (K) dim is only 8 f32 (32B)
+//   < a 128B atom, so a 128B swizzle would need K>=32 to define one full atom row. We
+//   therefore widen the K-tile to TK_SW=32 (4 wgmma K-steps fused) for MODE 5 so the
+//   128B swizzle atom is fully defined along K (the swizzle granularity). The wgmma is
+//   STILL m64n64k8 (issued 4x over the 32-wide K tile), but the TMA + descriptor see a
+//   128B-swizzle-complete tile.
+//
+//   IF the 128B swizzle does NOT match the TF32 8x4 INTER core (a real risk — the INTER
+//   layout's per-quad core packing may not coincide with the linear 128B g^r swizzle),
+//   MODE 5 will FAIL the rel_rms gate and we KEEP the W8 66.5 frontier (no regression).
+//   MODE 6/7 try 64B / 32B swizzle as the LEVER-2 fallback.
+// ======================================================================
+// swizzled wgmma matrix descriptor: same base/LBO/SBO packing as mk(), PLUS the
+// swizzle-mode field (bits 62:63): 0=none 1=128B 2=64B 3=32B. (NVIDIA PTX ISA wgmma
+// shared-descriptor format.)
+__device__ __forceinline__ uint64_t mk_sw(uint32_t s,uint32_t lbo,uint32_t sbo,int swmode){
+    uint64_t d=0; d|=(uint64_t)((s>>4)&0x3FFF);
+    d|=((uint64_t)((lbo>>4)&0x3FFF))<<16; d|=((uint64_t)((sbo>>4)&0x3FFF))<<32;
+    d|=((uint64_t)(swmode&0x3))<<62; return d;
+}
+// 128B-swizzle physical index inside an 8-row x 32-f32 (128B) atom: column granule
+// (16B = 4 f32) index g is XORed with row r. elem (r in 0..7, c in 0..31):
+//   granule g=c>>2, within-granule w=c&3; g_phys = g ^ (r&7); phys = r*32 + g_phys*4 + w.
+__device__ __forceinline__ int sw128(int r,int c){
+    int g=c>>2, w=c&3, gp=g^(r&7); return r*32 + gp*4 + w;
+}
+
+// W9 swizzled-TMA kernel. RUNTIME-TUNABLE descriptor params so the on-pod session can
+// sweep candidate (swm, LBO, SBO, kstep) without recompiling — the swizzle<->8x4-INTER
+// interaction is the named risk; the bit-exact gate is the arbiter.
+//   swm    = wgmma descriptor swizzle mode (1=128B,2=64B,3=32B)
+//   TKSW   = K slab width landed by the swizzled TMA (32 for 128B, 16 for 64B, 8 for 32B)
+//   lbo    = descriptor leading byte offset (>>4 packed by mk_sw)
+//   sbo    = descriptor stride byte offset
+//   kstep  = 0: bump descriptor START by kk floats per k8 sub-step (naive);
+//            1: keep START at atom base, encode k8 sub-step by adding kk/2 to LBO-units
+//               (descriptor-internal stepping — the CUTLASS-style swizzle-safe path).
+extern "C" __global__ void gemm_ws_tma_sw(const __grid_constant__ CUtensorMap tmapA,
+                                          const __grid_constant__ CUtensorMap tmapB,
+                                          float* __restrict__ gD,int M,int N,int K,int NST,
+                                          int swm,int TKSW,int lbo,int sbo,int kstep){
+    const int TM=128,TN=128,TK=8;
+    int bm=blockIdx.y*TM, bn=blockIdx.x*TN;
+    extern __shared__ __align__(128) float sm[];
+    // per-stage: A swizzled tile (128 rows x TKSW f32) + B swizzled tile (TKSW rows x 128 f32).
+    // Both land DIRECTLY from the swizzled TMA — NO permute scratch, NO gmma re-lay.
+    const int ATILE=TM*TKSW, BTILE=TKSW*TN;
+    const int BUF=ATILE+BTILE;
+    uint64_t* full =(uint64_t*)(sm + (size_t)NST*BUF);
+    uint64_t* empty=full+NST;
+    int tid=threadIdx.x; int wg=tid>>7; int band=wg; int lt=tid&127;
+    int nks=K/TKSW;                            // number of TKSW-wide K slabs
+    // SWIZZLE constraint: TMA contiguous box dim must == swizzle atom width = TKSW f32.
+    // => B (contiguous=N) lands as NATOM = TN/TKSW side-by-side 32-N swizzled atoms.
+    const int NATOM = TN/TKSW;                 // 128/32 = 4 for 128B
+    const int BATOM = TKSW*TKSW;               // one 32-N x TKSW-K swizzled atom (floats)
+    const uint32_t bytesA=ATILE*4, bytesB=BTILE*4;
+    if(tid<NST){ mbar_init_tx(&full[tid],1); }
+    else if(tid<2*NST){ mbar_init_tx(&empty[tid-NST],256); }
+    __syncthreads();
+
+    float d0[32],d1[32];
+    #pragma unroll
+    for(int i=0;i<32;++i){d0[i]=0.f;d1[i]=0.f;}
+    uint32_t fph=0;
+    int stages=NST<nks?NST:nks;
+    if(tid==0){
+        for(int st=0;st<stages;++st){
+            float* base=sm+(size_t)st*BUF; float* As=base; float* Bs=base+ATILE;
+            mbar_expect_tx(&full[st], bytesA+bytesB);
+            tma_load_2d(As,&tmapA,/*x=k*/st*TKSW,/*y=m*/bm,&full[st]);
+            // B: NATOM loads of 32-N swizzled atoms, landed side-by-side.
+            #pragma unroll
+            for(int c=0;c<NATOM;++c)
+                tma_load_2d(Bs+(size_t)c*BATOM,&tmapB,/*x=n*/bn+c*TKSW,/*y=k*/st*TKSW,&full[st]);
+        }
+    }
+    for(int ki=0;ki<nks;++ki){
+        int st=ki%NST;
+        mbar_wait(&full[st], fph); if(st==NST-1) fph^=1;
+        float* base=sm+(size_t)st*BUF;
+        float* As=base; float* Bs=base+ATILE;
+        // NO PERMUTE. The SWIZZLE_128B TMA landed As/Bs already wgmma-readable.
+        // This WG consumes its own 64-row A band. A band base offset within the swizzled
+        // 128-row tile: band 0 = rows 0..63, band 1 = rows 64..127 (each row is 32 f32 = a
+        // full 128B atom row, so a 64-row band starts at band*64*TKSW floats).
+        float* Aband=As + band*64*TKSW;
+        asm volatile("wgmma.fence.sync.aligned;\n":::"memory");
+        // wgmma k8 sub-steps over the TKSW-wide K slab. Two stepping policies (kstep):
+        //  0 (naive): START bumps by kk floats; LBO/SBO encode the swizzle.
+        //  1 (desc-internal): START stays at atom base; the descriptor START field is
+        //     advanced by (kk/2)>>4-units inside mk_sw via an added byte offset, keeping
+        //     the swizzle XOR origin at the atom base (CUTLASS-style, swizzle-safe).
+        // B atoms: atom c (32-N) at Bs + c*BATOM. n64 wgmma dB0 -> atoms{0,1}, dB1 -> {2,3}.
+        float* B0=Bs;            // N 0..63   (atoms 0,1 adjacent)
+        float* B1=Bs + 2*BATOM;  // N 64..127 (atoms 2,3 adjacent)
+        uint32_t aAb=(uint32_t)__cvta_generic_to_shared(Aband);
+        uint32_t a0b=(uint32_t)__cvta_generic_to_shared(B0);
+        uint32_t a1b=(uint32_t)__cvta_generic_to_shared(B1);
+        #pragma unroll
+        for(int kk=0;kk<TKSW;kk+=TK){
+            // K-sub-step inside the swizzled atom. kstep selects START-bump vs desc-internal.
+            uint32_t aA,a0,a1;
+            if(kstep==0){
+                aA=aAb + (uint32_t)(kk*4);
+                a0=a0b + (uint32_t)(kk*4);
+                a1=a1b + (uint32_t)(kk*4);
+            }else{
+                // alternative: step by a full core-row (kk * atom-N) — swept on-pod.
+                aA=aAb + (uint32_t)(kk*TKSW*4);
+                a0=a0b + (uint32_t)(kk*TKSW*4);
+                a1=a1b + (uint32_t)(kk*TKSW*4);
+            }
+            uint64_t dA=mk_sw(aA,lbo,sbo,swm), dB0=mk_sw(a0,lbo,sbo,swm), dB1=mk_sw(a1,lbo,sbo,swm);
+            WG(d0,dA,dB0);
+            WG(d1,dA,dB1);
+        }
+        asm volatile("wgmma.commit_group.sync.aligned;\n"
+                     "wgmma.wait_group.sync.aligned 0;\n":::"memory");
+        __syncthreads();
+        if(tid==0){
+            int load_ki=ki+stages;
+            if(load_ki<nks){
+                int lst=load_ki%NST;
+                float* lb=sm+(size_t)lst*BUF; float* lAs=lb; float* lBs=lb+ATILE;
+                mbar_expect_tx(&full[lst], bytesA+bytesB);
+                tma_load_2d(lAs,&tmapA,load_ki*TKSW,bm,&full[lst]);
+                #pragma unroll
+                for(int c=0;c<NATOM;++c)
+                    tma_load_2d(lBs+(size_t)c*BATOM,&tmapB,bn+c*TKSW,load_ki*TKSW,&full[lst]);
+            }
+        }
+    }
+    int rbase=bm+band*64;
+    int w=lt>>5,l=lt&31,rb=w*16+(l>>2),cb=(l&3)*2;
+    #pragma unroll
+    for(int c=0;c<8;++c)for(int r=0;r<2;++r)for(int p=0;p<2;++p){
+        int idx=c*4+r*2+p,row=rbase+rb+r*8;
+        int col0=bn+cb+p+c*8, col1=bn+64+cb+p+c*8;
+        if(row<M&&col0<N)gD[row*N+col0]=d0[idx];
+        if(row<M&&col1<N)gD[row*N+col1]=d1[idx];
+    }
+}
+
 static inline float tf(float x){uint32_t u;memcpy(&u,&x,4);u=(u+0x1000u)&0xFFFFE000u;float r;memcpy(&r,&u,4);return r;}
 
 int main(int argc,char**argv){
     int S=argc>1?atoi(argv[1]):2048; int MODE=argc>2?atoi(argv[2]):1; int NST=argc>3?atoi(argv[3]):3;
+    // W9 swizzled-TMA tunables (MODE 5/6/7): argv 4=lbo 5=sbo 6=kstep (defaults = the
+    // canonical 128B-swizzle guess; on-pod sweep overrides without recompiling).
+    int ARG_LBO=argc>4?atoi(argv[4]):16; int ARG_SBO=argc>5?atoi(argv[5]):1024; int ARG_KSTEP=argc>6?atoi(argv[6]):0;
     int M=S,N=S,K=S;
     if(N%128){printf("N must be multiple of 128\n");return 1;}
     if(K%16){printf("K must be multiple of 16\n");return 1;}
+    if(MODE==5&&K%32){printf("MODE5 needs K%%32==0 (128B swizzle atom)\n");return 1;}
     size_t szA=(size_t)M*K,szB=(size_t)K*N,szD=(size_t)M*N;
     float *hA=(float*)malloc(szA*4),*hB=(float*)malloc(szB*4),*hD=(float*)malloc(szD*4),*hR=(float*)malloc(szD*4);
     srand(7);
@@ -552,36 +727,50 @@ int main(int argc,char**argv){
     CB(cublasSgemm(h,CUBLAS_OP_N,CUBLAS_OP_N,N,M,K,&al,dB,N,dA,K,&be,dR,N));CK(cudaDeviceSynchronize());
     CK(cudaMemcpy(hR,dR,szD*4,cudaMemcpyDeviceToHost));
 
-    // ---- MODE 4 TMA tensor maps for A (MxK) and B (KxN), row-major ----
+    // ---- MODE 4 (no-swizzle) + MODE 5/6/7 (128B/64B/32B swizzle) TMA tensor maps ----
+    // MODE 5/6/7 widen the TMA K-box to TKSW so the swizzle atom is fully defined along K:
+    //   128B atom = 32 f32 (MODE5), 64B = 16 (MODE6), 32B = 8 (MODE7).
     CUtensorMap tmapA{}, tmapB{};
-    if(MODE==4){
+    bool isSw = (MODE>=5 && MODE<=7);
+    int TKSW = (MODE==5)?32:(MODE==6)?16:(MODE==7)?8:8;
+    CUtensorMapSwizzle swz = (MODE==5)?CU_TENSOR_MAP_SWIZZLE_128B:
+                             (MODE==6)?CU_TENSOR_MAP_SWIZZLE_64B:
+                             (MODE==7)?CU_TENSOR_MAP_SWIZZLE_32B:CU_TENSOR_MAP_SWIZZLE_NONE;
+    if(MODE==4 || isSw){
         void* fn=nullptr; cudaDriverEntryPointQueryResult q;
         cudaGetDriverEntryPoint("cuTensorMapEncodeTiled",&fn,cudaEnableDefault,&q);
         typedef CUresult (*Enc_t)(CUtensorMap*,CUtensorMapDataType,cuuint32_t,void*,
             const cuuint64_t*,const cuuint64_t*,const cuuint32_t*,const cuuint32_t*,
             CUtensorMapInterleave,CUtensorMapSwizzle,CUtensorMapL2promotion,CUtensorMapFloatOOBfill);
         Enc_t enc=(Enc_t)fn;
-        if(!enc){printf("MODE4: cuTensorMapEncodeTiled unavailable (CUDA<12?)\n");return 4;}
-        // A row-major MxK: global dims {K,M} (fastest=K), box tile {TK=8, TM=128}.
+        if(!enc){printf("MODE%d: cuTensorMapEncodeTiled unavailable (CUDA<12?)\n",MODE);return 4;}
+        int tk = isSw?TKSW:8;   // K box width (swizzle-atom-complete for sw modes)
+        // A row-major MxK: global dims {K,M} (fastest=K), box tile {tk, TM=128}.
         { cuuint64_t gd[2]={(cuuint64_t)K,(cuuint64_t)M}; cuuint64_t gs[1]={(cuuint64_t)K*4};
-          cuuint32_t bd[2]={8,128}; cuuint32_t es[2]={1,1};
+          cuuint32_t bd[2]={(cuuint32_t)tk,128}; cuuint32_t es[2]={1,1};
           CUresult r=enc(&tmapA,CU_TENSOR_MAP_DATA_TYPE_FLOAT32,2,dA,gd,gs,bd,es,
-            CU_TENSOR_MAP_INTERLEAVE_NONE,CU_TENSOR_MAP_SWIZZLE_NONE,
+            CU_TENSOR_MAP_INTERLEAVE_NONE,swz,
             CU_TENSOR_MAP_L2_PROMOTION_NONE,CU_TENSOR_MAP_FLOAT_OOB_FILL_NONE);
-          if(r!=CUDA_SUCCESS){printf("MODE4: encodeA r=%d\n",(int)r);return 4;} }
-        // B row-major KxN: global dims {N,K} (fastest=N), box tile {TN=128, TK=8}.
+          if(r!=CUDA_SUCCESS){printf("MODE%d: encodeA r=%d\n",MODE,(int)r);return 4;} }
+        // B row-major KxN: global dims {N,K} (fastest=N). For SWIZZLE the CONTIGUOUS box
+        // dim (N) must equal the swizzle atom width = 32 f32 (128B) / 16 (64B) / 8 (32B).
+        // MODE 4 (no swizzle): keep the full 128-wide N box. Swizzle: box N = tk-sized atom;
+        // the kernel issues TN/atom (=4 for 128B) B TMA loads of side-by-side 32-N atoms.
+        int bN = isSw?tk:128;   // for 128B-sw, bN=32; atoms across N = 128/bN
         { cuuint64_t gd[2]={(cuuint64_t)N,(cuuint64_t)K}; cuuint64_t gs[1]={(cuuint64_t)N*4};
-          cuuint32_t bd[2]={128,8}; cuuint32_t es[2]={1,1};
+          cuuint32_t bd[2]={(cuuint32_t)bN,(cuuint32_t)tk}; cuuint32_t es[2]={1,1};
           CUresult r=enc(&tmapB,CU_TENSOR_MAP_DATA_TYPE_FLOAT32,2,dB,gd,gs,bd,es,
-            CU_TENSOR_MAP_INTERLEAVE_NONE,CU_TENSOR_MAP_SWIZZLE_NONE,
+            CU_TENSOR_MAP_INTERLEAVE_NONE,swz,
             CU_TENSOR_MAP_L2_PROMOTION_NONE,CU_TENSOR_MAP_FLOAT_OOB_FILL_NONE);
-          if(r!=CUDA_SUCCESS){printf("MODE4: encodeB r=%d\n",(int)r);return 4;} }
+          if(r!=CUDA_SUCCESS){printf("MODE%d: encodeB r=%d\n",MODE,(int)r);return 4;} }
     }
 
-    // MODE 3/4 tile M by 128 (dual-consumer-WG); all others by 64.
-    int TMm = (MODE==3||MODE==4)?128:64;
+    // MODE 3/4/5/6/7 tile M by 128 (dual-consumer-WG); all others by 64.
+    int TMm = (MODE==3||MODE==4||isSw)?128:64;
     dim3 grid(N/128,(M+TMm-1)/TMm);
-    int blk = (MODE==3)?384:(MODE==2||MODE==4)?256:128;
+    int blk = (MODE==3)?384:(MODE==2||MODE==4||isSw)?256:128;
+    // MODE 5/6/7 swizzled-TMA per-stage shared = A(128*TKSW)+B(TKSW*128) floats + 2*NST mbar.
+    size_t sw_sm = (size_t)NST*((size_t)128*TKSW + (size_t)TKSW*128)*4 + (size_t)2*NST*8;
     // MODE 3 per-stage shared = 2*(64*8) + 2*(8*64) + 8*128 floats, + 2*NST mbarriers.
     size_t ws2_sm = (size_t)NST*((size_t)2*64*8 + 2*8*64 + 8*128)*4 + (size_t)2*NST*8;
     // MODE 4 per-stage = Araw(128*8)+Braw(8*128)+2*(64*8)+2*(8*64) floats, + 2*NST mbarriers.
@@ -596,8 +785,11 @@ int main(int argc,char**argv){
             gemm_ws<<<grid,blk,smsz>>>(dA,dB,dD,M,N,K,NST); }
         else if(MODE==3){ smsz=ws2_sm;
             gemm_ws2<<<grid,blk,smsz>>>(dA,dB,dD,M,N,K,NST); }
-        else { smsz=tma_sm;
+        else if(MODE==4){ smsz=tma_sm;
             gemm_ws_tma<<<grid,blk,smsz>>>(tmapA,tmapB,dD,M,N,K,NST); }
+        else { smsz=sw_sm;   // MODE 5/6/7 swizzled-TMA
+            int swm=(MODE==5)?1:(MODE==6)?2:3;
+            gemm_ws_tma_sw<<<grid,blk,smsz>>>(tmapA,tmapB,dD,M,N,K,NST,swm,TKSW,ARG_LBO,ARG_SBO,ARG_KSTEP); }
     };
     CK(cudaMemset(dD,0,szD*4));
     if(MODE==1){ CK(cudaFuncSetAttribute(gemm_apipe,cudaFuncAttributeMaxDynamicSharedMemorySize,
@@ -608,13 +800,16 @@ int main(int argc,char**argv){
         (int)ws2_sm)); }
     if(MODE==4){ CK(cudaFuncSetAttribute(gemm_ws_tma,cudaFuncAttributeMaxDynamicSharedMemorySize,
         (int)tma_sm)); }
+    if(isSw){ CK(cudaFuncSetAttribute(gemm_ws_tma_sw,cudaFuncAttributeMaxDynamicSharedMemorySize,
+        (int)sw_sm)); }
     // ---- occupancy proxy (the W8 success metric): CTAs/SM for the launched kernel ----
     { int occ=0; int dynsm=(int)(MODE==0?2*((size_t)64*8+2*8*64)*4:
         MODE==1?(size_t)NST*((size_t)64*8+2*8*64+8*128)*4:
         MODE==2?(size_t)NST*((size_t)64*8+2*8*64+8*128)*4+(size_t)2*NST*8:
-        MODE==3?ws2_sm:tma_sm);
+        MODE==3?ws2_sm:MODE==4?tma_sm:sw_sm);
       const void* kf=(MODE==0?(const void*)gemm_w5:MODE==1?(const void*)gemm_apipe:
-        MODE==2?(const void*)gemm_ws:MODE==3?(const void*)gemm_ws2:(const void*)gemm_ws_tma);
+        MODE==2?(const void*)gemm_ws:MODE==3?(const void*)gemm_ws2:
+        MODE==4?(const void*)gemm_ws_tma:(const void*)gemm_ws_tma_sw);
       cudaOccupancyMaxActiveBlocksPerMultiprocessor(&occ,kf,blk,(size_t)dynsm);
       printf("OCCUPANCY MODE=%d blk=%d dynsmem=%dB -> %d CTA/SM (%d compute-thr/SM)\n",
              MODE,blk,dynsm,occ,occ*blk);
@@ -625,7 +820,9 @@ int main(int argc,char**argv){
     CK(cudaMemcpy(hD,dD,szD*4,cudaMemcpyDeviceToHost));
     double se=0,sr=0;for(size_t i=0;i<szD;++i){double dd=(double)hD[i]-hR[i];se+=dd*dd;sr+=(double)hR[i]*hR[i];}
     double rr=sqrt(se/fmax(1e-30,sr));
-    if(rr>3e-3){printf("WS S=%d MODE=%d NST=%d rel_rms=%.3e FAIL — no perf (g5)\n",S,MODE,NST,rr);return 2;}
+    char ftag[48]=""; if(isSw) snprintf(ftag,48," lbo=%d sbo=%d kstep=%d",ARG_LBO,ARG_SBO,ARG_KSTEP);
+    if(rr>3e-3){printf("WS S=%d MODE=%d NST=%d%s rel_rms=%.3e FAIL — no perf (g5)\n",
+        S,MODE,NST,ftag,rr);return 2;}
     cudaEvent_t s0,s1;CK(cudaEventCreate(&s0));CK(cudaEventCreate(&s1));int it=20;
     launch();CK(cudaDeviceSynchronize());
     CK(cudaEventRecord(s0));for(int i=0;i<it;++i)launch();
@@ -637,7 +834,8 @@ int main(int argc,char**argv){
     CK(cudaEventRecord(s1));CK(cudaEventSynchronize(s1));
     float mc;CK(cudaEventElapsedTime(&mc,s0,s1));mc/=it;
     double tfc=fl/(mc*1e-3)/1e12,ratio=tfc/tfo;
-    printf("WS S=%d MODE=%d NST=%d own=%.1f TFLOP/s cuBLAS-TF32=%.1f ratio(cuBLAS/own)=%.2fx rel_rms=%.3e PARITY=%s\n",
-           S,MODE,NST,tfo,tfc,ratio,rr,ratio<=1.3?"YES":"NO");
+    char swtag[48]=""; if(isSw) snprintf(swtag,48," lbo=%d sbo=%d kstep=%d",ARG_LBO,ARG_SBO,ARG_KSTEP);
+    printf("WS S=%d MODE=%d NST=%d%s own=%.1f TFLOP/s cuBLAS-TF32=%.1f ratio(cuBLAS/own)=%.2fx rel_rms=%.3e PARITY=%s\n",
+           S,MODE,NST,swtag,tfo,tfc,ratio,rr,ratio<=1.3?"YES":"NO");
     return 0;
 }

@@ -297,7 +297,9 @@ dojo_preflight_mem() {
 dojo_preflight_mem_coarse() {
     local params="$1" pdt="$2" opt="$3" ddp="$4" grad_ckpt="$5" gpu="$6"
     local pb gb ob cap
-    case "$pdt" in f64) pb=8;; f32) pb=4;; tf32) pb=4;; bf16|f16|fp16) pb=2;; fp8|i8) pb=1;; *) pb=4;; esac
+    # dtype aliases mirror stdlib/cloud/preflight.hexa _dtype_bytes:
+    # fp64=f64 · fp32=f32 · fp16=f16 (bitsandbytes/torch-world spelling).
+    case "$pdt" in f64|fp64) pb=8;; f32|fp32) pb=4;; tf32) pb=4;; bf16|f16|fp16) pb=2;; fp8|i8) pb=1;; *) pb=4;; esac
     gb="$pb"
     case "$opt" in
         adamw|adam) ob=8;;
@@ -513,6 +515,14 @@ _dojo_self_test() {
         printf '  [FAIL] fix#5 7B fp32 should OOM H100-80GB\n'; fail=1; else printf '  [ok] fix#5 7B fp32 OOMs H100-80GB (blocked)\n'; fi
     if dojo_preflight_mem_coarse 7000000000 f32 adamw 8 0 h200-141gb >/dev/null 2>&1; then
         printf '  [ok] fix#5 7B fp32 fits H200-141GB\n'; else printf '  [FAIL] fix#5 7B fp32 should fit H200\n'; fail=1; fi
+
+    # dtype-alias: the bitsandbytes/torch-world `fp32` spelling (used by the
+    # docs + emitted run.sh DOJO_DTYPE=fp32) must map to the SAME byte width
+    # as the canonical hexa `f32` — same OOM/fit verdict on both surfaces.
+    if dojo_preflight_mem_coarse 7000000000 fp32 adamw 8 0 h100-80gb >/dev/null 2>&1; then
+        printf '  [FAIL] dtype-alias fp32 should OOM H100 like f32\n'; fail=1; else printf '  [ok] dtype-alias fp32 == f32 (OOMs H100-80GB)\n'; fi
+    if dojo_preflight_mem_coarse 7000000000 fp32 adamw 8 0 h200-141gb >/dev/null 2>&1; then
+        printf '  [ok] dtype-alias fp32 == f32 (fits H200-141GB)\n'; else printf '  [FAIL] dtype-alias fp32 should fit H200 like f32\n'; fail=1; fi
 
     # fix #6: torchrun command carries --tee 3 + --redirect 3 --log-dir
     local tc; tc=$(dojo_torchrun_cmd 8 train.py --foo bar)

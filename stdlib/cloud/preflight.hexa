@@ -27,11 +27,17 @@ fn _gib() -> int { return 1073741824 }
 // ── dtype byte width ─────────────────────────────────────────────────
 
 // _dtype_bytes — return the byte width of a parameter / gradient dtype.
-// Recognized: "f64" "f32" "tf32" "bf16" "f16" "i8" "fp8" "i4".
+// Recognized canonical hexa tokens: "f64" "f32" "tf32" "bf16" "f16"
+// "i8" "fp8" "i4". Also accepts the bitsandbytes/torch-world ALIASES
+// "fp64"→f64, "fp32"→f32, "fp16"→f16 so a spec authored with the
+// fp-prefixed names (DOJO_DTYPE=fp32, docs + emitted run.sh) maps cleanly
+// onto the hexa byte-width table — the two surfaces agree end-to-end.
 // Unknown returns 0 (caller treats as configuration error).
 fn _dtype_bytes(dt: str) -> int {
     if dt == "f64" { return 8 }
+    if dt == "fp64" { return 8 }
     if dt == "f32" { return 4 }
+    if dt == "fp32" { return 4 }
     if dt == "tf32" { return 4 }
     if dt == "bf16" { return 2 }
     if dt == "f16" { return 2 }
@@ -603,7 +609,8 @@ fn _preflight_help() {
     println("optimizers: sgd · sgd-momentum · adamw · adamw-amp-fp16 · adamw-8bit ·")
     println("            paged-adamw-8bit · lion · zero2 · zero3")
     println("")
-    println("dtypes: f64 · f32 · tf32 · bf16 · f16 · fp16 · i8 · fp8 · i4")
+    println("dtypes: f64 · f32 · tf32 · bf16 · f16 · i8 · fp8 · i4")
+    println("        (aliases: fp64=f64 · fp32=f32 · fp16=f16)")
     println("")
     println("gpu tiers (key):")
     println("  rtx-3060-12gb · rtx-4070-12gb · rtx-5070-12gb · rtx-4080-16gb")

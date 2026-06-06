@@ -492,21 +492,26 @@ the own-GEMM gap lifts the whole stack automatically.
       a 128-thread cp.async producer WG at TM=128 is **register-bound to 1 block/SM** (90 regs × 384 thr;
       2 CTAs = 69120 > 65536 regs/SM) → 256 compute-thr/SM vs async-pipe's 4×128 = 512. More consumer WGs cannot win
       while the producer eats a full WG AND evicts the 2nd resident CTA. verdict: `.verdicts/hexa-fusion/F-FUSION-SM90-WGMMA-W7.txt`.
-- [x] **W8 TMA-driven production (single elected thread + dual-consumer-WG)** ✅ BIG-PROGRESS — `MODE 4 gemm_ws_tma`:
-      thread 0 issues `cp.async.bulk.tensor.2d` for the A-band+B into an NST ring (mbarrier expect_tx); the other 255
-      threads are BOTH consumer warpgroups. H100 sm_90a (vast 39701877 DESTROYED leak 0, nvcc 12.6). **BIT-EXACT**
-      (rel_rms **0** @ S=2048..8192, NST=2..4). **own 50.7 → 66.5 TFLOP/s @4096³ (+31%); 69.6 @8192³**; ratio
-      **8.39× → 6.44×** off cuBLAS-TF32 (~428–456). **OCCUPANCY ROSE 1 → 2 CTA/SM** (512 vs 384 compute-thr/SM) —
-      the W8 success proxy ACHIEVED: TMA producer freed the WG + shrank the CTA 384→256 thr (120 regs·256 = 30,720/CTA,
-      2 CTAs = 61,440 < 65,536 regs/SM). The dual-consumer-WG geometry W7 wanted FINALLY pays once the producer stops
-      eating a full WG. **~26% of the 8.39×→1.0× parity gap closed.** PARITY=NO (6.44×). verdict: `.verdicts/hexa-fusion/F-FUSION-SM90-WGMMA-W8.txt`.
-- [ ] **W9 swizzled-TMA (eliminate the cooperative permute)** ★ NEXT — frontier is now COMPUTE/MAINLOOP-bound, not
-      occupancy-bound. `CU_TENSOR_MAP_SWIZZLE_128B` so the TMA tile lands wgmma-readable → KILL the per-K-step
-      Araw/Braw→gmma permute (+ its 2 `__syncthreads`) that cuBLAS never pays. Plus deeper-TK accumulator double-buffer
-      + n=256 (m64n256k8). Target: **6.44× → toward ≤1.3×**. Frontier kernel = W8 `gemm_ws_tma` (66.5, 6.44×, 2 CTA/SM).
+- [x] **W8 TMA-driven production** ✅ BIG-PROGRESS — `cp.async.bulk.tensor.2d` + a SINGLE elected producer thread
+      (freeing 255) → BOTH warpgroups consume, CTA shrinks 384→256 thr. MODE 4 `gemm_ws_tma`. native sm_90a H100
+      (vast 39701877, DESTROYED leak 0, nvcc 12.6). **BIT-EXACT** rel_rms **0** @ S=2048..8192. own **50.7 → 66.5
+      TFLOP/s** @4096 (+31%; 69.6 @8192) → **6.44×** off cuBLAS. **Occupancy 1 → 2 CTA/SM** (the W7-predicted fix,
+      measured). ~26% of the parity gap closed. PARITY=NO. verdict `.verdicts/hexa-fusion/F-FUSION-SM90-WGMMA-W8.txt`.
+- [~] **W9 swizzled-TMA (drop the per-K-step permute)** — 🟡 CLOSED-NEG (naive) + mechanism PROVEN + frontier KEPT.
+      MODE 5 `gemm_ws_tma_sw`: `CU_TENSOR_MAP_SWIZZLE_128B` so the tile lands wgmma-ready. native sm_90a H100
+      (vast 39704602, DESTROYED leak 0, nvcc 12.6). **PERMUTE REMOVED — SASS-proven** (gemm_ws_tma STS=28 →
+      gemm_ws_tma_sw STS=0, one __syncthreads dropped), **occupancy 2 CTA/SM preserved**. BUT **bit-exact GATE FAIL**:
+      rel_rms FLOOR **1.392** across ~100 (lbo×sbo×kstep) descriptor configs (lbo inert) → NO perf number (g5).
+      ROOT CAUSE measured: the FP32 128B-swizzle is **g_phys = g XOR ((r+1)&7)** (NOT textbook g XOR r), and it must
+      STILL compose with the 8×4 INTER core (gmma_phys) — a two-layer permutation one linear descriptor can't express.
+      W8 66.9/6.41× frontier **KEPT (no regression)**. verdict `.verdicts/hexa-fusion/F-FUSION-SM90-WGMMA-W9.txt`.
+- [ ] **W10 composed swizzle layout** ★ NEXT — compose the W9-MEASURED swizzle (g XOR ((r+1)&7)) with `gmma_phys`
+      to derive the EXACT shared layout the wgmma swizzle-mode-1 descriptor needs; make TMA land it (CUTLASS
+      GMMA::Layout derivation, now with the on-pod constant in hand). Verify on a single-tile decode probe to
+      rel_rms 0 BEFORE any 2048³ perf run. Target: drop the permute bit-exact → 6.44× toward ≤1.3× parity.
 
-**STATE**: correctness CLOSED (W2/W3 bit-exact). **W8 CONFIRMED the W7 diagnosis**: the wall WAS the production
-engine — a single-elected-thread HARDWARE TMA producer fixes the occupancy (1 → 2 CTA/SM) and LIFTS the frontier
-50.7 → 66.5 (+31%), gap 8.39× → 6.44×. The frontier is now compute/mainloop-bound (the cooperative gmma permute), NOT
-occupancy / NOT layout / NOT emit-path / NOT 불가. Frontier kernel = W8 `gemm_ws_tma`. Parity OPEN, further de-risked,
-own-GEMM-owned. cuBLAS = roofline, no superiority claim.
+**STATE**: correctness CLOSED (W2/W3 bit-exact). Occupancy CLOSED (W8 2 CTA/SM, **66.5 TFLOP/s, 6.44×**). W9 PROVED
+the swizzle mechanically removes the per-K-step permute (SASS 28→0 STS) at full occupancy, but the naive linear-
+swizzle descriptor is bit-wrong (rel_rms 1.392) — the residual is now a MEASURED, recoverable layout-composition
+(W10: g XOR ((r+1)&7) ∘ gmma_phys), NOT emit-path / NOT occupancy / NOT 불가. Frontier kernel = W8 `gemm_ws_tma`
+(66.5, 6.44×, 2 CTA/SM, bit-exact). Parity OPEN, de-risked, own-GEMM-owned. cuBLAS = roofline, no superiority claim.
