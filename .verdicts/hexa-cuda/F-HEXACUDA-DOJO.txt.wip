@@ -1,3 +1,0 @@
-=== F-HEXACUDA-DOJO-OWNGEMM — WIP (authoring in progress) ===
-branch: domain/dojo-reflect-owngemm
-Reflecting the landed sm_90a own-GEMM W-ladder + megakernel two-wall arc into the dojo.
