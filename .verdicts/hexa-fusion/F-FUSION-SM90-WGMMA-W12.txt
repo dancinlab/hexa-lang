@@ -1,0 +1,103 @@
+F-FUSION-SM90-WGMMA-W12 — the COUPLED LEVER (128x256 tile + warp-spec + smem shrink) on the W10 frontier
+=========================================================================================================
+verdict-tier: 🔴 CLOSED-NEGATIVE (bit-exact rel_rms 0 throughout). The (b) smem-shrink RESTORES
+              2 CTA/SM (the W11-pinned occupancy gate) but the ONLY scratch-shrink that keeps
+              the proven composed-decode — per-K8-sub decode — SERIALIZES decode<->wgmma (a
+              __syncthreads + a fresh decode launch per K8 sub-step, 4x the sync/decode of the
+              W10/W11 full-slab scratch), collapsing own to 26.1 TFLOP/s @4096 (vs W10 70.3).
+              The (a) warp-spec register-realloc form (separate producer warpgroup + setmaxnreg
+              40/232) is UNREALIZABLE on this kernel: ptxas IGNORED setmaxnreg (C7507, the
+              d0..d3 256-element accumulator register pressure forces minimum regs) AND the
+              separate-producer-WG mbarrier handshake DEADLOCKED (timeout-killed, exit 124).
+              A genuine closed-negative that deterministically rules out the litscan
+              tile<->warp-spec coupling ON THIS TF32 KERNEL: the smem ceiling can be met
+              (108KB < 114KB, 2 CTA/SM) but ONLY by a decode-serialization that costs far more
+              than the occupancy win, and the register-realloc that would hide it cannot be
+              granted under the bigger tile's accumulator footprint. The W10 70.7/6.09x frontier
+              is KEPT — NO regression shipped.
+date: 2026-06-06
+GPU: NVIDIA H100 80GB HBM3, compute_cap 9.0, driver 580.95.05
+     (vast pod 39719243, machine 58634, ssh8.vast.ai, DESTROYED immediately after capture — leak 0)
+toolchain: nvcc 12.6 (V12.6.77), -O3 -arch=sm_90a -lcublas -lcuda
+kernels: self/native/wgmma/wgmma_tf32_w12.cu
+           gemm_w12b  = MODE 10 (LEVER (b) per-K8-sub decode ONLY, 256 thr / 2 consumer WGs)
+           gemm_w12   = MODE 9  (LEVER (a)+(b) separate producer WG + setmaxnreg + sub-decode)
+         reuses self/native/wgmma/wgmma_tf32_w10_lib.h VERBATIM (W10 composed-decode law +
+         mbar/TMA/WG/mk helpers UNCHANGED). cuBLAS-TF32 = ROOFLINE. NO superiority claim.
+
+================= THE COUPLED LEVER ATTACKED (W12, handoff 6068c270) =========================
+  (a) warp-spec register realloc — setmaxnreg.dec 40 (producer WG) / setmaxnreg.inc 232
+      (consumer WGs), single-elected-thread TMA producer + 2 consumer warpgroups over 128x256.
+  (b) shrink the 128x256 smem under ~114 KB/CTA by ELIMINATING the W10 full-K-slab decode-copy
+      scratch — emit the wgmma operand directly per-K8-sub (the proven composed-decode index is
+      UNCHANGED, just emitted one K8 sub-tile at a time instead of per-slab). HW in-place
+      swizzle was RULED OUT in W10 (rel_rms floor 1.392) — this is a consumer-side layout-emit.
+
+================= SINGLE-TILE GATES — PASS (the gate, BEFORE any perf number, g5) ============
+  W10 MODE 0 composed-decode single-tile:   exact 4096/4096   rel_rms 0.000e+00  PASS
+  W10 MODE 1 composed-decode -> wgmma:       exact 4096/4096   rel_rms 0.000e+00  PASS
+  => W12 reuses the SAME composed index; the law is unchanged and bit-exact. Perf numbers
+     below were not produced until these gates were rel_rms 0.
+
+================= SAME-BINARY BASELINE (apples, this pod) ====================================
+  W10 gemm_w10 MODE 4 @S=4096 NST=2:  OCCUPANCY 2 CTA/SM (512 compute-thr/SM, smem 98336B)
+    own 70.3 TFLOP/s   cuBLAS-TF32 428.7   ratio 6.10x   rel_rms 0.000e+00
+  (matches the W10 #2847 frontier 70.7 / 6.09x — same kernel, same pod, re-measured.)
+
+================= LEVER (b) — MODE 10 (per-K8-sub decode, 128x256) — bit-exact + perf =========
+  ALL rel_rms 0.000e+00 (bit-exact preserved).
+  smem 110608B (108.0 KB/CTA) -> OCCUPANCY 2 CTA/SM (512 thr/SM) @NST=2  >>> 2 CTA/SM RESTORED
+    S=4096 NST=2  own 26.1  cuBLAS 435.5  ratio 16.66x   (2 CTA/SM, 108KB)
+    S=4096 NST=3  own 26.0  cuBLAS 435.1  ratio 16.73x   (1 CTA/SM, 156KB)
+    S=2048 NST=2  own 18.8  cuBLAS 356.3  ratio 18.99x
+    S=8192 NST=2  own 26.7  cuBLAS 461.8  ratio 17.27x
+  => OCCUPANCY GOAL MET (108KB < 114KB ceiling -> 2 CTA/SM, the W11 gating dependency RESOLVED)
+     but own COLLAPSES to ~26 TFLOP/s. ptxas C7511: wgmma serialized (insufficient regs). The
+     per-K8-sub decode adds a __syncthreads + a fresh 6-buffer decode per K8 sub-step (4x the
+     W10/W11 full-slab scratch's sync/decode), serializing decode<->wgmma. The decode-copy
+     scratch the spec named as the residual CANNOT be shrunk without serializing the very
+     decode/MMA overlap that made the 70.7 frontier fast. Occupancy was never the W10 wall;
+     decode/MMA pipelining is. Restoring 2 CTA/SM did NOT transfer to throughput.
+
+================= LEVER (a)+(b) — MODE 9 (warp-spec + sub-decode) — UNREALIZABLE =============
+  BUILD: ptxas C7507 'setmaxnreg ignored to maintain minimum register requirements' — the
+         d0..d3 (4x32 = 128 accumulator regs/thread) of the 128x256 tile forces minimum regs,
+         so the producer/consumer 40/232 asymmetry CANNOT be granted. (a) does not take effect.
+  RUN:   DEADLOCK on both NST=2 and NST=3 (timeout -k5 90 -> exit 124, killed; the separate-
+         producer-warpgroup full[]/empty[] mbarrier phase handshake is buggy). The 90s timeout
+         guard prevented any pod hang (storm-safe). No perf number — correctly NOT produced.
+  => (a) is unrealizable here: the register-realloc that the litscan ladder needs to hide the
+     bigger-tile cost is denied by that same bigger tile's accumulator footprint. The coupling
+     the litscan promised (tile pays IFF warp-spec holds occupancy + regs) does not close on a
+     TF32 wgmma kernel whose accumulator banks already saturate the register file.
+
+================= NUMBERS (the report row) ==================================================
+  tile:                 128x256 (vs W10 128x128)
+  warp-spec regs split: producer 40 / consumer 232 REQUESTED -> ptxas IGNORED (C7507)
+  smem KB/CTA:          W11 147.4 KB (1 CTA/SM)  ->  W12 (b) 108.0 KB (2 CTA/SM)   [SHRINK MET]
+  occupancy CTA/SM:     2 CTA/SM RESTORED (cudaOccupancyMaxActiveBlocksPerMultiprocessor)
+  rel-RMS:              0.000e+00 (single-tile + full @2048/4096/8192) — BIT-EXACT
+  own GFLOP/s:          70.7 (W10 frontier)  ->  26.1 (W12 MODE10 @4096)   [REGRESS, NOT shipped]
+  cuBLAS-TF32:          428.7 / 435.5 GFLOP/s (ROOFLINE)
+  ratio (cuBLAS/own):   W10 6.10x  ->  W12 MODE10 16.66x
+  % of 6.09x gap closed: NEGATIVE (gap WIDENED) — frontier KEPT at W10 70.7 / 6.09x
+  PARITY (<=1.3x):      N
+
+================= FINDING — the ruled-out axis ==============================================
+  W11 pinned: "lever 1 (128x256) needs lever 2 (warp-spec register realloc) to hold 2 CTA/SM
+  first." W12 tests that exact coupling and CLOSES IT NEGATIVE on two independent grounds:
+    (1) The smem CAN be held under the ceiling (108KB -> 2 CTA/SM), but ONLY via a per-K8-sub
+        decode that serializes the decode<->MMA pipeline — the occupancy win (2x residency) is
+        dwarfed by the ~2.7x serialization loss (70.3 -> 26.1). The W10 wall was NEVER occupancy;
+        it is decode/MMA overlap, which the scratch-shrink directly destroys.
+    (2) The warp-spec register realloc that the litscan claims hides the bigger-tile cost is
+        UNGRANTABLE: ptxas ignores setmaxnreg because the 128x256 tile's 128 accumulator regs/
+        thread already sit at the minimum. The lever the coupling depends on cannot fire on a
+        TF32 wgmma kernel of this accumulator footprint.
+  This deterministically rules out the "128x256 + warp-spec + smem-shrink" path on the W10 TF32
+  composed-decode kernel. The W10 70.7 / 6.09x frontier is KEPT (no regression shipped, per the
+  W11 hard rule). The bigger output tile is a DEAD AXIS for this kernel: it pays only on a kernel
+  whose accumulators leave register headroom for warp-spec AND whose decode is not the bottleneck.
+  cuBLAS-TF32 = ROOFLINE throughout — NO superiority claim.
+
+pod destroyed: Y (vast 39719243, leak 0)

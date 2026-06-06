@@ -1,0 +1,140 @@
+F-FUSION-SM90-WGMMA-W15 — DESCRIPTOR-DIRECT wgmma own-GEMM (delete the W10 32KB decode band)
+=============================================================================================
+verdict-tier: 🔴 CLOSED-NEGATIVE (g5, bit-exact GATE FAIL → NO perf number). The research-#2854
+              breakthrough hypothesis — that the W10/W11 in-place swizzle floor (rel-RMS 1.392)
+              was a fixable DESCRIPTOR-ENCODING bug, and that feeding wgmma DIRECTLY from the
+              SWIZZLE_128B-TMA tile via layout_type_=1 / SBO=1024B / base_offset_=phase would
+              reach rel-RMS 0 and delete the 32KB software decode band — is FALSIFIED BY
+              MEASUREMENT for this kernel's atom-major SWIZZLE_128B landing. A 3200-config
+              in-process descriptor sweep (swm∈{0,1,2,3} × sbo∈{16..4096,0} × boff∈{0..7} ×
+              lbo∈{0..2048}) FLOORS at single-tile rel-RMS 1.000 (best @ swm=1 sbo=1024 boff=2)
+              and full-GEMM rel-RMS 1.392 — NO config reaches 0. The decode-band REMOVAL is
+              mechanically REAL (smem 96→64 KB/CTA @NST=2, a 32KB drop, 2 CTA/SM held), but the
+              descriptor-direct READ is not bit-exact, so g5 forbids any perf number on it.
+              The research's load-bearing primary claim — "TMA-SWIZZLE_128B ≡ wgmma GMMA
+              Swizzle<3,4,3> BY CONSTRUCTION" — does NOT hold for the atom-major
+              cuTensorMapEncodeTiled landing this kernel produces. W10 70.7 frontier KEPT
+              (71.0 same-pod re-measured) — NO regression shipped. PARITY=NO. cuBLAS=roofline.
+date: 2026-06-06
+GPU: NVIDIA H100 80GB HBM3, compute_cap 9.0, driver 560.35.05
+     (vast contract 39738178, ssh3.vast.ai, DESTROYED immediately after capture — leak 0)
+toolchain: nvcc 12.6 (V12.6.77), -O3 -arch=sm_90a -lcublas -lcuda
+     (EXACT apples to the W10/W13 frontier toolchain: 12.6.77 / driver 560.35.x)
+kernel: self/native/wgmma/wgmma_tf32_w15.cu
+          probe_desc    (MODE 0/9) = descriptor-direct single-tile wgmma m64n64k8, runtime-
+                        tunable (lbo,sbo,boff,swmode); MODE 9 = fault-proof in-process sweep
+          probe_localize(MODE 6)   = descriptor-direct AND W10 composed-decode wgmma in ONE
+                        kernel → localizes which operand the descriptor misreads
+          gemm_w15      (MODE 4)   = full GEMM descriptor-direct, NO decode scratch band
+          dump_layout   (MODE 2)   = raw SWIZZLE_128B landed-layout oracle (reused W9/W10)
+        reuses self/native/wgmma/wgmma_tf32_w10.cu VERBATIM as the same-pod apples baseline.
+
+================= THE RESEARCH #2854 HYPOTHESIS W15 TESTED (falsifiable, primary-sourced) =====
+research/sm90-wgmma-parity-rewrite-deepdive.md §1+§4.1: build the GMMA SMEM matrix descriptor
+with layout_type_=1 (B128), SBO=1024B (=128×8, NON-compact 2/4-atom K-stack), 128B-aligned
+start, alignment phase in base_offset_ (the 3 named encoding bugs vs W10's "MODE5"/compact-SBO/
+dropped-phase), pointing DIRECTLY at the SWIZZLE_128B-TMA tile → DELETE the 32KB decode band.
+PRE-REGISTERED FALSIFIER: re-run the W11 single-tile differential → EXPECT rel-RMS → 0.000.
+
+================= MODE 2 ORACLE — the landed SWIZZLE_128B law (this GPU, verbatim) ============
+128×32 SWIZZLE_128B landed layout MEASURED (phys slot → landed m*32+k), per 8-row atom:
+  pr=0 mask0  pr=1 mask1  pr=2 mask2 ... pr=7 mask7   → g_phys = g XOR (r&7)  (TEXTBOOK).
+  Row-preserving, atom-major (atom a at float a*256). Confirms the FP32 SWIZZLE_128B law.
+
+================= MODE 6 LOCALIZER — composed=0, descriptor-direct=1.107 (verbatim) ===========
+  MODE6 lbo=128 sbo=1024 boff=0 swm=1:
+    composed_rel = 0.000e+00   (W10 composed-decode wgmma is BIT-EXACT — CPU ref + TMA land OK)
+    desc_rel     = 1.107e+00   (the layout_type_=1 descriptor-direct read is UNCORRELATED)
+    desc_vs_composed = 1.107e+00
+  CPU  row0: -0.70 -0.83  2.56 -2.19
+  DESC row0: -0.97 -0.33  1.31  2.39   (NOT a permutation of CPU — wgmma reads wrong elements)
+  => the wgmma+descriptor MECHANISM is correct (the no-swizzle composed path = rel 0); ONLY
+     the swizzle-mode-1 IN-PLACE read of the SWIZZLE_128B tile is wrong. Isolates the defect to
+     the TMA-swizzle ↔ wgmma-swizzle layout interaction (the research's "same by construction").
+
+================= MODE 9 — 3200-CONFIG IN-PROCESS DESCRIPTOR SWEEP (the falsifier, verbatim) ==
+  Single CUDA context, A/B encoded once, descriptor fields varied per launch (probe_desc PADDED
+  ±8K floats so a mis-strided descriptor reads valid garbage, never faults):
+    swm ∈ {1,2,3,0}  sbo ∈ {1024,512,256,128,2048,64,16,32,4096,0}
+    boff ∈ {0..7}    lbo ∈ {128,16,256,1024,0,64,512,2048,32,48}      (4·10·8·10 = 3200 cfg)
+  NEWBEST rel_rms=1.107e+00 @ lbo=128 sbo=1024 boff=0 swm=1
+  NEWBEST rel_rms=1.057e+00 @ lbo=128 sbo=1024 boff=1 swm=1
+  NEWBEST rel_rms=1.000e+00 @ lbo=128 sbo=1024 boff=2 swm=1
+  MODE9 SWEEP-DONE best rel_rms=1.000e+00 @ lbo=128 sbo=1024 boff=2 swm=1
+  => NO descriptor field combination reaches rel-RMS 0. The research-predicted (swm=1,sbo=1024)
+     IS the best basin and base_offset_ DOES move it (1.107→1.000, confirming the phase axis is
+     real) — but the floor is 1.000, an uncorrelated read, NOT 0. The 3-field fix is INSUFFICIENT.
+
+================= MODE 4 FULL GEMM — descriptor-direct (bit-exact GATE = FAIL, g5) ============
+  gemm_w15 @S=2048 NST=3 lbo=128 sbo=1024 boff=0 swm=1:  rel_rms = 1.392e+00  FAIL → NO perf (g5)
+    (1.392 = the identical W9/W10 in-place floor — the closed-negative reproduces at GEMM scale.)
+
+================= SMEM — THE DECODE-BAND REMOVAL IS REAL (the one mechanical positive) =========
+  W15 desc-direct (NO gmma decode scratch), MODE4, 2 CTA/SM held:
+    NST=2  dynsmem  65552 B = 64.0 KB/CTA  → 2 CTA/SM
+    NST=3  dynsmem  98328 B = 96.0 KB/CTA  → 2 CTA/SM
+    NST=4  dynsmem 131104 B = 128.0 KB/CTA → 1 CTA/SM
+  W10 frontier (HAS the 32KB composed-decode band), same pod:
+    NST=2  dynsmem  98336 B = 96.0 KB/CTA  → 2 CTA/SM
+  => W15 NST=2 64KB vs W10 NST=2 96KB = a 32 KB/CTA DROP. The decode band IS removable; W15
+     even fits NST=3 (96KB) in the budget W10 needed for NST=2+decode. This is the part of the
+     research that HELD — but it is unusable because the descriptor-direct read is not bit-exact.
+
+================= SAME-POD APPLES — W10 70.7 FRONTIER REPRODUCED + KEPT =======================
+  W10 gemm_w10 MODE4 @S=4096 NST=2 (this pod):
+    own 71.0 TFLOP/s   cuBLAS-TF32 429.8   ratio 6.06x   rel_rms 0.000e+00   PARITY NO
+  (matches the W10 #2847 frontier 70.7 / 6.09x — re-measured 71.0 / 6.06x, 2 CTA/SM, bit-exact.)
+  NO W15 number is shipped (gate FAIL). The W10 frontier kernel is UNCHANGED.
+
+================= HEADLINE =================
+  descriptor fields swept:        layout_type_∈{0,1,2,3} · SBO∈{0,16,32,64,128,256,512,1024,
+                                  2048,4096}B · base_offset_∈{0..7} · LBO∈{0..2048}B (3200 cfg)
+  research-default field set:      swm=1 sbo=1024B boff=0  → single-tile rel-RMS 1.107e+00
+  single-tile rel-RMS (BEST):      1.000e+00  @ swm=1 sbo=1024 boff=2  (NOT 0 — falsifier FAILED)
+  full-GEMM rel-RMS:               1.392e+00  (gate FAIL — identical to the W9/W10 in-place floor)
+  smem KB/CTA before→after:        W10 96.0 → W15 64.0 KB/CTA @NST=2  (32 KB decode band REMOVED)
+  occupancy:                       2 CTA/SM @NST=2 (held); NST=4 → 1 CTA/SM
+  own GFLOP/s 70.7→?:              NOT-REPORTED (g5 — no perf on a wrong-result kernel)
+  ratio vs cuBLAS-TF32:            N/A (W10 anchor 6.06x re-measured)
+  % of the 6.09x gap closed:       0% measured (decode-band removal alone does not close the gap)
+  decode-copy-removed:             YES mechanically (32KB drop) / NO usefully (read not bit-exact)
+  PARITY (≤1.3x):                  NO
+  pod destroyed:                   YES (39738178, leak 0)
+
+================= FINDING — CLOSED-NEGATIVE: a falsified literature prediction, precisely pinned
+The research #2854 §1 verdict ("decode-copy AVOIDABLE; the W10/W11 ruling-out was an encoding
+bug") is FALSIFIED for this kernel. The 3 named field fixes (layout_type_=1 not "MODE5";
+SBO=1024B not compact 256B; base_offset_ phase) are each NECESSARY-direction-correct — the
+best basin IS at swm=1/sbo=1024, and base_offset_ DOES move the residual (1.107→1.000) — but
+INSUFFICIENT: the floor is an uncorrelated 1.000 (single-tile) / 1.392 (GEMM), not 0. The
+load-bearing primary claim "the TMA box swizzle and the wgmma descriptor swizzle are the SAME
+Layout_K_SW128_Atom (Swizzle<3,4,3>) BY CONSTRUCTION, so the bytes the TMA lands ARE the bytes
+the descriptor addresses" does NOT hold for the cuTensorMapEncodeTiled(CU_TENSOR_MAP_SWIZZLE_128B)
+atom-major landing this own-GEMM produces. MEASURED, the landed pattern is g_phys = g XOR (r&7)
+(textbook, MODE 2 oracle) stacked atom-major (atom a at a*256 floats), and NO (LBO,SBO,
+base_offset_,layout_type_) makes wgmma's HW de-swizzle coincide with that — this is exactly the
+"genuine 3rd interaction" the W10 verdict named and the W9/SWIZZLE verdicts pinned, now
+re-confirmed against the deeper research at 3200-config resolution.
+
+THE GAP IN THE RESEARCH (precise): CuTe reaches the canonical layout via
+tile_to_shape(GMMA::Layout_K_SW128_Atom, ...) — a CuTe-COMPUTED SMEM layout whose bytes are
+then ALSO what make_tma_atom encodes. Our path instead picks a TMA box ({32,64} for A, {32,32}
+per B atom) and lands an ATOM-MAJOR stacking; that stacking is a DIFFERENT byte permutation than
+the canonical atom, so layout_type_=1's fixed HW de-swizzle reads the wrong core-matrices. The
+research conflated "TMA can land a 128B-swizzled tile" with "TMA lands the EXACT canonical
+Layout_K_SW128_Atom" — the equivalence holds only when the SMEM layout is BUILT from the atom
+(tile_to_shape) and the TMA is built from THAT SAME layout, which our hand-rolled box is not.
+
+REOPENED but NOT closed: the decode-band removal (32KB, REAL) remains the prize. The remaining
+path is to MATCH the canonical atom — either (a) re-encode A/B in GLOBAL memory so the
+SWIZZLE_128B TMA lands the canonical Layout_K_SW128_Atom byte pattern (then field-fix applies),
+or (b) port make_gmma_desc's exact LBO/SBO computation FOR THE ATOM-MAJOR LAYOUT (a different
+descriptor than the canonical one). Both are net-new kernel structure, not a field sweep. Until
+one lands bit-exact, the W10 composed software decode (70.7, 6.09x, bit-exact, 2 CTA/SM) is the
+frontier — and the W11–W14 "exhausted" verdicts STAND (the exhaustion was NOT merely a
+descriptor bug; the descriptor-direct alternative is itself blocked by the same swizzle-
+interaction wall, now measured at higher resolution).
+
+g5 HONEST: bit-exact GATE before any perf — gate FAILED (1.000 single-tile, 1.392 GEMM), so NO
+perf number is reported. cuBLAS = ROOFLINE, parity-SEEKING, NO superiority claim. W10 70.7
+frontier KEPT (71.0 re-measured), NO regression. pod destroyed (leak 0).
