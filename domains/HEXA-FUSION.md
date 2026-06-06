@@ -118,6 +118,29 @@
   frontier, breaks byte-eq, K=3/BK=16 doesn't map to m64n64k8 K-major TMA tile. HONEST: path E's 6.57× cure
   is UNCHANGED / NOT regressed; this prunes the cp.async lever from the gap-closing search. PR #2871.
   verdict: .verdicts/hexa-fusion/F-FUSION-MOE-CONV-PROD-PERF.txt
+- [x] **OG-FUSE-PROD-PERF2 — close path E → cuBLAS via wider register tile (arithmetic intensity)** —
+  🔴 CLOSED-NEGATIVE for the wider-register-tile / arithmetic-intensity lever. (2026-06-07, H100 80GB
+  HBM3, vast 39774277 RENTED+DESTROYED leak 0.) The PROD-PERF verdict named the correct residual lever:
+  raise ARITHMETIC INTENSITY (wider register micro-tile → more FLOPs per staged smem byte → less
+  bandwidth-starved). Lever (c) APPLIED: new templated path H k_moe_conv_gemm_wide<BM,BN,BK,TM,TN>
+  (dynamic smem so wide tiles exceed the 48KB static cap) + a 7-config sweep (64×64 control → 128×128
+  t8×8 → 128×128 BK8). Accumulation order BIT-IDENTICAL to E (ci asc, k inner) → **GATE byte-eq
+  max|Δ|=0 vs ModuleList-30 for ALL 7 configs** (gate FIRST at d=192 AND perf-shape cross-check at
+  d=6208, all 0.0; NO reorder forced). PERF (H100 132 SMs, median 20 iters, d=6208): **EVERY wider tile
+  REGRESSED.** 64×64 t4×4 (= path E, dynamic-smem) 514ms (BEST, ties E); 128×64 t8×4 616ms (+20%);
+  64×128 t4×8 745ms (+45%); 128×128 t8×8 919ms (+79%); 128×128 t8×4-512thr 868ms (+69%); 64×64 t8×8-64thr
+  993ms (+93%); 128×128 BK8 (AI=0.996, 4× path E's 0.248) **920ms — the highest-intensity config is the
+  SLOWEST.** cuBLAS-F roofline 34.6ms → ratio E/F = 16.4×, best-wide/F = 14.9× (just path E). FALSIFIER
+  (pre-registered): "wider tile raises FLOP/byte → E→cuBLAS ratio drops below ~10×" — FALSIFIED;
+  ratio did NOT move, throughput regressed monotonically with intensity. MECHANISM (the W12/OG17-256-tile
+  failure mode CONFIRMED here): wider tile → bigger register accumulator (up to 8×8=64 acc/thread) +
+  bigger Ws smem → OCCUPANCY collapses → fewer warps to hide the WEIGHT-stream HBM latency; and K=3/BK=16
+  is a SHALLOW contraction with NO deep-K reuse for a fat micro-tile to amortise (the conv's 13.87GB
+  weight bank is touched ~once). SAME wall the cp.async probe hit from the other side: weight/L2 BANDWIDTH
+  + reuse-poverty — NEITHER latency-hiding NOR arithmetic-intensity moves it. RULED-OUT AXIS: register-tile
+  width. STANDS: path E (64×64 t4×4) = the production deliverable (6.57× over ModuleList, byte-exact); the
+  E→cuBLAS gap is a fundamental register-vs-bandwidth wall. HONEST: nothing shipped regresses the cure
+  (H0 ties E exactly). PR pending. verdict: .verdicts/hexa-fusion/F-FUSION-MOE-CONV-PROD-PERF2.txt
 - [ ] **OG-FUSE-RIGHTSIZE — right-sized-GPU per-regime validation** — validate the cure on a right-sized
   GPU (RTX 5070 / L40S) per regime to dodge big-GPU contention + the access-unresolved blocker; the
   byte-eq D1536-saturates-5070-to-98% fact already shows right-sizing is the practical lever.

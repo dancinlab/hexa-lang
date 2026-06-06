@@ -1,0 +1,62 @@
+# OG-FUSE-PROD-PERF2 raw harvest — vast 39774277 H100 SXM ssh8.vast.ai:14276
+# build: nvcc -arch=sm_90 -O3 -DUSE_CUBLAS -lcublas  BUILD_RC=0
+# run:   MOEFUSE_SKIP=BCD /tmp/moefuse 30 6208 256 3 1
+
+# gpu_moe_conv_fuse — fused multi-expert Conv1d MoE kernel (f5e18a0f cure)
+# perf shape: E=30 d=6208 T=256 K=3 dil=1
+# device: NVIDIA H100 80GB HBM3  SMs=132  cap=9.0
+
+# ── CORRECTNESS GATE (vs CPU op-by-op 30-conv reference) ──
+# gate shape: E=30 d=192 T=32 K=3 dil=1 (small → CPU oracle tractable)
+[GATE-FUSED]   max|Δ| vs CPU = 2.980e-07
+[GATE-TILED]   max|Δ| vs CPU = 2.980e-07
+[GATE-GEMM]    max|Δ| vs CPU = 2.980e-07
+[GATE-GEMM-DB] max|Δ| vs CPU = 2.980e-07
+# ── OG-FUSE-PROD-PERF2 wide-tile gate (7 configs, byte-eq vs CPU+ModuleList) ──
+[GATE-CUBLAS]  rel-RMS vs CPU = 4.881e-07 (GEMM reorders ci → rel-RMS, not byte-eq; tol 1e-3)
+[GATE-MLIST30] max|Δ| vs CPU = 2.980e-07
+[GATE-GROUPED] max|Δ| vs CPU = 2.980e-07
+[GATE-WIDE-0]  E-control 64x64 t4x4   max|Δ|vsCPU=2.980e-07  max|Δ|vsMList=0.000e+00  OK
+[GATE-WIDE-1]  128x64 t8x4            max|Δ|vsCPU=2.980e-07  max|Δ|vsMList=0.000e+00  OK
+[GATE-WIDE-2]  64x128 t4x8            max|Δ|vsCPU=2.980e-07  max|Δ|vsMList=0.000e+00  OK
+[GATE-WIDE-3]  128x128 t8x8           max|Δ|vsCPU=2.980e-07  max|Δ|vsMList=0.000e+00  OK
+[GATE-WIDE-4]  128x128 t8x4 (512thr)  max|Δ|vsCPU=2.980e-07  max|Δ|vsMList=0.000e+00  OK
+[GATE-WIDE-5]  64x64 t8x8 (64thr)     max|Δ|vsCPU=2.980e-07  max|Δ|vsMList=0.000e+00  OK
+[GATE-WIDE-6]  128x128 t8x8 BK8       max|Δ|vsCPU=2.980e-07  max|Δ|vsMList=0.000e+00  OK
+[GATE-DEV-EQ]  max|Δ|(fused vs ModuleList) = 0.000e+00   max|Δ|(grouped vs ModuleList) = 0.000e+00
+[GATE-DEV-EQ]  max|Δ|(TILED vs ModuleList) = 0.000e+00
+[GATE-DEV-EQ]  max|Δ|(GEMM  vs ModuleList) = 0.000e+00
+[GATE-DEV-EQ]  max|Δ|(GEMM-DB vs ModuleList) = 0.000e+00
+# GATE (1) device-vs-device byte-exact (max|Δ|=0): PASS
+# GATE (2) device-vs-CPU within fp32 FMA tol=6.0e-06: PASS
+# GATE (3) PROD-PERF2 wide-tile configs byte-eq (max|Δ|=0 vs ModuleList): PASS
+# GATE OVERALL => PASS
+
+# weight bank = 13.87 GB (E·d·d·K fp32), output = 0.19 GB
+# perf-shape cross-check  max|Δ|(fused vs ModuleList) = 0.000e+00 (expect 0)
+# perf-shape cross-check  max|Δ|(TILED vs ModuleList) = 0.000e+00 (expect 0)
+# perf-shape cross-check  max|Δ|(GEMM  vs ModuleList) = 0.000e+00 (expect 0)
+# perf-shape cross-check  max|Δ|(GEMM-DB vs ModuleList) = 0.000e+00 (expect 0)
+# perf-shape cross-check  max|Δ|(WIDE[0] E-control 64x64 t4x4   vs ModuleList) = 0.000e+00 (expect 0)
+# perf-shape cross-check  max|Δ|(WIDE[1] 128x64 t8x4            vs ModuleList) = 0.000e+00 (expect 0)
+# perf-shape cross-check  max|Δ|(WIDE[2] 64x128 t4x8            vs ModuleList) = 0.000e+00 (expect 0)
+# perf-shape cross-check  max|Δ|(WIDE[3] 128x128 t8x8           vs ModuleList) = 0.000e+00 (expect 0)
+# perf-shape cross-check  max|Δ|(WIDE[4] 128x128 t8x4 (512thr)  vs ModuleList) = 0.000e+00 (expect 0)
+# perf-shape cross-check  max|Δ|(WIDE[5] 64x64 t8x8 (64thr)     vs ModuleList) = 0.000e+00 (expect 0)
+# perf-shape cross-check  max|Δ|(WIDE[6] 128x128 t8x8 BK8       vs ModuleList) = 0.000e+00 (expect 0)
+
+# ── PERF (median of timed iters, cuEvent) ──
+[A] ModuleList-30  step = 3709.211 ms
+[E] GEMM-CONV      step = 568.171 ms  (1 launch, 11640 CTAs, 64x64x16 tile, BM-fold weight reuse — PROD-KERNEL)
+# ── (H) WIDE-TILE SWEEP (OG-FUSE-PROD-PERF2 arithmetic intensity) ──
+[H0] E-control 64x64 t4x4   step = 514.231 ms  (11640 CTAs, 256 thr, smem=16512B, AI=0.248 out/B)
+[H1] 128x64 t8x4            step = 616.267 ms  (5820 CTAs, 256 thr, smem=20608B, AI=0.398 out/B)
+[H2] 64x128 t4x8            step = 744.614 ms  (5880 CTAs, 256 thr, smem=28800B, AI=0.284 out/B)
+[H3] 128x128 t8x8           step = 919.318 ms  (2940 CTAs, 256 thr, smem=32896B, AI=0.498 out/B)
+[H4] 128x128 t8x4 (512thr)  step = 867.695 ms  (2940 CTAs, 512 thr, smem=32896B, AI=0.498 out/B)
+[H5] 64x64 t8x8 (64thr)     step = 992.892 ms  (11640 CTAs, 64 thr, smem=16512B, AI=0.248 out/B)
+[H6] 128x128 t8x8 BK8       step = 919.918 ms  (2940 CTAs, 256 thr, smem=16448B, AI=0.996 out/B)
+[G] GEMM-CONV-DB   step = 607.366 ms  (1 launch, 11640 CTAs, 64x64x16 tile, cp.async 2-stage — PROD-PERF lever)
+[F] cuBLAS-GEMM    step = 34.555 ms  (K strided-batched GEMM — VENDOR ROOFLINE, not byte-eq)
+# CTA counts: A=1568/launch ×30 launches  B=30  C=D=47040  E=11640 (one launch)
+[T] DONE — gate PASS, perf captured.

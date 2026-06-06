@@ -1,0 +1,81 @@
+F-FUSION-MOE-CONV-PROD-PERF2 — wider-register-tile arithmetic-intensity lever on conv-MoE path E
+================================================================================================
+VERDICT: 🔴 CLOSED-NEG — wider register tile does NOT move the bandwidth wall; it REGRESSES.
+         Path E (64×64 t4×4) is at the arithmetic-intensity / register ceiling for this kernel.
+         The 6.57× ModuleList cure (path E) remains the production answer; the E→cuBLAS gap is a
+         fundamental register-vs-bandwidth wall, not a tile-width residual.
+
+DEVICE : NVIDIA H100 80GB HBM3, SMs=132, cap=9.0 (vast 39774277 — RENTED + DESTROYED, leak 0)
+SHAPE  : E=30 d=6208 T=256 K=3 dil=1 (the measured 7B conv-MoE wall). weight bank = 13.87 GB.
+BUILD  : nvcc -arch=sm_90 -O3 -DUSE_CUBLAS -lcublas  → BUILD_RC=0 (all 7 templates instantiate)
+
+PRE-REGISTERED FALSIFIER (g5): a wider register micro-tile raises arithmetic intensity (more
+FLOP per staged smem byte) → the conv-MoE weight/L2 BANDWIDTH-bound path E ratio vs the cuBLAS
+roofline (~15.7×) DROPS. FALSIFIED IF every wider tile regresses vs the 64×64 control / fails
+byte-eq / spills register-capping occupancy (the W12 / OG17-256-tile failure mode).
+
+────────────────────────────────────────────────────────────────────────────────────────────
+GATE (byte-eq FIRST — the contract that matters): PASS for ALL 7 configs.
+  The wider tile only RE-BLOCKS the SAME ci-ascending / k-inner contraction, so the per-output
+  accumulation sequence is bit-identical. max|Δ| = 0 vs ModuleList-30 held for every config; no
+  reorder was forced (NO rel-RMS fallback needed). vs CPU = 2.980e-07 (1-ULP FMA, expected).
+
+[GATE-WIDE-0] E-control 64x64 t4x4   max|Δ|vsCPU=2.980e-07  max|Δ|vsMList=0.000e+00  OK
+[GATE-WIDE-1] 128x64 t8x4            max|Δ|vsCPU=2.980e-07  max|Δ|vsMList=0.000e+00  OK
+[GATE-WIDE-2] 64x128 t4x8            max|Δ|vsCPU=2.980e-07  max|Δ|vsMList=0.000e+00  OK
+[GATE-WIDE-3] 128x128 t8x8           max|Δ|vsCPU=2.980e-07  max|Δ|vsMList=0.000e+00  OK
+[GATE-WIDE-4] 128x128 t8x4 (512thr)  max|Δ|vsCPU=2.980e-07  max|Δ|vsMList=0.000e+00  OK
+[GATE-WIDE-5] 64x64 t8x8 (64thr)     max|Δ|vsCPU=2.980e-07  max|Δ|vsMList=0.000e+00  OK
+[GATE-WIDE-6] 128x128 t8x8 BK8       max|Δ|vsCPU=2.980e-07  max|Δ|vsMList=0.000e+00  OK
+# GATE (1) device-vs-device byte-exact (max|Δ|=0): PASS
+# GATE (2) device-vs-CPU within fp32 FMA tol=6.0e-06: PASS
+# GATE (3) PROD-PERF2 wide-tile configs byte-eq (max|Δ|=0 vs ModuleList): PASS
+# GATE OVERALL => PASS
+(perf-shape cross-checks at d=6208 also max|Δ|=0 for all 7 configs — byte-eq holds at scale.)
+
+────────────────────────────────────────────────────────────────────────────────────────────
+PERF (median of 20 cuEvent iters, d=6208, H100):
+[A] ModuleList-30  3709.211 ms  (under-fill baseline)
+[E] GEMM-CONV       568.171 ms  (path-E original static-smem, 64x64x16 — PROD-KERNEL baseline)
+[H0] 64x64 t4x4     514.231 ms  (= path E, dynamic-smem; 11640 CTAs, 256 thr, AI=0.248 out/B) ← BEST
+[H1] 128x64 t8x4    616.267 ms  ( 5820 CTAs, 256 thr, AI=0.398)   +20% slower
+[H2] 64x128 t4x8    744.614 ms  ( 5880 CTAs, 256 thr, AI=0.284)   +45% slower
+[H3] 128x128 t8x8   919.318 ms  ( 2940 CTAs, 256 thr, AI=0.498)   +79% slower
+[H4] 128x128 t8x4   867.695 ms  ( 2940 CTAs, 512 thr, AI=0.498)   +69% slower
+[H5] 64x64 t8x8     992.892 ms  (11640 CTAs,  64 thr, AI=0.248)   +93% slower (occupancy starved)
+[H6] 128x128 BK8    919.918 ms  ( 2940 CTAs, 256 thr, AI=0.996)   +79% slower (highest AI, WORST)
+[G] GEMM-CONV-DB    607.366 ms  (cp.async 2-stage — prior PROD-PERF closed-neg)
+[F] cuBLAS-GEMM      34.555 ms  (VENDOR ROOFLINE, not byte-eq)
+
+RATIO vs cuBLAS roofline:
+  path E / cuBLAS = 568.2 / 34.6 = 16.4×   (prior verdict cited ~15.7×; same regime)
+  BEST wide (H0) / cuBLAS = 514.2 / 34.6 = 14.9×   (this is just path E re-impl, NOT a wider tile)
+  Every ACTUALLY-WIDER tile (H1–H6) is WORSE than path E. The widest/highest-AI config (H6,
+  AI=0.996 out/B, 4× path E's 0.248) is the SLOWEST of all — the OPPOSITE of the hypothesis.
+
+────────────────────────────────────────────────────────────────────────────────────────────
+FINDING (closed-negative — a deterministically ruled-out axis):
+  The arithmetic-intensity lever is REFUTED for this conv-MoE kernel. Higher FLOP/byte (wider
+  BM·BN, fatter TM×TN) MONOTONICALLY REGRESSES throughput, and the highest-intensity config is
+  the worst. Mechanism (the predicted W12/OG17 failure mode, now CONFIRMED here):
+    • Wider tile → bigger register accumulator (TM×TN up to 8×8=64 acc/thread) + bigger smem
+      (Ws[K][BK][BN] grows with BN) → fewer CTAs resident / fewer warps per SM → OCCUPANCY
+      collapses. H100 needs many in-flight warps to hide the WEIGHT-stream HBM latency; the
+      wide tile trades exactly that latency-hiding parallelism for on-paper intensity.
+    • K=3, BK=16 is a SHALLOW contraction inner loop — the reuse a GEMM register-tile buys
+      (amortising a deep K-loop over a fat micro-tile) is structurally absent here. The conv's
+      weight bank is touched ~once (15.87GB streamed); there is no deep-K to amortise, so a
+      wider tile adds register/smem pressure WITHOUT a compensating reuse win.
+    • This is the SAME wall the cp.async PROD-PERF probe hit from the other side: the bound is
+      weight/L2 BANDWIDTH (13.87GB weights / launch), and NEITHER latency-hiding (cp.async, path
+      G) NOR arithmetic-intensity (wider tile, path H) can move a fundamentally bandwidth-bound,
+      reuse-poor kernel toward the cuBLAS roofline.
+
+  RULED OUT: the register-tile-width axis as a lever to close the E→cuBLAS gap at d=6208.
+  STANDS: path E (64×64 t4×4) is the production deliverable — 6.57× over ModuleList @ H100, the
+  byte-exact hexa-ownable cure. The remaining E→cuBLAS gap is a fundamental register-vs-bandwidth
+  wall (the conv lacks the deep-K reuse a GEMM uses to be compute-bound). No regression: H0 ties
+  path E exactly; nothing shipped degrades the cure.
+
+POD: vast 39774277 (H100 SXM, ssh8.vast.ai:14276) RENTED then DESTROYED — leak 0. Sibling pods
+     39767151 (OG18) + 39774499 left untouched.
