@@ -402,7 +402,12 @@ __global__ void k_moe_conv_gemm(const float* __restrict__ X,
  * copies from global unconditionally), so those slots are zeroed by a plain store
  * BEFORE the cp.async of the valid slots — identical smem contents to (E).
  */
-#define GM_STAGES 3     /* smem ring depth (prefetch distance) */
+/* smem ring depth (prefetch distance). 2-stage keeps the ring's STATIC __shared__
+ * footprint (Xs+Ws = STAGES·(8448+12288) B) under the 48 KB static-smem hard cap
+ * (49152 B): STAGES=2 → 33024 B fits; STAGES=3 → 49536 B exceeds it and the launch
+ * fails with cudaErrorInvalidValue. A single-prefetch (2-stage) ring already hides
+ * the per-chunk Xs+Ws HBM load latency behind the register MAC of the prior chunk. */
+#define GM_STAGES 2
 __device__ __forceinline__ void cp_async_f4(float* smem_dst, const float* gmem_src) {
 #if __CUDA_ARCH__ >= 800
     unsigned s = (unsigned)__cvta_generic_to_shared(smem_dst);
