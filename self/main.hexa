@@ -2399,6 +2399,32 @@ fn resolve_module_loader() {
 // be prepended to the `exec(...)` command that launches the module_loader
 // child, or "" if the install dir isn't derivable or HEXA_INSTALL_DIR is
 // already present in the environment (never clobbered).
+// Split-install repo-root resolver. The default `hx install` layout makes
+// $HX_HOME/bin (= install_dir_from_argv0()) the driver dir and symlinks ONLY
+// `self` and `stdlib` into it from the real source checkout ($HX_HOME/src),
+// but NOT `compiler` / `tool` / `atlas` / etc. So install_dir_from_argv0()
+// validates as an install root (it carries self/module_loader.hexa via the
+// symlink) yet a bundled CLI that imports `compiler/...` (atlas_cli.hexa →
+// compiler/smash/candidate, verify_cli.hexa → compiler/atlas/calc_dispatch)
+// makes the module_loader probe $bin/compiler/... which does not exist →
+// `[module_loader] FATAL module not found: compiler/...`. This only bites
+// when the CLI is built from a non-repo CWD (every `hexa atlas`/`hexa verify`
+// subcommand that triggers a rebuild) — from the repo root the loader's bare
+// fallback resolves `compiler/...` against CWD and masks the gap.
+//
+// Fix: when the derived install dir lacks `compiler/` but its `self` entry is
+// a symlink, follow it — realpath($inst/self)'s parent IS the real source
+// root that carries every repo-root dir. Returns the resolved root, or the
+// original `inst` unchanged (self-contained installs / in-repo runs where
+// $inst already carries compiler/ are left exactly as before).
+fn resolve_loader_root(inst) {
+    if len(inst) == 0 { return inst }
+    let probe = "INST='" + inst + "'; if [ -d \"$INST/compiler\" ]; then printf '%s' \"$INST\"; elif [ -L \"$INST/self\" ]; then R=\"$(realpath \"$INST/self\" 2>/dev/null || readlink -f \"$INST/self\" 2>/dev/null)\"; if [ -n \"$R\" ]; then ROOT=\"$(cd \"$(dirname \"$R\")\" 2>/dev/null && pwd -P)\"; if [ -n \"$ROOT\" ] && [ -d \"$ROOT/compiler\" ]; then printf '%s' \"$ROOT\"; else printf '%s' \"$INST\"; fi; else printf '%s' \"$INST\"; fi; else printf '%s' \"$INST\"; fi"
+    let r = exec(probe)
+    if len(r) > 0 { return r }
+    return inst
+}
+
 fn module_loader_env_prefix() {
     // module_loader is a one-shot flatten — it holds the entire bundle's AST
     // in memory. The default 768 MB runtime cap (runtime.c::_hx_mem_cap_bytes)
@@ -2416,7 +2442,7 @@ fn module_loader_env_prefix() {
     // unset, force 4096. HEXA_MEM_UNLIMITED=1 (parent) is also propagated.
     let mut parts = []
     if len(env_var("HEXA_INSTALL_DIR")) == 0 {
-        let inst = install_dir_from_argv0()
+        let inst = resolve_loader_root(install_dir_from_argv0())
         if len(inst) > 0 {
             parts.push("HEXA_INSTALL_DIR='")
             parts.push(inst)
