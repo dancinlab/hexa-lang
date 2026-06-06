@@ -111,17 +111,17 @@ fn main() {
     let d2b = run_case(2, 64)
     check("N=2 S=64 byte-eq (max|d|==0)", d2b == 0.0)
 
-    print("DDP-M1 ring-all-reduce in-process sim")
+    print("DDP-M1 ring-all-reduce in-process sim\n")
     print("  steps: N=2 -> " + str(ring_step_count(2)) +
-          " , N=4 -> " + str(ring_step_count(4)) + "  (expect 2(N-1) = 2,6)")
-    print("  N=2 S=7  max|d| = " + str(d2))
-    print("  N=4 S=10 max|d| = " + str(d4))
-    print("  N=4 S=13 max|d| = " + str(d4b))
-    print("  N=2 S=64 max|d| = " + str(d2b))
-    print("  passed " + str(pass_count) + " / " + str(total_count))
+          " , N=4 -> " + str(ring_step_count(4)) + "  (expect 2(N-1) = 2,6)\n")
+    print("  N=2 S=7  max|d| = " + str(d2) + "\n")
+    print("  N=4 S=10 max|d| = " + str(d4) + "\n")
+    print("  N=4 S=13 max|d| = " + str(d4b) + "\n")
+    print("  N=2 S=64 max|d| = " + str(d2b) + "\n")
+    print("  passed " + str(pass_count) + " / " + str(total_count) + "\n")
     if pass_count == total_count {
-        print("RESULT: GREEN — all-reduce == serial sum, byte-eq max|d|=0; steps=2(N-1)")
+        print("RESULT: GREEN — all-reduce == serial sum, byte-eq max|d|=0; steps=2(N-1)\n")
     } else {
-        print("RESULT: RED — first failure: " + failed)
+        print("RESULT: RED — first failure: " + failed + "\n")
     }
 }

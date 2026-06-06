@@ -1,0 +1,14 @@
+DDP-M1 ring-all-reduce in-process sim
+  steps: N=2 -> 2 , N=4 -> 6  (expect 2(N-1) = 2,6)
+  N=2 S=7  max|d| = 0.0
+  N=4 S=10 max|d| = 0.0
+  N=4 S=13 max|d| = 0.0
+  N=2 S=64 max|d| = 0.0
+  passed 9 / 9
+RESULT: GREEN — all-reduce == serial sum, byte-eq max|d|=0; steps=2(N-1)
+
+=== provenance ===
+build: HEXA_MAC_BUILD_OK=1 hexa build stdlib/ddp/ring_all_reduce_test.hexa -o build/ddp_ring (OK)
+run:   ./build/ddp_ring  (exit 0)
+hexa:  hexa 0.1.0-dispatch
+date:  2026-06-07
