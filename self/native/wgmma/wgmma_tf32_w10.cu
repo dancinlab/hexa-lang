@@ -40,7 +40,9 @@
 #include <cuda.h>
 #include <cudaTypedefs.h>
 #include <cuda_runtime.h>
+#include <cublas_v2.h>
 #define CK(x) do{cudaError_t e=(x); if(e!=cudaSuccess){printf("CUDA-ERR %s @%d:%s\n",#x,__LINE__,cudaGetErrorString(e));return 3;}}while(0)
+#define CB(x) do{cublasStatus_t s=(x); if(s!=CUBLAS_STATUS_SUCCESS){printf("CUBLAS-ERR %d\n",(int)s);return 3;}}while(0)
 
 // ---- GMMA INTER 8x4-core physical index (W2/W3-proven, bit-exact). ----
 // strided dim s (M for A / N for B), contiguous dim k (K). core = 8 rows x 4 K-elems.
@@ -203,6 +205,125 @@ extern "C" __global__ void probe_wgmma(const __grid_constant__ CUtensorMap tmapA
     for(int c=0;c<8;++c)for(int r=0;r<2;++r)for(int p=0;p<2;++p){
         int idx=c*4+r*2+p,row=rb+r*8,col=cb+p+c*8;
         if(row<64&&col<64)gD[row*64+col]=d[idx];
+    }
+}
+
+// ======================================================================
+// MODE 4 — FULL GEMM, COMPOSED-DECODE swizzled-TMA dual-consumer-WG warpspec (the W10 GEMM).
+//   Geometry = W8 MODE 4: TM=128, TN=128, 256 thr = 2 consumer warpgroups, single elected
+//   TMA producer thread (full occupancy). DIFFERENCE vs W8: the A/B TMA descriptors are
+//   SWIZZLE_128B (tile lands wgmma-near-ready, no Braw transpose scratch), and the per-slab
+//   decode is the W10 COMPOSED INDEX (proven bit-exact above): swizzled slot -> gmma INTER.
+//   K slab = TKSW=32 (one 128B atom) -> 4 wgmma k8 sub-steps per slab.
+//   The W8 cooperative Araw/Braw->gmma TRANSPOSE permute (28 STS) is replaced by a pure
+//   composed index copy from the swizzled tile (no row-major scratch, no transpose).
+// ======================================================================
+extern "C" __global__ void gemm_w10(const __grid_constant__ CUtensorMap tmapA,
+                                     const __grid_constant__ CUtensorMap tmapB,
+                                     float* __restrict__ gD,int M,int N,int K,int NST){
+    const int TM=128,TN=128,TKSW=32,TK=8;
+    int bm=blockIdx.y*TM, bn=blockIdx.x*TN;
+    extern __shared__ __align__(128) float sm[];
+    // per-stage: Asw(128*32 swizzled) + Bsw(4 atoms * 32*32 swizzled)
+    //          + As0(64*32) As1(64*32) B0(32*64) B1(32*64) gmma-laid (full TKSW K).
+    const int ASW=TM*TKSW, BSW=TN*TKSW;        // swizzled landings
+    const int ABND=64*TKSW, BB=TKSW*64;         // gmma-laid bands (full 32-K slab)
+    const int BUF=ASW+BSW+2*ABND+2*BB;
+    uint64_t* full =(uint64_t*)(sm + (size_t)NST*BUF);
+    uint64_t* empty=full+NST;
+    int tid=threadIdx.x; int wg=tid>>7; int band=wg; int lt=tid&127;
+    int nks=K/TKSW;
+    const int NATOM=TN/TKSW;                     // 4 side-by-side 32-N B atoms
+    const uint32_t bytesA=ASW*4, bytesB=BSW*4;
+    if(tid<NST){ mbar_init_tx(&full[tid],1); }
+    else if(tid<2*NST){ mbar_init_tx(&empty[tid-NST],256); }
+    __syncthreads();
+
+    float d0[32],d1[32];
+    #pragma unroll
+    for(int i=0;i<32;++i){d0[i]=0.f;d1[i]=0.f;}
+    uint32_t fph=0;
+    int stages=NST<nks?NST:nks;
+    if(tid==0){
+        for(int st=0;st<stages;++st){
+            float* base=sm+(size_t)st*BUF; float* Asw=base; float* Bsw=base+ASW;
+            mbar_expect_tx(&full[st], bytesA+bytesB);
+            tma_load_2d(Asw,&tmapA,/*x=k*/st*TKSW,/*y=m*/bm,&full[st]);
+            #pragma unroll
+            for(int c=0;c<NATOM;++c)
+                tma_load_2d(Bsw+(size_t)c*(TKSW*TKSW),&tmapB,/*x=n*/bn+c*TKSW,/*y=k*/st*TKSW,&full[st]);
+        }
+    }
+    for(int ki=0;ki<nks;++ki){
+        int st=ki%NST;
+        mbar_wait(&full[st], fph); if(st==NST-1) fph^=1;
+        float* base=sm+(size_t)st*BUF;
+        float* Asw=base; float* Bsw=base+ASW;
+        float* As0=base+ASW+BSW; float* As1=As0+ABND;
+        float* B0=As1+ABND; float* B1=B0+BB;
+        // COMPOSED-INDEX decode (proven bit-exact): swizzled tile -> gmma INTER. The gmma
+        // band holds 4 INDEPENDENT k8 sub-tiles concatenated: sub = k>>3, each sub is a
+        // 64x8 gmma_phys tile (256 floats). The wgmma k8 sub-step START bumps by one sub.
+        // A: logical (m 0..127, k 0..TKSW-1). atom a=m>>3, r=m&7. swizzled slot as measured.
+        for(int i=tid;i<TM*TKSW;i+=256){
+            int m=i/TKSW, k=i%TKSW;
+            int a=m>>3, r=m&7;
+            int sw = a*256 + r*32 + (((k>>2)^(r&7))<<2) + (k&3);
+            float v=Asw[sw];
+            int sub=k>>3, kk=k&7, mm=(m&63);
+            float* dst=(m<64)?As0:As1;
+            dst[sub*(64*8) + gmma_phys(mm,kk)]=v;
+        }
+        // B: logical (k 0..TKSW-1, n 0..127). atom c=n>>5, nn=n&31, gp=(nn>>2)^(k&7).
+        for(int i=tid;i<TKSW*TN;i+=256){
+            int k=i/TN, n=i%TN;
+            int c=n>>5, nn=n&31, gp=(nn>>2)^(k&7);
+            int sw = c*(TKSW*TKSW) + k*32 + (gp<<2) + (nn&3);
+            float v=Bsw[sw];
+            int sub=k>>3, kk=k&7, nnn=(n&63);
+            float* dst=(n<64)?B0:B1;
+            dst[sub*(64*8) + gmma_phys(nnn,kk)]=v;
+        }
+        asm volatile("fence.proxy.async.shared::cta;\n":::"memory");
+        __syncthreads();
+        float* As=(band==0)?As0:As1;
+        uint32_t aAb=(uint32_t)__cvta_generic_to_shared(As);
+        uint32_t a0b=(uint32_t)__cvta_generic_to_shared(B0), a1b=(uint32_t)__cvta_generic_to_shared(B1);
+        asm volatile("wgmma.fence.sync.aligned;\n":::"memory");
+        // 4 wgmma k8 sub-steps over the 32-wide K slab; gmma bands are contiguous 8x4 cores
+        // so the k8 sub-step bumps START by 8 K-elems = gmma_phys stride of one kcore-pair.
+        #pragma unroll
+        for(int kk=0;kk<TKSW;kk+=TK){
+            // each k8 sub-tile is an independent 64x8 gmma_phys tile = 512 floats. START
+            // bumps by sub*512 floats = sub*2048 bytes.
+            uint32_t off=(uint32_t)((kk>>3)*512*4);
+            uint64_t dA=mk(aAb+off,128,256), dB0=mk(a0b+off,128,256), dB1=mk(a1b+off,128,256);
+            WG(d0,dA,dB0);
+            WG(d1,dA,dB1);
+        }
+        asm volatile("wgmma.commit_group.sync.aligned;\nwgmma.wait_group.sync.aligned 0;\n":::"memory");
+        __syncthreads();
+        if(tid==0){
+            int load_ki=ki+stages;
+            if(load_ki<nks){
+                int lst=load_ki%NST;
+                float* lb=sm+(size_t)lst*BUF; float* lAsw=lb; float* lBsw=lb+ASW;
+                mbar_expect_tx(&full[lst], bytesA+bytesB);
+                tma_load_2d(lAsw,&tmapA,load_ki*TKSW,bm,&full[lst]);
+                #pragma unroll
+                for(int c=0;c<NATOM;++c)
+                    tma_load_2d(lBsw+(size_t)c*(TKSW*TKSW),&tmapB,bn+c*TKSW,load_ki*TKSW,&full[lst]);
+            }
+        }
+    }
+    int rbase=bm+band*64;
+    int w=lt>>5,l=lt&31,rb=w*16+(l>>2),cb=(l&3)*2;
+    #pragma unroll
+    for(int c=0;c<8;++c)for(int r=0;r<2;++r)for(int p=0;p<2;++p){
+        int idx=c*4+r*2+p,row=rbase+rb+r*8;
+        int col0=bn+cb+p+c*8, col1=bn+64+cb+p+c*8;
+        if(row<M&&col0<N)gD[row*N+col0]=d0[idx];
+        if(row<M&&col1<N)gD[row*N+col1]=d1[idx];
     }
 }
 
@@ -416,6 +537,68 @@ int main(int argc,char**argv){
             // landed m for this physical row (should be constant == pr if row-preserving)
             int id0=(int)hO[pr*32]; printf(" | landed_m@g0=%d\n",id0/32);
         }
+        return 0;
+    }
+    if(MODE==4){
+        // ---- FULL GEMM: composed-decode swizzled-TMA, bit-exact gate then perf ----
+        int NST=argc>3?atoi(argv[3]):3;
+        int Mx=S,Nx=S,Kx=S;
+        if(Nx%128||Kx%32){printf("MODE4 needs N%%128==0 && K%%32==0\n");return 1;}
+        size_t szA=(size_t)Mx*Kx,szB=(size_t)Kx*Nx,szD=(size_t)Mx*Nx;
+        float *hA=(float*)malloc(szA*4),*hB=(float*)malloc(szB*4),*hD=(float*)malloc(szD*4),*hR=(float*)malloc(szD*4);
+        srand(7);
+        for(size_t i=0;i<szA;++i)hA[i]=tf(((rand()%17)-8)*0.0625f);
+        for(size_t i=0;i<szB;++i)hB[i]=tf(((rand()%17)-8)*0.0625f);
+        float *dA,*dB,*dD,*dR;
+        CK(cudaMalloc(&dA,szA*4));CK(cudaMalloc(&dB,szB*4));CK(cudaMalloc(&dD,szD*4));CK(cudaMalloc(&dR,szD*4));
+        CK(cudaMemcpy(dA,hA,szA*4,cudaMemcpyHostToDevice));CK(cudaMemcpy(dB,hB,szB*4,cudaMemcpyHostToDevice));
+        cublasHandle_t h;CB(cublasCreate(&h));CB(cublasSetMathMode(h,CUBLAS_TF32_TENSOR_OP_MATH));
+        float al=1.f,be=0.f;
+        CB(cublasSgemm(h,CUBLAS_OP_N,CUBLAS_OP_N,Nx,Mx,Kx,&al,dB,Nx,dA,Kx,&be,dR,Nx));CK(cudaDeviceSynchronize());
+        CK(cudaMemcpy(hR,dR,szD*4,cudaMemcpyDeviceToHost));
+        // swizzled tmaps: A box{32(K),128(M)}, B box{32(N),32(K)} (B as 32-N atoms).
+        CUtensorMap tmapA{},tmapB{};
+        { cuuint64_t gd[2]={(cuuint64_t)Kx,(cuuint64_t)Mx}; cuuint64_t gs[1]={(cuuint64_t)Kx*4};
+          cuuint32_t bd[2]={32,128}; cuuint32_t es[2]={1,1};
+          CUresult r=enc(&tmapA,CU_TENSOR_MAP_DATA_TYPE_FLOAT32,2,dA,gd,gs,bd,es,
+            CU_TENSOR_MAP_INTERLEAVE_NONE,CU_TENSOR_MAP_SWIZZLE_128B,
+            CU_TENSOR_MAP_L2_PROMOTION_NONE,CU_TENSOR_MAP_FLOAT_OOB_FILL_NONE);
+          if(r!=CUDA_SUCCESS){printf("MODE4 encodeA r=%d\n",(int)r);return 4;} }
+        { cuuint64_t gd[2]={(cuuint64_t)Nx,(cuuint64_t)Kx}; cuuint64_t gs[1]={(cuuint64_t)Nx*4};
+          cuuint32_t bd[2]={32,32}; cuuint32_t es[2]={1,1};
+          CUresult r=enc(&tmapB,CU_TENSOR_MAP_DATA_TYPE_FLOAT32,2,dB,gd,gs,bd,es,
+            CU_TENSOR_MAP_INTERLEAVE_NONE,CU_TENSOR_MAP_SWIZZLE_128B,
+            CU_TENSOR_MAP_L2_PROMOTION_NONE,CU_TENSOR_MAP_FLOAT_OOB_FILL_NONE);
+          if(r!=CUDA_SUCCESS){printf("MODE4 encodeB r=%d\n",(int)r);return 4;} }
+        const int TM=128,TN=128,TKSW=32;
+        size_t BUF=(size_t)(TM*TKSW + TN*TKSW + 2*64*TKSW + 2*TKSW*64);
+        size_t smsz=(size_t)NST*BUF*4 + (size_t)2*NST*8;
+        dim3 grid(Nx/128,(Mx+TM-1)/TM); int blk=256;
+        CK(cudaFuncSetAttribute(gemm_w10,cudaFuncAttributeMaxDynamicSharedMemorySize,(int)smsz));
+        auto launch=[&](){ gemm_w10<<<grid,blk,smsz>>>(tmapA,tmapB,dD,Mx,Nx,Kx,NST); };
+        { int occ=0; cudaOccupancyMaxActiveBlocksPerMultiprocessor(&occ,(const void*)gemm_w10,blk,smsz);
+          printf("OCCUPANCY MODE=4 blk=%d dynsmem=%zuB -> %d CTA/SM (%d compute-thr/SM)\n",blk,smsz,occ,occ*blk); }
+        CK(cudaMemset(dD,0,szD*4));
+        launch();
+        cudaError_t e=cudaGetLastError(); if(e==cudaSuccess)e=cudaDeviceSynchronize();
+        if(e!=cudaSuccess){printf("MODE4 OWN-FAULT %s\n",cudaGetErrorString(e));return 4;}
+        CK(cudaMemcpy(hD,dD,szD*4,cudaMemcpyDeviceToHost));
+        double se=0,sr=0;for(size_t i=0;i<szD;++i){double dd=(double)hD[i]-hR[i];se+=dd*dd;sr+=(double)hR[i]*hR[i];}
+        double rr=sqrt(se/fmax(1e-30,sr));
+        if(rr>3e-3){printf("W10 S=%d MODE=4 NST=%d rel_rms=%.3e FAIL — no perf (g5)\n",S,NST,rr);return 2;}
+        cudaEvent_t s0,s1;CK(cudaEventCreate(&s0));CK(cudaEventCreate(&s1));int it=20;
+        launch();CK(cudaDeviceSynchronize());
+        CK(cudaEventRecord(s0));for(int i=0;i<it;++i)launch();
+        CK(cudaEventRecord(s1));CK(cudaEventSynchronize(s1));
+        float mo;CK(cudaEventElapsedTime(&mo,s0,s1));mo/=it;
+        double fl=2.0*(double)Mx*Nx*Kx,tfo=fl/(mo*1e-3)/1e12;
+        cublasSgemm(h,CUBLAS_OP_N,CUBLAS_OP_N,Nx,Mx,Kx,&al,dB,Nx,dA,Kx,&be,dR,Nx);CK(cudaDeviceSynchronize());
+        CK(cudaEventRecord(s0));for(int i=0;i<it;++i)cublasSgemm(h,CUBLAS_OP_N,CUBLAS_OP_N,Nx,Mx,Kx,&al,dB,Nx,dA,Kx,&be,dR,Nx);
+        CK(cudaEventRecord(s1));CK(cudaEventSynchronize(s1));
+        float mc;CK(cudaEventElapsedTime(&mc,s0,s1));mc/=it;
+        double tfc=fl/(mc*1e-3)/1e12,ratio=tfc/tfo;
+        printf("W10 S=%d MODE=4 NST=%d own=%.1f TFLOP/s cuBLAS-TF32=%.1f ratio(cuBLAS/own)=%.2fx rel_rms=%.3e PARITY=%s\n",
+               S,NST,tfo,tfc,ratio,rr,ratio<=1.3?"YES":"NO");
         return 0;
     }
     printf("unknown MODE %d\n",MODE); return 1;
