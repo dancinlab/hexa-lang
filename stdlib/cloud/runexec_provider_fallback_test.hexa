@@ -59,6 +59,21 @@ fn _provider_ssh_port_lookup(state: [ProvState], id: str) -> Resolved {
     return Resolved { host: id, port: "", resolved: 0, via: "unresolved" }
 }
 
+// mirror of cloud_cli.hexa:_provider_ssh_port_lookup's RUNPOD arm KEY GATE
+// (handoff 676f7db5). The real runpod arm now uses the OPTIONAL key resolver
+// (cloud_runpod_api_key — "" when unset) instead of must_have, which exit(2)s.
+// The runpod arm is reached for ANY non-vast, non-dotted, non-pool, registry-miss
+// name — INCLUDING a plain ~/.ssh/config Host alias (default provider="runpod").
+// With NO runpod key, hard-exiting would REGRESS that keyless alias path, so a
+// missing key returns via="" (NOT "unresolved") → the guard does NOT fire and the
+// alias still resolves keyless. `key_set=0` mirrors len(cloud_runpod_api_key())==0.
+fn _provider_ssh_port_lookup_runpod(state: [ProvState], id: str, key_set: int) -> Resolved {
+    if key_set == 0 {
+        return Resolved { host: id, port: "", resolved: 0, via: "" }
+    }
+    return _provider_ssh_port_lookup(state, id)
+}
+
 // mirror of cloud_cli.hexa:_strip_user_at — KEEP IN SYNC.
 fn _strip_user_at(dest: str) -> str {
     let at = dest.index_of("@")
@@ -131,6 +146,23 @@ fn main() {
     // "unresolved") → the guard leaves it to the legacy ssh-config path.
     let sshconfig_fallthrough = Resolved { host: "38961119", port: "", resolved: 0, via: "" }
     _ck_i("ssh-config fallthrough no-die", _would_die(sshconfig_fallthrough), 0)
+
+    // ── handoff 676f7db5: runpod arm KEY GATE (optional key, no regression) ──
+    // KEY SET + provider HIT → live-resolve (unchanged).
+    let k1 = _provider_ssh_port_lookup_runpod(state, "8g5r7jup4lw35e", 1)
+    _ck_i("keyset hit resolved", k1.resolved, 1)
+    _ck_s("keyset hit via",      k1.via, "provider")
+    // KEY SET + provider MISS (RENTING) → fail loud (unchanged).
+    let k2 = _provider_ssh_port_lookup_runpod(state, "stillrenting01", 1)
+    _ck_s("keyset miss via",     k2.via, "unresolved")
+    _ck_i("keyset miss WOULD die", _would_die(k2), 1)
+    // KEY UNSET + any name (e.g. a ~/.ssh/config Host alias) → via="" so the
+    // guard does NOT fire; the legacy alias passthrough still resolves keyless.
+    let k3 = _provider_ssh_port_lookup_runpod(state, "mybox-alias", 0)
+    _ck_i("keyless skip resolved", k3.resolved, 0)
+    _ck_s("keyless skip via",      k3.via, "")
+    _ck_i("keyless skip no-die",   _would_die(k3), 0)
+    _ck_s("keyless skip host kept", k3.host, "mybox-alias")
 
     println("runexec_provider_fallback_test PASS")
 }

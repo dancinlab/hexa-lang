@@ -2142,13 +2142,32 @@ fn _idle_prov_of(id: str, bill_ids, bill_prov) -> str {
 // _cloud_ssh_port below — they MUST resolve the same endpoint.
 fn _provider_ssh_port_lookup(id: str, provider: str) -> ResolvedHost {
     if provider == "runpod" {
-        let api_key = cloud_runpod_must_have_api_key("ssh-port")
+        // handoff 676f7db5: use the OPTIONAL key resolver (cloud_runpod_api_key,
+        // "" when unset) — NOT must_have, which exit(2)s. The runpod arm is
+        // reached for ANY non-vast, non-dotted, non-pool, registry-miss name,
+        // including a plain ~/.ssh/config Host alias (default provider="runpod").
+        // With no runpod key, hard-exiting would REGRESS that keyless alias path
+        // (run/copy-to to an ssh-config Host would die instead of falling through
+        // to the legacy alias passthrough). So: key UNSET → return via="" (guard
+        // does NOT fire) so the alias still resolves keyless; key SET → behavior is
+        // unchanged (live-resolve the pod-id → root@ip:port, or via="unresolved" +
+        // loud-fail when the provider has no live endpoint for a real pod-id).
+        let api_key = cloud_runpod_api_key()
+        if len(api_key) == 0 {
+            // KEY UNSET: leave the name untouched (via="" → the guard does NOT
+            // fire) so a plain ~/.ssh/config Host alias still resolves keyless via
+            // the legacy alias passthrough. Returning via="unresolved" here would
+            // loud-fail an ssh-config alias too — the regression the optional-key
+            // guard exists to prevent.
+            return ResolvedHost { host: id, port: "", resolved: 0, via: "" }
+        }
         let r = runpod_get_ssh_port(api_key, id)
         if r.ok == 1 {
             return ResolvedHost { host: "root@" + r.ip, port: r.port, resolved: 1, via: "provider" }
         }
-        // via="unresolved" so the run/copy-to call site can fail LOUD instead of
-        // ssh-ing the bare pod-id (it is NOT a real ssh dest).
+        // KEY SET but the provider has no live ssh endpoint (still RENTING / id
+        // unknown): via="unresolved" so the run/copy-to call site can fail LOUD
+        // instead of ssh-ing the bare pod-id (it is NOT a real ssh dest).
         return ResolvedHost { host: id, port: "", resolved: 0, via: "unresolved" }
     }
     let v = vast_ssh_endpoint(id)
