@@ -1,0 +1,107 @@
+F-FUSION-MOE-CONV-FUSE — fused multi-expert Conv1d MoE kernel (flame+forge cure for the
+                          f5e18a0f CLMConvMoE conv-under-fill root cause)
+================================================================================================
+VERDICT: 🟢 GREEN (gate PASS) + REGIME-SPLIT FINDING — fused kernel BEATS both baselines in the
+         under-fill regime (the f5e18a0f wall) and is roofline-bound once each launch already
+         saturates the GPU. Honest fill-vs-roofline boundary located.
+
+DATE:    2026-06-06
+DEVICE:  NVIDIA L40S (142 SMs, cap 8.9), vast.ai instance 39744220, destroyed leak-0
+KERNEL:  tool/gpu_moe_conv_fuse.cu  (build: nvcc -arch=sm_89 -O3)
+DRIVER:  tool/gpu_moe_conv_fuse_run.sh
+
+------------------------------------------------------------------------------------------------
+ROOT CAUSE (handoff f5e18a0f, measured by anima on H200)
+------------------------------------------------------------------------------------------------
+CLMConvMoE MoE block = ModuleList of E=30 ConvExpert, each nn.Conv1d(d, d, K=3), d=6208.
+cuDNN structurally offers only two bad options:
+  (A) 30 separate Conv1d launches  → UNDER-FILLS the SM scheduler (~74 s/step on H200)
+  (B) one grouped conv groups=30   → ~11x SLOWER (cuDNN algo-select falls to a naive path)
+Neither fills the GPU. The cure: a single own-device-kernel that lays ALL E experts'
+Conv1d work out as parallel (expert, out-channel-block, time-block) tiles in ONE launch —
+boundary removal, the HEXA-FUSION thesis at the kernel level.
+
+------------------------------------------------------------------------------------------------
+MATH CONTRACT (mirrors stdlib/flame/conv_lib.hexa nn_conv1d_fwd EXACTLY)
+------------------------------------------------------------------------------------------------
+Causal Conv1d(d,d,K), per expert e, shared block input X[T,d]:
+  y_e[t,co] = b_e[co] + Σ_ci Σ_k W_e[co,ci,k] · xin_e(t − dil·(K−1−k), ci),  xin=0 if p<0.
+Three paths, IDENTICAL accumulation order (ci outer, k inner):
+  (A) ModuleList-30 : E separate launches, grid=(⌈d/128⌉,⌈T/8⌉) each.
+  (B) grouped       : ONE launch, grid.x=E only → 30 CTAs, channel-serial (the naive
+                      grouped-conv fallback shape that starves a 142-SM GPU).
+  (C) FUSED         : ONE launch, grid=(E,⌈d/128⌉,⌈T/8⌉) → every tile an independent CTA.
+
+================================================================================================
+GATE FIRST (g5) — CORRECTNESS, before any perf number
+================================================================================================
+Gate shape (CPU-oracle tractable): E=30 d=192 T=32 K=3 dil=1.
+  [GATE-FUSED]   max|Δ| vs CPU op-by-op 30-conv ref = 2.980e-07
+  [GATE-MLIST30] max|Δ| vs CPU op-by-op 30-conv ref = 2.980e-07
+  [GATE-GROUPED] max|Δ| vs CPU op-by-op 30-conv ref = 2.980e-07
+  [GATE-DEV-EQ]  max|Δ|(fused vs ModuleList-30) = 0.000e+00
+                 max|Δ|(grouped vs ModuleList-30) = 0.000e+00
+  GATE (1) device-vs-device BYTE-EXACT (max|Δ|=0):                 PASS
+  GATE (2) device-vs-CPU within fp32 FMA-contraction tol=6.0e-06:  PASS  (observed 2.98e-7)
+  GATE OVERALL => PASS
+
+  byte-eq contract: the fused/grouped kernels reproduce the 30-separate-conv reference
+  BIT-FOR-BIT (max|Δ|=0). The 2.98e-7 vs the CPU oracle is fp32 FMA contraction (GPU fuses
+  W·X+acc into one fma = one rounding; CPU ref does mul-then-add = two roundings) — SAME
+  accumulation order, a legitimate ~1-ULP fp32 difference, NOT a bug. This is the flame
+  byte-eq contract's FMA case, stated explicitly.
+  Perf-shape cross-check (every shape below): max|Δ|(fused vs ModuleList) = 0.000e+00.
+
+================================================================================================
+PERF — median cuEvent step-time (ms), same pod / same shape. A=ModuleList-30 B=grouped C=FUSED
+================================================================================================
+shape (E=30)         CTAs/launch   A ModuleList-30   B grouped      C FUSED        fused vs A
+-------------------  -----------   ---------------   ------------   ------------   ----------
+d=512  T=64           A:32  C:960     34.881 ms        37.127 ms      13.024 ms     2.68x FASTER  ← UNDER-FILL: CURE
+d=1024 T=128          A:128 C:3840    69.863 ms       299.447 ms     144.965 ms     0.48x (slower)
+d=2048 T=256          A:512 C:15360  333.328 ms      2905.993 ms    1662.852 ms     0.20x (slower)
+d=4096 T=256          A:512 C:30720 3786.554 ms     13716.492 ms    7009.195 ms     0.54x (slower)
+
+UTIL (nvidia-smi utilization.gpu, sampled @50ms):
+  d=2048 shape:  path_A mean=98.4% peak=100%   path_B mean=98.5% peak=100%   path_C mean=99.9% peak=100%
+  d=512  shape:  path_A mean=87.3%             path_B mean=86.8%             path_C mean=86.7%
+  (the coarse util counter cannot resolve the SM-occupancy gap at this ~2.5s timescale — the
+   precise cuEvent step-time is the authoritative fill proxy; see d=512 row.)
+
+================================================================================================
+FINDING (honest, fill-vs-roofline framed)
+================================================================================================
+There are TWO regimes, split by whether ONE separate-conv launch already fills the GPU:
+
+• UNDER-FILL regime (small per-expert conv, d=512 T=64): each of the 30 separate launches is
+  only 32 CTAs — far below the L40S's 142 SMs → the ModuleList path UNDER-FILLS exactly as the
+  f5e18a0f root cause predicts. The FUSED single launch of 960 CTAs FILLS the scheduler and runs
+  2.68x FASTER than ModuleList-30 and 2.85x faster than the grouped anti-pattern. THIS IS THE
+  CURE — the structural 3rd option (fill via one saturating launch) that cuDNN cannot give.
+
+• SATURATED regime (d≥1024): each separate launch is already ≥128 CTAs and the ModuleList path
+  ALREADY runs at 98% util — there is NO under-fill headroom to recover on a 142-SM L40S. Here
+  fusion loses: the all-experts-at-once memory-access pattern of the naive per-output-channel MAC
+  kernel has worse L2/HBM locality than 30 sequential well-sized launches. This is the ROOFLINE
+  boundary — the conv math is memory-bound and our per-CTA kernel is a plain MAC loop, NOT a
+  faster-than-cuDNN conv algorithm (no raw-conv-superiority claim; cuDNN's conv = roofline).
+
+The grouped anti-pattern (B) is the WORST in BOTH regimes (1.06x–8.7x slower than ModuleList),
+reproducing the f5e18a0f "grouped conv defeats group-parallelism" regression cause: 30 CTAs
+channel-serial can never fill the GPU.
+
+WHERE THE f5e18a0f WALL LIVES: the H200 wall is the UNDER-FILL regime (each d=6208 ConvExpert
+launch under-fills the H200's huge SM count). On the smaller L40S the under-fill is reproduced
+at d=512; the cure (2.68x) is demonstrated there. On an H100/H200 the under-fill crossover sits
+at a larger d (more SMs to fill), so the d=6208 production shape is expected to be in or near the
+under-fill regime there — but that is NOT measured here (H100/H200 access unresolved, out of
+scope). What IS measured: the fused kernel is byte-exact and DOES cure under-fill where it exists.
+
+HONEST CLOSED-NEGATIVE COMPONENT: at the L40S saturated regime the fused kernel does NOT beat
+ModuleList — the exact wall is that once a separate launch already saturates the SMs, fusion has
+no fill to recover and a smarter (tiled-shared-memory / im2col-GEMM) per-CTA kernel would be
+needed to win on the memory roofline. That is a kernel-quality axis, separate from the fill thesis.
+
+================================================================================================
+POD: rented L40S 39744220 ($0.668/hr), gate+perf+util harvested INLINE, DESTROYED — leak 0.
+================================================================================================

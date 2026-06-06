@@ -16,6 +16,19 @@
   a separate closed-neg).
 - **5-axis north-star**: axes 1 (own-GEMM perf) + 2 (cuBLAS-impossible megakernel) DONE/closed; axes 3/4/5
   (reflect → dojo / README / commons) are the downstream reflect lanes (axis-5 sign-gated, user-only). See §5-axis.
+- **fused multi-expert Conv1d MoE kernel — the flame+forge cure for the f5e18a0f conv-under-fill root cause**
+  (2026-06-06, F-FUSION-MOE-CONV-FUSE 🟢): a single own-device-kernel computes ALL E=30 ConvExpert Conv1d
+  in ONE GPU-saturating launch (tile = expert × out-channel-block × time-block), the structural 3rd option
+  cuDNN can't give (it offers only 30-separate-launch UNDER-FILL or grouped-conv 11x REGRESSION). GATE FIRST:
+  byte-exact vs the 30-separate-conv reference (max|Δ|=0 device-vs-device; 2.98e-7 vs CPU = fp32 FMA
+  contraction, same accum order). FINDING (L40S 142 SMs): regime-split — in the UNDER-FILL regime (d=512,
+  32 CTAs/separate-launch) the fused kernel is **2.68x faster than ModuleList-30 and 2.85x faster than
+  grouped** = the cure demonstrated; once each launch already saturates the GPU (d≥1024, ≥98% util) there is
+  no fill headroom and the naive per-channel MAC kernel loses to 30 well-sized launches on the memory roofline.
+  Grouped is WORST in both regimes (reproduces the f5e18a0f regression). HONEST: the win is FILL/boundary-
+  removal where under-fill exists, NOT raw-conv superiority (cuDNN conv = roofline). The d=6208/H200 production
+  shape lives in the under-fill regime on a big-SM GPU but that crossover is not re-measured here (H100/H200
+  access unresolved, out of scope). verdict: .verdicts/hexa-fusion/F-FUSION-MOE-CONV-FUSE.txt
 
 ## 전제 — 왜 fusion 인가 (host-feed 축이 닫힌 뒤)
 
