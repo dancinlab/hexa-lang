@@ -1,0 +1,45 @@
+// ════════════════════════════════════════════════════════════════════════════
+//  ring_all_reduce.hexa — hexa-native ring all-reduce collective (DDP-M1).
+//
+//  WIP SKELETON — collective-correctness leg only. See HEXA-DDP DDP-M1.
+//
+//  Canonical ring all-reduce over N ranks, each holding a length-S vector.
+//  The vector is split into N contiguous chunks; the algorithm runs in
+//  2(N-1) communication steps:
+//    Phase 1 — reduce-scatter (N-1 steps): in step i, rank r sends one chunk
+//      to its right neighbour (r+1)%N and adds the chunk it receives from its
+//      left neighbour (r-1+N)%N. After N-1 steps each rank owns the full SUM
+//      of exactly one distinct chunk.
+//    Phase 2 — all-gather (N-1 steps): circulate those fully-reduced chunks
+//      around the ring so every rank ends holding the complete summed vector.
+//
+//  HARDWARE-FREE SIM: the N ranks are modelled as N rows of a single
+//  host buffer (a flat float array of N*S elements, rank r at offset r*S).
+//  The "transport" is a plain in-process array copy — M3 later swaps this
+//  copy for real cudaMemcpyPeer / NVLink P2P with the schedule unchanged.
+//
+//  HONEST (g5): M1 proves the COLLECTIVE ALGORITHM is bit-exact vs a serial
+//  elementwise sum. It does NOT mean parallel training runs — real
+//  multi-GPU transport is M3 and multi-GPU hardware is M2 (the wildcard).
+// ════════════════════════════════════════════════════════════════════════════
+
+// chunk boundaries: split S into N contiguous chunks as evenly as possible.
+// chunk c spans [chunk_start(c), chunk_start(c+1)). When S is not a multiple
+// of N the first (S % N) chunks get one extra element (boundary case).
+pub fn ring_chunk_start(S: int, N: int, c: int) -> int {
+    let base = S / N
+    let rem = S % N
+    // each of the first `rem` chunks is (base+1); the rest are `base`.
+    if c <= rem { return c * (base + 1) }
+    return rem * (base + 1) + (c - rem) * base
+}
+
+// number of ring communication steps for the canonical schedule = 2(N-1).
+pub fn ring_step_count(N: int) -> int {
+    return 2 * (N - 1)
+}
+
+// WIP: ring all-reduce stub — filled in subsequent unit commits.
+pub fn ring_all_reduce(buf: int, N: int, S: int) {
+    // TODO: reduce-scatter then all-gather (units land next).
+}
