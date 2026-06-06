@@ -1,0 +1,140 @@
+F-DDP-M5-4GPU-COLLECTIVE — HEXA-DDP DDP-M5 (collective leg)
+Real 4-GPU ring all-reduce over inter-GPU transport (cudaMemcpyPeer).
+
+STATUS: GREEN — 4-rank collective byte-eq on real 4-GPU hardware + N=2 vs
+N=4 scaling measured.
+
+NODE: vast.ai instance 39793429 — 4x NVIDIA GeForce RTX 3060 (one node).
+  nvcc 12.4.131 / CUDA 12.4 / sm_86. Image nvidia/cuda:12.4.1-devel-ubuntu22.04.
+  (LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu forced per the M3 stale-compat
+   fix; build clean here, no forward-compat probe trip.)
+
+GATE (g5): ring all-reduce result on EVERY GPU == serial elementwise sum,
+byte-eq max|delta|=0, FP64, N=4. Schedule = the DDP-M1 canonical ring
+(2(N-1) steps = 6, chunk partition identical to stdlib/ddp/ring_all_reduce.hexa,
+byte-identical to the M3 general-N send_chunk/recv_chunk/all-gather formulas);
+only the rank count went 2 -> 4 (env DDP_NUM_GPUS) and per-step transport is a
+real device-to-device cudaMemcpyPeer. Source: stdlib/ddp/m5_4gpu/ring_p2p_m5.cu.
+
+──────────────────────────────────────────────────────────────────────────
+TOPO (nvidia-smi topo -m, verbatim):
+        GPU0    GPU1    GPU2    GPU3    CPU Affinity    NUMA Affinity   GPU NUMA ID
+  GPU0   X      PHB     PHB     SYS     0-13,28-41      0               N/A
+  GPU1  PHB      X      PHB     SYS     0-13,28-41      0               N/A
+  GPU2  PHB     PHB      X      SYS     0-13,28-41      0               N/A
+  GPU3  SYS     SYS     SYS      X      14-27,42-55     1               N/A
+  PHB  = traversing PCIe + a PCIe Host Bridge (the CPU).
+  SYS  = traversing PCIe + the SMP interconnect between NUMA nodes (QPI/UPI).
+  -> NOT NVLink (no NV# bond). GPU0/1/2 peer via the PCIe host bridge (PHB,
+     NUMA node 0); GPU3 sits on NUMA node 1 and reaches the others over the
+     cross-socket SYS link. Mixed PHB+SYS, no direct-P2P fabric.
+
+canAccessPeer (all 12 directed pairs):
+  cudaDeviceCanAccessPeer(0->1)=0  (0->2)=0  (0->3)=0
+  cudaDeviceCanAccessPeer(1->0)=0  (1->2)=0  (1->3)=0
+  cudaDeviceCanAccessPeer(2->0)=0  (2->1)=0  (2->3)=0
+  cudaDeviceCanAccessPeer(3->0)=0  (3->1)=0  (3->2)=0
+  -> direct P2P UNAVAILABLE on all pairs. GeForce-class direct peer access is
+     driver-disabled on this PHB/SYS topology (no NVLink bridge), so every
+     cudaMemcpyPeer routes through a host-staged copy. CORRECTNESS is identical
+     (the ring schedule is transport-agnostic); the PERF caveat is that this
+     leg ran without direct NVLink/PCIe-P2P bandwidth (same finding as M3).
+
+TRANSPORT: staged host copy (cudaMemcpyPeer routes via host).
+
+BYTE-EQ per case (verbatim from the harness):
+  S=13      (S%N=1, boundary chunking — NOT a multiple of N=4) : max|delta| vs serial-sum = 0  BYTE-EQ PASS
+  S=1048576 (1<<20, large)                                     : max|delta| vs serial-sum = 0  BYTE-EQ PASS
+
+STEP COUNT: 2(N-1) = 6 communication steps at N=4 (vs 2 at N=2). PASS.
+
+SCALING SWEEP (same total bytes S=4194304 = 4M doubles/rank = 32 MiB; median of
+5 warm reps, warmup discarded; per-step = all-reduce wall / 2(N-1)):
+  N=2  steps=2  all-reduce wall(median)=22.2413 ms  per-step=11.1206 ms  byte-eq=0 PASS
+  N=4  steps=6  all-reduce wall(median)=58.7016 ms  per-step= 9.7836 ms  byte-eq=0 PASS
+  -> the all-reduce WALL grows 22.24 -> 58.70 ms (2.64x) as N goes 2 -> 4
+     because the step count tripled (2 -> 6); the PER-STEP wall is roughly
+     flat (11.12 -> 9.78 ms), consistent with a near-constant per-rank
+     bandwidth (ring moves 2(N-1)/N x the per-rank data) while LATENCY grows
+     with the step count. MEASURED, not modeled, on a host-staged transport.
+
+DDP-M5 (collective leg) verdict line (verbatim):
+  === DDP-M5 (collective leg) verdict: GREEN - 4-rank ring all-reduce byte-eq over real multi-GPU + scaling measured ===
+
+POD DESTROYED: Y — vastai destroy instance 39793429 (leak 0; label confirmed
+  "hexa-ddp-m5" before destroy. The foreign rtsc-li2mgh16-anchor instance was
+  left untouched.). exit code 0.
+
+──────────────────────────────────────────────────────────────────────────
+HONEST (g5): M5 collective leg GREEN = the ring all-reduce COLLECTIVE scales
+to 4 REAL GPUs, byte-exact vs a serial sum, with the schedule + step count
+(2(N-1)=6) and per-step wall measured. This is NOT 4-GPU end-to-end training
+speedup: 4-GPU byte-exact collective != 4-GPU training speedup. End-to-end
+parallel training at scale = DDP-M5b, which chains on DDP-M4 (1-GPU vs N-GPU
+same-model byte-eq over a real flame step). Expected N-GPU speedup < N x
+(communication tax; g83) — and on THIS node the transport was host-staged
+(no NVLink/direct-P2P), so the wall is a correctness-grade number, not a
+bandwidth-optimal one. A node with an NVLink bridge would exercise the direct
+P2P path at higher bandwidth — same schedule, same byte-eq gate, faster wire.
+
+──────────────────────────────────────────────────────────────────────────
+RAW POD STDOUT (verbatim):
+######## DDP-M5 real 4-GPU ring all-reduce :: 2026-06-06T23:13:09Z ########
+
+==== nvidia-smi -L ====
+GPU 0: NVIDIA GeForce RTX 3060 (UUID: GPU-66ac0fc5-418f-570c-d1e0-9cc7de42d6d2)
+GPU 1: NVIDIA GeForce RTX 3060 (UUID: GPU-7869be38-0d1c-db70-f264-887e76ce8d25)
+GPU 2: NVIDIA GeForce RTX 3060 (UUID: GPU-571fdeac-4c3d-fef4-0035-6fb09d992e92)
+GPU 3: NVIDIA GeForce RTX 3060 (UUID: GPU-ae0e5f5f-8695-404a-c177-c119d5620150)
+
+==== nvidia-smi topo -m (VERBATIM SSOT) ====
+	GPU0	GPU1	GPU2	GPU3	CPU Affinity	NUMA Affinity	GPU NUMA ID
+GPU0	 X 	PHB	PHB	SYS	0-13,28-41	0		N/A
+GPU1	PHB	 X 	PHB	SYS	0-13,28-41	0		N/A
+GPU2	PHB	PHB	 X 	SYS	0-13,28-41	0		N/A
+GPU3	SYS	SYS	SYS	 X 	14-27,42-55	1		N/A
+
+Legend:
+
+  X    = Self
+  SYS  = Connection traversing PCIe as well as the SMP interconnect between NUMA nodes (e.g., QPI/UPI)
+  NODE = Connection traversing PCIe as well as the interconnect between PCIe Host Bridges within a NUMA node
+  PHB  = Connection traversing PCIe as well as a PCIe Host Bridge (typically the CPU)
+  PXB  = Connection traversing multiple PCIe bridges (without traversing the PCIe Host Bridge)
+  PIX  = Connection traversing at most a single PCIe bridge
+  NV#  = Connection traversing a bonded set of # NVLinks
+
+==== building (nvcc -arch=sm_86) ====
+build ok
+
+==== running ring_p2p_m5 (DDP_NUM_GPUS=4) ====
+=== ring_p2p_m5 :: visible CUDA devices = 4 ===
+ranks N = 4  (2(N-1) = 6 communication steps)
+cudaDeviceCanAccessPeer(0->1) = 0
+cudaDeviceCanAccessPeer(0->2) = 0
+cudaDeviceCanAccessPeer(0->3) = 0
+cudaDeviceCanAccessPeer(1->0) = 0
+cudaDeviceCanAccessPeer(1->2) = 0
+cudaDeviceCanAccessPeer(1->3) = 0
+cudaDeviceCanAccessPeer(2->0) = 0
+cudaDeviceCanAccessPeer(2->1) = 0
+cudaDeviceCanAccessPeer(2->3) = 0
+cudaDeviceCanAccessPeer(3->0) = 0
+cudaDeviceCanAccessPeer(3->1) = 0
+cudaDeviceCanAccessPeer(3->2) = 0
+transport = staged host copy (cudaMemcpyPeer routes via host)
+
+--- GATE case N=4 S=13 (S%N=1) ---
+N=4 S=13 : max|delta| vs serial-sum = 0  BYTE-EQ PASS
+
+--- GATE case N=4 S=1048576 (S%N=0) ---
+N=4 S=1048576 : max|delta| vs serial-sum = 0  BYTE-EQ PASS
+
+=== SCALING SWEEP (same total bytes; per-step wall) ===
+  N=2  steps=2(N-1)=2  S=4194304  all-reduce wall(median)=22.2413 ms  per-step=11.1206 ms  byte-eq(md)=0 PASS
+  N=4  steps=2(N-1)=6  S=4194304  all-reduce wall(median)=58.7016 ms  per-step=9.7836 ms  byte-eq(md)=0 PASS
+
+=== DDP-M5 (collective leg) verdict: GREEN - 4-rank ring all-reduce byte-eq over real multi-GPU + scaling measured ===
+transport=staged host copy (cudaMemcpyPeer routes via host)
+
+==== exit code: 0 ====
