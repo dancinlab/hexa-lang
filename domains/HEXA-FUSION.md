@@ -431,6 +431,9 @@ on-silicon run with its own verdict:
 | 1 | mma.sync cuBLAS-class mainloop (CB) | bit-exact (rel-RMS 0.000e+00) | **29.4×** off (+3.4%) | `F-FUSION-SM90-CUBLAS-MAINLOOP` |
 | 2 | wgmma.mma_async + TMA | FEASIBLE (builds+runs sm_90a) | not measured | `F-FUSION-SM90-WGMMA-TMA` |
 | 3 | wgmma no-swizzle bit-correctness | BLOCKED (rel-RMS 1.309) | not measured | `F-FUSION-SM90-WGMMA-SWIZZLE` |
+| W2/3 | wgmma GMMA INTER 8×4 layout | bit-exact (rel-RMS 0) @2048³ | layout SOLVED | `F-FUSION-SM90-WGMMA-GMMA-LAYOUT` |
+| W8 | TMA-producer dual-consumer-WG | bit-exact, **66.9 TFLOP/s** | **6.43×** off (2 CTA/SM) | `F-FUSION-SM90-WGMMA-W8` |
+| W10 | composed swizzle-decode (permute-free) | bit-exact, **70.7 TFLOP/s** ★ | **6.09×** off (2 CTA/SM, +5.7%) | `F-FUSION-SM90-WGMMA-W10` |
 
 **Ladder narrative (honest, g5):**
 1. **30.4× → 29.4×** is the only measured improvement: the mma.sync cuBLAS-class
@@ -505,13 +508,23 @@ the own-GEMM gap lifts the whole stack automatically.
       ROOT CAUSE measured: the FP32 128B-swizzle is **g_phys = g XOR ((r+1)&7)** (NOT textbook g XOR r), and it must
       STILL compose with the 8×4 INTER core (gmma_phys) — a two-layer permutation one linear descriptor can't express.
       W8 66.9/6.41× frontier **KEPT (no regression)**. verdict `.verdicts/hexa-fusion/F-FUSION-SM90-WGMMA-W9.txt`.
-- [ ] **W10 composed swizzle layout** ★ NEXT — compose the W9-MEASURED swizzle (g XOR ((r+1)&7)) with `gmma_phys`
-      to derive the EXACT shared layout the wgmma swizzle-mode-1 descriptor needs; make TMA land it (CUTLASS
-      GMMA::Layout derivation, now with the on-pod constant in hand). Verify on a single-tile decode probe to
-      rel_rms 0 BEFORE any 2048³ perf run. Target: drop the permute bit-exact → 6.44× toward ≤1.3× parity.
+- [x] **W10 composed swizzle decode** ✅ BIG-PROGRESS LIFT (beats W8) — 🟢 BIT-EXACT + frontier lifted. On-pod
+      MODE2/MODE3 dumps RE-MEASURED the true layout and **corrected the W9 handoff**: the FP32 SWIZZLE_128B law is
+      the **textbook g XOR (r&7)** (W9's (r+1)&7 was a partial-8-row-probe artifact); the wall was the SECOND layer
+      (gmma INTER core packing), not the swizzle. The COMPOSED decode (read gmma_phys(m,k) from swizzled slot, pure
+      index, no transpose scratch) is **bit-exact**: single-tile GATE 1+2 rel_rms **0.000e+00** (before any big run,
+      g5), full-GEMM rel_rms **0** @2048/4096/8192. KEY occupancy fix: gmma scratch = a SINGLE shared buffer (not
+      NST-ring-staged) → smem 131→98 KB/CTA → **2 CTA/SM restored**. Same-pod apples: W8 66.9 (6.43×) → **W10 70.7
+      TFLOP/s (6.09×) @S=4096** (+5.7%, 75.5 @8192), ~6.3% of the gap closed. In-place wgmma HW swizzle descriptor =
+      **CLOSED-NEG** (floor 1.392 ~40 cfgs, a 3rd interaction — HW de-swizzle ≠ TMA atom stacking). native sm_90a
+      H100 (vast 39707146, DESTROYED leak 0, nvcc 12.6 driver 560.35.05). verdict `.verdicts/hexa-fusion/F-FUSION-SM90-WGMMA-W10.txt`.
+- [ ] **W11 deeper pipeline / decode elimination** ★ NEXT — the W10 decode is still a software shared→shared index
+      copy per K-slab (the +5.7%). Remaining 6.09× = (a) the decode copy (HW in-place RULED OUT — needs a wgmma
+      operand layout matching the TMA atom stacking) + (b) deeper warp-spec multi-stage (NST>2 regresses occupancy
+      at the current tile). Target: 6.09× toward ≤1.3× parity, bit-exact gate first.
 
-**STATE**: correctness CLOSED (W2/W3 bit-exact). Occupancy CLOSED (W8 2 CTA/SM, **66.5 TFLOP/s, 6.44×**). W9 PROVED
-the swizzle mechanically removes the per-K-step permute (SASS 28→0 STS) at full occupancy, but the naive linear-
-swizzle descriptor is bit-wrong (rel_rms 1.392) — the residual is now a MEASURED, recoverable layout-composition
-(W10: g XOR ((r+1)&7) ∘ gmma_phys), NOT emit-path / NOT occupancy / NOT 불가. Frontier kernel = W8 `gemm_ws_tma`
-(66.5, 6.44×, 2 CTA/SM, bit-exact). Parity OPEN, de-risked, own-GEMM-owned. cuBLAS = roofline, no superiority claim.
+**STATE**: correctness CLOSED (W2/W3 bit-exact). Occupancy CLOSED (W8/W10 2 CTA/SM). **Frontier = W10 `gemm_w10`
+70.7 TFLOP/s, 6.09×, 2 CTA/SM, bit-exact** (beats W8 66.5/6.44× by +5.7%). W9 proved the swizzle removes the
+per-K-step permute (SASS 28→0); W10 corrected the law to textbook g XOR r and **composed it with gmma_phys in
+software** to land a permute-free bit-exact GEMM that lifts the frontier. The in-place HW-descriptor path is
+CLOSED-NEG (3rd interaction). Parity OPEN, de-risked, own-GEMM-owned. cuBLAS = roofline, no superiority claim.
