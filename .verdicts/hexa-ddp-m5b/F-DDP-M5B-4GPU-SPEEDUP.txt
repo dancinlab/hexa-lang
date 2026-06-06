@@ -1,0 +1,20 @@
+F-DDP-M5B-4GPU-SPEEDUP — HEXA-DDP DDP-M5b
+4-GPU end-to-end data-parallel TRAINING speedup (composes M4 train step + M5 4-rank ring).
+
+STATUS: WIP — harness pushed, awaiting a real 4-GPU node run (GPU spend approved).
+
+GATES (g5):
+  (1) CORRECTNESS — 1-GPU W_ref == 4-GPU DDP W_ddp byte-eq max|delta|=0 (FP64,
+      same global batch + seed; the M4 DDP invariant extended to N=4).
+  (2) SPEEDUP — per-step training wall at N=1/2/4 GPUs + speedup ratios +
+      efficiency, swept over model size H to find the compute>comm crossover.
+
+HONEST (g5/g83): N-GPU speedup is ALWAYS < N x (all-reduce comm + sync = Amdahl
+tax). On a GeForce-class PHB/SYS node with no NVLink the cudaMemcpyPeer is
+host-staged, so a small model can be SLOWER at 4-GPU than 1-GPU — an honest
+measured finding, not a failure. The size sweep reports at what H 4-GPU starts
+winning (compute per step amortizes the comm tax).
+
+Source: stdlib/ddp/m5b_speedup/ddp_train_m5b.cu + run_m5b.sh.
+
+(measurement section appended by the on-pod run)
