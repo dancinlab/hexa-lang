@@ -61,6 +61,16 @@
  * (B) regresses (channel-serial). If (C) does not beat (A) step-time/util on the
  * rented GPU → honest closed-negative + the exact wall.
  *
+ * ── OG-FUSE-OPT measured finding (L40S, sm_89, .verdicts/.../F-FUSION-MOE-CONV-OPT.txt)
+ * Path (D) smem-tiling REMOVED (C)'s redundant input reads → fused-vs-fused 1.61x
+ * faster at d=2048 (1662→1034 ms), byte-eq max|Δ|=0 held. BUT (D) STILL loses to
+ * (A) ModuleList at d=2048 (1034 vs 333 ms). Residual roofline = WEIGHT bandwidth +
+ * L2-weight-locality, NOT fill: util is 98.7% for A/C/D alike (the GPU is already
+ * saturated). Weights are unique per (co,ci,k), touched once, no reuse — kernel
+ * fusion can't shrink weight traffic, and the single fused launch interleaves 30
+ * experts' weight streams → worse L2 locality than A's clean per-expert stream.
+ * => fusion remains an UNDER-FILL-only cure; the saturated-win falsifier FALSIFIED.
+ *
  * Build (CUDA host):
  *   nvcc -arch=sm_XX -O3 -o gpu_moe_conv_fuse gpu_moe_conv_fuse.cu
  * Run:

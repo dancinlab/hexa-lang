@@ -29,10 +29,15 @@
   removal where under-fill exists, NOT raw-conv superiority (cuDNN conv = roofline). The d=6208/H200 production
   shape lives in the under-fill regime on a big-SM GPU but that crossover is not re-measured here (H100/H200
   access unresolved, out of scope). verdict: .verdicts/hexa-fusion/F-FUSION-MOE-CONV-FUSE.txt
-- [ ] **OG-FUSE-OPT — tiled/shared-mem fused MoE-conv kernel** — replace the naive per-channel MAC inner
-  loop with a shared-mem-tiled conv so the fused kernel ALSO wins in the SATURATED regime (d>=1024), not
-  only under-fill. Gate: byte-eq max|D|=0 vs the 30-conv reference; target: beat ModuleList-30 step-time
-  at d>=1024 too. GPU run access-gated (deliberate, no auto-fire).
+- [x] **OG-FUSE-OPT — tiled/shared-mem fused MoE-conv kernel** — added path (D): stage the input
+  time-window into smem once per CTA (CI_TILE-chunked, coalesced) + register-blocked time accumulators,
+  removing path (C)'s CO_TILE-fold redundant global X reads. L40S sm_89 (vast 39749770, DESTROYED leak 0):
+  byte-eq max|D|=0 vs the 30-conv reference HELD both regimes (gate + perf-shape cross-check). Tiling gave
+  a real 1.61x fused-vs-fused speedup at d=2048 (C 1662→D 1034 ms). BUT (D) STILL loses to ModuleList-30
+  at d=2048 (1034 vs 333 ms) → saturated-win FALSIFIED. Residual roofline = WEIGHT bandwidth + L2-weight-
+  locality, NOT fill (util 98.7% for A/C/D alike — already saturated); weights are unique/touched-once so
+  fusion can't shrink weight traffic. Fusion remains an UNDER-FILL-only cure.
+  verdict: .verdicts/hexa-fusion/F-FUSION-MOE-CONV-OPT.txt
 - [ ] **OG-FUSE-XOVER — d=6208/H200 production crossover** — measure the actual under-fill->saturated
   boundary at the PRODUCTION shape (d=6208, E=30, H200 132 SMs) to confirm the cure applies to the real
   7B CLMConvMoE step. Blocked on H100/H200 access (unresolved); deliberate, no auto-fire.
