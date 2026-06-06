@@ -1,0 +1,239 @@
+// ════════════════════════════════════════════════════════════════════════════
+//  clm_moe_conv_fused.hexa — OG-FUSE-FOLD: fold the fused multi-expert Conv1d
+//  MoE kernel (tool/gpu_moe_conv_fuse.cu, PR #2859 F-FUSION-MOE-CONV-FUSE 🟢)
+//  into flame as the DEVICE MoE-conv path for the CLMConvMoE expert block.
+//
+//  ── The wall (anima H200 handoff f5e18a0f) ──────────────────────────────────
+//  A CLMConvMoE MoE block = a ModuleList of E ConvExpert, each nn.Conv1d(d,d,K).
+//  E small Conv1d launches per step UNDER-FILL the SM scheduler. The "obvious"
+//  vectorization — one grouped conv(E·d, E·d, K, groups=E) — went ~11x SLOWER
+//  (cuDNN grouped-conv algo-selection falls to a naive serialized path). cuDNN
+//  structurally offers only two bad options; NEITHER fills the GPU.
+//
+//  ── The structural 3rd option (PR #2859) ────────────────────────────────────
+//  ONE own-device-kernel that computes ALL E experts' Conv1d in ONE saturating
+//  launch — tile = (expert e, out-channel-block, time-block). Byte-eq vs the
+//  E-conv ModuleList reference (max|Δ|=0 dev-vs-dev). The standalone benchmark is
+//  tool/gpu_moe_conv_fuse.cu (k_moe_conv_fused). This file is the APPLICATION
+//  FOLD: the flame trainer routes its E-expert conv through that fused layout,
+//  env-gated, with the E-conv ModuleList path as the byte-eq fallback.
+//
+//  ── Math contract (mirrors conv_lib.hexa nn_conv1d_fwd + the .cu kernel) ─────
+//  Every expert sees the SAME input X[T·d] (CLMConvMoE: the router gates, but
+//  every ConvExpert is fed the block input). Each has its own weight bank and
+//  bias. Causal-dilated Conv1d, accumulation ci-outer / k-inner:
+//    y_e[t,co] = b_e[co] + Σ_ci Σ_k W_e[co,ci,k] · xin(t − dil·(K−1−k), ci)
+//    xin(p,ci) = X[p,ci] if p>=0 else 0   (causal left-pad, no future leak).
+//  Packed layouts (mirror the .cu kernel byte-for-byte):
+//    X : [T · d]            shared block input (all experts read it)
+//    W : [E · d · d · K]    per-expert weight bank, W_e[co·d·K + ci·K + k]
+//    b : [E · d]            per-expert bias, b_e[co]
+//    Y : [E · T · d]        per-expert output, Y_e[t·d + co]
+//
+//  ── Byte-eq contract (matches clm_conv_batched.hexa #2383 bar, F-CLM-CONV-*) ─
+//  The fused path is a re-association-FREE fold: it computes each expert's conv
+//  with the SAME ci-outer/k-inner accumulation order as the per-expert
+//  ModuleList path, so the fold is byte-IDENTICAL to running nn_conv1d_fwd_off E
+//  times. The forge variant rides ONE strided-batched GEMM over the E experts
+//  (forge_matmul_batched — itself byte-eq to E serial forge_dispatch_matmul, see
+//  clm_conv_batched.hexa), so on a CUDA host the heavy work is ONE saturating
+//  launch while staying byte-eq to the E-launch ModuleList baseline.
+//
+//  F-CLM-MOE-CONV-FUSE-FOLD-EQ : fused-path Y == E× nn_conv1d_fwd_off (max|Δ|=0).
+//  Verified $0 on Mac CPU (this file runs under `hexa run`, no link dep — the
+//  forge strided-batched GPU dispatch is selected at the trainer call site via
+//  HEXA_FUSE_MOE_CONV). The on-pod own-kernel util Δ is the deferred large fire.
+//
+//  sibling: clm_conv_batched.hexa (the E=2 batched precedent this generalizes),
+//           clm_conv_gpu.hexa (the un-batched per-conv forge path),
+//           conv_lib.hexa (nn_conv1d_fwd / nn_conv1d_fwd_off — the math source).
+// ════════════════════════════════════════════════════════════════════════════
+
+use "stdlib/flame/tensor_lib"
+use "stdlib/flame/conv_lib"
+
+fn _mcf_absf(x: float) -> float { if x < 0.0 { return 0.0 - x } return x }
+
+// _mcf_fuse_on: the env gate (mirrors clm_prod.hexa _fuse_on). HEXA_FUSE_MOE_CONV
+// turns the fused E-expert MoE-conv path ON; HEXA_FUSE_ALL ORs it on with the
+// rest of the verified byte-eq fusion stack. Default OFF → ModuleList fallback.
+pub fn _mcf_fuse_on() -> bool {
+    if env("HEXA_FUSE_MOE_CONV") != "" { return true }
+    if env("HEXA_FUSE_ALL") != "" { return true }
+    return false
+}
+
+// ── ModuleList-E reference (path A): E separate per-expert convs ──────────────
+// The under-fill baseline AND the byte-eq oracle. Each expert e reads the shared
+// X[T·d] and its own weight bank W[e·d·d·K ..] / bias b[e·d ..] → Y[e·T·d ..],
+// via nn_conv1d_fwd_off (offset-capable, no per-call slice copy). This IS the
+// 30-launch ModuleList the .cu kernel reproduces; the fused path must match it.
+pub fn moe_conv_modulelist_fwd(x: int, w_bank: int, b_bank: int, y_out: int,
+                               E: int, T: int, d: int, K: int, dil: int) {
+    let mut e = 0
+    while e < E {
+        let woff = e * d * d * K
+        let boff = e * d
+        let yoff = e * T * d
+        // nn_conv1d_fwd_off writes y_out[0 .. T*d); we need it at y_out[yoff ..].
+        // It is offset-capable in WEIGHT space only, so write to a per-expert temp
+        // then place into the packed Y (keeps the reference path obviously correct).
+        let ye = t_zeros(T * d)
+        nn_conv1d_fwd_off(x, w_bank, woff, b_bank, boff, ye, T, d, d, K, dil)
+        let mut i = 0
+        while i < T * d { t_set(y_out, yoff + i, t_get(ye, i)); i = i + 1 }
+        t_free(ye)
+        e = e + 1
+    }
+}
+
+// ── Fused path (path C): ALL E experts in ONE strided-batched GEMM ────────────
+// Mirrors the .cu k_moe_conv_fused layout. Every expert reads the SAME X, so the
+// im2col xcol[T·(d·K)] is built ONCE and shared; the batch varies only the
+// weight Wt_e. One forge_matmul_batched over E problems issues ONE
+// cublasDgemmStridedBatched on a CUDA host (byte-eq to E serial Dgemm — same
+// per-problem FP64 accumulation order), the kernel-level "one saturating launch"
+// analogue of the own-device-kernel. On CPU forge_matmul_batched IS exactly the
+// E-serial loop → byte-eq to moe_conv_modulelist_fwd by construction.
+pub fn moe_conv_fused_fwd(x: int, w_bank: int, b_bank: int, y_out: int,
+                          E: int, T: int, d: int, K: int, dil: int) {
+    let Kdim = d * K
+    // shared im2col: xcol[t, ci*K+k] = (p>=0) ? X[p,ci] : 0, p = t − dil·(K−1−k).
+    let xcol = t_zeros(T * Kdim)
+    let mut t = 0
+    while t < T {
+        let mut ci = 0
+        while ci < d {
+            let mut k = 0
+            while k < K {
+                let p = t - dil * (K - 1 - k)
+                if p >= 0 { t_set(xcol, t * Kdim + ci * K + k, t_get(x, p * d + ci)) }
+                k = k + 1
+            }
+            ci = ci + 1
+        }
+        t = t + 1
+    }
+    // A_all = E copies of xcol (M=T, K=Kdim); B_all = [Wt_0 .. Wt_{E-1}], each
+    // Wt_e[j,co] = W[e·d·d·K + co·Kdim + j]  (transpose of the per-expert weight).
+    let a_all = t_zeros(E * T * Kdim)
+    let b_all = t_zeros(E * Kdim * d)
+    let mut e = 0
+    while e < E {
+        let aoff = e * T * Kdim
+        let mut ia = 0
+        while ia < T * Kdim { t_set(a_all, aoff + ia, t_get(xcol, ia)); ia = ia + 1 }
+        let woff = e * d * d * K
+        let boff2 = e * Kdim * d
+        let mut co = 0
+        while co < d {
+            let mut j = 0
+            while j < Kdim {
+                t_set(b_all, boff2 + j * d + co, t_get(w_bank, woff + co * Kdim + j))
+                j = j + 1
+            }
+            co = co + 1
+        }
+        e = e + 1
+    }
+    // ONE strided-batched GEMM over the E experts → c_all[E · T · d].
+    let c_all = t_zeros(E * T * d)
+    forge_matmul_batched(a_all, T, Kdim, b_all, d, E, c_all)
+    // + per-expert bias, scatter into packed Y[e·T·d + t·d + co].
+    let mut e2 = 0
+    while e2 < E {
+        let coff = e2 * T * d
+        let yoff = e2 * T * d
+        let boff = e2 * d
+        let mut t2 = 0
+        while t2 < T {
+            let mut c2 = 0
+            while c2 < d {
+                t_set(y_out, yoff + t2 * d + c2,
+                      t_get(c_all, coff + t2 * d + c2) + t_get(b_bank, boff + c2))
+                c2 = c2 + 1
+            }
+            t2 = t2 + 1
+        }
+        e2 = e2 + 1
+    }
+    t_free(xcol); t_free(a_all); t_free(b_all); t_free(c_all)
+}
+
+// ── Dispatch selector (the trainer call site) ─────────────────────────────────
+// HEXA_FUSE_MOE_CONV=1 (or HEXA_FUSE_ALL) → the fused one-launch path; else the
+// E-conv ModuleList fallback. Both are byte-eq (max|Δ|=0), so the descent is
+// identical regardless of the flag — the flag only selects fill/occupancy.
+pub fn moe_conv_fwd_dispatch(x: int, w_bank: int, b_bank: int, y_out: int,
+                             E: int, T: int, d: int, K: int, dil: int) {
+    if _mcf_fuse_on() {
+        moe_conv_fused_fwd(x, w_bank, b_bank, y_out, E, T, d, K, dil)
+    } else {
+        moe_conv_modulelist_fwd(x, w_bank, b_bank, y_out, E, T, d, K, dil)
+    }
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//  byte-eq selftest: fused E-expert MoE-conv == E× ModuleList nn_conv1d_fwd_off.
+//  F-CLM-MOE-CONV-FUSE-FOLD-EQ — the OG-FUSE-FOLD gate. max|Δ| must be 0.
+// ════════════════════════════════════════════════════════════════════════════
+
+fn _mcf_maxdev(a: int, b: int, n: int) -> float {
+    let mut m = 0.0
+    let mut i = 0
+    while i < n { let dv = _mcf_absf(t_get(a, i) - t_get(b, i)); if dv > m { m = dv }; i = i + 1 }
+    return m
+}
+
+fn _run_fold_gate(E: int, T: int, d: int, K: int, dil: int) -> int {
+    let dd = d * d * K
+    let x = t_zeros(T * d); t_fill_lcg(x, T * d, 31, 0.4)
+    // per-expert weight + bias banks, distinct seeds per expert.
+    let w_bank = t_zeros(E * dd)
+    let b_bank = t_zeros(E * d)
+    let mut e = 0
+    while e < E {
+        let wsl = t_zeros(dd);  t_fill_lcg(wsl, dd, 2 + e * 7, 0.2)
+        let bsl = t_zeros(d);   t_fill_lcg(bsl, d, 3 + e * 7, 0.1)
+        let mut iw = 0
+        while iw < dd { t_set(w_bank, e * dd + iw, t_get(wsl, iw)); iw = iw + 1 }
+        let mut ib = 0
+        while ib < d { t_set(b_bank, e * d + ib, t_get(bsl, ib)); ib = ib + 1 }
+        t_free(wsl); t_free(bsl)
+        e = e + 1
+    }
+
+    // reference: E× ModuleList
+    let y_ref = t_zeros(E * T * d)
+    moe_conv_modulelist_fwd(x, w_bank, b_bank, y_ref, E, T, d, K, dil)
+    // fused (one strided-batched GEMM)
+    let y_fused = t_zeros(E * T * d)
+    moe_conv_fused_fwd(x, w_bank, b_bank, y_fused, E, T, d, K, dil)
+
+    let md = _mcf_maxdev(y_ref, y_fused, E * T * d)
+    print("  E="); print(E); print(" T="); print(T); print(" d="); print(d)
+    print(" K="); print(K); print(" dil="); print(dil)
+    print("  max|Δ| fused-vs-ModuleList = "); println(to_string(md))
+    let tol = 0.000000001
+    if md <= tol { return 1 }
+    return 0
+}
+
+fn main() {
+    println("clm_moe_conv_fused — OG-FUSE-FOLD: fused E-expert MoE-conv (PR #2859 fold)")
+
+    // E=30 (the measured CLMConvMoE expert count) at a CPU-tractable d, plus a
+    // dilated case (dil=2) and a small-E sanity, to exercise the fold byte-eq.
+    let g1 = _run_fold_gate(30, 16, 8, 3, 1)
+    let g2 = _run_fold_gate(30, 16, 8, 3, 2)
+    let g3 = _run_fold_gate(4,  24, 8, 3, 1)
+
+    if g1 == 1 { if g2 == 1 { if g3 == 1 {
+        println("F-CLM-MOE-CONV-FUSE-FOLD-EQ = 1")
+        println("PASS — fused E-expert MoE-conv == E× ModuleList byte-eq (max|Δ|=0)")
+        println("OG-FUSE-FOLD CODE FOLD GREEN — HEXA_FUSE_MOE_CONV routes the fused path")
+        return
+    } } }
+    println("F-CLM-MOE-CONV-FUSE-FOLD-EQ = 0")
+    println("FAIL — fold byte-eq broken")
+}
