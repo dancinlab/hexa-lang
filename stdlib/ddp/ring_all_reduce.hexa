@@ -23,6 +23,8 @@
 //  multi-GPU transport is M3 and multi-GPU hardware is M2 (the wildcard).
 // ════════════════════════════════════════════════════════════════════════════
 
+use "stdlib/flame/tensor_lib"
+
 // chunk boundaries: split S into N contiguous chunks as evenly as possible.
 // chunk c spans [chunk_start(c), chunk_start(c+1)). When S is not a multiple
 // of N the first (S % N) chunks get one extra element (boundary case).
@@ -39,7 +41,97 @@ pub fn ring_step_count(N: int) -> int {
     return 2 * (N - 1)
 }
 
-// WIP: ring all-reduce stub — filled in subsequent unit commits.
+// Copy a chunk's worth of elements from one rank's row into another's.
+// `t_get`/`t_set` are the flame tensor host-array accessors (RFC 040 farr).
+fn _ring_copy_chunk(buf: int, S: int, src_rank: int, dst_rank: int,
+                    start: int, stop: int, out: int) {
+    let mut i = start
+    while i < stop {
+        t_set(out, dst_rank * S + i, t_get(buf, src_rank * S + i))
+        i = i + 1
+    }
+}
+
+// reduce-scatter phase (N-1 steps). In step i, rank r sends the chunk it is
+// currently responsible for to its right neighbour and the receiver ADDS it.
+// The send-chunk index for rank r at step i is (r - i + N) % N, so after the
+// last step rank r holds the full sum of chunk (r + 1) % N.
+//
+// We materialise each step into a fresh staging buffer to model the
+// simultaneous P2P sends of one ring step (no rank reads a value another
+// rank has already overwritten within the same step) — exactly what the
+// real transport guarantees.
+fn _ring_reduce_scatter(buf: int, N: int, S: int) {
+    let mut step = 0
+    while step < N - 1 {
+        // staging[dst_rank*S + i] = incoming chunk value to ADD at dst.
+        let staging = t_zeros(N * S)
+        let mut r = 0
+        while r < N {
+            let send_chunk = (r - step + N) % N
+            let dst = (r + 1) % N
+            let start = ring_chunk_start(S, N, send_chunk)
+            let stop = ring_chunk_start(S, N, send_chunk + 1)
+            _ring_copy_chunk(buf, S, r, dst, start, stop, staging)
+            r = r + 1
+        }
+        // apply the adds (dst += incoming) for the chunks that moved.
+        r = 0
+        while r < N {
+            let recv_chunk = ((r - 1 + N) % N - step + N) % N
+            let start = ring_chunk_start(S, N, recv_chunk)
+            let stop = ring_chunk_start(S, N, recv_chunk + 1)
+            let mut i = start
+            while i < stop {
+                t_set(buf, r * S + i,
+                      t_get(buf, r * S + i) + t_get(staging, r * S + i))
+                i = i + 1
+            }
+            r = r + 1
+        }
+        step = step + 1
+    }
+}
+
+// all-gather phase (N-1 steps). Each rank now owns one fully-reduced chunk;
+// circulate them so every rank ends holding the complete summed vector.
+// After reduce-scatter, rank r owns the reduced chunk (r + 1) % N. In step i
+// rank r forwards the chunk (r - i + 1 + N) % N to its right neighbour
+// (overwrite, no add).
+fn _ring_all_gather(buf: int, N: int, S: int) {
+    let mut step = 0
+    while step < N - 1 {
+        let staging = t_zeros(N * S)
+        let mut r = 0
+        while r < N {
+            let send_chunk = (r - step + 1 + N) % N
+            let dst = (r + 1) % N
+            let start = ring_chunk_start(S, N, send_chunk)
+            let stop = ring_chunk_start(S, N, send_chunk + 1)
+            _ring_copy_chunk(buf, S, r, dst, start, stop, staging)
+            r = r + 1
+        }
+        r = 0
+        while r < N {
+            let recv_chunk = (r - step + N) % N
+            let start = ring_chunk_start(S, N, recv_chunk)
+            let stop = ring_chunk_start(S, N, recv_chunk + 1)
+            let mut i = start
+            while i < stop {
+                t_set(buf, r * S + i, t_get(staging, r * S + i))
+                i = i + 1
+            }
+            r = r + 1
+        }
+        step = step + 1
+    }
+}
+
+// Full ring all-reduce over `buf` (N rows of S elements, rank r at r*S).
+// On return every rank's row holds the elementwise SUM across all N ranks.
+// Total communication steps = ring_step_count(N) = 2(N-1) (canonical optimum).
 pub fn ring_all_reduce(buf: int, N: int, S: int) {
-    // TODO: reduce-scatter then all-gather (units land next).
+    if N <= 1 { return }
+    _ring_reduce_scatter(buf, N, S)
+    _ring_all_gather(buf, N, S)
 }
