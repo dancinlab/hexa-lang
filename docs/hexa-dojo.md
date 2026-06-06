@@ -667,15 +667,15 @@ saturated → **weight-reuse GEMM recast**. Picking fill at saturation is the
 How to train across 2+ GPUs the hexa-native way (no NCCL). The collective is a
 ring all-reduce; you verify it byte-exact FIRST in a hardware-free sim, then swap
 only the transport for real GPU-to-GPU copies. **Honest scope (commons g83)**:
-collective-GREEN ≠ training-GREEN — M1/M3 prove the *all-reduce*; end-to-end
-parallel TRAINING (1-GPU vs 2-GPU same-model byte-eq over a real flame step) is
-DDP-M4, 4-GPU speedup is DDP-M5. N-GPU speedup is ALWAYS < N× (Amdahl + comm).
+collective-GREEN ≠ training-GREEN — M1/M3 prove the *all-reduce*; M4 (#2894) proved end-to-end parallel TRAINING
+byte-eq (1-GPU == 2-GPU weights/loss/grad, max|d|=0 on a real flame step); 4-GPU speedup is DDP-M5. N-GPU speedup is ALWAYS < N× (Amdahl + comm).
 
 ```
 ring all-reduce — transport swapped in stages, schedule FIXED at 2(N-1) steps
  [ M1 sim ] ─ in-process N-rank array-copy ─ byte-eq vs serial sum (NO hardware) 🟢
  [ M3 real ] ─ cudaMemcpyPeer over 2 GPUs ── same byte-eq gate 🟢
- [ M4/M5 ]  ─ real flame step · 4-GPU scale ─ TODO
+ [ M4 ]     ─ real 2-GPU flame step ── 1-GPU==2-GPU weights/loss/grad byte-eq max|d|=0 (#2894) 🟢
+ [ M5/M6 ]  ─ 4-GPU scale · multinode ── M5 collective in flight · M6 socket/IB TODO
 ```
 
 - **gate FIRST (g5)**: ring all-reduce result == serial elementwise sum, byte-eq
