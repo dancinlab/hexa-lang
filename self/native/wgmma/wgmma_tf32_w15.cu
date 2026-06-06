@@ -159,6 +159,102 @@ extern "C" __global__ void probe_desc(const __grid_constant__ CUtensorMap tmapA,
 }
 
 // ======================================================================
+// MODE 9 — IN-PROCESS descriptor sweep (one CUDA context). Re-runs probe_desc for many
+//   (lbo,sbo,boff,swmode) in a single binary so the iterate is seconds, not minutes (the
+//   per-process CUDA-context-init was the bottleneck). The A/B tmaps are encoded once; only
+//   the descriptor fields vary per launch. Reports rel_rms per config + the BEST.
+//   Reuses probe_desc above (declared); MODE 9 host loop lives in main().
+// ======================================================================
+
+// ---- GMMA INTER 8x4-core physical index (W2/W3-proven, bit-exact). The W10 oracle. ----
+__device__ __host__ __forceinline__ int gmma_phys(int s,int k){
+    int strip=s>>3,sr=s&7,kcore=k>>2,kc=k&3; return (strip*2+kcore)*32+sr*4+kc;
+}
+// ======================================================================
+// MODE 6 — LOCALIZER. Land A(64x32)+B(2x32x32) swizzled, run the descriptor-direct wgmma AND
+//   a W10 composed-decode wgmma (known bit-exact) in the SAME kernel, write BOTH to global so
+//   the host can diff descriptor-vs-composed and isolate whether A, B, or both are misread.
+//   Also dumps, for the descriptor path, the raw wgmma fragment so we can see the permutation.
+// ======================================================================
+extern "C" __global__ void probe_localize(const __grid_constant__ CUtensorMap tmapA,
+                                           const __grid_constant__ CUtensorMap tmapB,
+                                           float* __restrict__ gDdesc, float* __restrict__ gDcomp,
+                                           int lbo,int sbo,int boff,int swmode){
+    const int TM=64, TN=64, TKSW=32;
+    extern __shared__ __align__(128) float sm[];
+    float* Asw=sm;                       // 64*32 swizzled
+    float* Bsw=Asw + TM*TKSW;            // 2*(32*32) swizzled
+    float* Ag =Bsw + TN*TKSW;            // gmma-laid A 64x8 (composed decode)
+    float* Bg =Ag  + TM*8;               // gmma-laid B 8x64
+    uint64_t* bar=(uint64_t*)(Bg + 8*TN);
+    int tid=threadIdx.x;
+    if(tid==0){ mbar_init_tx(bar,1); }
+    __syncthreads();
+    if(tid==0){
+        uint32_t bytes=(uint32_t)((TM*TKSW + TN*TKSW)*4);
+        mbar_expect_tx(bar,bytes);
+        tma_load_2d(Asw,        &tmapA,0,0,bar);
+        tma_load_2d(Bsw,        &tmapB,0, 0,bar);
+        tma_load_2d(Bsw+32*TKSW,&tmapB,32,0,bar);
+    }
+    __syncthreads();
+    if(tid==0) mbar_wait(bar,0);
+    asm volatile("fence.proxy.async.shared::cta;\n":::"memory");
+    __syncthreads();
+    // ---- W10 composed decode (bit-exact oracle) into Ag/Bg ----
+    for(int i=tid;i<TM*8;i+=blockDim.x){
+        int m=i/8, k=i%8; int a=m>>3, r=m&7;
+        int sw_phys = a*256 + r*32 + (((k>>2)^(r&7))<<2) + (k&3);
+        Ag[gmma_phys(m,k)] = Asw[sw_phys];
+    }
+    for(int i=tid;i<8*TN;i+=blockDim.x){
+        int k=i/TN, n=i%TN; int c=n>>5, nn=n&31; int gp=(nn>>2)^(k&7);
+        int sw_phys = c*(32*TKSW) + k*32 + (gp<<2) + (nn&3);
+        Bg[gmma_phys(n,k)] = Bsw[sw_phys];
+    }
+    asm volatile("fence.proxy.async.shared::cta;\n":::"memory");
+    __syncthreads();
+    // ---- composed wgmma ----
+    {
+        uint32_t aA=(uint32_t)__cvta_generic_to_shared(Ag);
+        uint32_t aB=(uint32_t)__cvta_generic_to_shared(Bg);
+        uint64_t dA=mk_desc(aA,128,256,0,0), dB=mk_desc(aB,128,256,0,0); // no-swizzle gmma layout
+        float d[32];
+        #pragma unroll
+        for(int i=0;i<32;++i)d[i]=0.f;
+        asm volatile("wgmma.fence.sync.aligned;\n":::"memory");
+        WG(d,dA,dB);
+        asm volatile("wgmma.commit_group.sync.aligned;\nwgmma.wait_group.sync.aligned 0;\n":::"memory");
+        int w=tid>>5,l=tid&31,rb=w*16+(l>>2),cb=(l&3)*2;
+        #pragma unroll
+        for(int c=0;c<8;++c)for(int r=0;r<2;++r)for(int p=0;p<2;++p){
+            int idx=c*4+r*2+p,row=rb+r*8,col=cb+p+c*8;
+            if(row<64&&col<64)gDcomp[row*64+col]=d[idx];
+        }
+    }
+    __syncthreads();
+    // ---- descriptor-direct wgmma (the W15 path under test) ----
+    {
+        uint32_t aA=(uint32_t)__cvta_generic_to_shared(Asw);
+        uint32_t aB=(uint32_t)__cvta_generic_to_shared(Bsw);
+        uint64_t dA=mk_desc(aA,(uint32_t)lbo,(uint32_t)sbo,(uint32_t)boff,(uint32_t)swmode);
+        uint64_t dB=mk_desc(aB,(uint32_t)lbo,(uint32_t)sbo,(uint32_t)boff,(uint32_t)swmode);
+        float d[32];
+        #pragma unroll
+        for(int i=0;i<32;++i)d[i]=0.f;
+        asm volatile("wgmma.fence.sync.aligned;\n":::"memory");
+        WG(d,dA,dB);
+        asm volatile("wgmma.commit_group.sync.aligned;\nwgmma.wait_group.sync.aligned 0;\n":::"memory");
+        int w=tid>>5,l=tid&31,rb=w*16+(l>>2),cb=(l&3)*2;
+        #pragma unroll
+        for(int c=0;c<8;++c)for(int r=0;r<2;++r)for(int p=0;p<2;++p){
+            int idx=c*4+r*2+p,row=rb+r*8,col=cb+p+c*8;
+            if(row<64&&col<64)gDdesc[row*64+col]=d[idx];
+        }
+    }
+}
+
+// ======================================================================
 // MODE 2 — RAW SWIZZLE DUMP (validation oracle). Land a 128x32 SWIZZLE_128B tile where
 //   global A[m][k]=m*32+k (unique id), copy shared[p] verbatim to global so the HOST reads,
 //   per physical slot p, the landed (m,k). Measures the true Swizzle<3,4,3> law for THIS box.
@@ -420,6 +516,83 @@ int main(int argc,char**argv){
         printf("W15 S=%d MODE=4 NST=%d lbo=%d sbo=%d boff=%d swm=%d own=%.1f TFLOP/s cuBLAS-TF32=%.1f ratio(cuBLAS/own)=%.2fx rel_rms=%.3e PARITY=%s\n",
                S,NST,LBO,SBO,BOFF,SWM,tfo,tfc,ratio,rr,ratio<=1.3?"YES":"NO");
         return 0;
+    }
+    if(MODE==9 || MODE==6){
+        // ---- IN-PROCESS sweep / localizer (one CUDA context) ----
+        const int M=64,N=64,K=8;
+        float *hA=(float*)malloc((size_t)M*K*4),*hB=(float*)malloc((size_t)K*N*4);
+        float *hD=(float*)malloc((size_t)M*N*4),*hR=(float*)malloc((size_t)M*N*4);
+        float *hC=(float*)malloc((size_t)M*N*4);
+        srand(3);
+        for(int i=0;i<M*K;++i)hA[i]=tf(((rand()%17)-8)*0.125f);
+        for(int i=0;i<K*N;++i)hB[i]=tf(((rand()%17)-8)*0.125f);
+        for(int m=0;m<M;++m)for(int n=0;n<N;++n){float a=0;for(int kk=0;kk<K;++kk)a+=hA[m*K+kk]*hB[kk*N+n];hR[m*N+n]=a;}
+        const int KSW=32;
+        float *hApad=(float*)calloc((size_t)M*KSW,4), *hBpad=(float*)calloc((size_t)KSW*N,4);
+        for(int m=0;m<M;++m)for(int k=0;k<K;++k)hApad[m*KSW+k]=hA[m*K+k];
+        for(int k=0;k<K;++k)for(int n=0;n<N;++n)hBpad[k*N+n]=hB[k*N+n];
+        float *dA,*dB,*dD,*dC; CK(cudaMalloc(&dA,(size_t)M*KSW*4));CK(cudaMalloc(&dB,(size_t)KSW*N*4));
+        CK(cudaMalloc(&dD,(size_t)M*N*4));CK(cudaMalloc(&dC,(size_t)M*N*4));
+        CK(cudaMemcpy(dA,hApad,(size_t)M*KSW*4,cudaMemcpyHostToDevice));
+        CK(cudaMemcpy(dB,hBpad,(size_t)KSW*N*4,cudaMemcpyHostToDevice));
+        CUtensorMap tmapA{},tmapB{};
+        { cuuint64_t gd[2]={(cuuint64_t)KSW,(cuuint64_t)M}; cuuint64_t gs[1]={(cuuint64_t)KSW*4};
+          cuuint32_t bd[2]={32,64}; cuuint32_t es[2]={1,1};
+          CUresult r=enc(&tmapA,CU_TENSOR_MAP_DATA_TYPE_FLOAT32,2,dA,gd,gs,bd,es,
+            CU_TENSOR_MAP_INTERLEAVE_NONE,CU_TENSOR_MAP_SWIZZLE_128B,
+            CU_TENSOR_MAP_L2_PROMOTION_NONE,CU_TENSOR_MAP_FLOAT_OOB_FILL_NONE);
+          if(r!=CUDA_SUCCESS){printf("encodeA r=%d\n",(int)r);return 4;} }
+        { cuuint64_t gd[2]={(cuuint64_t)N,(cuuint64_t)KSW}; cuuint64_t gs[1]={(cuuint64_t)N*4};
+          cuuint32_t bd[2]={32,32}; cuuint32_t es[2]={1,1};
+          CUresult r=enc(&tmapB,CU_TENSOR_MAP_DATA_TYPE_FLOAT32,2,dB,gd,gs,bd,es,
+            CU_TENSOR_MAP_INTERLEAVE_NONE,CU_TENSOR_MAP_SWIZZLE_128B,
+            CU_TENSOR_MAP_L2_PROMOTION_NONE,CU_TENSOR_MAP_FLOAT_OOB_FILL_NONE);
+          if(r!=CUDA_SUCCESS){printf("encodeB r=%d\n",(int)r);return 4;} }
+        size_t sm0=(size_t)(M*KSW + N*KSW)*4 + 8;
+        size_t sm6=(size_t)(M*KSW + N*KSW + M*8 + 8*N)*4 + 8;
+        CK(cudaFuncSetAttribute(probe_desc,cudaFuncAttributeMaxDynamicSharedMemorySize,(int)sm0));
+        CK(cudaFuncSetAttribute(probe_localize,cudaFuncAttributeMaxDynamicSharedMemorySize,(int)sm6));
+
+        if(MODE==6){
+            int LBO=argc>3?atoi(argv[3]):128, SBO=argc>4?atoi(argv[4]):1024;
+            int BOFF=argc>5?atoi(argv[5]):0, SWM=argc>6?atoi(argv[6]):1;
+            CK(cudaMemset(dD,0,(size_t)M*N*4)); CK(cudaMemset(dC,0,(size_t)M*N*4));
+            probe_localize<<<1,128,sm6>>>(tmapA,tmapB,dD,dC,LBO,SBO,BOFF,SWM);
+            cudaError_t e=cudaGetLastError(); if(e==cudaSuccess)e=cudaDeviceSynchronize();
+            if(e!=cudaSuccess){printf("MODE6 FAULT %s\n",cudaGetErrorString(e));return 4;}
+            CK(cudaMemcpy(hD,dD,(size_t)M*N*4,cudaMemcpyDeviceToHost));
+            CK(cudaMemcpy(hC,dC,(size_t)M*N*4,cudaMemcpyDeviceToHost));
+            // diff composed-vs-CPU (should be 0) and desc-vs-CPU and desc-vs-composed.
+            double seC=0,seD=0,seDC=0,sr=0;
+            for(int i=0;i<M*N;++i){double t=hR[i];sr+=t*t;
+                seC+=(hC[i]-t)*(hC[i]-t); seD+=(hD[i]-t)*(hD[i]-t); seDC+=(hD[i]-hC[i])*(hD[i]-hC[i]);}
+            printf("MODE6 localize lbo=%d sbo=%d boff=%d swm=%d: composed_rel=%.3e desc_rel=%.3e desc_vs_composed=%.3e\n",
+                   LBO,SBO,BOFF,SWM,sqrt(seC/fmax(1e-30,sr)),sqrt(seD/fmax(1e-30,sr)),sqrt(seDC/fmax(1e-30,sr)));
+            // print first 4x4 of each for visual permutation read
+            printf("CPU   row0: %.2f %.2f %.2f %.2f\n",hR[0],hR[1],hR[2],hR[3]);
+            printf("COMP  row0: %.2f %.2f %.2f %.2f\n",hC[0],hC[1],hC[2],hC[3]);
+            printf("DESC  row0: %.2f %.2f %.2f %.2f\n",hD[0],hD[1],hD[2],hD[3]);
+            printf("DESC  col0: %.2f %.2f %.2f %.2f (rows0-3)\n",hD[0],hD[64],hD[128],hD[192]);
+            return 0;
+        }
+        // MODE 9 — in-process field sweep
+        double best=1e9; int bL=0,bS=0,bB=0,bW=0;
+        int swl[4]={1,2,3,0};
+        int sbl[8]={1024,512,256,128,2048,64,16,4096};
+        int lbl[8]={128,16,256,1024,0,64,512,2048};
+        for(int wi=0;wi<4;++wi)for(int si=0;si<8;++si)for(int bo=0;bo<8;++bo)for(int li=0;li<8;++li){
+            int SWM=swl[wi],SBO=sbl[si],BOFF=bo,LBO=lbl[li];
+            CK(cudaMemset(dD,0,(size_t)M*N*4));
+            probe_desc<<<1,128,sm0>>>(tmapA,tmapB,dD,M,N,K,LBO,SBO,BOFF,SWM);
+            if(cudaDeviceSynchronize()!=cudaSuccess){cudaGetLastError();continue;}
+            CK(cudaMemcpy(hD,dD,(size_t)M*N*4,cudaMemcpyDeviceToHost));
+            double se=0,sr=0;for(int i=0;i<M*N;++i){double dd=hD[i]-hR[i];se+=dd*dd;sr+=(double)hR[i]*hR[i];}
+            double rr=sqrt(se/fmax(1e-30,sr));
+            if(rr<best){best=rr;bL=LBO;bS=SBO;bB=BOFF;bW=SWM;
+                printf("NEWBEST rel_rms=%.3e @ lbo=%d sbo=%d boff=%d swm=%d\n",rr,LBO,SBO,BOFF,SWM);}
+        }
+        printf("MODE9 SWEEP-DONE best rel_rms=%.3e @ lbo=%d sbo=%d boff=%d swm=%d\n",best,bL,bS,bB,bW);
+        return best<=3e-3?0:2;
     }
     printf("unknown MODE %d\n",MODE); return 1;
 }
