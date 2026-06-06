@@ -70,3 +70,31 @@
 #   so warp-spec keeps FULL occupancy — how cuBLAS reaches sm_90a peak. Bring-over the W6
 #   TMA kit self/native/wgmma/wgmma_tma_gemm.cu. Frontier kernel = W6 async-pipe (50.7, 8.39x).
 #   STOP = honest occupancy/production-engine wall, NOT impossibility. cuBLAS=roofline.
+
+# ============================================================================
+# === UPDATE 2026-06-06 — W8 TMA-PRODUCER dual-consumer-WG = BIG-PROGRESS LIFT
+# ============================================================================
+# W8 (MODE 4 gemm_ws_tma): the W7-diagnosed fix LANDED. Replace the 128-thread cp.async
+#   producer WG with a HARDWARE TMA producer driven by ONE elected thread (thread 0 issues
+#   cp.async.bulk.tensor.2d for the A-band 128x8 + B 8x128 into an NST ring, mbarrier
+#   expect_tx tracks tx-complete). The other 255 threads are BOTH consumer warpgroups; they
+#   cooperatively permute the TMA-landed row-major tiles -> the W1/W2 gmma INTER 8x4 layout
+#   (SAME mk/gmma_phys/WG descriptors — only the production engine changed), then each WG
+#   wgmma's its 64-row band x the SHARED B tile. H100 sm_90a, vast 39701877 DESTROYED leak 0,
+#   nvcc 12.6. verdict F-FUSION-SM90-WGMMA-W8.txt.
+#   RESULT: BIT-EXACT (rel_rms 0, S=2048..8192, NST=2..4). own 50.7 -> 66.5 TFLOP/s @4096 (+31%);
+#     69.6 @8192. ratio 8.39x -> 6.44x. ~26% of the parity gap closed. PARITY=NO.
+#   OCCUPANCY (the W8 success proxy, on-pod): 1 CTA/SM (W7) -> 2 CTA/SM (W8) = 512 vs 384
+#     compute-thr/SM. ws_tma 120 regs * 256 thr = 30720/CTA -> 2 CTAs = 61440 < 65536 regs/SM.
+#     The TMA producer freed the WG AND shrank the CTA 384->256 thr -> doubled resident CTAs.
+#   APPLES (same pod S=4096): MODE1 apipe 50.8 (8.54x, 4 CTA/SM) | MODE3 ws2 32.0 (13.67x, 1
+#     CTA/SM) | MODE4 ws_tma 66.4 (6.45x, 2 CTA/SM). The dual-consumer-WG geometry W7 wanted
+#     FINALLY pays off once the producer stops eating a full WG + register-evicting the 2nd CTA.
+#
+# === NAMED RESIDUAL (W9, next-cycle) — the remaining 6.44x is COMPUTE/MAINLOOP-bound ===
+#   (1) SWIZZLED TMA (CU_TENSOR_MAP_SWIZZLE_128B): tile lands wgmma-readable -> ELIMINATE the
+#       per-K-step cooperative Araw/Braw->gmma permute (+2 __syncthreads) cuBLAS never pays.
+#       HIGHEST-value lever on the residual.
+#   (2) deeper-TK accumulator double-buffer to overlap wgmma latency (currently wait_group 0 / step).
+#   (3) wider N-tile m64n256k8 to amortize B-load + raise arithmetic intensity.
+#   Frontier kernel = W8 gemm_ws_tma (66.5, 6.44x, 2 CTA/SM). cuBLAS=roofline, no superiority claim.

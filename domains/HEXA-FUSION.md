@@ -492,12 +492,21 @@ the own-GEMM gap lifts the whole stack automatically.
       a 128-thread cp.async producer WG at TM=128 is **register-bound to 1 block/SM** (90 regs × 384 thr;
       2 CTAs = 69120 > 65536 regs/SM) → 256 compute-thr/SM vs async-pipe's 4×128 = 512. More consumer WGs cannot win
       while the producer eats a full WG AND evicts the 2nd resident CTA. verdict: `.verdicts/hexa-fusion/F-FUSION-SM90-WGMMA-W7.txt`.
-- [ ] **W8 TMA-driven production** ★ NEXT — `cp.async.bulk.tensor` + a SINGLE elected producer thread (freeing the
-      other 127) so a dual/quad-consumer-WG warp-spec keeps FULL compute occupancy. cuBLAS reaches sm_90a peak exactly
-      this way (hardware TMA producer, not a 128-thread cp.async WG). Bring-over: `self/native/wgmma/wgmma_tma_gemm.cu`.
-      Target: **8.39× → toward strict ≤1.3× parity**. GPU sm_90a; bit-exact GATE before any perf number.
+- [x] **W8 TMA-driven production (single elected thread + dual-consumer-WG)** ✅ BIG-PROGRESS — `MODE 4 gemm_ws_tma`:
+      thread 0 issues `cp.async.bulk.tensor.2d` for the A-band+B into an NST ring (mbarrier expect_tx); the other 255
+      threads are BOTH consumer warpgroups. H100 sm_90a (vast 39701877 DESTROYED leak 0, nvcc 12.6). **BIT-EXACT**
+      (rel_rms **0** @ S=2048..8192, NST=2..4). **own 50.7 → 66.5 TFLOP/s @4096³ (+31%); 69.6 @8192³**; ratio
+      **8.39× → 6.44×** off cuBLAS-TF32 (~428–456). **OCCUPANCY ROSE 1 → 2 CTA/SM** (512 vs 384 compute-thr/SM) —
+      the W8 success proxy ACHIEVED: TMA producer freed the WG + shrank the CTA 384→256 thr (120 regs·256 = 30,720/CTA,
+      2 CTAs = 61,440 < 65,536 regs/SM). The dual-consumer-WG geometry W7 wanted FINALLY pays once the producer stops
+      eating a full WG. **~26% of the 8.39×→1.0× parity gap closed.** PARITY=NO (6.44×). verdict: `.verdicts/hexa-fusion/F-FUSION-SM90-WGMMA-W8.txt`.
+- [ ] **W9 swizzled-TMA (eliminate the cooperative permute)** ★ NEXT — frontier is now COMPUTE/MAINLOOP-bound, not
+      occupancy-bound. `CU_TENSOR_MAP_SWIZZLE_128B` so the TMA tile lands wgmma-readable → KILL the per-K-step
+      Araw/Braw→gmma permute (+ its 2 `__syncthreads`) that cuBLAS never pays. Plus deeper-TK accumulator double-buffer
+      + n=256 (m64n256k8). Target: **6.44× → toward ≤1.3×**. Frontier kernel = W8 `gemm_ws_tma` (66.5, 6.44×, 2 CTA/SM).
 
-**STATE**: correctness is CLOSED (W2/W3 bit-exact 2048³/4096³). W7 sharpened the residual: warp-spec
-parity is NOT achievable with a cp.async-producer WG (register-bound 1 CTA/SM, measured) — it requires
-**TMA-driven production** (W8, near-zero producer threads), NOT layout / NOT emit-path / NOT 불가. Frontier
-kernel = W6 async-pipe (50.7, 8.39×). Parity OPEN, de-risked, own-GEMM-owned. cuBLAS = roofline, no superiority claim.
+**STATE**: correctness CLOSED (W2/W3 bit-exact). **W8 CONFIRMED the W7 diagnosis**: the wall WAS the production
+engine — a single-elected-thread HARDWARE TMA producer fixes the occupancy (1 → 2 CTA/SM) and LIFTS the frontier
+50.7 → 66.5 (+31%), gap 8.39× → 6.44×. The frontier is now compute/mainloop-bound (the cooperative gmma permute), NOT
+occupancy / NOT layout / NOT emit-path / NOT 불가. Frontier kernel = W8 `gemm_ws_tma`. Parity OPEN, further de-risked,
+own-GEMM-owned. cuBLAS = roofline, no superiority claim.
