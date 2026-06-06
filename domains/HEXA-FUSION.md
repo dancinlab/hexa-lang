@@ -2,7 +2,20 @@
 
 @title: 🔥 HEXA-FUSION — whole-program train-step fusion (match PyTorch+CUDA → exceed)
 
-@goal: hexa codegen 이 CLMConvMoE train step 전체(fwd → CE → bwd → AdamW)를 단일 device-resident 그래프로 fuse 해 (1) 인터프리터를 per-step hot path 에서 제거 → util-GREEN(MEAN≥20%) = PyTorch+CUDA 수준 따라잡기, (2) library-call 스택이 구조적으로 못 하는 op-boundary fusion + compile-time 특화로 그 이상을 연다. 실현 능력은 [[GPU]] whole-program-fusion North-Star(§5d/§5f/§5g), 적용 대상은 [[FLAME-PERF]] 트레이너, cure 대상은 [[FORGE-UTILGREEN]] option-B. 잣대 = [[GPU-ROOFLINE]]. **정직 경계 (g5)**: raw GEMM 우위 주장 금지 — cuBLAS = roofline, larger-tile/wgmma/split-K/warp-spec 전부 falsified(GPU.md:84). moat = **경계 제거**(launch + op-boundary), NOT 커널 한 장 속도.
+@goal: hexa codegen 이 CLMConvMoE train step 전체(fwd → CE → bwd → AdamW)를 단일 device-resident 그래프로 fuse 해 (1) 인터프리터를 per-step hot path 에서 제거 → util-GREEN(MEAN≥20%) = PyTorch+CUDA 수준 따라잡기, (2) library-call 스택이 구조적으로 못 하는 op-boundary fusion + compile-time 특화로 그 이상을 연다. 실현 능력은 [[GPU]] whole-program-fusion North-Star(§5d/§5f/§5g), 적용 대상은 [[FLAME-PERF]] 트레이너, cure 대상은 [[FORGE-UTILGREEN]] option-B. 잣대 = [[GPU-ROOFLINE]]. **정직 경계 (g5)**: raw GEMM 우위 주장 금지 — cuBLAS = roofline, 우위 주장 0. own-GEMM 현 상태 = TF32 own-GEMM 이 **70.7/71.0 TFLOP/s 정상(summit)**(6.06–6.09× off cuBLAS-TF32, **bit-exact**); parity gap 은 software decode-copy(32KB band ⊥ occupancy)에 **구조적으로 bound**(양쪽 dtype OG11–OG14 입증). research #2854 의 "descriptor-direct 로 decode-copy 제거" 가설은 **OG15 가 FALSIFY**(3200-cfg descriptor sweep rel-RMS 1.000 floor — decode band 는 96→64KB 제거-가능하나 read 가 bit-exact 아님: 손수 짠 `cuTensorMapEncodeTiled` box 가 canonical CuTe `Layout_K_SW128_Atom` 이 아닌 atom-major stacking 을 land). larger-tile/deep-ring/warp-spec 전부 closed-neg. moat = **경계 제거**(launch + op-boundary), NOT 커널 한 장 속도.
+
+## ── current state snapshot (2026-06-06, post OG-ladder drain) ──
+
+- **own-GEMM TF32 summit (OG10)** = **70.7–71.0 TFLOP/s, 6.06–6.09× off cuBLAS-TF32, 2 CTA/SM, bit-exact** —
+  the OG-ladder frontier; OG11→OG15 are all closed-neg on the SAME 32KB-band-vs-occupancy / atom-encoding wall
+  (OG15 FALSIFIED the descriptor-direct shortcut: band removable 96→64KB but read not bit-exact). The one net-new
+  lever = **OG16 canonical-atom match** (net-new kernel, deliberate future decision — no auto-fire).
+- **whole-step megakernel — BOTH walls CLOSED** (g5): wall 1 = un-fusable cuBLAS host call removed by the in-line
+  device own-GEMM (#2697); wall 2 = the two GroupNorm full-Y reductions closed by a cooperative grid-synced GN,
+  byte-eq max|Δ|=0 A100-confirmed. STRUCTURAL-COMPLETENESS, not a util/perf win (util term = GEMM-gap occupancy,
+  a separate closed-neg).
+- **5-axis north-star**: axes 1 (own-GEMM perf) + 2 (cuBLAS-impossible megakernel) DONE/closed; axes 3/4/5
+  (reflect → dojo / README / commons) are the downstream reflect lanes (axis-5 sign-gated, user-only). See §5-axis.
 
 ## 전제 — 왜 fusion 인가 (host-feed 축이 닫힌 뒤)
 
@@ -435,12 +448,14 @@ on-silicon run with its own verdict:
 | 1 | mma.sync cuBLAS-class mainloop (CB) | bit-exact (rel-RMS 0.000e+00) | **29.4×** off (+3.4%) | `F-FUSION-SM90-CUBLAS-MAINLOOP` |
 | 2 | wgmma.mma_async + TMA | FEASIBLE (builds+runs sm_90a) | not measured | `F-FUSION-SM90-WGMMA-TMA` |
 | 3 | wgmma no-swizzle bit-correctness | BLOCKED (rel-RMS 1.309) | not measured | `F-FUSION-SM90-WGMMA-SWIZZLE` |
-| W2/3 | wgmma GMMA INTER 8×4 layout | bit-exact (rel-RMS 0) @2048³ | layout SOLVED | `F-FUSION-SM90-WGMMA-GMMA-LAYOUT` |
-| W8 | TMA-producer dual-consumer-WG | bit-exact, **66.9 TFLOP/s** | **6.43×** off (2 CTA/SM) | `F-FUSION-SM90-WGMMA-W8` |
-| W10 | composed swizzle-decode (permute-free) | bit-exact, **70.7 TFLOP/s** ★ TF32 summit | **6.09×** off cuBLAS-TF32 (2 CTA/SM, +5.7%) | `F-FUSION-SM90-WGMMA-W10` |
-| W13 | deep async decode ring (NSTG-deep gmma scratch) | bit-exact, 51.9 TFLOP/s @NSTG≥2 | 🔴 CLOSED-NEG — 1 CTA/SM (regresses 70.7); **TF32 async-pipeline axis EXHAUSTED** | `F-FUSION-SM90-WGMMA-W13` |
-| W14 | **FP16/BF16** own-GEMM (NEW dtype axis) | bit-exact-vs-same-dtype, **71.6 TFLOP/s** (2 CTA/SM) | **11.5×** off cuBLAS-**FP16** — PARITY NO; W13 16KB-band overlap REFUTED (.k16 band still 32KB) | `F-FUSION-SM90-WGMMA-W14-FP16` |
-| W15 | descriptor-direct (delete 32KB decode band) | 🔴 **CLOSED-NEG** — single-tile rel-RMS floor **1.000** / GEMM **1.392** (3200-cfg sweep, none 0) → GATE FAIL, no perf | research #2854 FALSIFIED: TMA-SWIZZLE_128B ≢ wgmma Swizzle<3,4,3> for atom-major box. smem 96→**64 KB/CTA** (32KB band IS removable, but read not bit-exact). W10 70.7 KEPT | `F-FUSION-SM90-WGMMA-W15` |
+| OG2/3 | wgmma GMMA INTER 8×4 layout | bit-exact (rel-RMS 0) @2048³ | layout SOLVED | `F-FUSION-SM90-WGMMA-GMMA-LAYOUT` |
+| OG8 | TMA-producer dual-consumer-WG | bit-exact, **66.9 TFLOP/s** | **6.43×** off (2 CTA/SM) | `F-FUSION-SM90-WGMMA-W8` |
+| OG10 | composed swizzle-decode (permute-free) | bit-exact, **70.7 TFLOP/s** ★ TF32 summit | **6.09×** off cuBLAS-TF32 (2 CTA/SM, +5.7%) | `F-FUSION-SM90-WGMMA-W10` |
+| OG11 | 128×256 tile (lever-1) | bit-exact, 65.5–66.4 TFLOP/s | 🔴 CLOSED-NEG — occupancy 2→1 CTA/SM (regresses 70.7) | `F-FUSION-SM90-WGMMA-W11` |
+| OG12 | tile↔warp-spec coupling | bit-exact, 26.1 TFLOP/s @sub-decode | 🔴 CLOSED-NEG — smem shrink holds 2 CTA/SM but serializes decode↔MMA; setmaxnreg ungrantable | `F-FUSION-SM90-WGMMA-W12` |
+| OG13 | deep async decode ring (NSTG-deep gmma scratch) | bit-exact, 51.9 TFLOP/s @NSTG≥2 | 🔴 CLOSED-NEG — 1 CTA/SM (regresses 70.7); **TF32 async-pipeline axis EXHAUSTED** | `F-FUSION-SM90-WGMMA-W13` |
+| OG14 | **FP16/BF16** own-GEMM (NEW dtype axis) | bit-exact-vs-same-dtype, **71.6 TFLOP/s** (2 CTA/SM) | **11.5×** off cuBLAS-**FP16** — PARITY NO; OG13 16KB-band overlap REFUTED (.k16 band still 32KB) | `F-FUSION-SM90-WGMMA-W14-FP16` |
+| OG15 | descriptor-direct (delete 32KB decode band) | 🔴 **CLOSED-NEG** — single-tile rel-RMS floor **1.000** / GEMM **1.392** (3200-cfg sweep, none 0) → GATE FAIL, no perf | research #2854 FALSIFIED: TMA-SWIZZLE_128B ≢ wgmma Swizzle<3,4,3> for atom-major box. smem 96→**64 KB/CTA** (32KB band IS removable, but read not bit-exact). OG10 70.7 KEPT | `F-FUSION-SM90-WGMMA-W15` |
 
 **Ladder narrative (honest, g5):**
 1. **30.4× → 29.4×** is the only measured improvement: the mma.sync cuBLAS-class
@@ -478,24 +493,24 @@ remaining wall is the CUTLASS core-matrix layout above. No perf number is
 reported on any non-bit-correct kernel (g5). cuBLAS = roofline; no superiority
 claim. Kit: `self/native/wgmma/`. Pods all destroyed across every run (leak 0).
 
-## ── W15 descriptor-direct — 🔴 CLOSED-NEG (research #2854 FALSIFIED) · `F-FUSION-SM90-WGMMA-W15` (2026-06-06, g5 verbatim) ──
+## ── OG15 descriptor-direct — 🔴 CLOSED-NEG (research #2854 FALSIFIED) · `F-FUSION-SM90-WGMMA-W15` (2026-06-06, g5 verbatim) ──
 
 The research deep-dive `#2854` (docs/research/sm90-wgmma-parity-rewrite-deepdive.md) predicted the
-W10/W11 in-place swizzle floor (rel-RMS 1.392) was a fixable **descriptor-encoding bug** (nonexistent
+OG10/OG11 in-place swizzle floor (rel-RMS 1.392) was a fixable **descriptor-encoding bug** (nonexistent
 "MODE5" / compact SBO / dropped base_offset_ phase), and that building the GMMA descriptor with
 `layout_type_=1`, `SBO=1024B`, `base_offset_=phase` pointing DIRECTLY at the SWIZZLE_128B-TMA tile
-would reach **rel-RMS 0** and let us DELETE the W10 32KB software decode band — reopening the campaign.
-W15 tested this falsifier on native H100 sm_90a (vast 39738178 DESTROYED leak 0, nvcc 12.6.77 driver
-560.35.05 — W10-apples).
+would reach **rel-RMS 0** and let us DELETE the OG10 32KB software decode band — reopening the campaign.
+OG15 tested this falsifier on native H100 sm_90a (vast 39738178 DESTROYED leak 0, nvcc 12.6.77 driver
+560.35.05 — OG10-apples).
 
 **RESULT: FALSIFIED.** A 3200-config in-process descriptor sweep (layout_type_∈{0,1,2,3} × SBO∈{0..4096}B
 × base_offset_∈{0..7} × LBO∈{0..2048}B) **FLOORS at single-tile rel-RMS 1.000** (best @ swm=1 sbo=1024
 boff=2) and **full-GEMM rel-RMS 1.392** — NO config reaches 0. The 3 named fixes are each
 necessary-DIRECTION-correct (best basin IS swm=1/sbo=1024; base_offset_ moves the residual 1.107→1.000,
-confirming the phase axis is real) but **INSUFFICIENT**. A MODE6 localizer (descriptor-direct AND W10
+confirming the phase axis is real) but **INSUFFICIENT**. A MODE6 localizer (descriptor-direct AND OG10
 composed-decode wgmma in the SAME kernel) measured composed_rel=**0.000** (the wgmma+descriptor mechanism
 is correct) but desc_rel=**1.107** (the swizzle-mode-1 in-place read is uncorrelated) — pinning the defect
-to the **TMA-swizzle ↔ wgmma-swizzle interaction**, exactly the "3rd interaction" W10 named.
+to the **TMA-swizzle ↔ wgmma-swizzle interaction**, exactly the "3rd interaction" OG10 named.
 
 **THE GAP IN THE RESEARCH (precise):** the load-bearing claim "the TMA box swizzle and the wgmma
 descriptor swizzle are the SAME `Layout_K_SW128_Atom` (`Swizzle<3,4,3>`) BY CONSTRUCTION" holds **only when
@@ -506,131 +521,156 @@ permutation than the canonical atom, so `layout_type_=1`'s fixed HW de-swizzle r
 core-matrices. The research conflated "TMA lands a 128B-swizzled tile" with "TMA lands the EXACT canonical
 atom."
 
-**THE DECODE-BAND REMOVAL IS REAL (the one mechanical positive):** W15 desc-direct smem = **64.0 KB/CTA
-@NST=2** vs W10 **96.0 KB/CTA** = a **32 KB drop**, 2 CTA/SM held. But UNUSABLE — g5 forbids perf on a
-wrong-result kernel. own GFLOP/s **NOT-REPORTED**. W10 frontier re-measured same-pod: **71.0 TFLOP/s, 6.06×,
+**THE DECODE-BAND REMOVAL IS REAL (the one mechanical positive):** OG15 desc-direct smem = **64.0 KB/CTA
+@NST=2** vs OG10 **96.0 KB/CTA** = a **32 KB drop**, 2 CTA/SM held. But UNUSABLE — g5 forbids perf on a
+wrong-result kernel. own GFLOP/s **NOT-REPORTED**. OG10 frontier re-measured same-pod: **71.0 TFLOP/s, 6.06×,
 rel-RMS 0** — KEPT, NO regression. PARITY=NO, cuBLAS=roofline, no superiority claim.
 
-**THE W11–W14 "EXHAUSTED" VERDICTS STAND (NOT superseded).** The exhaustion was NOT merely a descriptor
+**THE OG11–OG14 "EXHAUSTED" VERDICTS STAND (NOT superseded).** The exhaustion was NOT merely a descriptor
 bug — the descriptor-direct alternative is itself blocked by the same swizzle-interaction wall, now measured
-at 3200-config resolution. **W16 frontier** to claim the 32KB prize: MATCH the canonical atom — either (a)
+at 3200-config resolution. **OG16 frontier** to claim the 32KB prize: MATCH the canonical atom — either (a)
 re-encode A/B in GLOBAL so the SWIZZLE_128B TMA lands the canonical `Layout_K_SW128_Atom` byte pattern (then
 the field-fix applies), or (b) port `make_gmma_desc`'s EXACT LBO/SBO computation FOR the atom-major layout (a
 DIFFERENT descriptor than the canonical one). Both = net-new kernel structure, not a field sweep. The other
 reopened levers (128×256 tile / deep-ring / warp-spec setmaxnreg / persistent-collective / split-K /
 FP16-reopen) all remain occupancy-gated BEHIND the decode-removal, which is itself gated on canonical-atom
-match. Frontier UNCHANGED = W10 `gemm_w10` (70.7, 6.09×, 2 CTA/SM, bit-exact). verdict:
+match. Frontier UNCHANGED = OG10 `gemm_w10` (70.7, 6.09×, 2 CTA/SM, bit-exact). verdict:
 `.verdicts/hexa-fusion/F-FUSION-SM90-WGMMA-W15.txt`.
 
-## ── own-GEMM sm_90a W-ladder: BIT-CORRECT achieved · perf W6 → W7 (2026-06-06, g5) ──
+## ── own-GEMM sm_90a OG-ladder (own-GEMM W1→W15, RENAMED OG1→OG15 to disambiguate from the L1 fusion-campaign W1-①…⑨ above): BIT-CORRECT achieved · summit OG10 70.7 · OG11–OG15 closed-neg (2026-06-06, g5) ──
+
+> **Ladder disambiguation:** this `OG#` ladder is the **own-GEMM wgmma perf climb** (forge's
+> `self/native/wgmma/*.cu`). It is DISTINCT from the L1 **fusion-campaign** `W1-①…⑨` items near the top of
+> this doc (device-resident · async · CUDA-graph · megakernel). The two used the same `W` prefix and collided;
+> the perf ladder is now `OG1→OG16`. Verdict slugs keep their on-disk `…-W#` filenames (unchanged on disk).
 
 The breakthrough route is the **own-GEMM** itself (forge's `self/native/wgmma/*` .cu) —
 NOT a separate flame/forge mechanism. flame rides forge rides this kernel, so closing
-the own-GEMM gap lifts the whole stack automatically.
+the own-GEMM gap lifts the whole stack automatically. **OG1→OG10 = the measured bit-exact climb to the
+70.7 TFLOP/s summit; OG11→OG15 = closed-neg rungs that ALL hit the same 32KB-decode-band-vs-occupancy /
+atom-encoding wall (these STAND — NOT superseded; OG15 confirmed the descriptor-direct alternative hits
+the same wall).**
 
-- [x] **W1 GMMA::Layout B-core-matrix builder** ✅ (#2819) — INTER 8×4 TF32 core layout (LBO 128B/SBO 256B).
-- [x] **W2 single-tile identity verify** ✅ (#2819) — rel-RMS **0.000e+00** — the swizzle is SOLVED ★ (the
+- [x] **OG1 GMMA::Layout B-core-matrix builder** ✅ (#2819) — INTER 8×4 TF32 core layout (LBO 128B/SBO 256B).
+- [x] **OG2 single-tile identity verify** ✅ (#2819) — rel-RMS **0.000e+00** — the swizzle is SOLVED ★ (the
       no-swizzle 8×16B core-matrix wall above is now CLOSED — the residual was one constant: 8×4 elems, not 8×8).
-- [x] **W3 full wgmma+TMA GEMM bit-correct** ✅ (#2819) — rel-RMS **0 @ 2048³** (own == cuBLAS == CPU-f64);
+- [x] **OG3 full wgmma+TMA GEMM bit-correct** ✅ (#2819) — rel-RMS **0 @ 2048³** (own == cuBLAS == CPU-f64);
       2nd bug fixed: wgmma reads shared via the async proxy → needs `fence.proxy.async.shared::cta`.
-- [x] **W4 sm_90 parity measure** ✅ honest — naive single-wgmma/block own **20.2 TFLOP/s**, 17.67× off.
-- [x] **W5 pipeline tune** ✅ — wide-N TN=128 → **38.0 TFLOP/s** (9.35× off), bit-exact.
-- [x] **W6 cp.async multi-stage ring (async-pipe)** ✅ (#2833) — own **38.0 → 50.7 TFLOP/s** @4096³, rel-RMS **0**
+- [x] **OG4 sm_90 parity measure** ✅ honest — naive single-wgmma/block own **20.2 TFLOP/s**, 17.67× off.
+- [x] **OG5 pipeline tune** ✅ — wide-N TN=128 → **38.0 TFLOP/s** (9.35× off), bit-exact.
+- [x] **OG6 cp.async multi-stage ring (async-pipe)** ✅ (#2833) — own **38.0 → 50.7 TFLOP/s** @4096³, rel-RMS **0**
       (+33%) → **8.39× off** cuBLAS-TF32 (~422). ~11.5% of gap closed. warp-spec first pass: race fixed
       (`wg_bar`) → rel-RMS 0 but 35.0 only (a SINGLE consumer warpgroup STARVES the tensor cores at TM=64).
-- [x] **W7 dual-consumer-warpgroup warp-spec (TM=128)** — 🔴 CLOSED-NEGATIVE (bit-exact, occupancy-bound).
+- [x] **OG7 dual-consumer-warpgroup warp-spec (TM=128)** — 🔴 CLOSED-NEGATIVE (bit-exact, occupancy-bound).
       BUILT (MODE 3 `gemm_ws2`, 384 thr = 3 WG: 1 cp.async producer WG + 2 consumer WGs each `wgmma` over its
       64-row band × the SHARED B tile) + run on native sm_90a H100 (vast 39651872, DESTROYED leak 0, nvcc 12.5.82).
-      **BIT-EXACT** (rel_rms **0** @ S=2048/4096, NST=2..5) but **32.0 TFLOP/s (13.2×) — SLOWER** than W6 async-pipe
-      50.7 (8.39×). W7 hypothesis FALSIFIED. Root cause (on-pod `cudaOccupancyMaxActiveBlocksPerMultiprocessor`):
+      **BIT-EXACT** (rel_rms **0** @ S=2048/4096, NST=2..5) but **32.0 TFLOP/s (13.2×) — SLOWER** than OG6 async-pipe
+      50.7 (8.39×). OG7 hypothesis FALSIFIED. Root cause (on-pod `cudaOccupancyMaxActiveBlocksPerMultiprocessor`):
       a 128-thread cp.async producer WG at TM=128 is **register-bound to 1 block/SM** (90 regs × 384 thr;
       2 CTAs = 69120 > 65536 regs/SM) → 256 compute-thr/SM vs async-pipe's 4×128 = 512. More consumer WGs cannot win
       while the producer eats a full WG AND evicts the 2nd resident CTA. verdict: `.verdicts/hexa-fusion/F-FUSION-SM90-WGMMA-W7.txt`.
-- [x] **W8 TMA-driven production** ✅ BIG-PROGRESS — `cp.async.bulk.tensor.2d` + a SINGLE elected producer thread
+- [x] **OG8 TMA-driven production** ✅ BIG-PROGRESS — `cp.async.bulk.tensor.2d` + a SINGLE elected producer thread
       (freeing 255) → BOTH warpgroups consume, CTA shrinks 384→256 thr. MODE 4 `gemm_ws_tma`. native sm_90a H100
       (vast 39701877, DESTROYED leak 0, nvcc 12.6). **BIT-EXACT** rel_rms **0** @ S=2048..8192. own **50.7 → 66.5
-      TFLOP/s** @4096 (+31%; 69.6 @8192) → **6.44×** off cuBLAS. **Occupancy 1 → 2 CTA/SM** (the W7-predicted fix,
+      TFLOP/s** @4096 (+31%; 69.6 @8192) → **6.44×** off cuBLAS. **Occupancy 1 → 2 CTA/SM** (the OG7-predicted fix,
       measured). ~26% of the parity gap closed. PARITY=NO. verdict `.verdicts/hexa-fusion/F-FUSION-SM90-WGMMA-W8.txt`.
-- [~] **W9 swizzled-TMA (drop the per-K-step permute)** — 🟡 CLOSED-NEG (naive) + mechanism PROVEN + frontier KEPT.
+- [~] **OG9 swizzled-TMA (drop the per-K-step permute)** — 🟡 CLOSED-NEG (naive) + mechanism PROVEN + frontier KEPT.
       MODE 5 `gemm_ws_tma_sw`: `CU_TENSOR_MAP_SWIZZLE_128B` so the tile lands wgmma-ready. native sm_90a H100
       (vast 39704602, DESTROYED leak 0, nvcc 12.6). **PERMUTE REMOVED — SASS-proven** (gemm_ws_tma STS=28 →
       gemm_ws_tma_sw STS=0, one __syncthreads dropped), **occupancy 2 CTA/SM preserved**. BUT **bit-exact GATE FAIL**:
       rel_rms FLOOR **1.392** across ~100 (lbo×sbo×kstep) descriptor configs (lbo inert) → NO perf number (g5).
       ROOT CAUSE measured: the FP32 128B-swizzle is **g_phys = g XOR ((r+1)&7)** (NOT textbook g XOR r), and it must
       STILL compose with the 8×4 INTER core (gmma_phys) — a two-layer permutation one linear descriptor can't express.
-      W8 66.9/6.41× frontier **KEPT (no regression)**. verdict `.verdicts/hexa-fusion/F-FUSION-SM90-WGMMA-W9.txt`.
-- [x] **W10 composed swizzle decode** ✅ BIG-PROGRESS LIFT (beats W8) — 🟢 BIT-EXACT + frontier lifted. On-pod
-      MODE2/MODE3 dumps RE-MEASURED the true layout and **corrected the W9 handoff**: the FP32 SWIZZLE_128B law is
-      the **textbook g XOR (r&7)** (W9's (r+1)&7 was a partial-8-row-probe artifact); the wall was the SECOND layer
+      OG8 66.9/6.41× frontier **KEPT (no regression)**. verdict `.verdicts/hexa-fusion/F-FUSION-SM90-WGMMA-W9.txt`.
+- [x] **OG10 composed swizzle decode** ✅ BIG-PROGRESS LIFT (beats OG8) — 🟢 BIT-EXACT + frontier lifted ★ **TF32 SUMMIT**. On-pod
+      MODE2/MODE3 dumps RE-MEASURED the true layout and **corrected the OG9 handoff**: the FP32 SWIZZLE_128B law is
+      the **textbook g XOR (r&7)** (OG9's (r+1)&7 was a partial-8-row-probe artifact); the wall was the SECOND layer
       (gmma INTER core packing), not the swizzle. The COMPOSED decode (read gmma_phys(m,k) from swizzled slot, pure
       index, no transpose scratch) is **bit-exact**: single-tile GATE 1+2 rel_rms **0.000e+00** (before any big run,
       g5), full-GEMM rel_rms **0** @2048/4096/8192. KEY occupancy fix: gmma scratch = a SINGLE shared buffer (not
-      NST-ring-staged) → smem 131→98 KB/CTA → **2 CTA/SM restored**. Same-pod apples: W8 66.9 (6.43×) → **W10 70.7
-      TFLOP/s (6.09×) @S=4096** (+5.7%, 75.5 @8192), ~6.3% of the gap closed. In-place wgmma HW swizzle descriptor =
+      NST-ring-staged) → smem 131→98 KB/CTA → **2 CTA/SM restored**. Same-pod apples: OG8 66.9 (6.43×) → **OG10 70.7
+      TFLOP/s (6.09×) @S=4096** (+5.7%, 75.5 @8192; re-measured 71.0/6.06× @OG15-pod), ~6.3% of the gap closed. In-place wgmma HW swizzle descriptor =
       **CLOSED-NEG** (floor 1.392 ~40 cfgs, a 3rd interaction — HW de-swizzle ≠ TMA atom stacking). native sm_90a
       H100 (vast 39707146, DESTROYED leak 0, nvcc 12.6 driver 560.35.05). verdict `.verdicts/hexa-fusion/F-FUSION-SM90-WGMMA-W10.txt`.
-- [x] **W11 research-named top levers** — 🔴 LEVER-1 CLOSED-NEGATIVE (occupancy-coupled) + frontier KEPT (#2850).
-      Applied the litscan top-3 levers on the W10 composed-decode. native sm_90a H100 (vast 39717398, DESTROYED leak
+
+**OG11–OG15 — closed-neg rungs (ALL hit the SAME 32KB-band-vs-occupancy / atom-encoding wall; STAND, not superseded):**
+- [x] **OG11 research-named top levers** — 🔴 LEVER-1 CLOSED-NEGATIVE (occupancy-coupled) + frontier KEPT (#2850).
+      Applied the litscan top-3 levers on the OG10 composed-decode. native sm_90a H100 (vast 39717398, DESTROYED leak
       0). bit-exact rel_rms 0 throughout. **LEVER 1 (128×256 tile, the named +34% jump) REGRESSED**: smem 98→147
       KB/CTA collapses occupancy **2→1 CTA/SM**, own 65.5–66.4 (< 70.6 same-binary baseline, -6.0%); the accumulator-
       reuse gain does NOT cover the halved residency (the litscan Q2-step5 tile↔warp-spec coupling CONFIRMED by
-      measurement). LEVER 3 (ping-pong) cannot rescue it. **W10 70.7/6.09× frontier KEPT — no regression shipped.**
+      measurement). LEVER 3 (ping-pong) cannot rescue it. **OG10 70.7/6.09× frontier KEPT — no regression shipped.**
       verdict `.verdicts/hexa-fusion/F-FUSION-SM90-WGMMA-W11.txt`. kernel `self/native/wgmma/wgmma_tf32_w11.cu`.
-- [x] **W12 tile + warp-spec register-realloc (coupled)** — 🔴 CLOSED-NEGATIVE (#2851) — the coupled lever does NOT
+- [x] **OG12 tile + warp-spec register-realloc (coupled)** — 🔴 CLOSED-NEGATIVE (#2851) — the coupled lever does NOT
       close on this TF32 kernel, on TWO grounds. native sm_90a H100 (vast 39719243, DESTROYED leak 0, nvcc 12.6,
       driver 580.95.05). bit-exact rel_rms 0 throughout. **(b) MODE10 per-K8-sub decode** shrinks the decode scratch
-      48KB→12KB → smem 147→**108.0 KB/CTA → 2 CTA/SM RESTORED** (the W11-pinned occupancy gate MET, 108<114) but own
+      48KB→12KB → smem 147→**108.0 KB/CTA → 2 CTA/SM RESTORED** (the OG11-pinned occupancy gate MET, 108<114) but own
       **COLLAPSES to 26.1 TFLOP/s** @4096 (ptxas C7511 wgmma serialized; the sub-decode forces a __syncthreads +
       fresh decode per K8 sub-step → serializes decode↔MMA — occupancy was NEVER the wall, decode/MMA OVERLAP is).
       **(a) MODE9 warp-spec setmaxnreg 40/232 UNREALIZABLE**: ptxas C7507 IGNORES it (the 128×256 tile's 128 accum
       regs/thr force min regs) AND the separate-producer-WG mbarrier handshake DEADLOCKED (timeout exit 124). The
       register-realloc the litscan needs is DENIED by the bigger tile's own accumulator footprint. **128×256 output
-      tile = DEAD AXIS for this kernel. W10 70.7/6.09× frontier KEPT — no regression shipped.** verdict
+      tile = DEAD AXIS for this kernel. OG10 70.7/6.09× frontier KEPT — no regression shipped.** verdict
       `.verdicts/hexa-fusion/F-FUSION-SM90-WGMMA-W12.txt`. kernel `self/native/wgmma/wgmma_tf32_w12.cu`.
-- [x] **W13 deep async decode ring** 🔴 CLOSED-NEG — attacked residual (b): ring the gmma decode scratch NSTG-deep
-      so decode(N+1) overlaps wgmma(N) (producer-ahead software pipeline, KEEP the W10 decode-copy per W12). BIT-EXACT
+- [x] **OG13 deep async decode ring** 🔴 CLOSED-NEG — attacked residual (b): ring the gmma decode scratch NSTG-deep
+      so decode(N+1) overlaps wgmma(N) (producer-ahead software pipeline, KEEP the OG10 decode-copy per OG12). BIT-EXACT
       at NSTG≥2 (rel_rms 0) but ONE added 32 KB gmma band pushes smem 96→128 KB/CTA → occupancy **2→1 CTA/SM**, and
       the overlap gain does NOT recover the halved occupancy: own **70.7 → 51.9 TFLOP/s @4096 (−27%)**. NSTG 2/3/4 flat
-      at 1 CTA/SM. The SAME wall W12 hit from the other side (W12 serializes to hold 2 CTA/SM; W13 overlaps but loses
-      it): **2 CTA/SM and decode/MMA overlap are MUTUALLY EXCLUSIVE** for this 128×128 FP32-scratch TF32 kernel. W10
+      at 1 CTA/SM. The SAME wall OG12 hit from the other side (OG12 serializes to hold 2 CTA/SM; OG13 overlaps but loses
+      it): **2 CTA/SM and decode/MMA overlap are MUTUALLY EXCLUSIVE** for this 128×128 FP32-scratch TF32 kernel. OG10
       70.7 frontier **KEPT (no regression)**. H100 (vast 39725711, DESTROYED leak 0, nvcc 12.6 driver 560.35.03).
       verdict `.verdicts/hexa-fusion/F-FUSION-SM90-WGMMA-W13.txt`.
-- [x] **W14 PRECISION axis — FP16/BF16 own-GEMM (NEW dtype campaign)** ✅ landed correct, 🔴 W13 thesis refuted
-      (2026-06-06). The user-opted-into separate dtype axis after W13 closed the TF32 async-pipeline. Ported the W10
+- [x] **OG14 PRECISION axis — FP16/BF16 own-GEMM (NEW dtype campaign)** ✅ landed correct, 🔴 OG13 thesis refuted
+      (2026-06-06). The user-opted-into separate dtype axis after OG13 closed the TF32 async-pipeline. Ported the OG10
       composed-swizzle-decode own-GEMM to 16-bit operands + f32 accumulate (`wgmma.mma_async...m64n64k16.f32.f16.f16`
       and `.bf16.bf16`). **f16 GMMA layout RE-DERIVED** (8×8 core, 128B, vs TF32 8×4); on-GPU MODE2/3 dump confirms
       the SWIZZLE_128B law = textbook g XOR (r&7) on 8-f16 granules, atom-major. **GATE CHANGE (g5, STATED): NOT
       bit-exact-vs-FP64** — precision-appropriate rel_rms ≤1e-2 vs SAME-DTYPE oracle (cuBLAS-FP16/BF16, NOT TF32).
       GATES PASS: MODE0/1/7 rel_rms **0.000e+00**; full GEMM rel_rms **0** (far inside 1e-2). **f16 frontier
       `gemm_f16_w14` NST=2: own 71.6 TFLOP/s @4096 (76.4 @8192), 96 KB/CTA → 2 CTA/SM, cuBLAS-FP16 827.2, ratio
-      11.55×, PARITY=NO**. BF16 mirrors (71.1 @4096, 11.48× off cuBLAS-BF16). **🔴 W13 "16KB band → 2 bands at
+      11.55×, PARITY=NO**. BF16 mirrors (71.1 @4096, 11.48× off cuBLAS-BF16). **🔴 OG13 "16KB band → 2 bands at
       2 CTA/SM reopens the overlap" REFUTED**: f16 wgmma is .k16, so a natural K-slab is 64-wide (one 128B atom),
       band holds 2× K-elems → **32 KB = SAME as TF32**; MODE6 ring bit-exact but every 2nd-band config → 1 CTA/SM →
-      regress (50.9 @4096, −29%). The own kernel stays decode/occupancy-bound at ~71-76 TFLOP/s (≈ TF32 W10 absolute)
-      while cuBLAS-FP16 roofline DOUBLED (827 vs 431) → same-dtype ratio WIDENED. **TF32 W10 70.7/6.09× summit stays
-      the TF32 frontier — W14 is a separate dtype axis, untouched.** NOT the forge BF16-TC megakernel (different
+      regress (50.9 @4096, −29%). The own kernel stays decode/occupancy-bound at ~71-76 TFLOP/s (≈ TF32 OG10 absolute)
+      while cuBLAS-FP16 roofline DOUBLED (827 vs 431) → same-dtype ratio WIDENED. **TF32 OG10 70.7/6.09× summit stays
+      the TF32 frontier — OG14 is a separate dtype axis, untouched.** NOT the forge BF16-TC megakernel (different
       artifact). native sm_90a H100 (vast 39729157, DESTROYED leak 0, nvcc 12.6 driver 560.35.03). Residual: escape
-      the software decode (f16 HW-swizzle in-place — TF32 W10 MODE5 was closed-neg, f16 unexplored) OR 32-K half-atom
+      the software decode (f16 HW-swizzle in-place — TF32 OG10 MODE5 was closed-neg, f16 unexplored) OR 32-K half-atom
       slab (band → 16 KB). verdict `.verdicts/hexa-fusion/F-FUSION-SM90-WGMMA-W14-FP16.txt`.
+- [x] **OG15 descriptor-direct (delete the 32KB decode band)** — 🔴 CLOSED-NEG, research #2854 FALSIFIED (#2855).
+      3200-cfg descriptor sweep FLOORS rel-RMS 1.000 single-tile / 1.392 GEMM (none 0). The 32KB band IS removable
+      (smem 96→64 KB/CTA, 2 CTA/SM held) but the in-place read is NOT bit-exact: our hand-rolled
+      `cuTensorMapEncodeTiled` box lands an **atom-major stacking ≠ the canonical CuTe `Layout_K_SW128_Atom`**, so
+      `layout_type_=1`'s fixed HW de-swizzle reads the wrong core-matrices. Confirms OG11–OG14 STAND (the
+      descriptor-direct alternative hits the same swizzle-interaction wall). OG10 71.0/6.06× re-measured same-pod, KEPT.
+      Full writeup in the OG15 section above. verdict `.verdicts/hexa-fusion/F-FUSION-SM90-WGMMA-W15.txt`.
 
-- [x] **TF32 async-pipeline axis EXHAUSTED** — W8 (TMA-producer) + W9 (permute-removal) + W10 (composed decode) +
-      W12 (output-tile DEAD, decode/MMA overlap = wall) + W13 (deeper ring regresses occupancy) collectively close the
-      TF32 own-GEMM perf axis at **W10 70.7 TFLOP/s, 6.09× off cuBLAS-TF32, 2 CTA/SM, bit-exact**. The ONLY remaining
-      axis is the **precision change (FP16/BF16 wgmma)** — doubles tensor-core throughput AND a 16-bit gmma band is
-      16 KB (could fit 2 bands at 2 CTA/SM, reopening W13's overlap) — a SEPARATE dtype campaign with a non-bit-exact
-      (FP16 accumulation) gate. **RECOMMEND STOP on the TF32 perf axis.**
+**The next net-new frontier (the ONLY remaining lever to claim the removable 32KB band):**
+- [ ] **OG16 — match the canonical CuTe `Layout_K_SW128_Atom`** — re-encode A/B in GLOBAL so the SWIZZLE_128B TMA
+      lands the canonical atom (or port `make_gmma_desc`'s EXACT LBO/SBO for the atom-major layout). **Net-new kernel
+      structure, NOT a descriptor-field sweep** (OG15 already exhausted the 3200-config field space). This is the only
+      remaining lever to make the 32KB decode band (OG15-proven removable) actually USABLE bit-exact. *Unblocked-BY-OG16
+      (NOT separate milestones — they all depend on the band becoming usable first): 128×256 tile / deep-ring /
+      warp-spec setmaxnreg / persistent-collective / split-K / FP16-reopen.* A deliberate future GPU decision, not an
+      auto-fire (OG15 was closed-neg).
+
+- [x] **TF32 async-pipeline axis EXHAUSTED (OG7–OG15)** — OG8 (TMA-producer) + OG9 (permute-removal) + OG10 (composed
+      decode = SUMMIT) + OG11/OG12 (output-tile DEAD, decode/MMA overlap = wall) + OG13 (deeper ring regresses
+      occupancy) + OG15 (descriptor-direct FALSIFIED) collectively close the TF32 own-GEMM perf axis at **OG10 70.7
+      TFLOP/s, 6.09× off cuBLAS-TF32, 2 CTA/SM, bit-exact**. The remaining lever is **OG16 canonical-atom match** (then
+      the removable 32KB band is usable); the **precision change (FP16/BF16, OG14)** is a separate dtype axis already
+      measured (own ≈71-76 but cuBLAS-FP16 roofline doubled → ratio widened). **RECOMMEND no auto-fire on the TF32 perf
+      axis — OG16 is a deliberate net-new-kernel decision.**
 
 
-**STATE**: correctness CLOSED (W2/W3 bit-exact). Occupancy CLOSED (W8/W10 2 CTA/SM). **Frontier = W10 `gemm_w10`
-70.7 TFLOP/s, 6.09×, 2 CTA/SM, bit-exact** (beats W8 66.5/6.44× by +5.7%). W11→W12 EXHAUSTED the litscan
-tile↔warp-spec coupling axis: lever 1 (128×256 tile) regresses alone (2→1 CTA/SM, W11), and **W12 closed the
-coupling negative** — the smem CAN meet the 114KB ceiling (108KB, 2 CTA/SM) but ONLY via a per-K8-sub decode that
-serializes decode↔MMA (70.3→26.1), and the warp-spec register realloc that would hide it is ungrantable under the
-bigger tile's accumulator regs (ptxas ignores setmaxnreg). **The 128×256 output-tile axis is CLOSED-NEGATIVE.**
-Remaining parity levers are OTHER axes: (i) the W5-class perf-only warp-spec TMA pipeline (hide the decode via a deep
-async producer ring WITHOUT shrinking the scratch); (ii) the precision axis (FP16/BF16 wgmma, where the litscan
-ladder was actually measured). The in-place HW-descriptor path stays CLOSED-NEG (W10). Parity OPEN on those axes;
-the output-tile axis is exhausted. cuBLAS = roofline, no superiority claim.
+**STATE**: correctness CLOSED (OG2/OG3 bit-exact). Occupancy CLOSED (OG8/OG10 2 CTA/SM). **TF32 summit = OG10
+`gemm_w10` 70.7–71.0 TFLOP/s, 6.06–6.09× off cuBLAS-TF32, 2 CTA/SM, bit-exact** (beats OG8 66.5/6.44× by +5.7%).
+**OG11→OG15 are all closed-neg on the SAME wall** — the parity gap is structurally bound by the software decode-copy
+(32KB band ⊥ occupancy, proven both dtypes OG11–OG14) and OG15 (3200-cfg descriptor sweep) FALSIFIED the
+descriptor-direct shortcut: the band IS removable (96→64 KB/CTA) but the read is not bit-exact because the
+hand-rolled box lands an atom-major stacking ≠ the canonical CuTe `Layout_K_SW128_Atom`. The ONE named net-new
+frontier is **OG16 (match the canonical atom)** — net-new kernel structure, the only lever to make the removable
+band usable. The in-place HW-descriptor path stays CLOSED-NEG (OG10). cuBLAS = roofline, no superiority claim.
 
 ## 🎯 Session north-star — the 5 axes (2026-06-06)
 
@@ -638,8 +678,8 @@ Pinned by the user as this session's tracked axes. Two upstream "make it work" a
 
 | # | axis | what | status |
 |---|---|---|---|
-| 1 | own-GEMM perf — util on H100 too | sm_90a own-GEMM W-ladder toward cuBLAS parity (H100 low-util on D1536 = right-sizing: byte-eq D1536 saturates an RTX 5070 to 98%, an H100 to ~13%). W6 async-pipe 50.7 (8.39x) -> W7 dual-consumer closed-neg -> W8 TMA-producer 66.5 (6.44x, occupancy 1->2 CTA/SM) -> W9 swizzled-TMA -> **W10 composed-decode 70.7 (6.09x) = TF32 SUMMIT** -> W11/12/13 TF32-async-pipe axis EXHAUSTED (closed-neg). **NEW dtype axis: W14 FP16/BF16 own-GEMM** — landed bit-exact-vs-same-dtype, own 71.6 (2 CTA/SM) but **11.5x off cuBLAS-FP16** (roofline doubled, ratio WIDENED); W13's 16KB-band-overlap thesis REFUTED for .k16 (band still 32KB). TF32 summit=70.7 UNTOUCHED (separate dtype). | **W14 done** (`F-FUSION-SM90-WGMMA-W14-FP16`); residual = escape software decode |
+| 1 | own-GEMM perf — util on H100 too | sm_90a own-GEMM **OG-ladder** (OG1→OG16; disambiguated from the L1 fusion-campaign W1-①…⑨) toward cuBLAS parity (H100 low-util on D1536 = right-sizing: byte-eq D1536 saturates an RTX 5070 to 98%, an H100 to ~13%). OG6 async-pipe 50.7 (8.39x) -> OG7 dual-consumer closed-neg -> OG8 TMA-producer 66.5 (6.44x, occupancy 1->2 CTA/SM) -> OG9 swizzled-TMA -> **OG10 composed-decode 70.7–71.0 (6.06–6.09x) = TF32 SUMMIT (bit-exact)** -> **OG11→OG15 ALL closed-neg on the SAME 32KB-band-vs-occupancy / atom-encoding wall** (OG11/12 output-tile DEAD, OG13 deep-ring regress, OG15 descriptor-direct FALSIFIED #2854: band removable 96→64KB but read not bit-exact, atom-major ≠ canonical CuTe `Layout_K_SW128_Atom`). **NEW dtype axis OG14 FP16/BF16** — bit-exact-vs-same-dtype, own 71.6 (2 CTA/SM) but **11.5x off cuBLAS-FP16** (roofline doubled). TF32 summit UNTOUCHED. **The ONE net-new frontier = OG16 (match the canonical atom — net-new kernel, NOT a field sweep; deliberate future decision, no auto-fire).** | 🔴 TF32 axis EXHAUSTED at OG10 70.7; OG16 = only remaining lever (canonical-atom match) |
 | 2 | cuBLAS-impossible parallel | persistent whole-step megakernel: a persistent kernel CANNOT call cuBLAS, so cuBLAS structurally caps fusion at the GEMM boundary. own-GEMM removed THAT wall (megakernel calls our device GEMM in-line); 2nd wall = the 2 GroupNorm full-y reductions need a grid-sync cooperative kernel (cudaLaunchCooperativeKernel + grid.sync) | GN grid-sync in flight |
 | 3 | reflect 1+2 -> dojo | fold the own-GEMM ladder + megakernel-wall story into stdlib/dojo (hexa-cuda track) | downstream of 1,2 |
-| 4 | reflect 1+2 -> README | flame.forge.hexa-cuda trinity GPU section (PR #2842 reorganized it); fold the W8/W9 numbers + both-walls-closed story | #2842 = 1st pass, numbers TODO |
+| 4 | reflect 1+2 -> README | flame.forge.hexa-cuda trinity GPU section (PR #2842 reorganized it); fold the OG8/OG10 numbers + both-walls-closed story | #2842 = 1st pass, numbers TODO |
 | 5 | reflect 1+2 -> commons.tape | governance directive capturing own-GEMM-parity + cuBLAS-impossible-megakernel — sign-gated (sidecar sign commons, user-only) | downstream, needs sign |
