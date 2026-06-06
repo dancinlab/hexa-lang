@@ -341,16 +341,122 @@ table **first** — the intuitive move is often the slower or the broken one.
   - **blocks/warns `optim8bit`** when any single tensor would exceed the 2³¹
     element limit (lesson #3) — pass `--max-tensor-elems N` to declare your
     largest parameter tensor,
-  - prints a **"DDP won't help if model-bound"** advisory line (lesson #6).
+  - prints a **"DDP won't help if model-bound"** advisory line (lesson #6 /
+    prescription 2 — *don't parallelize a pathological op*), and
+  - notes that **vectorizing a fused weight is what crosses the 2³¹ ceiling**
+    that breaks `optim8bit` (prescription 3 — the causal link from lesson #1
+    to lesson #3).
 
   Self-test it with no rental: `bash tool/dojo_rent_preflight.sh --self-test`.
 
-> **honesty:** these six are **cited** anima H200 observations (handoff
-> `a10891bc`), not hexa-lang re-measurements. The dojo reflects them as
-> *guidance + a preflight advisory*; it does not re-run the 7B job. The
-> preflight's element-limit and bf16 recommendation logic is locally
-> self-tested (pure arithmetic, no GPU); the underlying anima timings are
-> not reproduced here.
+### WHY parallel was the wrong path — root cause (decision-grade)
+
+Lessons #1, #3 and #6 above are three faces of **one** wrong decision the anima
+7B `CLMConvMoE` (~7.06 B params) campaign made. This subsection states the
+root cause as a **decision rule**, not a table row, so a dojo user reaching for
+"be a good multi-GPU citizen" sees *why* the obvious move backfired. These are
+**cited anima H200 observations** (sidecar handoff `f5e18a0f`, the
+decision/algorithm root-cause companion to recipe handoff `a10891bc`) —
+attributed, **not** re-measured here.
+
+**The trap (the "obvious" optimization).** The MoE layer ran its 30
+`ConvExpert` modules as a `ModuleList`:
+
+```python
+# the ModuleList form — 30 small Conv1d launches per step
+y = torch.stack([e(x) for e in self.experts])   # 30 × Conv1d(d, d, K), d=6208
+```
+
+To "be a good multi-GPU-DDP citizen" and cut **30 launches → 1**, the intuitive
+move was to **vectorize** the expert loop into one grouped conv:
+
+```python
+# the "optimized" grouped form — ONE launch, E=30 groups
+self.experts = nn.Conv1d(E*d, E*d, K, groups=E)   # E·d = 30 × 6208 = 186 240 channels
+```
+
+**The measurement (H200, cuDNN on *or* off).** The "optimization" was
+**~11× slower**:
+
+| form | per-step wall (H200) |
+|---|---|
+| `ModuleList` of 30 small convs | **~74 s/step** |
+| grouped `Conv1d(E·d, E·d, K, groups=30)` | **~14 min/step** (~11× slower) |
+
+**The root cause — fewer launches ≠ faster.** A grouped conv with `groups=30`
+and `E·d = 186 240` channels **defeats GPU group-parallelism**: cuDNN can't pick
+an optimized algorithm for that (very wide, many-group) shape and falls back to
+a **naive path**. The 30 *separate* small (`d = 6208`) convs each map to a fast
+cuDNN kernel and run **concurrently** on the SM scheduler — far better occupancy.
+The launch-count intuition is simply **wrong** for wide grouped convs.
+
+**The cascade — why the *parallel* path failed.** This is the decision-grade
+part. DDP replicates the **full** model on every GPU, so **each** GPU still runs
+the same **11×-inflated** grouped conv per step. You are parallelizing a
+per-step cost that is *itself* 11× inflated:
+
+- **4×H200 DDP** on the vectorized model was **slower wall-clock** than **1×H200**
+  on the `ModuleList` model — at **4× the cost**.
+- `a_wall_first` ("take the faster parallel path regardless of cost") only fires
+  when parallel is *actually* faster. The honest measurement showed it was
+  **not** — so single-GPU won on **wall time too**, not just on cost.
+- DDP multiplies a pathological op; it does **not** fix it.
+
+**The secondary trip-wire (silent).** The fused weight `(E·d, d, K)` is
+**3.47 B elements** — past the **bitsandbytes 2³¹ per-tensor element ceiling**.
+So vectorizing **also** silently broke `AdamW8bit`: `Error invalid
+configuration argument at ops.cu:226`. It surfaced only via
+`torchrun --tee 3`. **Vectorization is what crosses the 2³¹ ceiling** (lesson #3
+is the *consequence* of the lesson-#1 mistake).
+
+**The working production path (the canonical 7B-ENGINE recipe).** Single
+**141 GB H200**, **`ModuleList` experts**, **grad-checkpoint + `AdamW8bit`**,
+**~74 s/step**, CE descending cleanly `5.64 → 1.87` over step `0 → 1000`.
+
+**Before → after, as a decision:**
+
+| axis | the trap (chosen first) | the working path |
+|---|---|---|
+| expert layer | grouped `Conv1d(E·d,…, groups=30)` (1 launch) | `ModuleList` of 30 small convs |
+| per-step wall | ~14 min/step (cuDNN naive path) | ~74 s/step (concurrent fast kernels) |
+| scaling | 4×H200 DDP, slower than 1×H200 @ 4× cost | 1×H200, won on wall **and** cost |
+| 8-bit optimizer | broken (3.47 B-elem fused weight > 2³¹) | works (no oversized tensor) |
+
+**The four prescriptions (the decision rules):**
+
+1. **Keep per-expert conv MoE as a `ModuleList` of small convs** — do **not**
+   auto-vectorize into a grouped conv to "reduce launches". For wide
+   `E·d ≫ 10⁵`-channel grouped convs cuDNN regresses to a naive path; **bench
+   the grouped form against the loop on one step first.** (This *sharpens*
+   lesson #1 with the measured root cause + the 11× number.)
+2. **Before reaching for multi-GPU DDP, MEASURE single-GPU step time on the
+   ACTUAL kernels.** If a step is dominated by a pathological op, DDP just
+   **multiplies the pathology** — fix the op first, on one GPU. Parallel is
+   "wall-first" only when the per-replica step is **already healthy**. (NEW
+   rule — *don't parallelize a pathological op*.)
+3. **Gate vectorization on the bitsandbytes 2³¹ per-tensor element ceiling.**
+   Any fused param tensor with `numel > 2³¹` silently breaks 8-bit optimizers —
+   and **vectorization is exactly what crosses that line** (the causal link to
+   lesson #3).
+4. **Canonical 7B-ENGINE working recipe:** single **141 GB H200**, `ModuleList`
+   experts, **grad-ckpt + `AdamW8bit`**, **~74 s/step**.
+
+> **cross-links.** This decision-grade root cause (handoff `f5e18a0f`)
+> *complements* the two already-reflected handoffs: the **infra** preflight
+> (handoff `4474f21b` — the "no-troubleshoot preflight" section above) and the
+> **recipe** lessons (handoff `a10891bc` — the six-row table above). The
+> preflight's `dojo_recipe_advisory` carries the two causal lines from this
+> subsection — *DDP won't help a model/compute-bound run* (prescription 2) and
+> *vectorization crosses the 2³¹ ceiling* (prescription 3) — see
+> [how the dojo enforces this](#how-the-dojo-enforces-this).
+
+> **honesty:** the six table lessons **and** this decision-grade root cause are
+> **cited** anima H200 observations (handoffs `a10891bc` + `f5e18a0f`), not
+> hexa-lang re-measurements. The dojo reflects them as *guidance + a preflight
+> advisory*; it does not re-run the 7B job. The preflight's element-limit and
+> bf16 recommendation logic is locally self-tested (pure arithmetic, no GPU);
+> the underlying anima timings (the ~11×, ~74 s/step, the 4×H200-vs-1×H200
+> comparison) are **not** reproduced here.
 
 ## references
 
@@ -366,3 +472,4 @@ table **first** — the intuitive move is often the slower or the broken one.
 - [`docs/research/sm90-wgmma-parity-litscan.md`](research/sm90-wgmma-parity-litscan.md) — the `wgmma`/TMA/`SWIZZLE_128B` literature scan (#2846) behind the lesson's gotchas (a)/(d)
 - sidecar handoff `4474f21b` — the 6-fix **infra** preflight (rent + launch) reflected in the "no-troubleshoot preflight" section
 - sidecar handoff `a10891bc` — the 6 **training-recipe** lessons reflected in the "Training recipe — optimization gotchas" section
+- sidecar handoff `f5e18a0f` — the **decision/algorithm root cause** ("WHY parallel was the wrong path") reflected in the [decision-grade subsection](#why-parallel-was-the-wrong-path--root-cause-decision-grade): the 11× grouped-conv regression · DDP multiplies a pathological op · vectorization crosses the 2³¹ ceiling · the canonical 7B-ENGINE `ModuleList`/H200/~74 s recipe

@@ -150,3 +150,30 @@ verdict .verdicts/hexa-cuda/F-HEXACUDA-ADOPTION-DX.txt.)
       PRs #2841/#2847/#2845) + the lit scan (docs/research/sm90-wgmma-parity-litscan.md,
       #2846). No new perf claims of our own. Verdict:
       .verdicts/hexa-cuda/F-HEXACUDA-DOJO.txt (§9). Docs-only, no GPU.
+- [x] D12 — DOJO reflects the DECISION/ALGORITHM root cause "WHY the 7B parallel
+      path FAILED" (branch domain/dojo-parallel-rootcause; sidecar handoff
+      f5e18a0f — the companion to the infra 4474f21b + recipe a10891bc handoffs,
+      both already reflected). docs/hexa-dojo.md "Training recipe — optimization
+      gotchas" gains a decision-grade subsection "WHY parallel was the wrong path
+      — root cause": THE TRAP (vectorize 30 ConvExpert ModuleList → one grouped
+      Conv1d(E·d,E·d,K,groups=30), 186 240 channels, to cut 30 launches → 1) →
+      THE 11× MEASUREMENT (grouped ~14 min/step vs ModuleList ~74 s/step on H200,
+      cuDNN on or off) → THE ROOT CAUSE (a wide many-group conv defeats GPU
+      group-parallelism; cuDNN falls to a naive path — fewer launches ≠ faster)
+      → THE CASCADE (DDP replicates the FULL model so each GPU re-pays the 11×;
+      4×H200 DDP lost to 1×H200 at 4× cost — parallel was NOT wall-first) +
+      the secondary 2³¹ trip-wire (the 3.47 B-elem fused weight breaks
+      bitsandbytes optim8bit at ops.cu:226 — VECTORIZATION is what crosses the
+      ceiling) → the 4 PRESCRIPTIONS (keep experts as a ModuleList + bench-first ·
+      MEASURE single-GPU step on the ACTUAL kernels before DDP, don't parallelize
+      a pathological op · gate vectorization on the 2³¹ ceiling · canonical
+      7B-ENGINE recipe = single 141 GB H200 + ModuleList + grad-ckpt + AdamW8bit
+      ~74 s/step), as a before/after side-by-side. The preflight
+      tool/dojo_rent_preflight.sh dojo_recipe_advisory carries the two causal
+      lines cleanly — "DON'T PARALLELIZE A PATHOLOGICAL OP" (MEASURE single-GPU
+      first; DDP multiplies it) + "VECTORIZATION is what crosses the 2³¹ ceiling"
+      — self-test stays GREEN (+2 cases, bash -n clean). CITED anima H200
+      observations (f5e18a0f) — attributed, NOT re-measured here; no new perf
+      claims authored. Verdict: .verdicts/hexa-cuda/F-HEXACUDA-DOJO.txt (§10).
+      Docs/tool only, NO GPU (leaked-pod sweep: 0 leaked — only the spared
+      rtsc-39610026 anchor + known owned campaign pods; rented nothing).
