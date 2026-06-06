@@ -7,8 +7,12 @@
 set -u
 ARCH="${ARCH:-sm_90}"
 E="${E:-30}"; K="${K:-3}"; DIL="${DIL:-1}"; T="${T:-256}"
-# Production sweep: d=4096, 6208 (the measured 7B wall), 8192. Override with DSWEEP.
-DSWEEP="${DSWEEP:-4096 6208 8192}"
+# OG-FUSE-PROD-PERF2: d=6208 is the measured 7B wall — the wide-tile sweep target.
+# Override with DSWEEP. Skip the slow naive paths (B grouped, C naive-fused, D tiled)
+# in the perf timing — the byte-eq gate already ran them; we only need A/E/F/H timed
+# for the wide-tile arithmetic-intensity ratio vs cuBLAS roofline.
+DSWEEP="${DSWEEP:-6208}"
+export MOEFUSE_SKIP="${MOEFUSE_SKIP:-BCD}"
 
 echo "=== nvidia-smi ==="
 nvidia-smi --query-gpu=name,memory.total,utilization.gpu --format=csv
