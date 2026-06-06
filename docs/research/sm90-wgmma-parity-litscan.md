@@ -94,3 +94,70 @@ in. The remaining work (compose with the non-compact 8×16B core-matrix tiling) 
 - Lei Mao — "CuTe Swizzle" (secondary; concrete `Swizzle<3,4,3>` masks): https://leimao.github.io/blog/CuTe-Swizzle/
 
 ---
+
+## Q2 — sm_90a warp-specialized persistent TMA GEMM mainloop: the named levers 66.5→parity
+
+### Synthesis
+
+**The canonical CUTLASS 3.x design** (NVIDIA `efficient_gemm` doc + PyTorch ping-pong
+deep-dive) is: a persistent thread block split into **1 producer warpgroup + 2 consumer
+warpgroups** (128 threads each). The producer does *only* TMA `cp.async.bulk` loads into a
+circular SMEM buffer; consumers do *only* `wgmma.mma_async`. Coordination is an
+**async mbarrier pipeline** (producer_acquire/commit ↔ consumer_wait/release) deep enough
+to hide TMA latency. Key concrete levers:
+
+- **Register reallocation (`setmaxnreg`):** producer warps dropped to **40 registers**,
+  consumer warps raised to **232 registers** (PyTorch ping-pong). The producer is
+  deliberately register-starved (it only issues TMA) to free registers for the
+  math-heavy consumers, raising occupancy and keeping many MMAs in flight.
+- **Two consumers / ping-pong epilogue overlap:** "one [consumer] can be using the
+  tensor cores for MMA while the other performs the epilogue, and then vice-versa …
+  maximizes continuous usage of the tensor cores" (PyTorch). This is what turns a
+  tensor-core kernel that stalls during epilogue into one with **zero idle tensor-core
+  cycles**.
+- **TMA multicast across the thread-block cluster:** TMA multicasts a tile to all SMs of
+  a cluster, cutting redundant HBM traffic (PyTorch / NVIDIA doc).
+- **Persistent tile scheduler:** one block lives for many output tiles, amortizing the
+  launch + prologue (`while(work_tile.is_valid){ mainloop.dma(); scheduler.advance(); }`).
+- **"Async everything":** deep software pipelining is *mandatory* for Hopper — "Hopper's
+  substantial tensor-core compute requires deep asynchronous software pipelining to
+  achieve peak" (PyTorch).
+
+**The ordered lever→TFLOP ladder.** The `cudaforfun` H100 worklog is the single most
+directly applicable source: it traces a *working* TF16 `wgmma`+TMA kernel from 317 to 764
+TFLOP/s (107% of its cuBLAS 716), naming each lever and its gain. This is the map for our
+66.5→parity gap. Reproduced verbatim (their numbers, FP16; our regime is TF32 so absolute
+peaks differ, but the **lever ordering and relative jumps transfer**):
+
+| step | lever | TFLOP/s | gain |
+|---|---|---|---|
+| 1 | naive (Simon's algo) | 32 | — |
+| 2 | tensor cores + TMA + CUDA barriers working together | 317 | 10× |
+| 3 | larger output tiles 128×128 (`m64n128k16`) | 423 | +34% |
+| 4 | **warp specialization** (producer/consumer split) | 498 | +18% |
+| 5 | tile 128×256 + **2 consumer warpgroups** | 631 | +27% |
+| 6 | SM clustering + L2-aware scheduling | 660 | +5% |
+| 7 | faster barriers (raw PTX over CUDA API) | 704 | +7% |
+| 8 | thread-block clusters + **TMA multicast** | 734 | +4% |
+| 9 | micro-opt (store reorder, cache hints) | 747 | +2% |
+| 10 | async stores via TMA to GMEM | 758 | +1.5% |
+| 11 | Hilbert-curve spatial scheduling | 764 | +0.8% |
+
+**Reading this for us.** Our 66.5 TF32 sits *after* "tensor cores + TMA work together"
+(their step 2) but *before* the big mainloop levers. The literature says the dominant
+remaining jumps — in order of payoff — are **larger output tiles** (step 3, +34%),
+**warp specialization producer/consumer** (step 4, +18%), and **two consumer warpgroups
+with ping-pong epilogue overlap** (step 5, +27%). These three compound to ~2× before the
+diminishing-returns cluster/barrier micro-levers. The W9 swizzle work belongs to step 2's
+"TMA + tensor cores working together cleanly" — it removes the cooperative-permute stall
+that otherwise caps the mainloop, i.e. it is a *precondition* for the step-3/4/5 levers to
+pay off (a swizzle stall would otherwise mask their gains).
+
+### Sources
+- NVIDIA CUTLASS — "Efficient GEMM in CUDA" (primary doc; producer/consumer warp spec, `setmaxnreg` register de/allocation, persistent cooperative kernel, pipeline stages): https://docs.nvidia.com/cutlass/latest/media/docs/cpp/efficient_gemm.html
+- PyTorch blog — "Deep Dive on CUTLASS Ping-Pong GEMM Kernel" (producer 40 reg / consumer 232 reg, 1 producer + 2 consumer, ping-pong epilogue overlap, TMA multicast, persistent scheduler): https://pytorch.org/blog/cutlass-ping-pong-gemm-kernel/
+- cudaforfun (substack) — "Outperforming cuBLAS on H100: a Worklog" (ordered lever→TFLOP ladder 317→764, 107% cuBLAS): https://cudaforfun.substack.com/p/outperforming-cublas-on-h100-a-worklog
+- Hamza's blog — "Optimising GEMM on H100 for cuBLAS-like Performance (WIP)" (secondary, kernels 1–7 progression up to TMA+WGMMA; advanced levers WIP/not yet written): https://hamzaelshafie.bearblog.dev/worklog-optimising-gemm-on-nvidia-h100-for-cublas-like-performance-wip/
+- Colfax Research — "CUTLASS Tutorial: GEMM kernel design with Pipelining" (mbarrier pipeline depth, double buffering): https://research.colfax-intl.com/cutlass-tutorial-design-of-a-gemm-kernel/
+
+---
