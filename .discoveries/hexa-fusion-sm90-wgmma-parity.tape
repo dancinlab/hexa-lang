@@ -174,6 +174,45 @@
 #   bit-exact). cuBLAS=roofline, no superiority claim.
 
 # ============================================================================
+# === UPDATE 2026-06-06 — W11 LEVER-1 (128x256 tile) = CLOSED-NEGATIVE (occupancy-coupled)
+# ============================================================================
+# W11 (gemm_w11_t256 MODE6 + gemm_w11_pp MODE7 of wgmma_tf32_w11.cu): apply the research-named
+#   top levers on the W10 composed-decode frontier. H100 sm_90a, vast 39717398 DESTROYED leak 0,
+#   nvcc 12.6 driver 580.159.03. verdict F-...-W11.txt. ALL configs rel_rms 0.000e+00 (bit-exact).
+#
+#   SINGLE-TILE GATES (g5, before any perf): W10 MODE0 + MODE1 rel_rms 0 PASS (composed law intact).
+#   SAME-BINARY BASELINE (apples, this pod): W10 gemm_w10 MODE4 @4096 NST2 = 70.6 TFLOP/s, 6.12x,
+#     2 CTA/SM (matches the W10 #2847 frontier 70.7/6.09x re-measured).
+#
+#   LEVER 1 — 128x256 output tile (cudaforfun ladder #1, named +34%): REGRESSED.
+#     smem 98KB -> 147KB/CTA -> OCCUPANCY 2 -> 1 CTA/SM. own (all < the 70.6 baseline):
+#       S=4096 NST2 65.5 (6.59x)  NST3 66.4 (6.44x, best)  S=2048 63.4  S=8192 68.8
+#     The +34% FP16 reuse gain does NOT transfer: on this TF32 kernel the halved residency
+#     (256 vs 512 compute-thr/SM) dominates the accumulator-reuse win. -6.0% vs frontier.
+#   LEVER 3 — 128x256 + ping-pong epilogue overlap (named +27%): ALSO below frontier.
+#     S=4096 NST2 64.5 (6.65x) NST3 66.3 (6.44x). Cannot return the smem the bigger tile spent;
+#     occupancy-gated by lever 1, flat-to-below MODE6.
+#
+#   RULED-OUT AXIS (deterministic closed-negative): the "larger output tile" lever is NOT free in
+#     isolation on TF32 — it is OCCUPANCY-COUPLED. Tile-alone (2->1 CTA/SM) regresses; the litscan's
+#     own coupling (Q2 step5 = "tile 128x256 + 2 consumer warpgroups", never tile-alone; Q4 the
+#     register/stage choice fights the one-wave residency) is CONFIRMED BY MEASUREMENT. Bit-exact
+#     throughout (the composed decode is intact — the regression is pure occupancy, not numerics).
+#
+#   DECISION (W11 hard rules): a lever regressed -> KEEP the W10 70.7 frontier, NO regression shipped.
+#     Frontier kernel UNCHANGED = W10 gemm_w10 (70.7, 6.09x, 2 CTA/SM, bit-exact). cuBLAS=roofline.
+#
+# === NAMED RESIDUAL (W12, next-cycle) ===
+#   128x256 is correct + bit-exact but occupancy-bound. To make lever 1 pay off, BOTH are needed:
+#   (a) lever 2 — warp-spec setmaxnreg (producer 40 / consumer 232) so consumer WGs free registers;
+#       the single TMA-producer thread already exists, promote to a dedicated producer warpgroup.
+#   (b) shrink the 128x256 smem under the 114KB/CTA ceiling for 2 CTA/SM — the decode scratch
+#       (2 A-bands + 4 B-blocks) is the swing; the W10-named "eliminate the software decode copy"
+#       (a wgmma operand layout matching the TMA atom stacking; HW in-place RULED OUT in W10, so a
+#       layout-emit not a descriptor) removes the gmma scratch. Only with BOTH does 128x256 hold
+#       2 CTA/SM and the +34% reuse become visible. Tile-alone is closed-negative (W11 verdict).
+
+# ============================================================================
 # === UPDATE 2026-06-06 — W14 PRECISION AXIS: FP16/BF16 wgmma own-GEMM (NEW dtype sub-ladder)
 # ============================================================================
 # W14 (wgmma_f16_w14.cu): the user-opted-into SEPARATE dtype campaign opened after W13 closed
@@ -261,3 +300,4 @@
 #       structure, NOT a field sweep. Until one is bit-exact, W10 composed software decode is the
 #       frontier. (Other reopened levers — 128x256 / deep-ring / warp-spec setmaxnreg / persistent
 #       -collective / split-K / FP16-reopen — all remain occupancy-gated behind decode removal.)
+# ============================================================================

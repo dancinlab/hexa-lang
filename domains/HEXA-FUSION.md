@@ -568,10 +568,21 @@ the own-GEMM gap lifts the whole stack automatically.
       TFLOP/s (6.09×) @S=4096** (+5.7%, 75.5 @8192), ~6.3% of the gap closed. In-place wgmma HW swizzle descriptor =
       **CLOSED-NEG** (floor 1.392 ~40 cfgs, a 3rd interaction — HW de-swizzle ≠ TMA atom stacking). native sm_90a
       H100 (vast 39707146, DESTROYED leak 0, nvcc 12.6 driver 560.35.05). verdict `.verdicts/hexa-fusion/F-FUSION-SM90-WGMMA-W10.txt`.
-- [ ] **W11 deeper pipeline / decode elimination** ★ NEXT — the W10 decode is still a software shared→shared index
-      copy per K-slab (the +5.7%). Remaining 6.09× = (a) the decode copy (HW in-place RULED OUT — needs a wgmma
-      operand layout matching the TMA atom stacking) + (b) deeper warp-spec multi-stage (NST>2 regresses occupancy
-      at the current tile). Target: 6.09× toward ≤1.3× parity, bit-exact gate first.
+- [~] **W11 research-named top levers** — 🔴 LEVER-1 CLOSED-NEGATIVE (occupancy-coupled) + frontier KEPT. Applied
+      the litscan top-3 levers on the W10 composed-decode. native sm_90a H100 (vast 39717398, DESTROYED leak 0,
+      nvcc 12.6, driver 580.159.03). Single-tile gates rel_rms **0** (composed law intact); same-binary baseline
+      W10 MODE4 @4096 = 70.6 (6.12×, 2 CTA/SM). **LEVER 1 (128×256 tile, the named +34% jump) REGRESSED**: smem
+      98KB→147KB/CTA → **occupancy 2→1 CTA/SM**, own best 66.4 @4096 (6.44×), -6.0% vs frontier — the FP16 reuse
+      gain does NOT cover the halved residency on TF32. **LEVER 3 (ping-pong epilogue)** also below (64.5–66.3,
+      cannot return the smem). ALL rel_rms **0** (bit-exact). RULED OUT: "bigger tile alone" — it is occupancy-
+      coupled; pays off ONLY after lever 2 (warp-spec setmaxnreg) + a smem shrink hold 2 CTA/SM (litscan's own
+      Q2-step5 coupling CONFIRMED by measurement). **W10 70.7/6.09× frontier KEPT — no regression shipped.**
+      verdict `.verdicts/hexa-fusion/F-FUSION-SM90-WGMMA-W11.txt`. kernel `self/native/wgmma/wgmma_tf32_w11.cu`.
+- [ ] **W12 tile + warp-spec register-realloc (coupled)** ★ NEXT — make the W11 128×256 tile pay off by BOTH (a)
+      lever 2 setmaxnreg producer-40/consumer-232 warp-spec (promote the elected TMA thread to a producer WG) AND
+      (b) shrink the 128×256 smem under the 114KB/CTA ceiling for 2 CTA/SM (eliminate the W10 software decode copy
+      via a wgmma operand layout matching the TMA atom stacking — HW in-place RULED OUT, so a layout-emit). Only
+      with BOTH does the bigger tile hold 2 CTA/SM and the +34% reuse become visible. Tile-alone is closed-neg (W11).
 - [x] **W14 PRECISION axis — FP16/BF16 own-GEMM (NEW dtype campaign)** ✅ landed correct, 🔴 W13 thesis refuted
       (2026-06-06). The user-opted-into separate dtype axis after W13 closed the TF32 async-pipeline. Ported the W10
       composed-swizzle-decode own-GEMM to 16-bit operands + f32 accumulate (`wgmma.mma_async...m64n64k16.f32.f16.f16`
