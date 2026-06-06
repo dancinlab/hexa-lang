@@ -1,0 +1,94 @@
+F-DDP-M3-REAL-P2P-BYTEEQ — HEXA-DDP DDP-M3
+Real 2-GPU ring all-reduce over inter-GPU transport (cudaMemcpyPeer).
+
+STATUS: GREEN — collective byte-eq on real 2-GPU hardware.
+
+NODE: vast.ai instance 39786751 — 2x NVIDIA GeForce RTX 3090 (one node).
+  driver 535.54.03 / CUDA 12.4 / nvcc 12.4.131 / sm_86.
+  (Forward-compat libcuda shadowed the system driver; resolved by forcing
+   LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu — the first run's exit-1
+   "forward compatibility" line below is that stale-compat probe, superseded
+   by the GREEN run.)
+
+GATE (g5): ring all-reduce result on every GPU == serial elementwise sum,
+byte-eq max|delta|=0, FP64, N=2. Schedule = the DDP-M1 canonical ring
+(2(N-1) steps, chunk partition identical to stdlib/ddp/ring_all_reduce.hexa);
+only the per-step transport swapped to a real device-to-device cudaMemcpyPeer.
+
+──────────────────────────────────────────────────────────────────────────
+TOPO (nvidia-smi topo -m, verbatim):
+        GPU0    GPU1    CPU Affinity    NUMA Affinity   GPU NUMA ID
+  GPU0   X      PHB     0-71            N/A             N/A
+  GPU1  PHB      X      0-71            N/A             N/A
+  PHB = Connection traversing PCIe as well as a PCIe Host Bridge (the CPU).
+  -> NOT NVLink (no NV# bond). The two 3090s peer via the PCIe host bridge.
+
+canAccessPeer:
+  cudaDeviceCanAccessPeer(0->1) = 0
+  cudaDeviceCanAccessPeer(1->0) = 0
+  -> direct P2P UNAVAILABLE. GeForce-class direct peer access is
+     driver-disabled on this PHB topology (no NVLink bridge present), so
+     cudaMemcpyPeer routes through a host-staged copy. CORRECTNESS is
+     identical (the ring schedule is transport-agnostic); the PERF caveat is
+     that this leg ran without direct NVLink/PCIe-P2P bandwidth.
+
+NVLink-or-PCIe: PCIe (PHB host-bridge); P2P DISABLED -> staged-host fallback.
+
+BYTE-EQ per case (verbatim from the harness):
+  S=7       (S%N=1, boundary chunking) : max|delta| vs serial-sum = 0  BYTE-EQ PASS
+  S=1048576 (1<<20, large)             : max|delta| vs serial-sum = 0  BYTE-EQ PASS
+
+DDP-M3 verdict line (verbatim):
+  === DDP-M3 verdict: GREEN - ring all-reduce byte-eq over real 2-GPU P2P (transport=staged-host fallback) ===
+
+POD DESTROYED: Y — vastai destroy instance 39786751 (leak 0, exact-ID,
+  non-foreign; the rtsc-li2mgh16-anchor + a pre-existing unlabeled instance
+  were left untouched).
+
+──────────────────────────────────────────────────────────────────────────
+HONEST (g5): M3 GREEN = the ring all-reduce COLLECTIVE works on real
+multi-GPU hardware, byte-exact vs a serial sum -> 관문3 TRANSPORT HALF CLOSED.
+It is NOT yet end-to-end parallel training: DDP-M4 (1-GPU vs 2-GPU same-model
+byte-eq over a real flame step) and DDP-M5 (4-GPU scale + speedup) remain.
+TRANSPORT FINDING: the rented 2x3090 node had no NVLink and GeForce direct
+P2P disabled (PHB), so the verified transport was staged-host cudaMemcpyPeer.
+A node with an NVLink bridge (or a datacenter card) would exercise the direct
+P2P path at higher bandwidth — same schedule, same byte-eq gate, faster wire.
+
+──────────────────────────────────────────────────────────────────────────
+RAW POD STDOUT (verbatim):
+######## DDP-M3 real 2-GPU P2P ring all-reduce :: 2026-06-06T22:10:27Z ########
+
+==== nvidia-smi -L ====
+GPU 0: NVIDIA GeForce RTX 3090 (UUID: GPU-bd857d1e-a679-d50f-b96a-ff6dfd1fea05)
+GPU 1: NVIDIA GeForce RTX 3090 (UUID: GPU-9678c3c2-ac9c-8e26-e671-c48d5765c06c)
+
+==== nvidia-smi topo -m (VERBATIM SSOT) ====
+        GPU0    GPU1    CPU Affinity    NUMA Affinity   GPU NUMA ID
+GPU0     X      PHB     0-71            N/A             N/A
+GPU1    PHB      X      0-71            N/A             N/A
+
+  X    = Self
+  PHB  = Connection traversing PCIe as well as a PCIe Host Bridge (typically the CPU)
+  NV#  = Connection traversing a bonded set of # NVLinks
+
+==== building (nvcc -arch=sm_86) ====
+build ok
+
+(first invocation hit the stale forward-compat libcuda:
+ CUDA ERROR /root/ring_p2p.cu:57: forward compatibility was attempted on non supported HW
+ — re-run with LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu:)
+
+=== ring_p2p :: visible CUDA devices = 2 ===
+cudaDeviceCanAccessPeer(0->1) = 0
+cudaDeviceCanAccessPeer(1->0) = 0
+peer access UNAVAILABLE -> transport = staged host copy (cudaMemcpyPeer still
+  routes through host; correctness identical, perf caveat noted)
+
+--- case S=7 (S%N=1) ---
+S=7 : max|delta| vs serial-sum = 0  BYTE-EQ PASS
+
+--- case S=1048576 (S%N=0) ---
+S=1048576 : max|delta| vs serial-sum = 0  BYTE-EQ PASS
+
+=== DDP-M3 verdict: GREEN - ring all-reduce byte-eq over real 2-GPU P2P (transport=staged-host fallback) ===
