@@ -1,0 +1,86 @@
+DOJO-A1 — HEXA_CUDA_LINK fork-bomb + dropped runtime_cuda.c (677b84cd)
+=====================================================================
+
+FALSIFIER (domains/HEXA-DOJO.md): build completes, runtime_cuda.c present and full.
+
+GATE (task): HEXA_CUDA_LINK=1 build does NOT fork-bomb (proc count bounded)
+AND runtime_cuda.c emitted at full ~100KB (not dropped).
+
+------------------------------------------------------------------------
+PROVENANCE OF THE TWO LANE-G FIXES (recovered via git fetch + git show)
+------------------------------------------------------------------------
+
+  27535d93d  fix(cuda emit): HEXA_NO_CUDA=1 on nested runtime_cuda.c emit —
+             kills fork-bomb recursion under HEXA_CUDA_LINK=1   (root cause #3a)
+             → patched self/main.hexa::cuda_link_decision()  (a nested
+               `hexa run runtime_cuda_emit.hexa` whose inherited HEXA_CUDA_LINK=1
+               re-entered the link path → unbounded recursion, 1800+ procs).
+
+  bb10154fb  fix(cuda emit): write runtime_cuda.c via write_file builtin, not
+             cat-heredoc-via-exec — large-content write silently dropped (#3b)
+             → patched self/cuda/runtime_cuda_emit.hexa::main()  (heredoc
+               assembled the whole ~100KB+ C into ONE exec() argv → E2BIG /
+               MAX_ARG_STRLEN truncation → file never written).
+
+------------------------------------------------------------------------
+KEY FINDING — current origin/main state (commit 9b4f2c143)
+------------------------------------------------------------------------
+
+#3b (the dropped-write fix) IS ALREADY ON MAIN, landed independently as
+
+  8409117e2  fix(cuda-emit): write runtime_cuda.c via write_file, not exec
+             heredoc (>128KB E2BIG) (#2630)
+
+  self/cuda/runtime_cuda_emit.hexa::main() now does `write_file(out_path, c_text)`
+  (fopen/fwrite, no ARG_MAX limit) — byte-identical to the laneg #3b fix.
+
+#3a (the fork-bomb guard) targets `cuda_link_decision()` + the `HEXA_CUDA_LINK=1`
+OPT-IN CUDA-link build path. That entire feature was NEVER MERGED to main:
+  - `grep -n 'HEXA_CUDA_LINK\|HEXA_NO_CUDA' self/main.hexa`  → rc=1 (no matches)
+  - `grep -rn 'cuda_link_decision' self/ stdlib/`            → rc=1 (no matches)
+  - `git log -S 'cuda_link_decision' origin/main -- self/main.hexa` → EMPTY
+  - cmd_build() on main (self/main.hexa:2630) has NO cuda-link logic, NO nested
+    runtime_cuda.c emit, and reads NEITHER HEXA_CUDA_LINK NOR HEXA_NO_CUDA.
+
+The opt-in path lived only on the lane-g/forge-gpu lineage
+(4f64ed119 / 8312a8cae "opt-in CUDA/forge GPU link path — d768 F-RFC046")
+whose on-device fire was BLOCKED-OUTAGE (0904b972d) and never merged.
+
+CONCLUSION: the fork-bomb (#3a) is STRUCTURALLY IMPOSSIBLE on main — the code
+that recursed does not exist here. Porting #3a would require re-introducing the
+whole unmerged opt-in link feature, which is out of A1 scope. #3b is already in.
+
+------------------------------------------------------------------------
+EMPIRICAL VERIFICATION — the exact emit step that fork-bombed on laneg
+------------------------------------------------------------------------
+
+Ran the emit step locally (the step that fork-bombed AND dropped the write on
+laneg), with proc-count + output-size instrumentation:
+
+  $ hexa run self/cuda/runtime_cuda_emit.hexa /tmp/_rtcuda_out.c
+
+  baseline hx-selfhost-cli procs: 6
+  emit rc: 0
+  MAX hx-selfhost-cli procs observed during emit: bounded (single process,
+      completed in well under 1s; NO 1800+ proc storm)
+  [runtime_cuda_emit] wrote /tmp/_rtcuda_out.c
+  output size: 308919 bytes  (~302 KB — far exceeds the ~100KB full-write bar;
+      the write was NOT dropped)
+
+  (Tight 50ms-interval proc sampler over a second run: same — rc=0,
+   308919 bytes, no proc spike. Emit is a fast single-process C-string gen.)
+
+VERDICT: 🟢 GATE PASS (emit-step, local).
+  - fork-bomb gone:        YES (bounded — not present on main; emit single-proc)
+  - runtime_cuda.c full:   YES (308919 bytes ≫ 100KB, write not dropped)
+
+TODO (named, per task — full CUDA link needs nvcc/GPU pod):
+  Full `HEXA_CUDA_LINK=1 hexa build stdlib/flame/clm_prod.hexa` end-to-end link
+  (nvcc -DHEXA_CUDA -lcuda on a CUDA pod) is NOT run here — the opt-in link path
+  is absent from main, so there is nothing on main to link via that env. If the
+  lane-g opt-in feature is ever merged, re-port BOTH guards together and re-fire
+  full-link confirm on a pod. On current main the emit step (the failing step)
+  is clean.
+
+Tool/local oracle note: ~/.hx/bin/hexa.real = hx-selfhost-cli (current build,
+runs the emit fine). Run on darwin/arm64 workstation.
