@@ -382,3 +382,31 @@
 #       frontier. (Other reopened levers — 128x256 / deep-ring / warp-spec setmaxnreg / persistent
 #       -collective / split-K / FP16-reopen — all remain occupancy-gated behind decode removal.)
 # ============================================================================
+
+# === OG16 (gemm_og16/probe_a of wgmma_tf32_og16.cu): the OG15 closed-negative OVERTURNED ===
+#   The W15/OG15 "descriptor-direct read of the SWIZZLE_128B-TMA tile is not bit-exact, 32KB
+#   band removable but UNUSABLE" closed-negative is OVERTURNED by route (a). H100 native sm_90a,
+#   vast 39761328 DESTROYED leak 0 (sibling og-fuse-prod-kernel untouched), nvcc 12.6.77 driver
+#   560.35.05 (W10-apples). verdict F-FUSION-SM90-WGMMA-OG16.txt.  🟢 NUMERICAL, bit-exact GATE.
+#
+#   ROUTE (a) — the WINNING member (the cleaner sub-variant the OG15 3200-cfg field-sweep could
+#   NOT reach): re-encode A/B in GLOBAL into the canonical gmma-INTER (8x4 core) layout + use a
+#   NO-swizzle TMA, so the SMEM tile IS the wgmma-ready layout the descriptor addresses; the
+#   descriptor-direct read (layout_type_=0, SBO=1024B) is then bit-exact with NO in-kernel decode
+#   band. = the W10 composed-decode MOVED from the hot loop into a one-time global transform.
+#
+#   MODE10 single-tile gate: rel_rms 0.000e+00 @ pm=gmma-INTER tsw=NONE swm=0 sbo=1024 boff=0
+#     (pm=0 identity baseline reproduced the W15 floor 1.107->1.000 -> same-kernel apples).
+#   MODE4 full GEMM (bit-exact rel_rms 0 @2048 AND @4096, all NST):
+#     S=2048 NST=3 own=252.0 ratio=1.37x (BEST ratio)  | S=4096 NST=2 own=264.7 (BEST tput) 1.62x
+#     smem 96->64 KB/CTA @NST=2, 2 CTA/SM held -> the OG15-removable 32KB band is now USED.
+#   W10 apples same-pod: 70.2 TFLOP/s 6.09x (S=4096) -> SUPERSEDED. OG16 = 3.77x the W10 frontier.
+#
+#   FINDING: the 'H100 own-GEMM can't get near cuBLAS speed' wall — held W5 (38/9.35x) -> W10
+#     (70.7/6.09x) -> OG16 264.7/1.37-1.62x — is CRACKED OPEN. ~85-90% of the gap to cuBLAS-TF32
+#     closed, bit-exact. PARITY (<=1.3x) NOT crossed (best 1.37x); cuBLAS=roofline, gap-closure
+#     NOT superiority. The decode-band ⊥ occupancy contradiction that pinned OG11-OG15 DISSOLVES,
+#     so the residual perf axis (warp-spec setmaxnreg / larger tile / ping-pong / deep-ring) is
+#     now UN-gated = the next-cycle frontier (OG17). One-time pre-permute = O(MK+KN) amortized
+#     over K-reuse / batched weights, NOT in the measured steady-state GEMM hot loop.
+# ============================================================================

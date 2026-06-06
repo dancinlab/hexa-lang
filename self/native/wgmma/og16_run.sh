@@ -40,8 +40,10 @@ if [ "$G" -ne 0 ]; then
   echo "STOP per g5: no full GEMM, no perf number. W10 70.7 frontier KEPT (no regression)."
 else
   echo "OG16 SINGLE-TILE GATE PASSED (rel_rms 0) — canonical atom MATCHED, band usable."
+  echo "  (winning config: pm=gmma-INTER tsw=NONE swm=0 sbo=1024 boff=0)"
   echo "================= MODE 4 FULL GEMM — bit-exact gate + occupancy + perf ================="
-  for S in 2048 4096; do for NST in 3 2 4; do echo "--- S=$S NST=$NST ---"; /tmp/og16 $S 4 $NST 2>&1; done; done
+  # MODE4 args: S 4 NST [SWM=0] [SBO=1024] [BOFF=0]  (defaults = winning route-a config)
+  for S in 2048 4096; do for NST in 2 3 4; do echo "--- S=$S NST=$NST ---"; /tmp/og16 $S 4 $NST 2>&1; done; done
 fi
 echo
 
