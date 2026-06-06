@@ -70,3 +70,65 @@
 #   so warp-spec keeps FULL occupancy — how cuBLAS reaches sm_90a peak. Bring-over the W6
 #   TMA kit self/native/wgmma/wgmma_tma_gemm.cu. Frontier kernel = W6 async-pipe (50.7, 8.39x).
 #   STOP = honest occupancy/production-engine wall, NOT impossibility. cuBLAS=roofline.
+
+# ============================================================================
+# === UPDATE 2026-06-06 — W8 TMA-PRODUCER dual-consumer-WG = BIG-PROGRESS LIFT
+# ============================================================================
+# W8 (MODE 4 gemm_ws_tma): the W7-diagnosed fix LANDED. Replace the 128-thread cp.async
+#   producer WG with a HARDWARE TMA producer driven by ONE elected thread (thread 0 issues
+#   cp.async.bulk.tensor.2d for the A-band 128x8 + B 8x128 into an NST ring, mbarrier
+#   expect_tx tracks tx-complete). The other 255 threads are BOTH consumer warpgroups; they
+#   cooperatively permute the TMA-landed row-major tiles -> the W1/W2 gmma INTER 8x4 layout
+#   (SAME mk/gmma_phys/WG descriptors — only the production engine changed), then each WG
+#   wgmma's its 64-row band x the SHARED B tile. H100 sm_90a, vast 39701877 DESTROYED leak 0,
+#   nvcc 12.6. verdict F-FUSION-SM90-WGMMA-W8.txt.
+#   RESULT: BIT-EXACT (rel_rms 0, S=2048..8192, NST=2..4). own 50.7 -> 66.5 TFLOP/s @4096 (+31%);
+#     69.6 @8192. ratio 8.39x -> 6.44x. ~26% of the parity gap closed. PARITY=NO.
+#   OCCUPANCY (the W8 success proxy, on-pod): 1 CTA/SM (W7) -> 2 CTA/SM (W8) = 512 vs 384
+#     compute-thr/SM. ws_tma 120 regs * 256 thr = 30720/CTA -> 2 CTAs = 61440 < 65536 regs/SM.
+#     The TMA producer freed the WG AND shrank the CTA 384->256 thr -> doubled resident CTAs.
+#   APPLES (same pod S=4096): MODE1 apipe 50.8 (8.54x, 4 CTA/SM) | MODE3 ws2 32.0 (13.67x, 1
+#     CTA/SM) | MODE4 ws_tma 66.4 (6.45x, 2 CTA/SM). The dual-consumer-WG geometry W7 wanted
+#     FINALLY pays off once the producer stops eating a full WG + register-evicting the 2nd CTA.
+#
+# === NAMED RESIDUAL (W9, next-cycle) — the remaining 6.44x is COMPUTE/MAINLOOP-bound ===
+#   (1) SWIZZLED TMA (CU_TENSOR_MAP_SWIZZLE_128B): tile lands wgmma-readable -> ELIMINATE the
+#       per-K-step cooperative Araw/Braw->gmma permute (+2 __syncthreads) cuBLAS never pays.
+#       HIGHEST-value lever on the residual.
+#   (2) deeper-TK accumulator double-buffer to overlap wgmma latency (currently wait_group 0 / step).
+#   (3) wider N-tile m64n256k8 to amortize B-load + raise arithmetic intensity.
+#   Frontier kernel = W8 gemm_ws_tma (66.5, 6.44x, 2 CTA/SM). cuBLAS=roofline, no superiority claim.
+
+# ============================================================================
+# === UPDATE 2026-06-06 — W9 SWIZZLED-TMA = CLOSED-NEG (naive) + mechanism PROVEN
+# ============================================================================
+# W9 (MODE 5 gemm_ws_tma_sw): attack the W8-named residual — the per-K-step cooperative
+#   Araw/Braw->gmma permute (+__syncthreads) cuBLAS never pays. Use CU_TENSOR_MAP_SWIZZLE_128B
+#   so the bulk copy LANDS the tile wgmma-readable; wgmma matrix descriptor swizzle-mode=1.
+#   H100 sm_90a, vast 39704602 DESTROYED leak 0, nvcc 12.6. verdict F-FUSION-SM90-WGMMA-W9.txt.
+#
+#   ENCODE CONSTRAINT (closed sub-finding): cuTensorMapEncodeTiled+swizzle REQUIRES the
+#     CONTIGUOUS box dim == swizzle atom width (32 f32 = 128B). A (contig=K) OK; B (contig=N=128
+#     =512B) FAILS r=1. FIX (landed): B = 4 side-by-side 32-N swizzled atoms (box {32,32}).
+#
+#   MECHANISM CONFIRMED (SASS, the W9 goal): gemm_ws_tma (MODE4) STS=28 BAR.SYNC=3 vs
+#     gemm_ws_tma_sw (MODE5) STS=0 BAR.SYNC=2 -> the 28-store cooperative permute is GONE +
+#     one __syncthreads dropped. Occupancy PRESERVED at 2 CTA/SM (512 thr/SM).
+#
+#   BIT-EXACT GATE FAILED (the wall, g5): rel_rms FLOOR = 1.392 across ~100 descriptor configs
+#     (lbo{16..1024} x sbo{16..2048} x kstep{0,1}); lbo INERT; kstep=1 faults. NO config <=3e-3.
+#     => NO perf number (g5). own GFLOP/s UNCHANGED; W8 66.9/6.41x frontier KEPT (no regression).
+#
+#   ROOT CAUSE — MEASURED SWIZZLE LAW (recoverable): a direct shared dump of a 128B-landed
+#     8x32-f32 atom shows the swizzle is NOT g_phys=g XOR r but g XOR ((r+1)&7):
+#       row0 mask1 row1 mask2 row2 mask3 row3 mask4 row4 mask5 row5 mask6 row6 mask7 row7 mask0.
+#     TWO-LAYER mismatch: (1) TMA swizzle = g XOR ((r+1)&7) not g XOR r; (2) it must STILL compose
+#     with the 8x4 INTER core packing (gmma_phys) the wgmma descriptor expects. One linear
+#     lbo/sbo constant can't express both -> naive path DETERMINISTICALLY RULED OUT.
+#
+# === NAMED RESIDUAL (W10, next-cycle) — compose the MEASURED swizzle with gmma_phys ===
+#   The swizzle constant is now in hand (g XOR ((r+1)&7)). W10: (a) compose it with gmma_phys
+#   to derive the EXACT shared layout the wgmma swizzle-mode-1 descriptor needs, (b) make TMA
+#   land that (or emit into shared at it) — the CUTLASS GMMA::Layout derivation with the
+#   on-pod-measured constant. Frontier kernel UNTIL W10 = W8 gemm_ws_tma (66.9, 6.41x, 2 CTA/SM,
+#   bit-exact). cuBLAS=roofline, no superiority claim.
