@@ -94,6 +94,30 @@
   it does NOT itself measure a trainer speedup. DEFERRED: the full 7B clm_prod_gpu on-pod build + the
   GEMM-conv util Δ / step-time at production shape (d=6208, E=30, H100/H200) — NO full train was run; the
   6.57× is the KERNEL benchmark (PR #2867), the on-trainer measurement is the next step.
+- [x] **OG-FUSE-PROD-PERF — close path E → cuBLAS roofline via GEMM perf levers** — 🔴 CLOSED-NEGATIVE for
+  the cp.async double-buffer lever. (2026-06-07, H100 80GB HBM3, vast 39771465 DESTROYED leak 0.) Goal: push
+  path E (k_moe_conv_gemm, 6.57× over ModuleList-30, byte-eq) CLOSER to the cuBLAS strided-batched roofline
+  (path F, ~15× below E) WITHOUT losing weight-reuse / byte-eq. Lever (a) APPLIED: new path G
+  k_moe_conv_gemm_db — a STAGES-deep smem RING (Xs window + Ws weight slabs) prefetched via
+  cp.async.ca.shared.global + commit_group/wait_group so the next K-chunk's HBM loads are in flight while this
+  chunk's register MAC runs. Accumulation order BIT-IDENTICAL to E (ci asc, k inner) → **GATE byte-eq
+  max|Δ|=0 vs ModuleList-30** (gate FIRST at d=192 AND perf-shape cross-check at d=6208, both 0.0). PERF
+  (H100 132 SMs, median 20 iters): **path G is UNIFORMLY ~7% SLOWER than path E** — d=2048 G=68.95 vs
+  E=64.45; d=4096 G=265.1 vs E=247.8; **d=6208 (prod) G=602.7 vs E=563.9 ms** (A=3709, F-roofline=35.9 →
+  E 6.58× over A, 15.7× from roofline). FALSIFIER (pre-registered): "cp.async prefetch hides the per-chunk
+  Xs+Ws load latency the OG-FUSE-OPT verdict pinned, closing E→cuBLAS" — FALSIFIED. MECHANISM: GM_BK=16 →
+  d/16≈388 chunks; per chunk cp.async pays commit/wait + an extra __syncthreads while the per-chunk compute
+  (16 ci × K=3 over a 4×4 tile) is tiny → pipeline bookkeeping > latency hidden. Path E already overlaps
+  loads via OCCUPANCY (many CTAs/SM, warp scheduler hides latency), so explicit prefetch adds overhead w/o
+  adding overlap. The OPT-pinned wall is L2/WEIGHT BANDWIDTH (a bandwidth bound) — cp.async addresses LATENCY,
+  so it structurally cannot move it. RULED-OUT AXIS: latency-hiding is NOT the lever; path E is at its design
+  ceiling on the latency axis. The remaining E→cuBLAS gap = arithmetic-intensity + wgmma (levers c/b, next
+  cycle). (Forced GM_STAGES 3→2: 3-stage static __shared__ ring = 49536 B > 48KB/49152 B static-smem hard cap
+  → cudaErrorInvalidValue; 2-stage = 33024 B fits. Deeper static ring impossible; dynamic smem wouldn't
+  change the bandwidth conclusion.) Lever (b) wgmma TF32 NOT applied — OG16 atom still at swizzle-parity
+  frontier, breaks byte-eq, K=3/BK=16 doesn't map to m64n64k8 K-major TMA tile. HONEST: path E's 6.57× cure
+  is UNCHANGED / NOT regressed; this prunes the cp.async lever from the gap-closing search. PR #2871.
+  verdict: .verdicts/hexa-fusion/F-FUSION-MOE-CONV-PROD-PERF.txt
 - [ ] **OG-FUSE-RIGHTSIZE — right-sized-GPU per-regime validation** — validate the cure on a right-sized
   GPU (RTX 5070 / L40S) per regime to dodge big-GPU contention + the access-unresolved blocker; the
   byte-eq D1536-saturates-5070-to-98% fact already shows right-sizing is the practical lever.
