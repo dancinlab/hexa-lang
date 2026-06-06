@@ -12,3 +12,17 @@ cross-thread barrier = a cooperative/persistent kernel (cudaLaunchCooperativeKer
 a step-change from the L3 per-element/per-row pattern → deferred. NET block-2 megakernel status:
 gelu+pack+router = 1 kernel (L3-d, UNMEASURED), GN#2 = grid-sync residual. block-1 = L3-c. The
 glue-block megakernel is now realized except the 2 GN reductions (both grid-sync-walled).
+
+── UPDATE 2026-06-06 (GN grid-sync residual CLOSED — BOTH WALLS DOWN) ───────
+The "2 GN reductions (both grid-sync-walled)" residual above is now CLOSED. A cooperative
+grid-synced GroupNorm (_hx_k_groupnorm_coop + cudaLaunchCooperativeKernel + this_grid().sync())
+folds GN#1/GN#2 into the persistent megakernel WHILE holding byte-eq max|Δ|=0: ONE thread does
+the sequential host-order reduction (no tree re-assoc, same NR-40 sqrt) → grid.sync() broadcasts
+mu/inv → parallel normalize. byte-eq HARD GATE PASSED on real A100-SXM4 (sm_80): 4/4 cases incl.
+T=1536 C=1536 G=1 → max|Δ|=0, bitdiff_words=0. cooperative-launch GPU-confirmed (coop attr=1,
+grid fits one wave). The glue-block WHOLE-STEP megakernel is now FULLY realized — both walls gone
+(own-GEMM #2697 + this), 100% hexa-owned, cuBLAS-call-free. HONEST (g5): completeness, NOT a
+util/perf win (byte-eq forces single-thread reduction → zero reduction-parallelism; binding term
+= GEMM-gap occupancy, untouched). Full result: F-FUSION-MEGAKERNEL-GN-GRIDSYNC.txt. Supersedes
+the F-FUSION-GN-COOP-KERNEL-CLOSED-NEG analysis (correct on util=0; byte-eq-impossible premise
+measured false for the completeness goal).
