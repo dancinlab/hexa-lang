@@ -120,7 +120,13 @@ extern "C" __global__ void probe_desc(const __grid_constant__ CUtensorMap tmapA,
                                        float* __restrict__ gD,int M,int N,int K,
                                        int lbo,int sbo,int boff,int swmode){
     const int TM=64, TN=64, TKSW=32;
-    extern __shared__ __align__(128) float sm[];
+    extern __shared__ __align__(128) float sm_raw[];
+    // PAD: place the tile with 8K-float headroom on each side so a mis-strided descriptor
+    // reads valid (garbage) SMEM rather than faulting — lets the sweep run in one context.
+    const int PAD=8192;
+    float* sm=sm_raw+PAD;
+    for(int i=threadIdx.x;i<PAD;i+=blockDim.x){ sm_raw[i]=0.f; }
+    __syncthreads();
     // A swizzled 64x32; B = 2 side-by-side 32(N)x32(K) swizzled atoms (each 32*32 floats).
     float* Asw=sm;                       // 64*32
     float* Bsw=Asw + TM*TKSW;             // 2*(32*32)
@@ -400,7 +406,7 @@ int main(int argc,char**argv){
             CU_TENSOR_MAP_INTERLEAVE_NONE,CU_TENSOR_MAP_SWIZZLE_128B,
             CU_TENSOR_MAP_L2_PROMOTION_NONE,CU_TENSOR_MAP_FLOAT_OOB_FILL_NONE);
           if(r!=CUDA_SUCCESS){printf("MODE0 encodeB r=%d\n",(int)r);return 4;} }
-        size_t smsz=(size_t)(M*KSW + N*KSW)*4 + 8;
+        size_t smsz=(size_t)(2*8192 + M*KSW + N*KSW)*4 + 8;   // padded (probe_desc reads sm_raw+PAD)
         CK(cudaFuncSetAttribute(probe_desc,cudaFuncAttributeMaxDynamicSharedMemorySize,(int)smsz));
         probe_desc<<<1,128,smsz>>>(tmapA,tmapB,dD,M,N,K,LBO,SBO,BOFF,SWM);
         cudaError_t e=cudaGetLastError(); if(e==cudaSuccess)e=cudaDeviceSynchronize();
@@ -548,7 +554,8 @@ int main(int argc,char**argv){
             CU_TENSOR_MAP_INTERLEAVE_NONE,CU_TENSOR_MAP_SWIZZLE_128B,
             CU_TENSOR_MAP_L2_PROMOTION_NONE,CU_TENSOR_MAP_FLOAT_OOB_FILL_NONE);
           if(r!=CUDA_SUCCESS){printf("encodeB r=%d\n",(int)r);return 4;} }
-        size_t sm0=(size_t)(M*KSW + N*KSW)*4 + 8;
+        const int PAD=8192;
+        size_t sm0=(size_t)(2*PAD + M*KSW + N*KSW)*4 + 8;   // padded both sides (fault-proof sweep)
         size_t sm6=(size_t)(M*KSW + N*KSW + M*8 + 8*N)*4 + 8;
         CK(cudaFuncSetAttribute(probe_desc,cudaFuncAttributeMaxDynamicSharedMemorySize,(int)sm0));
         CK(cudaFuncSetAttribute(probe_localize,cudaFuncAttributeMaxDynamicSharedMemorySize,(int)sm6));
@@ -575,44 +582,28 @@ int main(int argc,char**argv){
             printf("DESC  col0: %.2f %.2f %.2f %.2f (rows0-3)\n",hD[0],hD[64],hD[128],hD[192]);
             return 0;
         }
-        // MODE 9 — in-process field sweep. Each config that FAULTS corrupts the context, so
-        // we re-init A/B/D after any fault (cudaDeviceReset + re-encode) and continue.
+        // MODE 9 — in-process field sweep. probe_desc is PADDED (8K floats each side) so a
+        // mis-strided descriptor reads valid garbage SMEM instead of faulting -> no context
+        // corruption; the whole grid runs in ONE context, fast.
         double best=1e9; int bL=0,bS=0,bB=0,bW=0;
-        // byte values (mk_desc does >>4): include small encoded values via 16/32/48 and the
-        // research non-compact 1024B, plus tile/atom strides (256/512/4096) and 0/inert.
+        // byte values (mk_desc does >>4): small encoded strides (16/32/48) + research 1024B +
+        // tile/atom strides (256/512/4096) + 0/inert.
         int swl[4]={1,2,3,0};
         int sbl[10]={1024,512,256,128,2048,64,16,32,4096,0};
         int lbl[10]={128,16,256,1024,0,64,512,2048,32,48};
-        auto reinit=[&]()->int{
-            cudaDeviceReset();
-            CK(cudaMalloc(&dA,(size_t)M*KSW*4));CK(cudaMalloc(&dB,(size_t)KSW*N*4));CK(cudaMalloc(&dD,(size_t)M*N*4));
-            CK(cudaMemcpy(dA,hApad,(size_t)M*KSW*4,cudaMemcpyHostToDevice));
-            CK(cudaMemcpy(dB,hBpad,(size_t)KSW*N*4,cudaMemcpyHostToDevice));
-            { cuuint64_t gd[2]={(cuuint64_t)KSW,(cuuint64_t)M}; cuuint64_t gs[1]={(cuuint64_t)KSW*4};
-              cuuint32_t bd[2]={32,64}; cuuint32_t es[2]={1,1};
-              enc(&tmapA,CU_TENSOR_MAP_DATA_TYPE_FLOAT32,2,dA,gd,gs,bd,es,CU_TENSOR_MAP_INTERLEAVE_NONE,
-                  CU_TENSOR_MAP_SWIZZLE_128B,CU_TENSOR_MAP_L2_PROMOTION_NONE,CU_TENSOR_MAP_FLOAT_OOB_FILL_NONE); }
-            { cuuint64_t gd[2]={(cuuint64_t)N,(cuuint64_t)KSW}; cuuint64_t gs[1]={(cuuint64_t)N*4};
-              cuuint32_t bd[2]={32,32}; cuuint32_t es[2]={1,1};
-              enc(&tmapB,CU_TENSOR_MAP_DATA_TYPE_FLOAT32,2,dB,gd,gs,bd,es,CU_TENSOR_MAP_INTERLEAVE_NONE,
-                  CU_TENSOR_MAP_SWIZZLE_128B,CU_TENSOR_MAP_L2_PROMOTION_NONE,CU_TENSOR_MAP_FLOAT_OOB_FILL_NONE); }
-            cudaFuncSetAttribute(probe_desc,cudaFuncAttributeMaxDynamicSharedMemorySize,(int)sm0);
-            return 0;
-        };
-        int faults=0;
         for(int wi=0;wi<4;++wi)for(int si=0;si<10;++si)for(int bo=0;bo<8;++bo)for(int li=0;li<10;++li){
             int SWM=swl[wi],SBO=sbl[si],BOFF=bo,LBO=lbl[li];
             cudaMemset(dD,0,(size_t)M*N*4);
             probe_desc<<<1,128,sm0>>>(tmapA,tmapB,dD,M,N,K,LBO,SBO,BOFF,SWM);
             cudaError_t e=cudaDeviceSynchronize();
-            if(e!=cudaSuccess){cudaGetLastError(); ++faults; if(reinit())return 4; continue;}
+            if(e!=cudaSuccess){printf("FATAL fault swm=%d sbo=%d boff=%d lbo=%d %s\n",SWM,SBO,BOFF,LBO,cudaGetErrorString(e));return 4;}
             cudaMemcpy(hD,dD,(size_t)M*N*4,cudaMemcpyDeviceToHost);
             double se=0,sr=0;for(int i=0;i<M*N;++i){double dd=hD[i]-hR[i];se+=dd*dd;sr+=(double)hR[i]*hR[i];}
             double rr=sqrt(se/fmax(1e-30,sr));
             if(rr<best){best=rr;bL=LBO;bS=SBO;bB=BOFF;bW=SWM;
                 printf("NEWBEST rel_rms=%.3e @ lbo=%d sbo=%d boff=%d swm=%d\n",rr,LBO,SBO,BOFF,SWM);}
         }
-        printf("MODE9 SWEEP-DONE best rel_rms=%.3e @ lbo=%d sbo=%d boff=%d swm=%d (faults=%d)\n",best,bL,bS,bB,bW,faults);
+        printf("MODE9 SWEEP-DONE best rel_rms=%.3e @ lbo=%d sbo=%d boff=%d swm=%d\n",best,bL,bS,bB,bW);
         return best<=3e-3?0:2;
     }
     printf("unknown MODE %d\n",MODE); return 1;
