@@ -1,0 +1,17 @@
+F-DDP-M3-REAL-P2P-BYTEEQ — HEXA-DDP DDP-M3
+Real 2-GPU ring all-reduce over cudaMemcpyPeer / NVLink-or-PCIe P2P transport.
+
+STATUS: WIP — awaiting GPU harvest (verbatim pod stdout pasted below on capture).
+
+GATE (g5): ring all-reduce result on every GPU == serial elementwise sum,
+byte-eq max|delta|=0, FP64 buffers, N=2, S=7 (S not a multiple of N, boundary
+chunking) AND S=1<<20 (large). Schedule = the DDP-M1 canonical ring
+(2(N-1) steps), only the per-step transport swapped to real device-to-device.
+
+To be filled on harvest:
+  - nvidia-smi topo -m matrix (verbatim)
+  - cudaDeviceCanAccessPeer(0<->1) Y/N
+  - peer access enabled both directions Y/N
+  - byte-eq per case (S=7, S=1<<20)
+  - transport: NVLink vs PCIe (vs staged-host fallback)
+  - pod destroyed Y/N (leak 0, exact-ID)
