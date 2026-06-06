@@ -39,8 +39,9 @@ util_capture() {
 }
 
 echo "=== UTIL capture (sampled @50ms during a ~2.5s sustained loop of each path) ==="
-# A = ModuleList-30 (under-fill baseline) · B = grouped (regression) · C = FUSED (cure)
-for path in A B C; do
+# A = ModuleList-30 (under-fill baseline) · B = grouped (regression)
+# C = FUSED (naive per-channel MAC) · D = TILED-FUSED (OG-FUSE-OPT smem-staged cure)
+for path in A B C D; do
     util_capture "path_$path" env MOEFUSE_ONLY="$path" /tmp/moefuse "$E" "$D" "$T" "$K" "$DIL"
 done
 

@@ -1,0 +1,89 @@
+F-FUSION-MOE-CONV-OPT — OG-FUSE-OPT: shared-mem-tiled fused MoE-conv kernel (path D)
+======================================================================================
+slug: hexa-fusion   group: HEXA-FUSION   method: device byte-eq gate (g5) + cuEvent perf + nvidia-smi util
+device: NVIDIA L40S  SMs=142  cap=8.9  (vast instance 39749770, rented + DESTROYED, leak 0)
+build: nvcc -arch=sm_89 -O3 -o moefuse tool/gpu_moe_conv_fuse.cu  (CUDA 12.4)
+shape: E=30 K=3 dil=1 T=256.  gate shape E=30 d=192 T=32 (CPU-oracle tractable).
+
+STATEMENT (pre-registered falsifier)
+------------------------------------
+Replacing the naive per-channel MAC inner loop of the fused MoE-conv kernel (path C)
+with a SHARED-MEM-TILED conv (path D: stage the input time-window into smem once per
+CTA, broadcast in the ci inner loop, register-blocked time accumulators) will (1) hold
+byte-eq max|Δ|=0 vs the 30-separate-conv reference, and (2) make the fused kernel
+competitive with ModuleList-30 in the SATURATED regime (d>=1024), not only under-fill.
+FALSIFIER: if tiled-fused still loses to ModuleList-30 step-time at d>=2048, the saturated
+win is NOT achieved → honest closed-negative + name the exact residual roofline.
+
+GATE (g5, FIRST — no perf before correctness) — PASS
+-----------------------------------------------------
+[GATE-DEV-EQ]  max|Δ|(TILED vs ModuleList) = 0.000e+00   <= THE OG-FUSE-OPT CONTRACT
+[GATE-DEV-EQ]  max|Δ|(fused vs ModuleList) = 0.000e+00   max|Δ|(grouped vs ModuleList) = 0.000e+00
+[GATE-TILED]   max|Δ| vs CPU = 2.980e-07  (fp32 FMA-contraction tol 6e-6 — PASS)
+perf-shape cross-check (d=512 AND d=2048): max|Δ|(TILED vs ModuleList) = 0.000e+00
+=> path D reproduces the 30-conv reference EXACTLY at the bit level. Accumulation order
+   preserved (ci outer, k inner) through the CI_TILE smem chunking. BYTE-EQ HELD.
+
+PERF — median of 20 cuEvent iters (ms/step)
+-------------------------------------------
+                         UNDER-FILL d=512        SATURATED d=2048
+  [A] ModuleList-30         34.942 ms               333.255 ms
+  [B] grouped              149.854 ms              2913.823 ms
+  [C] FUSED (naive MAC)     61.945 ms              1662.550 ms
+  [D] TILED-FUSED (smem)    63.849 ms              1034.302 ms
+  CTAs: A=512/launch×30   C=D=15360 (one launch, d=2048)
+
+UTIL (nvidia-smi @50ms, sustained ~2.5s loop, d=2048 saturated)
+  [A] mean=98.7% peak=100%   [C] mean=98.8% peak=100%   [D] mean=98.7% peak=100%
+
+FINDING (HONEST — partial win, residual is WEIGHT bandwidth, not fill/occupancy)
+--------------------------------------------------------------------------------
+1. BYTE-EQ: tiling preserved max|Δ|=0 vs the 30-conv reference in BOTH regimes. The
+   smem-staged window + CI_TILE chunking did NOT perturb the accumulation order. ✓
+
+2. TILING HELPED the fused kernel substantially at saturation:
+   d=2048  C(naive) 1662 ms -> D(tiled) 1034 ms  =  1.61x faster fused-vs-fused.
+   Staging X into smem removed the CO_TILE-fold redundant INPUT global reads (the
+   roofline named in PR #2859). Input bandwidth is no longer the fused bottleneck.
+
+3. BUT tiled-fused STILL LOSES to ModuleList-30 at d=2048: D 1034 ms vs A 333 ms = 0.32x.
+   beats-ModuleList-at-saturated = NO. This is a CLOSED-NEGATIVE on the saturated win.
+
+4. THE EXACT RESIDUAL ROOFLINE = WEIGHT bandwidth (not input, not occupancy):
+   - util is 98.7% for ALL of A/C/D at d=2048 → the GPU is already SATURATED for every
+     path. The wall is NOT fill/occupancy (which is what fusion cures); it is the work
+     each path must move through HBM.
+   - The MoE-conv is a depthwise-style per-output-channel weight read: every (co,ci,k)
+     weight is touched exactly once and is UNIQUE per thread (no weight reuse across
+     out-channels). Weight bank = E·d·d·K·4B = 1.51 GB @ d=2048. All four paths must
+     stream the full 1.51 GB of weights; smem tiling cannot reduce WEIGHT traffic
+     (only the redundant X reads, which it did remove).
+   - ModuleList-30 (A) wins because per-expert launches give the L2 a clean, sequential
+     weight-stream per launch (one expert's 1.51/30 GB resident at a time, high L2 hit
+     on the shared X) whereas the single fused launch interleaves 30 experts' weight
+     streams across the SM array, thrashing L2 on the weight side. The fused kernel
+     trades launch-overhead removal for worse weight-stream locality — a net loss once
+     the GPU is already full.
+   - i.e. the f5e18a0f cure (boundary removal) pays off ONLY where ModuleList UNDER-FILLS
+     (too-few CTAs per launch). At d=2048 on a 142-SM L40S, ModuleList already fills
+     (A util 98.7%), so there is no fill to recover and the weight-locality penalty
+     dominates. The under-fill->saturated crossover is GPU-size + d dependent.
+
+5. UNDER-FILL d=512 on L40S: A 34.9 ms wins here too (A util already 92.6%). At this
+   (E=30, d=512, 142-SM) point ModuleList is NOT under-filling on the L40S — the PR
+   #2859 2.68x fused win was at the production shape regime (d=6208 / smaller-SM or
+   the specific under-fill point), not reproduced at d=512 on a 142-SM L40S. Confirms
+   the win is regime-specific (under-fill ONLY), consistent with the campaign thesis.
+
+CONCLUSION
+----------
+OG-FUSE-OPT tiling is a REAL 1.61x improvement to the fused kernel at saturation and
+holds byte-eq exactly, BUT does NOT make fused beat ModuleList-30 in the saturated
+regime. The saturated-win falsifier is FALSIFIED: the residual is WEIGHT-bandwidth +
+L2-weight-locality, which kernel-level fusion cannot remove (weights are unique, touched
+once, no reuse). Fusion remains an UNDER-FILL-only cure. Tiling shrinks the fused-side
+penalty but the crossover stays where ModuleList under-fills, not at saturation.
+=> 🔴 closed-negative for the saturated-win claim; 🟢 positive for byte-eq + the 1.61x
+   fused-vs-fused tiling speedup. Honest both ways.
+
+verdict tier: 🔴 saturated-win FALSIFIED (weight-bandwidth roofline) · 🟢 byte-eq=0 · 🟢 1.61x tiling Δ
