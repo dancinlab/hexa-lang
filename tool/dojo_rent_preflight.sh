@@ -29,6 +29,13 @@
 #   • BLOCK adamw-8bit when a single tensor exceeds 2^31 elements (bitsandbytes
 #     'invalid configuration argument ops.cu:226').
 #   • advise that DDP won't help a model/compute-bound run (single-GPU can win).
+# Plus the DECISION/ALGORITHM root cause (sidecar handoff f5e18a0f — the
+# companion to a10891bc): two causal lines folded into the same advisory —
+#   • "don't parallelize a pathological op" — the anima grouped-conv vectorize
+#     was ~11x slower (cuDNN naive path on a 30-group / 186 240-channel shape);
+#     DDP then MULTIPLIES that 11x cost per replica (4xH200 lost to 1xH200).
+#   • "vectorization is what crosses the 2^31 ceiling" — the fused expert weight
+#     (3.47B elems) is exactly what trips the bitsandbytes optim8bit limit.
 # These are CITED anima observations — attributed, not re-measured here.
 #
 # Pure POSIX-ish bash. Drives `runpodctl` if present, else the RunPod GraphQL
@@ -371,6 +378,7 @@ dojo_recipe_advisory() {
             if [ "$max_elems" != "0" ] && [ "$max_elems" -gt "$DOJO_OPT8BIT_ELEM_LIMIT" ]; then
                 _dojo_err "optim8bit ($opt) but a single tensor has $max_elems elements > 2^31 ($DOJO_OPT8BIT_ELEM_LIMIT) — bitsandbytes will fail: 'Error invalid configuration argument at ops.cu:226' (anima a10891bc)" \
                           "keep fp32/bf16 AdamW for that tensor (do NOT use adamw-8bit), or split the giant tensor — a >2.1B-element fused weight is exactly what NOT to build (see bench-before-vectorize)"
+                _dojo_warn "CAUSAL (f5e18a0f): VECTORIZATION is what crosses the 2^31 ceiling — fusing the expert loop into one grouped weight (anima: 3.47B-elem fused conv) is what makes a tensor > 2^31. Keeping experts as a ModuleList of small convs avoids BOTH this break AND the ~11x grouped-conv slowdown"
                 rc=1
             elif [ "$max_elems" = "0" ]; then
                 _dojo_warn "optim8bit ($opt) requested but --max-tensor-elems not declared — bitsandbytes breaks on any single tensor > 2^31 (2.1B) elements (anima a10891bc); declare your largest parameter tensor with --max-tensor-elems N"
@@ -392,9 +400,13 @@ dojo_recipe_advisory() {
         esac
     fi
 
-    # lesson #6 — DDP-won't-help-if-model-bound advisory.
+    # lesson #6 / prescription 2 — DDP-won't-help-if-model-bound advisory.
+    # DON'T PARALLELIZE A PATHOLOGICAL OP: DDP MULTIPLIES a per-step cost that is
+    # itself inflated (anima: the grouped-conv vectorize was ~11x slower; each
+    # DDP replica then re-pays that 11x, so 4xH200 lost to 1xH200 at 4x cost).
     if [ "$ddp" -gt 1 ] 2>/dev/null; then
-        _dojo_warn "DDP x$ddp replicates the FULL model on every GPU (per-GPU memory unchanged). If you are MODEL/COMPUTE-bound (a big conv/GEMM per step), multi-GPU NEVER beats single-GPU — anima a10891bc: 4xH200 DDP did not beat single H200; the single-H200 ModuleList run trained fine (~74s/step). Scale to multi-GPU ONLY when data-throughput-bound; fix per-step model cost on ONE GPU first"
+        _dojo_warn "DDP x$ddp replicates the FULL model on every GPU (per-GPU memory unchanged). If you are MODEL/COMPUTE-bound (a big conv/GEMM per step), multi-GPU NEVER beats single-GPU — anima a10891bc/f5e18a0f: 4xH200 DDP did not beat single H200; the single-H200 ModuleList run trained fine (~74s/step). Scale to multi-GPU ONLY when data-throughput-bound; fix per-step model cost on ONE GPU first"
+        _dojo_warn "DON'T PARALLELIZE A PATHOLOGICAL OP (f5e18a0f): MEASURE single-GPU step time on the ACTUAL kernels FIRST — DDP MULTIPLIES a pathological op per replica (anima: the ~11x grouped-conv regression got 4x-replicated, so DDP was slower wall-clock AND 4x cost). Parallel is 'wall-first' only when the per-replica step is already healthy"
     fi
 
     return "$rc"
@@ -549,6 +561,18 @@ _dojo_self_test() {
     if printf '%s' "$adv" | grep -qi 'DDP'; then
         printf '  [ok] recipe lesson#6 DDP-won'\''t-help-if-model-bound advisory present\n'
     else printf '  [FAIL] recipe lesson#6 missing DDP advisory\n'; fail=1; fi
+    # f5e18a0f prescription 2 — DDP>1 should ALSO emit the "don't parallelize a
+    # pathological op" causal line (MEASURE single-GPU first; DDP multiplies it).
+    if printf '%s' "$adv" | grep -qi "DON'T PARALLELIZE A PATHOLOGICAL OP"; then
+        printf '  [ok] recipe f5e18a0f prescription2 don'\''t-parallelize-a-pathological-op line present\n'
+    else printf '  [FAIL] recipe f5e18a0f prescription2 causal line missing\n'; fail=1; fi
+    # f5e18a0f prescription 3 — a >2^31-element fused tensor under adamw-8bit
+    # must ALSO emit the "VECTORIZATION is what crosses the 2^31 ceiling" causal line.
+    local advv; advv=$(dojo_recipe_advisory --params 7000000000 --param-dtype bf16 \
+            --optimizer adamw-8bit --ddp 1 --max-tensor-elems 3470000000 2>&1)
+    if printf '%s' "$advv" | grep -qi 'VECTORIZATION is what crosses the 2'; then
+        printf '  [ok] recipe f5e18a0f prescription3 vectorization-crosses-2^31 causal line present\n'
+    else printf '  [FAIL] recipe f5e18a0f prescription3 causal line missing\n'; fail=1; fi
     # bf16 already selected at >=3B → no bf16 WARNING (already-winner OK line).
     local advb; advb=$(dojo_recipe_advisory --params 7000000000 --param-dtype bf16 --optimizer adamw --ddp 1 2>&1)
     if printf '%s' "$advb" | grep -q 'bf16 weights already selected'; then
