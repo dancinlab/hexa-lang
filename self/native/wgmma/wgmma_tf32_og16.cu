@@ -389,12 +389,13 @@ int main(int argc,char**argv){
         for(int k=0;k<Kx;++k)for(int n=0;n<Nx;++n){
             int tile=n>>7, nloc=n&127, c=nloc>>5, na=(nloc&31)>>3, r=nloc&7;
             int katom=k>>5, kk=k&31;
-            // B per 128-N tile = 4 32-N atoms (c). within a 32-N atom: na (8-row sub), r. gmma
-            // layout per 32-N atom = na*256 + gmma_phys(r,kk); the 4 atoms concatenated.
-            int p = c*(32*KSW) + na*256 + gmma_phys(r,kk);  // smem slot in the 128(N)x32(K) slab
-            int srow = tile*128 + (p>>5);             // box maps N-major: row=global N
-            int scol = katom*32 + (p&31);             // col = global K
-            hBp[(size_t)scol*Nx + (srow)] = hB[(size_t)k*Nx + n]; // B global K-major(Nx wide)
+            // The GEMM kernel loads B ATOM-BY-ATOM: box {32(N),32(K)}, contiguous=N. Each atom c
+            // lands SMEM[c*1024 + p'] from global col(N)=bn+c*32+(p'&31), row(K)=st*32+(p'>>5).
+            // We want SMEM[c*1024 + na*256+gmma_phys(r,kk)] = B value -> invert WITHOUT c in row.
+            int p = na*256 + gmma_phys(r,kk);          // smem slot WITHIN the 32-N atom (0..1023)
+            int gN = tile*128 + c*32 + (p&31);         // global N for this smem slot
+            int gK = katom*32 + (p>>5);                // global K (p>>5 in 0..31)
+            hBp[(size_t)gK*Nx + gN] = hB[(size_t)k*Nx + n]; // B global K-major(Nx wide)
         }
         CK(cudaMemcpy(dA,hAp,szA*4,cudaMemcpyHostToDevice));CK(cudaMemcpy(dB,hBp,szB*4,cudaMemcpyHostToDevice));
         CUtensorMap tmapA{},tmapB{};
