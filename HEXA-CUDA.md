@@ -113,9 +113,21 @@ verdict .verdicts/hexa-cuda/F-HEXACUDA-ADOPTION-DX.txt.)
       docs/hexa-dojo.md gains a "Training recipe — optimization gotchas" section. Advisory
       self-tests GREEN (+5 cases). CITED anima observations — attributed, not re-measured.
       Docs: docs/hexa-dojo.md (incl. the no-troubleshoot preflight + the training-recipe
-      gotchas sections). Verdict:
-      .verdicts/hexa-cuda/F-HEXACUDA-DOJO.txt (GREEN). Build-verify pending:
-      `hexa dojo domains` listing both [full] via the INSTALLED binary (Jun-1
+      gotchas sections). DOJO-IMPROVE (branch domain/hexa-dojo-improve): (a) the fp32/f32
+      dtype mismatch is FIXED end-to-end — DOJO_DTYPE=fp32 (docs + emitted run.sh) used to
+      error `unknown --param-dtype fp32` on the hexa preflight path; _dtype_bytes +
+      the shell coarse-mem gate now accept fp64=f64 / fp32=f32 / fp16=f16 aliases, self-test
+      stays GREEN (+2 dtype-alias cases). (b) vision · rl · tabular PROMOTED stub → [full]:
+      real flame trainers over the same stdlib/flame substrate as flame-forge — vision
+      (softmax-clf · patch-mlp, softmax-CE descent; patch-MLP floor since flame has no 2-D
+      conv backward yet — honest, ref.py uses nn.Conv2d) · rl (bandit-pg · gridworld-pg
+      REINFORCE + baseline, deterministic inline-LCG sampling, reward-ASCENT gate) · tabular
+      (logreg · mlp-tab, softmax-CE descent). All SIX domains now [full]; every new kata
+      emits 4 files + emitted train.hexa parses clean + RUNs with its gate GREEN + run.sh
+      bash -n clean + ref.py py_compile clean + --lang filter correct (verified via a
+      localized-import harness against the worktree modules). Verdict:
+      .verdicts/hexa-cuda/F-HEXACUDA-DOJO.txt (GREEN, §8). Build-verify pending:
+      `hexa dojo domains` listing all SIX [full] via the INSTALLED binary (Jun-1
       binary caches a precompiled stdlib/dojo snapshot — SOURCE verified via
       self-contained compile) · NVPTX PTX emission (needs a CUDA host) · a live
       multi-GPU DDP rent (preflight LOGIC locally verified).

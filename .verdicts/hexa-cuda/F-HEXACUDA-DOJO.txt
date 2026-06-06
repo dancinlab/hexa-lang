@@ -80,6 +80,52 @@ flame-forge/tiny-clm/train.hexa          OK: flame-forge/tiny-clm/train.hexa par
     re-measured here. The advisory's element-limit + bf16-rec logic is pure-arithmetic
     self-tested above; the underlying anima 7B timings are not reproduced.
 
+── (8) DOJO-IMPROVE (branch domain/hexa-dojo-improve, 2026-06-06) — dtype-alias fix
+       + vision/rl/tabular promoted stub → [full] ──
+  method: g5 (real local emit + hexa parse + hexa run), via a localized-import harness
+  against the worktree modules (the Jun-1 binary resolves the install SSOT, not the
+  worktree — same stale-oracle limitation as section (7)'s build-verify-pending).
+
+  (8a) DTYPE ALIAS — fp32/f32 mismatch FIXED end-to-end:
+    BEFORE: $ hexa run stdlib/cloud/preflight.hexa --param-dtype fp32 ...
+            [preflight] error: unknown --param-dtype `fp32`     ← user-facing error
+    AFTER : $ hexa run stdlib/cloud/preflight.hexa --params 7e9 --param-dtype fp32 \
+                       --grad-dtype fp32 --optimizer adamw --gpu h200-141gb
+            param_dtype    = fp32 (4 B)                          ← maps cleanly
+            verdict: PASS — but within 15% of cap, OOM risk elevated
+    _dtype_bytes now accepts fp64=f64 · fp32=f32 · fp16=f16 (symmetric w/ the prior
+    fp16 alias); the shell coarse-mem gate case-arm gains f64|fp64 / f32|fp32 too.
+    NEW self-test cases (bash tool/dojo_rent_preflight.sh --self-test):
+      [ok] dtype-alias fp32 == f32 (OOMs H100-80GB)
+      [ok] dtype-alias fp32 == f32 (fits H200-141GB)
+      == ALL 6 FIXES + RECIPE ADVISORY VERIFIED (pure logic) ==   ← stays GREEN
+
+  (8b) dojo domains — all SIX now [full]:
+      llm [full] · clm [full] · hexa-cuda [full] · flame-forge [full] ·
+      vision [full] · rl [full] · tabular [full]
+    dojo_is_stub() returns the empty set.
+
+  (8c) vision/rl/tabular — emit (4 files each) + emitted train.hexa hexa parse + hexa run:
+      vision/softmax-clf  parses clean · epoch-1 CE 1.55644 → epoch-60 0.996485
+                          F-VISION-SOFTMAXCLF = 1  PASS (CE descends)
+      vision/patch-mlp    parses clean · epoch-1 CE 1.44371 → epoch-60 0.524801
+                          F-VISION-PATCHMLP = 1    PASS (CE descends)
+      rl/bandit-pg        parses clean · epoch-1 reward 0.203125 → epoch-80 0.953125
+                          F-RL-BANDITPG = 1        PASS (reward ascends)
+      rl/gridworld-pg     parses clean · epoch-1 reward 0.203125 → epoch-80 0.984375
+                          F-RL-GRIDWORLDPG = 1     PASS (reward ascends)
+      tabular/logreg      parses clean · epoch-1 CE 1.1755 → epoch-60 0.00225554
+                          F-TABULAR-LOGREG = 1     PASS (CE descends)
+      tabular/mlp-tab     parses clean · epoch-1 CE 1.14173 → epoch-60 3.47726e-09
+                          F-TABULAR-MLPTAB = 1     PASS (CE descends)
+    --lang filter: hexa→train.hexa only · py→ref.py only · both→all 4 (verified).
+    emitted run.sh passes `bash -n`; emitted ref.py passes `python3 -m py_compile`.
+
+  (8d) vision scope honesty: flame has a forge matmul + 1-D conv (conv_lib.nn_conv1d_*)
+    but NO 2-D conv backward for a self-contained trainer — so the hexa vision path is
+    the patch-MLP FLOOR (flatten → MLP → softmax-CE, a real descending classifier, NOT a
+    faked conv trainer); ref.py uses a real nn.Conv2d. Stated plainly in the README + docs.
+
 VERDICT: 🟢 GREEN — both dojo domains emit; all 7 emitted katas hexa parse cleanly;
 all 3 flame-forge trainers RUN + PASS the descent gate; --lang=both emits the contrast
 surfaces; the 6-fix preflight/rent helper self-tests GREEN + is wired into the emitted
@@ -88,12 +134,19 @@ RECIPE-HARDENED (handoff a10891bc): the preflight now folds a training-recipe ad
 (--bf16-weights rec for >=3B params · optim8bit 2^31 element-limit BLOCK · DDP-model-bound
 advisory) self-testing GREEN (5 new cases), and the tiny-clm README carries the
 bench-before-vectorize note; docs/hexa-dojo.md gains the optimization-gotchas section.
+DOJO-IMPROVE (section 8): the fp32/f32 dtype mismatch is fixed end-to-end (fp-prefixed
+aliases on both the hexa preflight + the shell gate, self-test stays GREEN with 2 new
+cases), and vision/rl/tabular are promoted stub → [full] — six [full] domains, each new
+kata emits + parses + RUNs with its gate GREEN (vision/tabular CE descends, rl reward
+ascends), --lang filter correct, run.sh/ref.py syntax-clean.
 
-BUILD-VERIFY-PENDING (needs a real GPU pod — honest g5):
-  · 'hexa dojo domains' listing both [full] via the INSTALLED binary — the Jun-1 local
+BUILD-VERIFY-PENDING (needs a real GPU pod / a current binary rebuild — honest g5):
+  · 'hexa dojo domains' listing all SIX [full] via the INSTALLED binary — the Jun-1 local
     binary caches a precompiled stdlib/dojo/gen.hexa snapshot and ignores the new source;
-    the dispatch + dojo_domains() SOURCE is correct (verified via self-contained compile).
-    A binary rebuild surfaces it. Emit logic itself is fully verified locally (above).
+    the dispatch + dojo_domains() SOURCE is correct (verified via a self-contained compile:
+    section 8 ran the worktree modules through a localized-import harness → six [full]).
+    A binary rebuild surfaces it through the real `hexa dojo` CLI. Emit/parse/run logic is
+    fully verified locally (above) — only the INSTALLED-binary CLI surface is pending.
   · 'hexa build --target=nvptx kernel.hexa' (PTX emission) — needs a CUDA host (ptxas);
     the emitted run.sh parse-gates today and degrades gracefully when ptxas is absent.
   · An actual multi-GPU DDP rent+run — the preflight LOGIC is locally verified (self-test
