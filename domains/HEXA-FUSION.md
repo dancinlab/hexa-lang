@@ -53,12 +53,19 @@
   d=6208 (3997 vs 3734 ms) confirming OPT. cuBLAS roofline (F) stays ~15x below E — no superiority claim,
   E reaches a far better roofline point. The production cure is "replace ModuleList+fused/tiled with the
   GEMM-conv kernel", NOT "the wall is fundamental". verdict: .verdicts/hexa-fusion/F-FUSION-MOE-CONV-PROD-KERNEL.txt
-- [x] **OG-FUSE-XOVER — d=6208/H200 production crossover** — 🟢 MEASURED at d=6208 on H100 (132 SMs, same
-  saturated regime as the H200 wall; vast 39761793 DESTROYED). ModuleList-30 = 3734.5 ms reproduces anima's
-  H200 ~3736 ms/step wall. The under-fill->saturated crossover is moot for the CURE: at d=6208 ALL paths are
-  ~92% saturated yet the GEMM-conv (E) still wins 6.57x via weight reuse (work-reduction, not fill). The
-  prior fused/tiled (C/D) lose at saturation (D 3997 ms > A 3734) — fusion was the wrong lever, weight reuse
-  is the right one. Subsumed by OG-FUSE-PROD-KERNEL. verdict: .verdicts/hexa-fusion/F-FUSION-MOE-CONV-PROD-KERNEL.txt
+- [x] **OG-FUSE-XOVER — d=6208/H200 production crossover** ✅ (2026-06-07, F-FUSION-MOE-CONV-XOVER 🔴
+  closed-negative): measured on the EXACT production GPU (NVIDIA H200, 132 SMs, sm_90, vast 39749545
+  DESTROYED leak-0). GATE FIRST PASS at every swept d — byte-eq max|Δ|(fused/grouped vs ModuleList-30)=0,
+  device-vs-CPU 2.98e-7 fp32-FMA. d-sweep {4096,6208,8192} median step (ms), winner=ModuleList-30 EVERY d:
+  d=4096 A=1648.8 / C-fused=3132.7 / B-grouped=16134 · **d=6208(PROD) A=3736.1 / C=7076.2 / B=37921** ·
+  d=8192 A=8902.1 / C=12660.6 / B=64351.7. util MEAN 96-97% / PEAK 100% on ALL 3 paths at ALL d (saturated).
+  **VERDICT: d=6208/H200 is in the SATURATED regime — the f5e18a0f fused-conv launch cure DOES NOT APPLY
+  to the real 7B CLMConvMoE step.** ModuleList-30 already issues 1568 CTAs/launch at d=6208 (~12× the 132
+  SMs) → no under-fill headroom → fused loses 1.89×. The #2859 "d=6208 lives in under-fill" conjecture is
+  FALSIFIED; under-fill on a 132-SM GPU needs d≲384 (below any real MoE width). The ~74s/step production
+  wall is therefore a roofline/memory problem (→ OG-FUSE-OPT tiled kernel), NOT a launch-fill problem. The
+  cure stays valid only for genuinely small-d under-fill (L40S d=512). verdict:
+  .verdicts/hexa-fusion/F-FUSION-MOE-CONV-XOVER.txt (+ .raw.txt verbatim).
 - [ ] **OG-FUSE-FOLD — fold the fused kernel into the flame CLMConvMoE trainer** — wire
   tool/gpu_moe_conv_fuse.cu into stdlib/flame as the device MoE-conv path (env-gated, byte-eq ModuleList
   fallback) so the cure reaches the real trainer step. The application path for the f5e18a0f cure.

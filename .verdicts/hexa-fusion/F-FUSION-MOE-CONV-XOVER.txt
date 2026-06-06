@@ -1,0 +1,62 @@
+F-FUSION-MOE-CONV-XOVER — OG-FUSE-XOVER: d=6208 PRODUCTION crossover, measured on H200
+======================================================================================
+GPU:    NVIDIA H200, 143771 MiB, 132 SMs, cap 9.0, driver 580.159.03, CUDA 12.6 (sm_90)
+        (the EXACT production GPU; pod = vast 39749545, label og-fuse-xover-mine, DESTROYED leak-0)
+DATE:   2026-06-07
+SHAPE:  E=30, K=3, T=256, dil=1 (representative single-MoE-block); d swept {4096, 6208, 8192}
+KERNEL: tool/gpu_moe_conv_fuse.cu (PR #2859) — naive per-channel MAC fused MoE-conv.
+HARNESS: tool/gpu_moe_conv_xover_run.sh; MOEFUSE_ITERS=5 MOEFUSE_WARMUP=2 (median robust;
+         loop-count override is measurement-harness only, gate/byte-eq contract untouched).
+
+==================================== GATE FIRST (g5) ===================================
+At EVERY swept d the correctness gate runs at the small CPU-oracle shape (E=30 d=192 T=32):
+  [GATE-DEV-EQ] max|Δ|(fused vs ModuleList-30) = 0.000e+00   max|Δ|(grouped vs ModuleList) = 0.000e+00
+  device-vs-CPU = 2.980e-07 (fp32 FMA contraction: GPU fuses W*X+acc=1 rounding vs CPU mul-add=2;
+                             SAME accum order; within stated 6e-6 FMA tol)
+  perf-shape cross-check max|Δ|(fused vs ModuleList) = 0.000e+00 at d=4096/6208/8192 (expect 0)
+  => GATE OVERALL = PASS at d=4096, d=6208, d=8192. BYTE-EQ HOLDS. No perf number before gate.
+
+====================== D-SWEEP (median step, ITERS=5, cuEvent) ========================
+  Path A = ModuleList-30 (E separate launches)   B = grouped (channel-serial)   C = FUSED (1 launch)
+
+  d      | CTAs/launch A | A ModuleList | C FUSED   | B grouped  | winner | util MEAN (A/B/C) PEAK
+  -------+---------------+--------------+-----------+------------+--------+-----------------------
+  4096   | 1024 ×30      |  1648.8 ms   | 3132.7 ms | 16134.0 ms |   A    | 96.1/97.2/96.2  100/100/100
+  6208 * | 1568 ×30      |  3736.1 ms   | 7076.2 ms | 37921.1 ms |   A    | 96.4/97.5/96.6  100/100/100
+  8192   | 2048 ×30      |  8902.1 ms   |12660.6 ms | 64351.7 ms |   A    | 96.6/97.3/95.8  100/100/100
+  (*) = PRODUCTION shape (d=6208).  fused C is the single fused-launch CTA count = E·⌈d/128⌉·⌈T/8⌉:
+       d4096 C=30720 · d6208 C=47040 · d8192 C=61440 CTAs.
+
+================================= REGIME VERDICT =======================================
+d=6208 / H200 lives in the SATURATED regime  ->  THE CURE DOES NOT APPLY TO PRODUCTION.
+
+WHY: each ModuleList-30 (path A) launch already issues ⌈d/128⌉·⌈T/8⌉ = ⌈6208/128⌉·32 = 49·32
+     = 1568 CTAs PER LAUNCH at d=6208 — already ~12× the H200's 132 SMs. The scheduler is
+     FULLY FILLED by a single expert's launch (util MEAN 96.4%, PEAK 100% on ALL three paths
+     at ALL three d). There is NO under-fill headroom for the fused single-launch to recover,
+     so fused C (7076 ms) LOSES to ModuleList-30 A (3736 ms) by 1.89× at production d=6208 —
+     and loses at every swept d (4096: 1.9×, 8192: 1.42×). grouped B is worst everywhere
+     (reproduces the f5e18a0f groups=30 regression: 30 CTAs cannot fill 132 SMs, channel-serial).
+
+NO under-fill -> saturated boundary exists IN the swept band on a 132-SM GPU: the smallest
+swept point d=4096 already saturates (1024 CTAs/launch >> 132 SMs). The L40S under-fill regime
+(#2859: d=512, 32 CTAs/launch < 142 SMs, fused 2.68× WIN) requires d≲384 on an H200 (132 SMs)
+for ModuleList to under-fill — far below any real MoE width. PRODUCTION d=6208 is deep in
+saturation. The #2859 conjecture "d=6208/H200 lives in the under-fill regime" is FALSIFIED.
+
+HONEST FRAMING (g5): the per-CTA conv math is a plain tiled MAC, NOT a faster-than-cuDNN conv
+(cuDNN conv = roofline). The fused WIN is FILL/boundary-removal and exists ONLY where launches
+under-fill the SM scheduler. At the production shape that under-fill does NOT exist, so the
+boundary-removal cure is MOOT for the real 7B CLMConvMoE step on an H200. The cure remains
+valid+verified for genuinely small-d / many-tiny-expert under-fill regimes (L40S d=512), but
+NOT for d=6208. This is a closed-negative: it deterministically rules out the fused-conv launch
+cure as the lever for the ~74s/step production wall. (The 74s/step wall is therefore a
+roofline / memory-traffic problem at d=6208, not a launch-fill problem — see OG-FUSE-OPT:
+the naive per-channel MAC must be tiled/shared-mem to win in the saturated regime, which is
+where production lives.)
+
+POD: rented vast 39749545 (H200, $3.554/hr), label og-fuse-xover-mine. DESTROYED immediately
+     after numbers captured — leak 0 (only this pod destroyed; sibling rtsc/li2mgh16 pods of
+     concurrent agents left untouched).
+
+Raw stdout: .verdicts/hexa-fusion/F-FUSION-MOE-CONV-XOVER.raw.txt (verbatim, 112 lines).
