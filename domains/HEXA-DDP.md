@@ -8,7 +8,7 @@
 
 ## ── milestones (의존성 순) ──
 
-- [ ] **DDP-M1 — ring-all-reduce 통신 프리미티브 (hexa-native) ★ FIRST, 하드웨어 불요** — gradient sum 을 N-rank 가 나눠 합치는 ring-all-reduce 를 hexa 로 구현. **단일-GPU 안에서 2-rank in-process 시뮬**로 정합성 선검증: all-reduce(g0,g1) 결과 == 직렬 sum, byte-eq max|Δ|=0 (g5). 하드웨어 없이 지금 착수 가능 — DDP 의 진짜 심장. falsifier: 2-rank sim all-reduce == serial-sum byte-eq.
+- [x] **DDP-M1 — ring-all-reduce 통신 프리미티브 (hexa-native) ★ FIRST, 하드웨어 불요** — gradient sum 을 N-rank 가 나눠 합치는 ring-all-reduce 를 hexa 로 구현. **단일-GPU 안에서 2-rank in-process 시뮬**로 정합성 선검증: all-reduce(g0,g1) 결과 == 직렬 sum, byte-eq max|Δ|=0 (g5). 하드웨어 없이 지금 착수 가능 — DDP 의 진짜 심장. falsifier: 2-rank sim all-reduce == serial-sum byte-eq. **🟢 GREEN (#PR)** — stdlib/ddp/ring_all_reduce.hexa (reduce-scatter + all-gather, staged per-step copy) + in-process N-rank sim; 9/9 pass, N∈{2,4}, S not mult of N (7/10/13/64), byte-eq max|Δ|=0 FP64, steps=2(N-1) 확인. verdict: .verdicts/hexa-ddp-m1/F-DDP-RING-BYTEEQ.txt. **정직 경계: 이건 COLLECTIVE-CORRECTNESS leg only — 실 multi-GPU transport(P2P/NCCL)=M3, multi-GPU 하드웨어=M2; M1 GREEN ≠ 병렬 학습 동작.**
 - [ ] **DDP-M2 — 멀티-GPU pod rent 인프라** — tool/ 의 rent 경로가 `num_gpus≥2` 인스턴스(vast/runpod)를 잡고 NVLink/PCIe 토폴로지를 프로브하도록 확장 (현재 num_gpus=1 고정). 하드웨어-접근 wildcard — 전체 일정의 율속단계. falsifier: 2-GPU 한 노드 rent + `nvidia-smi topo -m` 캡처.
 - [ ] **DDP-M3 — 단일노드 2-GPU P2P all-reduce (실 하드웨어)** — DDP-M1 의 ring 을 실제 2-GPU 에 cudaMemcpyPeer/NVLink P2P 로 land. 의존: M1+M2. falsifier: 2-GPU all-reduce == 1-GPU serial byte-eq.
 - [ ] **DDP-M4 — DDP 정합성 게이트 (1-GPU vs 2-GPU)** — 같은 모델·시드·step 을 1-GPU 와 2-GPU(글로벌 batch 동일)로 돌려 weight/loss byte-eq. 의존: M3. **g5 HARD GATE** — 이게 통과해야 DDP 가 '정확'. falsifier: 1 vs 2 GPU max|Δ|=0.
