@@ -1,0 +1,15 @@
+F-FUSION-MOE-CONV-XOVER — OG-FUSE-XOVER: d=6208/H200 PRODUCTION crossover
+=========================================================================
+STATUS: WIP (GPU run pending) — harness + sweep script landed, byte-eq gate
+        + d-sweep {4096,6208,8192} to be filled INLINE from the rented pod.
+
+QUESTION (the KEY honest output): does the PRODUCTION shape d=6208 (E=30, K=3)
+on a big-SM GPU (H200 132 SMs / H100) live in the UNDER-FILL regime (the
+f5e18a0f fused-conv cure applies to the real 7B CLMConvMoE ~74s/step) or the
+SATURATED regime (cure moot for production)?
+
+GATE FIRST (g5): byte-exact max|Δ|=0 of (fused) and (grouped) vs the 30-conv
+ModuleList reference, device-vs-device, SAME accum order. fp32-FMA-vs-CPU
+tolerance 6e-6 reported separately. NO perf number before the gate passes.
+
+(results to be appended inline from the GPU run)
