@@ -1,0 +1,4 @@
+F-DDP-M4-TRAIN-BYTEEQ — HEXA-DDP DDP-M4
+End-to-end data-parallel TRAINING byte-eq: 1-GPU step == 2-GPU DDP step.
+
+STATUS: WIP — harness pushed, GPU run pending (verdict to be filled inline).
