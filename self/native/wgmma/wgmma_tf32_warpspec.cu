@@ -610,7 +610,11 @@ extern "C" __global__ void gemm_ws_tma_sw(const __grid_constant__ CUtensorMap tm
     uint64_t* full =(uint64_t*)(sm + (size_t)NST*BUF);
     uint64_t* empty=full+NST;
     int tid=threadIdx.x; int wg=tid>>7; int band=wg; int lt=tid&127;
-    int nks=K/TKSW;                            // number of 32-wide K slabs
+    int nks=K/TKSW;                            // number of TKSW-wide K slabs
+    // SWIZZLE constraint: TMA contiguous box dim must == swizzle atom width = TKSW f32.
+    // => B (contiguous=N) lands as NATOM = TN/TKSW side-by-side 32-N swizzled atoms.
+    const int NATOM = TN/TKSW;                 // 128/32 = 4 for 128B
+    const int BATOM = TKSW*TKSW;               // one 32-N x TKSW-K swizzled atom (floats)
     const uint32_t bytesA=ATILE*4, bytesB=BTILE*4;
     if(tid<NST){ mbar_init_tx(&full[tid],1); }
     else if(tid<2*NST){ mbar_init_tx(&empty[tid-NST],256); }
@@ -626,7 +630,10 @@ extern "C" __global__ void gemm_ws_tma_sw(const __grid_constant__ CUtensorMap tm
             float* base=sm+(size_t)st*BUF; float* As=base; float* Bs=base+ATILE;
             mbar_expect_tx(&full[st], bytesA+bytesB);
             tma_load_2d(As,&tmapA,/*x=k*/st*TKSW,/*y=m*/bm,&full[st]);
-            tma_load_2d(Bs,&tmapB,/*x=n*/bn,/*y=k*/st*TKSW,&full[st]);
+            // B: NATOM loads of 32-N swizzled atoms, landed side-by-side.
+            #pragma unroll
+            for(int c=0;c<NATOM;++c)
+                tma_load_2d(Bs+(size_t)c*BATOM,&tmapB,/*x=n*/bn+c*TKSW,/*y=k*/st*TKSW,&full[st]);
         }
     }
     for(int ki=0;ki<nks;++ki){
@@ -645,19 +652,25 @@ extern "C" __global__ void gemm_ws_tma_sw(const __grid_constant__ CUtensorMap tm
         //  1 (desc-internal): START stays at atom base; the descriptor START field is
         //     advanced by (kk/2)>>4-units inside mk_sw via an added byte offset, keeping
         //     the swizzle XOR origin at the atom base (CUTLASS-style, swizzle-safe).
+        // B atoms: atom c (32-N) at Bs + c*BATOM. n64 wgmma dB0 -> atoms{0,1}, dB1 -> {2,3}.
+        float* B0=Bs;            // N 0..63   (atoms 0,1 adjacent)
+        float* B1=Bs + 2*BATOM;  // N 64..127 (atoms 2,3 adjacent)
         uint32_t aAb=(uint32_t)__cvta_generic_to_shared(Aband);
-        uint32_t a0b=(uint32_t)__cvta_generic_to_shared(Bs);
-        uint32_t a1b=(uint32_t)__cvta_generic_to_shared(Bs + 64);
+        uint32_t a0b=(uint32_t)__cvta_generic_to_shared(B0);
+        uint32_t a1b=(uint32_t)__cvta_generic_to_shared(B1);
         #pragma unroll
         for(int kk=0;kk<TKSW;kk+=TK){
+            // K-sub-step inside the swizzled atom. kstep selects START-bump vs desc-internal.
             uint32_t aA,a0,a1;
             if(kstep==0){
-                aA=(uint32_t)__cvta_generic_to_shared(Aband + kk);
-                a0=(uint32_t)__cvta_generic_to_shared(Bs + (size_t)kk*TN);
-                a1=(uint32_t)__cvta_generic_to_shared(Bs + (size_t)kk*TN + 64);
+                aA=aAb + (uint32_t)(kk*4);
+                a0=a0b + (uint32_t)(kk*4);
+                a1=a1b + (uint32_t)(kk*4);
             }else{
-                // descriptor-internal step: add the K-core byte offset to the packed START.
-                aA=aAb + (uint32_t)(kk*4); a0=a0b + (uint32_t)(kk*TN*4); a1=a1b + (uint32_t)(kk*TN*4);
+                // alternative: step by a full core-row (kk * atom-N) — swept on-pod.
+                aA=aAb + (uint32_t)(kk*TKSW*4);
+                a0=a0b + (uint32_t)(kk*TKSW*4);
+                a1=a1b + (uint32_t)(kk*TKSW*4);
             }
             uint64_t dA=mk_sw(aA,lbo,sbo,swm), dB0=mk_sw(a0,lbo,sbo,swm), dB1=mk_sw(a1,lbo,sbo,swm);
             WG(d0,dA,dB0);
@@ -673,7 +686,9 @@ extern "C" __global__ void gemm_ws_tma_sw(const __grid_constant__ CUtensorMap tm
                 float* lb=sm+(size_t)lst*BUF; float* lAs=lb; float* lBs=lb+ATILE;
                 mbar_expect_tx(&full[lst], bytesA+bytesB);
                 tma_load_2d(lAs,&tmapA,load_ki*TKSW,bm,&full[lst]);
-                tma_load_2d(lBs,&tmapB,bn,load_ki*TKSW,&full[lst]);
+                #pragma unroll
+                for(int c=0;c<NATOM;++c)
+                    tma_load_2d(lBs+(size_t)c*BATOM,&tmapB,bn+c*TKSW,load_ki*TKSW,&full[lst]);
             }
         }
     }
@@ -737,9 +752,13 @@ int main(int argc,char**argv){
             CU_TENSOR_MAP_INTERLEAVE_NONE,swz,
             CU_TENSOR_MAP_L2_PROMOTION_NONE,CU_TENSOR_MAP_FLOAT_OOB_FILL_NONE);
           if(r!=CUDA_SUCCESS){printf("MODE%d: encodeA r=%d\n",MODE,(int)r);return 4;} }
-        // B row-major KxN: global dims {N,K} (fastest=N), box tile {TN=128, tk}.
+        // B row-major KxN: global dims {N,K} (fastest=N). For SWIZZLE the CONTIGUOUS box
+        // dim (N) must equal the swizzle atom width = 32 f32 (128B) / 16 (64B) / 8 (32B).
+        // MODE 4 (no swizzle): keep the full 128-wide N box. Swizzle: box N = tk-sized atom;
+        // the kernel issues TN/atom (=4 for 128B) B TMA loads of side-by-side 32-N atoms.
+        int bN = isSw?tk:128;   // for 128B-sw, bN=32; atoms across N = 128/bN
         { cuuint64_t gd[2]={(cuuint64_t)N,(cuuint64_t)K}; cuuint64_t gs[1]={(cuuint64_t)N*4};
-          cuuint32_t bd[2]={128,(cuuint32_t)tk}; cuuint32_t es[2]={1,1};
+          cuuint32_t bd[2]={(cuuint32_t)bN,(cuuint32_t)tk}; cuuint32_t es[2]={1,1};
           CUresult r=enc(&tmapB,CU_TENSOR_MAP_DATA_TYPE_FLOAT32,2,dB,gd,gs,bd,es,
             CU_TENSOR_MAP_INTERLEAVE_NONE,swz,
             CU_TENSOR_MAP_L2_PROMOTION_NONE,CU_TENSOR_MAP_FLOAT_OOB_FILL_NONE);
