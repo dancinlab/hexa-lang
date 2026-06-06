@@ -1,0 +1,12 @@
+F-DDP-M6-RUNPOD — DDP-M6 (runpod leg): cross-NODE ring all-reduce over TCP sockets
+provider = runpod
+transport = (pending: TCP / runpod proxy / loopback)
+node count = (pending)
+
+STATUS: WIP SKELETON — provisioning + run not yet executed.
+
+GATE (g5): 2-runpod-node ring all-reduce == serial elementwise sum,
+  byte-eq max|delta|=0 (FP64), S=7 (S%N!=0 boundary) AND S=1<<20 (large).
+  Bytes cross the wire (TCP reliable+ordered) and must arrive bit-identical.
+
+(verdict body filled in after the runpod run.)
