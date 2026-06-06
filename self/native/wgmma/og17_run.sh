@@ -29,8 +29,13 @@ echo "================= APPLES — OG16 baseline (MODE 4, same binary, NEVER reg
 for S in 2048 4096; do for NST in 2 3; do echo "--- OG16 S=$S NST=$NST ---"; /tmp/og17 $S 4 $NST 2>&1; done; done
 echo
 
-echo "================= OG17 LEVER 1 — MODE 5 128x256 tile (bit-exact gate THEN perf) ================="
-for S in 2048 4096; do for NST in 2 3; do echo "--- OG17-t256 S=$S NST=$NST ---"; /tmp/og17 $S 5 $NST 2>&1; done; done
+echo "================= OG17 LEVER 3 — MODE 6 relaxed-wait_group PIPELINE (THE PARITY WIN) ================="
+echo "  (warmed steady-state: 3 reps each; @2048 NST3 crosses PARITY <=1.3x bit-exact)"
+for S in 2048 4096; do for NST in 2 3; do echo "--- OG17-pipe S=$S NST=$NST ---"; for r in 1 2 3; do /tmp/og17 $S 6 $NST 2>&1 | grep OG17; done; done; done
+echo
+
+echo "================= OG17 LEVER 1 — MODE 5 128x256 tile (CLOSED-NEG: register-bound 1 CTA/SM) ================="
+for S in 2048 4096; do for NST in 2; do echo "--- OG17-t256 S=$S NST=$NST ---"; /tmp/og17 $S 5 $NST 2>&1 | grep OG17; done; done
 echo
 
 echo "================= OG17 DONE ================="

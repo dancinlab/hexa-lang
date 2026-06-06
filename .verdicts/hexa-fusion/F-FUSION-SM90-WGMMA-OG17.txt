@@ -1,0 +1,93 @@
+F-FUSION-SM90-WGMMA-OG17 — PARITY CROSSED on the OG16 canonical-atom own-GEMM: the W11
+ping-pong / relaxed-wait_group pipeline lever — DEAD on the OG11-15 decode band — is REOPENED
+by OG16's band removal and CLOSES the 'H100 own-GEMM can't reach cuBLAS-TF32' wall.
+=============================================================================================
+verdict-tier: 🟢 NUMERICAL — bit-exact GATE PASSED (full-GEMM rel-RMS 0.000e+00 @2048³ and
+              @4096³ at EVERY config), THEN perf. PARITY (≤1.3x) CROSSED: OG17 @2048 NST=3 =
+              own 279.3-280.2 TFLOP/s, ratio vs cuBLAS-TF32 = 1.24x (3 reps, all PARITY=YES,
+              all rel-RMS 0). The own-GEMM now runs at ~81% of cuBLAS-TF32, bit-exact. OG16
+              best @2048 was 1.37x (253.8 TFLOP/s) -> OG17 1.24x (280 TFLOP/s). The 'H100
+              can't reach cuBLAS-TF32 on a hand-built own-GEMM' wall is CLOSED at S=2048.
+              cuBLAS-TF32 = ROOFLINE, parity-SEEKING (reach ≤1.3x), NO superiority claim.
+              NO regression below OG16 264.7 / rel-RMS 0 (OG16 re-measured same-pod, kept).
+date: 2026-06-07
+GPU: NVIDIA H100 80GB HBM3, compute_cap 9.0, driver 560.35.03
+     (vast contract 39764955, ssh2.vast.ai, machine 28762961, DESTROYED immediately after
+      capture — leak 0; concurrent sibling og-fuse-prod-kernel pod NOT touched)
+toolchain: nvcc 12.6 (V12.6, cuda_12.6.r12.6/compiler.35059454_0), -O3 -arch=sm_90a -lcublas
+     -lcuda  (EXACT apples to the OG16 #2866 toolchain: 12.6.77 / driver 560.35.x)
+kernel: self/native/wgmma/wgmma_tf32_og17.cu
+          gemm_og17_pipe (MODE 6) = CLOSING LEVER: OG16 128x128 tile (90 regs, 2 CTA/SM) with a
+                     RELAXED wgmma.wait_group 1 software pipeline (the next K-slab's wgmma ISSUE
+                     overlaps the current slab's tensor-core drain; W11 "ping-pong epilogue
+                     overlap"). NO smem growth -> 2 CTA/SM HELD. THE PARITY-CROSSING KERNEL.
+          gemm_og17_t256 (MODE 5) = CLOSED-NEG lever: OG16 128x256 output tile (4 accumulators/
+                     warpgroup). Bit-exact (rel-RMS 0) but register-bound to 1 CTA/SM (154 regs);
+                     ties OG16, no parity gain. __launch_bounds__(256,2) to force 2 CTA/SM caused
+                     940B spills + C7511 wgmma-serialization -> collapse to 29-33 TFLOP/s.
+          gemm_og16      (MODE 4) = OG16 #2866 baseline VERBATIM, same binary = same-pod apples.
+        Route-(a) gmma-INTER global pre-permute + NO-swizzle TMA + descriptor-direct (swm=0,
+        SBO=1024, layout_type_=0) is KEPT END-TO-END — the OG16 band-removal is preserved.
+
+================= THE LEVERS, AND WHY OG17 COULD APPLY THEM (the un-gating) ====================
+OG11-15 (W11/W12/W13 verdicts) ALL died on ONE wall: the 32KB in-kernel decode band competed
+for SMEM, so ANY tile/ring growth collapsed occupancy 2->1 CTA/SM and the lever's gain never
+covered the halved occupancy. OG16 (#2866) re-encoded A/B in GLOBAL into the canonical
+gmma-INTER layout so a NO-swizzle TMA lands a wgmma-ready SMEM tile read descriptor-direct with
+NO decode band -> the band ⊥ occupancy contradiction DISSOLVED, freeing 32KB/CTA at 2 CTA/SM.
+OG17 spends that headroom on the now-viable levers:
+
+  LEVER 1 — 128x256 output tile (W11, MODE 5). REGRESSES/TIES: register-bound (154 regs ->
+            1 CTA/SM), NOT smem-bound. The accumulator-reuse gain exactly cancels the halved
+            occupancy (264.9 @4096 = OG16's 264.5). The register-realloc that would hold 2
+            CTA/SM (setmaxnreg / launch_bounds) spills under the 256-elt accumulator footprint
+            (C7511, the EXACT W12 closed-negative). CLOSED-NEGATIVE confirmed, band-free.
+
+  LEVER 3 — relaxed-wait_group / ping-pong epilogue overlap (W11 lever 3, MODE 6). THE WIN:
+            OG16 does `wgmma.wait_group 0` (FULL drain) + __syncthreads EVERY K-slab — the next
+            slab's wgmma cannot ISSUE until the current slab's tensor cores fully drain. MODE 6
+            keeps the OG16 tile/occupancy (90 regs, 2 CTA/SM) but issues the wgmma as its own
+            commit group and only `wgmma.wait_group 1` per slab, so slab ki+1's wgmma ISSUE
+            overlaps slab ki's tensor-core compute. The mbarrier ring (full[]) still gates SMEM
+            buffer reuse so the overlap is DATA-SAFE -> bit-exact rel-RMS 0 (the gate is the
+            arbiter; no race materialized at NST≥2). NO smem growth -> 2 CTA/SM HELD. This is
+            the lever that crosses parity.
+
+================= MODE 6 — FULL GEMM bit-exact (rel-RMS 0) THEN perf (verbatim, 3 reps) ========
+  OG17 S=2048 NST=2 own 253.9/264.1/257.6  cuBLAS ~347  ratio 1.37/1.31/1.35x  rel_rms 0  2CTA/SM 64KB
+  OG17 S=2048 NST=3 own 279.7/280.2/279.3  cuBLAS ~347  ratio 1.24/1.24/1.24x  rel_rms 0  2CTA/SM 96KB  PARITY=YES ★
+  OG17 S=4096 NST=2 own 275.0/274.6/275.7  cuBLAS ~429  ratio 1.56/1.56/1.55x  rel_rms 0  2CTA/SM 64KB
+  OG17 S=4096 NST=3 own 266.0/266.1/266.2  cuBLAS ~427  ratio 1.60/1.60/1.60x  rel_rms 0  2CTA/SM 96KB
+  (S=2048 NST=4 = 1 CTA/SM 128KB -> 211.7, 1.65x = regress, expected; S=4096 NST=4 = 253.5, 1.70x.)
+  => BEST = S=2048 NST=3: 280 TFLOP/s, ratio 1.24x, PARITY=YES, bit-exact across 3 reps.
+
+================= SAME-POD APPLES — OG16 #2866 re-measured + KEPT (NO regression) ==============
+  OG16 gemm_og16 MODE4 (this pod, same binary):
+    S=2048 NST=2 own 247.5  cuBLAS 347.3  ratio 1.40x  rel_rms 0
+    S=2048 NST=3 own 253.8  cuBLAS 348.5  ratio 1.37x  rel_rms 0   (OG16 best @2048)
+    S=4096 NST=2 own 264.8  cuBLAS 431.1  ratio 1.63x  rel_rms 0   (= OG16 264.7 frontier)
+    S=4096 NST=3 own 259.7  cuBLAS 427.7  ratio 1.65x  rel_rms 0
+  => OG17 MODE6 @2048 NST3 (280, 1.24x) BEATS OG16 best @2048 (253.8, 1.37x) and crosses parity.
+     OG17 @4096 NST2 (275) BEATS OG16 @4096 NST2 (264.8) on throughput. NO config regresses.
+
+================= MODE 5 — 128x256 tile CLOSED-NEGATIVE (band-free, bit-exact, verbatim) =======
+  OG17 S=2048 NST=2 t256 own 219.0  ratio 1.56x  rel_rms 0  1 CTA/SM (154 regs, 96KB)
+  OG17 S=4096 NST=2 t256 own 264.9  ratio 1.61x  rel_rms 0  1 CTA/SM (= OG16 264.5, TIES)
+  ptxas: gemm_og17_t256 = 154 regs (4x32 accumulators) -> 39424 regs/CTA -> 1 CTA/SM by REGISTERS.
+  __launch_bounds__(256,2) (cap 128 regs to force 2 CTA/SM): 940B spills + C7511 wgmma serialize
+    -> 29-33 TFLOP/s (10-15x off). The W12 register-realloc closed-negative, reproduced exactly.
+  => the bigger-tile axis is register-capped on TF32; the OVERLAP axis (MODE 6) is the cure.
+
+================= FINDING (Δ vs baseline, pre-registered falsifier g5) ==========================
+Pre-registered falsifier: a band-free OG16-tile kernel with a relaxed wgmma.wait_group pipeline
+will EITHER race the SMEM ring (rel-RMS != 0 -> closed-neg, keep OG16) OR overlap wgmma issue
+with drain and cross parity bit-exact. RESULT: rel-RMS 0.000 at every NST≥2 AND own @2048 NST3
+280 TFLOP/s = ratio 1.24x = PARITY=YES.
+  Δ: OG16 1.37x (253.8) -> OG17 1.24x (280) @2048; OG16 264.8 -> OG17 275 @4096 (throughput).
+  CLOSING LEVER: relaxed-wait_group (ping-pong epilogue overlap, W11 lever 3) — held at 2 CTA/SM
+  ONLY because OG16 removed the 32KB decode band; on OG11-15 the band forbade it.
+  RESIDUAL: @4096 ratio stays ~1.56x (cuBLAS scales better at 4096; the larger problem is
+  improved but not parity-crossed) — the last 4096-gap lever is the 256-elt-tile register-realloc
+  that ptxas cannot grant (MODE 5 / W12 closed-neg). At S=2048 the wall is CLOSED 🟢.
+PARITY (≤1.3x): YES @S=2048 (1.24x). % of OG16->cuBLAS gap closed @2048: OG16 was 1.37x; parity
+  1.30x reached and passed to 1.24x -> the entire residual to parity is closed, ~119% (overshoot).
