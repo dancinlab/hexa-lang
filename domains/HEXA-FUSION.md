@@ -116,7 +116,7 @@
   → cudaErrorInvalidValue; 2-stage = 33024 B fits. Deeper static ring impossible; dynamic smem wouldn't
   change the bandwidth conclusion.) Lever (b) wgmma TF32 NOT applied — OG16 atom still at swizzle-parity
   frontier, breaks byte-eq, K=3/BK=16 doesn't map to m64n64k8 K-major TMA tile. HONEST: path E's 6.57× cure
-  is UNCHANGED / NOT regressed; this prunes the cp.async lever from the gap-closing search. PR #__PR__.
+  is UNCHANGED / NOT regressed; this prunes the cp.async lever from the gap-closing search. PR #2871.
   verdict: .verdicts/hexa-fusion/F-FUSION-MOE-CONV-PROD-PERF.txt
 - [ ] **OG-FUSE-RIGHTSIZE — right-sized-GPU per-regime validation** — validate the cure on a right-sized
   GPU (RTX 5070 / L40S) per regime to dodge big-GPU contention + the access-unresolved blocker; the
