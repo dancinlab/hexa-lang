@@ -214,3 +214,98 @@ Hopper — corroborating that WS is the dominant lever but not adding a new prin
 - Task-Based Tensor Computations on Modern GPUs — arXiv:2504.07004 (secondary; task scheduling on Hopper): https://arxiv.org/abs/2504.07004
 
 ---
+
+## Q4 — cooperative-kernel grid-sync reductions: occupancy + numeric reproducibility
+
+### Synthesis
+
+**The mechanism.** A grid-wide barrier inside a persistent kernel uses Cooperative
+Groups `cg::this_grid().sync()` (a `grid_group`), which **requires the kernel be launched
+with `cudaLaunchCooperativeKernel`** (NVIDIA CUDA Programming Guide). NVIDIA explicitly
+lists "a global reduction to a single value" and "looping over rows of a large matrix
+sequentially using the entire grid" as the canonical applications — i.e. exactly our
+fuse-two-GroupNorm-full-y-reductions case.
+
+**The occupancy / one-wave constraint (the hard limit).** A cooperative launch's grid
+"must be no larger than the maximum number of active blocks on the device … exceeding
+this results in `CUDA_ERROR_COOPERATIVE_LAUNCH_TOO_LARGE`" (NVIDIA driver API /
+Cooperative Groups docs). Grid sync only works if **every block is co-resident in one
+wave** — a grid barrier cannot make a block that hasn't been scheduled yet participate.
+**Consequence for our megakernel:** the persistent whole-step kernel must size its grid
+to `numSMs × maxActiveBlocksPerSM` (via `cudaOccupancyMaxActiveBlocksPerMultiprocessor`),
+not to the problem size. This couples the GroupNorm-fusion grid-sync directly to the
+GEMM mainloop's register/SMEM footprint: every `setmaxnreg` / pipeline-stage choice from
+Q2 that raises per-block resource use *lowers* `maxActiveBlocksPerSM`, shrinking the
+maximum cooperative grid — there is a real tension between the deep-pipeline GEMM levers
+and the one-wave requirement of the fused grid-sync reduction.
+
+**The numeric-reproducibility risk (the bit-exact threat).** Our own-GEMM is bit-exact;
+a grid-wide GroupNorm reduction can *break* that. Floating-point addition is
+non-associative, so a parallel/grid-wide combine that uses **`atomicAdd` of partial sums
+accumulates in nondeterministic order** and is therefore **not reproducible run-to-run**
+(arXiv:2408.05148; the "SPA / simple-pass-with-atomicAdd" pattern is explicitly called
+out as nondeterministic). The paper notes the sensitivity of DL pipelines to this can be
+"extreme." The deterministic fix is a **fixed-order reduction**: a canonical binary-tree
+combine via warp/shared-memory intrinsics with a reduction order identical across runs
+(and *no* float atomics), so the rounding path is reproducible. **Implication for our
+cooperative GroupNorm:** to keep the megakernel bit-exact against the sequential
+two-kernel baseline, the grid-wide combine must be a **deterministic fixed-order tree
+across blocks** (e.g. write per-block partials to a scratch array, `grid.sync()`, then one
+designated block reduces them in a fixed index order) — **never `atomicAdd`**. A naive
+atomic grid-reduce would reproduce, at the GroupNorm boundary, exactly the kind of
+non-bit-exact failure our W9 naive-swizzle hit (rel-RMS ≠ 0).
+
+### Sources
+- NVIDIA CUDA Programming Guide — "Cooperative Groups" (`this_grid()`, `grid_group.sync()`, requires `cudaLaunchCooperativeKernel`, global-reduction-to-single-value use case): https://docs.nvidia.com/cuda/cuda-programming-guide/04-special-topics/cooperative-groups.html
+- NVIDIA Technical Blog — "Cooperative Groups: Flexible CUDA Thread Programming" (grid-group barrier, global reduction example): https://developer.nvidia.com/blog/cooperative-groups/
+- NVIDIA CUDA Driver API docs — cooperative launch occupancy limit (grid ≤ max active blocks; `CUDA_ERROR_COOPERATIVE_LAUNCH_TOO_LARGE`; `cudaOccupancyMaxActiveBlocksPerMultiprocessor`): https://docs.nvidia.com/cuda/cuda-c-programming-guide/ (Cooperative Groups / occupancy sections)
+- "Impacts of floating-point non-associativity on reproducibility for HPC and deep learning applications" — arXiv:2408.05148 (atomicAdd reductions nondeterministic; fixed-order tree reduction for reproducibility; extreme DL sensitivity): https://arxiv.org/abs/2408.05148
+- "Numerical reproducibility for the parallel reduction on multi- and many-core architectures" — Iakymchuk et al., ScienceDirect (secondary; reduction-order determinism): https://www.sciencedirect.com/science/article/abs/pii/S0167819115001155
+
+---
+
+## Implications for W10 / parity / megakernel
+
+**(A) W10 swizzle — does the literature confirm `g_phys = g XOR ((r+1)&7)`?**
+**YES, the *form* is confirmed; the `+1` is explained, not refuted.** The canonical CuTe
+`Swizzle<3,4,3>` (primary: `cute/swizzle.hpp`) is exactly "3 row bits XOR'd into the
+16B-column-block field, mod 8," and two secondary blogs reduce 128B mode to
+`col ^= (row + offset) mod 8`. Our `(r+1)` is the `offset`/wgmma **matrix-base-offset**
+phase (a constant additive shift inside the `& 7`), a documented descriptor field, not an
+anomaly. The remaining W10 task — composing the XOR with the **non-compact 8×16B
+core-matrix tiling** (TF32 core matrix = 8 rows × 4 elems × 4B = 8×16B) — is *confirmed
+necessary* by Colfax's "for 64/128B swizzle the layouts are not compact … 2 or 4 atoms
+stacked side-by-side in K." Compose as `phys = Swizzle<3,4,3>( core_matrix_tile(logical) )`,
+not `Swizzle(row-major)`; our naive rel-RMS 1.392 is the row-major-vs-tiled signature.
+
+**(B) Top-3 named levers 66.5 → parity** (from the `cudaforfun` ladder + FA3 + PyTorch
+ping-pong; relative jumps transfer to TF32 even though absolute peaks differ):
+1. **Larger output tiles** (e.g. 128×128 → 128×256) — biggest single jump in the worklog
+   (+34% then enabling +27%); more accumulator reuse per TMA load.
+2. **Warp specialization** (1 producer + 2 consumer warpgroups, `setmaxnreg` 40/232
+   asymmetry) — the 35%→75%-of-peak lever in FA3; producer does only TMA, consumers only
+   WGMMA, fully overlapped via mbarrier (+18% in the ladder, larger in FA3 regime).
+3. **Ping-pong epilogue overlap + TMA multicast** — two consumers alternate MMA/epilogue
+   so tensor cores never idle (+27% ladder), plus cluster TMA multicast (+4%). W9's
+   swizzle is the *precondition* (table-stakes) for these to not stall on bank conflicts.
+
+The literature's verdict: the 6.44× is **engineering of the async warp-specialized
+pipeline**, not a missing algorithm — ThunderKittens reaches cuBLAS-parity from a small
+fixed abstraction set; FA3 got 35%→75% purely from async+warp-spec+overlap.
+
+**(C) Cooperative-GroupNorm numeric finding.** The grid-sync fusion has **two coupled
+risks**: (1) the **one-wave occupancy cap** — cooperative grid ≤ `numSMs ×
+maxActiveBlocksPerSM`, which *fights* the deep-pipeline GEMM levers in (B) (more
+registers/stages → fewer resident blocks → smaller legal grid); size the grid via
+`cudaOccupancyMaxActiveBlocksPerMultiprocessor`. (2) **bit-exactness** — a grid-wide
+combine via `atomicAdd` is **nondeterministic** (FP non-associativity, arXiv:2408.05148)
+and *will* break our bit-exact property at the GroupNorm boundary. Mandate a
+**deterministic fixed-order cross-block tree reduction** (per-block partials → scratch →
+`grid.sync()` → fixed-index final combine, no float atomics) to preserve byte-equality
+against the sequential two-kernel baseline.
+
+---
+
+*Compiled as a literature scan (research, not a measured verdict). Primary sources
+(PTX ISA / CuTe source / NVIDIA docs) preferred over blogs where they overlap; secondary
+sources are labelled. No performance number in this note is our own measurement.*
