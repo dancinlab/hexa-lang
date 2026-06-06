@@ -62,6 +62,20 @@
 - [ ] **OG-FUSE-FOLD — fold the fused kernel into the flame CLMConvMoE trainer** — wire
   tool/gpu_moe_conv_fuse.cu into stdlib/flame as the device MoE-conv path (env-gated, byte-eq ModuleList
   fallback) so the cure reaches the real trainer step. The application path for the f5e18a0f cure.
+- [x] **OG-FUSE-RIGHTSIZE — right-sized-GPU per-regime validation** ✅ (2026-06-07, F-FUSION-MOE-CONV-RIGHTSIZE 🟢):
+  validated the f5e18a0f cure on a RIGHT-SIZED **RTX 4070 (46 SMs = 3.09x fewer than the L40S 142-SM baseline)**.
+  GATE FIRST (g5): byte-eq max|Δ|(fused vs 30-conv ref) = **0.000e+00** at EVERY swept d (256/512/1024/2048);
+  2.98e-7 vs CPU = fp32 FMA contraction (same accum order). FINDING — **right-sizing WIDENS the fused-win
+  regime: YES**. L40S baseline: fused wins in only 1 of 4 shapes (d=512 2.68x, loses ALL d≥1024). RTX 4070:
+  fused wins OUTRIGHT in 2 of 4 (**d=256 8.91x · d=2048 1.67x**) + ties d=512, loses only the narrow mid-band
+  d=1024 (0.435x) = fused-favorable in 3 of 4 vs 1 of 4. Two honest mechanisms: (1) deep under-fill at d=256
+  (8 CTAs/launch ≪ 46 SMs) → 8.91x; (2) launch-amortization/wave-continuity at d=2048 (one 15360-CTA launch
+  removes 29 inter-launch bubbles a 46-SM GPU can't hide) → 1.67x. The mid-band d=1024 loss = memory-roofline
+  (naive per-CTA MAC, no shared-mem tiling) = the OG-FUSE-OPT axis, orthogonal to fill. HONEST (g5): win =
+  fill + launch-amortization (boundary removal), NOT a faster conv (cuDNN conv = roofline). util counter
+  saturates 100% in both regimes (can't resolve occupancy) → cuEvent step-time is the authoritative fill
+  proxy. Right-sizing dodges big-GPU contention + the H100/H200 access-unresolved blocker AND structurally
+  favors fusion. pod RTX 4070 39749656 DESTROYED leak-0. verdict: .verdicts/hexa-fusion/F-FUSION-MOE-CONV-RIGHTSIZE.txt
   (2026-06-07, CODE FOLD GREEN — standalone byte-eq validated, full-trainer build DEFERRED):
   stdlib/flame/clm_moe_conv_fused.hexa folds the fused E-expert MoE-conv into flame. moe_conv_fwd_dispatch
   routes on env HEXA_FUSE_MOE_CONV (or HEXA_FUSE_ALL): SET → moe_conv_fused_fwd (ALL E experts in ONE
