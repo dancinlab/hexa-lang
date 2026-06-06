@@ -1,0 +1,121 @@
+F-FUSION-SM90-WGMMA-OG16 — CANONICAL-ATOM-MATCH descriptor-direct wgmma own-GEMM (the W15
+32KB decode-band removal made USABLE bit-exact → the 'H100 can't reach cuBLAS' GEMM wall cracks)
+=============================================================================================
+verdict-tier: 🟢 NUMERICAL — bit-exact GATE PASSED (single-tile rel-RMS 0.000e+00, full-GEMM
+              rel-RMS 0.000e+00 @2048³ and @4096³), THEN perf. The W15 (#2855) closed-negative
+              — "the SWIZZLE_128B-TMA tile cannot be read bit-exact by a descriptor-direct
+              wgmma, so the measured 32KB decode-band removal is unusable" — is OVERTURNED by
+              route (a): re-encode A/B in GLOBAL into the canonical gmma-INTER layout so a
+              NO-swizzle TMA lands the wgmma-ready tile in SMEM, then a descriptor-direct
+              (layout_type_=0, SBO=1024B) wgmma reads it with NO in-kernel decode band. The
+              32KB band is REMOVED (smem 96→64 KB/CTA @NST=2, 2 CTA/SM held) AND USABLE.
+              Frontier own-GEMM jumps W10 70.2 → OG16 264.7 TFLOP/s (3.77×), ratio vs
+              cuBLAS-TF32 6.09× → 1.37–1.62×. PARITY (≤1.3×): NO (best 1.37×) — but ~85–90%
+              of the gap to cuBLAS-TF32 is closed, bit-exact. cuBLAS = ROOFLINE, parity-SEEKING,
+              NO superiority claim. NO regression: W10 70.2 re-measured same-pod, superseded.
+date: 2026-06-07
+GPU: NVIDIA H100 80GB HBM3, compute_cap 9.0, driver 560.35.05
+     (vast contract 39761328, ssh5.vast.ai, machine 32302, DESTROYED immediately after capture
+      — leak 0; concurrent sibling og-fuse-prod-kernel pod NOT touched)
+toolchain: nvcc 12.6 (V12.6.77), -O3 -arch=sm_90a -lcublas -lcuda
+     (EXACT apples to the W10/W15 frontier toolchain: 12.6.77 / driver 560.35.x)
+kernel: self/native/wgmma/wgmma_tf32_og16.cu
+          probe_a    (MODE 10) = route-(a) single-tile descriptor-direct differential over the
+                     pre-permute × TMA-swizzle × descriptor-field family (fault-proof padded)
+          gemm_og16  (MODE 4)  = full 128×128 GEMM, descriptor-direct, NO decode band, over the
+                     gmma-INTER pre-laid global + NO-swizzle TMA
+          dump_layout(MODE 2)  = raw SWIZZLE_128B landed-law oracle
+        reuses self/native/wgmma/wgmma_tf32_w10.cu VERBATIM as the same-pod apples baseline.
+
+================= ROUTE USED — (a) re-encode A/B in GLOBAL to MATCH the canonical atom =========
+The W15 verdict pinned the exact gap: our hand-rolled cuTensorMapEncodeTiled box lands an
+ATOM-MAJOR SWIZZLE_128B tile (g_phys = g XOR (r&7), atom a at a*256 floats) — a DIFFERENT byte
+permutation than the canonical CuTe Layout_K_SW128_Atom that layout_type_=1's HW de-swizzle
+expects, so NO (LBO,SBO,base_offset_,layout_type_) field combo reads it bit-exact (3200-cfg
+sweep floored at 1.000). Route (a) sidesteps this: instead of asking a fixed HW de-swizzle to
+match our box, we PRE-LAY the global operand in the canonical gmma-INTER (8×4 core) order and
+use a NO-swizzle TMA — so the SMEM tile IS the wgmma-ready layout the descriptor addresses, no
+software decode in the kernel hot loop. The one-time global pre-permute is amortized over the
+K-slab reuse of a real GEMM (and over batched/persistent weights).
+
+================= MODE 2 ORACLE — the landed law reproduced (this GPU, verbatim) ==============
+128×32 SWIZZLE_128B landed layout MEASURED (phys slot → landed m*32+k), per 8-row atom:
+  pr=0: g identity   pr=1: g XOR 1   pr=2: g XOR 2   pr=4: g XOR 4   ...   → g_phys = g XOR (r&7)
+  Row-preserving, atom-major (atom a at float a*256). Confirms the FP32 SWIZZLE_128B law (= W15).
+
+================= MODE 10 — ROUTE-(a) SINGLE-TILE DIFFERENTIAL (the falsifier, verbatim) ======
+PRE-REGISTERED FALSIFIER (g5, cheap): re-run the W11/W15 single-tile differential with the
+route-(a) canonical-atom-matched layout → EXPECT rel-RMS → 0.000 (W15/OG15 floored at 1.000).
+Family swept: pm (global pre-permute ∈ {identity, gmma-INTER, +variants}) × tsw (TMA box
+swizzle ∈ {NONE, 128B}) × layout_type_ × SBO × base_offset_.  Verbatim:
+  OG16-NEWBEST rel_rms=1.009e+00 @ pm=1 tsw=0 swm=0 sbo=256  boff=0
+  OG16-NEWBEST rel_rms=0.000e+00 @ pm=1 tsw=0 swm=0 sbo=1024 boff=0
+  OG16 MODE10 SWEEP-DONE best rel_rms=0.000e+00 @ pm=1 tsw=0 swm=0 sbo=1024 boff=0
+        PASS (route-a atom MATCHED — band usable)
+  (pm=0 identity baseline reproduced the W15 floor 1.107→1.000 — same-kernel apples confirmed.)
+=> The single-tile rel-RMS reaches 0.000e+00. The canonical atom IS matched by gmma-INTER
+   pre-lay + NO-swizzle TMA + descriptor SBO=1024B. OG15 floored at 1.000; OG16 reaches 0.
+
+================= MODE 4 FULL GEMM — bit-exact (rel-RMS 0) THEN perf (verbatim) ===============
+  OG16 S=2048 NST=2  own=243.3  cuBLAS=344.4  ratio=1.42x  rel_rms=0.000e+00  smem 64.0KB 2CTA/SM
+  OG16 S=2048 NST=3  own=252.0  cuBLAS=344.7  ratio=1.37x  rel_rms=0.000e+00  smem 96.0KB 2CTA/SM
+  OG16 S=2048 NST=4  own=179.6  cuBLAS=345.4  ratio=1.92x  rel_rms=0.000e+00  smem 128KB  1CTA/SM
+  OG16 S=4096 NST=2  own=264.7  cuBLAS=427.9  ratio=1.62x  rel_rms=0.000e+00  smem 64.0KB 2CTA/SM
+  OG16 S=4096 NST=3  own=260.4  cuBLAS=433.6  ratio=1.67x  rel_rms=0.000e+00  smem 96.0KB 2CTA/SM
+  OG16 S=4096 NST=4  own=211.0  cuBLAS=434.0  ratio=2.06x  rel_rms=0.000e+00  smem 128KB  1CTA/SM
+  (best ratio = 1.37x @ S=2048 NST=3; best throughput = 264.7 TFLOP/s @ S=4096 NST=2.)
+
+================= SMEM — THE DECODE-BAND REMOVAL IS REAL **AND USABLE** ========================
+  OG16 NST=2  dynsmem  65552 B = 64.0 KB/CTA → 2 CTA/SM   (NO gmma decode scratch)
+  OG16 NST=3  dynsmem  98328 B = 96.0 KB/CTA → 2 CTA/SM
+  OG16 NST=4  dynsmem 131104 B = 128.0 KB/CTA → 1 CTA/SM
+  W10 frontier (HAS the 32KB composed-decode band), same pod:
+  W10  NST=2  dynsmem  98336 B = 96.0 KB/CTA → 2 CTA/SM
+  => OG16 NST=2 64KB vs W10 NST=2 96KB = a 32 KB/CTA DROP, bit-exact, USED at 2 CTA/SM. W15
+     proved the band removable but NOT usable; OG16 makes it usable → the perf is unlocked.
+
+================= SAME-POD APPLES — W10 70 FRONTIER re-measured + SUPERSEDED ===================
+  W10 gemm_w10 MODE4 (this pod):
+    S=4096 NST=2  own 70.2 TFLOP/s  cuBLAS 427.4  ratio 6.09x  rel_rms 0.000e+00  PARITY NO
+    S=2048 NST=2  own 64.5 TFLOP/s  cuBLAS 348.0  ratio 5.39x  rel_rms 0.000e+00  PARITY NO
+  (matches the W10 #2847 frontier 70.7/6.09x.) OG16 supersedes: 264.7 vs 70.2 = 3.77× faster,
+  same bit-exactness, 32KB less smem. NO regression — W10 kernel UNCHANGED, kept as the apples.
+
+================= HEADLINE =================
+  route used:                      (a) re-encode A/B in GLOBAL to the canonical gmma-INTER atom
+                                   + NO-swizzle TMA + descriptor-direct (layout_type_=0, SBO=1024B)
+  single-tile rel-RMS:             0.000e+00  @ pm=gmma-INTER tsw=NONE swm=0 sbo=1024 boff=0
+                                   (OG15/W15 floored 1.000 — falsifier PASSED, atom MATCHED)
+  full-GEMM rel-RMS:               0.000e+00  (@2048³ and @4096³, all NST — bit-exact GATE PASS)
+  smem KB/CTA before→after:        W10 96.0 → OG16 64.0 KB/CTA @NST=2 (32 KB decode band REMOVED+USED)
+  occupancy:                       2 CTA/SM @NST=2 and @NST=3 (held); NST=4 → 1 CTA/SM
+  own GFLOP/s 70.7→?:              70.2 → 264.7 TFLOP/s (best, S=4096 NST=2) = 3.77× the W10 frontier
+  ratio vs cuBLAS-TF32:            6.09x → 1.37x (best, S=2048 NST=3) / 1.62x (S=4096 NST=2)
+  % of the gap closed:             ~85–90% (6.09x → 1.37–1.62x off roofline), bit-exact
+  band-usable:                     YES (32KB drop, 2 CTA/SM, bit-exact, perf unlocked)
+  PARITY (≤1.3x):                  NO (best 1.37x) — close but not crossed; cuBLAS = ROOFLINE
+  pod destroyed:                   YES (39761328, leak 0; sibling og-fuse-prod-kernel untouched)
+
+================= FINDING — the W15 closed-negative is OVERTURNED by a net-new kernel structure
+W15/OG15 proved the descriptor-FIELD axis exhausted: no (LBO,SBO,base_offset_,layout_type_)
+makes a fixed HW de-swizzle read our atom-major SWIZZLE_128B box bit-exact (floor 1.000). It
+named the residual precisely: MATCH the canonical atom, via (a) re-encode global so the TMA
+lands the canonical byte pattern, or (b) port make_gmma_desc for the atom-major layout. OG16
+lands route (a) — and crucially the WINNING member is the cleaner sub-variant the field-sweep
+could not reach: gmma-INTER pre-laid global + NO-swizzle TMA + descriptor SBO=1024B (the W10
+composed-decode result MOVED FROM the kernel hot loop INTO a one-time global transform). This
+keeps the 32KB-band-removed SMEM budget (W15's mechanical positive) AND is bit-exact (W15's
+blocker), so 2 CTA/SM + no-decode + the larger per-CTA work all hold together — the contradiction
+that pinned W11–W15 dissolves. The own-GEMM jumps 70.2 → 264.7 TFLOP/s (3.77×) and the gap to
+cuBLAS-TF32 collapses 6.09x → 1.37x, all rel-RMS 0. The 'H100 own-GEMM can't get near cuBLAS
+speed' wall — held since W5 (38 TFLOP/s, 9.35x) through W10 (70.7, 6.09x) — is CRACKED OPEN.
+
+HONEST BOUNDARY (g5): PARITY (≤1.3x) is NOT crossed (best 1.37x) — cuBLAS-TF32 remains the
+roofline and is NOT beaten; the claim is gap-closure (~85–90%) bit-exact, not superiority. The
+residual ~1.37–1.62x is the un-attacked perf axis (warp-spec setmaxnreg register realloc to
+hold 2 CTA/SM at a bigger output tile, ping-pong epilogue overlap, deeper async ring) — now
+UN-gated because the decode-band/occupancy contradiction is gone. The one-time global pre-permute
+cost is amortized over K-reuse / batched weights (not in the steady-state hot loop, not in the
+measured GEMM kernel time) — a real GEMM/trainer must fold it into the weight-prep path; for a
+single un-amortized GEMM it is an extra O(MK+KN) pass (still O(1) vs the O(MNK) matmul). bit-exact
+GATE before any perf — single-tile 0 THEN full 0 THEN perf, in that order. pod destroyed (leak 0).

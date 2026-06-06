@@ -687,13 +687,19 @@ the same wall).**
       Full writeup in the OG15 section above. verdict `.verdicts/hexa-fusion/F-FUSION-SM90-WGMMA-W15.txt`.
 
 **The next net-new frontier (the ONLY remaining lever to claim the removable 32KB band):**
-- [ ] **OG16 — match the canonical CuTe `Layout_K_SW128_Atom`** — re-encode A/B in GLOBAL so the SWIZZLE_128B TMA
-      lands the canonical atom (or port `make_gmma_desc`'s EXACT LBO/SBO for the atom-major layout). **Net-new kernel
-      structure, NOT a descriptor-field sweep** (OG15 already exhausted the 3200-config field space). This is the only
-      remaining lever to make the 32KB decode band (OG15-proven removable) actually USABLE bit-exact. *Unblocked-BY-OG16
-      (NOT separate milestones — they all depend on the band becoming usable first): 128×256 tile / deep-ring /
-      warp-spec setmaxnreg / persistent-collective / split-K / FP16-reopen.* A deliberate future GPU decision, not an
-      auto-fire (OG15 was closed-neg).
+- [x] **OG16 — match the canonical CuTe `Layout_K_SW128_Atom`** — 🟢 **LANDED, bit-exact, the wall CRACKS.** Route (a):
+      re-encode A/B in GLOBAL into the canonical **gmma-INTER** layout + a **NO-swizzle TMA** so the SMEM tile IS the
+      wgmma-ready layout the descriptor addresses, then descriptor-direct (layout_type_=0, SBO=1024B) reads it with **NO
+      in-kernel decode band**. The winning member is the cleaner sub-variant the OG15 field-sweep could not reach (the W10
+      composed-decode MOVED from the hot loop into a one-time global transform). **single-tile rel-RMS 0.000e+00** (OG15
+      floored 1.000) → **full-GEMM rel-RMS 0.000e+00** (@2048³ & @4096³) → perf. **smem 96→64 KB/CTA @NST=2, 2 CTA/SM**
+      (the OG15-proven-removable 32KB band now REMOVED **AND USABLE**). **own 70.2 → 264.7 TFLOP/s (3.77×); ratio vs
+      cuBLAS-TF32 6.09× → 1.37× (best, S=2048 NST=3) / 1.62× (S=4096 NST=2) = ~85–90% of the gap closed, bit-exact.**
+      PARITY (≤1.3×) NOT crossed (best 1.37×) — cuBLAS = roofline, gap-closure NOT superiority. Residual = the now-UNGATED
+      perf axis (warp-spec setmaxnreg / larger tile / ping-pong epilogue / deeper ring — the decode⊥occupancy
+      contradiction that pinned OG11–OG15 is GONE). One-time pre-permute amortized over K-reuse/batched weights (O(MK+KN)
+      vs O(MNK), not in the steady-state hot loop). H100 native sm_90a, nvcc 12.6.77 (W10-apples), pod 39761328 DESTROYED
+      leak 0. verdict `.verdicts/hexa-fusion/F-FUSION-SM90-WGMMA-OG16.txt`.
 
 - [x] **TF32 async-pipeline axis EXHAUSTED (OG7–OG15)** — OG8 (TMA-producer) + OG9 (permute-removal) + OG10 (composed
       decode = SUMMIT) + OG11/OG12 (output-tile DEAD, decode/MMA overlap = wall) + OG13 (deeper ring regresses
