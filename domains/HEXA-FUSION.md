@@ -29,6 +29,19 @@
   removal where under-fill exists, NOT raw-conv superiority (cuDNN conv = roofline). The d=6208/H200 production
   shape lives in the under-fill regime on a big-SM GPU but that crossover is not re-measured here (H100/H200
   access unresolved, out of scope). verdict: .verdicts/hexa-fusion/F-FUSION-MOE-CONV-FUSE.txt
+- [ ] **OG-FUSE-OPT — tiled/shared-mem fused MoE-conv kernel** — replace the naive per-channel MAC inner
+  loop with a shared-mem-tiled conv so the fused kernel ALSO wins in the SATURATED regime (d>=1024), not
+  only under-fill. Gate: byte-eq max|D|=0 vs the 30-conv reference; target: beat ModuleList-30 step-time
+  at d>=1024 too. GPU run access-gated (deliberate, no auto-fire).
+- [ ] **OG-FUSE-XOVER — d=6208/H200 production crossover** — measure the actual under-fill->saturated
+  boundary at the PRODUCTION shape (d=6208, E=30, H200 132 SMs) to confirm the cure applies to the real
+  7B CLMConvMoE step. Blocked on H100/H200 access (unresolved); deliberate, no auto-fire.
+- [ ] **OG-FUSE-FOLD — fold the fused kernel into the flame CLMConvMoE trainer** — wire
+  tool/gpu_moe_conv_fuse.cu into stdlib/flame as the device MoE-conv path (env-gated, byte-eq ModuleList
+  fallback) so the cure reaches the real trainer step. The application path for the f5e18a0f cure.
+- [ ] **OG-FUSE-RIGHTSIZE — right-sized-GPU per-regime validation** — validate the cure on a right-sized
+  GPU (RTX 5070 / L40S) per regime to dodge big-GPU contention + the access-unresolved blocker; the
+  byte-eq D1536-saturates-5070-to-98% fact already shows right-sizing is the practical lever.
 
 ## 전제 — 왜 fusion 인가 (host-feed 축이 닫힌 뒤)
 
