@@ -1,0 +1,129 @@
+F-DDP-M5D-THROUGHPUT — HEXA-DDP DDP-M5d (throughput leg)
+Throughput scaling of data-parallel DDP: per-GPU batch FIXED, global batch
+scales with N. The regime DDP is DESIGNED for (vs M5b/M5c per-step latency).
+
+STATUS: GREEN — on a REAL NVLink 4-GPU node, DDP throughput (samples/sec)
+scales UP with N to NEAR-IDEAL (4-GPU 3.918x = 97.9% efficiency at the largest
+model), with the N=4 step byte-eq to a 1-process reference (max|delta|=0 FP64).
+This is the inverse of M5b/M5c per-step latency (which never beat 1.0x).
+
+NODE: vast.ai instance 39860052 — 4x NVIDIA A100-SXM4-40GB (one node).
+  Image nvidia/cuda:12.4.1-devel-ubuntu22.04, nvcc sm_80. label hexa-ddp-m5d,
+  DESTROYED (leak-0, project-tag-checked: label == hexa-ddp-m5d before destroy).
+
+──────────────────────────────────────────────────────────────────────────
+TOPO (nvidia-smi topo -m, verbatim) — NVLink Y/N: YES (NV12 ALL pairs):
+        GPU0    GPU1    GPU2    GPU3    NIC0    CPU Affinity    NUMA Affinity   GPU NUMA ID
+  GPU0   X      NV12    NV12    NV12    SYS     56-63,120-127   7               N/A
+  GPU1  NV12     X      NV12    NV12    SYS     56-63,120-127   7               N/A
+  GPU2  NV12    NV12     X      NV12    SYS     40-47,104-111   5               N/A
+  GPU3  NV12    NV12    NV12     X      SYS     40-47,104-111   5               N/A
+  NIC0  SYS     SYS     SYS     SYS      X
+  NV#  = Connection traversing a bonded set of # NVLinks.
+  -> EVERY GPU pair is NV12 (a bonded set of 12 NVLinks) — full direct-P2P
+     NVLink mesh. (The M5c gotcha — vast SXM4 != guaranteed NVLink — was
+     checked: this node IS NVLink, confirmed by both topo AND canAccessPeer.)
+
+canAccessPeer (all 12 directed pairs, verbatim) — the authoritative P2P probe:
+  canAccessPeer(0->1)=1  (0->2)=1  (0->3)=1
+  canAccessPeer(1->0)=1  (1->2)=1  (1->3)=1
+  canAccessPeer(2->0)=1  (2->1)=1  (2->3)=1
+  canAccessPeer(3->0)=1  (3->1)=1  (3->2)=1
+  -> direct P2P AVAILABLE on ALL pairs. cudaDeviceCanAccessPeer=1 everywhere
+     (the M5c "SXM4 != NVLink active" gotcha ruled out — this node has it).
+
+TRANSPORT: cudaMemcpyPeer P2P (direct NVLink, P2P-any=1, all pairs).
+
+──────────────────────────────────────────────────────────────────────────
+REGIME (the M5d change vs M5b/M5c):
+  per-GPU batch B_perGPU = 64 FIXED.  B_global(N) = B_perGPU * N.
+    N=1 -> B_global=64 ;  N=2 -> 128 ;  N=4 -> 256.
+  Each GPU always forwards/backwards 64 samples (constant per-rank work), so
+  the per-step wall stays ~flat while N processes N x more samples per step.
+  Metric = THROUGHPUT (samples/sec = B_global * 1000 / wall_ms), NOT per-step
+  latency. Model = MLP 64->H->H->64 (ReLU,ReLU,linear), FP64. Median of 30
+  reps (5 warmup discarded), per-step wall = fwd+bwd+all-reduce+sync.
+
+GATE (2) THROUGHPUT SCALING — samples/sec @ 1/2/4-GPU (verbatim from harness):
+
+  H=256  (NPARAM=98880):
+    N=1  B_global= 64  wall= 2.5920 ms  throughput=  24691.43 samples/sec
+    N=2  B_global=128  wall= 2.7238 ms  throughput=  46993.21 samples/sec
+    N=4  B_global=256  wall= 3.1026 ms  throughput=  82512.57 samples/sec
+    scaling: 2-GPU 1.903x (eff 95.2%)   4-GPU 3.342x (eff 83.5%)
+
+  H=1024 (NPARAM=1181760):
+    N=1  B_global= 64  wall=13.5021 ms  throughput=   4740.00 samples/sec
+    N=2  B_global=128  wall=13.8678 ms  throughput=   9230.01 samples/sec
+    N=4  B_global=256  wall=14.4994 ms  throughput=  17655.92 samples/sec
+    scaling: 2-GPU 1.947x (eff 97.4%)   4-GPU 3.725x (eff 93.1%)
+
+  H=2048 (NPARAM=4460608):
+    N=1  B_global= 64  wall=47.3976 ms  throughput=   1350.28 samples/sec
+    N=2  B_global=128  wall=47.8611 ms  throughput=   2674.41 samples/sec
+    N=4  B_global=256  wall=48.9333 ms  throughput=   5231.61 samples/sec
+    scaling: 2-GPU 1.981x (eff 99.0%)   4-GPU 3.874x (eff 96.9%)
+
+  H=3072 (NPARAM=9836608):
+    N=1  B_global= 64  wall=103.5881 ms  throughput=    617.83 samples/sec
+    N=2  B_global=128  wall=104.1526 ms  throughput=   1228.97 samples/sec
+    N=4  B_global=256  wall=105.7626 ms  throughput=   2420.52 samples/sec
+    scaling: 2-GPU 1.989x (eff 99.5%)   4-GPU 3.918x (eff 97.9%)
+
+  scaling efficiency eff(N) = throughput(N) / (N * throughput(1)):
+    H      2-GPU eff    4-GPU eff
+    256      95.2%        83.5%
+    1024     97.4%        93.1%
+    2048     99.0%        96.9%
+    3072     99.5%        97.9%
+  -> THROUGHPUT SCALES UP WITH N at every size, and efficiency rises
+     MONOTONICALLY toward the ideal N x as the model grows (the comm tax — the
+     same NPARAM-length grad all-reduce — is amortized over more compute/step).
+     At H=3072: 4-GPU is 3.918x = 97.9% of perfect 4x scaling.
+
+GATE (1) CORRECTNESS — N=4 byte-eq (verbatim from harness):
+  N=4 BYTE-EQ GATE (H=256, B_global=256, per-GPU=64):
+    loss_ref (mean over B_global=256) = 4733.5760213274643
+    grad  g_ddp vs g_ref  max|delta| = 0  BYTE-EQ
+    rank-agreement (Wr==W0) max|delta| = 0  ALL RANKS IDENTICAL
+    WEIGHTS W_ddp vs W_ref  max|delta| = 0  BYTE-EQ PASS
+  -> The 4-GPU DDP step (grad SUM ring all-reduce, real NVLink cudaMemcpyPeer,
+     then 1/B_global scale + identical SGD) is byte-identical to a 1-process
+     reference that consumes the SAME B_global=256 samples and reduces the
+     per-shard partials in the ring's per-chunk RIGHT-NESTED order (M5c finding,
+     transport-independent). max|delta|=0 on grad, weights, AND rank-agreement
+     — a true byte-eq, not a tolerance. byte-eq Y/N: YES.
+
+──────────────────────────────────────────────────────────────────────────
+EXPLICIT CONTRAST vs M5b/M5c (per-step latency) — why throughput is the metric:
+  · M5b (#2897) / M5c (#2901) FIXED the global batch B=64 and SPLIT it across N
+    ranks (16 rows/rank at N=4). They measured PER-STEP wall and found it NEVER
+    beats 1-GPU: 2-GPU 0.99x asymptote, 4-GPU 0.974x — EVEN on real NVLink.
+    Root cause (M5c): splitting a fixed batch only shards the BATCH dimension,
+    but an H->H step is the H^2 WEIGHT-BOUND GEMM, so 64->16 rows barely cuts
+    per-rank FLOPs. small-batch data-parallel per-step wall is STRUCTURALLY
+    capped at 1.0x (any transport). M5c explicitly named the cure: the
+    BATCH-BOUND regime — fix per-GPU batch, scale the global batch with N.
+  · M5d MEASURES that exact regime. Same model, same ring, same byte-eq gate;
+    the ONLY change is per-GPU batch FIXED + global batch ∝ N, metric = samples/sec.
+    Result: throughput scales 1 -> ~2 -> ~4 (4-GPU 3.918x = 97.9% at H=3072),
+    monotonically approaching ideal as the model grows. This is the OPPOSITE of
+    the per-step <1x: in DDP's design regime (throughput), multi-GPU FINALLY WINS.
+
+HONEST (g5/g83):
+  · eff < 100% as expected (comm tax — the grad all-reduce is a real ring), but
+    UNLIKE per-step latency, throughput scales UP with N, and the gap to the
+    ideal N x SHRINKS with model size (97.9% at H=3072). Not a surprise-failure
+    — the predicted DDP-design-regime behavior, now measured on real NVLink.
+  · This is single-step, wide 3-layer MLP, FP64, on a host-staged-free NVLink
+    node. The ring carries an NPARAM-length grad vector regardless of model
+    architecture, so the throughput algebra (constant per-rank compute, N x
+    samples/step) holds at any scale; the efficiency is set by the
+    compute/comm ratio, which the H sweep shows improving with model size.
+
+VERDICT: GREEN — DDP throughput scaling on real NVLink 4-GPU is near-ideal
+(4-GPU 3.918x / 97.9% eff at H=3072), with N=4 byte-eq max|delta|=0. Throughput
+IS the metric where DDP finally beats 1-GPU — the regime it is designed for —
+in direct contrast to the per-step latency M5b/M5c proved is structurally <1x.
+
+Source: stdlib/ddp/m5d_throughput/ddp_train_m5d.cu + run_m5d.sh.
