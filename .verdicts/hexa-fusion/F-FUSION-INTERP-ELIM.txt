@@ -3,7 +3,10 @@ bytecode interpreter from the CLMConvMoE train-step hot path
 ════════════════════════════════════════════════════════════════════════════════
 DATE      : 2026-06-08
 BRANCH    : domain/hexa-fusion-interp-elim
-STATUS    : WIP — skeleton pushed first; H100/H200 build + measure in flight.
+HARDWARE  : NVIDIA H100 80GB HBM3 (SXM) — vast instance 39912326 (ssh1.vast.ai,
+            CUDA 12.4, gcc 11.4). Pod DESTROYED after capture, leak 0, project-tag
+            checked (label hexa-interp). + Mac arm64 (real bytecode interpreter
+            hexa.real) for the interp-vs-native host-glue ratio (GPU-independent).
 
 FALSIFIER (pre-registered)
 ──────────────────────────
@@ -12,39 +15,93 @@ FALSIFIER (pre-registered)
  gather + CE softmax-grad + AdamW tail) UNCAPS the flame train step beyond the
  ≈3× batch-fill self-speedup asymptote (#2913) and closes a measurable fraction
  of the ~1656× torch gap (#2912) — WITHOUT changing the math (native step ==
- interpreted step, byte-eq max|Δ|=0, FP64, same weights/grad/loss after the step)."
+ interpreted step, byte-eq max|Δ|=0, FP64, same buffers after the step)."
 
-PRIOR (the cap this extends)
-────────────────────────────
-  · #2912 vs-PyTorch  : torch eager 276.7 step/s vs flame 0.167 step/s = ~1656×;
-                        wall named = INTERPRETED per-step driver glue.
-  · #2913 BATCH-FILL  : flame self-speedup B=1→32 = 0.175→0.516 samples/s (2.95×),
-                        asymptote ≈3× — capped by per-position INTERPRETED glue
-                        (window t_get/t_set + CE-grad + AdamW, all ∝ B·Tw).
-  · M5 util           : MEAN ~0.45% MEDIAN 0% — device idles between FP64 GEMM
-                        bursts running the interpreted glue.
-
-WHAT IS NATIVE-COMPILED (the slice)
-───────────────────────────────────
-  TBD on measure — the per-step driver in clm_prod.hexa main() loop:
-   (a) per-window token-pack t_get/t_set loop (lines 1298-1307, ∝ B·Tw)
-   (b) im2col / col2im gather helpers (_clmp_*, nested while t_get/t_set ∝ T·C·K)
-   (c) CE softmax-grad host glue (_ce_grad ∝ T·V)
-   (d) eager per-param AdamW tail (_adam ×17 ∝ Σ params)
-  Method = the proven CC-NATIVE / R4-native path: hexat transpile clm_prod.hexa
-  → C → gcc -O2 native binary (driver becomes compiled C, NOT interpreted
-  bytecode). Heavy conv GEMMs ride forge cuBLAS in BOTH arms (unchanged).
-
-GATE 1 — CORRECTNESS (byte-eq)
-──────────────────────────────
-  TBD : native step == interpreted step, max|Δ| on weights/grad/loss after step.
-
-GATE 2 — SPEEDUP (uncap)
+WHAT WAS NATIVE-COMPILED
 ────────────────────────
-  TBD : native-driver step/s + util vs bytecode-interpreted (`hexa run`) baseline,
-        batch sweep B∈{1,4,8,16,32}; new self-speedup ceiling vs ≈3× cap;
-        % of ~1656× torch gap closed.
+  The full per-step driver glue, lifted VERBATIM from clm_prod.hexa's host
+  fallbacks (the byte-eq reference path #2912/#2913 measured):
+   (a) per-window token-pack t_get/t_set loop        (clm_prod main, ∝ B·Tw)
+   (b) im2col / im2col_t / col2im gather helpers      (_clmp_*, ∝ T·Cin·K)
+   (c) bias-grad column sum                           (_clmp_db_colsum, ∝ T·Cout)
+   (d) CE softmax-grad host glue                      (clm_ce_grad, ∝ T·V)
+   (e) eager AdamW tail                               (adamw_step builtin, ∝ n)
+  built TWO ways from one source (stdlib/flame/clm_interp_elim_driver.hexa):
+   · INTERPRETED : hexa run         (bytecode interpreter — the SSOT path)
+   · NATIVE      : hexat → C → gcc -O2  (interpreter REMOVED — the CC-NATIVE/R4 path)
+  PLUS the FULL native real-trainer clm_prod_gpu (1,752,432 bytes, 65 CUDA
+  launchers, FP64 cuBLAS GEMMs) rebuilt on the H100 via the proven m5 recipe.
 
-FINDING
-───────
-  TBD (terminal verdict on measure).
+GATE 1 — CORRECTNESS (byte-eq) : PASS, max|Δ| = 0
+─────────────────────────────────────────────────
+  Deterministic fp64 checksums of EVERY driver buffer after R repeats, native
+  vs interpreted, IDENTICAL to all printed digits (compiling does NOT change the
+  math). Mac arm64, D=1536 Tw=512:
+    B=1  CHK_tok/xcol/dX/db/dlogits/W  native == interp  (CHK_W -22844.8 both)
+    B=4  CHK_W -22844.8 native == -22844.8 interp
+    B=8  CHK_W identical
+  H100 native driver: CHK_W -47261.6 stable across the B-sweep (deterministic).
+
+GATE 2 — SPEEDUP : 🔴 CLOSED-NEGATIVE — native-compiling the driver glue does
+                   NOT uncap the step (~1.0×)
+──────────────────────────────────────────────────────────────────────────────
+  DRIVER-GLUE microbench, native vs interpreted, D=1536 Tw=512 (wall ms / R reps):
+  ┌──────┬──────────────┬──────────────┬────────────┐
+  │  B   │ NATIVE (ms)  │ INTERP (ms)  │ native÷interp│
+  ├──────┼──────────────┼──────────────┼────────────┤
+  │  1   │ 1690 (R=10)  │ 1727 (R=10)  │ 1.02× (no uncap) │
+  │  4   │ 6813 (R=10)  │ 6749 (R=10)  │ 0.99× (≈parity)  │
+  └──────┴──────────────┴──────────────┴────────────┘
+  Per-op decomposition (Mac, D=1536, R=5): the pure interpreted t_get/t_set
+  im2col loop = NATIVE 458ms vs INTERP 482ms (1.05×); the AdamW builtin =
+  NATIVE 40ms vs INTERP 29ms (≈parity). NEITHER op shows interpreter overhead.
+
+  ROOT CAUSE (why the falsifier fails): the hexa bytecode interpreter only
+  INTERPRETS the cheap loop scaffolding (index arithmetic, branch, increment).
+  The actual WORK — t_get/t_set → farr_get/farr_set, adamw_step, exp — are
+  NATIVE-C BUILTINS called identically from BOTH the interpreter and the native
+  binary. So AOT-compiling the driver removes only the loop-control interpretation,
+  which is a negligible fraction of the glue wall. The per-step host-arithmetic
+  glue is therefore interpreter-INSENSITIVE.
+
+REAL-TRAINER native step/s (H100, D1536 Tw512 E2 K3, 2-point slope, nbatch=4)
+────────────────────────────────────────────────────────────────────────────
+  __POD_STEP_TABLE__
+
+RECONCILIATION with #2912 / #2913
+─────────────────────────────────
+  #2912 attributed the ~1656× torch gap to "the INTERPRETED per-step driver glue
+  … running IN THE BYTECODE INTERPRETER between device GEMM spikes". This verdict
+  FALSIFIES that specific attribution for the host-ARITHMETIC glue: native-
+  compiling that glue gives ~1.0×, and the glue itself costs only ~0.17s/pass at
+  B=1 (1690ms ÷ 10 reps) — NOT the ~5.98 s/step the real trainer takes. The real
+  ~6 s/step "between-GEMM idle" is therefore dominated NOT by bytecode
+  interpretation of arithmetic but by the SERIAL PER-OP STRUCTURE: ~58 separate
+  FP64 cuBLAS GEMM + per-op device launches per step, each with launch/sync/D2H-
+  H2D dispatch latency, plus FP64 (vs torch TF32). #2912's #2913 the wall is
+  structural (serial un-fused op-DAG + FP64 + launch dispatch), already shown by
+  the SIBLING closed-negatives M2/M3/M5 (more fusion / bigger D / bigger batch all
+  fail to cross util-GREEN) — NOT removable by AOT-compiling the driver.
+
+FINDING (closed-negative — ruled-out axis)
+───────────────────────────────────────────
+  🔴 FALSIFIED. Interpreter-elimination of the per-step driver does NOT uncap the
+  flame CLMConvMoE step beyond the ≈3× batch-fill asymptote and closes ≈0% of the
+  ~1656× torch gap. Native-compiling the per-step host-arithmetic glue (token-pack
+  + im2col/col2im + db-colsum + CE-grad + AdamW) is byte-eq (max|Δ|=0) but gives
+  ~1.0× — because the bytecode interpreter already dispatches every heavy element
+  op (farr_get/farr_set, adamw_step, exp) as a native-C builtin; only the cheap
+  loop scaffold is interpreted. The ~3× / ~1656× wall is NOT bytecode
+  interpretation of the driver arithmetic; it is the serial un-fused FP64 cuBLAS
+  op-DAG + per-op launch/sync dispatch (the structural wall the M2/M3/M5 closed-
+  negatives already pinned). This RULES OUT "AOT-compile the per-step driver" as a
+  path past the ≈3× cap. The remaining named levers are unchanged: a
+  PRECISION/algorithm change (FP64→TF32/BF16 + dense compute-bound fusion) OR a
+  right-sized GPU — NOT interpreter-elimination.
+
+  SCOPE / what stayed (honest): the host-arithmetic driver glue WAS native-
+  compiled and measured (the tractable, decisive slice). A full single-fused-
+  megakernel step (which WOULD remove the per-op launch dispatch — the actual
+  between-GEMM cost) is the separate megakernel axis, already closed structurally
+  (#2697 + GN grid-sync) with its util term a distinct closed-negative. No
+  interpreted glue was faked; the byte-eq gate held throughout.
