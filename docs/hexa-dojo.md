@@ -674,8 +674,10 @@ byte-eq (1-GPU == 2-GPU weights/loss/grad, max|d|=0 on a real flame step); 4-GPU
 ring all-reduce — transport swapped in stages, schedule FIXED at 2(N-1) steps
  [ M1 sim ] ─ in-process N-rank array-copy ─ byte-eq vs serial sum (NO hardware) 🟢
  [ M3 real ] ─ cudaMemcpyPeer over 2 GPUs ── same byte-eq gate 🟢
- [ M4 ]     ─ real 2-GPU flame step ── 1-GPU==2-GPU weights/loss/grad byte-eq max|d|=0 (#2894) 🟢
- [ M5/M6 ]  ─ 4-GPU scale · multinode ── M5 collective in flight · M6 socket/IB TODO
+ [ M4 ]   ─ 2-GPU flame step ─── 1==2-GPU weights/loss/grad byte-eq max|d|=0 (#2894) 🟢
+ [ M5 ]   ─ 4-GPU ring ────── byte-eq N=4 + collective scaling 2(N-1)=6 steps (#2892) 🟢
+ [ M5b ]  ─ 4-GPU train ───── 1==4-GPU byte-eq + speedup table (#2897) 🟢
+ [ M6 ]   ─ MULTINODE ─────── ring over WAN TCP byte-eq, 2 providers (#2899 vast PL<->UA, #2896 runpod) 🟢
 ```
 
 - **gate FIRST (g5)**: ring all-reduce result == serial elementwise sum, byte-eq
@@ -693,6 +695,26 @@ ring all-reduce — transport swapped in stages, schedule FIXED at 2(N-1) steps
 - **topology probe**: `tool/ddp_topo_probe.sh` runs `nvidia-smi topo -m` on-pod and
   classifies each pair NVLink(NV#) / PCIe(PIX/PXB/PHB) / SYS(cross-NUMA) → tells
   M3 which transport the pair actually supports.
+- **N≥3 reduce-scatter is a right-nested tree (FP-assoc, M5b finding)**: the ring sums
+  each chunk in a chunk-dependent nesting (e.g. chunk0 = `(3+(2+(1+0)))`), NOT a flat
+  left fold. For a true max|Δ|=0 vs a 1-GPU reference, the reference MUST replay the
+  ring's exact nesting (a naive left fold leaves a pure-associativity residual ~1e-14,
+  not a transport bug). N=2 has one add so is trivially order-invariant; the tree only bites at N≥3.
+- **multinode (M6) = swap the per-step transport to host TCP, schedule UNCHANGED**: the
+  same 2(N-1) chunk-partition ring runs cross-node by replacing `cudaMemcpyPeer` with a
+  TCP `sendall`/`recvall` (parity-ordered even-send/odd-recv = deadlock-free, no threads).
+  Proven byte-exact over the PUBLIC INTERNET between two countries (vast PL↔UA) AND across
+  2 runpod nodes — byte-eq is latency-INDEPENDENT (TCP reliable+ordered); only WAN
+  throughput (M6b, untested) is the open perf question. M6 needs no GPU (host FP64 ring, ~$0.06/hr).
+- **multinode networking gotchas**: runpod custom TCP ports gave no public proxy map →
+  used an SSH dual-port-forward between public endpoints (still real kernel TCP); `connect()`
+  to a tunnel port succeeds even if the far listener is down → add an interleaved SYN/ACK
+  handshake that proves the far LISTENER is up (startup-order-independent); `pkill -f` over
+  SSH self-matches its own command line → use `pkill -x`.
+- **speedup is honest (M5b, commons g83)**: 4-GPU DDP on a small model + host-staged (no
+  NVLink) is SLOWER than 1-GPU (0.61–0.73×) — comm tax > compute saved; efficiency rises
+  monotonically with model size (15%→18% as H 64→2048). N-GPU speedup is ALWAYS < N×; the
+  crossover where 4-GPU wins needs a bigger model and/or NVLink (measured directions, not asserted).
 - **env gotchas (recorded from the M3 fire)**: (1) a stale forward-compat `libcuda`
   on the rented image → `export LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu` before the
   CUDA build/run. (2) inline `ssh -o ...` flag mangling → use an SSH **config file**,
