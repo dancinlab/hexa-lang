@@ -45,7 +45,7 @@
 //
 //  Build:  nvcc -O2 -arch=sm_86 -o ddp_train_m5b ddp_train_m5b.cu
 //  Run:    DDP_NUM_GPUS=4 ./ddp_train_m5b        (sweeps N=1,2,4 internally)
-//  Env:    HEXA_DDP_H    = comma list of hidden dims (default "64,256,1024,4096")
+//  Env:    HEXA_DDP_H    = comma list of hidden dims (default "64,256,1024,2048")
 //          HEXA_DDP_REPS = timed reps per (N,H) (default 30, warmup 5 discarded)
 // ═══════════════════════════════════════════════════════════════════════════
 #include <cstdio>
@@ -226,6 +226,37 @@ static void ring_all_reduce_sum(std::vector<double*>& d,std::vector<double*>& st
 
 static void sgd_step(double* W,const double* g,int n){ for(int p=0;p<n;p++) W[p]-=LR*g[p]; }
 
+// ── reference grad reduced with the EXACT per-chunk PARENTHESIZATION the ring
+// produces ──────────────────────────────────────────────────────────────────
+// FP add is NOT associative. The ring reduce-scatter (DDP-M1 schedule) sums
+// each chunk's N rank-partials in a CHUNK-DEPENDENT RIGHT-NESTED tree: a 4-rank
+// simulation tracking the actual `d += staging` parenthesization gives, for
+// chunk c (where the sequence is s[j]=(c-1-j+2N)%N, j=0..N-1, i.e. start at rank
+// (c-1+N)%N and walk DOWN mod N):
+//     chunk c value = s[0] + ( s[1] + ( s[2] + ... + s[N-1] ) )   (RIGHT-fold).
+// e.g. chunk 0 = (3+(2+(1+0))). A naive LEFT-fold (((3+2)+1)+0) differs at the
+// ULP (~3.5e-15 measured on a 4-GPU 3090 node) — that residual is exactly this
+// associativity, NOT a transport error. To make the gate a TRUE max|delta|=0,
+// the 1-GPU reference must reduce element p with the same right-nested order as
+// the ring reduces p's chunk. This IS the honest DDP-equivalence definition:
+// same partials, same reduction tree. (N=2 has a single add, so M4 — and any
+// 2-GPU reduction — was trivially order-invariant; the tree only bites at N>=3.)
+static int ring_chunk_of(long p, long S, int N){
+    int c=0; while (c<N && !(p>=chunk_start(S,N,c) && p<chunk_start(S,N,c+1))) c++;
+    return c<N?c:N-1;
+}
+static void ref_grad_ring_order(const std::vector<std::vector<double>>& gloc,
+                                int N, long S, std::vector<double>& g_out){
+    g_out.assign((size_t)S,0.0);
+    for (long p=0;p<S;p++){
+        int c=ring_chunk_of(p,S,N);
+        // s[j] = (c-1-j+2N) % N ; right-fold from the innermost (j=N-1) up.
+        double acc = gloc[(size_t)((c-1-(N-1)+2*N)%N)][p];   // s[N-1] == rank c
+        for (int j=N-2;j>=0;j--) acc = gloc[(size_t)((c-1-j+2*N)%N)][p] + acc;
+        g_out[p]=acc;
+    }
+}
+
 // ── persistent per-rank device buffers (alloc once per (N,H), reused for reps) ─
 struct RankBufs { std::vector<double*> dW, dX, dY, dG, dloss, dstage; };
 
@@ -254,9 +285,21 @@ static void free_rank_bufs(RankBufs& B,const int* dev,int N){
 
 // run ONE training step (device compute + ring all-reduce), timed end-to-end on
 // the wall clock (covers all ranks' fwd/bwd + the cross-GPU all-reduce + sync).
-static double ddp_step_timed(RankBufs& B,const int* dev,int N,const Layout& L,int H){
-    int shard=B_GLOBAL/N;
+// opt the kernel into the device's max dynamic shared-mem (sm_86: up to ~99KB,
+// vs the 48KB default opt-out cap) on every device once per (N,H). Returns the
+// per-block dynamic shmem bytes, or aborts if H doesn't fit (caller caps H).
+static size_t enable_shmem(const int* dev,int N,int H){
     size_t shmem=(size_t)6*H*sizeof(double);
+    for (int r=0;r<N;r++){
+        CK(cudaSetDevice(dev[r]));
+        int maxsh=0; CK(cudaDeviceGetAttribute(&maxsh,cudaDevAttrMaxSharedMemoryPerBlockOptin,dev[r]));
+        if (shmem>(size_t)maxsh){ fprintf(stderr,"FATAL: H=%d needs %zu B shared > device optin max %d B\n",H,shmem,maxsh); exit(2); }
+        CK(cudaFuncSetAttribute(fwd_bwd_kernel,cudaFuncAttributeMaxDynamicSharedMemorySize,(int)shmem));
+    }
+    return shmem;
+}
+static double ddp_step_timed(RankBufs& B,const int* dev,int N,const Layout& L,int H,size_t shmem){
+    int shard=B_GLOBAL/N;
     for (int r=0;r<N;r++){ CK(cudaSetDevice(dev[r])); CK(cudaMemsetAsync(B.dG[r],0,(size_t)L.NPARAM*sizeof(double))); CK(cudaMemsetAsync(B.dloss[r],0,sizeof(double))); }
     for (int r=0;r<N;r++){ CK(cudaSetDevice(dev[r])); CK(cudaDeviceSynchronize()); }
     struct timespec ts0,ts1; clock_gettime(CLOCK_MONOTONIC,&ts0);
@@ -264,6 +307,7 @@ static double ddp_step_timed(RankBufs& B,const int* dev,int N,const Layout& L,in
         CK(cudaSetDevice(dev[r]));
         fwd_bwd_kernel<<<shard,256,shmem>>>(B.dW[r],B.dX[r],B.dY[r],B.dG[r],B.dloss[r],0,shard,H,
             L.P_W1,L.P_B1,L.P_W2,L.P_B2,L.P_W3,L.P_B3);
+        CK(cudaGetLastError());                  // catch launch-config errors NOW
     }
     for (int r=0;r<N;r++){ CK(cudaSetDevice(dev[r])); CK(cudaDeviceSynchronize()); }
     ring_all_reduce_sum(B.dG,B.dstage,dev,N,L.NPARAM);
@@ -287,7 +331,7 @@ int main(int argc,char** argv){
     printf("transport = %s\n", transport);
 
     std::vector<int> Hs;
-    { const char* e=getenv("HEXA_DDP_H"); std::string s = e?e:"64,256,1024,4096"; size_t i=0; while(i<s.size()){ size_t j=s.find(',',i); std::string tok=s.substr(i, j==std::string::npos?std::string::npos:j-i); if(!tok.empty()) Hs.push_back(atoi(tok.c_str())); if(j==std::string::npos)break; i=j+1; } }
+    { const char* e=getenv("HEXA_DDP_H"); std::string s = e?e:"64,256,1024,2048"; size_t i=0; while(i<s.size()){ size_t j=s.find(',',i); std::string tok=s.substr(i, j==std::string::npos?std::string::npos:j-i); if(!tok.empty()) Hs.push_back(atoi(tok.c_str())); if(j==std::string::npos)break; i=j+1; } }
     int REPS=30; { const char* e=getenv("HEXA_DDP_REPS"); if(e) REPS=atoi(e); } int WARM=5;
     const int Ns[3]={1,2,4};
 
@@ -307,12 +351,13 @@ int main(int argc,char** argv){
         std::vector<double> Winit; make_init(Winit,L);
         printf("\n--- H=%d  NPARAM=%d ---\n",H,L.NPARAM);
         double t[3]={0,0,0};
+        size_t shmem=enable_shmem(dev4,4,H);
         for (int ni=0; ni<3; ni++){
             int N=Ns[ni];
             RankBufs B; alloc_rank_bufs(B,dev4,N,L,Winit,X,Y);
-            for (int w=0;w<WARM;w++) ddp_step_timed(B,dev4,N,L,H);
+            for (int w=0;w<WARM;w++) ddp_step_timed(B,dev4,N,L,H,shmem);
             std::vector<double> reps; reps.reserve(REPS);
-            for (int r=0;r<REPS;r++) reps.push_back(ddp_step_timed(B,dev4,N,L,H));
+            for (int r=0;r<REPS;r++) reps.push_back(ddp_step_timed(B,dev4,N,L,H,shmem));
             t[ni]=median(reps);
             free_rank_bufs(B,dev4,N);
             printf("  N=%d  per-step wall(median)= %10.4f ms\n",N,t[ni]);
@@ -334,8 +379,11 @@ int main(int argc,char** argv){
         std::vector<std::vector<double>> gloc(NW, std::vector<double>(L.NPARAM,0.0));
         std::vector<double> lloc(NW,0.0);
         for (int r=0;r<NW;r++) lloc[r]=fwd_bwd_accum_host(Winit.data(),X.data(),Y.data(),r*shard,(r+1)*shard,gloc[r].data(),L,H);
-        std::vector<double> g_ref(L.NPARAM), W_ref=Winit;
-        for (int p=0;p<L.NPARAM;p++){ double s=gloc[0][p]; for(int r=1;r<NW;r++) s+=gloc[r][p]; g_ref[p]=s/(double)B_GLOBAL; }
+        std::vector<double> g_ref, W_ref=Winit;
+        // reference reduces each element in the ring's per-chunk order (so the
+        // gate is a true max|delta|=0, matching the device ring's associativity).
+        ref_grad_ring_order(gloc, NW, L.NPARAM, g_ref);
+        for (int p=0;p<L.NPARAM;p++) g_ref[p] /= (double)B_GLOBAL;
         double loss_ref=lloc[0]; for(int r=1;r<NW;r++) loss_ref+=lloc[r]; loss_ref/=(double)B_GLOBAL;
         sgd_step(W_ref.data(),g_ref.data(),L.NPARAM);
 

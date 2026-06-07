@@ -38,8 +38,8 @@ nvcc -O2 -arch=sm_${CC} -o /tmp/ddp_train_m5b "$CU" 2>&1 || {
 echo "build ok"
 echo
 
-echo "==== running ddp_train_m5b (HEXA_DDP_H=${HEXA_DDP_H:-64,256,1024,4096}) ===="
-HEXA_DDP_H="${HEXA_DDP_H:-64,256,1024,4096}" HEXA_DDP_REPS="${HEXA_DDP_REPS:-30}" /tmp/ddp_train_m5b
+echo "==== running ddp_train_m5b (HEXA_DDP_H=${HEXA_DDP_H:-64,256,1024,2048}) ===="
+HEXA_DDP_H="${HEXA_DDP_H:-64,256,1024,2048}" HEXA_DDP_REPS="${HEXA_DDP_REPS:-30}" /tmp/ddp_train_m5b
 RC=$?
 echo
 echo "==== exit code: $RC ===="
