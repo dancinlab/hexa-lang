@@ -740,6 +740,33 @@ ring all-reduce — transport swapped in stages, schedule FIXED at 2(N-1) steps
   not inline `-o`. (3) git-guard hard-blocks `--force`/`--force-with-lease` here —
   to update a stale branch, rebase onto a fresh branch + new PR, never force-push.
 
+### flame GPU train-speedup — where it comes from (and where it doesn't)
+
+The flame CLMConvMoE train step on H100/H200 — what actually moves the wall, measured end-to-end.
+
+```
+flame self-speedup vs batch (H100, D1536/T512, samples/s ÷ B=1)
+ B=1 ─▶ B=2 ─▶ B=4 ─▶ B=8 ─▶ B=16 ─▶ B=32 ─▶ (≈3× asymptote, glue cap)
+ 1.0×  1.50×  2.01×  2.39×  2.74×   2.95×
+       ★ ≥1.3× here
+```
+
+- **batch>1 SM-fill IS the lever (#2913 🟢)**: at batch=1 the step UNDER-FILLS the GPU (grid ≈528-660
+  CTAs vs 132/148 SMs → util 1-2%). Growing the batch fills the SMs and amortizes fixed per-step
+  overhead → **≥1.3× at B=2, 2.95× at B=32** self-speedup. Byte-eq: B=1 max|Δ|=0 (exact prior path);
+  B>1 window-concat carries a K-1 causal-conv SEAM-only Δ at window boundaries (a true max|Δ|=0 batched
+  step needs a per-window-segmented causal conv). Harness: `bench/vs_pytorch/batch_{sweep,byteeq}.sh`.
+- **capped at ≈3× by the interpreted per-step glue**: the token-pack t_get/t_set loop + CE/softmax-grad
+  host glue + eager ~28-call AdamW tail all grow ∝ B·Tw, so they cap the curve. util MEAN climbs
+  10→30% but MEDIAN stays 0% (bimodal {100% in-GEMM, 0% in glue}).
+- **what does NOT help (don't re-attempt for speed)**: per-step CUDA-graph capture/replay (#2910) and
+  fwd+bwd kernel-fusion (#2911) both = ~1.0× closed-neg — the wall is the interpreted glue, NOT
+  kernel-launch/boundary. own-GEMM ≈ cuBLAS (GPU peaks 100% in GEMM bursts), so GEMM isn't the wall either.
+- **vs PyTorch (honest, #2912)**: at batch=1 torch eager is ~1656× / torch.compile ~2207× faster — flame's
+  interpreted glue dominates. flame's value is byte-exact · device-resident · no-LLVM compile-time-theorem,
+  NOT step-rate-vs-torch. To close that gap: **interpreter-elimination** (a native/compiled per-step driver),
+  the only remaining lever — commons g85.
+
 ## references
 
 - [`HEXA-CUDA.md`](../HEXA-CUDA.md) — the GPU-native domain home
