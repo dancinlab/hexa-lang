@@ -1,0 +1,19 @@
+F-DDP-M5C-CROSSOVER — HEXA-DDP DDP-M5c  [WIP — awaiting NVLink-node run]
+
+GOAL: find the model size where multi-GPU DDP TRAINING actually BEATS 1-GPU
+(speedup > 1x) on an NVLink node, and confirm whether NVLink moves the crossover
+to a smaller model than the M5b host-staged GeForce node (which never crossed 1x).
+
+STATUS: WIP — harness pushed (stdlib/ddp/m5c_crossover/ddp_train_m5c.cu +
+run_m5c.sh), NVLink node rent + sweep PENDING. This file is overwritten verbatim
+with the on-pod stdout once the run completes.
+
+GATES (g5):
+ (1) CORRECTNESS — 1-GPU W_ref == 4-GPU W_ddp byte-eq max|delta|=0 (FP64), the
+     M4/M5b invariant with the ring's right-nested per-chunk reduce tree (N=4).
+ (2) CROSSOVER — per-step training wall at N=1/2/4 across a model-size sweep;
+     identify the H where 2-GPU>1x and 4-GPU>1x. NVLink (canAccessPeer=1) vs
+     staged-host (canAccessPeer=0) explicitly confirmed via nvidia-smi topo -m
+     + the 12-pair cudaDeviceCanAccessPeer probe.
+
+(verbatim on-pod stdout will replace this block)
