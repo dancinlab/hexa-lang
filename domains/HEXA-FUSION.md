@@ -175,6 +175,14 @@
 - [ ] **OG-FUSE-RIGHTSIZE — right-sized-GPU per-regime validation** — validate the cure on a right-sized
   GPU (RTX 5070 / L40S) per regime to dodge big-GPU contention + the access-unresolved blocker; the
   byte-eq D1536-saturates-5070-to-98% fact already shows right-sizing is the practical lever.
+- [ ] **MEGASTEP — whole-step fused persistent megakernel (the ONLY remaining ~3x uncap lever)** — fuse
+  the ENTIRE flame CLMConvMoE train step (fwd+bwd+optimizer, own-GEMM inline) into ONE persistent
+  cooperative kernel, eliminating the per-op launch/sync dispatch that IS the structural ~3x cap wall.
+  ⚠ HIGH-RISK / LOW-ODDS: the 4 per-op-DAG uncap levers ALL closed-neg (kernel-fusion #2910/#2911 ·
+  interpreter-elimination #2915 · precision-change #2917 · right-sized-GPU #2918 — commons g85), and
+  util-via-megakernel was already CLOSED-NEG (#2697 + GN grid-sync). Success = the ONLY path to an
+  absolute (torch-gap-closing) breakthrough beyond ~3x; failure = ~3x confirmed TERMINAL. Large codegen
+  rewrite (days), ROI uncertain. The batch-fill ~1.3x->2.95x self-speedup (#2913) is already MET.
 
 ## 전제 — 왜 fusion 인가 (host-feed 축이 닫힌 뒤)
 
