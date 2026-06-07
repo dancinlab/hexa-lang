@@ -46,3 +46,29 @@
 - **TOPO FINDING (honest)**: nvidia-smi topo -m = GPU0/1/2 PHB (PCIe host-bridge, NUMA node 0) + GPU3 SYS (cross-socket SMP interconnect, NUMA node 1); NOT NVLink. `cudaDeviceCanAccessPeer==0` on all 12 directed pairs → GeForce direct P2P driver-disabled → every cudaMemcpyPeer routes host-staged. Correctness identical (ring schedule transport-agnostic); perf caveat = no direct NVLink/PCIe-P2P bandwidth.
 - Pod DESTROYED immediately after capture (leak 0; label "hexa-ddp-m5" confirmed before destroy; foreign rtsc-li2mgh16-anchor left untouched).
 - **HONEST (g5)**: M5 collective leg GREEN = the ring all-reduce COLLECTIVE scales to 4 REAL GPUs byte-exact, with schedule + step count + per-step wall measured. This is NOT 4-GPU end-to-end training speedup — 4-GPU byte-exact collective ≠ 4-GPU training speedup. That = DDP-M5b (chains on DDP-M4). Expected N-GPU speedup < N× (communication tax; g83), and on this node the transport was host-staged (correctness-grade wall, not bandwidth-optimal).
+
+## DDP-M6 (runpod leg) — 2-runpod-node cross-node socket ring all-reduce — 🟢 GREEN (2026-06-07)
+
+- **What**: ported the M1/M3/M5 canonical ring all-reduce (2(N-1) steps, `chunk_start`
+  partition byte-identical) to cross a NODE boundary on **runpod** (sibling to the vast leg,
+  provider-isolated). Transport swapped from cudaMemcpyPeer (single-node P2P) to
+  D2H + TCP send/recv (host network) + H2D, so every chunk physically crosses the wire.
+- **Hardware**: 2 separate runpod SECURE-cloud H100 pods — node A `wosowf0qknt0au`
+  (216.243.220.230, internal 172.23.0.2) + node B `iz1e1v3h4n6n5y` (216.243.220.219,
+  internal 172.21.0.2). Distinct machines (different /16, different docker hostnames).
+- **Cross-host proof**: pod A held `ESTAB 172.23.0.2:46206 -> 216.243.220.219:16917`
+  carrying the ring data; raw `/dev/tcp` probe A→B public port = OPEN.
+- **GATE (g5) BOTH ranks**: S=7 (S%N=1 boundary) max|Δ|=0 PASS; S=1<<20 (large) max|Δ|=0 PASS.
+  FP64, result == serial elementwise sum. ALL BYTE-EQ PASS on rank0 AND rank1.
+- **Transport finding (honest)**: runpod custom TCP ports (5700/5701) did NOT surface a
+  public proxy mapping (`runtime.ports` empty for raw TCP) → cross-node TCP established as an
+  SSH port-forward between the two pods' public SSH endpoints. Still real kernel TCP over the
+  physical inter-node link; correctness is carrier-independent. NOT an RDMA/IB bandwidth claim,
+  NOT multi-node training speedup — collective correctness only.
+- **Wiring fix**: connect() over a tunnel port succeeds even when the far listener is down
+  (tunnel then drops) → added a deadlock-free interleaved SYN/ACK handshake (`ring_wire`) so
+  the ring only proceeds once the far LISTENER is confirmed, startup-order-independent.
+- **Code**: stdlib/ddp/m6_socket/ring_socket_m6.cu + run_m6.sh.
+- **Verdict**: .verdicts/hexa-ddp-m6-runpod/F-DDP-M6-RUNPOD.txt (verbatim rank stdout).
+- **Pods**: BOTH terminated immediately on capture (`runpodctl pod delete` -> deleted; account
+  pod list shows 0 of my M6 pods). Leak 0 on runpod.
