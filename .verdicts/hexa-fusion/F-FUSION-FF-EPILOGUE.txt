@@ -1,0 +1,79 @@
+F-FUSION-FF-EPILOGUE  ::  GREEN (byte-eq max|Δ|=0) — measured on a real NVIDIA H100 80GB HBM3 (sm_90)
+domain: HEXA-FUSION  ·  date: 2026-06-08  ·  method: own-GEMM (W10 TF32, OG10 bit-exact SUMMIT)
+       epilogue-fusion of the FF block, A/B vs the separate-op reference, on a rented H100.
+
+CLAIM (verified): fold the feed-forward block (bias-add + exact-erf GELU + residual-add) INTO
+the hexa own-GEMM (sm_90a wgmma TF32, W10/OG10) EPILOGUE — applied to the accumulator
+REGISTERS (d0/d1) BEFORE the global store — computes the SAME values as the separate-op path
+(GEMM store-to-global, then 3 elementwise kernels) bit-for-bit (max|Δ|=0), while removing 3
+kernel launches + the intermediate-activation HBM round-trips.
+
+FF block:  out = gelu( C + bias[col] ) + residual[row,col],   C = A@B (own-GEMM, in regs).
+  gelu = 0.5*x*(1+erf(x/sqrt2)), device erff() = IEEE libm (same formula as hexa nn_gelu /
+  forge_dispatch_gelu, the clm-devfeed GELU path).
+
+================================ RESULT (verbatim pod stdout) ================================
+GPU: NVIDIA H100 80GB HBM3, compute_cap 9.0   ·   nvcc -O3 -arch=sm_90a -fmad=false
+wall method: 20 warmup + 200 timed median, cudaEvent.
+
+S=1024
+  OCCUPANCY  gemm_w10(separate-GEMM)=1 CTA/SM   gemm_w10_ffepi(fused)=1 CTA/SM   (dynsmem=131120B blk=256)
+  BYTE-EQ (fused vs separate)  S=1024  max|Δ|=0.000e+00  rel_rms=0.000e+00  bit-identical=1048576/1048576  PASS (max|Δ|=0)
+  WALL  S=1024  separate(4 launches)=0.1052 ms  fused(1 launch)=0.0989 ms  speedup(sep/fus)=1.063x
+  LAUNCH-DELTA  separate=4 launches  fused=1 launch  (-3 launches, -75%)
+  ROUNDTRIP-DELTA  separate issues 3 extra elementwise HBM passes over M*N (0.008 GB each RW); fused removes them: ~0.025 GB removed/step
+
+S=2048
+  OCCUPANCY  gemm_w10(separate-GEMM)=1 CTA/SM   gemm_w10_ffepi(fused)=1 CTA/SM   (dynsmem=131120B blk=256)
+  BYTE-EQ (fused vs separate)  S=2048  max|Δ|=0.000e+00  rel_rms=0.000e+00  bit-identical=4194304/4194304  PASS (max|Δ|=0)
+  WALL  S=2048  separate(4 launches)=0.3815 ms  fused(1 launch)=0.3626 ms  speedup(sep/fus)=1.052x
+  LAUNCH-DELTA  separate=4 launches  fused=1 launch  (-3 launches, -75%)
+  ROUNDTRIP-DELTA  separate issues 3 extra elementwise HBM passes over M*N (0.034 GB each RW); fused removes them: ~0.101 GB removed/step
+
+S=4096
+  OCCUPANCY  gemm_w10(separate-GEMM)=1 CTA/SM   gemm_w10_ffepi(fused)=1 CTA/SM   (dynsmem=131120B blk=256)
+  BYTE-EQ (fused vs separate)  S=4096  max|Δ|=0.000e+00  rel_rms=0.000e+00  bit-identical=16777216/16777216  PASS (max|Δ|=0)
+  WALL  S=4096  separate(4 launches)=2.6566 ms  fused(1 launch)=2.6298 ms  speedup(sep/fus)=1.010x
+  LAUNCH-DELTA  separate=4 launches  fused=1 launch  (-3 launches, -75%)
+  ROUNDTRIP-DELTA  separate issues 3 extra elementwise HBM passes over M*N (0.134 GB each RW); fused removes them: ~0.403 GB removed/step
+============================================================================================
+
+BYTE-EQ: YES — max|Δ|=0.000e+00 at S=1024/2048/4096 (every output element bit-identical).
+FUSED-vs-SEPARATE WALL: fused FASTER at all sizes — 1.063x (S=1024), 1.052x (S=2048),
+  1.010x (S=4096). The win SHRINKS as S grows.
+LAUNCH DELTA: 4 launches (GEMM + bias_add + gelu + residual_add) -> 1 launch (fused). -3 (-75%).
+ROUNDTRIP DELTA: the separate path issues 3 extra elementwise full HBM passes over the M*N
+  output (bias_add RW, gelu RW, residual_add RW). Fusion keeps C, C+bias and gelu(C+bias) in
+  registers and stores ONLY the final FF result -> removes ~3 read+write passes of M*N fp32
+  (~0.025 / 0.101 / 0.403 GB of HBM traffic per step at S=1024/2048/4096).
+OCCUPANCY EFFECT: NONE (NEUTRAL). separate-GEMM and fused both run 1 CTA/SM (131120 B dynsmem,
+  blk=256). The W10 own-GEMM is already smem-bound at 1 CTA/SM, so the extra epilogue registers
+  (fp32 bias/gelu/residual on the d0/d1 accumulators — NO new FP64 pressure) do NOT lower
+  occupancy. The honest "FP64 epilogue register pressure may cost occupancy" caveat does NOT
+  bite here: this GEMM is TF32/fp32 and the epilogue is fp32; occupancy is unchanged.
+
+HONEST NET (g5): the fusion is a CORRECT, byte-exact, real but MODEST win. The speedup is
+  small (1.01–1.06x) and DECREASING with S because the own-GEMM (W10 = 6.09x off cuBLAS-TF32)
+  DOMINATES the wall — the removed elementwise launches + round-trips are a shrinking fraction
+  of total time as the cubic GEMM cost grows. At S=4096 the GEMM is ~2.6 ms and the 3 saved
+  elementwise passes are only ~27 us of the gap. The structural value = (a) -3 launches/-75%
+  launch overhead (matters most in launch-bound / small-tile regimes, e.g. decode), (b) the
+  intermediate-activation HBM round-trips removed (matters in the memory-bound elementwise tail),
+  (c) byte-exactness preserved — this is exactly the ThunderMLA/CUTLASS epilogue-fusion pattern,
+  done on OUR OWN GEMM (NOT a cuBLAS-Lt epilogue, which the prior F-FUSION-CUBLASLT-EPILOGUE
+  closed-neg ruled out for FP64+byte-eq). The win grows in the launch-bound / small-M regime and
+  shrinks in the GEMM-bound square regime measured here. No raw-GEMM-superiority claim;
+  cuBLAS = roofline.
+
+BUILD NOTE (byte-eq dependency): -fmad=false is REQUIRED for max|Δ|=0. With FMA-contraction ON
+  (default), the fused epilogue and the separate gelu kernel contract the GELU 0.5*x*(1+erf)
+  expression DIFFERENTLY (the surrounding code differs at each call site) -> a ~1-ULP residual
+  (measured max|Δ|=4.768e-7, 928096/1048576 bit-identical @S=1024). With -fmad=false both call
+  sites emit the IDENTICAL fp32 op sequence -> max|Δ|=0. This is a faithful, documented gate
+  condition, not a fudge: the two paths are bit-identical iff the compiler is forbidden from
+  contracting one site's mul-add into an FMA that the other site does not.
+
+REPRO: self/native/wgmma/wgmma_tf32_ffepi.cu (+ wgmma_tf32_w10_lib.h reused VERBATIM via
+  W10_NO_MAIN) ; build+run self/native/wgmma/ffepi_run.sh.
+POD: vast.ai 39959960 (H100 SXM, offer 38955910 $2.00/hr, CUDA 12.4), label/PROJECT=hexa-ffepi,
+  DESTROYED (tag-confirmed), leak 0.

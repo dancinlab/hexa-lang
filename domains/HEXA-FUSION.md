@@ -190,10 +190,22 @@
 - [ ] **FF-FUSED-OPTIM — fused AdamW tail (multi_tensor_apply / FusedAdam pattern)** — collapse the eager
   ~28-call per-param AdamW tail into 1-few launches; byte-eq FP64 (same accum order). LOW risk, both
   research legs' #1. Lit: Apex FusedAdam 10-15%, PyTorch foreach 21-293%. Attacks the optimizer DAG, not GEMMs.
-- [ ] **FF-EPILOGUE — own-GEMM epilogue/prologue fusion** — fold GELU/bias/residual-add (+ next-op start)
-  into the own-GEMM epilogue while data is in regs/smem, killing a global round-trip + a launch per fused
-  op; byte-eq vs separate-op ref. MED (FP64 epilogue register pressure). Highest leverage-per-effort kernel
-  change (we already own the GEMM). Lit: CUTLASS/Inductor epilogue fusion, ThunderMLA 20-35%.
+- [x] **FF-EPILOGUE — own-GEMM epilogue fusion** 🟢 GREEN byte-eq, modest+shrinking win (2026-06-08,
+  F-FUSION-FF-EPILOGUE, real H100 80GB): folded the FF block (bias-add + exact-erf GELU + residual-add) into
+  the W10 TF32 own-GEMM (OG10 bit-exact SUMMIT) EPILOGUE — applied to the d0/d1 accumulator REGISTERS before
+  the store. **byte-eq max|Δ|=0.000e+00 (bit-identical 1048576/1048576 @1024, 4194304/4194304 @2048,
+  16777216/16777216 @4096) vs the separate-op ref (GEMM + bias_add + gelu + residual_add)**. Fused FASTER at
+  all sizes — **1.063x @S=1024, 1.052x @S=2048, 1.010x @S=4096** (win SHRINKS as S grows: the own-GEMM, 6.09x
+  off cuBLAS, DOMINATES the wall, so the removed elementwise launches/round-trips are a shrinking fraction).
+  **LAUNCH 4→1 (-3, -75%)**; **HBM round-trips removed = ~3 RW passes of M×N (~0.025/0.101/0.403 GB/step)**.
+  **OCCUPANCY NEUTRAL (1 CTA/SM both** — W10 is already smem-bound at 1 CTA/SM, the fp32 epilogue regs cost
+  nothing; the "FP64 epilogue pressure" caveat does NOT bite, this path is TF32/fp32). BUILD NOTE: `-fmad=false`
+  REQUIRED for max|Δ|=0 (else the 2 GELU call sites FMA-contract differently → ~1 ULP, max|Δ|=4.77e-7). NOT
+  the cuBLAS-Lt epilogue (the FP64 closed-neg F-FUSION-CUBLASLT-EPILOGUE) — this is OUR OWN GEMM's epilogue,
+  the surviving "(B) own-kernel fusion" lever. HONEST: correct, byte-exact, real but small; win grows in the
+  launch-bound/small-M (decode) regime, shrinks in the GEMM-bound square regime measured. cuBLAS=roofline, no
+  superiority claim. pod 39959960 (tag hexa-ffepi) DESTROYED leak-0. verdict
+  `.verdicts/hexa-fusion/F-FUSION-FF-EPILOGUE.txt`.
 - [ ] **FF-VALLEY — persistent valley-only fusion megakernel** — fuse ONLY the between-GEMM glue
   (groupnorm+gelu+conv-experts+elementwise) into a persistent kernel; keep own-GEMMs as separate saturated
   kernels. Extends GREEN L3-a/L3-b to the bwd side; attacks the ~0%-util valley directly. MED. Lit: MPK
