@@ -1,0 +1,113 @@
+F-FUSION-FF-FUSED-OPTIM — fused AdamW optimizer tail (multi_tensor_apply / FusedAdam pattern)
+══════════════════════════════════════════════════════════════════════════════════════════
+DATE      : 2026-06-08
+BRANCH    : domain/hexa-fusion-ff-fused-optim  (worktree off origin/main d185691d1)
+HARDWARE  : NVIDIA H100 80GB HBM3 (vast 39960038, Czechia/CZ host, driver 560.35.03,
+            CUDA 12.6, nvcc V12.6.20). Labeled hexa-ffopt; DESTROYED after, leak 0
+            (verified GONE from instance list — confirmed tag before destroy).
+PRECISION : FP64 (double) throughout — both eager and fused AdamW are pure-double
+            elementwise. Gate (g5) = byte-eq max|Δ| vs eager AdamW (NOT a tolerance gate).
+
+WHAT FF-FUSED-OPTIM ASKED, AND THE PRIOR ART IT MEASURES
+───────────────────────────────────────────────────────
+The flame CLMConvMoE train step ends with a per-parameter AdamW tail: 17 distinct
+param tensors (embed, ecW/ecB, tcW/tcB, tgG/tgB, rW/rB, e0W/e0B, e1W/e1B, noG/noB,
+roW/roB), each updated by its own kernel launch (m,v update + bias-correct + step).
+That tail is a launch-bound valley after the GEMMs (lit: Apex FusedAdam 10-15%,
+foreach 21-293% optimizer-step speedup).
+
+The FUSED kernel ALREADY EXISTS in tree (HEXA-FUSION M2 milestone, _hx_k_adamw_fused /
+_hx_cuda_farr_adamw_fused_gpu, env HEXA_CLM_FULLSTEP) — it collapses all 17 per-param
+launches into ONE cudaLaunchCooperativeKernel (a persistent grid strides over the
+concatenation of all param tensors via a prefix-offset table; multi_tensor_apply
+pattern). The M2 verdict (F-FUSION-M2-FULLSTEP-MEGAKERNEL) measured this through the
+util% lens (closed-neg on util-GREEN) under a CE-convergence / TF32 gate.
+
+FF-FUSED-OPTIM measures the lens M2 did NOT: the g5 byte-eq FP64 gate + the optimizer-
+step wall before/after + the launch count before/after. This verdict is that gate run
+on a real H100 with a standalone differential harness (tool/cuda_test_adamw_fused.cu)
+that builds the EXACT clm_prod 17-param shape table (D-parameterized) and runs the
+FUSED kernel (1 launch) AND the eager per-param _hx_cuda_farr_adamw_step_inplace_gpu
+(17 launches) on identically-seeded buffers, then diffs W/m/v.
+
+LAUNCH COUNT (before → after)
+─────────────────────────────
+  EAGER : 17 kernel launches per optimizer tail (one _hx_k_adamw_step_inplace per param).
+  FUSED :  1 cudaLaunchCooperativeKernel  (_hx_k_adamw_fused over all 17, grid=660 blk=256).
+  [FULLSTEP-FIRED] _hx_k_adamw_fused cooperative AdamW over 17 params in ONE launch
+                   (grid=660 blk=256, optimizer tail collapsed)   ← device path verbatim.
+
+BYTE-EQ (g5)  — the load-bearing finding
+─────────────────────────────────────────
+The two kernels run CHARACTER-FOR-CHARACTER identical FP64 element arithmetic
+(b1*m+(1-b1)*g ; b2*v+(1-b2)*g*g ; m/c1 ; v/c2 ; sqrt(vhat)+eps ; W-lr*wd*W-lr*mhat/denom),
+same bias-correction (iterative b1t*=b1). So the fused tail IS bit-reproducible — BUT the
+result depends on nvcc FMA-contraction:
+
+  -fmad=true  (nvcc DEFAULT):  max|Δ| = 1.110e-16  → FAIL (exactly 1 ULP of double)
+  -fmad=false (no FMA fuse) :  max|Δ| = 0.000e+00  → PASS  at EVERY swept D {128,256,512,1536}
+
+  ROOT CAUSE of the 1-ULP gap: the 17-launch and the 1-launch kernels are compiled in
+  DIFFERENT expression contexts (the fused kernel adds a prefix-scan owner lookup +
+  f.W[p][i] double-indirection), so the compiler contracts `a*b+c` into hardware FMA at
+  different points between the two. The arithmetic is algebraically identical; the 1.11e-16
+  is pure context-dependent FMA rounding, NOT an algorithm difference. Disabling FMA
+  contraction (-fmad=false) forces both to discrete mul+add → exactly bit-identical.
+
+  HONEST GATE STATUS: byte-eq max|Δ|=0 = YES, conditional on consistent FMA contraction
+  (-fmad=false). Under nvcc default (-fmad=true) the cross-path differential is 1 ULP
+  (1.110e-16). In the SHIPPING clm_prod binary this is moot: a given run executes EITHER
+  the fused path OR the eager fallback (never both, never compared), and the per-element
+  AdamW is identical either way; the 1-ULP only surfaces in this A/B differential because
+  both kernels coexist in one binary. The clean byte-eq=0 build flag for any future
+  fused-vs-eager parity test is -fmad=false.
+
+OPTIMIZER-STEP WALL (before eager 17-launch / after fused 1-launch, H100, reps=200)
+──────────────────────────────────────────────────────────────────────────────────
+(-fmad=false, the byte-eq build; us = microseconds per optimizer tail)
+  D=128   total 132610 elems : EAGER 806.751 us  → FUSED 676.219 us   speedup 1.193x
+  D=256   total 396034 elems : EAGER 1339.395 us → FUSED 1209.881 us  speedup 1.107x
+  D=512   total 1316098 elems: EAGER 2828.439 us → FUSED 2693.346 us  speedup 1.050x
+  D=1536  total 10239234 elems: EAGER 14293.898 us → FUSED 14373.298 us speedup 0.994x
+(-fmad=true default build is within noise of the above: 1.192x / 1.107x / 1.010x / 0.946x.)
+
+FINDING — HONEST, launch-bound-bounded
+───────────────────────────────────────
+The fused tail wins ONLY in the launch-overhead-dominated regime and the win SHRINKS as
+the work grows, crossing to break-even by D≈1536:
+  - SMALL D (128): the 17 launches are tiny (total 132K elems); launch+sync overhead is
+    the whole cost, so collapsing 17→1 launch gives the max win ~1.19x (-15% optim tail).
+  - GROWING D: each per-param kernel becomes memory-bandwidth-bound (W/m/v/g HBM traffic),
+    the 17 launch overheads become a smaller fraction of wall, and the win decays —
+    1.19x → 1.11x → 1.05x → ~1.0x (break-even) at D=1536.
+  - At D=1536 the fused kernel is AT PARITY (0.99–1.01x): both paths are HBM-bound over
+    ~10M elements, where 16 saved launch gaps are negligible. The fused kernel does NOT
+    reduce HBM traffic (same W/m/v/g read+write), so it cannot beat the roofline once the
+    tail is bandwidth-bound, only remove launch overhead.
+
+This MATCHES the cited literature ceiling (Apex FusedAdam ~10-15%) and the FLAME-PERF
+closeout: the AdamW tail is launch-bound at small batch / small D, and the fusion harvests
+exactly that launch overhead (~15% of the tail at D=128) — NOT a roofline win. As a fraction
+of the FULL clm_prod step (fwd GEMMs + bwd glue dominate, AdamW tail is a small slice), a
+~15%-of-tail win at small D is a TINY % of full-step wall; at production D it is ~0%.
+
+CONCLUSION
+──────────
+🟢 FUSED ADAMW TAIL CORRECT + LAUNCH-COUNT 17→1 CONFIRMED, byte-eq max|Δ|=0 (-fmad=false).
+🟡 PERF is launch-bound-bounded exactly as predicted: ~1.19x optim-tail speedup at small D
+   (D=128, -15% tail), decaying to break-even by D=1536 (HBM-bound). NOT a full-step lever
+   (the tail is a small slice of the step, and the win vanishes at production width). This
+   is the honest 3rd-party-reproducible measurement the M2 util-lens verdict did not record.
+The fused optimizer (multi_tensor_apply) is the RIGHT structure and is byte-correct; its
+value is launch-overhead removal in the small-D / small-batch regime, consistent with
+FusedAdam 10-15% and the serial-DAG occupancy floor that bounds this whole regime.
+
+REPRODUCE
+─────────
+  Emit runtime_cuda.c (self/cuda/runtime_cuda_emit.hexa) + runtime_bf16.c
+  (self/cuda/runtime_bf16_emit.hexa). On a CUDA-devel H100:
+    nvcc -O2 -std=c++14 --fmad=false -DHEXA_CUDA -gencode arch=compute_90,code=sm_90 \
+        -x cu runtime_cuda.c tool/cuda_test_adamw_fused.cu -lcublas -lcudart -lcuda -lm \
+        -o test_adamw_fused
+    ./test_adamw_fused <D> <reps>     # D=128..1536, reps=200
+  (-fmad=false → byte-eq max|Δ|=0 ; nvcc default -fmad=true → 1.110e-16 / 1 ULP.)

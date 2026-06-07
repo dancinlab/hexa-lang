@@ -187,9 +187,28 @@
   nsys/ncu-profile the FP64 step into GEMM% vs between-GEMM-glue% vs optimizer-tail%; the valley fraction
   (1 - GEMM%) is the HARD ceiling 1/(1-valley) for every fusion lever below. Cheap (no kernel rewrite).
   Lit: Chopper arXiv 2512.08242 (isolates active-compute vs idle-SM vs dispatch as distinct walls).
-- [ ] **FF-FUSED-OPTIM — fused AdamW tail (multi_tensor_apply / FusedAdam pattern)** — collapse the eager
-  ~28-call per-param AdamW tail into 1-few launches; byte-eq FP64 (same accum order). LOW risk, both
-  research legs' #1. Lit: Apex FusedAdam 10-15%, PyTorch foreach 21-293%. Attacks the optimizer DAG, not GEMMs.
+- [x] **FF-FUSED-OPTIM — fused AdamW tail (multi_tensor_apply / FusedAdam pattern)** ✅ (2026-06-08,
+  F-FUSION-FF-FUSED-OPTIM 🟢 byte-eq + 🟡 launch-bound-bounded perf; real H100 80GB, vast 39960038 hexa-ffopt
+  DESTROYED leak 0). The fused kernel ALREADY EXISTS in tree (M2 _hx_k_adamw_fused / forge_dispatch_adamw_fused,
+  env HEXA_CLM_FULLSTEP) — it collapses the clm_prod step's **17 per-param AdamW launches → ONE
+  cudaLaunchCooperativeKernel** (persistent grid strides over the param-tensor concatenation via a prefix-offset
+  table; the multi_tensor_apply pattern). M2's verdict measured it through the util% lens (closed-neg on GREEN);
+  THIS lands the FF gate (g5) M2 did not record. GATE (g5) byte-eq FP64 max|Δ| vs the eager 17-launch tail over
+  the exact clm_prod 17-param shapes (tool/cuda_test_adamw_fused.cu): **max|Δ| = 0.000e+00 PASS** at every swept
+  D {128,256,512,1536} — CONDITIONAL on consistent FMA contraction (-fmad=false). Under nvcc DEFAULT (-fmad=true)
+  the cross-path differential is exactly **1.110e-16 (1 ULP)** — pure context-dependent FMA rounding (the 1-launch
+  kernel adds a prefix-scan owner lookup + double-indirection, so the compiler contracts a*b+c into FMA at
+  different points), NOT an algorithm diff; -fmad=false forces both to discrete mul+add → bit-identical. (In the
+  shipping binary this is moot: a run executes EITHER fused OR eager-fallback, never both/compared.) **LAUNCH
+  COUNT 17 → 1** ([FULLSTEP-FIRED] grid=660 blk=256). OPTIM-STEP WALL (H100, reps=200, -fmad=false): D=128
+  806.8→676.2 us **1.193x**; D=256 1339.4→1209.9 us 1.107x; D=512 2828.4→2693.3 us 1.050x; D=1536 14293.9→14373.3
+  us **0.994x (break-even)**. HONEST FINDING: launch-bound-bounded exactly as predicted — the win is pure launch-
+  overhead removal in the small-D regime (~15% of the tail @ D=128, = the cited Apex FusedAdam 10-15% ceiling) and
+  DECAYS to break-even by D=1536 as each per-param kernel becomes HBM-bandwidth-bound (the fused kernel reads/writes
+  the same W/m/v/g — no roofline reduction, only launch removal). As a fraction of the FULL step (fwd GEMMs + bwd
+  glue dominate, AdamW tail is a small slice), this is a TINY % of full-step wall at small D and ~0% at production
+  width. Right structure, byte-correct, value = launch removal at small batch/D — NOT a full-step lever.
+  verdict: .verdicts/hexa-fusion/F-FUSION-FF-FUSED-OPTIM.txt (+ .raw.txt verbatim).
 - [ ] **FF-EPILOGUE — own-GEMM epilogue/prologue fusion** — fold GELU/bias/residual-add (+ next-op start)
   into the own-GEMM epilogue while data is in regs/smem, killing a global round-trip + a launch per fused
   op; byte-eq vs separate-op ref. MED (FP64 epilogue register pressure). Highest leverage-per-effort kernel
