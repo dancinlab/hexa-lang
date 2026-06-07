@@ -91,3 +91,33 @@
 - **Verdict**: .verdicts/hexa-ddp-m6-runpod/F-DDP-M6-RUNPOD.txt (verbatim rank stdout).
 - **Pods**: BOTH terminated immediately on capture (`runpodctl pod delete` -> deleted; account
   pod list shows 0 of my M6 pods). Leak 0 on runpod.
+
+## 2026-06-07 — DDP-M5c NVLink crossover (#2901)
+- **GOAL**: find the model size where multi-GPU DDP TRAINING beats 1-GPU (speedup >1x)
+  on a REAL NVLink node, testing the M5b prediction (NVLink → smaller crossover).
+- **A/B on identical silicon**: rented TWO vast 4x A100-SXM4-40GB nodes. First
+  (39809783, mach 38233 Germany) = topo PHB, cudaDeviceCanAccessPeer=0 on all 12
+  pairs (P2P driver-DISABLED despite SXM4 silicon) → host-staged. Second (39811910,
+  mach 41067 Georgia) = topo NV12 on every pair, canAccessPeer=1 on all 12 pairs →
+  REAL NVLink direct-P2P ring. Both label hexa-ddp-m5c, BOTH DESTROYED on capture
+  (leak 0, tag-checked). KEY transport finding: vast SXM4 does NOT guarantee NVLink
+  P2P — the canAccessPeer CUDA probe is the only authoritative check.
+- **GATE(1) byte-eq**: N=4, 1-GPU W_ref == 4-GPU W_ddp max|delta|=0 (grad, weight,
+  rank-agreement all 0, FP64, ring right-nested reduce tree). Identical on both
+  nodes — correctness is transport-independent.
+- **GATE(2) crossover**: NVLink removes nearly the ENTIRE comm tax. Efficiency
+  jumps 2-GPU 43%→49.5%, 4-GPU 18%→24.2% (near the 50%/25% ideal). BUT per-step
+  wall still does NOT cross 1.0x even on NVLink: 2-GPU → 0.99x asymptote, 4-GPU →
+  0.974x. Staged node plateaus at 0.86x/0.74x (mirrors M5b).
+- **HONEST (g83)**: the 1.0x ceiling is NOT a comm defect (NVLink fixed comm) — it
+  is structural: pure data-parallel shards only the batch (B=64), but an H→H MLP
+  step is H² GEMM = weight-bound, so sharding 64 rows into 16 barely cuts per-rank
+  FLOPs; each rank does ~the full 1-GPU compute + a now-cheap all-reduce. Small-
+  batch data-parallel per-step wall is bounded by 1.0x on ANY transport. To beat
+  1-GPU: (a) batch-bound regime (large B → throughput, DDP's true use), or (b)
+  model/tensor parallelism (shard the H² weight). NVLink is the cure for comm,
+  not for the data-parallel structural ceiling.
+- **Code**: stdlib/ddp/m5c_crossover/ddp_train_m5c.cu + run_m5c.sh (M5b harness +
+  2-GPU crossover track + P2P-any line). **Verdict**:
+  .verdicts/hexa-ddp-m5c/F-DDP-M5C-CROSSOVER.txt (both node wall tables +
+  canAccessPeer probe + byte-eq verbatim).
