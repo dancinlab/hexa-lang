@@ -66,9 +66,19 @@
   wall is therefore a roofline/memory problem (→ OG-FUSE-OPT tiled kernel), NOT a launch-fill problem. The
   cure stays valid only for genuinely small-d under-fill (L40S d=512). verdict:
   .verdicts/hexa-fusion/F-FUSION-MOE-CONV-XOVER.txt (+ .raw.txt verbatim).
-- [ ] **OG-FUSE-FOLD — fold the fused kernel into the flame CLMConvMoE trainer** — wire
-  tool/gpu_moe_conv_fuse.cu into stdlib/flame as the device MoE-conv path (env-gated, byte-eq ModuleList
-  fallback) so the cure reaches the real trainer step. The application path for the f5e18a0f cure.
+- [x] **OG-FUSE-FOLD — fold the fused kernel into the flame CLMConvMoE trainer** ✅ (2026-06-07,
+  F-OGFUSE-FOLD 🟢): wired tool/gpu_moe_conv_fuse.cu into stdlib/flame as the device MoE-conv path —
+  clm_moe_conv_fused.hexa now folds the env-gated device MoE-conv DISPATCH into the CLMConvMoE expert
+  BLOCK (conv ⊕ route), the actual trainer step: `moe_block_fwd_dispatch` produces ex_out[E·T·d] via
+  `moe_conv_fwd_dispatch` (HEXA_FUSE_MOE_CONV / HEXA_FUSE_ALL → fused/GEMM-conv path E; default OFF →
+  E-conv ModuleList-30 oracle) then runs moe_lib's softmax router. Before this, ex_out was NOT produced
+  by the dispatch + fed to the router — the fused kernel was a standalone selftest, NOT the trainer path.
+  GATE (g5) byte-eq fused trainer block == ModuleList-30, **max|Δ| = 0.000e+00**: (1) CPU flame block
+  fold F-CLM-MOE-BLOCK-FOLD-EQ=1 — fuse_on=1 AND fuse_on=0 both 0.0 over E∈{30,4}, dil∈{1,2}; (2) GPU
+  dev-vs-dev (RTX A2000 sm_86) [GATE-DEV-EQ] GEMM-vs-ModuleList = 0.000e+00, GATE OVERALL => PASS (the
+  GEMM-conv path E the fold routes to). Env-gate = HEXA_FUSE_MOE_CONV. The fused kernel IS now the flame
+  trainer's device MoE-conv path, byte-eq — application path for the f5e18a0f cure CLOSED. Pod destroyed,
+  leak 0. verdict: .verdicts/hexa-fusion/F-OGFUSE-FOLD.txt.
 - [x] **OG-FUSE-RIGHTSIZE — right-sized-GPU per-regime validation** ✅ (2026-06-07, F-FUSION-MOE-CONV-RIGHTSIZE 🟢):
   validated the f5e18a0f cure on a RIGHT-SIZED **RTX 4070 (46 SMs = 3.09x fewer than the L40S 142-SM baseline)**.
   GATE FIRST (g5): byte-eq max|Δ|(fused vs 30-conv ref) = **0.000e+00** at EVERY swept d (256/512/1024/2048);

@@ -1,0 +1,60 @@
+F-OGFUSE-FOLD — OG-FUSE-FOLD: fold the fused multi-expert MoE-conv kernel into the
+flame CLMConvMoE trainer as the device MoE-conv path (env-gated, byte-eq ModuleList-30).
+=============================================================================================
+
+MILESTONE (domains/HEXA-FUSION.md): "fold the fused kernel into the flame CLMConvMoE
+trainer — wire tool/gpu_moe_conv_fuse.cu into stdlib/flame as the device MoE-conv path
+(env-gated, byte-eq ModuleList)."
+
+FLAME PATH WIRED: YES.
+  stdlib/flame/clm_moe_conv_fused.hexa now folds the device MoE-conv DISPATCH into the
+  CLMConvMoE expert BLOCK (conv ⊕ route), the actual trainer step:
+    moe_block_fwd_dispatch(x, w_bank, b_bank, logits, probs, y, E,T,d,K,dil)
+      ├─ ex_out[E·T·d] = moe_conv_fwd_dispatch(...)   (env-gated device MoE-conv path)
+      └─ Y[T·d]        = nn_moe_router_fwd(logits, ex_out, ...)   (moe_lib softmax gate+combine)
+  Before this milestone, clm_moe_conv_fused.hexa proved only the per-expert CONV byte-eq
+  (OG-FUSE-PROD-FOLD); ex_out was NOT yet produced by the dispatch and fed to moe_lib's
+  router. moe_block_fwd_dispatch is the single call site a CLMConvMoE trainer MoE step uses,
+  so HEXA_FUSE_MOE_CONV now reaches the REAL trainer step (conv→gate→combine), not just the
+  conv micro-op. moe_lib is now `use`d by clm_moe_conv_fused.hexa.
+
+ENV-GATE NAME: HEXA_FUSE_MOE_CONV  (also ORed on by HEXA_FUSE_ALL). Default OFF → the
+  E-conv ModuleList-30 path produces ex_out (the byte-eq fallback/oracle). The gate selects
+  ONLY fill/occupancy/perf; both branches are byte-identical, so the descent is unchanged.
+
+GATE (g5) — byte-eq fused trainer MoE block == ModuleList-30, max|Δ|=0:
+
+(1) CPU (flame `hexa run`, structural max|Δ|=0 — the dev-vs-dev contract):
+    F-CLM-MOE-CONV-GEMM-FOLD-EQ = 1   (conv path E == E× ModuleList)
+    F-CLM-MOE-BLOCK-FOLD-EQ     = 1   (WHOLE block conv⊕route dispatch == ModuleList)
+    DEFAULT (fuse off):
+      [BLOCK] E=30 T=16 d=8 fuse_on=0  max|Δ| block(conv⊕route) dispatch-vs-ModuleList = 0.0
+      [BLOCK] E=30 T=16 d=8 fuse_on=0  (dil=2)                                          = 0.0
+      [BLOCK] E=4  T=24 d=8 fuse_on=0                                                   = 0.0
+    FUSED ON (HEXA_FUSE_MOE_CONV=1 → dispatch takes the FUSED conv branch):
+      [BLOCK] E=30 T=16 d=8 fuse_on=1  max|Δ| block(conv⊕route) dispatch-vs-ModuleList = 0.0
+      [BLOCK] E=30 T=16 d=8 fuse_on=1  (dil=2)                                          = 0.0
+      [BLOCK] E=4  T=24 d=8 fuse_on=1                                                   = 0.0
+    => the FUSED trainer MoE block is byte-IDENTICAL to the ModuleList-30 block.
+
+(2) GPU dev-vs-dev (vast.ai RTX A2000, sm_86, 26 SMs) — the device MoE-conv kernel the
+    flame path folds (tool/gpu_moe_conv_fuse.cu, E=30 d=256 T=64 K=3 dil=1, gate_d=192):
+      [GATE-DEV-EQ]  max|Δ|(GEMM  vs ModuleList) = 0.000e+00  <= OG-FUSE-PROD-KERNEL CONTRACT
+      [GATE-DEV-EQ]  max|Δ|(fused vs ModuleList) = 0.000e+00
+      [GATE-DEV-EQ]  max|Δ|(TILED vs ModuleList) = 0.000e+00
+      [GATE-DEV-EQ]  max|Δ|(GEMM-DB vs ModuleList) = 0.000e+00
+      [GATE-WIDE-0..6]  max|Δ|vsMList = 0.000e+00 (all 7 wide-tile configs)
+      # GATE (1) device-vs-device byte-exact (max|Δ|=0): PASS
+      # GATE (2) device-vs-CPU within fp32 FMA tol=6.0e-06: PASS  (2.980e-07 = fp32 FMA)
+      # GATE (3) PROD-PERF2 wide-tile configs byte-eq (max|Δ|=0 vs ModuleList): PASS
+      # GATE OVERALL => PASS
+
+VERDICT: 🟢 GREEN. The fused multi-expert MoE-conv kernel IS now the flame CLMConvMoE
+  trainer's device MoE-conv path (HEXA_FUSE_MOE_CONV-gated), byte-eq vs the ModuleList-30
+  baseline at max|Δ| = 0.000e+00 on BOTH the CPU flame block fold AND the real-GPU device
+  kernel. The fold wires the dispatch into the trainer's MoE BLOCK (conv ⊕ route), closing
+  the application path for the f5e18a0f cure (#2859/#2867).
+
+POD: 39879104 (RTX A2000, label hexa-ogfold) DESTROYED post-capture. Leak 0
+  (2 earlier hosts — 39875117 docker-build error, 39876994 broken proxy port-forward —
+  also destroyed, all label-confirmed hexa-ogfold; zero hexa-ogfold instances remain).
