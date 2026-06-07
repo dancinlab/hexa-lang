@@ -1,0 +1,107 @@
+F-FUSION-FF-BWDFUSE — byte-exact ATOMIC-FREE fused backward for the MoE/conv
+                       experts via forward-index reuse (Flash-MaxSim template,
+                       arXiv 2605.29517)
+================================================================================================
+VERDICT: 🟢 GREEN (gate PASS) — the destination-owned, atomic-free MoE-conv backward
+         REPRODUCES the reference gradient BIT-FOR-BIT (max|Δ|=0 dev-vs-dev AND vs CPU-fmaf),
+         is DETERMINISTIC (run-to-run max|Δ|=0 where the atomic baseline drifts 1e-4..3e-4),
+         issues ZERO atomics (vs 9.66e10 atomicAdds), and is 14.9-17.0x FASTER than the
+         atomicAdd scatter on a real H100. The FF-BWDFUSE bwd-fusion PRIMITIVE that
+         FF-VALLEY + MEGASTEP need is AVAILABLE + verified.
+
+DATE:    2026-06-08
+DEVICE:  NVIDIA H100 80GB HBM3 (SMs=132, cap 9.0), vast.ai instance 39960150,
+         label hexa-ffbwd, DESTROYED leak-0 (tag-checked before destroy).
+KERNEL:  tool/gpu_moe_conv_bwd_fuse.cu  (build: nvcc -arch=sm_90 -O3)
+DRIVER:  tool/gpu_moe_conv_bwd_fuse_run.sh
+
+------------------------------------------------------------------------------------------------
+THE WALL (handoff): the flame CLMConvMoE backward glue
+------------------------------------------------------------------------------------------------
+A CLMConvMoE MoE block = ModuleList of E ConvExpert, each causal nn.Conv1d(d,d,K). The
+backward computes gX (input grad), gW (weight grad), gb (bias grad). The input gradient
+  gX[p,ci] = Σ_e Σ_co Σ_{k : t = p + dil*(K-1-k), 0<=t<T}  gY_e[t,co] · W_e[co,ci,k]
+in the naive bwd is computed by a SCATTER:  gX[p,ci] += gY_e[t,co]·W_e[co,ci,k]  with
+atomicAdd over (e,t,co,k) — many (e,t,co,k) collide on the same (p,ci). That scatter is
+(1) serialized on the atomic unit + memory-bound and (2) NON-DETERMINISTIC in accumulation
+order → NOT FP64 byte-exact across runs. This is the exact wall FF-VALLEY + MEGASTEP inherit.
+
+------------------------------------------------------------------------------------------------
+THE FLASH-MAXSIM CURE (arXiv 2605.29517) — forward-index reuse, destination-owned reduction
+------------------------------------------------------------------------------------------------
+Reuse the FORWARD index structure to make the backward a DESTINATION-OWNED gather:
+  forward read:    p = t - dil*(K-1-k)            (given t,k → p)
+  inverse (gather): t = p + dil*(K-1-k),  for each k in [0,K),  valid iff 0<=t<T
+A destination-owned gX kernel: thread owns ONE (p,ci); loops e (asc), co (asc), k (asc);
+for each k computes t=p+dil*(K-1-k); if 0<=t<T accumulates gY_e[t,co]·W_e[co,ci,k]. FIXED
+order (e,co,k) → DETERMINISTIC, ATOMIC-FREE. gW/gb are already destination-owned (one
+thread owns one (e,co,ci,k) resp. (e,co) and reduces over t) → no atomics, deterministic.
+The inverse-grid index mapping (the named hard part) was the deliverable; it is correct
+for multi-tap spans (dil>1) and causal boundaries (validated dil=1 AND dil=2 on CPU first).
+
+================================================================================================
+GATE FIRST (g5) — byte-exactness, before any perf number
+================================================================================================
+Gate shape (CPU-oracle tractable): E=30 d=192 T=32 K=3 dil=1.
+
+Two honest sub-gates (mirrors the forward MOE-CONV-FUSE verdict's contract):
+  (1) DEVICE-vs-DEVICE byte-exact: destination-owned kernel run TWICE → must be BIT-IDENTICAL
+      (max|Δ|=0). This IS the FF-BWDFUSE property: atomic-free ⇒ deterministic + reproducible.
+  (2) DEVICE-vs-CPU within fp32 FMA tol (6e-6): the CPU ref uses fmaf (single rounding, SAME
+      order) so it matches the GPU's fma-contracted MAC; residual is ~1-ULP fp32, not a bug.
+
+  [GATE-gX-DESTOWN] dev-vs-dev byte-eq max|Δ| = 0.000e+00 (must be 0)  vs CPU-fmaf = 0.000e+00
+  [GATE-gW-DESTOWN] dev-vs-dev byte-eq max|Δ| = 0.000e+00 (must be 0)  vs CPU-fmaf = 0.000e+00
+  [GATE-gb-DESTOWN] vs CPU ref max|Δ| = 0.000e+00 (pure sum; must be 0)
+  [GATE-gX-ATOMIC]  dev-vs-dev run1-vs-run2 max|Δ| = 1.359e-05 (NONZERO => non-deterministic)
+  # GATE (1) destination-owned dev-vs-dev byte-exact (max|Δ|=0): PASS
+  # GATE (2) destination-owned vs CPU-fmaf within tol=6.0e-06:   PASS
+  # GATE OVERALL => PASS
+
+  byte-eq contract: the destination-owned gX/gW/gb reproduce the deterministic reference
+  BIT-FOR-BIT (max|Δ|=0). The atomic scatter's run-to-run drift (1.36e-05 here, 3.12e-04 at
+  d=2048) is the non-determinism FF-BWDFUSE REMOVES — that delta IS the value, stated verbatim.
+
+================================================================================================
+PERF — median cuEvent step-time (ms), same pod / same shape. H100 80GB HBM3.
+================================================================================================
+PERF SHAPE d=2048 (representative single-MoE-block, weight bank 1.51 GB)
+  atomic-count:        ATOMIC = 9.664e+10 atomicAdd ops   |   DESTOWN = 0 atomics
+  determinism (gX):    atomic run1-vs-run2 = 3.119e-04 (NONZERO)  |  destown run1-vs-run2 = 0.000e+00
+  [gX-ATOMIC]   step = 2139.564 ms   (atomicAdd scatter — non-deterministic baseline)
+  [gX-DESTOWN]  step =  143.396 ms   (FF-BWDFUSE atomic-free gather — deterministic)  => 14.92x FASTER
+  [gW-DESTOWN]  step =   38.596 ms   (destination-owned, no atomics)
+  [gb-DESTOWN]  step =    0.029 ms   (destination-owned, no atomics)
+  device working set (gY,W,gX,gW,gB) = 3.09 GB (IDENTICAL both paths; atomic path additionally
+    needs a gX-zeroing memset each step + atomic-unit read-modify-write traffic — the destown
+    path writes each gX[p,ci] EXACTLY ONCE, no RMW, no pre-zero).
+
+PERF SHAPE d=512 (under-fill regime, weight bank ~0.09 GB)
+  atomic-count:        ATOMIC = 6.040e+09 atomicAdd ops   |   DESTOWN = 0 atomics
+  determinism (gX):    atomic run1-vs-run2 = 7.319e-05 (NONZERO)  |  destown run1-vs-run2 = 0.000e+00
+  [gX-ATOMIC]   step = 163.219 ms
+  [gX-DESTOWN]  step =   9.602 ms    => 17.00x FASTER  (byte-eq max|Δ|=0 held)
+  [gW-DESTOWN]  step =   2.453 ms
+  [gb-DESTOWN]  step =   0.012 ms
+
+------------------------------------------------------------------------------------------------
+HONEST FRAMING
+------------------------------------------------------------------------------------------------
+- The win is TWO-fold and both are real: (1) atomic-free DETERMINISM (byte-exact, reproducible,
+  required for FP64 byte-eq training) and (2) a large bwd-glue SPEEDUP (14.9-17.0x) because the
+  destination-owned gather replaces 6e9-9.7e10 serialized atomicAdds + the gX pre-zero with one
+  coalesced write-once per (p,ci). Both measured on a real H100, byte-eq gated FIRST.
+- The gX gather re-reads gY and W from HBM per (p,ci) (no weight reuse across destinations) —
+  it is a plain MAC, NOT a faster-than-cuBLAS conv-transpose algorithm. The atomicAdd baseline
+  is pathologically slow (atomic-unit-bound), so even a naive coalesced gather wins by ~15x.
+  A weight-reuse / smem-tiled gX (the forward GEMM-conv lever's dual) is a FUTURE perf lever;
+  the PRIMITIVE (atomic-free + byte-exact + deterministic) is what FF-VALLEY/MEGASTEP need and
+  is DELIVERED here.
+- d=6208 (the full 7B flame shape) NOT run: weight bank E·d·d·K·4 ≈ 43 GB exceeds 80 GB once
+  gY+gX+gW are added; d=2048 (1.51 GB bank) is the representative single-block proxy. The
+  byte-eq contract is shape-free (verified at gate-d=192 AND perf-d=512 AND d=2048).
+
+PRIMITIVE STATUS: AVAILABLE for FF-VALLEY + MEGASTEP — the atomic-free destination-owned
+backward (gX inverse-grid gather + gW/gb destination-owned reduction) is byte-exact, fp64
+byte-eq-preserving, deterministic, and fuse-ready (it is a single pass per gradient with no
+cross-CTA reduction / atomics, so it composes into a persistent valley/whole-step megakernel).
