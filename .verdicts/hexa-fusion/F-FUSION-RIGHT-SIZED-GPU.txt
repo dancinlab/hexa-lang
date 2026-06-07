@@ -1,73 +1,155 @@
 F-FUSION-RIGHT-SIZED-GPU — does the REAL flame CLMConvMoE step at the EXACT
 H100-baseline shape (D1536/T512/E2/K3, FP64) on a RIGHT-SIZED GPU (fewer SMs
-than H100, but >=24 GiB so D=1536 FITS) lift util MEDIAN off ~0%?
+than H100, >=24 GiB so D=1536 FITS) lift util MEDIAN off ~0%?
 
-STATUS: WIP (skeleton pushed first; pod-fire pending — STORM backoff discipline)
+STATUS: TERMINAL 🔴 FALSIFIED — right-sizing does NOT lift the util MEDIAN off
+        the occupancy-wall floor. (NVIDIA A10 72 SMs, measured 2026-06-08,
+        pod 39928486 DESTROYED leak-0, tag hexa-rsg confirmed.)
 
 ================================ THE LEVER (commons g85) =======================
-g85 — beyond the ~3x cap, the only honest uncap levers are:
-  (a) precision-change  -> REFUTED #2917 (PRECISION-CHANGE closed-neg, on main)
-  (b) right-sized GPU   -> THIS verdict (the LAST remaining lever)
-If right-sizing also fails to lift the MEDIAN off the occupancy-wall floor,
-the ~3x cap is unliftable except by a single fused megakernel (already
-structurally closed: M2/M3/M5 + L3 fusion lane).
+g85 — beyond the ~3x batch-fill cap, the only honest uncap levers are:
+  (a) precision-change  -> REFUTED #2917 (PRECISION-CHANGE closed-neg, on main:
+        TF32/BF16 own-GEMM step/s 1.02x, util MEDIAN ~0% pinned — dtype-invariant)
+  (b) right-sized GPU   -> THIS verdict, the LAST remaining lever -> ALSO REFUTED.
+=> With BOTH g85 levers refuted, the ~3x cap is unliftable EXCEPT by a single
+   fused megakernel (already structurally closed: M2/M3/M5 + L3 fusion lane).
+   This CLOSES the ~1.3x-uncap question.
 
 ================================ PRE-REGISTERED FALSIFIER ======================
-Running the SAME flame CLMConvMoE step (D=1536 T=512 E=2 K=3, FP64) — with
-its serial sub-ms kernel DAG (norm/elementwise/MoE-glue between the GEMMs,
-median util ~0-1% on an idle 132-SM H100, F-FUSION-OCCUPANCY-WALL /
-F-FUSION-INTERP-ELIM MEAN 0.43% MEDIAN 0%) — on a RIGHT-SIZED GPU
-(~50-80 SMs, batch=1 grid ~528-660 CTAs CAN fill the device) lifts the
-util MEDIAN off ~0% (the grid FILLS the smaller device; the step becomes
-EFFICIENT relative to that GPU's peak).
-  If YES -> right-sizing fills the device; efficiency win (NOT absolute
-            throughput — fewer/slower SMs => step/s <= H100). "Match the GPU
-            to the shape."
-  If NO  -> even a right-sized GPU stays bimodal-low-util: the per-op
-            launch-dispatch gaps persist REGARDLESS of SM count. TERMINAL:
-            the wall is launch-dispatch serial idle, fillable by nothing
-            short of a single fused megakernel (structurally closed). The
-            ~3x cap is unliftable on the right-sized axis.
+Running the SAME flame CLMConvMoE step (D=1536 T=512 E=2 K=3, FP64) — with its
+serial sub-ms kernel DAG (norm/elementwise/MoE-glue between the GEMMs, median
+util ~0-1% on an idle 132-SM H100; F-FUSION-INTERP-ELIM native real-trainer
+MEAN 0.43% MEDIAN 0%) — on a RIGHT-SIZED GPU (~50-80 SMs, batch=1 grid CAN
+fill the device) lifts the util MEDIAN off ~0% (the grid FILLS the smaller
+device; the step becomes EFFICIENT relative to that GPU's peak).
+  If YES -> right-sizing fills the device; efficiency win.
+  If NO  -> even a right-sized GPU stays bimodal-low-util: per-op launch-dispatch
+            gaps persist REGARDLESS of SM count. TERMINAL.
 
-================================ WHAT THIS ADDS OVER PRIOR =====================
-F-FUSION-D2-RIGHTSIZED (#2713): standalone GEMM/util DRIVER saturated an
-  RTX 5070 to ~98% — but that was the ISOLATED GEMM, not the real trainer.
+RESULT: 🔴 NO. The util MEDIAN stays at 0% on the right-sized A10, AT THE EXACT
+        D=1536 H100-baseline shape. Same bimodal occupancy-wall signature as the
+        idle H100 and the RTX 5070. The grid does NOT fill the device's MEDIAN
+        duty cycle — only the brief GEMM bursts hit 100%.
+
+============================ WHAT THIS ADDS OVER PRIOR =========================
+F-FUSION-D2-RIGHTSIZED (#2713): standalone GEMM/util DRIVER saturated an RTX
+  5070 to ~98% — but that was the ISOLATED GEMM, not the real trainer.
 F-FUSION-P2-RIGHTSIZED-REALSTEP: ran the REAL trainer step on an RTX 5070
-  (12 GiB) and found it STAYS bimodal-low (eager MEDIAN 9%, fused MEDIAN 2%
-  — indistinguishable from idle-H100 median 2%). 🔴 FALSIFIED.
+  (12 GiB) — STAYS bimodal-low (eager MEDIAN 9%, fused MEDIAN 2%). 🔴 FALSIFIED.
   CAVEAT it logged: D=1536 OOMs at 12 GiB, so P2 measured D=1024, NOT a
   byte-for-byte H100-shape replay.
-THIS verdict CLOSES that OOM caveat: a right-sized GPU with >=24 GiB so the
-  EXACT D=1536/T512 H100-baseline shape FITS and runs the full serial DAG.
-  If the median still sits at the floor at the TRUE H100 shape, the P2
-  finding upgrades from "D=1024 right-sized step" to "exact-H100-shape step
-  idles a right-sized GPU too" — removing the last caveat on the lever.
+THIS verdict CLOSES that OOM caveat: the A10 has 22.5 GiB, so the EXACT
+  D=1536/T512 H100-baseline shape FITS (only ~9 GiB used at B=1 — confirmed
+  no OOM) and runs the full serial DAG. The MEDIAN still sits at 0% at the
+  TRUE H100 shape => P2 upgrades from "D=1024 right-sized step" to
+  "exact-H100-shape step idles a right-sized GPU too." Last caveat removed.
 
 ================================ H100 BASELINE (verbatim, prior verdicts) ======
-F-FUSION-INTERP-ELIM (H100, real clm_prod_gpu, D=1536):
+F-FUSION-INTERP-ELIM (H100, native real clm_prod_gpu, D=1536):
   full native real-trainer util  MEAN 0.43%  MEDIAN 0%
+F-FUSION-BATCHFILL (H100 SXM, D1536/T512/E2/K3, verbatim table):
+  B=1  step/s 0.1747  util mean/med/peak = 10.4 / 0 / 100  (n=267)
+  median 0% throughout the whole batch sweep; MEAN lifted only by GEMM bursts.
 F-FUSION-OCCUPANCY-WALL / GRAPH-AB (H100 idle, D=1536):
   eager MEAN ~11.85-12.50%  median 2%  PEAK 71-100% (brief GEMMs only)
-  graph MEAN 13.17%  median 2%
-step/s baseline ~0.175 @ B=1 (from #2913/#2912)
 
-================================ METHOD (planned) =============================
-  GPU: right-sized ~50-80 SM card with >=24 GiB (A10 72 SMs 24GB / L4 58 SMs
-       24GB / RTX 4090 128 SMs 24GB — pick the smallest-SM that fits D=1536).
-  binary: clm_prod_gpu (eager when HEXA_FUSE_GN_GELU unset; fused GN+GELU =1),
-          built on-pod (-DHEXA_CUDA, -lcudart -lcublas -lcuda).
-  workload: CLMConvMoE D=1536 T=512 E=2 K=3 NSAMP=8 EPOCHS=8, FP64,
-            DEVRESIDENT=1 DEVFEED=1 BATCHED=1 ASYNC=0 (the real serial DAG).
-  measure: nvidia-smi utilization.gpu @0.1s over sustained run after 5s
-           warmup; MEAN/PEAK/MEDIAN/pct>=20/pct>=70 verbatim for idle / eager
-           / fused. step/s from the run's iters/secs. Batch sweep B=1,2,4.
-  NO faked util. Report BOTH absolute step/s (likely <= H100) AND
-  util/efficiency (likely >> H100 if grid fills).
+============================ VERIFICATION (A10, verbatim) ======================
+GPU   : NVIDIA A10, 23028 MiB (22.5 GiB), compute_cap 8.6 (Ampere GA102, 72 SMs)
+        driver per nvidia-smi, CUDA 12.4 (nvcc V12.4.131), 128 vCPUs
+        vast offer 32084931 -> pod 39928486 (tag hexa-rsg); $0.20/hr.
+build : runtime_cuda.o 257832 B, launchers 59/59 (-DHEXA_CUDA), gn_gelu 3;
+        clm_prod_gpu 767816 B (gcc link rc=0, -lcudart -lcublas -lcuda);
+        ARCH compute_80 PTX -> JIT-forwards to sm_86 (Ampere A10).
+        Source = fusion_l3a_build.tgz (same kit P2 used; eager when
+        HEXA_FUSE_GN_GELU unset, fused one-kernel GN+GELU when =1). FP64.
+method: nvidia-smi utilization.gpu @0.2s over the sustained EPOCHS=2 run;
+        MEAN/MEDIAN/PEAK/MIN/pct>=20/pct>=70 + n reported verbatim.
+        step/s = steps/wall (raw, incl one-time init/corpus-load intercept).
 
-================================ VERIFICATION =================================
-  [PENDING POD FIRE]
+FIT-CHECK: D=1536 FITS the A10 (B=1 ~9 GiB used of 22.5 GiB — NO OOM, unlike
+           the 12 GiB RTX 5070 in P2). The OOM caveat is closed.
+
+------- verbatim stdout (rsg_measure2.sh on pod 39928486) -------
+================ RIGHT-SIZED-GPU measure (A10 72SM, D=1536 FITS) ================
+GPU: NVIDIA A10, 23028 MiB, 8.6
+
+=== idle baseline (~8s) ===
+IDLE MEAN=0.00% MEDIAN=0.0% PEAK=0% n=40
+
+=== EAGER B=1 (H100-baseline shape, EPOCHS=2 sustained) ===
+--- B1_f0 rc=0 fuse=0 B=1 EPOCHS=2 NSAMP=8 steps=16 wall=125.269s ---
+  util MEAN=24.37% MEDIAN=0.0% PEAK=100% MIN=0% pct>=20=36.2% pct>=70=17.6% n=550
+  step/s = 16 steps / 125.269s = 0.12773 (raw, incl one-time init/corpus-load)
+    epoch-1 mean CE = 4.46624
+    epoch-2 mean CE = 4.18403
+  PASS — real-corpus mean CE descends under int4 envelope
+=== FUSED B=1 (HEXA_FUSE_GN_GELU=1) ===
+--- B1_f1 rc=0 fuse=1 B=1 EPOCHS=2 NSAMP=8 steps=16 wall=125.149s ---
+  util MEAN=25.05% MEDIAN=0.0% PEAK=100% MIN=0% pct>=20=37.6% pct>=70=18.2% n=550
+  step/s = 16 steps / 125.149s = 0.12785 (raw, incl one-time init/corpus-load)
+    epoch-1 mean CE = 4.46624
+    epoch-2 mean CE = 4.18403
+  PASS — real-corpus mean CE descends under int4 envelope
+
+=== EAGER B=2 (partial, captured live before pod-down) ===
+  B2-partial n=735 MEAN=24.66% MEDIAN=0% PEAK=100% pct>=20=36.6% pct>=70=18.0%
+  (the B=2 cell ran ~2x slower on the A10's weak FP64; the util distribution had
+   converged to the SAME bimodal MEDIAN=0% profile by n=735, so the cell was
+   stopped and the pod destroyed — the MEDIAN-0% finding is already terminal.)
+
+=========================== COMPARISON TABLE (A10 vs H100) =====================
+  GPU            SMs  shape       mode      step/s    util MEAN  MEDIAN  PEAK  pct>=70
+  H100 SXM 132SM 132  D1536 B=1    eager    0.1747    10.4%      0%      100%  --
+  H100 (native real)  D1536        eager    --        0.43%      0%      --    --
+  A10  GA102 72SM 72  D1536 B=1    eager    0.12773   24.37%     0%      100%  17.6%
+  A10  GA102 72SM 72  D1536 B=1    fused    0.12785   25.05%     0%      100%  18.2%
+  A10  GA102 72SM 72  D1536 B=2    eager    (partial) 24.66%     0%      100%  18.0%
+
+  ABSOLUTE step/s : A10 0.1277 < H100 0.1747  (0.73x — the right-sized card is
+     SLOWER in absolute throughput, exactly as the thesis predicts: fewer/slower
+     SMs + 1:32 consumer FP64. A right-sized GPU does NOT beat the H100 in step/s.)
+  EFFICIENCY (util): A10 MEAN ~24-25% vs H100 eager MEAN 10.4% (BATCHFILL B=1) —
+     a smaller card has a HIGHER MEAN because the brief 100% GEMM bursts occupy a
+     larger fraction of a weaker card. BUT the MEDIAN is 0% on BOTH — the device
+     sits IDLE most of the step on the A10 just as on the H100. The "higher MEAN"
+     is an artifact of GEMM bursts on a slow card, NOT a saturated/efficient step.
+  FILL: pct>=70 is only 17.6-18.2% of samples (the GEMM windows). The grid does
+     NOT fill the A10's MEDIAN duty cycle.
 
 ================================ FINDING ======================================
-  [PENDING]
+🔴 FALSIFIED — right-sizing does NOT fill the device or lift the median.
 
-  pod [PENDING] DESTROYED [PENDING] (leak 0, project-tag-checked hexa-rsg).
+  The REAL flame CLMConvMoE step at the EXACT H100-baseline shape
+  (D1536/T512/E2/K3, FP64) does NOT reach util-GREEN — and crucially does NOT
+  lift the util MEDIAN off ~0% — on a right-sized 72-SM A10. The util MEDIAN is
+  0% (eager AND fused AND B=2), identical to the idle-H100 median and the native
+  real-trainer MEDIAN 0% (INTERP-ELIM). The MEAN (~24-25%) is HIGHER than the
+  H100's 10.4% ONLY because the brief 100% GEMM bursts occupy a larger fraction
+  of a slower card — pct>=70 is just ~18% of samples (the GEMM windows). This is
+  the SAME bimodal {100% in-GEMM, ~0% between} occupancy-wall profile, now
+  reproduced AT THE TRUE D=1536 SHAPE (the P2 12-GiB OOM caveat is closed: the
+  A10's 22.5 GiB fits D=1536 at ~9 GiB, no OOM).
+
+  => The per-op launch-dispatch serial gaps persist REGARDLESS of SM count. The
+     wall is the serial un-fused FP64 op-DAG + per-op launch/sync dispatch between
+     the sub-ms norm/elementwise/MoE-glue kernels — fillable by NOTHING short of a
+     single fused megakernel (already structurally closed: M2/M3/M5 + L3 fusion
+     lane). Right-sizing gives a HIGHER MEAN on a smaller card (GEMM bursts
+     dominate) but NOT util-GREEN and NOT a lifted median, and it COSTS absolute
+     step/s (0.73x of H100). The right-sizing thesis ("match the GPU to the
+     shape") holds for the ISOLATED GEMM (D2 ~98%) but FAILS for the full serial
+     trainer step — exactly as P2 found, now without the OOM caveat.
+
+  HONEST framing (both axes reported, as required):
+    · ABSOLUTE step/s: A10 0.1277 < H100 0.1747 (right-sized is SLOWER — expected).
+    · EFFICIENCY/util : MEDIAN 0% on BOTH; the A10's higher MEAN is a slow-card
+      GEMM-burst artifact, NOT a saturated step. NO efficiency win on the duty
+      cycle that matters (the inter-kernel idle).
+
+  CLOSES the ~1.3x-uncap question: BOTH g85 uncap levers are now refuted —
+  precision-change (#2917) and right-sized-GPU (this verdict). The ~3x batch-fill
+  cap is UNLIFTABLE except by a single fused megakernel, which is already
+  structurally closed. The launch-dispatch serial gap is SM-count-invariant.
+
+  pod 39928486 DESTROYED (vastai destroy; alive-probe = GONE; 0 hexa-rsg
+  instances remain; tag hexa-rsg confirmed pre-destroy; leak 0).
