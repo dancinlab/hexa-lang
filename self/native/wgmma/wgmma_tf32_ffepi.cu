@@ -17,7 +17,11 @@
 // Reports: byte-eq max|Δ| + rel-RMS (fused vs separate), fused-vs-separate WALL,
 //   launch-count delta (4 -> 1), HBM round-trip delta, occupancy of each kernel.
 //
-// Build: nvcc -O3 -arch=sm_90a -o ffepi wgmma_tf32_ffepi.cu -lcuda -lcublas -lcudart
+// Build: nvcc -O3 -arch=sm_90a -fmad=false -o ffepi wgmma_tf32_ffepi.cu -lcuda -lcublas -lcudart
+//   -fmad=false is REQUIRED for max|Δ|=0: the fused epilogue and the separate gelu
+//   kernel must compute the GELU 0.5*x*(1+erf) expression with the IDENTICAL fp32 op
+//   sequence. With FMA-contraction ON the two call sites contract differently (surrounding
+//   code differs) -> ~1 ULP residual (max|Δ|=4.77e-7). OFF -> bit-identical (max|Δ|=0).
 // Run:   ./ffepi S            (S = square M=N=K, default 2048; needs N%128==0 K%32==0)
 #define W10_NO_MAIN 1
 #include "wgmma_tf32_w10_lib.h"
