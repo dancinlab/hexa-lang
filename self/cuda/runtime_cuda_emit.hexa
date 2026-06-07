@@ -2573,10 +2573,202 @@ fn emit_runtime_cuda_c() -> str {
             "    grid.sync();\n" +
             "    _hx_dev_groupnorm(grid, b.Y, b.noG, b.noB, b.YN, b.MEANN, b.INVN, b.XHATN, T, D);\n" +
             "}\n" +
+            "/* ════════════════════════════════════════════════════════════════════════\n" +
+            " * HEXA-FUSION FF-VALLEY — persistent VALLEY-ONLY fusion megakernel.\n" +
+            " *\n" +
+            " * Distinct from _hx_k_clm_megafwd_fp64 (whole-fwd megakernel, fuses GEMMs +\n" +
+            " * valley): FF-VALLEY fuses ONLY the between-GEMM GLUE into a persistent\n" +
+            " * grid-synced kernel and keeps the 4 own-GEMM convs as SEPARATE (already-\n" +
+            " * saturated) kernel launches. The glue is the ~0%-util valley the whole-\n" +
+            " * megakernel was closed-negative on (byte-eq ⊥ util when FP64 GEMM is pulled\n" +
+            " * inside the cooperative one-wave grid — F-FUSION campaign-closed). By leaving\n" +
+            " * the GEMMs as their own saturated launches and fusing ONLY the valley glue,\n" +
+            " * FF-VALLEY attacks the idle valley without de-saturating the GEMMs.\n" +
+            " *\n" +
+            " * The forward DAG splits the valley into TWO glue blocks (the 2 expert GEMMs\n" +
+            " * sit between them, so a single persistent kernel cannot span both without\n" +
+            " * re-including those GEMMs):\n" +
+            " *   VALLEY-A  (after h0=conv):  groupnorm#1 -> gelu -> residual  (xt = xec + gelu(hn0))\n" +
+            " *   VALLEY-B  (after eo0,eo1=conv): gelu2 + expert-pack + moe-router(softmax+combine)\n" +
+            " *                                  -> groupnorm#2 (y -> yn)\n" +
+            " * Each reuses the IDENTICAL byte-eq device fns (_hx_dev_groupnorm host-order\n" +
+            " * reduction + NR-40 sqrt, _hx_gelu_dev erf, _hx_moe_exp_dev scaled-Taylor) the\n" +
+            " * whole-megakernel proved byte-identical -> max|delta|=0 vs the separate-kernel\n" +
+            " * reference BY CONSTRUCTION (same code, same grid.sync ordering). Env-gated\n" +
+            " * HEXA_FUSE_VALLEY; on no-coop / any miss -> -1 -> caller's separate eager glue. */\n" +
+            "struct _HxValleyABufs {\n" +
+            "    const double *XEC, *tgG, *tgB;\n" +
+            "    double *H0, *HN0, *MEAN0, *INV0, *XHAT0, *HG0, *XT;\n" +
+            "};\n" +
+            "__global__ void _hx_k_clm_valley1_fp64(_HxValleyABufs b,\n" +
+            "        int64_t T, int64_t D) {\n" +
+            "    _hxcg::grid_group grid = _hxcg::this_grid();\n" +
+            "    int64_t n = T * D;\n" +
+            "    /* GLUE BLOCK 1: groupnorm#1 (h0->hn0) -> gelu -> residual (xt = xec + gelu(hn0)).\n" +
+            "     * IDENTICAL to _hx_k_clm_megafwd_fp64's block-1, sans the two preceding convs. */\n" +
+            "    _hx_dev_groupnorm(grid, b.H0, b.tgG, b.tgB, b.HN0, b.MEAN0, b.INV0, b.XHAT0, T, D);\n" +
+            "    grid.sync();\n" +
+            "    { int64_t stride=(int64_t)gridDim.x*blockDim.x;\n" +
+            "      for(int64_t i=(int64_t)blockIdx.x*blockDim.x+threadIdx.x;i<n;i+=stride){\n" +
+            "        double hg=_hx_gelu_dev(b.HN0[i]); b.HG0[i]=hg; b.XT[i]=b.XEC[i]+hg; } }\n" +
+            "}\n" +
+            "struct _HxValleyBBufs {\n" +
+            "    const double *EO0, *EO1, *LOGR, *noG, *noB;\n" +
+            "    double *EX0, *EX1, *EXOUT, *PROBS, *Y, *YN, *MEANN, *INVN, *XHATN;\n" +
+            "};\n" +
+            "__global__ void _hx_k_clm_valley2_fp64(_HxValleyBBufs b,\n" +
+            "        int64_t T, int64_t D, int64_t E) {\n" +
+            "    _hxcg::grid_group grid = _hxcg::this_grid();\n" +
+            "    int64_t n = T * D;\n" +
+            "    /* GLUE BLOCK 2: gelu2 + expert_pack2 + moe_router(softmax E + combine).\n" +
+            "     * ONE thread per t — host accumulation order (byte-eq to _hx_k_moe_block2),\n" +
+            "     * IDENTICAL to _hx_k_clm_megafwd_fp64's block-2 sans the 3 preceding convs. */\n" +
+            "    { int64_t stride=(int64_t)gridDim.x*blockDim.x;\n" +
+            "      for(int64_t t=(int64_t)blockIdx.x*blockDim.x+threadIdx.x;t<T;t+=stride){\n" +
+            "        for(int64_t c=0;c<D;c++){ int64_t j=t*D+c;\n" +
+            "          double g0=_hx_gelu_dev(b.EO0[j]); b.EX0[j]=g0; b.EXOUT[j]=g0;\n" +
+            "          double g1=_hx_gelu_dev(b.EO1[j]); b.EX1[j]=g1; b.EXOUT[n+j]=g1; }\n" +
+            "        int64_t base=t*E; double mx=b.LOGR[base];\n" +
+            "        for(int64_t e=1;e<E;e++){ double vv=b.LOGR[base+e]; if(vv>mx)mx=vv; }\n" +
+            "        double s=0.0;\n" +
+            "        for(int64_t e=0;e<E;e++){ double ev=_hx_moe_exp_dev(b.LOGR[base+e]-mx); b.PROBS[base+e]=ev; s+=ev; }\n" +
+            "        for(int64_t e=0;e<E;e++) b.PROBS[base+e]/=s;\n" +
+            "        for(int64_t c=0;c<D;c++){ double acc=0.0;\n" +
+            "          for(int64_t e=0;e<E;e++) acc+=b.PROBS[base+e]*b.EXOUT[e*n+t*D+c];\n" +
+            "          b.Y[t*D+c]=acc; } } }\n" +
+            "    grid.sync();\n" +
+            "    /* GROUPNORM #2 (y->yn) — fused into the SAME persistent kernel. */\n" +
+            "    _hx_dev_groupnorm(grid, b.Y, b.noG, b.noB, b.YN, b.MEANN, b.INVN, b.XHATN, T, D);\n" +
+            "}\n" +
             "#ifdef __cplusplus\n" +
             "extern \"C\" {  /* REOPEN — the launcher keeps C linkage (runtime.c calls it) */\n" +
             "#endif\n" +
             "#endif /* __CUDACC__ (device block) */\n" +
+            "\n" +
+            "/* FF-VALLEY launcher A — cooperativeLaunch valley-1 (GN#1+gelu+residual) glue.\n" +
+            " * Inputs (h0 from the preceding SEPARATE saturated conv GEMM, xec, gamma/beta)\n" +
+            " * are device-resident; outputs (hn0,hg0,xt,...) stay FARR_DEVICE for the NEXT\n" +
+            " * separate conv GEMMs. One-wave coop grid (grid.sync legal). On no-coop / any\n" +
+            " * miss -> -1 -> caller falls back to the separate eager glue kernels (byte-eq). */\n" +
+            "int _hx_cuda_farr_clm_valley1_gpu(\n" +
+            "        int64_t h0_id, int64_t xec_id, int64_t tgG_id, int64_t tgB_id,\n" +
+            "        int64_t hn0_id, int64_t mean0_id, int64_t inv0_id, int64_t xhat0_id,\n" +
+            "        int64_t hg0_id, int64_t xt_id, int64_t T, int64_t D) {\n" +
+            "#ifdef __CUDACC__\n" +
+            "    if (T <= 0 || D <= 0) return -1;\n" +
+            "    int dev = 0; cudaGetDevice(&dev);\n" +
+            "    int coop = 0; cudaDeviceGetAttribute(&coop, cudaDevAttrCooperativeLaunch, dev);\n" +
+            "    if (!coop) { fprintf(stderr, \"[cuda] valley1: no cooperativeLaunch\\n\"); return -1; }\n" +
+            "    int64_t n = T * D;\n" +
+            "    int64_t ins[4] = { h0_id, xec_id, tgG_id, tgB_id };\n" +
+            "    for (int i = 0; i < 4; i++) { if (ins[i] >= 0 && _h2d(ins[i]) != 0) return -1; }\n" +
+            "    if (_ensure_dev_alloc_out(hn0_id, n) != 0) return -1;\n" +
+            "    if (_ensure_dev_alloc_out(mean0_id, 1) != 0) return -1;\n" +
+            "    if (_ensure_dev_alloc_out(inv0_id, 1) != 0) return -1;\n" +
+            "    if (_ensure_dev_alloc_out(xhat0_id, n) != 0) return -1;\n" +
+            "    if (_ensure_dev_alloc_out(hg0_id, n) != 0) return -1;\n" +
+            "    if (_ensure_dev_alloc_out(xt_id, n) != 0) return -1;\n" +
+            "    _HxValleyABufs bb;\n" +
+            "    bb.XEC=g_slots[xec_id].d_buf; bb.tgG=g_slots[tgG_id].d_buf; bb.tgB=g_slots[tgB_id].d_buf;\n" +
+            "    bb.H0=g_slots[h0_id].d_buf; bb.HN0=g_slots[hn0_id].d_buf;\n" +
+            "    bb.MEAN0=g_slots[mean0_id].d_buf; bb.INV0=g_slots[inv0_id].d_buf;\n" +
+            "    bb.XHAT0=g_slots[xhat0_id].d_buf; bb.HG0=g_slots[hg0_id].d_buf; bb.XT=g_slots[xt_id].d_buf;\n" +
+            "    int blk = 128;\n" +
+            "    int numBlocksPerSm = 0;\n" +
+            "    cudaOccupancyMaxActiveBlocksPerMultiprocessor(&numBlocksPerSm,\n" +
+            "        (void*)_hx_k_clm_valley1_fp64, blk, 0);\n" +
+            "    if (numBlocksPerSm < 1) numBlocksPerSm = 1;\n" +
+            "    int numSm = 0; cudaDeviceGetAttribute(&numSm, cudaDevAttrMultiProcessorCount, dev);\n" +
+            "    if (numSm < 1) numSm = 1;\n" +
+            "    int grid_sz = numSm * numBlocksPerSm;\n" +
+            "    dim3 gdim(grid_sz), bdim(blk);\n" +
+            "    void* args[] = { (void*)&bb, (void*)&T, (void*)&D };\n" +
+            "    cudaError_t le = cudaLaunchCooperativeKernel((void*)_hx_k_clm_valley1_fp64,\n" +
+            "                        gdim, bdim, args, 0, _forge_stream());\n" +
+            "    if (le != cudaSuccess) { fprintf(stderr, \"[cuda] valley1 coop launch: %s\\n\", cudaGetErrorString(le)); return -1; }\n" +
+            "    if (_forge_launch_check(\"clm_valley1\") != 0) return -1;\n" +
+            "    { static int _v1_fired = 0; if (!_v1_fired) { _v1_fired = 1;\n" +
+            "        fprintf(stderr, \"[VALLEY1-FIRED] _hx_k_clm_valley1_fp64 FP64 persistent GN#1+gelu+resid glue (grid=%d blk=%d, GEMMs SEPARATE)\\n\", grid_sz, blk); } }\n" +
+            "    int64_t outs[6] = { hn0_id, mean0_id, inv0_id, xhat0_id, hg0_id, xt_id };\n" +
+            "    for (int k = 0; k < 6; k++) {\n" +
+            "        if (outs[k] < 0) continue;\n" +
+            "        HexaFarrEntry* e = &_hx_farr_table[outs[k]];\n" +
+            "        e->d_buf = (void*)g_slots[outs[k]].d_buf;\n" +
+            "        e->loc = FARR_DEVICE; e->dirty_host = 0; e->dirty_dev = 0;\n" +
+            "    }\n" +
+            "    return 0;\n" +
+            "#else\n" +
+            "    (void)h0_id;(void)xec_id;(void)tgG_id;(void)tgB_id;(void)hn0_id;(void)mean0_id;\n" +
+            "    (void)inv0_id;(void)xhat0_id;(void)hg0_id;(void)xt_id;(void)T;(void)D;\n" +
+            "    fprintf(stderr, \"[cuda] valley1: built without __CUDACC__\\n\"); return -1;\n" +
+            "#endif\n" +
+            "}\n" +
+            "/* FF-VALLEY launcher B — cooperativeLaunch valley-2 (gelu2+pack+moe-router+GN#2).\n" +
+            " * Inputs eo0/eo1 (from the SEPARATE saturated expert conv GEMMs), logr (router\n" +
+            " * GEMM), gamma/beta are device-resident; outputs (y,yn,...) stay FARR_DEVICE for\n" +
+            " * the final separate out-logits conv. EX0/EX1 are transient device scratch. */\n" +
+            "int _hx_cuda_farr_clm_valley2_gpu(\n" +
+            "        int64_t eo0_id, int64_t eo1_id, int64_t logr_id, int64_t noG_id, int64_t noB_id,\n" +
+            "        int64_t exout_id, int64_t probs_id, int64_t y_id, int64_t yn_id,\n" +
+            "        int64_t meanN_id, int64_t invN_id, int64_t xhatN_id,\n" +
+            "        int64_t T, int64_t D, int64_t E) {\n" +
+            "#ifdef __CUDACC__\n" +
+            "    if (T <= 0 || D <= 0 || E <= 0) return -1;\n" +
+            "    int dev = 0; cudaGetDevice(&dev);\n" +
+            "    int coop = 0; cudaDeviceGetAttribute(&coop, cudaDevAttrCooperativeLaunch, dev);\n" +
+            "    if (!coop) { fprintf(stderr, \"[cuda] valley2: no cooperativeLaunch\\n\"); return -1; }\n" +
+            "    int64_t n = T * D;\n" +
+            "    int64_t ins[5] = { eo0_id, eo1_id, logr_id, noG_id, noB_id };\n" +
+            "    for (int i = 0; i < 5; i++) { if (ins[i] >= 0 && _h2d(ins[i]) != 0) return -1; }\n" +
+            "    if (_ensure_dev_alloc_out(exout_id, 2 * n) != 0) return -1;\n" +
+            "    if (_ensure_dev_alloc_out(probs_id, T * E) != 0) return -1;\n" +
+            "    if (_ensure_dev_alloc_out(y_id, n) != 0) return -1;\n" +
+            "    if (_ensure_dev_alloc_out(yn_id, n) != 0) return -1;\n" +
+            "    if (_ensure_dev_alloc_out(meanN_id, T) != 0) return -1;\n" +
+            "    if (_ensure_dev_alloc_out(invN_id, T) != 0) return -1;\n" +
+            "    if (_ensure_dev_alloc_out(xhatN_id, n) != 0) return -1;\n" +
+            "    double *d_ex0 = NULL, *d_ex1 = NULL;\n" +
+            "    if (cudaMalloc((void**)&d_ex0, (size_t)n * sizeof(double)) != cudaSuccess) return -1;\n" +
+            "    if (cudaMalloc((void**)&d_ex1, (size_t)n * sizeof(double)) != cudaSuccess) { cudaFree(d_ex0); return -1; }\n" +
+            "    _HxValleyBBufs bb;\n" +
+            "    bb.EO0=g_slots[eo0_id].d_buf; bb.EO1=g_slots[eo1_id].d_buf; bb.LOGR=g_slots[logr_id].d_buf;\n" +
+            "    bb.noG=g_slots[noG_id].d_buf; bb.noB=g_slots[noB_id].d_buf;\n" +
+            "    bb.EXOUT=g_slots[exout_id].d_buf; bb.PROBS=g_slots[probs_id].d_buf; bb.Y=g_slots[y_id].d_buf;\n" +
+            "    bb.YN=g_slots[yn_id].d_buf; bb.MEANN=g_slots[meanN_id].d_buf;\n" +
+            "    bb.INVN=g_slots[invN_id].d_buf; bb.XHATN=g_slots[xhatN_id].d_buf;\n" +
+            "    bb.EX0=d_ex0; bb.EX1=d_ex1;\n" +
+            "    int blk = 128;\n" +
+            "    int numBlocksPerSm = 0;\n" +
+            "    cudaOccupancyMaxActiveBlocksPerMultiprocessor(&numBlocksPerSm,\n" +
+            "        (void*)_hx_k_clm_valley2_fp64, blk, 0);\n" +
+            "    if (numBlocksPerSm < 1) numBlocksPerSm = 1;\n" +
+            "    int numSm = 0; cudaDeviceGetAttribute(&numSm, cudaDevAttrMultiProcessorCount, dev);\n" +
+            "    if (numSm < 1) numSm = 1;\n" +
+            "    int grid_sz = numSm * numBlocksPerSm;\n" +
+            "    dim3 gdim(grid_sz), bdim(blk);\n" +
+            "    void* args[] = { (void*)&bb, (void*)&T, (void*)&D, (void*)&E };\n" +
+            "    cudaError_t le = cudaLaunchCooperativeKernel((void*)_hx_k_clm_valley2_fp64,\n" +
+            "                        gdim, bdim, args, 0, _forge_stream());\n" +
+            "    if (le != cudaSuccess) { fprintf(stderr, \"[cuda] valley2 coop launch: %s\\n\", cudaGetErrorString(le)); cudaFree(d_ex0); cudaFree(d_ex1); return -1; }\n" +
+            "    if (_forge_launch_check(\"clm_valley2\") != 0) { cudaFree(d_ex0); cudaFree(d_ex1); return -1; }\n" +
+            "    { static int _v2_fired = 0; if (!_v2_fired) { _v2_fired = 1;\n" +
+            "        fprintf(stderr, \"[VALLEY2-FIRED] _hx_k_clm_valley2_fp64 FP64 persistent gelu2+pack+moe+GN#2 glue (grid=%d blk=%d, GEMMs SEPARATE)\\n\", grid_sz, blk); } }\n" +
+            "    cudaFree(d_ex0); cudaFree(d_ex1);\n" +
+            "    int64_t outs[7] = { exout_id, probs_id, y_id, yn_id, meanN_id, invN_id, xhatN_id };\n" +
+            "    for (int k = 0; k < 7; k++) {\n" +
+            "        if (outs[k] < 0) continue;\n" +
+            "        HexaFarrEntry* e = &_hx_farr_table[outs[k]];\n" +
+            "        e->d_buf = (void*)g_slots[outs[k]].d_buf;\n" +
+            "        e->loc = FARR_DEVICE; e->dirty_host = 0; e->dirty_dev = 0;\n" +
+            "    }\n" +
+            "    return 0;\n" +
+            "#else\n" +
+            "    (void)eo0_id;(void)eo1_id;(void)logr_id;(void)noG_id;(void)noB_id;(void)exout_id;\n" +
+            "    (void)probs_id;(void)y_id;(void)yn_id;(void)meanN_id;(void)invN_id;(void)xhatN_id;\n" +
+            "    (void)T;(void)D;(void)E;\n" +
+            "    fprintf(stderr, \"[cuda] valley2: built without __CUDACC__\\n\"); return -1;\n" +
+            "#endif\n" +
+            "}\n" +
             "\n" +
             "/* P1 launcher — cooperativeLaunch the full-fwd megakernel. Resolves all 37\n" +
             " * farr ids to device buffers (inputs H2D, outputs dev-alloc), launches with\n" +

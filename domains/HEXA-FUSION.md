@@ -213,10 +213,21 @@
   into the own-GEMM epilogue while data is in regs/smem, killing a global round-trip + a launch per fused
   op; byte-eq vs separate-op ref. MED (FP64 epilogue register pressure). Highest leverage-per-effort kernel
   change (we already own the GEMM). Lit: CUTLASS/Inductor epilogue fusion, ThunderMLA 20-35%.
-- [ ] **FF-VALLEY — persistent valley-only fusion megakernel** — fuse ONLY the between-GEMM glue
+- [x] **FF-VALLEY — persistent valley-only fusion megakernel** — fuse ONLY the between-GEMM glue
   (groupnorm+gelu+conv-experts+elementwise) into a persistent kernel; keep own-GEMMs as separate saturated
   kernels. Extends GREEN L3-a/L3-b to the bwd side; attacks the ~0%-util valley directly. MED. Lit: MPK
   (arXiv 2512.22219) cross-task-pipelining ablation 1.2-1.3x. Best risk-adjusted structural lever.
+  🟢 **FWD GLUE LANDED, byte-eq GREEN.** 2 persistent grid-synced glue kernels (_hx_k_clm_valley1_fp64
+  GN#1+gelu+resid; _hx_k_clm_valley2_fp64 gelu2+pack+moe-router+GN#2), GEMMs kept SEPARATE (the
+  valley-only distinction vs the closed-neg whole-fwd megakernel). H100 (132 SM): byte-eq FP64
+  **max|delta|=0** vs separate-kernel ref (all outputs, T∈{128,256} D∈{512,1024} E∈{2,4}); valley-glue
+  wall **2.50–2.62x** (fused vs separate). DUTYCYCLE/BWDFUSE prereqs NOT landed → measured valley
+  fraction myself: GEMM4≈0.10–0.33ms → valley_frac ~99% → step lever ~2.48–2.60x BUT ⚠ the ~99%
+  fraction is an ARTIFACT of the byte-eq-forced SINGLE-THREAD GN reduction; in a parallel-reduction
+  trainer the valley collapses to a few % (→ back near the MPK 1.2–1.3x ceiling). Structural lever
+  VALIDATED + byte-exact; magnitude is byte-eq-regime-specific. BWD valley + full clm_prod .hexa
+  wiring DEFERRED (FF-BWDFUSE primitive unavailable). Verdict F-FUSION-FF-VALLEY.txt. pod hexa-ffval
+  39960189 DESTROYED leak-0.
 - [ ] **FF-BWDFUSE — byte-exact backward via forward-index reuse (Flash-MaxSim template)** — atomic-free,
   destination-owned gradient reduction reusing the fwd argmax/routing indices; the bwd-fusion primitive
   FF-VALLEY + MEGASTEP both need. byte-eq FP64. Lit: Flash-MaxSim arXiv 2605.29517 (train+bwd, 3.9-4.7x,
