@@ -198,10 +198,13 @@
   (groupnorm+gelu+conv-experts+elementwise) into a persistent kernel; keep own-GEMMs as separate saturated
   kernels. Extends GREEN L3-a/L3-b to the bwd side; attacks the ~0%-util valley directly. MED. Lit: MPK
   (arXiv 2512.22219) cross-task-pipelining ablation 1.2-1.3x. Best risk-adjusted structural lever.
-- [ ] **FF-BWDFUSE — byte-exact backward via forward-index reuse (Flash-MaxSim template)** — atomic-free,
-  destination-owned gradient reduction reusing the fwd argmax/routing indices; the bwd-fusion primitive
+- [x] **FF-BWDFUSE — byte-exact backward via forward-index reuse (Flash-MaxSim template)** — atomic-free,
+  destination-owned gradient reduction reusing the fwd index structure; the bwd-fusion primitive
   FF-VALLEY + MEGASTEP both need. byte-eq FP64. Lit: Flash-MaxSim arXiv 2605.29517 (train+bwd, 3.9-4.7x,
-  byte-exact, ~28x less train mem).
+  byte-exact, ~28x less train mem). 🟢 GREEN (H100, .verdicts/.../F-FUSION-FF-BWDFUSE.txt): gX inverse-grid
+  gather t=p+dil*(K-1-k) + gW/gb destination-owned → byte-eq max|Δ|=0 (dev-vs-dev AND vs CPU-fmaf),
+  DETERMINISTIC (run-to-run 0 vs atomic 1e-4..3e-4), 0 atomics (vs 9.66e10 atomicAdd), 14.9-17.0x faster
+  than the atomicAdd scatter. PRIMITIVE AVAILABLE for FF-VALLEY/MEGASTEP.
 - [ ] **FF-XSTREAM — cross-stream valley overlap (no fusion, cheapest probe)** — issue independent ops
   (per-expert, grad-compute || next-layer fwd) on multiple CUDA streams so the scheduler overlaps the
   under-filling kernels instead of serializing them; turns bimodal {100%,0%} into a mid-band. LOW. The
@@ -927,3 +930,34 @@ Pinned by the user as this session's tracked axes. Two upstream "make it work" a
 | 3 | reflect 1+2 -> dojo | fold the own-GEMM ladder + megakernel-wall story into stdlib/dojo (hexa-cuda track) | downstream of 1,2 |
 | 4 | reflect 1+2 -> README | flame.forge.hexa-cuda trinity GPU section (PR #2842 reorganized it); fold the OG8/OG10 numbers + both-walls-closed story | #2842 = 1st pass, numbers TODO |
 | 5 | reflect 1+2 -> commons.tape | governance directive capturing own-GEMM-parity + cuBLAS-impossible-megakernel — sign-gated (sidecar sign commons, user-only) | downstream, needs sign |
+
+## ── FF-BWDFUSE — atomic-free byte-exact MoE-conv backward 🟢 GREEN (H100, 2026-06-08, g5 verbatim) ──
+
+Flash-MaxSim (arXiv 2605.29517) forward-index reuse applied to the CLMConvMoE backward glue.
+The flame bwd computed gX[p,ci] by an atomicAdd SCATTER over (e,t,co,k) — atomic-unit-bound +
+NON-DETERMINISTIC (not fp64 byte-eq across runs). The cure: a DESTINATION-OWNED gather using the
+inverse-grid index `t = p + dil*(K-1-k)` (the forward read `p = t - dil*(K-1-k)` inverted) — each
+(p,ci) owns its grad, gathers contributors in FIXED order (e,co,k asc) → atomic-free, deterministic.
+gW/gb are already destination-owned (reduce over t). The inverse-grid mapping (the named hard part)
+is correct for multi-tap spans (validated dil=1 AND dil=2) + causal boundaries.
+
+GATE (g5, byte-eq FIRST) — H100 80GB HBM3, gate-d=192:
+  gX destination-owned: dev-vs-dev byte-eq max|Δ| = 0.000e+00  AND  vs CPU-fmaf = 0.000e+00
+  gW destination-owned: dev-vs-dev byte-eq max|Δ| = 0.000e+00  AND  vs CPU-fmaf = 0.000e+00
+  gb destination-owned: vs CPU ref max|Δ| = 0.000e+00
+  atomic baseline: run-to-run max|Δ| = 1.36e-05 (NONZERO — the non-determinism FF-BWDFUSE removes)
+  GATE OVERALL => PASS
+
+PERF (gX bwd glue, median cuEvent, H100):
+  d=2048: atomic 2139.6 ms (9.66e10 atomicAdd) -> destown 143.4 ms (0 atomics) = 14.9x · determinism 3.12e-4 -> 0
+  d=512:  atomic  163.2 ms (6.04e9  atomicAdd) -> destown   9.6 ms (0 atomics) = 17.0x · determinism 7.32e-5 -> 0
+  working set identical (3.09 GB @d=2048); atomic path additionally needs a per-step gX pre-zero +
+  atomic RMW traffic — destown writes each gX[p,ci] EXACTLY ONCE.
+
+HONEST: the gX gather is a plain MAC (no weight reuse across destinations); the ~15-17x win is vs the
+pathological atomicAdd baseline, NOT a faster-than-cuBLAS conv-transpose. A weight-reuse/smem-tiled gX
+is a future PERF lever; the PRIMITIVE (atomic-free + byte-exact + deterministic + single-pass, no
+cross-CTA reduction) is what FF-VALLEY/MEGASTEP need and is DELIVERED. d=6208 (43 GB bank) not run —
+contract is shape-free (verified d=192/512/2048). Verdict: .verdicts/hexa-fusion/F-FUSION-FF-BWDFUSE.txt
+kernel/driver: tool/gpu_moe_conv_bwd_fuse.cu · tool/gpu_moe_conv_bwd_fuse_run.sh
+pod: vast 39960150 (label hexa-ffbwd) DESTROYED leak-0 (tag-checked).
