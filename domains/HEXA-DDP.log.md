@@ -91,3 +91,13 @@
 - **Verdict**: .verdicts/hexa-ddp-m6-runpod/F-DDP-M6-RUNPOD.txt (verbatim rank stdout).
 - **Pods**: BOTH terminated immediately on capture (`runpodctl pod delete` -> deleted; account
   pod list shows 0 of my M6 pods). Leak 0 on runpod.
+
+## DDP-M7 — production 7B-scale DDP byte-eq (1-GPU == N-GPU)  [GREEN]
+- node: vast 4x NVIDIA H200 (143771 MiB/GPU, 149.56 GB free, 2015 GB host RAM), nvcc 12.4, sm_90, instance 39809972 (label hexa-ddp-m7, DESTROYED leak-0, project-tag-checked).
+- code: stdlib/ddp/m7_7b/ddp_train_m7.cu — M4/M5b flame-MLP fwd/bwd + canonical ring all-reduce; NPARAM pushed to production scale; gate = dtype-independent true max|Δ|=0 (ring per-chunk right-nested tree reference, M5b finding).
+- LEG A (FP64): NPARAM=5,492,732,608 (5.493 B, H=74048) — max|Δ|=0 [VRAM-CAPPED]. loss_ref==loss_ddp=340786697.62098843. 19m19s.
+- LEG B (fp32): NPARAM=7,010,541,280 (7.011 B, H=83664, HIT 7B TARGET) — max|Δ|=0. loss_ref==loss_ddp=477412959.75987273. 16m21s.
+- both legs: weights·grad·loss·rank-agreement all exactly 0; real NVLink P2P cudaMemcpyPeer ring (H200 SXM).
+- HONEST: 7B does not fit FP64 VRAM (168 GB/GPU > 143) — 7B leg is fp32 (order-matched true byte-eq, not tolerance). single step; multi-step accum + 7B speedup out of scope.
+- FINDING: the DDP byte-eq invariant HOLDS at production 7B scale. M4/M5b small-model max|Δ|=0 + M7 7B max|Δ|=0 bracket the production regime with no gap (grad-of-sum=sum-of-grads is scale-invariant by construction).
+- verdict: .verdicts/hexa-ddp-m7/F-DDP-M7-7B-BYTEEQ.txt (both legs verbatim).
