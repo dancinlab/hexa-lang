@@ -131,3 +131,31 @@
   2-GPU crossover track + P2P-any line). **Verdict**:
   .verdicts/hexa-ddp-m5c/F-DDP-M5C-CROSSOVER.txt (both node wall tables +
   canAccessPeer probe + byte-eq verbatim).
+
+## DDP-M6b — WAN throughput characterization of the M6 cross-node ring all-reduce (perf)
+- **Scope**: M6 (#2899/#2900) proved cross-node byte-eq only (latency-independent); M6b measures
+  the PERF envelope M6 deferred — RTT floor, BW-vs-payload (1KB..256MB), latency->bandwidth
+  crossover, and the TCP socket-buffer/window effect. NOT a correctness claim.
+- **Hardware**: 2 vast nodes, real intercontinental WAN. rank0 = instance 39810496 Poland
+  (91.150.160.38, ring ext :16989); rank1 = instance 39810517 California US (74.48.140.178,
+  ring ext :44291). Ring ports exposed via vast Docker port-map; two TCP connections each cross
+  the public Internet PL<->CA (~9-10k km). Both label hexa-ddp-m6b, DESTROYED leak-0.
+- **Code**: stdlib/ddp/m6b_throughput/ring_perf_m6b.c — M1/M3/M5/M6 canonical 2(N-1) ring
+  schedule + chunk_start partition + parity send/recv (M6 host-to-host TCP transport, byte-for-
+  byte), instrumented with: 1-byte ping-pong RTT (median of 50), per-size median-wall BW sweep,
+  --single (large single-size probe), --sockbuf (SO_SND/RCVBUF window axis).
+- **(1) RTT floor**: ~300-320 ms (3 independent runs: 314.79 / 300.70 / 319.08 ms). A full
+  all-reduce (reduce-scatter + all-gather, each a blocking send-then-recv phase) pays ~2 RTT min.
+- **(2) BW vs size (default buffer, reps=7)**: flat ~3-4e-5 GB/s (~30-40 KB/s) across 1KB..1MB.
+  Small S (<=16KB) median ~0.6-1.0s == the ~2 RTT floor; 1MB all-reduce = 30.9 s.
+- **(4) TCP-window probe (32 MB SO_SND/RCVBUF, kernel rmem/wmem_max raised to 128MB)**: curve is
+  INDISTINGUISHABLE from default-buffer. CLEAN NEGATIVE — the limiter is NOT the window/BDP; it
+  is the ring's per-phase blocking send-then-recv serialising a full RTT per phase (RTT-bound).
+- **(3) Crossover / ceiling**: never enters a bandwidth-bound regime at any measurable size;
+  effective GB/s ceiling ~3-4e-5 GB/s (~30-40 KB/s) — 2-3 orders below the links' ~800 Mbit
+  nominal. The cross-country RTT dwarfs transfer time for all realistic gradient sizes.
+- **Honest verdict (g5)**: byte-exact (M6) but perf-useless for synchronous DDP at realistic
+  gradient sizes over this commodity-WAN-TCP path; viable only when compute >> communication, or
+  if the collective is re-pipelined to overlap phases. NOT an RDMA/datacenter number.
+- **Verdict**: .verdicts/hexa-ddp-m6b/F-DDP-M6B-WAN-THROUGHPUT.txt (RTT + BW table + sockbuf
+  probe, verbatim rank0 stdout).
