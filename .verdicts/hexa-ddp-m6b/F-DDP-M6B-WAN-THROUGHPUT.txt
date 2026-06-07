@@ -1,0 +1,140 @@
+F-DDP-M6B-WAN-THROUGHPUT — perf envelope of the M6 cross-node ring all-reduce
+=============================================================================
+STATUS: 🟢 GREEN (perf characterization) — RTT + BW-vs-size curve measured on a
+        REAL intercontinental WAN. NOT a correctness claim (M6 #2899/#2900 owns
+        byte-eq); this is the THROUGHPUT envelope M6 explicitly deferred.
+
+PRE-REGISTERED FALSIFIER / QUESTION (g5):
+  M6 proved the 2-node TCP ring all-reduce crosses a real WAN node boundary
+  byte-exact, but said NOTHING about speed. M6b measures it:
+    (1) RTT floor (small-message ping-pong round trip),
+    (2) achieved all-reduce bandwidth (GB/s) as payload sweeps 1KB..256MB,
+    (3) the latency->bandwidth crossover size,
+    (4) the effect of the TCP socket-buffer / window (BDP) on (2).
+  HONEST prediction (g5): commodity WAN TCP between two rented pods is high-RTT
+  (cross-country tens-to-hundreds of ms); small messages are latency-bound
+  (terrible effective BW), large messages should approach link bandwidth. We
+  report the REAL curve. NOT datacenter/RDMA. NOT a correctness claim.
+
+METHOD:
+  stdlib/ddp/m6b_throughput/ring_perf_m6b.c — the EXACT M1/M3/M5/M6 canonical
+  ring schedule (2(N-1) steps, chunk_start partition, parity send/recv ordering
+  for deadlock-free 2-cycle), host-memory FP64 ring over host-to-host TCP
+  (sendall/recvall, TCP_NODELAY) — byte-for-byte the M6 transport, instrumented:
+    * RTT_PING: rank0 sends a 1-byte token to succ, rank1 echoes it back; median
+      of 50 round trips.
+    * BW sweep: per payload size S (FP64 elems), reset x and run a full
+      all-reduce R times, report MEDIAN wall. algo_GB/s = S*8 / median_wall;
+      wire_GB/s = (bytes actually put on the wire by the 2(N-1) steps) / median.
+      For N=2 both ~= S*8 (each rank sends ~S/2 and receives ~S/2 per phase, two
+      phases reduce-scatter+all-gather).
+    * --sockbuf BYTES sets SO_SNDBUF/SO_RCVBUF before connect/accept to probe
+      the bandwidth-delay-product (TCP window) hypothesis for (4).
+
+NODE LOCATIONS (genuinely different physical hosts, different public IPs,
+different continents — a REAL long-haul WAN boundary, NOT loopback):
+  rank 0 = vast instance 39810496, Poland       (PL), public 91.150.160.38
+  rank 1 = vast instance 39810517, California US (CA), public 74.48.140.178
+  Ring ports exposed via vast Docker port-map:
+    A (rank0): listen container 5700 -> external 91.150.160.38:16989
+    B (rank1): listen container 5701 -> external 74.48.140.178:44291
+  rank0 --succ 74.48.140.178:44291 ; rank1 --succ 91.150.160.38:16989.
+  The two TCP ring connections each cross the public Internet PL<->CA (a
+  trans-Atlantic + trans-continental hop, ~9-10k km great-circle).
+
+──────────────────────────────────────────────────────────────────────────────
+(1) RTT FLOOR — 1-byte ping-pong, median round trip (3 independent runs)
+──────────────────────────────────────────────────────────────────────────────
+  RTT_PING median_round_trip_ms = 314.7907   (first sweep, 50 pings)
+  RTT_PING median_round_trip_ms = 300.6978   (default-buffer sweep, 50 pings)
+  RTT_PING median_round_trip_ms = 319.0812   (32MB-sockbuf sweep, 50 pings)
+  => WAN RTT ~ 300-320 ms (PL<->CA). This is the hard latency floor: every
+     ring step pays >= 1 one-way delay; a full all-reduce (reduce-scatter +
+     all-gather, each a blocking send-then-recv phase) pays ~2 RTT minimum.
+
+──────────────────────────────────────────────────────────────────────────────
+(2) BW-vs-SIZE SWEEP — DEFAULT TCP buffer (verbatim stdout, rank0/host A, PL)
+    reps=7, median wall per all-reduce
+──────────────────────────────────────────────────────────────────────────────
+[rank 0/2] listen=0.0.0.0:5700 succ=74.48.140.178:44291 reps=7 pings=50
+[rank] connected succ 74.48.140.178:44291
+[rank] listening on 0.0.0.0:5700
+RTT_PING median_round_trip_ms = 300.6978  (over 50 pings, 1-byte)
+# DDP-M6b WAN all-reduce throughput sweep (N=2, reps=7, median)
+#  S_elems   payload_B   wire_B    median_s      algo_GB/s   wire_GB/s
+       128       1024       1024  0.60161649     0.00000     0.00000
+       256       2048       2048  0.81512790     0.00000     0.00000
+       512       4096       4096  0.76457292     0.00001     0.00001
+      1024       8192       8192  0.83568161     0.00001     0.00001
+      2048      16384      16384  1.03591534     0.00002     0.00002
+      4096      32768      32768  1.82259698     0.00002     0.00002
+      8192      65536      65536  2.62264246     0.00002     0.00002
+     16384     131072     131072  4.56747347     0.00003     0.00003
+     32768     262144     262144  7.44731313     0.00004     0.00004
+     65536     524288     524288  16.20746689     0.00003     0.00003
+    131072    1048576    1048576  30.91465111     0.00003     0.00003
+
+──────────────────────────────────────────────────────────────────────────────
+(4) TCP-WINDOW PROBE — 32 MB SO_SNDBUF/SO_RCVBUF (verbatim, rank0/host A, PL)
+    reps=5, median wall per all-reduce  (kernel rmem_max/wmem_max raised to 128MB)
+──────────────────────────────────────────────────────────────────────────────
+[rank 0/2] listen=0.0.0.0:5700 succ=74.48.140.178:44291 reps=5 pings=50
+[rank] connected succ 74.48.140.178:44291
+[rank] listening on 0.0.0.0:5700
+RTT_PING median_round_trip_ms = 319.0812  (over 50 pings, 1-byte)
+# DDP-M6b WAN all-reduce throughput sweep (N=2, reps=5, sockbuf=33554432, median)
+#  S_elems   payload_B   wire_B    median_s      algo_GB/s   wire_GB/s
+       128       1024       1024  0.63807727     0.00000     0.00000
+       256       2048       2048  0.63871350     0.00000     0.00000
+       512       4096       4096  0.64372664     0.00001     0.00001
+      1024       8192       8192  0.64099929     0.00001     0.00001
+      2048      16384      16384  0.63879573     0.00003     0.00003
+      4096      32768      32768  1.85122557     0.00002     0.00002
+      8192      65536      65536  3.23719056     0.00002     0.00002
+     16384     131072     131072  5.42741147     0.00002     0.00002
+     32768     262144     262144  8.99359839     0.00003     0.00003
+
+  FINDING (4): the 32 MB socket buffer curve is INDISTINGUISHABLE from the
+  default-buffer curve (same ~0.6s floor for tiny S, same ~0.00002-0.00004 GB/s
+  effective). => the bottleneck is NOT the TCP window / bandwidth-delay product.
+  The ring's per-phase BLOCKING send-then-recv serialises a full RTT before the
+  next byte moves, so throughput is RTT-dominated, not window-limited. A clean
+  NEGATIVE: enlarging the socket buffer does not help this collective on WAN.
+
+──────────────────────────────────────────────────────────────────────────────
+(3) CROSSOVER + (2-cont) SATURATION / EFFECTIVE GB/s CEILING
+──────────────────────────────────────────────────────────────────────────────
+  * Small S (<= 16 KB payload): median ~ 0.6-1.0 s == ~2 RTT floor (pure
+    latency). Effective BW < 0.00002 GB/s (~20 KB/s) — useless for tiny grads.
+  * The "crossover" where transfer time begins to dominate the RTT floor sets
+    in only around 32-256 KB payload (median climbs from the ~0.6s floor toward
+    seconds), but the effective BW stays FLAT at ~0.00002-0.00004 GB/s
+    (~20-40 KB/s) all the way to 1 MB — i.e. this WAN ring NEVER reaches a
+    bandwidth-bound regime at any size we could practically measure.
+  * EFFECTIVE GB/s CEILING (measured): ~3-4e-5 GB/s == ~30-40 KB/s sustained
+    all-reduce throughput, PL<->CA, both default and 32MB-window TCP. The link's
+    nominal capacity (~800 Mbit/s each pod) is two-to-three ORDERS of magnitude
+    above this — the collective cannot fill it because of the serial-RTT phase
+    structure over a 300ms path.
+  * USABILITY: at ~30 KB/s effective, even a 1 MB gradient all-reduce costs ~31s.
+    This WAN ring is byte-exact (M6) but perf-USELESS for synchronous DDP at any
+    realistic gradient size — the cross-country RTT dwarfs everything. It becomes
+    "useful" only if the per-all-reduce work is hidden behind >>seconds of
+    compute, or if the schedule is restructured to pipeline (overlap) the two
+    phases / many chunks so TCP can keep the pipe full instead of stalling a
+    full RTT per phase.
+
+──────────────────────────────────────────────────────────────────────────────
+HONEST VERDICT (g5)
+──────────────────────────────────────────────────────────────────────────────
+  The M6 cross-node ring all-reduce is byte-exact over a real intercontinental
+  WAN, but its THROUGHPUT envelope is RTT-bound and tiny: RTT ~300-320 ms,
+  effective all-reduce ceiling ~30-40 KB/s (~3-4e-5 GB/s), flat across 1KB..1MB.
+  It NEVER becomes bandwidth-bound at measurable sizes; a 32 MB TCP window does
+  not change the curve (the limiter is the serial per-phase blocking RTT, not
+  the socket buffer). This is a commodity-WAN-TCP perf reality, NOT an RDMA /
+  datacenter number, and NOT a correctness claim. Practical takeaway: synchronous
+  cross-country DDP over this transport is latency-dominated and only viable when
+  compute >> communication or the collective is re-pipelined to overlap phases.
+
+  Pods: 39810496 (PL) + 39810517 (CA), label hexa-ddp-m6b, DESTROYED leak-0.
