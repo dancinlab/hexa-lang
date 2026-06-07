@@ -1,0 +1,66 @@
+F-FUSION-BATCHFILL — batch-fill THROUGHPUT (samples/s) sweep: the REAL ~1.3× lever?
+═══════════════════════════════════════════════════════════════════════════════════
+STATUS    : 🚧 WIP (skeleton pushed first; H100/H200 measurement pending inline harvest)
+DATE      : 2026-06-07
+BRANCH    : domain/hexa-fusion-batchfill (off origin/main)
+
+FALSIFIER (pre-registered)
+──────────────────────────
+"On a real H100/H200, the flame CLMConvMoE trainer, swept over BATCH ∈ {1,2,4,8,16,32,64}
+ at the production-proxy shape (D1536/T512/E2/K3), reaches a throughput (samples/sec)
+ ≥ 1.3× its OWN batch=1 baseline at some batch — i.e. growing the batch to FILL the 132
+ SMs amortizes the per-step interpreted glue across B samples and lifts samples/s."
+
+ throughput(samples/s) ≡ (B · nbatch · epochs) / wall   [2-point timed, init/load-subtracted]
+
+(1) CORRECTNESS gate: the batched step stays math-faithful — per-sample CE descent holds
+    and B=1 is the EXACT prior behaviour (CLM_PROD_BATCH=1 path). NOTE on byte-eq scope:
+    the M5 batch lever CONCATENATES B distinct windows into one length-(B·Tw) buffer; this
+    introduces a tiny value perturbation ONLY at the B-1 causal-conv SEAMS between windows
+    (a K-1 boundary), so per-sample grads are NOT bit-identical to a B=1 reference summed
+    over the same windows — max|Δ|=0 is structurally unachievable for THIS concat scheme.
+    What IS gated max|Δ|=0: B=1 vs the prior un-batched path (exact), and the GEMM SHAPES
+    are unchanged by B (only the M-dimension grows). Honest scope recorded below.
+
+(2) ~1.3× CRITERION: find the batch where samples/s ≥ 1.3× the B=1 baseline + the FULL
+    curve (where it saturates SMs, util 1-2%→?, throughput scaling) + whether the growing
+    interpreted per-step glue (which scales with B·Tw) eventually CAPS samples/s.
+
+PRIOR CONTEXT THIS ACTS ON (decisive)
+─────────────────────────────────────
+  · F-FUSION-M5-BATCHFILL-UTIL (Jun-5, H100 SXM): util MEAN stays FLAT ~0.45% B=1→32
+    (closed-neg on the UTIL axis). util = duty-cycle, NOT throughput.
+  · F-FUSION-VS-PYTORCH (Jun-7, H100 SXM): flame B=1 = 5.98 s/step (0.167 step/s),
+    ~1656×/2207× slower than torch eager/compile. Wall = INTERPRETED per-step driver glue
+    (window t_get/t_set = B·Tw scalar ops, eager AdamW tail, CE-grad host glue). The
+    verdict EXPLICITLY predicts: "batch>1 fills SMs but the interpreted glue cost grows
+    WITH batch (B·Tw t_get/t_set), so fill alone cannot close the gap." THIS verdict tests
+    that prediction on the samples/s metric directly: does ANY per-step fixed overhead
+    (kernel-launch fixed cost, the single _adam_fused launch, the d2h metric readback)
+    amortize enough across B to give a sub-linear glue → a real throughput climb?
+
+HARDWARE  : <pending — H100/H200 vast pod, ID leak-swept to /tmp/batchfill_pod.txt>
+SOFTWARE  : flame clm_prod_gpu rebuilt from CURRENT clm_prod.hexa (M5 batch lever wired),
+            nvcc -DHEXA_CUDA compute_90, FP64 cuBLAS forge_dispatch_matmul GEMM path.
+
+════════════════════ BATCH × samples/s × util TABLE (verbatim — PENDING) ═══════════
+  B    T_eff   wall(2pt)/step   samples/s   ×B=1    util mean/med/peak   notes
+  ---  -----   --------------   ---------   -----   -----------------   -----
+  1    512     <pending>
+  2    1024    <pending>
+  4    2048    <pending>
+  8    4096    <pending>
+  16   8192    <pending>
+  32   16384   <pending>
+  64   32768   <pending>
+
+≥1.3× reached at batch : <pending>
+saturation point       : <pending>
+byte-eq (B=1 vs prior) : <pending>   seam-Δ at B>1 windows: documented (not max|Δ|=0)
+glue-cap honest note   : <pending>
+
+§FINDING (pending measurement)
+──────────────────────────────
+  <pending — does batch-fill reach ~1.3× samples/s on H100/H200, confirming the real
+   flame speedup lever, OR does the per-position interpreted glue scale with B·Tw and
+   pin samples/s flat (closed-negative, locating the glue as the harder wall)?>
