@@ -183,6 +183,40 @@
   util-via-megakernel was already CLOSED-NEG (#2697 + GN grid-sync). Success = the ONLY path to an
   absolute (torch-gap-closing) breakthrough beyond ~3x; failure = ~3x confirmed TERMINAL. Large codegen
   rewrite (days), ROI uncertain. The batch-fill ~1.3x->2.95x self-speedup (#2913) is already MET.
+- [ ] **FF-DUTYCYCLE — Chopper-style step duty-cycle breakdown (PREREQ, sets the Amdahl ceiling)** —
+  nsys/ncu-profile the FP64 step into GEMM% vs between-GEMM-glue% vs optimizer-tail%; the valley fraction
+  (1 - GEMM%) is the HARD ceiling 1/(1-valley) for every fusion lever below. Cheap (no kernel rewrite).
+  Lit: Chopper arXiv 2512.08242 (isolates active-compute vs idle-SM vs dispatch as distinct walls).
+- [ ] **FF-FUSED-OPTIM — fused AdamW tail (multi_tensor_apply / FusedAdam pattern)** — collapse the eager
+  ~28-call per-param AdamW tail into 1-few launches; byte-eq FP64 (same accum order). LOW risk, both
+  research legs' #1. Lit: Apex FusedAdam 10-15%, PyTorch foreach 21-293%. Attacks the optimizer DAG, not GEMMs.
+- [ ] **FF-EPILOGUE — own-GEMM epilogue/prologue fusion** — fold GELU/bias/residual-add (+ next-op start)
+  into the own-GEMM epilogue while data is in regs/smem, killing a global round-trip + a launch per fused
+  op; byte-eq vs separate-op ref. MED (FP64 epilogue register pressure). Highest leverage-per-effort kernel
+  change (we already own the GEMM). Lit: CUTLASS/Inductor epilogue fusion, ThunderMLA 20-35%.
+- [ ] **FF-VALLEY — persistent valley-only fusion megakernel** — fuse ONLY the between-GEMM glue
+  (groupnorm+gelu+conv-experts+elementwise) into a persistent kernel; keep own-GEMMs as separate saturated
+  kernels. Extends GREEN L3-a/L3-b to the bwd side; attacks the ~0%-util valley directly. MED. Lit: MPK
+  (arXiv 2512.22219) cross-task-pipelining ablation 1.2-1.3x. Best risk-adjusted structural lever.
+- [ ] **FF-BWDFUSE — byte-exact backward via forward-index reuse (Flash-MaxSim template)** — atomic-free,
+  destination-owned gradient reduction reusing the fwd argmax/routing indices; the bwd-fusion primitive
+  FF-VALLEY + MEGASTEP both need. byte-eq FP64. Lit: Flash-MaxSim arXiv 2605.29517 (train+bwd, 3.9-4.7x,
+  byte-exact, ~28x less train mem).
+- [ ] **FF-XSTREAM — cross-stream valley overlap (no fusion, cheapest probe)** — issue independent ops
+  (per-expert, grad-compute || next-layer fwd) on multiple CUDA streams so the scheduler overlaps the
+  under-filling kernels instead of serializing them; turns bimodal {100%,0%} into a mid-band. LOW. The
+  fastest "is the valley reclaimable at all?" probe before any megakernel. Pairs with FF-DUTYCYCLE.
+
+  ## ⚠ MEGASTEP ladder — HONEST framing (arxiv+web deep-research 2026-06-08, g5)
+  ALL megakernel literature (MPK 1.7x · Hazy "No Bubbles" 1.5-2.5x · Ada-MK · Event-Tensor) is
+  INFERENCE/decode-only; the Hazy/Tokasaurus authors explicitly call training-megakernels FUTURE WORK.
+  A whole-TRAIN-step (fwd+bwd+optimizer) megakernel is UNPROVEN — flame would ESTABLISH, not reproduce, it.
+  Pure launch-elimination is BOUNDED (~15-25%; Ada-MK 14.6%, CUDA-graph ~1.4x) — consistent with our 4
+  closed-neg uncap levers. The reclaimable win = ONLY the between-GEMM valley time (GEMM already saturated)
+  => every lever above is Amdahl-capped at 1/(1-valley); do NOT register a target above 1/duty-cycle.
+  MEGASTEP (#2920) stays the high-risk capstone (likely re-hits the occupancy wall at FP64/batch=1).
+  Optional speculative: Event-Tensor (arXiv 2604.13327) dynamic-control-flow tasks for data-dependent
+  CLMConvMoE routing — only if FF-DUTYCYCLE shows routing glue (not GEMMs) is a measured contributor.
 
 ## 전제 — 왜 fusion 인가 (host-feed 축이 닫힌 뒤)
 
