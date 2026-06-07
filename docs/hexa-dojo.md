@@ -711,6 +711,25 @@ ring all-reduce — transport swapped in stages, schedule FIXED at 2(N-1) steps
   to a tunnel port succeeds even if the far listener is down → add an interleaved SYN/ACK
   handshake that proves the far LISTENER is up (startup-order-independent); `pkill -f` over
   SSH self-matches its own command line → use `pkill -x`.
+- **WHY per-step DDP never beats 1-GPU — weight-bound ceiling (M5c, on REAL NVLink)**: A/B
+  on identical 4×A100-SXM4 (one NV12-NVLink canAccessPeer=1, one PHB-staged) — NVLink lifts
+  efficiency to near-ideal (2-GPU 43→49.5%, 4-GPU 18→24.2%) but 2-GPU asymptotes to 0.99× and
+  4-GPU to 0.974× — NEVER crosses 1.0× at any model size. The residual gap is STRUCTURAL not
+  comm: pure data-parallel shards only the BATCH; an H→H step is the H² GEMM = weight-bound, so
+  sharding 64 rows barely cuts per-rank FLOPs. The 1.0× per-step ceiling holds on any transport.
+  DDP's real win is THROUGHPUT (fixed per-GPU batch, global batch ×N → samples/s ~N×), or
+  tensor/model parallelism (shard the H² weight) — NOT per-step latency. ⚠ vast SXM4 does NOT
+  guarantee NVLink; cudaDeviceCanAccessPeer is the only authoritative check.
+- **DDP byte-eq holds at PRODUCTION 7B (M7, real 4×H200 NVLink)**: 7.011 B params @ fp32 and
+  5.493 B @ FP64 (FP64@7B = 168 GB/GPU > 143 GB VRAM, named cap) — both 1-GPU==4-GPU max|Δ|=0
+  (weights/grad/loss/rank-agreement). grad-of-sum=sum-of-grads is scale-invariant, so the small-MLP
+  max|Δ|=0 (M4) + the 7B max|Δ|=0 (M7) BRACKET production with no gap — the invariant is proven, not assumed.
+- **WAN ring throughput is RTT-bound, not window-bound (M6b, PL↔California)**: RTT floor ~300 ms;
+  throughput FLAT ~30-40 KB/s across 1KB–1MB (a 1 MB all-reduce = 31 s), never bandwidth-bound. A
+  32 MB TCP-buffer sweep was indistinguishable from default (clean NEGATIVE) → the limiter is the
+  ring's per-phase blocking send-then-recv serializing one full RTT per phase, NOT the TCP window.
+  Synchronous cross-country DDP is usable only when compute≫comm, or after re-pipelining the two
+  phases to overlap. Commodity-WAN-TCP reality, not RDMA.
 - **speedup is honest (M5b, commons g83)**: 4-GPU DDP on a small model + host-staged (no
   NVLink) is SLOWER than 1-GPU (0.61–0.73×) — comm tax > compute saved; efficiency rises
   monotonically with model size (15%→18% as H 64→2048). N-GPU speedup is ALWAYS < N×; the
