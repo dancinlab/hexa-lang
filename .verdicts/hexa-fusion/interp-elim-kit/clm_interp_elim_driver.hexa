@@ -1,0 +1,224 @@
+// ════════════════════════════════════════════════════════════════════════════
+//  clm_interp_elim_driver.hexa — HEXA-FUSION INTERP-ELIM microbench.
+//
+//  Isolates the CLMConvMoE per-step INTERPRETED driver glue (the wall named by
+//  #2912 vs-PyTorch + #2913 batch-fill: the per-position host glue running in the
+//  bytecode interpreter BETWEEN the device GEMM bursts, all ∝ B·Tw) and runs it
+//  STANDALONE so the SAME source can be measured two ways:
+//
+//    · INTERPRETED : `hexa run clm_interp_elim_driver.hexa`  (bytecode interpreter)
+//    · NATIVE      : `hexat … → C → gcc -O2`  (AOT-compiled — interpreter REMOVED)
+//
+//  The glue ops are lifted VERBATIM from stdlib/flame/clm_prod.hexa's host
+//  fallbacks (the byte-eq reference path the M5/batch-fill fires used):
+//    (a) per-window token-pack t_get/t_set loop      (clm_prod main, ∝ B·Tw)
+//    (b) im2col / im2col_t / col2im gather helpers    (_clmp_*, ∝ T·Cin·K)
+//    (c) bias-grad column sum                         (_clmp_db_colsum, ∝ T·Cout)
+//    (d) CE softmax-grad host glue                    (clm_ce_grad, ∝ T·V)
+//    (e) eager AdamW tail                             (adamw_step builtin, ∝ n)
+//
+//  GATE (byte-eq): the driver prints a deterministic fp64 checksum of every
+//  buffer after R repeats. NATIVE checksum == INTERPRETED checksum, max|Δ|=0
+//  ⇒ compiling does NOT change the math (the correctness gate). The GEMMs are
+//  NOT included here (they are device kernels in the real trainer, identical in
+//  both arms); this microbench measures EXACTLY the interpreted-vs-native delta
+//  of the host glue that caps the step — nothing else.
+//
+//  MEASURE: wall(ms) for R repeats at the batch sweep B ∈ {1,4,8,16,32}
+//  (T_eff = B·Tw). native_step/s ÷ interp_step/s = the per-step-glue uncap.
+//
+//  Env (back-compat defaults reproduce the trainer's measured config):
+//    IE_D=1536  IE_TW=512  IE_E=2  IE_V=256  IE_K=3  IE_B=1  IE_REPS=20
+// ════════════════════════════════════════════════════════════════════════════
+
+use "stdlib/flame/tensor_lib"
+use "stdlib/flame/optim_lib"
+
+// ── (a) per-window token-pack (clm_prod main loop, lines 1298-1307) ──────────
+fn pack_window(tok: int, tgt: int, IDS: int, TGT: int, B: int, Tw: int, nwin: int, b0: int) {
+    let mut bj = 0
+    while bj < B {
+        let w = (b0 + bj) % nwin
+        let mut q = 0
+        while q < Tw {
+            t_set(tok, bj * Tw + q, t_get(IDS, w * Tw + q))
+            t_set(tgt, bj * Tw + q, t_get(TGT, w * Tw + q))
+            q = q + 1
+        }
+        bj = bj + 1
+    }
+}
+
+// ── (b) im2col (clm_prod _clmp_im2col host fallback, verbatim) ───────────────
+fn ie_im2col(x: int, xcol: int, T: int, Cin: int, K: int, dil: int) {
+    let Kdim = Cin * K
+    let mut iz = 0
+    while iz < T * Kdim { t_set(xcol, iz, 0.0); iz = iz + 1 }
+    let mut t = 0
+    while t < T {
+        let mut ci = 0
+        while ci < Cin {
+            let mut k = 0
+            while k < K {
+                let p = t - dil * (K - 1 - k)
+                if p >= 0 { t_set(xcol, t * Kdim + ci * K + k, t_get(x, p * Cin + ci)) }
+                k = k + 1
+            }
+            ci = ci + 1
+        }
+        t = t + 1
+    }
+}
+
+// ── (b) col2im (clm_prod _clmp_col2im host fallback, verbatim) ──────────────
+fn ie_col2im(dXcol: int, dX_out: int, T: int, Cin: int, K: int, dil: int) {
+    let Kdim = Cin * K
+    let mut iz = 0
+    while iz < T * Cin { t_set(dX_out, iz, 0.0); iz = iz + 1 }
+    let mut p = 0
+    while p < T {
+        let mut ci = 0
+        while ci < Cin {
+            let mut acc = 0.0
+            let mut k = 0
+            while k < K {
+                let tt = p + dil * (K - 1 - k)
+                if tt < T { let j = ci * K + k; acc = acc + t_get(dXcol, tt * Kdim + j) }
+                k = k + 1
+            }
+            t_set(dX_out, p * Cin + ci, acc)
+            ci = ci + 1
+        }
+        p = p + 1
+    }
+}
+
+// ── (c) bias-grad column sum (clm_prod _clmp_db_colsum host fallback) ───────
+fn ie_db_colsum(dy: int, db_out: int, T: int, Cout: int) {
+    let mut cb = 0
+    while cb < Cout {
+        let mut acc = 0.0
+        let mut tb = 0
+        while tb < T {
+            acc = acc + t_get(dy, tb * Cout + cb)
+            tb = tb + 1
+        }
+        t_set(db_out, cb, acc)
+        cb = cb + 1
+    }
+}
+
+// ── (d) CE softmax-grad (clm_prod clm_ce_grad host fallback, verbatim) ──────
+fn ie_ce_grad(logits: int, targets: int, dlogits_out: int, T: int, V: int) {
+    let mut t = 0
+    while t < T {
+        let base = t * V
+        let mut mx = t_get(logits, base)
+        let mut i = 1
+        while i < V { let v = t_get(logits, base + i); if v > mx { mx = v }; i = i + 1 }
+        let mut sm = 0.0
+        let mut i2 = 0
+        while i2 < V { sm = sm + exp(t_get(logits, base + i2) - mx); i2 = i2 + 1 }
+        let invT = 1.0 / to_float(T)
+        let mut v3 = 0
+        while v3 < V {
+            let p = exp(t_get(logits, base + v3) - mx) / sm
+            t_set(dlogits_out, base + v3, p * invT)
+            v3 = v3 + 1
+        }
+        let tgt = to_int(t_get(targets, t))
+        t_set(dlogits_out, base + tgt, t_get(dlogits_out, base + tgt) - invT)
+        t = t + 1
+    }
+}
+
+// deterministic fp64 checksum over a farr (byte-eq gate carrier).
+fn ie_checksum(a: int, n: int) -> float {
+    let mut s = 0.0
+    let mut i = 0
+    while i < n {
+        s = s + t_get(a, i) * to_float(i % 97 + 1)
+        i = i + 1
+    }
+    return s
+}
+
+fn ie_fill_lcg(a: int, n: int, seed: int, scale: float) {
+    let mut st = seed
+    let mut i = 0
+    while i < n {
+        st = (st * 1103515245 + 12345) % 2147483648
+        t_set(a, i, (to_float(st) / 2147483648.0 - 0.5) * scale)
+        i = i + 1
+    }
+}
+
+fn main() {
+    let _d = env("IE_D");   let d = if _d == "" { 1536 } else { to_int(_d) }
+    let _tw = env("IE_TW"); let Tw = if _tw == "" { 512 } else { to_int(_tw) }
+    let _e = env("IE_E");   let E = if _e == "" { 2 } else { to_int(_e) }
+    let _v = env("IE_V");   let V = if _v == "" { 256 } else { to_int(_v) }
+    let _k = env("IE_K");   let K = if _k == "" { 3 } else { to_int(_k) }
+    let _b = env("IE_B");   let B = if _b == "" { 1 } else { to_int(_b) }
+    let _r = env("IE_REPS"); let R = if _r == "" { 20 } else { to_int(_r) }
+    let T = Tw * B
+    let nwin = 8
+
+    println("clm_interp_elim_driver — per-step driver glue microbench")
+    print("  d="); print(d); print(" Tw="); print(Tw); print(" B="); print(B)
+    print(" T_eff="); print(T); print(" E="); print(E); print(" V="); print(V)
+    print(" K="); print(K); print(" REPS="); print(R); println("")
+
+    // corpus windows (token-pack source) + per-step buffers
+    let IDS = t_zeros(nwin * Tw); let TGT = t_zeros(nwin * Tw)
+    ie_fill_lcg(IDS, nwin * Tw, 11, 200.0); ie_fill_lcg(TGT, nwin * Tw, 13, 200.0)
+    let tok = t_zeros(T); let tgt = t_zeros(T)
+
+    // activation / grad buffers (T-sized, matching the trainer's caches)
+    let Kdim = d * K
+    let xcol = t_zeros(T * Kdim); let dXcol = t_zeros(T * Kdim)
+    let dX = t_zeros(T * d); let dy = t_zeros(T * d); let db = t_zeros(d)
+    ie_fill_lcg(dXcol, T * Kdim, 17, 1.0); ie_fill_lcg(dy, T * d, 19, 1.0)
+    let xin = t_zeros(T * d); ie_fill_lcg(xin, T * d, 23, 1.0)
+
+    // CE softmax-grad buffers (logits T·V)
+    let logits = t_zeros(T * V); let dlogits = t_zeros(T * V)
+    ie_fill_lcg(logits, T * V, 29, 5.0)
+
+    // one representative AdamW param block (the conv W, d·d·K = Kdim·d) + state
+    let np = d * Kdim
+    let W = t_zeros(np); let gW = t_zeros(np); let m = t_zeros(np); let vv = t_zeros(np)
+    ie_fill_lcg(W, np, 31, 0.2); ie_fill_lcg(gW, np, 37, 0.01)
+
+    let t0 = time_now_ms()
+    let mut r = 0
+    while r < R {
+        let b0 = (r % nwin)
+        pack_window(tok, tgt, IDS, TGT, B, Tw, nwin, b0)   // (a)
+        ie_im2col(xin, xcol, T, d, K, 1)                   // (b) fwd
+        ie_col2im(dXcol, dX, T, d, K, 1)                   // (b) bwd
+        ie_db_colsum(dy, db, T, d)                         // (c)
+        ie_ce_grad(logits, tgt, dlogits, T, V)             // (d)
+        opt_adamw_step(W, gW, m, vv, np, 0.05, 0.9, 0.999, 0.00000001, 0.0, r + 1)  // (e)
+        r = r + 1
+    }
+    let t1 = time_now_ms()
+    let wall = t1 - t0
+
+    // byte-eq gate carriers — deterministic checksums after R repeats.
+    let cs_tok = ie_checksum(tok, T)
+    let cs_xcol = ie_checksum(xcol, T * Kdim)
+    let cs_dX = ie_checksum(dX, T * d)
+    let cs_db = ie_checksum(db, d)
+    let cs_dl = ie_checksum(dlogits, T * V)
+    let cs_W = ie_checksum(W, np)
+
+    print("  WALL_MS="); println(to_string(wall))
+    print("  CHK_tok=");  println(to_string(cs_tok))
+    print("  CHK_xcol="); println(to_string(cs_xcol))
+    print("  CHK_dX=");   println(to_string(cs_dX))
+    print("  CHK_db=");   println(to_string(cs_db))
+    print("  CHK_dlogits="); println(to_string(cs_dl))
+    print("  CHK_W=");    println(to_string(cs_W))
+    println("  IE-DONE")
+}
