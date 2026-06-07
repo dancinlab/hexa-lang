@@ -1,0 +1,104 @@
+F-DDP-M6-MULTINODE — ring all-reduce across a node boundary (TCP socket transport)
+=================================================================================
+STATUS: 🟢 GREEN — cross-node ring all-reduce byte-eq max|delta|=0 (FP64), 2 hosts.
+
+Falsifier (g5): 2-node ring all-reduce result == serial elementwise sum,
+byte-eq max|delta|=0 (FP64), for S%2!=0 (boundary, S=7) AND large S (1<<20).
+The FP64 bytes cross the wire and must arrive bit-identical (TCP reliable +
+ordered, so byte-eq should hold; this proves it on real transport).
+
+Method: stdlib/ddp/m6_multinode/ring_tcp_m6.c — the EXACT M1/M3/M5 canonical
+ring schedule (2(N-1) steps, chunk_start partition), per-step transport swapped
+from cudaMemcpyPeer (intra-node GPU, M5) to host-to-host TCP sendall/recvall on
+a ring socket. Each rank is a SEPARATE PROCESS ON A SEPARATE HOST; rank r
+listens for predecessor and connects to successor. Parity ordering (even
+send-then-recv / odd recv-then-send) makes the 2-cycle deadlock-free w/o threads.
+M6 is a HOST-MEMORY FP64 ring (no CUDA) — it isolates the cross-node TRANSPORT
+correctness; the GPU buffers are M3/M5's concern. If a byte flips crossing the
+node boundary, max|delta| != 0.
+
+TRANSPORT:  TCP sockets (sendall/recvall, TCP_NODELAY), inter-node.
+NODE COUNT: 2 — genuinely different physical hosts, different public IPs,
+            different countries:
+              rank 0 = vast instance 39797909, Poland,  public 91.150.160.38
+              rank 1 = vast instance 39797928, Ukraine, public 82.193.103.124
+            Each pod exposed its container ports via vast's Docker port map:
+              A (rank0): listen container 5700 -> external 91.150.160.38:16883
+              B (rank1): listen container 5701 -> external 82.193.103.124:40074
+            rank0 --succ 82.193.103.124:40074 ; rank1 --succ 91.150.160.38:16883.
+            The ring's two TCP connections each cross the public Internet between
+            two distinct datacenters — a REAL node boundary, NOT loopback.
+
+──────────────────────────────────────────────────────────────────────────────
+CROSS-NODE RUN (verbatim stdout, 2 hosts) — case S=7 (S%2=1 boundary)
+──────────────────────────────────────────────────────────────────────────────
+rank 0 (host A, Poland 91.150.160.38):
+  [rank 0/2] S=7 listen=0.0.0.0:5700 succ=82.193.103.124:40074 steps=2(N-1)=2
+  [rank] connected succ 82.193.103.124:40074
+  [rank] listening on 0.0.0.0:5700
+  rank 0/2 S=7 (S%N=1) : max|delta| vs serial-sum = 0  BYTE-EQ PASS
+rank 1 (host B, Ukraine 82.193.103.124):
+  [rank 1/2] S=7 listen=0.0.0.0:5701 succ=91.150.160.38:16883 steps=2(N-1)=2
+  [rank] listening on 0.0.0.0:5701
+  [rank] connected succ 91.150.160.38:16883
+  rank 1/2 S=7 (S%N=1) : max|delta| vs serial-sum = 0  BYTE-EQ PASS
+
+──────────────────────────────────────────────────────────────────────────────
+CROSS-NODE RUN (verbatim stdout, 2 hosts) — case S=1<<20 = 1048576 (large)
+──────────────────────────────────────────────────────────────────────────────
+rank 0 (host A, Poland 91.150.160.38):
+  [rank 0/2] S=1048576 listen=0.0.0.0:5700 succ=82.193.103.124:40074 steps=2(N-1)=2
+  [rank] connected succ 82.193.103.124:40074
+  [rank] listening on 0.0.0.0:5700
+  rank 0/2 S=1048576 (S%N=0) : max|delta| vs serial-sum = 0  BYTE-EQ PASS
+rank 1 (host B, Ukraine 82.193.103.124):
+  [rank 1/2] S=1048576 listen=0.0.0.0:5701 succ=91.150.160.38:16883 steps=2(N-1)=2
+  [rank] listening on 0.0.0.0:5701
+  [rank] connected succ 91.150.160.38:16883
+  rank 1/2 S=1048576 (S%N=0) : max|delta| vs serial-sum = 0  BYTE-EQ PASS
+
+──────────────────────────────────────────────────────────────────────────────
+LOOPBACK INTERMEDIATE PROOF (one host, 2 procs, 127.0.0.1) — labeled NOT multi-host
+  (local Mac, ./stdlib/ddp/m6_multinode/run_m6_loopback.sh; same binary, same
+   socket transport, both ranks on loopback — validates the socket ring before
+   the real node boundary):
+  rank 0/2 S=7 (S%N=1) : max|delta| vs serial-sum = 0  BYTE-EQ PASS
+  rank 1/2 S=7 (S%N=1) : max|delta| vs serial-sum = 0  BYTE-EQ PASS
+  rank 0/2 S=1048576 (S%N=0) : max|delta| vs serial-sum = 0  BYTE-EQ PASS
+  rank 1/2 S=1048576 (S%N=0) : max|delta| vs serial-sum = 0  BYTE-EQ PASS
+  === DDP-M6 loopback verdict: BYTE-EQ PASS (loopback, NOT true multi-host) ===
+
+──────────────────────────────────────────────────────────────────────────────
+RESULT MATRIX
+──────────────────────────────────────────────────────────────────────────────
+case            transport         rank0 max|delta|   rank1 max|delta|   verdict
+S=7   (S%2=1)   TCP 2-host        0                  0                  PASS
+S=2^20 (large)  TCP 2-host        0                  0                  PASS
+S=7   (S%2=1)   TCP loopback      0                  0                  PASS (intermediate)
+S=2^20 (large)  TCP loopback      0                  0                  PASS (intermediate)
+
+FINDING: The hexa-native ring all-reduce DOES cross a real node boundary
+byte-exact. The same 2(N-1)-step chunk-partition schedule proven on a single
+node in M1 (in-process sim) -> M3 (cudaMemcpyPeer 2-GPU) -> M5 (4-GPU) holds
+bit-for-bit when the per-step transport becomes a host-to-host TCP send/recv
+between two datacenters in different countries. FP64 bytes crossing the public
+Internet arrive bit-identical (TCP reliable+ordered), so max|delta| = 0 on
+EVERY rank for both the boundary (S%2!=0) and large (2^20) cases. Multi-host
+networking is NOT a wall for the collective's correctness — only its latency
+(M5 honest note: ring moves 2(N-1)/N x per-rank data; WAN latency dominates
+small messages, but byte-eq is independent of latency). This closes DDP-M6.
+
+INFRASTRUCTURE NOTE (honest, g5): vast.ai pods ARE inter-node reachable — each
+pod's container ports are published on its public IP via Docker port mapping
+(direct_port_count > 0 in the offer), so two pods reach each other over their
+public IPs + mapped external ports. No proxy/relay was needed for the data
+plane; the ring's two TCP connections went pod<->pod directly. (Node A's vast
+SSH *proxy* ssh4.vast.ai was flaky, but its DIRECT public-IP SSH and the
+data-plane ports worked — the finding is about the data plane, which is what M6
+tests.)
+
+PODS DESTROYED: YES — both, tag-verified before destroy (label==hexa-ddp-m6):
+  39797909 (Poland)  -> destroyed
+  39797928 (Ukraine) -> destroyed
+  post-destroy: 0 hexa-ddp-m6 instances alive (leak 0). The one remaining
+  account instance is foreign-project 'rtsc-li2mgh16-anchor' (NOT touched).
