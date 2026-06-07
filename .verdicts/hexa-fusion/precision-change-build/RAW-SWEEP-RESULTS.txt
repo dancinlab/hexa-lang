@@ -1,0 +1,22 @@
+================ HEXA-FUSION precision-change sweep — VERBATIM POD STDOUT ================
+host: e2153c37becd  NVIDIA H100 80GB HBM3, 81559 MiB, driver 560.35.05 (vast 39923836, ssh9, India)
+shape: D=1536 Tw=512 E=2 K=3  | BATCHES=[1 4 8 16] | PRECS=[fp64 tf32 bf16]
+nvcc: Cuda compilation tools, release 12.4, V12.4.131 | clm_prod_gpu = 2509704 B
+[note: B=8/16 NOT run — the low-precision convert-per-GEMM path made B=4 legs ~6min;
+ the B=1 + B=4 points are conclusive (see finding). Pod DESTROYED at this point, leak 0.]
+
+prec  B    T_eff   wall_lo   wall_hi   step/s     xFP64     util_m/md/pk gate_relrms
+-----------------------------------------------------------------------------------------------------
+fp64  1    512     23.679    54.015    0.19778    1.000     10.5/1/68 (baseline)
+tf32  1    512     23.980    53.734    0.20165    1.020     11.1/1/68  rel_rms_vs_fp64=2.761839e-04 gate(<=1e-2)=PASS
+bf16  1    512     25.390    54.962    0.20289    1.026     10.1/1/68  rel_rms_vs_fp64=2.614364e-03 gate(<=1e-2)=PASS
+fp64  4    2048    55.124    172.255   0.05122    1.000     10.6/1/69 (baseline)
+tf32  4    2048    53.781    174.909   0.04953    0.967     10.6/1/68  rel_rms_vs_fp64=2.761839e-04 gate(<=1e-2)=PASS
+
+=== [PREC-GATE] one-shot rel_rms-vs-FP64-cuBLAS (first GEMM, M=512 K=4608 N=1536) ===
+[PREC-GATE] single prec=tf32 ... rel_rms_vs_fp64=2.761839e-04 gate(<=1e-2)=PASS
+[PREC-GATE] single prec=bf16 ... rel_rms_vs_fp64=2.614364e-03 gate(<=1e-2)=PASS
+
+=== CE (epoch-1 mean, descent sane) ===
+fp64 B1 ce1=3.69702 | tf32 B1 ce1=3.69851 | bf16 B1 ce1=3.82362
+fp64 B4 ce1=3.86987 | tf32 B4 ce1=3.86867
