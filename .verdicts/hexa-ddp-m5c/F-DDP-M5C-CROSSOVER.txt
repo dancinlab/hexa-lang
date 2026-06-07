@@ -1,0 +1,132 @@
+F-DDP-M5C-CROSSOVER — HEXA-DDP DDP-M5c
+NVLink crossover: the model size where multi-GPU DDP TRAINING beats 1-GPU.
+
+STATUS: GREEN — N=4 data-parallel TRAINING byte-eq (1-GPU == 4-GPU, max|delta|=0,
+FP64) on REAL NVLink hardware (canAccessPeer=1 on all 12 pairs, NV12 bonds), AND
+per-step training wall measured at N=1/2/4 GPUs across a model-size sweep on BOTH
+a NVLink A100 node and a staged-host A100 node (identical 4x A100-SXM4-40GB
+silicon, differing ONLY in P2P transport — a controlled A/B). M5c TESTED the M5b
+prediction that NVLink moves the crossover toward a smaller model: CONFIRMED in
+DIRECTION (efficiency leaps from ~43%/18% staged -> ~50%/24% NVLink, i.e. NEAR-
+IDEAL), but HONESTLY the crossover above 1.0x is NOT reached in the swept H range
+on either node — 2-GPU asymptotes to 0.99x (just under) even on NVLink, because
+the per-rank H^2 GEMM is weight-bound not batch-bound (sharding B=64 over N rows
+barely shrinks per-rank compute when H is large), so DDP can APPROACH but not
+exceed 1.0x for this data-parallel-only MLP. The NVLink effect is large and
+measured: it removes essentially the ENTIRE comm tax (eff -> the ideal 50%/25%).
+
+==========================================================================
+NODES (both vast.ai, both 4x NVIDIA A100-SXM4-40GB, one node each):
+  * NVLink node  — instance 39811910 (machine 41067, Georgia US). nvcc 12.4.131
+    / CUDA 12.4 / sm_80. topo NV12 on every GPU pair (full NVSwitch fabric).
+    cudaDeviceCanAccessPeer = 1 on ALL 12 ordered pairs => direct P2P ring.
+  * staged node  — instance 39809783 (machine 38233, Germany DE). SAME silicon
+    (4x A100-SXM4-40GB) but topo PHB (PCIe host bridge, NO NV# bond);
+    cudaDeviceCanAccessPeer = 0 on ALL 12 pairs => P2P driver-disabled, every
+    cudaMemcpyPeer is HOST-STAGED. (vast.ai SXM4 nodes are NOT guaranteed to
+    expose NVLink P2P even though the silicon has NVSwitch — the first node we
+    rented had it disabled; the second had it enabled. The CUDA canAccessPeer
+    probe is the only authoritative check, NOT the SXM4 form factor.)
+  Both pods DESTROYED immediately after capture (leak 0, project-tag confirmed
+  mine: label hexa-ddp-m5c on both).
+
+MODEL: MLP  D_IN=64 -> H -> H -> D_OUT=64  (ReLU,ReLU,linear), MSE loss, FP64.
+  Global batch B=64 (split 64/32/16 across N=1/2/4 ranks). LR=0.01, SGD. H is
+  the model-SIZE knob swept {512,1024,2048,2560,3072,3456}; NPARAM 328768 ->
+  12,393,280. (H>=4096 exceeds the A100 167KB shared-mem optin cap of this
+  kernel, so the swept ceiling is H=3456.) The DDP change vs the 1-GPU reference
+  is ONLY (a) batch shard per rank + (b) grad SUM-reduce via the canonical ring
+  all-reduce; all fwd/bwd math, init, target, LR, step are identical. SAME
+  harness as DDP-M5b (stdlib/ddp/m5c_crossover/ddp_train_m5c.cu).
+
+==========================================================================
+GATE (1) CORRECTNESS — 1-GPU W_ref == 4-GPU DDP W_ddp byte-eq (NVLink node, verbatim):
+================= N=4 BYTE-EQ GATE (H=512) =================
+loss_ref (mean)            = 13859.109009485161
+grad  g_ddp vs g_ref  max|delta| = 0  BYTE-EQ
+rank-agreement (Wr==W0) max|delta| = 0  ALL RANKS IDENTICAL
+WEIGHTS W_ddp vs W_ref  max|delta| = 0  BYTE-EQ PASS
+
+  -> max|delta| = 0 on the SUMMED grad, on every post-step WEIGHT, and across all
+     4 ranks. This is the M4/M5b DDP invariant (mean-loss grad = SUM of per-sample
+     grads / B; split B over W ranks, all-reduce-SUM the per-rank partials, /B on
+     every rank => the exact 1-GPU grad) with the ring's per-chunk RIGHT-NESTED
+     reduction tree (the only tree that drives the gate to a TRUE max|delta|=0 at
+     N>=3 — FP add is non-associative). Identical max|delta|=0 on the staged node
+     (transport-agnostic: the ring carries the same partials in the same order
+     whether P2P is NVLink or host-staged). Correctness is independent of NVLink.
+
+==========================================================================
+GATE (2) CROSSOVER — per-step TRAINING wall at N=1/2/4 GPUs (verbatim both nodes):
+
+timing: median of 40 reps (5 warmup discarded), per-step wall (fwd+bwd+all-reduce+sync).
+
+------- NVLink node (canAccessPeer=1, NV12, direct-P2P ring) -------
+   H        N=1 (ms)   N=2 (ms)   N=4 (ms)   2-GPU spd (eff)   4-GPU spd (eff)
+   512        5.4860     5.9986     6.5208    0.915x (45.7%)    0.841x (21.0%)
+   1024      13.4588    13.7402    14.3304    0.980x (49.0%)    0.939x (23.5%)
+   2048      47.3665    47.8240    48.8965    0.990x (49.5%)    0.969x (24.2%)
+   2560      72.1153    72.6808    74.0309    0.992x (49.6%)    0.974x (24.4%)
+   3072     103.6203   104.5996   106.3892    0.991x (49.5%)    0.974x (24.3%)
+   3456     132.2157   133.5483   135.8685    0.990x (49.5%)    0.973x (24.3%)
+
+------- staged-host node (canAccessPeer=0, PHB, host-staged ring) -------
+   H        N=1 (ms)   N=2 (ms)   N=4 (ms)   2-GPU spd (eff)   4-GPU spd (eff)
+   512        5.5121     7.9788    13.7156    0.691x (34.5%)    0.402x (10.0%)
+   1024      13.4841    16.1547    21.0369    0.835x (41.7%)    0.641x (16.0%)
+   2048      47.3610    55.0051    65.3746    0.861x (43.1%)    0.724x (18.1%)
+   2560      72.0290    82.8089    97.4231    0.870x (43.5%)    0.739x (18.5%)
+   3072     103.6389   122.1776   142.8839    0.848x (42.4%)    0.725x (18.1%)
+   3456     132.2023   153.9492   179.0287    0.859x (42.9%)    0.738x (18.5%)
+
+CROSSOVER (where speedup crosses 1.0x):
+  NVLink:  2-GPU NOT reached (asymptotes to 0.99x by H=2048, pinned just under
+           1.0x). 4-GPU NOT reached (asymptotes to 0.974x). NEITHER crosses 1.0x
+           in the swept H<=3456 range, but BOTH are within ~1-3% of it (eff
+           ~49.5% / ~24.3% == NEAR-IDEAL for 2 / 4 GPUs).
+  staged:  2-GPU NOT reached (plateau 0.86x). 4-GPU NOT reached (plateau 0.74x).
+           Same finding as M5b on the GeForce host-staged node.
+
+==========================================================================
+NVLink vs STAGED (the controlled A/B on identical 4x A100-SXM4-40GB silicon):
+  NVLink removes essentially the ENTIRE comm tax. At every H, the NVLink per-step
+  wall is at or near the 1-GPU wall (N=2 adds <1% at H>=2048; N=4 adds <3%),
+  whereas the staged node pays 16-21% (N=2) and 35-45% (N=4) extra. Concretely at
+  H=2048: NVLink 4-GPU = 48.90ms vs 1-GPU 47.37ms (1.03x slower); staged 4-GPU =
+  65.37ms vs 47.36ms (1.38x slower). The efficiency lift is monotone and large:
+     2-GPU eff  43.1% (staged) -> 49.5% (NVLink)   [ideal 50%]
+     4-GPU eff  18.1% (staged) -> 24.2% (NVLink)   [ideal 25%]
+  So NVLink moves the regime from "comm-bound, badly sub-linear" to "near-ideal,
+  asymptotically pinned just under 1.0x". This CONFIRMS the M5b prediction's
+  DIRECTION (cheaper comm via NVLink shrinks the gap to crossover) and QUANTIFIES
+  it (the residual gap to 1.0x is now ~1% for 2-GPU, not the comm tax).
+
+==========================================================================
+HONEST FINDING (g5/g83): On a REAL NVLink node (4x A100-SXM4-40GB, NV12 bonds,
+cudaDeviceCanAccessPeer=1 on all 12 pairs), 4-GPU data-parallel TRAINING is
+CORRECT to the last bit (max|delta|=0, N=4) AND near-ideal in efficiency (2-GPU
+eff -> 49.5%, 4-GPU eff -> 24.3%, vs the 50%/25% ceiling) — NVLink removes
+almost the entire comm tax that crippled the staged-host node (43%/18% there).
+BUT even on NVLink the per-step training speedup does NOT cross 1.0x in the
+swept range: 2-GPU asymptotes to 0.99x, 4-GPU to 0.974x. The reason is NOT the
+comm (NVLink fixed that) — it is the MODEL: pure DATA parallelism shards only the
+batch (B=64 rows over N ranks), but the per-step cost of an H->H MLP is the H^2
+GEMM, which is WEIGHT-bound, not batch-bound, once H is large; sharding 64 rows
+into 16 barely reduces per-rank FLOPs, so each rank does nearly the FULL 1-GPU
+compute PLUS a (now-cheap) all-reduce. Data-parallel DDP therefore APPROACHES
+but cannot EXCEED 1.0x for a single training step of this small-batch MLP, on
+ANY transport. To actually BEAT 1-GPU you need either (a) a batch-bound regime
+(much larger B so per-rank compute genuinely drops ~1/N — DDP's true use case is
+THROUGHPUT at fixed large global batch, where N-GPU does N x the samples/sec),
+or (b) MODEL/tensor parallelism (shard the H^2 weight, not the batch). This is a
+crisp, measured negative on the per-step-wall axis and a strong positive on the
+comm-efficiency axis: NVLink is the cure for the comm tax (eff -> ideal), but
+data-parallel per-step wall is bounded by 1.0x by construction at small batch.
+
+The DURABLE results: (1) the M4 DDP byte-eq invariant holds max|delta|=0 at N=4
+on real NVLink P2P (correctness is transport-independent); (2) NVLink lifts DDP
+efficiency to NEAR-IDEAL (the comm tax is essentially eliminated), measured A/B
+on identical silicon; (3) the 1.0x ceiling for per-step data-parallel wall at
+small batch is a structural property (weight-bound GEMM), not a transport defect.
+
+Source: stdlib/ddp/m5c_crossover/ddp_train_m5c.cu + run_m5c.sh.
