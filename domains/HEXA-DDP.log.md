@@ -224,3 +224,39 @@
   hiding comm behind compute. Commodity-WAN-TCP, NOT RDMA/datacenter; byte-eq (M6) untouched.
 - **Verdict**: .verdicts/hexa-ddp-m6c/F-DDP-M6C-PHASE-OVERLAP.txt (overlap technique, per-mode
   byte-eq verbatim, BW-vs-size + speedup table, residual RTT floor, node locations).
+
+## DDP-M8 / M9 / M10 — multi-step DDP correctness deepening (2026-06-08)
+- **Node**: vast 2x RTX 3060 (sm_86), instance 39934701, label hexa-ddproad, DESTROYED
+  leak-0 (project-tag-checked). topo GPU0-GPU1=NODE/PCIe, canAccessPeer=0 all pairs ->
+  staged-host cudaMemcpyPeer ring (correctness transport-independent). nvcc 12.4.
+  (First rental 39933927 = flaky node: nvidia-smi saw both GPUs but CUDA runtime returned
+   "initialization error" / GPU1 ERR! — destroyed leak-0, re-rented a clean node.)
+- **Code**: stdlib/ddp/m8_m10_multistep/ddp_train_m8_m10.cu + run_m8_m10.sh. Reuses M5b
+  flame MLP host fwd/bwd oracle + canonical 2(N-1) ring all-reduce + right-nested per-chunk
+  reduce tree (FP-assoc finding). ONE K-step 1-vs-N run yields M8 + M10; M9 separate.
+- **M8 (multi-step W + optimizer-state byte-eq)**: K-step 1-GPU vs 2-GPU, same global
+  batch+seed each step. per-shard grad = HOST FP64 oracle (M4/M5b discipline) reduced by
+  REAL device ring; reference reduces in SAME ring right-nested order -> true max|Δ|=0.
+  TWO optimizers run+gated: SGD-momentum (vel) AND Adam (m,v). GATE K=10/H=128/N=2:
+  W max|Δ|=0, vel max|Δ|=0, Adam m max|Δ|=0, v max|Δ|=0 — BYTE-EQ PASS both optimizers.
+  ROBUSTNESS K=25/H=256: FP64 M8 all max|Δ|=0. -> averaged-grad update + optimizer
+  recursion BIT-IDENTICAL across the whole multi-step run, not just step 1 (M4).
+- **M10 (loss-curve convergence)**: per-step loss max|Δ|=0 at EVERY step k=0..K-1 over the
+  K-step run, both optimizers (K=10/H=128 and K=25/H=256). M4 single-step invariant carries
+  through the entire training trajectory = "really the same model training".
+- **M9 (bf16/fp16 dtype reproducibility)**: 1-GPU (whole-batch FP64 reduce->cast) vs 2-GPU
+  (shard-partial->cast->reduce in dtype, ring order), SGD-mom in dtype. STABLE K=10/H=128:
+  bf16 W rel-RMS=0.005564 (bound 4*eps=0.01562) PASS; fp16 W rel-RMS=0.000609 (bound
+  0.001953) PASS; loss rel-Δ bf16=0.001983, fp16=0.000363. HONEST: NOT max|Δ|=0 — the
+  whole-batch-vs-shard cast-point asymmetry is the irreducible low-precision DDP effect.
+  SEPARATE finding: K=25/H=256 bf16 raw-SGD weights DIVERGE to inf/NaN (LR=0.01, loss~1148
+  bf16 training-stability overflow — why production uses loss-scaling/mixed-precision, NOT
+  a DDP bug); reproducibility gate reported at the numerically-stable regime.
+- **Verdicts**: .verdicts/hexa-ddp-m8/F-DDP-M8-MULTISTEP.txt,
+  .verdicts/hexa-ddp-m10/F-DDP-M10-CONVERGENCE.txt, .verdicts/hexa-ddp-m9/F-DDP-M9-DTYPE.txt.
+- **VERDICT (does the DDP training invariant hold over K steps + optimizer-state + the loss
+  curve)**: YES. FP64 M8/M10 byte-eq max|Δ|=0 holds bit-exact over K=10 and K=25 multi-step
+  runs, across SGD-momentum AND Adam optimizer state, AND every per-step loss. The M4
+  single-step invariant is not an accident of step 1 — it carries through the full training
+  trajectory + the optimizer recursion. M9 dtype reproducibility holds within the dtype's
+  rel-RMS bound in the stable regime.

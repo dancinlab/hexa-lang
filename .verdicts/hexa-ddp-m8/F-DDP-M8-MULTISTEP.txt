@@ -1,0 +1,92 @@
+=== DDP-M8 :: multi-step grad-accum + optimizer-state byte-eq ===
+node: vast instance 39934701, 2x RTX 3060 (sm_86), nvcc 12.4, label hexa-ddproad (DESTROYED leak-0)
+topo: GPU0-GPU1 = NODE (PCIe), canAccessPeer=0 all pairs => staged-host cudaMemcpyPeer ring (correctness transport-independent)
+gate: K-step 1-GPU vs 2-GPU, SAME global batch+seed each step; after K steps W AND optimizer-state byte-eq max|delta|=0 (FP64).
+method: per-shard grad = host FP64 oracle (M4/M5b discipline) reduced by REAL device cudaMemcpyPeer ring all-reduce;
+        1-GPU reference reduces in the SAME ring right-nested per-chunk order (M5b finding) => true max|delta|=0, not tolerance.
+        TWO optimizers run + gated: SGD-with-momentum (vel) AND Adam (m,v moments).
+
+----- CANONICAL RUN: N=2, K=10, H=128, NPARAM=33088 (verbatim stdout) -----
+BUILD_DONE
+=== ddp_train_m8_m10 :: visible=2, using N=2 GPUs, H=128, NPARAM=33088, K=10 steps ===
+transport = staged-host cudaMemcpyPeer (P2P disabled all pairs; correctness identical)
+model: MLP 64->128->128->64 (ReLU,ReLU,linear), FP64. global batch B=64 split 32/rank.
+
+================= M8/M10 :: optimizer = SGD-momentum, K=10 steps =================
+  per-step loss curve (M10) + after-step W/opt byte-eq (M8):
+    step  0: loss_1gpu=1148.29227731587 loss_Ngpu=1148.29227731587  loss|Δ|=0 grad|Δ|=0  W|Δ|=0  vel|Δ|=0
+    step  1: loss_1gpu=491.821944778198 loss_Ngpu=491.821944778198  loss|Δ|=0 grad|Δ|=0  W|Δ|=0  vel|Δ|=0
+    step  2: loss_1gpu=37.5799361966674 loss_Ngpu=37.5799361966674  loss|Δ|=0 grad|Δ|=0  W|Δ|=0  vel|Δ|=0
+    step  3: loss_1gpu=18.1906348638746 loss_Ngpu=18.1906348638746  loss|Δ|=0 grad|Δ|=0  W|Δ|=0  vel|Δ|=0
+    step  4: loss_1gpu=11.3014389831996 loss_Ngpu=11.3014389831996  loss|Δ|=0 grad|Δ|=0  W|Δ|=0  vel|Δ|=0
+    step  5: loss_1gpu=9.52556689754058 loss_Ngpu=9.52556689754058  loss|Δ|=0 grad|Δ|=0  W|Δ|=0  vel|Δ|=0
+    step  6: loss_1gpu=8.60172504396825 loss_Ngpu=8.60172504396825  loss|Δ|=0 grad|Δ|=0  W|Δ|=0  vel|Δ|=0
+    step  7: loss_1gpu=7.97925889152389 loss_Ngpu=7.97925889152389  loss|Δ|=0 grad|Δ|=0  W|Δ|=0  vel|Δ|=0
+    step  8: loss_1gpu=7.60903044045591 loss_Ngpu=7.60903044045591  loss|Δ|=0 grad|Δ|=0  W|Δ|=0  vel|Δ|=0
+    step  9: loss_1gpu=7.50191796915434 loss_Ngpu=7.50191796915434  loss|Δ|=0 grad|Δ|=0  W|Δ|=0  vel|Δ|=0
+  --- SGD-momentum after K=10: loss-curve max|Δ|=0  W max|Δ|=0  vel max|Δ|=0 ---
+
+================= M8/M10 :: optimizer = Adam, K=10 steps =================
+  per-step loss curve (M10) + after-step W/opt byte-eq (M8):
+    step  0: loss_1gpu=1148.29227731587 loss_Ngpu=1148.29227731587  loss|Δ|=0 grad|Δ|=0  W|Δ|=0  m|Δ|=0 v|Δ|=0
+    step  1: loss_1gpu=547.800449924875 loss_Ngpu=547.800449924875  loss|Δ|=0 grad|Δ|=0  W|Δ|=0  m|Δ|=0 v|Δ|=0
+    step  2: loss_1gpu=396.446987250991 loss_Ngpu=396.446987250991  loss|Δ|=0 grad|Δ|=0  W|Δ|=0  m|Δ|=0 v|Δ|=0
+    step  3: loss_1gpu=301.814968915262 loss_Ngpu=301.814968915262  loss|Δ|=0 grad|Δ|=0  W|Δ|=0  m|Δ|=0 v|Δ|=0
+    step  4: loss_1gpu=230.572045263148 loss_Ngpu=230.572045263148  loss|Δ|=0 grad|Δ|=0  W|Δ|=0  m|Δ|=0 v|Δ|=0
+    step  5: loss_1gpu=206.163427810595 loss_Ngpu=206.163427810595  loss|Δ|=0 grad|Δ|=0  W|Δ|=0  m|Δ|=0 v|Δ|=0
+    step  6: loss_1gpu=150.032169543006 loss_Ngpu=150.032169543006  loss|Δ|=0 grad|Δ|=0  W|Δ|=0  m|Δ|=0 v|Δ|=0
+    step  7: loss_1gpu=115.528634667899 loss_Ngpu=115.528634667899  loss|Δ|=0 grad|Δ|=0  W|Δ|=0  m|Δ|=0 v|Δ|=0
+    step  8: loss_1gpu=82.7634338337635 loss_Ngpu=82.7634338337635  loss|Δ|=0 grad|Δ|=0  W|Δ|=0  m|Δ|=0 v|Δ|=0
+    step  9: loss_1gpu=67.8599754913477 loss_Ngpu=67.8599754913477  loss|Δ|=0 grad|Δ|=0  W|Δ|=0  m|Δ|=0 v|Δ|=0
+  --- Adam after K=10: loss-curve max|Δ|=0  W max|Δ|=0  m max|Δ|=0  v max|Δ|=0 ---
+
+================= M9 :: bf16/fp16 real-dtype DDP reproducibility =================
+  [M9 bf16] K=10 step: 1-GPU(whole-batch) vs 2-GPU(shard+ring), state dtype=bf16
+    step  0: loss1=1147.9332 lossN=1147.9332  loss-relΔ=7.92e-16  W rel-RMS=0.000824  W max|Δ|=0.00391
+    step  1: loss1=491.10102 lossN=491.22518  loss-relΔ=0.000253  W rel-RMS=0.00185  W max|Δ|=0.0137
+    step  2: loss1=37.464294 lossN=37.511509  loss-relΔ=0.00126  W rel-RMS=0.0028  W max|Δ|=0.0273
+    step  3: loss1=17.966554 lossN=17.935838  loss-relΔ=0.00171  W rel-RMS=0.00358  W max|Δ|=0.0391
+    step  4: loss1=11.22468 lossN=11.224863  loss-relΔ=1.63e-05  W rel-RMS=0.00412  W max|Δ|=0.0469
+    step  5: loss1=9.519521 lossN=9.528774  loss-relΔ=0.000972  W rel-RMS=0.00452  W max|Δ|=0.0586
+    step  6: loss1=8.5975473 lossN=8.6145965  loss-relΔ=0.00198  W rel-RMS=0.00491  W max|Δ|=0.0664
+    step  7: loss1=7.9784498 lossN=7.9845292  loss-relΔ=0.000762  W rel-RMS=0.00516  W max|Δ|=0.0742
+    step  8: loss1=7.606252 lossN=7.6145996  loss-relΔ=0.0011  W rel-RMS=0.00538  W max|Δ|=0.082
+    step  9: loss1=7.4983968 lossN=7.5053827  loss-relΔ=0.000932  W rel-RMS=0.00556  W max|Δ|=0.0898
+  [M9 fp16] K=10 step: 1-GPU(whole-batch) vs 2-GPU(shard+ring), state dtype=fp16
+    step  0: loss1=1148.2844 lossN=1148.2844  loss-relΔ=7.92e-16  W rel-RMS=0.000103  W max|Δ|=0.000488
+    step  1: loss1=491.71812 lossN=491.72975  loss-relΔ=2.37e-05  W rel-RMS=0.000191  W max|Δ|=0.00171
+    step  2: loss1=37.684911 lossN=37.682338  loss-relΔ=6.83e-05  W rel-RMS=0.000281  W max|Δ|=0.00317
+    step  3: loss1=18.198938 lossN=18.196889  loss-relΔ=0.000113  W rel-RMS=0.000365  W max|Δ|=0.00415
+    step  4: loss1=11.298593 lossN=11.294519  loss-relΔ=0.000361  W rel-RMS=0.000427  W max|Δ|=0.00488
+    step  5: loss1=9.521667 lossN=9.521868  loss-relΔ=2.11e-05  W rel-RMS=0.000481  W max|Δ|=0.00586
+    step  6: loss1=8.6005739 lossN=8.6013877  loss-relΔ=9.46e-05  W rel-RMS=0.000524  W max|Δ|=0.00635
+    step  7: loss1=7.9789791 lossN=7.9788381  loss-relΔ=1.77e-05  W rel-RMS=0.000559  W max|Δ|=0.00635
+    step  8: loss1=7.6095821 lossN=7.6092814  loss-relΔ=3.95e-05  W rel-RMS=0.000584  W max|Δ|=0.00684
+    step  9: loss1=7.5025371 lossN=7.5052625  loss-relΔ=0.000363  W rel-RMS=0.000609  W max|Δ|=0.00732
+
+================= DDP-M8/M9/M10 VERDICT =================
+transport: staged-host cudaMemcpyPeer (P2P disabled all pairs; correctness identical)
+K = 10 steps,  N = 2 GPUs,  H = 128,  NPARAM = 33088,  B_GLOBAL = 64
+[M8 opt=SGD-momentum] W max|Δ|=0  opt-state(vel) max|Δ|=0  BYTE-EQ PASS
+[M10 opt=SGD-momentum] loss-curve max|Δ| over K steps = 0  BYTE-EQ PASS
+[M8 opt=Adam] W max|Δ|=0  opt-state(m) max|Δ|=0  v max|Δ|=0  BYTE-EQ PASS
+[M10 opt=Adam] loss-curve max|Δ| over K steps = 0  BYTE-EQ PASS
+[M9 bf16] 1-GPU vs 2-GPU: loss rel-Δ=0.001983  W rel-RMS=0.005564  W max|Δ|=0.08984  (bound 4*eps=0.01562) PASS
+[M9 fp16] 1-GPU vs 2-GPU: loss rel-Δ=0.0003633  W rel-RMS=0.000609  W max|Δ|=0.007324  (bound 4*eps=0.001953) PASS
+=== DDP-M8/M10: GREEN - K-step W+optimizer-state+loss-curve byte-eq ===
+
+----- ROBUSTNESS: N=2, K=25, H=256, NPARAM=98880 (FP64 M8/M10 verbatim tail) -----
+    step 24: loss1=nan lossN=nan  loss-relΔ=nan  W rel-RMS=nan  W max|Δ|=inf
+
+transport: staged-host cudaMemcpyPeer (P2P disabled all pairs; correctness identical)
+K = 25 steps,  N = 2 GPUs,  H = 256,  NPARAM = 98880,  B_GLOBAL = 64
+[M8 opt=SGD-momentum] W max|Δ|=0  opt-state(vel) max|Δ|=0  BYTE-EQ PASS
+[M10 opt=SGD-momentum] loss-curve max|Δ| over K steps = 0  BYTE-EQ PASS
+[M8 opt=Adam] W max|Δ|=0  opt-state(m) max|Δ|=0  v max|Δ|=0  BYTE-EQ PASS
+[M10 opt=Adam] loss-curve max|Δ| over K steps = 0  BYTE-EQ PASS
+[M9 bf16] 1-GPU vs 2-GPU: loss rel-Δ=2.39e+38  W rel-RMS=2.408  W max|Δ|=inf  (bound 4*eps=0.01562) OUT-OF-BOUND
+[M9 fp16] 1-GPU vs 2-GPU: loss rel-Δ=9.996e-05  W rel-RMS=inf  W max|Δ|=inf  (bound 4*eps=0.001953) OUT-OF-BOUND
+
+FINDING: M8 (W + SGD-momentum vel + Adam m,v) byte-eq max|delta|=0 over K=10 AND K=25 steps, both optimizers.
+The averaged-grad update + the optimizer recursion stay BIT-IDENTICAL across the WHOLE multi-step run, not just step 1 (M4).
+HONEST (g5): collective is real device ring; grad SOURCE is the deterministic host oracle (atomicAdd kernel is M5b's timing leg only).
