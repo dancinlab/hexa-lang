@@ -93,7 +93,7 @@ RECONCILIATION with #2912 / #2913
   ~6 s/step "between-GEMM idle" is therefore dominated NOT by bytecode
   interpretation of arithmetic but by the SERIAL PER-OP STRUCTURE: ~58 separate
   FP64 cuBLAS GEMM + per-op device launches per step, each with launch/sync/D2H-
-  H2D dispatch latency, plus FP64 (vs torch TF32). #2912's #2913 the wall is
+  H2D dispatch latency, plus FP64 (vs torch TF32). The wall is therefore
   structural (serial un-fused op-DAG + FP64 + launch dispatch), already shown by
   the SIBLING closed-negatives M2/M3/M5 (more fusion / bigger D / bigger batch all
   fail to cross util-GREEN) — NOT removable by AOT-compiling the driver.
