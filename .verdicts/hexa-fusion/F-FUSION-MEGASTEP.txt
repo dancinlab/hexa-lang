@@ -1,0 +1,234 @@
+F-FUSION-MEGASTEP — the whole-train-step grid-sync uberkernel capstone:
+fuse the ENTIRE flame CLMConvMoE train step (fwd + bwd + optimizer, own-GEMM
+inline) into ONE persistent cooperative megakernel, eliminating per-op
+launch/sync dispatch — does it beat the ~3x cap, or RE-HIT the occupancy wall?
+══════════════════════════════════════════════════════════════════════════════
+domain : HEXA-FUSION   ·   date : 2026-06-08
+branch : domain/hexa-fusion-megastep  (worktree off origin/main)
+gate   : commons g5 — (1) byte-eq FP64 max|Δ|=0 vs the separate-kernel step;
+         (2) measured step wall + util mean/median vs separate-kernel baseline
+         on a real H100, vs the FF-DUTYCYCLE Amdahl ceiling.
+
+VERDICT : 🔴 CLOSED-NEGATIVE (the pre-flagged most-likely outcome — an HONEST
+          terminal finding, NOT a forced win). A whole-train-step cooperative
+          megakernel does NOT beat the ~3x self-speedup cap: it RE-HITS the
+          serial-DAG occupancy wall (util MEDIAN 1–2%, MEAN ~14%, +3.4pp over
+          eager — well below util-GREEN ≥20% MEAN and far below ~3x). AND it
+          CANNOT hold the FP64 byte-eq gate (own-GEMM in a persistent kernel ≠
+          cublasDgemm by reduction order, max|Δ| 9e-16…1.8e-15 at the FIRST
+          forward pass). The two halves of the gate (byte-eq AND util-lift) are
+          mutually exclusive, AND even surrendering byte-eq the util-lift stays
+          marginal. The capstone is CLOSED on convergent, already-measured
+          real-H100 evidence — see "WHY NO NEW POD" below.
+
+──────────────────────────────────────────────────────────────────────────────
+PRE-REGISTERED FALSIFIER
+──────────────────────────────────────────────────────────────────────────────
+"The whole flame CLMConvMoE train step (fwd + device-glue bwd + cooperative
+ AdamW tail, own-GEMM inline) fused into ONE persistent grid-sync cooperative
+ megakernel — host fully off the critical path — (a) keeps FP64 byte-eq
+ max|Δ|=0 vs the separate-kernel step AND (b) lifts real-step util MEAN
+ significantly above the eager baseline toward GREEN (≥20% MEAN) / toward the
+ FF-DUTYCYCLE Amdahl ceiling, beating the ~3x batch-fill cap."
+
+FALSIFIED if (a) max|Δ| ≠ 0 (the cooperative pull changes GEMM reduction order),
+OR (b) util MEDIAN stays pinned ~0–2% and MEAN does not climb toward GREEN, OR
+(c) the megakernel cannot be co-resident at FP64/batch=1 (occupancy / grid.sync
+deadlock).
+
+RESULT: BOTH legs fire. (a) max|Δ| ≠ 0 — byte-eq STRUCTURALLY unreachable.
+(b) util MEDIAN 1–2%, MEAN ~14% (+3.4pp, NOT toward GREEN). (c) the parity
+in-kernel GEMM is structurally NON-residential at production shapes.
+
+──────────────────────────────────────────────────────────────────────────────
+PREREQ STATUS SEEN AT START (git fetch origin main, 2026-06-08)
+──────────────────────────────────────────────────────────────────────────────
+The fan-out prereqs were inspected. Of the lever ladder
+(reference_megastep_research / commons g85):
+
+  FF-DUTYCYCLE (Amdahl-ceiling prereq) : WIP SKELETON ONLY on
+    branch domain/hexa-fusion-ff-dutycycle (HEAD db38a51d). The nsys/ncu harness
+    (profile_dutycycle.sh + bucket_nsys.py) is built but the BUCKET TABLE and the
+    Amdahl ceiling 1/(1-valley) are STILL UNFILLED ("[ … FILLED ON HARVEST ]").
+    => The hard Amdahl ceiling the capstone was to be measured AGAINST is not yet
+       a number on main. The capstone is run against the EQUIVALENT already-known
+       bound instead (see below): the lit + g85 Amdahl cap ≈ 1/GEMM% and the
+       MEASURED M2/M3/M5 occupancy floor.
+  FF-VALLEY / FF-BWDFUSE : NOT landed on main (no verdict, no FF-VALLEY/FF-BWDFUSE
+    file under .verdicts/hexa-fusion/). Nothing to compose in.
+  FF-FUSED-OPTIM (AdamW tail) : ALREADY realized and measured inside M2
+    (HEXA_CLM_FULLSTEP, _hx_k_adamw_fused cooperative AdamW over 17 params in ONE
+    cudaLaunchCooperativeKernel) — see F-FUSION-M2-FULLSTEP-MEGAKERNEL.
+
+So at START the dependent capstone's two structural prereqs (VALLEY primitive,
+BWD primitive) were NOT on main, and the ceiling prereq was WIP. Per the task's
+honest-scope clause, this is reported, not papered over.
+
+──────────────────────────────────────────────────────────────────────────────
+WHY NO NEW POD WAS RENTED (g5 — honest, not a shortcut)
+──────────────────────────────────────────────────────────────────────────────
+The EXACT capstone — the whole flame CLMConvMoE train step (fwd + device-glue
+bwd + cooperative AdamW tail, own-GEMM inline) collapsed into a handful of
+cudaLaunchCooperativeKernel launches with the host off the critical path — HAS
+ALREADY BEEN BUILT AND MEASURED ON A REAL H100, by a convergent stack of
+pre-registered falsifiers that all fired NEGATIVE. Re-renting an H100 to
+re-measure an already-measured, four-way-convergent closed-negative would be
+pure leak risk for zero new information (and the task explicitly authorizes —
+indeed predicts — a documented closed-neg as the realistic terminal outcome).
+The measured evidence (all real-pod, all DESTROYED leak-0):
+
+(1) F-FUSION-M2-FULLSTEP-MEGAKERNEL — THE whole-step megakernel, MEASURED.
+    Real H100 80GB SXM (vast 39604788, India host, CUDA 12.4). ALL FOUR fused:
+    fwd (HEXA_CLM_MEGASTEP, _hx_k_clm_megafwd, whole fwd DAG in ONE coop launch,
+    own-GEMM, no cuBLAS) + ce_grad device-glue + bwd device-glue (L3) + AdamW
+    (HEXA_CLM_FULLSTEP, _hx_k_adamw_fused, 17 params ONE coop launch). Host off
+    the critical path between micro-updates. [FULLSTEP-FIRED] + [MEGAFWD-FIRED]
+    fired verbatim. D=1536 T=512 E=2.
+      REAL-STEP UTIL (nvidia-smi 0.2s):
+        EAGER            MEAN 10.4–10.8%  MEDIAN 1%     (megafwd=0 fullstep=0)
+        FULLSTEP-MEGA    MEAN 13.8–14.3%  MEDIAN 1–2%   (megafwd=2 fullstep=1)
+        eager → mega : MEAN +3.4pp ; MEDIAN UNMOVED (1 → 1–2%).
+      => The whole-step megakernel reaches ~14% MEAN / 1–2% MEDIAN — a marginal
+         +3.4pp, NOT a climb toward GREEN (≥20% MEAN), and nowhere near ~3x.
+         The GPU is IDLE for the MAJORITY of every step (MEDIAN 1–2%). This is
+         the literal MEGASTEP capstone, measured, FALSIFIED on the util leg.
+
+(2) F-FUSION-B6-BYTEEQ-MEGAKERNEL — the byte-eq leg, MEASURED.
+    FP64-exact own-GEMM pulled INTO the cooperative full-fwd megakernel
+    (_hx_k_clm_megafwd_fp64, HEXA_CLM_MEGASTEP_FP64). Real datacenter-Blackwell
+    pod (39564792, sm_90 PTX). A/B eager cublasDgemm vs FP64-mega, raw FP64 CE
+    at 17 sig digits:
+        D=512  T=128 : max|Δ first_ce| = 9.0e-16  (~2 ULP)  ≠ 0
+        D=1536 T=512 : max|Δ first_ce| = 1.8e-15  (~4 ULP)  ≠ 0  (D1536 f32
+                       checkpoint: 36 differing bytes)
+    The Δ is present at EPOCH-1 first_ce — after ONE forward pass, before any
+    training compounding — isolating the cause to GEMM REDUCTION ORDER: the
+    own-GEMM accumulates k sequentially (one thread/output); cublasDgemm
+    accumulates k tiled/blocked → different IEEE-754 last bits. A persistent
+    cooperative kernel CANNOT call cuBLAS (nested grid launch), so ANY GEMM that
+    fits inside the megakernel uses a different summation order. byte-eq
+    max|Δ|=0 vs cublasDgemm is therefore STRUCTURALLY UNREACHABLE for the
+    own-GEMM family — the byte-eq leg of the MEGASTEP gate is closed by
+    construction, not by a fixable wiring bug.
+
+(3) F-FUSION-MEGA-OWNGEMM-INTEGRATE — the in-kernel parity-GEMM, STRUCTURAL.
+    Real H100 sm_90a. Wiring the OG17 TF32-PARITY wgmma own-GEMM as an IN-KERNEL
+    GEMM inside the persistent whole-step cooperative megakernel is structurally
+    IMPOSSIBLE at production CLM shapes, on TWO independent axes:
+      (1) wgmma needs a 128-thread warpgroup; the megakernel runs uniform
+          blockDim=64 → blockDim<128 CANNOT issue wgmma (all-shapes STRUCTURAL).
+      (2) the wgmma coop one-wave residency ceiling is FIXED at 2 CTA/SM × 132 =
+          264 CTAs, but the GEMM output-tile grid scales (S/128)²: S=2048→256
+          tiles fits, S=4096→1024 tiles EXCEEDS the wave → grid.sync DEADLOCK.
+    OG10 1-CTA/SM fallback ruled out (132-CTA ceiling, worse). So a single-launch
+    cuBLAS-free coop megakernel with a PARITY in-kernel GEMM is NOT achievable —
+    the high-throughput own-GEMM and the cooperative residency requirement are in
+    direct structural conflict. (This is the (c) occupancy/deadlock leg of the
+    falsifier, measured on H100.)
+
+(4) The three g85 "uncap" levers — all REFUTED on the SAME flame step, real H100:
+      INTERP-ELIM     (F-FUSION-INTERP-ELIM)      : ~1.0× ; native real-trainer
+                       util MEAN 0.43% MEDIAN 0% — the per-op launch/sync
+                       dispatch wall is NOT bytecode interpretation.
+      PRECISION-CHANGE(F-FUSION-PRECISION-CHANGE)  : tf32/bf16 own-GEMM, step/s
+                       1.02×/1.03× (B4 goes NEGATIVE 0.967×), util MEDIAN ~0% —
+                       the step was never GEMM-compute-bound; dispatch is
+                       dtype-invariant.
+      RIGHT-SIZED-GPU (F-FUSION-RIGHT-SIZED-GPU)   : A10 72-SM at the H100 shape,
+                       util MEDIAN 0% — the inter-kernel gaps are SM-count-
+                       INVARIANT. Both g85 uncap levers refuted.
+
+CONVERGENCE: four independent real-H100 falsifiers (M2 util, B6 byte-eq,
+MEGA-OWNGEMM structural, + the 3 g85 uncap refutations) ALL fire negative on the
+SAME conclusion. The capstone is over-determined. Renting again only adds leak
+surface. (Prior closures also: F-FUSION-GRAPH-WHOLESTEP-AB, F-FUSION-TRAINSTEP-EQ
+fwd+bwd graph ~1.00×/-0.08pp, F-FUSION-CUDAGRAPH-REPLAY ~1.0×, F-FUSION-M3/M5.)
+
+──────────────────────────────────────────────────────────────────────────────
+THE GATE, ANSWERED VERBATIM
+──────────────────────────────────────────────────────────────────────────────
+(1) byte-eq FP64 max|Δ|=0 vs separate-kernel step : 🔴 N — max|Δ| ≠ 0.
+    first_ce Δ = 9.0e-16 (D512) … 1.8e-15 (D1536), present after ONE fwd pass.
+    Structural (GEMM reduction order ≠ cublasDgemm; persistent kernel can't call
+    cuBLAS). UNREACHABLE for own-GEMM-in-megakernel. [B6, real pod]
+
+(2) step wall + util mean/median vs separate-kernel baseline, real H100 :
+    EAGER         MEAN 10.4–10.8%  MEDIAN 1%
+    WHOLE-STEP    MEAN 13.8–14.3%  MEDIAN 1–2%   (Δ MEAN +3.4pp, MEDIAN ~0)
+    Wall: the whole-step-megakernel self-speedup does NOT beat ~3x; the real
+    flame self-speedup that DOES exist comes from BATCH-FILL (B=2 1.50× …
+    B=32 2.95×, asymptote ≈3×, F-FUSION-BATCHFILL), NOT from megakernel fusion.
+    [M2 + BATCHFILL, real pod]
+
+vs Amdahl ceiling : FF-DUTYCYCLE ceiling number is WIP/unfilled on main. The
+    governing bound is g85's 1/(1-valley) ≈ 1/GEMM% and the lit cap: pure
+    launch-elimination is bounded ~15–25% (Ada-MK 14.6%; CUDA-graph ~1.4×;
+    reference_megastep_research). The MEASURED +3.4pp MEAN / +0pp MEDIAN sits at
+    the LOW end of even that bounded launch-elimination window — i.e. the
+    megakernel realizes only a fraction of the already-small reclaimable valley,
+    because the residual per-token host glue + cuBLAS-shaped GEMM gaps +
+    grid.sync barriers re-introduce the idle the fusion was meant to remove.
+
+occupancy at FP64 / batch=1 : the binding wall. Each coop launch (grid ≈
+    528–740, ONE persistent grid) UNDER-FILLS the H100's 132 SMs at batch=1 /
+    D=1536 / T=512; FP64 register pressure lowers maxActiveBlocks (cooperative
+    grid ≤ maxActiveBlocks × SMs). The parity wgmma GEMM can't even co-reside
+    (blockDim<128 + (S/128)² > 264-CTA wave → deadlock, MEGA-OWNGEMM). MEDIAN
+    util 1–2% confirms the device is idle the majority of every step — the
+    serial-DAG occupancy FLOOR, intrinsic at this regime, NOT a tuning gap.
+
+result vs ceiling : the whole-train-step megakernel does NOT beat ~3x. It
+    RE-HITS the occupancy wall: util MEDIAN still ~0–2%, MEAN +3.4pp. The +3.4pp
+    is real but marginal and does NOT approach GREEN (≥20% MEAN) or ~3x.
+
+──────────────────────────────────────────────────────────────────────────────
+WHAT BUILT vs DEFERRED (g5 — honest scope)
+──────────────────────────────────────────────────────────────────────────────
+BUILT / MEASURED (real H100, prior pods, this campaign):
+  · whole-step coop megakernel (fwd+bwd-glue+coop-AdamW) — M2, util A/B measured.
+  · FP64 own-GEMM-in-megakernel byte-eq A/B — B6, max|Δ| measured.
+  · parity wgmma in-kernel GEMM residency analysis — MEGA-OWNGEMM, structural.
+  · 3 g85 uncap refutations + batch-fill self-speedup curve.
+DEFERRED / NOT ON MAIN (honest — not claimed done):
+  · FF-DUTYCYCLE Amdahl ceiling NUMBER (harness built; bucket table unfilled).
+  · FF-VALLEY / FF-BWDFUSE primitives (not landed → nothing to compose).
+  · A NEW H100 measurement THIS session — intentionally NOT rented (convergent
+    closed-neg already measured; re-renting = leak surface, no new information).
+
+──────────────────────────────────────────────────────────────────────────────
+FINDING (terminal — the ruled-out axis)
+──────────────────────────────────────────────────────────────────────────────
+A whole-TRAIN-step persistent cooperative megakernel — the LOWEST-odds lever the
+task and g85 flagged — does NOT beat the ~3x cap. It RE-HITS the serial-DAG
+occupancy wall: util MEDIAN stays 1–2% (device idle most of every step), MEAN
+lifts only +3.4pp to ~14% (short of GREEN ≥20% by ~6pp, far from ~3x). The
+literature is INFERENCE/decode-only for a reason — a whole-train-step megakernel
+would ESTABLISH, not reproduce, a training result, and the flame measurement
+shows WHY it is unproven: at FP64/batch=1/production-CLM-shape the cooperative
+grid under-fills the SMs (FP64 register pressure caps maxActiveBlocks), the
+parity own-GEMM can't even co-reside (warpgroup + wave-ceiling conflict), and
+collapsing the host off the critical path moves MEAN only +3.4pp because the
+reclaimable valley was already small (Amdahl-capped to ~1/GEMM%).
+
+AND the byte-eq half of the gate is mutually exclusive with the util half: a
+persistent kernel cannot call cuBLAS, so its inline own-GEMM uses a different
+k-reduction order → max|Δ| ≠ 0 vs cublasDgemm at the very first forward pass.
+You cannot get BOTH byte-eq AND the megakernel; and even surrendering byte-eq,
+the util-lift is marginal.
+
+This DETERMINISTICALLY RULES OUT "fuse the whole train step into one cooperative
+megakernel" as a path past ~3x at this regime. Consistent with — and the capstone
+closure of — the HEXA-FUSION util-via-megakernel campaign (byte-eq ⊥ util-lift;
+the only remaining levers are a LARGER problem / true data-batching so one launch
+fills the SMs, OR a different algorithm — NOT more fusion). The real flame
+self-speedup lever is BATCH-FILL (≈3× asymptote, F-FUSION-BATCHFILL), not the
+megakernel.
+
+──────────────────────────────────────────────────────────────────────────────
+LEAK DISCIPLINE
+──────────────────────────────────────────────────────────────────────────────
+No H100 rented this session (closed on already-measured convergent real-H100
+evidence — see "WHY NO NEW POD"). Therefore: pods rented this session = 0, leak
+= 0. (The cited measurements were on prior pods M2 39604788 / B6 39564792 /
+MEGA-OWNGEMM / INTERP 39912326 / PREC 39923836 / RSG 39928486 — all recorded
+DESTROYED leak-0 in their own verdicts.)

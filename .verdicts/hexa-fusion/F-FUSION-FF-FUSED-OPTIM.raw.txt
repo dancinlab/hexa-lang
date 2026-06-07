@@ -1,0 +1,75 @@
+NVIDIA H100 80GB HBM3, 560.35.03
+=== DEFAULT FMA (-fmad=true, nvcc default) ===
+=== FF-FUSED-OPTIM byte-eq + wall + launch-count oracle ===
+clm_prod 17-param tail @ D=128  (V=256 E=2 K=1)  total elems=132610  reps=200
+[FF-FUSED-OPTIM-BYTEEQ] fused(1 launch) vs eager(17 launch) max|Δ|=1.110e-16  => FAIL
+[FF-FUSED-OPTIM-WALL] optimizer tail per step:
+    EAGER (17 launch) = 813.012 us/step
+    FUSED ( 1 launch) = 682.241 us/step
+    speedup = 1.192x   launch count: 17 -> 1
+=== FF-FUSED-OPTIM: byte-eq FAIL  speedup 1.192x ===
+
+=== FF-FUSED-OPTIM byte-eq + wall + launch-count oracle ===
+clm_prod 17-param tail @ D=256  (V=256 E=2 K=1)  total elems=396034  reps=200
+[FF-FUSED-OPTIM-BYTEEQ] fused(1 launch) vs eager(17 launch) max|Δ|=1.110e-16  => FAIL
+[FF-FUSED-OPTIM-WALL] optimizer tail per step:
+    EAGER (17 launch) = 1321.658 us/step
+    FUSED ( 1 launch) = 1194.071 us/step
+    speedup = 1.107x   launch count: 17 -> 1
+=== FF-FUSED-OPTIM: byte-eq FAIL  speedup 1.107x ===
+
+=== FF-FUSED-OPTIM byte-eq + wall + launch-count oracle ===
+clm_prod 17-param tail @ D=512  (V=256 E=2 K=1)  total elems=1316098  reps=200
+[FF-FUSED-OPTIM-BYTEEQ] fused(1 launch) vs eager(17 launch) max|Δ|=1.110e-16  => FAIL
+[FF-FUSED-OPTIM-WALL] optimizer tail per step:
+    EAGER (17 launch) = 2663.930 us/step
+    FUSED ( 1 launch) = 2637.728 us/step
+    speedup = 1.010x   launch count: 17 -> 1
+=== FF-FUSED-OPTIM: byte-eq FAIL  speedup 1.010x ===
+
+=== FF-FUSED-OPTIM byte-eq + wall + launch-count oracle ===
+clm_prod 17-param tail @ D=1536  (V=256 E=2 K=1)  total elems=10239234  reps=200
+[FF-FUSED-OPTIM-BYTEEQ] fused(1 launch) vs eager(17 launch) max|Δ|=1.110e-16  => FAIL
+[FF-FUSED-OPTIM-WALL] optimizer tail per step:
+    EAGER (17 launch) = 19239.902 us/step
+    FUSED ( 1 launch) = 20337.102 us/step
+    speedup = 0.946x   launch count: 17 -> 1
+=== FF-FUSED-OPTIM: byte-eq FAIL  speedup 0.946x ===
+
+=== FMAD=FALSE (-fmad=false → bit-exact) ===
+=== FF-FUSED-OPTIM byte-eq + wall + launch-count oracle ===
+clm_prod 17-param tail @ D=128  (V=256 E=2 K=1)  total elems=132610  reps=200
+[FF-FUSED-OPTIM-BYTEEQ] fused(1 launch) vs eager(17 launch) max|Δ|=0.000e+00  => PASS (max|Δ|=0)
+[FF-FUSED-OPTIM-WALL] optimizer tail per step:
+    EAGER (17 launch) = 806.751 us/step
+    FUSED ( 1 launch) = 676.219 us/step
+    speedup = 1.193x   launch count: 17 -> 1
+=== FF-FUSED-OPTIM: byte-eq PASS  speedup 1.193x ===
+
+=== FF-FUSED-OPTIM byte-eq + wall + launch-count oracle ===
+clm_prod 17-param tail @ D=256  (V=256 E=2 K=1)  total elems=396034  reps=200
+[FF-FUSED-OPTIM-BYTEEQ] fused(1 launch) vs eager(17 launch) max|Δ|=0.000e+00  => PASS (max|Δ|=0)
+[FF-FUSED-OPTIM-WALL] optimizer tail per step:
+    EAGER (17 launch) = 1339.395 us/step
+    FUSED ( 1 launch) = 1209.881 us/step
+    speedup = 1.107x   launch count: 17 -> 1
+=== FF-FUSED-OPTIM: byte-eq PASS  speedup 1.107x ===
+
+=== FF-FUSED-OPTIM byte-eq + wall + launch-count oracle ===
+clm_prod 17-param tail @ D=512  (V=256 E=2 K=1)  total elems=1316098  reps=200
+[FF-FUSED-OPTIM-BYTEEQ] fused(1 launch) vs eager(17 launch) max|Δ|=0.000e+00  => PASS (max|Δ|=0)
+[FF-FUSED-OPTIM-WALL] optimizer tail per step:
+    EAGER (17 launch) = 2828.439 us/step
+    FUSED ( 1 launch) = 2693.346 us/step
+    speedup = 1.050x   launch count: 17 -> 1
+=== FF-FUSED-OPTIM: byte-eq PASS  speedup 1.050x ===
+
+=== FF-FUSED-OPTIM byte-eq + wall + launch-count oracle ===
+clm_prod 17-param tail @ D=1536  (V=256 E=2 K=1)  total elems=10239234  reps=200
+[FF-FUSED-OPTIM-BYTEEQ] fused(1 launch) vs eager(17 launch) max|Δ|=0.000e+00  => PASS (max|Δ|=0)
+[FF-FUSED-OPTIM-WALL] optimizer tail per step:
+    EAGER (17 launch) = 14293.898 us/step
+    FUSED ( 1 launch) = 14373.298 us/step
+    speedup = 0.994x   launch count: 17 -> 1
+=== FF-FUSED-OPTIM: byte-eq PASS  speedup 0.994x ===
+

@@ -1,0 +1,29 @@
+  profiled span = 57365.080 ms  | kernels = 2109  | union(busy) = 7571.008 ms
+  ---------------- BUCKET TABLE (% of step wall) ----------------
+  (a) GEMM%       =   0.04%   (20.170 ms, 180 kernels)
+  (b) GLUE%       =  13.15%   (7543.368 ms, 1725 kernels)
+  (c) OPTIMIZER%  =   0.01%   (7.470 ms, 204 kernels)
+  (d) GAP/idle%   =  86.80%   (49794.072 ms)  [device truly idle = dispatch latency]
+  ---------------------------------------------------------------
+  valley_fraction = GLUE+OPT+GAP = 0.9996  (99.96%)
+  AMDAHL CEILING  = 1/(1-valley) = 1/GEMM% = 2844.131x
+  per-bucket priority (biggest reclaimable first):
+    1. GAP/idle(->FF-XSTREAM)            86.80%
+    2. GLUE(->FF-EPILOGUE/FF-VALLEY)     13.15%
+    3. OPTIMIZER(->FF-FUSED-OPTIM)        0.01%
+  --- top 15 kernels by total time (ms, bucket) ---
+    3166.573 ms  [GLUE]  _hx_k_groupnorm_bwd_dx
+    2535.069 ms  [GLUE]  _hx_k_groupnorm
+     841.684 ms  [GLUE]  [CUDA memcpy Device-to-Host]
+     427.252 ms  [GLUE]  [CUDA memcpy Host-to-Device]
+     279.406 ms  [GLUE]  _hx_k_embedding_bwd_scatter
+     259.972 ms  [GLUE]  _hx_k_int4_quant
+       9.370 ms  [GLUE]  _hx_k_moe_router_bwd
+       9.339 ms  [GEMM]  sm90_xmma_gemm_f64f64_f64f64_f64_nn_n_tilesize64x64x16_stage
+       8.777 ms  [GLUE]  _hx_k_moe_router
+       7.470 ms  [OPT ]  _hx_k_adamw_step_inplace
+       6.728 ms  [GEMM]  sm90_xmma_gemm_f64f64_f64f64_f64_nn_n_tilesize128x64x16_stag
+       4.702 ms  [GLUE]  _hx_k_groupnorm_bwd_affine
+       3.590 ms  [GEMM]  sm90_xmma_gemm_f64f64_f64f64_f64_nn_n_tilesize32x64x32_stage
+       3.439 ms  [GLUE]  _hx_k_db_colsum
+       2.740 ms  [GLUE]  _hx_k_int4_quant_bwd

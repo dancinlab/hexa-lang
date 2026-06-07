@@ -1,0 +1,84 @@
+F-FUSION-FF-VALLEY — persistent VALLEY-ONLY fusion megakernel (fwd glue)
+========================================================================
+verdict: 🟢 GREEN (byte-eq) · valley-glue wall 2.50–2.62x · step-level Amdahl-honest
+date:    2026-06-08
+device:  NVIDIA H100 80GB HBM3 (SXM, 132 SMs, sm_90, coop=1), vast pod 39960189 (hexa-ffval, DESTROYED leak-0)
+branch:  domain/hexa-fusion-ff-valley
+gate:    g5 — byte-eq FP64 max|delta|=0 vs the separate-kernel reference (fusion must not change the math)
+
+PREREQ STATUS (parallel fan-out, checked origin/main @ d185691d1 START):
+  FF-DUTYCYCLE  — NOT landed (milestone [ ], no verdict file). Amdahl ceiling not yet
+                  measured upstream → measured the valley fraction MYSELF here (below).
+  FF-BWDFUSE    — NOT landed (milestone [ ], no verdict file, no atomic-free bwd primitive
+                  available). Scoped FF-VALLEY to the FORWARD valley glue this session;
+                  the bwd glue is deferred (honest — see DEFERRED below).
+
+WHAT WAS BUILT
+  Two persistent grid-synced glue kernels (env-gated HEXA_FUSE_VALLEY) that fuse ONLY the
+  between-GEMM valley and keep the 4 own-GEMM convs as SEPARATE (already-saturated) launches —
+  the valley-only distinction vs the closed-negative WHOLE-fwd megakernel (_hx_k_clm_megafwd_fp64,
+  which pulls the GEMMs inside the one-wave coop grid and de-saturates them):
+    _hx_k_clm_valley1_fp64  (VALLEY-A): groupnorm#1 -> gelu -> residual (xt = xec + gelu(hn0))
+    _hx_k_clm_valley2_fp64  (VALLEY-B): gelu2 + expert-pack + moe-router(softmax+combine) -> groupnorm#2
+  + coop launchers _hx_cuda_farr_clm_valley{1,2}_gpu (one-wave grid, grid.sync legal; -1 fallback
+    to eager separate-kernel glue on no-coop), C wrappers forge_dispatch_clm_valley{1,2}.
+  Reuses the IDENTICAL byte-eq device fns the GREEN L3 chain / whole-megakernel already proved:
+  _hx_dev_groupnorm (host-order t-outer/c-inner reduction, NR-40 _hx_gn_sqrt_dev), _hx_gelu_dev
+  (erf, 1/sqrt2 literal), _hx_moe_exp_dev (scaled-Taylor). The valley DAG splits into 2 kernels
+  because the 2 expert GEMMs sit between block-1 and block-2 (a single persistent kernel can't
+  span them without re-including those GEMMs — that would be the whole-megakernel again).
+
+BYTE-EQ — Y, max|delta| = 0.000000e+00  (PASS, every output, every shape)
+  Standalone g5 harness (self/cuda/ffvalley_byteeq_harness.cu): SAME random FP64 device inputs,
+  runs fused valley1+valley2 vs the EAGER SEPARATE-kernel reference (GN G=1 + gelu + residual;
+  gelu2+pack+moe-router+GN#2), bit-for-bit compare of ALL valley outputs. VERBATIM:
+    T=128 D=512 E=2:  hn0/hg0/xt/xhat0/exout/probs/y/yn/xhatN all max|d|=0.000e+00 -> BYTEEQ 0.000000e+00 PASS
+    T=256 D=1024 E=2: all max|d|=0.000e+00 -> BYTEEQ 0.000000e+00 PASS
+    T=128 D=512 E=4:  all max|d|=0.000e+00 -> BYTEEQ 0.000000e+00 PASS
+  Byte-eq holds BY CONSTRUCTION: identical device code + identical grid.sync ordering as the
+  separate path; the valley fusion is a launch/residence reshape, not a math change.
+
+VALLEY-TIME — fused vs separate (the valley-glue wall; GEMMs excluded by design), VERBATIM:
+    T=128 D=512 E=2:  fused=5.4979 ms/iter  separate=13.7676 ms/iter  speedup=2.504x
+    T=256 D=1024 E=2: fused=21.7277 ms/iter separate=56.9424 ms/iter  speedup=2.621x
+    T=128 D=512 E=4:  fused=5.5531 ms/iter  separate=13.9073 ms/iter  speedup=2.504x
+
+UTIL before/after (nvidia-smi, sustained fused run T=256 D=1024):
+    fused persistent kernel: utilization.gpu = 100% (8/8 samples).
+  HONEST: this 100% is the COARSE nvidia-smi any-SM-busy flag — the resident persistent grid
+  keeps a block busy-waiting at the grid barrier on every SM, so it reads 100% even though the
+  byte-eq-forced GN reduction is SINGLE-THREAD (thread-0 only). It is NOT a compute-occupancy
+  gain. This is exactly the F-FUSION-OCCUPANCY-WALL caveat: byte-eq FORCES the reduction serial,
+  so the persistent kernel buys ZERO reduction-parallelism. The real win here is WALL-TIME of the
+  valley (2.5x: collapsing per-op launches + overlapping the 2 GN single-thread reductions with
+  the parallel normalize/gelu passes inside one resident grid), NOT SM saturation.
+
+RESULT vs the FF-DUTYCYCLE Amdahl ceiling (measured here — DUTYCYCLE not landed):
+  GEMM4-TIME (cuBLAS Dgemm stand-in for the 4 saturated own-GEMM convs, the part FF-VALLEY keeps
+  SEPARATE), VERBATIM:
+    T=128 D=512 K=3:  0.0968 ms/iter   T=256 D=1024 K=3:  0.3292 ms/iter
+  Step = valley + GEMM4. Amdahl step-level lever (1/((1-vf)+vf/valley_speedup)):
+    T=128 D=512:  valley_frac=99.30%  valley_speedup=2.504x  STEP_SPEEDUP=2.478x  (5.595 vs 13.864 ms)
+    T=256 D1024:  valley_frac=99.43%  valley_speedup=2.621x  STEP_SPEEDUP=2.597x  (22.057 vs 57.272 ms)
+  ⚠ HONEST CAVEAT (the load-bearing finding): the ~99% valley fraction is an ARTIFACT of the
+  byte-eq-forced SINGLE-THREAD GN reduction (an O(T*D) serial loop on one thread dominates the
+  FP64 step). It is NOT a real-workload property. In a non-byte-eq trainer the GN would be a
+  PARALLEL reduction (~microseconds) and the valley fraction would collapse to a few %, putting
+  the step-level lever back near the MPK 1.2–1.3x cross-task-pipelining ceiling the milestone cited.
+  So: FF-VALLEY's 2.5x is REAL and byte-eq-GREEN for the FP64 byte-eq path as built, but it is the
+  step-level Amdahl lever ONLY because byte-eq makes the valley pathologically dominant; it does
+  NOT generalize to a parallel-reduction trainer. The structural lever (persistent valley fusion,
+  GEMMs left saturated) is VALIDATED and byte-exact; the magnitude is byte-eq-regime-specific.
+
+DEFERRED (honest scope — could not fully build in one session):
+  - BWD glue valley fusion: deferred. FF-BWDFUSE's atomic-free bwd primitive had not landed, and
+    a byte-exact bwd valley (GN-bwd + gelu-bwd + moe-combine-bwd, destination-owned reduction)
+    is a second multi-kernel build. Forward valley is the largest byte-exact slice; shipped that.
+  - Full clm_prod train-program wiring (.hexa _clm_valley callsites + runtime.c splice of
+    ffvalley_wrapper.c): kernels + launchers + wrappers landed; the .hexa call-site gating is the
+    remaining integration step (mirrors the HEXA_CLM_MEGASTEP wiring), deferred to a follow-up.
+
+ARTIFACTS
+  self/cuda/runtime_cuda_emit.hexa        — _hx_k_clm_valley{1,2}_fp64 + coop launchers (emit)
+  self/cuda/ffvalley_wrapper.c            — runtime.c HexaVal dispatch wrappers
+  self/cuda/ffvalley_byteeq_harness.cu    — standalone g5 byte-eq + timing harness (this verdict)

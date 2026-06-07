@@ -183,25 +183,68 @@
   util-via-megakernel was already CLOSED-NEG (#2697 + GN grid-sync). Success = the ONLY path to an
   absolute (torch-gap-closing) breakthrough beyond ~3x; failure = ~3x confirmed TERMINAL. Large codegen
   rewrite (days), ROI uncertain. The batch-fill ~1.3x->2.95x self-speedup (#2913) is already MET.
-- [ ] **FF-DUTYCYCLE — Chopper-style step duty-cycle breakdown (PREREQ, sets the Amdahl ceiling)** —
-  nsys/ncu-profile the FP64 step into GEMM% vs between-GEMM-glue% vs optimizer-tail%; the valley fraction
-  (1 - GEMM%) is the HARD ceiling 1/(1-valley) for every fusion lever below. Cheap (no kernel rewrite).
+- [x] **FF-DUTYCYCLE — Chopper-style step duty-cycle breakdown (PREREQ, sets the Amdahl ceiling)** 🟢 MEASURED (2026-06-08, F-FUSION-FF-DUTYCYCLE, H100 SXM sm_90 driver 560.35.03, vast 39958628) — nsys cuda-trace + nvidia-smi util of the REAL flame CLMConvMoE FP64 step (D1536/T512/E2/K3, B=1, HEXA_CLM_MEGASTEP OFF). **VERBATIM (g5): GEMM% 0.04% (20.17ms·180k) · GLUE% 13.15% (7543ms·1725k) · OPTIMIZER% 0.01% (7.47ms·204k) · GAP/idle% 86.80% (49794ms). valley_fraction = 0.9996 · Amdahl ceiling = 1/GEMM% = 2844x.** util MEAN 10.90% MEDIAN 1% PEAK 68% pct≥70 0% pct<5 72.2% (n=273) = bimodal {bursts,~0%} CONFIRMED. Of GPU-ACTIVE time: **groupnorm fwd+bwd = 90.5%** (the two GN reductions avg 105-132ms EACH = byte-eq-forced single-thread reduction), **ALL cuBLAS f64 GEMMs combined ~0.3%**. **GATE: GREENLIGHT the ladder — GEMM is NOT the wall, the entire wall is the between-GEMM valley.** #1 reclaimable: by GPU-active-time = GroupNorm 90.5% → **FF-VALLEY** (fix the single-thread GN reduction); by span = GAP/idle 86.8% → FF-XSTREAM (overlap)+host-glue elim. **DEPRIORITIZE FF-FUSED-OPTIM** (AdamW only 0.01% span / 0.1% active — already cheap, refutes the research-leg #1 ranking for THIS shape). ncu SM-counters blocked (ERR_NVGPUCTRPERM); nvidia-smi+nsys authoritative. Reconciles the closed-neg uncap levers (INTERP-ELIM/PRECISION-CHANGE/RIGHT-SIZED-GPU each attacked the WRONG term — interpreter/dtype/SM-count; the RIGHT terms are GN reduction + valley overlap). pod DESTROYED leak-0 (tag hexa-dutycycle confirmed). verdict `.verdicts/hexa-fusion/F-FUSION-FF-DUTYCYCLE.txt` · harness+results `.verdicts/hexa-fusion/ff-dutycycle-build/`.
   Lit: Chopper arXiv 2512.08242 (isolates active-compute vs idle-SM vs dispatch as distinct walls).
-- [ ] **FF-FUSED-OPTIM — fused AdamW tail (multi_tensor_apply / FusedAdam pattern)** — collapse the eager
-  ~28-call per-param AdamW tail into 1-few launches; byte-eq FP64 (same accum order). LOW risk, both
-  research legs' #1. Lit: Apex FusedAdam 10-15%, PyTorch foreach 21-293%. Attacks the optimizer DAG, not GEMMs.
-- [ ] **FF-EPILOGUE — own-GEMM epilogue/prologue fusion** — fold GELU/bias/residual-add (+ next-op start)
-  into the own-GEMM epilogue while data is in regs/smem, killing a global round-trip + a launch per fused
-  op; byte-eq vs separate-op ref. MED (FP64 epilogue register pressure). Highest leverage-per-effort kernel
-  change (we already own the GEMM). Lit: CUTLASS/Inductor epilogue fusion, ThunderMLA 20-35%.
-- [ ] **FF-VALLEY — persistent valley-only fusion megakernel** — fuse ONLY the between-GEMM glue
+- [x] **FF-FUSED-OPTIM — fused AdamW tail (multi_tensor_apply / FusedAdam pattern)** ✅ (2026-06-08,
+  F-FUSION-FF-FUSED-OPTIM 🟢 byte-eq + 🟡 launch-bound-bounded perf; real H100 80GB, vast 39960038 hexa-ffopt
+  DESTROYED leak 0). The fused kernel ALREADY EXISTS in tree (M2 _hx_k_adamw_fused / forge_dispatch_adamw_fused,
+  env HEXA_CLM_FULLSTEP) — it collapses the clm_prod step's **17 per-param AdamW launches → ONE
+  cudaLaunchCooperativeKernel** (persistent grid strides over the param-tensor concatenation via a prefix-offset
+  table; the multi_tensor_apply pattern). M2's verdict measured it through the util% lens (closed-neg on GREEN);
+  THIS lands the FF gate (g5) M2 did not record. GATE (g5) byte-eq FP64 max|Δ| vs the eager 17-launch tail over
+  the exact clm_prod 17-param shapes (tool/cuda_test_adamw_fused.cu): **max|Δ| = 0.000e+00 PASS** at every swept
+  D {128,256,512,1536} — CONDITIONAL on consistent FMA contraction (-fmad=false). Under nvcc DEFAULT (-fmad=true)
+  the cross-path differential is exactly **1.110e-16 (1 ULP)** — pure context-dependent FMA rounding (the 1-launch
+  kernel adds a prefix-scan owner lookup + double-indirection, so the compiler contracts a*b+c into FMA at
+  different points), NOT an algorithm diff; -fmad=false forces both to discrete mul+add → bit-identical. (In the
+  shipping binary this is moot: a run executes EITHER fused OR eager-fallback, never both/compared.) **LAUNCH
+  COUNT 17 → 1** ([FULLSTEP-FIRED] grid=660 blk=256). OPTIM-STEP WALL (H100, reps=200, -fmad=false): D=128
+  806.8→676.2 us **1.193x**; D=256 1339.4→1209.9 us 1.107x; D=512 2828.4→2693.3 us 1.050x; D=1536 14293.9→14373.3
+  us **0.994x (break-even)**. HONEST FINDING: launch-bound-bounded exactly as predicted — the win is pure launch-
+  overhead removal in the small-D regime (~15% of the tail @ D=128, = the cited Apex FusedAdam 10-15% ceiling) and
+  DECAYS to break-even by D=1536 as each per-param kernel becomes HBM-bandwidth-bound (the fused kernel reads/writes
+  the same W/m/v/g — no roofline reduction, only launch removal). As a fraction of the FULL step (fwd GEMMs + bwd
+  glue dominate, AdamW tail is a small slice), this is a TINY % of full-step wall at small D and ~0% at production
+  width. Right structure, byte-correct, value = launch removal at small batch/D — NOT a full-step lever.
+  verdict: .verdicts/hexa-fusion/F-FUSION-FF-FUSED-OPTIM.txt (+ .raw.txt verbatim).
+- [x] **FF-EPILOGUE — own-GEMM epilogue fusion** 🟢 GREEN byte-eq, modest+shrinking win (2026-06-08,
+  F-FUSION-FF-EPILOGUE, real H100 80GB): folded the FF block (bias-add + exact-erf GELU + residual-add) into
+  the W10 TF32 own-GEMM (OG10 bit-exact SUMMIT) EPILOGUE — applied to the d0/d1 accumulator REGISTERS before
+  the store. **byte-eq max|Δ|=0.000e+00 (bit-identical 1048576/1048576 @1024, 4194304/4194304 @2048,
+  16777216/16777216 @4096) vs the separate-op ref (GEMM + bias_add + gelu + residual_add)**. Fused FASTER at
+  all sizes — **1.063x @S=1024, 1.052x @S=2048, 1.010x @S=4096** (win SHRINKS as S grows: the own-GEMM, 6.09x
+  off cuBLAS, DOMINATES the wall, so the removed elementwise launches/round-trips are a shrinking fraction).
+  **LAUNCH 4→1 (-3, -75%)**; **HBM round-trips removed = ~3 RW passes of M×N (~0.025/0.101/0.403 GB/step)**.
+  **OCCUPANCY NEUTRAL (1 CTA/SM both** — W10 is already smem-bound at 1 CTA/SM, the fp32 epilogue regs cost
+  nothing; the "FP64 epilogue pressure" caveat does NOT bite, this path is TF32/fp32). BUILD NOTE: `-fmad=false`
+  REQUIRED for max|Δ|=0 (else the 2 GELU call sites FMA-contract differently → ~1 ULP, max|Δ|=4.77e-7). NOT
+  the cuBLAS-Lt epilogue (the FP64 closed-neg F-FUSION-CUBLASLT-EPILOGUE) — this is OUR OWN GEMM's epilogue,
+  the surviving "(B) own-kernel fusion" lever. HONEST: correct, byte-exact, real but small; win grows in the
+  launch-bound/small-M (decode) regime, shrinks in the GEMM-bound square regime measured. cuBLAS=roofline, no
+  superiority claim. pod 39959960 (tag hexa-ffepi) DESTROYED leak-0. verdict
+  `.verdicts/hexa-fusion/F-FUSION-FF-EPILOGUE.txt`.
+- [x] **FF-VALLEY — persistent valley-only fusion megakernel** — fuse ONLY the between-GEMM glue
   (groupnorm+gelu+conv-experts+elementwise) into a persistent kernel; keep own-GEMMs as separate saturated
   kernels. Extends GREEN L3-a/L3-b to the bwd side; attacks the ~0%-util valley directly. MED. Lit: MPK
   (arXiv 2512.22219) cross-task-pipelining ablation 1.2-1.3x. Best risk-adjusted structural lever.
-- [ ] **FF-BWDFUSE — byte-exact backward via forward-index reuse (Flash-MaxSim template)** — atomic-free,
-  destination-owned gradient reduction reusing the fwd argmax/routing indices; the bwd-fusion primitive
+  🟢 **FWD GLUE LANDED, byte-eq GREEN.** 2 persistent grid-synced glue kernels (_hx_k_clm_valley1_fp64
+  GN#1+gelu+resid; _hx_k_clm_valley2_fp64 gelu2+pack+moe-router+GN#2), GEMMs kept SEPARATE (the
+  valley-only distinction vs the closed-neg whole-fwd megakernel). H100 (132 SM): byte-eq FP64
+  **max|delta|=0** vs separate-kernel ref (all outputs, T∈{128,256} D∈{512,1024} E∈{2,4}); valley-glue
+  wall **2.50–2.62x** (fused vs separate). DUTYCYCLE/BWDFUSE prereqs NOT landed → measured valley
+  fraction myself: GEMM4≈0.10–0.33ms → valley_frac ~99% → step lever ~2.48–2.60x BUT ⚠ the ~99%
+  fraction is an ARTIFACT of the byte-eq-forced SINGLE-THREAD GN reduction; in a parallel-reduction
+  trainer the valley collapses to a few % (→ back near the MPK 1.2–1.3x ceiling). Structural lever
+  VALIDATED + byte-exact; magnitude is byte-eq-regime-specific. BWD valley + full clm_prod .hexa
+  wiring DEFERRED (FF-BWDFUSE primitive NOW AVAILABLE — see below). Verdict F-FUSION-FF-VALLEY.txt.
+  pod hexa-ffval 39960189 DESTROYED leak-0.
+- [x] **FF-BWDFUSE — byte-exact backward via forward-index reuse (Flash-MaxSim template)** — atomic-free,
+  destination-owned gradient reduction reusing the fwd index structure; the bwd-fusion primitive
   FF-VALLEY + MEGASTEP both need. byte-eq FP64. Lit: Flash-MaxSim arXiv 2605.29517 (train+bwd, 3.9-4.7x,
-  byte-exact, ~28x less train mem).
+  byte-exact, ~28x less train mem). 🟢 GREEN (H100, .verdicts/.../F-FUSION-FF-BWDFUSE.txt): gX inverse-grid
+  gather t=p+dil*(K-1-k) + gW/gb destination-owned → byte-eq max|Δ|=0 (dev-vs-dev AND vs CPU-fmaf),
+  DETERMINISTIC (run-to-run 0 vs atomic 1e-4..3e-4), 0 atomics (vs 9.66e10 atomicAdd), 14.9-17.0x faster
+  than the atomicAdd scatter. PRIMITIVE AVAILABLE for FF-VALLEY/MEGASTEP.
 - [x] **FF-XSTREAM — cross-stream valley overlap (no fusion, cheapest probe) — 🔴 CLOSED-NEGATIVE
   (H100 80GB measured 2026-06-08)** — issued the E=30 mutually-independent expert Conv1d ops on
   separate CUDA streams (HEXA_MULTISTREAM=1, expert e on stream[e%E]) vs SERIAL on one stream, over
@@ -294,6 +337,7 @@ FORGE-UTILGREEN lever-1~5 가 GEMM repack 을 전부 device 化했어도 util ME
 - [x] **INTERP-ELIM — native/AOT-compile the per-step driver** 🔴 CLOSED-NEGATIVE (2026-06-08, F-FUSION-INTERP-ELIM): native-compiled the full per-step driver glue (token-pack t_get/t_set + im2col/col2im + db-colsum + CE softmax-grad + AdamW, verbatim from clm_prod.hexa host fallbacks) two ways from one source — INTERPRETED (`hexa run`, bytecode) vs NATIVE (hexat→C→gcc -O2). GATE byte-eq **max|Δ|=0** (native==interp checksums on every buffer, all configs). SPEEDUP **🔴 ~1.0× — NO uncap**: Mac D1536/Tw512 B=1 native 1690ms vs interp 1727ms (1.02×), B=4 0.99×; per-op im2col-loop 1.05×, AdamW-builtin parity. ROOT CAUSE — the interpreter only interprets cheap loop scaffold; t_get/t_set→farr_get/set, adamw_step, exp are NATIVE-C builtins in BOTH arms, so AOT-compiling removes a negligible fraction. H100: the FULL native real-trainer clm_prod_gpu util MEAN **0.43% MEDIAN 0%** = IDENTICAL to the M5 interpreted ~0.45% → interp-elim does NOT change the step's duty cycle. FALSIFIES the #2912 "interpreter" attribution for the host-arithmetic glue: the ≈3×/~1656× wall is the serial un-fused FP64 cuBLAS op-DAG + per-op launch/sync dispatch (the M2/M3/M5 structural closed-neg), NOT bytecode interpretation. Closes **≈0%** of the torch gap via this lever. Remaining levers unchanged (precision/algorithm fusion OR right-sized GPU). Pod 39912326 DESTROYED leak-0. verdict `.verdicts/hexa-fusion/F-FUSION-INTERP-ELIM.txt`.
 - [x] **PRECISION-CHANGE — TF32/BF16 own-GEMM flame step, does precision uncap >3×?** 🔴 CLOSED-NEGATIVE (2026-06-08, F-FUSION-PRECISION-CHANGE): the FIRST honest uncap lever g85 named beyond the ~3× batch-fill cap — REFUTED on the real flame step. runtime_cuda.c PATCHED (env `HEXA_GEMM_PREC=fp64|tf32|bf16` in BOTH matmul launchers via cublasGemmEx tensor-core; one-shot rel_rms-vs-FP64 [PREC-GATE]). H100 SXM (vast 39923836, driver 560.35.05, D1536/T512/E2/K3). **GATE PASS (W14 ≤1e-2, dtype-stated)**: TF32 rel_rms_vs_fp64=**2.76e-04**, BF16=**2.61e-03** (first GEMM M512/K4608/N1536); CE descends. **SPEEDUP 🔴 NO UNCAP**: step/s **B1 fp64 0.19778 → tf32 0.20165 (1.020×) · bf16 0.20289 (1.026×)**; **B4 fp64 0.05122 → tf32 0.04953 (0.967× — SLOWER)**. util **MEDIAN pinned at ~1% (≈0%)** for fp64/tf32/bf16 alike. The ~3× ceiling is NOT lifted. ROOT CAUSE — the FP64 GEMM is NOT the wall; the step is launch-/glue-bound (median util ≈0%, device idle between bursts), so cheaper-arithmetic tensor-core GEMMs shrink an already-small bursty fraction and the per-GEMM fp64→low-prec convert+alloc TAXES the launch-bound bottleneck (B4 goes negative). Same wall as INTERP-ELIM (~1.0×) + FP64-fusion: PER-OP DISPATCH is dtype-invariant. **Refutes the g85 "compute-bound dense fusion" hope** — the step was never GEMM-compute-bound. Narrows the remaining uncap lever to **RIGHT-SIZED GPU only**. HONEST: the HEXA_GEMM_PREC tf32/bf16 path is a real reusable correct artifact (gate PASS); the NEGATIVE is on the speedup axis. Pod DESTROYED leak-0 (tag hexa-prec confirmed). verdict `.verdicts/hexa-fusion/F-FUSION-PRECISION-CHANGE.txt`. build kit `.verdicts/hexa-fusion/precision-change-build/`.
 - [x] **RIGHT-SIZED-GPU — the LAST honest uncap lever (g85, after precision REFUTED #2917)** 🔴 CLOSED-NEGATIVE (2026-06-08, F-FUSION-RIGHT-SIZED-GPU): ran the REAL flame CLMConvMoE step at the EXACT H100-baseline shape (D1536/T512/E2/K3, FP64) on a **right-sized NVIDIA A10 (72 SMs, Ampere GA102, 22.5 GiB)** — which **CLOSES the P2 12-GiB OOM caveat**: D=1536 FITS the A10 at ~9 GiB (no OOM, unlike the 12-GiB RTX 5070 P2 was forced down to D=1024). **util MEDIAN stays 0%** at the true H100 shape — eager (MEAN 24.37% MEDIAN 0% PEAK 100% pct≥70 17.6% n=550), fused HEXA_FUSE_GN_GELU=1 (MEAN 25.05% MEDIAN 0% pct≥70 18.2%, byte-eq CE 4.466→4.184), B=2 partial (MEAN 24.66% MEDIAN 0% n=735) — the SAME bimodal {100% in-GEMM, ~0% between} occupancy-wall profile as the idle H100 (BATCHFILL B=1 mean/med/peak 10.4/0/100) and the native real-trainer (INTERP-ELIM MEAN 0.43% MEDIAN 0%). The A10's HIGHER MEAN is a slow-card GEMM-burst artifact (1:32 consumer FP64 stretches the GEMM windows), NOT a saturated step — pct≥70 is only ~18% of samples. **ABSOLUTE step/s 0.1277 < H100 0.1747 (0.73×, right-sized is SLOWER — expected)**; **EFFICIENCY: MEDIAN 0% on BOTH, no win on the inter-kernel duty cycle that matters**. => the per-op launch-dispatch serial gaps are **SM-count-INVARIANT**; the wall is the serial un-fused FP64 op-DAG + per-op launch/sync dispatch, fillable by NOTHING short of a single fused megakernel (already structurally closed: M2/M3/M5 + L3 lane). Right-sizing fills the ISOLATED GEMM (D2 ~98%) but FAILS the full serial trainer step (= P2, now without OOM caveat). **CLOSES the ~1.3×-uncap question: BOTH g85 uncap levers refuted — precision-change (#2917) AND right-sized-GPU (this). The ~3× batch-fill cap is unliftable except by the (structurally-closed) fused megakernel.** HONEST: the right-sizing thesis ("match the GPU to the shape") is an efficiency claim, not throughput — and even efficiency (median duty cycle) does NOT improve. pod 39928486 (tag hexa-rsg) DESTROYED leak-0. verdict `.verdicts/hexa-fusion/F-FUSION-RIGHT-SIZED-GPU.txt`.
+- [x] **MEGASTEP — the whole-train-step grid-sync uberkernel capstone (fwd+bwd+optimizer, own-GEMM inline, ONE persistent cooperative megakernel)** 🔴 CLOSED-NEGATIVE (2026-06-08, F-FUSION-MEGASTEP): the LOWEST-odds lever (commons g85 / reference_megastep_research flagged it most-likely to re-hit the wall) — **does NOT beat the ~3× cap; RE-HITS the serial-DAG occupancy wall**, on convergent ALREADY-MEASURED real-H100 evidence (no new pod rented — re-measuring a 4-way-convergent closed-neg = pure leak risk, 0 new info; pods this session=0 leak-0). **(1) byte-eq leg 🔴 max\|Δ\|≠0** — own-GEMM in a persistent cooperative kernel ≠ cublasDgemm by k-reduction order (B6: first_ce Δ 9.0e-16@D512 … 1.8e-15@D1536, present after ONE fwd pass; a persistent kernel CANNOT call cuBLAS → byte-eq STRUCTURALLY unreachable). **(2) util leg 🔴** — the literal whole-step megakernel (fwd HEXA_CLM_MEGASTEP + bwd device-glue + cooperative AdamW HEXA_CLM_FULLSTEP, all FOUR fused, [FULLSTEP-FIRED]+[MEGAFWD-FIRED] verbatim, real H100 SXM 39604788) measures **MEAN 13.8–14.3% MEDIAN 1–2%** vs eager MEAN 10.4–10.8% MEDIAN 1% = **+3.4pp MEAN / +0pp MEDIAN** (M2) — short of GREEN ≥20% MEAN by ~6pp, NOWHERE near ~3×; device idle MAJORITY of every step. **(3) occupancy FP64/batch=1** = the binding wall: coop grid (528–740, ONE persistent grid) under-fills 132 SMs (FP64 reg pressure caps maxActiveBlocks); the PARITY wgmma GEMM can't even co-reside (blockDim<128 can't issue wgmma + (S/128)²>264-CTA wave → grid.sync DEADLOCK, MEGA-OWNGEMM structural). vs Amdahl: FF-DUTYCYCLE ceiling WIP/unfilled on main; the +3.4pp sits at the LOW end of the lit's bounded ~15–25% launch-elim window (1/(1-valley)≈1/GEMM%). **The two gate halves (byte-eq ∧ util-lift) are MUTUALLY EXCLUSIVE, and even surrendering byte-eq the util-lift is marginal.** This is the CAPSTONE CLOSURE of the util-via-megakernel campaign: whole-train-step megakernel = ruled-out path past ~3×; the real flame self-speedup lever is BATCH-FILL (≈3× asymptote, F-FUSION-BATCHFILL). PREREQ status seen at START: FF-DUTYCYCLE WIP-skeleton-only (ceiling unfilled), FF-VALLEY/FF-BWDFUSE NOT on main (nothing to compose), FF-FUSED-OPTIM already inside M2. verdict `.verdicts/hexa-fusion/F-FUSION-MEGASTEP.txt`.
 
 ## ── completion roadmap (goal: 병렬 발사 전략으로 HEXA-FUSION 완성) ──
 
@@ -942,3 +986,34 @@ Pinned by the user as this session's tracked axes. Two upstream "make it work" a
 | 3 | reflect 1+2 -> dojo | fold the own-GEMM ladder + megakernel-wall story into stdlib/dojo (hexa-cuda track) | downstream of 1,2 |
 | 4 | reflect 1+2 -> README | flame.forge.hexa-cuda trinity GPU section (PR #2842 reorganized it); fold the OG8/OG10 numbers + both-walls-closed story | #2842 = 1st pass, numbers TODO |
 | 5 | reflect 1+2 -> commons.tape | governance directive capturing own-GEMM-parity + cuBLAS-impossible-megakernel — sign-gated (sidecar sign commons, user-only) | downstream, needs sign |
+
+## ── FF-BWDFUSE — atomic-free byte-exact MoE-conv backward 🟢 GREEN (H100, 2026-06-08, g5 verbatim) ──
+
+Flash-MaxSim (arXiv 2605.29517) forward-index reuse applied to the CLMConvMoE backward glue.
+The flame bwd computed gX[p,ci] by an atomicAdd SCATTER over (e,t,co,k) — atomic-unit-bound +
+NON-DETERMINISTIC (not fp64 byte-eq across runs). The cure: a DESTINATION-OWNED gather using the
+inverse-grid index `t = p + dil*(K-1-k)` (the forward read `p = t - dil*(K-1-k)` inverted) — each
+(p,ci) owns its grad, gathers contributors in FIXED order (e,co,k asc) → atomic-free, deterministic.
+gW/gb are already destination-owned (reduce over t). The inverse-grid mapping (the named hard part)
+is correct for multi-tap spans (validated dil=1 AND dil=2) + causal boundaries.
+
+GATE (g5, byte-eq FIRST) — H100 80GB HBM3, gate-d=192:
+  gX destination-owned: dev-vs-dev byte-eq max|Δ| = 0.000e+00  AND  vs CPU-fmaf = 0.000e+00
+  gW destination-owned: dev-vs-dev byte-eq max|Δ| = 0.000e+00  AND  vs CPU-fmaf = 0.000e+00
+  gb destination-owned: vs CPU ref max|Δ| = 0.000e+00
+  atomic baseline: run-to-run max|Δ| = 1.36e-05 (NONZERO — the non-determinism FF-BWDFUSE removes)
+  GATE OVERALL => PASS
+
+PERF (gX bwd glue, median cuEvent, H100):
+  d=2048: atomic 2139.6 ms (9.66e10 atomicAdd) -> destown 143.4 ms (0 atomics) = 14.9x · determinism 3.12e-4 -> 0
+  d=512:  atomic  163.2 ms (6.04e9  atomicAdd) -> destown   9.6 ms (0 atomics) = 17.0x · determinism 7.32e-5 -> 0
+  working set identical (3.09 GB @d=2048); atomic path additionally needs a per-step gX pre-zero +
+  atomic RMW traffic — destown writes each gX[p,ci] EXACTLY ONCE.
+
+HONEST: the gX gather is a plain MAC (no weight reuse across destinations); the ~15-17x win is vs the
+pathological atomicAdd baseline, NOT a faster-than-cuBLAS conv-transpose. A weight-reuse/smem-tiled gX
+is a future PERF lever; the PRIMITIVE (atomic-free + byte-exact + deterministic + single-pass, no
+cross-CTA reduction) is what FF-VALLEY/MEGASTEP need and is DELIVERED. d=6208 (43 GB bank) not run —
+contract is shape-free (verified d=192/512/2048). Verdict: .verdicts/hexa-fusion/F-FUSION-FF-BWDFUSE.txt
+kernel/driver: tool/gpu_moe_conv_bwd_fuse.cu · tool/gpu_moe_conv_bwd_fuse_run.sh
+pod: vast 39960150 (label hexa-ffbwd) DESTROYED leak-0 (tag-checked).
