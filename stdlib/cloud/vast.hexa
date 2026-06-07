@@ -671,8 +671,17 @@ fn vast_offer_release(offer_id: str) {
 //   --disk <gb> --raw`. Returns the new instance id parsed from the
 // `--raw` JSON (`new_contract` is the instance id in vastai's response;
 // some versions emit `id`). Mirrors runpod_create's CLI path; vast.ai
-// has no GraphQL fallback (the CLI is the only canonical surface).
+// has no GraphQL fallback (the CLI is the only canonical surface). Pass-through
+// to vast_create_labeled with an empty label (no provider-side attribution).
 fn vast_create(offer_id: str, image: str, disk_gb: int) -> VastInstance {
+    return vast_create_labeled(offer_id, image, disk_gb, "")
+}
+
+// vast_create_labeled — vast_create + a provider-side `--label <slug>` so a raw
+// `vastai show instances` surfaces the project-purpose attribution (@L3). A
+// blank label is omitted (identical to vast_create). The label is shell-quoted
+// so a slug can never break the create command line.
+fn vast_create_labeled(offer_id: str, image: str, disk_gb: int, label: str) -> VastInstance {
     let vc = _vastai_path()
     if len(vc) == 0 {
         return _vast_fail_instance("vastai not found (set VASTAI_DISABLE=1 to silence)")
@@ -680,9 +689,14 @@ fn vast_create(offer_id: str, image: str, disk_gb: int) -> VastInstance {
     if len(offer_id) == 0 {
         return _vast_fail_instance("create: empty offer_id")
     }
+    let mut label_arg = ""
+    if len(label) > 0 {
+        label_arg = " --label " + _shq_local(label)
+    }
     let cmd = _shq_local(vc) + " create instance " + _shq_local(offer_id)
         + " --image " + _shq_local(image)
         + " --disk " + _shq_local(to_string(disk_gb))
+        + label_arg
         + " --ssh --direct"
         + " --raw 2>&1"
     let out = exec(cmd)

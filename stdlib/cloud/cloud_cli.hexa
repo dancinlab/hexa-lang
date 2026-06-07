@@ -18,6 +18,7 @@ use "stdlib/cloud/pods_local"
 use "stdlib/cloud/parallel_audit"
 use "stdlib/cloud/providers_catalog"
 use "stdlib/cloud/alive"
+use "stdlib/http"
 use "stdlib/cloud/api"
 use "stdlib/cloud/provider_cli"
 use "stdlib/sys"
@@ -392,22 +393,117 @@ fn _basename(p: str) -> str {
     return p.substring(last + 1, n)
 }
 
-// _resolve_project — the owning project for a pod, used by rent/up/run/nohup/
-// adopt to STAMP attribution and by down/destroy to derive the cwd project for
-// the cross-project kill-guard. An explicit `--project <name>` flag wins;
-// otherwise fall back to the cwd git-repo basename (`git rev-parse
-// --show-toplevel` → basename); only "unattributed" when cwd is not a git repo
-// (so a pod rented from a non-repo shell is flagged, never silently mis-owned).
+// _at_prefix — render a repo/folder name as an `@`-prefixed project tag
+// (the rent-invocation cwd's project identity, e.g. cwd
+// `/Users/mini/dancinlab/demiurge` → `@demiurge`). Idempotent: a name that
+// already leads with `@` is returned unchanged; "" stays "".
+fn _at_prefix(name: str) -> str {
+    if len(name) == 0 {
+        return ""
+    }
+    if name.substring(0, 1) == "@" {
+        return name
+    }
+    return "@" + name
+}
+
+// _resolve_project — the owning PROJECT (= repo / folder / project name) of the
+// rent-invocation cwd, used by rent/up/run/nohup/adopt to STAMP attribution and
+// by down/destroy to derive the cwd project for the cross-project kill-guard.
+// Resolution order: an explicit `--project <name>` flag wins; else the cwd
+// git-repo basename (`git rev-parse --show-toplevel` → basename); else (NOT a
+// git repo) the cwd folder basename (`pwd`). All forms are `@`-prefixed, so a
+// rent from `/Users/mini/dancinlab/demiurge` tags the pod `@demiurge`. Only an
+// empty cwd degrades to "@unattributed".
 fn _resolve_project(av: [str], start: int) -> str {
     let flag = _flag_val(av, start, "--project", "")
     if len(flag) > 0 {
-        return flag
+        return _at_prefix(flag)
     }
     let git_top = exec("git rev-parse --show-toplevel 2>/dev/null").trim()
     if len(git_top) > 0 {
-        return _basename(git_top)
+        return _at_prefix(_basename(git_top))
     }
-    return "unattributed"
+    let pwd = exec("pwd").trim()
+    if len(pwd) > 0 {
+        return _at_prefix(_basename(pwd))
+    }
+    return "@unattributed"
+}
+
+// _resolve_purpose — the free-form TASK DESCRIPTION for a rented pod. An
+// explicit `--desc`/`--purpose <text>` flag wins (the new task-description
+// surface); else fall back to the legacy `--owner` tag (which historically
+// doubled as the purpose); else "unspecified". The (project, purpose) pair is
+// the idempotent-rent dedup key + the down-guard surface, and is rendered by
+// `cloud list`.
+fn _resolve_purpose(av: [str], start: int) -> str {
+    let desc = _flag_val(av, start, "--desc", "")
+    if len(desc) > 0 {
+        return desc
+    }
+    let purp = _flag_val(av, start, "--purpose", "")
+    if len(purp) > 0 {
+        return purp
+    }
+    let owner = _flag_val(av, start, "--owner", "")
+    if len(owner) > 0 {
+        return owner
+    }
+    return "unspecified"
+}
+
+// _slugify — lowercase + collapse any non-[a-z0-9] run to a single `-`, trim a
+// trailing `-`. Builds the provider `--label` (vast) / `--name` (runpod) from a
+// free-form project+purpose so a raw `vastai show instances` surfaces the
+// attribution too (e.g. `@demiurge` + `r12 gold harvest` →
+// `demiurge-r12-gold-harvest`).
+fn _slugify(s: str) -> str {
+    let mut out = ""
+    let mut prev_dash = 1
+    let n = len(s)
+    let mut i = 0
+    while i < n {
+        let c = s.substring(i, i + 1)
+        let lc = c.to_lower()
+        let is_digit = c >= "0" && c <= "9"
+        let is_alpha = lc >= "a" && lc <= "z"
+        if is_digit || is_alpha {
+            out = out + lc
+            prev_dash = 0
+        } else {
+            if prev_dash == 0 {
+                out = out + "-"
+                prev_dash = 1
+            }
+        }
+        i = i + 1
+    }
+    // trim a trailing dash (a leading one is impossible — prev_dash starts 1).
+    let m = len(out)
+    if m > 0 && out.substring(m - 1, m) == "-" {
+        out = out.substring(0, m - 1)
+    }
+    return out
+}
+
+// _project_purpose_label — the provider-side `project-purpose` slug stamped on
+// the underlying vast `--label` / runpod `--name` so a raw provider list shows
+// the attribution (@L3). Slugifies both (the `@` is dropped by _slugify), joins
+// with `-`. Either part blank → just the other; both blank → "hexa-cloud".
+fn _project_purpose_label(project: str, purpose: str) -> str {
+    let p = _slugify(project)
+    let q = _slugify(purpose)
+    if len(p) > 0 && len(q) > 0 {
+        return p + "-" + q
+    }
+    if len(p) > 0 {
+        return p
+    }
+    if len(q) > 0 {
+        return q
+    }
+    return "hexa-cloud"
 }
 
 // _cwd_project — the cwd's owning project (git-repo basename, else
@@ -1230,9 +1326,15 @@ fn _cloud_rent_vast(av: [str], start: int) -> int {
     let image = _flag_val(av, start, "--image", "ubuntu:22.04")
     let disk = _cli_atoi(_flag_val(av, start, "--disk", "30"))
     let owner = _flag_val(av, start, "--owner", "(hexa-cloud rent)")
-    // Project attribution (down-guard source) — explicit --project, else
-    // cwd git-repo basename, else "unattributed". `owner` doubles as purpose.
+    // Project attribution (down-guard source) — explicit --project, else cwd
+    // git-repo basename, else cwd folder basename; @-prefixed (e.g. @demiurge).
     let project = _resolve_project(av, start)
+    // Purpose / task description — --desc/--purpose, else legacy --owner, else
+    // "unspecified". This is the (project,purpose) dedup key + the list surface.
+    let purpose = _resolve_purpose(av, start)
+    // Provider-side label slug (@L3) so a raw `vastai show instances` carries
+    // the project-purpose attribution too (e.g. demiurge-r12-gold).
+    let prov_label = _project_purpose_label(project, purpose)
     let raw_query = _flag_val(av, start, "--query", "")
     // --gpu FAMILY|VARIANT — was declared in help but NEVER read, so an empty
     // --query searched with NO gpu filter and rented an arbitrary GPU (a B200
@@ -1272,9 +1374,9 @@ fn _cloud_rent_vast(av: [str], start: int) -> int {
     // pod-death) has been DEPRECATED — a fire that loses its pod NO LONGER
     // auto-rents; pod-loss FAILS LOUD and the user must `cloud rent` again.
     if _has_flag(av, start, "--force-new") == 0 {
-        let existing = pod_registry_find_by_purpose(project, owner)
+        let existing = pod_registry_find_by_purpose(project, purpose)
         if len(existing) > 0 {
-            println("[cloud] rent vast: reusing existing pod " + existing + " for " + project + "/" + owner + " (M5 registry; pass --force-new to override)")
+            println("[cloud] rent vast: reusing existing pod " + existing + " for " + project + "/" + purpose + " (M5 registry; pass --force-new to override)")
             println("instance_id=" + existing)
             println("owner=" + owner)
             return 0
@@ -1289,7 +1391,7 @@ fn _cloud_rent_vast(av: [str], start: int) -> int {
         return 1
     }
     println("[cloud] rent vast: picked offer " + offer.offer_id)
-    let inst = vast_create(offer.offer_id, image, disk_gb)
+    let inst = vast_create_labeled(offer.offer_id, image, disk_gb, prov_label)
     if inst.ok == 0 {
         // create failed → return the offer claim so a sibling can reuse it.
         vast_offer_release(offer.offer_id)
@@ -1301,7 +1403,7 @@ fn _cloud_rent_vast(av: [str], start: int) -> int {
     pod_registry_record(inst.instance_id, owner, "running")
     // M5 — crash-safe registry @ ~/.hx/cloud/active-pods.json (RENTING
     // before ssh-ready; flipped to READY below once ssh handshakes).
-    let _ = pod_registry_add(inst.instance_id, "vast", project, owner, "", "", "RENTING")
+    let _ = pod_registry_add(inst.instance_id, "vast", project, purpose, "", "", "RENTING")
     vast_offer_release(offer.offer_id)
     println("[cloud] rent vast: created instance " + inst.instance_id + " (owner=" + owner + ", registered)")
     // M1 — bounded SSH-readiness gate. Sleep cadence is 10s (vast boot is
@@ -1349,7 +1451,13 @@ fn _cloud_rent_vast(av: [str], start: int) -> int {
         return 1
     }
     println("[cloud] rent vast: READY " + ssh.host + ":" + ssh.port + " (root@" + ssh.host + " -p " + ssh.port + ")")
-    let _ = pod_registry_add(inst.instance_id, "vast", project, owner, ssh.host, ssh.port, "READY")
+    let _ = pod_registry_add(inst.instance_id, "vast", project, purpose, ssh.host, ssh.port, "READY")
+    // Always capture the vast offer's hourly rate (dph_total) into the registry
+    // so `cloud list` can render the dph column even without a cost-cap flag.
+    // "" when the offer JSON didn't carry dph (column shows "-").
+    if len(offer.dph) > 0 {
+        let _ = pod_registry_set_dph(inst.instance_id, offer.dph)
+    }
     if ttl_sec >= 0 || len(max_cost) > 0 {
         // Capture the vast offer's hourly rate (dph_total) so the cost-cap can
         // accrue. "" when the offer JSON didn't carry dph (cost-cap inert, TTL ok).
@@ -1396,9 +1504,14 @@ fn _cloud_rent_runpod(av: [str], start: int) -> int {
     let gpu = _flag_val(av, start, "--gpu", "NVIDIA A100 80GB PCIe")
     let image = _flag_val(av, start, "--image", "runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04")
     let owner = _flag_val(av, start, "--owner", "(hexa-cloud rent)")
-    // Project attribution (down-guard source) — explicit --project, else
-    // cwd git-repo basename, else "unattributed". `owner` doubles as purpose.
+    // Project attribution (down-guard source) — explicit --project, else cwd
+    // git-repo basename, else cwd folder basename; @-prefixed (e.g. @demiurge).
     let project = _resolve_project(av, start)
+    // Purpose / task description — --desc/--purpose, else legacy --owner, else
+    // "unspecified". (project,purpose) dedup key + the list surface.
+    let purpose = _resolve_purpose(av, start)
+    // Provider-side name slug (@L3) so `runpodctl get pod` carries attribution.
+    let prov_label = _project_purpose_label(project, purpose)
     // M1 — bounded SSH-readiness gate (default 180s). The 2026-05-28
     // RunPod H100 SXM dump (pod RUNNING + ssh exit 255 forever) is the
     // motivating incident; without a cap a dead-ssh pod bleeds billing.
@@ -1416,9 +1529,9 @@ fn _cloud_rent_runpod(av: [str], start: int) -> int {
     // The automatic re-rent rotation has been DEPRECATED — a fire that loses its
     // pod NO LONGER auto-rents; pod-loss FAILS LOUD (the user must `cloud rent`).
     if _has_flag(av, start, "--force-new") == 0 {
-        let existing = pod_registry_find_by_purpose(project, owner)
+        let existing = pod_registry_find_by_purpose(project, purpose)
         if len(existing) > 0 {
-            println("[cloud] rent runpod: reusing existing pod " + existing + " for " + project + "/" + owner + " (M5 registry; pass --force-new to override)")
+            println("[cloud] rent runpod: reusing existing pod " + existing + " for " + project + "/" + purpose + " (M5 registry; pass --force-new to override)")
             println("pod_id=" + existing)
             println("owner=" + owner)
             return 0
@@ -1443,7 +1556,7 @@ fn _cloud_rent_runpod(av: [str], start: int) -> int {
     } else {
         println("[cloud] rent runpod: persistent /workspace volume " + str(volume_gb) + " GiB (pod-kill-survivable; --ephemeral to opt out)")
     }
-    let pod = runpod_create_vol(api_key, gpu, image, pubkey, owner, volume_gb)
+    let pod = runpod_create_vol(api_key, gpu, image, pubkey, prov_label, volume_gb)
     if pod.ok == 0 {
         println("[cloud] rent runpod: " + pod.message)
         return 1
@@ -1451,7 +1564,7 @@ fn _cloud_rent_runpod(av: [str], start: int) -> int {
     pod_registry_record(pod.pod_id, owner, "running")
     // M5 — crash-safe registry @ ~/.hx/cloud/active-pods.json (RENTING
     // before ssh-ready; flipped to READY below once ssh handshakes).
-    let _ = pod_registry_add(pod.pod_id, "runpod", project, owner, "", "", "RENTING")
+    let _ = pod_registry_add(pod.pod_id, "runpod", project, purpose, "", "", "RENTING")
     println("[cloud] rent runpod: created pod " + pod.pod_id + " (owner=" + owner + ", registered)")
     // M1 — bounded path. sleep_each=10s; tries = max(1, max_wait_sec/10).
     // 0 / negative max_wait_sec restores legacy 40 × 15s = 600s unbounded.
@@ -1486,7 +1599,16 @@ fn _cloud_rent_runpod(av: [str], start: int) -> int {
         return 1
     }
     println("[cloud] rent runpod: READY " + port.ip + ":" + port.port + " (root@" + port.ip + " -p " + port.port + ")")
-    let _ = pod_registry_add(pod.pod_id, "runpod", project, owner, port.ip, port.port, "READY")
+    let _ = pod_registry_add(pod.pod_id, "runpod", project, purpose, port.ip, port.port, "READY")
+    // Always capture the RunPod hourly rate into the registry so `cloud list`
+    // renders the dph column even without a cost-cap flag ("" → column "-").
+    let mut dph_now = pod.cost_per_hr
+    if len(dph_now) == 0 {
+        dph_now = runpod_pod_cost_per_hr(api_key, pod.pod_id)
+    }
+    if len(dph_now) > 0 {
+        let _ = pod_registry_set_dph(pod.pod_id, dph_now)
+    }
     if ttl_sec >= 0 || len(max_cost) > 0 {
         // Capture the RunPod pod's hourly rate (`costPerHr`) so the M3 cost-cap
         // can accrue. Prefer the value the create response carried; if it was
@@ -1855,7 +1977,7 @@ fn _cloud_list_print(provider: str) -> int {
     let reg = pod_registry_list()
     if len(reg) > 0 {
         println("[cloud] registry (project attribution):")
-        println("  ID                       PROVIDER  STATUS    PROJECT          PURPOSE")
+        println("  ID                       PROVIDER  PROJECT          PURPOSE               STATUS     DPH      AGE")
         let mut k = 0
         while k < len(reg) {
             let r = reg[k]
@@ -1863,11 +1985,76 @@ fn _cloud_list_print(provider: str) -> int {
             if len(proj) == 0 {
                 proj = "⚠unattributed"
             }
+            let mut purp = r.purpose
+            if len(purp) == 0 {
+                purp = "(legacy)"
+            }
+            let mut dph = r.cost_per_hr_usd
+            if len(dph) == 0 {
+                dph = "-"
+            }
             println("  " + _reg_pad(r.id, 24) + " " + _reg_pad(r.provider, 9) + " "
-                + _reg_pad(r.status, 9) + " " + _reg_pad(proj, 16) + " " + r.purpose)
+                + _reg_pad(proj, 16) + " " + _reg_pad(purp, 21) + " "
+                + _reg_pad(r.status, 10) + " " + _reg_pad(dph, 8) + " "
+                + _cloud_age_str(r.created_at))
             k = k + 1
         }
     }
+    return 0
+}
+
+// _cloud_age_str — human age of a pod from its created_at ISO ts (e.g. "3h12m",
+// "45m", "8s"). "-" when the ts is absent / unparseable / in the future. The
+// list-render + --json age column source.
+fn _cloud_age_str(created_at: str) -> str {
+    if len(created_at) == 0 {
+        return "-"
+    }
+    let born = _reg_iso_to_sec(created_at)
+    let now = _reg_now_sec()
+    if born <= 0 || now <= 0 || now < born {
+        return "-"
+    }
+    let secs = now - born
+    if secs < 60 {
+        return str(secs) + "s"
+    }
+    let mins = secs / 60
+    if mins < 60 {
+        return str(mins) + "m"
+    }
+    let hrs = mins / 60
+    let rem_m = mins - hrs * 60
+    return str(hrs) + "h" + str(rem_m) + "m"
+}
+
+// _cloud_list_json — `cloud list --json/--raw` machine output: the full M5
+// registry as a JSON array, one object per pod carrying every attribution +
+// guard field PLUS a derived `age` string. Mirrors the human table's columns
+// (id·provider·project·purpose·status·dph·age) so a tool sees the same data.
+fn _cloud_list_json() -> int {
+    let reg = pod_registry_list()
+    let mut out = "["
+    let mut k = 0
+    while k < len(reg) {
+        let r = reg[k]
+        if k > 0 {
+            out = out + ","
+        }
+        out = out + "{"
+            + "\"id\":\"" + _reg_jstr(r.id) + "\","
+            + "\"provider\":\"" + _reg_jstr(r.provider) + "\","
+            + "\"project\":\"" + _reg_jstr(r.project) + "\","
+            + "\"purpose\":\"" + _reg_jstr(r.purpose) + "\","
+            + "\"status\":\"" + _reg_jstr(r.status) + "\","
+            + "\"dph\":\"" + _reg_jstr(r.cost_per_hr_usd) + "\","
+            + "\"created_at\":\"" + _reg_jstr(r.created_at) + "\","
+            + "\"age\":\"" + _reg_jstr(_cloud_age_str(r.created_at)) + "\""
+            + "}"
+        k = k + 1
+    }
+    out = out + "]"
+    println(out)
     return 0
 }
 
@@ -2430,8 +2617,12 @@ fn main() {
     if sub == "list" || sub == "status" {
         // List live pods (read-only, $-free). Bare → both providers;
         // --provider <p> narrows. Wires vast_list_instances /
-        // runpod_list_pods.
+        // runpod_list_pods. `--json`/`--raw` emit the M5 registry as a JSON
+        // array (machine output; carries project·purpose·dph·age·status).
         let provider = _flag_val(av, si + 1, "--provider", "")
+        if _has_flag(av, si + 1, "--json") == 1 || _has_flag(av, si + 1, "--raw") == 1 {
+            exit(_cloud_list_json())
+        }
         exit(_cloud_list_print(provider))
     }
     if sub == "preflight" {

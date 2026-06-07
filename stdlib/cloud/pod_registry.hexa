@@ -1204,6 +1204,45 @@ fn pod_registry_set_limits(pod_id: str, ttl_sec: int, max_cost_usd: str, cost_pe
     return 1
 }
 
+// pod_registry_set_dph — stamp ONLY the captured hourly rate (cost_per_hr_usd,
+// the provider dph at rent time) on a tracked pod, leaving every other field
+// (incl. ttl/max-cost) untouched. `cloud rent` calls this UNCONDITIONALLY at
+// READY so `cloud list` can render the dph column even when no cost-cap flag was
+// passed (set_limits only fires behind --ttl/--max-cost). Idempotent; a blank
+// rate is a no-op so a later real rate is never clobbered by "". Returns 1 on a
+// set, 0 if the pod is absent or the rate is blank.
+fn pod_registry_set_dph(pod_id: str, cost_per_hr_usd: str) -> int {
+    if len(pod_id) == 0 || len(cost_per_hr_usd) == 0 {
+        return 0
+    }
+    let mut records = pod_registry_load()
+    let idx = _m5_find(records, pod_id)
+    if idx < 0 {
+        return 0
+    }
+    let prev = records[idx]
+    records[idx] = PodRecord {
+        id: prev.id,
+        provider: prev.provider,
+        created_at: prev.created_at,
+        rented_by: prev.rented_by,
+        project: prev.project,
+        purpose: prev.purpose,
+        ssh_host: prev.ssh_host,
+        ssh_port: prev.ssh_port,
+        status: prev.status,
+        ttl_sec: prev.ttl_sec,
+        max_cost_usd: prev.max_cost_usd,
+        cumulative_cost_usd: prev.cumulative_cost_usd,
+        cost_per_hr_usd: cost_per_hr_usd,
+        owner_pid: prev.owner_pid,
+        last_heartbeat: prev.last_heartbeat,
+        max_ttl_sec: prev.max_ttl_sec
+    }
+    _m5_write_atomic(records)
+    return 1
+}
+
 // pod_registry_find_by_purpose — IDEMPOTENT-RENT lookup. Returns the id of
 // an EXISTING live pod (status RENTING or READY) that already owns the same
 // (project, purpose) key, or "" when none is tracked. This is the core of

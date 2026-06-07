@@ -1,0 +1,248 @@
+// @ci_gate — pure · network-free · deterministic (stdlib_selftest_aggregate --ci-gate)
+// stdlib/cloud/cloud_project_purpose_test.hexa — falsifiers for the rent-path
+// PROJECT (@<cwd repo/folder>) + PURPOSE (--desc/--purpose) auto-capture, its
+// provider-label slug, and the registry schema round-trip that surfaces them on
+// `cloud list`.
+//
+// Two layers:
+//   1. MIRROR (pure logic) — _at_prefix · _slugify · _project_purpose_label ·
+//      _resolve_purpose · _cloud_age_str are `_`-prefixed/private in
+//      cloud_cli.hexa, so they are mirrored byte-identically here (the
+//      established mirror-test pattern — see pod_registry_guard_test.hexa).
+//   2. ROUND-TRIP (real I/O) — drives the REAL pod_registry.hexa add/load to
+//      prove project + purpose + dph persist and read back (the data `cloud
+//      list` renders). Sandboxes the live ~/.hx/cloud/active-pods.json aside
+//      and restores it on exit (same pattern as pod_registry_atomic_test.hexa).
+//
+// Falsifiers:
+//   F-CPP-AT-PREFIX        — project is @-prefixed, idempotent, "" stays ""
+//   F-CPP-PURPOSE-RESOLVE  — --desc > --purpose > --owner > "unspecified"
+//   F-CPP-SLUG             — slugify drops @, lowercases, collapses to '-'
+//   F-CPP-LABEL            — project+purpose → provider-label slug
+//   F-CPP-AGE              — age formatter (s/m/h+m; "-" on bad/absent ts)
+//   F-CPP-ROUNDTRIP        — project+purpose+dph persist + read back (list src)
+//   F-CPP-LEGACY           — a record missing purpose/dph reads back "" (graceful)
+//
+// Run:   hexa run stdlib/cloud/cloud_project_purpose_test.hexa
+// PASS:  exits 0, prints "cloud_project_purpose_test PASS".
+
+use "stdlib/cloud/pod_registry"
+
+// ── mirrors of cloud_cli.hexa (keep byte-identical to source) ───────────
+
+fn _flag_val(av: [str], start: int, key: str, dflt: str) -> str {
+    let mut i = start
+    while i < len(av) {
+        if av[i] == key && i + 1 < len(av) { return av[i + 1] }
+        i = i + 1
+    }
+    return dflt
+}
+
+fn _at_prefix(name: str) -> str {
+    if len(name) == 0 {
+        return ""
+    }
+    if name.substring(0, 1) == "@" {
+        return name
+    }
+    return "@" + name
+}
+
+fn _resolve_purpose(av: [str], start: int) -> str {
+    let desc = _flag_val(av, start, "--desc", "")
+    if len(desc) > 0 {
+        return desc
+    }
+    let purp = _flag_val(av, start, "--purpose", "")
+    if len(purp) > 0 {
+        return purp
+    }
+    let owner = _flag_val(av, start, "--owner", "")
+    if len(owner) > 0 {
+        return owner
+    }
+    return "unspecified"
+}
+
+fn _slugify(s: str) -> str {
+    let mut out = ""
+    let mut prev_dash = 1
+    let n = len(s)
+    let mut i = 0
+    while i < n {
+        let c = s.substring(i, i + 1)
+        let lc = c.to_lower()
+        let is_digit = c >= "0" && c <= "9"
+        let is_alpha = lc >= "a" && lc <= "z"
+        if is_digit || is_alpha {
+            out = out + lc
+            prev_dash = 0
+        } else {
+            if prev_dash == 0 {
+                out = out + "-"
+                prev_dash = 1
+            }
+        }
+        i = i + 1
+    }
+    let m = len(out)
+    if m > 0 && out.substring(m - 1, m) == "-" {
+        out = out.substring(0, m - 1)
+    }
+    return out
+}
+
+fn _project_purpose_label(project: str, purpose: str) -> str {
+    let p = _slugify(project)
+    let q = _slugify(purpose)
+    if len(p) > 0 && len(q) > 0 {
+        return p + "-" + q
+    }
+    if len(p) > 0 {
+        return p
+    }
+    if len(q) > 0 {
+        return q
+    }
+    return "hexa-cloud"
+}
+
+// ── assertion helpers ───────────────────────────────────────────────────
+
+fn _eq(name: str, got: str, want: str) {
+    if got != want {
+        println("  FAIL: " + name + " got '" + got + "' want '" + want + "'")
+        exit(1)
+    }
+    println("  ok: " + name)
+}
+
+// ── sandbox the live registry aside (restored at the end) ───────────────
+
+fn _t_path_sandbox() -> str {
+    let sb = exec("mktemp -d /tmp/hexa-cpp-test.XXXXXX 2>/dev/null").trim()
+    let _ = exec("mkdir -p " + env_var("HOME") + "/.hx/cloud 2>/dev/null")
+    let real = env_var("HOME") + "/.hx/cloud/active-pods.json"
+    let _ = exec("test -f " + real + " && cp -p " + real + " " + sb + "/SAVED.json || true")
+    let _ = exec("rm -f " + real + " 2>/dev/null")
+    return sb
+}
+
+fn _t_restore(sb: str) {
+    let real = env_var("HOME") + "/.hx/cloud/active-pods.json"
+    let _ = exec("rm -f " + real + " 2>/dev/null")
+    let _ = exec("test -f " + sb + "/SAVED.json && cp -p " + sb + "/SAVED.json " + real + " || true")
+    let _ = exec("rm -rf " + sb + " 2>/dev/null")
+}
+
+fn _reg_lookup(id: str) -> PodRecord {
+    let recs = pod_registry_list()
+    let mut i = 0
+    while i < len(recs) {
+        if recs[i].id == id {
+            return recs[i]
+        }
+        i = i + 1
+    }
+    return PodRecord {
+        id: "", provider: "", created_at: "", rented_by: "", project: "",
+        purpose: "", ssh_host: "", ssh_port: "", status: "", ttl_sec: -1,
+        max_cost_usd: "", cumulative_cost_usd: "", cost_per_hr_usd: "",
+        owner_pid: -1, last_heartbeat: "", max_ttl_sec: -1
+    }
+}
+
+fn main() {
+    // ── F-CPP-AT-PREFIX ──────────────────────────────────────────────
+    _eq("at-prefix bare", _at_prefix("demiurge"), "@demiurge")
+    _eq("at-prefix idempotent", _at_prefix("@demiurge"), "@demiurge")
+    _eq("at-prefix empty", _at_prefix(""), "")
+    _eq("at-prefix hexa-lang", _at_prefix("hexa-lang"), "@hexa-lang")
+
+    // ── F-CPP-PURPOSE-RESOLVE — precedence --desc > --purpose > --owner ──
+    let av1 = ["rent", "vast", "--desc", "r12 gold harvest"]
+    _eq("purpose --desc wins", _resolve_purpose(av1, 1), "r12 gold harvest")
+    let av2 = ["rent", "vast", "--purpose", "ph grid", "--owner", "tag"]
+    _eq("purpose --purpose over --owner", _resolve_purpose(av2, 1), "ph grid")
+    let av3 = ["rent", "vast", "--owner", "legacy-owner"]
+    _eq("purpose --owner fallback", _resolve_purpose(av3, 1), "legacy-owner")
+    let av4 = ["rent", "vast"]
+    _eq("purpose default unspecified", _resolve_purpose(av4, 1), "unspecified")
+
+    // ── F-CPP-SLUG ───────────────────────────────────────────────────
+    _eq("slug drops @ + lowercases", _slugify("@Demiurge"), "demiurge")
+    _eq("slug collapses spaces", _slugify("r12 gold  harvest"), "r12-gold-harvest")
+    _eq("slug trims trailing", _slugify("ph grid!"), "ph-grid")
+    _eq("slug keeps digits", _slugify("Li2MgH16"), "li2mgh16")
+
+    // ── F-CPP-LABEL ──────────────────────────────────────────────────
+    _eq("label project+purpose", _project_purpose_label("@demiurge", "r12 gold"), "demiurge-r12-gold")
+    _eq("label purpose-only", _project_purpose_label("", "ph grid"), "ph-grid")
+    _eq("label project-only", _project_purpose_label("@demiurge", ""), "demiurge")
+    _eq("label both blank", _project_purpose_label("", ""), "hexa-cloud")
+
+    // ── F-CPP-AGE ────────────────────────────────────────────────────
+    _eq("age absent ts", _cloud_age_str(""), "-")
+    _eq("age unparseable", _cloud_age_str("not-a-date"), "-")
+
+    // ── ROUND-TRIP (real registry I/O) ───────────────────────────────
+    let sb = _t_path_sandbox()
+
+    // F-CPP-ROUNDTRIP — add a pod with project+purpose, set dph, read back.
+    let id = "99887766"
+    let _ = pod_registry_add(id, "vast", "@demiurge", "r12 gold harvest", "1.2.3.4", "12345", "READY")
+    let _ = pod_registry_set_dph(id, "0.412")
+    let r = _reg_lookup(id)
+    if r.id != id {
+        println("  FAIL: round-trip pod not found after add")
+        _t_restore(sb)
+        exit(1)
+    }
+    _eq("round-trip project", r.project, "@demiurge")
+    _eq("round-trip purpose", r.purpose, "r12 gold harvest")
+    _eq("round-trip dph", r.cost_per_hr_usd, "0.412")
+    _eq("round-trip status", r.status, "READY")
+    // created_at must be a real ts → age is non-empty + not "-" (list column).
+    if len(r.created_at) == 0 {
+        println("  FAIL: round-trip created_at empty (age column would be '-')")
+        _t_restore(sb)
+        exit(1)
+    }
+    println("  ok: round-trip created_at present (age=" + _cloud_age_str(r.created_at) + ")")
+
+    // F-CPP-LEGACY — a pod added with NO purpose/dph reads back "" (graceful;
+    // the list renderer maps "" → "(legacy)" / "-").
+    let lid = "11223344"
+    let _ = pod_registry_add(lid, "runpod", "", "", "", "", "RENTING")
+    let lr = _reg_lookup(lid)
+    _eq("legacy project blank", lr.project, "")
+    _eq("legacy purpose blank", lr.purpose, "")
+    _eq("legacy dph blank", lr.cost_per_hr_usd, "")
+
+    _t_restore(sb)
+    println("cloud_project_purpose_test PASS")
+}
+
+// ── mirror of cloud_cli.hexa:_cloud_age_str (keep byte-identical) ───────
+fn _cloud_age_str(created_at: str) -> str {
+    if len(created_at) == 0 {
+        return "-"
+    }
+    let born = _reg_iso_to_sec(created_at)
+    let now = _reg_now_sec()
+    if born <= 0 || now <= 0 || now < born {
+        return "-"
+    }
+    let secs = now - born
+    if secs < 60 {
+        return str(secs) + "s"
+    }
+    let mins = secs / 60
+    if mins < 60 {
+        return str(mins) + "m"
+    }
+    let hrs = mins / 60
+    let rem_m = mins - hrs * 60
+    return str(hrs) + "h" + str(rem_m) + "m"
+}
