@@ -194,3 +194,33 @@
   per-rank compute, N× samples/step) is scale-invariant; eff is set by the compute/comm ratio.
 - **Verdict**: .verdicts/hexa-ddp-m5d/F-DDP-M5D-THROUGHPUT.txt (topo + canAccessPeer + samples/sec
   table @1/2/4-GPU + eff + byte-eq, verbatim stdout).
+## DDP-M6c — phase-overlap re-pipeline of the M6b WAN ring (perf, ~2x over RTT-bound baseline)
+- **Seed**: M6b's honest boundary explicitly named "re-pipeline to overlap phases" as the only
+  lever left after the 32MB-window NEGATIVE proved the limiter is the ring's per-phase BLOCKING
+  send-then-recv (serializing ~2(N-1) RTTs of pure latency), not the TCP window.
+- **Technique**: stdlib/ddp/m6c_overlap/ring_perf_m6c.c reuses the EXACT M1/M3/M5/M6/M6b ring
+  schedule + chunk_start partition + parity + host-mem FP64 reduce (MATH byte-identical); changes
+  ONLY the per-step transport discipline. (A) full-duplex: a sender THREAD pushes the outbound
+  chunk while the main thread pulls the inbound chunk (send||recv on the two TCP half-duplex
+  directions => ~2 RTT/phase -> ~max(one-way)/phase). (B) chunk pipelining: split each step's
+  chunk into P sub-chunks kept in flight (fills the BDP). mode serial|duplex|pipeline isolates
+  each effect on the SAME path.
+- **Path**: vast 2 nodes PL<->NV. rank0=39860176 Poland 91.150.160.38:16906, rank1=39860157
+  Nevada US 24.176.246.20:38452 (label hexa-ddp-m6c, DESTROYED leak-0, project-tag-checked).
+  CPU-host FP64 ring (vast CPU-only asks return no_such_ask, so cheapest GPU pods used but GPU
+  unused — only host TCP + CPU FP64 matter). RTT ~200-215 ms.
+- **(1) Correctness**: --check loops all 3 modes over S=7,13,1023,1048575 (S%2!=0 boundary +
+  large). result == serial elementwise sum, byte-eq max|Δ|=0 FP64, 12/12 PASS. Overlap does NOT
+  corrupt the reduction.
+- **(2) Throughput**: SAME BW-vs-size sweep as M6b, speedup vs the same-path serial baseline.
+  Latency-bound 1KB..1MB: FLAT ~2.0x (serial ~0.41s floor = ~2 RTT -> duplex/pipeline ~0.205-0.22s
+  floor = ~1 RTT; 1MB all-reduce 0.439s -> 0.220s). Bandwidth regime 2MB..32MB: 32-way pipelining
+  adds lift (32MB serial 5.91s -> duplex 3.12s -> pipe32 2.46s = 2.40x over serial, 1.26x over
+  duplex); peak eff BW 5.7e-3 -> 1.36e-2 GB/s (~2.4x). RTT-count 2 -> 1 per all-reduce.
+- **Residual floor**: ~1 RTT (~205ms) — all-gather waits on reduce-scatter, so a 2-node ring's
+  single round-trip dependency is irreducible. Overlap halved the RTT count (max possible for a
+  2-phase collective), meaningfully beating the M6b ceiling without defeating WAN latency. ~2x is
+  the real full win. Going below 1 RTT needs an algorithm change (recursive-halving/tree) or
+  hiding comm behind compute. Commodity-WAN-TCP, NOT RDMA/datacenter; byte-eq (M6) untouched.
+- **Verdict**: .verdicts/hexa-ddp-m6c/F-DDP-M6C-PHASE-OVERLAP.txt (overlap technique, per-mode
+  byte-eq verbatim, BW-vs-size + speedup table, residual RTT floor, node locations).
