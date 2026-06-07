@@ -160,6 +160,40 @@
 - **Verdict**: .verdicts/hexa-ddp-m6b/F-DDP-M6B-WAN-THROUGHPUT.txt (RTT + BW table + sockbuf
   probe, verbatim rank0 stdout).
 
+## DDP-M5d — THROUGHPUT scaling: the regime where DDP actually wins (🟢 GREEN)
+
+- **Falsifier**: per-GPU batch FIXED, global batch = B_perGPU×N → (1) N=4 step byte-eq to
+  same-B_global 1-process ref (max|Δ|=0 FP64) AND (2) samples/sec @1/2/4-GPU + scaling eff;
+  expect throughput to scale UP with N (unlike M5b/M5c per-step <1×), comm tax → eff < N×.
+- **Node**: vast 4x A100-SXM4-40GB, instance 39860052, label hexa-ddp-m5d, DESTROYED leak-0
+  (project-tag-checked). topo = NV12 ALL pairs (full NVLink mesh), cudaDeviceCanAccessPeer=1 on
+  all 12 directed pairs — the M5c "vast SXM4 ≠ NVLink guaranteed" gotcha explicitly ruled out
+  by BOTH topo and the CUDA P2P probe. transport = direct NVLink cudaMemcpyPeer.
+- **Model**: MLP 64→H→H→64 (ReLU,ReLU,linear) FP64, B_perGPU=64 FIXED, H∈{256,1024,2048,3072},
+  median of 30 reps. throughput = B_global·1000/wall_ms (samples/sec).
+- **(1) Correctness**: N=4 byte-eq (H=256, B_global=256) grad/weights/rank-agreement all
+  max|Δ|=0 — 1-process ref reduces the same 256 samples' shard partials in the ring's per-chunk
+  right-nested order (M5c finding, transport-independent). True byte-eq, not a tolerance.
+- **(2) Throughput scaling** (samples/sec, verbatim): N=1/2/4 →
+  H=256:  24691 / 46993 / 82513  → 2-GPU 1.903x (95.2%), 4-GPU 3.342x (83.5%)
+  H=1024:  4740 /  9230 / 17656  → 2-GPU 1.947x (97.4%), 4-GPU 3.725x (93.1%)
+  H=2048:  1350 /  2674 /  5232  → 2-GPU 1.981x (99.0%), 4-GPU 3.874x (96.9%)
+  H=3072:   618 /  1229 /  2421  → 2-GPU 1.989x (99.5%), 4-GPU 3.918x (97.9%)
+  Efficiency rises MONOTONICALLY with model size toward the ideal N× — the comm tax (the same
+  NPARAM-length grad all-reduce) amortizes over larger per-step compute. At H=3072, 4-GPU is
+  3.918x = 97.9% of perfect 4× scaling.
+- **Explicit contrast vs M5b/M5c**: M5b/M5c FIXED the global batch B=64 and SPLIT it across N →
+  per-step wall never beats 1.0x EVEN on NVLink (2-GPU 0.99x, 4-GPU 0.974x) because an H→H step
+  is the H² weight-bound GEMM and splitting only the batch barely cuts per-rank FLOPs. M5d fixes
+  per-GPU batch and scales the global batch → samples/sec scales ~N×. Throughput is the OPPOSITE
+  of per-step latency: in DDP's design regime, multi-GPU FINALLY WINS.
+- **Honest verdict (g5/g83)**: throughput scales ~N× in DDP's design regime — near-ideal on real
+  NVLink (97.9% 4-GPU eff at H=3072), with the gap to ideal shrinking as the model grows. eff<100%
+  is the expected comm tax, NOT a failure. Single-step wide-MLP FP64; the ring carries an
+  NPARAM-length grad vector regardless of architecture so the throughput algebra (constant
+  per-rank compute, N× samples/step) is scale-invariant; eff is set by the compute/comm ratio.
+- **Verdict**: .verdicts/hexa-ddp-m5d/F-DDP-M5D-THROUGHPUT.txt (topo + canAccessPeer + samples/sec
+  table @1/2/4-GPU + eff + byte-eq, verbatim stdout).
 ## DDP-M6c — phase-overlap re-pipeline of the M6b WAN ring (perf, ~2x over RTT-bound baseline)
 - **Seed**: M6b's honest boundary explicitly named "re-pipeline to overlap phases" as the only
   lever left after the 32MB-window NEGATIVE proved the limiter is the ring's per-phase BLOCKING
