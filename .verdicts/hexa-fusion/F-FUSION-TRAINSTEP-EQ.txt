@@ -1,0 +1,4 @@
+F-FUSION-TRAINSTEP-EQ — fwd+bwd autograd-aware fusion (one device graph) — WIP SKELETON
+══════════════════════════════════════════════════════════════════════════════════════
+domain: HEXA-FUSION · milestone ⑤ (GPU.md §5d) · branch domain/hexa-fusion-fwdbwd
+STATUS: WIP — verdict to be finalized from the fused fwd+bwd device-graph A/B.
