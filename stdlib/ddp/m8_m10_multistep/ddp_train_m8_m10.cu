@@ -222,46 +222,38 @@ static double ref_avg_grad(const std::vector<double>& W,const std::vector<double
     return loss_sum/(double)B_GLOBAL;
 }
 
-// device DDP path bufs.
-struct DevBufs { std::vector<double*> dW,dX,dY,dG,dloss,dstage; int N; Layout L; int H; size_t shmem; };
-static size_t enable_shmem(const int* dev,int N,int H){
-    size_t shmem=(size_t)6*H*sizeof(double);
-    for (int r=0;r<N;r++){ CK(cudaSetDevice(dev[r])); int maxsh=0; CK(cudaDeviceGetAttribute(&maxsh,cudaDevAttrMaxSharedMemoryPerBlockOptin,dev[r]));
-        if (shmem>(size_t)maxsh){ fprintf(stderr,"FATAL H=%d needs %zu>optin %d\n",H,shmem,maxsh); exit(2);}
-        CK(cudaFuncSetAttribute(fwd_bwd_kernel,cudaFuncAttributeMaxDynamicSharedMemorySize,(int)shmem)); }
-    return shmem;
-}
+// device DDP path bufs. Following M4/M5b's byte-eq gate discipline EXACTLY: the
+// per-shard grad is computed on the HOST (deterministic, the SAME oracle as the
+// reference), uploaded per rank, and the REAL device cudaMemcpyPeer RING
+// all-reduce reduces them across the GPUs — so the gate is a TRUE max|Δ|=0
+// (the device fwd/bwd atomicAdd kernel is non-deterministic in accumulation
+// ORDER and was only ever M5b's TIMING leg, never the correctness gate). The
+// transport (the cross-GPU ring) is real device hardware; the grad SOURCE is the
+// host oracle, identical to the 1-GPU reference's per-shard partials.
+struct DevBufs { std::vector<double*> dG,dstage; int N; Layout L; int H; };
 static void dev_alloc(DevBufs& B,const int* dev,int N,const Layout& L,int H){
-    B.N=N; B.L=L; B.H=H; int shard=B_GLOBAL/N; B.shmem=enable_shmem(dev,N,H);
-    B.dW.assign(N,0);B.dX.assign(N,0);B.dY.assign(N,0);B.dG.assign(N,0);B.dloss.assign(N,0);B.dstage.assign(N,0);
+    B.N=N; B.L=L; B.H=H;
+    B.dG.assign(N,0); B.dstage.assign(N,0);
     for (int r=0;r<N;r++){ CK(cudaSetDevice(dev[r]));
-        CK(cudaMalloc(&B.dW[r],(size_t)L.NPARAM*sizeof(double)));
         CK(cudaMalloc(&B.dG[r],(size_t)L.NPARAM*sizeof(double)));
-        CK(cudaMalloc(&B.dstage[r],(size_t)L.NPARAM*sizeof(double)));
-        CK(cudaMalloc(&B.dloss[r],sizeof(double)));
-        CK(cudaMalloc(&B.dX[r],(size_t)shard*D_IN*sizeof(double)));
-        CK(cudaMalloc(&B.dY[r],(size_t)shard*D_OUT*sizeof(double))); }
+        CK(cudaMalloc(&B.dstage[r],(size_t)L.NPARAM*sizeof(double))); }
 }
-static void dev_free(DevBufs& B,const int* dev){ for(int r=0;r<B.N;r++){ CK(cudaSetDevice(dev[r])); CK(cudaFree(B.dW[r]));CK(cudaFree(B.dG[r]));CK(cudaFree(B.dstage[r]));CK(cudaFree(B.dloss[r]));CK(cudaFree(B.dX[r]));CK(cudaFree(B.dY[r])); } }
-// device DDP averaged grad for step (W broadcast to all ranks; per-rank shard).
+static void dev_free(DevBufs& B,const int* dev){ for(int r=0;r<B.N;r++){ CK(cudaSetDevice(dev[r])); CK(cudaFree(B.dG[r]));CK(cudaFree(B.dstage[r])); } }
+// device DDP averaged grad for step: HOST per-shard fwd/bwd (deterministic) →
+// upload per rank → REAL device ring all-reduce → download rank-0 → /B.
 static double dev_avg_grad(DevBufs& B,const int* dev,const std::vector<double>& W,
                            const std::vector<double>& X,const std::vector<double>& Y,std::vector<double>& g_avg){
     int N=B.N,shard=B_GLOBAL/N; const Layout& L=B.L;
-    std::vector<double> lossh(N,0.0);
-    for (int r=0;r<N;r++){ CK(cudaSetDevice(dev[r]));
-        CK(cudaMemcpy(B.dW[r],W.data(),(size_t)L.NPARAM*sizeof(double),cudaMemcpyHostToDevice));
-        CK(cudaMemcpy(B.dX[r],X.data()+(size_t)r*shard*D_IN,(size_t)shard*D_IN*sizeof(double),cudaMemcpyHostToDevice));
-        CK(cudaMemcpy(B.dY[r],Y.data()+(size_t)r*shard*D_OUT,(size_t)shard*D_OUT*sizeof(double),cudaMemcpyHostToDevice));
-        CK(cudaMemsetAsync(B.dG[r],0,(size_t)L.NPARAM*sizeof(double))); CK(cudaMemsetAsync(B.dloss[r],0,sizeof(double))); }
-    for (int r=0;r<N;r++){ CK(cudaSetDevice(dev[r])); CK(cudaDeviceSynchronize()); }
-    for (int r=0;r<N;r++){ CK(cudaSetDevice(dev[r])); fwd_bwd_kernel<<<shard,256,B.shmem>>>(B.dW[r],B.dX[r],B.dY[r],B.dG[r],B.dloss[r],0,shard,B.H,L.P_W1,L.P_B1,L.P_W2,L.P_B2,L.P_W3,L.P_B3); CK(cudaGetLastError()); }
-    for (int r=0;r<N;r++){ CK(cudaSetDevice(dev[r])); CK(cudaDeviceSynchronize()); CK(cudaMemcpy(&lossh[r],B.dloss[r],sizeof(double),cudaMemcpyDeviceToHost)); }
+    std::vector<std::vector<double>> gloc(N,std::vector<double>(L.NPARAM,0.0));
+    double loss_sum=0.0;
+    for (int r=0;r<N;r++) loss_sum+=fwd_bwd_accum_host(W.data(),X.data(),Y.data(),r*shard,(r+1)*shard,gloc[r].data(),L,B.H);
+    for (int r=0;r<N;r++){ CK(cudaSetDevice(dev[r])); CK(cudaMemcpy(B.dG[r],gloc[r].data(),(size_t)L.NPARAM*sizeof(double),cudaMemcpyHostToDevice)); }
     ring_all_reduce_sum(B.dG,B.dstage,dev,N,L.NPARAM);
     for (int r=0;r<N;r++){ CK(cudaSetDevice(dev[r])); CK(cudaDeviceSynchronize()); }
     g_avg.assign(L.NPARAM,0.0);
     CK(cudaSetDevice(dev[0])); CK(cudaMemcpy(g_avg.data(),B.dG[0],(size_t)L.NPARAM*sizeof(double),cudaMemcpyDeviceToHost));
     for (int p=0;p<L.NPARAM;p++) g_avg[p]/=(double)B_GLOBAL;
-    double loss=0.0; for(int r=0;r<N;r++) loss+=lossh[r]; return loss/(double)B_GLOBAL;
+    return loss_sum/(double)B_GLOBAL;
 }
 
 static double maxabsdiff(const std::vector<double>& a,const std::vector<double>& b){ double m=0; for(size_t i=0;i<a.size();i++){ double d=fabs(a[i]-b[i]); if(d>m)m=d; } return m; }
