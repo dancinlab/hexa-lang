@@ -72,3 +72,4 @@
 @link HEXA-FUSION --measured-by--> GPU-ROOFLINE   # fusion-kernel roofline % + vs-PyTorch+CUDA wall (honest: cuBLAS GEMM = roofline, win = boundary removal)
 @domain C-ZERO := "domains/C-ZERO.md"          # ecosystem-wide live-C → 0 (all FFI shims + siblings); HEXA-CC-ZERO owns the hexa_cc.c seed sub-goal
 @link C-ZERO --refines--> HEXA-CC-ZERO              # C-ZERO is the ecosystem superset; HEXA-CC-ZERO is its hexa_cc.c (28482 LOC) sub-target
+@domain HEXA-QRNG := "domains/HEXA-QRNG.md"        # ANU QRNG true-entropy OPT-IN (seed-provenance/DP/MC) — ISOLATED from flame byte-exact core
