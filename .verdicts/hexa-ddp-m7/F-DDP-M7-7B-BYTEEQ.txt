@@ -1,0 +1,9 @@
+DDP-M7 — production-scale DDP byte-eq invariant — WIP (verdict pending GPU run).
+
+GATE (g5): 1-GPU W_ref == N-GPU W_ddp byte-eq max|Δ|=0 at the LARGEST model that fits.
+  Leg A: FP64, largest-fitting NPARAM, true max|Δ|=0.
+  Leg B: fp32, NPARAM pushed toward 7B target, max|Δ|=0 via ring-order-matched reference.
+Replays the right-nested per-chunk reduce tree for N>=3 (the DDP-M5b finding).
+
+Pending: rent big-VRAM multi-GPU node, build stdlib/ddp/m7_7b/ddp_train_m7.cu, run run_m7.sh,
+capture verbatim stdout here, destroy pod (leak 0, project-tag-checked).
