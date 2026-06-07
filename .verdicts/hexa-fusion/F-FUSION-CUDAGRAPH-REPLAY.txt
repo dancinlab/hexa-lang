@@ -1,0 +1,94 @@
+F-FUSION-CUDAGRAPH-REPLAY — HEXA-FUSION L2 ④ per-step CUDA-graph capture/replay
+                            WALL realization (shape sweep · eager vs cudaGraphLaunch)
+
+host:   vast H100_NVL 95830 MiB (idle), glibc 2.35, nvcc 12.4.131, gcc 11.4,
+        instance 39881262 (label hexa-cap; DESTROYED post-measure, leak 0).
+build:  cudagraph kit fusion_graph_build.tgz (clm_prod.c graph-capture transpile +
+        runtime_cuda.c with _forge_graph_{on,begin,commit,ready,launch} + self/ tree),
+        nvcc -DHEXA_CUDA -gencode arch=compute_90: 58/58 _hx_cuda_farr launchers +
+        9 _forge_graph syms, gcc link -lcuda (760 KB). Smoke graph-on PASS.
+config: CLM_PROD_DEVRESIDENT=1 DEVFEED=1 BATCHED=1 E=2, corpus clm_mid_5lang_c4
+        (402270 bytes, V=256). Per cell: same step budget eager (GRAPH=0) vs
+        replay (GRAPH=1), wall via date+%N, per-step = wall/steps (steps=EP*nwin).
+graph:  the train loop captures the fwd→ce_grad→bwd kernel region ONCE on the first
+        non-metric step (cudaStreamBeginCapture/EndCapture/InstantiateWithFlags) and
+        REPLAYS the bulk middle steps with ONE cudaGraphLaunch; AdamW (host-dependent
+        bias-correction t) + the first/last-nwin metric steps stay EAGER. GRAPH=0 =>
+        forge_graph_* are no-ops => always the eager branch => byte-identical.
+
+═══ MEASUREMENT TABLE (verbatim, fire_cudagraph_shapesweep.sh) ════════════════════
+regime        | D/T       | eager s/st | replay s/st | speedup | Δwall%  | byteeq
+------------------------------------------------------------------------------------
+launch-bound  | 128/32    |    0.0465 |    0.0478 |  0.973x |   -2.82 | Y  (ce 4.23051/4.23051 0.651839/0.651839)
+launch-bound  | 256/64    |    0.1450 |    0.1453 |  0.998x |   -0.19 | Y  (ce 3.91897/3.91897 1.58146/1.58146)
+mid           | 512/128   |    0.5504 |    0.5450 |  1.010x |    0.99 | Y  (ce 3.61149/3.61149 0.96154/0.96154)
+mid           | 768/256   |    1.3085 |    1.3154 |  0.995x |   -0.52 | Y  (ce 3.28079/3.28079 1.41758/1.41758)
+bw-bound      | 1536/512  |    5.1999 |    5.0622 |  1.027x |    2.65 | Y  (ce 4.46624/4.46624 3.64669/3.64669)
+------------------------------------------------------------------------------------
+(rc 0/0 every cell. per-step wall = total wall / (EPOCHS*nwin). speedup = eager/replay.)
+
+═══ GATE (1) CORRECTNESS — PASS (byte-eq max|Δ|=0) ════════════════════════════════
+  GRAPH=1 (capture/replay) reproduces the GRAPH=0 (eager) kernel sequence EXACTLY at
+  EVERY shape. epoch-1 AND epoch-N mean CE are BIT-IDENTICAL to all printed digits in
+  all 5 cells (e.g. bw-bound 4.46624/4.46624 → 3.64669/3.64669; launch-bound
+  4.23051/4.23051 → 0.651839/0.651839). max|Δ|=0. The capture leaks NO host
+  dependency into the graph (token feed is DEVFEED device-resident, AdamW correctly
+  excluded, metric steps take the eager branch). Capture/replay is SOUND — NOT a race
+  (unlike the ② async lever whose ASYNC=1 CE diverged 4.89 vs 4.47). The D=1536/T=512
+  cell reproduces the prior F-FUSION-GRAPH-AB verdict's CE (4.46624→3.64669) EXACTLY,
+  confirming this build is faithful to the verified substrate.
+
+═══ GATE (2) SPEEDUP — FALSIFIED (≥30%/~1.3x NOT realized; flat ≈1.0x) ═════════════
+  Per-step WALL speedup (eager/replay) is FLAT ≈1.0x across the ENTIRE shape sweep:
+  0.973x · 0.998x · 1.010x · 0.995x · 1.027x. The range -2.82% .. +2.65% is within
+  run-to-run noise. The largest positive Δ (+2.65%) is at the BW-bound shape, NOT the
+  launch-bound shape — i.e. there is NO launch-bound regime in THIS workload where the
+  graph buys ≥30%. PRE-REGISTERED FALSIFIER "graph-replay per-step wall ≥30%/~1.3x
+  faster in the launch-bound regime" is FALSIFIED. The crossover the milestone asked
+  for (launch-bound win → BW-bound shrink-to-0) DOES NOT EXIST: the win is ~0 at BOTH
+  ends because the host critical path this loop pays is NOT cudaLaunch latency.
+
+═══ ROOT CAUSE — why the proven ≥30% (⑧) does NOT transfer here (honest g5) ════════
+  The ⑧ launch-amort proof (n*=-26595, ≥30% UNCONDITIONAL) is about a PURE kernel
+  sub-graph where the per-step host cost = N cudaLaunch calls (~5-10µs each) and HBM
+  traffic — there the graph collapsing N launches → 1 cudaGraphLaunch is a real ≥30%
+  win. But the flame CLMConvMoE train step's per-step host critical path is dominated
+  NOT by kernel-launch latency but by INTERPRETED HOST GLUE that the graph CANNOT
+  capture:
+    (a) the per-window token copy (T× t_get/t_set host scalar loop) at the loop head;
+    (b) the 28-call AdamW optimizer sweep — kept EAGER (host bias-correction t), each
+        a host-driven forge_dispatch with a host round-trip;
+    (c) the eager metric steps (first+last nwin loss readback, host d2h);
+    (d) the residual interpreted inter-op glue between device GEMM spikes.
+  The captured fwd→bwd kernel ISSUE is a tiny slice of per-step wall, so amortizing its
+  launch overhead with cudaGraphLaunch moves the needle ~0. As D/T grow the per-kernel
+  GEMM time grows (roofline / cuBLAS Dgemm dominates) and the launch slice shrinks
+  FURTHER toward irrelevance — there is no launch-bound knee to exploit because the host
+  bound here is the interpreter, not the driver. This is the SAME wall the prior
+  util-only verdicts hit (F-FUSION-GRAPH-AB +1.32pp util; -WHOLESTEP-AB +0.35pp more),
+  now quantified on the PER-STEP WALL axis: the graph's wall benefit is ~0 because
+  graph capture amortizes cudaLaunch, and cudaLaunch is not this step's bottleneck.
+
+═══ VERDICT (g5) ══════════════════════════════════════════════════════════════════
+  CORRECTNESS: PASS — capture/replay is byte-eq max|Δ|=0 at every shape (the ④ lever
+    is provably correct; capture does not change the math).
+  SPEEDUP: 🔴 CLOSED-NEGATIVE — the ≥30%/~1.3x launch-amort win is NOT realized by
+    per-step CUDA-graph capture/replay on the flame CLMConvMoE train step. Measured
+    flat ≈1.0x (0.97-1.03x) across launch-bound → BW-bound. RULED-OUT axis: "wrapping
+    the flame train step's fwd→bwd kernel region in a cudaGraph realizes the proven
+    launch-amort wall win". It does NOT — because the step's host bound is interpreted
+    inter-op glue + the eager AdamW/metric tail, NOT cudaLaunch latency. The ⑧ ≥30%
+    proof holds for a PURE-kernel sub-graph (launch+HBM bound), a regime this
+    interpreted training loop never enters. To realize a wall win the entire step
+    (incl. AdamW with a DEVICE-resident step-t and the host token/glue loops) must
+    become a single captured device program — which is the whole-step megakernel,
+    already CLOSED-NEGATIVE for util (F-FUSION-GRAPH-WHOLESTEP-AB / -MEGA-OWNGEMM).
+
+  NET: capture/replay is byte-eq CORRECT and a NECESSARY structural primitive, but on
+  this workload it is NOT SUFFICIENT for the ≥30% wall win — the win lives in a
+  launch-bound regime this interpreter-bound training step does not occupy. The
+  milestone's realization claim is FALSIFIED on the per-step WALL gate; the
+  correctness sub-gate is GREEN.
+
+artifacts: tool/hexa-fusion/fire_cudagraph_shapesweep.sh (harness). pod 39881262
+DESTROYED, leak 0 (tag hexa-cap verified pre-destroy; no foreign pod touched).
