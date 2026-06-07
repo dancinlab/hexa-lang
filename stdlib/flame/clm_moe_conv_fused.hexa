@@ -51,6 +51,7 @@
 
 use "stdlib/flame/tensor_lib"
 use "stdlib/flame/conv_lib"
+use "stdlib/flame/moe_lib"
 
 fn _mcf_absf(x: float) -> float { if x < 0.0 { return 0.0 - x } return x }
 
@@ -332,9 +333,67 @@ pub fn moe_conv_fwd_dispatch(x: int, w_bank: int, b_bank: int, y_out: int,
 }
 
 // ════════════════════════════════════════════════════════════════════════════
+//  OG-FUSE-FOLD — the MoE BLOCK fold: conv ⊕ route, the actual trainer step.
+//
+//  OG-FUSE-PROD-FOLD (above) routed the per-expert CONV (Y:[E·T·d]) through the
+//  env-gated dispatch and proved that conv byte-eq vs E× ModuleList. But the
+//  conv is only HALF the CLMConvMoE expert block — the trainer's MoE step is
+//    ex_out = device-MoE-conv(X)         (the E stacked ConvExpert outputs)
+//    Y      = router(logits) · ex_out    (softmax gate + gate-weighted combine)
+//  i.e. moe_lib.nn_moe_router_fwd consumes ex_out:[E·T·C] and ties the E experts
+//  together. Until ex_out is PRODUCED by moe_conv_fwd_dispatch, the fused kernel
+//  is not yet the trainer's device MoE-conv path — it is a standalone selftest.
+//
+//  moe_block_fwd_dispatch IS that fold: it produces ex_out via the env-gated
+//  dispatch (fused/GEMM-conv ON, ModuleList OFF), then runs moe_lib's router. It
+//  is the single call site a CLMConvMoE trainer step uses for its MoE block, so
+//  HEXA_FUSE_MOE_CONV now reaches the REAL trainer step (conv→gate→combine), not
+//  just the conv micro-op. Because moe_conv_fwd_dispatch is byte-eq (max|Δ|=0,
+//  the #2859/#2867 gate) and the router is identical on both branches, the WHOLE
+//  block output Y is byte-IDENTICAL fused-vs-ModuleList — the OG-FUSE-FOLD gate.
+//
+//  Layout note: the dispatch writes Y:[E·T·d] (Y_e[t·d+co]); moe_lib's router
+//  reads ex_out:[E·T·C] (ex[e·T·C + t·C + c]) — SAME packing with C=d, so the
+//  dispatch output feeds the router with no re-pack. Per-position router logits
+//  L:[T·E] are an input to the block (the d→E router-conv output, computed
+//  upstream by conv_lib — unchanged by this fold).
+// ════════════════════════════════════════════════════════════════════════════
+
+// moe_block_fwd_dispatch — the CLMConvMoE expert-block forward (conv ⊕ route).
+// ex_out (the E stacked ConvExpert outputs) is PRODUCED by the env-gated device
+// MoE-conv dispatch; then moe_lib's softmax router gate-combines them into Y[T·d].
+// HEXA_FUSE_MOE_CONV (or HEXA_FUSE_ALL) → fused/GEMM-conv produces ex_out; default
+// OFF → E× ModuleList produces it. Both byte-eq → Y byte-IDENTICAL either way.
+// Caller allocates probs_out[T·E] (cached for bwd) and y_out[T·d].
+pub fn moe_block_fwd_dispatch(x: int, w_bank: int, b_bank: int, logits: int,
+                              probs_out: int, y_out: int,
+                              E: int, T: int, d: int, K: int, dil: int) {
+    // ── conv half: ex_out[E·T·d] via the env-gated device MoE-conv path ──
+    let ex_out = t_zeros(E * T * d)
+    moe_conv_fwd_dispatch(x, w_bank, b_bank, ex_out, E, T, d, K, dil)
+    // ── route half: softmax gate over E + gate-weighted combine (moe_lib) ──
+    nn_moe_router_fwd(logits, ex_out, probs_out, y_out, T, E, d)
+    t_free(ex_out)
+}
+
+// moe_block_fwd_modulelist — the explicit ModuleList-E reference block: ex_out
+// from E× ModuleList convs (NEVER the fused path), same router. The OG-FUSE-FOLD
+// byte-eq oracle for the WHOLE block (conv ⊕ route), independent of the env gate.
+pub fn moe_block_fwd_modulelist(x: int, w_bank: int, b_bank: int, logits: int,
+                                probs_out: int, y_out: int,
+                                E: int, T: int, d: int, K: int, dil: int) {
+    let ex_out = t_zeros(E * T * d)
+    moe_conv_modulelist_fwd(x, w_bank, b_bank, ex_out, E, T, d, K, dil)
+    nn_moe_router_fwd(logits, ex_out, probs_out, y_out, T, E, d)
+    t_free(ex_out)
+}
+
+// ════════════════════════════════════════════════════════════════════════════
 //  byte-eq selftest: PRODUCTION GEMM-conv path E == E× ModuleList (the oracle).
 //  F-CLM-MOE-CONV-GEMM-FOLD-EQ — the OG-FUSE-PROD-FOLD gate (max|Δ| must be 0),
 //  plus the legacy F-CLM-MOE-CONV-FUSE-FOLD-EQ (strided-batched path) as a check.
+//  PLUS F-CLM-MOE-BLOCK-FOLD-EQ — the OG-FUSE-FOLD gate: the WHOLE MoE block
+//  (conv ⊕ route) fused == ModuleList byte-eq (max|Δ|=0), the trainer-step fold.
 // ════════════════════════════════════════════════════════════════════════════
 
 fn _mcf_maxdev(a: int, b: int, n: int) -> float {
@@ -383,6 +442,43 @@ fn _run_fold_gate(E: int, T: int, d: int, K: int, dil: int) -> int {
     return 0
 }
 
+// _run_block_gate — the OG-FUSE-FOLD gate: the WHOLE trainer MoE block (conv ⊕
+// route) via the env-gated dispatch == the explicit ModuleList-E block, max|Δ|=0.
+// Run with HEXA_FUSE_MOE_CONV=1 → moe_block_fwd_dispatch takes the FUSED conv
+// branch, so this verifies the FUSED trainer step is byte-eq to ModuleList-30.
+fn _run_block_gate(E: int, T: int, d: int, K: int, dil: int) -> int {
+    let dd = d * d * K
+    let x = t_zeros(T * d); t_fill_lcg(x, T * d, 31, 0.4)
+    let logits = t_zeros(T * E); t_fill_lcg(logits, T * E, 77, 0.9)
+    let w_bank = t_zeros(E * dd)
+    let b_bank = t_zeros(E * d)
+    let mut e = 0
+    while e < E {
+        let wsl = t_zeros(dd);  t_fill_lcg(wsl, dd, 2 + e * 7, 0.2)
+        let bsl = t_zeros(d);   t_fill_lcg(bsl, d, 3 + e * 7, 0.1)
+        let mut iw = 0
+        while iw < dd { t_set(w_bank, e * dd + iw, t_get(wsl, iw)); iw = iw + 1 }
+        let mut ib = 0
+        while ib < d { t_set(b_bank, e * d + ib, t_get(bsl, ib)); ib = ib + 1 }
+        t_free(wsl); t_free(bsl)
+        e = e + 1
+    }
+    // dispatch block (respects HEXA_FUSE_MOE_CONV: fused conv when set) vs the
+    // explicit ModuleList-E block (the byte-eq oracle, never fused).
+    let p_d = t_zeros(T * E); let y_d = t_zeros(T * d)
+    moe_block_fwd_dispatch(x, w_bank, b_bank, logits, p_d, y_d, E, T, d, K, dil)
+    let p_r = t_zeros(T * E); let y_r = t_zeros(T * d)
+    moe_block_fwd_modulelist(x, w_bank, b_bank, logits, p_r, y_r, E, T, d, K, dil)
+    let md = _mcf_maxdev(y_r, y_d, T * d)
+    let gated = if _mcf_fuse_on() { 1 } else { 0 }
+    print("  [BLOCK] E="); print(E); print(" T="); print(T); print(" d="); print(d)
+    print(" fuse_on="); print(gated)
+    print("  max|Δ| block(conv⊕route) dispatch-vs-ModuleList = "); println(to_string(md))
+    let tol = 0.000000001
+    if md <= tol { return 1 }
+    return 0
+}
+
 fn main() {
     println("clm_moe_conv_fused — OG-FUSE-PROD-FOLD: GEMM-conv weight-reuse (PR #2867 path E)")
 
@@ -392,12 +488,26 @@ fn main() {
     let g2 = _run_fold_gate(30, 16, 8, 3, 2)
     let g3 = _run_fold_gate(4,  24, 8, 3, 1)
 
+    // OG-FUSE-FOLD: the WHOLE trainer MoE block (conv ⊕ route) via the dispatch.
+    // Run with HEXA_FUSE_MOE_CONV=1 → the dispatch fuses the conv → this proves
+    // the FUSED trainer step == ModuleList-30 step, byte-eq (the milestone gate).
+    println("--- OG-FUSE-FOLD: trainer MoE block (conv ⊕ route) byte-eq ---")
+    let b1 = _run_block_gate(30, 16, 8, 3, 1)
+    let b2 = _run_block_gate(30, 16, 8, 3, 2)
+    let b3 = _run_block_gate(4,  24, 8, 3, 1)
+
     if g1 == 1 { if g2 == 1 { if g3 == 1 {
+      if b1 == 1 { if b2 == 1 { if b3 == 1 {
         println("F-CLM-MOE-CONV-GEMM-FOLD-EQ = 1")
+        println("F-CLM-MOE-BLOCK-FOLD-EQ = 1")
         println("PASS — GEMM-conv path E == E× ModuleList byte-eq (max|Δ|=0); fused-path also eq")
+        println("PASS — trainer MoE block (conv⊕route) dispatch == ModuleList byte-eq (max|Δ|=0)")
         println("OG-FUSE-PROD-FOLD CODE FOLD GREEN — HEXA_FUSE_MOE_CONV routes path E (6.57× @d=6208)")
+        println("OG-FUSE-FOLD GREEN — fused kernel IS the trainer device MoE-conv path, byte-eq")
         return
+      } } }
     } } }
     println("F-CLM-MOE-CONV-GEMM-FOLD-EQ = 0")
-    println("FAIL — production GEMM-conv fold byte-eq broken")
+    println("F-CLM-MOE-BLOCK-FOLD-EQ = 0")
+    println("FAIL — MoE-conv fold byte-eq broken")
 }
