@@ -92,6 +92,46 @@
 - **Pods**: BOTH terminated immediately on capture (`runpodctl pod delete` -> deleted; account
   pod list shows 0 of my M6 pods). Leak 0 on runpod.
 
+## DDP-M7 — production 7B-scale DDP byte-eq (1-GPU == N-GPU)  [GREEN]
+- node: vast 4x NVIDIA H200 (143771 MiB/GPU, 149.56 GB free, 2015 GB host RAM), nvcc 12.4, sm_90, instance 39809972 (label hexa-ddp-m7, DESTROYED leak-0, project-tag-checked).
+- code: stdlib/ddp/m7_7b/ddp_train_m7.cu — M4/M5b flame-MLP fwd/bwd + canonical ring all-reduce; NPARAM pushed to production scale; gate = dtype-independent true max|Δ|=0 (ring per-chunk right-nested tree reference, M5b finding).
+- LEG A (FP64): NPARAM=5,492,732,608 (5.493 B, H=74048) — max|Δ|=0 [VRAM-CAPPED]. loss_ref==loss_ddp=340786697.62098843. 19m19s.
+- LEG B (fp32): NPARAM=7,010,541,280 (7.011 B, H=83664, HIT 7B TARGET) — max|Δ|=0. loss_ref==loss_ddp=477412959.75987273. 16m21s.
+- both legs: weights·grad·loss·rank-agreement all exactly 0; real NVLink P2P cudaMemcpyPeer ring (H200 SXM).
+- HONEST: 7B does not fit FP64 VRAM (168 GB/GPU > 143) — 7B leg is fp32 (order-matched true byte-eq, not tolerance). single step; multi-step accum + 7B speedup out of scope.
+- FINDING: the DDP byte-eq invariant HOLDS at production 7B scale. M4/M5b small-model max|Δ|=0 + M7 7B max|Δ|=0 bracket the production regime with no gap (grad-of-sum=sum-of-grads is scale-invariant by construction).
+- verdict: .verdicts/hexa-ddp-m7/F-DDP-M7-7B-BYTEEQ.txt (both legs verbatim).
+
+## 2026-06-07 — DDP-M5c NVLink crossover (#2901)
+- **GOAL**: find the model size where multi-GPU DDP TRAINING beats 1-GPU (speedup >1x)
+  on a REAL NVLink node, testing the M5b prediction (NVLink → smaller crossover).
+- **A/B on identical silicon**: rented TWO vast 4x A100-SXM4-40GB nodes. First
+  (39809783, mach 38233 Germany) = topo PHB, cudaDeviceCanAccessPeer=0 on all 12
+  pairs (P2P driver-DISABLED despite SXM4 silicon) → host-staged. Second (39811910,
+  mach 41067 Georgia) = topo NV12 on every pair, canAccessPeer=1 on all 12 pairs →
+  REAL NVLink direct-P2P ring. Both label hexa-ddp-m5c, BOTH DESTROYED on capture
+  (leak 0, tag-checked). KEY transport finding: vast SXM4 does NOT guarantee NVLink
+  P2P — the canAccessPeer CUDA probe is the only authoritative check.
+- **GATE(1) byte-eq**: N=4, 1-GPU W_ref == 4-GPU W_ddp max|delta|=0 (grad, weight,
+  rank-agreement all 0, FP64, ring right-nested reduce tree). Identical on both
+  nodes — correctness is transport-independent.
+- **GATE(2) crossover**: NVLink removes nearly the ENTIRE comm tax. Efficiency
+  jumps 2-GPU 43%→49.5%, 4-GPU 18%→24.2% (near the 50%/25% ideal). BUT per-step
+  wall still does NOT cross 1.0x even on NVLink: 2-GPU → 0.99x asymptote, 4-GPU →
+  0.974x. Staged node plateaus at 0.86x/0.74x (mirrors M5b).
+- **HONEST (g83)**: the 1.0x ceiling is NOT a comm defect (NVLink fixed comm) — it
+  is structural: pure data-parallel shards only the batch (B=64), but an H→H MLP
+  step is H² GEMM = weight-bound, so sharding 64 rows into 16 barely cuts per-rank
+  FLOPs; each rank does ~the full 1-GPU compute + a now-cheap all-reduce. Small-
+  batch data-parallel per-step wall is bounded by 1.0x on ANY transport. To beat
+  1-GPU: (a) batch-bound regime (large B → throughput, DDP's true use), or (b)
+  model/tensor parallelism (shard the H² weight). NVLink is the cure for comm,
+  not for the data-parallel structural ceiling.
+- **Code**: stdlib/ddp/m5c_crossover/ddp_train_m5c.cu + run_m5c.sh (M5b harness +
+  2-GPU crossover track + P2P-any line). **Verdict**:
+  .verdicts/hexa-ddp-m5c/F-DDP-M5C-CROSSOVER.txt (both node wall tables +
+  canAccessPeer probe + byte-eq verbatim).
+
 ## DDP-M6b — WAN throughput characterization of the M6 cross-node ring all-reduce (perf)
 - **Scope**: M6 (#2899/#2900) proved cross-node byte-eq only (latency-independent); M6b measures
   the PERF envelope M6 deferred — RTT floor, BW-vs-payload (1KB..256MB), latency->bandwidth

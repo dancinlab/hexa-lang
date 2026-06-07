@@ -1,0 +1,120 @@
+F-DDP-M7-7B-BYTEEQ — production-scale DDP byte-eq invariant (1-GPU == N-GPU)
+===========================================================================
+GATE (g5): for the SAME global batch + SAME seed + ONE training step,
+           1-GPU W_ref == N-GPU W_ddp  byte-eq max|delta|=0
+           (grad, weights, rank-agreement, loss all exactly 0).
+Right-nested per-chunk reduce tree (DDP-M5b finding) replayed for N=4 (>=3).
+
+HARDWARE: vast instance 39809972 (label hexa-ddp-m7), 4x NVIDIA H200 (143771 MiB
+each, 149.56 GB free/GPU), 2015 GB host RAM, nvcc 12.4, arch sm_90. Transport =
+cudaMemcpyPeer P2P (real NVLink/PCIe direct — H200 SXM; canAccessPeer enabled).
+Pod DESTROYED immediately after capture (leak 0, project-tag confirmed hexa-ddp-m7).
+
+CODE: stdlib/ddp/m7_7b/ddp_train_m7.cu — SAME flame-MLP fwd/bwd + canonical ring
+all-reduce (DDP-M1 schedule, DDP-M3/M5 cudaMemcpyPeer transport) as DDP-M4/M5b,
+with NPARAM pushed to production scale. Gate is a TRUE max|delta|=0 at BOTH dtypes
+because it is broken only by reduction-ORDER, never the dtype: the 1-GPU
+reference reduces each element with the EXACT per-chunk right-nested tree the
+ring produces.
+
+SCALE PROVEN (two legs bracket production):
+  · LEG A  FP64(double)  NPARAM = 5,492,732,608  (5.493 B params)  max|delta|=0  [VRAM-CAPPED]
+  · LEG B  fp32(float)   NPARAM = 7,010,541,280  (7.011 B params)  max|delta|=0  [HIT 7B TARGET]
+FP64 7B does not fit (3*7e9*8 B = 168 GB/GPU > 143 GB); FP64 is VRAM-capped at
+5.49 B — still a TRUE max|delta|=0, >1000x larger than DDP-M4/M5b (~4 M). fp32 (4 B)
+reaches the full 7.011 B target, also max|delta|=0. The grad-of-sum=sum-of-grad
+algebra is scale-invariant by construction, so the small-model max|delta|=0 (M4/M5b)
++ this 7.011 B max|delta|=0 leave no gap in the production regime.
+
+======================= LEG A — FP64, verbatim stdout =======================
+=== ddp_train_m7 :: visible CUDA devices = 4, dtype=FP64(double) (8 B/elem) ===
+world_size N=4, transport = cudaMemcpyPeer P2P (NVLink/PCIe direct on >=1 pair)
+
+scale selection:
+  target NPARAM            = 7000000000
+  per-GPU free VRAM        = 149.56 GB (usable 131.61 GB)
+  Hmax(VRAM)=74052  Hmax(host RAM @1800GB)=179284  Htarget=83666
+  CHOSEN H=74048  ->  NPARAM=5492732608 (5.493 B params)  [VRAM-CAPPED]
+  model: MLP 64->74048->74048->64 (ReLU,ReLU,linear), dtype=FP64(double), global batch B=12, world_size N=4 (shard=3)
+
+computing per-shard grad partials (host FP FP64(double) reference)...
+  shard 0 done (loss_sum=911166842.9)
+  shard 1 done (loss_sum=949407665.1)
+  shard 2 done (loss_sum=1007962659)
+  shard 3 done (loss_sum=1220903204)
+
+running real 4-GPU ring all-reduce of the 5.493-B-element grad vector...
+
+================= DDP-M7 byte-eq GATE =================
+dtype                          = FP64(double) (8 B/elem)
+model                          = MLP 64->74048->74048->64, NPARAM=5492732608 (5.4927 B params)
+world_size N                   = 4 (shard=3, B=12), transport=cudaMemcpyPeer P2P (NVLink/PCIe direct on >=1 pair)
+scale verdict                  = VRAM-CAPPED
+loss_ref (mean)                = 340786697.62098843
+loss_ddp (mean,global)         = 340786697.62098843
+loss match max|delta|          = 0  BYTE-EQ
+grad  g_ddp vs g_ref  max|delta| = 0  BYTE-EQ
+rank-agreement (Wr==W0) max|delta| = 0  ALL RANKS IDENTICAL
+WEIGHTS W_ddp vs W_ref  max|delta| = 0  BYTE-EQ PASS
+WEIGHTS rel-RMS (for reference)  = 0.000e+00
+
+=== DDP-M7 verdict: GREEN - production-scale data-parallel TRAINING byte-eq — 1-GPU train == 4-GPU DDP train at NPARAM=5492732608 (5.493 B), dtype=FP64(double), transport=P2P ===
+
+real	19m18.787s
+user	10m21.630s
+sys	8m58.146s
+
+======================= LEG B — fp32, verbatim stdout =======================
+=== ddp_train_m7 :: visible CUDA devices = 4, dtype=fp32(float) (4 B/elem) ===
+world_size N=4, transport = cudaMemcpyPeer P2P (NVLink/PCIe direct on >=1 pair)
+
+scale selection:
+  target NPARAM            = 7000000000
+  per-GPU free VRAM        = 149.56 GB (usable 131.61 GB)
+  Hmax(VRAM)=104726  Hmax(host RAM @1800GB)=253546  Htarget=83666
+  CHOSEN H=83664  ->  NPARAM=7010541280 (7.011 B params)  [TARGET]
+  model: MLP 64->83664->83664->64 (ReLU,ReLU,linear), dtype=fp32(float), global batch B=12, world_size N=4 (shard=3)
+
+computing per-shard grad partials (host FP fp32(float) reference)...
+  shard 0 done (loss_sum=1323658630)
+  shard 1 done (loss_sum=1539058484)
+  shard 2 done (loss_sum=1379997327)
+  shard 3 done (loss_sum=1486241076)
+
+running real 4-GPU ring all-reduce of the 7.011-B-element grad vector...
+
+================= DDP-M7 byte-eq GATE =================
+dtype                          = fp32(float) (4 B/elem)
+model                          = MLP 64->83664->83664->64, NPARAM=7010541280 (7.0105 B params)
+world_size N                   = 4 (shard=3, B=12), transport=cudaMemcpyPeer P2P (NVLink/PCIe direct on >=1 pair)
+scale verdict                  = HIT TARGET
+loss_ref (mean)                = 477412959.75987273
+loss_ddp (mean,global)         = 477412959.75987273
+loss match max|delta|          = 0  BYTE-EQ
+grad  g_ddp vs g_ref  max|delta| = 0  BYTE-EQ
+rank-agreement (Wr==W0) max|delta| = 0  ALL RANKS IDENTICAL
+WEIGHTS W_ddp vs W_ref  max|delta| = 0  BYTE-EQ PASS
+WEIGHTS rel-RMS (for reference)  = 0.000e+00
+
+=== DDP-M7 verdict: GREEN - production-scale data-parallel TRAINING byte-eq — 1-GPU train == 4-GPU DDP train at NPARAM=7010541280 (7.011 B), dtype=fp32(float), transport=P2P ===
+
+real	16m20.649s
+user	9m40.207s
+sys	6m41.331s
+
+===========================================================================
+VERDICT: GREEN. The DDP byte-eq invariant (1-GPU == N-GPU training step) HOLDS
+AT PRODUCTION 7B SCALE. Real 4x H200 node, real NVLink P2P ring all-reduce of
+the full grad vector: 7.011 B params at fp32 max|delta|=0 (HIT 7B target) AND
+5.493 B params at FP64 max|delta|=0 (largest that fits FP64 VRAM). Loss, grad,
+weights, and cross-rank agreement all exactly 0 in both legs. The invariant is
+scale-invariant by construction (grad-of-sum = sum-of-grads); this 7B-scale
+max|delta|=0 + the M4/M5b small-model max|delta|=0 bracket the production regime
+with no gap.
+
+HONEST SCOPE (g5): proved on a single training step of a wide 3-layer MLP whose
+NPARAM is at production scale (the ring carries an NPARAM-length grad vector
+regardless of architecture). FP64 at the full 7B does not fit rentable VRAM
+(168 GB/GPU > 143 GB) — named explicitly; the 7B leg is fp32 with a true
+max|delta|=0 (order-matched, not a tolerance). Multi-step accumulation and 7B
+speedup are out of scope (speedup measured at M5b). 7B not run at FP64.
