@@ -27,8 +27,8 @@ fn cloud_commands() -> [CloudCmd] {
     return [
         // ── lifecycle ──────────────────────────────────────────────────
         CloudCmd { name: "rent", group: "lifecycle",
-            args: "<provider> [--gpu T] [--image IMG] [--disk GiB] [--volume-gb N] [--ephemeral] [--owner TAG] [--project NAME] [--query Q] [--max-wait-sec N] [--no-register] [--force-new]",
-            summary: "provision a GPU pod (vast|runpod) — DEFAULTS to a persistent /workspace volume (>=40 GiB, --volume-gb N to size, --ephemeral to opt out + warn); IDEMPOTENT per (project,owner): reuses a live M5 pod unless --force-new; --force-new is a MANUAL single-rent flag (never auto-invoked — automatic re-rent on pod-loss is DEPRECATED, pod-loss FAILS LOUD); waits ssh-ready, prints host:port + id (alias: up)" },
+            args: "<provider> [--gpu T] [--image IMG] [--disk GiB] [--volume-gb N] [--ephemeral] [--desc TEXT] [--owner TAG] [--project NAME] [--query Q] [--max-wait-sec N] [--no-register] [--force-new]",
+            summary: "provision a GPU pod (vast|runpod) — auto-tags PROJECT (@<cwd repo/folder>, e.g. @demiurge) + PURPOSE (--desc/--purpose TEXT, else --owner, else unspecified), persists both + stamps a project-purpose slug on the provider --label; DEFAULTS to a persistent /workspace volume (>=40 GiB, --volume-gb N to size, --ephemeral to opt out + warn); IDEMPOTENT per (project,purpose): reuses a live M5 pod unless --force-new (MANUAL single-rent flag, never auto-invoked; auto re-rent on pod-loss DEPRECATED, pod-loss FAILS LOUD); waits ssh-ready, prints host:port + id (alias: up)" },
         CloudCmd { name: "rm", group: "lifecycle",
             args: "<id> [--provider P] [--force]",
             summary: "CANONICAL teardown — confirm + destroy + forget (unifies down/destroy/forget); idempotent" },
@@ -39,8 +39,8 @@ fn cloud_commands() -> [CloudCmd] {
             args: "<id> [--provider P]",
             summary: "restart a pod container (preserve disk) to recover a DARK pod; vast only" },
         CloudCmd { name: "list", group: "lifecycle",
-            args: "[--provider P]",
-            summary: "list live pods (vast + runpod, or one via --provider; alias: status)" },
+            args: "[--provider P] [--json|--raw]",
+            summary: "list live pods + the M5 registry table (id·provider·project·purpose·status·dph·age); --json/--raw emit the registry as a JSON array (alias: status)" },
         CloudCmd { name: "ssh-port", group: "lifecycle",
             args: "<id> [--provider P]",
             summary: "print live ssh host:port of a pod (vast|runpod)" },
