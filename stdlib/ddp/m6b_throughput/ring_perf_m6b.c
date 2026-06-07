@@ -57,6 +57,18 @@
 
 static void die(const char* m){ perror(m); exit(2); }
 
+// ── optional explicit TCP socket buffer (window) size; 0 = OS default. ──────
+//    Over a high-RTT WAN the bandwidth-delay product is large, so the default
+//    socket buffer caps the in-flight window and throttles throughput. Setting
+//    SO_SNDBUF/SO_RCVBUF lets us probe the TCP-window effect (finding 4).
+static int g_sockbuf = 0;
+static void apply_sockbuf(int cs){
+    if (g_sockbuf > 0){
+        setsockopt(cs, SOL_SOCKET, SO_SNDBUF, &g_sockbuf, sizeof g_sockbuf);
+        setsockopt(cs, SOL_SOCKET, SO_RCVBUF, &g_sockbuf, sizeof g_sockbuf);
+    }
+}
+
 static double now_s(void){
     struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t);
     return (double)t.tv_sec + (double)t.tv_nsec * 1e-9;
@@ -95,6 +107,7 @@ static int listen_one(const char* hostport){
     char host[256]; int port; parse_hp(hostport, host, &port);
     int ls = socket(AF_INET, SOCK_STREAM, 0); if (ls<0) die("socket");
     int one=1; setsockopt(ls, SOL_SOCKET, SO_REUSEADDR, &one, sizeof one);
+    apply_sockbuf(ls); // inherited by accepted socket; set before listen
     struct sockaddr_in a; memset(&a,0,sizeof a);
     a.sin_family=AF_INET; a.sin_port=htons((uint16_t)port);
     a.sin_addr.s_addr = (!strcmp(host,"0.0.0.0")||!host[0]) ? INADDR_ANY
@@ -119,6 +132,7 @@ static int connect_succ(const char* hostport){
            memcpy(&a.sin_addr,he->h_addr,he->h_length); }
     for (int tries=0; tries<600; tries++){
         int cs = socket(AF_INET,SOCK_STREAM,0); if(cs<0) die("socket");
+        apply_sockbuf(cs); // set before connect so the window is honored
         if (connect(cs,(struct sockaddr*)&a,sizeof a)==0){
             int one=1; setsockopt(cs,IPPROTO_TCP,TCP_NODELAY,&one,sizeof one);
             fprintf(stderr,"[rank] connected succ %s\n",hostport);
@@ -202,12 +216,15 @@ static double measure_rtt(int rank, int N, int sock_succ, int sock_pred,
 
 int main(int argc, char** argv){
     int rank=-1, N=-1, reps=11, pings=50;
+    long single=0;          // if >0, sweep only this single S (large-size probe)
     const char *listen_hp=NULL, *succ_hp=NULL;
     for (int i=1;i<argc;i++){
         if(!strcmp(argv[i],"--rank")) rank=atoi(argv[++i]);
         else if(!strcmp(argv[i],"--np")) N=atoi(argv[++i]);
         else if(!strcmp(argv[i],"--reps")) reps=atoi(argv[++i]);
         else if(!strcmp(argv[i],"--ping")) pings=atoi(argv[++i]);
+        else if(!strcmp(argv[i],"--single")) single=atol(argv[++i]);
+        else if(!strcmp(argv[i],"--sockbuf")) g_sockbuf=atoi(argv[++i]);
         else if(!strcmp(argv[i],"--listen")) listen_hp=argv[++i];
         else if(!strcmp(argv[i],"--succ")) succ_hp=argv[++i];
         else { fprintf(stderr,"unknown arg %s\n",argv[i]); return 2; }
@@ -254,13 +271,18 @@ int main(int argc, char** argv){
         33554432,   // 256 MB
     };
     int nL = (int)(sizeof(ladder)/sizeof(ladder[0]));
+    // single-size probe: replace the ladder with one S (large-size BW ceiling).
+    long single_arr[1];
+    if (single > 0){ single_arr[0]=single; nL=1; }
+    long* L = (single > 0) ? single_arr : ladder;
+    #define LAD(k) (L[(k)])
 
     if (rank == 0){
-        printf("# DDP-M6b WAN all-reduce throughput sweep (N=%d, reps=%d, median)\n", N, reps);
+        printf("# DDP-M6b WAN all-reduce throughput sweep (N=%d, reps=%d, sockbuf=%d, median)\n", N, reps, g_sockbuf);
         printf("#  S_elems   payload_B   wire_B    median_s      algo_GB/s   wire_GB/s\n");
     }
 
-    long maxS = ladder[nL-1];
+    long maxS = LAD(nL-1);
     double* x     = (double*)malloc((size_t)maxS*sizeof(double));
     double* x0    = (double*)malloc((size_t)maxS*sizeof(double));
     double* stage = (double*)malloc((size_t)maxS*sizeof(double));
@@ -271,7 +293,7 @@ int main(int argc, char** argv){
     double* samp = (double*)malloc((size_t)reps*sizeof(double));
 
     for (int li=0; li<nL; li++){
-        long S = ladder[li];
+        long S = LAD(li);
         // wire bytes for N=2: each step moves one chunk (~S/N elems); 2(N-1) steps.
         // Sum the actual chunk sizes used by the schedule.
         long wire_elems = 0;
