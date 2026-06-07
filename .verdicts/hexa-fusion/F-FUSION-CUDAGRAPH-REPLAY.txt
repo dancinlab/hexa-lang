@@ -1,0 +1,24 @@
+F-FUSION-CUDAGRAPH-REPLAY — HEXA-FUSION L2 ④ per-step CUDA-graph capture/replay
+                            WALL realization (shape sweep · eager vs cudaGraphLaunch)
+
+STATUS: WIP — skeleton pushed; GPU measurement pending (pod fire in progress).
+
+GOAL: realize the launch-overhead-amortization wall win the domain proved
+analytically (⑧ F-FUSION-LAUNCH-AMORT: 30%-crossover n*=-26595 NEGATIVE ⇒ ≥30%
+wall win UNCONDITIONAL in the launch-bound regime). Capture the per-step kernel
+DAG once (cudaStreamBeginCapture/EndCapture/Instantiate) then replay every step
+with ONE cudaGraphLaunch (~10µs) instead of re-issuing N host launches.
+
+GATES (g5):
+  (1) CORRECTNESS — graph-replay step == eager-launch step, byte-eq (epoch-1 and
+      epoch-N mean CE bit-identical between GRAPH=0 and GRAPH=1). max|Δ|=0.
+  (2) SPEEDUP — per-step WALL eager vs replay across a SHAPE SWEEP. ≥30%/~1.3x
+      expected in the LAUNCH-BOUND regime (small D/T); shrinks toward 0 in the
+      BW-bound regime (large D/T = roofline, cuBLAS GEMM dominates). Report the
+      measured number + the launch-bound/BW-bound crossover.
+
+[ MEASUREMENT TABLE — to be filled from pod run, verbatim ]
+
+[ BYTE-EQ — to be filled ]
+
+[ VERDICT — to be filled ]
