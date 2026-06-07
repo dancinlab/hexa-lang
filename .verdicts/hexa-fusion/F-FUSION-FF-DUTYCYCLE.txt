@@ -1,0 +1,25 @@
+F-FUSION-FF-DUTYCYCLE  ::  Chopper-style step duty-cycle breakdown of the REAL flame CLMConvMoE FP64 train step (D1536/T512/E2/K3, batch=1; #2913 config) — measurement gate that sets the Amdahl ceiling for the MEGASTEP lever ladder
+domain: HEXA-FUSION  ·  date: 2026-06-08  ·  method: nsys/ncu profile the existing flame clm_prod_gpu step on a real H100 SXM; bucket step wall into GEMM% / between-GEMM GLUE% / OPTIMIZER-TAIL% / IDLE-GAP%; valley_fraction = glue+optim+idle; Amdahl ceiling = 1/(1-valley); cross-check SM util mean vs median (bimodal {100%,0%} hypothesis)
+
+[STATUS] WIP — pod 39958628 (H100 SXM, tag hexa-dutycycle/ffdc) profiling in flight. Numbers pasted VERBATIM below on completion (g5: this is a MEASUREMENT, not a perf claim).
+
+GATE g5 — paste nsys/ncu numbers verbatim. HONEST: if GEMM% dominant (valley small, ceiling ~1.0-1.3x) say so plainly — that GATES the ladder.
+
+PRIOR EVIDENCE (cited, to be confirmed by this direct nsys/ncu profile):
+  - INTERP-ELIM (#2914): native real-trainer clm_prod_gpu util MEAN 0.43% MEDIAN 0% on H100.
+  - RIGHT-SIZED-GPU (#2918): A10 eager MEAN 24.37% MEDIAN 0% PEAK 100% pct>=70 17.6%; bimodal {100% in-GEMM, ~0% between}.
+  - BATCHFILL (#2913): H100 B=1 util MEAN 10.4% MEDIAN 0% PEAK 100%.
+  These all point to a LARGE valley (small GEMM%) => ceiling well above ~1.3x for valley-filling levers, but capped by per-op dispatch.
+
+[BUCKET TABLE]      (to be filled verbatim from nsys --stats + ncu)
+  GEMM%            : TBD   (abs ms TBD)
+  GLUE%            : TBD   (abs ms TBD)  groupnorm/gelu/conv-experts/elementwise/token-pack
+  OPTIMIZER-TAIL%  : TBD   (abs ms TBD)  ~28-call AdamW
+  IDLE-GAP%        : TBD   (abs ms TBD)  device truly idle = dispatch latency
+  ------------------------------------
+  valley_fraction = glue+optim+idle = TBD
+  Amdahl ceiling  = 1/(1-valley)     = TBD
+  SM util mean/median = TBD / TBD
+
+[#1 RECLAIMABLE BUCKET] TBD -> priority downstream lever
+[GATE VERDICT] TBD (greenlight ladder if valley big / HALT if small)
