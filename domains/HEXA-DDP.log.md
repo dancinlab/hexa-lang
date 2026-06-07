@@ -65,3 +65,29 @@
 - INFRA FINDING: vast cheap pods ARE inter-node reachable (the HONEST-SCOPING 🟠 network-blocked branch did NOT trigger). Node A's vast SSH *proxy* (ssh4.vast.ai) was flaky, but its DIRECT public-IP SSH and the data-plane ports worked — and the data plane is exactly what M6 tests.
 - Pods destroyed: YES, both, tag-verified (label==hexa-ddp-m6) before destroy. Post-destroy 0 hexa-ddp-m6 instances alive (leak 0). The one remaining account instance is foreign-project 'rtsc-li2mgh16-anchor' (untouched).
 - verdict: .verdicts/hexa-ddp-m6/F-DDP-M6-MULTINODE.txt (verbatim). All M1..M6 collective milestones now GREEN (M5b 4-GPU e2e speedup done; M6b WAN throughput remains as perf follow-up).
+
+## DDP-M6 (runpod leg) — 2-runpod-node cross-node socket ring all-reduce — 🟢 GREEN (2026-06-07)
+
+- **What**: ported the M1/M3/M5 canonical ring all-reduce (2(N-1) steps, `chunk_start`
+  partition byte-identical) to cross a NODE boundary on **runpod** (sibling to the vast leg,
+  provider-isolated). Transport swapped from cudaMemcpyPeer (single-node P2P) to
+  D2H + TCP send/recv (host network) + H2D, so every chunk physically crosses the wire.
+- **Hardware**: 2 separate runpod SECURE-cloud H100 pods — node A `wosowf0qknt0au`
+  (216.243.220.230, internal 172.23.0.2) + node B `iz1e1v3h4n6n5y` (216.243.220.219,
+  internal 172.21.0.2). Distinct machines (different /16, different docker hostnames).
+- **Cross-host proof**: pod A held `ESTAB 172.23.0.2:46206 -> 216.243.220.219:16917`
+  carrying the ring data; raw `/dev/tcp` probe A→B public port = OPEN.
+- **GATE (g5) BOTH ranks**: S=7 (S%N=1 boundary) max|Δ|=0 PASS; S=1<<20 (large) max|Δ|=0 PASS.
+  FP64, result == serial elementwise sum. ALL BYTE-EQ PASS on rank0 AND rank1.
+- **Transport finding (honest)**: runpod custom TCP ports (5700/5701) did NOT surface a
+  public proxy mapping (`runtime.ports` empty for raw TCP) → cross-node TCP established as an
+  SSH port-forward between the two pods' public SSH endpoints. Still real kernel TCP over the
+  physical inter-node link; correctness is carrier-independent. NOT an RDMA/IB bandwidth claim,
+  NOT multi-node training speedup — collective correctness only.
+- **Wiring fix**: connect() over a tunnel port succeeds even when the far listener is down
+  (tunnel then drops) → added a deadlock-free interleaved SYN/ACK handshake (`ring_wire`) so
+  the ring only proceeds once the far LISTENER is confirmed, startup-order-independent.
+- **Code**: stdlib/ddp/m6_socket/ring_socket_m6.cu + run_m6.sh.
+- **Verdict**: .verdicts/hexa-ddp-m6-runpod/F-DDP-M6-RUNPOD.txt (verbatim rank stdout).
+- **Pods**: BOTH terminated immediately on capture (`runpodctl pod delete` -> deleted; account
+  pod list shows 0 of my M6 pods). Leak 0 on runpod.

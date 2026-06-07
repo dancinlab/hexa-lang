@@ -1,0 +1,77 @@
+F-DDP-M6-RUNPOD — DDP-M6 (runpod leg): cross-NODE ring all-reduce over TCP sockets
+================================================================================
+VERDICT: 🟢 GREEN — the canonical ring all-reduce crosses TWO runpod nodes
+         byte-exact (max|delta|=0, FP64) over a reliable+ordered TCP transport.
+
+provider     = runpod
+transport    = TCP (host network); cross-node bytes carried over an SSH/TCP
+               tunnel between the two pods' public endpoints (reliable+ordered).
+node count   = 2 (TWO separate runpod SECURE-cloud H100 pods, distinct machines)
+schedule     = canonical ring, 2(N-1)=2 communication steps, chunk_start
+               partition BYTE-IDENTICAL to DDP-M1/M3/M5.
+
+PODS (provisioned this run, both TERMINATED — leak 0):
+  rank0 / node A : pod wosowf0qknt0au  H100 80GB  pub 216.243.220.230:18489
+                   internal 172.23.0.2  (docker host 6f17ef825361)
+  rank1 / node B : pod iz1e1v3h4n6n5y  H100 80GB  pub 216.243.220.219:16917
+                   internal 172.21.0.2  (docker host 19e76d8db3c7)
+  -> distinct machines (different /16 internal subnets, different hostnames).
+
+CROSS-HOST PROOF (the ring's data connection is genuinely inter-node):
+  pod A held an ESTABLISHED TCP connection from its real interface to pod B's
+  PUBLIC IP, carrying every all-reduce chunk:
+    ESTAB 172.23.0.2:46206 -> 216.243.220.219:16917  (("ssh",pid=451))
+  Independently confirmed pod A can open raw TCP to pod B's public endpoint
+  (bash /dev/tcp probe -> "TCP OPEN to B:16917") and has working outbound.
+
+GATE (g5): 2-node all-reduce result on EVERY rank == serial elementwise sum,
+  byte-eq max|delta|=0 (FP64), S=7 (S%N=1 boundary, NOT a multiple of N) AND
+  S=1<<20 (large). Verbatim rank stdout:
+
+----- RANK 0 (pod A, 216.243.220.230) -----
+=== ring_socket_m6 :: rank 0/2  visible CUDA devices = 1 ===
+rank 0: ring schedule = 2(N-1) = 2 communication steps
+rank 0: listen 0.0.0.0:5700 (recv<-rank 1), connect 127.0.0.1:6701 (send->rank 1)
+rank 0: ring wired (send_fd=17 recv_fd=18)
+rank 0: S=7  max|delta|=0  BYTE-EQ PASS
+rank 0: S=1048576  max|delta|=0  BYTE-EQ PASS
+rank 0: ALL BYTE-EQ PASS
+
+----- RANK 1 (pod B, 216.243.220.219) -----
+=== ring_socket_m6 :: rank 1/2  visible CUDA devices = 1 ===
+rank 1: ring schedule = 2(N-1) = 2 communication steps
+rank 1: listen 0.0.0.0:5701 (recv<-rank 0), connect 127.0.0.1:6700 (send->rank 0)
+rank 1: ring wired (send_fd=17 recv_fd=18)
+rank 1: S=7  max|delta|=0  BYTE-EQ PASS
+rank 1: S=1048576  max|delta|=0  BYTE-EQ PASS
+rank 1: ALL BYTE-EQ PASS
+
+BUILD: nvcc -O2 -arch=sm_90 ring_socket_m6.cu  (CUDA 12.4, both H100 pods)
+
+TRANSPORT FINDING (honest, g5):
+  * runpod SECURE-cloud pods CAN reach each other across the node boundary:
+    raw outbound TCP from pod A to pod B's public IP:port works, and the
+    ring's chunks crossed that wire.
+  * The reachable inbound surface on each pod's public IP was its SSH endpoint;
+    the requested custom TCP ports (5700/5701) did NOT surface a usable public
+    proxy mapping (pod `runtime.ports` stayed empty for raw TCP for the lifetime
+    of the run). So the cross-node TCP path was established as an SSH port-
+    forward between the two pods' public SSH endpoints (still real host-network
+    TCP, reliable+ordered — the transport correctness the gate proves is
+    independent of whether the TCP carrier is a direct proxy port or an SSH
+    forward; both are kernel TCP over the same physical inter-node link).
+  * A naive connect() over a tunnel port is NOT sufficient to prove the peer is
+    up (the local tunnel port accepts even when the far listener is down, then
+    drops). The wiring uses a SYN/ACK end-to-end handshake so the ring only
+    proceeds once the far LISTENER is confirmed reachable — deadlock-free and
+    startup-order-independent.
+
+HONEST BOUNDARY (g5): this is the COLLECTIVE crossing a runpod node boundary
+  byte-exact — NOT multi-node end-to-end training speedup, and NOT an
+  interconnect-bandwidth claim (the path here is TCP over the pods' public link,
+  not RDMA/IB). Correctness is transport-independent; perf is out of scope.
+  Sibling vast leg proves the same on a separate provider (provider-isolated
+  inter-node networking each independently proven).
+
+PODS TERMINATED: YES (both — runpodctl pod delete -> "deleted": true; account
+  pod list shows 0 of my M6 pods remaining). Leak 0 on runpod.
