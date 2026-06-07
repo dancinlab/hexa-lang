@@ -1,25 +1,111 @@
-F-FUSION-FF-DUTYCYCLE  ::  Chopper-style step duty-cycle breakdown of the REAL flame CLMConvMoE FP64 train step (D1536/T512/E2/K3, batch=1; #2913 config) — measurement gate that sets the Amdahl ceiling for the MEGASTEP lever ladder
-domain: HEXA-FUSION  ·  date: 2026-06-08  ·  method: nsys/ncu profile the existing flame clm_prod_gpu step on a real H100 SXM; bucket step wall into GEMM% / between-GEMM GLUE% / OPTIMIZER-TAIL% / IDLE-GAP%; valley_fraction = glue+optim+idle; Amdahl ceiling = 1/(1-valley); cross-check SM util mean vs median (bimodal {100%,0%} hypothesis)
+F-FUSION-FF-DUTYCYCLE  ::  Chopper-style step duty-cycle breakdown of the REAL flame CLMConvMoE FP64 train step (D1536/T512/E2/K3, batch=1; #2913 config) — MEASUREMENT gate that sets the Amdahl ceiling for the MEGASTEP lever ladder
+domain: HEXA-FUSION  ·  date: 2026-06-08  ·  method: nsys cuda-trace + nvidia-smi util sampling of the existing flame clm_prod_gpu step on a real H100 SXM (vast 39958628, tag hexa-dutycycle/ffdc); bucket step wall into GEMM% / between-GEMM GLUE% / OPTIMIZER-TAIL% / IDLE-GAP%; valley_fraction = glue+optim+idle; Amdahl ceiling = 1/(1-valley); cross-check SM util mean vs median (bimodal {bursts,0%} hypothesis)
+GATE g5 — numbers pasted VERBATIM. This is a MEASUREMENT not a perf claim.
 
-[STATUS] WIP — pod 39958628 (H100 SXM, tag hexa-dutycycle/ffdc) profiling in flight. Numbers pasted VERBATIM below on completion (g5: this is a MEASUREMENT, not a perf claim).
+================================================================================
+ENVIRONMENT (verbatim)
+  GPU   : NVIDIA H100 80GB HBM3, 81559 MiB, driver 560.35.03, sm_90 (compute_cap 9.0)
+  nvcc  : CUDA 12.6 ; gcc 11.4.0 ; nsys 2024.3.2
+  binary: clm_prod_gpu 2538424 B (eager FP64 device-glue, EAGER-DEVGLUE-FIRED, HEXA_CLM_MEGASTEP OFF)
+  shape : D=1536 Tw=512 E=2 K=3 B=1 PREC=fp64 ; 12 windows (NSAMP=12, T=512)
+  run   : CLM_PROD_DEVRESIDENT=1 DEVFEED=1 BATCHED=1 HEXA_CUDA_ASYNC=0 HEXA_GEMM_PREC=fp64
+  CE    : first_ce=4.2200792520055925 last_ce=... (real device fwd/bwd DAG, descent-irrelevant @12 win)
 
-GATE g5 — paste nsys/ncu numbers verbatim. HONEST: if GEMM% dominant (valley small, ceiling ~1.0-1.3x) say so plainly — that GATES the ladder.
+================================================================================
+[A] BUCKET TABLE — % of profiled SPAN (nsys cuda_gpu_trace, full 12-window process)  VERBATIM
+  profiled span = 57365.080 ms  | kernels = 2109  | union(busy) = 7571.008 ms
+  ---------------- BUCKET TABLE (% of step wall) ----------------
+  (a) GEMM%       =   0.04%   (20.170 ms, 180 kernels)
+  (b) GLUE%       =  13.15%   (7543.368 ms, 1725 kernels)
+  (c) OPTIMIZER%  =   0.01%   (7.470 ms, 204 kernels)
+  (d) GAP/idle%   =  86.80%   (49794.072 ms)  [device truly idle = dispatch latency]
+  ---------------------------------------------------------------
+  valley_fraction = GLUE+OPT+GAP = 0.9996  (99.96%)
+  AMDAHL CEILING  = 1/(1-valley) = 1/GEMM% = 2844.131x
+  per-bucket priority (biggest reclaimable first):
+    1. GAP/idle(->FF-XSTREAM)            86.80%
+    2. GLUE(->FF-EPILOGUE/FF-VALLEY)     13.15%
+    3. OPTIMIZER(->FF-FUSED-OPTIM)        0.01%
+  --- top 15 kernels by total time (ms, bucket) ---
+    3166.573 ms  [GLUE]  _hx_k_groupnorm_bwd_dx
+    2535.069 ms  [GLUE]  _hx_k_groupnorm
+     841.684 ms  [GLUE]  [CUDA memcpy Device-to-Host]
+     427.252 ms  [GLUE]  [CUDA memcpy Host-to-Device]
+     279.406 ms  [GLUE]  _hx_k_embedding_bwd_scatter
+     259.972 ms  [GLUE]  _hx_k_int4_quant
+       9.370 ms  [GLUE]  _hx_k_moe_router_bwd
+       9.339 ms  [GEMM]  sm90_xmma_gemm_f64f64_f64f64_f64_nn_n_tilesize64x64x16_stage
+       8.777 ms  [GLUE]  _hx_k_moe_router
+       7.470 ms  [OPT ]  _hx_k_adamw_step_inplace
+       6.728 ms  [GEMM]  sm90_xmma_gemm_f64f64_f64f64_f64_nn_n_tilesize128x64x16_stag
+       4.702 ms  [GLUE]  _hx_k_groupnorm_bwd_affine
+       3.590 ms  [GEMM]  sm90_xmma_gemm_f64f64_f64f64_f64_nn_n_tilesize32x64x32_stage
+       3.439 ms  [GLUE]  _hx_k_db_colsum
+       2.740 ms  [GLUE]  _hx_k_int4_quant_bwd
 
-PRIOR EVIDENCE (cited, to be confirmed by this direct nsys/ncu profile):
-  - INTERP-ELIM (#2914): native real-trainer clm_prod_gpu util MEAN 0.43% MEDIAN 0% on H100.
-  - RIGHT-SIZED-GPU (#2918): A10 eager MEAN 24.37% MEDIAN 0% PEAK 100% pct>=70 17.6%; bimodal {100% in-GEMM, ~0% between}.
-  - BATCHFILL (#2913): H100 B=1 util MEAN 10.4% MEDIAN 0% PEAK 100%.
-  These all point to a LARGE valley (small GEMM%) => ceiling well above ~1.3x for valley-filling levers, but capped by per-op dispatch.
+  HONEST caveat on (d): the 86.8% "GAP" is span-minus-union over the FULL 12-window
+  process, so it folds in inter-window HOST glue (corpus tokenize/window-pack + per-step
+  python-level driver loop + init) on TOP of pure per-launch dispatch latency. It is NOT
+  all GPU-dispatch idle. The load-bearing fact is dispatch-caveat-INVARIANT: GEMM% is
+  negligible either way (see [B]).
 
-[BUCKET TABLE]      (to be filled verbatim from nsys --stats + ncu)
-  GEMM%            : TBD   (abs ms TBD)
-  GLUE%            : TBD   (abs ms TBD)  groupnorm/gelu/conv-experts/elementwise/token-pack
-  OPTIMIZER-TAIL%  : TBD   (abs ms TBD)  ~28-call AdamW
-  IDLE-GAP%        : TBD   (abs ms TBD)  device truly idle = dispatch latency
-  ------------------------------------
-  valley_fraction = glue+optim+idle = TBD
-  Amdahl ceiling  = 1/(1-valley)     = TBD
-  SM util mean/median = TBD / TBD
+================================================================================
+[B] GPU-ACTIVE-TIME breakdown — nsys cuda_gpu_kern_sum (Time% = % of GPU-busy time)  VERBATIM (top rows)
+  Time%  Total(ns)      Inst  Avg(ns)       Med(ns)      Name
+   50.2  3166572560      24  131940523.3  131917082.5  _hx_k_groupnorm_bwd_dx
+   40.2  2535068915      24  105627871.5  105072183.0  _hx_k_groupnorm
+    4.4   279405596      12   23283799.7   19425960.5  _hx_k_embedding_bwd_scatter
+    4.1   259971538      72    3610715.8    4919577.5  _hx_k_int4_quant
+    0.1     9370009      12     780834.1     779226.0  _hx_k_moe_router_bwd
+    0.1     9339286      36     259424.6     260238.0  sm90_xmma_gemm_f64f64...tilesize64x64x16
+    0.1     8776668      12     731389.0     663931.5  _hx_k_moe_router
+    0.1     7470087     204      36618.1       2944.0  _hx_k_adamw_step_inplace
+    0.1     6727750      48     140161.5     140223.0  sm90_xmma_gemm_f64f64...tilesize128x64x16
+    0.1     4702231      24     195926.3     195918.5  _hx_k_groupnorm_bwd_affine
+    0.1     3589922      36      99720.1     142686.0  sm90_xmma_gemm_f64f64...tilesize32x64x32
+   (... all remaining GEMM/glue kernels <0.1% each; full table in results/nsys_kernsum.txt)
 
-[#1 RECLAIMABLE BUCKET] TBD -> priority downstream lever
-[GATE VERDICT] TBD (greenlight ladder if valley big / HALT if small)
+  => Of GPU-ACTIVE kernel time: groupnorm fwd + bwd_dx + bwd_affine = 90.5%. ALL sm90 cuBLAS
+     f64 GEMMs COMBINED ~= 0.3%. The two GroupNorm reductions average 105-132 ms EACH — they
+     are the BYTE-EQ-FORCED single-thread-per-group sequential reduction (one thread does the
+     whole T*C reduction, no tree re-assoc; cf F-FUSION-MEGAKERNEL-GN-GRIDSYNC "coop launch
+     buys ZERO reduction parallelism"). This is a SLOW-KERNEL valley, not a launch-gap valley.
+
+================================================================================
+[C] SM-UTIL CROSS-CHECK — nvidia-smi @5Hz over the full timed run  VERBATIM
+  util  mean=10.90%  median=1%  peak=68%  n=273  pct>=70=0.0%  pct<5=72.2%
+  ncu sm__throughput per-kernel: UNAVAILABLE on this pod — ERR_NVGPUCTRPERM (vast container
+    lacks GPU performance-counter permission; ncu disconnected). The nvidia-smi sampling +
+    nsys per-kernel time table are the authoritative util/breakdown surface here.
+
+  mean(10.90%) >> median(1%) with 72.2% of samples <5% util = the BIMODAL {short bursts, ~0%
+  idle} occupancy wall — CONFIRMED. Matches BATCHFILL #2913 H100 B=1 (mean 10.4 / median 0 /
+  peak 100), RIGHT-SIZED-GPU A10 (median 0), INTERP-ELIM native (mean 0.43 / median 0). peak
+  68% (not 100) is 5Hz aliasing past the microsecond GEMM bursts — nsys confirms GEMMs are
+  us-scale; the long active kernels are the ms-scale groupnorms, themselves low-occupancy.
+
+================================================================================
+[VERDICT]  valley_fraction = 0.9996  ·  Amdahl ceiling = 1/GEMM% = 2844x  (GEMM is NOT the wall)
+
+  #1 RECLAIMABLE BUCKET (two honest framings, same conclusion):
+   - by SPAN time:        GAP/idle 86.80%  -> FF-XSTREAM (cross-stream overlap) + host-glue elim
+   - by GPU-ACTIVE time:  GroupNorm 90.5%  -> FF-VALLEY (fix the single-thread GN reduction;
+                          parallel byte-eq GN is the single biggest fixable on-device kernel)
+   OPTIMIZER tail (AdamW) = 0.01% span / 0.1% active -> FF-FUSED-OPTIM is NOT worth it here
+   (the ~28-call AdamW is already cheap; deprioritize vs the research-leg ranking).
+
+  GATE VERDICT: ** GREENLIGHT the MEGASTEP ladder. ** valley_fraction = 99.96% (GEMM% = 0.04%
+  span / ~0.3% GPU-active). The step is in NO sense GEMM-compute-bound — the FP64 cuBLAS GEMMs
+  are a rounding error. The entire wall is the between-GEMM valley: a serial, low-occupancy
+  un-fused op-DAG whose GPU-active time is 90% two pathologically-slow single-thread GroupNorm
+  reductions, executed with ~73% of wall-clock device-idle between launches. Every valley-fill
+  lever has enormous Amdahl headroom (ceiling >> the practical 1/duty-cycle ~9x from mean util).
+  HONEST: this does NOT contradict the closed-neg uncap levers — INTERP-ELIM / PRECISION-CHANGE
+  / RIGHT-SIZED-GPU each failed because they attacked the WRONG term (interpreter / GEMM dtype /
+  SM count). FF-DUTYCYCLE pinpoints the RIGHT terms: (1) the single-thread GroupNorm reduction
+  (the dominant on-device cost), (2) cross-stream/host-glue overlap of the idle valley. Re-prio
+  the ladder: FF-VALLEY (GN reduction first) > FF-XSTREAM > FF-EPILOGUE >> FF-FUSED-OPTIM (skip).
+
+  pod 39958628 (H100 SXM, tag hexa-dutycycle) DESTROYED leak-0 (tag-confirmed).
+  artifacts: .verdicts/hexa-fusion/ff-dutycycle-build/{profile_dutycycle.sh,bucket_nsys.py}
+             + results/{nsys_kernsum.txt,bucket_report.txt,util_dutycycle.csv,plain_run.txt}
