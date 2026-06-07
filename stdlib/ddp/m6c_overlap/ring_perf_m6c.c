@@ -299,6 +299,7 @@ static int correctness_check(int rank, int N, long S, double* x, double* x0,
 int main(int argc, char** argv){
     int rank=-1, N=-1, reps=11, pings=50, do_check=0;
     long single=0;
+    long maxs_cap=0;  // if >0, cap the sweep ladder to S <= maxs_cap (WAN-bounded run)
     const char *listen_hp=NULL, *succ_hp=NULL, *modestr="pipeline";
     for (int i=1;i<argc;i++){
         if(!strcmp(argv[i],"--rank")) rank=atoi(argv[++i]);
@@ -306,6 +307,7 @@ int main(int argc, char** argv){
         else if(!strcmp(argv[i],"--reps")) reps=atoi(argv[++i]);
         else if(!strcmp(argv[i],"--ping")) pings=atoi(argv[++i]);
         else if(!strcmp(argv[i],"--single")) single=atol(argv[++i]);
+        else if(!strcmp(argv[i],"--maxs")) maxs_cap=atol(argv[++i]);
         else if(!strcmp(argv[i],"--sockbuf")) g_sockbuf=atoi(argv[++i]);
         else if(!strcmp(argv[i],"--pchunks")) g_pchunks=atoi(argv[++i]);
         else if(!strcmp(argv[i],"--mode")) modestr=argv[++i];
@@ -345,6 +347,7 @@ int main(int argc, char** argv){
     long single_arr[1];
     if (single > 0){ single_arr[0]=single; nL=1; }
     long* L = (single > 0) ? single_arr : ladder;
+    if (single<=0 && maxs_cap>0){ int k=0; while(k<nL && ladder[k]<=maxs_cap) k++; if(k>0) nL=k; }
     #define LAD(k) (L[(k)])
     long maxS = LAD(nL-1);
     if (maxS < 1048575L) maxS = 1048575L; /* room for check sizes */
