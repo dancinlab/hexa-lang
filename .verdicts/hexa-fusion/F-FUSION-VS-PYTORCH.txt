@@ -1,0 +1,23 @@
+F-FUSION-VS-PYTORCH — END-TO-END vs-PyTorch+CUDA wall bench (flame vs torch eager vs torch.compile)
+═══════════════════════════════════════════════════════════════════════════════════════════════════
+STATUS    : WIP (skeleton pushed; H100/H200 run pending)
+DATE      : 2026-06-07
+BRANCH    : domain/hexa-fusion-vs-pytorch
+
+FALSIFIER (pre-registered)
+──────────────────────────
+"On a real H100/H200, the flame hexa device-resident CLMConvMoE trainer (same model
+ shape D1536/T512/E2/K3, batch=1) reaches >=1.3x the step/s of PyTorch (eager AND
+ torch.compile) on the FULL training step. If flame does NOT reach 1.3x — or trails
+ torch — report by how much + why (interpreted per-step glue vs torch's compiled C++
+ dispatch; serial-DAG occupancy floor at batch=1), locating the REAL lever (remove the
+ interpreted glue / batch>1 to fill SMs), NOT kernel fusion (siblings #2910/#2911 already
+ closed kernel-launch/boundary fusion at ~1.0x)."
+
+HONEST (g5)
+───────────
+cuBLAS GEMM = roofline. flame's own-GEMM reaches cuBLAS parity at best, so flame will
+NOT beat torch on raw GEMM. The question is the FULL step. Dtype mismatch (if any)
+reported verbatim. NO faked flame win.
+
+[ 3-way step/s + util table + flame/torch ratio + honest finding land here post-run ]
