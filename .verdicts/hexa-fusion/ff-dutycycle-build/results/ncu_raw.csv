@@ -1,0 +1,10 @@
+clm_prod — CLMConvMoE production corpus loop (PR1)
+  corpus: /root/work/corpus.txt  (402270 bytes, V=256)
+  windows: 4/4  (T=512 stride=100439)
+==PROF== Connected to process 2174 (/root/work/clm_prod_gpu)
+==ERROR== ERR_NVGPUCTRPERM - The user does not have permission to access NVIDIA GPU Performance Counters on the target device 0. For instructions on enabling permissions and to get more information see https://developer.nvidia.com/ERR_NVGPUCTRPERM
+  epoch-1 mean CE = 4.41383
+  epoch-1 mean CE = 4.41383
+F-CLM-PROD-DESCENT = 0
+FAIL
+==PROF== Disconnected from process 2174

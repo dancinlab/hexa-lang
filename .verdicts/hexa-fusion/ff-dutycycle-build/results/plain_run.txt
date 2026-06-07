@@ -1,0 +1,9 @@
+clm_prod — CLMConvMoE production corpus loop (PR1)
+  corpus: /root/work/corpus.txt  (402270 bytes, V=256)
+  windows: 12/12  (T=512 stride=33479)
+[EAGER-DEVGLUE-FIRED] _hx_k_gelu device CUDA-erf GELU (separate launch, P1B-a' device-resident eager ref)
+[B6-CE-HIPREC] first_ce=4.2200792520055925 last_ce=4.2200792520055925
+  epoch-1 mean CE = 4.22008
+  epoch-1 mean CE = 4.22008
+F-CLM-PROD-DESCENT = 0
+FAIL
