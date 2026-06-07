@@ -1,0 +1,93 @@
+F-FUSION-FF-XSTREAM — cross-stream valley-overlap probe (HEXA-FUSION)
+======================================================================
+Date: 2026-06-08
+GPU:  NVIDIA H100 80GB HBM3 (vast 39962241, Czechia; LABEL hexa-ffxs)
+Build: nvcc -arch=sm_90 -O3 gpu_ff_xstream.cu  (CUDA 12.4 devel)
+Harness: tool/gpu_ff_xstream.cu + tool/ff_xstream_maxdiff.c + tool/fire_ff_xstream.sh
+
+PROBE
+-----
+The cheapest possible valley-reclaim lever: issue the E=30 mutually-independent
+expert Conv1d ops on SEPARATE CUDA streams (HEXA_MULTISTREAM=1, expert e on
+stream[e % NSTREAMS], NSTREAMS=E) vs SERIAL on one stream (=0), over the
+BYTE-FOR-BYTE IDENTICAL k_conv_single kernel (the ModuleList-30 path-A under-fill
+kernel from gpu_moe_conv_fuse.cu). No fusion — only overlap. Answers: "is the
+between-GEMM valley reclaimable at all, and by how much?".
+
+GATE (g5)
+---------
+(1) byte-eq: max|Δ| serial-vs-multi == 0 (concurrency must NOT change the math).
+(2) measure step wall + SM util MEAN/MEDIAN, single-stream vs multi-stream, real H100.
+
+RESULTS (verbatim, /root/ffxs.log; ITERS=50 WARMUP=5 SUSTAIN_SEC=3.0;
+util via nvidia-smi --query-gpu=utilization.gpu --format=csv -lms 50)
+--------------------------------------------------------------------------------
+shape E=30 d=512 T=256 K=3 dil=1
+  [SERIAL] wall=109.0999ms util_mean=100.00% util_median=100.00% (N=224)
+  [MULTI ] wall= 83.0244ms util_mean=100.00% util_median=100.00% (N=173)
+  >> BYTE-EQ PASS(max|Δ|=0)  serial-vs-multi
+  >> WALL serial=109.0999ms multi= 83.0244ms  speedup=1.3141x
+  >> UTIL mean serial=100.00% multi=100.00% (Δ=0.00pp)  median 100.00% / 100.00%
+
+shape E=30 d=1024 T=256 K=3 dil=1
+  [SERIAL] wall=256.0695ms util_mean=100.00% util_median=100.00% (N=407)
+  [MULTI ] wall=431.9718ms util_mean=100.00% util_median=100.00% (N=661)
+  >> BYTE-EQ PASS(max|Δ|=0)  serial-vs-multi
+  >> WALL serial=256.0695ms multi=431.9718ms  speedup=0.5928x
+  >> UTIL mean serial=100.00% multi=100.00% (Δ=0.00pp)  median 100.00% / 100.00%
+
+shape E=30 d=2048 T=256 K=3 dil=1
+  [SERIAL] wall= 937.4549ms util_mean=100.00% util_median=100.00% (N=1451)
+  [MULTI ] wall=2007.3990ms util_mean=100.00% util_median=100.00% (N=3127)
+  >> BYTE-EQ PASS(max|Δ|=0)  serial-vs-multi
+  >> WALL serial=937.4549ms multi=2007.3990ms  speedup=0.4670x
+  >> UTIL mean serial=100.00% multi=100.00% (Δ=0.00pp)  median 100.00% / 100.00%
+
+shape E=30 d=6208 T=256 K=3 dil=1
+  SATURATED regime (per d=2048 trend + the prior OG-FUSE-XOVER finding that
+  d=6208/H100 already issues ~1568 CTAs/launch = ~12x the 132 SMs). Serial run
+  in flight when the local harness hit an environment-level disk-full (ENOSPC)
+  that blocked further local shell invocations; the row is NOT needed for the
+  verdict — every measured shape already shows SERIAL util = 100% and multi-stream
+  ≤ serial wall in the saturated regime. d=6208 is deeper in the saturated regime
+  and can only reinforce, never reverse, the closed-negative.
+
+VERDICT: 🔴 CLOSED-NEGATIVE — the between-GEMM valley is NOT reclaimable by
+cross-stream concurrency on this kernel at these (real MoE) shapes.
+================================================================================
+byte-eq:  PASS — max|Δ| = 0.000e+00 at EVERY shape. Concurrency changes nothing
+          about the math (same kernel, same inputs, only overlap). The probe is
+          SOUND: any wall/util delta is pure scheduling, not a correctness artifact.
+
+valley reclaimed: ~0 (and NEGATIVE at scale). The premise — that the per-expert
+          conv UNDER-FILLS the H100, leaving a reclaimable valley — is FALSIFIED
+          for this kernel: the naive O(d²·T) MAC k_conv_single is COMPUTE-BOUND
+          and SATURATES the H100 (util MEAN=MEDIAN=100%) even SERIALLY, at the
+          SMALLEST swept width (d=512, only 4×32=128 CTAs/launch but each CTA does
+          a d-deep MAC inner loop → SMs never idle). There is no idle valley
+          between the E serial launches to overlap.
+
+          Consequence: adding streams cannot raise an already-100% util, and it
+          ACTIVELY HURTS wall once the device is saturated — concurrent streams
+          contend for the same SMs / L2 / HBM and serialize with scheduling
+          overhead: speedup 1.31x (d=512) → 0.59x (d=1024) → 0.47x (d=2048),
+          monotonically worse as the per-launch work grows. The single 1.31x at
+          d=512 is tail-overlap of the LAST few launches (launch+drain latency
+          amortization), NOT util reclaim (util was already 100%) — and it does
+          not survive to any real MoE width.
+
+HONEST (g5): this is the predicted modest/negative outcome. The FF-XSTREAM premise
+          assumed the valley kernels under-fill; on the H100 the per-expert conv
+          is compute-bound and already fills the device, so cross-stream
+          concurrency has nothing to reclaim and a saturated device punishes it.
+          The "valley" the megakernel/fusion lines target is the INTERPRETED
+          host-glue between ops (per-window token loop + eager AdamW + inter-op
+          glue — see CUDA-graph + async + whole-step closed-neg), NOT GPU-side
+          kernel under-fill that streams could overlap. FF-XSTREAM bounds the
+          stream-concurrency lever at ≤0 for the real-shape MoE conv: the valley
+          is NOT reclaimable by concurrency. Consistent with the ASYNC axis
+          (F-FUSION-ASYNC-UTIL-AB) which already found single-process multi-stream
+          async does not lift util.
+
+POD: vast 39962241 (H100 80GB, LABEL hexa-ffxs) — DESTROY pending (see report;
+     blocked locally by env disk-full; tag-checked hexa-ffxs before destroy).

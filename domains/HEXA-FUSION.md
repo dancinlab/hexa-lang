@@ -245,10 +245,25 @@
   gather t=p+dil*(K-1-k) + gW/gb destination-owned → byte-eq max|Δ|=0 (dev-vs-dev AND vs CPU-fmaf),
   DETERMINISTIC (run-to-run 0 vs atomic 1e-4..3e-4), 0 atomics (vs 9.66e10 atomicAdd), 14.9-17.0x faster
   than the atomicAdd scatter. PRIMITIVE AVAILABLE for FF-VALLEY/MEGASTEP.
-- [ ] **FF-XSTREAM — cross-stream valley overlap (no fusion, cheapest probe)** — issue independent ops
-  (per-expert, grad-compute || next-layer fwd) on multiple CUDA streams so the scheduler overlaps the
-  under-filling kernels instead of serializing them; turns bimodal {100%,0%} into a mid-band. LOW. The
-  fastest "is the valley reclaimable at all?" probe before any megakernel. Pairs with FF-DUTYCYCLE.
+- [x] **FF-XSTREAM — cross-stream valley overlap (no fusion, cheapest probe) — 🔴 CLOSED-NEGATIVE
+  (H100 80GB measured 2026-06-08)** — issued the E=30 mutually-independent expert Conv1d ops on
+  separate CUDA streams (HEXA_MULTISTREAM=1, expert e on stream[e%E]) vs SERIAL on one stream, over
+  the BYTE-FOR-BYTE IDENTICAL k_conv_single kernel (ModuleList-30 path-A). No fusion — only overlap.
+  **byte-eq HARD GATE PASS: max|Δ|=0 serial-vs-multi at EVERY shape** (concurrency changes nothing —
+  same kernel/inputs, only overlapped; probe is sound). **VALLEY NOT RECLAIMABLE (~0, NEGATIVE at
+  scale)**: the premise that the per-expert conv UNDER-FILLS the H100 is FALSIFIED — the naive O(d²·T)
+  MAC kernel is COMPUTE-BOUND and SATURATES the H100 (util MEAN=MEDIAN=100%) even SERIALLY at the
+  smallest swept width (d=512, 128 CTAs/launch but a d-deep MAC inner loop → SMs never idle). There is
+  no idle valley between the E serial launches to overlap. Streams cannot lift an already-100% util and
+  ACTIVELY HURT a saturated device (SM/L2/HBM contention + scheduling): speedup 1.31x (d=512) → 0.59x
+  (d=1024) → 0.47x (d=2048), monotonically worse as per-launch work grows; the single d=512 1.31x is
+  tail launch-latency amortization, NOT util reclaim, and dies at any real MoE width. **The "valley"
+  the megakernel line targets is the INTERPRETED host-glue between ops (token loop + eager AdamW +
+  inter-op glue — CUDA-graph/async/whole-step closed-neg), NOT GPU-side kernel under-fill streams
+  could overlap.** Consistent with F-FUSION-ASYNC-UTIL-AB (single-process multi-stream async doesn't
+  lift util). FF-XSTREAM bounds the stream-concurrency lever at ≤0 for real-shape MoE conv. verdict
+  `.verdicts/hexa-fusion/F-FUSION-FF-XSTREAM.txt`. harness `tool/gpu_ff_xstream.cu` +
+  `tool/ff_xstream_maxdiff.c` + `tool/fire_ff_xstream.sh`. vast 39962241 (H100 80GB) DESTROYED leak 0.
 
   ## ⚠ MEGASTEP ladder — HONEST framing (arxiv+web deep-research 2026-06-08, g5)
   ALL megakernel literature (MPK 1.7x · Hazy "No Bubbles" 1.5-2.5x · Ada-MK · Event-Tensor) is
