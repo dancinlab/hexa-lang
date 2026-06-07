@@ -1,0 +1,17 @@
+F-DDP-M5D-THROUGHPUT — HEXA-DDP DDP-M5d (throughput leg)
+Throughput scaling of data-parallel DDP: per-GPU batch FIXED, global batch
+scales with N. The regime DDP is designed for (vs M5b/M5c per-step latency).
+
+STATUS: WIP — harness pushed, on-pod 4-GPU run pending (results below are the
+on-pod verbatim stdout, filled when the NVLink node run completes).
+
+GATE (g5):
+ (1) CORRECTNESS — N=4 DDP step byte-eq to a 1-process reference over the SAME
+     B_global=B_perGPU*4, reduced in the ring's per-chunk right-nested order
+     (M5c finding). max|delta|=0 FP64 on grad/weights/rank-agreement.
+ (2) THROUGHPUT SCALING — samples/sec at N=1/2/4 with per-GPU batch FIXED, and
+     scaling efficiency eff(N)=throughput(N)/(N*throughput(1)).
+
+Source: stdlib/ddp/m5d_throughput/ddp_train_m5d.cu + run_m5d.sh.
+
+(results pending on-pod run)
