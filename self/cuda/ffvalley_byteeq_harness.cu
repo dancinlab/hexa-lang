@@ -232,7 +232,7 @@ int main(int argc,char**argv){
   printf("BYTEEQ max|delta|=%.6e  %s\n",dmax,(dmax==0.0)?"PASS(max|d|=0)":"FAIL");
 
   /* ── timing: valley fused (A) vs eager separate (B) — the valley-time ── */
-  cudaEvent_t s,e; CK(cudaEventCreate(&s)); CK(cudaEventCreate(&e));
+  cudaEvent_t s,ev; CK(cudaEventCreate(&s)); CK(cudaEventCreate(&ev));
   /* warmup */
   for(int w=0;w<10;w++){
     void* a1[]={(void*)&va,(void*)&T,(void*)&D}; dim3 gd1(g1),bd(blk);
@@ -247,8 +247,8 @@ int main(int argc,char**argv){
     void* a2[]={(void*)&vb,(void*)&T,(void*)&D,(void*)&E}; dim3 gd2(g2);
     CK(cudaLaunchCooperativeKernel((void*)valley2,gd2,bd,a2,0,0));
   }
-  CK(cudaEventRecord(e)); CK(cudaEventSynchronize(e));
-  float ms_fused=0; CK(cudaEventElapsedTime(&ms_fused,s,e));
+  CK(cudaEventRecord(ev)); CK(cudaEventSynchronize(ev));
+  float ms_fused=0; CK(cudaEventElapsedTime(&ms_fused,s,ev));
 
   for(int w=0;w<10;w++){
     ref_groupnorm_g1<<<1,1>>>(H0,tgG,tgB,rHN0,rMEAN0,rINV0,rXHAT0,T,D);
@@ -263,8 +263,8 @@ int main(int argc,char**argv){
     ref_moe_block2<<<tb,blk>>>(EO0,EO1,LOGR,rEX0,rEX1,rEXOUT,rPROBS,rY,T,D,E);
     ref_groupnorm_g1<<<1,1>>>(rY,noG,noB,rYN,rMEANN,rINVN,rXHATN,T,D);
   }
-  CK(cudaEventRecord(e)); CK(cudaEventSynchronize(e));
-  float ms_ref=0; CK(cudaEventElapsedTime(&ms_ref,s,e));
+  CK(cudaEventRecord(ev)); CK(cudaEventSynchronize(ev));
+  float ms_ref=0; CK(cudaEventElapsedTime(&ms_ref,s,ev));
 
   printf("VALLEY-TIME  fused=%.4f ms/iter  separate=%.4f ms/iter  speedup=%.3fx\n",
          ms_fused/iters, ms_ref/iters, ms_ref/ms_fused);
