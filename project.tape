@@ -34,58 +34,11 @@
 # Infra already landed in this PR: CLAIMS.tape · .verdicts/ · PAPER/.
 # Every `do =`/`dont =` value is ≤100 chars (hexa-lang lint cap).
 
-# ── PAPER auto-generation flow (ported from anima a_paper_* ← hexa-codex) ────
-# atlas atom / compiler RUNEQ → hexa verify (g5) → .verdicts/<slug>/<id>.txt
-#   → CLAIMS.tape → /paper. g5 verify discipline IS this gate.
-
-@D claim_manifest := "CLAIMS.tape — single audit index of verifiable hexa-lang claims" :: workflow [required active]
-  do   = "every verifiable claim in root CLAIMS.tape — id · text · method · slug · group · verdict ptr"
-  dont = "scatter claims across docs / RFCs / *.tape logs without a CLAIMS.tape index — no audit surface"
-
-@D claim_verify := "every claim runs through hexa verify (g5), verdict persisted verbatim" :: workflow [required active]
-  do   = "each CLAIMS.tape entry → `hexa verify` (g5) → `.verdicts/<slug>/<id>.txt` raw stdout verbatim"
-  dont = "LLM self-judge correctness · paraphrase verdicts · hide a 🔴 or unfenced speculation"
-
-@D paper_gate := "/paper gated on terminal verdict AND significance" :: workflow [required active]
-  do   = "`/paper new <slug>` only when every section claim is terminal AND significance is satisfied"
-  do   = "terminal = 🔵 formal / 🟢 numerical / 🔴 CLOSED-negative — not 🟠 deferred / 🟡 citation / ⚪"
-  dont = "scaffold with any 🟠 deferred · 🟡 citation-only · ⚪ unfenced speculation · trivial recheck"
-
-@D paper_significance := "paper requires a pre-registered falsifier + real measurement + a finding" :: workflow [required active]
-  do   = "trigger only on a pre-registered falsifier + real measurement (verify / byte-diff / RUNEQ)"
-  do   = "finding = Δ vs baseline OR a closed-negative deterministically ruling out one axis"
-  dont = "paper for an atom recheck · known identity · bookkeeping closure · 🟠 residual prediction"
-
-@D paper_negative_ok := "closed-negative findings are publishable" :: workflow [required active]
-  do   = "a 🔴 FALSIFIED result that deterministically rules out a path is a valid paper"
-  do   = "frame as a negative result — the falsifier + the ruled-out space (e.g. a disproven property)"
-  dont = "treat a closed-negative as a non-finding · bury a falsification · publish a 🟠 as if closed"
-
-@D paper_format := "paper sections — statement · method · verification · finding" :: workflow [required active]
-  do   = "§statement (falsifier) · §method · §verification (real run) · §finding (Δ OR ruled-out axis)"
-  do   = "commons g51 — compile ≥10 pages + ≥1 fal.ai figure"
-  dont = "narrative-only · verification substitute for the statement · skip §finding · vague claims"
-
-@D paper_sections := "every paper section claim links to its verdict" :: workflow [required active]
-  do   = "every section claim links to its `.verdicts/<slug>/<id>.txt` verdict (verbatim stdout)"
-  dont = "ship a paper with any unresolved residual section · treat the verdict matrix as optional"
-
-@D paper_violation := "violating paper immediately revoked" :: workflow [required active]
-  do   = "violating paper (gate / significance fail) revoked immediately — PAPER/<slug>/ removed"
-  dont = "keep a violating paper as a draft · mark it WIP · defer revocation · allow a residual"
-
-@D paper_on_discovery := "any verified discovery becomes a paper — free slug, no fixed domain" :: workflow [required active]
-  do   = "every terminal discovery → its own paper slug (named by the finding, not a fixed bucket)"
-  do   = "replace/supersede in place when a stronger finding lands on the same slug"
-  dont = "pre-assign papers to fixed domain buckets · cap the paper set · force a finding into wrong slug"
-
-@D discovery := "discovery runs continuously, not only at cycle tail" :: workflow [required active]
-  do   = "interleave /kick · /gap discovery every batch — a discovery lane runs alongside verify"
-  dont = "defer discovery to the end · single tail-only round · stop discovering once a paper ships"
-
-@D discovery_log := "discoveries persist at .discoveries/<slug>.tape" :: workflow [required active]
-  do   = "log every kick/gap discovery to `.discoveries/<slug>.tape` — id · seed · verdict-tier-target"
-  dont = "discard discovery output · paraphrase findings · skip linking discovery → next-cycle claim"
+# ── PAPER / capitalization policy → commons g84 (single SSOT · OPT-IN) ────
+# Capitalization (paper / README-publish) is NOT proactive: the agent never proposes
+# /paper nor auto-scaffolds on discovery. A verified discovery is logged (verdict +
+# domain milestone) ONLY; a paper happens WHEN the user instructs it, gated by commons
+# g84. verify discipline = commons g5. (Removed: ported claim_*/paper_*/discovery flow.)
 
 @D h_verify_auto_absorb := "hexa verify auto-folds atom to atlas on success — ambient, not ceremony" :: governance [required active]
   do   = "successful 🔵/🟢 verify auto-folds the atom to atlas (embedded.gen.hexa SSOT) by default"
