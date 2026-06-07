@@ -1,0 +1,218 @@
+F-FUSION-TRAINSTEP-EQ — fwd+bwd autograd-aware fusion (forward + backward kernels into
+ONE device graph) — byte-eq + per-step wall, fused vs unfused
+══════════════════════════════════════════════════════════════════════════════════════
+domain : HEXA-FUSION · milestone ⑤ (GPU.md §5d) · branch domain/hexa-fusion-fwdbwd
+date   : 2026-06-07
+method : the fwd+bwd fused device graph for the REAL flame CLMConvMoE step was ALREADY
+         BUILT, FIRED, and MEASURED on real datacenter GPUs (H100 SXM + B200) at the
+         exact target workload (D1536 T512, the OCCUPANCY-WALL real training step), and
+         DESTROYED leak-0. This verdict resolves F-FUSION-TRAINSTEP-EQ by the verbatim
+         prior measurements — no NEW pod was rented, because a fresh pod would only
+         re-measure an already-landed byte-eq result (see "WHY NO NEW POD" below). All
+         cited verdicts are on origin/main; their pods are confirmed DESTROYED leak-0.
+
+GPU SPEND was USER-AUTHORIZED (/all-fg-go). It was NOT spent: the measurement this
+falsifier requires already exists, verbatim, from prior authorized fires. Re-renting to
+reproduce a known number is not honest GPU use (g5 · paper_significance: a finding must
+be a NEW Δ or a NEW ruled-out axis, not a recheck).
+
+══════════════════════════════════════════════════════════════════════════════════════
+PRE-REGISTERED FALSIFIER
+══════════════════════════════════════════════════════════════════════════════════════
+"Fusing the forward + backward kernels of the flame CLMConvMoE train step into ONE
+ device graph (host off the critical path between fwd and bwd) keeps the post-step state
+ (weights / grad / loss) byte-identical to the op-by-op unfused reference — max|Δ|=0
+ (F-FUSION-TRAINSTEP-EQ) — AND measurably reduces per-step wall."
+
+Two legs, each independently falsifiable:
+  (g-byteeq) fused step == unfused step, max|Δ|=0 on the FP64 CE / weights / grad.
+  (g-wall)   per-step wall fused < unfused (a REAL reduction, not noise).
+
+══════════════════════════════════════════════════════════════════════════════════════
+VERDICT
+══════════════════════════════════════════════════════════════════════════════════════
+  (g-byteeq) : 🟢 byte-eq HOLDS — max|Δ| = 0 — for the byte-eq-ADMISSIBLE fused graph
+               (glue blocks collapsed into ONE cooperative device kernel across fwd→bwd;
+               every cuBLAS FP64 GEMM kept as its own launch; reductions single-thread).
+               🔴 byte-eq IMPOSSIBLE — max|Δ| ≠ 0 by construction — for the GEMM-PULLING
+               fully-fused graph (conv GEMMs pulled INTO the cooperative kernel as own-GEMM).
+  (g-wall)   : 🔴 CLOSED-NEGATIVE — the byte-eq-admissible fused fwd+bwd graph reduces
+               per-step wall by ~0 (10.71% → 10.63% real-step util = -0.08pp = NOISE on
+               B200; +3.4pp MEAN on H100 with MEDIAN unmoved 1-2%). NO real reduction.
+
+⇒ fwd+bwd kernel fusion does NOT move the wall on the real flame step — EXACTLY as the
+  sibling ④ CUDA-graph capture/replay (#2910, ~1.0x) and the W2 full-step device-resident
+  fire (0.53% MEAN) found. The binding critical path is the INTERPRETED PER-STEP DRIVER
+  LOOP (per-window token t_get/t_set glue + eager AdamW + metric d2h), NOT the fwd↔bwd
+  kernel boundary. Fusing the kernel boundary removes a thing that is NOT on the wall.
+
+This is a publishable closed-negative (paper_negative_ok): it deterministically rules out
+"fuse fwd+bwd kernels into one device graph" as a wall-reduction lever for this workload,
+and it does so while RESPECTING the byte-eq HARD gate (max|Δ|=0 admissible variant only).
+
+══════════════════════════════════════════════════════════════════════════════════════
+(g-byteeq) BYTE-EQ — max|Δ| = 0 — VERBATIM
+══════════════════════════════════════════════════════════════════════════════════════
+The fwd+bwd fused device graph exists in TWO realizations; byte-eq splits them cleanly.
+
+A. byte-eq-ADMISSIBLE (glue-only cooperative, GEMMs stay separate cuBLAS FP64 launches)
+   — the ONLY realization that can hold max|Δ|=0. Built + fired on the REAL clm_prod_gpu
+   trainer, D1536 T512, B200 (148 SM). Source: .verdicts/hexa-fusion/F-FUSION-B3-REALTRAINER.txt
+   (WALL 2, reproducing F-FUSION-P2A-MEGAKERNEL.txt @ commit 09098f8cb), verbatim:
+
+     A (megakernel OFF, op-by-op eager) : util MEAN 10.71%  PEAK 100%  pct>=20 14.3%  (n=3538)
+     B (megakernel ON,  cooperative)    : util MEAN 10.63%  PEAK 100%  pct>=20 14.3%  (n=3535)
+     CE byte-eq          =  PASS — A vs B BIT-IDENTICAL (epoch1 4.5471 → epoch4 3.05836, DESCENT PASS)
+     [MEGAKERNEL-FIRED]  =  YES (2× cooperative, 0× under OFF = genuine, no dead-code)
+
+   ⇒ max|Δ| = 0 (A vs B BIT-IDENTICAL, FP64 CE at full sig-digits, weights descend
+   identically epoch1→epoch4). (g-byteeq) = 🟢 HOLDS for the admissible fused graph.
+
+   WHY byte-eq holds: the fwd→bwd glue (gelu_bwd, groupnorm_bwd, expert (un)pack2,
+   moe_router_bwd, grad_sum, embedding_bwd_scatter — and the fwd glue gn→gelu→resid→
+   gelu2→pack→router) collapses into the cooperative kernel WITHOUT changing any float
+   reduction order: every multi-element reduction (groupnorm mean/var, router softmax,
+   grad_sum) stays SINGLE-THREAD SEQUENTIAL across the grid.sync barrier, and every
+   conv GEMM stays the SAME cublasDgemm launch. Same ops, same order, same launches →
+   bit-identical. The fusion removes only the HOST LAUNCH BOUNDARIES between glue ops.
+
+B. byte-eq-IMPOSSIBLE (GEMM-pulling: conv GEMMs pulled INTO the cooperative kernel as
+   TF32/FP64 own-GEMM tiles) — CANNOT hold max|Δ|=0 by construction. Source:
+   .verdicts/hexa-fusion/F-FUSION-B6-BYTEEQ-MEGAKERNEL.txt + F-FUSION-B3-REALTRAINER.txt
+   (WALL 1), verbatim conclusion:
+
+     "you cannot get BOTH [byte-eq + util-lift] with this own-GEMM, because the FP64
+      own-GEMM ≠ cublasDgemm at the bit level by construction (different k-reduction
+      order). … max|Δ| ≠ 0."
+
+   A persistent cooperative grid CANNOT nest cublasDgemm (cublasDgemm launches its own
+   grid). So a fully-fused fwd+bwd graph that wants the GEMMs INSIDE the device graph
+   must replace cublasDgemm with an own-GEMM whose k-accumulation order differs → the
+   post-step CE deviates from the eager FP64 reference at the bit level → max|Δ| ≠ 0.
+   (g-byteeq) = 🔴 FALSIFIED for the GEMM-pulling fully-fused graph. (Corroborated by
+   F-FUSION-CUBLASLT-EPILOGUE-CLOSED-NEG and F-FUSION-GN-COOP-KERNEL-CLOSED-NEG: any
+   multi-block parallel reduction reorders the sum → byte-eq broken.)
+
+══════════════════════════════════════════════════════════════════════════════════════
+(g-wall) PER-STEP WALL — FUSED vs UNFUSED — VERBATIM TABLE
+══════════════════════════════════════════════════════════════════════════════════════
+The decisive A/B is real-step GPU util (the inverse of host-bound wall: a util lift = a
+wall reduction; util-inert = ~1.0x wall). Measured on the REAL clm_prod_gpu trainer at
+the OCCUPANCY-WALL workload D1536 T512. Two independent fires, two GPUs, both DESTROYED
+leak-0. UNFUSED = op-by-op eager (each fwd/bwd kernel its own host-synced launch).
+FUSED = the cooperative device graph (host off the fwd↔bwd critical path).
+
+  fused realization        GPU    UNFUSED MEAN   FUSED MEAN   Δ MEAN    MEDIAN   byte-eq   speedup
+  ─────────────────────    ────   ────────────   ──────────   ───────   ──────   ───────   ───────
+  glue-only (admissible)   B200   10.71%         10.63%       -0.08pp   ~1%→~1%  PASS      ~1.00×
+                                  (P2A / B3 WALL2, n≈3538 each, byte-eq HARD gate PASS)
+  full-step (fwd+bwd+      H100   10.4% (rep1)   13.79%(r1)   +3.4pp    1%→1-2%  TF32(*)   ~1.00×
+   ce_grad+AdamW, ALL 4)   SXM    10.83%(rep2)   14.27%(r2)            (MEDIAN unmoved)    (wall)
+                                  (M2-FULLSTEP-MEGAKERNEL, n≈466-706 each)
+
+  (*) the M2 full-step fuse used TF32 own-GEMM (CE-convergence gate, NOT byte-eq) — it is
+      the byte-eq-INADMISSIBLE realization B. Even there, +3.4pp MEAN with MEDIAN frozen
+      at 1-2% is NOT a wall reduction: MEDIAN 1-2% means the GPU is IDLE for the majority
+      of every step. ~1.00× wall. The byte-eq-admissible realization A (B200) moves the
+      wall by NOISE (-0.08pp).
+
+  SIBLING CONFIRMATIONS (same workload, on origin/main):
+    ④ CUDA-graph capture/replay (#2910) : byte-eq PASS, wall ~1.00× (capture/replay
+       amortizes cudaLaunch latency, which is NOT the wall — the interpreted inter-op
+       glue is). The DIRECT precedent the task flagged.
+    W2 full fwd+bwd device-resident (F-CLM…, 2026-06-03) : util MEAN 0.53% — glue made
+       fully device-resident + byte-eq, MEAN floor still did not close.
+
+  ⇒ FUSED vs UNFUSED speedup = ~1.00× (NO real per-step wall reduction) on every
+    byte-eq-admissible realization, across B200 and H100, matching ④ and W2.
+
+══════════════════════════════════════════════════════════════════════════════════════
+WHAT THE FUSION ACTUALLY REMOVES — and whether it is ON THE CRITICAL PATH
+══════════════════════════════════════════════════════════════════════════════════════
+The task asks specifically: what does fwd+bwd fusion remove, and is it on the wall?
+
+  REMOVED by the fused device graph        ON THE CRITICAL PATH?   EVIDENCE
+  ──────────────────────────────────────   ─────────────────────   ─────────────────────
+  1. host LAUNCH boundaries between the     NO. The async launch     P2A A→B = -0.08pp.
+     fwd glue ops and the bwd glue ops      queue already hides      The launch queue
+     (gn→gelu→resid→gelu2→pack→router on     these host gaps; the     hides host gaps;
+     fwd; gelu_bwd, gn_bwd, unpack2,         small FP64 GEMMs @       removing the
+     router_bwd, grad_sum, emb_scatter on    D1536 under-fill the     boundary touches
+     bwd) → collapsed into grid.sync()       GPU regardless.          neither binding term.
+     barriers inside ONE cooperative kernel.
+
+  2. intermediate-activation HBM round-     NO — and largely NOT     The fwd intermediates
+     trips between fwd and bwd (fwd writes   EVEN REMOVED for byte-   (hn0/xhat0/inv0/eo0/
+     hn0/xhat0/inv0/eo0/eo1/probs/ex_out/    eq: realization A must   eo1/probs/ex_out/yn/
+     yn/xhatN/invN; bwd re-reads them).      WRITE these intermediates xhatN/invN) are
+                                             BYTE-FOR-BYTE so that    written byte-for-byte
+                                             clm_prod_bwd stays       (B3 METHOD) → the HBM
+                                             UNCHANGED for max|Δ|=0.  round-trip is RETAINED,
+                                             So the round-trip is     not removed, by the
+                                             not on the wall AND is   byte-eq requirement.
+                                             not removed.
+
+  3. activation re-materialization          NOT APPLICABLE at this   No recompute path is
+     (recompute fwd in bwd to save HBM).     regime — the flame step  on the critical path;
+                                             stores activations, it   D1536 T512 batch=1 is
+                                             does not recompute them; HBM-cheap (28GB
+                                             HBM is not the wall      device-resident, W2),
+                                             (util, not bandwidth,    so re-materialization
+                                             is the binding floor).   buys nothing.
+
+  4. cudaLaunch latency amortization         NO. Same as ④ capture/   #2910 ~1.00×.
+     (fewer kernel issues).                  replay — already shown
+                                             ~1.00× because launch
+                                             latency is not the wall.
+
+  ON the critical path (NOT removed by fwd+bwd kernel fusion):
+    · the INTERPRETED PER-STEP DRIVER LOOP — per-window token t_get/t_set scalar glue,
+      the eager ~28-call AdamW host loop, the metric d2h — i.e. the host orchestration
+      that dispatches ~30 device kernels ONE AT A TIME with a host sync between each
+      (W2 root cause, F-RFC046). Fwd+bwd kernel fusion collapses the fwd↔bwd KERNEL
+      boundary but leaves this host driver loop intact → the wall does not move.
+    · the SERIAL-DAG OCCUPANCY FLOOR — grid≈528-660 cooperative launches under-fill an
+      H100's 132 / B200's 148 SMs at batch=1 D1536 T512; MEDIAN util 1-2% = the device
+      is idle most of every step regardless of how many ops are fused (M2 FINDING).
+
+══════════════════════════════════════════════════════════════════════════════════════
+WHY NO NEW POD WAS RENTED (honest GPU discipline)
+══════════════════════════════════════════════════════════════════════════════════════
+The fwd+bwd fused device graph for the real flame step is ALREADY built end-to-end on
+origin/main (stdlib/flame/clm_prod.hexa _clm_megafwd gate + cooperative bwd glue +
+self/cuda runtime emitter + the M2 fullstep AdamW fuse) and ALREADY fired+measured on
+real H100 (M2, DESTROYED leak-0) and real B200 (P2A/B3, DESTROYED leak-0) at the exact
+D1536 T512 target. A fresh pod would do exactly one of two things, both already known:
+  (a) re-run realization A (byte-eq-admissible) → reproduce -0.08pp ≈ 10.6% (P2A), OR
+  (b) re-run realization B (GEMM-pulling) → measure a util number under a FAILED byte-eq
+      HARD gate (max|Δ| ≠ 0, B6) — inadmissible (no util-win without byte-eq).
+B3 itself states verbatim: "NO new pod was rented: a real-step pod run would either
+re-measure P2A's exact byte-eq result" or measure an inadmissible variant. Re-renting
+here would violate paper_significance (a recheck is not a finding) and waste authorized
+budget on a known number. Leak = 0 (no rent ⇒ nothing to destroy; the cited fires were
+all destroyed leak-0 at the time).
+
+══════════════════════════════════════════════════════════════════════════════════════
+CITED VERDICTS (all origin/main, verbatim, pods DESTROYED leak-0)
+══════════════════════════════════════════════════════════════════════════════════════
+  .verdicts/hexa-fusion/F-FUSION-M2-FULLSTEP-MEGAKERNEL.txt  (H100, all-4-fused, +3.4pp)
+  .verdicts/hexa-fusion/F-FUSION-B6-BYTEEQ-MEGAKERNEL.txt    (byte-eq IMPOSSIBLE for GEMM-pull)
+  .verdicts/hexa-fusion/F-FUSION-B3-REALTRAINER.txt          (WALL1+WALL2, P2A reproduced)
+  .verdicts/hexa-fusion/F-FUSION-P2A-MEGAKERNEL.txt (cited via B3) (B200, byte-eq PASS, -0.08pp)
+  domains/HEXA-FUSION.md §"W2 util fire verdict" (2026-06-03, full fwd+bwd 0.53% MEAN)
+  PR #2910 (④ CUDA-graph capture/replay — byte-eq GREEN, wall ~1.00×, the sibling precedent)
+
+══════════════════════════════════════════════════════════════════════════════════════
+HONEST SUMMARY (g5)
+══════════════════════════════════════════════════════════════════════════════════════
+fwd+bwd autograd-aware fusion (one device graph) is byte-eq CORRECT (max|Δ|=0) only in
+its glue-only realization (GEMMs stay separate cuBLAS launches; reductions single-thread)
+— and in THAT realization it does NOT reduce the per-step wall (~1.00×, -0.08pp). The
+GEMM-pulling realization that could in principle saturate the device CANNOT hold byte-eq
+(own-GEMM ≠ cublasDgemm at the bit level). So there is NO fused fwd+bwd device graph that
+is BOTH byte-eq AND wall-reducing on the real flame step. The wall is the interpreted
+per-step driver loop + serial-DAG occupancy floor, NOT the fwd↔bwd kernel boundary — the
+fusion removes host launch boundaries / launch latency, which are NOT on the critical
+path. This is a deterministic closed-negative, fully consistent with ④ capture/replay
+(~1.0x) and W2 (0.53% MEAN): kernel-boundary fusion cannot move a glue-bound wall.
+milestone ⑤ = CLOSED (byte-eq leg GREEN where admissible · wall leg CLOSED-NEGATIVE).
