@@ -230,7 +230,7 @@ FORGE-UTILGREEN lever-1~5 가 GEMM repack 을 전부 device 化했어도 util ME
 
 ### closure — vs PyTorch+CUDA 벤치
 
-- [ ] **vs-PyTorch+CUDA wall 벤치** — 동일 모델 device-resident, step/s + util 을 torch eager + torch.compile 와 나란히. **정직**: cuBLAS GEMM = roofline(못 이김 ≠ 실패) — 우위는 fusion/launch-amort regime 에서만 주장. closure = util-GREEN ∧ descent-GREEN ∧ vs-PyTorch wall Δ 기록.
+- [x] **vs-PyTorch+CUDA wall 벤치** 🔴 CLOSED-NEG — H100 SXM, 동일 CLMConvMoE D1536/T512/E2/K3 batch=1, 3-way: **flame 0.167 step/s (5.98 s/step, FP64) · torch eager 276.7 step/s (3.61 ms) · torch.compile 368.5 step/s (2.71 ms)**. flame÷torch = **0.0006× (eager) / 0.00045× (compile)** — torch 가 ~1656×/2207× FASTER, flame 은 1.3× 도달 ❌. wall = **INTERPRETED per-step driver glue** (window t_get/t_set + eager AdamW + CE-grad host glue) — NOT raw GEMM(util peak 100% in-GEMM, ≈cuBLAS), NOT kernel-fusion(#2910 capture/replay·#2911 fwd+bwd 둘 다 ~1.0× closed-neg 확인). 실제 lever = interpreter-elimination of per-step driver, batch>1 fill 만으론 1000× gap 안 닫힘(glue 가 B 와 함께 증가). verdict `.verdicts/hexa-fusion/F-FUSION-VS-PYTORCH.txt`. **정직**: cuBLAS=roofline 라 flame own-GEMM≈parity at best → raw GEMM 으론 애초에 못 이김(맞음); 단 측정 gap 은 GEMM precision 으로 설명 불가한 ~3 orders. branch 4/4 close-out(L3-fold GREEN · #2910 · #2911 · 본 verdict)로 vs-PyTorch wall 질문 CLOSED.
 
 ## ── completion roadmap (goal: 병렬 발사 전략으로 HEXA-FUSION 완성) ──
 
