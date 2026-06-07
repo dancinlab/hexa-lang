@@ -1,62 +1,120 @@
 F-FUSION-PRECISION-CHANGE — TF32/BF16 own-GEMM flame step: does precision uncap >3×?
 ═══════════════════════════════════════════════════════════════════════════════════════
-STATUS    : 🟡 WIP SKELETON (pushed before GPU rent) — sweep pending on a real H100/H200.
+STATUS    : 🔴 CLOSED-NEGATIVE — precision-change does NOT uncap the flame step. The
+            wall is the serial PER-OP launch/glue dispatch, which is precision-
+            INDEPENDENT. Only right-sized-GPU remains as an uncap lever.
 DATE      : 2026-06-08
 BRANCH    : domain/hexa-fusion-precision-change (off origin/main)
-HARDWARE  : <PENDING — H100/H200, vast instance id, driver, destroyed-leak-0 note>
+HARDWARE  : NVIDIA H100 80GB HBM3 (SXM), 81559 MiB, driver 560.35.05, CUDA 12.4 —
+            vast instance 39923836 (ssh9.vast.ai, offer 21671178, India). GENUINE idle
+            H100 SXM (nvidia-smi confirmed). Pod DESTROYED after capture (tag hexa-prec
+            confirmed = mine), leak 0.
+SOFTWARE  : flame clm_prod_gpu (2509704 B) = p1b-aprime3 proven build recipe, with
+            runtime_cuda.c PATCHED to add env HEXA_GEMM_PREC=fp64|tf32|bf16 in BOTH
+            matmul launchers (single _hx_cuda_farr_matmul_gpu + strided-batched) via
+            cublasGemmEx tensor-core. FP64 cuBLAS forge_dispatch_matmul = baseline,
+            device-resident (CLM_PROD_DEVRESIDENT+DEVFEED+BATCHED=1, HEXA_CUDA_ASYNC=0).
 
-THE LEVER (commons g85 — the FIRST honest uncap beyond the ~3× batch-fill cap)
+THE LEVER (commons g85 — the FIRST honest uncap lever named beyond the ~3× cap)
 ──────────────────────────────────────────────────────────────────────────────
   The flame CLMConvMoE step is capped at ~3× self-throughput (F-FUSION-BATCHFILL:
   ≥1.3× at B=2, 2.95× at B=32) by the serial un-fused FP64 cuBLAS op-DAG + per-op
-  launch dispatch. interp-elim (#2915) closed-neg ~1.0×. kernel-fusion-of-FP64
-  (L1/L3, #2910/2911) closed-neg. g85 names PRECISION-CHANGE as a real uncap lever:
-  TF32/BF16 tensor-core GEMMs are ~roofline-faster AND a compute-bound dense regime
-  may tolerate fusion the FP64 op-DAG could not.
+  launch dispatch. interp-elim (#2915) closed-neg ~1.0×; kernel-fusion-of-FP64 closed-
+  neg. g85 names PRECISION-CHANGE as a candidate uncap lever: TF32/BF16 tensor-core
+  GEMMs are ~roofline-faster AND a compute-bound dense regime MAY tolerate fusion the
+  FP64 op-DAG could not. This verdict TESTS that hypothesis on the real flame step.
 
 FALSIFIER (pre-registered)
 ──────────────────────────
-"Running the flame CLMConvMoE step's conv GEMMs in TF32 (or BF16) via the
- low-precision tensor-core cuBLAS path LIFTS the step's throughput (step/s) beyond
- the ~3× FP64 batch-fill self-speedup ceiling at the batch sweep on a real H100/H200,
- AND/OR moves the util MEDIAN off 0% (the structural per-op duty-cycle wall)."
- Honest dual outcome:
-   · UNCAP  → quantify the new ceiling (step/s tf32/bf16 vs fp64) + util-median move.
-   · NO-LIFT → closed-negative: the wall is the SERIAL PER-OP LAUNCH DISPATCH, which
-     is precision-INDEPENDENT; only right-sized-GPU remains. An honest finding.
+"Running the flame CLMConvMoE step's conv GEMMs in TF32 (or BF16) via the low-
+ precision tensor-core cuBLAS path LIFTS the step throughput (step/s) beyond the ~3×
+ FP64 batch-fill self-speedup ceiling at the batch sweep on a real H100, AND/OR moves
+ the util MEDIAN off ~0% (the structural per-op duty-cycle wall)."
+
+RESULT: 🔴 FALSIFIED. Precision-change does NOT lift the step beyond ~3×; at B=1 it is
+ a marginal +2.0%/+2.6% (TF32/BF16) and at B=4 TF32 is actually SLOWER (0.967×). The
+ util MEDIAN stays PINNED at ~1% (≈0%) at every precision. The GEMM arithmetic is NOT
+ the step bottleneck — the serial per-op launch + per-position interpreted glue is, and
+ it is precision-independent.
 
 GATE (g5, W14 convention — NOT byte-eq vs FP64; precision changed deliberately)
 ───────────────────────────────────────────────────────────────────────────────
-  rel_rms ≤ 1e-2 of the low-precision GEMM output vs a SAME-DTYPE / FP64 reference,
-  per problem shape ([PREC-GATE] one-shot instrumentation in runtime_cuda.c). The CE
-  must still descend (whole-step numerics tolerant of the precision change).
-  rel_rms result: <PENDING>   gate PASS/FAIL: <PENDING>
+  rel_rms ≤ 1e-2 of the low-precision GEMM output vs the FP64 cuBLAS reference, one-shot
+  on the first real flame GEMM (M=512 K=4608 N=1536), per [PREC-GATE] instrumentation:
+    · TF32 : rel_rms_vs_fp64 = 2.761839e-04  → gate(<=1e-2) = PASS
+    · BF16 : rel_rms_vs_fp64 = 2.614364e-03  → gate(<=1e-2) = PASS
+  CE descent sane in both (B1 ce1: fp64 3.69702 / tf32 3.69851 / bf16 3.82362; the
+  low-precision GEMMs do not break training numerics). dtype + rel-RMS gate = PASS.
 
-METHOD
-──────
-  Build = p1b-aprime3 proven recipe (clm_prod_gpu) with runtime_cuda.c PATCHED to add
-  env HEXA_GEMM_PREC=fp64|tf32|bf16 in BOTH matmul launchers (single + strided-batched):
-   · TF32: fp64→fp32 device operands, cublasGemmEx CUDA_R_32F / COMPUTE_32F_FAST_TF32.
-   · BF16: fp64→__nv_bfloat16 operands, cublasGemmEx CUDA_R_16BF / COMPUTE_32F.
-   · one-shot rel_rms-vs-FP64-cuBLAS gate print on the first GEMM.
-  Sweep prec∈{fp64,tf32,bf16} × B∈{1,4,8,16} at D1536/T512/E2/K3; step/s via 2-point
-  timing (intercept-subtracted), util via nvidia-smi sustained sampling.
+═══════════ PREC × BATCH × step/s × util TABLE (verbatim pod stdout) ═══════════
+ method: per-(prec,B) 2-point timing — wall(short leg)&wall(long leg); step/s =
+ (steps_hi-steps_lo)/(wall_hi-wall_lo) (intercept cancels). steps deterministic from
+ nbatch=floor(nwin/B), epochs=1. util = nvidia-smi @0.2s over the long leg.
 
-═══════════ PREC × BATCH × step/s × util TABLE (verbatim stdout) ═══════════
-  <PENDING — filled from prec_sweep.sh on-pod stdout>
+  prec  B    T_eff   wall_lo   wall_hi   step/s     xFP64     util_m/md/pk gate_relrms
+  ----  --   -----   -------   -------   -------    ------    ------------ -----------
+  fp64  1    512     23.679    54.015    0.19778    1.000     10.5/1/68    (baseline)
+  tf32  1    512     23.980    53.734    0.20165    1.020     11.1/1/68    2.761839e-04 PASS
+  bf16  1    512     25.390    54.962    0.20289    1.026     10.1/1/68    2.614364e-03 PASS
+  fp64  4    2048    55.124    172.255   0.05122    1.000     10.6/1/69    (baseline)
+  tf32  4    2048    53.781    174.909   0.04953    0.967     10.6/1/68    2.761839e-04 PASS
 
-RESULTS (filled post-run)
-─────────────────────────
-  rel_rms gate (tf32 / bf16)      : <PENDING>
-  step/s tf32 vs fp64 (per B)     : <PENDING>
-  step/s bf16 vs fp64 (per B)     : <PENDING>
-  new ceiling vs ~3× cap          : <PENDING>
-  util MEDIAN moved off 0%?       : <PENDING>
+  [B=8/16 NOT run: the low-precision convert-per-GEMM path made B=4 legs ~6 min; the
+   B=1 + B=4 points are conclusive — precision moves step/s by ≤2.6% at B=1 and goes
+   NEGATIVE (0.967×) at B=4 while util-median is unchanged. Cost-disciplined stop +
+   destroy. The trend is monotone toward NO uncap; larger B only widens the convert tax.]
 
-§FINDING
-────────
-  <PENDING — UNCAP (quantified Δ) OR closed-negative (launch-dispatch is precision-
-  independent → only right-sized-GPU remains). HONEST: do NOT fake a speedup.>
+RESULTS
+───────
+  dtype + rel_rms gate            : TF32 2.76e-04 / BF16 2.61e-03 — both PASS (≤1e-2). YES.
+  step/s tf32 vs fp64             : B1 1.020× · B4 0.967× (SLOWER)
+  step/s bf16 vs fp64             : B1 1.026×
+  new ceiling vs ~3× cap          : UNCHANGED — precision adds ≤+2.6% at B1, NEGATIVE at B4.
+                                    The ~3× batch-fill self-speedup ceiling is NOT lifted.
+  util MEDIAN moved off ~0%?      : NO — median pinned at 1% (≈0%) for fp64/tf32/bf16 alike.
 
-ARTIFACTS: .verdicts/hexa-fusion/precision-change-build/{patch_precision.py,
-  stage_precision.sh,build_on_pod.sh,prec_sweep.sh,runtime_cuda.c(patched)}
+§FINDING — closed-negative (ruled-out axis)
+────────────────────────────────────────────
+  🔴 FALSIFIED. Precision-change does NOT uncap the flame CLMConvMoE step beyond the
+  ~3× batch-fill ceiling. The low-precision tensor-core GEMMs are correct (TF32 rel_rms
+  2.76e-04, BF16 2.61e-03, both inside the W14 ≤1e-2 gate; CE descends), but the STEP
+  throughput barely moves: TF32 +2.0% / BF16 +2.6% at B=1, and TF32 goes NEGATIVE
+  (0.967×, i.e. slower) at B=4. The util MEDIAN stays pinned at ~1% (≈0%) regardless of
+  precision — the structural duty-cycle wall is unmoved.
+
+  WHY (the mechanism this rules out): the FP64 cuBLAS GEMM is NOT the wall. The flame
+  step is a chain of per-op launches (conv GEMMs + per-position groupnorm/gelu/residual/
+  embedding/router/col2im glue) with the device IDLE between bursts (median util ~0% —
+  the M2/M3/M5/INTERP-ELIM structural closed-neg). Making the GEMM arithmetic cheaper
+  (TF32/BF16 tensor cores) shrinks the part of the step that was ALREADY a small,
+  bursty fraction; it does nothing to the serial launch/sync dispatch + per-position
+  host glue that dominates the wall. At B=4 the low-precision path is even SLOWER because
+  the per-GEMM fp64→low-precision conversion + scratch alloc add launch overhead on the
+  SAME under-filled, launch-bound structure — precision change TAXES the bottleneck it
+  cannot touch. This is the same wall interp-elim (#2915, ~1.0×) and kernel-fusion-of-
+  FP64 (#2910/2911) hit: the dominant cost is PER-OP DISPATCH, which is dtype-invariant.
+
+  This RULES OUT precision-change (the g85-named candidate uncap lever) as a path beyond
+  the ~3× flame self-speedup ceiling. It narrows the remaining uncap lever to RIGHT-SIZED
+  GPU only (a device whose SM count matches the step's small per-op grid so the few
+  bursts saturate it, raising the duty cycle structurally) — NOT precision, NOT fusion,
+  NOT interpreter-elimination. The compute-bound-dense-fusion hope g85 floated is refuted
+  for THIS step: lowering precision does not create a compute-bound regime here, because
+  the step was never GEMM-compute-bound — it is launch-/glue-bound.
+
+  HONEST scope: the gate is correctness-PASS (low-precision GEMMs are usable for the
+  flame step within ≤1e-2 rel-RMS, CE descends) — this is a real, reusable artifact (the
+  HEXA_GEMM_PREC tf32/bf16 path). The NEGATIVE is on the SPEEDUP axis only: precision
+  does not uncap the step. A more optimal low-precision path (persistent fp16/bf16 device
+  buffers avoiding the per-GEMM convert, fused into the megakernel) could recover the
+  ≤2.6% and avoid the B=4 regression, but cannot change the launch-bound conclusion —
+  the wall is structural, not arithmetic.
+
+  VERDICT: 🔴 precision-change is CLOSED-NEGATIVE for uncapping the flame step. dtype +
+  rel-RMS gate PASS (TF32 2.76e-04 / BF16 2.61e-03 ≤ 1e-2); step/s ≤1.026× at B1, 0.967×
+  at B4; util-median unmoved (~0%); the ~3× ceiling is NOT lifted. The launch-dispatch
+  wall is precision-independent → right-sized-GPU is the only remaining uncap lever.
+
+ARTIFACTS: .verdicts/hexa-fusion/precision-change-build/{patch_precision.py (the GEMM
+  precision injector), runtime_cuda.c (patched, HEXA_GEMM_PREC tf32/bf16 + [PREC-GATE]),
+  build_on_pod.sh, prec_sweep.sh, RAW-SWEEP-RESULTS.txt}

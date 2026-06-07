@@ -27,7 +27,9 @@ flame_run() {  # $1=B $2=NSAMP $3=EPOCHS $4=PREC -> stdout flame log (stderr mer
     CLM_PROD_CORPUS="$WORK/corpus.txt" \
     timeout 2400 ./clm_prod_gpu 2>&1
 }
-steps_of() { grep -oE 'steps=[0-9]+' "$1" | tail -1 | cut -d= -f2; }
+# This trainer build prints CE but no `steps=` line. The step count is
+# deterministic: nbatch = floor(nwin/B), nwin = NSAMP, steps = nbatch*epochs(=1).
+steps_calc() { python3 -c "print(($1//$2))"; }   # $1=NSAMP $2=B
 ce1_of()  { grep -oE 'epoch-1 mean CE = [0-9.]+' "$1" | tail -1 | grep -oE '[0-9.]+$'; }
 
 printf "%-5s %-4s %-7s %-9s %-9s %-10s %-9s %-9s %s\n" prec B T_eff wall_lo wall_hi step/s xFP64 util_m/md/pk gate_relrms
@@ -40,15 +42,16 @@ for B in $BATCHES; do
   NSAMP_LO=$(( B * S_LO + 2 ))
   NSAMP_HI=$(( B * S_HI + 2 ))
   for PREC in $PRECS; do
+    ST_LO=$(steps_calc "$NSAMP_LO" "$B"); ST_HI_EXP=$(steps_calc "$NSAMP_HI" "$B")
     # short leg (intercept anchor)
     T0=$(date +%s.%N); flame_run "$B" "$NSAMP_LO" 1 "$PREC" > "f_${PREC}_${B}_lo.txt"; T1=$(date +%s.%N)
-    WALL_LO=$(python3 -c "print(f'{$T1-$T0:.3f}')"); ST_LO=$(steps_of "f_${PREC}_${B}_lo.txt"); ST_LO="${ST_LO:-0}"
+    WALL_LO=$(python3 -c "print(f'{$T1-$T0:.3f}')")
     # long leg + util sampling
     UF="util_${PREC}_${B}.csv"; : > "$UF"
     ( while true; do nvidia-smi --query-gpu=utilization.gpu --format=csv,noheader,nounits -i 0 >> "$UF" 2>/dev/null; sleep 0.2; done ) & SP=$!
     T2=$(date +%s.%N); flame_run "$B" "$NSAMP_HI" 1 "$PREC" > "f_${PREC}_${B}_hi.txt"; T3=$(date +%s.%N)
     kill "$SP" 2>/dev/null
-    WALL_HI=$(python3 -c "print(f'{$T3-$T2:.3f}')"); ST_HI=$(steps_of "f_${PREC}_${B}_hi.txt"); ST_HI="${ST_HI:-0}"
+    WALL_HI=$(python3 -c "print(f'{$T3-$T2:.3f}')"); ST_HI=$ST_HI_EXP
     # step/s = dsteps/dwall
     SPS=$(python3 -c "lo,hi,wl,wh=$ST_LO,$ST_HI,$WALL_LO,$WALL_HI; print(f'{(hi-lo)/(wh-wl):.5f}' if (wh-wl)>0 and (hi-lo)>0 else '0')")
     if [ "$PREC" = "fp64" ]; then FP64_SPS[$B]=$SPS; fi
