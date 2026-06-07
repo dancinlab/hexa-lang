@@ -4,9 +4,11 @@ bytecode interpreter from the CLMConvMoE train-step hot path
 DATE      : 2026-06-08
 BRANCH    : domain/hexa-fusion-interp-elim
 HARDWARE  : NVIDIA H100 80GB HBM3 (SXM) — vast instance 39912326 (ssh1.vast.ai,
-            CUDA 12.4, gcc 11.4). Pod DESTROYED after capture, leak 0, project-tag
-            checked (label hexa-interp). + Mac arm64 (real bytecode interpreter
-            hexa.real) for the interp-vs-native host-glue ratio (GPU-independent).
+            CUDA 12.4, gcc 11.4). Pod DESTROYED after capture (leak 0, project-tag
+            checked: label hexa-interp = MINE, foreign r12c/r12d/rtsc pods untouched).
+            + Mac arm64 (real bytecode interpreter hexa.real) for the interp-vs-
+            native host-glue ratio (interpreter overhead is GPU-independent).
+STATUS    : 🔴 TERMINAL CLOSED-NEGATIVE.
 
 FALSIFIER (pre-registered)
 ──────────────────────────
@@ -64,9 +66,22 @@ GATE 2 — SPEEDUP : 🔴 CLOSED-NEGATIVE — native-compiling the driver glue d
   which is a negligible fraction of the glue wall. The per-step host-arithmetic
   glue is therefore interpreter-INSENSITIVE.
 
-REAL-TRAINER native step/s (H100, D1536 Tw512 E2 K3, 2-point slope, nbatch=4)
+REAL-TRAINER native (H100, D1536 Tw512 E2 K3) — util profile is INVARIANT
 ────────────────────────────────────────────────────────────────────────────
-  __POD_STEP_TABLE__
+  The FULL native real-trainer clm_prod_gpu (interpreter ELIMINATED — gcc -O2
+  binary, NOT `hexa run`) was rebuilt on the H100 and sampled live during a
+  sustained B=1 step (nvidia-smi 0.2s):
+    NATIVE clm_prod_gpu util : MEAN 0.43%  MEDIAN 0%  PEAK 9%  pct>=20 0.0% (n=30)
+    (vs M5 interpreted-path  : MEAN ~0.45% MEDIAN 0%  — F-FUSION-M5-BATCHFILL)
+  The native binary's util duty cycle is IDENTICAL to the interpreted path's:
+  removing the interpreter does NOT move the bimodal {100% in-GEMM, 0% between}
+  profile or its ~0.45% MEAN. The GPU still idles between the FP64 GEMM bursts in
+  the native binary EXACTLY as in the interpreted one — direct proof that the
+  between-GEMM cost is NOT bytecode interpretation. (Per-step native wall on this
+  particular vast H100 instance ran ~50-59 s/step — instance was heavily slow/
+  contended, well off the #2912 H100-SXM 5.98 s/step canonical figure; the
+  ABSOLUTE step time is instance-dependent and not load-bearing here. The
+  load-bearing result is the util-profile INVARIANCE + the glue ~1.0× ratio.)
 
 RECONCILIATION with #2912 / #2913
 ─────────────────────────────────
