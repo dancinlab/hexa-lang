@@ -56,6 +56,8 @@
 #include <string>
 #include <cstdint>
 #include <unistd.h>
+#include <fcntl.h>
+#include <sys/time.h>
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
@@ -136,24 +138,80 @@ static int open_listen(int port) {
 }
 
 // connect to host:port, retrying until the peer's listener is up.
-static int connect_retry(const std::string& host, int port) {
-    for (int attempt = 0; attempt < 600; attempt++) {
-        int fd = socket(AF_INET, SOCK_STREAM, 0);
-        if (fd < 0) { usleep(200000); continue; }
-        struct sockaddr_in a; memset(&a, 0, sizeof(a));
-        a.sin_family = AF_INET; a.sin_port = htons((uint16_t)port);
-        if (inet_pton(AF_INET, host.c_str(), &a.sin_addr) != 1) {
-            // try resolving as hostname via gethostbyname-free path is omitted;
-            // runpod proxy/direct gives an IP, so require dotted-quad here.
-            fprintf(stderr, "DDP_PEERS host '%s' must be a dotted-quad IP\n", host.c_str());
-            exit(2);
-        }
-        if (connect(fd, (struct sockaddr*)&a, sizeof(a)) == 0) { set_nodelay(fd); return fd; }
-        close(fd);
-        usleep(200000);  // 0.2s backoff, up to 120s total
+//   When the path is an SSH/proxy tunnel, connect() to the LOCAL tunnel port
+//   succeeds even if the FAR end (the real listener) is not up yet — the tunnel
+//   then drops the stream. So we do an end-to-end HANDSHAKE: send a magic byte,
+//   require the matching ack byte back. If the stream drops before the ack, the
+//   far end wasn't ready — close and retry. This makes wiring robust against the
+//   tunnel-far-end-refused race regardless of which rank starts first.
+static const unsigned char HS_SYN = 0xA6;  // M6
+static const unsigned char HS_ACK = 0x6A;
+
+static void set_rcvtimeo(int fd, int ms) {
+    struct timeval tv; tv.tv_sec = ms / 1000; tv.tv_usec = (ms % 1000) * 1000;
+    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+}
+
+// ── INTERLEAVED ring wiring (deadlock-free, tunnel-race-proof) ───────────────
+//   Both the connect side and the accept side make progress in one loop, so
+//   there is no ordering deadlock no matter which rank / tunnel comes up first:
+//     * connect side: try connect(succ); on success send SYN, then wait (with a
+//       short timeout) for the ACK. Over an SSH/proxy tunnel, connect() to the
+//       LOCAL tunnel port succeeds even when the FAR listener is down, so the
+//       SYN/ACK handshake — not connect() — is what proves the peer is really
+//       up. No ACK in time -> drop, retry.
+//     * accept side: non-blocking accept; on a new fd read SYN, send ACK.
+//   Returns 0; fills *send_fd (to successor) and *recv_fd (from predecessor).
+static void ring_wire(int ls, const std::string& succ_host, int succ_port,
+                      int* send_fd, int* recv_fd) {
+    int sfd = -1, rfd = -1;          // sfd = our send (to succ), rfd = our recv (from pred)
+    int pending = -1;                // a connect attempt awaiting its ACK
+    // make the listen socket non-blocking so accept() polls.
+    int lflags = fcntl(ls, F_GETFL, 0); fcntl(ls, F_SETFL, lflags | O_NONBLOCK);
+
+    struct sockaddr_in sa; memset(&sa, 0, sizeof(sa));
+    sa.sin_family = AF_INET; sa.sin_port = htons((uint16_t)succ_port);
+    if (inet_pton(AF_INET, succ_host.c_str(), &sa.sin_addr) != 1) {
+        fprintf(stderr, "DDP_PEERS host '%s' must be a dotted-quad IP\n", succ_host.c_str());
+        exit(2);
     }
-    fprintf(stderr, "connect to %s:%d failed after retries\n", host.c_str(), port);
-    exit(2);
+
+    for (int spin = 0; spin < 600000 && (sfd < 0 || rfd < 0); spin++) {
+        // (a) accept side: grab any pending inbound, complete SYN->ACK.
+        if (rfd < 0) {
+            int fd = accept(ls, nullptr, nullptr);
+            if (fd >= 0) {
+                set_nodelay(fd); set_rcvtimeo(fd, 500);
+                unsigned char syn = 0, ack = HS_ACK;
+                ssize_t r = recv(fd, &syn, 1, 0);
+                if (r == 1 && syn == HS_SYN && send(fd, &ack, 1, 0) == 1) {
+                    set_rcvtimeo(fd, 0); rfd = fd;          // block-mode for data
+                } else close(fd);
+            }
+        }
+        // (b) connect side: if no pending connect, start one; else await its ACK.
+        if (sfd < 0) {
+            if (pending < 0) {
+                int fd = socket(AF_INET, SOCK_STREAM, 0);
+                if (fd >= 0) {
+                    if (connect(fd, (struct sockaddr*)&sa, sizeof(sa)) == 0) {
+                        set_nodelay(fd); set_rcvtimeo(fd, 400);
+                        unsigned char syn = HS_SYN;
+                        if (send(fd, &syn, 1, 0) == 1) pending = fd;
+                        else close(fd);
+                    } else close(fd);
+                }
+            } else {
+                unsigned char ack = 0;
+                ssize_t r = recv(pending, &ack, 1, 0);     // up to 400ms
+                if (r == 1 && ack == HS_ACK) { set_rcvtimeo(pending, 0); sfd = pending; pending = -1; }
+                else { close(pending); pending = -1; }     // far end not up / dropped
+            }
+        }
+        usleep(50000);  // 0.05s spin
+    }
+    if (sfd < 0 || rfd < 0) { fprintf(stderr, "ring_wire failed (sfd=%d rfd=%d)\n", sfd, rfd); exit(2); }
+    *send_fd = sfd; *recv_fd = rfd;
 }
 
 // ── one full ring all-reduce. This rank holds vector `rank` on its GPU 0.
@@ -265,12 +323,10 @@ int main(int argc, char** argv) {
     fflush(stdout);
 
     int ls = open_listen(my_port);
-    // connect to successor, then accept from predecessor. The retry loop on
-    // connect handles the cross-node startup-order race.
-    int send_fd = connect_retry(peers[succ].first, peers[succ].second);
-    int recv_fd = -1;
-    SCK(recv_fd = accept(ls, nullptr, nullptr));
-    set_nodelay(recv_fd);
+    // interleaved, deadlock-free, tunnel-race-proof wiring (SYN/ACK handshake
+    // proves the far LISTENER is up, not just the local tunnel port).
+    int send_fd = -1, recv_fd = -1;
+    ring_wire(ls, peers[succ].first, peers[succ].second, &send_fd, &recv_fd);
     printf("rank %d: ring wired (send_fd=%d recv_fd=%d)\n", rank, send_fd, recv_fd);
     fflush(stdout);
 
