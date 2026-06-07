@@ -1,0 +1,50 @@
+F-FUSION-INTERP-ELIM — native/AOT-compile the per-step driver, removing the
+bytecode interpreter from the CLMConvMoE train-step hot path
+════════════════════════════════════════════════════════════════════════════════
+DATE      : 2026-06-08
+BRANCH    : domain/hexa-fusion-interp-elim
+STATUS    : WIP — skeleton pushed first; H100/H200 build + measure in flight.
+
+FALSIFIER (pre-registered)
+──────────────────────────
+"Removing the bytecode interpreter from the CLMConvMoE per-step driver hot path
+ (native/AOT-compile the per-window token-pack t_get/t_set loop + im2col/col2im
+ gather + CE softmax-grad + AdamW tail) UNCAPS the flame train step beyond the
+ ≈3× batch-fill self-speedup asymptote (#2913) and closes a measurable fraction
+ of the ~1656× torch gap (#2912) — WITHOUT changing the math (native step ==
+ interpreted step, byte-eq max|Δ|=0, FP64, same weights/grad/loss after the step)."
+
+PRIOR (the cap this extends)
+────────────────────────────
+  · #2912 vs-PyTorch  : torch eager 276.7 step/s vs flame 0.167 step/s = ~1656×;
+                        wall named = INTERPRETED per-step driver glue.
+  · #2913 BATCH-FILL  : flame self-speedup B=1→32 = 0.175→0.516 samples/s (2.95×),
+                        asymptote ≈3× — capped by per-position INTERPRETED glue
+                        (window t_get/t_set + CE-grad + AdamW, all ∝ B·Tw).
+  · M5 util           : MEAN ~0.45% MEDIAN 0% — device idles between FP64 GEMM
+                        bursts running the interpreted glue.
+
+WHAT IS NATIVE-COMPILED (the slice)
+───────────────────────────────────
+  TBD on measure — the per-step driver in clm_prod.hexa main() loop:
+   (a) per-window token-pack t_get/t_set loop (lines 1298-1307, ∝ B·Tw)
+   (b) im2col / col2im gather helpers (_clmp_*, nested while t_get/t_set ∝ T·C·K)
+   (c) CE softmax-grad host glue (_ce_grad ∝ T·V)
+   (d) eager per-param AdamW tail (_adam ×17 ∝ Σ params)
+  Method = the proven CC-NATIVE / R4-native path: hexat transpile clm_prod.hexa
+  → C → gcc -O2 native binary (driver becomes compiled C, NOT interpreted
+  bytecode). Heavy conv GEMMs ride forge cuBLAS in BOTH arms (unchanged).
+
+GATE 1 — CORRECTNESS (byte-eq)
+──────────────────────────────
+  TBD : native step == interpreted step, max|Δ| on weights/grad/loss after step.
+
+GATE 2 — SPEEDUP (uncap)
+────────────────────────
+  TBD : native-driver step/s + util vs bytecode-interpreted (`hexa run`) baseline,
+        batch sweep B∈{1,4,8,16,32}; new self-speedup ceiling vs ≈3× cap;
+        % of ~1656× torch gap closed.
+
+FINDING
+───────
+  TBD (terminal verdict on measure).
