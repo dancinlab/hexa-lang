@@ -764,8 +764,10 @@ flame self-speedup vs batch (H100, D1536/T512, samples/s ÷ B=1)
   kernel-launch/boundary. own-GEMM ≈ cuBLAS (GPU peaks 100% in GEMM bursts), so GEMM isn't the wall either.
 - **vs PyTorch (honest, #2912)**: at batch=1 torch eager is ~1656× / torch.compile ~2207× faster — flame's
   interpreted glue dominates. flame's value is byte-exact · device-resident · no-LLVM compile-time-theorem,
-  NOT step-rate-vs-torch. To close that gap: **interpreter-elimination** (a native/compiled per-step driver),
-  the only remaining lever — commons g85.
+  NOT step-rate-vs-torch. interpreter-elimination FALSIFIED this (#2915 🔴): native-AOT-compiling the per-step driver = ~1.0x
+  (byte-eq max|d|=0, H100 util 0.43% = same), because the heavy ops are native-C builtins in BOTH arms. The
+  ~3x cap is STRUCTURAL: the serial un-fused FP64 op-DAG + per-op launch/sync dispatch. The ONLY uncap levers
+  left (both != ~1.3x-of-FP64) = precision-change (TF32/BF16 + dense fusion) OR a right-sized GPU. commons g85.
 
 ## references
 
