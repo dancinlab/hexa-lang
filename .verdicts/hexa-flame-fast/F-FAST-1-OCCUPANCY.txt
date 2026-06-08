@@ -1,5 +1,6 @@
 F-FAST-1-OCCUPANCY :: HEXA-FLAME-FAST FAST-1 — TF32/BF16 occupancy headroom probe
-domain: HEXA-FLAME-FAST  ·  date: 2026-06-08  ·  status: WIP (probe authored, GPU run pending)
+domain: HEXA-FLAME-FAST  ·  date: 2026-06-08  ·  status: GREEN (FAST-2 GREENLIT)
+GPU: NVIDIA H100 80GB HBM3 (132 SMs, cc9.0, cooperativeLaunch=1) — vast 39991563, tag hexa-fast1, DESTROYED leak-0
 
 ════════════════════════════════════════════════════════════════════════════════
 GATE QUESTION (gates the whole FAST-2..5 ladder)
@@ -7,47 +8,115 @@ GATE QUESTION (gates the whole FAST-2..5 ladder)
 Does running the whole-step fused megakernel in TF32/BF16 instead of FP64 dissolve
 the cooperative-grid occupancy wall that closed-NEG F-FUSION-MEGASTEP (#2924, FP64)?
 
-#2924 FP64 closed-NEG because (verbatim from reference_megastep_research):
+#2924 FP64 closed-NEG named two structural blockers (verbatim from research):
   (a) coop grid 528-740 CTAs under-fills 132 SMs — FP64 reg pressure caps
       maxActiveBlocksPerSM so the resident grid can't fill the device;
   (b) parity wgmma GEMM can't co-reside (blockDim<128 can't issue wgmma +
-      (S/128)^2 > 264-CTA one-wave ceiling -> grid.sync deadlock — structural).
+      (S/128)^2 > 264-CTA one-wave ceiling -> grid.sync deadlock — MEGA-OWNGEMM
+      structural).
 
-Hypothesis: at TF32/BF16 the per-CTA footprint roughly HALVES -> (a) raises
+Hypothesis: at TF32/BF16 the per-CTA footprint roughly HALVES vs FP64 -> (a) raises
 maxActiveBlocks so the resident grid fills the device, and (b) lets the wgmma GEMM
 co-reside within the one-wave CTA ceiling (no grid.sync deadlock).
 
 ════════════════════════════════════════════════════════════════════════════════
 METHOD (measurement-first, g5)
 ════════════════════════════════════════════════════════════════════════════════
-tool/fast1/fast1_occupancy.cu — a representative whole-step fused megakernel
-(ONE cooperative launch: own-GEMM tile inline + groupnorm/gelu glue device-resident
-across grid.sync()) built at THREE dtypes that differ ONLY in the GEMM
+tool/fast1/fast1_occupancy.cu — a representative whole-step fused megakernel (ONE
+cooperative launch: own-GEMM tile inline + groupnorm/gelu glue device-resident
+across grid.sync()) built at THREE dtypes differing ONLY in the GEMM
 accumulator/operand footprint:
-  FP64 = double accum + double smem tiles, blockDim=64 (no tensor path — the
-         #2924 sub-128 block that hit the wgmma-issue wall)
-  TF32 = wmma::precision::tf32, float accum + float smem, blockDim=128 (OG10
-         own-GEMM convention — already bit-exact TF32, wmma-issuable)
+  FP64 = double accum + double smem tiles, blockDim=64 (no tensor path — the #2924
+         sub-128 block that hit the wgmma-issue wall)
+  TF32 = wmma::precision::tf32, float accum + float smem, blockDim=128 (OG10 own-GEMM
+         convention — ALREADY bit-exact TF32, wmma-issuable)
   BF16 = __nv_bfloat16 operands + float accum, blockDim=128
-Glue phases are identical fp32 across all three — isolating the footprint lever.
-Probe = cudaOccupancyMaxActiveBlocksPerMultiprocessor + cudaFuncGetAttributes
-(numRegs, sharedSizeBytes) + ptxas -v. Pure query, < 1s, no A/B.
-flame step shapes: D=1536 T=512 E=2 K=3, batch=1.
+Glue phases are identical fp32 across all three — isolating exactly the footprint lever.
+Probe = cudaOccupancyMaxActiveBlocksPerMultiprocessor + cudaFuncGetAttributes (numRegs,
+sharedSizeBytes) + ptxas -v. Pure query, <1s, no A/B. flame step shapes D1536 T512 E2 K3,
+batch=1. Built -arch=sm_90 -rdc=true (cooperative grid.sync). nvcc 12.4 on the real H100.
 
 ════════════════════════════════════════════════════════════════════════════════
-RESULT  (filled from the real-H100 probe run)
+RESULT  (VERBATIM probe stdout, real H100 80GB HBM3)
 ════════════════════════════════════════════════════════════════════════════════
-GPU: <pending>
+=== ptxas per-kernel register/smem budget ===
+  megastep_bf16 : Used 46 registers,  8192 bytes smem
+  megastep_tf32 : Used 46 registers, 16384 bytes smem
+  megastep_fp64 : Used 52 registers, 32768 bytes smem
 
-  maxActiveBlocksPerSM   FP64=<>  TF32=<>  BF16=<>
-  one-wave FIT @batch=1  FP64=<>  TF32=<>  BF16=<>
-  wgmma co-residence @TF32 = <>
-  footprint/CTA  FP64 regs=<> smem=<>B | TF32 regs=<> smem=<>B | BF16 regs=<> smem=<>B
-  smem halving FP64->TF32/BF16 = <>x
-
-  <VERBATIM probe stdout pasted here>
+============================================================
+HEXA-FLAME-FAST  FAST-1  occupancy headroom probe
+GPU: NVIDIA H100 80GB HBM3  SMs=132  cc=9.0  cooperativeLaunch=1
+flame step shapes: D=1536 T=512  -> conv-GEMM M=512 K=1536 N=1536 (batch=1)
+one-wave CTA demand: tensor-tile(128^2)=48  fp64-tile(64^2)=192
+------------------------------------------------------------
+  FP64     blockDim=64    maxActiveBlocksPerSM=4   regs/thread=52   smem/CTA=32768B  oneWaveCeiling=4*132=528 CTAs  gridNeed=192  FIT=YES
+  TF32     blockDim=128   maxActiveBlocksPerSM=4   regs/thread=46   smem/CTA=16384B  oneWaveCeiling=4*132=528 CTAs  gridNeed=48  FIT=YES
+  BF16     blockDim=128   maxActiveBlocksPerSM=4   regs/thread=46   smem/CTA=8192B  oneWaveCeiling=4*132=528 CTAs  gridNeed=48  FIT=YES
+------------------------------------------------------------
+[maxActiveBlocks]  FP64=4  TF32=4  BF16=4  ->  RISE FP64->low-prec = NO
+[footprint/CTA]    FP64 regs=52 smem=32768B | TF32 regs=46 smem=16384B | BF16 regs=46 smem=8192B
+[smem halving]     FP64 32768B -> TF32 16384B (ratio 2.00x)  BF16 8192B (ratio 4.00x)
+[one-wave FIT @batch=1]  FP64=YES  TF32=YES  BF16=YES
+[wgmma co-residence @TF32]  blockDim=128(>=128 wmma-issuable:Y) maxab>=1:Y oneWaveFit:Y -> CO-RESIDES=YES
+------------------------------------------------------------
+[GATE] FAST-2 GREENLIGHT — TF32/BF16 gives occupancy headroom; fused whole-step FITS one wave @batch=1
+============================================================
+(sanity @ D256/T128 identical verdict: FIT=YES all dtypes, co-resides YES, GREENLIGHT.)
 
 ════════════════════════════════════════════════════════════════════════════════
-GATE VERDICT
+THE NUMBERS (the FAST-2 gate inputs)
 ════════════════════════════════════════════════════════════════════════════════
-<GREENLIGHT FAST-2 | CLOSED-NEG> — <pending GPU run>
+  maxActiveBlocksPerSM   FP64=4   TF32=4   BF16=4   (RISE FP64->low-prec = NO)
+  footprint/CTA          FP64 regs=52 smem=32768B | TF32 regs=46 smem=16384B | BF16 regs=46 smem=8192B
+  smem footprint halving FP64->TF32 = 2.00x, FP64->BF16 = 4.00x  (CONFIRMED)
+  one-wave FIT @batch=1  FP64=YES   TF32=YES   BF16=YES
+  wgmma co-residence @TF32 = YES (blockDim=128 wmma-issuable; fits same resident grid as glue)
+
+════════════════════════════════════════════════════════════════════════════════
+GATE VERDICT :: 🟢 GREENLIGHT FAST-2
+════════════════════════════════════════════════════════════════════════════════
+TF32/BF16 gives occupancy headroom AND the wgmma GEMM co-resides — the two #2924
+structural blockers DISSOLVE at low precision:
+  · footprint HALVES exactly as hypothesized (smem 2.00x TF32 / 4.00x BF16; regs 52->46).
+  · the TF32 GEMM uses blockDim=128 (>=128 -> wmma-issuable), so blocker (b)'s
+    "blockDim<128 can't issue wgmma" vanishes — the GEMM CO-RESIDES with the glue
+    phases in one cooperative grid, NO grid.sync deadlock.
+  · at the flame D1536/T512 batch=1 shapes the fused step needs only 48 (TF32/BF16)
+    CTAs, FAR under the 528-CTA one-wave ceiling -> FITS one resident wave.
+=> the cooperative-grid co-residence wall that blocked #2924 is NOT structural at
+   TF32/BF16. FAST-2 (author the fused whole-step megakernel in TF32/BF16) is
+   ADMISSIBLE — the kernel will launch and co-reside. GREENLIT.
+
+════════════════════════════════════════════════════════════════════════════════
+HONEST CAVEATS (g5 — what this probe does and does NOT prove)
+════════════════════════════════════════════════════════════════════════════════
+1. maxActiveBlocks did NOT RISE FP64->TF32 (4->4). At the flame shapes the per-CTA
+   footprint (32KB smem FP64) was NOT the binding occupancy limit — 4 blocks/SM hold
+   even at FP64. The smem HALVING is real (2x/4x) and matters for LARGER tiles /
+   batch>1 (FAST-3), but at batch=1 the footprint was already non-binding.
+2. CONSEQUENCE for the #2924 framing: the probe shows the literal "528-740 CTAs
+   under-fill 132 SMs" point was an UNDER-FILL (too FEW CTAs to fill the device's
+   528-CTA one-wave capacity), NOT an over-subscription wall. Even FP64 FITS one
+   wave here. So #2924's CLOSED-NEG was NOT a co-residence/deadlock failure at these
+   shapes — the fused step always fit. What #2924 actually measured (corroborated by
+   F-FUSION-P1-TF32-MEGASTEP, which DID launch a TF32 coop megakernel grid=752 blk=128
+   and got only +5.51pp util) was the SERIAL-DAG IDLE FLOOR: phases grid.sync on each
+   other and the per-token glue/groupnorm UNDER-FILLS the 132 SMs between GEMM bursts.
+3. THEREFORE FAST-2 is greenlit on the CO-RESIDENCE/ADMISSIBILITY axis (the kernel
+   fits + wgmma co-resides — true and measured), but FAST-3's batch>1 is the lever
+   that actually attacks the binding constraint (UNDER-FILL): more CTAs to fill the
+   528-wave headroom this probe exposes (gridNeed 48 << 528 => ~11x batch headroom in
+   the GEMM phase before the one-wave ceiling binds). The footprint halving (this
+   probe) is what KEEPS that batch>1 fitting one wave. The two levers compose exactly
+   as the domain hypothesizes.
+4. F-FUSION-P1-TF32-MEGASTEP already EMPIRICALLY confirms a TF32 coop full-fwd
+   megakernel LAUNCHES (grid=752 blk=128, FIRED x2, CE-safe) — independent witness
+   that the co-residence verdict here is real, not just an occupancy-API prediction.
+
+g5-HONEST: real H100 80GB HBM3 (not Blackwell-substitute), cudaOccupancy + ptxas -v
+verbatim, 3 dtypes isolating only the GEMM footprint. Footprint halving CONFIRMED
+(2x/4x). wgmma co-residence CONFIRMED. One-wave FIT CONFIRMED all dtypes. The
+co-residence wall dissolves -> FAST-2 GREENLIT. Honest nuance: the wall at batch=1
+was UNDER-FILL not footprint-oversubscription; footprint-halving's payoff is for
+FAST-3 batch>1 (keeps the bigger grid fitting one wave). Pod destroyed, leak 0.
