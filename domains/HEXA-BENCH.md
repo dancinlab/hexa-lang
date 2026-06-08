@@ -131,6 +131,17 @@ no-LLVM/reproducible, NOT step-rate, so a large gap is EXPECTED and fine.
   elementwise/optimizer FUSION (not a better GEMM, not graph-capture — BENCH-6 refuted graph, BENCH-9 refutes
   GEMM-autotune). Files: GEMM_BACKEND=6 + tool/bench/run_bench9.sh.
 
+- [ ] **BENCH-10 — close the LAST cell D=4096/B=8 by fusing flame's valley+AdamW glue (the pinned lever)**
+  — BENCH-6 refuted graph-capture + BENCH-9 refuted GEMM-autotune as the closer; both PINNED the residual to
+  flame's UN-FUSED elementwise/optimizer glue (separate k_valley LN+gelu / k_transpose / k_adamw kernels) vs
+  torch.compile's fused step (which ~halves its eager time). flame BEATS torch EAGER here (0.711x); loses
+  ONLY to compiled. flame ALREADY HAS the fused kernels: FF-FUSED-OPTIM (AdamW 17->1 launch), FF-EPILOGUE
+  (4->1), FF-GN-PARALLEL (fused fixed-order GN reduction) from HEXA-FLAME-FAST. Wire them into the bench
+  step's valley+optimizer path + re-measure D=4096/B=8 (TF32+BF16+FP64) vs torch.compile on H100. Gate (g5):
+  determinism max|delta|=0 + bit-faithful vs un-fused ref + the new ratio. Does the cell FLIP to WIN? HONEST:
+  if even fused flame only ties torch.compile, that's the honest ceiling (torch-tied at the single largest
+  cell, flame wins everywhere else) = goal essentially met within a small constant. Last beat-all lever.
+
 ## honest framing (g5)
 
 flame is NOT a speed-competition tool — torch will almost certainly win throughput by a large margin (#2912
