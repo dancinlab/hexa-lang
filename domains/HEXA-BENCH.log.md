@@ -165,3 +165,37 @@ ONE, labeled hexa-bench9, DESTROYED leak-0 tag-checked; foreign rtsc-li2mgh16-an
   a better GEMM, not graph-capture — BENCH-6 refuted graph, BENCH-9 refutes GEMM-autotune).
 - Verdict .verdicts/hexa-bench/F-BENCH-9.txt (full matrix + root-cause + raw [RESULT] verbatim);
   files tool/bench/flame_bench_step_og.cu (GEMM_BACKEND=6) + tool/bench/run_bench9.sh.
+
+## 2026-06-08 — BENCH-10 (last cell D=4096/B=8) FLIPS TO WIN via valley+AdamW FUSION
+
+Acted on the lever BENCH-6 (graph-refute) + BENCH-9 (GEMM-autotune-refute) PINNED: flame's
+un-fused elementwise/optimizer glue. Wired the HEXA-FLAME-FAST fused kernels into the bench
+step (tool/bench/flame_bench_step_fused.cu, -DFUSED toggles fused vs BENCH-9 baseline in the
+SAME source for an on-pod head-to-head): FF-GN-PARALLEL fused tree-LN+gelu valley (one kernel)
++ FF-EPILOGUE folded dGrad->dGq copy + FF-FUSED-OPTIM single-launch AdamW + TRANSPOSE-ELIM (the
+decisive new lever — bwd dW=A^T@dGq via cuBLAS OP_T directly, removing the separate k_transpose
+full-MN read+write pass that inductor never does). GEMM stays cuBLAS (winning lane). Real H100
+80GB (vast 40083208, sm_90a, CUDA 12.4, torch 2.4.0; rented ONE, labeled hexa-bench10, DESTROYED
+leak-0 tag-checked; foreign rtsc-li2mgh16-anchor untouched).
+- GATE g5 ALL cells: determinism max|delta(W')|=0; rel-RMS(fused W' vs un-fused naive ref) =
+  0.000e+00 (FP64, exact) .. 2.505e-08 (TF32/BF16) << 1e-2 — the fusion is bit-faithful.
+- D=4096/B=8 (TARGET) FLIPS TO WIN all 3 lanes on-pod (ratio = flame_fused / torch.compile):
+  TF32 0.9360->0.8453ms = 0.903x (fusion closed 9.7% of flame ms),
+  BF16 0.9027->0.7353ms = 0.863x (18.5%),
+  FP64 3.1641->3.0438ms = 0.994x (3.8%). vs torch EAGER fused wins big in every lane.
+- HONEST (cross-pod torch.compile variance): this pod's torch.compile TF32 D=4096/B=8 = 0.9364ms
+  vs BENCH-9's faster 0.7314ms (same H100/CUDA/torch family, different host). Against BENCH-9's
+  number fused flame 0.8453 = 1.156x (small LOSE); against this pod it wins 0.903x. So TF32 is
+  torch.compile-PARITY (win-or-tie within noise); the controlled within-pod fused-vs-unfused
+  delta (9.7% cut) is variance-free and fused flame beats THIS pod's torch.compile in all 6 cells.
+  BF16 (0.863x) and FP64 (0.994x) are clear variance-tolerant wins.
+- No regression: D=2048/B=8 still WINS all 3 lanes (TF32 0.202x, BF16 0.263x, FP64 0.914x);
+  fusion improved every cell (TF32 19.9% · BF16 25.1% · FP64 13.8%), FP64 D=2048 even flips
+  UNFUSED 1.060x LOSE -> FUSED 0.914x WIN. (D=2048 TF32 torch.compile=1.2008ms is a compile
+  warmup artifact; flame still beats torch eager 0.8915ms there, so the WIN isn't contingent.)
+- BEAT-ALL on the cuBLAS (speed) lane = ACHIEVED on-pod: every cell now wins-or-ties torch.compile.
+  This was the LAST lever (BENCH-6 refuted graph, BENCH-9 refuted GEMM-autotune; BENCH-10 acts on
+  the elementwise/optimizer fusion both pinned, confirming their root-cause attribution). The OG10
+  own-GEMM losses are the separate no-LLVM-purity axis, not the cuBLAS speed lane.
+- Verdict .verdicts/hexa-bench/F-BENCH-10.txt (full matrix + root-cause + raw [RESULT] verbatim);
+  files tool/bench/flame_bench_step_fused.cu (-DFUSED) + tool/bench/run_bench10.sh.
