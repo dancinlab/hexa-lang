@@ -29,10 +29,15 @@ genuinely-UNTESTED fix = the SAME fusion at TF32/BF16 (smaller footprint → fit
 
 ## milestones
 
-- [ ] **FAST-1 — TF32/BF16 occupancy headroom probe (does the wall relax?)** — re-measure the whole-step
-  megakernel's cooperative-grid occupancy at TF32/BF16 vs the FP64 #2924 run: does halving the per-CTA
-  register/smem footprint let the fused step FIT one wave at batch=1 (the thing FP64 couldn't)? Gate: report
-  maxActiveBlocks + whether grid.sync deadlock (the #2924 blocker) disappears. Cheap probe, gates FAST-2.
+- [x] **FAST-1 — TF32/BF16 occupancy headroom probe (does the wall relax?)** — 🟢 GREENLIGHT FAST-2 (real
+  H100 80GB HBM3, vast 39991563 tag hexa-fast1 DESTROYED leak-0; verdict F-FAST-1-OCCUPANCY.txt). Footprint
+  HALVING confirmed (smem/CTA FP64 32768B → TF32 16384B = 2.00x, BF16 8192B = 4.00x; regs 52→46). wgmma
+  co-residence @TF32 = YES (blockDim=128 wmma-issuable → the #2924 "blockDim<128 can't issue wgmma + grid.sync
+  deadlock" blocker DISSOLVES). One-wave FIT @batch=1 = YES all 3 dtypes (gridNeed 48 TF32/BF16 ≪ 528-CTA
+  one-wave ceiling). HONEST nuance: maxActiveBlocksPerSM did NOT rise (4=4=4) — at batch=1 the footprint was
+  NOT the binding limit; the #2924 wall was UNDER-FILL (too few CTAs, 48≪528), not footprint-oversubscription.
+  So FAST-2 is admissible (kernel fits + wgmma co-resides), but the footprint-halving payoff is for FAST-3
+  batch>1 (keeps the bigger grid fitting one wave; ~11x batch headroom before the one-wave ceiling binds).
 - [ ] **FAST-2 — fused whole-step megakernel at TF32/BF16** — author the #2924 whole-step uberkernel but in
   TF32/BF16 so it fits occupancy. Gate (g5): rel-RMS <= 1e-2 vs same-dtype reference (W14 convention, NOT
   FP64-byte-exact) AND run-to-run determinism max|d|=0 (fixed accum order, reproducible). Measure full-step
