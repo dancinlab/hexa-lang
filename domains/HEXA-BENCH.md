@@ -102,6 +102,19 @@ no-LLVM/reproducible, NOT step-rate, so a large gap is EXPECTED and fine.
   kernel/graph — BENCH-6 refuted that). Battleground = {D=4096/B=8 cuBLAS lanes} + FP64 large-D naive-GEMM.
   Files: tool/bench/run_bench7.sh · flame_bench_step_og.cu GEMM_BACKEND=4 (cuBLAS-BF16) · torch --dtype bf16.
 
+- [ ] **BENCH-8 — close the FP64 large-D losses: add a cuBLAS-FP64 flame lane** — BENCH-7 found flame
+  LOSES 7 FP64 cells at D>=1536, but ONLY because flame's FP64 lane uses the NAIVE O(D^3) GEMM, not
+  cuBLAS-FP64. Add a cuBLAS-FP64 backend (cublasDgemm / GemmEx CUBLAS_COMPUTE_64F) to the flame bench step
+  + re-run the FP64 cells D={1536,2048,4096} x B={1,8} on H100 vs torch-FP64. HYPOTHESIS: flame-cuBLAS-FP64
+  + no-Python glue re-flips most/all FP64 cells to WIN (both sides use FP64 CUDA cores; flame's edge = no
+  Python). Gate (g5): determinism max|delta|=0 + the re-flipped FP64 WIN/LOSE row verbatim. Toward goal.
+- [ ] **BENCH-9 — close the last flame-cuBLAS losing cell D=4096/B=8 (TF32 1.27x, BF16 2.00x)** — the
+  single largest GEMM-bound+filled cell where flame-cuBLAS still loses to torch.compile (inductor's GEMM
+  algo-selection + epilogue fusion). Attack with cublasLt autotuned algo (cublasLtMatmulAlgoGetHeuristic)
+  + epilogue fusion (fuse bias/LN/gelu into the GEMM epilogue via CUBLASLT_EPILOGUE_*) to match inductor.
+  H100. Gate (g5): determinism max|delta|=0 + new D=4096/B=8 ratio (does it flip to WIN, or how close).
+  HONEST: BF16 2.00x is harder than TF32 1.27x; measure both. Toward goal (last cuBLAS-lane cell).
+
 ## honest framing (g5)
 
 flame is NOT a speed-competition tool — torch will almost certainly win throughput by a large margin (#2912
