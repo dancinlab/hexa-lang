@@ -419,8 +419,8 @@ HexaVal hexa_net_read_raw(HexaVal fd, HexaVal len);      /* native/net.c — RFC
 HexaVal hexa_os_getuid(void);                            /* native/net.c — RFC 093 R4: getuid(2) → Int */
 HexaVal hexa_net_close(HexaVal fd);                      /* native/net.c:168 */
 
-/* ── Additional native/*.c forward-decls (auto-generated 2026-05-15) ──
- * Sourced from grep of self/native/*.c hexa_* definitions; ensures user.c
+/* ── Additional native/ *.c forward-decls (auto-generated 2026-05-15) ──
+ * Sourced from grep of self/native/ *.c hexa_* definitions; ensures user.c
  * compiled by hexat codegen never relies on implicit-decl. Link only
  * the platform-applicable .o files (gated by HEXA_HAS_* macros). */
 /* native/crypto_sodium.c */

@@ -1,0 +1,63 @@
+F-OP5-FORGE-HARDEN — forge/runtime code-quality hardening (LOCAL, 0-GPU)
+========================================================================
+WIP skeleton — populated below as each hygiene fix lands.
+
+Scope: comment/warning/dead-code hygiene only. NO kernel math change, NO
+codegen output-byte change. Every fix is behavior-preserving and verified
+by local compile (clang -Wcomment / -Wall syntax-only), not by a GPU kernel.
+
+------------------------------------------------------------------------
+ISSUE 1 — self/runtime.h:422-423  '/*' within block comment [-Wcomment]
+------------------------------------------------------------------------
+DIAGNOSTIC (clang -fsyntax-only -Wcomment -x c self/runtime.h):
+  self/runtime.h:422:28: warning: '/*' within block comment [-Wcomment]
+    422 | /* ── Additional native/*.c forward-decls (auto-generated 2026-05-15) ──
+  self/runtime.h:423:36: warning: '/*' within block comment [-Wcomment]
+    423 |  * Sourced from grep of self/native/*.c hexa_* definitions; ensures user.c
+
+ROOT CAUSE: the glob pattern `native/*.c` written inside a /* ... */ block
+  comment forms the token `/*`, which clang flags (a nested comment opener is
+  almost always an accidentally-unterminated comment). Both lines mention the
+  `*.c` glob right after a `/`.
+
+FIX (comment-only, behavior-preserving): insert a space so the `/*` token is
+  not formed — `native/ *.c`. The glob still reads clearly; no code, no
+  declaration, no codegen byte changes.
+
+VERIFIED CLEAN:
+  $ clang -fsyntax-only -Wcomment -x c self/runtime.h 2>&1 | grep -c warning
+  0   (was 2 — the only -Wcomment hits in the file, now eliminated)
+  diff = 2 comment lines, +2/-2, no executable change.
+
+------------------------------------------------------------------------
+SWEEP — other 0-GPU forge/runtime hygiene candidates (result: NONE found)
+------------------------------------------------------------------------
+Ran a repo-wide -Wcomment sweep on every checked-in C/H/CU/CUH file
+(excluding .git/.claude/build):
+
+  $ find . -path ./.git -prune -o -path ./.claude -prune -o -path ./build \
+      -prune -o \( -name '*.c' -o -name '*.h' -o -name '*.cu' -o -name \
+      '*.cuh' \) -print | while read f; do
+        n=$(clang -fsyntax-only -Wcomment -x c "$f" 2>&1 \
+            | grep -c "within block comment"); [ "$n" -gt 0 ] && echo "$n $f"
+      done
+  => (empty after the runtime.h fix)  — runtime.h:422-423 was the ONLY one.
+
+Also checked, all clean:
+  * -Wcomment + -Wextra-tokens on all self/ headers (runtime.h, hexa_nanbox.h,
+    hexa_nanbox_bridge.h, bytecode.h, native/lora_cuda.h, forge/forge_tier_v1.h,
+    native/wgmma/wgmma_tf32_w10_lib.h) — 0 real hits.
+  * Forge-emitted CUDA wrappers (self/cuda/*.cu, *.c) — 0 comment/extra-token hits.
+  * Forge emit-string .hexa sources (runtime_cuda_emit, runtime_bf16_emit,
+    forge_tier_v1_emit) — no nested-comment glob in any emitted C string.
+
+(One artifact-only diagnostic was correctly IGNORED, not "fixed":
+ wgmma_tf32_w10_lib.h "#pragma once in main file" — a false positive from
+ syntax-checking a header standalone with -x c; it is correct in-place.)
+
+CONCLUSION: the diagnostic-surfaced runtime.h:422-423 -Wcomment was the sole
+genuine, safe, GPU-independent hygiene defect in the forge/runtime surface.
+All fixes behavior-preserving (comment-text only). No deferred items: a deeper
+forge robustness pass (error-path / dtype-edge / determinism) genuinely needs
+a GPU kernel run to gate and is out of this 0-GPU scope — see ## deferred.
+

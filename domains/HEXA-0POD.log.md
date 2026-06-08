@@ -26,3 +26,15 @@ using ONLY free resources (sidecar pool aiden/summer RTX 5070 + local code), zer
 free (RTX 5070 sm_120, 0% util). Backlog OP-1..5 (sm_120 own-GEMM speedup · wire bench wins into real trainer ·
 BF16 own-GEMM · fused-step coverage · forge hardening). Hopper-only own-GEMM decode-elim is out-of-scope (needs
 H100 pod). Loop fans out free-resource agents per round, byte-eq/bit-exact gated on the consumer card.
+
+## 2026-06-09 — OP-5 forge/runtime hygiene (LOCAL, 0-GPU)
+
+Fixed the diagnostic-surfaced `self/runtime.h:422-423` `'/*' within block comment` `-Wcomment` warning: the
+`native/*.c` glob written inside a `/* … */` block forms a nested `/*` token clang flags. Minimal comment-only
+fix (`native/ *.c`, +2/-2) — `clang -fsyntax-only -Wcomment -x c self/runtime.h` 2 warnings → 0. No
+declaration / codegen / behavior change. Repo-wide `-Wcomment` + `-Wextra-tokens` sweep over every checked-in
+C/H/CU/CUH header, the forge-emitted CUDA wrappers (self/cuda/*.cu|*.c), and the emit-string `.hexa` sources
+(runtime_cuda_emit / runtime_bf16_emit / forge_tier_v1_emit) confirmed runtime.h:422-423 was the ONLY genuine
+hit (one `#pragma once in main file` artifact from standalone header parse correctly ignored, not "fixed").
+All behavior-preserving. Verdict .verdicts/hexa-0pod/F-OP5-FORGE-HARDEN.txt. Deferred OP-5b (CI -Werror=comment
+gate, 0-GPU) + OP-5c (error-path/dtype/determinism hardening — NEEDS GPU, out of 0-pod scope) to self-feed.
