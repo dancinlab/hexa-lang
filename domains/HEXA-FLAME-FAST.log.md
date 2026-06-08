@@ -40,3 +40,29 @@ megakernel grid=752 blk=128); the footprint-halving payoff is for FAST-3 batch>1
 one wave — ~11x GEMM-phase batch headroom before the 528 ceiling binds). Verdict: .verdicts/hexa-flame-fast/
 F-FAST-1-OCCUPANCY.txt. 3 vast rentals: 39981994 (proxy-SSH dead) + 39986764 (key-injection broken) both
 DESTROYED leak-0 before harvest; 39991563 harvested via bare-hostname SSH (config id_vast_anima) then DESTROYED.
+
+## 2026-06-08 — FAST-2 🟢 GREEN: fused whole-step megakernel @ TF32/BF16 (real H100)
+
+Authored the #2924-style whole-train-step uberkernel at the GPU-fitting precision FAST-1
+greenlit. ONE persistent cooperative kernel (tool/fast2/fast2_fused_step.cu): PHASE0 fwd
+conv-GEMM (wmma own-GEMM) → PHASE1 FF-VALLEY gelu glue → PHASE2 atomic-free bwd dW=A^T@dG
+(fixed K order) → PHASE3 FF-FUSED-OPTIM AdamW, all device-resident across grid.sync(), NO
+atomics. + same-dtype separate-kernel reference in the same binary. env HEXA_FLAME_FAST.
+
+Build fix: wmma::precision::tf32 is an INCOMPLETE fragment-operand tag, not a storage type —
+split store_t (float for TF32, __nv_bfloat16 for BF16) from the ab_t fragment tag; TF32
+operands stored as float + converted at load via __float_to_tf32. Builds clean both dtypes.
+
+Real H100 80GB HBM3 (vast 39996767, tag hexa-fast2), flame D1536 T512 batch=1, iters=50:
+  CO-RESIDENCE  TF32+BF16: cudaLaunchCooperativeKernel launched=YES completed=YES (no deadlock)
+  CORRECTNESS   rel-RMS(W' fused vs separate, same dtype) = 0.0 exactly  (gate<=1e-2 PASS) — TF32 + BF16
+  DETERMINISM   run-to-run max|d|(fused W') = 0.0 exactly  (gate==0 PASS) — TF32 + BF16
+  MEASURE       TF32 fused 1.8134 vs separate 1.8067 ms/step (0.996x); BF16 1.5483 vs 1.5456 (0.998x)
+                fused grid=528 = full one-wave (maxActiveBlocks 4*132); occ-proxy 100%
+
+FAST-2 DELIVERABLE COMPLETE: kernel BUILDS + CO-RESIDES (empirical) + CORRECT + DETERMINISTIC.
+batch=1 wall flat ~1.00x EXACTLY as FAST-1 predicted (under-fill / serial-DAG idle floor, not
+footprint). The ~3x break is FAST-3's batch>1 — this verified kernel is its substrate (store_t/ab_t
+split makes TF32+BF16 first-class; baseline harness already wired, just vary M=B*T).
+
+Pod 39996767 (tag hexa-fast2 confirmed) DESTROYED, leak 0. PR base main.

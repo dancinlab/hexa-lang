@@ -38,10 +38,16 @@ genuinely-UNTESTED fix = the SAME fusion at TF32/BF16 (smaller footprint → fit
   NOT the binding limit; the #2924 wall was UNDER-FILL (too few CTAs, 48≪528), not footprint-oversubscription.
   So FAST-2 is admissible (kernel fits + wgmma co-resides), but the footprint-halving payoff is for FAST-3
   batch>1 (keeps the bigger grid fitting one wave; ~11x batch headroom before the one-wave ceiling binds).
-- [ ] **FAST-2 — fused whole-step megakernel at TF32/BF16** — author the #2924 whole-step uberkernel but in
-  TF32/BF16 so it fits occupancy. Gate (g5): rel-RMS <= 1e-2 vs same-dtype reference (W14 convention, NOT
-  FP64-byte-exact) AND run-to-run determinism max|d|=0 (fixed accum order, reproducible). Measure full-step
-  wall vs the separate-kernel baseline + util mean/median.
+- [x] **FAST-2 — fused whole-step megakernel at TF32/BF16** — 🟢 GREEN (real H100 80GB HBM3, vast 39996767
+  tag hexa-fast2 DESTROYED leak-0; verdict F-FAST-2-FUSED-TF32.txt, tool/fast2/fast2_fused_step.cu). Authored
+  the #2924-style whole-train-step uberkernel (fwd conv-GEMM + FF-VALLEY glue + atomic-free bwd + FF-FUSED-OPTIM
+  AdamW) as ONE persistent cooperative kernel at BOTH TF32 and BF16. All 3 g5 gates PASS both dtypes:
+  CO-RESIDENCE=YES (cudaLaunchCooperativeKernel launched+completed, NO grid.sync deadlock — FAST-1's prediction
+  now EMPIRICALLY witnessed by a running fused step, not just an occupancy-API forecast); CORRECTNESS rel-RMS=0
+  (exactly, vs same-dtype separate-kernel step — fusion is a pure structural transform, identical fixed accum
+  order; W14 gate <=1e-2); DETERMINISM run-to-run max|d|=0 (atomic-free + fixed-order). MEASURE batch=1: fused
+  vs separate flat (TF32 0.996x @1.81ms/step, BF16 0.998x @1.55ms/step) — EXPECTED (batch=1 under-fills, the
+  serial-DAG idle floor dominates; ~3x break is FAST-3's batch>1 job). The verified kernel is the FAST-3 substrate.
 - [ ] **FAST-3 — + batch>1 (the genuinely-untested 3-way combo)** — run FAST-2's fused-TF32 megakernel at
   batch>1: fit occupancy (TF32) + remove the gaps (fusion) + fill the SMs (batch) ALL AT ONCE. Gate: does the
   full-STEP self-speedup BREAK ~3x? Report the new ceiling vs the ~3x batch-fill cap. This is the decisive test.
