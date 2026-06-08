@@ -1,0 +1,79 @@
+F-FAST-3-BATCH — HEXA-FLAME-FAST FAST-3: the decisive 3-combo test (fusion × TF32/BF16 × batch>1)
+====================================================================================================
+VERDICT: 🔴 CLOSED-NEGATIVE — fused×TF32×batch does NOT break ~3x. It does not even REACH ~3x.
+         The full-step fused-vs-separate SELF-speedup is flat ~1.00x at EVERY batch B (1..32),
+         both TF32 and BF16. The ~3x batch-fill cap (#2913) SURVIVES the full 3-lever combination.
+         => ~3x is TERMINAL for this fusion axis. flame's value stays byte-exact/no-LLVM, not step-rate.
+
+SUBSTRATE: FAST-2 verified fused whole-step megakernel (tool/fast2/fast2_fused_step.cu) VERBATIM,
+           wrapped in a batch sweep harness (tool/fast3/fast3_batch_sweep.cu). Kernel math identical
+           (diff = whitespace/comments only) → fixed accum order preserved → rel-RMS 0 expected & got.
+
+HARDWARE: real H100 80GB HBM3 (vast 40003012, tag hexa-fast3, DESTROYED leak-0, tag-confirmed).
+          SMs=132  cc=9.0  cooperativeLaunch=1  nvcc 12.4  driver 555.58.02.
+          ptxas fused_step: 48 registers (both TF32 & BF16). maxActiveBlocks=4 → one-wave ceiling=528.
+          flame step dims: D=1536  T=512  iters=50.
+
+================================  THE DECISIVE TABLE  ================================
+fused-TF32 (M=B*T, K=N=D=1536):
+ B   M=B*T  gridNeed(fwd/bwd)  one-wave-FIT       sep-ms   fused-ms  self-speedup  util%   rel-RMS  determ
+ 1    512   3072 / 9216        NO (need 9216/528)  1.7969   1.7631    1.019x       97.0%   0.0e+00  0.0e+00
+ 2   1024   6144 / 9216        NO (need 9216/528)  3.3601   3.3786    0.995x       97.0%   0.0e+00  0.0e+00
+ 4   2048  12288 / 9216        NO (need12288/528)  6.6853   6.7134    0.996x       97.0%   0.0e+00  0.0e+00
+ 8   4096  24576 / 9216        NO (need24576/528) 14.9004  14.7867    1.008x       98.0%   0.0e+00  0.0e+00
+16   8192  49152 / 9216        NO (need49152/528) 31.2231  31.0815    1.005x       98.0%   0.0e+00  0.0e+00
+32  16384  98304 / 9216        NO (need98304/528) 64.4668  64.3567    1.002x       98.3%   0.0e+00  0.0e+00
+
+fused-BF16:
+ B   M=B*T  gridNeed(fwd/bwd)  one-wave-FIT       sep-ms   fused-ms  self-speedup  util%   rel-RMS  determ
+ 1    512   3072 / 9216        NO (need 9216/528)  1.5100   1.5009    1.006x       97.0%   0.0e+00  0.0e+00
+ 2   1024   6144 / 9216        NO (need 9216/528)  2.8398   2.8504    0.996x       97.0%   0.0e+00  0.0e+00
+ 4   2048  12288 / 9216        NO (need12288/528)  5.5838   5.5480    1.006x       97.0%   0.0e+00  0.0e+00
+ 8   4096  24576 / 9216        NO (need24576/528) 11.0270  10.9668    1.005x       98.0%   0.0e+00  0.0e+00
+16   8192  49152 / 9216        NO (need49152/528) 25.1026  24.4972    1.025x       98.0%   0.0e+00  0.0e+00
+32  16384  98304 / 9216        NO (need98304/528) 52.7956  52.1062    1.013x       98.3%   0.0e+00  0.0e+00
+=====================================================================================
+
+GATES (g5):
+ (1) CORRECTNESS — rel-RMS = 0.000e+00 at EVERY B, both dtypes (fusion = pure structural transform,
+     identical fixed accum order). DETERMINISM — run-to-run max|Δ| = 0.000e+00 at every B (atomic-free).
+     No B>1 seam: held EXACTLY across the whole sweep. ✅ PASS.
+ (2) ONE-WAVE FIT — gridNeed > 528 ceiling ALREADY at B=1 (bwd GEMM gridNeed=9216 = K*N tiles, fixed in B).
+     So the megakernel NEVER fits one cooperative wave at this flame size — it grid-strides 6→187 waves.
+     The FAST-1-predicted "~11x batch headroom before 528 binds" is REFUTED for the real flame step:
+     the bwd K*N tile count (9216) blows the ceiling at B=1, independent of batch. ✅ measured, honestly.
+ (3) THE DECISIVE NUMBER — fused-TF32 full-step self-speedup vs B = {1.019, 0.995, 0.996, 1.008, 1.005,
+     1.002}x. BF16 = {1.006, 0.996, 1.006, 1.005, 1.025, 1.013}x. **FLAT ~1.00x across the entire sweep.**
+     DOES IT BREAK ~3x?  ==> NO. It never exceeds ~1.02x. It does not even reach ~3x. ❌
+     vs separate-TF32 curve: ~equal (the comparison IS fused-vs-separate; flat = no win).
+     vs #2913 FP64 ~3x batch-fill cap: the ~3x cap SURVIVES — the 3-combo cancels NONE of it.
+
+UTIL-MEDIAN lifted off ~0%?  ==> ALREADY ~97-98% at B=1 in BOTH paths (separate AND fused). Mean≈median
+     (no near-0% phases). The fusion did NOT need to lift the median — it was never ~0% here.
+
+ROOT CAUSE (why ~1.00x, the honest mechanism):
+  The hypothesis assumed an 86.8% between-op host-glue idle gap for fusion to remove. THAT GAP IS ABSENT
+  in this device-resident benchmark: the "separate" baseline is 5 back-to-back grid-stride kernels with
+  NO host glue between them, each already saturating the H100 (gridNeed 3072..98304 ≫ 528 → 97-98% util
+  from B=1). With no idle valley to fill, fusion's only effect is trading ~5 kernel-launch overheads (~µs)
+  for ~5 grid.sync() barriers — a wash. Speedup ≈ 1.00x is the CORRECT result for a saturated DAG.
+  Batch>1 just scales work linearly (ms ∝ M ∝ B); it does not create headroom because there was no
+  under-fill to begin with at flame's D=1536/T=512 size. The #2913 ~3x came from removing INTERPRETED
+  host glue (t_get/t_set + eager AdamW), which is NOT present in either path here → no ~3x to beat.
+
+VERDICT FRAMING (g5, honest closed-negative):
+  The fused × TF32/BF16 × batch>1 combination is CORRECT (rel-RMS 0), DETERMINISTIC (max|Δ| 0), and
+  CO-RESIDENT (cooperative launch completes at every B with grid.sync barriers) — but it delivers NO
+  full-step self-speedup over the equivalent separate-kernel device-resident step at any batch. The
+  ~3x ceiling is not the gap this combo closes: ~3x (#2913) was an INTERPRETER-glue artifact, and a
+  device-resident separate baseline already pays none of it. CAMPAIGN RESULT for the kernel-fusion axis:
+  ~3x is TERMINAL — fusion-vs-separate is a wash once both are device-resident-saturated. The real
+  remaining lever (per memory MEGASTEP/flame-closeout) is INTERPRETER-ELIMINATION (native step) +
+  batch>1 at the PYTHON/eager boundary, NOT GPU kernel fusion. % of ~1656x torch gap closed by FAST-3 = 0%.
+
+  flame's identity is INTACT and was never at stake: byte-exact (rel-RMS 0), no-LLVM, deterministic-at-
+  dtype, theorem-cite. FAST is purely additive; this measurement just shows the additive value of
+  THIS particular fusion is ~0 at the saturated regime — an honest negative, faithfully reported.
+
+ARTIFACTS: tool/fast3/fast3_batch_sweep.cu (harness), tool/fast3/build_fast3.sh (TF32+BF16 build+run).
+PRIOR: F-FAST-1-OCCUPANCY.txt (footprint halving), F-FAST-2-FUSED-TF32.txt (fused step verified @batch=1).
