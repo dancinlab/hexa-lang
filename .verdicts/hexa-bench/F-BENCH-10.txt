@@ -1,0 +1,30 @@
+F-BENCH-10 — close the LAST cell D=4096/B=8 by fusing flame's valley+AdamW glue
+================================================================================
+STATUS: WIP (skeleton pushed; awaiting H100 measurement).
+
+LEVER (pinned by BENCH-6 graph-refute + BENCH-9 GEMM-autotune-refute): flame's
+UN-FUSED elementwise/optimizer glue — separate k_valley (LN+gelu) / k_transpose /
+k_adamw kernels, each a full pass over the 4096x4096 tensors — vs torch.compile's
+fused step (which ~halves its eager time: TF32 1.32->0.73ms, BF16 0.68->0.52ms).
+The GEMM is IDENTICAL (both ride cuBLAS); the gap is the glue.
+
+ATTACK (tool/bench/flame_bench_step_fused.cu, -DFUSED toggles fused vs BENCH-9 baseline):
+  - FF-GN-PARALLEL fused fixed-order tree LN reduction + gelu = ONE kernel (k_valley).
+  - FF-EPILOGUE: dGrad->dGq copy folded into the valley pass (no separate copy kernel).
+  - FF-FUSED-OPTIM: single-launch AdamW over W.
+  - TRANSPOSE-ELIM (the new decisive lever): bwd dW = A^T @ dGq via cuBLAS OP_T on A
+    directly — removes the separate k_transpose full-MN read+write pass that inductor
+    never does.
+  GEMM = cuBLAS in every lane (the winning lane). Lanes TF32/BF16/FP64.
+
+GATE g5: determinism run-to-run max|delta(W')|=0 + rel-RMS(fused W' vs UN-FUSED naive
+  ref) <=1e-2 (fusion is a structural transform; transpose-elim + folded copy are bit-
+  faithful; rel-RMS ~ machine-eps / cuBLAS-vs-naive accum order).
+
+(Results filled in after the H100 run — see RAW below.)
+
+================ RESULT MATRIX (to be filled) ===========================================
+(ratio = flame_ms / torch_compile_ms; >1 = LOSE)
+
+================ RAW RESULT LINES (verbatim) ============================================
+(pending)
