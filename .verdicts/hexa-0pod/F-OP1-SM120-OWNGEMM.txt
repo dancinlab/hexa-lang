@@ -1,0 +1,24 @@
+F-OP1-SM120-OWNGEMM — sm_120 own-GEMM speedup on aiden (RTX 5070, cc12.0), bit-exact
+=====================================================================================
+STATUS: WIP (skeleton pushed first per storm discipline; sweep results to follow)
+
+GOAL: improve OWN120 (mma.sync.aligned.m16n8k8.row.col.f32.tf32.tf32.f32, 64x64 block,
+BK=16) throughput toward consumer-card cuBLAS-TF32 on sm_120, staying bit-exact
+(rel-RMS vs FP64 ref ~0 / <1e-6 — these are scheduling/layout changes, NOT
+accumulation-order changes; nonzero rel-RMS = bug, rejected).
+
+BASELINE (F-BENCH-5 #2943): OWN120 ~4.9-8.1 TFLOP/s, 3.2-6.9x off cuBLAS-TF32.
+
+LEVERS swept on aiden (free pool GPU, sidecar pool on aiden):
+  (1) deeper smem pipelining (double-buffer BK tiles, cp.async commit/wait)
+  (2) bank-conflict-free smem layout (pad/swizzle, conflict-free 128-bit loads)
+  (3) larger per-CTA register tile (128x64 / 128x128 mma accumulator fragments)
+  (4) 2 mma.sync in flight (issue next K-step mma before consuming prior)
+  (5) vectorized 128-bit (.v4/.v2) global loads + vectorized epilogue
+
+RESULTS: (pending aiden sweep)
+
+BEST CONFIG: (pending)
+
+HONEST: consumer-card cuBLAS is tuned; closing 3.2-6.9x to <2.5x is the win, full
+parity unlikely. (pending real numbers)
