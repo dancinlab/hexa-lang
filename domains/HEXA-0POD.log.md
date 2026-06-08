@@ -53,3 +53,15 @@ over the same t-dim in the same ascending order. GPU cuBLAS OP_T is the document
 Deferred (GPU build, NOT vast): OP-2b runtime.c wrapper body + flip trainer to live call + step/s measure;
 OP-2c batched-expert transpose-elim (cublasDgemmStridedBatched OP_T) for the dominant 2-expert path. Verdict
 .verdicts/hexa-0pod/F-OP2-TRAINER-WIRE.txt.
+
+## 2026-06-09 — OP-5 forge/runtime hygiene (LOCAL, 0-GPU)
+
+Fixed the diagnostic-surfaced `self/runtime.h:422-423` `'/*' within block comment` `-Wcomment` warning: the
+`native/*.c` glob written inside a `/* … */` block forms a nested `/*` token clang flags. Minimal comment-only
+fix (`native/ *.c`, +2/-2) — `clang -fsyntax-only -Wcomment -x c self/runtime.h` 2 warnings → 0. No
+declaration / codegen / behavior change. Repo-wide `-Wcomment` + `-Wextra-tokens` sweep over every checked-in
+C/H/CU/CUH header, the forge-emitted CUDA wrappers (self/cuda/*.cu|*.c), and the emit-string `.hexa` sources
+(runtime_cuda_emit / runtime_bf16_emit / forge_tier_v1_emit) confirmed runtime.h:422-423 was the ONLY genuine
+hit (one `#pragma once in main file` artifact from standalone header parse correctly ignored, not "fixed").
+All behavior-preserving. Verdict .verdicts/hexa-0pod/F-OP5-FORGE-HARDEN.txt. Deferred OP-5b (CI -Werror=comment
+gate, 0-GPU) + OP-5c (error-path/dtype/determinism hardening — NEEDS GPU, out of 0-pod scope) to self-feed.
