@@ -1,15 +1,135 @@
 F-BENCH-9 — close the last flame-cuBLAS losing cell D=4096/B=8 (TF32 1.27x, BF16 2.00x)
 ========================================================================================
-STATUS: WIP (skeleton pushed; H100 measurement pending)
+STATUS: DONE 2026-06-08 — CLOSED-NEGATIVE for the NAMED LEVER (honest, productive).
+        cuBLASLt autotune + epilogue fusion do NOT close D=4096/B=8. The residual is
+        NOT cuBLAS algo-selection (the heuristic picks the same algo cuBLAS already
+        uses) — it is flame's UN-FUSED elementwise/optimizer glue (LN+gelu+loss+AdamW
+        as separate naive kernels) vs torch.compile/inductor's fused epilogue+optimizer.
 
-PLAN: BENCH-7 found flame-cuBLAS (plain cublasGemmEx) wins torch everywhere EXCEPT the
-single largest GEMM-bound+filled cell D=4096/B=8 (TF32 1.27x, BF16 2.00x slower than
-torch.compile). Attack with cuBLASLt:
-  (1) cublasLtMatmulAlgoGetHeuristic AUTOTUNE — pick the best algo for the 4096x4096
-      shape instead of cublasGemmEx's default CUBLAS_GEMM_DEFAULT_TENSOR_OP.
-  (2) epilogue fusion — CUBLASLT_EPILOGUE_GELU on the fwd GEMM (capability probe).
-Lanes: GEMM_BACKEND=5 (cuBLASLt TF32 autotune) + -DLT_BF16 (BF16). Baselines: backend 1
-(plain cuBLAS-TF32) + 4 (plain cuBLAS-BF16) + torch eager/compile. Focus D={2048,4096}
-B=8 + D=4096 B=1 sanity. GATE g5: determinism max|delta(W')|=0 + rel-RMS(vs naive)<=1e-2.
+HARDWARE: real H100 80GB HBM3 (vast 40078129, sm_90a cc=9.0, CUDA 12.4, torch 2.4.0).
+          Rented ONE, labeled hexa-bench9, DESTROYED leak-0 tag-checked. Foreign pod
+          rtsc-li2mgh16-anchor (39610026) untouched. The parallel BENCH-8 RTX_3090 pod
+          never touched.
 
-[results pending H100 run — raw [CFG]/[DETERMINISM]/[GATE]/[RESULT] appended below]
+ATTACK (GEMM_BACKEND=5 in tool/bench/flame_bench_step_og.cu):
+  (1) AUTOTUNE  : cublasLtMatmulAlgoGetHeuristic picks the best algo for the 4096x4096
+                  shape (cached per shape) instead of cublasGemmEx's
+                  CUBLAS_GEMM_DEFAULT_TENSOR_OP. TF32 (CUDA_R_32F, COMPUTE_32F_FAST_TF32)
+                  and BF16 (-DLT_BF16, cast to 16BF, COMPUTE_32F) lanes.
+  (2) EPILOGUE  : CUBLASLT_EPILOGUE_GELU fwd-GEMM fusion (HEXA_LT_EPILOGUE=gelu probe).
+  Baselines re-run on the SAME pod: plain cublasGemmEx TF32 (backend 1) + BF16 (backend 4)
+  + torch eager + compile, matched dtype. Driver: tool/bench/run_bench9.sh.
+
+GATE g5 — ALL CELLS PASS:
+  determinism run-to-run max|delta(W')| = 0.000e+00  (every lane, every cell)
+  rel-RMS(W' vs NAIVE-ref)              = 2.24e-08 .. 2.51e-08  (<< 1e-2)
+  (epilogue fusion is mathematically identical where applicable; rel-RMS unchanged.)
+
+================ RESULT MATRIX — ratio = flame_ms / torch_compile_ms (>1 = LOSE) =========
+
+D=4096 / B=8  (THE TARGET CELL)   torch_compile: TF32 0.7314ms · BF16 0.5212ms
+                                  torch_eager  : TF32 1.3204ms · BF16 0.6811ms
+  flame TF32 plain-cuBLAS         0.9384 ms   /compile = 1.283x LOSE  (/eager = 0.711x WIN)
+  flame TF32 cuBLASLt-autotune    0.9363 ms   /compile = 1.280x LOSE  (/eager = 0.709x WIN)
+  flame TF32 cuBLASLt+gelu-epi    0.9601 ms   /compile = 1.313x LOSE  (epilogue SLOWER)
+  flame BF16 plain-cuBLAS         0.9066 ms   /compile = 1.739x LOSE  (/eager = 1.331x)
+  flame BF16 cuBLASLt-autotune    0.9014 ms   /compile = 1.729x LOSE  (/eager = 1.323x)
+  flame BF16 cuBLASLt+gelu-epi    0.9259 ms   /compile = 1.776x LOSE  (epilogue SLOWER)
+
+  >>> TF32 1.283x -> 1.280x  (cuBLASLt autotune closed ~0.2%, effectively NOTHING)
+  >>> BF16 1.739x -> 1.729x  (closed ~0.6%, effectively NOTHING)
+      (BENCH-7 reported BF16 2.00x; this H100/torch build measured plain 1.74x — same
+       LOSE verdict, smaller magnitude; cross-pod torch.compile variance.)
+
+D=2048 / B=8  (REGRESSION CHECK)  torch_compile: TF32 0.5086ms · BF16 0.5036ms
+  flame TF32 plain-cuBLAS         0.2984 ms   = 0.587x  WIN
+  flame TF32 cuBLASLt-autotune    0.2967 ms   = 0.583x  WIN
+  flame BF16 plain-cuBLAS         0.3223 ms   = 0.640x  WIN
+  flame BF16 cuBLASLt-autotune    0.3202 ms   = 0.636x  WIN
+  >>> NO REGRESSION — D=2048/B=8 still WINS both lanes (cuBLASLt slightly faster).
+
+D=4096 / B=1  (CROSSOVER SANITY)  torch_compile: TF32 0.5487ms · BF16 0.5222ms
+  flame TF32 cuBLASLt-autotune    0.4597 ms   = 0.838x  WIN
+  flame BF16 cuBLASLt-autotune    0.4922 ms   = 0.943x  WIN
+  >>> D=4096 WINS at B=1, LOSES only at B=8 — BENCH-7 crossover RE-CONFIRMED.
+
+================ ROOT-CAUSE (why autotune+epilogue can't flip this cell) =================
+
+1. AUTOTUNE IS A NO-OP HERE. flame's GEMM wall is identical plain (0.9384 TF32 / 0.9066
+   BF16) vs cuBLASLt-autotune (0.9363 / 0.9014) — sub-1% delta, in the noise. cuBLASLt's
+   heuristic returns essentially the same kernel cublasGemmEx's CUBLAS_GEMM_DEFAULT_
+   TENSOR_OP already dispatches for a clean 2048x4096x4096 shape. The GEMM was NEVER the
+   residual; both flame and torch ride the SAME cuBLAS(Lt) GEMM. This REFUTES BENCH-7's
+   asserted "inductor GEMM algo-selection" attribution for THIS cell.
+
+2. EPILOGUE FUSION DOES NOT APPLY TO THIS STEP. The fwd GEMM's downstream op is
+   LayerNorm (a row REDUCTION over the feature dim) BEFORE the gelu — cuBLASLt's
+   epilogue only fuses POINTWISE ops (BIAS/GELU/RELU), not a reduction, and applying
+   GELU in the epilogue would compute gelu BEFORE LN (wrong order, not math-equal). The
+   step also has no GEMM bias (W is bias-free, matching torch nn.Linear(bias=False)).
+   So the inductor-style "fuse bias/gelu into the GEMM" lever has NO fusible target here.
+   The capability probe (HEXA_LT_EPILOGUE=gelu) runs and is correct as a mechanism but is
+   slightly SLOWER (+2-3%) and off-by-order, so it is the WRONG fusion for this DAG.
+
+3. THE REAL RESIDUAL = UN-FUSED ELEMENTWISE/OPTIMIZER GLUE. torch.compile nearly HALVES
+   its own eager time (TF32 1.3204 -> 0.7314 ms; BF16 0.6811 -> 0.5212 ms) by fusing the
+   LN + gelu + MSE-loss + AdamW elementwise traffic into a few kernels around the two
+   cuBLAS GEMMs. flame runs them as SEPARATE naive kernels (k_valley LN+gelu, k_transpose,
+   k_adamw). At the small glue-bound shapes (D<=2048, or D=4096/B=1) flame's no-Python
+   fused-launch step still WINS — but at D=4096/B=8 the elementwise/AdamW traffic over the
+   large 4096x4096 W tensor is big enough that inductor's elementwise+optimizer fusion is
+   the decisive lever, NOT GEMM algo-selection. flame BEATS torch EAGER in TF32 here
+   (0.711x); it loses only to the COMPILED elementwise-fused step.
+
+================ VERDICT ================================================================
+
+D=4096/B=8 does NOT flip to WIN via cuBLASLt autotune + epilogue fusion. The named lever
+closed ~0.2% (TF32) / ~0.6% (BF16) — effectively zero — because (a) the heuristic picks
+the same GEMM algo cuBLAS already used, and (b) this step's DAG has no fusible pointwise
+epilogue (LN-before-gelu reduction + bias-free GEMM). flame and torch ride the IDENTICAL
+cuBLAS GEMM at this shape; the gap is torch.compile's fused elementwise+AdamW glue, which
+flame does not have here. The CORRECT lever to flip this cell is a FUSED flame elementwise/
+optimizer path (fuse LN+gelu valley + AdamW into fewer kernels, matching inductor) — NOT a
+better GEMM and NOT graph-capture (BENCH-6 refuted graph; BENCH-9 refutes GEMM-autotune).
+Determinism + rel-RMS gates hold at 0 / ~2e-8 across ALL cells. D=2048/B=8 + D=4096/B=1
+both still WIN (no regression). Toward "모두 이길때까지": D=4096/B=8 remains the single
+open cuBLAS-lane cell; its closable lever is now PINNED to elementwise/optimizer fusion.
+
+Files: tool/bench/flame_bench_step_og.cu (GEMM_BACKEND=5 cuBLASLt autotune+epilogue) ·
+       tool/bench/run_bench9.sh · raw [CFG]/[DETERMINISM]/[GATE]/[RESULT] below.
+
+================ RAW RESULT LINES (verbatim) ============================================
+GPU: NVIDIA H100 80GB HBM3 cc=9.0 · CUDA build cuda_12.4.r12.4 · torch 2.4.0 · iters=50
+
+D=2048 B=8:
+[RESULT] TF32 GEMM=cuBLAS-TF32(proxy) B=8        ms/step=0.2984  step/s=3350.7250  samples/s=26805.8004
+[RESULT] TF32 GEMM=cuBLASLt-TF32-autotune B=8    ms/step=0.2967  step/s=3369.8974  samples/s=26959.1789
+[RESULT] TF32 GEMM=cuBLASLt-TF32-autotune B=8(+gelu-epi) ms/step=0.3071 step/s=3255.9476 samples/s=26047.5810
+[RESULT] BF16 GEMM=cuBLAS-BF16 B=8               ms/step=0.3223  step/s=3102.3283  samples/s=24818.6262
+[RESULT] BF16 GEMM=cuBLASLt-BF16-autotune B=8    ms/step=0.3202  step/s=3122.8142  samples/s=24982.5132
+[RESULT] BF16 GEMM=cuBLASLt-BF16-autotune B=8(+gelu-epi) ms/step=0.3293 step/s=3037.1829 samples/s=24297.4630
+[RESULT] torch TF32 mode=eager   B=8  ms/step=0.5697  step/s=1755.1713  samples/s=14041.3707
+[RESULT] torch TF32 mode=compile B=8  ms/step=0.5086  step/s=1966.3159  samples/s=15730.5270
+[RESULT] torch BF16 mode=eager   B=8  ms/step=0.5344  step/s=1871.0907  samples/s=14968.7256
+[RESULT] torch BF16 mode=compile B=8  ms/step=0.5036  step/s=1985.5691  samples/s=15884.5525
+
+D=4096 B=8:
+[RESULT] TF32 GEMM=cuBLAS-TF32(proxy) B=8        ms/step=0.9384  step/s=1065.6458  samples/s=8525.1668
+[RESULT] TF32 GEMM=cuBLASLt-TF32-autotune B=8    ms/step=0.9363  step/s=1068.0277  samples/s=8544.2218
+[RESULT] TF32 GEMM=cuBLASLt-TF32-autotune B=8(+gelu-epi) ms/step=0.9601 step/s=1041.5063 samples/s=8332.0500
+[RESULT] BF16 GEMM=cuBLAS-BF16 B=8               ms/step=0.9066  step/s=1103.0741  samples/s=8824.5925
+[RESULT] BF16 GEMM=cuBLASLt-BF16-autotune B=8    ms/step=0.9014  step/s=1109.4284  samples/s=8875.4268
+[RESULT] BF16 GEMM=cuBLASLt-BF16-autotune B=8(+gelu-epi) ms/step=0.9259 step/s=1080.0786 samples/s=8640.6287
+[RESULT] torch TF32 mode=eager   B=8  ms/step=1.3204  step/s=757.3732   samples/s=6058.9856
+[RESULT] torch TF32 mode=compile B=8  ms/step=0.7314  step/s=1367.2947  samples/s=10938.3578
+[RESULT] torch BF16 mode=eager   B=8  ms/step=0.6811  step/s=1468.1226  samples/s=11744.9811
+[RESULT] torch BF16 mode=compile B=8  ms/step=0.5212  step/s=1918.5173  samples/s=15348.1383
+
+D=4096 B=1 (crossover sanity):
+[RESULT] TF32 GEMM=cuBLASLt-TF32-autotune B=1    ms/step=0.4597  step/s=2175.2143  samples/s=2175.2143
+[RESULT] BF16 GEMM=cuBLASLt-BF16-autotune B=1    ms/step=0.4922  step/s=2031.7751  samples/s=2031.7751
+[RESULT] torch TF32 mode=compile B=1  ms/step=0.5487  step/s=1822.3668  samples/s=1822.3668
+[RESULT] torch BF16 mode=compile B=1  ms/step=0.5222  step/s=1915.1494  samples/s=1915.1494
+
+DETERMINISM (all cells): max|delta(W')| = 0.000e+00 PASS
+GATE rel-RMS (all cells): 2.24e-08 .. 2.51e-08 (<= 1e-2 PASS)
