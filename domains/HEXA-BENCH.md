@@ -183,18 +183,21 @@ no-LLVM/reproducible, NOT step-rate, so a large gap is EXPECTED and fine.
   Verdict .verdicts/hexa-bench/F-BENCH-11.txt. (orig spec: 70.7/6.09x was a faster-clocked prior pod; on
   THIS pod the matched W10 baseline is 50.5/6.92x @2048 — the W10->B11 delta is the apples-to-apples result.)
 
-- [ ] **BENCH-12 — DECODE-elimination: in-place swizzle descriptor (the BENCH-11-isolated real wall)** —
-  BENCH-11 proved the own-GEMM>cuBLAS wall is NOT pipeline depth (NSW/NGM sweep flat) — it's the composed
-  swizzle->gmma DECODE smem round-trip: OG10 decodes the swizzled tile into a SECOND smem buffer before
-  wgmma, while cuBLAS/CUTLASS build the GMMA descriptor to read the swizzled smem IN PLACE (no decode copy).
-  BENCH-12 = construct the wgmma matrix descriptor (swizzle-mode bits + leading/stride byte-offsets) so
-  wgmma reads the TMA-landed swizzled smem directly, eliminating the decode round-trip + its 2nd buffer
-  (also relieves the 229KB->less smem => maybe >1 CTA/SM, fixing the under-fill). Re-measure OG10 TFLOP/s
-  @D={2048,4096} vs cuBLAS + the OG10 bench cells vs torch. Gate (g5): bit-exact rel-RMS vs FP64 ref (the
-  descriptor must read the SAME bytes the decode produced — bit-identical) + new cuBLAS-multiple (was 6.2x).
-  HONEST: this attacks the ACTUAL isolated wall; it may meaningfully close (decode round-trip is real) OR
-  hit a deeper wall (TMA swizzle-layout vs wgmma-expected-layout mismatch needing a specific TMA swizzle
-  mode). If it plateaus, own-GEMM>cuBLAS is the terminal no-LLVM-purity frontier. H100 (sm_90a).
+- [x] **BENCH-12 — DECODE-elimination: in-place swizzle descriptor (the BENCH-11-isolated real wall)** —
+  GREEN, bit-exact (rel-RMS 0.000 everywhere) + MAJOR gap-close. Decode-elim WORKS: route-(a) pre-permutes
+  the global operand into canonical gmma-INTER + NO-swizzle TMA, then the wgmma GMMA descriptor reads the
+  tile IN PLACE (layout_type_=0, sbo=1024, boff=0) with NO decode band + NO 2nd buffer. Gate (MODE10)
+  single-tile rel-RMS 0.000 PASS — the naive swm=1-on-our-atom path floors at 1.009 (the deeper sub-wall,
+  sidestepped). Measured H100 80GB sm_90a CUDA 12.6 (vast 40100302, DESTROYED leak 0): own-GEMM 51.0->281.8
+  TFLOP/s @2048 (~5x), cuBLAS-multiple 6.81x->1.23-1.34x; @4096 53.8->265.8 TFLOP/s, 7.98x->1.62x. Occupancy
+  1->2 CTA/SM (131KB decode -> 64-96KB descriptor-direct). PARITY (<=1.3x) REACHED at D=2048 (borderline,
+  2/3 runs YES, best 1.23x), NOT at D=4096 (~1.6x). BENCH-11's isolation was CORRECT: the ~6-8x residual WAS
+  the decode round-trip; eliminating it recovers ~5x + lifts occupancy. own-GEMM>cuBLAS is NO LONGER a ~6-8x
+  terminal closed-neg — it's a near-parity bit-exact no-LLVM own-GEMM (parity at 2048, ~1.6x at 4096; the
+  residual is cuBLAS's persistent multi-CTA scheduler, a separate + much smaller axis). OG10 D=2048 cell
+  now ties torch's GEMM lane; D=4096 narrows ~7x->~1.6x. Verdict F-BENCH-12.txt. Kernels gemm_og16(MODE4)/
+  gemm_og17_t256(MODE5)/gemm_og17_pipe(MODE6) self/native/wgmma/wgmma_tf32_og17.cu; baseline gemm_w10 in
+  wgmma_tf32_w10_lib.h.
 
 ## honest framing (g5)
 

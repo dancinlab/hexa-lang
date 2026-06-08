@@ -215,3 +215,28 @@ leak-0 tag-checked; foreign rtsc-li2mgh16-anchor untouched).
   occupancy/issue-width + the decode smem round-trip cuBLAS avoids, NOT ring depth). The
   residual is a DECODE-elimination (in-place descriptor) axis, separate + unsolved. No OG10
   cell flips vs torch. Verdict F-BENCH-11.txt.
+
+## 2026-06-09 — BENCH-12 DONE (decode-elim in-place descriptor — the BENCH-11 wall closed)
+
+- H100 80GB HBM3 sm_90a, CUDA 12.6, vast 40100302 (rented, tag hexa-bench12, DESTROYED leak 0).
+  (first pod 40096088 = direct-SSH key never propagated -> destroyed leak 0, re-rented.)
+- BENCH-11 isolated the own-GEMM>cuBLAS wall as the composed swizzle->gmma DECODE smem round-trip
+  (decode to a 2nd buffer before wgmma, + the 1-CTA/SM under-fill that 32KB buffer forced).
+- BENCH-12 = read the TMA-landed tile IN PLACE via the wgmma GMMA descriptor (cuBLAS/CUTLASS trick).
+  Naive "swm=1 descriptor straight at OUR atom-major SWIZZLE_128B landing" FLOORS rel-RMS 1.009 (the
+  deeper sub-wall: TMA-swizzle <-> wgmma-descriptor-swizzle LAYOUT mismatch). Bit-exact route = route-(a):
+  pre-permute global into canonical gmma-INTER + NO-swizzle TMA + descriptor-direct read (layout_type_=0,
+  sbo=1024, boff=0) — decode band + 2nd buffer GONE, occupancy 1->2 CTA/SM.
+- GATE (MODE10) single-tile rel-RMS = 0.000e+00 PASS @ pm=1 tsw=NONE swm=0 sbo=1024 boff=0.
+- MEASURED (matched same-pod, it=20, rel_rms=0 EVERYWHERE):
+    DECODE BASELINE (W10 gemm_w10 MODE4): @2048 51.0 TFLOP/s 6.81x 1CTA/SM | @4096 53.8 7.98x 1CTA/SM
+    DESCRIPTOR-DIRECT (OG16 gemm_og16 MODE4): @2048 253.5 1.37x 2CTA/SM | @4096 265.8 1.62x 2CTA/SM
+    PIPE BEST (OG17 gemm_og17_pipe MODE6 NST3): @2048 261-281.8 TFLOP/s ratio 1.23-1.34x (2/3 runs PARITY=YES)
+    128x256 (gemm_og17_t256 MODE5): drops to 1CTA/SM -> 1.57-1.61x, does NOT beat 128x128 2-CTA/SM.
+- GAP-CLOSE: own 51->281.8 TFLOP/s @2048 (~5x), cuBLAS-multiple 6.81x->1.23x; @4096 ~4.9x, 7.98x->1.62x.
+  (BENCH-11 warp-spec TMA bought only +12-15%; decode-ELIMINATION buys ~5x — an order of magnitude more,
+   confirming BENCH-11's residual was DOMINATED by the decode round-trip.)
+- RESULT: own-GEMM>cuBLAS is NO LONGER a ~6-8x terminal closed-neg — it is a NEAR-PARITY bit-exact no-LLVM
+  own-GEMM. PARITY (<=1.3x) REACHED at D=2048 (borderline, 2/3 runs, best 1.23x), NOT at D=4096 (~1.6x).
+  Residual = cuBLAS persistent multi-CTA scheduler (separate, much smaller axis), NOT decode, NOT pipe depth.
+  OG10 D=2048 cell now ties torch's GEMM lane bit-exactly; D=4096 narrows ~7x->~1.6x. Verdict F-BENCH-12.txt.
