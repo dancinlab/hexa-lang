@@ -1,0 +1,36 @@
+================================================================================
+F-BENCH-8 — close the FP64 large-D losses: add a cuBLAS-FP64 flame lane
+================================================================================
+GOAL (user-pinned): "모두 이길때까지" — beat torch in EVERY regime. BENCH-7 found flame
+LOSES 7 FP64 cells at D>=1536 (up to 9.57x @D=4096/B=8), but ONLY because flame's FP64
+lane used the NAIVE O(D^3) k_gemm instead of cuBLAS-FP64. torch's FP64 also has NO tensor-
+core path (both sides use FP64 CUDA cores), so the loss is flame's naive GEMM being slow,
+NOT a torch FP64 advantage. BENCH-8 adds a cuBLAS-FP64 flame lane (GEMM_BACKEND=5,
+cublasGemmEx CUBLAS_COMPUTE_64F) and re-measures the FP64 cells vs torch-FP64.
+
+HYPOTHESIS: flame-cuBLAS-FP64 + no-Python glue re-flips most/all FP64 cells to WIN, like
+the TF32-cuBLAS lane did in BENCH-7 (which won 7/8 FP64-shape cells).
+
+BENCH-7 FP64 baseline (naive k_gemm), ratio = flame_ms / torch_compile_ms:
+  FP64   768 1 | 0.162 WIN    FP64   768 8 | 1.517 LOSE
+  FP64  1536 1 | 1.125 LOSE   FP64  1536 8 | 8.503 LOSE
+  FP64  2048 1 | 1.632 LOSE   FP64  2048 8 | 9.463 LOSE
+  FP64  4096 1 | 5.908 LOSE   FP64  4096 8 | 9.571 LOSE
+  => 7 LOSING cells (everything except D=768/B=1).
+
+[WIP] verdict skeleton — GPU run PENDING. cuBLAS-FP64 backend (GEMM_BACKEND=5) added to
+tool/bench/flame_bench_step_og.cu; driver tool/bench/run_bench8.sh. Will be filled with the
+H100 cuBLAS-FP64-vs-naive-FP64-vs-torch-FP64 ratio table + WIN/LOSE re-flip + determinism.
+
+DATE 2026-06-08.  GPU: <PENDING — real H100, vast, label hexa-bench8>.
+
+GATE g5: determinism max|delta(W')|=0 per cell (MUST). rel-RMS(cuBLAS-FP64 vs naive-FP64
+ref) ~1e-14 associativity (different accumulation order) — reported, NOT gated to bit-0.
+
+================================================================================
+cuBLAS-FP64 vs naive-FP64 vs torch-FP64  (verbatim)  [PENDING GPU]
+================================================================================
+lane               D  B |  flame_ms  t_eager  t_compile | ratio(f/tc)  verdict
+----------------------------------------------------------------------------------
+<filled after H100 sweep>
+================================================================================
