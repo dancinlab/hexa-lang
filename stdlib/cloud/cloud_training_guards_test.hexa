@@ -1,0 +1,89 @@
+// stdlib/cloud/cloud_training_guards_test.hexa — falsifiers for the
+// training-job artifact-completion guard (cloud_expect_artifact_cmd +
+// cloud_artifact_verdict). LLM-free, network-free, **no ssh / no pod**.
+//
+// These pin the silent-training-loss guard: a DEAD process is a success ONLY
+// if the final artifact actually wrote (anima 7B 2026-06: proc EXITED clean
+// but the final ckpt/result was never saved). The ssh round-trip is e2e-smoke
+// territory; this file pins the PURE command shape + the size→verdict logic.
+//
+// Run:   hexa run stdlib/cloud/cloud_training_guards_test.hexa
+// PASS:  exits 0, prints "cloud_training_guards_test PASS — N/N cases".
+
+use "stdlib/cloud/cloud"
+
+fn _fail(case: str, msg: str) {
+    println("FAIL " + case + ": " + msg)
+    exit(1)
+}
+fn _has(hay: str, needle: str) -> int {
+    if hay.index_of(needle) >= 0 { return 1 }
+    return 0
+}
+
+fn main() {
+    let mut n = 0
+
+    // ── cmd builder: `test -s` non-empty guard + stat size + echo-0 fallback,
+    //    path shell-quoted ──
+    let cmd = cloud_expect_artifact_cmd("/workspace/lanep_7b/clm_7b.pt")
+    if _has(cmd, "test -s ") != 1 {
+        _fail("cmd1", "missing test -s non-empty guard — " + cmd)
+    }
+    if _has(cmd, "stat -c%s ") != 1 {
+        _fail("cmd2", "missing stat byte-size — " + cmd)
+    }
+    if _has(cmd, "echo 0") != 1 {
+        _fail("cmd3", "missing absent/empty → 0 fallback — " + cmd)
+    }
+    if _has(cmd, "'/workspace/lanep_7b/clm_7b.pt'") != 1 {
+        _fail("cmd4", "path not shell-quoted — " + cmd)
+    }
+    n = n + 4
+
+    // ── verdict: size "0" → FAIL (exit 100), the silent-loss signature ──
+    let v0 = cloud_artifact_verdict("/x/final.pt", "0")
+    if v0.ok != 0 {
+        _fail("v0", "size 0 must be FAIL")
+    }
+    if v0.exit_code != 100 {
+        _fail("v0e", "size 0 exit must be 100")
+    }
+    if _has(v0.message, "artifact_missing_or_zero") != 1 {
+        _fail("v0m", "missing diag — " + v0.message)
+    }
+    n = n + 3
+
+    // ── verdict: empty (ssh returned nothing) → FAIL ──
+    let ve = cloud_artifact_verdict("/x/final.pt", "")
+    if ve.ok != 0 {
+        _fail("ve", "empty size must be FAIL")
+    }
+    if ve.exit_code != 100 {
+        _fail("vee", "empty exit must be 100")
+    }
+    n = n + 2
+
+    // ── verdict: a real 28GB ckpt size → OK ──
+    let vk = cloud_artifact_verdict("/workspace/lanep_7b/clm_7b.pt", "28227314087")
+    if vk.ok != 1 {
+        _fail("vk", "positive size must be OK")
+    }
+    if vk.exit_code != 0 {
+        _fail("vke", "OK exit must be 0")
+    }
+    if _has(vk.message, "28227314087 bytes") != 1 {
+        _fail("vkm", "size not in msg — " + vk.message)
+    }
+    n = n + 3
+
+    // ── verdict: whitespace/newline-padded size (stat + trailing \n) trims
+    //    to OK — guards against a false FAIL on a real file ──
+    let vt = cloud_artifact_verdict("/x/r.json", "  123\n")
+    if vt.ok != 1 {
+        _fail("vt", "padded positive size must trim to OK")
+    }
+    n = n + 1
+
+    println("cloud_training_guards_test PASS — " + str(n) + "/" + str(n) + " cases")
+}
