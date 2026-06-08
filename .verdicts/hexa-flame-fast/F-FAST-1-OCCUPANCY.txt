@@ -1,0 +1,53 @@
+F-FAST-1-OCCUPANCY :: HEXA-FLAME-FAST FAST-1 — TF32/BF16 occupancy headroom probe
+domain: HEXA-FLAME-FAST  ·  date: 2026-06-08  ·  status: WIP (probe authored, GPU run pending)
+
+════════════════════════════════════════════════════════════════════════════════
+GATE QUESTION (gates the whole FAST-2..5 ladder)
+════════════════════════════════════════════════════════════════════════════════
+Does running the whole-step fused megakernel in TF32/BF16 instead of FP64 dissolve
+the cooperative-grid occupancy wall that closed-NEG F-FUSION-MEGASTEP (#2924, FP64)?
+
+#2924 FP64 closed-NEG because (verbatim from reference_megastep_research):
+  (a) coop grid 528-740 CTAs under-fills 132 SMs — FP64 reg pressure caps
+      maxActiveBlocksPerSM so the resident grid can't fill the device;
+  (b) parity wgmma GEMM can't co-reside (blockDim<128 can't issue wgmma +
+      (S/128)^2 > 264-CTA one-wave ceiling -> grid.sync deadlock — structural).
+
+Hypothesis: at TF32/BF16 the per-CTA footprint roughly HALVES -> (a) raises
+maxActiveBlocks so the resident grid fills the device, and (b) lets the wgmma GEMM
+co-reside within the one-wave CTA ceiling (no grid.sync deadlock).
+
+════════════════════════════════════════════════════════════════════════════════
+METHOD (measurement-first, g5)
+════════════════════════════════════════════════════════════════════════════════
+tool/fast1/fast1_occupancy.cu — a representative whole-step fused megakernel
+(ONE cooperative launch: own-GEMM tile inline + groupnorm/gelu glue device-resident
+across grid.sync()) built at THREE dtypes that differ ONLY in the GEMM
+accumulator/operand footprint:
+  FP64 = double accum + double smem tiles, blockDim=64 (no tensor path — the
+         #2924 sub-128 block that hit the wgmma-issue wall)
+  TF32 = wmma::precision::tf32, float accum + float smem, blockDim=128 (OG10
+         own-GEMM convention — already bit-exact TF32, wmma-issuable)
+  BF16 = __nv_bfloat16 operands + float accum, blockDim=128
+Glue phases are identical fp32 across all three — isolating the footprint lever.
+Probe = cudaOccupancyMaxActiveBlocksPerMultiprocessor + cudaFuncGetAttributes
+(numRegs, sharedSizeBytes) + ptxas -v. Pure query, < 1s, no A/B.
+flame step shapes: D=1536 T=512 E=2 K=3, batch=1.
+
+════════════════════════════════════════════════════════════════════════════════
+RESULT  (filled from the real-H100 probe run)
+════════════════════════════════════════════════════════════════════════════════
+GPU: <pending>
+
+  maxActiveBlocksPerSM   FP64=<>  TF32=<>  BF16=<>
+  one-wave FIT @batch=1  FP64=<>  TF32=<>  BF16=<>
+  wgmma co-residence @TF32 = <>
+  footprint/CTA  FP64 regs=<> smem=<>B | TF32 regs=<> smem=<>B | BF16 regs=<> smem=<>B
+  smem halving FP64->TF32/BF16 = <>x
+
+  <VERBATIM probe stdout pasted here>
+
+════════════════════════════════════════════════════════════════════════════════
+GATE VERDICT
+════════════════════════════════════════════════════════════════════════════════
+<GREENLIGHT FAST-2 | CLOSED-NEG> — <pending GPU run>
