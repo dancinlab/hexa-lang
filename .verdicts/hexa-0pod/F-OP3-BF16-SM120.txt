@@ -1,0 +1,76 @@
+F-OP3-BF16-SM120 — BF16 sm_120 own-GEMM on aiden (RTX 5070, cc12.0), bit-faithful
+==================================================================================
+STATUS: GREEN — working bit-faithful BF16 own-GEMM on the consumer Blackwell card,
+riding ALL of OP-1's (#2972) layout/load wins. rel-RMS vs FP64 << 1e-2 at every
+shape; run-to-run determinism max|delta| = 0 (bit-for-bit).
+HARDWARE: aiden RTX 5070 (sm_120 / cc12.0), CUDA 13.0, free sidecar pool (no vast).
+
+GOAL: extend the OP-1 sm_120 TF32 own-GEMM to BF16 using the warp-synchronous
+mma.sync.aligned.m16n8k16.row.col.f32.bf16.bf16.f32 (k16, NOT k8 — the 16x8x16
+BF16 fragment packs two bf16 per 32-bit register), fp32 inputs RN-converted to
+bf16 with fp32 accumulation, reusing OP-1's bank-conflict-free smem pad + .v4
+128-bit float4 global loads + cp.async double-buffer. Measure vs cuBLAS-BF16.
+
+KERNEL: self/native/mma_sm120/owngemm_sm120_bf16.cu (build_owngemm_bf16.sh).
+  - 64x64 block tile, BK=16 (== one m16n8k16 BF16 mma step), 4 warps 2x2, each
+    warp a 32x32 sub-tile = 2 (m16) x 4 (n8) fragments = 8 mma.sync per BK step.
+  - fp32 staged into smem (As[BM][BK+4], Bs[BK][BN+4], double-buffered) via the
+    SAME cp.async .v4 128-bit global-load path as OP-1; RN fp32->bf16 conversion
+    (__float2bfloat16_rn) + bf16-pair packing happens at the smem->register
+    fragment load (where TF32's f2tf32 lived). Identical K-major mma.sync order.
+
+OP-1 LEVERS CARRIED OVER (the dominant layout/load wins, verbatim):
+  (a) bank-conflict-free smem pad  (As[BM][BK+4], Bs[BK][BN+4])
+  (b) vectorized 128-bit .v4 / float4 global loads (K%4==0 && N%4==0 fast path,
+      masked scalar tail fallback)
+  (c) cp.async double-buffered BK stage (prefetch next tile while MMAs consume)
+  The 128x64 register-tile lever is CLOSED-NEGATIVE on the consumer card (OP-1) —
+  NOT attempted here. (Deferred OP-1b BK=32 / 3-stage pipeline likewise out of scope.)
+
+GATE (g5, W14 bit-FAITHFUL convention — NOT bit-exact-vs-fp32; BF16 has 8 mantissa
+bits, so truncation error vs an FP64 oracle is REAL and expected):
+  rel-RMS vs FP64 reference (double accumulation):
+    D=256:   rel-RMS = 8.380e-03   max|delta| = 5.804e-04   PASS (<=1e-2)
+    D=768:   rel-RMS = 2.652e-03   max|delta| = 6.471e-04   PASS
+    D=1024:  rel-RMS = 6.697e-03   max|delta| = 7.047e-04   PASS
+    D=2048:  rel-RMS = 8.008e-03   max|delta| = 1.432e-03   PASS
+  => bit-faithful HELD at every shape. (rel-RMS sits at the BF16 precision floor —
+     ~1e-3..8e-3 — confirming a CORRECT fragment layout; a wrong m16n8k16 bf16 map
+     would give rel-RMS ~0.5-1.0, not a BF16-precision-level error.)
+
+DETERMINISM (run-to-run, own-vs-own bit compare):
+    D=1024:  max|delta| = 0.000e+00   bitdiff = 0/1048576   HELD
+    D=2048:  max|delta| = 0.000e+00   bitdiff = 0/4194304   HELD
+  => identical K-major mma.sync accumulation order => the kernel is its own
+     bit-for-bit reproducer. Determinism held: YES.
+
+PERF (TFLOP/s, aiden RTX 5070, GPU verified free 0% / 2 MiB before each timed run;
+two timed passes, 50 iters/measure):
+  D=1024:  own-GEMM-BF16  26.13 / 26.47 TFLOP/s   cuBLAS-BF16  54.75 / 54.74 TFLOP/s   off-cuBLAS = 2.10x / 2.07x
+  D=2048:  own-GEMM-BF16  33.30 / 33.27 TFLOP/s   cuBLAS-BF16  66.71 / 61.49 TFLOP/s   off-cuBLAS = 2.00x / 1.85x
+
+  cuBLAS-BF16-multiple: ~2.0-2.1x @1024, ~1.85-2.0x @2048.
+
+HONEST (g5): the cuBLAS-multiple is WIDER than the TF32 path's (OP-1 hit ~1.0-1.15x)
+EXACTLY as predicted — BF16 ~DOUBLES the cuBLAS roofline on the consumer card
+(cuBLAS-BF16 ~55-67 TFLOP/s vs cuBLAS-TF32 ~28-31). The own-GEMM's ABSOLUTE
+throughput is in fact HIGHER in BF16 (26-33 TFLOP/s) than in TF32 (24-30 @ OP-1),
+but cuBLAS scales up faster on the doubled roofline, so the RATIO opens to ~2x.
+The win is a WORKING bit-faithful BF16 own-GEMM on the consumer card that rides
+OP-1's layout/load wins (the same +3x layout lever applies); it is NOT cuBLAS-BF16
+parity (cuBLAS-BF16 exploits the full f16-class tensor-core path our portable
+warp-mma does not). Reporting the real ~2x multiple per g5 honesty.
+
+PLATEAU NOTE: closing the residual ~2x to cuBLAS-BF16 would need the same f16-class
+tensor-core scheduling tricks cuBLAS uses (and likely a deeper K-pipeline / wider
+output tile) — the layout-lever ladder OP-1 climbed is already fully applied here.
+Logged as deferred OP-3b (BK=32 / 3-stage cp.async / .v2-.v4 epilogue for the BF16
+path, mirroring OP-1b) — NOT the register-tile lever (closed-neg on this card).
+
+REPRO:
+  scp self/native/mma_sm120/owngemm_sm120_bf16.cu aiden:/tmp/
+  sidecar pool on aiden 'export PATH=/usr/local/cuda/bin:$PATH; \
+    nvcc -arch=sm_120 -I/usr/local/cuda/targets/x86_64-linux/include -O3 \
+    -DOWNGEMM_MAIN /tmp/owngemm_sm120_bf16.cu -lcublas -o /tmp/owngemm_sm120_bf16; \
+    /tmp/owngemm_sm120_bf16 1024 2; /tmp/owngemm_sm120_bf16 1024 1; /tmp/owngemm_sm120_bf16 2048 1'
+  (mode 0=gate, 1=perf-vs-cuBLAS-BF16, 2=determinism)
