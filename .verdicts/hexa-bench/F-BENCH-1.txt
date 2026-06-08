@@ -1,0 +1,13 @@
+F-BENCH-1 — flame vs PyTorch matched-dtype batch sweep (aiden RTX 5070 free pool GPU)
+====================================================================================
+STATUS: WIP — harness landing, GPU run pending on aiden (RTX 5070, 12GB).
+
+Plan:
+  - flame step = fast2 CLMConvMoE representative whole-step (own-GEMM TF32/BF16/FP64
+    + FF-VALLEY gelu + atomic-free bwd + FF-FUSED-OPTIM AdamW), batched B=1,2,4,8.
+  - torch step = equivalent Conv1d-MoE + groupnorm + AdamW, eager + torch.compile,
+    matched dtype + batch sweep.
+  - Metric per (dtype,B): flame step/s, torch-eager step/s, torch.compile step/s,
+    samples/s, flame/torch ratio. OOM-B reported. nvidia-smi pasted verbatim.
+
+(numbers filled after aiden run)
