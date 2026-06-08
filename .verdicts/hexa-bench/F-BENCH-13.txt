@@ -1,0 +1,22 @@
+F-BENCH-13 — swizzled-rasterization + persistent-kernel own-GEMM (the last cuBLAS residual)
+================================================================================
+STATUS: WIP (skeleton pushed; H100 measurement pending).
+
+GOAL: close the BENCH-12 residual ~1.3-1.6x own-GEMM-vs-cuBLAS toward "모두 이길때까지" by
+adding cuBLAS's persistent multi-CTA SCHEDULER to the bit-exact descriptor-direct own-GEMM:
+  (1) SWIZZLED CTA->tile rasterization — remap blockIdx to (tile_row,tile_col) in a grouped
+      column order so adjacent CTAs share a B-column (or A-row) operand in L2; and
+  (2) a PERSISTENT-KERNEL tile loop — gridDim = GRIDMUL*#SMs, each CTA walks
+      for(t=blockIdx; t<total; t+=gridDim) over the swizzled tile order (amortizes launch +
+      smooths the D=4096 tail wave: 1024 tiles vs ~264 CTAs).
+
+MECHANISM (self/native/wgmma/wgmma_tf32_og17.cu): gemm_og17_persist (MODE 7) wraps the
+gemm_og16 (BENCH-12, descriptor-direct 128x128, 2 CTA/SM, bit-exact) per-tile math in a
+persistent swizzled tile walk. tile_unswizzle(): SWZ=0 row-major (OG16 order), SWZ=w grouped
+column rasterization (w adjacent CTAs share an A row-block / L2-hot B columns).
+
+GATE (g5): rasterization changes only tile ORDER + which CTA computes which tile — per-tile
+accumulation byte-identical to gemm_og16, so rel-RMS vs cuBLAS-TF32 MUST stay 0. Non-zero =
+tile-index bug (driver returns before perf).
+
+[MEASUREMENT PENDING — H100 sm_90a]
