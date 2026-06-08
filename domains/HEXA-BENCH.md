@@ -44,6 +44,19 @@ no-LLVM/reproducible, NOT step-rate, so a large gap is EXPECTED and fine.
   on sm_120 vs torch's inductor-tuned GEMM; the two cuBLAS GEMMs dominate the step, elementwise+launch are
   tiny). Lever to close it = a better-tuned own/cuBLAS GEMM for this shape, NOT megakernel/graph-capture.
 
+- [x] **BENCH-5 — port the OG10 own-GEMM from sm_90a (Hopper wgmma) to sm_120 (consumer Blackwell) so flame's
+  own-GEMM RUNS on the free consumer card** — DONE 2026-06-08 (.verdicts/hexa-bench/F-BENCH-5.txt). ISA PROBE
+  on aiden CUDA13.0.88: mma.sync.m16n8k8.tf32 = ACCEPTED (portable warp MMA, the path that works), tcgen05 =
+  mnemonic KNOWN to ptxas but needs the full Blackwell tmem protocol (deferred), wgmma (Hopper) = REJECTED
+  (re-confirms BENCH-3 ISA gap). Built a TF32 own-GEMM for sm_120 (self/native/mma_sm120/owngemm_sm120.cu,
+  OG10 tile-spirit on mma.sync) — GATE rel-RMS 1.3e-5..7e-5 vs cuBLAS-TF32 (<<1e-2) ALL shapes, ~4.9-8.1
+  TFLOP/s standalone (3.2-6.9x off cuBLAS, like OG10's 6.09x on Hopper). Wired as flame_bench_step_og.cu
+  -DGEMM_BACKEND=3 (OWN120-mma.sync), re-ran TF32 sweep vs naive/cuBLAS/torch on aiden. RESULT: own-GEMM-on-
+  consumer-card NARROWS the naive gap 3.06-9.67x -> 2.81-4.73x (up to 2.04x shrink @B8, kills the naive batch-
+  scaling blowup) and sits BETWEEN naive and the cuBLAS-proxy ceiling (2.15-2.79x) — does NOT reach cuBLAS,
+  no torch-parity in TF32. WIN = flame's own-GEMM now RUNS+correct on sm_120 (BENCH-3 ISA-gap weakness REMOVED),
+  not beating torch. Determinism max|delta|=0 all cells. Free pool GPU (aiden), zero vast, no leak.
+
 ## honest framing (g5)
 
 flame is NOT a speed-competition tool — torch will almost certainly win throughput by a large margin (#2912
