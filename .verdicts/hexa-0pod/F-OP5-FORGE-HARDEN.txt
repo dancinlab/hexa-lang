@@ -1,0 +1,12 @@
+F-OP5-FORGE-HARDEN — forge/runtime code-quality hardening (LOCAL, 0-GPU)
+========================================================================
+WIP skeleton — populated below as each hygiene fix lands.
+
+Scope: comment/warning/dead-code hygiene only. NO kernel math change, NO
+codegen output-byte change. Every fix is behavior-preserving and verified
+by local compile (clang -Wcomment / -Wall syntax-only), not by a GPU kernel.
+
+------------------------------------------------------------------------
+ISSUE 1 — self/runtime.h:422-423  '/*' within block comment [-Wcomment]
+(pending)
+------------------------------------------------------------------------
