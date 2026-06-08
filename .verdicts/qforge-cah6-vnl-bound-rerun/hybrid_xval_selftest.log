@@ -1,0 +1,12 @@
+── parser: BZ-summed λ from raw QE CaH6 .elph bytes ──
+PASS parsed λ_BZ=8.51683 == QE 8.516825 (rel-ε=4.17141e-16, 168 modes)
+── QFORGE assembler: λ = 2∫α²F/ω from assembled α²F (σ_ph→0) ──
+ng=1000 σ_ph=3.53908K  λ_QFORGE=8.51692  rel-ε=1.05761e-05
+PASS ng=1000 residual shrank (1.05761e-05 < 9.99)
+ng=4000 σ_ph=0.884769K  λ_QFORGE=8.51683  rel-ε=6.60962e-07
+PASS ng=4000 residual shrank (6.60962e-07 < 1.05761e-05)
+ng=8000 σ_ph=0.442385K  λ_QFORGE=8.51683  rel-ε=1.6524e-07
+PASS ng=8000 residual shrank (1.6524e-07 < 6.60962e-07)
+── L3 GATE: QFORGE α²F assembler vs QE λ_BZ, rel-ε ≤ 1% ──
+PASS L3 |g|/α²F cross-val — QFORGE λ within 1% of QE 8.516825 (rel-ε=1.6524e-07)
+qforge_cah6_qe_xval_test PASS
