@@ -59,14 +59,18 @@ using namespace nvcuda;
 #define WN 16
 #if FUSE_PREC == 1
   #define WK 8
-  typedef wmma::precision::tf32 ab_t;
+  typedef wmma::precision::tf32 ab_t;   // fragment OPERAND tag (incomplete type)
+  typedef float store_t;                // TF32 operands are STORED as float in mem
   #define LOAD_TF32 1
   static const char* PREC_NAME = "TF32";
+  __device__ __host__ __forceinline__ store_t to_store(float f){ return f; }
 #else
   #define WK 16
-  typedef __nv_bfloat16 ab_t;
+  typedef __nv_bfloat16 ab_t;           // bf16 operand == storage type
+  typedef __nv_bfloat16 store_t;
   #define LOAD_TF32 0
   static const char* PREC_NAME = "BF16";
+  __device__ __host__ __forceinline__ store_t to_store(float f){ return (__nv_bfloat16)f; }
 #endif
 
 // AdamW hyperparameters (fixed — deterministic).
@@ -88,11 +92,11 @@ __device__ __forceinline__ float gelu_glue(float v) {
 // One tiled wmma GEMM output tile C[mt,nt] += sum_k A[mt,k] B[k,nt], fixed K order.
 // A is row-major [M,K], B is row-major [K,N] (loaded col-major into the B frag).
 __device__ void gemm_tile(const float* As_unused, // (placeholder to keep signature stable)
-                          const ab_t* Ain, const ab_t* Bin,
+                          const store_t* Ain, const store_t* Bin,
                           float* Cout, long long M, long long K, long long N,
                           long long tileRow, long long tileCol) {
-    __shared__ ab_t As[WM][16];
-    __shared__ ab_t Bs[16][WN];
+    __shared__ store_t As[WM][16];
+    __shared__ store_t Bs[16][WN];
     int lane = threadIdx.x;
     wmma::fragment<wmma::accumulator, WM, WN, WK, float> cf;
     wmma::fill_fragment(cf, 0.0f);
@@ -102,12 +106,12 @@ __device__ void gemm_tile(const float* As_unused, // (placeholder to keep signat
         for (int t=lane; t<WM*16; t+=blockDim.x) {
             int r=t/16, c=t%16;
             long long gr=tileRow*WM+r, gc=kk+c;
-            As[r][c] = (gr<M && gc<K) ? Ain[gr*K+gc] : (ab_t)0;
+            As[r][c] = (gr<M && gc<K) ? Ain[gr*K+gc] : to_store(0.0f);
         }
         for (int t=lane; t<16*WN; t+=blockDim.x) {
             int r=t/WN, c=t%WN;
             long long gk=kk+r, gn=tileCol*WN+c;
-            Bs[r][c] = (gk<K && gn<N) ? Bin[gk*N+gn] : (ab_t)0;
+            Bs[r][c] = (gk<K && gn<N) ? Bin[gk*N+gn] : to_store(0.0f);
         }
         __syncthreads();
         wmma::load_matrix_sync(af, &As[0][0], 16);
@@ -128,12 +132,12 @@ __device__ void gemm_tile(const float* As_unused, // (placeholder to keep signat
 // resident across grid.sync(). NO atomics anywhere (determinism gate).
 // Shapes: A[M,K], W[K,N], H/G[M,N], dG[M,N], dW[K,N], m/v[K,N].
 // ============================================================================
-__global__ void fused_step(const ab_t* __restrict__ A,  const ab_t* __restrict__ Wq,
+__global__ void fused_step(const store_t* __restrict__ A,  const store_t* __restrict__ Wq,
                            float* __restrict__ H,        float* __restrict__ G,
                            const float* __restrict__ dGrad,
                            float* __restrict__ dW,       float* __restrict__ Wf,
                            float* __restrict__ Mm,       float* __restrict__ Vv,
-                           ab_t* __restrict__ AT,        ab_t* __restrict__ dGq,
+                           store_t* __restrict__ AT,     store_t* __restrict__ dGq,
                            long long M, long long K, long long N, int tstep) {
     cg::grid_group grid = cg::this_grid();
     long long bx = blockIdx.x;
@@ -153,7 +157,7 @@ __global__ void fused_step(const ab_t* __restrict__ A,  const ab_t* __restrict__
         for (long long i=(long long)bx*blockDim.x+threadIdx.x; i<n; i+=stride) {
             G[i] = gelu_glue(H[i]);
             // quantize dG operand for the bwd GEMM (TF32/BF16 operand path)
-            dGq[i] = (ab_t)dGrad[i];
+            dGq[i] = to_store(dGrad[i]);
         }
     }
     grid.sync();
@@ -199,7 +203,7 @@ __global__ void fused_step(const ab_t* __restrict__ A,  const ab_t* __restrict__
 // TF32/BF16 separate-kernel step that FAST-2 is the fused analogue of). Same
 // dtype, same fixed accum order -> the rel-RMS gate isolates ONLY fusion.
 // ============================================================================
-__global__ void k_gemm(const ab_t* A, const ab_t* B, float* C,
+__global__ void k_gemm(const store_t* A, const store_t* B, float* C,
                        long long M, long long K, long long N) {
     long long bx=blockIdx.x, tilesN=(N+WN-1)/WN, ntiles=((M+WM-1)/WM)*tilesN;
     for (long long tg=bx; tg<ntiles; tg+=gridDim.x) {
@@ -207,13 +211,13 @@ __global__ void k_gemm(const ab_t* A, const ab_t* B, float* C,
         gemm_tile(nullptr, A, B, C, M, K, N, tr, tc);
     }
 }
-__global__ void k_valley(const float* H, float* G, const float* dGrad, ab_t* dGq, long long n) {
+__global__ void k_valley(const float* H, float* G, const float* dGrad, store_t* dGq, long long n) {
     long long stride=(long long)blockDim.x*gridDim.x;
     for (long long i=(long long)blockIdx.x*blockDim.x+threadIdx.x; i<n; i+=stride) {
-        G[i]=gelu_glue(H[i]); dGq[i]=(ab_t)dGrad[i];
+        G[i]=gelu_glue(H[i]); dGq[i]=to_store(dGrad[i]);
     }
 }
-__global__ void k_transpose(const ab_t* A, ab_t* AT, long long M, long long K) {
+__global__ void k_transpose(const store_t* A, store_t* AT, long long M, long long K) {
     long long n=M*K, stride=(long long)blockDim.x*gridDim.x;
     for (long long i=(long long)blockIdx.x*blockDim.x+threadIdx.x; i<n; i+=stride) {
         long long r=i/K, c=i%K; AT[c*M+r]=A[r*K+c];
@@ -241,9 +245,9 @@ static void ck(cudaError_t e, const char* what) {
 
 template<class T> static T* dalloc(size_t n){ void* p; ck(cudaMalloc(&p,n*sizeof(T)),"malloc"); return (T*)p; }
 
-__global__ void fill_ab(ab_t* x, long long n, unsigned seed) {
+__global__ void fill_ab(store_t* x, long long n, unsigned seed) {
     long long i=(long long)blockIdx.x*blockDim.x+threadIdx.x;
-    if(i<n){ unsigned h=(unsigned)(i*2654435761u)^seed; float f=((h&0xffff)/65535.0f-0.5f)*0.1f; x[i]=(ab_t)f; }
+    if(i<n){ unsigned h=(unsigned)(i*2654435761u)^seed; float f=((h&0xffff)/65535.0f-0.5f)*0.1f; x[i]=to_store(f); }
 }
 __global__ void fill_f(float* x, long long n, unsigned seed, float scale) {
     long long i=(long long)blockIdx.x*blockDim.x+threadIdx.x;
@@ -268,7 +272,7 @@ int main(int argc, char** argv) {
     printf("flame step: D=%lld T=%lld -> M=%lld K=%lld N=%lld (batch=1)  iters=%d\n",D,T,M,K,N,iters);
 
     long long MN=M*N, KN=K*N, MK=M*K;
-    ab_t *A=dalloc<ab_t>(MK), *Wq=dalloc<ab_t>(KN), *AT=dalloc<ab_t>(MK), *dGq=dalloc<ab_t>(MN);
+    store_t *A=dalloc<store_t>(MK), *Wq=dalloc<store_t>(KN), *AT=dalloc<store_t>(MK), *dGq=dalloc<store_t>(MN);
     float *H=dalloc<float>(MN), *G=dalloc<float>(MN), *dGrad=dalloc<float>(MN), *dW=dalloc<float>(KN);
     float *Wf=dalloc<float>(KN), *Mm=dalloc<float>(KN), *Vv=dalloc<float>(KN);
     // reference output state (separate, second copy for fused)
