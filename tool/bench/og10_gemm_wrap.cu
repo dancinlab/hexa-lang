@@ -31,7 +31,9 @@ __global__ void k_tf32_trunc(float* x, long long n){
 
 static Enc_t g_enc = nullptr;
 
-extern "C" void og10_gemm(float* C, const float* A, const float* Bm, int M, int K, int N){
+// C++ linkage (matches the harness's `extern void og10_gemm(...)` declaration —
+// real==float in the TF32 lane, so the float signature here is the same symbol).
+void og10_gemm(float* C, const float* A, const float* Bm, int M, int K, int N){
     if(!g_enc){ g_enc = get_enc();
         if(!g_enc){ printf("[OG10] cuTensorMapEncodeTiled unavailable (CUDA<12?)\n"); return; } }
     if(N%128 || K%32){ printf("[OG10] shape M=%d K=%d N=%d violates N%%128==0 && K%%32==0\n",M,K,N); return; }
