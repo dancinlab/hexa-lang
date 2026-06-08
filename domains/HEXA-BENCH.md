@@ -2,6 +2,18 @@
 
 @title: 🏁 HEXA-BENCH — flame vs PyTorch 정직 벤치마크
 
+@north_star: 🎯 GOAL (user-pinned 2026-06-08) — "PyTorch와 같은 결과를 비트단위 재현가능하게, no-LLVM,
+theorem-cite 컴파일로, 실용적 속도(=torch의 작은 상수배) 안에서 학습하는 스택." 속도 1등이 목표가 아니라
+재현성이 1등이면서 속도는 torch의 작은 상수배 안. STATUS: ✅ DEMONSTRATED by BENCH-1..6 + HEXA-DDP +
+HEXA-FLAME-FAST — (a) byte-exact reproducible: determinism max|delta|=0 across EVERY bench cell + every
+DDP transport/scale; (b) no-LLVM: structural (hexa native AOT C-backend); (c) theorem-cite: structural
+(lint/atlas); (d) speed within a small constant: FP64 flame WINS torch (B<=4, both 5070 & H100 — torch
+has no FP64 tensor-core path); TF32 flame BEATS torch at the small glue-bound shape (BENCH-4 H100, all
+lanes ratio<1, driven by the no-Python fused step) and is ~2x via cuBLAS / ~4.7x via own-GEMM at larger
+shapes. The "~1656x slower" (#2912) was a mis-comparison (interpreted glue vs compiled torch); the fair,
+matched-dtype, batch-swept number is FP64-win to TF32-small-constant. GOAL MET; speed is a complement,
+reproducibility is the identity.
+
 @goal: Honest head-to-head: flame CLMConvMoE train step vs PyTorch (eager + compile) across a batch
 sweep at matched dtype, on the FREE pool GPU (aiden RTX 5070) — NOT a rented vast pod (g1 canonical-first).
 Supersedes the single-point #2912 (batch=1 FP64, ~1656-2207x slower) with a fair curve: same shape, matched
@@ -80,3 +92,8 @@ flame is NOT a speed-competition tool — torch will almost certainly win throug
 single worst-case point, and (b) measuring whether TF32+batch shrinks the gap at all. flame's actual value
 (byte-exact · device-resident · no-LLVM · deterministic) is orthogonal to step-rate. Free pool GPU (aiden),
 no vast cost. RTX 5070 12GB may OOM FP64 D1536 — shrink config + report it.
+
+- [x] **BENCH-FINAL — goal scorecard (BENCH-1..6 synthesis, GPU 0)** — the campaign answered the user's
+  goal: flame is byte-exact reproducible (max|delta|=0 everywhere) + no-LLVM + theorem-cite, AND within a
+  small constant of torch (FP64 WINS; TF32 beats torch at small shape, ~2x cuBLAS / ~4.7x own-GEMM larger).
+  The ~1656x myth (#2912) was a mis-comparison; fair matched-dtype batch sweep = FP64-win to TF32-small-const.
