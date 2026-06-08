@@ -206,6 +206,28 @@ in the first seconds; `tail` watches the whole run after it survives that.
 - **vs `ssh host 'cmd'`** — same transport, but the command is a quoted argv
   list instead of a free-form string the remote shell re-parses.
 
+## Training-job completion — `proc-done` is NOT success
+
+A long training job is **DONE** only when *all three* hold:
+
+1. the process is dead (`cloud poll <host> <pid>` returns DEAD), **AND**
+2. every expected output artifact exists and is non-empty, **AND**
+3. the log shows a terminal success marker (not a crash/timeout signature).
+
+History (anima 7B, 2026-06): a train loop's final ckpt + `result.json` were
+never written (a trailing save was skipped on a modulo miss, and a post-train
+eval crashed before reaching it), yet the process **EXITED cleanly** — so
+"proc dead + no error in the log" looked like success while the trained
+weights were silently lost. Guard against it:
+
+- verify artifacts with **`cloud poll <host> <pid> --expect-artifact
+  /path/final.pt,/path/result.json`** — a DEAD pid with a missing/zero
+  artifact is `DEAD-INCOMPLETE` (exit 1), not success.
+- the cloud library **always merges stderr** (`2>&1`) into the logfile on
+  `fire`/`nohup`/`run`/`exec`. If you launch training with a **raw `ssh`**
+  command yourself you MUST add `2>&1` — otherwise an eval crash on stderr is
+  invisible and the log just stops with no traceback.
+
 ## Scope
 
 Cycle A (this release) — generic SSH structured-dispatch core. Cycle B —
