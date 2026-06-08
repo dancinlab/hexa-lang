@@ -7,7 +7,7 @@
 use "stdlib/qforge/assembler"
 use "stdlib/qforge/davidson"
 use "stdlib/qforge/upf"
-let DECK = "/home/aiden/qf-kb-wt/_deck/CaH6_NC"
+let DECK = "/Users/mini/dancinlab/demiurge/exports/rtsc/decks/CaH6_NC"
 fn build_npw(npw: int, mshell: int, b1: [float], b2: [float], b3: [float]) -> [float] {
     let mut gall: [float] = [] ; let mut g2all: [float] = []
     let mut gi = -mshell
