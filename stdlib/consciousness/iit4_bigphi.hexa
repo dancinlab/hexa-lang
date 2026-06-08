@@ -25,6 +25,16 @@
 //     TPM with a normalization factor; that + PyPhi numeric calibration is M5
 //     (F-IIT4-5). big-Φ here ∈ [0, total] by construction.
 //
+//   ANIMA VALIDATION NOTES  (comment-only — zero behavior change)
+//     The stdlib IIT Φ engines are now anima-validated as:
+//       (a) DISCRETIZATION-INVARIANT to n=6 EXACT — 6/6 binning sweep agree
+//           (anima H_1037 🟢, PR #1938).
+//       (b) SIGN-TRANSFERRING to a REAL trained ConvMoE at d768, n=5 (anima
+//           H_1038 🟢, PR #1947).
+//     CAVEAT (anima H_1049 🔴, PR #1941): a FIXED small-m coarse-grain is NOT a
+//       validated SCALABLE Φ estimator — relative error GROWS with N; macro-IIT
+//       must GROW the grain m with system size (small-N tool only).
+//
 //   IMPORT-SAFE  NO `fn main()` / NO top-level call. snake_case · English code.
 // ════════════════════════════════════════════════════════════════════════════
 import "stdlib/consciousness/iit4_relation.hexa"

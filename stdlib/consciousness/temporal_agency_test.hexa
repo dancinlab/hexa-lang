@@ -1,0 +1,55 @@
+// HEXA Standard Library — consciousness/temporal_agency_test
+//
+// Canonical import-based test for the stdlib T-axis (temporal agency) ruler
+// (temporal_agency.hexa). Promoted from anima H_1051 (PR #1944), per commons
+// @D g61 (reusable domain engine → stdlib/<domain>/). Like phi_spatial_test /
+// iit4_test, `import "stdlib/..."` is not flattened by single-file build, so
+// this is the canonical (run-only) test.
+//
+// Deterministic toy fixture (anima H_1051 — active vs passive, Φ-matched):
+//   An ACTIVE unit has deep provenance + high active-veto; a PASSIVE unit has
+//   shallow provenance + ~0 veto. Against the same (mean, std) normalization,
+//   the T-axis MUST rank active > passive. This is the orthogonal-ruler claim
+//   reduced to a hand-verifiable assertion.
+//   Also: a degenerate (std = 0) channel contributes 0 (no agency signal).
+// ════════════════════════════════════════════════════════════════════════════
+import "stdlib/consciousness/temporal_agency.hexa"
+
+fn _ck(name: string, ok: int) -> int {
+    if ok == 1 { println("PASS " + name); return 0 }
+    println("FAIL " + name); return 1
+}
+
+fn _close(a: float, b: float) -> int { if (a - b < 0.000001) && (b - a < 0.000001) { return 1 } return 0 }
+
+fn main() {
+    let mut fails = 0
+
+    // shared normalization stats for the toy population
+    let prov_mean = 5.0
+    let prov_std  = 2.0
+    let veto_mean = 0.4
+    let veto_std  = 0.2
+
+    // ACTIVE: deep auditable chain (prov 9) + strong active veto (veto 0.8)
+    let active  = ta_temporal_agency(9.0, prov_mean, prov_std, 0.8, veto_mean, veto_std)
+    // PASSIVE: shallow chain (prov 2) + ~no veto (veto 0.05)
+    let passive = ta_temporal_agency(2.0, prov_mean, prov_std, 0.05, veto_mean, veto_std)
+
+    fails = fails + _ck("active T_axis > passive T_axis", if ta_t_axis(active) > ta_t_axis(passive) { 1 } else { 0 })
+    fails = fails + _ck("active T_axis > 0 (above-mean agency)", if ta_t_axis(active) > 0.0 { 1 } else { 0 })
+    fails = fails + _ck("passive T_axis < 0 (below-mean agency)", if ta_t_axis(passive) < 0.0 { 1 } else { 0 })
+
+    // echoed inputs preserved in the record
+    fails = fails + _ck("record echoes provenance_depth", _close(ta_prov(active), 9.0))
+    fails = fails + _ck("record echoes veto_capacity", _close(ta_veto(active), 0.8))
+
+    // exact arithmetic: z(9;5,2)=2.0, z(0.8;0.4,0.2)=2.0 ⇒ T_axis=4.0
+    fails = fails + _ck("active T_axis = 4.0 (exact z-sum)", _close(ta_t_axis(active), 4.0))
+
+    // degenerate channel (std=0) contributes 0 — no agency signal from a constant
+    fails = fails + _ck("std=0 channel z = 0.0", _close(ta_zscore(7.0, 5.0, 0.0), 0.0))
+
+    if fails == 0 { println("stdlib/consciousness/temporal_agency — ALL PASS") }
+    else { panic("stdlib temporal_agency test FAILED") }
+}
