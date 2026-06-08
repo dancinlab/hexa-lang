@@ -1,0 +1,296 @@
+// HEXA Standard Library — qforge/realcell_dynq
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// QFORGE BZ-DISPERSED FORCE CONSTANTS — the reciprocal-space frozen-ion
+// dynamical matrix D(q), the genuine-dispersion replacement for the q-FLAT
+// single-Γ force constant the PW front-end emitted (pw_frontend.hexa).
+//
+// ── WHY THIS EXISTS (the q-flat wall, d6 honest) ─────────────────────────────
+// The production-DFPT front-end (qforge_pw_frontend_phonons_scr) displaced ONE
+// atom → a 3×3 on-site Γ force-constant block, then built the deck with
+// ncells=1, cell_R=[0,0,0]. The q-mesh dispersion then evaluates
+//   D(q) = Σ_R Φ(R)·cos(q·R)  with the ONLY R = [0,0,0]  →  cos(0)=1 ∀q
+// so D(q) = Φ for EVERY q — the "band" is the 3 Γ eigenvalues REPLICATED across
+// the whole BZ. There is NO genuine dispersion; the el-ph weighting over q is a
+// single mode smeared by the unit anchor only. This is a named contributor to
+// the CaH6 independent-path miss (λ=0.180634 vs QE 4.376, ω_log=115.91 vs 1236.4 K).
+//
+// ── THE FIX — reciprocal-space ION-ION (Ewald-like) dynamical matrix ──────────
+// The converged front-end already carries (a) the PW G-vectors, (b) the per-atom
+// local ionic form factor V_κ(|G|) (the assembler's qforge_vloc_of_g radial
+// transform), and (c) the cartesian atom positions τ_κ. The BARE ION-ION
+// contribution to the dynamical matrix at wavevector q is the standard
+// reciprocal-space (frozen-ion / Ewald G-space) form
+//
+//   D_κα,κ'β(q) = (1/√(M_κ M_κ')) [
+//        Σ_{G≠0} (G+q)_α (G+q)_β · K_κκ'(|G+q|) · cos((G+q)·(τ_κ − τ_κ'))     (κ≠κ' or self off-q)
+//      − δ_κκ' Σ_{G≠0} G_α G_β · Σ_κ'' K_κκ''(|G|) ]                          (self / sum-rule term)
+//
+// where K_κκ'(p) = V_κ(p)·V_κ'(p) is the product of the two ionic form factors at
+// momentum p (the Coulomb-screened ion-ion kernel already encoded in V_loc^κ(G)).
+// The (G+q) momentum makes D GENUINELY q-DEPENDENT: at q=Γ the self term enforces
+// the acoustic sum rule (Σ_κ D_κκ'(Γ)=0); away from Γ the (G+q) shift disperses
+// every branch. This is the SAME ion-ion lattice dynamics QE's DFPT computes for
+// the local (Ewald) part — here from the converged cell's own G-data (d3/d19
+// reuse: vloc_of_g + the G-basis; zero new radial integrals).
+//
+// d4 GENERIC — caller supplies G-vectors, the per-species V_κ(|G|) form factors,
+// the atom→species map, τ_κ, masses. CaH6 / LaH10 / Li2MgH16 all traverse this
+// one path; add/swap an atom = change the inputs, no name branch.
+//
+// d6 HONEST SCOPE — this is the BARE ION-ION (local Ewald) dynamical matrix. It
+// is NOT the full DFPT D(q) (it omits the electronic band-structure / non-local
+// response term that the Sternheimer linear response carries). It RESTORES the
+// q-DISPERSION the q-flat single-atom block threw away — the named contributor of
+// THIS lane. The absolute scale is anchored (as the front-end already does) to the
+// established phonon energy; what changes is the BAND SHAPE (real q-spread), which
+// is what ω_log and the α²F(ω) weighting see. λ/ω_log are reported VERBATIM (d6).
+
+use "stdlib/qforge/dfpt"
+use "stdlib/qforge/mpgrid"
+use "stdlib/qforge/realcell_qmesh"
+
+// ── per-(G,q) ion form-factor kernel K_κκ'(p)=V_κ(p)·V_κ'(p) ─────────────────
+//   We re-derive V_κ(|p|) from the SAME radial form factor the assembler used: the
+//   caller passes the per-species form factor SAMPLED on a |p| table. To keep this
+//   brick self-contained and basis-agnostic we accept the per-species form factor
+//   as a CLOSURE-FREE lookup: vff is a flat [nspec · ng] table of V_κ at the ng
+//   tabulated |p| nodes pmag[0..ng]; we linear-interpolate K at an arbitrary |p|.
+//   (The front-end builds vff via qforge_vloc_of_g over a |p| node list — d19.)
+
+// linear interpolate V_κ(|p|) from the per-species sampled table (clamped ends).
+fn _dq_vff_interp(vff: [float], pmag: [float], ng: int, spec: int, p: float) -> float {
+    if ng < 1 { return 0.0 }
+    let base = spec * ng
+    if p <= pmag[0] { return vff[base] }
+    if p >= pmag[ng - 1] { return vff[base + ng - 1] }
+    let mut k = 1
+    while k < ng {
+        if p <= pmag[k] {
+            let p0 = pmag[k - 1] ; let p1 = pmag[k]
+            let v0 = vff[base + k - 1] ; let v1 = vff[base + k]
+            let t = if p1 > p0 { (p - p0) / (p1 - p0) } else { 0.0 }
+            return v0 + t * (v1 - v0)
+        }
+        k = k + 1
+    }
+    return vff[base + ng - 1]
+}
+
+// ── qforge_dynq_ionic — the BARE ION-ION dynamical matrix D(q) at one q ───────
+//
+//   gvecs   : flat [3·nG] cartesian G-vectors (bohr⁻¹) — the PW basis / a G-shell.
+//   qvec    : [3] cartesian wavevector q (bohr⁻¹).
+//   tau     : flat [3·nat] cartesian atom positions (bohr).
+//   spec_of : [nat] species index per atom (0..nspec-1).
+//   masses  : [nat] atomic masses (amu).
+//   vff     : flat [nspec·ng] sampled V_κ(|p|) form factor table.
+//   pmag    : [ng] |p| nodes (ascending) the vff table is sampled on.
+//   gcut    : drop |G+q| above this (0 = keep all) — tractable G-shell control.
+//
+//   Returns a DynMat (dim=3·nat) — the mass-weighted, Hermitised, q-dependent
+//   ion-ion dynamical matrix. Reuses dfpt.qforge_phonons downstream for ω(q,ν).
+pub fn qforge_dynq_ionic(gvecs: [float], qvec: [float], tau: [float],
+                         spec_of: [int], masses: [float], vff: [float],
+                         pmag: [float], ng: int, gcut: float) -> DynMat {
+    let nat = len(masses)
+    let dim = 3 * nat
+    let nG = len(gvecs) / 3
+    // accumulate the un-weighted force-constant blocks acc[a][b] (real).
+    let mut acc: [float] = []
+    let mut z = 0
+    while z < dim * dim { acc.push(0.0) ; z = z + 1 }
+
+    let qx = qvec[0] ; let qy = qvec[1] ; let qz = qvec[2]
+
+    // ── off-diagonal (κ,κ') + diagonal-at-q term: Σ_G (G+q)_α(G+q)_β K_κκ'(|G+q|)
+    //    cos((G+q)·Δτ).  Build the full κ×κ' block for each (G+q). ──
+    let mut ig = 0
+    while ig < nG {
+        let gx = gvecs[ig * 3] ; let gy = gvecs[ig * 3 + 1] ; let gz = gvecs[ig * 3 + 2]
+        let px = gx + qx ; let py = gy + qy ; let pz = gz + qz
+        let p2 = px * px + py * py + pz * pz
+        if p2 > 1.0e-12 {
+            let pm = sqrt(p2)
+            if gcut <= 0.0 || pm <= gcut {
+                // per-atom form factor at |G+q|.
+                let mut ka = 0
+                while ka < nat {
+                    let vka = _dq_vff_interp(vff, pmag, ng, spec_of[ka], pm)
+                    let tax = tau[ka * 3] ; let tay = tau[ka * 3 + 1] ; let taz = tau[ka * 3 + 2]
+                    let mut kb = 0
+                    while kb < nat {
+                        let vkb = _dq_vff_interp(vff, pmag, ng, spec_of[kb], pm)
+                        let dtx = tax - tau[kb * 3]
+                        let dty = tay - tau[kb * 3 + 1]
+                        let dtz = taz - tau[kb * 3 + 2]
+                        let ph = px * dtx + py * dty + pz * dtz
+                        let w = vka * vkb * cos(ph)
+                        // (G+q)_α (G+q)_β outer product over the 3×3 cartesian block.
+                        let pcomp = [px, py, pz]
+                        let mut al = 0
+                        while al < 3 {
+                            let ia = ka * 3 + al
+                            let mut be = 0
+                            while be < 3 {
+                                let ib = kb * 3 + be
+                                acc[ia * dim + ib] = acc[ia * dim + ib]
+                                    + pcomp[al] * pcomp[be] * w
+                                be = be + 1
+                            }
+                            al = al + 1
+                        }
+                        kb = kb + 1
+                    }
+                    ka = ka + 1
+                }
+            }
+        }
+        ig = ig + 1
+    }
+
+    // ── acoustic sum rule (self term at q): subtract Σ_κ' D_κκ'(Γ-self) on the
+    //    diagonal κ-block so Σ_κ D_κκ'(Γ)=0 (translational invariance). We use the
+    //    q=Γ self term Σ_G G_α G_β K_κκ''(|G|) summed over κ'' — the standard ASR. ──
+    let mut ka = 0
+    while ka < nat {
+        // self stiffness Σ_κ'' Σ_G G_αG_β V_κ(|G|)V_κ''(|G|)
+        let mut sxx = 0.0 ; let mut sxy = 0.0 ; let mut sxz = 0.0
+        let mut syy = 0.0 ; let mut syz = 0.0 ; let mut szz = 0.0
+        let mut ig2 = 0
+        while ig2 < nG {
+            let gx = gvecs[ig2 * 3] ; let gy = gvecs[ig2 * 3 + 1] ; let gz = gvecs[ig2 * 3 + 2]
+            let g2 = gx * gx + gy * gy + gz * gz
+            if g2 > 1.0e-12 {
+                let gm = sqrt(g2)
+                if gcut <= 0.0 || gm <= gcut {
+                    let vka = _dq_vff_interp(vff, pmag, ng, spec_of[ka], gm)
+                    let mut sumv = 0.0
+                    let mut kc = 0
+                    while kc < nat {
+                        sumv = sumv + _dq_vff_interp(vff, pmag, ng, spec_of[kc], gm)
+                        kc = kc + 1
+                    }
+                    let w = vka * sumv
+                    sxx = sxx + gx * gx * w ; sxy = sxy + gx * gy * w ; sxz = sxz + gx * gz * w
+                    syy = syy + gy * gy * w ; syz = syz + gy * gz * w ; szz = szz + gz * gz * w
+                }
+            }
+            ig2 = ig2 + 1
+        }
+        let s3 = [sxx, sxy, sxz, sxy, syy, syz, sxz, syz, szz]
+        let mut al = 0
+        while al < 3 {
+            let ia = ka * 3 + al
+            let mut be = 0
+            while be < 3 {
+                let ib = ka * 3 + be
+                acc[ia * dim + ib] = acc[ia * dim + ib] - s3[al * 3 + be]
+                be = be + 1
+            }
+            al = al + 1
+        }
+        ka = ka + 1
+    }
+
+    // ── mass-weight D_ab = acc_ab / √(M_a M_b), then Hermitise (real symmetric). ──
+    let mut mat: [float] = []
+    let mut zz = 0
+    while zz < dim * dim { mat.push(0.0) ; zz = zz + 1 }
+    let mut i = 0
+    while i < dim {
+        let mi = masses[i / 3]
+        let mut j = 0
+        while j < dim {
+            let mj = masses[j / 3]
+            mat[i * dim + j] = acc[i * dim + j] / sqrt(mi * mj)
+            j = j + 1
+        }
+        i = i + 1
+    }
+    let mut a = 0
+    while a < dim {
+        let mut b = a + 1
+        while b < dim {
+            let avg = 0.5 * (mat[a * dim + b] + mat[b * dim + a])
+            mat[a * dim + b] = avg
+            mat[b * dim + a] = avg
+            b = b + 1
+        }
+        a = a + 1
+    }
+    return DynMat { dim: dim, mat: mat, qx: qx, qy: qy, qz: qz }
+}
+
+// ── qforge_dynq_dispersion — the BZ-DISPERSED ω(q,ν) over an MP q-mesh ────────
+//
+//   Sweeps a Γ-centred nq1×nq2×nq3 MP mesh; at each q builds the ion-ion D(q)
+//   (qforge_dynq_ionic) → eigh → ω(q,ν). Returns a QmeshDispersion identical in
+//   shape to qforge_qmesh_dispersion, so every downstream helper (omega_band,
+//   omega_log) consumes it unchanged (d4 — one path). This is the GENUINE-DISPERSION
+//   drop-in for the q-flat realcell_qmesh path.
+pub fn qforge_dynq_dispersion(gvecs: [float], tau: [float], spec_of: [int],
+                              masses: [float], vff: [float], pmag: [float],
+                              ng: int, gcut: float,
+                              nq1: int, nq2: int, nq3: int,
+                              b1: [float], b2: [float], b3: [float]) -> QmeshDispersion {
+    let nat = len(masses)
+    let dim = 3 * nat
+    if nat < 1 || nq1 < 1 || nq2 < 1 || nq3 < 1 {
+        return QmeshDispersion { omega: [], omega2: [], qcoords: [],
+                                 nq: 0, nmode: 0, n_gamma_zero: 0 }
+    }
+    let grid = qforge_mp_grid(nq1, nq2, nq3, 0, 0, 0)
+    let nq = grid.npoints
+    let mut omega: [float] = []
+    let mut omega2: [float] = []
+    let mut qcoords: [float] = []
+    let mut n_gamma_zero = 0
+    let mut iq = 0
+    while iq < nq {
+        let fx = grid.coords[3 * iq]
+        let fy = grid.coords[3 * iq + 1]
+        let fz = grid.coords[3 * iq + 2]
+        let qx = fx * b1[0] + fy * b2[0] + fz * b3[0]
+        let qy = fx * b1[1] + fy * b2[1] + fz * b3[1]
+        let qz = fx * b1[2] + fy * b2[2] + fz * b3[2]
+        qcoords.push(qx) ; qcoords.push(qy) ; qcoords.push(qz)
+        let dq = qforge_dynq_ionic(gvecs, [qx, qy, qz], tau, spec_of, masses,
+                                   vff, pmag, ng, gcut)
+        let pq = qforge_phonons(dq, masses, nat)
+        let mut m = 0
+        while m < dim { omega.push(pq.omega[m]) ; omega2.push(pq.omega2[m]) ; m = m + 1 }
+        let isg = (qx * qx + qy * qy + qz * qz) < 1.0e-12
+        if isg { n_gamma_zero = n_gamma_zero + pq.n_acoustic_zero }
+        iq = iq + 1
+    }
+    return QmeshDispersion {
+        omega: omega, omega2: omega2, qcoords: qcoords,
+        nq: nq, nmode: dim, n_gamma_zero: n_gamma_zero
+    }
+}
+
+// ── dispersion witness: max/min ω spread RATIO across the BZ (q-flat ⇒ 1.0) ───
+//   A single number proving the band is GENUINELY dispersed: the ratio of the
+//   largest to the smallest POSITIVE ω across all (q,ν). The q-flat single-Γ
+//   construction returns 1.0 (every q identical); a real dispersion returns >1.
+//   Returns 1.0 on a degenerate/empty band (honest — no fake spread).
+pub fn qforge_dynq_spread_ratio(disp: QmeshDispersion) -> float {
+    let total = len(disp.omega)
+    let mut lo = 1.0e30 ; let mut hi = -1.0e30
+    let mut any = false
+    let mut i = 0
+    while i < total {
+        let w = disp.omega[i]
+        if w > 1.0e-6 {
+            any = true
+            if w < lo { lo = w }
+            if w > hi { hi = w }
+        }
+        i = i + 1
+    }
+    if !any || lo <= 0.0 { return 1.0 }
+    return hi / lo
+}

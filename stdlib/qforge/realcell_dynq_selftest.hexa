@@ -1,0 +1,127 @@
+// @ci_gate — deterministic · network-free · NO pod ops · BZ-dispersed ion-ion D(q) g5 gate
+//
+// realcell_dynq_selftest.hexa — QFORGE BZ-DISPERSED force-constant g5 gate.
+//
+// realcell_dynq.hexa replaces the q-FLAT single-Γ force constant (the
+// pw_frontend.hexa ncells=1 / cell_R=[0,0,0] construction, where D(q)=Φ ∀q) with
+// the reciprocal-space ION-ION dynamical matrix D(q) = (1/√MM') Σ_G (G+q)(G+q)
+// K(|G+q|) cos((G+q)·Δτ) − (self/ASR term). The (G+q) momentum makes D GENUINELY
+// q-dependent. This gate asserts:
+//   (1) Hermiticity: D(q) real-symmetric at a generic q.
+//   (2) acoustic sum rule: at q=Γ the lowest ω→0 (translational invariance).
+//   (3) NON-TRIVIAL DISPERSION: ω SPREADS across the BZ — spread_ratio = ωmax/ωmin
+//       > 1 (the q-flat single-Γ construction returns EXACTLY 1.0). THIS is the
+//       fix's load-bearing witness — the band is no longer a replicated point.
+//   (4) ω(q,ν) real & finite (no NaN / no divergence).
+// No case forces λ or a target ω — only the dispersion's q-dependence (d6 honest).
+//
+// MODEL: a 2-atom cubic cell (a=6 bohr), one species, masses [1.0, 1.0], two atoms
+// at τ=[0,0,0] and τ=[a/2,a/2,a/2]. A small G-shell (the 6 ±cubic-axis G + a few
+// diagonals) with a flat-ish V(|p|) form factor. The ASR drives ω(Γ,acoustic)→0;
+// the (G+q) shift disperses the optical branch across the BZ — q-flat would give
+// spread_ratio == 1.0, so a measured ratio > 1 PROVES genuine BZ dispersion.
+//
+// Run:  HEXA_STDLIB_ROOT="$PWD/stdlib" hexa run --no-sentinel stdlib/qforge/realcell_dynq_selftest.hexa
+// PASS: "qforge_realcell_dynq_selftest PASS".
+use "stdlib/qforge/realcell_dynq"
+use "stdlib/qforge/realcell_qmesh"
+use "stdlib/qforge/dfpt"
+
+fn _abs(x: float) -> float { if x < 0.0 { return -x } return x }
+
+fn _ck_bool(name: str, got: bool, want: bool) -> int {
+    if got == want { println("PASS " + name) ; return 0 }
+    println("FAIL " + name + " — got " + to_string(got) + " want " + to_string(want)) ; return 1
+}
+fn _ck_gt(name: str, got: float, lo: float) -> int {
+    if got > lo { println("PASS " + name + " (" + to_string(got) + " > " + to_string(lo) + ")") ; return 0 }
+    println("FAIL " + name + " — got " + to_string(got) + " not > " + to_string(lo)) ; return 1
+}
+
+fn main() {
+    let mut fails = 0
+    let a = 6.0
+    let tpa = 6.28318530717958647692 / a
+    let b1 = [tpa, 0.0, 0.0] ; let b2 = [0.0, tpa, 0.0] ; let b3 = [0.0, 0.0, tpa]
+
+    // ── G-shell: Γ + the 6 ±axis + 8 diagonal cubic G-vectors (a tractable shell) ──
+    let mut gvecs: [float] = []
+    let mut hh = -1
+    while hh <= 1 {
+        let mut kk = -1
+        while kk <= 1 {
+            let mut ll = -1
+            while ll <= 1 {
+                gvecs.push(to_float(hh) * tpa)
+                gvecs.push(to_float(kk) * tpa)
+                gvecs.push(to_float(ll) * tpa)
+                ll = ll + 1
+            }
+            kk = kk + 1
+        }
+        hh = hh + 1
+    }
+    // 2-atom cell: one species (spec 0), masses [1,1], τ at corner + body-centre.
+    let tau = [0.0, 0.0, 0.0, 0.5 * a, 0.5 * a, 0.5 * a]
+    let spec_of = [0, 0]
+    let masses = [1.0, 1.0]
+    // form-factor table V(|p|): a smooth decaying ionic-like form factor on |p| nodes.
+    let pmag = [0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0]
+    let ng = 8
+    // V_0(p) = −4π·Z/p² style softened (use a bounded decaying table, one species).
+    let vff = [0.0, -2.0, -1.2, -0.7, -0.45, -0.22, -0.13, -0.06]
+
+    // ── (1) Hermiticity at a generic q = (0.3,0.2,0.1)·b ──
+    let qg = [0.3 * tpa, 0.2 * tpa, 0.1 * tpa]
+    let dq = qforge_dynq_ionic(gvecs, qg, tau, spec_of, masses, vff, pmag, ng, 0.0)
+    let dim = dq.dim
+    let mut herm_ok = true
+    let mut i = 0
+    while i < dim {
+        let mut j = 0
+        while j < dim {
+            if _abs(dq.mat[i * dim + j] - dq.mat[j * dim + i]) > 1.0e-9 { herm_ok = false }
+            j = j + 1
+        }
+        i = i + 1
+    }
+    fails = fails + _ck_bool("(1) D(q) real-symmetric (Hermitian)", herm_ok, true)
+
+    // ── (2) acoustic sum rule: ω(Γ, lowest) ≈ 0 ──
+    let dgam = qforge_dynq_ionic(gvecs, [0.0, 0.0, 0.0], tau, spec_of, masses, vff, pmag, ng, 0.0)
+    let pgam = qforge_phonons(dgam, masses, 2)
+    // lowest |ω| of the band should be ~0 (acoustic at Γ).
+    let mut wmin_gam = 1.0e30
+    let mut g = 0
+    while g < dim { if _abs(pgam.omega[g]) < wmin_gam { wmin_gam = _abs(pgam.omega[g]) } ; g = g + 1 }
+    fails = fails + _ck_bool("(2) acoustic ω(Γ,lowest)≈0 (sum rule)", wmin_gam < 1.0e-4, true)
+
+    // ── (3) NON-TRIVIAL DISPERSION over a 4×4×4 MP mesh — the load-bearing fix ──
+    let disp = qforge_dynq_dispersion(gvecs, tau, spec_of, masses, vff, pmag, ng, 0.0,
+                                      4, 4, 4, b1, b2, b3)
+    let ratio = qforge_dynq_spread_ratio(disp)
+    println("[dynq] BZ spread_ratio (ωmax/ωmin over 4³ mesh) = " + to_string(ratio)
+            + "  (q-flat single-Γ ⇒ EXACTLY 1.0)")
+    // a genuine dispersion spreads the band: ratio comfortably > 1 (q-flat == 1.0).
+    fails = fails + _ck_gt("(3) genuine BZ dispersion: spread_ratio > 1.05", ratio, 1.05)
+
+    // ── (4) ω(q,ν) all finite (no NaN / no divergence) ──
+    let mut finite_ok = true
+    let mut t = 0
+    while t < len(disp.omega) {
+        let w = disp.omega[t]
+        // NaN check: w == w is false for NaN; inf check via a large bound.
+        if !(w == w) || _abs(w) > 1.0e12 { finite_ok = false }
+        t = t + 1
+    }
+    fails = fails + _ck_bool("(4) ω(q,ν) all finite (no NaN/inf)", finite_ok, true)
+
+    // ── witness: real band ω_log vs the (q-flat) single-Γ optical ω ──
+    let band = qforge_qmesh_omega_band(disp, 1.0e-6)
+    let wlog = qforge_qmesh_omega_log(band)
+    println("[dynq] dispersed band: " + to_string(len(band)) + " positive ω, ω_log="
+            + to_string(wlog) + " (genuine q-spread, NOT a replicated point)")
+
+    if fails == 0 { println("qforge_realcell_dynq_selftest PASS") }
+    else { println("qforge_realcell_dynq_selftest FAIL — " + to_string(fails) + " case(s)") }
+}
