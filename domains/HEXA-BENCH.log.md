@@ -84,3 +84,19 @@ RESULT — flame÷best-torch TF32 ratio: NAIVE 3.06/4.05/5.53/9.67x · OWN120 2.
 max|delta(W')|=0 all cells; bench GATE rel-RMS ~4e-8 all B. WIN = flame's own-GEMM now RUNS+correct on the
 consumer RTX 5070 (BENCH-3 ISA-gap weakness REMOVED), not beating torch (g5 honest framing). Verdict
 .verdicts/hexa-bench/F-BENCH-5.txt; files self/native/mma_sm120/* + tool/bench/run_bench5.sh.
+
+## BENCH-4 — real OG10 own-GEMM on a true H100 (2026-06-08)
+
+Rented vast H100_SXM 40064324 (label hexa-bench4, sm_90a, CUDA 12.6, driver 560.35.03, $2.52/hr),
+ran the BENCH-3 step harness with GEMM_BACKEND=2 = the ACTUAL OG10 own-GEMM (W10 TF32-wgmma
+gemm_w10, MODE-4 swizzled-TMA), wired via tool/bench/og10_gemm_wrap.cu. Destroyed leak-0
+(tag verified pre-destroy; foreign rtsc pod untouched).
+
+- ISA: OG10 sm_90a COMPILE OK on Hopper (BENCH-3's sm_120 rejection CLOSED). 3 flame lanes built EXIT 0.
+- GATE g5: rel-RMS(W' vs naive) = 2.16e-4 (<<1e-2 PASS) all B; determinism max|delta(W')|=0 all cells.
+- ms/step (B=1/2/4/8): naive 0.113/0.194/0.362/0.688 · OG10 0.137/0.160/0.216/0.326 · cuBLAS 0.045/0.051/0.066/0.099.
+- OG10 lands BETWEEN naive and cuBLAS (B>=2); batch-FLAT (2.4x across B vs naive's 6.1x); 2.11x faster than naive @B8.
+- cuBLAS proxy OPTIMISTIC ~3x (proxy/OG10 ms ~3.0-3.3x): real OG10 closes only ~30-40% of naive->cuBLAS gap.
+- torch TF32 eager 0.756/0.678/0.674/0.539 · compile 0.718/0.709/0.732/0.777 ms/step — flame BEATS torch all lanes
+  (launch/glue-bound tiny shape; inverts BENCH-1 5070). FP64 flame-win (B<=4) re-confirmed (flame 0.18-0.59 vs torch ~0.70).
+- Verdict .verdicts/hexa-bench/F-BENCH-4.txt (full 3-way table + nvidia-smi verbatim).

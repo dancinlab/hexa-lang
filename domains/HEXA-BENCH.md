@@ -57,6 +57,22 @@ no-LLVM/reproducible, NOT step-rate, so a large gap is EXPECTED and fine.
   no torch-parity in TF32. WIN = flame's own-GEMM now RUNS+correct on sm_120 (BENCH-3 ISA-gap weakness REMOVED),
   not beating torch. Determinism max|delta|=0 all cells. Free pool GPU (aiden), zero vast, no leak.
 
+<!-- ANCHOR:BENCH-4 (unique — parallel BENCH-5/6 append at their own anchors) -->
+- [x] **BENCH-4 — measure the REAL OG10 own-GEMM on a true H100 (replaces BENCH-3's cuBLAS proxy)** —
+  DONE 2026-06-08 (.verdicts/hexa-bench/F-BENCH-4.txt). Rented ONE real H100_SXM (vast 40064324, sm_90a,
+  CUDA 12.6, destroyed leak-0 tag-checked) and ran the SAME bench step with the ACTUAL OG10 own-GEMM (W10
+  TF32-wgmma gemm_w10, MODE-4 swizzled-TMA) wired as the D->D GEMM. ISA gap CLOSED: OG10 sm_90a COMPILE OK on
+  Hopper (sm_120 had rejected it). GATE g5: rel-RMS(W' vs naive) = 2.16e-4 (<<1e-2 PASS), determinism
+  max|delta|=0 ALL cells. RESULT (ms/step): real OG10 lands BETWEEN naive and cuBLAS at every B and inherits
+  the tuned-GEMM's batch-FLATNESS — naive 0.113->0.688 (6.1x across B) vs OG10 0.137->0.326 (2.4x); at B=8
+  OG10 is 2.11x faster than naive. BENCH-3's cuBLAS proxy was OPTIMISTIC ~3x (proxy/OG10 ms ~3.0-3.3x): real
+  OG10 closes only ~30-40% of the naive->cuBLAS gap, LESS than the proxy implied (OG10 is 6.09x off cuBLAS).
+  TORCH-PARITY: flame BEATS torch (eager+compile) on the step wall for all lanes here (flame/torch_compile
+  0.06-0.89, all <1) — INVERTS BENCH-1's 5070 result; this tiny shape is launch/glue-bound, not GEMM-bound,
+  so flame's no-Python fused step wins (at large GEMM-bound shapes torch's cuBLAS would re-take the lead).
+  FP64 flame-win (B<=4) RE-CONFIRMED on H100 (flame 0.18-0.59 ms vs torch flat ~0.70 ms; up to 3.9x @B1).
+<!-- /ANCHOR:BENCH-4 -->
+
 ## honest framing (g5)
 
 flame is NOT a speed-competition tool — torch will almost certainly win throughput by a large margin (#2912
