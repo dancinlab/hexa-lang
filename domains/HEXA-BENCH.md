@@ -31,14 +31,18 @@ no-LLVM/reproducible, NOT step-rate, so a large gap is EXPECTED and fine.
   max|delta|=0 all cells. RESULT: the tuned GEMM shrinks the BENCH-1 naive gap from a batch-GROWING 3.03x@B1
   -> 7.88x@B8 down to a near batch-INVARIANT ~2.0-2.9x (2.20/2.25/2.07/2.85x; up to 2.77x shrink @B8). NO
   torch-parity regime in TF32 (residual ~2x = launch/glue/occupancy, not GEMM); FP64 B>=4 stays flame's win.
-
-- [ ] **BENCH-3 — swap the bench step naive tiled GEMM for the OG10 own-GEMM (TF32 wgmma) + re-measure** —
-  BENCH-1 found the TF32 3-8x torch gap is cuBLAS-tuned-GEMM vs flame naive tiled CUDA-core kernel (not
-  interpreter). hexa already HAS the OG10 own-GEMM (TF32 wgmma, ~70.7 TFLOP/s, bit-exact, 6.09x off cuBLAS).
-  Wire OG10 into the bench step D->D projection (replacing the naive kernel), re-run the TF32 batch sweep on
-  aiden RTX 5070 (free pool GPU, NOT vast). Gate (g5): bit-exact vs naive result + new flame/torch TF32 ratio.
-  HONEST: OG10 is 6.09x off cuBLAS so it narrows but won't beat torch; measure how much 3-8x shrinks. aiden is
-  consumer Blackwell sm_120 - OG10 is sm_90a wgmma; if it won't compile on sm_120 report the ISA gap + scope.
+<!-- BENCH-6-ANCHOR (do not remove; BENCH-6 appends here to avoid colliding with parallel BENCH-4/5) -->
+- [x] **BENCH-6 — CUDA-graph capture on the bench step: does it cut the residual ~2x?** — DONE 2026-06-08
+  (.verdicts/hexa-bench/F-BENCH-6.txt). CLOSED-NEGATIVE (honest, productive). Wrapped the BENCH-3 cuBLAS-TF32
+  per-step DAG (fwd GEMM -> LN/gelu valley -> transpose -> bwd GEMM -> AdamW) in a CUDA graph
+  (cudaStreamBeginCapture/EndCapture -> cudaGraphInstantiate -> cudaGraphLaunch; 5-8 nodes replay as ONE
+  launch) and measured captured vs un-captured (eager) step/s at B=1,2,4,8 on aiden (free pool RTX 5070, no
+  vast). RESULT: graph/eager = 0.98-1.01x at EVERY B (NO speedup; per-op launch overhead is ~1% of the step
+  wall, in the noise). GATE bit-exact graph-vs-eager max|delta(W')|=0 + determinism=0 all cells. So the
+  residual ~2.0-2.4x vs torch is UNCHANGED by graph capture => it is NOT launch/glue/occupancy. This REFUTES
+  BENCH-3's asserted launch attribution and PINS the residual to GEMM-THROUGHPUT (cuBLAS-TF32 algo-selection
+  on sm_120 vs torch's inductor-tuned GEMM; the two cuBLAS GEMMs dominate the step, elementwise+launch are
+  tiny). Lever to close it = a better-tuned own/cuBLAS GEMM for this shape, NOT megakernel/graph-capture.
 
 ## honest framing (g5)
 

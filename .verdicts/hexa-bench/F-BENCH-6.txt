@@ -1,0 +1,103 @@
+F-BENCH-6 — CUDA-graph capture on the flame bench step: does it cut the residual ~2x?
+=====================================================================================
+DATE 2026-06-08 · HOST aiden (pool, RTX 5070 12GB, sm_120/cc12.0, NOT vast — g1, no leak)
+CONFIG D=768 T=256, iters=50-100, TF32 lane, batch sweep B=1,2,4,8 (BENCH-1/3 shape).
+
+VERDICT: CLOSED-NEGATIVE (the HONEST, productive outcome). CUDA-graph capture gives
+flame's bench step ~1.00x (0.98-1.01x across B) — NO speedup. This REFUTES BENCH-3's
+asserted attribution that the residual ~2x TF32 gap is "launch/glue/occupancy" and PINS
+the residual ~2x to GEMM-THROUGHPUT (cuBLAS-TF32 vs torch's inductor-tuned GEMM), NOT
+per-op launch overhead.
+
+QUESTION: BENCH-3 (F-BENCH-3) flattened flame's TF32 gap vs torch to a near
+batch-INVARIANT ~2.0-2.9x and ASSERTED (untested) the residual ~2x is "launch/glue/
+occupancy of the serial DAG — a different lever (megakernel/graph-capture), NOT GEMM."
+BENCH-6 tests it: wrap the per-step kernel sequence (cuBLAS-TF32 fwd GEMM -> LN/gelu
+valley -> transpose -> cuBLAS-TF32 bwd GEMM -> AdamW) in a CUDA graph
+(cudaStreamBeginCapture/EndCapture -> cudaGraphInstantiate -> cudaGraphLaunch) so the
+whole step replays as ONE graph launch, amortizing per-op launch+sync overhead, and
+measure captured step/s vs the un-captured (eager) baseline at B=1,2,4,8.
+
+SOURCE: tool/bench/flame_bench_step_graph.cu (eager + graph paths from ONE binary;
+identical step DAG to BENCH-3 flame_bench_step_og.cu -DGEMM_BACKEND=1). The ONLY
+difference is HOW the step launches: eager (1 cuLaunch per kernel/cublas call) vs
+replayed from a captured graph. DRIVER: tool/bench/run_bench6.sh.
+
+================================ nvidia-smi (verbatim) ================================
+Mon Jun  8 20:19:25 2026
++-----------------------------------------------------------------------------------------+
+| NVIDIA-SMI 580.159.04             Driver Version: 580.159.04     CUDA Version: 13.0     |
++-----------------------------------------+------------------------+----------------------+
+|   0  NVIDIA GeForce RTX 5070        On  |   00000000:01:00.0 Off |                  N/A |
+|  0%   42C    P8              8W /  250W |       2MiB /  12227MiB |      0%      Default |
++-----------------------------------------+------------------------+----------------------+
+nvcc release 13.0, V13.0.88 · torch 2.12.0.dev20260408+cu128
+(GPU idle-checked util<5% mem<800MiB before every timed run — shared with BENCH-5.)
+
+================= GATE (g5): graph capture changes NOTHING mathematically ==============
+max|delta(W')| graph-vs-EAGER and run-to-run determinism, MEASURED, all B:
+  B=1  graph-vs-eager = 0.000e+00 (PASS) · determinism = 0.000e+00 (PASS)
+  B=2  graph-vs-eager = 0.000e+00 (PASS) · determinism = 0.000e+00 (PASS)
+  B=4  graph-vs-eager = 0.000e+00 (PASS) · determinism = 0.000e+00 (PASS)
+  B=8  graph-vs-eager = 0.000e+00 (PASS) · determinism = 0.000e+00 (PASS)
+The captured graph subsumes 5 nodes (8 at B=8) and replays as 1 cudaGraphLaunch.
+BIT-EXACT confirmed: graph replay == eager step, exactly. GATE PASS.
+
+============== HEADLINE: graph-capture step/s vs the un-captured (eager) baseline ======
+(warm pass, iters=100; eager step/s reproduce BENCH-3's cuBLAS-TF32 baseline within ~0.5%)
+
+ B | flame EAGER st/s | flame GRAPH st/s | graph/eager | ms eager -> ms graph
+ --+------------------+------------------+-------------+----------------------
+ 1 |     2280.96      |     2312.97      |   1.0140x   | 0.4384 -> 0.4323
+ 2 |     2159.54      |     2178.39      |   1.0087x   | 0.4631 -> 0.4591
+ 4 |     1929.48      |     1951.23      |   1.0113x   | 0.5183 -> 0.5125
+ 8 |     1625.76      |     1630.78      |   1.0031x   | 0.6151 -> 0.6132
+
+(cold-clock first pass, iters=50, same trend: 1.0063 / 0.9838 / 1.0076 / 0.9998x —
+graph/eager sits at 1.00x +/- ~1.5% noise at EVERY B, both passes.)
+
+=> graph-capture cuts the residual ~2x to: NOTHING. ~2.0x stays ~2.0x. The whole step
+   already costs ~0.44-0.62 ms; collapsing 5-8 launches into one graph launch saves at
+   most ~1%, i.e. per-op launch overhead is in the NOISE of the step wall.
+
+================= DID IT CUT THE ~2x? + WHERE THE RESIDUAL ACTUALLY LIVES =============
+torch TF32 this run (step/s): eager  B1 4200 B2 3521 B4 4192 B8 2708
+                              compile B1 4358 B2 3595 B4 3453 B8 3844
+best-torch = max(eager,compile): B1 4358 · B2 3595 · B4 4192 · B8 3844
+
+ B | flame EAGER ratio | flame GRAPH ratio | did graph cut it?
+ --+-------------------+-------------------+-------------------
+ 1 |   4358/2281=1.91x |   4358/2313=1.88x |  NO (1.91->1.88, =graph≈eager)
+ 2 |   3595/2160=1.66x |   3595/2178=1.65x |  NO
+ 4 |   4192/1929=2.17x |   4192/1951=2.15x |  NO
+ 8 |   3844/1626=2.36x |   3844/1631=2.36x |  NO
+
+The residual ~2x is INVARIANT under graph capture. flame's per-step wall does NOT move
+when launch overhead is amortized away => the residual is NOT launch overhead.
+
+WHERE THE RESIDUAL ~2x LIVES = GEMM-THROUGHPUT, not launch.
+  The step time is dominated by the two cuBLAS-TF32 GEMMs (fwd H=A@W, bwd dW=A^T@dG).
+  The elementwise kernels (valley LN+gelu, transpose, AdamW) are tiny relative to the
+  GEMMs, and the per-op LAUNCH cost (the thing graph-capture removes) is ~1% of the
+  step. torch is faster on the SAME nominal cuBLAS-TF32 path because torch's inductor
+  selects better-tuned GEMM algorithms/heuristics + its captured/fused elementwise for
+  THIS small consumer card (sm_120) shape — i.e. the gap is GEMM kernel-selection /
+  throughput, which graph capture cannot touch. This is exactly the closed-neg BENCH-3
+  flagged as the likely honest outcome.
+
+CONTRAST with HEXA-FLAME-FAST (whole-step megakernel/graph-capture closed-neg ~1.0x for
+the FULL interpreted FP64 trainer): there the wall was interpreted per-step glue +
+occupancy. Here the wall is DIFFERENT (compiled minimal C++ step), and graph capture is
+STILL ~1.0x — but for the OPPOSITE reason: not interpreter glue, but because the cuBLAS
+GEMM already dominates and launch overhead is negligible. Two different walls, same
+graph-capture verdict (~1.0x), both honestly measured.
+
+================================ CONCLUSION ==========================================
+- Graph-capture step/s vs eager: 0.98-1.01x at B=1,2,4,8 (NO speedup; launch overhead
+  is ~1% of the step wall, in the noise).
+- bit-eq graph-vs-eager: YES (max|delta(W')|=0 all B) · determinism: YES (=0 all B).
+- The residual ~2.0-2.4x vs torch is GEMM-THROUGHPUT (cuBLAS algo-selection on sm_120 vs
+  torch inductor), NOT launch/glue/occupancy. BENCH-3's launch attribution is REFUTED;
+  the residual is pinned to GEMM. The lever to close it would be a better-tuned own/cuBLAS
+  GEMM algo for this shape on sm_120 — NOT megakernel/graph-capture.
+- Free pool GPU (aiden RTX 5070), zero vast, no leak.

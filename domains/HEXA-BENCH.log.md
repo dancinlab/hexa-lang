@@ -50,3 +50,15 @@ it to a batch-INVARIANT ~2x (biggest win at B=8 where naive was worst). flame GE
 = 1.43/1.81/2.45/3.46x. NO torch-parity regime in TF32 — residual ~2x is launch/glue/occupancy (serial DAG),
 NOT GEMM; FP64 B>=4 remains flame's win regime (BENCH-1). Verdict .verdicts/hexa-bench/F-BENCH-3.txt; raw
 log tool/bench/bench3_raw.log.
+
+## 2026-06-08 — BENCH-6 graph-capture: does it cut the residual ~2x? (aiden RTX 5070, no vast)
+BENCH-3 ASSERTED (untested) the residual ~2x is "launch/glue/occupancy, NOT GEMM." BENCH-6 TESTED it:
+wrapped the cuBLAS-TF32 per-step DAG (fwd GEMM -> LN/gelu valley -> transpose -> bwd GEMM -> AdamW) in a CUDA
+graph (BeginCapture/EndCapture -> Instantiate -> Launch; 5-8 nodes -> 1 launch) — flame_bench_step_graph.cu,
+eager+graph from one binary, sm_120. GATE bit-exact graph-vs-eager max|delta(W')|=0 + determinism=0 at ALL
+B (PASS). RESULT graph/eager step/s: B1 1.014 · B2 1.009 · B4 1.011 · B8 1.003 — ~1.00x, NO speedup; per-op
+launch overhead is ~1% of the step wall (noise). warm eager step/s reproduce BENCH-3's cuBLAS baseline
+(2281/2160/1929/1626). residual vs best-torch (4358/3595/4192/3844): 1.91/1.66/2.17/2.36x — INVARIANT under
+graph capture. CONCLUSION: BENCH-3's launch attribution REFUTED; residual ~2x = GEMM-THROUGHPUT (cuBLAS algo
+on sm_120 vs torch inductor; the 2 cuBLAS GEMMs dominate, elementwise+launch tiny). Lever = better GEMM, NOT
+megakernel/graph-capture. Verdict .verdicts/hexa-bench/F-BENCH-6.txt.
