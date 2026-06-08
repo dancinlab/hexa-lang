@@ -42,6 +42,8 @@ def build(D, dtype, dev):
 def run(D, T, B, dtype_name, mode, iters, dev):
     if dtype_name == 'fp64':
         dtype = torch.float64
+    elif dtype_name == 'bf16':
+        dtype = torch.bfloat16
     else:
         dtype = torch.float32
     if dtype_name == 'tf32':
@@ -104,7 +106,7 @@ if __name__ == '__main__':
     ap.add_argument('--D', type=int, default=768)
     ap.add_argument('--T', type=int, default=256)
     ap.add_argument('--B', type=int, default=1)
-    ap.add_argument('--dtype', default='fp32', choices=['fp32','tf32','fp64'])
+    ap.add_argument('--dtype', default='fp32', choices=['fp32','tf32','fp64','bf16'])
     ap.add_argument('--mode', default='eager', choices=['eager','compile'])
     ap.add_argument('--iters', type=int, default=50)
     a = ap.parse_args()

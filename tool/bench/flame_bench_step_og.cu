@@ -39,8 +39,11 @@
 #define GEMM_BACKEND 1          // default proxy = cuBLAS-TF32
 #endif
 
-#if GEMM_BACKEND == 1
+#if GEMM_BACKEND == 1 || GEMM_BACKEND == 4
   #include <cublas_v2.h>
+#endif
+#if GEMM_BACKEND == 4
+  #include <cuda_bf16.h>
 #endif
 
 #ifndef BENCH_PREC
@@ -67,6 +70,8 @@
   static const char* GEMM_NAME = "OG10-wgmma";
 #elif GEMM_BACKEND == 3
   static const char* GEMM_NAME = "OWN120-mma.sync";
+#elif GEMM_BACKEND == 4
+  static const char* GEMM_NAME = "cuBLAS-BF16";
 #endif
 
 // AdamW hyperparameters (fixed -> deterministic) — identical to BENCH-1.
@@ -197,6 +202,36 @@ extern "C" void owngemm_sm120(float* C, const float* A, const float* B, int M, i
 static void gemm_setup(){}
 static void gemm(real* C, const real* A, const real* Bm, int M, int K, int N){
     owngemm_sm120(C, A, Bm, M, K, N);   // BENCH_PREC=1 -> real==float, TF32 lane
+}
+#elif GEMM_BACKEND == 4
+// BF16 lane (BENCH-7). float A/W storage + elementwise (deterministic, stable),
+// but the load-bearing D->D GEMM runs in BF16 tensor cores (CUDA_R_16BF inputs,
+// FP32 accum) — the matched-dtype peer of torch --dtype bf16's matmul. The cast
+// to bf16 is RNE-deterministic so run-to-run max|delta|=0 holds, and the result is
+// directly comparable to the naive FP32 ref within bf16's rel-RMS (~1e-2 gate).
+static cublasHandle_t g_cublas = nullptr;
+static __nv_bfloat16 *g_Ab=nullptr,*g_Bb=nullptr; static long long g_nA=0,g_nB=0;
+__global__ void k_f2bf(const float* __restrict__ s, __nv_bfloat16* __restrict__ d, long long n){
+    long long i=(long long)blockIdx.x*blockDim.x+threadIdx.x; if(i<n) d[i]=__float2bfloat16(s[i]); }
+static void gemm_setup(){
+    cublasCreate(&g_cublas);
+    cublasSetMathMode(g_cublas, CUBLAS_DEFAULT_MATH);   // BF16 tensor-core via 16BF inputs
+}
+static void gemm(real* C, const real* A, const real* Bm, int M, int K, int N){
+    long long nA=(long long)M*K, nB=(long long)K*N;
+    if(nA>g_nA){ if(g_Ab)cudaFree(g_Ab); cudaMalloc(&g_Ab,nA*sizeof(__nv_bfloat16)); g_nA=nA; }
+    if(nB>g_nB){ if(g_Bb)cudaFree(g_Bb); cudaMalloc(&g_Bb,nB*sizeof(__nv_bfloat16)); g_nB=nB; }
+    k_f2bf<<<(nA+255)/256,256>>>(A, g_Ab, nA);
+    k_f2bf<<<(nB+255)/256,256>>>(Bm, g_Bb, nB);
+    const float alpha=1.f, beta=0.f;
+    // row-major C=A@B  ==  col-major C^T = B^T @ A^T  ==  gemm(N,M,K, B,A)
+    cublasGemmEx(g_cublas, CUBLAS_OP_N, CUBLAS_OP_N,
+                 N, M, K, &alpha,
+                 g_Bb, CUDA_R_16BF, N,
+                 g_Ab, CUDA_R_16BF, K,
+                 &beta,
+                 C,    CUDA_R_32F,  N,
+                 CUBLAS_COMPUTE_32F, CUBLAS_GEMM_DEFAULT_TENSOR_OP);
 }
 #else
 static void gemm_setup(){}
