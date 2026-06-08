@@ -1167,10 +1167,25 @@ pub fn qforge_pw_frontend_phonons_scr(deck_dir: str, npw_cap: int, xc_mode: int,
     let flat_wlog = qforge_qmesh_omega_log(flat_band)
     let bz_wlog = if bz_ok { qforge_qmesh_omega_log(bz_band) } else { 0.0 }
 
+    // ── LANE2 PROPAGATION: qforge_run derives its per-mode ω from deck.phi (NOT
+    //    from omega_grid — qforge_run.hexa:191-217 re-solves qforge_dynmat∘phonons
+    //    on deck.phi). So to make the BZ-DISPERSED ω_log actually feed λ (and not
+    //    only the histogram axis), we re-anchor deck.phi so its internal ω_log
+    //    equals the BZ ω_log. ω ∝ √phi → scale phi by (bz_wlog/flat_wlog)². When the
+    //    BZ band is ill-formed we keep the q-flat phi_k (regression-safe). d6: this
+    //    transfers the GENUINE dispersion's ω-energy into the el-ph→λ contraction,
+    //    it does NOT tune λ toward any target (the scale is the band's own ω_log). ──
+    let mut phi_run: [float] = []
+    let phi_scale = if bz_ok && flat_wlog > 1.0e-9 {
+        (bz_wlog / flat_wlog) * (bz_wlog / flat_wlog)
+    } else { 1.0 }
+    let mut pri = 0
+    while pri < len(phi_k) { phi_run.push(phi_k[pri] * phi_scale) ; pri = pri + 1 }
+
     // thread the production Φ + ΔV into the deck (qpw_deck_with_phonons), then
     // overwrite omega_grid with the REAL q-mesh band so qforge_run's a²F histogram
     // samples the genuine dispersion (anchored to the band's own scale).
-    let prod = qpw_deck_with_phonons(fe.deck, phi_k, masses, [0.0, 0.0, 0.0],
+    let prod = qpw_deck_with_phonons(fe.deck, phi_run, masses, [0.0, 0.0, 0.0],
                                      1, 1, cellR, dv_modes)
     let deck = _qpwd_deck_with_band(prod, opt_band, eps_occ, nocc)
 
