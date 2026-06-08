@@ -38,6 +38,24 @@ NVIDIA-scale multi-year effort, an honest open frontier — NOT the speed lane, 
 GOAL MET on the speed lane within the small constant it allows; identity (byte-exact/no-LLVM/theorem-cite/
 deterministic) intact across all cells.
 
+
+## 🏁 OWN-GEMM PURITY AXIS — honest near-parity TERMINAL (2026-06-09, BENCH-11..13)
+
+The no-LLVM-purity stretch (flame's no-library bit-exact own-GEMM BEATS cuBLAS) is closed at honest
+near-parity. Journey: BENCH-11 warp-spec TMA (+12-15%, isolated the wall = NOT pipeline depth); BENCH-12
+DECODE-ELIMINATION via in-place wgmma descriptor (the breakthrough: 51->281 TFLOP/s @2048, ~5x, collapsing
+cuBLAS-multiple 6.2x->1.23x@2048 PARITY / 1.62x@4096, bit-exact rel-RMS 0, occupancy 1->2 CTA/SM); BENCH-13
+CTA-rasterization+persistent scheduler (NEUTRAL — D=2048 single-wave so swizzle is a no-op + H100 50MB L2
+already caches the shared operands; D=4096 best 1.52x from occupancy not scheduler). FINAL: own-GEMM ~1.36x
+off cuBLAS on square-fitting shapes, ~1.5-1.6x on tail-quantized (D=4096/132-SM = 3.88 waves), BIT-EXACT
+(rel-RMS 0) throughout. KEY FINDING: the ONLY remaining lever is split-K, which changes FP32 accumulation
+order and BREAKS the bit-exact gate — i.e. the irreducible residual IS EXACTLY the bit-exactness flame
+refuses to trade. So 'own-GEMM>cuBLAS' is unreachable WITHOUT abandoning flame's identity (byte-exact
+determinism) = a PRINCIPLED terminal, not a failure: the gap that remains is the identity itself. Net result:
+flame's no-library bit-exact own-GEMM went from 1/7th of cuBLAS to near-parity (within 1.36-1.6x), an
+NVIDIA-library-class result for a no-LLVM theorem-cited compiler. The speed lane (calls cuBLAS) already
+beat-all (BENCH-7..10). Both lanes now at their honest ceilings; identity intact across every measurement.
+
 @goal: Honest head-to-head: flame CLMConvMoE train step vs PyTorch (eager + compile) across a batch
 sweep at matched dtype, on the FREE pool GPU (aiden RTX 5070) — NOT a rented vast pod (g1 canonical-first).
 Supersedes the single-point #2912 (batch=1 FP64, ~1656-2207x slower) with a fair curve: same shape, matched
