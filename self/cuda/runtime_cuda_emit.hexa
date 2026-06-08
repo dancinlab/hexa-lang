@@ -979,6 +979,118 @@ fn emit_runtime_cuda_c() -> str {
             "    return 0;\n" +
             "}\n" +
             "\n" +
+            "/* HEXA-0POD OP-2 (BENCH-10 transpose-elimination) — C[K,N] = A[M,K]^T @ B[M,N]\n" +
+            " * via cuBLAS Dgemm with OP_T on A, NO materialized A^T. Owns the backward\n" +
+            " * dW = xcol^T @ dy of conv1d_bwd_via_forge: the prior path ran a SEPARATE\n" +
+            " * transpose-layout im2col pass (_clmp_im2col_t -> xcolT[Kdim,T]) then an OP_N\n" +
+            " * GEMM; this reuses the forward's NON-transposed xcol[T,Kdim] and lets cuBLAS\n" +
+            " * read it transposed for free (the extra full im2col_t pass is eliminated).\n" +
+            " * Math contract: dW_flat[j,c] = Σ_t A[t,j]·B[t,c] (contraction over the shared\n" +
+            " * M=T dim). Byte-eq to im2col_t+OP_N on the CPU oracle (max|Δ|=0,\n" +
+            " * clm_prod_transpose_elim_eq.hexa); the cuBLAS reduction is an fp-accum-order\n" +
+            " * variant of the OP_N Dgemm (rel-RMS ~1e-14, identical-tolerance lane).\n" +
+            " *\n" +
+            " * Row-major C[K,N] = A^T(K×M) @ B(M×N). cuBLAS col-major: view row-major B as\n" +
+            " * col-major B^T (N×M), row-major A as col-major A^T (K×M). Compute col-major\n" +
+            " *   C^T_col(N×K) = B^T_col(N×M) · (A^T_col)^T(M×K)\n" +
+            " * = Dgemm(OP_N on B, OP_T on A, m=N, n=K, k=M, B_dev ldb=N, A_dev lda=K,\n" +
+            " *   C_dev ldc=N) — the col-major (N×K) IS the row-major C(K×N). */\n" +
+            "__global__ void _hx_k_gemm_t(const double* __restrict__ A,\n" +
+            "                             const double* __restrict__ B,\n" +
+            "                             double* __restrict__ C,\n" +
+            "                             int64_t M, int64_t K, int64_t N) {\n" +
+            "    /* own (no-cuBLAS) fallback: C[k,n] = Σ_m A[m*K+k]·B[m*N+n]. */\n" +
+            "    int64_t n = (int64_t)blockIdx.x * blockDim.x + threadIdx.x;\n" +
+            "    int64_t k = (int64_t)blockIdx.y * blockDim.y + threadIdx.y;\n" +
+            "    if (k >= K || n >= N) return;\n" +
+            "    double acc = 0.0;\n" +
+            "    for (int64_t m = 0; m < M; m++) acc += A[m * K + k] * B[m * N + n];\n" +
+            "    C[k * N + n] = acc;\n" +
+            "}\n" +
+            "int _hx_cuda_farr_matmul_tn_gpu(int64_t a_id, int64_t M, int64_t K,\n" +
+            "                                int64_t b_id, int64_t N,\n" +
+            "                                int64_t c_id) {\n" +
+            "    if (_ensure_cublas() != 0) return -1;\n" +
+            "    if (a_id < 0 || b_id < 0 || c_id < 0) {\n" +
+            "        fprintf(stderr, \"[cuda] matmul_tn: bad ids %lld %lld %lld\\n\",\n" +
+            "                (long long)a_id, (long long)b_id, (long long)c_id);\n" +
+            "        return -1;\n" +
+            "    }\n" +
+            "    if (M <= 0 || K <= 0 || N <= 0) {\n" +
+            "        fprintf(stderr, \"[cuda] matmul_t: bad shape M=%lld K=%lld N=%lld\\n\",\n" +
+            "                (long long)M, (long long)K, (long long)N);\n" +
+            "        return -1;\n" +
+            "    }\n" +
+            "    if (_h2d(a_id) != 0) return -1;\n" +
+            "    if (_h2d(b_id) != 0) return -1;\n" +
+            "    if (_ensure_slot_cap(c_id) != 0) return -1;\n" +
+            "    HexaFarrEntry* ce = &_hx_farr_table[c_id];\n" +
+            "    _CudaFarrSlot*  cs = &g_slots[c_id];\n" +
+            "    if (!ce->buf || ce->len < K * N) {\n" +
+            "        fprintf(stderr, \"[cuda] matmul_t: C host len %lld < K*N %lld\\n\",\n" +
+            "                (long long)ce->len, (long long)(K*N));\n" +
+            "        return -1;\n" +
+            "    }\n" +
+            "    if (_forge_sync() != 0) return -1;\n" +
+            "    if (!cs->d_buf || cs->len != ce->len) {\n" +
+            "        if (cs->d_buf) cudaFree(cs->d_buf);\n" +
+            "        cudaError_t er = cudaMalloc((void**)&cs->d_buf,\n" +
+            "                                    (size_t)ce->len * sizeof(double));\n" +
+            "        if (er != cudaSuccess) {\n" +
+            "            fprintf(stderr, \"[cuda] cudaMalloc C_t(%lld) failed: %s\\n\",\n" +
+            "                    (long long)ce->len, cudaGetErrorString(er));\n" +
+            "            cs->d_buf = NULL; cs->len = 0;\n" +
+            "            return -1;\n" +
+            "        }\n" +
+            "        cs->len = ce->len;\n" +
+            "    }\n" +
+            "    double* A_dev = g_slots[a_id].d_buf;\n" +
+            "    double* B_dev = g_slots[b_id].d_buf;\n" +
+            "    double* C_dev = cs->d_buf;\n" +
+            "    const double alpha = 1.0;\n" +
+            "    const double beta  = 0.0;\n" +
+            "    if (getenv(\"HEXA_OWN_GEMM\") && getenv(\"HEXA_OWN_GEMM\")[0]) {\n" +
+            "        static int _own_gemmt_fired = 0;\n" +
+            "        if (!_own_gemmt_fired) { _own_gemmt_fired = 1;\n" +
+            "            fprintf(stderr, \"[OWN-GEMM-FIRED] _hx_k_gemm_t DEVICE path (no cuBLAS)\\n\"); }\n" +
+            "        dim3 _gblk(16, 16);\n" +
+            "        dim3 _ggrd((unsigned)((N + 15) / 16), (unsigned)((K + 15) / 16));\n" +
+            "        _hx_k_gemm_t<<<_ggrd, _gblk, 0, _forge_stream()>>>(A_dev, B_dev, C_dev, M, K, N);\n" +
+            "        if (_forge_launch_check(\"own_gemm_t\") != 0) return -1;\n" +
+            "    } else {\n" +
+            "    static int _gemmt_fired = 0;\n" +
+            "    if (!_gemmt_fired) { _gemmt_fired = 1;\n" +
+            "        fprintf(stderr, \"[MATMUL-T-FIRED] cuBLAS Dgemm OP_T (transpose-elim, no A^T pass)\\n\"); }\n" +
+            "    /* Dgemm(OP_N B, OP_T A, m=N, n=K, k=M): col-major C^T(N×K) = B(N×M)·A(M×K). */\n" +
+            "    cublasStatus_t st = cublasDgemm(g_cublas,\n" +
+            "                                    CUBLAS_OP_N, CUBLAS_OP_T,\n" +
+            "                                    (int)N, (int)K, (int)M,\n" +
+            "                                    &alpha,\n" +
+            "                                    B_dev, (int)N,\n" +
+            "                                    A_dev, (int)K,\n" +
+            "                                    &beta,\n" +
+            "                                    C_dev, (int)N);\n" +
+            "    if (st != CUBLAS_STATUS_SUCCESS) {\n" +
+            "        fprintf(stderr, \"[cuda] cublasDgemm OP_T failed: %d\\n\", (int)st);\n" +
+            "        return -1;\n" +
+            "    }\n" +
+            "    }\n" +
+            "    if (_forge_sync() != 0) return -1;\n" +
+            "    cudaError_t er = cudaMemcpy(ce->buf, C_dev,\n" +
+            "                                (size_t)(K * N) * sizeof(double),\n" +
+            "                                cudaMemcpyDeviceToHost);\n" +
+            "    if (er != cudaSuccess) {\n" +
+            "        fprintf(stderr, \"[cuda] cudaMemcpy C_t D2H failed: %s\\n\",\n" +
+            "                cudaGetErrorString(er));\n" +
+            "        return -1;\n" +
+            "    }\n" +
+            "    ce->d_buf      = (void*)C_dev;\n" +
+            "    ce->loc        = FARR_MIRRORED;\n" +
+            "    ce->dirty_host = 0;\n" +
+            "    ce->dirty_dev  = 0;\n" +
+            "    return 0;\n" +
+            "}\n" +
+            "\n" +
             "/* ════════════════════════════════════════════════════════════════════\n" +
             " * LEVER (a) — device-resident im2col / col2im (forge device-feed).\n" +
             " *\n" +
