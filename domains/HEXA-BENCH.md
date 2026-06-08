@@ -85,6 +85,18 @@ no-LLVM/reproducible, NOT step-rate, so a large gap is EXPECTED and fine.
   FP64 flame-win (B<=4) RE-CONFIRMED on H100 (flame 0.18-0.59 ms vs torch flat ~0.70 ms; up to 3.9x @B1).
 <!-- /ANCHOR:BENCH-4 -->
 
+- [ ] **BENCH-7 — full-regime frontier map: WHERE does flame still lose to torch? (goal: beat all)** —
+  user goal '모두 이길때까지' (beat torch in EVERY regime). Sweep shape D in {768,1536,2048,4096} x T x
+  batch x dtype {FP64, TF32-cuBLAS, TF32-OG10, BF16} on a real H100, vs torch (eager+compile). For each
+  cell record flame/torch ms ratio + WIN/LOSE. Separate the two flame TF32 lanes: flame-calls-cuBLAS (no
+  own-GEMM penalty, only the no-Python-glue edge) vs flame-own-GEMM-OG10 (6.09x off cuBLAS). HYPOTHESIS:
+  flame-cuBLAS WINS most cells (same GEMM + no Python glue); flame-own-GEMM loses only the large GEMM-bound
+  TF32/BF16 cells (where the 6.09x-off own-GEMM dominates). Gate (g5): the full WIN/LOSE matrix verbatim +
+  the EXACT set of cells flame still loses = the remaining battleground for the goal. HONEST: at large
+  GEMM-bound shapes flame-own-GEMM will lose to cuBLAS; whether flame-cuBLAS-lane wins everywhere is the
+  real question (if yes, 'beat all' is achievable by calling cuBLAS + no-Python glue; the own-GEMM is a
+  separate no-LLVM-purity axis). H100 (vast, paid — justified for the large-shape + OG10-Hopper sweep).
+
 ## honest framing (g5)
 
 flame is NOT a speed-competition tool — torch will almost certainly win throughput by a large margin (#2912
