@@ -1,0 +1,50 @@
+name: forge-runtime-warn-gate
+
+# ── OP-5b: forge-runtime -Wcomment hygiene gate (0-GPU) ─────────────────────
+#
+# Locks in the OP-5 (#2973) cleanup. OP-5 removed a `-Wcomment` defect from
+# self/runtime.h (a `native/*.c` glob inside a block comment formed a nested
+# `/*` token clang flags). This gate re-checks the *already-clean* forge/
+# runtime header surface with `-Wcomment -Werror` and FAILS only if a NEW
+# warning of that class re-lands in one of those specific files.
+#
+# LOW BLAST RADIUS — this is NOT a repo-wide `-Werror`:
+#   * Compiles ONLY an explicit, pre-verified-clean allow-list (see the script
+#     tool/forge_runtime_warn_gate.sh). Grandfathered warnings anywhere else in
+#     the tree are untouched and can never fail this gate.
+#   * Enables ONLY `-Wcomment` — the exact class OP-5 cleaned. It is a purely
+#     lexical check (nested `/*` in a comment), so no CUDA toolchain, project
+#     includes, or type definitions are needed; each file compiles stand-alone.
+#   * The script is the SSOT (also runnable locally / in a pre-commit hook);
+#     this workflow is a thin CI wrapper around it. The gate passes on the
+#     current clean tree, so it introduces no false-positive CI break.
+#
+# 0-GPU: pure build-level syntax check, no kernel run.
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'self/runtime.h'
+      - 'self/forge/forge_tier_v1.h'
+      - 'self/native/lora_cuda.h'
+      - 'tool/forge_runtime_warn_gate.sh'
+      - '.github/workflows/forge-runtime-warn-gate.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  forge-runtime-wcomment:
+    name: forge/runtime -Wcomment hygiene (OP-5-clean files)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Run forge-runtime warning-hygiene gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          sh tool/forge_runtime_warn_gate.sh

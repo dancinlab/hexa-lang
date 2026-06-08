@@ -1,0 +1,107 @@
+F-OP5B-WARN-GATE — forge-runtime warning-hygiene CI gate (LOCAL, 0-GPU)
+=======================================================================
+Goal: lock in the OP-5 (#2973) -Wcomment cleanup so the same defect class
+cannot silently re-land in the forge/runtime header surface — WITHOUT a
+repo-wide -Werror that would fail CI on grandfathered warnings elsewhere.
+
+Option chosen: OPTION A (hard gate, fail-only-on-new-warning, scoped to the
+already-clean files). Low blast radius by construction (see below).
+
+GPU: NONE. Pure build-level syntax check (clang -fsyntax-only). No kernel run.
+
+------------------------------------------------------------------------
+WHAT IS GUARDED (explicit OP-5-clean allow-list)
+------------------------------------------------------------------------
+The gate compiles ONLY these files, each verified -Wcomment-clean on the
+current tree before being added to the list:
+  * self/runtime.h                 <- the file OP-5 (#2973) actually cleaned
+  * self/forge/forge_tier_v1.h     <- forge tier header (sibling, clean)
+  * self/native/lora_cuda.h        <- forge CUDA host header (sibling, clean)
+
+OP-5 fixed a `-Wcomment` defect at self/runtime.h:422-423: a `native/*.c`
+glob written inside a `/* ... */` block comment formed a nested `/*` token
+that clang flags. This gate re-checks that exact class.
+
+------------------------------------------------------------------------
+GUARD MECHANISM
+------------------------------------------------------------------------
+Script (SSOT, locally runnable): tool/forge_runtime_warn_gate.sh
+CI wrapper:                       .github/workflows/forge-runtime-warn-gate.yml
+                                  (PR-on-main, paths-scoped to the guarded
+                                  files + the script + the workflow itself;
+                                  also workflow_dispatch)
+
+For each allow-listed file:
+  $ clang -fsyntax-only -Wcomment -Werror -x c <file>
+  rc != 0  => a nested-comment regression -> gate FAILS (exit 1)
+  rc == 0  => clean
+
+Why it is genuinely low blast radius (a reviewer can see at a glance):
+  1. Compiles ONLY the explicit allow-list. Nothing else in the tree is
+     touched, so grandfathered warnings ANYWHERE else can never fail it.
+  2. Enables ONLY -Wcomment (the exact class OP-5 cleaned). It is a purely
+     LEXICAL check (nested `/*` inside a comment) — no CUDA toolchain, no
+     project includes, no type definitions needed; each file is compiled
+     stand-alone via `-x c`. (self/runtime.h also passes a full
+     `clang -fsyntax-only -x c` with exit 0 — it is self-contained.)
+  3. Adding a file requires confirming it exits 0 on the current tree first,
+     so the gate is guaranteed to pass on a clean checkout (no false-positive
+     CI break, including on this PR's own CI).
+  4. Falls back clang -> gcc -> cc (all implement -Wcomment identically);
+     resolves repo root via `git rev-parse`, so it runs from any CWD.
+
+------------------------------------------------------------------------
+LOCAL PROOF — PASSES ON CLEAN TREE (no false positive)   [VERBATIM]
+------------------------------------------------------------------------
+$ sh tool/forge_runtime_warn_gate.sh
+OP-5b forge-runtime warning gate — CC=clang, class=-Wcomment (lexical), -Werror
+guarded files (OP-5-clean allow-list):
+  PASS  self/runtime.h
+  PASS  self/forge/forge_tier_v1.h
+  PASS  self/native/lora_cuda.h
+
+GATE PASSED: 3 guarded forge/runtime file(s) clean of -Wcomment.
+exit=0
+
+------------------------------------------------------------------------
+LOCAL PROOF — CATCHES A RE-INTRODUCED WARNING (inject + revert)  [VERBATIM]
+------------------------------------------------------------------------
+$ printf '/* verdict proof: nested /* in block comment */\n' >> self/runtime.h
+$ sh tool/forge_runtime_warn_gate.sh
+OP-5b forge-runtime warning gate — CC=clang, class=-Wcomment (lexical), -Werror
+guarded files (OP-5-clean allow-list):
+  FAIL  self/runtime.h  (-Wcomment regression — re-introduced nested comment?)
+        self/runtime.h:2050:26: error: '/*' within block comment [-Werror,-Wcomment]
+         2050 | /* verdict proof: nested /* in block comment */
+              |                          ^
+        1 error generated.
+  PASS  self/forge/forge_tier_v1.h
+  PASS  self/native/lora_cuda.h
+
+GATE FAILED: a -Wcomment warning regressed in an OP-5-clean forge/runtime file.
+Fix the nested-comment defect (e.g. write 'native/ *.c' not 'native/*.c').
+exit=1
+(then reverted: `git diff --quiet self/runtime.h` => clean)
+
+------------------------------------------------------------------------
+LOCAL PROOF — IGNORES GRANDFATHERED WARNINGS IN UNGUARDED FILES (CI-safe)
+------------------------------------------------------------------------
+Injected the same nested-comment defect into an UNGUARDED forge CUDA source
+(self/native/hxcuda_conv1d.cu), ran the gate, reverted:
+  gate exit with the unguarded-file warning present = 0  (untouched, as designed)
+=> the gate cannot fail on any file outside its allow-list; a repo-wide
+   -Werror is explicitly NOT used.
+
+------------------------------------------------------------------------
+GATE (g5) RESULT
+------------------------------------------------------------------------
+passes-on-clean-tree ............ YES (exit 0, 3/3 guarded files PASS)
+catches-regression .............. YES (exit 1 on injected nested /*, precise
+                                   diagnostic; reverts clean)
+CI-safe (no grandfathered fail) . YES (allow-list only; unguarded-file warning
+                                   leaves the gate green)
+behavior-preserving ............. YES (CI-only addition: one script + one
+                                   workflow; no source logic / codegen change)
+
+CONCLUSION: OP-5b GREEN. The OP-5 -Wcomment cleanup is now regression-locked
+by a minimal, auditable, 0-GPU gate that guards only the already-clean files.

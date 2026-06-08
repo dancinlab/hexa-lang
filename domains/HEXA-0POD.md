@@ -52,6 +52,15 @@ loop targets what the consumer card + code can carry.
   Repo-wide `-Wcomment` + `-Wextra-tokens` sweep over ALL checked-in C/H/CU/CUH + forge-emitted wrappers +
   emit-string `.hexa` sources found NO other genuine hits (one `#pragma once in main file` artifact correctly
   ignored, not "fixed"). All behavior-preserving. Verdict .verdicts/hexa-0pod/F-OP5-FORGE-HARDEN.txt.
+- [x] **OP-5b — forge-runtime warning-hygiene CI gate (local, 0-GPU)** — lock in the OP-5 `-Wcomment` cleanup
+  so it can't reland. Added `tool/forge_runtime_warn_gate.sh` (SSOT) + `.github/workflows/forge-runtime-warn-
+  gate.yml` (PR-on-main, paths-scoped). OPTION A hard gate: `clang -fsyntax-only -Wcomment -Werror -x c` over an
+  EXPLICIT OP-5-clean allow-list (`self/runtime.h`, `self/forge/forge_tier_v1.h`, `self/native/lora_cuda.h`),
+  fails ONLY on a new nested-comment warning in those files. LOW BLAST RADIUS — NOT a repo-wide `-Werror`:
+  allow-list only (grandfathered warnings elsewhere can never fail it) + only `-Wcomment` (purely lexical, no
+  CUDA/includes/types). Verified LOCALLY: passes on clean tree (3/3 PASS, exit 0); catches an injected nested
+  `/*` in a guarded file (exit 1, precise diagnostic, reverts clean); IGNORES the same warning injected into an
+  unguarded file (exit 0 = CI-safe). Behavior-preserving CI-only addition. Verdict .verdicts/hexa-0pod/F-OP5B-WARN-GATE.txt.
 
 ## deferred (0-pod follow-ups surfaced by the loop — self-feed)
 
@@ -75,12 +84,6 @@ loop targets what the consumer card + code can carry.
   _clmp_matmul_batched. Extend the OP_T transpose-elim to the batched dW GEMM to reach the dominant path.
   Byte-eq gate identical (max|Δ|=0 to the im2col_t+OP_N batched reference). Free aiden GPU.
 
-- **OP-5b — forge runtime warnings-as-errors CI gate (0-GPU).** OP-5 cleaned the one `-Wcomment` defect in the
-  forge/runtime header surface and confirmed (by sweep) it was the only one. Lock it in: add a tiny CI step that
-  `clang -fsyntax-only -Wcomment -Werror`-checks the checked-in forge/runtime C/H/CU headers (`self/runtime.h`,
-  `self/forge/*.h`, `self/native/*.h`, `self/cuda/*.cu|*.c` wrappers) so a regression can't reland. Pure build-
-  level gate, no kernel run — 0-GPU. (Header-standalone `#pragma once`/undefined-CUDA-type artifacts must be
-  excluded or the headers compiled via their including TU, not `-x c` standalone.)
 - **OP-5c — forge error-path / dtype-edge / determinism hardening (NEEDS GPU — deferred out of 0-GPU scope).**
   The robustness improvements OP-5 originally listed (error paths, dtype edge cases, determinism guards in the
   forge runtime) cannot be gated byte-eq without running a kernel; they belong to a GPU round (aiden 5070), not
