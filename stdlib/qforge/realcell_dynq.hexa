@@ -50,6 +50,7 @@
 
 use "stdlib/qforge/dfpt"
 use "stdlib/qforge/mpgrid"
+use "stdlib/qforge/checkpoint"
 use "stdlib/qforge/realcell_qmesh"
 
 // ── per-(G,q) ion form-factor kernel K_κκ'(p)=V_κ(p)·V_κ'(p) ─────────────────
@@ -105,8 +106,12 @@ pub fn qforge_dynq_ionic(gvecs: [float], qvec: [float], tau: [float],
 
     let qx = qvec[0] ; let qy = qvec[1] ; let qz = qvec[2]
 
-    // ── off-diagonal (κ,κ') + diagonal-at-q term: Σ_G (G+q)_α(G+q)_β K_κκ'(|G+q|)
-    //    cos((G+q)·Δτ).  Build the full κ×κ' block for each (G+q). ──
+    // ── the PAIR term C_κκ'(q) = Σ_G (G+q)_α(G+q)_β K_κκ'(|G+q|) cos((G+q)·Δτ),
+    //    where K_κκ'(p)=V_κ(p)·V_κ'(p) ≥ 0 (V's same sign). Built for the FULL
+    //    κ×κ' block (κ=κ' included). cos = Re of the e^{i(G+q)·Δτ} phase (real D for
+    //    a centrosymmetric / sum-over-±G shell). We accumulate −C into acc so the
+    //    force constant Φ = −∂²(pair energy)/∂u² is the standard POSITIVE-curvature
+    //    restoring matrix (a higher form-factor product = a stiffer bond). ──
     let mut ig = 0
     while ig < nG {
         let gx = gvecs[ig * 3] ; let gy = gvecs[ig * 3 + 1] ; let gz = gvecs[ig * 3 + 2]
@@ -115,7 +120,7 @@ pub fn qforge_dynq_ionic(gvecs: [float], qvec: [float], tau: [float],
         if p2 > 1.0e-12 {
             let pm = sqrt(p2)
             if gcut <= 0.0 || pm <= gcut {
-                // per-atom form factor at |G+q|.
+                let pcomp = [px, py, pz]
                 let mut ka = 0
                 while ka < nat {
                     let vka = _dq_vff_interp(vff, pmag, ng, spec_of[ka], pm)
@@ -127,17 +132,19 @@ pub fn qforge_dynq_ionic(gvecs: [float], qvec: [float], tau: [float],
                         let dty = tay - tau[kb * 3 + 1]
                         let dtz = taz - tau[kb * 3 + 2]
                         let ph = px * dtx + py * dty + pz * dtz
+                        // SIGN: off-diagonal pair coupling is NEGATIVE of the bond
+                        //   stiffness (Φ_κκ' = −k_κκ' for κ≠κ'); the diagonal then
+                        //   carries +Σ_κ' k_κκ' from the ASR below — the textbook
+                        //   spring-network sign so optical branches are ω²>0.
                         let w = vka * vkb * cos(ph)
-                        // (G+q)_α (G+q)_β outer product over the 3×3 cartesian block.
-                        let pcomp = [px, py, pz]
                         let mut al = 0
                         while al < 3 {
                             let ia = ka * 3 + al
                             let mut be = 0
                             while be < 3 {
                                 let ib = kb * 3 + be
-                                acc[ia * dim + ib] = acc[ia * dim + ib]
-                                    + pcomp[al] * pcomp[be] * w
+                                let contrib = pcomp[al] * pcomp[be] * w
+                                acc[ia * dim + ib] = acc[ia * dim + ib] - contrib
                                 be = be + 1
                             }
                             al = al + 1
@@ -151,14 +158,19 @@ pub fn qforge_dynq_ionic(gvecs: [float], qvec: [float], tau: [float],
         ig = ig + 1
     }
 
-    // ── acoustic sum rule (self term at q): subtract Σ_κ' D_κκ'(Γ-self) on the
-    //    diagonal κ-block so Σ_κ D_κκ'(Γ)=0 (translational invariance). We use the
-    //    q=Γ self term Σ_G G_α G_β K_κκ''(|G|) summed over κ'' — the standard ASR. ──
+    // ── ACOUSTIC SUM RULE — the EXACT translational-invariance restoring term.
+    //   The textbook recipe: D_κκ(q) ← D_κκ(q) + Σ_{κ'} C_κκ'(Γ), where C_κκ'(Γ) is
+    //   the SAME pair term at q=Γ (the −acc we accumulated, evaluated at q=0). This
+    //   GUARANTEES Σ_κ D_κκ'(Γ)=0 (ω_acoustic(Γ)=0) for ANY form factor / geometry,
+    //   and makes the on-site stiffness = the sum of the bond stiffnesses to all
+    //   neighbours (the spring-network self term). We recompute C_κκ'(Γ) here (G+0)
+    //   and ADD Σ_κ' of it onto the κ diagonal block. ──
     let mut ka = 0
     while ka < nat {
-        // self stiffness Σ_κ'' Σ_G G_αG_β V_κ(|G|)V_κ''(|G|)
+        // self block S_κ = Σ_{κ'} C_κκ'(Γ) = Σ_{κ'} Σ_G G_αG_β V_κ(|G|)V_κ'(|G|)cos(G·Δτ)
         let mut sxx = 0.0 ; let mut sxy = 0.0 ; let mut sxz = 0.0
         let mut syy = 0.0 ; let mut syz = 0.0 ; let mut szz = 0.0
+        let tax = tau[ka * 3] ; let tay = tau[ka * 3 + 1] ; let taz = tau[ka * 3 + 2]
         let mut ig2 = 0
         while ig2 < nG {
             let gx = gvecs[ig2 * 3] ; let gy = gvecs[ig2 * 3 + 1] ; let gz = gvecs[ig2 * 3 + 2]
@@ -167,10 +179,16 @@ pub fn qforge_dynq_ionic(gvecs: [float], qvec: [float], tau: [float],
                 let gm = sqrt(g2)
                 if gcut <= 0.0 || gm <= gcut {
                     let vka = _dq_vff_interp(vff, pmag, ng, spec_of[ka], gm)
+                    // Σ_κ' V_κ'(|G|) cos(G·(τ_κ − τ_κ')) — the full Γ pair sum over κ'.
                     let mut sumv = 0.0
                     let mut kc = 0
                     while kc < nat {
-                        sumv = sumv + _dq_vff_interp(vff, pmag, ng, spec_of[kc], gm)
+                        let vkc = _dq_vff_interp(vff, pmag, ng, spec_of[kc], gm)
+                        let dtx = tax - tau[kc * 3]
+                        let dty = tay - tau[kc * 3 + 1]
+                        let dtz = taz - tau[kc * 3 + 2]
+                        let ph = gx * dtx + gy * dty + gz * dtz
+                        sumv = sumv + vkc * cos(ph)
                         kc = kc + 1
                     }
                     let w = vka * sumv
@@ -187,7 +205,7 @@ pub fn qforge_dynq_ionic(gvecs: [float], qvec: [float], tau: [float],
             let mut be = 0
             while be < 3 {
                 let ib = ka * 3 + be
-                acc[ia * dim + ib] = acc[ia * dim + ib] - s3[al * 3 + be]
+                acc[ia * dim + ib] = acc[ia * dim + ib] + s3[al * 3 + be]
                 be = be + 1
             }
             al = al + 1
