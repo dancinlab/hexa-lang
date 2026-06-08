@@ -57,6 +57,16 @@ no-LLVM/reproducible, NOT step-rate, so a large gap is EXPECTED and fine.
   no torch-parity in TF32. WIN = flame's own-GEMM now RUNS+correct on sm_120 (BENCH-3 ISA-gap weakness REMOVED),
   not beating torch. Determinism max|delta|=0 all cells. Free pool GPU (aiden), zero vast, no leak.
 
+<!-- ANCHOR:BENCH-4 (unique — parallel BENCH-5/6 append at their own anchors) -->
+- [ ] **BENCH-4 — measure the REAL OG10 own-GEMM on a true H100 (replace BENCH-3's cuBLAS proxy)** —
+  WIP. BENCH-3 had to PROXY OG10 with cuBLAS-TF32 because aiden's sm_120 rejects the Hopper wgmma ISA. BENCH-4
+  rents ONE real H100 (vast, sm_90a — paid, justified: OG10 is Hopper-only) and runs the SAME bench step with
+  the ACTUAL OG10 own-GEMM (W10 TF32-wgmma, self/native/wgmma/wgmma_tf32_w10_lib.h) wired as the D->D GEMM.
+  3-way: NAIVE (BENCH-1) vs real OG10 (this) vs cuBLAS proxy (BENCH-3) vs torch. Gate (g5): bit-exact /
+  rel-RMS<=1e-2 vs naive ref. HONEST: OG10 is 6.09x off cuBLAS so it should land BETWEEN naive and proxy
+  (close the 3-8x naive gap but LESS than the proxy's ~2x). Also re-confirm the FP64 flame-win regime on H100.
+<!-- /ANCHOR:BENCH-4 -->
+
 ## honest framing (g5)
 
 flame is NOT a speed-competition tool — torch will almost certainly win throughput by a large margin (#2912
