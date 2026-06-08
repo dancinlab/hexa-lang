@@ -1,0 +1,375 @@
+############ HEXA-BENCH BENCH-7  T=256 iters=50  arch=sm_90a  D={768 1536 2048 4096} B={1 8} ############
+==== nvidia-smi ====
+Mon Jun  8 12:48:44 2026       
++-----------------------------------------------------------------------------------------+
+| NVIDIA-SMI 560.35.03              Driver Version: 560.35.03      CUDA Version: 12.6     |
+|-----------------------------------------+------------------------+----------------------+
+| GPU  Name                 Persistence-M | Bus-Id          Disp.A | Volatile Uncorr. ECC |
+| Fan  Temp   Perf          Pwr:Usage/Cap |           Memory-Usage | GPU-Util  Compute M. |
+|                                         |                        |               MIG M. |
+|=========================================+========================+======================|
+|   0  NVIDIA H100 80GB HBM3          On  |   00000000:46:00.0 Off |                    0 |
+| N/A   41C    P0            103W /  700W |       1MiB /  81559MiB |      0%      Default |
+|                                         |                        |             Disabled |
++-----------------------------------------+------------------------+----------------------+
+                                                                                         
++-----------------------------------------------------------------------------------------+
+| Processes:                                                                              |
+|  GPU   GI   CI        PID   Type   Process name                              GPU Memory |
+|        ID   ID                                                               Usage      |
+|=========================================================================================|
+|  No running processes found                                                             |
++-----------------------------------------------------------------------------------------+
+==== nvcc ====
+Cuda compilation tools, release 12.4, V12.4.131
+Build cuda_12.4.r12.4/compiler.34097967_0
+==== OG10 (W10 TF32-wgmma) sm_90a ISA CHECK ====
+OG10 sm_90a COMPILE: OK
+==== build flame lanes ====
+build OK (OG10)
+
+================= D=768  B=1  T=256 =================
+--- flame FP64 (naive) D=768 B=1 ---
+[CFG] FP64 GEMM=NAIVE-tiled  GPU=NVIDIA H100 80GB HBM3 cc=9.0  D=768 T=256 B=1 -> M=256 K=768 N=768  iters=50  est_mem=0.03 GiB
+[DETERMINISM] FP64 GEMM=NAIVE-tiled B=1 run-to-run max|delta(W')| = 0.000e+00 (gate ==0: PASS)
+[GATE] FP64 GEMM=NAIVE-tiled B=1 rel-RMS(W' vs NAIVE-ref) = 0.000e+00 (gate <=1e-2: PASS)
+[RESULT] FP64 GEMM=NAIVE-tiled B=1  ms/step=0.1786  step/s=5598.5726  samples/s=5598.5726
+--- flame TF32-cuBLAS  D=768 B=1 ---
+[CFG] TF32 GEMM=cuBLAS-TF32(proxy)  GPU=NVIDIA H100 80GB HBM3 cc=9.0  D=768 T=256 B=1 -> M=256 K=768 N=768  iters=50  est_mem=0.01 GiB
+[DETERMINISM] TF32 GEMM=cuBLAS-TF32(proxy) B=1 run-to-run max|delta(W')| = 0.000e+00 (gate ==0: PASS)
+[GATE] TF32 GEMM=cuBLAS-TF32(proxy) B=1 rel-RMS(W' vs NAIVE-ref) = 4.088e-08 (gate <=1e-2: PASS)
+[RESULT] TF32 GEMM=cuBLAS-TF32(proxy) B=1  ms/step=0.0452  step/s=22140.5077  samples/s=22140.5077
+--- flame TF32-OG10    D=768 B=1 ---
+[CFG] TF32 GEMM=OG10-wgmma  GPU=NVIDIA H100 80GB HBM3 cc=9.0  D=768 T=256 B=1 -> M=256 K=768 N=768  iters=50  est_mem=0.01 GiB
+[DETERMINISM] TF32 GEMM=OG10-wgmma B=1 run-to-run max|delta(W')| = 0.000e+00 (gate ==0: PASS)
+[GATE] TF32 GEMM=OG10-wgmma B=1 rel-RMS(W' vs NAIVE-ref) = 2.160e-04 (gate <=1e-2: PASS)
+[RESULT] TF32 GEMM=OG10-wgmma B=1  ms/step=0.1341  step/s=7458.0917  samples/s=7458.0917
+--- flame BF16-cuBLAS  D=768 B=1 ---
+[CFG] TF32 GEMM=cuBLAS-BF16  GPU=NVIDIA H100 80GB HBM3 cc=9.0  D=768 T=256 B=1 -> M=256 K=768 N=768  iters=50  est_mem=0.01 GiB
+[DETERMINISM] TF32 GEMM=cuBLAS-BF16 B=1 run-to-run max|delta(W')| = 0.000e+00 (gate ==0: PASS)
+[GATE] TF32 GEMM=cuBLAS-BF16 B=1 rel-RMS(W' vs NAIVE-ref) = 2.673e-07 (gate <=1e-2: PASS)
+[RESULT] TF32 GEMM=cuBLAS-BF16 B=1  ms/step=0.0512  step/s=19538.8221  samples/s=19538.8221
+--- torch fp64 eager D=768 B=1 ---
+[CFG] FP64 mode=eager GPU=NVIDIA H100 80GB HBM3 D=768 T=256 B=1 M=256 iters=50 torch=2.4.0
+[RESULT] FP64 mode=eager B=1  ms/step=0.6873  step/s=1455.0552  samples/s=1455.0552
+--- torch fp64 compile D=768 B=1 ---
+W0608 12:49:06.180000 124530588342080 torch/_logging/_internal.py:1034] [2/0] Profiler function <class 'torch.autograd.profiler.record_function'> will be ignored
+[CFG] FP64 mode=compile GPU=NVIDIA H100 80GB HBM3 D=768 T=256 B=1 M=256 iters=50 torch=2.4.0
+[RESULT] FP64 mode=compile B=1  ms/step=1.1005  step/s=908.6836  samples/s=908.6836
+--- torch tf32 eager D=768 B=1 ---
+[CFG] TF32 mode=eager GPU=NVIDIA H100 80GB HBM3 D=768 T=256 B=1 M=256 iters=50 torch=2.4.0
+[RESULT] TF32 mode=eager B=1  ms/step=0.6473  step/s=1544.9928  samples/s=1544.9928
+--- torch tf32 compile D=768 B=1 ---
+W0608 12:49:16.075000 132540261943104 torch/_logging/_internal.py:1034] [2/0] Profiler function <class 'torch.autograd.profiler.record_function'> will be ignored
+[CFG] TF32 mode=compile GPU=NVIDIA H100 80GB HBM3 D=768 T=256 B=1 M=256 iters=50 torch=2.4.0
+[RESULT] TF32 mode=compile B=1  ms/step=0.5253  step/s=1903.6534  samples/s=1903.6534
+--- torch bf16 eager D=768 B=1 ---
+[CFG] BF16 mode=eager GPU=NVIDIA H100 80GB HBM3 D=768 T=256 B=1 M=256 iters=50 torch=2.4.0
+[RESULT] BF16 mode=eager B=1  ms/step=0.5928  step/s=1686.9946  samples/s=1686.9946
+--- torch bf16 compile D=768 B=1 ---
+W0608 12:49:25.335000 126749685352256 torch/_logging/_internal.py:1034] [2/0] Profiler function <class 'torch.autograd.profiler.record_function'> will be ignored
+[CFG] BF16 mode=compile GPU=NVIDIA H100 80GB HBM3 D=768 T=256 B=1 M=256 iters=50 torch=2.4.0
+[RESULT] BF16 mode=compile B=1  ms/step=0.6760  step/s=1479.1977  samples/s=1479.1977
+
+================= D=768  B=8  T=256 =================
+--- flame FP64 (naive) D=768 B=8 ---
+[CFG] FP64 GEMM=NAIVE-tiled  GPU=NVIDIA H100 80GB HBM3 cc=9.0  D=768 T=256 B=8 -> M=2048 K=768 N=768  iters=50  est_mem=0.09 GiB
+[DETERMINISM] FP64 GEMM=NAIVE-tiled B=8 run-to-run max|delta(W')| = 0.000e+00 (gate ==0: PASS)
+[GATE] FP64 GEMM=NAIVE-tiled B=8 rel-RMS(W' vs NAIVE-ref) = 0.000e+00 (gate <=1e-2: PASS)
+[RESULT] FP64 GEMM=NAIVE-tiled B=8  ms/step=1.1641  step/s=859.0177  samples/s=6872.1419
+--- flame TF32-cuBLAS  D=768 B=8 ---
+[CFG] TF32 GEMM=cuBLAS-TF32(proxy)  GPU=NVIDIA H100 80GB HBM3 cc=9.0  D=768 T=256 B=8 -> M=2048 K=768 N=768  iters=50  est_mem=0.04 GiB
+[DETERMINISM] TF32 GEMM=cuBLAS-TF32(proxy) B=8 run-to-run max|delta(W')| = 0.000e+00 (gate ==0: PASS)
+[GATE] TF32 GEMM=cuBLAS-TF32(proxy) B=8 rel-RMS(W' vs NAIVE-ref) = 2.450e-08 (gate <=1e-2: PASS)
+[RESULT] TF32 GEMM=cuBLAS-TF32(proxy) B=8  ms/step=0.1007  step/s=9928.7670  samples/s=79430.1362
+--- flame TF32-OG10    D=768 B=8 ---
+[CFG] TF32 GEMM=OG10-wgmma  GPU=NVIDIA H100 80GB HBM3 cc=9.0  D=768 T=256 B=8 -> M=2048 K=768 N=768  iters=50  est_mem=0.04 GiB
+[DETERMINISM] TF32 GEMM=OG10-wgmma B=8 run-to-run max|delta(W')| = 0.000e+00 (gate ==0: PASS)
+[GATE] TF32 GEMM=OG10-wgmma B=8 rel-RMS(W' vs NAIVE-ref) = 2.160e-04 (gate <=1e-2: PASS)
+[RESULT] TF32 GEMM=OG10-wgmma B=8  ms/step=0.3280  step/s=3048.9411  samples/s=24391.5286
+--- flame BF16-cuBLAS  D=768 B=8 ---
+[CFG] TF32 GEMM=cuBLAS-BF16  GPU=NVIDIA H100 80GB HBM3 cc=9.0  D=768 T=256 B=8 -> M=2048 K=768 N=768  iters=50  est_mem=0.04 GiB
+[DETERMINISM] TF32 GEMM=cuBLAS-BF16 B=8 run-to-run max|delta(W')| = 0.000e+00 (gate ==0: PASS)
+[GATE] TF32 GEMM=cuBLAS-BF16 B=8 rel-RMS(W' vs NAIVE-ref) = 4.152e-08 (gate <=1e-2: PASS)
+[RESULT] TF32 GEMM=cuBLAS-BF16 B=8  ms/step=0.1106  step/s=9042.2971  samples/s=72338.3771
+--- torch fp64 eager D=768 B=8 ---
+[CFG] FP64 mode=eager GPU=NVIDIA H100 80GB HBM3 D=768 T=256 B=8 M=2048 iters=50 torch=2.4.0
+[RESULT] FP64 mode=eager B=8  ms/step=0.6618  step/s=1511.0341  samples/s=12088.2731
+--- torch fp64 compile D=768 B=8 ---
+W0608 12:49:37.323000 127221439256384 torch/_logging/_internal.py:1034] [2/0] Profiler function <class 'torch.autograd.profiler.record_function'> will be ignored
+[CFG] FP64 mode=compile GPU=NVIDIA H100 80GB HBM3 D=768 T=256 B=8 M=2048 iters=50 torch=2.4.0
+[RESULT] FP64 mode=compile B=8  ms/step=0.7674  step/s=1303.0670  samples/s=10424.5362
+--- torch tf32 eager D=768 B=8 ---
+[CFG] TF32 mode=eager GPU=NVIDIA H100 80GB HBM3 D=768 T=256 B=8 M=2048 iters=50 torch=2.4.0
+[RESULT] TF32 mode=eager B=8  ms/step=0.6358  step/s=1572.7452  samples/s=12581.9615
+--- torch tf32 compile D=768 B=8 ---
+W0608 12:49:46.697000 135475071399744 torch/_logging/_internal.py:1034] [2/0] Profiler function <class 'torch.autograd.profiler.record_function'> will be ignored
+[CFG] TF32 mode=compile GPU=NVIDIA H100 80GB HBM3 D=768 T=256 B=8 M=2048 iters=50 torch=2.4.0
+[RESULT] TF32 mode=compile B=8  ms/step=0.7030  step/s=1422.5059  samples/s=11380.0472
+--- torch bf16 eager D=768 B=8 ---
+[CFG] BF16 mode=eager GPU=NVIDIA H100 80GB HBM3 D=768 T=256 B=8 M=2048 iters=50 torch=2.4.0
+[RESULT] BF16 mode=eager B=8  ms/step=0.5234  step/s=1910.6434  samples/s=15285.1468
+--- torch bf16 compile D=768 B=8 ---
+W0608 12:49:56.465000 126805616826176 torch/_logging/_internal.py:1034] [2/0] Profiler function <class 'torch.autograd.profiler.record_function'> will be ignored
+[CFG] BF16 mode=compile GPU=NVIDIA H100 80GB HBM3 D=768 T=256 B=8 M=2048 iters=50 torch=2.4.0
+[RESULT] BF16 mode=compile B=8  ms/step=0.5682  step/s=1759.9597  samples/s=14079.6774
+
+================= D=1536  B=1  T=256 =================
+--- flame FP64 (naive) D=1536 B=1 ---
+[CFG] FP64 GEMM=NAIVE-tiled  GPU=NVIDIA H100 80GB HBM3 cc=9.0  D=1536 T=256 B=1 -> M=256 K=1536 N=1536  iters=50  est_mem=0.09 GiB
+[DETERMINISM] FP64 GEMM=NAIVE-tiled B=1 run-to-run max|delta(W')| = 0.000e+00 (gate ==0: PASS)
+[GATE] FP64 GEMM=NAIVE-tiled B=1 rel-RMS(W' vs NAIVE-ref) = 0.000e+00 (gate <=1e-2: PASS)
+[RESULT] FP64 GEMM=NAIVE-tiled B=1  ms/step=0.6192  step/s=1614.9136  samples/s=1614.9136
+--- flame TF32-cuBLAS  D=1536 B=1 ---
+[CFG] TF32 GEMM=cuBLAS-TF32(proxy)  GPU=NVIDIA H100 80GB HBM3 cc=9.0  D=1536 T=256 B=1 -> M=256 K=1536 N=1536  iters=50  est_mem=0.04 GiB
+[DETERMINISM] TF32 GEMM=cuBLAS-TF32(proxy) B=1 run-to-run max|delta(W')| = 0.000e+00 (gate ==0: PASS)
+[GATE] TF32 GEMM=cuBLAS-TF32(proxy) B=1 rel-RMS(W' vs NAIVE-ref) = 5.027e-08 (gate <=1e-2: PASS)
+[RESULT] TF32 GEMM=cuBLAS-TF32(proxy) B=1  ms/step=0.1029  step/s=9717.2212  samples/s=9717.2212
+--- flame TF32-OG10    D=1536 B=1 ---
+[CFG] TF32 GEMM=OG10-wgmma  GPU=NVIDIA H100 80GB HBM3 cc=9.0  D=1536 T=256 B=1 -> M=256 K=1536 N=1536  iters=50  est_mem=0.04 GiB
+[DETERMINISM] TF32 GEMM=OG10-wgmma B=1 run-to-run max|delta(W')| = 0.000e+00 (gate ==0: PASS)
+[GATE] TF32 GEMM=OG10-wgmma B=1 rel-RMS(W' vs NAIVE-ref) = 2.160e-04 (gate <=1e-2: PASS)
+[RESULT] TF32 GEMM=OG10-wgmma B=1  ms/step=0.2763  step/s=3619.1012  samples/s=3619.1012
+--- flame BF16-cuBLAS  D=1536 B=1 ---
+[CFG] TF32 GEMM=cuBLAS-BF16  GPU=NVIDIA H100 80GB HBM3 cc=9.0  D=1536 T=256 B=1 -> M=256 K=1536 N=1536  iters=50  est_mem=0.04 GiB
+[DETERMINISM] TF32 GEMM=cuBLAS-BF16 B=1 run-to-run max|delta(W')| = 0.000e+00 (gate ==0: PASS)
+[GATE] TF32 GEMM=cuBLAS-BF16 B=1 rel-RMS(W' vs NAIVE-ref) = 4.283e-07 (gate <=1e-2: PASS)
+[RESULT] TF32 GEMM=cuBLAS-BF16 B=1  ms/step=0.1102  step/s=9072.2766  samples/s=9072.2766
+--- torch fp64 eager D=1536 B=1 ---
+[CFG] FP64 mode=eager GPU=NVIDIA H100 80GB HBM3 D=1536 T=256 B=1 M=256 iters=50 torch=2.4.0
+[RESULT] FP64 mode=eager B=1  ms/step=0.6492  step/s=1540.3533  samples/s=1540.3533
+--- torch fp64 compile D=1536 B=1 ---
+W0608 12:50:08.835000 132034142246720 torch/_logging/_internal.py:1034] [2/0] Profiler function <class 'torch.autograd.profiler.record_function'> will be ignored
+[CFG] FP64 mode=compile GPU=NVIDIA H100 80GB HBM3 D=1536 T=256 B=1 M=256 iters=50 torch=2.4.0
+[RESULT] FP64 mode=compile B=1  ms/step=0.5506  step/s=1816.0929  samples/s=1816.0929
+--- torch tf32 eager D=1536 B=1 ---
+[CFG] TF32 mode=eager GPU=NVIDIA H100 80GB HBM3 D=1536 T=256 B=1 M=256 iters=50 torch=2.4.0
+[RESULT] TF32 mode=eager B=1  ms/step=0.6235  step/s=1603.9541  samples/s=1603.9541
+--- torch tf32 compile D=1536 B=1 ---
+W0608 12:50:18.549000 126689972754240 torch/_logging/_internal.py:1034] [2/0] Profiler function <class 'torch.autograd.profiler.record_function'> will be ignored
+[CFG] TF32 mode=compile GPU=NVIDIA H100 80GB HBM3 D=1536 T=256 B=1 M=256 iters=50 torch=2.4.0
+[RESULT] TF32 mode=compile B=1  ms/step=0.7381  step/s=1354.7945  samples/s=1354.7945
+--- torch bf16 eager D=1536 B=1 ---
+[CFG] BF16 mode=eager GPU=NVIDIA H100 80GB HBM3 D=1536 T=256 B=1 M=256 iters=50 torch=2.4.0
+[RESULT] BF16 mode=eager B=1  ms/step=0.6566  step/s=1523.1023  samples/s=1523.1023
+--- torch bf16 compile D=1536 B=1 ---
+W0608 12:50:28.401000 138356082980672 torch/_logging/_internal.py:1034] [2/0] Profiler function <class 'torch.autograd.profiler.record_function'> will be ignored
+[CFG] BF16 mode=compile GPU=NVIDIA H100 80GB HBM3 D=1536 T=256 B=1 M=256 iters=50 torch=2.4.0
+[RESULT] BF16 mode=compile B=1  ms/step=0.4903  step/s=2039.6703  samples/s=2039.6703
+
+================= D=1536  B=8  T=256 =================
+--- flame FP64 (naive) D=1536 B=8 ---
+[CFG] FP64 GEMM=NAIVE-tiled  GPU=NVIDIA H100 80GB HBM3 cc=9.0  D=1536 T=256 B=8 -> M=2048 K=1536 N=1536  iters=50  est_mem=0.21 GiB
+[DETERMINISM] FP64 GEMM=NAIVE-tiled B=8 run-to-run max|delta(W')| = 0.000e+00 (gate ==0: PASS)
+[GATE] FP64 GEMM=NAIVE-tiled B=8 rel-RMS(W' vs NAIVE-ref) = 0.000e+00 (gate <=1e-2: PASS)
+[RESULT] FP64 GEMM=NAIVE-tiled B=8  ms/step=4.3698  step/s=228.8435  samples/s=1830.7480
+--- flame TF32-cuBLAS  D=1536 B=8 ---
+[CFG] TF32 GEMM=cuBLAS-TF32(proxy)  GPU=NVIDIA H100 80GB HBM3 cc=9.0  D=1536 T=256 B=8 -> M=2048 K=1536 N=1536  iters=50  est_mem=0.11 GiB
+[DETERMINISM] TF32 GEMM=cuBLAS-TF32(proxy) B=8 run-to-run max|delta(W')| = 0.000e+00 (gate ==0: PASS)
+[GATE] TF32 GEMM=cuBLAS-TF32(proxy) B=8 rel-RMS(W' vs NAIVE-ref) = 2.506e-08 (gate <=1e-2: PASS)
+[RESULT] TF32 GEMM=cuBLAS-TF32(proxy) B=8  ms/step=0.2270  step/s=4404.4979  samples/s=35235.9834
+--- flame TF32-OG10    D=1536 B=8 ---
+[CFG] TF32 GEMM=OG10-wgmma  GPU=NVIDIA H100 80GB HBM3 cc=9.0  D=1536 T=256 B=8 -> M=2048 K=1536 N=1536  iters=50  est_mem=0.11 GiB
+[DETERMINISM] TF32 GEMM=OG10-wgmma B=8 run-to-run max|delta(W')| = 0.000e+00 (gate ==0: PASS)
+[GATE] TF32 GEMM=OG10-wgmma B=8 rel-RMS(W' vs NAIVE-ref) = 2.160e-04 (gate <=1e-2: PASS)
+[RESULT] TF32 GEMM=OG10-wgmma B=8  ms/step=0.7855  step/s=1273.1344  samples/s=10185.0751
+--- flame BF16-cuBLAS  D=1536 B=8 ---
+[CFG] TF32 GEMM=cuBLAS-BF16  GPU=NVIDIA H100 80GB HBM3 cc=9.0  D=1536 T=256 B=8 -> M=2048 K=1536 N=1536  iters=50  est_mem=0.11 GiB
+[DETERMINISM] TF32 GEMM=cuBLAS-BF16 B=8 run-to-run max|delta(W')| = 0.000e+00 (gate ==0: PASS)
+[GATE] TF32 GEMM=cuBLAS-BF16 B=8 rel-RMS(W' vs NAIVE-ref) = 5.918e-08 (gate <=1e-2: PASS)
+[RESULT] TF32 GEMM=cuBLAS-BF16 B=8  ms/step=0.2310  step/s=4329.3821  samples/s=34635.0566
+--- torch fp64 eager D=1536 B=8 ---
+[CFG] FP64 mode=eager GPU=NVIDIA H100 80GB HBM3 D=1536 T=256 B=8 M=2048 iters=50 torch=2.4.0
+[RESULT] FP64 mode=eager B=8  ms/step=0.9149  step/s=1092.9959  samples/s=8743.9669
+--- torch fp64 compile D=1536 B=8 ---
+W0608 12:50:41.499000 125611126499136 torch/_logging/_internal.py:1034] [2/0] Profiler function <class 'torch.autograd.profiler.record_function'> will be ignored
+[CFG] FP64 mode=compile GPU=NVIDIA H100 80GB HBM3 D=1536 T=256 B=8 M=2048 iters=50 torch=2.4.0
+[RESULT] FP64 mode=compile B=8  ms/step=0.5139  step/s=1945.7654  samples/s=15566.1230
+--- torch tf32 eager D=1536 B=8 ---
+[CFG] TF32 mode=eager GPU=NVIDIA H100 80GB HBM3 D=1536 T=256 B=8 M=2048 iters=50 torch=2.4.0
+[RESULT] TF32 mode=eager B=8  ms/step=0.5133  step/s=1948.0817  samples/s=15584.6539
+--- torch tf32 compile D=1536 B=8 ---
+W0608 12:50:51.102000 139591080527680 torch/_logging/_internal.py:1034] [2/0] Profiler function <class 'torch.autograd.profiler.record_function'> will be ignored
+[CFG] TF32 mode=compile GPU=NVIDIA H100 80GB HBM3 D=1536 T=256 B=8 M=2048 iters=50 torch=2.4.0
+[RESULT] TF32 mode=compile B=8  ms/step=0.7414  step/s=1348.7427  samples/s=10789.9415
+--- torch bf16 eager D=1536 B=8 ---
+[CFG] BF16 mode=eager GPU=NVIDIA H100 80GB HBM3 D=1536 T=256 B=8 M=2048 iters=50 torch=2.4.0
+[RESULT] BF16 mode=eager B=8  ms/step=0.6951  step/s=1438.6056  samples/s=11508.8446
+--- torch bf16 compile D=1536 B=8 ---
+W0608 12:51:01.568000 131224788322112 torch/_logging/_internal.py:1034] [2/0] Profiler function <class 'torch.autograd.profiler.record_function'> will be ignored
+[CFG] BF16 mode=compile GPU=NVIDIA H100 80GB HBM3 D=1536 T=256 B=8 M=2048 iters=50 torch=2.4.0
+[RESULT] BF16 mode=compile B=8  ms/step=0.4211  step/s=2374.5180  samples/s=18996.1437
+
+================= D=2048  B=1  T=256 =================
+--- flame FP64 (naive) D=2048 B=1 ---
+[CFG] FP64 GEMM=NAIVE-tiled  GPU=NVIDIA H100 80GB HBM3 cc=9.0  D=2048 T=256 B=1 -> M=256 K=2048 N=2048  iters=50  est_mem=0.15 GiB
+[DETERMINISM] FP64 GEMM=NAIVE-tiled B=1 run-to-run max|delta(W')| = 0.000e+00 (gate ==0: PASS)
+[GATE] FP64 GEMM=NAIVE-tiled B=1 rel-RMS(W' vs NAIVE-ref) = 0.000e+00 (gate <=1e-2: PASS)
+[RESULT] FP64 GEMM=NAIVE-tiled B=1  ms/step=1.0862  step/s=920.6654  samples/s=920.6654
+--- flame TF32-cuBLAS  D=2048 B=1 ---
+[CFG] TF32 GEMM=cuBLAS-TF32(proxy)  GPU=NVIDIA H100 80GB HBM3 cc=9.0  D=2048 T=256 B=1 -> M=256 K=2048 N=2048  iters=50  est_mem=0.07 GiB
+[DETERMINISM] TF32 GEMM=cuBLAS-TF32(proxy) B=1 run-to-run max|delta(W')| = 0.000e+00 (gate ==0: PASS)
+[GATE] TF32 GEMM=cuBLAS-TF32(proxy) B=1 rel-RMS(W' vs NAIVE-ref) = 2.437e-08 (gate <=1e-2: PASS)
+[RESULT] TF32 GEMM=cuBLAS-TF32(proxy) B=1  ms/step=0.1471  step/s=6797.9711  samples/s=6797.9711
+--- flame TF32-OG10    D=2048 B=1 ---
+[CFG] TF32 GEMM=OG10-wgmma  GPU=NVIDIA H100 80GB HBM3 cc=9.0  D=2048 T=256 B=1 -> M=256 K=2048 N=2048  iters=50  est_mem=0.07 GiB
+[DETERMINISM] TF32 GEMM=OG10-wgmma B=1 run-to-run max|delta(W')| = 0.000e+00 (gate ==0: PASS)
+[GATE] TF32 GEMM=OG10-wgmma B=1 rel-RMS(W' vs NAIVE-ref) = 2.155e-04 (gate <=1e-2: PASS)
+[RESULT] TF32 GEMM=OG10-wgmma B=1  ms/step=0.3699  step/s=2703.6334  samples/s=2703.6334
+--- flame BF16-cuBLAS  D=2048 B=1 ---
+[CFG] TF32 GEMM=cuBLAS-BF16  GPU=NVIDIA H100 80GB HBM3 cc=9.0  D=2048 T=256 B=1 -> M=256 K=2048 N=2048  iters=50  est_mem=0.07 GiB
+[DETERMINISM] TF32 GEMM=cuBLAS-BF16 B=1 run-to-run max|delta(W')| = 0.000e+00 (gate ==0: PASS)
+[GATE] TF32 GEMM=cuBLAS-BF16 B=1 rel-RMS(W' vs NAIVE-ref) = 2.525e-08 (gate <=1e-2: PASS)
+[RESULT] TF32 GEMM=cuBLAS-BF16 B=1  ms/step=0.1589  step/s=6292.5631  samples/s=6292.5631
+--- torch fp64 eager D=2048 B=1 ---
+[CFG] FP64 mode=eager GPU=NVIDIA H100 80GB HBM3 D=2048 T=256 B=1 M=256 iters=50 torch=2.4.0
+[RESULT] FP64 mode=eager B=1  ms/step=0.5727  step/s=1746.1883  samples/s=1746.1883
+--- torch fp64 compile D=2048 B=1 ---
+W0608 12:51:14.198000 128593546114880 torch/_logging/_internal.py:1034] [2/0] Profiler function <class 'torch.autograd.profiler.record_function'> will be ignored
+[CFG] FP64 mode=compile GPU=NVIDIA H100 80GB HBM3 D=2048 T=256 B=1 M=256 iters=50 torch=2.4.0
+[RESULT] FP64 mode=compile B=1  ms/step=0.6656  step/s=1502.3430  samples/s=1502.3430
+--- torch tf32 eager D=2048 B=1 ---
+[CFG] TF32 mode=eager GPU=NVIDIA H100 80GB HBM3 D=2048 T=256 B=1 M=256 iters=50 torch=2.4.0
+[RESULT] TF32 mode=eager B=1  ms/step=0.5890  step/s=1697.7637  samples/s=1697.7637
+--- torch tf32 compile D=2048 B=1 ---
+W0608 12:51:23.914000 129113511130944 torch/_logging/_internal.py:1034] [2/0] Profiler function <class 'torch.autograd.profiler.record_function'> will be ignored
+[CFG] TF32 mode=compile GPU=NVIDIA H100 80GB HBM3 D=2048 T=256 B=1 M=256 iters=50 torch=2.4.0
+[RESULT] TF32 mode=compile B=1  ms/step=0.3913  step/s=2555.7532  samples/s=2555.7532
+--- torch bf16 eager D=2048 B=1 ---
+[CFG] BF16 mode=eager GPU=NVIDIA H100 80GB HBM3 D=2048 T=256 B=1 M=256 iters=50 torch=2.4.0
+[RESULT] BF16 mode=eager B=1  ms/step=0.6815  step/s=1467.4458  samples/s=1467.4458
+--- torch bf16 compile D=2048 B=1 ---
+W0608 12:51:34.155000 129823696615232 torch/_logging/_internal.py:1034] [2/0] Profiler function <class 'torch.autograd.profiler.record_function'> will be ignored
+[CFG] BF16 mode=compile GPU=NVIDIA H100 80GB HBM3 D=2048 T=256 B=1 M=256 iters=50 torch=2.4.0
+[RESULT] BF16 mode=compile B=1  ms/step=0.5602  step/s=1785.1468  samples/s=1785.1468
+
+================= D=2048  B=8  T=256 =================
+--- flame FP64 (naive) D=2048 B=8 ---
+[CFG] FP64 GEMM=NAIVE-tiled  GPU=NVIDIA H100 80GB HBM3 cc=9.0  D=2048 T=256 B=8 -> M=2048 K=2048 N=2048  iters=50  est_mem=0.31 GiB
+[DETERMINISM] FP64 GEMM=NAIVE-tiled B=8 run-to-run max|delta(W')| = 0.000e+00 (gate ==0: PASS)
+[GATE] FP64 GEMM=NAIVE-tiled B=8 rel-RMS(W' vs NAIVE-ref) = 0.000e+00 (gate <=1e-2: PASS)
+[RESULT] FP64 GEMM=NAIVE-tiled B=8  ms/step=7.6730  step/s=130.3273  samples/s=1042.6182
+--- flame TF32-cuBLAS  D=2048 B=8 ---
+[CFG] TF32 GEMM=cuBLAS-TF32(proxy)  GPU=NVIDIA H100 80GB HBM3 cc=9.0  D=2048 T=256 B=8 -> M=2048 K=2048 N=2048  iters=50  est_mem=0.16 GiB
+[DETERMINISM] TF32 GEMM=cuBLAS-TF32(proxy) B=8 run-to-run max|delta(W')| = 0.000e+00 (gate ==0: PASS)
+[GATE] TF32 GEMM=cuBLAS-TF32(proxy) B=8 rel-RMS(W' vs NAIVE-ref) = 2.430e-08 (gate <=1e-2: PASS)
+[RESULT] TF32 GEMM=cuBLAS-TF32(proxy) B=8  ms/step=0.3034  step/s=3295.9616  samples/s=26367.6931
+--- flame TF32-OG10    D=2048 B=8 ---
+[CFG] TF32 GEMM=OG10-wgmma  GPU=NVIDIA H100 80GB HBM3 cc=9.0  D=2048 T=256 B=8 -> M=2048 K=2048 N=2048  iters=50  est_mem=0.16 GiB
+[DETERMINISM] TF32 GEMM=OG10-wgmma B=8 run-to-run max|delta(W')| = 0.000e+00 (gate ==0: PASS)
+[GATE] TF32 GEMM=OG10-wgmma B=8 rel-RMS(W' vs NAIVE-ref) = 2.155e-04 (gate <=1e-2: PASS)
+[RESULT] TF32 GEMM=OG10-wgmma B=8  ms/step=0.9488  step/s=1054.0056  samples/s=8432.0446
+--- flame BF16-cuBLAS  D=2048 B=8 ---
+[CFG] TF32 GEMM=cuBLAS-BF16  GPU=NVIDIA H100 80GB HBM3 cc=9.0  D=2048 T=256 B=8 -> M=2048 K=2048 N=2048  iters=50  est_mem=0.16 GiB
+[DETERMINISM] TF32 GEMM=cuBLAS-BF16 B=8 run-to-run max|delta(W')| = 0.000e+00 (gate ==0: PASS)
+[GATE] TF32 GEMM=cuBLAS-BF16 B=8 rel-RMS(W' vs NAIVE-ref) = 2.505e-08 (gate <=1e-2: PASS)
+[RESULT] TF32 GEMM=cuBLAS-BF16 B=8  ms/step=0.3253  step/s=3073.9781  samples/s=24591.8247
+--- torch fp64 eager D=2048 B=8 ---
+[CFG] FP64 mode=eager GPU=NVIDIA H100 80GB HBM3 D=2048 T=256 B=8 M=2048 iters=50 torch=2.4.0
+[RESULT] FP64 mode=eager B=8  ms/step=1.3223  step/s=756.2295  samples/s=6049.8360
+--- torch fp64 compile D=2048 B=8 ---
+W0608 12:51:47.597000 134716170049344 torch/_logging/_internal.py:1034] [2/0] Profiler function <class 'torch.autograd.profiler.record_function'> will be ignored
+[CFG] FP64 mode=compile GPU=NVIDIA H100 80GB HBM3 D=2048 T=256 B=8 M=2048 iters=50 torch=2.4.0
+[RESULT] FP64 mode=compile B=8  ms/step=0.8108  step/s=1233.3950  samples/s=9867.1604
+--- torch tf32 eager D=2048 B=8 ---
+[CFG] TF32 mode=eager GPU=NVIDIA H100 80GB HBM3 D=2048 T=256 B=8 M=2048 iters=50 torch=2.4.0
+[RESULT] TF32 mode=eager B=8  ms/step=0.6946  step/s=1439.7469  samples/s=11517.9753
+--- torch tf32 compile D=2048 B=8 ---
+W0608 12:51:57.092000 136119680558912 torch/_logging/_internal.py:1034] [2/0] Profiler function <class 'torch.autograd.profiler.record_function'> will be ignored
+[CFG] TF32 mode=compile GPU=NVIDIA H100 80GB HBM3 D=2048 T=256 B=8 M=2048 iters=50 torch=2.4.0
+[RESULT] TF32 mode=compile B=8  ms/step=0.5688  step/s=1758.1688  samples/s=14065.3505
+--- torch bf16 eager D=2048 B=8 ---
+[CFG] BF16 mode=eager GPU=NVIDIA H100 80GB HBM3 D=2048 T=256 B=8 M=2048 iters=50 torch=2.4.0
+[RESULT] BF16 mode=eager B=8  ms/step=0.6643  step/s=1505.3983  samples/s=12043.1863
+--- torch bf16 compile D=2048 B=8 ---
+W0608 12:52:06.803000 139819772516160 torch/_logging/_internal.py:1034] [2/0] Profiler function <class 'torch.autograd.profiler.record_function'> will be ignored
+[CFG] BF16 mode=compile GPU=NVIDIA H100 80GB HBM3 D=2048 T=256 B=8 M=2048 iters=50 torch=2.4.0
+[RESULT] BF16 mode=compile B=8  ms/step=0.4805  step/s=2081.2248  samples/s=16649.7982
+
+================= D=4096  B=1  T=256 =================
+--- flame FP64 (naive) D=4096 B=1 ---
+[CFG] FP64 GEMM=NAIVE-tiled  GPU=NVIDIA H100 80GB HBM3 cc=9.0  D=4096 T=256 B=1 -> M=256 K=4096 N=4096  iters=50  est_mem=0.55 GiB
+[DETERMINISM] FP64 GEMM=NAIVE-tiled B=1 run-to-run max|delta(W')| = 0.000e+00 (gate ==0: PASS)
+[GATE] FP64 GEMM=NAIVE-tiled B=1 rel-RMS(W' vs NAIVE-ref) = 0.000e+00 (gate <=1e-2: PASS)
+[RESULT] FP64 GEMM=NAIVE-tiled B=1  ms/step=4.1999  step/s=238.1036  samples/s=238.1036
+--- flame TF32-cuBLAS  D=4096 B=1 ---
+[CFG] TF32 GEMM=cuBLAS-TF32(proxy)  GPU=NVIDIA H100 80GB HBM3 cc=9.0  D=4096 T=256 B=1 -> M=256 K=4096 N=4096  iters=50  est_mem=0.27 GiB
+[DETERMINISM] TF32 GEMM=cuBLAS-TF32(proxy) B=1 run-to-run max|delta(W')| = 0.000e+00 (gate ==0: PASS)
+[GATE] TF32 GEMM=cuBLAS-TF32(proxy) B=1 rel-RMS(W' vs NAIVE-ref) = 2.243e-08 (gate <=1e-2: PASS)
+[RESULT] TF32 GEMM=cuBLAS-TF32(proxy) B=1  ms/step=0.4632  step/s=2158.9126  samples/s=2158.9126
+--- flame TF32-OG10    D=4096 B=1 ---
+[CFG] TF32 GEMM=OG10-wgmma  GPU=NVIDIA H100 80GB HBM3 cc=9.0  D=4096 T=256 B=1 -> M=256 K=4096 N=4096  iters=50  est_mem=0.27 GiB
+[DETERMINISM] TF32 GEMM=OG10-wgmma B=1 run-to-run max|delta(W')| = 0.000e+00 (gate ==0: PASS)
+[GATE] TF32 GEMM=OG10-wgmma B=1 rel-RMS(W' vs NAIVE-ref) = 2.160e-04 (gate <=1e-2: PASS)
+[RESULT] TF32 GEMM=OG10-wgmma B=1  ms/step=1.0079  step/s=992.1731  samples/s=992.1731
+--- flame BF16-cuBLAS  D=4096 B=1 ---
+[CFG] TF32 GEMM=cuBLAS-BF16  GPU=NVIDIA H100 80GB HBM3 cc=9.0  D=4096 T=256 B=1 -> M=256 K=4096 N=4096  iters=50  est_mem=0.27 GiB
+[DETERMINISM] TF32 GEMM=cuBLAS-BF16 B=1 run-to-run max|delta(W')| = 0.000e+00 (gate ==0: PASS)
+[GATE] TF32 GEMM=cuBLAS-BF16 B=1 rel-RMS(W' vs NAIVE-ref) = 2.397e-08 (gate <=1e-2: PASS)
+[RESULT] TF32 GEMM=cuBLAS-BF16 B=1  ms/step=0.5009  step/s=1996.2234  samples/s=1996.2234
+--- torch fp64 eager D=4096 B=1 ---
+[CFG] FP64 mode=eager GPU=NVIDIA H100 80GB HBM3 D=4096 T=256 B=1 M=256 iters=50 torch=2.4.0
+[RESULT] FP64 mode=eager B=1  ms/step=1.4641  step/s=682.9986  samples/s=682.9986
+--- torch fp64 compile D=4096 B=1 ---
+W0608 12:52:20.388000 135846866392896 torch/_logging/_internal.py:1034] [2/0] Profiler function <class 'torch.autograd.profiler.record_function'> will be ignored
+[CFG] FP64 mode=compile GPU=NVIDIA H100 80GB HBM3 D=4096 T=256 B=1 M=256 iters=50 torch=2.4.0
+[RESULT] FP64 mode=compile B=1  ms/step=0.7109  step/s=1406.6087  samples/s=1406.6087
+--- torch tf32 eager D=4096 B=1 ---
+[CFG] TF32 mode=eager GPU=NVIDIA H100 80GB HBM3 D=4096 T=256 B=1 M=256 iters=50 torch=2.4.0
+[RESULT] TF32 mode=eager B=1  ms/step=0.6944  step/s=1440.0889  samples/s=1440.0889
+--- torch tf32 compile D=4096 B=1 ---
+W0608 12:52:29.874000 128831971780416 torch/_logging/_internal.py:1034] [2/0] Profiler function <class 'torch.autograd.profiler.record_function'> will be ignored
+[CFG] TF32 mode=compile GPU=NVIDIA H100 80GB HBM3 D=4096 T=256 B=1 M=256 iters=50 torch=2.4.0
+[RESULT] TF32 mode=compile B=1  ms/step=0.6989  step/s=1430.8999  samples/s=1430.8999
+--- torch bf16 eager D=4096 B=1 ---
+[CFG] BF16 mode=eager GPU=NVIDIA H100 80GB HBM3 D=4096 T=256 B=1 M=256 iters=50 torch=2.4.0
+[RESULT] BF16 mode=eager B=1  ms/step=0.7069  step/s=1414.6713  samples/s=1414.6713
+--- torch bf16 compile D=4096 B=1 ---
+W0608 12:52:39.524000 132795849168704 torch/_logging/_internal.py:1034] [2/0] Profiler function <class 'torch.autograd.profiler.record_function'> will be ignored
+[CFG] BF16 mode=compile GPU=NVIDIA H100 80GB HBM3 D=4096 T=256 B=1 M=256 iters=50 torch=2.4.0
+[RESULT] BF16 mode=compile B=1  ms/step=0.6574  step/s=1521.0945  samples/s=1521.0945
+
+================= D=4096  B=8  T=256 =================
+--- flame FP64 (naive) D=4096 B=8 ---
+[CFG] FP64 GEMM=NAIVE-tiled  GPU=NVIDIA H100 80GB HBM3 cc=9.0  D=4096 T=256 B=8 -> M=2048 K=4096 N=4096  iters=50  est_mem=0.88 GiB
+[DETERMINISM] FP64 GEMM=NAIVE-tiled B=8 run-to-run max|delta(W')| = 0.000e+00 (gate ==0: PASS)
+[GATE] FP64 GEMM=NAIVE-tiled B=8 rel-RMS(W' vs NAIVE-ref) = 0.000e+00 (gate <=1e-2: PASS)
+[RESULT] FP64 GEMM=NAIVE-tiled B=8  ms/step=30.2747  step/s=33.0309  samples/s=264.2475
+--- flame TF32-cuBLAS  D=4096 B=8 ---
+[CFG] TF32 GEMM=cuBLAS-TF32(proxy)  GPU=NVIDIA H100 80GB HBM3 cc=9.0  D=4096 T=256 B=8 -> M=2048 K=4096 N=4096  iters=50  est_mem=0.44 GiB
+[DETERMINISM] TF32 GEMM=cuBLAS-TF32(proxy) B=8 run-to-run max|delta(W')| = 0.000e+00 (gate ==0: PASS)
+[GATE] TF32 GEMM=cuBLAS-TF32(proxy) B=8 rel-RMS(W' vs NAIVE-ref) = 2.261e-08 (gate <=1e-2: PASS)
+[RESULT] TF32 GEMM=cuBLAS-TF32(proxy) B=8  ms/step=0.9459  step/s=1057.1568  samples/s=8457.2545
+--- flame TF32-OG10    D=4096 B=8 ---
+[CFG] TF32 GEMM=OG10-wgmma  GPU=NVIDIA H100 80GB HBM3 cc=9.0  D=4096 T=256 B=8 -> M=2048 K=4096 N=4096  iters=50  est_mem=0.44 GiB
+[DETERMINISM] TF32 GEMM=OG10-wgmma B=8 run-to-run max|delta(W')| = 0.000e+00 (gate ==0: PASS)
+[GATE] TF32 GEMM=OG10-wgmma B=8 rel-RMS(W' vs NAIVE-ref) = 2.160e-04 (gate <=1e-2: PASS)
+[RESULT] TF32 GEMM=OG10-wgmma B=8  ms/step=3.2939  step/s=303.5925  samples/s=2428.7400
+--- flame BF16-cuBLAS  D=4096 B=8 ---
+[CFG] TF32 GEMM=cuBLAS-BF16  GPU=NVIDIA H100 80GB HBM3 cc=9.0  D=4096 T=256 B=8 -> M=2048 K=4096 N=4096  iters=50  est_mem=0.44 GiB
+[DETERMINISM] TF32 GEMM=cuBLAS-BF16 B=8 run-to-run max|delta(W')| = 0.000e+00 (gate ==0: PASS)
+[GATE] TF32 GEMM=cuBLAS-BF16 B=8 rel-RMS(W' vs NAIVE-ref) = 2.403e-08 (gate <=1e-2: PASS)
+[RESULT] TF32 GEMM=cuBLAS-BF16 B=8  ms/step=0.9068  step/s=1102.7564  samples/s=8822.0514
+--- torch fp64 eager D=4096 B=8 ---
+[CFG] FP64 mode=eager GPU=NVIDIA H100 80GB HBM3 D=4096 T=256 B=8 M=2048 iters=50 torch=2.4.0
+[RESULT] FP64 mode=eager B=8  ms/step=4.2092  step/s=237.5746  samples/s=1900.5966
+--- torch fp64 compile D=4096 B=8 ---
+W0608 12:52:54.826000 138146117670720 torch/_logging/_internal.py:1034] [2/0] Profiler function <class 'torch.autograd.profiler.record_function'> will be ignored
+[CFG] FP64 mode=compile GPU=NVIDIA H100 80GB HBM3 D=4096 T=256 B=8 M=2048 iters=50 torch=2.4.0
+[RESULT] FP64 mode=compile B=8  ms/step=3.1633  step/s=316.1224  samples/s=2528.9790
+--- torch tf32 eager D=4096 B=8 ---
+[CFG] TF32 mode=eager GPU=NVIDIA H100 80GB HBM3 D=4096 T=256 B=8 M=2048 iters=50 torch=2.4.0
+[RESULT] TF32 mode=eager B=8  ms/step=1.3447  step/s=743.6519  samples/s=5949.2151
+--- torch tf32 compile D=4096 B=8 ---
+W0608 12:53:04.672000 125903274813248 torch/_logging/_internal.py:1034] [2/0] Profiler function <class 'torch.autograd.profiler.record_function'> will be ignored
+[CFG] TF32 mode=compile GPU=NVIDIA H100 80GB HBM3 D=4096 T=256 B=8 M=2048 iters=50 torch=2.4.0
+[RESULT] TF32 mode=compile B=8  ms/step=0.7424  step/s=1346.9368  samples/s=10775.4945
+--- torch bf16 eager D=4096 B=8 ---
+[CFG] BF16 mode=eager GPU=NVIDIA H100 80GB HBM3 D=4096 T=256 B=8 M=2048 iters=50 torch=2.4.0
+[RESULT] BF16 mode=eager B=8  ms/step=0.7008  step/s=1426.9310  samples/s=11415.4479
+--- torch bf16 compile D=4096 B=8 ---
+W0608 12:53:14.492000 140023882155840 torch/_logging/_internal.py:1034] [2/0] Profiler function <class 'torch.autograd.profiler.record_function'> will be ignored
+[CFG] BF16 mode=compile GPU=NVIDIA H100 80GB HBM3 D=4096 T=256 B=8 M=2048 iters=50 torch=2.4.0
+[RESULT] BF16 mode=compile B=8  ms/step=0.4542  step/s=2201.5386  samples/s=17612.3091
+
+############ BENCH-7 DONE — raw at /tmp/bench7_raw.log ############

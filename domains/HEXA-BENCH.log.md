@@ -100,3 +100,26 @@ gemm_w10, MODE-4 swizzled-TMA), wired via tool/bench/og10_gemm_wrap.cu. Destroye
 - torch TF32 eager 0.756/0.678/0.674/0.539 · compile 0.718/0.709/0.732/0.777 ms/step — flame BEATS torch all lanes
   (launch/glue-bound tiny shape; inverts BENCH-1 5070). FP64 flame-win (B<=4) re-confirmed (flame 0.18-0.59 vs torch ~0.70).
 - Verdict .verdicts/hexa-bench/F-BENCH-4.txt (full 3-way table + nvidia-smi verbatim).
+
+## BENCH-7 — full-regime frontier map (2026-06-08)
+
+Rented vast H100 80GB HBM3 40075088 (label hexa-bench7, sm_90a, CUDA 12.4 nvcc /
+driver 560.35.03, $2.52/hr), swept D∈{768,1536,2048,4096} × B∈{1,8} × 4 lanes
+{FP64, TF32-cuBLAS, TF32-OG10, BF16-cuBLAS} vs torch 2.4.0 eager+compile (matched
+dtype). Destroyed leak-0 (tag verified pre-destroy; foreign rtsc-li2mgh16 untouched).
+
+- GATE g5: determinism max|delta(W')|=0 ALL 32 flame cells; rel-RMS(W' vs naive) <<1e-2 all
+  (cuBLAS ~2.4e-8, OG10 2.16e-4). 80/80 [RESULT] lines, 0 FAIL. OG10 sm_90a COMPILE OK.
+- WINS 19/32 (ratio=flame_ms/torch_compile_ms).
+- flame-cuBLAS lanes (TF32 & BF16, SAME GEMM as torch + no-Python step): WIN 14/16 — lose
+  ONLY D=4096/B=8 (TF32 1.27x, BF16 2.00x). Win up to 11.6x at small D (TF32 D=768 B=1 0.086).
+- Crossover: cuBLAS lanes win ALL D @B=1; flip at D=4096 @B=8. OG10 (own-GEMM, 6.09x off
+  cuBLAS): crossover D=4096@B1 / D=1536@B8, up to 4.44x — EXPECTED no-LLVM-purity cost.
+- FP64 = NAIVE-GEMM lane: wins tiny D=768/B=1 (0.162x), loses large D to torch FP64 cuBLAS
+  (naive O(D^3) confound, NOT a torch FP64-TC edge; cuBLAS-FP64 flame lane would likely re-flip).
+- VERDICT: 'beat all' REACHABLE for practical cuBLAS lanes — flame-cuBLAS wins everywhere
+  except D=4096/B=8, one large-GEMM corner closable by inductor-class GEMM algo-selection /
+  GEMM-epilogue fusion (BENCH-6 already refuted megakernel/graph). flame identity (byte-exact ·
+  no-LLVM · theorem-cite · deterministic) holds across all 32 cells.
+- Verdict .verdicts/hexa-bench/F-BENCH-7.txt (full 32-cell matrix + crossover + losing set
+  + nvidia-smi verbatim); raw tool/bench/bench7_raw.log.

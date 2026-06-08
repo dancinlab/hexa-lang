@@ -85,17 +85,22 @@ no-LLVM/reproducible, NOT step-rate, so a large gap is EXPECTED and fine.
   FP64 flame-win (B<=4) RE-CONFIRMED on H100 (flame 0.18-0.59 ms vs torch flat ~0.70 ms; up to 3.9x @B1).
 <!-- /ANCHOR:BENCH-4 -->
 
-- [ ] **BENCH-7 — full-regime frontier map: WHERE does flame still lose to torch? (goal: beat all)** —
-  user goal '모두 이길때까지' (beat torch in EVERY regime). Sweep shape D in {768,1536,2048,4096} x T x
-  batch x dtype {FP64, TF32-cuBLAS, TF32-OG10, BF16} on a real H100, vs torch (eager+compile). For each
-  cell record flame/torch ms ratio + WIN/LOSE. Separate the two flame TF32 lanes: flame-calls-cuBLAS (no
-  own-GEMM penalty, only the no-Python-glue edge) vs flame-own-GEMM-OG10 (6.09x off cuBLAS). HYPOTHESIS:
-  flame-cuBLAS WINS most cells (same GEMM + no Python glue); flame-own-GEMM loses only the large GEMM-bound
-  TF32/BF16 cells (where the 6.09x-off own-GEMM dominates). Gate (g5): the full WIN/LOSE matrix verbatim +
-  the EXACT set of cells flame still loses = the remaining battleground for the goal. HONEST: at large
-  GEMM-bound shapes flame-own-GEMM will lose to cuBLAS; whether flame-cuBLAS-lane wins everywhere is the
-  real question (if yes, 'beat all' is achievable by calling cuBLAS + no-Python glue; the own-GEMM is a
-  separate no-LLVM-purity axis). H100 (vast, paid — justified for the large-shape + OG10-Hopper sweep).
+- [x] **BENCH-7 — full-regime frontier map: WHERE does flame still lose to torch? (goal: beat all)** —
+  DONE 2026-06-08 (.verdicts/hexa-bench/F-BENCH-7.txt). Swept D in {768,1536,2048,4096} x B in {1,8} x
+  {FP64, TF32-cuBLAS, TF32-OG10, BF16-cuBLAS} vs torch eager+compile on a real H100 (vast 40075088,
+  destroyed leak-0 tag-checked; foreign rtsc untouched). 80 [RESULT] lines, determinism max|delta|=0 ALL 32
+  cells, GATE rel-RMS <<1e-2 all (PASS). RESULT (ratio=flame/torch_compile): WINS 19/32. flame-cuBLAS lanes
+  (TF32 & BF16 — same cuBLAS GEMM as torch + no-Python step) WIN 14/16 cells, losing ONLY the single largest
+  GEMM-bound+filled cell D=4096/B=8 (TF32 1.27x · BF16 2.00x); win up to 11.6x at small D. Crossover: both
+  cuBLAS lanes win ALL D at B=1, flip at D=4096 only at B=8. flame-OWN-GEMM-OG10 loses the large GEMM-bound
+  TF32 cells exactly as predicted (6.09x off cuBLAS; crossover D=4096@B1, D=1536@B8, up to 4.44x) — the
+  EXPECTED no-LLVM-purity cost, orthogonal to speed (speed-lane calls cuBLAS). FP64 = flame's NAIVE-GEMM
+  lane: wins only tiny D=768/B=1 (0.162x), loses at large D to torch's FP64 cuBLAS (naive-GEMM confound, NOT
+  a torch FP64-TC edge; a cuBLAS-FP64 flame lane would likely re-flip these — out of scope). VERDICT: 'beat
+  all' is REACHABLE for the practical cuBLAS lanes — flame-cuBLAS already wins everywhere except D=4096/B=8,
+  one large-GEMM corner closable by inductor-class GEMM algo-selection / GEMM-epilogue fusion (NOT mega-
+  kernel/graph — BENCH-6 refuted that). Battleground = {D=4096/B=8 cuBLAS lanes} + FP64 large-D naive-GEMM.
+  Files: tool/bench/run_bench7.sh · flame_bench_step_og.cu GEMM_BACKEND=4 (cuBLAS-BF16) · torch --dtype bf16.
 
 ## honest framing (g5)
 

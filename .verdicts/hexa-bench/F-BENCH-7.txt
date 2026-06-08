@@ -1,0 +1,141 @@
+================================================================================
+F-BENCH-7 — HEXA-BENCH full-regime frontier map: WHERE does flame still lose?
+================================================================================
+GOAL (user-pinned): "모두 이길때까지" — beat torch in EVERY regime. Map EXACTLY which
+shape × dtype × batch cells flame still loses to PyTorch on a real H100, separate the two
+flame TF32 lanes (flame-calls-cuBLAS vs flame-own-GEMM-OG10), and report the crossover-D
+where each lane flips win→lose + the EXACT remaining losing-cell set (the battleground).
+
+DATE 2026-06-08.  GPU: real H100 (vast 40075088, label hexa-bench7, destroyed leak-0
+tag-checked; foreign rtsc-li2mgh16-anchor untouched).  CUDA 12.4 nvcc / driver 560.35.03
+(CUDA 12.6) / NVIDIA H100 80GB HBM3 cc=9.0.  torch 2.4.0.  T=256, iters=50.
+OG10 sm_90a (W10 TF32-wgmma) COMPILE: OK on Hopper (ISA gap closed, as BENCH-4).
+
+GATE g5: determinism max|delta(W')| = 0.000e+00 on ALL 32 flame cells (PASS).
+         bench rel-RMS(W' vs NAIVE-FP32 ref): cuBLAS-TF32/BF16 ~2.4e-8..3e-7,
+         OG10-wgmma 2.16e-4 — ALL <<1e-2 (PASS). 80/80 [RESULT] lines, 0 FAIL.
+
+ratio = flame_ms / torch_COMPILE_ms  (matched dtype/shape).  WIN = ratio<1.
+
+================================================================================
+FULL WIN/LOSE MATRIX  (verbatim)
+================================================================================
+lane              D  B |  flame_ms  t_eager  t_compile | ratio(f/tc)  verdict
+----------------------------------------------------------------------------------
+FP64            768  1 |    0.1786   0.6873     1.1005 |       0.162      WIN
+FP64            768  8 |    1.1641   0.6618     0.7674 |       1.517     LOSE
+FP64           1536  1 |    0.6192   0.6492     0.5506 |       1.125     LOSE
+FP64           1536  8 |    4.3698   0.9149     0.5139 |       8.503     LOSE
+FP64           2048  1 |    1.0862   0.5727     0.6656 |       1.632     LOSE
+FP64           2048  8 |    7.6730   1.3223     0.8108 |       9.463     LOSE
+FP64           4096  1 |    4.1999   1.4641     0.7109 |       5.908     LOSE
+FP64           4096  8 |   30.2747   4.2092     3.1633 |       9.571     LOSE
+----------------------------------------------------------------------------------
+TF32-cuBLAS     768  1 |    0.0452   0.6473     0.5253 |       0.086      WIN
+TF32-cuBLAS     768  8 |    0.1007   0.6358     0.7030 |       0.143      WIN
+TF32-cuBLAS    1536  1 |    0.1029   0.6235     0.7381 |       0.139      WIN
+TF32-cuBLAS    1536  8 |    0.2270   0.5133     0.7414 |       0.306      WIN
+TF32-cuBLAS    2048  1 |    0.1471   0.5890     0.3913 |       0.376      WIN
+TF32-cuBLAS    2048  8 |    0.3034   0.6946     0.5688 |       0.533      WIN
+TF32-cuBLAS    4096  1 |    0.4632   0.6944     0.6989 |       0.663      WIN
+TF32-cuBLAS    4096  8 |    0.9459   1.3447     0.7424 |       1.274     LOSE
+----------------------------------------------------------------------------------
+TF32-OG10       768  1 |    0.1341   0.6473     0.5253 |       0.255      WIN
+TF32-OG10       768  8 |    0.3280   0.6358     0.7030 |       0.467      WIN
+TF32-OG10      1536  1 |    0.2763   0.6235     0.7381 |       0.374      WIN
+TF32-OG10      1536  8 |    0.7855   0.5133     0.7414 |       1.059     LOSE
+TF32-OG10      2048  1 |    0.3699   0.5890     0.3913 |       0.945      WIN
+TF32-OG10      2048  8 |    0.9488   0.6946     0.5688 |       1.668     LOSE
+TF32-OG10      4096  1 |    1.0079   0.6944     0.6989 |       1.442     LOSE
+TF32-OG10      4096  8 |    3.2939   1.3447     0.7424 |       4.437     LOSE
+----------------------------------------------------------------------------------
+BF16-cuBLAS     768  1 |    0.0512   0.5928     0.6760 |       0.076      WIN
+BF16-cuBLAS     768  8 |    0.1106   0.5234     0.5682 |       0.195      WIN
+BF16-cuBLAS    1536  1 |    0.1102   0.6566     0.4903 |       0.225      WIN
+BF16-cuBLAS    1536  8 |    0.2310   0.6951     0.4211 |       0.549      WIN
+BF16-cuBLAS    2048  1 |    0.1589   0.6815     0.5602 |       0.284      WIN
+BF16-cuBLAS    2048  8 |    0.3253   0.6643     0.4805 |       0.677      WIN
+BF16-cuBLAS    4096  1 |    0.5009   0.7069     0.6574 |       0.762      WIN
+BF16-cuBLAS    4096  8 |    0.9068   0.7008     0.4542 |       1.996     LOSE
+----------------------------------------------------------------------------------
+WINS 19/32 · LOSES 13/32.
+
+================================================================================
+CROSSOVER-D per lane
+================================================================================
+  FP64          B=1: crossover at D=1536 (wins only D=768)
+  FP64          B=8: loses ALL D (even D=768)
+  TF32-cuBLAS   B=1: NO crossover — wins ALL D (768..4096)
+  TF32-cuBLAS   B=8: crossover at D=4096 (wins D<=2048)
+  TF32-OG10     B=1: crossover at D=4096 (wins D<=2048)
+  TF32-OG10     B=8: crossover at D=1536 (wins only D=768)
+  BF16-cuBLAS   B=1: NO crossover — wins ALL D (768..4096)
+  BF16-cuBLAS   B=8: crossover at D=4096 (wins D<=2048)
+
+================================================================================
+EXACT LOSING CELLS — the remaining battleground for "beat all"
+================================================================================
+  FP64          D=768   B=8:  1.52x   (naive-GEMM cell — see note)
+  FP64          D=1536  B=1:  1.12x   (naive-GEMM)
+  FP64          D=1536  B=8:  8.50x   (naive-GEMM)
+  FP64          D=2048  B=1:  1.63x   (naive-GEMM)
+  FP64          D=2048  B=8:  9.46x   (naive-GEMM)
+  FP64          D=4096  B=1:  5.91x   (naive-GEMM)
+  FP64          D=4096  B=8:  9.57x   (naive-GEMM)
+  TF32-cuBLAS   D=4096  B=8:  1.27x   <-- the ONLY flame-cuBLAS TF32 loss
+  TF32-OG10     D=1536  B=8:  1.06x   (own-GEMM 6.09x-off-cuBLAS penalty, EXPECTED)
+  TF32-OG10     D=2048  B=8:  1.67x   (own-GEMM, EXPECTED)
+  TF32-OG10     D=4096  B=1:  1.44x   (own-GEMM, EXPECTED)
+  TF32-OG10     D=4096  B=8:  4.44x   (own-GEMM, EXPECTED)
+  BF16-cuBLAS   D=4096  B=8:  2.00x   <-- the ONLY flame-cuBLAS BF16 loss
+
+================================================================================
+DOES flame-cuBLAS LANE WIN AT ALL D?  -> NO (but only at ONE cell each)
+================================================================================
+  TF32-cuBLAS : NO — wins 7/8; loses ONLY D=4096 B=8 by 1.27x. Worst ratio 1.274.
+  BF16-cuBLAS : NO — wins 7/8; loses ONLY D=4096 B=8 by 2.00x. Worst ratio 1.996.
+
+The flame-cuBLAS lanes (same cuBLAS GEMM as torch + no-Python fused step) WIN every cell
+EXCEPT the single largest GEMM-bound + filled cell D=4096/B=8. There the step becomes pure
+GEMM throughput, the no-Python-glue edge is negligible, and torch.compile's inductor GEMM
+algo-selection edges ahead (TF32 1.27x, BF16 2.00x). At every smaller/less-filled cell the
+no-Python fused step dominates and flame-cuBLAS WINS, by up to 11.6x (TF32 D=768 B=1, 0.086).
+
+================================================================================
+HONEST VERDICT — is "beat all" reachable?
+================================================================================
+ALMOST — and the residual is a known, narrow battleground, not a wall.
+
+1. flame-cuBLAS (TF32 & BF16) is the goal-relevant lane: SAME GEMM as torch, so any
+   remaining gap is glue/algo-selection, not raw FLOPs. It wins 14/16 cells; the only two
+   losses are BOTH the single cell D=4096/B=8 (the most GEMM-bound + most filled). =>
+   "beat all" is within reach by calling cuBLAS + the no-Python fused step; what's left is
+   ONE corner cell where torch.compile's inductor picks a better cuBLAS algo/epilogue.
+   Lever to close it: match torch's algo (cublasLtMatmul with epilogue fusion / explicit
+   algo search) at large M·N·K, OR fuse the LN/gelu+AdamW epilogue into the GEMM tail so
+   the step is one launch. NOT a megakernel/graph problem (BENCH-6 already refuted that).
+
+2. flame-OWN-GEMM-OG10 (the no-LLVM-purity lane) loses at the large GEMM-bound TF32 cells
+   exactly as predicted (6.09x off cuBLAS): crossover at D=4096 (B=1) and D=1536 (B=8),
+   up to 4.44x. This is a SEPARATE axis (no-LLVM purity), not a speed regression of the
+   stack — when speed is the goal flame calls cuBLAS (lane 1) and the own-GEMM loss is moot.
+
+3. FP64 is flame's NAIVE-GEMM lane (torch has no FP64 tensor-core path either, but torch's
+   FP64 cuBLAS GEMM still beats flame's O(D^3) tiled naive kernel at large D). flame wins
+   FP64 ONLY at the tiny D=768/B=1 (0.162x) and loses elsewhere — driven by the NAIVE GEMM,
+   NOT a torch FP64-TC advantage. CAVEAT: this is the naive-GEMM confound; a cuBLAS-FP64
+   flame lane (CUBLAS_COMPUTE_64F) would likely flip most FP64 cells back to flame (torch
+   FP64 has no TC either), but that lane was out of BENCH-7 scope. BENCH-4's FP64-win claim
+   holds at small shapes; at large shapes the naive FP64 GEMM is the loss, fixable by cuBLAS.
+
+BOTTOM LINE: "beat all" is REACHABLE for the practical (cuBLAS) lanes — flame-cuBLAS already
+wins everywhere except D=4096/B=8 (1.27x TF32 / 2.00x BF16), one large-GEMM-bound corner
+closable by inductor-class GEMM algo-selection or GEMM-epilogue fusion. The own-GEMM (OG10)
+loss at large D is the EXPECTED no-LLVM-purity cost, orthogonal to the speed goal. flame's
+identity (byte-exact max|delta|=0 everywhere · no-LLVM · theorem-cite · deterministic) holds
+across all 32 cells. Remaining battleground = {D=4096/B=8 cuBLAS lanes} + the FP64 large-D
+naive-GEMM (both GEMM-throughput, both have a concrete cuBLAS/algo-selection lever).
+
+Raw 80 [RESULT] + 32 [DETERMINISM]=0 + 32 [GATE] lines: tool/bench/bench7_raw.log (verbatim
+nvidia-smi + nvcc + per-cell [CFG]). Driver: tool/bench/run_bench7.sh. BF16 lane:
+flame_bench_step_og.cu GEMM_BACKEND=4 + torch_bench_step.py --dtype bf16.
