@@ -1,0 +1,97 @@
+F-FUSION-FF-GN-PARALLEL  ::  Fixed-order PARALLEL-TREE GroupNorm reduction — replacing the
+byte-eq-FORCED single-thread serial GN reduction (DUTYCYCLE: 90.5% of GPU-active time, the two
+GN reductions @105-132 ms EACH) with a deterministic fixed-order block-tree that RE-BASELINES the
+GN reference. The FIRST lever attacking the RIGHT term (GN reduction), not GEMM/launch/dtype.
+
+domain: HEXA-FUSION · date: 2026-06-08 · method: real H100-SXM (vast 39970223, tag hexa-ffgn);
+gn_tree.cu fixed-order block-tree (fwd mean/var + bwd_dx s1/s2) vs verbatim single-thread oracle
+(_hx_k_groupnorm / _hx_k_groupnorm_bwd_dx). DUTYCYCLE shape D1536/Tw512 => T=512 C=1536 G=1, FP64.
+GATE g5 — numbers pasted VERBATIM.
+
+================================================================================
+ENVIRONMENT (verbatim)
+  GPU   : NVIDIA H100 80GB HBM3, sm_90, driver via pytorch/pytorch:2.4.0-cuda12.4-cudnn9-devel
+  nvcc  : CUDA 12.4 (cuda_12.4.r12.4) ; nvcc -O3 -arch=sm_90
+  shape : T=512 C=1536 G=1 (whole-tensor, N=786432 elems), FP64
+  tree  : fixed grid NB=256 blocks x BS=256 threads ; ascending-index lane partition ;
+          fixed pairwise (stride-halving) shared-mem tree ; 2-pass (reduce_blocks -> single-block
+          finalize over NB partials in ascending block order) ; NO atomics, NO race.
+  oracle: verbatim _hx_k_groupnorm + _hx_k_groupnorm_bwd_dx, single-thread (<<<1,1>>>),
+          same NR-40 _hx_gn_sqrt_dev, same t-outer/c-inner host accumulation order.
+
+================================================================================
+[GATE 1] DETERMINISM (load-bearing correctness) — run-to-run max|delta| == 0   VERBATIM
+  [GATE1 DETERMINISM] fwd Y  run-to-run max|delta|=0 bitdiff=0
+  [GATE1 DETERMINISM] bwd DX run-to-run max|delta|=0 bitdiff=0  DETERMINISTIC PASS
+  CROSS-PROCESS (3 separate process invocations): rebaseline delta BIT-IDENTICAL each run
+    (2.55351295663786e-14 / 1.2656542480726785e-14 in run1, run2, run3) — the tree is fully
+    bit-reproducible run-to-run, not merely within-process. PRESERVES the reproducibility
+    north-star: deterministic, just a NEW fixed value (different fixed associativity).
+  => DETERMINISM: YES, max|delta| = 0 (fwd Y AND bwd DX), bitdiff = 0.
+
+================================================================================
+[GATE 2] RE-BASELINE delta (honest cost) — tree-order GN vs OLD sequential-sum oracle  VERBATIM
+  [GATE2 REBASELINE] fwd Y  tree-vs-seq max|delta|=2.55351295663786e-14
+  [GATE2 REBASELINE] bwd DX tree-vs-seq max|delta|=1.2656542480726785e-14
+  (over N=786432, FP64)
+  => ~2.6e-14 / ~1.3e-14 = pure machine-eps FP64 REASSOCIATION (~1e-14 over a 786k-elem sum),
+     NOT an accuracy regression. The canonical GN reference RE-BASELINES to the tree order
+     (FP non-associativity yields a different-but-fixed value). NUMERICALLY NEGLIGIBLE.
+
+================================================================================
+[GATE 3] SPEEDUP (the prize) — tree vs single-thread, real H100, DUTYCYCLE config  VERBATIM
+  (T=512 C=1536 G=1, FP64, iters=100, ms/call)
+    fwd  GN  seq=93.8655 ms   tree=0.0260 ms   speedup=3612.17x
+    bwd  DX  seq=118.0440 ms   tree=0.0173 ms   speedup=6838.09x
+    GN total seq=211.9095 ms   tree=0.0432 ms   speedup=4899.80x
+  (seq 93.9 / 118.0 ms MATCH the DUTYCYCLE per-call 105.6 / 131.9 ms — same pathological
+   single-thread serial sum.) GN-KERNEL SPEEDUP = ~4900x (the GN reduction wall is annihilated).
+
+================================================================================
+[FULL-STEP PROJECTION] — from DUTYCYCLE verbatim per-step breakdown (the authoritative surface)
+  DUTYCYCLE (real flame CLMConvMoE FP64 step, H100): GPU-active union = 7571.008 ms / process;
+  GroupNorm (fwd+bwd_dx+affine) = 5706 ms = 75.4% of GPU-active union, = 90.5% of the
+  fwd/bwd_dx-only big-kernel time. Tree collapses fwd+bwd_dx (~5701 ms saved across the process).
+
+  TWO HONEST FRAMINGS (same numbers, different denominator):
+   - Frame A (GPU-ACTIVE kernel time only): union 7571 ms -> 1870 ms  =>  4.0x self-speedup.
+       The on-device kernel work shrinks 4x; GN goes from the dominant kernel to a rounding error.
+   - Frame B (FULL-STEP WALL = span, gap UNCHANGED): GAP/idle = 49794 ms = 86.80% of the
+       57365 ms span is the DUTYCYCLE between-kernel idle valley (FF-XSTREAM), UNTOUCHED by this
+       lever. GN was only 9.9% of SPAN. span 57365 ms -> 51664 ms  =>  1.11x full-step self-speedup.
+
+  DOES IT BREAK ~3x?  ON THE FULL STEP: **NO** (full-step self-speedup = 1.11x). The ~3x
+  batch-fill cap is NOT broken because the binding wall is now the 86.8% idle gap, not GN.
+  ON GPU-ACTIVE KERNEL TIME: the GN kernel itself is ~4900x faster and the active-time
+  self-speedup is 4.0x (which alone WOULD exceed 3x), but the full-step wall is gated by the
+  separate idle gap.
+
+================================================================================
+[VERDICT]  HONEST PARTIAL — the GN reduction lever WORKS (the right term), but the full step is
+           now IDLE-GAP-GATED (FF-XSTREAM is the co-requisite binding wall).
+
+  - GATE 1 DETERMINISM: PASS. Tree is bit-reproducible run-to-run AND cross-process (max|delta|=0).
+  - GATE 2 RE-BASELINE: PASS. tree-vs-seq max|delta| = 2.55e-14 / 1.27e-14 = machine-eps reassoc.
+  - GATE 3 SPEEDUP: PASS. GN-kernel ~4900x; GN fwd 93.9->0.026 ms, bwd_dx 118->0.017 ms.
+
+  This is the FIRST lever to attack the RIGHT term that DUTYCYCLE pinpointed: the single-thread
+  GroupNorm reduction (the dominant on-device cost), NOT interpreter (INTERP-ELIM) / GEMM dtype
+  (PRECISION-CHANGE) / SM count (RIGHT-SIZED-GPU), all of which closed-neg by attacking the WRONG
+  term. The re-baseline (sequential-sum -> fixed-order tree) costs ~1e-14 FP64 and keeps full
+  run-to-run reproducibility -- so it is a FREE structural win on the GN kernel.
+
+  HONEST (g5): the full-step wall does NOT break ~3x, because GroupNorm was 90.5% of GPU-ACTIVE
+  time but only 9.9% of SPAN -- the 86.8% device-idle GAP (inter-kernel dispatch + host glue) is
+  a SEPARATE wall (FF-XSTREAM). After this lever, GN is no longer on the critical on-device path;
+  the binding term is unambiguously the idle gap. => FF-XSTREAM (cross-stream overlap + host-glue
+  elimination of the idle valley) is the CO-REQUISITE next lever; only the two together (fast GN
+  + overlapped valley) can move the full-step wall. Reported BOTH numbers per g5: GN-kernel ~4900x
+  (large, as predicted), full-step 1.11x (idle-gated, the honest pointer to FF-XSTREAM).
+
+  NEW CEILING: with GN no longer the on-device bottleneck, the practical full-step ceiling is set
+  by 1/duty-cycle on the idle gap (DUTYCYCLE Amdahl ceiling on GEMM% = 2844x is unchanged and far;
+  the achievable near-term ceiling is gated by FF-XSTREAM's overlap factor, not by GN anymore).
+
+  pod 39970223 (H100 SXM, tag hexa-ffgn) DESTROYED leak-0 (tag-confirmed).
+  (prior broken-sshd pod 39968941, tag hexa-ffgn, also DESTROYED tag-confirmed before re-rent.)
+  artifacts: .verdicts/hexa-fusion/ff-gn-parallel-build/{gn_tree.cu, build_run.sh}
