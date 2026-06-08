@@ -1059,3 +1059,38 @@ fn cloud_verify_sha(host: str, ssh_opts: [str], remote_path: str, local_path: st
     return CloudResult { ok: 1, exit_code: 0, pid: 0, stdout_: "",
         message: "sha256 verified (" + lsha.substring(0, 12) + "…)", logfile: "" }
 }
+
+// cloud_expect_artifact — verify a remote training artifact actually wrote.
+// The job-loss failure mode (anima 7B, 2026-06): a train loop's FINAL ckpt +
+// result.json were never written (the trailing save was skipped on a modulo
+// miss, and a post-train eval crashed before reaching it), yet the process
+// still EXITED cleanly — so "proc dead + no error in log" LOOKED like SUCCESS
+// while the trained weights were silently lost. This re-reads the remote file
+// SIZE so a missing-or-zero artifact is a FAIL even on a clean process exit.
+// exit_code: 0 present+non-empty · 100 missing/zero. Size (bytes) rides in
+// `message` for the caller's log / Monitor.
+// cloud_expect_artifact_cmd — PURE: the remote one-liner that reports an
+// artifact's byte size (0 if absent/empty). `test -s` is true iff the file
+// exists AND is non-empty; else `echo 0` — so the size IS the file-state
+// verdict, never an ssh transport error. Split out (pure) so the quoting +
+// command shape are unit-testable with no pod.
+fn cloud_expect_artifact_cmd(artifact_path: str) -> str {
+    return "if test -s " + _shq(artifact_path) + "; then stat -c%s " + _shq(artifact_path) + "; else echo 0; fi"
+}
+
+// cloud_artifact_verdict — PURE: turn the stat size string into a CloudResult.
+// "" / "0" → FAIL (exit 100); any positive size → OK. Unit-testable.
+fn cloud_artifact_verdict(artifact_path: str, sz: str) -> CloudResult {
+    let s = sz.trim()
+    if len(s) == 0 || s == "0" {
+        return CloudResult { ok: 0, exit_code: 100, pid: 0, stdout_: s,
+            message: "artifact_missing_or_zero · " + artifact_path, logfile: "" }
+    }
+    return CloudResult { ok: 1, exit_code: 0, pid: 0, stdout_: s,
+        message: "artifact OK · " + s + " bytes · " + artifact_path, logfile: "" }
+}
+
+fn cloud_expect_artifact(host: str, ssh_opts: [str], artifact_path: str) -> CloudResult {
+    let sz = _ssh_capture(host, ssh_opts, cloud_expect_artifact_cmd(artifact_path))
+    return cloud_artifact_verdict(artifact_path, sz)
+}

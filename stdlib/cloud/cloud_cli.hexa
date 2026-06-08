@@ -3000,7 +3000,7 @@ fn main() {
     }
     if sub == "poll" {
         if si + 2 >= len(av) {
-            println("[cloud] poll: usage — cloud poll <host> <pid> [--port N] [--insecure]")
+            println("[cloud] poll: usage — cloud poll <host> <pid> [--port N] [--insecure] [--expect-artifact <p1,p2,…>]  (with --expect-artifact, a DEAD pid is success ONLY if every listed remote artifact exists + is non-empty)")
             exit(2)
         }
         let _rh = _resolve_cloud_host(_checked_host(av[si + 1]))
@@ -3026,6 +3026,35 @@ fn main() {
             exit(2)
         }
         println("[cloud] pid " + str(pid) + " DEAD")
+        // --expect-artifact <csv>: a DEAD process is a SUCCESSFUL completion
+        // ONLY if every expected output artifact actually wrote. Catches the
+        // silent-loss mode where proc EXITED clean but the final ckpt/result
+        // was never saved (anima 7B, 2026-06). Opt-in: without the flag, a
+        // DEAD pid stays exit 1 (unchanged behavior for existing callers).
+        let _arts = _flag_val(av, si + 3, "--expect-artifact", "")
+        if len(_arts) > 0 {
+            let _paths = _arts.split(",")
+            let mut _all_ok = 1
+            let mut _ai = 0
+            while _ai < len(_paths) {
+                let _p = _paths[_ai].trim()
+                if len(_p) > 0 {
+                    let _ar = cloud_expect_artifact(host, ssh_opts, _p)
+                    println("[cloud]   " + _ar.message)
+                    if _ar.ok == 0 {
+                        _all_ok = 0
+                    }
+                }
+                _ai = _ai + 1
+            }
+            let _ = _teardown_verdict_if_registered(pid)
+            if _all_ok == 1 {
+                println("[cloud] pid " + str(pid) + " DEAD-COMPLETE — all expected artifacts present")
+                exit(0)
+            }
+            println("[cloud] pid " + str(pid) + " DEAD-INCOMPLETE — an expected artifact is MISSING/zero (silent training-loss); NOT a success")
+            exit(1)
+        }
         // Fix B — teardown auto-verdict. If this pid was registered via Fix A
         // (`--register` on fire/nohup), flip its verdict PENDING→FAIL so the
         // ledger never carries a stale-PENDING row for a DEAD remote job. Runs
