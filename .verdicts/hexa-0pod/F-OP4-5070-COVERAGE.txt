@@ -1,0 +1,97 @@
+F-OP4-5070-COVERAGE — flame fused training step vs torch on consumer RTX 5070 (sm_120)
+=======================================================================================
+STATUS: GREEN (measurement/coverage) — frontier MAPPED, all g5 gates PASS. HONEST finding:
+        on the consumer RTX 5070 the flame fused step LOSES to torch.compile in ALL 18
+        cells; it only APPROACHES PARITY in the FP64 compute-bound regime (ratio ~1.0-1.3x).
+        No crossover-D where flame wins on this card. (Different from H100; documented below.)
+HARDWARE: aiden RTX 5070 (sm_120 / cc12.0, 12227 MiB), driver 580.159.04, CUDA 13.0,
+          torch 2.12.0.dev20260408+cu128. FREE sidecar pool — NO vast, NO pod, NO leak.
+
+GOAL: map where the flame fused training step (flame_bench_step_fused.cu -DFUSED, cuBLAS
+backend = the speed lane: fused valley LN+gelu+copy + single-launch AdamW + transpose-elim)
+WINS vs LOSES against torch (eager + compile/inductor) on CONSUMER hardware, across
+D={768,1536,2048} x B={1,8} x dtype={FP64,TF32,BF16}. T=256, ITERS=50, warmup before timed.
+ratio = flame_ms / torch_compile_ms. WIN = flame_ms < torch_compile_ms.
+
+EXCLUSIVITY: shared GPU (parallel OP-2/OP-3 agents). Every timed run gated on util<5% &
+mem<800MiB (else sleep 20s, retry up to 30x). The guard fired several times during the
+sweep (parallel agents hit the card) and correctly held each timed run until exclusive.
+
+====================== WIN/LOSE MATRIX (RTX 5070, sm_120) verbatim ======================
+flame = flame FUSED step ms/step (cuBLAS lane). torch_e = eager, torch_c = compile (ms/step).
+ratio_c = flame_ms / torch_compile_ms. verdict = WIN if flame < torch_compile, else LOSE.
+
+dtype     D   B |  flame_ms  torch_e  torch_c | ratio_c verdict
+---------------------------------------------------------------
+TF32    768   1 |    0.4308   0.2119   0.2416 |   1.783    LOSE
+TF32   1536   1 |    1.6689   0.2891   0.2632 |   6.341    LOSE
+TF32   2048   1 |    2.9839   0.4971   0.3329 |   8.963    LOSE
+
+TF32    768   8 |    0.5794   0.3687   0.2118 |   2.736    LOSE
+TF32   1536   8 |    2.1994   0.9670   0.7472 |   2.944    LOSE
+TF32   2048   8 |    4.0131   1.8016   1.4080 |   2.850    LOSE
+
+BF16    768   1 |    0.4347   0.2013   0.2609 |   1.666    LOSE
+BF16   1536   1 |    1.6577   0.2046   0.2659 |   6.234    LOSE
+BF16   2048   1 |    2.9451   0.2473   0.2009 |  14.660    LOSE
+
+BF16    768   8 |    0.5320   0.2682   0.1910 |   2.785    LOSE
+BF16   1536   8 |    2.0321   0.5172   0.3813 |   5.329    LOSE
+BF16   2048   8 |    3.5911   0.8769   0.7044 |   5.098    LOSE
+
+FP64    768   1 |    1.9888   1.9405   1.5073 |   1.319    LOSE
+FP64   1536   1 |    6.9867   5.8318   5.5962 |   1.248    LOSE
+FP64   2048   1 |   12.5216  10.9385  10.3438 |   1.211    LOSE
+
+FP64    768   8 |   12.3736  11.7330  10.7456 |   1.152    LOSE
+FP64   1536   8 |   41.9352  42.2522  41.6429 |   1.007    LOSE
+FP64   2048   8 |   76.2800  74.6326  73.4579 |   1.038    LOSE
+
+18 cells, 0 OOM (12 GiB held every shape; the largest, FP64/D=2048/B=8, used ~0.4 GiB).
+
+===================== CROSSOVER-D per dtype (consumer-card frontier) =====================
+There is NO crossover-D where flame retakes the lead on the RTX 5070 — flame LOSES to
+torch.compile at every D for every dtype. Instead the meaningful axis is the RATIO trend:
+
+  TF32 : LOSE everywhere. Gap WIDENS with D at B=1 (1.78x@768 -> 8.96x@2048 — the small-M
+         GEMM is launch/glue-bound and torch's inductor fuses the whole step into a couple
+         kernels while flame still pays per-launch + a separate cuBLAS handle). At B=8 the
+         gap is flatter (~2.7-2.9x) — bigger M amortizes flame's overhead somewhat but
+         torch.compile still wins by ~3x.
+  BF16 : LOSE everywhere, WORST dtype for flame. Ratio blows up to 14.66x at D=2048/B=1
+         (torch's inductor + cuBLASLt BF16 path is extremely efficient on small-M; flame's
+         per-step f32->bf16 cast kernels + cuBLAS overhead dominate the tiny matmul). B=8
+         ratios 2.8-5.3x.
+  FP64 : LOSE everywhere but CLOSE TO PARITY (ratio 1.04-1.32x), and TIGHTEST at large B:
+         FP64/D=1536/B=8 = 1.007x (essentially tied), D=2048/B=8 = 1.038x. FP64 is
+         rate-limited (compute-bound) on consumer Blackwell, so the GEMM dominates the step
+         wall and flame's glue overhead is amortized -> flame nearly matches torch.
+
+CONSUMER-CARD vs H100: on H100 the BENCH-10 fused step was competitive/winning in the
+glue-bound regime; on the 5070 (fewer SMs, smaller L2, much weaker FP64/TF32 tensor rate
+relative to its launch-overhead floor) torch.compile wins across the board. The earlier
+BENCH-1 "flame won at D=768 on the 5070" claim does NOT reproduce here against this torch
+2.12 eager+compile baseline — at D=768/B=1 torch eager is 0.21 ms vs flame 0.43 ms (TF32).
+
+WHERE FLAME WINS ON CONSUMER HW: nowhere on raw step-rate in this sweep. Flame's standing
+on the 5070 is "near-parity ONLY in FP64-compute-bound large-batch" (ratio ~1.0); its value
+on consumer HW remains its IDENTITY properties (byte-exact / device-resident / deterministic /
+no-LLVM / no torch dependency), NOT step throughput. For users who need raw speed on a
+consumer card, torch.compile is faster everywhere; flame is the right tool when bit-exact
+reproducibility or a torch-free native step matters more than the 1-9x speed delta.
+
+============================== GATE g5 (per cell) — verbatim =============================
+DETERMINISM: every cell run-to-run max|delta(W')| = 0.000e+00  (gate ==0)  -> PASS x18/18
+rel-RMS(fused W' vs un-fused NAIVE-GEMM ref): every cell <= 4.2e-8 (FP64 cells = 0.000e+00)
+             (gate <= 1e-2)  -> PASS x18/18
+0 determinism fails, 0 rel-RMS fails. The fusion is bit-faithful on the consumer card.
+
+================================ nvidia-smi (sweep start) ===============================
+Tue Jun  9 08:03:30 2026   NVIDIA-SMI 580.159.04   Driver 580.159.04   CUDA 13.0
+  GPU 0  NVIDIA GeForce RTX 5070  On   00000000:01:00.0
+  0%  39C  P1  30W/250W   220MiB / 12227MiB   GPU-Util 0%   (idle at sweep start; the
+  exclusivity guard held each timed run when parallel OP-2/OP-3 agents touched the card.)
+
+REPRO: tool/bench/run_op4_5070.sh (sweeps the FUSED lanes + torch eager+compile on sm_120
+with the exclusivity guard). Sources: tool/bench/flame_bench_step_fused.cu (-DFUSED) +
+tool/bench/torch_bench_step.py. Raw log: /tmp/op4_5070_raw.log on aiden.

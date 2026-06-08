@@ -33,8 +33,17 @@ loop targets what the consumer card + code can carry.
   .verdicts/hexa-0pod/F-OP2-TRAINER-WIRE.txt.
 - [ ] **OP-3 — BF16 sm_120 own-GEMM (aiden)** — extend the sm_120 own-GEMM to BF16 (mma.sync bf16), measure
   vs cuBLAS-BF16, bit-faithful. Free aiden GPU.
-- [ ] **OP-4 — flame fused-step on aiden: extend shape/dtype coverage** — run the BENCH-10 fused step across
+- [x] **OP-4 — flame fused-step on aiden: extend shape/dtype coverage** — run the BENCH-10 fused step across
   more (D,T,B,dtype) on the free 5070, find + document where flame wins/loses on consumer hardware.
+  DONE — swept D={768,1536,2048} x B={1,8} x dtype={FP64,TF32,BF16} = 18 cells on aiden RTX 5070 (sm_120),
+  flame FUSED step (cuBLAS lane) vs torch eager+compile. HONEST consumer-card frontier: flame LOSES to
+  torch.compile in ALL 18 cells (no crossover-D where flame wins). Ratio (flame/torch_compile) trend: TF32
+  1.78x->8.96x (widens with D at B=1, ~2.8x at B=8); BF16 worst, up to 14.66x @D=2048/B=1; FP64 near-parity
+  1.04-1.32x (D=1536/B=8 = 1.007x tied) — FP64 is compute-bound so the GEMM amortizes flame's glue overhead.
+  0 OOM (12GB held every shape). GATE g5 PASS x18/18: determinism max|d(W')|=0 every cell, rel-RMS(fused vs
+  unfused-naive ref) <=4.2e-8 (FP64 cells =0). flame's consumer-card value = byte-exact/device-resident/
+  torch-free identity, NOT step-rate; torch.compile is faster everywhere on the 5070. The BENCH-1 "flame won
+  @D=768 on 5070" claim does NOT reproduce vs torch 2.12. Verdict .verdicts/hexa-0pod/F-OP4-5070-COVERAGE.txt.
 - [x] **OP-5 — forge robustness/correctness hardening (local, 0-GPU)** — pick a forge code-quality / numerical-
   robustness improvement (error paths, dtype edge cases, determinism guards) verifiable without a GPU.
   DONE — fixed the `self/runtime.h:422-423` `'/*' within block comment` `-Wcomment` warning (the `native/*.c`
@@ -76,6 +85,16 @@ loop targets what the consumer card + code can carry.
   The robustness improvements OP-5 originally listed (error paths, dtype edge cases, determinism guards in the
   forge runtime) cannot be gated byte-eq without running a kernel; they belong to a GPU round (aiden 5070), not
   this 0-pod pass. Logged here so the loop doesn't re-attempt them as "0-GPU".
+- **OP-4b — 5070 launch-overhead-floor: CUDA-graph / single-megakernel fused step (aiden).** OP-4 found flame's
+  worst losses on the consumer card are at SMALL B (B=1): TF32 1.78x->8.96x and BF16 up to 14.66x as D grows,
+  where the GEMM is tiny and the step is dominated by per-launch + separate-cuBLAS-handle overhead (torch's
+  inductor fuses the whole step into ~2 kernels). The lever flame already has but the bench step does NOT use:
+  capture the per-step DAG into a CUDA graph (one launch/replay) OR fold valley+epilogue+AdamW into one
+  megakernel around the two cuBLAS calls, to collapse the per-launch floor that loses small-M cells. Gate:
+  byte-eq vs the current fused step (max|d(W')|=0) on aiden + re-measure the small-B ratio. Free 5070, 0-pod.
+  HONEST scope note: this only attacks the launch-floor regime (small B); FP64 is already near-parity (compute-
+  bound, 1.0x) so it won't move there, and large-B TF32/BF16 stays ~3-5x off (cuBLAS GEMM-rate bound, not
+  glue) — so OP-4b is a small-B-only win, not a path to beating torch.compile everywhere on the consumer card.
 
 ## honest framing (g5)
 
