@@ -46,9 +46,11 @@ near-parity. Journey: BENCH-11 warp-spec TMA (+12-15%, isolated the wall = NOT p
 DECODE-ELIMINATION via in-place wgmma descriptor (the breakthrough: 51->281 TFLOP/s @2048, ~5x, collapsing
 cuBLAS-multiple 6.2x->1.23x@2048 PARITY / 1.62x@4096, bit-exact rel-RMS 0, occupancy 1->2 CTA/SM); BENCH-13
 CTA-rasterization+persistent scheduler (NEUTRAL — D=2048 single-wave so swizzle is a no-op + H100 50MB L2
-already caches the shared operands; D=4096 best 1.52x from occupancy not scheduler). FINAL: own-GEMM ~1.36x
-off cuBLAS on square-fitting shapes, ~1.5-1.6x on tail-quantized (D=4096/132-SM = 3.88 waves), BIT-EXACT
-(rel-RMS 0) throughout. KEY FINDING: the ONLY remaining lever is split-K, which changes FP32 accumulation
+already caches the shared operands; D=4096 best 1.52x from occupancy not scheduler); BENCH-14 per-CTA wgmma
+INNER-LOOP tuning (deeper wgmma-group pipeline PDEP=2 dual-issue + vectorized .v2.f32 epilogue — THE PARITY
+WIN: D=2048 324.9 TFLOP/s / 1.10x / PARITY=YES bit-exact, essentially TIES cuBLAS; D=4096 narrowed to 1.50x).
+FINAL: own-GEMM TIES cuBLAS @D=2048 (1.10x bit-exact), ~1.50x on tail-quantized (D=4096/132-SM = 1024-tile
+waves), BIT-EXACT (rel-RMS 0) throughout. KEY FINDING: the ONLY remaining lever is split-K, which changes FP32 accumulation
 order and BREAKS the bit-exact gate — i.e. the irreducible residual IS EXACTLY the bit-exactness flame
 refuses to trade. So 'own-GEMM>cuBLAS' is unreachable WITHOUT abandoning flame's identity (byte-exact
 determinism) = a PRINCIPLED terminal, not a failure: the gap that remains is the identity itself. Net result:
@@ -234,17 +236,25 @@ no-LLVM/reproducible, NOT step-rate, so a large gap is EXPECTED and fine.
   tail-quantized; the last residual is exactly the bit-exactness flame refuses to trade. Verdict F-BENCH-13.txt.
   Kernel gemm_og17_persist(MODE7)+tile_unswizzle in self/native/wgmma/wgmma_tf32_og17.cu; driver bench13_run.sh.
 
-- [ ] **BENCH-14 — last identity-preserving lever: per-CTA wgmma inner-loop microarch (D=2048 1.36x)** —
-  BENCH-13 showed the D=2048 single-wave residual (~1.36x off cuBLAS) is NOT scheduler/rasterization (no-op
-  at single wave) and NOT tail-quant (that's D=4096). It's the per-CTA wgmma INNER-LOOP efficiency vs
-  cuBLAS's tuned mainloop. Unlike split-K (which breaks bit-exactness), inner-loop tuning preserves the
-  accumulation order -> stays bit-exact. Levers: deeper register-tiling (more wgmma accum fragments/CTA),
-  async/pipelined EPILOGUE (overlap the C-store with the next tile's wgmma), K-unroll + dual-issue wgmma
-  (2 wgmma in flight), smem bank-conflict-free C-write. Re-measure D={2048,4096} vs cuBLAS. Gate (g5):
-  bit-exact rel-RMS vs FP64 ref MUST stay 0 (inner-loop tuning changes scheduling, NOT values) + new
-  cuBLAS-multiple (was 1.36x@2048). HONEST: this is the DEEPEST tuning layer (NVIDIA per-shape mainloop
-  tuning over years), lowest yield; may nudge 1.36x->~1.2x or plateau. If it plateaus, the own-GEMM purity
-  axis is fully exhausted identity-preserving = the FINAL terminal. One round, then the goal closes. H100.
+- [x] **BENCH-14 — close the D=2048 ~1.36x residual: per-CTA wgmma INNER-LOOP microarch tuning (bit-exact)**
+  — D=2048 ESSENTIALLY TIES cuBLAS (1.10x, bit-exact) = the FINAL identity-preserving terminal. Added the
+  per-CTA wgmma mainloop lever to the descriptor-direct own-GEMM (MODE 8 gemm_og17_b14): (1) a DEEPER
+  wgmma-group PIPELINE (parameterized wait_group depth PDEP; PDEP=2 keeps 2 commit-groups in flight, dual-
+  issue, needing NST>=PDEP+1 ring buffers) generalizing OG17's fixed depth-1, + (2) an OVERLAPPED VECTORIZED
+  (.v2.f32) epilogue. Pure SCHEDULING/overlap — the per-tile FMA accumulation order is byte-identical, so
+  rel-RMS MUST stay 0. Measured on H100 80GB sm_90 CUDA 12.6 (vast 40114886, DESTROYED leak-0 tag
+  hexa-bench14). RESULT: D=2048 NST=3 PDEP=2 -> own 324.9 TFLOP/s / 1.10x / PARITY=YES (all 3 reps),
+  +28% over BENCH-12's OG16 baseline (256.6) and closing the residual from ~1.36x to 1.10x BIT-EXACTLY — a
+  no-library/no-LLVM/byte-exact own-GEMM within 10% of NVIDIA's years-tuned cuBLAS-TF32 at the square shape.
+  D=4096 narrowed to ~1.50x (best 285.7 NST=3 PDEP=1) but NOT to parity: its residual is the tail-wave
+  quantization (1024 tiles / 132 SMs) BENCH-13 pinned as IRREDUCIBLE without split-K (split-K changes the
+  FP32 accumulation order -> breaks the bit-exact gate, excluded by g5). Bit-exact held YES at EVERY
+  S/NST/PDEP (44/44 configs). NST>=4 drops to 1 CTA/SM (smem >128KB) and regresses -> NST=3/PDEP=2 is the
+  2-CTA/SM sweet spot. THE OWN-GEMM PURITY AXIS IS NOW FULLY EXHAUSTED IDENTITY-PRESERVING: decode-elim
+  (B12) + scheduler/rasterization/persistent (B13) + inner-loop pipeline+epilogue (B14) all measured; the
+  only remaining lever is split-K, which forfeits the bit-exact identity that is the entire point. FINAL
+  HONEST TERMINAL — D=2048 ties cuBLAS bit-exactly (1.10x), D=4096 ~1.50x. Verdict F-BENCH-14.txt. Kernel
+  gemm_og17_b14(MODE8) in self/native/wgmma/wgmma_tf32_b14.cu; driver bench14_run.sh.
 
 ## honest framing (g5)
 

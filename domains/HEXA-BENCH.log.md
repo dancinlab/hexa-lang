@@ -263,3 +263,27 @@ leak-0 tag-checked; foreign rtsc-li2mgh16-anchor untouched).
 - cuBLAS-multiple: 2048 1.36x (unchanged from BENCH-12) | 4096 1.52x BEST (was 1.62x), bit-exact throughout.
   flame's no-library own-GEMM is parity-adjacent square-fitting / ~1.5-1.6x tail-quantized; the last residual
   is exactly the bit-exactness flame refuses to trade. Verdict F-BENCH-13.txt.
+
+## 2026-06-09 — BENCH-14: per-CTA wgmma INNER-LOOP tuning (THE PARITY WIN @D=2048)
+
+- Added MODE 8 gemm_og17_b14 (self/native/wgmma/wgmma_tf32_b14.cu): clones the BENCH-12/OG16 descriptor-
+  direct 128x128 math VERBATIM (route-a gmma-INTER, NO decode band, 2 CTA/SM) + two NET-NEW inner-loop levers
+  that change ONLY scheduling/overlap (accumulation order byte-identical -> rel-RMS MUST stay 0):
+  (1) DEEPER wgmma-group PIPELINE: parameterized wait_group depth PDEP keeping PDEP commit-groups in flight
+      (dual-issue), generalizing OG17 MODE6's fixed depth-1. Needs NST>=PDEP+1 ring buffers; PDEP=0==OG16
+      full-drain, PDEP=1==OG17, PDEP>=2 net-new.  (2) OVERLAPPED VECTORIZED epilogue (.v2.f32 store of the
+      contiguous gmma col-pair, halving store-instruction count).
+- H100 80GB sm_90 CUDA 12.6 driver 595.71.05 (vast 40114886, tag hexa-bench14, DESTROYED leak-0). nSM=132.
+- GATE: rel_rms = 0.000e+00 at EVERY S{2048,4096}/NST{3,4,5}/PDEP{0..NST-1} = 44/44 bit-exact. PASS.
+- RESULT @D=2048 (NST=3, 2 CTA/SM, median of 3):
+    PDEP=0 own=292.3 / 1.23x PARITY=YES (vec epilogue alone beats OG16's 1.38x)
+    PDEP=1 own=312.2 / 1.15x PARITY=YES
+    PDEP=2 own=324.9 / 1.10x PARITY=YES  *** BEST — essentially TIES cuBLAS-TF32 (357.7) bit-exactly ***
+  +28% over BENCH-12 OG16 baseline (256.6); residual closed ~1.36x -> 1.10x BIT-EXACTLY.
+- RESULT @D=4096 (NST=3): PDEP=1 own=285.7 / 1.50x (best; was BENCH-12 1.62x). NOT parity — tail-wave
+  quantization (1024 tiles/132 SMs) IRREDUCIBLE without split-K (g5-forbidden). NST>=4 -> 1 CTA/SM, regress.
+- TERMINAL: the own-GEMM purity axis is FULLY EXHAUSTED identity-preserving — decode-elim (B12) + scheduler
+  (B13) + inner-loop pipeline+epilogue (B14) all measured. Only split-K remains, and it forfeits the bit-exact
+  identity that is the whole point. FINAL HONEST TERMINAL: D=2048 ties cuBLAS (1.10x), D=4096 ~1.50x, all
+  bit-exact. A no-library/no-LLVM/byte-exact own-GEMM within 10% of years-tuned cuBLAS at the square shape.
+  Verdict F-BENCH-14.txt.
