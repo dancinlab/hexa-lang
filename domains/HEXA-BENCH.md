@@ -32,14 +32,6 @@ no-LLVM/reproducible, NOT step-rate, so a large gap is EXPECTED and fine.
   -> 7.88x@B8 down to a near batch-INVARIANT ~2.0-2.9x (2.20/2.25/2.07/2.85x; up to 2.77x shrink @B8). NO
   torch-parity regime in TF32 (residual ~2x = launch/glue/occupancy, not GEMM); FP64 B>=4 stays flame's win.
 
-- [ ] **BENCH-3 — swap the bench step naive tiled GEMM for the OG10 own-GEMM (TF32 wgmma) + re-measure** —
-  BENCH-1 found the TF32 3-8x torch gap is cuBLAS-tuned-GEMM vs flame naive tiled CUDA-core kernel (not
-  interpreter). hexa already HAS the OG10 own-GEMM (TF32 wgmma, ~70.7 TFLOP/s, bit-exact, 6.09x off cuBLAS).
-  Wire OG10 into the bench step D->D projection (replacing the naive kernel), re-run the TF32 batch sweep on
-  aiden RTX 5070 (free pool GPU, NOT vast). Gate (g5): bit-exact vs naive result + new flame/torch TF32 ratio.
-  HONEST: OG10 is 6.09x off cuBLAS so it narrows but won't beat torch; measure how much 3-8x shrinks. aiden is
-  consumer Blackwell sm_120 - OG10 is sm_90a wgmma; if it won't compile on sm_120 report the ISA gap + scope.
-
 ## honest framing (g5)
 
 flame is NOT a speed-competition tool — torch will almost certainly win throughput by a large margin (#2912
