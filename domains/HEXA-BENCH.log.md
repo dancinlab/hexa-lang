@@ -62,3 +62,25 @@ launch overhead is ~1% of the step wall (noise). warm eager step/s reproduce BEN
 graph capture. CONCLUSION: BENCH-3's launch attribution REFUTED; residual ~2x = GEMM-THROUGHPUT (cuBLAS algo
 on sm_120 vs torch inductor; the 2 cuBLAS GEMMs dominate, elementwise+launch tiny). Lever = better GEMM, NOT
 megakernel/graph-capture. Verdict .verdicts/hexa-bench/F-BENCH-6.txt.
+
+## BENCH-5 — OG10 own-GEMM sm_90a→sm_120 port (aiden RTX 5070, free pool, no vast) — 2026-06-08
+ISA PROBE (ptxas -arch=sm_120, CUDA13.0.88, aiden): mma.sync.aligned.m16n8k8.row.col.f32.tf32.tf32.f32 =
+ACCEPTED (portable Ampere+ warp MMA — the path that works on consumer Blackwell). tcgen05.mma = mnemonic
+KNOWN to ptxas ("Arguments mismatch", not "not supported") but needs the full Blackwell tmem protocol
+(tcgen05.alloc + tmem addr + 64-bit instr-descriptor + tcgen05.ld) — deferred, out of one-session scope.
+wgmma.* (Hopper warpgroup-async) = REJECTED ("not supported on .target sm_120") — re-confirms the BENCH-3
+ISA gap: OG10-exact (sm_90a wgmma+TMA+128B-swizzle) CANNOT run on sm_120.
+PORT: self/native/mma_sm120/owngemm_sm120.cu — OG10's tiling SPIRIT (64x64 block, BK=16 smem stage, register
+FP32 accum, RN-to-TF32 operands) on the mma.sync.m16n8k8 warp-MMA primitive (NOT wgmma). 4 warps/block,
+each warp 32x32 out = 2x4 m16n8 frags. GATE vs cuBLAS-TF32: rel-RMS 1.3e-5/3.0e-5/1.7e-5/7.0e-5 at
+S=768/1024/2048/4096 (all <<1e-2 PASS). Standalone perf 7.25/6.75/8.05/4.91 TFLOP/s, off-cuBLAS 3.16/4.17/
+3.82/6.85x (mirrors OG10's 6.09x-off-cuBLAS on Hopper — naive warp-MMA GEMM, no cp.async double-buffer).
+WIRED: flame_bench_step_og.cu -DGEMM_BACKEND=3 (OWN120-mma.sync) links owngemm_sm120.cu, same step DAG as
+BENCH-1/3. TF32 sweep D=768 T=256 B=1,2,4,8 vs naive/cuBLAS/torch on aiden:
+RESULT — flame÷best-torch TF32 ratio: NAIVE 3.06/4.05/5.53/9.67x · OWN120 2.81/3.01/3.16/4.73x · cuBLAS-proxy
+2.15/2.24/2.26/2.79x. OWN120 sits BETWEEN naive and the cuBLAS ceiling at every batch, shrinks the naive gap
+(up to 2.04x @B8 — 9.67x→4.73x) and KILLS the naive batch-scaling blowup, but does NOT reach cuBLAS (own-GEMM
+~3.2x off cuBLAS standalone). NO torch-parity in TF32; FP64 B>=4 stays flame's win (unchanged). Determinism
+max|delta(W')|=0 all cells; bench GATE rel-RMS ~4e-8 all B. WIN = flame's own-GEMM now RUNS+correct on the
+consumer RTX 5070 (BENCH-3 ISA-gap weakness REMOVED), not beating torch (g5 honest framing). Verdict
+.verdicts/hexa-bench/F-BENCH-5.txt; files self/native/mma_sm120/* + tool/bench/run_bench5.sh.

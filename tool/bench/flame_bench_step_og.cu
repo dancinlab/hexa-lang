@@ -14,6 +14,10 @@
 //   -DGEMM_BACKEND=2   OG10    HEXA-FUSION W10 TF32-wgmma own-GEMM (sm_90a).
 //                              Only built when the ISA is available; see the
 //                              sm_120-vs-sm_90a finding in the verdict.
+//   -DGEMM_BACKEND=3   OWN120  BENCH-5 sm_120 TF32 own-GEMM (mma.sync m16n8k8).
+//                              The OG10-spirit own-GEMM PORTED to the consumer-
+//                              Blackwell ISA (RTX 5070). RUNS where backend 2's
+//                              wgmma is ptxas-rejected. Links owngemm_sm120.cu.
 //
 // Everything else (valley groupnorm+gelu, transpose, AdamW, RNG init, the
 // determinism check, the [RESULT] line format) is byte-for-byte the same as
@@ -61,6 +65,8 @@
   static const char* GEMM_NAME = "cuBLAS-TF32(proxy)";
 #elif GEMM_BACKEND == 2
   static const char* GEMM_NAME = "OG10-wgmma";
+#elif GEMM_BACKEND == 3
+  static const char* GEMM_NAME = "OWN120-mma.sync";
 #endif
 
 // AdamW hyperparameters (fixed -> deterministic) — identical to BENCH-1.
@@ -183,6 +189,14 @@ extern void og10_gemm(real* C, const real* A, const real* Bm, int M, int K, int 
 static void gemm_setup(){}
 static void gemm(real* C, const real* A, const real* Bm, int M, int K, int N){
     og10_gemm(C, A, Bm, M, K, N);
+}
+#elif GEMM_BACKEND == 3
+// BENCH-5 sm_120 own-GEMM (mma.sync m16n8k8 TF32). Defined in owngemm_sm120.cu
+// (compiled into the same binary). Signature C[M,N]=A[M,K]@B[K,N], TF32 lane.
+extern "C" void owngemm_sm120(float* C, const float* A, const float* B, int M, int K, int N);
+static void gemm_setup(){}
+static void gemm(real* C, const real* A, const real* Bm, int M, int K, int N){
+    owngemm_sm120(C, A, Bm, M, K, N);   // BENCH_PREC=1 -> real==float, TF32 lane
 }
 #else
 static void gemm_setup(){}

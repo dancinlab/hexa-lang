@@ -1,0 +1,134 @@
+F-BENCH-5 — port the OG10 own-GEMM from sm_90a (Hopper wgmma) to sm_120 (consumer
+Blackwell, RTX 5070) so flame's own-GEMM RUNS on the free consumer card
+========================================================================================
+DATE 2026-06-08 · HOST aiden (pool, RTX 5070 12GB, sm_120/cc12.0, NOT vast — g1, no leak)
+CUDA 13.0.88 (V13.0.88, ptxas) · driver 580.159.04 · torch 2.12.0.dev20260408+cu128
+CONFIG D=768 T=256, iters=50, TF32 lane, batch sweep B=1,2,4,8 (same shape as BENCH-1/3).
+
+QUESTION (follow-on to BENCH-3): BENCH-3 found OG10 (self/native/wgmma/wgmma_tf32_w10.cu,
+the W10 TF32-wgmma own-GEMM, 70.7 TFLOP/s bit-exact on Hopper) ptxas-REJECTS for sm_120
+(Hopper warpgroup-async MMA family not in the consumer-Blackwell ISA), so BENCH-3 fell
+back to a cuBLAS-TF32 proxy. BENCH-5 = actually PORT a hand-written TF32 tensor-core
+own-GEMM to the sm_120 ISA so flame's own-GEMM RUNS on the consumer card, and re-measure
+the TF32 gap with a REAL own-GEMM (not the cuBLAS optimistic ceiling).
+
+==================== (1) ISA PROBE — which TF32 tensor-core MMA does sm_120 accept? =====
+Probe self/native/mma_sm120/probe_mma_sm120.cu, one ptxas pass per family for -arch=sm_120
+on aiden's CUDA 13.0.88 (the cheap ISA check, done FIRST). VERBATIM:
+
+  === BENCH-5 ISA PROBE  arch=sm_120  release 13.0, V13.0.88 ===
+  [TRY_MMA_SYNC] ACCEPTED  (ptxas emitted SASS for sm_120)
+  [TRY_TCGEN05]  REJECTED
+      ptxas ... error : Arguments mismatch for instruction 'tcgen05.mma'
+      ptxas fatal   : Ptx assembly aborted due to errors
+  [TRY_WGMMA]    REJECTED
+      ptxas ... error : Instruction 'wgmma.fence' not supported on .target 'sm_120'
+      ptxas ... error : Instruction 'wgmma.mma_async with floating point types' not
+                        supported on .target 'sm_120'
+
+  FINDINGS (the load-bearing answer):
+   • mma.sync.aligned.m16n8k8.row.col.f32.tf32.tf32.f32 — YES. The Ampere+ warp-level
+     synchronous tensor-core TF32 MMA ASSEMBLES on sm_120/CUDA13. This is the portable
+     path; it is what BENCH-5's own-GEMM uses.
+   • tcgen05.* (Blackwell 5th-gen) — NO (as written). The mnemonic 'tcgen05.mma' is KNOWN
+     to ptxas 13.0.88 (the error is "Arguments mismatch", NOT "not supported"/"unrecognized")
+     — i.e. the family EXISTS in the sm_120 assembler but needs the full Blackwell operand
+     protocol (tensor-memory tcgen05.alloc + tmem address + a 64-bit instruction descriptor
+     + tcgen05.ld/st to drain tmem accumulators). It is NOT a drop-in like mma.sync and was
+     out of scope for a one-session port; the portable mma.sync path covers the goal (own-
+     GEMM RUNS on the consumer card). HONEST: tcgen05 is reachable on CUDA13 but bleeding-
+     edge / multi-instruction-protocol, deferred.
+   • wgmma.* (Hopper sm_90a warpgroup-async) — NO. Re-confirms BENCH-3: the Hopper MMA
+     family is genuinely absent from the sm_120 ISA ("not supported on .target sm_120").
+
+==================== (2) sm_120 TF32 own-GEMM — build + GATE + perf =====================
+self/native/mma_sm120/owngemm_sm120.cu. PORTS OG10's tiling SPIRIT (block tile 64x64 +
+BK=16 smem stage + register-resident FP32 accumulators + RN-to-TF32 operand rounding) onto
+the mma.sync.m16n8k8 warp-MMA primitive (NOT the wgmma warpgroup-async primitive OG10 uses,
+which sm_120 rejects). 4 warps/block (2x2), each warp owns a 32x32 output = a 2x4 grid of
+m16n8 fragments. C[M,N]=A[M,K]@B[K,N] row-major, TF32 matmul / FP32 accum.
+
+GATE (g5): rel-RMS / max|delta| of the own-GEMM vs a cuBLAS-TF32 (COMPUTE_32F_FAST_TF32)
+reference, square shapes. ALL PASS (<<1e-2):
+  S=768   rel-RMS 1.332e-05  max|delta| 1.151e-05  PASS
+  S=1024  rel-RMS 3.019e-05  max|delta| 1.406e-05  PASS
+  S=2048  rel-RMS 1.743e-05  max|delta| 1.936e-05  PASS
+  S=4096  rel-RMS 6.952e-05  max|delta| 2.199e-05  PASS
+→ the sm_120 own-GEMM is CORRECT (TF32-tolerant) at every shape. It RUNS — the BENCH-3
+  "OG10 can't compile for sm_120" weakness is REMOVED: flame now has an own-GEMM that
+  executes on the consumer card.
+
+PERF (standalone square GEMM, own-GEMM vs cuBLAS-TF32 on aiden, verbatim):
+  S=768   own  7.25 TFLOP/s  cuBLAS 22.92 TFLOP/s  off-cuBLAS 3.16x
+  S=1024  own  6.75 TFLOP/s  cuBLAS 28.12 TFLOP/s  off-cuBLAS 4.17x
+  S=2048  own  8.05 TFLOP/s  cuBLAS 30.78 TFLOP/s  off-cuBLAS 3.82x
+  S=4096  own  4.91 TFLOP/s  cuBLAS 33.67 TFLOP/s  off-cuBLAS 6.85x
+HONEST: a naive (no cp.async double-buffer, no register-blocking beyond the warp tile, no
+swizzle) hand-written warp-MMA GEMM peaks ~8 TFLOP/s, ~3.2-6.9x off cuBLAS — DIRECTLY
+analogous to OG10 being 6.09x off cuBLAS on Hopper. The WIN is that it RUNS + is correct
+on the consumer card, NOT that it beats cuBLAS.
+
+==================== (3) wired into the bench + TF32 sweep vs torch =====================
+Wired as tool/bench/flame_bench_step_og.cu -DGEMM_BACKEND=3 (OWN120-mma.sync), linking
+owngemm_sm120.cu, IDENTICAL step DAG to BENCH-1/3 (fwd GEMM -> groupnorm+gelu valley ->
+bwd GEMM -> AdamW). All three flame backends (0 naive, 1 cuBLAS-proxy, 3 OWN120) built from
+one source, run on the same binary set; torch via tool/bench/torch_bench_step.py (tf32 lane,
+eager+compile). FREE pool GPU (aiden), zero vast.
+
+GATE/DETERMINISM in the bench (rel-RMS of W' vs the NAIVE-GEMM reference, run-to-run):
+  OWN120 B=1 rel-RMS 4.075e-08 · B=2 2.869e-08 · B=4 2.511e-08 · B=8 2.448e-08  (all PASS)
+  DETERMINISM (flame, run-to-run max|delta(W')|): 0.000e+00 at EVERY (GEMM,B)        PASS
+  (cuBLAS-proxy + naive re-measured identical to BENCH-3 — same binary, sanity OK.)
+
+TF32 SCORECARD — flame step/s + flame÷torch ratio (best_torch = max(eager,compile)):
+ B | naive st/s | OWN120 st/s | cuBLAS st/s | best-torch | NAIVE× | OWN120× | cuBLAS×
+ --+------------+-------------+-------------+------------+--------+---------+--------
+ 1 |   1604.9   |    1750.2   |    2281.7   |   4913.1   |  3.06x |  2.81x  |  2.15x
+ 2 |   1193.7   |    1605.4   |    2160.6   |   4835.7   |  4.05x |  3.01x  |  2.24x
+ 4 |    789.0   |    1379.9   |    1929.4   |   4361.7   |  5.53x |  3.16x  |  2.26x
+ 8 |    470.0   |     960.8   |    1626.7   |   4543.1   |  9.67x |  4.73x  |  2.79x
+
+raw torch THIS run: eager  B1 4716 B2 4836 B4 3123 B8 2705
+                    compile B1 4913 B2 3758 B4 4362 B8 4543
+OWN120 samples/s: B1 1750 · B2 3211 · B4 5520 · B8 7686
+
+==================== DOES own-GEMM-on-consumer-card NARROW THE TF32 GAP? =================
+YES — partially. The OWN120 own-GEMM shrinks the BENCH-1 naive gap and, crucially, KILLS
+the naive kernel's batch-scaling blowup (where naive went 3.06x->9.67x as B grew, because
+the naive tiled kernel does not scale with the larger GEMM M):
+
+   B | NAIVE (this run) | OWN120 | cuBLAS-proxy (ceiling) | OWN120 shrink-vs-naive
+   --+------------------+--------+------------------------+-----------------------
+   1 |      3.06x       | 2.81x  |        2.15x           |   1.09x
+   2 |      4.05x       | 3.01x  |        2.24x           |   1.35x
+   4 |      5.53x       | 3.16x  |        2.26x           |   1.75x
+   8 |      9.67x       | 4.73x  |        2.79x           |   2.04x
+
+ • OWN120 lands BETWEEN naive and the cuBLAS proxy at every batch — exactly as predicted
+   for a real (non-cuBLAS) own-GEMM. The biggest win is at B=8: 9.67x -> 4.73x (a 2.04x
+   shrink), the regime where the naive kernel was worst.
+ • OWN120 does NOT reach the cuBLAS-proxy ratio (2.79x vs 4.73x @B8). That residual is the
+   own-GEMM's ~3.2x-off-cuBLAS standalone perf — i.e. a hand-written warp-MMA GEMM doesn't
+   match cuBLAS, mirroring OG10's 6.09x-off-cuBLAS on Hopper. The cuBLAS proxy was
+   explicitly the OPTIMISTIC ceiling; OWN120 closes LESS, as BENCH-3 forecast.
+ • NO torch-parity regime in TF32 (torch still 2.8-4.7x ahead with the own-GEMM; ~2x of
+   the cuBLAS-proxy residual is launch/glue/occupancy, not GEMM). FP64 B>=4 remains flame's
+   only ahead regime (BENCH-2, unchanged — torch has no FP64 tensor-core path).
+
+==================== VERDICT ===========================================================
+🟢 BENCH-5 GOAL MET (honest partial on perf, as scoped). The OG10 own-GEMM idea is PORTED
+to sm_120: a TF32 tensor-core own-GEMM (mma.sync.m16n8k8) now COMPILES + RUNS + is correct
+(rel-RMS ~1e-5 vs cuBLAS-TF32) on the consumer RTX 5070, removing the BENCH-3 ISA-gap
+weakness (OG10/wgmma couldn't even assemble for sm_120). Wired into the bench, it narrows
+the naive TF32 gap (3.06-9.67x -> 2.81-4.73x; up to a 2.04x shrink @B8) and eliminates the
+naive kernel's batch-scaling blowup. It does NOT reach cuBLAS-proxy (own-GEMM is ~3.2x off
+cuBLAS standalone — same story as OG10 on Hopper) and there is NO torch-parity regime in
+TF32. The win is that flame's own-GEMM RUNS on the free consumer card at all, not that it
+beats torch — fully consistent with the honest framing (g5).
+
+ISA one-liner for memory: on sm_120/CUDA13.0.88 — mma.sync.m16n8k8.tf32 = YES (portable
+warp MMA, the path that works), tcgen05 = mnemonic known but needs full tmem protocol
+(deferred), wgmma (Hopper) = NO (not in sm_120 ISA).
+
+Files: self/native/mma_sm120/{probe_mma_sm120.cu, owngemm_sm120.cu, build_probe.sh,
+build_owngemm.sh} · tool/bench/{flame_bench_step_og.cu (GEMM_BACKEND=3), run_bench5.sh}.
