@@ -1,0 +1,106 @@
+############ HEXA-BENCH BENCH-3  D=768 T=256 iters=50  arch=sm_120 ############
+==== nvidia-smi ====
+Mon Jun  8 19:51:02 2026       
++-----------------------------------------------------------------------------------------+
+| NVIDIA-SMI 580.159.04             Driver Version: 580.159.04     CUDA Version: 13.0     |
++-----------------------------------------+------------------------+----------------------+
+| GPU  Name                 Persistence-M | Bus-Id          Disp.A | Volatile Uncorr. ECC |
+| Fan  Temp   Perf          Pwr:Usage/Cap |           Memory-Usage | GPU-Util  Compute M. |
+|                                         |                        |               MIG M. |
+|=========================================+========================+======================|
+|   0  NVIDIA GeForce RTX 5070        On  |   00000000:01:00.0 Off |                  N/A |
+|  0%   40C    P8              7W /  250W |       2MiB /  12227MiB |      0%      Default |
+|                                         |                        |                  N/A |
++-----------------------------------------+------------------------+----------------------+
++-----------------------------------------------------------------------------------------+
+| Processes:                                                                              |
+|  GPU   GI   CI              PID   Type   Process name                        GPU Memory |
+|        ID   ID                                                               Usage      |
+|=========================================================================================|
+|  No running processes found                                                             |
++-----------------------------------------------------------------------------------------+
+==== nvcc ====
+Cuda compilation tools, release 13.0, V13.0.88
+Build cuda_13.0.r13.0/compiler.36424714_0
+==== OG10 (W10 TF32-wgmma) sm_120 ISA CHECK ====
+OG10 sm_120 COMPILE: FAIL (expected). First errors:
+ptxas /tmp/tmpxft_000bbaf6_00000000-6_wgmma_tf32_w10.ptx, line 429; error   : Instruction 'wgmma.fence' not supported on .target 'sm_120'
+ptxas /tmp/tmpxft_000bbaf6_00000000-6_wgmma_tf32_w10.ptx, line 468; error   : Instruction 'wgmma.mma_async with floating point types' not supported on .target 'sm_120'
+ptxas /tmp/tmpxft_000bbaf6_00000000-6_wgmma_tf32_w10.ptx, line 472; error   : Instruction 'wgmma.mma_async with floating point types' not supported on .target 'sm_120'
+ptxas /tmp/tmpxft_000bbaf6_00000000-6_wgmma_tf32_w10.ptx, line 500; error   : Instruction 'wgmma.mma_async with floating point types' not supported on .target 'sm_120'
+==== build flame_bench_step_og TF32 (NAIVE baseline + cuBLAS-TF32 proxy) ====
+build OK
+######## FLAME TF32 — NAIVE (BENCH-1 baseline, re-measured on this binary) ########
+--- flame_naive_tf32 B=1 ---
+[CFG] TF32 GEMM=NAIVE-tiled  GPU=NVIDIA GeForce RTX 5070 cc=12.0  D=768 T=256 B=1 -> M=256 K=768 N=768  iters=50  est_mem=0.01 GiB
+[DETERMINISM] TF32 GEMM=NAIVE-tiled B=1 run-to-run max|delta(W')| = 0.000e+00 (gate ==0: PASS)
+[GATE] TF32 GEMM=NAIVE-tiled B=1 rel-RMS(W' vs NAIVE-ref) = 0.000e+00 (gate <=1e-2: PASS)
+[RESULT] TF32 GEMM=NAIVE-tiled B=1  ms/step=0.6231  step/s=1604.8356  samples/s=1604.8356
+--- flame_naive_tf32 B=2 ---
+[CFG] TF32 GEMM=NAIVE-tiled  GPU=NVIDIA GeForce RTX 5070 cc=12.0  D=768 T=256 B=2 -> M=512 K=768 N=768  iters=50  est_mem=0.02 GiB
+[DETERMINISM] TF32 GEMM=NAIVE-tiled B=2 run-to-run max|delta(W')| = 0.000e+00 (gate ==0: PASS)
+[GATE] TF32 GEMM=NAIVE-tiled B=2 rel-RMS(W' vs NAIVE-ref) = 0.000e+00 (gate <=1e-2: PASS)
+[RESULT] TF32 GEMM=NAIVE-tiled B=2  ms/step=0.8367  step/s=1195.1685  samples/s=2390.3370
+--- flame_naive_tf32 B=4 ---
+[CFG] TF32 GEMM=NAIVE-tiled  GPU=NVIDIA GeForce RTX 5070 cc=12.0  D=768 T=256 B=4 -> M=1024 K=768 N=768  iters=50  est_mem=0.03 GiB
+[DETERMINISM] TF32 GEMM=NAIVE-tiled B=4 run-to-run max|delta(W')| = 0.000e+00 (gate ==0: PASS)
+[GATE] TF32 GEMM=NAIVE-tiled B=4 rel-RMS(W' vs NAIVE-ref) = 0.000e+00 (gate <=1e-2: PASS)
+[RESULT] TF32 GEMM=NAIVE-tiled B=4  ms/step=1.2657  step/s=790.0747  samples/s=3160.2989
+--- flame_naive_tf32 B=8 ---
+[CFG] TF32 GEMM=NAIVE-tiled  GPU=NVIDIA GeForce RTX 5070 cc=12.0  D=768 T=256 B=8 -> M=2048 K=768 N=768  iters=50  est_mem=0.04 GiB
+[DETERMINISM] TF32 GEMM=NAIVE-tiled B=8 run-to-run max|delta(W')| = 0.000e+00 (gate ==0: PASS)
+[GATE] TF32 GEMM=NAIVE-tiled B=8 rel-RMS(W' vs NAIVE-ref) = 0.000e+00 (gate <=1e-2: PASS)
+[RESULT] TF32 GEMM=NAIVE-tiled B=8  ms/step=2.1218  step/s=471.3064  samples/s=3770.4511
+######## FLAME TF32 — cuBLAS-TF32 PROXY (tuned/own-GEMM stand-in for OG10) ########
+--- flame_cublas_tf32 B=1 ---
+[CFG] TF32 GEMM=cuBLAS-TF32(proxy)  GPU=NVIDIA GeForce RTX 5070 cc=12.0  D=768 T=256 B=1 -> M=256 K=768 N=768  iters=50  est_mem=0.01 GiB
+[DETERMINISM] TF32 GEMM=cuBLAS-TF32(proxy) B=1 run-to-run max|delta(W')| = 0.000e+00 (gate ==0: PASS)
+[GATE] TF32 GEMM=cuBLAS-TF32(proxy) B=1 rel-RMS(W' vs NAIVE-ref) = 4.088e-08 (gate <=1e-2: PASS)
+[RESULT] TF32 GEMM=cuBLAS-TF32(proxy) B=1  ms/step=0.4364  step/s=2291.4019  samples/s=2291.4019
+--- flame_cublas_tf32 B=2 ---
+[CFG] TF32 GEMM=cuBLAS-TF32(proxy)  GPU=NVIDIA GeForce RTX 5070 cc=12.0  D=768 T=256 B=2 -> M=512 K=768 N=768  iters=50  est_mem=0.02 GiB
+[DETERMINISM] TF32 GEMM=cuBLAS-TF32(proxy) B=2 run-to-run max|delta(W')| = 0.000e+00 (gate ==0: PASS)
+[GATE] TF32 GEMM=cuBLAS-TF32(proxy) B=2 rel-RMS(W' vs NAIVE-ref) = 2.874e-08 (gate <=1e-2: PASS)
+[RESULT] TF32 GEMM=cuBLAS-TF32(proxy) B=2  ms/step=0.4611  step/s=2168.8435  samples/s=4337.6871
+--- flame_cublas_tf32 B=4 ---
+[CFG] TF32 GEMM=cuBLAS-TF32(proxy)  GPU=NVIDIA GeForce RTX 5070 cc=12.0  D=768 T=256 B=4 -> M=1024 K=768 N=768  iters=50  est_mem=0.03 GiB
+[DETERMINISM] TF32 GEMM=cuBLAS-TF32(proxy) B=4 run-to-run max|delta(W')| = 0.000e+00 (gate ==0: PASS)
+[GATE] TF32 GEMM=cuBLAS-TF32(proxy) B=4 rel-RMS(W' vs NAIVE-ref) = 2.512e-08 (gate <=1e-2: PASS)
+[RESULT] TF32 GEMM=cuBLAS-TF32(proxy) B=4  ms/step=0.5163  step/s=1936.7235  samples/s=7746.8940
+--- flame_cublas_tf32 B=8 ---
+[CFG] TF32 GEMM=cuBLAS-TF32(proxy)  GPU=NVIDIA GeForce RTX 5070 cc=12.0  D=768 T=256 B=8 -> M=2048 K=768 N=768  iters=50  est_mem=0.04 GiB
+[DETERMINISM] TF32 GEMM=cuBLAS-TF32(proxy) B=8 run-to-run max|delta(W')| = 0.000e+00 (gate ==0: PASS)
+[GATE] TF32 GEMM=cuBLAS-TF32(proxy) B=8 rel-RMS(W' vs NAIVE-ref) = 2.454e-08 (gate <=1e-2: PASS)
+[RESULT] TF32 GEMM=cuBLAS-TF32(proxy) B=8  ms/step=0.6135  step/s=1630.1037  samples/s=13040.8293
+######## TORCH TF32 ########
+==== torch TF32 eager ====
+--- torch tf32 eager B=1 ---
+[CFG] TF32 mode=eager GPU=NVIDIA GeForce RTX 5070 D=768 T=256 B=1 M=256 iters=50 torch=2.12.0.dev20260408+cu128
+[RESULT] TF32 mode=eager B=1  ms/step=0.2044  step/s=4891.3155  samples/s=4891.3155
+--- torch tf32 eager B=2 ---
+[CFG] TF32 mode=eager GPU=NVIDIA GeForce RTX 5070 D=768 T=256 B=2 M=512 iters=50 torch=2.12.0.dev20260408+cu128
+[RESULT] TF32 mode=eager B=2  ms/step=0.2053  step/s=4869.8797  samples/s=9739.7595
+--- torch tf32 eager B=4 ---
+[CFG] TF32 mode=eager GPU=NVIDIA GeForce RTX 5070 D=768 T=256 B=4 M=1024 iters=50 torch=2.12.0.dev20260408+cu128
+[RESULT] TF32 mode=eager B=4  ms/step=0.2877  step/s=3475.3467  samples/s=13901.3866
+--- torch tf32 eager B=8 ---
+[CFG] TF32 mode=eager GPU=NVIDIA GeForce RTX 5070 D=768 T=256 B=8 M=2048 iters=50 torch=2.12.0.dev20260408+cu128
+[RESULT] TF32 mode=eager B=8  ms/step=0.3686  step/s=2712.7855  samples/s=21702.2837
+==== torch TF32 compile ====
+--- torch tf32 compile B=1 ---
+W0608 19:51:16.033000 769055 torch/_logging/_internal.py:1311] [2/0] Profiler record function <class 'torch.autograd.profiler.record_function'> will be ignored
+[CFG] TF32 mode=compile GPU=NVIDIA GeForce RTX 5070 D=768 T=256 B=1 M=256 iters=50 torch=2.12.0.dev20260408+cu128
+[RESULT] TF32 mode=compile B=1  ms/step=0.1985  step/s=5038.9760  samples/s=5038.9760
+--- torch tf32 compile B=2 ---
+W0608 19:51:19.588000 769197 torch/_logging/_internal.py:1311] [2/0] Profiler record function <class 'torch.autograd.profiler.record_function'> will be ignored
+[CFG] TF32 mode=compile GPU=NVIDIA GeForce RTX 5070 D=768 T=256 B=2 M=512 iters=50 torch=2.12.0.dev20260408+cu128
+[RESULT] TF32 mode=compile B=2  ms/step=0.2053  step/s=4870.6070  samples/s=9741.2139
+--- torch tf32 compile B=4 ---
+W0608 19:51:23.241000 769319 torch/_logging/_internal.py:1311] [2/0] Profiler record function <class 'torch.autograd.profiler.record_function'> will be ignored
+[CFG] TF32 mode=compile GPU=NVIDIA GeForce RTX 5070 D=768 T=256 B=4 M=1024 iters=50 torch=2.12.0.dev20260408+cu128
+[RESULT] TF32 mode=compile B=4  ms/step=0.2490  step/s=4016.2836  samples/s=16065.1345
+--- torch tf32 compile B=8 ---
+W0608 19:51:26.904000 769464 torch/_logging/_internal.py:1311] [2/0] Profiler record function <class 'torch.autograd.profiler.record_function'> will be ignored
+[CFG] TF32 mode=compile GPU=NVIDIA GeForce RTX 5070 D=768 T=256 B=8 M=2048 iters=50 torch=2.12.0.dev20260408+cu128
+[RESULT] TF32 mode=compile B=8  ms/step=0.2155  step/s=4640.6103  samples/s=37124.8821
+############ BENCH-3 DONE ############

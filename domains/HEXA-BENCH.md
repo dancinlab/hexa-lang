@@ -21,6 +21,16 @@ no-LLVM/reproducible, NOT step-rate, so a large gap is EXPECTED and fine.
   tensor-core path), FP32 2.15-6.60x, TF32 3.03-7.88x (torch's cuBLAS GEMM vs flame's naive tiled kernel).
   Least-far-behind regime = FP64 B>=2 where flame is AHEAD. flame's edge = reproducibility/no-LLVM; torch's
   = raw TF32 throughput (29.7k samp/s @ B=8 vs flame 3.8k). Honest: a large torch TF32 win is EXPECTED + fine.
+- [x] **BENCH-3 — tuned/own-GEMM swap, re-measure the TF32 gap** — DONE 2026-06-08
+  (.verdicts/hexa-bench/F-BENCH-3.txt). Swapped the bench step's D->D projection GEMM (naive tiled CUDA-core
+  k_gemm) for a TUNED GEMM and re-ran the TF32 sweep on aiden. ISA FINDING: the intended OG10 (HEXA-FUSION
+  W10 TF32-wgmma own-GEMM) is sm_90a (Hopper wgmma.mma_async/fence/commit/wait) — ptxas REJECTS it for
+  aiden's sm_120 consumer-Blackwell ISA (Hopper warpgroup-async MMA not in the sm_120 ISA; OG10-exact can't
+  run without a port). FELL BACK to cuBLAS-TF32 (COMPUTE_32F_FAST_TF32) as the tuned-GEMM proxy (= optimistic
+  ceiling; OG10 is 6.09x off cuBLAS so would close LESS). GATE rel-RMS vs naive ~e-8 (<<1e-2), determinism
+  max|delta|=0 all cells. RESULT: the tuned GEMM shrinks the BENCH-1 naive gap from a batch-GROWING 3.03x@B1
+  -> 7.88x@B8 down to a near batch-INVARIANT ~2.0-2.9x (2.20/2.25/2.07/2.85x; up to 2.77x shrink @B8). NO
+  torch-parity regime in TF32 (residual ~2x = launch/glue/occupancy, not GEMM); FP64 B>=4 stays flame's win.
 
 ## honest framing (g5)
 
