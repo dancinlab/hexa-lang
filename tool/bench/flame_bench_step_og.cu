@@ -18,6 +18,11 @@
 //                              The OG10-spirit own-GEMM PORTED to the consumer-
 //                              Blackwell ISA (RTX 5070). RUNS where backend 2's
 //                              wgmma is ptxas-rejected. Links owngemm_sm120.cu.
+//   -DGEMM_BACKEND=5   CUBLAS-FP64  cublasGemmEx CUBLAS_COMPUTE_64F (BENCH-8).
+//                              Pairs with -DBENCH_PREC=2; replaces the naive O(D^3)
+//                              FP64 k_gemm with cuBLAS-FP64 to close BENCH-7's
+//                              7 large-D FP64 losses (naive-GEMM confound, not a
+//                              torch FP64-TC edge — both use FP64 CUDA cores).
 //
 // Everything else (valley groupnorm+gelu, transpose, AdamW, RNG init, the
 // determinism check, the [RESULT] line format) is byte-for-byte the same as
@@ -39,7 +44,7 @@
 #define GEMM_BACKEND 1          // default proxy = cuBLAS-TF32
 #endif
 
-#if GEMM_BACKEND == 1 || GEMM_BACKEND == 4
+#if GEMM_BACKEND == 1 || GEMM_BACKEND == 4 || GEMM_BACKEND == 5
   #include <cublas_v2.h>
 #endif
 #if GEMM_BACKEND == 4
@@ -72,6 +77,8 @@
   static const char* GEMM_NAME = "OWN120-mma.sync";
 #elif GEMM_BACKEND == 4
   static const char* GEMM_NAME = "cuBLAS-BF16";
+#elif GEMM_BACKEND == 5
+  static const char* GEMM_NAME = "cuBLAS-FP64";   // BENCH-8: cublasDgemm, CUBLAS_COMPUTE_64F
 #endif
 
 // AdamW hyperparameters (fixed -> deterministic) — identical to BENCH-1.
@@ -232,6 +239,33 @@ static void gemm(real* C, const real* A, const real* Bm, int M, int K, int N){
                  &beta,
                  C,    CUDA_R_32F,  N,
                  CUBLAS_COMPUTE_32F, CUBLAS_GEMM_DEFAULT_TENSOR_OP);
+}
+#elif GEMM_BACKEND == 5
+// BENCH-8 cuBLAS-FP64 lane. Pairs with -DBENCH_PREC=2 (real==double): the whole
+// step runs in FP64 (matched to torch --dtype fp64), but the load-bearing D->D
+// GEMM is cuBLAS FP64 (CUDA_R_64F in/out, CUBLAS_COMPUTE_64F) instead of the
+// naive O(D^3) k_gemm. Both flame-cuBLAS-FP64 and torch-FP64 use the SAME FP64
+// CUDA-core path (no FP64 tensor cores on Hopper for this size), so this isolates
+// flame's no-Python-glue edge from the naive-GEMM confound that lost BENCH-7's
+// 7 large-D FP64 cells. rel-RMS vs the naive-FP64 ref is ~1e-14 associativity
+// (different accumulation order), NOT necessarily bit-0; run-to-run det == 0.
+static cublasHandle_t g_cublas = nullptr;
+static void gemm_setup(){
+    cublasCreate(&g_cublas);
+    cublasSetMathMode(g_cublas, CUBLAS_DEFAULT_MATH);   // FP64: no tensor-op downcast
+}
+static void gemm(real* C, const real* A, const real* Bm, int M, int K, int N){
+    // cuBLAS is column-major: row-major C=A(MxK)@B(KxN) == col-major C^T=B^T@A^T
+    // == cublas(op_n, op_n, N, M, K, B, A). FP64 alpha/beta are double.
+    const double alpha=1.0, beta=0.0;
+    cublasGemmEx(g_cublas, CUBLAS_OP_N, CUBLAS_OP_N,
+                 N, M, K,
+                 &alpha,
+                 Bm, CUDA_R_64F, N,
+                 A,  CUDA_R_64F, K,
+                 &beta,
+                 C,  CUDA_R_64F, N,
+                 CUBLAS_COMPUTE_64F, CUBLAS_GEMM_DEFAULT);
 }
 #else
 static void gemm_setup(){}

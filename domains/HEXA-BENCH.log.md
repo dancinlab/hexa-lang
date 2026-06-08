@@ -123,3 +123,23 @@ dtype). Destroyed leak-0 (tag verified pre-destroy; foreign rtsc-li2mgh16 untouc
   no-LLVM · theorem-cite · deterministic) holds across all 32 cells.
 - Verdict .verdicts/hexa-bench/F-BENCH-7.txt (full 32-cell matrix + crossover + losing set
   + nvidia-smi verbatim); raw tool/bench/bench7_raw.log.
+
+## 2026-06-08 — BENCH-8: cuBLAS-FP64 lane closes the FP64 large-D losses 🟢
+
+- Added GEMM_BACKEND=5 (cublasGemmEx CUBLAS_COMPUTE_64F, CUDA_R_64F in/out) to
+  flame_bench_step_og.cu, paired with -DBENCH_PREC=2, replacing the naive O(D^3)
+  k_gemm on the FP64 lane. Driver tool/bench/run_bench8.sh. Real H100 (vast 40078131,
+  hexa-bench8, DESTROYED leak-0 tag-checked). CUDA 12.4, torch 2.4.0, T=256, iters=50.
+- RESULT: cuBLAS-FP64 + no-Python glue re-flips 6 of the 7 BENCH-7 lost FP64 cells to WIN.
+  FP64 now WINS 7/8 (was 1/8 naive). ratio f/torch-compile: 768/1 0.048, 768/8 0.203,
+  1536/1 0.154, 1536/8 0.579, 2048/1 0.179, 2048/8 0.926, 4096/1 0.784 — all WIN.
+  Each cuBLAS cell 3.3x-8.9x faster than flame's own naive lane (768/8 6.10x, 1536/8 8.00x,
+  2048/8 8.91x, 4096/8 9.57x).
+- RESIDUAL LOSE: D=4096/B=8 ratio 1.030 (3.1719ms vs torch-compile 3.0795ms) — 3% glue-
+  fusion margin where both sides dispatch the SAME FP64 cuBLAS kernel (no FP64 TC on Hopper);
+  torch.compile fuses valley+AdamW into fewer kernels. FUSION axis (= BENCH-9 territory),
+  NOT an FP64-GEMM deficiency. CONFIRMS: BENCH-7's "7 FP64 losses" was a NAIVE-GEMM artifact,
+  NOT a torch FP64 advantage.
+- Gate g5: determinism max|delta(W')|=0 on all 16 flame cells (0 FAIL); rel-RMS(cuBLAS vs
+  naive-FP64 ref) 0.000e+00 on 6/8, 3.3e-17 on the two B=8 cells (FP64 accumulation-order
+  associativity, ~machine-eps, not bit-0 by design). Verdict .verdicts/hexa-bench/F-BENCH-8.txt.

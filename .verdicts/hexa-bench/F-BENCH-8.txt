@@ -1,0 +1,101 @@
+================================================================================
+F-BENCH-8 — close the FP64 large-D losses: add a cuBLAS-FP64 flame lane
+================================================================================
+GOAL (user-pinned): "모두 이길때까지" — beat torch in EVERY regime. BENCH-7 found flame
+LOSES 7 FP64 cells at D>=1536 (up to 9.57x @D=4096/B=8), but ONLY because flame's FP64
+lane used the NAIVE O(D^3) k_gemm instead of cuBLAS-FP64. torch's FP64 also has NO tensor-
+core path (both sides use FP64 CUDA cores), so the loss is flame's naive GEMM being slow,
+NOT a torch FP64 advantage. BENCH-8 adds a cuBLAS-FP64 flame lane (GEMM_BACKEND=5,
+cublasGemmEx CUBLAS_COMPUTE_64F, CUDA_R_64F in/out) paired with -DBENCH_PREC=2, and
+re-measures the FP64 cells D={768,1536,2048,4096} × B={1,8} vs torch-FP64 (eager+compile).
+
+RESULT: HYPOTHESIS CONFIRMED. flame-cuBLAS-FP64 + no-Python glue re-flips 6 of the 7
+lost FP64 cells to WIN. cuBLAS-FP64 now WINS 7/8 FP64 cells (was 1/8 with naive). The
+ONLY residual LOSE is the largest GEMM-bound cell D=4096/B=8 at ratio 1.030 — a 3% hair
+over parity where both sides call the same FP64 cuBLAS kernel and torch.compile's fused
+glue edges flame's per-launch glue. Toward the goal: FP64 went from 1 win / 7 loss to
+7 win / 1 (near-parity) loss.
+
+DATE 2026-06-08.  GPU: real H100 (vast contract 40078131, label hexa-bench8, DESTROYED
+leak-0 tag-checked; foreign rtsc-li2mgh16-anchor + the parallel hexa-bench9 pod untouched).
+NVIDIA H100 80GB HBM3 cc=9.0.  CUDA 12.4 nvcc (release 12.4 V12.4.131) / driver 550.163.01
+(CUDA 12.4).  torch 2.4.0+cu121.  T=256, iters=50, arch=sm_90a.
+
+GATE g5: determinism max|delta(W')| = 0.000e+00 on ALL 16 flame cells (8 cuBLAS-FP64 +
+8 naive-FP64), 0 FAIL (PASS). bench rel-RMS(cuBLAS-FP64 W' vs naive-FP64 ref): 0.000e+00
+on 6/8 cells, 3.324e-17 and 3.368e-17 on the two B=8 D=768/1536 cells (FP64 GEMM
+accumulation-order associativity — ~machine-epsilon, NOT gated to bit-0 by design; all
+<<1e-2 PASS). Run-to-run determinism is the load-bearing gate and is exactly 0 everywhere.
+
+ratio = flame_ms / torch_COMPILE_ms (matched FP64 dtype/shape). WIN = ratio<1.
+
+================================================================================
+cuBLAS-FP64 vs naive-FP64 vs torch-FP64  (verbatim)
+================================================================================
+lane          D  B | cuBLAS_ms naive_ms t_eager t_compile | ratio_cuB  ratio_naive(B7)  verdict | cuB-speedup-vs-naive
+-----------------------------------------------------------------------------------------------------------------------
+FP64        768  1 |   0.0537   0.1758  0.8802    1.1198 |    0.048         0.162          WIN  |   3.27x
+FP64        768  8 |   0.1915   1.1685  1.0278    0.9452 |    0.203         1.517 (LOSE)   WIN  |   6.10x  <- reflip
+FP64       1536  1 |   0.1462   0.6231  0.8774    0.9468 |    0.154         1.125 (LOSE)   WIN  |   4.26x  <- reflip
+FP64       1536  8 |   0.5444   4.3579  0.9080    0.9398 |    0.579         8.503 (LOSE)   WIN  |   8.00x  <- reflip
+FP64       2048  1 |   0.2193   1.0854  0.8966    1.2261 |    0.179         1.632 (LOSE)   WIN  |   4.95x  <- reflip
+FP64       2048  8 |   0.8609   7.6716  1.3087    0.9294 |    0.926         9.463 (LOSE)   WIN  |   8.91x  <- reflip
+FP64       4096  1 |   0.7486   4.1982  1.4594    0.9548 |    0.784         5.908 (LOSE)   WIN  |   5.61x  <- reflip
+FP64       4096  8 |   3.1719  30.3510  4.1672    3.0795 |    1.030         9.571 (LOSE)   LOSE |   9.57x  <- still loses (3% over parity)
+-----------------------------------------------------------------------------------------------------------------------
+cuBLAS-FP64 WIN: 7/8   (naive-FP64 BENCH-7 was 1/8)
+REFLIPPED B7-LOSE -> B8-WIN: 6 of the 7 lost cells.
+RESIDUAL LOSE: 1 cell, D=4096/B=8, ratio 1.030 (near-parity).
+
+================================================================================
+RE-FLIPPED FP64 WIN/LOSE ROW (verbatim, the headline)
+================================================================================
+   D=768/B=1   WIN (0.162 -> 0.048)      already won in B7, now 3.4x more decisive
+   D=768/B=8   WIN (1.517 -> 0.203)      REFLIP  (naive LOSE -> cuBLAS WIN)
+   D=1536/B=1  WIN (1.125 -> 0.154)      REFLIP
+   D=1536/B=8  WIN (8.503 -> 0.579)      REFLIP
+   D=2048/B=1  WIN (1.632 -> 0.179)      REFLIP
+   D=2048/B=8  WIN (9.463 -> 0.926)      REFLIP
+   D=4096/B=1  WIN (5.908 -> 0.784)      REFLIP
+   D=4096/B=8  LOSE (9.571 -> 1.030)     near-parity; NOT reflipped (3% over)
+
+================================================================================
+WHY THE ONE RESIDUAL LOSS (D=4096/B=8, ratio 1.030)
+================================================================================
+At the largest GEMM-bound shape (M=2048,K=4096,N=4096) the D->D GEMM dominates the step
+and flame + torch BOTH dispatch the SAME cuBLAS FP64 kernel (no FP64 tensor cores on
+Hopper for this — both run FP64 CUDA cores at ~the same TFLOP/s). With the GEMM equalized,
+the only differentiator is the non-GEMM glue: torch.compile fuses the groupnorm+gelu+AdamW
+valley into the GEMM epilogue / fewer kernels, while flame still launches them as separate
+kernels (k_valley + k_transpose + k_adamw). That residual launch/glue overhead is ~3% of
+the 3.08ms step here, so flame lands at 3.1719ms = 1.030x. This is the SAME glue-fusion
+gap BENCH-7 named as the irreducible residual on the cuBLAS lanes (TF32 D=4096/B=8 was the
+sole battleground there too) — it is a FUSION axis (fuse flame's valley into the GEMM
+epilogue), NOT an FP64-GEMM deficiency. cuBLAS-FP64 closed the naive-GEMM confound exactly
+as hypothesized.
+
+CONCLUSION: the BENCH-7 "flame loses 7 FP64 cells" finding was a NAIVE-GEMM artifact, NOT
+a torch FP64 advantage. With cuBLAS-FP64 + no-Python glue, flame WINS 7/8 FP64 cells (6
+reflips), each 3.3x-8.9x faster than its own naive lane, and the lone residual loss is a
+3% glue-fusion margin at the saturated D=4096/B=8 — consistent with BENCH-7's TF32-cuBLAS
+result. "모두 이길때까지" is now within a single fusion lever of complete for the FP64 lane.
+
+================================================================================
+RAW [RESULT] LINES (verbatim, all 8 cells × {cuBLAS, naive, torch eager, torch compile})
+================================================================================
+D=768  B=1: cuBLAS ms/step=0.0537  naive 0.1758  torch eager 0.8802  torch compile 1.1198
+D=768  B=8: cuBLAS ms/step=0.1915  naive 1.1685  torch eager 1.0278  torch compile 0.9452
+D=1536 B=1: cuBLAS ms/step=0.1462  naive 0.6231  torch eager 0.8774  torch compile 0.9468
+D=1536 B=8: cuBLAS ms/step=0.5444  naive 4.3579  torch eager 0.9080  torch compile 0.9398
+D=2048 B=1: cuBLAS ms/step=0.2193  naive 1.0854  torch eager 0.8966  torch compile 1.2261
+D=2048 B=8: cuBLAS ms/step=0.8609  naive 7.6716  torch eager 1.3087  torch compile 0.9294
+D=4096 B=1: cuBLAS ms/step=0.7486  naive 4.1982  torch eager 1.4594  torch compile 0.9548
+D=4096 B=8: cuBLAS ms/step=3.1719  naive 30.3510 torch eager 4.1672  torch compile 3.0795
+
+DETERMINISM (all 16 flame cells): max|delta(W')| = 0.000e+00  (gate ==0: PASS, 0 FAIL)
+GATE rel-RMS(cuBLAS-FP64 vs naive-FP64 ref): 0.000e+00 except
+  D=768/B=8  = 3.324e-17   D=1536/B=8 = 3.368e-17   (all <<1e-2 PASS; FP64 associativity)
+
+ARTIFACTS: tool/bench/flame_bench_step_og.cu (GEMM_BACKEND=5 cuBLAS-FP64 lane),
+           tool/bench/run_bench8.sh (driver).
+================================================================================

@@ -102,12 +102,17 @@ no-LLVM/reproducible, NOT step-rate, so a large gap is EXPECTED and fine.
   kernel/graph — BENCH-6 refuted that). Battleground = {D=4096/B=8 cuBLAS lanes} + FP64 large-D naive-GEMM.
   Files: tool/bench/run_bench7.sh · flame_bench_step_og.cu GEMM_BACKEND=4 (cuBLAS-BF16) · torch --dtype bf16.
 
-- [ ] **BENCH-8 — close the FP64 large-D losses: add a cuBLAS-FP64 flame lane** — BENCH-7 found flame
-  LOSES 7 FP64 cells at D>=1536, but ONLY because flame's FP64 lane uses the NAIVE O(D^3) GEMM, not
-  cuBLAS-FP64. Add a cuBLAS-FP64 backend (cublasDgemm / GemmEx CUBLAS_COMPUTE_64F) to the flame bench step
-  + re-run the FP64 cells D={1536,2048,4096} x B={1,8} on H100 vs torch-FP64. HYPOTHESIS: flame-cuBLAS-FP64
-  + no-Python glue re-flips most/all FP64 cells to WIN (both sides use FP64 CUDA cores; flame's edge = no
-  Python). Gate (g5): determinism max|delta|=0 + the re-flipped FP64 WIN/LOSE row verbatim. Toward goal.
+- [x] **BENCH-8 — close the FP64 large-D losses: add a cuBLAS-FP64 flame lane** 🟢 — added GEMM_BACKEND=5
+  (cublasGemmEx CUBLAS_COMPUTE_64F, CUDA_R_64F, -DBENCH_PREC=2) + re-ran FP64 D={768,1536,2048,4096}×B={1,8}
+  on a real H100 (vast 40078131, hexa-bench8, destroyed leak-0) vs torch-FP64 eager+compile. RESULT: cuBLAS-
+  FP64 + no-Python glue re-flips **6 of the 7 lost FP64 cells to WIN** — FP64 now **WINS 7/8** (was 1/8 with
+  naive), each 3.3x-8.9x faster than flame's own naive lane. ratio f/torch-compile: 768/1 0.048, 768/8 0.203,
+  1536/1 0.154, 1536/8 0.579, 2048/1 0.179, 2048/8 0.926, 4096/1 0.784 — all WIN; **lone residual LOSE =
+  D=4096/B=8 ratio 1.030** (3% over parity, glue-fusion margin where both call the same FP64 cuBLAS kernel —
+  a FUSION axis, NOT an FP64-GEMM deficiency; same as BENCH-7's TF32 battleground). The BENCH-7 "7 FP64
+  losses" was a NAIVE-GEMM artifact, NOT a torch FP64 advantage — CONFIRMED. Gate g5: determinism
+  max|delta(W')|=0 on all 16 cells, rel-RMS(cuBLAS vs naive)≤3.4e-17 (FP64 associativity). Verdict
+  .verdicts/hexa-bench/F-BENCH-8.txt. CUDA 12.4, torch 2.4.0, T=256 iters=50.
 - [ ] **BENCH-9 — close the last flame-cuBLAS losing cell D=4096/B=8 (TF32 1.27x, BF16 2.00x)** — the
   single largest GEMM-bound+filled cell where flame-cuBLAS still loses to torch.compile (inductor's GEMM
   algo-selection + epilogue fusion). Attack with cublasLt autotuned algo (cublasLtMatmulAlgoGetHeuristic)
