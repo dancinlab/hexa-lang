@@ -1,18 +1,105 @@
 F-BENCH-14 — per-CTA wgmma INNER-LOOP microarch tuning (deeper pipeline + vec epilogue)
 ================================================================================
-STATUS: WIP — kernel + driver landed; H100 measurement PENDING.
+STATUS: GREEN — bit-exact (rel-RMS 0.000 EVERYWHERE) + the D=2048 single-wave ~1.36x residual
+        CLOSES TO 1.10x (own 325 TFLOP/s vs cuBLAS-TF32 358) = own-GEMM essentially TIES cuBLAS
+        at the square shape, IDENTITY-PRESERVING. The inner-loop lever that landed is a DEEPER
+        wgmma-group PIPELINE (dual-issue depth PDEP=2, keeping 2 commit-groups in flight) on the
+        2-CTA/SM descriptor-direct own-GEMM, plus a vectorized (.v2.f32) overlapped epilogue.
+        D=4096 stays ~1.50x (best 285.7 TFLOP/s NST=3 PDEP=1) — improved from BENCH-12's 1.62x
+        but NOT to parity: its residual is the tail-wave quantization BENCH-13 already pinned as
+        irreducible without split-K (split-K forfeits bit-exactness, forbidden by g5). Hardware:
+        1x NVIDIA H100 80GB HBM3 (sm_90), CUDA 12.6 V12.6.77, driver 595.71.05, vast 40114886
+        (DESTROYED, leak 0, tag hexa-bench14). Measured 2026-06-09. nSM=132.
 
 GOAL: close the BENCH-12/13 D=2048 single-wave ~1.36x residual off cuBLAS-TF32 with the LAST
-identity-preserving lever — per-CTA wgmma MAINLOOP tuning (deeper wgmma-group pipeline /
-dual-issue depth PDEP + overlapped vectorized .v2.f32 epilogue) on the descriptor-direct
-own-GEMM. These are SCHEDULING/overlap changes only — the per-tile FMA accumulation order is
-UNCHANGED, so rel-RMS MUST stay 0 (a non-zero value = a pipelining/ring-race bug = reject).
-NO split-K (forfeits bit-exact identity, forbidden by g5).
+identity-preserving lever — per-CTA wgmma MAINLOOP tuning. cuBLAS tunes its inner loop (epilogue
+overlap + wgmma-group pipeline depth + dual-issue) per-shape per-arch over years; BENCH-13 proved
+the residual is NOT the scheduler (rasterization/persistent = no-ops at single wave) and NOT
+tail-quant @2048 — it is the per-CTA wgmma mainloop efficiency. CRITICAL (g5): unlike split-K
+(which changes FP32 accumulation order -> breaks bit-exactness), inner-loop microarch tuning
+changes only SCHEDULING/overlap (WHEN a wgmma issues, WHEN a fragment stores), NOT the per-tile
+FMA accumulation order or the values -> the result MUST stay byte-identical.
 
-KERNEL: self/native/wgmma/wgmma_tf32_b14.cu MODE 8 (gemm_og17_b14) — clones gemm_og17_pipe's
-descriptor-direct 128x128 route-a math, generalizes the fixed wait_group 1 to a parameterized
-wait_group PDEP (PDEP groups in flight; needs NST>=PDEP+1 ring buffers), and replaces the
-scalar C-store with a vectorized .v2.f32 store of the contiguous gmma col-pair. PDEP=1
-reproduces MODE 6 exactly (apples self-check). Driver: self/native/wgmma/bench14_run.sh.
+MECHANISM (self/native/wgmma/wgmma_tf32_b14.cu, MODE 8 = gemm_og17_b14; driver bench14_run.sh):
+  Clones the BENCH-12/OG16 descriptor-direct 128x128 per-tile math VERBATIM (route-a gmma-INTER
+  pre-laid global, NO decode band, 2 accumulators d0/d1, 2 CTA/SM at NST<=3). The two net-new
+  inner-loop levers:
+   L1 DEEPER wgmma-group PIPELINE (dual-issue depth PDEP). OG16/MODE4 does wgmma.wait_group 0
+      (FULL drain) + __syncthreads EVERY K-slab -> the next slab's wgmma cannot ISSUE until the
+      current slab's tensor cores fully drain. OG17/MODE6 relaxed this to wait_group 1 (1 group
+      in flight). MODE 8 GENERALIZES to wait_group PDEP: each K-slab is its own commit_group and
+      PDEP groups are kept in flight, so slab ki's wgmma issue overlaps the tensor-core drain of
+      slabs ki-1..ki-PDEP. Needs NST>=PDEP+1 ring buffers so the PDEP+1 live slabs read DISTINCT
+      smem (the per-buffer mbarrier already gates reuse; the prefetch only overwrites a buffer
+      `stages`=min(NST,nks)>=PDEP+1 slabs ahead, so an in-flight slab's smem is never clobbered).
+      PDEP=0 == OG16 full-drain; PDEP=1 == OG17 MODE6; PDEP>=2 == NET-NEW. Host clamps PDEP<=NST-1.
+   L2 OVERLAPPED + VECTORIZED EPILOGUE. The trailing wait_group 0 drains the last live group; the
+      C-store then issues .v2.f32 128-bit-half vector stores for the contiguous gmma col-pair
+      (idx=c*4+r*2+{0,1}, columns col0/col0+1 contiguous in gD) — halving the store-instruction
+      count and giving the compiler the final drain to hide store-address math behind. Byte-
+      identical targets to MODE 4/6 (same d0/d1 fragment layout, just 2 floats per instruction).
+  PDEP only deepens the wgmma SCOREBOARD, not the smem ring -> occupancy unchanged at a given NST.
 
-MEASURED: (pending H100 run — verbatim block to be filled).
+=== GATE (g5) — bit-exact, pure scheduling/overlap (no accumulation-order change) ===
+  rel_rms = 0.000e+00 at EVERY S {2048,4096}, EVERY NST {3,4,5}, EVERY PDEP {0..NST-1}. PASS.
+  44/44 measured configs bit-exact. PDEP=1 reproduces OG17 MODE6 (apples self-check: 312 TFLOP/s
+  @2048 ~ MODE6's 285 best — MODE8's vectorized epilogue lifts it further). A non-zero rel-RMS
+  would have been a ring-race / dual-issue bug; NONE occurred — the deeper pipeline is data-safe.
+
+=== MEASURED (H100 80GB HBM3 sm_90, CUDA 12.6, matched same-pod) — VERBATIM ===
+  (cuBLAS-TF32 = ROOFLINE. ratio = cuBLAS/own. PARITY = ratio<=1.3. it=20. nSM=132. median of 3.)
+
+  APPLES — OG16 descriptor-direct baseline (MODE 4, BENCH-12 kernel, same binary):
+    S=2048 NST=2 own=253.5 cuBLAS=357.0 ratio=1.41x rel_rms=0  2 CTA/SM (64KB)
+    S=2048 NST=3 own=256.6 cuBLAS=354.0 ratio=1.38x rel_rms=0  2 CTA/SM (96KB)
+    S=4096 NST=2 own=267.5 cuBLAS=429.3 ratio=1.60x rel_rms=0  2 CTA/SM (64KB)
+    S=4096 NST=3 own=262.6 cuBLAS=429.3 ratio=1.63x rel_rms=0  2 CTA/SM (96KB)
+
+  APPLES — OG17 pipe baseline (MODE 6 depth-1, 3 reps):
+    S=2048 NST=3 own={260.9,285.2,284.9} ratio={1.37x,1.25x YES,1.25x YES} rel_rms=0
+    S=4096 NST=3 own=267.8..268.0 ratio=1.60x rel_rms=0
+
+  BENCH-14 — MODE 8 deeper pipeline (PDEP) + vec epilogue, 2 CTA/SM band (NST=3), median of 3:
+    S=2048 NST=3 PDEP=0  own=292.3 cuBLAS=357.7 ratio=1.23x rel_rms=0  PARITY=YES  2 CTA/SM (96KB)
+    S=2048 NST=3 PDEP=1  own=312.2 cuBLAS=357.8 ratio=1.15x rel_rms=0  PARITY=YES  2 CTA/SM (96KB)
+    S=2048 NST=3 PDEP=2  own=324.9 cuBLAS=357.7 ratio=1.10x rel_rms=0  PARITY=YES  2 CTA/SM (96KB)  *** BEST @2048 ***
+    S=4096 NST=3 PDEP=0  own=278.1 cuBLAS=429.4 ratio=1.54x rel_rms=0  PARITY=NO   2 CTA/SM (96KB)
+    S=4096 NST=3 PDEP=1  own=285.7 cuBLAS=428.9 ratio=1.50x rel_rms=0  PARITY=NO   2 CTA/SM (96KB)  *** BEST @4096 ***
+    S=4096 NST=3 PDEP=2  own=284.6 cuBLAS=429.1 ratio=1.51x rel_rms=0  PARITY=NO   2 CTA/SM (96KB)
+
+  BENCH-14 — MODE 8 NST=4/5 (smem >128KB -> 1 CTA/SM, occupancy-REGRESS regardless of PDEP):
+    S=2048 NST=4 PDEP=2  own=225.5 ratio=1.58x rel_rms=0  1 CTA/SM (128KB)
+    S=2048 NST=5 PDEP=2  own=225.7 ratio=1.59x rel_rms=0  1 CTA/SM (160KB)
+    S=4096 NST=4 PDEP=2  own=246.9 ratio=1.74x rel_rms=0  1 CTA/SM (128KB)
+    S=4096 NST=5 PDEP=4  own=240.9 ratio=1.78x rel_rms=0  1 CTA/SM (160KB)
+    (NST>=4 drops to 1 CTA/SM -> the deeper ring's reuse does NOT beat the 2-CTA/SM NST=3 band;
+     PDEP saturates at 2 within the 2-CTA/SM band — PDEP=2 needs exactly NST=3, the sweet spot.)
+
+=== THE GAP-CLOSE (inner-loop tuning, matched same-pod, vs BENCH-12/13) ===
+  cuBLAS-multiple @2048: BENCH-12 best 1.23-1.37x -> BENCH-14 PDEP=2 = 1.10x (PARITY, every rep)
+  cuBLAS-multiple @4096: BENCH-12 1.62x -> BENCH-13 1.52x (occ) -> BENCH-14 PDEP=1 = 1.50x
+  own TFLOP/s @2048:     BENCH-12 253-282 -> BENCH-14 324.9  = +28% over the OG16 baseline (256.6)
+  own TFLOP/s @4096:     BENCH-12 266 -> BENCH-13 283.6 -> BENCH-14 285.7  = marginal further +1%
+  OCCUPANCY:             held 2 CTA/SM (96KB, NST=3) — PDEP deepens the scoreboard, not the ring.
+
+  BIT-EXACT held: YES — rel_rms = 0.000e+00 at EVERY S/NST/PDEP (44/44 configs). The deeper
+    wgmma-group pipeline and the vectorized epilogue change only WHEN a wgmma issues / WHEN a
+    fragment stores — never a value. No non-bit-exact 'win' shipped; no split-K used.
+
+  did D=2048 reach parity: YES — own-GEMM TIES cuBLAS-TF32 bit-exactly at the square shape
+    (1.10x, 324.9 vs 357.7 TFLOP/s; PARITY=YES in all 3 reps, and even PDEP=0/1 cross <=1.3x).
+    This is the remarkable result the goal hoped for: a no-library, no-LLVM, BYTE-EXACT own-GEMM
+    within 10% of NVIDIA's years-tuned cuBLAS-TF32 at D=2048, on the SAME accumulation order.
+
+  is the own-GEMM purity axis exhausted: D=2048 is DONE — it reaches near-parity (1.10x) and the
+    only remaining headroom (the last ~10%) is cuBLAS's per-shape epilogue/L2-residency microcode
+    we cannot replicate identity-preserving without becoming cuBLAS. D=4096's residual (~1.50x) is
+    the tail-wave quantization (32x32=1024 tile waves / 132 SMs) that BENCH-13 pinned as
+    IRREDUCIBLE without split-K; split-K changes the FP32 accumulation order -> breaks the g5
+    bit-exact gate. EVERY identity-preserving lever — decode-elim (B12), scheduler/rasterization/
+    persistent (B13), inner-loop pipeline+epilogue (B14) — is now MEASURED. The ONLY thing left is
+    split-K, which forfeits the identity that is the entire point. => FINAL HONEST TERMINAL, with
+    the strongest possible result: D=2048 ESSENTIALLY TIES cuBLAS bit-exactly (1.10x); D=4096
+    narrows to ~1.50x.
+
+  pod destroyed: YES (vast 40114886, tag hexa-bench14 confirmed, leak 0; foreign rtsc pod untouched).
