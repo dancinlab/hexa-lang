@@ -7523,6 +7523,16 @@ fn gen2_expr(node) {
                 // FP64 matmul through forge_tier_dispatch_v1 instead of
                 // calling hexa_farr_matmul directly. Returns the farr handle.
                 if name == "forge_dispatch_matmul" { return "hexa_forge_dispatch_matmul(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ", " + arg_strs[3] + ", " + arg_strs[4] + ")" }
+                // HEXA-0POD OP-2 (BENCH-10 transpose-elim): forge_dispatch_matmul_t(
+                // A, M, K, B, N) -> new farr handle [K·N] (or hexa_int(-1) on error).
+                // dW_flat[K,N] = A[M,K]^T @ B[M,N] computed via cuBLAS Dgemm OP_T on A
+                // directly — eliminates the trainer bwd's SEPARATE transpose-layout
+                // im2col_t pass (conv1d_bwd_via_forge reuses the fwd's non-transposed
+                // xcol). Same 5-arg handle-returning seam as forge_dispatch_matmul.
+                // CUDA -> _hx_cuda_farr_matmul_tn_gpu; no-CUDA -> host A^T@B oracle
+                // (byte-eq to im2col_t+OP_N, max|Δ|=0, clm_prod_transpose_elim_eq.hexa).
+                // (#1187: a new GPU builtin needs codegen + runtime.h proto + body.)
+                if name == "forge_dispatch_matmul_t" { return "hexa_forge_dispatch_matmul_t(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ", " + arg_strs[3] + ", " + arg_strs[4] + ")" }
                 // HEXA-FUSION L3 (glue half · final ⑤c): forge_dispatch_embedding(
                 // ids, table, x_out, T, d) -> int rc. X_OUT[i·d+c]=TABLE[tok·d+c]
                 // where tok=(int)IDS[i] — the token-gather host glue at the head of
