@@ -31,6 +31,16 @@ no-LLVM/reproducible, NOT step-rate, so a large gap is EXPECTED and fine.
   max|delta|=0 all cells. RESULT: the tuned GEMM shrinks the BENCH-1 naive gap from a batch-GROWING 3.03x@B1
   -> 7.88x@B8 down to a near batch-INVARIANT ~2.0-2.9x (2.20/2.25/2.07/2.85x; up to 2.77x shrink @B8). NO
   torch-parity regime in TF32 (residual ~2x = launch/glue/occupancy, not GEMM); FP64 B>=4 stays flame's win.
+<!-- BENCH-6-ANCHOR (do not remove; BENCH-6 appends here to avoid colliding with parallel BENCH-4/5) -->
+- [ ] **BENCH-6 — CUDA-graph capture on the bench step: does it cut the residual ~2x?** — WIP
+  (.verdicts/hexa-bench/F-BENCH-6.txt). BENCH-3 ATTRIBUTED (untested) the residual ~2x TF32 gap to
+  "launch/glue/occupancy of the serial DAG, NOT GEMM." BENCH-6 TESTS it: wraps the per-step kernel
+  sequence (cuBLAS-TF32 fwd GEMM -> LN/gelu valley -> transpose -> cuBLAS-TF32 bwd GEMM -> AdamW) in a
+  CUDA graph (cudaStreamBeginCapture/EndCapture -> cudaGraphInstantiate -> cudaGraphLaunch), replays the
+  whole step as ONE launch, measures captured step/s vs the un-captured (eager) baseline at B=1,2,4,8 on
+  aiden (free pool RTX 5070, no vast). GATE (g5): max|delta(W')| graph-vs-eager == 0 (capture changes no
+  math) + run-to-run determinism == 0. Resolves WHERE the residual ~2x lives: graph/eager >~1.3x => launch
+  overhead is the lever; graph/eager ~1.0x => cuBLAS GEMM dominates, residual is GEMM-THROUGHPUT not launch.
 
 ## honest framing (g5)
 

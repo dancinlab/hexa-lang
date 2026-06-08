@@ -1,0 +1,29 @@
+F-BENCH-6 — CUDA-graph capture on the flame bench step: does it cut the residual ~2x?
+=====================================================================================
+STATUS: WIP (skeleton landed; aiden measurement pending).
+
+QUESTION: BENCH-3 (#... F-BENCH-3) flattened flame's TF32 gap vs torch to a near
+batch-INVARIANT ~2.0-2.9x and ATTRIBUTED the residual ~2x to "launch/glue/occupancy of
+the serial DAG — a different lever (megakernel/graph-capture), NOT GEMM." That was an
+ASSERTION, never tested. BENCH-6 tests it honestly.
+
+METHOD: take the BENCH-3 cuBLAS-TF32 step DAG (fwd cuBLAS GEMM -> LN/gelu valley ->
+transpose -> bwd cuBLAS GEMM -> AdamW) and wrap the per-step kernel sequence in a CUDA
+graph (cudaStreamBeginCapture/EndCapture -> cudaGraphInstantiate -> cudaGraphLaunch) so
+the whole step replays as ONE graph launch, amortizing per-op launch+sync overhead.
+Measure captured step/s vs the un-captured (eager) baseline at B=1,2,4,8 on aiden (free
+pool RTX 5070 sm_120, no vast). Source: tool/bench/flame_bench_step_graph.cu (eager and
+graph paths from ONE binary). Driver: tool/bench/run_bench6.sh.
+
+GATE (g5): graph capture changes NOTHING mathematically, so
+  - max|delta(W')| graph-vs-eager == 0 (bit-exact), and
+  - run-to-run determinism max|delta(W')| == 0.
+
+RESOLUTION (the point):
+  graph/eager > ~1.3x  => residual ~2x lived in LAUNCH overhead (graph-capture is the lever).
+  graph/eager ~ 1.0x   => cuBLAS GEMM dominates the step; launch/elementwise is negligible;
+                          residual ~2x is GEMM-THROUGHPUT (cuBLAS vs torch inductor-tuned),
+                          NOT launch. (honest closed-neg pinning the residual to GEMM.)
+
+(Measured [CFG]/[GRAPH]/[DETERMINISM]/[GATE]/[RESULT]/[SPEEDUP] lines + nvidia-smi to be
+filled verbatim from the aiden run.)
