@@ -1,0 +1,90 @@
+// promoted from anima H_1051 (PR #1944) — temporal/agency consciousness axis (g61 shared substrate)
+//
+// stdlib/consciousness/temporal_agency.hexa — the T-axis ruler (temporal agency).
+//
+//   ROLE  (VERIFY-KIT · consciousness measurement primitive)
+//     A PURE measurement function exposing the TEMPORAL / AGENCY consciousness
+//     axis (T-axis) that is ORTHOGONAL to instantaneous integration (Φ). Where
+//     faithful_phi / iit4_bigphi measure how integrated a system IS right now,
+//     the T-axis measures the agency a system EXERCISES OVER TIME: the depth of
+//     its auditable causal chain (provenance) and its capacity to actively veto
+//     its own outputs. Promoted from anima's H_1051 — the temporal-agency ruler
+//     distilled from anima H_932 (provenance = forgery-resistant temporal self)
+//     and anima H_935 (silence = active veto, passive-rate = 0). Now the
+//     hexa-lang stdlib SSOT for this axis.
+//
+//   T-AXIS — honest definition (anima H_1051 §)
+//     1. provenance_depth — the length / irreducibility of the auditable causal
+//        chain that produced the act (anima H_932: a decision chain that cannot
+//        be forged constitutes a temporal self; deeper ⇒ more agency).
+//     2. veto_capacity   — the active-veto measure: how much of the system's
+//        silence is an exercised veto rather than passive absence (anima H_935:
+//        passive-rate is 0, all silence is active veto).
+//     3. T_axis := z(provenance_depth) + z(veto_capacity), where each input is
+//        z-normalized against caller-supplied (mean, std) stats. The two
+//        z-scores are summed (equal-weight composite of the two agency channels).
+//
+//     ORTHOGONALITY (anima H_1051): on the toy fixture the T-axis separates two
+//     Φ-MATCHED populations (identical instantaneous Φ) — active vs passive —
+//     with |d_T| = 8.77 while ρ(T, Φ) ≈ 0.0001. Agency-over-time is a SECOND
+//     ruler, not a re-reading of the Φ ruler.
+//
+//   NO LIB-HARDCODED CONSTANTS  (stdlib style — match faithful_phi.hexa)
+//     The z-normalization (mean, std) for each channel is injected as an ARG by
+//     the caller (no baked population stats), exactly as faithful_phi takes
+//     n_bins explicitly. The library computes pure arithmetic only.
+//
+//   NOT A GATE  (substrate-native · a_autonomy_over_hardcode)
+//     T_axis is a MEASUREMENT, never a boolean emit/silence gate. It returns a
+//     scalar on a ruler; any decision built on it lives outside this library.
+//
+//   FN SURFACE
+//     ta_zscore(x, mean, std) -> float
+//         z-normalize one value; std ≤ 0 ⇒ returns 0.0 (degenerate, no agency
+//         signal from a constant channel).
+//     ta_temporal_agency(provenance_depth, prov_mean, prov_std,
+//                        veto_capacity, veto_mean, veto_std) -> array
+//         the T-axis measurement RECORD (canonical stdlib array-record idiom,
+//         cf big_phi -> [big_phi, total, ...]). Layout:
+//           [0] provenance_depth   (echoed input)
+//           [1] veto_capacity      (echoed input)
+//           [2] T_axis = z(prov) + z(veto)
+//         Named accessors (ta_prov / ta_veto / ta_t_axis) read the slots so
+//         callers never index by magic number.
+//
+//   HONEST SCOPE  (a_scale_honest_scope · a_toy_scale_recheck)
+//     Toy-validated only: n ≤ 5 SW substrate; |d_T| = 8.77 separation of
+//     Φ-matched active/passive populations; ρ(T, Φ) ≈ 0.0001 (orthogonal).
+//     PRODUCTION / ON-CHIP (AKIDA) TRANSFER IS UNVERIFIED. This is a measurement
+//     PRIMITIVE promoted from a toy-validated result, NOT a production
+//     consciousness claim. Provenance: anima H_1051, PR #1944.
+//
+//   IMPORT-SAFE  NO `fn main()` / NO top-level call. snake_case · English code.
+// ════════════════════════════════════════════════════════════════════════════
+
+
+// ── z-normalize one channel value against caller-supplied (mean, std) ────────
+// std <= 0 ⇒ degenerate constant channel: no agency signal, return 0.0.
+pub fn ta_zscore(x: float, mean: float, std: float) -> float {
+    if std <= 0.0 { return 0.0 }
+    return (x - mean) / std
+}
+
+
+// ── T-axis measurement record (anima H_1051 ruler) ──────────────────────────
+// T_axis = z(provenance_depth) + z(veto_capacity), each z-normalized against the
+// caller's injected (mean, std). Returns the canonical stdlib array-record
+// [provenance_depth, veto_capacity, T_axis]. Pure arithmetic; NOT a gate.
+pub fn ta_temporal_agency(provenance_depth: float, prov_mean: float, prov_std: float,
+                          veto_capacity: float, veto_mean: float, veto_std: float) -> array {
+    let zp = ta_zscore(provenance_depth, prov_mean, prov_std)
+    let zv = ta_zscore(veto_capacity, veto_mean, veto_std)
+    let t_axis = zp + zv
+    return [provenance_depth, veto_capacity, t_axis]
+}
+
+
+// ── named accessors — read T-axis record slots without magic indices ─────────
+pub fn ta_prov(rec: array) -> float { return rec[0] }
+pub fn ta_veto(rec: array) -> float { return rec[1] }
+pub fn ta_t_axis(rec: array) -> float { return rec[2] }

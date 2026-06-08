@@ -50,6 +50,19 @@
 //         / anytime path) — we panic so callers cannot mistake a placeholder
 //         for a real faithful Φ.
 //
+//   ANIMA VALIDATION NOTES  (comment-only — zero behavior change)
+//     This faithful-Φ engine is now anima-validated as:
+//       (a) DISCRETIZATION-INVARIANT to n=6 EXACT — 6/6 binning sweep agree
+//           (anima H_1037 🟢, PR #1938). The faithful Φ★ sign/ordering does not
+//           depend on the n_bins choice across the tested grid.
+//       (b) SIGN-TRANSFERRING to a REAL trained ConvMoE at d768, n=5 (anima
+//           H_1038 🟢, PR #1947) — the toy-calibrated engine carries its sign
+//           to a production-scale .clm substrate (n=5).
+//     CAVEAT (anima H_1049 🔴, PR #1941): a FIXED small-m coarse-grain is NOT a
+//       validated SCALABLE Φ estimator — relative error GROWS with N. Macro-IIT
+//       must GROW the grain m with system size; a constant-m coarse-grain is a
+//       small-N tool only (cf the L3 n≤8 exact carve-out below).
+//
 //   IMPORT-SAFE  NO `fn main()` / NO top-level call. snake_case · English code.
 // ════════════════════════════════════════════════════════════════════════════
 
