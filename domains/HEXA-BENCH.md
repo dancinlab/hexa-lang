@@ -113,12 +113,23 @@ no-LLVM/reproducible, NOT step-rate, so a large gap is EXPECTED and fine.
   losses" was a NAIVE-GEMM artifact, NOT a torch FP64 advantage — CONFIRMED. Gate g5: determinism
   max|delta(W')|=0 on all 16 cells, rel-RMS(cuBLAS vs naive)≤3.4e-17 (FP64 associativity). Verdict
   .verdicts/hexa-bench/F-BENCH-8.txt. CUDA 12.4, torch 2.4.0, T=256 iters=50.
-- [ ] **BENCH-9 — close the last flame-cuBLAS losing cell D=4096/B=8 (TF32 1.27x, BF16 2.00x)** — the
-  single largest GEMM-bound+filled cell where flame-cuBLAS still loses to torch.compile (inductor's GEMM
-  algo-selection + epilogue fusion). Attack with cublasLt autotuned algo (cublasLtMatmulAlgoGetHeuristic)
-  + epilogue fusion (fuse bias/LN/gelu into the GEMM epilogue via CUBLASLT_EPILOGUE_*) to match inductor.
-  H100. Gate (g5): determinism max|delta|=0 + new D=4096/B=8 ratio (does it flip to WIN, or how close).
-  HONEST: BF16 2.00x is harder than TF32 1.27x; measure both. Toward goal (last cuBLAS-lane cell).
+- [x] **BENCH-9 — close the last flame-cuBLAS losing cell D=4096/B=8 (TF32 1.27x, BF16 2.00x)** — DONE
+  2026-06-08 (.verdicts/hexa-bench/F-BENCH-9.txt). CLOSED-NEGATIVE for the NAMED lever (honest, productive).
+  Added GEMM_BACKEND=6 (cublasLtMatmulAlgoGetHeuristic AUTOTUNE TF32 + -DLT_BF16, + CUBLASLT_EPILOGUE_GELU
+  probe; backend 5 is BENCH-8's FP64) and re-measured D=4096/B=8 + D=2048/B=8 + D=4096/B=1 on a real H100
+  (vast 40078129, destroyed leak-0 tag-checked; foreign rtsc untouched). GATE g5: determinism max|delta|=0 +
+  rel-RMS 2.2-2.5e-8 ALL cells. RESULT: cuBLASLt autotune closed ~0.2% TF32 (1.283x->1.280x) / ~0.6% BF16
+  (1.739x->1.729x) = effectively NOTHING — D=4096/B=8 does NOT flip to WIN. ROOT CAUSE: (1) the heuristic
+  picks the SAME GEMM algo cuBLAS already used (flame's GEMM wall is identical plain-vs-Lt; the GEMM was never
+  the residual — REFUTES BENCH-7's 'inductor GEMM algo-selection' attribution); (2) epilogue fusion has NO
+  fusible target here (fwd GEMM -> LayerNorm REDUCTION before gelu + bias-free W; CUBLASLT_EPILOGUE_GELU is
+  pointwise-only + wrong order, runs +2-3% SLOWER). The REAL residual = flame's UN-FUSED elementwise/optimizer
+  glue: torch.compile nearly HALVES its eager time (TF32 1.32->0.73, BF16 0.68->0.52 ms) by fusing
+  LN+gelu+loss+AdamW; flame runs separate naive k_valley/k_transpose/k_adamw. flame BEATS torch EAGER in TF32
+  here (0.711x); loses only to the COMPILED fused step. No regression: D=2048/B=8 (0.583-0.640x WIN) +
+  D=4096/B=1 (0.838/0.943x WIN) still WIN. The correct lever to flip D=4096/B=8 is now PINNED to flame
+  elementwise/optimizer FUSION (not a better GEMM, not graph-capture — BENCH-6 refuted graph, BENCH-9 refutes
+  GEMM-autotune). Files: GEMM_BACKEND=6 + tool/bench/run_bench9.sh.
 
 ## honest framing (g5)
 
