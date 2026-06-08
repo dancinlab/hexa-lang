@@ -199,6 +199,20 @@ no-LLVM/reproducible, NOT step-rate, so a large gap is EXPECTED and fine.
   gemm_og17_t256(MODE5)/gemm_og17_pipe(MODE6) self/native/wgmma/wgmma_tf32_og17.cu; baseline gemm_w10 in
   wgmma_tf32_w10_lib.h.
 
+- [ ] **BENCH-13 — close the last own-GEMM residual: CTA rasterization + persistent scheduling (1.6x@4096)**
+  — BENCH-12 collapsed own-GEMM vs cuBLAS from 6.2x to 1.23x@2048 (parity) / 1.62x@4096 via decode-elim;
+  it isolated the remaining ~1.3-1.6x as cuBLAS's persistent multi-CTA SCHEDULER (not decode, not pipe depth
+  — both ruled out). cuBLAS rasterizes output tiles in a swizzled/grouped order (CTA -> tile mapping) for L2
+  reuse of the shared A/B operands + uses a persistent grid (gridDim=#SMs, each CTA loops over a tile-queue)
+  to amortize launch + balance the tail wave. BENCH-13 = add (1) swizzled CTA-to-tile rasterization (group
+  columns so adjacent CTAs share B-operand L2 lines) + (2) a persistent-kernel tile loop, to the descriptor-
+  direct own-GEMM. Re-measure D={2048,4096} vs cuBLAS. Gate (g5): bit-exact rel-RMS vs FP64 ref (scheduling
+  changes only tile ORDER, never values -> must stay rel-RMS 0) + new cuBLAS-multiple (was 1.23/1.62x).
+  HONEST: this is the DEEPEST cuBLAS-tuning layer (years-tuned per-shape); rasterization+persistent may close
+  D=4096 to parity OR plateau (tail-wave quantization at 4096/132-SM is a hard residual). If it reaches
+  parity at BOTH sizes -> own-GEMM ties cuBLAS bit-exactly = no-LLVM-purity axis WON. If 4096 plateaus ~1.3x
+  -> honest near-parity terminal. H100 (sm_90a).
+
 ## honest framing (g5)
 
 flame is NOT a speed-competition tool — torch will almost certainly win throughput by a large margin (#2912
