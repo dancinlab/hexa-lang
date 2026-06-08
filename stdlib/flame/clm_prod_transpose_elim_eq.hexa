@@ -1,0 +1,173 @@
+// ════════════════════════════════════════════════════════════════════════════
+//  clm_prod_transpose_elim_eq.hexa — F-OP2 transpose-elimination byte-eq ORACLE.
+//
+//  HEXA-0POD OP-2: port the BENCH-10 transpose-elimination win into the real
+//  flame CLMConvMoE trainer's backward dW GEMM.
+//
+//  The trainer's conv1d_bwd_via_forge computes the weight gradient as
+//      xcolT[Kdim,T] = _clmp_im2col_t(x)          (a SEPARATE transpose-layout pass)
+//      dW_flat[Kdim,Cout] = forge_dispatch_matmul(xcolT, Kdim, T, dy, Cout)
+//  i.e. it materializes a transposed im2col buffer xcolT just to feed an OP_N GEMM.
+//
+//  BENCH-10 (tool/bench/flame_bench_step_fused.cu, gemm_op OP_T) eliminates that
+//  transpose pass: compute dW = A^T @ dGq directly with cuBLAS OP_T on the
+//  NON-transposed A, no materialized A^T. The trainer analog reuses the SAME
+//  im2col layout as the forward (xcol[T,Kdim] = _clmp_im2col(x)) and computes
+//      dW_flat[Kdim,Cout] = forge_dispatch_matmul_t(xcol, T, Kdim, dy, Cout)
+//  where matmul_t(A[M,K], B[M,N]) = A^T @ B = C[K,N] (cuBLAS OP_T on the GPU).
+//
+//  This file is the CPU-LOCAL byte-eq ORACLE (mirrors clm_prod_hostfeed_eq.hexa):
+//  it reconstructs the OLD path (im2col_t + matmul) and the NEW path
+//  (im2col + matmul_t) using pure host arithmetic and proves dW_flat is
+//  BYTE-IDENTICAL.  The transposed-gather value identity xcolT[j,t] == xcol[t,j]
+//  plus the SAME t-ascending accumulation order make the two dW sums bit-for-bit
+//  equal term-by-term.  Runs $0 via `hexa run` on any CPU (mac / aiden) — no GPU.
+//
+//  F-OP2-TRANSPOSE-ELIM-BWD-EQ : im2col+matmul_t dW == im2col_t+matmul dW, max|Δ|=0.
+// ════════════════════════════════════════════════════════════════════════════
+
+use "stdlib/flame/tensor_lib"
+
+fn _te_absf(x: float) -> float { if x < 0.0 { return 0.0 - x } return x }
+fn _te_maxdev(a: int, b: int, n: int) -> float {
+    let mut m = 0.0
+    let mut i = 0
+    while i < n { let d = _te_absf(t_get(a, i) - t_get(b, i)); if d > m { m = d }; i = i + 1 }
+    return m
+}
+
+// ── im2col (non-transposed, xcol[t, ci*K+k]) — byte-eq to clm_prod _clmp_im2col host
+fn _te_im2col(x: int, xcol: int, T: int, Cin: int, K: int, dil: int) {
+    let Kdim = Cin * K
+    let mut iz = 0
+    while iz < T * Kdim { t_set(xcol, iz, 0.0); iz = iz + 1 }
+    let mut t = 0
+    while t < T {
+        let mut ci = 0
+        while ci < Cin {
+            let mut k = 0
+            while k < K {
+                let p = t - dil * (K - 1 - k)
+                if p >= 0 { t_set(xcol, t * Kdim + ci * K + k, t_get(x, p * Cin + ci)) }
+                k = k + 1
+            }
+            ci = ci + 1
+        }
+        t = t + 1
+    }
+}
+// ── im2col_t (transposed, xcolT[ci*K+k, t]) — byte-eq to clm_prod _clmp_im2col_t host
+fn _te_im2col_t(x: int, xcolT: int, T: int, Cin: int, K: int, dil: int) {
+    let Kdim = Cin * K
+    let mut iz = 0
+    while iz < Kdim * T { t_set(xcolT, iz, 0.0); iz = iz + 1 }
+    let mut t = 0
+    while t < T {
+        let mut ci = 0
+        while ci < Cin {
+            let mut k = 0
+            while k < K {
+                let p = t - dil * (K - 1 - k)
+                if p >= 0 { let j = ci * K + k; t_set(xcolT, j * T + t, t_get(x, p * Cin + ci)) }
+                k = k + 1
+            }
+            ci = ci + 1
+        }
+        t = t + 1
+    }
+}
+
+// ── matmul  C[M,N] = A[M,K] @ B[K,N], k-ascending accumulation.
+//    Byte-eq to hexa_farr_matmul / forge_dispatch_matmul on the CPU oracle path.
+fn _te_matmul(a: int, M: int, K: int, b: int, N: int, c: int) {
+    let mut m = 0
+    while m < M {
+        let mut n = 0
+        while n < N {
+            let mut acc = 0.0
+            let mut k = 0
+            while k < K { acc = acc + t_get(a, m * K + k) * t_get(b, k * N + n); k = k + 1 }
+            t_set(c, m * N + n, acc)
+            n = n + 1
+        }
+        m = m + 1
+    }
+}
+
+// ── matmul_t  C[K,N] = A[M,K]^T @ B[M,N], m-ascending accumulation (the OP_T form).
+//    This is the CPU oracle for the new forge_dispatch_matmul_t builtin. The GPU
+//    path runs cuBLAS Dgemm with OP_T on A (no materialized A^T). Here A is read
+//    as A[m*K+k]; the contraction is over the shared M dimension.
+fn _te_matmul_t(a: int, M: int, K: int, b: int, N: int, c: int) {
+    let mut kk = 0
+    while kk < K {
+        let mut n = 0
+        while n < N {
+            let mut acc = 0.0
+            let mut m = 0
+            while m < M { acc = acc + t_get(a, m * K + kk) * t_get(b, m * N + n); m = m + 1 }
+            t_set(c, kk * N + n, acc)
+            n = n + 1
+        }
+        kk = kk + 1
+    }
+}
+
+// ── OLD dW path: im2col_t(x) -> xcolT[Kdim,T]; dW_flat = matmul(xcolT, dy)
+fn _old_dW(x: int, dy: int, dW_flat: int, T: int, Cin: int, Cout: int, K: int, dil: int) {
+    let Kdim = Cin * K
+    let xcolT = t_zeros(Kdim * T)
+    _te_im2col_t(x, xcolT, T, Cin, K, dil)
+    _te_matmul(xcolT, Kdim, T, dy, Cout, dW_flat)   // dW_flat[Kdim,Cout]
+}
+// ── NEW dW path: im2col(x) -> xcol[T,Kdim]; dW_flat = matmul_t(xcol, dy)
+fn _new_dW(x: int, dy: int, dW_flat: int, T: int, Cin: int, Cout: int, K: int, dil: int) {
+    let Kdim = Cin * K
+    let xcol = t_zeros(T * Kdim)
+    _te_im2col(x, xcol, T, Cin, K, dil)
+    _te_matmul_t(xcol, T, Kdim, dy, Cout, dW_flat)  // (xcol^T @ dy)[Kdim,Cout]
+}
+
+// deterministic fixture fill (no rng dependency — reproducible bytes)
+fn _te_fill(a: int, n: int, seed: int) {
+    let mut i = 0
+    let mut s = seed
+    while i < n {
+        s = (s * 1103515245 + 12345) & 0x7FFFFFFF
+        t_set(a, i, (to_float(s % 1000) - 500.0) * 0.001)
+        i = i + 1
+    }
+}
+
+fn _run_case(T: int, Cin: int, Cout: int, K: int, dil: int) -> float {
+    let Kdim = Cin * K
+    let x  = t_zeros(T * Cin)
+    let dy = t_zeros(T * Cout)
+    _te_fill(x, T * Cin, 7)
+    _te_fill(dy, T * Cout, 13)
+    let dW_old = t_zeros(Kdim * Cout)
+    let dW_new = t_zeros(Kdim * Cout)
+    _old_dW(x, dy, dW_old, T, Cin, Cout, K, dil)
+    _new_dW(x, dy, dW_new, T, Cin, Cout, K, dil)
+    return _te_maxdev(dW_old, dW_new, Kdim * Cout)
+}
+
+fn main() {
+    println("clm_prod_transpose_elim_eq — F-OP2 backward dW transpose-elim byte-eq (CPU oracle)")
+    let d1 = _run_case(8, 4, 4, 3, 1)
+    let d2 = _run_case(8, 4, 4, 3, 2)
+    let d3 = _run_case(16, 6, 6, 3, 1)
+    let d4 = _run_case(12, 5, 7, 4, 2)   // Cin != Cout, K=4
+    println("  dW max|Δ|  T8 C4 K3 d1 = " + to_string(d1))
+    println("  dW max|Δ|  T8 C4 K3 d2 = " + to_string(d2))
+    println("  dW max|Δ|  T16 C6 K3 d1 = " + to_string(d3))
+    println("  dW max|Δ|  T12 C5x7 K4 d2 = " + to_string(d4))
+    let ok = (d1 == 0.0) && (d2 == 0.0) && (d3 == 0.0) && (d4 == 0.0)
+    if ok {
+        println("F-OP2-TRANSPOSE-ELIM-BWD-EQ = 1")
+        println("PASS — im2col+matmul_t dW == im2col_t+matmul dW byte-eq (max|Δ|=0, all cases)")
+    } else {
+        println("F-OP2-TRANSPOSE-ELIM-BWD-EQ = 0")
+        println("FAIL — transpose-elim dW diverges from prior path")
+    }
+}
