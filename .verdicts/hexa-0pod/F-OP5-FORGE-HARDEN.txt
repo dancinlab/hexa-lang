@@ -8,5 +8,24 @@ by local compile (clang -Wcomment / -Wall syntax-only), not by a GPU kernel.
 
 ------------------------------------------------------------------------
 ISSUE 1 — self/runtime.h:422-423  '/*' within block comment [-Wcomment]
-(pending)
 ------------------------------------------------------------------------
+DIAGNOSTIC (clang -fsyntax-only -Wcomment -x c self/runtime.h):
+  self/runtime.h:422:28: warning: '/*' within block comment [-Wcomment]
+    422 | /* ── Additional native/*.c forward-decls (auto-generated 2026-05-15) ──
+  self/runtime.h:423:36: warning: '/*' within block comment [-Wcomment]
+    423 |  * Sourced from grep of self/native/*.c hexa_* definitions; ensures user.c
+
+ROOT CAUSE: the glob pattern `native/*.c` written inside a /* ... */ block
+  comment forms the token `/*`, which clang flags (a nested comment opener is
+  almost always an accidentally-unterminated comment). Both lines mention the
+  `*.c` glob right after a `/`.
+
+FIX (comment-only, behavior-preserving): insert a space so the `/*` token is
+  not formed — `native/ *.c`. The glob still reads clearly; no code, no
+  declaration, no codegen byte changes.
+
+VERIFIED CLEAN:
+  $ clang -fsyntax-only -Wcomment -x c self/runtime.h 2>&1 | grep -c warning
+  0   (was 2 — the only -Wcomment hits in the file, now eliminated)
+  diff = 2 comment lines, +2/-2, no executable change.
+
