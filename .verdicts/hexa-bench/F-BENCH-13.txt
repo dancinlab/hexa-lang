@@ -1,0 +1,137 @@
+F-BENCH-13 — swizzled-rasterization + persistent-kernel own-GEMM (the last cuBLAS residual)
+================================================================================
+STATUS: GREEN-bit-exact / HONEST NEAR-PARITY TERMINAL. The cuBLAS persistent-multi-CTA
+        SCHEDULER axis (swizzled CTA->tile rasterization + persistent tile-loop) was added to
+        the BENCH-12 descriptor-direct own-GEMM and measured BIT-EXACT (rel-RMS 0 everywhere).
+        It did NOT close the residual: D=2048 stays ~1.36x (already saturated, waves=1.00,
+        nothing to schedule); D=4096 stays ~1.62x (swizzle-width sweep flat, persistent grid =
+        baseline). The D=4096 residual is tail-wave quantization at 1024 tiles / 132 SMs, which
+        is irreducible without split-K (split-K changes accumulation order -> breaks the
+        bit-exact gate; NOT used per g5). Best D=4096 own = 283.6 TFLOP/s came from the NST=2
+        OCCUPANCY point (1.52x), NOT from rasterization. Hardware: 1x NVIDIA H100 80GB HBM3
+        (sm_90), CUDA 12.6 V12.6.77, driver 560.35.03, vast 40104341 (DESTROYED, leak 0, tag
+        hexa-bench13). Measured 2026-06-09. nSM=132.
+
+GOAL: close the BENCH-12 residual (~1.36x@2048 / ~1.62x@4096 own-GEMM-vs-cuBLAS-TF32, bit-exact)
+toward "모두 이길때까지" by replicating cuBLAS's persistent multi-CTA SCHEDULER on the bit-exact
+descriptor-direct own-GEMM: (1) SWIZZLED CTA->tile rasterization (grouped column order so
+adjacent CTAs share an A-row / L2-hot B-column operand) + (2) a PERSISTENT-KERNEL tile loop
+(gridDim = GRIDMUL*#SMs, each CTA for(t=blockIdx; t<total; t+=gridDim) over the swizzled order,
+amortizing launch + smoothing the D=4096 tail wave: 1024 tiles vs ~264 CTAs).
+
+MECHANISM (self/native/wgmma/wgmma_tf32_og17.cu, MODE 7 = gemm_og17_persist):
+  - Wraps the BENCH-12 gemm_og16 per-tile math (descriptor-direct 128x128, route-(a) gmma-INTER
+    pre-laid global, NO decode band, 2 CTA/SM) in a persistent swizzled tile walk. Per-tile
+    accumulation is byte-identical to gemm_og16.
+  - tile_unswizzle(t, tilesM, tilesN, swz): SWZ=0 -> plain row-major (OG16 order). SWZ=w>0 ->
+    CUTLASS-style grouped column rasterization: column-groups of width w, walk rows within a
+    group first so w adjacent CTAs share the same A row-block (and L2-hot B columns). Verified a
+    BIJECTION over square/non-square/odd-remainder tile grids (host pre-check) -> no tile is
+    dropped or double-computed; this is why rel-RMS MUST be 0.
+  - PERSISTENT FIX: the mbarriers are RE-INITIALIZED per tile iteration so each tile starts at
+    barrier phase 0 (matching the fph=0 reset). The first kernel draft re-used barriers across
+    tiles -> the barrier phase carried over and mbar_wait(.,0) DEADLOCKED whenever a CTA
+    processed >1 tile (waves>1, i.e. EVERY D=4096 run + GRIDMUL=1). Re-init per tile is the fix;
+    bit-exact + no hang after it.
+
+=== GATE (g5) — bit-exact, rasterization is a pure tile-ORDER permutation ===
+  rel_rms = 0.000e+00 at EVERY S, EVERY SWZ {0,2,4,8,16}, EVERY GRIDMUL {0,1,2,4}, EVERY NST
+  {2,3}. PASS. The swizzle/persistent remap changes ONLY which CTA computes which output tile
+  and in what order — never a value — so the result is byte-identical to gemm_og16. (A non-zero
+  rel-RMS would have been a tile-index bug; none occurred.)
+
+=== MEASURED (H100 80GB HBM3 sm_90, CUDA 12.6, matched same-pod) — VERBATIM ===
+  (cuBLAS-TF32 = ROOFLINE. ratio = cuBLAS/own. PARITY = ratio<=1.3. it=20. nSM=132.)
+
+  APPLES — OG16 descriptor-direct baseline (MODE 4, BENCH-12 kernel, same binary):
+    S=2048 NST=2 own=243.4 cuBLAS=342.1 ratio=1.41x rel_rms=0  2 CTA/SM (64KB)
+    S=2048 NST=3 own=254.9 cuBLAS=345.0 ratio=1.35x rel_rms=0  2 CTA/SM (96KB)
+    S=4096 NST=2 own=263.0 cuBLAS=428.6 ratio=1.63x rel_rms=0  2 CTA/SM (64KB)
+    S=4096 NST=3 own=261.4 cuBLAS=429.9 ratio=1.64x rel_rms=0  2 CTA/SM (96KB)
+
+  BENCH-13 — MODE 7 swizzle-width sweep (persistent GRIDMUL=2, NST=3, 2 CTA/SM), median of 3:
+    S=2048  SWZ=0  own=253.6  ratio=1.36x   waves=1.00
+    S=2048  SWZ=2  own=249.9  ratio=1.37x   waves=1.00
+    S=2048  SWZ=4  own=250.1  ratio=1.38x   waves=1.00
+    S=2048  SWZ=8  own=251.7  ratio=1.36x   waves=1.00
+    S=2048  SWZ=16 own=253.3  ratio=1.36x   waves=1.00
+    S=4096  SWZ=0  own=265.5  ratio=1.62x   waves=3.88
+    S=4096  SWZ=2  own=271.9  ratio=1.59x   waves=3.88   (best-swizzle @4096, marginal)
+    S=4096  SWZ=4  own=264.2  ratio=1.64x   waves=3.88
+    S=4096  SWZ=8  own=264.0  ratio=1.63x   waves=3.88
+    S=4096  SWZ=16 own=265.0  ratio=1.63x   waves=3.88
+    -> SWIZZLE WIDTH IS FLAT. No swizzle group-width meaningfully shifts the ratio at either size.
+
+  BENCH-13 — MODE 7 persistent-depth sweep (SWZ=8, NST=3), median of 3:
+    S=2048  GRIDMUL=0 (non-persist, gridDim=256 tiles) own=252.3 ratio=1.37x  waves=1.00
+    S=2048  GRIDMUL=1 (132 CTAs, UNDER-subscribed)     own=178.6 ratio=1.95x  waves=1.94  REGRESS
+    S=2048  GRIDMUL=2 (264 CTAs)                        own=252.4 ratio=1.38x  waves=1.00
+    S=2048  GRIDMUL=4 (clamped to 256 tiles)           own=252.6 ratio=1.38x  waves=1.00
+    S=4096  GRIDMUL=0 (non-persist, gridDim=1024 tiles)own=259.6 ratio=1.66x  waves=1.00
+    S=4096  GRIDMUL=1 (132 CTAs, UNDER-subscribed)     own=206.7 ratio=2.09x  waves=7.76  REGRESS
+    S=4096  GRIDMUL=2 (264 CTAs)                        own=265.5 ratio=1.62x  waves=3.88
+    S=4096  GRIDMUL=4 (528 CTAs)                        own=262.1 ratio=1.65x  waves=1.94
+    -> PERSISTENCE IS NEUTRAL when CTAs >= #SMs*occupancy (GRIDMUL>=2 ~ GRIDMUL=0); UNDER-
+       subscription (GRIDMUL=1 = 1 CTA/SM, leaves the 2nd occupancy slot empty) REGRESSES hard.
+
+  BENCH-13 — NST=2 cross-check (64KB/CTA, the BENCH-12 best-occupancy point), SWZ=8 GRIDMUL=2:
+    S=2048 NST=2 own=250.5 ratio=1.39x rel_rms=0
+    S=4096 NST=2 own=283.6 ratio=1.52x rel_rms=0   <-- BEST D=4096 own-GEMM measured (was 265.8)
+    -> The smem-HEADROOM point (NST=2 = 64KB/CTA) beats the swizzle/persistent lever at D=4096:
+       283.6 TFLOP/s / 1.52x, a real +7% over the BENCH-12 265.8 @4096 — from OCCUPANCY, not
+       from the scheduler.
+
+=== THE RESULT vs BENCH-12 (matched same-pod) ===
+  cuBLAS-multiple @2048: BENCH-12 1.23-1.37x  ->  BENCH-13 1.36-1.39x  (UNCHANGED; saturated)
+  cuBLAS-multiple @4096: BENCH-12 1.62x        ->  BENCH-13 1.52x BEST (NST=2 occ), 1.62x (raster)
+  own TFLOP/s @4096:     BENCH-12 265.8        ->  BENCH-13 283.6 (NST=2)  = +7% from occupancy
+  BIT-EXACT held:        YES — rel_rms 0.000e+00 at EVERY config (swizzle/persist = order-only).
+
+  Did D=4096 reach parity (<=1.3x)?  NO — best 1.52x (NST=2 occupancy), ~1.62x (rasterized).
+  Did D=2048 stay at/improve parity? It stays AT the BENCH-12 boundary (~1.36-1.39x), bit-exact;
+    the persistent+swizzled path neither helps nor hurts (already 1 wave, nothing to schedule).
+  Is own-GEMM = cuBLAS achieved (purity axis WON)?  NO. HONEST NEAR-PARITY TERMINAL.
+
+=== ROOT CAUSE (g5 honest) — why swizzle+persistent did NOT close the gap ===
+  1) D=2048 is ALREADY a single full wave (256 tiles, 132 SMs * 2 CTA/SM = 264 slots >= 256
+     tiles -> waves=1.00). There is NO tail wave to smooth and NO multi-tile L2-reuse window to
+     swizzle over: every CTA does exactly ONE tile. The persistent loop never iterates twice and
+     the swizzle only reorders a single wave -> provably no-op. The ~1.36x there is the per-tile
+     wgmma-pipeline gap (BENCH-12 territory), untouched by scheduling.
+  2) D=4096 (1024 tiles, 3.88 waves) is where scheduling COULD help, but:
+     - Swizzle width is FLAT (1.58-1.65x across SWZ 0..16): the H100's large L2 (50MB) already
+       caches the shared A-row / B-column operands across the naive row-major wave, so a CUTLASS
+       group-swizzle adds no measurable L2-reuse on these square TF32 shapes.
+     - Persistent grid = NEUTRAL vs classic launch (GRIDMUL=2 1.62x ~ GRIDMUL=0 1.66x): kernel
+       launch is already amortized over a 1024-tile GEMM; the persistent loop trades launch
+       overhead it didn't have for a per-tile mbarrier re-init it now pays. Under-subscription
+       (GRIDMUL=1) REGRESSES because it gives up the 2nd occupancy slot.
+     - The genuine D=4096 residual is the 3.88-wave TAIL QUANTIZATION (the 4th wave is 0.88 full)
+       + the per-wgmma pipeline gap. The ONLY lever that moved it was OCCUPANCY (NST=2 -> 1.52x),
+       NOT the scheduler. Closing the tail needs split-K (decompose K across CTAs to fill the
+       partial wave) which changes the FP32 accumulation order -> would BREAK the bit-exact gate.
+       Per g5 / the spec, split-K is NOT used. Honest terminal.
+
+VERDICT: The cuBLAS persistent-multi-CTA SCHEDULER axis is REPLICATED bit-exactly (swizzled
+rasterization + persistent tile-loop, rel-RMS 0 everywhere) but does NOT close the BENCH-12
+residual. own-GEMM-vs-cuBLAS-TF32 stays ~1.36x@2048 (saturated, single wave -> nothing to
+schedule) and ~1.52-1.62x@4096 (swizzle-width flat, persistent grid neutral; the only mover was
+NST=2 OCCUPANCY -> 283.6 TFLOP/s best, +7% over BENCH-12). The D=4096 residual is tail-wave
+quantization (3.88 waves / 132 SMs) that is IRREDUCIBLE without split-K, and split-K changes the
+accumulation order -> breaks bit-exactness, so it is excluded by g5. own-GEMM = cuBLAS is NOT
+achieved: this is the HONEST NEAR-PARITY TERMINAL the spec anticipated. flame's bit-exact,
+no-library, no-LLVM own-GEMM is at cuBLAS parity-adjacent (~1.36x) for square-fitting shapes and
+~1.5-1.6x on tail-quantized shapes, BIT-EXACT throughout — its identity (byte-exact, no-library,
+deterministic) is intact; the last ~1.3-1.6x is NVIDIA's per-shape split-K tail handling, which
+trades exactly the bit-exactness flame refuses to give up.
+
+OG10 BENCH-CELL vs torch: torch's GEMM backend is cuBLAS, so torch's D=2048/4096 TF32 GEMM lane
+runs at the cuBLAS roofline (344/430 TFLOP/s here). The own-GEMM D=2048 cell sits ~1.36x behind
+(near-tie, BENCH-12 borderline-parity unchanged); the D=4096 cell narrows to its best 1.52x
+(283.6 vs 430 TFLOP/s) at NST=2 — improved from BENCH-12's 1.62x but still a loss. The OG10
+purity-axis cells stay "near-tie @2048 / ~1.5-1.6x loss @4096" vs torch — the rasterization+
+persistent axis did not flip them to a win; the NST=2 occupancy point shaved the 4096 loss ~7%.
+
+Build: nvcc -O3 -arch=sm_90a -lcuda -lcublas. Kernel gemm_og17_persist (MODE 7) +
+tile_unswizzle() in self/native/wgmma/wgmma_tf32_og17.cu; driver self/native/wgmma/bench13_run.sh.
+Gate = rel-RMS 0 on every MODE 7 run (vs cuBLAS-TF32). Baseline = gemm_og16 (MODE 4, BENCH-12).

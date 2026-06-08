@@ -363,6 +363,134 @@ extern "C" __global__ void gemm_og16(const __grid_constant__ CUtensorMap tmapA,
 }
 
 // ======================================================================
+// MODE 7 — OG17 LEVER 4: SWIZZLED-RASTERIZATION + PERSISTENT-KERNEL own-GEMM (BENCH-13).
+//   Same per-tile math as gemm_og16 (descriptor-direct 128x128, 2 CTA/SM, bit-exact) but the
+//   blockIdx -> output-tile mapping is REPLACED by (1) a persistent tile loop and (2) a
+//   CUTLASS-style threadblock SWIZZLE so adjacent CTAs share a B-column (or A-row) operand in
+//   L2 instead of each CTA touching disjoint operands.
+//
+//   PERSISTENT: launch gridDim = GRIDN (= occ * #SMs, e.g. 2*132 = 264). Each CTA walks
+//     for(t = blockIdx.x; t < total_tiles; t += GRIDN) processing swizzled tile t. This
+//     amortizes launch + smooths the tail wave (vs the plain Nx/128 * Mx/128 1-CTA/tile launch
+//     that leaves a partial last wave at D=4096: 32*32=1024 tiles vs 264 CTAs = 3.88 waves).
+//
+//   SWIZZLE (threadblock rasterization), SWZ = group-width along tile-COLUMN (N):
+//     SWZ=0  -> plain ROW-MAJOR linear (tile -> (tile/tilesN, tile%tilesN)) = OG16 order (baseline).
+//     SWZ=w>0-> "grouped" order: tiles are walked in column-groups of width w. Within a group of
+//               w columns we step DOWN the rows first (so w adjacent CTAs in linear order share
+//               the SAME A-row-block operand -> A stays hot in L2), then advance to the next
+//               group of w columns. This is the CUTLASS GemmIdentityThreadblockSwizzle log-group.
+//   The remap is a pure index permutation of which (tile_row,tile_col) a CTA computes — the
+//   per-tile accumulation is byte-identical to gemm_og16, so rel-RMS MUST stay 0 (a non-zero
+//   value = a tile-index bug, which the g5 gate catches before any perf number).
+// ======================================================================
+__device__ __forceinline__ void tile_unswizzle(int t,int tilesM,int tilesN,int swz,int* trow,int* tcol){
+    if(swz<=0){ *trow=t/tilesN; *tcol=t%tilesN; return; }
+    // grouped/swizzled rasterization: column-groups of width `swz`. Walk rows within a group
+    // first so `swz` consecutive CTAs share the same A row-block (and L2-hot B columns of the
+    // group). Last group may be narrower (tilesN % swz).
+    int full_grp = tilesN / swz;            // number of full-width column groups
+    int gw = swz;
+    int per_full = tilesM * gw;             // tiles in one full-width group
+    int grp, off, gcols0;
+    if(t < full_grp*per_full){ grp=t/per_full; off=t%per_full; gw=swz; gcols0=grp*swz; }
+    else {
+        int rem=t - full_grp*per_full; int rgw=tilesN - full_grp*swz; // remainder group width
+        grp=full_grp; off=rem; gw=rgw; gcols0=full_grp*swz;
+    }
+    (void)grp;
+    *trow = off / gw;
+    *tcol = gcols0 + (off % gw);
+}
+
+extern "C" __global__ void gemm_og17_persist(const __grid_constant__ CUtensorMap tmapA,
+                                      const __grid_constant__ CUtensorMap tmapB,
+                                      float* __restrict__ gD,int M,int N,int K,int NST,
+                                      int lbo,int sbo,int boff,int swmode,
+                                      int tilesM,int tilesN,int total_tiles,int swz){
+    const int TM=128,TN=128,TKSW=32,TK=8;
+    extern __shared__ __align__(128) float sm[];
+    const int ASW=TM*TKSW, BSW=TN*TKSW;
+    const int SWBUF=ASW+BSW;
+    uint64_t* full =(uint64_t*)(sm + (size_t)NST*SWBUF);
+    int tid=threadIdx.x; int wg=tid>>7; int band=wg; int lt=tid&127;
+    int nks=K/TKSW;
+    const int NATOM=TN/TKSW;
+    const uint32_t bytesA=ASW*4, bytesB=BSW*4;
+    const int gridN=gridDim.x;
+    // PERSISTENT TILE LOOP — each CTA walks swizzled tiles strided by gridDim.
+    for(int t=blockIdx.x; t<total_tiles; t+=gridN){
+        int trow,tcol; tile_unswizzle(t,tilesM,tilesN,swz,&trow,&tcol);
+        int bm=trow*TM, bn=tcol*TN;
+        float d0[32],d1[32];
+        #pragma unroll
+        for(int i=0;i<32;++i){d0[i]=0.f;d1[i]=0.f;}
+        uint32_t fph=0;
+        int stages=NST<nks?NST:nks;
+        __syncthreads();                 // ensure all CTAs done with prior tile's smem before reuse
+        // RE-INIT the mbarriers per tile so each tile starts at phase 0 (matching fph=0). Without
+        // this the barrier phase carries over from the previous tile -> mbar_wait(.,0) deadlocks
+        // on an already-toggled barrier when a CTA processes >1 tile (waves>1, e.g. D=4096).
+        if(tid<NST){ mbar_init_tx(&full[tid],1); }
+        __syncthreads();
+        if(tid==0){
+            for(int st=0;st<stages;++st){
+                float* base=sm+(size_t)st*SWBUF; float* Asw=base; float* Bsw=base+ASW;
+                mbar_expect_tx(&full[st], bytesA+bytesB);
+                tma_load_2d(Asw,&tmapA,st*TKSW,bm,&full[st]);
+                #pragma unroll
+                for(int c=0;c<NATOM;++c)
+                    tma_load_2d(Bsw+(size_t)c*(TKSW*TKSW),&tmapB,bn+c*TKSW,st*TKSW,&full[st]);
+            }
+        }
+        for(int ki=0;ki<nks;++ki){
+            int st=ki%NST;
+            mbar_wait(&full[st], fph); if(st==NST-1) fph^=1;
+            float* base=sm+(size_t)st*SWBUF; float* Asw=base; float* Bsw=base+ASW;
+            float* Aband=Asw + band*64*TKSW;
+            float* B0=Bsw;
+            float* B1=Bsw + 2*(TKSW*TKSW);
+            uint32_t aAb=(uint32_t)__cvta_generic_to_shared(Aband);
+            uint32_t a0b=(uint32_t)__cvta_generic_to_shared(B0);
+            uint32_t a1b=(uint32_t)__cvta_generic_to_shared(B1);
+            asm volatile("wgmma.fence.sync.aligned;\n":::"memory");
+            #pragma unroll
+            for(int kk=0;kk<TKSW;kk+=TK){
+                uint32_t off=(uint32_t)((kk>>3)*64*4);
+                uint64_t dA =mk_desc(aAb+off,(uint32_t)lbo,(uint32_t)sbo,(uint32_t)boff,(uint32_t)swmode);
+                uint64_t dB0=mk_desc(a0b+off,(uint32_t)lbo,(uint32_t)sbo,(uint32_t)boff,(uint32_t)swmode);
+                uint64_t dB1=mk_desc(a1b+off,(uint32_t)lbo,(uint32_t)sbo,(uint32_t)boff,(uint32_t)swmode);
+                WG(d0,dA,dB0);
+                WG(d1,dA,dB1);
+            }
+            asm volatile("wgmma.commit_group.sync.aligned;\nwgmma.wait_group.sync.aligned 0;\n":::"memory");
+            __syncthreads();
+            if(tid==0){
+                int load_ki=ki+stages;
+                if(load_ki<nks){
+                    int lst=load_ki%NST;
+                    float* lb=sm+(size_t)lst*SWBUF; float* lAsw=lb; float* lBsw=lb+ASW;
+                    mbar_expect_tx(&full[lst], bytesA+bytesB);
+                    tma_load_2d(lAsw,&tmapA,load_ki*TKSW,bm,&full[lst]);
+                    #pragma unroll
+                    for(int c=0;c<NATOM;++c)
+                        tma_load_2d(lBsw+(size_t)c*(TKSW*TKSW),&tmapB,bn+c*TKSW,load_ki*TKSW,&full[lst]);
+                }
+            }
+        }
+        int rbase=bm+band*64;
+        int w=lt>>5,l=lt&31,rb=w*16+(l>>2),cb=(l&3)*2;
+        #pragma unroll
+        for(int c=0;c<8;++c)for(int r=0;r<2;++r)for(int p=0;p<2;++p){
+            int idx=c*4+r*2+p,row=rbase+rb+r*8;
+            int col0=bn+cb+p+c*8, col1=bn+64+cb+p+c*8;
+            if(row<M&&col0<N)gD[row*N+col0]=d0[idx];
+            if(row<M&&col1<N)gD[row*N+col1]=d1[idx];
+        }
+    }
+}
+
+// ======================================================================
 // MODE 6 — OG17 LEVER 3: 128x128 (OG16 tile, 2 CTA/SM) with a RELAXED-wait_group software
 //   pipeline — the W11 "ping-pong epilogue overlap" lever, dead on the decode band, reopened.
 //   OG16 does `wgmma.wait_group 0` (FULL drain) + __syncthreads EVERY K-slab: the next slab's
@@ -566,6 +694,106 @@ int main(int argc,char**argv){
     int S=argc>1?atoi(argv[1]):2048; int MODE=argc>2?atoi(argv[2]):10;
     Enc_t enc=get_enc();
     if(!enc){printf("cuTensorMapEncodeTiled unavailable (CUDA<12?)\n");return 4;}
+
+    if(MODE==7){
+        // ---- OG17 LEVER 4 (BENCH-13): SWIZZLED-RASTERIZATION + PERSISTENT-KERNEL own-GEMM.
+        // Same route-(a) pre-lay + descriptor-direct 128x128 math as MODE 4, but launch
+        // gridDim = GRIDMUL*#SMs persistent CTAs, each walking a SWIZZLED tile order (SWZ =
+        // column-group width). Bit-exact gate FIRST (scheduling changes only tile ORDER), then
+        // perf. argv: S 7 [NST] [SWZ] [GRIDMUL] [SWM] [SBO] [BOFF].
+        //   SWZ=0 -> plain row-major (OG16 order). SWZ>0 -> grouped column rasterization.
+        //   GRIDMUL=0 -> non-persistent (gridDim = total_tiles, classic). >0 -> GRIDMUL*#SMs.
+        int NST  =argc>3?atoi(argv[3]):3;
+        int SWZ  =argc>4?atoi(argv[4]):8;
+        int GRIDMUL=argc>5?atoi(argv[5]):2;
+        int SWM  =argc>6?atoi(argv[6]):0;
+        int SBO  =argc>7?atoi(argv[7]):1024;
+        int BOFF =argc>8?atoi(argv[8]):0;
+        int LBO  =128;
+        int Mx=S,Nx=S,Kx=S;
+        if(Nx%128||Kx%32||Mx%128){printf("MODE7 needs M,N%%128==0 && K%%32==0\n");return 1;}
+        int nSM=0; { cudaDeviceProp pp; cudaGetDeviceProperties(&pp,0); nSM=pp.multiProcessorCount; }
+        size_t szA=(size_t)Mx*Kx,szB=(size_t)Kx*Nx,szD=(size_t)Mx*Nx;
+        float *hA=(float*)malloc(szA*4),*hB=(float*)malloc(szB*4),*hD=(float*)malloc(szD*4),*hR=(float*)malloc(szD*4);
+        srand(7);
+        for(size_t i=0;i<szA;++i)hA[i]=tf(((rand()%17)-8)*0.0625f);
+        for(size_t i=0;i<szB;++i)hB[i]=tf(((rand()%17)-8)*0.0625f);
+        float *dA,*dB,*dD,*dR;
+        CK(cudaMalloc(&dA,szA*4));CK(cudaMalloc(&dB,szB*4));CK(cudaMalloc(&dD,szD*4));CK(cudaMalloc(&dR,szD*4));
+        float *dAo,*dBo; CK(cudaMalloc(&dAo,szA*4));CK(cudaMalloc(&dBo,szB*4));
+        CK(cudaMemcpy(dAo,hA,szA*4,cudaMemcpyHostToDevice));CK(cudaMemcpy(dBo,hB,szB*4,cudaMemcpyHostToDevice));
+        cublasHandle_t h;CB(cublasCreate(&h));CB(cublasSetMathMode(h,CUBLAS_TF32_TENSOR_OP_MATH));
+        float al=1.f,be=0.f;
+        CB(cublasSgemm(h,CUBLAS_OP_N,CUBLAS_OP_N,Nx,Mx,Kx,&al,dBo,Nx,dAo,Kx,&be,dR,Nx));CK(cudaDeviceSynchronize());
+        CK(cudaMemcpy(hR,dR,szD*4,cudaMemcpyDeviceToHost));
+        // pre-lay A,B IDENTICAL to MODE 4 (route-(a) gmma-INTER 128x32 / 128-N tiles of 4 atoms).
+        float *hAp=(float*)calloc(szA,4),*hBp=(float*)calloc(szB,4);
+        for(int m=0;m<Mx;++m)for(int k=0;k<Kx;++k){
+            int tile=m>>7, mloc=m&127, a=mloc>>3, r=mloc&7;
+            int katom=k>>5, kk=k&31;
+            int p = a*256 + gmma_phys(r,kk);
+            int srow = tile*128 + (p>>5);
+            int scol = katom*32 + (p&31);
+            hAp[(size_t)srow*Kx + scol] = hA[(size_t)m*Kx + k];
+        }
+        for(int k=0;k<Kx;++k)for(int n=0;n<Nx;++n){
+            int tile=n>>7, nloc=n&127, c=nloc>>5, na=(nloc&31)>>3, r=nloc&7;
+            int katom=k>>5, kk=k&31;
+            int p = na*256 + gmma_phys(r,kk);
+            int gN = tile*128 + c*32 + (p&31);
+            int gK = katom*32 + (p>>5);
+            hBp[(size_t)gK*Nx + gN] = hB[(size_t)k*Nx + n];
+        }
+        CK(cudaMemcpy(dA,hAp,szA*4,cudaMemcpyHostToDevice));CK(cudaMemcpy(dB,hBp,szB*4,cudaMemcpyHostToDevice));
+        CUtensorMap tmapA{},tmapB{};
+        { cuuint64_t gd[2]={(cuuint64_t)Kx,(cuuint64_t)Mx}; cuuint64_t gs[1]={(cuuint64_t)Kx*4};
+          cuuint32_t bd[2]={32,128}; cuuint32_t es[2]={1,1};
+          CUresult r=enc(&tmapA,CU_TENSOR_MAP_DATA_TYPE_FLOAT32,2,dA,gd,gs,bd,es,
+            CU_TENSOR_MAP_INTERLEAVE_NONE,CU_TENSOR_MAP_SWIZZLE_NONE,
+            CU_TENSOR_MAP_L2_PROMOTION_NONE,CU_TENSOR_MAP_FLOAT_OOB_FILL_NONE);
+          if(r!=CUDA_SUCCESS){printf("MODE7 encodeA r=%d\n",(int)r);return 4;} }
+        { cuuint64_t gd[2]={(cuuint64_t)Nx,(cuuint64_t)Kx}; cuuint64_t gs[1]={(cuuint64_t)Nx*4};
+          cuuint32_t bd[2]={32,32}; cuuint32_t es[2]={1,1};
+          CUresult r=enc(&tmapB,CU_TENSOR_MAP_DATA_TYPE_FLOAT32,2,dB,gd,gs,bd,es,
+            CU_TENSOR_MAP_INTERLEAVE_NONE,CU_TENSOR_MAP_SWIZZLE_NONE,
+            CU_TENSOR_MAP_L2_PROMOTION_NONE,CU_TENSOR_MAP_FLOAT_OOB_FILL_NONE);
+          if(r!=CUDA_SUCCESS){printf("MODE7 encodeB r=%d\n",(int)r);return 4;} }
+        const int TM=128,TN=128,TKSW=32;
+        size_t SWBUF=(size_t)(TM*TKSW + TN*TKSW);
+        size_t smsz=(size_t)NST*SWBUF*4 + (size_t)NST*8;
+        int tilesM=(Mx+TM-1)/TM, tilesN=(Nx+TN-1)/TN, total=tilesM*tilesN;
+        int gridX = (GRIDMUL>0)? GRIDMUL*nSM : total;
+        if(gridX>total) gridX=total;           // never launch more CTAs than tiles
+        dim3 grid(gridX); int blk=256;
+        CK(cudaFuncSetAttribute(gemm_og17_persist,cudaFuncAttributeMaxDynamicSharedMemorySize,(int)smsz));
+        auto launch=[&](){ gemm_og17_persist<<<grid,blk,smsz>>>(tmapA,tmapB,dD,Mx,Nx,Kx,NST,LBO,SBO,BOFF,SWM,tilesM,tilesN,total,SWZ); };
+        { int occ=0; cudaOccupancyMaxActiveBlocksPerMultiprocessor(&occ,(const void*)gemm_og17_persist,blk,smsz);
+          printf("OCCUPANCY MODE=7 blk=%d dynsmem=%zuB (%.1f KB/CTA) -> %d CTA/SM | nSM=%d tiles=%dx%d=%d gridX=%d waves=%.2f SWZ=%d GRIDMUL=%d\n",
+                 blk,smsz,smsz/1024.0,occ,nSM,tilesM,tilesN,total,gridX,(double)total/fmax(1,gridX),SWZ,GRIDMUL); }
+        CK(cudaMemset(dD,0,szD*4));
+        launch();
+        cudaError_t e=cudaGetLastError(); if(e==cudaSuccess)e=cudaDeviceSynchronize();
+        if(e!=cudaSuccess){printf("MODE7 OWN-FAULT SWZ=%d GRIDMUL=%d %s\n",SWZ,GRIDMUL,cudaGetErrorString(e));return 4;}
+        CK(cudaMemcpy(hD,dD,szD*4,cudaMemcpyDeviceToHost));
+        double se=0,sr=0;for(size_t i=0;i<szD;++i){double dd=(double)hD[i]-hR[i];se+=dd*dd;sr+=(double)hR[i]*hR[i];}
+        double rr=sqrt(se/fmax(1e-30,sr));
+        if(rr>3e-3){printf("OG17 S=%d MODE=7 NST=%d SWZ=%d GRIDMUL=%d rel_rms=%.3e FAIL — tile-index bug (g5), no perf\n",
+            S,NST,SWZ,GRIDMUL,rr);return 2;}
+        cudaEvent_t s0,s1;CK(cudaEventCreate(&s0));CK(cudaEventCreate(&s1));int it=20;
+        launch();CK(cudaDeviceSynchronize());
+        CK(cudaEventRecord(s0));for(int i=0;i<it;++i)launch();
+        CK(cudaEventRecord(s1));CK(cudaEventSynchronize(s1));
+        float mo;CK(cudaEventElapsedTime(&mo,s0,s1));mo/=it;
+        double fl=2.0*(double)Mx*Nx*Kx,tfo=fl/(mo*1e-3)/1e12;
+        cublasSgemm(h,CUBLAS_OP_N,CUBLAS_OP_N,Nx,Mx,Kx,&al,dBo,Nx,dAo,Kx,&be,dR,Nx);CK(cudaDeviceSynchronize());
+        CK(cudaEventRecord(s0));for(int i=0;i<it;++i)cublasSgemm(h,CUBLAS_OP_N,CUBLAS_OP_N,Nx,Mx,Kx,&al,dBo,Nx,dAo,Kx,&be,dR,Nx);
+        CK(cudaEventRecord(s1));CK(cudaEventSynchronize(s1));
+        float mc;CK(cudaEventElapsedTime(&mc,s0,s1));mc/=it;
+        double tfc=fl/(mc*1e-3)/1e12,ratio=tfc/tfo;
+        printf("OG17 S=%d MODE=7 NST=%d SWZ=%d GRIDMUL=%d persist own=%.1f TFLOP/s cuBLAS-TF32=%.1f ratio(cuBLAS/own)=%.2fx rel_rms=%.3e PARITY=%s\n",
+               S,NST,SWZ,GRIDMUL,tfo,tfc,ratio,rr,ratio<=1.3?"YES":"NO");
+        return 0;
+    }
 
     if(MODE==6){
         // ---- OG17 LEVER 3: 128x128 (OG16 tile, 2 CTA/SM) + relaxed wait_group software pipeline.

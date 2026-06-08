@@ -240,3 +240,26 @@ leak-0 tag-checked; foreign rtsc-li2mgh16-anchor untouched).
   own-GEMM. PARITY (<=1.3x) REACHED at D=2048 (borderline, 2/3 runs, best 1.23x), NOT at D=4096 (~1.6x).
   Residual = cuBLAS persistent multi-CTA scheduler (separate, much smaller axis), NOT decode, NOT pipe depth.
   OG10 D=2048 cell now ties torch's GEMM lane bit-exactly; D=4096 narrows ~7x->~1.6x. Verdict F-BENCH-12.txt.
+
+## BENCH-13 — swizzled-raster + persistent-kernel own-GEMM (2026-06-09, H100 vast 40104341, DESTROYED leak-0)
+- AXIS: replicate cuBLAS's persistent multi-CTA SCHEDULER on the BENCH-12 descriptor-direct own-GEMM.
+  MODE 7 gemm_og17_persist: (1) CUTLASS-style swizzled column-group CTA->tile rasterization (tile_unswizzle,
+  SWZ=group-width; host-verified BIJECTION) + (2) persistent tile-loop gridDim=GRIDMUL*#SMs, each CTA
+  for(t=blockIdx; t<total; t+=gridDim). Per-tile math byte-identical to gemm_og16 (BENCH-12).
+- BUG FOUND+FIXED: persistent loop deadlocked at waves>1 (D=4096, GRIDMUL=1) — mbarrier phase carried across
+  tiles so mbar_wait(.,0) hung on an already-toggled barrier. Fix = RE-INIT mbarriers per tile iteration
+  (each tile starts at phase 0). First run hung 27min @100% util on `og17 2048 7 3 8 1`; killed, re-ran fixed.
+- GATE (g5): rel_rms = 0.000e+00 at EVERY S{2048,4096} x SWZ{0,2,4,8,16} x GRIDMUL{0,1,2,4} x NST{2,3}. PASS
+  (swizzle/persistent = pure tile-ORDER permutation, never a value).
+- MEASURED (median of 3, cuBLAS-TF32 roofline, ratio=cuBLAS/own, nSM=132):
+    OG16 baseline (MODE4): 2048 1.35-1.41x | 4096 1.63-1.64x.
+    swizzle sweep @GRIDMUL=2 NST=3: 2048 FLAT 1.36-1.38x (waves=1.00) | 4096 FLAT 1.58-1.65x (best SWZ=2 1.59x).
+    persist sweep @SWZ=8 NST=3: GRIDMUL>=2 NEUTRAL (4096 1.62x ~ GRIDMUL=0 1.66x); GRIDMUL=1 REGRESS (2.09x).
+    NST=2 cross-check @SWZ8 GRIDMUL2: 4096 own=283.6 TFLOP/s 1.52x = BEST D=4096 own-GEMM (+7% over 265.8).
+- RESULT: own-GEMM=cuBLAS NOT achieved. HONEST NEAR-PARITY TERMINAL. D=2048 saturated (1 wave -> nothing to
+  schedule); D=4096 swizzle FLAT (H100 50MB L2 already caches operands) + persistent NEUTRAL. The only mover
+  was OCCUPANCY (NST=2), not the scheduler. D=4096 residual = tail-wave quantization (3.88 waves/132 SMs)
+  IRREDUCIBLE without split-K; split-K changes FP32 accum order -> breaks bit-exact gate (excluded g5).
+- cuBLAS-multiple: 2048 1.36x (unchanged from BENCH-12) | 4096 1.52x BEST (was 1.62x), bit-exact throughout.
+  flame's no-library own-GEMM is parity-adjacent square-fitting / ~1.5-1.6x tail-quantized; the last residual
+  is exactly the bit-exactness flame refuses to trade. Verdict F-BENCH-13.txt.
