@@ -1,0 +1,35 @@
+F-BENCH-11 — warp-specialized TMA producer/consumer pipeline on the OG10 own-GEMM
+================================================================================
+STATUS: WIP (skeleton) — GPU build/measure pending on H100 (sm_90a).
+
+GOAL: push flame's OG10 own-GEMM (W10 composed-swizzle-decode TF32 wgmma, no-library,
+no-LLVM, bit-exact, ~70.7 TFLOP/s @2048, 6.09x off cuBLAS-TF32) CLOSER to cuBLAS via the
+W-ladder's known unexhausted residual lever = a fuller warp-specialized TMA producer/
+consumer pipeline (dedicated TMA-load + DECODE warpgroup feeding wgmma consumer
+warpgroup through DEEP smem multi-buffering / ring-staged DECODED gmma bands + mbarrier
+producer/consumer sync). The canonical CUTLASS/cuBLAS Hopper GEMM structure that W10's
+simpler single-shared-band K-loop lacks.
+
+LEVER (gemm_b11, MODE 6): 2 warpgroups. WG0=PRODUCER issues TMA (cp.async.bulk.tensor)
++ does the bit-exact composed swizzle->gmma DECODE into a RING of NGM gmma-band buffers
+ahead of the consumer; WG1=CONSUMER only runs wgmma over the ring band. Decode (smem
+permute, no tensor cores) of slab ki+1 overlaps wgmma (tensor cores) of slab ki — hiding
+the decode latency the W10 single shared band serialized. NSW = TMA swizzle ring depth,
+NGM = decoded gmma ring depth (deep multi-buffering).
+
+W7 PRIOR (CLOSED-NEG #2838): split the CONSUMER (2 wgmma WGs / 1 producer) found no lift
+because the wall was DECODE serialization, not consumer count. gemm_b11 attacks the right
+axis (ring-stage the DECODED band so decode overlaps wgmma).
+
+GATE (g5): bit-exact rel_rms vs cuBLAS-TF32 ref (<=3e-3, ideally 0 vs proven W10 numerics)
+FIRST; perf (TFLOP/s + cuBLAS-multiple, was 6.09x) only after. cuBLAS = ROOFLINE, NO
+superiority fabrication. HONEST: a remaining large residual is a legitimate terminal
+closed-neg pinning 'own-GEMM > cuBLAS' as the irreducible no-LLVM-purity frontier.
+
+=== MEASURED (H100 sm_90a) — PENDING ===
+  W10 baseline @2048 : own=___ TFLOP/s  cuBLAS=___  ratio=___x  rel_rms=___
+  W10 baseline @4096 : own=___ TFLOP/s  cuBLAS=___  ratio=___x  rel_rms=___
+  B11 warp-spec @2048: own=___ TFLOP/s  cuBLAS=___  ratio=___x  rel_rms=___  (best NSW/NGM=___)
+  B11 warp-spec @4096: own=___ TFLOP/s  cuBLAS=___  ratio=___x  rel_rms=___  (best NSW/NGM=___)
+  CLOSE: 6.09x -> ___x   bit-exact held: ___   own-GEMM>cuBLAS reachable: ___ / honest-closed-neg
+  OG10 bench-cell vs torch: ___
