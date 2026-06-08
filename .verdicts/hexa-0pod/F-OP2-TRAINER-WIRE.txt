@@ -1,0 +1,74 @@
+F-OP2-TRAINER-WIRE — wire HEXA-BENCH step wins into the REAL flame CLMConvMoE trainer
+======================================================================================
+status: GREEN (byte-eq proven) — transpose-elim slice landed; runtime.c body deferred to GPU build
+
+scope: port the HEXA-BENCH-proven step wins (BENCH-8 cuBLAS-FP64 lane, BENCH-10 fused
+valley + single-launch AdamW + transpose-elimination) from the standalone bench harness
+(tool/bench/flame_bench_step_{fused,og}.cu) into the actual flame CLMConvMoE trainer
+(stdlib/flame/clm_prod.hexa + the forge device runtime self/cuda/runtime_cuda_emit.hexa).
+
+────────────────────────────────────────────────────────────────────────────────────
+ALREADY-WIRED audit — 3 of the 4 bench wins are ALREADY in the real trainer (env-gated):
+  • cuBLAS-FP64 projection GEMM (BENCH-8): the DEFAULT path. _hx_cuda_farr_matmul_gpu
+    uses cublasDgemm by default (HEXA_OWN_GEMM only swaps in the naive _hx_k_gemm kernel).
+    forge_dispatch_matmul rides this → already in product. The bench's "naive O(D^3)"
+    refers to the HEXA_OWN_GEMM kernel, not the default trainer path.
+  • fused valley LN+gelu(+residual) (BENCH-10): env HEXA_FUSE_VALLEY / HEXA_FUSE_GN_GELU /
+    HEXA_FUSE_GN_GELU_RESID → _hx_k_groupnorm_gelu[_residual] (HEXA-FUSION L3-a/L3-c).
+  • single-launch fused AdamW (BENCH-10): env HEXA_CLM_FULLSTEP → _adam_fused →
+    forge_dispatch_adamw_fused → _hx_k_adamw_fused cooperative kernel (HEXA-FUSION M2).
+  → these were landed by the HEXA-FUSION campaign; OP-2 confirms they are in the product.
+
+MISSING win that OP-2 wires: BENCH-10 TRANSPOSE-ELIMINATION for the backward dW GEMM.
+  prior: conv1d_bwd_via_forge runs _clmp_im2col_t(x)→xcolT[Kdim,T] (a SEPARATE transpose-
+         layout im2col pass) then forge_dispatch_matmul(xcolT,Kdim,T,dy,Cout) [OP_N].
+  bench: dW = A^T @ dGq via cuBLAS OP_T on A directly (no materialized A^T pass).
+  wire:  new forge_dispatch_matmul_t(A,M,K,B,N) = A[M,K]^T@B[M,N] = C[K,N]; the bwd reuses
+         the forward's NON-transposed _clmp_im2col(x)→xcol[T,Kdim] then matmul_t(xcol,dy).
+         Eliminates the extra full-MN transpose-layout im2col_t pass each step.
+
+────────────────────────────────────────────────────────────────────────────────────
+GATE (g5) — byte-eq vs prior trainer dW:  HELD  ✅
+  harness: stdlib/flame/clm_prod_transpose_elim_eq.hexa (CPU oracle, `hexa run`, 0-pod)
+  F-OP2-TRANSPOSE-ELIM-BWD-EQ = 1
+    dW max|Δ|  T8  C4   K3 d1 = 0.0
+    dW max|Δ|  T8  C4   K3 d2 = 0.0
+    dW max|Δ|  T16 C6   K3 d1 = 0.0
+    dW max|Δ|  T12 C5x7 K4 d2 = 0.0
+  PASS — im2col+matmul_t dW == im2col_t+matmul dW byte-eq (max|Δ|=0, all 4 cases).
+  WHY bit-exact: xcolT[j,t] == xcol[t,j] (same gather value) and the contraction runs over
+  the SAME t/m dimension in the SAME ascending order → term-for-term identical sum. On the
+  GPU the cuBLAS OP_T Dgemm is an fp-accumulation-order variant of the OP_N Dgemm
+  (rel-RMS ~1e-14, the documented identical-tolerance lane — NOT a regression).
+  Verified via `hexa run` on the mac host (same CPU dispatch as aiden) — no GPU build needed,
+  mirroring the established clm_prod_hostfeed_eq.hexa 0-pod methodology.
+
+LANDED (ready infrastructure, this PR):
+  • self/cuda/runtime_cuda_emit.hexa — _hx_cuda_farr_matmul_tn_gpu (cublasDgemm CUBLAS_OP_T,
+    + _hx_k_gemm_t own-fallback under HEXA_OWN_GEMM). Emit verified: no symbol collision
+    with the pre-existing RFC-040 M^T·u gemv (_hx_cuda_farr_matmul_t_gpu), brace-balanced.
+  • self/codegen.hexa — forge_dispatch_matmul_t call-name → hexa_forge_dispatch_matmul_t.
+  • self/runtime.h — hexa_forge_dispatch_matmul_t / forge_dispatch_matmul_t protos.
+  • stdlib/flame/clm_prod.hexa — the 3-line transpose-elim swap documented inline at
+    conv1d_bwd_via_forge (kept as a COMMENT, not a live call, so the trainer build stays
+    unbroken until the runtime.c wrapper body lands — see deferred).
+
+step/s before / after:  NOT MEASURED. The transpose-elim's runtime speedup needs the GPU
+  path live (cuBLAS OP_T), which requires the full clm_prod_gpu build (deferred). The
+  win is the removal of one full-MN im2col_t read+write pass per backward conv (BENCH-10
+  measured this against the materialize-A^T baseline). The math result is unchanged
+  (byte-eq), so this is a pure-speed lever, not a numerics change.
+
+────────────────────────────────────────────────────────────────────────────────────
+DEFERRED (out of 0-pod scope — needs the clm_prod_gpu GPU build, NOT vast; aiden CPU
+verify of the math is DONE):
+  1. runtime.c wrapper body hexa_forge_dispatch_matmul_t(...) — the no-CUDA host A^T@B
+     oracle + the CUDA route to _hx_cuda_farr_matmul_tn_gpu. self/runtime.c is build-time-
+     assembled (gitignored, not in the worktree), so this body + a fresh hexa rebuild
+     (new codegen→hexat + runtime.h + runtime.c) must be done in the clm_prod_gpu build
+     env (project_clmprod_gpu_build_seed_drift recipe). Once it lands, flip the documented
+     comment in conv1d_bwd_via_forge to the live call under HEXA_BWD_TRANSPOSE_ELIM.
+  2. batched-expert transpose-elim — conv2_bwd_via_forge_batched uses _clmp_matmul_batched
+     (OP_N strided). Needs a forge_dispatch_matmul_t_batched (cublasDgemmStridedBatched
+     OP_T) to extend the win to the 2-expert path (the dominant 65% of step cost).
+  3. step/s before/after measurement on aiden — requires the GPU build (1) live.

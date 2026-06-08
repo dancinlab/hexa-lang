@@ -1018,6 +1018,26 @@ HexaVal hexa_forge_dispatch_matmul(HexaVal a_v, HexaVal m_v, HexaVal k_v,
 HexaVal forge_dispatch_matmul(HexaVal a_v, HexaVal m_v, HexaVal k_v,
                               HexaVal b_v, HexaVal n_v);               /* runtime.c — RFC 050 seam */
 
+/* ── HEXA-0POD OP-2: transpose-elim matmul (BENCH-10) ───────────────
+ * forge_dispatch_matmul_t(A, M, K, B, N) -> new farr [K·N]:
+ *   dW_flat[K,N] = A[M,K]^T @ B[M,N], contraction over the shared M dim.
+ * Ports the BENCH-10 transpose-elimination into the real flame trainer:
+ * conv1d_bwd_via_forge previously ran a SEPARATE transpose-layout im2col
+ * (_clmp_im2col_t -> xcolT[Kdim,T]) then an OP_N GEMM; under env
+ * HEXA_BWD_TRANSPOSE_ELIM the bwd instead reuses the forward's non-
+ * transposed xcol[T,Kdim] and calls this, which lets cuBLAS read A
+ * transposed for free (Dgemm OP_T) — the extra full im2col_t pass is gone.
+ * CUDA build -> _hx_cuda_farr_matmul_tn_gpu (cublasDgemm CUBLAS_OP_T on A,
+ * no materialized A^T); no-CUDA -> a byte-eq host A^T@B oracle (m-ascending
+ * accumulation == the prior im2col_t+OP_N order, max|Δ|=0 per
+ * clm_prod_transpose_elim_eq.hexa). Same bare-symbol seam as
+ * forge_dispatch_matmul. Body (SSOT): self/runtime.c (wrapper) +
+ * self/cuda/runtime_cuda.c (emit: self/cuda/runtime_cuda_emit.hexa). */
+HexaVal hexa_forge_dispatch_matmul_t(HexaVal a_v, HexaVal m_v, HexaVal k_v,
+                                     HexaVal b_v, HexaVal n_v);        /* runtime.c — OP-2 transpose-elim */
+HexaVal forge_dispatch_matmul_t(HexaVal a_v, HexaVal m_v, HexaVal k_v,
+                                HexaVal b_v, HexaVal n_v);             /* runtime.c — OP-2 transpose-elim seam */
+
 /* ── LEVER (b): strided-batched FP64 matmul (forge GPU util) ────────
  * `forge_dispatch_matmul_batched(a_all, M, K, b_all, N, batch, c_all)`
  * — 7-arg builtin. ONE strided-batched GEMM over `batch` contiguous

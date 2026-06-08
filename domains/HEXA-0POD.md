@@ -20,11 +20,17 @@ loop targets what the consumer card + code can carry.
   3.2-6.9x -> ~1.0-1.15x (target <2.5x beaten). Layout/load-vectorization = dominant lever (+3.1-3.4x); cp.async
   modest top-up; the 128x64 register tile PLATEAUED (regressed on consumer card, not shipped). Verdict
   .verdicts/hexa-0pod/F-OP1-SM120-OWNGEMM.txt.
-- [ ] **OP-2 — wire bench-proven step wins into the REAL flame trainer (forge code + aiden verify)** — the
+- [x] **OP-2 — wire bench-proven step wins into the REAL flame trainer (forge code + aiden verify)** — the
   HEXA-BENCH wins live only in the bench harness; port the cuBLAS-FP64 lane + fused valley (LN+gelu) +
   single-launch AdamW + transpose-elimination into the actual flame CLMConvMoE trainer step so the real
   product gets faster. Gate: byte-eq vs prior trainer output (max|d|=0) on aiden; the trainer improves, not
-  just a benchmark. Pure code + aiden verify, 0-pod.
+  just a benchmark. Pure code + aiden verify, 0-pod. DONE: audit found 3/4 wins (cuBLAS-FP64 default,
+  fused valley HEXA_FUSE_*, single-launch AdamW HEXA_CLM_FULLSTEP) ALREADY in the trainer from HEXA-FUSION.
+  The missing BENCH-10 TRANSPOSE-ELIM is wired: GPU kernel _hx_cuda_farr_matmul_tn_gpu (cuBLAS OP_T) +
+  forge_dispatch_matmul_t codegen/proto LANDED; byte-eq PROVEN max|Δ|=0 (4 cases) via the CPU oracle
+  clm_prod_transpose_elim_eq.hexa on `hexa run` (0-pod, no GPU). The live trainer swap + step/s measure
+  are deferred to the GPU build (runtime.c wrapper body is build-time-assembled). Verdict
+  .verdicts/hexa-0pod/F-OP2-TRAINER-WIRE.txt.
 - [ ] **OP-3 — BF16 sm_120 own-GEMM (aiden)** — extend the sm_120 own-GEMM to BF16 (mma.sync bf16), measure
   vs cuBLAS-BF16, bit-faithful. Free aiden GPU.
 - [ ] **OP-4 — flame fused-step on aiden: extend shape/dtype coverage** — run the BENCH-10 fused step across
@@ -47,6 +53,18 @@ loop targets what the consumer card + code can carry.
   unchanged (accumulation order preserved; pure schedule/layout). Free aiden GPU. The register-tile lever
   (128x64) is CLOSED-NEGATIVE on the consumer card — do NOT re-attempt it; the win is K-pipeline depth + the
   epilogue, not the per-CTA output tile.
+- **OP-2b — land the runtime.c hexa_forge_dispatch_matmul_t wrapper body + flip the trainer to the live
+  transpose-elim call.** OP-2 landed the GPU kernel (_hx_cuda_farr_matmul_tn_gpu, cuBLAS OP_T), codegen
+  mapping, runtime.h proto, and proved dW byte-eq (max|Δ|=0). The remaining piece is the runtime.c wrapper
+  body (no-CUDA host A^T@B oracle + CUDA route) — self/runtime.c is build-time-assembled (gitignored), so it
+  + a fresh hexa rebuild must be done in the clm_prod_gpu GPU build env (project_clmprod_gpu_build_seed_drift).
+  Then flip the documented comment in conv1d_bwd_via_forge to the live forge_dispatch_matmul_t call under
+  HEXA_BWD_TRANSPOSE_ELIM, and measure step/s before/after on aiden. NOT vast — the small-config build runs on
+  the pool 5070.
+- **OP-2c — batched-expert transpose-elim (forge_dispatch_matmul_t_batched, cublasDgemmStridedBatched OP_T).**
+  conv2_bwd_via_forge_batched (the 2-expert path, ~65% of step cost) still uses the OP_N strided
+  _clmp_matmul_batched. Extend the OP_T transpose-elim to the batched dW GEMM to reach the dominant path.
+  Byte-eq gate identical (max|Δ|=0 to the im2col_t+OP_N batched reference). Free aiden GPU.
 
 - **OP-5b — forge runtime warnings-as-errors CI gate (0-GPU).** OP-5 cleaned the one `-Wcomment` defect in the
   forge/runtime header surface and confirmed (by sweep) it was the only one. Lock it in: add a tiny CI step that

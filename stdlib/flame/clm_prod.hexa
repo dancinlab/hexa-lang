@@ -235,6 +235,17 @@ fn conv1d_bwd_via_forge(x: int, w: int, dy: int,
     let xcolT = t_zeros(Kdim * T)
     _clmp_im2col_t(x, xcolT, T, Cin, K, dil)
     // dW: dW_flat[Kdim, Cout] = xcolT[Kdim,T] @ dy[T,Cout] (forge GEMM)
+    //
+    // HEXA-0POD OP-2 (BENCH-10 transpose-elim) — READY but DEFERRED to the GPU
+    // build (needs the runtime.c hexa_forge_dispatch_matmul_t wrapper body, which
+    // is build-time-assembled, not in this worktree). When that body lands, swap
+    // the two lines above for the transpose-elim path under HEXA_BWD_TRANSPOSE_ELIM:
+    //     let xcol = t_zeros(T * Kdim)
+    //     _clmp_im2col(x, xcol, T, Cin, K, dil)           // SAME layout as the fwd
+    //     dW_flat = forge_dispatch_matmul_t(xcol, T, Kdim, dy, Cout)  // cuBLAS OP_T
+    // which drops the separate transpose-layout im2col_t pass entirely. Byte-eq to
+    // this path proven max|Δ|=0 in clm_prod_transpose_elim_eq.hexa. The GPU kernel
+    // (_hx_cuda_farr_matmul_tn_gpu), codegen mapping, and runtime.h proto are landed.
     let dW_flat = forge_dispatch_matmul(xcolT, Kdim, T, dy, Cout)
     let mut co = 0
     while co < Cout {
