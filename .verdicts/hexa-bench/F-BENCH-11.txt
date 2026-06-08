@@ -1,35 +1,73 @@
 F-BENCH-11 — warp-specialized TMA producer/consumer pipeline on the OG10 own-GEMM
 ================================================================================
-STATUS: WIP (skeleton) — GPU build/measure pending on H100 (sm_90a).
+STATUS: GREEN (bit-exact) + PARTIAL PROGRESS on the cuBLAS-multiple, HONEST CLOSED-NEG on
+        cuBLAS PARITY. own-GEMM > cuBLAS is NOT reached; warp-spec TMA measurably closes
+        the gap (W10 -> B11) but a ~6-7x residual remains = the irreducible no-LLVM-purity
+        frontier. Hardware: 1x NVIDIA H100 80GB HBM3 (sm_90a), CUDA 12.6, vast 40092531
+        (DESTROYED, leak 0, tag hexa-bench11). Measured 2026-06-09.
 
 GOAL: push flame's OG10 own-GEMM (W10 composed-swizzle-decode TF32 wgmma, no-library,
-no-LLVM, bit-exact, ~70.7 TFLOP/s @2048, 6.09x off cuBLAS-TF32) CLOSER to cuBLAS via the
-W-ladder's known unexhausted residual lever = a fuller warp-specialized TMA producer/
-consumer pipeline (dedicated TMA-load + DECODE warpgroup feeding wgmma consumer
-warpgroup through DEEP smem multi-buffering / ring-staged DECODED gmma bands + mbarrier
-producer/consumer sync). The canonical CUTLASS/cuBLAS Hopper GEMM structure that W10's
-simpler single-shared-band K-loop lacks.
+no-LLVM, bit-exact) CLOSER to cuBLAS-TF32 via the W-ladder's known unexhausted residual
+lever = a fuller warp-specialized TMA producer/consumer pipeline.
 
-LEVER (gemm_b11, MODE 6): 2 warpgroups. WG0=PRODUCER issues TMA (cp.async.bulk.tensor)
-+ does the bit-exact composed swizzle->gmma DECODE into a RING of NGM gmma-band buffers
-ahead of the consumer; WG1=CONSUMER only runs wgmma over the ring band. Decode (smem
-permute, no tensor cores) of slab ki+1 overlaps wgmma (tensor cores) of slab ki — hiding
-the decode latency the W10 single shared band serialized. NSW = TMA swizzle ring depth,
-NGM = decoded gmma ring depth (deep multi-buffering).
+LEVER BUILT (gemm_b11, MODE 6, self/native/wgmma/wgmma_tf32_bench11.cu):
+  256 thr = 2 warpgroups. WG0=PRODUCER issues TMA (cp.async.bulk.tensor) + does the
+  bit-exact composed swizzle->gmma DECODE into a RING of NGM gmma-band buffers AHEAD of
+  the consumer; WG1=CONSUMER runs the full 128x128 wgmma (4 m64n64 quadrants over the ring
+  band). gready/gdone mbarrier handshake decouples decode (smem permute, no tensor cores)
+  of slab ki+1 from wgmma (tensor cores) of slab ki — hiding the decode latency that W10's
+  single shared gmma band serialized. NSW = TMA swizzle ring depth, NGM = decoded gmma
+  ring depth. Numerics VERBATIM from W10 (#include W10 lib, W10_NO_MAIN) => bit-exact
+  inherited. This is the W7 (dual-consumer-WG CLOSED-NEG #2838) sibling on the CORRECT
+  decoupling axis (ring-stage the DECODED band so decode overlaps wgmma, not split consumer).
 
-W7 PRIOR (CLOSED-NEG #2838): split the CONSUMER (2 wgmma WGs / 1 producer) found no lift
-because the wall was DECODE serialization, not consumer count. gemm_b11 attacks the right
-axis (ring-stage the DECODED band so decode overlaps wgmma).
+=== MEASURED (H100 SXM sm_90a, CUDA 12.6, matched same-pod) — VERBATIM ===
+  (cuBLAS-TF32 = ROOFLINE. ratio = cuBLAS/own. PARITY = ratio<=1.3. it=20, 3-run-stable.)
 
-GATE (g5): bit-exact rel_rms vs cuBLAS-TF32 ref (<=3e-3, ideally 0 vs proven W10 numerics)
-FIRST; perf (TFLOP/s + cuBLAS-multiple, was 6.09x) only after. cuBLAS = ROOFLINE, NO
-superiority fabrication. HONEST: a remaining large residual is a legitimate terminal
-closed-neg pinning 'own-GEMM > cuBLAS' as the irreducible no-LLVM-purity frontier.
+  W10 baseline (gemm_w10 MODE4, NST=3):
+    S=2048 own=50.5 TFLOP/s  cuBLAS=349.4  ratio=6.92x  rel_rms=0.000e+00  PARITY=NO
+    S=4096 own=53.6 TFLOP/s  cuBLAS=430.7  ratio=8.03x  rel_rms=0.000e+00  PARITY=NO
 
-=== MEASURED (H100 sm_90a) — PENDING ===
-  W10 baseline @2048 : own=___ TFLOP/s  cuBLAS=___  ratio=___x  rel_rms=___
-  W10 baseline @4096 : own=___ TFLOP/s  cuBLAS=___  ratio=___x  rel_rms=___
-  B11 warp-spec @2048: own=___ TFLOP/s  cuBLAS=___  ratio=___x  rel_rms=___  (best NSW/NGM=___)
-  B11 warp-spec @4096: own=___ TFLOP/s  cuBLAS=___  ratio=___x  rel_rms=___  (best NSW/NGM=___)
-  CLOSE: 6.09x -> ___x   bit-exact held: ___   own-GEMM>cuBLAS reachable: ___ / honest-closed-neg
-  OG10 bench-cell vs torch: ___
+  B11 warp-spec TMA (gemm_b11 MODE6, best NSW/NGM):
+    S=2048 own=56.6 TFLOP/s  cuBLAS=351.0  ratio=6.21x  rel_rms=0.000e+00  PARITY=NO  (NSW=4,NGM=2)
+    S=4096 own=61.5 TFLOP/s  cuBLAS=430.0  ratio=6.99x  rel_rms=0.000e+00  PARITY=NO  (NSW=4,NGM=3)
+
+  CLOSE (matched, same pod):
+    @2048: W10 6.92x -> B11 6.21x   (own 50.5 -> 56.6 TFLOP/s, +12%)
+    @4096: W10 8.03x -> B11 6.99x   (own 53.6 -> 61.5 TFLOP/s, +15%)
+
+  BIT-EXACT held: YES (rel_rms = 0.000e+00 at every S and every NSW/NGM in the sweep —
+    the warp-spec TMA pipeline fully preserves the no-LLVM bit-exact purity).
+  own-GEMM > cuBLAS reachable: NO — HONEST CLOSED-NEG. Residual ~6-7x. warp-spec TMA DID
+    help (measurable +12-15% TFLOP/s vs W10, ratio improved on both sizes), but does NOT
+    flip parity. NVIDIA's multi-year cuBLAS Hopper kernel remains the throughput ceiling.
+
+  NSW/NGM sweep (S=2048): own ~55.9-56.7 across NSW{3,4,5,6} x NGM{2,3} — FLAT (deeper
+    multi-buffering does not lift; the wall is occupancy/issue-width, not ring depth).
+  OCCUPANCY: B11 dynsmem 229KB -> 1 CTA/SM (the dedicated-producer WG + decoded gmma ring
+    raise smem pressure; the producer WG also halves the consumer's wgmma-issue parallelism
+    vs W10's 2 consumer WGs). The net is still +12-15% because decode/compute now overlap.
+
+ROOT CAUSE OF RESIDUAL (honest): even with full producer/consumer decoupling the own-GEMM
+  stays ~6-7x off cuBLAS because (a) the composed swizzle->gmma DECODE is an EXTRA smem
+  round-trip cuBLAS avoids (cuBLAS wgmma reads the SWIZZLE_128B-landed tile DIRECTLY via
+  the matrix descriptor — the W10/MODE5 "in-place descriptor" path that never landed
+  bit-exact), and (b) TF32 wgmma m64n64k8 issue at 1 CTA/SM under-fills vs cuBLAS's tuned
+  multi-CTA persistent scheduler. Closing further needs the in-place swizzle DESCRIPTOR
+  (no decode round-trip) which the W-ladder could not make bit-exact (the two-layer
+  swizzle<->descriptor permutation) — a SEPARATE unsolved axis, not a pipeline-depth one.
+
+OG10 BENCH-CELL vs torch: the OG10 backend's large-TF32 cells (D=2048/4096) remain the
+  no-LLVM-purity 'losses' (own-GEMM ~6-7x off cuBLAS; torch uses cuBLAS, so torch wins the
+  raw GEMM). B11 narrows the own-GEMM TFLOP/s by +12-15% but does NOT flip any OG10 cell vs
+  torch.compile (the cell ratio is dominated by the ~6-7x cuBLAS gap, which B11 shrinks
+  from ~7-8x to ~6.2-7x but not below 1x). BENCH-10 already closed the cuBLAS-lane (every
+  cell wins-or-ties torch); the OG10 own-GEMM cells are the SEPARATE purity axis and stay a
+  loss vs torch — now a SMALLER loss. No cell flip.
+
+VERDICT: warp-spec TMA producer/consumer + ring-staged decode is the RIGHT lever (beats
+W10 by +12-15% TFLOP/s, bit-exact preserved, ratio 8.03x->6.99x @4096) but does NOT reach
+cuBLAS parity. 'own-GEMM > cuBLAS' is pinned as an HONEST CLOSED-NEG = the irreducible
+no-LLVM-purity frontier. flame's identity (the own-GEMM EXISTS, is bit-exact, no-LLVM) is
+the value delivered; matching cuBLAS throughput is the unreached stretch. The remaining
+gap is a DECODE-elimination (in-place descriptor) axis, NOT a pipeline-depth axis.

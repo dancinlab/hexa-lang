@@ -199,3 +199,19 @@ leak-0 tag-checked; foreign rtsc-li2mgh16-anchor untouched).
   own-GEMM losses are the separate no-LLVM-purity axis, not the cuBLAS speed lane.
 - Verdict .verdicts/hexa-bench/F-BENCH-10.txt (full matrix + root-cause + raw [RESULT] verbatim);
   files tool/bench/flame_bench_step_fused.cu (-DFUSED) + tool/bench/run_bench10.sh.
+
+## BENCH-11 — warp-spec TMA producer/consumer own-GEMM (2026-06-09, H100 SXM sm_90a)
+- Built gemm_b11 (wgmma_tf32_bench11.cu, MODE6): dedicated TMA-producer WG0 + ring-staged
+  composed swizzle->gmma DECODE (NGM-deep) feeding a wgmma consumer WG1 (full 128x128 = 4
+  m64n64 quadrants) via gready/gdone mbarrier handshake. Decode of slab ki+1 overlaps wgmma
+  of slab ki. Numerics VERBATIM from W10 (#include W10 lib) => bit-exact inherited.
+- vast 40092531 (H100 80GB HBM3, CUDA 12.6), labeled hexa-bench11, DESTROYED leak-0.
+- MEASURED (matched same-pod, it=20, 3-run-stable, cuBLAS-TF32=roofline):
+    W10 @2048 50.5 TFLOP/s 6.92x  | B11 @2048 56.6 TFLOP/s 6.21x  (+12%, rel_rms=0)
+    W10 @4096 53.6 TFLOP/s 8.03x  | B11 @4096 61.5 TFLOP/s 6.99x  (+15%, rel_rms=0)
+- RESULT: warp-spec TMA IS the right lever (+12-15% TFLOP/s, ratio 8.03x->6.99x @4096),
+  bit-exact preserved, but PARITY=NO (own-GEMM ~6-7x off cuBLAS). HONEST CLOSED-NEG on
+  'own-GEMM>cuBLAS' = irreducible no-LLVM-purity frontier. NSW/NGM sweep FLAT (wall =
+  occupancy/issue-width + the decode smem round-trip cuBLAS avoids, NOT ring depth). The
+  residual is a DECODE-elimination (in-place descriptor) axis, separate + unsolved. No OG10
+  cell flips vs torch. Verdict F-BENCH-11.txt.

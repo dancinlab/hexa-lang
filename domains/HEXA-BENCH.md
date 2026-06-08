@@ -170,16 +170,18 @@ no-LLVM/reproducible, NOT step-rate, so a large gap is EXPECTED and fine.
   D=2048/B=8 NO regression (all WIN; FP64 even flips 1.060->0.914x). BEAT-ALL on the cuBLAS speed lane =
   ACHIEVED on-pod (every cell wins-or-ties torch.compile). Last beat-all lever — frontier closed.
 
-- [ ] **BENCH-11 — push the OG10 own-GEMM toward cuBLAS (the no-LLVM-purity axis, hardest frontier)** —
-  the ONLY remaining unbeaten axis: flame's own hand-written no-library GEMM (OG10, W10 TF32-wgmma, 70.7
-  TFLOP/s @2048, 6.09x off cuBLAS) loses to cuBLAS at large TF32. Apply the W-ladder's known residual lever
-  = warp-specialized TMA producer/consumer pipeline (dedicated TMA-load warpgroup feeding wgmma consumer
-  warpgroups, deeper smem multi-buffering) to push past the 70.7 TFLOP/s plateau toward cuBLAS. Re-measure
-  the OG10 bench cells (D={2048,4096} x B={1,8} TF32) vs cuBLAS + torch. Gate (g5): bit-exact own-GEMM
-  (rel-RMS vs FP64 ref) + new TFLOP/s + cuBLAS-multiple. HONEST: beating cuBLAS with a no-library kernel is
-  an NVIDIA-scale multi-year effort; the W-ladder (W1-15) plateaued at 6.09x. Measure how much warp-spec TMA
-  closes it (e.g. 6.09x -> Nx) + whether any OG10 cell flips; a large residual is an honest closed-neg
-  pinning 'own-GEMM>cuBLAS' as the irreducible no-LLVM-purity frontier. H100 (OG10 = Hopper sm_90a).
+- [x] **BENCH-11 — push the OG10 own-GEMM toward cuBLAS (the no-LLVM-purity axis, hardest frontier)** —
+  DONE 2026-06-09 (H100 SXM sm_90a, vast 40092531 destroyed leak-0). Built gemm_b11 (MODE6,
+  self/native/wgmma/wgmma_tf32_bench11.cu): warp-specialized TMA-producer WG + ring-staged composed-decode
+  feeding a wgmma consumer WG via gready/gdone mbarrier (decode of slab ki+1 overlaps wgmma of slab ki).
+  BIT-EXACT held (rel_rms=0.000e+00 at every S and every NSW/NGM). MATCHED same-pod: @2048 W10 50.5 TFLOP/s
+  6.92x -> B11 56.6 6.21x (+12%); @4096 W10 53.6 8.03x -> B11 61.5 6.99x (+15%). warp-spec TMA IS the right
+  lever (+12-15% TFLOP/s, ratio 8.03x->6.99x @4096) but PARITY=NO — own-GEMM stays ~6-7x off cuBLAS.
+  HONEST CLOSED-NEG on 'own-GEMM>cuBLAS' = the irreducible no-LLVM-purity frontier; the residual is a
+  DECODE-elimination (in-place swizzle descriptor) axis, NOT a pipeline-depth one (NSW/NGM sweep FLAT at
+  ~56 TFLOP/s). No OG10 cell flips vs torch (the ~6-7x cuBLAS gap shrinks but does not cross 1x).
+  Verdict .verdicts/hexa-bench/F-BENCH-11.txt. (orig spec: 70.7/6.09x was a faster-clocked prior pod; on
+  THIS pod the matched W10 baseline is 50.5/6.92x @2048 — the W10->B11 delta is the apples-to-apples result.)
 
 ## honest framing (g5)
 
