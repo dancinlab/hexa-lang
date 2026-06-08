@@ -29,8 +29,14 @@ loop targets what the consumer card + code can carry.
   vs cuBLAS-BF16, bit-faithful. Free aiden GPU.
 - [ ] **OP-4 — flame fused-step on aiden: extend shape/dtype coverage** — run the BENCH-10 fused step across
   more (D,T,B,dtype) on the free 5070, find + document where flame wins/loses on consumer hardware.
-- [ ] **OP-5 — forge robustness/correctness hardening (local, 0-GPU)** — pick a forge code-quality / numerical-
+- [x] **OP-5 — forge robustness/correctness hardening (local, 0-GPU)** — pick a forge code-quality / numerical-
   robustness improvement (error paths, dtype edge cases, determinism guards) verifiable without a GPU.
+  DONE — fixed the `self/runtime.h:422-423` `'/*' within block comment` `-Wcomment` warning (the `native/*.c`
+  glob inside a `/* … */` block formed a nested `/*` token). Minimal comment-only fix (`native/ *.c`, +2/-2):
+  `clang -fsyntax-only -Wcomment -x c self/runtime.h` 2 warnings → 0, no declaration/codegen/behavior change.
+  Repo-wide `-Wcomment` + `-Wextra-tokens` sweep over ALL checked-in C/H/CU/CUH + forge-emitted wrappers +
+  emit-string `.hexa` sources found NO other genuine hits (one `#pragma once in main file` artifact correctly
+  ignored, not "fixed"). All behavior-preserving. Verdict .verdicts/hexa-0pod/F-OP5-FORGE-HARDEN.txt.
 
 ## deferred (0-pod follow-ups surfaced by the loop — self-feed)
 
@@ -41,6 +47,17 @@ loop targets what the consumer card + code can carry.
   unchanged (accumulation order preserved; pure schedule/layout). Free aiden GPU. The register-tile lever
   (128x64) is CLOSED-NEGATIVE on the consumer card — do NOT re-attempt it; the win is K-pipeline depth + the
   epilogue, not the per-CTA output tile.
+
+- **OP-5b — forge runtime warnings-as-errors CI gate (0-GPU).** OP-5 cleaned the one `-Wcomment` defect in the
+  forge/runtime header surface and confirmed (by sweep) it was the only one. Lock it in: add a tiny CI step that
+  `clang -fsyntax-only -Wcomment -Werror`-checks the checked-in forge/runtime C/H/CU headers (`self/runtime.h`,
+  `self/forge/*.h`, `self/native/*.h`, `self/cuda/*.cu|*.c` wrappers) so a regression can't reland. Pure build-
+  level gate, no kernel run — 0-GPU. (Header-standalone `#pragma once`/undefined-CUDA-type artifacts must be
+  excluded or the headers compiled via their including TU, not `-x c` standalone.)
+- **OP-5c — forge error-path / dtype-edge / determinism hardening (NEEDS GPU — deferred out of 0-GPU scope).**
+  The robustness improvements OP-5 originally listed (error paths, dtype edge cases, determinism guards in the
+  forge runtime) cannot be gated byte-eq without running a kernel; they belong to a GPU round (aiden 5070), not
+  this 0-pod pass. Logged here so the loop doesn't re-attempt them as "0-GPU".
 
 ## honest framing (g5)
 
