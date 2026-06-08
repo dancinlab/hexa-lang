@@ -66,3 +66,34 @@ footprint). The ~3x break is FAST-3's batch>1 — this verified kernel is its su
 split makes TF32+BF16 first-class; baseline harness already wired, just vary M=B*T).
 
 Pod 39996767 (tag hexa-fast2 confirmed) DESTROYED, leak 0. PR base main.
+
+## 2026-06-08 — FAST-3 batch sweep 🔴 CLOSED-NEGATIVE: ~3x cap SURVIVES the full 3-combo (TERMINAL)
+
+THE DECISIVE TEST. Ran FAST-2's verified fused whole-step megakernel (TF32 AND BF16, kernel math verbatim)
+across batch B=1,2,4,8,16,32 (M=B*T) on a real H100 80GB HBM3 (vast 40003012, tag hexa-fast3, DESTROYED
+leak-0, tag-confirmed). flame step D=1536 T=512, 50 iters/B. Verdict: F-FAST-3-BATCH.txt.
+
+DOES fused × TF32/BF16 × batch>1 BREAK ~3x?  ==> NO. Full-step fused-vs-separate SELF-speedup is FLAT
+~1.00x at EVERY batch (TF32 0.995–1.019x · BF16 0.996–1.025x). It never even reaches ~3x. The #2913 ~3x
+batch-fill cap SURVIVES the full 3-lever combination → ~3x is TERMINAL for the kernel-fusion axis.
+
+Gates held perfectly where they could: CORRECTNESS rel-RMS=0.0e+00 at every B both dtypes (pure structural
+transform, fixed accum order); DETERMINISM run-to-run max|Δ|=0.0e+00 at every B (atomic-free) — NO B>1 seam.
+ONE-WAVE-FIT=NO already at B=1: the bwd GEMM gridNeed=K*N tiles=9216 ≫ 528 one-wave ceiling and is FIXED in
+B → the megakernel never fits one cooperative wave at the real flame size; it grid-strides 6→187 waves.
+FAST-1's "~11x batch headroom before 528 binds" is REFUTED for the real flame step (the bwd tile count, not
+batch, blows the ceiling).
+
+ROOT CAUSE (honest, g5): the hypothesis assumed an 86.8% between-op host-glue idle gap for fusion to fill.
+THAT GAP IS ABSENT in a device-resident separate baseline — 5 back-to-back grid-stride kernels, no host glue,
+each already saturating the H100 (util ~97-98% from B=1, mean≈median, never ~0%). With no idle valley, fusion
+only trades ~5 kernel launches for ~5 grid.sync barriers (a wash) → ~1.00x is the CORRECT result for a
+saturated DAG. Batch>1 scales work linearly (ms ∝ B); no under-fill existed to relax. The #2913 ~3x was an
+INTERPRETER-glue artifact (t_get/t_set + eager AdamW), which neither path here pays. % of ~1656x torch gap
+closed by FAST-3 = 0%.
+
+flame identity INTACT and never at stake (byte-exact rel-RMS 0 · no-LLVM · deterministic-at-dtype ·
+theorem-cite); FAST is purely additive — this fusion's additive value is ~0 at the saturated regime. CAMPAIGN
+CONCLUSION: kernel-fusion is EXHAUSTED on this axis; the real remaining lever is INTERPRETER-ELIMINATION
+(native step) + batch>1 at the eager boundary (per reference_megastep_research + flame_h100_h200_closeout),
+NOT GPU kernel fusion. FAST-4/FAST-5 are moot for breaking ~3x (FAST-5 was gated on FAST-3 winning).

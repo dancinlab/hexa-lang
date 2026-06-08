@@ -48,9 +48,19 @@ genuinely-UNTESTED fix = the SAME fusion at TF32/BF16 (smaller footprint → fit
   order; W14 gate <=1e-2); DETERMINISM run-to-run max|d|=0 (atomic-free + fixed-order). MEASURE batch=1: fused
   vs separate flat (TF32 0.996x @1.81ms/step, BF16 0.998x @1.55ms/step) — EXPECTED (batch=1 under-fills, the
   serial-DAG idle floor dominates; ~3x break is FAST-3's batch>1 job). The verified kernel is the FAST-3 substrate.
-- [ ] **FAST-3 — + batch>1 (the genuinely-untested 3-way combo)** — run FAST-2's fused-TF32 megakernel at
-  batch>1: fit occupancy (TF32) + remove the gaps (fusion) + fill the SMs (batch) ALL AT ONCE. Gate: does the
-  full-STEP self-speedup BREAK ~3x? Report the new ceiling vs the ~3x batch-fill cap. This is the decisive test.
+- [x] **FAST-3 — + batch>1 (the genuinely-untested 3-way combo)** — 🔴 CLOSED-NEGATIVE (real H100 80GB HBM3,
+  vast 40003012 tag hexa-fast3 DESTROYED leak-0; verdict F-FAST-3-BATCH.txt, tool/fast3/fast3_batch_sweep.cu).
+  Ran FAST-2's fused-TF32 AND BF16 megakernel across B=1,2,4,8,16,32 (M=B*T). DECISIVE NUMBER: fused-vs-separate
+  full-step self-speedup is FLAT ~1.00x at EVERY batch (TF32 0.995–1.019x · BF16 0.996–1.025x). DOES IT BREAK
+  ~3x? **NO** — it never even reaches ~3x. The ~3x batch-fill cap (#2913) SURVIVES the full 3-lever combo →
+  ~3x is TERMINAL for the kernel-fusion axis. Gates 1+2 held perfectly: rel-RMS=0 + determinism max|Δ|=0 at
+  every B both dtypes (no seam); one-wave-FIT=NO already at B=1 (bwd GEMM gridNeed=9216 ≫ 528 ceiling, fixed
+  in B → FAST-1's "~11x batch headroom" REFUTED for the real flame step). ROOT CAUSE (honest): no 86.8% idle
+  gap exists in a DEVICE-RESIDENT separate baseline — both paths are grid-stride-saturated (util ~97-98% from
+  B=1, median NOT ~0%), so fusion only trades ~5 launches for ~5 grid.syncs (a wash). The #2913 ~3x came from
+  removing INTERPRETED host glue, absent here. % of ~1656x torch gap closed = 0%. flame identity INTACT
+  (byte-exact rel-RMS 0 · no-LLVM · deterministic-at-dtype · theorem-cite); FAST is additive, this fusion's
+  additive value is ~0 at the saturated regime. REAL remaining lever = interpreter-elimination, NOT GPU fusion.
 - [ ] **FAST-4 — opt-in fast-mode wiring + identity guard (preserve the default)** — wire FAST as an OPT-IN
   lane (env/flag) so FP64 byte-exact stays the canonical default; FAST is selected explicitly. Gate: FP64
   byte-exact path unchanged (max|d|=0 vs prior) AND FAST path documented as deterministic-at-dtype (not
