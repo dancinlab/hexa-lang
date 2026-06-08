@@ -1,0 +1,15 @@
+F-BENCH-9 — close the last flame-cuBLAS losing cell D=4096/B=8 (TF32 1.27x, BF16 2.00x)
+========================================================================================
+STATUS: WIP (skeleton pushed; H100 measurement pending)
+
+PLAN: BENCH-7 found flame-cuBLAS (plain cublasGemmEx) wins torch everywhere EXCEPT the
+single largest GEMM-bound+filled cell D=4096/B=8 (TF32 1.27x, BF16 2.00x slower than
+torch.compile). Attack with cuBLASLt:
+  (1) cublasLtMatmulAlgoGetHeuristic AUTOTUNE — pick the best algo for the 4096x4096
+      shape instead of cublasGemmEx's default CUBLAS_GEMM_DEFAULT_TENSOR_OP.
+  (2) epilogue fusion — CUBLASLT_EPILOGUE_GELU on the fwd GEMM (capability probe).
+Lanes: GEMM_BACKEND=5 (cuBLASLt TF32 autotune) + -DLT_BF16 (BF16). Baselines: backend 1
+(plain cuBLAS-TF32) + 4 (plain cuBLAS-BF16) + torch eager/compile. Focus D={2048,4096}
+B=8 + D=4096 B=1 sanity. GATE g5: determinism max|delta(W')|=0 + rel-RMS(vs naive)<=1e-2.
+
+[results pending H100 run — raw [CFG]/[DETERMINISM]/[GATE]/[RESULT] appended below]

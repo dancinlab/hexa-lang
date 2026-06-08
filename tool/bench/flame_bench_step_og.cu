@@ -33,6 +33,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <math.h>
 
 #ifndef GEMM_BACKEND
@@ -42,8 +43,11 @@
 #if GEMM_BACKEND == 1 || GEMM_BACKEND == 4
   #include <cublas_v2.h>
 #endif
-#if GEMM_BACKEND == 4
+#if GEMM_BACKEND == 4 || GEMM_BACKEND == 5
   #include <cuda_bf16.h>
+#endif
+#if GEMM_BACKEND == 5
+  #include <cublasLt.h>      // BENCH-9: cublasLt autotuned algo + epilogue fusion
 #endif
 
 #ifndef BENCH_PREC
@@ -72,6 +76,12 @@
   static const char* GEMM_NAME = "OWN120-mma.sync";
 #elif GEMM_BACKEND == 4
   static const char* GEMM_NAME = "cuBLAS-BF16";
+#elif GEMM_BACKEND == 5
+  #ifdef LT_BF16
+    static const char* GEMM_NAME = "cuBLASLt-BF16-autotune";
+  #else
+    static const char* GEMM_NAME = "cuBLASLt-TF32-autotune";
+  #endif
 #endif
 
 // AdamW hyperparameters (fixed -> deterministic) — identical to BENCH-1.
@@ -233,6 +243,106 @@ static void gemm(real* C, const real* A, const real* Bm, int M, int K, int N){
                  C,    CUDA_R_32F,  N,
                  CUBLAS_COMPUTE_32F, CUBLAS_GEMM_DEFAULT_TENSOR_OP);
 }
+#elif GEMM_BACKEND == 5
+// ===================== BENCH-9: cuBLASLt autotune + epilogue fusion =====================
+// Closes the last flame-cuBLAS losing cell D=4096/B=8 (TF32 1.27x, BF16 2.00x vs
+// torch.compile). Two levers, matching what torch's inductor does:
+//   (1) AUTOTUNE: cublasLtMatmulAlgoGetHeuristic picks the best algo for THIS shape
+//       instead of cublasGemmEx's CUBLAS_GEMM_DEFAULT_TENSOR_OP. The chosen algo is
+//       cached per (M,K,N) so the per-step cost is one heuristic lookup, amortized.
+//   (2) EPILOGUE: when HEXA_LT_EPILOGUE=gelu is set, the fwd GEMM fuses its activation
+//       into the matmul epilogue (CUBLASLT_EPILOGUE_GELU) so the elementwise pass folds
+//       into the GEMM — what inductor does. (Default = no epilogue, math == plain ref.)
+//
+// LT_BF16 compile flag -> cast inputs to bf16 (CUDA_R_16BF, COMPUTE_32F); else TF32
+// (CUDA_R_32F, COMPUTE_32F_FAST_TF32). The cast is RNE-deterministic so max|delta|=0.
+//
+// cuBLASLt is COLUMN-MAJOR; to get row-major C[M,N]=A[M,K]@B[K,N] we compute the
+// transpose C^T = B^T @ A^T in col-major == matmul(opN,opN, N,M,K, B,A) with all three
+// matrices laid out as col-major of the transposed logical shape (identical trick to the
+// cublasGemmEx wrappers above). N is the leading dim of B^T(=N x K col-major) and C^T.
+static cublasLtHandle_t g_lt = nullptr;
+static void* g_ws = nullptr;            // autotune workspace
+static size_t g_ws_sz = 32u*1024u*1024u; // 32 MiB — ample for these shapes
+static int g_epilogue_gelu = 0;         // HEXA_LT_EPILOGUE=gelu
+#ifdef LT_BF16
+static __nv_bfloat16 *g_Ab=nullptr,*g_Bb=nullptr; static long long g_nA=0,g_nB=0;
+__global__ void k_f2bf(const float* __restrict__ s, __nv_bfloat16* __restrict__ d, long long n){
+    long long i=(long long)blockIdx.x*blockDim.x+threadIdx.x; if(i<n) d[i]=__float2bfloat16(s[i]); }
+#endif
+// per-shape algo cache (small fixed table; the bench uses 2 distinct GEMM shapes)
+struct LtCache { int M,K,N,fwd; cublasLtMatmulAlgo_t algo; int valid; };
+static LtCache g_cache[8]; static int g_ncache=0;
+static void gemm_setup(){
+    cublasLtCreate(&g_lt);
+    cudaMalloc(&g_ws, g_ws_sz);
+    const char* ep = getenv("HEXA_LT_EPILOGUE");
+    if(ep && (!strcmp(ep,"gelu")||!strcmp(ep,"GELU"))) g_epilogue_gelu = 1;
+    for(int i=0;i<8;i++) g_cache[i].valid=0;
+}
+// is_fwd distinguishes the fwd GEMM (epilogue may apply) from the bwd dW GEMM (never).
+static void gemm_impl(real* C, const real* A, const real* Bm, int M, int K, int N, int is_fwd){
+#ifdef LT_BF16
+    cudaDataType_t IN_T = CUDA_R_16BF;
+    long long nA=(long long)M*K, nB=(long long)K*N;
+    if(nA>g_nA){ if(g_Ab)cudaFree(g_Ab); cudaMalloc(&g_Ab,nA*sizeof(__nv_bfloat16)); g_nA=nA; }
+    if(nB>g_nB){ if(g_Bb)cudaFree(g_Bb); cudaMalloc(&g_Bb,nB*sizeof(__nv_bfloat16)); g_nB=nB; }
+    k_f2bf<<<(nA+255)/256,256>>>(A, g_Ab, nA);
+    k_f2bf<<<(nB+255)/256,256>>>(Bm, g_Bb, nB);
+    const void *pA=g_Ab, *pB=g_Bb;
+    cublasComputeType_t COMP = CUBLAS_COMPUTE_32F;
+#else
+    cudaDataType_t IN_T = CUDA_R_32F;
+    const void *pA=A, *pB=Bm;
+    cublasComputeType_t COMP = CUBLAS_COMPUTE_32F_FAST_TF32;
+#endif
+    // col-major C^T = B^T @ A^T : op_n,op_n, rows=N, cols=M, inner=K.
+    cublasLtMatmulDesc_t op;
+    cublasLtMatmulDescCreate(&op, COMP, CUDA_R_32F);
+    cublasOperation_t opn = CUBLAS_OP_N;
+    cublasLtMatmulDescSetAttribute(op, CUBLASLT_MATMUL_DESC_TRANSA, &opn, sizeof(opn));
+    cublasLtMatmulDescSetAttribute(op, CUBLASLT_MATMUL_DESC_TRANSB, &opn, sizeof(opn));
+    int use_gelu = (is_fwd && g_epilogue_gelu);
+    if(use_gelu){
+        cublasLtEpilogue_t epi = CUBLASLT_EPILOGUE_GELU;
+        cublasLtMatmulDescSetAttribute(op, CUBLASLT_MATMUL_DESC_EPILOGUE, &epi, sizeof(epi));
+    }
+    // layouts: Bm^T is N x K (ld=N), A^T is K x M (ld=K), C^T is N x M (ld=N).
+    cublasLtMatrixLayout_t lB, lA, lC;
+    cublasLtMatrixLayoutCreate(&lB, IN_T,        N, K, N);
+    cublasLtMatrixLayoutCreate(&lA, IN_T,        K, M, K);
+    cublasLtMatrixLayoutCreate(&lC, CUDA_R_32F,  N, M, N);
+    const float alpha=1.f, beta=0.f;
+
+    // --- find or compute the autotuned algo for this (M,K,N,is_fwd) ---
+    int ci=-1;
+    for(int i=0;i<g_ncache;i++) if(g_cache[i].M==M&&g_cache[i].K==K&&g_cache[i].N==N&&g_cache[i].fwd==use_gelu){ ci=i; break; }
+    if(ci<0 && g_ncache<8){
+        cublasLtMatmulPreference_t pref; cublasLtMatmulPreferenceCreate(&pref);
+        cublasLtMatmulPreferenceSetAttribute(pref, CUBLASLT_MATMUL_PREF_MAX_WORKSPACE_BYTES,
+                                             &g_ws_sz, sizeof(g_ws_sz));
+        cublasLtMatmulHeuristicResult_t heur[1]; int nres=0;
+        cublasStatus_t hs = cublasLtMatmulAlgoGetHeuristic(g_lt, op, lB, lA, lC, lC,
+                                                           pref, 1, heur, &nres);
+        if(hs==CUBLAS_STATUS_SUCCESS && nres>0){
+            ci=g_ncache++;
+            g_cache[ci].M=M; g_cache[ci].K=K; g_cache[ci].N=N; g_cache[ci].fwd=use_gelu;
+            g_cache[ci].algo=heur[0].algo; g_cache[ci].valid=1;
+        }
+        cublasLtMatmulPreferenceDestroy(pref);
+    }
+    const cublasLtMatmulAlgo_t* algo = (ci>=0 && g_cache[ci].valid)? &g_cache[ci].algo : nullptr;
+    cublasLtMatmul(g_lt, op, &alpha, pB, lB, pA, lA, &beta, C, lC, C, lC,
+                   algo, g_ws, g_ws_sz, 0);
+    cublasLtMatrixLayoutDestroy(lB); cublasLtMatrixLayoutDestroy(lA); cublasLtMatrixLayoutDestroy(lC);
+    cublasLtMatmulDescDestroy(op);
+}
+static void gemm(real* C, const real* A, const real* Bm, int M, int K, int N){
+    gemm_impl(C, A, Bm, M, K, N, 0);   // generic (bwd) entry — no epilogue
+}
+static void gemm_fwd(real* C, const real* A, const real* Bm, int M, int K, int N){
+    gemm_impl(C, A, Bm, M, K, N, 1);   // fwd entry — epilogue may apply
+}
 #else
 static void gemm_setup(){}
 static void gemm(real* C, const real* A, const real* Bm, int M, int K, int N){
@@ -240,6 +350,11 @@ static void gemm(real* C, const real* A, const real* Bm, int M, int K, int N){
     dim3 g((N+TILE-1)/TILE,(M+TILE-1)/TILE);
     k_gemm<<<g,blk>>>(A, Bm, C, M, K, N);
 }
+#endif
+
+// For backends without a dedicated fwd-epilogue entry, fwd == generic gemm.
+#if GEMM_BACKEND != 5
+#define gemm_fwd gemm
 #endif
 
 int main(int argc,char**argv){
@@ -279,7 +394,7 @@ int main(int argc,char**argv){
     int eGrid=(int)((KN+255)/256);
 
     auto step=[&](int tstep){
-        gemm(H, A, Wf, M, K, N);                    // PHASE 0 fwd  H = A @ W   (tuned GEMM)
+        gemm_fwd(H, A, Wf, M, K, N);                // PHASE 0 fwd  H = A @ W   (tuned GEMM; bk5 epilogue-able)
         k_valley<<<M,256>>>(H,G,dGrad,dGq,M,N);     // PHASE 1 valley
         k_transpose<<<256,256>>>(A,AT,M,K);         // AT = A^T
         gemm(dW, AT, dGq, K, M, N);                 // PHASE 2 bwd  dW = A^T @ dG (tuned GEMM)
