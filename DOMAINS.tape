@@ -73,3 +73,4 @@
 @domain C-ZERO := "domains/C-ZERO.md"          # ecosystem-wide live-C → 0 (all FFI shims + siblings); HEXA-CC-ZERO owns the hexa_cc.c seed sub-goal
 @link C-ZERO --refines--> HEXA-CC-ZERO              # C-ZERO is the ecosystem superset; HEXA-CC-ZERO is its hexa_cc.c (28482 LOC) sub-target
 @domain HEXA-QRNG := "domains/HEXA-QRNG.md"        # ANU QRNG true-entropy OPT-IN (seed-provenance/DP/MC) — ISOLATED from flame byte-exact core
+@domain HEXA-FLAME-FAST := "domains/HEXA-FLAME-FAST.md"  # break ~3x flame step cap via fused-step x TF32/BF16 x batch>1 (opt-in, FP64 byte-exact stays default)
