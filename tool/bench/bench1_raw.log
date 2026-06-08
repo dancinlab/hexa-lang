@@ -1,0 +1,187 @@
+############ HEXA-BENCH BENCH-1  D=768 T=256 iters=50  arch=sm_120 ############
+==== nvidia-smi ====
+Mon Jun  8 18:57:36 2026       
++-----------------------------------------------------------------------------------------+
+| NVIDIA-SMI 580.159.04             Driver Version: 580.159.04     CUDA Version: 13.0     |
++-----------------------------------------+------------------------+----------------------+
+| GPU  Name                 Persistence-M | Bus-Id          Disp.A | Volatile Uncorr. ECC |
+| Fan  Temp   Perf          Pwr:Usage/Cap |           Memory-Usage | GPU-Util  Compute M. |
+|                                         |                        |               MIG M. |
+|=========================================+========================+======================|
+|   0  NVIDIA GeForce RTX 5070        On  |   00000000:01:00.0 Off |                  N/A |
+|  0%   41C    P8              8W /  250W |       2MiB /  12227MiB |      0%      Default |
+|                                         |                        |                  N/A |
++-----------------------------------------+------------------------+----------------------+
++-----------------------------------------------------------------------------------------+
+| Processes:                                                                              |
+|  GPU   GI   CI              PID   Type   Process name                        GPU Memory |
+|        ID   ID                                                               Usage      |
+|=========================================================================================|
+|  No running processes found                                                             |
++-----------------------------------------------------------------------------------------+
+==== nvcc ====
+Cuda compilation tools, release 13.0, V13.0.88
+Build cuda_13.0.r13.0/compiler.36424714_0
+==== build flame_bench_step (FP32 / TF32 / FP64) ====
+build OK
+######## FLAME ########
+==== flame FP32 ====
+--- flame flame_fp32 B=1 ---
+[CFG] FP32  GPU=NVIDIA GeForce RTX 5070 cc=12.0  D=768 T=256 B=1 -> M=256 K=768 N=768  iters=50  est_mem=0.01 GiB
+[DETERMINISM] FP32 B=1 run-to-run max|delta(W')| = 0.000e+00 (gate ==0: PASS)
+[RESULT] FP32 B=1  ms/step=0.6232  step/s=1604.7186  samples/s=1604.7186
+--- flame flame_fp32 B=2 ---
+[CFG] FP32  GPU=NVIDIA GeForce RTX 5070 cc=12.0  D=768 T=256 B=2 -> M=512 K=768 N=768  iters=50  est_mem=0.02 GiB
+[DETERMINISM] FP32 B=2 run-to-run max|delta(W')| = 0.000e+00 (gate ==0: PASS)
+[RESULT] FP32 B=2  ms/step=0.8365  step/s=1195.3870  samples/s=2390.7740
+--- flame flame_fp32 B=4 ---
+[CFG] FP32  GPU=NVIDIA GeForce RTX 5070 cc=12.0  D=768 T=256 B=4 -> M=1024 K=768 N=768  iters=50  est_mem=0.03 GiB
+[DETERMINISM] FP32 B=4 run-to-run max|delta(W')| = 0.000e+00 (gate ==0: PASS)
+[RESULT] FP32 B=4  ms/step=1.2665  step/s=789.5920  samples/s=3158.3680
+--- flame flame_fp32 B=8 ---
+[CFG] FP32  GPU=NVIDIA GeForce RTX 5070 cc=12.0  D=768 T=256 B=8 -> M=2048 K=768 N=768  iters=50  est_mem=0.04 GiB
+[DETERMINISM] FP32 B=8 run-to-run max|delta(W')| = 0.000e+00 (gate ==0: PASS)
+[RESULT] FP32 B=8  ms/step=2.1238  step/s=470.8630  samples/s=3766.9040
+==== flame TF32 ====
+--- flame flame_tf32 B=1 ---
+[CFG] TF32  GPU=NVIDIA GeForce RTX 5070 cc=12.0  D=768 T=256 B=1 -> M=256 K=768 N=768  iters=50  est_mem=0.01 GiB
+[DETERMINISM] TF32 B=1 run-to-run max|delta(W')| = 0.000e+00 (gate ==0: PASS)
+[RESULT] TF32 B=1  ms/step=0.6246  step/s=1600.9697  samples/s=1600.9697
+--- flame flame_tf32 B=2 ---
+[CFG] TF32  GPU=NVIDIA GeForce RTX 5070 cc=12.0  D=768 T=256 B=2 -> M=512 K=768 N=768  iters=50  est_mem=0.02 GiB
+[DETERMINISM] TF32 B=2 run-to-run max|delta(W')| = 0.000e+00 (gate ==0: PASS)
+[RESULT] TF32 B=2  ms/step=0.8377  step/s=1193.6894  samples/s=2387.3788
+--- flame flame_tf32 B=4 ---
+[CFG] TF32  GPU=NVIDIA GeForce RTX 5070 cc=12.0  D=768 T=256 B=4 -> M=1024 K=768 N=768  iters=50  est_mem=0.03 GiB
+[DETERMINISM] TF32 B=4 run-to-run max|delta(W')| = 0.000e+00 (gate ==0: PASS)
+[RESULT] TF32 B=4  ms/step=1.2670  step/s=789.2383  samples/s=3156.9532
+--- flame flame_tf32 B=8 ---
+[CFG] TF32  GPU=NVIDIA GeForce RTX 5070 cc=12.0  D=768 T=256 B=8 -> M=2048 K=768 N=768  iters=50  est_mem=0.04 GiB
+[DETERMINISM] TF32 B=8 run-to-run max|delta(W')| = 0.000e+00 (gate ==0: PASS)
+[RESULT] TF32 B=8  ms/step=2.1236  step/s=470.9063  samples/s=3767.2504
+==== flame FP64 ====
+--- flame flame_fp64 B=1 ---
+[CFG] FP64  GPU=NVIDIA GeForce RTX 5070 cc=12.0  D=768 T=256 B=1 -> M=256 K=768 N=768  iters=50  est_mem=0.03 GiB
+[DETERMINISM] FP64 B=1 run-to-run max|delta(W')| = 0.000e+00 (gate ==0: PASS)
+[RESULT] FP64 B=1  ms/step=1.6533  step/s=604.8355  samples/s=604.8355
+--- flame flame_fp64 B=2 ---
+[CFG] FP64  GPU=NVIDIA GeForce RTX 5070 cc=12.0  D=768 T=256 B=2 -> M=512 K=768 N=768  iters=50  est_mem=0.04 GiB
+[DETERMINISM] FP64 B=2 run-to-run max|delta(W')| = 0.000e+00 (gate ==0: PASS)
+[RESULT] FP64 B=2  ms/step=2.7943  step/s=357.8754  samples/s=715.7507
+--- flame flame_fp64 B=4 ---
+[CFG] FP64  GPU=NVIDIA GeForce RTX 5070 cc=12.0  D=768 T=256 B=4 -> M=1024 K=768 N=768  iters=50  est_mem=0.05 GiB
+[DETERMINISM] FP64 B=4 run-to-run max|delta(W')| = 0.000e+00 (gate ==0: PASS)
+[RESULT] FP64 B=4  ms/step=5.0839  step/s=196.6999  samples/s=786.7996
+--- flame flame_fp64 B=8 ---
+[CFG] FP64  GPU=NVIDIA GeForce RTX 5070 cc=12.0  D=768 T=256 B=8 -> M=2048 K=768 N=768  iters=50  est_mem=0.09 GiB
+[DETERMINISM] FP64 B=8 run-to-run max|delta(W')| = 0.000e+00 (gate ==0: PASS)
+[RESULT] FP64 B=8  ms/step=9.6773  step/s=103.3342  samples/s=826.6733
+######## TORCH ########
+==== torch FP32 eager ====
+--- torch fp32 eager B=1 ---
+[CFG] FP32 mode=eager GPU=NVIDIA GeForce RTX 5070 D=768 T=256 B=1 M=256 iters=50 torch=2.12.0.dev20260408+cu128
+[RESULT] FP32 mode=eager B=1  ms/step=0.2892  step/s=3457.5547  samples/s=3457.5547
+--- torch fp32 eager B=2 ---
+[CFG] FP32 mode=eager GPU=NVIDIA GeForce RTX 5070 D=768 T=256 B=2 M=512 iters=50 torch=2.12.0.dev20260408+cu128
+[RESULT] FP32 mode=eager B=2  ms/step=0.2290  step/s=4367.1685  samples/s=8734.3369
+--- torch fp32 eager B=4 ---
+[CFG] FP32 mode=eager GPU=NVIDIA GeForce RTX 5070 D=768 T=256 B=4 M=1024 iters=50 torch=2.12.0.dev20260408+cu128
+[RESULT] FP32 mode=eager B=4  ms/step=0.2858  step/s=3499.4381  samples/s=13997.7525
+--- torch fp32 eager B=8 ---
+[CFG] FP32 mode=eager GPU=NVIDIA GeForce RTX 5070 D=768 T=256 B=8 M=2048 iters=50 torch=2.12.0.dev20260408+cu128
+[RESULT] FP32 mode=eager B=8  ms/step=0.4785  step/s=2089.9211  samples/s=16719.3689
+==== torch FP32 compile ====
+--- torch fp32 compile B=1 ---
+/home/aiden/.local/lib/python3.12/site-packages/torch/_inductor/compile_fx.py:320: UserWarning: TensorFloat32 tensor cores for float32 matrix multiplication available but not enabled. Consider setting `torch.set_float32_matmul_precision('high')` for better performance.
+  warnings.warn(
+W0608 18:57:51.650000 712678 torch/_inductor/utils.py:1709] [1/0_1] Not enough SMs to use max_autotune_gemm mode
+W0608 18:57:52.806000 712678 torch/_logging/_internal.py:1311] [2/0] Profiler record function <class 'torch.autograd.profiler.record_function'> will be ignored
+[CFG] FP32 mode=compile GPU=NVIDIA GeForce RTX 5070 D=768 T=256 B=1 M=256 iters=50 torch=2.12.0.dev20260408+cu128
+[RESULT] FP32 mode=compile B=1  ms/step=0.2681  step/s=3730.6389  samples/s=3730.6389
+--- torch fp32 compile B=2 ---
+/home/aiden/.local/lib/python3.12/site-packages/torch/_inductor/compile_fx.py:320: UserWarning: TensorFloat32 tensor cores for float32 matrix multiplication available but not enabled. Consider setting `torch.set_float32_matmul_precision('high')` for better performance.
+  warnings.warn(
+W0608 18:57:57.001000 712906 torch/_inductor/utils.py:1709] [1/0_1] Not enough SMs to use max_autotune_gemm mode
+W0608 18:57:57.561000 712906 torch/_logging/_internal.py:1311] [2/0] Profiler record function <class 'torch.autograd.profiler.record_function'> will be ignored
+[CFG] FP32 mode=compile GPU=NVIDIA GeForce RTX 5070 D=768 T=256 B=2 M=512 iters=50 torch=2.12.0.dev20260408+cu128
+[RESULT] FP32 mode=compile B=2  ms/step=0.2421  step/s=4131.3147  samples/s=8262.6293
+--- torch fp32 compile B=4 ---
+/home/aiden/.local/lib/python3.12/site-packages/torch/_inductor/compile_fx.py:320: UserWarning: TensorFloat32 tensor cores for float32 matrix multiplication available but not enabled. Consider setting `torch.set_float32_matmul_precision('high')` for better performance.
+  warnings.warn(
+W0608 18:58:01.223000 712999 torch/_inductor/utils.py:1709] [1/0_1] Not enough SMs to use max_autotune_gemm mode
+W0608 18:58:01.899000 712999 torch/_logging/_internal.py:1311] [2/0] Profiler record function <class 'torch.autograd.profiler.record_function'> will be ignored
+[CFG] FP32 mode=compile GPU=NVIDIA GeForce RTX 5070 D=768 T=256 B=4 M=1024 iters=50 torch=2.12.0.dev20260408+cu128
+[RESULT] FP32 mode=compile B=4  ms/step=0.2590  step/s=3860.8930  samples/s=15443.5718
+--- torch fp32 compile B=8 ---
+/home/aiden/.local/lib/python3.12/site-packages/torch/_inductor/compile_fx.py:320: UserWarning: TensorFloat32 tensor cores for float32 matrix multiplication available but not enabled. Consider setting `torch.set_float32_matmul_precision('high')` for better performance.
+  warnings.warn(
+W0608 18:58:05.424000 713071 torch/_inductor/utils.py:1709] [1/0_1] Not enough SMs to use max_autotune_gemm mode
+W0608 18:58:06.090000 713071 torch/_logging/_internal.py:1311] [2/0] Profiler record function <class 'torch.autograd.profiler.record_function'> will be ignored
+[CFG] FP32 mode=compile GPU=NVIDIA GeForce RTX 5070 D=768 T=256 B=8 M=2048 iters=50 torch=2.12.0.dev20260408+cu128
+[RESULT] FP32 mode=compile B=8  ms/step=0.3219  step/s=3106.7689  samples/s=24854.1512
+==== torch TF32 eager ====
+--- torch tf32 eager B=1 ---
+[CFG] TF32 mode=eager GPU=NVIDIA GeForce RTX 5070 D=768 T=256 B=1 M=256 iters=50 torch=2.12.0.dev20260408+cu128
+[RESULT] TF32 mode=eager B=1  ms/step=0.2059  step/s=4856.0379  samples/s=4856.0379
+--- torch tf32 eager B=2 ---
+[CFG] TF32 mode=eager GPU=NVIDIA GeForce RTX 5070 D=768 T=256 B=2 M=512 iters=50 torch=2.12.0.dev20260408+cu128
+[RESULT] TF32 mode=eager B=2  ms/step=0.2055  step/s=4866.8162  samples/s=9733.6323
+--- torch tf32 eager B=4 ---
+[CFG] TF32 mode=eager GPU=NVIDIA GeForce RTX 5070 D=768 T=256 B=4 M=1024 iters=50 torch=2.12.0.dev20260408+cu128
+[RESULT] TF32 mode=eager B=4  ms/step=0.2285  step/s=4375.6350  samples/s=17502.5398
+--- torch tf32 eager B=8 ---
+[CFG] TF32 mode=eager GPU=NVIDIA GeForce RTX 5070 D=768 T=256 B=8 M=2048 iters=50 torch=2.12.0.dev20260408+cu128
+[RESULT] TF32 mode=eager B=8  ms/step=0.3697  step/s=2705.1343  samples/s=21641.0740
+==== torch TF32 compile ====
+--- torch tf32 compile B=1 ---
+W0608 18:58:16.463000 713383 torch/_inductor/utils.py:1709] [1/0_1] Not enough SMs to use max_autotune_gemm mode
+W0608 18:58:16.771000 713383 torch/_logging/_internal.py:1311] [2/0] Profiler record function <class 'torch.autograd.profiler.record_function'> will be ignored
+[CFG] TF32 mode=compile GPU=NVIDIA GeForce RTX 5070 D=768 T=256 B=1 M=256 iters=50 torch=2.12.0.dev20260408+cu128
+[RESULT] TF32 mode=compile B=1  ms/step=0.2179  step/s=4589.9512  samples/s=4589.9512
+--- torch tf32 compile B=2 ---
+W0608 18:58:20.736000 713526 torch/_inductor/utils.py:1709] [1/0_1] Not enough SMs to use max_autotune_gemm mode
+W0608 18:58:21.018000 713526 torch/_logging/_internal.py:1311] [2/0] Profiler record function <class 'torch.autograd.profiler.record_function'> will be ignored
+[CFG] TF32 mode=compile GPU=NVIDIA GeForce RTX 5070 D=768 T=256 B=2 M=512 iters=50 torch=2.12.0.dev20260408+cu128
+[RESULT] TF32 mode=compile B=2  ms/step=0.2651  step/s=3771.8538  samples/s=7543.7077
+--- torch tf32 compile B=4 ---
+W0608 18:58:24.817000 713667 torch/_inductor/utils.py:1709] [1/0_1] Not enough SMs to use max_autotune_gemm mode
+W0608 18:58:25.109000 713667 torch/_logging/_internal.py:1311] [2/0] Profiler record function <class 'torch.autograd.profiler.record_function'> will be ignored
+[CFG] TF32 mode=compile GPU=NVIDIA GeForce RTX 5070 D=768 T=256 B=4 M=1024 iters=50 torch=2.12.0.dev20260408+cu128
+[RESULT] TF32 mode=compile B=4  ms/step=0.2881  step/s=3471.3527  samples/s=13885.4108
+--- torch tf32 compile B=8 ---
+W0608 18:58:28.802000 713827 torch/_inductor/utils.py:1709] [1/0_1] Not enough SMs to use max_autotune_gemm mode
+W0608 18:58:29.087000 713827 torch/_logging/_internal.py:1311] [2/0] Profiler record function <class 'torch.autograd.profiler.record_function'> will be ignored
+[CFG] TF32 mode=compile GPU=NVIDIA GeForce RTX 5070 D=768 T=256 B=8 M=2048 iters=50 torch=2.12.0.dev20260408+cu128
+[RESULT] TF32 mode=compile B=8  ms/step=0.2696  step/s=3708.7616  samples/s=29670.0930
+==== torch FP64 eager ====
+--- torch fp64 eager B=1 ---
+[CFG] FP64 mode=eager GPU=NVIDIA GeForce RTX 5070 D=768 T=256 B=1 M=256 iters=50 torch=2.12.0.dev20260408+cu128
+[RESULT] FP64 mode=eager B=1  ms/step=1.9444  step/s=514.3091  samples/s=514.3091
+--- torch fp64 eager B=2 ---
+[CFG] FP64 mode=eager GPU=NVIDIA GeForce RTX 5070 D=768 T=256 B=2 M=512 iters=50 torch=2.12.0.dev20260408+cu128
+[RESULT] FP64 mode=eager B=2  ms/step=3.3364  step/s=299.7285  samples/s=599.4571
+--- torch fp64 eager B=4 ---
+[CFG] FP64 mode=eager GPU=NVIDIA GeForce RTX 5070 D=768 T=256 B=4 M=1024 iters=50 torch=2.12.0.dev20260408+cu128
+[RESULT] FP64 mode=eager B=4  ms/step=6.1231  step/s=163.3151  samples/s=653.2602
+--- torch fp64 eager B=8 ---
+[CFG] FP64 mode=eager GPU=NVIDIA GeForce RTX 5070 D=768 T=256 B=8 M=2048 iters=50 torch=2.12.0.dev20260408+cu128
+[RESULT] FP64 mode=eager B=8  ms/step=11.7257  step/s=85.2827  samples/s=682.2613
+==== torch FP64 compile ====
+--- torch fp64 compile B=1 ---
+W0608 18:58:41.692000 714198 torch/_logging/_internal.py:1311] [2/0] Profiler record function <class 'torch.autograd.profiler.record_function'> will be ignored
+[CFG] FP64 mode=compile GPU=NVIDIA GeForce RTX 5070 D=768 T=256 B=1 M=256 iters=50 torch=2.12.0.dev20260408+cu128
+[RESULT] FP64 mode=compile B=1  ms/step=1.5087  step/s=662.8093  samples/s=662.8093
+--- torch fp64 compile B=2 ---
+W0608 18:58:46.664000 714356 torch/_logging/_internal.py:1311] [2/0] Profiler record function <class 'torch.autograd.profiler.record_function'> will be ignored
+[CFG] FP64 mode=compile GPU=NVIDIA GeForce RTX 5070 D=768 T=256 B=2 M=512 iters=50 torch=2.12.0.dev20260408+cu128
+[RESULT] FP64 mode=compile B=2  ms/step=2.8571  step/s=350.0086  samples/s=700.0171
+--- torch fp64 compile B=4 ---
+W0608 18:58:51.152000 714526 torch/_logging/_internal.py:1311] [2/0] Profiler record function <class 'torch.autograd.profiler.record_function'> will be ignored
+[CFG] FP64 mode=compile GPU=NVIDIA GeForce RTX 5070 D=768 T=256 B=4 M=1024 iters=50 torch=2.12.0.dev20260408+cu128
+[RESULT] FP64 mode=compile B=4  ms/step=5.4751  step/s=182.6453  samples/s=730.5813
+--- torch fp64 compile B=8 ---
+W0608 18:58:55.985000 714675 torch/_logging/_internal.py:1311] [2/0] Profiler record function <class 'torch.autograd.profiler.record_function'> will be ignored
+[CFG] FP64 mode=compile GPU=NVIDIA GeForce RTX 5070 D=768 T=256 B=8 M=2048 iters=50 torch=2.12.0.dev20260408+cu128
+[RESULT] FP64 mode=compile B=8  ms/step=10.7384  step/s=93.1241  samples/s=744.9927
+############ BENCH-1 DONE ############
+DONE_RC=0

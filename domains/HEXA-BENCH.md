@@ -11,14 +11,16 @@ no-LLVM/reproducible, NOT step-rate, so a large gap is EXPECTED and fine.
 
 ## milestones
 
-- [ ] **BENCH-1 — matched-config batch sweep on aiden RTX 5070 (free pool GPU)** — flame (FP64 + TF32) vs
-  torch (eager + torch.compile) at the SAME CLMConvMoE shape, batch sweep B=1,2,4,8 (sized to fit 12GB —
-  shrink D if FP64 OOMs; report the config used). Metric: samples/s + step/s + the flame÷torch ratio per
-  (dtype, B). Gate (g5): paste raw numbers verbatim; correctness note (flame byte-exact vs torch tolerance).
-  Run via `sidecar pool on aiden` — NO vast rent, no leak risk. aiden RTX 5070 12GB idle confirmed.
-- [ ] **BENCH-2 — honest scorecard + gap analysis** — does matched-dtype (TF32) + batch>1 narrow the
-  ~1656x #2912 gap, and to what? Tabulate the curve, name the regime (if any) where flame is least-far-behind.
-  Reflect the honest conclusion: flame's edge = reproducibility/no-LLVM, torch's = raw throughput. GPU 0 (doc).
+- [x] **BENCH-1 — matched-config batch sweep on aiden RTX 5070 (free pool GPU)** — DONE 2026-06-08
+  (.verdicts/hexa-bench/F-BENCH-1.txt). Config D=768/T=256, B=1,2,4,8, flame FP32/TF32/FP64 vs torch
+  eager+compile, same dtype. No OOM (FP64 B=8 est 0.09 GiB << 12GB). flame determinism max|delta|=0 ALL
+  cells. Raw 36 [RESULT] lines + nvidia-smi (RTX 5070) verbatim in the verdict. Free pool GPU, zero vast.
+- [x] **BENCH-2 — honest scorecard + gap analysis** — DONE (same run). The #2912 ~1656x was the full
+  trainer's INTERPRETED per-step glue at batch=1, NOT the compiled step. Measuring the compiled matched-dtype
+  step, the gap collapses to SINGLE DIGITS: FP64 0.83-1.10x (flame TIES B=2, WINS B>=4 — torch has no FP64
+  tensor-core path), FP32 2.15-6.60x, TF32 3.03-7.88x (torch's cuBLAS GEMM vs flame's naive tiled kernel).
+  Least-far-behind regime = FP64 B>=2 where flame is AHEAD. flame's edge = reproducibility/no-LLVM; torch's
+  = raw TF32 throughput (29.7k samp/s @ B=8 vs flame 3.8k). Honest: a large torch TF32 win is EXPECTED + fine.
 
 ## honest framing (g5)
 
