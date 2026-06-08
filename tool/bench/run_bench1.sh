@@ -8,6 +8,13 @@ D="${D:-768}"; T="${T:-256}"; ITERS="${ITERS:-50}"
 BSWEEP="${BSWEEP:-1 2 4 8}"
 ARCH="${ARCH:-sm_120}"     # RTX 5070 = consumer Blackwell sm_120
 
+# CUDA env — non-login ssh shells on aiden don't have nvcc's bin/include on PATH.
+CUDA_ROOT="${CUDA_ROOT:-/usr/local/cuda}"
+export PATH="$CUDA_ROOT/bin:$CUDA_ROOT/nvvm/bin:$PATH"
+CUINC="$CUDA_ROOT/targets/x86_64-linux/include"
+CULIB="$CUDA_ROOT/targets/x86_64-linux/lib"
+NVCC_FLAGS="-arch=$ARCH -O3 -I$CUINC -L$CULIB"
+
 echo "############ HEXA-BENCH BENCH-1  D=$D T=$T iters=$ITERS  arch=$ARCH ############"
 echo "==== nvidia-smi ===="
 nvidia-smi
@@ -16,9 +23,9 @@ nvcc --version | tail -2
 
 # ---- build flame variants ----
 echo "==== build flame_bench_step (FP32 / TF32 / FP64) ===="
-nvcc -arch=$ARCH -O3 -DBENCH_PREC=1            -o /tmp/flame_fp32 "$HERE/flame_bench_step.cu" || { echo "BUILD FAIL fp32"; exit 1; }
-nvcc -arch=$ARCH -O3 -DBENCH_PREC=1 -DUSE_TF32 -o /tmp/flame_tf32 "$HERE/flame_bench_step.cu" || { echo "BUILD FAIL tf32"; exit 1; }
-nvcc -arch=$ARCH -O3 -DBENCH_PREC=2            -o /tmp/flame_fp64 "$HERE/flame_bench_step.cu" || { echo "BUILD FAIL fp64"; exit 1; }
+nvcc $NVCC_FLAGS -DBENCH_PREC=1            -o /tmp/flame_fp32 "$HERE/flame_bench_step.cu" || { echo "BUILD FAIL fp32"; exit 1; }
+nvcc $NVCC_FLAGS -DBENCH_PREC=1 -DUSE_TF32 -o /tmp/flame_tf32 "$HERE/flame_bench_step.cu" || { echo "BUILD FAIL tf32"; exit 1; }
+nvcc $NVCC_FLAGS -DBENCH_PREC=2            -o /tmp/flame_fp64 "$HERE/flame_bench_step.cu" || { echo "BUILD FAIL fp64"; exit 1; }
 echo "build OK"
 
 run_flame () { local bin=$1; for B in $BSWEEP; do echo "--- flame $bin B=$B ---"; "/tmp/$bin" "$D" "$T" "$B" "$ITERS"; done; }
