@@ -1,0 +1,21 @@
+F-OP4B-GRAPH-5070 — CUDA-graph-captured flame FUSED step on consumer RTX 5070 (sm_120)
+========================================================================================
+STATUS: WIP (skeleton) — harness + driver landed; aiden measurement pending.
+
+GOAL: OP-4 found flame's worst losses vs torch.compile on the consumer RTX 5070 are at
+SMALL B (B=1), where the fused step's GEMM is tiny and the step wall is dominated by
+per-launch + separate-cuBLAS-handle overhead (TF32 1.78x->8.96x as D grows; BF16 up to
+14.66x @D=2048/B=1). OP-4b wraps the SAME fused per-step DAG (cuBLAS fwd GEMM + fused
+valley + cuBLAS OP_T bwd GEMM (transpose-elim) + fused AdamW) in a CUDA GRAPH so the whole
+step replays as ONE cudaGraphLaunch, collapsing that per-launch floor. Re-measure the worst
+small-B cells (B=1, D={768,1536,2048}, TF32+BF16) graph-captured vs eager (un-captured OP-4
+baseline) and vs torch.compile.
+
+GATE g5: graph capture changes NOTHING mathematically -> max|delta(W')| (graph vs eager,
+SAME snapshot+opt-state) == 0, run-to-run determinism == 0.
+
+HARNESS: tool/bench/flame_bench_step_graph_fused.cu (FUSED step + cudaStreamBeginCapture/
+EndCapture -> cudaGraphInstantiate -> cudaGraphLaunch), driver tool/bench/run_op4b_5070.sh.
+
+=== RESULTS (pending aiden run) ===
+[to be filled]
