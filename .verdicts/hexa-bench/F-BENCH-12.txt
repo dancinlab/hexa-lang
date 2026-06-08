@@ -1,0 +1,12 @@
+F-BENCH-12 — decode-elimination: in-place swizzle descriptor (the BENCH-11-isolated wall)
+================================================================================
+STATUS: WIP (skeleton pushed first; measuring on a real H100 sm_90a).
+
+GOAL: eliminate the OG10/B11 composed swizzle->gmma DECODE smem round-trip — build the
+wgmma GMMA matrix descriptor to read the TMA-landed swizzled smem IN PLACE (no decode
+copy to a 2nd buffer), the way cuBLAS/CUTLASS do. Bit-exact gate (g5): rel-RMS 0 vs the
+FP64/cuBLAS reference. Measure new own-GEMM TFLOP/s @D={2048,4096}, new cuBLAS-multiple
+(was 6.21-6.99x in BENCH-11), occupancy (CTA/SM), and whether decode-elim closes the gap
+or hits the deeper TMA-swizzle<->wgmma-layout sub-wall.
+
+(measurement in progress — numbers replace this skeleton on harvest.)
