@@ -418,8 +418,6 @@ extern "C" __global__ void gemm_og17_persist(const __grid_constant__ CUtensorMap
     const int NATOM=TN/TKSW;
     const uint32_t bytesA=ASW*4, bytesB=BSW*4;
     const int gridN=gridDim.x;
-    if(tid<NST){ mbar_init_tx(&full[tid],1); }
-    __syncthreads();
     // PERSISTENT TILE LOOP — each CTA walks swizzled tiles strided by gridDim.
     for(int t=blockIdx.x; t<total_tiles; t+=gridN){
         int trow,tcol; tile_unswizzle(t,tilesM,tilesN,swz,&trow,&tcol);
@@ -430,6 +428,11 @@ extern "C" __global__ void gemm_og17_persist(const __grid_constant__ CUtensorMap
         uint32_t fph=0;
         int stages=NST<nks?NST:nks;
         __syncthreads();                 // ensure all CTAs done with prior tile's smem before reuse
+        // RE-INIT the mbarriers per tile so each tile starts at phase 0 (matching fph=0). Without
+        // this the barrier phase carries over from the previous tile -> mbar_wait(.,0) deadlocks
+        // on an already-toggled barrier when a CTA processes >1 tile (waves>1, e.g. D=4096).
+        if(tid<NST){ mbar_init_tx(&full[tid],1); }
+        __syncthreads();
         if(tid==0){
             for(int st=0;st<stages;++st){
                 float* base=sm+(size_t)st*SWBUF; float* Asw=base; float* Bsw=base+ASW;

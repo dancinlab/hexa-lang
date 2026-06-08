@@ -199,19 +199,22 @@ no-LLVM/reproducible, NOT step-rate, so a large gap is EXPECTED and fine.
   gemm_og17_t256(MODE5)/gemm_og17_pipe(MODE6) self/native/wgmma/wgmma_tf32_og17.cu; baseline gemm_w10 in
   wgmma_tf32_w10_lib.h.
 
-- [ ] **BENCH-13 — close the last own-GEMM residual: CTA rasterization + persistent scheduling (1.6x@4096)**
-  — BENCH-12 collapsed own-GEMM vs cuBLAS from 6.2x to 1.23x@2048 (parity) / 1.62x@4096 via decode-elim;
-  it isolated the remaining ~1.3-1.6x as cuBLAS's persistent multi-CTA SCHEDULER (not decode, not pipe depth
-  — both ruled out). cuBLAS rasterizes output tiles in a swizzled/grouped order (CTA -> tile mapping) for L2
-  reuse of the shared A/B operands + uses a persistent grid (gridDim=#SMs, each CTA loops over a tile-queue)
-  to amortize launch + balance the tail wave. BENCH-13 = add (1) swizzled CTA-to-tile rasterization (group
-  columns so adjacent CTAs share B-operand L2 lines) + (2) a persistent-kernel tile loop, to the descriptor-
-  direct own-GEMM. Re-measure D={2048,4096} vs cuBLAS. Gate (g5): bit-exact rel-RMS vs FP64 ref (scheduling
-  changes only tile ORDER, never values -> must stay rel-RMS 0) + new cuBLAS-multiple (was 1.23/1.62x).
-  HONEST: this is the DEEPEST cuBLAS-tuning layer (years-tuned per-shape); rasterization+persistent may close
-  D=4096 to parity OR plateau (tail-wave quantization at 4096/132-SM is a hard residual). If it reaches
-  parity at BOTH sizes -> own-GEMM ties cuBLAS bit-exactly = no-LLVM-purity axis WON. If 4096 plateaus ~1.3x
-  -> honest near-parity terminal. H100 (sm_90a).
+- [x] **BENCH-13 — close the last own-GEMM residual: CTA rasterization + persistent scheduling (1.6x@4096)**
+  — HONEST NEAR-PARITY TERMINAL (bit-exact, rel-RMS 0 everywhere). Added cuBLAS's persistent multi-CTA
+  scheduler to the BENCH-12 descriptor-direct own-GEMM (MODE 7 gemm_og17_persist): (1) CUTLASS-style swizzled
+  column-group CTA->tile rasterization (tile_unswizzle, verified bijection) + (2) persistent tile-loop
+  gridDim=GRIDMUL*#SMs. Measured on H100 80GB sm_90 CUDA 12.6 (vast 40104341, DESTROYED leak-0 tag
+  hexa-bench13). RESULT: did NOT close the gap. D=2048 stays ~1.36x (already 1 wave: 256 tiles / 264 slots ->
+  nothing to schedule, persistent loop never iterates twice, swizzle reorders a single wave = provable no-op).
+  D=4096 swizzle-width FLAT (1.58-1.65x across SWZ 0..16: H100's 50MB L2 already caches shared operands) +
+  persistent grid NEUTRAL (GRIDMUL=2 1.62x ~ GRIDMUL=0 1.66x; GRIDMUL=1 under-subscription REGRESSES to
+  2.09x). The ONLY D=4096 mover was OCCUPANCY, not scheduling: NST=2 (64KB/CTA) -> 283.6 TFLOP/s / 1.52x =
+  BEST D=4096 own-GEMM (+7% over BENCH-12's 265.8). own-GEMM=cuBLAS NOT achieved; the D=4096 residual is
+  tail-wave quantization (3.88 waves / 132 SMs) IRREDUCIBLE without split-K, and split-K changes the FP32
+  accumulation order -> breaks the bit-exact gate (excluded by g5). Bit-exact held YES at EVERY S/SWZ/GRIDMUL/
+  NST. flame's no-library bit-exact own-GEMM is parity-adjacent (~1.36x square-fitting) / ~1.5-1.6x
+  tail-quantized; the last residual is exactly the bit-exactness flame refuses to trade. Verdict F-BENCH-13.txt.
+  Kernel gemm_og17_persist(MODE7)+tile_unswizzle in self/native/wgmma/wgmma_tf32_og17.cu; driver bench13_run.sh.
 
 ## honest framing (g5)
 
