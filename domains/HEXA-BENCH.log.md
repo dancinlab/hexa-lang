@@ -143,3 +143,25 @@ dtype). Destroyed leak-0 (tag verified pre-destroy; foreign rtsc-li2mgh16 untouc
 - Gate g5: determinism max|delta(W')|=0 on all 16 flame cells (0 FAIL); rel-RMS(cuBLAS vs
   naive-FP64 ref) 0.000e+00 on 6/8, 3.3e-17 on the two B=8 cells (FP64 accumulation-order
   associativity, ~machine-eps, not bit-0 by design). Verdict .verdicts/hexa-bench/F-BENCH-8.txt.
+
+## 2026-06-08 — BENCH-9 (last cuBLAS-lane cell D=4096/B=8) CLOSED-NEGATIVE for the named lever
+
+Attacked the single open flame-cuBLAS losing cell with cuBLASLt autotune + epilogue fusion
+(GEMM_BACKEND=6: cublasLtMatmulAlgoGetHeuristic, TF32 + -DLT_BF16, + CUBLASLT_EPILOGUE_GELU probe;
+backend 5 is BENCH-8's FP64). Real H100 80GB (vast 40078129, sm_90a, CUDA 12.4, torch 2.4.0; rented
+ONE, labeled hexa-bench9, DESTROYED leak-0 tag-checked; foreign rtsc-li2mgh16-anchor untouched).
+- GATE g5 ALL cells: determinism max|delta(W')|=0, rel-RMS(vs naive) 2.2-2.5e-8 (<<1e-2).
+- D=4096/B=8 ratio vs torch.compile: TF32 plain 1.283x -> cuBLASLt 1.280x (~0.2% closed);
+  BF16 plain 1.739x -> cuBLASLt 1.729x (~0.6%). Did NOT flip to WIN. epilogue-gelu +2-3% SLOWER.
+- ROOT CAUSE: (1) the heuristic returns the SAME GEMM algo cuBLAS already dispatched (GEMM wall
+  identical plain-vs-Lt) — the GEMM was never the residual; REFUTES BENCH-7's GEMM-algo attribution.
+  (2) no fusible pointwise epilogue (fwd GEMM -> LayerNorm reduction before gelu + bias-free W).
+  (3) REAL residual = flame's un-fused LN+gelu+loss+AdamW glue; torch.compile halves its own eager
+  time (TF32 1.32->0.73, BF16 0.68->0.52 ms) by fusing it. flame BEATS torch EAGER in TF32 (0.711x).
+  CORROBORATES BENCH-8's note that D=4096/B=8 FP64 also loses 3% to torch's valley+AdamW fusion
+  ("FUSION axis = BENCH-9 territory") — the residual is the SAME elementwise/optimizer-fusion gap.
+- No regression: D=2048/B=8 still WIN (0.583-0.640x), D=4096/B=1 still WIN (0.838/0.943x) — BENCH-7
+  crossover re-confirmed. Lever to flip the cell PINNED to flame elementwise/optimizer fusion (not
+  a better GEMM, not graph-capture — BENCH-6 refuted graph, BENCH-9 refutes GEMM-autotune).
+- Verdict .verdicts/hexa-bench/F-BENCH-9.txt (full matrix + root-cause + raw [RESULT] verbatim);
+  files tool/bench/flame_bench_step_og.cu (GEMM_BACKEND=6) + tool/bench/run_bench9.sh.
