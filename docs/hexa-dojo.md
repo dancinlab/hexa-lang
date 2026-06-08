@@ -769,6 +769,36 @@ flame self-speedup vs batch (H100, D1536/T512, samples/s ÷ B=1)
   ~3x cap is STRUCTURAL: the serial un-fused FP64 op-DAG + per-op launch/sync dispatch. The ONLY uncap levers
   left (both != ~1.3x-of-FP64) = precision-change (TF32/BF16 + dense fusion) OR a right-sized GPU. commons g85.
 
+### flame vs PyTorch — the FAIR compiled bench (corrects the ~1656x reading) · commons g86
+
+The ~1656x above is the INTERPRETED full trainer vs compiled torch — an UNFAIR comparison. The HEXA-BENCH
+campaign (BENCH-1..14, D=768..4096 × B=1..8 × {FP64,TF32,BF16}, aiden RTX 5070 + vast H100) re-measured the
+COMPILED matched-dtype step. Result: flame wins-or-ties torch.compile in EVERY cell — the ~1656x was never
+flame's real standing.
+
+```
+ ▢ UNFAIR (#2912)              →   ▢ FAIR (BENCH-7..14)
+ interp-trainer vs compiled-torch  →   compiled step, matched dtype, batch sweep
+ ~1656x slower (one bad point)     →   FP64 WINS · TF32/BF16 win-or-tie · own-GEMM cuBLAS parity
+```
+
+- **the speed lane (flame calls cuBLAS)**: wins-or-ties torch.compile every cell. FP64 flame WINS (torch has
+  no FP64 tensor-core path); the last GEMM-bound cell D=4096/B=8 was closed by **fused valley (LN+gelu) +
+  single-launch AdamW + TRANSPOSE-ELIMINATION** (compute bwd `dW=A^T@dG` via cuBLAS `OP_T`, killing the
+  separate k_transpose pass). graph-capture (BENCH-6) and cuBLAS-Lt GEMM-autotune (BENCH-9) were both
+  closed-neg — the residual was glue-fusion, not launch or GEMM-algo.
+- **the no-LLVM purity lane (own-GEMM beats cuBLAS, no library)**: from 1/7th of cuBLAS to PARITY. The
+  decisive lever is **DECODE-ELIMINATION**: build the wgmma GMMA descriptor to read the TMA-landed swizzled
+  smem IN PLACE (swizzle-mode + leading/stride byte-offset fields) instead of un-swizzling into a 2nd smem
+  buffer. 51→281 TFLOP/s @2048 (6.2x→1.23x), then inner-loop pipeline+epilogue tune → **1.10x = cuBLAS parity
+  @D=2048, bit-exact rel-RMS 0**. The naive "swm=1 descriptor at atom-major SWIZZLE_128B landing" floors at
+  rel-RMS 1.0 (layout mismatch) — the bit-exact route is pre-permute global to canonical gmma-INTER + NO-swizzle TMA.
+- **the irreducible residual IS the identity**: D=4096 stays ~1.5x (tail-wave quantization, 1024 tiles/132
+  SMs). The ONLY lever that moves it is split-K, which changes FP32 accumulation order and BREAKS byte-exactness
+  — so flame refuses it. The gap that remains is exactly the reproducibility flame exists for, not a missing opt.
+- **don't**: cite ~1656x as flame's verdict (it was the unfair interp-vs-compiled point); use split-K to chase
+  the last ~1.5x (forfeits the identity). **do**: matched-dtype + compiled when benching; decode-elim for own-GEMM.
+
 ## references
 
 - [`HEXA-CUDA.md`](../HEXA-CUDA.md) — the GPU-native domain home
