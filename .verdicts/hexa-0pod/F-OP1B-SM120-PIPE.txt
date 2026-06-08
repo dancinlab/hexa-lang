@@ -1,0 +1,13 @@
+F-OP1B-SM120-PIPE — sm_120 TF32 own-GEMM: BK=32 + 3-stage cp.async pipeline + .v2/.v4 vectorized epilogue
+========================================================================================================
+STATUS: WIP (skeleton — aiden RTX 5070 sweep pending)
+
+OBJECTIVE: close the residual ~3-15% off cuBLAS-TF32 at D=1024 (OP-1 K2 left it 1.15x@1024 / 1.02x@2048),
+bit-exact (rel-RMS vs FP64 ref ~0, scheduling/layout only). Levers:
+  (1) BK=32  — deeper K-tile per smem stage
+  (2) 3-stage cp.async ring buffer (cp.async.wait_group<2>) vs current 2-stage
+  (3) .v2/.v4 vectorized C-store epilogue (vs 4 scalar masked writes/fragment)
+
+Register-tile (128x64) lever is CLOSED-NEGATIVE (OP-1) — NOT re-attempted.
+
+(measurements appended after aiden sweep)
