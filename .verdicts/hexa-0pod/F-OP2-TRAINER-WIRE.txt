@@ -1,0 +1,35 @@
+F-OP2-TRAINER-WIRE — wire HEXA-BENCH step wins into the REAL flame CLMConvMoE trainer
+======================================================================================
+status: WIP (skeleton)
+
+scope: port the HEXA-BENCH-proven step wins (BENCH-8 cuBLAS-FP64 lane, BENCH-10 fused
+valley + single-launch AdamW + transpose-elimination) from the standalone bench harness
+(tool/bench/flame_bench_step_{fused,og}.cu) into the actual flame CLMConvMoE trainer
+(stdlib/flame/clm_prod.hexa + the forge device runtime).
+
+ALREADY-WIRED audit (the bench wins that the trainer ALREADY carries, env-gated):
+  - cuBLAS-FP64 projection GEMM (BENCH-8): DEFAULT path. _hx_cuda_farr_matmul_gpu uses
+    cublasDgemm by default (HEXA_OWN_GEMM only swaps in the naive kernel). The trainer's
+    forge_dispatch_matmul rides this. -> already in product.
+  - fused valley LN+gelu+residual (BENCH-10): env HEXA_FUSE_VALLEY / HEXA_FUSE_GN_GELU /
+    HEXA_FUSE_GN_GELU_RESID -> _hx_k_groupnorm_gelu[_residual]. -> already in product.
+  - single-launch fused AdamW (BENCH-10): env HEXA_CLM_FULLSTEP -> _adam_fused ->
+    forge_dispatch_adamw_fused -> _hx_k_adamw_fused cooperative kernel. -> already in product.
+
+MISSING (the slice OP-2 wires): transpose-elimination for the backward dW GEMM.
+  current: conv1d_bwd_via_forge does _clmp_im2col_t(x)->xcolT[Kdim,T] (a SEPARATE
+           transpose-layout im2col pass) then forge_dispatch_matmul(xcolT,Kdim,T,dy,Cout).
+  bench:   dW[K,N] = A^T @ dGq via cuBLAS OP_T on A directly (no materialized A^T).
+  wire:    new forge_dispatch_matmul_t(A,M,K,B,N) builtin = A[M,K]^T @ B[M,N] = C[K,N];
+           bwd reuses the NON-transposed _clmp_im2col(x)->xcol[T,Kdim] (same layout as the
+           fwd) then dW = matmul_t(xcol, dy). Eliminates the transpose-layout im2col pass.
+           env-gated HEXA_BWD_TRANSPOSE_ELIM; OFF -> the prior _clmp_im2col_t path (byte-eq).
+
+GATE (g5): byte-eq vs prior trainer dW. CPU oracle path makes byte-eq verifiable on
+aiden via `hexa run` (CPU) without the heavy GPU build; GPU cuBLAS-OP_T path is an
+fp-accumulation-order variant of cuBLAS-OP_N (rel-RMS <= ~1e-14, NOT a regression).
+
+byte-eq max|Δ|:   <pending>
+step/s before:    <pending>
+step/s after:     <pending>
+deferred:         <pending>
