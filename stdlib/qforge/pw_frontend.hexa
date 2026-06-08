@@ -1154,7 +1154,11 @@ pub fn qforge_pw_frontend_phonons_scr(deck_dir: str, npw_cap: int, xc_mode: int,
     //    the FULL multi-atom cell. We use the BZ band as opt_band when it is well-
     //    formed (>1 optical mode); else fall back to the q-flat band (d6 — honest,
     //    never fabricate). ω_log changes because the band SHAPE changes, not the scale.
-    let bz_band = _qpwd_bz_dispersed_band(deck_dir, geom, gvecs, nq, _OMEGA_ANCHOR_K)
+    //   measurement toggle (d6 — apples-to-apples baseline): QFORGE_BZ_FC=0 forces
+    //   the q-flat single-Γ band (the prior behaviour) so the BZ vs q-flat λ/ω_log
+    //   can be measured on the IDENTICAL screened-DFPT path. Default (unset/≠0) = BZ.
+    let bz_disabled = exec("printf '%s' \"${QFORGE_BZ_FC:-1}\"") == "0"
+    let bz_band = if bz_disabled { [] } else { _qpwd_bz_dispersed_band(deck_dir, geom, gvecs, nq, _OMEGA_ANCHOR_K) }
     let bz_ok = len(bz_band) > 1
     let mut opt_band: [float] = []
     if bz_ok {
