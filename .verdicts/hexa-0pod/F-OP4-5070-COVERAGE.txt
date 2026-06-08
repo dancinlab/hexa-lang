@@ -1,0 +1,20 @@
+F-OP4-5070-COVERAGE — flame fused training step vs torch on consumer RTX 5070 (sm_120)
+=======================================================================================
+STATUS: WIP (skeleton pushed first per STORM; matrix filled inline after the aiden sweep).
+HARDWARE: aiden RTX 5070 (sm_120 / cc12.0, 12 GiB), CUDA 13.0, torch 2.12 cu128.
+          FREE sidecar pool — NO vast, NO pod rental, NO leak discipline (pool host).
+
+GOAL: map where the flame fused training step (flame_bench_step_fused.cu -DFUSED, cuBLAS
+backend = the speed lane) WINS vs LOSES against torch (eager + compile/inductor) on
+CONSUMER hardware, across D={768,1536,2048} x B={1,8} x dtype={FP64,TF32,BF16}.
+The H100 frontier is known; the 5070 has fewer SMs + smaller L2 so crossover-D shifts.
+
+METHOD: flame fused step (fused valley LN+gelu+copy + single-launch AdamW + transpose-elim,
+GEMM=cuBLAS) vs torch_bench_step.py (matched dtype/shape). ratio = flame_ms / torch_compile_ms.
+WIN = flame_ms < torch_compile_ms. OOM at 12GB reported (memory limit, NOT a loss).
+ITERS=50, T=256, warmup before timed loop, exclusive-GPU guard (util<5% & mem<800MiB).
+
+GATE g5 (per cell): determinism run-to-run max|delta(W')| = 0  +  rel-RMS(fused W' vs
+un-fused NAIVE-GEMM ref) <= 1e-2. (both checked in-binary by flame_bench_step_fused.cu.)
+
+(matrix + crossover-D + OOM cells + nvidia-smi filled after the run)
