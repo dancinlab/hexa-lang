@@ -183,6 +183,19 @@ no-LLVM/reproducible, NOT step-rate, so a large gap is EXPECTED and fine.
   Verdict .verdicts/hexa-bench/F-BENCH-11.txt. (orig spec: 70.7/6.09x was a faster-clocked prior pod; on
   THIS pod the matched W10 baseline is 50.5/6.92x @2048 — the W10->B11 delta is the apples-to-apples result.)
 
+- [ ] **BENCH-12 — DECODE-elimination: in-place swizzle descriptor (the BENCH-11-isolated real wall)** —
+  BENCH-11 proved the own-GEMM>cuBLAS wall is NOT pipeline depth (NSW/NGM sweep flat) — it's the composed
+  swizzle->gmma DECODE smem round-trip: OG10 decodes the swizzled tile into a SECOND smem buffer before
+  wgmma, while cuBLAS/CUTLASS build the GMMA descriptor to read the swizzled smem IN PLACE (no decode copy).
+  BENCH-12 = construct the wgmma matrix descriptor (swizzle-mode bits + leading/stride byte-offsets) so
+  wgmma reads the TMA-landed swizzled smem directly, eliminating the decode round-trip + its 2nd buffer
+  (also relieves the 229KB->less smem => maybe >1 CTA/SM, fixing the under-fill). Re-measure OG10 TFLOP/s
+  @D={2048,4096} vs cuBLAS + the OG10 bench cells vs torch. Gate (g5): bit-exact rel-RMS vs FP64 ref (the
+  descriptor must read the SAME bytes the decode produced — bit-identical) + new cuBLAS-multiple (was 6.2x).
+  HONEST: this attacks the ACTUAL isolated wall; it may meaningfully close (decode round-trip is real) OR
+  hit a deeper wall (TMA swizzle-layout vs wgmma-expected-layout mismatch needing a specific TMA swizzle
+  mode). If it plateaus, own-GEMM>cuBLAS is the terminal no-LLVM-purity frontier. H100 (sm_90a).
+
 ## honest framing (g5)
 
 flame is NOT a speed-competition tool — torch will almost certainly win throughput by a large margin (#2912
