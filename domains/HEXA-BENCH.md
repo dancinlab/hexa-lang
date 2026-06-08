@@ -170,6 +170,17 @@ no-LLVM/reproducible, NOT step-rate, so a large gap is EXPECTED and fine.
   D=2048/B=8 NO regression (all WIN; FP64 even flips 1.060->0.914x). BEAT-ALL on the cuBLAS speed lane =
   ACHIEVED on-pod (every cell wins-or-ties torch.compile). Last beat-all lever — frontier closed.
 
+- [ ] **BENCH-11 — push the OG10 own-GEMM toward cuBLAS (the no-LLVM-purity axis, hardest frontier)** —
+  the ONLY remaining unbeaten axis: flame's own hand-written no-library GEMM (OG10, W10 TF32-wgmma, 70.7
+  TFLOP/s @2048, 6.09x off cuBLAS) loses to cuBLAS at large TF32. Apply the W-ladder's known residual lever
+  = warp-specialized TMA producer/consumer pipeline (dedicated TMA-load warpgroup feeding wgmma consumer
+  warpgroups, deeper smem multi-buffering) to push past the 70.7 TFLOP/s plateau toward cuBLAS. Re-measure
+  the OG10 bench cells (D={2048,4096} x B={1,8} TF32) vs cuBLAS + torch. Gate (g5): bit-exact own-GEMM
+  (rel-RMS vs FP64 ref) + new TFLOP/s + cuBLAS-multiple. HONEST: beating cuBLAS with a no-library kernel is
+  an NVIDIA-scale multi-year effort; the W-ladder (W1-15) plateaued at 6.09x. Measure how much warp-spec TMA
+  closes it (e.g. 6.09x -> Nx) + whether any OG10 cell flips; a large residual is an honest closed-neg
+  pinning 'own-GEMM>cuBLAS' as the irreducible no-LLVM-purity frontier. H100 (OG10 = Hopper sm_90a).
+
 ## honest framing (g5)
 
 flame is NOT a speed-competition tool — torch will almost certainly win throughput by a large margin (#2912
