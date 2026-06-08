@@ -8,6 +8,22 @@ SEPARATELY so far. Crucially this is OPT-IN: FP64 byte-exact stays the canonical
 lane. flame's identity (no-LLVM native compile · deterministic/reproducible at the chosen dtype · theorem-cite)
 is PRESERVED — compiling does NOT make flame into PyTorch.
 
+
+## 🔴 DOMAIN CLOSED-NEGATIVE (2026-06-08) — ~3x is TERMINAL on the kernel-fusion axis
+
+The 3-way combo fused x TF32/BF16 x batch>1 (FAST-3 #2936, real H100) delivers FLAT ~1.00x full-step
+self-speedup vs the device-resident separate-kernel baseline at every B=1..32, both dtypes (rel-RMS 0,
+run-to-run max|d|=0 — correct + deterministic, identity intact). It NEVER reaches ~3x, let alone breaks it.
+ROOT CAUSE (g5): the hypothesis assumed an 86.8%% host-glue idle valley for fusion to fill, but that valley
+is ABSENT in a device-resident separate baseline (5 back-to-back grid-stride kernels, already ~97-98%% util
+from B=1, no host glue). Fusion just trades ~5 launches for ~5 grid.syncs = a wash. FAST-1's '~11x batch
+headroom' was REFUTED: the bwd-GEMM gridNeed (K*N tiles = 9216) is FIXED in B and blows the 528 one-wave
+ceiling already at B=1 (tile count, not batch). The #2913 ~3x was an INTERPRETER-glue artifact neither
+device-resident path pays. => kernel fusion EXHAUSTED for breaking ~3x; cap TERMINAL on this axis. flame
+identity (byte-exact/no-LLVM/deterministic/theorem-cite) intact. FAST-4 (opt-in wiring) MOOT (no speedup to
+wire); FAST-5 (vs-PyTorch) N/A (conditional on a break that didn't happen). The 3 levers were genuinely
+measured TOGETHER for the first time — an honest closed-negative, not a skipped lever.
+
 ## the corrected understanding (g5, supersedes an earlier overstatement)
 
 ⚠ CORRECTION logged: an earlier claim — "compiling the whole step = months-long engine rewrite that turns
@@ -61,11 +77,11 @@ genuinely-UNTESTED fix = the SAME fusion at TF32/BF16 (smaller footprint → fit
   removing INTERPRETED host glue, absent here. % of ~1656x torch gap closed = 0%. flame identity INTACT
   (byte-exact rel-RMS 0 · no-LLVM · deterministic-at-dtype · theorem-cite); FAST is additive, this fusion's
   additive value is ~0 at the saturated regime. REAL remaining lever = interpreter-elimination, NOT GPU fusion.
-- [ ] **FAST-4 — opt-in fast-mode wiring + identity guard (preserve the default)** — wire FAST as an OPT-IN
+- [x] **FAST-4 (MOOT — FAST-3 closed-neg) — opt-in fast-mode wiring + identity guard (preserve the default)** — wire FAST as an OPT-IN
   lane (env/flag) so FP64 byte-exact stays the canonical default; FAST is selected explicitly. Gate: FP64
   byte-exact path unchanged (max|d|=0 vs prior) AND FAST path documented as deterministic-at-dtype (not
   FP64-byte-exact). Identity preserved: no-LLVM + reproducible + theorem-cite all intact.
-- [ ] **FAST-5 — honest vs-PyTorch re-measure (only if FAST-3 breaks ~3x)** — if FAST-3 actually beats ~3x,
+- [x] **FAST-5 (N/A — conditional on FAST-3 breaking ~3x, unmet) — honest vs-PyTorch re-measure (only if FAST-3 breaks ~3x)** — if FAST-3 actually beats ~3x,
   measure the new flame-vs-PyTorch gap (was ~1656x @ FP64/batch=1): how much of the gap does fused-TF32-batch
   close? Honest: flame's value is still byte-exact/no-LLVM, not step-rate; FAST is a complement, not a torch killer.
 
