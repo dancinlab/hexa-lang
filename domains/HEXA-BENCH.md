@@ -234,6 +234,18 @@ no-LLVM/reproducible, NOT step-rate, so a large gap is EXPECTED and fine.
   tail-quantized; the last residual is exactly the bit-exactness flame refuses to trade. Verdict F-BENCH-13.txt.
   Kernel gemm_og17_persist(MODE7)+tile_unswizzle in self/native/wgmma/wgmma_tf32_og17.cu; driver bench13_run.sh.
 
+- [ ] **BENCH-14 — last identity-preserving lever: per-CTA wgmma inner-loop microarch (D=2048 1.36x)** —
+  BENCH-13 showed the D=2048 single-wave residual (~1.36x off cuBLAS) is NOT scheduler/rasterization (no-op
+  at single wave) and NOT tail-quant (that's D=4096). It's the per-CTA wgmma INNER-LOOP efficiency vs
+  cuBLAS's tuned mainloop. Unlike split-K (which breaks bit-exactness), inner-loop tuning preserves the
+  accumulation order -> stays bit-exact. Levers: deeper register-tiling (more wgmma accum fragments/CTA),
+  async/pipelined EPILOGUE (overlap the C-store with the next tile's wgmma), K-unroll + dual-issue wgmma
+  (2 wgmma in flight), smem bank-conflict-free C-write. Re-measure D={2048,4096} vs cuBLAS. Gate (g5):
+  bit-exact rel-RMS vs FP64 ref MUST stay 0 (inner-loop tuning changes scheduling, NOT values) + new
+  cuBLAS-multiple (was 1.36x@2048). HONEST: this is the DEEPEST tuning layer (NVIDIA per-shape mainloop
+  tuning over years), lowest yield; may nudge 1.36x->~1.2x or plateau. If it plateaus, the own-GEMM purity
+  axis is fully exhausted identity-preserving = the FINAL terminal. One round, then the goal closes. H100.
+
 ## honest framing (g5)
 
 flame is NOT a speed-competition tool — torch will almost certainly win throughput by a large margin (#2912
