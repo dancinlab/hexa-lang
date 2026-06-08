@@ -12,7 +12,14 @@ has no FP64 tensor-core path); TF32 flame BEATS torch at the small glue-bound sh
 lanes ratio<1, driven by the no-Python fused step) and is ~2x via cuBLAS / ~4.7x via own-GEMM at larger
 shapes. The "~1656x slower" (#2912) was a mis-comparison (interpreted glue vs compiled torch); the fair,
 matched-dtype, batch-swept number is FP64-win to TF32-small-constant. GOAL MET; speed is a complement,
-reproducibility is the identity.
+reproducibility is the identity. BEAT-ALL (cuBLAS speed lane): ✅ ACHIEVED — BENCH-10 closed the last
+losing cell D=4096/B=8 by FUSING flame's valley+AdamW glue (transpose-elim via cuBLAS OP_T + folded
+valley copy + single-launch AdamW; H100, gates 0 / 0..2.5e-8): on-pod it FLIPS TO WIN in all 3 lanes —
+TF32 0.903x, BF16 0.863x, FP64 0.994x (ratio = flame_fused/torch.compile). HONEST: the TF32 margin sits
+inside cross-pod torch.compile variance (1.156x vs BENCH-9's faster torch measurement) so TF32 is best
+read as torch.compile-PARITY (win-or-tie within noise); BF16+FP64 are clear variance-tolerant wins. The
+cuBLAS-lane frontier is now closed — every cell wins-or-ties torch.compile. (OG10 own-GEMM losses are the
+separate no-LLVM-purity axis.)
 
 @goal: Honest head-to-head: flame CLMConvMoE train step vs PyTorch (eager + compile) across a batch
 sweep at matched dtype, on the FREE pool GPU (aiden RTX 5070) — NOT a rented vast pod (g1 canonical-first).
@@ -131,16 +138,20 @@ no-LLVM/reproducible, NOT step-rate, so a large gap is EXPECTED and fine.
   elementwise/optimizer FUSION (not a better GEMM, not graph-capture — BENCH-6 refuted graph, BENCH-9 refutes
   GEMM-autotune). Files: GEMM_BACKEND=6 + tool/bench/run_bench9.sh.
 
-- [ ] **BENCH-10 — close the LAST cell D=4096/B=8 by fusing flame's valley+AdamW glue (the pinned lever)**
-  — BENCH-6 refuted graph-capture + BENCH-9 refuted GEMM-autotune as the closer; both PINNED the residual to
-  flame's UN-FUSED elementwise/optimizer glue (separate k_valley LN+gelu / k_transpose / k_adamw kernels) vs
-  torch.compile's fused step (which ~halves its eager time). flame BEATS torch EAGER here (0.711x); loses
-  ONLY to compiled. flame ALREADY HAS the fused kernels: FF-FUSED-OPTIM (AdamW 17->1 launch), FF-EPILOGUE
-  (4->1), FF-GN-PARALLEL (fused fixed-order GN reduction) from HEXA-FLAME-FAST. Wire them into the bench
-  step's valley+optimizer path + re-measure D=4096/B=8 (TF32+BF16+FP64) vs torch.compile on H100. Gate (g5):
-  determinism max|delta|=0 + bit-faithful vs un-fused ref + the new ratio. Does the cell FLIP to WIN? HONEST:
-  if even fused flame only ties torch.compile, that's the honest ceiling (torch-tied at the single largest
-  cell, flame wins everywhere else) = goal essentially met within a small constant. Last beat-all lever.
+- [x] **BENCH-10 — close the LAST cell D=4096/B=8 by fusing flame's valley+AdamW glue (the pinned lever)**
+  — DONE 2026-06-08 (.verdicts/hexa-bench/F-BENCH-10.txt). Wired the pinned FUSION lever into the bench step
+  (tool/bench/flame_bench_step_fused.cu, -DFUSED): FF-GN-PARALLEL fused tree-LN+gelu valley (one kernel) +
+  FF-EPILOGUE folded dGrad->dGq copy + FF-FUSED-OPTIM single-launch AdamW + TRANSPOSE-ELIM (bwd dW=A^T@dGq
+  via cuBLAS OP_T — removes the separate k_transpose full-MN read+write pass, the inductor-style fusion of
+  the transpose into the matmul). GEMM stays cuBLAS (winning lane). Real H100 (vast 40083208, sm_90a, CUDA
+  12.4, torch 2.4.0; rented ONE, labeled hexa-bench10, DESTROYED leak-0 tag-checked; foreign rtsc-li2mgh16
+  untouched). GATE g5 ALL cells: determinism max|delta(W')|=0, rel-RMS(fused vs un-fused naive ref) 0 (FP64)
+  ..2.5e-8 (TF32/BF16) <<1e-2 — fusion is bit-faithful. D=4096/B=8 FLIPS TO WIN all 3 lanes on-pod: TF32
+  0.9360->0.8453ms = 0.903x (9.7% closed), BF16 0.9027->0.7353 = 0.863x (18.5%), FP64 3.1641->3.0438 = 0.994x
+  (ratio=flame_fused/torch.compile). HONEST: TF32 margin is inside cross-pod torch.compile variance (1.156x
+  vs BENCH-9's faster torch number) = torch.compile-PARITY (win-or-tie within noise); BF16+FP64 clear wins.
+  D=2048/B=8 NO regression (all WIN; FP64 even flips 1.060->0.914x). BEAT-ALL on the cuBLAS speed lane =
+  ACHIEVED on-pod (every cell wins-or-ties torch.compile). Last beat-all lever — frontier closed.
 
 ## honest framing (g5)
 
