@@ -1,0 +1,123 @@
+F-BENCH-3 — flame TF32 with a TUNED/own-GEMM vs PyTorch (aiden RTX 5070, FREE pool GPU)
+========================================================================================
+DATE 2026-06-08 · HOST aiden (pool, RTX 5070 12GB, sm_120/cc12.0, NOT vast — g1, no leak)
+CONFIG D=768 T=256, iters=50, TF32 lane, batch sweep B=1,2,4,8 (same shape as BENCH-1).
+
+QUESTION: BENCH-1/2 found the flame÷torch TF32 gap (3.03x@B1 → 7.88x@B8) is the bench
+step's NAIVE tiled CUDA-core GEMM losing to torch's cuBLAS-tuned GEMM (NOT interpreter).
+BENCH-3 swaps that D->D projection GEMM for a TUNED/own-GEMM and re-measures how much the
+gap shrinks. The intended tuned GEMM is the HEXA-FUSION OG10 (W10 TF32-wgmma own-GEMM,
+70.7 TFLOP/s, 6.09x off cuBLAS-TF32, bit-exact — verdict F-FUSION-SM90-WGMMA-W10).
+
+============================ ⚠ ISA FINDING: OG10 is sm_90a, aiden is sm_120 ============
+OG10 (self/native/wgmma/wgmma_tf32_w10.cu) uses Hopper warpgroup-async MMA:
+  wgmma.mma_async.sync.aligned.m64n64k8.f32.tf32.tf32 + wgmma.fence / commit_group /
+  wait_group + cp.async.bulk.tensor (TMA). These are the sm_90a (Hopper) tensor-core ISA.
+
+aiden = RTX 5070 = consumer Blackwell, sm_120 (cc 12.0). Compiling OG10 for sm_120 FAILS
+at ptxas (CUDA 13.0.88, run ON aiden — the cheap ISA check, done FIRST):
+
+  ptxas wgmma_tf32_w10.ptx, line 429: error : Instruction 'wgmma.fence' not supported
+        on .target 'sm_120'
+  ptxas wgmma_tf32_w10.ptx, line 468: error : Instruction 'wgmma.mma_async with floating
+        point types' not supported on .target 'sm_120'
+  ...(also wgmma.commit_group, wgmma.wait_group; ~22 wgmma sites total reject)...
+
+→ HONEST sm_120-vs-sm_90a GAP: the Hopper wgmma async-warpgroup-MMA instruction family
+  is NOT part of the consumer-Blackwell (sm_120) ISA. Blackwell tensor cores use a
+  different encoding (tcgen05 / 5th-gen) — OG10-exact CANNOT run on aiden without a port.
+  OG10's 70.7 TFLOP/s / bit-exact summit stands ONLY on sm_90a (Hopper, e.g. H100).
+
+GEMM ACTUALLY USED (fallback per the BENCH-3 plan, option (a)): cuBLAS-TF32 as the
+tuned-GEMM PROXY — cublasGemmEx with CUBLAS_COMPUTE_32F_FAST_TF32 +
+CUBLAS_TF32_TENSOR_OP_MATH. This is the realistic CEILING a tuned/own-GEMM gives: a
+sm_90a OG10 would APPROXIMATE cuBLAS-TF32 within its measured 6.09x off-cuBLAS factor,
+so cuBLAS-TF32 here UPPER-BOUNDS how much OG10 would have closed the gap (OG10 would close
+LESS, being 6.09x slower than cuBLAS). Both the NAIVE baseline (re-measured on the same
+binary) and the cuBLAS proxy run from ONE source (tool/bench/flame_bench_step_og.cu,
+-DGEMM_BACKEND=0 vs =1), identical step DAG to BENCH-1 (fwd GEMM → groupnorm+gelu valley →
+bwd GEMM → AdamW).
+
+================================ nvidia-smi (verbatim) ================================
+Mon Jun  8 19:51:02 2026
++-----------------------------------------------------------------------------------------+
+| NVIDIA-SMI 580.159.04             Driver Version: 580.159.04     CUDA Version: 13.0     |
++-----------------------------------------+------------------------+----------------------+
+|   0  NVIDIA GeForce RTX 5070        On  |   00000000:01:00.0 Off |                  N/A |
+|  0%   40C    P8              7W /  250W |       2MiB /  12227MiB |      0%      Default |
++-----------------------------------------+------------------------+----------------------+
+nvcc release 13.0, V13.0.88 · torch 2.12.0.dev20260408+cu128
+
+==================== GATE (g5): rel-RMS vs the NAIVE-GEMM result (same math) ===========
+The cuBLAS-TF32 proxy is held to rel-RMS(W' vs NAIVE-ref) <= 1e-2 (TF32 tolerance, not
+bit-exact — torch-equivalent tuned-but-tolerant). MEASURED, all B PASS:
+  cuBLAS B=1 rel-RMS = 4.088e-08   cuBLAS B=2 = 2.874e-08
+  cuBLAS B=4 rel-RMS = 2.512e-08   cuBLAS B=8 = 2.454e-08      (all << 1e-2 — PASS)
+  NAIVE  B=1..8 rel-RMS = 0.000e+00 (identity, same kernel — PASS)
+DETERMINISM (flame, run-to-run max|delta(W')|): 0.000e+00 at EVERY (GEMM,B) — PASS.
+
+================= TF32 SCORECARD: step/s + flame÷torch RATIO per (GEMM, B) =============
+ratio = best_torch_step/s ÷ flame_step/s  (>1 = torch faster). best_torch = max(eager,
+compile) measured THIS run. samples/s = step/s × B.
+
+ B | flame-NAIVE st/s | flame-cuBLAS st/s | best-torch st/s | NAIVE ratio | cuBLAS ratio
+ --+------------------+-------------------+-----------------+-------------+-------------
+ 1 |      1604.84     |      2291.40      |     5038.98     |    3.14x    |    2.20x
+ 2 |      1195.17     |      2168.84      |     4870.61     |    4.08x    |    2.25x
+ 4 |       790.07     |      1936.72      |     4016.28     |    5.08x    |    2.07x
+ 8 |       471.31     |      1630.10      |     4640.61     |    9.85x    |    2.85x
+
+raw torch THIS run:  eager  B1 4891 B2 4870 B4 3475 B8 2713
+                     compile B1 5039 B2 4871 B4 4016 B8 4641
+flame-cuBLAS samples/s: B1 2291 · B2 4338 · B4 7747 · B8 13041
+
+================= HOW MUCH DID THE TUNED GEMM SHRINK THE BENCH-1 3-8x NAIVE GAP? =======
+Headline (vs the PUBLISHED BENCH-1 best-torch÷naive ratios): the tuned/own-GEMM proxy
+flattens the gap to a near batch-INVARIANT ~2.0-2.9x, where the naive gap GREW with batch:
+
+   B | BENCH-1 NAIVE (published) | BENCH-3 cuBLAS-proxy | gap SHRANK by
+   --+---------------------------+----------------------+--------------
+   1 |          3.03x            |        2.20x         |    1.38x
+   2 |          4.08x            |        2.25x         |    1.82x
+   4 |          5.54x            |        2.07x         |    2.67x
+   8 |          7.88x            |        2.85x         |    2.77x
+
+  The naive GEMM's gap WIDENED with batch (3.03 → 7.88x) because the naive tiled kernel
+  does NOT scale with the larger GEMM M (it under-uses the tensor cores torch saturates).
+  The tuned GEMM REMOVES that batch-scaling penalty: the cuBLAS gap is flat ~2x and even
+  IMPROVES to 2.07x at B=4. At B=8 the tuned-GEMM gap is 2.85x vs naive's 7.88x — a 2.77x
+  shrink — the single biggest win, exactly where the naive kernel was worst.
+
+  flame's own GEMM-only speedup (cuBLAS ÷ naive step/s): B1 1.43x · B2 1.81x · B4 2.45x ·
+  B8 3.46x. The bigger the batch, the more the tuned GEMM helps — because the GEMM is a
+  larger share of the step wall at high M.
+
+============================ TORCH-PARITY REGIME? =====================================
+NO. flame-with-tuned-GEMM reaches NO torch-parity regime in the TF32 lane: the residual
+2.0-2.9x persists at every B. Why the floor doesn't close to 1x:
+  (a) cuBLAS-TF32 is the PROXY ceiling; a real OG10 (6.09x off cuBLAS on its native
+      sm_90a) would land FURTHER from torch, not closer — so 2.0-2.9x is the OPTIMISTIC
+      bound, not the OG10-achievable number.
+  (b) the residual is now the NON-GEMM glue (per-row groupnorm valley reduction +
+      transpose + AdamW elementwise) + per-kernel launch overhead of the serial DAG,
+      which torch.compile fuses/overlaps and flame's discrete-launch step does not.
+  The GEMM was the batch-SCALING part of the gap (now removed); the flat ~2x floor is
+  occupancy/launch/glue, a DIFFERENT lever (megakernel/graph-capture — closed-neg for
+  byte-eq elsewhere). In the FP64 lane (BENCH-1) flame already WINS B>=4 (torch has no
+  FP64 tensor-core path) — that remains flame's parity/win regime, unchanged by BENCH-3.
+
+================================ HONEST BOTTOM LINE ===================================
+A tuned/own-GEMM (cuBLAS-TF32 proxy) shrinks the BENCH-1 naive TF32 gap from a
+batch-growing 3.03x→7.88x down to a flat ~2.0-2.9x (up to 2.77x shrink at B=8), by
+removing the naive kernel's batch-scaling penalty. It does NOT reach torch parity — the
+residual ~2x is launch/glue/occupancy, not GEMM. OG10-exact (the intended own-GEMM)
+could NOT be measured here: it is sm_90a (Hopper wgmma) and ptxas rejects it for aiden's
+sm_120 consumer-Blackwell ISA. cuBLAS-TF32 is the optimistic upper bound of OG10's
+benefit (OG10 is 6.09x off cuBLAS, so would close the gap LESS). flame's value stays
+byte-exact/deterministic (max|delta|=0 all cells) + its TF32-naive gap is now explained
+and bounded; raw TF32 throughput remains torch's by ~2x even with a tuned GEMM. Free pool
+GPU (aiden), zero vast, no leak.
+
+ARTIFACTS: tool/bench/flame_bench_step_og.cu (pluggable GEMM backend) ·
+tool/bench/run_bench3.sh (ISA probe + sweep driver) · tool/bench/bench3_raw.log (full
+verbatim run: ISA errors + all [CFG]/[DETERMINISM]/[GATE]/[RESULT] lines).

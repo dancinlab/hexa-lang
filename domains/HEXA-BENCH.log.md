@@ -27,3 +27,26 @@ flame determinism max|delta(W')|=0 at ALL 12 cells (byte-exact). No OOM (FP64 B=
 Honest: torch wins TF32/FP32 throughput big (29.7k samp/s @ B=8 vs flame 3.8k) — EXPECTED + fine;
 flame's value = reproducibility/no-LLVM/device-resident, not step-rate. Free pool GPU, zero vast cost.
 Verdict .verdicts/hexa-bench/F-BENCH-1.txt; raw 36-RESULT log tool/bench/bench1_raw.log.
+
+## 2026-06-08 — BENCH-3 DONE — tuned/own-GEMM swap, TF32 gap re-measured (aiden, no vast)
+
+Swapped the bench step's D->D projection GEMM (the naive tiled CUDA-core k_gemm that BENCH-2 fingered as
+the cause of the TF32 3-8x gap) for a TUNED GEMM and re-ran the TF32 sweep B=1,2,4,8 on aiden.
+
+OG10 sm_120 ISA CHECK (done FIRST, cheap): the intended own-GEMM = HEXA-FUSION OG10 (W10 TF32-wgmma,
+70.7 TFLOP/s, bit-exact, self/native/wgmma/wgmma_tf32_w10.cu) is sm_90a (Hopper). Compiling it for aiden's
+sm_120 FAILS at ptxas (CUDA 13.0.88, ON aiden): 'wgmma.fence / wgmma.mma_async / wgmma.commit_group /
+wgmma.wait_group not supported on .target sm_120' (~22 sites). HONEST GAP: Hopper warpgroup-async MMA is
+NOT in the consumer-Blackwell (sm_120) ISA — OG10-exact can't run on a 5070 without a tcgen05 port. OG10's
+summit stands only on Hopper (H100). FELL BACK (plan a) to cuBLAS-TF32 (cublasGemmEx,
+CUBLAS_COMPUTE_32F_FAST_TF32) as the tuned-GEMM proxy = optimistic CEILING (OG10 is 6.09x off cuBLAS, would
+close LESS). One source tool/bench/flame_bench_step_og.cu, GEMM_BACKEND 0=naive/1=cuBLAS, same DAG as BENCH-1.
+
+GATE (g5): cuBLAS rel-RMS(W' vs naive-ref) ~e-8 all B (<<1e-2 PASS); determinism max|delta(W')|=0 all cells.
+RESULT — flame÷best-torch TF32 ratio: NAIVE (re-measured) 3.14/4.08/5.08/9.85x vs cuBLAS-proxy
+2.20/2.25/2.07/2.85x. vs PUBLISHED BENCH-1 naive (3.03/4.08/5.54/7.88x) the tuned GEMM SHRINKS the gap by
+1.38/1.82/2.67/2.77x. The naive gap GREW with batch (kernel doesn't scale with M); the tuned GEMM flattens
+it to a batch-INVARIANT ~2x (biggest win at B=8 where naive was worst). flame GEMM-only speedup cuBLAS÷naive
+= 1.43/1.81/2.45/3.46x. NO torch-parity regime in TF32 — residual ~2x is launch/glue/occupancy (serial DAG),
+NOT GEMM; FP64 B>=4 remains flame's win regime (BENCH-1). Verdict .verdicts/hexa-bench/F-BENCH-3.txt; raw
+log tool/bench/bench3_raw.log.
