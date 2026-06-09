@@ -1,5 +1,38 @@
 # HEXA-0POD — log
 
+## 2026-06-09 — OP-22 DONE: MEGASTEP whole-step megakernel DESIGN + Amdahl bound + H100 recipe (0-pod, vs TF32)
+
+Produced (reading existing real-pod verdicts + research memory only — $0, 0-GPU, NO vast/pod) the 0-pod
+DESIGN + honest Amdahl ceiling + turnkey experiment recipe for MEGASTEP: the whole flame CLMConvMoE train
+step fused into one persistent grid-resident cooperative megakernel to fill the between-GEMM valley.
+
+- VALLEY STRUCTURE (cited F-FUSION-FF-DUTYCYCLE, real H100 SXM, vast 39958628 DESTROYED leak-0):
+  GEMM% = 0.04% of wall (≈0.3% GPU-active) vs valley = 99.96% (GLUE 13.15% + GAP/idle 86.80% + OPT 0.01%).
+  GPU-active is 90.5% the 2 byte-eq-forced single-thread GroupNorm reductions (105–132 ms EACH). util
+  MEDIAN 1% / MEAN 10.9% / 72.2% samples <5% = BIMODAL {bursts, ~0% idle} occupancy wall. The step is in
+  NO sense GEMM-bound.
+- AMDAHL CEILING = 1/GEMM% = 1/0.0004 = 2844× — flagged HONESTLY as a USELESS ceiling (huge only because
+  GEMM is a rounding error; Amdahl gives the limit of perfect serial-removal, NOT what a megakernel reaches).
+  Binding bound = the serial-DAG occupancy FLOOR; MEASURED achievable ~1.0–1.04× (M2 MEAN +3.4pp).
+- DESIGN: 9-phase grid.sync()-delimited cooperative megakernel (cudaLaunchCooperativeKernel, one wave) with
+  inline own-GEMM replacing cuBLAS host calls. BOTH megakernel walls already closed: own-GEMM (#2697) + coop
+  grid-synced byte-eq GroupNorm (F-FUSION-MEGAKERNEL-GN-GRIDSYNC, A100 max|Δ|=0). Buildable; just doesn't win.
+- THREE honest tensions (all cited, real-pod): (1) own-GEMM ~6× off cuBLAS (W10 70.7 TFLOP/s) — fusion trades
+  GEMM speed; (2) byte-eq ⊥ util-lift (B6 max|Δ first_ce| 9e-16…1.8e-15 ≠ 0 after ONE fwd — GEMM k-order ≠
+  cublasDgemm, structural); (3) parity wgmma CANNOT co-reside (MEGA-OWNGEMM: blockDim<128 can't issue wgmma +
+  (S/128)² > 264-CTA one-wave ceiling → grid.sync deadlock @S=4096).
+- MEGASTEP-vs-TF32 (OP-20 ~4.2× @B=1) HONEST VERDICT: (b) DOMINATED. Same 99.96% valley; TF32 ~4× the win at
+  ~0 architecture risk (P1-TF32 +5.5pp util CE-safe). MEGASTEP's only GREEN slice (FF-VALLEY 2.5×) is a byte-eq
+  single-thread-GN ARTIFACT that collapses to MPK ~1.2–1.3× in a parallel/TF32 trainer; no orthogonal stack on
+  top of TF32 (TF32 already pulls GEMMs inline + collapses launches; residual idle is the serial-DAG floor).
+  DECISION: do NOT spend an H100 campaign on MEGASTEP. Bank TF32 for B=1; pursue BATCH-FILL (≈3×) for SM-sat.
+- TURNKEY RECIPE: FF-DUTYCYCLE → FF-VALLEY → MEGASTEP rungs + byte-eq/util/wall/batch-fill/TF32 gates + leak-0
+  destroy, runnable the moment a GPU is authorized — with an EARLY-EXIT note (RUNG C already measured closed-
+  neg; re-running buys 0 info → spend the GPU on TF32 drift-study or batch-fill instead).
+- HONEST (OP-2b/OP-21-class, g5): DESIGN + BOUND only. NO measurement performed or claimed; the H100 measure
+  stays GPU-gated and out of 0-pod scope. NO pod rented this session (0-pod goal = ZERO vast). leak = 0.
+  Verdict .verdicts/hexa-0pod/F-OP22-MEGASTEP-DESIGN.txt.
+
 ## 2026-06-09 — OP-18 DONE: host fallbacks for the remaining L3 fused dispatchers (gelu2 + moe_block2), 0-GPU
 
 Completed the OP-16 (#2995) L3 fused-dispatch FAMILY. forge_dispatch_gelu2 (L3-b) + forge_dispatch_moe_block2
