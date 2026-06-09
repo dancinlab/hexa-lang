@@ -10,6 +10,24 @@ loop targets what the consumer card + code can carry.
 
 ## milestones (loop self-feeds; add as discovered)
 
+<!-- ANCHOR:OP-26-MACHINEINDEP-WRITEUP (unique anchor — consolidate the OP-19/19b + oracle-series machine-independent bit-exact training RESULT into a rigorous evidence-complete results doc; docs-only; NO /paper scaffold per g84 OPT-IN) -->
+- [x] **OP-26 — machine-independent bit-exact training: rigorous results writeup (evidence-complete, docs-only, NO paper scaffold)** —
+  DOCS-COMPLETE. Authored docs/flame-machine-independent-training.md — a rigorous, evidence-complete RESULTS
+  document (NOT a paper) consolidating the HEXA-0POD result that the flame CLMConvMoE step is FULLY
+  machine-independent byte-exact (same weights/loss to the bit on ANY IEEE-754 arch/OS — a property
+  torch/JAX do NOT give, since libm transcendentals are not correctly-rounded across platforms). Contains:
+  (a) THE CLAIM, (b) the THREAT MODEL (libm transcendentals not correctly-rounded · tree-reduction
+  nondeterminism · atomic-scatter order → flame closure → verdict, with ASCII closure diagrams), (c) an
+  EVIDENCE TABLE citing 12 verdicts (8 per-phase oracles + F-OP15 capstone + F-OP19/19b cross-platform byte
+  folds + F-OP23 TF32) with byte-cmp values + ULP divergences + platforms, (d) the DETERMINISM CONSTRUCTION
+  recipe (dt_exp/dt_erf/_moe_exp/dt_ln + Newton sqrt + sequential reductions + ascending accumulation +
+  fixed foldings + deterministic init), (e) HONEST LIMITS (1.38e-7 erf-vs-libm by design · TF32 self-not-
+  cross-precision · single-machine GPU scope · B>1 conv seam · build-deferred final read). Every number
+  traces to a cited verdict (g5); no new computation — verified by reading the existing verdicts. Pointer
+  added from docs/flame-determinism-contract.md (the contributor SSOT). GOVERNANCE (project.tape g84 PAPER
+  OPT-IN): logged-discovery consolidation ONLY — NO /paper scaffolded, NO PAPER.tape/PAPER.md, paper skill
+  NOT invoked. $0 · 0-GPU · 0-pod · no vast. Verdict .verdicts/hexa-0pod/F-OP26-MACHINEINDEP-WRITEUP.txt.
+
 <!-- ANCHOR:OP-24-TF32-LIVEWIRE (unique anchor — wire OP-20's validated deterministic TF32 fast-mode into the live forge GEMM dispatch, env-gated, byte-eq-safe, aiden verify) -->
 - [x] **OP-24 — wire deterministic TF32 fast-mode into the live forge GEMM dispatch (env-gated, byte-eq-safe, aiden verify)** —
   GREEN (dispatch-unit). OP-20's PROVEN deterministic TF32 fast-mode is now an env-gated OPT-IN
