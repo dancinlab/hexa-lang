@@ -748,6 +748,103 @@ fn emit_runtime_cuda_c() -> str {
             "    C[m * N + n] = acc;\n" +
             "}\n" +
             "\n" +
+            "/* HEXA-0POD OP-24 (TF32 LIVE-WIRE) — deterministic TF32 fast-mode for the live\n" +
+            " * forge GEMM dispatch. OP-20 PROVED (aiden RTX 5070): a TF32 tensor-op step is\n" +
+            " * self-byte-eq run-to-run (max|delta|=0) AND W14-tol vs FP64 (rel-RMS ~1e-6) AND\n" +
+            " * 4.2x faster @B=1 — it breaks the ~3x FP64 step cap. OP-23 validated the\n" +
+            " * trajectory tracks FP64 over 100 steps. This wires that PROVEN compute-type into\n" +
+            " * the real trainer dispatch, env-gated HEXA_TF32_FASTMODE (FP64 stays the DEFAULT;\n" +
+            " * TF32 is opt-in). The forge farr buffers are FP64 (double); the TF32 path casts\n" +
+            " * A,B down to fp32 (a separate output buffer — NEVER mutates the FP64 inputs, so\n" +
+            " * the FP64 default path is byte-identical when the flag is off), runs the cuBLAS\n" +
+            " * TF32 tensor-op GEMM (CUBLAS_COMPUTE_32F_FAST_TF32, pinned CUBLAS_PEDANTIC_MATH\n" +
+            " * for the PORTABLE self-byte-eq guarantee per OP-20's ship recommendation), then\n" +
+            " * casts the fp32 result back up to the FP64 C buffer. The cast is a fixed-order\n" +
+            " * elementwise map (no reduction, no atomics) so it adds no determinism hazard;\n" +
+            " * the only determinism question is the cuBLAS TF32 GEMM, which PEDANTIC pins. */\n" +
+            "__global__ void _hx_k_cast_d2f(const double* __restrict__ src,\n" +
+            "                               float* __restrict__ dst, int64_t n) {\n" +
+            "    int64_t i = (int64_t)blockIdx.x * blockDim.x + threadIdx.x;\n" +
+            "    if (i < n) dst[i] = (float)src[i];\n" +
+            "}\n" +
+            "__global__ void _hx_k_cast_f2d(const float* __restrict__ src,\n" +
+            "                               double* __restrict__ dst, int64_t n) {\n" +
+            "    int64_t i = (int64_t)blockIdx.x * blockDim.x + threadIdx.x;\n" +
+            "    if (i < n) dst[i] = (double)src[i];\n" +
+            "}\n" +
+            "\n" +
+            "/* OP-24: returns 1 iff HEXA_TF32_FASTMODE is set+non-empty (opt-in; default 0). */\n" +
+            "static int _forge_tf32_fastmode(void) {\n" +
+            "    const char* v = getenv(\"HEXA_TF32_FASTMODE\");\n" +
+            "    return (v && v[0]) ? 1 : 0;\n" +
+            "}\n" +
+            "\n" +
+            "/* OP-24: deterministic TF32 tensor-op GEMM on FP64 row-major farr device buffers.\n" +
+            " * Computes C[M,N] = A[M,K] . B[K,N] (same row->col trick + arg layout as the\n" +
+            " * cublasDgemm default path: cublas sees row-major as col-major transposed, so the\n" +
+            " * call is GemmEx(N,N, m=N,n=M,k=K, Bf,N, Af,K, Cf,N)). A_dev,B_dev,C_dev are the\n" +
+            " * existing FP64 device buffers; we allocate scratch fp32 mirrors, cast in, run the\n" +
+            " * TF32 tensor-op, cast the fp32 result back into C_dev. Returns 0 ok / -1 err.\n" +
+            " * Uses a PEDANTIC-math cuBLAS handle (lazy, separate from g_cublas which stays\n" +
+            " * fp64-strict for the default Dgemm path) so the TF32 self-byte-eq is portable. */\n" +
+            "static cublasHandle_t g_cublas_tf32 = NULL;\n" +
+            "static int _ensure_cublas_tf32(void) {\n" +
+            "    if (g_cublas_tf32) return 0;\n" +
+            "    cublasStatus_t st = cublasCreate(&g_cublas_tf32);\n" +
+            "    if (st != CUBLAS_STATUS_SUCCESS) {\n" +
+            "        fprintf(stderr, \"[cuda] cublasCreate(tf32) failed: %d\\n\", (int)st);\n" +
+            "        g_cublas_tf32 = NULL; return -1;\n" +
+            "    }\n" +
+            "    /* PEDANTIC pins a deterministic, no-heuristic math mode -> portable self-byte-eq\n" +
+            "     * (OP-20 ship recommendation). The TF32 tensor-op is selected per-GEMM via the\n" +
+            "     * GemmEx computeType CUBLAS_COMPUTE_32F_FAST_TF32, not the handle math-mode. */\n" +
+            "    cublasSetMathMode(g_cublas_tf32, CUBLAS_PEDANTIC_MATH);\n" +
+            "    if (_forge_async_on()) cublasSetStream(g_cublas_tf32, _forge_stream());\n" +
+            "    return 0;\n" +
+            "}\n" +
+            "static int _hx_cuda_gemm_tf32_dev(double* A_dev, double* B_dev, double* C_dev,\n" +
+            "                                  int64_t M, int64_t K, int64_t N) {\n" +
+            "    if (_ensure_cublas_tf32() != 0) return -1;\n" +
+            "    float* Af = NULL; float* Bf = NULL; float* Cf = NULL;\n" +
+            "    cudaError_t er;\n" +
+            "    er = cudaMalloc((void**)&Af, (size_t)(M*K) * sizeof(float));\n" +
+            "    if (er != cudaSuccess) { fprintf(stderr, \"[cuda] tf32 malloc Af: %s\\n\", cudaGetErrorString(er)); return -1; }\n" +
+            "    er = cudaMalloc((void**)&Bf, (size_t)(K*N) * sizeof(float));\n" +
+            "    if (er != cudaSuccess) { fprintf(stderr, \"[cuda] tf32 malloc Bf: %s\\n\", cudaGetErrorString(er)); cudaFree(Af); return -1; }\n" +
+            "    er = cudaMalloc((void**)&Cf, (size_t)(M*N) * sizeof(float));\n" +
+            "    if (er != cudaSuccess) { fprintf(stderr, \"[cuda] tf32 malloc Cf: %s\\n\", cudaGetErrorString(er)); cudaFree(Af); cudaFree(Bf); return -1; }\n" +
+            "    cudaStream_t strm = _forge_stream();\n" +
+            "    { int64_t nA = M*K; dim3 b(256); dim3 g((unsigned)((nA + 255) / 256));\n" +
+            "      _hx_k_cast_d2f<<<g, b, 0, strm>>>(A_dev, Af, nA); }\n" +
+            "    { int64_t nB = K*N; dim3 b(256); dim3 g((unsigned)((nB + 255) / 256));\n" +
+            "      _hx_k_cast_d2f<<<g, b, 0, strm>>>(B_dev, Bf, nB); }\n" +
+            "    if (_forge_launch_check(\"tf32_cast_in\") != 0) { cudaFree(Af); cudaFree(Bf); cudaFree(Cf); return -1; }\n" +
+            "    static int _tf32_fired = 0;\n" +
+            "    if (!_tf32_fired) { _tf32_fired = 1;\n" +
+            "        fprintf(stderr, \"[TF32-FASTMODE-FIRED] cublasGemmEx COMPUTE_32F_FAST_TF32 (PEDANTIC) DEVICE path\\n\"); }\n" +
+            "    const float alpha = 1.0f; const float beta = 0.0f;\n" +
+            "    cublasStatus_t st = cublasGemmEx(g_cublas_tf32,\n" +
+            "                                     CUBLAS_OP_N, CUBLAS_OP_N,\n" +
+            "                                     (int)N, (int)M, (int)K,\n" +
+            "                                     &alpha,\n" +
+            "                                     Bf, CUDA_R_32F, (int)N,\n" +
+            "                                     Af, CUDA_R_32F, (int)K,\n" +
+            "                                     &beta,\n" +
+            "                                     Cf, CUDA_R_32F, (int)N,\n" +
+            "                                     CUBLAS_COMPUTE_32F_FAST_TF32,\n" +
+            "                                     CUBLAS_GEMM_DEFAULT_TENSOR_OP);\n" +
+            "    if (st != CUBLAS_STATUS_SUCCESS) {\n" +
+            "        fprintf(stderr, \"[cuda] cublasGemmEx TF32 failed: %d\\n\", (int)st);\n" +
+            "        cudaFree(Af); cudaFree(Bf); cudaFree(Cf); return -1;\n" +
+            "    }\n" +
+            "    { int64_t nC = M*N; dim3 b(256); dim3 g((unsigned)((nC + 255) / 256));\n" +
+            "      _hx_k_cast_f2d<<<g, b, 0, strm>>>(Cf, C_dev, nC); }\n" +
+            "    if (_forge_launch_check(\"tf32_cast_out\") != 0) { cudaFree(Af); cudaFree(Bf); cudaFree(Cf); return -1; }\n" +
+            "    if (_forge_sync() != 0) { cudaFree(Af); cudaFree(Bf); cudaFree(Cf); return -1; }\n" +
+            "    cudaFree(Af); cudaFree(Bf); cudaFree(Cf);\n" +
+            "    return 0;\n" +
+            "}\n" +
+            "\n" +
             "/* _hx_cuda_farr_matmul_gpu(A, M, K, B, N, C) — Dgemm row-major C = A · B.\n" +
             " *   A is M×K, B is K×N, C is M×N.\n" +
             " *   - Caller (runtime.c) has already allocated C farr_id with len = M·N\n" +
@@ -830,6 +927,10 @@ fn emit_runtime_cuda_c() -> str {
             "        dim3 _ggrd((unsigned)((N + 15) / 16), (unsigned)((M + 15) / 16));\n" +
             "        _hx_k_gemm<<<_ggrd, _gblk, 0, _forge_stream()>>>(A_dev, B_dev, C_dev, M, K, N);\n" +
             "        if (_forge_launch_check(\"own_gemm\") != 0) return -1;\n" +
+            "    } else if (_forge_tf32_fastmode()) {\n" +
+            "        /* HEXA-0POD OP-24: deterministic TF32 fast-mode (opt-in). FP64 default is\n" +
+            "         * UNTOUCHED above; this branch only fires when HEXA_TF32_FASTMODE is set. */\n" +
+            "        if (_hx_cuda_gemm_tf32_dev(A_dev, B_dev, C_dev, M, K, N) != 0) return -1;\n" +
             "    } else {\n" +
             "    cublasStatus_t st = cublasDgemm(g_cublas,\n" +
             "                                    CUBLAS_OP_N, CUBLAS_OP_N,\n" +

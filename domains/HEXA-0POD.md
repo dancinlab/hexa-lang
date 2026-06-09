@@ -10,6 +10,9 @@ loop targets what the consumer card + code can carry.
 
 ## milestones (loop self-feeds; add as discovered)
 
+<!-- ANCHOR:OP-24-TF32-LIVEWIRE (unique anchor — wire OP-20's validated deterministic TF32 fast-mode into the live forge GEMM dispatch, env-gated, byte-eq-safe, aiden verify) -->
+- [ ] **OP-24 — wire deterministic TF32 fast-mode into the live forge GEMM dispatch (env-gated, byte-eq-safe, aiden verify)**
+
 <!-- ANCHOR:OP-23-TF32-DRIFT (unique anchor — TF32 N-step trajectory drift vs FP64; validate TF32 fast-mode is real, not a 1-step illusion; aiden 5070) -->
 - [x] **OP-23 — TF32 N-step trajectory drift vs FP64: validate TF32 fast-mode is real not 1-step illusion (aiden)** —
   GREEN. Decisively VALIDATED: OP-20's deterministic TF32 fast-mode is a REAL training fast-mode, NOT a 1-step
