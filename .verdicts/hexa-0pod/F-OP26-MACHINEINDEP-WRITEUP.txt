@@ -1,0 +1,107 @@
+════════════════════════════════════════════════════════════════════════════
+F-OP26-MACHINEINDEP-WRITEUP — machine-independent bit-exact training: rigorous
+                              results writeup (evidence-complete, docs-only)
+HEXA-0POD OP-26 · 0-GPU · 0-pod · NO vast · $0 · pure docs consolidation
+════════════════════════════════════════════════════════════════════════════
+
+DELIVERABLE (the doc)
+  docs/flame-machine-independent-training.md — a rigorous, evidence-complete
+  RESULTS document (NOT a paper scaffold) consolidating the HEXA-0POD result
+  into the publishable claim. Verified by READING the existing verdicts; no new
+  computation. Pointer added from docs/flame-determinism-contract.md (the
+  contributor-facing SSOT) → the results doc.
+
+THE CONSOLIDATED CLAIM (verbatim)
+  flame trains a real neural network (CLMConvMoE) bit-for-bit identically on ANY
+  IEEE-754 platform — the same fixed-seed step produces the same weights,
+  gradients, and loss to the last bit on x86-64 Linux (glibc) and arm64 macOS
+  (Darwin libm), across architectures AND operating systems. This is a property
+  PyTorch/JAX/TensorFlow do NOT provide: they route exp/erf/log through libm,
+  which is NOT correctly-rounded (glibc vs Darwin round the last ULP
+  differently). flame closes every such hole — the step has NO libm
+  transcendental left; every transcendental is a fixed-iteration +−×÷ routine,
+  bit-identical on any IEEE-754 hardware.
+
+  Two layers, each independently verified:
+   (1) run-to-run determinism (single machine) — per-op oracle series
+       OP-2/7/8/9/10/11/12/13 + the end-to-end capstone F-OP15 (max|Δ|=0 over 17
+       weights + m + v + loss).
+   (2) cross-platform determinism (any machine) — close the two libm holes that
+       survive on the step path: CE-backward exp (F-OP19) and GELU erf (F-OP19b).
+
+THREAT MODEL (what breaks cross-platform reproducibility → flame closure → verdict)
+  T1 libm transcendental NOT correctly-rounded → dt_exp/dt_erf/dt_ln/_moe_exp +
+     Newton sqrt (pure +−×÷, no libm)        → F-OP19, F-OP19B, F-OP8, F-OP11
+  T2 tree/warp-shuffle reduction nondeterminism → SEQUENTIAL scalar reductions,
+     fixed ASCENDING accumulation order locked → F-OP8, F-OP9, F-OP11
+  T3 atomic-scatter order (embedding bwd atomicAdd races) → in-place
+     position-ASCENDING scatter-add            → F-OP13
+
+EVIDENCE TABLE SUMMARY (# oracles cited = 8 per-phase + 1 capstone + 2
+cross-platform + 1 TF32 = 12 verdicts)
+  F-OP7  fwd conv im2col==direct           : max|Δ|=0 across 5 shapes
+  F-OP2  bwd dW transpose-elim             : max|Δ|=0 (GPU OP_T variant rel-RMS ~1e-14)
+  F-OP8  MoE softmax+combine two==one-pass : max|Δ|=0.0 all 6 shapes (_moe_exp, e-ASC)
+  F-OP9  GroupNorm two-pass+GELU==fused    : max|Δ|=0.0 (eps 1e-5, _gn_sqrt, dt_erf)
+  F-OP11 CE fwd+softmax-grad bwd           : gate max|Δ|=0; (p−1)·invT refold probe 1.38778e-17
+  F-OP12 AdamW update arithmetic           : gate max|Δ|=0; (1−β2)·(g·g) refold probe ≤8.88e-16
+  F-OP13 embedding bwd scatter-add         : gate max|Δ|=0; descending reorder probe ≤5.68434e-14
+  F-OP15 WHOLE composed micro-step r2r     : max|Δ|=0.0 over W(17)/m(17)/v(17)/loss;
+                                             neg-control distinct-seed = 0.344217 (genuine pass)
+  F-OP19 CE-bwd libm exp cross-platform    : libm fold arm64-macos 7969105254299072804 vs
+                                             x86-linux 3352931952497630952 = DIVERGE (4/4096
+                                             grad elems × 1 ULP); dt_exp 7679248634312321699
+                                             IDENTICAL on all 3; swap grad Δ max abs 2.17e-18,
+                                             max rel ≈2.0e-14 → AFTER byte-identical YES
+  F-OP19b GELU erf cross-platform          : dt_erf (A&S 7.1.26, branchless, no libm) GELU
+                                             fwd fold 4548590605583584556 / bwd
+                                             4249661408190172843 IDENTICAL on local+ghost
+                                             arm64-macos + aiden x86-linux
+  F-OP23 TF32 fast-mode complement (5070)  : self-byte-eq r2r over N=100 (W+loss max|Δ|=0);
+                                             loss-track FP64 ~1e-7 (worst 2.5e-5 @step1, no growth)
+
+PLATFORMS (free pool + local — ZERO vast, ZERO pod)
+  local arm64-macos (Darwin libm) · ghost arm64-macos · aiden x86_64-linux (glibc)
+  = cross-arch AND cross-OS contrast.
+
+DETERMINISM CONSTRUCTION (the reproducer recipe — §4 of the doc)
+  (a) hand-rolled transcendentals, NO libm: dt_exp (CE fwd/bwd + GELU-bwd pdf,
+      12-term scaled Taylor) · _moe_exp (MoE softmax, 14-term) · dt_erf (GELU
+      fwd/bwd, A&S 7.1.26, branchless) · dt_ln (CE fwd) · _gn_sqrt (40-iter
+      Newton) · _adamw_sqrt (24-iter Newton). Two distinct exp impls each
+      load-bearing; dt_erf load-bearing BRANCHLESS.
+  (b) sequential reductions — no tree/warp-shuffle/Welford.
+  (c) ascending accumulation order (v/e/t/position/(t,c)/j-ascending).
+  (d) fixed foldings (CE-bwd scale-then-subtract; AdamW left-assoc, ε outside √).
+  (e) deterministic LCG init + no-uninit-scratch state threading.
+  host↔device byte-eq: __device__ twins _hx_dt_exp_dev / _hx_dt_erf_dev.
+
+HONEST LIMITS (§5 — g5, elephant rule)
+  • dt_erf is 1.38e-7 from libm erf BY DESIGN (GELU fwd abs 2.11e-7, bwd ≈6e-9;
+    CE-bwd dt_exp swap grad max rel ≈2.0e-14) — reproducible-everywhere, not
+    bit-equal-to-a-reference-libm; ≤ GELU tolerance, training-equivalent.
+  • TF32-mode is SELF-deterministic, NOT cross-precision bit-equal to FP64
+    (training is chaotic; weights diverge while loss tracks). Cross-platform
+    bit-exactness is an FP64-lane claim.
+  • GPU determinism scope is single-machine here (host↔device byte-eq + cross-
+    platform CPU byte-eq proven; cross-GPU-arch byte measure NOT in scope).
+  • B>1 conv-seam intentionally non-zero: interior bit-exact, first (K-1)·dil
+    positions per window>0 carry cross-window causal context (seam max|Δ|
+    0.06–0.38 over 6 cases); platform-independent + run-to-run deterministic, just
+    not identical to a segmented conv. (F-OP10.)
+  • production-stdlib oracle final 0.0 read build-deferred (stale local hexa);
+    self-contained twins + cross-language C byte-eq pin the re-lock.
+
+GOVERNANCE (project.tape g84 — PAPER OPT-IN)
+  This is the LOGGED-DISCOVERY consolidation ONLY. NO /paper was scaffolded, NO
+  PAPER.tape/PAPER.md created, the paper skill was NOT invoked. A paper happens
+  ONLY when the user explicitly instructs /paper. Value = the publishable result
+  made rigorous + evidence-complete, NOT new computation.
+
+  F-OP26-MACHINEINDEP-WRITEUP : docs/flame-machine-independent-training.md
+                                consolidates the machine-independent bit-exact
+                                training result (12 cited verdicts, threat model,
+                                evidence table, reproducer recipe, honest limits);
+                                contract-doc pointer added; NO paper scaffolded
+                                (g84). $0 · 0-GPU · 0-pod · no vast.  DOCS-COMPLETE.
+════════════════════════════════════════════════════════════════════════════

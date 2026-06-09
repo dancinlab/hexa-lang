@@ -773,3 +773,29 @@ NOT claimed. $0, no vast/pool/pod. Verdict .verdicts/hexa-0pod/F-OP21-HOPPER-WAR
   self-byte-eq + wall step/s. PEDANTIC PINNED (not optional) = portable determinism; GATE-B=0 confirms.
 - $0 · free aiden · no vast · no pod · aiden /tmp cleaned (no residue). Verdict F-OP24-TF32-LIVEWIRE.txt;
   raw tool/bench/op24_5070_raw.log.
+
+## OP-26 — machine-independent bit-exact training: rigorous results writeup (docs-only, 0-pod, $0, NO paper) — 2026-06-10
+- DELIVERABLE: docs/flame-machine-independent-training.md — a rigorous, evidence-complete RESULTS document
+  (NOT a paper) consolidating the HEXA-0POD result that flame's CLMConvMoE step is FULLY machine-independent
+  byte-exact. Verified by READING the existing verdicts; NO new computation, NO GPU, NO vast, NO pod.
+- THE CLAIM: same fixed-seed step produces the same weights/grads/loss to the LAST BIT on x86-64-linux (glibc)
+  and arm64-macos (Darwin libm) — cross-arch AND cross-OS. torch/JAX do NOT give this (libm exp/erf/log are
+  not correctly-rounded; glibc vs Darwin round the last ULP differently). flame has NO libm transcendental
+  left on the step path → every transcendental is a fixed-iteration +−×÷ routine = bit-identical on any
+  IEEE-754 hardware.
+- THREAT MODEL → closure → verdict (ASCII diagrams in doc): T1 libm-not-correctly-rounded → dt_exp/dt_erf/
+  dt_ln/_moe_exp + Newton sqrt (F-OP19/19b/8/11) · T2 tree/warp reduction → sequential ASCENDING (F-OP8/9/11)
+  · T3 atomic-scatter → position-ASCENDING scatter-add (F-OP13).
+- EVIDENCE TABLE — 12 cited verdicts with byte-cmp values: F-OP7/2/8/9/11/12/13 per-phase (max|Δ|=0 + honest
+  reorder probes 1.39e-17 / 8.88e-16 / 5.68e-14), F-OP15 whole-step capstone (max|Δ|=0 over W/m/v/loss,
+  neg-control 0.344217), F-OP19 CE-bwd libm exp DIVERGE (arm64-macos 7969105254299072804 vs x86-linux
+  3352931952497630952 = 4/4096 × 1 ULP; dt_exp 7679248634312321699 identical on all 3), F-OP19b GELU dt_erf
+  fwd 4548590605583584556 / bwd 4249661408190172843 identical on local+ghost arm64-macos + aiden x86-linux,
+  F-OP23 TF32 self-byte-eq N=100 + loss-track ~1e-7.
+- DETERMINISM CONSTRUCTION recipe (§4) + HONEST LIMITS (§5): dt_erf 1.38e-7 from libm BY DESIGN · TF32
+  self-not-cross-precision · single-machine GPU scope (host↔device byte-eq + cross-platform CPU byte-eq) ·
+  B>1 conv seam intentional (F-OP10) · production-stdlib final 0.0 read build-deferred.
+- Pointer added from docs/flame-determinism-contract.md (contributor SSOT) → the results doc.
+- GOVERNANCE (project.tape g84 PAPER OPT-IN): logged-discovery consolidation ONLY. NO /paper scaffolded, NO
+  PAPER.tape/PAPER.md created, paper skill NOT invoked. A paper happens ONLY on explicit /paper.
+- $0 · 0-GPU · 0-pod · no vast. Verdict .verdicts/hexa-0pod/F-OP26-MACHINEINDEP-WRITEUP.txt.
