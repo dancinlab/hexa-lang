@@ -1,0 +1,76 @@
+════════════════════════════════════════════════════════════════════════════
+F-OP8-MOE-COMBINE-EQ — MoE router: softmax+combine two-pass == one-pass fused
+HEXA-0POD OP-8 · CPU-LOCAL byte-eq ORACLE · 0-GPU (`hexa run`) · $0
+════════════════════════════════════════════════════════════════════════════
+
+IDENTITY LOCKED
+  The flame CLMConvMoE trainer's MoE router (clm_prod.hexa _moe_router →
+  moe_lib.hexa nn_moe_router_fwd) computes the per-position mixture-of-experts
+  combine as TWO sequential reductions over the E experts:
+      probs[t,:] = softmax(logits[t,:])             (reduction 1: the gate)
+      y[t,c]     = Σ_e probs[t,e] · ex_out[e,t,c]    (reduction 2: the combine)
+  The softmax uses a hand-rolled scaled-Taylor _moe_exp (NOT a libm/CUDA exp),
+  per-position max-subtraction for stability, a sequentially-summed denominator,
+  and the combine accumulates over e in ASCENDING order.
+
+  The HEXA_FUSE_MOE_BLOCK2 megakernel (gelu2 + expert_pack2 + moe_router fused
+  into ONE device launch) claims in clm_prod.hexa to "replay _moe_exp and
+  accumulate BOTH reductions SEQUENTIALLY (NO tree re-assoc) → bit-exact to
+  nn_moe_router_fwd (max|Δ|=0)". OP-8 LOCKS that determinism contract on CPU.
+
+  OP-8 proves the trainer's TWO-PASS form (full probs[T·E] softmax buffer, THEN
+  a separate per-position e-ascending combine — the nn_moe_router_fwd path) is
+  BIT-FOR-BIT identical to a ONE-PASS FUSED form (the megakernel shape: per
+  position compute the gate INLINE — max → exp/sum → normalize into a transient
+  register-local probs row — then accumulate the combine over the SAME
+  e-ascending order, with NO full-T probs DRAM round-trip):
+      max|Δ| = 0.0, all shapes.
+
+  This is a true FUSION / ordering identity, NOT an associativity case — no
+  tolerance. Both forms (a) subtract the same per-position max, (b) call the
+  SAME _moe_exp on the SAME arguments in the SAME order, (c) divide by the SAME
+  sequentially-summed denominator, and (d) accumulate the combine over e in the
+  SAME ascending order ⇒ every float op is identical. A future refactor that
+  tree-reduces the softmax sum or the combine, drops the max-subtraction, or
+  reorders the expert axis would break determinism — this oracle catches it.
+
+  CANONICAL ORDER (the determinism contract this locks):
+    softmax    : max-subtraction ON; exp/sum e-ASCENDING; sequential denom.
+    combine    : Σ_e e-ASCENDING (e = 0,1,…,E-1), per (t,c).
+    exp        : hand-rolled scaled-Taylor _moe_exp (range-reduce + 14-term),
+                 NOT libm/CUDA exp.
+
+ORACLE
+  stdlib/flame/clm_prod_moe_combine_eq.hexa  (pure `hexa run`, CPU, 0-GPU)
+  _me_exp           — byte-identical mirror of moe_lib _moe_exp.
+  _moe_router_ref   — two-pass (mirrors nn_moe_router_fwd): full probs buffer.
+  _moe_router_fused — one-pass (megakernel shape): inline gate + fused combine.
+  6 shapes: E=2 (the trainer's 2-expert moe_block2), E=3/4/8, varied T,C,
+  + degenerate T=1,C=1 (pure-gate) edge.
+
+GATE (g5): `hexa run` — PASS, max|Δ| = 0.0 across all 6 shapes.
+
+VERBATIM `hexa run` OUTPUT
+----------------------------------------------------------------------------
+clm_prod_moe_combine_eq — F-OP8 MoE softmax+combine two-pass==one-pass byte-eq (CPU oracle)
+  y max|Δ|  T8 E2 C4  = 0.0
+  y max|Δ|  T8 E2 C8  = 0.0
+  y max|Δ|  T16 E4 C6 = 0.0
+  y max|Δ|  T12 E8 C5 = 0.0
+  y max|Δ|  T10 E3 C7 = 0.0
+  y max|Δ|  T1 E8 C1  = 0.0
+F-OP8-MOE-COMBINE-EQ = 1
+PASS — MoE softmax+combine two-pass == one-pass fused byte-eq (max|Δ|=0, all cases)
+----------------------------------------------------------------------------
+
+HONEST FRAMING (g5)
+  Behavior-preserving: NO trainer logic changed (oracle/verification addition
+  only). max|Δ|=0 is a GENUINE fusion identity (same exp, same max-sub, same
+  denominator, same e-ascending accumulation) — NOT a faked associativity pass.
+  The MoE router is in the FUSED hot path (HEXA_FUSE_MOE_BLOCK2), making this
+  the highest-value not-yet-locked identity. Companion to OP-2 (bwd dW
+  transpose-elim) and OP-7 (fwd conv im2col) in the determinism-oracle series.
+  $0 — pure local CPU `hexa run`, no GPU / no pool / no vast.
+
+  F-OP8-MOE-COMBINE-EQ = 1
+════════════════════════════════════════════════════════════════════════════

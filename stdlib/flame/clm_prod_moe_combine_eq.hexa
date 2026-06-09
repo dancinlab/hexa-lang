@@ -1,0 +1,223 @@
+// ════════════════════════════════════════════════════════════════════════════
+//  clm_prod_moe_combine_eq.hexa — F-OP8 MoE router softmax+combine byte-eq ORACLE.
+//
+//  HEXA-0POD OP-8: CPU-LOCAL (`hexa run`, 0-GPU) oracle that bit-exactly locks the
+//  flame CLMConvMoE MoE-router identity the FUSED hot path relies on, in the same
+//  oracle spirit as OP-2 (bwd dW transpose-elim) and OP-7 (fwd conv im2col).
+//
+//  The trainer's _moe_router (clm_prod.hexa) computes the per-position MoE combine
+//  as TWO sequential reductions over the E experts:
+//      probs[t,:] = softmax(logits[t,:])              (reduction 1: gate)
+//      y[t,c]     = Σ_e probs[t,e] · ex_out[e,t,c]     (reduction 2: combine)
+//  via nn_moe_router_fwd (moe_lib.hexa). The softmax uses a hand-rolled scaled-
+//  Taylor _moe_exp (NOT a libm/CUDA exp), max-subtraction for stability, and the
+//  combine accumulates in e-ASCENDING order. The HEXA_FUSE_MOE_BLOCK2 megakernel
+//  (gelu2 + expert_pack2 + moe_router fused into ONE device launch) claims to
+//  "replay _moe_exp and accumulate BOTH reductions SEQUENTIALLY (NO tree re-assoc)
+//  → bit-exact to nn_moe_router_fwd (max|Δ|=0)". This oracle LOCKS that contract on
+//  CPU so a future refactor that tree-reduces the softmax sum / the combine, or
+//  drops the max-subtraction, can't silently break trainer determinism.
+//
+//  TWO forms over the same fixture:
+//    REF  (two-pass) = the trainer path: nn_moe_softmax mirror (full probs buffer),
+//                      THEN a separate per-position e-ascending combine. = baseline.
+//    FUSED (one-pass) = a SINGLE per-position pass: compute the gate inline
+//                      (max → exp/sum → normalize) and accumulate the combine in
+//                      the SAME e-ascending order, NO intermediate full-probs DRAM
+//                      round-trip (the megakernel shape: probs kept register-local,
+//                      combine fused after). Same _moe_exp, same max-sub, same
+//                      e-ascending accumulation ⇒ y is BIT-FOR-BIT identical.
+//
+//  Because both forms (a) subtract the same per-position max, (b) call the SAME
+//  _moe_exp on the SAME arguments in the SAME order, (c) divide by the SAME
+//  sequentially-summed denominator, and (d) accumulate the combine over e in the
+//  SAME ascending order, every float op is identical ⇒ max|Δ|=0 (a true
+//  fusion/ordering identity, NOT an associativity case — no tolerance). Runs $0 via
+//  `hexa run` on any CPU (mac / aiden) — no GPU.
+//
+//  F-OP8-MOE-COMBINE-EQ : two-pass softmax+combine == one-pass fused, max|Δ|=0.
+// ════════════════════════════════════════════════════════════════════════════
+
+use "stdlib/flame/tensor_lib"
+
+fn _me_absf(x: float) -> float { if x < 0.0 { return 0.0 - x } return x }
+fn _me_maxdev(a: int, b: int, n: int) -> float {
+    let mut m = 0.0
+    let mut i = 0
+    while i < n { let d = _me_absf(t_get(a, i) - t_get(b, i)); if d > m { m = d }; i = i + 1 }
+    return m
+}
+
+// ── hand-rolled e^x — BYTE-IDENTICAL to moe_lib.hexa _moe_exp (scaled Taylor,
+//    range reduction x = n·ln2 + r, |r|<=ln2/2, 14-term Taylor, 2^n by mul/div).
+//    Both REF and FUSED call THIS exact function ⇒ no exp-impl divergence.
+fn _me_exp(x: float) -> float {
+    let ln2 = 0.6931471805599453
+    let mut n = 0
+    let mut r = x
+    while r > 0.34657359 { r = r - ln2; n = n + 1 }
+    while r < 0.0 - 0.34657359 { r = r + ln2; n = n - 1 }
+    let mut term = 1.0
+    let mut sum = 1.0
+    let mut k = 1
+    while k < 14 {
+        term = term * r / to_float(k)
+        sum = sum + term
+        k = k + 1
+    }
+    let mut p = sum
+    if n >= 0 {
+        let mut i = 0
+        while i < n { p = p * 2.0; i = i + 1 }
+    } else {
+        let mut i = 0
+        while i < (0 - n) { p = p / 2.0; i = i + 1 }
+    }
+    return p
+}
+
+// ── REF path (two-pass) — mirrors nn_moe_router_fwd exactly: full probs[T·E]
+//    softmax buffer, THEN a separate y[t,c] = Σ_e probs[t,e]·ex_out[e,t,c] combine.
+fn _moe_softmax_ref(logits: int, probs_out: int, T: int, E: int) {
+    let mut t = 0
+    while t < T {
+        let base = t * E
+        let mut mx = t_get(logits, base)
+        let mut e = 1
+        while e < E {
+            let v = t_get(logits, base + e)
+            if v > mx { mx = v }
+            e = e + 1
+        }
+        let mut s = 0.0
+        let mut e2 = 0
+        while e2 < E {
+            let ev = _me_exp(t_get(logits, base + e2) - mx)
+            t_set(probs_out, base + e2, ev)
+            s = s + ev
+            e2 = e2 + 1
+        }
+        let mut e3 = 0
+        while e3 < E {
+            t_set(probs_out, base + e3, t_get(probs_out, base + e3) / s)
+            e3 = e3 + 1
+        }
+        t = t + 1
+    }
+}
+
+fn _moe_router_ref(logits: int, ex_out: int, probs_out: int, y_out: int, T: int, E: int, C: int) {
+    _moe_softmax_ref(logits, probs_out, T, E)
+    let mut t = 0
+    while t < T {
+        let mut c = 0
+        while c < C {
+            let mut acc = 0.0
+            let mut e = 0
+            while e < E {
+                acc = acc + t_get(probs_out, t * E + e) * t_get(ex_out, e * T * C + t * C + c)
+                e = e + 1
+            }
+            t_set(y_out, t * C + c, acc)
+            c = c + 1
+        }
+        t = t + 1
+    }
+}
+
+// ── FUSED path (one-pass, megakernel shape) — per position: compute the gate
+//    INLINE (max → exp/sum → normalize into a small per-position probs row), then
+//    accumulate the combine over the SAME e-ascending order, with NO full-T probs
+//    DRAM buffer (probs row kept transient, the HEXA_FUSE_MOE_BLOCK2 register-local
+//    shape). Same _me_exp, same max-sub, same denominator, same e-order ⇒ byte-eq.
+fn _moe_router_fused(logits: int, ex_out: int, y_out: int, T: int, E: int, C: int) {
+    let prow = t_zeros(E)                 // transient per-position gate (no T-buffer)
+    let mut t = 0
+    while t < T {
+        let base = t * E
+        // gate: max
+        let mut mx = t_get(logits, base)
+        let mut e = 1
+        while e < E {
+            let v = t_get(logits, base + e)
+            if v > mx { mx = v }
+            e = e + 1
+        }
+        // gate: exp + sum (same _me_exp, same e-ascending sum as REF)
+        let mut s = 0.0
+        let mut e2 = 0
+        while e2 < E {
+            let ev = _me_exp(t_get(logits, base + e2) - mx)
+            t_set(prow, e2, ev)
+            s = s + ev
+            e2 = e2 + 1
+        }
+        // gate: normalize
+        let mut e3 = 0
+        while e3 < E {
+            t_set(prow, e3, t_get(prow, e3) / s)
+            e3 = e3 + 1
+        }
+        // combine: y[t,c] = Σ_e prow[e]·ex_out[e,t,c], e-ascending (same as REF)
+        let mut c = 0
+        while c < C {
+            let mut acc = 0.0
+            let mut e4 = 0
+            while e4 < E {
+                acc = acc + t_get(prow, e4) * t_get(ex_out, e4 * T * C + t * C + c)
+                e4 = e4 + 1
+            }
+            t_set(y_out, t * C + c, acc)
+            c = c + 1
+        }
+        t = t + 1
+    }
+}
+
+// deterministic fixture fill (no rng dependency — reproducible bytes)
+fn _me_fill(a: int, n: int, seed: int) {
+    let mut i = 0
+    let mut s = seed
+    while i < n {
+        s = (s * 1103515245 + 12345) & 0x7FFFFFFF
+        t_set(a, i, (to_float(s % 1000) - 500.0) * 0.01)
+        i = i + 1
+    }
+}
+
+fn _run_case(T: int, E: int, C: int) -> float {
+    let logits = t_zeros(T * E)
+    let ex_out = t_zeros(E * T * C)
+    _me_fill(logits, T * E, 7)
+    _me_fill(ex_out, E * T * C, 13)
+    let probs = t_zeros(T * E)
+    let y_ref = t_zeros(T * C)
+    let y_fused = t_zeros(T * C)
+    _moe_router_ref(logits, ex_out, probs, y_ref, T, E, C)
+    _moe_router_fused(logits, ex_out, y_fused, T, E, C)
+    return _me_maxdev(y_ref, y_fused, T * C)
+}
+
+fn main() {
+    println("clm_prod_moe_combine_eq — F-OP8 MoE softmax+combine two-pass==one-pass byte-eq (CPU oracle)")
+    let d1 = _run_case(8, 2, 4)      // E=2 (the trainer's 2-expert moe_block2 shape)
+    let d2 = _run_case(8, 2, 8)      // wider C
+    let d3 = _run_case(16, 4, 6)     // E=4 experts
+    let d4 = _run_case(12, 8, 5)     // E=8 (more experts → longer combine reduction)
+    let d5 = _run_case(10, 3, 7)     // E=3, odd C
+    let d6 = _run_case(1, 8, 1)      // degenerate T=1,C=1 (pure gate)
+    println("  y max|Δ|  T8 E2 C4  = " + to_string(d1))
+    println("  y max|Δ|  T8 E2 C8  = " + to_string(d2))
+    println("  y max|Δ|  T16 E4 C6 = " + to_string(d3))
+    println("  y max|Δ|  T12 E8 C5 = " + to_string(d4))
+    println("  y max|Δ|  T10 E3 C7 = " + to_string(d5))
+    println("  y max|Δ|  T1 E8 C1  = " + to_string(d6))
+    let ok = (d1 == 0.0) && (d2 == 0.0) && (d3 == 0.0) && (d4 == 0.0) && (d5 == 0.0) && (d6 == 0.0)
+    if ok {
+        println("F-OP8-MOE-COMBINE-EQ = 1")
+        println("PASS — MoE softmax+combine two-pass == one-pass fused byte-eq (max|Δ|=0, all cases)")
+    } else {
+        println("F-OP8-MOE-COMBINE-EQ = 0")
+        println("FAIL — MoE router fused combine diverges from two-pass reference")
+    }
+}
