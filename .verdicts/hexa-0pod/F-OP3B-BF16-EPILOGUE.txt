@@ -1,0 +1,81 @@
+F-OP3B-BF16-EPILOGUE — .v2 vectorized C-store epilogue on the BF16 sm_120 own-GEMM
+==================================================================================
+STATUS: GREEN — SHIP. The .v2 (float2) vectorized C-store epilogue (OP-1b's ONE
+bit-exact-positive lever) helped the BF16 sm_120 own-GEMM BIT-EXACTLY: +2.1% @1024,
++1.0% @2048, with the output BYTE-IDENTICAL to the OP-3 scalar baseline (rel-RMS vs
+OP-3 = 0) and the bit-faithful FP64 gate + run-to-run determinism unchanged.
+HARDWARE: aiden RTX 5070 (sm_120 / cc12.0), CUDA 13.0, free sidecar pool (NO vast).
+GPU verified FREE (0% util / 2 MiB) before every timed run.
+
+GOAL (narrowly scoped per OP-1b's finding): apply ONLY the .v2 vectorized C-store
+epilogue to the BF16 path of self/native/mma_sm120/owngemm_sm120_bf16.cu (the
+mma.sync.aligned.m16n8k16.row.col.f32.bf16.bf16.f32 own-GEMM). The BF16 mma OUTPUT
+fragment is fp32 with the IDENTICAL m16n8 C layout as the TF32 path (c0/c1 and c2/c3
+contiguous in C at cols 2*tig, 2*tig+1), so the .v2 store fuses each pair into one
+64-bit store — same bits, fewer store instructions. DELIBERATELY NOT attempted:
+BK=32 and 3-stage cp.async (OP-1b CLOSED-NEG on the 5070's 48KB smem cap — occupancy
+loss > latency-hide) and the 128x64 register tile (OP-1 CLOSED-NEG). This is the
+consumer-card own-GEMM's last identity-preserving lever.
+
+KERNEL: self/native/mma_sm120/owngemm_sm120_bf16.cu (lever (d) added).
+BUILD: build_owngemm_bf16.sh — builds the .v2 binary AND a -DEPILOGUE_SCALAR
+(OP-3 baseline) twin, dumps both C outputs (MODE 3) and `cmp`s them for byte-identity.
+
+GATE (g5, W14 bit-FAITHFUL — rel-RMS vs FP64 double-accum oracle, BF16 8-mantissa
+floor; UNCHANGED from OP-3 because the epilogue is a store-vectorization, not math):
+  D=768:   rel-RMS = 2.652e-03   max|delta| = 6.471e-04   PASS (<=1e-2)
+  D=1024:  rel-RMS = 6.697e-03   max|delta| = 7.047e-04   PASS
+  D=2048:  rel-RMS = 8.008e-03   max|delta| = 1.432e-03   PASS
+  => bit-faithful HELD at every shape, EXACT same values as OP-3.
+
+DETERMINISM (run-to-run, own-vs-own bit compare):
+  D=1024:  max|delta| = 0.000e+00   bitdiff = 0/1048576   HELD
+  D=2048:  max|delta| = 0.000e+00   bitdiff = 0/4194304   HELD
+  => determinism held: YES.
+
+BYTE-IDENTICAL vs OP-3 BASELINE (.v2 binary vs -DEPILOGUE_SCALAR twin, raw f32 dump
+`cmp`): rel-RMS vs OP-3 = 0, the gate the task demanded for a store-vectorization:
+  D=1024:  BYTE-IDENTICAL (cmp clean)
+  D=2048:  BYTE-IDENTICAL (cmp clean)
+  => the .v2 epilogue changed ZERO output bits. bit-faithful preserved: YES.
+
+PERF (TFLOP/s, aiden RTX 5070, GPU 0% verified; two timed passes, 50 iters/measure):
+  D=1024:
+    .v2  (OP-3b):  26.66 / 26.54 TFLOP/s  (avg 26.60)   off-cuBLAS = 2.06x / 2.06x
+    scalar (OP-3): 26.04 / 26.07 TFLOP/s  (avg 26.06)   off-cuBLAS = 2.11x / 2.10x
+    cuBLAS-BF16:   ~54.8 TFLOP/s
+    => .v2 LIFT = +2.1% (26.06 -> 26.60), tightens cuBLAS-multiple 2.10x -> 2.06x.
+  D=2048:
+    .v2  (OP-3b):  33.50 / 33.53 TFLOP/s  (avg 33.52)   off-cuBLAS = 1.92x / 1.97x
+    scalar (OP-3): 33.22 / 33.18 TFLOP/s  (avg 33.20)   off-cuBLAS = 1.88x / 2.01x
+    cuBLAS-BF16:   ~62-67 TFLOP/s
+    => .v2 LIFT = +1.0% (33.20 -> 33.52).
+
+  NEW cuBLAS-BF16-multiple (with .v2): ~2.06x @1024, ~1.92-1.97x @2048
+  (OP-3 baseline was ~2.0-2.1x @1024, ~1.85-2.0x @2048 — .v2 tightens it slightly).
+
+HONEST (g5): the ~2x BF16 gap is the DOUBLED cuBLAS-BF16 roofline (~55-67 TFLOP/s
+vs cuBLAS-TF32 ~28-31) — it is roofline-bound, not store-bound, so the store-only
+.v2 lever can only give the predicted ~1-2%, and it delivered EXACTLY that: +2.1%
+@1024, +1.0% @2048. This is the SAME magnitude OP-1b found for TF32 (+1.7% @1024).
+The lift is real but small; the residual ~2x to cuBLAS-BF16 is the f16-class
+tensor-core scheduling the portable warp-mma does not exploit — NOT closeable by an
+identity-preserving lever. SHIP (positive + bit-exact, no regression).
+
+CLOSED-NEG levers NOT re-attempted (terminal on the consumer 5070, per OP-1/OP-1b):
+  - BK=32 / 3-stage cp.async ring: smem-pressure occupancy loss > latency-hide on
+    the 48KB cap (OP-1b CLOSED-NEG).
+  - 128x64 register output tile: OP-1 CLOSED-NEG.
+After OP-3b the BF16 own-GEMM's identity-preserving lever ladder is EXHAUSTED.
+
+REPRO:
+  scp self/native/mma_sm120/owngemm_sm120_bf16.cu aiden:/tmp/
+  sidecar pool on aiden 'export PATH=/usr/local/cuda/bin:$PATH; \
+    nvcc -arch=sm_120 -I/usr/local/cuda/targets/x86_64-linux/include -O3 \
+      -DOWNGEMM_MAIN /tmp/owngemm_sm120_bf16.cu -lcublas -o /tmp/og_v2; \
+    nvcc -arch=sm_120 -I/usr/local/cuda/targets/x86_64-linux/include -O3 \
+      -DOWNGEMM_MAIN -DEPILOGUE_SCALAR /tmp/owngemm_sm120_bf16.cu -lcublas -o /tmp/og_sc; \
+    /tmp/og_v2 1024 2; \
+    /tmp/og_v2 1024 3 /tmp/a.bin; /tmp/og_sc 1024 3 /tmp/b.bin; cmp /tmp/a.bin /tmp/b.bin; \
+    /tmp/og_v2 1024 1; /tmp/og_v2 2048 1; /tmp/og_sc 1024 1; /tmp/og_sc 2048 1'
+  (mode 0=gate, 1=perf-vs-cuBLAS-BF16, 2=determinism, 3=dump-C-for-byte-cmp)

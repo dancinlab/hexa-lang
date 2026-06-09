@@ -43,6 +43,16 @@ loop targets what the consumer card + code can carry.
   DOUBLES the cuBLAS roofline (own-GEMM absolute TFLOP/s is actually HIGHER than TF32; cuBLAS scales faster)
   — real ~2x reported per g5. Win = working bit-faithful BF16 own-GEMM on the consumer card riding OP-1's
   layout/load lever. Verdict .verdicts/hexa-0pod/F-OP3-BF16-SM120.txt.
+- [x] **OP-3b — .v2 vectorized C-store epilogue on the BF16 sm_120 own-GEMM (aiden)** — apply OP-1b's ONE
+  bit-exact-positive lever (.v2 float2 C-store) to the BF16 path; the BF16 mma OUTPUT fragment is fp32 with
+  the IDENTICAL m16n8 C layout as TF32, so c0/c1 (and c2/c3) fuse to one 64-bit store. DONE — aiden RTX 5070
+  (free, GPU 0% verified): .v2 helped BIT-EXACTLY +2.1% @1024 (26.06→26.60 TFLOP/s, 2.10x→2.06x off cuBLAS-
+  BF16) / +1.0% @2048 (33.20→33.52), output BYTE-IDENTICAL to the OP-3 scalar baseline (rel-RMS vs OP-3 = 0,
+  cmp clean). GATE (g5 bit-faithful) UNCHANGED: rel-RMS vs FP64 2.7e-3/6.7e-3/8.0e-3 PASS; determinism
+  max|d|=0 bitdiff=0/N HELD. HONEST: ~2x gap is the doubled cuBLAS-BF16 roofline (roofline-bound), so the
+  store-only lever gives the predicted ~1-2% — same magnitude as OP-1b's TF32 +1.7%; SHIP. BK=32/3-stage
+  (OP-1b) + 128x64 register tile (OP-1) NOT re-attempted (CLOSED-NEG on 5070). The consumer-card own-GEMM's
+  identity-preserving lever ladder is now EXHAUSTED. Verdict .verdicts/hexa-0pod/F-OP3B-BF16-EPILOGUE.txt.
 - [x] **OP-4 — flame fused-step on aiden: extend shape/dtype coverage** — run the BENCH-10 fused step across
   more (D,T,B,dtype) on the free 5070, find + document where flame wins/loses on consumer hardware.
   DONE — swept D={768,1536,2048} x B={1,8} x dtype={FP64,TF32,BF16} = 18 cells on aiden RTX 5070 (sm_120),
@@ -119,15 +129,6 @@ loop targets what the consumer card + code can carry.
   The robustness improvements OP-5 originally listed (error paths, dtype edge cases, determinism guards in the
   forge runtime) cannot be gated byte-eq without running a kernel; they belong to a GPU round (aiden 5070), not
   this 0-pod pass. Logged here so the loop doesn't re-attempt them as "0-GPU".
-- **OP-3b — BF16 sm_120 own-GEMM: close the residual ~2x to cuBLAS-BF16 (aiden).** OP-3 landed a working
-  bit-faithful BF16 own-GEMM at ~2.0x off cuBLAS-BF16 with OP-1's layout/load lever fully applied. The
-  residual is the f16-class tensor-core scheduling cuBLAS exploits that the portable warp-mma does not. Probe
-  the .v2/.v4 vectorized C-store epilogue for the BF16 path (the ONE lever OP-1b found bit-exactly positive
-  on the 5070, +1.7% @1024). Do NOT re-attempt BK=32 or the 3-stage cp.async ring — OP-1b CLOSED both
-  NEGATIVE on the consumer card (smem-pressure occupancy loss; BK32+3stage overflows the 48KB cap), nor the
-  128x64 register tile (CLOSED-NEGATIVE, OP-1). Bit-faithful gate unchanged (rel-RMS vs FP64 ≤1e-2,
-  determinism max|d|=0). Free aiden GPU, 0-pod.
-
 ## honest framing (g5)
 
 Free-resource-only loop: every gate runs on the sidecar pool (aiden/summer 5070) or locally — NO vast cost.
