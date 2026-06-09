@@ -193,7 +193,21 @@ loop targets what the consumer card + code can carry.
   stdlib/flame/clm_prod_ln_reduction_eq.hexa · verdict .verdicts/hexa-0pod/F-OP9-LN-REDUCTION-ORACLE.txt.
 
 <!-- ANCHOR:OP-10-CONV-SEAM (unique anchor — OP-9 edits a different anchor) -->
-- [ ] **OP-10 — CPU oracle characterizing the B>1 causal-conv window-concat seam (0-GPU)**
+- [x] **OP-10 — CPU oracle characterizing the B>1 causal-conv window-concat seam (0-GPU)** — made the
+  flame_h100_h200_closeout's KNOWN honest non-bit-exact spot PRECISE. The flame batched step
+  (CLM_PROD_BATCH=B) concatenates B distinct length-Tw windows into ONE length-T=B*Tw buffer and runs the
+  causal-dilated Conv1d over the whole thing; the closeout flagged a "K-1 causal-conv SEAM-only Δ" vs a
+  per-window-segmented conv. This LOCAL `hexa run` (0-GPU) oracle computes BOTH paths on CPU — (a) the
+  flame concat conv (every previous-window row visible to the receptive field p=t-dil*(K-1-k)) vs (b) a
+  per-window-segmented reference that zeros the cross-window causal context — and maps Δ per output
+  position. FINDING (g5, honest CHARACTERIZATION not max|Δ|=0-everywhere): the INTERIOR is bit-exact
+  (interior max|Δ|=0, 0 bad positions across 6 cases) and the SEAM is EXACTLY the first (K-1)*dil output
+  positions of every window AFTER the first, where Δ = the cross-window context the segmented form zeros
+  (genuinely nonzero, 0 mischaracterized). CONFIRMS the closeout claim and REFINES it: dil=1 ⇒ band=K-1
+  (the named case); dil>1 ⇒ band=(K-1)*dil (the trunk's dilated convs widen the seam — the closeout said a
+  flat "K-1"). Seam magnitudes ~0.03–0.38 (LCG fixture). Behavior-preserving: NO trainer logic changed
+  (characterization addition only). Oracle stdlib/flame/clm_conv_window_seam_eq.hexa · verdict
+  .verdicts/hexa-0pod/F-OP10-CONV-SEAM-ORACLE.txt.
 
 ## deferred (0-pod follow-ups surfaced by the loop — self-feed)
 
