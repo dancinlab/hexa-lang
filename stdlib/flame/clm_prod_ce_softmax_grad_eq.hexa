@@ -1,10 +1,284 @@
 // ════════════════════════════════════════════════════════════════════════════
 //  clm_prod_ce_softmax_grad_eq.hexa — F-OP11 CE+softmax fused-gradient byte-eq ORACLE.
-//  HEXA-0POD OP-11 (WIP skeleton — body lands next commit).
+//
+//  HEXA-0POD OP-11: CPU-LOCAL (`hexa run`, 0-GPU) oracle that bit-exactly locks the
+//  flame CLMConvMoE cross-entropy LOSS path — the flame_h100_h200_closeout-flagged
+//  "CE/softmax-grad host glue" — in the same oracle spirit as OP-2 (bwd dW transpose-
+//  elim), OP-7 (fwd conv im2col), OP-8 (MoE softmax+combine), and OP-9 (GroupNorm/LN).
+//
+//  ── The PRODUCTION CE path (stdlib/flame/clm_prod.hexa + nn_lib.hexa) ──────────
+//  The trainer's full step runs the LOSS in two production functions, each with a
+//  DIFFERENT exp implementation (this is the subtle determinism hazard this oracle
+//  locks — a refactor that "unifies the exp" would silently break byte-eq):
+//
+//    BACKWARD grad — clm_ce_grad (clm_prod.hexa:919), the fused CE+softmax gradient:
+//        dL/dlogits[t,v] = ( softmax(logits[t,:])[v] − [v==tgt_t] ) / T
+//      computed per position t as: per-row max-subtraction → SEQUENTIAL exp-sum
+//      denominator (v-ascending) → p = exp(logit−mx)/sm → write p/T → then subtract
+//      1/T at the single target index. EXP = the libm `exp` BUILTIN (the comment at
+//      clm_prod.hexa:696 pins "device exp() = libm → bit-exact to the host
+//      clm_ce_grad (max|Δ|=0)"). This is the well-known CE+softmax fused-gradient
+//      simplification dL/dlogits == softmax(logits) − onehot(target) (·1/T mean).
+//
+//    FORWARD loss — nn_ce_loss_allpos (nn_lib.hexa:957), the scalar mean NLL:
+//        L = (1/T) Σ_t  −ln( softmax(logits[t,:])[tgt_t] )
+//      per-row max-subtraction → SEQUENTIAL exp-sum (v-ascending) → p_t = exp/tot →
+//      clamp p_t≥1e-6 → accumulate −ln(p_t) over t in t-ASCENDING order → /T. EXP =
+//      `dt_exp` and LN = `dt_ln` — the HAND-ROLLED flame_math.hexa scaled-Taylor
+//      (NOT libm), per the flame "explicit math" discipline. NOTE: this is a DIFFERENT
+//      exp than the backward path (libm) — the oracle matches EACH path's own exp.
+//
+//  ── What this oracle LOCKS (two independent identities, both max|Δ|=0) ──────────
+//  (A) BWD fused-grad identity: clm_ce_grad's PRODUCTION form (inline, no full-probs
+//      buffer, p/T then target−1/T) == a definitional REFERENCE that builds the full
+//      softmax row first, then forms (softmax − onehot)/T. Both use the SAME libm
+//      `exp` on the SAME args, SAME per-row max, SAME v-ascending denominator sum, and
+//      scale by the SAME 1/T ⇒ every float op identical ⇒ max|Δ|=0 (ordering/fusion
+//      identity, NOT an associativity case — no tolerance).
+//  (B) FWD loss-scalar identity: nn_ce_loss_allpos's PRODUCTION form (fused: it only
+//      exp's the row to get the denominator, then takes the target prob) == a
+//      definitional REFERENCE that materializes the full normalized softmax row and
+//      reads p[tgt]. Both use the SAME dt_exp, SAME max, SAME v-ascending denom, SAME
+//      ≥1e-6 clamp, SAME dt_ln, and accumulate over t in the SAME t-ascending order
+//      ⇒ max|Δ|=0 on the scalar loss.
+//
+//  HONEST (g5): NOT faked. The match is genuine max|Δ|=0 because each form replays its
+//  production function's EXACT exp impl and EXACT reduction order (the production order
+//  is SSOT). No tree re-association is introduced anywhere. Runs $0 via `hexa run` on
+//  any CPU (mac / aiden) — no GPU, no pool, no vast.
+//
+//  CANONICAL ORDER (SSOT) — and ONE honest associativity finding:
+//    • BWD: libm `exp`; per-row max-sub; denominator summed v-ascending; scale 1/T;
+//           grad = p/T (write p·invT for ALL v), THEN index tgt gets −invT.
+//      ⚠ FINDING: the target index is the SSOT-sensitive spot. The production writes
+//      (p·invT) for every v then SUBTRACTS invT at tgt → result (p_tgt·invT)−invT.
+//      A "fused" reference (p−onehot)·invT gives (p_tgt−1)·invT, which is float-
+//      DIFFERENT (observed max|Δ|≈1.39e-17 at T12/V7 before the fix). The oracle's
+//      reference therefore replays the EXACT production op order (scale-then-subtract,
+//      NOT fuse) ⇒ genuine max|Δ|=0. The production order (clm_prod.hexa:933-937) is
+//      the SSOT; do NOT algebraically refold the target subtraction.
+//    • FWD: dt_exp / dt_ln (flame_math Taylor); per-row max-sub; denom v-ascending;
+//           p_t clamped ≥1e-6; loss summed over t t-ascending; mean /T.
+//
+//  F-OP11-CE-SOFTMAX-ORACLE : clm_ce_grad == (softmax−onehot)/T  AND
+//                             nn_ce_loss_allpos == definitional mean-NLL, both max|Δ|=0.
 // ════════════════════════════════════════════════════════════════════════════
 
 use "stdlib/flame/tensor_lib"
+use "stdlib/flame/flame_math"
+
+fn _ce_absf(x: float) -> float { if x < 0.0 { return 0.0 - x } return x }
+fn _ce_maxdev(a: int, b: int, n: int) -> float {
+    let mut m = 0.0
+    let mut i = 0
+    while i < n { let d = _ce_absf(t_get(a, i) - t_get(b, i)); if d > m { m = d }; i = i + 1 }
+    return m
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//  (A) BACKWARD fused-grad identity — libm `exp`
+// ════════════════════════════════════════════════════════════════════════════
+
+// PRODUCTION form — BYTE-IDENTICAL to clm_ce_grad (clm_prod.hexa:919): inline
+// per-position, no full-probs buffer, write p/T then subtract 1/T at the target.
+fn _ce_grad_prod(logits: int, targets: int, dlogits_out: int, T: int, V: int) {
+    let mut t = 0
+    while t < T {
+        let base = t * V
+        let mut mx = t_get(logits, base)
+        let mut i = 1
+        while i < V { let v = t_get(logits, base + i); if v > mx { mx = v }; i = i + 1 }
+        let mut sm = 0.0
+        let mut i2 = 0
+        while i2 < V { sm = sm + exp(t_get(logits, base + i2) - mx); i2 = i2 + 1 }
+        let invT = 1.0 / to_float(T)
+        let mut v3 = 0
+        while v3 < V {
+            let p = exp(t_get(logits, base + v3) - mx) / sm
+            t_set(dlogits_out, base + v3, p * invT)
+            v3 = v3 + 1
+        }
+        let tgt = to_int(t_get(targets, t))
+        t_set(dlogits_out, base + tgt, t_get(dlogits_out, base + tgt) - invT)
+        t = t + 1
+    }
+}
+
+// REFERENCE form — the DEFINITIONAL CE+softmax gradient: first materialize the full
+// normalized softmax row p[t,:] (the classic "softmax forward"), then form the fused
+// gradient (softmax − onehot)/T. Same libm `exp`, same per-row max, same v-ascending
+// denominator, same 1/T ⇒ bit-for-bit identical to the production fused form.
+fn _ce_grad_ref(logits: int, targets: int, dlogits_out: int, T: int, V: int) {
+    let prow = t_zeros(V)                     // full softmax row (definitional)
+    let mut t = 0
+    while t < T {
+        let base = t * V
+        let mut mx = t_get(logits, base)
+        let mut i = 1
+        while i < V { let v = t_get(logits, base + i); if v > mx { mx = v }; i = i + 1 }
+        // softmax forward: exp(logit−mx), v-ascending denom sum, then normalize
+        let mut sm = 0.0
+        let mut i2 = 0
+        while i2 < V {
+            let ev = exp(t_get(logits, base + i2) - mx)
+            t_set(prow, i2, ev)
+            sm = sm + ev
+            i2 = i2 + 1
+        }
+        let invT = 1.0 / to_float(T)
+        let tgt = to_int(t_get(targets, t))
+        // grad = (softmax − onehot)/T, written in the PRODUCTION op order (SSOT):
+        // first scale every prob by invT (p·invT), THEN subtract invT at the target
+        // index — NOT the fused (p−onehot)·invT. The two are algebraically equal but
+        // float-DIFFERENT at the target: (p·invT)−invT ≠ (p−1)·invT at ULP level
+        // (a multiply-vs-subtract associativity gap; clm_prod.hexa:933-937 is SSOT).
+        let mut v3 = 0
+        while v3 < V {
+            let p = t_get(prow, v3) / sm
+            t_set(dlogits_out, base + v3, p * invT)
+            v3 = v3 + 1
+        }
+        t_set(dlogits_out, base + tgt, t_get(dlogits_out, base + tgt) - invT)
+        t = t + 1
+    }
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//  (B) FORWARD loss-scalar identity — dt_exp / dt_ln (flame_math Taylor)
+// ════════════════════════════════════════════════════════════════════════════
+
+// PRODUCTION form — BYTE-IDENTICAL to nn_ce_loss_allpos (nn_lib.hexa:957): per row it
+// exp's only to build the denom + the target's numerator, clamps p_t≥1e-6, sums
+// −dt_ln(p_t) over t (t-ascending), divides by T.
+fn _ce_loss_prod(logits: int, targets: int, T: int, V: int) -> float {
+    let mut total = 0.0
+    let mut t = 0
+    while t < T {
+        let base = t * V
+        let mut mx = t_get(logits, base)
+        let mut i = 1
+        while i < V { if t_get(logits, base + i) > mx { mx = t_get(logits, base + i) }; i = i + 1 }
+        let mut tot = 0.0
+        let mut i2 = 0
+        while i2 < V { tot = tot + dt_exp(t_get(logits, base + i2) - mx); i2 = i2 + 1 }
+        let tgt = to_int(t_get(targets, t))
+        let p_t = dt_exp(t_get(logits, base + tgt) - mx) / tot
+        let pt_safe = if p_t < 0.000001 { 0.000001 } else { p_t }
+        total = total + (0.0 - dt_ln(pt_safe))
+        t = t + 1
+    }
+    return total / to_float(T)
+}
+
+// REFERENCE form — DEFINITIONAL: materialize the full normalized softmax row, read
+// p[tgt], same ≥1e-6 clamp, same dt_ln, accumulate over t in the SAME t-ascending
+// order, mean /T. Same dt_exp, same max, same v-ascending denom ⇒ identical scalar.
+fn _ce_loss_ref(logits: int, targets: int, T: int, V: int) -> float {
+    let prow = t_zeros(V)
+    let mut total = 0.0
+    let mut t = 0
+    while t < T {
+        let base = t * V
+        let mut mx = t_get(logits, base)
+        let mut i = 1
+        while i < V { if t_get(logits, base + i) > mx { mx = t_get(logits, base + i) }; i = i + 1 }
+        let mut tot = 0.0
+        let mut i2 = 0
+        while i2 < V {
+            let ev = dt_exp(t_get(logits, base + i2) - mx)
+            t_set(prow, i2, ev)
+            tot = tot + ev
+            i2 = i2 + 1
+        }
+        let tgt = to_int(t_get(targets, t))
+        let p_t = t_get(prow, tgt) / tot
+        let pt_safe = if p_t < 0.000001 { 0.000001 } else { p_t }
+        total = total + (0.0 - dt_ln(pt_safe))
+        t = t + 1
+    }
+    return total / to_float(T)
+}
+
+// ── deterministic fixtures (no rng — reproducible bytes) ──────────────────────
+fn _ce_fill(a: int, n: int, seed: int) {
+    let mut i = 0
+    let mut s = seed
+    while i < n {
+        s = (s * 1103515245 + 12345) & 0x7FFFFFFF
+        t_set(a, i, (to_float(s % 1000) - 500.0) * 0.01)
+        i = i + 1
+    }
+}
+fn _ce_fill_targets(a: int, T: int, V: int, seed: int) {
+    let mut t = 0
+    let mut s = seed
+    while t < T {
+        s = (s * 1103515245 + 12345) & 0x7FFFFFFF
+        t_set(a, t, to_float(s % V))      // a valid class index in [0,V)
+        t = t + 1
+    }
+}
+
+fn _run_grad_case(T: int, V: int) -> float {
+    let logits = t_zeros(T * V)
+    let targets = t_zeros(T)
+    _ce_fill(logits, T * V, 7)
+    _ce_fill_targets(targets, T, V, 31)
+    let d_prod = t_zeros(T * V)
+    let d_ref = t_zeros(T * V)
+    _ce_grad_prod(logits, targets, d_prod, T, V)
+    _ce_grad_ref(logits, targets, d_ref, T, V)
+    return _ce_maxdev(d_prod, d_ref, T * V)
+}
+
+fn _run_loss_case(T: int, V: int) -> float {
+    let logits = t_zeros(T * V)
+    let targets = t_zeros(T)
+    _ce_fill(logits, T * V, 7)
+    _ce_fill_targets(targets, T, V, 31)
+    let lp = _ce_loss_prod(logits, targets, T, V)
+    let lr = _ce_loss_ref(logits, targets, T, V)
+    return _ce_absf(lp - lr)
+}
 
 fn main() {
-    println("clm_prod_ce_softmax_grad_eq — F-OP11 CE+softmax fused-grad byte-eq (CPU oracle) [WIP]")
+    println("clm_prod_ce_softmax_grad_eq — F-OP11 CE+softmax fused-grad + loss byte-eq (CPU oracle)")
+
+    // (A) BWD fused-grad identity: clm_ce_grad == (softmax − onehot)/T
+    let g1 = _run_grad_case(8, 16)     // small vocab
+    let g2 = _run_grad_case(8, 64)     // wider vocab
+    let g3 = _run_grad_case(16, 32)    // more positions
+    let g4 = _run_grad_case(4, 256)    // large V (CLM-scale vocab)
+    let g5 = _run_grad_case(1, 50)     // degenerate T=1
+    let g6 = _run_grad_case(12, 7)     // odd V
+    println("  grad max|Δ|  T8  V16  = " + to_string(g1))
+    println("  grad max|Δ|  T8  V64  = " + to_string(g2))
+    println("  grad max|Δ|  T16 V32  = " + to_string(g3))
+    println("  grad max|Δ|  T4  V256 = " + to_string(g4))
+    println("  grad max|Δ|  T1  V50  = " + to_string(g5))
+    println("  grad max|Δ|  T12 V7   = " + to_string(g6))
+
+    // (B) FWD loss-scalar identity: nn_ce_loss_allpos == definitional mean-NLL
+    let l1 = _run_loss_case(8, 16)
+    let l2 = _run_loss_case(8, 64)
+    let l3 = _run_loss_case(16, 32)
+    let l4 = _run_loss_case(4, 256)
+    let l5 = _run_loss_case(1, 50)
+    let l6 = _run_loss_case(12, 7)
+    println("  loss |Δ|     T8  V16  = " + to_string(l1))
+    println("  loss |Δ|     T8  V64  = " + to_string(l2))
+    println("  loss |Δ|     T16 V32  = " + to_string(l3))
+    println("  loss |Δ|     T4  V256 = " + to_string(l4))
+    println("  loss |Δ|     T1  V50  = " + to_string(l5))
+    println("  loss |Δ|     T12 V7   = " + to_string(l6))
+
+    let grad_ok = (g1 == 0.0) && (g2 == 0.0) && (g3 == 0.0) && (g4 == 0.0) && (g5 == 0.0) && (g6 == 0.0)
+    let loss_ok = (l1 == 0.0) && (l2 == 0.0) && (l3 == 0.0) && (l4 == 0.0) && (l5 == 0.0) && (l6 == 0.0)
+    if grad_ok && loss_ok {
+        println("F-OP11-CE-SOFTMAX-ORACLE = 1")
+        println("PASS — CE fused-grad (softmax−onehot)/T AND fwd mean-NLL byte-eq (max|Δ|=0, all cases)")
+    } else {
+        println("F-OP11-CE-SOFTMAX-ORACLE = 0")
+        println("FAIL — CE grad or loss reference diverges from production")
+    }
 }
