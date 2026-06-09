@@ -195,7 +195,23 @@ loop targets what the consumer card + code can carry.
   free pool (aiden/ghost), no vast. Verdict .verdicts/hexa-0pod/F-OP19B-DET-ERF.txt.
 
 <!-- ANCHOR:OP-19C-PI5-3PLATFORM (unique anchor — extends OP-19/19b's 2-platform cross-platform byte-eq to a 3rd distinct arch×OS combo: pi5-akida arm64-LINUX, isolating arch-vs-OS) -->
-- [ ] **OP-19c — 3rd-platform byte-exact: pi5 arm64-linux confirms machine-independence (or honest blocked/divergence)**
+- [x] **OP-19c — 3rd-platform byte-exact: pi5 arm64-linux confirms machine-independence (or honest blocked/divergence)** —
+  Extended OP-19 (#3002) + OP-19b (#3008)'s 2-platform machine-independence proof (x86-linux aiden ↔ arm64-macos
+  local/ghost) to a THIRD distinct arch×OS cell: **pi5-akida = arm64-LINUX** (Raspberry Pi 5, glibc), which isolates
+  arch-vs-OS — SAME arch as the macos machines, SAME OS as aiden. OP-19/19b noted pi5 had no hexa; installed it
+  **0-pod** (NO vast, NO build-from-source): official release tarball `hexa-linux-arm64.tar.gz` → `hexa 0.1.0-dispatch`
+  (SAME version as all 3 prior hosts) + a user-local `clang→gcc` shim (pi5 has gcc 13.3.0, no clang; strips the
+  clang-only `-fbracket-depth`) + scp'd a matching-version `self/` runtime tree (md5-verified, `tar -h` to deref the 4
+  macOS-absolute symlinks). Ran BOTH self-contained oracles (op19_crossplatform_selfcontained + op19b_crossplatform_erf)
+  via `hexa run` (0-GPU). **RESULT — 3-platform byte-IDENTICAL**: pi5 CE-bwd dt_exp = `7679248634312321699`, GELU FWD
+  dt_erf = `4548590605583584556`, GELU BWD dt_erf = `4249661408190172843` — all THREE deterministic folds match the
+  recorded arm64-macos AND x86-linux values bit-for-bit. The {x86,arm64}×{linux,macos} matrix is now **3/4 cells
+  confirmed** (4th = x86-macos, no pool host — retired Intel Macs); pi5 supplies the arm64-linux diagonal. **BONUS
+  (strengthens OP-19)**: pi5's libm CE-bwd fold = `3352931952497630952` == aiden x86-linux (NOT arm64-macos's
+  `7969105254299072804`) → the libm `exp` divergence OP-19 measured is an **OS/libc effect (glibc vs Darwin libm), NOT
+  arch** — pi5 tracks the OS it shares (Linux/glibc), not the arch it shares (arm64). dt_exp/dt_erf remove exactly that
+  OS-dependent path. NO divergence on the production deterministic path. $0, 0-GPU, free pool (pi5-akida only), ZERO
+  vast. Verdict .verdicts/hexa-0pod/F-OP19C-PI5-3PLATFORM.txt.
 
 <!-- ANCHOR:OP-18-L3-FUSED-HOST (unique anchor — completes the OP-16 L3 fused-dispatch family: gelu2 + moe_block2) -->
 - [x] **OP-18 — host fallbacks for the remaining L3 fused dispatchers (gelu2 + moe_block2), 0-GPU testable** —

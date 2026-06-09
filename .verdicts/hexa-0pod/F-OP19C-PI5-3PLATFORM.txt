@@ -4,30 +4,145 @@
  HEXA-0POD OP-19c · 0-GPU (`hexa run`) · free pool ONLY (pi5-akida) · ZERO vast · $0
 ════════════════════════════════════════════════════════════════════════════════
 
-[WIP — skeleton pushed first per STORM discipline; filled as the pi5 install + run
- lands. The 2-platform proof is already on main (OP-19 #3002 + OP-19b #3008).]
-
 GOAL
   OP-19 (#3002) + OP-19b (#3008) proved the flame CLMConvMoE step is machine-
   independent byte-exact on TWO platform combos:
     · x86_64-linux  (aiden, glibc)
     · arm64-macos   (local + ghost, Darwin libm)
-  That pair is cross-arch AND cross-OS at once. OP-19c adds a THIRD distinct combo —
-  pi5-akida = arm64-LINUX — which isolates arch-vs-OS: SAME arch as macos, SAME OS as
-  aiden. If the byte folds match on pi5 too, the determinism is proven across the full
-  {x86,arm64}×{linux,macos} matrix (3 of 4 cells), not a 2-machine coincidence.
+  That pair is cross-arch AND cross-OS at once — but only 2 of the 4 cells of the
+  {x86,arm64}×{linux,macos} matrix. OP-19c adds a THIRD distinct cell — pi5-akida =
+  arm64-LINUX — which isolates arch-vs-OS: SAME arch as the macos machines, SAME OS
+  as aiden. If the deterministic byte folds match on pi5 too, the determinism is
+  proven across 3 of the 4 arch×OS cells, not a 2-machine coincidence.
 
-RECORDED 2-PLATFORM FOLDS (on main; the values pi5 must match)
-  OP-19  CE-bwd dt_exp fold      = 7679248634312321699   (local+ghost arm64-macos, aiden x86-linux)
-  OP-19b GELU dt_erf  FWD fold   = 4548590605583584556   (local+ghost arm64-macos, aiden x86-linux)
-  OP-19b GELU dt_erf  BWD fold   = 4249661408190172843   (local+ghost arm64-macos, aiden x86-linux)
+────────────────────────────────────────────────────────────────────────────────
+ 1. pi5-akida hexa status — RUNNABLE: YES (installed 0-pod this op)
+────────────────────────────────────────────────────────────────────────────────
+  OP-19/19b recorded pi5 had NO hexa install at the time. This op installed it 0-pod
+  (NO vast, NO build-from-source — the official release path):
 
-ORACLES (self-contained, `hexa run`, 0-GPU)
-  · stdlib/flame/op19_crossplatform_selfcontained.hexa  (CE-bwd dt_exp fold = CEBWD-TAYLOR-bits)
-  · stdlib/flame/op19b_crossplatform_erf.hexa           (GELU dt_erf FWD/BWD = GELUFWD/BWD-DET-bits)
+    platform : Linux ubuntu 6.8.0-1007-raspi aarch64 GNU/Linux  (Raspberry Pi 5)
+               = arm64-LINUX (glibc) — the 3rd distinct arch×OS combo.
+    hexa     : hexa 0.1.0-dispatch  (SAME version string as local/ghost/aiden —
+               an apples-to-apples comparison, not a version-skew artifact).
+    binary   : ELF 64-bit LSB pie, ARM aarch64, GNU/Linux, dynamically linked.
 
-[PENDING] 1. pi5-akida hexa status (runnable Y/N)
-[PENDING] 2. pi5 byte folds (verbatim oracle output)
-[PENDING] 3. 3-way cmp verdict (3-platform identical OR exact divergence)
-[PENDING] 4. {x86,arm64}×{linux,macos} matrix result
+  INSTALL (0-pod, free pool only, $0):
+   (a) curl https://.../install.sh | bash (HEXA_SKIP_HX=1 HEXA_SKIP_SRC=1) — pulled
+       the prebuilt release asset hexa-linux-arm64.tar.gz (v0.17.3) → ~/.hx/bin/hexa.
+   (b) pi5 has gcc/make but NO clang; `hexa run`'s C-backend hardcodes `clang`.
+       Dropped a user-local shim ~/.hx/bin/clang → gcc that strips the clang-only
+       flag -fbracket-depth=* (gcc has no bracket-depth limit). gcc = Ubuntu 13.3.0.
+   (c) The release tarball ships only {hexa, build/}, NOT self/ (runtime.c + headers
+       + native/*.c + forge/*.c). Shipped a matching-version self/ tree from the
+       local 0.1.0-dispatch install via scp (md5-verified intact), dereferencing the
+       4 macOS-absolute symlinks (native/{crypto_blowfish,hxtok.h,parser_v2,hxtok.c})
+       with `tar -h` so the real file contents travelled. Symlinked ~/.hx/bin/self.
+  All three are user-local, free-pool, $0 — no pod, no GPU, no vast.
+
+────────────────────────────────────────────────────────────────────────────────
+ 2. pi5 byte folds (verbatim oracle output) — `hexa run`, 0-GPU
+────────────────────────────────────────────────────────────────────────────────
+  ORACLES (self-contained, no `use`, scp'd to /tmp on pi5, run with `hexa run`):
+    · stdlib/flame/op19_crossplatform_selfcontained.hexa
+    · stdlib/flame/op19b_crossplatform_erf.hexa
+
+  ===OP19===  (op19_crossplatform_selfcontained.hexa)
+    cmp the *-LIBM-bits lines across arch/OS for the cross-platform verdict
+      CEBWD-LIBM-bits   = 3352931952497630952
+      CEBWD-TAYLOR-bits = 7679248634312321699
+      GELUFWD-LIBM-bits   = 3332333775004383127
+      GELUFWD-TAYLOR-bits = 4548590605583584556
+      GELUBWD-LIBM-bits   = 3938753516756680850
+      GELUBWD-TAYLOR-bits = 636106759170901885
+  ===OP19B===  (op19b_crossplatform_erf.hexa)
+    cmp the *-DET-bits lines across arch/OS for the cross-platform verdict
+      GELUFWD-DET-bits = 4548590605583584556
+      GELUBWD-DET-bits = 4249661408190172843
+
+  (NOTE: op19's GELUBWD-TAYLOR = 636106759170901885 uses that oracle's dt_erf with
+   the *0.5·x·x* pdf-arg sign form and the inlined poly; the canonical, wired GELU-
+   bwd deterministic fold is op19b's GELUBWD-DET = 4249661408190172843 — that is the
+   value OP-19b recorded and that this op compares. Both oracles agree on the FWD
+   fold 4548590605583584556. The op19 GELUBWD-TAYLOR is a co-located swap-test, not
+   the production fold; it is platform-deterministic too but is not the recorded
+   cross-platform key.)
+
+────────────────────────────────────────────────────────────────────────────────
+ 3. THE 3-WAY cmp — DETERMINISTIC FOLDS BYTE-IDENTICAL ON ALL 3 PLATFORMS
+────────────────────────────────────────────────────────────────────────────────
+  Recorded on main (OP-19 #3002 + OP-19b #3008):
+    · local + ghost = arm64-macos (Darwin libm)
+    · aiden         = x86_64-linux (glibc)
+
+  ┌─────────────────────┬──────────────────────┬──────────────────────┬──────────────────────┐
+  │ deterministic fold  │ arm64-macos (rec.)   │ x86-linux aiden(rec.)│ arm64-LINUX pi5 (NEW)│
+  ├─────────────────────┼──────────────────────┼──────────────────────┼──────────────────────┤
+  │ CE-bwd  dt_exp      │ 7679248634312321699  │ 7679248634312321699  │ 7679248634312321699  │
+  │ GELU FWD dt_erf     │ 4548590605583584556  │ 4548590605583584556  │ 4548590605583584556  │
+  │ GELU BWD dt_erf     │ 4249661408190172843  │ 4249661408190172843  │ 4249661408190172843  │
+  └─────────────────────┴──────────────────────┴──────────────────────┴──────────────────────┘
+    CE-bwd  dt_exp  : pi5 == recorded  → MATCH
+    GELU FWD dt_erf : pi5 == recorded  → MATCH
+    GELU BWD dt_erf : pi5 == recorded  → MATCH
+
+  3-PLATFORM BYTE-IDENTICAL: YES. All three deterministic folds are bit-for-bit
+  identical on arm64-macos, x86-linux, AND arm64-linux.
+
+────────────────────────────────────────────────────────────────────────────────
+ 4. THE {x86,arm64}×{linux,macos} MATRIX RESULT
+────────────────────────────────────────────────────────────────────────────────
+                      │  linux                      │  macos (Darwin)
+   ───────────────────┼─────────────────────────────┼──────────────────────────────
+    x86_64            │  aiden    ✓ (OP-19/19b)      │  — (no host in pool)
+    arm64 (aarch64)   │  pi5-akida ✓ (THIS OP-19c)   │  local + ghost ✓ (OP-19/19b)
+   ───────────────────┴─────────────────────────────┴──────────────────────────────
+  3 of the 4 cells now CONFIRMED byte-identical (the 4th, x86-macos, has no pool
+  host — Apple Silicon retired Intel Macs). The 3 confirmed cells span BOTH arch
+  values AND BOTH OS values, with pi5 supplying the diagonal that isolates arch from
+  OS: pi5 shares arch with the macos machines and OS with aiden, yet produces the
+  SAME deterministic bytes as both. The determinism is therefore proven to be
+  genuinely platform-independent, not a 2-machine coincidence.
+
+────────────────────────────────────────────────────────────────────────────────
+ 5. BONUS FINDING — the libm CE-bwd divergence is an OS/libc effect, not arch
+    (pi5 cleanly isolates this; STRENGTHENS the OP-19 thesis)
+────────────────────────────────────────────────────────────────────────────────
+  OP-19 measured the libm `exp` CE-bwd fold diverging:
+      arm64-macos 7969105254299072804  ≠  x86-linux aiden 3352931952497630952
+  but could not say whether the split was caused by ARCH (arm64 vs x86) or by OS/libc
+  (Darwin libm vs glibc) — the two machines differed in BOTH at once. pi5 resolves it:
+
+      pi5 arm64-LINUX  CEBWD-LIBM = 3352931952497630952
+        == aiden x86-LINUX 3352931952497630952   (same OS/glibc, DIFFERENT arch)
+        != local arm64-macos 7969105254299072804 (same arch, DIFFERENT OS/libm)
+
+  → pi5 (arm64) tracks aiden (x86) on the libm path because they share glibc, NOT the
+    macos machine it shares an arch with. The libm `exp` divergence is a glibc-vs-
+    Darwin-libm (OS/libc) rounding difference, NOT an arch (arm64-vs-x86) difference.
+    The deterministic dt_exp/dt_erf folds collapse all three to identical bytes — the
+    determinism removes precisely the OS/libc-dependent path this isolates. (Same
+    GELU libm story: GELUFWD/BWD-LIBM are pi5-glibc values; the DET folds are equal.)
+
+────────────────────────────────────────────────────────────────────────────────
+ SUMMARY
+────────────────────────────────────────────────────────────────────────────────
+   pi5 hexa runnable ........ YES (installed 0-pod: release tarball + clang→gcc shim
+                              + scp'd matching-version self/ tree; hexa 0.1.0-dispatch)
+   pi5 byte folds ........... CE-bwd 7679248634312321699 · GELU FWD 4548590605583584556
+                              · GELU BWD 4249661408190172843  (all DETERMINISTIC folds)
+   3-platform byte-identical  YES — all 3 deterministic folds bit-for-bit equal on
+                              arm64-macos + x86-linux + arm64-linux
+   arch×OS matrix ........... 3/4 cells confirmed {x86,arm64}×{linux,macos}; pi5
+                              supplies the arm64-linux diagonal isolating arch vs OS
+   bonus .................... libm CE-bwd divergence proven to be OS/libc (glibc vs
+                              Darwin), NOT arch — pi5 (arm64-linux) matches aiden
+                              (x86-linux), not arm64-macos; dt_exp/dt_erf remove it
+   divergence / defect ...... NONE on the deterministic path (the production path)
+   cost ..................... $0 · 0-GPU · free pool (pi5-akida only) · ZERO vast
+
+   F-OP19C-PI5-3PLATFORM : pi5-akida arm64-LINUX reproduces the OP-19/19b
+                           deterministic folds BYTE-IDENTICALLY → machine-independence
+                           strengthened to a 3-of-4 {x86,arm64}×{linux,macos} matrix;
+                           libm hole isolated to OS/libc. REAL-AND-CONFIRMED.
 ════════════════════════════════════════════════════════════════════════════════
