@@ -221,22 +221,53 @@ pub fn devfeed_residual_add(a: int, b: int, out: int, n: int) {
     while i < n { t_set(out, i, t_get(a, i) + t_get(b, i)); i = i + 1 }
 }
 
+// ── OP-19b deterministic transcendental replicas (NO libm) ────────────────────
+// Byte-for-byte the flame_math.hexa dt_erf / dt_exp SSOT. Replicated (not
+// cross-imported) because these flame libs only `use` sibling data libs and a
+// cross-lib fn-value reference does not codegen here (same reason gn_lib._gn_gelu
+// replicates nn_lib's GELU). The devfeed REFERENCE GELU below is the host oracle
+// the device kernel must match max|Δ|=0; since the device kernel now uses
+// _hx_dt_erf_dev/_hx_dt_exp_dev (OP-19b), this reference uses the same dt_erf/dt_exp.
+fn _devfeed_dt_exp(x: float) -> float {
+    let mut r = 0
+    let mut xr = x
+    while (if xr > 0.0 { xr } else { 0.0 - xr }) > 0.25 { xr = xr / 2.0; r = r + 1 }
+    let mut term = 1.0
+    let mut acc = 1.0
+    let mut k = 1
+    while k < 12 { term = term * xr / to_float(k); acc = acc + term; k = k + 1 }
+    let mut s = 0
+    while s < r { acc = acc * acc; s = s + 1 }
+    return acc
+}
+fn _devfeed_dt_erf(x: float) -> float {
+    let mut sign = 1.0
+    let mut z = x
+    if z < 0.0 { sign = 0.0 - 1.0; z = 0.0 - z }
+    let t = 1.0 / (1.0 + 0.3275911 * z)
+    let a1 = 0.254829592
+    let a2 = 0.0 - 0.284496736
+    let a3 = 1.421413741
+    let a4 = 0.0 - 1.453152027
+    let a5 = 1.061405429
+    let poly = ((((a5 * t + a4) * t + a3) * t + a2) * t + a1) * t
+    return sign * (1.0 - poly * _devfeed_dt_exp(0.0 - z * z))
+}
+
 // ── devfeed_gelu: device-resident elementwise GELU (glue) ─────────────────────
 // HEXA-FUSION L3 (glue half) — the REFERENCE host GELU that the device kernel
 // _hx_cuda_farr_gelu_gpu reproduces: out[i] = in[i]·0.5·(1+erf(in[i]/√2)), the
 // EXACT erf-based GELU of nn_lib.hexa _nn_gelu (the 1/√2 literal and x·cdf op
 // order match the kernel verbatim). Pure elementwise, NO reduction → the device
-// kernel is trivially bit-exact (max|Δ| MUST be exactly 0). `erf` is the libm
-// codegen builtin (IEEE-correct on both host + CUDA device). Inlined here (NOT a
-// call into the device builtin) so the prebuilt mac binary never link-references
-// the builtin under `hexa run`; the builtin is wired ONLY in clm_prod.hexa::_gelu
-// under env CLM_PROD_DEVRESIDENT and realized in the self-host-rebuilt pod binary.
+// kernel is trivially bit-exact (max|Δ| MUST be exactly 0). OP-19b: `erf` →
+// _devfeed_dt_erf (deterministic Maclaurin, NO libm) — matches _hx_dt_erf_dev on
+// the device so the byte-eq assertion holds AND is cross-platform deterministic.
 pub fn devfeed_gelu(g: int, out: int, n: int) {
     let inv_sqrt2 = 0.70710678118654752440
     let mut i = 0
     while i < n {
         let x = t_get(g, i)
-        let cdf = 0.5 * (1.0 + erf(x * inv_sqrt2))
+        let cdf = 0.5 * (1.0 + _devfeed_dt_erf(x * inv_sqrt2))
         t_set(out, i, x * cdf)
         i = i + 1
     }
@@ -421,8 +452,8 @@ pub fn devfeed_gelu_bwd(g: int, da: int, dg: int, n: int) {
     let mut i = 0
     while i < n {
         let x = t_get(g, i)
-        let cdf = 0.5 * (1.0 + erf(x * inv_sqrt2))
-        let pdf = inv_sqrt2pi * exp(0.0 - 0.5 * x * x)
+        let cdf = 0.5 * (1.0 + _devfeed_dt_erf(x * inv_sqrt2))
+        let pdf = inv_sqrt2pi * _devfeed_dt_exp(0.0 - 0.5 * x * x)
         let grad = cdf + x * pdf
         t_set(dg, i, t_get(da, i) * grad)
         i = i + 1
@@ -966,7 +997,7 @@ fn main() {
     let gOH = t_zeros(ng); let isq2 = 0.70710678118654752440; let mut gi = 0
     while gi < ng {
         let xv = t_get(gG, gi)
-        t_set(gOH, gi, xv * (0.5 * (1.0 + erf(xv * isq2))))
+        t_set(gOH, gi, xv * (0.5 * (1.0 + _devfeed_dt_erf(xv * isq2))))
         gi = gi + 1
     }
     // device-kernel math reference (devfeed_gelu — what the GPU reproduces)
@@ -1164,8 +1195,8 @@ fn main() {
     let mut gbi = 0
     while gbi < ngb {
         let xv = t_get(gGb, gbi)
-        let cdf = 0.5 * (1.0 + erf(xv * isq2b))
-        let pdf = isq2pi * exp(0.0 - 0.5 * xv * xv)
+        let cdf = 0.5 * (1.0 + _devfeed_dt_erf(xv * isq2b))
+        let pdf = isq2pi * _devfeed_dt_exp(0.0 - 0.5 * xv * xv)
         t_set(dgH, gbi, t_get(daB, gbi) * (cdf + xv * pdf))
         gbi = gbi + 1
     }

@@ -47,30 +47,27 @@ fn dt_exp(x: float) -> float {
     return acc
 }
 
-// ── dt_erf : PURE-FP deterministic erf — NO libm, NO transcendental at all (not
-//    even dt_exp). Maclaurin series of the error function:
-//        erf(z) = (2/√π) · Σ_{n≥0} (−1)ⁿ z^(2n+1) / (n! · (2n+1))
-//    summed in fixed ASCENDING n order (80 terms — machine-exact for |z|<4 in
-//    fp64), clamped to ±1 for |z| ≥ 4 (erf(4) = 0.99999998458…, the clamp step
-//    is ≤ 1.54e-8, and GELU saturates to x or 0 there). Odd function: the sign is
-//    folded out and restored. EVERY op is +,-,*,/ on fp64 → bit-identical on any
-//    IEEE-754 platform (x86/arm64/Darwin/Linux). max|dt_erf − libm erf| = 1.54e-8.
+// ── dt_erf : PURE-FP deterministic erf — NO libm. Abramowitz & Stegun 7.1.26
+//    rational, with the single transcendental routed through dt_exp (above):
+//        erf(z) = 1 − (a₁t+…+a₅t⁵)·exp(−z²),  t = 1/(1 + p·z)
+//    BRANCHLESS in z (only the z=0 odd sign flip) — a SINGLE continuous arithmetic
+//    expression with no value-dependent boundary. That branchlessness is what makes
+//    it byte-eq under in-register vs stored-reload rounding of the GELU argument (a
+//    piecewise series-then-clamp/tail erf straddles its boundary and breaks
+//    max|Δ|=0). EVERY op is +,-,*,/ + dt_exp → bit-identical on any IEEE-754
+//    platform (x86/arm64/Darwin/Linux). max|dt_erf − libm erf| = 1.38e-7.
 fn dt_erf(x: float) -> float {
     let mut sign = 1.0
     let mut z = x
     if z < 0.0 { sign = 0.0 - 1.0; z = 0.0 - z }
-    if z >= 4.0 { return sign * 1.0 }
-    let two_over_sqrtpi = 1.1283791670955126   // 2/√π
-    let z2 = z * z
-    let mut term = z                           // n=0 : z^1 / (0! · 1)
-    let mut acc = z
-    let mut n = 1
-    while n < 80 {
-        term = term * (0.0 - z2) / to_float(n)         // term_{n} = term_{n-1}·(−z²)/n
-        acc = acc + term / to_float(2 * n + 1)         // ÷(2n+1), ascending n
-        n = n + 1
-    }
-    return sign * two_over_sqrtpi * acc
+    let t = 1.0 / (1.0 + 0.3275911 * z)
+    let a1 = 0.254829592
+    let a2 = 0.0 - 0.284496736
+    let a3 = 1.421413741
+    let a4 = 0.0 - 1.453152027
+    let a5 = 1.061405429
+    let poly = ((((a5 * t + a4) * t + a3) * t + a2) * t + a1) * t
+    return sign * (1.0 - poly * dt_exp(0.0 - z * z))
 }
 
 // ── deterministic LCG fixture (matches op19 oracle) ──────────────────────────

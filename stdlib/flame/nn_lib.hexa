@@ -986,16 +986,21 @@ pub fn nn_ce_loss_allpos(logits: int, targets: int, T: int, V: int) -> float {
 // (flame float-eval byte-eq hazard / RFC 059 §3 GELU' = Φ(g)+g·φ(g)):
 //   GELU(x)  = x · Φ(x) ,  Φ(x) = 0.5·(1 + erf(x/√2))   (normal CDF)
 //   GELU'(x) = Φ(x) + x · φ(x) ,  φ(x) = exp(−x²/2)/√(2π)  (normal pdf)
-// Both `erf` and `exp` are libm codegen builtins (self/codegen.hexa) —
-// IEEE-correct, no hand-rolled Taylor (CLAUDE.md stdlib_trig_libm).
+// HEXA-0POD OP-19b: erf → flame_math `dt_erf` (pure-FP Maclaurin, NO libm) and
+// exp → flame_math `dt_exp` (deterministic Taylor, OP-19). The libm `erf`/`exp`
+// codegen builtins DIVERGE across arch/OS by ≥1 ULP (OP-19 measured it on the CE
+// exp), so the GELU CDF/PDF are now routed through the deterministic twins → the
+// whole GELU fwd+bwd is byte-IDENTICAL on x86-linux + arm64-macos (F-OP19B). This
+// is a NUMERIC change (max|Δ vs libm| = 1.54e-8 ≤ GELU tolerance): it trades
+// "matches libm erf" for "matches across ALL platforms" (the reproducibility id).
 fn _nn_inv_sqrt2() -> float { return 0.70710678118654752440 }  // 1/√2
 fn _nn_inv_sqrt2pi() -> float { return 0.39894228040143267794 } // 1/√(2π)
 
 fn _nn_normal_cdf(x: float) -> float {
-    return 0.5 * (1.0 + erf(x * _nn_inv_sqrt2()))
+    return 0.5 * (1.0 + dt_erf(x * _nn_inv_sqrt2()))
 }
 fn _nn_normal_pdf(x: float) -> float {
-    return _nn_inv_sqrt2pi() * exp(0.0 - 0.5 * x * x)
+    return _nn_inv_sqrt2pi() * dt_exp(0.0 - 0.5 * x * x)
 }
 fn _nn_gelu(x: float) -> float {
     return x * _nn_normal_cdf(x)

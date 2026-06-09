@@ -301,9 +301,41 @@ pub fn nn_groupnorm_bwd_off(xhat: int, inv: int, gamma: int, goff: int, dy: int,
 // UNCHANGED — the saved hn (= y_out) feeds the existing nn_gelu_bwd →
 // nn_groupnorm_bwd_off chain, so the gradient path is bit-identical and
 // GRAD-EXACT is untouched.
+// HEXA-0POD OP-19b — pure-FP deterministic erf/exp replicas of flame_math.dt_erf
+// / dt_exp. Replicated (not cross-imported) for the SAME reason _gn_gelu
+// replicates nn_lib's GELU: gn_lib only `use`s tensor_lib and a cross-lib
+// fn-value reference does not codegen here. Character-for-character the
+// flame_math SSOT so _gn_gelu stays bit-for-bit equal to nn_lib _nn_gelu (the
+// OP-9 GN-GELU fusion byte-eq, max|Δ|=0). A&S 7.1.26 + dt_exp, BRANCHLESS, NO libm.
+fn _gn_dt_exp(x: float) -> float {
+    let mut r = 0
+    let mut xr = x
+    while (if xr > 0.0 { xr } else { 0.0 - xr }) > 0.25 { xr = xr / 2.0; r = r + 1 }
+    let mut term = 1.0
+    let mut acc = 1.0
+    let mut k = 1
+    while k < 12 { term = term * xr / to_float(k); acc = acc + term; k = k + 1 }
+    let mut s = 0
+    while s < r { acc = acc * acc; s = s + 1 }
+    return acc
+}
+fn _gn_dt_erf(x: float) -> float {
+    let mut sign = 1.0
+    let mut z = x
+    if z < 0.0 { sign = 0.0 - 1.0; z = 0.0 - z }
+    let t = 1.0 / (1.0 + 0.3275911 * z)
+    let a1 = 0.254829592
+    let a2 = 0.0 - 0.284496736
+    let a3 = 1.421413741
+    let a4 = 0.0 - 1.453152027
+    let a5 = 1.061405429
+    let poly = ((((a5 * t + a4) * t + a3) * t + a2) * t + a1) * t
+    return sign * (1.0 - poly * _gn_dt_exp(0.0 - z * z))
+}
+
 fn _gn_gelu(x: float) -> float {
     let inv_sqrt2 = 0.70710678118654752440  // 1/√2 — matches nn_lib _nn_inv_sqrt2
-    return x * (0.5 * (1.0 + erf(x * inv_sqrt2)))
+    return x * (0.5 * (1.0 + _gn_dt_erf(x * inv_sqrt2)))
 }
 
 // Offset-capable fused forward (trunk call site). gamma[goff+ch] / beta[boff+ch]
