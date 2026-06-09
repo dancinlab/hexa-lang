@@ -469,3 +469,25 @@ Verdict .verdicts/hexa-0pod/F-OP14-DETERMINISM-DOC.txt.
   emit SSOT for forge dispatchers) → the C BODY lands via a runtime rebuild in the release/build env (verbatim
   body + exact one-rebuild fix in the verdict). Byte-eq oracle + milestone + verdict ship now (tracked).
   links-now YES · byte-eq max|Δ|=0 · GPU untouched YES. Verdict .verdicts/hexa-0pod/F-OP16-GN-HOST-FALLBACK.txt.
+
+## OP-17 — fix runtime.c -Wmacro-redefined (9 libc macros) at source · 🟢 9→0
+
+- WIP skeleton pushed first (milestone + placeholder verdict; durable-worktree rule).
+- SIGNAL: clang on self/runtime.c → 9 [-Wmacro-redefined] (strcat/bzero/memcpy/memset/memmove/strncpy/strcpy/
+  snprintf/sprintf). Forge-hygiene class — same as OP-5/OP-5b (-Wcomment) but a DIFFERENT warning class.
+- TWO COLLIDING SITES located: (1) Darwin _FORTIFY_SOURCE secure headers `<secure/_string.h>`/`_strings.h`/
+  `_stdio.h` ALREADY `#define` these 9 as `__*_chk_func` fortify macros (transitive via top `#include <string.h>`/
+  `<strings.h>`/`<stdio.h>`); (2) runtime.c "Textual override" block (frozen lines 2070,2082-2087,2095-2096)
+  redefines them to the `hxlcl_*` svc-trap helpers. Only these 9 collide — the rest (strlen/memcmp/…) are plain
+  externs, not fortify macros.
+- MINIMAL FIX: `#undef` the 9 names before the override block — the EXACT precedent the seed already uses for
+  `#undef isalnum`/`#undef exit`. BEHAVIOR-PRESERVING (clang -E proof): hxlcl_* is the LAST `#define` either way →
+  expansion byte-identical before/after; `#undef` only kills the warning (no-op on Linux glibc → platform-neutral).
+- LOCAL VERIFY (0-GPU, `clang -fsyntax-only -DHEXA_RT_SELFEMIT`): -Wmacro-redefined 9→0; the 2 unrelated
+  pre-existing classes (4 -Wincompatible-pointer + 12 -Wundefined-internal) UNCHANGED; 0 errors.
+- HONEST LANDING (g5, OP-2b/OP-15/OP-16 class): self/runtime.c is gitignored frozen-seed (#2065, restored from
+  immutable blob 151c52c8… — no tracked emit SSOT) → durable fix lands as a deterministic, idempotent,
+  marker-guarded POST-RESTORE PATCH in the TRACKED tool/restore_frozen_seeds (injects the 9 `#undef`s on every
+  restore). End-to-end verified through the patched tool (warnings 0 after restore; re-restore stays single-inject).
+  9 warnings GONE · behavior-preserving YES · no new warn YES · GPU/pod/vast NONE ($0).
+  Verdict .verdicts/hexa-0pod/F-OP17-MACRO-REDEF.txt.

@@ -91,6 +91,43 @@ for f in "${FROZEN_SEEDS[@]}"; do
     exit 1
   fi
 done
+# ── OP-17 (HEXA-0POD) — -Wmacro-redefined hygiene patch ──────────────────────
+# The frozen self/runtime.c #defines 9 libc names (strcat/bzero/memcpy/memset/
+# memmove/strncpy/strcpy/snprintf/sprintf) that Darwin clang's _FORTIFY_SOURCE
+# secure headers (<secure/_string.h>/_strings.h/_stdio.h) ALREADY #define as
+# __*_chk_func fortify macros → 9 [-Wmacro-redefined] warnings on every build.
+# The SSOT is the immutable frozen blob (151c52c8…, the .c-graduation parent),
+# so the fix lands here as a deterministic post-restore patch: insert `#undef`
+# before the override block (same precedent as the seed's own `#undef isalnum`/
+# `#undef exit`). BEHAVIOR-PRESERVING — the hxlcl_* macro is the effective
+# expansion either way (it is the last #define); #undef only silences the warning.
+# Idempotent: the marker guards against double-injection across re-restores.
+rt="self/runtime.c"
+if [ -f "$rt" ] && ! grep -q 'OP-17 (HEXA-0POD' "$rt"; then
+  # Anchor on the unique override-block comment line; inject the #undef block
+  # immediately before the first `#define strlen(` that follows it.
+  awk '
+    /^#define strlen\(s\)/ && !done {
+      print "// OP-17 (HEXA-0POD) -Wmacro-redefined hygiene — #undef the 9 names the"
+      print "// Darwin _FORTIFY_SOURCE secure headers already #define as __*_chk_func"
+      print "// fortify macros, before our hxlcl_* override (behavior-preserving: our"
+      print "// macro is the effective expansion either way; #undef only kills the warn)."
+      print "#undef strcat"
+      print "#undef bzero"
+      print "#undef memcpy"
+      print "#undef memset"
+      print "#undef memmove"
+      print "#undef strncpy"
+      print "#undef strcpy"
+      print "#undef snprintf"
+      print "#undef sprintf"
+      done=1
+    }
+    { print }
+  ' "$rt" > "$rt.op17" && mv "$rt.op17" "$rt"
+  echo "[restore_frozen_seeds] OP-17: injected 9 #undef (-Wmacro-redefined hygiene) into $rt"
+fi
+
 # Unstage everything we just restored so the index reflects the graduated tree;
 # the working-tree files remain as the ephemeral build input.
 git reset -q -- "${FROZEN_SEEDS[@]}" 2>/dev/null || true
