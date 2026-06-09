@@ -82,8 +82,13 @@ template<int N> __device__ __forceinline__ void cp_async_wait(){ asm volatile("c
 //       scalar tail fallback otherwise),
 //   (c) cp.async double-buffered BK stage (prefetch next tile while MMAs consume
 //       the current one).
-// Measured on aiden RTX 5070 (sm_120): 6.75->24.49 TFLOP/s @1024 (1.15x off cuBLAS),
-// 8.05->29.75 TFLOP/s @2048 (1.03x off cuBLAS). Was 3.2-6.9x off; now ~1.0-1.15x.
+//   (d) [OP-1b] .v2 (float2) vectorized C-store epilogue — c0/c1 (and c2/c3) are
+//       contiguous so they fuse to one 64-bit store; same bits, fewer store insns.
+// Measured on aiden RTX 5070 (sm_120): 6.75->24.93 TFLOP/s @1024 (1.12x off cuBLAS),
+// 8.05->29.92 TFLOP/s @2048 (~1.02x off cuBLAS). Was 3.2-6.9x off; now ~1.0-1.12x.
+// OP-1b probed BK=32 + 3-stage cp.async ring too: both REGRESSED on the consumer
+// card (smem-pressure occupancy loss; BK32+3stage overflows the 48KB cap). Only the
+// .v2 epilogue (d) helped bit-exactly, so only it is shipped.
 extern "C" __global__ void gemm_sm120(const float* __restrict__ A,
                                       const float* __restrict__ B,
                                       float* __restrict__ C,
@@ -162,6 +167,15 @@ extern "C" __global__ void gemm_sm120(const float* __restrict__ A,
     // store: each thread of the warp holds 4 acc per (16x8) fragment.
     // m16n8 C layout: c0:(row=groupID,col=2*tig), c1:(row=groupID,col=2*tig+1),
     //                 c2:(row=groupID+8,col=2*tig), c3:(row=groupID+8,col=2*tig+1)
+    // HEXA-0POD OP-1b: c0/c1 (and c2/c3) are CONTIGUOUS in C (cols 2*tig, 2*tig+1),
+    // so emit them as one 64-bit float2 .v2 store instead of two scalar writes —
+    // SAME bits (no math change; rel-RMS vs baseline = 0), half the store
+    // instructions in the common interior-tile case. Aiden RTX 5070 (sm_120):
+    // +1.7% @1024 (24.50->24.93 TFLOP/s, 1.143x->1.124x off cuBLAS-TF32), small
+    // top-up @2048 (the deeper-K levers BK=32 / 3-stage cp.async REGRESSED on the
+    // consumer card's 48KB smem cap — occupancy loss > latency-hide; see verdict
+    // .verdicts/hexa-0pod/F-OP1B-SM120-PIPE.txt). Scalar masked fallback at the
+    // right/bottom boundary tiles and on odd alignment.
     #pragma unroll
     for(int fmi=0; fmi<WM_FRAG; fmi++){
         int mrow = bm + wm + fmi*16;
@@ -170,10 +184,13 @@ extern "C" __global__ void gemm_sm120(const float* __restrict__ A,
             int ncol = bn + wn + fni*8;
             float* d = acc[fmi][fni];
             int r0=mrow+gid, r1=mrow+gid+8, c0=ncol+2*tig, c1=ncol+2*tig+1;
-            if(r0<M && c0<N) C[(long long)r0*N+c0]=d[0];
-            if(r0<M && c1<N) C[(long long)r0*N+c1]=d[1];
-            if(r1<M && c0<N) C[(long long)r1*N+c0]=d[2];
-            if(r1<M && c1<N) C[(long long)r1*N+c1]=d[3];
+            bool aligned = ((c0&1)==0);   // c0 even -> &C[..][c0] is 8-byte aligned
+            if(r0<M && c1<N && aligned) *reinterpret_cast<float2*>(&C[(long long)r0*N+c0]) = make_float2(d[0],d[1]);
+            else { if(r0<M && c0<N) C[(long long)r0*N+c0]=d[0];
+                   if(r0<M && c1<N) C[(long long)r0*N+c1]=d[1]; }
+            if(r1<M && c1<N && aligned) *reinterpret_cast<float2*>(&C[(long long)r1*N+c0]) = make_float2(d[2],d[3]);
+            else { if(r1<M && c0<N) C[(long long)r1*N+c0]=d[2];
+                   if(r1<M && c1<N) C[(long long)r1*N+c1]=d[3]; }
         }
     }
 }
