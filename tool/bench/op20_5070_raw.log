@@ -1,0 +1,105 @@
+############ HEXA-0POD OP-20 — deterministic TF32 fast-mode on RTX 5070 (sm_120) ############
+T=256 iters=50 arch=sm_120 D={768 1536} B={1 8}  TF32 vs FP64 in-process
+==== nvidia-smi ====
+Tue Jun  9 20:29:35 2026       
++-----------------------------------------------------------------------------------------+
+| NVIDIA-SMI 580.159.04             Driver Version: 580.159.04     CUDA Version: 13.0     |
++-----------------------------------------+------------------------+----------------------+
+| GPU  Name                 Persistence-M | Bus-Id          Disp.A | Volatile Uncorr. ECC |
+| Fan  Temp   Perf          Pwr:Usage/Cap |           Memory-Usage | GPU-Util  Compute M. |
+|                                         |                        |               MIG M. |
+|=========================================+========================+======================|
+|   0  NVIDIA GeForce RTX 5070        On  |   00000000:01:00.0 Off |                  N/A |
+|  0%   40C    P8              8W /  250W |       2MiB /  12227MiB |      0%      Default |
+|                                         |                        |                  N/A |
++-----------------------------------------+------------------------+----------------------+
+
++-----------------------------------------------------------------------------------------+
+| Processes:                                                                              |
+|  GPU   GI   CI              PID   Type   Process name                        GPU Memory |
+|        ID   ID                                                               Usage      |
+|=========================================================================================|
+|  No running processes found                                                             |
++-----------------------------------------------------------------------------------------+
+==== nvcc ====
+Cuda compilation tools, release 13.0, V13.0.88
+Build cuda_13.0.r13.0/compiler.36424714_0
+==== build TF32-DEFAULT + TF32-PEDANTIC ====
+build OK
+
+######## VARIANT = default (/tmp/flame_tf32_default) ########
+
+================= default  D=768  B=1  T=256 =================
+[CFG] OP-20 TF32-DEFAULT  GPU=NVIDIA GeForce RTX 5070 cc=12.0  D=768 T=256 B=1 -> M=256 K=768 N=768 iters=50
+[GATE-A] TF32-DEFAULT D=768 B=1  TF32 run-to-run max|delta(W')| = 0.000e+00  (self-byte-eq ==0: PASS)
+[GATE-B] TF32-DEFAULT D=768 B=1  rel-RMS(TF32 vs FP64 W') = 1.134e-06  (W14 <=1e-2: PASS)
+[SPEED] TF32-DEFAULT D=768 B=1  TF32 ms/step=0.4309  FP64 ms/step=1.9887  speedup(FP64/TF32)=4.616x
+[RESULT] OP-20 TF32-DEFAULT D=768 B=1  selfByteEq=Y  relRMSvsFP64=1.134e-06  TF32_ms=0.4309  FP64_ms=1.9887  FP64/TF32=4.616x
+
+================= default  D=768  B=8  T=256 =================
+  [wait_gpu] util=98% mem=2MiB busy — sleep 20s (try 1/30)
+[CFG] OP-20 TF32-DEFAULT  GPU=NVIDIA GeForce RTX 5070 cc=12.0  D=768 T=256 B=8 -> M=2048 K=768 N=768 iters=50
+[GATE-A] TF32-DEFAULT D=768 B=8  TF32 run-to-run max|delta(W')| = 0.000e+00  (self-byte-eq ==0: PASS)
+[GATE-B] TF32-DEFAULT D=768 B=8  rel-RMS(TF32 vs FP64 W') = 1.131e-06  (W14 <=1e-2: PASS)
+[SPEED] TF32-DEFAULT D=768 B=8  TF32 ms/step=0.5795  FP64 ms/step=12.3740  speedup(FP64/TF32)=21.354x
+[RESULT] OP-20 TF32-DEFAULT D=768 B=8  selfByteEq=Y  relRMSvsFP64=1.131e-06  TF32_ms=0.5795  FP64_ms=12.3740  FP64/TF32=21.354x
+
+================= default  D=1536  B=1  T=256 =================
+  [wait_gpu] util=50% mem=2MiB busy — sleep 20s (try 1/30)
+[CFG] OP-20 TF32-DEFAULT  GPU=NVIDIA GeForce RTX 5070 cc=12.0  D=1536 T=256 B=1 -> M=256 K=1536 N=1536 iters=50
+[GATE-A] TF32-DEFAULT D=1536 B=1  TF32 run-to-run max|delta(W')| = 0.000e+00  (self-byte-eq ==0: PASS)
+[GATE-B] TF32-DEFAULT D=1536 B=1  rel-RMS(TF32 vs FP64 W') = 1.134e-06  (W14 <=1e-2: PASS)
+[SPEED] TF32-DEFAULT D=1536 B=1  TF32 ms/step=1.6670  FP64 ms/step=6.9872  speedup(FP64/TF32)=4.191x
+[RESULT] OP-20 TF32-DEFAULT D=1536 B=1  selfByteEq=Y  relRMSvsFP64=1.134e-06  TF32_ms=1.6670  FP64_ms=6.9872  FP64/TF32=4.191x
+
+================= default  D=1536  B=8  T=256 =================
+  [wait_gpu] util=91% mem=2MiB busy — sleep 20s (try 1/30)
+[CFG] OP-20 TF32-DEFAULT  GPU=NVIDIA GeForce RTX 5070 cc=12.0  D=1536 T=256 B=8 -> M=2048 K=1536 N=1536 iters=50
+[GATE-A] TF32-DEFAULT D=1536 B=8  TF32 run-to-run max|delta(W')| = 0.000e+00  (self-byte-eq ==0: PASS)
+[GATE-B] TF32-DEFAULT D=1536 B=8  rel-RMS(TF32 vs FP64 W') = 1.130e-06  (W14 <=1e-2: PASS)
+[SPEED] TF32-DEFAULT D=1536 B=8  TF32 ms/step=2.1962  FP64 ms/step=41.9397  speedup(FP64/TF32)=19.096x
+[RESULT] OP-20 TF32-DEFAULT D=1536 B=8  selfByteEq=Y  relRMSvsFP64=1.130e-06  TF32_ms=2.1962  FP64_ms=41.9397  FP64/TF32=19.096x
+
+######## VARIANT = pedantic (/tmp/flame_tf32_pedantic) ########
+
+================= pedantic  D=768  B=1  T=256 =================
+  [wait_gpu] util=80% mem=2MiB busy — sleep 20s (try 1/30)
+[CFG] OP-20 TF32-PEDANTIC  GPU=NVIDIA GeForce RTX 5070 cc=12.0  D=768 T=256 B=1 -> M=256 K=768 N=768 iters=50
+[GATE-A] TF32-PEDANTIC D=768 B=1  TF32 run-to-run max|delta(W')| = 0.000e+00  (self-byte-eq ==0: PASS)
+[GATE-B] TF32-PEDANTIC D=768 B=1  rel-RMS(TF32 vs FP64 W') = 1.134e-06  (W14 <=1e-2: PASS)
+[SPEED] TF32-PEDANTIC D=768 B=1  TF32 ms/step=0.4308  FP64 ms/step=1.9945  speedup(FP64/TF32)=4.630x
+[RESULT] OP-20 TF32-PEDANTIC D=768 B=1  selfByteEq=Y  relRMSvsFP64=1.134e-06  TF32_ms=0.4308  FP64_ms=1.9945  FP64/TF32=4.630x
+
+================= pedantic  D=768  B=8  T=256 =================
+[CFG] OP-20 TF32-PEDANTIC  GPU=NVIDIA GeForce RTX 5070 cc=12.0  D=768 T=256 B=8 -> M=2048 K=768 N=768 iters=50
+[GATE-A] TF32-PEDANTIC D=768 B=8  TF32 run-to-run max|delta(W')| = 0.000e+00  (self-byte-eq ==0: PASS)
+[GATE-B] TF32-PEDANTIC D=768 B=8  rel-RMS(TF32 vs FP64 W') = 1.131e-06  (W14 <=1e-2: PASS)
+[SPEED] TF32-PEDANTIC D=768 B=8  TF32 ms/step=0.5794  FP64 ms/step=12.3736  speedup(FP64/TF32)=21.358x
+[RESULT] OP-20 TF32-PEDANTIC D=768 B=8  selfByteEq=Y  relRMSvsFP64=1.131e-06  TF32_ms=0.5794  FP64_ms=12.3736  FP64/TF32=21.358x
+
+================= pedantic  D=1536  B=1  T=256 =================
+  [wait_gpu] util=61% mem=2MiB busy — sleep 20s (try 1/30)
+[CFG] OP-20 TF32-PEDANTIC  GPU=NVIDIA GeForce RTX 5070 cc=12.0  D=1536 T=256 B=1 -> M=256 K=1536 N=1536 iters=50
+[GATE-A] TF32-PEDANTIC D=1536 B=1  TF32 run-to-run max|delta(W')| = 0.000e+00  (self-byte-eq ==0: PASS)
+[GATE-B] TF32-PEDANTIC D=1536 B=1  rel-RMS(TF32 vs FP64 W') = 1.134e-06  (W14 <=1e-2: PASS)
+[SPEED] TF32-PEDANTIC D=1536 B=1  TF32 ms/step=1.6672  FP64 ms/step=6.9874  speedup(FP64/TF32)=4.191x
+[RESULT] OP-20 TF32-PEDANTIC D=1536 B=1  selfByteEq=Y  relRMSvsFP64=1.134e-06  TF32_ms=1.6672  FP64_ms=6.9874  FP64/TF32=4.191x
+
+================= pedantic  D=1536  B=8  T=256 =================
+  [wait_gpu] util=17% mem=2MiB busy — sleep 20s (try 1/30)
+[CFG] OP-20 TF32-PEDANTIC  GPU=NVIDIA GeForce RTX 5070 cc=12.0  D=1536 T=256 B=8 -> M=2048 K=1536 N=1536 iters=50
+[GATE-A] TF32-PEDANTIC D=1536 B=8  TF32 run-to-run max|delta(W')| = 0.000e+00  (self-byte-eq ==0: PASS)
+[GATE-B] TF32-PEDANTIC D=1536 B=8  rel-RMS(TF32 vs FP64 W') = 1.130e-06  (W14 <=1e-2: PASS)
+[SPEED] TF32-PEDANTIC D=1536 B=8  TF32 ms/step=2.1981  FP64 ms/step=41.9381  speedup(FP64/TF32)=19.079x
+[RESULT] OP-20 TF32-PEDANTIC D=1536 B=8  selfByteEq=Y  relRMSvsFP64=1.130e-06  TF32_ms=2.1981  FP64_ms=41.9381  FP64/TF32=19.079x
+
+############ OP-20 DONE — raw at /tmp/op20_5070_raw.log ############
+==== RESULT lines ====
+[RESULT] OP-20 TF32-DEFAULT D=768 B=1  selfByteEq=Y  relRMSvsFP64=1.134e-06  TF32_ms=0.4309  FP64_ms=1.9887  FP64/TF32=4.616x
+[RESULT] OP-20 TF32-DEFAULT D=768 B=8  selfByteEq=Y  relRMSvsFP64=1.131e-06  TF32_ms=0.5795  FP64_ms=12.3740  FP64/TF32=21.354x
+[RESULT] OP-20 TF32-DEFAULT D=1536 B=1  selfByteEq=Y  relRMSvsFP64=1.134e-06  TF32_ms=1.6670  FP64_ms=6.9872  FP64/TF32=4.191x
+[RESULT] OP-20 TF32-DEFAULT D=1536 B=8  selfByteEq=Y  relRMSvsFP64=1.130e-06  TF32_ms=2.1962  FP64_ms=41.9397  FP64/TF32=19.096x
+[RESULT] OP-20 TF32-PEDANTIC D=768 B=1  selfByteEq=Y  relRMSvsFP64=1.134e-06  TF32_ms=0.4308  FP64_ms=1.9945  FP64/TF32=4.630x
+[RESULT] OP-20 TF32-PEDANTIC D=768 B=8  selfByteEq=Y  relRMSvsFP64=1.131e-06  TF32_ms=0.5794  FP64_ms=12.3736  FP64/TF32=21.358x
+[RESULT] OP-20 TF32-PEDANTIC D=1536 B=1  selfByteEq=Y  relRMSvsFP64=1.134e-06  TF32_ms=1.6672  FP64_ms=6.9874  FP64/TF32=4.191x
+[RESULT] OP-20 TF32-PEDANTIC D=1536 B=8  selfByteEq=Y  relRMSvsFP64=1.130e-06  TF32_ms=2.1981  FP64_ms=41.9381  FP64/TF32=19.079x

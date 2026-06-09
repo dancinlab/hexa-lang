@@ -524,3 +524,29 @@ Verdict .verdicts/hexa-0pod/F-OP14-DETERMINISM-DOC.txt.
   restore). End-to-end verified through the patched tool (warnings 0 after restore; re-restore stays single-inject).
   9 warnings GONE · behavior-preserving YES · no new warn YES · GPU/pod/vast NONE ($0).
   Verdict .verdicts/hexa-0pod/F-OP17-MACRO-REDEF.txt.
+
+## OP-20 — deterministic TF32 fast-mode (the PRECISION-CHANGE uncap lever)
+
+Probed the one unexplored uncap lever the campaign named (MEGASTEP + flame_h100_h200_closeout): does a
+FP64->TF32 precision change break the ~3x flame step cap WHILE keeping flame's reproducibility identity?
+Key insight: TF32 breaks byte-eq-vs-FP64 but can still be byte-eq-vs-ITSELF (run-to-run) — a different
+PRECISION CONTRACT (W14: rel-rms<=1e-2 vs same dtype), a legitimate product mode not an identity sacrifice.
+
+Harness tool/bench/flame_bench_step_tf32fast.cu runs BOTH a TF32 lane (CUDA_R_32F /
+CUBLAS_COMPUTE_32F_FAST_TF32 tensor-op) and an FP64 lane (CUDA_R_64F / COMPUTE_64F) in ONE process over the
+OP-4 fused step DAG (fused valley LN+gelu+copy + transpose-elim bwd GEMM + single-launch AdamW; only the
+cuBLAS compute type differs; all elementwise/reduction glue in FIXED deterministic order, no atomics).
+-DPEDANTIC toggles CUBLAS_PEDANTIC_MATH to test whether default tensor-op TF32 needs pedantic to stay
+self-byte-eq. Driver tool/bench/run_op20_5070.sh, idle-guarded, on FREE aiden RTX 5070 (sm_120, CUDA 13.0).
+
+Result (8/8 cells GREEN, both DEFAULT and PEDANTIC):
+  GATE-A self-byte-eq: max|delta(W')| = EXACTLY 0 — pedantic NOT needed (default TF32 already deterministic
+         on the 5070; PEDANTIC = identical bytes, identical time → recommend PEDANTIC as portable SHIP guarantee).
+  GATE-B rel-RMS(TF32 vs FP64) ~ 1.13e-6 — 4 orders inside W14 1e-2.
+  SPEED  FP64/TF32 = 4.19-4.63x @B=1, 19.08-21.36x @B=8 — BREAKS the ~3x cap at every shape.
+Honest: B=8 ~20x is inflated by the 5070's crippled FP64 (~1/64 FP32); quote B=1 (4.2x, card-robust) as the
+headline. Determinism proven for THIS card/cuBLAS-13.0; pin PEDANTIC to guarantee portably. Single-step
+rel-RMS only (long-horizon TF32-vs-FP64 drift deferred). Harness-level (OP-4 fused lane) — live forge GEMM
+TF32-dispatch wire deferred (clm_prod build + aiden verify). Deterministic TF32 fast-mode = a REAL flame
+fast-mode: identity kept + W14-equivalent + >3x faster. The precision-change uncap lever WORKS. $0, no vast.
+Verdict .verdicts/hexa-0pod/F-OP20-TF32-FASTMODE.txt.
