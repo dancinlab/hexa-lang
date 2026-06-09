@@ -129,7 +129,7 @@ loop targets what the consumer card + code can carry.
   H100-GATED — NO number produced or claimed; the exact gated step is `nvcc -O3 -arch=sm_90a wgmma_tf32_w16.cu
   -o w16 -lcublas -lcuda -Xptxas -v` on an authorized H100. W10 70.7 frontier KEPT (the W11/W12/W13 hard rule).
   Value = the lever is now CODE not just design — H100 authorization -> turnkey measurement. $0, no vast/pool/pod.
-  Verdict .verdicts/hexa-0pod/F-OP21A-W16-KERNEL.txt (PR #PRNUM).
+  Verdict .verdicts/hexa-0pod/F-OP21A-W16-KERNEL.txt (PR #3017).
 
 <!-- ANCHOR:OP-21-HOPPER-WARPSPEC-DESIGN (unique anchor — 0-pod DESIGN for the Hopper sm_90a wgmma warp-spec TMA pipeline; measure is GPU-gated) -->
 - [x] **OP-21 — Hopper warp-spec TMA pipeline DESIGN + perf-gap analysis + H100 experiment recipe (0-pod, GPU-gated measure)** —
