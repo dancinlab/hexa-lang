@@ -10,6 +10,27 @@ loop targets what the consumer card + code can carry.
 
 ## milestones (loop self-feeds; add as discovered)
 
+<!-- ANCHOR:OP-21-HOPPER-WARPSPEC-DESIGN (unique anchor — 0-pod DESIGN for the Hopper sm_90a wgmma warp-spec TMA pipeline; measure is GPU-gated) -->
+- [x] **OP-21 — Hopper warp-spec TMA pipeline DESIGN + perf-gap analysis + H100 experiment recipe (0-pod, GPU-gated measure)** —
+  produced (reading source + verdicts only, $0, 0-GPU) the design for the forge own-GEMM's remaining Hopper
+  (sm_90a wgmma) perf lever: a warp-specialized TMA producer/consumer software pipeline (the cuBLAS-class
+  mainloop). MAPPED W10-has-vs-misses against the actual frontier source self/native/wgmma/wgmma_tf32_w10_lib.h
+  (HAS: HW TMA producer/single elected thread, dual consumer WGs, SWIZZLE_128B TMA, composed software decode,
+  NST swizzled-TMA ring; MISSES: dedicated producer WG + setmaxnreg register realloc, decode/MMA overlap at
+  2 CTA/SM, descriptor-direct wgmma deleting the 32KB band, m64n256k8, ping-pong epilogue). ROOFLINED the
+  6.09x gap (70.7 vs ~430 TFLOP/s) to the decode/MMA-overlap (B)+(C) KNOT — occupancy A~0% (closed by W8,
+  W10 already at max 2 CTA/SM), epilogue D small — with cited W7..W15 verdict numbers. DESIGNED the next
+  lever OP-21A: canonical-atom re-encode (kills the W15 "3rd interaction" root cause) -> descriptor-direct
+  wgmma (delete the 32KB band, W15-real -32KB) -> spend the headroom on a deeper decode-free TMA ring +
+  wgmma.wait_group<NST-2> overlap + setmaxnreg producer/consumer split (UNBLOCKED at 128x128's 64-reg
+  accumulator, unlike W12's 128x256 which ptxas rejected), with concrete smem/stage/barrier/register budget;
+  + OP-21B fallback (register wgmma double-buffer, no M3 dependency). WROTE the turnkey H100 recipe (rent 1
+  H100 sm_90a nvcc12.6 -> build wgmma_tf32_w16.cu #include w10-lib -> gate rel_rms 0 MODE0/1 then MODE4
+  @2048/4096/8192 -> ONLY THEN sweep own vs same-binary cuBLAS-TF32 -> write W16 verdict Δ-vs-W10 -> destroy
+  pod leak 0). HONEST (OP-2b-class, g5): this is the DESIGN for a GPU-GATED experiment — NO measurement
+  performed or claimed; the Hopper measure stays out of 0-pod scope until an H100 is authorized. $0, no
+  vast/pool/pod. Verdict .verdicts/hexa-0pod/F-OP21-HOPPER-WARPSPEC-DESIGN.txt (PR #3000).
+
 <!-- ANCHOR:OP-20-TF32-FASTMODE (unique anchor — precision-change uncap lever: deterministic TF32 fast-mode) -->
 - [x] **OP-20 — deterministic TF32 fast-mode: self-byte-eq + W14-tol vs FP64 + speedup measure (aiden)** —
   probed the ONE unexplored uncap lever (PRECISION-CHANGE FP64->TF32) the campaign named. New harness
