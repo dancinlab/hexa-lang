@@ -550,3 +550,49 @@ rel-RMS only (long-horizon TF32-vs-FP64 drift deferred). Harness-level (OP-4 fus
 TF32-dispatch wire deferred (clm_prod build + aiden verify). Deterministic TF32 fast-mode = a REAL flame
 fast-mode: identity kept + W14-equivalent + >3x faster. The precision-change uncap lever WORKS. $0, no vast.
 Verdict .verdicts/hexa-0pod/F-OP20-TF32-FASTMODE.txt.
+
+## OP-21 — Hopper warp-spec TMA pipeline DESIGN (0-pod, GPU-gated measure) — 2026-06-09
+
+Deep-dive design round, $0/0-GPU, by reading the W10 frontier source + the W-ladder verdicts ONLY. Produced
+the design + perf-gap roofline + turnkey H100 recipe for the forge own-GEMM's remaining Hopper (sm_90a wgmma)
+perf lever — a warp-specialized TMA producer/consumer software pipeline (the cuBLAS-class mainloop).
+
+W10-HAS (from self/native/wgmma/wgmma_tf32_w10_lib.h gemm_w10): HW TMA producer driven by a single elected
+thread (W8 lever), dual consumer warpgroups, SWIZZLE_128B TMA descriptors (W9 permute-removal), the COMPOSED
+software decode (W10 fix, bit-exact rel_rms 0), and an NST-deep swizzled-TMA ring (load side pipelined).
+W10-MISSES (the cuBLAS-class residual): M1 dedicated producer warpgroup + setmaxnreg register realloc (W10
+has NO setmaxnreg; W12 tried it on 128x256 and ptxas IGNORED it C7507 — but the W10 128x128 has 64-reg
+accumulator headroom W12's 128 did not); M2 decode/MMA overlap at 2 CTA/SM (gemm_w10 does wgmma.wait_group 0
+every slab + a SINGLE non-ringed decode band -> decode<->MMA serialize); M3 descriptor-direct wgmma deleting
+the 32KB band (W10-inplace + W15's 3200-config sweep floored rel_rms 1.392/1.000 — the atom-major landing is
+a "3rd interaction"); M4 m64n256k8 wider-N; M5 ping-pong epilogue.
+
+PERF-GAP ROOFLINE (cited, NOT re-measured): own W10 70.7 TFLOP/s @4096 vs cuBLAS-TF32 ~430 = 6.09x. Gap
+decomposed: occupancy (A) ~0% — W10 is already at the max 2 CTA/SM (W8 closed 1->2; W11/W13 regressed trying
+to use more); mainloop/decode-MMA overlap (B) = DOMINANT share (wait_group 0 + single band serialize, cuBLAS
+never stalls the TCs); decode-band tax (C) = secondary AND COUPLED to (B) — you can't ring-deepen the band
+(W13: 2nd 32KB band -> 1 CTA/SM -27%) NOR delete it (W15: read wrong) without a structural change; epilogue
+(D) small (W10 already has the register-blocked scatter). The 6.09x is the (B)+(C) decode/MMA-overlap KNOT.
+
+DESIGNED LEVER OP-21A: untie the knot — (1) canonical-atom re-encode so the SWIZZLE_128B TMA lands the exact
+CuTe Layout_K_SW128_Atom the wgmma HW de-swizzle expects (kills W15's root cause, the falsifiable core);
+(2) descriptor-direct wgmma -> delete the 32KB software decode band (W15 MEASURED this real: 96->64KB/CTA,
+2 CTA/SM held); (3) spend the 32KB on a deeper decode-free TMA ring (NST=3) + wgmma.wait_group<NST-2> so the
+oldest committed group drains while the newest issues (the overlap, attacks B); (4) dedicated producer WG +
+setmaxnreg.dec 40 / consumer setmaxnreg.inc 232 — GRANTABLE here because the 128x128 accumulator is only 64
+regs/thread (W12's 128x256 was 128, rejected). Concrete params: tile 128x128 (kept — W11 proved bigger alone
+regresses), TKSW=32, NST=3, full[]/empty[] mbar + wgmma.wait_group<NST-2>, producer/consumer reg split with
+single-elected-thread fallback. FALLBACK OP-21B (if canonical re-encode doesn't hit rel_rms 0): keep the band,
+register wgmma double-buffer (no M3 dependency). PRE-REGISTERED FALSIFIER stated (lift past 70.7 toward parity,
+to confirm/refute on H100; either way a publishable closed-negative with a number).
+
+TURNKEY H100 RECIPE: rent 1 H100 (sm_90a, nvcc 12.6.77, driver 560.35.x — apples to W10/W15) -> author
+wgmma_tf32_w16.cu (#include wgmma_tf32_w10_lib.h for same-binary gemm_w10 baseline + canonical-atom encoder +
+probe_desc_canonical + gemm_w16 descriptor-direct/NST=3/wait_group<NST-2>/setmaxnreg) -> GATE rel_rms 0
+(MODE 0/1 single-tile, then MODE 4 @2048/4096/8192) BEFORE any perf -> ONLY THEN occupancy (confirm 2 CTA/SM)
++ perf sweep own vs same-binary cuBLAS-TF32 (Δ vs W10 70.7) + SASS (STS gone) -> write W16 verdict (new
+frontier if lifts bit-exact, else closed-negative W10 KEPT) -> destroy pod (leak 0). One H100-hour suffices.
+
+HONEST (OP-2b-class, g5): NO measurement performed or claimed. This is the DESIGN for a GPU-GATED experiment;
+the Hopper sm_90a measure is out of 0-pod scope until an H100 is authorized. cuBLAS-TF32 = roofline, parity
+NOT claimed. $0, no vast/pool/pod. Verdict .verdicts/hexa-0pod/F-OP21-HOPPER-WARPSPEC-DESIGN.txt (PR #3000).
