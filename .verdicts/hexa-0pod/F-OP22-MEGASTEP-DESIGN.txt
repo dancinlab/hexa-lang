@@ -1,0 +1,410 @@
+════════════════════════════════════════════════════════════════════════════
+F-OP22-MEGASTEP-DESIGN — whole-train-step MEGASTEP megakernel DESIGN +
+HONEST Amdahl ceiling + turnkey H100 experiment recipe + MEGASTEP-vs-TF32 call
+HEXA-0POD OP-22 · 0-pod (read existing verdicts + research memory only) · $0
+domain: HEXA-0POD · date: 2026-06-09 · branch: domain/hexa-0pod-op22
+gate g5: Amdahl bound uses REAL cited duty-cycle numbers; the design traces to
+         the megakernel verdicts; the recipe is concrete. NO measurement made
+         or claimed here — DESIGN + BOUND only (the measure is GPU-gated; the
+         standing 0-pod goal is ZERO vast → no pod rented this session).
+════════════════════════════════════════════════════════════════════════════
+
+HEADLINE (read this first)
+──────────────────────────────────────────────────────────────────────────────
+MEGASTEP is NOT worth a fresh H100 campaign. It is BOTH already-measured
+closed-negative AND dominated by the cheaper win:
+
+  • valley structure (cited, real H100, F-FUSION-FF-DUTYCYCLE): the flame
+    CLMConvMoE FP64 step @D1536/T512/E2/B=1 is GEMM% = 0.04% of wall (≈0.3% of
+    GPU-active time) vs valley = 99.96% (GLUE 13.15% + OPT 0.01% + GAP/idle
+    86.80%). The step is in NO sense GEMM-bound.
+
+  • Amdahl CEILING (cited): 1/GEMM% = 1/0.0004 = 2844× theoretical. This is a
+    USELESS ceiling — the bound is enormous precisely because GEMM is a rounding
+    error; it does NOT mean a megakernel reaches it. The BINDING bound is the
+    serial-DAG occupancy FLOOR: util MEDIAN 1% / MEAN 10.9% / 72.2% of samples
+    <5% (bimodal {short bursts, ~0% idle}). A megakernel fills launches, not the
+    dependency-serialized idle.
+
+  • MEASURED MEGASTEP (cited, real H100, F-FUSION-MEGASTEP / M2): the literal
+    whole-step cooperative megakernel reaches MEAN ~14% / MEDIAN 1–2% — a
+    marginal +3.4pp over eager, NOT toward GREEN (≥20%) and nowhere near ~3×.
+    AND it CANNOT hold FP64 byte-eq (own-GEMM k-order ≠ cublasDgemm → max|Δ| ≠ 0
+    at the first forward pass). byte-eq ⊥ util-lift, AND the util-lift is small.
+
+  • vs TF32 (OP-20, sibling deep-dive, ~4.2× @B=1 via precision-change): TF32
+    fast-mode ALREADY broke the ~3× structural cap 0-pod-authorizable, at ZERO
+    new kernel-architecture risk. MEGASTEP's measured self-speedup is ~1.0–1.04×
+    (M2 MEAN +3.4pp; the real flame self-speedup is BATCH-FILL ≈3× asymptote,
+    F-FUSION-BATCHFILL, NOT megakernel fusion). MEGASTEP adds NO orthogonal gain
+    on top of TF32 at B=1 — it competes for the same already-small reclaimable
+    valley and loses.
+
+VERDICT: (b) DOMINATED BY TF32. Do NOT spend an H100 campaign on MEGASTEP.
+The one honest residual MEGASTEP slice that is GREEN — FF-VALLEY (valley-only
+fusion, GEMMs left saturated) — is 2.5× ONLY because byte-eq forces a
+pathologically-slow single-thread GroupNorm; it does NOT generalize to a
+parallel-reduction (or TF32) trainer. See §6 for the full decision.
+
+This OP-22 verdict is the 0-pod DESIGN + BOUND consolidation. It traces every
+number to a cited real-pod verdict (all DESTROYED leak-0 in their own files);
+NO pod was rented for OP-22.
+
+══════════════════════════════════════════════════════════════════════════════
+§1 — THE REAL VALLEY STRUCTURE  (cited: F-FUSION-FF-DUTYCYCLE, real H100)
+══════════════════════════════════════════════════════════════════════════════
+Source: F-FUSION-FF-DUTYCYCLE, real NVIDIA H100 80GB SXM (vast 39958628,
+DESTROYED leak-0), nsys cuda-trace + nvidia-smi @5Hz of the EXISTING flame
+clm_prod_gpu step (eager FP64 device-glue). Config D=1536 Tw=512 E=2 K=3 B=1
+PREC=fp64, 12 windows. first_ce=4.2200792520055925.
+
+BUCKET TABLE (% of step wall, VERBATIM from FF-DUTYCYCLE [A]):
+  profiled span = 57365.080 ms | kernels = 2109 | union(busy) = 7571.008 ms
+  (a) GEMM%      =   0.04%   (20.170 ms, 180 kernels)   ← the part a megakernel
+                                                           CANNOT improve: cuBLAS
+                                                           FP64 GEMMs already
+                                                           negligible & saturated
+  (b) GLUE%      =  13.15%   (7543.368 ms, 1725 kernels) ← the valley a megakernel
+                                                           COULD fuse (between-GEMM)
+  (c) OPTIMIZER% =   0.01%   (7.470 ms, 204 kernels)     ← AdamW tail (deprioritize)
+  (d) GAP/idle%  =  86.80%   (49794.072 ms)              ← device-idle dispatch +
+                                                           inter-window host glue
+  valley_fraction = GLUE+OPT+GAP = 0.9996 (99.96%)
+
+GPU-ACTIVE breakdown (FF-DUTYCYCLE [B], Time% = % of GPU-busy time):
+  _hx_k_groupnorm_bwd_dx   50.2%  (avg 131.9 ms / call)
+  _hx_k_groupnorm          40.2%  (avg 105.6 ms / call)
+  _hx_k_embedding_bwd_scatter 4.4% · _hx_k_int4_quant 4.1%
+  ALL sm90 cuBLAS f64 GEMMs COMBINED ≈ 0.3%
+  => GroupNorm fwd + bwd_dx + bwd_affine = 90.5% of ALL GPU-active kernel time.
+
+UTIL CROSS-CHECK (FF-DUTYCYCLE [C], nvidia-smi @5Hz, VERBATIM):
+  mean=10.90%  median=1%  peak=68%  n=273  pct>=70=0.0%  pct<5=72.2%
+  => mean(10.9) >> median(1) with 72.2% <5% = the BIMODAL {short bursts, ~0%
+     idle} occupancy wall — CONFIRMED. (Matches BATCHFILL #2913 H100 B=1
+     mean 10.4/median 0; RIGHT-SIZED-GPU A10 median 0; INTERP-ELIM native
+     mean 0.43/median 0 — the gap is dispatch-/SM-/dtype-INVARIANT.)
+
+LOAD-BEARING READING OF THE VALLEY (the honest twist):
+  The 99.96% valley splits two ways, SAME conclusion:
+    - by SPAN time:      GAP/idle 86.80% → host-glue + dispatch idle.
+    - by GPU-ACTIVE time: GroupNorm 90.5% → a SLOW-KERNEL valley, NOT a
+      launch-gap valley. The 2 GroupNorm reductions average 105–132 ms EACH
+      because they are the BYTE-EQ-FORCED single-thread-per-group sequential
+      reduction (one thread does the whole T·C reduction, no tree re-assoc;
+      cf F-FUSION-MEGAKERNEL-GN-GRIDSYNC "coop launch buys ZERO reduction
+      parallelism"). This is the crux for §6: the valley is dominant ONLY
+      because byte-eq makes GN pathological. A non-byte-eq (or TF32) trainer
+      runs GN as a parallel reduction in microseconds and the valley collapses.
+
+══════════════════════════════════════════════════════════════════════════════
+§2 — THE HONEST AMDAHL CEILING  (real cited numbers)
+══════════════════════════════════════════════════════════════════════════════
+Amdahl for a perfect valley-fill (cited FF-DUTYCYCLE [VERDICT]):
+  If GEMM is X% of wall and valley is (1−X)%, a PERFECT megakernel that filled
+  the valley to zero caps at 1/X.
+    X = GEMM% = 0.04% = 0.0004
+    AMDAHL CEILING = 1/X = 1/0.0004 = 2844×   (FF-DUTYCYCLE: 2844.131×)
+
+⚠ WHY 2844× IS A USELESS CEILING (the honest reading):
+  The ceiling is astronomically large for the WRONG reason — GEMM is a rounding
+  error, so 1/GEMM% blows up. A large 1/X does NOT imply a megakernel reaches
+  it; Amdahl gives the LIMIT of a perfect serial-fraction removal, not what the
+  megakernel architecture actually achieves. The achievable bound is governed
+  by THREE real walls the megakernel does NOT remove:
+
+  (W1) DEPENDENCY-SERIAL DAG. Every fwd phase grid.syncs on the previous
+       (conv→GN→gelu→residual→router/experts→gelu2→pack→combine→GN2). The valley
+       is serial by data dependence — fusing launches does not parallelize it.
+       The practical lever is ≈ 1/duty-cycle ≈ 1/0.109 ≈ 9× from MEAN util
+       (FF-DUTYCYCLE notes ceiling >> practical 1/duty ~9×), and even that is
+       only reachable if the serialization itself is broken (it is not, by
+       megakernel fusion alone).
+
+  (W2) BYTE-EQ-FORCED SINGLE-THREAD GN. The dominant on-device cost (90.5%
+       GPU-active) is the single-thread GN reduction. A megakernel that keeps
+       byte-eq KEEPS this single-thread reduction (GN-GRIDSYNC: coop launch
+       buys ZERO reduction parallelism). So the biggest active-time bucket is
+       UNTOUCHED by fusion under byte-eq.
+
+  (W3) OCCUPANCY FLOOR @ FP64/B=1. The cooperative grid (≈528–752 blocks, ONE
+       persistent wave) UNDER-FILLS the H100's 132 SMs at B=1/D1536/T512; FP64
+       register pressure lowers maxActiveBlocks. MEDIAN util 1–2% = device idle
+       most of every step (F-FUSION-MEGASTEP §occupancy).
+
+  NET ACHIEVABLE (cited, MEASURED — not theory): the literal whole-step
+  megakernel realizes MEAN +3.4pp (10.4→13.8%), MEDIAN unmoved (1→1–2%),
+  self-speedup ~1.0–1.04× (PRECISION-CHANGE 1.02–1.03×; M2 +3.4pp). That sits
+  at the LOW end of even the bounded launch-elimination window the literature
+  gives (Ada-MK 14.6%, CUDA-graph ~1.4×; reference_megastep_research), because
+  the residual host glue + grid.sync barriers + serial DAG re-introduce the
+  idle fusion was meant to remove. The 2844× Amdahl number and the ~1.0×
+  measured reality are the two ends of the honesty gap.
+
+══════════════════════════════════════════════════════════════════════════════
+§3 — THE MEGASTEP MEGAKERNEL DESIGN  (traced to the megakernel verdicts)
+══════════════════════════════════════════════════════════════════════════════
+DESIGN 1-LINE: a persistent grid-resident cooperative megakernel
+(cudaLaunchCooperativeKernel, sized to ONE wave via
+cudaOccupancyMaxActiveBlocksPerMultiprocessor × SM count) that runs the WHOLE
+flame CLMConvMoE train step — embed→conv→GN→gelu→residual→router/experts→
+gelu2→pack→softmax-combine→GN2→logits→CE→bwd-glue→cooperative-AdamW — as
+in-kernel PHASES separated by cooperative_groups::this_grid().sync() barriers,
+with the conv GEMMs as INLINE own-GEMM (replacing the un-fusable cuBLAS host
+calls) so they CAN live inside the persistent kernel, host fully off the
+critical path.
+
+PHASE STRUCTURE (each phase = a grid.sync()-delimited block; all intermediates
+device-resident across barriers — no relaunch gap). Traced to the as-built
+kernels in F-FUSION-P1-TF32-MEGASTEP / M2 / FF-VALLEY:
+  P0  embed (xe)                                          [_hx_k_embedding]
+  P1  conv(xe→xec), conv(xec→h0)        inline own-GEMM   [im2col causal-dilated
+                                                           folded into inner loop]
+  --- grid.sync ---
+  P2  groupnorm#1 (reduce in canonical thread → sync →    [_hx_k_groupnorm_coop;
+      parallel normalize) → gelu → residual (xt)           GN-GRIDSYNC primitive]
+  --- grid.sync ---
+  P3  conv-router(xt→logits_r), conv-experts×2(xt→eo0/eo1) inline own-GEMM
+  --- grid.sync ---
+  P4  gelu2 → expert-pack → moe-router(softmax+combine)   [L3-d _hx_k_moe_block2,
+      → groupnorm#2 (coop reduce→sync→normalize)           byte-eq order]
+  --- grid.sync ---
+  P5  conv(yn→out_logits)                                 inline own-GEMM
+  P6  CE loss + softmax-grad seed (ce_grad)               [device-glue, L3]
+  --- grid.sync ---
+  P7  full bwd chain device-glue                          [conv_bwd · groupnorm_bwd
+      (GN-bwd · gelu-bwd · moe-router-bwd · embed-scatter)  · moe_router_bwd ·
+                                                            gelu_bwd · scatter-add]
+  --- grid.sync ---
+  P8  cooperative AdamW over all 17 params in ONE launch  [_hx_k_adamw_fused, M2
+                                                            HEXA_CLM_FULLSTEP]
+  build: nvcc -x cu -DHEXA_CUDA -rdc=true -arch=sm_90 + -dlink + -lcudadevrt
+         (rdc REQUIRED for cooperative_groups grid.sync).
+
+BOTH MEGAKERNEL WALLS ARE ALREADY CLOSED (cited F-FUSION-MEGAKERNEL-DESIGN
+2026-06-06 UPDATE + GN-GRIDSYNC, real A100 sm_80):
+  WALL 1 (own-GEMM): a persistent kernel calls the device _hx_k_gemm in-line
+    instead of an un-fusable cuBLAS host call (own-GEMM stack #2697).
+  WALL 2 (GN grid-sync): the 2 GroupNorm full-Y reductions fuse via
+    _hx_k_groupnorm_coop + this_grid().sync() WHILE byte-eq max|Δ|=0 (A100
+    4/4 cases incl. T=1536 C=1536 G=1 → max|Δ|=0, bitdiff_words=0; the canonical
+    reducer thread runs the IDENTICAL sequential t-outer/c-inner accumulation,
+    grid.sync broadcasts mu/inv, only the per-element normalize is parallel).
+  => The glue-block whole-step megakernel is structurally REALIZABLE and
+     cuBLAS-call-free. The design is buildable; it just does not WIN (§2/§5).
+
+──────────────────────────────────────────────────────────────────────────────
+THE THREE HONEST TENSIONS (each cited, each load-bearing)
+──────────────────────────────────────────────────────────────────────────────
+TENSION 1 — own-GEMM vs cuBLAS SPEED (the fusion-cost trade).
+  To be IN-kernel, the conv GEMMs must use own-GEMM (a persistent kernel cannot
+  nest a cuBLAS host launch). own-GEMM is ~6× off cuBLAS (TF32 W10 summit 70.7
+  TFLOP/s, 6.09× off cuBLAS-TF32, F-FUSION-SM90-WGMMA-W10; FP16 W14 11.5× off).
+  So the megakernel TRADES cuBLAS GEMM speed for fusion. At B=1 this trade is
+  ~free ONLY because GEMM is 0.04% of wall (§1) — but it means the megakernel
+  can NEVER recover the GEMM-bound regime (larger B / larger D), exactly where
+  cuBLAS wins. The megakernel is a B=1-niche structure.
+
+TENSION 2 — byte-eq ⊥ util-lift (mutually exclusive gate halves, MEASURED).
+  A persistent kernel's inline own-GEMM accumulates k sequentially (one thread
+  per output) ≠ cublasDgemm's tiled/blocked order → different IEEE-754 last
+  bits. F-FUSION-B6-BYTEEQ-MEGAKERNEL (real pod): max|Δ first_ce| = 9.0e-16
+  (D512) … 1.8e-15 (D1536) ≠ 0 AFTER ONE forward pass, before any training
+  compounding — isolating the cause to GEMM REDUCTION ORDER. byte-eq max|Δ|=0
+  vs cublasDgemm is STRUCTURALLY UNREACHABLE for own-GEMM-in-megakernel. You
+  get byte-eq OR the megakernel, not both.
+
+TENSION 3 — parity own-GEMM CANNOT co-reside (occupancy/deadlock, STRUCTURAL).
+  F-FUSION-MEGA-OWNGEMM-INTEGRATE (real H100 sm_90a): wiring the high-throughput
+  OG17 TF32-parity wgmma own-GEMM as the in-kernel GEMM is structurally
+  IMPOSSIBLE at production CLM shapes on TWO axes:
+    (a) wgmma needs a 128-thread warpgroup; the megakernel runs uniform
+        blockDim=64 → blockDim<128 CANNOT issue wgmma (all-shapes structural).
+    (b) the wgmma coop one-wave residency ceiling is 2 CTA/SM × 132 = 264 CTAs,
+        but the GEMM output-tile grid scales (S/128)²: S=2048→256 fits,
+        S=4096→1024 EXCEEDS the wave → grid.sync DEADLOCK.
+  So a single-launch cuBLAS-free coop megakernel with a PARITY in-kernel GEMM is
+  NOT achievable — the fast own-GEMM and the cooperative-residency requirement
+  are in DIRECT structural conflict. The megakernel must use the SLOW
+  (non-warpgroup) own-GEMM, deepening Tension 1.
+
+GRID-SYNC RESIDUAL (cited F-FUSION-MEGAKERNEL-GN-GRIDSYNC): the coop GN closes
+  the correctness wall but buys ZERO reduction parallelism — byte-eq forces the
+  single-thread reduction, so the dominant on-device cost (§1, GN 90.5%) stays
+  serial inside the megakernel. The grid.sync() PAIR (reduce→sync→normalize)
+  makes GN fuse-able mid-megakernel; it does NOT make it FAST.
+
+══════════════════════════════════════════════════════════════════════════════
+§4 — TURNKEY H100 EXPERIMENT RECIPE  (runnable the moment a GPU is authorized)
+══════════════════════════════════════════════════════════════════════════════
+This recipe is GPU-GATED (needs an H100; standing 0-pod goal = ZERO vast, so it
+is NOT run here). It is written so a single authorized H100 session executes the
+FULL FF-ladder rungs FF-DUTYCYCLE → FF-VALLEY → MEGASTEP with byte-eq +
+util/wall gates + leak-0 destroy. Estimated 1 H100 session (~1–2 h).
+
+PROVISION (leak-disciplined):
+  hexa cloud rent vast --gpu H100          # H100 80GB SXM, sm_90; record offer
+  # if vast serves Blackwell sm_120 (as in P1-TF32), build sm_90 PTX JIT-forward
+  # use image nvidia/cuda:12.6-devel-ubuntu22.04 (nvcc 12.6, gcc 11.4)
+  # TAG the pod (e.g. hexa-op22/megastep) so destroy is tag-confirmed leak-0.
+
+BUILD (regen path — the launchers live in the emitter SSOT, not committed .c):
+  1. regen self/cuda/runtime_cuda.c by running runtime_cuda_emit.hexa main()
+     through the compiler (deterministic string-emit). Confirm megafwd refs.
+  2. hexa build --c-only on the megastep-wired clm_prod.hexa → clm_prod.c.
+     (Jun-1 compiler may emit hexa_call4(forge_dispatch_X,…) closures for ~8
+      forge dispatchers — rewrite those to direct C calls, mechanical; see
+      F-FUSION-P1-TF32-MEGASTEP BUILD notes for the exact 8 symbols + the
+      mega_meanN/invN = t_zeros(T) sizing fix that unblocks [MEGAFWD-FIRED].)
+  3. nvcc -x cu -DHEXA_CUDA -rdc=true -arch=sm_90 ... -dlink -lcudadevrt
+     (rdc + lcudadevrt MANDATORY for cooperative_groups grid.sync).
+     Build clm_prod_gpu.
+
+RUNG A — FF-DUTYCYCLE (set the Amdahl ceiling on THIS pod, verbatim):
+  bash .verdicts/hexa-fusion/ff-dutycycle-build/profile_dutycycle.sh
+    # nsys cuda-trace + nvidia-smi @5Hz of the eager FP64 step (HEXA_CLM_MEGASTEP
+    # OFF), D=1536 T=512 E=2 K=3 B=1 PREC=fp64, 12 windows.
+  python .verdicts/hexa-fusion/ff-dutycycle-build/bucket_nsys.py
+    # emit BUCKET TABLE (GEMM%/GLUE%/OPT%/GAP%), valley_fraction, Amdahl 1/GEMM%,
+    # util mean/median/peak/pct<5. EXPECT GEMM%≈0.04, valley≈99.96, median≈1%.
+
+RUNG B — FF-VALLEY (valley-only fusion, GEMMs left saturated; byte-eq GREEN):
+  # build the standalone g5 harness (already on main):
+  nvcc -x cu -DHEXA_CUDA -rdc=true -arch=sm_90 -lcudadevrt \
+       self/cuda/ffvalley_byteeq_harness.cu -o ffval
+  ./ffval     # GATE: byte-eq max|Δ|=0 over ALL valley outputs (T128/D512/E2,
+              # T256/D1024/E2, T128/D512/E4) + valley-time speedup (expect ~2.5×)
+              # + step-level Amdahl (expect ~2.48–2.60×, byte-eq-regime-specific).
+  # HONEST gate: record the FF-VALLEY caveat — the ~99% valley fraction is a
+  # byte-eq SINGLE-THREAD-GN artifact; in a parallel-reduction/TF32 trainer the
+  # valley collapses to a few % and the step lever drops to MPK ~1.2–1.3×.
+
+RUNG C — MEGASTEP (whole-step coop megakernel; the capstone A/B):
+  # eager baseline:
+  CLM_PROD_DEVRESIDENT=1 DEVFEED=1 BATCHED=1 HEXA_GEMM_PREC=fp64 \
+    ./clm_prod_gpu  D=1536 T=512 E=2 NSAMP=8 EPOCHS=4          # A: HEXA_CLM_MEGASTEP unset
+  # whole-step megakernel:
+  HEXA_CLM_MEGASTEP=1 HEXA_CLM_FULLSTEP=1 CLM_PROD_DEVRESIDENT=1 DEVFEED=1 \
+    BATCHED=1 ./clm_prod_gpu  D=1536 T=512 E=2 NSAMP=8 EPOCHS=4   # B: megastep
+  # external util sample in parallel:  nvidia-smi --query-gpu=utilization.gpu \
+  #   --format=csv,noheader -lms 200 > util_mega.csv
+  GATES (g5):
+    (1) byte-eq leg (FP64): build HEXA_CLM_MEGASTEP_FP64 A/B (B6 harness),
+        compare raw FP64 first_ce @17 sig digits vs eager cublasDgemm.
+        EXPECT max|Δ| ≠ 0 (~9e-16…1.8e-15) — byte-eq STRUCTURALLY unreachable.
+        => report closed-neg on the byte-eq leg (do not paper over).
+    (2) util/wall leg: util MEAN/MEDIAN + step wall A vs B. EXPECT MEAN +~3.4pp
+        (10.4→13.8%), MEDIAN unmoved (1→1–2%), self-speedup ~1.0–1.04×.
+        Confirm [MEGAFWD-FIRED]≥1 + [FULLSTEP-FIRED] (verbatim, else silent
+        fallback — check the mega_meanN/invN sizing fix landed).
+    (3) batch-fill cross-check: re-run B at B∈{2,8,32} → EXPECT 1.5×/…/2.95×
+        (BATCHFILL) — confirm the real self-speedup is BATCH, not megakernel.
+    (4) TF32 cross-check (the decision gate): re-run with HEXA_GEMM_PREC=tf32
+        (P1-TF32 / OP-20 path) → EXPECT ~4.2× @B=1, CE converges, util +5.5pp.
+        => if TF32 ≫ megakernel self-speedup, MEGASTEP is dominated (§6).
+
+WRITE-UP + DESTROY:
+  # write F-FUSION-MEGASTEP-MEASURED verdict (or confirm the existing one):
+  #   valley %, Amdahl, byte-eq Δ, util A/B, batch-fill curve, TF32 vs mega.
+  yes | hexa cloud destroy vast <id>     # TAG-confirm, leak 0.
+
+EARLY-EXIT (the honest one): RUNG C is ALREADY MEASURED closed-negative on a
+real H100 (F-FUSION-MEGASTEP / M2 / B6 / MEGA-OWNGEMM, all DESTROYED leak-0).
+Re-running RUNG C buys ZERO new information. If a GPU is authorized, spend it on
+the TF32 trajectory-drift study (OP-20 follow-up) or BATCH-FILL scaling, NOT on
+re-measuring MEGASTEP.
+
+══════════════════════════════════════════════════════════════════════════════
+§5 — THE FF-LADDER, RESOLVED  (where each rung actually lands)
+══════════════════════════════════════════════════════════════════════════════
+  FF-DUTYCYCLE   : MEASURED. valley 99.96%, Amdahl 1/GEMM% = 2844× (useless
+                   ceiling; real bound = occupancy floor). GREENLIGHTS the
+                   ladder on paper; pinpoints GN single-thread reduction + host-
+                   glue/xstream as the RIGHT terms.            [F-FUSION-FF-DUTYCYCLE]
+  FF-VALLEY      : GREEN (byte-eq), valley-glue 2.5×, step ~2.48–2.60× — BUT
+                   byte-eq-regime-specific (single-thread-GN artifact; collapses
+                   in a parallel/TF32 trainer).                [F-FUSION-FF-VALLEY]
+  FF-FUSED-OPTIM : realized in M2 (_hx_k_adamw_fused). DEPRIORITIZE — AdamW is
+                   0.01% span / 0.1% active; not worth it.     [M2 / FF-DUTYCYCLE]
+  FF-EPILOGUE / FF-BWDFUSE / FF-XSTREAM : the remaining glue/host-overlap levers;
+                   FF-BWDFUSE atomic-free bwd primitive NOT landed.
+  MEGASTEP       : MEASURED closed-negative. MEAN +3.4pp, MEDIAN unmoved, byte-eq
+                   unreachable, parity own-GEMM can't co-reside. RE-HITS the
+                   serial-DAG occupancy wall.                  [F-FUSION-MEGASTEP/M2/B6]
+
+══════════════════════════════════════════════════════════════════════════════
+§6 — MEGASTEP vs TF32 (OP-20): THE HONEST DECISION
+══════════════════════════════════════════════════════════════════════════════
+QUESTION (the task's headline): given OP-20's TF32 4.2× @B=1 0-pod win, is
+MEGASTEP (a) still worth it (orthogonal gain on top of TF32) or (b) dominated?
+
+ANSWER: (b) DOMINATED. Three independent reasons:
+
+  1. SAME VALLEY, DIFFERENT TOOL. Both TF32-mode and MEGASTEP attack the
+     between-GEMM valley. TF32 attacks it by making the GN/glue cheaper
+     (parallel reduction, relaxed precision) AND letting GEMMs go inline
+     CE-safely; MEGASTEP attacks it by removing launches. The valley is the
+     SAME 99.96%, and the MEASURED outcomes are TF32 ~4.2× (sibling OP-20 /
+     consistent with on-main P1-TF32 +5.5pp util, CE-safe descent) vs MEGASTEP
+     ~1.0–1.04× self-speedup (M2 +3.4pp; PRECISION-CHANGE 1.02–1.03×). TF32 is
+     ~4× the win at ~0 architecture risk.
+
+  2. MEGASTEP'S BEST CASE IS BYTE-EQ-LOCKED, AND THAT IS THE TRAP. The only
+     GREEN megakernel slice (FF-VALLEY 2.5×) is GREEN ONLY because byte-eq
+     forces a pathologically-slow single-thread GN — i.e. its speedup is
+     measured against an artificially-slow baseline. The moment you relax to
+     TF32 (which OP-20 authorizes and CE-validates), GN becomes a parallel
+     reduction in microseconds, the valley collapses to a few %, and the
+     megakernel lever drops to the MPK ~1.2–1.3× cross-task-pipelining ceiling
+     (FF-VALLEY caveat, verbatim). So MEGASTEP's headline number EVAPORATES in
+     exactly the regime where you would actually run it.
+
+  3. NO ORTHOGONAL STACK. Could MEGASTEP add gain ON TOP of TF32? The two are
+     not additive at B=1: TF32 already pulls the GEMMs inline CE-safely and
+     lifts util to 34.5% MEAN (P1-TF32), and the residual idle is the serial-DAG
+     dependency floor (P1-TF32 FINDING: "the util ceiling is the serial-DAG idle
+     floor, deeper than both precision and launch-fusion"). MEGASTEP removes
+     LAUNCHES; but in the TF32 path the launches are already collapsed into the
+     one cooperative megafwd. There is no separate launch-elimination win left
+     for a byte-eq megakernel to add — and a byte-eq megakernel CANNOT co-exist
+     with TF32 GEMMs anyway (different math). The honest residual lever past TF32
+     is BATCH-FILL (≈3× asymptote, SM-saturation) and breaking the phase
+     serialization (multi-step pipelining), NEITHER of which is "fuse the whole
+     step into one byte-eq megakernel."
+
+DECISION: do NOT spend an H100 campaign on MEGASTEP. It is already-measured
+closed-negative (§2/§3 tensions) AND strictly dominated by the cheaper TF32
+win (OP-20). Bank TF32 as the B=1 lever; pursue BATCH-FILL for SM-saturation;
+treat MEGASTEP as a completeness artifact (100% hexa-owned, cuBLAS-call-free —
+F-FUSION-MEGAKERNEL-DESIGN), NOT a perf path. The literature being
+inference/decode-ONLY is now EXPLAINED, not just cited: a whole-train-step
+megakernel under-fills the SMs at FP64/B=1, can't hold byte-eq, can't co-reside
+a parity GEMM, and its launch-elim win is Amdahl-capped to a valley a cheaper
+precision-change already drains.
+
+══════════════════════════════════════════════════════════════════════════════
+§7 — LEAK DISCIPLINE (g5)
+══════════════════════════════════════════════════════════════════════════════
+NO pod rented for OP-22. This is a 0-pod DESIGN + BOUND consolidation, produced
+by reading existing real-pod verdicts (all DESTROYED leak-0 in their own files:
+FF-DUTYCYCLE 39958628 · FF-VALLEY 39960189 · M2 39604788 · B6 39564792 ·
+MEGA-OWNGEMM · GN-GRIDSYNC A100 · P1-TF32 Blackwell · INTERP 39912326 · PREC
+39923836 · RSG 39928486) + research memory (reference_megastep_research,
+project_flame_h100_h200_closeout, project_hexa_fusion_campaign_closed). No
+measurement performed or claimed; the H100 measure stays GPU-gated.
+pods rented this session = 0, leak = 0.
+
+CITED VERDICTS (traceability):
+  .verdicts/hexa-fusion/F-FUSION-FF-DUTYCYCLE.txt          (valley %, Amdahl)
+  .verdicts/hexa-fusion/F-FUSION-FF-VALLEY.txt             (2.5× byte-eq, caveat)
+  .verdicts/hexa-fusion/F-FUSION-MEGASTEP.txt              (whole-step closed-neg)
+  .verdicts/hexa-fusion/F-FUSION-M2-FULLSTEP-MEGAKERNEL.txt(measured util A/B)
+  .verdicts/hexa-fusion/F-FUSION-B6-BYTEEQ-MEGAKERNEL.txt  (byte-eq Δ≠0)
+  .verdicts/hexa-fusion/F-FUSION-MEGA-OWNGEMM-INTEGRATE.txt(parity co-reside fail)
+  .verdicts/hexa-fusion/F-FUSION-MEGAKERNEL-DESIGN.txt     (both walls closed)
+  .verdicts/hexa-fusion/F-FUSION-MEGAKERNEL-GN-GRIDSYNC.txt(coop GN byte-eq)
+  .verdicts/hexa-fusion/F-FUSION-P1-TF32-MEGASTEP.txt      (TF32 +5.5pp, CE-safe)
+  .verdicts/hexa-fusion/F-FUSION-PRECISION-CHANGE.txt      (tf32/bf16 1.02-1.03×)
+  .verdicts/hexa-fusion/F-FUSION-BATCHFILL.txt             (≈3× batch asymptote)
+  .verdicts/hexa-0pod/F-OP15-STEP-DETERMINISM.txt          (the composed step)
+════════════════════════════════════════════════════════════════════════════

@@ -10,6 +10,28 @@ loop targets what the consumer card + code can carry.
 
 ## milestones (loop self-feeds; add as discovered)
 
+<!-- ANCHOR:OP-22-MEGASTEP-DESIGN (unique anchor — 0-pod whole-step MEGASTEP megakernel DESIGN + Amdahl bound + H100 experiment recipe; measure is GPU-gated; honest vs TF32-mode) -->
+- [x] **OP-22 — MEGASTEP whole-step megakernel DESIGN + Amdahl bound + experiment recipe (0-pod, GPU-gated; vs TF32-mode)** —
+  produced (reading existing real-pod verdicts + research memory only, $0, 0-GPU, NO vast) the DESIGN +
+  honest Amdahl ceiling + turnkey H100 recipe for MEGASTEP (whole flame CLMConvMoE train step fused into one
+  persistent grid-resident cooperative megakernel). VALLEY STRUCTURE (cited F-FUSION-FF-DUTYCYCLE, real H100):
+  GEMM% = 0.04% of wall vs valley = 99.96% (GLUE 13.15% + GAP/idle 86.80% + OPT 0.01%); util MEDIAN 1% / MEAN
+  10.9% / 72.2% samples <5% = BIMODAL occupancy wall. AMDAHL CEILING = 1/GEMM% = 2844× — a USELESS ceiling
+  (huge only because GEMM is a rounding error); the BINDING bound is the serial-DAG occupancy FLOOR. DESIGN:
+  9-phase grid.sync()-delimited cooperative kernel (embed→conv→GN→gelu→residual→router/experts→gelu2→pack→
+  combine→GN2→logits→CE→bwd-glue→coop-AdamW) with inline own-GEMM; BOTH megakernel walls already closed
+  (own-GEMM #2697 + coop GN byte-eq, F-FUSION-MEGAKERNEL-GN-GRIDSYNC). THREE honest tensions (cited): own-GEMM
+  ~6× off cuBLAS (W10), byte-eq ⊥ util-lift (B6 max|Δ| 9e-16…1.8e-15 ≠ 0 at first fwd), parity wgmma can't
+  co-reside (MEGA-OWNGEMM blockDim<128 + (S/128)²>264-CTA wave deadlock). MEGASTEP is MEASURED closed-negative
+  (M2 MEAN +3.4pp, MEDIAN unmoved, self-speedup ~1.0–1.04×). HONEST vs TF32 (OP-20 ~4.2× @B=1): (b) DOMINATED
+  — same valley, TF32 ~4× the win at ~0 architecture risk; MEGASTEP's only GREEN slice (FF-VALLEY 2.5×) is a
+  byte-eq single-thread-GN ARTIFACT that collapses to MPK ~1.2–1.3× in a TF32/parallel trainer; no orthogonal
+  stack on top of TF32. VERDICT: do NOT spend an H100 campaign on MEGASTEP. Wrote the turnkey recipe anyway
+  (FF-DUTYCYCLE→FF-VALLEY→MEGASTEP rungs + byte-eq/util/TF32 gates + leak-0 destroy) so it is runnable the
+  moment a GPU is authorized — with an EARLY-EXIT note (already measured; re-running buys 0 info). HONEST
+  (OP-2b/OP-21-class, g5): DESIGN + BOUND only, NO measurement performed or claimed; NO pod rented (0-pod goal
+  = ZERO vast). Verdict .verdicts/hexa-0pod/F-OP22-MEGASTEP-DESIGN.txt.
+
 <!-- ANCHOR:OP-21-HOPPER-WARPSPEC-DESIGN (unique anchor — 0-pod DESIGN for the Hopper sm_90a wgmma warp-spec TMA pipeline; measure is GPU-gated) -->
 - [x] **OP-21 — Hopper warp-spec TMA pipeline DESIGN + perf-gap analysis + H100 experiment recipe (0-pod, GPU-gated measure)** —
   produced (reading source + verdicts only, $0, 0-GPU) the design for the forge own-GEMM's remaining Hopper
