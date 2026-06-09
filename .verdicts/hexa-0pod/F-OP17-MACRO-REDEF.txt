@@ -1,0 +1,6 @@
+════════════════════════════════════════════════════════════════════════════
+F-OP17-MACRO-REDEF — fix runtime.c -Wmacro-redefined (9 libc macros) at source
+HEXA-0POD OP-17 · forge warning-hygiene · 0-GPU (local clang) · $0
+════════════════════════════════════════════════════════════════════════════
+
+WIP — skeleton pushed first (durable-worktree rule). Filled in next commit.
