@@ -1,0 +1,10 @@
+// ════════════════════════════════════════════════════════════════════════════
+//  clm_prod_ce_softmax_grad_eq.hexa — F-OP11 CE+softmax fused-gradient byte-eq ORACLE.
+//  HEXA-0POD OP-11 (WIP skeleton — body lands next commit).
+// ════════════════════════════════════════════════════════════════════════════
+
+use "stdlib/flame/tensor_lib"
+
+fn main() {
+    println("clm_prod_ce_softmax_grad_eq — F-OP11 CE+softmax fused-grad byte-eq (CPU oracle) [WIP]")
+}
