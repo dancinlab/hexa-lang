@@ -1,0 +1,17 @@
+// ════════════════════════════════════════════════════════════════════════════
+//  clm_conv_window_seam_eq.hexa — F-OP10 B>1 window-concat causal-conv SEAM oracle.
+//  WIP SKELETON (push-first) — characterization filled in next commits.
+//
+//  HEXA-0POD OP-10: CPU-LOCAL (`hexa run`, 0-GPU) oracle that CHARACTERIZES the
+//  known B>1 batched-step causal-conv window-concat seam (flame_h100_h200_closeout).
+// ════════════════════════════════════════════════════════════════════════════
+
+use "stdlib/flame/tensor_lib"
+
+fn _ws_absf(x: float) -> float { if x < 0.0 { return 0.0 - x } return x }
+
+pub fn op10_main() {
+    println("OP-10 WIP skeleton — window-concat seam oracle (placeholder)")
+}
+
+fn main() { op10_main() }

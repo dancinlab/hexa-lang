@@ -192,6 +192,9 @@ loop targets what the consumer card + code can carry.
   cross-channel + cg=1 per-channel edges). Behavior-preserving: NO trainer logic changed. Oracle
   stdlib/flame/clm_prod_ln_reduction_eq.hexa · verdict .verdicts/hexa-0pod/F-OP9-LN-REDUCTION-ORACLE.txt.
 
+<!-- ANCHOR:OP-10-CONV-SEAM (unique anchor — OP-9 edits a different anchor) -->
+- [ ] **OP-10 — CPU oracle characterizing the B>1 causal-conv window-concat seam (0-GPU)**
+
 ## deferred (0-pod follow-ups surfaced by the loop — self-feed)
 
 - **OP-2b — land the runtime.c hexa_forge_dispatch_matmul_t wrapper body + flip the trainer to the live
