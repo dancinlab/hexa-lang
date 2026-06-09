@@ -144,6 +144,15 @@ pub fn qpw_h_apply(v: [float]) -> [float] { return qforge_h_apply(QPW_HAM, v) }
 // n in the (1,1,n) cubic-grid screening convention). Read by qpwd_drho_to_dvscf.
 let mut QPW_RHO: [float] = []
 
+// ── 3-D REAL-SPACE SCF toggle (the (1,1,n) 1-D G-index density REBUILD) ────────
+//   When QPW_RS3D, the front-end SCF runs qforge_scf_pw_h_multi_smeared_rs3d: a
+//   pow2-padded 3-D cube ρ(r) + spectral GGA ∇ρ (n=645≠pow2 maps onto a valid FFT
+//   grid). Set via qpw_set_rs3d before qforge_pw_frontend(_phonons*). Default OFF
+//   (regression-pin: the (1,1,n) path is verbatim). d4-generic.
+let mut QPW_RS3D: bool = false
+pub fn qpw_set_rs3d(on: bool) { QPW_RS3D = on }
+pub fn qpw_rs3d_is_on() -> bool { return QPW_RS3D }
+
 // =============================================================================
 // ① DECK-DIR GEOMETRY PARSER
 // =============================================================================
@@ -579,7 +588,17 @@ pub fn qforge_pw_frontend(deck_dir: str, npw_cap: int, xc_mode: int,
     //   QE ecutwfc is in Ry; the kinetic cutoff ½|G|² is in Ha → ecut_ha = ecutwfc/2.
     //   npw_cap truncates to a tractable pow2 basis for the in-loop V_H FFT line.
     let ecut_ha = if geom.ecutwfc > 0.0 { 0.5 * geom.ecutwfc } else { 0.0 }
-    let gvecs = qpw_gvectors(geom.b1, geom.b2, geom.b3, ecut_ha, 4, npw_cap)
+    // 3-D real-space path needs the integer Miller indices (singular-B-safe); the
+    //   (1,1,n) path needs only the cartesian G. Emit both via the Miller variant
+    //   when RS3D is on (the gvecs are byte-identical to qpw_gvectors).
+    let mut gvecs: [float] = []
+    let mut gmiller: [float] = []
+    if QPW_RS3D {
+        let gvm = qpw_gvectors_miller(geom.b1, geom.b2, geom.b3, ecut_ha, 4, npw_cap)
+        gvecs = gvm[0] ; gmiller = gvm[1]
+    } else {
+        gvecs = qpw_gvectors(geom.b1, geom.b2, geom.b3, ecut_ha, 4, npw_cap)
+    }
     let n = len(gvecs) / 3
     if n < 1 { return _qpw_fe_err(geom, "PW basis empty (ecut/cap too small)") }
 
@@ -589,11 +608,23 @@ pub fn qforge_pw_frontend(deck_dir: str, npw_cap: int, xc_mode: int,
     let tpa = _QPW_2PI / geom.a
     let eb1 = [tpa, 0.0, 0.0] ; let eb2 = [0.0, tpa, 0.0] ; let eb3 = [0.0, 0.0, tpa]
     let nbands = nocc + 4
-    let scf = qforge_scf_pw_h_multi_smeared(
-        k0, gvecs, geom.nspec, rs, rabs, vlocs, mlens, zs,
-        poss, palens, betas, ls, dij, nprojs, blens, dlens,
-        geom.omega, xc_mode, 1, 1, n, eb1, eb2, eb3,
-        nbands, nelec, 0.3, 1.0e-6, 200, sigma, 2.0, 6)
+    let mut scf = ScfResult { rho: [], evals: [], converged: false, iters: 0, e_total: 0.0 }
+    if QPW_RS3D {
+        // TRUE 3-D real-space ρ(r) SCF (pow2-padded cube; n=645≠pow2 maps onto a
+        //   valid FFT grid; spectral GGA ∇ρ when xc_mode=3). The reciprocal basis
+        //   for |G|²/∇ on the cube = the physical (eb1,eb2,eb3).
+        scf = qforge_scf_pw_h_multi_smeared_rs3d(
+            k0, gvecs, gmiller, geom.nspec, rs, rabs, vlocs, mlens, zs,
+            poss, palens, betas, ls, dij, nprojs, blens, dlens,
+            geom.omega, xc_mode, eb1, eb2, eb3,
+            nbands, nelec, 0.3, 1.0e-6, 200, sigma, 2.0, 6)
+    } else {
+        scf = qforge_scf_pw_h_multi_smeared(
+            k0, gvecs, geom.nspec, rs, rabs, vlocs, mlens, zs,
+            poss, palens, betas, ls, dij, nprojs, blens, dlens,
+            geom.omega, xc_mode, 1, 1, n, eb1, eb2, eb3,
+            nbands, nelec, 0.3, 1.0e-6, 200, sigma, 2.0, 6)
+    }
 
     // stage the converged ρ(r) for the screened-vertex Dyson kernel (d19 — the XC
     // evaluation point; same length-n (1,1,n) cubic grid the in-loop V_H[ρ] uses).

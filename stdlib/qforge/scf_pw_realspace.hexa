@@ -70,6 +70,28 @@ let mut PWRS_B3: [float] = []
 let mut PWRS_OMEGA: float = 1.0      // cell volume Ω (bohr³) — ρ(r) normalization
 let mut PWRS_XCMODE: int = 2         // 0=H · 1=+LDA-x · 2=+LDA-x+c · 3=PBE(GGA)
 
+// ── REUSABLE SCRATCH (memory-efficiency — the hot-loop jetsam guard, RESILIENCE) ─
+//   The per-SCF-iteration 3-D reconstruction (scatter + ifft3 per band + ~6 spectral
+//   gradient FFTs) allocated ~Ntot grids PER CALL × nb bands × {≤200} SCF iters →
+//   push-alloc churn → jetsam (SIGKILL/137) even at a small cube. These module-level
+//   buffers are sized once per cell and CLEARED (not reallocated) per use. d4/d6 —
+//   pure scratch, zero physics change. (mirrors screening_pwfft.hexa's OOM fix.)
+let mut PWRS_SCAT: [float] = []          // reciprocal-grid scatter buffer
+let mut PWRS_ZIM: [float] = []           // zeroed imaginary buffer
+let mut PWRS_REAL: [float] = []          // real-space ifft3 result buffer
+let mut PWRS_RHOACC: [float] = []        // ρ(r) accumulator
+fn _rs_grid_zeroed(buf: [float], ntot: int) -> [float] {
+    if len(buf) != ntot {
+        let mut nb: [float] = []
+        let mut p = 0
+        while p < ntot { nb.push(0.0) ; p = p + 1 }
+        return nb
+    }
+    let mut p = 0
+    while p < ntot { buf[p] = 0.0 ; p = p + 1 }
+    return buf
+}
+
 // ── next power of two ≥ m (d19: identical to qpwfft_next_pow2 contract) ───────
 fn _rs_next_pow2(m: int) -> int {
     if m <= 1 { return 1 }
@@ -155,26 +177,24 @@ pub fn qforge_rho3d_stage(gvecs: [float], miller: [float],
 //   convention the qforge SCF uses — ψ coefficients are real in this Γ basis).
 fn _rs_scatter(c: [float]) -> [float] {
     let ntot = PWRS_NX * PWRS_NY * PWRS_NZ
-    let mut g: [float] = []
-    let mut p = 0
-    while p < ntot { g.push(0.0) ; p = p + 1 }
+    PWRS_SCAT = _rs_grid_zeroed(PWRS_SCAT, ntot)            // reuse (cleared) — no churn
     let mut i = 0
-    while i < PWRS_N { g[PWRS_LIN[i]] = g[PWRS_LIN[i]] + c[i] ; i = i + 1 }
-    return g
+    while i < PWRS_N { PWRS_SCAT[PWRS_LIN[i]] = PWRS_SCAT[PWRS_LIN[i]] + c[i] ; i = i + 1 }
+    return PWRS_SCAT
 }
 
 // ── ψ(G) cube → ψ(r) real-space cube (real part of ifft3) ─────────────────────
+//   Reuses PWRS_REAL — SAFE because each caller consumes the result before the next
+//   _rs_to_real (no two live ψ(r) results alias in the rho accumulation loop).
 fn _rs_to_real(re_grid: [float]) -> [float] {
     let ntot = PWRS_NX * PWRS_NY * PWRS_NZ
-    let mut zim: [float] = []
-    let mut q = 0
-    while q < ntot { zim.push(0.0) ; q = q + 1 }
-    let inter = ifft3(re_grid, zim, PWRS_NX, PWRS_NY, PWRS_NZ)
+    PWRS_ZIM = _rs_grid_zeroed(PWRS_ZIM, ntot)
+    let inter = ifft3(re_grid, PWRS_ZIM, PWRS_NX, PWRS_NY, PWRS_NZ)
     if len(inter) != 2 * ntot { return [] }
-    let mut out: [float] = []
+    PWRS_REAL = _rs_grid_zeroed(PWRS_REAL, ntot)
     let mut p = 0
-    while p < ntot { out.push(inter[p * 2]) ; p = p + 1 }
-    return out
+    while p < ntot { PWRS_REAL[p] = inter[p * 2] ; p = p + 1 }
+    return PWRS_REAL
 }
 
 // ── TRUE 3-D real-space density ρ(r) = Σ_b occ_b·|ψ_b(r)|² on the pow2 cube ────
@@ -190,9 +210,7 @@ pub fn qforge_rho3d_from_psi(psis: [[float]], occ: [float]) -> [float] {
     let nb = len(psis)
     if nb < 1 || len(occ) < nb { return [] }
     let ntot = PWRS_NX * PWRS_NY * PWRS_NZ
-    let mut rho: [float] = []
-    let mut p = 0
-    while p < ntot { rho.push(0.0) ; p = p + 1 }
+    PWRS_RHOACC = _rs_grid_zeroed(PWRS_RHOACC, ntot)        // reuse (cleared) — no churn
     let mut b = 0
     while b < nb {
         if len(psis[b]) != PWRS_N { return [] }
@@ -201,10 +219,10 @@ pub fn qforge_rho3d_from_psi(psis: [[float]], occ: [float]) -> [float] {
         if len(psir) != ntot { return [] }
         let ob = occ[b]
         let mut t = 0
-        while t < ntot { rho[t] = rho[t] + ob * psir[t] * psir[t] ; t = t + 1 }
+        while t < ntot { PWRS_RHOACC[t] = PWRS_RHOACC[t] + ob * psir[t] * psir[t] ; t = t + 1 }
         b = b + 1
     }
-    return rho
+    return PWRS_RHOACC
 }
 
 // ── physical normalization of the raw Σocc·|ψ(r)|² grid to ρ(r) [e/bohr³] ──────
