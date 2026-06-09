@@ -1,0 +1,119 @@
+F-OP6B-ADAMW-FUSE
+HEXA-0POD OP-6b — fuse the AdamW update INTO the bwd-GEMM epilogue (boundary-removal)
+Host: aiden (sidecar pool, RTX 5070, sm_120 / cc12.0). FREE pool. NO vast, NO pod, NO leak.
+nvcc 13.0. GPU verified idle (nvidia-smi util 0%) before every timed run.
+
+VERDICT: CLOSED-NEGATIVE (honest) — for production shapes. The AdamW-into-bwd-GEMM
+epilogue fusion is BIT-EXACT (max|delta|=0 under BOTH --fmad=false AND --fmad=true,
+a STRONGER byte-eq result than OP-6) but gives NO perf win on production-realistic
+dW-GEMM shapes (~1.000-1.002x) and is SLIGHTLY SLOWER (0.98x) in the dW-dominated
+regime. The eliminated dW DRAM round-trip is real but Amdahl-negligible against the
+GEMM cost, and folding AdamW into the GEMM's tile geometry runs the elementwise work
+at WORSE effective bandwidth than a dedicated AdamW kernel. Fusion wins ONLY in a
+tiny-GEMM launch-bound regime (1.108x) where killing the 2nd kernel LAUNCH matters.
+PLUS the structural blocker: the PRODUCTION bwd-dW is cuBLAS (scope B) — you cannot
+fuse an epilogue into a closed cuBLAS call at all. NOT shipped.
+
+──────────────────────────────────────────────────────────────────────────────────────
+WHICH BWD-dW PATH (determined) — SCOPE B (cuBLAS-bound)
+  conv1d_bwd_via_forge (stdlib/flame/clm_prod.hexa:229-251) computes dW via
+    dW_flat = forge_dispatch_matmul(xcolT, Kdim, T, dy, Cout)        (line 238)
+  forge_dispatch_matmul routes (codegen.hexa:7525 -> hexa_forge_dispatch_matmul ->
+  farr_matmul_gpu) on a CUDA host to a REAL cuBLAS Dgemm body (emitted by
+  self/cuda/runtime_cuda_emit.hexa, "real cuBLAS Dgemm body ... -lcublas"). The
+  batched 2-expert dW (conv2_bwd_via_forge_batched / _clmp_matmul_batched) likewise
+  rides cublasDgemmStridedBatched. => the production bwd-dW GEMM is CLOSED cuBLAS;
+  an AdamW epilogue CANNOT be fused into it. This is scope B per the pre-registered
+  task framing: boundary-removal requires routing the bwd dW through an OWN-GEMM.
+  THE HONEST FINDING: epilogue-fusion boundary-removal lives in the OWN-GEMM bwd path,
+  not the production cuBLAS path. So OP-6b MEASURES what own-GEMM-bwd + fused-AdamW
+  would buy (scope A demonstration) to decide whether routing bwd through own-GEMM
+  for the sake of the fusion is worth it. It is NOT (see PERF).
+
+──────────────────────────────────────────────────────────────────────────────────────
+WHAT WAS BUILT (scope A demonstration on an own-GEMM)  tool/op6b/op6b_adamw_fuse_bench.cu
+  fp64 tiled own-GEMM dW[M,N]=A[M,K].B[K,N] (TILE=16, smem-staged, one thread/cell),
+  mirroring the dW GEMM STRUCTURE dW[Kdim,Cout]=xcolT[Kdim,T].dy[T,Cout]. Two paths:
+   SEPARATE  : gemm_dW_store -> writes dW to DRAM ;  then adamw_separate re-reads dW
+               (+W,M,V) and writes W,M,V.  = 2 kernel launches + a full dW DRAM
+               write + a full dW DRAM re-read.
+   FUSED     : gemm_dW_adamw_fused consumes each dW cell `acc` IN-REGISTER the instant
+               the K-loop finishes (NEVER stored to DRAM), reads W,M,V for that cell,
+               applies the AdamW update inline, writes W,M,V.  = 1 launch, dW write +
+               dW re-read ELIMINATED.
+  The per-element AdamW arithmetic is the VERBATIM _hx_k_adamw_step_inplace body,
+  expanded from ONE shared MACRO (ADAMW_BODY) in both paths. fp64 throughout (AdamW is
+  fp64 in production); the boundary-removal saving is dtype-independent (a DRAM
+  round-trip + launch elimination, identical for a TF32 dW GEMM).
+
+──────────────────────────────────────────────────────────────────────────────────────
+RESULT 1 — BIT-EXACT GATE (g5)  [the strong result]
+  fused (W,M,V) vs separate (W,M,V), aiden RTX 5070, ALL shapes:
+    --fmad=false : bitdiff=0  max|delta|=0.000e+00  -> BYTE-IDENTICAL (PASS)
+    --fmad=true  : bitdiff=0  max|delta|=0.000e+00  -> BYTE-IDENTICAL (PASS)   <-- key
+  Byte-eq HELD under the PRODUCTION --fmad=true default at EVERY shape tested. This is
+  STRONGER than OP-6: OP-6's double2 vectorization broke byte-eq under --fmad=true
+  (1-ULP, pair-loop vs single-loop FMA reschedule). Fusion does NOT: the fused epilogue
+  reads the gradient from a REGISTER (the GEMM accumulator) and applies the EXACT SAME
+  macro statements as the separate AdamW kernel in the SAME order — the AdamW FMA chain
+  is identical; only the gradient SOURCE differs (register vs DRAM re-read), which
+  changes no arithmetic. So boundary-removal fusion is byte-eq even under production
+  flags — the byte-eq concern that blocked OP-6 does NOT apply here.
+
+RESULT 2 — PERFORMANCE (no win on production shapes; slight loss when dW-dominated)
+  fmad=true, SEPARATE vs FUSED ms/step, aiden RTX 5070:
+    dW[1536, 512], K=2048 :  SEP 5.9500 | FUSED 5.9397 | 1.002x   (GEMM-dominated)
+    dW[3072, 768], K=2048 :  SEP 17.8243| FUSED 17.8031| 1.001x   (GEMM-dominated)
+    dW[ 512, 512], K=4096 :  SEP 4.0456 | FUSED 4.0376 | 1.002x   (GEMM-dominated)
+   dW-DOMINATED regime (large M,N, tiny K — dW round-trip is a big share):
+    dW[4096,4096], K=64   :  SEP 6.6946 | FUSED 6.7884 | 0.986x   <-- SLOWER
+    dW[8192,2048], K=32   :  SEP 4.7639 | FUSED 4.8560 | 0.981x   <-- SLOWER
+    dW[2048,2048], K=16   :  SEP 0.9584 | FUSED 0.9766 | 0.981x   <-- SLOWER
+   LAUNCH-BOUND regime (tiny sub-ms GEMM — the 2nd launch is a real fraction):
+    dW[ 256, 256], K=16   :  SEP 0.0205 | FUSED 0.0185 | 1.108x   <-- the ONLY win
+  fmad=false numbers track the same pattern (1.000x GEMM-dominated).
+
+WHY NO WIN (the honest mechanism)
+  (a) GEMM-DOMINATED shapes: the dW DRAM round-trip eliminated is tiny relative to the
+      GEMM. For dW[1536,512] it is 0.0126 GB (write+reread) ~= 0.9-2.1 GB/s amortized
+      over the 5.9ms step — Amdahl-negligible against a compute/smem-bound fp64 GEMM.
+      Removing a 1% traffic term yields a 1% (noise) speedup.
+  (b) dW-DOMINATED shapes: fusion is SLOWER. The separate AdamW kernel is a clean
+      memory-bound elementwise pass at ~333 GB/s (OP-6's measured peak), launched at
+      its OWN ideal geometry (256-thread grid-stride, high occupancy). The FUSED
+      epilogue does the W,M,V read+write INSIDE the GEMM's tile geometry (TILE=16, one
+      output cell per thread, low elementwise occupancy), so the elementwise work runs
+      at WORSE effective bandwidth than the dedicated kernel. The ~40-70 GB/s of dW
+      round-trip saved is outweighed by the elementwise slowdown under GEMM geometry.
+  (c) LAUNCH-BOUND shapes: the only place fusion wins (1.108x) is when the GEMM is so
+      small (~0.02 ms) that eliminating the SECOND kernel LAUNCH (~few us) is a real
+      fraction of the step. This is a launch-elimination win, NOT a bandwidth win, and
+      it disappears the moment the GEMM is non-trivial (production scale).
+
+ROOT DISTINCTION vs the codebase's WINNING fusions (OG-FUSE-FOLD #2909, OP-2)
+  Those fused ops that share a tile/launch and were BOTH under-utilized (e.g. 30
+  ConvExpert micro-launches that individually under-fill the SMs) — fusion FILLED the
+  GPU. Here the bwd GEMM ALREADY saturates the GPU (or is a single cuBLAS call), and
+  the AdamW is ALREADY bandwidth-saturated as its own kernel. Neither side is
+  under-filled, so fusing them removes only a small DRAM term and a launch — no fill
+  headroom to recover. Boundary-removal pays off when one side is under-utilized; it
+  does NOT pay when both kernels already run at roofline.
+
+DETERMINISM: run-to-run max|delta|=0 for both paths (deterministic). HELD.
+SHIPPED: NO. No perf win on production shapes (1.00x), slight loss when dW-dominated
+  (0.98x), and the production bwd-dW is cuBLAS (cannot fuse an epilogue in anyway).
+  No production code changed (harness + verdict only — behavior-preserving).
+COST: $0 (free pool aiden). NO vast, NO pod, NO leak (pool host, never destroyed).
+
+WHERE BOUNDARY-REMOVAL MUST LIVE (the structural finding)
+  AdamW-epilogue boundary-removal is only EXPRESSIBLE on the own-GEMM bwd path (scope A;
+  cuBLAS is closed = scope B). And even on the own-GEMM it is NOT WORTH IT: it is
+  byte-eq but perf-flat/negative on production shapes, because neither the bwd GEMM nor
+  the AdamW is under-utilized. The elementwise lever for the 5070 is now EXHAUSTED on
+  BOTH axes: OP-6 closed memory-INSTRUCTION vectorization (already coalesced), OP-6b
+  closes BOUNDARY-REMOVAL fusion (nothing under-filled to recover). The remaining real
+  flame lever is elsewhere (interpreter-elimination / batch>1 per the flame closeout
+  memory + W-ladder own-GEMM perf), NOT the optimizer elementwise op.
+
+HARNESS: tool/op6b/op6b_adamw_fuse_bench.cu (self-contained; builds with
+  nvcc -O3 -arch=sm_120 --fmad={false,true}; argv = M N K [iters]).
