@@ -1,17 +1,245 @@
 // ════════════════════════════════════════════════════════════════════════════
 //  clm_conv_window_seam_eq.hexa — F-OP10 B>1 window-concat causal-conv SEAM oracle.
-//  WIP SKELETON (push-first) — characterization filled in next commits.
 //
-//  HEXA-0POD OP-10: CPU-LOCAL (`hexa run`, 0-GPU) oracle that CHARACTERIZES the
-//  known B>1 batched-step causal-conv window-concat seam (flame_h100_h200_closeout).
+//  HEXA-0POD OP-10: CPU-LOCAL (`hexa run`, 0-GPU) CHARACTERIZATION oracle that
+//  makes the KNOWN B>1 batched-step causal-conv window-concat seam PRECISE — in
+//  the same spirit as OP-7's forward im2col==direct conv byte-eq oracle, but for
+//  the honestly-NON-bit-exact batched concat path the flame closeout flagged.
+//
+//  CONTEXT (project_flame_h100_h200_closeout · #2913 batch-fill lever):
+//  The flame CLMConvMoE batched training step (CLM_PROD_BATCH=B in clm_prod.hexa)
+//  concatenates B consecutive DISTINCT length-Tw windows into ONE length-T=B*Tw
+//  buffer and runs every op (the causal-dilated Conv1d included) over the whole
+//  concatenated sequence. The closeout recorded:
+//    "B>1 window-concat carries a K-1 causal-conv SEAM-only Δ (not bit-identical;
+//     a true max|Δ|=0 batched step needs a per-window-segmented causal conv)".
+//  This oracle CONFIRMS that claim and REFINES it to an exact per-position map.
+//
+//  THE TWO PATHS (both computed here on CPU, identical weights/bias/dtype):
+//   (a) WINDOW-CONCAT (flame B>1): conv over x_concat[T=B·Tw, Cin]. At a global
+//       position t the receptive field is  p = t − dil·(K−1−k), k∈[0,K). For the
+//       first (K−1)·dil local positions of every window AFTER the first, some p
+//       lands in the PREVIOUS window — cross-window causal context is mixed in.
+//   (b) PER-WINDOW-SEGMENTED reference: each length-Tw window is convolved
+//       INDEPENDENTLY (its own causal left-pad of zeros at the window start), then
+//       the B results are stacked. Here cross-window context is ZEROED: for local
+//       position tl the field is p_local = tl − dil·(K−1−k), and p_local<0 ⇒ 0.
+//
+//  Δ[t] = (a) − (b) is therefore EXACTLY the contribution of the previous-window
+//  tokens that (a) includes and (b) zeros. The map proven below:
+//    · window 0 (b==0): every position bit-exact (no previous window) ⇒ Δ=0.
+//    · window b>0, local positions tl ∈ [ (K−1)·dil , Tw ): receptive field stays
+//      INSIDE the window in both paths ⇒ INTERIOR, Δ=0 (max|Δ|=0, bit-exact).
+//    · window b>0, local positions tl ∈ [ 0 , (K−1)·dil ): SEAM band — the field
+//      straddles the window start; (a) reads previous-window tokens that (b)
+//      zeros ⇒ Δ = Σ over the straddling taps of  x_prev · w  (nonzero in general).
+//  So the seam is EXACTLY the first (K−1)·dil positions of each window after the
+//  first (for the trunk dilation>1 it widens to (K−1)·dil, not just K−1; at dil=1
+//  it is the classic K−1 band the closeout named). The interior is bit-exact.
+//
+//  HONEST (g5): this is a CHARACTERIZATION oracle — the FINDING is the seam
+//  LOCATION + MAGNITUDE, NOT a clean max|Δ|=0 everywhere. The interior bit-exact
+//  proof + the exact seam band is the deliverable. Behavior-preserving: NO trainer
+//  logic changed (verification/characterization addition only). Runs $0 via
+//  `hexa run` on any CPU — 0-GPU, no pool, no vast.
+//
+//  F-OP10-CONV-SEAM-ORACLE : interior max|Δ|=0 · seam band = first (K−1)·dil
+//                            positions of each window>0 · Δ = cross-window context.
 // ════════════════════════════════════════════════════════════════════════════
 
 use "stdlib/flame/tensor_lib"
 
 fn _ws_absf(x: float) -> float { if x < 0.0 { return 0.0 - x } return x }
 
+// ── DIRECT causal-dilated conv1d over a contiguous [T,Cin] buffer (read from
+//    x[xoff..]) → y[T,Cout]. Mirrors conv_lib's nn_conv1d_fwd math EXACTLY:
+//    y[t,co] = b[co] + Σ_ci Σ_k x[p,ci]·w[co, ci·K+k],  p = t − dil·(K−1−k),
+//    zero when p<0. ci-OUTER k-INNER (= j=ci·K+k ascending = the GEMM k-order,
+//    OP-7-locked). The ONLY cross-position coupling in the whole ConvMoE step.
+//    `xlo` = lowest GLOBAL row index that is "in bounds" for this conv: a read of
+//    row p is taken only when p >= xlo (and p < T). For the concat path xlo=0
+//    (whole buffer visible); for a segmented window xlo = the window's start row
+//    (previous-window rows are OUT of bounds ⇒ treated as causal zero pad).
+fn _ws_conv_direct(x: int, xlo: int, T: int, Cin: int, Cout: int, K: int, dil: int,
+                   w: int, b: int, y: int) {
+    let mut t = 0
+    while t < T {
+        let mut co = 0
+        while co < Cout {
+            let mut acc = t_get(b, co)
+            let mut ci = 0
+            while ci < Cin {
+                let mut k = 0
+                while k < K {
+                    let p = t - dil * (K - 1 - k)
+                    if p >= xlo {
+                        if p < T {
+                            acc = acc + t_get(x, p * Cin + ci) * t_get(w, co * (Cin * K) + ci * K + k)
+                        }
+                    }
+                    k = k + 1
+                }
+                ci = ci + 1
+            }
+            t_set(y, t * Cout + co, acc)
+            co = co + 1
+        }
+        t = t + 1
+    }
+}
+
+// ── (a) WINDOW-CONCAT path: ONE conv over the whole length-T=B·Tw buffer.
+//    xlo=0 ⇒ every in-buffer previous-window row is visible to the receptive
+//    field. This is exactly what the flame batched step does.
+fn _ws_concat_path(xcat: int, B: int, Tw: int, Cin: int, Cout: int, K: int, dil: int,
+                   w: int, b: int, ycat: int) {
+    let T = B * Tw
+    _ws_conv_direct(xcat, 0, T, Cin, Cout, K, dil, w, b, ycat)
+}
+
+// ── (b) PER-WINDOW-SEGMENTED reference: convolve each window independently into
+//    yseg[b·Tw .. ]. Realized over the SAME concat buffer by setting the
+//    in-bounds floor xlo = wb*Tw (rows before this window's start = causal zero
+//    pad), and restricting the output rows to [wb*Tw, wb*Tw+Tw). This ZEROES the
+//    cross-window context — the true per-window-segmented causal conv.
+fn _ws_segmented_path(xcat: int, B: int, Tw: int, Cin: int, Cout: int, K: int, dil: int,
+                      w: int, b: int, yseg: int) {
+    let mut wb = 0
+    while wb < B {
+        let base = wb * Tw
+        let mut tl = 0
+        while tl < Tw {
+            let t = base + tl
+            let mut co = 0
+            while co < Cout {
+                let mut acc = t_get(b, co)
+                let mut ci = 0
+                while ci < Cin {
+                    let mut k = 0
+                    while k < K {
+                        let p = t - dil * (K - 1 - k)
+                        if p >= base {
+                            // p < base ⇒ previous window ⇒ zero pad (segmented).
+                            // p is always < t+1 <= base+Tw so the upper bound holds.
+                            acc = acc + t_get(xcat, p * Cin + ci) * t_get(w, co * (Cin * K) + ci * K + k)
+                        }
+                        k = k + 1
+                    }
+                    ci = ci + 1
+                }
+                t_set(yseg, t * Cout + co, acc)
+                co = co + 1
+            }
+            tl = tl + 1
+        }
+        wb = wb + 1
+    }
+}
+
+// ── per-position max|Δ| over the Cout channels at global row t.
+fn _ws_rowdev(ycat: int, yseg: int, t: int, Cout: int) -> float {
+    let mut m = 0.0
+    let mut co = 0
+    while co < Cout {
+        let d = _ws_absf(t_get(ycat, t * Cout + co) - t_get(yseg, t * Cout + co))
+        if d > m { m = d }
+        co = co + 1
+    }
+    return m
+}
+
+// ── run one (B,Tw,Cin,Cout,K,dil) config: build a concat buffer, run both paths,
+//    print the per-position Δ map, ASSERT interior max|Δ|=0, characterize the
+//    seam band. Returns 1 if the map matched the predicted shape, else 0.
+fn _ws_run_case(B: int, Tw: int, Cin: int, Cout: int, K: int, dil: int, seed: int) -> int {
+    let T = B * Tw
+    let band = (K - 1) * dil            // predicted seam-band width per window>0
+
+    // distinct per-window data so cross-window context is genuinely nonzero
+    let xcat = t_zeros(T * Cin)
+    t_fill_lcg(xcat, T * Cin, seed, 0.7)
+    let w = t_zeros(Cout * Cin * K)
+    t_fill_lcg(w, Cout * Cin * K, seed + 11, 0.3)
+    let b = t_zeros(Cout)
+    t_fill_lcg(b, Cout, seed + 23, 0.1)
+
+    let ycat = t_zeros(T * Cout)
+    let yseg = t_zeros(T * Cout)
+    _ws_concat_path(xcat, B, Tw, Cin, Cout, K, dil, w, b, ycat)
+    _ws_segmented_path(xcat, B, Tw, Cin, Cout, K, dil, w, b, yseg)
+
+    print("  ── case B="); print(B); print(" Tw="); print(Tw); print(" Cin="); print(Cin)
+    print(" Cout="); print(Cout); print(" K="); print(K); print(" dil="); print(dil)
+    print("  (predicted seam band = (K-1)*dil = "); print(band); println(")")
+
+    let mut interior_max = 0.0    // must stay 0.0 (bit-exact)
+    let mut seam_max = 0.0        // characterize magnitude
+    let mut seam_positions = 0
+    let mut bad_interior = 0      // interior position with Δ != 0 (would FAIL)
+    let mut wrong_seam = 0        // seam position that came out Δ==0 (mischaracterized)
+
+    let mut t = 0
+    while t < T {
+        let wb = t / Tw
+        let tl = t - wb * Tw
+        let d = _ws_rowdev(ycat, yseg, t, Cout)
+        // predicted: window 0 ⇒ interior; window>0 & tl<band ⇒ SEAM; else interior
+        let is_seam = if wb > 0 { if tl < band { 1 } else { 0 } } else { 0 }
+        if is_seam == 1 {
+            seam_positions = seam_positions + 1
+            if d > seam_max { seam_max = d }
+            if d == 0.0 { wrong_seam = wrong_seam + 1 }
+            print("    SEAM  t="); print(t); print(" (win "); print(wb); print(" local "); print(tl)
+            print(")  max|Δ|="); println(d)
+        } else {
+            if d > interior_max { interior_max = d }
+            if d != 0.0 { bad_interior = bad_interior + 1 }
+        }
+        t = t + 1
+    }
+
+    print("    interior max|Δ| = "); print(interior_max)
+    print("   (bad interior positions = "); print(bad_interior); println(")")
+    print("    seam positions  = "); print(seam_positions)
+    print("   seam max|Δ| = "); print(seam_max)
+    print("   (mischaracterized seam = "); print(wrong_seam); println(")")
+
+    t_free(xcat); t_free(w); t_free(b); t_free(ycat); t_free(yseg)
+
+    // PASS = interior bit-exact AND the seam band is exactly the predicted set:
+    //   no interior position carries Δ, AND every predicted seam position is
+    //   genuinely nonzero (the seam is real, not over-claimed).
+    let mut ok = 1
+    if bad_interior != 0 { ok = 0 }
+    if interior_max != 0.0 { ok = 0 }
+    if wrong_seam != 0 { ok = 0 }
+    return ok
+}
+
 pub fn op10_main() {
-    println("OP-10 WIP skeleton — window-concat seam oracle (placeholder)")
+    println("OP-10 — B>1 window-concat causal-conv SEAM characterization oracle (0-GPU)")
+    println("  paths: (a) flame concat conv over T=B*Tw  vs  (b) per-window-segmented ref")
+    println("")
+
+    let mut allok = 1
+    // dil=1 → classic K-1 band (the closeout's named case); trunk dil>1 widens it.
+    // Cover the flame conv shapes: embed/expert K=3 dil=1; trunk K=3 dil=2,4.
+    if _ws_run_case(2, 6, 1, 1, 3, 1, 1)  == 0 { allok = 0 }
+    if _ws_run_case(2, 6, 2, 2, 3, 1, 7)  == 0 { allok = 0 }
+    if _ws_run_case(3, 5, 2, 3, 3, 1, 13) == 0 { allok = 0 }
+    if _ws_run_case(2, 8, 2, 2, 3, 2, 21) == 0 { allok = 0 }   // dilation widens band
+    if _ws_run_case(2, 9, 1, 2, 3, 4, 29) == 0 { allok = 0 }   // dil=4 band=(K-1)*4=8
+    if _ws_run_case(4, 4, 1, 1, 2, 1, 31) == 0 { allok = 0 }   // K=2 band=1 (edge)
+
+    println("")
+    if allok == 1 {
+        println("F-OP10-CONV-SEAM-ORACLE = 1")
+        println("PASS — interior max|Δ|=0 (bit-exact) · seam = first (K-1)*dil positions of each window>0")
+        println("       seam Δ = cross-window causal context the segmented path zeros (CONFIRMS closeout)")
+    } else {
+        println("F-OP10-CONV-SEAM-ORACLE = 0")
+        println("FAIL — seam map did not match prediction (interior not bit-exact OR seam over/under-claimed)")
+    }
 }
 
 fn main() { op10_main() }

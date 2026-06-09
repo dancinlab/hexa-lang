@@ -281,3 +281,28 @@ or drops the max-sub now breaks the oracle. Canonical order documented: softmax 
 changed (oracle/verification addition only). Companion to OP-2 (bwd dW transpose-elim) + OP-7 (fwd conv im2col).
 $0 — pure local CPU `hexa run`, no GPU / no pool / no vast. Oracle stdlib/flame/clm_prod_moe_combine_eq.hexa ·
 verdict .verdicts/hexa-0pod/F-OP8-IDENTITY-ORACLE.txt.
+
+## 2026-06-09 — OP-10 DONE: B>1 window-concat causal-conv SEAM characterized (0-GPU)
+
+Made the flame_h100_h200_closeout's KNOWN honest non-bit-exact spot PRECISE. The flame CLMConvMoE batched step
+(CLM_PROD_BATCH=B, clm_prod.hexa) concatenates B distinct length-Tw windows into ONE length-T=B*Tw buffer and
+runs the causal-dilated Conv1d over the whole concat; the closeout flagged a "K-1 causal-conv SEAM-only Δ" vs a
+per-window-segmented conv but did NOT pin the exact positions/magnitude. This LOCAL `hexa run` (0-GPU, no pool,
+no vast) oracle computes BOTH paths on CPU with identical weights/bias/FP dtype: (a) the flame concat conv
+(every previous-window row visible to the receptive field p = t - dil*(K-1-k)) vs (b) a per-window-segmented
+reference that zeros the cross-window causal context, then maps Δ per output position.
+
+FINDING (g5 — honest CHARACTERIZATION, NOT a clean max|Δ|=0-everywhere identity):
+  • INTERIOR BIT-EXACT: every output position OUTSIDE the seam band has Δ exactly 0 (interior max|Δ|=0, bad
+    interior positions = 0 across all 6 cases — exactly 0, not merely small).
+  • SEAM = EXACTLY the first (K-1)*dil output positions of every window AFTER the first; there Δ = the
+    cross-window causal context that the segmented conv zeros (genuinely nonzero; mischaracterized seam = 0,
+    so the band is neither over- nor under-claimed). Window 0 is fully bit-exact (no previous window).
+  • CONFIRMS the closeout's claim AND REFINES it: at dil=1 the band = K-1 (the closeout's named "K-1 seam");
+    at dil>1 (the trunk's dilated convs) the band WIDENS to (K-1)*dil — the closeout said a flat "K-1", this
+    oracle sharpens it. Seam max|Δ| ranged ~0.035–0.384 on the LCG fixture (e.g. K=3 dil=4 → full 8-wide band).
+
+Behavior-preserving: NO trainer logic changed (characterization/verification addition only). Companion to OP-7
+(fwd conv im2col==direct, B=1) — OP-7 locked the B=1 conv bit-exactly, OP-10 maps exactly where B>1 departs.
+$0 — pure local CPU `hexa run`, no GPU / no pool / no vast. Oracle stdlib/flame/clm_conv_window_seam_eq.hexa ·
+verdict .verdicts/hexa-0pod/F-OP10-CONV-SEAM-ORACLE.txt.
