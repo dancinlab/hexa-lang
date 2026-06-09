@@ -1,0 +1,239 @@
+════════════════════════════════════════════════════════════════════════════
+F-OP16-GN-HOST-FALLBACK — gn_lib fused-valley GN+GELU 0-GPU host-linkable
+HEXA-0POD OP-16 · forge host fallback · 0-GPU (`hexa run`) · $0
+════════════════════════════════════════════════════════════════════════════
+
+RESULT: host body WRITTEN + PROVEN locally (links + byte-eq max|Δ|=0). The C body
+itself lands via a RUNTIME REBUILD in the release/build env (self/runtime.c is
+gitignored frozen-seed — same constraint as OP-2b). The byte-eq ORACLE that
+exercises the fused entry point is the durable TRACKED artifact and ships in this
+PR. GPU dispatch path UNCHANGED (the host body is `#ifndef HEXA_CUDA`).
+
+────────────────────────────────────────────────────────────────────────────
+THE GAP (OP-15 #2994 finding, REPRODUCED verbatim)
+────────────────────────────────────────────────────────────────────────────
+A `hexa run` harness that `use`s stdlib/flame/gn_lib FAILS TO LINK off a no-CUDA
+build:
+    Undefined symbols for architecture arm64:
+      "_forge_dispatch_groupnorm_gelu", referenced from:
+          _nn_gn_gelu_fused_off in hexa_run-*.o
+    ld: symbol(s) not found for architecture arm64
+    clang: error: linker command failed with exit code 1
+
+gn_lib's nn_gn_gelu_fused_off (stdlib/flame/gn_lib.hexa:321) calls
+forge_dispatch_groupnorm_gelu under an env gate (HEXA_FUSE_GN_GELU +
+CLM_PROD_DEVRESIDENT + goff==0 && boff==0). The CALL SITE is env-gated so at
+RUNTIME the host loop runs anyway — BUT codegen (self/codegen.hexa:7838 maps
+forge_dispatch_groupnorm_gelu → the bare symbol; the deployed hexat emits the
+bare `forge_dispatch_groupnorm_gelu`) ALWAYS emits the symbol REFERENCE, and the
+bare `forge_dispatch_groupnorm_gelu` C body has NO host definition off-CUDA → the
+LINK fails before any code runs. The whole L3 fused-dispatch family (gelu2 /
+groupnorm_gelu / moe_block2) is host-undefined off-CUDA: the GPU build supplies
+them via the hand-written fusion_dispatch.c glue (launcher + `#ifdef HEXA_CUDA`,
+see .verdicts/hexa-fusion/p1b-aprime2-build/fusion_dispatch.c), which is ABSENT
+off-CUDA. So the fused-valley GN+GELU path was not locally `hexa run`-testable on
+CPU — the 0-GPU determinism-test blind spot OP-15 named.
+
+Reproduced with: `hexa run stdlib/flame/flame_gn_gelu_fused_test.hexa`
+(this test `use`s gn_lib) → the exact undefined-symbol link error above.
+
+────────────────────────────────────────────────────────────────────────────
+THE FIX — HOST BODY LOCATION + IDIOM
+────────────────────────────────────────────────────────────────────────────
+LOCATION: self/runtime.c (the forge host-runtime TU), as an `#ifndef HEXA_CUDA`
+definition of the BARE symbol `forge_dispatch_groupnorm_gelu`, mirroring the
+existing host-fallback idiom in the SAME TU:
+  - the bare-wrapper seam `forge_dispatch_matmul` (RFC 050 L1) — bare symbol the
+    deployed hexat emits, paired with the runtime.h prototype (already present:
+    self/runtime.h:1238);
+  - the host CPU-oracle twin `hexa_forge_dispatch_matmul_batched` — `#ifdef
+    HEXA_CUDA` launcher, else a byte-eq host loop reading _hx_farr_table[id].buf;
+  - the FP_CONTRACT OFF byte-eq blocks (the ag_tape host oracles) — REQUIRED here
+    (see "byte-eq cure" below).
+
+`#ifndef HEXA_CUDA` is deliberate: under HEXA_CUDA the symbol is provided by
+fusion_dispatch.c, so guarding the host body off-CUDA avoids a duplicate symbol
+AND leaves the GPU dispatch path byte-identical to today (GPU path UNCHANGED).
+
+SEMANTICS: identical to gn_lib's own host loop and to the OP-9 (#2987) unfused
+reference that was already PROVEN bit-exactly equal (max|Δ|=0) to the fused
+device kernel:
+  - two-pass mean/var, t-outer / c-inner reduction order (no tree re-assoc);
+  - eps = 1e-5 placement var+eps; inv = 1/_op16_gn_sqrt(var+eps);
+  - _op16_gn_sqrt = the 40-iteration Newton recurrence g=0.5*(g+x/g), seed g0=x
+    (byte-identical to gn_lib _gn_sqrt / nn_lib _nn_sqrt);
+  - affine y = gamma[ch]*xhat + beta[ch]; xhat = (x-mu)*inv;
+  - GELU a = y * 0.5*(1 + erf(y * 0.70710678118654752440)) — erf is libm (the
+    same hexa_math_erf the hexa `erf` builtin lowers to);
+  - writes y_out (pre-GELU GN, bwd cache), a_out (GELU), mean_out, inv_out,
+    xhat_out via the FP64 farr buffers; returns hexa_int(0) ok, hexa_int(-1) on
+    bad ids/dims (caller falls through to its own host loop — also byte-eq).
+
+BYTE-EQ CURE (the one non-obvious finding): with a naïve host body, max|Δ| was a
+constant ~3.55e-15 (1-2 ULP), NOT 0 — clang -O2 FMA-CONTRACTS the affine
+`gamma*xhat + beta` into one fma, but hexa codegen emits NON-contracted
+sequential rounding. Wrapping the host body in
+    #pragma STDC FP_CONTRACT OFF  …  #pragma STDC FP_CONTRACT DEFAULT
+(the exact proven recipe the ag_tape host oracles in the same TU already use)
+drops max|Δ| to EXACTLY 0. Without it, the fused dispatch is correct to ~1 ULP
+but NOT byte-eq.
+
+VERBATIM HOST BODY (apply at self/runtime.c, after the FFN bare-wrapper region /
+the matmul_batched host oracle — anywhere _hx_farr_table is in scope):
+
+  #ifndef HEXA_CUDA
+  #pragma STDC FP_CONTRACT OFF
+  static double _op16_gn_sqrt(double x) {
+      if (x <= 0.0) return 0.0;
+      double g = x;
+      for (int i = 0; i < 40; i++) g = 0.5 * (g + x / g);
+      return g;
+  }
+  HexaVal forge_dispatch_groupnorm_gelu(HexaVal x_v, HexaVal gamma_v, HexaVal beta_v,
+                                        HexaVal y_v, HexaVal a_v, HexaVal mean_v,
+                                        HexaVal inv_v, HexaVal xhat_v,
+                                        HexaVal t_v, HexaVal c_v, HexaVal g_v) {
+      int64_t x  = hexa_as_num(x_v),  gm = hexa_as_num(gamma_v), bt = hexa_as_num(beta_v);
+      int64_t y  = hexa_as_num(y_v),  a  = hexa_as_num(a_v),     mn = hexa_as_num(mean_v);
+      int64_t iv = hexa_as_num(inv_v), xh = hexa_as_num(xhat_v);
+      int64_t T  = hexa_as_num(t_v),  C  = hexa_as_num(c_v),     G  = hexa_as_num(g_v);
+      if (T <= 0 || C <= 0 || G <= 0 || (C % G) != 0)         return hexa_int(-1);
+      if (x < 0 || gm < 0 || bt < 0 || y < 0 || a < 0)        return hexa_int(-1);
+      if (mn < 0 || iv < 0 || xh < 0)                         return hexa_int(-1);
+      if (x  >= _hx_farr_count || gm >= _hx_farr_count || bt >= _hx_farr_count ||
+          y  >= _hx_farr_count || a  >= _hx_farr_count || mn >= _hx_farr_count ||
+          iv >= _hx_farr_count || xh >= _hx_farr_count)        return hexa_int(-1);
+      int64_t cg = C / G;
+      int64_t n  = T * C;
+      if (_hx_farr_table[x].len  < n || _hx_farr_table[y].len  < n ||
+          _hx_farr_table[a].len  < n || _hx_farr_table[xh].len < n ||
+          _hx_farr_table[gm].len < C || _hx_farr_table[bt].len < C ||
+          _hx_farr_table[mn].len < G || _hx_farr_table[iv].len < G)
+          return hexa_int(-1);
+      double* X  = _hx_farr_table[x].buf;
+      double* GM = _hx_farr_table[gm].buf;
+      double* BT = _hx_farr_table[bt].buf;
+      double* Y  = _hx_farr_table[y].buf;
+      double* A  = _hx_farr_table[a].buf;
+      double* MN = _hx_farr_table[mn].buf;
+      double* IV = _hx_farr_table[iv].buf;
+      double* XH = _hx_farr_table[xh].buf;
+      if (!X || !GM || !BT || !Y || !A || !MN || !IV || !XH)   return hexa_int(-1);
+      const double eps        = 0.00001;
+      const double inv_sqrt2  = 0.70710678118654752440;
+      double m = (double)(cg * T);
+      for (int64_t g = 0; g < G; g++) {
+          int64_t c0 = g * cg;
+          double sum = 0.0;                       /* pass 1: group mean */
+          for (int64_t t = 0; t < T; t++)
+              for (int64_t c = 0; c < cg; c++)
+                  sum = sum + X[t * C + (c0 + c)];
+          double mu = sum / m;
+          double vs = 0.0;                        /* pass 2: group var */
+          for (int64_t t = 0; t < T; t++)
+              for (int64_t c = 0; c < cg; c++) {
+                  double d = X[t * C + (c0 + c)] - mu;
+                  vs = vs + d * d;
+              }
+          double var = vs / m;
+          double inv = 1.0 / _op16_gn_sqrt(var + eps);
+          MN[g] = mu;
+          IV[g] = inv;
+          for (int64_t t = 0; t < T; t++)         /* affine + GELU, single sweep */
+              for (int64_t c = 0; c < cg; c++) {
+                  int64_t ch  = c0 + c;
+                  int64_t idx = t * C + ch;
+                  double xhat = (X[idx] - mu) * inv;
+                  XH[idx] = xhat;
+                  double yv = GM[ch] * xhat + BT[ch];
+                  Y[idx] = yv;
+                  A[idx] = yv * (0.5 * (1.0 + erf(yv * inv_sqrt2)));
+              }
+      }
+      return hexa_int(0);
+  }
+  #pragma STDC FP_CONTRACT DEFAULT
+  #endif
+
+────────────────────────────────────────────────────────────────────────────
+LINKS-NOW PROOF (local, 0-GPU)
+────────────────────────────────────────────────────────────────────────────
+Applied the body to the install src tree (~/.hx/src/self/runtime.c — the SSOT the
+local `hexa run` build compiles into ~/.hexa-cache/runtime.<sha>.o), rebuilt
+runtime.o (pure `clang -O2 -c runtime.c` — 0-GPU), cleared the stale cache.
+
+  nm runtime.o | grep groupnorm_gelu
+    00000000000472d8 T _forge_dispatch_groupnorm_gelu     ← was undefined (U), now DEFINED (T)
+
+  hexa run stdlib/flame/flame_gn_gelu_fused_test.hexa  (use's gn_lib — was a link error)
+    shape T=128 C=64  G=1 …  max_abs_diff = 0.0
+    shape T=256 C=128 G=1 …  max_abs_diff = 0.0
+    shape T=128 C=64  G=8 …  max_abs_diff = 0.0
+    OVERALL max_abs_diff = 0.0
+    PASS — fused == unfused, byte-identical          ← LINKS + RUNS
+
+GPU PATH UNTOUCHED: `clang -DHEXA_CUDA -fsyntax-only runtime.c` shows NO new error
+on the groupnorm_gelu region (the `#ifndef HEXA_CUDA` block is excluded; the only
+diagnostic is the pre-existing _hx_cuda_farr_silu_gate_gpu implicit-decl at
+line 8979, resolved by runtime_cuda.c in a real GPU build). No duplicate symbol
+with fusion_dispatch.c.
+
+────────────────────────────────────────────────────────────────────────────
+BYTE-EQ PROOF vs UNFUSED (OP-9 #2987 reference) — through the NEW host dispatch
+────────────────────────────────────────────────────────────────────────────
+Oracle stdlib/flame/clm_prod_gn_gelu_hostdispatch_eq.hexa (TRACKED, ships in this
+PR) `use`s gn_lib and calls nn_gn_gelu_fused_off with goff=boff=0 under the env
+gate (HEXA_FUSE_GN_GELU=1 CLM_PROD_DEVRESIDENT=1) so the fused path ACTUALLY
+invokes forge_dispatch_groupnorm_gelu (the OP-16 host body), then compares Y, A,
+mean, inv, xhat to an inline UNFUSED reference (the OP-9 _gn_ref shape: two-pass
+mean/var + a SEPARATE GELU sweep).
+
+  HEXA_FUSE_GN_GELU=1 CLM_PROD_DEVRESIDENT=1 hexa run …hostdispatch_eq.hexa
+    max|Δ| (Y,A,mean,inv,xhat)  T8 C8 G1   = 0.0
+    max|Δ| (Y,A,mean,inv,xhat)  T8 C8 G2   = 0.0
+    max|Δ| (Y,A,mean,inv,xhat)  T16 C12 G4 = 0.0
+    max|Δ| (Y,A,mean,inv,xhat)  T12 C16 G8 = 0.0
+    max|Δ| (Y,A,mean,inv,xhat)  T10 C6 G3  = 0.0
+    max|Δ| (Y,A,mean,inv,xhat)  T1 C4 G1   = 0.0
+    max|Δ| (Y,A,mean,inv,xhat)  T32 C8 G8  = 0.0
+    F-OP16-GN-HOST-FALLBACK = 1
+    PASS — gn_lib fused dispatch (host body) == unfused reference, byte-eq
+           (max|Δ|=0, all cases); LINKS off-CUDA
+
+Per-output diagnostic (gate ON) confirmed dY=dA=dmean=dinv=dxhat=0.0 on EVERY
+shape. Gate OFF (gn_lib host loop) also LINKS + PASSES. Comparator is genuine:
+the pre-FP_CONTRACT-OFF run showed 3.55e-15 (a real divergence the gate caught),
+flipping to 0.0 only after the FP_CONTRACT OFF cure — so the 0.0 is earned.
+
+────────────────────────────────────────────────────────────────────────────
+TRACKED-LANDING — HONEST FRAMING (g5) — the OP-2b situation
+────────────────────────────────────────────────────────────────────────────
+self/runtime.c is GITIGNORED (.gitignore:280) as a build artifact: commit #2065
+("tracked .c = 0 — full .hexa-only") untracked it; the release pipeline
+(release.yml Stage 0b) compiles a FROZEN-SEED runtime.c → `ar` archive in the
+build env, and fresh installs link the prebuilt object (HEXA_PREBUILT_RUNTIME).
+There is NO tracked .hexa SSOT that emits the top-level runtime.c forge-dispatch
+bodies (forge_tier_dispatch_v1(FORGE_KERNEL_MATMUL…) appears in ZERO tracked
+files; runtime.c is hand-maintained C per roadmap RT-P4-1). The `.c-graduation`
+policy also forbids adding a new tracked self/native/*.c. So the C BODY cannot
+land in a pure-worktree commit — it lands when the frozen-seed runtime.c is
+rebuilt in the release/build env (identical constraint to deferred OP-2b).
+
+WHAT SHIPS IN THIS PR (tracked, 0-GPU):
+  - stdlib/flame/clm_prod_gn_gelu_hostdispatch_eq.hexa — the byte-eq oracle that
+    drives the fused entry point through the host dispatch (PASSES once the body
+    lands; it is the regression guard for the contract).
+  - the verbatim host body + the FP_CONTRACT-OFF byte-eq cure above (for the
+    build-env to apply — like OP-2b's documented runtime.c wrapper).
+  - the milestone + this verdict.
+
+EXACT BUILD-ENV FIX (one runtime rebuild, 0-GPU): paste the VERBATIM HOST BODY
+block above into self/runtime.c (after the matmul_batched host oracle, where
+_hx_farr_table is in scope), then `clang -O2 -c self/runtime.c -o
+self/runtime.o` (or the release.yml Stage 0b `clang -c → ar`). No GPU, no flag
+changes, no other symbol touched. PROVEN locally exactly this way.
+
+OUTCOME: links-now YES (proven), byte-eq vs unfused max|Δ|=0 (proven, all 7
+shapes), GPU path untouched YES. The host body is COMPLETE and CORRECT; its repo
+landing is the frozen-seed runtime rebuild (OP-2b-class), documented verbatim.
+$0, 0-GPU, no pool/vast.

@@ -450,3 +450,22 @@ Verdict .verdicts/hexa-0pod/F-OP14-DETERMINISM-DOC.txt.
   Composition is deterministic — no uninit-scratch / non-det-iteration / address-ordered hole. Comparator
   sensitivity confirmed via negative control (distinct seed → 0.344217; identical → 0.0). GREEN (g5).
   Verdict .verdicts/hexa-0pod/F-OP15-STEP-DETERMINISM.txt.
+
+## OP-16 — gn_lib host fallback (fused-valley GN+GELU 0-GPU hexa-run-testable)
+
+- WIP skeleton pushed (milestone + verdict reproducing the OP-15 link gap).
+- GAP REPRODUCED: `hexa run` of a harness that `use`s gn_lib → `Undefined symbols: _forge_dispatch_groupnorm_gelu,
+  referenced from _nn_gn_gelu_fused_off`. The bare L3 fused-dispatch symbol has no host body off-CUDA (GPU build
+  supplies it via fusion_dispatch.c `#ifdef HEXA_CUDA` glue, absent on CPU).
+- HOST BODY written in self/runtime.c as `#ifndef HEXA_CUDA` definition of the bare symbol — two-pass mean/var
+  (t-outer/c-inner), eps=1e-5 var+eps, 40-iter Newton _gn_sqrt, erf-GELU, writing the FP64 farr buffers. GPU
+  dispatch UNCHANGED (guard avoids duplicate symbol with fusion_dispatch.c).
+- BYTE-EQ CURE: naïve body diverged 3.55e-15 (clang -O2 FMA-contracts gamma*xhat+beta; hexa codegen does not).
+  `#pragma STDC FP_CONTRACT OFF` (the proven ag_tape recipe) → max|Δ| EXACTLY 0.
+- PROVEN (0-GPU): rebuilt runtime.o (`clang -O2 -c`), nm shows symbol U→T; flame_gn_gelu_fused_test (use's
+  gn_lib) LINKS+PASSES max_abs_diff=0; tracked oracle clm_prod_gn_gelu_hostdispatch_eq.hexa drives the FUSED
+  entry point through the host dispatch (env-gated) vs unfused OP-9 ref → max|Δ|=0 on Y,A,mean,inv,xhat (7 shapes).
+- HONEST LANDING (g5, OP-2b-class): self/runtime.c is gitignored frozen-seed (#2065 .c-graduation, no tracked
+  emit SSOT for forge dispatchers) → the C BODY lands via a runtime rebuild in the release/build env (verbatim
+  body + exact one-rebuild fix in the verdict). Byte-eq oracle + milestone + verdict ship now (tracked).
+  links-now YES · byte-eq max|Δ|=0 · GPU untouched YES. Verdict .verdicts/hexa-0pod/F-OP16-GN-HOST-FALLBACK.txt.
