@@ -257,7 +257,14 @@ pub fn static_atlas() -> AtlasIndex {
 // when the embed is absent. Used by --emit=obj, which produces object code
 // and does NOT need the theorem-citation atlas; loading the full embed
 // (17265 nodes) cost ~1.85GB RSS and dominated the native obj-emit OOM.
-pub fn empty_atlas() -> AtlasIndex {
+// NB: named `empty_atlas_index` (not `empty_atlas`) to avoid a flatten-time
+// name collision with compiler/parse/parser.hexa's `empty_atlas() -> AtlasRef`.
+// When the self-host closure is flattened to a single TU, two same-named pub
+// fns with different return types confuse the native typechecker's name
+// resolution (it bound the AtlasRef one at main.hexa's `--emit=obj` site,
+// yielding HX3001 expected:AtlasRef got:AtlasIndex). The C-transpile path
+// resolved it module-scoped; an explicit distinct name makes BOTH agree.
+pub fn empty_atlas_index() -> AtlasIndex {
     let empty: array = []
     return _bucket_by_kind(empty)
 }
