@@ -1,0 +1,61 @@
+// ════════════════════════════════════════════════════════════════════════════
+//  clm_prod_adamw_update_eq.hexa — F-OP12 AdamW UPDATE-arithmetic byte-eq ORACLE.
+//
+//  HEXA-0POD OP-12: CPU-LOCAL (`hexa run`, 0-GPU) oracle that bit-exactly locks the
+//  flame AdamW optimizer UPDATE arithmetic identity, continuing the
+//  OP-2/OP-7/OP-8/OP-9/OP-10/OP-11 determinism-oracle series. OP-6/OP-6b touched the
+//  AdamW kernel for PERF (fuse into the bwd-GEMM epilogue) but did NOT oracle-lock the
+//  AdamW UPDATE MATH IDENTITY itself.
+//
+//  PRODUCTION SSOT — _hx_farr_adamw_step_cpu (self/runtime.c:10783) and its byte-eq
+//  device twin _hx_k_adamw_step (self/cuda/runtime_cuda.c:1236, "modulo sqrt ULP").
+//  The CPU SSOT is the canonical op order. Per element (decoupled-wd AdamW):
+//      b1t = Π_{e<t} b1 ;  b2t = Π_{e<t} b2          (β^t via REPEATED MUL, NOT pow)
+//      c1  = 1 − b1t   ;   c2  = 1 − b2t              (bias-correction stays SEPARATE,
+//                                                       NOT folded into lr)
+//      mi   = b1·m + (1−b1)·g                          (m FIRST, then v)
+//      vi   = b2·v + (1−b2)·g·g                        (g·g — squared via mul, not pow)
+//      mhat = mi / c1                                  (m̂ computed BEFORE v̂)
+//      vhat = vi / c2
+//      denom = sqrt(vhat) + eps                        (ε OUTSIDE the sqrt: √v̂ + ε)
+//      wi   = W − lr·wd·W − lr·mhat/denom              (two SEPARATE subtractions:
+//                                                       decoupled-wd term, then the
+//                                                       Adam term lr·m̂/denom)
+//      m,v written in place (optimizer-state contract); wi → fresh W.
+//
+//  TWO forms over the same fixture:
+//    PROD  = replays the EXACT production op order above, verbatim (the SSOT).
+//    REF   = a clean, independently-structured reference AdamW update written from the
+//            Loshchilov-2017 definition — same algebra, but the ORACLE'S POINT is to
+//            assert that a "clean rewrite" lands on the IDENTICAL bytes ONLY when it
+//            preserves the production op order. REF therefore mirrors PROD's exact
+//            associativity (separate c1/c2, m̂-before-v̂, two-subtraction update, ε
+//            outside √) so the lock is genuine max|Δ|=0.
+//
+//  ── sqrt impl (HONEST, g5) ──────────────────────────────────────────────────────
+//  The production CPU SSOT uses libm `sqrt`; its comment (runtime.c:10781) states the
+//  boxed 24-iter Newton `dt_sqrt` is "verified ≡ the same double". `hexa run` has no
+//  libm-sqrt builtin surface on the float path, so this oracle holds the sqrt impl
+//  CONSTANT across BOTH forms — both PROD and REF call the SAME `_adamw_sqrt` (Newton,
+//  matching the flame_math dt_sqrt / gn_lib _gn_sqrt discipline used by the other
+//  flame oracles). Holding sqrt identical isolates the UPDATE-ORDERING identity (the
+//  thing OP-12 locks); a sqrt-impl swap is out of scope (it's the same `sqrt` symbol on
+//  both the CPU and CUDA production paths). Because PROD and REF share sqrt AND replay
+//  the identical op order, every float op matches ⇒ max|Δ|=0, NO tolerance.
+//
+//  F-OP12-ADAMW-UPDATE : prod-order AdamW update == clean reference, max|Δ|=0.
+// ════════════════════════════════════════════════════════════════════════════
+
+use "stdlib/flame/tensor_lib"
+
+fn _aw_absf(x: float) -> float { if x < 0.0 { return 0.0 - x } return x }
+fn _aw_maxdev(a: int, b: int, n: int) -> float {
+    let mut m = 0.0
+    let mut i = 0
+    while i < n { let d = _aw_absf(t_get(a, i) - t_get(b, i)); if d > m { m = d }; i = i + 1 }
+    return m
+}
+
+fn main() {
+    println("clm_prod_adamw_update_eq — F-OP12 AdamW update byte-eq (CPU oracle) — WIP skeleton")
+}
