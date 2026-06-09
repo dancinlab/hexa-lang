@@ -1,0 +1,23 @@
+F-OP25-BF16-FASTMODE — deterministic BF16 fast-mode for the flame training step (RTX 5070)
+==========================================================================================
+STATUS: WIP (skeleton pushed before the aiden run, per STORM). Results pending the aiden
+        5070 build+run; this file is replaced with verbatim numbers + verdict on harvest.
+
+THESIS: the precision-uncap ladder's NEXT rung after OP-20 TF32 (e-6, 4.2x) is BF16. BF16
+has an 8-bit mantissa (vs TF32's 10-bit) so it is LESS accurate (rel-RMS ~e-3 expected) but
+POTENTIALLY faster (or same speed, half GEMM-input memory traffic). OP-25 measures whether a
+deterministic BF16 STEP fast-mode is (a) self-byte-eq run-to-run, (b) within W14 1e-2 vs
+FP64, (c) FASTER than TF32 — placing BF16 on the precision/speed/accuracy Pareto frontier
+FP64(exact,1x) -> TF32(e-6,4.2x) -> BF16(e-3,?x).
+
+HONEST PRIOR (g5): on the 5070, BF16 and TF32 are BOTH 16-bit-input tensor-ops and may have
+the SAME tensor throughput -> BF16 likely NOT faster, just less accurate = DOMINATED by TF32
+(TF32 = the precision-uncap sweet spot). If so, that is the honest closed result. If BF16 IS
+faster (half mem traffic helping the memory-bound glue) it is a NEW rung.
+
+HARNESS: tool/bench/flame_bench_step_bf16fast.cu (3 lanes BF16/TF32/FP64 in one process; BF16
+lane = CUDA_R_16BF storage + CUBLAS_COMPUTE_32F_FAST_16BF, fp32 master weights/AdamW state +
+fp32 glue accum = standard mixed-precision contract). Drift: flame_traj_drift_bf16_op25.cu.
+Drivers: run_op25_5070.sh + run_op25_drift_5070.sh (idle-guarded, hard backoff 30->480s).
+
+RESULTS: pending aiden run.
