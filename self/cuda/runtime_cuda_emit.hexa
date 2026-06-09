@@ -1535,15 +1535,54 @@ fn emit_runtime_cuda_c() -> str {
             "#endif\n" +
             "}\n" +
             "\n" +
+            "/* HEXA-0POD OP-19b — device-side deterministic transcendentals, shared by\n" +
+            " * every device GELU kernel below (_hx_k_gelu, _hx_k_gelu2, _hx_gelu_dev,\n" +
+            " * _hx_k_gelu_bwd) AND the CE-grad kernel (F-OP19). Defined ONCE here, before\n" +
+            " * the first use, so all GELU kernels swap CUDA erf()/exp() → these → the\n" +
+            " * device GELU stays bit-exact to the host (which now uses flame_math dt_erf/\n" +
+            " * dt_exp) AND cross-platform deterministic (CUDA erf/exp diverge across\n" +
+            " * arch/OS like libm — OP-19 measured 1 ULP arm64↔x86). _hx_dt_erf_dev is the\n" +
+            " * byte-for-byte transcription of flame_math.hexa dt_erf (Maclaurin, NO libm).\n" +
+            " * _hx_dt_exp_dev is the F-OP19 dt_exp twin. */\n" +
+            "__device__ static double _hx_dt_exp_dev(double x) {\n" +
+            "    /* byte-identical to flame_math.hexa dt_exp. */\n" +
+            "    long long r = 0;\n" +
+            "    double xr = x;\n" +
+            "    while ((xr > 0.0 ? xr : 0.0 - xr) > 0.25) { xr = xr / 2.0; r = r + 1; }\n" +
+            "    double term = 1.0;\n" +
+            "    double acc = 1.0;\n" +
+            "    long long k = 1;\n" +
+            "    while (k < 12) { term = term * xr / (double)k; acc = acc + term; k = k + 1; }\n" +
+            "    long long s = 0;\n" +
+            "    while (s < r) { acc = acc * acc; s = s + 1; }\n" +
+            "    return acc;\n" +
+            "}\n" +
+            "__device__ static double _hx_dt_erf_dev(double x) {\n" +
+            "    /* byte-identical to flame_math.hexa dt_erf — A&S 7.1.26 rational with the\n" +
+            "     * exp routed through _hx_dt_exp_dev. BRANCHLESS in z (only the z=0 odd\n" +
+            "     * sign flip), so it never straddles a value-dependent boundary; pure\n" +
+            "     * +,-,*,/ + dt_exp, NO libm. max|Δ vs libm erf| = 1.38e-7. */\n" +
+            "    double sign = 1.0;\n" +
+            "    double z = x;\n" +
+            "    if (z < 0.0) { sign = 0.0 - 1.0; z = 0.0 - z; }\n" +
+            "    double t = 1.0 / (1.0 + 0.3275911 * z);\n" +
+            "    const double a1 = 0.254829592;\n" +
+            "    const double a2 = 0.0 - 0.284496736;\n" +
+            "    const double a3 = 1.421413741;\n" +
+            "    const double a4 = 0.0 - 1.453152027;\n" +
+            "    const double a5 = 1.061405429;\n" +
+            "    double poly = ((((a5 * t + a4) * t + a3) * t + a2) * t + a1) * t;\n" +
+            "    return sign * (1.0 - poly * _hx_dt_exp_dev(0.0 - z * z));\n" +
+            "}\n" +
             "/* HEXA-FUSION L3 (glue half) — device-resident elementwise GELU.\n" +
             " * OUT[i] = IN[i]·0.5·(1 + erf(IN[i]·(1/√2))) — the EXACT erf-based GELU of\n" +
             " * stdlib/flame/nn_lib.hexa _nn_gelu (GELU(x)=x·Φ(x), Φ(x)=0.5·(1+erf(x/√2))).\n" +
             " * Pure elementwise, NO reduction. The constant 1/√2 is the SAME literal the\n" +
             " * host uses (_nn_inv_sqrt2 = 0.70710678118654752440) and the op order matches\n" +
-            " * (x · cdf). Device erf() is the IEEE-correct libm erf (same contract as the\n" +
-            " * host erf builtin) → bit-exact to the host scalar loop (max|Δ|=0). Fuses the\n" +
-            " * gelu ×3 host glue in clm_prod_fwd (hg0/ex0/ex1 — the ③ fwd-only 0% floor)\n" +
-            " * and keeps OUT FARR_DEVICE so the next conv GEMM H2D-skips it. */\n" +
+            " * (x · cdf). OP-19b: erf → _hx_dt_erf_dev (deterministic, NO libm) → bit-exact\n" +
+            " * to the host scalar loop (now dt_erf) AND cross-platform. Fuses the gelu ×3\n" +
+            " * host glue in clm_prod_fwd (hg0/ex0/ex1 — the ③ fwd-only 0% floor) and keeps\n" +
+            " * OUT FARR_DEVICE so the next conv GEMM H2D-skips it. */\n" +
             "__global__ void _hx_k_gelu(const double* __restrict__ IN,\n" +
             "                           double* __restrict__ OUT, int64_t n) {\n" +
             "    const double inv_sqrt2 = 0.70710678118654752440;\n" +
@@ -1551,7 +1590,7 @@ fn emit_runtime_cuda_c() -> str {
             "    for (int64_t i = (int64_t)blockIdx.x * blockDim.x + threadIdx.x;\n" +
             "         i < n; i += stride) {\n" +
             "        double x = IN[i];\n" +
-            "        double cdf = 0.5 * (1.0 + erf(x * inv_sqrt2));\n" +
+            "        double cdf = 0.5 * (1.0 + _hx_dt_erf_dev(x * inv_sqrt2));\n" +
             "        OUT[i] = x * cdf;\n" +
             "    }\n" +
             "}\n" +
@@ -1606,10 +1645,10 @@ fn emit_runtime_cuda_c() -> str {
             "    for (int64_t i = (int64_t)blockIdx.x * blockDim.x + threadIdx.x;\n" +
             "         i < n; i += stride) {\n" +
             "        double x0 = G0[i];\n" +
-            "        double cdf0 = 0.5 * (1.0 + erf(x0 * inv_sqrt2));\n" +
+            "        double cdf0 = 0.5 * (1.0 + _hx_dt_erf_dev(x0 * inv_sqrt2));\n" +
             "        A0[i] = x0 * cdf0;\n" +
             "        double x1 = G1[i];\n" +
-            "        double cdf1 = 0.5 * (1.0 + erf(x1 * inv_sqrt2));\n" +
+            "        double cdf1 = 0.5 * (1.0 + _hx_dt_erf_dev(x1 * inv_sqrt2));\n" +
             "        A1[i] = x1 * cdf1;\n" +
             "    }\n" +
             "}\n" +
@@ -1786,9 +1825,9 @@ fn emit_runtime_cuda_c() -> str {
             " * computed by the IDENTICAL expression and GELU is applied to that SAME double\n" +
             " * (max|Δ|=0). Env-gated HEXA_FUSE_GN_GELU; no-CUDA → -1 → host nn_gn_gelu_fused. */\n" +
             "__device__ static double _hx_gelu_dev(double x) {\n" +
-            "    /* byte-identical to _hx_k_gelu / gn_lib.hexa _gn_gelu. */\n" +
+            "    /* byte-identical to _hx_k_gelu / gn_lib.hexa _gn_gelu (OP-19b dt_erf). */\n" +
             "    const double inv_sqrt2 = 0.70710678118654752440;\n" +
-            "    double cdf = 0.5 * (1.0 + erf(x * inv_sqrt2));\n" +
+            "    double cdf = 0.5 * (1.0 + _hx_dt_erf_dev(x * inv_sqrt2));\n" +
             "    return x * cdf;\n" +
             "}\n" +
             "__global__ void _hx_k_groupnorm_gelu(const double* __restrict__ X,\n" +
@@ -2367,10 +2406,10 @@ fn emit_runtime_cuda_c() -> str {
             "        for (int64_t c = 0; c < C; c++) {\n" +
             "            int64_t j = t * C + c;\n" +
             "            double x0 = EO0[j];\n" +
-            "            double g0 = x0 * 0.5 * (1.0 + erf(x0 * inv_sqrt2));\n" +
+            "            double g0 = x0 * 0.5 * (1.0 + _hx_dt_erf_dev(x0 * inv_sqrt2));\n" +
             "            EX0[j] = g0; EX_OUT[j] = g0;\n" +
             "            double x1 = EO1[j];\n" +
-            "            double g1 = x1 * 0.5 * (1.0 + erf(x1 * inv_sqrt2));\n" +
+            "            double g1 = x1 * 0.5 * (1.0 + _hx_dt_erf_dev(x1 * inv_sqrt2));\n" +
             "            EX1[j] = g1; EX_OUT[n + j] = g1;\n" +
             "        }\n" +
             "        /* softmax over E (max-subtract, _hx_moe_exp_dev, sequential sum/norm). */\n" +
@@ -3083,8 +3122,8 @@ fn emit_runtime_cuda_c() -> str {
             "    for (int64_t i = (int64_t)blockIdx.x * blockDim.x + threadIdx.x;\n" +
             "         i < n; i += stride) {\n" +
             "        double x   = G[i];\n" +
-            "        double cdf = 0.5 * (1.0 + erf(x * inv_sqrt2));\n" +
-            "        double pdf = inv_sqrt2pi * exp(0.0 - 0.5 * x * x);\n" +
+            "        double cdf = 0.5 * (1.0 + _hx_dt_erf_dev(x * inv_sqrt2));\n" +
+            "        double pdf = inv_sqrt2pi * _hx_dt_exp_dev(0.0 - 0.5 * x * x);\n" +
             "        double grad = cdf + x * pdf;\n" +
             "        DG[i] = DA[i] * grad;\n" +
             "    }\n" +
@@ -3314,20 +3353,9 @@ fn emit_runtime_cuda_c() -> str {
             " * bit-exact (max|Δ|=0). Fuses the clm_ce_grad host glue at the head of the\n" +
             " * full-step driver (before clm_prod_bwd). Keeps DLOGITS FARR_DEVICE so the\n" +
             " * first conv-bwd GEMM H2D-skips it. */\n" +
-            "__device__ static double _hx_dt_exp_dev(double x) {\n" +
-            "    /* byte-identical to flame_math.hexa dt_exp (range-reduce by halving\n" +
-            "     * until |xr|<=0.25, 12-term Taylor, then repeated-square 2^r). */\n" +
-            "    long long r = 0;\n" +
-            "    double xr = x;\n" +
-            "    while ((xr > 0.0 ? xr : 0.0 - xr) > 0.25) { xr = xr / 2.0; r = r + 1; }\n" +
-            "    double term = 1.0;\n" +
-            "    double acc = 1.0;\n" +
-            "    long long k = 1;\n" +
-            "    while (k < 12) { term = term * xr / (double)k; acc = acc + term; k = k + 1; }\n" +
-            "    long long s = 0;\n" +
-            "    while (s < r) { acc = acc * acc; s = s + 1; }\n" +
-            "    return acc;\n" +
-            "}\n" +
+            "/* HEXA-0POD OP-19b: _hx_dt_exp_dev is now defined ONCE above (before the\n" +
+            " * device GELU kernels, which also need it for the bwd pdf) — the F-OP19\n" +
+            " * definition formerly inlined here was hoisted to avoid a redefinition. */\n" +
             "__global__ void _hx_k_ce_grad(const double* __restrict__ LOGITS,\n" +
             "                              const double* __restrict__ TARGETS,\n" +
             "                              double* __restrict__ DLOGITS,\n" +

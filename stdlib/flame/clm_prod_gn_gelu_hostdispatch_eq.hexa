@@ -60,10 +60,40 @@ fn _h16_sqrt(x: float) -> float {
     return g
 }
 
-// GELU — BYTE-IDENTICAL to gn_lib _gn_gelu / nn_lib _nn_gelu / the OP-16 host body.
+// OP-19b deterministic erf/exp — byte-identical to flame_math.hexa dt_erf/dt_exp
+// (A&S 7.1.26 + Taylor, BRANCHLESS, NO libm). Re-locks this oracle against the
+// dt_erf production GELU.
+fn _h16_dt_exp(x: float) -> float {
+    let mut r = 0
+    let mut xr = x
+    while (if xr > 0.0 { xr } else { 0.0 - xr }) > 0.25 { xr = xr / 2.0; r = r + 1 }
+    let mut term = 1.0
+    let mut acc = 1.0
+    let mut k = 1
+    while k < 12 { term = term * xr / to_float(k); acc = acc + term; k = k + 1 }
+    let mut s = 0
+    while s < r { acc = acc * acc; s = s + 1 }
+    return acc
+}
+fn _h16_dt_erf(x: float) -> float {
+    let mut sign = 1.0
+    let mut z = x
+    if z < 0.0 { sign = 0.0 - 1.0; z = 0.0 - z }
+    let t = 1.0 / (1.0 + 0.3275911 * z)
+    let a1 = 0.254829592
+    let a2 = 0.0 - 0.284496736
+    let a3 = 1.421413741
+    let a4 = 0.0 - 1.453152027
+    let a5 = 1.061405429
+    let poly = ((((a5 * t + a4) * t + a3) * t + a2) * t + a1) * t
+    return sign * (1.0 - poly * _h16_dt_exp(0.0 - z * z))
+}
+
+// GELU — BYTE-IDENTICAL to gn_lib _gn_gelu / nn_lib _nn_gelu / the OP-16 host body
+// (OP-19b: dt_erf, deterministic + cross-platform, NO libm).
 fn _h16_gelu(x: float) -> float {
     let inv_sqrt2 = 0.70710678118654752440
-    return x * (0.5 * (1.0 + erf(x * inv_sqrt2)))
+    return x * (0.5 * (1.0 + _h16_dt_erf(x * inv_sqrt2)))
 }
 
 // UNFUSED reference (the OP-9 _gn_ref shape): two-pass mean/var (t-outer, c-inner),

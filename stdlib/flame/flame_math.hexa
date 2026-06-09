@@ -75,6 +75,35 @@ pub fn dt_exp(x: float) -> float {
     return acc
 }
 
+// dt_erf : PURE-FP deterministic error function — NO libm. Abramowitz & Stegun
+// 7.1.26 rational approximation, with the single transcendental routed through the
+// deterministic `dt_exp` Taylor (above):
+//     erf(z) = 1 − (a₁t + a₂t² + a₃t³ + a₄t⁴ + a₅t⁵)·exp(−z²),  t = 1/(1 + p·z)
+// BRANCHLESS in z (the ONLY conditional is the odd-symmetry sign flip at z = 0,
+// which is exact) — so it is a SINGLE continuous arithmetic expression with no
+// value-dependent branch. That branchlessness is load-bearing for byte-eq: a
+// piecewise erf (series-then-clamp, or series-then-tail) straddles its branch
+// boundary under in-register vs stored-reload rounding of the GELU argument and
+// breaks max|Δ|=0; the unconditional A&S form has no boundary to straddle.
+// EVERY op is +,-,*,/ on fp64 plus dt_exp (itself +,-,*,/ only), so the result is
+// bit-IDENTICAL on any IEEE-754 platform (x86/arm64 · Darwin/Linux) — the OP-19b
+// reproducibility identity. max|dt_erf − libm erf| = 1.38e-7 (HEXA-0POD F-OP19B),
+// ≤ the GELU training tolerance. The deterministic twin of the libm `erf` GELU
+// path; with OP-19's dt_exp this removes the LAST libm transcendental in the step.
+pub fn dt_erf(x: float) -> float {
+    let mut sign = 1.0
+    let mut z = x
+    if z < 0.0 { sign = 0.0 - 1.0; z = 0.0 - z }
+    let t = 1.0 / (1.0 + 0.3275911 * z)
+    let a1 = 0.254829592
+    let a2 = 0.0 - 0.284496736
+    let a3 = 1.421413741
+    let a4 = 0.0 - 1.453152027
+    let a5 = 1.061405429
+    let poly = ((((a5 * t + a4) * t + a3) * t + a2) * t + a1) * t
+    return sign * (1.0 - poly * dt_exp(0.0 - z * z))
+}
+
 // dt_ln : 2 · Σ_{k=0..23} u^(2k+1)/(2k+1), u = (x-1)/(x+1).
 // Valid for x > 0; series converges fastest near x = 1.
 pub fn dt_ln(x: float) -> float {

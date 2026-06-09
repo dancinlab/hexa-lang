@@ -1,5 +1,34 @@
 # HEXA-0POD — log
 
+## 2026-06-10 — OP-19b DONE: pure-FP deterministic erf seals the GELU cross-platform hole → flame FULLY machine-independent byte-exact (0-GPU)
+
+Closed OP-19's measured latent residual (GELU libm `erf`, the last libm transcendental in the step).
+Implemented `flame_math.dt_erf` = Abramowitz & Stegun 7.1.26 rational with the exp via OP-19's deterministic
+`dt_exp` — pure +,-,*,/ + dt_exp, NO libm, BRANCHLESS in z (only the z=0 odd sign flip).
+
+KEY DEAD-END NOTED: a first cut (Maclaurin series + hard clamp |z|≥4) was 1.54e-8-accurate but BROKE the
+fused-vs-unfused GN-GELU byte-eq (max|Δ|=2.5e-7): the GELU argument straddles the clamp boundary differently
+in-register (fused) vs stored-reload (unfused). A series+rational-tail hybrid had the same seam defect. The
+unconditional A&S form has NO value-dependent boundary → byte-eq restored. (Maclaurin also diverges past z≈5.)
+
+WIRED: host nn_lib `_nn_normal_cdf`/`_pdf` + gn_lib `_gn_gelu` (+ `_gn_dt_exp` replica); reference
+clm_conv_devfeed (4 erf + 2 exp sites); device `_hx_dt_erf_dev` shared by all GELU kernels (+ `_hx_dt_exp_dev`
+hoisted, F-OP19 dup removed); host C fallback (restore_frozen_seeds `_op18_gelu`→dt_erf) — VERIFIED clang-clean
++ BYTE-IDENTICAL to hexa dt_erf (fold 93,35,192,253,183,12,237,63 @1.19071).
+
+CROSS-PLATFORM ORACLE (op19b_crossplatform_erf.hexa, self-contained): det-erf GELU fwd+bwd byte fold IDENTICAL
+on local+ghost arm64-macos AND aiden x86-linux — FWD 4548590605583584556, BWD 4249661408190172843 on all 3.
+BEFORE: libm `erf` won't even LINK on aiden (`hexa_math_erf` undefined) → can't be cross-platform measured.
+ACCURACY: max|dt_erf − libm erf| = 1.38e-7 (≤ GELU tolerance; g5 honest trade matches-libm → matches-all-platforms).
+
+DEPENDENT ORACLES re-locked: OP-9 LN-reduction PASS 0.0; GN-GELU re-lock proof (op19b_gngelu_relock.hexa, both
+arms dt_erf) PASS max|Δ|=0; OP-15 step + OP-18 gelu2 inherit via nn_lib + the byte-eq host fallback (validate on
+fresh build — local hexa is a stale prebuilt that uses its own embedded stdlib).
+
+RESULT: exp/erf/ln all hand-rolled deterministic, sqrt Newton — NO libm transcendental left → flame is now
+FULLY machine-independent byte-exact. $0 · 0-GPU · free pool (aiden/ghost) · no vast. Verdict
+.verdicts/hexa-0pod/F-OP19B-DET-ERF.txt.
+
 ## 2026-06-10 — OP-25 GREEN gates / DOMINATED: deterministic BF16 fast-mode — Pareto-dominated by TF32 (aiden 5070, FREE)
 
 The precision-uncap ladder's NEXT rung after OP-20 TF32 (#2999) + OP-23 TF32-drift (#3005). BF16 has an
