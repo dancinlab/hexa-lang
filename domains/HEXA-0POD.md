@@ -173,6 +173,9 @@ loop targets what the consumer card + code can carry.
   Highest-value remaining identity (MoE combine is in the fused hot path). Oracle
   stdlib/flame/clm_prod_moe_combine_eq.hexa · verdict .verdicts/hexa-0pod/F-OP8-IDENTITY-ORACLE.txt.
 
+<!-- ANCHOR:OP-10-CONV-SEAM (unique anchor — OP-9 edits a different anchor) -->
+- [ ] **OP-10 — CPU oracle characterizing the B>1 causal-conv window-concat seam (0-GPU)**
+
 ## deferred (0-pod follow-ups surfaced by the loop — self-feed)
 
 - **OP-2b — land the runtime.c hexa_forge_dispatch_matmul_t wrapper body + flip the trainer to the live
