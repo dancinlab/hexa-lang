@@ -201,3 +201,16 @@ need a GPU build env / frozen-seed runtime, OUT of 0-pod scope: OP-2b (runtime.c
 wrapper body — self/runtime.c build-time-assembled in clm_prod_gpu env), OP-2c (batched-expert transpose-
 elim — needs the OP-2b wrapper first), OP-5c (forge error-path/dtype-edge/determinism — can't be byte-eq
 gated without a kernel build). No further 0-pod follow-up surfaces from OP-3b (the lever ladder is closed).
+
+## OP-7 — forward conv im2col==direct byte-eq CPU oracle (0-GPU) · GREEN
+Self-generated 0-pod follow-up (re-opening the oracle-hardening lane that OP-2 started). Added
+stdlib/flame/clm_prod_conv_im2col_eq.hexa: a pure-host `hexa run` oracle that bit-exactly locks the flame
+CLMConvMoE trainer's FORWARD causal-dilated conv1d layout transform. The trainer (conv1d_via_forge) computes
+the conv as im2col(x)[T,Kdim] + GEMM(.,Wt[Kdim,Cout]) + bias; the oracle proves this equals a DIRECT
+sliding-window conv reference y[t,co]=b[co]+Σ_ci Σ_k x[p,ci]*w[co,ci*K+k] (p=t-dil*(K-1-k)). The im2col col
+index j=ci*K+k makes the reference's (ci-outer,k-inner) accumulation order EXACTLY the j-ascending GEMM
+contraction order ⇒ bit-for-bit equal (true re-layout identity, NOT associativity — no tolerance).
+`hexa run` PASS: max|Δ|=0 across 5 shapes (K=3/4/5, dil=1/2/3, Cin==Cout & Cin!=Cout, wide-dilation zero-pad
+seam). Honest finding: NONE non-bit-exact — the identity is genuinely exact, max|Δ|=0 is real not faked.
+Behavior-preserving: no trainer logic touched (verification/oracle addition only). Forward companion to
+OP-2's backward-dW transpose-elim oracle (#2974). Verdict .verdicts/hexa-0pod/F-OP7-IDENTITY-ORACLE.txt.
