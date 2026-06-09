@@ -209,6 +209,27 @@ install_src() {
         red "    build manually: cd $HX_SRC && tool/build_hexa_module_loader.sh"
         return 1
     fi
+
+    # Pre-warm the runtime object cache so the FIRST `hexa build` / `hexa run`
+    # in EVERY project is storm-free. The content-hash `runtime.<sha>.o` under
+    # ~/.hexa-cache is otherwise compiled lazily on the first cache miss (~8 s
+    # `clang -O2` of the ~18-TU runtime amalgam) — paid once per machine per
+    # runtime revision, but it lands as a surprise CPU spike on the user's very
+    # first build. Warm it HERE via one throwaway `hexa build` so the cache is
+    # populated by the CANONICAL build path (exact os_clang_cflags), not a
+    # hand-rolled clang that could drift from main.hexa. Run inside a temp cwd
+    # so no build/artifacts/ litters the install dir. Non-fatal: a failed probe
+    # just defers the one-time compile to the first real build (status quo).
+    bold "▸ pre-warming runtime cache (storm-free first build in every project)"
+    _pw_dir="$(mktemp -d)"
+    printf 'fn main() {}\n' > "$_pw_dir/_prewarm.hexa"
+    if ( cd "$_pw_dir" && HEXA_MAC_BUILD_OK=1 HEXA_LANG="$HX_SRC" \
+         "$HX_BIN/hexa" build _prewarm.hexa -o _prewarm.bin ) >/dev/null 2>&1; then
+        green "  ✓ ~/.hexa-cache/runtime.<sha>.o warmed (first build = link-only)"
+    else
+        dim   "  ⚠ runtime pre-warm skipped — first real build compiles runtime once"
+    fi
+    rm -rf "$_pw_dir"
 }
 
 install_hx() {
