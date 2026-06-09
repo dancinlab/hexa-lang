@@ -1,0 +1,17 @@
+════════════════════════════════════════════════════════════════════════════
+F-OP18-L3-FUSED-HOST — host fallbacks for the remaining L3 fused dispatchers
+HEXA-0POD OP-18 · forge host fallback · 0-GPU (`hexa run`) · $0  · WIP SKELETON
+════════════════════════════════════════════════════════════════════════════
+
+STATUS: WIP skeleton (push-first). Completes the OP-16 L3 fused-dispatch family —
+adds the host CPU fallbacks for the REMAINING TWO bare dispatchers so the WHOLE
+fused-dispatch family is 0-GPU `hexa run`-testable, byte-eq:
+    forge_dispatch_gelu2       (L3-b — the 2 expert GELUs fused)
+    forge_dispatch_moe_block2  (L3-d — gelu2 + expert_pack2 + moe_router fused)
+
+(forge_dispatch_groupnorm_gelu got its host twin in OP-16 #2995.)
+
+Result fields (host-body location, links-now U→T proof, byte-eq max|Δ| vs the
+unfused reference, FP_CONTRACT note, GPU-untouched proof) are filled below as the
+units land. Honest per g5.
+════════════════════════════════════════════════════════════════════════════
