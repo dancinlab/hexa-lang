@@ -1,0 +1,12 @@
+F-OP6-VECTORIZE-KERNEL — WIP (skeleton)
+HEXA-0POD OP-6: vectorize a memory-bound flame sm_120 kernel (.v load/store, bit-exact)
+
+TARGET (selected): _hx_k_adamw_step / _hx_k_adamw_step_inplace in self/cuda/runtime_cuda.c
+  — fp64 elementwise AdamW optimizer update. 4 fp64 reads (W,M,V,G) + 3 fp64 writes
+    (M,V,O) per element = 7 bandwidth streams, ZERO cross-element dependency, NO reduction.
+    Pure grid-stride scalar (64-bit) global loads/stores → memory-bound, un-vectorized.
+  Lever (OP-1 generalized): double2 (128-bit) coalesced loads + double2 vectorized stores,
+    contiguous layout, scalar tail for n % 2. Identity-preserving: changes ONLY load/store
+    width, NOT the per-element math or accumulation order → max|Δ|=0 bit-exact expected.
+
+STATUS: WIP — measuring before/after GB/s on aiden RTX 5070 (sm_120), bit-exact cmp pending.
