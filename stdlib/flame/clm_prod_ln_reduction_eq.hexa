@@ -4,7 +4,45 @@
 //  HEXA-0POD OP-9: CPU-LOCAL (`hexa run`, 0-GPU) oracle that bit-exactly locks the
 //  flame CLMConvMoE GroupNorm "valley" normalization the FUSED hot path relies on,
 //  in the same oracle spirit as OP-2 (bwd dW transpose-elim), OP-7 (fwd conv
-//  im2col), and OP-8 (MoE-router softmax+combine).  WIP SKELETON — fill below.
+//  im2col), and OP-8 (MoE-router softmax+combine).
+//
+//  The flame trunk block is conv → GroupNorm → GELU. GroupNorm needs per-GROUP
+//  statistics over the FULL conv output, so it cannot stream — the conv must
+//  finish, then a "valley" reduction normalizes. The trainer (clm_prod.hexa
+//  _groupnorm / _groupnorm_gelu) computes GroupNorm via gn_lib.hexa with a
+//  TWO-PASS mean/variance reduction (NOT Welford):
+//      pass 1: sum = Σ_{c∈g, t} X[t,c]                  → mu  = sum / (cg·T)
+//      pass 2: vs  = Σ_{c∈g, t} (X[t,c] - mu)²          → var = vs  / (cg·T)
+//                 inv = 1 / _gn_sqrt(var + eps)         (eps = 1e-5)
+//      xhat[t,c] = (X[t,c] - mu)·inv ; Y = gamma·xhat + beta ; A = GELU(Y)
+//  BOTH reduction passes iterate in (t-OUTER, c-INNER) order — sequential, NO
+//  tree re-assoc. The HEXA_FUSE_GN_GELU / HEXA_FUSE_VALLEY megakernel
+//  (forge_dispatch_groupnorm_gelu) replays this EXACT order; gn_lib's fused
+//  reference nn_gn_gelu_fused_off is "character-for-character identical to
+//  nn_groupnorm_fwd_off (same sum/var reduction order, same _gn_sqrt)" and the
+//  GELU is the SAME erf-based normal CDF as nn_lib _nn_gelu. This oracle LOCKS
+//  that contract on CPU so a future refactor that tree-reduces the mean/var sum,
+//  switches to a Welford streaming mean/var, or reorders the (t,c) axes can't
+//  silently break trainer determinism.
+//
+//  TWO forms over the same fixture (replicating the two gn_lib paths exactly):
+//    REF  (un-fused) = nn_groupnorm_fwd shape: the two-pass mean/var reduction,
+//                      a SEPARATE affine pass writing Y, THEN a SEPARATE GELU
+//                      pass re-reading Y and writing A (two elementwise sweeps
+//                      over [T·C] — GN writes Y, GELU re-reads Y → A). = baseline.
+//    FUSED (valley)  = nn_gn_gelu_fused shape: the SAME two-pass mean/var
+//                      reduction, but the GN-affine value is GELU'd the instant
+//                      it is computed — the post-GN [T·C] tensor is touched ONCE,
+//                      Y and A written in ONE elementwise pass (the megakernel
+//                      shape; no Y read+write round-trip).
+//
+//  Because both forms (a) sum the mean over the SAME (t-outer,c-inner) order,
+//  (b) subtract the SAME mu and sum the variance over the SAME order, (c) use
+//  the SAME _gn_sqrt(var+eps), and (d) apply the SAME gamma·xhat+beta affine
+//  then the SAME erf-based GELU to the SAME value, every float op is identical
+//  ⇒ max|Δ|=0 on BOTH Y (pre-GELU GN, the bwd cache) and A (GELU output) — a
+//  true fusion/ordering identity, NOT an associativity case (no tolerance).
+//  Runs $0 via `hexa run` on any CPU (mac / aiden) — no GPU.
 //
 //  F-OP9-LN-REDUCTION-ORACLE : two-pass mean/var + separate GELU == fused valley,
 //                              max|Δ|=0.
@@ -12,7 +50,223 @@
 
 use "stdlib/flame/tensor_lib"
 
+fn _ln_absf(x: float) -> float { if x < 0.0 { return 0.0 - x } return x }
+fn _ln_maxdev(a: int, b: int, n: int) -> float {
+    let mut m = 0.0
+    let mut i = 0
+    while i < n { let d = _ln_absf(t_get(a, i) - t_get(b, i)); if d > m { m = d }; i = i + 1 }
+    return m
+}
+
+// ── Newton-Raphson sqrt — BYTE-IDENTICAL to gn_lib.hexa _gn_sqrt (40 iters, same
+//    seed g0=x, same recurrence). Both REF and FUSED call THIS exact function so
+//    the inv-std has no sqrt-impl divergence.
+fn _ln_sqrt(x: float) -> float {
+    if x <= 0.0 { return 0.0 }
+    let mut g = x
+    let mut i = 0
+    while i < 40 {
+        g = 0.5 * (g + x / g)
+        i = i + 1
+    }
+    return g
+}
+
+// ── GELU — BYTE-IDENTICAL to gn_lib.hexa _gn_gelu (= nn_lib _nn_gelu): the
+//    erf-based normal CDF, GELU(x)=x·0.5·(1+erf(x·(1/√2))), same 1/√2 constant,
+//    `erf` libm codegen builtin. Both REF and FUSED apply THIS exact function.
+fn _ln_gelu(x: float) -> float {
+    let inv_sqrt2 = 0.70710678118654752440
+    return x * (0.5 * (1.0 + erf(x * inv_sqrt2)))
+}
+
+// ── REF path (un-fused) — mirrors nn_groupnorm_fwd EXACTLY (two-pass mean/var,
+//    t-outer/c-inner reduction order) writing Y (= GN affine, pre-GELU), THEN a
+//    SEPARATE GELU sweep that re-reads Y → A. Two elementwise sweeps over [T·C].
+fn _gn_ref(x: int, gamma: int, beta: int, y_out: int, a_out: int,
+           mean_out: int, inv_out: int, xhat_out: int,
+           T: int, C: int, G: int) {
+    let eps = 0.00001
+    let cg = C / G
+    let m = to_float(cg * T)
+    let mut g = 0
+    while g < G {
+        let c0 = g * cg
+        // pass 1: mean over group (t-outer, c-inner — exactly gn_lib order)
+        let mut sum = 0.0
+        let mut t = 0
+        while t < T {
+            let mut c = 0
+            while c < cg {
+                sum = sum + t_get(x, t * C + (c0 + c))
+                c = c + 1
+            }
+            t = t + 1
+        }
+        let mu = sum / m
+        // pass 2: var over group (same order)
+        let mut vs = 0.0
+        let mut t2 = 0
+        while t2 < T {
+            let mut c2 = 0
+            while c2 < cg {
+                let d = t_get(x, t2 * C + (c0 + c2)) - mu
+                vs = vs + d * d
+                c2 = c2 + 1
+            }
+            t2 = t2 + 1
+        }
+        let var = vs / m
+        let inv = 1.0 / _ln_sqrt(var + eps)
+        t_set(mean_out, g, mu)
+        t_set(inv_out, g, inv)
+        // affine pass: write Y (= gamma·xhat + beta), and xhat cache
+        let mut t3 = 0
+        while t3 < T {
+            let mut c3 = 0
+            while c3 < cg {
+                let ch = c0 + c3
+                let idx = t3 * C + ch
+                let xh = (t_get(x, idx) - mu) * inv
+                t_set(xhat_out, idx, xh)
+                t_set(y_out, idx, t_get(gamma, ch) * xh + t_get(beta, ch))
+                c3 = c3 + 1
+            }
+            t3 = t3 + 1
+        }
+        g = g + 1
+    }
+    // SEPARATE GELU sweep: re-read Y → A (the un-fused two-sweep shape)
+    let n = T * C
+    let mut i = 0
+    while i < n {
+        t_set(a_out, i, _ln_gelu(t_get(y_out, i)))
+        i = i + 1
+    }
+}
+
+// ── FUSED valley path — mirrors nn_gn_gelu_fused_off EXACTLY: the SAME two-pass
+//    mean/var reduction (same t-outer/c-inner order, same _ln_sqrt), but the
+//    GN-affine value is GELU'd the instant it is computed — Y (pre-GELU bwd
+//    cache) and A (GELU) written in ONE elementwise pass, NO Y read+write
+//    round-trip. Same mu, same inv, same affine, same _ln_gelu ⇒ byte-eq.
+fn _gn_fused(x: int, gamma: int, beta: int, y_out: int, a_out: int,
+             mean_out: int, inv_out: int, xhat_out: int,
+             T: int, C: int, G: int) {
+    let eps = 0.00001
+    let cg = C / G
+    let m = to_float(cg * T)
+    let mut g = 0
+    while g < G {
+        let c0 = g * cg
+        let mut sum = 0.0
+        let mut t = 0
+        while t < T {
+            let mut c = 0
+            while c < cg {
+                sum = sum + t_get(x, t * C + (c0 + c))
+                c = c + 1
+            }
+            t = t + 1
+        }
+        let mu = sum / m
+        let mut vs = 0.0
+        let mut t2 = 0
+        while t2 < T {
+            let mut c2 = 0
+            while c2 < cg {
+                let d = t_get(x, t2 * C + (c0 + c2)) - mu
+                vs = vs + d * d
+                c2 = c2 + 1
+            }
+            t2 = t2 + 1
+        }
+        let var = vs / m
+        let inv = 1.0 / _ln_sqrt(var + eps)
+        t_set(mean_out, g, mu)
+        t_set(inv_out, g, inv)
+        // fused affine + GELU: touch the post-GN tensor ONCE
+        let mut t3 = 0
+        while t3 < T {
+            let mut c3 = 0
+            while c3 < cg {
+                let ch = c0 + c3
+                let idx = t3 * C + ch
+                let xh = (t_get(x, idx) - mu) * inv
+                t_set(xhat_out, idx, xh)
+                let yv = t_get(gamma, ch) * xh + t_get(beta, ch)
+                t_set(y_out, idx, yv)
+                t_set(a_out, idx, _ln_gelu(yv))
+                c3 = c3 + 1
+            }
+            t3 = t3 + 1
+        }
+        g = g + 1
+    }
+}
+
+// deterministic fixture fill (no rng dependency — reproducible bytes)
+fn _ln_fill(a: int, n: int, seed: int, scale: float) {
+    let mut i = 0
+    let mut s = seed
+    while i < n {
+        s = (s * 1103515245 + 12345) & 0x7FFFFFFF
+        t_set(a, i, (to_float(s % 1000) - 500.0) * scale)
+        i = i + 1
+    }
+}
+
+// returns max(|ΔY|, |ΔA|) over the two GN-valley outputs
+fn _run_case(T: int, C: int, G: int) -> float {
+    let x = t_zeros(T * C)
+    let gamma = t_zeros(C)
+    let beta = t_zeros(C)
+    _ln_fill(x, T * C, 7, 0.05)        // activations
+    _ln_fill(gamma, C, 21, 0.02)       // affine scale ~1±
+    _ln_fill(beta, C, 33, 0.01)        // affine shift
+    // gamma centered near 1.0 (PyTorch GN affine init) so GELU sees realistic range
+    let mut i = 0
+    while i < C { t_set(gamma, i, t_get(gamma, i) + 1.0); i = i + 1 }
+    let y_ref = t_zeros(T * C)
+    let a_ref = t_zeros(T * C)
+    let mean_ref = t_zeros(G)
+    let inv_ref = t_zeros(G)
+    let xhat_ref = t_zeros(T * C)
+    let y_fz = t_zeros(T * C)
+    let a_fz = t_zeros(T * C)
+    let mean_fz = t_zeros(G)
+    let inv_fz = t_zeros(G)
+    let xhat_fz = t_zeros(T * C)
+    _gn_ref(x, gamma, beta, y_ref, a_ref, mean_ref, inv_ref, xhat_ref, T, C, G)
+    _gn_fused(x, gamma, beta, y_fz, a_fz, mean_fz, inv_fz, xhat_fz, T, C, G)
+    let dy = _ln_maxdev(y_ref, y_fz, T * C)
+    let da = _ln_maxdev(a_ref, a_fz, T * C)
+    if dy > da { return dy }
+    return da
+}
+
 fn main() {
     println("clm_prod_ln_reduction_eq — F-OP9 GroupNorm valley reduction byte-eq (CPU oracle)")
-    println("WIP — skeleton")
+    let d1 = _run_case(8, 8, 1)       // G=1 = LayerNorm-over-channels degenerate
+    let d2 = _run_case(8, 8, 2)       // G=2 groups
+    let d3 = _run_case(16, 12, 4)     // G=4, wider C
+    let d4 = _run_case(12, 16, 8)     // G=8 groups (cg=2 channels/group)
+    let d5 = _run_case(10, 6, 3)      // G=3, odd C, cg=2
+    let d6 = _run_case(1, 4, 1)       // degenerate T=1 (pure cross-channel norm)
+    let d7 = _run_case(32, 8, 8)      // G=8, cg=1 (1 channel/group → per-channel norm)
+    println("  YA max|Δ|  T8 C8 G1  = " + to_string(d1))
+    println("  YA max|Δ|  T8 C8 G2  = " + to_string(d2))
+    println("  YA max|Δ|  T16 C12 G4 = " + to_string(d3))
+    println("  YA max|Δ|  T12 C16 G8 = " + to_string(d4))
+    println("  YA max|Δ|  T10 C6 G3  = " + to_string(d5))
+    println("  YA max|Δ|  T1 C4 G1   = " + to_string(d6))
+    println("  YA max|Δ|  T32 C8 G8  = " + to_string(d7))
+    let ok = (d1 == 0.0) && (d2 == 0.0) && (d3 == 0.0) && (d4 == 0.0) && (d5 == 0.0) && (d6 == 0.0) && (d7 == 0.0)
+    if ok {
+        println("F-OP9-LN-REDUCTION-ORACLE = 1")
+        println("PASS — GroupNorm valley: two-pass mean/var + separate GELU == fused, byte-eq (max|Δ|=0, all cases)")
+    } else {
+        println("F-OP9-LN-REDUCTION-ORACLE = 0")
+        println("FAIL — GroupNorm fused valley diverges from the two-pass reference")
+    }
 }
