@@ -28,6 +28,24 @@
 #define CK(x) do{ cudaError_t e=(x); if(e!=cudaSuccess){ \
   fprintf(stderr,"CUDA err %s:%d: %s\n",__FILE__,__LINE__,cudaGetErrorString(e)); exit(1);} }while(0)
 
+/* per-element body — a MACRO (not a function) so the expression text is
+ * inlined IDENTICALLY in both the scalar and the vec kernel. This guarantees
+ * ptxas applies the SAME fp-contraction (fma fusion) in both paths, so the
+ * only difference is load/store WIDTH → bit-exact even under --fmad=true
+ * (the production default). Each invocation expands to the exact same
+ * statements as _hx_k_adamw_step_inplace. */
+#define ADAMW_BODY(w_in, m_in, v_in, g_in, w_out, m_out, v_out)               \
+    do {                                                                      \
+        double _g    = (g_in);                                                \
+        double _mi   = b1 * (m_in) + (1.0 - b1) * _g;                         \
+        double _vi   = b2 * (v_in) + (1.0 - b2) * _g * _g;                    \
+        double _mhat = _mi / c1;                                              \
+        double _vhat = _vi / c2;                                              \
+        double _denom = sqrt(_vhat) + eps;                                    \
+        double _wi   = (w_in) - lr * wd * (w_in) - lr * _mhat / _denom;       \
+        (m_out) = _mi; (v_out) = _vi; (w_out) = _wi;                          \
+    } while (0)
+
 /* ── SCALAR baseline — VERBATIM arithmetic of _hx_k_adamw_step_inplace ── */
 __global__ void adamw_scalar(double* __restrict__ W,
                              double* __restrict__ Mm,
@@ -40,31 +58,8 @@ __global__ void adamw_scalar(double* __restrict__ W,
     int64_t stride = (int64_t)blockDim.x * (int64_t)gridDim.x;
     for (int64_t i = (int64_t)blockIdx.x * blockDim.x + threadIdx.x;
          i < n; i += stride) {
-        double g    = G[i];
-        double mi   = b1 * Mm[i] + (1.0 - b1) * g;
-        double vi   = b2 * Vv[i] + (1.0 - b2) * g * g;
-        double mhat = mi / c1;
-        double vhat = vi / c2;
-        double denom = sqrt(vhat) + eps;
-        double wi   = W[i] - lr * wd * W[i] - lr * mhat / denom;
-        Mm[i] = mi;
-        Vv[i] = vi;
-        W[i]  = wi;
+        ADAMW_BODY(W[i], Mm[i], Vv[i], G[i], W[i], Mm[i], Vv[i]);
     }
-}
-
-/* per-element body — identical math, factored so vec path reuses it EXACTLY */
-__device__ __forceinline__ void adamw_body(double w, double m, double v, double g,
-                                           double lr, double b1, double b2,
-                                           double eps, double wd, double c1, double c2,
-                                           double* w_o, double* m_o, double* v_o) {
-    double mi   = b1 * m + (1.0 - b1) * g;
-    double vi   = b2 * v + (1.0 - b2) * g * g;
-    double mhat = mi / c1;
-    double vhat = vi / c2;
-    double denom = sqrt(vhat) + eps;
-    double wi   = w - lr * wd * w - lr * mhat / denom;
-    *w_o = wi; *m_o = mi; *v_o = vi;
 }
 
 /* ── VECTORIZED — double2 (128-bit) coalesced loads + vectorized stores ──
@@ -90,16 +85,14 @@ __global__ void adamw_vec(double* __restrict__ W,
          p < npair; p += stride) {
         double2 w = W2[p], m = M2[p], v = V2[p], g = G2[p];   /* 128-bit loads */
         double2 wo, mo, vo;
-        adamw_body(w.x, m.x, v.x, g.x, lr,b1,b2,eps,wd,c1,c2, &wo.x,&mo.x,&vo.x);
-        adamw_body(w.y, m.y, v.y, g.y, lr,b1,b2,eps,wd,c1,c2, &wo.y,&mo.y,&vo.y);
+        ADAMW_BODY(w.x, m.x, v.x, g.x, wo.x, mo.x, vo.x);
+        ADAMW_BODY(w.y, m.y, v.y, g.y, wo.y, mo.y, vo.y);
         M2[p] = mo;  V2[p] = vo;  W2[p] = wo;                 /* 128-bit stores */
     }
     /* scalar tail — only thread 0 of block 0 (tiny, n%2 ∈ {0,1}) */
     if (blockIdx.x == 0 && threadIdx.x == 0) {
         for (int64_t i = (npair << 1); i < n; ++i) {
-            double wo,mo,vo;
-            adamw_body(W[i],Mm[i],Vv[i],G[i], lr,b1,b2,eps,wd,c1,c2, &wo,&mo,&vo);
-            Mm[i]=mo; Vv[i]=vo; W[i]=wo;
+            ADAMW_BODY(W[i], Mm[i], Vv[i], G[i], W[i], Mm[i], Vv[i]);
         }
     }
 }
