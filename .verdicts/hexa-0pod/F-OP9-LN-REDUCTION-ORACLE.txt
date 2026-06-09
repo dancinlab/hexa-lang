@@ -1,0 +1,102 @@
+════════════════════════════════════════════════════════════════════════════
+F-OP9-LN-REDUCTION-ORACLE — GroupNorm valley: two-pass mean/var + separate GELU
+                            == fused valley (one-pass), byte-eq
+HEXA-0POD OP-9 · CPU-LOCAL byte-eq ORACLE · 0-GPU (`hexa run`) · $0
+════════════════════════════════════════════════════════════════════════════
+
+WHICH REDUCTION IS LOCKED
+  The flame CLMConvMoE trunk block is conv → GroupNorm → GELU. GroupNorm needs
+  per-GROUP statistics over the FULL conv output, so it cannot stream — the conv
+  finishes, then a "valley" reduction normalizes (this is the HEXA_FUSE_VALLEY /
+  HEXA_FUSE_GN_GELU fused hot path; clm_prod.hexa _groupnorm / _groupnorm_gelu →
+  gn_lib.hexa nn_groupnorm_fwd / nn_gn_gelu_fused).
+
+  The PRODUCTION reduction is a TWO-PASS mean/variance (NOT Welford), per group g
+  (cg = C/G channels, m = cg·T elements):
+      pass 1: sum = Σ_{c∈g, t} X[t,c]              → mu  = sum / m
+      pass 2: vs  = Σ_{c∈g, t} (X[t,c] - mu)²       → var = vs  / m
+              inv = 1 / _gn_sqrt(var + eps)        (eps = 1e-5, PyTorch GN default)
+      xhat[t,c] = (X[t,c]-mu)·inv ; Y = gamma·xhat + beta ; A = GELU(Y)
+  BOTH reduction passes iterate in (t-OUTER, c-INNER) order — SEQUENTIAL, NO tree
+  re-assoc. _gn_sqrt is a 40-iter Newton-Raphson (libm-free); GELU is the erf-
+  based normal CDF GELU(x)=x·0.5·(1+erf(x·(1/√2))) (`erf` = libm codegen builtin).
+
+CANONICAL ORDER (the determinism contract this locks — device kernel = SSOT)
+  mean   : Σ over (t-OUTER, c-INNER), sequential; mu = sum / (cg·T).
+  var    : Σ (x-mu)² over the SAME (t-OUTER, c-INNER) order; var = vs / (cg·T).
+           TWO-PASS (mean-then-var), NOT a streaming Welford.
+  inv-std: 1 / _gn_sqrt(var + eps), eps = 1e-5, _gn_sqrt = 40-iter Newton seed x.
+  affine : Y[t,c] = gamma[c]·xhat[t,c] + beta[c].
+  gelu   : A = Y · 0.5·(1 + erf(Y · 1/√2)) (erf libm builtin, NOT hand-Taylor).
+  The forge_dispatch_groupnorm_gelu megakernel replays THIS exact order; gn_lib's
+  nn_gn_gelu_fused_off is documented "character-for-character identical to
+  nn_groupnorm_fwd_off (same sum/var reduction order, same _gn_sqrt)".
+
+IDENTITY PROVEN
+  OP-9 proves the trainer's UN-FUSED form (nn_groupnorm_fwd shape: the two-pass
+  mean/var reduction, a SEPARATE affine sweep writing Y, THEN a SEPARATE GELU
+  sweep re-reading Y → A — two elementwise passes over [T·C]) is BIT-FOR-BIT
+  identical to the FUSED VALLEY form (nn_gn_gelu_fused shape: the SAME two-pass
+  mean/var reduction, but the GN-affine value is GELU'd the instant it is
+  computed — Y (pre-GELU bwd cache) and A (GELU) written in ONE elementwise pass,
+  the post-GN [T·C] tensor touched ONCE, NO Y read+write round-trip — the
+  megakernel shape):
+      max(|ΔY|, |ΔA|) = 0.0, all shapes.
+
+  This is a true FUSION / ordering identity, NOT an associativity case — no
+  tolerance. Both forms (a) sum the mean over the SAME (t-outer,c-inner) order,
+  (b) subtract the SAME mu and sum the variance over the SAME order, (c) use the
+  SAME _gn_sqrt(var+eps), (d) apply the SAME gamma·xhat+beta affine, and (e) apply
+  the SAME erf-based GELU to the SAME value ⇒ every float op is identical. A future
+  refactor that tree-reduces the mean/var sum (warp-shuffle), switches to a
+  Welford streaming mean/var, drops the max/eps handling, or reorders the (t,c)
+  axes would break determinism — this oracle catches it.
+
+ORACLE
+  stdlib/flame/clm_prod_ln_reduction_eq.hexa  (pure `hexa run`, CPU, 0-GPU)
+  _ln_sqrt   — byte-identical mirror of gn_lib _gn_sqrt (40-iter Newton-Raphson).
+  _ln_gelu   — byte-identical mirror of gn_lib _gn_gelu (= nn_lib _nn_gelu, erf CDF).
+  _gn_ref    — un-fused (nn_groupnorm_fwd shape): two-pass reduction + affine sweep
+               + SEPARATE GELU sweep over Y.
+  _gn_fused  — fused valley (nn_gn_gelu_fused shape): same reduction, affine+GELU
+               in ONE pass.
+  7 shapes: G=1 (LayerNorm-over-channels degenerate), G=2/3/4/8, varied T,C,
+  + degenerate T=1 (pure cross-channel), + cg=1 (G=8 = per-channel norm) edges.
+
+GATE (g5): `hexa run` — PASS, max|Δ| = 0.0 across all 7 shapes.
+
+VERBATIM `hexa run` OUTPUT
+----------------------------------------------------------------------------
+clm_prod_ln_reduction_eq — F-OP9 GroupNorm valley reduction byte-eq (CPU oracle)
+  YA max|Δ|  T8 C8 G1  = 0.0
+  YA max|Δ|  T8 C8 G2  = 0.0
+  YA max|Δ|  T16 C12 G4 = 0.0
+  YA max|Δ|  T12 C16 G8 = 0.0
+  YA max|Δ|  T10 C6 G3  = 0.0
+  YA max|Δ|  T1 C4 G1   = 0.0
+  YA max|Δ|  T32 C8 G8  = 0.0
+F-OP9-LN-REDUCTION-ORACLE = 1
+PASS — GroupNorm valley: two-pass mean/var + separate GELU == fused, byte-eq (max|Δ|=0, all cases)
+----------------------------------------------------------------------------
+
+HONEST FRAMING (g5)
+  Behavior-preserving: NO trainer logic changed (oracle/verification addition
+  only). max|Δ|=0 is a GENUINE fusion identity (same two-pass reduction order,
+  same _gn_sqrt, same erf-GELU on the same value) — NOT a faked associativity
+  pass and NOT a tolerance-hidden tree-vs-sequential case. The honest tree-vs-
+  sequential associativity RISK the task flagged is REAL but does NOT arise here:
+  the locked fused reference (gn_lib nn_gn_gelu_fused) keeps the SAME sequential
+  (t-outer,c-inner) two-pass reduction order as the un-fused nn_groupnorm_fwd —
+  the fusion only collapses the GN-affine + GELU elementwise sweeps (a boundary-
+  removal), it does NOT re-associate the mean/var sum. So the CPU oracle matches
+  the production reduction order EXACTLY → genuine max|Δ|=0, no eps needed.
+  (Were a future device kernel to warp-shuffle/tree-reduce the mean/var sum, THIS
+  oracle would flag the ULP divergence — that is its job. The canonical SSOT is
+  the documented sequential (t-outer,c-inner) two-pass order above.)
+  GroupNorm is in the FUSED valley hot path (HEXA_FUSE_GN_GELU). Companion to
+  OP-2 (bwd dW transpose-elim), OP-7 (fwd conv im2col), OP-8 (MoE softmax+combine)
+  in the determinism-oracle series. $0 — pure local CPU `hexa run`, no GPU / no
+  pool / no vast.
+
+  F-OP9-LN-REDUCTION-ORACLE = 1
+════════════════════════════════════════════════════════════════════════════
