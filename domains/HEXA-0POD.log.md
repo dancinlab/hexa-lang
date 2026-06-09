@@ -1,5 +1,41 @@
 # HEXA-0POD — log
 
+## 2026-06-10 — OP-25 GREEN gates / DOMINATED: deterministic BF16 fast-mode — Pareto-dominated by TF32 (aiden 5070, FREE)
+
+The precision-uncap ladder's NEXT rung after OP-20 TF32 (#2999) + OP-23 TF32-drift (#3005). BF16 has an
+8-bit mantissa (vs TF32's 10-bit) so the GEMM is less accurate but POTENTIALLY faster (or same speed, half
+GEMM-input bytes). OP-25 asks: is a deterministic BF16 step fast-mode (a) self-byte-eq, (b) within W14 vs
+FP64, (c) FASTER than TF32 — i.e. a NEW rung, or DOMINATED by TF32 (same throughput, no reason to use it)?
+
+- METHOD: 3-lane (BF16 / TF32 / FP64) single-process harness over the OP-20 fused step DAG (fwd GEMM →
+  fused valley LN+gelu+copy → transpose-elim bwd GEMM → single-launch AdamW); only cuBLAS storage/compute
+  differs (BF16=CUDA_R_16BF/COMPUTE_32F_FAST_16BF). MIXED-PRECISION CONTRACT (decisive): master weights +
+  AdamW state + glue accum all fp32; only the two GEMM operands are bf16 (bf16 copy refreshed each AdamW).
+  All glue fixed-order, no atomics. Drift harness = continuous trajectory per lane (W/m/v persist) + scalar
+  loss mean(G²). aiden RTX 5070 FREE, idle-guard hard-backoff 30→480s×8. 8/8 1-step + 4/4 drift cells.
+- (1) BF16 SELF-BYTE-EQ: YES, max|delta(W',loss)|=EXACTLY 0 on every cell AND over the full 50-step
+  trajectory. PEDANTIC NOT needed (DEFAULT bf16 tensor-op already run-to-run deterministic; identical bytes
+  + time — same finding as OP-20's TF32). Pin PEDANTIC for a portable ship guarantee (costs nothing).
+- (2) rel-RMS vs FP64 ~1.13-1.22e-6 — NOT the expected ~1e-3, and essentially EQUAL to TF32's 1.13e-6.
+  WHY (load-bearing): fp32 master weights → only GEMM operands bf16 → the e-3 GEMM error enters W through
+  ONE tiny optimizer step → e-6 W' error. Fully trainable; 4 orders inside W14 1e-2. (A bf16-MASTER step
+  WOULD show e-3 — but nobody ships that; the fp32-master contract is the real one and is what we measured.)
+- (3) SPEED: FP64/BF16 = 3.88-4.10×@B=1, 15.8-16.8×@B=8 (B=8 inflated by 5070's ~1/64 FP64, same OP-20
+  caveat). BF16-vs-TF32 = TF32/BF16 1.01-1.12× → BF16 at most ~12% faster @B=8 (half-input-bytes mem
+  traffic, NOT compute) and a DEAD HEAT @B=1 (1.01-1.02×, the latency regime the ~3× cap names). On the
+  5070 BF16 & TF32 are both 16-bit-input fp32-accum tensor-ops at EQUAL throughput → no GEMM-cost edge.
+- (4) DRIFT N=50, B=1: BF16 LOSS TRACKS FP64 — worst loss-track gap 9.4e-5 (D=768) / 1.7e-4 (D=1536),
+  bounded, no growth; weight rel-RMS ~e-6 does NOT accumulate (1.2e-6@step1 → 2.5e-6@step50) =
+  chaotic-but-microscopic, same shape as OP-23's TF32 drift. Real trainable fast-mode, not a 1-step illusion.
+- PARETO PLACEMENT: FP64(exact,1×) → TF32(e-6, 4.2×) → BF16(e-6, 4.1× — SAME accuracy + SAME speed as TF32).
+  BF16 is Pareto-DOMINATED by TF32: not worse, but BETTER on neither axis → no reason to prefer it. The
+  expected "less accurate but faster" trade did NOT appear: (i) fp32-master contract erases the accuracy
+  gap, (ii) equal 16-bit tensor throughput erases the speed gap. TF32 stays the precision-uncap TERMINAL
+  SWEET SPOT; the BF16 rung is a NO-OP on consumer hardware. HONEST CLOSED result, $0, no vast/pod/leak.
+- ARTIFACTS: verdict .verdicts/hexa-0pod/F-OP25-BF16-FASTMODE.txt; harness
+  tool/bench/flame_bench_step_bf16fast.cu + flame_traj_drift_bf16_op25.cu; drivers run_op25_5070.sh +
+  run_op25_drift_5070.sh; raw op25_5070_raw.log + op25_drift_5070_raw.log. branch domain/hexa-0pod-op25.
+
 ## 2026-06-10 — OP-23 GREEN: TF32 N-step trajectory drift vs FP64 — TF32 fast-mode is REAL, not a 1-step illusion (aiden 5070, FREE)
 
 The decisive validation of OP-20's deterministic TF32 fast-mode. OP-20 (#2999) proved a SINGLE TF32 flame

@@ -11,7 +11,25 @@ loop targets what the consumer card + code can carry.
 ## milestones (loop self-feeds; add as discovered)
 
 <!-- ANCHOR:OP-25-BF16-FASTMODE (unique anchor — next precision-uncap rung: deterministic BF16 fast-mode; self-byte-eq + W14-tol vs FP64 + speed vs TF32; precision Pareto placement BF16-vs-TF32; aiden 5070) -->
-- [ ] **OP-25 — deterministic BF16 fast-mode: self-byte-eq + W14-tol + speed vs TF32 (precision Pareto, aiden)**
+- [x] **OP-25 — deterministic BF16 fast-mode: self-byte-eq + W14-tol + speed vs TF32 (precision Pareto, aiden)** —
+  GREEN gates / DOMINATED outcome (honest closed result). Probed the precision-uncap ladder's NEXT rung after
+  OP-20 TF32: a deterministic BF16 step fast-mode (CUBLAS_COMPUTE_32F_FAST_16BF, bf16 GEMM operands, fp32 master
+  weights+AdamW+glue = standard mixed-precision contract). 3-lane (BF16/TF32/FP64) harness + drift, aiden RTX 5070
+  FREE pool, 8/8 1-step cells + 4/4 drift cells (DEFAULT+PEDANTIC × D={768,1536} × B={1,8}). (1) BF16 SELF-BYTE-EQ
+  YES — max|delta(W',loss)|=EXACTLY 0 every cell + over the whole 50-step trajectory; PEDANTIC NOT needed (DEFAULT
+  bf16 tensor-op already deterministic, identical bytes+time — same as TF32/OP-20). (2) rel-RMS vs FP64 ~1.1e-6
+  (NOT the expected ~1e-3) — because fp32 MASTER weights mean only GEMM operands are bf16, so the bf16 e-3 GEMM
+  error enters W via one tiny optimizer step → e-6; essentially EQUAL to TF32's 1.13e-6, well inside W14 1e-2.
+  (3) SPEED: BF16/FP64 = 3.88-4.10× @B=1 (same as TF32); BF16-vs-TF32 = TF32/BF16 1.01-1.12× → BF16 at most ~12%
+  faster @B=8 (half-input-bytes mem traffic, NOT compute) and a DEAD HEAT @B=1 (1.01-1.02×, the latency regime the
+  ~3× cap names). On the 5070 BF16 & TF32 are both 16-bit-input tensor-ops at EQUAL throughput → no GEMM-cost edge.
+  (4) DRIFT N=50: BF16 LOSS TRACKS FP64 (worst loss-track gap 9.4e-5/1.7e-4, bounded, no peel; weight rel-RMS ~e-6,
+  does NOT grow — chaotic-but-microscopic, same shape as OP-23's TF32 drift) → real trainable fast-mode, not a
+  1-step illusion. PARETO: FP64(exact,1×) → TF32(e-6,4.2×) → BF16(e-6,4.1× = SAME accuracy + SAME speed as TF32).
+  ==> BF16 is Pareto-DOMINATED by TF32: not worse, but not better on either axis → no reason to prefer it. TF32
+  stays the precision-uncap TERMINAL SWEET SPOT; the BF16 rung is a NO-OP on consumer hardware. Verdict
+  .verdicts/hexa-0pod/F-OP25-BF16-FASTMODE.txt; harness tool/bench/flame_bench_step_bf16fast.cu +
+  flame_traj_drift_bf16_op25.cu; raw op25_5070_raw.log + op25_drift_5070_raw.log. $0, no vast/pod/leak.
 
 <!-- ANCHOR:OP-23-TF32-DRIFT (unique anchor — TF32 N-step trajectory drift vs FP64; validate TF32 fast-mode is real, not a 1-step illusion; aiden 5070) -->
 - [x] **OP-23 — TF32 N-step trajectory drift vs FP64: validate TF32 fast-mode is real not 1-step illusion (aiden)** —

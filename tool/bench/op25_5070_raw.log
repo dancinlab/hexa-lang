@@ -1,0 +1,114 @@
+############ HEXA-0POD OP-25 — deterministic BF16 fast-mode on RTX 5070 (sm_120) ############
+T=256 iters=50 arch=sm_120 D={768 1536} B={1 8}  BF16 vs TF32 vs FP64 in-process
+==== nvidia-smi ====
+Wed Jun 10 05:06:38 2026       
++-----------------------------------------------------------------------------------------+
+| NVIDIA-SMI 580.159.04             Driver Version: 580.159.04     CUDA Version: 13.0     |
++-----------------------------------------+------------------------+----------------------+
+| GPU  Name                 Persistence-M | Bus-Id          Disp.A | Volatile Uncorr. ECC |
+| Fan  Temp   Perf          Pwr:Usage/Cap |           Memory-Usage | GPU-Util  Compute M. |
+|                                         |                        |               MIG M. |
+|=========================================+========================+======================|
+|   0  NVIDIA GeForce RTX 5070        On  |   00000000:01:00.0 Off |                  N/A |
+|  0%   36C    P8              8W /  250W |       2MiB /  12227MiB |      0%      Default |
+|                                         |                        |                  N/A |
++-----------------------------------------+------------------------+----------------------+
+
++-----------------------------------------------------------------------------------------+
+| Processes:                                                                              |
+|  GPU   GI   CI              PID   Type   Process name                        GPU Memory |
+|        ID   ID                                                               Usage      |
+|=========================================================================================|
+|  No running processes found                                                             |
++-----------------------------------------------------------------------------------------+
+==== nvcc ====
+Cuda compilation tools, release 13.0, V13.0.88
+Build cuda_13.0.r13.0/compiler.36424714_0
+==== build BF16-DEFAULT + BF16-PEDANTIC ====
+build OK
+
+######## VARIANT = default (/tmp/flame_bf16_default) ########
+
+================= default  D=768  B=1  T=256 =================
+[CFG] OP-25 BF16-DEFAULT  GPU=NVIDIA GeForce RTX 5070 cc=12.0  D=768 T=256 B=1 -> M=256 K=768 N=768 iters=50
+[GATE-A] BF16-DEFAULT D=768 B=1  BF16 run-to-run max|delta(W')| = 0.000e+00  (self-byte-eq ==0: PASS)
+[GATE-B] BF16-DEFAULT D=768 B=1  rel-RMS(BF16 vs FP64 W') = 1.167e-06  (W14 <=1e-2: PASS)
+[REF] BF16-DEFAULT D=768 B=1  rel-RMS(TF32 vs FP64 W') = 1.134e-06
+[SPEED] BF16-DEFAULT D=768 B=1  BF16=0.4852  TF32=0.4915  FP64=1.9887 ms/step  FP64/BF16=4.099x  TF32/BF16=1.013x
+[RESULT] OP-25 BF16-DEFAULT D=768 B=1  selfByteEq=Y  relRMSvsFP64=1.167e-06  relRMS_TF32=1.134e-06  BF16_ms=0.4852  TF32_ms=0.4915  FP64_ms=1.9887  FP64/BF16=4.099x  TF32/BF16=1.013x
+
+================= default  D=768  B=8  T=256 =================
+  [wait_gpu] util=53% mem=2MiB busy — sleep 30s (try 1/8)
+[CFG] OP-25 BF16-DEFAULT  GPU=NVIDIA GeForce RTX 5070 cc=12.0  D=768 T=256 B=8 -> M=2048 K=768 N=768 iters=50
+[GATE-A] BF16-DEFAULT D=768 B=8  BF16 run-to-run max|delta(W')| = 0.000e+00  (self-byte-eq ==0: PASS)
+[GATE-B] BF16-DEFAULT D=768 B=8  rel-RMS(BF16 vs FP64 W') = 1.131e-06  (W14 <=1e-2: PASS)
+[REF] BF16-DEFAULT D=768 B=8  rel-RMS(TF32 vs FP64 W') = 1.131e-06
+[SPEED] BF16-DEFAULT D=768 B=8  BF16=0.7793  TF32=0.8583  FP64=12.3329 ms/step  FP64/BF16=15.826x  TF32/BF16=1.101x
+[RESULT] OP-25 BF16-DEFAULT D=768 B=8  selfByteEq=Y  relRMSvsFP64=1.131e-06  relRMS_TF32=1.131e-06  BF16_ms=0.7793  TF32_ms=0.8583  FP64_ms=12.3329  FP64/BF16=15.826x  TF32/BF16=1.101x
+
+================= default  D=1536  B=1  T=256 =================
+  [wait_gpu] util=100% mem=2MiB busy — sleep 30s (try 1/8)
+[CFG] OP-25 BF16-DEFAULT  GPU=NVIDIA GeForce RTX 5070 cc=12.0  D=1536 T=256 B=1 -> M=256 K=1536 N=1536 iters=50
+[GATE-A] BF16-DEFAULT D=1536 B=1  BF16 run-to-run max|delta(W')| = 0.000e+00  (self-byte-eq ==0: PASS)
+[GATE-B] BF16-DEFAULT D=1536 B=1  rel-RMS(BF16 vs FP64 W') = 1.219e-06  (W14 <=1e-2: PASS)
+[REF] BF16-DEFAULT D=1536 B=1  rel-RMS(TF32 vs FP64 W') = 1.134e-06
+[SPEED] BF16-DEFAULT D=1536 B=1  BF16=1.7949  TF32=1.8308  FP64=6.9642 ms/step  FP64/BF16=3.880x  TF32/BF16=1.020x
+[RESULT] OP-25 BF16-DEFAULT D=1536 B=1  selfByteEq=Y  relRMSvsFP64=1.219e-06  relRMS_TF32=1.134e-06  BF16_ms=1.7949  TF32_ms=1.8308  FP64_ms=6.9642  FP64/BF16=3.880x  TF32/BF16=1.020x
+
+================= default  D=1536  B=8  T=256 =================
+  [wait_gpu] util=90% mem=2MiB busy — sleep 30s (try 1/8)
+[CFG] OP-25 BF16-DEFAULT  GPU=NVIDIA GeForce RTX 5070 cc=12.0  D=1536 T=256 B=8 -> M=2048 K=1536 N=1536 iters=50
+[GATE-A] BF16-DEFAULT D=1536 B=8  BF16 run-to-run max|delta(W')| = 0.000e+00  (self-byte-eq ==0: PASS)
+[GATE-B] BF16-DEFAULT D=1536 B=8  rel-RMS(BF16 vs FP64 W') = 1.131e-06  (W14 <=1e-2: PASS)
+[REF] BF16-DEFAULT D=1536 B=8  rel-RMS(TF32 vs FP64 W') = 1.130e-06
+[SPEED] BF16-DEFAULT D=1536 B=8  BF16=2.4910  TF32=2.7790  FP64=41.7968 ms/step  FP64/BF16=16.779x  TF32/BF16=1.116x
+[RESULT] OP-25 BF16-DEFAULT D=1536 B=8  selfByteEq=Y  relRMSvsFP64=1.131e-06  relRMS_TF32=1.130e-06  BF16_ms=2.4910  TF32_ms=2.7790  FP64_ms=41.7968  FP64/BF16=16.779x  TF32/BF16=1.116x
+
+######## VARIANT = pedantic (/tmp/flame_bf16_pedantic) ########
+
+================= pedantic  D=768  B=1  T=256 =================
+  [wait_gpu] util=100% mem=2MiB busy — sleep 30s (try 1/8)
+[CFG] OP-25 BF16-PEDANTIC  GPU=NVIDIA GeForce RTX 5070 cc=12.0  D=768 T=256 B=1 -> M=256 K=768 N=768 iters=50
+[GATE-A] BF16-PEDANTIC D=768 B=1  BF16 run-to-run max|delta(W')| = 0.000e+00  (self-byte-eq ==0: PASS)
+[GATE-B] BF16-PEDANTIC D=768 B=1  rel-RMS(BF16 vs FP64 W') = 1.167e-06  (W14 <=1e-2: PASS)
+[REF] BF16-PEDANTIC D=768 B=1  rel-RMS(TF32 vs FP64 W') = 1.134e-06
+[SPEED] BF16-PEDANTIC D=768 B=1  BF16=0.4852  TF32=0.4913  FP64=1.9887 ms/step  FP64/BF16=4.099x  TF32/BF16=1.013x
+[RESULT] OP-25 BF16-PEDANTIC D=768 B=1  selfByteEq=Y  relRMSvsFP64=1.167e-06  relRMS_TF32=1.134e-06  BF16_ms=0.4852  TF32_ms=0.4913  FP64_ms=1.9887  FP64/BF16=4.099x  TF32/BF16=1.013x
+
+================= pedantic  D=768  B=8  T=256 =================
+  [wait_gpu] util=87% mem=2MiB busy — sleep 30s (try 1/8)
+[CFG] OP-25 BF16-PEDANTIC  GPU=NVIDIA GeForce RTX 5070 cc=12.0  D=768 T=256 B=8 -> M=2048 K=768 N=768 iters=50
+[GATE-A] BF16-PEDANTIC D=768 B=8  BF16 run-to-run max|delta(W')| = 0.000e+00  (self-byte-eq ==0: PASS)
+[GATE-B] BF16-PEDANTIC D=768 B=8  rel-RMS(BF16 vs FP64 W') = 1.131e-06  (W14 <=1e-2: PASS)
+[REF] BF16-PEDANTIC D=768 B=8  rel-RMS(TF32 vs FP64 W') = 1.131e-06
+[SPEED] BF16-PEDANTIC D=768 B=8  BF16=0.7802  TF32=0.8584  FP64=12.3350 ms/step  FP64/BF16=15.810x  TF32/BF16=1.100x
+[RESULT] OP-25 BF16-PEDANTIC D=768 B=8  selfByteEq=Y  relRMSvsFP64=1.131e-06  relRMS_TF32=1.131e-06  BF16_ms=0.7802  TF32_ms=0.8584  FP64_ms=12.3350  FP64/BF16=15.810x  TF32/BF16=1.100x
+
+================= pedantic  D=1536  B=1  T=256 =================
+  [wait_gpu] util=45% mem=2MiB busy — sleep 30s (try 1/8)
+[CFG] OP-25 BF16-PEDANTIC  GPU=NVIDIA GeForce RTX 5070 cc=12.0  D=1536 T=256 B=1 -> M=256 K=1536 N=1536 iters=50
+[GATE-A] BF16-PEDANTIC D=1536 B=1  BF16 run-to-run max|delta(W')| = 0.000e+00  (self-byte-eq ==0: PASS)
+[GATE-B] BF16-PEDANTIC D=1536 B=1  rel-RMS(BF16 vs FP64 W') = 1.219e-06  (W14 <=1e-2: PASS)
+[REF] BF16-PEDANTIC D=1536 B=1  rel-RMS(TF32 vs FP64 W') = 1.134e-06
+[SPEED] BF16-PEDANTIC D=1536 B=1  BF16=1.7949  TF32=1.8306  FP64=6.9642 ms/step  FP64/BF16=3.880x  TF32/BF16=1.020x
+[RESULT] OP-25 BF16-PEDANTIC D=1536 B=1  selfByteEq=Y  relRMSvsFP64=1.219e-06  relRMS_TF32=1.134e-06  BF16_ms=1.7949  TF32_ms=1.8306  FP64_ms=6.9642  FP64/BF16=3.880x  TF32/BF16=1.020x
+
+================= pedantic  D=1536  B=8  T=256 =================
+  [wait_gpu] util=32% mem=2MiB busy — sleep 30s (try 1/8)
+[CFG] OP-25 BF16-PEDANTIC  GPU=NVIDIA GeForce RTX 5070 cc=12.0  D=1536 T=256 B=8 -> M=2048 K=1536 N=1536 iters=50
+[GATE-A] BF16-PEDANTIC D=1536 B=8  BF16 run-to-run max|delta(W')| = 0.000e+00  (self-byte-eq ==0: PASS)
+[GATE-B] BF16-PEDANTIC D=1536 B=8  rel-RMS(BF16 vs FP64 W') = 1.131e-06  (W14 <=1e-2: PASS)
+[REF] BF16-PEDANTIC D=1536 B=8  rel-RMS(TF32 vs FP64 W') = 1.130e-06
+[SPEED] BF16-PEDANTIC D=1536 B=8  BF16=2.4934  TF32=2.7803  FP64=41.9346 ms/step  FP64/BF16=16.818x  TF32/BF16=1.115x
+[RESULT] OP-25 BF16-PEDANTIC D=1536 B=8  selfByteEq=Y  relRMSvsFP64=1.131e-06  relRMS_TF32=1.130e-06  BF16_ms=2.4934  TF32_ms=2.7803  FP64_ms=41.9346  FP64/BF16=16.818x  TF32/BF16=1.115x
+
+############ OP-25 DONE — raw at /tmp/op25_5070_raw.log ############
+==== RESULT lines ====
+[RESULT] OP-25 BF16-DEFAULT D=768 B=1  selfByteEq=Y  relRMSvsFP64=1.167e-06  relRMS_TF32=1.134e-06  BF16_ms=0.4852  TF32_ms=0.4915  FP64_ms=1.9887  FP64/BF16=4.099x  TF32/BF16=1.013x
+[RESULT] OP-25 BF16-DEFAULT D=768 B=8  selfByteEq=Y  relRMSvsFP64=1.131e-06  relRMS_TF32=1.131e-06  BF16_ms=0.7793  TF32_ms=0.8583  FP64_ms=12.3329  FP64/BF16=15.826x  TF32/BF16=1.101x
+[RESULT] OP-25 BF16-DEFAULT D=1536 B=1  selfByteEq=Y  relRMSvsFP64=1.219e-06  relRMS_TF32=1.134e-06  BF16_ms=1.7949  TF32_ms=1.8308  FP64_ms=6.9642  FP64/BF16=3.880x  TF32/BF16=1.020x
+[RESULT] OP-25 BF16-DEFAULT D=1536 B=8  selfByteEq=Y  relRMSvsFP64=1.131e-06  relRMS_TF32=1.130e-06  BF16_ms=2.4910  TF32_ms=2.7790  FP64_ms=41.7968  FP64/BF16=16.779x  TF32/BF16=1.116x
+[RESULT] OP-25 BF16-PEDANTIC D=768 B=1  selfByteEq=Y  relRMSvsFP64=1.167e-06  relRMS_TF32=1.134e-06  BF16_ms=0.4852  TF32_ms=0.4913  FP64_ms=1.9887  FP64/BF16=4.099x  TF32/BF16=1.013x
+[RESULT] OP-25 BF16-PEDANTIC D=768 B=8  selfByteEq=Y  relRMSvsFP64=1.131e-06  relRMS_TF32=1.131e-06  BF16_ms=0.7802  TF32_ms=0.8584  FP64_ms=12.3350  FP64/BF16=15.810x  TF32/BF16=1.100x
+[RESULT] OP-25 BF16-PEDANTIC D=1536 B=1  selfByteEq=Y  relRMSvsFP64=1.219e-06  relRMS_TF32=1.134e-06  BF16_ms=1.7949  TF32_ms=1.8306  FP64_ms=6.9642  FP64/BF16=3.880x  TF32/BF16=1.020x
+[RESULT] OP-25 BF16-PEDANTIC D=1536 B=8  selfByteEq=Y  relRMSvsFP64=1.131e-06  relRMS_TF32=1.130e-06  BF16_ms=2.4934  TF32_ms=2.7803  FP64_ms=41.9346  FP64/BF16=16.818x  TF32/BF16=1.115x
