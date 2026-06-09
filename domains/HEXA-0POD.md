@@ -107,6 +107,9 @@ loop targets what the consumer card + code can carry.
   (OP-2b/OP-21-class, g5): DESIGN + BOUND only, NO measurement performed or claimed; NO pod rented (0-pod goal
   = ZERO vast). Verdict .verdicts/hexa-0pod/F-OP22-MEGASTEP-DESIGN.txt.
 
+<!-- ANCHOR:OP-21A-W16-KERNEL (unique anchor — OP-21A's designed lever turned into WRITTEN wgmma_tf32_w16.cu + turnkey build kit; local-checked, perf H100-gated) -->
+- [ ] **OP-21A — Hopper warp-spec TMA kernel WRITTEN (wgmma_tf32_w16.cu) + turnkey build kit, local-checked, H100-gated perf**
+
 <!-- ANCHOR:OP-21-HOPPER-WARPSPEC-DESIGN (unique anchor — 0-pod DESIGN for the Hopper sm_90a wgmma warp-spec TMA pipeline; measure is GPU-gated) -->
 - [x] **OP-21 — Hopper warp-spec TMA pipeline DESIGN + perf-gap analysis + H100 experiment recipe (0-pod, GPU-gated measure)** —
   produced (reading source + verdicts only, $0, 0-GPU) the design for the forge own-GEMM's remaining Hopper
