@@ -46,6 +46,7 @@ use "stdlib/qforge/screening"
 use "stdlib/qforge/correlation"
 use "stdlib/qforge/scf"
 use "stdlib/qforge/scf_etot"
+use "stdlib/qforge/scf_pw_realspace"
 
 // ── module-global cell slot for the H_of_rho closure (named-fn pattern, d4) ───
 //   Staged by qforge_scf_pw_set; read by qforge_h_of_rho_global. The same slots
@@ -102,6 +103,51 @@ let mut PW_B3: [float] = []
 //   FFT path is bypassed entirely (no silent Hartree flip). d4-generic — ρ̄ is data.
 let mut PW_FDG_ON: bool = false
 let mut PW_FDG_RHOBAR: float = 0.0     // ρ̄ = nelec/Ω (basis-independent average density)
+
+// ── 3-D REAL-SPACE SCF screening (the (1,1,n) 1-D G-index density REBUILD) ─────
+//   When PW_RS3D_ON, the H_of_rho closure builds V_scr from a TRUE 3-D real-space
+//   ρ(r) on a pow2-PADDED cube (scf_pw_realspace.hexa) instead of the (1,1,n)
+//   degenerate line — so the spectral GGA ∇ρ sees a genuine 3-D gradient and the
+//   n=645 basis maps onto a valid FFT grid (the pow2 wall is gone). The current
+//   ψ columns are captured each iteration by qforge_rho3d_of_psi_capture (the
+//   custom rho_of_psi) and read here to reconstruct ρ(r). xc_mode 3 → PBE GGA;
+//   <3 → LDA point-fn on the 3-D ρ(r). d4-generic; opt-in (default OFF, no regress).
+let mut PW_RS3D_ON: bool = false
+let mut PW_RS3D_NELEC: int = 0
+let mut PW_RS3D_PSIS: [[float]] = []   // captured ψ columns (nb × n) of the current SCF step
+let mut PW_RS3D_OCC: [float] = []      // captured per-band occupations
+
+// ── stage the 3-D real-space SCF grid (call after qforge_rho3d_stage staged it) ─
+//   Enables the 3-D real-space screening path in qforge_h_of_rho_multi. The pow2
+//   cube + Miller + basis must already be staged in scf_pw_realspace by the caller
+//   (the front-end carries the integer Miller indices, singular-B-safe). d4-generic.
+pub fn qforge_scf_pw_set_rs3d(on: bool, nelec: int) {
+    PW_RS3D_ON = on
+    PW_RS3D_NELEC = nelec
+}
+
+// ── custom rho_of_psi: CAPTURE ψ columns (for the 3-D ρ(r) rebuild) + return the
+//    standard (1,1,n) G-diagonal density the driver mixes on. The capture lets the
+//    H_of_rho closure reconstruct a TRUE 3-D ρ(r); the returned G-diagonal keeps the
+//    driver's convergence/mixing identical (no-regression on the driver contract). ─
+pub fn qforge_rho3d_of_psi_capture(psis: [[float]], occ: [float], nbands: int) -> [float] {
+    // capture the occupied manifold for the 3-D screening reconstruction.
+    let mut cp: [[float]] = []
+    let mut ocp: [float] = []
+    let mut b = 0
+    while b < nbands {
+        let mut col: [float] = []
+        let mut i = 0
+        while i < len(psis[b]) { col.push(psis[b][i]) ; i = i + 1 }
+        cp.push(col)
+        ocp.push(occ[b])
+        b = b + 1
+    }
+    PW_RS3D_PSIS = cp
+    PW_RS3D_OCC = ocp
+    // standard G-diagonal density (the driver mixes/converges on this, unchanged).
+    return qforge_rho_of_psi(psis, occ, nbands)
+}
 
 // ── LDA xc potential at a single density point (Hartree units) ────────────────
 //   xc_mode: 0=x-only(Slater) · ≥1=x+c(PW92).  ρ≤0 → 0 (no electrons → no xc).
@@ -314,7 +360,27 @@ pub fn qforge_h_of_rho_multi(rho: [float]) {
     // QFORGE-PERF: basis-decoupled G=0 screening (uniform-gas V_xc(ρ̄)) — bypasses
     //   the NPW-coupled (1,1,NPW) FFT path entirely (no silent Hartree flip).
     let mut vscr: [float] = []
-    if PW_FDG_ON {
+    if PW_RS3D_ON && qforge_rho3d_is_on() && len(PW_RS3D_PSIS) > 0 {
+        // ── TRUE 3-D real-space screening: build V_scr from ρ(r) on the pow2 cube
+        //    (V_H + V_xc^PBE[ρ,∇ρ] for xc_mode≥3, else LDA on the 3-D ρ(r)). The
+        //    captured ψ columns reconstruct ρ(r); the result is the per-G diagonal.
+        //    Falls back to the (1,1,n) path if the 3-D build returns [] (never silent
+        //    wrong — d6). This is the (1,1,n) 1-D G-index density REBUILD. ──
+        let v3 = qforge_vscr3d_from_psi(PW_RS3D_PSIS, PW_RS3D_OCC, PW_RS3D_NELEC, PW_XCMODE)
+        if len(v3) == n {
+            vscr = v3
+        } else {
+            // honest fallback — the 3-D build failed (malformed grid); keep the
+            //   (1,1,n) diagonal rather than ship a half-built screening (d6/g4).
+            let mut vhf = PW_VH
+            if PW_HGRID_ON {
+                if len(rho) == PW_NX * PW_NY * PW_NZ {
+                    vhf = qforge_vhartree_from_rho(rho, PW_NX, PW_NY, PW_NZ, PW_B1, PW_B2, PW_B3)
+                }
+            }
+            vscr = qforge_vscr_diag(rho, vhf, PW_XCMODE)
+        }
+    } else if PW_FDG_ON {
         vscr = qforge_vscr_diag_fdg(n, PW_FDG_RHOBAR, PW_XCMODE)
     } else {
     let mut vh = PW_VH
@@ -392,6 +458,47 @@ pub fn qforge_scf_pw_h_multi_smeared(kvec: [float], gvecs: [float], nspec: int,
     let n = len(gvecs) / 3
     return qforge_scf_smeared(qforge_h_of_rho_multi, qforge_rho_of_psi, n, nbands,
                               nelec, mix, tol, max_iter, sigma, spin_deg, and_depth)
+}
+
+// ── MULTI-SPECIES SMEARED SCF with TRUE 3-D REAL-SPACE ρ(r) SCREENING ─────────
+//   The (1,1,n) 1-D G-index density REBUILD (rtsc.log.md A1 PBE-SCF lever). Same
+//   staging + smeared+Anderson driver as qforge_scf_pw_h_multi_smeared, but:
+//     • stages a pow2-PADDED 3-D cube from the integer Miller indices (so n=645 ≠
+//       pow2 STILL maps onto a valid FFT grid — the pow2-FFT wall is gone), and
+//     • routes the SCF screening V_scr through a TRUE 3-D real-space ρ(r): ψ(G) →
+//       ifft3 → ψ(r) → ρ(r)=Σocc|ψ(r)|², V_H + V_xc^PBE[ρ,|∇ρ|] with a genuine 3-D
+//       spectral gradient (xc_mode 3), then sampled back onto the PW-G diagonal.
+//   gmiller = flat 3n integer (h,k,l) per coefficient (qpw_gvectors_miller — the
+//   singular-B-safe path). d4-generic; every hydride traverses this one entry.
+//   xc_mode<3 → LDA on the 3-D ρ(r) (still a physical 3-D density, not (1,1,n)).
+pub fn qforge_scf_pw_h_multi_smeared_rs3d(kvec: [float], gvecs: [float],
+                                          gmiller: [float], nspec: int,
+                                          rs: [float], rabs: [float], vlocs: [float],
+                                          mlens: [int], zs: [float],
+                                          poss: [float], palens: [int],
+                                          betas: [float], ls: [int], dij: [float],
+                                          nprojs: [int], blens: [int], dlens: [int],
+                                          omega: float, xc_mode: int,
+                                          b1: [float], b2: [float], b3: [float],
+                                          nbands: int, nelec: int, mix: float, tol: float,
+                                          max_iter: int, sigma: float, spin_deg: float,
+                                          and_depth: int) -> ScfResult {
+    PWM_KVEC = kvec ; PWM_GVECS = gvecs ; PWM_NSPEC = nspec
+    PWM_RS = rs ; PWM_RABS = rabs ; PWM_VLOCS = vlocs ; PWM_MLENS = mlens ; PWM_ZS = zs
+    PWM_POSS = poss ; PWM_PALENS = palens
+    PWM_BETAS = betas ; PWM_LS = ls ; PWM_DIJ = dij
+    PWM_NPROJS = nprojs ; PWM_BLENS = blens ; PWM_DLENS = dlens
+    PWM_OMEGA = omega
+    let mut empty_f: [float] = []
+    PW_VH = empty_f ; PW_XCMODE = xc_mode
+    PW_FDG_ON = false ; PW_HGRID_ON = false                // bypass the (1,1,n) FFT path
+    // stage the pow2-padded 3-D cube + enable the 3-D real-space screening route.
+    let staged = qforge_rho3d_stage(gvecs, gmiller, b1, b2, b3, omega, xc_mode)
+    qforge_scf_pw_set_rs3d(staged, nelec)
+    let n = len(gvecs) / 3
+    // drive with the CAPTURE rho_of_psi (stores ψ for the 3-D ρ(r) rebuild).
+    return qforge_scf_smeared(qforge_h_of_rho_multi, qforge_rho3d_of_psi_capture, n,
+                              nbands, nelec, mix, tol, max_iter, sigma, spin_deg, and_depth)
 }
 
 // ── MULTI-SPECIES SMEARED SCF with BASIS-DECOUPLED screening (QFORGE-PERF fix) ──
