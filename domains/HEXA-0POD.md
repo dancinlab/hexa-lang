@@ -94,6 +94,31 @@ loop targets what the consumer card + code can carry.
   on aiden's runtime — documented as follow-up. $0, 0-GPU, free pool, no vast. Verdict
   .verdicts/hexa-0pod/F-OP19-CROSSPLATFORM-EXACT.txt.
 
+<!-- ANCHOR:OP-19B-DET-ERF (unique anchor — seals the GELU erf cross-platform hole OP-19 deferred; the LAST libm transcendental in the step) -->
+- [x] **OP-19b — pure-FP deterministic erf seals GELU → flame FULLY machine-independent byte-exact (0-GPU)** —
+  Closed OP-19's measured latent residual: the GELU `erf` path (fwd `GELU(x)=x·0.5·(1+erf(x/√2))` + bwd
+  `GELU'=Φ+x·φ`). Implemented `dt_erf` (flame_math.hexa) = Abramowitz & Stegun 7.1.26 rational with the single
+  exp routed through OP-19's deterministic `dt_exp` Taylor — pure +,-,*,/ + dt_exp, **NO libm, NO other
+  transcendental**. KEY: BRANCHLESS in z (only the z=0 odd sign flip). A first cut used a Maclaurin series +
+  hard clamp at |z|≥4; that PIECEWISE form broke max|Δ|=0 because the GELU argument straddles the branch
+  boundary under in-register-vs-stored-reload rounding (measured 2e-7 fused≠unfused). The unconditional A&S form
+  has no value-dependent boundary to straddle → byte-eq restored. max|dt_erf − libm erf| = 1.38e-7 (≤ GELU
+  tolerance; honest g5 — trades "matches libm erf" for "matches across ALL platforms"). Wired host (nn_lib
+  `_nn_normal_cdf`/`_pdf` + gn_lib `_gn_gelu`) + reference (clm_conv_devfeed) + device (`_hx_dt_erf_dev` shared by
+  `_hx_k_gelu`/gelu2/`_hx_gelu_dev`/gelu_bwd; `_hx_dt_exp_dev` hoisted) + host C fallback (restore_frozen_seeds
+  `_op18_gelu` → dt_erf, BYTE-IDENTICAL to the hexa dt_erf, fold 93,35,192,253,183,12,237,63 @1.19071). CROSS-
+  PLATFORM ORACLE (stdlib/flame/op19b_crossplatform_erf.hexa, self-contained): det-erf GELU fwd+bwd byte fold
+  IDENTICAL on local + ghost (arm64-macos) AND aiden (x86-linux) — FWD 4548590605583584556, BWD
+  4249661408190172843 on all 3. BEFORE (honest): libm `erf` won't even LINK on aiden (`hexa_math_erf` undefined)
+  so a libm-erf GELU oracle CANNOT be cross-platform measured — the same hole-class OP-19 measured for libm exp
+  (1 ULP arm64↔x86). DEPENDENT ORACLES re-locked: OP-9 LN-reduction (self-contained _ln_gelu→dt_erf) PASS 0.0;
+  GN-GELU fusion re-lock proof (op19b_gngelu_relock.hexa, both arms dt_erf) PASS max|Δ|=0; OP-15 step + OP-18
+  gelu2 inherit via nn_lib + the dt_erf host fallback (re-lock on fresh build — local hexa is a stale prebuilt
+  that uses its own embedded stdlib, so the production-stdlib oracles validate on CI rebuild). RESULT: with
+  OP-19's dt_exp + OP-19b's dt_erf, the flame CLMConvMoE step has **NO libm transcendental left** (exp/erf/ln all
+  hand-rolled deterministic; sqrt already Newton) → flame is now FULLY machine-independent byte-exact. $0, 0-GPU,
+  free pool (aiden/ghost), no vast. Verdict .verdicts/hexa-0pod/F-OP19B-DET-ERF.txt.
+
 <!-- ANCHOR:OP-18-L3-FUSED-HOST (unique anchor — completes the OP-16 L3 fused-dispatch family: gelu2 + moe_block2) -->
 - [x] **OP-18 — host fallbacks for the remaining L3 fused dispatchers (gelu2 + moe_block2), 0-GPU testable** —
   completes the OP-16 (#2995) L3 fused-dispatch family: forge_dispatch_gelu2 (L3-b) + forge_dispatch_moe_block2

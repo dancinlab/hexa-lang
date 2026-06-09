@@ -40,16 +40,23 @@ bit-identical).
    "matches libm" for "matches across ALL platforms" — the flame reproducibility-first
    identity. (`F-OP19-CROSSPLATFORM-EXACT`.)
 
-   **Residual libm hole (latent, not yet closed):** the **GELU** path
-   (`nn_gelu_fwd`/`_nn_normal_cdf` and the bwd `_nn_normal_pdf`, plus the fused
-   `_gn_gelu`) still calls the libm **`erf`** builtin (fwd) and libm `erf`+`exp` (bwd).
-   By the same argument this is a cross-platform hole. It was NOT closed here because
-   (a) no bit-accurate deterministic `erf` exists in-tree (`core/special.hexa erf_fn`
-   is A&S 7.1.26, ~1.5e-7 off AND itself libm-`exp`-dependent), so a deterministic erf
-   is a larger numeric change + a separate impl, and (b) `erf` is too new for some
-   pool runtimes to even link — measured as a `hexa_math_erf`-undefined link failure on
-   aiden's prebuilt runtime, so the GELU erf path could not be cross-platform measured
-   there. Documented as a latent risk / follow-up.
+   **F-OP19b cross-platform fix (GELU erf — the last libm transcendental):** the
+   **GELU** path (`nn_gelu_fwd`/`_nn_normal_cdf`, the bwd `_nn_normal_pdf`, the fused
+   `_gn_gelu`, and the device + host-C-fallback twins) formerly called the libm
+   **`erf`** builtin (fwd) and libm `erf`+`exp` (bwd) — the same cross-platform hole
+   class. It is now swapped to **`dt_erf`** (`flame_math.hexa`): Abramowitz & Stegun
+   7.1.26 rational with the exp routed through `dt_exp` — pure `+ − × ÷` + `dt_exp`,
+   **no libm**, and **BRANCHLESS in z** (only the z=0 odd sign flip). The branchless
+   form is load-bearing: a piecewise series-then-clamp/tail erf straddles its branch
+   boundary under in-register-vs-stored-reload rounding of the GELU argument and breaks
+   `max|Δ|=0`; the unconditional A&S form has no boundary to straddle. The det-erf GELU
+   fwd+bwd byte fold is **byte-identical on local+ghost arm64-macos AND aiden x86-linux**
+   (`F-OP19B`). Accuracy: max|dt_erf − libm erf| = **1.38e-7** (≤ the GELU tolerance) —
+   trades "matches libm erf" for "matches across ALL platforms". (The libm-erf path
+   couldn't even be cross-platform measured: `hexa_math_erf` is undefined on aiden's
+   prebuilt runtime — link failure.) **With this + F-OP19's `dt_exp`, the step has NO
+   libm transcendental left** (exp/erf/ln Taylor, sqrt Newton) → flame is FULLY
+   machine-independent byte-exact. (`F-OP19B-DET-ERF`.)
 
    These are separate code paths. Swapping one for another (Taylor ↔
    `_moe_exp`) changes the bits. (The hand-rolled `sqrt` impls are
@@ -80,7 +87,7 @@ tolerance) unless noted.
 |---|---|---|---|
 | **INPUT** — token-embedding backward (scatter-add) | F-OP13-EMBED-RESIDUAL-ORACLE | shared-token row grads accumulate **position-ascending** (i = 0..T-1, in-place); mirrors `nn_embedding_bwd_scatter` | a gather-then-grouped-sum reorder, or GPU atomic-scatter, that drops position-ascending — descending diverges ~1e-13 on repeated-token rows (honest probe) |
 | **FWD conv** — forward causal-dilated conv1d | F-OP7-CONV-IM2COL-EQ | im2col + GEMM == direct sliding-window conv; contract over `Kdim` **j-ascending** (`j = ci*K + k`), ci-outer k-inner; zero-pad p<0 → 0 | reorder the im2col layout or swap the contraction axis order |
-| **NORM** — conv→GroupNorm→GELU "valley" | F-OP9-LN-REDUCTION-ORACLE | **two-pass** mean/var (NOT Welford) summed **(t-outer, c-inner)** sequential; `inv = 1/_gn_sqrt(var + eps)`, **eps = 1e-5**, `_gn_sqrt` = 40-iter Newton; GELU = erf-based CDF `x·0.5·(1+erf(x/√2))` (libm `erf`) | tree/warp-shuffle reduce the mean/var, switch to Welford, drop eps, reorder (t,c), or hand-Taylor the GELU |
+| **NORM** — conv→GroupNorm→GELU "valley" | F-OP9-LN-REDUCTION-ORACLE | **two-pass** mean/var (NOT Welford) summed **(t-outer, c-inner)** sequential; `inv = 1/_gn_sqrt(var + eps)`, **eps = 1e-5**, `_gn_sqrt` = 40-iter Newton; GELU = erf-based CDF `x·0.5·(1+erf(x/√2))` (**`dt_erf`** — A&S 7.1.26 + `dt_exp`, branchless, NO libm; F-OP19b) | tree/warp-shuffle reduce the mean/var, switch to Welford, drop eps, reorder (t,c), or swap `dt_erf` (a piecewise/clamped erf straddles its boundary and breaks byte-eq — keep it branchless) |
 | **MoE** — router softmax + expert combine | F-OP8-MOE-COMBINE-EQ | two-pass form == one-pass fused; softmax with **max-subtraction ON**, denom summed **e-ascending** sequential; exp = `_moe_exp`; combine Σ_e **e-ascending** per (t,c) | tree-reduce the softmax sum or combine, drop max-subtraction, reorder the expert axis, or swap `_moe_exp` |
 | **LOSS bwd** — CE + softmax fused gradient | F-OP11 · F-OP19 | `dL/dlogits[t,v] = (softmax[v] − [v==tgt])/T`; exp = **`dt_exp`** (F-OP19, was libm `exp`); per-row max-sub ON; denom **v-ascending** sequential; write `p·invT` for all v, **THEN** `dlogits[tgt] −= invT` (scale-then-subtract; do NOT refold to `(p−1)·invT`) | tree-reduce denom, drop max-sub, swap exp impl (libm exp diverges across arch/OS — F-OP19), or refold the target subtraction (the `(p−1)·invT` fold is float-different — ~1.39e-17) |
 | **LOSS fwd** — mean NLL | F-OP11-CE-SOFTMAX-ORACLE | `L = (1/T) Σ_t −ln(softmax[tgt_t])`; exp = **`dt_exp`**, ln = **`dt_ln`** (Taylor, NOT libm, NOT `_moe_exp`); per-row max-sub ON; denom **v-ascending**; `p_t` clamped ≥ 1e-6; loss summed **t-ascending**; mean = total/T | swap exp/ln impl, tree-reduce the denom, drop max-sub or the ≥1e-6 clamp, or reorder the t-sum |
@@ -154,11 +161,12 @@ A non-exhaustive checklist — any of these silently breaks `max|Δ| = 0`:
   `(p−1)·invT`).
 - **Refolding the AdamW squared-grad term** (`((1−β2)·g)·g`, not `(1−β2)·(g·g)`),
   or moving ε inside the √.
-- **Hand-rolling `erf`/`sqrt`** where a libm builtin (`erf`, in GELU) or the specific
-  Newton seed (`_gn_sqrt`, `_adamw_sqrt`) is locked — but note the GELU libm `erf` is
-  itself a known cross-platform LATENT hole (F-OP19 §1 residual): on a SINGLE machine
-  it is byte-eq, across arch/OS it can differ by ULPs like libm `exp` did. A
-  deterministic erf is the eventual fix (a numeric change), not a regression.
+- **Re-rolling `erf`/`sqrt`** where the deterministic impl (`dt_erf` in GELU, F-OP19b)
+  or the specific Newton seed (`_gn_sqrt`, `_adamw_sqrt`) is locked. The GELU erf is
+  now the branchless A&S `dt_erf` (F-OP19b closed the former libm-`erf` cross-platform
+  hole); do NOT revert it to libm `erf` (re-opens the arch/OS ULP divergence) and do
+  NOT make it piecewise (a series-then-clamp/tail erf straddles its boundary under
+  in-register-vs-stored rounding and breaks `max|Δ|=0`).
 
 ## adding a new oracle
 
