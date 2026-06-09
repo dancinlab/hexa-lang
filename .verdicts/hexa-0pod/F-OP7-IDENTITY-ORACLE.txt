@@ -1,0 +1,1 @@
+F-OP7-CONV-IM2COL-EQ — WIP skeleton (verification pending hexa run)

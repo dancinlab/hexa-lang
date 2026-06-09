@@ -1,0 +1,180 @@
+// ════════════════════════════════════════════════════════════════════════════
+//  clm_prod_conv_im2col_eq.hexa — F-OP7 forward conv im2col==direct byte-eq ORACLE.
+//
+//  HEXA-0POD OP-7: CPU-LOCAL (`hexa run`, 0-GPU) oracle that bit-exactly locks the
+//  forward causal-dilated conv1d layout transform the flame CLMConvMoE trainer
+//  relies on, in the same spirit as OP-2's transpose-elim oracle.
+//
+//  The trainer's conv1d_via_forge (clm_prod.hexa) computes the forward conv as
+//      xcol[T,Kdim] = _clmp_im2col(x)          (im2col gather, j = ci*K + k)
+//      mm[T,Cout]   = forge_dispatch_matmul(xcol[T,Kdim], Wt[Kdim,Cout])
+//      y[t,co]      = mm[t,co] + b[co]
+//  i.e. it materializes an im2col buffer and does ONE GEMM. The GEMM contracts
+//  over the shared Kdim dimension in j-ASCENDING order (the matmul k-loop), and
+//  _clmp_im2col lays out xcol[t, ci*K+k] = x[p,ci] with p = t - dil*(K-1-k).
+//
+//  A DIRECT sliding-window conv reference computes the SAME output without ever
+//  materializing the im2col buffer:
+//      y[t,co] = b[co] + Σ_ci Σ_k  x[p,ci] * w[co, ci*K + k],   p = t - dil*(K-1-k)
+//  iterating ci-OUTER, k-INNER. Because j = ci*K + k makes that nested order
+//  EXACTLY the j-ascending GEMM contraction order, the two accumulate the same
+//  products in the same sequence ⇒ y is BIT-FOR-BIT identical (max|Δ|=0), with
+//  zero-padding (p<0) contributing 0 in both. This locks the forward
+//  im2col+GEMM == direct-conv identity: a future refactor that reorders the
+//  im2col layout or the contraction axis would break determinism, and this
+//  oracle catches it. Runs $0 via `hexa run` on any CPU (mac / aiden) — no GPU.
+//
+//  F-OP7-CONV-IM2COL-EQ : im2col+matmul fwd conv == direct conv, max|Δ|=0.
+// ════════════════════════════════════════════════════════════════════════════
+
+use "stdlib/flame/tensor_lib"
+
+fn _ce_absf(x: float) -> float { if x < 0.0 { return 0.0 - x } return x }
+fn _ce_maxdev(a: int, b: int, n: int) -> float {
+    let mut m = 0.0
+    let mut i = 0
+    while i < n { let d = _ce_absf(t_get(a, i) - t_get(b, i)); if d > m { m = d }; i = i + 1 }
+    return m
+}
+
+// ── im2col (non-transposed, xcol[t, ci*K+k]) — byte-eq to clm_prod _clmp_im2col host.
+fn _ce_im2col(x: int, xcol: int, T: int, Cin: int, K: int, dil: int) {
+    let Kdim = Cin * K
+    let mut iz = 0
+    while iz < T * Kdim { t_set(xcol, iz, 0.0); iz = iz + 1 }
+    let mut t = 0
+    while t < T {
+        let mut ci = 0
+        while ci < Cin {
+            let mut k = 0
+            while k < K {
+                let p = t - dil * (K - 1 - k)
+                if p >= 0 { t_set(xcol, t * Kdim + ci * K + k, t_get(x, p * Cin + ci)) }
+                k = k + 1
+            }
+            ci = ci + 1
+        }
+        t = t + 1
+    }
+}
+
+// ── matmul  C[M,N] = A[M,K] @ B[K,N], k-ascending accumulation.
+//    Byte-eq to hexa_farr_matmul / forge_dispatch_matmul on the CPU oracle path.
+fn _ce_matmul(a: int, M: int, K: int, b: int, N: int, c: int) {
+    let mut m = 0
+    while m < M {
+        let mut n = 0
+        while n < N {
+            let mut acc = 0.0
+            let mut k = 0
+            while k < K { acc = acc + t_get(a, m * K + k) * t_get(b, k * N + n); k = k + 1 }
+            t_set(c, m * N + n, acc)
+            n = n + 1
+        }
+        m = m + 1
+    }
+}
+
+// ── OLD path (im2col + matmul) — mirrors conv1d_via_forge exactly.
+//    w is stored [Cout, Kdim] (the trainer's weight layout); Wt[Kdim,Cout] is the
+//    transpose the trainer materializes before the GEMM. y[t,co] = mm[t,co]+b[co].
+fn _conv_im2col(x: int, w: int, b: int, y_out: int,
+                T: int, Cin: int, Cout: int, K: int, dil: int) {
+    let Kdim = Cin * K
+    let xcol = t_zeros(T * Kdim)
+    _ce_im2col(x, xcol, T, Cin, K, dil)
+    let Wt = t_zeros(Kdim * Cout)
+    let mut co = 0
+    while co < Cout {
+        let mut j = 0
+        while j < Kdim { t_set(Wt, j * Cout + co, t_get(w, co * Kdim + j)); j = j + 1 }
+        co = co + 1
+    }
+    let mm = t_zeros(T * Cout)
+    _ce_matmul(xcol, T, Kdim, Wt, Cout, mm)
+    let mut t2 = 0
+    while t2 < T {
+        let mut c2 = 0
+        while c2 < Cout {
+            t_set(y_out, t2 * Cout + c2, t_get(mm, t2 * Cout + c2) + t_get(b, c2))
+            c2 = c2 + 1
+        }
+        t2 = t2 + 1
+    }
+}
+
+// ── NEW path (direct sliding-window conv) — no im2col buffer, no GEMM.
+//    y[t,co] = b[co] + Σ_ci Σ_k x[p,ci]*w[co, ci*K+k], p = t-dil*(K-1-k), ci-outer k-inner.
+//    The (ci,k) nested order = j=ci*K+k ascending = the GEMM contraction order ⇒ byte-eq.
+fn _conv_direct(x: int, w: int, b: int, y_out: int,
+                T: int, Cin: int, Cout: int, K: int, dil: int) {
+    let Kdim = Cin * K
+    let mut t = 0
+    while t < T {
+        let mut co = 0
+        while co < Cout {
+            let mut acc = 0.0
+            let mut ci = 0
+            while ci < Cin {
+                let mut k = 0
+                while k < K {
+                    let p = t - dil * (K - 1 - k)
+                    if p >= 0 { acc = acc + t_get(x, p * Cin + ci) * t_get(w, co * Kdim + ci * K + k) }
+                    k = k + 1
+                }
+                ci = ci + 1
+            }
+            t_set(y_out, t * Cout + co, acc + t_get(b, co))
+            co = co + 1
+        }
+        t = t + 1
+    }
+}
+
+// deterministic fixture fill (no rng dependency — reproducible bytes)
+fn _ce_fill(a: int, n: int, seed: int) {
+    let mut i = 0
+    let mut s = seed
+    while i < n {
+        s = (s * 1103515245 + 12345) & 0x7FFFFFFF
+        t_set(a, i, (to_float(s % 1000) - 500.0) * 0.001)
+        i = i + 1
+    }
+}
+
+fn _run_case(T: int, Cin: int, Cout: int, K: int, dil: int) -> float {
+    let Kdim = Cin * K
+    let x = t_zeros(T * Cin)
+    let w = t_zeros(Cout * Kdim)
+    let b = t_zeros(Cout)
+    _ce_fill(x, T * Cin, 7)
+    _ce_fill(w, Cout * Kdim, 13)
+    _ce_fill(b, Cout, 29)
+    let y_old = t_zeros(T * Cout)
+    let y_new = t_zeros(T * Cout)
+    _conv_im2col(x, w, b, y_old, T, Cin, Cout, K, dil)
+    _conv_direct(x, w, b, y_new, T, Cin, Cout, K, dil)
+    return _ce_maxdev(y_old, y_new, T * Cout)
+}
+
+fn main() {
+    println("clm_prod_conv_im2col_eq — F-OP7 forward conv im2col==direct byte-eq (CPU oracle)")
+    let d1 = _run_case(8, 4, 4, 3, 1)
+    let d2 = _run_case(8, 4, 4, 3, 2)
+    let d3 = _run_case(16, 6, 6, 3, 1)
+    let d4 = _run_case(12, 5, 7, 4, 2)   // Cin != Cout, K=4
+    let d5 = _run_case(10, 3, 5, 5, 3)   // K=5, dil=3 (wide dilation, more zero-pad seams)
+    println("  y max|Δ|  T8 C4 K3 d1 = " + to_string(d1))
+    println("  y max|Δ|  T8 C4 K3 d2 = " + to_string(d2))
+    println("  y max|Δ|  T16 C6 K3 d1 = " + to_string(d3))
+    println("  y max|Δ|  T12 C5x7 K4 d2 = " + to_string(d4))
+    println("  y max|Δ|  T10 C3x5 K5 d3 = " + to_string(d5))
+    let ok = (d1 == 0.0) && (d2 == 0.0) && (d3 == 0.0) && (d4 == 0.0) && (d5 == 0.0)
+    if ok {
+        println("F-OP7-CONV-IM2COL-EQ = 1")
+        println("PASS — im2col+matmul fwd conv == direct conv byte-eq (max|Δ|=0, all cases)")
+    } else {
+        println("F-OP7-CONV-IM2COL-EQ = 0")
+        println("FAIL — forward conv im2col path diverges from direct reference")
+    }
+}

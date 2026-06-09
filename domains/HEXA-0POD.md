@@ -110,6 +110,10 @@ loop targets what the consumer card + code can carry.
   aiden). Best: 24.93 TFLOP/s @1024 (1.13x off cuBLAS, was 1.15x) / 29.86 @2048 (1.02x). Verdict
   .verdicts/hexa-0pod/F-OP1B-SM120-PIPE.txt.
 
+- [ ] **OP-7 — byte-eq CPU oracle for a flame math identity (0-GPU)** — in the spirit of OP-2's
+  transpose-elim oracle, add a LOCAL `hexa run` (0-GPU) oracle that bit-exactly locks a deterministic
+  layout/re-association the flame trainer relies on, so a future refactor can't silently break determinism.
+
 ## deferred (0-pod follow-ups surfaced by the loop — self-feed)
 
 - **OP-2b — land the runtime.c hexa_forge_dispatch_matmul_t wrapper body + flip the trainer to the live
