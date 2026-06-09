@@ -80,6 +80,10 @@ let mut PWRS_SCAT: [float] = []          // reciprocal-grid scatter buffer
 let mut PWRS_ZIM: [float] = []           // zeroed imaginary buffer
 let mut PWRS_REAL: [float] = []          // real-space ifft3 result buffer
 let mut PWRS_RHOACC: [float] = []        // ρ(r) accumulator
+let mut PWRS_VRE: [float] = []           // Poisson/gradient spectral re buffer
+let mut PWRS_VIM: [float] = []           // Poisson/gradient spectral im buffer
+let mut PWRS_OUT: [float] = []           // generic real-space output buffer
+let mut PWRS_CP: [float] = []            // defensive-copy input buffer for fft3
 fn _rs_grid_zeroed(buf: [float], ntot: int) -> [float] {
     if len(buf) != ntot {
         let mut nb: [float] = []
@@ -260,14 +264,15 @@ fn _rs_grad_component(rho_re: [float], dir: int) -> [float] {
     //   transform overwrites the caller's array). Passing rho_re directly would
     //   destroy the density across successive gradient-component calls (the root of
     //   a spurious nonzero divergence on a uniform ρ). Copy before transforming.
-    let mut re_cp: [float] = []
-    let mut zim: [float] = []
+    PWRS_CP = _rs_grid_zeroed(PWRS_CP, ntot)               // reuse transient input copy
+    PWRS_ZIM = _rs_grid_zeroed(PWRS_ZIM, ntot)
     let mut q = 0
-    while q < ntot { re_cp.push(rho_re[q]) ; zim.push(0.0) ; q = q + 1 }
-    let spec = fft3(re_cp, zim, nx, ny, nz)               // ρ(G), interleaved 2N
+    while q < ntot { PWRS_CP[q] = rho_re[q] ; q = q + 1 }
+    let spec = fft3(PWRS_CP, PWRS_ZIM, nx, ny, nz)         // ρ(G), interleaved 2N
     if len(spec) != 2 * ntot { return [] }
-    // multiply each G by i·G_dir : (re,im) → (−G·im, +G·re).
-    let mut gre: [float] = [] ; let mut gim: [float] = []
+    // multiply each G by i·G_dir : (re,im) → (−G·im, +G·re). Reuse VRE/VIM (transient).
+    PWRS_VRE = _rs_grid_zeroed(PWRS_VRE, ntot)
+    PWRS_VIM = _rs_grid_zeroed(PWRS_VIM, ntot)
     let mut ix = 0
     while ix < nx {
         let mut iy = 0
@@ -286,16 +291,17 @@ fn _rs_grad_component(rho_re: [float], dir: int) -> [float] {
                 let lin = (ix * ny + iy) * nz + iz
                 let re = spec[lin * 2]
                 let im = spec[lin * 2 + 1]
-                gre.push(-1.0 * gd * im)                    // i·G·(re+i·im) real part
-                gim.push(gd * re)                           // imag part
+                PWRS_VRE[lin] = -1.0 * gd * im              // i·G·(re+i·im) real part
+                PWRS_VIM[lin] = gd * re                     // imag part
                 iz = iz + 1
             }
             iy = iy + 1
         }
         ix = ix + 1
     }
-    let back = ifft3(gre, gim, nx, ny, nz)
+    let back = ifft3(PWRS_VRE, PWRS_VIM, nx, ny, nz)
     if len(back) != 2 * ntot { return [] }
+    // the result is HELD by the caller (3 live components in vxc) → must be fresh.
     let mut out: [float] = []
     let mut p = 0
     while p < ntot { out.push(back[p * 2]) ; p = p + 1 }
@@ -420,32 +426,110 @@ pub fn qforge_vxc_pbe_3d(rho_r: [float], xc_mode: int) -> [float] {
 }
 
 // ── GROUND-STATE 3-D Hartree V_H(r) = 4π ρ(G)/|G|² (G≠0) on the pow2 cube ──────
-//   Reuses the verified G-space Poisson core (screening.hexa) on THIS module's
-//   pow2-padded grid + reciprocal basis. ρ(r) physical → V_H(r) physical. [] bad.
+//   Same closed-form G-space Poisson as screening.hexa's verified core, but using
+//   THIS module's reusable scratch buffers (the jetsam guard — the per-SCF-iter
+//   churn of the allocating qforge_vhartree_from_rho was a SIGKILL/137 OOM source).
+//   ρ(r) physical → V_H(r) physical (real part). G=0 → 0 (neutral gauge). [] bad.
 pub fn qforge_vh_3d(rho_r: [float]) -> [float] {
-    let ntot = PWRS_NX * PWRS_NY * PWRS_NZ
+    let nx = PWRS_NX ; let ny = PWRS_NY ; let nz = PWRS_NZ
+    let ntot = nx * ny * nz
     if len(rho_r) != ntot { return [] }
-    return qforge_vhartree_from_rho(rho_r, PWRS_NX, PWRS_NY, PWRS_NZ, PWRS_B1, PWRS_B2, PWRS_B3)
+    let four_pi = 4.0 * _RS_PI
+    PWRS_CP = _rs_grid_zeroed(PWRS_CP, ntot)
+    PWRS_ZIM = _rs_grid_zeroed(PWRS_ZIM, ntot)
+    let mut q = 0
+    while q < ntot { PWRS_CP[q] = rho_r[q] ; q = q + 1 }
+    let spec = fft3(PWRS_CP, PWRS_ZIM, nx, ny, nz)         // ρ(G), interleaved 2N
+    if len(spec) != 2 * ntot { return [] }
+    PWRS_VRE = _rs_grid_zeroed(PWRS_VRE, ntot)
+    PWRS_VIM = _rs_grid_zeroed(PWRS_VIM, ntot)
+    let mut ix = 0
+    while ix < nx {
+        let mut iy = 0
+        while iy < ny {
+            let mut iz = 0
+            while iz < nz {
+                let h = _rs_freq(ix, nx)
+                let k = _rs_freq(iy, ny)
+                let l = _rs_freq(iz, nz)
+                let gx = to_float(h) * PWRS_B1[0] + to_float(k) * PWRS_B2[0] + to_float(l) * PWRS_B3[0]
+                let gy = to_float(h) * PWRS_B1[1] + to_float(k) * PWRS_B2[1] + to_float(l) * PWRS_B3[1]
+                let gz = to_float(h) * PWRS_B1[2] + to_float(k) * PWRS_B2[2] + to_float(l) * PWRS_B3[2]
+                let g2 = gx * gx + gy * gy + gz * gz
+                let lin = (ix * ny + iy) * nz + iz
+                if g2 < 1.0e-12 {
+                    PWRS_VRE[lin] = 0.0 ; PWRS_VIM[lin] = 0.0    // G=0 gauge
+                } else {
+                    let f = four_pi / g2
+                    PWRS_VRE[lin] = f * spec[lin * 2]
+                    PWRS_VIM[lin] = f * spec[lin * 2 + 1]
+                }
+                iz = iz + 1
+            }
+            iy = iy + 1
+        }
+        ix = ix + 1
+    }
+    let back = ifft3(PWRS_VRE, PWRS_VIM, nx, ny, nz)
+    if len(back) != 2 * ntot { return [] }
+    PWRS_OUT = _rs_grid_zeroed(PWRS_OUT, ntot)             // V_H consumed before next vh call
+    let mut p = 0
+    while p < ntot { PWRS_OUT[p] = back[p * 2] ; p = p + 1 }
+    return PWRS_OUT
 }
 
-// ── sample a real-space cube field V(r) back onto the PW-G diagonal vscr_diag ──
-//   The assembler accepts a length-n G-diagonal local screening term. The physical
-//   diagonal element for coefficient i is the cube value V(r) sampled at the grid
-//   point the coefficient's Miller index maps to — i.e. the LOCAL real-space value
-//   seen by that PW component (consistent with the assembler's G-diagonal contract
-//   that scf_pw.hexa already uses). Returns length-n vscr_diag. [] on malformed.
+// ── project a real-space cube field V(r) onto the PW-G diagonal vscr_diag ───────
+//   The assembler (assembler.hexa) adds vscr_diag[a] ONLY to the diagonal H[a][a]
+//   (it discards off-diagonal screening). For a LOCAL (multiplicative) potential
+//   V(r), the exact diagonal matrix element is
+//       ⟨G_a|V|G_a⟩ = (1/Ω)∫ V(r)·e^{-iG_a·r}·e^{+iG_a·r} dr = (1/Ω)∫ V(r) dr = V̄,
+//   the SPATIAL AVERAGE = V(G=0) — IDENTICAL for every coefficient a. The per-G
+//   variation of a local potential lives entirely in the OFF-diagonal V(G_a−G_b),
+//   which this diagonal-only assembler cannot carry.
 //
-//   d6 NOTE: the assembler's G-diagonal can only carry a LOCAL (multiplicative)
-//   screening — the full V_scr(r)·ψ(r) is a real-space product, exactly diagonal
-//   in r. We hand it the per-coefficient real-space sample, which is the faithful
-//   diagonal the assembler's vscr_diag was built to receive (scf_pw.hexa:33-34).
+//   d6 HONEST: this means a TRUE 3-D real-space V_scr(r) contributes ONLY its
+//   spatial average to the diagonal the assembler accepts — the 3-D structure of
+//   V_xc[ρ(r)] (the whole point of the rebuild) enters the KS operator ONLY through
+//   the off-diagonal, which the current diagonal-only assembler discards. We return
+//   the correct V̄ (so the SCF converges to the right diagonal-screening fixed point)
+//   and surface the off-diagonal RMS as a witness (qforge_v3d_offdiag_rms) so the
+//   measurement reports HOW MUCH structure the diagonal assembler is dropping.
+let mut PWRS_LAST_VBAR: float = 0.0
+pub fn qforge_v3d_vbar() -> float { return PWRS_LAST_VBAR }
 pub fn qforge_vscr_diag_from_v3d(v3d: [float]) -> [float] {
     let ntot = PWRS_NX * PWRS_NY * PWRS_NZ
     if !PWRS_ON || len(v3d) != ntot { return [] }
+    // V̄ = (1/Ntot) Σ V(r)  (the G=0 / spatial-average diagonal of a local potential).
+    let mut s = 0.0
+    let mut t = 0
+    while t < ntot { s = s + v3d[t] ; t = t + 1 }
+    let vbar = s / to_float(ntot)
+    PWRS_LAST_VBAR = vbar
     let mut out: [float] = []
     let mut i = 0
-    while i < PWRS_N { out.push(v3d[PWRS_LIN[i]]) ; i = i + 1 }
+    while i < PWRS_N { out.push(vbar) ; i = i + 1 }
     return out
+}
+
+// ── off-diagonal screening RMS the diagonal-only assembler DROPS (d6 witness) ──
+//   ‖V(r) − V̄‖ / |V̄| — the fraction of the real-space screening that is NOT the
+//   spatial average (i.e. the off-diagonal V(G≠0) structure the assembler discards).
+//   A large value means the 3-D V_xc structure cannot reach the KS operator through
+//   the diagonal — the honest architectural limit named in the measurement.
+pub fn qforge_v3d_offdiag_rms(v3d: [float]) -> float {
+    let ntot = PWRS_NX * PWRS_NY * PWRS_NZ
+    if len(v3d) != ntot { return 0.0 }
+    let mut s = 0.0
+    let mut t = 0
+    while t < ntot { s = s + v3d[t] ; t = t + 1 }
+    let vbar = s / to_float(ntot)
+    let mut ss = 0.0
+    t = 0
+    while t < ntot { let d = v3d[t] - vbar ; ss = ss + d * d ; t = t + 1 }
+    let rms = sqrt(ss / to_float(ntot))
+    let avbar = if vbar >= 0.0 { vbar } else { -vbar }
+    if avbar < 1.0e-30 { return 0.0 }
+    return rms / avbar
 }
 
 // ── ONE-CALL: 3-D ρ(r) → V_scr(G) diagonal (V_H + V_xc^PBE) for the SCF closure ─
