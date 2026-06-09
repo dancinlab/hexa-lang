@@ -1,0 +1,112 @@
+F-OP24-TF32-LIVEWIRE — wire OP-20's deterministic TF32 fast-mode into the live forge GEMM dispatch
+=================================================================================================
+STATUS: GREEN (dispatch-unit) — the OP-20-proven deterministic TF32 fast-mode is now an
+        env-gated (HEXA_TF32_FASTMODE) OPT-IN branch in the LIVE forge projection-GEMM
+        dispatch _hx_cuda_farr_matmul_gpu (the path the real CLMConvMoE trainer rides).
+        FP64 cublasDgemm stays the DEFAULT and is byte-identical when the flag is off.
+        Verified on aiden RTX 5070 at the dispatch-unit level: 4/4 cells PASS all 3 gates.
+        Full-trainer end-to-end measurement is HONESTLY deferred to the clm_prod_gpu build
+        (OP-2b-class) — the exact remaining integration step is named below.
+
+HARDWARE: aiden RTX 5070 (sm_120 / cc12.0, 12227 MiB), driver 580.159.04, CUDA 13.0.
+          FREE sidecar pool — NO vast, NO pod, NO leak ($0). GPU idle-guarded (util<5% &
+          mem<800MiB) before the timed runs (fired idle on first check). Post-run the card
+          read 42% util (a PARALLEL agent sharing it) but MY buffers freed back to 2 MiB,
+          and /tmp/op24* was removed — no residue left on aiden.
+
+------------------------------------------------------------------------------------------
+THE WIRE (durable landing — tracked SSOT, NOT a frozen seed)
+------------------------------------------------------------------------------------------
+DISPATCH SITE: self/cuda/runtime_cuda_emit.hexa, function _hx_cuda_farr_matmul_gpu
+  (the live forge row-major projection GEMM C[M,N]=A[M,K].B[K,N] the trainer's
+  conv*_via_forge / forge_dispatch_matmul calls). This is the SAME function OP-2 touched
+  for transpose-elim; the existing default is cublasDgemm (FP64), with HEXA_OWN_GEMM the
+  only prior opt-in (swaps in the naive _hx_k_gemm device kernel).
+
+  runtime_cuda_emit.hexa is a git-TRACKED .hexa emitter (it emits the CUDA runtime C);
+  it is NOT in tool/restore_frozen_seeds' FROZEN_SEEDS set (those are self/runtime.c + its
+  .c #include fragments + hexa_cc.c). So the durable landing is the ordinary tracked-source
+  path (branch -> commit -> PR), exactly like OP-2's runtime_cuda_emit.hexa slice — no
+  frozen-seed patch needed.
+
+ENV-GATED TF32 BRANCH (added, opt-in; FP64 path byte-for-byte UNCHANGED):
+  The forge farr device buffers are FP64 (double). The TF32 branch:
+    1. casts A,B FP64 -> fp32 into SCRATCH buffers (_hx_k_cast_d2f) — NEVER mutates the
+       FP64 inputs, so with HEXA_TF32_FASTMODE unset the default Dgemm path is identical;
+    2. runs cublasGemmEx(CUBLAS_COMPUTE_32F_FAST_TF32, CUBLAS_GEMM_DEFAULT_TENSOR_OP) on a
+       SEPARATE lazy handle g_cublas_tf32 pinned to CUBLAS_PEDANTIC_MATH (OP-20's portable
+       self-byte-eq ship recommendation — pedantic costs ~0 and GUARANTEES determinism vs
+       relying on the default tensor-op mode happening to be reproducible);
+    3. casts the fp32 result up -> FP64 C buffer (_hx_k_cast_f2d).
+  Same row-major->col-major arg layout as the default Dgemm (GemmEx(N,N, m=N,n=M,k=K,
+  Bf,N, Af,K, Cf,N)). Dispatch structure: if(HEXA_OWN_GEMM){..} else if(_forge_tf32_fastmode())
+  {tf32} else {cublasDgemm}. The cast is a fixed-order elementwise map (no reduction, no
+  atomics) so it adds no determinism hazard; the only determinism question is the cuBLAS
+  TF32 GEMM, which PEDANTIC pins. g_cublas (the FP64 handle) is untouched and stays
+  fp64-strict for the default path.
+
+------------------------------------------------------------------------------------------
+DISPATCH-UNIT VERIFY (aiden 5070, verbatim) — op24_tf32_livewire_dispatch.cu replays the
+EXACT wired codepath in isolation (same FP64 buffers, cast kernels, PEDANTIC handle, arg
+layout, COMPUTE_32F_FAST_TF32) so the result is the LIVE dispatch logic, not the OP-20
+standalone harness (which kept fp32 storage end-to-end). M=B*T rows (T=256), K=N=D, iters=50.
+------------------------------------------------------------------------------------------
+[RESULT] OP-24 LIVEWIRE M=256  K=768  N=768   fp64ByteId=Y  tf32SelfByteEq=Y  relRMSvsFP64=2.940e-04(W14:Y)  FP64/TF32=29.900x  GATES=PASS
+[RESULT] OP-24 LIVEWIRE M=2048 K=768  N=768   fp64ByteId=Y  tf32SelfByteEq=Y  relRMSvsFP64=2.938e-04(W14:Y)  FP64/TF32=51.014x  GATES=PASS
+[RESULT] OP-24 LIVEWIRE M=256  K=1536 N=1536  fp64ByteId=Y  tf32SelfByteEq=Y  relRMSvsFP64=2.944e-04(W14:Y)  FP64/TF32=41.290x  GATES=PASS
+[RESULT] OP-24 LIVEWIRE M=2048 K=1536 N=1536  fp64ByteId=Y  tf32SelfByteEq=Y  relRMSvsFP64=2.940e-04(W14:Y)  FP64/TF32=46.936x  GATES=PASS
+(full raw incl. nvidia-smi/nvcc/build/idle-guard at tool/bench/op24_5070_raw.log)
+
+GATE-A  FP64-default byte-identical run-to-run : max|delta| = 0.000e+00 ALL 4 cells. The
+        opt-in TF32 branch does NOT perturb the default — the FP64 Dgemm dispatch is bitwise
+        stable before/after the wire (it is the same call, untouched).
+GATE-B  TF32-live self-byte-eq run-to-run      : max|delta| = 0.000e+00 ALL 4 cells. The
+        PEDANTIC-pinned cublasGemmEx TF32 path through the cast-in/GemmEx/cast-out live
+        logic is run-to-run deterministic (the OP-20 self-byte-eq identity carries through
+        the live FP64-in/FP64-out wire).
+GATE-C  TF32 W14-tol vs FP64                    : rel-RMS ~2.94e-04 ALL 4 cells — ~34x INSIDE
+        the W14 1e-2 contract.
+SPEED   FP64/TF32 through the live dispatch path : 29.9x - 51.0x. Decisively past the ~3x cap.
+
+------------------------------------------------------------------------------------------
+HONEST FRAMING (g5)
+------------------------------------------------------------------------------------------
+1. SCOPE = dispatch-unit, NOT full-trainer. This verifies the WIRED dispatch logic
+   (_hx_cuda_gemm_tf32_dev's cast+GemmEx+cast, the PEDANTIC handle, the FP64-default
+   no-perturb) in isolation on the real hardware. It does NOT run the full CLMConvMoE
+   trainer with HEXA_TF32_FASTMODE=1 end-to-end. That needs the full clm_prod_gpu GPU
+   build (the project_clmprod_gpu_build_seed_drift recipe: fresh CUDA pod / aiden, nvcc
+   -DHEXA_CUDA, -lcuda, rebuild .o on-host), which is the same OP-2b-class deferral OP-2's
+   transpose-elim wire took. NO full-trainer step/s number is claimed here.
+   EXACT REMAINING INTEGRATION STEP (OP-2b-class): build clm_prod_gpu from a frozen-seed
+   bundle on aiden with -DHEXA_CUDA so _hx_cuda_farr_matmul_gpu's TF32 branch is live, then
+   run the CLMConvMoE trainer once with HEXA_TF32_FASTMODE=1 vs unset and report (i) loss-
+   path self-byte-eq run-to-run (GATE-B at trainer scope, expected from OP-23's N-step
+   result) and (ii) wall step/s ratio (the live-path speedup diluted by the non-GEMM glue
+   the trainer also runs — conv im2col, GN/gelu valley, AdamW; expect LESS than the GEMM-
+   only 30-51x, closer to OP-20's ~4.2x @B=1 once the elementwise glue is in the loop).
+
+2. The rel-RMS here (~2.9e-4) is the RAW SINGLE-GEMM output rel-RMS, NOT OP-20's ~1.1e-6.
+   They measure different things and BOTH pass: OP-20 reported rel-RMS of the post-AdamW
+   WEIGHT delta (where the LR=1e-3 update shrinks the GEMM error by ~3 orders), whereas
+   this unit measures the GEMM output C directly (the worst-case, pre-update number).
+   2.9e-4 is the honest raw-GEMM TF32-vs-FP64 error and is still ~34x inside W14 1e-2.
+
+3. The 30-51x GEMM-only speedup OVERSTATES the trainer step speedup for two reasons, both
+   already flagged in OP-20: (a) the 5070's FP64 is ~1/64 of its FP32 rate, so the FP64
+   lane is artificially crippled on this consumer card (a datacenter card with ~1/2 FP64
+   would show a much smaller ratio); (b) this is GEMM-isolated — no elementwise/glue dilution.
+   The card-robust, trainer-relevant signal remains OP-20's B=1 latency-bound ~4.2x. The
+   honest headline is "the wire carries OP-20's >3x uncap into the live dispatch", not "30-51x".
+
+4. PEDANTIC was PINNED (not optional) on the TF32 handle. OP-20 found the DEFAULT tensor-op
+   mode was already self-byte-eq on the 5070, but recommended PEDANTIC as the PORTABLE ship
+   guarantee (cuBLAS split-K algo selection is shape/version/GPU-dependent). GATE-B=0 here
+   confirms PEDANTIC keeps the live wire deterministic.
+
+VERDICT: GREEN at dispatch-unit. OP-20's deterministic TF32 fast-mode is wired into the live
+forge GEMM dispatch as an env-gated (HEXA_TF32_FASTMODE) opt-in, FP64 default byte-identical,
+TF32 branch self-byte-eq (PEDANTIC-pinned) + W14-tol vs FP64 + >3x (30-51x GEMM-only) faster,
+verified on the FREE aiden 5070 ($0, no vast/pod/leak). Durable landing = the tracked
+runtime_cuda_emit.hexa SSOT (no frozen-seed patch needed). Full-trainer end-to-end is the
+named OP-2b-class clm_prod_gpu-build follow-up; no full-trainer measurement is claimed.
