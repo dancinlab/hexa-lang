@@ -1,0 +1,92 @@
+════════════════════════════════════════════════════════════════════════════
+F-OP11-CE-SOFTMAX-ORACLE — flame CE loss + softmax-gradient identity
+HEXA-0POD OP-11 · CPU-LOCAL byte-eq ORACLE · 0-GPU (`hexa run`) · $0
+════════════════════════════════════════════════════════════════════════════
+
+IDENTITIES LOCKED
+  The flame CLMConvMoE training step's LOSS path — the flame_h100_h200_closeout-
+  flagged "CE/softmax-grad host glue" — runs in TWO production functions, and the
+  subtle determinism hazard this oracle locks is that they use DIFFERENT exp
+  implementations (a refactor that "unifies the exp" would silently break byte-eq):
+
+  (A) BACKWARD — clm_ce_grad (clm_prod.hexa:919): the well-known CE+softmax fused
+      gradient simplification
+          dL/dlogits[t,v] = ( softmax(logits[t,:])[v] − [v==tgt_t] ) / T
+      computed per position with per-row max-subtraction, a v-ASCENDING sequential
+      exp-sum denominator, p = exp(logit−mx)/sm, write p·invT for all v, THEN
+      subtract invT at the single target index. EXP = the libm `exp` BUILTIN
+      (clm_prod.hexa:696 pins "device exp() = libm → bit-exact to the host
+      clm_ce_grad (max|Δ|=0)").
+
+  (B) FORWARD — nn_ce_loss_allpos (nn_lib.hexa:957): the scalar mean NLL
+          L = (1/T) Σ_t  −ln( softmax(logits[t,:])[tgt_t] )
+      per-row max-subtraction, v-ASCENDING sequential exp-sum denominator, p_t =
+      exp/tot clamped ≥1e-6, accumulate −ln(p_t) over t in t-ASCENDING order, /T.
+      EXP = `dt_exp` and LN = `dt_ln` — the HAND-ROLLED flame_math.hexa scaled-
+      Taylor (NOT libm, and NOT the MoE _moe_exp). DIFFERENT exp than path (A).
+
+  The oracle proves, for EACH path, that the production form == a DEFINITIONAL
+  reference (materialize the full normalized softmax row first → then form the
+  gradient / read the target prob), with every float op replaying the production's
+  EXACT exp impl and EXACT reduction order ⇒ max|Δ|=0.
+
+THE ORACLE (stdlib/flame/clm_prod_ce_softmax_grad_eq.hexa, `hexa run`, 0-GPU)
+  _ce_grad_prod  — byte-identical to clm_ce_grad (inline fused, libm exp).
+  _ce_grad_ref   — definitional: full softmax row, then (softmax−onehot)/T written
+                   in the PRODUCTION op order (scale-then-subtract at target).
+  _ce_loss_prod  — byte-identical to nn_ce_loss_allpos (dt_exp/dt_ln, fused).
+  _ce_loss_ref   — definitional: full normalized softmax row, read p[tgt], same
+                   ≥1e-6 clamp, same dt_ln, same t-ascending accumulation.
+  LCG deterministic fixtures (no rng); 6 shapes; targets are valid class indices.
+
+HONEST FINDING (g5) — a REAL associativity gap, documented + resolved (NOT faked)
+  The TARGET INDEX of the backward grad is float-sensitive. The production
+  (clm_ce_grad:933-937) writes (p·invT) for every v, THEN subtracts invT at tgt →
+  result (p_tgt·invT) − invT. An algebraically-equal "fused" reference
+  (p_tgt − 1)·invT is float-DIFFERENT: a multiply-vs-subtract ordering gap. With
+  the fused reference the oracle FIRST RUN showed grad max|Δ| = 1.38778e-17 at the
+  T12/V7 case (all other cases 0). The fix is NOT a tolerance — the reference now
+  replays the EXACT production op order (write p·invT for all v, then −invT at
+  tgt), recovering genuine max|Δ| = 0 everywhere. The production order is the SSOT;
+  the target subtraction must NOT be algebraically refolded.
+
+CANONICAL ORDER (the determinism contract this locks — SSOT)
+  BWD (clm_ce_grad)      : exp = libm `exp`; per-row max-subtraction ON; denominator
+                           summed v-ASCENDING (sequential, no tree); scale invT=1/T;
+                           grad = p·invT for all v, THEN dlogits[tgt] −= invT.
+  FWD (nn_ce_loss_allpos): exp = `dt_exp`, ln = `dt_ln` (flame_math Taylor); per-row
+                           max-subtraction ON; denom v-ASCENDING; p_t clamped ≥1e-6;
+                           loss summed over t t-ASCENDING; mean = total / T.
+  A future refactor that tree-reduces the denominator, drops the max-subtraction,
+  swaps exp impls (libm↔Taylor↔_moe_exp), or refolds the target subtraction would
+  trip this oracle.
+
+`hexa run` PASS (verbatim)
+────────────────────────────────────────────────────────────────────────────
+clm_prod_ce_softmax_grad_eq — F-OP11 CE+softmax fused-grad + loss byte-eq (CPU oracle)
+  grad max|Δ|  T8  V16  = 0.0
+  grad max|Δ|  T8  V64  = 0.0
+  grad max|Δ|  T16 V32  = 0.0
+  grad max|Δ|  T4  V256 = 0.0
+  grad max|Δ|  T1  V50  = 0.0
+  grad max|Δ|  T12 V7   = 0.0
+  loss |Δ|     T8  V16  = 0.0
+  loss |Δ|     T8  V64  = 0.0
+  loss |Δ|     T16 V32  = 0.0
+  loss |Δ|     T4  V256 = 0.0
+  loss |Δ|     T1  V50  = 0.0
+  loss |Δ|     T12 V7   = 0.0
+F-OP11-CE-SOFTMAX-ORACLE = 1
+PASS — CE fused-grad (softmax−onehot)/T AND fwd mean-NLL byte-eq (max|Δ|=0, all cases)
+────────────────────────────────────────────────────────────────────────────
+
+  max|Δ| = 0.0 (genuine, all 12 sub-cases) after matching the production op order.
+  eps = 0 (no documented-eps case remains; the 1.39e-17 target-index gap was a
+  reference op-order bug, resolved to exact, NOT a kept tolerance).
+
+  Behavior-preserving: NO trainer logic changed (oracle/verification addition only).
+  Runs $0 on any CPU (mac / aiden) — no GPU, no pool, no vast.
+
+VERDICT : 🟢 GREEN — both CE identities byte-eq, max|Δ|=0. The flame CE loss +
+          softmax-gradient determinism contract is now oracle-locked on CPU.
+════════════════════════════════════════════════════════════════════════════

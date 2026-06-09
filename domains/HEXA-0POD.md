@@ -209,6 +209,28 @@ loop targets what the consumer card + code can carry.
   (characterization addition only). Oracle stdlib/flame/clm_conv_window_seam_eq.hexa · verdict
   .verdicts/hexa-0pod/F-OP10-CONV-SEAM-ORACLE.txt.
 
+<!-- ANCHOR:OP-11-CE-SOFTMAX-GRAD (unique anchor — OP-10 edits a different anchor) -->
+- [x] **OP-11 — byte-eq CPU oracle for the CE loss + softmax-gradient identity (0-GPU)** — continuing the
+  OP-2/OP-7/OP-8/OP-9 determinism-oracle series, added a LOCAL `hexa run` (0-GPU) oracle that bit-exactly locks
+  the flame CLMConvMoE LOSS path — the flame_h100_h200_closeout-flagged "CE/softmax-grad host glue". Locks TWO
+  independent identities, each replaying its OWN production exp impl (the subtle hazard: the two CE entry points
+  use DIFFERENT exp — a refactor that "unifies" them would silently break byte-eq):
+  (A) the CE+softmax FUSED-GRADIENT identity dL/dlogits == (softmax(logits) − onehot(target))/T — production
+  clm_ce_grad (clm_prod.hexa:919, libm `exp`, per-row max-sub, v-ascending denom, p·invT then −invT at target)
+  == a definitional reference that materializes the full softmax row then forms (softmax−onehot)/T. max|Δ|=0
+  across 6 shapes (V=7..256 CLM-scale, varied T, T=1 edge). (B) the FORWARD mean-NLL loss scalar — production
+  nn_ce_loss_allpos (nn_lib.hexa:957, `dt_exp`/`dt_ln` flame_math Taylor — NOT libm, NOT _moe_exp; p_t clamp
+  ≥1e-6; t-ascending sum) == a definitional reference materializing the normalized row then reading p[tgt].
+  |Δ|=0 across the same 6 shapes. HONEST (g5) — REAL associativity finding, documented + resolved: the target
+  index is float-sensitive — production writes (p·invT) for all v THEN subtracts invT at tgt, giving
+  (p_tgt·invT)−invT, which is float-DIFFERENT from a fused (p_tgt−1)·invT (observed max|Δ|≈1.39e-17 at T12/V7
+  before the fix). The oracle's reference replays the EXACT production op order (scale-then-subtract, NOT
+  algebraically refold) ⇒ genuine max|Δ|=0, no eps. CANONICAL ORDER (SSOT): BWD = libm exp, per-row max-sub,
+  v-ascending denom, grad=p/T then tgt−=1/T (clm_prod.hexa:933-937 = SSOT); FWD = dt_exp/dt_ln, v-ascending
+  denom, ≥1e-6 clamp, t-ascending loss sum, mean/T. Behavior-preserving: NO trainer logic changed (oracle
+  addition only). Oracle stdlib/flame/clm_prod_ce_softmax_grad_eq.hexa · verdict
+  .verdicts/hexa-0pod/F-OP11-CE-SOFTMAX-ORACLE.txt.
+
 ## deferred (0-pod follow-ups surfaced by the loop — self-feed)
 
 - **OP-2b — land the runtime.c hexa_forge_dispatch_matmul_t wrapper body + flip the trainer to the live
