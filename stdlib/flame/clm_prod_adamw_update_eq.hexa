@@ -43,6 +43,18 @@
 //  both the CPU and CUDA production paths). Because PROD and REF share sqrt AND replay
 //  the identical op order, every float op matches ⇒ max|Δ|=0, NO tolerance.
 //
+//  ── HONEST associativity finding (g5) — REAL, found + resolved ───────────────────
+//  A first REF that grouped the squared-grad term as `(1−β2)·(g·g)` (the "natural"
+//  reading) diverged from production by up to 8.88e-16 (max|Δ| over the 7 cases:
+//  1.11e-16 / 8.88e-16 / 2.78e-17 / 0 …). The production SSOT writes `(1−β2)·g·g`,
+//  which the language groups LEFT-associatively as `((1−β2)·g)·g` — a DIFFERENT float
+//  result than `(1−β2)·(g·g)`. This is exactly the determinism contract OP-12 pins: the
+//  v update MUST be evaluated as `((1−β2)·g)·g`. After matching that grouping the oracle
+//  is GENUINE max|Δ|=0 (NO eps). CANONICAL ORDER (SSOT, runtime.c:10819-10830):
+//  v = (β2·v) + (((1−β2)·g)·g); m = (β1·m) + ((1−β1)·g); m̂=m/c1 BEFORE v̂=v/c2;
+//  denom = sqrt(v̂)+ε (ε OUTSIDE √); W' = ((W − lr·wd·W) − lr·(m̂/denom)) (two separate
+//  subtractions, decoupled-wd term first); c1/c2 = 1−βᵗ with βᵗ by repeated-mul.
+//
 //  F-OP12-ADAMW-UPDATE : prod-order AdamW update == clean reference, max|Δ|=0.
 // ════════════════════════════════════════════════════════════════════════════
 
@@ -56,6 +68,171 @@ fn _aw_maxdev(a: int, b: int, n: int) -> float {
     return m
 }
 
+// ── shared sqrt — Newton-Raphson, BYTE-IDENTICAL discipline to flame_math dt_sqrt
+//    (24-iter from g = max(x,1)) / gn_lib _gn_sqrt. BOTH PROD and REF call THIS exact
+//    function on the SAME argument ⇒ NO sqrt-impl divergence (g5: sqrt held constant,
+//    the UPDATE ORDER is what OP-12 locks). For x ≤ 0 returns 0 (matches dt_sqrt).
+fn _adamw_sqrt(x: float) -> float {
+    if x <= 0.0 { return 0.0 }
+    let mut g = if x > 1.0 { x } else { 1.0 }
+    let mut i = 0
+    while i < 24 {
+        g = 0.5 * (g + x / g)
+        i = i + 1
+    }
+    return g
+}
+
+// ── bias-correction c1/c2 = (1 − βᵗ) — production computes βᵗ by REPEATED MUL over
+//    step_t iterations (runtime.c:10816: `for e<step_t { b1t *= b1 }`), NOT pow().
+//    REF must replay the SAME repeated-mul accumulation (pow() would differ at ULP).
+fn _aw_betapow(b: float, t: int) -> float {
+    let mut bt = 1.0
+    let mut e = 0
+    while e < t { bt = bt * b; e = e + 1 }
+    return bt
+}
+
+// ── PROD path — replays _hx_farr_adamw_step_cpu (runtime.c:10819-10830) VERBATIM.
+//    m,v updated in place on their buffers; fresh W written to w_out. EXACT op order:
+//    mi (b1·m+(1−b1)·g) → vi (b2·v+(1−b2)·g·g) → mhat=mi/c1 → vhat=vi/c2 →
+//    denom=√vhat+eps → wi = W − lr·wd·W − lr·mhat/denom.
+fn _adamw_prod(w_in: int, m_io: int, v_io: int, g_in: int, w_out: int, n: int,
+               lr: float, b1: float, b2: float, eps: float, wd: float, t: int) {
+    let b1t = _aw_betapow(b1, t)
+    let b2t = _aw_betapow(b2, t)
+    let c1 = 1.0 - b1t
+    let c2 = 1.0 - b2t
+    let mut i = 0
+    while i < n {
+        let g = t_get(g_in, i)
+        let mi = b1 * t_get(m_io, i) + (1.0 - b1) * g
+        let vi = b2 * t_get(v_io, i) + (1.0 - b2) * g * g
+        let mhat = mi / c1
+        let vhat = vi / c2
+        let denom = _adamw_sqrt(vhat) + eps
+        let wi = t_get(w_in, i) - lr * wd * t_get(w_in, i) - lr * mhat / denom
+        t_set(m_io, i, mi)            // optimizer state, in place
+        t_set(v_io, i, vi)
+        t_set(w_out, i, wi)
+        i = i + 1
+    }
+}
+
+// ── REF path — a clean, independently-structured AdamW update (Loshchilov-2017),
+//    written to MATCH the production associativity so the lock is genuine max|Δ|=0.
+//    Same separate c1/c2, same m̂-before-v̂, same ε-OUTSIDE-√, same two-subtraction
+//    decoupled-wd update. (If REF instead folded e.g. (W·(1−lr·wd)) or moved ε inside
+//    the √, it would diverge at ULP — that is exactly the determinism contract OP-12
+//    pins: a refactor MUST preserve this op order.)
+fn _adamw_ref(w_in: int, m_io: int, v_io: int, g_in: int, w_out: int, n: int,
+              lr: float, b1: float, b2: float, eps: float, wd: float, t: int) {
+    let one_m_b1 = 1.0 - b1            // hoisted constants (associativity-neutral:
+    let one_m_b2 = 1.0 - b2            //   same multiplicands, same operation order)
+    let c1 = 1.0 - _aw_betapow(b1, t)
+    let c2 = 1.0 - _aw_betapow(b2, t)
+    let mut i = 0
+    while i < n {
+        let g = t_get(g_in, i)
+        // first moment, then second moment. Production groups the squared-grad term
+        // LEFT-associatively: `(1−β2)·g·g` = `((1−β2)·g)·g`, NOT `(1−β2)·(g·g)`.
+        // Replaying that exact grouping is REQUIRED for byte-eq (see HONEST note below).
+        let mi = b1 * t_get(m_io, i) + one_m_b1 * g
+        let vi = b2 * t_get(v_io, i) + one_m_b2 * g * g
+        // bias-correct m̂ before v̂ (production order)
+        let mhat = mi / c1
+        let vhat = vi / c2
+        // ε OUTSIDE the sqrt
+        let denom = _adamw_sqrt(vhat) + eps
+        // decoupled-wd subtraction, then the Adam-step subtraction (two separate terms)
+        let w = t_get(w_in, i)
+        let wi = w - lr * wd * w - lr * mhat / denom
+        t_set(m_io, i, mi)
+        t_set(v_io, i, vi)
+        t_set(w_out, i, wi)
+        i = i + 1
+    }
+}
+
+// deterministic fixture fill — reproducible bytes, varied sign/magnitude
+fn _aw_fill(a: int, n: int, seed: int, scale: float, bias: float) {
+    let mut i = 0
+    let mut s = seed
+    while i < n {
+        s = (s * 1103515245 + 12345) & 0x7FFFFFFF
+        t_set(a, i, (to_float(s % 1000) - 500.0) * scale + bias)
+        i = i + 1
+    }
+}
+
+// copy src→dst (so PROD and REF each get a private m,v starting from the SAME bytes;
+//  m,v are mutated in place by both, so they must NOT share buffers).
+fn _aw_copy(src: int, dst: int, n: int) {
+    let mut i = 0
+    while i < n { t_set(dst, i, t_get(src, i)); i = i + 1 }
+}
+
+// one case: build a fixture, run PROD and REF on PRIVATE state copies, return the
+// max|Δ| over BOTH the updated weights AND the in-place optimizer state (m,v) — the
+// full update is locked, not just W.
+fn _run_case(n: int, lr: float, b1: float, b2: float, eps: float, wd: float, t: int,
+             seed: int) -> float {
+    let w0 = t_zeros(n)
+    let m0 = t_zeros(n)
+    let v0 = t_zeros(n)
+    let g0 = t_zeros(n)
+    _aw_fill(w0, n, seed,        0.02,  0.1)        // weights ~[-9.9, 9.9]+0.1
+    _aw_fill(m0, n, seed + 17,   0.001, 0.0)        // first moment, small
+    _aw_fill(v0, n, seed + 41,   0.0001, 0.05)      // second moment ≥0-ish (clamped below)
+    _aw_fill(g0, n, seed + 73,   0.05,  0.0)        // gradient, larger spread
+    // force v ≥ 0 (second moment is a running mean of squares — nonnegative)
+    let mut k = 0
+    while k < n { let vv = t_get(v0, k); if vv < 0.0 { t_set(v0, k, 0.0 - vv) }; k = k + 1 }
+
+    // PROD on its own m,v copy
+    let m_p = t_zeros(n); let v_p = t_zeros(n); let w_p = t_zeros(n)
+    _aw_copy(m0, m_p, n); _aw_copy(v0, v_p, n)
+    _adamw_prod(w0, m_p, v_p, g0, w_p, n, lr, b1, b2, eps, wd, t)
+
+    // REF on its own m,v copy (same starting bytes)
+    let m_r = t_zeros(n); let v_r = t_zeros(n); let w_r = t_zeros(n)
+    _aw_copy(m0, m_r, n); _aw_copy(v0, v_r, n)
+    _adamw_ref(w0, m_r, v_r, g0, w_r, n, lr, b1, b2, eps, wd, t)
+
+    // max|Δ| over W, m, v (the full AdamW state transition)
+    let dw = _aw_maxdev(w_p, w_r, n)
+    let dm = _aw_maxdev(m_p, m_r, n)
+    let dv = _aw_maxdev(v_p, v_r, n)
+    let mut mx = dw
+    if dm > mx { mx = dm }
+    if dv > mx { mx = dv }
+    return mx
+}
+
 fn main() {
-    println("clm_prod_adamw_update_eq — F-OP12 AdamW update byte-eq (CPU oracle) — WIP skeleton")
+    println("clm_prod_adamw_update_eq — F-OP12 AdamW update prod-order==reference byte-eq (CPU oracle)")
+    // config sweep: (n, lr, β1, β2, ε, wd, t step, seed) — vary every knob
+    let d1 = _run_case(64,  0.001,  0.9,   0.999,  0.00000001, 0.01,  1,   3)   // step t=1 (max bias-corr)
+    let d2 = _run_case(64,  0.001,  0.9,   0.999,  0.00000001, 0.01,  10,  3)   // mid step
+    let d3 = _run_case(64,  0.0003, 0.9,   0.999,  0.00000001, 0.1,   100, 5)   // late step, heavy wd
+    let d4 = _run_case(128, 0.01,   0.8,   0.99,   0.000001,   0.0,   5,   11)  // alt β, eps=1e-6, wd=0
+    let d5 = _run_case(96,  0.005,  0.95,  0.9999, 0.0000001,  0.05,  50,  23)  // β1=.95 β2=.9999
+    let d6 = _run_case(1,   0.001,  0.9,   0.999,  0.00000001, 0.01,  1,   7)   // n=1 degenerate
+    let d7 = _run_case(200, 0.002,  0.9,   0.999,  0.0,        0.0,   3,   31)  // eps=0, wd=0
+    println("  max|Δ| n64  lr1e-3 b.9/.999 wd.01 t=1   = " + to_string(d1))
+    println("  max|Δ| n64  lr1e-3 b.9/.999 wd.01 t=10  = " + to_string(d2))
+    println("  max|Δ| n64  lr3e-4 b.9/.999 wd.1  t=100 = " + to_string(d3))
+    println("  max|Δ| n128 lr1e-2 b.8/.99  wd0   t=5   = " + to_string(d4))
+    println("  max|Δ| n96  lr5e-3 b.95/.9999 wd.05 t=50= " + to_string(d5))
+    println("  max|Δ| n1   lr1e-3 b.9/.999 wd.01 t=1   = " + to_string(d6))
+    println("  max|Δ| n200 lr2e-3 b.9/.999 eps0 wd0 t=3= " + to_string(d7))
+    let ok = (d1 == 0.0) && (d2 == 0.0) && (d3 == 0.0) && (d4 == 0.0)
+          && (d5 == 0.0) && (d6 == 0.0) && (d7 == 0.0)
+    if ok {
+        println("F-OP12-ADAMW-UPDATE = 1")
+        println("PASS — AdamW update prod-order == clean reference byte-eq (max|Δ|=0 over W,m,v, all cases)")
+    } else {
+        println("F-OP12-ADAMW-UPDATE = 0")
+        println("FAIL — AdamW update reference diverges from production op order")
+    }
 }
