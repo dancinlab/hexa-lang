@@ -84,16 +84,24 @@ loop targets what the consumer card + code can carry.
   CUDA/includes/types). Verified LOCALLY: passes on clean tree (3/3 PASS, exit 0); catches an injected nested
   `/*` in a guarded file (exit 1, precise diagnostic, reverts clean); IGNORES the same warning injected into an
   unguarded file (exit 0 = CI-safe). Behavior-preserving CI-only addition. Verdict .verdicts/hexa-0pod/F-OP5B-WARN-GATE.txt.
+- [x] **OP-1b — sm_120 own-GEMM: BK=32 + 3-stage cp.async pipeline + .v2/.v4 vectorized epilogue (aiden)** —
+  OP-1 deferred TF32 follow-up to close the residual ~3-15% off cuBLAS-TF32 @D=1024 (K2 was furthest off
+  there). DONE — swept all 3 levers on aiden RTX 5070 (sm_120) bit-exact vs FP64 + vs the OP-1 baseline.
+  HONEST partial-positive: ONLY the .v2 (float2) vectorized C-store epilogue helped — c0/c1 (and c2/c3) are
+  contiguous so they fuse to one 64-bit store; +1.7% @1024 (24.50→24.93 TFLOP/s, 1.143x→1.124x off cuBLAS),
+  small top-up @2048 (29.74→29.92, ~1.02x). BK=32 and the 3-stage cp.async ring BOTH REGRESSED (−1.7 TFLOP/s
+  @1024: doubling per-stage smem cuts CTA occupancy below the already-saturated latency-hide on the 5070's
+  48KB cap), and BK32+3stage OVERFLOWS smem entirely (0xd200 > 0xc000, ptxas reject) — both CLOSED-NEGATIVE
+  on the consumer card, kept OUT of production (the consumer-card lever is memory-instruction vectorization,
+  not staging depth — matches OP-1). The 128x64 register tile was NOT re-attempted (closed-neg, OP-1). GATE
+  (g5): bit-exact HELD — every building config byte-identical to the OP-1 baseline (rel-RMS vs baseline = 0;
+  vs-cuBLAS-TF32 1.33e-05@768/3.02e-05@1024/1.74e-05@2048 unchanged; vs-FP64 ~1e-4 = the TF32 truncation
+  floor, same for cuBLAS). Shipped: .v2 epilogue folded into the production owngemm_sm120.cu (re-verified on
+  aiden). Best: 24.93 TFLOP/s @1024 (1.13x off cuBLAS, was 1.15x) / 29.86 @2048 (1.02x). Verdict
+  .verdicts/hexa-0pod/F-OP1B-SM120-PIPE.txt.
 
 ## deferred (0-pod follow-ups surfaced by the loop — self-feed)
 
-- **OP-1b — sm_120 own-GEMM: BK=32 + 3-stage cp.async pipeline + .v2/.v4 vectorized epilogue.** OP-1 reached
-  1.02-1.15x off cuBLAS with K2 (BK=16, 2-stage). Probe whether deepening the K tile to BK=32 and going to a
-  3-deep cp.async ring (wait_group<2>) closes the residual ~3-15% at D=1024 (where K2 is furthest off). Also
-  vectorize the C store epilogue (.v2/.v4) — currently 4 scalar masked writes per fragment. Bit-exact gate
-  unchanged (accumulation order preserved; pure schedule/layout). Free aiden GPU. The register-tile lever
-  (128x64) is CLOSED-NEGATIVE on the consumer card — do NOT re-attempt it; the win is K-pipeline depth + the
-  epilogue, not the per-CTA output tile.
 - **OP-2b — land the runtime.c hexa_forge_dispatch_matmul_t wrapper body + flip the trainer to the live
   transpose-elim call.** OP-2 landed the GPU kernel (_hx_cuda_farr_matmul_tn_gpu, cuBLAS OP_T), codegen
   mapping, runtime.h proto, and proved dW byte-eq (max|Δ|=0). The remaining piece is the runtime.c wrapper
@@ -114,10 +122,11 @@ loop targets what the consumer card + code can carry.
 - **OP-3b — BF16 sm_120 own-GEMM: close the residual ~2x to cuBLAS-BF16 (aiden).** OP-3 landed a working
   bit-faithful BF16 own-GEMM at ~2.0x off cuBLAS-BF16 with OP-1's layout/load lever fully applied. The
   residual is the f16-class tensor-core scheduling cuBLAS exploits that the portable warp-mma does not. Probe
-  the SAME K-pipeline-depth levers OP-1b lists for the BF16 path — BK=32 + 3-stage cp.async ring
-  (wait_group<2>) + .v2/.v4 vectorized C-store epilogue — to narrow the gap. Do NOT re-attempt the 128x64
-  register tile (CLOSED-NEGATIVE on the consumer card, OP-1). Bit-faithful gate unchanged (rel-RMS vs FP64
-  ≤1e-2, determinism max|d|=0). Free aiden GPU, 0-pod.
+  the .v2/.v4 vectorized C-store epilogue for the BF16 path (the ONE lever OP-1b found bit-exactly positive
+  on the 5070, +1.7% @1024). Do NOT re-attempt BK=32 or the 3-stage cp.async ring — OP-1b CLOSED both
+  NEGATIVE on the consumer card (smem-pressure occupancy loss; BK32+3stage overflows the 48KB cap), nor the
+  128x64 register tile (CLOSED-NEGATIVE, OP-1). Bit-faithful gate unchanged (rel-RMS vs FP64 ≤1e-2,
+  determinism max|d|=0). Free aiden GPU, 0-pod.
 
 ## honest framing (g5)
 
