@@ -1,0 +1,115 @@
+F-OP4B-GRAPH-5070 — CUDA-graph-captured flame FUSED step on consumer RTX 5070 (sm_120)
+========================================================================================
+STATUS: GREEN (measurement) + HONEST CLOSED-NEGATIVE. All g5 gates PASS (max|delta(W')|=0
+        graph-vs-eager + run-to-run determinism =0 in every cell). FINDING: on the consumer
+        RTX 5070, CUDA-graph capture does NOT cut the small-B launch floor — graph/eager =
+        1.00-1.02x across ALL small-B cells (B=1, D={768,1536,2048}, TF32+BF16+FP64). The
+        small-B loss vs torch.compile is GEMM-RATE-bound, NOT per-launch-overhead-bound.
+        Same outcome as the H100 BENCH-6 graph finding — graph replay buys ~nothing because
+        cuBLAS GEMM dominates the step wall, the per-op launch cost is already negligible.
+
+HARDWARE: aiden RTX 5070 (sm_120 / cc12.0, 12227 MiB), driver 580.159.04, CUDA 13.0.
+          FREE sidecar pool — NO vast, NO pod, NO leak. T=256, ITERS=50, warmup before timed.
+          Exclusivity guard (util<5% & mem<800MiB, retry 20s x30) gated every timed run.
+
+GOAL: OP-4 (F-OP4-5070-COVERAGE) mapped the flame FUSED training step (cuBLAS lane: fused
+valley LN+gelu+copy + single-launch AdamW + transpose-elim) vs torch on the 5070 and found
+flame LOSES every cell, WORST at SMALL B (B=1) — TF32 ratio 1.78x->8.96x as D grows, BF16
+up to 14.66x @D=2048/B=1 vs torch.compile. OP-4's note attributed the small-B loss to the
+per-launch + separate-cuBLAS-handle overhead floor (the GEMM is tiny at B=1, so ~4-11 kernel
+launches dominate; torch's inductor fuses into ~2 kernels AND graph-captures via cudagraph
+trees). OP-4b TESTS that attribution: wrap the SAME fused per-step DAG in a CUDA graph
+(cudaStreamBeginCapture/EndCapture -> cudaGraphInstantiate -> cudaGraphLaunch) so the whole
+step replays as ONE launch, and re-measure graph vs eager (un-captured OP-4 baseline).
+
+  IF graph << eager -> the floor was per-launch overhead; ratio narrows toward torch.compile.
+  IF graph == eager -> the launch floor was NOT the binding cost; the small-B loss is cuBLAS
+       GEMM-rate-bound, NOT launch (the honest closed-neg, matching H100 BENCH-6).
+
+HARNESS: tool/bench/flame_bench_step_graph_fused.cu — the FUSED step (BYTE-FOR-BYTE the
+OP-4 -DFUSED math: cuBLAS fwd GEMM + fused valley + cuBLAS OP_T bwd GEMM (transpose-elim,
+no materialized A^T) + single-launch AdamW), stream-scoped and wrapped in a CUDA graph. The
+ONLY difference vs the OP-4 baseline is HOW the step launches: eager (one launch per op) vs
+replayed from the captured graph. BF16 cast scratch is pre-warmed once before BeginCapture
+(a cudaMalloc is not capturable) so the captured graph is pure kernels + cuBLAS.
+Driver: tool/bench/run_op4b_5070.sh.
+
+================== GRAPH vs EAGER (un-captured) — small-B floor (verbatim) =================
+eager_ms = OP-4 flame_ms lane (un-captured fused step). graph_ms = same step replayed from a
+captured CUDA graph. speedup = eager_ms / graph_ms (>1 = graph faster). nodes = graph nodes
+the single replay subsumes.
+
+dtype     D   B | eager_ms  graph_ms | speedup | nodes | gate max|dW'| | determ.
+--------------------------------------------------------------------------------
+TF32    768   1 |  0.4318    0.4262  |  1.0132 |   4   |   0 (PASS)    | 0 (PASS)
+TF32   1536   1 |  1.6688    1.6669  |  1.0011 |   4   |   0 (PASS)    | 0 (PASS)
+TF32   2048   1 |  2.9855    2.9816  |  1.0013 |   7   |   0 (PASS)    | 0 (PASS)
+
+BF16    768   1 |  0.4353    0.4269  |  1.0198 |   8   |   0 (PASS)    | 0 (PASS)
+BF16   1536   1 |  1.6577    1.6495  |  1.0050 |   8   |   0 (PASS)    | 0 (PASS)
+BF16   2048   1 |  2.9477    2.9413  |  1.0022 |  11   |   0 (PASS)    | 0 (PASS)
+
+FP64    768   1 |  1.9894    1.9916  |  0.9989 |   4   |   0 (PASS)    | 0 (PASS)
+FP64   1536   1 |  6.9842    6.9842  |  1.0000 |   4   |   0 (PASS)    | 0 (PASS)
+FP64   2048   1 | 12.5229   12.5175  |  1.0004 |   4   |   0 (PASS)    | 0 (PASS)
+
+9 small-B cells. graph/eager = 1.00-1.02x EVERYWHERE. Best observed = BF16/D=768 at 1.0198x
+(~2%); FP64/D=768 even slightly SLOWER (0.9989x, within noise). The eager column reproduces
+OP-4's flame_ms baseline exactly (e.g. TF32/768/1 OP-4=0.4308 vs here 0.4318; BF16/2048/1
+OP-4=2.9451 vs here 2.9477) — the captured DAG is the same step.
+
+================ NEW RATIO vs torch.compile (graph-captured flame / torch_c) ===============
+torch_c = OP-4's torch.compile (inductor) ms/step baseline, same cell. ratio_old = OP-4's
+eager-flame / torch_c; ratio_new = graph-captured-flame / torch_c. Graph barely moves it.
+
+dtype     D   B | graph_ms  torch_c | ratio_old -> ratio_new (verdict still LOSE)
+-------------------------------------------------------------------------------
+TF32    768   1 |  0.4262   0.2416  |   1.783  ->  1.764
+TF32   1536   1 |  1.6669   0.2632  |   6.341  ->  6.334
+TF32   2048   1 |  2.9816   0.3329  |   8.963  ->  8.957
+BF16    768   1 |  0.4269   0.2609  |   1.666  ->  1.636
+BF16   1536   1 |  1.6495   0.2659  |   6.234  ->  6.203
+BF16   2048   1 |  2.9413   0.2009  |  14.660  -> 14.640   <- the worst cell, basically unmoved
+FP64    768   1 |  1.9916   1.5073  |   1.319  ->  1.321
+FP64   1536   1 |  6.9842   5.5962  |   1.248  ->  1.248
+FP64   2048   1 | 12.5175  10.3438  |   1.211  ->  1.210
+
+The worst small-B cell (BF16/D=2048/B=1) went 14.66x -> 14.64x. Graph capture did NOT close
+the floor — it shaved <0.5% off every ratio. flame still LOSES every small-B cell.
+
+============================ WHERE THE SMALL-B LOSS LIVES =================================
+NOT launch. GEMM-RATE. Graph capture collapses ALL per-op launch/sync overhead into one
+replay; if the small-B floor were launch-bound, the ratio would have dropped. It moved
+<2%. Therefore on the RTX 5070 the small-B step wall is dominated by the cuBLAS GEMM
+execution itself (plus, for BF16, the f32->bf16 cast kernels' memory traffic), not by the
+cost of issuing the launches. The 5070's per-launch overhead is already small relative to
+even a tiny-M cuBLAS GEMM at these D — there is no launch floor left for a graph to remove.
+torch.compile wins the small-B cells because its inductor path runs a FASTER/fused GEMM-glue
+schedule (fewer, fatter kernels + cuBLASLt heuristics tuned for small-M), not because it
+saves launches that flame is paying. This is the SAME structural result as H100 BENCH-6:
+graph-capture ~1.0x => residual pinned to GEMM-throughput, not launch.
+
+This corroborates and SHARPENS the broader campaign finding (MEMORY: ~3x cap is structural
+op-DAG, interpreter-elimination FALSIFIED, megastep INFERENCE-only): the flame step's gap to
+torch is a GEMM-schedule/fusion-quality gap, not a launch-elimination opportunity. The
+launch-elimination lever (graph capture) is now CLOSED-NEGATIVE on the consumer 5070 too.
+
+================================ HONEST SCOPE (g5) ========================================
+- Graph capture is BIT-EXACT (gate max|dW'|=0 every cell) + deterministic — it changes
+  nothing mathematically, exactly as designed. So it is a SAFE optimization to ship; it just
+  doesn't HELP on this workload/card.
+- This was scoped (OP-4b note) as a SMALL-B-only probe. It did not move FP64 (already
+  compute-bound, ~1.2x, confirmed unmoved) and was never expected to touch large-B
+  (cuBLAS-GEMM-rate-bound). The probe's job was to test the small-B launch-floor hypothesis;
+  the hypothesis is REFUTED for the 5070.
+- flame's consumer-card value remains its IDENTITY (byte-exact / device-resident /
+  deterministic / no-LLVM / torch-free), NOT raw step-rate. torch.compile is faster on every
+  small-B cell, and graph capture does not change that.
+
+CONCLUSION: OP-4b CLOSED-NEGATIVE (honest). CUDA-graph capture of the fused step is bit-exact
++ deterministic but gives ~1.0x (1.00-1.02x) on the RTX 5070 — the small-B loss to
+torch.compile is GEMM-rate-bound, not launch-overhead-bound. The worst cell (BF16/D=2048/B=1)
+stays 14.64x vs 14.66x. Launch-elimination is exhausted as a lever on the consumer card.
+
+RAW: /tmp/op4b_5070_raw.log on aiden (full sweep, iters=50, build + nvidia-smi + nvcc header).
+HARNESS: tool/bench/flame_bench_step_graph_fused.cu · DRIVER: tool/bench/run_op4b_5070.sh.
