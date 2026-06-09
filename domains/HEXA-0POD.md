@@ -47,7 +47,32 @@ loop targets what the consumer card + code can carry.
   step/s). FREE aiden, $0, no vast/pod/leak. Verdict .verdicts/hexa-0pod/F-OP24-TF32-LIVEWIRE.txt.
 
 <!-- ANCHOR:OP-24B-TF32-ENDTOEND (unique anchor — complete OP-24's TF32 live-wire end-to-end through the REAL clm_prod_gpu CLMConvMoE trainer: attempt the -DHEXA_CUDA build on aiden 0-pod; if it builds, run FP64 vs HEXA_TF32_FASTMODE=1 and report FP64-unchanged + TF32 self-byte-eq + loss-track + live step/s; else honest build-gated step + well-formed-in-DHEXA_CUDA proof) -->
-- [ ] **OP-24b — TF32 fast-mode end-to-end through the REAL clm_prod_gpu trainer (aiden build) OR honest build-gated step**
+- [x] **OP-24b — TF32 fast-mode end-to-end through the REAL clm_prod_gpu trainer (aiden build) OR honest build-gated step** —
+  HONEST BUILD-GATED (OP-2b-class; g5 OR-branch). Attempted the clm_prod_gpu -DHEXA_CUDA build on aiden
+  (FREE RTX 5070 sm_120, nvcc 13.0, $0). clm_prod_gpu BUILT ON AIDEN = NO — blocked at a precisely-named
+  SOURCE-completeness step (NOT a toolchain/host gap; aiden's toolchain compiles fine). The real trainer
+  stdlib/flame/clm_prod.hexa (1421 L CLMConvMoE corpus loop) calls 31 forge_dispatch_<op> ops whose HOST
+  marshal wrappers `hexa_forge_dispatch_<op>(HexaVal...)` must live in a consistent runtime.c. MEASURED:
+  the authoritative frozen seed runtime.c (151c52c82, restored by tool/restore_frozen_seeds) provides only
+  2/31 (matmul + ffn_fp64_via_bf16); the other 30 are in NO git-tracked current-main source — 24 live only
+  in the UNTRACKED inbox patch forge-devfeed-lever-a-runtime-c-fragment.c.txt (749 L, stale worktrees only),
+  ~6 were hand-spliced on the gone W2 pod + never re-frozen. restore_frozen_seeds appends ONLY OP-18
+  #ifndef HEXA_CUDA host FALLBACKS, not the #ifdef HEXA_CUDA device marshal wrappers. = the SAME terminal
+  wall project_clmprod_gpu_build_seed_drift documents, now quantified at current main (2/31 present, 30
+  missing). UNBLOCK (maintainer/CI one-time): re-freeze a runtime.c seed carrying all 31 #ifdef HEXA_CUDA
+  host wrappers, OR add a CUDA build job to release.yml. WHAT IS 0-POD WAS DELIVERED: the OP-24 TF32 branch
+  is PROVEN WELL-FORMED + CODEGEN-COMPLETE in the REAL -DHEXA_CUDA context — emitted runtime_cuda.c (current-
+  main SSOT, 334KB, TF32 wire present) COMPILES CLEAN under `nvcc -x cu -DHEXA_CUDA -arch=sm_120` to a 3.4 MB
+  object on aiden (only benign warnings, none in TF32 code); `nm` confirms ALL TF32 symbols emitted
+  (_hx_k_cast_d2f/f2d, g_cublas_tf32 PEDANTIC handle, _hx_cuda_gemm_tf32_dev, _hx_cuda_farr_matmul_gpu with
+  the TF32 else-if branch; only external cublasGemmEx/cublasSetMathMode undefined → -lcublas at link). So
+  the ONLY gap to end-to-end is the RUN, not the code; NO end-to-end trainer run claimed (g5). BONUS 0-pod
+  finding: the first -DHEXA_CUDA compile surfaced a PRE-EXISTING OP-19b regression — `_hx_dt_exp_dev` is
+  emitted TWICE in runtime_cuda.c (line 1624 + dead line-4092 Taylor variant; OP-19b's "defined ONCE above"
+  comment didn't remove the 2nd), a latent emit bug that only breaks under nvcc -DHEXA_CUDA (the 0-GPU blind
+  spot OP-15 named). Isolated it (renamed the dead def) for the proof; trivial 0-pod follow-up = delete the
+  line-4092 block from runtime_cuda_emit.hexa. FREE aiden, $0, no vast/pod/leak, foreign pod 40306156
+  untouched. Verdict .verdicts/hexa-0pod/F-OP24B-TF32-ENDTOEND.txt.
 
 <!-- ANCHOR:OP-25-BF16-FASTMODE (unique anchor — next precision-uncap rung: deterministic BF16 fast-mode; self-byte-eq + W14-tol vs FP64 + speed vs TF32; precision Pareto placement BF16-vs-TF32; aiden 5070) -->
 - [x] **OP-25 — deterministic BF16 fast-mode: self-byte-eq + W14-tol + speed vs TF32 (precision Pareto, aiden)** —
