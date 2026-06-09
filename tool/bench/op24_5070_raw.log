@@ -1,0 +1,32 @@
+=== HEXA-0POD OP-24 dispatch-unit verify — aiden RTX 5070 (FREE pool, $0) ===
+=== nvcc/driver ===
+Build cuda_13.0.r13.0/compiler.36424714_0
+NVIDIA GeForce RTX 5070, 580.159.04, 12227 MiB
+=== idle-guard ===
+idle util=0 mem=2MiB after 1
+=== build ===
+BUILD-OK   (nvcc -arch=sm_120 -O3 -I<cuda13-inc> -o op24disp op24_tf32_livewire_dispatch.cu -lcublas)
+=== sweep M=B*256 K=N=D ===
+[GATE-A] FP64-default M=256 K=768 N=768  run-to-run max|delta| = 0.000e+00  (byte-identical ==0: YES)
+[GATE-B] TF32-live   M=256 K=768 N=768  run-to-run max|delta| = 0.000e+00  (self-byte-eq ==0: YES)
+[GATE-C] TF32-vs-FP64 M=256 K=768 N=768  rel-RMS = 2.940e-04  (W14 <=1e-2: YES)
+[SPEED]  M=256 K=768 N=768  TF32_ms=0.0205  FP64_ms=0.6144  FP64/TF32=29.900x
+[RESULT] OP-24 LIVEWIRE M=256 K=768 N=768  fp64ByteId=Y  tf32SelfByteEq=Y  relRMSvsFP64=2.940e-04(W14:Y)  FP64/TF32=29.900x  GATES=PASS
+[GATE-A] FP64-default M=2048 K=768 N=768  run-to-run max|delta| = 0.000e+00  (byte-identical ==0: YES)
+[GATE-B] TF32-live   M=2048 K=768 N=768  run-to-run max|delta| = 0.000e+00  (self-byte-eq ==0: YES)
+[GATE-C] TF32-vs-FP64 M=2048 K=768 N=768  rel-RMS = 2.938e-04  (W14 <=1e-2: YES)
+[SPEED]  M=2048 K=768 N=768  TF32_ms=0.0963  FP64_ms=4.9141  FP64/TF32=51.014x
+[RESULT] OP-24 LIVEWIRE M=2048 K=768 N=768  fp64ByteId=Y  tf32SelfByteEq=Y  relRMSvsFP64=2.938e-04(W14:Y)  FP64/TF32=51.014x  GATES=PASS
+[GATE-A] FP64-default M=256 K=1536 N=1536  run-to-run max|delta| = 0.000e+00  (byte-identical ==0: YES)
+[GATE-B] TF32-live   M=256 K=1536 N=1536  run-to-run max|delta| = 0.000e+00  (self-byte-eq ==0: YES)
+[GATE-C] TF32-vs-FP64 M=256 K=1536 N=1536  rel-RMS = 2.944e-04  (W14 <=1e-2: YES)
+[SPEED]  M=256 K=1536 N=1536  TF32_ms=0.0594  FP64_ms=2.4523  FP64/TF32=41.290x
+[RESULT] OP-24 LIVEWIRE M=256 K=1536 N=1536  fp64ByteId=Y  tf32SelfByteEq=Y  relRMSvsFP64=2.944e-04(W14:Y)  FP64/TF32=41.290x  GATES=PASS
+[GATE-A] FP64-default M=2048 K=1536 N=1536  run-to-run max|delta| = 0.000e+00  (byte-identical ==0: YES)
+[GATE-B] TF32-live   M=2048 K=1536 N=1536  run-to-run max|delta| = 0.000e+00  (self-byte-eq ==0: YES)
+[GATE-C] TF32-vs-FP64 M=2048 K=1536 N=1536  rel-RMS = 2.940e-04  (W14 <=1e-2: YES)
+[SPEED]  M=2048 K=1536 N=1536  TF32_ms=0.4177  FP64_ms=19.6048  FP64/TF32=46.936x
+[RESULT] OP-24 LIVEWIRE M=2048 K=1536 N=1536  fp64ByteId=Y  tf32SelfByteEq=Y  relRMSvsFP64=2.940e-04(W14:Y)  FP64/TF32=46.936x  GATES=PASS
+=== post ===
+42 %, 2 MiB   (42% util = a PARALLEL agent sharing the card; my run's mem freed to 2MiB)
+=== aiden /tmp cleaned: no residue ===
