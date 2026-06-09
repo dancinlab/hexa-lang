@@ -214,3 +214,24 @@ contraction order ⇒ bit-for-bit equal (true re-layout identity, NOT associativ
 seam). Honest finding: NONE non-bit-exact — the identity is genuinely exact, max|Δ|=0 is real not faked.
 Behavior-preserving: no trainer logic touched (verification/oracle addition only). Forward companion to
 OP-2's backward-dW transpose-elim oracle (#2974). Verdict .verdicts/hexa-0pod/F-OP7-IDENTITY-ORACLE.txt.
+
+## OP-6 — vectorize a memory-bound flame sm_120 kernel (.v4 loads/stores, bit-exact) — CLOSED-NEGATIVE
+Generalized OP-1's memory-instruction-vectorization lever (.v4/.v2 coalesced loads + vectorized stores) from
+the compute-bound own-GEMM to a MEMORY-BOUND flame elementwise kernel on aiden (RTX 5070, sm_120, free pool,
+GPU 0% verified). Target = the fp64 AdamW optimizer update _hx_k_adamw_step_inplace
+(self/cuda/runtime_cuda.c:1236-1289): 7 fp64 streams (read W,M,V,G + write M,V,W), no reduction, no cross-elem
+dependency, scalar grid-stride loads — the correct memory-bound un-vectorized candidate.
+Applied double2 (128-bit) coalesced loads + double2 stores (2 elems/thread, scalar n%2 tail).
+RESULT (honest, NO win): scalar fp64 AdamW already hits ~333 GB/s; double2 = 1.005-1.006x @16M/64M/odd-tail.
+Root-cause probe (op6_bandwidth_probe.cu): pure fp64 COPY also 1.005x (567->570 GB/s); fp32 AdamW with the
+literal .v4 float4 lever only 1.028x. On the 5070 (GDDR7) contiguous scalar 32/64-bit grid-stride accesses
+ALREADY coalesce to peak DRAM BW → .v4/.v2 add nothing. OP-1 won because its GEMM had STRIDED partially-
+uncoalesced smem-feed loads to repair; a contiguous elementwise/copy kernel has no such pattern → the lever
+does not transfer (memory-INSTRUCTION vectorization != memory-BANDWIDTH gain when already coalesced).
+BIT-EXACT (g5): vec BYTE-IDENTICAL to scalar under --fmad=false (bitdiff=0, max|Δ|=0, all sizes incl odd-N
+tail — the rewrite is mathematically pure); under --fmad=true (production default) a 1-ULP (1.388e-17)
+FMA-scheduling artifact appears (different fma fusion in single-elem vs pair loop), so a double2 production
+rewrite would FAIL the OP-2 byte-eq-vs-prior-trainer gate. NOT shipped (no win + not byte-eq under defaults).
+Contiguous-elementwise vectorization lever EXHAUSTED on the 5070; only remaining headroom = AdamW-into-bwd-
+GEMM-epilogue FUSION (boundary removal), deferred as OP-6b. $0 (free pool, no vast, no leak). Harness
+tool/op6/op6_adamw_vec_bench.cu + op6_bandwidth_probe.cu. Verdict .verdicts/hexa-0pod/F-OP6-VECTORIZE-KERNEL.txt.

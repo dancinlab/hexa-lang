@@ -109,6 +109,24 @@ loop targets what the consumer card + code can carry.
   floor, same for cuBLAS). Shipped: .v2 epilogue folded into the production owngemm_sm120.cu (re-verified on
   aiden). Best: 24.93 TFLOP/s @1024 (1.13x off cuBLAS, was 1.15x) / 29.86 @2048 (1.02x). Verdict
   .verdicts/hexa-0pod/F-OP1B-SM120-PIPE.txt.
+- [x] **OP-6 — vectorize a memory-bound flame sm_120 kernel (.v4 loads/stores, bit-exact)** — generalize
+  OP-1's proven memory-instruction-vectorization lever (.v4/.v2 coalesced loads + vectorized stores) from
+  the compute-bound GEMM to a MEMORY-BOUND flame elementwise kernel on aiden, bit-exact. Target = the fp64
+  AdamW optimizer update _hx_k_adamw_step_inplace (self/cuda/runtime_cuda.c:1236-1289) — 7 fp64 streams
+  (4 read W,M,V,G + 3 write M,V,W), no reduction, scalar grid-stride loads = correct memory-bound candidate.
+  CLOSED-NEGATIVE (honest, aiden RTX 5070 sm_120, GPU 0% verified): double2 (128-bit) loads/stores gave NO
+  win — 1.005-1.006x @16M/64M/odd-tail (333.4->335.0 GB/s). ROOT-CAUSE probe: even a pure fp64 COPY is
+  1.005x (567->570 GB/s) and an fp32 AdamW with the literal .v4 float4 lever is only 1.028x — on the 5070
+  (sm_120, GDDR7) the memory controller ALREADY coalesces contiguous scalar 32/64-bit grid-stride accesses
+  to peak DRAM bandwidth, so .v4/.v2 cannot raise achieved BW. OP-1 won because its GEMM had STRIDED
+  partially-uncoalesced smem-feed loads to repair; a contiguous elementwise/copy kernel has none → the
+  lever's premise does not transfer. BIT-EXACT (g5): vec is BYTE-IDENTICAL to scalar under --fmad=false
+  (bitdiff=0, max|Δ|=0, all sizes incl odd-N tail — proves the rewrite is mathematically pure); under
+  --fmad=true (production default) a 1-ULP (1.388e-17) FMA-scheduling artifact appears (different fma
+  fusion in the single-elem vs pair loop), so a double2 rewrite would FAIL the OP-2 byte-eq-vs-prior-trainer
+  gate. NOT shipped (no win + not byte-eq under default flags). Contiguous-elementwise vectorization lever
+  EXHAUSTED on the 5070; only remaining headroom = AdamW-into-bwd-epilogue fusion (deferred OP-6b). Harness
+  tool/op6/op6_adamw_vec_bench.cu + op6_bandwidth_probe.cu. Verdict .verdicts/hexa-0pod/F-OP6-VECTORIZE-KERNEL.txt.
 
 - [x] **OP-7 — byte-eq CPU oracle for a flame math identity (0-GPU)** — in the spirit of OP-2's
   transpose-elim oracle, added a LOCAL `hexa run` (0-GPU) oracle that bit-exactly locks the flame trainer's
@@ -123,6 +141,12 @@ loop targets what the consumer card + code can carry.
 
 ## deferred (0-pod follow-ups surfaced by the loop — self-feed)
 
+- **OP-6b — fuse the AdamW update into the preceding bwd-GEMM epilogue (eliminate the 7-stream round-trip).**
+  OP-6 proved load/store-width vectorization (.v4/.v2) is a DEAD lever for contiguous memory-bound elementwise
+  kernels on the 5070 (already coalesced → ~1.005x). The remaining headroom for a memory-bound elementwise op
+  is KERNEL FUSION: fold the _hx_k_adamw_step elementwise update into the epilogue of the bwd GEMM that
+  produces G, so M,V,W never round-trip through DRAM as a separate 7-stream pass. Byte-eq gate vs the
+  separate-kernel reference (max|Δ|=0). Free aiden GPU. (Lever = boundary-removal, not instruction width.)
 - **OP-2b — land the runtime.c hexa_forge_dispatch_matmul_t wrapper body + flip the trainer to the live
   transpose-elim call.** OP-2 landed the GPU kernel (_hx_cuda_farr_matmul_tn_gpu, cuBLAS OP_T), codegen
   mapping, runtime.h proto, and proved dW byte-eq (max|Δ|=0). The remaining piece is the runtime.c wrapper

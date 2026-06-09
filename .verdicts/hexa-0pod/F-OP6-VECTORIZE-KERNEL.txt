@@ -1,0 +1,75 @@
+F-OP6-VECTORIZE-KERNEL
+HEXA-0POD OP-6 — vectorize a memory-bound flame sm_120 kernel (.v loads/stores, bit-exact)
+Host: aiden (sidecar pool, RTX 5070, sm_120/cc12.0). FREE pool. NO vast. nvcc 13.0.
+GPU verified idle (nvidia-smi util 0%, 2 MiB) before every timed run.
+
+VERDICT: CLOSED-NEGATIVE (honest). The memory-instruction-vectorization lever (.v4/.v2
+coalesced loads + vectorized stores) that gave OP-1 ~3x on the sm_120 own-GEMM does NOT
+transfer to a contiguous memory-bound *elementwise* flame kernel on the RTX 5070 — the
+scalar grid-stride loads/stores ALREADY coalesce to peak DRAM bandwidth, so there is no
+under-utilized memory transaction for vectorization to fix. Bit-exactness ALSO does not
+hold under the production --fmad=true flags (1-ULP FMA-scheduling artifact). NOT shipped.
+
+──────────────────────────────────────────────────────────────────────────────────────
+TARGET KERNEL (selected, confirmed memory-bound, confirmed scalar/un-vectorized)
+  _hx_k_adamw_step_inplace / _hx_k_adamw_step  (self/cuda/runtime_cuda.c:1236-1289)
+  = the fp64 elementwise AdamW optimizer update used by the flame CLMConvMoE trainer.
+  Per element: reads W,M,V,G (4 fp64) + writes M,V,W (3 fp64) = 7 fp64 bandwidth streams,
+  ZERO cross-element dependency, NO reduction -> a pure memory-bound elementwise kernel.
+  The production kernel uses SCALAR (64-bit) grid-stride global loads/stores — no float4/
+  float2/double2 anywhere in runtime_cuda.c (grep confirmed). Correct OP-6 candidate.
+
+LEVER APPLIED (OP-1 generalized)
+  double2 (128-bit) coalesced loads + double2 vectorized stores over the contiguous
+  element layout; one double2 per stream per thread (2 elems/thread); scalar remainder
+  loop for the n%2 tail. The per-element arithmetic is expanded from a SINGLE shared MACRO
+  (ADAMW_BODY) in BOTH the scalar and the vec kernel so the expression text — hence the
+  ptxas fp-contraction — is identical; only the load/store WIDTH differs.
+  Harness: tool/op6/op6_adamw_vec_bench.cu (extracts the verbatim production arithmetic).
+
+──────────────────────────────────────────────────────────────────────────────────────
+RESULT 1 — PERFORMANCE (no win)
+  AdamW fp64, scalar vs double2 (--fmad=true, production default), aiden RTX 5070:
+    n=16M : SCALAR 2.8180 ms 333.4 GB/s | VEC 2.8044 ms 335.0 GB/s | speedup 1.005x
+    n=64M : SCALAR 11.2574 ms 333.8 GB/s | VEC 11.1953 ms 335.7 GB/s | speedup 1.006x
+    n=33554431 (odd, tail) : SCALAR 5.6347 ms | VEC 5.6015 ms | speedup 1.006x
+  => ~0.5% — within noise. The scalar fp64 AdamW already hits ~333 GB/s.
+
+RESULT 2 — BIT-EXACT GATE (g5)
+  --fmad=false (FMA OFF): VEC is BYTE-IDENTICAL to SCALAR at every size INCLUDING the
+    odd-N tail:  bitdiff=0  max|delta|=0.000e+00  -> BYTE-IDENTICAL (PASS).
+    This proves the double2 vectorization is mathematically PURE (load/store width only).
+  --fmad=true (FMA ON, production default): bitdiff != 0, max|delta|=1.388e-17 (1 ULP).
+    Cause: ptxas fuses `w - lr*wd*w - lr*mhat/denom` into different fma chains in the
+    single-element grid-stride loop vs the pair-interleaved loop (register scheduling
+    differs), NOT a vectorization error. CONSEQUENCE: a double2 rewrite of the production
+    kernel would NOT be byte-eq to the current scalar kernel under the default build flags
+    — it fails the OP-2 "max|d|=0 vs prior trainer" gate. This alone blocks shipping it.
+
+RESULT 3 — ROOT-CAUSE PROBE (why the lever doesn't transfer)  tool/op6/op6_bandwidth_probe.cu
+  COPY fp64, 2 streams: scalar 567.60 GB/s | vec(double2) 570.25 GB/s | speedup 1.005x
+  ADAMW fp32, 7 streams: scalar 559.71 GB/s | vec(float4)  575.58 GB/s | speedup 1.028x
+  => Even the SIMPLEST bandwidth-bound kernel (pure copy) gets NO benefit from
+     vectorization (1.005x), and the genuinely fast-ALU fp32 AdamW with the literal OP-1
+     .v4 (float4) lever gains only 2.8%. On the RTX 5070 (sm_120, GDDR7) the memory
+     controller ALREADY coalesces contiguous scalar 32/64-bit grid-stride accesses into
+     full-width transactions, so .v4/.v2 cannot raise achieved bandwidth.
+
+WHY OP-1 WON BUT OP-6 DOESN'T (the honest distinction)
+  OP-1's GEMM was compute/smem-staging-bound with STRIDED, partially-uncoalesced smem-feed
+  loads — .v4 repaired a real un-coalesced access pattern (the actual bottleneck). A
+  contiguous elementwise/copy kernel has NO un-coalesced access to repair, so the lever's
+  premise ("vectorization fixes under-utilized memory transactions") simply does not apply.
+  Memory-INSTRUCTION vectorization != memory-BANDWIDTH increase when accesses already
+  coalesce. The fp64 AdamW is additionally partly fp64-ALU-bound (333 vs 567 GB/s copy
+  ceiling: the divides + sqrt on the 1:64-fp64 consumer card), which vectorization also
+  cannot help.
+
+DETERMINISM: run-to-run max|d|=0 for both kernels (deterministic). HELD.
+SHIPPED: NO. Kept out of production — no perf win + not byte-eq under --fmad=true.
+COST: $0 (free pool aiden). NO vast, NO pod, NO leak (pool host, never destroyed).
+
+DEFERRED FOLLOW-UP (surfaced): the only consumer-card elementwise lever with headroom is
+KERNEL FUSION (fuse the AdamW update into the preceding bwd-GEMM epilogue to remove the
+7-stream round-trip), NOT load/store-width vectorization. Logged to HEXA-0POD ## deferred
+as OP-6b. The contiguous-elementwise vectorization lever is EXHAUSTED on the 5070.
