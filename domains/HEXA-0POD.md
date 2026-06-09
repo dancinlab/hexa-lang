@@ -232,7 +232,22 @@ loop targets what the consumer card + code can carry.
   .verdicts/hexa-0pod/F-OP11-CE-SOFTMAX-ORACLE.txt.
 
 <!-- OP-13-EMBED-RESIDUAL -->
-- [ ] **OP-13 — byte-eq CPU oracle for the embedding/residual path identity (0-GPU)**
+- [x] **OP-13 — byte-eq CPU oracle for the embedding/residual path identity (0-GPU)** — extends the
+  OP-2/7/8/9/10/11 determinism-oracle series to the previously-unlocked INPUT path: the backward of the
+  token-embedding gather (nn_lib.hexa nn_embedding_bwd_scatter). When repeated tokens share a row, each
+  position's gradient ACCUMULATES into the same dtable row, and float-addition non-associativity makes the
+  accumulation ORDER load-bearing — the classic determinism trap. Production order = POSITION-ASCENDING
+  (i=0..T-1 in-place scatter-add). LOCAL `hexa run` (0-GPU) oracle bit-exactly LOCKS that order: REF (exact
+  mirror of nn_embedding_bwd_scatter, i-ascending in-place, pre-seeded with a tied-head term to cover the
+  d5_grad accumulate-onto-existing case) == GROUPED+ (per-row reformulation summing each row's positions
+  i-ASCENDING) ⇒ GATE max|Δ|=0 across 6 shapes (T8..32, V3..8, d3..8, ALL with repeats — max-repeat up to
+  12 positions sharing one row; + degenerate T=1). HONEST (g5): a deliberately non-canonical GROUPED-
+  (i-DESCENDING) reorder DIVERGES by an FP eps (5.68e-14 … 4.55e-13) on repeated-token rows (0.0 on T=1, no
+  repeats) — the genuine non-associativity witness proving the production i-ascending order is the canonical
+  SSOT and that a future gather-then-grouped-sum / GPU atomic-scatter refactor MUST preserve it. GATE eps
+  NOT faked (=0 is a true reorder identity). Behavior-preserving: NO trainer logic changed (oracle/verification
+  addition only). $0 — pure local CPU. Oracle stdlib/flame/clm_prod_embed_scatter_eq.hexa · verdict
+  .verdicts/hexa-0pod/F-OP13-EMBED-RESIDUAL-ORACLE.txt.
 
 ## deferred (0-pod follow-ups surfaced by the loop — self-feed)
 

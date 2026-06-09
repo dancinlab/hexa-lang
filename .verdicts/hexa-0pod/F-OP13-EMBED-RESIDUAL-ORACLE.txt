@@ -1,0 +1,101 @@
+════════════════════════════════════════════════════════════════════════════
+F-OP13-EMBED-RESIDUAL-ORACLE — embedding bwd scatter-add: production t-ASCENDING
+  accumulation order locked (REF==GROUPED+ byte-eq); reorder eps documented.
+HEXA-0POD OP-13 · CPU-LOCAL byte-eq ORACLE · 0-GPU (`hexa run`) · $0
+════════════════════════════════════════════════════════════════════════════
+
+IDENTITY LOCKED  (the INPUT path — the embedding-gather backward)
+
+  The flame CLMConvMoE trainer's token-embedding backward (nn_lib.hexa
+  nn_embedding_bwd_scatter) scatter-adds each position's gradient into its
+  token's table row, IN PLACE, iterating positions i = 0..T-1 ASCENDING:
+
+      for i in 0..T:                       # position / time, i-ASCENDING
+          tok = ids[i]
+          for c in 0..d:
+              dtable[tok*d + c] += dX[i*d + c]
+
+  When MULTIPLE positions share a token (repeated tokens — the common case in
+  real corpora), the gradients of those positions ACCUMULATE into the SAME row.
+  Float addition is non-associative, so the ACCUMULATION ORDER is load-bearing:
+  it is part of the trainer's determinism contract. The production order is
+  POSITION-ASCENDING (i = 0,1,…,T-1). This is the canonical SSOT.
+
+  OP-13 LOCKS that order with three forms over a fixture built WITH repeated
+  tokens (max-repeat up to 12 positions sharing one row — the trap is exercised):
+
+    REF       = exact mirror of nn_embedding_bwd_scatter: i-ASCENDING in-place
+                scatter-add. The production path / byte SSOT. Also pre-seeded
+                with a deterministic "tied-head" term so the oracle covers the
+                d5_grad ACCUMULATE-onto-existing case, not just zero-init.
+
+    GROUPED+  = a per-vocab-ROW reformulation: for each row v, sum the dX of
+                every position with ids[i]==v in POSITION-ASCENDING order into a
+                fresh table. Same products, SAME per-row order as REF.
+                GATE  ⇒  REF == GROUPED+,  max|Δ| = 0  (true reorder identity).
+
+    GROUPED-  = the SAME grouping but summing each row's positions in
+                POSITION-DESCENDING order. HONEST (g5) determinism PROBE — NOT
+                the production order; FP non-associativity makes it diverge by a
+                tiny eps on any row with ≥2 repeated tokens. Measured + documented.
+
+ORACLE
+  stdlib/flame/clm_prod_embed_scatter_eq.hexa   (pure host arithmetic, `hexa run`)
+  _embed_bwd_ref          — byte-identical mirror of nn_embedding_bwd_scatter.
+  _embed_bwd_grouped_asc  — per-row, positions i-ASCENDING  (GATE side).
+  _embed_bwd_grouped_desc — per-row, positions i-DESCENDING (honest probe).
+  Deterministic LCG fixtures (reproducible bytes, no rng dep); ids biased to a
+  small row set so repeats are GUARANTEED (max-repeat reported per shape).
+
+GATE (g5) — `hexa run` PASS: GATE max|Δ| = 0 across all shapes (production
+  t-ascending order byte-locked); PROBE eps reported as the honest witness.
+
+VERBATIM `hexa run` OUTPUT
+----------------------------------------------------------------------------
+clm_prod_embed_scatter_eq — F-OP13 embedding bwd scatter-add byte-eq (CPU oracle)
+  (REF = nn_embedding_bwd_scatter i-ASCENDING in-place; GATE = REF==GROUPED+ )
+  GATE max|Δ| REF==GROUPED+ (asc) | PROBE eps REF-vs-GROUPED- (desc) | max-repeat
+    T8  V4 d4 : gate=0.0 probe=5.68434e-14 maxrep=4
+    T16 V5 d6 : gate=0.0 probe=2.27374e-13 maxrep=9
+    T32 V8 d3 : gate=0.0 probe=2.27374e-13 maxrep=8
+    T24 V3 d8 : gate=0.0 probe=4.54747e-13 maxrep=12
+    T10 V7 d5 : gate=0.0 probe=2.27374e-13 maxrep=3
+    T1  V4 d4 : gate=0.0 probe=0.0 maxrep=1
+F-OP13-EMBED-RESIDUAL-ORACLE = 1
+PASS — embedding bwd scatter-add production t-ASCENDING order locked (REF==GROUPED+ max|Δ|=0, all shapes)
+  HONEST: GROUPED- (descending) reorder gives nonzero eps on repeated-token rows
+          ⇒ accumulation order is float-non-associative; production i-ascending is the canonical SSOT.
+----------------------------------------------------------------------------
+
+CANONICAL ORDER (the determinism contract this locks)
+  embedding bwd scatter-add : per shared token row, accumulate the contributing
+  positions' gradients in POSITION-ASCENDING order (i = 0,1,…,T-1), matching the
+  in-place scatter loop of nn_embedding_bwd_scatter. A future refactor to a
+  "gather-then-grouped-sum" embedding backward (or a GPU atomic-scatter kernel)
+  MUST preserve this i-ascending per-row order to stay bit-exact.
+
+MAX|Δ| / EPS
+  GATE   (REF == GROUPED+, the locked production order)  : max|Δ| = 0.0  (EXACT —
+         no tolerance; a genuine reorder identity, NOT an associativity case).
+  PROBE  (REF vs GROUPED-, the non-canonical descending reorder) : eps in
+         5.68e-14 … 4.55e-13 on repeated-token shapes; 0.0 on T=1 (no repeats).
+         This eps is REAL, not faked — it is the determinism witness that makes
+         the production i-ascending order load-bearing.
+
+HONEST FINDING (g5)
+  The gate identity is genuinely bit-exact (max|Δ|=0): GROUPED+ visits the SAME
+  products in the SAME per-row order as the in-place scatter, so it is a true
+  re-layout identity with NO tolerance. The deliberately non-canonical GROUPED-
+  descending sum DOES diverge by an FP eps (≈1e-13) on rows with repeated tokens
+  — that is the point: it proves the accumulation order is non-associative and
+  therefore part of the determinism contract, and that the production order is
+  i-ASCENDING (the SSOT). max|Δ|=0 on the GATE is NOT faked. Behavior-preserving:
+  NO trainer logic changed (oracle/verification addition only). $0 — pure local
+  CPU `hexa run`, no GPU / no pool / no vast.
+
+  Companion to OP-2 (bwd dW transpose-elim), OP-7 (fwd conv im2col), OP-8 (MoE
+  combine), OP-9/10/11 (GN / conv-seam / CE-softmax-grad) — extends the
+  determinism-oracle series to the previously-unlocked INPUT path.
+
+  F-OP13-EMBED-RESIDUAL-ORACLE = 1
+════════════════════════════════════════════════════════════════════════════

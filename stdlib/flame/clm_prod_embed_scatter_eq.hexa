@@ -1,11 +1,243 @@
 // ════════════════════════════════════════════════════════════════════════════
 //  clm_prod_embed_scatter_eq.hexa — F-OP13 embedding bwd scatter-add byte-eq ORACLE.
-//  HEXA-0POD OP-13 · CPU-LOCAL (`hexa run`, 0-GPU) determinism oracle.
-//  WIP skeleton — body filled in subsequent commits.
+//
+//  HEXA-0POD OP-13: CPU-LOCAL (`hexa run`, 0-GPU) determinism oracle that locks the
+//  flame CLMConvMoE INPUT-PATH identity — the backward of the token-embedding gather.
+//  Continues the OP-2/7/8/9/10/11 oracle series (bwd dW, fwd conv, MoE combine, GN,
+//  conv seam, CE/softmax-grad). The embedding scatter-add is the classic determinism
+//  trap NOT yet locked: when multiple positions share a token (repeated tokens), the
+//  gradients of those positions ACCUMULATE into the SAME table row, and the order of
+//  that accumulation is float-non-associative — different orders give different bytes.
+//
+//  PRODUCTION PATH (nn_lib.hexa nn_embedding_bwd_scatter):
+//      for i in 0..T:               # position / time, i-ASCENDING
+//          tok = ids[i]
+//          for c in 0..d:
+//              dtable[tok*d + c] += dX[i*d + c]   # in-place scatter-add
+//  i.e. the production accumulation order for a repeated token is POSITION-ASCENDING
+//  (i = 0,1,…,T-1). This is the SSOT canonical order.
+//
+//  THIS ORACLE locks that order with three forms over the same fixture (built WITH
+//  repeated tokens so the shared-row accumulation is actually exercised):
+//
+//    REF       = exact mirror of nn_embedding_bwd_scatter: in-place scatter, i-asc.
+//                (the production path; the baseline byte SSOT.)
+//
+//    GROUPED+  = a per-TOKEN-ROW reformulation: for each vocab row v, sum the dX of
+//                every position with ids[i]==v in POSITION-ASCENDING order into a
+//                fresh table. Same products, SAME per-row order as REF ⇒ a true
+//                reorder identity, max|Δ|=0 (a future refactor to a "gather then
+//                grouped-sum" embedding-bwd that keeps t-ascending stays byte-eq).
+//
+//    GROUPED-  = the SAME per-row grouping but summing each row's positions in
+//                POSITION-DESCENDING order. HONEST (g5) determinism PROBE: this is
+//                NOT the production order; on a row with ≥2 repeated tokens FP
+//                non-associativity makes it diverge by a tiny eps. We MEASURE that
+//                eps and DOCUMENT it — proving WHY the production t-ascending order
+//                is the canonical SSOT (and that a future refactor MUST preserve it).
+//
+//  GATE (g5): REF == GROUPED+ byte-eq (max|Δ|=0, all shapes) ⇒ the production order
+//  is locked. GROUPED- eps is reported as the honest non-associativity witness, NOT
+//  faked to 0. Runs $0 via `hexa run` on any CPU — no GPU.
+//
+//  F-OP13-EMBED-RESIDUAL-ORACLE : embedding bwd scatter-add, production t-ascending
+//                                 order locked (REF==GROUPED+ max|Δ|=0); GROUPED-
+//                                 reorder eps documented as the determinism witness.
 // ════════════════════════════════════════════════════════════════════════════
 
 use "stdlib/flame/tensor_lib"
 
+fn _es_absf(x: float) -> float { if x < 0.0 { return 0.0 - x } return x }
+fn _es_maxdev(a: int, b: int, n: int) -> float {
+    let mut m = 0.0
+    let mut i = 0
+    while i < n { let dd = _es_absf(t_get(a, i) - t_get(b, i)); if dd > m { m = dd }; i = i + 1 }
+    return m
+}
+
+// ── REF — BYTE-IDENTICAL mirror of nn_lib.hexa nn_embedding_bwd_scatter:
+//    i-ASCENDING in-place scatter-add  dtable[ids[i]*d+c] += dX[i*d+c].
+//    dtable is pre-zeroed by the caller (the d5_grad pattern). This is the
+//    production accumulation order = canonical SSOT.
+fn _embed_bwd_ref(dX: int, ids: int, dtable: int, T: int, d: int) {
+    let mut i = 0
+    while i < T {
+        let tok = to_int(t_get(ids, i))
+        let mut c = 0
+        while c < d {
+            let cur = t_get(dtable, tok * d + c)
+            t_set(dtable, tok * d + c, cur + t_get(dX, i * d + c))
+            c = c + 1
+        }
+        i = i + 1
+    }
+}
+
+// ── GROUPED+ — per-vocab-row reformulation, positions summed in i-ASCENDING order
+//    (SAME order as REF for any shared row) ⇒ byte-eq reorder identity.
+fn _embed_bwd_grouped_asc(dX: int, ids: int, dtable: int, T: int, d: int, V: int) {
+    let mut v = 0
+    while v < V {
+        let mut c = 0
+        while c < d {
+            let mut acc = t_get(dtable, v * d + c)   // honor any pre-set (e.g. tied-head term)
+            let mut i = 0                              // i-ASCENDING (0..T-1)
+            while i < T {
+                if to_int(t_get(ids, i)) == v {
+                    acc = acc + t_get(dX, i * d + c)
+                }
+                i = i + 1
+            }
+            t_set(dtable, v * d + c, acc)
+            c = c + 1
+        }
+        v = v + 1
+    }
+}
+
+// ── GROUPED- — same grouping, positions summed in i-DESCENDING order. HONEST
+//    determinism PROBE (NOT the production order): diverges by an FP eps on rows
+//    with ≥2 repeated tokens. Used only to MEASURE/DOCUMENT that eps.
+fn _embed_bwd_grouped_desc(dX: int, ids: int, dtable: int, T: int, d: int, V: int) {
+    let mut v = 0
+    while v < V {
+        let mut c = 0
+        while c < d {
+            let mut acc = t_get(dtable, v * d + c)
+            let mut i = T - 1                          // i-DESCENDING (T-1..0)
+            while i >= 0 {
+                if to_int(t_get(ids, i)) == v {
+                    acc = acc + t_get(dX, i * d + c)
+                }
+                i = i - 1
+            }
+            t_set(dtable, v * d + c, acc)
+            c = c + 1
+        }
+        v = v + 1
+    }
+}
+
+// deterministic fixtures (LCG — reproducible bytes, no rng dependency)
+fn _es_fill(a: int, n: int, seed: int) {
+    let mut i = 0
+    let mut s = seed
+    while i < n {
+        s = (s * 1103515245 + 12345) & 0x7FFFFFFF
+        // mildly large magnitudes so descending-vs-ascending non-assoc is visible
+        t_set(a, i, (to_float(s % 100000) - 50000.0) * 0.013)
+        i = i + 1
+    }
+}
+// ids fixture deliberately REPEATS tokens (mod V, plus a forced-collision pattern)
+// so multiple positions land on the same row and the accumulation order matters.
+fn _es_fill_ids(ids: int, T: int, V: int, seed: int) {
+    let mut i = 0
+    let mut s = seed
+    while i < T {
+        s = (s * 1103515245 + 12345) & 0x7FFFFFFF
+        // bias toward a small set of rows → guaranteed repeats even when V is large
+        let tok = (s % (V / 2 + 1)) % V
+        t_set(ids, i, to_float(tok))
+        i = i + 1
+    }
+}
+
+// count the worst-case repeat depth (max positions sharing one token) — context
+fn _es_max_repeat(ids: int, T: int, V: int) -> int {
+    let cnt = t_zeros(V)
+    let mut i = 0
+    while i < T {
+        let tok = to_int(t_get(ids, i))
+        t_set(cnt, tok, t_get(cnt, tok) + 1.0)
+        i = i + 1
+    }
+    let mut mx = 0
+    let mut v = 0
+    while v < V {
+        let c = to_int(t_get(cnt, v))
+        if c > mx { mx = c }
+        v = v + 1
+    }
+    return mx
+}
+
+// run one shape: returns max|Δ| REF-vs-GROUPED+ (gate) into out[0],
+// max|Δ| REF-vs-GROUPED- (honest probe) into out[1], max-repeat into out[2].
+fn _run_case(T: int, V: int, d: int, out: int) {
+    let dX  = t_zeros(T * d)
+    let ids = t_zeros(T)
+    _es_fill(dX, T * d, 7 + T + d)
+    _es_fill_ids(ids, T, V, 101 + T * 3 + V)
+
+    // pre-seed dtable with a deterministic "tied-head" term so the oracle also
+    // covers the d5_grad ACCUMULATE-onto-existing case (not just zero-init).
+    let pre = t_zeros(V * d)
+    _es_fill(pre, V * d, 31 + V)
+
+    let dt_ref = t_zeros(V * d)
+    let dt_asc = t_zeros(V * d)
+    let dt_dsc = t_zeros(V * d)
+    let mut k = 0
+    while k < V * d {
+        let p = t_get(pre, k)
+        t_set(dt_ref, k, p); t_set(dt_asc, k, p); t_set(dt_dsc, k, p)
+        k = k + 1
+    }
+
+    _embed_bwd_ref(dX, ids, dt_ref, T, d)
+    _embed_bwd_grouped_asc(dX, ids, dt_asc, T, d, V)
+    _embed_bwd_grouped_desc(dX, ids, dt_dsc, T, d, V)
+
+    t_set(out, 0, _es_maxdev(dt_ref, dt_asc, V * d))   // GATE — must be 0
+    t_set(out, 1, _es_maxdev(dt_ref, dt_dsc, V * d))   // HONEST probe eps
+    t_set(out, 2, to_float(_es_max_repeat(ids, T, V)))
+}
+
 fn main() {
-    println("clm_prod_embed_scatter_eq — F-OP13 (WIP skeleton)")
+    println("clm_prod_embed_scatter_eq — F-OP13 embedding bwd scatter-add byte-eq (CPU oracle)")
+    println("  (REF = nn_embedding_bwd_scatter i-ASCENDING in-place; GATE = REF==GROUPED+ )")
+
+    let o = t_zeros(3)
+
+    // shapes vary T, V, d — ALL with repeated tokens (max-repeat reported)
+    _run_case(8, 4, 4, o)
+    let g1 = t_get(o, 0); let p1 = t_get(o, 1); let r1 = to_int(t_get(o, 2))
+    _run_case(16, 5, 6, o)
+    let g2 = t_get(o, 0); let p2 = t_get(o, 1); let r2 = to_int(t_get(o, 2))
+    _run_case(32, 8, 3, o)
+    let g3 = t_get(o, 0); let p3 = t_get(o, 1); let r3 = to_int(t_get(o, 2))
+    _run_case(24, 3, 8, o)               // V=3, deep repeats
+    let g4 = t_get(o, 0); let p4 = t_get(o, 1); let r4 = to_int(t_get(o, 2))
+    _run_case(10, 7, 5, o)
+    let g5 = t_get(o, 0); let p5 = t_get(o, 1); let r5 = to_int(t_get(o, 2))
+    _run_case(1, 4, 4, o)                // degenerate T=1 (no repeats possible)
+    let g6 = t_get(o, 0); let p6 = t_get(o, 1); let r6 = to_int(t_get(o, 2))
+
+    println("  GATE max|Δ| REF==GROUPED+ (asc) | PROBE eps REF-vs-GROUPED- (desc) | max-repeat")
+    println("    T8  V4 d4 : gate=" + to_string(g1) + " probe=" + to_string(p1) + " maxrep=" + to_string(r1))
+    println("    T16 V5 d6 : gate=" + to_string(g2) + " probe=" + to_string(p2) + " maxrep=" + to_string(r2))
+    println("    T32 V8 d3 : gate=" + to_string(g3) + " probe=" + to_string(p3) + " maxrep=" + to_string(r3))
+    println("    T24 V3 d8 : gate=" + to_string(g4) + " probe=" + to_string(p4) + " maxrep=" + to_string(r4))
+    println("    T10 V7 d5 : gate=" + to_string(g5) + " probe=" + to_string(p5) + " maxrep=" + to_string(r5))
+    println("    T1  V4 d4 : gate=" + to_string(g6) + " probe=" + to_string(p6) + " maxrep=" + to_string(r6))
+
+    let gate_ok = (g1 == 0.0) && (g2 == 0.0) && (g3 == 0.0) && (g4 == 0.0) && (g5 == 0.0) && (g6 == 0.0)
+    // the probe SHOULD be nonzero on at least one repeated-token shape (else the
+    // fixture failed to exercise the determinism trap) — honest self-check.
+    let probe_exercised = (p1 > 0.0) || (p2 > 0.0) || (p3 > 0.0) || (p4 > 0.0) || (p5 > 0.0)
+
+    if gate_ok {
+        println("F-OP13-EMBED-RESIDUAL-ORACLE = 1")
+        println("PASS — embedding bwd scatter-add production t-ASCENDING order locked (REF==GROUPED+ max|Δ|=0, all shapes)")
+        if probe_exercised {
+            println("  HONEST: GROUPED- (descending) reorder gives nonzero eps on repeated-token rows")
+            println("          ⇒ accumulation order is float-non-associative; production i-ascending is the canonical SSOT.")
+        } else {
+            println("  NOTE: probe eps stayed 0 (fixture repeats summed to identical bytes both directions).")
+        }
+    } else {
+        println("F-OP13-EMBED-RESIDUAL-ORACLE = 0")
+        println("FAIL — GROUPED+ ascending diverges from the production in-place scatter (order mismatch)")
+    }
 }

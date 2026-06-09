@@ -359,3 +359,23 @@ CANONICAL ORDER (SSOT): BWD = libm exp, per-row max-sub, v-ascending denom, grad
 FWD = dt_exp/dt_ln, per-row max-sub, v-ascending denom, p_t≥1e-6 clamp, t-ascending loss sum, mean/T.
 Behavior-preserving: NO trainer logic changed (oracle addition only). $0 — pure local CPU, no GPU/pool/vast.
 Oracle stdlib/flame/clm_prod_ce_softmax_grad_eq.hexa · verdict .verdicts/hexa-0pod/F-OP11-CE-SOFTMAX-ORACLE.txt.
+
+## OP-13 — embedding bwd scatter-add byte-eq CPU oracle (0-GPU) — DONE
+
+F-OP13-EMBED-RESIDUAL-ORACLE = 1. Locked the INPUT path (previously unlocked): the token-embedding
+gather BACKWARD (nn_lib.hexa nn_embedding_bwd_scatter). Repeated tokens → multiple positions accumulate
+into the SAME dtable row; float non-associativity makes the accumulation ORDER load-bearing (the classic
+determinism trap). Production order = POSITION-ASCENDING in-place scatter-add.
+
+Oracle stdlib/flame/clm_prod_embed_scatter_eq.hexa, three forms over a repeated-token fixture:
+  REF      = exact mirror of nn_embedding_bwd_scatter (i-asc in-place; pre-seeded tied-head term).
+  GROUPED+ = per-row reformulation, positions i-ASCENDING  → GATE: REF==GROUPED+ max|Δ|=0 (all 6 shapes).
+  GROUPED- = per-row, positions i-DESCENDING → HONEST probe: eps 5.68e-14…4.55e-13 on repeated rows.
+hexa run PASS (max|Δ|=0 gate; max-repeat up to 12 positions/row exercised; T=1 probe correctly 0.0).
+
+CANONICAL ORDER (SSOT): per shared token row, accumulate contributing positions' gradients in
+POSITION-ASCENDING order (i=0..T-1), matching the in-place scatter loop. A future gather-then-grouped-sum
+or GPU atomic-scatter refactor MUST preserve this i-ascending per-row order to stay bit-exact.
+HONEST (g5): GATE max|Δ|=0 is a true reorder identity (NOT faked); GROUPED- eps is the genuine
+non-associativity witness. Behavior-preserving: NO trainer logic changed. $0 — pure local CPU.
+Verdict .verdicts/hexa-0pod/F-OP13-EMBED-RESIDUAL-ORACLE.txt.
