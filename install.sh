@@ -226,6 +226,22 @@ install_src() {
     if ( cd "$_pw_dir" && HEXA_MAC_BUILD_OK=1 HEXA_LANG="$HX_SRC" \
          "$HX_BIN/hexa" build _prewarm.hexa -o _prewarm.bin ) >/dev/null 2>&1; then
         green "  ✓ ~/.hexa-cache/runtime.<sha>.o warmed (first build = link-only)"
+        # Drop a FIXED-NAME copy so a build can still link a runtime when
+        # self/runtime.c later goes MISSING (broken self symlink, or a linux
+        # install that left runtime.c ungenerated — handoff 87a5f82e). In that
+        # state the content-hash path can neither key nor compile the source;
+        # main.hexa's Layer-2 rescue links this prebuilt instead, whose path
+        # depends on NEITHER runtime.c NOR the self symlink. Keyed identically
+        # to main.hexa (sha1 of runtime*.c + native/*.c + *.h under $HX_SRC/self,
+        # NOT the symlink) so it matches the object the warm build just produced.
+        _rt_sha="$(cat "$HX_SRC/self"/runtime*.c "$HX_SRC/self"/runtime*.h \
+                       "$HX_SRC/self"/native/*.c "$HX_SRC/self"/native/*.h \
+                   2>/dev/null | shasum -a 1 2>/dev/null | cut -d' ' -f1)"
+        if [ -n "$_rt_sha" ] && [ -f "$HOME/.hexa-cache/runtime.$_rt_sha.o" ]; then
+            cp -f "$HOME/.hexa-cache/runtime.$_rt_sha.o" \
+                  "$HOME/.hexa-cache/runtime.prebuilt.o" 2>/dev/null \
+                && green "  ✓ ~/.hexa-cache/runtime.prebuilt.o (rescue for missing runtime.c)"
+        fi
     else
         dim   "  ⚠ runtime pre-warm skipped — first real build compiles runtime once"
     fi
