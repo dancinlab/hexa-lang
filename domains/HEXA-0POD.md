@@ -11,7 +11,23 @@ loop targets what the consumer card + code can carry.
 ## milestones (loop self-feeds; add as discovered)
 
 <!-- ANCHOR:OP-20-TF32-FASTMODE (unique anchor — precision-change uncap lever: deterministic TF32 fast-mode) -->
-- [ ] **OP-20 — deterministic TF32 fast-mode: self-byte-eq + W14-tol vs FP64 + speedup measure (aiden)**
+- [x] **OP-20 — deterministic TF32 fast-mode: self-byte-eq + W14-tol vs FP64 + speedup measure (aiden)** —
+  probed the ONE unexplored uncap lever (PRECISION-CHANGE FP64->TF32) the campaign named. New harness
+  tool/bench/flame_bench_step_tf32fast.cu runs a TF32 lane (CUDA_R_32F, COMPUTE_32F_FAST_TF32 tensor-op) AND
+  an FP64 lane (CUDA_R_64F) in ONE process over the OP-4 fused step DAG (fused valley + transpose-elim bwd
+  GEMM + single-launch AdamW; only the cuBLAS compute type differs; all glue in FIXED deterministic order).
+  Measured on FREE aiden 5070 (sm_120), idle-guarded, 8 cells (DEFAULT + PEDANTIC × D={768,1536} × B={1,8}).
+  RESULT (all 8 PASS): (a) GATE-A TF32 self-byte-eq run-to-run max|delta(W')| = EXACTLY 0 — pedantic-cublas
+  NOT needed (default tensor-op TF32 is already deterministic on the 5070; PEDANTIC gives identical bytes at
+  identical time → recommend PEDANTIC as the portable SHIP guarantee). (b) GATE-B rel-RMS(TF32 vs FP64 W') ~
+  1.13e-6 — 4 orders inside W14 1e-2. (c) SPEED FP64/TF32 = 4.19-4.63x @B=1, 19-21x @B=8 → BREAKS the ~3x cap
+  at every shape (B=1 latency-bound — the regime the cap was named for — is already 4.2-4.6x). HONEST: the
+  B=8 ~20x is INFLATED by the 5070's crippled FP64 (~1/64 FP32); a datacenter card would show less — quote
+  B=1 (4.2x, card-robust) as the headline; determinism proven for THIS card/cuBLAS-13.0 (pin PEDANTIC to
+  guarantee portably). Deterministic TF32 fast-mode = a REAL flame fast-mode: identity kept + W14-equivalent
+  + >3x faster. Verdict .verdicts/hexa-0pod/F-OP20-TF32-FASTMODE.txt. $0, FREE aiden, no vast/pod/leak.
+  FOLLOW-UPS (deferred): wire TF32 compute-type into the live forge GEMM dispatch (clm_prod build + aiden
+  verify, analogous to OP-2); multi-step TF32-vs-FP64 trajectory-drift study (long-horizon).
 
 <!-- ANCHOR:OP-18-L3-FUSED-HOST (unique anchor — completes the OP-16 L3 fused-dispatch family: gelu2 + moe_block2) -->
 - [x] **OP-18 — host fallbacks for the remaining L3 fused dispatchers (gelu2 + moe_block2), 0-GPU testable** —

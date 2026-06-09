@@ -1,31 +1,105 @@
 F-OP20-TF32-FASTMODE — deterministic TF32 fast-mode for the flame training step (RTX 5070)
 ==========================================================================================
-STATUS: WIP (skeleton landed; aiden 5070 measurement pending)
+STATUS: GREEN — the PRECISION-CHANGE uncap lever WORKS. A deterministic TF32 fast-mode is
+        REAL: self-byte-eq run-to-run (max|delta|=0, NO pedantic-cublas needed), within W14
+        tolerance vs FP64 (rel-RMS ~1.13e-6), and 4.19x-21.35x faster than FP64 — it breaks
+        the ~3x FP64 step cap at EVERY shape measured. 8/8 cells PASS both gates.
 
-THESIS: flame's training step is ~3x capped at batch=1 by the serial FP64 cuBLAS op-DAG.
-Kernel-fusion / interp-elim / graph-capture are exhausted (closed-neg). The ONLY two uncap
-levers named (MEGASTEP memory + flame_h100_h200_closeout) are (a) PRECISION-CHANGE
-FP64->TF32 + dense compute-bound fusion, (b) right-sized GPU. (a) is unexplored. OP-20
-probes (a) on the FREE 5070 — NO vast.
+HARDWARE: aiden RTX 5070 (sm_120 / cc12.0, 12227 MiB), driver 580.159.04, CUDA 13.0.
+          FREE sidecar pool — NO vast, NO pod, NO leak. GPU idle-guarded before each timed
+          run (util<5% & mem<800MiB); the guard fired several times (a parallel agent shared
+          the card) and correctly held each timed run until exclusive. GPU returned to 0%/2MiB
+          and /tmp artifacts cleaned after the run.
 
-KEY INSIGHT: FP64->TF32 breaks byte-eq-vs-FP64, BUT a TF32 step can still be byte-eq-vs-
-ITSELF (run-to-run deterministic). That preserves flame's reproducibility IDENTITY at a
-different PRECISION CONTRACT (W14: rel-rms <= 1e-2 vs same-dtype). So "deterministic TF32
-fast-mode" = a legitimate flame product mode, not an identity sacrifice — IF it stays
-self-byte-eq.
+THESIS: flame's training step is ~3x capped at batch=1 by the serial FP64 cuBLAS op-DAG +
+per-op launch/sync + interpreted glue. Kernel-fusion / interp-elim / graph-capture are ALL
+exhausted (closed-neg, per MEGASTEP memory + flame_h100_h200_closeout). The ONLY two named
+uncap levers are (a) PRECISION-CHANGE FP64->TF32 + dense compute-bound fusion, (b) right-
+sized GPU. (a) was UNEXPLORED. OP-20 probes (a) on the FREE 5070.
+
+KEY INSIGHT (validated): FP64->TF32 breaks byte-eq-vs-FP64, BUT a TF32 step can still be
+byte-eq-vs-ITSELF (run-to-run deterministic). That PRESERVES flame's reproducibility
+IDENTITY at a different PRECISION CONTRACT (the W14 convention: rel-rms <= 1e-2 vs same
+dtype). So "deterministic TF32 fast-mode" is a LEGITIMATE flame product mode, not an
+identity sacrifice — and the measurement confirms it stays self-byte-eq.
 
 HARNESS: tool/bench/flame_bench_step_tf32fast.cu runs BOTH a TF32 lane and an FP64 lane in
 ONE process (the OP-4 fused step DAG: fused valley LN+gelu+copy + transpose-elim bwd GEMM +
-single-launch AdamW; only the cuBLAS compute type differs). Reports per (D,B):
-  GATE-A  TF32 self-byte-eq run-to-run: max|delta(W')| == 0
-  GATE-B  rel-RMS(TF32 W' vs FP64 W') <= 1e-2 (W14 cross-precision tolerance)
-  SPEED   TF32 ms/step vs FP64 ms/step, ratio FP64/TF32
-CUBLAS determinism toggle: -DPEDANTIC -> CUBLAS_PEDANTIC_MATH (no split-K heuristics) to
-test whether the default tensor-op TF32 mode is self-byte-eq or NEEDS pedantic.
-Driver: tool/bench/run_op20_5070.sh (idle-guarded, default+pedantic x D={768,1536} x B={1,8}).
+single-launch AdamW; only the cuBLAS compute type differs — TF32 = CUDA_R_32F /
+CUBLAS_COMPUTE_32F_FAST_TF32 tensor-op, FP64 = CUDA_R_64F / CUBLAS_COMPUTE_64F). All
+elementwise/reduction glue stays in the FIXED deterministic order (fixed-order per-row tree
+reduce, no atomics), so the only determinism question was whether the cuBLAS TF32 tensor-
+core GEMM is itself run-to-run reproducible (split-K heuristics). Both lanes seeded
+identically so they start bit-identical (mod fp32/fp64 cast).
+Driver: tool/bench/run_op20_5070.sh (idle-guarded; builds DEFAULT + PEDANTIC variants ×
+D={768,1536} × B={1,8}, T=256, iters=50, warmup before each timed loop).
 
-PENDING MEASUREMENT (aiden RTX 5070, sm_120, FREE):
-  [ ] GATE-A self-byte-eq Y/N per (variant,D,B) + does default need pedantic?
-  [ ] GATE-B rel-RMS(TF32 vs FP64) per (D,B)
-  [ ] SPEED FP64/TF32 ratio per (D,B) — does it break the ~3x cap?
-  [ ] HONEST VERDICT: real deterministic-fast-mode Y/N
+CUBLAS DETERMINISM TOGGLE: -DPEDANTIC builds with CUBLAS_PEDANTIC_MATH (forces a
+deterministic, no-heuristic math mode) on the TF32 handle to test whether the DEFAULT TF32
+tensor-op mode needs pedantic to stay self-byte-eq. ANSWER: it does NOT — both variants give
+max|delta(W')|=0, and their step times are identical within noise (pedantic costs nothing
+here on the 5070 because cuBLAS already picks a deterministic algo for these shapes).
+
+================================ RESULTS (verbatim, aiden 5070) ===========================
+selfByteEq = GATE-A TF32 run-to-run max|delta(W')|==0.  relRMSvsFP64 = GATE-B (W14 <=1e-2).
+FP64/TF32 = step-time speedup (how many x faster the TF32 step is than the FP64 step).
+
+[RESULT] OP-20 TF32-DEFAULT  D=768  B=1  selfByteEq=Y  relRMSvsFP64=1.134e-06  TF32_ms=0.4309  FP64_ms=1.9887   FP64/TF32=4.616x
+[RESULT] OP-20 TF32-DEFAULT  D=768  B=8  selfByteEq=Y  relRMSvsFP64=1.131e-06  TF32_ms=0.5795  FP64_ms=12.3740  FP64/TF32=21.354x
+[RESULT] OP-20 TF32-DEFAULT  D=1536 B=1  selfByteEq=Y  relRMSvsFP64=1.134e-06  TF32_ms=1.6670  FP64_ms=6.9872   FP64/TF32=4.191x
+[RESULT] OP-20 TF32-DEFAULT  D=1536 B=8  selfByteEq=Y  relRMSvsFP64=1.130e-06  TF32_ms=2.1962  FP64_ms=41.9397  FP64/TF32=19.096x
+[RESULT] OP-20 TF32-PEDANTIC D=768  B=1  selfByteEq=Y  relRMSvsFP64=1.134e-06  TF32_ms=0.4308  FP64_ms=1.9945   FP64/TF32=4.630x
+[RESULT] OP-20 TF32-PEDANTIC D=768  B=8  selfByteEq=Y  relRMSvsFP64=1.131e-06  TF32_ms=0.5794  FP64_ms=12.3736  FP64/TF32=21.358x
+[RESULT] OP-20 TF32-PEDANTIC D=1536 B=1  selfByteEq=Y  relRMSvsFP64=1.134e-06  TF32_ms=1.6672  FP64_ms=6.9874   FP64/TF32=4.191x
+[RESULT] OP-20 TF32-PEDANTIC D=1536 B=8  selfByteEq=Y  relRMSvsFP64=1.130e-06  TF32_ms=2.1981  FP64_ms=41.9381  FP64/TF32=19.079x
+
+(full raw incl. nvidia-smi/nvcc/per-gate lines archived at tool/bench/op20_5070_raw.log)
+
+============================== ANSWERS TO THE OP-20 QUESTIONS ==============================
+(a) TF32 self-byte-eq run-to-run?  YES — max|delta(W',m',v',loss-path)| = EXACTLY 0.000e+00
+    on all 8 cells. Pedantic-cublas NEEDED?  NO — the DEFAULT CUBLAS_TF32_TENSOR_OP_MATH
+    mode is already run-to-run deterministic on the 5070 for these shapes; PEDANTIC gives
+    the identical bytes at identical step time (no determinism nor speed difference). The
+    feared split-K-heuristic nondeterminism did NOT materialize here. (Caveat below.)
+
+(b) rel-RMS vs FP64?  ~1.13e-6 at every shape — FOUR orders of magnitude inside the W14
+    1e-2 contract. The TF32 step is training-equivalent to the FP64 step.
+
+(c) TF32/FP64 step-time ratio — does it beat ~3x?  YES, decisively, at EVERY shape:
+      B=1: 4.19x-4.63x   (already > 3x even at the latency-bound batch=1 the cap is named for)
+      B=8: 19.08x-21.36x (compute-bound regime; the 5070's FP64 throughput is ~1/64 of FP32,
+                          so the FP64 lane is artificially crippled on this consumer card —
+                          the B=8 ratio is INFLATED by weak consumer FP64, see HONEST below).
+
+IS-IT-A-REAL-DETERMINISTIC-FAST-MODE?  YES. Self-byte-eq (identity preserved) + W14-tol vs
+FP64 (training-equivalent) + >3x faster (breaks the cap) = a legitimate flame "deterministic
+TF32 fast-mode". The precision-change uncap lever works.
+
+================================== HONEST FRAMING (g5) =====================================
+1. The ~3x cap is BROKEN, but the magnitude is consumer-card-specific. The RTX 5070 (sm_120)
+   has heavily throttled FP64 (~1/64 FP32 rate), so the FP64 lane here is unusually slow and
+   the B=8 19-21x ratios OVERSTATE what a datacenter card (H100, FP64 ~1/2 FP32) would show.
+   The HONEST, card-robust signal is the B=1 latency-bound cells: even there TF32 is 4.2-4.6x
+   FP64, comfortably past the ~3x cap the campaign named — and B=1 is exactly the regime the
+   cap was attributed to. So the lever clears the cap on the metric that matters; the
+   headline B=8 number should be quoted WITH the FP64-throttle caveat, not as a clean ~20x.
+2. Determinism is PROVEN for THIS card / these shapes / this cuBLAS (13.0). cuBLAS split-K
+   algo selection is shape- and version-dependent; a different GPU, larger D, or a future
+   cuBLAS could pick a non-deterministic reduction. The safe SHIP contract is therefore:
+   pin CUBLAS_PEDANTIC_MATH (costs nothing measured here) to GUARANTEE the self-byte-eq
+   identity portably, rather than relying on the default mode happening to be deterministic.
+   We have the receipts for both; PEDANTIC is the conservative default for a shipped mode.
+3. This is a HARNESS-level result on the OP-4 fused step DAG (the established flame speed
+   lane), not a wiring into clm_prod's real trainer. Wiring the TF32 compute-type into the
+   live forge GEMM dispatch (analogous to OP-2's transpose-elim wire) is the natural OP-20
+   follow-up (deferred — needs the clm_prod_gpu build env + an aiden verify pass).
+4. rel-RMS is single-step (one optimizer update). Multi-step drift of the TF32 trajectory vs
+   FP64 over a full run is NOT measured here; the W14 contract is per-step same-dtype
+   reproducibility, which holds. A long-horizon TF32-vs-FP64 divergence study is a separate
+   (larger) question, deferred.
+
+VERDICT: GREEN. Deterministic TF32 fast-mode = a REAL flame fast-mode on the 5070:
+self-byte-eq (identity kept, no pedantic needed though pedantic recommended for portable
+guarantee), W14-tol vs FP64 (rel-RMS ~1e-6), and 4.2-21x faster (breaks the ~3x cap). The
+precision-change uncap lever — the one unexplored uncap path the campaign named — WORKS,
+measured on FREE consumer hardware. $0, no vast/pod/leak.
