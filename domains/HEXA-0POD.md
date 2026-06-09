@@ -46,6 +46,9 @@ loop targets what the consumer card + code can carry.
   build with -DHEXA_CUDA, run trainer HEXA_TF32_FASTMODE=1 vs unset, report loss self-byte-eq + wall
   step/s). FREE aiden, $0, no vast/pod/leak. Verdict .verdicts/hexa-0pod/F-OP24-TF32-LIVEWIRE.txt.
 
+<!-- ANCHOR:OP-24B-TF32-ENDTOEND (unique anchor — complete OP-24's TF32 live-wire end-to-end through the REAL clm_prod_gpu CLMConvMoE trainer: attempt the -DHEXA_CUDA build on aiden 0-pod; if it builds, run FP64 vs HEXA_TF32_FASTMODE=1 and report FP64-unchanged + TF32 self-byte-eq + loss-track + live step/s; else honest build-gated step + well-formed-in-DHEXA_CUDA proof) -->
+- [ ] **OP-24b — TF32 fast-mode end-to-end through the REAL clm_prod_gpu trainer (aiden build) OR honest build-gated step**
+
 <!-- ANCHOR:OP-25-BF16-FASTMODE (unique anchor — next precision-uncap rung: deterministic BF16 fast-mode; self-byte-eq + W14-tol vs FP64 + speed vs TF32; precision Pareto placement BF16-vs-TF32; aiden 5070) -->
 - [x] **OP-25 — deterministic BF16 fast-mode: self-byte-eq + W14-tol + speed vs TF32 (precision Pareto, aiden)** —
   GREEN gates / DOMINATED outcome (honest closed result). Probed the precision-uncap ladder's NEXT rung after

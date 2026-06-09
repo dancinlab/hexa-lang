@@ -1,0 +1,10 @@
+F-OP24B-TF32-ENDTOEND — TF32 fast-mode end-to-end through the REAL clm_prod_gpu CLMConvMoE trainer
+HEXA-0POD OP-24b · branch domain/hexa-0pod-op24b-v1 · FREE aiden RTX 5070 sm_120 only · ZERO vast
+
+GOAL: complete OP-24's TF32 live-wire from the dispatch-UNIT to the FULL end-to-end trainer —
+build the real clm_prod_gpu on aiden (-DHEXA_CUDA) and run the actual flame CLMConvMoE trainer
+with HEXA_TF32_FASTMODE=1, proving the validated TF32 fast-mode works through the REAL trainer.
+
+STATUS: WIP (skeleton pushed first per storm-discipline). Build attempt + result below.
+
+=== (filled in by the build attempt) ===
