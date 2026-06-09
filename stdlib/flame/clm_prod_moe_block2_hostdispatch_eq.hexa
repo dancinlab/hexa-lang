@@ -1,0 +1,126 @@
+// ════════════════════════════════════════════════════════════════════════════
+//  clm_prod_moe_block2_hostdispatch_eq.hexa — F-OP18 moe_block2 host-dispatch ORACLE.
+//
+//  HEXA-0POD OP-18: 0-GPU (`hexa run`) oracle that LINKS + drives the L3-d fused
+//  dispatcher forge_dispatch_moe_block2 through its NEW host CPU fallback
+//  (self/runtime.c #ifndef HEXA_CUDA body) and proves it BYTE-EQ to the unfused
+//  reference — the exact 3-helper chain clm_prod.hexa _moe_block2 falls through to
+//  off-CUDA: gelu2 (eo0→ex0, eo1→ex1) → expert_pack2 (stack into ex_out[E·T·C]) →
+//  moe_router (nn_moe_router_fwd: softmax via hand-rolled _moe_exp scaled-Taylor +
+//  e-ascending combine). Completes the OP-16 (#2995) / OP-18a (gelu2) fused family.
+//
+//  forge_dispatch_moe_block2(eo0,eo1,logits,ex0,ex1,ex_out,probs,y,T,E,C) reuses
+//  OP-8's PROVEN canonical order (_moe_exp scaled-Taylor, per-position max-sub,
+//  e-ascending denom, e-ascending combine) so every float op matches the unfused
+//  reference ⇒ max|Δ| = 0 on ex0, ex1, ex_out, probs AND y.
+//
+//  Before OP-18 a `hexa run` harness referencing forge_dispatch_moe_block2 FAILED
+//  TO LINK off-CUDA (undefined symbol — GPU build supplied it via fusion_dispatch.c
+//  #ifdef HEXA_CUDA). This oracle LINKS now and locks the contract. $0, CPU, no GPU.
+//
+//  F-OP18-MOE-BLOCK2-HOST : fused moe_block2 dispatch (host) == unfused chain, max|Δ|=0.
+// ════════════════════════════════════════════════════════════════════════════
+
+use "stdlib/flame/tensor_lib"
+use "stdlib/flame/nn_lib"
+use "stdlib/flame/moe_lib"
+
+fn _mb_absf(x: float) -> float { if x < 0.0 { return 0.0 - x } return x }
+fn _mb_maxdev(a: int, b: int, n: int) -> float {
+    let mut m = 0.0
+    let mut i = 0
+    while i < n { let d = _mb_absf(t_get(a, i) - t_get(b, i)); if d > m { m = d }; i = i + 1 }
+    return m
+}
+
+// deterministic fixture fill (reproducible bytes, spans -5..+5)
+fn _mb_fill(a: int, n: int, seed: int) {
+    let mut i = 0
+    let mut s = seed
+    while i < n {
+        s = (s * 1103515245 + 12345) & 0x7FFFFFFF
+        t_set(a, i, (to_float(s % 1000) - 500.0) * 0.01)
+        i = i + 1
+    }
+}
+
+// unfused reference — the off-CUDA fall-through path of clm_prod.hexa _moe_block2:
+//   _gelu2 -> two nn_gelu_fwd ;  _expert_pack2 -> stack ;  _moe_router -> nn_moe_router_fwd.
+fn _moe_block2_ref(eo0: int, eo1: int, logits: int, ex0: int, ex1: int,
+                   ex_out: int, probs: int, y: int, T: int, E: int, C: int) {
+    let n = T * C
+    nn_gelu_fwd(eo0, ex0, n)              // gelu2 part 1
+    nn_gelu_fwd(eo1, ex1, n)              // gelu2 part 2
+    let mut j = 0                         // expert_pack2: ex_out[0·n+j]=ex0, [1·n+j]=ex1
+    while j < n {
+        t_set(ex_out, 0 * n + j, t_get(ex0, j))
+        t_set(ex_out, 1 * n + j, t_get(ex1, j))
+        j = j + 1
+    }
+    nn_moe_router_fwd(logits, ex_out, probs, y, T, E, C)   // softmax + combine
+}
+
+// worst max|Δ| over ALL fused outputs (ex0, ex1, ex_out, probs, y); rc==0 asserted.
+fn _run_case(T: int, C: int) -> float {
+    let E = 2                            // moe_block2 host body packs the 2 experts
+    let n = T * C
+    let eo0 = t_zeros(n)
+    let eo1 = t_zeros(n)
+    let logits = t_zeros(T * E)
+    _mb_fill(eo0, n, 7)
+    _mb_fill(eo1, n, 29)
+    _mb_fill(logits, T * E, 101)
+    // reference buffers
+    let ex0_r = t_zeros(n)
+    let ex1_r = t_zeros(n)
+    let exo_r = t_zeros(E * n)
+    let pr_r  = t_zeros(T * E)
+    let y_r   = t_zeros(T * C)
+    _moe_block2_ref(eo0, eo1, logits, ex0_r, ex1_r, exo_r, pr_r, y_r, T, E, C)
+    // fused dispatch through the NEW host body
+    let ex0_d = t_zeros(n)
+    let ex1_d = t_zeros(n)
+    let exo_d = t_zeros(E * n)
+    let pr_d  = t_zeros(T * E)
+    let y_d   = t_zeros(T * C)
+    let rc = forge_dispatch_moe_block2(eo0, eo1, logits, ex0_d, ex1_d, exo_d, pr_d, y_d, T, E, C)
+    if rc != 0 {
+        println("  !! forge_dispatch_moe_block2 returned rc=" + to_string(rc) + " (expected 0) — host body not linked?")
+        return 999.0
+    }
+    let mut w = _mb_maxdev(ex0_r, ex0_d, n)
+    let d1 = _mb_maxdev(ex1_r, ex1_d, n);     if d1 > w { w = d1 }
+    let d2 = _mb_maxdev(exo_r, exo_d, E * n); if d2 > w { w = d2 }
+    let d3 = _mb_maxdev(pr_r,  pr_d,  T * E); if d3 > w { w = d3 }
+    let d4 = _mb_maxdev(y_r,   y_d,   T * C); if d4 > w { w = d4 }
+    return w
+}
+
+fn main() {
+    println("clm_prod_moe_block2_hostdispatch_eq — F-OP18 moe_block2 fused-dispatch (host) == unfused chain (CPU oracle)")
+    let d1 = _run_case(8, 4)      // the trainer's 2-expert moe_block2 shape
+    let d2 = _run_case(8, 8)      // wider C
+    let d3 = _run_case(16, 6)     // more positions, odd C
+    let d4 = _run_case(12, 5)
+    let d5 = _run_case(1, 1)      // degenerate T=1,C=1
+    let d6 = _run_case(32, 8)
+    println("  max|Δ| (ex0,ex1,ex_out,probs,y)  T8 C4   = " + to_string(d1))
+    println("  max|Δ| (ex0,ex1,ex_out,probs,y)  T8 C8   = " + to_string(d2))
+    println("  max|Δ| (ex0,ex1,ex_out,probs,y)  T16 C6  = " + to_string(d3))
+    println("  max|Δ| (ex0,ex1,ex_out,probs,y)  T12 C5  = " + to_string(d4))
+    println("  max|Δ| (ex0,ex1,ex_out,probs,y)  T1 C1   = " + to_string(d5))
+    println("  max|Δ| (ex0,ex1,ex_out,probs,y)  T32 C8  = " + to_string(d6))
+    let mut worst = d1
+    if d2 > worst { worst = d2 }
+    if d3 > worst { worst = d3 }
+    if d4 > worst { worst = d4 }
+    if d5 > worst { worst = d5 }
+    if d6 > worst { worst = d6 }
+    if worst == 0.0 {
+        println("F-OP18-MOE-BLOCK2-HOST = 1")
+        println("PASS — moe_block2 fused dispatch (host body) == unfused gelu2+pack2+router, byte-eq (max|Δ|=0); LINKS off-CUDA")
+    } else {
+        println("F-OP18-MOE-BLOCK2-HOST = 0")
+        println("FAIL — max|Δ| = " + to_string(worst))
+    }
+}

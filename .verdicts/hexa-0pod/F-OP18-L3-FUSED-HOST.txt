@@ -1,0 +1,172 @@
+════════════════════════════════════════════════════════════════════════════
+F-OP18-L3-FUSED-HOST — host fallbacks for the remaining L3 fused dispatchers
+HEXA-0POD OP-18 · forge host fallback · 0-GPU (`hexa run`) · $0
+════════════════════════════════════════════════════════════════════════════
+
+RESULT: BOTH host bodies WRITTEN + PROVEN locally (LINK + byte-eq max|Δ|=0, GPU
+path UNCHANGED). Completes the OP-16 (#2995) L3 fused-dispatch family — the WHOLE
+family (groupnorm_gelu + gelu2 + moe_block2) is now 0-GPU `hexa run`-testable,
+byte-eq to the unfused reference. The durable landing is an idempotent post-restore
+patch in the tracked tool/restore_frozen_seeds (self/runtime.c is gitignored
+frozen-seed — same mechanism OP-17 #2996 used), VERIFIED end-to-end through the
+patched tool. Two byte-eq oracles + the milestone + this verdict ship tracked.
+
+  per-symbol: links-now Y/N · byte-eq max|Δ| · FP_CONTRACT note · GPU-untouched
+  forge_dispatch_gelu2       : links-now YES · max|Δ| = 0.0 (5 shapes) · FP_CONTRACT OFF · GPU untouched YES
+  forge_dispatch_moe_block2  : links-now YES · max|Δ| = 0.0 (6 shapes, 5 outputs) · FP_CONTRACT OFF · GPU untouched YES
+
+────────────────────────────────────────────────────────────────────────────
+THE GAP (OP-16 #2995 family, the remaining 2 dispatchers)
+────────────────────────────────────────────────────────────────────────────
+The L3 fused-dispatch FAMILY — forge_dispatch_gelu2 (L3-b), groupnorm_gelu
+(L3-a), moe_block2 (L3-d) — is supplied ONLY by the GPU build's fusion_dispatch.c
+glue (launcher + `#ifdef HEXA_CUDA`, see
+.verdicts/hexa-fusion/p1b-aprime2-build/fusion_dispatch.c). Off-CUDA those bare
+symbols are UNDEFINED, so a `hexa run` harness that drives the fused paths
+(clm_prod.hexa _gelu2 / _moe_block2, which emit the bare symbol unconditionally
+via codegen) FAILS TO LINK before any code runs:
+    Undefined symbols for architecture arm64:
+      "_forge_dispatch_gelu2", referenced from: …
+      "_forge_dispatch_moe_block2", referenced from: …
+OP-16 added the host twin for groupnorm_gelu ONLY; gelu2 + moe_block2 were still
+host-undefined → still 0-GPU blind spots. OP-18 closes them, completing the family.
+
+────────────────────────────────────────────────────────────────────────────
+THE FIX — HOST BODY LOCATION + IDIOM
+────────────────────────────────────────────────────────────────────────────
+LOCATION: self/runtime.c, as `#ifndef HEXA_CUDA` definitions of the BARE symbols,
+immediately after OP-16's forge_dispatch_groupnorm_gelu host block (same TU, same
+bare-wrapper-seam idiom — extract farr ids via hexa_as_num, reject bad ids/dims,
+read _hx_farr_table[id].buf, return hexa_int(0)/(-1)). `#ifndef HEXA_CUDA` is
+deliberate: under HEXA_CUDA fusion_dispatch.c supplies the symbol, so guarding the
+host body off-CUDA avoids a duplicate symbol AND leaves the GPU dispatch path
+byte-identical to today (GPU path UNCHANGED).
+
+SEMANTICS = the UNFUSED reference each fused helper falls through to in
+clm_prod.hexa, character-for-character:
+
+  gelu2(g0,a0,g1,a1,n)  — two erf-GELU passes:
+     a0[i] = GELU(g0[i]),  a1[i] = GELU(g1[i]),   i in 0..n
+     GELU(x) = x · 0.5·(1 + erf(x · (1/√2))),  1/√2 = 0.70710678118654752440
+     == two nn_gelu_fwd (the clm_prod.hexa _gelu2 off-CUDA fall-through).
+
+  moe_block2(eo0,eo1,logits,ex0,ex1,ex_out,probs,y,T,E,C) — the 3-helper chain:
+     (1) gelu2 : ex0 = GELU(eo0), ex1 = GELU(eo1)   (n = T·C)
+     (2) expert_pack2 : ex_out[0·n+j]=ex0[j], ex_out[1·n+j]=ex1[j]   (E=2 stack)
+     (3) moe_router : softmax over E experts replaying moe_lib _moe_exp
+         (scaled-Taylor range reduction x=n·ln2+r, 14-term, 2^n by mul/div —
+         NOT libm exp) with PER-POSITION MAX-SUBTRACTION + SEQUENTIALLY-SUMMED
+         denom, then y[t,c] = Σ_e probs[t,e]·ex_out[e·T·C+t·C+c] in e-ASCENDING
+         order. == nn_moe_router_fwd. This is OP-8's (#2993) PROVEN canonical
+         order; the host body reuses it verbatim. E!=2 → returns -1 (caller falls
+         through to its own E-generic host helpers, also byte-eq).
+
+BYTE-EQ CURE (OP-16's lesson, applied): both bodies are wrapped in
+    #pragma STDC FP_CONTRACT OFF … #pragma STDC FP_CONTRACT DEFAULT
+because hexa codegen emits NON-contracted sequential rounding (no a·b+c fused into
+one fma) but clang -O2 FMA-contracts (the affine gamma·xhat+beta in groupnorm_gelu,
+the GELU x·0.5·(1+erf), the router combine acc+p·x). Without it the low bit can
+diverge ~1 ULP from the hexa unfused reference; with it, max|Δ| = EXACTLY 0. The
+shared helpers _op18_gelu / _op18_moe_exp / _op18_gn_sqrt live inside the same
+FP_CONTRACT-OFF region.
+
+────────────────────────────────────────────────────────────────────────────
+LINKS-NOW PROOF (local, 0-GPU)
+────────────────────────────────────────────────────────────────────────────
+Applied the bodies to the install src tree (~/.hx/src/self/runtime.c), cleared the
+stale runtime cache, let `hexa run` rebuild runtime.o (pure `clang -O2 -c`, 0-GPU).
+
+  nm ~/.hexa-cache/runtime.<sha>.o | grep -E 'gelu2|moe_block2|groupnorm_gelu'
+    …T _forge_dispatch_gelu2           ← was undefined (U), now DEFINED (T)
+    …T _forge_dispatch_groupnorm_gelu  ← (OP-16)
+    …T _forge_dispatch_moe_block2      ← was undefined (U), now DEFINED (T)
+
+GPU PATH UNTOUCHED: `clang -DHEXA_CUDA -fsyntax-only self/runtime.c` shows NO
+gelu2/moe_block2 duplicate-symbol or redefinition diagnostic (the `#ifndef
+HEXA_CUDA` blocks are excluded). No collision with fusion_dispatch.c.
+
+────────────────────────────────────────────────────────────────────────────
+BYTE-EQ PROOF vs UNFUSED — through the NEW host dispatch (tracked oracles)
+────────────────────────────────────────────────────────────────────────────
+Two oracles ship tracked in this PR; both `use` the flame stdlib, call the BARE
+fused dispatcher directly (now linkable), and compare to the unfused reference.
+
+(1) stdlib/flame/clm_prod_gelu2_hostdispatch_eq.hexa — gelu2 vs 2× nn_gelu_fwd:
+  clm_prod_gelu2_hostdispatch_eq — F-OP18 gelu2 fused-dispatch (host) == 2× unfused gelu (CPU oracle)
+    a max|Δ|  n=16   = 0.0
+    a max|Δ|  n=64   = 0.0
+    a max|Δ|  n=257  = 0.0
+    a max|Δ|  n=1    = 0.0
+    a max|Δ|  n=1024 = 0.0
+  F-OP18-GELU2-HOST = 1
+  PASS — gelu2 fused dispatch (host body) == 2× unfused nn_gelu_fwd, byte-eq (max|Δ|=0); LINKS off-CUDA
+
+(2) stdlib/flame/clm_prod_moe_block2_hostdispatch_eq.hexa — moe_block2 vs unfused
+    gelu2+expert_pack2+nn_moe_router_fwd (compares ex0, ex1, ex_out, probs AND y):
+  clm_prod_moe_block2_hostdispatch_eq — F-OP18 moe_block2 fused-dispatch (host) == unfused chain (CPU oracle)
+    max|Δ| (ex0,ex1,ex_out,probs,y)  T8 C4   = 0.0
+    max|Δ| (ex0,ex1,ex_out,probs,y)  T8 C8   = 0.0
+    max|Δ| (ex0,ex1,ex_out,probs,y)  T16 C6  = 0.0
+    max|Δ| (ex0,ex1,ex_out,probs,y)  T12 C5  = 0.0
+    max|Δ| (ex0,ex1,ex_out,probs,y)  T1 C1   = 0.0
+    max|Δ| (ex0,ex1,ex_out,probs,y)  T32 C8  = 0.0
+  F-OP18-MOE-BLOCK2-HOST = 1
+  PASS — moe_block2 fused dispatch (host body) == unfused gelu2+pack2+router, byte-eq (max|Δ|=0); LINKS off-CUDA
+
+Both rc==0 on every shape (host dispatch actually fired, not a -1 fall-through —
+the oracle FAILs with rc!=0 if the host body were missing). The moe_block2 oracle
+also locks ex_out/probs (intermediates), not just y, so the WHOLE fused unit is
+byte-eq. Genuine comparator: the moe-router order is OP-8's proven contract; a
+tree-reassoc or dropped max-sub would surface as Δ≠0.
+
+────────────────────────────────────────────────────────────────────────────
+DURABLE LANDING — tool/restore_frozen_seeds OP-18 post-restore patch (VERIFIED)
+────────────────────────────────────────────────────────────────────────────
+self/runtime.c is GITIGNORED (.gitignore:280) as a build artifact (#2065
+`.c-graduation`). The release/build env restores the frozen seed (151c52c8…, the
+graduation parent) which PREDATES all L3 fusion glue. So the durable fix lands —
+exactly like OP-17 #2996 — as an IDEMPOTENT post-restore patch in the tracked
+tool/restore_frozen_seeds: after restoring the seeds it APPENDS the three
+`#ifndef HEXA_CUDA` host bodies (gelu2 + moe_block2 + groupnorm_gelu — OP-16 never
+landed groupnorm_gelu durably, so OP-18 makes the WHOLE family restorable) at EOF
+of the restored runtime.c, where _hx_farr_table / hexa_as_num / erf / hexa_int are
+all in scope. Marker-guarded (`grep -q 'OP-18 (HEXA-0POD'`) so re-restores don't
+double-inject.
+
+VERIFIED END-TO-END (0-GPU, this is the load-bearing proof for the durable path):
+  - ran the OP-18 append on the freshly-restored frozen blob (151c52c8 runtime.c
+    + its 18 #include fragments + forge_tier_v1.h, all from the pinned ref);
+  - `clang -O2 -c runtime.c` (no-CUDA) → exit 0, clean; nm shows ALL THREE symbols
+    U→T:  T _forge_dispatch_gelu2 · T _forge_dispatch_groupnorm_gelu ·
+          T _forge_dispatch_moe_block2;
+  - `clang -DHEXA_CUDA -fsyntax-only runtime.c` → NO duplicate/redefinition on the
+    three symbols (the `#ifndef HEXA_CUDA` excludes them → GPU path UNCHANGED; the
+    only HEXA_CUDA diagnostic is the pre-existing CUDA-fragment one resolved by
+    runtime_cuda.c in a real GPU build);
+  - idempotent: 2nd append run no-ops (marker count stays 1).
+  - the appended bodies are byte-identical to the proven local-install versions
+    (only inline `/* … */` comments differ — same statements, same order).
+
+WHAT SHIPS TRACKED IN THIS PR (0-GPU):
+  - tool/restore_frozen_seeds — the OP-18 post-restore patch (the durable fix).
+  - stdlib/flame/clm_prod_gelu2_hostdispatch_eq.hexa — gelu2 byte-eq oracle.
+  - stdlib/flame/clm_prod_moe_block2_hostdispatch_eq.hexa — moe_block2 byte-eq oracle.
+  - the milestone + this verdict.
+
+────────────────────────────────────────────────────────────────────────────
+OUTCOME (g5 honest)
+────────────────────────────────────────────────────────────────────────────
+  forge_dispatch_gelu2       : links-now YES · byte-eq max|Δ|=0 (5 shapes) · GPU untouched YES
+  forge_dispatch_moe_block2  : links-now YES · byte-eq max|Δ|=0 (6 shapes·5 outputs) · GPU untouched YES
+  whole L3 fused-dispatch family (groupnorm_gelu + gelu2 + moe_block2) now host-
+    testable 0-GPU, byte-eq YES (groupnorm_gelu also made durably restorable here).
+  GPU path (#ifdef HEXA_CUDA / fusion_dispatch.c) UNCHANGED YES — host bodies are
+    `#ifndef HEXA_CUDA` only, no duplicate symbol, verified by syntax check.
+  Durable landing VERIFIED through the patched restore tool (no GPU-build regen
+    needed beyond the restore-tool patch — fully in-0-pod, unlike OP-2b/OP-16's
+    deferred runtime-rebuild framing). NO 1-ULP residual (FP_CONTRACT OFF cured it).
+  $0, 0-GPU, no pool / no vast.
+
+  F-OP18-GELU2-HOST = 1
+  F-OP18-MOE-BLOCK2-HOST = 1
+════════════════════════════════════════════════════════════════════════════

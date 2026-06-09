@@ -10,6 +10,22 @@ loop targets what the consumer card + code can carry.
 
 ## milestones (loop self-feeds; add as discovered)
 
+<!-- ANCHOR:OP-18-L3-FUSED-HOST (unique anchor — completes the OP-16 L3 fused-dispatch family: gelu2 + moe_block2) -->
+- [x] **OP-18 — host fallbacks for the remaining L3 fused dispatchers (gelu2 + moe_block2), 0-GPU testable** —
+  completes the OP-16 (#2995) L3 fused-dispatch family: forge_dispatch_gelu2 (L3-b) + forge_dispatch_moe_block2
+  (L3-d) were GPU-only (fusion_dispatch.c #ifdef HEXA_CUDA), so a 0-GPU `hexa run` driving the fused paths
+  failed to LINK (undefined symbol). DONE — wrote the missing `#ifndef HEXA_CUDA` host twins in self/runtime.c
+  (gelu2 = two erf-GELU passes == 2× nn_gelu_fwd; moe_block2 = gelu2 → expert_pack2(E=2) → moe_router replaying
+  moe_lib _moe_exp scaled-Taylor + OP-8's PROVEN canonical order: per-pos max-sub, e-ascending denom + combine).
+  FP_CONTRACT OFF (OP-16's cure) → max|Δ| EXACTLY 0, no 1-ULP residual. Proven 0-GPU: both symbols U→T, the two
+  tracked oracles drive each fused entry point through the host dispatch vs the unfused reference → max|Δ|=0
+  (gelu2 5 shapes; moe_block2 6 shapes × ex0/ex1/ex_out/probs/y). GPU path UNCHANGED (#ifndef HEXA_CUDA, no dup
+  symbol — verified). Durable landing = idempotent OP-18 post-restore patch in tool/restore_frozen_seeds (same
+  mechanism as OP-17 #2996; also makes OP-16's groupnorm_gelu restorable), VERIFIED end-to-end: append on the
+  frozen blob → patched runtime.c compiles clean no-CUDA (exit 0), nm all 3 symbols U→T, HEXA_CUDA excludes
+  them, idempotent. Whole L3 fused-dispatch family now 0-GPU host-testable byte-eq. Verdict
+  .verdicts/hexa-0pod/F-OP18-L3-FUSED-HOST.txt. $0, no GPU/pool/vast.
+
 <!-- ANCHOR:OP-17-MACRO-REDEF (unique anchor — forge-hygiene, -Wmacro-redefined; distinct warning class from OP-5/OP-5b's -Wcomment) -->
 - [x] **OP-17 — fix runtime.c -Wmacro-redefined (9 libc macros) at source, behavior-preserving (0-GPU)** —
   same forge-hygiene class as OP-5/OP-5b (which cleaned -Wcomment) but a DIFFERENT warning class

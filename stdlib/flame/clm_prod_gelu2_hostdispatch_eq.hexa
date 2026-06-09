@@ -1,0 +1,95 @@
+// ════════════════════════════════════════════════════════════════════════════
+//  clm_prod_gelu2_hostdispatch_eq.hexa — F-OP18 gelu2 host-dispatch byte-eq ORACLE.
+//
+//  HEXA-0POD OP-18: 0-GPU (`hexa run`) oracle that LINKS + drives the L3-b fused
+//  dispatcher forge_dispatch_gelu2 through its NEW host CPU fallback (self/runtime.c
+//  #ifndef HEXA_CUDA body) and proves it BYTE-EQ to the unfused reference (two
+//  separate nn_gelu_fwd calls — the exact path clm_prod.hexa _gelu2 falls through
+//  to off-CUDA). Completes the OP-16 (#2995) fused-dispatch family on CPU.
+//
+//  forge_dispatch_gelu2(g0,a0,g1,a1,n) writes a0 = GELU(g0) and a1 = GELU(g1)
+//  over n elements each, erf-based GELU(x) = x·0.5·(1+erf(x/√2)). The host body
+//  is byte-identical to two nn_gelu_fwd calls ⇒ max|Δ| = 0.
+//
+//  Before OP-18 a `hexa run` harness referencing forge_dispatch_gelu2 FAILED TO
+//  LINK off-CUDA (undefined symbol — the GPU build supplied it via
+//  fusion_dispatch.c #ifdef HEXA_CUDA). This oracle LINKS now and locks the
+//  contract. $0, pure CPU, no GPU.
+//
+//  F-OP18-GELU2-HOST : fused gelu2 dispatch (host) == two unfused gelu, max|Δ|=0.
+// ════════════════════════════════════════════════════════════════════════════
+
+use "stdlib/flame/tensor_lib"
+use "stdlib/flame/nn_lib"
+
+fn _g2_absf(x: float) -> float { if x < 0.0 { return 0.0 - x } return x }
+fn _g2_maxdev(a: int, b: int, n: int) -> float {
+    let mut m = 0.0
+    let mut i = 0
+    while i < n { let d = _g2_absf(t_get(a, i) - t_get(b, i)); if d > m { m = d }; i = i + 1 }
+    return m
+}
+
+// deterministic fixture fill (reproducible bytes, spans -5..+5 so GELU exercises
+// the full erf range incl. negatives).
+fn _g2_fill(a: int, n: int, seed: int) {
+    let mut i = 0
+    let mut s = seed
+    while i < n {
+        s = (s * 1103515245 + 12345) & 0x7FFFFFFF
+        t_set(a, i, (to_float(s % 1000) - 500.0) * 0.01)
+        i = i + 1
+    }
+}
+
+// returns (max|Δ| on a0, max|Δ| on a1, dispatch rc) — but hexa has no tuples here,
+// so we fold to a single max over both outputs and assert rc==0 separately.
+fn _run_case(n: int) -> float {
+    let g0 = t_zeros(n)
+    let g1 = t_zeros(n)
+    _g2_fill(g0, n, 7)
+    _g2_fill(g1, n, 29)
+    // unfused reference: two separate nn_gelu_fwd
+    let a0_ref = t_zeros(n)
+    let a1_ref = t_zeros(n)
+    nn_gelu_fwd(g0, a0_ref, n)
+    nn_gelu_fwd(g1, a1_ref, n)
+    // fused dispatch through the NEW host body (writes a0_d, a1_d)
+    let a0_d = t_zeros(n)
+    let a1_d = t_zeros(n)
+    let rc = forge_dispatch_gelu2(g0, a0_d, g1, a1_d, n)
+    if rc != 0 {
+        println("  !! forge_dispatch_gelu2 returned rc=" + to_string(rc) + " (expected 0) — host body not linked?")
+        return 999.0
+    }
+    let d0 = _g2_maxdev(a0_ref, a0_d, n)
+    let d1 = _g2_maxdev(a1_ref, a1_d, n)
+    if d1 > d0 { return d1 }
+    return d0
+}
+
+fn main() {
+    println("clm_prod_gelu2_hostdispatch_eq — F-OP18 gelu2 fused-dispatch (host) == 2× unfused gelu (CPU oracle)")
+    let d1 = _run_case(16)
+    let d2 = _run_case(64)
+    let d3 = _run_case(257)     // odd length
+    let d4 = _run_case(1)       // degenerate single element
+    let d5 = _run_case(1024)
+    println("  a max|Δ|  n=16   = " + to_string(d1))
+    println("  a max|Δ|  n=64   = " + to_string(d2))
+    println("  a max|Δ|  n=257  = " + to_string(d3))
+    println("  a max|Δ|  n=1    = " + to_string(d4))
+    println("  a max|Δ|  n=1024 = " + to_string(d5))
+    let mut worst = d1
+    if d2 > worst { worst = d2 }
+    if d3 > worst { worst = d3 }
+    if d4 > worst { worst = d4 }
+    if d5 > worst { worst = d5 }
+    if worst == 0.0 {
+        println("F-OP18-GELU2-HOST = 1")
+        println("PASS — gelu2 fused dispatch (host body) == 2× unfused nn_gelu_fwd, byte-eq (max|Δ|=0); LINKS off-CUDA")
+    } else {
+        println("F-OP18-GELU2-HOST = 0")
+        println("FAIL — max|Δ| = " + to_string(worst))
+    }
+}

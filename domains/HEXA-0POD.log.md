@@ -1,5 +1,38 @@
 # HEXA-0POD — log
 
+## 2026-06-09 — OP-18 DONE: host fallbacks for the remaining L3 fused dispatchers (gelu2 + moe_block2), 0-GPU
+
+Completed the OP-16 (#2995) L3 fused-dispatch FAMILY. forge_dispatch_gelu2 (L3-b) + forge_dispatch_moe_block2
+(L3-d) were supplied ONLY by the GPU build's fusion_dispatch.c (`#ifdef HEXA_CUDA`), so a 0-GPU `hexa run`
+harness driving the fused paths (clm_prod.hexa _gelu2 / _moe_block2, which emit the bare symbol via codegen)
+FAILED TO LINK off-CUDA — the last 2 of the family's 3 dispatchers still host-undefined after OP-16 fixed
+groupnorm_gelu only.
+
+- WROTE the `#ifndef HEXA_CUDA` host twins in self/runtime.c (after OP-16's groupnorm_gelu block, same
+  bare-wrapper-seam idiom, FP_CONTRACT OFF):
+    gelu2(g0,a0,g1,a1,n)      = two erf-GELU passes (GELU(x)=x·0.5·(1+erf(x/√2))) == 2× nn_gelu_fwd.
+    moe_block2(…,T,E,C)       = gelu2 → expert_pack2 (E=2 stack into ex_out[E·T·C]) → moe_router replaying
+                               moe_lib _moe_exp (scaled-Taylor, NOT libm exp) with per-pos max-sub +
+                               sequentially-summed denom + e-ASCENDING combine = OP-8's (#2993) PROVEN order.
+- BYTE-EQ 0-GPU: both symbols U→T (nm); two TRACKED oracles drive each fused entry through the host dispatch
+  vs the unfused reference → max|Δ| = 0.0:
+    clm_prod_gelu2_hostdispatch_eq.hexa     — gelu2 vs 2× nn_gelu_fwd, n=16/64/257/1/1024 → 0.0 all.
+    clm_prod_moe_block2_hostdispatch_eq.hexa — moe_block2 vs unfused chain, 6 shapes, comparing
+                                              ex0/ex1/ex_out/probs/y → 0.0 all (whole fused unit locked).
+  rc==0 on every shape (host dispatch actually fired). FP_CONTRACT OFF cured the would-be ~1-ULP FMA gap →
+  EXACTLY 0 (OP-16's lesson; no residual).
+- GPU PATH UNCHANGED: `#ifndef HEXA_CUDA` only — `clang -DHEXA_CUDA -fsyntax-only` shows no duplicate/
+  redefinition on the 2 symbols (fusion_dispatch.c still owns the HEXA_CUDA bodies).
+- DURABLE LANDING (g5, OP-17-class): self/runtime.c is gitignored frozen-seed (#2065, restored from immutable
+  blob 151c52c8… which PREDATES all L3 fusion glue). Durable fix = idempotent, marker-guarded OP-18
+  POST-RESTORE PATCH in the TRACKED tool/restore_frozen_seeds that APPENDS the 3 `#ifndef HEXA_CUDA` host
+  bodies (gelu2 + moe_block2 + groupnorm_gelu — OP-16 never landed groupnorm_gelu durably, so OP-18 makes the
+  WHOLE family restorable) at EOF where _hx_farr_table/hexa_as_num/erf/hexa_int are in scope. VERIFIED
+  end-to-end: append on the freshly-restored frozen blob → patched runtime.c compiles clean no-CUDA (exit 0),
+  nm all 3 symbols U→T, HEXA_CUDA excludes them (GPU untouched), idempotent (2nd run no-ops). Fully in-0-pod
+  (no GPU-build regen needed beyond the restore-tool patch). Whole L3 fused-dispatch family now 0-GPU
+  host-testable byte-eq. Verdict .verdicts/hexa-0pod/F-OP18-L3-FUSED-HOST.txt. $0, no GPU/pool/vast.
+
 ## 2026-06-09 — OP-4 DONE: flame fused-step 5070 win/lose map — LOSES everywhere, near-parity only in FP64
 
 Swept the flame BENCH-10 FUSED training step (flame_bench_step_fused.cu -DFUSED, cuBLAS lane = the speed lane:
