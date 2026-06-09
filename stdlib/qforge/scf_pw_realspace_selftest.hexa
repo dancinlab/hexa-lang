@@ -1,0 +1,177 @@
+// HEXA Standard Library — qforge/scf_pw_realspace_selftest
+//
+// g5 deterministic gate for the TRUE 3-D real-space SCF density ρ(r) module.
+// Every case has a CLOSED-FORM analytic target on plane-wave / cosine inputs —
+// no number-forcing (d6). Verifies: pow2-padding (n=645-style staging), the 3-D
+// spectral gradient per-axis (NOT a flattened 1-D line), the GGA→LDA reduction in
+// the uniform limit, the physical density normalization, and the Hartree Poisson.
+use "stdlib/qforge/scf_pw_realspace"
+use "stdlib/qforge/screening"
+
+let PI = 3.14159265358979323846
+
+fn approx(a: float, b: float, tol: float) -> bool {
+    let d = if a > b { a - b } else { b - a }
+    return d <= tol
+}
+
+fn report(name: string, ok: bool, detail: string) -> int {
+    if ok { println("PASS " + name + " — " + detail) ; return 0 }
+    println("FAIL " + name + " — " + detail) ; return 1
+}
+
+fn main() {
+    let mut fails = 0
+
+    // ── A · STAGING + POW2 PADDING (the n=645≠pow2 wall is gone) ───────────────
+    //   Build a small BCC-ish G-shell whose max Miller index is 5 → axis dim must
+    //   pad to pow2 ≥ 4·5+1 = 21 → 32. A non-pow2 PW count (n=7, odd) must STILL
+    //   stage onto a valid pow2 cube (the (1,1,n) line could not).
+    let mut gv: [float] = []
+    let mut mil: [float] = []
+    // 7 coefficients with Miller indices up to ±5 on each axis (odd count → n=7).
+    let hs = [0, 1, -1, 5, -5, 2, -3]
+    let ks = [0, -1, 1, 0, 5, -2, 3]
+    let ls = [0, 1, -1, 5, 0, 2, -5]
+    // cubic reciprocal basis b = 2π/a, a=4 bohr → b≈1.5708 (identity-scaled).
+    let bb = 2.0 * PI / 4.0
+    let b1 = [bb, 0.0, 0.0]
+    let b2 = [0.0, bb, 0.0]
+    let b3 = [0.0, 0.0, bb]
+    let mut i = 0
+    while i < 7 {
+        let gx = to_float(hs[i]) * bb
+        let gy = to_float(ks[i]) * bb
+        let gz = to_float(ls[i]) * bb
+        gv.push(gx) ; gv.push(gy) ; gv.push(gz)
+        mil.push(to_float(hs[i])) ; mil.push(to_float(ks[i])) ; mil.push(to_float(ls[i]))
+        i = i + 1
+    }
+    let omega = 4.0 * 4.0 * 4.0                         // a³ = 64 bohr³
+    let staged = qforge_rho3d_stage(gv, mil, b1, b2, b3, omega, 3)
+    fails = fails + report("A staging ok (odd n=7, Miller±5)", staged, "staged=" + to_string(staged))
+    let dims = qforge_rho3d_dims()
+    let pow2ok = dims[0] == 32 && dims[1] == 32 && dims[2] == 32
+    fails = fails + report("A pow2 cube dims = 32³ (4·5+1=21→32)", pow2ok,
+                           "dims=" + to_string(dims[0]) + "x" + to_string(dims[1]) + "x" + to_string(dims[2]))
+
+    // ── B · UNIFORM DENSITY → |∇ρ|=0 everywhere (3-D gradient is exact) ────────
+    //   ρ(r)=const cube. The spectral 3-D ∇ρ must be ~0 on EVERY axis (the
+    //   flattened (1,1,n) line could fake one direction; a true 3-D grid cannot).
+    let ntot = dims[0] * dims[1] * dims[2]
+    let mut rho_u: [float] = []
+    let mut t = 0
+    while t < ntot { rho_u.push(0.30) ; t = t + 1 }       // ρ̄ = 0.30 e/bohr³
+    let gnorm_u = qforge_rho3d_gradnorm(rho_u)
+    let mut gmax = 0.0
+    t = 0
+    while t < ntot { if gnorm_u[t] > gmax { gmax = gnorm_u[t] } ; t = t + 1 }
+    fails = fails + report("B uniform ρ ⇒ |∇ρ|≈0 (3-D, all axes)", approx(gmax, 0.0, 1.0e-9),
+                           "max|∇ρ|=" + to_string(gmax))
+
+    // ── C · PBE V_xc on uniform ρ ≡ LDA V_xc (GGA→LDA reduction, exact) ────────
+    //   On a uniform density the GGA divergence term vanishes (∇ρ=0) → V_xc^PBE
+    //   must equal ∂e/∂ρ = the LDA-x+c potential. Compare to the screening LDA fn.
+    let vxc_u = qforge_vxc_pbe_3d(rho_u, 3)
+    let cval = vxc_u[0] + 0.0           // freeze the scalar OUT of the array NOW (the
+                                        // interpreter reuses FFT buffers across later
+                                        // cases; reading vxc_u[0] later would alias).
+    let lda_ref = qforge_vx_lda(0.30) + qforge_vc_pw92_from_rho(0.30)
+    // central-difference ∂e/∂ρ at g=0 ≈ analytic LDA V_xc (loose tol for the FD step).
+    let okC = approx(cval, lda_ref, 5.0e-4)
+    fails = fails + report("C PBE V_xc[uniform ρ] ≡ LDA V_xc", okC,
+                           "V_xc^PBE=" + to_string(cval) + " LDA=" + to_string(lda_ref))
+
+    // ── D · COSINE DENSITY → analytic 3-D gradient on a SINGLE axis ────────────
+    //   ρ(x)=ρ̄+A·cos(G₁·x), G₁ = b1 (one reciprocal lattice vector along x). The
+    //   exact gradient is ∂ρ/∂x = −A·G₁·sin(G₁·x), ∂ρ/∂y=∂ρ/∂z=0. A flattened
+    //   (1,1,n) representation CANNOT distinguish the x-axis modulation; the true
+    //   3-D grid must put ALL the gradient on the x component. We build the density
+    //   directly on the cube grid points and check the spectral ∂/∂x peak.
+    let nx = dims[0] ; let ny = dims[1] ; let nz = dims[2]
+    let amp = 0.05 ; let rbar = 0.30
+    let g1 = bb                                            // |G₁| along x
+    let mut rho_c: [float] = []
+    let mut ix = 0
+    while ix < nx {
+        let mut iy = 0
+        while iy < ny {
+            let mut iz = 0
+            while iz < nz {
+                // real-space coordinate x = ix·(a/Nx); cos(G₁·x)=cos(b·ix·a/Nx)
+                //   with G₁=2π/a ⇒ G₁·x = 2π·ix/Nx (a single grid-period cosine).
+                let phase = 2.0 * PI * to_float(ix) / to_float(nx)
+                rho_c.push(rbar + amp * cos(phase))
+                iz = iz + 1
+            }
+            iy = iy + 1
+        }
+        ix = ix + 1
+    }
+    // |∇ρ| peak = A·G₁ (at sin=±1).  G₁ = 2π/a = bb.
+    let gnorm_c = qforge_rho3d_gradnorm(rho_c)
+    let mut gpk = 0.0
+    t = 0
+    while t < ntot { if gnorm_c[t] > gpk { gpk = gnorm_c[t] } ; t = t + 1 }
+    let gpk_ref = amp * g1
+    fails = fails + report("D cos(G·x) ⇒ peak |∇ρ| = A·|G| (3-D x-axis)",
+                           approx(gpk, gpk_ref, 5.0e-3 * gpk_ref + 1.0e-6),
+                           "peak=" + to_string(gpk) + " ref=" + to_string(gpk_ref))
+
+    // ── E · HARTREE of a single-G cosine ρ matches 4π/|G|² (Poisson, exact) ────
+    //   V_H(G) = 4π ρ(G)/|G|². For ρ(x)=ρ̄+A·cos(G₁·x): the G=0 part → 0 (gauge),
+    //   the ±G₁ Fourier amplitude is A/2 each → V_H(x)=A·(4π/G₁²)·cos(G₁·x). So
+    //   peak |V_H| = A·4π/G₁².  Checks the 3-D Poisson on the padded cube.
+    let vh_c = qforge_vh_3d(rho_c)
+    let mut vmax = 0.0
+    t = 0
+    while t < ntot { let av = if vh_c[t] >= 0.0 { vh_c[t] } else { -vh_c[t] }
+                     if av > vmax { vmax = av } ; t = t + 1 }
+    let vmax_ref = amp * 4.0 * PI / (g1 * g1)
+    fails = fails + report("E Hartree[cos] peak = A·4π/|G|² (3-D Poisson)",
+                           approx(vmax, vmax_ref, 1.0e-3 * vmax_ref + 1.0e-9),
+                           "peak=" + to_string(vmax) + " ref=" + to_string(vmax_ref))
+
+    // ── F · DENSITY NORMALIZATION ∫ρ dr = nelec (physical ρ from raw |ψ|²) ─────
+    //   A raw uniform |ψ|² grid of value c normalized to nelec must integrate to
+    //   exactly nelec: ∫ = Σ·(Ω/Ntot)·scale = nelec by construction.
+    let mut raw: [float] = []
+    t = 0
+    while t < ntot { raw.push(0.123) ; t = t + 1 }
+    let nelec = 8
+    let rho_n = qforge_rho3d_normalize(raw, nelec)
+    let dv = omega / to_float(ntot)
+    let mut integral = 0.0
+    t = 0
+    while t < ntot { integral = integral + rho_n[t] ; t = t + 1 }
+    integral = integral * dv
+    fails = fails + report("F ∫ρ dr = nelec after normalize", approx(integral, to_float(nelec), 1.0e-9),
+                           "∫ρ=" + to_string(integral) + " nelec=" + to_string(nelec))
+
+    // ── G · PBE V_xc on cosine ρ ≠ LDA (the GGA term is provably LIVE) ─────────
+    //   On the modulated density the GGA divergence term is nonzero, so V_xc^PBE
+    //   must DIFFER from the pointwise LDA V_xc somewhere (proves the 3-D gradient
+    //   physics actually fires — not a silent LDA fallback).
+    let vxc_c = qforge_vxc_pbe_3d(rho_c, 3)
+    let mut maxdiff = 0.0
+    t = 0
+    while t < ntot {
+        let lda = qforge_vx_lda(rho_c[t]) + qforge_vc_pw92_from_rho(rho_c[t])
+        let d = if vxc_c[t] > lda { vxc_c[t] - lda } else { lda - vxc_c[t] }
+        if d > maxdiff { maxdiff = d }
+        t = t + 1
+    }
+    fails = fails + report("G PBE V_xc[cos ρ] ≠ LDA (GGA term LIVE)", maxdiff > 1.0e-6,
+                           "max|V_PBE−V_LDA|=" + to_string(maxdiff))
+
+    // ── H · FX_PBE enhancement bounds: F_x(0)=1, F_x→1+κ, monotone ────────────
+    let fx0 = qforge_fx_pbe_enh(0.30, 0.0)
+    let fx_lo = qforge_fx_pbe_enh(0.30, 0.01)
+    let fx_hi = qforge_fx_pbe_enh(0.30, 100.0)
+    let okH = approx(fx0, 1.0, 1.0e-12) && fx_hi > fx_lo && fx_hi <= 1.0 + 0.804 + 1.0e-9 && fx_lo > 1.0
+    fails = fails + report("H F_x(s): F_x(0)=1, monotone, ≤1+κ", okH,
+                           "F_x(0)=" + to_string(fx0) + " F_x(.01)=" + to_string(fx_lo) + " F_x(∞)=" + to_string(fx_hi))
+
+    if fails == 0 { println("qforge_scf_pw_realspace_selftest PASS") }
+    else { println("qforge_scf_pw_realspace_selftest FAIL — " + to_string(fails) + " case(s)") }
+}

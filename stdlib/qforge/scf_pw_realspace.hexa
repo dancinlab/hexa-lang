@@ -238,10 +238,15 @@ fn _rs_grad_component(rho_re: [float], dir: int) -> [float] {
     let nx = PWRS_NX ; let ny = PWRS_NY ; let nz = PWRS_NZ
     let ntot = nx * ny * nz
     if len(rho_re) != ntot { return [] }
+    // DEFENSIVE COPY: core_fft fft3 mutates its real/imag inputs IN PLACE (the 3-D
+    //   transform overwrites the caller's array). Passing rho_re directly would
+    //   destroy the density across successive gradient-component calls (the root of
+    //   a spurious nonzero divergence on a uniform ρ). Copy before transforming.
+    let mut re_cp: [float] = []
     let mut zim: [float] = []
     let mut q = 0
-    while q < ntot { zim.push(0.0) ; q = q + 1 }
-    let spec = fft3(rho_re, zim, nx, ny, nz)               // ρ(G), interleaved 2N
+    while q < ntot { re_cp.push(rho_re[q]) ; zim.push(0.0) ; q = q + 1 }
+    let spec = fft3(re_cp, zim, nx, ny, nz)               // ρ(G), interleaved 2N
     if len(spec) != 2 * ntot { return [] }
     // multiply each G by i·G_dir : (re,im) → (−G·im, +G·re).
     let mut gre: [float] = [] ; let mut gim: [float] = []
