@@ -8,10 +8,17 @@
 // the B fragment is 2 regs of 4 bf16. The fp32 input is round-to-nearest
 // converted to bf16 (RN, ties-to-even) on the fly; accumulation stays fp32.
 //
-// We carry over OP-1's THREE bit-faithful layout/load wins verbatim:
+// We carry over OP-1's bit-faithful layout/load wins verbatim:
 //   (a) bank-conflict-free smem pad (As[BM][BK+pad], Bs[BK][BN+pad]),
 //   (b) vectorized 128-bit (.v4 / float4) global loads (fast path; scalar tail),
 //   (c) cp.async double-buffered BK stage.
+//   (d) [OP-3b] .v2 (float2) vectorized C-store epilogue — the BF16 m16n8 C
+//       fragment is fp32 (same OUTPUT layout as TF32), so c0/c1 (and c2/c3) are
+//       contiguous and fuse to one 64-bit store; SAME bits, fewer store insns.
+//       This is the ONE lever OP-1b found bit-exactly positive on the 5070 (+1.7%
+//       @1024 TF32); BK=32 / 3-stage cp.async were CLOSED-NEGATIVE there (smem
+//       pressure on the 48KB cap) and are NOT attempted. rel-RMS vs the OP-3
+//       baseline = 0 (a store-vectorization, not a math change).
 // The fp32->bf16 RN conversion happens at the smem->register fragment load (same
 // place TF32's f2tf32 happened), so the smem staging + global load path is an
 // exact structural copy of the TF32 kernel; only the MMA tile (k16 vs k8), the
@@ -32,6 +39,8 @@
 //   0  GATE: rel-RMS / max|delta| vs FP64 ref at the bench shape (default D=768).
 //   1  PERF: TFLOP/s vs cuBLAS-BF16 (square S from argv[1]).
 //   2  DETERMINISM: run twice, report max|delta| between the two own-GEMM runs.
+//   3  DUMP: write the own-GEMM C output to argv[3] as raw float32 (for the .v2-vs-
+//      OP-3-baseline BYTE-IDENTICAL `cmp` — build a -DEPILOGUE_SCALAR twin + diff).
 //
 // Build: build_owngemm_bf16.sh (run on aiden).
 
@@ -184,6 +193,14 @@ extern "C" __global__ void gemm_sm120_bf16(const float* __restrict__ A,
     // store: each thread of the warp holds 4 acc per (16x8) fragment.
     // m16n8 C layout: c0:(row=groupID,col=2*tig), c1:(row=groupID,col=2*tig+1),
     //                 c2:(row=groupID+8,col=2*tig), c3:(row=groupID+8,col=2*tig+1)
+    // HEXA-0POD OP-3b: the BF16 m16n8 C fragment layout is IDENTICAL to the TF32
+    // m16n8 one (the mma OUTPUT fragment is fp32 in both — only the input dtype /
+    // k-step differ), so OP-1b's bit-exact .v2 (float2) vectorized C-store epilogue
+    // applies VERBATIM: c0/c1 (and c2/c3) are CONTIGUOUS in C (cols 2*tig, 2*tig+1),
+    // so emit each pair as one 64-bit float2 .v2 store instead of two scalar writes
+    // — SAME bits (no math change; rel-RMS vs the OP-3 baseline = 0), half the store
+    // instructions in the common interior-tile case. Scalar masked fallback at the
+    // right/bottom boundary tiles and on odd (8-byte-unaligned) column start.
     #pragma unroll
     for(int fmi=0; fmi<WM_FRAG; fmi++){
         int mrow = bm + wm + fmi*16;
@@ -192,10 +209,22 @@ extern "C" __global__ void gemm_sm120_bf16(const float* __restrict__ A,
             int ncol = bn + wn + fni*8;
             float* d = acc[fmi][fni];
             int r0=mrow+gid, r1=mrow+gid+8, c0=ncol+2*tig, c1=ncol+2*tig+1;
+#ifdef EPILOGUE_SCALAR
+            // OP-3 baseline epilogue (scalar stores) — built with -DEPILOGUE_SCALAR
+            // so the build script can prove the .v2 path is BYTE-IDENTICAL to it.
             if(r0<M && c0<N) C[(long long)r0*N+c0]=d[0];
             if(r0<M && c1<N) C[(long long)r0*N+c1]=d[1];
             if(r1<M && c0<N) C[(long long)r1*N+c0]=d[2];
             if(r1<M && c1<N) C[(long long)r1*N+c1]=d[3];
+#else
+            bool aligned = ((c0&1)==0);   // c0 even -> &C[..][c0] is 8-byte aligned
+            if(r0<M && c1<N && aligned) *reinterpret_cast<float2*>(&C[(long long)r0*N+c0]) = make_float2(d[0],d[1]);
+            else { if(r0<M && c0<N) C[(long long)r0*N+c0]=d[0];
+                   if(r0<M && c1<N) C[(long long)r0*N+c1]=d[1]; }
+            if(r1<M && c1<N && aligned) *reinterpret_cast<float2*>(&C[(long long)r1*N+c0]) = make_float2(d[2],d[3]);
+            else { if(r1<M && c0<N) C[(long long)r1*N+c0]=d[2];
+                   if(r1<M && c1<N) C[(long long)r1*N+c1]=d[3]; }
+#endif
         }
     }
 }
@@ -244,6 +273,17 @@ int main(int argc,char**argv){
     double relrms = sr>0 ? sqrt(se/szC)/sqrt(sr/szC) : 0.0;
     printf("[GATE] S=%d own-GEMM-BF16 vs FP64 ref: rel-RMS=%.3e max|delta|=%.3e (gate<=1e-2: %s)\n",
            S,relrms,maxd, relrms<=1e-2?"PASS":"FAIL");
+
+    if(MODE==3){
+        // DUMP own-GEMM C as raw float32 to argv[3] — the build script builds this
+        // (.v2 epilogue) and a -DEPILOGUE_SCALAR twin, dumps both, and `cmp`s them
+        // for BYTE-IDENTITY (proves the .v2 store changed zero output bits).
+        const char* path = argc>3?argv[3]:"/tmp/owngemm_bf16_dump.bin";
+        FILE* f=fopen(path,"wb");
+        if(!f){ printf("[DUMP] cannot open %s\n",path); return 5; }
+        fwrite(hC,4,szC,f); fclose(f);
+        printf("[DUMP] S=%d wrote %zu floats to %s\n",S,szC,path);
+    }
 
     if(MODE==2){
         // DETERMINISM: run again, compare own-vs-own bit-for-bit.
