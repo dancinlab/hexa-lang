@@ -441,3 +441,12 @@ GATE (g5): doc-consolidation milestone — value = the byte-eq reproducibility c
 computation. Every canonical-order claim traces to a specific verdict line (no invented invariant). $0, 0-GPU,
 no pool/vast. OP-12 (AdamW optimizer oracle) landed in parallel and is indexed here as the OPTIMIZER phase.
 Verdict .verdicts/hexa-0pod/F-OP14-DETERMINISM-DOC.txt.
+
+## OP-15 — integration byte-eq oracle (whole micro-step byte-identical run-to-run)
+
+- WIP skeleton pushed (stdlib/flame/clm_step_determinism_eq.hexa).
+- DONE (`hexa run`, 0-GPU): composed CLMConvMoE micro-step (embed→conv→GroupNorm→MoE→CE→bwd→AdamW, 17 params)
+  BYTE-IDENTICAL run-to-run from same fixed-seed init. loss 4.81916 both runs; max|Δ| = 0 over W, m, v, loss.
+  Composition is deterministic — no uninit-scratch / non-det-iteration / address-ordered hole. Comparator
+  sensitivity confirmed via negative control (distinct seed → 0.344217; identical → 0.0). GREEN (g5).
+  Verdict .verdicts/hexa-0pod/F-OP15-STEP-DETERMINISM.txt.
