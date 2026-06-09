@@ -1,0 +1,206 @@
+// ════════════════════════════════════════════════════════════════════════════
+//  clm_prod_gn_gelu_hostdispatch_eq.hexa — F-OP16 fused-valley GN+GELU host
+//  dispatch byte-eq ORACLE.
+//
+//  HEXA-0POD OP-16: closes the 0-GPU determinism-test blind spot OP-15 (#2994)
+//  found. OP-15 noted that any `hexa run` harness that `use`s stdlib/flame/gn_lib
+//  FAILS TO LINK off a no-CUDA build, because gn_lib's nn_gn_gelu_fused_off
+//  references the GPU forge symbol forge_dispatch_groupnorm_gelu, which had NO
+//  HOST BODY off-CUDA → undefined symbol at link. So the fused-valley GN+GELU
+//  path (HEXA_FUSE_GN_GELU) could not be exercised locally on CPU.
+//
+//  OP-16 added the missing HOST twin for forge_dispatch_groupnorm_gelu (runtime.c
+//  `#ifndef HEXA_CUDA` branch — the GPU dispatch is UNCHANGED). The host body
+//  computes the SAME unfused GN+GELU in the SAME canonical order: two-pass
+//  mean/var (t-outer, c-inner), eps=1e-5 placement var+eps, 40-iter Newton
+//  `_gn_sqrt`, erf-based GELU y·0.5·(1+erf(y·(1/√2))). OP-9 (#2987) already
+//  proved unfused == fused (max|Δ|=0), so this host body IS the byte-correct
+//  host implementation of the fused dispatch.
+//
+//  This oracle DRIVES THE FUSED ENTRY POINT through the new host dispatch path:
+//  it `use`s gn_lib (the previously-unlinkable import) and calls
+//  nn_gn_gelu_fused_off with goff=boff=0 under the env gate
+//  (HEXA_FUSE_GN_GELU + CLM_PROD_DEVRESIDENT set by the runner). With the gate
+//  ON and offsets 0, nn_gn_gelu_fused_off invokes forge_dispatch_groupnorm_gelu
+//  — i.e. the OP-16 host body — and returns its result. The oracle compares that
+//  fused-dispatch output to an inline UNFUSED reference (the OP-9 _gn_ref shape:
+//  two-pass mean/var + a SEPARATE GELU sweep) and asserts max|Δ|=0 on BOTH Y
+//  (pre-GELU GN affine, the bwd cache) and A (GELU output).
+//
+//  If env is OFF (or the dispatch returns -1), gn_lib's own host loop runs —
+//  also byte-eq — so the test passes either way, but the WHOLE POINT is that with
+//  the gate ON the binary LINKS and the dispatch host body runs. Run with:
+//      HEXA_FUSE_GN_GELU=1 CLM_PROD_DEVRESIDENT=1 hexa run <this file>
+//
+//  F-OP16-GN-HOST-FALLBACK : fused-dispatch host body == unfused reference,
+//                            max|Δ|=0, links off-CUDA.
+// ════════════════════════════════════════════════════════════════════════════
+
+use "stdlib/flame/tensor_lib"
+use "stdlib/flame/gn_lib"
+
+fn _h16_absf(x: float) -> float { if x < 0.0 { return 0.0 - x } return x }
+fn _h16_maxdev(a: int, b: int, n: int) -> float {
+    let mut m = 0.0
+    let mut i = 0
+    while i < n { let d = _h16_absf(t_get(a, i) - t_get(b, i)); if d > m { m = d }; i = i + 1 }
+    return m
+}
+
+// Newton-Raphson sqrt — BYTE-IDENTICAL to gn_lib _gn_sqrt and the OP-16 host
+// body _op16_gn_sqrt (40 iters, seed g0=x, same recurrence).
+fn _h16_sqrt(x: float) -> float {
+    if x <= 0.0 { return 0.0 }
+    let mut g = x
+    let mut i = 0
+    while i < 40 {
+        g = 0.5 * (g + x / g)
+        i = i + 1
+    }
+    return g
+}
+
+// GELU — BYTE-IDENTICAL to gn_lib _gn_gelu / nn_lib _nn_gelu / the OP-16 host body.
+fn _h16_gelu(x: float) -> float {
+    let inv_sqrt2 = 0.70710678118654752440
+    return x * (0.5 * (1.0 + erf(x * inv_sqrt2)))
+}
+
+// UNFUSED reference (the OP-9 _gn_ref shape): two-pass mean/var (t-outer, c-inner),
+// SEPARATE affine pass writing Y, THEN a SEPARATE GELU sweep re-reading Y → A.
+fn _h16_ref(x: int, gamma: int, beta: int, y_out: int, a_out: int,
+            mean_out: int, inv_out: int, xhat_out: int,
+            T: int, C: int, G: int) {
+    let eps = 0.00001
+    let cg = C / G
+    let m = to_float(cg * T)
+    let mut g = 0
+    while g < G {
+        let c0 = g * cg
+        let mut sum = 0.0
+        let mut t = 0
+        while t < T {
+            let mut c = 0
+            while c < cg {
+                sum = sum + t_get(x, t * C + (c0 + c))
+                c = c + 1
+            }
+            t = t + 1
+        }
+        let mu = sum / m
+        let mut vs = 0.0
+        let mut t2 = 0
+        while t2 < T {
+            let mut c2 = 0
+            while c2 < cg {
+                let d = t_get(x, t2 * C + (c0 + c2)) - mu
+                vs = vs + d * d
+                c2 = c2 + 1
+            }
+            t2 = t2 + 1
+        }
+        let var = vs / m
+        let inv = 1.0 / _h16_sqrt(var + eps)
+        t_set(mean_out, g, mu)
+        t_set(inv_out, g, inv)
+        let mut t3 = 0
+        while t3 < T {
+            let mut c3 = 0
+            while c3 < cg {
+                let ch = c0 + c3
+                let idx = t3 * C + ch
+                let xh = (t_get(x, idx) - mu) * inv
+                t_set(xhat_out, idx, xh)
+                t_set(y_out, idx, t_get(gamma, ch) * xh + t_get(beta, ch))
+                c3 = c3 + 1
+            }
+            t3 = t3 + 1
+        }
+        g = g + 1
+    }
+    let n = T * C
+    let mut i = 0
+    while i < n {
+        t_set(a_out, i, _h16_gelu(t_get(y_out, i)))
+        i = i + 1
+    }
+}
+
+// deterministic fixture fill (reproducible bytes — no rng dependency).
+fn _h16_fill(a: int, n: int, seed: int, scale: float) {
+    let mut i = 0
+    let mut s = seed
+    while i < n {
+        s = (s * 1103515245 + 12345) & 0x7FFFFFFF
+        t_set(a, i, (to_float(s % 1000) - 500.0) * scale)
+        i = i + 1
+    }
+}
+
+// returns max(|ΔY|, |ΔA|): unfused reference vs gn_lib fused dispatch (host body).
+fn _run_case(T: int, C: int, G: int) -> float {
+    let x = t_zeros(T * C)
+    let gamma = t_zeros(C)
+    let beta = t_zeros(C)
+    _h16_fill(x, T * C, 7, 0.05)
+    _h16_fill(gamma, C, 21, 0.02)
+    _h16_fill(beta, C, 33, 0.01)
+    let mut i = 0
+    while i < C { t_set(gamma, i, t_get(gamma, i) + 1.0); i = i + 1 }   // GN affine ~1.0
+
+    let y_ref = t_zeros(T * C)
+    let a_ref = t_zeros(T * C)
+    let mean_ref = t_zeros(G)
+    let inv_ref = t_zeros(G)
+    let xhat_ref = t_zeros(T * C)
+    _h16_ref(x, gamma, beta, y_ref, a_ref, mean_ref, inv_ref, xhat_ref, T, C, G)
+
+    // FUSED path through gn_lib → forge_dispatch_groupnorm_gelu (OP-16 host body
+    // when env-gated). goff=boff=0 so the dispatch is taken under the gate.
+    let y_fz = t_zeros(T * C)
+    let a_fz = t_zeros(T * C)
+    let mean_fz = t_zeros(G)
+    let inv_fz = t_zeros(G)
+    let xhat_fz = t_zeros(T * C)
+    nn_gn_gelu_fused_off(x, gamma, 0, beta, 0, y_fz, a_fz, mean_fz, inv_fz, xhat_fz, T, C, G)
+
+    // Compare BOTH GN-valley outputs Y (pre-GELU affine, bwd cache) and A
+    // (GELU) AND the bwd-cache scalars mean/inv/xhat to the unfused reference.
+    let dy = _h16_maxdev(y_ref, y_fz, T * C)
+    let da = _h16_maxdev(a_ref, a_fz, T * C)
+    let dmean = _h16_maxdev(mean_ref, mean_fz, G)
+    let dinv = _h16_maxdev(inv_ref, inv_fz, G)
+    let dxhat = _h16_maxdev(xhat_ref, xhat_fz, T * C)
+    let mut mx = dy
+    if da > mx { mx = da }
+    if dmean > mx { mx = dmean }
+    if dinv > mx { mx = dinv }
+    if dxhat > mx { mx = dxhat }
+    return mx
+}
+
+fn main() {
+    println("clm_prod_gn_gelu_hostdispatch_eq — F-OP16 fused-valley GN+GELU host dispatch byte-eq (CPU oracle)")
+    let d1 = _run_case(8, 8, 1)       // G=1 = LayerNorm-over-channels degenerate
+    let d2 = _run_case(8, 8, 2)       // G=2 groups
+    let d3 = _run_case(16, 12, 4)     // G=4, wider C
+    let d4 = _run_case(12, 16, 8)     // G=8, cg=2
+    let d5 = _run_case(10, 6, 3)      // G=3, odd C, cg=2
+    let d6 = _run_case(1, 4, 1)       // degenerate T=1 (pure cross-channel)
+    let d7 = _run_case(32, 8, 8)      // G=8, cg=1 (per-channel norm)
+    println("  max|Δ| (Y,A,mean,inv,xhat)  T8 C8 G1   = " + to_string(d1))
+    println("  max|Δ| (Y,A,mean,inv,xhat)  T8 C8 G2   = " + to_string(d2))
+    println("  max|Δ| (Y,A,mean,inv,xhat)  T16 C12 G4 = " + to_string(d3))
+    println("  max|Δ| (Y,A,mean,inv,xhat)  T12 C16 G8 = " + to_string(d4))
+    println("  max|Δ| (Y,A,mean,inv,xhat)  T10 C6 G3  = " + to_string(d5))
+    println("  max|Δ| (Y,A,mean,inv,xhat)  T1 C4 G1   = " + to_string(d6))
+    println("  max|Δ| (Y,A,mean,inv,xhat)  T32 C8 G8  = " + to_string(d7))
+    let ok = (d1 == 0.0) && (d2 == 0.0) && (d3 == 0.0) && (d4 == 0.0) && (d5 == 0.0) && (d6 == 0.0) && (d7 == 0.0)
+    if ok {
+        println("F-OP16-GN-HOST-FALLBACK = 1")
+        println("PASS — gn_lib fused dispatch (host body) == unfused reference, byte-eq (max|Δ|=0, all cases); LINKS off-CUDA")
+    } else {
+        println("F-OP16-GN-HOST-FALLBACK = 0")
+        println("FAIL — fused dispatch host body diverges from the unfused reference")
+    }
+}
