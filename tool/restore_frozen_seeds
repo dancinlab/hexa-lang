@@ -155,10 +155,31 @@ if [ -f "$rt" ] && ! grep -q 'OP-18 (HEXA-0POD' "$rt"; then
  * `#ifndef HEXA_CUDA` only → GPU path (fusion_dispatch.c) UNCHANGED. */
 #ifndef HEXA_CUDA
 #pragma STDC FP_CONTRACT OFF
-/* erf-based GELU, byte-identical to nn_lib _nn_gelu (1/√2 = 0.70710678118654752440). */
+/* HEXA-0POD OP-19b — deterministic exp/erf, byte-identical to flame_math dt_exp/
+ * dt_erf (A&S 7.1.26 + Taylor, BRANCHLESS, NO libm). The host GELU fallback must
+ * match nn_lib's dt_erf GELU (which OP-19b swapped off libm erf) so the gelu2 /
+ * groupnorm_gelu host-dispatch oracles stay byte-eq vs the unfused nn_gelu_fwd. */
+static double _op19b_dt_exp(double x) {
+    long long r = 0; double xr = x;
+    while ((xr > 0.0 ? xr : 0.0 - xr) > 0.25) { xr = xr / 2.0; r = r + 1; }
+    double term = 1.0, acc = 1.0;
+    for (long long k = 1; k < 12; k++) { term = term * xr / (double)k; acc = acc + term; }
+    for (long long s = 0; s < r; s++) acc = acc * acc;
+    return acc;
+}
+static double _op19b_dt_erf(double x) {
+    double sign = 1.0, z = x;
+    if (z < 0.0) { sign = 0.0 - 1.0; z = 0.0 - z; }
+    double t = 1.0 / (1.0 + 0.3275911 * z);
+    const double a1 = 0.254829592, a2 = 0.0 - 0.284496736, a3 = 1.421413741,
+                 a4 = 0.0 - 1.453152027, a5 = 1.061405429;
+    double poly = ((((a5 * t + a4) * t + a3) * t + a2) * t + a1) * t;
+    return sign * (1.0 - poly * _op19b_dt_exp(0.0 - z * z));
+}
+/* dt_erf-based GELU, byte-identical to nn_lib _nn_gelu (OP-19b; 1/√2 literal). */
 static double _op18_gelu(double x) {
     const double inv_sqrt2 = 0.70710678118654752440;
-    return x * (0.5 * (1.0 + erf(x * inv_sqrt2)));
+    return x * (0.5 * (1.0 + _op19b_dt_erf(x * inv_sqrt2)));
 }
 /* Newton-Raphson sqrt — matches gn_lib _gn_sqrt / nn_lib _nn_sqrt (40 iters). */
 static double _op18_gn_sqrt(double x) {
