@@ -1,0 +1,24 @@
+F-OP23-TF32-DRIFT — TF32 vs FP64 N-step training-TRAJECTORY drift (RTX 5070)
+============================================================================
+STATUS: WIP — harness + driver landed; aiden run pending. (This verdict is filled
+        verbatim after the FREE-pool 5070 run completes.)
+
+QUESTION (OP-20 deferred the LARGER one): OP-20 proved a single TF32 flame step is
+self-byte-eq run-to-run + rel-RMS ~1.13e-6 vs FP64 + >3x faster. OPEN: does the TF32
+training TRAJECTORY track FP64 over N>=50 steps (TF32 = real fast-mode), or peel away
+(the 1-step number was an illusion)?
+
+HARNESS: tool/bench/flame_traj_drift_tf32_op23.cu — runs ONE CONTINUOUS trajectory per
+lane (AdamW W/m/v PERSIST across steps so drift ACCUMULATES; OP-20 reset every step). Same
+seed + same fixed data both lanes. Records per step: lossTF32, lossFP64, |dLoss|/|lossFP64|,
+relRMS(W_TF32 vs W_FP64), max|dW|. Loss = mean(G^2) over post-valley activation (fixed-order
+block tree reduce, no atomics — deterministic). Runs the TF32 trajectory TWICE to check
+self-byte-eq over the WHOLE trajectory (not just step 1).
+DRIVER: tool/bench/run_op23_5070.sh (idle-guarded; DEFAULT + PEDANTIC; D={768,1536} B={1,8}).
+
+HONEST FRAMING (g5): NN training is CHAOTIC — even FP64-vs-FP64 with a 1-ULP perturbation
+diverges in WEIGHTS over many steps (butterfly) while LOSS stays equivalent. The RIGHT
+metric is LOSS-TRACKING, not weight byte-closeness. Bounded loss-tracking = TF32 is a real
+fast-mode; loss divergence = illusion.
+
+(results pending aiden run)

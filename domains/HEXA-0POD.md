@@ -10,6 +10,9 @@ loop targets what the consumer card + code can carry.
 
 ## milestones (loop self-feeds; add as discovered)
 
+<!-- ANCHOR:OP-23-TF32-DRIFT (unique anchor — TF32 N-step trajectory drift vs FP64; validate TF32 fast-mode is real, not a 1-step illusion; aiden 5070) -->
+- [ ] **OP-23 — TF32 N-step trajectory drift vs FP64: validate TF32 fast-mode is real not 1-step illusion (aiden)**
+
 <!-- ANCHOR:OP-22-MEGASTEP-DESIGN (unique anchor — 0-pod whole-step MEGASTEP megakernel DESIGN + Amdahl bound + H100 experiment recipe; measure is GPU-gated; honest vs TF32-mode) -->
 - [x] **OP-22 — MEGASTEP whole-step megakernel DESIGN + Amdahl bound + experiment recipe (0-pod, GPU-gated; vs TF32-mode)** —
   produced (reading existing real-pod verdicts + research memory only, $0, 0-GPU, NO vast) the DESIGN +
