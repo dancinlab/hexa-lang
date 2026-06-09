@@ -1,0 +1,31 @@
+F-OP20-TF32-FASTMODE — deterministic TF32 fast-mode for the flame training step (RTX 5070)
+==========================================================================================
+STATUS: WIP (skeleton landed; aiden 5070 measurement pending)
+
+THESIS: flame's training step is ~3x capped at batch=1 by the serial FP64 cuBLAS op-DAG.
+Kernel-fusion / interp-elim / graph-capture are exhausted (closed-neg). The ONLY two uncap
+levers named (MEGASTEP memory + flame_h100_h200_closeout) are (a) PRECISION-CHANGE
+FP64->TF32 + dense compute-bound fusion, (b) right-sized GPU. (a) is unexplored. OP-20
+probes (a) on the FREE 5070 — NO vast.
+
+KEY INSIGHT: FP64->TF32 breaks byte-eq-vs-FP64, BUT a TF32 step can still be byte-eq-vs-
+ITSELF (run-to-run deterministic). That preserves flame's reproducibility IDENTITY at a
+different PRECISION CONTRACT (W14: rel-rms <= 1e-2 vs same-dtype). So "deterministic TF32
+fast-mode" = a legitimate flame product mode, not an identity sacrifice — IF it stays
+self-byte-eq.
+
+HARNESS: tool/bench/flame_bench_step_tf32fast.cu runs BOTH a TF32 lane and an FP64 lane in
+ONE process (the OP-4 fused step DAG: fused valley LN+gelu+copy + transpose-elim bwd GEMM +
+single-launch AdamW; only the cuBLAS compute type differs). Reports per (D,B):
+  GATE-A  TF32 self-byte-eq run-to-run: max|delta(W')| == 0
+  GATE-B  rel-RMS(TF32 W' vs FP64 W') <= 1e-2 (W14 cross-precision tolerance)
+  SPEED   TF32 ms/step vs FP64 ms/step, ratio FP64/TF32
+CUBLAS determinism toggle: -DPEDANTIC -> CUBLAS_PEDANTIC_MATH (no split-K heuristics) to
+test whether the default tensor-op TF32 mode is self-byte-eq or NEEDS pedantic.
+Driver: tool/bench/run_op20_5070.sh (idle-guarded, default+pedantic x D={768,1536} x B={1,8}).
+
+PENDING MEASUREMENT (aiden RTX 5070, sm_120, FREE):
+  [ ] GATE-A self-byte-eq Y/N per (variant,D,B) + does default need pedantic?
+  [ ] GATE-B rel-RMS(TF32 vs FP64) per (D,B)
+  [ ] SPEED FP64/TF32 ratio per (D,B) — does it break the ~3x cap?
+  [ ] HONEST VERDICT: real deterministic-fast-mode Y/N
