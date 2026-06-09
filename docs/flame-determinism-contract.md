@@ -12,6 +12,11 @@ invariant here traces to a verdict under `.verdicts/hexa-0pod/F-OP*-*.txt` — t
 verdict is the evidence; this doc is the map. If you refactor a step phase, the
 oracle named below is the one that catches a determinism break.
 
+> For the consolidated *result* — the publishable
+> **machine-independent bit-exact training** claim (cross-platform byte
+> measurements, threat model, evidence table, honest limits) — see
+> [`flame-machine-independent-training.md`](flame-machine-independent-training.md).
+
 ## the cross-cutting rule
 
 Three facts hold across the whole step. Violate any one and byte-eq silently
