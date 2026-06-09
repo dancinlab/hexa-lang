@@ -799,3 +799,32 @@ NOT claimed. $0, no vast/pool/pod. Verdict .verdicts/hexa-0pod/F-OP21-HOPPER-WAR
 - GOVERNANCE (project.tape g84 PAPER OPT-IN): logged-discovery consolidation ONLY. NO /paper scaffolded, NO
   PAPER.tape/PAPER.md created, paper skill NOT invoked. A paper happens ONLY on explicit /paper.
 - $0 · 0-GPU · 0-pod · no vast. Verdict .verdicts/hexa-0pod/F-OP26-MACHINEINDEP-WRITEUP.txt.
+
+## OP-19c — 3rd-platform byte-exact: pi5-akida arm64-LINUX confirms machine-independence (2026-06-10)
+- GOAL: extend OP-19/19b's 2-platform proof (x86-linux aiden ↔ arm64-macos local/ghost) to a 3rd distinct
+  arch×OS cell = pi5-akida arm64-LINUX (Raspberry Pi 5, glibc) — isolates arch-vs-OS (same arch as macos, same OS
+  as aiden). FREE POOL ONLY (pi5-akida), ZERO vast, 0-GPU (`hexa run`), $0.
+- pi5 hexa status: RUNNABLE = YES. OP-19/19b noted pi5 had no hexa; installed it 0-pod this op:
+  (a) official installer pulled prebuilt hexa-linux-arm64.tar.gz (v0.17.3) → hexa 0.1.0-dispatch (SAME version
+      as all 3 prior hosts — apples-to-apples). ELF aarch64 GNU/Linux.
+  (b) pi5 has gcc 13.3.0 but NO clang; `hexa run` C-backend hardcodes clang → dropped user-local ~/.hx/bin/clang
+      shim → gcc, stripping the clang-only -fbracket-depth flag.
+  (c) release tarball ships no self/ → scp'd a matching-version self/ runtime tree (runtime.c + headers +
+      native/*.c + forge/*.c) from the local 0.1.0-dispatch install, md5-verified; `tar -h` to dereference the
+      4 macOS-absolute symlinks (native/crypto_blowfish.c, hxtok.h, parser_v2.c, hxtok.c). symlinked ~/.hx/bin/self.
+- pi5 byte folds (verbatim `hexa run` output):
+    CEBWD-TAYLOR (dt_exp)  = 7679248634312321699
+    GELUFWD-DET  (dt_erf)  = 4548590605583584556
+    GELUBWD-DET  (dt_erf)  = 4249661408190172843
+    (libm baselines also dumped: CEBWD-LIBM = 3352931952497630952, GELUFWD/BWD-LIBM = glibc values)
+- 3-WAY cmp (pi5 vs recorded arm64-macos local/ghost + x86-linux aiden):
+    CE-bwd dt_exp  : MATCH  (7679248634312321699 on all 3)
+    GELU FWD dt_erf: MATCH  (4548590605583584556 on all 3)
+    GELU BWD dt_erf: MATCH  (4249661408190172843 on all 3)
+  => 3-PLATFORM BYTE-IDENTICAL = YES. {x86,arm64}×{linux,macos} matrix now 3/4 cells confirmed (4th = x86-macos,
+     no pool host — retired Intel Macs). pi5 supplies the arm64-linux diagonal isolating arch vs OS.
+- BONUS (strengthens OP-19): pi5 arm64-linux CEBWD-LIBM = 3352931952497630952 == aiden x86-linux, NOT arm64-macos's
+  7969105254299072804. => the libm `exp` divergence OP-19 measured is an OS/libc effect (glibc vs Darwin libm), NOT
+  arch — pi5 tracks the OS it shares (Linux/glibc), not the arch it shares (arm64). dt_exp/dt_erf remove that path.
+- NO divergence on the production deterministic path. $0 · 0-GPU · 0-pod · free pool (pi5-akida only) · no vast.
+  Verdict .verdicts/hexa-0pod/F-OP19C-PI5-3PLATFORM.txt.
