@@ -1,5 +1,35 @@
 # HEXA-0POD — log
 
+## 2026-06-10 — OP-23 GREEN: TF32 N-step trajectory drift vs FP64 — TF32 fast-mode is REAL, not a 1-step illusion (aiden 5070, FREE)
+
+The decisive validation of OP-20's deterministic TF32 fast-mode. OP-20 (#2999) proved a SINGLE TF32 flame
+step is self-byte-eq + rel-RMS 1.13e-6 vs FP64 + 4.2×@B=1 — but flagged the LARGER deferred question:
+does the TF32 TRAJECTORY track FP64 over N steps, or peel away (1-step illusion)? OP-23 answers it.
+
+- METHOD: TWO continuous trajectories (TF32 lane + FP64 lane) from the SAME seed + SAME fixed data, N=100
+  steps, AdamW state W/m/v PERSISTS across steps so drift ACCUMULATES (OP-20 reset every step). Same step
+  DAG as OP-20 (fwd GEMM → fused valley LN+gelu+copy → transpose-elim bwd GEMM → single-launch AdamW); only
+  cuBLAS compute type differs. Added deterministic loss = mean(G²) over the post-valley activation (fixed-
+  order block tree reduce, no atomics). TF32 trajectory run TWICE for whole-trajectory self-byte-eq.
+  aiden RTX 5070 sm_120, FREE sidecar pool, idle-guarded, leak-0. 4/4 cells (DEFAULT+PEDANTIC, D={768,1536},
+  B={1,8}).
+- Q1 WEIGHT DRIFT = BOUNDED: relRMS(TF32-W vs FP64-W) starts ~1.13e-6 (OP-20's 1-step #), SHRINKS to
+  ~4.5–5.3e-7 by step 100 — does NOT grow. max|dW| creeps 1e-8→~5e-7 (chaotic accum) but stays microscopic
+  (3–4 orders inside NN's ~1e-3 forgiveness). The GOOD case.
+- Q2 LOSS-TRACKING = YES (decisive): TF32 loss matches FP64 loss to ~1e-7 every step. WORST gap 2.495e-5 is
+  at the COLD-START step 1 (before AdamW's bias-corrected moments settle); from step 6 it DROPS to ~1e-7 and
+  stays flat. NO peeling, NO drift trend — both lanes ride the SAME loss curve to the SAME loss (~0.40739).
+- Q3 SELF-BYTE-EQ over the WHOLE trajectory: run1-vs-run2 W max|Δ|=0.000e+00 AND per-step loss max|Δ|=0.000e+00
+  at step N on every cell. Determinism holds across the trajectory, not just step 1. PEDANTIC NOT needed
+  (DEFAULT TF32-tensor-op already bit-identical run-to-run, identical numbers).
+- VERDICT (g5 honest): the RIGHT metric is loss-tracking (training-equivalent), NOT weight byte-closeness —
+  chaos guarantees weights drift, which is exactly why flame's identity is SELF-determinism (TF32-vs-TF32=0),
+  not cross-precision. Bounded loss-tracking ⇒ TF32-mode is a REAL training fast-mode, CONFIRMED at the
+  trajectory level. The 1-step rel-RMS 1e-6 was NOT an illusion. Caveats: N=100 small synthetic config
+  (mean(G²) proxy, no real corpus/LR-schedule); drift TREND flat-to-shrinking to step 100, no late blow-up.
+- Harness tool/bench/flame_traj_drift_tf32_op23.cu · driver tool/bench/run_op23_5070.sh · raw
+  tool/bench/op23_5070_raw.log · verdict .verdicts/hexa-0pod/F-OP23-TF32-DRIFT.txt. FREE pool, NO vast, $0.
+
 ## 2026-06-09 — OP-22 DONE: MEGASTEP whole-step megakernel DESIGN + Amdahl bound + H100 recipe (0-pod, vs TF32)
 
 Produced (reading existing real-pod verdicts + research memory only — $0, 0-GPU, NO vast/pod) the 0-pod

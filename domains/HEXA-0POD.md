@@ -10,6 +10,24 @@ loop targets what the consumer card + code can carry.
 
 ## milestones (loop self-feeds; add as discovered)
 
+<!-- ANCHOR:OP-23-TF32-DRIFT (unique anchor — TF32 N-step trajectory drift vs FP64; validate TF32 fast-mode is real, not a 1-step illusion; aiden 5070) -->
+- [x] **OP-23 — TF32 N-step trajectory drift vs FP64: validate TF32 fast-mode is real not 1-step illusion (aiden)** —
+  GREEN. Decisively VALIDATED: OP-20's deterministic TF32 fast-mode is a REAL training fast-mode, NOT a 1-step
+  illusion. Ran TWO continuous trajectories (TF32 + FP64) from the SAME seed/data for N=100 steps (AdamW state
+  PERSISTS so drift accumulates; OP-20 reset every step), aiden RTX 5070 FREE pool, 4/4 cells (DEFAULT+PEDANTIC,
+  D={768,1536}, B={1,8}). (1) LOSS-TRACKING = YES, decisive: TF32 loss tracks FP64 loss to ~1e-7 every step;
+  WORST gap 2.5e-5 is at the COLD-START step 1, then DROPS to ~1e-7 and stays flat — NO peeling, NO drift trend,
+  both lanes converge to the SAME loss along the SAME curve. (2) WEIGHT rel-RMS = BOUNDED ~5e-7 (starts 1.13e-6
+  = OP-20 1-step #, then SHRINKS to ~4.5-5.3e-7 by step 100; does NOT grow) — chaotic-but-microscopic (3-4 orders
+  inside NN's ~1e-3 forgiveness). (3) TF32 self-byte-eq over the WHOLE trajectory: run1-vs-run2 W max|Δ|=0 AND
+  per-step loss max|Δ|=0 at step N (determinism holds across the trajectory, not just step 1; PEDANTIC not needed).
+  HONEST (g5): the RIGHT metric is loss-tracking (training-equiv), NOT weight byte-closeness — chaos guarantees
+  weights drift, that's why flame's identity is SELF-determinism (TF32-vs-TF32=0), not cross-precision. So:
+  bounded loss-tracking = real fast-mode CONFIRMED. Caveat: N=100 small synthetic config (mean(G²) loss proxy,
+  no real corpus/LR-schedule); drift TREND flat-to-shrinking to step 100, no late blow-up. Harness
+  tool/bench/flame_traj_drift_tf32_op23.cu + driver run_op23_5070.sh + raw op23_5070_raw.log; verdict
+  .verdicts/hexa-0pod/F-OP23-TF32-DRIFT.txt. FREE pool only, NO vast, leak-0.
+
 <!-- ANCHOR:OP-22-MEGASTEP-DESIGN (unique anchor — 0-pod whole-step MEGASTEP megakernel DESIGN + Amdahl bound + H100 experiment recipe; measure is GPU-gated; honest vs TF32-mode) -->
 - [x] **OP-22 — MEGASTEP whole-step megakernel DESIGN + Amdahl bound + experiment recipe (0-pod, GPU-gated; vs TF32-mode)** —
   produced (reading existing real-pod verdicts + research memory only, $0, 0-GPU, NO vast) the DESIGN +

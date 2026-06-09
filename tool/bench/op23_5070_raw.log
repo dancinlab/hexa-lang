@@ -1,0 +1,159 @@
+=== OP-23 env ===
+NVIDIA GeForce RTX 5070, 580.159.04, 12227 MiB
+Build cuda_13.0.r13.0/compiler.36424714_0
+=== build flame_traj_op23 ===
+=== build flame_traj_op23_ped ===
+[idle-guard] GPU busy (util=100% mem=358MiB) — waiting 1/60...
+[idle-guard] GPU busy (util=7% mem=358MiB) — waiting 2/60...
+[idle-guard] GPU busy (util=90% mem=358MiB) — waiting 3/60...
+[idle-guard] GPU busy (util=100% mem=358MiB) — waiting 4/60...
+[idle-guard] GPU busy (util=100% mem=358MiB) — waiting 5/60...
+=== run flame_traj_op23  D=768 T=256 B=1 N=100 ===
+[CFG] OP-23 TF32-DEFAULT  GPU=NVIDIA GeForce RTX 5070 cc=12.0  D=768 T=256 B=1 -> M=256 K=768 N=768 Nsteps=100
+[TRAJ] step   lossTF32        lossFP64        |dLoss|/|lossFP64|   relRMS(W_TF32 vs W_FP64)   maxAbs(W_TF32-W_FP64)
+[TRAJ]     1   1.68735213e-01   1.68731003e-01   2.495003e-05        1.133694e-06             1.118402e-08
+[TRAJ]     6   4.06130333e-01   4.06130407e-01   1.817603e-07        1.189255e-06             3.466440e-08
+[TRAJ]    11   4.07128775e-01   4.07128820e-01   1.103848e-07        9.657671e-07             5.872314e-08
+[TRAJ]    16   4.07297125e-01   4.07297145e-01   4.748814e-08        7.762678e-07             7.969789e-08
+[TRAJ]    21   4.07350192e-01   4.07350230e-01   9.480637e-08        6.350976e-07             1.018056e-07
+[TRAJ]    26   4.07372103e-01   4.07372125e-01   5.342507e-08        5.838088e-07             1.242261e-07
+[TRAJ]    31   4.07382559e-01   4.07382571e-01   2.834610e-08        5.267674e-07             1.444533e-07
+[TRAJ]    36   4.07387968e-01   4.07388000e-01   7.861128e-08        4.933578e-07             1.630973e-07
+[TRAJ]    41   4.07390915e-01   4.07390960e-01   1.104150e-07        4.744895e-07             1.854205e-07
+[TRAJ]    46   4.07392570e-01   4.07392603e-01   7.999359e-08        4.734855e-07             2.071808e-07
+[TRAJ]    51   4.07393455e-01   4.07393503e-01   1.173523e-07        4.689653e-07             2.325199e-07
+[TRAJ]    56   4.07393913e-01   4.07393965e-01   1.269705e-07        4.703227e-07             2.575844e-07
+[TRAJ]    61   4.07394127e-01   4.07394161e-01   8.340501e-08        4.778691e-07             2.787115e-07
+[TRAJ]    66   4.07394171e-01   4.07394193e-01   5.396510e-08        4.826892e-07             3.047832e-07
+[TRAJ]    71   4.07394063e-01   4.07394123e-01   1.471309e-07        4.871013e-07             3.293836e-07
+[TRAJ]    76   4.07393945e-01   4.07393990e-01   1.094938e-07        4.889027e-07             3.575074e-07
+[TRAJ]    81   4.07393750e-01   4.07393817e-01   1.659020e-07        4.931630e-07             3.817166e-07
+[TRAJ]    86   4.07393561e-01   4.07393622e-01   1.494268e-07        4.975273e-07             4.020235e-07
+[TRAJ]    91   4.07393411e-01   4.07393415e-01   8.322067e-09        5.000205e-07             4.258914e-07
+[TRAJ]    96   4.07393122e-01   4.07393202e-01   1.973277e-07        5.031234e-07             4.513785e-07
+[TRAJ]   100   4.07393008e-01   4.07393031e-01   5.687534e-08        5.055990e-07             4.699396e-07
+[SUMMARY] OP-23 TF32-DEFAULT D=768 T=256 B=1 Nsteps=100
+[SUMMARY] TF32 self-byte-eq over WHOLE trajectory (run1 vs run2): W max|delta|=0.000e+00  loss max|delta|=0.000e+00  (==0: YES)
+[SUMMARY] step-N weight relRMS(TF32 vs FP64) = 5.055990e-07   max|dW| = 4.699396e-07
+[SUMMARY] step-N loss-tracking  |dLoss|/|lossFP64| = 5.687534e-08
+[SUMMARY] WORST loss-tracking gap over trajectory = 2.495003e-05 at step 1
+[RESULT] OP-23 TF32-DEFAULT D=768 B=1 Nsteps=100  selfByteEqN=Y  relRMS_W_N=5.056e-07  lossTrackN=5.688e-08  worstLossTrack=2.495e-05
+[idle-guard] GPU busy (util=95% mem=358MiB) — waiting 1/60...
+[idle-guard] GPU busy (util=49% mem=358MiB) — waiting 2/60...
+[idle-guard] GPU busy (util=100% mem=358MiB) — waiting 3/60...
+[idle-guard] GPU busy (util=17% mem=358MiB) — waiting 4/60...
+[idle-guard] GPU busy (util=100% mem=358MiB) — waiting 5/60...
+[idle-guard] GPU busy (util=63% mem=358MiB) — waiting 6/60...
+[idle-guard] GPU busy (util=100% mem=358MiB) — waiting 7/60...
+[idle-guard] GPU busy (util=100% mem=358MiB) — waiting 8/60...
+[idle-guard] GPU busy (util=47% mem=358MiB) — waiting 9/60...
+[idle-guard] GPU busy (util=64% mem=358MiB) — waiting 10/60...
+[idle-guard] GPU busy (util=10% mem=358MiB) — waiting 11/60...
+[idle-guard] GPU busy (util=97% mem=358MiB) — waiting 12/60...
+=== run flame_traj_op23  D=768 T=256 B=8 N=100 ===
+[CFG] OP-23 TF32-DEFAULT  GPU=NVIDIA GeForce RTX 5070 cc=12.0  D=768 T=256 B=8 -> M=2048 K=768 N=768 Nsteps=100
+[TRAJ] step   lossTF32        lossFP64        |dLoss|/|lossFP64|   relRMS(W_TF32 vs W_FP64)   maxAbs(W_TF32-W_FP64)
+[TRAJ]     1   1.68735213e-01   1.68731003e-01   2.495003e-05        1.130732e-06             7.972436e-09
+[TRAJ]     6   4.06130345e-01   4.06130415e-01   1.738100e-07        1.170340e-06             1.453668e-08
+[TRAJ]    11   4.07128795e-01   4.07128827e-01   8.058272e-08        9.380510e-07             2.112518e-08
+[TRAJ]    16   4.07297124e-01   4.07297152e-01   6.735884e-08        7.414636e-07             2.600566e-08
+[TRAJ]    21   4.07350213e-01   4.07350238e-01   6.141017e-08        5.940018e-07             3.026418e-08
+[TRAJ]    26   4.07372104e-01   4.07372132e-01   6.722997e-08        5.391231e-07             3.915479e-08
+[TRAJ]    31   4.07382565e-01   4.07382578e-01   3.279619e-08        4.779800e-07             4.213727e-08
+[TRAJ]    36   4.07387964e-01   4.07388007e-01   1.046741e-07        4.417432e-07             4.853733e-08
+[TRAJ]    41   4.07390912e-01   4.07390967e-01   1.348919e-07        4.209918e-07             5.464219e-08
+[TRAJ]    46   4.07392577e-01   4.07392610e-01   8.034787e-08        4.198269e-07             5.673904e-08
+[TRAJ]    51   4.07393456e-01   4.07393510e-01   1.337068e-07        4.147689e-07             6.329556e-08
+[TRAJ]    56   4.07393926e-01   4.07393972e-01   1.139998e-07        4.160666e-07             7.191810e-08
+[TRAJ]    61   4.07394140e-01   4.07394168e-01   7.060172e-08        4.241444e-07             8.027792e-08
+[TRAJ]    66   4.07394178e-01   4.07394201e-01   5.627753e-08        4.293221e-07             9.211280e-08
+[TRAJ]    71   4.07394072e-01   4.07394131e-01   1.436258e-07        4.340386e-07             9.998465e-08
+[TRAJ]    76   4.07393962e-01   4.07393997e-01   8.489969e-08        4.361665e-07             1.113565e-07
+[TRAJ]    81   4.07393774e-01   4.07393824e-01   1.240471e-07        4.409705e-07             1.187904e-07
+[TRAJ]    86   4.07393560e-01   4.07393629e-01   1.692699e-07        4.459770e-07             1.222987e-07
+[TRAJ]    91   4.07393408e-01   4.07393422e-01   3.330037e-08        4.489628e-07             1.293445e-07
+[TRAJ]    96   4.07393131e-01   4.07393209e-01   1.915050e-07        4.524905e-07             1.344564e-07
+[TRAJ]   100   4.07393001e-01   4.07393038e-01   9.287989e-08        4.553446e-07             1.428872e-07
+[SUMMARY] OP-23 TF32-DEFAULT D=768 T=256 B=8 Nsteps=100
+[SUMMARY] TF32 self-byte-eq over WHOLE trajectory (run1 vs run2): W max|delta|=0.000e+00  loss max|delta|=0.000e+00  (==0: YES)
+[SUMMARY] step-N weight relRMS(TF32 vs FP64) = 4.553446e-07   max|dW| = 1.428872e-07
+[SUMMARY] step-N loss-tracking  |dLoss|/|lossFP64| = 9.287989e-08
+[SUMMARY] WORST loss-tracking gap over trajectory = 2.495003e-05 at step 1
+[RESULT] OP-23 TF32-DEFAULT D=768 B=8 Nsteps=100  selfByteEqN=Y  relRMS_W_N=4.553e-07  lossTrackN=9.288e-08  worstLossTrack=2.495e-05
+=== run flame_traj_op23  D=1536 T=256 B=1 N=100 ===
+[CFG] OP-23 TF32-DEFAULT  GPU=NVIDIA GeForce RTX 5070 cc=12.0  D=1536 T=256 B=1 -> M=256 K=1536 N=1536 Nsteps=100
+[TRAJ] step   lossTF32        lossFP64        |dLoss|/|lossFP64|   relRMS(W_TF32 vs W_FP64)   maxAbs(W_TF32-W_FP64)
+[TRAJ]     1   1.51505776e-01   1.51503875e-01   1.254529e-05        1.134407e-06             1.234410e-08
+[TRAJ]     6   4.07124168e-01   4.07124342e-01   4.256941e-07        1.195735e-06             4.251688e-08
+[TRAJ]    11   4.07364700e-01   4.07364870e-01   4.170084e-07        9.770949e-07             7.204856e-08
+[TRAJ]    16   4.07399465e-01   4.07399579e-01   2.800994e-07        7.919345e-07             1.019763e-07
+[TRAJ]    21   4.07408263e-01   4.07408403e-01   3.430964e-07        6.551640e-07             1.313324e-07
+[TRAJ]    26   4.07410825e-01   4.07410967e-01   3.501683e-07        6.061443e-07             1.623697e-07
+[TRAJ]    31   4.07411419e-01   4.07411540e-01   2.963148e-07        5.519626e-07             1.920748e-07
+[TRAJ]    36   4.07411254e-01   4.07411391e-01   3.373805e-07        5.205268e-07             2.214688e-07
+[TRAJ]    41   4.07410841e-01   4.07410975e-01   3.302276e-07        5.027451e-07             2.505643e-07
+[TRAJ]    46   4.07410347e-01   4.07410471e-01   3.052352e-07        5.019701e-07             2.793736e-07
+[TRAJ]    51   4.07409850e-01   4.07409954e-01   2.570607e-07        4.977351e-07             3.076601e-07
+[TRAJ]    56   4.07409367e-01   4.07409456e-01   2.188465e-07        4.990362e-07             3.361421e-07
+[TRAJ]    61   4.07408900e-01   4.07408989e-01   2.193831e-07        5.062338e-07             3.606733e-07
+[TRAJ]    66   4.07408464e-01   4.07408558e-01   2.306732e-07        5.108084e-07             3.919997e-07
+[TRAJ]    71   4.07408053e-01   4.07408161e-01   2.640581e-07        5.148551e-07             4.202849e-07
+[TRAJ]    76   4.07407677e-01   4.07407797e-01   2.951056e-07        5.163244e-07             4.553903e-07
+[TRAJ]    81   4.07407340e-01   4.07407463e-01   3.024335e-07        5.203143e-07             4.865948e-07
+[TRAJ]    86   4.07407042e-01   4.07407157e-01   2.813668e-07        5.244447e-07             5.213615e-07
+[TRAJ]    91   4.07406768e-01   4.07406876e-01   2.628260e-07        5.267620e-07             5.522523e-07
+[TRAJ]    96   4.07406506e-01   4.07406616e-01   2.709305e-07        5.299087e-07             5.792798e-07
+[TRAJ]   100   4.07406307e-01   4.07406423e-01   2.861614e-07        5.324204e-07             6.043869e-07
+[SUMMARY] OP-23 TF32-DEFAULT D=1536 T=256 B=1 Nsteps=100
+[SUMMARY] TF32 self-byte-eq over WHOLE trajectory (run1 vs run2): W max|delta|=0.000e+00  loss max|delta|=0.000e+00  (==0: YES)
+[SUMMARY] step-N weight relRMS(TF32 vs FP64) = 5.324204e-07   max|dW| = 6.043869e-07
+[SUMMARY] step-N loss-tracking  |dLoss|/|lossFP64| = 2.861614e-07
+[SUMMARY] WORST loss-tracking gap over trajectory = 1.254529e-05 at step 1
+[RESULT] OP-23 TF32-DEFAULT D=1536 B=1 Nsteps=100  selfByteEqN=Y  relRMS_W_N=5.324e-07  lossTrackN=2.862e-07  worstLossTrack=1.255e-05
+[idle-guard] GPU busy (util=100% mem=358MiB) — waiting 1/60...
+[idle-guard] GPU busy (util=25% mem=358MiB) — waiting 2/60...
+[idle-guard] GPU busy (util=100% mem=358MiB) — waiting 3/60...
+[idle-guard] GPU busy (util=100% mem=358MiB) — waiting 4/60...
+[idle-guard] GPU busy (util=100% mem=358MiB) — waiting 5/60...
+[idle-guard] GPU busy (util=57% mem=358MiB) — waiting 6/60...
+[idle-guard] GPU busy (util=100% mem=358MiB) — waiting 7/60...
+[idle-guard] GPU busy (util=74% mem=358MiB) — waiting 8/60...
+[idle-guard] GPU busy (util=90% mem=358MiB) — waiting 9/60...
+[idle-guard] GPU busy (util=100% mem=358MiB) — waiting 10/60...
+[idle-guard] GPU busy (util=100% mem=358MiB) — waiting 11/60...
+[idle-guard] GPU busy (util=70% mem=358MiB) — waiting 12/60...
+[idle-guard] GPU busy (util=100% mem=358MiB) — waiting 13/60...
+[idle-guard] GPU busy (util=100% mem=358MiB) — waiting 14/60...
+[idle-guard] GPU busy (util=100% mem=358MiB) — waiting 15/60...
+=== run flame_traj_op23_ped  D=768 T=256 B=1 N=100 ===
+[CFG] OP-23 TF32-PEDANTIC  GPU=NVIDIA GeForce RTX 5070 cc=12.0  D=768 T=256 B=1 -> M=256 K=768 N=768 Nsteps=100
+[TRAJ] step   lossTF32        lossFP64        |dLoss|/|lossFP64|   relRMS(W_TF32 vs W_FP64)   maxAbs(W_TF32-W_FP64)
+[TRAJ]     1   1.68735213e-01   1.68731003e-01   2.495003e-05        1.133694e-06             1.118402e-08
+[TRAJ]     6   4.06130333e-01   4.06130407e-01   1.817603e-07        1.189255e-06             3.466440e-08
+[TRAJ]    11   4.07128775e-01   4.07128820e-01   1.103848e-07        9.657671e-07             5.872314e-08
+[TRAJ]    16   4.07297125e-01   4.07297145e-01   4.748814e-08        7.762678e-07             7.969789e-08
+[TRAJ]    21   4.07350192e-01   4.07350230e-01   9.480637e-08        6.350976e-07             1.018056e-07
+[TRAJ]    26   4.07372103e-01   4.07372125e-01   5.342507e-08        5.838088e-07             1.242261e-07
+[TRAJ]    31   4.07382559e-01   4.07382571e-01   2.834610e-08        5.267674e-07             1.444533e-07
+[TRAJ]    36   4.07387968e-01   4.07388000e-01   7.861128e-08        4.933578e-07             1.630973e-07
+[TRAJ]    41   4.07390915e-01   4.07390960e-01   1.104150e-07        4.744895e-07             1.854205e-07
+[TRAJ]    46   4.07392570e-01   4.07392603e-01   7.999359e-08        4.734855e-07             2.071808e-07
+[TRAJ]    51   4.07393455e-01   4.07393503e-01   1.173523e-07        4.689653e-07             2.325199e-07
+[TRAJ]    56   4.07393913e-01   4.07393965e-01   1.269705e-07        4.703227e-07             2.575844e-07
+[TRAJ]    61   4.07394127e-01   4.07394161e-01   8.340501e-08        4.778691e-07             2.787115e-07
+[TRAJ]    66   4.07394171e-01   4.07394193e-01   5.396510e-08        4.826892e-07             3.047832e-07
+[TRAJ]    71   4.07394063e-01   4.07394123e-01   1.471309e-07        4.871013e-07             3.293836e-07
+[TRAJ]    76   4.07393945e-01   4.07393990e-01   1.094938e-07        4.889027e-07             3.575074e-07
+[TRAJ]    81   4.07393750e-01   4.07393817e-01   1.659020e-07        4.931630e-07             3.817166e-07
+[TRAJ]    86   4.07393561e-01   4.07393622e-01   1.494268e-07        4.975273e-07             4.020235e-07
+[TRAJ]    91   4.07393411e-01   4.07393415e-01   8.322067e-09        5.000205e-07             4.258914e-07
+[TRAJ]    96   4.07393122e-01   4.07393202e-01   1.973277e-07        5.031234e-07             4.513785e-07
+[TRAJ]   100   4.07393008e-01   4.07393031e-01   5.687534e-08        5.055990e-07             4.699396e-07
+[SUMMARY] OP-23 TF32-PEDANTIC D=768 T=256 B=1 Nsteps=100
+[SUMMARY] TF32 self-byte-eq over WHOLE trajectory (run1 vs run2): W max|delta|=0.000e+00  loss max|delta|=0.000e+00  (==0: YES)
+[SUMMARY] step-N weight relRMS(TF32 vs FP64) = 5.055990e-07   max|dW| = 4.699396e-07
+[SUMMARY] step-N loss-tracking  |dLoss|/|lossFP64| = 5.687534e-08
+[SUMMARY] WORST loss-tracking gap over trajectory = 2.495003e-05 at step 1
+[RESULT] OP-23 TF32-PEDANTIC D=768 B=1 Nsteps=100  selfByteEqN=Y  relRMS_W_N=5.056e-07  lossTrackN=5.688e-08  worstLossTrack=2.495e-05
+=== OP-23 done ===
+6 %, 2 MiB
