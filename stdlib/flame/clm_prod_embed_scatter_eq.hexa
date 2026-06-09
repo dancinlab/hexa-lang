@@ -1,0 +1,11 @@
+// ════════════════════════════════════════════════════════════════════════════
+//  clm_prod_embed_scatter_eq.hexa — F-OP13 embedding bwd scatter-add byte-eq ORACLE.
+//  HEXA-0POD OP-13 · CPU-LOCAL (`hexa run`, 0-GPU) determinism oracle.
+//  WIP skeleton — body filled in subsequent commits.
+// ════════════════════════════════════════════════════════════════════════════
+
+use "stdlib/flame/tensor_lib"
+
+fn main() {
+    println("clm_prod_embed_scatter_eq — F-OP13 (WIP skeleton)")
+}

@@ -231,6 +231,9 @@ loop targets what the consumer card + code can carry.
   addition only). Oracle stdlib/flame/clm_prod_ce_softmax_grad_eq.hexa · verdict
   .verdicts/hexa-0pod/F-OP11-CE-SOFTMAX-ORACLE.txt.
 
+<!-- OP-13-EMBED-RESIDUAL -->
+- [ ] **OP-13 — byte-eq CPU oracle for the embedding/residual path identity (0-GPU)**
+
 ## deferred (0-pod follow-ups surfaced by the loop — self-feed)
 
 - **OP-2b — land the runtime.c hexa_forge_dispatch_matmul_t wrapper body + flip the trainer to the live
