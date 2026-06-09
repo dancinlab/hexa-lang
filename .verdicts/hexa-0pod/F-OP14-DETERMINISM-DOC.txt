@@ -1,0 +1,86 @@
+════════════════════════════════════════════════════════════════════════════
+F-OP14-DETERMINISM-DOC — flame determinism-contract doc consolidating the
+                         HEXA-0POD byte-eq oracle invariants
+HEXA-0POD OP-14 · CPU-LOCAL doc-consolidation milestone · 0-GPU · $0
+════════════════════════════════════════════════════════════════════════════
+
+WHAT THIS IS
+  A documentation/consolidation milestone (NOT new computation). value = the
+  flame CLMConvMoE training-step REPRODUCIBILITY CONTRACT made legible to
+  contributors in ONE place. No trainer/oracle/.hexa/.tape code changed.
+
+DOC AUTHORED
+  docs/flame-determinism-contract.md
+  Contributor-facing index of every CPU byte-eq oracle invariant that locks the
+  flame CLMConvMoE step's byte-reproducibility. Leads with the cross-cutting
+  rule, tabulates per-phase locked identities (phase → oracle → canonical order
+  → what-breaks-it), an ASCII step-phase map (g3 minimal), a "what breaks the
+  contract" checklist, the B>1 conv-seam known-nonzero spot, and a "how to add a
+  new oracle" pointer. Elephant rule: CURRENT-STATE facts only, no journey.
+
+DOJO POINTER ADDED — YES
+  docs/hexa-dojo.md "Training recipe — optimization gotchas" section (the
+  CLMConvMoE flame-trainer recipe section): one-line blockquote pointer to
+  flame-determinism-contract.md. One line, no dojo restructure.
+
+ORACLES INDEXED — 8 verdicts (all under .verdicts/hexa-0pod/)
+  F-OP2-TRAINER-WIRE.txt            — BWD dW GEMM transpose-elim (im2col+matmul_t
+                                      == im2col_t+matmul, same-order contract sum)
+  F-OP7-IDENTITY-ORACLE.txt         — FWD conv1d im2col+GEMM == direct conv
+                                      (j-ascending, j = ci*K+k)
+  F-OP8-IDENTITY-ORACLE.txt         — MoE router softmax+combine two-pass==fused
+                                      (_moe_exp, e-ascending denom+combine)
+  F-OP9-LN-REDUCTION-ORACLE.txt     — GroupNorm valley two-pass mean/var
+                                      (t-outer,c-inner; _gn_sqrt; eps=1e-5; erf-GELU)
+  F-OP10-CONV-SEAM-ORACLE.txt       — B>1 window-concat conv SEAM characterization
+                                      (interior max|Δ|=0; seam = first (K-1)*dil pos)
+  F-OP11-CE-SOFTMAX-ORACLE.txt      — CE bwd grad (libm exp) + fwd loss (dt_exp/dt_ln)
+                                      (v-ascending denom; scale-then-subtract at tgt)
+  F-OP12-ADAMW-UPDATE-ORACLE.txt    — AdamW decoupled-wd update (v=β2·v+((1−β2)·g)·g
+                                      left-assoc; m̂/c1 before v̂/c2; ε outside √;
+                                      _adamw_sqrt 24-iter Newton)
+  F-OP13-EMBED-RESIDUAL-ORACLE.txt  — embedding bwd scatter-add (position-ascending)
+
+CROSS-CUTTING INVARIANTS SUMMARIZED (the doc leads with these)
+  1. THREE distinct exp impls, each LOAD-BEARING (a "unify the exp" refactor
+     silently breaks byte-eq):
+        libm `exp`  — CE BACKWARD grad        (F-OP11)
+        `dt_exp`    — CE FORWARD loss (Taylor) (F-OP11)
+        `_moe_exp`  — MoE router softmax       (F-OP8)
+     (+ per-phase hand-rolled sqrt impls also load-bearing: _gn_sqrt = 40-iter
+        Newton for GroupNorm (F-OP9); _adamw_sqrt = 24-iter Newton for the
+        optimizer denom (F-OP12); neither is libm.)
+  2. Reductions are SEQUENTIAL — NO tree / warp-shuffle re-association, NO
+     Welford streaming mean/var. (F-OP8/9/11.)
+  3. Accumulations are ASCENDING-order: softmax denom v-ascending; MoE combine
+     e-ascending; CE fwd loss t-ascending; embedding scatter-add position-
+     ascending; GroupNorm (t-outer,c-inner); conv/GEMM contraction j-ascending.
+     (F-OP7/8/9/11/13.)
+
+KNOWN NON-ZERO SPOT DOCUMENTED (B>1 conv seam, F-OP10)
+  Interior bit-exact (max|Δ|=0); seam = EXACTLY the first (K-1)*dil output
+  positions of every window AFTER the first (cross-window causal context a
+  segmented conv zeros). The batched concat path is deterministic run-to-run,
+  just not identical to a per-window-segmented conv at the seams.
+
+GATE (g5) — accuracy, not computation
+  Every canonical-order claim in the doc traces to a specific verdict line:
+    · 3 exp impls          → F-OP11 lines 19-26 (libm/dt_exp), F-OP8 line 40 (_moe_exp)
+    · sequential reductions → F-OP8 l.38-39, F-OP9 l.26-27, F-OP11 l.53-62
+    · ascending accum       → F-OP7 l.13, F-OP8 l.39, F-OP9 l.26, F-OP11 l.57-59, F-OP13 l.70-75
+    · GroupNorm eps=1e-5/_gn_sqrt/erf-GELU → F-OP9 l.28-30
+    · CE scale-then-subtract (not (p-1)*invT) → F-OP11 l.42-52
+    · B>1 seam = first (K-1)*dil pos → F-OP10 l.36-40
+    · transpose-elim same-order sum → F-OP2 l.31-44
+    · AdamW left-assoc/ε-outside-√/_adamw_sqrt/order → F-OP12 verdict CANONICAL ORDER
+  NO invariant invented that is not in a verdict. PASS.
+
+HONEST FRAMING (g5)
+  Documentation-only consolidation; NO new measurement, NO trainer/oracle code
+  changed. value = the byte-eq reproducibility contract made legible (the
+  reproducibility-first identity of flame), NOT new computation. $0 — pure local
+  doc authoring, no GPU / no pool / no vast. OP-12 (AdamW optimizer oracle)
+  landed in parallel and is now indexed here as the OPTIMIZER phase (8th oracle).
+
+  F-OP14-DETERMINISM-DOC = 1
+════════════════════════════════════════════════════════════════════════════

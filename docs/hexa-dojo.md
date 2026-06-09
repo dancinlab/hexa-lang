@@ -387,6 +387,11 @@ attributed, not re-measured here; the numbers are anima's H200 observations.
 When a kata says "optimize the model" or "scale to multi-GPU", consult this
 table **first** — the intuitive move is often the slower or the broken one.
 
+> **determinism contract:** before refactoring any flame `CLMConvMoE` step phase,
+> read [`flame-determinism-contract.md`](flame-determinism-contract.md) — the
+> CPU byte-eq oracle invariants (3 load-bearing exp impls · sequential
+> ascending-order reductions) that a "unify/fuse/tree-reduce" refactor silently breaks.
+
 | # | lesson | the dojo rule |
 |---|---|---|
 | **1** | **bench before you vectorize** — fusing 30 `ConvExpert` modules into one grouped `nn.Conv1d(E·d, E·d, K, groups=30)` (186 240 channels) ran **~14 min/step** on an H200, vs the plain `ModuleList` of 30 small convs at **~74 s/step**. A grouped conv with many groups *defeats* GPU group-parallelism and cuDNN can't pick a fast algo for that shape. | **Fewer kernel launches ≠ faster.** BENCH the grouped/fused form against the loop on **one step** before adopting it. Do **not** auto-vectorize an expert loop. |

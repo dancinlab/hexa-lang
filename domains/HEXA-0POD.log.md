@@ -409,3 +409,35 @@ subtractions, decoupled-wd term first); c1,c2=1−βᵗ with βᵗ by repeated-m
 max|Δ|=0 all 7 cases. Behavior-preserving: NO trainer logic changed (oracle addition only). $0 — pure local
 CPU, no GPU/pool/vast. Oracle stdlib/flame/clm_prod_adamw_update_eq.hexa · verdict
 .verdicts/hexa-0pod/F-OP12-ADAMW-UPDATE-ORACLE.txt.
+
+## 2026-06-09 — OP-14 DONE: flame determinism-contract doc consolidating the byte-eq oracle invariants (0-GPU)
+
+Consolidated the HEXA-0POD byte-eq oracle findings into ONE contributor-facing doc —
+docs/flame-determinism-contract.md — making flame's reproducibility-first identity legible. Pure local doc
+authoring (0-GPU, $0); NO trainer/oracle/.hexa/.tape code changed.
+
+INDEXED 8 verdicts as a per-phase table (step phase → oracle file → CANONICAL ORDER invariant → what-breaks-it),
+with an ASCII step-phase map (g3 minimal):
+  · F-OP13 INPUT  embedding bwd scatter-add (position-ASCENDING)
+  · F-OP7  FWD    conv1d im2col+GEMM == direct (j-ASCENDING, j=ci*K+k)
+  · F-OP2  BWD    dW transpose-elim (same-order contraction sum)
+  · F-OP9  NORM   GroupNorm two-pass mean/var (t-out,c-in) + _gn_sqrt + eps=1e-5 + erf-GELU
+  · F-OP8  MoE    softmax+combine (_moe_exp, max-sub, e-ASCENDING)
+  · F-OP11 LOSS   bwd grad (libm exp) + fwd NLL (dt_exp/dt_ln), v-ASCENDING, scale-then-subtract
+  · F-OP12 OPTIM  AdamW (v=β2·v+((1−β2)·g)·g left-assoc; m̂/c1 before v̂/c2; ε outside √; _adamw_sqrt)
+  · F-OP10 SEAM   B>1 window-concat conv (interior bit-exact; seam = first (K-1)*dil pos)
+
+CROSS-CUTTING RULE the doc leads with:
+  1. THREE distinct exp impls each load-bearing — libm exp (CE bwd) · dt_exp (CE fwd) · _moe_exp (MoE) — a
+     "unify the exp" refactor silently breaks byte-eq. (+ _gn_sqrt = 40-iter Newton, not libm.)
+  2. Reductions SEQUENTIAL — no tree/warp-shuffle, no Welford.
+  3. Accumulations ASCENDING — softmax denom v-asc · MoE combine e-asc · CE fwd t-asc · embed position-asc ·
+     GroupNorm (t-out,c-in) · conv/GEMM j-asc.
+
+DOJO POINTER: one-line blockquote pointer to flame-determinism-contract.md added to docs/hexa-dojo.md
+"Training recipe — optimization gotchas" (the CLMConvMoE recipe) section. No dojo restructure.
+
+GATE (g5): doc-consolidation milestone — value = the byte-eq reproducibility contract made legible, NOT new
+computation. Every canonical-order claim traces to a specific verdict line (no invented invariant). $0, 0-GPU,
+no pool/vast. OP-12 (AdamW optimizer oracle) landed in parallel and is indexed here as the OPTIMIZER phase.
+Verdict .verdicts/hexa-0pod/F-OP14-DETERMINISM-DOC.txt.
