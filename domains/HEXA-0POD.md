@@ -194,6 +194,9 @@ loop targets what the consumer card + code can carry.
   hand-rolled deterministic; sqrt already Newton) → flame is now FULLY machine-independent byte-exact. $0, 0-GPU,
   free pool (aiden/ghost), no vast. Verdict .verdicts/hexa-0pod/F-OP19B-DET-ERF.txt.
 
+<!-- ANCHOR:OP-19C-PI5-3PLATFORM (unique anchor — extends OP-19/19b's 2-platform cross-platform byte-eq to a 3rd distinct arch×OS combo: pi5-akida arm64-LINUX, isolating arch-vs-OS) -->
+- [ ] **OP-19c — 3rd-platform byte-exact: pi5 arm64-linux confirms machine-independence (or honest blocked/divergence)**
+
 <!-- ANCHOR:OP-18-L3-FUSED-HOST (unique anchor — completes the OP-16 L3 fused-dispatch family: gelu2 + moe_block2) -->
 - [x] **OP-18 — host fallbacks for the remaining L3 fused dispatchers (gelu2 + moe_block2), 0-GPU testable** —
   completes the OP-16 (#2995) L3 fused-dispatch family: forge_dispatch_gelu2 (L3-b) + forge_dispatch_moe_block2

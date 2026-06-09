@@ -1,0 +1,33 @@
+════════════════════════════════════════════════════════════════════════════════
+ F-OP19C-PI5-3PLATFORM — 3rd-platform byte-exact: pi5-akida arm64-LINUX confirms
+ the OP-19/19b machine-independence result on a NEW arch×OS combo
+ HEXA-0POD OP-19c · 0-GPU (`hexa run`) · free pool ONLY (pi5-akida) · ZERO vast · $0
+════════════════════════════════════════════════════════════════════════════════
+
+[WIP — skeleton pushed first per STORM discipline; filled as the pi5 install + run
+ lands. The 2-platform proof is already on main (OP-19 #3002 + OP-19b #3008).]
+
+GOAL
+  OP-19 (#3002) + OP-19b (#3008) proved the flame CLMConvMoE step is machine-
+  independent byte-exact on TWO platform combos:
+    · x86_64-linux  (aiden, glibc)
+    · arm64-macos   (local + ghost, Darwin libm)
+  That pair is cross-arch AND cross-OS at once. OP-19c adds a THIRD distinct combo —
+  pi5-akida = arm64-LINUX — which isolates arch-vs-OS: SAME arch as macos, SAME OS as
+  aiden. If the byte folds match on pi5 too, the determinism is proven across the full
+  {x86,arm64}×{linux,macos} matrix (3 of 4 cells), not a 2-machine coincidence.
+
+RECORDED 2-PLATFORM FOLDS (on main; the values pi5 must match)
+  OP-19  CE-bwd dt_exp fold      = 7679248634312321699   (local+ghost arm64-macos, aiden x86-linux)
+  OP-19b GELU dt_erf  FWD fold   = 4548590605583584556   (local+ghost arm64-macos, aiden x86-linux)
+  OP-19b GELU dt_erf  BWD fold   = 4249661408190172843   (local+ghost arm64-macos, aiden x86-linux)
+
+ORACLES (self-contained, `hexa run`, 0-GPU)
+  · stdlib/flame/op19_crossplatform_selfcontained.hexa  (CE-bwd dt_exp fold = CEBWD-TAYLOR-bits)
+  · stdlib/flame/op19b_crossplatform_erf.hexa           (GELU dt_erf FWD/BWD = GELUFWD/BWD-DET-bits)
+
+[PENDING] 1. pi5-akida hexa status (runnable Y/N)
+[PENDING] 2. pi5 byte folds (verbatim oracle output)
+[PENDING] 3. 3-way cmp verdict (3-platform identical OR exact divergence)
+[PENDING] 4. {x86,arm64}×{linux,macos} matrix result
+════════════════════════════════════════════════════════════════════════════════
