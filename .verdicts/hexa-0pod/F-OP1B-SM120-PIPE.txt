@@ -1,13 +1,78 @@
 F-OP1B-SM120-PIPE — sm_120 TF32 own-GEMM: BK=32 + 3-stage cp.async pipeline + .v2/.v4 vectorized epilogue
 ========================================================================================================
-STATUS: WIP (skeleton — aiden RTX 5070 sweep pending)
+STATUS: DONE — partial-positive. ONLY the .v2 vectorized epilogue helped (small but real + bit-exact);
+        BK=32 and the 3-stage cp.async ring both REGRESSED on the consumer card. Best config SHIPPED.
 
-OBJECTIVE: close the residual ~3-15% off cuBLAS-TF32 at D=1024 (OP-1 K2 left it 1.15x@1024 / 1.02x@2048),
-bit-exact (rel-RMS vs FP64 ref ~0, scheduling/layout only). Levers:
+ENV: aiden RTX 5070 (sm_120 / cc12.0, 48KB smem/CTA cap = 0xc000), FREE sidecar pool host (GPU 0% / 2MiB
+     verified idle before every timed run; never destroyed). ZERO vast. nvcc -arch=sm_120 -O3.
+
+OBJECTIVE (OP-1 deferred follow-up): OP-1's K2 kernel (BK=16, 2-stage cp.async double-buffer, scalar
+masked epilogue) reached 1.15x off cuBLAS-TF32 @1024 / 1.02-1.03x @2048. OP-1b probes 3 schedule/layout
+levers to close the residual ~3-15% @1024 (the regime furthest off):
   (1) BK=32  — deeper K-tile per smem stage
-  (2) 3-stage cp.async ring buffer (cp.async.wait_group<2>) vs current 2-stage
-  (3) .v2/.v4 vectorized C-store epilogue (vs 4 scalar masked writes/fragment)
+  (2) 3-stage cp.async ring (cp.async.wait_group<2>) vs the 2-stage double buffer
+  (3) .v2 (float2) vectorized C-store epilogue (vs 4 scalar masked writes / fragment)
+The 128x64 register tile is CLOSED-NEGATIVE (OP-1) and was NOT re-attempted.
 
-Register-tile (128x64) lever is CLOSED-NEGATIVE (OP-1) — NOT re-attempted.
+METHOD: owngemm_sm120_pipe.cu — the production kernel parameterized by -DLBK / -DLSTAGES / -DLVEC.
+Defaults (16/2/0) reproduce OP-1's production kernel bit-for-bit. 8-config grid built + run; gate adds a
+host FP64 reference (g5 ground truth). Best bit-exact config folded into owngemm_sm120.cu and re-verified
+via the production build script.
 
-(measurements appended after aiden sweep)
+============================ SWEEP RESULTS (aiden RTX 5070, sm_120) ============================
+
+own-GEMM TFLOP/s (off cuBLAS-TF32 multiple):
+  config                         @D=1024            @D=2048
+  ------------------------------ ------------------ ------------------
+  baseline (BK16,2stg,scalar)    24.50  (1.143x)    29.74  (1.02-1.04x)   <- OP-1 K2 production
+  L1: BK=32                      22.76  (1.231x)    26.44  (1.159x)       REGRESS
+  L2: 3-stage cp.async ring      22.79  (1.229x)    27.61  (1.115x)       REGRESS
+  L3: .v2 vectorized epilogue    24.93  (1.124x)    29.92  (1.019x)       +1.7% @1024  *** WIN ***
+  L1+L3 (BK32 + vec)             23.10  (1.213x)    26.60  (1.150x)       REGRESS (BK32 dominates)
+  L2+L3 (3stage + vec)           23.27  (1.204x)    27.80  (1.100x)       REGRESS (3stage dominates)
+  L1+L2 (BK32 + 3stage)          BUILD FAIL — ptxas: 0xd200 smem > 0xc000 max (48KB cap overflow)
+  ALL  (BK32+3stage+vec)         BUILD FAIL — same smem overflow
+
+  (baseline & L3 each re-run x3 — variance < 0.05 TFLOP/s @1024; the +0.43 TFLOP/s L3 gain is stable,
+   not noise. cuBLAS @2048 warmup-sensitive 28.6-30.5, so the @2048 off-multiple bounces; the own-GEMM
+   absolute TFLOP/s is the stable signal and L3 edges baseline there too.)
+
+PER-LEVER VERDICT:
+  (1) BK=32      — PLATEAUED/REGRESS. Doubling the K-tile doubles per-stage smem (As+Bs), cutting CTA
+                   occupancy below the latency-hide payback at D=1024/2048 on the 5070. -1.7 TFLOP/s @1024.
+  (2) 3-stage    — PLATEAUED/REGRESS. A 3rd ring slot is +50% smem for the same reason; the 2-stage
+                   double buffer already hides the cp.async latency at these sizes. -1.7 TFLOP/s @1024.
+  (1)+(2)        — INFEASIBLE on sm_120: 0xd200 (53.8KB) > 0xc000 (48KB) static-smem cap. Hard wall.
+  (3) .v2 epi    — WIN (small, real, bit-exact). c0/c1 (and c2/c3) are contiguous in C (cols 2*tig,
+                   2*tig+1) so they fuse into one 64-bit float2 store; halves interior-tile store insns.
+                   +0.43 TFLOP/s / +1.7% @1024 (24.50->24.93, 1.143x->1.124x), small top-up @2048.
+                   Scalar masked fallback at boundary/odd-alignment tiles preserves correctness.
+
+BIT-EXACT GATE (g5): HELD — Y. Every BUILDING config produces BYTE-IDENTICAL output: vs-cuBLAS-TF32
+rel-RMS = {1.332e-05 @768, 3.019e-05 @1024, 1.743e-05 @2048} and vs-FP64 rel-RMS = {2.656e-04 @768,
+6.209e-04 @1024, 5.350e-04 @2048} are IDENTICAL across baseline / BK32 / 3stage / vec / all combos —
+i.e. rel-RMS vs the OP-1 baseline = 0 (pure schedule/layout, zero math drift; non-zero would = a bug).
+(The vs-FP64 ~1e-4 is the inherent TF32 10-bit-mantissa truncation floor, not a regression — it is the
+SAME for cuBLAS-TF32; the bit-exact criterion is "identical to baseline", which holds exactly.)
+
+PRODUCTION RE-VERIFY (shipped owngemm_sm120.cu, built via build_owngemm.sh on aiden):
+  @768  GATE rel-RMS=1.332e-05 max|d|=1.151e-05  PASS  (== OP-1 baseline, bit-exact)
+  @1024 own 24.93 TFLOP/s  off-cuBLAS 1.13x  (GATE rel-RMS 3.019e-05 PASS)
+  @2048 own 29.86 TFLOP/s  off-cuBLAS 1.02x  (GATE rel-RMS 1.743e-05 PASS)
+
+================================== HONEST FRAMING (g5) ==================================
+The residual was small (OP-1 already at 1.02-1.15x off cuBLAS-TF32) and the K-pipeline-depth levers did
+NOT move it — they made it WORSE. On the RTX 5070's 48KB smem cap, the 2-stage / BK=16 config is the
+occupancy sweet spot at D=1024/2048; deepening the K-tile or the cp.async ring trades occupancy for a
+latency-hide that is already saturated, so it regresses, and stacking them overflows smem entirely. This
+matches the OP-1 conclusion: the consumer-card lever is LAYOUT / MEMORY-INSTRUCTION VECTORIZATION, not
+staging depth (the .v4 loads were OP-1's big win; the .v2 store is OP-1b's small one). The ONLY positive,
+bit-exact lever was the .v2 epilogue — +1.7% @1024 (1.143x -> 1.124x off cuBLAS-TF32). It is shipped.
+NOT regressed: BK=32 / 3-stage kept OUT of production (closed-negative on consumer card, logged).
+
+BEST sm_120 TF32 own-GEMM (shipped): 24.93 TFLOP/s @1024 (1.13x off cuBLAS-TF32, was 1.15x),
+                                     29.86 TFLOP/s @2048 (1.02x off cuBLAS-TF32). Bit-exact Y.
+Lever that helped: .v2 vectorized epilogue.  Plateaued/regressed: BK=32, 3-stage cp.async ring.
+
+Files: self/native/mma_sm120/owngemm_sm120.cu (production, .v2 epilogue folded in),
+       self/native/mma_sm120/owngemm_sm120_pipe.cu + build_owngemm_pipe.sh (the OP-1b sweep harness).
