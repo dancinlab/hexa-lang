@@ -1,0 +1,175 @@
+// ════════════════════════════════════════════════════════════════════════════
+//  op19b_gngelu_relock.hexa — F-OP19B GN+GELU fusion re-lock under the pure-FP
+//  deterministic erf (dt_erf). SELF-CONTAINED (no `use` — the gelu/erf/sqrt are
+//  file-local, so the proof does NOT depend on a freshly-rebuilt stdlib and runs
+//  identically on any hexa host via `hexa run`).
+//
+//  The OP-9/OP-16 GN-GELU oracle (clm_prod_gn_gelu_hostdispatch_eq.hexa) locks the
+//  fused-valley identity: the UNFUSED reference (two-pass GN → store Y → separate
+//  GELU sweep) must be byte-exact (max|Δ|=0) to the FUSED single-pass (GN affine +
+//  inline GELU on the in-register affine yv). OP-19b swaps the GELU's libm `erf`
+//  for the deterministic dt_erf (A&S 7.1.26 + dt_exp, branchless). This oracle
+//  proves the fusion STILL re-locks to max|Δ|=0 with dt_erf on BOTH arms — i.e. the
+//  numeric change is consistent across the fused/unfused split, so the production
+//  oracle (which reads gn_lib's _gn_gelu) reads 0.0 once the stdlib is rebuilt with
+//  the dt_erf swap. Both arms apply the IDENTICAL file-local _gelu. $0, 0-GPU.
+// ════════════════════════════════════════════════════════════════════════════
+
+// dt_exp — byte-identical to flame_math.hexa dt_exp (F-OP19). Pure +,-,*,/.
+fn _dt_exp(x: float) -> float {
+    let mut r = 0
+    let mut xr = x
+    while (if xr > 0.0 { xr } else { 0.0 - xr }) > 0.25 { xr = xr / 2.0; r = r + 1 }
+    let mut term = 1.0
+    let mut acc = 1.0
+    let mut k = 1
+    while k < 12 { term = term * xr / to_float(k); acc = acc + term; k = k + 1 }
+    let mut s = 0
+    while s < r { acc = acc * acc; s = s + 1 }
+    return acc
+}
+
+// dt_erf — byte-identical to flame_math.hexa dt_erf (A&S 7.1.26 + dt_exp,
+// BRANCHLESS in z; only the z=0 odd sign flip). NO libm. max|Δ vs libm| = 1.38e-7.
+fn _dt_erf(x: float) -> float {
+    let mut sign = 1.0
+    let mut z = x
+    if z < 0.0 { sign = 0.0 - 1.0; z = 0.0 - z }
+    let t = 1.0 / (1.0 + 0.3275911 * z)
+    let a1 = 0.254829592
+    let a2 = 0.0 - 0.284496736
+    let a3 = 1.421413741
+    let a4 = 0.0 - 1.453152027
+    let a5 = 1.061405429
+    let poly = ((((a5 * t + a4) * t + a3) * t + a2) * t + a1) * t
+    return sign * (1.0 - poly * _dt_exp(0.0 - z * z))
+}
+
+// GELU(x) = x·0.5·(1 + erf(x/√2)) — byte-identical to gn_lib _gn_gelu / nn_lib
+// _nn_gelu (OP-19b dt_erf form). The SAME 1/√2 literal and x·cdf op order.
+fn _gelu(x: float) -> float {
+    return x * (0.5 * (1.0 + _dt_erf(x * 0.70710678118654752440)))
+}
+
+// _gn_sqrt — 40-iter Newton, byte-identical to gn_lib _gn_sqrt (F-OP9).
+fn _sqrt(x: float) -> float {
+    if x <= 0.0 { return 0.0 }
+    let mut g = x
+    let mut i = 0
+    while i < 40 { g = 0.5 * (g + x / g); i = i + 1 }
+    return g
+}
+
+fn _absf(x: float) -> float { if x < 0.0 { return 0.0 - x } return x }
+
+// REF vs FUSED for one GN shape; returns max(|ΔY|, |ΔA|). Two-pass mean/var
+// (t-outer, c-inner), eps=1e-5, then the SAME _gelu on both arms.
+fn _run(T: int, C: int, G: int) -> float {
+    let eps = 0.00001
+    let cg = C / G
+    let m = to_float(cg * T)
+    let x = farr_zeros(T * C)
+    let gamma = farr_zeros(C)
+    let beta = farr_zeros(C)
+    let mut s = 7
+    let mut i = 0
+    while i < T * C {
+        s = (s * 1103515245 + 12345) & 0x7FFFFFFF
+        farr_set(x, i, (to_float(s % 1000) - 500.0) * 0.05)
+        i = i + 1
+    }
+    let mut c = 0
+    while c < C {
+        s = (s * 1103515245 + 12345) & 0x7FFFFFFF
+        farr_set(gamma, c, (to_float(s % 1000) - 500.0) * 0.02 + 1.0)
+        farr_set(beta, c, 0.01)
+        c = c + 1
+    }
+    let yR = farr_zeros(T * C)
+    let aR = farr_zeros(T * C)
+    let yF = farr_zeros(T * C)
+    let aF = farr_zeros(T * C)
+
+    // REF: GN → store Y → SEPARATE gelu sweep over stored Y.
+    let mut g = 0
+    while g < G {
+        let c0 = g * cg
+        let mut sum = 0.0
+        let mut t = 0
+        while t < T { let mut cc = 0; while cc < cg { sum = sum + farr_get(x, t * C + (c0 + cc)); cc = cc + 1 }; t = t + 1 }
+        let mu = sum / m
+        let mut vs = 0.0
+        let mut t2 = 0
+        while t2 < T { let mut c2 = 0; while c2 < cg { let d = farr_get(x, t2 * C + (c0 + c2)) - mu; vs = vs + d * d; c2 = c2 + 1 }; t2 = t2 + 1 }
+        let inv = 1.0 / _sqrt(vs / m + eps)
+        let mut t3 = 0
+        while t3 < T {
+            let mut c3 = 0
+            while c3 < cg {
+                let ch = c0 + c3
+                let idx = t3 * C + ch
+                farr_set(yR, idx, farr_get(gamma, ch) * ((farr_get(x, idx) - mu) * inv) + farr_get(beta, ch))
+                c3 = c3 + 1
+            }
+            t3 = t3 + 1
+        }
+        g = g + 1
+    }
+    let mut q = 0
+    while q < T * C { farr_set(aR, q, _gelu(farr_get(yR, q))); q = q + 1 }
+
+    // FUSED: GN affine + inline gelu on the in-register affine yv, single pass.
+    let mut g2 = 0
+    while g2 < G {
+        let c0 = g2 * cg
+        let mut sum = 0.0
+        let mut t = 0
+        while t < T { let mut cc = 0; while cc < cg { sum = sum + farr_get(x, t * C + (c0 + cc)); cc = cc + 1 }; t = t + 1 }
+        let mu = sum / m
+        let mut vs = 0.0
+        let mut t2 = 0
+        while t2 < T { let mut c2 = 0; while c2 < cg { let d = farr_get(x, t2 * C + (c0 + c2)) - mu; vs = vs + d * d; c2 = c2 + 1 }; t2 = t2 + 1 }
+        let inv = 1.0 / _sqrt(vs / m + eps)
+        let mut t3 = 0
+        while t3 < T {
+            let mut c3 = 0
+            while c3 < cg {
+                let ch = c0 + c3
+                let idx = t3 * C + ch
+                let yv = farr_get(gamma, ch) * ((farr_get(x, idx) - mu) * inv) + farr_get(beta, ch)
+                farr_set(yF, idx, yv)
+                farr_set(aF, idx, _gelu(yv))
+                c3 = c3 + 1
+            }
+            t3 = t3 + 1
+        }
+        g2 = g2 + 1
+    }
+
+    let mut md = 0.0
+    let mut j = 0
+    while j < T * C {
+        let dy = _absf(farr_get(yR, j) - farr_get(yF, j))
+        let da = _absf(farr_get(aR, j) - farr_get(aF, j))
+        if dy > md { md = dy }
+        if da > md { md = da }
+        j = j + 1
+    }
+    return md
+}
+
+fn main() {
+    println("op19b_gngelu_relock — F-OP19B GN+GELU fusion re-lock under dt_erf (CPU oracle)")
+    let d1 = _run(8, 8, 1)
+    let d2 = _run(16, 12, 4)
+    let d3 = _run(12, 16, 8)
+    let d4 = _run(32, 8, 8)
+    println("  max|Δ| (Y,A)  T8C8G1=" + to_string(d1) + " T16C12G4=" + to_string(d2) + " T12C16G8=" + to_string(d3) + " T32C8G8=" + to_string(d4))
+    if d1 == 0.0 && d2 == 0.0 && d3 == 0.0 && d4 == 0.0 {
+        println("F-OP19B-GNGELU-RELOCK = 1")
+        println("PASS — fused == unfused GN+GELU byte-eq (max|Δ|=0) with deterministic dt_erf on both arms")
+    } else {
+        println("F-OP19B-GNGELU-RELOCK = 0")
+        println("FAIL — dt_erf GN+GELU fusion diverges")
+    }
+}
