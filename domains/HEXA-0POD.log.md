@@ -441,3 +441,7 @@ GATE (g5): doc-consolidation milestone — value = the byte-eq reproducibility c
 computation. Every canonical-order claim traces to a specific verdict line (no invented invariant). $0, 0-GPU,
 no pool/vast. OP-12 (AdamW optimizer oracle) landed in parallel and is indexed here as the OPTIMIZER phase.
 Verdict .verdicts/hexa-0pod/F-OP14-DETERMINISM-DOC.txt.
+
+## OP-15 — integration byte-eq oracle (whole micro-step byte-identical run-to-run)
+
+- WIP skeleton pushed (stdlib/flame/clm_step_determinism_eq.hexa). Body next.

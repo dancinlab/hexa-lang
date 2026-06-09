@@ -1,0 +1,18 @@
+// ════════════════════════════════════════════════════════════════════════════
+//  clm_step_determinism_eq.hexa — F-OP15 INTEGRATION byte-eq determinism ORACLE.
+//
+//  HEXA-0POD OP-15: CPU-LOCAL (`hexa run`, 0-GPU) COMPOSITION-level reproducibility
+//  proof for the flame CLMConvMoE micro train-step. The OP-2/7/8/9/10/11/12/13 series
+//  locked each PER-OP identity bit-exactly; what is NOT yet locked is the COMPOSITION —
+//  that the FULL step (embed → conv → GroupNorm → MoE → CE → backward → AdamW), with
+//  ALL its state threading (cache buffers, optimizer m/v carry, deterministic init),
+//  produces BYTE-IDENTICAL post-step state when run TWICE from the same seed.
+//
+//  WIP SKELETON — body lands in the next commit.
+// ════════════════════════════════════════════════════════════════════════════
+
+use "stdlib/flame/tensor_lib"
+
+fn main() {
+    println("clm_step_determinism_eq — F-OP15 (WIP skeleton)")
+}

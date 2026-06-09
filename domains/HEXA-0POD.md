@@ -289,6 +289,9 @@ loop targets what the consumer card + code can carry.
   legible, NOT new computation; every canonical-order claim traces to a specific verdict line (g5). $0, 0-GPU,
   no pool/vast. Verdict .verdicts/hexa-0pod/F-OP14-DETERMINISM-DOC.txt.
 
+<!-- ANCHOR:OP-15-STEP-DETERMINISM (unique anchor — distinct from OP-14/OP-13/OP-11) -->
+- [ ] **OP-15 — integration byte-eq oracle: whole micro-step byte-identical run-to-run (0-GPU)**
+
 ## deferred (0-pod follow-ups surfaced by the loop — self-feed)
 
 - **OP-2b — land the runtime.c hexa_forge_dispatch_matmul_t wrapper body + flip the trainer to the live
