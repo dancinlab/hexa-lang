@@ -3,4 +3,131 @@ F-OP17-MACRO-REDEF — fix runtime.c -Wmacro-redefined (9 libc macros) at source
 HEXA-0POD OP-17 · forge warning-hygiene · 0-GPU (local clang) · $0
 ════════════════════════════════════════════════════════════════════════════
 
-WIP — skeleton pushed first (durable-worktree rule). Filled in next commit.
+RESULT: 9 [-Wmacro-redefined] warnings ELIMINATED at the source, behavior-
+preserving (the 9 macros still expand to their hxlcl_* interception helpers,
+byte-identical expansion before vs after), no new warning/error introduced.
+PROVEN LOCALLY (0-GPU, clang -fsyntax-only). Same forge-hygiene class as
+OP-5/OP-5b (which cleaned -Wcomment); this is the -Wmacro-redefined class.
+
+────────────────────────────────────────────────────────────────────────────
+THE SIGNAL (clang build diagnostics on self/runtime.c, Darwin)
+────────────────────────────────────────────────────────────────────────────
+  strcat · bzero · memcpy · memset · memmove · strncpy · strcpy · snprintf ·
+  sprintf  — all [-Wmacro-redefined]. Reproduced verbatim:
+    $ cd self && clang -fsyntax-only -DHEXA_RT_SELFEMIT -I . -I .. runtime.c
+    → 9 'macro redefined' warnings (count = 9, exact match to the signal).
+
+────────────────────────────────────────────────────────────────────────────
+THE TWO COLLIDING DEFINITION SITES (located)
+────────────────────────────────────────────────────────────────────────────
+SITE 1 — macOS SDK _FORTIFY_SOURCE "secure" headers (the PREVIOUS definition),
+  active by default under Darwin clang. Captured from the warning `note:`:
+    secure/_string.h:254  #define strcat(...)   __strcat_chk_func (__VA_ARGS__)
+    secure/_strings.h:90  #define bzero(...)    __bzero_chk_func (__VA_ARGS__)
+    secure/_string.h:234  #define memcpy(...)   __memcpy_chk_func (__VA_ARGS__)
+    secure/_string.h:244  #define memset(...)   __memset_chk_func (__VA_ARGS__)
+    secure/_string.h:239  #define memmove(...)  __memmove_chk_func (__VA_ARGS__)
+    secure/_string.h:259  #define strncpy(...)  __strncpy_chk_func (__VA_ARGS__)
+    secure/_string.h:249  #define strcpy(...)   __strcpy_chk_func (__VA_ARGS__)
+    secure/_stdio.h:119   #define snprintf(...) __snprintf_chk_func (...)
+    secure/_stdio.h:107   #define sprintf(...)  __sprintf_chk_func (...)
+  Pulled in transitively by runtime.c's `#include <string.h>` / `<strings.h>` /
+  `<stdio.h>` at the top of the file.
+
+SITE 2 — self/runtime.c's libc-interception "Textual override" block
+  (the REDEFINITION). At frozen-seed lines 2070, 2082-2087, 2095-2096:
+    #define strcat(d,s)    hxlcl_strcat((char *)(d), (const char *)(s))
+    #define bzero(p,n)     hxlcl_bzero((void *)(p), (size_t)(n))
+    #define memcpy(d,s,n)  hxlcl_memcpy((void *)(d), (const void *)(s), (size_t)(n))
+    #define memset(p,c,n)  hxlcl_memset((void *)(p), (int)(c), (size_t)(n))
+    #define memmove(d,s,n) hxlcl_memmove((void *)(d), (const void *)(s), (size_t)(n))
+    #define strncpy(d,s,n) hxlcl_strncpy((char *)(d), (const char *)(s), (size_t)(n))
+    #define strcpy(d,s)    hxlcl_strcpy((char *)(d), (const char *)(s))
+    #define snprintf(b,c,...)  hxlcl_snprintf((char *)(b), (size_t)(c), __VA_ARGS__)
+    #define sprintf(b,...)     hxlcl_sprintf((char *)(b), __VA_ARGS__)
+  This is the runtime's libc-interception layer (routes residual libc calls in
+  runtime_core.c / HI tier / transpile output to the hxlcl_* svc-trap helpers).
+  It MUST stay defined — the fix de-duplicates, it does not remove interception.
+
+WHY only these 9 (and not strlen/memcmp/strcmp/… in the same block): only these
+9 names are #define'd as macros by the fortify secure headers; the rest are
+plain extern functions (no macro), so their runtime.c #define is the FIRST and
+ONLY definition → no collision.
+
+────────────────────────────────────────────────────────────────────────────
+THE MINIMAL DE-DUP FIX (behavior-preserving)
+────────────────────────────────────────────────────────────────────────────
+Insert `#undef <NAME>` for the 9 names immediately BEFORE the override block
+(right before `#define strlen(s) …`). This is the EXACT precedent the seed
+already uses two screens down for the same situation:
+    #undef isalnum / #undef isalpha   (ctype.h pre-defines them)  → line ~2130
+    #undef exit    / #undef _exit      (stdlib.h inline)           → line ~2137
+
+Injected block:
+    #undef strcat
+    #undef bzero
+    #undef memcpy
+    #undef memset
+    #undef memmove
+    #undef strncpy
+    #undef strcpy
+    #undef snprintf
+    #undef sprintf
+
+BEHAVIOR-PRESERVING — PROVEN: the effective macro expansion is UNCHANGED. Our
+hxlcl_* #define is the LAST definition either way, so it already won (just with
+a warning). `clang -E` of a probe TU that calls all 9 expands them identically
+before vs after the fix:
+    BEFORE (clean frozen seed): hxlcl_{strcat,bzero,memcpy,memset,memmove,
+                                strncpy,strcpy,snprintf,sprintf}
+    AFTER  (with #undef block):  ...identical set, byte-for-byte...
+`#undef` of an unset macro is a standards-defined no-op, so the block is also
+safe on Linux (glibc does not macro-define these) — platform-neutral.
+
+────────────────────────────────────────────────────────────────────────────
+WARNINGS-GONE PROOF (local, 0-GPU)
+────────────────────────────────────────────────────────────────────────────
+  $ cd self && clang -fsyntax-only -DHEXA_RT_SELFEMIT -I . -I .. runtime.c
+
+  BEFORE fix — warning types:
+       4 [-Wincompatible-pointer-types-discards-qualifiers]
+       9 [-Wmacro-redefined]      ← the signal
+      12 [-Wundefined-internal]
+  AFTER fix — warning types:
+       4 [-Wincompatible-pointer-types-discards-qualifiers]
+      12 [-Wundefined-internal]
+  → -Wmacro-redefined: 9 → 0. The 2 pre-existing unrelated warning classes are
+    UNCHANGED (no regression, no NEW warning). errors: 0 → 0.
+
+────────────────────────────────────────────────────────────────────────────
+LANDING (g5, OP-2b / OP-15 / OP-16 class — frozen-seed honest landing)
+────────────────────────────────────────────────────────────────────────────
+self/runtime.c is gitignored frozen-seed (#2065 `.c-graduation`): it has NO
+tracked .c emit SSOT — it is restored on demand from the immutable git blob at
+151c52c82502e93d01735c58b43b017d102fee63 (the graduation-commit parent) by
+tool/restore_frozen_seeds. The blob is history → not editable in place.
+
+So the durable fix lands in the TRACKED restore tool as a deterministic,
+idempotent POST-RESTORE PATCH: tool/restore_frozen_seeds now injects the 9
+`#undef`s right before the `#define strlen(` line on every restore (marker-
+guarded so re-restores don't double-inject). This makes EVERY build env (CI
+nobaseline-gate, release pipeline, local bootstrap) get the de-duplicated
+runtime.c automatically — no manual step, no GPU, no pod.
+
+END-TO-END VERIFY (0-GPU, via the patched tool):
+  $ bash tool/restore_frozen_seeds          # restores + injects #undef block
+    → "[restore_frozen_seeds] OP-17: injected 9 #undef … into self/runtime.c"
+  $ cd self && clang -fsyntax-only -DHEXA_RT_SELFEMIT -I . -I .. runtime.c
+    → -Wmacro-redefined count = 0 ; errors = 0 ; other warnings unchanged
+  $ bash tool/restore_frozen_seeds && grep -c 'OP-17 (HEXA-0POD' self/runtime.c
+    → 1   (idempotent — single injection after re-restore)
+
+VERDICT:
+  9 -Wmacro-redefined eliminated ............................. YES (9 → 0)
+  behavior-preserving (same hxlcl_* expansion) ............... YES (clang -E proof)
+  no new warning / no error .................................. YES (4+12 unchanged, 0 err)
+  local verify (0-GPU) ...................................... YES (clang -fsyntax-only)
+  durable landing ........................................... tool/restore_frozen_seeds
+                                                               post-restore patch (tracked,
+                                                               idempotent, platform-neutral)
+  GPU / pod / vast .......................................... NONE ($0)

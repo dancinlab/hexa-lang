@@ -11,7 +11,27 @@ loop targets what the consumer card + code can carry.
 ## milestones (loop self-feeds; add as discovered)
 
 <!-- ANCHOR:OP-17-MACRO-REDEF (unique anchor — forge-hygiene, -Wmacro-redefined; distinct warning class from OP-5/OP-5b's -Wcomment) -->
-- [ ] **OP-17 — fix runtime.c -Wmacro-redefined (9 libc macros) at source, behavior-preserving (0-GPU)** — WIP
+- [x] **OP-17 — fix runtime.c -Wmacro-redefined (9 libc macros) at source, behavior-preserving (0-GPU)** —
+  same forge-hygiene class as OP-5/OP-5b (which cleaned -Wcomment) but a DIFFERENT warning class
+  (-Wmacro-redefined). The two colliding definition sites: (1) Darwin clang's _FORTIFY_SOURCE secure headers
+  `<secure/_string.h>`/`_strings.h`/`_stdio.h` ALREADY `#define` strcat/bzero/memcpy/memset/memmove/strncpy/
+  strcpy/snprintf/sprintf as `__*_chk_func` fortify macros (pulled in transitively by runtime.c's top
+  `#include <string.h>`/`<strings.h>`/`<stdio.h>`); (2) self/runtime.c's "Textual override" libc-interception
+  block (frozen-seed lines 2070,2082-2087,2095-2096) redefines those same 9 names to the `hxlcl_*` svc-trap
+  helpers → 9 [-Wmacro-redefined]. (Only these 9 collide — the other override names strlen/memcmp/strcmp/… are
+  plain externs, not macros.) MINIMAL FIX: `#undef <NAME>` the 9 names right before the override block — the
+  EXACT precedent the seed already uses for `#undef isalnum`/`#undef exit` two screens down. BEHAVIOR-PRESERVING
+  (PROVEN via `clang -E`): our hxlcl_* `#define` is the LAST definition either way, so the effective expansion is
+  byte-identical before vs after — `#undef` only silences the warning (and is a standards no-op on Linux where
+  glibc doesn't macro-define these → platform-neutral). LOCAL VERIFY (0-GPU, `clang -fsyntax-only -DHEXA_RT_SELFEMIT`):
+  -Wmacro-redefined 9→0, the 2 unrelated pre-existing warning classes (4 -Wincompatible-pointer + 12
+  -Wundefined-internal) UNCHANGED, 0 errors. HONEST landing (g5, OP-2b/OP-15/OP-16 class): self/runtime.c is
+  gitignored frozen-seed (#2065 .c-graduation, restored from immutable blob 151c52c8… — no tracked emit SSOT), so
+  the durable fix lands as a deterministic, idempotent, marker-guarded POST-RESTORE PATCH in the TRACKED
+  tool/restore_frozen_seeds (injects the 9 `#undef`s on every restore) → every build env (CI/release/local
+  bootstrap) gets the de-duplicated runtime.c automatically. End-to-end verified through the patched tool. 9
+  warnings GONE · behavior-preserving YES · no new warn YES · GPU/pod/vast NONE ($0). Verdict
+  .verdicts/hexa-0pod/F-OP17-MACRO-REDEF.txt.
 
 - [x] **OP-1 — sm_120 own-GEMM speedup on aiden (close the cuBLAS gap, bit-exact)** — the sm_120 OWN120
   (mma.sync m16n8k8 TF32, ~4.9-8.1 TFLOP/s, 3.2-6.9x off cuBLAS) has headroom: deeper smem staging,
