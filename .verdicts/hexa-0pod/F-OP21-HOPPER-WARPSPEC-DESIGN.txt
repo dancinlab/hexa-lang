@@ -1,0 +1,7 @@
+F-OP21-HOPPER-WARPSPEC-DESIGN — WIP SKELETON (0-pod DESIGN, GPU-gated measure)
+==============================================================================
+STATUS: WIP — skeleton committed first (durable-worktree discipline). Body fills in next commit.
+SCOPE: 0-POD DESIGN ONLY. The forge own-GEMM's remaining Hopper (sm_90a wgmma) perf lever —
+       a warp-specialized TMA producer/consumer software pipeline (cuBLAS-class mainloop).
+       This verdict is a DESIGN + perf-gap analysis + turnkey H100 experiment recipe. NO
+       MEASUREMENT is claimed; the measure is GPU-gated (no vast, no pod rental in this round).
