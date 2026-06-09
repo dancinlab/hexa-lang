@@ -1,0 +1,113 @@
+F-OP10-CONV-SEAM-ORACLE — B>1 window-concat causal-conv SEAM characterization
+================================================================================
+HEXA-0POD OP-10 · LOCAL `hexa run` (0-GPU, no pool, no vast) · CPU oracle.
+Oracle: stdlib/flame/clm_conv_window_seam_eq.hexa
+Verdict tier: 🔵 (CPU bit-exact characterization; honest g5 — this is a SEAM
+              CHARACTERIZATION, not a clean max|Δ|=0-everywhere identity).
+
+WHAT IS CHARACTERIZED
+--------------------------------------------------------------------------------
+The flame CLMConvMoE batched training step (CLM_PROD_BATCH=B in clm_prod.hexa)
+concatenates B consecutive DISTINCT length-Tw windows into ONE length-T=B*Tw
+buffer and runs the causal-dilated Conv1d over the whole concatenated sequence.
+The flame_h100_h200_closeout memory recorded the honest non-bit-exact spot:
+
+  "B>1 window-concat carries a K-1 causal-conv SEAM-only Δ (not bit-identical;
+   a true max|Δ|=0 batched step needs a per-window-segmented causal conv)".
+
+This oracle computes the conv BOTH ways on CPU (identical weights/bias/FP dtype):
+  (a) WINDOW-CONCAT (flame B>1): one conv over x_concat[T=B*Tw, Cin], every
+      previous-window row visible to the receptive field p = t - dil*(K-1-k).
+  (b) PER-WINDOW-SEGMENTED reference: each length-Tw window convolved
+      INDEPENDENTLY (its own causal zero left-pad), cross-window context ZEROED.
+Δ[t] = (a) - (b) per output position.
+
+THE PRECISE PER-POSITION MAP (PROVEN)
+--------------------------------------------------------------------------------
+· window 0 (b==0)                              : Δ = 0 (no previous window).
+· window b>0, local tl ∈ [ (K-1)*dil , Tw )    : INTERIOR, receptive field stays
+                                                 inside the window ⇒ Δ = 0
+                                                 (bit-exact, max|Δ|=0).
+· window b>0, local tl ∈ [ 0 , (K-1)*dil )     : SEAM band — field straddles the
+                                                 window start; (a) reads prev-window
+                                                 tokens (b) zeros ⇒ Δ = Σ over the
+                                                 straddling taps of x_prev·w ≠ 0.
+
+So the SEAM = EXACTLY the first (K-1)*dil output positions of every window AFTER
+the first. The INTERIOR is bit-exact (max|Δ|=0). REFINEMENT of the closeout:
+  · dil=1  ⇒ band width = K-1  (the closeout's named "K-1 seam" — CONFIRMED).
+  · dil>1  ⇒ band width = (K-1)*dil  (the trunk's dilated convs widen the band;
+            the closeout said "K-1" — this oracle SHARPENS it to (K-1)*dil).
+
+INTERIOR BIT-EXACT PROOF: across all 6 cases, interior max|Δ| = 0.0 with
+bad-interior-positions = 0 (every position outside the predicted band is exactly
+0, not merely small). The seam positions are all genuinely nonzero
+(mischaracterized-seam = 0): the band is neither over- nor under-claimed.
+
+EXACT SEAM MAGNITUDES (per case, max over band positions):
+  B=2 Tw=6 K=3 dil=1   band=2   seam max|Δ| = 0.111258
+  B=2 Tw=6 Cin2Cout2   band=2   seam max|Δ| = 0.166135
+  B=3 Tw=5 Cin2Cout3   band=2   seam max|Δ| = 0.383572 (4 seam positions, 2 per win>0)
+  B=2 Tw=8 K=3 dil=2   band=4   seam max|Δ| = 0.236489
+  B=2 Tw=9 K=3 dil=4   band=8   seam max|Δ| = 0.208698 (full (K-1)*4=8 band)
+  B=4 Tw=4 K=2 dil=1   band=1   seam max|Δ| = 0.061163 (3 seam positions, 1 per win>0)
+
+CONFIRMS / REFINES CLOSEOUT: CONFIRMS the closeout's claim (the seam is real,
+interior is bit-exact, a per-window-segmented conv removes it). REFINES it: the
+band is the first (K-1)*dil positions per window>0 (not a flat "K-1"); magnitude
+= the cross-window causal context the segmented form zeros.
+
+GATE (g5): `hexa run` PASS · F-OP10-CONV-SEAM-ORACLE = 1 · interior max|Δ|=0 ·
+seam band exactly predicted. Behavior-preserving — verification/characterization
+addition only, NO trainer logic changed. 0-GPU, no pool, no vast.
+
+VERBATIM `hexa run stdlib/flame/clm_conv_window_seam_eq.hexa` OUTPUT
+--------------------------------------------------------------------------------
+OP-10 — B>1 window-concat causal-conv SEAM characterization oracle (0-GPU)
+  paths: (a) flame concat conv over T=B*Tw  vs  (b) per-window-segmented ref
+
+  ── case B=2 Tw=6 Cin=1 Cout=1 K=3 dil=1  (predicted seam band = (K-1)*dil = 2)
+    SEAM  t=6 (win 1 local 0)  max|Δ|=0.111258
+    SEAM  t=7 (win 1 local 1)  max|Δ|=0.0009032
+    interior max|Δ| = 0.0   (bad interior positions = 0)
+    seam positions  = 2   seam max|Δ| = 0.111258   (mischaracterized seam = 0)
+  ── case B=2 Tw=6 Cin=2 Cout=2 K=3 dil=1  (predicted seam band = (K-1)*dil = 2)
+    SEAM  t=6 (win 1 local 0)  max|Δ|=0.151276
+    SEAM  t=7 (win 1 local 1)  max|Δ|=0.166135
+    interior max|Δ| = 0.0   (bad interior positions = 0)
+    seam positions  = 2   seam max|Δ| = 0.166135   (mischaracterized seam = 0)
+  ── case B=3 Tw=5 Cin=2 Cout=3 K=3 dil=1  (predicted seam band = (K-1)*dil = 2)
+    SEAM  t=5 (win 1 local 0)  max|Δ|=0.383572
+    SEAM  t=6 (win 1 local 1)  max|Δ|=0.275396
+    SEAM  t=10 (win 2 local 0)  max|Δ|=0.219364
+    SEAM  t=11 (win 2 local 1)  max|Δ|=0.093411
+    interior max|Δ| = 0.0   (bad interior positions = 0)
+    seam positions  = 4   seam max|Δ| = 0.383572   (mischaracterized seam = 0)
+  ── case B=2 Tw=8 Cin=2 Cout=2 K=3 dil=2  (predicted seam band = (K-1)*dil = 4)
+    SEAM  t=8 (win 1 local 0)  max|Δ|=0.236489
+    SEAM  t=9 (win 1 local 1)  max|Δ|=0.0557207
+    SEAM  t=10 (win 1 local 2)  max|Δ|=0.129939
+    SEAM  t=11 (win 1 local 3)  max|Δ|=0.173984
+    interior max|Δ| = 0.0   (bad interior positions = 0)
+    seam positions  = 4   seam max|Δ| = 0.236489   (mischaracterized seam = 0)
+  ── case B=2 Tw=9 Cin=1 Cout=2 K=3 dil=4  (predicted seam band = (K-1)*dil = 8)
+    SEAM  t=9 (win 1 local 0)  max|Δ|=0.208698
+    SEAM  t=10 (win 1 local 1)  max|Δ|=0.133189
+    SEAM  t=11 (win 1 local 2)  max|Δ|=0.189874
+    SEAM  t=12 (win 1 local 3)  max|Δ|=0.119195
+    SEAM  t=13 (win 1 local 4)  max|Δ|=0.0761112
+    SEAM  t=14 (win 1 local 5)  max|Δ|=0.0850773
+    SEAM  t=15 (win 1 local 6)  max|Δ|=0.0943373
+    SEAM  t=16 (win 1 local 7)  max|Δ|=0.0694519
+    interior max|Δ| = 0.0   (bad interior positions = 0)
+    seam positions  = 8   seam max|Δ| = 0.208698   (mischaracterized seam = 0)
+  ── case B=4 Tw=4 Cin=1 Cout=1 K=2 dil=1  (predicted seam band = (K-1)*dil = 1)
+    SEAM  t=4 (win 1 local 0)  max|Δ|=0.0351832
+    SEAM  t=8 (win 2 local 0)  max|Δ|=0.0611626
+    SEAM  t=12 (win 3 local 0)  max|Δ|=0.0573939
+    interior max|Δ| = 0.0   (bad interior positions = 0)
+    seam positions  = 3   seam max|Δ| = 0.0611626   (mischaracterized seam = 0)
+
+F-OP10-CONV-SEAM-ORACLE = 1
+PASS — interior max|Δ|=0 (bit-exact) · seam = first (K-1)*dil positions of each window>0
+       seam Δ = cross-window causal context the segmented path zeros (CONFIRMS closeout)
