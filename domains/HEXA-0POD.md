@@ -274,7 +274,20 @@ loop targets what the consumer card + code can carry.
   stdlib/flame/clm_prod_adamw_update_eq.hexa · verdict .verdicts/hexa-0pod/F-OP12-ADAMW-UPDATE-ORACLE.txt.
 
 <!-- ANCHOR:OP-14-DETERMINISM-DOC (unique anchor — distinct from OP-13/OP-11/OP-10) -->
-- [ ] **OP-14 — flame determinism-contract doc consolidating the byte-eq oracle invariants (0-GPU)**
+- [x] **OP-14 — flame determinism-contract doc consolidating the byte-eq oracle invariants (0-GPU)** —
+  consolidated the HEXA-0POD byte-eq oracle findings into ONE contributor-facing doc,
+  docs/flame-determinism-contract.md, making flame's reproducibility-first identity legible. Indexes 8
+  verdicts (F-OP2 transpose-elim · F-OP7 fwd conv im2col · F-OP8 MoE softmax+combine · F-OP9 GroupNorm valley ·
+  F-OP10 B>1 conv seam · F-OP11 CE bwd+fwd · F-OP12 AdamW update · F-OP13 embedding scatter-add) as a per-phase table (phase → oracle
+  → CANONICAL ORDER → what-breaks-it) + ASCII step-phase map. LEADS with the cross-cutting rule: THREE distinct
+  exp impls each load-bearing (libm `exp` = CE bwd · `dt_exp` = CE fwd · `_moe_exp` = MoE softmax — a "unify the
+  exp" refactor silently breaks byte-eq); reductions SEQUENTIAL (no tree/Welford); accumulations ASCENDING
+  (softmax denom v-asc · MoE combine e-asc · CE fwd loss t-asc · embed scatter position-asc · GroupNorm
+  (t-out,c-in) · conv/GEMM j-asc). Documents the one known-nonzero spot (B>1 conv seam = first (K-1)·dil
+  positions, interior bit-exact) + a "how to add a new oracle" pointer. One-line determinism pointer added to
+  docs/hexa-dojo.md (Training-recipe section). Doc-consolidation milestone — value = the byte-eq contract made
+  legible, NOT new computation; every canonical-order claim traces to a specific verdict line (g5). $0, 0-GPU,
+  no pool/vast. Verdict .verdicts/hexa-0pod/F-OP14-DETERMINISM-DOC.txt.
 
 ## deferred (0-pod follow-ups surfaced by the loop — self-feed)
 
