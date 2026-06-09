@@ -273,6 +273,9 @@ loop targets what the consumer card + code can carry.
   Behavior-preserving: NO trainer logic changed (oracle addition only). Oracle
   stdlib/flame/clm_prod_adamw_update_eq.hexa · verdict .verdicts/hexa-0pod/F-OP12-ADAMW-UPDATE-ORACLE.txt.
 
+<!-- ANCHOR:OP-14-DETERMINISM-DOC (unique anchor — distinct from OP-13/OP-11/OP-10) -->
+- [ ] **OP-14 — flame determinism-contract doc consolidating the byte-eq oracle invariants (0-GPU)**
+
 ## deferred (0-pod follow-ups surfaced by the loop — self-feed)
 
 - **OP-2b — land the runtime.c hexa_forge_dispatch_matmul_t wrapper body + flip the trainer to the live
