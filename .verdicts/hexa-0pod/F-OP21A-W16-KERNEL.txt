@@ -1,0 +1,194 @@
+F-OP21A-W16-KERNEL — OP-21A Hopper warp-spec TMA kernel WRITTEN (wgmma_tf32_w16.cu) + turnkey kit
+=================================================================================================
+verdict-tier: ⚪ CODE-READY (0-pod, GPU-GATED MEASURE). This is NOT a measurement. It turns the
+              OP-21 DESIGN (F-OP21-HOPPER-WARPSPEC-DESIGN, #3000) into actual CUDA source +
+              a turnkey build/gate/measure script, local-checked as far as a GPU-less host
+              allows. NO TFLOP/s is produced or claimed — the perf measure needs an authorized
+              H100 (sm_90a); ZERO-VAST standing goal, no rental this round. The value: the
+              OP-21A lever is now CODE, not just design — H100 authorization -> one command.
+date: 2026-06-10
+author: HEXA-0POD OP-21A (deep-dive round-3 branch, 0-pod, FOREGROUND)
+domain: HEXA-0POD
+SSOT read (verbatim, no GPU):
+  self/native/wgmma/wgmma_tf32_w10_lib.h  (the W10 frontier kernel — gemm_w10 MODE 4, mk/mk_sw,
+                                           gmma_phys, mbar/TMA helpers, get_enc, the WG macro)
+  self/native/wgmma/wgmma_tf32_w15.cu     (the descriptor-direct probe_desc + mk_desc idiom)
+  .verdicts/hexa-0pod/F-OP21-HOPPER-WARPSPEC-DESIGN.txt  (the OP-21A design + H100 recipe)
+COST: $0. 0-GPU. No pool/vast/pod. Kernel authored + host-parsed by reading source + verdicts only.
+
+
+=========================== §0  HONEST FRAMING (g5, read this first) ===========================
+This verdict closes NOTHING by measurement. OP-21 produced the DESIGN; OP-21A produces the CODE
+that design specified, plus the turnkey runner. The ladder's hard rule (W11/W12/W13) stands: a
+lever is only real once BUILT + bit-exact-GATED + MEASURED faster, else the W10 frontier is KEPT.
+  • The forge TF32 own-GEMM frontier is W10 = 70.7 TFLOP/s @S=4096, 6.09x off cuBLAS-TF32,
+    bit-exact (rel_rms 0), 2 CTA/SM. UNCHANGED by this verdict.
+  • cuBLAS-TF32 (~430 TFLOP/s @4096) is the ROOFLINE reference. NO superiority claim.
+  • PARITY (<=1.3x): NOT reached, NOT claimed. The w16 kernel's predicted lift is a PRE-REGISTERED
+    falsifier (D1 below), to be confirmed or falsified on H100.
+  • The wgmma/TMA/setmaxnreg PTX is GPU-TOOLCHAIN-GATED: only nvcc/ptxas on sm_90a validates the
+    '+f'/'l' inline-asm constraints + the GMMA instruction encoding. Local host clang CANNOT
+    compile the device asm (it rejects those constraints by design). The local check is therefore
+    a host-side C++ STRUCTURAL parse (device-PTX neutralized) + a rigorous ISA-level review of the
+    PTX I authored against the sm_90a ISA + the W10/W15 reference. Documented below.
+
+
+===================== §1  WHAT WAS WRITTEN (wgmma_tf32_w16.cu structure) =======================
+File: self/native/wgmma/wgmma_tf32_w16.cu  (COMPLETE, well-formed, sm_90a-targeted)
+  #define W10_NO_MAIN 1
+  #include "wgmma_tf32_w10_lib.h"     <- SAME-BINARY baseline (W11/W12/W13/W15 pattern): reuses
+                                          gemm_w10, get_enc, gmma_phys, mk, mk_sw, mbar/TMA
+                                          helpers, tf(), the WG m64n64k8 macro VERBATIM.
+
+  Helpers authored (the OP-21A-new PTX):
+    setmaxnreg_dec40() / setmaxnreg_inc232()   — D5; literal-N setmaxnreg.{dec,inc}.sync.aligned.u32
+    wgmma_wait_group0() / wgmma_wait_group1()   — D4; literal-N wgmma.wait_group.sync.aligned {0,1}
+    wgmma_commit_group()                        — wgmma.commit_group.sync.aligned
+    enc_canonical()                             — D1; the canonical-atom TMA encoder name (the
+                                                  canonical-ness is the descriptor stride, D1 below)
+
+  Kernels:
+    w16_probe_canon  (MODE 0) — land canonical SWIZZLE_128B A box via TMA, verify the composed
+                                canonical read recovers global A bit-exact (the D1 sanity; the
+                                W10 probe_decode analog, w10_lib.h L206-238).
+    w16_probe_desc   (MODE 1) — land canonical A(64x32)+B(2x32x32), run ONE descriptor-direct
+                                wgmma m64n64k8 reading swizzled smem IN PLACE via mk_sw(swmode=1)
+                                — NO software decode. rel_rms vs CPU. THE D1 FALSIFIER. Reuses the
+                                W15 probe_desc shape (w15.cu L118-165), incl. the PAD=8192 guard.
+    gemm_w16         (MODE 4) — the FULL OP-21A GEMM (deltas §2). Descriptor-direct, NST ring,
+                                wgmma.wait_group<NST-2>, setmaxnreg producer/consumer split.
+    gemm_w16b        (—)      — OP-21B FALLBACK: keep the W10 composed-decode band, no M3
+                                dependency (built when D1 floors). Distinct symbol, kit follow-up
+                                to wire as a MODE.
+    (MODE 9 reuses w10_lib.h dump_layout for the canonical-atom byte-order evidence.)
+
+  main() (guarded #ifndef W16_NO_MAIN): argv = S MODE [NST] [lbo] [sbo] [boff] [swmode].
+    MODE 0/1/9 single-tile gates + MODE 4 full GEMM with the same-binary gemm_w10 + cuBLAS-TF32
+    apples re-measure (own/w10 and cuBLAS/own ratios printed; g5 — no perf on rel_rms > 3e-3).
+
+
+==================== §2  THE OP-21A DELTAS IMPLEMENTED (vs W10, cited inline) ==================
+All five designed deltas are in the source; each cites the w10_lib.h line it adapts/replaces.
+  D1  CANONICAL-ATOM LANDING (Step 1, the FALSIFIABLE core). W15 pinned the descriptor-direct
+      failure to our hand-rolled box landing an ATOM-MAJOR a*256-stacked permutation, not the
+      canonical CuTe Layout_K_SW128_Atom the wgmma HW de-swizzle addresses. w16 names this
+      enc_canonical() and EXPOSES it as the falsifiable gate: MODE 0 (canonical-decode probe)
+      and MODE 1 (descriptor-direct probe, swept fields) must hit rel_rms 0 BEFORE any GEMM. The
+      canonical-ness is realized as the (lbo,sbo,boff,swmode) the descriptor strides — exactly
+      what W15 proved must change — with the box geometry held so the TMA still lands SWIZZLE_128B
+      8-row atoms. PRE-REGISTERED FALSIFIER: if MODE 1 floors at ~1.0/1.392 (the W15 wall), D1
+      FAILED -> OP-21B.
+  D2  DESCRIPTOR-DIRECT wgmma (Step 2, delete the 32KB band). gemm_w16 reads wgmma operands
+      DIRECTLY from the swizzled smem via mk_sw(swmode=1) — the As0/As1/B0/B1 gmma decode scratch
+      (w10_lib.h L361) is REMOVED. smem/CTA: the W15-measured 96->64KB drop (2 CTA/SM held).
+  D3  NST=3 DECODE-FREE RING (Step 3). Only the swizzled tiles ring (w10_lib.h L331 SWBUF), now
+      NST-deep (default 3); the 32KB band-removal headroom buys the extra stage at 2 CTA/SM.
+  D4  wgmma.wait_group<NST-2> (Step 3). Replaces w10_lib.h L407's wgmma.wait_group 0 (which
+      drained EVERY slab -> serialization). w16 commits per slab then waits<1> (=NST-2 @NST=3)
+      so the OLDEST committed group drains while the NEWEST issues -> back-to-back wgmma across
+      K-slabs (the overlap, attacking share (B)). NST=2 clamps to wait<0> (well-formed).
+  D5  setmaxnreg PRODUCER/CONSUMER SPLIT (M1, Step 4). 384-thr CTA = 1 producer WG (warpgroup 0,
+      setmaxnreg.dec 40, TMA+mbar only, mbar empty[]-gated streaming) + 2 consumer WGs
+      (setmaxnreg.inc 232, the wgmma). UNBLOCKED at the 128x128 tile's 64-reg accumulator
+      (w10_lib.h L345) — HALF the 128x256 tile's 128 regs/thread that made ptxas reject
+      setmaxnreg in W12 (C7507). FALLBACK -DW16_PRODUCER_WG=0 compiles a single-elected-thread
+      producer (the W10 H1 path, 256 thr, 2 CTA/SM already) + D3/D4 software-pipeline only —
+      the SAFE PARTIAL if ptxas/occupancy rejects the 384-thr 2-CTA/SM split.
+  + gemm_w16b = OP-21B (keep the W10 decode band, register-double-buffer the wgmma overlap, no
+    M3 dependency) for the D1-floored path. Always builds; lower ceiling (decode still gates).
+
+
+==================== §3  LOCAL 0-pod CHECK (no GPU) + the EXACT gated compile step ============
+nvcc presence: ABSENT locally (`which nvcc` -> not found). The perf+compile of device PTX is
+  therefore GPU-TOOLCHAIN-GATED. What WAS done locally, 0-pod:
+
+  (a) HOST-SIDE C++ STRUCTURAL PARSE (clang++ -std=c++17 -fsyntax-only). A minimal CUDA stub
+      (device qualifiers -> empty, CUDA runtime/cublas funcs -> permissive templated no-ops,
+      empty cuda.h/cublas_v2.h, device asm + __syncthreads neutralized) lets host clang parse
+      the C++ STRUCTURE: templates, control flow, the producer/consumer warpgroup branching,
+      the mbar/ring index arithmetic, and the full main() driver. RESULT:
+         DEFAULT  (W16_PRODUCER_WG=1, producer-WG + setmaxnreg) parse exit = 0  (clean)
+         FALLBACK (W16_PRODUCER_WG=0, single-elected-thread)     parse exit = 0  (clean)
+      Both code paths are structurally well-formed C++. (This does NOT validate the device PTX —
+      that is (c) below.)
+
+  (b) ISA-LEVEL REVIEW of the PTX authored, vs the sm_90a ISA + the W10/W15 reference:
+      • wgmma.wait_group.sync.aligned 0/1 — count is an IMMEDIATE literal in the instruction text
+        (matches w10_lib.h L407's `...aligned 0;`). w16 embeds 0 and 1 as literals (not a
+        %-operand), the canonical CUTLASS/nvcc form. <NST-2> @NST=3 = 1. CORRECT.
+      • wgmma.commit_group.sync.aligned — verbatim w10_lib.h L407. CORRECT.
+      • setmaxnreg.{dec,inc}.sync.aligned.u32 N — N is an immediate multiple-of-8 in [24,256];
+        w16 uses 40 (dec) / 232 (inc) as literals. Warpgroup-wide; issued once per WG after the
+        mbar init __syncthreads, before the mainloop. CORRECT form (acceptance is the C7507
+        ptxas gate the build script watches; granted iff the 64-reg accumulator leaves headroom).
+      • mbarrier.arrive.shared::cta.b64 _, [%0] — the consumer empty[]-arrive (producer/consumer
+        handshake); '_' sink (no token), shared addr via __cvta_generic_to_shared. Matches the
+        w10_lib.h mbar_expect_tx form. CORRECT.
+      • fence.proxy.async.shared::cta — kept verbatim from w10_lib.h L292 (the async-proxy fence
+        before the descriptor read). CORRECT.
+      • mk_sw(swmode=1) descriptor — reused VERBATIM from w10_lib.h L102-105 (start>>4, LBO>>4,
+        SBO>>4, base_offset bits 49:51, swizzle mode bits 62:63). The (lbo,sbo,boff) the MODE 1
+        sweep arbitrates are the W15 fields. CORRECT (bit-packing identical to the proven helper).
+      • GMMA 8x4 TF32 core-matrix constant (gmma_phys) + the WG m64n64k8 macro — reused VERBATIM
+        from w10_lib.h (the W2/W3-proven, bit-exact layout). Not re-derived; cited.
+      No ISA discrepancy found in the authored PTX. The ONE genuinely unproven element is D1
+      (whether the canonical landing makes mk_sw(swmode=1) bit-exact) — which is WHY it is the
+      pre-registered falsifier gated by MODE 1, not asserted here.
+
+  (c) THE EXACT GPU-GATED COMPILE STEP (the verification that is toolchain-gated):
+        nvcc -O3 -arch=sm_90a wgmma_tf32_w16.cu -o w16 -lcublas -lcuda -Xptxas -v
+      (-Xptxas -v prints regs/CTA + flags C7507 "setmaxnreg ignored"; if seen, rebuild
+        -DW16_PRODUCER_WG=0). This is the first line of tool/wgmma/build_w16.sh and runs ONLY on
+      the authorized H100. Until then the compile-verification of the device PTX is HONESTLY
+      pending (GPU-toolchain-gated), with the ISA review (b) standing as the 0-pod evidence.
+
+
+============================ §4  THE TURNKEY SCRIPT (build_w16.sh) =============================
+tool/wgmma/build_w16.sh (bash -n syntax-valid, executable). ONE command on the authorized H100:
+    bash tool/wgmma/build_w16.sh            # producer-WG (D5) build
+    W16_PRODUCER_WG=0 bash tool/wgmma/build_w16.sh   # fallback build
+  Flow (the OP-21 §4 recipe, now wired to w16.cu):
+    PROVISION checklist (NO auto-rent — ZERO-VAST; exits early if no sm_90a GPU visible)
+    -> nvcc -arch=sm_90a -Xptxas -v build (C7507 setmaxnreg detection + fallback hint)
+    -> MODE 9 canonical-atom layout dump (D1 evidence)
+    -> GATE MODE 0 canonical-decode (rel_rms 0)
+    -> GATE MODE 1 descriptor-direct (the D1 falsifier; sweeps lbo/sbo/boff/swmode if it floors;
+       full-sweep fail -> OP-21B switch documented, exit 2, W10 KEPT)
+    -> MODE 4 full GEMM bit-exact gate + occupancy + perf sweep S{2048,4096,8192} x NST{3,4,2}
+       vs same-binary gemm_w10 (the W10 70.7 apples baseline) + same-binary cuBLAS-TF32
+    -> SASS (decode STS gone + wgmma back-to-back, the W9-style evidence)
+    -> headline Δ vs W10 70.7 -> destroy leak-0.
+  g5 gate order is ENFORCED (no perf line before a rel_rms-0 single-tile gate).
+
+
+================================= §5  HEADLINE ================================================
+  written wgmma_tf32_w16.cu COMPLETE + well-formed:   YES (host C++ structural parse exit 0, both
+                                                       paths; ISA review of authored PTX clean)
+  OP-21A deltas implemented:                          D1 canonical-atom landing (enc_canonical +
+                                                       MODE 0/1 falsifier) · D2 descriptor-direct
+                                                       (32KB band deleted) · D3 NST=3 decode-free
+                                                       ring · D4 wgmma.wait_group<NST-2> · D5
+                                                       setmaxnreg producer/consumer split (+ -D
+                                                       fallback) · + gemm_w16b OP-21B fallback
+  local compile result:                               nvcc ABSENT locally -> device-PTX compile is
+                                                       GPU-TOOLCHAIN-GATED; host-side structural
+                                                       parse PASSES + ISA-level review clean. Exact
+                                                       gated step: nvcc -O3 -arch=sm_90a
+                                                       wgmma_tf32_w16.cu -o w16 -lcublas -lcuda
+                                                       -Xptxas -v  (runs on authorized H100 only)
+  turnkey script:                                      tool/wgmma/build_w16.sh (bash -n valid),
+                                                       one-command build+gate+measure, no auto-rent
+  measurement:                                         GPU-GATED — NOT performed, NOT claimed.
+  PARITY:                                              NOT reached, NOT claimed (D1 is a pre-
+                                                       registered falsifier confirmed/refuted on H100)
+  W10 frontier:                                        70.7 TFLOP/s, KEPT (unchanged) until w16
+                                                       lifts it bit-exact on H100 (the hard rule)
+  cost:                                                $0, 0-GPU, no vast/pool/pod this round
+
+verdict: ⚪ CODE-READY — the OP-21A lever is now CODE (wgmma_tf32_w16.cu, all five deltas + OP-21B
+         fallback, every adapted line citing w10_lib.h) + a turnkey one-command build/gate/measure
+         script. Local-checked as far as a GPU-less host allows: host-side C++ structural parse
+         clean for both build paths + a rigorous sm_90a ISA-level review of the authored PTX (no
+         discrepancy; the one unproven element D1 is the pre-registered falsifier gated by MODE 1,
+         not asserted). HONEST: the device-PTX compile + ALL perf is H100-GATED — no number is
+         produced or claimed. H100 authorization -> turnkey measurement (one command).

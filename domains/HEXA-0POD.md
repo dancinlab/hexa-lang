@@ -107,6 +107,30 @@ loop targets what the consumer card + code can carry.
   (OP-2b/OP-21-class, g5): DESIGN + BOUND only, NO measurement performed or claimed; NO pod rented (0-pod goal
   = ZERO vast). Verdict .verdicts/hexa-0pod/F-OP22-MEGASTEP-DESIGN.txt.
 
+<!-- ANCHOR:OP-21A-W16-KERNEL (unique anchor — OP-21A's designed lever turned into WRITTEN wgmma_tf32_w16.cu + turnkey build kit; local-checked, perf H100-gated) -->
+- [x] **OP-21A — Hopper warp-spec TMA kernel WRITTEN (wgmma_tf32_w16.cu) + turnkey build kit, local-checked, H100-gated perf** —
+  turned the OP-21 DESIGN (#3000) into CODE: WROTE self/native/wgmma/wgmma_tf32_w16.cu implementing all five
+  OP-21A deltas vs the W10 frontier (each adapted line citing wgmma_tf32_w10_lib.h) — D1 canonical-atom landing
+  (enc_canonical + MODE 0/1 probes = the falsifiable D1 gate), D2 descriptor-direct wgmma via mk_sw(swmode=1)
+  DELETING the 32KB software decode band (96->64KB/CTA, W15-measured), D3 NST=3 decode-free swizzled-TMA ring,
+  D4 wgmma.wait_group<NST-2> (literal 1) back-to-back across K-slabs (replaces W10's wait_group 0), D5 dedicated
+  producer WG setmaxnreg.dec 40 / consumer WGs setmaxnreg.inc 232 (384 thr, UNBLOCKED at the 128x128 tile's
+  64-reg accumulator unlike W12's 128x256) with -DW16_PRODUCER_WG=0 single-elected-thread fallback; + gemm_w16b
+  OP-21B fallback (keep band, no M3 dependency). #include w10-lib for the SAME-BINARY gemm_w10 + cuBLAS-TF32
+  apples baseline. LOCAL 0-pod CHECK (no nvcc locally): host-side C++ structural parse (clang++ -fsyntax-only,
+  CUDA stubbed, device-PTX neutralized) PASSES for BOTH build paths (exit 0); rigorous sm_90a ISA-level review
+  of the authored PTX (wait_group/commit_group/setmaxnreg literals, mbarrier.arrive, fence.proxy.async, mk_sw
+  bit-packing, GMMA 8x4 const) — no discrepancy; the one unproven element D1 is the pre-registered falsifier
+  gated by MODE 1, not asserted. WROTE the turnkey tool/wgmma/build_w16.sh (bash -n valid): one-command
+  provision-checklist (NO auto-rent, ZERO-VAST) -> nvcc -arch=sm_90a -Xptxas -v build (C7507 setmaxnreg detect)
+  -> MODE 9 canonical dump -> MODE 0/1 gates (D1 falsifier, field sweep, OP-21B switch on floor) -> MODE 4
+  bit-exact gate + occupancy + perf sweep @2048/4096/8192 x NST{3,4,2} vs same-binary w10+cuBLAS -> SASS ->
+  Δ-vs-W10-70.7 -> destroy leak-0; g5 gate order enforced. HONEST (g5): device-PTX compile + ALL perf is
+  H100-GATED — NO number produced or claimed; the exact gated step is `nvcc -O3 -arch=sm_90a wgmma_tf32_w16.cu
+  -o w16 -lcublas -lcuda -Xptxas -v` on an authorized H100. W10 70.7 frontier KEPT (the W11/W12/W13 hard rule).
+  Value = the lever is now CODE not just design — H100 authorization -> turnkey measurement. $0, no vast/pool/pod.
+  Verdict .verdicts/hexa-0pod/F-OP21A-W16-KERNEL.txt (PR #3017).
+
 <!-- ANCHOR:OP-21-HOPPER-WARPSPEC-DESIGN (unique anchor — 0-pod DESIGN for the Hopper sm_90a wgmma warp-spec TMA pipeline; measure is GPU-gated) -->
 - [x] **OP-21 — Hopper warp-spec TMA pipeline DESIGN + perf-gap analysis + H100 experiment recipe (0-pod, GPU-gated measure)** —
   produced (reading source + verdicts only, $0, 0-GPU) the design for the forge own-GEMM's remaining Hopper
