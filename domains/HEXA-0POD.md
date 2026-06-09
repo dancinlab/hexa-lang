@@ -139,14 +139,29 @@ loop targets what the consumer card + code can carry.
   OP-2's backward-dW transpose-elim oracle. Oracle stdlib/flame/clm_prod_conv_im2col_eq.hexa · verdict
   .verdicts/hexa-0pod/F-OP7-IDENTITY-ORACLE.txt.
 
+- [x] **OP-6b — fuse the AdamW update INTO the bwd-GEMM epilogue (boundary-removal, not vectorization)** —
+  OP-6's deferred follow-up: fold _hx_k_adamw_step into the bwd dW GEMM's epilogue so dW never round-trips
+  through DRAM as a separate 7-stream kernel + launch. BWD-dW PATH DETERMINED = SCOPE B (cuBLAS-bound):
+  conv1d_bwd_via_forge (clm_prod.hexa:238) computes dW via forge_dispatch_matmul → farr_matmul_gpu → REAL
+  cuBLAS Dgemm (runtime_cuda_emit.hexa) — a CLOSED cuBLAS call you cannot fuse an epilogue into; boundary-
+  removal is only EXPRESSIBLE on an own-GEMM bwd path. CLOSED-NEGATIVE (honest, aiden RTX 5070 sm_120, GPU 0%):
+  built a scope-A demonstration (fp64 tiled own-GEMM, fused gemm_dW_adamw_fused consumes dW in-register before
+  the C-store + applies verbatim ADAMW_BODY, vs separate gemm_dW_store + adamw_separate = dW DRAM round-trip +
+  2nd launch). PERF: ~1.000-1.002x on production-realistic GEMM-dominated shapes (dW round-trip eliminated is
+  Amdahl-negligible vs the GEMM), and SLIGHTLY SLOWER 0.98x in the dW-dominated regime (large M,N tiny K) —
+  the fused epilogue runs the W,M,V elementwise work under the GEMM's TILE=16 geometry at WORSE bandwidth than
+  a dedicated 256-thread AdamW kernel, outweighing the ~40-70 GB/s of dW traffic saved. Fusion wins ONLY in a
+  tiny-GEMM launch-bound regime (1.108x @0.02ms step) where killing the 2nd LAUNCH matters. BIT-EXACT (g5,
+  STRONGER than OP-6): fused W,M,V == separate W,M,V max|Δ|=0 bitdiff=0 under BOTH --fmad=false AND --fmad=true
+  at every shape — register-source fusion does NOT reschedule the AdamW FMAs (the gradient source changes,
+  not the arithmetic order), so the byte-eq concern that blocked OP-6's vectorization does NOT apply. NOT
+  shipped (no win + scope B cuBLAS). Boundary-removal pays only when a side is UNDER-utilized; here neither the
+  bwd GEMM nor the AdamW is under-filled → nothing to recover. Elementwise lever now EXHAUSTED on BOTH axes
+  (OP-6 instruction-width, OP-6b boundary-removal). Harness tool/op6b/op6b_adamw_fuse_bench.cu · verdict
+  .verdicts/hexa-0pod/F-OP6B-ADAMW-FUSE.txt.
+
 ## deferred (0-pod follow-ups surfaced by the loop — self-feed)
 
-- **OP-6b — fuse the AdamW update into the preceding bwd-GEMM epilogue (eliminate the 7-stream round-trip).**
-  OP-6 proved load/store-width vectorization (.v4/.v2) is a DEAD lever for contiguous memory-bound elementwise
-  kernels on the 5070 (already coalesced → ~1.005x). The remaining headroom for a memory-bound elementwise op
-  is KERNEL FUSION: fold the _hx_k_adamw_step elementwise update into the epilogue of the bwd GEMM that
-  produces G, so M,V,W never round-trip through DRAM as a separate 7-stream pass. Byte-eq gate vs the
-  separate-kernel reference (max|Δ|=0). Free aiden GPU. (Lever = boundary-removal, not instruction width.)
 - **OP-2b — land the runtime.c hexa_forge_dispatch_matmul_t wrapper body + flip the trainer to the live
   transpose-elim call.** OP-2 landed the GPU kernel (_hx_cuda_farr_matmul_tn_gpu, cuBLAS OP_T), codegen
   mapping, runtime.h proto, and proved dW byte-eq (max|Δ|=0). The remaining piece is the runtime.c wrapper

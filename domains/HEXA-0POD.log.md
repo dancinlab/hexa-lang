@@ -235,3 +235,30 @@ rewrite would FAIL the OP-2 byte-eq-vs-prior-trainer gate. NOT shipped (no win +
 Contiguous-elementwise vectorization lever EXHAUSTED on the 5070; only remaining headroom = AdamW-into-bwd-
 GEMM-epilogue FUSION (boundary removal), deferred as OP-6b. $0 (free pool, no vast, no leak). Harness
 tool/op6/op6_adamw_vec_bench.cu + op6_bandwidth_probe.cu. Verdict .verdicts/hexa-0pod/F-OP6-VECTORIZE-KERNEL.txt.
+
+## OP-6b — fuse the AdamW update INTO the bwd-GEMM epilogue (boundary-removal) — CLOSED-NEGATIVE
+OP-6's deferred follow-up. Determined the bwd-dW path FIRST: conv1d_bwd_via_forge (clm_prod.hexa:238) computes
+dW = forge_dispatch_matmul(xcolT,...) → farr_matmul_gpu → REAL cuBLAS Dgemm (runtime_cuda_emit.hexa). The
+PRODUCTION bwd-dW GEMM is CLOSED cuBLAS = SCOPE B: you cannot fuse an AdamW epilogue into a cuBLAS call;
+boundary-removal is only expressible on an own-GEMM bwd path. Built a scope-A demonstration on aiden (RTX 5070,
+sm_120, free pool, GPU 0% verified): fp64 tiled own-GEMM dW[M,N]=A·B, SEPARATE (gemm_dW_store writes dW to DRAM
++ adamw_separate re-reads dW + 2 launches) vs FUSED (gemm_dW_adamw_fused consumes the dW cell IN-REGISTER the
+instant the K-loop ends, applies the verbatim ADAMW_BODY, writes W,M,V directly — dW write + re-read + 2nd
+launch all eliminated). AdamW arithmetic = ONE shared MACRO in both paths.
+PERF (honest, NO win): GEMM-dominated production shapes ~1.000-1.002x (the eliminated dW round-trip is
+Amdahl-negligible vs the GEMM cost — e.g. dW[1536,512] saves 0.0126 GB ~0.9-2.1 GB/s over a 5.9ms step).
+dW-DOMINATED regime (large M,N, tiny K) is SLOWER 0.98x: the fused epilogue runs the W,M,V elementwise work
+inside the GEMM's TILE=16 geometry (low elementwise occupancy) at WORSE bandwidth than a dedicated 256-thread
+AdamW kernel, outweighing the ~40-70 GB/s of dW traffic saved. Fusion wins ONLY in a tiny launch-bound regime
+(dW[256,256] 1.108x @0.02ms step) where killing the 2nd LAUNCH is a real fraction — a launch-elim win, gone at
+production scale.
+BIT-EXACT (g5, STRONGER than OP-6): fused W,M,V == separate W,M,V, max|Δ|=0 bitdiff=0 under BOTH --fmad=false
+AND --fmad=true at every shape. Unlike OP-6's vectorization (which broke byte-eq under --fmad=true via pair-vs-
+single FMA reschedule), register-source fusion changes the gradient SOURCE not the AdamW arithmetic ORDER, so
+the FMA chain is identical → byte-eq holds even under production flags.
+WHERE BOUNDARY-REMOVAL MUST LIVE: only on the own-GEMM bwd path (cuBLAS closed), AND not worth it even there
+(byte-eq but perf-flat/negative) because neither the bwd GEMM nor the AdamW is under-utilized — boundary-removal
+pays only when a side is under-filled (cf OG-FUSE-FOLD #2909 under-filling 30 conv micro-launches). Elementwise
+optimizer lever now EXHAUSTED on BOTH axes (OP-6 instruction-width, OP-6b boundary-removal). NOT shipped, no
+production code changed. $0 (free pool aiden, no vast, no pod, no leak). Harness
+tool/op6b/op6b_adamw_fuse_bench.cu. Verdict .verdicts/hexa-0pod/F-OP6B-ADAMW-FUSE.txt.
