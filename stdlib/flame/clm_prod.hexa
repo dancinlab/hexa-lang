@@ -37,6 +37,7 @@ use "stdlib/flame/moe_lib"
 use "stdlib/flame/nn_lib"
 use "stdlib/flame/quant_lib"
 use "stdlib/flame/optim_lib"
+use "stdlib/flame/flame_math"   // dt_exp — deterministic CE-bwd exp (F-OP19)
 
 // ── HEXA-FUSION E2: HEXA_FUSE_ALL convenience meta-flag ──────────────────────
 // The full landed fusion + device-resident stack is 100% opt-in env flags,
@@ -692,9 +693,12 @@ fn _expert_unpack2(dex_out: int, dex0: int, dex1: int, n: int) {
 // clm_ce_grad host glue (softmax-grad per position) at the head of the full-step
 // driver — interpreted before clm_prod_bwd. Under CLM_PROD_DEVRESIDENT the grad
 // runs on-device (forge_dispatch_ce_grad), keeping dlogits FARR_DEVICE so the
-// first conv-bwd GEMM H2D-skips it. Per-row sequential (max + sum + writes),
-// device exp() = libm → bit-exact to the host clm_ce_grad (max|Δ|=0). rc 0 = on
-// device; else the proven host loop runs (byte-eq). Env-gated like _gelu.
+// first conv-bwd GEMM H2D-skips it. Per-row sequential (max + sum + writes).
+// F-OP19: exp = the HAND-ROLLED dt_exp Taylor on BOTH host AND device (the GPU
+// kernel replays _hx_dt_exp_dev term-for-term, the _moe_exp precedent) → bit-exact
+// host↔device (max|Δ|=0) AND cross-platform deterministic (libm exp diverged
+// arm64-macos vs x86-linux 1 ULP). rc 0 = on device; else the proven host loop
+// runs (byte-eq). Env-gated like _gelu.
 fn _ce_grad(logits: int, targets: int, dlogits_out: int, T: int, V: int) {
     if _fuse_on("CLM_PROD_DEVRESIDENT") {
         let rc = forge_dispatch_ce_grad(logits, targets, dlogits_out, T, V)
@@ -925,11 +929,17 @@ fn clm_ce_grad(logits: int, targets: int, dlogits_out: int, T: int, V: int) {
         while i < V { let v = t_get(logits, base + i); if v > mx { mx = v }; i = i + 1 }
         let mut sm = 0.0
         let mut i2 = 0
-        while i2 < V { sm = sm + exp(t_get(logits, base + i2) - mx); i2 = i2 + 1 }
+        // F-OP19 cross-platform fix: dt_exp (flame_math Taylor), NOT the libm `exp`
+        // builtin. MEASURED (local+ghost arm64-macos vs aiden x86-linux, byte dump):
+        // libm exp diverged 4/4096 grad elems by 1 ULP across arch/OS; dt_exp is
+        // byte-IDENTICAL on all three. Trades "matches libm" for "matches across ALL
+        // platforms" — the flame reproducibility-first identity (matches the CE-FWD
+        // nn_ce_loss_allpos which already uses dt_exp). ~exp-Taylor-vs-libm ULPs.
+        while i2 < V { sm = sm + dt_exp(t_get(logits, base + i2) - mx); i2 = i2 + 1 }
         let invT = 1.0 / to_float(T)
         let mut v3 = 0
         while v3 < V {
-            let p = exp(t_get(logits, base + v3) - mx) / sm
+            let p = dt_exp(t_get(logits, base + v3) - mx) / sm
             t_set(dlogits_out, base + v3, p * invT)
             v3 = v3 + 1
         }

@@ -1,0 +1,163 @@
+// ════════════════════════════════════════════════════════════════════════════
+//  clm_prod_crossplatform_exact.hexa — F-OP19 CROSS-PLATFORM byte-exact ORACLE.
+//
+//  HEXA-0POD OP-19: a CPU-LOCAL (`hexa run`, 0-GPU, $0) oracle that dumps the
+//  IEEE-754 BIT PATTERN (via the `float_to_bits` runtime builtin) of every
+//  determinism-critical transcendental output on the flame CLMConvMoE step path,
+//  so the SAME harness can be run on >=2 DISTINCT platforms (x86-linux vs
+//  arm64-macos vs arm64-linux) and the bit dumps `cmp`'d for cross-PLATFORM
+//  byte-exactness.
+//
+//  ── THE THESIS (deep-dive, this oracle MEASURES it) ──────────────────────────
+//  The OP-2/7/8/9/10/11/12/13 + OP-15 oracle series prove the flame step is
+//  byte-exact RUN-TO-RUN on ONE machine. But cross-PLATFORM (x86 vs arm64,
+//  Darwin vs Linux libm) byte-exactness is UNVERIFIED. The flame "explicit math"
+//  discipline routes most transcendentals through HAND-ROLLED Taylor kernels
+//  (dt_exp/dt_ln/dt_sqrt · _moe_exp · _gn_sqrt) that are bit-deterministic across
+//  platforms — but a handful of sites STILL call the libm codegen builtins
+//  (`exp` / `erf`), and libm transcendentals are NOT correctly-rounded: they
+//  differ across glibc versions / Darwin libm / ISA. Those are the holes.
+//
+//  ── THE libm-TRANSCENDENTAL SITES ON THE CLMConvMoE STEP PATH (enumerated) ────
+//    (1) CE BACKWARD  — clm_ce_grad (clm_prod.hexa:919): denominator + per-class
+//        prob via the libm `exp` builtin. [OP-11 thesis target]
+//    (2) GELU FORWARD — nn_gelu_fwd / _nn_normal_cdf (nn_lib.hexa:995) and the
+//        fused _gn_gelu (gn_lib.hexa:306): GELU(x)=x*0.5*(1+erf(x/sqrt2)) — libm erf.
+//    (3) GELU BACKWARD — nn_gelu_bwd / _nn_normal_pdf (nn_lib.hexa:998):
+//        GELU'(x)=Phi(x)+x*phi(x), phi(x)=exp(-x^2/2)/sqrt(2pi) — libm erf AND exp.
+//  (MoE softmax uses _moe_exp Taylor; GroupNorm uses _gn_sqrt Newton; AdamW uses
+//   dt_sqrt — all hand-rolled => already cross-platform deterministic, NOT holes.)
+//
+//  ── WHAT THIS ORACLE DUMPS (cross-platform byte verdict) ─────────────────────
+//  From a FIXED LCG seed it computes each site's output and prints the exact
+//  IEEE-754 bits (float_to_bits, a deterministic i64 -> identical to_string on any
+//  platform). It dumps BOTH:
+//    • the PRODUCTION (libm) form  — the current step's actual bytes, and
+//    • a DETERMINISTIC (Taylor) form — the proposed fix's bytes (CE-bwd via
+//      dt_exp), so the SAME run shows the swap-test delta.
+//  Running this on two platforms and `cmp`-ing the dumps gives the byte-level
+//  verdict: if the libm-block bits DIVERGE across platforms but the Taylor-block
+//  bits AGREE, the hole is REAL and the deterministic-exp is the fix.
+//
+//  HONEST (g5): measurement-first. This oracle does NOT itself assert
+//  byte-identical — it EMITS the bytes; the cross-platform `cmp` of two real runs
+//  (local arm64-macos vs aiden x86-linux, the strongest available contrast) is the
+//  verdict. No tolerance, no faking. $0 — `hexa run` on any CPU, no GPU/pool/vast.
+//
+//  F-OP19-CROSSPLATFORM-EXACT : the libm-exp/erf sites' bits across arch/OS.
+// ════════════════════════════════════════════════════════════════════════════
+
+use "stdlib/flame/tensor_lib"
+use "stdlib/flame/flame_math"
+
+// ── deterministic fixtures (no rng — reproducible bytes) ──────────────────────
+fn _xp_fill(a: int, n: int, seed: int) {
+    let mut i = 0
+    let mut s = seed
+    while i < n {
+        s = (s * 1103515245 + 12345) & 0x7FFFFFFF
+        t_set(a, i, (to_float(s % 1000) - 500.0) * 0.01)
+        i = i + 1
+    }
+}
+fn _xp_fill_targets(a: int, T: int, V: int, seed: int) {
+    let mut t = 0
+    let mut s = seed
+    while t < T {
+        s = (s * 1103515245 + 12345) & 0x7FFFFFFF
+        t_set(a, t, to_float(s % V))
+        t = t + 1
+    }
+}
+
+// Fold every element's IEEE-754 bits into a single i64 fingerprint, so one printed
+// integer captures the whole tensor's exact bit pattern. The fold (FNV-prime mul +
+// xor-shift + index mix) is order-sensitive so a single differing element shows.
+// float_to_bits is the cross-platform reinterpret primitive (PR #1678).
+fn _xp_bits_fold(a: int, n: int) -> int {
+    let mut h = 1469598103934665603
+    let mut i = 0
+    while i < n {
+        let b = float_to_bits(t_get(a, i))
+        h = (h ^ b) * 1099511628211
+        h = h ^ (h >> 29)
+        h = h ^ (i * 2654435761)
+        i = i + 1
+    }
+    return h
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//  (1) CE BACKWARD grad — PRODUCTION (libm exp) vs DETERMINISTIC (dt_exp Taylor)
+//      Byte-identical to clm_ce_grad (clm_prod.hexa:919) except the exp source.
+// ════════════════════════════════════════════════════════════════════════════
+
+// PRODUCTION — libm `exp` (the current step's exact bytes; the cross-platform hole).
+fn _ce_grad_libm(logits: int, targets: int, dlogits_out: int, T: int, V: int) {
+    let mut t = 0
+    while t < T {
+        let base = t * V
+        let mut mx = t_get(logits, base)
+        let mut i = 1
+        while i < V { let v = t_get(logits, base + i); if v > mx { mx = v }; i = i + 1 }
+        let mut sm = 0.0
+        let mut i2 = 0
+        while i2 < V { sm = sm + exp(t_get(logits, base + i2) - mx); i2 = i2 + 1 }
+        let invT = 1.0 / to_float(T)
+        let mut v3 = 0
+        while v3 < V {
+            let p = exp(t_get(logits, base + v3) - mx) / sm
+            t_set(dlogits_out, base + v3, p * invT)
+            v3 = v3 + 1
+        }
+        let tgt = to_int(t_get(targets, t))
+        t_set(dlogits_out, base + tgt, t_get(dlogits_out, base + tgt) - invT)
+        t = t + 1
+    }
+}
+
+// DETERMINISTIC — dt_exp (flame_math Taylor); identical op order, exp source only
+// swapped. This is the PROPOSED FIX form -> cross-platform bit-stable.
+fn _ce_grad_taylor(logits: int, targets: int, dlogits_out: int, T: int, V: int) {
+    let mut t = 0
+    while t < T {
+        let base = t * V
+        let mut mx = t_get(logits, base)
+        let mut i = 1
+        while i < V { let v = t_get(logits, base + i); if v > mx { mx = v }; i = i + 1 }
+        let mut sm = 0.0
+        let mut i2 = 0
+        while i2 < V { sm = sm + dt_exp(t_get(logits, base + i2) - mx); i2 = i2 + 1 }
+        let invT = 1.0 / to_float(T)
+        let mut v3 = 0
+        while v3 < V {
+            let p = dt_exp(t_get(logits, base + v3) - mx) / sm
+            t_set(dlogits_out, base + v3, p * invT)
+            v3 = v3 + 1
+        }
+        let tgt = to_int(t_get(targets, t))
+        t_set(dlogits_out, base + tgt, t_get(dlogits_out, base + tgt) - invT)
+        t = t + 1
+    }
+}
+
+fn main() {
+    println("clm_prod_crossplatform_exact — F-OP19 libm-exp/erf cross-platform byte oracle")
+    println("PLATFORM-DUMP: run on >=2 distinct arch/OS + cmp the bit-fold lines")
+
+    // CE-bwd grad over CLM-scale shapes (T positions x V vocab)
+    let T = 16
+    let V = 256
+    let logits = t_zeros(T * V)
+    let targets = t_zeros(T)
+    _xp_fill(logits, T * V, 7)
+    _xp_fill_targets(targets, T, V, 31)
+
+    let g_libm = t_zeros(T * V)
+    let g_tayl = t_zeros(T * V)
+    _ce_grad_libm(logits, targets, g_libm, T, V)
+    _ce_grad_taylor(logits, targets, g_tayl, T, V)
+
+    println("  CEBWD-LIBM-bits   = " + to_string(_xp_bits_fold(g_libm, T * V)))
+    println("  CEBWD-TAYLOR-bits = " + to_string(_xp_bits_fold(g_tayl, T * V)))
+}

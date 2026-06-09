@@ -1,0 +1,209 @@
+// ════════════════════════════════════════════════════════════════════════════
+//  op19_crossplatform_selfcontained.hexa — F-OP19 cross-platform byte dump,
+//  SELF-CONTAINED (no `use` — runs via scp/stdin on ANY hexa host, checkout-
+//  independent) so the SAME source runs on local arm64-macos AND aiden x86-linux.
+//
+//  Dumps an IEEE-754 byte fingerprint (f64_to_bytes_le, the cross-platform
+//  reinterpret builtin available on BOTH local + aiden's runtime — float_to_bits
+//  is too new for aiden's prebuilt runtime.a) of three determinism-critical
+//  transcendental sites on the
+//  flame CLMConvMoE step path, EACH in its PRODUCTION (libm) form and a
+//  DETERMINISTIC (hand-rolled Taylor) form:
+//    (1) CE-bwd grad   : libm `exp`  vs  dt_exp Taylor      [clm_ce_grad]
+//    (2) GELU fwd      : libm `erf`  vs  Taylor erf         [nn_gelu_fwd]
+//    (3) GELU bwd grad : libm erf+exp vs Taylor erf+exp     [nn_gelu_bwd]
+//  cmp the printed *-LIBM-bits across two platforms => the cross-platform verdict.
+//  If a LIBM line differs but its TAYLOR twin agrees, that op is a REAL hole and
+//  the Taylor form is the fix. $0, 0-GPU, no pool-build (pure `hexa run`).
+// ════════════════════════════════════════════════════════════════════════════
+
+// ── dt_exp : EXACT copy of flame_math.hexa dt_exp (12-term Taylor + range-reduce
+//    by halving + repeated-square). Deterministic across platforms. ─────────────
+fn dt_exp(x: float) -> float {
+    let mut r = 0
+    let mut xr = x
+    while (if xr > 0.0 { xr } else { 0.0 - xr }) > 0.25 {
+        xr = xr / 2.0
+        r = r + 1
+    }
+    let mut term = 1.0
+    let mut acc = 1.0
+    let mut k = 1
+    while k < 12 {
+        term = term * xr / to_float(k)
+        acc = acc + term
+        k = k + 1
+    }
+    let mut s = 0
+    while s < r { acc = acc * acc; s = s + 1 }
+    return acc
+}
+
+// ── dt_erf : a DETERMINISTIC erf built on dt_exp (no libm). Uses the same
+//    A&S 7.1.26 rational shell (max |err| ~1.5e-7 vs true erf) but with the
+//    exp term routed through dt_exp so it is fully cross-platform bit-stable.
+//    NOTE: this is a NUMERIC approximation (NOT bit-eq to libm erf) — it exists
+//    only to MEASURE that a deterministic erf gives identical bits cross-platform.
+fn dt_erf(x: float) -> float {
+    if x == 0.0 { return 0.0 }
+    let mut sign = 1.0
+    let mut z = x
+    if z < 0.0 { sign = 0.0 - 1.0; z = 0.0 - z }
+    let p = 0.3275911
+    let t = 1.0 / (1.0 + p * z)
+    let a1 = 0.254829592
+    let a2 = 0.0 - 0.284496736
+    let a3 = 1.421413741
+    let a4 = 0.0 - 1.453152027
+    let a5 = 1.061405429
+    let poly = ((((a5 * t + a4) * t + a3) * t + a2) * t + a1) * t
+    let y = 1.0 - poly * dt_exp(0.0 - z * z)
+    return sign * y
+}
+
+// ── deterministic LCG fixtures ───────────────────────────────────────────────
+fn _fill(a: int, n: int, seed: int) {
+    let mut i = 0
+    let mut s = seed
+    while i < n {
+        s = (s * 1103515245 + 12345) & 0x7FFFFFFF
+        let _ = farr_set(a, i, (to_float(s % 1000) - 500.0) * 0.01)
+        i = i + 1
+    }
+}
+fn _fill_targets(a: int, T: int, V: int, seed: int) {
+    let mut t = 0
+    let mut s = seed
+    while t < T {
+        s = (s * 1103515245 + 12345) & 0x7FFFFFFF
+        let _ = farr_set(a, t, to_float(s % V))
+        t = t + 1
+    }
+}
+
+// FNV-1a bit-fold over the 8 IEEE-754 little-endian bytes (f64_to_bytes_le) of
+// every element -> one i64 fingerprint. The byte decomposition is the EXACT bit
+// pattern, identical on any platform iff the float bits are identical; the fold
+// is order/position-sensitive so a single differing byte changes the result.
+fn _fold(a: int, n: int) -> int {
+    let mut h = 1469598103934665603
+    let mut i = 0
+    while i < n {
+        let bytes = f64_to_bytes_le(farr_get(a, i))
+        let mut k = 0
+        while k < 8 {
+            h = (h ^ bytes[k]) * 1099511628211
+            h = h ^ (h >> 29)
+            k = k + 1
+        }
+        h = h ^ (i * 2654435761)
+        i = i + 1
+    }
+    return h
+}
+
+// exp/erf selector helpers — separate fns (NOT an inline ternary on the libm call,
+// which aiden's older codegen mistypes when the false-branch is a libm builtin).
+fn _sel_exp(a: float, usetaylor: int) -> float {
+    if usetaylor == 1 { return dt_exp(a) }
+    return exp(a)
+}
+fn _sel_erf(a: float, usetaylor: int) -> float {
+    if usetaylor == 1 { return dt_erf(a) }
+    return erf(a)
+}
+
+// (1) CE-bwd grad — production op order; `usetaylor` swaps libm exp -> dt_exp.
+fn _ce_grad(logits: int, targets: int, out: int, T: int, V: int, usetaylor: int) {
+    let mut t = 0
+    while t < T {
+        let base = t * V
+        let mut mx = farr_get(logits, base)
+        let mut i = 1
+        while i < V { let v = farr_get(logits, base + i); if v > mx { mx = v }; i = i + 1 }
+        let mut sm = 0.0
+        let mut i2 = 0
+        while i2 < V {
+            sm = sm + _sel_exp(farr_get(logits, base + i2) - mx, usetaylor)
+            i2 = i2 + 1
+        }
+        let invT = 1.0 / to_float(T)
+        let mut v3 = 0
+        while v3 < V {
+            let e = _sel_exp(farr_get(logits, base + v3) - mx, usetaylor)
+            let _ = farr_set(out, base + v3, (e / sm) * invT)
+            v3 = v3 + 1
+        }
+        let tgt = to_int(farr_get(targets, t))
+        let _ = farr_set(out, base + tgt, farr_get(out, base + tgt) - invT)
+        t = t + 1
+    }
+}
+
+// (2) GELU fwd — GELU(x)=x*0.5*(1+erf(x/sqrt2)); `usetaylor` swaps libm erf->dt_erf.
+fn _gelu_fwd(g: int, out: int, n: int, usetaylor: int) {
+    let inv_sqrt2 = 0.70710678118654752440
+    let mut i = 0
+    while i < n {
+        let x = farr_get(g, i)
+        let e = _sel_erf(x * inv_sqrt2, usetaylor)
+        let _ = farr_set(out, i, x * (0.5 * (1.0 + e)))
+        i = i + 1
+    }
+}
+
+// (3) GELU bwd — dg = da * GELU'(x); GELU'(x)=Phi(x)+x*phi(x),
+//     Phi=0.5*(1+erf(x/sqrt2)), phi=exp(-x^2/2)/sqrt(2pi). libm erf+exp vs Taylor.
+fn _gelu_bwd(g: int, da: int, out: int, n: int, usetaylor: int) {
+    let inv_sqrt2 = 0.70710678118654752440
+    let inv_sqrt2pi = 0.39894228040143267794
+    let mut i = 0
+    while i < n {
+        let x = farr_get(g, i)
+        let ef = _sel_erf(x * inv_sqrt2, usetaylor)
+        let ex = _sel_exp(0.0 - 0.5 * x * x, usetaylor)
+        let cdf = 0.5 * (1.0 + ef)
+        let pdf = inv_sqrt2pi * ex
+        let grad = cdf + x * pdf
+        let _ = farr_set(out, i, farr_get(da, i) * grad)
+        i = i + 1
+    }
+}
+
+fn main() {
+    println("op19_crossplatform_selfcontained — F-OP19 libm-exp/erf byte dump")
+    println("cmp the *-LIBM-bits lines across arch/OS for the cross-platform verdict")
+
+    // (1) CE-bwd grad, CLM-scale T16 V256
+    let T = 16
+    let V = 256
+    let logits = farr_zeros(T * V)
+    let targets = farr_zeros(T)
+    _fill(logits, T * V, 7)
+    _fill_targets(targets, T, V, 31)
+    let ce_libm = farr_zeros(T * V)
+    let ce_tayl = farr_zeros(T * V)
+    _ce_grad(logits, targets, ce_libm, T, V, 0)
+    _ce_grad(logits, targets, ce_tayl, T, V, 1)
+    println("  CEBWD-LIBM-bits   = " + to_string(_fold(ce_libm, T * V)))
+    println("  CEBWD-TAYLOR-bits = " + to_string(_fold(ce_tayl, T * V)))
+
+    // (2)+(3) GELU fwd+bwd over N=1024 pre-activations
+    let N = 1024
+    let pre = farr_zeros(N)
+    let da = farr_zeros(N)
+    _fill(pre, N, 13)
+    _fill(da, N, 71)
+    let gf_libm = farr_zeros(N)
+    let gf_tayl = farr_zeros(N)
+    _gelu_fwd(pre, gf_libm, N, 0)
+    _gelu_fwd(pre, gf_tayl, N, 1)
+    println("  GELUFWD-LIBM-bits   = " + to_string(_fold(gf_libm, N)))
+    println("  GELUFWD-TAYLOR-bits = " + to_string(_fold(gf_tayl, N)))
+    let gb_libm = farr_zeros(N)
+    let gb_tayl = farr_zeros(N)
+    _gelu_bwd(pre, da, gb_libm, N, 0)
+    _gelu_bwd(pre, da, gb_tayl, N, 1)
+    println("  GELUBWD-LIBM-bits   = " + to_string(_fold(gb_libm, N)))
+    println("  GELUBWD-TAYLOR-bits = " + to_string(_fold(gb_tayl, N)))
+}

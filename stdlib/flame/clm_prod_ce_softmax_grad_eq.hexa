@@ -15,9 +15,10 @@
 //        dL/dlogits[t,v] = ( softmax(logits[t,:])[v] − [v==tgt_t] ) / T
 //      computed per position t as: per-row max-subtraction → SEQUENTIAL exp-sum
 //      denominator (v-ascending) → p = exp(logit−mx)/sm → write p/T → then subtract
-//      1/T at the single target index. EXP = the libm `exp` BUILTIN (the comment at
-//      clm_prod.hexa:696 pins "device exp() = libm → bit-exact to the host
-//      clm_ce_grad (max|Δ|=0)"). This is the well-known CE+softmax fused-gradient
+//      1/T at the single target index. EXP = dt_exp (flame_math Taylor) AS OF F-OP19
+//      (was the libm `exp` BUILTIN; F-OP19 MEASURED that libm exp DIVERGED across
+//      arch/OS — local+ghost arm64-macos vs aiden x86-linux, 4/4096 grad elems × 1
+//      ULP — and dt_exp is byte-identical on all 3 → re-locked here). The well-known
 //      simplification dL/dlogits == softmax(logits) − onehot(target) (·1/T mean).
 //
 //    FORWARD loss — nn_ce_loss_allpos (nn_lib.hexa:957), the scalar mean NLL:
@@ -25,14 +26,15 @@
 //      per-row max-subtraction → SEQUENTIAL exp-sum (v-ascending) → p_t = exp/tot →
 //      clamp p_t≥1e-6 → accumulate −ln(p_t) over t in t-ASCENDING order → /T. EXP =
 //      `dt_exp` and LN = `dt_ln` — the HAND-ROLLED flame_math.hexa scaled-Taylor
-//      (NOT libm), per the flame "explicit math" discipline. NOTE: this is a DIFFERENT
-//      exp than the backward path (libm) — the oracle matches EACH path's own exp.
+//      (NOT libm), per the flame "explicit math" discipline. AS OF F-OP19 the BWD
+//      path ALSO uses dt_exp (was libm) — so BOTH CE paths now share dt_exp; only the
+//      MoE softmax still differs (_moe_exp). The oracle matches EACH path's own exp.
 //
 //  ── What this oracle LOCKS (two independent identities, both max|Δ|=0) ──────────
 //  (A) BWD fused-grad identity: clm_ce_grad's PRODUCTION form (inline, no full-probs
 //      buffer, p/T then target−1/T) == a definitional REFERENCE that builds the full
-//      softmax row first, then forms (softmax − onehot)/T. Both use the SAME libm
-//      `exp` on the SAME args, SAME per-row max, SAME v-ascending denominator sum, and
+//      softmax row first, then forms (softmax − onehot)/T. Both use the SAME dt_exp
+//      (F-OP19) on the SAME args, SAME per-row max, SAME v-ascending denominator sum, and
 //      scale by the SAME 1/T ⇒ every float op identical ⇒ max|Δ|=0 (ordering/fusion
 //      identity, NOT an associativity case — no tolerance).
 //  (B) FWD loss-scalar identity: nn_ce_loss_allpos's PRODUCTION form (fused: it only
@@ -48,7 +50,7 @@
 //  any CPU (mac / aiden) — no GPU, no pool, no vast.
 //
 //  CANONICAL ORDER (SSOT) — and ONE honest associativity finding:
-//    • BWD: libm `exp`; per-row max-sub; denominator summed v-ascending; scale 1/T;
+//    • BWD: dt_exp (F-OP19); per-row max-sub; denominator summed v-ascending; scale 1/T;
 //           grad = p/T (write p·invT for ALL v), THEN index tgt gets −invT.
 //      ⚠ FINDING: the target index is the SSOT-sensitive spot. The production writes
 //      (p·invT) for every v then SUBTRACTS invT at tgt → result (p_tgt·invT)−invT.
@@ -76,7 +78,7 @@ fn _ce_maxdev(a: int, b: int, n: int) -> float {
 }
 
 // ════════════════════════════════════════════════════════════════════════════
-//  (A) BACKWARD fused-grad identity — libm `exp`
+//  (A) BACKWARD fused-grad identity — dt_exp (F-OP19 re-lock; was libm `exp`)
 // ════════════════════════════════════════════════════════════════════════════
 
 // PRODUCTION form — BYTE-IDENTICAL to clm_ce_grad (clm_prod.hexa:919): inline
@@ -90,11 +92,11 @@ fn _ce_grad_prod(logits: int, targets: int, dlogits_out: int, T: int, V: int) {
         while i < V { let v = t_get(logits, base + i); if v > mx { mx = v }; i = i + 1 }
         let mut sm = 0.0
         let mut i2 = 0
-        while i2 < V { sm = sm + exp(t_get(logits, base + i2) - mx); i2 = i2 + 1 }
+        while i2 < V { sm = sm + dt_exp(t_get(logits, base + i2) - mx); i2 = i2 + 1 }
         let invT = 1.0 / to_float(T)
         let mut v3 = 0
         while v3 < V {
-            let p = exp(t_get(logits, base + v3) - mx) / sm
+            let p = dt_exp(t_get(logits, base + v3) - mx) / sm
             t_set(dlogits_out, base + v3, p * invT)
             v3 = v3 + 1
         }
@@ -106,7 +108,7 @@ fn _ce_grad_prod(logits: int, targets: int, dlogits_out: int, T: int, V: int) {
 
 // REFERENCE form — the DEFINITIONAL CE+softmax gradient: first materialize the full
 // normalized softmax row p[t,:] (the classic "softmax forward"), then form the fused
-// gradient (softmax − onehot)/T. Same libm `exp`, same per-row max, same v-ascending
+// gradient (softmax − onehot)/T. Same dt_exp (F-OP19), same per-row max, same v-ascending
 // denominator, same 1/T ⇒ bit-for-bit identical to the production fused form.
 fn _ce_grad_ref(logits: int, targets: int, dlogits_out: int, T: int, V: int) {
     let prow = t_zeros(V)                     // full softmax row (definitional)
@@ -116,11 +118,11 @@ fn _ce_grad_ref(logits: int, targets: int, dlogits_out: int, T: int, V: int) {
         let mut mx = t_get(logits, base)
         let mut i = 1
         while i < V { let v = t_get(logits, base + i); if v > mx { mx = v }; i = i + 1 }
-        // softmax forward: exp(logit−mx), v-ascending denom sum, then normalize
+        // softmax forward: dt_exp(logit−mx), v-ascending denom sum, then normalize
         let mut sm = 0.0
         let mut i2 = 0
         while i2 < V {
-            let ev = exp(t_get(logits, base + i2) - mx)
+            let ev = dt_exp(t_get(logits, base + i2) - mx)
             t_set(prow, i2, ev)
             sm = sm + ev
             i2 = i2 + 1

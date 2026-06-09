@@ -629,3 +629,25 @@ frontier if lifts bit-exact, else closed-negative W10 KEPT) -> destroy pod (leak
 HONEST (OP-2b-class, g5): NO measurement performed or claimed. This is the DESIGN for a GPU-GATED experiment;
 the Hopper sm_90a measure is out of 0-pod scope until an H100 is authorized. cuBLAS-TF32 = roofline, parity
 NOT claimed. $0, no vast/pool/pod. Verdict .verdicts/hexa-0pod/F-OP21-HOPPER-WARPSPEC-DESIGN.txt (PR #3000).
+
+## OP-19 — cross-platform byte-exact: libm-exp CE-bwd divergence MEASURED + CLOSED (2026-06-09)
+
+- THESIS (deep-dive, MEASURED REAL): OP-11 found CE-bwd clm_ce_grad uses the libm `exp` builtin; the OP-2/7/8/
+  9/10/11/12/13+OP-15 series prove only SINGLE-machine run-to-run byte-eq. Cross-PLATFORM (x86 vs arm64,
+  Darwin vs Linux libm) was UNVERIFIED. libm transcendentals are not correctly-rounded → suspected hole.
+- ORACLE (0-GPU, $0, free pool): stdlib/flame/op19_crossplatform_selfcontained.hexa — self-contained `hexa
+  run` that folds the exact IEEE-754 bytes (f64_to_bytes_le; float_to_bits too new for aiden's runtime.a) of
+  CE-bwd grad in libm-exp + dt_exp form. RAN on local+ghost (arm64-macos) vs aiden (x86-linux) = cross-arch +
+  cross-OS.
+- VERDICT (BEFORE): libm-exp CEBWD fold DIVERGED — local/ghost 7969105254299072804 ≠ aiden 3352931952497630952;
+  dt_exp byte-IDENTICAL (7679248634312321699) on all 3. ISOLATED via per-element byte diff: EXACTLY 4/4096 grad
+  elems differ, EACH by 1 mantissa-LSB = 1 ULP (glibc vs Darwin libm). Run-to-run stable per machine.
+- FIX: clm_ce_grad libm `exp` → dt_exp (matches CE-fwd) on host (clm_prod.hexa) + GPU kernel (_hx_dt_exp_dev in
+  runtime_cuda_emit.hexa, _moe_exp_dev precedent → host↔device byte-eq preserved). Grad-change: max abs
+  2.17e-18, max rel ≈2.0e-14 (a few ULPs). Trades "matches libm" for "matches across ALL platforms" (g5).
+- AFTER: production CE-bwd fold = 7679248634312321699 IDENTICAL on all 3 → cross-platform byte-identical YES.
+- OP-11 RE-LOCK: clm_prod_ce_softmax_grad_eq.hexa _ce_grad_prod + _ce_grad_ref libm→dt_exp; F-OP11 = 1 PASS
+  (all 6 grad + 6 loss cases max|Δ|=0). Contract doc updated (3 exp impls → 2).
+- RESIDUAL (honest latent, OP-19b deferred): GELU libm `erf` (fwd+bwd) is the same hole; no bit-accurate
+  deterministic erf in-tree + `erf` won't link on aiden's runtime → documented follow-up.
+- $0 · 0-GPU · free pool (aiden/ghost) · no vast · no pod. Verdict .verdicts/hexa-0pod/F-OP19-CROSSPLATFORM-EXACT.txt.
