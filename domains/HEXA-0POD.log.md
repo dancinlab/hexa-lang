@@ -281,3 +281,34 @@ or drops the max-sub now breaks the oracle. Canonical order documented: softmax 
 changed (oracle/verification addition only). Companion to OP-2 (bwd dW transpose-elim) + OP-7 (fwd conv im2col).
 $0 — pure local CPU `hexa run`, no GPU / no pool / no vast. Oracle stdlib/flame/clm_prod_moe_combine_eq.hexa ·
 verdict .verdicts/hexa-0pod/F-OP8-IDENTITY-ORACLE.txt.
+
+## OP-9 — GroupNorm/LN valley reduction byte-eq CPU oracle (0-GPU) — 2026-06-09
+
+Continuing the OP-2/OP-7/OP-8 determinism-oracle series, added a LOCAL `hexa run` (0-GPU) oracle that
+bit-exactly locks the flame CLMConvMoE GroupNorm "valley" normalization the FUSED hot path (HEXA_FUSE_VALLEY /
+HEXA_FUSE_GN_GELU · forge_dispatch_groupnorm_gelu) relies on. WHICH REDUCTION: the production GroupNorm
+(gn_lib.hexa nn_groupnorm_fwd / nn_gn_gelu_fused, called from clm_prod.hexa _groupnorm / _groupnorm_gelu) uses
+a TWO-PASS mean/variance reduction (NOT Welford): pass-1 sum=Σ_{c∈g,t} X[t,c] → mu=sum/(cg·T); pass-2
+vs=Σ (X-mu)² → var=vs/(cg·T); inv=1/_gn_sqrt(var+eps), eps=1e-5 — BOTH passes iterate (t-OUTER,c-INNER),
+sequential, NO tree re-assoc. Then Y=gamma·xhat+beta, A=GELU(Y) (erf-based normal CDF, libm builtin).
+
+The oracle proves the UN-FUSED form (_gn_ref = nn_groupnorm_fwd shape: two-pass reduction + SEPARATE affine
+sweep writing Y, THEN a SEPARATE GELU sweep re-reading Y → A — two elementwise sweeps over [T·C]) ==
+the FUSED VALLEY form (_gn_fused = nn_gn_gelu_fused shape: SAME two-pass reduction, but affine+GELU in ONE
+pass — post-GN [T·C] tensor touched ONCE, no Y read+write round-trip — the megakernel shape), with
+max(|ΔY|,|ΔA|)=0. Both share _ln_sqrt (byte-identical to gn_lib _gn_sqrt, 40-iter Newton) + _ln_gelu
+(byte-identical erf-GELU), same mu, same inv, same affine ⇒ a true fusion/boundary-removal identity, NOT an
+associativity case (no tolerance, max|Δ|=0 not faked).
+
+HONEST (g5): the tree-vs-sequential associativity RISK the spec flagged is REAL but does NOT arise here —
+gn_lib's fused valley keeps the SAME sequential (t-outer,c-inner) two-pass order as the un-fused path; the
+fusion only collapses the GN-affine+GELU elementwise sweeps (boundary removal), it does NOT re-associate the
+mean/var sum. So the CPU oracle matches the production reduction order EXACTLY → genuine max|Δ|=0, no eps
+needed. CANONICAL ORDER (device kernel = SSOT): sequential (t-outer,c-inner) two-pass mean-then-var,
+inv=1/_gn_sqrt(var+eps) eps=1e-5, affine, erf-GELU. A future warp-shuffle/tree reduce of the mean/var sum or a
+Welford switch would trip THIS oracle — its job.
+
+`hexa run` PASS, max|Δ|=0 across 7 shapes (G=1 LN-over-channels degenerate, G=2/3/4/8, varied T,C, + T=1 pure
+cross-channel + cg=1 G=8 per-channel edges). Behavior-preserving: NO trainer logic changed (oracle/verification
+addition only). $0 — pure local CPU `hexa run`, no GPU / no pool / no vast. Oracle
+stdlib/flame/clm_prod_ln_reduction_eq.hexa · verdict .verdicts/hexa-0pod/F-OP9-LN-REDUCTION-ORACLE.txt.
