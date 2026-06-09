@@ -1,0 +1,8 @@
+════════════════════════════════════════════════════════════════════════════
+F-OP22-MEGASTEP-DESIGN — WIP SKELETON (filling on harvest)
+HEXA-0POD OP-22 · whole-train-step MEGASTEP megakernel DESIGN + Amdahl bound
+                 + turnkey H100 recipe · 0-pod (read verdicts only) · $0
+════════════════════════════════════════════════════════════════════════════
+[ … sections below filled from cited verdicts — DUTYCYCLE valley %, Amdahl
+  ceiling, megakernel design + grid-sync/own-GEMM tensions, MEGASTEP-vs-TF32
+  honest verdict, turnkey recipe … ]
