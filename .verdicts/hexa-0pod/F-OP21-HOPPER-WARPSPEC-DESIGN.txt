@@ -1,7 +1,305 @@
-F-OP21-HOPPER-WARPSPEC-DESIGN — WIP SKELETON (0-pod DESIGN, GPU-gated measure)
-==============================================================================
-STATUS: WIP — skeleton committed first (durable-worktree discipline). Body fills in next commit.
-SCOPE: 0-POD DESIGN ONLY. The forge own-GEMM's remaining Hopper (sm_90a wgmma) perf lever —
-       a warp-specialized TMA producer/consumer software pipeline (cuBLAS-class mainloop).
-       This verdict is a DESIGN + perf-gap analysis + turnkey H100 experiment recipe. NO
-       MEASUREMENT is claimed; the measure is GPU-gated (no vast, no pod rental in this round).
+F-OP21-HOPPER-WARPSPEC-DESIGN — Hopper warp-spec TMA producer/consumer pipeline DESIGN
+=======================================================================================
+verdict-tier: ⚪ DESIGN (0-pod, GPU-GATED MEASURE). This is NOT a measurement. It is the
+              design + roofline perf-gap analysis + turnkey H100 experiment recipe for the
+              forge own-GEMM's remaining Hopper (sm_90a wgmma) performance lever: a warp-
+              specialized TMA producer/consumer software pipeline (the cuBLAS-class mainloop).
+              The design traces to the actual W10 frontier source + the W7..W15 ladder
+              verdicts (cited inline); the perf-gap numbers are the REAL verdict TFLOP/s. NO
+              perf number is produced or claimed here — the measure needs an authorized H100
+              (no vast, no pod rental this round), exactly OP-2b's honest GPU-gated framing.
+date: 2026-06-09
+author: HEXA-0POD OP-21 (deep-dive branch, 0-pod)
+domain: HEXA-0POD
+SSOT read (verbatim, no GPU): self/native/wgmma/wgmma_tf32_w10_lib.h (the W10 frontier kernel)
+  + .verdicts/hexa-fusion/F-FUSION-SM90-WGMMA-{W7,W8,W9,W10,W11,W12,W13,W14-FP16,W15}.txt
+  + .verdicts/hexa-fusion/F-FUSION-SM90-CUBLAS-MAINLOOP.txt
+COST: $0. 0-GPU. No pool/vast/pod. Design verified by reading source + verdicts only.
+
+
+=========================== §0  HONEST FRAMING (g5, read this first) ===========================
+This verdict closes NOTHING by measurement. It is a DESIGN for a GPU-GATED experiment. The
+ladder's hard rule (W11/W12/W13) is "a lever is only real once it is BUILT + bit-exact-GATED +
+MEASURED faster, else the W10 frontier is KEPT." OP-21 produces the build plan + the gate + the
+recipe so that the moment an H100 is authorized the work is turnkey. Until then:
+  • The forge TF32 own-GEMM frontier is W10 = 70.7 TFLOP/s @S=4096, 6.09x off cuBLAS-TF32,
+    bit-exact (rel_rms 0), 2 CTA/SM. UNCHANGED by this verdict.
+  • cuBLAS-TF32 (~430 TFLOP/s @4096) is the ROOFLINE reference. NO superiority claim.
+  • PARITY (<=1.3x): NOT reached, NOT claimed. The design's PREDICTED outcome is explicitly a
+    prediction (a pre-registered falsifier), to be confirmed or falsified on H100.
+
+
+=================== §1  WHAT W10 ALREADY HAS vs WHAT THE cuBLAS-CLASS MAINLOOP MISSES ===========
+Read directly off self/native/wgmma/wgmma_tf32_w10_lib.h (gemm_w10, MODE 4) + the W8/W10 verdicts.
+
+W10 ALREADY HAS (the techniques that landed bit-exact + lifted the frontier):
+  H1. HARDWARE TMA PRODUCER, single elected thread (W8 lever, kept in W10). One thread (tid==0)
+      issues cp.async.bulk.tensor.2d for the A-band (128x32) + 4 B atoms (32x32) into an NST-deep
+      ring; mbarrier.arrive.expect_tx tracks the TMA byte count; the TMA HW engine does the
+      global->shared copy with ~0 consumer threads spent. (lib.h L350-359, L409-420.)
+      => freed the W7 cp.async producer warpgroup; CTA 384->256 thr; occupancy 1->2 CTA/SM.
+  H2. DUAL CONSUMER WARPGROUPS. 256 thr = 2 warpgroups, BOTH consumers (wg=tid>>7, band=wg);
+      each issues its 2 wgmma.m64n64k8 over its 64-row A band x the shared B tile (lib.h L404-405).
+  H3. SWIZZLE_128B TMA descriptors (W9 mechanism, made bit-exact in W10). The A/B tiles land
+      128B-swizzled (CU_TENSOR_MAP_SWIZZLE_128B, lib.h MODE 0/1/2/3 encoders) so the W8
+      cooperative Araw/Braw->gmma TRANSPOSE permute (SASS 28 STS) is GONE (W9: STS 28->0).
+  H4. COMPOSED SOFTWARE DECODE (the W10 fix). A pure-index shared->shared copy maps the swizzled
+      slot to the gmma INTER 8x4-core layout: A sw = a*256 + r*32 + (((k>>2)^(r&7))<<2) + (k&3);
+      B sw = c*(32*32) + k*32 + (gp<<2) + (nn&3) (lib.h L371-389). Bit-exact (rel_rms 0).
+  H5. NST-DEEP SWIZZLED-TMA RING (the LOAD side is pipelined). Only the swizzled tiles ring
+      NST-deep (lib.h L329-331 SWBUF); the elected thread prefetches load_ki=ki+stages ahead
+      (L409-420). TMA latency IS hidden across K-slabs.
+  H6. mbarrier full[]/empty[] handshake (full arrive=1 producer, empty arrive=256 consumers).
+
+W10 IS MISSING (the cuBLAS-class mainloop techniques NOT in gemm_w10 — the residual lever set):
+  M1. DEDICATED PRODUCER WARPGROUP + setmaxnreg REGISTER REALLOCATION. cuBLAS/CUTLASS-Hopper
+      run a SEPARATE producer warpgroup that does setmaxnreg.dec to ~40 regs (it only issues TMA
+      + arrives), freeing the register file so the CONSUMER warpgroups setmaxnreg.inc to ~232 and
+      hold deeper accumulator + ping-pong state. W10 has the single-elected-thread TMA producer
+      (H1) but NO setmaxnreg and NO register-budget asymmetry. (grep wgmma_tf32_w10_lib.h:
+      setmaxnreg -> ABSENT.) W12 ATTEMPTED M1 on the 128x256 tile and ptxas IGNORED setmaxnreg
+      (C7507) because that tile's 128 accumulator regs/thread already sit at the minimum — BUT
+      that was the BIGGER 128x256 tile; M1 on the W10 128x128 tile (only d0[32]+d1[32] = 64
+      accumulator regs/thread, lib.h L345) has register HEADROOM W12's 128x256 did not. This is
+      the precise, untested gap: M1 on the EXISTING 128x128 geometry, not coupled to a bigger tile.
+  M2. DECODE/MMA OVERLAP AT 2 CTA/SM. gemm_w10 does wgmma.commit_group + wgmma.wait_group 0
+      EVERY K-slab (lib.h L407), and the gmma decode band is a SINGLE shared buffer (NOT ring-
+      staged, lib.h L332 "one gmma-band scratch shared across slabs"). So decode(N+1) cannot
+      start until wgmma(N) drains the band: decode<->MMA SERIALIZE. W13 tried to deepen the
+      decode ring (NSTG>=2) and it cost a 2nd 32KB band -> 96KB->128KB/CTA -> 2->1 CTA/SM ->
+      -27% (51.9 vs 70.7). So at 128x128 TF32, 2-CTA/SM and decode/MMA overlap are MUTUALLY
+      EXCLUSIVE *as long as the 32KB decode band exists*. The missing technique is therefore not
+      "deeper ring" (W13 closed it) but "ELIMINATE the decode band so the freed 32KB pays for the
+      overlap stage" — which needs M3.
+  M3. DESCRIPTOR-DIRECT wgmma (delete the 32KB software decode band). cuBLAS feeds wgmma DIRECTLY
+      from the swizzled smem via the GMMA matrix descriptor (no software decode copy at all).
+      W10-inplace (MODE 5) + W15 (3200-config descriptor sweep) BOTH FLOORED at rel_rms 1.392 /
+      1.000 — the wgmma HW de-swizzle does NOT coincide with our ATOM-MAJOR SWIZZLE_128B landing
+      (a "genuine 3rd interaction"). W15 pinned the exact reason: CuTe reaches the canonical
+      Layout_K_SW128_Atom via tile_to_shape and builds the TMA from THAT SAME layout; our hand-
+      rolled box ({32,64} A, {32,32} B) lands a DIFFERENT atom-major byte permutation. So M3 is
+      NOT a descriptor field fix (W15 ruled that out at 3200-config resolution) — it requires
+      re-encoding A/B so the SWIZZLE_128B TMA lands the EXACT canonical atom (a global re-encode
+      or a tile_to_shape-built smem layout), which is net-new kernel structure.
+  M4. WIDER N wgmma (m64n256k8) to amortize the B-load + raise arithmetic intensity (W8 named
+      residual #3). W10 uses m64n64k8 (lib.h WG macro L90-98). Untested on the W10 swizzle path.
+  M5. EPILOGUE/MAINLOOP OVERLAP (ping-pong). W11 MODE 7 tried ping-pong but ON the 128x256 tile
+      (already 1 CTA/SM) so it could not isolate the epilogue win. Ping-pong ON the 128x128 W10
+      geometry (2 CTA/SM held) is untested.
+
+
+====================== §2  THE PERF-GAP ROOFLINE (70.7 vs ~430 TFLOP/s — cited numbers) =========
+All numbers are the REAL verdict TFLOP/s (no new measurement). @S=4096, H100 80GB, sm_90a, NST=2:
+  own (W10)      = 70.7 TFLOP/s        [F-FUSION-SM90-WGMMA-W10 L55,72; re-measured 70.3/70.6/71.0
+                                        in W11/W12/W15 same-pod apples -> STABLE]
+  cuBLAS-TF32    = ~430 TFLOP/s        [W10 L73 430.8; W8 434.3; W11 431.9; W13 431.2; W15 429.8]
+  ratio          = 6.09x off cuBLAS    [W10 L74]   (6.06-6.12x across the re-measures)
+
+Ladder context (the climb that got here, all bit-exact rel_rms 0, @S=4096):
+  mma.sync warp-level CB (CUBLAS-MAINLOOP) 11.55 TFLOP/s  29.4x   <- DIFFERENT instr class (ceiling)
+  W6/W7 async-pipe (frontier pre-W8)       50.7          8.39x
+  W7 dual-consumer-WG (cp.async producer)  32.0         13.2x    CLOSED-NEG (1 CTA/SM, reg-bound)
+  W8 TMA-producer dual-consumer            66.5          6.44x    +31% (occupancy 1->2 CTA/SM)
+  W9 swizzled-TMA (naive descriptor)       GATE FAIL (rel_rms 1.392) — permute removed, law measured
+  W10 composed-decode (FRONTIER)           70.7          6.09x ★  +5.7% over W8, 2 CTA/SM, bit-exact
+  W11 128x256 tile alone                   66.4          6.44x    CLOSED-NEG (2->1 CTA/SM)
+  W12 128x256 + warp-spec + sub-decode     26.1         16.7x    CLOSED-NEG (decode serializes; setmaxnreg ignored)
+  W13 deep decode ring (NSTG>=2)           51.9          8.36x    CLOSED-NEG (2nd 32KB band -> 1 CTA/SM)
+  W14 fp16/bf16 port                       71.6         11.5x    NEW dtype; roofline doubled, gap widened
+  W15 descriptor-direct (delete band)      GATE FAIL (rel_rms 1.392) — band removable but read wrong
+
+GAP DECOMPOSITION — where the 6.09x lives (attributed from the cited closed-negatives, NOT new measure):
+  (A) OCCUPANCY (CTA/SM, smem cap): ~0% of the residual.
+      W10 is already at the MAX 2 CTA/SM for this 128x128 TF32 kernel (smem 98KB/CTA, lib.h /
+      W13 L70-74: 2x96KB=192KB fits the H100 228KB/SM, 2x128KB=256KB does not). Every attempt
+      to raise residency further or to USE the residency for a bigger tile (W11) / deeper ring
+      (W13) REGRESSED. Occupancy is NOT the binding constraint and NOT a lever — it is a
+      CONSTRAINT the design must PRESERVE. (W8 already closed the occupancy axis 1->2 CTA/SM.)
+  (B) MAINLOOP / DECODE-MMA OVERLAP: ~the DOMINANT share of the residual.
+      gemm_w10's per-slab sequence is mbar_wait -> decode (single band) -> __syncthreads ->
+      wgmma.fence -> 4x wgmma -> wgmma.wait_group 0 -> __syncthreads (lib.h L362-408). The
+      wait_group 0 + single band SERIALIZE the memory-bound decode of slab N+1 behind the
+      tensor-core wgmma of slab N (W13 §"THE W12 ROOT-CAUSE": "the single band + the wait_group 0
+      SERIALIZE decode(N+1) behind wgmma(N)"). cuBLAS's mainloop never stalls the tensor cores:
+      its producer warpgroup streams the next operand while the consumer warpgroups run wgmma
+      back-to-back. THIS is the structural difference and the largest closable share.
+  (C) DECODE COPY ITSELF (the 32KB software shared->shared band): a real but SECONDARY tax, AND
+      it is the thing that BLOCKS closing (B). The decode is ~the W8->W10 +5.7% worth of work
+      (W10 L94 "the W10 decode is still a software shared->shared index copy ~5.7% lift"). It
+      cannot be removed by the HW in-place descriptor (M3 ruled out W10/W15) without the canonical-
+      atom re-encode. So (B) and (C) are COUPLED: you cannot overlap decode/MMA at 2 CTA/SM
+      (B) while the 32KB band exists (W13), and you cannot delete the band (C) without the
+      canonical-atom re-encode (W15). The gap is a (B)+(C) KNOT.
+  (D) EPILOGUE SERIALIZATION: small. The W10 epilogue is a register->global scatter (lib.h
+      L422-430, d0/d1 directly to col-major C, no shared round-trip — already the CB-class
+      register-blocked epilogue from CUBLAS-MAINLOOP L4). Ping-pong epilogue overlap (M5) is
+      untested at 2 CTA/SM but the epilogue is a per-tile one-shot (not per-K-slab), so its
+      share of a K-deep GEMM is small — a few % at most.
+
+ROOFLINE READING: the 6.09x is NOT occupancy (closed, A~0%) and NOT epilogue (D small). It is
+  the (B)+(C) decode/MMA-overlap KNOT: the tensor cores idle waiting for the single decode band
+  to refill, and the band cannot be both ring-deepened (W13: costs occupancy) and deleted (W15:
+  read wrong) without a structural change. cuBLAS closes exactly this with a dedicated producer
+  warpgroup streaming canonical-atom operands the wgmma reads in-place. The remaining ~6x is the
+  cuBLAS mainloop SHAPE, not a tuning knob on the current one.
+
+
+===================== §3  THE DESIGNED NEXT LEVER (most gap-closing, concrete) ==================
+LEVER OP-21A (PRIMARY): CANONICAL-ATOM RE-ENCODE + DESCRIPTOR-DIRECT wgmma + DEDICATED PRODUCER
+WARPGROUP with setmaxnreg — i.e. untie the (B)+(C) knot by deleting the decode band the RIGHT
+way (W15's named path (a)), THEN spend the freed 32KB on the decode-free producer/consumer
+overlap cuBLAS uses. This is the ONE change that attacks the dominant (B)+(C) share; every other
+lever (W11 tile, W13 ring, W14 dtype) was closed-negative because it left the knot intact.
+
+  Step 1 — CANONICAL-ATOM LANDING (kills M3's "3rd interaction", the W15 root cause).
+    W15 proved the descriptor-direct read fails ONLY because our hand-rolled TMA box lands an
+    ATOM-MAJOR byte permutation, not the canonical CuTe Layout_K_SW128_Atom that the wgmma HW
+    de-swizzle expects. FIX (W15 named path (a)): build the SMEM tile layout = the canonical
+    K-major SW128 atom (the CuTe tile_to_shape(GMMA::Layout_K_SW128_Atom, {128,32}) byte order),
+    and encode the cuTensorMapEncodeTiled box FROM THAT SAME layout so the TMA lands exactly the
+    bytes the swmode=1 descriptor addresses. Concretely: choose the TMA box so the swizzle atom
+    is the canonical 8-row x (128B) tile WITHOUT the extra atom-major a*256 stacking — i.e. lay
+    the K-slab as ONE contiguous swizzle region the descriptor's LBO/SBO can stride, not 16
+    independently-stacked 256-float atoms. EXPECTED: the W15 swmode=1/sbo=1024 descriptor (the
+    measured best basin, rel_rms 1.000) drops to rel_rms 0 ON the canonical landing. (Pre-
+    registered: this is the FALSIFIABLE core — if rel_rms does not reach 0 on the canonical atom,
+    the M3 path stays dead and OP-21A degrades to OP-21B below.)
+    GATE: reuse the W10/W15 single-tile differential (MODE 0/1) — rel_rms 0 BEFORE any GEMM.
+
+  Step 2 — DELETE THE 32KB DECODE BAND. With Step 1 bit-exact, gemm reads wgmma operands DIRECTLY
+    from the swizzled smem (no As0/As1/B0/B1 gmma scratch, lib.h L361 removed). smem/CTA: W15
+    MEASURED this is REAL — 96KB->64KB/CTA @NST=2 (W15 L73-80), a 32KB drop, 2 CTA/SM held, and
+    NST=3 (96KB) even fits the budget W10 needed for NST=2.
+
+  Step 3 — SPEND THE 32KB ON DECODE-FREE PRODUCER/CONSUMER OVERLAP (the cuBLAS mainloop shape).
+    Now that there is NO decode band to serialize on, deepen the SWIZZLED-TMA ring (NST=3..4,
+    the 32KB headroom buys >=1 extra stage at 2 CTA/SM) AND restructure the mainloop so the
+    consumer warpgroups issue wgmma BACK-TO-BACK across K-slabs with software-pipelined
+    wgmma.wait_group<N-1> (drain the OLDEST group while the newest issues), instead of
+    wgmma.wait_group 0 every slab (lib.h L407). The TMA producer (single elected thread or a
+    dedicated producer warpgroup, Step 4) streams slab N+NST while consumers run slab N — the
+    tensor cores never idle on a decode. THIS directly attacks share (B).
+
+  Step 4 — DEDICATED PRODUCER WARPGROUP + setmaxnreg (M1), now UNBLOCKED. On the 128x128 W10
+    geometry the consumer accumulator is only d0[32]+d1[32] = 64 regs/thread (lib.h L345) — HALF
+    the 128x256 tile's 128 regs/thread that made ptxas IGNORE setmaxnreg in W12 (C7507). So the
+    asymmetry CAN be granted here: producer WG setmaxnreg.dec to ~40 (TMA + mbar only), consumer
+    WGs setmaxnreg.inc to ~232 (deeper ring state + back-to-back wgmma). 384-thread CTA (1
+    producer WG + 2 consumer WGs) — BUT only if the band-free smem (Step 2, 64KB) keeps 2 CTA/SM
+    at 384 thr; if register pressure forces 1 CTA/SM, FALL BACK to the single-elected-thread
+    producer (H1, which already gives 2 CTA/SM) + Step 3's software-pipelined wait_group. Step 4
+    is the cuBLAS-EXACT shape; Step 3-without-4 is the safe partial.
+
+  CONCRETE DESIGN PARAMETERS (the kernel the recipe builds):
+    tile          : 128 x 128 (UNCHANGED — W11 proved bigger tile alone regresses; keep 2 CTA/SM)
+    K-slab        : TKSW=32 (one 128B SWIZZLE_128B atom) -> 4 wgmma m64n64k8 sub-steps/slab
+    smem layout   : [NST * (Asw 128x32 + Bsw 4x(32x32)) canonical-atom swizzled ring] +
+                    [NST full mbar][NST empty mbar]   — NO gmma decode band (deleted Step 2)
+    stage count   : NST = 3 (the 32KB band-removal headroom buys it at 2 CTA/SM; sweep 2..4)
+    barrier scheme: full[NST] (producer-arrives) / empty[NST] (consumers-arrive, count = #consumer
+                    threads); + wgmma.commit_group per slab, wgmma.wait_group<NST-2> (NOT 0) so
+                    the oldest committed group drains while the newest issues (the overlap).
+    register budget: producer WG setmaxnreg.dec 40 ; consumer WGs setmaxnreg.inc 232 (Step 4);
+                    fall back to single-elected-thread producer (no setmaxnreg) if ptxas/occupancy
+                    rejects the 384-thr 2-CTA/SM (the W12 failure mode — guarded against here).
+    epilogue      : KEEP the W10 register->global scatter (lib.h L422-430); OPTIONALLY add
+                    ping-pong (M5) as a follow-up sub-lever once 2 CTA/SM + overlap is confirmed.
+
+LEVER OP-21B (FALLBACK, if Step 1 canonical re-encode does NOT reach rel_rms 0): keep the W10
+  software decode band but software-pipeline ONLY the wgmma side — issue wgmma.wait_group<2>
+  with a 2-deep ACCUMULATOR double-buffer in registers (no extra smem band, so 2 CTA/SM held)
+  so consecutive K-slabs' wgmma overlap even though decode is still per-slab. This attacks a
+  SLICE of share (B) without needing M3. Lower expected ceiling (the decode still gates) but it
+  does NOT depend on the falsifiable canonical-atom re-encode. Bit-exact gate: rel_rms 0 vs W10.
+
+EXPECTED (PRE-REGISTERED FALSIFIER, to confirm/refute on H100 — NOT a claim):
+  "On the W10 128x128 TF32 swizzle path, landing the CANONICAL SW128 atom makes the descriptor-
+  direct wgmma read bit-exact (rel_rms 0), deleting the 32KB decode band; spending that 32KB on
+  a deeper decode-free TMA ring + software-pipelined wgmma.wait_group<NST-2> + setmaxnreg
+  producer/consumer split keeps 2 CTA/SM AND overlaps the mainloop, lifting own past 70.7 toward
+  cuBLAS-TF32 parity." Falsified if (a) canonical landing still floors rel_rms ~1.0/1.392 (M3
+  stays dead -> OP-21B), or (b) the overlap holds bit-exact but does NOT lift 70.7 (mainloop was
+  not the binding share after all). EITHER outcome is a publishable closed-negative with a number.
+
+
+============================ §4  TURNKEY H100 EXPERIMENT RECIPE ================================
+⚠ GPU-GATED. This runs ONLY when an H100 (sm_90a) is AUTHORIZED. 0-pod until then. The recipe is
+written so a future H100 session is turnkey. (Provisioning mirrors the W8..W15 verdicts' vast
+H100 flow; substitute the sidecar pool if a free H100 ever appears — none exists today.)
+
+  PROVISION (authorized H100 only):
+    0. Confirm authorization + budget. Rent ONE H100 80GB (sm_90a). Per memory project_hexa_ddp:
+       vast destroy needs `yes |`; ssh via -F config (inline -o mangled). Tag the pod to YOUR
+       project; DESTROY immediately after capture (every W-verdict: "leak 0").
+    1. nvcc 12.6 (V12.6.77) toolchain, driver 560.35.x (EXACT apples to W10/W13/W15). Flags:
+       -O3 -arch=sm_90a -lcublas -lcuda.
+
+  BUILD (the OP-21A kernel):
+    2. Author self/native/wgmma/wgmma_tf32_w16.cu by #include "wgmma_tf32_w10_lib.h" (W10_NO_MAIN)
+       so gemm_w10 is the SAME-BINARY apples baseline (the W11/W12/W13/W15 pattern). Add:
+         - get_enc_canonical(): cuTensorMapEncodeTiled with the box chosen so the SWIZZLE_128B
+           landing is the canonical Layout_K_SW128_Atom (Step 1) — ONE contiguous swizzle region,
+           not 16 atom-major-stacked 256-float atoms.
+         - probe_desc_canonical (MODE 0/1): the W15 single-tile descriptor differential ON the
+           canonical landing. swmode=1, sweep sbo in {1024,512,256,2048}, boff 0..7, lbo 0..2048.
+         - gemm_w16 (MODE 4): descriptor-direct (NO decode band) + NST=3 ring + wgmma.wait_group
+           <NST-2> + Step-4 setmaxnreg producer/consumer split (with the single-elected-thread
+           fallback compiled behind -DW16_PRODUCER_WG=0).
+    3. nvcc -O3 -arch=sm_90a wgmma_tf32_w16.cu -o w16 -lcublas -lcuda  (-Xptxas -v to see regs +
+       setmaxnreg acceptance — watch for C7507 "setmaxnreg ignored"; if seen, use the fallback).
+
+  GATE (bit-exact FIRST, g5 — NO perf number before this passes):
+    4. ./w16 4096 0   -> single-tile composed/canonical decode  rel_rms MUST be 0.000e+00
+       ./w16 4096 1   -> single-tile descriptor-direct wgmma     rel_rms MUST be 0.000e+00
+       If MODE 1 floors at ~1.0/1.392 (the W15 wall reproduces): canonical landing FAILED ->
+       record the closed-negative, switch to OP-21B (gemm_w16b, decode band kept, wgmma double-
+       buffer), re-gate MODE 0/1 rel_rms 0 vs W10.
+    5. Full-GEMM gate: ./w16 2048 4 ; ./w16 4096 4 ; ./w16 8192 4 — rel_rms 0.000e+00 at EVERY S
+       (vs cuBLAS-TF32 oracle, same as W10). NO perf reported on any rel_rms > 3e-3 config (g5).
+
+  MEASURE (only after the gate is rel_rms 0):
+    6. Occupancy: cudaOccupancyMaxActiveBlocksPerMultiprocessor on gemm_w16 — CONFIRM 2 CTA/SM
+       (512 compute-thr/SM) at NST=2 AND NST=3 (the band-removal headroom). Print regs/CTA.
+    7. Perf sweep (same-binary apples vs gemm_w10): for S in {2048,4096,8192}, NST in {2,3,4}:
+       own TFLOP/s, cuBLAS-TF32 TFLOP/s, ratio=cuBLAS/own, rel_rms — verbatim, like W10 L53-56.
+       Headline = own @S=4096 NST=best vs the W10 70.7 same-pod baseline (re-measure gemm_w10 in
+       the SAME binary/pod for the apples Δ — every W-verdict does this).
+    8. SASS check (cuobjdump -sass): confirm the gmma decode STS are GONE (descriptor-direct) and
+       count wgmma back-to-back issue (the overlap). Like W9's STS 28->0 evidence.
+
+  CAPTURE + CLOSE:
+    9. Write .verdicts/hexa-fusion/F-FUSION-SM90-WGMMA-W16.txt: bit-exact gate (verbatim rel_rms),
+       occupancy (verbatim), the perf sweep (verbatim), Δ vs W10 70.7, % of the 6.09x gap closed,
+       PARITY verdict (honest), and the pre-registered-falsifier disposition (confirmed/falsified).
+       If it lifts 70.7 bit-exact -> NEW frontier. If not -> closed-negative, W10 KEPT (the hard
+       rule). DESTROY the pod (leak 0). Total measure: ONE H100-hour suffices (W8..W15 each did it
+       in a single short session).
+
+  RECIPE-IN-ONE-LINE: rent 1 H100(sm_90a,nvcc12.6) -> build wgmma_tf32_w16.cu (#include w10 lib,
+    canonical-atom TMA + descriptor-direct + NST=3 ring + wait_group<NST-2> + setmaxnreg split) ->
+    gate rel_rms 0 (MODE 0/1 single-tile, then MODE 4 full @2048/4096/8192) -> ONLY THEN sweep own
+    vs same-binary cuBLAS-TF32 @S/NST -> write W16 verdict (Δ vs W10 70.7) -> destroy pod (leak 0).
+
+
+================================= §5  HEADLINE (DESIGN, not measure) ===========================
+  W10 frontier (cited, NOT re-measured):  70.7 TFLOP/s @4096, 6.09x off cuBLAS-TF32, 2 CTA/SM, rel_rms 0
+  gap decomposition:                      occupancy ~0% (closed, A) | mainloop/decode-MMA overlap
+                                          DOMINANT (B) | decode-band tax SECONDARY + COUPLED (C) |
+                                          epilogue small (D)
+  designed next lever (OP-21A):           canonical-atom re-encode -> descriptor-direct (delete 32KB
+                                          band, W15-real) -> spend 32KB on deeper decode-free ring +
+                                          wgmma.wait_group<NST-2> overlap + setmaxnreg producer/
+                                          consumer split (UNBLOCKED at 128x128's 64-reg accumulator)
+  fallback (OP-21B):                      keep decode band, register-double-buffer wgmma overlap (no
+                                          M3 dependency)
+  measurement:                            GPU-GATED — NOT performed, NOT claimed. Recipe is turnkey.
+  PARITY:                                 NOT reached, NOT claimed (design predicts a lift, to be
+                                          confirmed/falsified on H100).
+  cost:                                   $0, 0-GPU, no vast/pool/pod this round.
+  cuBLAS-TF32:                            ROOFLINE throughout. NO superiority claim.
+
+verdict: ⚪ DESIGN — W10-has-vs-misses mapped to the actual source; the 6.09x gap rooflined to the
+         decode/MMA-overlap (B)+(C) knot (occupancy A~0% closed, epilogue D small) with cited W7..W15
+         numbers; the next lever (canonical-atom -> descriptor-direct -> decode-free overlap +
+         setmaxnreg) designed concretely with smem/stage/barrier/register budget; a turnkey H100
+         recipe written. HONEST: this is the design for a GPU-GATED experiment, NOT a result.
