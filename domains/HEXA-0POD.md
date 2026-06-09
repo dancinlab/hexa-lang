@@ -306,6 +306,9 @@ loop targets what the consumer card + code can carry.
   preserving — oracle addition only, NO trainer logic changed. $0, 0-GPU, no pool/vast. Verdict
   .verdicts/hexa-0pod/F-OP15-STEP-DETERMINISM.txt.
 
+<!-- ANCHOR:OP-16-GN-HOST-FALLBACK (unique anchor — closes the OP-15 0-GPU link blind spot) -->
+- [ ] **OP-16 — gn_lib host fallback so the fused-valley GN+GELU path is 0-GPU hexa-run-testable** — (WIP)
+
 ## deferred (0-pod follow-ups surfaced by the loop — self-feed)
 
 - **OP-2b — land the runtime.c hexa_forge_dispatch_matmul_t wrapper body + flip the trainer to the live

@@ -1,0 +1,25 @@
+════════════════════════════════════════════════════════════════════════════
+F-OP16-GN-HOST-FALLBACK — gn_lib fused-valley GN+GELU 0-GPU host-linkable
+HEXA-0POD OP-16 · forge host fallback · 0-GPU (`hexa run`) · $0
+════════════════════════════════════════════════════════════════════════════
+
+STATUS: WIP (skeleton landed first — investigation + host-body + byte-eq proof
+to follow in this verdict).
+
+THE GAP (OP-15 #2994 finding, reproduced)
+  A `hexa run` harness that `use`s stdlib/flame/gn_lib FAILS TO LINK off a no-CUDA
+  build:
+      Undefined symbols for architecture arm64:
+        "_forge_dispatch_groupnorm_gelu", referenced from:
+            _nn_gn_gelu_fused_off in hexa_run-*.o
+      ld: symbol(s) not found for architecture arm64
+  gn_lib's nn_gn_gelu_fused_off (stdlib/flame/gn_lib.hexa:321) calls
+  forge_dispatch_groupnorm_gelu under an env gate (HEXA_FUSE_GN_GELU +
+  CLM_PROD_DEVRESIDENT + goff==0 && boff==0). The CALL SITE is env-gated so at
+  RUNTIME the host loop runs; but codegen ALWAYS emits the symbol reference, and
+  the bare `forge_dispatch_groupnorm_gelu` C body has NO host definition off-CUDA
+  → the LINK fails. The fused-valley GN+GELU path is therefore not locally
+  `hexa run`-testable on CPU — the 0-GPU determinism-test blind spot OP-15 named.
+
+(to be completed: host-body location + idiom, links-now proof, byte-eq max|Δ|=0
+ vs unfused OP-9 reference, OR honest out-of-scope finding.)
