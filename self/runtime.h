@@ -1402,9 +1402,11 @@ HexaVal forge_dispatch_expert_unpack2(HexaVal dex_out_v, HexaVal dex0_v,
  * forge_dispatch_ce_grad(logits, targets, dlogits, T, V) -> int rc (0 ok / -1
  * host). Reproduces clm_prod.hexa clm_ce_grad: per t (one thread) mx=max_v logit,
  * sm=Σ_v exp(logit-mx), dlogits[t,v]=(exp(logit-mx)/sm)·(1/T), dlogits[t,tgt]-=1/T.
- * Sequential per-row (max + sum + writes), device exp() = IEEE libm contract →
- * bit-exact (max|Δ|=0) via _hx_cuda_farr_ce_grad_gpu. Keeps DLOGITS DEVICE-
- * RESIDENT. Gated behind CLM_PROD_DEVRESIDENT; no-CUDA → -1 → host clm_ce_grad. */
+ * Sequential per-row (max + sum + writes). F-OP19: exp = HAND-ROLLED dt_exp Taylor
+ * (_hx_dt_exp_dev), NOT CUDA exp() → bit-exact to host clm_ce_grad (also dt_exp)
+ * AND cross-platform deterministic (libm/CUDA exp diverged across arch/OS, 1 ULP).
+ * (max|Δ|=0) via _hx_cuda_farr_ce_grad_gpu. Keeps DLOGITS DEVICE-RESIDENT. Gated
+ * behind CLM_PROD_DEVRESIDENT; no-CUDA → -1 → host clm_ce_grad. */
 HexaVal hexa_forge_dispatch_ce_grad(HexaVal logits_v, HexaVal targets_v,
                                   HexaVal dlogits_v, HexaVal t_v, HexaVal v_v);   /* runtime.c — fusion L3 bwd glue */
 HexaVal forge_dispatch_ce_grad(HexaVal logits_v, HexaVal targets_v,

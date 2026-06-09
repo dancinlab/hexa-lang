@@ -72,6 +72,28 @@ loop targets what the consumer card + code can carry.
   FOLLOW-UPS (deferred): wire TF32 compute-type into the live forge GEMM dispatch (clm_prod build + aiden
   verify, analogous to OP-2); multi-step TF32-vs-FP64 trajectory-drift study (long-horizon).
 
+<!-- ANCHOR:OP-19-CROSSPLATFORM-EXACT (unique anchor — cross-PLATFORM byte-eq, distinct from OP-11/OP-15 single-machine run-to-run) -->
+- [x] **OP-19 — cross-platform byte-exact: measure libm-exp divergence across arch/OS, close if real (0-GPU)** —
+  MEASURE→ISOLATE→FIX, free pool only ($0, NO vast). The OP-2/7/8/9/10/11/12/13+OP-15 series proved the flame
+  step byte-exact RUN-TO-RUN on ONE machine; cross-PLATFORM (x86 vs arm64 · Darwin vs Linux libm) was
+  UNVERIFIED. Built a self-contained `hexa run` oracle (stdlib/flame/op19_crossplatform_selfcontained.hexa)
+  that folds the exact IEEE-754 bytes (f64_to_bytes_le — float_to_bits is too new for aiden's prebuilt
+  runtime.a) of CE-bwd clm_ce_grad's grad in BOTH libm-exp + dt_exp-Taylor form. RAN ON 3 PLATFORMS: local +
+  ghost (arm64-macos) vs aiden (x86-linux) — cross-arch AND cross-OS. VERDICT: libm-exp CEBWD fold DIVERGED
+  (arm64-macos 7969105254299072804 ≠ x86-linux 3352931952497630952) while dt_exp was byte-IDENTICAL on all 3.
+  ISOLATED via per-element byte diff: EXACTLY 4 of 4096 grad elems differ, EACH by 1 mantissa-LSB = 1 ULP
+  (glibc vs Darwin libm round 4 inputs differently). HOLE REAL → FIXED: swapped clm_ce_grad libm `exp` →
+  dt_exp (matching CE-fwd nn_ce_loss_allpos) on host (clm_prod.hexa) AND the GPU kernel (_hx_dt_exp_dev in
+  runtime_cuda_emit.hexa, the _moe_exp_dev precedent → host↔device byte-eq holds + device also deterministic).
+  Grad-change magnitude: max abs 2.17e-18, max rel ≈2.0e-14 (a few ULPs) — trades "matches libm" for "matches
+  across ALL platforms" (g5 honest). AFTER: production CE-bwd fold = 7679248634312321699 IDENTICAL on all 3 →
+  cross-platform byte-identical YES. OP-11 oracle RE-LOCKED (clm_prod_ce_softmax_grad_eq.hexa _ce_grad_prod +
+  _ce_grad_ref libm→dt_exp): F-OP11 = 1 PASS, all max|Δ|=0. Contract doc updated (3 exp impls → 2). RESIDUAL
+  (honest latent, not closed): GELU libm `erf` (fwd+bwd) is the same kind of hole but no bit-accurate
+  deterministic erf exists in-tree (A&S 7.1.26 is 1.5e-7-off + itself libm-exp-dependent) AND `erf` won't link
+  on aiden's runtime — documented as follow-up. $0, 0-GPU, free pool, no vast. Verdict
+  .verdicts/hexa-0pod/F-OP19-CROSSPLATFORM-EXACT.txt.
+
 <!-- ANCHOR:OP-18-L3-FUSED-HOST (unique anchor — completes the OP-16 L3 fused-dispatch family: gelu2 + moe_block2) -->
 - [x] **OP-18 — host fallbacks for the remaining L3 fused dispatchers (gelu2 + moe_block2), 0-GPU testable** —
   completes the OP-16 (#2995) L3 fused-dispatch family: forge_dispatch_gelu2 (L3-b) + forge_dispatch_moe_block2
@@ -444,6 +466,18 @@ loop targets what the consumer card + code can carry.
   conv2_bwd_via_forge_batched (the 2-expert path, ~65% of step cost) still uses the OP_N strided
   _clmp_matmul_batched. Extend the OP_T transpose-elim to the batched dW GEMM to reach the dominant path.
   Byte-eq gate identical (max|Δ|=0 to the im2col_t+OP_N batched reference). Free aiden GPU.
+
+- **OP-19b — close the GELU libm-`erf` cross-platform hole with a deterministic erf (numeric change).**
+  F-OP19 (OP-19) closed CE-bwd's libm `exp` but MEASURED the GELU path (nn_gelu_fwd/_gn_gelu fwd +
+  nn_gelu_bwd) still calls libm `erf` (fwd) and libm `erf`+`exp` (bwd) — the same arch/OS divergence kind. Not
+  closed because no bit-accurate deterministic erf exists in-tree (core/special.hexa erf_fn = A&S 7.1.26
+  ~1.5e-7-off AND itself libm-exp-dependent) so it needs a genuine deterministic erf impl (a numeric change,
+  larger than ULP), AND `erf`/hexa_math_erf is too new to LINK on aiden's prebuilt runtime.a (so the pool
+  cross-platform measure needs a runtime rebuild or a newer pool host). Build a deterministic dt_erf (e.g. a
+  Taylor/continued-fraction erf on dt_exp), swap GELU fwd+bwd (host + GPU kernel), re-lock OP-9's GN+GELU
+  oracle to the new erf, document the grad-change magnitude. The OP-19 oracle already has a dt_erf swap-test
+  proving a deterministic erf gives byte-identical folds locally — this milestone makes it production + a
+  numeric decision.
 
 - **OP-5c — forge error-path / dtype-edge / determinism hardening (NEEDS GPU — deferred out of 0-GPU scope).**
   The robustness improvements OP-5 originally listed (error paths, dtype edge cases, determinism guards in the

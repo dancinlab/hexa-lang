@@ -3305,11 +3305,29 @@ fn emit_runtime_cuda_c() -> str {
             " *   DLOGITS[t, tgt] -= 1/T          (tgt = (int)TARGETS[t])\n" +
             " * The max + the sum + the per-col writes all run SEQUENTIALLY in the host\n" +
             " * scan order (one thread per t, v ascending) — NO tree re-assoc, NO atomics.\n" +
-            " * Device exp() is the IEEE libm contract (same as the host `exp`), and the\n" +
-            " * 1/T = 1.0/(double)T scaling matches `1.0 / to_float(T)` exactly → bit-exact\n" +
-            " * (max|Δ|=0). Fuses the clm_ce_grad host glue at the head of the full-step\n" +
-            " * driver (before clm_prod_bwd). Keeps DLOGITS FARR_DEVICE so the first\n" +
-            " * conv-bwd GEMM H2D-skips it. */\n" +
+            " * F-OP19: exp = the HAND-ROLLED dt_exp Taylor (replayed term-for-term in\n" +
+            " * _hx_dt_exp_dev), NOT CUDA exp()/expf — so it is bit-exact to the host\n" +
+            " * clm_ce_grad (which ALSO uses dt_exp as of F-OP19) AND cross-platform\n" +
+            " * deterministic (CUDA exp, like host libm exp, diverged across arch/OS —\n" +
+            " * measured 1 ULP arm64-macos vs x86-linux). The _moe_exp_dev precedent.\n" +
+            " * The 1/T = 1.0/(double)T scaling matches `1.0 / to_float(T)` exactly →\n" +
+            " * bit-exact (max|Δ|=0). Fuses the clm_ce_grad host glue at the head of the\n" +
+            " * full-step driver (before clm_prod_bwd). Keeps DLOGITS FARR_DEVICE so the\n" +
+            " * first conv-bwd GEMM H2D-skips it. */\n" +
+            "__device__ static double _hx_dt_exp_dev(double x) {\n" +
+            "    /* byte-identical to flame_math.hexa dt_exp (range-reduce by halving\n" +
+            "     * until |xr|<=0.25, 12-term Taylor, then repeated-square 2^r). */\n" +
+            "    long long r = 0;\n" +
+            "    double xr = x;\n" +
+            "    while ((xr > 0.0 ? xr : 0.0 - xr) > 0.25) { xr = xr / 2.0; r = r + 1; }\n" +
+            "    double term = 1.0;\n" +
+            "    double acc = 1.0;\n" +
+            "    long long k = 1;\n" +
+            "    while (k < 12) { term = term * xr / (double)k; acc = acc + term; k = k + 1; }\n" +
+            "    long long s = 0;\n" +
+            "    while (s < r) { acc = acc * acc; s = s + 1; }\n" +
+            "    return acc;\n" +
+            "}\n" +
             "__global__ void _hx_k_ce_grad(const double* __restrict__ LOGITS,\n" +
             "                              const double* __restrict__ TARGETS,\n" +
             "                              double* __restrict__ DLOGITS,\n" +
@@ -3325,9 +3343,9 @@ fn emit_runtime_cuda_c() -> str {
             "        }\n" +
             "        double sm = 0.0;\n" +
             "        for (int64_t i2 = 0; i2 < V; i2++)\n" +
-            "            sm += exp(LOGITS[base + i2] - mx);\n" +
+            "            sm += _hx_dt_exp_dev(LOGITS[base + i2] - mx);\n" +
             "        for (int64_t v3 = 0; v3 < V; v3++) {\n" +
-            "            double p = exp(LOGITS[base + v3] - mx) / sm;\n" +
+            "            double p = _hx_dt_exp_dev(LOGITS[base + v3] - mx) / sm;\n" +
             "            DLOGITS[base + v3] = p * invT;\n" +
             "        }\n" +
             "        int64_t tgt = (int64_t)TARGETS[t];\n" +

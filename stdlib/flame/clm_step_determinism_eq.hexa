@@ -56,6 +56,7 @@ use "stdlib/flame/conv_lib"
 use "stdlib/flame/moe_lib"
 use "stdlib/flame/nn_lib"
 use "stdlib/flame/optim_lib"
+use "stdlib/flame/flame_math"   // dt_exp — CE-bwd deterministic exp (F-OP19)
 
 fn _abs(x: float) -> float { if x < 0.0 { return 0.0 - x }; return x }
 
@@ -220,11 +221,11 @@ fn clm_ce_grad(logits: int, targets: int, dlogits_out: int, T: int, V: int) {
         while i < V { let v = t_get(logits, base + i); if v > mx { mx = v }; i = i + 1 }
         let mut sm = 0.0
         let mut i2 = 0
-        while i2 < V { sm = sm + exp(t_get(logits, base + i2) - mx); i2 = i2 + 1 }
+        while i2 < V { sm = sm + dt_exp(t_get(logits, base + i2) - mx); i2 = i2 + 1 }  // F-OP19
         let invT = 1.0 / to_float(T)
         let mut v3 = 0
         while v3 < V {
-            let p = exp(t_get(logits, base + v3) - mx) / sm
+            let p = dt_exp(t_get(logits, base + v3) - mx) / sm  // F-OP19: dt_exp (was libm exp)
             t_set(dlogits_out, base + v3, p * invT)
             v3 = v3 + 1
         }
