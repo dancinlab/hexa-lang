@@ -1,1 +1,75 @@
-F-OP15-STEP-DETERMINISM — WIP (skeleton); body + hexa-run PASS to land next commit.
+════════════════════════════════════════════════════════════════════════════
+F-OP15-STEP-DETERMINISM — whole CLMConvMoE micro-step BYTE-IDENTICAL run-to-run
+HEXA-0POD OP-15 · CPU-LOCAL INTEGRATION byte-eq ORACLE · 0-GPU (`hexa run`) · $0
+════════════════════════════════════════════════════════════════════════════
+
+COMPOSITION LOCKED (the gap the per-op oracles do NOT cover)
+  OP-2/7/8/9/10/11/12/13 each locked a PER-OP identity of the flame CLMConvMoE
+  step bit-exactly. What was NOT yet locked is the COMPOSITION: that the FULL
+  step (embed → conv → GroupNorm → MoE → CE → backward → AdamW), with ALL its
+  state threading (cache buffers, optimizer m/v carry, deterministic LCG init),
+  produces BYTE-IDENTICAL post-step state when run TWICE from the SAME seed.
+  Per-op oracles can all pass while a composition bug — uninitialized scratch, a
+  non-deterministic dict/set iteration, an address-dependent ordering — still
+  breaks run-to-run determinism. OP-15 is the end-to-end guard.
+
+COMPOSED SCOPE (the largest sub-sequence — the COMPLETE micro-step)
+  The EXACT step from stdlib/flame/clm_step.hexa main() (CLMConvMoE QAT train-step
+  assembly 3a, verified #2294/#2302), run as ONE micro-step:
+    clm_fwd_full : embed → conv(ec) → conv(tc) → GroupNorm(tg) → GELU → residual
+                   → conv(router)+conv(e0)/conv(e1) → GELU×2 → MoE router combine
+                   → GroupNorm(no) → conv(ro) → logits
+    nn_ce_loss_allpos : all-position CE loss
+    clm_ce_grad  : softmax-gradient seed
+    clm_bwd      : full reverse chain (conv_bwd · groupnorm_bwd · moe_router_bwd
+                   · gelu_bwd · embedding scatter-add) writing every param grad
+    _adam (opt_adamw_step) on ALL 17 parameter tensors → W', m', v' in place
+  Config tiny CPU-runnable: T=4, d=8, E=2, V=256, K=3. DETERMINISTIC init (fixed
+  LCG seeds, no RNG / no wall-clock). NOT scoped down — the WHOLE step runs in
+  `hexa run`. m/v zero-initialized; loss = step-1 fwd CE.
+
+HARNESS
+  stdlib/flame/clm_step_determinism_eq.hexa  (pure `hexa run`, CPU, 0-GPU)
+  Imports the cleanly-linking production libs (conv_lib · moe_lib · nn_lib ·
+  optim_lib) DIRECTLY and inlines ONLY GroupNorm fwd/bwd as _gn_fwd/_gn_bwd —
+  byte-identical copies of gn_lib nn_groupnorm_fwd/nn_groupnorm_bwd (same
+  eps=1e-5, same 40-iter Newton _gn_sqrt, same (t,c) reduction order).
+  WHY inline GN: gn_lib's nn_gn_gelu_fused_off references the GPU forge symbol
+  forge_dispatch_groupnorm_gelu, which is host-undefined on the 0-GPU link path
+  (resolves only in a CUDA build) → importing gn_lib fails to LINK locally. The
+  composition-determinism property does not depend on the fused kernel; the
+  unfused CPU GroupNorm is the production reference path (gn_lib runs it byte-eq
+  when HEXA_FUSE_GN_GELU is off — the default). The conv/moe/nn/optim CALLS are
+  the LIVE production lib functions, verbatim from clm_step.hexa.
+  run_step() snapshots every post-step W/m/v tensor (farr_copy → fresh handle)
+  into 17-slot packs; pack_max_dev() walks every element of every tensor.
+
+METHOD
+  Run 1: run_step from fixed-seed init → W', m', v', loss'.
+  Run 2: run_step from the SAME fixed-seed init → W'', m'', v'', loss''.
+  Assert max|Δ| = 0 over every param, every m, every v, AND |Δloss| = 0.
+  Comparator sensitivity verified (negative control): distinct-seed tensors give
+  max|Δ|=0.344217; identical-seed give 0.0 — the 0.0 below is a genuine byte-eq
+  pass, NOT a self-alias (farr_copy returns independent handles per run).
+
+`hexa run` OUTPUT (verbatim)
+  clm_step_determinism_eq — F-OP15 INTEGRATION byte-eq run-to-run determinism (CPU oracle)
+    scope: ONE full CLMConvMoE micro-step (embed->conv->GroupNorm->MoE->CE->bwd->AdamW), 17 params + m/v + loss
+    loss run1 = 4.81916
+    loss run2 = 4.81916
+    max|d(W', W'')|   = 0.0
+    max|d(m', m'')|   = 0.0
+    max|d(v', v'')|   = 0.0
+    |d(loss', loss'')| = 0.0
+  F-OP15-STEP-DETERMINISM = 1
+  PASS - composed CLMConvMoE micro-step is BYTE-IDENTICAL run-to-run (max|d|=0 over W, m, v, loss). Composition is deterministic; no uninit-scratch / non-det-iteration / address-ordered hole.
+
+VERDICT (g5, HONEST)
+  GREEN. max|Δ| = 0.0 over W (17 params), m (17), v (17), and loss — RUN-TO-RUN
+  byte-identical for the COMPOSED CLMConvMoE micro-step. The composition is
+  deterministic: NO composition-determinism hole (no uninit scratch, no
+  non-deterministic iteration, no address-dependent ordering) exists in the
+  embed→conv→GroupNorm→MoE→CE→bwd→AdamW step + its state threading. This is the
+  end-to-end reproducibility proof the per-op oracles (OP-2/7/8/9/10/11/12/13)
+  individually could not give. $0, 0-GPU, no pool/vast.
+════════════════════════════════════════════════════════════════════════════
