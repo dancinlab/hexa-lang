@@ -262,3 +262,22 @@ pays only when a side is under-filled (cf OG-FUSE-FOLD #2909 under-filling 30 co
 optimizer lever now EXHAUSTED on BOTH axes (OP-6 instruction-width, OP-6b boundary-removal). NOT shipped, no
 production code changed. $0 (free pool aiden, no vast, no pod, no leak). Harness
 tool/op6b/op6b_adamw_fuse_bench.cu. Verdict .verdicts/hexa-0pod/F-OP6B-ADAMW-FUSE.txt.
+
+## OP-8 — MoE softmax+combine byte-eq CPU oracle (0-GPU) · max|Δ|=0
+F-OP8-MOE-COMBINE-EQ = 1. Picked the highest-value not-yet-locked flame identity: the CLMConvMoE MoE-router
+softmax-gate + gate-weighted expert combine, which lives in the FUSED hot path (HEXA_FUSE_MOE_BLOCK2 megakernel
+= gelu2 + expert_pack2 + moe_router in ONE launch). Added LOCAL `hexa run` (0-GPU) oracle
+stdlib/flame/clm_prod_moe_combine_eq.hexa locking the trainer's TWO-PASS form (nn_moe_router_fwd: full
+probs[T·E] softmax buffer, THEN per-position e-ascending Σ_e probs[t,e]·ex_out[e,t,c]) == a ONE-PASS FUSED form
+(the megakernel shape: inline per-position gate kept register-local, combine fused immediately after, NO full-T
+probs DRAM round-trip). max|Δ|=0 across 6 shapes (E=2 trainer 2-expert · E=3/4/8 · varied T,C · degenerate
+T=1,C=1 pure-gate edge). HONEST (g5): genuine fusion/ordering identity NOT an associativity case — both forms
+use the SAME hand-rolled scaled-Taylor _moe_exp (NOT libm/CUDA exp), SAME per-position max-subtraction, SAME
+sequentially-summed denominator, SAME e-ascending combine accumulation, so every float op is identical (no
+tolerance, max|Δ|=0 not faked). This LOCKS the megakernel's explicit "accumulate BOTH reductions SEQUENTIALLY,
+NO tree re-assoc → bit-exact" determinism contract — a future refactor that tree-reduces the softmax sum/combine
+or drops the max-sub now breaks the oracle. Canonical order documented: softmax max-sub ON + e-ascending exp/sum
++ sequential denom; combine Σ_e e-ascending; exp = scaled-Taylor _moe_exp. Behavior-preserving: NO trainer logic
+changed (oracle/verification addition only). Companion to OP-2 (bwd dW transpose-elim) + OP-7 (fwd conv im2col).
+$0 — pure local CPU `hexa run`, no GPU / no pool / no vast. Oracle stdlib/flame/clm_prod_moe_combine_eq.hexa ·
+verdict .verdicts/hexa-0pod/F-OP8-IDENTITY-ORACLE.txt.
