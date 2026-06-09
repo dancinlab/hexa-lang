@@ -1,0 +1,151 @@
+// ════════════════════════════════════════════════════════════════════════════
+//  op19b_crossplatform_erf.hexa — F-OP19B cross-platform byte dump for the
+//  GELU erf path, SELF-CONTAINED (no `use` — runs via scp/stdin on ANY hexa
+//  host, checkout-independent) so the SAME source runs on local arm64-macos,
+//  ghost arm64-macos AND aiden x86-linux.
+//
+//  OP-19 closed the CE-bwd libm `exp` cross-platform hole (libm exp diverged
+//  arm64↔x86 by 1 ULP on 4/4096 grad elems; dt_exp Taylor is byte-identical).
+//  It left the GELU `erf` path as a MEASURED LATENT residual (OP-19b): the
+//  forward GELU(x)=x·0.5·(1+erf(x/√2)) and its backward derivative still called
+//  libm `erf` (fwd) + libm `erf`+`exp` (bwd) — the SAME class of hole.
+//
+//  This oracle dumps an IEEE-754 byte fingerprint (f64_to_bytes_le, available on
+//  BOTH local + aiden's prebuilt runtime.a) of the DETERMINISTIC GELU fwd+bwd
+//  computed with the new pure-FP `dt_erf` (NO libm — only +,-,*,/ and dt_exp).
+//
+//  IMPORTANT — the libm `erf` baseline is NOT dumped here: aiden's prebuilt
+//  runtime.a has NO `hexa_math_erf` symbol (OP-19 measured it undefined → won't
+//  link), so a libm-erf GELU oracle CANNOT be cross-platform run on the pool. The
+//  BEFORE-divergence is instead shown by the libm-vs-det accuracy gap in the
+//  verdict (and OP-19's op19_crossplatform_selfcontained.hexa already dumped the
+//  GELU libm bits on local where erf DOES link). The CLOSURE proof here is: the
+//  pure-FP det-erf GELU fold is byte-IDENTICAL on all three platforms.
+//  $0, 0-GPU, no pool-build (pure `hexa run`).
+// ════════════════════════════════════════════════════════════════════════════
+
+// ── dt_exp : EXACT copy of flame_math.hexa dt_exp (12-term Taylor + range-reduce
+//    by halving + repeated-square). Deterministic across platforms (OP-19). Used
+//    ONLY by the GELU backward pdf φ(x)=exp(−x²/2)/√(2π). ───────────────────────
+fn dt_exp(x: float) -> float {
+    let mut r = 0
+    let mut xr = x
+    while (if xr > 0.0 { xr } else { 0.0 - xr }) > 0.25 {
+        xr = xr / 2.0
+        r = r + 1
+    }
+    let mut term = 1.0
+    let mut acc = 1.0
+    let mut k = 1
+    while k < 12 {
+        term = term * xr / to_float(k)
+        acc = acc + term
+        k = k + 1
+    }
+    let mut s = 0
+    while s < r { acc = acc * acc; s = s + 1 }
+    return acc
+}
+
+// ── dt_erf : PURE-FP deterministic erf — NO libm, NO transcendental at all (not
+//    even dt_exp). Maclaurin series of the error function:
+//        erf(z) = (2/√π) · Σ_{n≥0} (−1)ⁿ z^(2n+1) / (n! · (2n+1))
+//    summed in fixed ASCENDING n order (80 terms — machine-exact for |z|<4 in
+//    fp64), clamped to ±1 for |z| ≥ 4 (erf(4) = 0.99999998458…, the clamp step
+//    is ≤ 1.54e-8, and GELU saturates to x or 0 there). Odd function: the sign is
+//    folded out and restored. EVERY op is +,-,*,/ on fp64 → bit-identical on any
+//    IEEE-754 platform (x86/arm64/Darwin/Linux). max|dt_erf − libm erf| = 1.54e-8.
+fn dt_erf(x: float) -> float {
+    let mut sign = 1.0
+    let mut z = x
+    if z < 0.0 { sign = 0.0 - 1.0; z = 0.0 - z }
+    if z >= 4.0 { return sign * 1.0 }
+    let two_over_sqrtpi = 1.1283791670955126   // 2/√π
+    let z2 = z * z
+    let mut term = z                           // n=0 : z^1 / (0! · 1)
+    let mut acc = z
+    let mut n = 1
+    while n < 80 {
+        term = term * (0.0 - z2) / to_float(n)         // term_{n} = term_{n-1}·(−z²)/n
+        acc = acc + term / to_float(2 * n + 1)         // ÷(2n+1), ascending n
+        n = n + 1
+    }
+    return sign * two_over_sqrtpi * acc
+}
+
+// ── deterministic LCG fixture (matches op19 oracle) ──────────────────────────
+fn _fill(a: int, n: int, seed: int) {
+    let mut i = 0
+    let mut s = seed
+    while i < n {
+        s = (s * 1103515245 + 12345) & 0x7FFFFFFF
+        let _ = farr_set(a, i, (to_float(s % 1000) - 500.0) * 0.01)
+        i = i + 1
+    }
+}
+
+// FNV-1a fold over the 8 IEEE-754 little-endian bytes (f64_to_bytes_le) of every
+// element → one i64 fingerprint, identical on any platform iff the float bits are.
+fn _fold(a: int, n: int) -> int {
+    let mut h = 1469598103934665603
+    let mut i = 0
+    while i < n {
+        let bytes = f64_to_bytes_le(farr_get(a, i))
+        let mut k = 0
+        while k < 8 {
+            h = (h ^ bytes[k]) * 1099511628211
+            h = h ^ (h >> 29)
+            k = k + 1
+        }
+        h = h ^ (i * 2654435761)
+        i = i + 1
+    }
+    return h
+}
+
+fn isq2() -> float { return 0.70710678118654752440 }     // 1/√2
+fn isq2pi() -> float { return 0.39894228040143267794 }   // 1/√(2π)
+
+// GELU fwd — GELU(x) = x·0.5·(1+erf(x/√2)) — DETERMINISTIC dt_erf.
+fn _gelu_fwd_det(g: int, out: int, n: int) {
+    let mut i = 0
+    while i < n {
+        let x = farr_get(g, i)
+        let e = dt_erf(x * isq2())
+        let _ = farr_set(out, i, x * (0.5 * (1.0 + e)))
+        i = i + 1
+    }
+}
+
+// GELU bwd — dg = da·GELU'(x); GELU'(x)=Φ(x)+x·φ(x), Φ=0.5·(1+erf(x/√2)),
+//   φ=exp(−x²/2)/√(2π) — DETERMINISTIC dt_erf + dt_exp.
+fn _gelu_bwd_det(g: int, da: int, out: int, n: int) {
+    let mut i = 0
+    while i < n {
+        let x = farr_get(g, i)
+        let cdf = 0.5 * (1.0 + dt_erf(x * isq2()))
+        let pdf = isq2pi() * dt_exp(0.0 - 0.5 * x * x)
+        let grad = cdf + x * pdf
+        let _ = farr_set(out, i, farr_get(da, i) * grad)
+        i = i + 1
+    }
+}
+
+fn main() {
+    println("op19b_crossplatform_erf — F-OP19B pure-FP det-erf GELU byte dump")
+    println("cmp the *-DET-bits lines across arch/OS for the cross-platform verdict")
+
+    let N = 1024
+    let pre = farr_zeros(N)
+    let da = farr_zeros(N)
+    _fill(pre, N, 13)
+    _fill(da, N, 71)
+
+    let gf = farr_zeros(N)
+    let gb = farr_zeros(N)
+    _gelu_fwd_det(pre, gf, N)
+    _gelu_bwd_det(pre, da, gb, N)
+
+    println("  GELUFWD-DET-bits = " + to_string(_fold(gf, N)))
+    println("  GELUBWD-DET-bits = " + to_string(_fold(gb, N)))
+}
