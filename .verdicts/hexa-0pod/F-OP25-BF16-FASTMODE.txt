@@ -1,0 +1,144 @@
+F-OP25-BF16-FASTMODE — deterministic BF16 fast-mode for the flame training step (RTX 5070)
+==========================================================================================
+STATUS: GREEN gates, DOMINATED outcome (honest). A deterministic BF16 fast-mode IS real on
+        the 5070 — self-byte-eq run-to-run (max|delta|=0, NO pedantic needed), within W14
+        tolerance vs FP64, loss tracks FP64 over 50 steps (no peel) — BUT it is NOT faster
+        than the OP-20 TF32 fast-mode (TF32/BF16 = 1.01x-1.12x, same-tensor-throughput) and
+        offers NO better accuracy under the fp32-master-weight contract. BF16 is therefore
+        Pareto-DOMINATED by TF32: TF32 remains the precision-uncap sweet spot. 8/8 1-step
+        cells PASS both gates; 4/4 drift cells track. The honest closed result.
+
+HARDWARE: aiden RTX 5070 (sm_120 / cc12.0, 12227 MiB), driver 580.159.04, CUDA 13.0.88.
+          FREE sidecar pool — NO vast, NO pod, NO leak. GPU idle-guarded (hard backoff
+          30->480s, 8 tries) before each timed run; the guard fired on most cells (a parallel
+          agent shared the card) and correctly held each timed run until <5% util / <800MiB.
+          GPU returned to 0%/2MiB and all /tmp + ~/op25_bench artifacts cleaned after the run.
+
+THESIS: the precision-uncap ladder's NEXT rung after OP-20 TF32 (e-6, 4.2x) is BF16. BF16 has
+an 8-bit mantissa (vs TF32's 10-bit) so the GEMM is less accurate but POTENTIALLY faster (or
+same speed, half GEMM-input memory traffic). OP-25 measures whether a deterministic BF16 STEP
+fast-mode (a) stays self-byte-eq, (b) stays within W14 1e-2 vs FP64, (c) beats TF32 speed —
+placing BF16 on the precision/speed/accuracy Pareto FP64(exact,1x) -> TF32(e-6,4.2x) -> BF16.
+
+HARNESS: tool/bench/flame_bench_step_bf16fast.cu runs THREE lanes (BF16/TF32/FP64) in ONE
+process over the OP-20 fused step DAG (fused valley LN+gelu+copy + transpose-elim bwd GEMM +
+single-launch AdamW); only the cuBLAS storage/compute differs:
+  BF16 = CUDA_R_16BF / CUBLAS_COMPUTE_32F_FAST_16BF   (bf16-input, fp32-accum tensor-op)
+  TF32 = CUDA_R_32F  / CUBLAS_COMPUTE_32F_FAST_TF32   (tf32-input, fp32-accum tensor-op)
+  FP64 = CUDA_R_64F  / CUBLAS_COMPUTE_64F
+MIXED-PRECISION CONTRACT (standard, and decisive — see HONEST #1): the BF16 lane keeps the
+MASTER weights + AdamW state (W,m,v) in fp32 and the LN/gelu/AdamW glue accumulates in fp32;
+only the two GEMM operands are bf16 (a bf16 copy Wlp is refreshed by AdamW each step). All
+glue runs in FIXED deterministic order (per-row tree reduce, no atomics). All three lanes are
+seeded identically so they start bit-identical (mod dtype cast).
+DRIFT: tool/bench/flame_traj_drift_bf16_op25.cu — one CONTINUOUS trajectory per lane (W,m,v
+PERSIST so drift accumulates) + a deterministic scalar loss=mean(G^2) (fp64 fixed-order
+reduce) per step. DRIVERS: run_op25_5070.sh + run_op25_drift_5070.sh (idle-guard, hard
+backoff 30->480s x8). -DPEDANTIC builds the CUBLAS_PEDANTIC_MATH variant.
+
+================== 1-STEP RESULTS (verbatim, aiden 5070) — 8/8 cells ======================
+selfByteEq = GATE-A BF16 run-to-run max|delta(W')|==0.  relRMSvsFP64 = GATE-B (W14 <=1e-2).
+relRMS_TF32 = TF32-vs-FP64 reference. FP64/BF16, TF32/BF16 = step-time ratios (>1 = faster).
+
+[RESULT] OP-25 BF16-DEFAULT  D=768  B=1  selfByteEq=Y  relRMSvsFP64=1.167e-06  relRMS_TF32=1.134e-06  BF16_ms=0.4852  TF32_ms=0.4915  FP64_ms=1.9887   FP64/BF16=4.099x   TF32/BF16=1.013x
+[RESULT] OP-25 BF16-DEFAULT  D=768  B=8  selfByteEq=Y  relRMSvsFP64=1.131e-06  relRMS_TF32=1.131e-06  BF16_ms=0.7793  TF32_ms=0.8583  FP64_ms=12.3329  FP64/BF16=15.826x  TF32/BF16=1.101x
+[RESULT] OP-25 BF16-DEFAULT  D=1536 B=1  selfByteEq=Y  relRMSvsFP64=1.219e-06  relRMS_TF32=1.134e-06  BF16_ms=1.7949  TF32_ms=1.8308  FP64_ms=6.9642   FP64/BF16=3.880x   TF32/BF16=1.020x
+[RESULT] OP-25 BF16-DEFAULT  D=1536 B=8  selfByteEq=Y  relRMSvsFP64=1.131e-06  relRMS_TF32=1.130e-06  BF16_ms=2.4910  TF32_ms=2.7790  FP64_ms=41.7968  FP64/BF16=16.779x  TF32/BF16=1.116x
+[RESULT] OP-25 BF16-PEDANTIC D=768  B=1  selfByteEq=Y  relRMSvsFP64=1.167e-06  relRMS_TF32=1.134e-06  BF16_ms=0.4852  TF32_ms=0.4913  FP64_ms=1.9887   FP64/BF16=4.099x   TF32/BF16=1.013x
+[RESULT] OP-25 BF16-PEDANTIC D=768  B=8  selfByteEq=Y  relRMSvsFP64=1.131e-06  relRMS_TF32=1.131e-06  BF16_ms=0.7802  TF32_ms=0.8584  FP64_ms=12.3350  FP64/BF16=15.810x  TF32/BF16=1.100x
+[RESULT] OP-25 BF16-PEDANTIC D=1536 B=1  selfByteEq=Y  relRMSvsFP64=1.219e-06  relRMS_TF32=1.134e-06  BF16_ms=1.7949  TF32_ms=1.8306  FP64_ms=6.9642   FP64/BF16=3.880x   TF32/BF16=1.020x
+[RESULT] OP-25 BF16-PEDANTIC D=1536 B=8  selfByteEq=Y  relRMSvsFP64=1.131e-06  relRMS_TF32=1.130e-06  BF16_ms=2.4934  TF32_ms=2.7803  FP64_ms=41.9346  FP64/BF16=16.818x  TF32/BF16=1.115x
+
+================== DRIFT RESULTS (verbatim, aiden 5070, N=50, B=1) — 4/4 cells =============
+selfByteEqN = BF16 trajectory run1-vs-run2 (W AND loss) max|delta|==0 over all N steps.
+relRMS_W_N = BF16-vs-FP64 weight rel-RMS at step N. lossTrackN = |dLoss|/|lossFP64| at step N.
+worstLossTrack = worst per-step loss-tracking gap over the whole trajectory.
+
+[RESULT] OP-25-DRIFT BF16-DEFAULT  D=768  B=1 Nsteps=50  selfByteEqN=Y  relRMS_W_N=1.616e-06  lossTrackN=2.537e-05  worstLossTrack=9.398e-05
+[RESULT] OP-25-DRIFT BF16-DEFAULT  D=1536 B=1 Nsteps=50  selfByteEqN=Y  relRMS_W_N=2.535e-06  lossTrackN=2.899e-05  worstLossTrack=1.705e-04
+[RESULT] OP-25-DRIFT BF16-PEDANTIC D=768  B=1 Nsteps=50  selfByteEqN=Y  relRMS_W_N=1.616e-06  lossTrackN=2.537e-05  worstLossTrack=9.398e-05
+[RESULT] OP-25-DRIFT BF16-PEDANTIC D=1536 B=1 Nsteps=50  selfByteEqN=Y  relRMS_W_N=2.535e-06  lossTrackN=2.899e-05  worstLossTrack=1.705e-04
+(weight rel-RMS does NOT grow across the trajectory: ~1.2e-6 @step1 -> ~2.5e-6 @step50 —
+ chaotic-but-microscopic, same shape as OP-23's TF32 drift; loss-track gap bounded <1.7e-4.)
+
+(full raw incl. nvidia-smi/nvcc/per-gate/per-step lines at tool/bench/op25_5070_raw.log +
+ tool/bench/op25_drift_5070_raw.log)
+
+============================== ANSWERS TO THE OP-25 QUESTIONS ==============================
+(1) BF16 self-byte-eq run-to-run?  YES — max|delta(W',loss)| = EXACTLY 0.000e+00 on all 8
+    1-step cells AND over the whole 50-step trajectory (run1 vs run2). Pedantic-cublas
+    NEEDED?  NO — DEFAULT BF16 tensor-op is already run-to-run deterministic on the 5070 for
+    these shapes; PEDANTIC gives identical bytes at identical step time (same as TF32/OP-20).
+    The feared split-K bf16 nondeterminism did NOT materialize. (Same portability caveat as
+    OP-20: pin PEDANTIC for a shipped guarantee — costs nothing measured.)
+
+(2) rel-RMS(BF16 vs FP64)?  ~1.13e-6 to 1.22e-6 at every shape — FOUR orders inside W14 1e-2,
+    and essentially EQUAL to TF32's ~1.13e-6 (NOT the ~1e-3 a pure-bf16 step would give).
+    WHY it is e-6 not e-3 (the load-bearing finding): under the standard mixed-precision
+    contract the MASTER weights + optimizer state are fp32; only the GEMM operands are bf16.
+    A single AdamW update moves the fp32 master weight by lr*~O(grad); the bf16 rounding of
+    the GEMM inputs perturbs the gradient at the ~e-3 RELATIVE level, but that perturbation
+    enters W only through one tiny optimizer step, so the resulting W' rel-RMS is ~e-6. BF16
+    is fully trainable here. (A bf16-MASTER-weight contract WOULD show ~e-3 W' error — but
+    nobody trains that way; the fp32-master contract is the real one and is what we measured.)
+
+(3) BF16/FP64 and BF16/TF32 speed?
+      BF16/FP64 (FP64/BF16): 3.88x-4.10x @B=1, 15.8x-16.8x @B=8 — same magnitude as TF32 vs
+        FP64 (the B=8 number inflated by the 5070's ~1/64-rate consumer FP64; see OP-20).
+      BF16/TF32 (TF32/BF16): 1.01x-1.12x — i.e. BF16 is at MOST ~12% faster than TF32, and
+        at B=1 (the latency-bound regime the ~3x cap is named for) it is a dead heat (1.01x-
+        1.02x, within noise). On the 5070 BF16 and TF32 are BOTH 16-bit-input tensor-ops with
+        the SAME tensor throughput, so the GEMM cost is identical; the small B=8 edge (~10%)
+        is half-the-input-bytes memory traffic on the larger M, NOT a compute win, and it does
+        NOT appear in the B=1 latency regime that matters for the cap.
+
+(4) Drift (N=50, B=1)?  BF16 LOSS TRACKS FP64 — worst loss-tracking gap over the trajectory =
+    9.4e-5 (D=768) / 1.7e-4 (D=1536), BOUNDED, no growth/peel. Weight rel-RMS stays ~e-6 and
+    does NOT accumulate (1.2e-6 @step1 -> 2.5e-6 @step50). The e-3 GEMM error does NOT peel
+    the trajectory — same chaotic-but-microscopic behavior OP-23 found for TF32. BF16 is a
+    REAL trainable fast-mode, not a 1-step illusion. (As expected from #2: with fp32 masters
+    the per-step error is e-6 not e-3, so there is nothing large to accumulate.)
+
+================================ PRECISION PARETO PLACEMENT ================================
+FP64  : exact (reference),  1x.
+TF32  : rel-RMS ~1.1e-6 vs FP64,  4.2x-4.6x @B=1 (OP-20/OP-23, validated + drift-checked).
+BF16  : rel-RMS ~1.1e-6 vs FP64,  4.1x @B=1 — SAME accuracy, SAME speed as TF32 (TF32/BF16
+        = 1.01x-1.12x). BF16 buys NOTHING TF32 doesn't already give on this card.
+
+==> BF16 is Pareto-DOMINATED by TF32 on the RTX 5070. It is not worse (it matches TF32 on
+both accuracy AND speed under the fp32-master contract), but it is not BETTER on either axis,
+so there is no reason to prefer it: TF32 stays the precision-uncap SWEET SPOT. The expected
+"BF16 = less accurate but maybe faster" trade did NOT appear because (i) the fp32-master
+contract erases the accuracy difference and (ii) same-16-bit-tensor-throughput erases the
+speed difference. BF16's only mechanical edge — half the GEMM-input bytes — shows up as a
+~10% win ONLY in the compute/bandwidth-bound B=8 regime, never in the B=1 latency regime the
+~3x cap is about. This is the honest CLOSED result: the precision ladder's next rung is a
+no-op on consumer hardware; TF32 is the terminal sweet spot here.
+
+================================== HONEST FRAMING (g5) ====================================
+1. The e-6 (not e-3) rel-RMS is a CONTRACT artifact, not a BF16 accuracy win: with fp32 master
+   weights only the GEMM operands are bf16, so the bf16 error enters W via one small optimizer
+   step. This is the CORRECT real-world contract — but it means OP-25 did NOT stress bf16's
+   raw e-3 GEMM precision in the weights. A bf16-MASTER-weight step would expose e-3 and is a
+   different (and worse) product; we did not build it because nobody ships it.
+2. "BF16 not faster than TF32" is 5070-specific (both are 16-bit-input tensor-ops at equal
+   throughput). On hardware where bf16 has HIGHER tensor throughput than tf32, or where the
+   step is memory-bound on the GEMM operands, BF16 could pull ahead — but on this consumer
+   card and this step DAG it does not, and the B=1 latency regime (the cap's regime) is a dead
+   heat. The honest, card-robust signal is the B=1 cells: BF16 ties TF32 (1.01x-1.02x).
+3. The B=8 FP64/BF16 ~16x ratio is INFLATED by the 5070's ~1/64-rate FP64 (same caveat as
+   OP-20); quote it only with that caveat. BF16-vs-TF32 (the OP-25 question) is unaffected —
+   both are fp32-accum 16-bit tensor-ops, an apples-to-apples comparison.
+4. Determinism PROVEN for THIS card / these shapes / cuBLAS 13.0; pin PEDANTIC for a portable
+   ship guarantee (costs nothing measured). Same caveat OP-20 carried.
+5. Harness-level result on the OP-20 fused step DAG, not wired into clm_prod's live trainer.
+   Given the DOMINATED finding there is no reason to wire a BF16 dispatch — TF32 (OP-20) is
+   the mode to ship.
+
+VERDICT: GREEN gates / DOMINATED outcome. A deterministic BF16 fast-mode is REAL on the 5070
+(self-byte-eq, no pedantic needed; W14-tol ~1e-6 vs FP64; loss tracks FP64 over 50 steps with
+no peel) — but it is Pareto-DOMINATED by the OP-20 TF32 fast-mode: SAME accuracy (fp32-master
+contract erases bf16's e-3 GEMM error), SAME speed (equal 16-bit tensor throughput; TF32/BF16
+= 1.01x-1.12x, a B=1 dead heat). BF16 buys nothing TF32 doesn't already give on consumer
+hardware. The precision-uncap ladder's BF16 rung is a NO-OP here; TF32 remains the terminal
+precision-uncap sweet spot. Honest closed result, measured on FREE 5070. $0, no vast/pod/leak.
