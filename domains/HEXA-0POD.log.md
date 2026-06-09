@@ -177,3 +177,27 @@ vs-FP64 ~1e-4 = the TF32 10-bit-mantissa truncation floor, same for cuBLAS). SHI
 folded into the production owngemm_sm120.cu (re-verified on aiden: @1024 24.93 TFLOP/s 1.13x / @2048 29.86
 1.02x, gate PASS). BK=32 / 3-stage kept OUT (closed-negative on consumer card). Best sm_120 TF32 own-GEMM
 now 24.93 TFLOP/s @1024 (1.13x off cuBLAS, was 1.15x). Verdict .verdicts/hexa-0pod/F-OP1B-SM120-PIPE.txt.
+
+## OP-3b — .v2 vectorized C-store epilogue on the BF16 sm_120 own-GEMM (aiden RTX 5070) — GREEN/SHIP
+Applied OP-1b's ONE bit-exact-positive lever — the .v2 (float2) vectorized C-store epilogue — to the BF16
+path of owngemm_sm120_bf16.cu (mma.sync m16n8k16 bf16). The BF16 mma OUTPUT fragment is fp32 with the
+IDENTICAL m16n8 C layout as the TF32 path (c0/c1 and c2/c3 contiguous at cols 2*tig, 2*tig+1), so the
+TF32 .v2 epilogue ports VERBATIM: each pair fuses to one 64-bit store. Added a -DEPILOGUE_SCALAR (OP-3
+baseline) compile twin + MODE==3 raw-f32 C dump so the build proves byte-identity by `cmp`. NARROW scope
+per OP-1b: only .v2 — NOT BK=32 / 3-stage cp.async (CLOSED-NEG on the 5070 48KB smem cap) nor the 128x64
+register tile (CLOSED-NEG, OP-1). aiden RTX 5070 (free, GPU 0%/2MiB verified): .v2 helped BIT-EXACTLY —
++2.1% @1024 (scalar 26.06 → .v2 26.60 TFLOP/s, off-cuBLAS-BF16 2.10x → 2.06x) / +1.0% @2048 (33.20 →
+33.52). cuBLAS-BF16 ~54.8 @1024 / ~62-67 @2048; new multiple ~2.06x @1024, ~1.92-1.97x @2048. GATE g5
+(bit-faithful, UNCHANGED — store-vectorization not math): rel-RMS vs FP64 2.65e-3@768 / 6.70e-3@1024 /
+8.01e-3@2048 ≤1e-2 PASS; determinism max|d|=0 bitdiff=0/N HELD; BYTE-IDENTICAL to OP-3 scalar baseline
+@1024 & @2048 (cmp clean → rel-RMS vs OP-3 = 0). HONEST: the ~2x BF16 gap is the doubled cuBLAS-BF16
+roofline (roofline-bound), so the store-only lever can only give ~1-2% — delivered exactly that, same
+magnitude as OP-1b's TF32 +1.7%. SHIP (positive + bit-exact, no regression). After OP-3b the consumer-card
+own-GEMM's identity-preserving lever ladder is EXHAUSTED. 0-pod, NO vast, NO leak (pool host). Verdict
+.verdicts/hexa-0pod/F-OP3B-BF16-EPILOGUE.txt.
+
+DEPLETION NOTE: with OP-3b shipped the 0-pod-actionable backlog is DRAINED. Remaining deferred items all
+need a GPU build env / frozen-seed runtime, OUT of 0-pod scope: OP-2b (runtime.c forge_dispatch_matmul_t
+wrapper body — self/runtime.c build-time-assembled in clm_prod_gpu env), OP-2c (batched-expert transpose-
+elim — needs the OP-2b wrapper first), OP-5c (forge error-path/dtype-edge/determinism — can't be byte-eq
+gated without a kernel build). No further 0-pod follow-up surfaces from OP-3b (the lever ladder is closed).
