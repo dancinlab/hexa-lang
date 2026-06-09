@@ -3273,9 +3273,30 @@ fn cmd_build(src, out, c_only, target, shared) {
         println("  [rt] HEXA_PREBUILT_RUNTIME — linking prebuilt: " + __bld_prebuilt)
         _rt_obj = __bld_prebuilt
     } else if shared != "1" && len(target) == 0 && len(env("HOME")) > 0 {
+        let _rt_cache = env("HOME") + "/.hexa-cache"
+        // Layer-2 rescue (broken self symlink / linux install left runtime.c
+        // ungenerated — handoff 87a5f82e): when runtime.c is ABSENT the
+        // content-hash path below can neither compute its sha key NOR compile
+        // the source, so the final link dies "runtime.c file not found" and the
+        // project CANNOT use the self-hosted toolchain. Fall back to the
+        // installer's FIXED-NAME prebuilt object (~/.hexa-cache/runtime.prebuilt.o,
+        // dropped by install.sh's pre-warm) — its path depends on NEITHER
+        // runtime.c NOR the self symlink, so every project still links a working
+        // runtime with the source gone. Triggers ONLY when runtime.c is missing
+        // — the normal content-hash path stays byte-for-byte identical when the
+        // source exists (no staleness risk on the hot path).
+        if !file_exists(__runtime_c) {
+            let _rt_resc = _rt_cache + "/runtime.prebuilt.o"
+            if file_exists(_rt_resc) {
+                println("  [rt] runtime.c absent — linking installer prebuilt: " + _rt_resc)
+                _rt_obj = _rt_resc
+            } else {
+                println("  [rt] runtime.c absent AND no " + _rt_resc + " — re-run install.sh to drop a prebuilt runtime")
+            }
+        }
+        if len(_rt_obj) == 0 {
         let _rt_sha = exec("cat '" + __self_dir + "'/runtime*.c '" + __self_dir + "'/runtime*.h '" + __self_dir + "'/native/*.c '" + __self_dir + "'/native/*.h 2>/dev/null | shasum -a 1 2>/dev/null | cut -d' ' -f1").trim()
         if len(_rt_sha) > 0 {
-            let _rt_cache = env("HOME") + "/.hexa-cache"
             let _rt_cand = _rt_cache + "/runtime." + _rt_sha + ".o"
             if !file_exists(_rt_cand) {
                 exec("mkdir -p '" + _rt_cache + "' 2>/dev/null")
@@ -3300,6 +3321,7 @@ fn cmd_build(src, out, c_only, target, shared) {
                 }
             }
             if file_exists(_rt_cand) { _rt_obj = _rt_cand }
+        }
         }
     }
     // Runtime input to the final link: cached object when available, else
