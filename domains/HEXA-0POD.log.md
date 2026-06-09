@@ -337,3 +337,25 @@ Behavior-preserving: NO trainer logic changed (characterization/verification add
 (fwd conv im2col==direct, B=1) — OP-7 locked the B=1 conv bit-exactly, OP-10 maps exactly where B>1 departs.
 $0 — pure local CPU `hexa run`, no GPU / no pool / no vast. Oracle stdlib/flame/clm_conv_window_seam_eq.hexa ·
 verdict .verdicts/hexa-0pod/F-OP10-CONV-SEAM-ORACLE.txt.
+
+## OP-11 — CE loss + softmax-gradient byte-eq CPU oracle (0-GPU) · 🟢 max|Δ|=0
+
+Continuing the OP-2/OP-7/OP-8/OP-9/OP-10 determinism-oracle series. Added a LOCAL `hexa run` (0-GPU) oracle that
+bit-exactly locks the flame CLMConvMoE LOSS path — the flame_h100_h200_closeout-flagged "CE/softmax-grad host
+glue". Two independent identities, each replaying its OWN production exp impl (the subtle hazard: the two CE
+entry points use DIFFERENT exp):
+  (A) BWD fused-grad: clm_ce_grad (clm_prod.hexa:919, libm `exp`) == (softmax(logits) − onehot(target))/T.
+  (B) FWD loss scalar: nn_ce_loss_allpos (nn_lib.hexa:957, `dt_exp`/`dt_ln` flame_math Taylor, NOT libm,
+      NOT _moe_exp) == definitional mean-NLL.
+`hexa run` PASS, max|Δ|=0 across 6 shapes each (V=7..256 CLM-scale, varied T, T=1 edge).
+
+HONEST FINDING (g5) — a REAL associativity gap, found + resolved (NOT faked): the backward grad's TARGET INDEX
+is float-sensitive. Production writes (p·invT) for every v THEN subtracts invT at tgt → (p_tgt·invT)−invT; an
+algebraically-equal fused reference (p_tgt−1)·invT is float-DIFFERENT. The FIRST oracle run showed grad
+max|Δ| = 1.38778e-17 at T12/V7 (all others 0). Fix = replay the EXACT production op order (scale-then-subtract,
+NOT refold) → genuine max|Δ|=0 everywhere, no eps. Production order = SSOT (clm_prod.hexa:933-937).
+
+CANONICAL ORDER (SSOT): BWD = libm exp, per-row max-sub, v-ascending denom, grad=p/T then tgt−=1/T;
+FWD = dt_exp/dt_ln, per-row max-sub, v-ascending denom, p_t≥1e-6 clamp, t-ascending loss sum, mean/T.
+Behavior-preserving: NO trainer logic changed (oracle addition only). $0 — pure local CPU, no GPU/pool/vast.
+Oracle stdlib/flame/clm_prod_ce_softmax_grad_eq.hexa · verdict .verdicts/hexa-0pod/F-OP11-CE-SOFTMAX-ORACLE.txt.
