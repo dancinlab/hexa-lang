@@ -10,6 +10,24 @@ loop targets what the consumer card + code can carry.
 
 ## milestones (loop self-feeds; add as discovered)
 
+<!-- ANCHOR:OP-24-TF32-LIVEWIRE (unique anchor — wire OP-20's validated deterministic TF32 fast-mode into the live forge GEMM dispatch, env-gated, byte-eq-safe, aiden verify) -->
+- [x] **OP-24 — wire deterministic TF32 fast-mode into the live forge GEMM dispatch (env-gated, byte-eq-safe, aiden verify)** —
+  GREEN (dispatch-unit). OP-20's PROVEN deterministic TF32 fast-mode is now an env-gated OPT-IN
+  (HEXA_TF32_FASTMODE) branch in the LIVE forge projection-GEMM dispatch `_hx_cuda_farr_matmul_gpu`
+  (self/cuda/runtime_cuda_emit.hexa — the path the real CLMConvMoE trainer rides; same fn OP-2 wired).
+  FP64 cublasDgemm stays the DEFAULT, byte-identical when the flag is off; the TF32 branch casts the
+  FP64 farr device buffers down to fp32, runs cublasGemmEx CUBLAS_COMPUTE_32F_FAST_TF32 on a PEDANTIC-
+  pinned handle (OP-20's portable self-byte-eq guarantee), casts the result back up. Durable landing =
+  the tracked runtime_cuda_emit.hexa SSOT (NOT a frozen seed — no restore_frozen_seeds patch needed).
+  aiden RTX 5070 dispatch-unit verify (op24_tf32_livewire_dispatch.cu replays the EXACT wired codepath),
+  4/4 cells PASS all 3 gates: GATE-A FP64-default byte-identical max|Δ|=0; GATE-B TF32-live self-byte-eq
+  max|Δ|=0 (PEDANTIC confirms determinism); GATE-C W14-tol rel-RMS ~2.9e-4 (~34x inside 1e-2);
+  SPEED 29.9–51.0x (GEMM-only; OVERSTATES the trainer step — consumer-5070 FP64 ~1/64 throttle + no
+  glue dilution; card-robust signal = OP-20's B=1 ~4.2x). HONEST (g5): dispatch-UNIT, not full-trainer
+  — full end-to-end needs the clm_prod_gpu GPU build (OP-2b-class; exact remaining step named in verdict:
+  build with -DHEXA_CUDA, run trainer HEXA_TF32_FASTMODE=1 vs unset, report loss self-byte-eq + wall
+  step/s). FREE aiden, $0, no vast/pod/leak. Verdict .verdicts/hexa-0pod/F-OP24-TF32-LIVEWIRE.txt.
+
 <!-- ANCHOR:OP-25-BF16-FASTMODE (unique anchor — next precision-uncap rung: deterministic BF16 fast-mode; self-byte-eq + W14-tol vs FP64 + speed vs TF32; precision Pareto placement BF16-vs-TF32; aiden 5070) -->
 - [x] **OP-25 — deterministic BF16 fast-mode: self-byte-eq + W14-tol + speed vs TF32 (precision Pareto, aiden)** —
   GREEN gates / DOMINATED outcome (honest closed result). Probed the precision-uncap ladder's NEXT rung after

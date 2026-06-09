@@ -746,3 +746,30 @@ NOT claimed. $0, no vast/pool/pod. Verdict .verdicts/hexa-0pod/F-OP21-HOPPER-WAR
 - RESIDUAL (honest latent, OP-19b deferred): GELU libm `erf` (fwd+bwd) is the same hole; no bit-accurate
   deterministic erf in-tree + `erf` won't link on aiden's runtime → documented follow-up.
 - $0 · 0-GPU · free pool (aiden/ghost) · no vast · no pod. Verdict .verdicts/hexa-0pod/F-OP19-CROSSPLATFORM-EXACT.txt.
+
+## OP-24 — wire deterministic TF32 fast-mode into the live forge GEMM dispatch (env-gated, byte-eq-safe, aiden) 🟢 dispatch-unit
+- GOAL: take OP-20's PROVEN deterministic TF32 fast-mode (self-byte-eq + W14-tol vs FP64, 4.2x @B=1) +
+  OP-23's validated N-step trajectory and WIRE it into the REAL flame forge GEMM dispatch the CLMConvMoE
+  trainer rides — env-gated like HEXA_OWN_GEMM/HEXA_FUSE_*, FP64 default UNCHANGED. The OP-2-class
+  harness-win→live-trainer wire the F-OP20 verdict named as the deferred follow-up.
+- DISPATCH SITE: self/cuda/runtime_cuda_emit.hexa `_hx_cuda_farr_matmul_gpu` (the forge row-major
+  projection GEMM; same fn OP-2 touched for transpose-elim). Default = cublasDgemm (FP64); prior only
+  opt-in was HEXA_OWN_GEMM (naive _hx_k_gemm). runtime_cuda_emit.hexa is git-TRACKED, NOT a frozen seed
+  (FROZEN_SEEDS = runtime.c + .c fragments + hexa_cc.c) → durable landing is the ordinary branch→PR path.
+- WIRE: new `else if (_forge_tf32_fastmode())` branch (env HEXA_TF32_FASTMODE). FP64 farr buffers are
+  double; TF32 path casts A,B→fp32 into SCRATCH (never mutates inputs → FP64 default byte-identical),
+  runs cublasGemmEx CUBLAS_COMPUTE_32F_FAST_TF32 on a SEPARATE PEDANTIC-pinned handle g_cublas_tf32
+  (OP-20's portable self-byte-eq ship guarantee), casts result fp32→FP64 C. Cast = fixed-order elementwise
+  (no reduction/atomics) → no determinism hazard. g_cublas (FP64) untouched, stays fp64-strict.
+- VERIFY (aiden RTX 5070 sm_120, CUDA 13.0, FREE pool, idle-guarded): op24_tf32_livewire_dispatch.cu
+  replays the EXACT wired codepath (same FP64 buffers, cast kernels, PEDANTIC handle, arg layout) — the
+  LIVE dispatch logic in isolation, not the OP-20 fp32-storage harness. 4/4 cells (D={768,1536}×B={1,8})
+  PASS all 3 gates: GATE-A FP64-default byte-id max|Δ|=0; GATE-B TF32-live self-byte-eq max|Δ|=0;
+  GATE-C W14 rel-RMS ~2.94e-4 (~34x inside 1e-2); SPEED 29.9–51.0x (GEMM-only).
+- HONEST (g5): dispatch-UNIT not full-trainer. rel-RMS 2.9e-4 = RAW single-GEMM output (OP-20's 1.1e-6
+  was post-AdamW weight delta — both pass, different metric). 30-51x OVERSTATES trainer step (5070 FP64
+  ~1/64 throttle + no glue dilution); card-robust signal = OP-20's B=1 ~4.2x. EXACT remaining OP-2b-class
+  step: build clm_prod_gpu -DHEXA_CUDA on aiden, run trainer HEXA_TF32_FASTMODE=1 vs unset, report loss
+  self-byte-eq + wall step/s. PEDANTIC PINNED (not optional) = portable determinism; GATE-B=0 confirms.
+- $0 · free aiden · no vast · no pod · aiden /tmp cleaned (no residue). Verdict F-OP24-TF32-LIVEWIRE.txt;
+  raw tool/bench/op24_5070_raw.log.
