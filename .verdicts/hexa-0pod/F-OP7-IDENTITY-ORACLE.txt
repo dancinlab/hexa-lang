@@ -1,1 +1,54 @@
-F-OP7-CONV-IM2COL-EQ — WIP skeleton (verification pending hexa run)
+════════════════════════════════════════════════════════════════════════════
+F-OP7-CONV-IM2COL-EQ — forward causal-dilated conv1d: im2col+GEMM == direct conv
+HEXA-0POD OP-7 · CPU-LOCAL byte-eq ORACLE · 0-GPU (`hexa run`) · $0
+════════════════════════════════════════════════════════════════════════════
+
+IDENTITY LOCKED
+  The flame CLMConvMoE trainer's forward conv (clm_prod.hexa conv1d_via_forge)
+  computes a causal dilated conv1d as:
+      xcol[T,Kdim] = _clmp_im2col(x)         (gather, col index j = ci*K + k)
+      mm[T,Cout]   = forge_dispatch_matmul(xcol[T,Kdim], Wt[Kdim,Cout])
+      y[t,co]      = mm[t,co] + b[co]
+  with _clmp_im2col laying out xcol[t, ci*K+k] = x[p,ci], p = t - dil*(K-1-k),
+  and the GEMM contracting over Kdim in j-ASCENDING order.
+
+  OP-7 proves this is BIT-FOR-BIT identical to a DIRECT sliding-window conv
+  reference that never materializes the im2col buffer or runs a GEMM:
+      y[t,co] = b[co] + Σ_ci Σ_k x[p,ci]*w[co, ci*K+k],  p = t - dil*(K-1-k)
+  iterating ci-OUTER, k-INNER. Since j = ci*K + k makes that nested (ci,k)
+  order EXACTLY the j-ascending GEMM contraction order, both forms accumulate
+  the identical products in the identical sequence (zero-pad p<0 contributes 0
+  in both) ⇒ max|Δ| = 0. This is a true bit-exact re-layout identity, NOT an
+  associativity case — no machine-eps tolerance is needed or claimed.
+
+ORACLE
+  stdlib/flame/clm_prod_conv_im2col_eq.hexa  (pure host arithmetic, `hexa run`)
+  _conv_im2col  = OLD path  (im2col + matmul + bias add) — mirrors conv1d_via_forge
+  _conv_direct  = NEW path  (direct sliding-window conv, ci-outer k-inner)
+  Both fed the same deterministic LCG fixture (reproducible bytes, no rng dep).
+
+GATE (g5) — `hexa run` PASS, max|Δ| = 0 across all test shapes:
+
+  $ hexa run stdlib/flame/clm_prod_conv_im2col_eq.hexa
+  clm_prod_conv_im2col_eq — F-OP7 forward conv im2col==direct byte-eq (CPU oracle)
+    y max|Δ|  T8 C4 K3 d1 = 0.0
+    y max|Δ|  T8 C4 K3 d2 = 0.0
+    y max|Δ|  T16 C6 K3 d1 = 0.0
+    y max|Δ|  T12 C5x7 K4 d2 = 0.0
+    y max|Δ|  T10 C3x5 K5 d3 = 0.0
+  F-OP7-CONV-IM2COL-EQ = 1
+  PASS — im2col+matmul fwd conv == direct conv byte-eq (max|Δ|=0, all cases)
+
+  Shapes covered: K=3/4/5, dilation 1/2/3, Cin==Cout and Cin!=Cout, varied T —
+  the zero-pad seam regime (wide dilation, p<0 boundary) included (T10 C3x5 K5 d3).
+
+VERDICT: GREEN. Forward conv im2col+GEMM layout transform is bit-exactly locked
+  (max|Δ| = 0, no tolerance) against a direct sliding-window reference. A future
+  refactor that reorders the im2col layout or swaps the contraction axis order
+  would now break this oracle. Behavior-preserving: NO trainer logic changed —
+  verification/oracle addition only.
+
+HONEST FINDING: none non-bit-exact. The identity is genuinely exact (matched
+  FMA order), so max|Δ|=0 is real, not faked. Companion to F-OP2's transpose-elim
+  oracle (the backward dW analog).
+════════════════════════════════════════════════════════════════════════════

@@ -110,9 +110,16 @@ loop targets what the consumer card + code can carry.
   aiden). Best: 24.93 TFLOP/s @1024 (1.13x off cuBLAS, was 1.15x) / 29.86 @2048 (1.02x). Verdict
   .verdicts/hexa-0pod/F-OP1B-SM120-PIPE.txt.
 
-- [ ] **OP-7 — byte-eq CPU oracle for a flame math identity (0-GPU)** — in the spirit of OP-2's
-  transpose-elim oracle, add a LOCAL `hexa run` (0-GPU) oracle that bit-exactly locks a deterministic
-  layout/re-association the flame trainer relies on, so a future refactor can't silently break determinism.
+- [x] **OP-7 — byte-eq CPU oracle for a flame math identity (0-GPU)** — in the spirit of OP-2's
+  transpose-elim oracle, added a LOCAL `hexa run` (0-GPU) oracle that bit-exactly locks the flame trainer's
+  FORWARD causal-dilated conv1d layout transform: the im2col+GEMM path (conv1d_via_forge) ==
+  a DIRECT sliding-window conv reference, max|Δ|=0. Because the im2col col index j=ci*K+k makes the direct
+  reference's (ci-outer, k-inner) accumulation order EXACTLY the j-ascending GEMM contraction order, the two
+  are bit-for-bit equal (a true re-layout identity, NOT an associativity case — no tolerance). `hexa run`
+  PASS, max|Δ|=0 across 5 shapes (K=3/4/5, dil=1/2/3, Cin==Cout & Cin!=Cout, zero-pad seam regime).
+  Behavior-preserving: NO trainer logic changed (oracle/verification addition only). The forward companion to
+  OP-2's backward-dW transpose-elim oracle. Oracle stdlib/flame/clm_prod_conv_im2col_eq.hexa · verdict
+  .verdicts/hexa-0pod/F-OP7-IDENTITY-ORACLE.txt.
 
 ## deferred (0-pod follow-ups surfaced by the loop — self-feed)
 
