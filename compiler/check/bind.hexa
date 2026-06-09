@@ -1262,7 +1262,7 @@ fn _bind_builtin_names() -> [string] {
         "term_isatty_stdin", "term_isatty_stdout", "term_poll_stdin", "term_pty_reap", "term_pty_spawn_sh", "term_raw_enter", "term_raw_restore", "term_read_byte",
         "term_sigint_pending", "term_sigwinch_pending", "term_winsize_cols", "term_winsize_rows", "term_write_str", "time_ms", "to_bool", "to_float",
         "to_int", "to_lower", "to_string", "to_upper", "trim", "true", "tty_isatty", "tty_ttyname",
-        "type_of", "u_floor", "umount", "unshare", "utc_compact_now", "utc_iso_format", "utc_iso_now", "utc_iso_parse",
+        "type_of", "typeof", "u_floor", "umount", "unshare", "utc_compact_now", "utc_iso_format", "utc_iso_now", "utc_iso_parse",
         "write_bytes_append_v", "write_bytes_append", "write_bytes_v", "write_bytes", "write_file", "x25519_keypair", "x25519_scalarmult",
         // Interp-recognised aliases / commonly-used names that the
         // legacy bind list missed; without them the typecheck rejects
