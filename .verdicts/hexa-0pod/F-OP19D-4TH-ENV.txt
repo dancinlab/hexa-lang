@@ -1,0 +1,177 @@
+════════════════════════════════════════════════════════════════════════════════
+ F-OP19D-4TH-ENV — 4th distinct environment (musl libc, Alpine) strengthens the
+ machine-independent byte-exact proof to span 3 DISTINCT libm implementations
+ HEXA-0POD OP-19d · 0-GPU · free pool ONLY (summer + docker/Alpine) · ZERO vast · $0
+════════════════════════════════════════════════════════════════════════════════
+
+GOAL
+  OP-19 (#3002) + OP-19b (#3008) + OP-19c (#3016) proved flame's deterministic
+  dt_exp/dt_erf folds byte-IDENTICAL on 3 platforms — arm64-macos (Darwin libm),
+  x86-linux (aiden, glibc), arm64-linux (pi5, glibc). OP-19c's KEY finding: the libm
+  exp/erf divergence is an OS/libc effect (glibc vs Darwin), NOT an ISA effect (pi5
+  arm64-linux tracked aiden x86-linux on the libm path, not the arm64-macos machine
+  it shares an arch with). The {x86,arm64}×{linux,macos} matrix's 4th cell (x86-macos)
+  has NO pool host (retired Intel Macs). This OP tests the result HARDER with a 4th
+  DISTINCT ENVIRONMENT that supplies a DIFFERENT libc entirely — musl (Alpine) — the
+  strongest test of "no libm dependence left": if dt_* match on musl too while libm
+  folds DIVERGE across glibc/musl/Darwin, that is definitive.
+
+────────────────────────────────────────────────────────────────────────────────
+ 1. THE 4th ENV CHOSEN — musl libc (Alpine Linux), 0-pod via docker on summer
+────────────────────────────────────────────────────────────────────────────────
+  Picked MUSL over a 4th glibc host (the task's priority: musl > summer-as-glibc):
+  musl is a 3rd DISTINCT libc/libm implementation (musl ≠ glibc ≠ Darwin), so it adds
+  a genuinely new libm impl, not just a 2nd cross-machine-same-OS data point. (summer's
+  own native glibc hexa was ALSO unusable this session — its bootstrap is broken: the
+  hexat transpiler is missing and the runtime_core.c rebuild fails 10 errors. So summer
+  contributed ONLY as the docker host for the Alpine/musl container, not as a glibc run.)
+
+  REACHABILITY (0-pod, free pool, $0 — NO vast, NO GPU, NO pod rental):
+    host        : summer (pool linux, 192.168.50.60) — has /usr/bin/docker 29.1.3
+    container   : alpine:latest  → musl libc, /lib/ld-musl-x86_64.so.1 (x86_64)
+    toolchain   : apk add clang(22.1.3) musl-dev linux-headers lld binutils gcc libgcc
+
+────────────────────────────────────────────────────────────────────────────────
+ 2. CAN HEXA RUN ON MUSL 0-POD? — YES, but only with a TEST-ONLY runtime shim
+    (a REAL hexa-runtime↔musl portability bug found + characterized + worked around)
+────────────────────────────────────────────────────────────────────────────────
+  hexa's compiler binary (hexa.real) is a glibc-dynamically-linked PIE → cannot run
+  under musl. But `hexa run` = transpile .hexa → C, then `clang … self/runtime.c -lm`
+  → native binary. So the GENERATED C of each oracle was transpiled on aiden (working
+  glibc hexa, `self/native/hexa_v2 oracle.hexa out.c`), then COMPILED + RUN inside the
+  Alpine/musl container. The produced binary links MUSL libc/libm:
+      ldd /tmp/exp_musl →  libc.musl-x86_64.so.1 => /lib/ld-musl-x86_64.so.1   (PROOF)
+  This is a legitimate musl test of the generated code: dt_exp/dt_erf are pure FP
+  (libc-independent); libm `exp`/`erf` resolve to MUSL's libm.
+
+  THREE musl-specific BUILD blockers surfaced + fixed (build-only, NOT numeric):
+   (a) self/native/net.c includes <sys/un.h>; runtime.c's `#define strlen hxlcl_strlen`
+       (line 1488) mangles musl's `size_t strlen(const char*)` proto (glibc's <sys/un.h>
+       doesn't redeclare strlen). Fix: clang `-include sys/socket.h -include sys/un.h …`
+       so the headers parse BEFORE the macro. (header-ordering only)
+   (b) Alpine base clang ships no linker → `-fuse-ld=lld` (+ apk lld).
+   (c) lld couldn't find crtbeginS.o/-lgcc → apk gcc + libgcc (CRT + libgcc).
+
+  THEN a REAL RUNTIME BUG (not build — genuine musl incompatibility), hit at process
+  init BEFORE any oracle code, gdb backtrace:
+      SIGSEGV in hxlcl_getenv (runtime.c:913)  ← _hexa_init_mem_cap (constructor)
+                                                ← musl do_init_fini / __libc_start_init
+    ROOT CAUSE: runtime.c:34 priority-101 ctor `hxlcl_capture_environ(int,char**,char**
+    envp){ hxlcl_environ = envp; }` + `#define environ hxlcl_environ`. The runtime's own
+    comment states it relies on "Darwin/dyld passes (argc,argv,envp,apple) to init
+    routines" — and glibc has the same .init_array constructor-args extension. **musl
+    does NOT pass argc/argv/envp to constructors** (they are called with NO args), so
+    `envp` is garbage → hxlcl_environ = garbage → _hexa_init_mem_cap's getenv("HEXA_MEM_
+    LIMIT") walks garbage → segfault, before main(). A genuine hexa-runtime↔musl libc-
+    ABI incompatibility (constructor calling convention), latent on glibc/Darwin.
+    WORKAROUND (TEST-ONLY, disclosed; NOT committed, NOT in any shipped path): patched a
+    THROWAWAY copy self/runtime_muslpatch.c so the ctor reads musl's real `extern char
+    **__environ` instead of the un-passed envp. This touches ONLY env capture — every
+    math / dt_* / libm path is byte-IDENTICAL to the unpatched runtime. With the shim,
+    both oracles run cleanly on musl (EXP-RC=0, ERF-RC=0).
+  HONEST: the env-capture ctor ABI bug is a real follow-up for the runtime (out of
+  OP-19d's measurement scope — fixing it is a guarded runtime source change + its own
+  verify/PR). It is at process init and is INDEPENDENT of the fold math.
+
+────────────────────────────────────────────────────────────────────────────────
+ 3. THE 4-ENVIRONMENT byte folds (verbatim oracle output)
+────────────────────────────────────────────────────────────────────────────────
+  Oracles: stdlib/flame/op19_crossplatform_selfcontained.hexa  (libm + dt_exp/dt_erf)
+           stdlib/flame/op19b_crossplatform_erf.hexa           (pure-FP dt_erf GELU)
+
+  musl (Alpine/summer) — VERBATIM:
+    ===OP19===
+      CEBWD-LIBM-bits   = 3352931952497630952
+      CEBWD-TAYLOR-bits = 7679248634312321699
+      GELUFWD-LIBM-bits   = 7314648833623304241
+      GELUFWD-TAYLOR-bits = 4548590605583584556
+      GELUBWD-LIBM-bits   = 8700963067286923736
+      GELUBWD-TAYLOR-bits = 636106759170901885
+    ===OP19B===
+      GELUFWD-DET-bits = 4548590605583584556
+      GELUBWD-DET-bits = 4249661408190172843
+
+  Darwin (local arm64-macos, this session, same oracle) — VERBATIM:
+      CEBWD-LIBM   = 7969105254299072804   GELUFWD-LIBM = 1521224270287218303
+      GELUBWD-LIBM = 3061716277569066716   (TAYLOR/DET folds = recorded, all match)
+  glibc (aiden x86-linux, this session):
+      CEBWD-LIBM   = 3352931952497630952   GELUFWD-LIBM = 6306829276275644424
+      GELUBWD-LIBM = 5500011732941122953
+  glibc (pi5 arm64-linux, OP-19c record):
+      CEBWD-LIBM   = 3352931952497630952   GELUFWD-LIBM = 3332333775004383127
+      GELUBWD-LIBM = 3938753516756680850
+
+────────────────────────────────────────────────────────────────────────────────
+ 4. THE 4-WAY cmp — DETERMINISTIC FOLDS BYTE-IDENTICAL ON ALL 4 ENVIRONMENTS
+────────────────────────────────────────────────────────────────────────────────
+  ┌────────────────────┬─────────────────────┬─────────────────────┬─────────────────────┬─────────────────────┐
+  │ deterministic fold │ arm64-macos Darwin  │ x86-linux glibc     │ arm64-linux glibc   │ x86 MUSL (Alpine)   │
+  │  (cmp target)      │ (recorded)          │ aiden (recorded)    │ pi5 (OP-19c)        │ (THIS OP — NEW)     │
+  ├────────────────────┼─────────────────────┼─────────────────────┼─────────────────────┼─────────────────────┤
+  │ CE-bwd  dt_exp     │ 7679248634312321699 │ 7679248634312321699 │ 7679248634312321699 │ 7679248634312321699 │
+  │ GELU FWD dt_erf    │ 4548590605583584556 │ 4548590605583584556 │ 4548590605583584556 │ 4548590605583584556 │
+  │ GELU BWD dt_erf    │ 4249661408190172843 │ 4249661408190172843 │ 4249661408190172843 │ 4249661408190172843 │
+  └────────────────────┴─────────────────────┴─────────────────────┴─────────────────────┴─────────────────────┘
+    dt_exp fold  == 7679248634312321699 ?  →  YES (musl == all 3 recorded)
+    dt_erf FWD   == 4548590605583584556 ?  →  YES (musl == all 3 recorded)
+    dt_erf BWD   == 4249661408190172843 ?  →  YES (musl == all 3 recorded)
+  4-ENVIRONMENT BYTE-IDENTICAL: YES. All three deterministic folds bit-for-bit equal on
+  Darwin + glibc-x86 + glibc-arm64 + musl-x86. NO divergence on the production path.
+
+────────────────────────────────────────────────────────────────────────────────
+ 5. # DISTINCT libm IMPLEMENTATIONS SPANNED — 3 (glibc · musl · Darwin); the libm
+    folds DIVERGE across them while dt_* stay identical — the DEFINITIVE confirmation
+────────────────────────────────────────────────────────────────────────────────
+  libm `erf` (GELU-FWD-LIBM) — ALL FOUR environments give a DIFFERENT value:
+      Darwin  arm64-macos : 1521224270287218303
+      glibc   x86  aiden  : 6306829276275644424
+      glibc   arm64 pi5   : 3332333775004383127
+      musl    x86  Alpine : 7314648833623304241   ← musl is a DISTINCT 3rd libm impl
+  (musl's erf differs from BOTH glibc AND Darwin; even the two glibc arch builds differ
+   from each other on this input — libm rounding is per-libc-and-arch.)
+  libm `exp` (CE-bwd-LIBM): musl 3352931952497630952 == glibc (x86+arm64), ≠ Darwin
+      7969105254299072804 — musl's exp happens to round this set like glibc, NOT Darwin;
+      so on the exp path the split is Darwin-vs-{glibc,musl}, confirming the OP-19c
+      thesis that the libm divergence is an OS/libc effect, now with a 3rd libc in hand.
+
+  → 3 DISTINCT libm IMPLEMENTATIONS spanned: glibc, musl, Darwin. The libm folds DIVERGE
+    across them (definitively on erf: 3 distinct values). The deterministic dt_exp/dt_erf
+    folds collapse ALL of them to identical bytes. This is the STRONGEST possible
+    confirmation that ONLY the deterministic dt_* path is machine-independent — libm
+    differs across glibc/musl/Darwin, dt_* identical on all.
+
+────────────────────────────────────────────────────────────────────────────────
+ SUMMARY
+────────────────────────────────────────────────────────────────────────────────
+   4th env chosen ........... MUSL libc (Alpine Linux), 0-pod via docker on summer.
+                              Why: 3rd DISTINCT libc/libm impl (musl≠glibc≠Darwin) —
+                              the strongest "no libm dependence left" test. (summer's
+                              native glibc hexa was bootstrap-broken; used only as the
+                              docker host.)
+   hexa runnable on musl .... YES, with a disclosed TEST-ONLY runtime shim. Found a REAL
+                              hexa-runtime↔musl bug: the priority-101 environ-capture
+                              ctor relies on the glibc/Darwin-only "(argc,argv,envp)→
+                              constructor" ABI; musl passes no args → segfault at init.
+                              Shim reads musl's extern __environ (env-capture ONLY; all
+                              math byte-identical). Build also needed -include header
+                              ordering + lld + gcc/libgcc CRT. Runtime ctor-ABI bug = a
+                              real follow-up for the runtime (separate guarded PR).
+   deterministic folds match  YES — 4-environment byte-identical: dt_exp 7679248634312321699
+                              · dt_erf FWD 4548590605583584556 · dt_erf BWD 4249661408190172843
+                              bit-for-bit on Darwin + glibc-x86 + glibc-arm64 + musl-x86.
+   # distinct libm impls .... 3 (glibc · musl · Darwin). libm erf gives 4 different
+                              values across the 4 envs (3 distinct impls + per-arch glibc);
+                              dt_* identical on all → ONLY dt_* is machine-independent.
+   divergence / defect ...... NONE on the deterministic (production) path. The musl init
+                              segfault is a libc-ABI portability bug in env capture, hit
+                              before any fold math; characterized + worked around honestly.
+   cost ..................... $0 · 0-GPU · free pool (summer docker + Alpine) · ZERO vast
+
+   F-OP19D-4TH-ENV : musl (Alpine) reproduces the OP-19/19b/19c deterministic dt_exp/
+                     dt_erf folds BYTE-IDENTICALLY → machine-independence is now a
+                     4-ENVIRONMENT proof SPANNING 3 DISTINCT libm IMPLEMENTATIONS
+                     (glibc·musl·Darwin), with libm folds DIVERGING across the 3 while
+                     dt_* stay identical = definitive. Bonus: a real hexa-runtime↔musl
+                     constructor-ABI bug found, characterized, and flagged as a runtime
+                     follow-up. REAL-AND-CONFIRMED.
+════════════════════════════════════════════════════════════════════════════════

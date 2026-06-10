@@ -923,3 +923,37 @@ NOT claimed. $0, no vast/pool/pod. Verdict .verdicts/hexa-0pod/F-OP21-HOPPER-WAR
   complete under -DHEXA_CUDA (F-OP24B §3) — only the RUN is gated, and this script IS the run.
 - TURNKEY = YES. HONEST: no end-to-end number claimed (kit-ready, run-gated; OP-21A framing). 0-pod · $0 · no
   vast · no pod · no GPU · no leak · foreign pod 40306156 untouched. Verdict .verdicts/hexa-0pod/F-OP24C-TF32-TURNKEY.txt.
+
+## OP-19d — 4th-env byte-exact: musl (Alpine) strengthens machine-independence to 3 distinct libm impls (2026-06-10)
+- GOAL: extend OP-19/19b/19c's 3-platform proof (Darwin · glibc-x86 aiden · glibc-arm64 pi5) to a 4TH DISTINCT
+  ENVIRONMENT giving a 3rd DISTINCT libc/libm — musl (Alpine). The hardest "no libm dependence left" test:
+  musl ≠ glibc ≠ Darwin. FREE POOL ONLY (summer's docker), ZERO vast, 0-GPU, $0.
+- 4th env chosen = MUSL (Alpine Linux) via `docker run alpine` on summer (has /usr/bin/docker). Picked over a 4th
+  glibc host because musl is a genuinely new libm impl. summer's own native glibc hexa was bootstrap-broken (hexat
+  transpiler missing, runtime_core.c rebuild fails 10 errors) → summer served ONLY as the docker host, not a glibc run.
+- hexa runnable on musl = YES, with a DISCLOSED TEST-ONLY shim. hexa.real is glibc-linked (can't run under musl), but
+  `hexa run` = transpile→C then `clang …runtime.c -lm`. Transpiled both oracles on aiden (self/native/hexa_v2), then
+  COMPILED+RAN the C in Alpine — binaries link MUSL (`ldd → libc.musl-x86_64.so.1`), libm = musl. Build fixes (build-
+  only, NOT numeric): `-include sys/un.h…` (musl <sys/un.h> strlen proto vs runtime `#define strlen`), `-fuse-ld=lld`,
+  apk gcc+libgcc (CRT). REAL RUNTIME BUG found (gdb): SIGSEGV at init in _hexa_init_mem_cap→hxlcl_getenv — the
+  priority-101 `hxlcl_capture_environ(argc,argv,envp)` ctor relies on the glibc/Darwin-only "(argc,argv,envp)→ctor"
+  ABI; musl passes NO args to ctors → envp garbage → segfault before main. Worked around with a throwaway runtime copy
+  (ctor reads musl `extern __environ`; env-capture ONLY, all math byte-identical; NOT committed). The ctor-ABI bug is a
+  genuine runtime follow-up (separate guarded PR), INDEPENDENT of fold math.
+- musl byte folds (verbatim, env-capture-shimmed run):
+    CEBWD-TAYLOR (dt_exp)  = 7679248634312321699
+    GELUFWD-DET  (dt_erf)  = 4548590605583584556
+    GELUBWD-DET  (dt_erf)  = 4249661408190172843
+- 4-WAY cmp (musl vs recorded Darwin + glibc-x86 aiden + glibc-arm64 pi5):
+    CE-bwd dt_exp  : MATCH  (7679248634312321699 on all 4)
+    GELU FWD dt_erf: MATCH  (4548590605583584556 on all 4)
+    GELU BWD dt_erf: MATCH  (4249661408190172843 on all 4)
+  => 4-ENVIRONMENT BYTE-IDENTICAL = YES.
+- # DISTINCT libm impls spanned = 3 (glibc · musl · Darwin). libm `erf` (GELU-FWD-LIBM) gives 4 DIFFERENT values
+  across the 4 envs: musl 7314648833623304241 ≠ glibc-x86 6306829276275644424 ≠ glibc-arm64 3332333775004383127 ≠
+  Darwin 1521224270287218303, while dt_erf is identical on all → DEFINITIVE: only the dt_* path is machine-independent.
+  (libm exp CE-bwd: musl 3352931952497630952 == glibc, ≠ Darwin 7969105254299072804 — confirms OP-19c's OS/libc thesis
+  with a 3rd libc in hand.)
+- NO divergence/defect on the production deterministic path (the musl init segfault is a pre-main libc-ABI env-capture
+  bug, flagged as a runtime follow-up). $0 · 0-GPU · 0-pod · free pool (summer docker + Alpine) · ZERO vast · foreign
+  pod 40306156 untouched. Verdict .verdicts/hexa-0pod/F-OP19D-4TH-ENV.txt.
