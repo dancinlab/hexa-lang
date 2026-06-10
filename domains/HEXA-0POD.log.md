@@ -1,5 +1,21 @@
 # HEXA-0POD — log
 
+## 2026-06-10 — OP-27 DONE: deterministic TF32 fast-mode reflected into the dojo (0-pod docs) + commons directive DRAFTED for user sign ($0)
+- Reflected the validated deterministic TF32 fast-mode (OP-20 #2999 + OP-23 #3005 + OP-24 #3009 + OP-25 #3007)
+  into docs/hexa-dojo.md as a contributor recipe: `### deterministic TF32 fast-mode (precision-uncap)`, inserted
+  after the g86 "flame vs PyTorch — fair-bench parity recipe" section, before `## references`. Elephant-rule
+  (current-facts only). Covers: WHEN (HEXA_TF32_FASTMODE=1 for >3× keeping determinism; FP64 default byte-identical
+  flag-off; keep FP64 for cross-machine byte-eq) · DETERMINISM (self-byte-eq max|Δ|=0 single-step + whole 100-step
+  trajectory; pin CUBLAS_PEDANTIC_MATH portable guarantee) · W14 (rel-RMS 1.13e-6, ~34× inside) · REAL-not-illusion
+  (N=100 loss-track ~1e-7, bounded ~5e-7 drift) · card-robust 4.2×@B=1 (B=8 19-21× FP64-throttle-caveated) ·
+  precision Pareto FP64→TF32 SWEET-SPOT→BF16 DOMINATED + ASCII diagram · live-wire dispatch site (runtime_cuda_emit
+  .hexa `_hx_cuda_farr_matmul_gpu`). Every number CITED from a verdict (g5).
+- COMMONS half: DRAFTED ONLY. Wrote the proposed `g87_tf32_fastmode` directive (do/dont ≤100char/line, ASCII)
+  verbatim in the verdict for the user to apply AFTER `sidecar sign commons`. The agent NEVER self-signs a
+  sign-gated SSOT → NO .tape file edited in this PR. Honest: dojo half shipped 0-pod, commons half awaits user sign.
+- $0 · 0-pod · NO GPU · NO vast · NO pod · foreign vast pod 40306156 NOT touched.
+  Verdict .verdicts/hexa-0pod/F-OP27-TF32-DOJO.txt.
+
 ## 2026-06-10 — OP-21A DONE: Hopper warp-spec TMA kernel WRITTEN (wgmma_tf32_w16.cu) + turnkey build kit, local-checked, H100-gated perf (0-pod, $0)
 - Turned the OP-21 DESIGN (#3000, F-OP21-HOPPER-WARPSPEC-DESIGN) into CODE. WROTE self/native/wgmma/wgmma_tf32_w16.cu
   (#define W10_NO_MAIN; #include "wgmma_tf32_w10_lib.h" for the SAME-BINARY gemm_w10 + cuBLAS-TF32 apples baseline,

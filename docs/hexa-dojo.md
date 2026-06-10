@@ -791,6 +791,72 @@ win-or-tie. Two recipes carry it:
   which changes FP32 accumulation order and breaks byte-exactness — so flame refuses it. The residual is the
   identity, not a missing optimization.
 
+### deterministic TF32 fast-mode (precision-uncap)
+
+flame's FP64-default step is `~3×`-capped at batch=1 (serial op-DAG + per-op launch/sync + interpreted glue).
+Kernel-fusion, interp-elim, and graph-capture are all closed-neg. The one uncap lever that works without a
+right-sized GPU is **precision-change**: run the GEMMs in TF32 instead of FP64. The catch the campaign resolved
+is that FP64→TF32 breaks byte-equality *vs FP64*, but a TF32 step is still byte-equal *vs itself* run-to-run —
+so flame's reproducibility identity is preserved at a different **precision contract** (W14: rel-RMS ≤ 1e-2 vs
+the same dtype, not byte-equality across dtypes). That makes "deterministic TF32 fast-mode" a legitimate flame
+product mode, not an identity sacrifice.
+
+**when to use it** — set `HEXA_TF32_FASTMODE=1` to opt the live forge projection-GEMM into TF32 when you want
+the `>3×` speedup AND keep run-to-run determinism. With the flag unset the FP64 `cublasDgemm` path is the default
+and is byte-identical (the TF32 branch never mutates the FP64 inputs). Use it for training/throughput; keep FP64
+when you need byte-equality *across machines/dtypes* (the machine-independent identity is an FP64-path property).
+
+**the determinism guarantee** — the TF32 step is self-byte-eq run-to-run: max|Δ(W′, m, v, loss)| = 0 over a
+single step (8/8 cells) and over a whole 100-step trajectory (W and loss max|Δ| = 0 at step N, not just step 1).
+On the RTX 5070 / cuBLAS 13.0 the **default** TF32 tensor-op mode is already deterministic (the feared split-K
+heuristic nondeterminism did not materialize), but cuBLAS algo selection is shape/version/GPU-dependent — so the
+shipped wire **pins `CUBLAS_PEDANTIC_MATH`** as the portable guarantee. Pedantic costs ~0 here (identical bytes,
+identical step time) and removes the "happens to be deterministic" dependency for cross-card portability.
+
+**the precision contract (W14)** — TF32-vs-FP64 rel-RMS is **1.13e-6** (single-step post-AdamW weight delta) —
+four orders of magnitude inside the W14 1e-2 cap. The raw single-GEMM-output rel-RMS through the live dispatch is
+~2.9e-4 (still ~34× inside W14); the LR=1e-3 optimizer update shrinks that to e-6 at the weight level. The TF32
+step is training-equivalent to the FP64 step.
+
+**it is a REAL fast-mode, not a 1-step illusion** — over N=100 steps the TF32 loss tracks the FP64 loss to ~1e-7
+every step (worst gap 2.5e-5, and that worst gap is at the cold-start step 1 — it does NOT grow), and the weight
+rel-RMS stays BOUNDED at ~5e-7 (it shrinks as both lanes converge to the same loss along the same curve). NN
+training is chaotic, so the weights are not byte-equal to FP64 and never will be — but the loss-tracking (the
+training-equivalent metric) holds, which is what makes TF32 a real training fast-mode.
+
+**the speedup (card-robust)** — the honest, card-robust number is the **B=1 latency-bound 4.2×** (4.19×–4.63× over
+FP64), which clears the `~3×` cap on exactly the regime the cap is attributed to. The B=8 ratios (19–21×) are
+INFLATED by the consumer 5070's ~1/64-rate FP64 — quote them only with that caveat; a datacenter card (FP64 ~1/2)
+shows a smaller ratio.
+
+**the precision Pareto** — BF16 was checked as the next rung and is **Pareto-DOMINATED** by TF32: under the
+standard fp32-master-weight contract BF16 lands the SAME accuracy (~1.1e-6, the bf16 GEMM error enters W through
+one tiny optimizer step) and the SAME speed (both are 16-bit-input tensor-ops at equal throughput; TF32/BF16 =
+1.01×–1.12×, a B=1 dead heat). BF16 buys nothing TF32 doesn't already give on consumer hardware. TF32 is the
+terminal precision-uncap **sweet spot**.
+
+```
+precision Pareto (RTX 5070, flame fused step DAG)        speed (B=1, vs FP64)
+  FP64  exact (reference) ──────────────────────────────  1.0×   byte-eq across machines
+  TF32  rel-RMS 1.13e-6 vs FP64 ────────────────────────  4.2×   ◀ SWEET SPOT (self-byte-eq)
+  BF16  rel-RMS 1.13e-6 vs FP64 ────────────────────────  4.1×   ✗ DOMINATED (same acc, same speed)
+                              │                              │
+                          W14 ≤ 1e-2  (1.13e-6 = 4 orders inside)   │
+                                                          breaks the ~3× FP64 cap
+```
+
+**the live-wire dispatch site** — `HEXA_TF32_FASTMODE` is read in `self/cuda/runtime_cuda_emit.hexa`,
+`_hx_cuda_farr_matmul_gpu` (the forge row-major projection GEMM the trainer's `conv*_via_forge` calls). Dispatch
+order: `if(HEXA_OWN_GEMM){…} else if(_forge_tf32_fastmode()){tf32} else {cublasDgemm}`. The TF32 branch casts the
+FP64 A/B into fp32 scratch (never mutating the FP64 inputs), runs `cublasGemmEx(CUBLAS_COMPUTE_32F_FAST_TF32)` on a
+separate `CUBLAS_PEDANTIC_MATH`-pinned handle, and casts the fp32 result back up to the FP64 C buffer. Verified at
+the dispatch-unit level on the aiden 5070 (FP64 default byte-identical · TF32 self-byte-eq · W14-tol · `>3×`); the
+full-trainer end-to-end wire is the OP-2b-class `clm_prod_gpu`-build follow-up (the GEMM-only ratio dilutes toward
+the card-robust ~4.2× once the non-GEMM glue is in the loop).
+
+(verdicts: `.verdicts/hexa-0pod/F-OP20-TF32-FASTMODE.txt` · `…F-OP23-TF32-DRIFT.txt` ·
+`…F-OP24-TF32-LIVEWIRE.txt` · `…F-OP25-BF16-FASTMODE.txt`)
+
 ## references
 
 - [`HEXA-CUDA.md`](../HEXA-CUDA.md) — the GPU-native domain home
