@@ -218,6 +218,9 @@ loop targets what the consumer card + code can carry.
   canonical-atom encode/read, W15's root-cause) is now CPU-verified, raising the H100 D1 first-try success odds.
   $0, no vast/pool/pod/GPU. Verdict .verdicts/hexa-0pod/F-OP21B-W16-CPU-DERISK.txt.
 
+<!-- ANCHOR:OP-21C-W16-MODES-DERISK (unique anchor — extends OP-21B by CPU-validating the REMAINING-MODE GPU-free reference logic of w16.cu — MODE-4 full-tile ref + epilogue scatter, the B-ring read, the gemm_w16b fallback ref, the descriptor stride consistency — so more of the H100 gate sequence is pre-validated 0-pod) -->
+- [ ] **OP-21C — w16.cu remaining-MODE reference logic CPU-validated 0-pod (extends OP-21B; more of the H100 gate de-risked)**
+
 <!-- ANCHOR:OP-21-HOPPER-WARPSPEC-DESIGN (unique anchor — 0-pod DESIGN for the Hopper sm_90a wgmma warp-spec TMA pipeline; measure is GPU-gated) -->
 - [x] **OP-21 — Hopper warp-spec TMA pipeline DESIGN + perf-gap analysis + H100 experiment recipe (0-pod, GPU-gated measure)** —
   produced (reading source + verdicts only, $0, 0-GPU) the design for the forge own-GEMM's remaining Hopper

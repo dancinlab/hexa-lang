@@ -1,0 +1,6 @@
+F-OP21C-W16-MODES-DERISK — w16.cu remaining-MODE GPU-free reference logic CPU-validated 0-pod
+=============================================================================================
+[WIP] HEXA-0POD OP-21C. 0-pod (no GPU, no vast, no pod). Branch domain/hexa-0pod-op21c.
+EXTENDS OP-21B: CPU-validates the GPU-FREE reference logic of the OTHER w16.cu MODEs
+(not just MODE 0/1) so MORE of the H100 gate sequence is pre-validated before the run.
+Skeleton pushed first (storm discipline); checks land in subsequent commits.
