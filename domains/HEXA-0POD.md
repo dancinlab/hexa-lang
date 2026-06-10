@@ -63,6 +63,24 @@ loop targets what the consumer card + code can carry.
   OPT-IN): logged-discovery consolidation ONLY — NO /paper scaffolded, NO PAPER.tape/PAPER.md, paper skill
   NOT invoked. $0 · 0-GPU · 0-pod · no vast. Verdict .verdicts/hexa-0pod/F-OP26-MACHINEINDEP-WRITEUP.txt.
 
+<!-- ANCHOR:OP-26B-SUBMISSION-READINESS (unique anchor — submission-readiness assessment for the machine-independent bit-exact training result, capturing the NOW-4-environment evidence stronger than OP-26's doc; readiness checklist DONE-vs-paper-ADD + gap list + novelty argument; NO /paper scaffold per g84 OPT-IN) -->
+- [x] **OP-26b — machine-independent training SUBMISSION-READINESS assessment (4-env evidence; NO paper scaffold, g84)** —
+  DOCS-COMPLETE. Authored docs/flame-machine-independent-SUBMISSION-READINESS.md — a go/no-go readiness
+  assessment (NOT a paper) so the user can decide whether/when to instruct /paper. Extends OP-26's results
+  doc to the NOW-4-environment evidence base: (a) THE CLAIM in its strongest current form — machine-independent
+  bit-exact NN training byte-identical across {x86,arm64}×{linux,macos} + musl, spanning 3 DISTINCT libm
+  impls (glibc·musl·Darwin), STRONGER than OP-26's 2-platform consolidation (OP-19c pi5 arm64-linux 3rd cell;
+  OP-19d musl 4th env / 3rd libm; OP-19e durable POSIX-environ fix → real un-shimmed musl run); (b) READINESS
+  CHECKLIST — DONE (result + 8 oracles + 4-env evidence + threat model + recipe + honest limits, all → verdicts)
+  vs what a PAPER ADDS (abstract · related-work survey · figures · repro Docker · venue fit); (c) GAP LIST
+  G1-G6 (G1 real-corpus e2e = GPU-build-gated HIGH · G2 2nd arch · G3 x86-macos blocked · G4 perf↔det Pareto
+  · G5 cross-GPU-arch byte · G6 musl CI-gate); (d) NOVELTY ARGUMENT (torch/JAX give NO cross-platform bit-exact
+  training; flame removes ALL libm — MEASURED: libm erf = 4 values, dt_* identical on all 4) + ASCII go/no-go
+  diagram. Every claim traces to F-OP15/19/19b/19c/19d/19e + OP-26 (g5); no new computation. GOVERNANCE
+  (project.tape g84 PAPER OPT-IN): NO /paper scaffolded, NO PAPER.tape/PAPER.md/LaTeX, paper skill NOT invoked
+  — the doc ends with the explicit user action (USER runs `/paper new flame-machine-independent`, agent does
+  NOT auto-scaffold). $0 · 0-GPU · 0-pod · no vast. Verdict .verdicts/hexa-0pod/F-OP26B-SUBMISSION-READINESS.txt.
+
 <!-- ANCHOR:OP-24-TF32-LIVEWIRE (unique anchor — wire OP-20's validated deterministic TF32 fast-mode into the live forge GEMM dispatch, env-gated, byte-eq-safe, aiden verify) -->
 - [x] **OP-24 — wire deterministic TF32 fast-mode into the live forge GEMM dispatch (env-gated, byte-eq-safe, aiden verify)** —
   GREEN (dispatch-unit). OP-20's PROVEN deterministic TF32 fast-mode is now an env-gated OPT-IN

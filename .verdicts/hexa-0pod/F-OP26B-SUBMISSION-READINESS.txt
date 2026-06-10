@@ -1,0 +1,102 @@
+════════════════════════════════════════════════════════════════════════════════
+ F-OP26B-SUBMISSION-READINESS — submission-readiness assessment for the machine-
+ independent bit-exact training result (4-env evidence; NO paper scaffold, g84)
+ HEXA-0POD OP-26b · 0-GPU · 0-pod · NO vast · $0 · pure docs/assessment
+════════════════════════════════════════════════════════════════════════════════
+
+DELIVERABLE (the doc)
+  docs/flame-machine-independent-SUBMISSION-READINESS.md — a go/no-go readiness
+  assessment (NOT a paper) so the user can decide whether/when to instruct /paper.
+  Authored by READING the existing verdicts; no new computation. Extends OP-26's
+  results doc to the NOW-4-environment evidence base.
+
+THE STRONGEST-CURRENT CLAIM (verbatim, the form the assessment headlines)
+  flame trains a real neural network (CLMConvMoE) bit-for-bit identically across a
+  4-environment matrix — {x86,arm64}×{linux,macos} plus musl — spanning 3 DISTINCT
+  libm implementations (glibc · musl · Darwin), because the training step has NO
+  libm transcendental left: every transcendental is a fixed-iteration +−×÷ routine
+  bit-identical on any IEEE-754 machine.
+  STRONGER than OP-26's 2-platform {x86-linux, arm64-macos} consolidation:
+   · OP-19c (F-OP19C) — pi5 arm64-linux = 3rd arch×OS cell (3 of 4 matrix cells);
+     isolated the libm split to OS/libc, NOT arch (pi5-glibc tracks aiden-glibc).
+   · OP-19d (F-OP19D) — musl (Alpine) = 4th env, 3rd DISTINCT libm impl; libm erf
+     gives 4 different values, dt_* identical on all 4.
+   · OP-19e (F-OP19E) — durable POSIX-environ runtime fix → the musl run is REAL,
+     not shimmed (native-musl hexa run RUN_EXIT=0, folds byte-identical).
+
+READINESS CHECKLIST — DONE vs what a PAPER ADDS
+  DONE (publication-ready, every row → a verdict):
+   · core result: whole-step max|Δ|=0 over 17 W+m+v+loss, neg-ctrl 0.344217 (F-OP15)
+   · per-phase oracle series conv/dW/MoE/GN/CE/AdamW/embed (F-OP2,7,8,9,11,12,13)
+   · 4-environment cross-platform evidence (F-OP19,19b,19c,19d)
+   · 3-distinct-libm divergence: libm erf = 4 values, dt_* identical (F-OP19c/d §5)
+   · REAL un-shimmed musl run via POSIX-environ runtime fix (F-OP19E)
+   · threat model T1/T2/T3, construction recipe, honest limits §5 (OP-26 doc)
+   · TF32/BF16 deterministic fast-mode complement (F-OP23/23b/25)
+   · $0 reproduction surface — all CPU hexa run, free pool + local, ZERO vast/pod
+  A PAPER ADDS (the delta — NONE scaffolded here per g84):
+   · formal abstract + intro · related-work survey (PyTorch/JAX determinism, CNR,
+     CR-libm/RLIBM, FP-reproducibility lit) · figures (pgfplots; defer LaTeX compile)
+   · reproducibility artifact / Docker (Alpine-musl harness exists, not packaged)
+   · venue fit + positioning · author/affiliation/licensing front-matter
+
+GAP LIST — what a STRONG submission still needs (honest, g5; none closed here)
+   G1 real-corpus end-to-end run (not the fixed-seed micro-step) — GPU-build-gated
+      (clm_prod_gpu -DHEXA_CUDA turnkey via F-OP24C, run env-gated). SEVERITY HIGH —
+      headline says "trains a real NN"; byte-eq proven on the STEP, e2e build-deferred.
+   G2 a 2nd model architecture beyond CLMConvMoE — not attempted. MED (generality).
+   G3 the 4th matrix cell x86-macos — physically blocked (Apple retired Intel Macs;
+      no pool host). LOW — disclosed; 3 confirmed cells span both arch + both OS.
+   G4 perf-vs-determinism Pareto framing tying in TF32/BF16 — partial (fast-modes
+      exist + self-byte-eq, no unified precision↔determinism↔3×-cap figure). MED.
+   G5 cross-GPU-architecture byte measurement (sm_120 vs sm_90) — out of scope; only
+      host↔device byte-eq on one machine + cross-platform CPU byte-eq proven. MED.
+   G6 musl ctor-ABI fix CI-gated on the main release path — fix durable via
+      tool/restore_frozen_seeds post-restore patch, no native-musl CI gate yet. LOW.
+
+NOVELTY ARGUMENT (why publishable)
+   1. PyTorch/JAX/TensorFlow do NOT give cross-platform bit-exact training — they
+      route exp/erf/log through libm (NOT correctly-rounded; glibc/musl/Darwin round
+      the last ULP differently). Their determinism is same-machine run-to-run at best,
+      NOT same-bytes-on-a-different-machine/OS/libc.
+   2. flame removes ALL libm transcendentals — MEASURED, not claimed: libm erf returns
+      4 DIFFERENT values across the 4 envs (Darwin 1521224270287218303 / glibc-x86
+      6306829276275644424 / glibc-arm64 3332333775004383127 / musl-x86
+      7314648833623304241); dt_exp/dt_erf collapse all 4 to bit-identical folds
+      (7679248634312321699 / 4548590605583584556 / 4249661408190172843). The split is
+      proven OS/libc, NOT arch (pi5 tracks aiden, not the arm64-macos it shares an ISA).
+   3. It is a constructive, $0-checkable recipe (hand-rolled transcendentals + ascending
+      sequential reductions + fixed foldings + deterministic init), max|Δ|=0 byte oracle.
+   Honest framing (g5): reproducible-EVERYWHERE, NOT bit-equal-to-a-reference-libm
+   (dt_erf 1.38e-7 from libm BY DESIGN, ≤ GELU tolerance); byte-exactness is an
+   FP64-lane property (TF32/BF16 are self-deterministic, not cross-precision bit-equal).
+
+GOVERNANCE NOTE — NO PAPER WAS SCAFFOLDED (g84, verbatim from the doc §6)
+   No paper was scaffolded. Per project.tape g84 (the PAPER OPT-IN policy), the agent
+   does NOT propose /paper, does NOT auto-scaffold on discovery, and does NOT create
+   PAPER.tape / PAPER.md / any LaTeX. This document is strictly a logged-discovery
+   readiness assessment. A paper happens ONLY when the user explicitly types /paper,
+   which they have not.
+
+THE ONE USER ACTION (verbatim)
+   To scaffold the actual paper, the USER runs `/paper new flame-machine-independent`
+   (or similar) — the agent does NOT auto-scaffold per g84.
+
+GATE (g5)
+   assessment accurate (traces to verdicts) ... YES — F-OP15/19/19b/19c/19d/19e + OP-26
+   captures NOW-4-env evidence (> OP-26) .... YES — 4 envs, 3 distinct libm impls
+   readiness checklist honest (DONE vs ADD) . YES — result DONE; paper = packaging
+   gap list honest .......................... YES — G1-G6, G1 HIGH (GPU-build-gated e2e)
+   NO paper scaffolded ...................... CONFIRMED — no PAPER.tape/PAPER.md/LaTeX,
+                                              paper skill NOT invoked, /paper NOT run
+   cost ..................................... $0 · 0-GPU · 0-pod · NO vast · pure docs
+
+   F-OP26B-SUBMISSION-READINESS : docs/flame-machine-independent-SUBMISSION-READINESS.md
+                                  gives the user a go/no-go readiness picture for the
+                                  machine-independent bit-exact training result — the
+                                  strongest-current 4-environment / 3-libm-impl claim,
+                                  DONE-vs-paper-ADD checklist, gap list G1-G6, novelty
+                                  argument, ASCII go/no-go diagram, and the exact
+                                  /paper action — WITHOUT overstepping g84 (NO paper
+                                  scaffolded). DOCS-COMPLETE.
+════════════════════════════════════════════════════════════════════════════════

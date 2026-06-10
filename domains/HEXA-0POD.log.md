@@ -1062,3 +1062,26 @@ NOT claimed. $0, no vast/pool/pod. Verdict .verdicts/hexa-0pod/F-OP21-HOPPER-WAR
   fast-mode, not an illusion). HONEST SYNTHETIC CAVEAT (unchanged): still a proxy (loss=mean(G^2), single
   fused block, structured-synthetic target); real-corpus CLMConvMoE end-to-end is GPU-build-gated (OP-24b/24c).
   Verdict .verdicts/hexa-0pod/F-OP23B-TF32-DRIFT-LONG.txt.
+
+## OP-26b — machine-independent training SUBMISSION-READINESS assessment (4-env evidence; NO paper scaffold, g84)
+- DELIVERABLE: docs/flame-machine-independent-SUBMISSION-READINESS.md — a go/no-go readiness assessment
+  (NOT a paper) so the user can decide whether/when to instruct /paper. Authored by READING verdicts; $0 0-pod.
+- STRONGEST-CURRENT CLAIM: machine-independent bit-exact CLMConvMoE training byte-identical across
+  {x86,arm64}x{linux,macos} + musl, spanning 3 DISTINCT libm impls (glibc/musl/Darwin) — STRONGER than
+  OP-26's 2-platform consolidation. Growth: OP-19c (F-OP19C) pi5 arm64-linux 3rd cell (libm split = OS/libc
+  not arch); OP-19d (F-OP19D) musl 4th env / 3rd libm impl (libm erf = 4 values, dt_* identical);
+  OP-19e (F-OP19E) durable POSIX-environ fix -> real un-shimmed native-musl run.
+- READINESS CHECKLIST: DONE = result (F-OP15 whole-step max|delta|=0) + 8 per-phase oracles + 4-env evidence
+  + threat model + construction recipe + honest limits, all -> verdicts. PAPER ADDS = abstract · related-work
+  survey (PyTorch/JAX determinism, CNR, CR-libm/RLIBM) · figures · repro Docker artifact · venue fit · front-matter.
+- GAP LIST: G1 real-corpus e2e = GPU-build-gated (HIGH) · G2 2nd architecture (MED) · G3 x86-macos cell
+  blocked (no Intel-Mac host, LOW) · G4 perf<->det Pareto via TF32/BF16 (MED) · G5 cross-GPU-arch byte (MED)
+  · G6 musl ctor-ABI fix CI-gate (LOW).
+- NOVELTY: torch/JAX/TF give NO cross-platform bit-exact training (libm not correctly-rounded); flame removes
+  ALL libm — MEASURED: libm erf = 4 different values across 4 envs, dt_exp/dt_erf collapse all to bit-identical
+  folds; split proven OS/libc not arch (pi5 tracks aiden). Honest: reproducible-everywhere NOT bit-equal-to-libm
+  (dt_erf 1.38e-7 by design); byte-exactness is FP64-lane (TF32/BF16 self-det, not cross-precision).
+- GOVERNANCE (g84 PAPER OPT-IN): NO /paper scaffolded, NO PAPER.tape/PAPER.md/LaTeX, paper skill NOT invoked.
+  Doc ends with the explicit user action: USER runs `/paper new flame-machine-independent` (or similar) — the
+  agent does NOT auto-scaffold per g84. CONFIRMED no paper scaffolded.
+- Milestone OP-26b flipped [x]. Verdict .verdicts/hexa-0pod/F-OP26B-SUBMISSION-READINESS.txt. $0 · 0-GPU · 0-pod · no vast.
