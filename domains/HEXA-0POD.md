@@ -183,6 +183,27 @@ loop targets what the consumer card + code can carry.
   Value = the lever is now CODE not just design — H100 authorization -> turnkey measurement. $0, no vast/pool/pod.
   Verdict .verdicts/hexa-0pod/F-OP21A-W16-KERNEL.txt (PR #3017).
 
+<!-- ANCHOR:OP-21B-W16-CPU-DERISK (unique anchor — OP-21A's riskiest GPU-free element D1 CPU-validated 0-pod via a clang++ canonical-atom harness; de-risks the H100 bit-exact gate) -->
+- [x] **OP-21B — w16.cu canonical-atom encoder CPU-validated 0-pod (de-risks the H100 bit-exact gate)** —
+  de-risked OP-21A's D1 (the canonical-atom re-encode, the pre-registered MODE-1 falsifier) BEFORE the H100 run
+  by validating its GPU-FREE arithmetic on a CPU. WROTE tool/wgmma/w16_canon_cpu_check.cpp (clang++ -std=c++17,
+  ZERO GPU/CUDA/PTX) that ports the pure-arithmetic SSOT VERBATIM from w10_lib.h (gmma_phys 8x4 INTER core,
+  sw128_measured 128B-swizzle index, tf() TF32 round) + the EXACT composed read laws hard-coded in w16.cu, and
+  asserts 7 element-for-element checks: T1 sw128_measured is a bijection over each 8x32 atom (the landed swizzle
+  MUST be a permutation or the in-place read cannot recover A); T2 w16.cu w16_probe_canon L175 law
+  `a*256 + r*32 + (((k>>2)^(r&7))<<2) + (k&3)` == the W10-proven `a*256 + sw128_measured(r,k)` element-for-element
+  (proves w16's copy did not drift); T3 the composed A-read recovers global A bit-exact on the 128x32 box
+  (the MODE-0 gate simulated on CPU, exact 4096/4096); T4 gmma_phys is a bijection over the 64x8 wgmma operand
+  sub-tile; T5 the per-slab B-read recovers global B bit-exact (exact 2048/2048); T6 the reference GEMM math is
+  TF32-round-inputs + fp32-FMA accumulate (so MODE-4's bit-exact-vs-cuBLAS gate checks the RIGHT reference); T7
+  the D1 descriptor-stride byte arithmetic is self-consistent (atom=1024B=SBO default, swrow=128B, 1KB swizzle
+  period, k8 bump=32B). RAN locally: 7/7 PASS, exit 0 — the canonical-atom encoder GPU-free logic is CPU-PROVEN
+  correct, NO bug found. HONEST (g5): this proves the GPU-FREE half of D1 only; the DEVICE wgmma swmode=1
+  de-swizzle actually reading the descriptor as this law predicts (MODE-1 rel_rms 0) + ALL perf REMAIN
+  H100-GATED — no wgmma/PTX executed, no TFLOP/s claimed. Value = the riskiest GPU-free part of w16 (the
+  canonical-atom encode/read, W15's root-cause) is now CPU-verified, raising the H100 D1 first-try success odds.
+  $0, no vast/pool/pod/GPU. Verdict .verdicts/hexa-0pod/F-OP21B-W16-CPU-DERISK.txt.
+
 <!-- ANCHOR:OP-21-HOPPER-WARPSPEC-DESIGN (unique anchor — 0-pod DESIGN for the Hopper sm_90a wgmma warp-spec TMA pipeline; measure is GPU-gated) -->
 - [x] **OP-21 — Hopper warp-spec TMA pipeline DESIGN + perf-gap analysis + H100 experiment recipe (0-pod, GPU-gated measure)** —
   produced (reading source + verdicts only, $0, 0-GPU) the design for the forge own-GEMM's remaining Hopper

@@ -1,0 +1,104 @@
+F-OP21B-W16-CPU-DERISK — w16.cu canonical-atom encoder CPU-validated 0-pod
+==========================================================================
+HEXA-0POD OP-21B. 0-pod (no GPU, no vast, no pod). Branch domain/hexa-0pod-op21b.
+Validates the GPU-FREE arithmetic of OP-21A's wgmma_tf32_w16.cu D1 (the canonical-atom
+re-encode — the pre-registered MODE-1 falsifier) BEFORE the H100 run, so the H100
+bit-exact gate is more likely to pass first-try. Device wgmma + perf REMAIN H100-gated.
+
+CONTEXT
+-------
+OP-21A (#3017) wrote self/native/wgmma/wgmma_tf32_w16.cu + tool/wgmma/build_w16.sh.
+The riskiest element is D1 ("canonical-atom landing"): if the canonical-atom encode/read
+law is wrong, the H100 MODE-1 bit-exact gate fails and a pod-hour is burned. D1's encoder,
+read law, and reference GEMM are PURE HOST ARITHMETIC (no wgmma/PTX/GPU) -> CPU-validatable.
+
+THE ENCODER LOGIC (extracted from w16.cu + w10_lib.h, the SSOT)
+--------------------------------------------------------------
+TF32 (4B) SWIZZLE_128B canonical atom = 8 rows x 32 floats (128B/row x 8 = 1KB swizzle
+period). The 128x32 A tile = 16 vertically-stacked 8-row atoms, ATOM-MAJOR: atom a=m>>3,
+within-atom row r=m&7.
+
+  gmma_phys(s,k)   [w10_lib.h L54-56]: GMMA INTER 8x4 core
+      strip=s>>3, sr=s&7, kcore=k>>2, kc=k&3; return (strip*2+kcore)*32 + sr*4 + kc
+  sw128_measured(r,c) [w10_lib.h L62-64]: 128B-swizzle index inside the 8x32 atom
+      g=c>>2, w=c&3, gp = g XOR (r&7); return r*32 + gp*4 + w
+  tf(x) [w10_lib.h L469]: TF32 round (round-to-nearest, +0x1000 then &0xFFFFE000)
+
+w16.cu's MODE-0 canonical-decode read law (w16_probe_canon L175):
+      sw = a*256 + r*32 + (((k>>2)^(r&7))<<2) + (k&3)
+  == the W10 composition  a*256 + sw128_measured(r,k)   (claim verified, T2 below).
+
+B per-slab read law (w10_lib.h gemm_w10 L383-384, == gemm_w16b L466-467):
+      c=n>>5, nn=n&31, gp=(nn>>2)^(k&7); sw = c*(TKSW*TKSW) + k*32 + (gp<<2) + (nn&3)
+
+enc_canonical() (w16.cu L142) returns get_enc() — the standard cuTensorMapEncodeTiled
+driver entry. D1's "canonical-ness" is NOT a different encoder call; it is (a) the composed
+read index in MODE 0 and (b) the descriptor strides (lbo/sbo/boff, swmode=1) in gemm_w16's
+mk_sw, which the MODE-1 H100 sweep arbitrates against rel_rms 0.
+
+THE CPU HARNESS
+---------------
+tool/wgmma/w16_canon_cpu_check.cpp — clang++ -O2 -std=c++17, ZERO GPU/CUDA/PTX. Ports the
+arithmetic above VERBATIM, then asserts 7 element-for-element checks:
+
+  T1  sw128_measured is a BIJECTION over each 8x32 atom (256 slots: no collision, full cover).
+      Necessary condition: the TMA-landed swizzle must be a permutation or the in-place read
+      cannot recover A.
+  T2  w16.cu line-175 read law == W10-proven a*256+sw128_measured(r,k), element-for-element
+      over the full 128x32 box. (Proves w16's hard-coded copy did not drift from the SSOT.)
+  T3  CPU MODE-0 gate: model the TMA by placing global A[m][k] at slot composed(m,k), then
+      read back via the SAME index -> recovers global A bit-exact (memcmp, 4096/4096 exact).
+  T4  gmma_phys is a BIJECTION over the 64x8 wgmma-operand INTER sub-tile (512 slots).
+  T5  B per-slab read recovers global B bit-exact (2 side-by-side 32-N atoms, 2048/2048 exact).
+  T6  reference GEMM math = TF32-round-inputs + fp32-FMA accumulate (the math gemm_w16
+      computes); cross-checked bit-for-bit so MODE-4's bit-exact-vs-cuBLAS gate uses the RIGHT
+      reference.
+  T7  D1 descriptor-stride byte arithmetic self-consistent with the MODE-1 defaults
+      (lbo=16, sbo=1024): atom=256 floats=1024B=SBO, swrow=128B, 1KB swizzle period, k8
+      START bump = kk*4B = 32B for kk=8 (one k8 stride within the 32-wide atom).
+
+ELEMENT-FOR-ELEMENT MATCH RESULT (clang++ on Apple arm64, 0-GPU)
+----------------------------------------------------------------
+  $ clang++ -O2 -std=c++17 w16_canon_cpu_check.cpp -o w16chk && ./w16chk
+  =============================================================
+  OP-21B — w16.cu canonical-atom encoder CPU validation (0-pod)
+  =============================================================
+    [PASS] T1 sw128_measured bijection (8x32 atom)
+    [PASS] T2 w16 line-175 law == W10 reference law
+    [PASS] T3 composed A-read recovers global A bit-exact exact=4096/4096
+    [PASS] T4 gmma_phys bijection (64x8 INTER sub-tile)
+    [PASS] T5 B per-slab read recovers global B bit-exact exact=2048/2048
+    [PASS] T6 reference GEMM = TF32-round + fp32 FMA
+    [PASS] T7 D1 descriptor-stride byte arithmetic        atom=1024B swrow=128B period=1024B SBO=1024 LBO=16 k8bump=32B
+  -------------------------------------------------------------
+  RESULT: 7 PASS, 0 FAIL
+  CANONICAL-ATOM ENCODER CPU-CORRECT — D1 GPU-free logic de-risked.
+  STILL H100-GATED: the device wgmma swmode=1 de-swizzle reads the descriptor
+  as this law predicts (MODE 1 rel_rms 0), + all perf. No TFLOP/s claimed.
+  EXIT=0
+
+OUTCOME
+-------
+CPU harness runs: YES (clang++, 0-GPU, exit 0).
+Canonical-atom encoder CPU-correct: YES — 7/7 PASS. NO bug found; the encoder/read laws in
+w16.cu are element-for-element consistent with the W10-proven SSOT, are valid bijections,
+recover A and B bit-exact under the CPU model of the TMA, the reference GEMM math is the
+correct TF32-round+fp32-FMA, and the D1 descriptor-stride byte geometry is self-consistent.
+
+WHAT REMAINS H100-GATED (honest, g5)
+------------------------------------
+This proves the GPU-FREE half of D1 only. The CPU harness MODELS the swizzle landing by the
+same law w16.cu reads it with — it CANNOT prove the actual sm_90a TMA hardware lands that
+exact byte permutation, nor that the wgmma swmode=1 descriptor de-swizzle reads it in place
+matching the law. Those are exactly the MODE-1 falsifier (rel_rms 0 on canonical landing vs
+W15's 1.0 floor on the non-canonical one), runnable ONLY on an authorized H100 (sm_90a) via
+`nvcc -O3 -arch=sm_90a wgmma_tf32_w16.cu -o w16 -lcublas -lcuda -Xptxas -v` + tool/wgmma/
+build_w16.sh. ALL perf (TFLOP/s, occupancy, Δ-vs-W10-70.7) is H100-gated. NO number claimed.
+
+H100-FIRST-TRY DE-RISKED: YES. The riskiest GPU-free part of w16 (the canonical-atom
+encode/read law — W15's root cause) is now CPU-proven internally consistent and bit-exact
+under the read model, so a MODE-1 failure on the H100 would isolate to the device-side
+HW-swizzle/descriptor interaction, NOT a host-arithmetic bug — the CPU bug class is excluded
+before the pod-hour is spent.
+
+$0. No vast, no pool, no pod, no GPU. Foreign pod 40306156 NOT touched.
