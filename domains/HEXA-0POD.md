@@ -311,7 +311,27 @@ loop targets what the consumer card + code can carry.
   vast. Verdict .verdicts/hexa-0pod/F-OP19C-PI5-3PLATFORM.txt.
 
 <!-- ANCHOR:OP-19D-4TH-ENV (unique anchor — 4th distinct env: musl libc (Alpine) adds a 3rd distinct libm impl beyond glibc+Darwin; OP-19c proved the divergence is an OS/libc effect, this tests it HARDER with a different libc entirely) -->
-- [ ] **OP-19d — 4th-env byte-exact: musl/summer strengthens machine-independence (or honest blocked)**
+- [x] **OP-19d — 4th-env byte-exact: musl/summer strengthens machine-independence (or honest blocked)** —
+  Extended OP-19/19b/19c's 3-platform machine-independence proof (Darwin · glibc-x86 aiden · glibc-arm64 pi5)
+  to a 4TH DISTINCT ENVIRONMENT supplying a 3rd DISTINCT libc/libm: **musl (Alpine Linux)**, reached 0-pod via
+  `docker run alpine` on summer (pool linux w/ docker; NO vast, NO GPU, NO pod). Picked musl over a 4th glibc host
+  (musl≠glibc≠Darwin = the strongest "no libm dependence left" test; summer's own native glibc hexa was bootstrap-
+  broken so it served ONLY as the docker host). hexa.real is glibc-linked so can't run under musl, but `hexa run`
+  transpiles .hexa→C then `clang …runtime.c -lm`; transpiled both oracles on aiden, then COMPILED+RAN the C inside
+  Alpine — binaries link MUSL libc (`ldd → libc.musl-x86_64.so.1`), libm exp/erf = musl. Build needed `-include
+  sys/un.h…` (musl's <sys/un.h> strlen proto clashes with runtime's `#define strlen`), `-fuse-ld=lld`, gcc/libgcc
+  CRT. **Found a REAL hexa-runtime↔musl bug** (gdb): SIGSEGV in `_hexa_init_mem_cap`→`hxlcl_getenv` at process init —
+  the priority-101 `hxlcl_capture_environ(argc,argv,envp)` ctor relies on the glibc/Darwin-only "(argc,argv,envp)→
+  constructor" ABI; **musl passes NO args to ctors** → envp garbage → `hxlcl_environ`=garbage → segfault before main.
+  Worked around with a DISCLOSED TEST-ONLY runtime copy (ctor reads musl's `extern __environ`; env-capture ONLY, all
+  math byte-identical; NOT committed). RESULT — **4-ENVIRONMENT byte-IDENTICAL**: musl dt_exp = 7679248634312321699,
+  dt_erf FWD = 4548590605583584556, BWD = 4249661408190172843 — all match the recorded Darwin+glibc-x86+glibc-arm64
+  values bit-for-bit. # DISTINCT libm impls spanned = **3 (glibc·musl·Darwin)**: libm `erf` gives 4 DIFFERENT values
+  across the 4 envs (musl 7314648833623304241 ≠ glibc-x86 6306829276275644424 ≠ glibc-arm64 3332333775004383127 ≠
+  Darwin 1521224270287218303) while dt_erf is identical on all → DEFINITIVE that ONLY the deterministic dt_* path is
+  machine-independent. NO divergence/defect on the production path (the musl init segfault is a libc-ABI env-capture
+  bug hit BEFORE any fold math — flagged as a runtime follow-up). $0, 0-GPU, free pool (summer docker + Alpine), ZERO
+  vast. Verdict .verdicts/hexa-0pod/F-OP19D-4TH-ENV.txt.
 
 <!-- ANCHOR:OP-18-L3-FUSED-HOST (unique anchor — completes the OP-16 L3 fused-dispatch family: gelu2 + moe_block2) -->
 - [x] **OP-18 — host fallbacks for the remaining L3 fused dispatchers (gelu2 + moe_block2), 0-GPU testable** —
