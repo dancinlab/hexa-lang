@@ -18,9 +18,9 @@ prereqs: arr_alloc codegen map + runtime leaf fns + hexa_ld L1/L2 patches.
 
 ## milestones
 
-- [x] ENTRY GATE — gen2 byte-eq fixpoint verdict (cmp cc-prc2.o == cc-gen3.o, exit 0) confirmed on ghost
-- [ ] land integration branch `cc-native/selfhost-ghost` (link prereqs: arr_alloc map + leaf fns + hexa_ld L1/L2) to main
-- [ ] promote self-hosted gen to the default `hx` / hexa_v2 toolchain (replace the bootstrap compiler), with smoke + verify parity
+- [x] ENTRY GATE — native byte-eq fixpoint: consecutive native stages cc-gen3.o == cc-gen4.o (sha d0792379 ghost / ece49087 mini, exit 0). The CORRECT fixpoint is gen3≡gen4 (native↔native), not aprime(C)≡gen2 (one-time C↔native boundary delta). Gate wired as `tool/selfhost_byteeq_gate.sh` on the `selfhost-byteeq-real` CI (ghost-selfhost runner, GREEN). verdict `.verdicts/hexa-cc-native/F-HEXA-CC-NATIVE-N5-FIXPOINT-ACHIEVED.txt`
+- [x] land integration fixes — enabling fixes landed to main as stacked PRs #3020 (typeof→type_of builtin alias) + #3024/#3025 (fixpoint gate + verdict). The remaining `cc-native/selfhost-ghost` carries only stale docs (tools already on main); not merged by design (would conflict, no new code).
+- [x] promote self-hosted gen to the default toolchain — `tool/promote_selfhost.sh install --default --i-have-reviewed-parity` flips `hexa.real → hx-selfhost-cli` (tier2), parity gate 5/5 PASS on BOTH ghost + mini. Routing: `--emit=<x>` → native gen3 (Mach-O direct, 0 C); `build`/`run`/`verify`/`--version` → C-transpile delegate (safety > coverage). REVERSIBLE via `--revert` (backup `hexa.real.pre-selfhost.*`). Persisted across `hx install` via marker `~/.hx/.selfhost-default` (#3031 — install.sh re-applies the flip on reinstall). Residual (NOT this milestone): full `hexa build` native end-to-end (gen3 owning link + runtime orchestration).
 - [ ] multi-target bootstrap: linux-arm64 self-host (faithful CI already exercises rt_fs guard — extend to full self-emit)
 - [ ] multi-target bootstrap: x86_64 codegen path (new backend surface — scope first)
 
