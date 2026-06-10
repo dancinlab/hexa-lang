@@ -11,12 +11,18 @@ loop targets what the consumer card + code can carry.
 ## milestones (loop self-feeds; add as discovered)
 
 <!-- ANCHOR:OP-27-TF32-DOJO (unique anchor — reflect the VALIDATED deterministic TF32 fast-mode OP-20/23/24/25 into the dojo as a contributor recipe; 0-pod docs; flag the commons.tape governance reflection for user sign) -->
-- [ ] **OP-27 — deterministic TF32 fast-mode dojo recipe (0-pod) + commons directive drafted for user sign** —
-  WIP: add a `### deterministic TF32 fast-mode (precision-uncap)` recipe to docs/hexa-dojo.md (when to use
-  HEXA_TF32_FASTMODE, the self-byte-eq + PEDANTIC-for-portability determinism guarantee, the W14 rel-RMS≤1e-2
-  contract measured 1.13e-6, card-robust 4.2x@B=1, N-step loss-tracking, the precision Pareto FP64→TF32→BF16-
-  DOMINATED, live-wire dispatch site) + DRAFT (not apply) the commons g8x directive for the user's `sidecar
-  sign commons`. NO .tape edits (commons sign-gated). 0-pod, no GPU, no vast.
+- [x] **OP-27 — deterministic TF32 fast-mode dojo recipe (0-pod) + commons directive drafted for user sign** —
+  DOCS-COMPLETE (0-pod half SHIPPED). Added `### deterministic TF32 fast-mode (precision-uncap)` to
+  docs/hexa-dojo.md (after the g86 fair-bench section): when to use HEXA_TF32_FASTMODE (>3× keeping run-to-run
+  determinism, FP64 default byte-identical flag-off), the determinism guarantee (self-byte-eq max|Δ|=0 single-step
+  + whole 100-step trajectory; PIN CUBLAS_PEDANTIC_MATH for portable cross-card guarantee), the W14 rel-RMS≤1e-2
+  contract (1.13e-6 post-AdamW weight, ~2.9e-4 raw live-GEMM), the card-robust 4.2×@B=1 (B=8 19-21× FP64-throttle-
+  caveated), N-step loss-tracking (~1e-7/step, bounded ~5e-7 weight drift → real fast-mode not 1-step illusion),
+  the precision Pareto (FP64 exact 1× → TF32 e-6 4.2× SWEET SPOT → BF16 e-6 4.1× DOMINATED) + ASCII diagram, and
+  the live-wire dispatch site (self/cuda/runtime_cuda_emit.hexa `_hx_cuda_farr_matmul_gpu`). Every number CITED
+  from a verdict (g5), elephant-rule. COMMONS half DRAFTED ONLY (g87_tf32_fastmode do/dont ≤100char/line, ASCII)
+  → awaits user `sidecar sign commons` (agent CANNOT self-sign). NO .tape edited. $0 · 0-pod · no GPU · no vast.
+  Verdict .verdicts/hexa-0pod/F-OP27-TF32-DOJO.txt (dojo summary + drafted directive verbatim + governance note).
 
 <!-- ANCHOR:OP-26-MACHINEINDEP-WRITEUP (unique anchor — consolidate the OP-19/19b + oracle-series machine-independent bit-exact training RESULT into a rigorous evidence-complete results doc; docs-only; NO /paper scaffold per g84 OPT-IN) -->
 - [x] **OP-26 — machine-independent bit-exact training: rigorous results writeup (evidence-complete, docs-only, NO paper scaffold)** —
