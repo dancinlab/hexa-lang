@@ -310,6 +310,9 @@ loop targets what the consumer card + code can carry.
   OS-dependent path. NO divergence on the production deterministic path. $0, 0-GPU, free pool (pi5-akida only), ZERO
   vast. Verdict .verdicts/hexa-0pod/F-OP19C-PI5-3PLATFORM.txt.
 
+<!-- ANCHOR:OP-19D-4TH-ENV (unique anchor — 4th distinct env: musl libc (Alpine) adds a 3rd distinct libm impl beyond glibc+Darwin; OP-19c proved the divergence is an OS/libc effect, this tests it HARDER with a different libc entirely) -->
+- [ ] **OP-19d — 4th-env byte-exact: musl/summer strengthens machine-independence (or honest blocked)**
+
 <!-- ANCHOR:OP-18-L3-FUSED-HOST (unique anchor — completes the OP-16 L3 fused-dispatch family: gelu2 + moe_block2) -->
 - [x] **OP-18 — host fallbacks for the remaining L3 fused dispatchers (gelu2 + moe_block2), 0-GPU testable** —
   completes the OP-16 (#2995) L3 fused-dispatch family: forge_dispatch_gelu2 (L3-b) + forge_dispatch_moe_block2

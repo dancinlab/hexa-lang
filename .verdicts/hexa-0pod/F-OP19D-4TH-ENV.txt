@@ -1,0 +1,24 @@
+════════════════════════════════════════════════════════════════════════════════
+ F-OP19D-4TH-ENV — 4th distinct environment strengthens the machine-independent
+ byte-exact proof (musl libc as a 3rd distinct libm impl, or honest blocked)
+ HEXA-0POD OP-19d · 0-GPU · free pool only · ZERO vast · $0
+════════════════════════════════════════════════════════════════════════════════
+
+STATUS: WIP — skeleton pushed first (STORM-backoff discipline). Measurement in
+progress; this verdict is replaced with the real folds + 4-way cmp on completion.
+
+GOAL
+  OP-19/19b/19c proved flame's deterministic dt_exp/dt_erf folds byte-identical on
+  3 platforms (arm64-macos Darwin · x86-linux glibc aiden · arm64-linux glibc pi5),
+  and OP-19c's KEY finding: the libm exp/erf divergence is an OS/libc effect (glibc
+  vs Darwin), NOT an ISA effect. This OP tests that HARDER with a 4th distinct
+  environment that adds a DIFFERENT libc — musl (Alpine) — the strongest test of
+  "no libm dependence left": if dt_* folds match on musl too (a 3rd distinct libm
+  impl) while libm folds differ across glibc/musl/Darwin, that is definitive.
+
+RECORDED 3-PLATFORM DETERMINISTIC FOLDS (the cmp targets)
+  CE-bwd dt_exp           = 7679248634312321699
+  GELU dt_erf FWD         = 4548590605583584556
+  GELU dt_erf BWD         = 4249661408190172843
+
+4th ENV (TBD), hexa runnable Y/N (TBD), 4-way cmp (TBD), # distinct libm impls (TBD).
