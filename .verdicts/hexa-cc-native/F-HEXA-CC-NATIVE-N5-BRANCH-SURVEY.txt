@@ -1,0 +1,124 @@
+F-HEXA-CC-NATIVE-N5-BRANCH-SURVEY -- exhaustive survey of the cc-native/* N5 branches: where N5 ACTUALLY stands
+==============================================================================================================
+date: 2026-06-10   host: mini (darwin-arm64)   surveyor session: HEXA-CC-NATIVE N5 (post #3010/#3011/#3015/#3018)
+tier: 🟢 SUPPORTED-NUMERICAL (git-observed branch tips + verdicts; deterministic)
+
+WHY THIS VERDICT
+----------------
+This session RE-DERIVED N5 work that already exists in unmerged cc-native/* branches (4th re-derivation
+of pre-existing work: C-ZERO, the 144-stale, the obj-emit O(n²), and now the whole N5 fixpoint stack).
+Recording the branch landscape so future sessions RESUME from the frontier instead of redoing it.
+LESSON: survey `git branch -a | grep cc-native` + .verdicts/hexa-cc-native/ BEFORE deriving N5 work.
+
+THE N5 BRANCH LANDSCAPE (all unmerged to main)
+----------------------------------------------
+- cc-native/n5-gen2-segv ............ FRONTIER (73 commits ahead of n5sym-pt9b). Has the full stack:
+    strtab O(n²)→O(n) (#2458 fce9e9ab2), ADD/SUB SP extended-reg encoding (3164861ff),
+    __arr_alloc_items_zero → hexa_arr_zeros_leaf map (64df436ca). Top = SIGSEGV mitigation work.
+- cc-native/n5sym-pt9b .............. hexa_ld COMMON symbol allocation in __bss (b7eb2abd0) +
+    internal-data GOT_LOAD relaxation (a17764beb).
+- cc-native/n5-strtab-perf / -main .. _build_merged_strtab O(n)+O(n log n) (cb61f56a8); -main verdict:
+    "full-flat emit DONE (residual 0, ~66min) + honest gen2 SIGSEGV".
+- cc-native/n5-byteeq-fixpoint ...... f79451f53 "STEP 6 gen2 smoke FALSIFIED — startup SIGSEGV @0x20".
+- cc-native/n5-fixpoint-link ........ "rt_new.o + hld_bin DONE, emit env-killed at ~60min".
+- supporting: n5sym-pt5/pt7/pt8 (runtime symbol resolution), obj-skip-atlas (−1.85GB RSS),
+    objsym-mangle (_-prefix ABI), n5link-movk-lsl, n5sym-cstring-sect (__TEXT,__cstring).
+
+WHAT IS DONE (across branches, verdict-backed)
+----------------------------------------------
+N0 frontier · N3/N3A/N3B exec-link · N4 chain-zero-extern · N5A symset ·
+N5-pre STEP0 (144 measured) · N5-link (ascast, movk/lsl) · obj-emit atlas-skip ·
+obj-emit strtab O(n) · full-flat emit residual 0 · hexa_ld COMMON-in-bss + GOT relax.
+=> native codegen + obj-emit + hexa_ld link of the WHOLE self-host closure all WORK.
+
+THE REMAINING WALL — TWO independent hexa_ld bugs (per n5-byteeq-fixpoint STEP-6 verdict f79451f53)
+---------------------------------------------------------------------------------------------------
+BUG 1 — gen2 startup SIGSEGV @0x20 (deterministic, 5/5, on ANY real invocation incl. --version):
+  "near-null deref @0x20 in main's early runtime exec path." A weak/common DATA global
+  (`_return_val`-class; hexa_ld.hexa:1010 + :1585 already handle return_val GOT_LOAD/weak-data)
+  resolves to ~0, then +0x20 offset deref crashes. Leading hypothesis (branch name
+  n5-gen2-segv-addend-fix): relocation-ADDEND bug. Mitigations landed but NOT cleared:
+  COMMON-in-bss (pt9b), arr_alloc-leaf, SP-encoding, GOT relax. NOTE the STEP-6 verdict also says
+  the parent's earlier "gen2 starts clean" NO LONGER reproduces (regressed on fresh relink).
+BUG 2 — hexa_ld output is NONDETERMINISTIC: gen2 != gen2b, diff @byte 1924664 in the LINKEDIT tail.
+  This INDEPENDENTLY blocks byte-eq fixpoint even if BUG 1 is fixed (cmp gen2≡gen3 needs a
+  deterministic linker). Likely an unsorted map/hash iteration or uninitialized pad in hexa_ld's
+  LINKEDIT (symtab/strtab/dyld-info) serialization. Localize by reading hexa_ld.hexa LINKEDIT emit
+  for non-sorted iteration / timestamp / uninit buffer (code-read, no 60min build needed to START).
+Both bugs need a ~60min gen2 emit per verify cycle — this is a genuine multi-session linker frontier.
+
+BUG 2 INVESTIGATION (code-read of cc-native/n5-gen2-segv tool/hexa_ld.hexa, no build):
+  LINKEDIT determinism is UNTOUCHED by any branch (git log --all grep linkedit/determinism = empty).
+  HYPOTHESIS "unsorted map iteration in the symtab/dsym pipeline" → **REFUTED by code-read**:
+    - obj.defined / extern_refs built by reading each .o nlist sequentially (hexa_ld.hexa:380-396) → file-order deterministic.
+    - dsym_names/dsym_slot/dsym_offset built by iterating obj.defined IN ARRAY ORDER (701-725) → deterministic.
+    - symtab/strtab emission iterates obj.defined array-order + linear name-scan (985-1010) → deterministic.
+  So the whole symtab/strtab/dsym path is array/file-order based — NO map iteration, NO sort needed.
+  => a speculative "sort dsym" patch would be WRONG (it would have changed deterministic output for no
+  reason). The @byte-1924664 non-determinism is ELSEWHERE in LINKEDIT: the dyld_info export trie /
+  bind opcodes, the code-signature, or an uninitialized pad buffer — NONE localizable by code-read alone.
+  CONCLUSION: there is NO honest no-build fix for BUG2. Its entry point is a BYTE-DIFF of two real
+  gen2 builds at offset 1924664 (otool -l + xxd of the LINKEDIT region) → identify which LINKEDIT
+  sub-table differs → fix its source. That needs 2× ~60min builds. Both N5 bugs are build-gated.
+
+CRITICAL REFRAME (full read of F-N5-BYTEEQ-FIXPOINT.txt on cc-native/n5-byteeq-fixpoint):
+  N5 is NOT "2 deep unsolved bugs / fresh multi-session". The fixpoint REACHED STEP 6 with gen2
+  building AND STARTING CLEAN, and only STEP 7 (the byte-eq cmp) was pending. Verbatim from the
+  verdict's main run:
+    STEP 4 EMIT [DONE] EXIT=0 WALL=4049s RESIDUAL=0 → /tmp/cc-prc2.o (3220664 B)
+    STEP 5 LINK [DONE] /tmp/hld_bin -o /tmp/gen2 cc-prc2.o rt_new.o --lc-main _main → /tmp/gen2 (1946688 B)
+    GEN2 STARTUP [CONFIRMED] /tmp/gen2 --version/--help → exit 0. "SP-encoding fix #2464 VALIDATED:
+      NO 0x1000 SIGSEGV at gen2 startup." A/B control: gen2 ≡ aprime (identical behavior).
+    STEP 7 [PENDING] gen2 self-emits cc-gen3.o (~67min) ; cmp cc-prc2.o cc-gen3.o (exit 0 = graduation).
+  The LATER SIGSEGV @0x20 (commit f79451f53) is a REGRESSION on a fresh relink: the verdict header
+  states "main had [hexa_ld L1 GOT_LOAD relax + L2 COMMON→__bss] REVERTED" — the gen2-starts-clean
+  build used a hld_bin PATCHED with L1/L2 (cherry-picked from n5-fixpoint-link 1ac3140e5); when those
+  patches were lost on a main merge, the fresh hld_bin produced a SIGSEGV-ing gen2.
+  => THE REAL PATH TO N5 FIXPOINT (not "2 multi-session bugs"):
+     1. Build hld_bin from a branch that STILL HAS L1+L2 (cc-native/n5sym-pt9b = COMMON→__bss +
+        GOT relax; or n5-fixpoint-link 1ac3140e5). Do NOT use a main-merged hld_bin (L1/L2 reverted).
+     2. Re-run STEP 1-5 (aprime_fxp + rt_new.o + flat + 67min emit cc-prc2.o + hld_bin link) → gen2
+        should START CLEAN again (the SIGSEGV is the patch-regression, already solved once).
+     3. STEP 7: gen2 self-emits cc-gen3.o (~67min) ; cmp cc-prc2.o cc-gen3.o. BUG2 (LINKEDIT
+        nondeterminism gen2≠gen2b @1924664) is the residual to resolve IF the cmp fails — but STEP 7
+        was never reached because the SIGSEGV regression blocked it. Resolve L1/L2-regression FIRST.
+  So N5 is "consolidate the L1/L2 hexa_ld patches onto the codegen frontier + run STEP 4→7
+  (~2×67min detached emits + a cmp)" — a ONE-focused-session build task, NOT an open research wall.
+
+CORRECTION (full read of the verdict's LATER continuation — the "1 session" above was too optimistic):
+  The same verdict's continuation confirms BOTH blockers are REAL in the latest state, not conditional:
+    - "hld_bin is NON-DETERMINISTIC: relinking gen2 from IDENTICAL inputs [differs]" → BUG2 CONFIRMED
+      (byte-eq fixpoint blocked even with a clean gen2; needs a byte-diff of 2 builds to localize +
+      a hexa_ld fix to make linking deterministic).
+    - "fresh hld_bin relink reproduces the crash" → the SIGSEGV regression reproduces on fresh builds.
+  So the honest N5 path is a 3-part build+debug campaign, each part 67min-build-gated:
+    (P1) consolidate L1/L2 (GOT relax + COMMON→bss) onto the codegen frontier so gen2 starts clean,
+    (P2) FIX hld_bin nondeterminism (localize via 2-build byte-diff @1924664 → deterministic LINKEDIT),
+    (P3) run STEP 4→7 (67min emit cc-prc2.o → link gen2 → gen2 self-emits gen3 67min → cmp byte-eq).
+  Launching a blind 67min emit BEFORE P1+P2 is waste (it lands in the known SIGSEGV + nondeterminism).
+  This is a dedicated multi-step build-capable session — correctly scoped, but NOT a single launch.
+
+P2 FURTHER NARROWING (hexa_ld code-read, no build — and why no-build is now EXHAUSTED):
+  gen2 = 1946688 B; the nondeterministic byte 1924664 is 22024 B from EOF = the LINKEDIT tail.
+  hexa_ld emits only an LC_CODE_SIGNATURE PLACEHOLDER (hexa_ld.hexa:481, :502); the real signature is
+  applied POST-LINK by the EXTERNAL `codesign -s -` (ad-hoc). So @1924664 is the code-signature region
+  / LINKEDIT-tail placeholder. Candidates: (a) the placeholder blob has UNINITIALIZED bytes hexa_ld
+  didn't zero; (b) bytes elsewhere are uninit and `codesign`'s cdhash (which covers the whole file)
+  serializes differently. Code-read CANNOT decide which bytes are uninit without running — that needs
+  a 2-build byte-diff (`otool -l` to find the LINKEDIT/codesig offsets, `xxd` the 1924664 region of
+  gen2 vs gen2b). => EVERY no-build avenue (symtab determinism refute → code-sig narrow) terminates at
+  "needs the 67min build". The no-build investigation is EXHAUSTIVELY closed. N5 is build-session work.
+
+NEXT (resume here — do NOT redo from main)
+------------------------------------------
+1. Check out cc-native/n5-gen2-segv (the 73-ahead frontier), rebase/merge current main if needed.
+2. Build gen2 (native --emit=obj of the full flat → hexa_ld; ~60min emit — pool/guarded).
+3. lldb the gen2 SIGSEGV: `lldb gen2 -o run -o 'bt' -o 'di -s $pc'` → identify the @0x20 deref site.
+4. Map back to the hexa_ld relocation that produced the bad pointer (weak/common `_return_val`,
+   addend). Fix hexa_ld's weak/common symbol or addend handling.
+5. gen2 smoke (exit42) → gen2 recompiles SSOT → gen3 → cmp gen2≡gen3 = N5 fixpoint.
+
+This session's NEW, non-redundant landed value: #3010 (install.sh runtime cache pre-warm) + #3011
+(runtime.c-absent rescue) — default C-transpile path hardening, MERGED, orthogonal to N5.
+#3015/#3018 (Fix A empty_atlas / Fix B typeof) are small compiler/-tree increments that may overlap
+n5sym/obj-skip-atlas branch work — reconcile before relying on them as novel.

@@ -1,0 +1,52 @@
+F-HEXA-CC-NATIVE-N5PRE-STEP1-CPATH-CLEAN -- current compiler source typechecks CLEAN via the working
+self-host (C-transpile) compiler; the STEP0 144 diagnostics are NOT a parser source bug
+====================================================================================================
+date: 2026-06-10   host: mini (darwin-arm64)   base: working tree on origin/main (post #3011 304a4019f)
+tier: 🟢 SUPPORTED-NUMERICAL (deterministic reproduce: flatten + transpile, exit 0, 0 HexaError)
+
+CLAIM TESTED
+------------
+The N5-pre STEP0 verdict (F-...-N5PRE-STEP0-MEASURED) framed the residual 144 native-typecheck
+diagnostics as a "parser as-cast cascade" (as x61 + ) x7 HX2001 + HX0011 x13), with STEP1 =
+"fix compiler/parse/parser.hexa as-cast". Two static refutations were found first:
+  (1) the source FULLY handles `as`: compiler/lex/lexer.hexa:92 (as->KwAs) ->
+      compiler/parse/parser.hexa:715 (G10 postfix cast) -> compiler/check/types.hexa:1823 (op=="as").
+  (2) every REAL cast in compiler/ has a bare-Ident target (as string / as f64 / as i64 / as int /
+      as T ...); there are NO complex-target casts (as T? / as [T] / as T<X>) that parser.hexa:720
+      `expect(Ident)` would reject. (The "as a / as the / as Cooper / as an" hits are PROSE in
+      comments, not casts.)
+
+DECISIVE EXPERIMENT (cheap, no aprime_cc rebuild)
+-------------------------------------------------
+Flatten compiler/main.hexa's import/use closure with build_aprime.sh's own stage-1 Python flattener
+(self-contained), then feed the flattened single file to the WORKING installed self-host compiler
+via the C-transpile path:
+
+  $ python3 <build_aprime stage-1 flatten>  -> /tmp/cc-flat-probe.hexa  (48 files, 43973 lines)
+  $ HEXA_MAC_BUILD_OK=1 hexa build /tmp/cc-flat-probe.hexa --c-only -o /tmp/cc-flat-probe.c
+    OK: build/artifacts/cc-flat-probe.c.c
+    OK: transpiled /tmp/cc-flat-probe.c (C source, no link)
+
+RESULT: 0 HexaError. The current compiler source, parsed + typechecked + lowered to C by the current
+working self-host compiler, has ZERO HX0011 / HX2001 / HX3001 / HX3004 / HX2003. (--c-only runs the
+full parse+typecheck before C emission, so a clean transpile means a clean typecheck.)
+
+CONCLUSION
+----------
+The STEP0 144 diagnostics are NOT a parser/type SOURCE bug -- the working compiler proves the source
+is self-consistent. They are therefore one of:
+  (A) a STALE aprime_cc build (the measured binary's transpiler/parser predates current source), or
+  (B) NATIVE-PATH-SPECIFIC typecheck behavior -- the `--emit=obj --backend=native` typecheck path
+      running stricter / different checks than the C-transpile `--c-only` path (the HX3001/HX3004/
+      HX2003 "HexaVal carrier-model" class is the likely native-specific surface).
+Distinguishing (A) vs (B) requires a CURRENT-source aprime_cc re-measure (the reproduce loop). The
+"STEP1 = fix parser as-cast" premise is FALSIFIED either way -- the C-path typecheck is clean, so the
+next action is rebuild-current-aprime + re-measure, NOT a speculative parser edit.
+
+NEXT
+----
+N5-pre reproduce loop on guarded mini (nice -n 19), per plan §5: rebuild a current-source aprime_cc
+(hexa cc -> hexa_v2; runtime_core_emit regen; clean worktree; build_aprime.sh -v) and re-run
+`aprime_cc <flat> --emit=obj`. Expect either ~0 (stale, case A) or a residual native-specific set
+(case B, => STEP3 HexaVal carrier in types.hexa is the real work, parser is NOT touched).
+live tree untouched; /tmp/cc-flat-probe.* disposable. No milestone flipped.

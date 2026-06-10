@@ -1,0 +1,56 @@
+F-HEXA-CC-NATIVE-N5PRE-REMEASURE -- current-source aprime_cc re-measure: 144 -> 3 fatal errors
+=================================================================================================
+date: 2026-06-10   host: mini (darwin-arm64)   base: clean worktree off origin/main 304a4019f (post #3011)
+tier: 🟢 SUPPORTED-NUMERICAL (deterministic build + measure; falsifier PASS; smoke exit42 PASS)
+
+WHAT
+----
+Built a CURRENT-source aprime_cc via the canonical `tool/build_aprime.sh` STAGE-0 path (self-contained
+regen: restore_frozen_seeds -> stage_resolve_runtime_a [runtime_core_emit regen + runtime.a] ->
+stage_prebuild_hexat [build/hexat from hexa_cc.c]), then re-measured the N5-pre diagnostics by
+compiling the flattened compiler/main.hexa closure with `--emit=obj`.
+
+KEY RESULT: the STEP0b darwin "recipe gap" that BLOCKED earlier (F-...-N5PRE-STEP0B-DARWIN) is RESOLVED
+on current main -- build_aprime.sh STAGE-0 now builds clean:
+  [0/5] regen: runtime.c=14875L · hexat=1963336B
+  [1/5] flatten 48 files 43973 L -> [2/5] transpile 47546 L C -> [4/5] clang /tmp/aprime_fresh
+        1520384 B Mach-O arm64 -> [5/5] smoke exit(6*7)==42 PASS.
+
+CLI NOTE (why a prior naive measure read 0): aprime_cc's `_normalize_argv` (compiler/main.hexa:108)
+consumes the FIRST `*.hexa` token as the script-name and finds the SOURCE among the args AFTER it.
+Correct form: `aprime_cc <dummy.hexa> [flags] -o out.o <REAL_SOURCE.hexa>`.
+
+FALSIFIER (measurement honesty) -- PASS: a source with `totally_undefined_zzz()` ->
+`HexaError [HX2001] undefined name` + exit 1.
+
+MEASUREMENT (current-source aprime_cc, flattened compiler/main.hexa --emit=obj)
+------------------------------------------------------------------------------
+  STEP0 (stale binary)  ->  CURRENT (STAGE-0 build)
+  144 diagnostics       ->  3 FATAL HexaError (+ 26 HX4001 int-div WARN, non-fatal)
+  ----------------------------------------------------------------------
+  HX0011 x13 (brace)    ->  0   (the "as-cast cascade" was 100% STALE-BOOTSTRAP)
+  as x61 + ) x7         ->  0
+  HX3001 x17            ->  2   (empty_atlas() AtlasRef<->AtlasIndex, flat:43492)
+  HX2001 (residual)     ->  1   (`typeof`, flat:36987)
+  HX3004 x18 / HX2003   ->  0
+
+THE 3 FATAL (exact)
+-------------------
+1. HX2001 `typeof` @ flat:36987 -- in `rt_null_coal` of self/rt/core.hexa, a DORMANT scaffold
+   (header: "cg_rt_target=='c', not linked"; RUNTIME-PORT M5 confirmed self/rt/* is a dormant
+   scaffold, cg_rt_target() hardcoded "c"). The native typechecker doesn't recognize the `typeof`
+   operator. Fix candidates: (a) teach native bind/types the `typeof` builtin, or (b) exclude the
+   dead self/rt/* scaffold from the native self-host closure (it is not linked).
+2-3. HX3001 x2 `type mismatch: expected named:AtlasRef, got named:AtlasIndex` @ flat:43492 --
+   the live `let atlas = if emit_kind == "obj" { empty_atlas() } else { _load_atlas() }`.
+   `empty_atlas()` returns AtlasIndex; the `atlas` binding / consumer expects AtlasRef. A type
+   signature reconcile (empty_atlas return type or the AtlasRef/AtlasIndex carrier in types.hexa).
+
+CONCLUSION
+----------
+N5-pre is NOT a "parser as-cast overhaul" (STEP0's framing, now FALSIFIED -- those 81 were stale).
+It is 3 concrete fixes: 1 `typeof` in dead scaffold + 2 `empty_atlas()` AtlasRef/AtlasIndex. The
+26 HX4001 are non-fatal int-div warnings. Once the 3 fatals clear, `--emit=obj` should reach codegen,
+unblocking N5 (gen2 self-host obj) -> N5 fixpoint (gen2 ≡ gen3 byte-eq).
+NEXT: STEP-typeof + STEP-atlasref edits -> rebuild (STAGE-0, ~build) -> re-measure -> expect 0 fatal.
+live tree untouched; /tmp/aprime_fresh + worktree disposable. N5 not yet flipped.
