@@ -960,7 +960,14 @@ fn _emit_x86_64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
             }
             i = i + 1
         }
-        let target = s.op
+        // SELFHOST-NEXT x86_64: map builtin/runtime names to their linkable
+        // C runtime symbol (print -> hexa_print_val, println -> hexa_println,
+        // exit -> hexa_exit, etc.) — the same mapping the arm64 direct-asm
+        // path uses (_builtin_runtime_sym, arm64_darwin.hexa). Without this
+        // the x86_64 path emitted the bare hexa name (e.g. `print`) which has
+        // no runtime symbol -> `undefined reference to print` at link. User
+        // functions are not in the table and pass through unchanged.
+        let target = _builtin_runtime_sym(s.op)
         buf.push(_x86_instr1("call", _x86_op_label(target), "call " + target))
         let cleanup = overflow_n * 8 + align_pad
         if cleanup > 0 {
