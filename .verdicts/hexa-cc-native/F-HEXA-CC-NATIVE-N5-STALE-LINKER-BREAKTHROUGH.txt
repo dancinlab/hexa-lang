@@ -1,0 +1,82 @@
+F-HEXA-CC-NATIVE-N5-STALE-LINKER-BREAKTHROUGH
+==============================================
+Date:    2026-06-10
+Axis:    self-host / C-free fixpoint (N5: gen2 ≡ gen3 byte-eq)
+Status:  🟢 startup-SIGSEGV RESOLVED (stale-linker) · 🟠 N5 gap re-localized to a
+         narrow gen2 native-codegen miscompile (STP/LDP mem-operand)
+Supersedes the "gen2 SIGSEGV = 16-byte HexaVal runtime gap" conclusion in
+F-HEXA-CC-NATIVE-N5-P1-LOCALIZED.txt — that root-cause was WRONG.
+
+SUMMARY
+-------
+The long-standing "gen2 startup SIGSEGV" that blocked N5 was a STALE-LINKER
+artifact, not a runtime/representation defect. I had been patching the linker on
+the worktree branch `cc-native/n5-byteeq-fixpoint`, whose `tool/hexa_ld.hexa` is
+**293 lines BEHIND main** (2227-line fork vs main's 2473-line). main's hexa_ld
+ALREADY lays out `__literal8`/`__literal16` and routes `__DATA,__const` pointer
+tables (`is_const_fam` / `is_data_const`, ~lines 706-788). Rebuilding hld_bin from
+main's source and relinking the SAME object makes gen2 start CLEAN.
+
+PROOF (all on macOS arm64, this host)
+-------------------------------------
+1. Build linker from main:
+     cd <main-worktree>
+     HEXA_MAC_BUILD_OK=1 hexa build tool/hexa_ld.hexa -o /tmp/hld_main   # 552192B
+2. Relink the existing gen2 object (unchanged, 3220808B) + runtime:
+     /tmp/hld_main -o /tmp/gen2_main /tmp/cc-prc2.o /tmp/rtx/runtime.o --lc-main _main
+     codesign -s - -f /tmp/gen2_main
+3. Startup:
+     /tmp/gen2_main            -> "hexa-compiler: missing SOURCE.hexa"  exit 2
+     (3/3 stable, NO SIGSEGV — vs the stale linker's 139/139 segfault)
+
+So the 8 successive "definitive root" claims (reloc/ASLR, 16-byte HexaVal vs
+8-byte NaN-box, null-map, key-ABI, …) were all chasing a stale-linker ghost.
+Lesson reinforced: survey branches/worktrees BEFORE deriving — main was ahead.
+
+"missing SOURCE.hexa" IS NOT A BUG
+----------------------------------
+`compiler/main.hexa::_normalize_argv` (line 108) assumes the INTERPRETED shape
+`hexa run compiler/main.hexa SOURCE.hexa` and skips the FIRST `*.hexa` token as
+the script. gen2 is a STANDALONE compiled binary, so its first `*.hexa` IS the
+user source -> wrongly skipped -> empty argv. The argv plumbing is CORRECT:
+  - lldb at `hexa_set_args` entry: x0 = 0x3 (argc=3), x1 = valid argv (3 ptrs).
+  - `_main+8` = `bl hexa_set_args` (codegen arm64_darwin.hexa:2362, `if
+    fn_name == "main"`), so x0/x1 are stashed into __hexa_argc/__hexa_argv.
+Workaround proven — pass a dummy first `.hexa` token:
+     /tmp/gen2_main SCRIPT.hexa /tmp/smoke.hexa --emit=obj -o out.o
+-> gen2 now runs the FULL pipeline (lex -> parse -> check -> lower -> codegen ->
+emit). A real fix: make `_normalize_argv` detect standalone invocation (argv[0]
+is not a hexa driver / not `.hexa`) and not skip the first source.
+
+THE REAL N5 GAP — gen2 native-codegen miscompile at EMIT
+--------------------------------------------------------
+With correct invocation, gen2 reaches emit and fails:
+     ENCODE-MISS: STP mem-parse-fail mem=#0
+     ENCODE-MISS: LDP mem-parse-fail mem=#0
+     pack_lir: 5 page ref(s) unresolved (PR-C: globals/floats)
+Site: compiler/emit/macho_arm64.hexa:551/564. The STP/LDP ENCODER is correct;
+the malformed input is `ops[2] == "#0"` (a bare immediate) where a memory operand
+`"[sp, #N]"` / `"[x29, #N]"` is required. So gen2's spill/frame operand builder
+(compiler/codegen/arm64_darwin.hexa) emits a memory operand string with the base
+register dropped. This matches the existing note at
+compiler/lower/hir_to_mir.hexa:298 — "function-body aliasing -> ENCODE-MISS/SIGSEGV
+in gen2". N5 frontier = fix this self-host aliasing/operand miscompile (+ the 5
+PR-C global/float page-refs), NOT a runtime port. The C runtime (rtx/runtime.o,
+all 88 syms) links and runs fine.
+
+OPEN — gen2-miscompile vs source-codegen-bug
+--------------------------------------------
+Undetermined whether `ops[2]=="#0"` is (a) a gen2 self-host miscompile (the
+compiler that built cc-prc2.o corrupted the operand) or (b) a latent bug in
+main's codegen source that only manifests on self-compile. Deciding needs a FRESH
+native compiler built from main source (~63min `--emit=obj`) to emit smoke.hexa
+and diff. The stale Jun-1 host hexa cannot serve as oracle: it C-transpiles even
+under `--backend=native` and miscompiles compiler/main.hexa itself
+(`hexa_call2(__raw_cmp3, …)` 20 clang errors).
+
+ARTIFACTS (this host /tmp)
+--------------------------
+  cc-prc2.o (3220808B, gen2 object) · rtx/runtime.o (529296B) ·
+  hld_main (552192B, main-source linker) · gen2_main (1963152B, links+starts) ·
+  smoke.hexa · smoke_gen2.o (808B, incomplete due to ENCODE-MISS)
+See also: F-HEXA-CC-NATIVE-N5-P1-LOCALIZED.txt (earlier, superseded root-cause).
