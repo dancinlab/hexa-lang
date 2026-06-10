@@ -1,0 +1,153 @@
+F-X86-FULL-CODEGEN-RUNG1-PASS — SELFHOST-NEXT x86_64 full source->binary
+========================================================================
+date: 2026-06-11
+branch: domain/selfhost-next-x86_64-complete
+HEAD: 380bdf548
+host: summer (x86_64 GNU/Linux, gcc 13.3.0, glibc) — repo ~/dancinlab/hexa-lang
+
+CLAIM (pre-registered)
+  A non-trivial hexa source program compiles VIA THE NATIVE x86_64 EMITTER
+  (compiler/main.hexa codegen_x86_64_linux -> pack_lir_x86_64 ->
+  serialize_elf_x86_64; encode_x86_64_insn Intel-SDM-verified; NO system
+  `as`, NO clang for codegen) through the compiler driver to an x86_64 ELF
+  that RUNS on real x86_64 hardware and produces the correct exit code.
+
+RESULT: 🟢 RUNG 1 PASS  +  🟢 RUNG 3 (gold determinism) PASS
+        🔴 RUNG 2 (runtime string-print) — precise boundary documented below.
+
+==========================================================================
+WHAT WAS BUILT
+==========================================================================
+The native x86_64 hexa compiler `cc_native` was built on summer from the
+compiler/main.hexa import closure (48 files, 44041 lines) via the new
+`tool/build_native_linux_x86_64` (the x86_64 sibling of the proven
+build_native_linux_arm64): python3 flatten -> build/hexat transpile ->
+s4 post-process + runtime inline + rt_fs/rt_array link-fills -> gcc.
+
+  cc_native: ELF 64-bit LSB pie executable, x86-64, dynamically linked,
+             BuildID b57f952a..., 3,383,240 B  (native x86_64 compiler)
+
+THREE in-tree source changes (this branch):
+  1. compiler/main.hexa — add the x86_64-linux-gnu native OBJ fast-path
+     (emit_kind==obj && backend==native && target==x86_64-linux-gnu ->
+      pack_lir_x86_64 + serialize_elf_x86_64 + write_bytes + exit). This
+      is the x86-64 mirror of the arm64-linux branch and removes BLOCKER (a)
+      (the fast-path was previously gated to arm64 targets only).
+  2. compiler/codegen/x86_64_linux.hexa — route STMT_CALL targets through
+     _builtin_runtime_sym (print -> hexa_print_val, exit -> hexa_exit, …);
+     previously emitted the bare hexa name -> `undefined reference to print`.
+  3. compiler/codegen/arm64_darwin.hexa — export _builtin_runtime_sym `pub`
+     so the x86_64 backend reuses the single name->runtime-symbol table.
+
+BLOCKER 0 (substrate, was masking everything on summer): the installed
+  toolchain at ~/core/hexa-lang carried a STALE generated self/runtime_core.c
+  (June 2) with a bare `#include <malloc.h>` AFTER runtime.c's
+  `#define malloc(n) hxlcl_malloc(...)` shims -> glibc malloc.h prototypes
+  macro-expand -> "function cannot return function type" (10-error cascade),
+  plus 4 undeclared hxlcl_* helpers. ROOT CAUSE: stale .c artifact. FIX:
+  use origin/main sources in ~/dancinlab/hexa-lang where `restore_frozen_seeds`
+  produces a coherent same-revision seed that compiles with ZERO errors
+  (the malloc.h ordering fix already lives in self/runtime_core_emit.hexa on
+  main, lines 370-381). NO source change needed for blocker 0 — it was a
+  stale-artifact false alarm; the fix is "build from main, not from the
+  stale ~/core checkout."
+
+BLOCKER (b) (`hexa run compiler/main.hexa` extern gap): the bootstrap
+  C-transpile of the whole compiler/ module graph drops some `pub` cross-file
+  symbols (codegen_options_default, NVPTX_TARGET_SM90, Severity_*) -> 14
+  clang errors. BYPASSED (not the codegen path): the milestone is exercised
+  by BUILDING cc_native from the flattened closure (flatten resolves all
+  imports into one TU), exactly as the proven arm64-linux milestone does.
+
+==========================================================================
+PROVING RUNS (verbatim, captured on summer)
+==========================================================================
+host: x86_64 GNU/Linux · gcc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0
+HEAD: 380bdf548
+
+--- RUNG 1a: ret / exit code ---
+  $ cat ret42.hexa
+    fn main() -> Int {
+      return 42
+    }
+  $ cc_native _drv.hexa --emit=obj --backend=native \
+        --target=x86_64-linux-gnu --verbose -o ret42.o ret42.hexa
+    hexa-compiler: emitted ELF x86-64 .o via native backend (488 bytes) to ret42.o
+    ret42.o: ELF 64-bit LSB relocatable, x86-64, version 1 (SYSV), not stripped
+  $ gcc ret42.o build/runtime.a -o ret42 -lm -ldl
+  $ ./ret42 ; echo rc=$?
+    rc=42                                    <-- CORRECT
+
+--- RUNG 1b: integer arithmetic + user function call + branch ---
+  $ cat arith.hexa
+    fn add(a: Int, b: Int) -> Int { return a + b }
+    fn main() -> Int {
+      let x = add(30, 12)        // function call + integer arithmetic
+      if x > 40 { return x }     // branch
+      return 0
+    }
+  $ cc_native _drv.hexa --emit=obj --backend=native \
+        --target=x86_64-linux-gnu -o arith.o arith.hexa
+  $ gcc arith.o build/runtime.a -o arith -lm -ldl
+  $ ./arith ; echo rc=$?
+    rc=42                                    <-- CORRECT (add(30,12)=42, branch taken)
+
+--- RUNG 3: byte-eq determinism (re-emit identical) ---
+  $ cc_native ... -o ret42_a.o ret42.hexa ; cc_native ... -o ret42_b.o ret42.hexa
+  $ cmp ret42_a.o ret42_b.o && echo IDENTICAL
+    IDENTICAL    (sha256 33536f17f2e94481…, both emits)
+  $ cmp arith.o arith_b.o && echo IDENTICAL
+    IDENTICAL
+
+PROVENANCE: the `.o` is produced ONLY by the in-tree native encoder
+  (serialize_elf_x86_64 + encode_x86_64_insn) — confirmed by the verbose
+  "emitted ELF x86-64 .o via native backend" line, which is the new
+  fast-path branch (NOT a system `as` fork). gcc is used ONLY to link the
+  driver-produced .o against the runtime archive (same as the arm64-linux
+  milestone uses ld/gcc for the link step).
+
+==========================================================================
+RUNG 2 BOUNDARY (the precise remaining gap — runtime string-print)
+==========================================================================
+A program calling a RUNTIME builtin with a primitive arg fails:
+  $ cat hi.hexa
+    fn main() { print("hi") ; exit(7) }
+  emit OK (valid ELF x86-64 .o), link OK, RUN -> stdout=[<value>] rc=208
+  (expected stdout=hi rc=7).
+
+ROOT CAUSE — incomplete HexaVal arg ABI in the x86_64 STMT_CALL path:
+  HexaVal is a 16-byte struct `{ HexaTag tag; union { i64 i; char* s; … } }`
+  (self/runtime_core.c:1007). Under the SysV AMD64 ABI a 16-byte struct
+  passes in a register PAIR: arg0 -> rdi(tag):rsi(payload),
+  arg1 -> rdx:rcx, arg2 -> r8:r9; INTEGER/POINTER returns are rax:rdx.
+  The x86_64 backend (compiler/codegen/x86_64_linux.hexa STMT_CALL loop,
+  ~L951-964) currently materialises only ONE register per arg (the payload),
+  omitting the tag eightbyte, and does NOT box int/bool runtime returns.
+  Emitted asm for print("hi"):  `mov rdi, .LCstr0 ; call hexa_print_val`
+  — passes the raw cstr pointer where hexa_print_val expects a {tag,payload}
+  HexaVal -> prints `<value>`. exit(7): `mov rdi, 7 ; call hexa_exit`
+  -> 7 read as a malformed HexaVal -> rc 208.
+
+  The arm64 backend does this correctly via `_hv_load(buf, arg, lo, hi)`
+  (arm64_darwin.hexa L1961-1996): tag in the lo reg, payload in the hi reg,
+  per arg pair, plus _builtin_ret_box for int/bool returns. The same
+  16-byte two-eightbyte ABI must be implemented for x86_64 (a `_hv_load`-
+  equivalent emitting `mov tag_reg, TAG ; mov payload_reg, value` into the
+  rdi:rsi / rdx:rcx / r8:r9 pairs, + rax:rdx return boxing). This also
+  affects the pre-existing x86_64 array/map runtime-call emits
+  (hexa_array_push etc., L724-862) which likewise pass HexaVal in one reg.
+
+  This is a self-contained NEXT codegen milestone ("x86_64 HexaVal 16-byte
+  SysV struct-by-value arg/return ABI"), NOT a correctness defect in the
+  ret/arithmetic/branch codegen proven above.
+
+==========================================================================
+VERDICT
+==========================================================================
+🟢 RUNG 1 (the [x] bar) PASS: a non-trivial hexa program (ret; and
+   arithmetic+call+branch) compiles through the NATIVE x86_64 emitter via
+   the compiler driver to a runnable x86_64 ELF with the correct exit code,
+   byte-eq deterministic on re-emit (RUNG 3 also green). The "multi-target
+   bootstrap: x86_64 codegen path" milestone is DONE for source->binary
+   integer/control-flow programs. RUNG 2 (runtime-extern string-print) is
+   the named next step, bounded precisely above (x86_64 HexaVal 16-byte ABI).
