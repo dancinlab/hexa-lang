@@ -1033,3 +1033,32 @@ NOT claimed. $0, no vast/pool/pod. Verdict .verdicts/hexa-0pod/F-OP21-HOPPER-WAR
   STILL H100-GATED: device wgmma swmode=1 HW de-swizzle (MODE 1/4 rel_rms), the gemm_w16b device band path, ALL perf.
   No wgmma/PTX executed, no TFLOP/s claimed. Build temp cleaned (disk-frugal). Foreign vast pod 40375114 untouched.
   Verdict .verdicts/hexa-0pod/F-OP21C-W16-MODES-DERISK.txt.
+
+## OP-23b — TF32 drift N=500 + LR-schedule (longer/harsher horizon) — GREEN (aiden 5070, $0, 0-pod)
+- EXTENDED OP-23 (#3005) to a LONGER + HARSHER regime to resolve its caveat ("N=100, no LR-schedule;
+  flat-to-shrinking to step 100 with no late blow-up — does it hold longer/harsher?"):
+    N=500 (5x) · standard transformer LR schedule (linear warmup 50 steps 0->1e-3, then cosine decay to
+    5e-5; computed in DOUBLE, passed IDENTICALLY to both lanes so the schedule is not a divergence source) ·
+    harder structured synthetic (row/col sinusoidal dGrad target, default D bumped 768->1024).
+  Harness: tool/bench/flame_traj_drift_tf32_op23b.cu (step DAG byte-identical to OP-23/OP-20; only cuBLAS
+  compute type differs + per-step LR). Driver: run_op23b_5070.sh (idle-guarded, DEFAULT+PEDANTIC).
+- 4/4 cells on aiden RTX 5070 sm_120 (D={1024,768}, T=256, B={1,8}). FREE pool, NO vast, NO pod, leak-0,
+  /tmp/op23b cleaned after. Raw: tool/bench/op23b_5070_raw.log.
+- RESULTS (verbatim):
+    DEFAULT  D=1024 B=1  selfByteEqN=Y  lossTrackN=3.170e-06  worstLossTrack=1.864e-04@3  lateWorst=3.240e-06@476  peakWorst=3.284e-06@52
+    DEFAULT  D=1024 B=8  selfByteEqN=Y  lossTrackN=1.145e-07  worstLossTrack=1.904e-04@3  lateWorst=2.156e-07@492  peakWorst=2.909e-07@52
+    DEFAULT  D=768  B=1  selfByteEqN=Y  lossTrackN=3.398e-06  worstLossTrack=6.334e-05@5  lateWorst=3.518e-06@454  peakWorst=3.338e-06@48
+    PEDANTIC D=1024 B=1  selfByteEqN=Y  lossTrackN=3.170e-06  worstLossTrack=1.864e-04@3  lateWorst=3.240e-06@476  peakWorst=3.284e-06@52
+- THREE QUESTIONS:
+    Q1 bounded-to-500-vs-late-blowup -> BOUNDED. Worst gap always EARLY (step 3-5); late-half worst SMALLER
+       and FLAT; step-500 tracking 1e-7..3.4e-6. NO late blow-up. Caveat resolved in the GOOD direction.
+    Q2 LR-schedule amplifies? -> NO. Warmup-peak window [45..55] worst (~3e-6/~3e-7) == steady-state order;
+       the 1e-3 LR peak is not a spike. Bounded-tracking SURVIVES the schedule.
+    Q3 self-byte-eq at 500? -> YES every cell (W AND loss max|delta|=0 over the whole 500-step trajectory).
+- Weight rel-RMS@500 = 9.7e-3 (B=1) / 4.6e-5 (B=8): chaotic-but-bounded (5x steps + harder target + noisy
+  B=1) — exactly why LOSS, not weights, is decisive (butterfly drifts weights; loss tracks). OP-23 lesson re-confirmed.
+- VERDICT: TF32 fast-mode HOLDS at the longer/harsher horizon — training-equivalent (bounded loss-tracking)
+  to >=N=500 under an LR schedule + through the warmup peak. STRENGTHENS OP-23 (1-step ~1e-6 was a real
+  fast-mode, not an illusion). HONEST SYNTHETIC CAVEAT (unchanged): still a proxy (loss=mean(G^2), single
+  fused block, structured-synthetic target); real-corpus CLMConvMoE end-to-end is GPU-build-gated (OP-24b/24c).
+  Verdict .verdicts/hexa-0pod/F-OP23B-TF32-DRIFT-LONG.txt.

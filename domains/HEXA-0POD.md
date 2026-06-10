@@ -10,6 +10,27 @@ loop targets what the consumer card + code can carry.
 
 ## milestones (loop self-feeds; add as discovered)
 
+<!-- ANCHOR:OP-23B-TF32-DRIFT-LONG (unique anchor — extend OP-23's TF32 trajectory-drift validation to N=500 + an LR schedule (warmup+cosine decay) + a harder synthetic; does bounded loss-tracking hold at the longer/harsher horizon, or does a late blow-up / LR-amplified drift appear; aiden 5070, 0-pod) -->
+- [x] **OP-23b — TF32 drift N=500 + LR-schedule: bounded-tracking holds at longer/harsher horizon (or honest late-blowup bound)** —
+  GREEN. Extended OP-23's TF32-vs-FP64 trajectory-drift harness to a LONGER + HARSHER regime: N=500 (5x),
+  a standard transformer LR schedule (linear warmup 50 steps 0->1e-3 then cosine decay to 5e-5, computed
+  in double + passed identically to both lanes), and a harder structured synthetic (row/col sinusoidal
+  target, D bumped to 1024). 4/4 cells on aiden RTX 5070 (D={1024,768}, B={1,8}, DEFAULT+PEDANTIC), FREE
+  pool, $0, 0-pod. RESOLVES OP-23's caveat in the GOOD direction: (1) loss-tracking stays BOUNDED to N=500
+  — worst gap is at step 3-5 (EARLY transient), late-half (steps>250) worst is SMALLER (3.2e-6 / 2.2e-7)
+  and flat, step-500 tracking 1.1e-7 (B=8) to 3.4e-6 (B=1), NO late blow-up; (2) the LR schedule does NOT
+  amplify — warmup-peak window [45..55] worst loss-track (~3e-6 / ~3e-7) is the SAME order as steady-state,
+  the 1e-3 peak is not a spike; (3) TF32 self-byte-eq over the WHOLE 500-step trajectory (W AND loss
+  max|delta|=0 at step 500) in every cell. Weight rel-RMS at N=500 is 9.7e-3 (B=1) / 4.6e-5 (B=8) —
+  chaotic-but-bounded (5x more steps + harder target + noisy B=1), EXACTLY why LOSS not weights is the
+  decisive metric (butterfly drifts weights; loss tracks). VERDICT: TF32 fast-mode HOLDS at the longer/
+  harsher horizon — training-equivalent (bounded loss-tracking) to >=N=500 under an LR schedule; strengthens
+  OP-23 (the 1-step ~1e-6 was a real fast-mode, not an illusion, now bounded at 5x the horizon + through the
+  warmup peak). HONEST SYNTHETIC CAVEAT (unchanged): still a proxy (loss=mean(G^2), single fused block,
+  structured-synthetic target) — the real-corpus CLMConvMoE end-to-end read is GPU-build-gated (OP-24b/24c).
+  Harness tool/bench/flame_traj_drift_tf32_op23b.cu · driver run_op23b_5070.sh · raw op23b_5070_raw.log ·
+  verdict .verdicts/hexa-0pod/F-OP23B-TF32-DRIFT-LONG.txt.
+
 <!-- ANCHOR:OP-27-TF32-DOJO (unique anchor — reflect the VALIDATED deterministic TF32 fast-mode OP-20/23/24/25 into the dojo as a contributor recipe; 0-pod docs; flag the commons.tape governance reflection for user sign) -->
 - [x] **OP-27 — deterministic TF32 fast-mode dojo recipe (0-pod) + commons directive drafted for user sign** —
   DOCS-COMPLETE (0-pod half SHIPPED). Added `### deterministic TF32 fast-mode (precision-uncap)` to
