@@ -1,0 +1,10 @@
+PASS A staging ok (odd n=7, Miller±5) — staged=true
+PASS A pow2 cube dims = 32³ (4·5+1=21→32) — dims=32x32x32
+PASS B uniform ρ ⇒ |∇ρ|≈0 (3-D, all axes) — max|∇ρ|=0.0
+PASS C PBE V_xc[uniform ρ] ≡ LDA V_xc — V_xc^PBE=-0.728542 LDA=-0.728542
+PASS D cos(G·x) ⇒ peak |∇ρ| = A·|G| (3-D x-axis) — peak=0.0785398 ref=0.0785398
+PASS E Hartree[cos] peak = A·4π/|G|² (3-D Poisson) — peak=0.254649 ref=0.254648
+PASS F ∫ρ dr = nelec after normalize — ∫ρ=8 nelec=8
+PASS G PBE V_xc[cos ρ] ≠ LDA (GGA term LIVE) — max|V_PBE−V_LDA|=8.85729e-05
+PASS H F_x(s): F_x(0)=1, monotone, ≤1+κ — F_x(0)=1.0 F_x(.01)=1.00001 F_x(∞)=1.80355
+qforge_scf_pw_realspace_selftest PASS

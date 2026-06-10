@@ -1,0 +1,6 @@
+PASS (E) from_rho |∇ρ|=0 ⇒ PW92 ρ=0.05 (-0.0482994)
+PASS (E) from_rho |∇ρ|=0 ⇒ PW92 ρ=0.1 (-0.0532511)
+PASS (E) from_rho |∇ρ|=0 ⇒ PW92 ρ=0.5 (-0.0655687)
+PASS (F) H(r_s=2,t=1) > 0 (true)
+PASS (F) ε_c^PBE(r_s=2,t=1) > ε_c^LDA (less negative) (true)
+qforge_correlation_pbe_selftest PASS
