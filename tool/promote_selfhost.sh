@@ -77,8 +77,8 @@ if [ "$MODE" = status ]; then status; exit 0; fi
 if [ "$MODE" = revert ]; then
     BK="$(ls -1t "$HX_HOME/bin/"hexa.real.pre-selfhost.* 2>/dev/null | head -1)"
     if [ -L "$REAL" ] && [ -n "$BK" ]; then
-        rm -f "$REAL"; mv "$BK" "$REAL"
-        echo "reverted: hexa.real restored from $BK"; status; exit 0
+        rm -f "$REAL"; mv "$BK" "$REAL"; rm -f "$HX_HOME/.selfhost-default"
+        echo "reverted: hexa.real restored from $BK (cleared persistence marker)"; status; exit 0
     fi
     echo "revert: nothing to revert (hexa.real is not a selfhost symlink, or no backup)" >&2
     exit 2
@@ -140,7 +140,9 @@ if [ "$DO_DEFAULT" = 1 ]; then
         echo "tier2: backed up shipped hexa.real -> hexa.real.pre-selfhost.$TS"
     fi
     ln -sf "$CLI_LAUNCHER" "$REAL"
+    : > "$HX_HOME/.selfhost-default"   # persistence marker — install.sh re-applies this flip after a reinstall
     echo "tier2: DEFAULT FLIPPED — hexa.real -> $CLI_LAUNCHER (revert: tool/promote_selfhost.sh --revert)"
+    echo "tier2: wrote persistence marker $HX_HOME/.selfhost-default (install.sh re-applies the flip on reinstall)"
 fi
 status
 exit 0

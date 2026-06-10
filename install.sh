@@ -130,6 +130,19 @@ EOF
         fi
     fi
 
+    # selfhost persistence — the `install … hexa.real` above overwrites hexa.real
+    # with the shipped C-transpile dispatch binary, silently reverting a tier2
+    # native default-flip (tool/promote_selfhost.sh install --default). If the
+    # native default was promoted (marker present) and the self-host slot + CLI
+    # shim survived this reinstall, re-apply the flip so the native compile
+    # surface stays the default. Reversible via `promote_selfhost.sh --revert`
+    # (clears the marker). codesign above already signed the real binary.
+    if [ -f "$HX_HOME/.selfhost-default" ] && [ -x "$HX_BIN/hx-selfhost-cli" ] \
+       && [ -x "$HX_HOME/self/native/selfhost/gen3" ]; then
+        mv "$HX_BIN/hexa.real" "$HX_BIN/hexa.real.pre-selfhost.$(date +%Y%m%d-%H%M%S)"
+        ln -sf "$HX_BIN/hx-selfhost-cli" "$HX_BIN/hexa.real"
+        green "  ✓ selfhost-default marker → re-applied native tier2 flip"
+    fi
     green "  ✓ $HX_BIN/hexa"
     rm -rf "$tmp"
 }
