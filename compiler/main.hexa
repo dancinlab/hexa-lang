@@ -941,6 +941,28 @@ if stream_mode && target == "arm64-apple-darwin" {
         exit(0)
     }
 
+    // ── Emit OBJ (native ELF x86-64, SELFHOST-NEXT) ──────────────
+    //
+    // `--backend=native` + `target=x86_64-linux-gnu` writes the ELF
+    // x86-64 `.o` directly via `pack_lir_x86_64` + `serialize_elf_x86_64`
+    // (compiler/emit/elf_x86_64.hexa) — NO host `as`. Reuses the x86-64
+    // instruction encoder (encode_x86_64_insn, Intel-SDM-verified) for
+    // text bytes; the wire delta from the AArch64 ELF path is only the
+    // EM_X86_64 machine + x86-64 reloc kinds (R_X86_64_64/PC32/PLT32).
+    // This is the x86-64 sibling of the arm64-linux branch above and
+    // mirrors it byte-for-byte in structure. Closes SELFHOST-NEXT
+    // "multi-target bootstrap: x86_64 codegen path".
+    if emit_kind == "obj" && backend_kind == "native" && target == "x86_64-linux-gnu" {
+        let elf_obj = pack_lir_x86_64(lmodule)
+        let elf_bytes = serialize_elf_x86_64(elf_obj)
+        write_bytes(out_path, elf_bytes)
+        if verbose {
+            eprintln("hexa-compiler: emitted ELF x86-64 .o via native backend ("
+                     + to_string(len(elf_bytes)) + " bytes) to " + out_path)
+        }
+        exit(0)
+    }
+
     // RFC 055 055-P3 — NVPTX uses the PTX text emit pass, not the CPU
     // emit_asm renderer (PTX's operand surface differs from the CPU
     // LOperand reg/imm/mem encoding — see nvptx_target.hexa §6.2 note).

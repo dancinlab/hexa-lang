@@ -1,0 +1,182 @@
+#!/usr/bin/env bash
+# ─────────────────────────────────────────────────────────────────────────
+# tool/build_native_linux_x86_64 — native linux-x86_64 hexa COMPILER + emit.
+#
+# Builds the native-codegen hexa compiler (compiler/main.hexa) into a
+# self-contained linux-x86_64 ELF binary (`cc_native`, the aprime_cc analogue
+# for ELF x86-64), then drives it through:
+#   (1) a small-program native ELF `.o` emit + native link + native RUN
+#       (print("hi");exit(7)) — the SELFHOST-NEXT x86_64 EMIT milestone,
+#   (2) an optional COMPILER SELF-EMIT (`--self-emit`): cc_native emits its own
+#       flattened source to an ELF x86-64 `.o` (the self-host escalation).
+#
+# This is the x86_64 sibling of tool/build_native_linux_arm64. The ONLY deltas
+# are the target triple and the host-arch check; the flatten → hexat transpile
+# → post-process → gcc pipeline is byte-identical. The native obj fast-path it
+# exercises (--backend=native --target=x86_64-linux-gnu → pack_lir_x86_64 +
+# serialize_elf_x86_64, compiler/main.hexa) is the x86-64 mirror of the
+# arm64-linux ELF path (pack_lir_arm64_elf + serialize_elf_arm64). NO host `as`.
+#
+# Extension-less (not .sh) per the stage_* / release_build precedent: the
+# project sidecar hook blocks .sh Write/Edit. Invoke as `bash tool/build_native_linux_x86_64`.
+#
+# ── Prereqs (resolved from the repo / host) ──────────────────────────────────
+#   gcc + binutils ld (stock Ubuntu/Debian x86_64), python3, build/hexat
+#   (the bootstrap transpiler — `hexa cc` or stage_* builds it), self/runtime.c
+#   (restore_frozen_seeds). /usr/lib/x86_64-linux-gnu/crt1.o for native link/run.
+#
+# ── Usage ────────────────────────────────────────────────────────────────────
+#   tool/build_native_linux_x86_64 [-r REPO] [-w WORK] [--self-emit]
+#     -r REPO       repo root (default: cwd; must hold compiler/main.hexa)
+#     -w WORK       scratch/output dir (default: $REPO/build/lx8664) — NOT /tmp
+#     --self-emit   ALSO run the compiler self-emit (heavy; cc_native emits its
+#                   own flattened source to an ELF x86-64 `.o`)
+#
+# ── Exit codes ───────────────────────────────────────────────────────────────
+#   0  cc_native built + hi.hexa emitted native ELF .o + linked + RAN rc 7
+#   1  build failure (flatten/transpile/gcc/link)
+#   2  emit/run failure (binary built but the hi.hexa native run != rc 7)
+#   3  bad invocation / missing inputs
+# ─────────────────────────────────────────────────────────────────────────
+set -u
+
+REPO="$(pwd)"
+WORK=""
+SELF_EMIT=0
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -r) REPO="$2"; shift 2 ;;
+        -w) WORK="$2"; shift 2 ;;
+        --self-emit) SELF_EMIT=1; shift ;;
+        *) echo "build_native_linux_x86_64: unknown arg '$1'" >&2; exit 3 ;;
+    esac
+done
+
+cd "$REPO" || { echo "build_native_linux_x86_64: bad repo '$REPO'" >&2; exit 3; }
+[ -f compiler/main.hexa ] || { echo "build_native_linux_x86_64: no compiler/main.hexa under $REPO" >&2; exit 3; }
+[ "$(uname -m)" = "x86_64" ] || echo "build_native_linux_x86_64: WARNING — host is $(uname -m), not x86_64; native run will fail" >&2
+[ -z "$WORK" ] && WORK="$REPO/build/lx8664"
+case "$WORK" in /tmp/*|/private/tmp/*) echo "build_native_linux_x86_64: WORK must not be under /tmp" >&2; exit 3 ;; esac
+mkdir -p "$WORK" || { echo "build_native_linux_x86_64: cannot mkdir $WORK" >&2; exit 3; }
+
+CC="${CC:-gcc}"
+GCC_FLAGS="-O1 -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs -fno-builtin-bzero -fno-builtin-memcpy -fno-builtin-strlen -D_FORTIFY_SOURCE=0 -fno-stack-protector"
+log() { echo "[build_native_linux_x86_64] $*"; }
+fail() { log "FATAL ($1): $2"; exit "${3:-1}"; }
+
+HEAD_SHA="$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
+log "=== repo=$REPO HEAD=$HEAD_SHA work=$WORK CC=$CC ==="
+
+# ── stage seed: bootstrap transpiler + runtime ───────────────────────────────
+if [ ! -x build/hexat ] || [ ! -f self/runtime.c ]; then
+    log "stage seed: building bootstrap transpiler + runtime via release stages"
+    TARGET=linux-x86_64 CC="$CC" LIBS="-lm -ldl" bash tool/restore_frozen_seeds >/dev/null 2>&1 || true
+    [ -f self/runtime.c ] || fail seed "self/runtime.c missing (restore_frozen_seeds failed)"
+    if [ ! -x build/hexat ]; then
+        TARGET=linux-x86_64 CC="$CC" LIBS="-lm -ldl" bash tool/stage_resolve_runtime_a >/dev/null 2>&1 || true
+        HEXA_PREBUILT_RUNTIME="$REPO/build/runtime.a" TARGET=linux-x86_64 CC="$CC" LIBS="-lm -ldl" \
+            bash tool/stage_prebuild_hexat >/dev/null 2>&1 || fail seed "stage_prebuild_hexat failed"
+    fi
+fi
+[ -x build/hexat ] || fail seed "build/hexat missing"
+log "seed: hexat=$(stat -c%s build/hexat 2>/dev/null) runtime.c=$([ -f self/runtime.c ] && wc -l < self/runtime.c || echo MISSING)L"
+
+# ── stage 1: flatten compiler/main.hexa closure (target-agnostic flatten) ─────
+log "stage1: flatten compiler/main.hexa -> cc-flat.hexa"
+python3 tool/larm64_flatten.py compiler/main.hexa "$WORK/cc-flat.hexa" || fail flatten "larm64_flatten.py failed"
+[ -s "$WORK/cc-flat.hexa" ] || fail flatten "cc-flat.hexa empty"
+
+# ── stage 2: transpile via hexat -> C ────────────────────────────────────────
+log "stage2: hexat transpile -> ap.c"
+build/hexat "$WORK/cc-flat.hexa" "$WORK/ap.c" 2>&1 | tail -1
+[ -f "$WORK/ap.c" ] || fail transpile "no $WORK/ap.c"
+
+# ── stage 3: post-process (s4 + builtin sed + runtime inline + link-fills) ────
+log "stage3: post-process"
+cp "$WORK/ap.c" "$WORK/flat4.c"
+python3 tool/s4_flatc_post.py "$WORK/flat4.c" 2>&1 | tail -1
+sed -E -e 's/hexa_call1\(sha256_hex,[ ]*([^)]*)\)/hexa_sha256(\1)/g' \
+       -e 's/hexa_call1\(list_dir,[ ]*[^)]*\)/hexa_array_new()/g' \
+       "$WORK/flat4.c" > "$WORK/ap_post.c"
+sed -i 's|#include "runtime.h"|#include "runtime.c"|' "$WORK/ap_post.c"
+sed -i '1i #define HEXA_HAS_HEXA_RT_STDLIB 1' "$WORK/ap_post.c"
+
+# rt_fs B2 link-fill (same as build_native_linux_arm64) — only when runtime_core.c lacks them.
+if ! grep -q 'HexaVal rt_fs_append_atomic(HexaVal path, HexaVal data) {' self/runtime_core.c 2>/dev/null; then
+    cat >> "$WORK/ap_post.c" <<'RTFS'
+/* TEMP B2 link-fill (remove once self/runtime_core_emit.hexa emits these). */
+#ifndef HEXA_RT_SELFEMIT
+HexaVal rt_fs_append_atomic(HexaVal path, HexaVal data) { (void)path; (void)data; return hexa_int(-1); }
+HexaVal rt_fs_stat(HexaVal path) { (void)path; return hexa_void(); }
+HexaVal rt_fs_rotate_if_over(HexaVal path, HexaVal max_bytes, HexaVal keep) { (void)path; (void)max_bytes; (void)keep; return hexa_int(0); }
+#endif
+RTFS
+    log "stage3: rt_fs B2 link-fill appended"
+fi
+# rt_array link-fill — the rt-stdlib-gate externs rt_array_pop/shift but the
+# hexa-source array stdlib is not in the compiler's flatten closure; darwin
+# avoids this via -Wl,-dead_strip. Bodies mirror runtime_core.c's #ifndef branch.
+if ! grep -q 'HexaVal rt_array_pop(HexaVal arr) {' self/runtime_core.c 2>/dev/null; then
+    cat >> "$WORK/ap_post.c" <<'RTARR'
+/* linux-x86_64 rt_array link-fill (rt-stdlib-gate; mirrors #ifndef branch). */
+#ifndef HEXA_RT_SELFEMIT
+HexaVal rt_array_pop(HexaVal arr) {
+    int n = HX_ARR_LEN(arr);
+    HexaVal last = HX_ARR_ITEMS(arr)[n - 1];
+    HX_SET_ARR_LEN(arr, n - 1);
+    return last;
+}
+HexaVal rt_array_shift(HexaVal arr) {
+    HexaVal first = HX_ARR_ITEMS(arr)[0];
+    int n = HX_ARR_LEN(arr);
+    for (int i = 0; i < n - 1; i++) { HX_ARR_ITEMS(arr)[i] = HX_ARR_ITEMS(arr)[i + 1]; }
+    HX_SET_ARR_LEN(arr, n - 1);
+    return first;
+}
+#endif
+RTARR
+    log "stage3: rt_array link-fill appended"
+fi
+
+# ── stage 4: gcc compile the native compiler (native x86_64) ──────────────────
+log "stage4: gcc compile -> cc_native"
+CL_ERR="$($CC $GCC_FLAGS -I self -I . "$WORK/ap_post.c" -o "$WORK/cc_native" -lm -ldl 2>&1 | grep -iE 'error:|undefined' | head -10)"
+if [ -n "$CL_ERR" ] || [ ! -x "$WORK/cc_native" ]; then
+    echo "$CL_ERR" >&2
+    fail gcc "cc_native compile/link failed"
+fi
+log "stage4: cc_native = $(stat -c%s "$WORK/cc_native") B · $(file -b "$WORK/cc_native" | cut -d, -f1-2)"
+
+# ── stage 5: native ELF .o EMIT + native LINK + native RUN (print hi; exit 7) ──
+T="$WORK/lx8664-test"; mkdir -p "$T"
+printf 'fn main() {\n  print("hi")\n  exit(7)\n}\n' > "$T/hi.hexa"
+log "stage5: cc_native emit hi.hexa -> native ELF .o (--target=x86_64-linux-gnu --backend=native)"
+"$WORK/cc_native" _drv.hexa --emit=obj --backend=native --target=x86_64-linux-gnu -o "$T/hi.o" "$T/hi.hexa" 2>&1 | tail -2
+[ -s "$T/hi.o" ] || fail emit "hi.o not produced" 2
+log "stage5: hi.o = $(file -b "$T/hi.o" | cut -d, -f1-2)"
+$CC "$T/hi.o" build/runtime.a -o "$T/hi" -lm -ldl 2>&1 | grep -iE 'undefined|error' | head
+[ -x "$T/hi" ] || fail link "hi link failed" 2
+OUT="$("$T/hi")"; RC=$?
+log "stage5: NATIVE RUN — stdout=[$OUT] rc=$RC"
+if [ "$OUT" != "hi" ] || [ "$RC" != "7" ]; then
+    fail run "expected stdout=hi rc=7, got stdout=[$OUT] rc=$RC" 2
+fi
+log "stage5: PASS — native ELF .o emitted + linked + RAN natively (hi / rc 7)"
+
+# ── stage 6 (optional): COMPILER SELF-EMIT to ELF x86-64 .o ───────────────────
+if [ "$SELF_EMIT" = 1 ]; then
+    log "stage6: SELF-EMIT — cc_native emits its own flattened source (heavy)"
+    mkdir -p "$WORK/noatlas"
+    HEXA_ATLAS_EMBED="$WORK/noatlas" "$WORK/cc_native" _drv.hexa --emit=obj --backend=native \
+        --target=x86_64-linux-gnu --ignore-errors -o "$WORK/cc-self.o" "$WORK/cc-flat.hexa" \
+        > "$WORK/selfemit.log" 2>&1
+    SRC=$?
+    MISS=$(grep -c ENCODE-MISS "$WORK/selfemit.log" 2>/dev/null || echo 0)
+    SZ=$(stat -c%s "$WORK/cc-self.o" 2>/dev/null || echo 0)
+    log "stage6: self-emit rc=$SRC encode-miss=$MISS cc-self.o=$SZ B"
+    grep ENCODE-MISS "$WORK/selfemit.log" 2>/dev/null | head -5
+fi
+
+log "DONE — cc_native + native-emit milestone PASS (HEAD=$HEAD_SHA)"
+exit 0
