@@ -355,6 +355,56 @@ OP18_EOF
   echo "[restore_frozen_seeds] OP-18: appended L3 fused-dispatch host fallbacks (gelu2 + moe_block2 + groupnorm_gelu) to $rt"
 fi
 
+# ── OP-19e (HEXA-0POD) — musl-safe env capture (POSIX `environ`, not the ──────
+# constructor-args ABI) ──────────────────────────────────────────────────────
+# The frozen self/runtime.c (151c52c8…) captures envp via the GCC/Darwin
+# constructor signature  hxlcl_capture_environ(int argc, char**argv, char**envp).
+# Receiving argc/argv/envp in a constructor is a glibc + Darwin/dyld extension
+# (dyld passes (argc,argv,envp,apple) to __mod_init_func; glibc's __libc_csu_init
+# forwards them) — it is NOT in the C/ELF standard. musl runs constructors with
+# NO arguments, so on musl `envp` is whatever garbage is in the 3rd arg register
+# → hxlcl_environ = garbage → the FIRST hxlcl_getenv (driven by the priority-default
+# arena init _hexa_init_mem_cap, which runs AFTER this priority-101 ctor) walks a
+# wild pointer → SIGSEGV before main(). (Surfaced by OP-19d's 4-environment run;
+# that PR shipped a test-only runtime copy + flagged this durable follow-up.)
+#
+# Fix: read the POSIX global `extern char **environ` (defined by EVERY libc —
+# glibc, musl, AND Darwin's crt1 for the main executable) instead of the ctor
+# arg. The constructor still runs at priority 101 (before the arena init) and
+# still snapshots into hxlcl_environ, so hxlcl_getenv is unchanged downstream.
+# BEHAVIOR-PRESERVING on glibc/Darwin (same process environment captured — the
+# ctor-arg envp and the libc `environ` global point at the same vector at start);
+# FIXES musl (real pointer, not a garbage register). The `extern char **environ`
+# decl is emitted BEFORE the `#define environ hxlcl_environ` line so it refers to
+# the libc symbol, not our shadowed macro. Deterministic, idempotent (marker
+# guard). Anchored on the unique "RUNTIME tail (cycle 85)" comment block.
+if [ -f "$rt" ] && ! grep -q 'OP-19e (HEXA-0POD' "$rt"; then
+  # State machine: on the `static char **hxlcl_environ = 0;` declaration, emit the
+  # musl-safe replacement and SKIP every original line through the matching
+  # `#define environ hxlcl_environ` (the 6-line frozen capture block).
+  awk '
+    /^static char \*\*hxlcl_environ = 0;$/ && !patched {
+      print "// OP-19e (HEXA-0POD) — musl-safe env capture: read the POSIX `environ`"
+      print "// global (every libc incl. musl defines it) instead of the constructor-args"
+      print "// ABI envp, which only glibc + Darwin/dyld pass; musl gives ctors NO args,"
+      print "// so the old `(argc,argv,envp)` signature read a garbage register -> SIGSEGV"
+      print "// in _hexa_init_mem_cap->hxlcl_getenv before main(). Behavior-preserving on"
+      print "// glibc/Darwin (same env vector), fixes musl. `environ` is referenced BEFORE"
+      print "// the `#define environ hxlcl_environ` shadow below so it is the libc symbol."
+      print "extern char **environ;"
+      print "static char **hxlcl_environ = 0;"
+      print "__attribute__((constructor(101)))"
+      print "static void hxlcl_capture_environ(void) { hxlcl_environ = environ; }"
+      print "#define environ hxlcl_environ"
+      skip=1; patched=1; next
+    }
+    skip && /^#define environ hxlcl_environ$/ { skip=0; next }
+    skip { next }
+    { print }
+  ' "$rt" > "$rt.op19e" && mv "$rt.op19e" "$rt"
+  echo "[restore_frozen_seeds] OP-19e: rewrote env capture to POSIX environ (musl-safe) in $rt"
+fi
+
 # Unstage everything we just restored so the index reflects the graduated tree;
 # the working-tree files remain as the ephemeral build input.
 git reset -q -- "${FROZEN_SEEDS[@]}" 2>/dev/null || true
