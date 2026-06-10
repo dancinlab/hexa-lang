@@ -10,6 +10,14 @@ loop targets what the consumer card + code can carry.
 
 ## milestones (loop self-feeds; add as discovered)
 
+<!-- ANCHOR:OP-27-TF32-DOJO (unique anchor — reflect the VALIDATED deterministic TF32 fast-mode OP-20/23/24/25 into the dojo as a contributor recipe; 0-pod docs; flag the commons.tape governance reflection for user sign) -->
+- [ ] **OP-27 — deterministic TF32 fast-mode dojo recipe (0-pod) + commons directive drafted for user sign** —
+  WIP: add a `### deterministic TF32 fast-mode (precision-uncap)` recipe to docs/hexa-dojo.md (when to use
+  HEXA_TF32_FASTMODE, the self-byte-eq + PEDANTIC-for-portability determinism guarantee, the W14 rel-RMS≤1e-2
+  contract measured 1.13e-6, card-robust 4.2x@B=1, N-step loss-tracking, the precision Pareto FP64→TF32→BF16-
+  DOMINATED, live-wire dispatch site) + DRAFT (not apply) the commons g8x directive for the user's `sidecar
+  sign commons`. NO .tape edits (commons sign-gated). 0-pod, no GPU, no vast.
+
 <!-- ANCHOR:OP-26-MACHINEINDEP-WRITEUP (unique anchor — consolidate the OP-19/19b + oracle-series machine-independent bit-exact training RESULT into a rigorous evidence-complete results doc; docs-only; NO /paper scaffold per g84 OPT-IN) -->
 - [x] **OP-26 — machine-independent bit-exact training: rigorous results writeup (evidence-complete, docs-only, NO paper scaffold)** —
   DOCS-COMPLETE. Authored docs/flame-machine-independent-training.md — a rigorous, evidence-complete RESULTS

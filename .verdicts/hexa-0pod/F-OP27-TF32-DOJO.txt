@@ -1,0 +1,3 @@
+F-OP27-TF32-DOJO — deterministic TF32 fast-mode dojo recipe (0-pod) + commons directive draft
+=============================================================================================
+STATUS: WIP (skeleton). Dojo recipe + drafted commons directive incoming.
