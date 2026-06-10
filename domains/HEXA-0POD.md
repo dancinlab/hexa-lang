@@ -219,7 +219,29 @@ loop targets what the consumer card + code can carry.
   $0, no vast/pool/pod/GPU. Verdict .verdicts/hexa-0pod/F-OP21B-W16-CPU-DERISK.txt.
 
 <!-- ANCHOR:OP-21C-W16-MODES-DERISK (unique anchor — extends OP-21B by CPU-validating the REMAINING-MODE GPU-free reference logic of w16.cu — MODE-4 full-tile ref + epilogue scatter, the B-ring read, the gemm_w16b fallback ref, the descriptor stride consistency — so more of the H100 gate sequence is pre-validated 0-pod) -->
-- [ ] **OP-21C — w16.cu remaining-MODE reference logic CPU-validated 0-pod (extends OP-21B; more of the H100 gate de-risked)**
+- [x] **OP-21C — w16.cu remaining-MODE reference logic CPU-validated 0-pod (extends OP-21B; more of the H100 gate de-risked)** —
+  EXTENDED OP-21B's D1 CPU de-risk to the OTHER w16.cu MODEs' GPU-free reference logic, so more of build_w16.sh's
+  H100 gate sequence (not just MODE 0/1) is pre-validated. WROTE tool/wgmma/w16_modes_cpu_check.cpp (clang++
+  -std=c++17, ZERO GPU/CUDA/PTX) that ports the SSOT arithmetic VERBATIM (gmma_phys, tf() TF32 round, composed_A/
+  composed_B) + models the device epilogue register->global scatter VERBATIM from gemm_w16 L395-403, and asserts 6
+  element-for-element / bit-exact checks: C1a the epilogue scatter is a BIJECTIVE FULL COVER of the 128x128 output
+  tile (every output written exactly once — gates MODE 4 regardless of the GEMM math); C1b the MODE-4 FULL-TILE
+  (128x128) reference GEMM = TF32-round + fp32-FMA accumulated in the kernel's K-order (TKSW=32 slabs, TK=8 inner,
+  K=96 so NST=3 turns) reproduces a straight increasing-k TF32-round + fp32-FMA GEMM bit-for-bit (extends T6's 8x8
+  to full tile -> MODE-4's vs-cuBLAS gate checks the RIGHT reference at scale); C2 the B per-slab read recovers
+  global B bit-exact across ALL NST=3 slabs AND all 4 N-atoms (extends T5's single slab/2 atoms; exact 12288/12288);
+  C3 the gemm_w16b fallback band decode (composed_A/B -> gmma_phys repack) reconstructs the SAME logical operands
+  gemm_w16 reads in place (A=4096/4096 B=4096/4096); C3b the w16b per-slab 128x128 GEMM == the w16 per-slab GEMM
+  element-for-element (16384/16384 — same math, different schedule); C4 the descriptor stride byte arithmetic is
+  self-consistent across the NST=3 stages (ring slot st*SWBUF non-overlap/contiguous, w16 kk*4 bumps tile a 128B
+  swizzle row [0,32,64,96]B, w16b (kk>>3)*512*4 bumps tile the 4 gmma sub-tiles [0,2k,4k,6k]B, MODE-1 lbo=16/sbo=
+  1024 match the 1024B atom). RAN locally: 6/6 PASS, exit 0 — the remaining-MODE GPU-free reference logic is
+  CPU-PROVEN correct, NO bug found (teeth confirmed: an injected wrong-xor drops the B round-trip to 2190/4096).
+  HONEST (g5): proves GPU-FREE reference logic only; the DEVICE wgmma swmode=1 HW de-swizzle (MODE 1 rel_rms 0,
+  MODE 4 rel_rms <=3e-3 vs cuBLAS), the gemm_w16b device band path, and ALL perf REMAIN H100-GATED — no wgmma/PTX
+  executed, no TFLOP/s claimed. Value = MORE of the w16 H100 gate sequence (MODE 4 full-tile ref + epilogue, the
+  B-ring read, the w16b fallback, the descriptor stride consistency) is CPU-pre-validated -> higher first-try odds.
+  $0, no vast/pool/pod/GPU; build temp cleaned. Verdict .verdicts/hexa-0pod/F-OP21C-W16-MODES-DERISK.txt.
 
 <!-- ANCHOR:OP-21-HOPPER-WARPSPEC-DESIGN (unique anchor — 0-pod DESIGN for the Hopper sm_90a wgmma warp-spec TMA pipeline; measure is GPU-gated) -->
 - [x] **OP-21 — Hopper warp-spec TMA pipeline DESIGN + perf-gap analysis + H100 experiment recipe (0-pod, GPU-gated measure)** —
