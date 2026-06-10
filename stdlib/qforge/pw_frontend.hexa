@@ -829,19 +829,26 @@ fn qpwd_drho_zero(drho: [float]) -> [float] {
 let mut QPWD_G2: [float] = []          // |G_i|² per PW coefficient (length n)
 let mut QPWD_GRID_N: int = 0
 let mut QPWD_FXC: float = 0.0          // uniform-gas f_xc[ρ̄] (local kernel coeff)
+// Thomas-Fermi k_TF² (bohr⁻²) for the diagonal-path Coulomb regularization — the
+// SAME metallic-gain bound the FFT-Poisson path applies (screening_pwfft.PWFFT_KTF2):
+// v_TF(G)=4π/(|G|²+k_TF²) replaces the divergent 4π/|G|² so the Dyson fixed point is
+// bounded/physical (ratio O(0.1-2)). ≤0 → bare Coulomb (no change). DATA from ρ̄, d4/d6.
+let mut QPWD_KTF2: float = 0.0
+pub fn qpwd_set_ktf2(ktf2: float) { if ktf2 > 0.0 { QPWD_KTF2 = ktf2 } else { QPWD_KTF2 = 0.0 } }
 
 let _QPWD_4PI: float = 12.5663706143591729539
 
 pub fn qpwd_drho_to_dvscf(drho: [float]) -> [float] {
     let n = len(drho)
     if n != QPWD_GRID_N || len(QPWD_G2) != n { return [] }
-    // ΔV_scr-correction[i] = 4π·Δρ(G_i)/|G_i|²  (Hartree, G=0→0)  +  f_xc[ρ̄]·Δρ[i].
+    // ΔV_scr-correction[i] = 4π·Δρ(G_i)/(|G_i|²+k_TF²)  (TF-screened Hartree, G=0→0)
+    //   + f_xc[ρ̄]·Δρ[i].  k_TF²=0 → bare 4π/|G|² (test-charge metallic screening).
     let mut out: [float] = []
     let mut i = 0
     while i < n {
         let g2 = QPWD_G2[i]
         let mut v = 0.0
-        if g2 > 1.0e-12 { v = _QPWD_4PI * drho[i] / g2 }   // G=0 gauge → 0
+        if g2 > 1.0e-12 { v = _QPWD_4PI * drho[i] / (g2 + QPWD_KTF2) }   // G=0 gauge → 0
         v = v + QPWD_FXC * drho[i]                          // uniform-gas LDA xc
         out.push(v)
         i = i + 1
@@ -1045,6 +1052,14 @@ pub fn qforge_pw_frontend_phonons_scr(deck_dir: str, npw_cap: int, xc_mode: int,
     let mut fxc = qforge_fx_lda(rho_bar)
     if xc_mode >= 1 { fxc = fxc + qforge_fc_pw92(rho_bar) }
     QPWD_FXC = fxc
+    // ── THOMAS-FERMI metallic-gain bound (the SC-DFPT inner-loop convergence fix) ──
+    //   The bare 4π/|G|² Hartree kernel drives the Dyson gain past 1 on the converged
+    //   metallic cell → ‖ΔV_scr‖/‖ΔV_bare‖ = 3.5e7, conv=false (the #2786 wall). The
+    //   static-RPA TF screened Coulomb v_TF(G)=4π/(|G|²+k_TF²) bounds it → physical
+    //   ratio O(0.1-2). k_TF²=4 k_F/π, k_F=(3π²ρ̄)^{1/3} — DERIVED from ρ̄, NOT tuned.
+    //   Applied to BOTH the diagonal (QPWD) and FFT-Poisson (PWFFT) screening paths.
+    let ktf2 = qpwfft_ktf2_from_density(rho_bar)
+    qpwd_set_ktf2(ktf2)
     // ── stage the POW2-PADDED REAL-SPACE FFT-POISSON grid (the migration-gate fix) ──
     //   The diagonal QPWD kernel above is the FALLBACK; when this stages OK the
     //   Anderson map (ad_map) screens via the GENUINE real-space convolution
@@ -1060,6 +1075,7 @@ pub fn qforge_pw_frontend_phonons_scr(deck_dir: str, npw_cap: int, xc_mode: int,
     //   converged-CaH6 gate needs xc_mode=2 (H+x+c); the fixture passes xc_mode=1 to the
     //   front-end SCF but the screening kernel runs the FULL x+c (the el-ph vertex XC).
     if pwfft_ok && geom.omega > 0.0 { qpwfft_enable_local_alda(geom.omega, 2) }
+    if pwfft_ok && ktf2 > 0.0 { qpwfft_enable_tf(ktf2) }   // TF Coulomb bound (FFT path)
     let kernel_ok = (n > 0)                          // G-space kernel always available
 
     // per-direction coupling weight ‖ΔV|ψ⟩‖² (rank the 3 cartesian dirs). The bundle
@@ -1177,7 +1193,8 @@ pub fn qforge_pw_frontend_phonons_scr(deck_dir: str, npw_cap: int, xc_mode: int,
     } else { "diagonal-fallback (FFT-Poisson grid NOT staged)" }
     let vert_tag = if screened && kernel_ok {
         "SCREENED ΔV_scr·ψ (Dyson ε⁻¹, Anderson β=" + to_string(scr_beta)
-        + " m=" + to_string(scr_mdepth) + ", " + pwfft_tag + "): " + to_string(scr_iters_tot)
+        + " m=" + to_string(scr_mdepth) + ", TF k_TF²=" + to_string(ktf2)
+        + " bohr⁻², " + pwfft_tag + "): " + to_string(scr_iters_tot)
         + " SCF iters · conv=" + to_string(scr_conv_all) + " · ‖fp_res‖_max="
         + to_string(scr_fpr_max) + " · ‖ΔV_scr‖/‖ΔV_bare‖="
         + to_string(scr_ratio) + " (the @L5 screening-XC closure, H+x+c) [d6 VERBATIM]"
