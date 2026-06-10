@@ -1381,7 +1381,20 @@ fn serialize(obj: MachoArm64Obj) -> [Int] {
     let mut ri = 0
     while ri < nreloc {
         let rl = obj.relocs[ri]
-        _emit_reloc_info(out, rl.offset, rl.sym_idx, rl.pcrel, rl.length, 1, rl.kind)
+        // PERF (N5 byte-eq): inline _emit_reloc_info + _u32_le so the reloc bytes
+        // grow `out` in serialize's OWN arena (one heapify at serialize return)
+        // instead of a per-reloc callee arena-return that heapifies the whole
+        // growing buffer — that was O(nreloc^2) and made full-compiler obj-emit
+        // take >1h. Byte-identical to _emit_reloc_info(out,…,r_extern=1,…).
+        out.push(rl.offset & 0xff)
+        out.push((rl.offset >> 8) & 0xff)
+        out.push((rl.offset >> 16) & 0xff)
+        out.push((rl.offset >> 24) & 0xff)
+        let bits = (rl.sym_idx & 0xffffff) | ((rl.pcrel & 1) << 24) | ((rl.length & 3) << 25) | (1 << 27) | ((rl.kind & 0xf) << 28)
+        out.push(bits & 0xff)
+        out.push((bits >> 8) & 0xff)
+        out.push((bits >> 16) & 0xff)
+        out.push((bits >> 24) & 0xff)
         ri = ri + 1
     }
 
@@ -1393,7 +1406,25 @@ fn serialize(obj: MachoArm64Obj) -> [Int] {
         let mut n_type = s.kind
         if s.is_external != 0 { n_type = n_type | MACHO_N_EXT }
         if s.is_pext != 0     { n_type = n_type | MACHO_N_PEXT }
-        _emit_nlist64(out, s.name_offset, n_type, s.section, s.value)
+        // PERF (N5 byte-eq): inline _emit_nlist64 + _u32/16/64_le — same O(n^2)
+        // per-symbol arena-return heapify fix as the reloc loop above. nlist_64
+        // is 16 bytes: n_strx(4) n_type(1) n_sect(1) n_desc(2=0) n_value(8).
+        out.push(s.name_offset & 0xff)
+        out.push((s.name_offset >> 8) & 0xff)
+        out.push((s.name_offset >> 16) & 0xff)
+        out.push((s.name_offset >> 24) & 0xff)
+        out.push(n_type & 0xff)
+        out.push(s.section & 0xff)
+        out.push(0)
+        out.push(0)
+        out.push(s.value & 0xff)
+        out.push((s.value >> 8) & 0xff)
+        out.push((s.value >> 16) & 0xff)
+        out.push((s.value >> 24) & 0xff)
+        out.push((s.value >> 32) & 0xff)
+        out.push((s.value >> 40) & 0xff)
+        out.push((s.value >> 48) & 0xff)
+        out.push((s.value >> 56) & 0xff)
         si = si + 1
     }
 
