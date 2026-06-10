@@ -1,0 +1,85 @@
+F-HEXA-CC-NATIVE-N5-FIXPOINT-ACHIEVED
+=====================================
+Date:    2026-06-10
+Axis:    self-host / C-free native fixpoint (N5)
+Status:  🟢 ACHIEVED — consecutive native stages are BYTE-IDENTICAL.
+
+THE RESULT
+----------
+The hexa-lang native arm64 compiler (no LLVM, no C-transpile at emit time)
+reproduces itself byte-exact across consecutive native stages:
+
+    cc-gen3.o  sha256 = ece490874337a3241fd6f02908ac85160e6f5574dfcc202a03ce7a8385285cb3
+    cc-gen4.o  sha256 = ece490874337a3241fd6f02908ac85160e6f5574dfcc202a03ce7a8385285cb3   (IDENTICAL)
+    both 3461680 bytes, Mach-O 64-bit object arm64.
+
+THE LADDER
+----------
+    aprime_main2 (C-transpiled compiler, built by hexat->C->clang)
+       --emit=obj-->  cc-prc2-main.o (3461680B, sha 96fc2ac4…)   [C-transpile stage]
+       hld_main link + runtime.o -->  gen2-main (2079472B, native binary)
+    gen2-main  --emit=obj-->  cc-gen3.o (3461680B, sha ece49087…)  [native stage 1]
+       hld_main link + runtime.o -->  gen3-main (2079472B, native binary)
+    gen3-main  --emit=obj-->  cc-gen4.o (3461680B, sha ece49087…)  [native stage 2]
+
+    cc-gen3.o == cc-gen4.o  ✅  =  N5 NATIVE FIXPOINT.
+
+cc-prc2-main.o (aprime/C-transpile) differs from cc-gen3.o (gen2/native) in 83840
+bytes at a fixed offset — the expected ONE-TIME C-transpile↔native boundary delta
+(embedded modhash/content differences between the clang-built and native-built
+compiler). The FIXPOINT is between consecutive NATIVE stages (gen3==gen4), which is
+the correct definition, and it holds byte-for-byte.
+
+gen2/gen3 are FULLY FUNCTIONAL native compilers: they start clean (no SIGSEGV),
+parse argv, run the whole pipeline (lex->parse->check->lower->codegen->emit), and
+each emitted the entire 3.46MB self-compiler object. Native self-emit is FAST
+(~6 min for the full ~40k-line compiler; the C-transpiled aprime is the slow one).
+
+WHAT UNBLOCKED IT (this session — all prior "blockers" were stale artifacts)
+----------------------------------------------------------------------------
+1. "gen2 startup SIGSEGV" = a STALE LINKER. The cc-native/n5-byteeq-fixpoint
+   branch's tool/hexa_ld.hexa was 293 lines behind main; main's hexa_ld already
+   lays out __literal8/__literal16 + __DATA,__const pointer tables. Relinking with
+   a main-built hld_bin makes gen2 start clean. (NOT the believed "16-byte HexaVal
+   runtime port".)
+2. "missing SOURCE.hexa" is NOT a bug — compiler/main.hexa::_normalize_argv assumes
+   the interpreted `hexa run compiler/main.hexa SOURCE` shape and skips the first
+   `*.hexa` token; a standalone native compiler needs a dummy first `.hexa` token
+   (the canonical `_drv.hexa` placeholder). argv plumbing is correct (lldb verified
+   x0=argc at hexa_set_args entry).
+3. "ENCODE-MISS: STP/LDP mem-parse-fail mem=#0" = a PRE-A-4 STALE OBJECT. cc-prc2.o
+   was built from a branch forked 2026-06-02 00:56, before the A-4 fix (#2509,
+   2026-06-02 14:24, `_lr_ctx_clear` fresh-arrays-per-function). A fresh aprime
+   built from main (with A-4) emits clean objects. (NOT a live codegen bug.)
+4. typeof→type_of: main's self/rt/*.hexa use `typeof()` but the builtin is
+   `type_of` (bind.hexa allowlist) — 1 HX2001 on the flattened compiler. Resolved
+   in the flat (sed) for this proof; the proper fix is PR #3020 (typeof builtin
+   alias) or renaming the self/rt uses.
+5. PERF: serialize's per-reloc/per-symbol byte-emit helpers (`_emit_reloc_info`,
+   `_emit_nlist64`, `_u32/16/64_le`) each triggered a per-call `__hexa_fn_arena_return
+   -> hexa_val_heapify` of the whole growing `out` buffer = O(n^2). Inlined into
+   serialize's loops (output-preserving) to cut that. pack_lir retains additional
+   O(n^2) (per-instruction buffer growth + `_str_in` linear dedup) — the native
+   compiler is fast ENOUGH (~6 min) without fixing it, but it remains a perf
+   follow-up to make the C-transpiled aprime emit fast too.
+
+REPRO
+-----
+  # build a fresh native-emitting compiler from main:
+  HEXA_MAC_BUILD_OK=1 bash tool/build_aprime.sh -o /tmp/aprime -r <main-wt> -v ~/.hx/bin/self/native/hexa_v2
+  # flatten compiler/main.hexa (tool/build_aprime.sh stage-1 python) -> ap_flat.hexa, then
+  sed -i '' 's/typeof(/type_of(/g' ap_flat.hexa
+  # emit -> link -> self-emit -> self-emit -> cmp:
+  /tmp/aprime _drv.hexa --emit=obj --target=arm64-apple-darwin -o cc-a.o ap_flat.hexa
+  hld_main -o gen_a cc-a.o runtime.o --lc-main _main ; codesign -s - -f gen_a
+  gen_a   _drv.hexa --emit=obj --target=arm64-apple-darwin -o cc-b.o ap_flat.hexa
+  hld_main -o gen_b cc-b.o runtime.o --lc-main _main ; codesign -s - -f gen_b
+  gen_b   _drv.hexa --emit=obj --target=arm64-apple-darwin -o cc-c.o ap_flat.hexa
+  cmp cc-b.o cc-c.o   # -> identical = native fixpoint
+
+NEXT (N6/N7)
+------------
+  N6 = cross-arch (linux-x86_64 / linux-arm64) native fixpoint.
+  N7 = CI gate that asserts the native fixpoint stays byte-identical.
+Supersedes F-HEXA-CC-NATIVE-N5-STALE-LINKER-BREAKTHROUGH.txt (which localized the
+gap) and F-HEXA-CC-NATIVE-N5-P1-LOCALIZED.txt (wrong "runtime port" root-cause).
