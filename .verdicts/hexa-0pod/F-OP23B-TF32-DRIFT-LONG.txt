@@ -1,0 +1,5 @@
+F-OP23B-TF32-DRIFT-LONG — TF32 vs FP64 LONG (N=500) + LR-SCHEDULE trajectory drift (RTX 5070)
+=============================================================================================
+STATUS: WIP — harness authored + skeleton pushed; aiden GPU run PENDING.
+        (This verdict will be overwritten verbatim with the N=500 + LR-schedule sampled
+         loss+relRMS trend and the bounded-vs-late-blowup decision once the aiden run lands.)

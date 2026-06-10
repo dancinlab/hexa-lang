@@ -10,6 +10,9 @@ loop targets what the consumer card + code can carry.
 
 ## milestones (loop self-feeds; add as discovered)
 
+<!-- ANCHOR:OP-23B-TF32-DRIFT-LONG (unique anchor — extend OP-23's TF32 trajectory-drift validation to N=500 + an LR schedule (warmup+cosine decay) + a harder synthetic; does bounded loss-tracking hold at the longer/harsher horizon, or does a late blow-up / LR-amplified drift appear; aiden 5070, 0-pod) -->
+- [ ] **OP-23b — TF32 drift N=500 + LR-schedule: bounded-tracking holds at longer/harsher horizon (or honest late-blowup bound)**
+
 <!-- ANCHOR:OP-27-TF32-DOJO (unique anchor — reflect the VALIDATED deterministic TF32 fast-mode OP-20/23/24/25 into the dojo as a contributor recipe; 0-pod docs; flag the commons.tape governance reflection for user sign) -->
 - [x] **OP-27 — deterministic TF32 fast-mode dojo recipe (0-pod) + commons directive drafted for user sign** —
   DOCS-COMPLETE (0-pod half SHIPPED). Added `### deterministic TF32 fast-mode (precision-uncap)` to
