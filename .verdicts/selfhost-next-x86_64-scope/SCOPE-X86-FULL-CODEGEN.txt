@@ -1,0 +1,44 @@
+SCOPE — SELFHOST-NEXT x86_64 full source->binary codegen (WIP checkpoint)
+==========================================================================
+date: 2026-06-11
+branch: domain/selfhost-next-x86_64-complete
+host: summer (x86_64 Linux, glibc) — repo ~/core/hexa-lang
+
+GOAL
+  Close the SELFHOST-NEXT milestone "multi-target bootstrap: x86_64
+  codegen path" from [~] PARTIAL to [x] DONE by proving a full
+  source -> x86_64 ELF binary path through the native x86_64 emitter
+  that RUNS on real x86_64 hardware and produces the correct result.
+
+BLOCKERS IDENTIFIED (this checkpoint)
+  Blocker 0 (substrate): on summer (glibc), the bootstrap `hexa cc`
+    rebuild of self/runtime.c FAILS at clang:
+      self/runtime_core.c:328  #include <malloc.h>
+    is processed AFTER runtime.c:1367-1370 define the macros
+      #define malloc(n) hxlcl_malloc(...)  (+ calloc/realloc/free)
+    so glibc's `extern void *malloc(size_t)` prototype macro-expands
+    to garbage -> "function cannot return function type 'int (size_t)'".
+    The <malloc.h> include (added for the HEXA_FARR_MMAP mallopt
+    constructor) only needs mallopt / M_MMAP_THRESHOLD / M_TRIM_THRESHOLD.
+    FIX: #undef the colliding alloc macros around the <malloc.h> include
+    (push/pop), restoring them after. glibc-Linux only; other libm impls
+    unaffected (byte-identical).
+
+  Blocker (a): native OBJ fast-path gated to arm64 targets only in
+    compiler/main.hexa (~L913/933). x86_64-linux-gnu has pack_lir_x86_64
+    + serialize_elf_x86_64 in compiler/emit/elf_x86_64.hexa but no
+    fast-path branch -> falls through to system `as`/`ld` (which IS wired
+    at L1002/L1055). System path is a valid RUNG-1 route if emit_asm
+    produces correct x86_64 .s.
+
+  Blocker (b): `hexa run compiler/main.hexa` (bootstrap interpreter)
+    hits __raw_add_f / __raw_cmp3 undeclared — same substrate family as
+    blocker 0 (running the big compiler via C-transpile). Bypassed by
+    using the native compiler binary once blocker 0 is fixed.
+
+PLAN
+  1. Fix blocker 0 (runtime.c macro/include ordering) -> bootstrap green.
+  2. Build native x86_64 hexa compiler on summer.
+  3. ret42.hexa --target=x86_64-linux-gnu via system as/ld -> run -> rc=42.
+  4. If native obj fast-path desired, add x86_64 branch mirroring arm64.
+  5. Climb rungs: arithmetic+call+branch, then runtime (string print).
