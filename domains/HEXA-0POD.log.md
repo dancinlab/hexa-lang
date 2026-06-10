@@ -893,3 +893,33 @@ NOT claimed. $0, no vast/pool/pod. Verdict .verdicts/hexa-0pod/F-OP21-HOPPER-WAR
   0-pod follow-up = delete the line-4092 block from self/cuda/runtime_cuda_emit.hexa.
 - $0 · free aiden · no vast · no pod · aiden ~/op24b_wellformed cleaned (no residue). NO end-to-end run
   claimed (g5). Verdict .verdicts/hexa-0pod/F-OP24B-TF32-ENDTOEND.txt.
+
+## 2026-06-10 — OP-24c DONE: TF32 end-to-end TURNKEY build kit (build_clmprod_tf32_e2e.sh) WRITTEN + local-checked, GPU-build-gated run (0-pod, $0)
+- GOAL: turn OP-24b's honest build-gated finding into a TURNKEY one-command kit — the OP-21A pattern
+  (code+script ready, measurement env-gated) wired specifically to the TF32 end-to-end test through the
+  REAL clm_prod_gpu CLMConvMoE trainer. 0-pod: WRITE + local-check the script; NO build, NO run, NO GPU.
+- DELIVERED: tool/clm/build_clmprod_tf32_e2e.sh (turnkey, bash -n VALID, every step concrete). The moment
+  a complete-frozen-seed GPU-build env is authorized, the whole test = `bash tool/clm/build_clmprod_tf32_e2e.sh`.
+- STRUCTURE (JOB a-e): (a) PROVISION CHECKLIST + ZERO-VAST guard (does NOT rent; exits clean if no nvcc /
+  no sm_120+ GPU) + OP-23/24 idle guard. (b) frozen-seed stage (FROZEN_SEED_REF=151c52c8… restore_frozen_seeds)
+  + EXACT-BLOCKER PRE-CHECK: greps restored self/runtime.c for the 31 host marshal wrappers clm_prod.hexa calls;
+  if any missing, prints the F-OP24B blocker verbatim (the 30 absent, the 2 unblock options) + EXITS 3 BEFORE
+  wasting a build; then EMIT runtime_cuda.c (TF32 wire asserted present) + nvcc -x cu -DHEXA_CUDA -arch=$ARCH
+  + gcc-link -lcudart -lcublas -lcuda (the proven recipe). (c) run the trainer x2 each FP64-default +
+  HEXA_TF32_FASTMODE=1, tiny config (CLM_PROD_{D,E,T,BATCH,NSAMP,EPOCHS} env knobs, all verified in main()).
+  (d) g5 GATE SEQUENCE: GATE-A FP64-unchanged (run1==run2 loss max|Δ|=0) → GATE-B TF32 self-byte-eq → GATE-C
+  TF32-tracks-FP64 (OP-23 E2E, worst |Δloss|/|loss_FP64| <= W14 1e-2) → SPEED wall step/s ratio (ONLY after
+  A+B+C PASS, with the honest glue-dilution caveat: << GEMM-only 30-51x, nearer OP-20 ~4.2x @B=1; consumer-card
+  FP64 ~1/64 inflates it; no superiority claim). (e) verdict headline + leak-0 cleanup trap.
+- LOCAL 0-POD CHECK (verbatim): `bash -n tool/clm/build_clmprod_tf32_e2e.sh` -> PASS. Referenced paths/flags/
+  knobs verified at current main: restore_frozen_seeds OK, runtime_cuda_emit.hexa OK, clm_prod.hexa (main L1164)
+  OK, frozen ref 151c52c8… resolves to a commit, all 6 CLM_PROD_* knobs read by main(). self/runtime.c is
+  correctly ABSENT at main (graduated-removed seed RESTORED by the script's own step b.1 BEFORE step b.2 greps
+  it — ordering correct). inbox patch absent (F-OP24B says untracked; script doesn't depend on it).
+- EXACT REMAINING GPU-BUILD-ENV-GATED STEP (F-OP24B-confirmed, the single irreducible wall): in the canonical
+  self-host build env, re-freeze a runtime.c seed carrying ALL 31 #ifdef HEXA_CUDA host wrappers (today 2/31:
+  matmul + ffn_fp64_via_bf16), OR add a CUDA build job to release.yml. THEN `bash tool/clm/build_clmprod_tf32_e2e.sh`
+  runs unchanged + the pre-check passes instead of exiting 3. TF32 code already proven well-formed + codegen-
+  complete under -DHEXA_CUDA (F-OP24B §3) — only the RUN is gated, and this script IS the run.
+- TURNKEY = YES. HONEST: no end-to-end number claimed (kit-ready, run-gated; OP-21A framing). 0-pod · $0 · no
+  vast · no pod · no GPU · no leak · foreign pod 40306156 untouched. Verdict .verdicts/hexa-0pod/F-OP24C-TF32-TURNKEY.txt.
