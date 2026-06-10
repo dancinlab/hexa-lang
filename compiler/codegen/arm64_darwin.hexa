@@ -1359,6 +1359,7 @@ fn _builtin_runtime_sym(name: string) -> string {
     if name == "utc_iso_now"   { return "hexa_utc_iso_now" }
     if name == "trim"          { return "rt_str_trim" }
     if name == "type_of"       { return "hexa_type_of" }
+    if name == "typeof"        { return "hexa_type_of" }  // keyword-form alias of type_of
     if name == "write_file"    { return "rt_write_file" }
     if name == "sha256"        { return "hexa_sha256" }
     if name == "sha256_file"   { return "hexa_sha256_file" }
