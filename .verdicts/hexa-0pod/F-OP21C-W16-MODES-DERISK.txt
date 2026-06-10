@@ -1,0 +1,90 @@
+F-OP21C-W16-MODES-DERISK — w16.cu remaining-MODE GPU-free reference logic CPU-validated 0-pod
+=============================================================================================
+HEXA-0POD OP-21C. 0-pod (no GPU, no vast, no pod). Branch domain/hexa-0pod-op21c.
+EXTENDS OP-21B (#3023): OP-21B CPU-validated the riskiest D1 piece (the MODE-0 canonical-atom
+read law + the GMMA 8x4 layout + an 8x8 TF32 ref GEMM — T1..T7, all PASS). OP-21C validates
+the GPU-FREE reference logic of the OTHER w16.cu MODEs in the H100 gate sequence, so MORE of
+that sequence (not just MODE 0/1) is CPU-pre-validated before the run. Device wgmma swmode=1
+HW de-swizzle + the gemm_w16b device band path + ALL perf REMAIN H100-gated.
+
+CONTEXT
+-------
+OP-21A (#3017) wrote self/native/wgmma/wgmma_tf32_w16.cu + tool/wgmma/build_w16.sh (the turnkey
+H100 gate sequence: MODE 9 dump -> MODE 0 canonical-decode -> MODE 1 descriptor-direct
+falsifier [field sweep, OP-21B switch on floor] -> MODE 4 full GEMM bit-exact-vs-cuBLAS gate +
+perf). OP-21B de-risked MODE 0's canonical read law on CPU. NOT yet CPU-covered before OP-21C:
+MODE 4's full-tile (128x128) reference GEMM + the device epilogue register->global scatter the
+bit-exact gate compares against; the B-operand per-slab read across ALL slabs of the NST=3 ring
++ all 4 N-atoms (OP-21B T5 did one slab, 2 atoms); the gemm_w16b OP-21B-fallback reference
+(band gmma_phys repack) computing the SAME math as gemm_w16; and the descriptor stride byte
+arithmetic across the NST=3 stages. Each is PURE HOST ARITHMETIC -> CPU-validatable 0-pod.
+
+THE HARNESS (tool/wgmma/w16_modes_cpu_check.cpp — clang++ -std=c++17, ZERO GPU/CUDA/PTX)
+---------------------------------------------------------------------------------------
+Ports the pure-arithmetic SSOT VERBATIM from w10_lib.h + w16.cu (gmma_phys 8x4 INTER core,
+tf() TF32 round, the composed_A / composed_B read laws) AND models the device epilogue
+register->global scatter VERBATIM from gemm_w16 L395-403 (= gemm_w10 L184-190). Asserts 6
+element-for-element / bit-exact CPU checks (the additional MODEs' GPU-free reference logic):
+
+  C1a  EPILOGUE SCATTER = BIJECTIVE FULL COVER of the 128x128 output tile. Sweeps both
+       warpgroups (band 0/1), all 128 lanes, all 32 accumulators, both d0/d1 — every output
+       (row,col) written EXACTLY ONCE (no double-write, no gap). If the scatter were wrong the
+       MODE-4 device result is wrong REGARDLESS of the GEMM math, so this gates MODE 4 just as
+       much as the arithmetic does. (rb=w*16+(l>>2), cb=(l&3)*2, d0->N0..63, d1->N64..127.)
+  C1b  MODE-4 FULL-TILE (128x128) REFERENCE GEMM = TF32-round-inputs + fp32-FMA, accumulated
+       in the KERNEL's K-order (TKSW=32 slabs, TK=8 inner sub-steps), reproduces a straight
+       increasing-k TF32-round + fp32-FMA GEMM bit-for-bit over the WHOLE tile (K=3*TKSW=96 so
+       the NST=3 ring turns). Confirms MODE 4's gate (rel_rms vs cuBLAS-TF32) compares the
+       device output against the RIGHT reference at FULL-TILE scale (extends OP-21B T6's 8x8).
+  C2   B PER-SLAB READ recovers global B bit-exact across ALL NST=3 slabs AND all 4 N-atoms
+       (NATOM=TN/TKSW=4). A distinct B tile per slab (per-slab RNG seed) catches slab-cross
+       aliasing. composed_B(k,n) lands then reads back -> must recover B[k][n] for every
+       (slab,k,n). (extends OP-21B T5's single slab / 2 atoms.)
+  C3   gemm_w16b BAND DECODE == gemm_w16 OPERANDS. gemm_w16b software-decodes Asw -> As0/As1
+       (composed_A -> gmma_phys repack, w16.cu L458-463) and Bsw -> B0/B1 (composed_B ->
+       gmma_phys repack, L464-469) into the gmma band, then wgmma reads the band. Reading the
+       band back through gmma_phys reconstructs the SAME logical operands gemm_w16 reads in
+       place from global — the repack is a pure value-preserving reshuffle (A=4096/4096,
+       B=4096/4096 bit-exact).
+  C3b  closes C3: the per-slab 128x128 GEMM computed FROM the w16b band == the per-slab GEMM
+       gemm_w16 computes from global, element-for-element (16384/16384) — both fp32-FMA over
+       tf32 inputs in the same increasing-k order. Different scheduling, IDENTICAL math.
+  C4   DESCRIPTOR STRIDE byte arithmetic self-consistent ACROSS the NST=3 stages: (i) ring
+       slot bases st*SWBUF (SWBUF=8192 floats) non-overlap + contiguous over the stages; (ii)
+       gemm_w16 kk*4-byte START bumps tile one 128B swizzle row per atom [0,32,64,96]B for the
+       4 sub-steps; (iii) gemm_w16b (kk>>3)*512*4 bumps tile the 4 gmma sub-tiles
+       [0,2048,4096,6144]B (512-float/2048B each); (iv) MODE-1/MODE-4 defaults (lbo=16,
+       sbo=1024) match the 256-float (1024B) atom.
+
+RESULT (RAN LOCALLY, 0-GPU: clang++ -O2 -std=c++17 ... -o w16mchk && ./w16mchk)
+-------------------------------------------------------------------------------
+  [PASS] C1a epilogue scatter = bijective full cover (128x128)
+  [PASS] C1b MODE-4 full-tile ref = TF32-round + fp32-FMA (K-order)   exact=16384/16384 K=96
+  [PASS] C2 B read recovers global B bit-exact (all 3 slabs, 4 atoms) exact=12288/12288
+  [PASS] C3 gemm_w16b band decode == gemm_w16 operands (same math)    A=4096/4096 B=4096/4096
+  [PASS] C3b w16b per-slab GEMM == w16 per-slab GEMM                  exact=16384/16384
+  [PASS] C4 descriptor stride self-consistent across NST=3 stages     SWBUF=8192f rings=ok ...
+  RESULT: 6 PASS, 0 FAIL   exit 0
+
+6/6 PASS. NO bug found — the remaining-MODE GPU-free reference logic is CPU-PROVEN correct.
+(Teeth confirmed: an injected wrong-xor in the B read law drops the round-trip recovery to
+2190/4096, and the epilogue cover check catches any double-write/gap — the checks are not
+trivially-passing.)
+
+WHAT IS STILL H100-GATED (HONEST, g5)
+-------------------------------------
+This proves the GPU-FREE reference logic only. STILL device-gated:
+  - the DEVICE wgmma swmode=1 HW de-swizzle actually reading the descriptor as the canonical
+    law predicts (MODE 1 rel_rms 0, MODE 4 rel_rms <= 3e-3 vs cuBLAS-TF32) — the pre-registered
+    falsifier; CPU cannot execute the wgmma instruction or model the HW de-swizzle;
+  - the gemm_w16b DEVICE band path (the fallback's actual wgmma + mk(128,256) descriptor read);
+  - ALL perf (own vs same-binary gemm_w10 vs cuBLAS-TF32; occupancy; SASS STS=0 evidence).
+NO wgmma/PTX executed. NO TFLOP/s claimed.
+
+VALUE / ADDITIONAL DE-RISK ACHIEVED: YES
+----------------------------------------
+Before OP-21C only MODE 0/1's canonical read was CPU-validated. Now the MODE-4 full-tile
+reference + its epilogue scatter, the B-ring read (all slabs/atoms), the gemm_w16b fallback
+reference, and the descriptor stride consistency are ALSO CPU-proven. The H100 gate sequence
+in build_w16.sh is more fully pre-validated 0-pod -> higher first-try odds for MODE 1, MODE 4,
+and the OP-21B fallback alike. $0, no vast/pool/pod/GPU. Build temp cleaned (disk-frugal).

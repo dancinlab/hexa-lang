@@ -1011,3 +1011,25 @@ NOT claimed. $0, no vast/pool/pod. Verdict .verdicts/hexa-0pod/F-OP21-HOPPER-WAR
   (musl build still needs OP-19d's documented build-env knobs — pre-existing, not this ABI bug).
 - Temp artifacts cleaned on summer (docker image + /tmp), aiden (/tmp), local. Foreign vast pod 40375114 untouched.
   Verdict .verdicts/hexa-0pod/F-OP19E-MUSL-ENVFIX.txt.
+
+## OP-21C — w16.cu remaining-MODE GPU-free reference logic CPU-validated 0-pod (extends OP-21B)
+- branch domain/hexa-0pod-op21c (worktree off origin/main). 0-pod: no GPU, no vast, no pod, $0.
+- GOAL: extend OP-21B's D1 CPU de-risk to the OTHER w16.cu MODEs' GPU-free reference logic, so MORE of
+  build_w16.sh's H100 gate sequence (not just MODE 0/1) is CPU-pre-validated before the run.
+- WROTE tool/wgmma/w16_modes_cpu_check.cpp (clang++ -std=c++17, ZERO GPU/CUDA/PTX) — ports SSOT arithmetic
+  VERBATIM (gmma_phys, tf(), composed_A/composed_B) + models the device epilogue scatter VERBATIM from
+  gemm_w16 L395-403. 6 element-for-element/bit-exact checks:
+      C1a  epilogue register->global scatter = BIJECTIVE FULL COVER of 128x128 tile (every output once)
+      C1b  MODE-4 FULL-TILE (128x128) ref GEMM = TF32-round + fp32-FMA in kernel K-order == straight GEMM
+           bit-for-bit (K=96 turns NST=3) — extends OP-21B T6's 8x8 to full tile
+      C2   B per-slab read recovers global B bit-exact across ALL 3 slabs + all 4 N-atoms (12288/12288)
+      C3   gemm_w16b band decode (composed -> gmma_phys repack) == gemm_w16 operands (A/B 4096/4096 each)
+      C3b  w16b per-slab 128x128 GEMM == w16 per-slab GEMM (16384/16384) — same math, different schedule
+      C4   descriptor stride byte arithmetic self-consistent across NST=3 stages (ring st*SWBUF, w16 kk*4
+           [0,32,64,96]B, w16b (kk>>3)*512*4 [0,2k,4k,6k]B, MODE-1 lbo=16/sbo=1024 vs 1024B atom)
+- RAN locally (0-GPU): 6 PASS, 0 FAIL, exit 0 — remaining-MODE GPU-free reference logic CPU-PROVEN correct, NO bug.
+  Teeth confirmed: injected wrong-xor in B read drops round-trip to 2190/4096; epilogue cover catches double-write/gap.
+- GATE g5: extended harness runs locally YES · additional MODEs' GPU-free reference logic proven correct YES (no bug).
+  STILL H100-GATED: device wgmma swmode=1 HW de-swizzle (MODE 1/4 rel_rms), the gemm_w16b device band path, ALL perf.
+  No wgmma/PTX executed, no TFLOP/s claimed. Build temp cleaned (disk-frugal). Foreign vast pod 40375114 untouched.
+  Verdict .verdicts/hexa-0pod/F-OP21C-W16-MODES-DERISK.txt.
