@@ -1,0 +1,148 @@
+════════════════════════════════════════════════════════════════════════════════
+ F-OP19E-MUSL-ENVFIX — musl-safe env capture (POSIX `environ`, not the
+ constructor-args ABI); fixes the OP-19d pre-main SIGSEGV under musl libc
+ HEXA-0POD OP-19e · 0-GPU · free pool ONLY (summer + docker/Alpine) · ZERO vast · $0
+════════════════════════════════════════════════════════════════════════════════
+
+GOAL
+  OP-19d (#3027) proved 4-environment machine-independence (Darwin · glibc-x86 ·
+  glibc-arm64 · musl-x86) of flame's deterministic dt_exp/dt_erf folds, but to run
+  ANYTHING on native musl it needed a disclosed TEST-ONLY runtime shim — because it
+  surfaced a REAL hexa-runtime↔musl portability bug: the priority-101 environ-capture
+  constructor crashes before main() on musl. OP-19e is the durable fix for that bug.
+
+────────────────────────────────────────────────────────────────────────────────
+ 1. THE BUG (verbatim root cause)
+────────────────────────────────────────────────────────────────────────────────
+  self/runtime.c (frozen seed 151c52c8…, "RUNTIME tail (cycle 85)") owns the environ
+  global via a priority-101 constructor that runs BEFORE the default-priority arena
+  init (_hexa_init_mem_cap → hxlcl_getenv):
+
+      static char **hxlcl_environ = 0;
+      __attribute__((constructor(101)))
+      static void hxlcl_capture_environ(int argc, char **argv, char **envp) {
+          (void)argc; (void)argv; hxlcl_environ = envp;
+      }
+      #define environ hxlcl_environ
+
+  The `(int argc, char **argv, char **envp)` constructor signature is a glibc + Darwin/
+  dyld EXTENSION, NOT in the C/ELF standard:
+    · Darwin/dyld passes (argc, argv, envp, apple) to every __mod_init_func routine.
+    · glibc's __libc_csu_init forwards (argc, argv, envp) to .init_array entries.
+    · musl runs constructors with NO arguments (do_init_fini / __libc_start_init).
+  So on musl `envp` is whatever garbage sits in the 3rd arg register at ctor time →
+  hxlcl_environ = garbage → the FIRST hxlcl_getenv (driven by the arena init, which
+  runs AFTER this priority-101 ctor) walks a wild pointer → SIGSEGV before main().
+  OP-19d's gdb backtrace: SIGSEGV in hxlcl_getenv ← _hexa_init_mem_cap (constructor)
+  ← musl do_init_fini / __libc_start_init.
+
+────────────────────────────────────────────────────────────────────────────────
+ 2. THE FIX — POSIX `environ` global (musl-safe, behavior-preserving)
+────────────────────────────────────────────────────────────────────────────────
+  Read the POSIX global `extern char **environ` (defined by EVERY libc — glibc, musl,
+  AND Darwin's crt1 for the main executable) instead of the constructor-args envp.
+  The constructor STILL runs at priority 101 (before the arena init) and still snapshots
+  into hxlcl_environ, so hxlcl_getenv downstream is byte-for-byte unchanged:
+
+      extern char **environ;
+      static char **hxlcl_environ = 0;
+      __attribute__((constructor(101)))
+      static void hxlcl_capture_environ(void) { hxlcl_environ = environ; }
+      #define environ hxlcl_environ
+
+  The `extern char **environ;` is emitted BEFORE the `#define environ hxlcl_environ`
+  shadow, and the constructor body references `environ` on the line ABOVE the #define,
+  so it binds to the LIBC symbol (not the macro). On glibc/Darwin the ctor-arg envp and
+  the libc `environ` global point at the SAME process-environment vector at start, so
+  the captured env is IDENTICAL → BEHAVIOR-PRESERVING. On musl it is a real pointer
+  instead of a garbage register → FIXED. No more reliance on the non-standard ctor ABI.
+
+────────────────────────────────────────────────────────────────────────────────
+ 3. DURABLE LANDING — tool/restore_frozen_seeds OP-19e post-restore patch
+────────────────────────────────────────────────────────────────────────────────
+  self/runtime.c is gitignored (the .c-graduation froze it; SSOT = git blob 151c52c8…,
+  immutable). Per the OP-16/17/18 mechanism the durable fix lands as a deterministic,
+  idempotent post-restore patch inside tool/restore_frozen_seeds — an awk state machine
+  that, after restoring the frozen runtime.c, rewrites the 6-line capture block (the
+  `static char **hxlcl_environ = 0;` decl through `#define environ hxlcl_environ`) into
+  the POSIX-environ form above. Marker-guarded (`OP-19e (HEXA-0POD)`) → no double-inject
+  across re-restores. So every fresh `.c=0` self-build (CI nobaseline-gate + local
+  restore) emits the musl-safe runtime automatically. The TRACKED change is one file:
+  tool/restore_frozen_seeds (the only durable surface; runtime.c stays untracked).
+
+────────────────────────────────────────────────────────────────────────────────
+ 4. PROOF — 3-environment matrix (0-pod, free pool, $0, NO vast, NO GPU)
+────────────────────────────────────────────────────────────────────────────────
+  REACHABILITY: summer (pool linux, /usr/bin/docker 29.1.3) hosts an Alpine 3.20
+  container → musl libc /lib/ld-musl-x86_64.so.1. Darwin = local. glibc = summer host.
+
+  (a) ISOLATED REPRODUCER (the exact capture pattern, NEW vs OLD, both compiled native):
+        Alpine/musl (gcc, /lib/ld-musl-x86_64.so.1):
+          OLD (ctor-args ABI, the OP-19d bug)  → "Segmentation fault (core dumped)",
+                                                  exit 139 (128+SIGSEGV)
+          NEW (POSIX environ, the OP-19e fix)  → "environ_nonnull=1 OP19E_PROBE=hello
+                                                  PATH=1", exit 0
+        Ubuntu glibc 2.39 (host):
+          OLD → environ_nonnull=1 OP19E_PROBE=hello PATH=1, exit 0
+          NEW → environ_nonnull=1 OP19E_PROBE=hello PATH=1, exit 0   (IDENTICAL → preserving)
+        Darwin (local, clang):
+          NEW → environ_nonnull=1 OP19E_PROBE=hello PATH=1, exit 0
+      ⇒ musl SIGSEGV GONE with the fix; glibc OLD≡NEW (behavior-preserving); Darwin clean.
+
+  (b) FULL PATCHED self/runtime.c BUILDS under musl + Darwin:
+        Darwin clang -fsyntax-only self/runtime.c → exit 0, ZERO errors, NO environ diag.
+        Alpine/musl clang -c self/runtime.c → runtime.o OK, ZERO environ diagnostics
+          (the only extra flags vs Darwin are the OP-19d-class build-env knobs:
+           -include {sched,sys/socket,sys/un,…}.h header pre-ordering + lld + gcc/libgcc
+           CRT + openssl/sodium-dev for the crypto fragment — BUILD-ONLY, not numeric,
+           identical to OP-19d's documented musl blockers, unrelated to the env fix).
+
+  (c) BONUS — REAL native-musl `hexa run` of the OP-19 cross-platform fold oracle with
+      the DURABLE OP-19e fix and NO SHIM (upgrades OP-19d's test-only shim to a real run):
+        stdlib/flame/op19_crossplatform_selfcontained.hexa transpiled to C on aiden
+        (build/hexat, transpile-only), then compiled + linked against the OP-19e-patched
+        self/runtime.c inside Alpine/musl. ldd → libc.musl-x86_64.so.1 (genuine musl).
+          RUN_EXIT = 0   ← NO SIGSEGV (the OP-19d pre-main crash is GONE, no shim)
+        Deterministic Taylor folds, BYTE-IDENTICAL across Darwin + glibc + native-musl
+        (same OP-19e-patched runtime built on each):
+                                 Darwin              glibc(summer)       musl(Alpine)
+          CEBWD-TAYLOR  (dt_exp) 7679248634312321699 = 7679248634312321699 = 7679248634312321699
+          GELUFWD-TAYLOR(dt_erf) 4548590605583584556 = 4548590605583584556 = 4548590605583584556
+          GELUBWD-TAYLOR         636106759170901885  = 636106759170901885  = 636106759170901885
+        (CEBWD/GELUFWD reproduce OP-19d's published dt_exp/dt_erf bytes exactly.)
+        Every libm-* line DIVERGES across the 3 (Darwin libm ≠ glibc libm ≠ musl libm),
+        e.g. CEBWD-LIBM Darwin 7969105254299072804 vs musl 3352931952497630952 vs
+        glibc — confirming ONLY the dt_* path is machine-independent, now on a REAL musl
+        run rather than a shimmed one.
+
+────────────────────────────────────────────────────────────────────────────────
+ GATE (g5)
+────────────────────────────────────────────────────────────────────────────────
+   env-capture musl-safe (POSIX environ) ... YES — reads `extern char **environ`, not
+                                              the non-standard (argc,argv,envp) ctor ABI.
+   musl SIGSEGV GONE ....................... YES — isolated repro OLD=139→NEW=0; real
+                                              native-musl oracle run RUN_EXIT=0, no shim.
+   behavior-preserving glibc/Darwin ........ YES — glibc OLD≡NEW identical; Darwin clean;
+                                              same env vector captured (same env source).
+   durable landing ......................... tool/restore_frozen_seeds OP-19e post-restore
+                                              patch (idempotent, marker-guarded) — the
+                                              ONE tracked file; runtime.c stays gitignored.
+   bonus native-musl folds match ........... YES — dt_exp/dt_erf byte-identical across
+                                              Darwin + glibc + native-musl; libm diverges.
+   residual ................................ NONE on the env-capture path. The musl
+                                              build still needs OP-19d's documented build-
+                                              env knobs (header pre-ordering + lld + CRT);
+                                              those are pre-existing build-env items, not
+                                              the runtime ABI bug this OP fixes.
+   cost .................................... $0 · 0-GPU · free pool (summer docker +
+                                              Alpine) · ZERO vast.
+
+   F-OP19E-MUSL-ENVFIX : the OP-19d hexa-runtime↔musl constructor-ABI bug is FIXED at the
+                         source — env capture now reads the POSIX `environ` global on
+                         every libc (glibc · musl · Darwin) instead of the glibc/Darwin-
+                         only constructor-args ABI. musl pre-main SIGSEGV GONE, glibc/
+                         Darwin behavior byte-preserved, durably landed via the
+                         restore_frozen_seeds post-restore patch, and the OP-19/19b/19c/19d
+                         deterministic folds now reproduce BYTE-IDENTICALLY under a REAL
+                         native-musl `hexa run` with no shim. REAL-AND-CONFIRMED.
+════════════════════════════════════════════════════════════════════════════════

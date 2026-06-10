@@ -347,6 +347,27 @@ loop targets what the consumer card + code can carry.
   bug hit BEFORE any fold math — flagged as a runtime follow-up). $0, 0-GPU, free pool (summer docker + Alpine), ZERO
   vast. Verdict .verdicts/hexa-0pod/F-OP19D-4TH-ENV.txt.
 
+<!-- ANCHOR:OP-19E-MUSL-ENVFIX (unique anchor — the durable runtime fix for the OP-19d musl ctor-ABI SIGSEGV: POSIX `environ` global replaces the glibc/Darwin-only (argc,argv,envp) constructor-args ABI; upgrades OP-19d's test-only shim to a real native-musl run) -->
+- [x] **OP-19e — musl-safe env-capture (POSIX environ, not constructor-args ABI); fixes the OP-19d SIGSEGV (0-pod)** —
+  THE durable fix for the REAL hexa-runtime↔musl bug OP-19d surfaced. The priority-101 `hxlcl_capture_environ(int argc,
+  char**argv, char**envp)` ctor relied on the glibc/Darwin-only "(argc,argv,envp)→constructor" ABI; **musl passes NO
+  args to ctors** → `envp` = garbage register → `hxlcl_environ`=garbage → SIGSEGV in `_hexa_init_mem_cap`→`hxlcl_getenv`
+  BEFORE main(). FIX: read the POSIX global `extern char **environ` (defined by EVERY libc incl. musl) instead — ctor
+  still runs at prio 101 (`hxlcl_capture_environ(void){ hxlcl_environ = environ; }`), `environ` referenced before the
+  `#define environ hxlcl_environ` shadow so it binds the libc symbol. BEHAVIOR-PRESERVING on glibc/Darwin (ctor-arg envp
+  and libc `environ` point at the SAME vector at start → same env captured), FIXES musl (real pointer). DURABLE LANDING:
+  self/runtime.c is gitignored (frozen seed 151c52c8…), so the fix lands via the OP-16/17/18 mechanism — an idempotent,
+  marker-guarded **OP-19e post-restore awk patch in tool/restore_frozen_seeds** that rewrites the 6-line capture block on
+  every restore (the ONE tracked file; runtime.c stays untracked). PROOF (0-pod, summer docker + Alpine, $0, NO vast/GPU):
+  (a) isolated reproducer native — Alpine/musl OLD ctor-ABI = SIGSEGV exit 139, NEW POSIX-environ = clean exit 0; glibc
+  OLD≡NEW identical; Darwin clean. (b) full patched self/runtime.c builds under musl (runtime.o OK, ZERO environ diags)
+  + Darwin (`-fsyntax-only` exit 0). (c) BONUS — real native-musl `hexa run` of op19_crossplatform_selfcontained.hexa
+  against the patched runtime, NO SHIM: `ldd → libc.musl-x86_64.so.1`, **RUN_EXIT=0** (SIGSEGV GONE), deterministic
+  Taylor folds **byte-identical across Darwin + glibc(summer) + native-musl** (dt_exp 7679248634312321699, dt_erf FWD
+  4548590605583584556, GELUBWD 636106759170901885 — all three equal on all three), while every libm-* line DIVERGES
+  (Darwin≠glibc≠musl) → upgrades OP-19d's test-only shim to a REAL native-musl run. Verdict
+  .verdicts/hexa-0pod/F-OP19E-MUSL-ENVFIX.txt.
+
 <!-- ANCHOR:OP-18-L3-FUSED-HOST (unique anchor — completes the OP-16 L3 fused-dispatch family: gelu2 + moe_block2) -->
 - [x] **OP-18 — host fallbacks for the remaining L3 fused dispatchers (gelu2 + moe_block2), 0-GPU testable** —
   completes the OP-16 (#2995) L3 fused-dispatch family: forge_dispatch_gelu2 (L3-b) + forge_dispatch_moe_block2
