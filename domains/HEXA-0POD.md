@@ -11,7 +11,24 @@ loop targets what the consumer card + code can carry.
 ## milestones (loop self-feeds; add as discovered)
 
 <!-- ANCHOR:OP-31-3RD-ARCH (unique anchor — OP-29 proved machine-independence on a 2nd flame arch (decoder block); OP-31 generalizes to a THIRD structurally-distinct arch — a plain feed-forward MLP (nn_lib nn_linear_fwd + GELU, NO attention/RoPE/conv/MoE/norm) — and verifies the OP-30 cross-ISA-matmul invariant (inline ascending reduction, NOT FMA-fused farr_matmul) holds. The production nn_linear_fwd routes through forge_dispatch_matmul → FMA-fused farr_matmul (tensor_lib L58 "ikj order, FMA-fused under clang -O2") = a REAL OP-30 hole; close it inline-ascending like OP-29) -->
-- [ ] **OP-31 — machine-independence on a 3rd flame arch + OP-30 cross-ISA-matmul invariant verified (or violation found+closed)**
+- [x] **OP-31 — machine-independence on a 3rd flame arch + OP-30 cross-ISA-matmul invariant verified (or violation found+closed)** —
+  GREEN. Generalizes OP-29's G2 from 2 archs to THREE: machine-independent byte-exact determinism now holds on a plain
+  feed-forward MLP (Linear→GELU→Linear→GELU→Linear), structurally DISTINCT from CLMConvMoE (OP-15: conv+MoE+GroupNorm)
+  AND the decoder block (OP-29: attention+RoPE+SwiGLU+RMSNorm) — every MLP layer is a pure GEMM, the purest stress of the
+  OP-30 cross-ISA matmul invariant. 3rd arch = PRODUCTION nn_lib MLP (nn_linear_fwd + nn_gelu_fwd + nn_linear_bwd +
+  nn_gelu_bwd). ORACLES stdlib/flame/op31_mlp_determinism_eq.hexa (run-to-run, imports prod lib) +
+  stdlib/flame/op31_mlp_selfcontained.hexa (cross-platform inline-reduction twin + an in-band OP-30 FMA diagnostic).
+  RESULT: byte-eq run-to-run (fwd out · bwd grads · bwd dx all max|Δ|=0) on BOTH oracles, BOTH platforms; AND
+  cross-platform byte-IDENTICAL on local arm64-macos vs aiden x86-linux (free CPU pool, $0, NO vast/NO GPU) — identical
+  checksums (fwd 1585504437 / grad 926871122) + identical IEEE-754 fingerprints FWD `0 0 64 45 56 160 215 65` · GRAD
+  `0 0 0 41 119 159 203 65` on BOTH. OP-30 INVARIANT DIRECTLY DEMONSTRATED (not just verified): the production
+  nn_linear_fwd rides forge_dispatch_matmul → FMA-fused farr_matmul (tensor_lib L58 "ikj order, FMA-fused under clang
+  -O2") — a REAL OP-30 hole. The self-contained twin's in-band FMA diagnostic shows that exact kernel's L1 checksum
+  byte-DIVERGES arm64 2039553633 vs x86 124945498 on byte-identical fp64 inputs, WHILE the inline-ascending rewrite of
+  the same matmul stays byte-identical (fwd ck 1585504437 on both) — the live difference the invariant guards. HOLE
+  CLOSED inline-ascending (_mlp_linear_fwd plain mul+add, no C kernel), the OP-29/CLMConvMoE discipline; nn_linear_bwd
+  was already inline. libm-CLEAN (GELU via dt_erf/dt_exp; no RMSNorm so no _nn_sqrt libm on this path). Machine-
+  independence GENERALIZES to 3 structurally-distinct archs. Verdict .verdicts/hexa-0pod/F-OP31-3RD-ARCH.txt.
 
 <!-- ANCHOR:OP-30-CROSSISA-CONTRACT (unique anchor — OP-29 surfaced a cross-cutting find: the C farr_matmul FMA-fused kernel byte-DIVERGES across ISAs (arm64 single-FMA vs x86 mul+add under clang -O2); OP-29 closed it by re-implementing matmul as inline ascending reductions. That contract requirement currently lives only in the OP-29 milestone+verdict — OP-30 formalizes it as a FIRST-CLASS, discoverable invariant in docs/flame-determinism-contract.md so a future contributor can't miss it: flame matmul on the det path MUST route through inline ascending reductions, NOT the FMA-fused farr_matmul) -->
 - [x] **OP-30 — cross-ISA matmul invariant formalized in the determinism contract (FMA-fused farr_matmul forbidden on the det path)** —

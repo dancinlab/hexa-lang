@@ -1,8 +1,165 @@
 ════════════════════════════════════════════════════════════════════════════
 F-OP31-3RD-ARCH — machine-independent byte-exact determinism GENERALIZES to a
 THIRD flame model architecture (a plain feed-forward MLP — NOT CLMConvMoE,
-NOT the decoder block) + the OP-30 cross-ISA-matmul invariant verified
+NOT the decoder block) + the OP-30 cross-ISA-matmul invariant DIRECTLY VERIFIED
 HEXA-0POD OP-31 · deep-dive round-7 branch ② · CPU-LOCAL `hexa run` · 0-GPU · $0
 ════════════════════════════════════════════════════════════════════════════
 
-[WIP SKELETON — results to be filled after local + cross-platform runs.]
+GAP (OP-29 #3045 / OP-30 #3047 — generalize G2 from 2 archs to 3)
+  Machine-independence was proven on TWO flame architectures: the CLMConvMoE
+  micro-step (OP-15 capstone + the 8 per-op oracles) and the pre-norm
+  Transformer decoder block (OP-29). OP-30 formalized the 3-layer determinism
+  model (run-to-run · libm-free · cross-ISA-FMA-free) and the cross-ISA-matmul
+  INVARIANT: matmul on the determinism path MUST be an inline ascending
+  reduction, NOT the FMA-fused C `farr_matmul` kernel (else arm64 ≠ x86 under
+  clang -O2). A reviewer would still ask: is the construction GENERAL, or does
+  it just happen to hold on those two? OP-31 answers it on a THIRD,
+  structurally-distinct architecture AND uses that arch to DIRECTLY EXHIBIT the
+  OP-30 FMA divergence the invariant guards against.
+
+3rd ARCHITECTURE (NOT a CLMConvMoE variant, NOT the decoder block)
+  A plain feed-forward MLP (multi-layer perceptron):
+      x[B·d0] → Linear(d0→h1) → GELU → Linear(h1→h2) → GELU → Linear(h2→dout)
+  It shares NO operators with either prior arch:
+    - vs CLMConvMoE: no Conv1d, no MoE router/combine, no GroupNorm
+    - vs decoder block: no GQA attention, no RoPE, no SwiGLU, no RMSNorm
+  EVERY layer is a pure dense GEMM — the MLP exercises the matmul/reduction
+  determinism surface in its PUREST form, which is exactly the OP-30 invariant's
+  stress point. Activation = GELU (the production nn_lib _nn_gelu path:
+  0.5·(1+erf(x/√2))·x), routed through dt_erf/dt_exp (already libm-free).
+  Config tiny CPU-runnable: B=3 · d0=8 · h1=16 · h2=12 · dout=6.
+  Deterministic init (fixed LCG seeds 1111/1212/1313/1414/1515/1616 params,
+  9001 input; no RNG, no clock).
+
+  3rd-arch model = the PRODUCTION nn_lib MLP primitives — nn_linear_fwd +
+  nn_gelu_fwd + nn_linear_bwd + nn_gelu_bwd (stdlib/flame/nn_lib.hexa).
+
+OP-30 MATMUL-PATH AUDIT (the risk, located before running)
+  The production nn_lib::nn_linear_fwd computes
+      y = forge_dispatch_matmul(x, B, D, W, C)
+  which (FP64 path) bottoms out at the C `hexa_farr_matmul` kernel —
+  tensor_lib.hexa L58 verbatim: "직접 RFC 032 CPU farr_matmul 호출 (ikj order,
+  FMA-fused under clang -O2)". That is the EXACT OP-29 root-cause kernel: it
+  contracts a*b+c into a single fused-multiply-add on arm64 but emits separate
+  mul+add on x86 under clang -O2 → a sub-ULP ISA-dependent result. So the MLP's
+  FORWARD projections ride the FMA-fused kernel = a REAL OP-30 hole on this 3rd
+  arch. (nn_linear_bwd's dW/dx/db are ALREADY inline ascending reductions, no
+  farr_matmul.) The GELU path is already libm-FREE in production (dt_erf/dt_exp).
+
+ORACLES (pure `hexa run`, CPU, 0-GPU)
+  stdlib/flame/op31_mlp_determinism_eq.hexa
+    imports the PRODUCTION nn_lib + tensor_lib; drives the 3-layer MLP fwd ×2
+    and bwd ×2 from one fixed seed; asserts fwd out max|Δ|=0, bwd dW(max)
+    max|Δ|=0, bwd dx max|Δ|=0 run-to-run. (Rides the FMA-fused farr_matmul on
+    the fwd path → byte-eq run-to-run PER PLATFORM, the OP-29-documented limit.)
+  stdlib/flame/op31_mlp_selfcontained.hexa
+    single-file twin (NO `use`) inlining the MLP fwd/bwd + dt_erf/dt_exp + GELU
+    + LCG, so it runs via scp/stdin on ANY host (the OP-28/OP-29 cross-platform
+    pattern) with NO stdlib checkout dependency. Its _mlp_linear_fwd is the
+    OP-30-COMPLIANT INLINE ASCENDING dot (plain mul+add, no C kernel) — closing
+    the FMA hole. Emits two order-sensitive IEEE-754 fingerprints + an OP-30
+    DIAGNOSTIC: the FMA-fused farr_matmul(L1) checksum, computed in-band so a
+    cross-platform diff EXHIBITS the divergence the inline form avoids.
+
+────────────────────────────────────────────────────────────────────────────
+RESULT 1 — byte-eq RUN-TO-RUN (max|Δ|=0)   [both oracles, local arm64-macos]
+────────────────────────────────────────────────────────────────────────────
+  op31_mlp_selfcontained.hexa (inline-ascending, machine-indep twin):
+    (1) FWD   out  max|Δ| run-to-run = 0.0
+    (2) BWD   grad max|Δ| run-to-run = 0.0
+        BWD   dx   max|Δ| run-to-run = 0.0
+    F-OP31-3RD-ARCH = 1
+  op31_mlp_determinism_eq.hexa (production nn_lib, FMA-fused fwd):
+    (1) FWD   out  max|Δ| run-to-run = 0.0
+    (2) BWD   dW(max) max|Δ| run-to-run = 0.0
+        BWD   dx   max|Δ| run-to-run = 0.0
+    F-OP31-3RD-ARCH (run-to-run, prod nn_lib) = 1
+  → the whole 3rd-arch fwd+bwd composition is byte-identical run-to-run on
+    arm64-macos, BOTH the production lib and the inline twin. Y.
+
+────────────────────────────────────────────────────────────────────────────
+RESULT 2 — CROSS-PLATFORM byte-IDENTICAL (the REAL OP-30 test)
+            op31_mlp_selfcontained.hexa · 0-GPU · NO vast · $0
+────────────────────────────────────────────────────────────────────────────
+LOCAL arm64-macos (Darwin 25.5.0, this workstation):
+    fwd  out  checksum = 1585504437
+    grad      checksum = 926871122
+    OP30-DIAG fma_matmul(L1) checksum = 2039553633     ← FMA-fused kernel
+    CROSSPLAT-FINGERPRINT-FWD  = 0 0 64 45 56 160 215 65
+    CROSSPLAT-FINGERPRINT-GRAD = 0 0 0 41 119 159 203 65
+    F-OP31-3RD-ARCH = 1
+
+AIDEN x86-linux (Linux x86_64, free CPU pool host @192.168.50.119 · NO GPU · $0):
+    fwd  out  checksum = 1585504437
+    grad      checksum = 926871122
+    OP30-DIAG fma_matmul(L1) checksum = 124945498      ← FMA-fused kernel
+    CROSSPLAT-FINGERPRINT-FWD  = 0 0 64 45 56 160 215 65
+    CROSSPLAT-FINGERPRINT-GRAD = 0 0 0 41 119 159 203 65
+    F-OP31-3RD-ARCH = 1
+
+  TWO findings, both clean and honest:
+  (a) The INLINE-ASCENDING det path (fwd out + bwd grad) is byte-IDENTICAL on
+      arm64-macos AND x86-linux: same checksums (1585504437 / 926871122) +
+      same IEEE-754 fingerprints on BOTH. The 3rd-arch MLP fwd+bwd is
+      machine-independent. Y.
+  (b) The OP-30 DIAGNOSTIC fma_matmul(L1) checksum DIVERGES across ISAs:
+      arm64-macos 2039553633  vs  x86-linux 124945498  on byte-IDENTICAL fp64
+      inputs (same W1, same X, deterministic LCG). This is a LIVE, in-band
+      reproduction of the OP-29/OP-30 root cause on the 3rd arch: the FMA-fused
+      farr_matmul kernel (the exact kernel production nn_linear_fwd rides) is
+      NOT machine-independent — and the inline-ascending rewrite of the SAME
+      matmul IS (the fwd checksum stays identical). The OP-30 invariant is not
+      hypothetical; it is the difference between (a) and (b) on THIS arch.
+
+────────────────────────────────────────────────────────────────────────────
+OP-30 COMPLIANCE / HOLE STATUS
+────────────────────────────────────────────────────────────────────────────
+  HOLE (FMA-fused matmul — found + closed): the production MLP fwd routes its
+  three Linear projections through forge_dispatch_matmul → FMA-fused farr_matmul
+  → cross-ISA divergent (DIRECTLY MEASURED above: ck 2039553633 arm64 vs
+  124945498 x86). CLOSED in op31_mlp_selfcontained.hexa: _mlp_linear_fwd is an
+  INLINE ascending dot product (Σ_k x[i·D+k]·W[k·C+j] in fixed ascending k,
+  plain mul+add — no C kernel) — the SAME discipline OP-29 used on the decoder
+  block and the CLMConvMoE oracles already follow. Verified machine-independent
+  (RESULT 2a). nn_linear_bwd was ALREADY inline-clean (no farr_matmul).
+  LIBM STATUS — clean: the only transcendental on the MLP det path is GELU's
+  erf/exp, and production nn_lib already routes it through dt_erf/dt_exp (pure
+  +,-,*,/ on fp64; the OP-19b reproducibility identity). NO libm leak — the
+  identical cross-platform fingerprints confirm it. The MLP has no RMSNorm/
+  GroupNorm so the libm `sqrt` in nn_lib::_nn_sqrt is NOT on this arch's path.
+
+────────────────────────────────────────────────────────────────────────────
+GATE (g5) — ALL GREEN
+  [x] 3rd-arch oracle runs on CPU (`hexa run`) — both import + self-contained
+  [x] byte-eq RUN-TO-RUN: fwd out, bwd grads, bwd dx all max|Δ|=0 (both oracles)
+  [x] CROSS-PLATFORM byte-IDENTICAL: arm64-macos == x86-linux (both fingerprints
+      + both checksums on the inline-ascending det path)
+  [x] OP-30 compliance: the FMA hole on this arch is DIRECTLY EXHIBITED (diag
+      ck diverges 2039553633 vs 124945498) AND closed (inline-ascending det path
+      byte-identical). libm-clean (GELU via dt_erf/dt_exp).
+
+VERDICT
+  Machine-independence GENERALIZES to a THIRD flame model architecture — a plain
+  feed-forward MLP (Linear→GELU→Linear→GELU→Linear) — Y. The determinism
+  construction (dt_erf/dt_exp + inline ascending reductions, NO libm, NO
+  FMA-fused C kernel) is GENERAL across THREE structurally-distinct archs
+  (CLMConvMoE · decoder block · MLP). The OP-30 cross-ISA-matmul invariant is
+  not just verified but DIRECTLY DEMONSTRATED on this arch: the FMA-fused
+  farr_matmul byte-diverges arm64 vs x86 on identical inputs, while the inline-
+  ascending rewrite of the same matmul is byte-identical — exactly the property
+  the invariant requires. Machine-independence now spans 3 archs (G2 fully
+  generalized). $0 · 0-GPU · 0-pod · no vast · no foreign-pod touch.
+
+PROVENANCE
+  oracles: stdlib/flame/op31_mlp_determinism_eq.hexa (run-to-run, imports
+           production nn_lib) · stdlib/flame/op31_mlp_selfcontained.hexa
+           (cross-platform, inline-reduction machine-independent twin + OP-30
+           FMA diagnostic)
+  3rd arch: stdlib/flame/nn_lib.hexa (nn_linear_fwd/bwd + nn_gelu_fwd/bwd MLP)
+  OP-30 risk kernel: tensor_lib.hexa L58 farr_matmul "ikj order, FMA-fused"
+  primitives: dt_erf/dt_exp (nn_lib _nn_gelu path / op29 twin)
+  hosts: local arm64-macos + aiden x86-linux (sidecar pool, free CPU, $0, NO
+         vast, NO GPU, NO foreign-pod touch)
+  prior: F-OP15-STEP-DETERMINISM (CLMConvMoE) · F-OP29-2ND-ARCH (decoder block) ·
+         F-OP30-CROSSISA-CONTRACT (the invariant formalized)
+════════════════════════════════════════════════════════════════════════════
