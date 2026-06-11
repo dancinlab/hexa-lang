@@ -10,6 +10,10 @@ loop targets what the consumer card + code can carry.
 
 ## milestones (loop self-feeds; add as discovered)
 
+<!-- ANCHOR:OP-24D-G1-READINESS (unique anchor — OP-24c (tool/clm/build_clmprod_tf32_e2e.sh) is the turnkey GPU-build kit for the real-corpus clm_prod_gpu TF32 end-to-end run; it is GPU-build-gated. OP-28 (byte-level) + OP-28b (BPE) proved the INPUT side (tokenize->pack->batch) byte-eq + machine-independent 0-pod. OP-24d WIRES those input-side oracles INTO the turnkey kit as a CPU pre-gate (step 0, runs NOW with NO GPU) so the kit verifies input reproducibility before the GPU step. Result: G1 is 0-pod-maximally-closed — everything provable without a GPU is proven + wired, the SOLE remaining G1 item is the GPU trainer step run; 0-pod, no GPU, no vast) -->
+- [ ] **OP-24d — G1 turnkey kit pre-gates the proven input-side determinism (OP-28/28b); only the GPU step remains gated** —
+  WIP.
+
 <!-- ANCHOR:OP-28B-BPE-FIX (unique anchor — OP-28 flagged a RESIDUAL: the BPE path (flame_bpe_corpus_lib.hexa, V=151936 real Qwen vocab) is not cleanly 0-pod-runnable because build_byte_to_char's byte->unicode map is non-canonical. OP-28b fixes the byte<->unicode mapping to the canonical GPT-2/Qwen bytes_to_unicode (256-entry bijection: printable ASCII -> itself, the rest -> U+0100.. in RUNNING-COUNTER order), making the BPE token pipeline byte-eq run-to-run + cross-platform determinism-provable, closing OP-28's residual input-side item; 0-pod, no GPU, no vast) -->
 - [x] **OP-28b — BPE tokenizer byte-to-unicode fix (canonical GPT-2/Qwen map); BPE token pipeline determinism-provable (0-pod)** —
   GREEN. Closes OP-28's flagged residual input-side item. flame's BPE byte<->unicode map

@@ -1,0 +1,8 @@
+════════════════════════════════════════════════════════════════════════════
+F-OP24D-G1-READINESS — the OP-24c turnkey kit now PRE-GATES the proven
+input-side determinism (OP-28 byte-level + OP-28b BPE) as step 0 (CPU, 0-GPU);
+gap G1 is 0-pod-maximally-closed — only the GPU trainer step run remains gated
+HEXA-0POD OP-24d · INTEGRATION + READINESS DOC · 0-GPU · $0 · no vast · no pod
+════════════════════════════════════════════════════════════════════════════
+
+[WIP skeleton — filled on integration]
