@@ -1,0 +1,84 @@
+════════════════════════════════════════════════════════════════════════════
+F-OP30C-FMA-BOUNDARY — OP-32's DIAG-B finding (binary {0,1}-operand matmuls
+are FMA-IMMUNE) formalized as the PRECISE BOUNDARY CONDITION of the OP-30
+cross-ISA-matmul invariant in docs/flame-determinism-contract.md (docs-only)
+HEXA-0POD OP-30c · deep-dive round-9 branch ③ · docs-only · 0-pod · $0
+════════════════════════════════════════════════════════════════════════════
+
+GAP (OP-30 #3047 + OP-32 #3052)
+  The contract doc's cross-ISA invariant stated only the blanket rule:
+  det-path matmul MUST be inline ascending; the FMA-fused farr_matmul is
+  forbidden (arm64 single-FMA ≠ x86 mul+add under clang -O2 — F-OP29). OP-32
+  then MEASURED the precise boundary of that rule (DIAG-A vs DIAG-B through
+  the SAME fused kernel) — but the boundary lived only in the F-OP32 verdict
+  + a parenthetical, not as a first-class, discoverable part of the contract.
+  A future contributor reading the contract could neither (a) understand WHY
+  the rule exists (inexact products are the entire failure mode) nor (b) know
+  the one operand class where the fused kernel provably cannot diverge.
+
+WHAT LANDED (docs, surgical)
+  docs/flame-determinism-contract.md — NEW subsection under the cross-ISA
+  invariant: "#### boundary: exact-product operands are FMA-immune"
+    (a) MATH: round(a·b + c) == round(round(a·b) + c) iff the intermediate
+        product a·b is EXACT in fp64 — fma's single rounding can differ from
+        mul+add's two roundings ONLY through an inexact product. Exact-product
+        operand classes enumerated: b ∈ {0,1} (a·0=0, a·1=a), b = ±2^k
+        (exponent shift; barring under/overflow at range edges), a = 0/±2^k.
+        ASCII mini-diagram: exact (FMA-IMMUNE) vs inexact (FMA-EXPOSED).
+    (b) MEASUREMENT (F-OP32-4TH-ARCH, verbatim): byte-identical fp64 inputs
+        through the SAME forbidden FMA-fused farr_matmul kernel —
+          DIAG-A rate-coded REAL-VALUED drive:  arm64 ck = 1478294112
+                                                x86   ck = 210297454   DIVERGES
+          DIAG-B BINARY {0,1} spike drive:      arm64 ck = 1881150137
+                                                x86   ck = 1881150137  IDENTICAL
+        Same kernel, same machines, same run — only the operand values differ.
+        The invariant is precision-structural, not superstition.
+    (c) PRACTICAL RULE: one-hot/mask/binary-spike matmuls are provably safe
+        through the fused kernel, BUT the immunity is a property of operand
+        VALUES at run time (not the kernel/call site) → conditional + fragile:
+        the moment operands go real-valued (plasticity, rate-coding, scaling,
+        normalization, soft masks, dropout 1/(1-p)) the blanket rule applies
+        in full — OP-32's own arch is the cautionary case (binary spikes, but
+        traces + plastic weights real-valued from the first STDP update);
+        "exact today" ≠ "exact after the next refactor" (silent crossing, no
+        oracle failure on the original fixture); DEFAULT to inline ascending
+        unless you can PROVE exact operands for the lifetime of the call site
+        (+ leave a comment citing this boundary + F-OP32 there).
+    (d) BLANKET DEFAULT KEPT: explicit SCOPE paragraph — the subsection is an
+        explanation + a narrowly-licensed exception, NOT a loophole; the RULE
+        block at the top of the section is unchanged and remains the default
+        for every determinism-path matmul.
+  docs/flame-machine-independent-training.md — surgical cross-ref appended to
+  the T4 discussion paragraph (§2): T4 has a measured boundary, DIAG-B
+  1881150137 identical both ISAs vs DIAG-A divergent, pointer to the contract
+  subsection + F-OP32-4TH-ARCH, inline-ascending default unchanged.
+
+CITED NUMBERS (all verbatim from F-OP32-4TH-ARCH)
+  DIAG-A fma_matmul(rate-coded):   arm64-macos 1478294112 · x86-linux 210297454
+  DIAG-B fma_matmul(binary-spike): arm64-macos 1881150137 · x86-linux 1881150137
+
+GATE (g5) — ALL GREEN
+  [x] boundary subsection precise: math (iff-exact-product condition + operand
+      classes) + measurement (DIAG-A/B verbatim checksums) + practical rule
+      (conditional immunity, fragility cases, prove-don't-assume default)
+  [x] every number cites F-OP32 verbatim (1478294112 / 210297454 / 1881150137)
+  [x] blanket inline-ascending default KEPT (explicit SCOPE paragraph; RULE
+      block untouched)
+  [x] surgical: 2 docs touched, additive only; no .tape edits; no code; 0-pod
+
+VERDICT
+  The OP-30 cross-ISA invariant now carries its precise mathematical boundary
+  condition as a first-class contract subsection: FMA divergence requires an
+  INEXACT product; exact-product operands (b∈{0,1} / ±2^k / 0) are immune —
+  measured (DIAG-B identical 1881150137 both ISAs through the forbidden
+  kernel) and bounded (immunity conditional on operand values; blanket rule
+  stays the default). Docs-only · $0 · 0-GPU · 0-pod · no vast · no
+  foreign-pod touch · no .tape edits.
+
+PROVENANCE
+  docs:    docs/flame-determinism-contract.md (boundary subsection) ·
+           docs/flame-machine-independent-training.md (T4 cross-ref)
+  source:  .verdicts/hexa-0pod/F-OP32-4TH-ARCH.txt (DIAG-A/B measurement,
+           OP-32 #3052) · F-OP30-CROSSISA-CONTRACT (the invariant, #3047) ·
+           F-OP29-2ND-ARCH (the original FMA divergence)
+════════════════════════════════════════════════════════════════════════════
