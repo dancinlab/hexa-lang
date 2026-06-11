@@ -1174,3 +1174,24 @@ NOT claimed. $0, no vast/pool/pod. Verdict .verdicts/hexa-0pod/F-OP21-HOPPER-WAR
 - CONTRACT learned: any flame arch must route matmul through inline ascending reductions, not the FMA-fused
   farr_matmul, to be byte-identical across ISAs. Machine-independence GENERALIZES beyond CLMConvMoE → Y. G2 closed.
 - Milestone OP-29 flipped [x]. Verdict .verdicts/hexa-0pod/F-OP29-2ND-ARCH.txt. $0 · 0-GPU · 0-pod · no vast.
+
+## OP-30 — cross-ISA matmul invariant formalized in the determinism contract (0-pod, docs-only)
+- Deep-dive round-7 branch ①. NO GPU, NO vast, NO pod, NO .tape edits, NO foreign-pod touch. $0.
+- PROBLEM: OP-29's cross-cutting find (the C farr_matmul FMA-fused kernel byte-DIVERGES across ISAs) lived ONLY
+  in the OP-29 milestone block + verdict — not discoverable as a contract invariant. OP-30 formalizes it.
+- ADDED to docs/flame-determinism-contract.md §1: "### cross-ISA invariant: matmul = inline ascending reduction,
+  NOT FMA-fused" — RULE (det-path matmul MUST accumulate via inline ascending reductions; FMA-fused farr_matmul
+  forbidden), WHY (clang -O2 fuses a*b+c → 1-rounding FMA on arm64 but mul+add 2-roundings on x86; cites OP-29
+  ck=241449363 arm64 vs ck=1401117690 x86 from byte-identical fp64 inputs W ck=1950370123/xbt ck=527426024),
+  SCOPE (cross-ISA layer ON TOP of run-to-run + libm-free — a model can be both and STILL cross-ISA-divergent),
+  HOW (inline ascending dot the oracles use, OR -ffp-contract=off off the det path). ASCII arm64-vs-x86 FMA
+  diagram (g3 minimal) + a "what breaks the contract" checklist entry.
+- ADDED to docs/flame-machine-independent-training.md: the 3-LAYER determinism model (run-to-run · libm-free ·
+  cross-ISA-FMA-free) in §1 claim, a 4th threat-model row T4 (FMA-fused matmul ISA divergence → inline ascending
+  dots, F-OP29) distinct from T1/T2/T3 as a back-end codegen (not library) divergence, recipe item (d) "inline
+  ascending matmul — NOT the FMA-fused C kernel", and an F-OP29/F-OP30 provenance entry.
+- 3-LAYER MODEL: layer1 run-to-run (OP-2/7/8/9/11/12/13+OP-15) · layer2 libm-free (OP-19/19b) · layer3
+  cross-ISA-FMA-free (OP-29) — independent; clearing any two does NOT imply the third.
+- Every claim traces to F-OP29-2ND-ARCH (g5). NO new computation, docs-only consolidation.
+- Milestone OP-30 flipped [x]. Verdict .verdicts/hexa-0pod/F-OP30-CROSSISA-CONTRACT.txt (invariant text + 3-layer
+  model + cited OP-29 evidence verbatim). $0 · 0-GPU · 0-pod · no vast.

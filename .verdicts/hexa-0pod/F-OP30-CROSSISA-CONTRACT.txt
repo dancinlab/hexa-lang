@@ -1,10 +1,134 @@
 ════════════════════════════════════════════════════════════════════════════
-F-OP30-CROSSISA-CONTRACT — WIP SKELETON (docs-only consolidation)
+F-OP30-CROSSISA-CONTRACT — the cross-ISA FMA-matmul finding (OP-29) FORMALIZED
+as a first-class invariant in the flame determinism contract
 HEXA-0POD OP-30 · deep-dive round-7 branch ① · 0-pod · NO GPU · NO vast · $0
 ════════════════════════════════════════════════════════════════════════════
 
-WIP. Formalizing OP-29's cross-ISA FMA-matmul finding (F-OP29-2ND-ARCH) into a
-first-class invariant in docs/flame-determinism-contract.md, plus the 3-layer
-determinism model into docs/flame-machine-independent-training.md. Body filled
-in the next commit.
+WHAT THIS IS
+  Docs-only consolidation. OP-29 (F-OP29-2ND-ARCH, #3045 on main) proved
+  machine-independent byte-exact determinism GENERALIZES to a 2nd flame model
+  architecture (a Transformer decoder block) AND surfaced a cross-cutting find:
+  the C `farr_matmul` FMA-fused kernel DIVERGES across ISAs. That finding lived
+  ONLY in the OP-29 milestone block + verdict. OP-30 promotes it to a FIRST-CLASS,
+  discoverable invariant in docs/flame-determinism-contract.md (the contributor
+  SSOT) + adds the 3-layer determinism model to docs/flame-machine-independent-
+  training.md, so a future contributor cannot miss it.
+
+  No new computation. Every claim traces to F-OP29-2ND-ARCH (g5).
+
+────────────────────────────────────────────────────────────────────────────
+THE INVARIANT (added to docs/flame-determinism-contract.md §1, verbatim)
+────────────────────────────────────────────────────────────────────────────
+  ### cross-ISA invariant: matmul = inline ascending reduction, NOT FMA-fused
+
+  RULE. Any flame matmul on the determinism-critical path MUST accumulate via
+  inline ascending reductions (plain `acc = acc + a*b` in hexa codegen). The C
+  runtime `farr_matmul` kernel (tensor_lib: ikj order, FMA-fused under clang -O2)
+  is NOT cross-ISA byte-identical and is therefore FORBIDDEN on the determinism
+  path. (F-OP29-2ND-ARCH.)
+
+  WHY. clang -O2 contracts a multiply-then-add (`a*b + c`) into a single
+  fused-multiply-add on arm64 (ONE rounding) but emits a separate `mul` then
+  `add` on x86 (TWO roundings). The two forms produce a sub-ULP-different fp64
+  accumulation, so an ACCUMULATING matmul returns different bytes per ISA — even
+  on byte-identical inputs.
+
+  SCOPE. This is strictly the cross-ISA layer. The `farr_matmul` kernel is still
+  perfectly RUN-TO-RUN deterministic (it fuses the same way every time on a given
+  machine) and is LIBM-FREE (pure arithmetic). It just is not MACHINE-INDEPENDENT.
+  So a step that uses it can pass every layer-1 and layer-2 oracle and still fail
+  a cross-platform byte fold.
+
+  HOW to comply. Do not call `farr_matmul` (nor any C kernel that lets clang fuse
+  `a*b+c`) on the determinism path. Re-implement the projection / grad-accumulator
+  as an inline ascending-order dot product — the same sequential-reduction
+  discipline §1.2/§1.3 already mandate, and the reason the CLMConvMoE oracles were
+  ACCIDENTALLY cross-ISA-safe (their conv/GEMM contractions are inline ascending
+  loops, never `farr_matmul`). If a fused C matmul is unavoidable off the
+  determinism path, provide a non-FMA accumulation (`-ffp-contract=off`, or split
+  the multiply and add into separate statements the backend cannot recombine) and
+  re-measure the cross-ISA byte fold.
+
+────────────────────────────────────────────────────────────────────────────
+THE 3-LAYER DETERMINISM MODEL (added to both docs)
+────────────────────────────────────────────────────────────────────────────
+  Three INDEPENDENT layers — each must hold for machine-independence; clearing
+  any two does NOT imply the third:
+
+   layer 1  RUN-TO-RUN          same machine, twice → max|Δ|=0
+            (sequential order · no uninit scratch · no addr-ordered iteration)
+              └ OP-2/7/8/9/11/12/13 + OP-15 capstone
+
+   layer 2  libm-FREE           any transcendental → bit-identical on any IEEE-754
+            (dt_exp/dt_erf/dt_ln/_moe_exp + Newton sqrt, NO libm)
+              └ OP-19 (CE-bwd exp) · OP-19b (GELU erf)
+
+   layer 3  cross-ISA-FMA-FREE  a*b+c contraction → same bytes on arm64 AND x86
+            (inline ascending reductions, NOT the FMA-fused farr_matmul kernel)
+              └ OP-29  ← THIS invariant
+
+  The threat-model table in flame-machine-independent-training.md §2 gains a 4th
+  row T4 (FMA-fused matmul ISA divergence → INLINE ascending dot products, verdict
+  F-OP29), distinct from T1 (libm) / T2 (reduction order) / T3 (atomic-scatter)
+  because it is a BACK-END CODE-GENERATION divergence, not a library or order one,
+  and survives even when T1–T3 are all closed. The construction recipe §4 gains a
+  matching item (d): "inline ascending matmul — NOT the FMA-fused C kernel".
+
+────────────────────────────────────────────────────────────────────────────
+CITED OP-29 EVIDENCE (verbatim from F-OP29-2ND-ARCH, the layer-3 measurement)
+────────────────────────────────────────────────────────────────────────────
+  HOLE #2 (FMA-fused matmul — the REAL find — closed): with HOLE #1 closed, the
+  block was STILL byte-eq run-to-run but byte-DIVERGENT across platforms.
+  BISECT (cache-stage checksum, fwd): stages cos/sin/Bp/X/rin(RMSNorm-1) all
+  IDENTICAL on both ISAs; the FIRST divergence is the Q PROJECTION. ISOLATED to
+  the C runtime `farr_matmul` kernel (tensor_lib: "ikj order, FMA-fused under
+  clang -O2"): on byte-IDENTICAL fp64 inputs (W ck=1950370123, xbt ck=527426024
+  on both), an 8×8·8×4 matmul returns DIFFERENT bytes —
+      arm64-macos  C ck = 241449363
+      x86-linux    C ck = 1401117690
+  because arm64 contracts a*b+c into a single fused-multiply-add while x86 emits
+  separate mul+add (clang -O2), a sub-ULP ISA-dependent result. (A 3×3 identity
+  probe matched — identity has no accumulation to fuse, which is why earlier
+  spot-checks passed.) The production decoder_block_lib routes its projections /
+  grad-accumulators (_db_proj_batch_farr · _db_grad_accum_farr) through this
+  kernel → block byte-eq run-to-run per platform but NOT machine-independent.
+  CLOSED in op29_decoder_block_selfcontained.hexa: both helpers re-implemented as
+  INLINE ascending-order dot products (plain mul+add in hexa codegen, no C
+  kernel) — the SAME "sequential reduction, no fused kernel" discipline the
+  CLMConvMoE oracles already use. Verified: the inline dot returns ck=1401117690
+  on BOTH ISAs (matches; FMA-fusion eliminated).
+
+  [from F-OP29 VERDICT] OP-29 also surfaced a reusable contract requirement for
+  ANY flame arch: matmul MUST route through inline ascending reductions, not the
+  FMA-fused farr_matmul kernel, to be byte-identical across ISAs (the same
+  discipline the CLMConvMoE oracles already follow).
+
+────────────────────────────────────────────────────────────────────────────
+GATE (g5)
+  [x] the cross-ISA matmul invariant is added as a first-class section in
+      docs/flame-determinism-contract.md (§1 "cross-ISA invariant" + a checklist
+      entry in "what breaks the contract")
+  [x] elephant-rule: states current-state facts only (the RULE, WHY, SCOPE, HOW)
+  [x] the 3-layer determinism model (run-to-run / libm-free / cross-ISA-FMA-free)
+      is explicit in BOTH docs (ASCII layer diagram + threat-model T4 row +
+      recipe item (d))
+  [x] every claim traces to F-OP29-2ND-ARCH (ck 241449363 vs 1401117690, the
+      FMA-vs-mul+add rounding difference, the inline-ascending closure)
+  [x] ASCII diagrams (g3 minimal) · ENGLISH · NO new computation · 0-pod · $0
+
+VERDICT
+  The cross-ISA FMA-matmul contract is now a FIRST-CLASS, discoverable invariant
+  a future contributor cannot miss — formalized in the contributor SSOT
+  (flame-determinism-contract.md) and woven into the results writeup
+  (flame-machine-independent-training.md) as the 3rd determinism layer. Docs-only
+  consolidation of OP-29's finding; value = discoverability + the explicit
+  3-layer model. F-OP30-CROSSISA-CONTRACT = 1. Y.
+
+PROVENANCE
+  source finding : .verdicts/hexa-0pod/F-OP29-2ND-ARCH.txt (HOLE #2 + VERDICT)
+  docs edited    : docs/flame-determinism-contract.md (§1 invariant + checklist),
+                   docs/flame-machine-independent-training.md (§1 3-layer · §2 T4 ·
+                   §4 recipe (d) · §6 provenance)
+  surface        : local arm64-macos, `hexa run`-free (docs-only), NO GPU, NO vast,
+                   NO pod, NO foreign-pod touch, NO .tape edits
 ════════════════════════════════════════════════════════════════════════════

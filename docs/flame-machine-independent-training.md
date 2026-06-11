@@ -27,24 +27,41 @@ atomic-scatter nondeterminism enters. flame closes every such hole: the step has
 **no `libm` transcendental left**. Every transcendental is a fixed-iteration
 `+ − × ÷` routine, which is bit-identical on any IEEE-754 hardware.
 
-The claim has two layers, each independently verified:
+The claim has **three independent layers**, each separately verified — clearing
+any two does NOT imply the third:
 
 1. **Run-to-run determinism (single machine).** The composed step is
    byte-identical when re-run from the same seed — no uninitialized scratch, no
    nondeterministic iteration, no address-dependent ordering. Locked by the
    per-op oracle series (OP-2/7/8/9/10/11/12/13) and the end-to-end capstone
    `F-OP15-STEP-DETERMINISM` (`max|Δ| = 0` over 17 weights + m + v + loss).
-2. **Cross-platform determinism (any machine).** The *same bytes* are produced
-   on x86-64-linux **and** arm64-macos. Established by closing the two `libm`
-   transcendental holes that survive on the step path: the CE-backward `exp`
-   (`F-OP19-CROSSPLATFORM-EXACT`) and the GELU `erf`
-   (`F-OP19B-DET-ERF`).
+2. **libm-free transcendentals (cross-platform, library layer).** Every
+   `exp`/`erf`/`log` is a hand-rolled fixed-iteration `+ − × ÷` routine, so it is
+   bit-identical on any IEEE-754 hardware rather than depending on a
+   not-correctly-rounded platform `libm`. Established by closing the two `libm`
+   transcendental holes on the step path: the CE-backward `exp`
+   (`F-OP19-CROSSPLATFORM-EXACT`) and the GELU `erf` (`F-OP19B-DET-ERF`).
+3. **Cross-ISA FMA-free matmul (cross-platform, accumulation layer).** Matmul on
+   the determinism path accumulates via **inline ascending reductions**, never the
+   FMA-fused C `farr_matmul` kernel. clang -O2 fuses `a*b+c` into a single-rounding
+   FMA on arm64 but emits mul+add (two roundings) on x86 — so an *accumulating*
+   matmul byte-diverges across ISAs even with layers 1–2 clean. Surfaced and
+   closed for a 2nd architecture in `F-OP29-2ND-ARCH`. This is a distinct hole
+   from `libm`: a backend code-generation divergence, not a library one.
+
+Layers 2 + 3 together are what make the *same bytes* appear on x86-64-linux
+**and** arm64-macos (cross-platform determinism), once layer 1 is already locked.
+See the contributor SSOT [`flame-determinism-contract.md`](flame-determinism-contract.md)
+§"cross-ISA invariant" for the layer-3 rule a refactorer must obey.
 
 ## 2. Threat model — what breaks cross-platform reproducibility
 
-Three independent failure classes break bit-exact reproducibility in a standard
+Four independent failure classes break bit-exact reproducibility in a standard
 training stack. flame closes each; the table maps threat → where flame closes it
-→ the verdict that proves it.
+→ the verdict that proves it. T1–T3 are *library / order* divergences; **T4 is a
+back-end code-generation divergence** (the FMA-fusion threat OP-29 surfaced) —
+distinct from the others because it survives even when every transcendental is
+`libm`-free and every reduction order is fixed.
 
 ```
   ┌──────────────────────────────────────────────────────────────────────────┐
@@ -64,6 +81,12 @@ training stack. flame closes each; the table maps threat → where flame closes 
   │ T3  atomic-scatter order             │  in-place position-   │  F-OP13      │
   │     (embedding bwd atomicAdd races;  │  ASCENDING scatter-   │              │
   │      accumulation order = race order)│  add, deterministic   │              │
+  ├──────────────────────────────────────┼───────────────────────┼─────────────┤
+  │ T4  FMA-fused matmul ISA divergence  │  INLINE ascending     │  F-OP29      │
+  │     (clang -O2 fuses a*b+c → 1-round │  dot products on the  │              │
+  │      FMA on arm64 but mul+add → 2    │  det path, NOT the    │              │
+  │      rounds on x86 → accumulating    │  FMA-fused C          │              │
+  │      matmul byte-diverges per ISA)   │  farr_matmul kernel   │              │
   └──────────────────────────────────────┴───────────────────────┴─────────────┘
 ```
 
@@ -91,6 +114,18 @@ heart of the cross-platform result — are CE-backward `exp` (closed by OP-19) a
 GELU `erf` (closed by OP-19b). Before those, the step was already run-to-run
 deterministic on one machine but **not** cross-platform; OP-19/19b are what
 extended determinism from "same machine, twice" to "any machine, ever".
+
+The **T4 FMA-matmul** threat is the same shape one layer down: even with T1–T3
+closed, a matmul that routes `a*b+c` through the FMA-fused C `farr_matmul` kernel
+byte-diverges per ISA. OP-29 measured it directly on a 2nd architecture (a
+Transformer decoder block): byte-identical fp64 inputs gave `C ck = 241449363` on
+arm64-macos vs `C ck = 1401117690` on x86-linux from the *same* `farr_matmul`
+call, because clang -O2 contracts the multiply-add into a single FMA on arm64 (one
+rounding) but emits a separate mul+add on x86 (two roundings). Re-implementing the
+matmul as an inline ascending dot product folds to `1401117690` on **both** ISAs.
+(The CLMConvMoE step was *accidentally* T4-safe — its conv/GEMM contractions are
+already inline ascending loops, never `farr_matmul`; OP-29 is what made the
+requirement explicit and general. F-OP29-2ND-ARCH.)
 
 ## 3. Evidence
 
@@ -214,13 +249,26 @@ softmax denominators **v-ascending**; MoE combine **e-ascending**; CE fwd loss
 **(t-outer, c-inner)**; conv/GEMM contractions **j-ascending** (`j = ci*K + k`).
 (F-OP7/8/9/11/13.)
 
-**(d) Fixed arithmetic foldings (the non-obvious ones).** CE-bwd writes `p·invT`
+**(d) Inline ascending matmul — NOT the FMA-fused C kernel (cross-ISA).** Matmul
+on the determinism path accumulates via **inline ascending dot products** (plain
+`acc = acc + a*b` in hexa codegen), never the FMA-fused C `farr_matmul` kernel.
+clang -O2 contracts `a*b+c` into a single-rounding FMA on arm64 but emits mul+add
+(two roundings) on x86, so an *accumulating* `farr_matmul` byte-diverges per ISA
+(`241449363` arm64 vs `1401117690` x86 on byte-identical fp64 inputs); the inline
+dot folds to `1401117690` on both. This is the cross-ISA layer ON TOP of (a)
+(`libm`-free) and (b)/(c) (sequential ascending order): a model can satisfy (a)–(c)
+and still byte-diverge across ISAs if a matmul routes through the fused kernel. If
+a fused C matmul is needed off the det path, force a non-FMA accumulation
+(`-ffp-contract=off`, or split mul/add into statements the backend cannot
+recombine). (F-OP29.)
+
+**(e) Fixed arithmetic foldings (the non-obvious ones).** CE-bwd writes `p·invT`
 for all v **then** subtracts `invT` at the target (scale-then-subtract; do NOT
 refold to `(p−1)·invT` — diverges 1.39e-17). AdamW uses `v=β2·v+((1−β2)·g)·g`
 left-assoc (not `(1−β2)·(g·g)`), m̂/c1 before v̂/c2, ε **outside** √. (F-OP11,
 F-OP12.)
 
-**(e) Deterministic init + state threading.** Fixed LCG seeds (no RNG, no
+**(f) Deterministic init + state threading.** Fixed LCG seeds (no RNG, no
 wall-clock); m/v zero-initialized; cache buffers, optimizer carry, and all
 intermediate state thread deterministically with no uninitialized scratch and no
 nondeterministic (dict/set/address-ordered) iteration. (F-OP15.)
@@ -288,6 +336,11 @@ Every claim above traces to a verdict (g5). Primary sources:
   byte-eq capstone.
 - `.verdicts/hexa-0pod/F-OP{2,7,8,9,10,11,12,13}-*.txt` — the per-phase oracle
   series.
+- `.verdicts/hexa-0pod/F-OP29-2ND-ARCH.txt` — machine-independence generalizes
+  to a 2nd arch (decoder block); surfaced + closed the T4 cross-ISA FMA-matmul
+  hole (`241449363` arm64 vs `1401117690` x86 from FMA-fused `farr_matmul`).
+- `.verdicts/hexa-0pod/F-OP30-CROSSISA-CONTRACT.txt` — this T4 invariant
+  formalized as a first-class rule in `flame-determinism-contract.md`.
 - `.verdicts/hexa-0pod/F-OP23-TF32-DRIFT.txt` — TF32 fast-mode complement.
 - `.verdicts/hexa-0pod/F-OP14-DETERMINISM-DOC.txt` /
   [`flame-determinism-contract.md`](flame-determinism-contract.md) — the

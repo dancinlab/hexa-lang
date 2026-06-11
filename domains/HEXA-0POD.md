@@ -11,10 +11,19 @@ loop targets what the consumer card + code can carry.
 ## milestones (loop self-feeds; add as discovered)
 
 <!-- ANCHOR:OP-30-CROSSISA-CONTRACT (unique anchor — OP-29 surfaced a cross-cutting find: the C farr_matmul FMA-fused kernel byte-DIVERGES across ISAs (arm64 single-FMA vs x86 mul+add under clang -O2); OP-29 closed it by re-implementing matmul as inline ascending reductions. That contract requirement currently lives only in the OP-29 milestone+verdict — OP-30 formalizes it as a FIRST-CLASS, discoverable invariant in docs/flame-determinism-contract.md so a future contributor can't miss it: flame matmul on the det path MUST route through inline ascending reductions, NOT the FMA-fused farr_matmul) -->
-- [ ] **OP-30 — cross-ISA matmul invariant formalized in the determinism contract (FMA-fused farr_matmul forbidden on the det path)** —
-  WIP (docs-only, 0-pod). Formalizing OP-29's cross-ISA FMA-matmul finding as a first-class invariant in
-  docs/flame-determinism-contract.md + adding the 3-layer determinism model (run-to-run · libm-free · cross-ISA-FMA-free)
-  to docs/flame-machine-independent-training.md. Every claim traces to F-OP29-2ND-ARCH (g5).
+- [x] **OP-30 — cross-ISA matmul invariant formalized in the determinism contract (FMA-fused farr_matmul forbidden on the det path)** —
+  DOCS-COMPLETE (0-pod, NO GPU/vast). OP-29's cross-cutting find (the C farr_matmul FMA-fused kernel byte-DIVERGES
+  across ISAs — arm64 single-FMA on a*b+c vs x86 mul+add under clang -O2) lived only in the OP-29 milestone+verdict.
+  OP-30 promotes it to a FIRST-CLASS, discoverable invariant. (1) docs/flame-determinism-contract.md §1 gains a
+  "### cross-ISA invariant: matmul = inline ascending reduction, NOT FMA-fused" section — RULE (det-path matmul MUST use
+  inline ascending reductions; FMA-fused farr_matmul forbidden), WHY (clang -O2 fuses a*b+c → 1-rounding FMA on arm64 vs
+  mul+add 2-roundings x86; cites OP-29 ck 241449363 arm64 vs 1401117690 x86 on byte-identical fp64 inputs), SCOPE (the
+  cross-ISA layer ON TOP of run-to-run + libm-free — a model can be both and STILL cross-ISA-divergent), HOW (use the
+  inline-ascending dot the oracles use, OR -ffp-contract=off off the det path) + an ASCII arm64-vs-x86 FMA diagram + a
+  "what breaks the contract" checklist entry. (2) docs/flame-machine-independent-training.md gains the 3-LAYER model
+  (run-to-run · libm-free · cross-ISA-FMA-free) in §1, a 4th threat-model row T4 (FMA-fused matmul ISA divergence →
+  inline ascending dots, F-OP29), a recipe item (d), and an F-OP29/F-OP30 provenance entry. Every claim traces to
+  F-OP29-2ND-ARCH (g5). NO new computation, NO .tape edits. Verdict .verdicts/hexa-0pod/F-OP30-CROSSISA-CONTRACT.txt.
 
 <!-- ANCHOR:OP-29-2ND-ARCH (unique anchor — OP-26b gap G2 = a 2nd architecture beyond CLMConvMoE: the 8 oracles + OP-15 capstone all lock the CLMConvMoE step; prove the machine-independent byte-exact determinism construction (dt_exp/dt_sqrt + sequential reductions + ascending accumulation) GENERALIZES to a SECOND flame model arch — a full pre-norm Transformer decoder block (GQA attention + RoPE + SwiGLU + RMSNorm), stdlib/flame/decoder_block_lib) -->
 - [x] **OP-29 — machine-independence generalizes to a 2nd flame model arch (G2 closed, or a 2nd-arch libm hole found+closed)** —
