@@ -10,6 +10,9 @@ loop targets what the consumer card + code can carry.
 
 ## milestones (loop self-feeds; add as discovered)
 
+<!-- ANCHOR:OP-28B-BPE-FIX (unique anchor — OP-28 flagged a RESIDUAL: the BPE path (flame_bpe_corpus_lib.hexa, V=151936 real Qwen vocab) is not cleanly 0-pod-runnable because build_byte_to_char's byte->unicode map is non-canonical. OP-28b fixes the byte<->unicode mapping to the canonical GPT-2/Qwen bytes_to_unicode (256-entry bijection: printable ASCII -> itself, the rest -> U+0100.. in RUNNING-COUNTER order), making the BPE token pipeline byte-eq run-to-run + cross-platform determinism-provable, closing OP-28's residual input-side item; 0-pod, no GPU, no vast) -->
+- [ ] **OP-28b — BPE tokenizer byte-to-unicode fix (canonical GPT-2/Qwen map); BPE token pipeline determinism-provable (0-pod)**
+
 <!-- ANCHOR:OP-31-3RD-ARCH (unique anchor — OP-29 proved machine-independence on a 2nd flame arch (decoder block); OP-31 generalizes to a THIRD structurally-distinct arch — a plain feed-forward MLP (nn_lib nn_linear_fwd + GELU, NO attention/RoPE/conv/MoE/norm) — and verifies the OP-30 cross-ISA-matmul invariant (inline ascending reduction, NOT FMA-fused farr_matmul) holds. The production nn_linear_fwd routes through forge_dispatch_matmul → FMA-fused farr_matmul (tensor_lib L58 "ikj order, FMA-fused under clang -O2") = a REAL OP-30 hole; close it inline-ascending like OP-29) -->
 - [x] **OP-31 — machine-independence on a 3rd flame arch + OP-30 cross-ISA-matmul invariant verified (or violation found+closed)** —
   GREEN. Generalizes OP-29's G2 from 2 archs to THREE: machine-independent byte-exact determinism now holds on a plain
