@@ -1,5 +1,34 @@
 # HEXA-0POD — log
 
+## 2026-06-12 — OP-36 DONE: forge dispatch CPU-fallback SYSTEMATIC audit — 33-symbol matrix, 2 real link holes + seam fixed byte-eq, 16/16 flame libs CPU-link-probed ($0 · 0-pod)
+- Deep-dive round-10 branch ④: closes the OP-16/18/32b class PROACTIVELY. Swept ALL 33 forge_dispatch_*
+  prototypes (runtime.h) × CUDA emit (runtime_cuda_emit.hexa launchers — 33/33 ✓) × CPU body (restored
+  frozen-seed runtime.c + tracked tool/restore_frozen_seeds appends) × real (non-comment) stdlib callers.
+- CLASS (a) — real CPU surfaces that could NOT link, now FIXED via the OP-36 marker-guarded
+  restore_frozen_seeds append (#ifndef HEXA_CUDA · idempotent · GPU path -E-proven untouched):
+  HOLE-1 forge_dispatch_matmul_t (5-arg, OP-2 transpose-elim) — host body materializes A^T (exact copies)
+  and delegates to the frozen hexa_farr_matmul ikj kernel → byte-eq BY CONSTRUCTION; committed victim
+  clm_prod_transpose_elim_eq.hexa now LINKS+PASSES (dW max|Δ|=0 all 4 shapes) + new committed oracle
+  op36_matmul_t_hostdispatch_eq.hexa (max|Δ|=0, 187/187 nonzero). HOLE-2 forge_dispatch_matmul_batched
+  (7-arg) — per-problem host loop over the same kernel; committed flame_forge_batched_test.hexa now
+  LINKS+PASSES (rc=0, max|Δ|=0). SEAM-3 — hexa_ twins for groupnorm_gelu/gelu2/moe_block2 (OP-16/18 bodies
+  were bare-name-only; current codegen lowers to hexa_forge_dispatch_*). nm U→T for all (both names).
+- CLASS (b) — all 25 remaining CPU-missing symbols (adamw×3, ce_grad, clm_megafwd, col2im, db_colsum,
+  embedding×2, expert_*2, gelu/gelu_bwd, grad_sum2/3, groupnorm×3, im2col×2, int4_quant×2, moe_router×2,
+  residual_add) are reachable ONLY from clm_prod.hexa — a STANDALONE program (own main, not importable),
+  GPU-build-only by design (fusion_dispatch.c supplies all on CUDA pods). Documented, deliberately NOT
+  hand-rolled. CLASS (c) orphans: none — every symbol has ≥1 real caller.
+- LIB GATE: all 16 stdlib/flame/*_lib.hexa trivially imported + CPU-linked GREEN against REPO sources
+  (clean sandbox — discovered `hexa run` prefers deployed ~/.hx/src/stdlib over the checkout when a
+  hexa.toml is at cwd, and ~/.hexa-cache keys on program-source hash only).
+- HONEST environment findings (not repo defects): committed F-OP16 gn oracle fails on THIS host because
+  (1) the deployed runtime.c carried pre-OP-19b libm-erf bodies (locally dt_erf-synced, backup kept) and
+  (2) the stale Jun-1 hexat MISCOMPILES `let a = 0.0 - <float literal>` via a lossy ~6-sig-digit
+  const-fold roundtrip (measured: -2.64e-7 / +2.027e-6 on the A&S erf coefficients) → the oracle's own
+  inline reference is off by ≤1.76e-6. The C host body is byte-correct: direct dispatch probe A ==
+  dt_gelu(Y) max|Δ|=0 on the oracle's exact fill. Known project_local_hexa_stale_oracle class.
+- Verdict .verdicts/hexa-0pod/F-OP36-DISPATCH-AUDIT.txt (full matrix + proofs verbatim).
+
 ## 2026-06-12 — OP-19g DONE: summer recorded as 5th environment of the machine-independence matrix (distinct glibc x86_64 host, fingerprint pinned) ($0 · 0-pod)
 - Deep-dive round-10 branch ②: summer had only been an ad-hoc substitute leg (OP-33/35, aiden down both times)
   — never RECORDED as an environment row. Fingerprinted: Ubuntu 24.04.2 LTS (Noble Numbat) · kernel

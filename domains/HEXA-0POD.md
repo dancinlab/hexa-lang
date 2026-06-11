@@ -11,7 +11,13 @@ loop targets what the consumer card + code can carry.
 ## milestones (loop self-feeds; add as discovered)
 
 <!-- ANCHOR:OP-36-DISPATCH-AUDIT (unique anchor — deep-dive round-10 branch ④: the OP-16 (groupnorm_gelu) / OP-18 (gelu2, moe_block2) / OP-32b (stdp_pair) class produced 4 REACTIVE discoveries of "GPU dispatch symbol declared + CUDA emit exists, but NO CPU body → importing the lib fails to link on CPU-only hosts" (hexa codegen emits ALL module fns, no DCE). OP-36 closes the pattern PROACTIVELY: sweep ALL forge dispatch symbols, build the symbol × CUDA-emit × CPU-body matrix, classify each CPU-missing symbol (real lib link hole / GPU-build-only by design / orphan), fix the real holes via the tool/restore_frozen_seeds marker-guarded channel, and CPU-link-probe every flame lib) -->
-- [ ] **OP-36 — forge dispatch CPU-fallback systematic audit: full symbol matrix, remaining link holes fixed (OP-16/18/32b class closed proactively)**
+- [x] **OP-36 — forge dispatch CPU-fallback systematic audit: full symbol matrix, remaining link holes fixed (OP-16/18/32b class closed proactively)** —
+  33-symbol matrix (prototype × CUDA-emit × CPU-body × reach): 33 CUDA-emitted · 8 CPU-covered · 25 CPU-missing
+  · 0 orphans. Class (a) real holes FIXED link-proven byte-eq: HOLE-1 matmul_t (committed transpose-elim oracle
+  was unlinkable → now F-OP2-TRANSPOSE-ELIM-BWD-EQ=1) + HOLE-2 matmul_batched (F-FORGE-BATCHED-EQ=1) + SEAM-3
+  hexa_ twins for the OP-16/18 bare-only bodies. Class (b) = all 25 remaining, reachable ONLY from clm_prod.hexa
+  (standalone GPU-build-only program, not importable) — documented, no blind math added. 16/16 flame *_lib.hexa
+  CPU-link-probed LINK-OK (repo sources, clean sandbox). Verdict .verdicts/hexa-0pod/F-OP36-DISPATCH-AUDIT.txt
 
 <!-- ANCHOR:OP-19G-SUMMER-5TH-ENV (unique anchor — deep-dive round-10 branch ②: formalize summer as the 5th RECORDED environment row of the machine-independence matrix. Summer (a distinct x86_64-linux glibc host from aiden, possibly a different glibc minor/distro) has been used as a substitute leg (OP-33/35) but was never RECORDED as an environment row with its exact glibc/distro/kernel fingerprint. Adding it diversifies the glibc-version axis and formalizes what OP-33/35 ran ad-hoc. Self-contained oracles only — summer's older hexa miscompiles cross-module imports (F-OP33/35 quirk)) -->
 - [x] **OP-19g — summer recorded as 5th environment (distinct glibc x86 host): golden folds verified + matrix row** —

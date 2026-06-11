@@ -1,14 +1,217 @@
-F-OP36-DISPATCH-AUDIT — forge dispatch CPU-fallback systematic audit (WIP skeleton)
+F-OP36-DISPATCH-AUDIT — forge dispatch CPU-fallback SYSTEMATIC audit (full matrix)
 ══════════════════════════════════════════════════════════════════════════════
 DATE: 2026-06-12 · HEXA-0POD OP-36 · 0-pod ($0, NO GPU, NO vast, NO pod)
 HOST: local arm64-macos (Darwin 25.5.0), CPU-only
-STATUS: WIP — audit in progress (skeleton pushed first per STORM protocol)
+STATUS: GREEN — gate g5 all checks pass (matrix complete · class-(a) fixed
+        link-proven byte-eq · 16/16 flame *_lib.hexa CPU-link-probed)
 
-SCOPE
-  Proactive sweep of ALL forge_dispatch_* / hexa_forge_dispatch_* symbols:
-  symbol | CUDA emit? | CPU body? matrix → classify CPU-missing as
-  (a) real lib link hole / (b) GPU-build-only by design / (c) orphan →
-  fix class (a) via tool/restore_frozen_seeds marker-guarded append →
-  CPU link-probe every stdlib/flame lib.
+WHY: the OP-16 (groupnorm_gelu) / OP-18 (gelu2, moe_block2) / OP-32b
+(stdp_pair) class — "GPU dispatch symbol declared (runtime.h) + CUDA emit
+exists, but NO CPU body → importing the lib fails to link on CPU-only hosts
+(hexa codegen emits ALL module fns, no DCE)" — produced 4 REACTIVE
+discoveries. OP-36 closes the pattern PROACTIVELY: sweep ALL dispatch
+symbols, fix the remaining real holes, link-probe every flame lib.
 
-(matrix + classification + fixes + probes to follow)
+────────────────────────────────────────────────────────────────────────────
+THE MATRIX — 33 symbols (runtime.h hexa_forge_dispatch_* prototypes, each
+with a bare forge_dispatch_* bootstrap-seam twin)
+────────────────────────────────────────────────────────────────────────────
+columns: CUDA emit = launcher in self/cuda/runtime_cuda_emit.hexa
+         (_hx_cuda_farr_<s>_gpu) unless noted · CPU body = restored
+         self/runtime.c (frozen seed 151c52c8 + tracked
+         tool/restore_frozen_seeds marker-guarded appends) · reach =
+         real (non-comment) call sites in stdlib
+
+symbol                      CUDA emit  CPU body            reach (callers)
+─────────────────────────── ─────────  ──────────────────  ─────────────────
+matmul                      ✓          ✓ seed (hexa+bare)  nn_lib · dojo/clm ·
+                                                           qforge/assembler ·
+                                                           12+ flame programs
+matmul_t                    ✓          ✓ OP-36 HOLE-1      clm_prod ·
+                                                           clm_prod_transpose_elim_eq ·
+                                                           op36 oracle
+matmul_batched              ✓          ✓ OP-36 HOLE-2      clm_prod ·
+                                                           flame_forge_batched_test
+ffn_fp64_via_bf16           ✓ (bf16    ✓ seed              nn_lib
+                            emit file)
+groupnorm_gelu              ✓          ✓ OP-16 bare        gn_lib · clm_prod
+                                       + OP-36 hexa_ twin
+gelu2                       ✓          ✓ OP-18 bare        clm_prod · gelu2 oracle
+                                       + OP-36 hexa_ twin
+moe_block2                  ✓          ✓ OP-18 bare        clm_prod · moe_block2 oracle
+                                       + OP-36 hexa_ twin
+stdp_pair                   ✓          ✓ OP-32b            spiking_lib
+adamw                       ✓          ✗                   clm_prod ONLY
+adamw_fused                 ✓          ✗                   clm_prod ONLY
+adamw_keepmv                ✓          ✗                   clm_prod ONLY
+ce_grad                     ✓          ✗                   clm_prod ONLY
+clm_megafwd                 ✓          ✗                   clm_prod ONLY
+col2im                      ✓          ✗                   clm_prod ONLY
+db_colsum                   ✓          ✗                   clm_prod ONLY
+embedding                   ✓          ✗                   clm_prod ONLY
+embedding_bwd_scatter       ✓          ✗                   clm_prod ONLY
+expert_pack2                ✓          ✗                   clm_prod ONLY
+expert_unpack2              ✓          ✗                   clm_prod ONLY
+gelu                        ✓          ✗                   clm_prod ONLY
+gelu_bwd                    ✓          ✗                   clm_prod ONLY
+grad_sum2                   ✓          ✗                   clm_prod ONLY
+grad_sum3                   ✓          ✗                   clm_prod ONLY
+groupnorm                   ✓          ✗                   clm_prod ONLY
+groupnorm_bwd               ✓          ✗                   clm_prod ONLY
+groupnorm_gelu_residual     ✓          ✗                   clm_prod ONLY
+im2col                      ✓          ✗                   clm_prod ONLY
+im2col_t                    ✓          ✗                   clm_prod ONLY
+int4_quant                  ✓          ✗                   clm_prod ONLY
+int4_quant_bwd              ✓          ✗                   clm_prod ONLY
+moe_router                  ✓          ✗                   clm_prod ONLY
+moe_router_bwd              ✓          ✗                   clm_prod ONLY
+residual_add                ✓          ✗                   clm_prod ONLY
+
+totals: 33 symbols · 33 CUDA-emitted · 8 CPU-covered (3 pre-seed + OP-16 +
+OP-18×2 + OP-32b + OP-36×2) · 25 CPU-missing · 0 orphans (every symbol has
+≥1 real caller)
+
+────────────────────────────────────────────────────────────────────────────
+CLASSIFICATION
+────────────────────────────────────────────────────────────────────────────
+(a) REAL CPU LINK HOLES — CPU-reachable surfaces that could not link: 2+1
+    HOLE-1  matmul_t — the committed $0 CPU oracle
+            stdlib/flame/clm_prod_transpose_elim_eq.hexa (OP-2
+            transpose-elim) calls the 5-arg builtin; runtime.h:1036
+            documents a "no-CUDA → byte-eq host A^T@B oracle" whose SSOT is
+            self/runtime.c, but the frozen seed predates OP-2 → symbol
+            UNDEFINED on every CPU host. FIXED.
+    HOLE-2  matmul_batched — the committed $0 CPU test
+            stdlib/flame/flame_forge_batched_test.hexa demands the
+            documented "no-CUDA → byte-eq host loop" branch; frozen seed
+            predates it (live repro: `_forge_dispatch_matmul_batched`
+            undefined at link). FIXED.
+    SEAM-3  the OP-16/18 host fallbacks (groupnorm_gelu · gelu2 ·
+            moe_block2) defined ONLY the bare bootstrap-seam symbols, but
+            CURRENT self/codegen.hexa lowers these builtins to
+            hexa_forge_dispatch_* — a hexat built from current source
+            against this seed would miss the hexa_ names. FIXED (thin
+            hexa_ twins delegating to the bare bodies — OP-32b both-names
+            precedent).
+(b) GPU-BUILD-ONLY BY DESIGN — benign, documented: the 25 CPU-missing
+    symbols are reachable EXCLUSIVELY from stdlib/flame/clm_prod.hexa,
+    which is a STANDALONE PROGRAM (own `fn main`; "clm flame files cannot
+    `use` one another" — its own header), NOT an importable lib. clm_prod
+    is the GPU production trainer, built only via the GPU build kit where
+    fusion_dispatch.c / runtime_cuda.c supply every dispatcher
+    (project_clmprod_gpu_build_seed_drift recipe). No importable lib pulls
+    these symbols → no CPU link surface exists. NOT fixed (deliberate):
+    hand-rolling 25 host bodies without a demanding CPU surface adds
+    untested math — the OP-16/18/32b/36 pattern adds host bodies only when
+    a CPU surface demands them.
+(c) ORPHANED PROTOTYPES — none. All 33 symbols have ≥1 real caller.
+
+────────────────────────────────────────────────────────────────────────────
+THE FIXES (tracked: tool/restore_frozen_seeds, OP-36 marker-guarded append;
+all `#ifndef HEXA_CUDA` → GPU path byte-identical)
+────────────────────────────────────────────────────────────────────────────
+· hexa_forge_dispatch_matmul_t(A,M,K,B,N) + bare twin: materialize A^T
+  (exact element copies At[k·M+m]=A[m·K+k], no rounding) and delegate to
+  the SAME frozen hexa_farr_matmul ikj kernel the prior (im2col_t +
+  forge_dispatch_matmul OP_N) path bottoms out in → byte-eq BY
+  CONSTRUCTION (same fn, same values, m-ascending accumulation).
+· hexa_forge_dispatch_matmul_batched(a,M,K,b,N,batch,c) + bare twin: per
+  problem g copy A_g/B_g slices into temp farrs, run hexa_farr_matmul,
+  scatter into caller-allocated C_all[g·M·N..] — identical bits vs
+  per-problem forge_dispatch_matmul by construction.
+· hexa_ twins for groupnorm_gelu / gelu2 / moe_block2 delegating to the
+  OP-16/18 bare bodies (single host SSOT preserved).
+  No new math hand-rolled anywhere — everything delegates to the frozen
+  kernel / existing bodies; no FMA-contraction hazard introduced.
+
+────────────────────────────────────────────────────────────────────────────
+PROOF (all 0-GPU, this host)
+────────────────────────────────────────────────────────────────────────────
+(a) SYMBOL U → T — restored runtime.c compiles clean (clang -O2 -c; only
+    the seed's pre-existing warnings); nm:
+      T _hexa_forge_dispatch_matmul_t        T _forge_dispatch_matmul_t
+      T _hexa_forge_dispatch_matmul_batched  T _forge_dispatch_matmul_batched
+      T _hexa_forge_dispatch_groupnorm_gelu  T _hexa_forge_dispatch_gelu2
+      T _hexa_forge_dispatch_moe_block2     (+ OP-32b stdp_pair pair)
+(b) HOLE-1 BYTE-EQ — stdlib/flame/op36_matmul_t_hostdispatch_eq.hexa
+    (committed): forge_dispatch_matmul_t(A,M,K,B,N) A/B vs
+    forge_dispatch_matmul(A^T,K,M,B,N) on hexa-side materialized A^T,
+    M=23 K=17 N=11 (odd, non-square, unroll tail):
+      max|Δ| = 0.0 · nonzero 187/187 · F-OP36-MATMUL-T-HOSTDISPATCH-EQ = 1
+    + the ORIGINAL victim, committed oracle clm_prod_transpose_elim_eq.hexa
+    now LINKS + PASSES: dW max|Δ| = 0.0 all 4 shapes,
+    F-OP2-TRANSPOSE-ELIM-BWD-EQ = 1 (was: link failure).
+(c) HOLE-2 BYTE-EQ — committed flame_forge_batched_test.hexa now LINKS +
+    PASSES: rc=0, per-problem max|Δ| batched-vs-serial = 0.0,
+    F-FORGE-BATCHED-EQ = 1 (was: _forge_dispatch_matmul_batched undefined).
+(d) SEAM-3 — direct-dispatch probe (T8 C8 G1, oracle's exact LCG fill):
+    forge_dispatch_groupnorm_gelu rc=0, A == dt_erf-GELU(Y) max|Δ| = 0.0.
+    gelu2 oracle F-OP18-GELU2-HOST = 1 · moe_block2 oracle
+    F-OP18-MOE-BLOCK2-HOST = 1 · OP-32b oracle GREEN (mismatch=0, cksum
+    347631115==347631115) — no regression from the twins (pure delegation).
+(e) GPU PATH UNTOUCHED — `clang -E -DHEXA_CUDA` rc=0; preprocessed TU
+    contains ZERO of the OP-36 dispatch definitions → -DHEXA_CUDA build
+    byte-identical; no duplicate symbol with the GPU kit possible.
+(f) IDEMPOTENT — tool/restore_frozen_seeds re-run twice: OP-36 marker count
+    stays 1; final runtime.c byte-identical across re-restores (cmp clean).
+(g) LIB PROBES — ALL 16 stdlib/flame/*_lib.hexa CPU-link-probed via trivial
+    import (`use` + println main, REPO stdlib compiled — clean sandbox,
+    cwd-stdlib resolution, cache-busted): 16/16 LINK-OK —
+    autograd ckpt conv decoder_block decoder expert_stream flame_bpe_corpus
+    gn mm_extract moe nn optim quant spiking tensor train.
+
+────────────────────────────────────────────────────────────────────────────
+HONEST NOTES / RESIDUALS
+────────────────────────────────────────────────────────────────────────────
+· STALE LOCAL TOOLCHAIN ARTIFACTS (environment, NOT repo): during
+  verification the committed F-OP16 gn_gelu oracle FAILED on this host
+  (max|Δ| ≈ 2.5e-7, A only; Y/mean/inv/xhat = 0.0). Root-caused to TWO
+  local-install artifacts, neither a repo defect:
+    1. deployed ~/.hx/src/self/runtime.c (hardlinked to bin/self) carried
+       PRE-OP-19b OP-16/18 bodies (libm erf, not dt_erf). Fixed locally:
+       surgical dt_erf sync patch (helpers + 2 call sites) — OP-32b
+       "local install ALSO patched" precedent. Backup kept
+       (~/.hx/src/self/runtime.c.op36-backup-20260612).
+    2. the stale Jun-1 hexat MISCOMPILES `let aN = 0.0 - <float literal>`
+       (lossy ~6-sig-digit const-fold roundtrip: a2 err -2.64e-7, a4 err
+       +2.027e-6 — measured) → the oracle's INLINE _h16_dt_erf reference
+       itself is wrong by up to 1.76e-6 vs the same algorithm with inline
+       literals. The C host body is byte-correct (direct probe (d): A ==
+       dt_gelu(Y) max|Δ|=0 on the oracle's own fill). Known class:
+       project_local_hexa_stale_oracle — "use ghost for miscompile
+       differentials, not local". The oracle is committed-green on CI.
+· `hexa run` import resolution: with a hexa.toml project at cwd the
+  DEPLOYED ~/.hx/src/stdlib wins over the repo checkout; lib probes were
+  therefore re-run in a clean sandbox (repo stdlib copy at cwd, no
+  hexa.toml, fresh cache) so the REPO sources are what 16/16 certifies.
+  ~/.hexa-cache keys on program-source hash — runtime.c changes do NOT
+  invalidate cached binaries (cache cleared during verification).
+· clm_prod.hexa CPU build: with the stale local hexat it fails C-COMPILE
+  (unknown ≥5-arg builtins emitted as bare identifiers passed as values)
+  before link is reached — toolchain artifact. Symbol-level analysis
+  stands: under current codegen the 25 class-(b) hexa_forge_dispatch_*
+  externs have no CPU bodies; clm_prod remains GPU-build-only by design.
+· On a -DHEXA_CUDA build of the FROZEN seed the wrappers are (as before)
+  supplied by the GPU build flow's own glue, not the seed — unchanged by
+  design (OP-32b residual, still GPU-session-gated).
+
+GATE (g5) — ALL GREEN
+  [x] full 33-symbol matrix (prototype × CUDA emit × CPU body × reach)
+  [x] every CPU-missing symbol classified (a)/(b)/(c) — 2+seam (a) fixed,
+      25 (b) documented, 0 (c)
+  [x] class-(a) fixes link-proven (nm U→T) + byte-eq vs canonical
+      references (max|Δ|=0) + original victims re-run GREEN
+  [x] GPU path untouched (-E proof) · idempotent (marker count 1)
+  [x] all 16 flame *_lib.hexa CPU-link-probed LINK-OK (repo sources)
+  [x] ambiguities documented honestly (stale-hexat const-fold miscompile
+      measured; no math guessed)
+
+PROVENANCE
+  fix:     tool/restore_frozen_seeds (OP-36 block) — tracked, durable
+  oracle:  stdlib/flame/op36_matmul_t_hostdispatch_eq.hexa (committed)
+  victims: stdlib/flame/clm_prod_transpose_elim_eq.hexa ·
+           stdlib/flame/flame_forge_batched_test.hexa (now GREEN)
+  pattern: OP-16 (#3008/#2995) · OP-18 · OP-19e · OP-32b (#3054) — same
+           marker-guarded post-restore channel
+  semantics SSOT: self/runtime.c hexa_farr_matmul (frozen ikj kernel) ·
+           OP-16/18 bodies (host) · runtime_cuda_emit.hexa (GPU twins)
