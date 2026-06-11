@@ -1,0 +1,10 @@
+════════════════════════════════════════════════════════════════════════════
+F-OP30-CROSSISA-CONTRACT — WIP SKELETON (docs-only consolidation)
+HEXA-0POD OP-30 · deep-dive round-7 branch ① · 0-pod · NO GPU · NO vast · $0
+════════════════════════════════════════════════════════════════════════════
+
+WIP. Formalizing OP-29's cross-ISA FMA-matmul finding (F-OP29-2ND-ARCH) into a
+first-class invariant in docs/flame-determinism-contract.md, plus the 3-layer
+determinism model into docs/flame-machine-independent-training.md. Body filled
+in the next commit.
+════════════════════════════════════════════════════════════════════════════
