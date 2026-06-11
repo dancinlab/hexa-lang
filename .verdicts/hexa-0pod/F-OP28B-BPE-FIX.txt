@@ -1,0 +1,169 @@
+════════════════════════════════════════════════════════════════════════════
+F-OP28B-BPE-FIX — BPE tokenizer byte<->unicode fixed to the canonical
+GPT-2/Qwen bytes_to_unicode; the BPE token pipeline is now 0-pod
+determinism-provable (OP-28's residual input-side item CLOSED)
+HEXA-0POD OP-28b · CPU-LOCAL byte-eq ORACLE · 0-GPU (`hexa run`) · $0 · no vast
+════════════════════════════════════════════════════════════════════════════
+
+CONTEXT — OP-28's residual.
+  OP-28 (#3041) proved the BYTE-LEVEL corpus token pipeline (tokenize->pack->
+  batch, V=256) is deterministic + machine-independent (pure integer, byte-eq
+  run-to-run + cross-platform). It flagged a RESIDUAL: the BPE path
+  (stdlib/flame/flame_bpe_corpus_lib.hexa, V=151936 — the real Qwen vocab) was
+  NOT cleanly 0-pod-runnable because its byte<->unicode map collided / broke the
+  real-Qwen round-trip. OP-28b fixes that map so the BPE path is also
+  determinism-provable.
+
+THE BUG (root cause — verified empirically on the local hexa runtime)
+  self/ml/tokenizer_bpe.hexa::build_byte_to_char did NOT build the canonical
+  GPT-2/Qwen bytes_to_unicode(). It had TWO distinct defects:
+
+  (1) CHR-TRUNCATION / WRONG-GLYPH on the printable range. It used `chr(i)` for
+      printable bytes. `chr(n)` in hexa (runtime.c hexa_chr_byte) masks to a
+      single byte (n & 0xFF) and returns a 1-byte string:
+        probe: chr(288) -> bytes [32]   == chr(32) == space  (COLLISION hazard)
+               chr(161) -> bytes [161]  (RAW byte 0xA1)
+      But the canonical map (and Qwen's vocab.json) stores the Latin-1 printable
+      range (bytes 161..172, 174..255) as the UNICODE CODEPOINT U+00A1..U+00FF,
+      i.e. UTF-8 0xC2 0xA1.. :
+        probe: from_char_code(161) -> bytes [194,161]  (UTF-8 U+00A1, canonical)
+      So token strings for those bytes never matched the real vocab. (And had
+      build_byte_to_char ever used chr on the 256+ range, chr(256+i) would have
+      collapsed to chr(i), the exact space-collision the old header warned of.)
+
+  (2) WRONG CODEPOINT FORMULA on the non-printable range. It used
+      `from_char_code(256 + i)` (codepoint = 256 + byte_value). The canonical
+      map assigns the non-printable bytes codepoint 256 + n where n is a RUNNING
+      COUNTER incremented once per non-printable byte (ascending byte order).
+      The two agree only for bytes 0..32 and DIVERGE for every byte >= 127 —
+      exactly 35 bytes (127..160 and 173):
+        byte 127: canonical U+0121, old code U+017F   (WRONG)
+        byte 160: canonical U+0142, old code U+01A0   (WRONG)
+      ... so those 35 glyphs never matched the real vocab either.
+
+  NOTE on OP-28's framing: OP-28 attributed the residual to "hexa chr()
+  truncates to a byte". That IS one of the two defects (defect 1) — but the
+  deeper, dominant defect was (2), the non-canonical codepoint formula. Both
+  are fixed. from_char_code (the UTF-8 codepoint encoder) was already correct
+  and is the right primitive; the fix is to use it for the WHOLE table with the
+  canonical running-counter formula, and to never use byte-truncating chr in
+  the byte->unicode map.
+
+THE FIX (surgical — self/ml/tokenizer_bpe.hexa::build_byte_to_char)
+  build_byte_to_char now emits the canonical GPT-2/Qwen 256-entry bijection:
+    printable byte b (b in 33..126 | 161..172 | 174..255) -> from_char_code(b)
+                                                             (codepoint == b)
+    every OTHER byte (ascending order)                     -> from_char_code(256 + n)
+                                                             (running counter n)
+  - from_char_code is the UTF-8 encoder (1-byte for ASCII, 2-byte for
+    U+00A1..U+00FF and U+0100..U+0143) — NOT byte-truncating chr.
+  - Pure integer / table build: the codepoint sequence is fixed + ascending,
+    so the table is byte-identical run-to-run and across machines. No libm, no
+    float, no hash-ordered dict (OP-28 determinism discipline).
+  - The decode side (bpe_decode + build_char_to_byte) was already UTF-8-
+    codepoint-aware (lead-byte-sized slicing) and consumes the SAME table, so
+    the inverse is consistent — no decode change needed.
+  - flame_bpe_corpus_lib.hexa header updated: limitation RESOLVED.
+
+ORACLE
+  stdlib/flame/op28b_bpe_byteuni_det.hexa
+    - SELF-CONTAINED (no `use`) — runs via scp/stdin on ANY hexa host,
+      checkout-independent, so the SAME source runs on local arm64-macos AND
+      aiden x86-linux (OP-19/OP-28 cross-platform pattern).
+    - Embeds the canonical bytes_to_unicode VERBATIM (twin of the fixed
+      build_byte_to_char) + a self-contained tiny BPE (byte-encode -> merge ->
+      id lookup) with fixed merge + vocab tables expressed in canonical glyphs,
+      so no merges.txt/vocab.json disk dependency (disk-frugal, host-portable).
+    - PROVES (not asserts):
+      (a) byte->unicode->byte round-trips ALL 256 bytes (decode each glyph back
+          == original byte) AND the 256 glyphs are DISTINCT (collision scan).
+      (b) the BPE pipeline over a fixed mixed-byte input is byte-eq run-to-run
+          (max|Δ| over ids = 0), in-process + process-to-process.
+      (c) emits an IEEE-754 fingerprint (f64_to_bytes_le of an order-sensitive
+          integer checksum over the round-trip + the bpe ids) for the
+          cross-platform byte-diff.
+
+GATE (g5) — `hexa run` PASS:
+
+  $ hexa run stdlib/flame/op28b_bpe_byteuni_det.hexa
+  op28b_bpe_byteuni_det — F-OP28B BPE byte<->unicode + token-pipeline determinism (CPU oracle, 0-GPU)
+    byte->unicode->byte round-trip exact = 256 / 256
+    glyph collisions (must be 0)         = 0
+    space byte 32  -> glyph bytes = 196 160  (canonical U+0120 = 196 160) back=32
+    byte 127 -> back=127  byte 160 -> back=160  byte 173 -> back=173
+    bpe input = "hello hello"
+    ids run1 = 22 33 11 55 44 33 11 55
+    bpe ids max|Δ| run-to-run = 0
+    checksum (roundtrip + bpe ids) = 102745433
+    CROSSPLAT-FINGERPRINT (f64_to_bytes_le of checksum) = 0 0 0 100 21 127 152 65
+    F-OP28B-BPE-FIX = 1
+    PASS — canonical GPT-2/Qwen bytes_to_unicode: byte<->unicode round-trips
+    ALL 256 bytes exactly (no collision), and the BPE token pipeline is byte-eq
+    run-to-run max|Δ|=0. Pure integer/table => machine-independent by construction.
+
+  (space byte 32 -> 196 160 = the historically-broken case, now the canonical
+   U+0120 glyph; round-trips back to 32. bytes 127/160/173 — the diverging
+   run — all round-trip. The bpe ids 22 33 11 55 44 33 11 55 = h,e,ll,o, h,e,
+   ll,o: the l+l merge and the space+h merge both fire as expected.)
+
+PROCESS-TO-PROCESS byte-eq (two independent `hexa run` invocations):
+  $ hexa run op28b_... > A.txt ; hexa run op28b_... > B.txt ; diff A.txt B.txt
+  → (no diff) ; full 945-byte output BYTE-IDENTICAL.
+  PROCESS-TO-PROCESS BYTE-EQ: YES
+
+CROSS-PLATFORM byte-eq (free CPU pool host, $0, NO vast / NO GPU):
+  local (arm64-macos, Darwin libm):
+    checksum = 102745433 ; FINGERPRINT = 0 0 0 100 21 127 152 65
+  aiden (x86-linux, glibc — sidecar pool CPU host, scp self-contained source):
+    checksum = 102745433 ; FINGERPRINT = 0 0 0 100 21 127 152 65
+  $ diff local.txt aiden.txt → (no diff)
+  CROSS-PLATFORM BYTE-EQ: YES (arm64-macos == x86-linux; FULL output identical,
+    round-trip 256/256, 0 collisions, bpe ids, checksum + fingerprint all match.)
+  (aiden /tmp cleaned after the run; no pod, no GPU, no vast touched.)
+
+OP-30 COMPLIANCE (honest)
+  The BPE path is INTEGER (table lookups + index math, no matmul), so the
+  OP-30 FMA-matmul cross-ISA invariant does not apply. Confirmed NO libm/float
+  leak in the token id path: scanned self/ml/tokenizer_bpe.hexa — the byte->uni
+  table, encode, merge, and id lookup are pure integer / string-table; no
+  exp/sin/cos/log/sqrt/erf, no float arithmetic. (The only remaining chr() uses
+  are in bpe_decode/byte_detokenize where chr(byte_val) correctly rebuilds a
+  RAW byte from a recovered 0..255 value — the correct use; build_byte_to_char
+  no longer uses chr. clock()/ms timing lines are print-only, not in the id
+  path.) The fixed table is fixed+ascending => byte-identical by construction.
+
+HONEST REMAINDER (g5 — what OP-28b does and does NOT claim)
+  - FIXED + PROVEN 0-pod: the byte<->unicode map (the chr/byte-encoder OP-28
+    flagged) is now the canonical GPT-2/Qwen bytes_to_unicode — 256/256 exact
+    round-trip, no collision, byte-eq run-to-run + cross-platform. This is the
+    substantive correctness fix and it is locked here.
+  - NOT exercised against a real on-disk Qwen merges.txt + vocab.json: the
+    oracle uses a self-contained tiny merge/vocab (canonical glyphs) so it stays
+    `use`-free + cross-platform + disk-frugal (no 151936-entry vocab.json on the
+    pool host, no GPU). A full real-Qwen-vocab encode/decode round-trip on a
+    downloaded tokenizer is the natural next confirmation but needs the vocab
+    files staged; it is NOT a code defect — the byte-encoder (the part OP-28
+    flagged) is fixed and the merge/id machinery is unchanged integer lookups.
+  - The merges table + regex pre-tokenizer (split_into_words is a simplified
+    space-splitter, not GPT-2's full regex) are unchanged; they were not the
+    flagged residual and are out of scope for this surgical byte-encoder fix.
+    The simplified pre-tokenizer is a pre-existing approximation, documented,
+    not regressed by OP-28b.
+  - The GPU TRAINER STEP consuming these ids remains the GPU-build-gated
+    remainder of gap G1 (unchanged from OP-28).
+
+VERDICT: GREEN. The flame BPE tokenizer's byte<->unicode mapping is fixed to the
+  canonical GPT-2/Qwen bytes_to_unicode (256-entry bijection via the UTF-8
+  encoder from_char_code with the running-counter formula — no byte-truncating
+  chr, no wrong codepoint). The byte<->unicode round-trip is EXACT for all 256
+  bytes (256/256, no collision — the space-byte collision OP-28 flagged is
+  gone), and the BPE token pipeline is byte-eq run-to-run (max|Δ|=0, in-process
+  + process-to-process) and cross-platform byte-identical (arm64-macos ==
+  x86-linux IEEE-754 fingerprint). Pure integer/table => machine-independent by
+  construction (no libm/float/hash-order in the token id path). OP-28's residual
+  input-side item is CLOSED for the byte-encoder; the real-on-disk-vocab
+  confirmation + the simplified regex pre-tokenizer + the GPU step are the
+  honest remainder, documented. Behavior change is confined to the byte->unicode
+  map correctness (encode/decode now produce the canonical glyphs); the decode
+  side + downstream pack/batch are unchanged.
+════════════════════════════════════════════════════════════════════════════

@@ -11,7 +11,29 @@ loop targets what the consumer card + code can carry.
 ## milestones (loop self-feeds; add as discovered)
 
 <!-- ANCHOR:OP-28B-BPE-FIX (unique anchor — OP-28 flagged a RESIDUAL: the BPE path (flame_bpe_corpus_lib.hexa, V=151936 real Qwen vocab) is not cleanly 0-pod-runnable because build_byte_to_char's byte->unicode map is non-canonical. OP-28b fixes the byte<->unicode mapping to the canonical GPT-2/Qwen bytes_to_unicode (256-entry bijection: printable ASCII -> itself, the rest -> U+0100.. in RUNNING-COUNTER order), making the BPE token pipeline byte-eq run-to-run + cross-platform determinism-provable, closing OP-28's residual input-side item; 0-pod, no GPU, no vast) -->
-- [ ] **OP-28b — BPE tokenizer byte-to-unicode fix (canonical GPT-2/Qwen map); BPE token pipeline determinism-provable (0-pod)**
+- [x] **OP-28b — BPE tokenizer byte-to-unicode fix (canonical GPT-2/Qwen map); BPE token pipeline determinism-provable (0-pod)** —
+  GREEN. Closes OP-28's flagged residual input-side item. flame's BPE byte<->unicode map
+  (self/ml/tokenizer_bpe.hexa build_byte_to_char) was NOT the canonical GPT-2/Qwen
+  bytes_to_unicode — TWO defects: (1) printable bytes used byte-truncating chr(b) -> raw
+  byte 0xA1, not the U+00A1 codepoint (UTF-8 0xC2 0xA1) the real Qwen vocab uses for the
+  Latin-1 range (chr is also the chr(256+i)==chr(i) space-collision hazard); (2)
+  non-printable bytes used codepoint 256+byte instead of the canonical running counter
+  256+n (diverges for 35 bytes: 127..160, 173 — e.g. byte 127 canonical U+0121 vs old
+  U+017F). FIX: build_byte_to_char now emits the canonical 256-entry bijection via the
+  UTF-8 encoder from_char_code (never chr) with the running-counter formula — pure
+  integer/table, no libm/float/hash-order. Oracle stdlib/flame/op28b_bpe_byteuni_det.hexa
+  (self-contained, `use`-free cross-platform twin) PROVES: byte->unicode->byte round-trips
+  ALL 256 bytes exactly (256/256, 0 collisions — space byte 32 -> U+0120 196 160 -> back
+  32; bytes 127/160/173 round-trip); BPE pipeline (byte-encode->merge->id) byte-eq
+  run-to-run max|Δ|=0 (in-process + process-to-process 945B identical); cross-platform
+  byte-eq local arm64-macos == aiden x86-linux (checksum 102745433, fingerprint
+  `0 0 0 100 21 127 152 65` on BOTH). OP-30: BPE is integer (no matmul) so FMA invariant
+  N/A; confirmed no libm/float leak in the token id path. Honest remainder: NOT run
+  against a real on-disk 151936-entry Qwen vocab.json (oracle uses a canonical-glyph
+  self-contained merge/vocab to stay use-free + disk-frugal; the flagged byte-encoder is
+  fixed, merge/id machinery is unchanged integer lookups); the simplified regex
+  pre-tokenizer + GPU step are unchanged out-of-scope. $0, no vast, no GPU.
+  Verdict .verdicts/hexa-0pod/F-OP28B-BPE-FIX.txt.
 
 <!-- ANCHOR:OP-31-3RD-ARCH (unique anchor — OP-29 proved machine-independence on a 2nd flame arch (decoder block); OP-31 generalizes to a THIRD structurally-distinct arch — a plain feed-forward MLP (nn_lib nn_linear_fwd + GELU, NO attention/RoPE/conv/MoE/norm) — and verifies the OP-30 cross-ISA-matmul invariant (inline ascending reduction, NOT FMA-fused farr_matmul) holds. The production nn_linear_fwd routes through forge_dispatch_matmul → FMA-fused farr_matmul (tensor_lib L58 "ikj order, FMA-fused under clang -O2") = a REAL OP-30 hole; close it inline-ascending like OP-29) -->
 - [x] **OP-31 — machine-independence on a 3rd flame arch + OP-30 cross-ISA-matmul invariant verified (or violation found+closed)** —
