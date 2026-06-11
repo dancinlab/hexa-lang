@@ -11,7 +11,19 @@ loop targets what the consumer card + code can carry.
 ## milestones (loop self-feeds; add as discovered)
 
 <!-- ANCHOR:OP-35-CHECKPOINT (unique anchor — deep-dive round-10 branch ①: the 6th determinism surface = CHECKPOINT save/restore. A machine-independent run is only useful if you can STOP it, serialize (W, m, v, step t), restore, and RESUME byte-identical to an uninterrupted run. Serialization is a classic determinism hole: float→text round-trip loses bits; binary endianness; missing optimizer state restarts bias-correction; field/tensor iteration order. stdlib's only checkpoint (clm_ckpt.hexa .clm) is an int4-QAT INFERENCE export at fp32 — NOT a training checkpoint) -->
-- [ ] **OP-35 — checkpoint save/restore determinism: resume==uninterrupted byte-eq + exact serialization (6th surface)**
+- [x] **OP-35 — checkpoint save/restore determinism: resume==uninterrupted byte-eq + exact serialization (6th surface)** —
+  GREEN ($0, CPU `hexa run` + pool summer x86-linux; NO GPU/vast/pod). AUDIT: NO training checkpoint existed in
+  stdlib — clm_ckpt.hexa (.clm) is an int4/fp32 INFERENCE export carrying BOTH classic training-resume holes
+  (fp32 narrowing of fp64 state + no AdamW m/v/step-t); both DEMONSTRATED divergent in-band (fp32-trunc resume
+  1.77e-8, wrong-t resume 0.042 — REAL-AND-CLOSED, not latent). CLOSE: stdlib/flame/ckpt_lib.hexa "FCK\x01" v1 —
+  binary fp64-LE bit-pattern reinterpret (f64_to_bytes_le, NO text), fixed field order, COMPLETE state
+  (W+m+v+applied-t). ORACLES: op35_ckpt_resume_eq.hexa — production CLMConvMoE micro-step save@2→restore-FRESH→
+  resume 3..4 == uninterrupted 4-step run BIT-FOR-BIT (max|Δ|=0, 0 bit-mismatch over 17×{W,m,v}, loss bits eq) +
+  adversarial IEEE-754 round-trip 33/33 (denormals·-0.0·±inf·qNaN-payload·sNaN-pattern); op35_ckpt_xplat_
+  selfcontained.hexa (pool pattern) — 4/4 file-level cmp gates byte-IDENTICAL arm64-macos ↔ x86_64-linux
+  (FORMAT-ECHO · RESUME-XPLAT · WRITE-SIDE · FINAL-UNINT) on a machine-independent pure-hexa step (no
+  farr_matmul/no C-builtin AdamW — any diff attributable to the ckpt surface). Contract doc gains the CHECKPOINT
+  row + what-breaks bullet. Verdict .verdicts/hexa-0pod/F-OP35-CHECKPOINT.txt.
 
 <!-- ANCHOR:OP-34-FOLD-CI-GATE (unique anchor — deep-dive round-9 branch ④: the cross-platform oracles (OP-19 dt_exp / OP-19b dt_erf folds) exist on main but NOTHING ran them in CI — a regression (libm reintroduced on a deterministic site, canonical fold order broken, codegen FP-semantics change) would land silently. Wire the fold checks into CI as a low-blast-radius regression gate on the 3 CI platforms = the same matrix as faithful-nobaseline) -->
 - [x] **OP-34 — machine-independence fold CI regression gate: dt_exp/dt_erf golden folds asserted per-platform** —

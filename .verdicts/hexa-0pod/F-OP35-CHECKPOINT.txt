@@ -1,6 +1,146 @@
 ════════════════════════════════════════════════════════════════════════════
-F-OP35-CHECKPOINT — checkpoint save/restore determinism (6th surface) — WIP
-HEXA-0POD OP-35 · CPU-LOCAL (`hexa run`) · 0-GPU · $0 · no vast/pod
+F-OP35-CHECKPOINT — checkpoint save/restore determinism (6th surface):
+resume == uninterrupted BIT-FOR-BIT + exact serialization + cross-platform bytes
+HEXA-0POD OP-35 · CPU-LOCAL (`hexa run`) + pool x86-linux · 0-GPU · $0 · no vast/pod
 ════════════════════════════════════════════════════════════════════════════
 
-STATUS: WIP skeleton — audit in progress. Will be replaced by the full verdict.
+THE 6TH DETERMINISM SURFACE
+  The campaign locked: step math (F-OP15), input pipeline (F-OP28), 4 archs
+  (F-OP29 etc.), schedule (F-OP33), cross-platform transcendentals (F-OP19/19b).
+  A machine-independent run is only USEFUL if you can STOP it, serialize the
+  state (W, AdamW m/v, step t), restore, and RESUME with the trajectory
+  byte-identical to an uninterrupted run. Serialization is a classic determinism
+  hole: (a) float→TEXT loses bits; (b) binary endianness/layout; (c) missing
+  optimizer state (m,v,t) restarts bias-correction; (d) field/iteration order.
+
+AUDIT (what existed in stdlib/flame — the honest finding)
+  · clm_ckpt.hexa (.clm v0.1/v0.2, PR2 of CLM_PROD_TRAINER_PLAN): an int4-QAT
+    INFERENCE export — weights as int4 codes + fp32 scales; the v0.2 "CLMX" ext
+    trailer (embed/GN affine/biases) is fp32. Round-trip is exact FOR WHAT IT
+    STORES, but as a TRAINING checkpoint it has BOTH classic holes:
+      hole (a'): fp64 training state stored at fp32 → 29 mantissa bits lost →
+                 restore ≠ original → resumed trajectory diverges from k+1;
+      hole (c) : NO AdamW m, NO v, NO step t → a resume restarts bias-correction
+                 at t=1 → diverges even with exact weights.
+  · flame_load_pt.hexa / pt_loader.hexa: PyTorch IMPORT readers, not save paths.
+  · train_lib.hexa / optim_lib.hexa / nn_lib.hexa: no save/load/serialize path.
+  → VERDICT: NO training checkpoint existed in stdlib. Not a "bug found in a
+    checkpoint path" — the path was MISSING (and the nearest thing, the .clm
+    export, would silently diverge if abused as one — both holes are now
+    DEMONSTRATED in-band, below). REAL-AND-CLOSED.
+
+THE CLOSE — stdlib/flame/ckpt_lib.hexa ("FCK\x01" v1)
+  Minimal deterministic training checkpoint:
+    [MAGIC 'F','C','K',0x01][t_step u32-le][n_params u32-le]
+    per param, pinned canonical order: [len u32-le][len×f64-le W][len×f64-le m]
+                                       [len×f64-le v]
+  · BINARY fp64-LE via f64_to_bytes_le / bytes_to_f64_le — IEEE-754 bit-pattern
+    reinterpret, NO text round-trip, NO narrowing.
+  · LITTLE-ENDIAN PINNED — bytes are the contract, not host layout.
+  · COMPLETE state: every W + m + v + the applied step t (resume = t+1).
+  · FIXED field order — the byte stream is a pure function of (state, order).
+
+ORACLE 1 — stdlib/flame/op35_ckpt_resume_eq.hexa (production libs, local)
+  The EXACT OP-15 composed CLMConvMoE micro-step (embed→conv→GroupNorm→MoE→CE→
+  bwd→AdamW, 17 params, T=4 d=8 E=2 V=256 K=3, fixed LCG seeds) restructured
+  into a stateful N-step loop. RUN A = uninterrupted N=4 steps. RUN B = steps
+  1..2 → SAVE to file (124,928 bytes) → restore into FRESH tensors → resume 3..4.
+  `hexa run` OUTPUT (verbatim, local arm64-macos):
+    checkpoint @k=2 -> /tmp/op35_ckpt_k2.fck (124928 bytes)
+    loss step3 A/resumed bits = 4616684866775960840 / 4616684866775960840
+    loss step4 A/resumed bits = 4616353440145745400 / 4616353440145745400
+    max|d(uninterrupted, resumed)| = 0.0
+    bit-mismatch count (W,m,v)     = 0
+    NC-1 wrong-t resume   max|d| = 0.04248
+    NC-2 fp32-trunc resume max|d| = 1.77089e-08
+    roundtrip adversarial: 33 elems, bit-mismatch = 0
+    F-OP35-CKPT-RESUME = 1
+    F-OP35-CKPT-ROUNDTRIP = 1
+    F-OP35-NEGCTRL-DIVERGE = 1
+  · RESUME-INVARIANT: save→restore→resume == uninterrupted, BIT-FOR-BIT
+    (float_to_bits over every element of 17×{W,m,v} + per-step loss bits;
+    max|Δ|=0 AND 0 bit-mismatches — the bit compare also catches -0.0 vs +0.0).
+  · ROUND-TRIP: adversarial IEEE-754 set through the REAL ckpt path — +0.0,
+    -0.0 (0x8000000000000000), min denormal (0x...0001, 5e-324), max denormal,
+    min normal, max double, +inf, -inf, qNaN (0x7FF8...), qNaN payload 0xEF,
+    sNaN-pattern (0x7FF0000000000001), and inexact fractions — 33/33
+    float_to_bits-identical after serialize→file→deserialize. NaN handling:
+    payloads (incl. the sNaN bit pattern) are preserved VERBATIM on both test
+    platforms (the path is memcpy-like: bytes→f64 array→bytes; no x87).
+  · NEGATIVE CONTROLS (the holes DEMONSTRATED real, in-band — also the
+    comparator-sensitivity proof that the 0.0 gate is genuine):
+      NC-1 same restored state, t restarted at 1 (the "no step count" classic,
+           hole (c)) → diverges max|Δ| = 0.04248 within 2 steps.
+      NC-2 restored state rounded through fp32 (what the .clm export gives,
+           hole (a')) → diverges max|Δ| = 1.77089e-08 within 2 steps.
+
+ORACLE 2 — stdlib/flame/op35_ckpt_xplat_selfcontained.hexa (cross-platform)
+  Self-contained NO-`use` twin (OP-28/29/33 pool pattern; g61 advisory
+  acknowledged — dt_exp/dt_erf/dt_ln/dt_sqrt + LCG + ckpt primitives inlined
+  VERBATIM; keep in sync). Step = machine-independent-by-construction micro-LM
+  (embed→explicit-loop linear→GELU(dt_erf)→linear→CE(dt_exp/dt_ln)→explicit
+  bwd→PURE-HEXA AdamW in the F-OP12 canonical fold) — deliberately NO
+  farr_matmul (OP-30/32 cross-ISA FMA surface) and NO adamw_step C builtin, so
+  any cross-platform diff is attributable to the CHECKPOINT surface.
+  Hosts: local arm64-macos (Darwin) vs summer x86_64-linux (glibc, sidecar pool
+  @192.168.50.60, hexa 0.1.0-dispatch) — aiden was DOWN again (ssh timeout,
+  same as OP-33).
+  Same-host gates: F-OP35-XPLAT-LOCAL = 1 on BOTH hosts (resume bit-mismatch 0,
+  roundtrip 33/33) and per-step loss bits IDENTICAL across platforms
+  (4613432940088934008 / 4613136240819395993 / 4612796173840186281 /
+  4612371089293635799 — steps 1..4, both hosts).
+  FILE-LEVEL `cmp` GATES (all byte-IDENTICAL, 8288 bytes each):
+    FORMAT-ECHO : ckpt WRITTEN on arm64 → loaded on x86 → re-serialized on x86
+                  == the original file (pure serialization, NO arithmetic).
+    RESUME-XPLAT: restore-on-x86 + resume 3..4 → final state == the
+                  UNINTERRUPTED arm64 run's final state. THE invariant,
+                  cross-platform.
+    WRITE-SIDE  : ckpt written on x86 == ckpt written on arm64 (identical
+                  state ⇒ identical bytes; no host-dependent layout).
+    FINAL-UNINT : uninterrupted finals equal arm64 vs x86 (step itself xplat).
+  → The format is PORTABLE, not host-only: write on arm64-macos, restore on
+    x86_64-linux, resume byte-identical. (For the PRODUCTION CLMConvMoE step,
+    cross-platform resume-equality additionally requires the step to obey the
+    cross-ISA matmul rule — the OP-30 surface, orthogonal to and unchanged by
+    this checkpoint surface.)
+
+GATE (g5)
+---------
+  [x] AUDIT: no training checkpoint existed (clm_ckpt = int4/fp32 INFERENCE
+      export with both classic training-resume holes; loaders are PT imports)
+  [x] CLOSE: ckpt_lib.hexa "FCK\x01" v1 — binary fp64-LE, fixed field order,
+      complete W+m+v+t (REAL-AND-CLOSED)
+  [x] RESUME-INVARIANT oracle: max|Δ|=0 AND 0 bit-mismatch AND loss bits eq
+      (production CLMConvMoE micro-step, save@2/resume 3..4 vs uninterrupted 4)
+  [x] ROUND-TRIP bit-exact on adversarial IEEE-754 (33/33; NaN payload + sNaN
+      pattern + denormals + -0.0 + ±inf), both platforms
+  [x] NEGATIVE CONTROLS: missing-t (0.04248) + fp32-truncation (1.77e-8)
+      divergences DEMONSTRATED in-band (not latent) + comparator sensitivity
+  [x] CROSS-PLATFORM: 4/4 file-level cmp gates byte-IDENTICAL arm64-macos ↔
+      x86_64-linux (echo / resume / write-side / final)
+  [x] contract doc: docs/flame-determinism-contract.md CHECKPOINT row +
+      what-breaks bullet (citing this verdict)
+
+HONEST (g5) notes
+-----------------
+· The .clm format is NOT deprecated — it is the correct int4 INFERENCE export.
+  The finding is that it must not be (and now need not be) abused as a training
+  checkpoint; the contract row documents exactly why.
+· aiden DOWN (ssh timeout) again; the x86 leg ran on summer (same ISA/OS/libc
+  class as OP-33; strongest available contrast to arm64-Darwin).
+· summer toolchain quirks (why the xplat twin is self-contained): its older
+  hexa build (a) miscompiles cross-module imports (implicit-declaration C
+  errors — even the landed OP-15 oracle fails to compile there) and (b) wraps
+  a trailing void user-fn call in `return __hexa_fn_arena_return(...)` → the
+  oracles use explicit trailing `return`s. No repo change on summer; the 3
+  scp'd files + /tmp artifacts were removed after the run (checkout left clean).
+· The xplat micro-LM's pure-hexa AdamW follows the F-OP12 canonical fold
+  (left-assoc ((1−β2)·g)·g, m̂ before v̂, ε outside the 24-iter Newton sqrt, two
+  separate W subtractions, repeated-mul βᵗ) — verified all 4 cmp gates again
+  after pinning the fold.
+· ckpt_lib uses `while` loops + u32-le lens; checkpoints >2^31-1 elements per
+  tensor or >2^32-1 steps are out of the v1 envelope (document-before-extend).
+· Disk-frugal: largest artifact 124,928 bytes (production oracle ckpt); xplat
+  files 8,288 bytes each; all under /tmp, summer copies removed.
+$0 · 0-GPU · no vast/pod · pool CPU only (summer).
+════════════════════════════════════════════════════════════════════════════
