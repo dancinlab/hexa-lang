@@ -86,6 +86,23 @@ loop targets what the consumer card + code can carry.
   (toolchain repaired host-locally: consistent generated runtime.c pair + prebuilt hexat_linux + runtime.a).
   Verdict .verdicts/hexa-0pod/F-OP33-LR-SCHEDULE.txt.
 
+<!-- ANCHOR:OP-33B-DEAD-LR-CLEANUP (unique anchor — deep-dive round-10 branch ③: surgical cleanup of the DEAD legacy LR path OP-33's audit surfaced. stdlib/optim.hexa scheduled_lr wrapped cosine_lr/warmup_lr builtin names that have NO runtime impl (generated C fails to link: use of undeclared identifier) yet the self/env.hexa builtin roster still REGISTERED them so the compiler emitted calls into nothing. Deletion user-sanctioned per g34 (/afg)) -->
+- [x] **OP-33b — dead scheduled_lr/cosine_lr legacy path removed (falsified builtins); canonical opt_lr_warmup_cosine pointed** —
+  GREEN ($0, CPU `hexa run`, NO GPU/vast/pod). DEADNESS RE-VERIFIED independently (not trusted from F-OP33):
+  probes `cosine_lr(...)`/`warmup_lr(...)` both FAIL — clang `error: use of undeclared identifier 'cosine_lr'`
+  (the compiler emits hexa_call4 into a nonexistent runtime symbol — the roster/runtime split is the bug).
+  CALLER SWEEP: 4 example files (test_stdlib · test_lr_batch · anima_mega_demo · anima_convergence_proof —
+  ALL baseline-broken, examples_baseline.json exit_code=-1 never-passed) + the self/env.hexa roster row; zero
+  LIVE callers. EXECUTED: scheduled_lr removed from stdlib/optim.hexa (one-line pointer comment →
+  opt_lr_warmup_cosine, F-OP33); all 4 examples REPOINTED to `use "../stdlib/flame/optim_lib"` +
+  opt_lr_warmup_cosine (floor_frac mapping: legacy min_lr=base·0.1 → 0.1; conv-proof 0.001/0.05 → 0.02;
+  warmup-only = floor_frac 1.0 degenerate); self/env.hexa deregisters warmup_lr/cosine_lr (next compiler build
+  rejects at hexa level instead of emitting broken C). POST: zero non-historical refs to the 3 names; OP-33
+  oracle re-run PASS (F-OP33-LR-SCHEDULE = 1); canonical probe green (warm 0.0005 · mid 0.000628142).
+  HONEST: stdlib/optim.hexa adam/safe_update wrap adam_step/grad_clip_norm which are ALSO dead (same falsified
+  legacy-ML builtin family, incl. slice/zeros/mean/cross_entropy used by the examples) — NOT sanctioned here,
+  left as a follow-up candidate. Verdict .verdicts/hexa-0pod/F-OP33B-DEAD-LR-CLEANUP.txt.
+
 <!-- ANCHOR:OP-26C-READINESS-V2 (unique anchor — OP-26b (#3035) wrote docs/flame-machine-independent-SUBMISSION-READINESS.md against the round-5 evidence (1 arch · 4 env · gap G2 open · G1 input-side unproven). Rounds 6-8 grew the evidence: G2 CLOSED ×3-over (OP-29 decoder block #3045 · OP-31 MLP #3048 · OP-32 spiking LIF+STDP #3052 = 4 archs total), the G1 input slice fully proven (OP-28 byte-level #3041 · OP-28b BPE fix #3049 · OP-28c REAL Qwen vocab 151643 entries #3053) + pre-gated into the turnkey kit (OP-24d #3050), and NEW findings landed (OP-30 #3047 3-layer determinism model + cross-ISA FMA-matmul invariant; OP-32 binary-spike FMA-immunity boundary; OP-30b #3051 contract consistency). OP-26c refreshes the readiness doc to the current state: 4-arch claim, refreshed gap list, new evidence rows, sharpened FMA novelty, honest limits; docs-only, NO /paper scaffold per g84) -->
 - [x] **OP-26c — SUBMISSION-READINESS updated: 4-arch G2 closed, real-vocab input, FMA novelty (docs-only, g84)** —
   GREEN (docs-only, $0, NO GPU/vast/pod). docs/flame-machine-independent-SUBMISSION-READINESS.md refreshed (v2)

@@ -1,0 +1,125 @@
+F-OP33B-DEAD-LR-CLEANUP — dead legacy LR-schedule path removed from stdlib/optim.hexa
+        (scheduled_lr → falsified cosine_lr/warmup_lr builtins); all callers repointed to
+        the canonical opt_lr_warmup_cosine (stdlib/flame/optim_lib.hexa, d5_cos, F-OP33);
+        the falsified names deregistered from the self/env.hexa builtin roster.
+HEXA-0POD OP-33b · deep-dive round-10 branch ③ · CPU-LOCAL (`hexa run`) · 0-GPU · $0 · no vast/pod
+Deletion USER-SANCTIONED per g34 (offered + approved via /afg). Date: 2026-06-12.
+════════════════════════════════════════════════════════════════════════════
+
+[1] DEADNESS — independently RE-VERIFIED (g5: not trusted from F-OP33)
+----------------------------------------------------------------------
+Probe A (cosine_lr, `hexa run`, hexa 0.1.0-dispatch, baseline tree = origin/main 2c303882b):
+
+    let lr = cosine_lr(0.001, 100, 1000, 0.0001)
+
+  VERBATIM:
+    build/artifacts/hexa_run.923dabb4aab9d4a8_0.1.0-dispatch.tmp.*.c:13:21:
+      error: use of undeclared identifier 'cosine_lr'
+       13 |     lr = hexa_call4(cosine_lr, hexa_float(0.001), ((HexaVal){.tag=TAG_INT,.i=(100)}), ...);
+    error: clang compile failed — binary not produced
+
+Probe B (warmup_lr):
+    error: use of undeclared identifier 'warmup_lr'
+
+Probe C (import stdlib/optim.hexa + scheduled_lr) — pre-removal:
+    error: use of undeclared identifier 'warmup_lr'; did you mean 'warmup'?
+    error: use of undeclared identifier 'cosine_lr'
+    (also: call to undeclared function 'adam_step' — see HONEST §6)
+
+ROOT-CAUSE SPLIT: self/env.hexa env_new() builtin roster (line ~169) still REGISTERED
+"warmup_lr", "cosine_lr" as known builtin names, so the compiler type-checks the call and
+EMITS `hexa_call4(cosine_lr, …)` into a runtime that no longer defines the symbol — the
+failure surfaces as a clang link/decl error in generated C instead of a hexa-level
+unknown-identifier. The builtins were falsified (removed from the runtime) at some point;
+the roster row + the stdlib wrapper survived as misleading dead code. CONFIRMED: zero
+hexa_warmup_lr/hexa_cosine_lr in compiler/ or any runtime source (repo-wide grep — the
+ONLY registration was self/env.hexa:169).
+
+[2] CALLER SWEEP — zero LIVE callers
+------------------------------------
+grep -rn "scheduled_lr|cosine_lr|warmup_lr" over *.hexa/*.md/*.sh/*.yml/*.json:
+
+  DIRECT callers of the dead names (all example/, ALL baseline-broken):
+    example/test_stdlib.hexa:26,60         scheduled_lr ×2
+    example/test_lr_batch.hexa:11,22,82,104,107,110,111  warmup_lr/cosine_lr ×7
+    example/anima_mega_demo.hexa:40        scheduled_lr
+    example/anima_convergence_proof.hexa:51 warmup_lr(cosine_lr(...))
+  tool/examples_baseline.json: all 4 files category=UNKNOWN, exit_code=-1, last_pass=""
+  (never-passing; not wired into any CI gate/script — sweep of .github/scripts/tool/tools).
+  Each also fails on OTHER dead legacy-ML builtins (slice/zeros/mean/cross_entropy/...).
+
+  Registration (not a caller): self/env.hexa:169 builtin roster row.
+
+  NOT callers (kept untouched): self/ ga_cosine_lr / ga_warmup_cosine_lr / se_cosine_lr /
+  su_cosine_lr (local fns, different names); self/{test_lion_optimizer,test_sophia}.hexa +
+  self/ml/{lion_optimizer,sophia}.hexa `let scheduled_lr = ...` (LOCAL variable shadow, not
+  the stdlib fn); doc/state.json:99 (2026-04-11 ossification record — historical, stays);
+  domains/HEXA-0POD.{md,log.md} + .verdicts/ (historical OP-33 narration — stays).
+
+DECISION: job rule 2(b) — callers exist but none live → REPOINT callers to the canonical
+primitive, then REMOVE the dead path.
+
+[3] REMOVAL DIFF (commit aaf95a28e, 6 files, +25/−19 — wipe_guard-scoped subject)
+---------------------------------------------------------------------------------
+  stdlib/optim.hexa            : fn scheduled_lr REMOVED (3 lines); one-line pointer left:
+    "LR schedule: use `opt_lr_warmup_cosine` (stdlib/flame/optim_lib.hexa) — deterministic d5_cos (F-OP33)."
+  example/test_stdlib.hexa     : + use "../stdlib/flame/optim_lib";
+                                 scheduled_lr(0.001,50,1000,100)  → opt_lr_warmup_cosine(0.001,0.1,50,1000,100)
+                                 scheduled_lr(0.001,10,100,20)    → opt_lr_warmup_cosine(0.001,0.1,10,100,20)
+                                 (legacy min_lr = base·0.1 ⇒ floor_frac = 0.1)
+  example/anima_mega_demo.hexa : scheduled_lr(0.03,epoch,20,3)    → opt_lr_warmup_cosine(0.03,0.1,epoch,20,3)
+  example/anima_convergence_proof.hexa:
+                                 warmup_lr(cosine_lr(0.05,e,200,0.001),e,20)
+                                                                  → opt_lr_warmup_cosine(0.05,0.02,e,200,20)
+                                 (floor_frac = 0.001/0.05 = 0.02)
+  example/test_lr_batch.hexa   : warmup demo → opt_lr_warmup_cosine(…,1.0,…) (floor_frac=1.0
+                                 degenerates to warmup-ramp-then-constant — exact legacy ramp
+                                 base·t/warmup); cosine demo → floor_frac=0.1, warmup=0;
+                                 3 LR @tests rewritten against the canonical fn.
+  self/env.hexa                : "warmup_lr", "cosine_lr" DEREGISTERED from env_new() roster
+                                 (next compiler build rejects at hexa level, no broken C emit).
+                                 "phase_lr" left (separate name, not in the OP-33b sanction).
+
+[4] POST-REMOVAL CHECKS — GREEN
+-------------------------------
+(a) probe (import repo stdlib/optim.hexa + scheduled_lr call), cache-busted:
+      error: use of undeclared identifier 'scheduled_lr'      ← no longer DEFINED/emitted;
+      generated C contains zero warmup_lr/cosine_lr/scheduled_lr definitions.
+(b) canonical path probe (use "stdlib/flame/optim_lib"):
+      opt_lr_warmup_cosine(0.001,0.1, 50,1000,100) = 0.0005       (warmup ramp ✓ base·50/100)
+      opt_lr_warmup_cosine(0.001,0.1,500,1000,100) = 0.000628142  (cosine mid ✓)
+(c) OP-33 oracle RE-RUN on the changed tree:
+      hexa run stdlib/flame/op33_lr_schedule_determinism_eq.hexa
+      → "F-OP33-LR-SCHEDULE = 1"
+      → "PASS — d5 LR schedule byte-eq run-to-run; libm-free => machine-independent."
+(d) repointed examples: ZERO remaining LR-name errors (each still fails on the PRE-EXISTING
+    dead legacy-ML family — test_stdlib/mega_demo: slice zeros mean cross_entropy cosine_sim
+    grad_clip_norm chaos_perturb lorenz_step tension; conv_proof: slice zeros xavier_init
+    cross_entropy; lr_batch: phase_lr batch_matvec batch_norm mean — unchanged baseline
+    deadness, out of the OP-33b sanction).
+(e) removed-name grep: zero non-historical references remain (residuals = the pointer
+    comment, local-variable shadows, ga_/se_/su_ prefixed local fns, .verdicts/ + domain
+    history + doc/state.json ossification record).
+
+[5] GATE (g5) — PASS
+--------------------
+  deadness independently verified (verbatim errors §1)      : YES
+  zero-LIVE-caller confirmed (sweep §2)                     : YES (4 dead example callers repointed)
+  removal clean (no dangling refs · probes behave §4a/e)    : YES
+  canonical path unaffected (oracle PASS §4c)               : YES
+
+[6] HONEST
+----------
+  • stdlib/optim.hexa is still NOT buildable as a whole: adam/safe_update wrap adam_step /
+    grad_clip_norm — the SAME falsified legacy-ML builtin family (also slice/zeros/mean/
+    cross_entropy/phase_lr/batch_matvec/batch_norm/grad_accumulate/randn-era names used by
+    the examples). That deadness PRE-DATES this change and is NOT sanctioned under OP-33b;
+    left as an explicit follow-up candidate (OP-33c?).
+  • The 4 repointed examples therefore still don't build end-to-end (baseline exit_code=-1
+    preserved) — but the LR path inside them now cites the canonical, verified primitive,
+    and the exact repoint form was build+run-verified standalone (§4b form, run from
+    example/ dir: lr 0.0005).
+  • self/env.hexa edit affects the NEXT self-host compiler build; the installed hexat
+    (0.1.0-dispatch) keeps the roster until rebuilt — behavior verified via generated-C
+    inspection, not a compiler rebuild (0-pod, disk-frugal).
+$0 · 0-GPU · 0-pod · no vast · no foreign-pod touch · no .tape edits.
