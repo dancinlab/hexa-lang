@@ -22,6 +22,8 @@
 // API 표면 RFC 043 §Surface 의 opt_adamw_step 와 동일.
 // ════════════════════════════════════════════════════════════════════════
 
+use "stdlib/flame/flame_math"
+
 pub fn opt_adamw_step(W: int, gW: int, m: int, v: int, n: int,
                      lr: float, b1: float, b2: float, eps: float,
                      wd: float, t: int) {
@@ -112,4 +114,52 @@ pub fn opt_adamw_step_sharded(W: int, gW: int, m: int, v: int, n: int,
     }
     let _ = farr_free(W_s); let _ = farr_free(g_s)
     let _ = farr_free(m_s); let _ = farr_free(v_s)
+}
+
+// ════════════════════════════════════════════════════════════════════════
+// DETERMINISTIC LR SCHEDULE (HEXA-0POD OP-33 · F-OP33-LR-SCHEDULE)
+//
+// The 5th determinism surface: the per-step LR schedule. flame's step path
+// is libm-free (dt_exp/dt_erf/dt_ln · Newton sqrt — F-OP19/19b/29), but
+// stdlib had NO production LR scheduler — the standard transformer schedule
+// (linear warmup + cosine decay) needs cos(), and the libm `cos` builtin is
+// NOT correctly-rounded → differs across arch/OS libm (the exact hole class
+// F-OP19 measured for `exp`: 1-ULP divergence → lr differs by 1 ULP →
+// weights diverge → machine-independence breaks the moment a user reaches
+// for libm cos in a schedule).
+//
+// opt_lr_warmup_cosine is the canonical machine-independent scheduler:
+//   t in [1..n_steps] (1-based, matching AdamW's t):
+//     t <= warmup : lr = base · t/warmup                (linear ramp 0→base)
+//     else        : prog = (t−warmup)/(n_steps−warmup)  (0..1)
+//                   cosf = 0.5·(1 + d5_cos(π·prog))     (1..0)
+//                   lr = base · (floor + (1−floor)·cosf)
+//   floor = final lr as a FRACTION of base (e.g. 0.05). Matches the OP-23b
+//   drift-harness schedule (tool/bench/flame_traj_drift_tf32_op23b.cu lr_at)
+//   with cos routed through d5_cos.
+//
+// CANONICAL ORDER (what breaks byte-eq):
+//   • cos = d5_cos (flame_math: mod-2π reduce + 14-term Taylor, F-OP29's
+//     RoPE primitive) — NOT libm cos (re-opens the arch/OS ULP divergence).
+//   • π = d5_pi() = 3.141592653589793 (the exact double; do not re-derive).
+//   • fold order is pinned: prog FIRST (single divide), then π·prog, then
+//     0.5·(1.0 + c), then floor + (1.0−floor)·cosf, then base·(...). Any
+//     refold (e.g. base·floor + base·(1−floor)·cosf) is float-different.
+//   • warmup ramp = base·(t/warmup) — divide BEFORE multiply, NOT
+//     (base·t)/warmup.
+// Verified: stdlib/flame/op33_lr_schedule_determinism_eq.hexa — N=500
+// schedule byte-eq run-to-run + cross-platform (arm64-macos vs x86-linux),
+// full 500×8-byte IEEE-754 dump diffed. Verdict
+// .verdicts/hexa-0pod/F-OP33-LR-SCHEDULE.txt.
+// ════════════════════════════════════════════════════════════════════════
+
+pub fn opt_lr_warmup_cosine(base_lr: float, floor_frac: float,
+                            t: int, n_steps: int, warmup: int) -> float {
+    if warmup > 0 && t <= warmup {
+        return base_lr * (to_float(t) / to_float(warmup))
+    }
+    if t >= n_steps { return base_lr * floor_frac }
+    let prog = to_float(t - warmup) / to_float(n_steps - warmup)
+    let cosf = 0.5 * (1.0 + d5_cos(d5_pi() * prog))
+    return base_lr * (floor_frac + (1.0 - floor_frac) * cosf)
 }
