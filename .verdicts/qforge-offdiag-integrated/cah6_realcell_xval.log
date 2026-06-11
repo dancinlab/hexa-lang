@@ -1,0 +1,41 @@
+=== QFORGE breadth COMPOSITION — CaH6 all-4-bricks on ONE converged cell ===
+[ground SCF] NPW=64 converged=true iters=21 etot=2.74425
+[d screen ANDERSON] passes=21 converged=true max_residual=9.37514e-09 fixed_point_res=9.60061e-09
+[d screen PICARD β=0.05] converged=true col0_finite=true  (the #2500 NaN wall)
+[d screen] ‖ΔV_scr‖/‖ΔV_bare‖ (state 0) = 0.984663  (<1 weakened, >1 enhanced — as-found, d6)
+[a phonon] force-constant converged=true passes=28
+[a phonon] real ω band: 24 modes, ω_log(band)=1156.47 K (vs single Einstein 1236.4 K)
+[c N(E_F)] real smeared DOS at E_F (Γ) = 19.9471  (vs 1.0 placeholder)
+── COMPOSED CROSS-VAL (d6 VERBATIM, NOT tuned) ──
+isolated bare      (1 ω₀, n_ef=1, bare ΔV)      λ = 16.4249
+isolated screened  (1 ω₀, n_ef=1, ΔV_scr)       λ = 17.8361
+BARE-COMPOSED a+b+c (real band[a]+N(E_F)[c]+offdiag[b], BARE ΔV) λ = 1.06315  ω_log=1030.18 K
+COMPOSED all-4     (real band[a]+ΔV_scr[d]+N(E_F)[c]+offdiag[b]) λ = 1.1545  [screening converged=true]
+  n_pairs=100 n_samples=2400 band_modes=24 N(E_F)=19.9471
+QE reference λ = 4.376
+── CLASSIFICATION on ALL-4 ANDERSON-SCREENED a+b+c+d (d6 VERBATIM, NOT tuned) ──
+[d] contributes without NaN = true
+composed λ (primary) = 1.1545  [ALL-4, screened d]
+rel-ε vs QE 4.376 = 0.736175
+anchors: isolated bare λ=16.4249 · isolated screened λ=17.8361 · bare-composed λ=1.06315
+composition LOWERED λ vs isolated bare
+VERDICT: PARTIAL — REAL all-4 composed λ (screened [d] CONTRIBUTING, no NaN) outside 1%; the screening-solver WALL is BROKEN (d2) — next knob = denser NPW/k-mesh + screened FC β; reported verbatim (d6)
+
+════════════════════════════════════════════════════════════════════
+── UNIFIED dense off-diag V_scr(G_a−G_b) vertex (elph_offdiag_integrated) ──
+λ_unified  (qforge_lambda_dense, route-B cols, all-4) = 1.1545
+λ_compose  (qforge_compose_cah6_lambda, established)  = 1.1545
+λ_diag-floor (OLD diagonal-only assembler)            = 1.08916
+Σ|g|²_dense/Σ|g|²_diag lift (vertex structure)        = 1.67608
+Hermiticity residual Σ|g_mn−g_nm|                     = 1.3906e-15
+|λ_unified − λ_compose|/λ_compose (route A=B residual) = 3.3013e-07
+ROUTE A=B (unified == compose, ≤1%) = true  → the off-diag assembler IS the compose vertex (architectural residual CLOSED)
+DIAGONAL→DENSE LIFT (real CaH6): λ_diag=1.08916 → λ_dense=1.1545  (off-diag RAISES λ)
+── UNIFIED classification vs QE 4.376 (d6 VERBATIM, NOT tuned) ──
+λ_unified = 1.1545  rel-ε vs QE 4.376 = 0.736175
+UNIFIED VERDICT: ARCHITECTURE CLOSED, MAGNITUDE RESIDUAL — the dense off-diag
+  vertex is UNIFIED + normalization-consistent (A=B=C theorem, route A=B on real cell)
+  but the VERTEX MAGNITUDE residual vs QE 4.376 persists (rel-ε=0.736175).
+  Architectural residual CLOSED; the remaining gap is NOT the assembler but the
+  Γ-only FS BZ / vertex-magnitude (GPU-gated n=645 k×q convergence) — d6 honest, @L5.
+=== DONE ===
