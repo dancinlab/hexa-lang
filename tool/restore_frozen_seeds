@@ -521,6 +521,210 @@ OP32B_EOF
   echo "[restore_frozen_seeds] OP-32b: appended flame STDP pair-dispatch host fallback (hexa_forge_dispatch_stdp_pair) to $rt"
 fi
 
+# ── OP-36 (HEXA-0POD) — dispatch CPU-fallback SYSTEMATIC audit fixes ──────────
+# OP-36 swept ALL 33 forge_dispatch_* symbols (runtime.h prototypes × CUDA emit
+# × CPU body in this restored seed) instead of waiting for the next reactive
+# OP-15/16/18/32-style import failure. Findings (verdict
+# .verdicts/hexa-0pod/F-OP36-DISPATCH-AUDIT.txt has the full matrix):
+#   HOLE-1  forge_dispatch_matmul_t (OP-2 transpose-elim, 5-arg) — runtime.h
+#           L1036 documents a "no-CUDA → byte-eq host A^T@B oracle" whose SSOT
+#           is self/runtime.c, but the frozen seed (151c52c8…) predates OP-2 →
+#           the symbol is UNDEFINED on every CPU-only host (live repro: probe
+#           compile/link fails). Host body below: materialize A^T (exact
+#           element copies, no rounding) and delegate to hexa_farr_matmul —
+#           term-by-term the SAME arithmetic as the prior im2col_t+OP_N path
+#           (forge_dispatch_matmul → forge_tier_dispatch_v1 MATMUL+FP64 →
+#           hexa_farr_matmul), so byte-eq BY CONSTRUCTION (same fn, same vals).
+#   HOLE-2  forge_dispatch_matmul_batched (LEVER b, 7-arg) — runtime.h L1042
+#           documents a "no-CUDA → byte-eq host loop (batch hexa_farr_matmul
+#           calls)"; the committed $0 CPU test flame_forge_batched_test.hexa
+#           demands exactly that branch, but the frozen seed predates it (live
+#           repro: `_forge_dispatch_matmul_batched` undefined at link). Host
+#           body below: per problem g, copy the A_g/B_g slices into temp farrs,
+#           call hexa_farr_matmul, scatter the result into caller-allocated
+#           C_all[g·M·N..] — identical bits vs per-problem forge_dispatch_matmul
+#           by construction.
+#   SEAM-3  the OP-16/18 host fallbacks (groupnorm_gelu · gelu2 · moe_block2)
+#           define ONLY the bare bootstrap-seam symbols, but self/codegen.hexa
+#           (L7442/7838/…) lowers these builtins to hexa_forge_dispatch_* —
+#           a hexat built from CURRENT source against this seed would miss the
+#           hexa_ names. Thin hexa_ twins below delegate to the bare bodies
+#           (the OP-32b both-names precedent), closing the seam direction.
+# All under `#ifndef HEXA_CUDA` → a -DHEXA_CUDA build is byte-identical to
+# today (GPU bodies come from the GPU build kit's fusion_dispatch.c /
+# runtime_cuda.c; no duplicate symbol possible). No new math is hand-rolled —
+# everything delegates to the frozen hexa_farr_matmul / the OP-18 bodies, so
+# there is no FMA-contraction hazard to fence. Appended at EOF (after OP-18 /
+# OP-32b) where hexa_farr_zeros / hexa_farr_free / hexa_farr_matmul /
+# _hx_farr_table / hexa_as_num / hexa_int / HX_INT are all in scope.
+# Idempotent: the marker guards against double-injection across re-restores.
+if [ -f "$rt" ] && ! grep -q 'OP-36 (HEXA-0POD' "$rt"; then
+  cat >> "$rt" <<'OP36_EOF'
+
+/* ═══════════════════════════════════════════════════════════════════
+ * OP-36 (HEXA-0POD) — dispatch CPU-fallback systematic-audit fixes:
+ * matmul_t + matmul_batched host bodies (delegating to the frozen
+ * hexa_farr_matmul → byte-eq by construction) + hexa_ seam twins for
+ * the OP-16/18 bare-only fallbacks.
+ * `#ifndef HEXA_CUDA` only → GPU path UNCHANGED. */
+#ifndef HEXA_CUDA
+
+/* HOLE-1 — forge_dispatch_matmul_t(A, M, K, B, N) -> new farr [K·N]:
+ * C[K,N] = A[M,K]^T @ B[M,N] (contraction over M). Host oracle:
+ * materialize At[K,M] (exact copies, At[k·M+m] = A[m·K+k] — the
+ * transposed-gather value identity xcolT[j,t] == xcol[t,j]) and run the
+ * SAME hexa_farr_matmul the prior im2col_t+OP_N path bottoms out in →
+ * m-ascending accumulation, bit-identical term-by-term
+ * (clm_prod_transpose_elim_eq.hexa is the committed order proof). */
+HexaVal hexa_forge_dispatch_matmul_t(HexaVal a_v, HexaVal m_v, HexaVal k_v,
+                                     HexaVal b_v, HexaVal n_v) {
+    int64_t a_id = hexa_as_num(a_v);
+    int64_t M    = hexa_as_num(m_v);
+    int64_t K    = hexa_as_num(k_v);
+    int64_t b_id = hexa_as_num(b_v);
+    int64_t N    = hexa_as_num(n_v);
+    if (M <= 0 || K <= 0 || N <= 0)                          return hexa_int(-1);
+    if (a_id < 0 || a_id >= _hx_farr_count)                  return hexa_int(-1);
+    if (b_id < 0 || b_id >= _hx_farr_count)                  return hexa_int(-1);
+    if (!_hx_farr_table[a_id].buf || _hx_farr_table[a_id].len < M * K)
+        return hexa_int(-1);
+    if (!_hx_farr_table[b_id].buf || _hx_farr_table[b_id].len < K * N)
+        return hexa_int(-1);
+    /* materialize A^T — hexa_farr_zeros may realloc the table (entry
+     * pointers move): re-fetch EVERYTHING by id after the allocation. */
+    HexaVal at_h = hexa_farr_zeros(hexa_int(K * M));
+    int64_t at_id = HX_INT(at_h);
+    if (at_id < 0 || at_id >= _hx_farr_count)                return hexa_int(-1);
+    {
+        const double* A  = _hx_farr_table[a_id].buf;
+        double*       At = _hx_farr_table[at_id].buf;
+        if (!A || !At)                                       return hexa_int(-1);
+        for (int64_t m = 0; m < M; m++)
+            for (int64_t k = 0; k < K; k++)
+                At[k * M + m] = A[m * K + k];
+    }
+    /* C[K,N] = At[K,M] @ B[M,N] — the exact frozen ikj kernel the prior
+     * (im2col_t + forge_dispatch_matmul) path used. */
+    HexaVal c_h = hexa_farr_matmul(hexa_int(at_id), hexa_int(K),
+                                   hexa_int(M), hexa_int(b_id), hexa_int(N));
+    (void)hexa_farr_free(hexa_int(at_id));
+    int64_t c_id = HX_INT(c_h);
+    if (c_id < 0)                                            return hexa_int(-1);
+    return hexa_int(c_id);
+}
+/* Bare-symbol bootstrap seam (deployed hexat predating the 5-arg builtin
+ * emits a literal forge_dispatch_matmul_t(...) call). */
+HexaVal forge_dispatch_matmul_t(HexaVal a_v, HexaVal m_v, HexaVal k_v,
+                                HexaVal b_v, HexaVal n_v) {
+    return hexa_forge_dispatch_matmul_t(a_v, m_v, k_v, b_v, n_v);
+}
+
+/* HOLE-2 — forge_dispatch_matmul_batched(a_all, M, K, b_all, N, batch,
+ * c_all) -> int rc (0 ok / -1 err). Host loop: per problem g copy
+ * A_g = a_all[g·M·K..], B_g = b_all[g·K·N..] into temp farrs, run the
+ * SAME hexa_farr_matmul as the per-problem forge_dispatch_matmul path,
+ * scatter into caller-allocated c_all[g·M·N..]. Byte-eq vs the
+ * per-problem path by construction (same fn, same values) — the
+ * committed flame_forge_batched_test.hexa F-FORGE-BATCHED-EQ oracle. */
+HexaVal hexa_forge_dispatch_matmul_batched(HexaVal a_v, HexaVal m_v,
+                                           HexaVal k_v, HexaVal b_v,
+                                           HexaVal n_v, HexaVal batch_v,
+                                           HexaVal c_v) {
+    int64_t a_id  = hexa_as_num(a_v);
+    int64_t M     = hexa_as_num(m_v);
+    int64_t K     = hexa_as_num(k_v);
+    int64_t b_id  = hexa_as_num(b_v);
+    int64_t N     = hexa_as_num(n_v);
+    int64_t batch = hexa_as_num(batch_v);
+    int64_t c_id  = hexa_as_num(c_v);
+    if (M <= 0 || K <= 0 || N <= 0 || batch <= 0)            return hexa_int(-1);
+    if (a_id < 0 || a_id >= _hx_farr_count)                  return hexa_int(-1);
+    if (b_id < 0 || b_id >= _hx_farr_count)                  return hexa_int(-1);
+    if (c_id < 0 || c_id >= _hx_farr_count)                  return hexa_int(-1);
+    if (!_hx_farr_table[a_id].buf || _hx_farr_table[a_id].len < batch * M * K)
+        return hexa_int(-1);
+    if (!_hx_farr_table[b_id].buf || _hx_farr_table[b_id].len < batch * K * N)
+        return hexa_int(-1);
+    if (!_hx_farr_table[c_id].buf || _hx_farr_table[c_id].len < batch * M * N)
+        return hexa_int(-1);
+    for (int64_t g = 0; g < batch; g++) {
+        HexaVal ag_h = hexa_farr_zeros(hexa_int(M * K));
+        int64_t ag_id = HX_INT(ag_h);
+        if (ag_id < 0)                                       return hexa_int(-1);
+        HexaVal bg_h = hexa_farr_zeros(hexa_int(K * N));
+        int64_t bg_id = HX_INT(bg_h);
+        if (bg_id < 0) { (void)hexa_farr_free(hexa_int(ag_id)); return hexa_int(-1); }
+        /* re-fetch by id after BOTH allocations (realloc moves entries) */
+        {
+            const double* A  = _hx_farr_table[a_id].buf;
+            const double* B  = _hx_farr_table[b_id].buf;
+            double*       Ag = _hx_farr_table[ag_id].buf;
+            double*       Bg = _hx_farr_table[bg_id].buf;
+            if (!A || !B || !Ag || !Bg)                      return hexa_int(-1);
+            for (int64_t i = 0; i < M * K; i++) Ag[i] = A[g * M * K + i];
+            for (int64_t i = 0; i < K * N; i++) Bg[i] = B[g * K * N + i];
+        }
+        HexaVal cg_h = hexa_farr_matmul(hexa_int(ag_id), hexa_int(M),
+                                        hexa_int(K), hexa_int(bg_id),
+                                        hexa_int(N));
+        int64_t cg_id = HX_INT(cg_h);
+        if (cg_id < 0) {
+            (void)hexa_farr_free(hexa_int(ag_id));
+            (void)hexa_farr_free(hexa_int(bg_id));
+            return hexa_int(-1);
+        }
+        {
+            const double* Cg = _hx_farr_table[cg_id].buf;
+            double*       C  = _hx_farr_table[c_id].buf;
+            if (!Cg || !C)                                   return hexa_int(-1);
+            for (int64_t i = 0; i < M * N; i++) C[g * M * N + i] = Cg[i];
+        }
+        (void)hexa_farr_free(hexa_int(ag_id));
+        (void)hexa_farr_free(hexa_int(bg_id));
+        (void)hexa_farr_free(hexa_int(cg_id));
+    }
+    return hexa_int(0);
+}
+/* Bare-symbol bootstrap seam (the deployed prebuilt hexat has no 7-arg
+ * batched builtin — its direct-C path emits the bare literal call;
+ * live OP-36 repro: `_forge_dispatch_matmul_batched` undefined). */
+HexaVal forge_dispatch_matmul_batched(HexaVal a_v, HexaVal m_v, HexaVal k_v,
+                                      HexaVal b_v, HexaVal n_v,
+                                      HexaVal batch_v, HexaVal c_v) {
+    return hexa_forge_dispatch_matmul_batched(a_v, m_v, k_v, b_v, n_v,
+                                              batch_v, c_v);
+}
+
+/* SEAM-3 — hexa_ twins for the OP-16/18 bare-only host fallbacks, so a
+ * hexat built from CURRENT self/codegen.hexa (which lowers these
+ * builtins to hexa_forge_dispatch_*) also links against this seed.
+ * Pure delegation — the OP-18 bodies above stay the single host SSOT. */
+HexaVal hexa_forge_dispatch_groupnorm_gelu(HexaVal x_v, HexaVal gamma_v,
+                                           HexaVal beta_v, HexaVal y_v,
+                                           HexaVal a_v, HexaVal mean_v,
+                                           HexaVal inv_v, HexaVal xhat_v,
+                                           HexaVal t_v, HexaVal c_v,
+                                           HexaVal g_v) {
+    return forge_dispatch_groupnorm_gelu(x_v, gamma_v, beta_v, y_v, a_v,
+                                         mean_v, inv_v, xhat_v, t_v, c_v, g_v);
+}
+HexaVal hexa_forge_dispatch_gelu2(HexaVal g0_v, HexaVal a0_v, HexaVal g1_v,
+                                  HexaVal a1_v, HexaVal n_v) {
+    return forge_dispatch_gelu2(g0_v, a0_v, g1_v, a1_v, n_v);
+}
+HexaVal hexa_forge_dispatch_moe_block2(HexaVal eo0_v, HexaVal eo1_v,
+                                       HexaVal logits_v, HexaVal ex0_v,
+                                       HexaVal ex1_v, HexaVal ex_out_v,
+                                       HexaVal probs_v, HexaVal y_v,
+                                       HexaVal t_v, HexaVal e_v, HexaVal c_v) {
+    return forge_dispatch_moe_block2(eo0_v, eo1_v, logits_v, ex0_v, ex1_v,
+                                     ex_out_v, probs_v, y_v, t_v, e_v, c_v);
+}
+#endif
+OP36_EOF
+  echo "[restore_frozen_seeds] OP-36: appended dispatch audit host fixes (matmul_t + matmul_batched + hexa_ seam twins) to $rt"
+fi
+
 # Unstage everything we just restored so the index reflects the graduated tree;
 # the working-tree files remain as the ephemeral build input.
 git reset -q -- "${FROZEN_SEEDS[@]}" 2>/dev/null || true
