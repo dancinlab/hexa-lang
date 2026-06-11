@@ -1,0 +1,6 @@
+════════════════════════════════════════════════════════════════════════════
+F-OP35-CHECKPOINT — checkpoint save/restore determinism (6th surface) — WIP
+HEXA-0POD OP-35 · CPU-LOCAL (`hexa run`) · 0-GPU · $0 · no vast/pod
+════════════════════════════════════════════════════════════════════════════
+
+STATUS: WIP skeleton — audit in progress. Will be replaced by the full verdict.

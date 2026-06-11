@@ -10,6 +10,9 @@ loop targets what the consumer card + code can carry.
 
 ## milestones (loop self-feeds; add as discovered)
 
+<!-- ANCHOR:OP-35-CHECKPOINT (unique anchor — deep-dive round-10 branch ①: the 6th determinism surface = CHECKPOINT save/restore. A machine-independent run is only useful if you can STOP it, serialize (W, m, v, step t), restore, and RESUME byte-identical to an uninterrupted run. Serialization is a classic determinism hole: float→text round-trip loses bits; binary endianness; missing optimizer state restarts bias-correction; field/tensor iteration order. stdlib's only checkpoint (clm_ckpt.hexa .clm) is an int4-QAT INFERENCE export at fp32 — NOT a training checkpoint) -->
+- [ ] **OP-35 — checkpoint save/restore determinism: resume==uninterrupted byte-eq + exact serialization (6th surface)**
+
 <!-- ANCHOR:OP-34-FOLD-CI-GATE (unique anchor — deep-dive round-9 branch ④: the cross-platform oracles (OP-19 dt_exp / OP-19b dt_erf folds) exist on main but NOTHING ran them in CI — a regression (libm reintroduced on a deterministic site, canonical fold order broken, codegen FP-semantics change) would land silently. Wire the fold checks into CI as a low-blast-radius regression gate on the 3 CI platforms = the same matrix as faithful-nobaseline) -->
 - [x] **OP-34 — machine-independence fold CI regression gate: dt_exp/dt_erf golden folds asserted per-platform** —
   GREEN ($0, 0-GPU, 0-pod, NO vast). WIRING: the 3 faithful-nobaseline jobs (darwin-arm64 · linux-x86_64 ·
