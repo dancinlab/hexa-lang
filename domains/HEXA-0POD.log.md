@@ -1130,3 +1130,27 @@ NOT claimed. $0, no vast/pool/pod. Verdict .verdicts/hexa-0pod/F-OP21-HOPPER-WAR
 - RESIDUAL: BPE path (V=151936) also documented-integer but flame's BPE has a known upstream chr()-unicode
   limitation (not cleanly 0-pod-runnable today) — FLAGGED, not locked.
 - Milestone OP-28 flipped [x]. Verdict .verdicts/hexa-0pod/F-OP28-CORPUS-LOADER-DET.txt. $0 · 0-GPU · 0-pod · no vast.
+
+## OP-29 — machine-independence generalizes to a 2nd flame model arch (decoder block) — GREEN
+- GAP: OP-26b gap G2 (a 2nd architecture beyond CLMConvMoE). The 8 per-op oracles + OP-15 capstone all lock the
+  SAME CLMConvMoE step; OP-29 proves the machine-independent determinism construction GENERALIZES to a SECOND arch.
+- 2nd ARCH: stdlib/flame/decoder_block_lib.hexa — pre-norm Transformer DECODER BLOCK (GQA scaled-dot attention +
+  RoPE + SwiGLU + RMSNorm). Shares NO operators with CLMConvMoE (no conv/MoE/GroupNorm). Tiny CPU config
+  T=4·d=8·nh=2·nkv=1·h=16, fixed LCG seed (no RNG/clock).
+- ORACLES: op29_decoder_block_determinism_eq.hexa (run-to-run, imports production lib) +
+  op29_decoder_block_selfcontained.hexa (cross-platform inline-reduction twin, NO `use`, scp-runnable).
+- RUN-TO-RUN: fwd Xout max|Δ|=0, bwd grads max|Δ|=0, bwd dX max|Δ|=0 (both oracles).
+- HOLE #1 (libm RoPE, closed): nn_rope_build_tables computes inv-freq via libm ln/exp → leaks libm. Closed with
+  deterministic _rope_build_tables_dt (dt_exp/dt_ln/d5_cos/d5_sin) — the OP-19/19b discipline.
+- HOLE #2 (FMA matmul — the REAL find, closed): with #1 closed the block was still byte-eq run-to-run but
+  byte-DIVERGENT cross-platform. Bisect (cache-stage checksum): cos/sin/Bp/X/rin identical; FIRST divergence =
+  Q projection. Isolated to the C farr_matmul kernel (ikj FMA-fused clang -O2): on byte-identical fp64 inputs an
+  8×8·8×4 matmul returns arm64 ck=241449363 vs x86 ck=1401117690 (arm64 fuses a*b+c into one FMA, x86 mul+add).
+  Closed by re-implementing _db_proj_batch_farr/_db_grad_accum_farr as INLINE ascending dot products (no C kernel)
+  → inline ck=1401117690 on BOTH ISAs. Same sequential-reduction discipline the CLMConvMoE oracles use.
+- CROSS-PLATFORM (free CPU pool host, $0, NO vast/NO GPU): local arm64-macos (Darwin) vs aiden x86-linux (glibc)
+  emit byte-IDENTICAL fingerprints FWD `0 0 64 78 44 169 214 65` · GRAD `0 0 128 244 215 140 211 65`; checksums
+  fwd=1520742713 grad=1311989714 identical. aiden /tmp + ~ probe files cleaned; no pod/GPU/vast touched.
+- CONTRACT learned: any flame arch must route matmul through inline ascending reductions, not the FMA-fused
+  farr_matmul, to be byte-identical across ISAs. Machine-independence GENERALIZES beyond CLMConvMoE → Y. G2 closed.
+- Milestone OP-29 flipped [x]. Verdict .verdicts/hexa-0pod/F-OP29-2ND-ARCH.txt. $0 · 0-GPU · 0-pod · no vast.

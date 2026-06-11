@@ -10,6 +10,27 @@ loop targets what the consumer card + code can carry.
 
 ## milestones (loop self-feeds; add as discovered)
 
+<!-- ANCHOR:OP-29-2ND-ARCH (unique anchor — OP-26b gap G2 = a 2nd architecture beyond CLMConvMoE: the 8 oracles + OP-15 capstone all lock the CLMConvMoE step; prove the machine-independent byte-exact determinism construction (dt_exp/dt_sqrt + sequential reductions + ascending accumulation) GENERALIZES to a SECOND flame model arch — a full pre-norm Transformer decoder block (GQA attention + RoPE + SwiGLU + RMSNorm), stdlib/flame/decoder_block_lib) -->
+- [x] **OP-29 — machine-independence generalizes to a 2nd flame model arch (G2 closed, or a 2nd-arch libm hole found+closed)** —
+  GREEN. OP-26b gap G2 = "a 2nd architecture beyond CLMConvMoE": the 8 per-op oracles + OP-15 capstone all lock the
+  SAME CLMConvMoE step. OP-29 proves the machine-independent determinism construction GENERALIZES to a SECOND,
+  structurally-different arch: a pre-norm Transformer DECODER BLOCK (stdlib/flame/decoder_block_lib — GQA scaled-dot
+  attention + RoPE + SwiGLU + RMSNorm), which shares NO operators with CLMConvMoE (no conv, no MoE, no GroupNorm) and
+  exercises a different determinism surface (attention softmax, RoPE rotation, SiLU gate, RMSNorm). ORACLES
+  stdlib/flame/op29_decoder_block_determinism_eq.hexa (run-to-run, imports the production lib) +
+  stdlib/flame/op29_decoder_block_selfcontained.hexa (cross-platform inline-reduction twin, NO `use`, scp-runnable).
+  RESULT: byte-eq run-to-run (fwd Xout · bwd grads · bwd dX all max|Δ|=0) AND cross-platform byte-IDENTICAL on local
+  arm64-macos vs aiden x86-linux (free CPU pool host, $0, NO vast/NO GPU) — identical IEEE-754 fingerprints FWD
+  `0 0 64 78 44 169 214 65` · GRAD `0 0 128 244 215 140 211 65` on BOTH. TWO 2nd-arch holes found+CLOSED: (#1 libm
+  RoPE) the production nn_rope_build_tables computes inv-freq via libm ln/exp — closed with a deterministic
+  _rope_build_tables_dt (dt_exp/dt_ln/d5_cos/d5_sin), the OP-19/19b discipline; (#2 FMA matmul — the real find) the
+  C farr_matmul kernel (ikj FMA-fused under clang -O2) is NOT machine-independent — on byte-identical fp64 inputs an
+  8×8·8×4 matmul byte-diverges arm64 (single FMA on a*b+c) vs x86 (mul+add), bisected to the Q projection — closed by
+  re-implementing _db_proj_batch_farr/_db_grad_accum_farr as INLINE ascending dot products (no C kernel), the same
+  sequential-reduction discipline the CLMConvMoE oracles use. CONTRACT learned: any flame arch must route matmul
+  through inline ascending reductions, not the FMA-fused farr_matmul, to be byte-identical across ISAs. Machine-
+  independence GENERALIZES beyond CLMConvMoE → Y. Verdict .verdicts/hexa-0pod/F-OP29-2ND-ARCH.txt.
+
 <!-- ANCHOR:OP-28-CORPUS-LOADER-DET (unique anchor — the 0-pod-feasible slice of gap G1 (real-corpus end-to-end): the trainer STEP is GPU-build-gated but the INPUT side — the data loader / token pipeline (tokenize->pack->batch) producing (ids,targets) — runs on CPU and IS 0-pod-verifiable; byte-eq oracle proving it deterministic + machine-independent, so the real-corpus INPUT is proven reproducible before the GPU step runs) -->
 - [x] **OP-28 — real-corpus token-pipeline determinism oracle (0-pod slice of gap G1; input side proven, GPU step still gated)** —
   GREEN. 0-pod slice of OP-26b gap G1 (real-corpus end-to-end, GPU-build-gated): the trainer STEP needs the GPU,
