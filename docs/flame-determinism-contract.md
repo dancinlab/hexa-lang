@@ -82,6 +82,84 @@ bit-identical).
    GroupNorm sums in **(t-outer, c-inner)** order; conv/GEMM contractions run
    **j-ascending** (`j = ci*K + k`). (F-OP7/8/9/11/13.)
 
+### cross-ISA invariant: matmul = inline ascending reduction, NOT FMA-fused
+
+> **RULE.** Any flame matmul on the determinism-critical path **must accumulate
+> via inline ascending reductions** (plain `acc = acc + a*b` in hexa codegen).
+> The C runtime `farr_matmul` kernel (`tensor_lib`: ikj order, FMA-fused under
+> clang -O2) is **NOT cross-ISA byte-identical** and is therefore **forbidden on
+> the determinism path**. (F-OP29-2ND-ARCH.)
+
+This is the **third determinism layer** — the cross-ISA layer that sits *on top
+of* the run-to-run + libm-free layers in §1. A model can be perfectly run-to-run
+deterministic (a fixed sequential order, no uninit scratch) **and** libm-free
+(every transcendental hand-rolled `dt_*`) and **still byte-diverge across ISAs**
+if any matmul on its path routes through the FMA-fused kernel. The three layers
+are independent — clearing the first two does **not** clear this one.
+
+```
+  3 INDEPENDENT determinism layers (each must hold for machine-independence):
+
+   layer 1  RUN-TO-RUN          same machine, twice → max|Δ|=0
+            (sequential order · no uninit scratch · no addr-ordered iteration)
+              └ OP-2/7/8/9/11/12/13 + OP-15 capstone
+
+   layer 2  libm-FREE           any transcendental → bit-identical on any IEEE-754
+            (dt_exp/dt_erf/dt_ln/_moe_exp + Newton sqrt, NO libm)
+              └ OP-19 (CE-bwd exp) · OP-19b (GELU erf)
+
+   layer 3  cross-ISA-FMA-FREE  a*b+c contraction → same bytes on arm64 AND x86
+            (inline ascending reductions, NOT the FMA-fused farr_matmul kernel)
+              └ OP-29  ← THIS invariant
+```
+
+**WHY — the FMA-fusion divergence (F-OP29).** clang -O2 contracts a
+multiply-then-add (`a*b + c`) into a **single fused-multiply-add** on arm64 (one
+rounding) but emits a **separate `mul` then `add`** on x86 (two roundings). The
+two forms produce a sub-ULP-different fp64 accumulation, so an *accumulating*
+matmul returns different bytes per ISA — even on byte-identical inputs. OP-29
+isolated this exactly: feeding the `farr_matmul` kernel byte-identical fp64
+operands (`W` checksum `1950370123`, `xbt` checksum `527426024` on **both**
+ISAs), an 8×8·8×4 matmul returned
+
+```
+   farr_matmul (FMA-fused C kernel)        inline ascending acc = acc + a*b
+   ───────────────────────────────        ──────────────────────────────────
+     arm64-macos  C ck = 241449363           arm64-macos  ck = 1401117690
+     x86-linux    C ck = 1401117690    →      x86-linux    ck = 1401117690
+            ↑ DIVERGES (FMA vs mul+add)            ↑ MATCHES (no fusion)
+
+   arm64:  fma(a, b, c)        → 1 rounding   ┐ different fp64 result
+   x86 :   add(mul(a,b), c)    → 2 roundings  ┘ → sub-ULP per-ISA divergence
+```
+
+The inline ascending dot product emits a plain `mul` + `add` in hexa codegen on
+**both** ISAs — there is no `a*b+c` statement for the backend to fuse — so it
+folds to the **same** `1401117690` everywhere. (A 3×3 *identity* probe matched on
+both ISAs and hid the bug at first: an identity matmul has no accumulation to
+fuse. The divergence only appears once a contraction sums ≥2 products.)
+
+**SCOPE.** This is strictly the cross-ISA layer. The `farr_matmul` kernel is
+still perfectly *run-to-run* deterministic (it fuses the same way every time on a
+given machine) and is *libm-free* (it is pure arithmetic). It just is not
+*machine-independent*. So a step that uses it can pass every layer-1 and layer-2
+oracle and still fail a cross-platform byte fold — which is exactly what OP-29
+observed before closing the hole (the decoder block was byte-eq run-to-run per
+platform but byte-divergent arm64 vs x86 until the matmul was de-fused).
+
+**HOW to comply.** On the determinism path, **do not call `farr_matmul`** (nor
+any C kernel that lets clang fuse `a*b+c`). Re-implement the projection /
+grad-accumulator as an **inline ascending-order dot product** — the same
+sequential-reduction discipline §1.2/§1.3 already mandate for every other sum,
+and the reason the CLMConvMoE oracles were *accidentally* cross-ISA-safe (they
+never used `farr_matmul`; their conv/GEMM contractions are inline ascending
+loops). OP-29 closed the decoder-block hole this way: `_db_proj_batch_farr` and
+`_db_grad_accum_farr` were re-implemented as inline ascending dots (no C kernel).
+If a fused C matmul is unavoidable for performance off the determinism path,
+provide a **non-FMA accumulation** (e.g. force `-ffp-contract=off`, or split the
+multiply and add into separate statements the backend cannot recombine) and
+re-measure the cross-ISA byte fold. (F-OP29-2ND-ARCH.)
+
 ## per-phase locked identities
 
 Each row = one step phase, its oracle, the canonical-order invariant it locks,
@@ -172,6 +250,12 @@ A non-exhaustive checklist — any of these silently breaks `max|Δ| = 0`:
   hole); do NOT revert it to libm `erf` (re-opens the arch/OS ULP divergence) and do
   NOT make it piecewise (a series-then-clamp/tail erf straddles its boundary under
   in-register-vs-stored rounding and breaks `max|Δ|=0`).
+- **Routing a determinism-path matmul through the FMA-fused C `farr_matmul`
+  kernel** (or any C kernel clang -O2 can fold `a*b+c` into a single FMA). It is
+  run-to-run deterministic but **cross-ISA divergent** (arm64 single-FMA vs x86
+  mul+add → `241449363` vs `1401117690` on the same fp64 inputs). Use an inline
+  ascending-order dot product instead — see the **cross-ISA invariant** in §1.
+  (F-OP29.)
 
 ## adding a new oracle
 
