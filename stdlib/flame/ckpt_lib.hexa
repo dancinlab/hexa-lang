@@ -1,0 +1,123 @@
+// ════════════════════════════════════════════════════════════════════════════
+//  ckpt_lib.hexa — flame deterministic TRAINING checkpoint (HEXA-0POD OP-35).
+//
+//  THE 6TH DETERMINISM SURFACE: checkpoint save/restore. A machine-independent
+//  training run (F-OP15/19/19b/28/29/33 locked step · input · schedule · arch)
+//  is only useful if you can STOP it, serialize the FULL training state, restore,
+//  and RESUME with the trajectory byte-identical to an uninterrupted run.
+//
+//  AUDIT (what existed before this lib — see F-OP35-CHECKPOINT verdict):
+//    stdlib/flame/clm_ckpt.hexa (.clm v0.1/v0.2) is an int4-QAT INFERENCE export:
+//      (a) weights stored as int4 codes + fp32 scales, ext entries fp32 — flame's
+//          training state is fp64; an fp64→fp32 store LOSES 29 mantissa bits →
+//          restore ≠ original → the resumed trajectory diverges from step k+1;
+//      (b) NO optimizer state (AdamW m, v) and NO step count t — a "resume" from
+//          it restarts bias-correction at t=1 → diverges even with exact weights.
+//    flame_load_pt / pt_loader are PyTorch import readers, not save paths.
+//    → there was NO training checkpoint in stdlib. This lib is the minimal
+//      deterministic one.
+//
+//  FORMAT "FCK\x01" v1 — binary, LITTLE-ENDIAN, FIXED field order, fp64-EXACT:
+//    [MAGIC 'F','C','K',0x01]                                    (4 bytes)
+//    [t_step  u32-le]   — AdamW 1-based step count ALREADY APPLIED (resume
+//                         passes t_step+1 to the next opt_adamw_step)  (4 bytes)
+//    [n_params u32-le]                                            (4 bytes)
+//    per param, in the CALLER-PINNED canonical order (for CLMConvMoE: the
+//    clm_step.hexa 17-param order — embed ecW ecB tcW tcB tgG tgB rW rB e0W
+//    e0B e1W e1B noG noB roW roB):
+//      [len u32-le] [len × f64-le W] [len × f64-le m] [len × f64-le v]
+//
+//  WHY each choice (the classic serialization determinism holes, closed):
+//    · BINARY f64-le, NOT text — printf-style %f/%g round-trips lose bits
+//      (to_string is NOT shortest-round-trip guaranteed); f64_to_bytes_le /
+//      bytes_to_f64_le reinterpret the IEEE-754 bit pattern → save→load is
+//      BIT-EXACT for every value class incl denormals, -0.0, ±inf, NaN
+//      (payload preserved — verified in op35_ckpt_resume_eq adversarial gate).
+//    · LITTLE-ENDIAN PINNED — the byte layout is the format, not the host's;
+//      a checkpoint written on arm64-macos restores bit-exactly on x86-linux.
+//    · m, v, t INCLUDED — AdamW is stateful; omitting any of the three silently
+//      "works" but diverges (demonstrated in-band by the oracle's negative
+//      controls: wrong-t resume and fp32-truncated resume both give Δ ≠ 0).
+//    · FIXED field order, length-prefixed — no dict/set iteration, no
+//      address-dependent ordering; the byte stream is a pure function of
+//      (state, param order), so identical state ⇒ identical file bytes.
+//
+//  F-OP35-CKPT-RESUME    : save@k → restore into FRESH state → resume k+1..N
+//                          == uninterrupted N-step run, bit-for-bit (W, m, v,
+//                          per-step losses).
+//  F-OP35-CKPT-ROUNDTRIP : serialize→file→deserialize is float_to_bits-identical
+//                          on adversarial IEEE-754 values.
+//  Oracle: stdlib/flame/op35_ckpt_resume_eq.hexa · verdict
+//  .verdicts/hexa-0pod/F-OP35-CHECKPOINT.txt
+// ════════════════════════════════════════════════════════════════════════════
+
+use "stdlib/flame/tensor_lib"
+
+fn _ck_push_u32(buf, n: int) {
+    buf.push(n & 0xFF); buf.push((n / 0x100) & 0xFF)
+    buf.push((n / 0x10000) & 0xFF); buf.push((n / 0x1000000) & 0xFF)
+}
+fn _ck_rd_u32(rb, off: int) -> int {
+    return rb[off] + rb[off+1]*0x100 + rb[off+2]*0x10000 + rb[off+3]*0x1000000
+}
+fn _ck_push_f64(buf, f: float) {
+    let b = f64_to_bytes_le(f)
+    let mut i = 0
+    while i < 8 { buf.push(b[i]); i = i + 1 }
+}
+
+// ckpt_begin — append the header: magic "FCK\x01" + applied step t + param count.
+pub fn ckpt_begin(buf, t_step: int, n_params: int) {
+    buf.push(70); buf.push(67); buf.push(75); buf.push(1)   // "FCK\x01"
+    _ck_push_u32(buf, t_step)
+    _ck_push_u32(buf, n_params)
+}
+
+// ckpt_save_param — append ONE parameter's full training state:
+// [len u32-le][len×f64 W][len×f64 m][len×f64 v]. Call once per param, in the
+// canonical order. fp64-exact (bit-pattern reinterpret, no text).
+pub fn ckpt_save_param(buf, W: int, m: int, v: int, n: int) {
+    _ck_push_u32(buf, n)
+    let mut i = 0
+    while i < n { _ck_push_f64(buf, t_get(W, i)); i = i + 1 }
+    let mut j = 0
+    while j < n { _ck_push_f64(buf, t_get(m, j)); j = j + 1 }
+    let mut k = 0
+    while k < n { _ck_push_f64(buf, t_get(v, k)); k = k + 1 }
+}
+
+// ckpt_magic_ok — header sanity: byte buffer starts with "FCK\x01".
+pub fn ckpt_magic_ok(rb) -> int {
+    if len(rb) < 12 { return 0 }
+    if rb[0] == 70 && rb[1] == 67 && rb[2] == 75 && rb[3] == 1 { return 1 }
+    return 0
+}
+
+// ckpt_step — the AdamW step count already applied when the checkpoint was
+// taken (resume continues with t = ckpt_step + 1).
+pub fn ckpt_step(rb) -> int { return _ck_rd_u32(rb, 4) }
+
+// ckpt_nparams — number of parameter records in the file.
+pub fn ckpt_nparams(rb) -> int { return _ck_rd_u32(rb, 8) }
+
+// ckpt_body_off — byte offset of the first parameter record.
+pub fn ckpt_body_off() -> int { return 12 }
+
+// ckpt_param_len — element count of the parameter record starting at `off`.
+pub fn ckpt_param_len(rb, off: int) -> int { return _ck_rd_u32(rb, off) }
+
+// ckpt_load_param — read ONE parameter record at `off` into caller-allocated
+// (W_out, m_out, v_out) tensors (allocate ckpt_param_len elements); returns the
+// offset of the next record. Bit-exact: bytes_to_f64_le reinterprets the stored
+// IEEE-754 pattern verbatim.
+pub fn ckpt_load_param(rb, off: int, W_out: int, m_out: int, v_out: int) -> int {
+    let n = _ck_rd_u32(rb, off)
+    let mut p = off + 4
+    let mut i = 0
+    while i < n { t_set(W_out, i, bytes_to_f64_le(rb, p)); p = p + 8; i = i + 1 }
+    let mut j = 0
+    while j < n { t_set(m_out, j, bytes_to_f64_le(rb, p)); p = p + 8; j = j + 1 }
+    let mut k = 0
+    while k < n { t_set(v_out, k, bytes_to_f64_le(rb, p)); p = p + 8; k = k + 1 }
+    return p
+}
