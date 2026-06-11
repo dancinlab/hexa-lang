@@ -83,6 +83,30 @@ loop targets what the consumer card + code can carry.
   was already inline. libm-CLEAN (GELU via dt_erf/dt_exp; no RMSNorm so no _nn_sqrt libm on this path). Machine-
   independence GENERALIZES to 3 structurally-distinct archs. Verdict .verdicts/hexa-0pod/F-OP31-3RD-ARCH.txt.
 
+<!-- ANCHOR:OP-32-4TH-ARCH (unique anchor — OP-15/29/31 proved machine-independence on 3 archs (CLMConvMoE · decoder block · MLP); OP-32 generalizes to a FOURTH structurally-distinct arch exercising a NEW primitive class: a spiking LIF RECURRENT network (spiking_lib flame_event_threshold + flame_refractory_step + flame_stdp_pair) — sequential state-carry across timesteps (recurrence = a new determinism surface: state-threading order), event thresholding (>= branch), integer refractory countdown, clip, and LOCAL STDP learning (non-backprop). spiking_lib primitives are pure t_* loops (NO farr_matmul, NO transcendental) → OP-30-compliant by construction; the oracle's recurrent/input current matvec is inline-ascending + an in-band FMA diag like OP-31) -->
+- [x] **OP-32 — machine-independence on a 4th flame arch (new primitive class) + OP-30 compliance** —
+  GREEN. Generalizes from 3 archs to FOUR: machine-independent byte-exact determinism now holds on a spiking LIF
+  RECURRENT network with local STDP/Hebbian plasticity — the first RECURRENT (state-threaded across T=32 timesteps),
+  first EVENT-DRIVEN, and first NON-BACKPROP-learning arch in the series. NEW primitives vs all 3 proven archs: event
+  thresholding (v≥v_th), integer refractory countdown w/ clamp, clip, winner-take-all argmax, pair-STDP + competitive
+  Hebbian local learning. 4th arch = PRODUCTION spiking_lib (flame_event_threshold + flame_refractory_step +
+  flame_stdp_pair) + plasti_sim (ps_present chain). ORACLES stdlib/flame/op32_spiking_determinism_eq.hexa (run-to-run;
+  imports prod plasti_sim + verbatim spiking CPU primitives) + stdlib/flame/op32_spiking_selfcontained.hexa
+  (cross-platform twin + TWO in-band OP-30 FMA diagnostics). RESULT: byte-eq run-to-run (raster · plastic W · membrane v
+  · traces · plasti_sim W/winners all max|Δ|=0, non-trivial: 25 spikes, STDP moved weights 0.2549) AND cross-platform
+  byte-IDENTICAL local arm64-macos vs aiden x86-linux ($0, NO vast/GPU) — identical checksums (raster 236398270 / W
+  876398044 / v 147958574) + identical fingerprints RASTER `0 0 0 124 77 46 172 65` · W `0 0 0 238 98 30 202 65` · V
+  `0 0 0 92 86 163 161 65`. OP-30: substrate compliant BY CONSTRUCTION (pure t_* loops, no farr_matmul); currents
+  inline-ascending; DIAG-A (rate-coded real-valued drive through FMA-fused farr_matmul) byte-DIVERGES arm64 1478294112
+  vs x86 210297454 (live reproduction), while NEW FINDING DIAG-B: the binary {0,1} spike pattern through the SAME fused
+  kernel is byte-IDENTICAL (1881150137 both) — binary-spike matvecs are PROVABLY (a·b exact for b∈{0,1} ⇒ fused≡unfused)
+  and now MEASURABLY FMA-immune; the OP-30 boundary is precision-structural. libm-CLEAN by construction (decays are
+  binary-exact rationals 15/16 · 7/8 · 13/16 — no transcendental on the arch). HOLE-2 FOUND (pre-existing, documented
+  not closed): `use spiking_lib` does not LINK on CPU-only hosts — flame_stdp_pair_gpu's builtin lowers to
+  hexa_forge_dispatch_stdp_pair whose CPU body is ABSENT from the regenerated runtime.c (header+codegen+CUDA-emit only;
+  never committed) → packaging follow-up, not a determinism hole. Machine-independence GENERALIZES to 4 structurally-
+  distinct archs. Verdict .verdicts/hexa-0pod/F-OP32-4TH-ARCH.txt.
+
 <!-- ANCHOR:OP-30-CROSSISA-CONTRACT (unique anchor — OP-29 surfaced a cross-cutting find: the C farr_matmul FMA-fused kernel byte-DIVERGES across ISAs (arm64 single-FMA vs x86 mul+add under clang -O2); OP-29 closed it by re-implementing matmul as inline ascending reductions. That contract requirement currently lives only in the OP-29 milestone+verdict — OP-30 formalizes it as a FIRST-CLASS, discoverable invariant in docs/flame-determinism-contract.md so a future contributor can't miss it: flame matmul on the det path MUST route through inline ascending reductions, NOT the FMA-fused farr_matmul) -->
 - [x] **OP-30 — cross-ISA matmul invariant formalized in the determinism contract (FMA-fused farr_matmul forbidden on the det path)** —
   DOCS-COMPLETE (0-pod, NO GPU/vast). OP-29's cross-cutting find (the C farr_matmul FMA-fused kernel byte-DIVERGES
