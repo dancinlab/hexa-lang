@@ -1,0 +1,113 @@
+// @raw117_exempt
+// OP-32b byte-eq oracle: flame_stdp_pair_gpu (production lib, host dispatch
+// hexa_forge_dispatch_stdp_pair on 0-GPU host) vs flame_stdp_pair (the
+// OP-32-proven CPU reference). Same LCG fills as op32 oracles.
+use "stdlib/flame/spiking_lib"
+
+fn _abs(x: float) -> float { if x < 0.0 { return 0.0 - x } return x }
+fn _flame_lcg_next(state: int) -> int {
+    let s = state * 6364136223846793005 + 1442695040888963407
+    let m = s % 2147483647
+    if m < 0 { return 0 - m }
+    return m
+}
+fn _flame_lcg_unit(v: int) -> float { return (to_float(v) / 2147483647.0) * 2.0 - 1.0 }
+fn t_fill_lcg2(t: int, n: int, seed: int, scale: float) {
+    let mut st = seed
+    let mut i = 0
+    while i < n {
+        st = _flame_lcg_next(st)
+        t_set(t, i, _flame_lcg_unit(st) * scale)
+        i = i + 1
+    }
+}
+fn t_fill_lcg_binary(t: int, n: int, seed: int) {
+    let mut st = seed
+    let mut i = 0
+    while i < n {
+        st = _flame_lcg_next(st)
+        if _flame_lcg_unit(st) > 0.0 { t_set(t, i, 1.0) } else { t_set(t, i, 0.0) }
+        i = i + 1
+    }
+}
+fn _cksum(t: int, n: int) -> int {
+    let mut h = 1469598103
+    let mut i = 0
+    while i < n {
+        let bits = float_to_bits(t_get(t, i))
+        h = (h * 1099511 + bits) % 2147483647
+        if h < 0 { h = 0 - h }
+        i = i + 1
+    }
+    return h
+}
+
+fn main() {
+    let n = 24
+    let nn = n * n
+    let w = t_zeros(nn)
+    let tr_pre = t_zeros(n)
+    let tr_post = t_zeros(n)
+    let spike = t_zeros(n)
+    t_fill_lcg2(w, nn, 1234567, 0.9)          // real-valued weights near clip range
+    t_fill_lcg2(tr_pre, n, 7654321, 1.0)      // real-valued traces
+    t_fill_lcg2(tr_post, n, 2468135, 1.0)
+    t_fill_lcg_binary(spike, n, 1357911)      // binary spike vector
+
+    let a_plus = 0.21
+    let a_minus = 0.17
+    let w_max = 0.875                          // engages clip on |w|>0.875 cells
+
+    // CPU reference (OP-32-proven primitive, pure t_* loop)
+    let ref_out = flame_stdp_pair(w, tr_pre, tr_post, spike, a_plus, a_minus, w_max)
+    // production GPU wrapper -> host dispatch (new OP-32b body)
+    let gpu_out = flame_stdp_pair_gpu(w, tr_pre, tr_post, spike, a_plus, a_minus, w_max)
+
+    let mut maxd = 0.0
+    let mut mismatch = 0
+    let mut i = 0
+    while i < nn {
+        let dv = _abs(t_get(ref_out, i) - t_get(gpu_out, i))
+        if dv > maxd { maxd = dv }
+        if dv != 0.0 { mismatch = mismatch + 1 }
+        i = i + 1
+    }
+    // sanity: diagonal passthrough + clip bound on the dispatch output
+    let mut diag_bad = 0
+    let mut clip_bad = 0
+    let mut k = 0
+    while k < n {
+        let dref = t_get(w, k * n + k)
+        let mut dexp = dref
+        if dexp > w_max { dexp = w_max }
+        if dexp < 0.0 - w_max { dexp = 0.0 - w_max }
+        if t_get(gpu_out, k * n + k) != dexp { diag_bad = diag_bad + 1 }
+        k = k + 1
+    }
+    let mut m = 0
+    while m < nn {
+        let v = t_get(gpu_out, m)
+        if v > w_max { clip_bad = clip_bad + 1 }
+        if v < 0.0 - w_max { clip_bad = clip_bad + 1 }
+        m = m + 1
+    }
+    // non-trivial dynamics: the update must actually move weights
+    let mut moved = 0.0
+    let mut p = 0
+    while p < nn {
+        let dv2 = _abs(t_get(gpu_out, p) - t_get(w, p))
+        if dv2 > moved { moved = dv2 }
+        p = p + 1
+    }
+    print("OP32B-BYTEEQ n=" + to_string(n) + " mismatch=" + to_string(mismatch)
+          + " maxd=" + to_string(maxd))
+    print("OP32B-CKSUM ref=" + to_string(_cksum(ref_out, nn))
+          + " gpu=" + to_string(_cksum(gpu_out, nn)))
+    print("OP32B-DIAG bad=" + to_string(diag_bad) + " OP32B-CLIP bad=" + to_string(clip_bad)
+          + " moved=" + to_string(moved))
+    if mismatch == 0 && maxd == 0.0 && diag_bad == 0 && clip_bad == 0 && moved > 0.0 {
+        print("OP32B-GATE GREEN")
+    } else {
+        print("OP32B-GATE RED")
+    }
+}
