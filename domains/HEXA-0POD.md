@@ -10,6 +10,9 @@ loop targets what the consumer card + code can carry.
 
 ## milestones (loop self-feeds; add as discovered)
 
+<!-- ANCHOR:OP-19G-SUMMER-5TH-ENV (unique anchor — deep-dive round-10 branch ②: formalize summer as the 5th RECORDED environment row of the machine-independence matrix. Summer (a distinct x86_64-linux glibc host from aiden, possibly a different glibc minor/distro) has been used as a substitute leg (OP-33/35) but was never RECORDED as an environment row with its exact glibc/distro/kernel fingerprint. Adding it diversifies the glibc-version axis and formalizes what OP-33/35 ran ad-hoc. Self-contained oracles only — summer's older hexa miscompiles cross-module imports (F-OP33/35 quirk)) -->
+- [ ] **OP-19g — summer recorded as 5th environment (distinct glibc x86 host): golden folds verified + matrix row**
+
 <!-- ANCHOR:OP-35-CHECKPOINT (unique anchor — deep-dive round-10 branch ①: the 6th determinism surface = CHECKPOINT save/restore. A machine-independent run is only useful if you can STOP it, serialize (W, m, v, step t), restore, and RESUME byte-identical to an uninterrupted run. Serialization is a classic determinism hole: float→text round-trip loses bits; binary endianness; missing optimizer state restarts bias-correction; field/tensor iteration order. stdlib's only checkpoint (clm_ckpt.hexa .clm) is an int4-QAT INFERENCE export at fp32 — NOT a training checkpoint) -->
 - [x] **OP-35 — checkpoint save/restore determinism: resume==uninterrupted byte-eq + exact serialization (6th surface)** —
   GREEN ($0, CPU `hexa run` + pool summer x86-linux; NO GPU/vast/pod). AUDIT: NO training checkpoint existed in

@@ -1,0 +1,19 @@
+════════════════════════════════════════════════════════════════════════════
+F-OP19G-SUMMER-5TH-ENV — summer recorded as the 5th environment of the
+machine-independence matrix (distinct glibc x86_64-linux host vs aiden)
+HEXA-0POD OP-19g · 0-GPU · free pool ONLY (summer, sidecar pool) · ZERO vast · $0
+════════════════════════════════════════════════════════════════════════════
+
+STATUS: WIP — skeleton pushed first (STORM discipline). Fingerprint + fold
+runs land in subsequent commits on this branch.
+
+PLAN
+  1. Fingerprint summer (distro / kernel / glibc `ldd --version` / CPU model).
+  2. Run the SELF-CONTAINED fold oracles on summer:
+       op19_crossplatform_selfcontained.hexa  (dt_exp CE-bwd fold)
+       op19b_crossplatform_erf.hexa           (dt_erf GELU FWD/BWD folds)
+     + breadth lanes (op33 schedule / op35 xplat) as feasible.
+     Golden values: dt_exp 7679248634312321699 · dt_erf FWD 4548590605583584556
+     · dt_erf BWD 4249661408190172843.
+  3. Record the summer row in docs/flame-machine-independent-training.md's
+     environment table (5th recorded environment; 6th counting musl-Alpine).
