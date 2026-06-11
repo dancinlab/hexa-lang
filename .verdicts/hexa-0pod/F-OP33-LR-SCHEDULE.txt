@@ -1,0 +1,145 @@
+F-OP33-LR-SCHEDULE — the LR-SCHEDULER determinism surface (5th surface):
+        audit + deterministic warmup+cosine scheduler (d5_cos) + N=500 schedule
+        oracle byte-eq run-to-run AND cross-platform + the libm-cos divergence
+        DEMONSTRATED in-band (10/500 steps differ across Darwin/glibc).
+HEXA-0POD OP-33 · CPU-LOCAL (`hexa run`) · 0-GPU · $0 · no vast/pod
+════════════════════════════════════════════════════════════════════════════
+
+CONTEXT — the question OP-23b sidestepped
+-----------------------------------------
+flame's step path is fully machine-independent (no libm transcendental:
+dt_exp/dt_erf/dt_ln + Newton sqrt — F-OP19/19b/29). But the LR SCHEDULE is a
+SEPARATE per-step float surface feeding `lr` into AdamW. The standard
+transformer schedule (linear warmup + cosine decay) needs cos(); libm `cos`
+is NOT correctly-rounded and differs across arch/OS libm — the exact hole
+class F-OP19 measured for `exp` (1-ULP CE-bwd divergence). lr off by 1 ULP →
+AdamW update differs → weights diverge → the machine-independence claim
+breaks the moment anyone uses a libm-cos schedule. OP-23b's drift harness
+(tool/bench/flame_traj_drift_tf32_op23b.cu lr_at(): host double `cos(M_PI*prog)`)
+computed the schedule ONCE and passed it identically to both lanes — so the
+schedule was never itself cross-platform-tested in production form.
+
+[AUDIT] does a production scheduler exist? does it call libm?
+--------------------------------------------------------------
+Swept stdlib/flame (optim_lib · train_lib · nn_lib · clm_train · clm_prod ·
+clm_large · clm_* trainers) for cosine/warmup/schedule/lr_* per-step arithmetic:
+
+  (1) NO production LR scheduler existed in stdlib/flame. Every trainer takes a
+      FIXED scalar `lr` (opt_adamw_step / adamw_step / train loops). The
+      schedule surface was 100% USER-SIDE — exactly where a user reaches for
+      the libm `cos` builtin (which IS live: `cos(1.0)` compiles+runs today).
+  (2) stdlib/optim.hexa `scheduled_lr` (legacy, top-level dialect) wraps
+      `cosine_lr`/`warmup_lr` BUILTINS THAT NO LONGER EXIST in the current
+      toolchain — probe `cosine_lr(0.001,100,1000,0.0001)` FAILS to build
+      (hexa 0.1.0-dispatch). Dead code, not a live hole; left as-is (legacy
+      dialect file, documented here).
+  (3) self/ml/gradient_accumulation.hexa has ga_warmup_cosine_lr with a
+      5-term Taylor ga_cos_approx — deterministic but crude (8th-order) and in
+      the self/ dialect, not the flame stdlib surface.
+  (4) No OTHER schedule-class float arithmetic found on the flame training
+      loop (no weight-decay/beta/temperature ramps; wd & betas are fixed
+      scalars; OP-23b/24 wired per-step lr from the host harness only).
+
+VERDICT: scheduler ABSENT in stdlib (case b) + the libm hole REAL for the
+user-side schedule (libm cos live, and measured divergent — below).
+
+[LOCK] the canonical machine-independent scheduler (new primitive)
+------------------------------------------------------------------
+stdlib/flame/optim_lib.hexa  pub fn opt_lr_warmup_cosine(base_lr, floor_frac,
+                                                          t, n_steps, warmup)
+  t in [1..n_steps] (1-based, matching AdamW t):
+    t <= warmup : lr = base · t/warmup                 (linear ramp 0→base)
+    else        : prog = (t−warmup)/(n_steps−warmup)
+                  cosf = 0.5·(1 + d5_cos(π·prog))      (1..0)
+                  lr   = base · (floor + (1−floor)·cosf)
+  cos = d5_cos (flame_math: mod-2π reduce + 14-term Taylor — the F-OP29 RoPE
+  primitive; pure + − × ÷ IEEE-754 double) · π = d5_pi() exact double ·
+  fold order PINNED (see optim_lib header CANONICAL ORDER block).
+  Same formula as the OP-23b harness lr_at() with cos routed through d5_cos.
+
+[ORACLE] stdlib/flame/op33_lr_schedule_determinism_eq.hexa
+----------------------------------------------------------
+Self-contained (NO `use` — the OP-28/29 scp/stdin pattern; d5_cos + schedule
+inlined verbatim). N=500, warmup=50, base_lr=1e-3, floor=0.05 (the OP-23b
+config). Computes (a) the d5 schedule TWICE → run-to-run max|Δ| gate,
+(b) the libm-cos twin (IDENTICAL fold order, only cos differs), (c) FULL
+per-step IEEE-754 byte dump (f64_to_bytes_le, 500 lines per lane) +
+order-sensitive checksum fingerprints for the cross-platform diff.
+
+LOCAL arm64-macos (Darwin 25.5.0, hexa 0.1.0-dispatch):
+  (1) RUN-TO-RUN d5 schedule max|Δ| = 0.0
+  (3) libm-cos lane vs d5 lane (this host): bit-diff steps = 189 / 500   max|Δ| = 3.18484e-19
+  d5   schedule checksum = 598834071
+  libm schedule checksum = 849024739
+  CROSSPLAT-FINGERPRINT-D5   = 0 0 128 203 189 216 193 65
+  CROSSPLAT-FINGERPRINT-LIBM = 0 0 128 113 139 77 201 65
+  F-OP33-LR-SCHEDULE = 1
+PROCESS-TO-PROCESS byte-eq: two independent `hexa run` invocations, full
+44889-byte output diffed → (no diff). BYTE-EQ: YES.
+
+SUMMER x86_64-linux (glibc, sidecar pool CPU host @192.168.50.60, $0):
+  (1) RUN-TO-RUN d5 schedule max|Δ| = 0.0
+  (3) libm-cos lane vs d5 lane (this host): bit-diff steps = 192 / 500   max|Δ| = 3.18484e-19
+  d5   schedule checksum = 598834071
+  libm schedule checksum = 990987107
+  CROSSPLAT-FINGERPRINT-D5   = 0 0 128 203 189 216 193 65
+  CROSSPLAT-FINGERPRINT-LIBM = 0 0 128 177 161 136 205 65
+  F-OP33-LR-SCHEDULE = 1
+(aiden x86-linux was unreachable this round — ssh timeout; summer is the same
+arch/OS class glibc x86_64, the strongest available contrast to arm64-Darwin.
+summer toolchain note below.)
+
+CROSS-PLATFORM diff of the FULL per-step byte dumps (500 lines per lane):
+  D5   lane: 0 / 500 lines differ  → the schedule is BYTE-IDENTICAL
+             arm64-macos == x86_64-linux at every step. MACHINE-INDEPENDENT.
+  LIBM lane: 10 / 500 lines differ → libm cos DIVERGES Darwin vs glibc at
+             t = 121 180 367 381 387 391 394 407 414 433
+             each by 1–4 ULP in the low mantissa byte, e.g.:
+               t=121  local 153 84 235 154 14 229 78 63   summer 154 84 ...
+               t=367  local  66 242 224 59 160 132 47 63  summer  68 242 ...
+               t=433  local  89 86 152 54 116 123 26 63   summer  85 86 ...
+  → THE HOLE IS REAL AND DEMONSTRATED (not latent): a libm-cos warmup+cosine
+    schedule hands DIFFERENT lr values to AdamW on different platforms at 10
+    of 500 steps (~2%) — weights then diverge from the first such step. The
+    EXACT F-OP19 pattern (libm exp: 4/4096 grads), now measured for cos on
+    the schedule surface.
+
+[COST OF THE SWAP] d5_cos vs libm cos, same host: 189–192/500 steps differ by
+≤ 3.18e-19 absolute (~ULPs on lr≈1e-3..1e-5; rel ~1e-15) — the usual
+"matches-libm" → "matches-across-ALL-platforms" trade (F-OP19 framing).
+
+GATE (g5)
+---------
+  [x] audit verdict: NO stdlib scheduler (user-side surface) + legacy
+      scheduled_lr DEAD (builtins gone) + libm cos live = real hole class
+  [x] LOCK: opt_lr_warmup_cosine (d5_cos, pinned fold order) added to
+      stdlib/flame/optim_lib.hexa as the canonical scheduler
+  [x] N=500 schedule oracle byte-eq RUN-TO-RUN (max|Δ|=0, both hosts)
+      + PROCESS-TO-PROCESS full-output byte-eq
+  [x] CROSS-PLATFORM byte-identical: d5 lane 0/500 diff, fingerprints equal
+      (arm64-macos == x86_64-linux)
+  [x] libm-cos divergence DEMONSTRATED in-band: 10/500 steps, 1–4 ULP,
+      Darwin vs glibc (REAL-AND-CLOSED, not latent)
+  [x] contract doc updated (docs/flame-determinism-contract.md — SCHEDULE
+      surface entry citing this verdict)
+
+HONEST (g5) notes
+-----------------
+· aiden (the OP-19/28/29 host) was DOWN (ssh timeout); the x86-linux leg ran
+  on summer instead — same ISA/OS/libc class (glibc x86_64), hexa
+  0.1.0-dispatch at origin/main 40a18614.
+· summer toolchain repair (incidental, host-local only): its checkout carried
+  MIXED-GENERATION gitignored runtime files (stale self/runtime.c without the
+  hxlcl_* shims + newer runtime_core.c calling them → clang implicit-decl
+  errors) and HEXA_PREBUILT_RUNTIME pointed at a deleted build/runtime.a.
+  Fixed by checking out origin/main, scp'ing the local consistent generated
+  runtime.c/runtime_core.c pair, rebuilding runtime.o + build/runtime.a
+  (clean), and using the committed prebuilt build/hexat_linux. No repo change.
+· The oracle's d5_cos/d5_reduce/d5_pi are inlined VERBATIM from flame_math
+  (the OP-28/29 self-contained pattern, g61 advisory acknowledged) — keep in
+  sync if flame_math changes.
+· The libm lane's same-host bit-diff count differs local 189 vs summer 192 —
+  consistent with the cross-platform divergence (each platform's libm rounds
+  a different subset of inputs away from the Taylor value).
+· stdlib/optim.hexa's dead scheduled_lr was NOT revived/removed — out of
+  flame scope, legacy dialect; documented here as dead.

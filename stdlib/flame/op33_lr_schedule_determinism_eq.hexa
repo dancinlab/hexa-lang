@@ -1,0 +1,222 @@
+// @raw117_exempt
+// ════════════════════════════════════════════════════════════════════════
+// stdlib/flame/op33_lr_schedule_determinism_eq.hexa
+// HEXA-0POD OP-33 · LR-SCHEDULE determinism oracle (5th surface) · NO `use`
+//
+// THE SURFACE: the per-step LR schedule (linear warmup + cosine decay — the
+// standard transformer schedule). flame's step path is libm-free
+// (dt_exp/dt_erf/dt_ln · Newton sqrt — F-OP19/19b/29), but the SCHEDULE is a
+// separate per-step float computation that feeds lr into AdamW. The cosine
+// decay needs cos(); the libm `cos` builtin is NOT correctly-rounded — it can
+// differ across arch/OS libm by 1 ULP (the EXACT hole class F-OP19 measured
+// for `exp`). lr differs by 1 ULP → the AdamW update differs → weights
+// diverge → the machine-independence claim breaks the moment a user reaches
+// for libm cos in a schedule. OP-23b's drift harness SIDESTEPPED this (its
+// schedule was computed once on one host and passed identically to both
+// lanes); production has no such luxury.
+//
+// THE LOCK: opt_lr_warmup_cosine (stdlib/flame/optim_lib.hexa) — warmup ramp
+// + cosine decay with cos routed through d5_cos (flame_math: mod-2π reduce +
+// 14-term Taylor, the F-OP29 RoPE primitive). Pure + − × ÷ IEEE-754 double
+// ops → bit-identical on any IEEE-754 platform.
+//
+// THIS ORACLE (self-contained, OP-28/29 scp/stdin pattern — inlines d5_cos +
+// the schedule verbatim so it runs on ANY hexa host with no checkout):
+//   (1) RUN-TO-RUN  — computes the N=500 d5 schedule twice; gates max|Δ|=0.
+//   (2) CROSS-PLATFORM — dumps the FULL per-step IEEE-754 byte pattern
+//       (f64_to_bytes_le, 500 lines) of the d5 lane AND the libm-cos lane,
+//       plus order-sensitive checksum fingerprints. Run on two platforms and
+//       `diff` the dumps: d5 lane must be byte-identical everywhere; the
+//       libm lane either DIVERGES (hole demonstrated in-band) or agrees on
+//       the tested pair (then the hole is LATENT — same framing as F-OP19's
+//       libm-exp before the 4/4096 divergence was found).
+//   (3) IN-BAND DELTA — counts steps where libm-cos bits != d5 bits on THIS
+//       host and reports max|Δ| (the cost of the deterministic swap: ~ULPs).
+//
+// HONEST (g5): the oracle EMITS bytes; the cross-platform verdict is the
+// diff of two real runs (local arm64-macos vs pool x86-linux). No tolerance.
+// $0 — `hexa run`, CPU-only, no GPU/vast/pod.
+//
+// F-OP33-LR-SCHEDULE : .verdicts/hexa-0pod/F-OP33-LR-SCHEDULE.txt
+// ════════════════════════════════════════════════════════════════════════
+
+// ── flame_math d5 primitives (inlined VERBATIM — keep in sync) ──────────
+fn d5_two_pi() -> float { return 6.283185307179586 }
+fn d5_pi() -> float { return 3.141592653589793 }
+
+fn d5_reduce(x: float) -> float {
+    let tp = d5_two_pi()
+    let mut r = x
+    while r > d5_pi()  { r = r - tp }
+    while r < 0.0 - d5_pi() { r = r + tp }
+    return r
+}
+
+fn d5_cos(x: float) -> float {
+    let r = d5_reduce(x)
+    let r2 = r * r
+    let mut term = 1.0
+    let mut acc = 1.0
+    let mut k = 1
+    while k < 14 {
+        term = 0.0 - term * r2 / to_float((2*k-1) * (2*k))
+        acc = acc + term
+        k = k + 1
+    }
+    return acc
+}
+
+// ── the schedule (inlined VERBATIM from stdlib/flame/optim_lib.hexa) ────
+fn opt_lr_warmup_cosine(base_lr: float, floor_frac: float,
+                        t: int, n_steps: int, warmup: int) -> float {
+    if warmup > 0 && t <= warmup {
+        return base_lr * (to_float(t) / to_float(warmup))
+    }
+    if t >= n_steps { return base_lr * floor_frac }
+    let prog = to_float(t - warmup) / to_float(n_steps - warmup)
+    let cosf = 0.5 * (1.0 + d5_cos(d5_pi() * prog))
+    return base_lr * (floor_frac + (1.0 - floor_frac) * cosf)
+}
+
+// ── the libm-cos twin (the hole this oracle measures) — IDENTICAL fold
+//    order, only cos differs: libm `cos` builtin instead of d5_cos ────────
+fn lr_warmup_cosine_libm(base_lr: float, floor_frac: float,
+                         t: int, n_steps: int, warmup: int) -> float {
+    if warmup > 0 && t <= warmup {
+        return base_lr * (to_float(t) / to_float(warmup))
+    }
+    if t >= n_steps { return base_lr * floor_frac }
+    let prog = to_float(t - warmup) / to_float(n_steps - warmup)
+    let cosf = 0.5 * (1.0 + cos(d5_pi() * prog))
+    return base_lr * (floor_frac + (1.0 - floor_frac) * cosf)
+}
+
+// ── helpers (OP-29 pattern) ─────────────────────────────────────────────
+fn _maxdiff(a: int, b: int, n: int) -> float {
+    let mut m = 0.0
+    let mut i = 0
+    while i < n {
+        let d = farr_get(a, i) - farr_get(b, i)
+        let ad = if d < 0.0 { 0.0 - d } else { d }
+        if ad > m { m = ad }
+        i = i + 1
+    }
+    return m
+}
+
+fn _farr_checksum(t: int, n: int) -> int {
+    let mut acc = 1469598903
+    let mut i = 0
+    while i < n {
+        let b = f64_to_bytes_le(farr_get(t, i))
+        let mut k = 0
+        while k < len(b) {
+            acc = (acc * 131 + b[k] + i) % 2147483647
+            k = k + 1
+        }
+        i = i + 1
+    }
+    return acc
+}
+
+fn _print_bytes_line(tag: string, t: int, v: float) {
+    print(tag); print(" t="); print(t); print(" bytes=")
+    let b = f64_to_bytes_le(v)
+    let mut k = 0
+    while k < len(b) { print(" "); print(b[k]); k = k + 1 }
+    println("")
+}
+
+fn _bits_eq(a: float, b: float) -> bool {
+    let ba = f64_to_bytes_le(a)
+    let bb = f64_to_bytes_le(b)
+    let mut k = 0
+    while k < len(ba) {
+        if ba[k] != bb[k] { return false }
+        k = k + 1
+    }
+    return true
+}
+
+// ════════════════════════════════════════════════════════════════════════
+println("=== HEXA-0POD OP-33 · LR-schedule determinism oracle (5th surface) ===")
+println("  schedule: linear warmup 50 steps 0->base, cosine decay base->0.05*base over 450")
+println("  config:   N=500  warmup=50  base_lr=0.001  floor_frac=0.05  (the OP-23b schedule)")
+
+let N = 500
+let WARMUP = 50
+let BASE = 0.001
+let FLOOR = 0.05
+
+// (1) RUN-TO-RUN: two independent passes of the d5 schedule
+let s1 = farr_zeros(N)
+let s2 = farr_zeros(N)
+let sl = farr_zeros(N)
+let mut t = 1
+while t <= N {
+    let _ = farr_set(s1, t - 1, opt_lr_warmup_cosine(BASE, FLOOR, t, N, WARMUP))
+    t = t + 1
+}
+let mut t2 = 1
+while t2 <= N {
+    let _ = farr_set(s2, t2 - 1, opt_lr_warmup_cosine(BASE, FLOOR, t2, N, WARMUP))
+    t2 = t2 + 1
+}
+let mut t3 = 1
+while t3 <= N {
+    let _ = farr_set(sl, t3 - 1, lr_warmup_cosine_libm(BASE, FLOOR, t3, N, WARMUP))
+    t3 = t3 + 1
+}
+
+let rr_dev = _maxdiff(s1, s2, N)
+print("  (1) RUN-TO-RUN d5 schedule max|Δ| = "); println(rr_dev)
+
+// (3) IN-BAND DELTA: libm-cos lane vs d5 lane on THIS host
+let mut nbitdiff = 0
+let mut ti = 0
+while ti < N {
+    if !_bits_eq(farr_get(s1, ti), farr_get(sl, ti)) { nbitdiff = nbitdiff + 1 }
+    ti = ti + 1
+}
+let libm_dev = _maxdiff(s1, sl, N)
+print("  (3) libm-cos lane vs d5 lane (this host): bit-diff steps = ")
+print(nbitdiff); print(" / "); print(N)
+print("   max|Δ| = "); println(libm_dev)
+
+// checksum fingerprints (order-sensitive — the OP-28/29 cross-platform key)
+let ck_d5 = _farr_checksum(s1, N)
+let ck_lm = _farr_checksum(sl, N)
+print("  d5   schedule checksum = "); println(ck_d5)
+print("  libm schedule checksum = "); println(ck_lm)
+let fb = f64_to_bytes_le(to_float(ck_d5))
+print("  CROSSPLAT-FINGERPRINT-D5   = ")
+let mut bi = 0
+while bi < len(fb) { print(fb[bi]); print(" "); bi = bi + 1 }
+println("")
+let lb = f64_to_bytes_le(to_float(ck_lm))
+print("  CROSSPLAT-FINGERPRINT-LIBM = ")
+let mut bj = 0
+while bj < len(lb) { print(lb[bj]); print(" "); bj = bj + 1 }
+println("")
+
+// (2) FULL per-step byte dump — diff this block across platforms
+println("--- FULL BYTE DUMP (d5 lane, then libm lane) ---")
+let mut td = 0
+while td < N {
+    _print_bytes_line("D5", td + 1, farr_get(s1, td))
+    td = td + 1
+}
+let mut tl = 0
+while tl < N {
+    _print_bytes_line("LIBM", tl + 1, farr_get(sl, tl))
+    tl = tl + 1
+}
+println("--- END BYTE DUMP ---")
+
+if rr_dev == 0.0 {
+    println("F-OP33-LR-SCHEDULE = 1")
+    println("PASS — d5 LR schedule byte-eq run-to-run; libm-free => machine-independent.")
+} else {
+    println("F-OP33-LR-SCHEDULE = 0")
+    println("FAIL — d5 schedule not byte-eq run-to-run.")
+}
