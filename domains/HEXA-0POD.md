@@ -10,6 +10,9 @@ loop targets what the consumer card + code can carry.
 
 ## milestones (loop self-feeds; add as discovered)
 
+<!-- ANCHOR:OP-31-3RD-ARCH (unique anchor — OP-29 proved machine-independence on a 2nd flame arch (decoder block); OP-31 generalizes to a THIRD structurally-distinct arch — a plain feed-forward MLP (nn_lib nn_linear_fwd + GELU, NO attention/RoPE/conv/MoE/norm) — and verifies the OP-30 cross-ISA-matmul invariant (inline ascending reduction, NOT FMA-fused farr_matmul) holds. The production nn_linear_fwd routes through forge_dispatch_matmul → FMA-fused farr_matmul (tensor_lib L58 "ikj order, FMA-fused under clang -O2") = a REAL OP-30 hole; close it inline-ascending like OP-29) -->
+- [ ] **OP-31 — machine-independence on a 3rd flame arch + OP-30 cross-ISA-matmul invariant verified (or violation found+closed)**
+
 <!-- ANCHOR:OP-30-CROSSISA-CONTRACT (unique anchor — OP-29 surfaced a cross-cutting find: the C farr_matmul FMA-fused kernel byte-DIVERGES across ISAs (arm64 single-FMA vs x86 mul+add under clang -O2); OP-29 closed it by re-implementing matmul as inline ascending reductions. That contract requirement currently lives only in the OP-29 milestone+verdict — OP-30 formalizes it as a FIRST-CLASS, discoverable invariant in docs/flame-determinism-contract.md so a future contributor can't miss it: flame matmul on the det path MUST route through inline ascending reductions, NOT the FMA-fused farr_matmul) -->
 - [x] **OP-30 — cross-ISA matmul invariant formalized in the determinism contract (FMA-fused farr_matmul forbidden on the det path)** —
   DOCS-COMPLETE (0-pod, NO GPU/vast). OP-29's cross-cutting find (the C farr_matmul FMA-fused kernel byte-DIVERGES

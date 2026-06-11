@@ -1,0 +1,161 @@
+// @raw117_exempt
+// ════════════════════════════════════════════════════════════════════════
+// stdlib/flame/op31_mlp_determinism_eq.hexa
+// HEXA-0POD OP-31 · 3rd-arch run-to-run determinism oracle (imports PROD lib)
+//
+// The import-based twin of op31_mlp_selfcontained.hexa: drives the PRODUCTION
+// nn_lib MLP primitives (nn_linear_fwd + nn_gelu_fwd + nn_linear_bwd +
+// nn_gelu_bwd) — the real flame feed-forward stack — and asserts the 3-layer
+// MLP fwd+bwd is byte-eq RUN-TO-RUN (max|Δ|=0) on CPU.
+//
+// 3rd arch = a plain Linear→GELU→Linear→GELU→Linear MLP. Structurally DISTINCT
+// from CLMConvMoE (OP-15) and the decoder block (OP-29): no conv, no MoE, no
+// attention, no RoPE, no norm — every layer is a pure GEMM, the purest stress
+// of the OP-30 cross-ISA matmul invariant.
+//
+// NOTE (OP-30): the PRODUCTION nn_linear_fwd routes through forge_dispatch_
+// matmul → the FMA-fused C `farr_matmul` kernel (tensor_lib L58). That kernel
+// is byte-eq RUN-TO-RUN per platform (so this oracle PASSES here) but is NOT
+// machine-independent across ISAs (OP-29 root cause). The cross-platform
+// machine-independence is proven by the inline-ascending self-contained twin
+// (op31_mlp_selfcontained.hexa), which closes the OP-30 hole.
+// ════════════════════════════════════════════════════════════════════════
+
+use "stdlib/flame/nn_lib"
+use "stdlib/flame/tensor_lib"
+
+fn _abs(x: float) -> float { if x < 0.0 { return 0.0 - x } return x }
+fn _maxdiff(a: int, b: int, n: int) -> float {
+    let mut m = 0.0
+    let mut i = 0
+    while i < n {
+        let dv = _abs(farr_get(a, i) - farr_get(b, i))
+        if dv > m { m = dv }
+        i = i + 1
+    }
+    return m
+}
+fn _flame_lcg_next(state: int) -> int {
+    let s = state * 6364136223846793005 + 1442695040888963407
+    let m = s % 2147483647
+    if m < 0 { return 0 - m }
+    return m
+}
+fn _flame_lcg_unit(v: int) -> float { return (to_float(v) / 2147483647.0) * 2.0 - 1.0 }
+fn t_fill_lcg2(t: int, n: int, seed: int, scale: float) {
+    let mut st = seed
+    let mut i = 0
+    while i < n {
+        st = _flame_lcg_next(st)
+        let _ = farr_set(t, i, _flame_lcg_unit(st) * scale)
+        i = i + 1
+    }
+}
+
+// 3-layer MLP forward using PRODUCTION nn_linear_fwd + nn_gelu_fwd.
+//   x[B·d0] → L1 → GELU → L2 → GELU → L3. Caches z1/a1/z2/a2 for bwd.
+fn mlp_fwd_prod(x: int, W1: int, b1: int, W2: int, b2: int, W3: int, b3: int,
+                z1: int, a1: int, z2: int, a2: int, out: int,
+                B: int, d0: int, h1: int, h2: int, dout: int) {
+    let y1 = nn_linear_fwd(x, W1, b1, B, d0, h1)
+    let mut i = 0
+    while i < B * h1 { let _ = farr_set(z1, i, farr_get(y1, i)); i = i + 1 }
+    let _ = farr_free(y1)
+    nn_gelu_fwd(z1, a1, B * h1)
+    let y2 = nn_linear_fwd(a1, W2, b2, B, h1, h2)
+    let mut j = 0
+    while j < B * h2 { let _ = farr_set(z2, j, farr_get(y2, j)); j = j + 1 }
+    let _ = farr_free(y2)
+    nn_gelu_fwd(z2, a2, B * h2)
+    let y3 = nn_linear_fwd(a2, W3, b3, B, h2, dout)
+    let mut k = 0
+    while k < B * dout { let _ = farr_set(out, k, farr_get(y3, k)); k = k + 1 }
+    let _ = farr_free(y3)
+}
+
+// 3-layer MLP backward using PRODUCTION nn_linear_bwd + nn_gelu_bwd.
+fn mlp_bwd_prod(x: int, W1: int, W2: int, W3: int,
+                z1: int, a1: int, z2: int, a2: int, dout_up: int,
+                dW1: int, db1: int, dW2: int, db2: int, dW3: int, db3: int,
+                dx_out: int,
+                B: int, d0: int, h1: int, h2: int, dout: int) {
+    let da2 = farr_zeros(B * h2)
+    nn_linear_bwd(a2, W3, dout_up, dW3, da2, db3, B, h2, dout)
+    let dz2 = farr_zeros(B * h2)
+    nn_gelu_bwd(z2, da2, dz2, B * h2)
+    let da1 = farr_zeros(B * h1)
+    nn_linear_bwd(a1, W2, dz2, dW2, da1, db2, B, h1, h2)
+    let dz1 = farr_zeros(B * h1)
+    nn_gelu_bwd(z1, da1, dz1, B * h1)
+    nn_linear_bwd(x, W1, dz1, dW1, dx_out, db1, B, d0, h1)
+    let _ = farr_free(da2)
+    let _ = farr_free(dz2)
+    let _ = farr_free(da1)
+    let _ = farr_free(dz1)
+}
+
+println("=== HEXA-0POD OP-31 · MLP 3rd-arch run-to-run oracle (PROD nn_lib) ===")
+
+let B = 3
+let d0 = 8
+let h1 = 16
+let h2 = 12
+let dout = 6
+
+let W1 = farr_zeros(d0 * h1); t_fill_lcg2(W1, d0 * h1, 1111, 0.1)
+let b1 = farr_zeros(h1);      t_fill_lcg2(b1, h1, 1212, 0.05)
+let W2 = farr_zeros(h1 * h2); t_fill_lcg2(W2, h1 * h2, 1313, 0.1)
+let b2 = farr_zeros(h2);      t_fill_lcg2(b2, h2, 1414, 0.05)
+let W3 = farr_zeros(h2 * dout); t_fill_lcg2(W3, h2 * dout, 1515, 0.1)
+let b3 = farr_zeros(dout);    t_fill_lcg2(b3, dout, 1616, 0.05)
+let X = farr_zeros(B * d0);   t_fill_lcg2(X, B * d0, 9001, 0.2)
+
+let z1a = farr_zeros(B*h1); let a1a = farr_zeros(B*h1)
+let z2a = farr_zeros(B*h2); let a2a = farr_zeros(B*h2)
+let outA = farr_zeros(B*dout)
+let z1b = farr_zeros(B*h1); let a1b = farr_zeros(B*h1)
+let z2b = farr_zeros(B*h2); let a2b = farr_zeros(B*h2)
+let outB = farr_zeros(B*dout)
+mlp_fwd_prod(X, W1, b1, W2, b2, W3, b3, z1a, a1a, z2a, a2a, outA, B, d0, h1, h2, dout)
+mlp_fwd_prod(X, W1, b1, W2, b2, W3, b3, z1b, a1b, z2b, a2b, outB, B, d0, h1, h2, dout)
+let fwd_dev = _maxdiff(outA, outB, B * dout)
+
+let dout_up = farr_zeros(B*dout)
+let mut iu = 0
+while iu < B*dout { let _ = farr_set(dout_up, iu, farr_get(outA, iu)); iu = iu + 1 }
+
+let np = d0*h1 + h1 + h1*h2 + h2 + h2*dout + dout
+let dW1_1 = farr_zeros(d0*h1); let db1_1 = farr_zeros(h1)
+let dW2_1 = farr_zeros(h1*h2); let db2_1 = farr_zeros(h2)
+let dW3_1 = farr_zeros(h2*dout); let db3_1 = farr_zeros(dout)
+let dx_1 = farr_zeros(B*d0)
+let dW1_2 = farr_zeros(d0*h1); let db1_2 = farr_zeros(h1)
+let dW2_2 = farr_zeros(h1*h2); let db2_2 = farr_zeros(h2)
+let dW3_2 = farr_zeros(h2*dout); let db3_2 = farr_zeros(dout)
+let dx_2 = farr_zeros(B*d0)
+mlp_bwd_prod(X, W1, W2, W3, z1a, a1a, z2a, a2a, dout_up,
+             dW1_1, db1_1, dW2_1, db2_1, dW3_1, db3_1, dx_1, B, d0, h1, h2, dout)
+mlp_bwd_prod(X, W1, W2, W3, z1b, a1b, z2b, a2b, dout_up,
+             dW1_2, db1_2, dW2_2, db2_2, dW3_2, db3_2, dx_2, B, d0, h1, h2, dout)
+
+let g_dW1 = _maxdiff(dW1_1, dW1_2, d0*h1)
+let g_dW2 = _maxdiff(dW2_1, dW2_2, h1*h2)
+let g_dW3 = _maxdiff(dW3_1, dW3_2, h2*dout)
+let g_dx  = _maxdiff(dx_1, dx_2, B*d0)
+let bwd_grad_dev = if g_dW1 > g_dW2 { if g_dW1 > g_dW3 { g_dW1 } else { g_dW3 } }
+                   else { if g_dW2 > g_dW3 { g_dW2 } else { g_dW3 } }
+
+print("  (1) FWD   out  max|Δ| run-to-run = "); println(fwd_dev)
+print("  (2) BWD   dW(max) max|Δ| run-to-run = "); println(bwd_grad_dev)
+print("      BWD   dx   max|Δ| run-to-run = "); println(g_dx)
+
+let det_ok = (fwd_dev == 0.0) && (bwd_grad_dev == 0.0) && (g_dx == 0.0)
+if det_ok {
+    print("F-OP31-3RD-ARCH (run-to-run, prod nn_lib) = 1")
+    println("")
+    println("PASS — production MLP byte-eq run-to-run on CPU.")
+} else {
+    print("F-OP31-3RD-ARCH (run-to-run, prod nn_lib) = 0")
+    println("")
+    println("FAIL.")
+}

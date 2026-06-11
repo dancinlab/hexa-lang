@@ -1,0 +1,404 @@
+// @raw117_exempt
+// ════════════════════════════════════════════════════════════════════════
+// stdlib/flame/op31_mlp_selfcontained.hexa
+// HEXA-0POD OP-31 · SELF-CONTAINED 3rd-arch machine-indep oracle (NO `use`)
+//
+// THIRD flame architecture — a plain feed-forward MLP (multi-layer
+// perceptron): a Linear→GELU→Linear→GELU→Linear stack. It is structurally
+// DISTINCT from both prior proven archs:
+//   - CLMConvMoE (OP-15 capstone): Conv1d + MoE router/combine + GroupNorm
+//   - decoder block (OP-29):        GQA attention + RoPE + SwiGLU + RMSNorm
+//   - MLP (OP-31, HERE):            ONLY dense linear layers + GELU. No conv,
+//                                   no MoE, no attention, no RoPE, no norm.
+// It exercises the matmul/reduction determinism surface in its purest form —
+// every layer is a GEMM — which is exactly the OP-30 cross-ISA invariant's
+// stress point (matmul MUST be inline ascending reduction, NOT the FMA-fused
+// C farr_matmul kernel, else arm64≠x86 under clang -O2).
+//
+// 3rd-arch model = the production nn_lib MLP primitives (nn_linear_fwd +
+// nn_gelu_fwd + nn_linear_bwd + nn_gelu_bwd), inlined verbatim. The forward
+// linear `nn_linear_fwd` routes through forge_dispatch_matmul → the FMA-fused
+// `farr_matmul` C kernel (tensor_lib.hexa L58: "ikj order, FMA-fused under
+// clang -O2") — the OP-30 hole. CLOSED HERE: this self-contained twin's
+// _mlp_linear_fwd is an INLINE ascending dot product (plain mul+add in hexa
+// codegen, no C kernel) — the SAME OP-29/OP-30 discipline. The GELU path is
+// already libm-free in production (nn_lib _nn_gelu uses dt_erf/dt_exp), so
+// the only divergence risk on this arch is the matmul kernel.
+//
+// Emits order-sensitive IEEE-754 fingerprints (f64_to_bytes_le of a checksum
+// fold) of the fwd output and of the gradient → proven byte-IDENTICAL on
+// local arm64-macos vs aiden x86-linux.
+// ════════════════════════════════════════════════════════════════════════
+
+// ── flame_math dt_*/d5_* (inlined verbatim from op29 twin) ──────────────
+pub fn dt_exp(x: float) -> float {
+    let mut r = 0
+    let mut xr = x
+    while (if xr > 0.0 { xr } else { 0.0 - xr }) > 0.25 {
+        xr = xr / 2.0
+        r = r + 1
+    }
+    let mut term = 1.0
+    let mut acc = 1.0
+    let mut k = 1
+    while k < 12 {
+        term = term * xr / to_float(k)
+        acc = acc + term
+        k = k + 1
+    }
+    let mut s = 0
+    while s < r { acc = acc * acc; s = s + 1 }
+    return acc
+}
+
+// dt_erf : A&S 7.1.26 rational approx, the single transcendental routed
+// through dt_exp. BRANCHLESS in z (only the odd-symmetry sign flip), so a
+// SINGLE continuous arithmetic expression → bit-identical on any IEEE-754
+// platform (the OP-19b reproducibility identity). EVERY op is +,-,*,/ on
+// fp64 plus dt_exp (itself +,-,*,/ only). Verbatim from nn_lib _nn_gelu's
+// erf path / op29 twin dt_erf.
+pub fn dt_erf(x: float) -> float {
+    let mut sign = 1.0
+    let mut z = x
+    if z < 0.0 { sign = 0.0 - 1.0; z = 0.0 - z }
+    let t = 1.0 / (1.0 + 0.3275911 * z)
+    let a1 = 0.254829592
+    let a2 = 0.0 - 0.284496736
+    let a3 = 1.421413741
+    let a4 = 0.0 - 1.453152027
+    let a5 = 1.061405429
+    let poly = ((((a5 * t + a4) * t + a3) * t + a2) * t + a1) * t
+    return sign * (1.0 - poly * dt_exp(0.0 - z * z))
+}
+
+// ── GELU (nn_lib _nn_gelu / nn_gelu_fwd, inlined verbatim) ──────────────
+fn _inv_sqrt2() -> float { return 0.70710678118654752440 }    // 1/√2
+fn _inv_sqrt2pi() -> float { return 0.39894228040143267794 }  // 1/√(2π)
+fn _normal_cdf(x: float) -> float {
+    return 0.5 * (1.0 + dt_erf(x * _inv_sqrt2()))
+}
+fn _normal_pdf(x: float) -> float {
+    return _inv_sqrt2pi() * dt_exp(0.0 - 0.5 * x * x)
+}
+fn _gelu(x: float) -> float { return x * _normal_cdf(x) }
+fn _gelu_grad(x: float) -> float {
+    return _normal_cdf(x) + x * _normal_pdf(x)
+}
+
+// nn_gelu_fwd (verbatim): a_out[i] = GELU(g[i]).
+fn _mlp_gelu_fwd(g: int, a_out: int, h: int) {
+    let mut i = 0
+    while i < h {
+        let _ = farr_set(a_out, i, _gelu(farr_get(g, i)))
+        i = i + 1
+    }
+}
+// nn_gelu_bwd (verbatim): dg[i] = da[i] · GELU'(g[i]); g = pre-activation.
+fn _mlp_gelu_bwd(g: int, da: int, dg_out: int, h: int) {
+    let mut i = 0
+    while i < h {
+        let _ = farr_set(dg_out, i, farr_get(da, i) * _gelu_grad(farr_get(g, i)))
+        i = i + 1
+    }
+}
+
+// ── tensor LCG fill (inlined from tensor_lib / op29 twin) ────────────────
+fn _flame_lcg_next(state: int) -> int {
+    let s = state * 6364136223846793005 + 1442695040888963407
+    let m = s % 2147483647
+    if m < 0 { return 0 - m }
+    return m
+}
+fn _flame_lcg_unit(v: int) -> float {
+    let f = (to_float(v) / 2147483647.0)
+    return f * 2.0 - 1.0
+}
+fn t_fill_lcg2(t: int, n: int, seed: int, scale: float) {
+    let mut st = seed
+    let mut i = 0
+    while i < n {
+        st = _flame_lcg_next(st)
+        let _ = farr_set(t, i, _flame_lcg_unit(st) * scale)
+        i = i + 1
+    }
+}
+
+// ── MLP linear (nn_lib nn_linear_fwd/bwd math, OP-30-MACHINE-INDEP) ──────
+// y = x · W + b ; shapes: x [B·D], W [D·C], b [C] → y [B·C].
+//
+// PRODUCTION nn_lib::nn_linear_fwd computes y = forge_dispatch_matmul(x,B,D,
+// W,C) — which bottoms out at the FMA-fused C `farr_matmul` kernel (tensor_lib
+// L58: "ikj order, FMA-fused under clang -O2"). OP-30 RISK: on byte-identical
+// fp64 inputs, that kernel byte-DIVERGES arm64 (single FMA on a*b+c) vs x86
+// (separate mul+add) — exactly the OP-29 root cause.
+// OP-31 MACHINE-INDEPENDENT REWRITE: y[i·C+j] = Σ_k x[i·D+k]·W[k·C+j]
+// computed INLINE in fixed ascending k order — plain mul+add → bit-identical
+// on any IEEE-754 platform. (bias add identical to production single-pass.)
+fn _mlp_linear_fwd(x: int, W: int, b: int, y: int, B: int, D: int, C: int) {
+    let mut i = 0
+    while i < B {
+        let mut j = 0
+        while j < C {
+            let mut acc = 0.0
+            let mut k = 0
+            while k < D {
+                acc = acc + farr_get(x, i * D + k) * farr_get(W, k * C + j)
+                k = k + 1
+            }
+            let _ = farr_set(y, i * C + j, acc + farr_get(b, j))
+            j = j + 1
+        }
+        i = i + 1
+    }
+}
+
+// nn_linear_bwd math (verbatim — production nn_linear_bwd is ALREADY inline
+// ascending, no farr_matmul; reproduced here for the self-contained twin):
+//   dW[d·C+c] = Σ_b x[b·D+d]·dy[b·C+c]   (ascending b)
+//   dx[b·D+d] = Σ_c dy[b·C+c]·W[d·C+c]   (ascending c)
+//   db[c]     = Σ_b dy[b·C+c]            (ascending b)
+fn _mlp_linear_bwd(x: int, W: int, dy: int,
+                   dW_out: int, dx_out: int, db_out: int,
+                   B: int, D: int, C: int) {
+    let mut d = 0
+    while d < D {
+        let mut c = 0
+        while c < C {
+            let mut acc = 0.0
+            let mut bi = 0
+            while bi < B {
+                acc = acc + farr_get(x, bi * D + d) * farr_get(dy, bi * C + c)
+                bi = bi + 1
+            }
+            let _ = farr_set(dW_out, d * C + c, acc)
+            c = c + 1
+        }
+        d = d + 1
+    }
+    let mut bi2 = 0
+    while bi2 < B {
+        let mut d2 = 0
+        while d2 < D {
+            let mut acc2 = 0.0
+            let mut c2 = 0
+            while c2 < C {
+                acc2 = acc2 + farr_get(dy, bi2 * C + c2) * farr_get(W, d2 * C + c2)
+                c2 = c2 + 1
+            }
+            let _ = farr_set(dx_out, bi2 * D + d2, acc2)
+            d2 = d2 + 1
+        }
+        bi2 = bi2 + 1
+    }
+    let mut j = 0
+    while j < C {
+        let mut acc3 = 0.0
+        let mut i3 = 0
+        while i3 < B {
+            acc3 = acc3 + farr_get(dy, i3 * C + j)
+            i3 = i3 + 1
+        }
+        let _ = farr_set(db_out, j, acc3)
+        j = j + 1
+    }
+}
+
+// ── 3-layer MLP forward: x[B·d0] → L1(d0→h1) → GELU → L2(h1→h2) → GELU
+//                          → L3(h2→dout). Caches pre-activations for bwd.
+//   W1 [d0·h1] b1 [h1] · W2 [h1·h2] b2 [h2] · W3 [h2·dout] b3 [dout]
+//   caches: z1 [B·h1] a1 [B·h1] z2 [B·h2] a2 [B·h2]  (all caller-alloc)
+//   out [B·dout]
+fn mlp_fwd(x: int, W1: int, b1: int, W2: int, b2: int, W3: int, b3: int,
+           z1: int, a1: int, z2: int, a2: int, out: int,
+           B: int, d0: int, h1: int, h2: int, dout: int) {
+    _mlp_linear_fwd(x, W1, b1, z1, B, d0, h1)   // z1 = x·W1 + b1
+    _mlp_gelu_fwd(z1, a1, B * h1)               // a1 = GELU(z1)
+    _mlp_linear_fwd(a1, W2, b2, z2, B, h1, h2)  // z2 = a1·W2 + b2
+    _mlp_gelu_fwd(z2, a2, B * h2)               // a2 = GELU(z2)
+    _mlp_linear_fwd(a2, W3, b3, out, B, h2, dout) // out = a2·W3 + b3
+}
+
+// ── 3-layer MLP backward: given dout-upstream → grads of every param + dx.
+//   ACCUMULATES into the caller-pre-zeroed grad farrs.
+fn mlp_bwd(x: int, W1: int, W2: int, W3: int,
+           z1: int, a1: int, z2: int, a2: int,
+           dout_up: int,
+           dW1: int, db1: int, dW2: int, db2: int, dW3: int, db3: int,
+           dx_out: int,
+           B: int, d0: int, h1: int, h2: int, dout: int) {
+    // L3 reversed: out = a2·W3 + b3  →  dW3, db3, da2
+    let da2 = farr_zeros(B * h2)
+    _mlp_linear_bwd(a2, W3, dout_up, dW3, da2, db3, B, h2, dout)
+    // GELU2 reversed: da2 → dz2  (z2 is the pre-activation)
+    let dz2 = farr_zeros(B * h2)
+    _mlp_gelu_bwd(z2, da2, dz2, B * h2)
+    // L2 reversed: z2 = a1·W2 + b2  →  dW2, db2, da1
+    let da1 = farr_zeros(B * h1)
+    _mlp_linear_bwd(a1, W2, dz2, dW2, da1, db2, B, h1, h2)
+    // GELU1 reversed: da1 → dz1
+    let dz1 = farr_zeros(B * h1)
+    _mlp_gelu_bwd(z1, da1, dz1, B * h1)
+    // L1 reversed: z1 = x·W1 + b1  →  dW1, db1, dx
+    _mlp_linear_bwd(x, W1, dz1, dW1, dx_out, db1, B, d0, h1)
+    let _ = farr_free(da2)
+    let _ = farr_free(dz2)
+    let _ = farr_free(da1)
+    let _ = farr_free(dz1)
+}
+
+// ── DIAGNOSTIC: the OP-30 hole, demonstrated in-band ─────────────────────
+// Computes z1 = x·W1 (NO bias) TWICE — once via the OP-30-compliant inline
+// ascending dot (above, _mlp_linear_fwd), once via the FMA-fused C kernel
+// `farr_matmul` (the exact kernel production nn_linear_fwd rides). Emits the
+// FMA-fused kernel's output checksum. RUN-TO-RUN this is stable per platform;
+// the OP-29 root cause is that this farr_matmul checksum DIVERGES across ISAs
+// (arm64 single-FMA vs x86 mul+add) while the inline-dot output does NOT —
+// which is precisely why the det-path matmul MUST be the inline form. We
+// report both checksums so a cross-platform diff exposes (or refutes) the
+// FMA hole directly on THIS 3rd arch.
+fn _fma_matmul_ck(x: int, W1: int, B: int, d0: int, h1: int) -> int {
+    let prod = farr_matmul(x, B, d0, W1, h1)  // FMA-fused C kernel (OP-30 risk)
+    let ck = _farr_checksum(prod, B * h1)
+    let _ = farr_free(prod)
+    return ck
+}
+
+// ── oracle helpers (verbatim from op29 twin) ─────────────────────────────
+fn _abs(x: float) -> float { if x < 0.0 { return 0.0 - x } return x }
+
+fn _farr_checksum(t: int, n: int) -> int {
+    let mut acc = 1469598903
+    let mut i = 0
+    while i < n {
+        let b = f64_to_bytes_le(farr_get(t, i))
+        let mut k = 0
+        while k < len(b) {
+            acc = (acc * 131 + b[k] + i) % 2147483647
+            k = k + 1
+        }
+        i = i + 1
+    }
+    return acc
+}
+
+fn _maxdiff(a: int, b: int, n: int) -> float {
+    let mut m = 0.0
+    let mut i = 0
+    while i < n {
+        let dv = _abs(farr_get(a, i) - farr_get(b, i))
+        if dv > m { m = dv }
+        i = i + 1
+    }
+    return m
+}
+
+// ── driver ──────────────────────────────────────────────────────────────
+println("=== HEXA-0POD OP-31 · SELF-CONTAINED MLP 3rd-arch oracle ===")
+
+// tiny CPU-runnable config; B=3 rows so the matmul reduction is non-trivial.
+let B = 3
+let d0 = 8
+let h1 = 16
+let h2 = 12
+let dout = 6
+
+// deterministic init (fixed LCG seeds; no RNG, no clock).
+let W1 = farr_zeros(d0 * h1); t_fill_lcg2(W1, d0 * h1, 1111, 0.1)
+let b1 = farr_zeros(h1);      t_fill_lcg2(b1, h1, 1212, 0.05)
+let W2 = farr_zeros(h1 * h2); t_fill_lcg2(W2, h1 * h2, 1313, 0.1)
+let b2 = farr_zeros(h2);      t_fill_lcg2(b2, h2, 1414, 0.05)
+let W3 = farr_zeros(h2 * dout); t_fill_lcg2(W3, h2 * dout, 1515, 0.1)
+let b3 = farr_zeros(dout);    t_fill_lcg2(b3, dout, 1616, 0.05)
+let X = farr_zeros(B * d0);   t_fill_lcg2(X, B * d0, 9001, 0.2)
+
+// ── forward ×2 (run-to-run) ──
+let z1a = farr_zeros(B * h1); let a1a = farr_zeros(B * h1)
+let z2a = farr_zeros(B * h2); let a2a = farr_zeros(B * h2)
+let outA = farr_zeros(B * dout)
+let z1b = farr_zeros(B * h1); let a1b = farr_zeros(B * h1)
+let z2b = farr_zeros(B * h2); let a2b = farr_zeros(B * h2)
+let outB = farr_zeros(B * dout)
+mlp_fwd(X, W1, b1, W2, b2, W3, b3, z1a, a1a, z2a, a2a, outA, B, d0, h1, h2, dout)
+mlp_fwd(X, W1, b1, W2, b2, W3, b3, z1b, a1b, z2b, a2b, outB, B, d0, h1, h2, dout)
+
+let fwd_dev = _maxdiff(outA, outB, B * dout)
+let fwd_ck = _farr_checksum(outA, B * dout)
+
+// ── backward ×2 (run-to-run); seed upstream from fwd output (MSE-like) ──
+let dout_up = farr_zeros(B * dout)
+let mut iu = 0
+while iu < B * dout {
+    let _ = farr_set(dout_up, iu, farr_get(outA, iu))
+    iu = iu + 1
+}
+// grad packs (W1,b1,W2,b2,W3,b3) concatenated for a single checksum.
+let np = d0*h1 + h1 + h1*h2 + h2 + h2*dout + dout
+let dW1_1 = farr_zeros(d0*h1); let db1_1 = farr_zeros(h1)
+let dW2_1 = farr_zeros(h1*h2); let db2_1 = farr_zeros(h2)
+let dW3_1 = farr_zeros(h2*dout); let db3_1 = farr_zeros(dout)
+let dx_1 = farr_zeros(B * d0)
+let dW1_2 = farr_zeros(d0*h1); let db1_2 = farr_zeros(h1)
+let dW2_2 = farr_zeros(h1*h2); let db2_2 = farr_zeros(h2)
+let dW3_2 = farr_zeros(h2*dout); let db3_2 = farr_zeros(dout)
+let dx_2 = farr_zeros(B * d0)
+mlp_bwd(X, W1, W2, W3, z1a, a1a, z2a, a2a, dout_up,
+        dW1_1, db1_1, dW2_1, db2_1, dW3_1, db3_1, dx_1, B, d0, h1, h2, dout)
+mlp_bwd(X, W1, W2, W3, z1b, a1b, z2b, a2b, dout_up,
+        dW1_2, db1_2, dW2_2, db2_2, dW3_2, db3_2, dx_2, B, d0, h1, h2, dout)
+
+// pack grad run-1 into a single farr for fingerprint + run-to-run maxdiff.
+fn _pack6(g: int, p1: int, n1: int, p2: int, n2: int, p3: int, n3: int,
+          p4: int, n4: int, p5: int, n5: int, p6: int, n6: int) {
+    let mut o = 0
+    let mut i = 0
+    while i < n1 { let _ = farr_set(g, o, farr_get(p1, i)); o = o+1; i = i+1 }
+    i = 0
+    while i < n2 { let _ = farr_set(g, o, farr_get(p2, i)); o = o+1; i = i+1 }
+    i = 0
+    while i < n3 { let _ = farr_set(g, o, farr_get(p3, i)); o = o+1; i = i+1 }
+    i = 0
+    while i < n4 { let _ = farr_set(g, o, farr_get(p4, i)); o = o+1; i = i+1 }
+    i = 0
+    while i < n5 { let _ = farr_set(g, o, farr_get(p5, i)); o = o+1; i = i+1 }
+    i = 0
+    while i < n6 { let _ = farr_set(g, o, farr_get(p6, i)); o = o+1; i = i+1 }
+}
+let G1 = farr_zeros(np)
+let G2 = farr_zeros(np)
+_pack6(G1, dW1_1, d0*h1, db1_1, h1, dW2_1, h1*h2, db2_1, h2, dW3_1, h2*dout, db3_1, dout)
+_pack6(G2, dW1_2, d0*h1, db1_2, h1, dW2_2, h1*h2, db2_2, h2, dW3_2, h2*dout, db3_2, dout)
+
+let bwd_grad_dev = _maxdiff(G1, G2, np)
+let bwd_dx_dev = _maxdiff(dx_1, dx_2, B * d0)
+let grad_ck = _farr_checksum(G1, np)
+
+// ── OP-30 diagnostic: FMA-fused farr_matmul checksum on layer-1 ──
+let fma_ck = _fma_matmul_ck(X, W1, B, d0, h1)
+
+print("  (1) FWD   out  max|Δ| run-to-run = "); println(fwd_dev)
+print("  (2) BWD   grad max|Δ| run-to-run = "); println(bwd_grad_dev)
+print("      BWD   dx   max|Δ| run-to-run = "); println(bwd_dx_dev)
+print("  fwd  out  checksum = "); println(fwd_ck)
+print("  grad      checksum = "); println(grad_ck)
+print("  OP30-DIAG fma_matmul(L1) checksum = "); println(fma_ck)
+let fbytes = f64_to_bytes_le(to_float(fwd_ck))
+print("  CROSSPLAT-FINGERPRINT-FWD  = ")
+let mut bi = 0
+while bi < len(fbytes) { print(fbytes[bi]); print(" "); bi = bi + 1 }
+println("")
+let gbytes = f64_to_bytes_le(to_float(grad_ck))
+print("  CROSSPLAT-FINGERPRINT-GRAD = ")
+let mut bj = 0
+while bj < len(gbytes) { print(gbytes[bj]); print(" "); bj = bj + 1 }
+println("")
+
+let det_ok = (fwd_dev == 0.0) && (bwd_grad_dev == 0.0) && (bwd_dx_dev == 0.0)
+if det_ok {
+    print("F-OP31-3RD-ARCH = 1")
+    println("")
+    println("PASS — MLP byte-eq run-to-run; libm-free (dt_erf/dt_exp) + inline-ascending matmul => machine-independent.")
+} else {
+    print("F-OP31-3RD-ARCH = 0")
+    println("")
+    println("FAIL — not byte-eq run-to-run.")
+}

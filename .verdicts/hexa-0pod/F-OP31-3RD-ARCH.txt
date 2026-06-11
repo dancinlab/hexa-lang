@@ -1,0 +1,8 @@
+════════════════════════════════════════════════════════════════════════════
+F-OP31-3RD-ARCH — machine-independent byte-exact determinism GENERALIZES to a
+THIRD flame model architecture (a plain feed-forward MLP — NOT CLMConvMoE,
+NOT the decoder block) + the OP-30 cross-ISA-matmul invariant verified
+HEXA-0POD OP-31 · deep-dive round-7 branch ② · CPU-LOCAL `hexa run` · 0-GPU · $0
+════════════════════════════════════════════════════════════════════════════
+
+[WIP SKELETON — results to be filled after local + cross-platform runs.]
