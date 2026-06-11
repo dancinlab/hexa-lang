@@ -302,6 +302,29 @@ loop targets what the consumer card + code can carry.
   B-ring read, the w16b fallback, the descriptor stride consistency) is CPU-pre-validated -> higher first-try odds.
   $0, no vast/pool/pod/GPU; build temp cleaned. Verdict .verdicts/hexa-0pod/F-OP21C-W16-MODES-DERISK.txt.
 
+<!-- ANCHOR:OP-21D-W16-HARDEN (unique anchor — the 0-pod-feasible completeness pass for the H100-gated w16 perf: dry-run + harden tool/wgmma/build_w16.sh into a bullet-proof turnkey kit (no-GPU/no-nvcc clean exit, MODE 0/1 HARD-GATE STOP-before-perf, leak-0 DESTROY trap on every exit) + the OP-29 (#3042) FMA-reference cross-cut check confirming w16's MODE-4 gate cannot be false-failed by cross-ISA FMA divergence; H100 perf measurement STILL gated) -->
+- [x] **OP-21D — build_w16.sh hardened + dry-run + OP-29 FMA-ref check (turnkey bullet-proof; H100 perf still gated)** —
+  the 0-pod-feasible completeness pass over the H100-GATED w16 perf measurement (NO GPU, NO vast). (a) DRY-RAN +
+  HARDENED tool/wgmma/build_w16.sh: bash -n VALID; structural walkthrough confirmed the gate ORDER is correct
+  (provision-guards -> build -> MODE 9 dump -> MODE 0 HARD GATE -> MODE 1 D1-falsifier HARD GATE + field sweep +
+  OP-21B fallback on floor -> MODE 4 bit-exact gate + perf -> SASS -> DESTROY). Added guards: `set -o pipefail`;
+  NVCC_MISSING clean early-exit (instructions); NO_GPU clean early-exit when nvidia-smi absent/empty OR compute_cap
+  != 9.0 (refuses to build for the wrong arch; ZERO-VAST — no auto-rent, only checks an already-provisioned host);
+  MODE 0 + MODE 1 are HARD GATES that `die` BEFORE any MODE 4/perf (no TFLOP/s on a falsified read law); MODE 4
+  per-(S,NST) rel_rms FAIL prints NO perf for that cell + a final STOP if EVERY cell floored; and an EXIT trap that
+  prints the leak-0 DESTROY reminder on EVERY exit path (success OR failure/abort). DRY-RAN on the 0-pod box: both
+  NVCC_MISSING and NO_GPU paths exit clean (code 1) with copy-paste instructions and the DESTROY trap fires. (b) the
+  OP-29 (#3042) FMA cross-cut: AUDITED w16's gate references — WROTE tool/wgmma/w16_op29_ref_check.cpp (clang++,
+  0-pod) proving MODE-1's CPU reference is the OP-29-SAFE inline ascending `acc += a*b` (NOT fmaf-fused; mul+add are
+  separate statements so -ffp-contract cannot synthesize an FMA; deterministic re-run; == w16.cu L558 verbatim; the
+  addmul-vs-FMA Δ is << the 3e-3 gate tolerance), AND that MODE-4's reference is cuBLAS-TF32 ON DEVICE (cublasSgemm +
+  CUBLAS_TF32_TENSOR_OP_MATH, w16.cu L645-647) with NO CPU FMA at all — so the OP-29 cross-ISA FMA-divergence failure
+  mode is STRUCTURALLY ABSENT from the MODE-4 gate and CANNOT false-fail it; the device wgmma K-accumulation order is
+  well-defined (ascending k, slab-order == flat-order 16384/16384). RAN locally: 4/4 PASS, exit 0. HONEST (g5): the
+  H100 perf measurement REMAINS GATED — no wgmma/PTX executed, no TFLOP/s claimed; value = the build kit is now
+  bullet-proof turnkey + the OP-29 subtlety is checked OFF for w16's gate -> highest H100 first-try odds. $0, no
+  vast/pool/pod/GPU. Verdict .verdicts/hexa-0pod/F-OP21D-W16-HARDEN.txt.
+
 <!-- ANCHOR:OP-21-HOPPER-WARPSPEC-DESIGN (unique anchor — 0-pod DESIGN for the Hopper sm_90a wgmma warp-spec TMA pipeline; measure is GPU-gated) -->
 - [x] **OP-21 — Hopper warp-spec TMA pipeline DESIGN + perf-gap analysis + H100 experiment recipe (0-pod, GPU-gated measure)** —
   produced (reading source + verdicts only, $0, 0-GPU) the design for the forge own-GEMM's remaining Hopper

@@ -1,5 +1,26 @@
 # HEXA-0POD — log
 
+## 2026-06-11 — OP-21D DONE: build_w16.sh hardened + dry-run + OP-29 FMA-ref check (turnkey bullet-proof; H100 perf still gated) ($0 · 0-pod)
+- The 0-pod-feasible completeness pass over the H100-GATED w16 perf measurement (NO GPU, NO vast, NO pod).
+- (a) DRY-RAN + HARDENED tool/wgmma/build_w16.sh. bash -n VALID. Structural walkthrough: gate ORDER correct
+  (provision-guards -> build -> MODE 9 -> MODE 0 HARD GATE -> MODE 1 D1-falsifier HARD GATE + sweep + OP-21B
+  fallback -> MODE 4 bit-exact + perf -> SASS -> DESTROY). Guards added: set -o pipefail; NVCC_MISSING clean
+  early-exit; NO_GPU clean early-exit (nvidia-smi absent/empty OR compute_cap != 9.0 -> refuse wrong-arch build,
+  no auto-rent); MODE 0 + MODE 1 HARD GATES die BEFORE any MODE 4/perf; MODE 4 per-cell rel_rms fail prints NO
+  perf + final STOP if all floored; EXIT trap prints leak-0 DESTROY on EVERY exit path.
+- DRY-RAN on the 0-pod box: NVCC_MISSING path AND NO_GPU path both exit clean (code 1) with instructions and the
+  DESTROY trap fires. CONFIRMED.
+- (b) OP-29 (#3042) FMA cross-cut: WROTE tool/wgmma/w16_op29_ref_check.cpp (clang++, 0-pod). Proved MODE-1's CPU
+  reference is the OP-29-SAFE inline ascending `acc += a*b` (not fmaf-fused; == w16.cu L558; FMA Δ << 3e-3 tol),
+  and MODE-4's reference is cuBLAS-TF32 ON DEVICE (no CPU FMA) -> the OP-29 cross-ISA FMA divergence is
+  STRUCTURALLY ABSENT from the MODE-4 gate and CANNOT false-fail it. Device K-accum order well-defined
+  (ascending k, slab==flat 16384/16384). grep: only `fmax` (not fma) in w16.cu CPU paths. RAN: 4/4 PASS.
+- Re-ran the prior 0-pod checks: OP-21B 7/7 PASS, OP-21C 6/6 PASS, OP-21D 4/4 PASS.
+- HONEST (g5): the H100 perf measurement REMAINS GATED — no wgmma/PTX executed, no TFLOP/s claimed. Value = the
+  build kit is now bullet-proof turnkey + the OP-29 subtlety checked OFF -> highest H100 first-try odds.
+- Milestone OP-21D flipped [x]. Verdict .verdicts/hexa-0pod/F-OP21D-W16-HARDEN.txt. $0 · 0-GPU · 0-pod · no vast.
+  Foreign vast pod 40375114 (anima-chat-7b) NOT touched.
+
 ## 2026-06-10 — OP-27 DONE: deterministic TF32 fast-mode reflected into the dojo (0-pod docs) + commons directive DRAFTED for user sign ($0)
 - Reflected the validated deterministic TF32 fast-mode (OP-20 #2999 + OP-23 #3005 + OP-24 #3009 + OP-25 #3007)
   into docs/hexa-dojo.md as a contributor recipe: `### deterministic TF32 fast-mode (precision-uncap)`, inserted

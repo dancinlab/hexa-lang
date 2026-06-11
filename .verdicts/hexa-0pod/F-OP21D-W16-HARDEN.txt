@@ -1,0 +1,120 @@
+F-OP21D-W16-HARDEN — build_w16.sh hardened + dry-run walkthrough + OP-29 FMA-ref check
+=======================================================================================
+HEXA-0POD OP-21D (deep-dive round-6 branch ③, FOREGROUND). 0-pod, no GPU, no vast.
+The w16 Hopper perf MEASUREMENT is H100-gated (no authorization). This is the
+0-pod-feasible completeness pass: dry-run + harden the turnkey build kit + add the
+final CPU-side validation (the OP-29 FMA cross-cut) that de-risks the H100 first-try.
+
+HONEST (g5): the H100 perf measurement REMAINS GATED. No wgmma/PTX executed here, no
+TFLOP/s claimed. Value = the build kit is now bullet-proof turnkey + the OP-29 subtlety
+is checked OFF for w16's gate -> highest H100 first-try odds.
+
+
+1) build_w16.sh — bash -n + STRUCTURAL DRY-RUN WALKTHROUGH
+---------------------------------------------------------
+bash -n tool/wgmma/build_w16.sh -> VALID (no syntax error).
+
+GATE ORDER (verified concrete + correct):
+  PROVISION CHECKLIST (documented, NOT auto-rent — ZERO-VAST)
+   -> ENV provision guards:  GUARD 1 nvcc present+runnable   GUARD 2 sm_90a GPU visible
+   -> BUILD  nvcc -O3 -arch=sm_90a -lcublas -lcuda -DW16_PRODUCER_WG=$PWG -Xptxas -v  (build-fail -> die)
+   -> ptxas -v scan (C7507 setmaxnreg-ignored advisory -> fallback hint)
+   -> MODE 9  canonical-atom layout dump (fault -> die)
+   -> GATE 1/3  MODE 0 canonical-decode probe   (rel_rms 0)  HARD GATE -> die on fail
+   -> GATE 2/3  MODE 1 descriptor-direct probe   (the D1 FALSIFIER)  HARD GATE
+                  on floor: sweep (lbo,sbo,boff,swmode); no HIT -> OP-21B fallback hint + die
+   -> GATE 3/3 + PERF  MODE 4 full GEMM @ S{2048,4096,8192} x NST{3,4,2}
+                  per-cell rel_rms<=3e-3 self-gated by the .cu (returns 2, prints NO perf on fail);
+                  every cell floored -> die (no perf claimed)
+   -> SASS  cuobjdump decode-STS-gone + wgmma-issue count (advisory, not gating)
+   -> HEADLINE  apples Δ vs the W10 70.7 baseline
+   -> DESTROY (leak 0)  fires via EXIT trap on EVERY exit path.
+
+Each step is CONCRETE (no placeholder): every $BIN invocation has explicit args, every flag
+present (-arch=sm_90a, -lcublas, -lcuda, -Xptxas -v, -DW16_PRODUCER_WG). The D1 falsifier
+(MODE 1) runs BEFORE the MODE 4 perf, and the leak-0 destroy is last. Order CORRECT.
+
+build_w16.sh bash -n valid:  YES
+gate order correct:          YES
+
+
+2) HARDENING — guards added (the bullet-proof turnkey changes)
+--------------------------------------------------------------
+  * set -o pipefail        — a faulting MODE 9 dump piped through `head` is no longer masked.
+  * GUARD 1 NVCC_MISSING   — `command -v $NVCC` + `$NVCC --version` runnable check; clean early
+                             exit (code 1) with the NVCC=/usr/local/cuda-12.6/bin/nvcc hint.
+  * GUARD 2 NO_GPU         — three sub-guards: nvidia-smi absent -> die; nvidia-smi present but
+                             no GPU enumerated -> die; compute_cap != 9.0 -> die (refuses to
+                             build for the wrong arch). ZERO-VAST: checks an ALREADY-provisioned
+                             sm_90a host, never auto-rents; exits with provisioning instructions.
+  * BUILD-FAIL die         — build failure dies (cats ptxas log) BEFORE any gate/perf.
+  * MODE 9 FAULT die       — a run/driver fault on the dump stops before the gates.
+  * MODE 0 HARD GATE        — G0 != 0 -> die BEFORE MODE 1/4/perf (no number on a falsified law).
+  * MODE 1 HARD GATE        — floor -> field sweep; no HIT -> OP-21B fallback hint + die.
+  * MODE 4 STOP-on-floor    — per-cell fail prints NO perf; ALL cells floored -> die (no perf).
+  * EXIT trap DESTROY_HINT  — the leak-0 DESTROY reminder prints on EVERY exit (success OR any
+                             failure/abort), so a half-run still reminds you to destroy the pod.
+
+DRY-RUN on the 0-pod box (no nvcc, no GPU):
+  - default (no nvcc): NVCC_MISSING clean exit code 1 + DESTROY trap fired.  CONFIRMED.
+  - fake-nvcc + no nvidia-smi: NO_GPU clean exit + DESTROY trap fired.        CONFIRMED.
+
+
+3) OP-29 FMA-REFERENCE CHECK (#3042 cross-cut) — the MODE-4 reference accumulation
+----------------------------------------------------------------------------------
+OP-29 found the C farr_matmul FMA-FUSED kernel DIVERGES across ISAs (arm64 single fused
+multiply-add = one round; x86 mul+add = two rounds). The contract: a reference matmul that
+must be byte-identical across hosts has to be an inline ascending `acc += a*b` reduction,
+NOT fma()/fmaf()-fused, and not compiled with -ffp-contract=fast.
+
+Applied to w16's gate references (tool/wgmma/w16_op29_ref_check.cpp, clang++, 0-pod, 4/4 PASS):
+
+  D1 (MODE-1 reference, w16.cu L558):
+     `for(kk) a += hA[m*K+kk]*hB[kk*N+n]`  — inline ASCENDING-k, mul and add are SEPARATE
+     operations on `a` (no single `a*b+c` expression), so the compiler cannot legally contract
+     it into one FMA even under -ffp-contract=on. It is OP-29-SAFE: deterministic re-run,
+     reproducible cross-ISA, accumulation ORDER well-defined (ascending k). PASS (D1a).
+     Even if a host DID contract it to one FMA, the addmul-vs-FMA Δ is << the MODE-1 gate
+     tolerance (rel_rms <= 3e-3) -> the gate cannot be false-failed. PASS (D1b).
+
+  D4 (MODE-4 reference, w16.cu L645-647):
+     the FULL-GEMM gate's reference is NOT a CPU matmul at all — it is cuBLAS-TF32 ON DEVICE
+     (cublasSgemm + CUBLAS_TF32_TENSOR_OP_MATH), compared at rel_rms <= 3e-3 (line 685, NOT
+     bit-exact). Because there is NO host FMA reference in MODE 4, the OP-29 cross-ISA FMA
+     divergence failure mode is STRUCTURALLY ABSENT from the MODE-4 gate. We additionally
+     confirmed the device wgmma K-accumulation order is well-defined (TKSW=32 slabs, TK=8
+     inner) and equals a canonical ascending-k reduction (slab-order == flat-order,
+     16384/16384). PASS (D4). And the MODE-4 gate is correctly a TOLERANCE gate (TF32 vs
+     TF32 tensor-core, each with its own internal reduction order), not a memcmp. PASS (D4b).
+
+MODE 4 ref accumulation well-defined (OP-29 check):  YES — the MODE-4 reference is cuBLAS-TF32
+ON DEVICE (no CPU FMA), so OP-29 cannot false-fail it; MODE-1's CPU reference is the
+OP-29-safe inline ascending += (not fmaf-fused). The device K-accum order is ascending-k,
+well-defined. The grep for fma/fmaf in w16.cu found ONLY `fmax` (a max, not fused-multiply-add)
+in the rel_rms denominator — no FMA-fused accumulation anywhere in any CPU reference path.
+
+
+4) WHAT IS STILL H100-GATED (honest)
+------------------------------------
+  - the device wgmma swmode=1 HW de-swizzle actually reading the descriptor as the canonical
+    law predicts (MODE 0/1 rel_rms 0 ON THE REAL DEVICE).
+  - the MODE 4 full-GEMM bit-exact-vs-cuBLAS gate (rel_rms <= 3e-3) on the device.
+  - ALL perf: own (gemm_w16) vs same-binary gemm_w10 (the W10 70.7 apples baseline) vs
+    same-binary cuBLAS-TF32. NO TFLOP/s exists until build_w16.sh runs on an authorized sm_90a.
+  - the OP-21B gemm_w16b device fallback path (if D1 floors).
+
+The 0-pod work (OP-21B/C reference logic + OP-21D hardening + OP-29 audit) maximizes the
+odds that the single H100 session lands first-try, but does NOT substitute for it.
+
+
+5) CPU CHECK RESULTS (re-ran on this 0-pod box, all PASS)
+--------------------------------------------------------
+  OP-21B  tool/wgmma/w16_canon_cpu_check.cpp   -> 7/7 PASS (T1..T7)
+  OP-21C  tool/wgmma/w16_modes_cpu_check.cpp   -> 6/6 PASS (C1a,C1b,C2,C3,C3b,C4)
+  OP-21D  tool/wgmma/w16_op29_ref_check.cpp    -> 4/4 PASS (D1a,D1b,D4,D4b)
+
+Files (this PR):
+  tool/wgmma/build_w16.sh           (hardened; bash -n valid; dry-run confirmed)
+  tool/wgmma/w16_op29_ref_check.cpp (the OP-29 FMA-reference audit; 4/4 PASS)
+
+$0. No vast/pool/pod/GPU. Foreign vast pod 40375114 (anima-chat-7b) NOT touched.
