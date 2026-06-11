@@ -3,13 +3,38 @@
 // stdlib/flame/op29_decoder_block_determinism_eq.hexa
 // HEXA-0POD OP-29 · 2nd-ARCH machine-independence oracle · 0-GPU (`hexa run`)
 //
-// WIP SKELETON (committed first per STORM discipline) — checks filled in
-// subsequent commits.
+// GOAL (OP-26b gap G2): prove the machine-independent byte-exact determinism
+// that the 8 CLMConvMoE per-op oracles + the OP-15 capstone lock GENERALIZES
+// to a SECOND, structurally-DIFFERENT flame model architecture — a full
+// pre-norm Transformer DECODER BLOCK (GQA scaled-dot attention + RoPE +
+// SwiGLU + RMSNorm), stdlib/flame/decoder_block_lib.hexa. This is NOT a
+// CLMConvMoE variant: no conv, no MoE router, no GroupNorm — it exercises
+// attention/softmax, RoPE rotation, SwiGLU, and RMSNorm instead. If the
+// determinism construction is GENERAL (as claimed) it must make this 2nd
+// arch byte-eq run-to-run AND machine-independent too.
 //
-// GOAL (gap G2): prove the machine-independent byte-exact determinism that
-// the 8 CLMConvMoE oracles + OP-15 capstone lock GENERALIZES to a SECOND
-// flame model architecture — a full pre-norm Transformer DECODER BLOCK
-// (GQA attention + RoPE + SwiGLU + RMSNorm), stdlib/flame/decoder_block_lib.
+// THE DETERMINISM CONSTRUCTION under test (same primitives as the CLMConvMoE
+// oracles): dt_exp (Taylor+repeated-square, softmax) · dt_sqrt (24-iter
+// Newton, RMSNorm + attn scale) · _db_silu via dt_exp (SwiGLU) · sequential
+// reductions in fixed ascending order · LCG-deterministic init. EVERY op is
+// +,-,*,/ on fp64 plus dt_*, so the result is bit-IDENTICAL on any IEEE-754
+// platform (x86/arm64 · Darwin/Linux) — the OP-19/19b reproducibility ident.
+//
+// ── 2nd-ARCH libm HOLE (HONEST FINDING, closed here) ─────────────────────
+// decoder_block_lib's fwd/bwd math is dt_*-clean. BUT it consumes RoPE
+// cos/sin TABLES as inputs, and the production builder nn_lib::
+// nn_rope_build_tables_base computes the inverse-frequency via libm
+// `ln(base)` + `exp(ex)` (nn_lib.hexa §512/§521) — so feeding it the
+// production tables would LEAK libm into the 2nd-arch step exactly like the
+// pre-OP-19 CE/GELU path leaked libm exp/erf. OP-29 CLOSES this 2nd-arch
+// hole the same way OP-19/19b closed CE/GELU: a deterministic RoPE builder
+// `_rope_build_tables_dt` that routes the inv-freq through dt_exp/dt_ln and
+// the angle through d5_cos/d5_sin (all pure-FP, NO libm). The block then
+// runs fully libm-free → machine-independent.
+//
+// GATE (g5): block fwd byte-eq run-to-run (max|Δ|=0) AND block bwd grads
+// byte-eq run-to-run (max|Δ|=0) AND deterministic IEEE-754 fingerprint
+// emitted for cross-platform byte-diff (local arm64-macos vs aiden x86-linux).
 // ════════════════════════════════════════════════════════════════════════
 
 use "stdlib/flame/flame_math"
@@ -18,6 +43,185 @@ use "stdlib/flame/decoder_block_lib"
 
 fn _abs(x: float) -> float { if x < 0.0 { return 0.0 - x } return x }
 
-// ── entrypoint (skeleton) ────────────────────────────────────────────────
-println("=== HEXA-0POD OP-29 · decoder-block (2nd arch) machine-indep oracle (WIP) ===")
-println("SKELETON — checks pending")
+// ── deterministic RoPE table builder (closes the 2nd-arch libm hole) ──────
+// Replicates nn_rope_build_tables_base(base=10000) but with EVERY
+// transcendental routed through pure-FP dt_* (NO libm ln/exp):
+//   invf[i] = exp(-(2i/hd)·ln(base))  via  dt_exp(-(2i/hd)·dt_ln(base))
+//   ang     = p · invf
+//   cos/sin = d5_cos(ang) / d5_sin(ang)
+// dt_ln's atanh series converges for x>0 but fastest near 1; base=10000 is
+// far from 1, so we fold ln(10000) = 4·ln(10) and compute ln(10) once via a
+// scaled argument (10 = 2·5; ln near-1 helpers). Simpler + still pure-FP:
+// dt_ln(10000) directly — atanh series with u=(x-1)/(x+1)=0.9998 converges
+// slowly but the 24-term series is deterministic regardless of accuracy
+// (we only need REPRODUCIBILITY, not libm-equality, for the RoPE freq —
+// the angle is then identical run-to-run + cross-platform). To keep the
+// freq well-conditioned we instead build ln(base) by repeated halving:
+//   ln(base) = ln(base/2^k) + k·ln(2), choose k so base/2^k ∈ [1,2).
+fn _dt_ln_stable(x: float) -> float {
+    let mut v = x
+    let mut k = 0
+    while v >= 2.0 { v = v / 2.0; k = k + 1 }
+    while v < 1.0 { v = v * 2.0; k = k - 1 }
+    // v in [1,2); dt_ln converges well here. ln(2) via the same series.
+    return dt_ln(v) + to_float(k) * dt_ln(2.0)
+}
+
+fn _rope_build_tables_dt(T: int, hd: int, cos_out: int, sin_out: int, base: float) {
+    let half = hd / 2
+    let lnb = _dt_ln_stable(base)
+    let mut p = 0
+    while p < T {
+        let mut c = 0
+        while c < hd {
+            let fi = if c < half { c } else { c - half }
+            let ex = (to_float(2 * fi) / to_float(hd)) * lnb
+            let invf = 1.0 / dt_exp(ex)
+            let ang = to_float(p) * invf
+            let _ = farr_set(cos_out, p * hd + c, d5_cos(ang))
+            let _ = farr_set(sin_out, p * hd + c, d5_sin(ang))
+            c = c + 1
+        }
+        p = p + 1
+    }
+}
+
+// ── order-sensitive IEEE-754 checksum over a float farr (machine-indep) ───
+// Folds every element's raw little-endian fp64 bytes into a 63-bit integer
+// accumulator in fixed ascending index order. Pure +,*,% integer math on
+// the EXACT IEEE bytes → identical on any IEEE-754 platform. Captures every
+// mantissa bit (a max|Δ|=0 sibling that is sensitive to sub-ULP changes).
+fn _farr_checksum(t: int, n: int) -> int {
+    let mut acc = 1469598903
+    let mut i = 0
+    while i < n {
+        let b = f64_to_bytes_le(farr_get(t, i))
+        let mut k = 0
+        while k < len(b) {
+            acc = (acc * 131 + b[k] + i) % 2147483647
+            k = k + 1
+        }
+        i = i + 1
+    }
+    return acc
+}
+
+// ── max|Δ| between two float farrs ────────────────────────────────────────
+fn _maxdiff(a: int, b: int, n: int) -> float {
+    let mut m = 0.0
+    let mut i = 0
+    while i < n {
+        let dv = _abs(farr_get(a, i) - farr_get(b, i))
+        if dv > m { m = dv }
+        i = i + 1
+    }
+    return m
+}
+
+// ════════════════════════════════════════════════════════════════════════
+// tiny fixed-seed decoder block (2nd arch — NOT CLMConvMoE)
+//   T=4 positions · d=8 model · nh=2 heads · nkv=1 kv-head (GQA) · h=16 ffn
+// ════════════════════════════════════════════════════════════════════════
+println("=== HEXA-0POD OP-29 · decoder-block (2nd arch) machine-indep oracle ===")
+println("2nd arch = pre-norm Transformer decoder block (GQA attn + RoPE + SwiGLU + RMSNorm)")
+println("           stdlib/flame/decoder_block_lib — NOT a CLMConvMoE variant")
+println("")
+
+let T = 4
+let d = 8
+let nh = 2
+let nkv = 1
+let h = 16
+let hd = d / nh
+
+// deterministic params (fixed LCG seed — no RNG, no wall-clock)
+let np = bp_total(d, nh, nkv, h)
+let Bp = t_zeros(np)
+t_fill_lcg(Bp, np, 4242, 0.1)
+
+// deterministic block input X [T·d]
+let X = t_zeros(T * d)
+t_fill_lcg(X, T * d, 9001, 0.2)
+
+// deterministic RoPE tables (libm-free — closes the 2nd-arch hole)
+let cos = t_zeros(T * hd)
+let sin = t_zeros(T * hd)
+_rope_build_tables_dt(T, hd, cos, sin, 10000.0)
+
+let nc = bc_total(T, d, nh, nkv, h)
+let oXout = bc_off_Xout(T, d, nh, nkv, h)
+
+// ── (1) FORWARD byte-eq run-to-run ───────────────────────────────────────
+let Bc1 = t_zeros(nc)
+let Bc2 = t_zeros(nc)
+nn_decoder_block_fwd(X, Bp, Bc1, cos, sin, T, d, nh, nkv, h)
+nn_decoder_block_fwd(X, Bp, Bc2, cos, sin, T, d, nh, nkv, h)
+
+// compare Xout slice (the block output)
+let xout1 = t_zeros(T * d)
+let xout2 = t_zeros(T * d)
+let mut ix = 0
+while ix < T * d {
+    let _ = farr_set(xout1, ix, farr_get(Bc1, oXout + ix))
+    let _ = farr_set(xout2, ix, farr_get(Bc2, oXout + ix))
+    ix = ix + 1
+}
+let fwd_dev = _maxdiff(xout1, xout2, T * d)
+let fwd_ck = _farr_checksum(xout1, T * d)
+
+// ── (2) BACKWARD byte-eq run-to-run ──────────────────────────────────────
+// upstream gradient dXout = Xout (the L = ½·Σ Xout² convention the lib's
+// own falsifier uses) — deterministic, derived from the fwd output.
+let dXout = t_zeros(T * d)
+let mut ig = 0
+while ig < T * d {
+    let _ = farr_set(dXout, ig, farr_get(Bc1, oXout + ig))
+    ig = ig + 1
+}
+
+let Bg1 = t_zeros(np)
+let Bg2 = t_zeros(np)
+let dX1 = t_zeros(T * d)
+let dX2 = t_zeros(T * d)
+nn_decoder_block_bwd(X, Bp, Bc1, dXout, dX1, Bg1, cos, sin, T, d, nh, nkv, h)
+nn_decoder_block_bwd(X, Bp, Bc2, dXout, dX2, Bg2, cos, sin, T, d, nh, nkv, h)
+
+let bwd_grad_dev = _maxdiff(Bg1, Bg2, np)
+let bwd_dx_dev = _maxdiff(dX1, dX2, T * d)
+let grad_ck = _farr_checksum(Bg1, np)
+
+// ── report + IEEE-754 cross-platform fingerprint ─────────────────────────
+print("  block params bp_total = "); print(np)
+print("  · cache bc_total = "); println(nc)
+println("")
+print("  (1) FWD   Xout max|Δ| run-to-run = "); println(fwd_dev)
+print("  (2) BWD   grad max|Δ| run-to-run = "); println(bwd_grad_dev)
+print("      BWD   dX   max|Δ| run-to-run = "); println(bwd_dx_dev)
+println("")
+print("  fwd  Xout checksum (order-sensitive IEEE fold) = "); println(fwd_ck)
+print("  grad      checksum (order-sensitive IEEE fold) = "); println(grad_ck)
+
+// the two cross-platform fingerprints a 2nd host byte-diffs
+let fbytes = f64_to_bytes_le(to_float(fwd_ck))
+print("  CROSSPLAT-FINGERPRINT-FWD  (f64_to_bytes_le of fwd checksum)  = ")
+let mut bi = 0
+while bi < len(fbytes) { print(fbytes[bi]); print(" "); bi = bi + 1 }
+println("")
+let gbytes = f64_to_bytes_le(to_float(grad_ck))
+print("  CROSSPLAT-FINGERPRINT-GRAD (f64_to_bytes_le of grad checksum) = ")
+let mut bj = 0
+while bj < len(gbytes) { print(gbytes[bj]); print(" "); bj = bj + 1 }
+println("")
+println("")
+
+// ── GATE ──
+let det_ok = (fwd_dev == 0.0) && (bwd_grad_dev == 0.0) && (bwd_dx_dev == 0.0)
+if det_ok {
+    print("F-OP29-2ND-ARCH = 1")
+    println("")
+    println("PASS — 2nd flame model arch (Transformer decoder block: GQA attn + RoPE + SwiGLU + RMSNorm) is byte-eq run-to-run: fwd Xout max|Δ|=0, bwd grads max|Δ|=0, bwd dX max|Δ|=0. Built libm-free (dt_exp/dt_sqrt + deterministic RoPE _rope_build_tables_dt closing the nn_rope_build_tables libm ln/exp hole) => machine-independent by the OP-19/19b reproducibility identity. The determinism construction GENERALIZES beyond CLMConvMoE. Cross-platform: byte-diff the two CROSSPLAT-FINGERPRINT lines on a 2nd host (local arm64-macos vs aiden x86-linux).")
+} else {
+    print("F-OP29-2ND-ARCH = 0")
+    println("")
+    println("FAIL — decoder block NOT byte-eq run-to-run; a nondeterminism leaked (investigate the max|Δ| lines above).")
+}
