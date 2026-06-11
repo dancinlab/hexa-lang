@@ -1,0 +1,143 @@
+════════════════════════════════════════════════════════════════════════════════
+ F-OP34-FOLD-CI-GATE — machine-independence FOLD checks wired into CI as a
+ regression gate: dt_exp/dt_erf golden folds asserted per-platform
+ HEXA-0POD OP-34 (deep-dive round-9 branch ④) · 0-GPU · 0-pod · ZERO vast · $0
+════════════════════════════════════════════════════════════════════════════════
+
+GOAL
+  The cross-platform determinism oracles (OP-19 dt_exp + OP-19b dt_erf folds)
+  exist on main but NOTHING ran them in CI — a regression (someone reintroduces
+  libm on a deterministic site, breaks a canonical fold order, or a codegen
+  change alters FP semantics) would land SILENTLY. OP-34 adds a low-blast-radius
+  CI gate that runs the deterministic-fold oracles on the 3 CI platforms and
+  FAILS if any fold drifts from the recorded golden values.
+
+────────────────────────────────────────────────────────────────────────────────
+ 1. FEASIBILITY CHECK → WIRING CHOICE (the cheapest honest wiring)
+────────────────────────────────────────────────────────────────────────────────
+  INSPECTED .github/workflows/nobaseline-gate.yml (faithful-nobaseline): each of
+  the 3 platform jobs (darwin-arm64 macos-latest · linux-x86_64 ubuntu-latest ·
+  linux-arm64 ubuntu-24.04-arm) builds a WORKING ./hexa from the shared release
+  path (tool/release_build: Stage 0b edge-pulls build/runtime.a → Stage 0a-pre
+  build/hexat → Stage 0/1/2 → ./hexa) and already asserts `./hexa --version`.
+  → A built hexa binary IS available in those jobs ⇒ per the feasibility ladder,
+  the fold checks are APPENDED THERE (cheapest: zero extra builds, zero new
+  jobs, the exact same 3-platform matrix the machine-independence result needs).
+
+  THE .c=0 SEAM (why `hexa run` works there with the seeds removed): `hexa run`
+  = `hexa build` + exec; the final link honors HEXA_PREBUILT_RUNTIME
+  (self/main.hexa resolve_prebuilt_runtime — ".c-graduation Phase-3" seam) and
+  links the prebuilt archive instead of compiling the absent self/runtime.c.
+  The faithful jobs leave Stage 0b's archive at build/runtime.a; the gate
+  script auto-exports HEXA_PREBUILT_RUNTIME=$PWD/build/runtime.a when present.
+
+  SHAPE (the OP-5b forge-runtime-warn-gate / OP-19f musl-ctor-abi-gate
+  discipline): the logic lives in ONE SSOT script — tool/fold_ci_gate.sh —
+  runnable locally (`sh tool/fold_ci_gate.sh [hexa-bin]`); the CI step is a
+  thin wrapper. One step per platform job, right after the './hexa runs'
+  assert, before release_package. Runtime cost <5 s/platform (each oracle runs
+  in <0.1 s; the only cost is two tiny `hexa build` compiles).
+
+  PATH-SCOPING NOTE: nobaseline-gate triggers on push/PR to main with NO paths
+  filter (it is the release-safety gate). The fold step rides that trigger —
+  which is CORRECT coverage here: a fold regression can come from compiler/
+  codegen changes ANYWHERE, not just from edits to the flame stdlib or the
+  oracle files, so a paths-filtered trigger would under-cover. The added cost
+  is <5 s on a job that already runs.
+
+────────────────────────────────────────────────────────────────────────────────
+ 2. GOLDEN ASSERTIONS (recorded, 4-environment byte-identical)
+────────────────────────────────────────────────────────────────────────────────
+  Oracles (SELF-CONTAINED, no `use`, hexa-run-able anywhere):
+    · stdlib/flame/op19_crossplatform_selfcontained.hexa
+    · stdlib/flame/op19b_crossplatform_erf.hexa
+
+  Asserted DETERMINISTIC fold lines (exact-line sed extraction):
+    CEBWD-TAYLOR-bits  (dt_exp,  op19)   == 7679248634312321699
+    GELUFWD-DET-bits   (dt_erf fwd, 19b) == 4548590605583584556
+    GELUBWD-DET-bits   (dt_erf bwd, 19b) == 4249661408190172843
+  Provenance: F-OP19 (#3002) + F-OP19B (#3008) arm64-macos local/ghost +
+  x86_64-linux glibc aiden · F-OP19C pi5 arm64-linux glibc · F-OP19D musl
+  (4th env) — all three folds byte-identical in every recorded environment.
+
+  NOT asserted (intentionally): the *-LIBM-bits lines (platform-dependent by
+  construction — they are the BEFORE-divergence evidence, not the invariant)
+  and op19's GELUBWD-TAYLOR co-located swap-test (636106759170901885 — not the
+  canonical wired fold; F-OP19C records the canonical GELU-bwd key as op19b's
+  GELUBWD-DET = 4249661408190172843).
+
+────────────────────────────────────────────────────────────────────────────────
+ 3. PASSES ON CURRENT TREE (local, arm64-macos) — verbatim
+────────────────────────────────────────────────────────────────────────────────
+  $ sh tool/fold_ci_gate.sh ~/.hx/bin/hexa        (worktree @ origin/main 9220eb21f)
+    fold_ci_gate: running stdlib/flame/op19_crossplatform_selfcontained.hexa ...
+      CEBWD-LIBM-bits   = 7969105254299072804
+      CEBWD-TAYLOR-bits = 7679248634312321699
+      GELUFWD-LIBM-bits   = 1521224270287218303
+      GELUFWD-TAYLOR-bits = 4548590605583584556
+      GELUBWD-LIBM-bits   = 3061716277569066716
+      GELUBWD-TAYLOR-bits = 636106759170901885
+    fold_ci_gate: running stdlib/flame/op19b_crossplatform_erf.hexa ...
+      GELUFWD-DET-bits = 4548590605583584556
+      GELUBWD-DET-bits = 4249661408190172843
+    fold_ci_gate: OK   CEBWD-TAYLOR-bits (dt_exp) = 7679248634312321699
+    fold_ci_gate: OK   GELUFWD-DET-bits  (dt_erf fwd) = 4548590605583584556
+    fold_ci_gate: OK   GELUBWD-DET-bits  (dt_erf bwd) = 4249661408190172843
+    fold_ci_gate: PASS — all 3 deterministic folds match the recorded goldens.
+    exit 0
+  CI proof on all 3 platforms = the PR's own nobaseline-gate run (the fold step
+  executes INSIDE the 3 faithful jobs; gate-green ≡ all 3 platforms asserted).
+
+────────────────────────────────────────────────────────────────────────────────
+ 4. TEETH — the gate demonstrably catches a drift (simulated locally)
+────────────────────────────────────────────────────────────────────────────────
+  Simulation 1: GOLD_GELUFWD …556 → …557 (1-ULP-class golden alteration)
+    fold_ci_gate: OK   CEBWD-TAYLOR-bits (dt_exp) = 7679248634312321699
+    fold_ci_gate: DRIFT GELUFWD-DET-bits  (dt_erf fwd) = '4548590605583584556' (golden 4548590605583584557)
+    fold_ci_gate: OK   GELUBWD-DET-bits  (dt_erf bwd) = 4249661408190172843
+    fold_ci_gate: FAIL — machine-independence fold REGRESSION detected.
+  Simulation 2: GOLD_CEBWD → 1111111111111111111, exit code captured directly:
+    script-exit=1
+  Reverted both; re-run → PASS, exit 0 (revert-exit=0). The check is an exact
+  string compare per fold — ANY drift (1 bit anywhere in any of the dumped
+  arrays changes the FNV-1a fold) fails the gate with a DRIFT line naming the
+  fold + the golden. A missing/garbled line fails as '<missing>'.
+
+────────────────────────────────────────────────────────────────────────────────
+ 5. LOW BLAST RADIUS (the OP-5b/OP-19f discipline) — CONFIRMED
+────────────────────────────────────────────────────────────────────────────────
+  · The gate runs ONLY the two SELF-CONTAINED oracles (no `use`, no flame
+    stdlib import, no repo-wide compile/scan) — grandfathered or unrelated code
+    can never fail it.
+  · It asserts ONLY the 3 deterministic fold lines; the platform-dependent
+    LIBM lines are not compared.
+  · Failure modes: (a) a fold drifts from its golden = the REAL regression the
+    gate exists for; (b) the oracle fails to build/run on the CI platform = a
+    real breakage of `hexa run` on a release platform (also worth failing on,
+    and the faithful job's own asserts would usually catch it first).
+  · The script is the SSOT; the 3 YAML steps are thin wrappers. No new
+    workflow, no new trigger surface, no required-check changes.
+
+────────────────────────────────────────────────────────────────────────────────
+ 6. GATE (g5) SUMMARY
+────────────────────────────────────────────────────────────────────────────────
+  wiring choice ............ append to the 3 faithful-nobaseline jobs (built
+                             ./hexa already there) + SSOT tool/fold_ci_gate.sh
+  golden folds asserted .... dt_exp 7679248634312321699 · dt_erf FWD
+                             4548590605583584556 · dt_erf BWD 4249661408190172843
+  passes on current tree ... YES local (verbatim §3); 3-platform proof = the
+                             PR's own CI run (fold step inside the matrix jobs)
+  teeth (catches drift) .... YES — simulated golden alteration → DRIFT + exit 1
+                             (§4); reverted, PASS restored
+  low-blast-radius ......... YES (§5 — only fold drift / oracle-run failure)
+  platforms covered ........ darwin-arm64 · linux-x86_64 · linux-arm64 (the
+                             SAME matrix as faithful-nobaseline). musl is NOT a
+                             CI platform — the musl cell stays covered by the
+                             recorded F-OP19D verdict + the OP-19f static gate
+                             (honest limit, documented here).
+  cost ..................... <5 s/platform on an already-running job · $0 ·
+                             0-GPU · 0-pod · no vast · no .tape edits
+
+  Files: tool/fold_ci_gate.sh (NEW, SSOT) ·
+         .github/workflows/nobaseline-gate.yml (3 steps appended)
+════════════════════════════════════════════════════════════════════════════════

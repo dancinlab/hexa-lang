@@ -1448,3 +1448,22 @@ NOT claimed. $0, no vast/pool/pod. Verdict .verdicts/hexa-0pod/F-OP21-HOPPER-WAR
 - docs/flame-machine-independent-training.md: surgical T4 cross-ref (boundary pointer + DIAG numbers).
 - Milestone OP-30c flipped [x]. Verdict .verdicts/hexa-0pod/F-OP30C-FMA-BOUNDARY.txt. All numbers cite
   F-OP32-4TH-ARCH verbatim.
+
+## OP-34 — machine-independence fold CI regression gate (2026-06-12)
+- FEASIBILITY: inspected nobaseline-gate.yml — all 3 faithful-nobaseline jobs build a working ./hexa via
+  the shared tool/release_build (Stage 0b leaves build/runtime.a) and already assert `./hexa --version`
+  → appended the fold checks THERE (cheapest: zero new builds/jobs, exact 3-platform matrix).
+- .c=0 seam: `hexa run` = `hexa build`+exec; the final link honors HEXA_PREBUILT_RUNTIME
+  (resolve_prebuilt_runtime, self/main.hexa) → works on the seeds-removed checkout; the gate script
+  auto-exports HEXA_PREBUILT_RUNTIME=$PWD/build/runtime.a when present.
+- SSOT script tool/fold_ci_gate.sh (OP-5b/19f discipline): runs op19_crossplatform_selfcontained.hexa +
+  op19b_crossplatform_erf.hexa, asserts CEBWD-TAYLOR-bits == 7679248634312321699 ·
+  GELUFWD-DET-bits == 4548590605583584556 · GELUBWD-DET-bits == 4249661408190172843. LIBM lines NOT
+  asserted (platform-dependent by construction). 3 thin YAML steps appended (one per faithful job).
+- PASS on current tree local arm64-macos (exit 0, verbatim in verdict §3); 3-platform proof = the PR's
+  own nobaseline-gate CI run. TEETH: altered golden → DRIFT + exit 1; reverted → PASS exit 0.
+- LOW-BLAST confirmed: only a real fold drift (or `hexa run` breaking on a release platform) can fail it;
+  no repo-wide scan, no new workflow/trigger, no required-check change. musl = honest limit (covered by
+  recorded F-OP19D + the OP-19f static gate; musl is not a CI platform).
+- Milestone OP-34 flipped [x]. Verdict .verdicts/hexa-0pod/F-OP34-FOLD-CI-GATE.txt. $0 · 0-GPU · 0-pod ·
+  no vast · no foreign-pod touch · no .tape edits.
