@@ -1,0 +1,128 @@
+════════════════════════════════════════════════════════════════════════════
+F-OP28-CORPUS-LOADER-DET — real-corpus token pipeline (tokenize→pack→batch)
+is DETERMINISTIC + MACHINE-INDEPENDENT byte-eq
+HEXA-0POD OP-28 · CPU-LOCAL byte-eq ORACLE · 0-GPU (`hexa run`) · $0 · no vast
+════════════════════════════════════════════════════════════════════════════
+
+CONTEXT — the 0-pod slice of gap G1
+  OP-26b (#3035, docs/flame-machine-independent-SUBMISSION-READINESS.md) listed
+  gap G1 = "real-corpus end-to-end run, GPU-build-gated (HIGH — the one
+  substantive gap a strong venue may want)". G1 is gated because the TRAINER
+  STEP (nn_decoder_fwd/grad + AdamW) needs the GPU build. But the trainer's
+  INPUT side — the data loader / token pipeline that produces the (ids,targets)
+  tensors fed to clm_step — runs on CPU and IS 0-pod-verifiable. OP-28 proves
+  that input pipeline is deterministic + machine-independent, so the
+  "real-corpus" INPUT is reproducible even before the GPU step runs. This
+  closes the INPUT-side 0-pod slice of G1; the GPU STEP RUN remains gated.
+
+THE PIPELINE (verbatim from the production corpus path)
+  Source: stdlib/flame/flame_d32_corpus_test.hexa (anima d_corpus_fire
+  equivalent — the real corpus test the byte-level trainer uses), lines 62-84.
+
+  (1) tokenize  : read_file_bytes(corpus) → byte ids in [0,256)   [V=256]
+                  the byte-level vocab the real corpus tests train on.
+  (2) pack/window (T=16, nsamp windows, stride):
+                  IDS[s*T + p] = toks[s*stride + p]     (p in 0..T)
+                  YS[s]        = toks[s*stride + T]      (next-token target)
+                  pure integer index arithmetic, fixed ascending (s,p) order.
+  (3) batch     : (IDS, YS) == (ids, targets) → nn_decoder_fwd / nn_decoder_grad.
+
+  (The BPE path — stdlib/flame/flame_bpe_corpus_lib.hexa, V=151936 — is the
+   OTHER tokenizer; see RESIDUAL below. The byte-level path above is the one
+   the production corpus tests actually run, and is what OP-28 locks.)
+
+WHY DETERMINISTIC + MACHINE-INDEPENDENT (the FINDING)
+  The byte-level token path is PURE INTEGER end-to-end:
+    - tokenize = a byte read. A byte is a byte on every IEEE-754 arch/OS;
+      read_file_bytes / byte_at are exact, no float, no transcendental.
+    - pack = integer multiply/add index math (s*T+p, s*stride+p, s*stride+T)
+      + a direct array copy, iterated in a fixed ascending (s,p) order.
+    - NO float arithmetic, NO libm transcendental (no exp/erf/sin/log), and
+      NO dict/set/hash-ordered iteration over a vocab anywhere in the path.
+  ⟹ (ids, targets) are bit-identical run-to-run AND across machines BY
+  CONSTRUCTION. This is the strongest possible determinism class — there is
+  no fp-tolerance, no ULP divergence, no accumulation-order question: the
+  integers are identical or the oracle fails.
+
+ORACLE
+  stdlib/flame/op28_corpus_loader_det.hexa
+    - SELF-CONTAINED (no `use`) → runs via scp/stdin on ANY hexa host,
+      checkout-independent, so the SAME source runs on local arm64-macos AND
+      aiden x86-linux for the cross-platform leg (matches OP-19 pattern).
+    - The fixed corpus is an EMBEDDED 306-byte ASCII byte-string LITERAL
+      (byte_at over a string) — the SAME bytes read_file_bytes would yield for
+      that content, with NO disk dependency (disk-frugal, host-portable).
+    - _tokenize_bytes  = tokenize step (byte read → int farr)
+    - _pack_windows    = VERBATIM the flame_d32_corpus_test windowing
+    - _pack_checksum   = order-sensitive PURE-INTEGER fold (position-weighted,
+      mod 1e9+7) over every (id, target) — any reorder / off-by-one changes it.
+    - Emits an IEEE-754 byte fingerprint f64_to_bytes_le(checksum) for the
+      cross-platform byte-diff (the checksum 441979096 has an exact f64 repr).
+    - PROVES, not merely asserts: runs the full pipeline TWICE (independent
+      in-process runs), compares every (id, target) integer (max|Δ|), and the
+      whole `hexa run` is invoked twice process-to-process and the full output
+      byte-diffed.
+
+GATE (g5) — `hexa run` PASS, (ids,targets) byte-eq run-to-run max|Δ|=0:
+
+  $ hexa run stdlib/flame/op28_corpus_loader_det.hexa
+  op28_corpus_loader_det — F-OP28 real-corpus token-pipeline determinism (CPU oracle, 0-GPU)
+    corpus: embedded byte-string, 306 bytes (V=256 byte-level vocab — the production corpus path)
+    window config: T=16  nsamp=8  stride=24
+    ids[window 0]: 99 111 110 115 99 105 111 117 115 110 101 115 115 32 105 115
+    targets[0..nsamp]: 32 114 110 108 120 110 101 101
+    ids     max|Δ| run-to-run = 0
+    targets max|Δ| run-to-run = 0
+    pack checksum run1 = 441979096
+    pack checksum run2 = 441979096
+    CROSSPLAT-FINGERPRINT (f64_to_bytes_le of checksum) = 0 0 0 216 16 88 186 65
+    F-OP28-CORPUS-LOADER-DET = 1
+    PASS — real-corpus token pipeline (tokenize->pack->batch) is DETERMINISTIC ...
+
+  ids[window 0] = 99 111 110 115 ... = the literal bytes of "conscious..." —
+  these are the REAL corpus byte ids, not a synthetic fixture.
+
+PROCESS-TO-PROCESS byte-eq (run-to-run, two independent `hexa run` invocations):
+  $ hexa run op28_... > A.txt ; hexa run op28_... > B.txt ; diff A.txt B.txt
+  → (no diff) ; full 945-byte output BYTE-IDENTICAL.
+  PROCESS-TO-PROCESS BYTE-EQ: YES
+
+CROSS-PLATFORM byte-eq (the bonus leg — free CPU pool host, $0, NO vast/NO GPU):
+  local  (arm64-macos, Darwin libm) :
+    CROSSPLAT-FINGERPRINT (f64_to_bytes_le of checksum) = 0 0 0 216 16 88 186 65
+  aiden  (x86-linux, glibc — sidecar pool CPU host, scp self-contained source) :
+    CROSSPLAT-FINGERPRINT (f64_to_bytes_le of checksum) = 0 0 0 216 16 88 186 65
+  $ diff local_fp.txt aiden_fp.txt → (no diff)
+  CROSS-PLATFORM FINGERPRINT BYTE-EQ: YES (arm64-macos == x86-linux)
+  ids/targets/checksum (441979096) ALL identical on both hosts.
+  (aiden /tmp cleaned after the run; no pod, no GPU, no vast touched.)
+
+WHAT IS STILL GPU-GATED (honest, g5 — G1 NOT fully closed)
+  The GPU TRAINER STEP — nn_decoder_fwd / nn_decoder_grad / opt_adamw_step
+  consuming the proven (ids,targets) — is the GPU-build-gated remainder of G1.
+  OP-28 does NOT run the trainer step and does NOT claim a real-corpus
+  end-to-end training result. It proves only that the INPUT to that step is
+  deterministic + machine-independent. When the GPU-build end-to-end run
+  happens, the input side is already proven reproducible — the remaining work
+  is the STEP RUN, not the input code.
+
+RESIDUAL input-side item (surfaced, not a failure)
+  The BPE tokenizer path (stdlib/flame/flame_bpe_corpus_lib.hexa, V=151936) is
+  the OTHER tokenizer (for 3B-scale). It is ALSO documented-integer (merge-rank
+  table lookups, no float), but flame's BPE has a KNOWN upstream limitation —
+  hexa chr() truncates to a byte, so build_byte_to_char collides space's
+  byte-char and real-Qwen round-trip returns false (documented in the lib
+  header, filed inbox/notes hexa-chr-unicode). So the BPE path is NOT cleanly
+  0-pod-runnable today; its determinism is FLAGGED as the residual input-side
+  item, not locked here. The byte-level path IS the production corpus path the
+  real tests use, and is what OP-28 locks.
+
+VERDICT: GREEN. The real-corpus token pipeline (tokenize→pack→batch) that feeds
+  the flame CLMConvMoE trainer step is DETERMINISTIC (ids,targets byte-eq
+  run-to-run max|Δ|=0, in-process AND process-to-process) and MACHINE-INDEPENDENT
+  (byte-identical IEEE-754 fingerprint across arm64-macos + x86-linux). The
+  byte-level path is pure-integer → machine-independent by construction (no
+  libm, no float, no hash-order). This closes the 0-pod INPUT-side slice of gap
+  G1; the GPU TRAINER STEP RUN remains the gated remainder. Behavior-preserving:
+  NO trainer logic changed — verification/oracle addition only.
+════════════════════════════════════════════════════════════════════════════

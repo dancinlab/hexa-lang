@@ -1085,3 +1085,27 @@ NOT claimed. $0, no vast/pool/pod. Verdict .verdicts/hexa-0pod/F-OP21-HOPPER-WAR
   Doc ends with the explicit user action: USER runs `/paper new flame-machine-independent` (or similar) — the
   agent does NOT auto-scaffold per g84. CONFIRMED no paper scaffolded.
 - Milestone OP-26b flipped [x]. Verdict .verdicts/hexa-0pod/F-OP26B-SUBMISSION-READINESS.txt. $0 · 0-GPU · 0-pod · no vast.
+
+## OP-28 — real-corpus token-pipeline determinism oracle (0-pod slice of gap G1; input side proven, GPU step still gated)
+- 0-POD SLICE OF G1: OP-26b gap G1 (real-corpus end-to-end) is GPU-build-gated because the trainer STEP needs
+  the GPU. But the trainer's INPUT side — the token pipeline producing the (ids,targets) fed to clm_step — runs
+  on CPU and IS 0-pod-verifiable. OP-28 proves that input pipeline deterministic + machine-independent.
+- THE PIPELINE (verbatim from flame_d32_corpus_test.hexa, the production byte-level corpus path):
+  (1) tokenize = read_file_bytes -> byte ids [0,256) [V=256]; (2) pack/window = IDS[s*T+p]=toks[s*stride+p],
+  YS[s]=toks[s*stride+T] (pure integer index math, fixed ascending (s,p) order); (3) batch = (IDS,YS)==(ids,targets).
+- ORACLE stdlib/flame/op28_corpus_loader_det.hexa — SELF-CONTAINED (no `use`, scp/stdin-runnable on any host),
+  embedded 306-byte ASCII corpus = the same bytes read_file_bytes yields (disk-free, disk-frugal). Runs full
+  pipeline twice + emits f64_to_bytes_le(checksum) IEEE fingerprint for cross-platform byte-diff.
+- FINDING: byte-level token path is PURE INTEGER — NO float, NO libm transcendental, NO dict/set/hash-ordered
+  vocab iteration — so (ids,targets) bit-identical run-to-run AND across machines BY CONSTRUCTION.
+- GATE PASS: ids max|delta| = 0, targets max|delta| = 0 run-to-run; checksum 441979096 identical both runs.
+  ids[window 0] = 99 111 110 115 ... = literal bytes of "conscious..." (REAL corpus ids, not synthetic).
+- PROCESS-TO-PROCESS: two independent `hexa run` invocations -> full 945-byte output BYTE-IDENTICAL (diff empty).
+- CROSS-PLATFORM (free CPU pool host, $0, NO vast/NO GPU): local arm64-macos (Darwin libm) vs aiden x86-linux
+  (glibc) emit the byte-IDENTICAL IEEE-754 fingerprint `0 0 0 216 16 88 186 65`; ids/targets/checksum identical.
+  aiden /tmp cleaned; no pod/GPU/vast touched.
+- STILL GPU-GATED (honest, G1 NOT fully closed): the GPU TRAINER STEP (nn_decoder_fwd/grad/AdamW on the
+  (ids,targets)) is the gated remainder. OP-28 closes the INPUT-side slice only; the STEP RUN remains gated.
+- RESIDUAL: BPE path (V=151936) also documented-integer but flame's BPE has a known upstream chr()-unicode
+  limitation (not cleanly 0-pod-runnable today) — FLAGGED, not locked.
+- Milestone OP-28 flipped [x]. Verdict .verdicts/hexa-0pod/F-OP28-CORPUS-LOADER-DET.txt. $0 · 0-GPU · 0-pod · no vast.

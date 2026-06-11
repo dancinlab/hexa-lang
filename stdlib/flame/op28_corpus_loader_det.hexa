@@ -67,7 +67,7 @@ fn _corpus_text() -> string {
 //    int farr of the corpus byte ids. Pure: byte_at is an exact byte read. ──
 fn _tokenize_bytes(text: string) -> int {
     let n = len(text)
-    let toks = farr_new(n)
+    let toks = farr_zeros(n)
     let mut i = 0
     while i < n {
         let _ = farr_set(toks, i, to_float(byte_at(text, i)))
@@ -81,13 +81,9 @@ fn _tokenize_bytes(text: string) -> int {
 //    Pure integer index arithmetic, fixed ascending (s,p) iteration order.
 //    Returns #{ ids, ys } as two int farrs (ids len = nsamp*T, ys len = nsamp).
 fn _pack_windows(toks: int, n_toks: int, nsamp: int, T: int, stride: int) {
-    let IDS = farr_new(nsamp * T)
-    let YS = farr_new(nsamp)
-    // zero-init (windows past corpus end stay 0, same as t_zeros fallback)
-    let mut z = 0
-    while z < nsamp * T { let _ = farr_set(IDS, z, 0.0); z = z + 1 }
-    let mut zy = 0
-    while zy < nsamp { let _ = farr_set(YS, zy, 0.0); zy = zy + 1 }
+    // farr_zeros pre-zeros: windows past corpus end stay 0 (== t_zeros fallback)
+    let IDS = farr_zeros(nsamp * T)
+    let YS = farr_zeros(nsamp)
     let mut s = 0
     while s < nsamp {
         let off = s * stride
@@ -193,16 +189,14 @@ fn main() {
     let ck2 = _pack_checksum(ids2, n_ids, ys2, nsamp)
     print("  pack checksum run1 = "); println(ck1)
     print("  pack checksum run2 = "); println(ck2)
+    // f64_to_bytes_le returns a native byte array indexed by [] subscript
+    // (NOT farr_get); these 8 LE IEEE-754 bytes of the checksum are the
+    // cross-platform fingerprint a 2nd host byte-diffs.
     let cbytes = f64_to_bytes_le(to_float(ck1))
     print("  CROSSPLAT-FINGERPRINT (f64_to_bytes_le of checksum) = ")
     let mut bi = 0
-    while bi < len(cbytes) { print(to_int(farr_get(cbytes, bi))); print(" "); bi = bi + 1 }
+    while bi < len(cbytes) { print(cbytes[bi]); print(" "); bi = bi + 1 }
     println("")
-
-    let _ = farr_free(toks1); let _ = farr_free(toks2)
-    let _ = farr_free(ids1);  let _ = farr_free(ids2)
-    let _ = farr_free(ys1);   let _ = farr_free(ys2)
-    let _ = farr_free(cbytes)
 
     // ── GATE ──
     let det_ok = (max_d_ids == 0) && (max_d_ys == 0) && (ck1 == ck2)
