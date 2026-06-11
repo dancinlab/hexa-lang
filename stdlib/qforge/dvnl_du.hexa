@@ -1,0 +1,137 @@
+// HEXA Standard Library — qforge/dvnl_du
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// QFORGE DFPT brick — the PHONON NONLOCAL-potential derivative ∂V_NL/∂u_κ.
+//
+// ── Why this brick (the B2 gate lever) ───────────────────────────────────────
+// `dvloc_du.hexa` supplies only the LOCAL deformation potential ∂V_loc/∂u. The
+// separable Kleinman-Bylander nonlocal potential
+//
+//   V_NL = Σ_{i,j} |β_i⟩ D_ij ⟨β_j|
+//
+// is ALSO position-dependent: each projector β_i carries the structure-factor
+// phase of the atom it sits on, β_i(q) ∝ exp(−i q·τ_κ) (q = k+G). Displacing
+// the atom τ_κ → τ_κ + u therefore changes V_NL, and its derivative
+//
+//   ∂V_NL/∂u_d = Σ_ij ( |∂β_i/∂u_d⟩ D_ij ⟨β_j| + |β_i⟩ D_ij ⟨∂β_j/∂u_d| )
+//
+// is a genuine el-ph vertex contribution that the QFORGE from-scratch path was
+// MISSING (the CaH6 compose driver dropped the nonlocal part entirely, nprojs=0).
+// This is the un-tried "missing ∂V_NL/∂u" lever named in the QFORGE-PAW round-1
+// design (Route B / B2). It needs NO augmentation (pure NC).
+//
+// ── The single-direction projector derivative (structure-factor route, d19) ──
+// In the PW basis the phased projector at q = k+G for an atom at τ_κ is
+//
+//   β_i(q) = (4π/√Ω)(−i)^{l_i} Y_{l_i m}(q̂) β̃_i(|q|) · exp(−i q·τ_κ)
+//
+// where β̃_i(|q|) = ∫ r² β_i(r) j_{l_i}(|q|r) dr is the radial Bessel transform
+// (d19 — REUSES `qforge_proj_radial` from projector.hexa, no new radial machinery).
+// Only the phase exp(−i q·τ_κ) depends on the displacement, so
+//
+//   ∂β_i(q)/∂u_d = −i q_d · β_i(q)                                   (★)
+//
+// the SAME −i·(component)·(value) structure already proven correct for the local
+// head in `dvloc_du.hexa`. At the Γ k-point q = G, so q_d = G_d and the head
+// (G=0) derivative is exactly 0 (translational invariance), matching dvloc.
+//
+// ── Hermiticity (real-space realness of ∂V_NL) ───────────────────────────────
+// β_i(−q) = conj(β_i(q)) (β̃ real even, phase conjugate-symmetric, (−i)^l Y_lm
+// pairs conjugate over q↔−q for the m-summed addition theorem). Then by (★)
+//   ∂β_i(−q)/∂u_d = −i(−q_d)·conj(β_i(q)) = conj( −i q_d β_i(q) )
+//                 = conj( ∂β_i(q)/∂u_d ),
+// so ∂V_NL(−G_a,−G_b) = conj( ∂V_NL(G_a,G_b) ) — the real-space ∂V_NL is REAL.
+// The selftest pins this to < 1e-10, plus a finite-difference check of (★)
+// against the analytic Gaussian-projector transform to < 1e-6.
+//
+// d3/d4 generic: element- and structure-agnostic — the caller supplies τ_κ,
+// the radial β_i(r)/l_i/D_ij (any species/cell), NO hardcoded names. One path.
+
+let _DVNL_4PI: float = 12.56637061435917295384   // 4π
+
+// j_l for l=0,1,2 (local copy — projector.hexa's is private; same closed forms).
+fn _dvnl_jl(l: int, x: float) -> float {
+    if x < 1.0e-8 && x > -1.0e-8 {
+        if l == 0 { return 1.0 - x * x / 6.0 }
+        return 0.0
+    }
+    let s = sin(x)
+    let c = cos(x)
+    if l == 0 { return s / x }
+    if l == 1 { return s / (x * x) - c / x }
+    if l == 2 { return (3.0 / (x * x) - 1.0) * s / x - 3.0 * c / (x * x) }
+    return 0.0
+}
+
+// Legendre P_l(u) for l=0,1,2 (addition-theorem angular factor).
+fn _dvnl_legendre(l: int, u: float) -> float {
+    if l == 0 { return 1.0 }
+    if l == 1 { return u }
+    if l == 2 { return 0.5 * (3.0 * u * u - 1.0) }
+    return 0.0
+}
+
+// ── Phased complex projector β_i(q) for one projector over a q-grid ───────────
+// Returns the SCALAR radial part folded with the atom structure-factor phase,
+// WITHOUT the (2l+1)/4π·P_l angular factor (which couples q_a,q_b pairwise and
+// is applied in the block assembly). Per q a complex number:
+//   c_i(q) = β̃_i(|q|) · exp(−i q·τ_κ)
+//   qvecs : flat [3·nq] cartesian q = k+G (bohr⁻¹)
+//   r,rab,beta,l : the radial projector (d19 — qforge_proj_radial)
+//   tau   : [3] atom position (bohr)
+// Returns interleaved [re0,im0, re1,im1, …] (2·nq). Malformed → [].
+pub fn qforge_beta_phased(qvecs: [float], r: [float], rab: [float], beta: [float],
+                          l: int, tau: [float]) -> [float] {
+    let lq = len(qvecs)
+    if lq % 3 != 0 || len(tau) != 3 { return [] }
+    let n = len(r)
+    if len(rab) != n || len(beta) != n { return [] }
+    let nq = lq / 3
+    let tx = tau[0] ; let ty = tau[1] ; let tz = tau[2]
+    let mut out: [float] = []
+    let mut a = 0
+    while a < nq {
+        let qx = qvecs[a * 3]
+        let qy = qvecs[a * 3 + 1]
+        let qz = qvecs[a * 3 + 2]
+        let qm = sqrt(qx * qx + qy * qy + qz * qz)
+        let bt = qforge_proj_radial(r, rab, beta, l, qm)
+        // structure-factor phase exp(−i q·τ) = cos(p) − i sin(p)
+        let p = qx * tx + qy * ty + qz * tz
+        out.push(bt * cos(p))
+        out.push(-bt * sin(p))
+        a = a + 1
+    }
+    return out
+}
+
+// ── Single-direction projector derivative ∂β_i(q)/∂u_d = −i q_d β_i(q) ────────
+// Takes the phased projector c_i (interleaved [re,im,…] from qforge_beta_phased)
+// and the q-grid; applies (★) per q: (−i q_d)·(cre + i cim) = (q_d cim) + i(−q_d cre).
+//   beta_phased : interleaved [re,im,…] (2·nq) — qforge_beta_phased output
+//   qvecs       : flat [3·nq] (same grid)
+//   dir         : Cartesian component d ∈ {0,1,2}
+// Returns interleaved [re,im,…] (2·nq). Malformed → [].
+pub fn qforge_dbeta_du(beta_phased: [float], qvecs: [float], dir: int) -> [float] {
+    let lq = len(qvecs)
+    if lq % 3 != 0 { return [] }
+    let nq = lq / 3
+    if len(beta_phased) != 2 * nq { return [] }
+    if dir < 0 || dir > 2 { return [] }
+    let mut out: [float] = []
+    let mut a = 0
+    while a < nq {
+        let mut qd = qvecs[a * 3]
+        if dir == 1 { qd = qvecs[a * 3 + 1] }
+        if dir == 2 { qd = qvecs[a * 3 + 2] }
+        let cre = beta_phased[a * 2]
+        let cim = beta_phased[a * 2 + 1]
+        // (−i·qd)·(cre + i·cim) = qd·cim + i·(−qd·cre)
+        out.push(qd * cim)
+        out.push(-qd * cre)
+        a = a + 1
+    }
+    return out
+}

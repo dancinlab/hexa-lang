@@ -1,0 +1,198 @@
+// @ci_gate — deterministic · network-free · ∂V_NL/∂u BLOCK g5 gate
+//
+// dvnl_du_block_selftest.hexa — QFORGE B2 brick 2 (full ∂V_NL/∂u_d block).
+//
+// The block ∂V[a,b] = Σ_ij D_ij·ang·[conj(∂β_i(a))β_j(b) + conj(β_i(a))∂β_j(b)]
+// is the position-derivative of the SAME V_NL the assembler builds. The decisive
+// g5 anchor is therefore a FINITE-DIFFERENCE of the REAL V_NL block from
+// projector.hexa: the displaced-atom V_NL has its center at τ, so
+//   ∂V_NL/∂u_d ≈ [V_NL(τ + ε ê_d) − V_NL(τ − ε ê_d)] / 2ε.
+// (qforge_vnl_block centers projectors at the origin; we re-center by phasing the
+//  q-grid: V_NL with τ-phase = the standard block on q-vectors with the structure
+//  phase folded in — but qforge_vnl_block has no phase, so we build the PHASED
+//  V_NL explicitly from qforge_beta_phased and compare its τ-derivative.)
+//
+//   (A) HERMITICITY: ∂V[a,b] == conj(∂V[b,a]) to < 1e-10.            🔵
+//   (B) FD vs ANALYTIC: the analytic block matches the central FD of the phased
+//       V_NL block under τ ± ε to rel-ε < 1e-5 (both re,im).         🔵 closed
+//   (C) APPLY path: (∂V·ψ)(a) = Σ_b ∂V[a,b]ψ(b) matches the explicit row sum. 🔵
+//   (D) Γ-head sum rule: Σ_a Re ∂V[a,a] over a q↔−q symmetric grid = 0 (the
+//       diagonal head cancels — translational invariance).          🔵
+//   (E) malformed → [].
+//
+// Run:  hexa run stdlib/qforge/dvnl_du_block_selftest.hexa
+// PASS: "qforge_dvnl_du_block_selftest PASS".
+use "stdlib/qforge/dvnl_du"
+use "stdlib/qforge/dvnl_du_block"
+use "stdlib/qforge/projector"
+
+let _PI: float = 3.14159265358979323846
+let _4PI: float = 12.56637061435917295384
+
+fn _abs(x: float) -> float { if x < 0.0 { return -x } return x }
+fn _ck_true(name: str, cond: bool) -> int {
+    if cond { println("PASS " + name) ; return 0 }
+    println("FAIL " + name) ; return 1
+}
+
+// Phased real-symmetric V_NL block element re/im for an atom at τ, built from
+// qforge_beta_phased (same convention as qforge_dvnl_du_block, l-summed angular).
+// Returns [re,im] for element (a,b).
+fn _phased_vnl(r: [float], rab: [float], betas: [float], ls: [int], dij: [float],
+               nproj: int, omega: float, tau: [float], qvecs: [float],
+               a: int, b: int, nq: int) -> [float] {
+    let four_pi_om = _4PI / omega
+    // unit vectors for angular cosine
+    let qax = qvecs[a * 3] ; let qay = qvecs[a * 3 + 1] ; let qaz = qvecs[a * 3 + 2]
+    let qbx = qvecs[b * 3] ; let qby = qvecs[b * 3 + 1] ; let qbz = qvecs[b * 3 + 2]
+    let ma = sqrt(qax * qax + qay * qay + qaz * qaz)
+    let mb = sqrt(qbx * qbx + qby * qby + qbz * qbz)
+    let mut u = 0.0
+    if ma > 1.0e-12 && mb > 1.0e-12 {
+        u = (qax * qbx + qay * qby + qaz * qbz) / (ma * mb)
+    }
+    let mut vr = 0.0 ; let mut vi = 0.0
+    let mut i = 0
+    while i < nproj {
+        let mut beta_i: [float] = []
+        let mut t = 0
+        while t < len(r) { beta_i.push(betas[i * len(r) + t]) ; t = t + 1 }
+        let mut j = 0
+        while j < nproj {
+            if ls[i] == ls[j] {
+                let l = ls[i]
+                let mut pl = 1.0
+                if l == 1 { pl = u }
+                if l == 2 { pl = 0.5 * (3.0 * u * u - 1.0) }
+                let ang = four_pi_om * to_float(2 * l + 1) * pl
+                let mut beta_j: [float] = []
+                let mut tj = 0
+                while tj < len(r) { beta_j.push(betas[j * len(r) + tj]) ; tj = tj + 1 }
+                let bta = qforge_proj_radial(r, rab, beta_i, l, ma)
+                let btb = qforge_proj_radial(r, rab, beta_j, l, mb)
+                // β_i(q_a)=bta·exp(−iq_a·τ), β_j(q_b)=btb·exp(−iq_b·τ).
+                // V element = conj(β_i(a))·β_j(b) = bta·btb·exp(−i(q_b−q_a)·τ).
+                let pa = qax * tau[0] + qay * tau[1] + qaz * tau[2]
+                let pb = qbx * tau[0] + qby * tau[1] + qbz * tau[2]
+                let ph = pb - pa
+                vr = vr + dij[i * nproj + j] * ang * bta * btb * cos(ph)
+                vi = vi + dij[i * nproj + j] * ang * bta * btb * (-sin(ph))
+            }
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return [vr, vi]
+}
+
+fn main() {
+    let mut fails = 0
+
+    // l=0 Gaussian projector, single channel (projector_selftest convention).
+    let alpha = 1.5 ; let nmesh = 1600 ; let r0 = 0.0002 ; let dx = 0.010
+    let mut r: [float] = [] ; let mut rab: [float] = [] ; let mut beta: [float] = []
+    let mut i = 0
+    while i < nmesh {
+        let ri = r0 * exp(to_float(i) * dx)
+        r.push(ri) ; rab.push(ri * dx) ; beta.push(exp(-alpha * ri * ri))
+        i = i + 1
+    }
+    let ls = [0] ; let dij = [2.5] ; let nproj = 1 ; let omega = 120.0
+    let tau = [0.37, -0.21, 0.55]
+    // q-grid with q↔−q pairs for the sum rule.
+    let qvecs = [ 0.5, 0.0, 0.0,   -0.5, 0.0, 0.0,
+                  0.3, 0.7, 0.2,   -0.3, -0.7, -0.2,
+                  1.1, -0.4, 0.9,  -1.1, 0.4, -0.9 ]
+    let nq = 6
+    let dir = 0
+
+    let blk = qforge_dvnl_du_block(r, rab, beta, ls, dij, nproj, omega, tau, qvecs, dir)
+    fails = fails + _ck_true("block size 2·nq²", len(blk) == 2 * nq * nq)
+
+    // ── (A) Hermiticity ∂V[a,b]=conj(∂V[b,a]) ──────────────────────────────────
+    let mut herm_ok = true ; let mut herm_max = 0.0
+    let mut a = 0
+    while a < nq {
+        let mut b = 0
+        while b < nq {
+            let iab = (a * nq + b) * 2
+            let iba = (b * nq + a) * 2
+            let dr = _abs(blk[iab] - blk[iba])
+            let di = _abs(blk[iab + 1] - (-blk[iba + 1]))
+            if dr > herm_max { herm_max = dr }
+            if di > herm_max { herm_max = di }
+            if dr > 1.0e-10 || di > 1.0e-10 { herm_ok = false }
+            b = b + 1
+        }
+        a = a + 1
+    }
+    fails = fails + _ck_true("(A) ∂V[a,b]=conj(∂V[b,a]) < 1e-10 (max=" + to_string(herm_max) + ")", herm_ok)
+
+    // ── (B) FD of the phased V_NL block vs the analytic ∂V block ───────────────
+    let eps = 1.0e-6
+    let mut taup = [tau[0], tau[1], tau[2]] ; let mut taum = [tau[0], tau[1], tau[2]]
+    taup[dir] = taup[dir] + eps ; taum[dir] = taum[dir] - eps
+    let mut fd_ok = true ; let mut fd_max = 0.0
+    a = 0
+    while a < nq {
+        let mut b = 0
+        while b < nq {
+            let vp = _phased_vnl(r, rab, beta, ls, dij, nproj, omega, taup, qvecs, a, b, nq)
+            let vm = _phased_vnl(r, rab, beta, ls, dij, nproj, omega, taum, qvecs, a, b, nq)
+            let fd_re = (vp[0] - vm[0]) / (2.0 * eps)
+            let fd_im = (vp[1] - vm[1]) / (2.0 * eps)
+            let an_re = blk[(a * nq + b) * 2] ; let an_im = blk[(a * nq + b) * 2 + 1]
+            let mag = sqrt(an_re * an_re + an_im * an_im)
+            if mag > 1.0e-8 {
+                let rel = (_abs(fd_re - an_re) + _abs(fd_im - an_im)) / mag
+                if rel > fd_max { fd_max = rel }
+                if rel > 1.0e-5 {
+                    fd_ok = false
+                    println("  FD mismatch a=" + to_string(a) + " b=" + to_string(b)
+                            + " an=(" + to_string(an_re) + "," + to_string(an_im)
+                            + ") fd=(" + to_string(fd_re) + "," + to_string(fd_im) + ") rel=" + to_string(rel))
+                }
+            }
+            b = b + 1
+        }
+        a = a + 1
+    }
+    fails = fails + _ck_true("(B) FD(phased V_NL) vs analytic ∂V < 1e-5 (max rel=" + to_string(fd_max) + ")", fd_ok)
+
+    // ── (C) apply path matches explicit row sum ────────────────────────────────
+    let mut psi: [float] = []
+    let pv = [0.31, -0.12, 0.44, 0.07, -0.28, 0.19]
+    i = 0 ; while i < nq { psi.push(pv[i]) ; i = i + 1 }
+    let av = qforge_dvnl_du_apply(blk, psi, nq)
+    let mut apply_ok = true
+    a = 0
+    while a < nq {
+        let mut sr = 0.0 ; let mut si = 0.0
+        let mut b = 0
+        while b < nq {
+            sr = sr + blk[(a * nq + b) * 2] * psi[b]
+            si = si + blk[(a * nq + b) * 2 + 1] * psi[b]
+            b = b + 1
+        }
+        if _abs(av[a * 2] - sr) > 1.0e-12 || _abs(av[a * 2 + 1] - si) > 1.0e-12 { apply_ok = false }
+        a = a + 1
+    }
+    fails = fails + _ck_true("(C) apply == explicit Σ_b ∂V[a,b]ψ(b)", apply_ok)
+
+    // ── (D) Γ-head sum rule: Σ_a Re ∂V[a,a] = 0 (q↔−q symmetric grid) ──────────
+    let mut diag_sum = 0.0
+    a = 0
+    while a < nq { diag_sum = diag_sum + blk[(a * nq + a) * 2] ; a = a + 1 }
+    fails = fails + _ck_true("(D) Σ_a Re ∂V[a,a] = 0 (got " + to_string(diag_sum) + ")", _abs(diag_sum) < 1.0e-9)
+
+    // ── (E) malformed guards ───────────────────────────────────────────────────
+    fails = fails + _ck_true("(E) bad dir → []",
+        len(qforge_dvnl_du_block(r, rab, beta, ls, dij, nproj, omega, tau, qvecs, 7)) == 0)
+    fails = fails + _ck_true("(E) Ω≤0 → []",
+        len(qforge_dvnl_du_block(r, rab, beta, ls, dij, nproj, 0.0, tau, qvecs, dir)) == 0)
+    fails = fails + _ck_true("(E) apply size mismatch → []",
+        len(qforge_dvnl_du_apply(blk, [1.0, 2.0], nq)) == 0)
+
+    if fails == 0 { println("qforge_dvnl_du_block_selftest PASS") }
+    else { println("qforge_dvnl_du_block_selftest FAIL — " + to_string(fails) + " case(s)") }
+}

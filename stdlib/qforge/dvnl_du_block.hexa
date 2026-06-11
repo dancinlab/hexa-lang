@@ -1,0 +1,174 @@
+// HEXA Standard Library — qforge/dvnl_du_block
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// QFORGE DFPT brick — the full nonlocal deformation-potential BLOCK ∂V_NL/∂u_d.
+//
+// Brick 1 (`dvnl_du.hexa`) supplied the per-projector derivative ∂β_i(q)/∂u_d =
+// −i q_d β_i(q). This brick assembles the complete el-ph nonlocal vertex term
+//
+//   ⟨q_a| ∂V_NL/∂u_d |q_b⟩ = Σ_ij D_ij [ ∂β_i*(q_a)·β_j(q_b)
+//                                       + β_i*(q_a)·∂β_j(q_b) ]
+//
+// (the product rule on V_NL = Σ_ij |β_i⟩D_ij⟨β_j|), restricting the angular
+// coupling to same-l projector pairs via the addition theorem (4π/Ω)(2l+1)P_l(q̂_a·q̂_b)
+// exactly as `qforge_vnl_block` does (d19 — same convention, so ∂V_NL is the
+// position-derivative of the SAME V_NL the SCF/elph assembler uses).
+//
+// This is the term the QFORGE from-scratch CaH6 el-ph path was MISSING — the
+// compose driver dropped the nonlocal part (nprojs=0). Adding ∂V_NL/∂u to the
+// vertex (alongside the existing ∂V_loc/∂u) is the B2 lever.
+//
+// ── Output: COMPLEX block (interleaved [re,im,…], length 2·nq²) ──────────────
+// Unlike V_NL (real-symmetric), ∂V_NL/∂u is anti-symmetric-ish / complex because
+// the derivative carries a −i q_d factor. The block is Hermitian:
+// ∂V_NL[a,b] = conj(∂V_NL[b,a]) — selftest checks it. Caller folds re/im into the
+// PW H-apply / elph off-diag vertex.
+//
+// d3/d4 generic: element/structure-agnostic — caller supplies τ_κ, betas/ls/D_ij.
+
+let _DVNLB_4PI: float = 12.56637061435917295384   // 4π
+
+fn _dvnlb_legendre(l: int, u: float) -> float {
+    if l == 0 { return 1.0 }
+    if l == 1 { return u }
+    if l == 2 { return 0.5 * (3.0 * u * u - 1.0) }
+    return 0.0
+}
+
+// ── ∂V_NL/∂u_d block over a q-grid (COMPLEX, interleaved [re,im,…]) ───────────
+//   r,rab        : radial mesh + weights (shared by projectors)
+//   betas        : flat [nproj·n] radial β_i(r) (row i)
+//   ls           : [nproj] angular momenta
+//   dij          : flat [nproj·nproj] couplings D_ij
+//   nproj        : projector count
+//   omega        : cell volume Ω
+//   tau          : [3] position of the displaced atom (the projectors' center)
+//   qvecs        : flat [3·nq] cartesian q = k+G
+//   dir          : Cartesian displacement component {0,1,2}
+// Returns flat [2·nq·nq] interleaved-complex ∂V_NL/∂u. Malformed → [].
+//
+// Element (same-l blocks):
+//   ∂V[a,b] = Σ_ij D_ij·(4π/Ω)(2l+1)P_l(q̂_a·q̂_b)
+//             · [ conj(∂β_i(q_a))·β_j(q_b) + conj(β_i(q_a))·∂β_j(q_b) ]
+// where β_i(q)=β̃_i(|q|)exp(−iq·τ) and ∂β_i(q)=−i q_d β_i(q) (brick 1).
+pub fn qforge_dvnl_du_block(r: [float], rab: [float], betas: [float], ls: [int],
+                            dij: [float], nproj: int, omega: float,
+                            tau: [float], qvecs: [float], dir: int) -> [float] {
+    let n = len(r)
+    if n == 0 || omega <= 0.0 { return [] }
+    if len(rab) != n || len(betas) != nproj * n || len(ls) != nproj { return [] }
+    if len(dij) != nproj * nproj || len(tau) != 3 { return [] }
+    if dir < 0 || dir > 2 { return [] }
+    let lq = len(qvecs)
+    if lq % 3 != 0 { return [] }
+    let nq = lq / 3
+    let four_pi_om = _DVNLB_4PI / omega
+
+    // q magnitudes + unit vectors (angular cosine) — same as qforge_vnl_block.
+    let mut qmag: [float] = []
+    let mut qhat: [float] = []
+    let mut a = 0
+    while a < nq {
+        let qx = qvecs[a * 3] ; let qy = qvecs[a * 3 + 1] ; let qz = qvecs[a * 3 + 2]
+        let m = sqrt(qx * qx + qy * qy + qz * qz)
+        qmag.push(m)
+        if m > 1.0e-12 { qhat.push(qx / m) ; qhat.push(qy / m) ; qhat.push(qz / m) }
+        else { qhat.push(0.0) ; qhat.push(0.0) ; qhat.push(0.0) }
+        a = a + 1
+    }
+
+    // Per projector i: phased β_i(q) [re,im] and ∂β_i(q)/∂u_d [re,im], over all q.
+    //   bre[i*nq+a],bim[i*nq+a] = β_i(q_a) ;  dre[i*nq+a],dim[i*nq+a] = ∂β_i(q_a).
+    let mut bre: [float] = [] ; let mut bim: [float] = []
+    let mut dre: [float] = [] ; let mut dim: [float] = []
+    let mut ip = 0
+    while ip < nproj {
+        let mut beta_i: [float] = []
+        let mut t = 0
+        while t < n { beta_i.push(betas[ip * n + t]) ; t = t + 1 }
+        let li = ls[ip]
+        let mut aa = 0
+        while aa < nq {
+            let bt = qforge_proj_radial(r, rab, beta_i, li, qmag[aa])
+            let qx = qvecs[aa * 3] ; let qy = qvecs[aa * 3 + 1] ; let qz = qvecs[aa * 3 + 2]
+            let p = qx * tau[0] + qy * tau[1] + qz * tau[2]
+            let br = bt * cos(p) ; let bi = -bt * sin(p)
+            bre.push(br) ; bim.push(bi)
+            // ∂β = −i q_d β = (q_d·bi) + i(−q_d·br)
+            let mut qd = qx
+            if dir == 1 { qd = qy }
+            if dir == 2 { qd = qz }
+            dre.push(qd * bi) ; dim.push(-qd * br)
+            aa = aa + 1
+        }
+        ip = ip + 1
+    }
+
+    // Assemble ∂V[a,b] = Σ_ij(same-l) D_ij·ang·[ conj(∂β_i(a))·β_j(b) + conj(β_i(a))·∂β_j(b) ].
+    // complex products: conj(x)·y where x=(xr,xi),y=(yr,yi):
+    //   re = xr·yr + xi·yi ;  im = xr·yi − xi·yr.
+    let mut out: [float] = []
+    let mut ra = 0
+    while ra < nq {
+        let mut cb = 0
+        while cb < nq {
+            let u = qhat[ra * 3] * qhat[cb * 3]
+                  + qhat[ra * 3 + 1] * qhat[cb * 3 + 1]
+                  + qhat[ra * 3 + 2] * qhat[cb * 3 + 2]
+            let mut vr = 0.0 ; let mut vi = 0.0
+            let mut i = 0
+            while i < nproj {
+                let mut j = 0
+                while j < nproj {
+                    if ls[i] == ls[j] {
+                        let l = ls[i]
+                        let ang = four_pi_om * to_float(2 * l + 1) * _dvnlb_legendre(l, u)
+                        let dcoef = dij[i * nproj + j] * ang
+                        // term 1: conj(∂β_i(a))·β_j(b)
+                        let xr1 = dre[i * nq + ra] ; let xi1 = dim[i * nq + ra]
+                        let yr1 = bre[j * nq + cb] ; let yi1 = bim[j * nq + cb]
+                        vr = vr + dcoef * (xr1 * yr1 + xi1 * yi1)
+                        vi = vi + dcoef * (xr1 * yi1 - xi1 * yr1)
+                        // term 2: conj(β_i(a))·∂β_j(b)
+                        let xr2 = bre[i * nq + ra] ; let xi2 = bim[i * nq + ra]
+                        let yr2 = dre[j * nq + cb] ; let yi2 = dim[j * nq + cb]
+                        vr = vr + dcoef * (xr2 * yr2 + xi2 * yi2)
+                        vi = vi + dcoef * (xr2 * yi2 - xi2 * yr2)
+                    }
+                    j = j + 1
+                }
+                i = i + 1
+            }
+            out.push(vr) ; out.push(vi)
+            cb = cb + 1
+        }
+        ra = ra + 1
+    }
+    return out
+}
+
+// ── Apply ∂V_NL/∂u to a PW state column (the el-ph vertex consumer) ───────────
+// (∂V_NL/∂u · ψ)(q_a) = Σ_b ∂V[a,b]·ψ(q_b). ψ is REAL PW coeffs (length nq, the
+// SCF/davidson convention). Returns interleaved-complex [re,im,…] (2·nq).
+//   block : qforge_dvnl_du_block output (2·nq²) ; psi : [nq] real ; nq.
+// Malformed → [].
+pub fn qforge_dvnl_du_apply(block: [float], psi: [float], nq: int) -> [float] {
+    if len(block) != 2 * nq * nq || len(psi) != nq { return [] }
+    let mut out: [float] = []
+    let mut a = 0
+    while a < nq {
+        let mut sr = 0.0 ; let mut si = 0.0
+        let mut b = 0
+        while b < nq {
+            let idx = (a * nq + b) * 2
+            sr = sr + block[idx] * psi[b]
+            si = si + block[idx + 1] * psi[b]
+            b = b + 1
+        }
+        out.push(sr) ; out.push(si)
+        a = a + 1
+    }
+    return out
+}
