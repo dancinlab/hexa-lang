@@ -92,6 +92,19 @@ jobs:
           ./hexa --version
           echo "faithful-nobaseline OK (darwin-arm64)"
 
+      # ── OP-34: machine-independence FOLD regression gate ──────────────────
+      # The built ./hexa runs the two self-contained determinism oracles and
+      # asserts the recorded golden folds (dt_exp 7679248634312321699 ·
+      # dt_erf FWD 4548590605583584556 · dt_erf BWD 4249661408190172843 —
+      # proven byte-identical across 4 environments, F-OP19/19b/19c/19d).
+      # LOW BLAST RADIUS: only a REAL fold drift (or the oracle failing to
+      # run) can fail this step — tool/fold_ci_gate.sh is the SSOT. <5 s.
+      - name: OP-34 — fold gate (dt_exp/dt_erf golden folds, darwin-arm64)
+        shell: bash
+        run: |
+          set -euo pipefail
+          sh tool/fold_ci_gate.sh ./hexa
+
       - name: Package — shared release_package (seeds removed)
         shell: bash
         env:
@@ -135,6 +148,15 @@ jobs:
           ./hexa --version
           echo "faithful-nobaseline OK (linux-x86_64)"
 
+      # ── OP-34: machine-independence FOLD regression gate (see darwin job
+      # for full rationale). SSOT = tool/fold_ci_gate.sh; <5 s; fails ONLY on
+      # a real deterministic-fold drift vs the 4-environment goldens.
+      - name: OP-34 — fold gate (dt_exp/dt_erf golden folds, linux-x86_64)
+        shell: bash
+        run: |
+          set -euo pipefail
+          sh tool/fold_ci_gate.sh ./hexa
+
       - name: Package — shared release_package (seeds removed)
         shell: bash
         env:
@@ -176,6 +198,15 @@ jobs:
           set -euo pipefail
           ./hexa --version
           echo "faithful-nobaseline OK (linux-arm64)"
+
+      # ── OP-34: machine-independence FOLD regression gate (see darwin job
+      # for full rationale). SSOT = tool/fold_ci_gate.sh; <5 s; fails ONLY on
+      # a real deterministic-fold drift vs the 4-environment goldens.
+      - name: OP-34 — fold gate (dt_exp/dt_erf golden folds, linux-arm64)
+        shell: bash
+        run: |
+          set -euo pipefail
+          sh tool/fold_ci_gate.sh ./hexa
 
       - name: Package — shared release_package (seeds removed)
         shell: bash
