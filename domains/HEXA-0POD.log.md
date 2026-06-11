@@ -1,5 +1,26 @@
 # HEXA-0POD — log
 
+## 2026-06-12 — OP-19g DONE: summer recorded as 5th environment of the machine-independence matrix (distinct glibc x86_64 host, fingerprint pinned) ($0 · 0-pod)
+- Deep-dive round-10 branch ②: summer had only been an ad-hoc substitute leg (OP-33/35, aiden down both times)
+  — never RECORDED as an environment row. Fingerprinted: Ubuntu 24.04.2 LTS (Noble Numbat) · kernel
+  6.17.0-35-generic x86_64 · glibc 2.39 (Ubuntu GLIBC 2.39-0ubuntu8.7) · AMD Ryzen 5 9600X · hexa
+  0.1.0-dispatch @380bdf548 (F-OP33 host-local toolchain repair still in place, runtime.a rebuilt Jun-11).
+- Golden folds reproduce EXACTLY on summer (self-contained oracles, scp pool pattern): op19 dt_exp CE-bwd
+  7679248634312321699 ✓ · op19b dt_erf FWD 4548590605583584556 ✓ / BWD 4249661408190172843 ✓ — plus
+  process-to-process byte-eq double-runs. Breadth: op33 schedule lane F-OP33-LR-SCHEDULE=1 (d5 checksum
+  598834071, CROSSPLAT-FINGERPRINT-D5 == all-env) · op35 xplat ckpt lane F-OP35-XPLAT-LOCAL=1 (loss bits ==
+  record, resume bit-mismatch 0, roundtrip 33/33).
+- NEW glibc-axis data: summer LIBM folds == aiden recorded glibc-x86 LIBM folds (CE-bwd 3352931952497630952 ·
+  GELU-fwd 6306829276275644424 · GELU-bwd 5500011732941122953) — two INDEPENDENT glibc x86_64 hosts round
+  identically on the libm lane (per-libc effect, F-OP19C thesis), while dt_* is identical across all 6 envs.
+- RECORDED: docs/flame-machine-independent-training.md §3 table upgraded to the full 6-row environment matrix
+  (local · ghost · aiden · pi5 · SUMMER · musl) with the summer fingerprint verbatim + caveats.
+- HONEST: aiden DOWN (pool [x]) + its exact glibc version never recorded → the pair's glibc-VERSION diversity
+  is unknown (recorded claim = "2nd independent glibc x86_64 host, fingerprint pinned", no more). Summer =
+  self-contained lane only (older hexa miscompiles cross-module imports). Pre-existing untracked op35 oracle
+  copy on summer's checkout left as found (not mine). /tmp/op19g cleaned. Verdict
+  .verdicts/hexa-0pod/F-OP19G-SUMMER-5TH-ENV.txt.
+
 ## 2026-06-12 — OP-35 DONE: checkpoint save/restore determinism (6th surface) — audit + FCK\x01 fp64-LE training checkpoint + resume==uninterrupted bit-eq oracle + cross-platform byte-identical files ($0 · 0-pod)
 - Deep-dive round-10 branch ①: a machine-independent run is only useful if you can STOP→serialize (W,m,v,t)→
   restore→RESUME byte-identical to an uninterrupted run. Serialization holes: float→text bit loss; binary

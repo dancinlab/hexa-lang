@@ -1,19 +1,149 @@
 ════════════════════════════════════════════════════════════════════════════
-F-OP19G-SUMMER-5TH-ENV — summer recorded as the 5th environment of the
-machine-independence matrix (distinct glibc x86_64-linux host vs aiden)
+F-OP19G-SUMMER-5TH-ENV — summer formally RECORDED as the 5th environment of
+the machine-independence matrix (a 2nd independent glibc x86_64-linux host,
+exact fingerprint pinned); golden folds verified on-host
 HEXA-0POD OP-19g · 0-GPU · free pool ONLY (summer, sidecar pool) · ZERO vast · $0
 ════════════════════════════════════════════════════════════════════════════
 
-STATUS: WIP — skeleton pushed first (STORM discipline). Fingerprint + fold
-runs land in subsequent commits on this branch.
+GOAL
+  The matrix had 4 recorded environments + musl: local arm64-macos (Darwin),
+  ghost arm64-macos (Darwin), aiden x86_64-linux (glibc), pi5 arm64-linux
+  (glibc), + musl-Alpine (docker on summer; F-OP19D/19E). Summer ITSELF — a
+  distinct x86_64-linux host — had only been an ad-hoc SUBSTITUTE leg
+  (F-OP33 schedule, F-OP35 checkpoint; aiden was down both times) and was
+  never RECORDED as an environment row with its exact glibc/distro/kernel
+  fingerprint. This OP (a) fingerprints summer precisely, (b) re-runs the
+  golden fold oracles ON summer for the record, (c) lands the row in
+  docs/flame-machine-independent-training.md → 5 recorded environments
+  (6 counting musl separately).
 
-PLAN
-  1. Fingerprint summer (distro / kernel / glibc `ldd --version` / CPU model).
-  2. Run the SELF-CONTAINED fold oracles on summer:
-       op19_crossplatform_selfcontained.hexa  (dt_exp CE-bwd fold)
-       op19b_crossplatform_erf.hexa           (dt_erf GELU FWD/BWD folds)
-     + breadth lanes (op33 schedule / op35 xplat) as feasible.
-     Golden values: dt_exp 7679248634312321699 · dt_erf FWD 4548590605583584556
-     · dt_erf BWD 4249661408190172843.
-  3. Record the summer row in docs/flame-machine-independent-training.md's
-     environment table (5th recorded environment; 6th counting musl-Alpine).
+────────────────────────────────────────────────────────────────────────────
+ 1. SUMMER FINGERPRINT (measured this session via `sidecar pool on summer`)
+────────────────────────────────────────────────────────────────────────────
+  distro : Ubuntu 24.04.2 LTS (Noble Numbat)            [/etc/os-release]
+  kernel : Linux 6.17.0-35-generic #35~24.04.1-Ubuntu SMP PREEMPT_DYNAMIC
+           x86_64                                        [uname -srvm]
+  glibc  : ldd (Ubuntu GLIBC 2.39-0ubuntu8.7) 2.39      [ldd --version]
+  CPU    : AMD Ryzen 5 9600X 6-Core Processor (12 threads)
+  hexa   : 0.1.0-dispatch · checkout ~/dancinlab/hexa-lang @ 380bdf548
+           (toolchain host-locally repaired per the F-OP33 recipe:
+            consistent runtime.c/runtime_core.c pair + rebuilt
+            build/runtime.a 2026-06-11 + committed prebuilt build/hexat_linux)
+
+  aiden contrast: aiden was DOWN (pool health [x], consistent with
+  OP-33/35); its exact glibc/distro version was NEVER recorded in any
+  campaign verdict (they say only "x86_64-linux (glibc)"), so the
+  glibc-VERSION diversity of the aiden/summer pair is honestly UNKNOWN.
+  What this OP adds for certain: a SECOND independent glibc x86_64 host
+  with its fingerprint pinned — and a libm cross-check (below) showing the
+  two glibc hosts round identically on the libm lane.
+
+────────────────────────────────────────────────────────────────────────────
+ 2. GOLDEN FOLD ORACLES ON SUMMER — VERBATIM (self-contained lane only)
+────────────────────────────────────────────────────────────────────────────
+  Oracles scp'd from origin/main 035e1390d to /tmp/op19g and run via
+  `hexa run` on summer (cwd = the repaired checkout). SELF-CONTAINED oracles
+  ONLY — summer's older hexa miscompiles cross-module imports and mis-wraps
+  trailing void user-fn calls (the F-OP33/35-documented quirk); this
+  constraint is part of the record.
+
+  (a) stdlib/flame/op19_crossplatform_selfcontained.hexa — VERBATIM:
+        CEBWD-LIBM-bits   = 3352931952497630952
+        CEBWD-TAYLOR-bits = 7679248634312321699   == GOLDEN ✓
+        GELUFWD-LIBM-bits   = 6306829276275644424
+        GELUFWD-TAYLOR-bits = 4548590605583584556 == GOLDEN ✓
+        GELUBWD-LIBM-bits   = 5500011732941122953
+        GELUBWD-TAYLOR-bits = 636106759170901885  == recorded 4-env value ✓
+      PROCESS-TO-PROCESS: two independent `hexa run` invocations, full
+      output cmp → byte-identical (OP19-PROC-BYTEEQ-OK).
+
+  (b) stdlib/flame/op19b_crossplatform_erf.hexa — VERBATIM:
+        GELUFWD-DET-bits = 4548590605583584556    == GOLDEN ✓
+        GELUBWD-DET-bits = 4249661408190172843    == GOLDEN ✓
+      PROCESS-TO-PROCESS: byte-identical (OP19B-PROC-BYTEEQ-OK).
+
+  GOLDEN GATE: all three golden folds reproduce EXACTLY on summer —
+    dt_exp  CE-bwd   7679248634312321699  ✓
+    dt_erf  GELU-FWD 4548590605583584556  ✓
+    dt_erf  GELU-BWD 4249661408190172843  ✓
+  NO divergence found.
+
+  (c) breadth lane 1 — op33_lr_schedule_determinism_eq.hexa (5th surface):
+        (1) RUN-TO-RUN d5 schedule max|Δ| = 0.0
+        (3) libm-cos vs d5 (this host): bit-diff steps = 192 / 500
+            max|Δ| = 3.18484e-19
+        d5   schedule checksum = 598834071          == recorded ✓
+        libm schedule checksum = 990987107          == F-OP33 summer record ✓
+        CROSSPLAT-FINGERPRINT-D5   = 0 0 128 203 189 216 193 65   == all-env ✓
+        CROSSPLAT-FINGERPRINT-LIBM = 0 0 128 177 161 136 205 65
+        F-OP33-LR-SCHEDULE = 1
+      (reproduces the F-OP33 summer leg exactly, now under a pinned
+       fingerprint; output 44890 bytes)
+
+  (d) breadth lane 2 — op35_ckpt_xplat_selfcontained.hexa (6th surface):
+        step 1..4 loss bits = 4613432940088934008 / 4613136240819395993 /
+                              4612796173840186281 / 4612371089293635799
+                              == F-OP35 both-host record ✓
+        resume bit-mismatch (W,m,v) = 0
+        roundtrip adversarial: 33 elems, bit-mismatch = 0
+        F-OP35-XPLAT-LOCAL = 1
+
+────────────────────────────────────────────────────────────────────────────
+ 3. THE GLIBC-AXIS FINDING — summer's LIBM folds == aiden's recorded LIBM folds
+────────────────────────────────────────────────────────────────────────────
+  summer (glibc 2.39, this OP)   vs  aiden (glibc, F-OP19/19B/19D records):
+    CE-bwd  LIBM exp : 3352931952497630952 == 3352931952497630952  (also pi5,
+                                              also musl; ≠ Darwin 796910525…)
+    GELU-FWD LIBM erf: 6306829276275644424 == 6306829276275644424  (x86-glibc-
+                                              specific: pi5/musl/Darwin all ≠)
+    GELU-BWD LIBM erf: 5500011732941122953 == 5500011732941122953
+  → Two INDEPENDENT glibc x86_64 hosts round identically on the libm lane
+    (per-libc+arch effect, F-OP19C thesis re-confirmed), while the dt_* lane
+    is identical across ALL six environments. The deterministic-fold claim now
+    rests on two separate glibc x86 machines, not one.
+
+────────────────────────────────────────────────────────────────────────────
+ 4. RECORDED — docs/flame-machine-independent-training.md
+────────────────────────────────────────────────────────────────────────────
+  The §3 "Platforms tested" table upgraded into the full 6-row environment
+  matrix (local · ghost · aiden · pi5 · SUMMER · musl) with the summer
+  fingerprint verbatim + the glibc-pair libm cross-check paragraph + the
+  honest aiden-version-unknown and self-contained-lane caveats.
+
+GATE (g5)
+---------
+  [x] summer fingerprinted precisely (Ubuntu 24.04.2 · 6.17.0-35-generic ·
+      glibc 2.39-0ubuntu8.7 · Ryzen 5 9600X) — measured, not assumed
+  [x] golden folds == golden on summer (all 3 values verbatim above) +
+      process-to-process byte-eq double-runs
+  [x] breadth: OP-33 schedule lane + OP-35 xplat ckpt lane both = 1 with all
+      recorded values reproduced
+  [x] environment table updated → 5 recorded environments (6 with musl)
+  [x] glibc-diversity point recorded honestly (aiden version unknown — host
+      down + never recorded; the pair's libm agreement IS recorded)
+
+HONEST (g5) notes
+-----------------
+· aiden DOWN again (pool health [x]) — same as OP-33/35. Its glibc/distro
+  version is NOT recorded anywhere in the campaign verdicts; this OP does not
+  invent one. (rfc_070 mentions an "aiden@10.142.0.1 Ubuntu 24.04" but that
+  is a DIFFERENT machine — a GCP host with user aiden — not pool aiden
+  @192.168.50.119; not used.)
+· If summer and aiden are both Ubuntu 24.04/glibc 2.39, the "two different
+  glibc BUILDS" would collapse to "two installs of the same build" — unknown
+  until aiden is back; the claim recorded is exactly "second independent
+  glibc x86_64 host, fingerprint pinned", no more.
+· Self-contained oracle lane ONLY on summer (older hexa miscompiles
+  cross-module imports + mis-wraps trailing void calls — F-OP33/35 quirk);
+  the production-stdlib lane on summer remains untested until its toolchain
+  is upgraded. This constraint is part of the environment record.
+· Summer toolchain = the F-OP33 host-local repair (no repo change on
+  summer); checkout at 380bdf548, hexa 0.1.0-dispatch.
+· Pre-existing residue noticed on summer's checkout: an UNTRACKED
+  stdlib/flame/op35_ckpt_xplat_selfcontained.hexa left from the OP-35
+  session (differs from the landed main version). NOT mine — left as found,
+  flagged here for the next summer session.
+· Disk-frugal: all artifacts under /tmp/op19g on summer (≤45KB each),
+  removed after the run.
+$0 · 0-GPU · no vast/pod · pool CPU only (summer) · foreign pod untouched.
+════════════════════════════════════════════════════════════════════════════

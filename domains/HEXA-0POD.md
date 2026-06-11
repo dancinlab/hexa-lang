@@ -11,7 +11,18 @@ loop targets what the consumer card + code can carry.
 ## milestones (loop self-feeds; add as discovered)
 
 <!-- ANCHOR:OP-19G-SUMMER-5TH-ENV (unique anchor — deep-dive round-10 branch ②: formalize summer as the 5th RECORDED environment row of the machine-independence matrix. Summer (a distinct x86_64-linux glibc host from aiden, possibly a different glibc minor/distro) has been used as a substitute leg (OP-33/35) but was never RECORDED as an environment row with its exact glibc/distro/kernel fingerprint. Adding it diversifies the glibc-version axis and formalizes what OP-33/35 ran ad-hoc. Self-contained oracles only — summer's older hexa miscompiles cross-module imports (F-OP33/35 quirk)) -->
-- [ ] **OP-19g — summer recorded as 5th environment (distinct glibc x86 host): golden folds verified + matrix row**
+- [x] **OP-19g — summer recorded as 5th environment (distinct glibc x86 host): golden folds verified + matrix row** —
+  summer fingerprinted precisely (Ubuntu 24.04.2 LTS · kernel 6.17.0-35-generic x86_64 · glibc 2.39 Ubuntu
+  2.39-0ubuntu8.7 · AMD Ryzen 5 9600X) and formally RECORDED as the 5th environment (6th counting musl) in the
+  docs/flame-machine-independent-training.md matrix. All 3 golden folds reproduce EXACTLY on summer (dt_exp
+  7679248634312321699 · dt_erf FWD 4548590605583584556 · dt_erf BWD 4249661408190172843, process-to-process
+  byte-eq double-runs) + breadth lanes F-OP33-LR-SCHEDULE=1 (d5 checksum 598834071, fingerprint == all-env) and
+  F-OP35-XPLAT-LOCAL=1 (loss bits == record). NEW glibc-axis point: summer's LIBM folds == aiden's recorded
+  glibc-x86 LIBM folds (3352931952497630952 / 6306829276275644424 / 5500011732941122953) — two independent
+  glibc x86_64 hosts round identically on the libm lane while dt_* is identical across all 6 environments.
+  HONEST: aiden DOWN + its glibc version never recorded (version-diversity unknown); summer = self-contained
+  oracle lane only (older hexa miscompiles cross-module imports — F-OP33/35 quirk). Verdict
+  .verdicts/hexa-0pod/F-OP19G-SUMMER-5TH-ENV.txt. $0 · 0-GPU · no vast.
 
 <!-- ANCHOR:OP-35-CHECKPOINT (unique anchor — deep-dive round-10 branch ①: the 6th determinism surface = CHECKPOINT save/restore. A machine-independent run is only useful if you can STOP it, serialize (W, m, v, step t), restore, and RESUME byte-identical to an uninterrupted run. Serialization is a classic determinism hole: float→text round-trip loses bits; binary endianness; missing optimizer state restarts bias-correction; field/tensor iteration order. stdlib's only checkpoint (clm_ckpt.hexa .clm) is an int4-QAT INFERENCE export at fp32 — NOT a training checkpoint) -->
 - [x] **OP-35 — checkpoint save/restore determinism: resume==uninterrupted byte-eq + exact serialization (6th surface)** —
