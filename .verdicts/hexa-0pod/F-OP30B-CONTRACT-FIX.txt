@@ -1,0 +1,89 @@
+════════════════════════════════════════════════════════════════════════════════
+ F-OP30B-CONTRACT-FIX — stale "GELU erf still-open libm hole" line corrected
+ HEXA-0POD OP-30b · docs-only · 0-pod · NO GPU · NO vast · $0
+════════════════════════════════════════════════════════════════════════════════
+
+GOAL
+  OP-30 (#3047) formalized the cross-ISA matmul invariant in
+  docs/flame-determinism-contract.md but flagged (out-of-scope) a STALE line:
+  the step-phase-map closing parenthetical still called the GELU erf
+  "a still-open libm hole — see §1 residual". OP-19b (#3008, F-OP19B-DET-ERF)
+  CLOSED that hole via dt_erf, so the line was factually wrong AND contradicted
+  the doc's own §1 / per-phase table / what-breaks checklist. OP-30b corrects it.
+
+────────────────────────────────────────────────────────────────────────────────
+ 1. THE STALE LINE (verbatim, pre-fix — docs/flame-determinism-contract.md,
+    "## step-phase map" closing paragraph, lines 226-229 at origin/main 7d1ef48e9)
+────────────────────────────────────────────────────────────────────────────────
+  Two exp impls live in this diagram: **`_moe_exp`** (MoE) and **`dt_exp`** (loss
+  fwd AND loss bwd — the latter swapped from libm `exp` in F-OP19 for cross-platform
+  byte-exactness). Each is load-bearing. (The GELU `erf` is a still-open libm hole —
+  see §1 residual.)
+
+  WHY WRONG (current-state facts, per merged verdicts):
+  - OP-19b (#3008, F-OP19B-DET-ERF) swapped the GELU fwd+bwd libm `erf` (and the
+    bwd libm `exp`) to the deterministic dt_erf (flame_math.hexa): A&S 7.1.26
+    rational, branchless in z, the exp routed through dt_exp — NO libm. Byte fold
+    byte-identical cross-platform (arm64-macos local+ghost AND x86-linux aiden in
+    F-OP19B; extended by OP-19c pi5 arm64-linux + OP-19d musl). The hole is CLOSED.
+  - With F-OP19's dt_exp + F-OP19b's dt_erf, the step has NO libm transcendental
+    left on the step path (exp/erf/ln Taylor, sqrt Newton).
+  - The pointer "see §1 residual" was dangling: §1 ("the cross-cutting rule")
+    contains no open erf residual — it contains the F-OP19b CLOSURE paragraph.
+  - The line contradicted three other (correct) sections of the SAME doc:
+    §1's F-OP19b paragraph, the per-phase NORM table row (GELU = dt_erf, "NO
+    libm; F-OP19b"), and the what-breaks checklist ("F-OP19b closed the former
+    libm-`erf` cross-platform hole").
+
+  PROVENANCE OF THE STALENESS: the sentence predates OP-19b (written when CE-bwd's
+  exp was fixed by F-OP19 but the GELU erf genuinely was still open, cf. the OP-19b
+  deferred-item text in domains/HEXA-0POD.md); OP-19b updated §1 + the table +
+  the checklist but missed this closing parenthetical. OP-30 (#3047) spotted it
+  while editing the same doc and left it out-of-scope.
+
+────────────────────────────────────────────────────────────────────────────────
+ 2. THE CORRECTION (verbatim, post-fix — same location)
+────────────────────────────────────────────────────────────────────────────────
+  Two exp impls live in this diagram: **`_moe_exp`** (MoE) and **`dt_exp`** (loss
+  fwd AND loss bwd — the latter swapped from libm `exp` in F-OP19 for cross-platform
+  byte-exactness). Each is load-bearing. (The GELU `erf` is likewise closed: it is
+  the deterministic **`dt_erf`** — A&S 7.1.26 branchless, built on `dt_exp`, no libm;
+  F-OP19b. With it the step has **no libm transcendental left** — see §1.)
+
+  Surgical: 2 lines replaced by 3; matches §1's own wording ("A&S 7.1.26",
+  "branchless", "no libm", "NO libm transcendental left"); cites F-OP19b; the §1
+  pointer now points at the closure paragraph (which exists) instead of a
+  "residual" (which doesn't).
+
+────────────────────────────────────────────────────────────────────────────────
+ 3. OTHER STALE CLAIMS — SCAN RESULT: NONE FOUND
+────────────────────────────────────────────────────────────────────────────────
+  Whole-doc scan for stale/contradictory determinism claims
+  (grep -i 'still-open|still open|open libm|residual|not yet|TODO|remaining|future'
+  + read-through of §1, per-phase table, seam section, step-phase map,
+  what-breaks, adding-a-new-oracle):
+  - "still" at L23/96/143/146: correct current-state usages (run-to-run vs
+    cross-ISA distinctions per F-OP29/F-OP29-2ND-ARCH) — NOT stale.
+  - "residual" at L171: the verdict FILENAME F-OP13-EMBED-RESIDUAL-ORACLE — not a claim.
+  - §1 F-OP19/F-OP19b paragraphs, NORM table row, what-breaks erf bullet, cross-ISA
+    farr_matmul section (F-OP29): all already consistent with merged verdicts.
+  No other correction needed. The fixed parenthetical was the SOLE contradiction.
+
+────────────────────────────────────────────────────────────────────────────────
+ 4. CONSISTENCY CONFIRMATION
+────────────────────────────────────────────────────────────────────────────────
+  Post-fix, every mention of the GELU erf in docs/flame-determinism-contract.md
+  states the SAME fact — closed by dt_erf (A&S 7.1.26 branchless on dt_exp, no
+  libm, F-OP19b), do not revert to libm erf, do not make it piecewise:
+    §1  "F-OP19b cross-platform fix (GELU erf — the last libm transcendental)" ✓
+    per-phase NORM row  "GELU = erf-based CDF … (`dt_erf` … NO libm; F-OP19b)" ✓
+    step-phase-map parenthetical (THE FIX)  "likewise closed … dt_erf … F-OP19b" ✓
+    what-breaks  "dt_erf in GELU, F-OP19b … F-OP19b closed the former libm-`erf`
+                  cross-platform hole" ✓
+  grep -i 'still-open|still open|open libm' → 0 matches. No dangling "§1 residual"
+  pointer. Doc internally consistent about erf's status: YES.
+
+HONEST FRAMING (g5)
+  Docs-only consistency fix. No code, no measurement, no new determinism claim —
+  the doc is brought in line with the already-merged, already-measured verdicts
+  F-OP19B-DET-ERF (#3008) / F-OP19-CROSSPLATFORM-EXACT (#3002). 0-pod, $0.

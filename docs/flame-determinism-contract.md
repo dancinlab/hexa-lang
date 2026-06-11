@@ -225,8 +225,9 @@ just not *identical* to a segmented conv at the window seams. A true
 
 Two exp impls live in this diagram: **`_moe_exp`** (MoE) and **`dt_exp`** (loss
 fwd AND loss bwd — the latter swapped from libm `exp` in F-OP19 for cross-platform
-byte-exactness). Each is load-bearing. (The GELU `erf` is a still-open libm hole —
-see §1 residual.)
+byte-exactness). Each is load-bearing. (The GELU `erf` is likewise closed: it is
+the deterministic **`dt_erf`** — A&S 7.1.26 branchless, built on `dt_exp`, no libm;
+F-OP19b. With it the step has **no libm transcendental left** — see §1.)
 
 ## what breaks the contract
 
