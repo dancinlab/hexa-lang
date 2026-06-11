@@ -1,0 +1,21 @@
+// ════════════════════════════════════════════════════════════════════════════
+//  op28c_bpe_realvocab_staging.hexa — F-OP28C real-scale vocab staging oracle.
+//  WIP SKELETON — full oracle lands in the next commit.
+//
+//  HEXA-0POD OP-28c · CPU-LOCAL byte-eq ORACLE · 0-GPU (`hexa run`) · $0 · no vast
+//
+//  Closes OP-28b's honest remainder: run the BPE tokenizer through the
+//  PRODUCTION load path (bpe_load: load_merges + load_vocab json_parse ->
+//  id lookup) against a REAL on-disk Qwen-style vocab.json + merges.txt at
+//  real-vocab scale (Qwen2.5 base vocab: 151643 entries, 151388 merges),
+//  proving (a) round-trip exact, (b) byte-eq run-to-run, (c) deterministic
+//  load, (d) cross-platform identical fingerprints.
+//
+//  The real vocab is NOT committed to git (megabytes): the oracle reads it
+//  read-only from a candidate path list and SKIPs honestly if absent.
+// ════════════════════════════════════════════════════════════════════════════
+use "self/ml/tokenizer_bpe"
+
+fn main() {
+    println("op28c_bpe_realvocab_staging — WIP skeleton (full oracle in next commit)")
+}

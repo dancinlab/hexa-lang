@@ -63,6 +63,9 @@ loop targets what the consumer card + code can carry.
   pre-tokenizer + GPU step are unchanged out-of-scope. $0, no vast, no GPU.
   Verdict .verdicts/hexa-0pod/F-OP28B-BPE-FIX.txt.
 
+<!-- ANCHOR:OP-28C-VOCAB-STAGING (unique anchor — OP-28b's honest remainder: its oracle proved the fixed byte-encoder end-to-end but did NOT run against a real on-disk Qwen vocab.json (used a canonical-glyph self-contained merge/vocab — a staging gap, not a code defect). OP-28c closes that staging gap 0-pod: stage/verify the BPE tokenizer against a REAL on-disk Qwen-style vocab through the PRODUCTION load path (bpe_load: load_merges + load_vocab json_parse -> id lookup) at real-vocab scale — round-trip exact + byte-eq run-to-run + deterministic load + cross-platform arm64-macos==x86-linux; 0-pod, no GPU, no vast) -->
+- [ ] **OP-28c — BPE real-scale vocab staging: production load path round-trip + byte-eq + cross-platform (closes OP-28b remainder)**
+
 <!-- ANCHOR:OP-31-3RD-ARCH (unique anchor — OP-29 proved machine-independence on a 2nd flame arch (decoder block); OP-31 generalizes to a THIRD structurally-distinct arch — a plain feed-forward MLP (nn_lib nn_linear_fwd + GELU, NO attention/RoPE/conv/MoE/norm) — and verifies the OP-30 cross-ISA-matmul invariant (inline ascending reduction, NOT FMA-fused farr_matmul) holds. The production nn_linear_fwd routes through forge_dispatch_matmul → FMA-fused farr_matmul (tensor_lib L58 "ikj order, FMA-fused under clang -O2") = a REAL OP-30 hole; close it inline-ascending like OP-29) -->
 - [x] **OP-31 — machine-independence on a 3rd flame arch + OP-30 cross-ISA-matmul invariant verified (or violation found+closed)** —
   GREEN. Generalizes OP-29's G2 from 2 archs to THREE: machine-independent byte-exact determinism now holds on a plain
