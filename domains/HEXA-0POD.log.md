@@ -1,5 +1,29 @@
 # HEXA-0POD — log
 
+## 2026-06-11 — OP-24d DONE: G1 turnkey kit pre-gates the proven input-side determinism (OP-28/28b) ($0 · 0-pod · NO GPU/vast/pod)
+- Deep-dive round-7 branch ④: closes the 0-pod-feasible completeness of gap G1 (real-corpus end-to-end). The GPU
+  trainer run stays GPU-build-gated, but the now-proven INPUT-side pieces are WIRED into OP-24c's turnkey kit.
+- INTEGRATION (tool/clm/build_clmprod_tf32_e2e.sh, the only code change): added STEP 0 · INPUT-SIDE PRE-GATE BEFORE
+  the PROVISION/ENV/nvcc guards (CPU-only, runs on ANY host). run_input_oracle <name> <oracle> <pass-token> runs each
+  oracle TWICE via $HEXA_RUN (bare-file form, matching the script's own emit call) and asserts (i) the in-oracle PASS
+  token (F-OP28-CORPUS-LOADER-DET = 1 / F-OP28B-BPE-FIX = 1) AND (ii) process-to-process byte-eq (run1==run2 diff
+  clean), surfacing each CROSSPLAT-FINGERPRINT line. Runs BOTH oracles (OP-28 byte-level V=256 + OP-28b BPE V=151936);
+  INPUT_PREGATE=PASS only if BOTH pass both legs, else the kit STOPS (exit 2) before spending a GPU build (g5: a
+  determinism claim on a non-reproducible input is meaningless). HEADLINE [RESULT] line now also reports
+  INPUT-PRE-GATE(OP-24d · CPU · 0-GPU)=$INPUT_PREGATE alongside GATE-A/B/C.
+- VALIDATION (0-pod, CPU): bash -n VALID. op28 oracle PASS locally, fingerprint 0 0 0 216 16 88 186 65 == the F-OP28
+  recorded local+aiden x86-linux value (cross-platform byte-eq). op28b oracle PASS locally (fingerprint
+  0 0 0 100 21 127 152 65). The pre-gate function exercised end-to-end against ~/.hx/bin/hexa-run => INPUT_PREGATE=PASS
+  (both oracles PASS both legs, both fingerprints surfaced).
+- G1-READINESS PICTURE: PROVEN 0-pod NOW + pre-gated = the INPUT side (tokenize->pack->batch, byte-level F-OP28 AND
+  BPE F-OP28b, byte-eq + machine-independent by construction). SOLE GATED REMAINDER = the GPU trainer STEP run
+  (clm_prod_gpu -DHEXA_CUDA build env; F-OP24B's 31-host-marshal-wrapper frozen-seed completeness, a build-ENV gate,
+  not a pod). G1 is 0-pod-MAXIMALLY-CLOSED: everything provable without a GPU is proven AND wired; only the GPU step
+  awaits authorization.
+- Behavior-preserving: the kit's GPU STAGE/BUILD/RUN/GATE-A/B/C logic UNCHANGED; OP-24d only PREPENDS a CPU pre-gate +
+  a headline line. Readiness doc G1 row updated (severity HIGH -> reduced). NO GPU run, NO vast, NO pod, NO foreign
+  pod touched. Verdict .verdicts/hexa-0pod/F-OP24D-G1-READINESS.txt.
+
 ## 2026-06-11 — OP-31 DONE: machine-independence on a 3rd flame arch (MLP) + OP-30 cross-ISA-matmul invariant DIRECTLY DEMONSTRATED ($0 · 0-pod)
 - Generalizes OP-29's G2 from 2 archs to THREE. 3rd arch = a plain feed-forward MLP (Linear→GELU→Linear→GELU→Linear),
   structurally DISTINCT from CLMConvMoE (OP-15: conv+MoE+GroupNorm) AND the decoder block (OP-29: attention+RoPE+

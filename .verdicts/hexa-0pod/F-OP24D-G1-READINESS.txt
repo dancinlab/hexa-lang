@@ -5,4 +5,110 @@ gap G1 is 0-pod-maximally-closed — only the GPU trainer step run remains gated
 HEXA-0POD OP-24d · INTEGRATION + READINESS DOC · 0-GPU · $0 · no vast · no pod
 ════════════════════════════════════════════════════════════════════════════
 
-[WIP skeleton — filled on integration]
+CONTEXT — gap G1 and the pieces that close its 0-pod slice
+  OP-26b (#3035, docs/flame-machine-independent-SUBMISSION-READINESS.md) named
+  gap G1 = "real-corpus end-to-end training run, GPU-build-gated (HIGH)". The
+  pieces, all already on main, are:
+    - OP-24c (tool/clm/build_clmprod_tf32_e2e.sh, #3022): the TURNKEY GPU-build
+      kit (frozen-seed restore -> nvcc -DHEXA_CUDA clm_prod_gpu -> FP64 + TF32
+      lanes -> GATE-A/B/C determinism + loss-track + speed). GPU-build-gated.
+    - OP-28 (stdlib/flame/op28_corpus_loader_det.hexa, #3041): proves the
+      BYTE-LEVEL token pipeline (tokenize->pack->batch, V=256) is byte-eq
+      run-to-run + machine-independent (pure integer; no libm/no float/no
+      hash-order). 0-pod (CPU `hexa run`).
+    - OP-28b (stdlib/flame/op28b_bpe_byteuni_det.hexa, #3049): closes OP-28's
+      residual — fixes the BPE byte<->unicode map to the canonical GPT-2/Qwen
+      bytes_to_unicode, so the BPE pipeline (V=151936) is ALSO 0-pod
+      determinism-provable (byte-eq + cross-platform).
+  So the INPUT side (tokenize->pack->batch, both byte-level AND BPE) is proven
+  machine-independent 0-pod. The only UNPROVEN G1 piece is the GPU trainer STEP
+  run. OP-24d WIRES the input-side proof INTO the turnkey kit as a CPU pre-gate.
+
+THE INTEGRATION (tool/clm/build_clmprod_tf32_e2e.sh — the only code change)
+  Added STEP 0 · INPUT-SIDE PRE-GATE, inserted BEFORE the PROVISION CHECKLIST
+  / ENV / nvcc guards (i.e. it runs on ANY host, CPU-only, no CUDA needed):
+
+    run_input_oracle <name> <oracle-path> <pass-token>
+      - runs the oracle TWICE via the project hexa runner ($HEXA_RUN, default
+        hexa-run; bare-file form `$HEXA_RUN <file>`, matching this script's own
+        runtime_cuda_emit.hexa call — the verdicts' `hexa run <oracle>` is the
+        same compile-then-exec path),
+      - asserts (i) the in-oracle PASS token is present
+        (`F-OP28-CORPUS-LOADER-DET = 1` / `F-OP28B-BPE-FIX = 1` — the oracle's
+        own byte-eq + pure-integer gate), AND
+      - asserts (ii) PROCESS-TO-PROCESS byte-eq: the two independent runs
+        `diff -q` clean (run1 == run2, max|Δ|=0), AND
+      - surfaces each oracle's CROSSPLAT-FINGERPRINT line (the IEEE-754 LE bytes
+        of the checksum) so a 2nd host can byte-diff it (cross-platform leg).
+
+    The pre-gate runs BOTH oracles:
+      run_input_oracle OP28-bytelevel  ...  "F-OP28-CORPUS-LOADER-DET = 1"
+      run_input_oracle OP28b-bpe       ...  "F-OP28B-BPE-FIX = 1"
+    -> INPUT_PREGATE=PASS only if BOTH pass both legs. On FAIL the kit STOPS
+       (exit 2) BEFORE spending a GPU build: a determinism claim on the GPU step
+       is meaningless on a non-reproducible input (g5 honest).
+
+  The HEADLINE [RESULT] line now also reports
+    INPUT-PRE-GATE(OP-24d · CPU · 0-GPU)=$INPUT_PREGATE
+  alongside GATE-A/B/C, so the turnkey kit's output records the input-side proof
+  as step 0 of the same flow.
+
+  Turnkey flow AFTER OP-24d (one command, on an authorized CUDA host):
+    STEP 0 : INPUT PRE-GATE (CPU, runs NOW) — OP-28 + OP-28b oracles byte-eq
+             => the (ids,targets) the trainer will consume are PROVEN reproducible
+    then   : GPU build + FP64/TF32 runs + GATE-A/B/C + SPEED  — the GPU step,
+             the SOLE gated piece (clm_prod_gpu -DHEXA_CUDA build env).
+
+VALIDATION (0-pod, CPU, 0-GPU, $0, no vast, no pod — performed locally)
+  bash -n tool/clm/build_clmprod_tf32_e2e.sh   ->  VALID (syntax-clean).
+
+  The two oracles, run on this host (arm64-macos, ~/.hx/bin/hexa-run):
+    op28_corpus_loader_det.hexa :
+      F-OP28-CORPUS-LOADER-DET = 1   (PASS token present)
+      CROSSPLAT-FINGERPRINT = 0 0 0 216 16 88 186 65   (== F-OP28 verdict's
+        recorded local AND aiden x86-linux fingerprint — cross-platform byte-eq)
+      run1 == run2  ->  process-to-process BYTE-EQ.
+    op28b_bpe_byteuni_det.hexa :
+      F-OP28B-BPE-FIX = 1            (PASS token present)
+      CROSSPLAT-FINGERPRINT = 0 0 0 100 21 127 152 65
+      run1 == run2  ->  process-to-process BYTE-EQ.
+
+  The pre-gate function itself, exercised end-to-end against the real runner:
+      INPUT_PREGATE=PASS
+    (both oracles PASS both legs; both fingerprints surfaced). The pre-gate is
+    functionally wired and green on CPU.
+
+G1-READINESS PICTURE (the honest, complete 0-pod picture)
+  PROVEN 0-pod (NO GPU, runs NOW, and now PRE-GATED by the turnkey kit):
+    - INPUT side, byte-level path : tokenize->pack->batch byte-eq run-to-run
+      + machine-independent (F-OP28; pure integer => by construction).
+    - INPUT side, BPE path        : byte<->unicode + token pipeline byte-eq
+      run-to-run + machine-independent (F-OP28b).
+    - The turnkey kit verifies BOTH as step 0 before any GPU work, and STOPS
+      if the input is not reproducible.
+  SOLE GATED REMAINDER (awaits an authorized GPU-build env — NOT done here):
+    - The GPU trainer STEP RUN: nn_decoder_fwd / nn_decoder_grad / AdamW
+      consuming the proven (ids,targets), built via clm_prod_gpu -DHEXA_CUDA.
+      The kit's STAGE/BUILD/RUN/GATE-A/B/C blocks are unchanged and ready; the
+      one irreducible blocker stays the frozen-seed CUDA runtime completeness
+      (F-OP24B: 31 host marshal wrappers) — a GPU-build-ENV gate, not a pod.
+  => G1 is 0-pod-MAXIMALLY-CLOSED: everything provable without a GPU is proven
+     AND wired into the turnkey flow; only the GPU step run awaits authorization.
+
+GATE (g5) — what this verdict claims, and what it does NOT
+  CLAIMS: the turnkey kit now pre-gates the input-side determinism (OP-28 +
+    OP-28b oracles as step 0, byte-eq + machine-independent), bash -n VALID,
+    and the G1-readiness is documented (input proven 0-pod; GPU step the sole
+    gated remainder). Pre-gate verified GREEN locally on CPU.
+  DOES NOT CLAIM: any GPU run, any step/s number, any real-corpus end-to-end
+    training result. NO GPU was used, NO vast/pod rented, NO foreign pod
+    touched. The GPU trainer STEP run remains the gated remainder of G1.
+  Behavior-preserving: the kit's GPU build/run/gate logic is UNCHANGED; OP-24d
+    only PREPENDS a CPU pre-gate + a headline line + a doc/milestone update.
+
+VERDICT: GREEN. gap G1's INPUT side is 0-pod-PROVEN (OP-28 byte-level +
+  OP-28b BPE, byte-eq run-to-run + machine-independent), the OP-24c turnkey kit
+  now PRE-GATES it as step 0 (CPU, 0-GPU, runs now; bash -n valid; pre-gate
+  green locally), and the SOLE remaining G1 item is the GPU trainer step run
+  (clm_prod_gpu -DHEXA_CUDA build env). G1 is 0-pod-maximally-closed.
+════════════════════════════════════════════════════════════════════════════
