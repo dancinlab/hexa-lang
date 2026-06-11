@@ -35,6 +35,25 @@
 // GATE (g5): block fwd byte-eq run-to-run (max|Δ|=0) AND block bwd grads
 // byte-eq run-to-run (max|Δ|=0) AND deterministic IEEE-754 fingerprint
 // emitted for cross-platform byte-diff (local arm64-macos vs aiden x86-linux).
+//
+// ── 2nd 2nd-arch HOLE (FMA-routing — found + closed in the self-contained
+//    twin) ──────────────────────────────────────────────────────────────
+// This multi-file oracle imports the PRODUCTION decoder_block_lib, whose
+// projection/grad helpers (_db_proj_batch_farr / _db_grad_accum_farr) route
+// through the C runtime `farr_matmul` kernel (ikj order, FMA-fused under
+// clang -O2). OP-29 found that this C kernel is NOT machine-independent:
+// on byte-IDENTICAL fp64 inputs an 8×8·8×4 matmul byte-DIVERGES arm64 vs
+// x86 (arm64 contracts a*b+c into one FMA, x86 emits mul+add) — so the
+// production block is byte-eq run-to-run on EACH platform but its result
+// differs ACROSS platforms. This is the 2nd-arch twin of the pre-OP-19
+// libm leak. It is CLOSED in op29_decoder_block_selfcontained.hexa, which
+// re-implements both helpers as inline ascending-order dot products (plain
+// mul+add in hexa codegen, no C kernel) → byte-IDENTICAL arm64-macos vs
+// aiden x86-linux (FWD 0 0 64 78 44 169 214 65 · GRAD 0 0 128 244 215 140
+// 211 65 on BOTH). The machine-independence contract for a 2nd arch must
+// therefore route matmul through inline reductions, NOT the FMA-fused
+// farr_matmul — the same "sequential reduction, no fused kernel" discipline
+// the CLMConvMoE oracles already use. THIS file proves run-to-run only.
 // ════════════════════════════════════════════════════════════════════════
 
 use "stdlib/flame/flame_math"
@@ -219,7 +238,7 @@ let det_ok = (fwd_dev == 0.0) && (bwd_grad_dev == 0.0) && (bwd_dx_dev == 0.0)
 if det_ok {
     print("F-OP29-2ND-ARCH = 1")
     println("")
-    println("PASS — 2nd flame model arch (Transformer decoder block: GQA attn + RoPE + SwiGLU + RMSNorm) is byte-eq run-to-run: fwd Xout max|Δ|=0, bwd grads max|Δ|=0, bwd dX max|Δ|=0. Built libm-free (dt_exp/dt_sqrt + deterministic RoPE _rope_build_tables_dt closing the nn_rope_build_tables libm ln/exp hole) => machine-independent by the OP-19/19b reproducibility identity. The determinism construction GENERALIZES beyond CLMConvMoE. Cross-platform: byte-diff the two CROSSPLAT-FINGERPRINT lines on a 2nd host (local arm64-macos vs aiden x86-linux).")
+    println("PASS (run-to-run) — 2nd flame model arch (Transformer decoder block: GQA attn + RoPE + SwiGLU + RMSNorm) is byte-eq run-to-run: fwd Xout max|Δ|=0, bwd grads max|Δ|=0, bwd dX max|Δ|=0. RoPE built libm-free (deterministic _rope_build_tables_dt closing the nn_rope_build_tables libm ln/exp hole). NOTE: this file imports the PRODUCTION decoder_block_lib, whose _db_*_farr helpers route through the C farr_matmul kernel — OP-29 found that kernel is FMA-non-deterministic across ISAs (arm64 vs x86 byte-diverge on identical fp64 inputs), so CROSS-PLATFORM byte-identity is proven by the inline-reduction twin op29_decoder_block_selfcontained.hexa (FWD 0 0 64 78 44 169 214 65 · GRAD 0 0 128 244 215 140 211 65 IDENTICAL on arm64-macos + aiden x86-linux). The determinism construction GENERALIZES beyond CLMConvMoE once matmul is routed through inline ascending reductions (NOT the FMA-fused C kernel) — the same discipline the CLMConvMoE oracles use.")
 } else {
     print("F-OP29-2ND-ARCH = 0")
     println("")
