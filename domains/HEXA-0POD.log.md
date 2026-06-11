@@ -1435,3 +1435,16 @@ NOT claimed. $0, no vast/pool/pod. Verdict .verdicts/hexa-0pod/F-OP21-HOPPER-WAR
 - g84 CONFIRMED: NO /paper scaffold — no PAPER.tape / PAPER.md / LaTeX; readiness assessment only.
 - Milestone OP-26c flipped [x]. Verdict .verdicts/hexa-0pod/F-OP26C-READINESS-V2.txt. Docs-only · $0 ·
   0-GPU · 0-pod · no vast · no foreign-pod touch · no .tape edits.
+
+## OP-30c — FMA-immunity boundary formalized in the cross-ISA invariant (docs-only) — 2026-06-12
+- Deep-dive round-9 branch ③ (FOREGROUND). docs-only · $0 · 0-GPU · 0-pod · no vast · no .tape edits.
+- docs/flame-determinism-contract.md: NEW "#### boundary: exact-product operands are FMA-immune" under the
+  cross-ISA invariant — MATH (round(a·b+c)==round(round(a·b)+c) iff a·b exact; b∈{0,1}/±2^k/0 classes +
+  ASCII exact-vs-inexact diagram), MEASUREMENT (F-OP32 DIAG-B binary spikes 1881150137 IDENTICAL both ISAs
+  vs DIAG-A rate-coded 1478294112≠210297454, same forbidden fused kernel), PRACTICAL RULE (one-hot/mask/
+  binary-spike provably safe BUT immunity = operand-value property, conditional + fragile — plasticity/
+  scaling/normalization → real-valued → blanket rule; default inline-ascending unless exact PROVEN),
+  SCOPE (blanket default kept; explanation + narrowly-licensed exception, not a loophole).
+- docs/flame-machine-independent-training.md: surgical T4 cross-ref (boundary pointer + DIAG numbers).
+- Milestone OP-30c flipped [x]. Verdict .verdicts/hexa-0pod/F-OP30C-FMA-BOUNDARY.txt. All numbers cite
+  F-OP32-4TH-ARCH verbatim.

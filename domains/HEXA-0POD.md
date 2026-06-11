@@ -10,6 +10,20 @@ loop targets what the consumer card + code can carry.
 
 ## milestones (loop self-feeds; add as discovered)
 
+<!-- ANCHOR:OP-30C-FMA-BOUNDARY (unique anchor — deep-dive round-9 branch ③: OP-32's DIAG-B finding (binary {0,1}-operand matmuls are FMA-IMMUNE: fused≡unfused because a·b is exact when b∈{0,1}) formalized as the PRECISE boundary condition of the OP-30 cross-ISA-matmul invariant in docs/flame-determinism-contract.md — the boundary lived only in the F-OP32 verdict, not as a first-class discoverable part of the contract) -->
+- [x] **OP-30c — FMA-immunity boundary (exact-product operands) formalized in the cross-ISA invariant (docs-only)** —
+  GREEN (docs-only, $0, 0-pod, NO GPU/vast). docs/flame-determinism-contract.md gains "#### boundary:
+  exact-product operands are FMA-immune" under the cross-ISA invariant: (a) MATH — round(a·b+c) ==
+  round(round(a·b)+c) iff the product a·b is EXACT in fp64 (b∈{0,1} / ±2^k / 0 classes; ASCII exact-vs-inexact
+  diagram); (b) MEASUREMENT — F-OP32 DIAG-B binary {0,1} spikes byte-IDENTICAL cross-ISA (1881150137 BOTH)
+  through the SAME forbidden FMA-fused farr_matmul kernel that DIAG-A rate-coded real-valued drive diverges
+  on (arm64 1478294112 ≠ x86 210297454); (c) PRACTICAL RULE — one-hot/mask/binary-spike matmuls provably safe
+  through the fused kernel, but the immunity is an operand-VALUE property → conditional + fragile (plasticity/
+  scaling/normalization make operands real-valued → blanket rule applies; default inline-ascending unless
+  exact operands PROVEN); (d) blanket inline-ascending default KEPT (explicit SCOPE: explanation + narrowly-
+  licensed exception, not a loophole). + surgical T4 cross-ref in flame-machine-independent-training.md.
+  Verdict .verdicts/hexa-0pod/F-OP30C-FMA-BOUNDARY.txt.
+
 <!-- ANCHOR:OP-33-LR-SCHEDULE (unique anchor — deep-dive round-9 branch ②: the 5th determinism surface = the LR-SCHEDULER arithmetic (warmup + cosine decay). The step path is libm-free (F-OP19/19b/29) but the schedule is a separate per-step float surface feeding lr into AdamW; the cosine needs cos() and libm cos is the same not-correctly-rounded cross-platform hole class F-OP19 closed for exp. OP-23b's harness computed its schedule once host-side and passed it to both lanes — sidestepping the production question) -->
 - [x] **OP-33 — LR-scheduler determinism surface: audit + deterministic schedule (d5_cos) + oracle (5th surface)** —
   GREEN ($0, CPU `hexa run` + pool x86-linux; NO GPU/vast/pod). AUDIT: NO production LR scheduler existed in

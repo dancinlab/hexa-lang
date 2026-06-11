@@ -160,6 +160,82 @@ provide a **non-FMA accumulation** (e.g. force `-ffp-contract=off`, or split the
 multiply and add into separate statements the backend cannot recombine) and
 re-measure the cross-ISA byte fold. (F-OP29-2ND-ARCH.)
 
+#### boundary: exact-product operands are FMA-immune
+
+The invariant above has a **precise mathematical boundary**, measured by OP-32's
+in-band FMA diagnostics on the 4th (spiking LIF) architecture. It bounds *when*
+the fused kernel can diverge — it does **not** relax the rule above, which stays
+the default on the determinism path.
+
+**The MATH.** The FMA divergence exists only because one rounding can differ
+from two. `fma(a, b, c)` rounds **once** (after the exact product `a·b` and the
+add); `add(mul(a, b), c)` rounds **twice** (once after the product, once after
+the add). The two forms can differ **iff the intermediate product `a·b` is
+inexact** — i.e. iff `round(a·b) ≠ a·b`. When the product is *exactly
+representable* in fp64, the first rounding is the identity and the two forms
+collapse to the same bits:
+
+```
+   round(a·b + c)  ==  round(round(a·b) + c)     iff  a·b is EXACT in fp64
+
+   exact-product operand classes (FMA-IMMUNE):     inexact product (FMA-EXPOSED):
+     b ∈ {0, 1}    a·0 = 0,  a·1 = a  (exact)        b real-valued, a·b needs
+     b = ±2^k      exponent shift only (exact*)       rounding → fused (1 round)
+     a = 0 or ±2^k symmetric case                     ≠ unfused (2 rounds)
+                                                      → sub-ULP per-ISA divergence
+   (* barring under/overflow at the exponent range edges)
+```
+
+A matmul whose *every* product is exact therefore folds to the same bytes
+through the FMA-fused kernel and through the inline ascending form — there is
+nothing for the contraction setting to fuse *differently*. Binary `{0,1}`
+operands (spikes, one-hot rows, boolean masks) are the practically important
+member of this class.
+
+**The MEASUREMENT (F-OP32-4TH-ARCH).** OP-32 fed byte-identical fp64 inputs
+through the **same forbidden FMA-fused `farr_matmul` kernel** on both ISAs, in
+two drives:
+
+```
+   through the SAME FMA-fused farr_matmul kernel (the forbidden one):
+
+   DIAG-A  rate-coded REAL-VALUED drive       DIAG-B  BINARY {0,1} spike drive
+   ──────────────────────────────────         ────────────────────────────────
+     arm64-macos  ck = 1478294112               arm64-macos  ck = 1881150137
+     x86-linux    ck = 210297454                x86-linux    ck = 1881150137
+        ↑ DIVERGES (inexact products)              ↑ IDENTICAL (exact products)
+```
+
+Same kernel, same machines, same run — the only difference is whether the
+operand values make every product exact. This confirms the invariant is
+**precision-structural, not superstition**: divergence requires an inexact
+product, and `b ∈ {0,1}` removes it. (F-OP32-4TH-ARCH, DIAG-A/DIAG-B.)
+
+**The PRACTICAL RULE.** One-hot / boolean-mask / binary-spike matmuls are
+*provably* safe through the fused kernel — but the immunity is a property of
+the **operand values at run time**, not of the kernel or the call site, so it
+is **conditional and fragile**:
+
+- the moment an operand goes real-valued — plasticity updating weights,
+  rate-coding, scaling, normalization, dropout-style `1/(1-p)` masks — the
+  products go inexact and the blanket rule applies in full. OP-32's own arch is
+  the cautionary case: its *spikes* are binary, but its traces and plastic
+  weights are real-valued from the first STDP update;
+- "exact today" is not "exact after the next refactor" — a mask that becomes a
+  soft mask, a one-hot that becomes a distribution, silently crosses the
+  boundary with **no error and no oracle failure on the original fixture**;
+- therefore: **default to inline ascending**. Ride the fused kernel only when
+  you can *prove* (not assume) that every product operand stays in the
+  exact-product class for the lifetime of the call site — and leave a comment
+  citing this boundary + F-OP32 at that call site.
+
+**SCOPE.** This subsection is an *explanation plus a narrowly-licensed
+exception*, not a loophole: the RULE block at the top of this section is
+unchanged and remains the default for every determinism-path matmul. The
+boundary tells you *why* the rule exists (inexact products are the entire
+failure mode) and the one operand class where it provably cannot fire.
+(F-OP32-4TH-ARCH.)
+
 ## per-phase locked identities
 
 Each row = one step phase, its oracle, the canonical-order invariant it locks,
