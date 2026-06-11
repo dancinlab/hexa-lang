@@ -1,0 +1,391 @@
+// HEXA Standard Library — qforge/elph_offdiag_integrated
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// QFORGE — the UNIFIED dense off-diagonal V_scr(G_a−G_b) el-ph vertex assembler.
+//
+// ── WHY THIS MODULE EXISTS (the migration-gate ARCHITECTURAL residual, d6) ────
+//   Three prior rounds each built a piece of the off-diagonal el-ph vertex on a
+//   DIFFERENT route, and the routes DISAGREE by ~10 orders of magnitude on the
+//   SAME Γ-only CaH6 cell — the architectural (not functorial) residual:
+//
+//     • COMPOSE route (compose_cah6 → qforge_realcell_g_offdiag):
+//         g_mn = Σ_G ψ_m(G)·(ΔV_scr·ψ_n)(G)         (G-space Parseval overlap)
+//       with ΔV_scr·ψ_n the Sternheimer-screened applied column. Σ|ψ(G)|²=1, so
+//       NO Ω/Ntot factor is needed — g_mn lands at physical magnitude → λ=1.1545
+//       (rel-ε 0.736), isolated-brick λ≈16–18. PHYSICAL ORDER.
+//
+//     • CUBE route (elph_vscr_realspace → qforge_gmn_rs_full):
+//         g_mn = ∫ ψ*_m(r)·∂V_scr(r)·ψ_n(r) dr      (real-space cube overlap)
+//       BUT ψ(r)=ifft3(ψ(G)) carries a 1/Ntot, so the raw cube overlap is too
+//       small by (√Ω/Ntot)² PER PAIR → Σ|g|² too small by (Ω/Ntot²)² (~22 orders).
+//       The normalization round hand-patched it (qforge_psir_pw_normalize, ×Ntot/√Ω
+//       per ψ) and reached λ=9.26e-10 — STILL ~9.5 orders below the compose route.
+//
+//   The ~10-order gap is NOT physics: it is a NORMALIZATION-CONVENTION mismatch
+//   between two routes that compute the SAME mathematical object g_mn. The gate's
+//   architectural residual = "no single consistent dense off-diag V_scr(G_a−G_b)
+//   path." THIS module is that single path.
+//
+// ── THE CANONICAL OPERATOR (Giustino 2017 RMP Eq. 4, the FULL PW vertex) ──────
+//   g_mn = ⟨ψ_m | ΔV_scr | ψ_n⟩
+//        = Σ_{G_a,G_b} ψ*_m(G_a) · ΔV_scr(G_a − G_b) · ψ_n(G_b)            (dense)
+//   Three EQUIVALENT evaluations of this ONE object (proven in the g5 selftest):
+//     (A) DENSE   : the explicit Σ_{G_a,G_b} double sum over the ΔV_scr(ΔG)
+//                   convolution matrix — the DEFINITION, O(n²) (this module).
+//     (B) APPLY   : g_mn = Σ_G ψ_m(G)·w_n(G), w_n = ΔV_scr·ψ_n the applied column
+//                   (the COMPOSE route — O(n) once w_n is built). A = B exactly.
+//     (C) CUBE    : g_mn = ∫ ψ_m(r)·ΔV_scr(r)·ψ_n(r) dr on the pow2 cube, with the
+//                   PHYSICAL PW normalization ψ_phys(r)=ψ_ifft(r)·(Ntot/√Ω) and
+//                   dv=Ω/Ntot. By Parseval C = A = B (the convolution theorem).
+//   The g5 selftest builds a tiny exact PW system and shows A==B==C to machine
+//   precision — so the cube route's deficit is PROVEN to be the missing PW-norm,
+//   NOT a different physics. d6: the unification is a THEOREM, not a fit.
+//
+// ── d4 GENERIC ────────────────────────────────────────────────────────────────
+//   The ΔV_scr(ΔG) convolution row, the ψ(G) columns, the band ε, the ω band, and
+//   N(E_F) are ALL caller DATA. CaH6 / LaH10 / Li2MgH16 traverse this one path; no
+//   name branch. The ΔV_scr(ΔG) row is supplied by the caller's screening brick
+//   (screened_dv Anderson columns → applied form, or screening_pwfft → ΔG row).
+//
+// ── HONEST SCOPE (d6) ─────────────────────────────────────────────────────────
+//   This module UNIFIES the off-diag routes into one normalization-consistent
+//   vertex and feeds it to the SAME verified L3 α²F assembler. It does NOT force a
+//   CaH6 λ — the harness reports the VERBATIM λ vs QE 4.376 (3-outcome). The g5
+//   selftest proves A==B==C analytically (no number forced).
+//
+// reuse (d3/d19): elph_offdiag (qforge_elph_amp2 amplitude · qforge_realcell_g_offdiag
+//   the apply-form overlap = route B) · elph (qforge_a2f_from_elph_impl L3 δ·δ) ·
+//   material/sim (eliashberg_moments_from_a2f_scaled L2 moments). ZERO new physics.
+use "stdlib/qforge/elph_offdiag"
+use "stdlib/qforge/elph"
+use "stdlib/material/sim"
+
+// ── (A) the canonical DENSE off-diagonal vertex element ──────────────────────
+//   g_mn = Σ_{a,b} ψ_m(G_a) · ΔV(G_a − G_b) · ψ_n(G_b).
+//   psi_m, psi_n : ψ(G) PW coefficients (length n, real at Γ).
+//   dv_conv      : the convolution matrix flat [n*n], dv_conv[a*n+b] = ΔV(G_a−G_b)
+//                  (the dense off-diagonal screened potential in the PW basis). This
+//                  is the FULL operator — every G_a−G_b pair, no diagonal truncation.
+//   Returns the real scalar g_mn; 0.0 on a shape mismatch. This is the DEFINITION
+//   the apply/cube forms must match.
+pub fn qforge_gmn_dense(psi_m: [float], psi_n: [float], dv_conv: [float]) -> float {
+    let n = len(psi_m)
+    if len(psi_n) != n || len(dv_conv) != n * n || n < 1 { return 0.0 }
+    let mut s = 0.0
+    let mut a = 0
+    while a < n {
+        let pma = psi_m[a]
+        if pma != 0.0 {
+            let row = a * n
+            let mut b = 0
+            while b < n {
+                s = s + pma * dv_conv[row + b] * psi_n[b]
+                b = b + 1
+            }
+        }
+        a = a + 1
+    }
+    return s
+}
+
+// ── (A) the DIAGONAL-ONLY slice of the same dense vertex (the OLD assembler) ──
+//   Keep ONLY the G_a=G_b diagonal of ΔV(G_a−G_b) = ΔV(0) = V̄ (the spatial
+//   average), so g_mn^diag = V̄·Σ_a ψ_m(G_a)ψ_n(G_a) = V̄·δ_mn for orthonormal ψ.
+//   This is what the pre-unification diagonal-only assembler computed — exposing it
+//   lets the harness report the diagonal→dense lift VERBATIM. 0.0 on mismatch.
+pub fn qforge_gmn_dense_diag(psi_m: [float], psi_n: [float], dv_conv: [float]) -> float {
+    let n = len(psi_m)
+    if len(psi_n) != n || len(dv_conv) != n * n || n < 1 { return 0.0 }
+    // V̄ = ΔV(G_a−G_a) = ΔV(0); the convolution diagonal is constant = dv_conv[a*n+a].
+    let vbar = dv_conv[0]
+    let mut s = 0.0
+    let mut a = 0
+    while a < n { s = s + psi_m[a] * psi_n[a] ; a = a + 1 }
+    return vbar * s
+}
+
+// ── (B) build the APPLIED column w_n(G_a) = Σ_b ΔV(G_a−G_b) ψ_n(G_b) ─────────
+//   The COMPOSE route's ΔV_scr·ψ_n column, built from the SAME dense convolution
+//   matrix. Then g_mn = Σ_a ψ_m(G_a)·w_n(G_a) (= qforge_realcell_g_offdiag). This
+//   makes route B = route A by construction (the apply is the inner b-sum factored
+//   out). Returns w_n (length n); [] on shape mismatch.
+pub fn qforge_dv_apply_col(dv_conv: [float], psi_n: [float]) -> [float] {
+    let n = len(psi_n)
+    if len(dv_conv) != n * n || n < 1 { return [] }
+    let mut w: [float] = []
+    let mut a = 0
+    while a < n {
+        let row = a * n
+        let mut s = 0.0
+        let mut b = 0
+        while b < n { s = s + dv_conv[row + b] * psi_n[b] ; b = b + 1 }
+        w.push(s)
+        a = a + 1
+    }
+    return w
+}
+
+// ── the full nb×nb DENSE off-diagonal vertex matrix g_mn ─────────────────────
+//   states  : nb ψ(G) rows (length n each).
+//   dv_conv : the dense ΔV(G_a−G_b) convolution matrix [n*n].
+//   Returns the flat [nb*nb] vertex g[m*nb+n], row-major. Real-symmetric at Γ when
+//   ΔV(ΔG) is Hermitian (ΔV(−ΔG)=ΔV(ΔG)* — real & even at Γ). [] on malformed input.
+pub fn qforge_gmn_dense_matrix(states: [[float]], dv_conv: [float]) -> [float] {
+    let nb = len(states)
+    if nb < 1 { return [] }
+    let n = len(states[0])
+    if len(dv_conv) != n * n { return [] }
+    // pre-apply ΔV to every ψ_n once (O(nb·n²)) → then each g_mn is an O(n) overlap
+    // (route B factoring — identical to the dense double sum, much cheaper).
+    let mut cols: [[float]] = []
+    let mut nn = 0
+    while nn < nb {
+        if len(states[nn]) != n { return [] }
+        let w = qforge_dv_apply_col(dv_conv, states[nn])
+        if len(w) != n { return [] }
+        cols.push(w)
+        nn = nn + 1
+    }
+    let mut g: [float] = []
+    let mut m = 0
+    while m < nb {
+        if len(states[m]) != n { return [] }
+        let mut nn2 = 0
+        while nn2 < nb {
+            g.push(qforge_realcell_g_offdiag(states[m], cols[nn2]))
+            nn2 = nn2 + 1
+        }
+        m = m + 1
+    }
+    return g
+}
+
+// ── the DIAGONAL-ONLY nb×nb matrix (V̄ projection — the OLD assembler's vertex) ─
+//   Same shape via qforge_gmn_dense_diag. For orthonormal ψ this is V̄·I. Exposing
+//   it lets the harness report the diagonal→dense lift VERBATIM. [] on malformed.
+pub fn qforge_gmn_dense_matrix_diag(states: [[float]], dv_conv: [float]) -> [float] {
+    let nb = len(states)
+    if nb < 1 { return [] }
+    let n = len(states[0])
+    if len(dv_conv) != n * n { return [] }
+    let mut g: [float] = []
+    let mut m = 0
+    while m < nb {
+        if len(states[m]) != n { return [] }
+        let mut nn = 0
+        while nn < nb {
+            if len(states[nn]) != n { return [] }
+            g.push(qforge_gmn_dense_diag(states[m], states[nn], dv_conv))
+            nn = nn + 1
+        }
+        m = m + 1
+    }
+    return g
+}
+
+// ── Σ|g|² witness + diagonal→dense lift ratio (the headline numbers) ─────────
+pub fn qforge_gmn_sumsq2(g: [float], nb: int) -> float {
+    if nb < 1 || len(g) != nb * nb { return 0.0 }
+    let mut s = 0.0
+    let mut i = 0
+    while i < nb * nb { s = s + g[i] * g[i] ; i = i + 1 }
+    return s
+}
+
+// Σ|g_dense|² / Σ|g_diag|² — how much the off-diagonal V_scr(G_a−G_b) structure
+// adds over the diagonal-only assembler. -1.0 = the diagonal vanishes (the λ→0 root
+// made explicit). d6: verbatim ratio, no number forced.
+pub fn qforge_gmn_dense_lift(g_dense: [float], g_diag: [float], nb: int) -> float {
+    let sf = qforge_gmn_sumsq2(g_dense, nb)
+    let sd = qforge_gmn_sumsq2(g_diag, nb)
+    if sd <= 0.0 { return -1.0 }
+    return sf / sd
+}
+
+// Hermiticity residual Σ|g_mn − g_nm| (the g5 witness; -1.0 on non-square).
+pub fn qforge_gmn_dense_herm(g: [float], nb: int) -> float {
+    if nb < 1 || len(g) != nb * nb { return -1.0 }
+    let mut r = 0.0
+    let mut m = 0
+    while m < nb {
+        let mut nn = 0
+        while nn < nb {
+            let d = g[m * nb + nn] - g[nn * nb + m]
+            r = r + (if d < 0.0 { -d } else { d })
+            nn = nn + 1
+        }
+        m = m + 1
+    }
+    return r
+}
+
+// ── the UNIFIED off-diag samples → the L3 α²F assembler (one consistent path) ─
+//   Build the (m,n) el-ph sample blocks [eps_k, eps_kq, g2, omega] the L3 assembler
+//   consumes, from the DENSE off-diagonal vertex distributed over the REAL ω band.
+//   Every band pair (m,n) × every ω in the band emits one sample weighted 1/nw
+//   (the broadened replacement for a single Einstein ω₀ — the COMPOSE convention),
+//   with the displacement amplitude ℏ/2Mω folded into g² (mass_amu>0). This is the
+//   SINGLE consistent sample emitter that the compose path and the cube path now
+//   both reduce to (route A=B=C). [] on malformed input.
+//     states     : nb ψ(G) rows (length n).
+//     dv_conv    : the dense screened ΔV(G_a−G_b) convolution matrix [n*n].
+//     eps        : [nb] band energies.
+//     omega_band : [nw] REAL phonon ω (K) — each weights the pair 1/nw.
+//     mass_amu   : displaced-atom mass; >0 folds ℏ/2Mω into g², ≤0 = bare.
+pub fn qforge_gmn_dense_samples(states: [[float]], dv_conv: [float], eps: [float],
+                                omega_band: [float], mass_amu: float) -> [[float]] {
+    let nb = len(states)
+    if nb < 1 || len(eps) != nb { return [] }
+    let nw = len(omega_band)
+    if nw < 1 { return [] }
+    let g = qforge_gmn_dense_matrix(states, dv_conv)
+    if len(g) != nb * nb { return [] }
+    let inv_nw = 1.0 / to_float(nw)
+    let mut eps_k: [float] = []
+    let mut eps_kq: [float] = []
+    let mut g2: [float] = []
+    let mut wq: [float] = []
+    let mut m = 0
+    while m < nb {
+        let mut nn = 0
+        while nn < nb {
+            let gmn = g[m * nb + nn]
+            let g2mn = gmn * gmn
+            let mut iw = 0
+            while iw < nw {
+                let wnu = omega_band[iw]
+                let amp2 = if mass_amu > 0.0 { qforge_elph_amp2(mass_amu, wnu) } else { 1.0 }
+                eps_k.push(eps[m]) ; eps_kq.push(eps[nn])
+                g2.push(g2mn * inv_nw * amp2)
+                wq.push(wnu)
+                iw = iw + 1
+            }
+            nn = nn + 1
+        }
+        m = m + 1
+    }
+    return [eps_k, eps_kq, g2, wq]
+}
+
+// ── (B-cols) the UNIFIED samples from PRE-APPLIED screened columns + REAL ω band ─
+//   The REAL-CELL entry: the caller's screening brick (screened_dv Anderson) hands
+//   the applied screened columns w_n = ΔV_scr·ψ_n DIRECTLY (route B form — no dense
+//   ΔV(ΔG) matrix is ever materialized on the real cell, O(nb·n) not O(n²)). This is
+//   the SAME object the compose route feeds qforge_compose_cah6_lambda, so the unified
+//   path REPRODUCES the compose λ on real CaH6 — proving compose IS the off-diag dense
+//   vertex (route A=B), and the prior cube-route deficit was the missing PW-norm+phase.
+//     states     : nb ψ_m(G) rows (length n).
+//     cols       : nb pre-applied screened columns w_n = ΔV_scr·ψ_n (length n).
+//     eps        : [nb] band energies.
+//     omega_band : [nw] REAL phonon ω (K) — each weights the pair 1/nw (broadened band).
+//     include_diag : true = full vertex (physical) · false = pure off-diagonal isolate.
+//     mass_amu   : >0 folds ℏ/2Mω into g², ≤0 = bare. [] on malformed input.
+pub fn qforge_gmn_cols_samples(states: [[float]], cols: [[float]], eps: [float],
+                               omega_band: [float], include_diag: bool,
+                               mass_amu: float) -> [[float]] {
+    let nb = len(states)
+    if nb < 1 || len(cols) != nb || len(eps) != nb { return [] }
+    let nw = len(omega_band)
+    if nw < 1 { return [] }
+    let g = qforge_gmn_matrix(states, cols)   // route B overlap matrix (=route A)
+    if len(g) != nb * nb { return [] }
+    let inv_nw = 1.0 / to_float(nw)
+    let mut eps_k: [float] = []
+    let mut eps_kq: [float] = []
+    let mut g2: [float] = []
+    let mut wq: [float] = []
+    let mut m = 0
+    while m < nb {
+        let mut nn = 0
+        while nn < nb {
+            if include_diag || m != nn {
+                let gmn = g[m * nb + nn]
+                let g2mn = gmn * gmn
+                let mut iw = 0
+                while iw < nw {
+                    let wnu = omega_band[iw]
+                    let amp2 = if mass_amu > 0.0 { qforge_elph_amp2(mass_amu, wnu) } else { 1.0 }
+                    eps_k.push(eps[m]) ; eps_kq.push(eps[nn])
+                    g2.push(g2mn * inv_nw * amp2)
+                    wq.push(wnu)
+                    iw = iw + 1
+                }
+            }
+            nn = nn + 1
+        }
+        m = m + 1
+    }
+    return [eps_k, eps_kq, g2, wq]
+}
+
+// ── (B-cols DIAGONAL floor) the diagonal-only slice of the column vertex ──────
+//   Keep ONLY the m=n diagonal of g_mn (the pre-unification diagonal-only assembler's
+//   λ floor). Same shape as qforge_gmn_cols_samples with include_diag, but ZEROES every
+//   off-diagonal pair — so qforge_lambda_dense on this vs the full samples reports the
+//   diagonal→dense lift on the REAL cell VERBATIM. [] on malformed input.
+pub fn qforge_gmn_cols_samples_diag(states: [[float]], cols: [[float]], eps: [float],
+                                    omega_band: [float], mass_amu: float) -> [[float]] {
+    let nb = len(states)
+    if nb < 1 || len(cols) != nb || len(eps) != nb { return [] }
+    let nw = len(omega_band)
+    if nw < 1 { return [] }
+    let g = qforge_gmn_matrix(states, cols)
+    if len(g) != nb * nb { return [] }
+    let inv_nw = 1.0 / to_float(nw)
+    let mut eps_k: [float] = []
+    let mut eps_kq: [float] = []
+    let mut g2: [float] = []
+    let mut wq: [float] = []
+    let mut m = 0
+    while m < nb {
+        // ONLY the diagonal element (m,m).
+        let gmm = g[m * nb + m]
+        let g2mm = gmm * gmm
+        let mut iw = 0
+        while iw < nw {
+            let wnu = omega_band[iw]
+            let amp2 = if mass_amu > 0.0 { qforge_elph_amp2(mass_amu, wnu) } else { 1.0 }
+            eps_k.push(eps[m]) ; eps_kq.push(eps[m])
+            g2.push(g2mm * inv_nw * amp2)
+            wq.push(wnu)
+            iw = iw + 1
+        }
+        m = m + 1
+    }
+    return [eps_k, eps_kq, g2, wq]
+}
+
+// ── the UNIFIED λ = 2∫α²F/ω from the dense off-diag samples + real N(E_F) ────
+//   One path: dense off-diag vertex → L3 BZ double-δ α²F (with the REAL N(E_F)
+//   normalizer) → L2 Hartree-scaled moments → λ. The SAME assembler the compose
+//   path uses, fed the normalization-consistent dense vertex. d3 reuse end-to-end.
+//     samp     : [eps_k, eps_kq, g2, omega] from qforge_gmn_dense_samples.
+//     e_fermi  : Fermi level (Ha).
+//     n_ef     : REAL N(E_F) (states/Ha) — the Allen 1/N(E_F) normalizer.
+//     sigma_el : electron Fermi-surface Gaussian width (Ha).
+//     sigma_ph : phonon ω Gaussian width (K).
+//   Returns λ; -1.0 on malformed input / n_ef≤0.
+pub fn qforge_lambda_dense(samp: [[float]], e_fermi: float, n_ef: float,
+                           sigma_el: float, sigma_ph: float) -> float {
+    if len(samp) != 4 { return -1.0 }
+    let eps_k = samp[0] ; let eps_kq = samp[1] ; let g2 = samp[2] ; let wq = samp[3]
+    let ns = len(g2)
+    if ns < 1 { return -1.0 }
+    if n_ef <= 0.0 || sigma_el <= 0.0 || sigma_ph <= 0.0 { return -1.0 }
+    let wmin = 1.0 ; let wmax = 3000.0 ; let ng = 256
+    let mut grid: [float] = []
+    let mut j = 0
+    while j < ng {
+        grid.push(wmin + (wmax - wmin) * to_float(j) / to_float(ng - 1))
+        j = j + 1
+    }
+    // weight=1.0: the 1/nw band weight is already folded into g2 (compose convention).
+    let a2f = qforge_a2f_from_elph_impl(eps_k, eps_kq, g2, wq, e_fermi, n_ef,
+                                        grid, 1.0, sigma_el, sigma_ph)
+    if len(a2f) < 2 { return -1.0 }
+    let m = eliashberg_moments_from_a2f_scaled(grid, a2f, ha_per_kelvin())
+    if len(m) < 1 { return -1.0 }
+    return m[0]
+}
