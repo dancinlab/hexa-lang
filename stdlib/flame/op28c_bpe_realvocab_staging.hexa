@@ -36,12 +36,12 @@
 //  STAGING (disk-frugal — the megabyte vocab is NEVER committed to git):
 //  the real tokenizer files are read READ-ONLY from the first present of:
 //    1. env override   OP28C_VOCAB / OP28C_MERGES
-//    2. /Users/mini/dancinlab/edge/ckpt/storyboard-grpo/{vocab.json,merges.txt}
-//       (local Qwen2.5 artifact — base_model dancinlab/qwen2.5-7b-edge,
-//        tokenizer == Qwen/Qwen2.5 stock)
-//    3. /tmp/op28c-qwen/{vocab.json,merges.txt}   (scp staging on a 2nd host)
-//  If none is present the oracle SKIPs HONESTLY (F-OP28C-VOCAB-STAGING = SKIP,
-//  exit 0) — it never fakes a pass.
+//       (e.g. point at a local Qwen2.5 artifact's vocab.json/merges.txt —
+//        any stock Qwen2.5 tokenizer export works)
+//    2. /tmp/op28c-qwen/{vocab.json,merges.txt}   (cp/scp staging, any host)
+//  No machine-absolute home path is hardcoded (CI no-hardcode gate): stage
+//  via env or /tmp. If neither is present the oracle SKIPs HONESTLY
+//  (F-OP28C-VOCAB-STAGING = SKIP, exit 0) — it never fakes a pass.
 //
 //  BYTE-EQ COMPARE DISCIPLINE: bpe_load prints a wall-clock "in X ms" line, so
 //  ALL loads happen BEFORE the `OP28C-DET-BEGIN` marker; everything between
@@ -86,14 +86,12 @@ fn _ids_max_delta(a, b) -> int {
 fn main() {
     println("op28c_bpe_realvocab_staging — F-OP28C real-scale vocab staging (production load path, CPU oracle, 0-GPU)")
 
-    // ── resolve the real on-disk tokenizer (read-only, never committed) ──
+    // ── resolve the real on-disk tokenizer (read-only, never committed;
+    //    env override first, then the /tmp staging dir — no machine-absolute
+    //    home path hardcoded) ──
     let mut vocab_path = env_var("OP28C_VOCAB")
     let mut merges_path = env_var("OP28C_MERGES")
     if len(vocab_path) == 0 || !file_exists(vocab_path) {
-        vocab_path = "/Users/mini/dancinlab/edge/ckpt/storyboard-grpo/vocab.json"
-        merges_path = "/Users/mini/dancinlab/edge/ckpt/storyboard-grpo/merges.txt"
-    }
-    if !file_exists(vocab_path) {
         vocab_path = "/tmp/op28c-qwen/vocab.json"
         merges_path = "/tmp/op28c-qwen/merges.txt"
     }
