@@ -11,7 +11,21 @@ loop targets what the consumer card + code can carry.
 ## milestones (loop self-feeds; add as discovered)
 
 <!-- ANCHOR:OP-26C-READINESS-V2 (unique anchor — OP-26b (#3035) wrote docs/flame-machine-independent-SUBMISSION-READINESS.md against the round-5 evidence (1 arch · 4 env · gap G2 open · G1 input-side unproven). Rounds 6-8 grew the evidence: G2 CLOSED ×3-over (OP-29 decoder block #3045 · OP-31 MLP #3048 · OP-32 spiking LIF+STDP #3052 = 4 archs total), the G1 input slice fully proven (OP-28 byte-level #3041 · OP-28b BPE fix #3049 · OP-28c REAL Qwen vocab 151643 entries #3053) + pre-gated into the turnkey kit (OP-24d #3050), and NEW findings landed (OP-30 #3047 3-layer determinism model + cross-ISA FMA-matmul invariant; OP-32 binary-spike FMA-immunity boundary; OP-30b #3051 contract consistency). OP-26c refreshes the readiness doc to the current state: 4-arch claim, refreshed gap list, new evidence rows, sharpened FMA novelty, honest limits; docs-only, NO /paper scaffold per g84) -->
-- [ ] **OP-26c — SUBMISSION-READINESS updated: 4-arch G2 closed, real-vocab input, FMA novelty (docs-only, g84)**
+- [x] **OP-26c — SUBMISSION-READINESS updated: 4-arch G2 closed, real-vocab input, FMA novelty (docs-only, g84)** —
+  GREEN (docs-only, $0, NO GPU/vast/pod). docs/flame-machine-independent-SUBMISSION-READINESS.md refreshed (v2)
+  to the round-7/8 evidence: (a) CLAIM = the construction is GENERAL — 4 structurally-distinct archs (CLMConvMoE
+  conv+MoE F-OP15 · decoder block attention F-OP29 · dense MLP F-OP31 · recurrent spiking LIF+STDP F-OP32 — first
+  recurrent/event-driven/non-backprop) under the formalized 3-layer model (run-to-run · libm-free ·
+  cross-ISA-FMA-free, F-OP30); flagship matrix stays 4-env × 3-libm, archs 2-4 honestly scoped to the 2-env ISA
+  pair (new gap G7, LOW). (b) GAPS: G2 CLOSED ×3-over; G1 input slice CLOSED + pre-gated (F-OP28 byte-level ·
+  F-OP28b canonical BPE · F-OP28c REAL Qwen vocab 151643 through production bpe_load · F-OP24d turnkey step-0
+  pre-gate) — sole remainder = the GPU trainer step run, severity high→low-medium; G3-G6 verified unchanged.
+  (c) EVIDENCE table +13 rows (incl. F-OP30b contract consistency, F-OP32b spiking CPU link). (d) NOVELTY now
+  TWO legs: the 4-arch constructive recipe AND the cross-ISA FMA-contraction class itself — measured ×3 archs
+  (F-OP29 241449363≠1401117690 · F-OP31 2039553633≠124945498 · F-OP32 DIAG-A 1478294112≠210297454), mitigation
+  contract (inline ascending, F-OP30), measured boundary (binary {0,1} operands FMA-IMMUNE: F-OP32 DIAG-B
+  1881150137 both ISAs). (e) honest limits refreshed (7 items); readiness ~80%→~90%. g84: NO /paper scaffold —
+  readiness assessment only. Verdict .verdicts/hexa-0pod/F-OP26C-READINESS-V2.txt.
 
 <!-- ANCHOR:OP-30B-CONTRACT-FIX (unique anchor — OP-30 (#3047) formalized the cross-ISA matmul invariant in docs/flame-determinism-contract.md but flagged OUT-OF-SCOPE a STALE pre-OP-19b line in the step-phase-map section still calling the GELU erf "a still-open libm hole" + pointing at a "§1 residual" that no longer exists; OP-19b (#3008, F-OP19B-DET-ERF) CLOSED that hole via dt_erf (A&S 7.1.26 branchless on dt_exp, byte-identical cross-platform), so the line is factually wrong and contradicts the doc's own §1 + per-phase table + what-breaks list. OP-30b corrects it; docs-only, 0-pod) -->
 - [x] **OP-30b — fix stale "GELU erf still-open" line in the determinism contract (OP-19b closed it via dt_erf)** —
