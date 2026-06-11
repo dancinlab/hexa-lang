@@ -1,0 +1,458 @@
+// @raw117_exempt
+// ════════════════════════════════════════════════════════════════════════
+// stdlib/flame/op32_spiking_selfcontained.hexa
+// HEXA-0POD OP-32 · SELF-CONTAINED 4th-arch machine-indep oracle (NO `use`)
+//
+// FOURTH flame architecture — a spiking LIF RECURRENT network with local
+// STDP plasticity (the spiking_lib substrate). Structurally DISTINCT from
+// all three prior proven archs:
+//   - CLMConvMoE (OP-15 capstone): Conv1d + MoE router/combine + GroupNorm
+//   - decoder block (OP-29):        GQA attention + RoPE + SwiGLU + RMSNorm
+//   - MLP (OP-31):                  dense Linear + GELU stacks (pure GEMMs)
+//   - spiking LIF (OP-32, HERE):    RECURRENT state-carry across T timesteps
+//                                   + event thresholding (v >= v_th branch)
+//                                   + integer refractory countdown w/ clamp
+//                                   + clip + LOCAL pair-STDP learning (NO
+//                                   backprop — event-driven plasticity).
+//
+// NEW PRIMITIVE CLASS / NEW DETERMINISM SURFACE: recurrence. The membrane
+// state v, refractory countdown refr, eligibility traces tr_pre/tr_post and
+// the plastic weight matrix Wrec are THREADED through T sequential
+// timesteps — each step's result feeds the next (state-threading order is
+// part of the contract). None of the 3 proven archs carry state across
+// steps; here a single reordered/divergent op at step t corrupts every
+// step > t, so the final fingerprint is maximally order-sensitive.
+//
+// 4th-arch model = the PRODUCTION spiking_lib primitives, inlined verbatim
+// (t_* → farr_* binding only):
+//   flame_event_threshold  → _spk_event_threshold   (F-SPIKE-1)
+//   flame_refractory_step  → _spk_refractory_step   (F-SPIKE-2)
+//   flame_stdp_pair        → _spk_stdp_pair         (F-SPIKE-3)
+// plus the LIF membrane leak-integrate (alpha·v + I) and exponential-decay
+// eligibility traces composed exactly like flame_spiking_test F-SPIKE-4's
+// LIF micro-step, extended to a T-step recurrent simulation.
+//
+// OP-30 MATMUL AUDIT (this arch):
+//   spiking_lib's production primitives are PURE t_get/t_set loops — NO
+//   farr_matmul, NO forge_dispatch — so the substrate is OP-30-compliant BY
+//   CONSTRUCTION. The only matmul-shaped op on this arch is the per-step
+//   input/recurrent current  I[i] = Σ_j Win[i·D+j]·x_t[j] + Σ_j Wrec[i·N+j]
+//   ·s_prev[j], computed HERE as an INLINE ASCENDING reduction (plain
+//   mul+add, no C kernel) — the OP-29/30/31 discipline.
+//
+// LIBM AUDIT (this arch): NO transcendental anywhere on the path. Membrane
+// leak and trace decays are FIXED binary-exact rational constants
+// (alpha=15/16, decay_pre=7/8, decay_post=13/16) — the usual exp(-dt/tau)
+// is folded into the constant, so the arch is libm-free BY CONSTRUCTION
+// (no dt_* needed; every op is +,-,*,/ and compares on fp64).
+//
+// OP-30 IN-BAND DIAGNOSTICS (×2 — one expected to diverge, one PROVABLY
+// immune):
+//   DIAG-A (rate-coded drive): a REAL-VALUED rate-coding variant of the
+//     input drive computed through the FMA-fused C farr_matmul kernel
+//     (tensor_lib L58 "ikj order, FMA-fused under clang -O2") — the exact
+//     OP-29/31 divergence kernel. Expected to byte-DIVERGE arm64 vs x86.
+//   DIAG-B (binary-spike drive): the SAME kernel over the {0,1} spike
+//     raster. FMA-IMMUNITY ARGUMENT: fma(a,b,c) with b∈{0,1} — a·b is
+//     EXACT (a·1=a, a·0=0), so round(a·b+c) == round(round(a·b)+c); the
+//     fused and unfused forms are bit-identical. A binary-spike matvec
+//     cannot exhibit the FMA hole even through the fused kernel. Expected
+//     byte-IDENTICAL cross-ISA — a NEW arch-specific determinism finding
+//     (spike-driven currents are FMA-safe; rate-coded currents are NOT).
+//
+// Emits order-sensitive IEEE-754 fingerprints (f64_to_bytes_le of checksum
+// folds) of the spike raster, final plastic weights, and final membrane →
+// to be proven byte-IDENTICAL on local arm64-macos vs aiden x86-linux.
+// ════════════════════════════════════════════════════════════════════════
+
+// ── tensor LCG fill (inlined from tensor_lib / op29-31 twins, verbatim) ──
+fn _flame_lcg_next(state: int) -> int {
+    let s = state * 6364136223846793005 + 1442695040888963407
+    let m = s % 2147483647
+    if m < 0 { return 0 - m }
+    return m
+}
+fn _flame_lcg_unit(v: int) -> float {
+    let f = (to_float(v) / 2147483647.0)
+    return f * 2.0 - 1.0
+}
+fn t_fill_lcg2(t: int, n: int, seed: int, scale: float) {
+    let mut st = seed
+    let mut i = 0
+    while i < n {
+        st = _flame_lcg_next(st)
+        let _ = farr_set(t, i, _flame_lcg_unit(st) * scale)
+        i = i + 1
+    }
+}
+// binary {0,1} spike-pattern fill: 1.0 iff the LCG unit is > 0.0 (~50%).
+fn t_fill_lcg_binary(t: int, n: int, seed: int) {
+    let mut st = seed
+    let mut i = 0
+    while i < n {
+        st = _flame_lcg_next(st)
+        if _flame_lcg_unit(st) > 0.0 {
+            let _ = farr_set(t, i, 1.0)
+        } else {
+            let _ = farr_set(t, i, 0.0)
+        }
+        i = i + 1
+    }
+}
+
+// ── spiking_lib primitives, inlined VERBATIM (t_* → farr_*; out-buffer
+//    form instead of alloc-and-return — identical per-element semantics) ──
+
+// flame_event_threshold (F-SPIKE-1): mask[i] = 1.0 if v[i] >= v_th else 0.0.
+// `>=` semantics — a unit exactly at threshold fires.
+fn _spk_event_threshold(v: int, n: int, v_th: float, mask_out: int) {
+    let mut i = 0
+    while i < n {
+        let vi = farr_get(v, i)
+        if vi >= v_th {
+            let _ = farr_set(mask_out, i, 1.0)
+        } else {
+            let _ = farr_set(mask_out, i, 0.0)
+        }
+        i = i + 1
+    }
+}
+
+// flame_refractory_step (F-SPIKE-2): spiked → reset to refrac; else
+// max(refr-1, floor). refr is float-valued integers.
+fn _spk_refractory_step(refr: int, spiked: int, n: int, refrac: int, floor: int, out: int) {
+    let refrac_f = to_float(refrac)
+    let floor_f = to_float(floor)
+    let mut i = 0
+    while i < n {
+        let s = farr_get(spiked, i)
+        if s != 0.0 {
+            let _ = farr_set(out, i, refrac_f)
+        } else {
+            let dec = farr_get(refr, i) - 1.0
+            if dec < floor_f {
+                let _ = farr_set(out, i, floor_f)
+            } else {
+                let _ = farr_set(out, i, dec)
+            }
+        }
+        i = i + 1
+    }
+}
+
+// flame_stdp_pair (F-SPIKE-3): local pair-based STDP on the N×N recurrent
+// weights. dW[i][j] = A_plus·spike[i]·tr_pre[j] − A_minus·tr_post[i]·
+// spike[j]; diagonal 0; clip to [−w_max, w_max]. Depends ONLY on
+// {spike, tr_pre, tr_post} — NO loss, NO gradient (locality contract).
+fn _spk_stdp_pair(W: int, tr_pre: int, tr_post: int, spike: int, n: int,
+                  A_plus: float, A_minus: float, w_max: float, out: int) {
+    let neg_w_max = 0.0 - w_max
+    let mut i = 0
+    while i < n {
+        let s_i = farr_get(spike, i)
+        let trpost_i = farr_get(tr_post, i)
+        let mut j = 0
+        while j < n {
+            let idx = i * n + j
+            let w_ij = farr_get(W, idx)
+            if i == j {
+                let mut wd = w_ij
+                if wd > w_max { wd = w_max }
+                if wd < neg_w_max { wd = neg_w_max }
+                let _ = farr_set(out, idx, wd)
+            } else {
+                let ltp = A_plus * s_i * farr_get(tr_pre, j)
+                let ltd = A_minus * trpost_i * farr_get(spike, j)
+                let mut wnew = w_ij + (ltp - ltd)
+                if wnew > w_max { wnew = w_max }
+                if wnew < neg_w_max { wnew = neg_w_max }
+                let _ = farr_set(out, idx, wnew)
+            }
+            j = j + 1
+        }
+        i = i + 1
+    }
+}
+
+// ── LIF input/recurrent current — INLINE ASCENDING (OP-30 invariant) ─────
+// I[i] = Σ_j Win[i·D+j]·x_t[j]  +  Σ_j Wrec[i·N+j]·s_prev[j]
+// both sums in fixed ascending j — plain mul+add, no C kernel.
+fn _lif_current(Win: int, Wrec: int, Xs: int, t: int, s_prev: int,
+                I_out: int, N: int, D: int) {
+    let mut i = 0
+    while i < N {
+        let mut acc = 0.0
+        let mut j = 0
+        while j < D {
+            acc = acc + farr_get(Win, i * D + j) * farr_get(Xs, t * D + j)
+            j = j + 1
+        }
+        let mut k = 0
+        while k < N {
+            acc = acc + farr_get(Wrec, i * N + k) * farr_get(s_prev, k)
+            k = k + 1
+        }
+        let _ = farr_set(I_out, i, acc)
+        i = i + 1
+    }
+}
+
+// ── T-step recurrent LIF+STDP simulation (the state-threading chain) ─────
+// State threaded across steps: v, refr, tr_pre, tr_post, Wrec (plastic),
+// s_prev. Per step, in FIXED order:
+//   (1) current   I = Win·x_t + Wrec·s_prev      (inline ascending)
+//   (2) membrane  refr>0 → v=v_reset (clamped) ; else v = alpha·v + I
+//   (3) threshold s = (v >= v_th)                (F-SPIKE-1 verbatim)
+//   (4) reset     spiked → v = v_reset
+//   (5) refractory refr' per F-SPIKE-2           (verbatim)
+//   (6) traces    tr = decay·tr + s              (binary-exact decays)
+//   (7) STDP      Wrec' per F-SPIKE-3            (verbatim, plastic update)
+//   (8) raster[t] = s ; s_prev = s
+// Wrec is COPIED from Wrec0 first (caller's init stays pristine); final
+// state lands in the caller-allocated v/refr/tr/Wrec/raster buffers.
+fn lif_sim(Win: int, Wrec0: int, Xs: int,
+           v: int, refr: int, tr_pre: int, tr_post: int,
+           Wrec: int, raster: int,
+           N: int, D: int, T: int,
+           alpha: float, v_th: float, v_reset: float,
+           refrac: int, floor: int,
+           decay_pre: float, decay_post: float,
+           A_plus: float, A_minus: float, w_max: float) {
+    // init threaded state
+    let mut z = 0
+    while z < N {
+        let _ = farr_set(v, z, 0.0)
+        let _ = farr_set(refr, z, 0.0)
+        let _ = farr_set(tr_pre, z, 0.0)
+        let _ = farr_set(tr_post, z, 0.0)
+        z = z + 1
+    }
+    let mut w0 = 0
+    while w0 < N * N {
+        let _ = farr_set(Wrec, w0, farr_get(Wrec0, w0))
+        w0 = w0 + 1
+    }
+    let I = farr_zeros(N)
+    let s = farr_zeros(N)
+    let s_prev = farr_zeros(N)
+    let refr_nx = farr_zeros(N)
+    let Wnx = farr_zeros(N * N)
+    let mut t = 0
+    while t < T {
+        // (1) input + recurrent current — inline ascending (OP-30)
+        _lif_current(Win, Wrec, Xs, t, s_prev, I, N, D)
+        // (2) leaky integrate, refractory clamp
+        let mut i = 0
+        while i < N {
+            if farr_get(refr, i) > 0.0 {
+                let _ = farr_set(v, i, v_reset)
+            } else {
+                let _ = farr_set(v, i, alpha * farr_get(v, i) + farr_get(I, i))
+            }
+            i = i + 1
+        }
+        // (3) event threshold (F-SPIKE-1)
+        _spk_event_threshold(v, N, v_th, s)
+        // (4) spike reset
+        let mut r = 0
+        while r < N {
+            if farr_get(s, r) != 0.0 { let _ = farr_set(v, r, v_reset) }
+            r = r + 1
+        }
+        // (5) refractory countdown (F-SPIKE-2)
+        _spk_refractory_step(refr, s, N, refrac, floor, refr_nx)
+        let mut c = 0
+        while c < N {
+            let _ = farr_set(refr, c, farr_get(refr_nx, c))
+            c = c + 1
+        }
+        // (6) eligibility traces (binary-exact decay constants)
+        let mut q = 0
+        while q < N {
+            let _ = farr_set(tr_pre, q, decay_pre * farr_get(tr_pre, q) + farr_get(s, q))
+            let _ = farr_set(tr_post, q, decay_post * farr_get(tr_post, q) + farr_get(s, q))
+            q = q + 1
+        }
+        // (7) local STDP plasticity (F-SPIKE-3) — the LEARNING step
+        _spk_stdp_pair(Wrec, tr_pre, tr_post, s, N, A_plus, A_minus, w_max, Wnx)
+        let mut wc = 0
+        while wc < N * N {
+            let _ = farr_set(Wrec, wc, farr_get(Wnx, wc))
+            wc = wc + 1
+        }
+        // (8) raster + thread spikes to next step
+        let mut p = 0
+        while p < N {
+            let _ = farr_set(raster, t * N + p, farr_get(s, p))
+            let _ = farr_set(s_prev, p, farr_get(s, p))
+            p = p + 1
+        }
+        t = t + 1
+    }
+    let _ = farr_free(I)
+    let _ = farr_free(s)
+    let _ = farr_free(s_prev)
+    let _ = farr_free(refr_nx)
+    let _ = farr_free(Wnx)
+}
+
+// ── OP-30 DIAGNOSTICS: FMA-fused farr_matmul checksums ───────────────────
+// DIAG-A rides REAL-VALUED rate-coded drive Xr [T·D] · WinT [D·N] through
+// the FMA-fused C kernel — the exact OP-29/31 divergence kernel.
+// DIAG-B rides the BINARY spike pattern Xs [T·D] · WinT through the SAME
+// kernel — provably FMA-immune (a·b exact when b ∈ {0,1}).
+fn _fma_matmul_ck(A: int, M: int, K: int, B: int, N: int) -> int {
+    let prod = farr_matmul(A, M, K, B, N)  // FMA-fused C kernel (OP-30 risk)
+    let ck = _farr_checksum(prod, M * N)
+    let _ = farr_free(prod)
+    return ck
+}
+
+// ── oracle helpers (verbatim from op29/op31 twins) ───────────────────────
+fn _abs(x: float) -> float { if x < 0.0 { return 0.0 - x } return x }
+
+fn _farr_checksum(t: int, n: int) -> int {
+    let mut acc = 1469598903
+    let mut i = 0
+    while i < n {
+        let b = f64_to_bytes_le(farr_get(t, i))
+        let mut k = 0
+        while k < len(b) {
+            acc = (acc * 131 + b[k] + i) % 2147483647
+            k = k + 1
+        }
+        i = i + 1
+    }
+    return acc
+}
+
+fn _maxdiff(a: int, b: int, n: int) -> float {
+    let mut m = 0.0
+    let mut i = 0
+    while i < n {
+        let dv = _abs(farr_get(a, i) - farr_get(b, i))
+        if dv > m { m = dv }
+        i = i + 1
+    }
+    return m
+}
+
+// ── driver ──────────────────────────────────────────────────────────────
+println("=== HEXA-0POD OP-32 · SELF-CONTAINED spiking-LIF 4th-arch oracle ===")
+
+// tiny CPU-runnable config; T=32 steps so the state-threading chain is deep.
+let N = 10
+let D = 8
+let T = 32
+
+// binary-exact rational constants — libm-free BY CONSTRUCTION (the usual
+// exp(-dt/tau) decays are folded into fixed constants).
+let alpha = 0.9375        // 15/16  membrane leak
+let v_th = 0.5
+let v_reset = 0.0
+let refrac = 2
+let floor = 0 - 1
+let decay_pre = 0.875     // 7/8
+let decay_post = 0.8125   // 13/16
+let A_plus = 0.03125      // 1/32
+let A_minus = 0.015625    // 1/64
+let w_max = 0.5
+
+// deterministic init (fixed LCG seeds; no RNG, no clock).
+let Win = farr_zeros(N * D);  t_fill_lcg2(Win, N * D, 2121, 0.45)
+let Wrec0 = farr_zeros(N * N); t_fill_lcg2(Wrec0, N * N, 2222, 0.25)
+// zero the recurrent diagonal (no self-connection — spiking_lib contract)
+let mut dg = 0
+while dg < N { let _ = farr_set(Wrec0, dg * N + dg, 0.0); dg = dg + 1 }
+// binary input spike pattern [T·D] (~50% density)
+let Xs = farr_zeros(T * D);   t_fill_lcg_binary(Xs, T * D, 3001)
+
+// ── simulate ×2 (run-to-run) ──
+let vA = farr_zeros(N);  let refrA = farr_zeros(N)
+let trpA = farr_zeros(N); let trqA = farr_zeros(N)
+let WA = farr_zeros(N * N); let rasterA = farr_zeros(T * N)
+let vB = farr_zeros(N);  let refrB = farr_zeros(N)
+let trpB = farr_zeros(N); let trqB = farr_zeros(N)
+let WB = farr_zeros(N * N); let rasterB = farr_zeros(T * N)
+lif_sim(Win, Wrec0, Xs, vA, refrA, trpA, trqA, WA, rasterA, N, D, T,
+        alpha, v_th, v_reset, refrac, floor, decay_pre, decay_post,
+        A_plus, A_minus, w_max)
+lif_sim(Win, Wrec0, Xs, vB, refrB, trpB, trqB, WB, rasterB, N, D, T,
+        alpha, v_th, v_reset, refrac, floor, decay_pre, decay_post,
+        A_plus, A_minus, w_max)
+
+let raster_dev = _maxdiff(rasterA, rasterB, T * N)
+let w_dev = _maxdiff(WA, WB, N * N)
+let v_dev = _maxdiff(vA, vB, N)
+let trp_dev = _maxdiff(trpA, trpB, N)
+let trq_dev = _maxdiff(trqA, trqB, N)
+
+// non-triviality (honesty): spikes fired AND plasticity moved the weights.
+let mut spikes = 0
+let mut sc = 0
+while sc < T * N {
+    if farr_get(rasterA, sc) != 0.0 { spikes = spikes + 1 }
+    sc = sc + 1
+}
+let w_moved = _maxdiff(WA, Wrec0, N * N)
+
+let raster_ck = _farr_checksum(rasterA, T * N)
+let w_ck = _farr_checksum(WA, N * N)
+let v_ck = _farr_checksum(vA, N)
+
+// ── OP-30 diagnostics: build WinT [D·N], rate-coded Xr [T·D] ──
+let WinT = farr_zeros(D * N)
+let mut ti = 0
+while ti < N {
+    let mut tj = 0
+    while tj < D {
+        let _ = farr_set(WinT, tj * N + ti, farr_get(Win, ti * D + tj))
+        tj = tj + 1
+    }
+    ti = ti + 1
+}
+let Xr = farr_zeros(T * D); t_fill_lcg2(Xr, T * D, 4001, 0.2)
+let fmaA_ck = _fma_matmul_ck(Xr, T, D, WinT, N)   // real-valued — OP-30 risk
+let fmaB_ck = _fma_matmul_ck(Xs, T, D, WinT, N)   // binary spikes — FMA-immune
+
+print("  (1) RASTER   max|Δ| run-to-run = "); println(raster_dev)
+print("  (2) FINAL-W  max|Δ| run-to-run = "); println(w_dev)
+print("  (3) FINAL-V  max|Δ| run-to-run = "); println(v_dev)
+print("  (4) TRACE-pre  max|Δ| run-to-run = "); println(trp_dev)
+print("      TRACE-post max|Δ| run-to-run = "); println(trq_dev)
+print("  spikes fired (of T*N cells) = "); println(spikes)
+print("  STDP weight movement max|Δ| vs init = "); println(w_moved)
+print("  raster  checksum = "); println(raster_ck)
+print("  final-W checksum = "); println(w_ck)
+print("  final-v checksum = "); println(v_ck)
+print("  OP30-DIAG-A fma_matmul(rate-coded) checksum = "); println(fmaA_ck)
+print("  OP30-DIAG-B fma_matmul(binary-spike) checksum = "); println(fmaB_ck)
+
+let rbytes = f64_to_bytes_le(to_float(raster_ck))
+print("  CROSSPLAT-FINGERPRINT-RASTER = ")
+let mut bi = 0
+while bi < len(rbytes) { print(rbytes[bi]); print(" "); bi = bi + 1 }
+println("")
+let wbytes = f64_to_bytes_le(to_float(w_ck))
+print("  CROSSPLAT-FINGERPRINT-W      = ")
+let mut bj = 0
+while bj < len(wbytes) { print(wbytes[bj]); print(" "); bj = bj + 1 }
+println("")
+let vbytes = f64_to_bytes_le(to_float(v_ck))
+print("  CROSSPLAT-FINGERPRINT-V      = ")
+let mut bk = 0
+while bk < len(vbytes) { print(vbytes[bk]); print(" "); bk = bk + 1 }
+println("")
+
+let det_ok = (raster_dev == 0.0) && (w_dev == 0.0) && (v_dev == 0.0)
+          && (trp_dev == 0.0) && (trq_dev == 0.0)
+          && (spikes > 0) && (w_moved > 0.0)
+if det_ok {
+    print("F-OP32-4TH-ARCH = 1")
+    println("")
+    println("PASS — spiking LIF recurrent net byte-eq run-to-run; libm-free by construction + inline-ascending currents => machine-independent.")
+} else {
+    print("F-OP32-4TH-ARCH = 0")
+    println("")
+    println("FAIL — not byte-eq run-to-run (or trivial dynamics: no spikes / no plasticity).")
+}

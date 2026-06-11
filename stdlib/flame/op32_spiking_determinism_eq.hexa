@@ -1,0 +1,376 @@
+// @raw117_exempt
+// ════════════════════════════════════════════════════════════════════════
+// stdlib/flame/op32_spiking_determinism_eq.hexa
+// HEXA-0POD OP-32 · 4th-arch run-to-run determinism oracle (imports PROD lib)
+//
+// The import-based twin of op32_spiking_selfcontained.hexa, in TWO parts:
+//
+// PART A — PRODUCTION plasti_sim (use'd, links clean): the local-plasticity
+//   competitive-Hebbian learner (ps_drive → ps_winner → ps_hebb_update,
+//   composed by ps_present) driven over S sequential presentations with the
+//   weight matrix W THREADED across presentations (state-carry — the same
+//   NEW determinism surface as the LIF recurrence: any divergence at
+//   presentation k corrupts every later one). Asserts byte-eq RUN-TO-RUN.
+//
+// PART B — the spiking LIF+STDP recurrent chain, with the spiking_lib CPU
+//   primitive bodies copied VERBATIM (same t_* production tensor surface).
+//
+// ⚠ OP-32 HOLE FOUND (link-level, pre-existing, documented in the verdict):
+//   `use "stdlib/flame/spiking_lib"` does NOT LINK on a CPU-only host with
+//   the current regenerated runtime: spiking_lib::flame_stdp_pair_gpu calls
+//   the builtin forge_dispatch_stdp_pair, lowered by codegen to
+//   hexa_forge_dispatch_stdp_pair — whose prototype exists (self/runtime.h
+//   L1504) and whose CUDA kernel emit exists (self/cuda/runtime_cuda_emit
+//   _hx_cuda_kern_stdp_pair), but whose CPU oracle BODY is absent from the
+//   regenerated self/runtime.c (grep = 0 matches) → `ld: symbol not found
+//   _hexa_forge_dispatch_stdp_pair` even though the oracle never CALLS the
+//   GPU wrapper (hexa codegen emits all module fns; no DCE). So this twin
+//   copies the three CPU primitives VERBATIM (per-element identical, same
+//   t_* calls) instead of importing the module, and PART A supplies the
+//   genuinely-imported production-lib leg via plasti_sim (which has no GPU
+//   seam). The cross-platform machine-independence proof + OP-30 FMA
+//   diagnostics live in op32_spiking_selfcontained.hexa.
+//
+// 4th arch = spiking LIF RECURRENT net + local plasticity. Structurally
+// DISTINCT from CLMConvMoE (OP-15), the decoder block (OP-29), and the MLP
+// (OP-31). NEW primitive class: sequential state-carry, event thresholding,
+// refractory countdown, clip, winner-take-all argmax, NON-BACKPROP local
+// learning (STDP + competitive Hebbian). OP-30: plasti_sim's ps_drive and
+// this file's current/drive sums are inline ascending; NO farr_matmul on
+// the det path. LIBM: none — decays/constants are binary-exact rationals.
+// ════════════════════════════════════════════════════════════════════════
+
+use "stdlib/flame/tensor_lib"
+use "stdlib/flame/plasti_sim"
+
+fn _abs(x: float) -> float { if x < 0.0 { return 0.0 - x } return x }
+fn _maxdiff(a: int, b: int, n: int) -> float {
+    let mut m = 0.0
+    let mut i = 0
+    while i < n {
+        let dv = _abs(t_get(a, i) - t_get(b, i))
+        if dv > m { m = dv }
+        i = i + 1
+    }
+    return m
+}
+fn _flame_lcg_next(state: int) -> int {
+    let s = state * 6364136223846793005 + 1442695040888963407
+    let m = s % 2147483647
+    if m < 0 { return 0 - m }
+    return m
+}
+fn _flame_lcg_unit(v: int) -> float { return (to_float(v) / 2147483647.0) * 2.0 - 1.0 }
+fn t_fill_lcg2(t: int, n: int, seed: int, scale: float) {
+    let mut st = seed
+    let mut i = 0
+    while i < n {
+        st = _flame_lcg_next(st)
+        t_set(t, i, _flame_lcg_unit(st) * scale)
+        i = i + 1
+    }
+}
+fn t_fill_lcg_binary(t: int, n: int, seed: int) {
+    let mut st = seed
+    let mut i = 0
+    while i < n {
+        st = _flame_lcg_next(st)
+        if _flame_lcg_unit(st) > 0.0 { t_set(t, i, 1.0) } else { t_set(t, i, 0.0) }
+        i = i + 1
+    }
+}
+
+// ── spiking_lib CPU primitives — copied VERBATIM (see HOLE note above) ───
+// flame_event_threshold (F-SPIKE-1), verbatim body:
+fn _spk_event_threshold(v: int, v_th: float) -> int {
+    let n = t_len(v)
+    let mask = t_zeros(n)
+    let mut i = 0
+    while i < n {
+        let vi = t_get(v, i)
+        if vi >= v_th {
+            t_set(mask, i, 1.0)
+        } else {
+            t_set(mask, i, 0.0)
+        }
+        i = i + 1
+    }
+    return mask
+}
+// flame_refractory_step (F-SPIKE-2), verbatim body:
+fn _spk_refractory_step(refr: int, spiked: int, refrac: int, floor: int) -> int {
+    let n = t_len(refr)
+    let out = t_zeros(n)
+    let refrac_f = to_float(refrac)
+    let floor_f = to_float(floor)
+    let mut i = 0
+    while i < n {
+        let s = t_get(spiked, i)
+        if s != 0.0 {
+            t_set(out, i, refrac_f)
+        } else {
+            let dec = t_get(refr, i) - 1.0
+            if dec < floor_f {
+                t_set(out, i, floor_f)
+            } else {
+                t_set(out, i, dec)
+            }
+        }
+        i = i + 1
+    }
+    return out
+}
+// flame_stdp_pair (F-SPIKE-3), verbatim body:
+fn _spk_stdp_pair(W: int, tr_pre: int, tr_post: int, spike: int,
+                  A_plus: float, A_minus: float, w_max: float) -> int {
+    let n = t_len(spike)
+    let out = t_zeros(n * n)
+    let neg_w_max = 0.0 - w_max
+    let mut i = 0
+    while i < n {
+        let s_i = t_get(spike, i)
+        let trpost_i = t_get(tr_post, i)
+        let mut j = 0
+        while j < n {
+            let idx = i * n + j
+            let w_ij = t_get(W, idx)
+            if i == j {
+                let mut wd = w_ij
+                if wd > w_max { wd = w_max }
+                if wd < neg_w_max { wd = neg_w_max }
+                t_set(out, idx, wd)
+            } else {
+                let ltp = A_plus * s_i * t_get(tr_pre, j)
+                let ltd = A_minus * trpost_i * t_get(spike, j)
+                let mut wnew = w_ij + (ltp - ltd)
+                if wnew > w_max { wnew = w_max }
+                if wnew < neg_w_max { wnew = neg_w_max }
+                t_set(out, idx, wnew)
+            }
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return out
+}
+
+// per-step input/recurrent current — INLINE ASCENDING (OP-30 invariant)
+fn _lif_current(Win: int, Wrec: int, Xs: int, t: int, s_prev: int,
+                I_out: int, N: int, D: int) {
+    let mut i = 0
+    while i < N {
+        let mut acc = 0.0
+        let mut j = 0
+        while j < D {
+            acc = acc + t_get(Win, i * D + j) * t_get(Xs, t * D + j)
+            j = j + 1
+        }
+        let mut k = 0
+        while k < N {
+            acc = acc + t_get(Wrec, i * N + k) * t_get(s_prev, k)
+            k = k + 1
+        }
+        t_set(I_out, i, acc)
+        i = i + 1
+    }
+}
+
+// T-step recurrent LIF+STDP simulation (fixed per-step order; state
+// threaded: v · refr · tr_pre · tr_post · Wrec · s_prev).
+fn lif_sim(Win: int, Wrec0: int, Xs: int,
+           v: int, tr_pre: int, tr_post: int,
+           Wfin: int, raster: int,
+           N: int, D: int, T: int,
+           alpha: float, v_th: float, v_reset: float,
+           refrac: int, floor: int,
+           decay_pre: float, decay_post: float,
+           A_plus: float, A_minus: float, w_max: float) {
+    let mut z = 0
+    while z < N {
+        t_set(v, z, 0.0)
+        t_set(tr_pre, z, 0.0)
+        t_set(tr_post, z, 0.0)
+        z = z + 1
+    }
+    let mut refr = t_zeros(N)
+    let mut Wrec = t_zeros(N * N)
+    let mut w0 = 0
+    while w0 < N * N { t_set(Wrec, w0, t_get(Wrec0, w0)); w0 = w0 + 1 }
+    let I = t_zeros(N)
+    let mut s_prev = t_zeros(N)
+    let mut t0 = 0
+    while t0 < T {
+        _lif_current(Win, Wrec, Xs, t0, s_prev, I, N, D)
+        let mut i = 0
+        while i < N {
+            if t_get(refr, i) > 0.0 {
+                t_set(v, i, v_reset)
+            } else {
+                t_set(v, i, alpha * t_get(v, i) + t_get(I, i))
+            }
+            i = i + 1
+        }
+        let s = _spk_event_threshold(v, v_th)        // F-SPIKE-1 verbatim
+        let mut r = 0
+        while r < N {
+            if t_get(s, r) != 0.0 { t_set(v, r, v_reset) }
+            r = r + 1
+        }
+        let refr2 = _spk_refractory_step(refr, s, refrac, floor)  // F-SPIKE-2
+        let _ = t_free(refr)
+        refr = refr2
+        let mut q = 0
+        while q < N {
+            t_set(tr_pre, q, decay_pre * t_get(tr_pre, q) + t_get(s, q))
+            t_set(tr_post, q, decay_post * t_get(tr_post, q) + t_get(s, q))
+            q = q + 1
+        }
+        let Wnx = _spk_stdp_pair(Wrec, tr_pre, tr_post, s,        // F-SPIKE-3
+                                 A_plus, A_minus, w_max)
+        let _ = t_free(Wrec)
+        Wrec = Wnx
+        let mut p = 0
+        while p < N { t_set(raster, t0 * N + p, t_get(s, p)); p = p + 1 }
+        let _ = t_free(s_prev)
+        s_prev = s
+        t0 = t0 + 1
+    }
+    let mut wf = 0
+    while wf < N * N { t_set(Wfin, wf, t_get(Wrec, wf)); wf = wf + 1 }
+    let _ = t_free(refr)
+    let _ = t_free(Wrec)
+    let _ = t_free(I)
+    let _ = t_free(s_prev)
+}
+
+// ── PART A driver: PRODUCTION plasti_sim chain (state-carried W) ─────────
+// S presentations of D-dim samples through ps_present (PRODUCTION code:
+// ps_drive inline-ascending → ps_winner argmax → ps_hebb_update + L1
+// renorm). W is threaded across presentations. Returns nothing; fills the
+// winner sequence + leaves the learned W in place.
+fn plasti_run(W: int, samples: int, wins_out: int, S: int, Np: int, Dp: int,
+              lr: float, w_max: float, target_norm: float) {
+    let x = t_zeros(Dp)
+    let mut s0 = 0
+    while s0 < S {
+        let mut j = 0
+        while j < Dp { t_set(x, j, t_get(samples, s0 * Dp + j)); j = j + 1 }
+        let win = ps_present(W, x, Np, Dp, lr, w_max, target_norm)
+        t_set(wins_out, s0, to_float(win))
+        s0 = s0 + 1
+    }
+    let _ = t_free(x)
+}
+
+// ── driver ──────────────────────────────────────────────────────────────
+println("=== HEXA-0POD OP-32 · spiking/plasticity 4th-arch determinism (PROD plasti_sim + verbatim spiking_lib CPU) ===")
+
+// ── PART A: production plasti_sim, S=24 presentations, W threaded ──
+let Np = 6
+let Dp = 8
+let S = 24
+let samplesA = t_zeros(S * Dp)
+// non-negative samples (competitive prototypes live in [0, w_max])
+let mut sa = 0
+let mut stt = 7001
+while sa < S * Dp {
+    stt = _flame_lcg_next(stt)
+    t_set(samplesA, sa, _abs(_flame_lcg_unit(stt)) * 0.8)
+    sa = sa + 1
+}
+let WpA = t_zeros(Np * Dp)
+let WpB = t_zeros(Np * Dp)
+// seed prototypes on the first Np samples (production ps_seed_row)
+let xseed = t_zeros(Dp)
+let mut sr = 0
+while sr < Np {
+    let mut sj = 0
+    while sj < Dp { t_set(xseed, sj, t_get(samplesA, sr * Dp + sj)); sj = sj + 1 }
+    ps_seed_row(WpA, xseed, sr, Dp)
+    ps_seed_row(WpB, xseed, sr, Dp)
+    sr = sr + 1
+}
+let _ = t_free(xseed)
+let winsA = t_zeros(S)
+let winsB = t_zeros(S)
+plasti_run(WpA, samplesA, winsA, S, Np, Dp, 0.25, 1.0, 0.0)
+plasti_run(WpB, samplesA, winsB, S, Np, Dp, 0.25, 1.0, 0.0)
+let pa_w_dev = _maxdiff(WpA, WpB, Np * Dp)
+let pa_win_dev = _maxdiff(winsA, winsB, S)
+// non-triviality: at least 2 distinct winners + weights moved from seed
+let mut distinct = 1
+let mut dw = 1
+while dw < S {
+    if t_get(winsA, dw) != t_get(winsA, 0) { distinct = 2 }
+    dw = dw + 1
+}
+print("  [A] PROD plasti_sim  W   max|Δ| run-to-run = "); println(pa_w_dev)
+print("  [A] PROD plasti_sim wins max|Δ| run-to-run = "); println(pa_win_dev)
+print("  [A] distinct winners >= 2 → "); println(distinct)
+
+// ── PART B: spiking LIF+STDP recurrent chain (verbatim CPU primitives) ──
+let N = 10
+let D = 8
+let T = 32
+let alpha = 0.9375
+let v_th = 0.5
+let v_reset = 0.0
+let refrac = 2
+let floor = 0 - 1
+let decay_pre = 0.875
+let decay_post = 0.8125
+let A_plus = 0.03125
+let A_minus = 0.015625
+let w_max = 0.5
+
+let Win = t_zeros(N * D);   t_fill_lcg2(Win, N * D, 2121, 0.45)
+let Wrec0 = t_zeros(N * N); t_fill_lcg2(Wrec0, N * N, 2222, 0.25)
+let mut dg = 0
+while dg < N { t_set(Wrec0, dg * N + dg, 0.0); dg = dg + 1 }
+let Xs = t_zeros(T * D);    t_fill_lcg_binary(Xs, T * D, 3001)
+
+let vA = t_zeros(N); let trpA = t_zeros(N); let trqA = t_zeros(N)
+let WA = t_zeros(N * N); let rasterA = t_zeros(T * N)
+let vB = t_zeros(N); let trpB = t_zeros(N); let trqB = t_zeros(N)
+let WB = t_zeros(N * N); let rasterB = t_zeros(T * N)
+lif_sim(Win, Wrec0, Xs, vA, trpA, trqA, WA, rasterA, N, D, T,
+        alpha, v_th, v_reset, refrac, floor, decay_pre, decay_post,
+        A_plus, A_minus, w_max)
+lif_sim(Win, Wrec0, Xs, vB, trpB, trqB, WB, rasterB, N, D, T,
+        alpha, v_th, v_reset, refrac, floor, decay_pre, decay_post,
+        A_plus, A_minus, w_max)
+
+let raster_dev = _maxdiff(rasterA, rasterB, T * N)
+let w_dev = _maxdiff(WA, WB, N * N)
+let v_dev = _maxdiff(vA, vB, N)
+let trp_dev = _maxdiff(trpA, trpB, N)
+let trq_dev = _maxdiff(trqA, trqB, N)
+let mut spikes = 0
+let mut sc = 0
+while sc < T * N {
+    if t_get(rasterA, sc) != 0.0 { spikes = spikes + 1 }
+    sc = sc + 1
+}
+let w_moved = _maxdiff(WA, Wrec0, N * N)
+
+print("  [B] RASTER   max|Δ| run-to-run = "); println(raster_dev)
+print("  [B] FINAL-W  max|Δ| run-to-run = "); println(w_dev)
+print("  [B] FINAL-V  max|Δ| run-to-run = "); println(v_dev)
+print("  [B] TRACE-pre  max|Δ| run-to-run = "); println(trp_dev)
+print("      TRACE-post max|Δ| run-to-run = "); println(trq_dev)
+print("  [B] spikes fired (of T*N cells) = "); println(spikes)
+print("  [B] STDP weight movement max|Δ| vs init = "); println(w_moved)
+
+let det_ok = (pa_w_dev == 0.0) && (pa_win_dev == 0.0) && (distinct == 2)
+          && (raster_dev == 0.0) && (w_dev == 0.0) && (v_dev == 0.0)
+          && (trp_dev == 0.0) && (trq_dev == 0.0)
+          && (spikes > 0) && (w_moved > 0.0)
+if det_ok {
+    print("F-OP32-4TH-ARCH (run-to-run, prod plasti_sim + verbatim spiking CPU) = 1")
+    println("")
+    println("PASS — local-plasticity 4th arch byte-eq run-to-run (state-carried chains).")
+} else {
+    print("F-OP32-4TH-ARCH (run-to-run, prod plasti_sim + verbatim spiking CPU) = 0")
+    println("")
+    println("FAIL — not byte-eq run-to-run (or trivial dynamics).")
+}
