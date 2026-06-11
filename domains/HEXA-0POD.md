@@ -11,7 +11,16 @@ loop targets what the consumer card + code can carry.
 ## milestones (loop self-feeds; add as discovered)
 
 <!-- ANCHOR:OP-30B-CONTRACT-FIX (unique anchor — OP-30 (#3047) formalized the cross-ISA matmul invariant in docs/flame-determinism-contract.md but flagged OUT-OF-SCOPE a STALE pre-OP-19b line in the step-phase-map section still calling the GELU erf "a still-open libm hole" + pointing at a "§1 residual" that no longer exists; OP-19b (#3008, F-OP19B-DET-ERF) CLOSED that hole via dt_erf (A&S 7.1.26 branchless on dt_exp, byte-identical cross-platform), so the line is factually wrong and contradicts the doc's own §1 + per-phase table + what-breaks list. OP-30b corrects it; docs-only, 0-pod) -->
-- [ ] **OP-30b — fix stale "GELU erf still-open" line in the determinism contract (OP-19b closed it via dt_erf)**
+- [x] **OP-30b — fix stale "GELU erf still-open" line in the determinism contract (OP-19b closed it via dt_erf)** —
+  GREEN (docs-only). The step-phase-map closing parenthetical in docs/flame-determinism-contract.md still read
+  "(The GELU `erf` is a still-open libm hole — see §1 residual.)" — a pre-OP-19b leftover that was factually
+  wrong (OP-19b #3008 closed the hole via dt_erf, byte-identical cross-platform; F-OP19B-DET-ERF) and
+  contradicted the doc's own §1 + NORM table row + what-breaks checklist; the "§1 residual" pointer was
+  dangling (§1 contains the closure, not a residual). Corrected surgically to the current truth: erf closed by
+  dt_erf (A&S 7.1.26 branchless on dt_exp, no libm; F-OP19b) → step has NO libm transcendental left. Whole-doc
+  stale-claim scan: this parenthetical was the SOLE contradiction (other "still"/"residual" hits = correct
+  run-to-run-vs-cross-ISA usages + the F-OP13 filename). Doc now internally consistent about erf's status.
+  Verdict .verdicts/hexa-0pod/F-OP30B-CONTRACT-FIX.txt.
 
 <!-- ANCHOR:OP-24D-G1-READINESS (unique anchor — OP-24c (tool/clm/build_clmprod_tf32_e2e.sh) is the turnkey GPU-build kit for the real-corpus clm_prod_gpu TF32 end-to-end run; it is GPU-build-gated. OP-28 (byte-level) + OP-28b (BPE) proved the INPUT side (tokenize->pack->batch) byte-eq + machine-independent 0-pod. OP-24d WIRES those input-side oracles INTO the turnkey kit as a CPU pre-gate (step 0, runs NOW with NO GPU) so the kit verifies input reproducibility before the GPU step. Result: G1 is 0-pod-maximally-closed — everything provable without a GPU is proven + wired, the SOLE remaining G1 item is the GPU trainer step run; 0-pod, no GPU, no vast) -->
 - [x] **OP-24d — G1 turnkey kit pre-gates the proven input-side determinism (OP-28/28b); only the GPU step remains gated** —

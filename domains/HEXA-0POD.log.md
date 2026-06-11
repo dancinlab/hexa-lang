@@ -1281,3 +1281,19 @@ NOT claimed. $0, no vast/pool/pod. Verdict .verdicts/hexa-0pod/F-OP21-HOPPER-WAR
   staged, NOT a code defect). The simplified space-split pre-tokenizer (vs GPT-2's full regex) + the GPU trainer
   step are unchanged + out-of-scope.
 - Milestone OP-28b flipped [x]. Verdict .verdicts/hexa-0pod/F-OP28B-BPE-FIX.txt. $0 · 0-GPU · 0-pod · no vast.
+
+## OP-30b — fix stale "GELU erf still-open" line in the determinism contract (0-pod, docs-only)
+
+- 2026-06-11 · deep-dive round-8 branch ① (OP-30 residual). OP-30 (#3047) flagged out-of-scope a STALE line in
+  docs/flame-determinism-contract.md: the step-phase-map closing parenthetical still read "(The GELU `erf` is a
+  still-open libm hole — see §1 residual.)" — pre-OP-19b leftover, factually wrong since OP-19b (#3008,
+  F-OP19B-DET-ERF) closed the GELU erf hole via dt_erf (A&S 7.1.26 branchless on dt_exp, no libm,
+  byte-identical cross-platform), and contradicting the doc's own §1 closure paragraph + NORM table row +
+  what-breaks checklist. The "§1 residual" pointer was dangling.
+- Surgical fix: parenthetical now states the current truth — erf likewise closed (dt_erf, F-OP19b), step has NO
+  libm transcendental left, pointer → §1 closure. Whole-doc stale-claim scan found NO other contradiction
+  (remaining "still" hits = correct run-to-run-vs-cross-ISA F-OP29 usages; "residual" hit = the
+  F-OP13-EMBED-RESIDUAL-ORACLE filename). Doc internally consistent about erf post-fix
+  (grep still-open/still open/open libm → 0).
+- Milestone OP-30b flipped [x]. Verdict .verdicts/hexa-0pod/F-OP30B-CONTRACT-FIX.txt. Docs-only · $0 · 0-GPU ·
+  0-pod · no vast. Honest: consistency fix only, no new determinism claim.
