@@ -1,5 +1,35 @@
 # HEXA-0POD — log
 
+## 2026-06-12 — OP-35 DONE: checkpoint save/restore determinism (6th surface) — audit + FCK\x01 fp64-LE training checkpoint + resume==uninterrupted bit-eq oracle + cross-platform byte-identical files ($0 · 0-pod)
+- Deep-dive round-10 branch ①: a machine-independent run is only useful if you can STOP→serialize (W,m,v,t)→
+  restore→RESUME byte-identical to an uninterrupted run. Serialization holes: float→text bit loss; binary
+  endianness/layout; missing optimizer state (restarts bias-correction); field/iteration order.
+- AUDIT: NO training checkpoint in stdlib. clm_ckpt.hexa (.clm v0.1/v0.2) = int4-QAT INFERENCE export (int4
+  codes + fp32 scales, fp32 ext trailer) with BOTH classic training-resume holes: fp64→fp32 narrowing AND no
+  AdamW m/v/step-t. flame_load_pt/pt_loader = PT import readers. train/optim/nn_lib: no save path.
+- CLOSE: stdlib/flame/ckpt_lib.hexa "FCK\x01" v1 — [magic][t u32-le][n_params u32-le] + per-param
+  [len][len×f64-le W][m][v] in pinned canonical order; f64_to_bytes_le/bytes_to_f64_le bit-pattern reinterpret
+  (NO text, NO narrowing); little-endian pinned (bytes are the contract, not host layout).
+- ORACLE 1 op35_ckpt_resume_eq.hexa (production conv/moe/nn/optim libs, the OP-15 composed micro-step as a
+  stateful 4-step loop): save@k=2 (124,928 B) → restore FRESH → resume 3..4 == uninterrupted BIT-FOR-BIT
+  (max|Δ|=0, 0 bit-mismatch over 17×{W,m,v} via float_to_bits, step-3/4 loss bits identical). Adversarial
+  round-trip 33/33 bit-exact (+0/-0, min/max denormal, min normal, max double, ±inf, qNaN, qNaN payload 0xEF,
+  sNaN pattern, inexact fractions). NEGATIVE CONTROLS in-band: wrong-t resume diverges 0.04248; fp32-truncated
+  resume (= the .clm abuse) diverges 1.77089e-08 — both holes REAL-AND-CLOSED + comparator sensitivity proven.
+- ORACLE 2 op35_ckpt_xplat_selfcontained.hexa (NO-use pool twin, g61 acknowledged): machine-independent
+  pure-hexa micro-LM step (explicit ascending loops, dt_exp/dt_erf/dt_ln/dt_sqrt, pure-hexa AdamW in the
+  F-OP12 canonical fold; NO farr_matmul / NO adamw_step C builtin → any xplat diff attributable to the ckpt
+  surface). Per-step loss bits IDENTICAL arm64-macos vs summer x86_64-linux. FILE-LEVEL cmp gates 4/4
+  byte-IDENTICAL (8288 B): FORMAT-ECHO (arm ckpt→x86 load→re-serialize == original, no arithmetic),
+  RESUME-XPLAT (x86-resumed final == arm uninterrupted final), WRITE-SIDE (x86 ckpt bytes == arm ckpt bytes),
+  FINAL-UNINT. → write on arm64-macos, restore+resume on x86_64-linux, byte-identical: PORTABLE, not host-only.
+- summer toolchain notes (why the xplat twin is self-contained): older hexa build miscompiles cross-module
+  imports (even the landed OP-15 oracle fails to compile there) + wraps trailing void user-fn calls in
+  `return __hexa_fn_arena_return(...)` → explicit trailing returns in the oracles. aiden DOWN (ssh timeout,
+  as OP-33). summer checkout left clean (scp'd files + /tmp artifacts removed).
+- docs/flame-determinism-contract.md: CHECKPOINT row in the per-phase locked-identities table + "lossy or
+  incomplete CHECKPOINT" bullet in what-breaks. Verdict .verdicts/hexa-0pod/F-OP35-CHECKPOINT.txt.
+
 ## 2026-06-12 — OP-33 DONE: LR-scheduler determinism surface (5th surface) — audit + deterministic warmup+cosine scheduler (d5_cos) + N=500 oracle; libm-cos divergence DEMONSTRATED 10/500 steps Darwin vs glibc ($0 · 0-pod)
 - Deep-dive round-9 branch ②: the step path is libm-free (F-OP19/19b/29) but the LR SCHEDULE is a separate
   per-step float surface feeding lr into AdamW; cosine decay needs cos() = the F-OP19 hole class. OP-23b's

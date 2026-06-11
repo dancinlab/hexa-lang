@@ -1,0 +1,651 @@
+// ════════════════════════════════════════════════════════════════════════════════
+//  op35_ckpt_resume_eq.hexa — F-OP35 CHECKPOINT save/restore determinism ORACLE.
+//
+//  HEXA-0POD OP-35 (6th determinism surface): a machine-independent training run is
+//  only useful if you can STOP it, serialize the FULL state (W, AdamW m/v, step t),
+//  restore into a FRESH context, and RESUME with the trajectory BYTE-IDENTICAL to an
+//  uninterrupted run. Serialization is a classic determinism hole: float→text loses
+//  bits; binary byte order; missing optimizer state restarts bias-correction; field/
+//  tensor iteration order. This oracle locks the new stdlib/flame/ckpt_lib.hexa
+//  ("FCK\x01" v1 — binary fp64-le, fixed field order, W+m+v+t complete).
+//
+//  ── GATES (g5, no tolerance) ────────────────────────────────────────────────────
+//  F-OP35-CKPT-RESUME    : RUN A = uninterrupted N=4 steps. RUN B = 2 steps → SAVE
+//      full state to file → restore into FRESH tensors → resume steps 3..4.
+//      Final W/m/v BIT-IDENTICAL (float_to_bits, catches -0.0 vs +0.0) AND
+//      max|Δ|=0 AND step-3/4 loss bits identical.
+//  F-OP35-CKPT-ROUNDTRIP : serialize→file→deserialize on ADVERSARIAL IEEE-754
+//      values (denormal min/max, -0.0, ±inf, qNaN + payload NaN, sNaN-pattern,
+//      max double, min normal, non-terminating fractions) — float_to_bits
+//      identical for every element through the REAL ckpt_lib path.
+//  NEGATIVE CONTROLS (the holes demonstrated REAL in-band, not latent):
+//      NC-1 wrong-t resume    : same restored state, but t restarts at 1 (the
+//           "checkpoint without step count" classic) → MUST diverge (Δ≠0).
+//      NC-2 fp32-truncated    : restored state rounded through fp32 (what the
+//           pre-existing .clm inference export would give a training resume)
+//           → MUST diverge (Δ≠0).
+//      The controls double as comparator-sensitivity proof: the 0.0 in the main
+//      gate is a genuine pass, not a comparator that can't see differences.
+//
+//  ── COMPOSED STEP (verbatim from clm_step_determinism_eq.hexa / clm_step.hexa) ──
+//  The EXACT OP-15 micro-step — embed → conv(ec) → conv(tc) → GroupNorm → GELU →
+//  residual → router+experts → GELU×2 → MoE combine → GroupNorm → conv(ro) → CE →
+//  full bwd chain → AdamW over ALL 17 params — restructured into a stateful loop
+//  (params/m/v persist across steps; t is the 1-based AdamW step). Tiny config
+//  T=4 d=8 E=2 V=256 K=3, fixed LCG seeds, CPU `hexa run`, 0-GPU. GroupNorm is
+//  inlined (_gn_fwd/_gn_bwd) for the same link reason OP-15 documents (gn_lib
+//  pulls the GPU forge symbol on the host link path).
+//
+//  ── CROSS-PLATFORM MODES (argv) ─────────────────────────────────────────────────
+//      (none)              : full local oracle (resume-eq + roundtrip + controls)
+//      save   <out.fck>    : init → steps 1..2 → write checkpoint bytes
+//      resume <in.fck> <out.fck> : restore from <in> → steps 3..4 → write the
+//                            FINAL state (t=4) re-serialized in ckpt format
+//  The portability gate is then file-level: ckpt SAVEd on arm64-macos, RESUMEd on
+//  x86_64-linux → the two final-state files are byte-identical (cmp) to the
+//  locally-resumed and the uninterrupted-run final state. The format is
+//  little-endian PINNED — bytes, not host layout, are the contract.
+//
+//  Verdict: .verdicts/hexa-0pod/F-OP35-CHECKPOINT.txt
+// ════════════════════════════════════════════════════════════════════════════════
+
+use "stdlib/flame/tensor_lib"
+use "stdlib/flame/conv_lib"
+use "stdlib/flame/moe_lib"
+use "stdlib/flame/nn_lib"
+use "stdlib/flame/optim_lib"
+use "stdlib/flame/ckpt_lib"
+use "stdlib/flame/flame_math"   // dt_exp — CE-bwd deterministic exp (F-OP19)
+
+fn _abs(x: float) -> float { if x < 0.0 { return 0.0 - x }; return x }
+
+// ── GroupNorm fwd/bwd — byte-identical mirror of gn_lib (see OP-15 note). ──
+fn _gn_sqrt(x: float) -> float {
+    if x <= 0.0 { return 0.0 }
+    let mut g = x
+    let mut i = 0
+    while i < 40 { g = 0.5 * (g + x / g); i = i + 1 }
+    return g
+}
+
+fn _gn_fwd(x: int, gamma: int, beta: int,
+           y_out: int, mean_out: int, inv_out: int, xhat_out: int,
+           T: int, C: int, G: int) {
+    let eps = 0.00001
+    let cg = C / G
+    let m = to_float(cg * T)
+    let mut g = 0
+    while g < G {
+        let c0 = g * cg
+        let mut sum = 0.0
+        let mut t = 0
+        while t < T {
+            let mut c = 0
+            while c < cg { sum = sum + t_get(x, t * C + (c0 + c)); c = c + 1 }
+            t = t + 1
+        }
+        let mu = sum / m
+        let mut vs = 0.0
+        let mut t2 = 0
+        while t2 < T {
+            let mut c2 = 0
+            while c2 < cg {
+                let d = t_get(x, t2 * C + (c0 + c2)) - mu
+                vs = vs + d * d
+                c2 = c2 + 1
+            }
+            t2 = t2 + 1
+        }
+        let var = vs / m
+        let inv = 1.0 / _gn_sqrt(var + eps)
+        t_set(mean_out, g, mu)
+        t_set(inv_out, g, inv)
+        let mut t3 = 0
+        while t3 < T {
+            let mut c3 = 0
+            while c3 < cg {
+                let ch = c0 + c3
+                let xh = (t_get(x, t3 * C + ch) - mu) * inv
+                t_set(xhat_out, t3 * C + ch, xh)
+                t_set(y_out, t3 * C + ch, t_get(gamma, ch) * xh + t_get(beta, ch))
+                c3 = c3 + 1
+            }
+            t3 = t3 + 1
+        }
+        g = g + 1
+    }
+}
+
+fn _gn_bwd(xhat: int, inv: int, gamma: int, dy: int,
+           dgamma_out: int, dbeta_out: int, dX_out: int,
+           T: int, C: int, G: int) {
+    let cg = C / G
+    let m = to_float(cg * T)
+    let mut c = 0
+    while c < C {
+        let mut sg = 0.0
+        let mut sb = 0.0
+        let mut t = 0
+        while t < T {
+            let idx = t * C + c
+            let gy = t_get(dy, idx)
+            sg = sg + gy * t_get(xhat, idx)
+            sb = sb + gy
+            t = t + 1
+        }
+        t_set(dgamma_out, c, sg)
+        t_set(dbeta_out, c, sb)
+        c = c + 1
+    }
+    let mut g = 0
+    while g < G {
+        let c0 = g * cg
+        let inv_g = t_get(inv, g)
+        let mut s1 = 0.0
+        let mut s2 = 0.0
+        let mut t = 0
+        while t < T {
+            let mut cc = 0
+            while cc < cg {
+                let ch = c0 + cc
+                let idx = t * C + ch
+                let dxh = t_get(dy, idx) * t_get(gamma, ch)
+                s1 = s1 + dxh
+                s2 = s2 + dxh * t_get(xhat, idx)
+                cc = cc + 1
+            }
+            t = t + 1
+        }
+        let mut t2 = 0
+        while t2 < T {
+            let mut cc2 = 0
+            while cc2 < cg {
+                let ch = c0 + cc2
+                let idx = t2 * C + ch
+                let dxh = t_get(dy, idx) * t_get(gamma, ch)
+                let dx = inv_g * (dxh - s1 / m - t_get(xhat, idx) * s2 / m)
+                t_set(dX_out, idx, dx)
+                cc2 = cc2 + 1
+            }
+            t2 = t2 + 1
+        }
+        g = g + 1
+    }
+}
+
+// ── clm_fwd_full — verbatim from clm_step.hexa (gn calls → inlined _gn_fwd) ──
+fn clm_fwd_full(tokens: int,
+                embed: int, ecW: int, ecB: int, tcW: int, tcB: int, tgG: int, tgB: int,
+                rW: int, rB: int, e0W: int, e0B: int, e1W: int, e1B: int,
+                noG: int, noB: int, roW: int, roB: int,
+                xe: int, xec: int, xt: int, hn0: int, xhat0: int, inv0: int,
+                eo0: int, eo1: int, probs: int, ex_out: int, yn: int, xhatN: int, invN: int,
+                out_logits: int, T: int, d: int, E: int, V: int, K: int) {
+    nn_embedding_fwd(tokens, embed, xe, T, d)
+    nn_conv1d_fwd(xe, ecW, ecB, xec, T, d, d, K, 1)
+    let h0 = t_zeros(T * d)
+    nn_conv1d_fwd(xec, tcW, tcB, h0, T, d, d, K, 1)
+    let mean0 = t_zeros(1)
+    _gn_fwd(h0, tgG, tgB, hn0, mean0, inv0, xhat0, T, d, 1)
+    let hg0 = t_zeros(T * d); nn_gelu_fwd(hn0, hg0, T * d)
+    let mut i = 0
+    while i < T * d { t_set(xt, i, t_get(xec, i) + t_get(hg0, i)); i = i + 1 }
+    let logits_r = t_zeros(T * E)
+    nn_conv1d_fwd(xt, rW, rB, logits_r, T, d, E, 1, 1)
+    nn_conv1d_fwd(xt, e0W, e0B, eo0, T, d, d, K, 1)
+    nn_conv1d_fwd(xt, e1W, e1B, eo1, T, d, d, K, 1)
+    let ex0 = t_zeros(T * d); nn_gelu_fwd(eo0, ex0, T * d)
+    let ex1 = t_zeros(T * d); nn_gelu_fwd(eo1, ex1, T * d)
+    let mut j = 0
+    while j < T * d {
+        t_set(ex_out, 0 * T * d + j, t_get(ex0, j))
+        t_set(ex_out, 1 * T * d + j, t_get(ex1, j))
+        j = j + 1
+    }
+    let y = t_zeros(T * d)
+    nn_moe_router_fwd(logits_r, ex_out, probs, y, T, E, d)
+    let meanN = t_zeros(1)
+    _gn_fwd(y, noG, noB, yn, meanN, invN, xhatN, T, d, 1)
+    nn_conv1d_fwd(yn, roW, roB, out_logits, T, d, V, 1, 1)
+    return   // explicit — older codegen wraps a trailing user-fn call in a return (summer toolchain)
+}
+
+// CE gradient seed (verbatim from clm_step.hexa).
+fn clm_ce_grad(logits: int, targets: int, dlogits_out: int, T: int, V: int) {
+    let mut t = 0
+    while t < T {
+        let base = t * V
+        let mut mx = t_get(logits, base)
+        let mut i = 1
+        while i < V { let v = t_get(logits, base + i); if v > mx { mx = v }; i = i + 1 }
+        let mut sm = 0.0
+        let mut i2 = 0
+        while i2 < V { sm = sm + dt_exp(t_get(logits, base + i2) - mx); i2 = i2 + 1 }  // F-OP19
+        let invT = 1.0 / to_float(T)
+        let mut v3 = 0
+        while v3 < V {
+            let p = dt_exp(t_get(logits, base + v3) - mx) / sm  // F-OP19: dt_exp
+            t_set(dlogits_out, base + v3, p * invT)
+            v3 = v3 + 1
+        }
+        let tgt = to_int(t_get(targets, t))
+        t_set(dlogits_out, base + tgt, t_get(dlogits_out, base + tgt) - invT)
+        t = t + 1
+    }
+}
+
+// Backward chain (verbatim from clm_step.hexa; gn calls → inlined _gn_bwd).
+fn clm_bwd(dlogits: int, tokens: int,
+           embed: int, ecW: int, tcW: int, tgG: int, rW: int, e0W: int, e1W: int, noG: int, roW: int,
+           xe: int, xec: int, xt: int, hn0: int, xhat0: int, inv0: int,
+           eo0: int, eo1: int, probs: int, ex_out: int, yn: int, xhatN: int, invN: int,
+           dembed: int, decW: int, decB: int, dtcW: int, dtcB: int, dtgG: int, dtgB: int,
+           drW: int, drB: int, de0W: int, de0B: int, de1W: int, de1B: int,
+           dnoG: int, dnoB: int, droW: int, droB: int,
+           T: int, d: int, E: int, V: int, K: int) {
+    let dynorm = t_zeros(T * d)
+    nn_conv1d_bwd(yn, roW, dlogits, droW, dynorm, droB, T, d, V, 1, 1)
+    let dy = t_zeros(T * d)
+    _gn_bwd(xhatN, invN, noG, dynorm, dnoG, dnoB, dy, T, d, 1)
+    let dlogits_r = t_zeros(T * E)
+    let dex_out = t_zeros(E * T * d)
+    nn_moe_router_bwd(probs, ex_out, dy, dlogits_r, dex_out, T, E, d)
+    let dxt_r = t_zeros(T * d)
+    nn_conv1d_bwd(xt, rW, dlogits_r, drW, dxt_r, drB, T, d, E, 1, 1)
+    let dex0 = t_zeros(T * d); let dex1 = t_zeros(T * d)
+    let mut ei = 0
+    while ei < T * d {
+        t_set(dex0, ei, t_get(dex_out, 0 * T * d + ei))
+        t_set(dex1, ei, t_get(dex_out, 1 * T * d + ei))
+        ei = ei + 1
+    }
+    let deo0 = t_zeros(T * d); nn_gelu_bwd(eo0, dex0, deo0, T * d)
+    let deo1 = t_zeros(T * d); nn_gelu_bwd(eo1, dex1, deo1, T * d)
+    let dxt_e0 = t_zeros(T * d); nn_conv1d_bwd(xt, e0W, deo0, de0W, dxt_e0, de0B, T, d, d, K, 1)
+    let dxt_e1 = t_zeros(T * d); nn_conv1d_bwd(xt, e1W, deo1, de1W, dxt_e1, de1B, T, d, d, K, 1)
+    let dxt = t_zeros(T * d)
+    let mut xi = 0
+    while xi < T * d {
+        t_set(dxt, xi, t_get(dxt_r, xi) + t_get(dxt_e0, xi) + t_get(dxt_e1, xi))
+        xi = xi + 1
+    }
+    let dhn0 = t_zeros(T * d); nn_gelu_bwd(hn0, dxt, dhn0, T * d)
+    let dh0 = t_zeros(T * d)
+    _gn_bwd(xhat0, inv0, tgG, dhn0, dtgG, dtgB, dh0, T, d, 1)
+    let dxec_b = t_zeros(T * d)
+    nn_conv1d_bwd(xec, tcW, dh0, dtcW, dxec_b, dtcB, T, d, d, K, 1)
+    let dxec = t_zeros(T * d)
+    let mut ci = 0
+    while ci < T * d { t_set(dxec, ci, t_get(dxt, ci) + t_get(dxec_b, ci)); ci = ci + 1 }
+    let dxe = t_zeros(T * d)
+    nn_conv1d_bwd(xe, ecW, dxec, decW, dxe, decB, T, d, d, K, 1)
+    let mut zi = 0
+    while zi < V * d { t_set(dembed, zi, 0.0); zi = zi + 1 }
+    nn_embedding_bwd_scatter(dxe, tokens, dembed, T, d)
+    return   // explicit — older codegen wraps a trailing user-fn call in a return (summer toolchain)
+}
+
+fn _adam(W: int, gW: int, m: int, v: int, n: int, t: int) {
+    opt_adamw_step(W, gW, m, v, n, 0.05, 0.9, 0.999, 0.00000001, 0.0, t)
+    return   // explicit — older codegen wraps a trailing user-fn call in a return (summer toolchain)
+}
+
+// ── stateful multi-step harness ──────────────────────────────────────────────
+// 17 params in the CANONICAL clm_step order (the ckpt field order):
+//   0 embed 1 ecW 2 ecB 3 tcW 4 tcB 5 tgG 6 tgB 7 rW 8 rB 9 e0W 10 e0B
+//   11 e1W 12 e1B 13 noG 14 noB 15 roW 16 roB
+const NP = 17
+
+fn cfg_T() -> int { return 4 }
+fn cfg_d() -> int { return 8 }
+fn cfg_E() -> int { return 2 }
+fn cfg_V() -> int { return 256 }
+fn cfg_K() -> int { return 3 }
+
+// element count of param slot s
+fn param_size(s: int) -> int {
+    let d = cfg_d(); let E = cfg_E(); let V = cfg_V(); let K = cfg_K()
+    let dd = d * d * K; let ed = E * d; let vd = V * d
+    let sizes = [vd, dd, d, dd, d, d, d, ed, E, dd, d, dd, d, d, d, vd, V]
+    return sizes[s]
+}
+
+// allocate a fresh (all-zero) state: pack/mpack/vpack slots ← new tensor handles
+fn alloc_state(Wp: int, Mp: int, Vp: int) {
+    let mut s = 0
+    while s < NP {
+        let n = param_size(s)
+        let _ = farr_set(Wp, s, to_float(t_zeros(n)))
+        let _ = farr_set(Mp, s, to_float(t_zeros(n)))
+        let _ = farr_set(Vp, s, to_float(t_zeros(n)))
+        s = s + 1
+    }
+}
+
+// deterministic param init — the OP-15 fixed LCG seeds (m/v stay zero)
+fn init_params(Wp: int) {
+    let seeds  = [1, 2, 3, 4, 5, 6, 7, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21]
+    let scales = [0.3, 0.2, 0.1, 0.2, 0.1, 0.5, 0.1, 0.2, 0.1, 0.2, 0.1, 0.2, 0.1, 0.5, 0.1, 0.2, 0.1]
+    let mut s = 0
+    while s < NP {
+        let h = to_int(farr_get(Wp, s))
+        t_fill_lcg(h, param_size(s), seeds[s], scales[s])
+        s = s + 1
+    }
+}
+
+fn _h(p: int, s: int) -> int { return to_int(farr_get(p, s)) }
+
+// ONE composed micro-step (fwd→loss→bwd→AdamW) on the persistent state, AdamW
+// 1-based step `t`. Returns the step CE loss.
+fn step_once(Wp: int, Mp: int, Vp: int, t: int) -> float {
+    let T = cfg_T(); let d = cfg_d(); let E = cfg_E(); let V = cfg_V(); let K = cfg_K()
+    let dd = d * d * K; let ed = E * d; let vd = V * d
+
+    let tokens = t_zeros(T)
+    t_set(tokens, 0, 3.0); t_set(tokens, 1, 14.0); t_set(tokens, 2, 159.0); t_set(tokens, 3, 26.0)
+    let targets = t_zeros(T)
+    t_set(targets, 0, 14.0); t_set(targets, 1, 159.0); t_set(targets, 2, 26.0); t_set(targets, 3, 7.0)
+
+    let embed=_h(Wp,0); let ecW=_h(Wp,1); let ecB=_h(Wp,2); let tcW=_h(Wp,3); let tcB=_h(Wp,4)
+    let tgG=_h(Wp,5); let tgB=_h(Wp,6); let rW=_h(Wp,7); let rB=_h(Wp,8)
+    let e0W=_h(Wp,9); let e0B=_h(Wp,10); let e1W=_h(Wp,11); let e1B=_h(Wp,12)
+    let noG=_h(Wp,13); let noB=_h(Wp,14); let roW=_h(Wp,15); let roB=_h(Wp,16)
+
+    // grads
+    let dembed=t_zeros(vd); let decW=t_zeros(dd); let decB=t_zeros(d)
+    let dtcW=t_zeros(dd); let dtcB=t_zeros(d); let dtgG=t_zeros(d); let dtgB=t_zeros(d)
+    let drW=t_zeros(ed); let drB=t_zeros(E)
+    let de0W=t_zeros(dd); let de0B=t_zeros(d); let de1W=t_zeros(dd); let de1B=t_zeros(d)
+    let dnoG=t_zeros(d); let dnoB=t_zeros(d); let droW=t_zeros(vd); let droB=t_zeros(V)
+
+    // caches
+    let xe=t_zeros(T*d); let xec=t_zeros(T*d); let xt=t_zeros(T*d)
+    let hn0=t_zeros(T*d); let xhat0=t_zeros(T*d); let inv0=t_zeros(1)
+    let eo0=t_zeros(T*d); let eo1=t_zeros(T*d); let probs=t_zeros(T*E); let ex_out=t_zeros(E*T*d)
+    let yn=t_zeros(T*d); let xhatN=t_zeros(T*d); let invN=t_zeros(1)
+    let logits=t_zeros(T*V); let dlogits=t_zeros(T*V)
+
+    clm_fwd_full(tokens, embed, ecW, ecB, tcW, tcB, tgG, tgB, rW, rB,
+                 e0W, e0B, e1W, e1B, noG, noB, roW, roB,
+                 xe, xec, xt, hn0, xhat0, inv0, eo0, eo1, probs, ex_out,
+                 yn, xhatN, invN, logits, T, d, E, V, K)
+    let loss = nn_ce_loss_allpos(logits, targets, T, V)
+    clm_ce_grad(logits, targets, dlogits, T, V)
+    clm_bwd(dlogits, tokens, embed, ecW, tcW, tgG, rW, e0W, e1W, noG, roW,
+            xe, xec, xt, hn0, xhat0, inv0, eo0, eo1, probs, ex_out, yn, xhatN, invN,
+            dembed, decW, decB, dtcW, dtcB, dtgG, dtgB, drW, drB, de0W, de0B, de1W, de1B,
+            dnoG, dnoB, droW, droB, T, d, E, V, K)
+
+    let G = [dembed, decW, decB, dtcW, dtcB, dtgG, dtgB, drW, drB,
+             de0W, de0B, de1W, de1B, dnoG, dnoB, droW, droB]
+    let mut s = 0
+    while s < NP {
+        _adam(_h(Wp, s), G[s], _h(Mp, s), _h(Vp, s), param_size(s), t)
+        s = s + 1
+    }
+    return loss
+}
+
+// serialize the full training state (header step = t_applied) → byte buffer
+fn state_to_bytes(Wp: int, Mp: int, Vp: int, t_applied: int) {
+    let buf = []
+    ckpt_begin(buf, t_applied, NP)
+    let mut s = 0
+    while s < NP {
+        ckpt_save_param(buf, _h(Wp, s), _h(Mp, s), _h(Vp, s), param_size(s))
+        s = s + 1
+    }
+    return buf
+}
+
+// restore a checkpoint byte buffer into a FRESH state; returns the applied step
+// t (resume continues at t+1), or 0-1 (== -1) on a malformed file.
+fn bytes_to_state(rb, Wp: int, Mp: int, Vp: int) -> int {
+    if ckpt_magic_ok(rb) == 0 { return 0 - 1 }
+    if ckpt_nparams(rb) != NP { return 0 - 1 }
+    alloc_state(Wp, Mp, Vp)
+    let mut off = ckpt_body_off()
+    let mut s = 0
+    while s < NP {
+        if ckpt_param_len(rb, off) != param_size(s) { return 0 - 1 }
+        off = ckpt_load_param(rb, off, _h(Wp, s), _h(Mp, s), _h(Vp, s))
+        s = s + 1
+    }
+    return ckpt_step(rb)
+}
+
+// ── comparators ──────────────────────────────────────────────────────────────
+// max|Δ| + bit-mismatch count over (W,m,v) of two states.
+fn state_max_dev(WpA: int, MpA: int, VpA: int, WpB: int, MpB: int, VpB: int) -> float {
+    let mut worst = 0.0
+    let packsA = [WpA, MpA, VpA]; let packsB = [WpB, MpB, VpB]
+    let mut k = 0
+    while k < 3 {
+        let mut s = 0
+        while s < NP {
+            let a = _h(packsA[k], s); let b = _h(packsB[k], s)
+            let n = param_size(s)
+            let mut i = 0
+            while i < n {
+                let dev = _abs(t_get(a, i) - t_get(b, i))
+                if dev > worst { worst = dev }
+                i = i + 1
+            }
+            s = s + 1
+        }
+        k = k + 1
+    }
+    return worst
+}
+
+fn state_bit_mismatch(WpA: int, MpA: int, VpA: int, WpB: int, MpB: int, VpB: int) -> int {
+    let mut bad = 0
+    let packsA = [WpA, MpA, VpA]; let packsB = [WpB, MpB, VpB]
+    let mut k = 0
+    while k < 3 {
+        let mut s = 0
+        while s < NP {
+            let a = _h(packsA[k], s); let b = _h(packsB[k], s)
+            let n = param_size(s)
+            let mut i = 0
+            while i < n {
+                if float_to_bits(t_get(a, i)) != float_to_bits(t_get(b, i)) { bad = bad + 1 }
+                i = i + 1
+            }
+            s = s + 1
+        }
+        k = k + 1
+    }
+    return bad
+}
+
+// fp32-truncate every element of the state IN PLACE (negative-control NC-2 —
+// what resuming from the fp32 .clm inference export would hand the trainer).
+fn state_fp32_truncate(Wp: int, Mp: int, Vp: int) {
+    let packs = [Wp, Mp, Vp]
+    let mut k = 0
+    while k < 3 {
+        let mut s = 0
+        while s < NP {
+            let h = _h(packs[k], s)
+            let n = param_size(s)
+            let mut i = 0
+            while i < n {
+                let b32 = f32_to_bytes_le(t_get(h, i))
+                t_set(h, i, bytes_to_f32_le(b32, 0))
+                i = i + 1
+            }
+            s = s + 1
+        }
+        k = k + 1
+    }
+}
+
+// ── adversarial IEEE-754 round-trip through the REAL ckpt_lib path ──────────
+fn roundtrip_adversarial() -> int {
+    // bit patterns chosen to break lossy serializers:
+    //   0                      +0.0
+    //   -9223372036854775808   -0.0                 (0x8000000000000000)
+    //   1                      min denormal 5e-324
+    //   4503599627370495       max denormal         (0x000FFFFFFFFFFFFF)
+    //   4503599627370496       min normal           (0x0010000000000000)
+    //   9218868437227405311    max double           (0x7FEFFFFFFFFFFFFF)
+    //   9218868437227405312    +inf                 (0x7FF0000000000000)
+    //   -4503599627370497      -inf                 (0xFFF0000000000000)
+    //   9221120237041090560    qNaN                 (0x7FF8000000000000)
+    //   9221120237041090799    qNaN payload 0xEF    (0x7FF80000000000EF)
+    //   9218868437227405313    sNaN-pattern         (0x7FF0000000000001)
+    let bits = [0, 0-9223372036854775807-1, 1, 4503599627370495, 4503599627370496,
+                9218868437227405311, 9218868437227405312, 0-4503599627370497,
+                9221120237041090560, 9221120237041090799, 9218868437227405313]
+    let n = len(bits)
+    let W = t_zeros(n); let M = t_zeros(n); let Vt = t_zeros(n)
+    let mut i = 0
+    while i < n {
+        t_set(W, i, bits_to_float(bits[i]))
+        t_set(M, i, bits_to_float(bits[(i + 3) - (((i + 3) / n) * n)]))   // rotated
+        t_set(Vt, i, 1.0 / 3.0 + to_float(i))                              // inexact fractions
+        i = i + 1
+    }
+    let buf = []
+    ckpt_begin(buf, 7, 1)
+    ckpt_save_param(buf, W, M, Vt, n)
+    let path = "/tmp/op35_roundtrip_adversarial.fck"
+    write_bytes(path, buf)
+    let rb = read_file_bytes(path)
+    if ckpt_magic_ok(rb) == 0 { return 0 }
+    if ckpt_step(rb) != 7 { return 0 }
+    if ckpt_nparams(rb) != 1 { return 0 }
+    let W2 = t_zeros(n); let M2 = t_zeros(n); let V2 = t_zeros(n)
+    let _ = ckpt_load_param(rb, ckpt_body_off(), W2, M2, V2)
+    let mut bad = 0
+    let mut j = 0
+    while j < n {
+        if float_to_bits(t_get(W, j)) != float_to_bits(t_get(W2, j)) { bad = bad + 1 }
+        if float_to_bits(t_get(M, j)) != float_to_bits(t_get(M2, j)) { bad = bad + 1 }
+        if float_to_bits(t_get(Vt, j)) != float_to_bits(t_get(V2, j)) { bad = bad + 1 }
+        j = j + 1
+    }
+    print("  roundtrip adversarial: "); print(n * 3); print(" elems, bit-mismatch = "); println(bad)
+    if bad == 0 { return 1 }
+    return 0
+}
+
+fn main() {
+    let argv = args()
+    let N = 4    // total steps
+    let kk = 2   // checkpoint after step kk
+
+    // ── mode: save <out.fck> — steps 1..kk then write the checkpoint ──
+    if len(argv) >= 3 && argv[1] == "save" {
+        let Wp = t_zeros(NP); let Mp = t_zeros(NP); let Vp = t_zeros(NP)
+        alloc_state(Wp, Mp, Vp); init_params(Wp)
+        let mut t = 1
+        while t <= kk {
+            let l = step_once(Wp, Mp, Vp, t)
+            print("  step "); print(t); print(" loss bits = "); println(float_to_bits(l))
+            t = t + 1
+        }
+        let buf = state_to_bytes(Wp, Mp, Vp, kk)
+        write_bytes(argv[2], buf)
+        print("SAVED "); print(argv[2]); print(" ("); print(len(buf)); println(" bytes)")
+        return
+    }
+
+    // ── mode: resume <in.fck> <out.fck> — restore, steps kk+1..N, write final ──
+    if len(argv) >= 4 && argv[1] == "resume" {
+        let rb = read_file_bytes(argv[2])
+        let Wp = t_zeros(NP); let Mp = t_zeros(NP); let Vp = t_zeros(NP)
+        let tk = bytes_to_state(rb, Wp, Mp, Vp)
+        if tk < 0 { println("FAIL — malformed checkpoint"); return }
+        print("  restored t="); println(tk)
+        let mut t = tk + 1
+        while t <= N {
+            let l = step_once(Wp, Mp, Vp, t)
+            print("  step "); print(t); print(" loss bits = "); println(float_to_bits(l))
+            t = t + 1
+        }
+        let buf = state_to_bytes(Wp, Mp, Vp, N)
+        write_bytes(argv[3], buf)
+        print("RESUMED-FINAL "); print(argv[3]); print(" ("); print(len(buf)); println(" bytes)")
+        return
+    }
+
+    // ── full local oracle ──
+    println("op35_ckpt_resume_eq — F-OP35 checkpoint save/restore determinism (CPU oracle)")
+    println("  scope: full CLMConvMoE micro-step xN; save@k -> restore FRESH -> resume == uninterrupted")
+
+    // RUN A — uninterrupted N steps
+    let WA = t_zeros(NP); let MA = t_zeros(NP); let VA = t_zeros(NP)
+    alloc_state(WA, MA, VA); init_params(WA)
+    let lossA = t_zeros(N + 1)
+    let mut tA = 1
+    while tA <= N { t_set(lossA, tA, step_once(WA, MA, VA, tA)); tA = tA + 1 }
+
+    // RUN B — steps 1..kk, SAVE to file, restore into FRESH state, resume kk+1..N
+    let WB = t_zeros(NP); let MB = t_zeros(NP); let VB = t_zeros(NP)
+    alloc_state(WB, MB, VB); init_params(WB)
+    let mut tB = 1
+    while tB <= kk { let _ = step_once(WB, MB, VB, tB); tB = tB + 1 }
+    let ckbuf = state_to_bytes(WB, MB, VB, kk)
+    let ckpath = "/tmp/op35_ckpt_k2.fck"
+    write_bytes(ckpath, ckbuf)
+    print("  checkpoint @k="); print(kk); print(" -> "); print(ckpath)
+    print(" ("); print(len(ckbuf)); println(" bytes)")
+
+    let rb = read_file_bytes(ckpath)
+    let WR = t_zeros(NP); let MR = t_zeros(NP); let VR = t_zeros(NP)
+    let tk = bytes_to_state(rb, WR, MR, VR)
+    if tk != kk { println("F-OP35-CKPT-RESUME = 0"); println("FAIL — restore returned wrong t"); return }
+    let lossR = t_zeros(N + 1)
+    let mut tR = tk + 1
+    while tR <= N { t_set(lossR, tR, step_once(WR, MR, VR, tR)); tR = tR + 1 }
+
+    let dev = state_max_dev(WA, MA, VA, WR, MR, VR)
+    let bits = state_bit_mismatch(WA, MA, VA, WR, MR, VR)
+    let mut loss_ok = 1
+    let mut tl = kk + 1
+    while tl <= N {
+        if float_to_bits(t_get(lossA, tl)) != float_to_bits(t_get(lossR, tl)) { loss_ok = 0 }
+        tl = tl + 1
+    }
+    print("  loss step3 A/resumed bits = "); print(float_to_bits(t_get(lossA, 3)))
+    print(" / "); println(float_to_bits(t_get(lossR, 3)))
+    print("  loss step4 A/resumed bits = "); print(float_to_bits(t_get(lossA, 4)))
+    print(" / "); println(float_to_bits(t_get(lossR, 4)))
+    print("  max|d(uninterrupted, resumed)| = "); println(dev)
+    print("  bit-mismatch count (W,m,v)     = "); println(bits)
+
+    // NC-1 — wrong-t resume (the "no step count in the checkpoint" classic):
+    // same restored state, but AdamW t restarts at 1 → bias-correction restarts.
+    let Wn1 = t_zeros(NP); let Mn1 = t_zeros(NP); let Vn1 = t_zeros(NP)
+    let _ = bytes_to_state(rb, Wn1, Mn1, Vn1)
+    let mut tn = 1
+    while tn <= N - kk { let _ = step_once(Wn1, Mn1, Vn1, tn); tn = tn + 1 }
+    let devN1 = state_max_dev(WA, MA, VA, Wn1, Mn1, Vn1)
+    print("  NC-1 wrong-t resume   max|d| = "); println(devN1)
+
+    // NC-2 — fp32-truncated restore (what the .clm fp32 export would give):
+    let Wn2 = t_zeros(NP); let Mn2 = t_zeros(NP); let Vn2 = t_zeros(NP)
+    let _ = bytes_to_state(rb, Wn2, Mn2, Vn2)
+    state_fp32_truncate(Wn2, Mn2, Vn2)
+    let mut tn2 = kk + 1
+    while tn2 <= N { let _ = step_once(Wn2, Mn2, Vn2, tn2); tn2 = tn2 + 1 }
+    let devN2 = state_max_dev(WA, MA, VA, Wn2, Mn2, Vn2)
+    print("  NC-2 fp32-trunc resume max|d| = "); println(devN2)
+
+    // adversarial serialize→deserialize round-trip (the lib path itself)
+    let rt_ok = roundtrip_adversarial()
+
+    let resume_ok = if dev == 0.0 && bits == 0 && loss_ok == 1 { 1 } else { 0 }
+    let nc_ok = if devN1 > 0.0 && devN2 > 0.0 { 1 } else { 0 }
+    println("F-OP35-CKPT-RESUME = " + to_string(resume_ok))
+    println("F-OP35-CKPT-ROUNDTRIP = " + to_string(rt_ok))
+    println("F-OP35-NEGCTRL-DIVERGE = " + to_string(nc_ok))
+    if resume_ok == 1 && rt_ok == 1 && nc_ok == 1 {
+        println("PASS - save@k -> restore FRESH -> resume == uninterrupted BIT-FOR-BIT (W,m,v,losses); adversarial f64 round-trip exact; both classic holes (missing-t, fp32 truncation) DEMONSTRATED divergent.")
+        return
+    }
+    println("FAIL")
+}

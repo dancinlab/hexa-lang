@@ -253,6 +253,7 @@ tolerance) unless noted.
 | **BWD dW** — backward weight-gradient GEMM (transpose-elim) | F-OP2-TRAINER-WIRE | `im2col + matmul_t` dW == `im2col_t + matmul` dW; contract over the **same t/m dimension, same ascending order** (`xcolT[j,t] == xcol[t,j]`) | reorder the contraction; on GPU the cuBLAS OP_T Dgemm is an fp-accum-order variant of OP_N (rel-RMS ~1e-14, the documented identical-tolerance lane — not a regression) |
 | **OPTIMIZER** — AdamW decoupled-wd update | F-OP12-ADAMW-UPDATE-ORACLE | SSOT `_hx_farr_adamw_step_cpu`: `v = β2·v + ((1−β2)·g)·g` (**left-assoc**, NOT `(1−β2)·(g·g)`); `m̂ = m/c1` **before** `v̂ = v/c2`; `denom = √v̂ + ε` (**ε outside √**, `_adamw_sqrt` 24-iter Newton held constant); `W' = (W − lr·wd·W) − lr·(m̂/denom)` (two separate subtractions, decoupled-wd first); `c1,c2 = 1−βᵗ` by repeated-mul (not `pow`) | refold `(1−β2)·g·g` to `(1−β2)·(g·g)` (diverges ≤8.88e-16), reorder the bias-correction divides, move ε inside √, or swap the sqrt impl |
 | **SCHEDULE** — per-step LR (warmup + cosine decay) | F-OP33-LR-SCHEDULE | `opt_lr_warmup_cosine` (optim_lib): cos = **`d5_cos`** (mod-2π reduce + 14-term Taylor, the F-OP29 RoPE primitive — NOT libm `cos`); π = `d5_pi()`; fold order pinned (`prog` single-divide → `0.5·(1+c)` → `floor+(1−floor)·cosf` → `base·(...)`; warmup ramp `base·(t/warmup)`). Any per-step schedule arithmetic (lr/wd/beta/temperature ramps) must use `dt_*`/`d5_*` primitives | a libm-`cos` schedule — MEASURED divergent Darwin vs glibc: **10/500 steps differ 1–4 ULP** (t=121 180 367 381 387 391 394 407 414 433 at the OP-23b config), each handing AdamW a different lr → weights diverge from the first such step; or refolding the pinned fold order |
+| **CHECKPOINT** — training-state save/restore/resume | F-OP35-CHECKPOINT | `ckpt_lib` (`"FCK\x01"` v1): **binary fp64 little-endian** via `f64_to_bytes_le`/`bytes_to_f64_le` (IEEE-754 bit-pattern reinterpret — NO text round-trip), **fixed field order** (header `t`,`n_params`; per param `[len][W][m][v]` in the pinned param order), state **COMPLETE** (every W + AdamW m,v + applied step t; resume continues at t+1). save→restore-FRESH→resume == uninterrupted **bit-for-bit** (0 bit-mismatch over W/m/v + loss bits); round-trip bit-exact on denormals/-0.0/±inf/NaN-payload; bytes platform-pinned (arm64-macos ↔ x86_64-linux: write/echo/resume files all `cmp`-identical) | a `%f`/`to_string` TEXT serialization (not shortest-round-trip — drops low mantissa bits → restore ≠ original → trajectory diverges); an **fp32** store anywhere in the path (the `.clm` int4/fp32 INFERENCE export is NOT a training checkpoint — MEASURED 1.77e-8 divergence 2 steps after an fp32-truncated resume); **omitting m, v, or the applied step t** (a reset t restarts bias-correction — MEASURED 0.042 divergence); host-endian or dict/iteration-ordered layouts |
 
 ### the one known non-zero spot — B>1 conv seam
 
@@ -343,6 +344,16 @@ A non-exhaustive checklist — any of these silently breaks `max|Δ| = 0`:
   in a warmup+cosine schedule is MEASURED divergent Darwin-arm64 vs glibc-x86:
   10/500 steps differ 1–4 ULP → a different lr enters AdamW on each platform →
   weights diverge from the first such step. (F-OP33.)
+- **A lossy or incomplete CHECKPOINT.** Serializing training state through TEXT
+  (`%f`/`to_string` — not shortest-round-trip; drops low mantissa bits), through
+  an **fp32** store (the `.clm` int4/fp32 INFERENCE export is NOT a training
+  checkpoint — an fp32-truncated resume diverges, MEASURED 1.77e-8 within 2
+  steps), or **without the AdamW m/v + applied step t** (a reset t restarts
+  bias-correction — MEASURED 0.042 divergence). The canonical primitive is
+  `ckpt_lib` (`"FCK\x01"`: binary fp64-LE bit-pattern reinterpret, fixed field
+  order, full W+m+v+t) — save→restore→resume is bit-identical to the
+  uninterrupted run and the BYTES are platform-portable (arm64-macos ↔
+  x86_64-linux `cmp`-equal). (F-OP35.)
 
 ## adding a new oracle
 
