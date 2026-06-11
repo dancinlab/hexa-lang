@@ -1384,3 +1384,27 @@ NOT claimed. $0, no vast/pool/pod. Verdict .verdicts/hexa-0pod/F-OP21-HOPPER-WAR
   natural fix = #ifdef twin calling _hx_cuda_farr_stdp_pair_gpu, needs 1 GPU session). No other missing sibling
   symbol surfaced — the full lib import links with only this body.
 - Milestone OP-32b flipped [x]. Verdict .verdicts/hexa-0pod/F-OP32B-STDP-HOST.txt. $0 · 0-GPU · 0-pod · no vast.
+
+## OP-26c — SUBMISSION-READINESS doc v2: 4-arch G2 closed · real-vocab input · FMA novelty (0-pod, docs-only)
+
+- 2026-06-12 · deep-dive round-9 branch ① (foreground). Docs-only refresh of
+  docs/flame-machine-independent-SUBMISSION-READINESS.md — the v1 (OP-26b #3035) was written against round-5
+  evidence (1 arch · G2 open · G1 input unproven); rounds 6-8 grew the base and the doc had gone stale.
+- CLAIM (v2): the determinism construction is GENERAL — 4 structurally-distinct archs (CLMConvMoE F-OP15 ·
+  decoder block F-OP29 · MLP F-OP31 · spiking LIF+STDP F-OP32, first recurrent/event-driven/non-backprop)
+  under the formalized 3-layer model (run-to-run · libm-free · cross-ISA-FMA-free, F-OP30). Honest scope:
+  flagship 4-env × 3-libm matrix (F-OP19/b/c/d/e); archs 2-4 = both-ISA pair (arm64-macos == x86-linux);
+  new gap G7 (full-matrix legs for archs 2-4, LOW, mechanical via self-contained scp-portable oracles).
+- GAPS refreshed: G2 CLOSED ×3-over. G1 input slice CLOSED + pre-gated (F-OP28 · F-OP28b · F-OP28c real Qwen
+  vocab 151643 entries through production bpe_load, round-trip 6/6 · F-OP24d turnkey step-0 pre-gate); sole
+  remainder = the GPU trainer step run, severity high→low-medium. G3/G4/G5/G6 statuses verified unchanged.
+- EVIDENCE table: +13 rows, each citing its verdict (incl. F-OP30b contract consistency + F-OP32b spiking
+  CPU-link close + threat-model T4 + recipe item (d)).
+- NOVELTY sharpened to TWO legs: ① the 4-arch constructive recipe; ② the cross-ISA FMA-contraction class
+  ITSELF — measured ×3 archs (F-OP29 241449363≠1401117690 · F-OP31 2039553633≠124945498 · F-OP32 DIAG-A
+  1478294112≠210297454 on byte-identical inputs), mitigation contract (inline ascending matmul, F-OP30),
+  measured boundary (binary {0,1} operands FMA-IMMUNE — F-OP32 DIAG-B 1881150137 on BOTH ISAs through the
+  forbidden kernel). Honest-limits section refreshed (7 items); diagram + GO/NO-GO updated (~80%→~90%).
+- g84 CONFIRMED: NO /paper scaffold — no PAPER.tape / PAPER.md / LaTeX; readiness assessment only.
+- Milestone OP-26c flipped [x]. Verdict .verdicts/hexa-0pod/F-OP26C-READINESS-V2.txt. Docs-only · $0 ·
+  0-GPU · 0-pod · no vast · no foreign-pod touch · no .tape edits.

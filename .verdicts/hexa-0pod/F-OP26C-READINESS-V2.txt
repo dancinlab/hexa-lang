@@ -1,0 +1,154 @@
+════════════════════════════════════════════════════════════════════════════
+F-OP26C-READINESS-V2 — SUBMISSION-READINESS doc updated to the round-7/8
+evidence: 4-arch G2 closed · real-Qwen-vocab input slice · cross-ISA FMA
+novelty · 3-layer determinism model
+HEXA-0POD OP-26c · deep-dive round-9 branch ① · docs-only · 0-pod · NO GPU ·
+NO vast · $0
+════════════════════════════════════════════════════════════════════════════
+
+WHAT THIS IS
+  Docs-only refresh of docs/flame-machine-independent-SUBMISSION-READINESS.md.
+  The v1 assessment (OP-26b #3035, F-OP26B-SUBMISSION-READINESS) was written
+  against the round-5 evidence: ONE architecture, gap G2 ("a 2nd architecture,
+  MED") open, G1's input side unproven. Rounds 6-8 grew the evidence base
+  materially; OP-26c brings the readiness doc to current state (elephant rule).
+  No new computation. Every claim traces to a merged verdict (g5).
+
+────────────────────────────────────────────────────────────────────────────
+THE UPDATED CLAIM (doc §a, v2 — strongest current form)
+────────────────────────────────────────────────────────────────────────────
+  flame trains neural networks bit-for-bit identically across machines, and
+  the determinism construction is GENERAL: it holds on 4 structurally-distinct
+  architectures — conv+MoE (CLMConvMoE) · attention (Transformer decoder
+  block) · dense MLP · recurrent spiking LIF with local STDP — because the
+  construction satisfies a formalized 3-layer model (run-to-run · libm-free ·
+  cross-ISA-FMA-free).
+
+  HONEST SCOPE (stated in the doc, g5):
+  - flagship path (CLMConvMoE + dt_*): 4-environment matrix, 3 distinct libm
+    impls (F-OP19/19B/19C/19D/19E)
+  - archs 2-4: cross-ISA byte-identical on arm64-macos == x86-linux (the pair
+    that exhibits the FMA divergence); pi5/musl legs mechanical but unrun
+    (logged as NEW gap G7, LOW)
+
+────────────────────────────────────────────────────────────────────────────
+THE REFRESHED GAP LIST (doc §c, v2)
+────────────────────────────────────────────────────────────────────────────
+  G1  real-corpus e2e   INPUT SIDE CLOSED + PRE-GATED (F-OP28 byte-level ·
+                        F-OP28B canonical BPE map · F-OP28C real Qwen vocab
+                        151643 entries through the PRODUCTION bpe_load path,
+                        round-trip 6/6, deterministic load, cross-platform ·
+                        F-OP24D turnkey-kit step-0 pre-gate). SOLE remainder
+                        = the GPU trainer STEP run (clm_prod_gpu -DHEXA_CUDA
+                        build env). severity high → LOW-MEDIUM.
+  G2  2nd architecture  CLOSED ×3-over — F-OP29-2ND-ARCH (decoder block) ·
+                        F-OP31-3RD-ARCH (MLP) · F-OP32-4TH-ARCH (spiking
+                        LIF+STDP: first recurrent, event-driven, non-backprop
+                        arch). 4 architectures total with CLMConvMoE.
+  G3  x86-macos cell    unchanged — physically blocked (no Intel-Mac host),
+                        LOW, honestly disclosed.
+  G4  perf↔det Pareto   unchanged — partial (F-OP23/23B TF32 · F-OP25 BF16
+                        self-det exist, no unified figure), MEDIUM.
+  G5  cross-GPU-arch    unchanged — out of scope, MEDIUM.
+  G6  musl fix CI-gate  unchanged — fix durable, not CI-gated, LOW.
+  G7  archs 2-4 on the  NEW (honest) — decoder/MLP/spiking cross-platform
+      full 4-env matrix proofs cover both ISAs but only 2 of the 4+1 env
+                        cells; self-contained oracles are scp-portable so the
+                        extension is mechanical. LOW (the ISA axis — the
+                        layer-3 risk — IS covered for all 4 archs).
+
+────────────────────────────────────────────────────────────────────────────
+NEW EVIDENCE ROWS ADDED (doc §b DONE table, each with its verdict)
+────────────────────────────────────────────────────────────────────────────
+  2nd arch (decoder block)              F-OP29-2ND-ARCH
+  3rd arch (MLP, FMA demo in-band)      F-OP31-3RD-ARCH
+  4th arch (spiking LIF+STDP)           F-OP32-4TH-ARCH
+  3-layer model + cross-ISA invariant   F-OP30-CROSSISA-CONTRACT
+  FMA-immunity boundary (binary {0,1})  F-OP32-4TH-ARCH (DIAG-A/B)
+  input byte-level pipeline             F-OP28-CORPUS-LOADER-DET
+  input BPE canonical map               F-OP28B-BPE-FIX
+  input REAL Qwen vocab (151643)        F-OP28C-VOCAB-STAGING
+  G1 turnkey step-0 pre-gate            F-OP24D-G1-READINESS
+  contract doc consistency              F-OP30B-CONTRACT-FIX
+  spiking lib CPU-linkable              F-OP32B-STDP-HOST
+  threat model gains T4 (FMA)           F-OP30-CROSSISA-CONTRACT
+  recipe gains item (d) inline matmul   F-OP30-CROSSISA-CONTRACT
+
+────────────────────────────────────────────────────────────────────────────
+THE SHARPENED NOVELTY (doc §d, v2 — now TWO legs)
+────────────────────────────────────────────────────────────────────────────
+  LEG 1 (unchanged, strengthened): cross-platform bit-exact training as a
+  constructive recipe — now proven 4-architectures wide, including a
+  non-backprop (STDP/Hebbian) substrate.
+
+  LEG 2 (NEW — itself novel): the cross-ISA FMA-contraction nondeterminism
+  class, measured + mitigated + bounded:
+  - the CLASS: clang -O2 fuses a*b+c on arm64 (1 rounding) but not x86 (2
+    roundings) → the FMA-fused farr_matmul kernel byte-diverges on identical
+    inputs, reproduced ×3: F-OP29 (241449363 vs 1401117690) · F-OP31
+    (2039553633 vs 124945498) · F-OP32 DIAG-A (1478294112 vs 210297454).
+    Distinct from libm (T1) and reduction order (T2): a step using the kernel
+    passes every layer-1/layer-2 oracle and still fails cross-platform.
+  - the MITIGATION CONTRACT: determinism-path matmul = inline ascending
+    reduction, formalized first-class (F-OP30-CROSSISA-CONTRACT); the inline
+    rewrite of the SAME matmul is byte-identical cross-ISA in every case.
+  - the BOUNDARY: binary {0,1} operands are FMA-IMMUNE (a·b exact ⇒ fused ≡
+    unfused) — measured, F-OP32 DIAG-B (1881150137 on BOTH ISAs through the
+    forbidden kernel) while the rate-coded twin diverges. Input-value
+    property, not a kernel property; the contract RULE is unchanged.
+
+────────────────────────────────────────────────────────────────────────────
+HONEST LIMITS (doc, refreshed v2)
+────────────────────────────────────────────────────────────────────────────
+  - GPU trainer step run still gated (G1 sole remainder)
+  - archs 2-4 cross-platform = 2 envs, not the full matrix (G7)
+  - BPE pre-tokenizer = simplified space-splitter, NOT HF-id parity (F-OP28C)
+  - dt_erf 1.38e-7 from libm BY DESIGN (reproducible-everywhere, not libm-eq)
+  - TF32/BF16 = self-deterministic only, not cross-precision bit-equal
+  - GPU determinism scope = host↔device on one machine (G5)
+  - spiking GPU seam has no CUDA-side wrapper twin yet (F-OP32B residual)
+
+────────────────────────────────────────────────────────────────────────────
+GATE (g5)
+  [x] CLAIM updated — 4 architectures (conv+MoE / attention / dense MLP /
+      recurrent spiking) × the 4-env/3-libm flagship matrix, with the
+      formalized 3-layer determinism construction; honest 2-env scope on
+      archs 2-4 stated
+  [x] GAP LIST refreshed — G2 CLOSED (4 archs), G1 input-side CLOSED +
+      pre-gated (GPU step = sole remainder), G3-G6 statuses verified
+      unchanged, G7 added honestly
+  [x] EVIDENCE TABLE — 13 new rows, each citing its verdict
+  [x] NOVELTY sharpened — the cross-ISA FMA finding as a second novelty leg:
+      measured class (×3 archs) + mitigation contract + measured boundary
+      (binary-operand FMA-immunity)
+  [x] honest limits refreshed (7 items)
+  [x] readiness diagram + GO/NO-GO updated (~80% → ~90%)
+  [x] every claim cites a verdict (g5)
+
+NO-PAPER-SCAFFOLD CONFIRMATION (g84)
+  NO /paper was invoked. NO PAPER.tape, NO PAPER.md, NO LaTeX was created or
+  modified. The doc remains a READINESS ASSESSMENT only; its §e governance
+  note (the user runs /paper to opt in) is preserved verbatim in spirit and
+  updated to say "(v2 included)". docs-only · 0-pod · NO GPU · NO vast ·
+  NO .tape edits · NO foreign-pod touch.
+
+VERDICT
+  The SUBMISSION-READINESS doc now reflects the current evidence state:
+  4 architectures (G2 closed ×3-over), the real-Qwen-vocab input slice proven
+  + pre-gated (G1 reduced to the GPU step run), the 3-layer determinism model,
+  and the cross-ISA FMA finding promoted to a second novelty leg with its
+  measured boundary. Readiness ~90%; the substantive remaining gap a strong
+  venue may require is the GPU-build-gated G1 step run. F-OP26C-READINESS-V2
+  = 1. Y.
+
+PROVENANCE
+  doc edited : docs/flame-machine-independent-SUBMISSION-READINESS.md (v2)
+  sources    : F-OP26B-SUBMISSION-READINESS (v1 baseline) · F-OP29-2ND-ARCH ·
+               F-OP30-CROSSISA-CONTRACT · F-OP30B-CONTRACT-FIX ·
+               F-OP31-3RD-ARCH · F-OP32-4TH-ARCH · F-OP32B-STDP-HOST ·
+               F-OP28-CORPUS-LOADER-DET · F-OP28B-BPE-FIX ·
+               F-OP28C-VOCAB-STAGING · F-OP24D-G1-READINESS ·
+               F-OP19/19B/19C/19D/19E (flagship matrix, unchanged)
+  surface    : local arm64-macos, docs-only, NO GPU, NO vast, NO pod,
+               NO foreign-pod touch, NO .tape edits, $0
+════════════════════════════════════════════════════════════════════════════
