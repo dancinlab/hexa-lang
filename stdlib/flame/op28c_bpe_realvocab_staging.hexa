@@ -1,0 +1,257 @@
+// ════════════════════════════════════════════════════════════════════════════
+//  op28c_bpe_realvocab_staging.hexa — F-OP28C real-scale vocab staging oracle.
+//
+//  HEXA-0POD OP-28c · CPU-LOCAL byte-eq ORACLE · 0-GPU (`hexa run`) · $0 · no vast
+//
+//  CLOSES OP-28b's HONEST REMAINDER. OP-28b (#3049) fixed the BPE byte<->unicode
+//  map to the canonical GPT-2/Qwen bytes_to_unicode and proved it end-to-end —
+//  but its oracle used a canonical-glyph SELF-CONTAINED merge/vocab, NOT a real
+//  on-disk Qwen vocab.json ("a staging gap, not a code defect"). THIS oracle
+//  runs the PRODUCTION load path against a REAL on-disk Qwen2.5 tokenizer
+//  (vocab.json: 151643 entries / merges.txt: 151388 merges — the base vocab;
+//  151936 is the model embedding rows incl. special tokens, which live in
+//  tokenizer.json added_tokens, NOT vocab.json) and proves:
+//
+//    (a) PRODUCTION LOAD PATH at real scale — bpe_load (load_merges +
+//        load_vocab: read_file -> json_parse -> dict_keys -> id arrays/maps),
+//        NOT the toy self-contained table. Parse spot-checked against known
+//        real-Qwen (token,id) pairs incl. the byte-glyph ids the OP-28b fix
+//        repaired (byte 32 -> U+0120 id 220 · 127 -> 221 · 160 -> 254 ·
+//        173 -> 255) and a multi-byte merge token ("Ġhello" -> 23811).
+//    (b) ROUND-TRIP EXACT — bpe_decode(bpe_encode(text)) == text byte-for-byte
+//        on multilingual input (ASCII, space-heavy, Latin-1 high bytes, CJK —
+//        exactly the cases the old chr-collision broke).
+//    (c) BYTE-EQ RUN-TO-RUN — re-encode max|Δ|=0 on the id sequence.
+//    (d) DETERMINISTIC LOAD — TWO independent bpe_load's of the same files
+//        (fresh json_parse each) agree on vocab_size, the FULL id->token
+//        table (all 151643 entries compared), and produce identical ids —
+//        i.e. no hash-order iteration in load_vocab affects observable ids.
+//    (e) FLAME ENTRY — flame_bpe_corpus_load (the production corpus loader)
+//        over a staged multilingual corpus file: ids in [0,V), n_toks stable,
+//        flame_bpe_roundtrip true.
+//    (f) CROSS-PLATFORM — order-sensitive integer checksum over all id
+//        sequences + an IEEE-754 byte fingerprint for byte-diff on a 2nd host
+//        (local arm64-macos == aiden x86-linux).
+//
+//  STAGING (disk-frugal — the megabyte vocab is NEVER committed to git):
+//  the real tokenizer files are read READ-ONLY from the first present of:
+//    1. env override   OP28C_VOCAB / OP28C_MERGES
+//       (e.g. point at a local Qwen2.5 artifact's vocab.json/merges.txt —
+//        any stock Qwen2.5 tokenizer export works)
+//    2. /tmp/op28c-qwen/{vocab.json,merges.txt}   (cp/scp staging, any host)
+//  No machine-absolute home path is hardcoded (CI no-hardcode gate): stage
+//  via env or /tmp. If neither is present the oracle SKIPs HONESTLY
+//  (F-OP28C-VOCAB-STAGING = SKIP, exit 0) — it never fakes a pass.
+//
+//  BYTE-EQ COMPARE DISCIPLINE: bpe_load prints a wall-clock "in X ms" line, so
+//  ALL loads happen BEFORE the `OP28C-DET-BEGIN` marker; everything between
+//  OP28C-DET-BEGIN and OP28C-DET-END is deterministic byte-comparable output
+//  (process-to-process and cross-platform):
+//    sed -n '/OP28C-DET-BEGIN/,/OP28C-DET-END/p' out.txt
+//
+//  ⚠ RUN FROM A REPO-ROOT COPY (OP-28c staging FINDING — stale-install
+//  module-resolution trap): a STALE installed hexa (e.g. the Jun-1 ~/.hx
+//  build) resolves `use "self/ml/tokenizer_bpe"` of a stdlib/flame-RESIDENT
+//  file via its source-dir (stdlib/flame/self/... absent) and then falls back
+//  to the INSTALL's own self/ tree — which still carries the PRE-OP-28b
+//  byte->unicode map (256+byte formula). The first staging run silently
+//  picked that stale copy and reproduced the exact pre-fix failure (byte 127
+//  glyph U+017F instead of U+0121, multilingual round-trip broken) even
+//  though the repo source is fixed. A ROOT-RESIDENT copy resolves
+//  source-dir-relative to the repo's OWN (fixed) modules. NOT a production
+//  load-path defect — a run-staging requirement.
+//
+//  Run (from the repo root):
+//    cp stdlib/flame/op28c_bpe_realvocab_staging.hexa ./op28c_oracle_tmp.hexa
+//    hexa run op28c_oracle_tmp.hexa ; rm -f op28c_oracle_tmp.hexa
+// ════════════════════════════════════════════════════════════════════════════
+use "self/ml/tokenizer_bpe"
+use "stdlib/flame/flame_bpe_corpus_lib"
+
+fn _abs_i(x: int) -> int { if x < 0 { return 0 - x } return x }
+
+// max|Δ| between two id arrays; returns -1 on length mismatch.
+fn _ids_max_delta(a, b) -> int {
+    if len(a) != len(b) { return 0 - 1 }
+    let mut m = 0
+    let mut i = 0
+    while i < len(a) {
+        let d = _abs_i(a[i] - b[i])
+        if d > m { m = d }
+        i = i + 1
+    }
+    return m
+}
+
+fn main() {
+    println("op28c_bpe_realvocab_staging — F-OP28C real-scale vocab staging (production load path, CPU oracle, 0-GPU)")
+
+    // ── resolve the real on-disk tokenizer (read-only, never committed;
+    //    env override first, then the /tmp staging dir — no machine-absolute
+    //    home path hardcoded) ──
+    let mut vocab_path = env_var("OP28C_VOCAB")
+    let mut merges_path = env_var("OP28C_MERGES")
+    if len(vocab_path) == 0 || !file_exists(vocab_path) {
+        vocab_path = "/tmp/op28c-qwen/vocab.json"
+        merges_path = "/tmp/op28c-qwen/merges.txt"
+    }
+    if !file_exists(vocab_path) || !file_exists(merges_path) {
+        println("F-OP28C-VOCAB-STAGING = SKIP")
+        println("SKIP — no real Qwen-style vocab.json/merges.txt staged on this host.")
+        println("Stage one at /tmp/op28c-qwen/{vocab.json,merges.txt} or set OP28C_VOCAB/OP28C_MERGES.")
+        return
+    }
+    print("  vocab  = "); println(vocab_path)    // host-dependent: OUTSIDE det block
+    print("  merges = "); println(merges_path)
+
+    // ── ALL loads up-front (bpe_load prints a wall-clock ms line) ──
+    let tok1 = bpe_load(merges_path, vocab_path)   // PRODUCTION load path, load #1
+    let tok2 = bpe_load(merges_path, vocab_path)   // independent load #2 (det-load leg)
+
+    // flame production corpus entry over a staged multilingual corpus file.
+    let corpus_text = "hello world  double  space\n안녕하세요 세계 BPE 토큰 테스트\n你好，世界。日本語のテスト echo café naïve Ångström — em—dash\n  leading spaces and trailing  \n"
+    let corpus_path = "/tmp/op28c_corpus.txt"
+    let _ = write_file(corpus_path, corpus_text)
+    let corpus = flame_bpe_corpus_load(merges_path, vocab_path, corpus_path)  // load #3
+
+    println("OP28C-DET-BEGIN")
+
+    // ── (a) real scale + parse spot-checks vs known real-Qwen ids ──
+    let v1 = bpe_vocab_size(tok1)
+    let v2 = bpe_vocab_size(tok2)
+    print("  vocab_size load1 / load2 = "); print(v1); print(" / "); println(v2)
+    print("  n_merges   load1 / load2 = "); print(len(tok1.merges)); print(" / "); println(len(tok2.merges))
+    let real_scale = v1 >= 100000 && len(tok1.merges) >= 100000
+
+    let glyphs = build_byte_to_char()             // production byte->unicode table
+    let g_sp  = glyphs[32]                        // U+0120 "Ġ"
+    let mut spot_ok = 0
+    let mut spot_n = 0
+    // [token, expected_real_qwen_id] — values read from the real vocab.json
+    let mut spots = []
+    spots.push(["hello", 14990])
+    spots.push([g_sp + "hello", 23811])           // "Ġhello" (merge-derived, multi-byte glyph prefix)
+    spots.push([g_sp + "world", 1879])            // "Ġworld"
+    spots.push([g_sp, 220])                       // bare space glyph
+    spots.push([glyphs[127], 221])                // OP-28b-repaired running-counter glyphs
+    spots.push([glyphs[160], 254])
+    spots.push([glyphs[173], 255])
+    let mut si = 0
+    while si < len(spots) {
+        let got = bpe_token_to_id(tok1, spots[si][0])
+        let want = spots[si][1]
+        spot_n = spot_n + 1
+        if got == want { spot_ok = spot_ok + 1 }
+        print("  spot id["); print(si); print("] got="); print(got); print(" want="); println(want)
+        si = si + 1
+    }
+    // inverse lookup through the parsed id->token table
+    let inv_ok = bpe_id_to_token(tok1, 14990) == "hello" && bpe_id_to_token(tok1, 220) == g_sp
+    print("  inverse id->token spot (14990->hello, 220->space-glyph) = "); println(inv_ok)
+
+    // ── (d) deterministic load: load1 vs load2 FULL id->token table compare ──
+    let mut tbl_mismatch = 0
+    if v1 == v2 {
+        let mut ti = 0
+        while ti < v1 {
+            if bpe_id_to_token(tok1, ti) != bpe_id_to_token(tok2, ti) { tbl_mismatch = tbl_mismatch + 1 }
+            ti = ti + 1
+        }
+    } else {
+        tbl_mismatch = 0 - 1
+    }
+    print("  load1-vs-load2 id->token table mismatches (all "); print(v1); print(" ids) = "); println(tbl_mismatch)
+
+    // ── (b)(c) round-trip exact + byte-eq run-to-run on multilingual inputs ──
+    let mut inputs = []
+    inputs.push("hello world")                               // plain ASCII
+    inputs.push("  leading and  double  spaces ")            // space-heavy (U+0120 path)
+    inputs.push("café naïve Ångström §±°")                  // Latin-1 high bytes (chr-collision case)
+    inputs.push("안녕하세요 세계")                              // Korean (3-byte UTF-8)
+    inputs.push("你好，世界。日本語のテスト")                     // Chinese+Japanese, no spaces
+    inputs.push("BPE 토큰 test 123 !@# 終わり")               // mixed
+
+    let mut rt_ok = 0
+    let mut max_d_rerun = 0      // run-to-run (same tok)
+    let mut max_d_loads = 0      // load1-tok vs load2-tok
+    let mut all_ids = []
+    let mut ii = 0
+    while ii < len(inputs) {
+        let text = inputs[ii]
+        let ids_a = bpe_encode(tok1, text)
+        let ids_b = bpe_encode(tok1, text)       // independent re-run, same tok
+        let ids_c = bpe_encode(tok2, text)       // fresh-load tok
+        let dec = bpe_decode(tok1, ids_a)
+        let rt = dec == text
+        if rt { rt_ok = rt_ok + 1 }
+        let d_ab = _ids_max_delta(ids_a, ids_b)
+        let d_ac = _ids_max_delta(ids_a, ids_c)
+        if d_ab < 0 { max_d_rerun = 999999999 }
+        if d_ab >= 0 && d_ab > max_d_rerun { max_d_rerun = d_ab }
+        if d_ac < 0 { max_d_loads = 999999999 }
+        if d_ac >= 0 && d_ac > max_d_loads { max_d_loads = d_ac }
+        let in_range = flame_bpe_ids_in_vocab(ids_a, v1)
+        print("  input["); print(ii); print("] n_ids="); print(len(ids_a))
+        print(" roundtrip="); print(rt)
+        print(" in_vocab="); print(in_range)
+        print(" ids=")
+        let mut k = 0
+        while k < len(ids_a) {
+            print(ids_a[k]); print(" ")
+            all_ids.push(ids_a[k])
+            k = k + 1
+        }
+        println("")
+        if !in_range { rt_ok = rt_ok - 1000 }    // poison the gate on OOB ids
+        ii = ii + 1
+    }
+    print("  roundtrip exact = "); print(rt_ok); print(" / "); println(len(inputs))
+    print("  ids max|Δ| run-to-run (same load)   = "); println(max_d_rerun)
+    print("  ids max|Δ| load1-vs-load2 (fresh)   = "); println(max_d_loads)
+
+    // ── (e) flame production corpus entry ──
+    let c_ids = corpus["ids"]
+    let c_n = corpus["n_toks"]
+    let c_v = corpus["vocab_size"]
+    let c_in = flame_bpe_ids_in_vocab(c_ids, c_v)
+    let c_rt = flame_bpe_roundtrip(corpus["tok"], corpus_text)
+    print("  flame_bpe_corpus_load: n_toks="); print(c_n)
+    print(" vocab_size="); print(c_v)
+    print(" ids_in_vocab="); print(c_in)
+    print(" roundtrip="); println(c_rt)
+    let mut ci0 = 0
+    while ci0 < len(c_ids) {
+        all_ids.push(c_ids[ci0])
+        ci0 = ci0 + 1
+    }
+
+    // ── (f) order-sensitive integer checksum + IEEE-754 byte fingerprint ──
+    let mut ck = 1469598103
+    ck = (ck * 131 + v1) % 1000000007
+    let mut ai = 0
+    while ai < len(all_ids) {
+        ck = (ck * 131 + all_ids[ai] * (ai + 13)) % 1000000007
+        ai = ai + 1
+    }
+    print("  total ids fingerprinted = "); println(len(all_ids))
+    print("  checksum (vocab_size + all id sequences) = "); println(ck)
+    let cbytes = f64_to_bytes_le(to_float(ck))
+    print("  CROSSPLAT-FINGERPRINT (f64_to_bytes_le of checksum) = ")
+    let mut bi = 0
+    while bi < len(cbytes) { print(cbytes[bi]); print(" "); bi = bi + 1 }
+    println("")
+
+    // ── GATE ──
+    let gate = real_scale && (spot_ok == spot_n) && inv_ok && (tbl_mismatch == 0)
+        && (rt_ok == len(inputs)) && (max_d_rerun == 0) && (max_d_loads == 0)
+        && (c_n > 0) && c_in && c_rt && (c_v == v1)
+    println("")
+    if gate {
+        println("F-OP28C-VOCAB-STAGING = 1")
+        println("PASS — PRODUCTION bpe_load over a REAL on-disk Qwen2.5 vocab.json+merges.txt at real scale: parse spot-checks match the real vocab (incl. the OP-28b-repaired byte glyphs), round-trip exact on multilingual input, ids byte-eq run-to-run AND across independent loads max|Δ|=0, full id->token table identical across fresh json_parse loads (no hash-order leak), flame_bpe_corpus_load green. Cross-platform: byte-diff the OP28C-DET block on a 2nd host.")
+    } else {
+        println("F-OP28C-VOCAB-STAGING = 0")
+        println("FAIL — see lines above (scale / spot ids / table mismatch / round-trip / byte-eq / corpus leg).")
+    }
+    println("OP28C-DET-END")
+}

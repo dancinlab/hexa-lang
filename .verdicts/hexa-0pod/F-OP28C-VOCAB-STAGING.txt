@@ -1,0 +1,137 @@
+════════════════════════════════════════════════════════════════════════════
+F-OP28C-VOCAB-STAGING — BPE tokenizer staged/verified against a REAL on-disk
+Qwen-style vocab through the PRODUCTION load path at real-vocab scale;
+OP-28b's honest staging remainder CLOSED
+HEXA-0POD OP-28c · CPU-LOCAL byte-eq ORACLE · 0-GPU (`hexa run`) · $0 · no vast
+════════════════════════════════════════════════════════════════════════════
+
+CONTEXT — OP-28b's honest remainder.
+  OP-28b (#3049) fixed the BPE byte<->unicode map to the canonical GPT-2/Qwen
+  bytes_to_unicode and proved the fix end-to-end — but its oracle used a
+  canonical-glyph SELF-CONTAINED merge/vocab, NOT a real on-disk Qwen
+  vocab.json ("a staging gap, not a code defect"). OP-28c closes that gap:
+  the PRODUCTION load path (bpe_load: load_merges + load_vocab read_file ->
+  json_parse -> dict_keys -> id arrays/maps; plus flame_bpe_corpus_load, the
+  flame corpus entry) is exercised against a REAL on-disk Qwen2.5 tokenizer
+  at real-vocab scale, 0-pod.
+
+STAGING APPROACH USED — (a) REAL Qwen vocab (the BEST option; no synthetic
+fallback needed).
+  A real Qwen2.5 tokenizer already lives on this machine (read-only, NEVER
+  committed to git — megabytes stay out of the repo):
+    /Users/mini/dancinlab/edge/ckpt/storyboard-grpo/vocab.json   (2,776,833 B)
+    /Users/mini/dancinlab/edge/ckpt/storyboard-grpo/merges.txt   (1,671,853 B)
+  Provenance: adapter_config.json base_model = dancinlab/qwen2.5-7b-edge
+  (tokenizer == stock Qwen/Qwen2.5; an independent copy under
+  ~/anima_chat_pack/lora_adapter/ with base Qwen/Qwen2.5-1.5B is byte-wise the
+  same vocab format, 151643 entries). Local dancinlab artifact — NOT a foreign
+  pod; read-only.
+  SCALE (honest): vocab.json = 151643 entries (ids 0..151642), merges.txt =
+  151388 lines (151387 merge rules after the #version header). The task brief's
+  "151936" is the MODEL EMBEDDING rows incl. the special tokens, which live in
+  tokenizer.json/added_tokens — NOT in vocab.json. 151643 IS the real Qwen
+  vocab.json scale.
+  The oracle resolves the files from (1) env OP28C_VOCAB/OP28C_MERGES, (2) the
+  local artifact path, (3) /tmp/op28c-qwen/ (2nd-host scp staging), and SKIPs
+  HONESTLY (F-OP28C-VOCAB-STAGING = SKIP) if none is present — never fakes.
+
+THE ORACLE — stdlib/flame/op28c_bpe_realvocab_staging.hexa
+  `use "self/ml/tokenizer_bpe"` + `use "stdlib/flame/flame_bpe_corpus_lib"`
+  (the PRODUCTION modules — not a self-contained twin). Loads the real files
+  TWICE via bpe_load (two independent json_parse passes) + once more through
+  flame_bpe_corpus_load over a staged multilingual corpus file, then checks:
+    (a) real scale + parse spot-checks vs known real-vocab ids,
+    (b) round-trip exact on 6 multilingual inputs,
+    (c) ids byte-eq run-to-run (same load object),
+    (d) deterministic load (fresh-load-vs-fresh-load ids + FULL id->token
+        table compare across all 151643 ids — no hash-order leak),
+    (e) flame_bpe_corpus_load (ids in [0,V), n_toks, flame_bpe_roundtrip),
+    (f) order-sensitive integer checksum + IEEE-754 fingerprint for the
+        cross-platform byte-diff.
+  Byte-eq discipline: bpe_load prints a wall-clock "in X ms" line, so all
+  loads happen BEFORE the OP28C-DET-BEGIN marker; the deterministic block
+  (OP28C-DET-BEGIN..OP28C-DET-END, 1895 bytes) is what is byte-diffed.
+
+GATE (g5) — PASS on BOTH platforms (verbatim deterministic block):
+  $ cp stdlib/flame/op28c_bpe_realvocab_staging.hexa ./op28c_oracle_tmp.hexa
+  $ hexa run op28c_oracle_tmp.hexa
+  OP28C-DET-BEGIN
+    vocab_size load1 / load2 = 151643 / 151643
+    n_merges   load1 / load2 = 151387 / 151387
+    spot id[0] got=14990 want=14990        ("hello")
+    spot id[1] got=23811 want=23811        ("Ġhello" — merge-derived, U+0120 prefix)
+    spot id[2] got=1879 want=1879          ("Ġworld")
+    spot id[3] got=220 want=220            (bare space glyph U+0120)
+    spot id[4] got=221 want=221            (byte 127 glyph U+0121 — OP-28b-repaired)
+    spot id[5] got=254 want=254            (byte 160 glyph U+0142 — OP-28b-repaired)
+    spot id[6] got=255 want=255            (byte 173 glyph U+0143 — OP-28b-repaired)
+    inverse id->token spot (14990->hello, 220->space-glyph) = true
+    load1-vs-load2 id->token table mismatches (all 151643 ids) = 0
+    input[0] n_ids=2 roundtrip=true in_vocab=true ids=14990 1879
+    input[1] n_ids=8 roundtrip=true in_vocab=true ids=220 6388 323 220 1990 220 12621 220
+    input[2] n_ids=11 roundtrip=true in_vocab=true ids=924 58858 94880 586 79252 968 495 85584 16625 37021 11616
+    input[3] n_ids=4 roundtrip=true in_vocab=true ids=126246 144370 91145 133196
+    input[4] n_ids=8 roundtrip=true in_vocab=true ids=108386 3837 99489 1773 101059 102819 15767 140592
+    input[5] n_ids=19 roundtrip=true in_vocab=true ids=33 1740 10764 228 57160 223 108 1273 220 16 17 18 753 31 2 10236 113 224 126061
+    roundtrip exact = 6 / 6
+    ids max|Δ| run-to-run (same load)   = 0
+    ids max|Δ| load1-vs-load2 (fresh)   = 0
+    flame_bpe_corpus_load: n_toks=50 vocab_size=151643 ids_in_vocab=true roundtrip=true
+    total ids fingerprinted = 102
+    checksum (vocab_size + all id sequences) = 757635534
+    CROSSPLAT-FINGERPRINT (f64_to_bytes_le of checksum) = 0 0 0 231 76 148 198 65
+  F-OP28C-VOCAB-STAGING = 1
+  (inputs: ASCII "hello world" · space-heavy "  leading and  double  spaces " ·
+   Latin-1 "café naïve Ångström §±°" · Korean "안녕하세요 세계" ·
+   "你好，世界。日本語のテスト" (no spaces) · mixed "BPE 토큰 test 123 !@# 終わり"
+   — exactly the classes the pre-OP-28b chr-collision broke.)
+
+RESULTS
+  ROUND-TRIP EXACT ............ YES (6/6 multilingual; corpus loader leg too)
+  BYTE-EQ RUN-TO-RUN .......... YES (max|Δ|=0 same-load; max|Δ|=0 across two
+                                independent fresh loads; process-to-process
+                                DET block diff CLEAN on both hosts)
+  DETERMINISTIC LOAD .......... YES (FULL 151643-entry id->token table
+                                identical across two fresh json_parse loads —
+                                load_vocab's dict_keys hash-order iteration
+                                does NOT leak into observable ids: id arrays/
+                                maps are keyed, vocab is id-bijective)
+  CROSS-PLATFORM .............. YES (local arm64-macos == aiden x86-linux,
+                                free sidecar pool CPU host, $0, NO vast/GPU:
+                                DET block 1895 bytes byte-IDENTICAL, checksum
+                                757635534, fingerprint 0 0 0 231 76 148 198 65
+                                on BOTH; aiden staged via scp to /tmp/op28c-qwen
+                                + a minimal 3-file module tree, /tmp cleaned
+                                after)
+
+SCALE DEFECT FOUND? — ONE STAGING TRAP found + documented (NOT a production
+load-path code defect):
+  STALE-INSTALL MODULE-RESOLUTION TRAP. With a stale installed hexa (the local
+  Jun-1 ~/.hx build), `use "self/ml/tokenizer_bpe"` inside a stdlib/flame-
+  RESIDENT file resolves source-dir-relative (stdlib/flame/self/... absent)
+  and then falls back to the INSTALL's own self/ tree — which still carries
+  the PRE-OP-28b byte->unicode map (256+byte formula). The first staging run
+  silently picked that stale copy and reproduced the EXACT pre-fix failure
+  (byte-127 glyph U+017F instead of U+0121; spot ids 221/254/255 -> UNK 0;
+  multilingual round-trip 2/6) even though the repo source is fixed.
+  Diagnosis chain: vocab.json keys verified RAW UTF-8 on disk; hexa
+  json_parse handles multi-byte keys at full 151643-key scale (probe: all
+  contains-key true); production tok internals correct — divergence isolated
+  to build_byte_to_char() returning the OLD table => import resolution, not
+  parse. CURE (documented in the oracle header): run from a REPO-ROOT COPY
+  (source-dir-relative resolution then picks the repo's own fixed modules).
+  A relative `use "../../self/..."` is NOT a fix — the lib's inner
+  `use "self/..."` then splices the stale copy as a duplicate (compile error).
+  The production load path itself (json_parse at 2.7MB / 151643 keys, glyph
+  bijection, merge ranks, id maps) showed NO defect at real scale.
+
+WHAT THIS CLOSES / WHAT REMAINS
+  CLOSED: OP-28b's honest remainder — the BPE token pipeline is now proven
+  against a REAL on-disk Qwen-format vocab at real scale through the
+  PRODUCTION load path, deterministically, cross-platform, 0-pod.
+  REMAINS (unchanged, out of scope): the simplified space-only pre-tokenizer
+  (ids are NOT claimed equal to HF tokenizers' regex-split ids — the gate is
+  round-trip + determinism, not HF-id parity); the GPU trainer step (G1).
+
+  $0 spent · no vast · no GPU · no pod · foreign pods untouched.
+════════════════════════════════════════════════════════════════════════════
