@@ -1,0 +1,27 @@
+F-OP32B-STDP-HOST — spiking_lib CPU link hole: hexa_forge_dispatch_stdp_pair host fallback
+══════════════════════════════════════════════════════════════════════════════
+STATUS: WIP (skeleton — STORM protocol; filled on completion)
+
+THE HOLE (OP-32 HOLE-2, pre-existing)
+  `use "stdlib/flame/spiking_lib"` fails to LINK on any CPU-only host:
+  flame_stdp_pair_gpu calls the 8-arg builtin forge_dispatch_stdp_pair,
+  lowered by self/codegen.hexa L7800 to hexa_forge_dispatch_stdp_pair —
+  prototype exists (self/runtime.h:1504), CUDA kernel emit exists
+  (self/cuda/runtime_cuda_emit.hexa _hx_cuda_kern_stdp_pair +
+  _hx_cuda_farr_stdp_pair_gpu), but the CPU body is ABSENT from the
+  regenerated frozen-seed self/runtime.c (never committed; hexa codegen
+  emits all module fns with no DCE → merely importing the lib pulls the
+  undefined symbol). Reproduced live:
+    ld: symbol(s) not found for architecture arm64:
+      "_hexa_forge_dispatch_stdp_pair", referenced from:
+        _flame_stdp_pair_gpu in hexa_run-*.o
+
+PLAN (gate g5)
+  [ ] host fallback body added (#ifndef HEXA_CUDA, OP-16/18 pattern,
+      durable via tool/restore_frozen_seeds marker-guarded append)
+  [ ] symbol U → T (nm on compiled runtime.o)
+  [ ] spiking_lib links + runs 0-GPU (hexa run harness)
+  [ ] BYTE-EQ: production-lib path through the new host dispatch ==
+      flame_stdp_pair CPU reference (max|Δ|=0)
+  [ ] GPU path (#ifdef HEXA_CUDA) untouched; no duplicate symbol
+  [ ] OP-32 oracle re-run green; import link-failure GONE

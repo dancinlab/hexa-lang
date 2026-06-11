@@ -128,6 +128,9 @@ loop targets what the consumer card + code can carry.
   never committed) → packaging follow-up, not a determinism hole. Machine-independence GENERALIZES to 4 structurally-
   distinct archs. Verdict .verdicts/hexa-0pod/F-OP32-4TH-ARCH.txt.
 
+<!-- ANCHOR:OP-32B-STDP-HOST (unique anchor — closes OP-32's HOLE-2: spiking_lib fails to LINK on any CPU-only host because flame_stdp_pair_gpu's builtin lowers to hexa_forge_dispatch_stdp_pair, whose prototype (runtime.h L1504) + CUDA kernel emit exist but whose CPU body was never committed to the regenerated self/runtime.c (codegen emits all module fns, no DCE → merely importing the lib pulls the undefined symbol). OP-32b adds the #ifndef HEXA_CUDA host fallback body — the OP-16/18 host-fallback pattern, landed durably via the tracked tool/restore_frozen_seeds idempotent marker-guarded post-restore patch — making spiking_lib 0-GPU linkable + the host dispatch byte-eq vs the proven flame_stdp_pair CPU reference) -->
+- [ ] **OP-32b — spiking_lib CPU link hole fixed: hexa_forge_dispatch_stdp_pair host fallback (OP-16/18 pattern)**
+
 <!-- ANCHOR:OP-30-CROSSISA-CONTRACT (unique anchor — OP-29 surfaced a cross-cutting find: the C farr_matmul FMA-fused kernel byte-DIVERGES across ISAs (arm64 single-FMA vs x86 mul+add under clang -O2); OP-29 closed it by re-implementing matmul as inline ascending reductions. That contract requirement currently lives only in the OP-29 milestone+verdict — OP-30 formalizes it as a FIRST-CLASS, discoverable invariant in docs/flame-determinism-contract.md so a future contributor can't miss it: flame matmul on the det path MUST route through inline ascending reductions, NOT the FMA-fused farr_matmul) -->
 - [x] **OP-30 — cross-ISA matmul invariant formalized in the determinism contract (FMA-fused farr_matmul forbidden on the det path)** —
   DOCS-COMPLETE (0-pod, NO GPU/vast). OP-29's cross-cutting find (the C farr_matmul FMA-fused kernel byte-DIVERGES
