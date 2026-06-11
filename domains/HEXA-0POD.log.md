@@ -1,5 +1,25 @@
 # HEXA-0POD — log
 
+## 2026-06-11 — OP-19f DONE: musl ctor-ABI regression gate (static POSIX-environ guard; locks OP-19e) ($0 · 0-pod)
+- Closes OP-26b gap G6 ("musl ctor-ABI fix CI-gate, LOW"). A LOW-BLAST-RADIUS gate that regression-locks the
+  OP-19e (#3029) musl env-capture fix so the `(argc,argv,envp)` constructor-args ABI it removed can't silently
+  re-land (CI doesn't run under musl → a revert/seed-regen would bring the SIGSEGV back unnoticed).
+- MECHANISM (static grep guard, NOT a runtime musl test — honest per g5): `tool/musl_ctor_abi_gate.sh` reads the
+  OP-19e patch SOURCE `tool/restore_frozen_seeds`, extracts ONLY the awk-EMITTED C of the env-capture patch (the
+  `print "..."` payloads, dropping `//` comment payloads), then asserts (1) the musl-safe
+  `hxlcl_capture_environ(void){ hxlcl_environ = environ; }` POSIX-environ form is PRESENT, and (2) any args-ABI
+  capture (`hxlcl_capture_environ(int …` OR `hxlcl_environ = envp`) is ABSENT. The shell `#` prose + emitted `//`
+  comments that DO spell out the old bad signature are structurally exempt (non-print + //-drop) → can't false-fail.
+- CI wrapper `.github/workflows/musl-ctor-abi-gate.yml`, paths-scoped to restore_frozen_seeds + the gate + the
+  workflow. Mirrors OP-5b's forge_runtime_warn_gate discipline (guard ONLY the clean thing).
+- PROVEN 0-GPU, $0: (A) PASSES on the current OP-19e-fixed tree (exit 0, no false positive). (B) CATCHES an
+  injected args-ABI form — scratch copy, file restored to 0-diff — exit 1, BOTH guns fire (safe-form-missing +
+  args-ABI-present). (C) low-blast-radius confirmed: unrelated prose mentioning argc/argv/envp did NOT trip it.
+- HONEST: static source-pattern guard, not a musl runtime run (CI has no musl runner) — the cheapest effective
+  guard, locking the exact source pattern the musl SIGSEGV depends on.
+- Milestone OP-19f flipped [x]. Verdict .verdicts/hexa-0pod/F-OP19F-MUSL-CTOR-GATE.txt. $0 · 0-GPU · 0-pod · no
+  vast. Foreign vast pod 40375114 (anima-chat-7b) NOT touched.
+
 ## 2026-06-11 — OP-21D DONE: build_w16.sh hardened + dry-run + OP-29 FMA-ref check (turnkey bullet-proof; H100 perf still gated) ($0 · 0-pod)
 - The 0-pod-feasible completeness pass over the H100-GATED w16 perf measurement (NO GPU, NO vast, NO pod).
 - (a) DRY-RAN + HARDENED tool/wgmma/build_w16.sh. bash -n VALID. Structural walkthrough: gate ORDER correct

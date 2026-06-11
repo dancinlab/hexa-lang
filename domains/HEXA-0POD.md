@@ -475,6 +475,19 @@ loop targets what the consumer card + code can carry.
   (Darwin≠glibc≠musl) → upgrades OP-19d's test-only shim to a REAL native-musl run. Verdict
   .verdicts/hexa-0pod/F-OP19E-MUSL-ENVFIX.txt.
 
+<!-- ANCHOR:OP-19F-MUSL-CTOR-GATE (unique anchor — regression-locks OP-19e: static source-pattern guard over the env-capture patch so the (argc,argv,envp) args-ABI form can't silently re-land; closes OP-26b gap G6) -->
+- [x] **OP-19f — musl ctor-ABI regression gate (static POSIX-environ guard; locks OP-19e, low-blast-radius)** —
+  closes OP-26b gap G6 ("musl ctor-ABI fix CI-gate, LOW"). LOW-BLAST-RADIUS gate (`tool/musl_ctor_abi_gate.sh` +
+  `.github/workflows/musl-ctor-abi-gate.yml`, paths-scoped) that locks the OP-19e (#3029) fix at its SOURCE: it
+  extracts ONLY the awk-EMITTED C of the env-capture patch in `tool/restore_frozen_seeds` (the `print "..."`
+  payloads, minus `//` comments) and asserts the musl-safe `hxlcl_capture_environ(void){ hxlcl_environ = environ; }`
+  POSIX form is PRESENT and any args-ABI capture (`hxlcl_capture_environ(int …` / `hxlcl_environ = envp`) is ABSENT.
+  The explanatory comments that spell out the OLD bad `(argc,argv,envp)` signature are structurally exempt → can't
+  false-fail. PROVEN 0-GPU, $0: PASSES on the fixed tree; an injected args-ABI form is CAUGHT (exit 1, both guns
+  fire); unrelated prose mentioning argc/argv/envp does NOT trip it. Honest: CI has no musl runner, so this is a
+  STATIC source-pattern guard (the cheapest effective check), not a runtime musl test. Mirrors OP-5b discipline.
+  Verdict .verdicts/hexa-0pod/F-OP19F-MUSL-CTOR-GATE.txt.
+
 <!-- ANCHOR:OP-18-L3-FUSED-HOST (unique anchor — completes the OP-16 L3 fused-dispatch family: gelu2 + moe_block2) -->
 - [x] **OP-18 — host fallbacks for the remaining L3 fused dispatchers (gelu2 + moe_block2), 0-GPU testable** —
   completes the OP-16 (#2995) L3 fused-dispatch family: forge_dispatch_gelu2 (L3-b) + forge_dispatch_moe_block2

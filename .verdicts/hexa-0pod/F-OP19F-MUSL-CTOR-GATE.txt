@@ -1,0 +1,128 @@
+════════════════════════════════════════════════════════════════════════════
+F-OP19F-MUSL-CTOR-GATE — regression-lock OP-19e's musl env-capture fix
+HEXA-0POD OP-19f · CI/test gate (static source-pattern guard) · 0-GPU · $0
+════════════════════════════════════════════════════════════════════════════
+
+RESULT: a LOW-BLAST-RADIUS regression gate that locks the OP-19e (#3029) musl
+env-capture fix. It asserts, on the OP-19e patch SOURCE
+(tool/restore_frozen_seeds), that the priority-101 env-capture constructor it
+injects into the restored self/runtime.c uses the musl-safe POSIX `environ`
+form and NOT the glibc/Darwin-only constructor-args ABI. PASSES on the current
+(OP-19e-fixed) tree; demonstrably CATCHES an injected args-ABI regression; can
+NOT false-fail on unrelated code. PROVEN LOCALLY (0-GPU, pure grep, $0).
+
+Honest framing: CI does NOT run under musl, so this is a STATIC source-pattern
+guard (the args-ABI form's ABSENCE + the POSIX-environ form's PRESENCE in the
+emitted patch), NOT a runtime musl test. It catches the regression at the exact
+source pattern the musl SIGSEGV depends on — the cheapest effective guard.
+
+────────────────────────────────────────────────────────────────────────────
+WHAT OP-19e FIXED (the regression target)
+────────────────────────────────────────────────────────────────────────────
+The frozen self/runtime.c captured the process environment via the GCC/Darwin
+constructor-args ABI:
+    hxlcl_capture_environ(int argc, char**argv, char**envp){ hxlcl_environ = envp; }
+Receiving (argc,argv,envp) in a constructor is a glibc + Darwin/dyld extension,
+NOT in the C/ELF standard. musl runs constructors with NO arguments, so `envp`
+is a garbage register -> hxlcl_environ = garbage -> the first hxlcl_getenv
+(driven by the priority-default arena init _hexa_init_mem_cap, which runs AFTER
+this priority-101 ctor) walks a wild pointer -> SIGSEGV before main().
+
+OP-19e rewrote the patch in tool/restore_frozen_seeds to emit instead:
+    extern char **environ;
+    static char **hxlcl_environ = 0;
+    __attribute__((constructor(101)))
+    static void hxlcl_capture_environ(void) { hxlcl_environ = environ; }
+    #define environ hxlcl_environ
+reading the POSIX `environ` global (defined by EVERY libc incl. musl). Behavior-
+preserving on glibc/Darwin (same env vector), fixes musl.
+
+REGRESSION RISK: a future runtime/seed edit, a manual revert, or a frozen-seed
+regen drops this patch / re-adds the args-ABI capture form -> musl SIGSEGV
+returns silently (CI doesn't run under musl). OP-26b gap G6 = "musl ctor-ABI
+fix CI-gate (LOW)". THIS gate closes G6.
+
+────────────────────────────────────────────────────────────────────────────
+THE GATE MECHANISM (static grep guard — tool/musl_ctor_abi_gate.sh)
+────────────────────────────────────────────────────────────────────────────
+1. Reads ONE file: tool/restore_frozen_seeds (the OP-19e patch source).
+2. Extracts ONLY the awk-EMITTED C code of the env-capture patch — the payload
+   of each `print "..."` directive, then DROPS `//` C-comment payloads. What
+   remains is exactly the real C the patch injects into runtime.c. The
+   explanatory shell `#` prose and emitted `//` comments — which legitimately
+   spell out the OLD bad `(argc,argv,envp)` signature — are STRUCTURALLY EXEMPT
+   and can never trip the gate.
+3. Within that narrow emitted-C scope:
+   (1) MUST be present — the musl-safe POSIX-environ capture definition:
+         hxlcl_capture_environ(void) { hxlcl_environ = environ; }
+   (2) MUST be absent — either smoking gun of the args-ABI capture:
+         hxlcl_capture_environ(int ...      (a signature taking ctor args), OR
+         hxlcl_environ = envp               (capture from the ctor-arg envp)
+   Either, if EMITTED into the runtime, re-introduces the musl SIGSEGV.
+4. exit 0 = OP-19e form intact; exit 1 = args-ABI regressed / safe form missing.
+
+Mirrors the OP-5b discipline (tool/forge_runtime_warn_gate.sh): guard ONLY the
+clean thing, scoped so it can't false-fail on grandfathered/unrelated code.
+CI wrapper: .github/workflows/musl-ctor-abi-gate.yml, paths-scoped to
+tool/restore_frozen_seeds + tool/musl_ctor_abi_gate.sh + the workflow itself.
+
+────────────────────────────────────────────────────────────────────────────
+PROOF A — PASSES ON THE CURRENT (OP-19e-FIXED) TREE (no false positive)
+────────────────────────────────────────────────────────────────────────────
+  $ sh tool/musl_ctor_abi_gate.sh
+  OP-19f musl ctor-ABI regression gate — static POSIX-environ guard
+  guarded patch source: tool/restore_frozen_seeds (env-capture constructor only)
+    PASS  musl-safe POSIX-environ capture form present
+          (hxlcl_capture_environ(void) { hxlcl_environ = environ; })
+    PASS  no constructor-args ABI capture form emitted (musl-safe)
+
+  GATE PASSED: OP-19e musl-safe POSIX-environ env capture intact (args-ABI absent).
+  exit=0
+
+────────────────────────────────────────────────────────────────────────────
+PROOF B — CATCHES A RE-INTRODUCED ARGS-ABI REGRESSION
+────────────────────────────────────────────────────────────────────────────
+Injected the old musl-unsafe form back into the patch's emitted line (scratch;
+file restored to 0-diff after), i.e. the emitted definition became
+  static void hxlcl_capture_environ(int argc, char**argv, char**envp) { hxlcl_environ = envp; }
+
+  $ sh tool/musl_ctor_abi_gate.sh
+  OP-19f musl ctor-ABI regression gate — static POSIX-environ guard
+  guarded patch source: tool/restore_frozen_seeds (env-capture constructor only)
+    FAIL  musl-safe POSIX-environ capture form MISSING from emitted patch
+          OP-19e fix appears reverted/dropped — restore the POSIX-environ ctor.
+    FAIL  musl-UNSAFE constructor-args ABI form re-introduced into the patch:
+            13:static void hxlcl_capture_environ(int argc, char**argv, char**envp) { hxlcl_environ = envp; }
+          This is the (argc,argv,envp) ABI musl does NOT pass -> SIGSEGV.
+
+  GATE FAILED: OP-19e musl-safe env-capture regressed in tool/restore_frozen_seeds.
+  Emit  hxlcl_capture_environ(void) { hxlcl_environ = environ; }  (POSIX environ),
+  NOT   hxlcl_capture_environ(int argc,char**argv,char**envp){ hxlcl_environ = envp; }
+  exit=1
+  (file restored after: 0 diff lines)
+
+Both smoking guns fire (safe-form-missing AND args-ABI-present), exit 1.
+
+────────────────────────────────────────────────────────────────────────────
+LOW-BLAST-RADIUS CONFIRMATION (can't false-fail elsewhere)
+────────────────────────────────────────────────────────────────────────────
+* The gate scans ONE file and, within it, ONLY the env-capture patch's emitted
+  C lines. It never compiles or scans the runtime, so no unrelated code can
+  fail it.
+* The explanatory comments in tool/restore_frozen_seeds that DO mention the old
+  `hxlcl_capture_environ(int argc, char**argv, char**envp)` signature and
+  `(argc,argv,envp)` (shell `#` prose at lines 360-380, 390 + emitted `//`
+  block) are excluded by construction (non-`print` lines + `//`-payload drop) —
+  the current tree contains that prose AND the gate PASSES.
+* Verified: appending unrelated prose mentioning `argc argv envp hxlcl_environ`
+  elsewhere in the script did NOT trip the gate (still exit 0).
+* Purely lexical (grep) — no compiler, CUDA, or musl toolchain; runs anywhere.
+
+VERDICT: 🔵 GREEN — OP-19f closes OP-26b gap G6. The OP-19e musl-safe POSIX-
+environ env-capture form is regression-locked by a static source-pattern gate
+that passes on the fixed tree, catches a re-introduced args-ABI form, and is
+low-blast-radius (guards only the env-capture constructor; structurally cannot
+false-fail on the explanatory comments or any unrelated code). Honest: static
+guard, not a runtime musl test — by design, the cheapest effective guard since
+CI has no musl runner. 0-GPU, $0.
+════════════════════════════════════════════════════════════════════════════
