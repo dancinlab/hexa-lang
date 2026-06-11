@@ -1,0 +1,14 @@
+F-OP36-DISPATCH-AUDIT — forge dispatch CPU-fallback systematic audit (WIP skeleton)
+══════════════════════════════════════════════════════════════════════════════
+DATE: 2026-06-12 · HEXA-0POD OP-36 · 0-pod ($0, NO GPU, NO vast, NO pod)
+HOST: local arm64-macos (Darwin 25.5.0), CPU-only
+STATUS: WIP — audit in progress (skeleton pushed first per STORM protocol)
+
+SCOPE
+  Proactive sweep of ALL forge_dispatch_* / hexa_forge_dispatch_* symbols:
+  symbol | CUDA emit? | CPU body? matrix → classify CPU-missing as
+  (a) real lib link hole / (b) GPU-build-only by design / (c) orphan →
+  fix class (a) via tool/restore_frozen_seeds marker-guarded append →
+  CPU link-probe every stdlib/flame lib.
+
+(matrix + classification + fixes + probes to follow)

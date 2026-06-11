@@ -10,6 +10,9 @@ loop targets what the consumer card + code can carry.
 
 ## milestones (loop self-feeds; add as discovered)
 
+<!-- ANCHOR:OP-36-DISPATCH-AUDIT (unique anchor — deep-dive round-10 branch ④: the OP-16 (groupnorm_gelu) / OP-18 (gelu2, moe_block2) / OP-32b (stdp_pair) class produced 4 REACTIVE discoveries of "GPU dispatch symbol declared + CUDA emit exists, but NO CPU body → importing the lib fails to link on CPU-only hosts" (hexa codegen emits ALL module fns, no DCE). OP-36 closes the pattern PROACTIVELY: sweep ALL forge dispatch symbols, build the symbol × CUDA-emit × CPU-body matrix, classify each CPU-missing symbol (real lib link hole / GPU-build-only by design / orphan), fix the real holes via the tool/restore_frozen_seeds marker-guarded channel, and CPU-link-probe every flame lib) -->
+- [ ] **OP-36 — forge dispatch CPU-fallback systematic audit: full symbol matrix, remaining link holes fixed (OP-16/18/32b class closed proactively)**
+
 <!-- ANCHOR:OP-19G-SUMMER-5TH-ENV (unique anchor — deep-dive round-10 branch ②: formalize summer as the 5th RECORDED environment row of the machine-independence matrix. Summer (a distinct x86_64-linux glibc host from aiden, possibly a different glibc minor/distro) has been used as a substitute leg (OP-33/35) but was never RECORDED as an environment row with its exact glibc/distro/kernel fingerprint. Adding it diversifies the glibc-version axis and formalizes what OP-33/35 ran ad-hoc. Self-contained oracles only — summer's older hexa miscompiles cross-module imports (F-OP33/35 quirk)) -->
 - [x] **OP-19g — summer recorded as 5th environment (distinct glibc x86 host): golden folds verified + matrix row** —
   summer fingerprinted precisely (Ubuntu 24.04.2 LTS · kernel 6.17.0-35-generic x86_64 · glibc 2.39 Ubuntu
