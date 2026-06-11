@@ -1219,3 +1219,41 @@ NOT claimed. $0, no vast/pool/pod. Verdict .verdicts/hexa-0pod/F-OP21-HOPPER-WAR
 - Every claim traces to F-OP29-2ND-ARCH (g5). NO new computation, docs-only consolidation.
 - Milestone OP-30 flipped [x]. Verdict .verdicts/hexa-0pod/F-OP30-CROSSISA-CONTRACT.txt (invariant text + 3-layer
   model + cited OP-29 evidence verbatim). $0 · 0-GPU · 0-pod · no vast.
+
+## OP-28b — BPE tokenizer byte-to-unicode fix (canonical GPT-2/Qwen map); BPE pipeline determinism-provable (0-pod)
+- Deep-dive round-7 branch ③. NO GPU, NO vast, NO pod, NO .tape edits, NO foreign-pod touch. $0.
+- CLOSES OP-28's flagged residual: the BPE path (flame_bpe_corpus_lib.hexa, V=151936 real Qwen vocab) was not
+  cleanly 0-pod-runnable because self/ml/tokenizer_bpe.hexa build_byte_to_char did NOT build the canonical
+  GPT-2/Qwen bytes_to_unicode.
+- ROOT CAUSE (verified on the live hexa runtime, two defects):
+  (1) chr-truncation / wrong-glyph: printable bytes used chr(b) -> RAW byte (probe chr(161)=[161], chr(288)=[32]
+      == space collision hazard); canonical (+ Qwen vocab.json) uses the UNICODE codepoint U+00A1.. for the
+      Latin-1 printable range (probe from_char_code(161)=[194,161] = UTF-8 U+00A1). chr is byte-truncating.
+  (2) wrong codepoint formula: non-printable bytes used from_char_code(256+byte) instead of the canonical running
+      counter 256+n — agree only for bytes 0..32, DIVERGE for 35 bytes 127..160,173 (byte 127 canonical U+0121
+      vs old U+017F; byte 160 U+0142 vs U+01A0; byte 173 U+0143 vs U+01AD).
+  OP-28 had attributed the residual to chr() truncation — that is defect (1); the dominant defect was (2).
+- FIX (surgical, build_byte_to_char): emit the canonical 256-entry bijection via the UTF-8 encoder from_char_code
+  for the WHOLE table (printable byte -> from_char_code(byte); the rest -> from_char_code(256+n) running counter).
+  Never byte-truncating chr in the byte->unicode map. Pure integer/table, no libm/float/hash-order. Decode side
+  (bpe_decode + build_char_to_byte) already UTF-8-codepoint-aware, consumes the same table -> no decode change.
+  flame_bpe_corpus_lib.hexa header: limitation RESOLVED.
+- ORACLE stdlib/flame/op28b_bpe_byteuni_det.hexa (self-contained, use-free cross-platform twin embedding the
+  canonical map + a tiny self-contained BPE byte-encode->merge->id over canonical-glyph merge/vocab tables —
+  no merges.txt/vocab.json disk dependency).
+- GATE GREEN (hexa run): byte->unicode->byte round-trip = 256/256 exact; glyph collisions = 0; space byte 32 ->
+  glyph [196,160] = canonical U+0120 -> back 32; bytes 127/160/173 all round-trip; bpe ids "hello hello" ->
+  22 33 11 55 44 33 11 55 (l+l merge + space+h merge fire); bpe ids max|Δ| run-to-run = 0; F-OP28B-BPE-FIX = 1.
+- PROCESS-TO-PROCESS byte-eq: two independent hexa run -> 945B output byte-identical (diff clean). YES.
+- CROSS-PLATFORM byte-eq: local arm64-macos == aiden x86-linux (sidecar pool CPU host, scp self-contained source):
+  checksum 102745433, FINGERPRINT `0 0 0 100 21 127 152 65` on BOTH; full output diff clean. YES. aiden /tmp
+  cleaned; no pod/GPU/vast touched.
+- OP-30: BPE is integer (no matmul) -> FMA cross-ISA invariant N/A; confirmed NO libm/float leak in the token id
+  path (byte->uni table, encode, merge, id lookup all pure integer/string-table; remaining chr() uses are in
+  bpe_decode/byte_detokenize rebuilding a RAW byte from a recovered 0..255 value = correct).
+- HONEST REMAINDER: NOT exercised against a real on-disk 151936-entry Qwen vocab.json (oracle stays use-free +
+  disk-frugal with canonical-glyph self-contained tables; the FLAGGED byte-encoder is fixed, merge/id machinery
+  is unchanged integer lookups — a full real-vocab round-trip is the natural next confirmation, needs vocab files
+  staged, NOT a code defect). The simplified space-split pre-tokenizer (vs GPT-2's full regex) + the GPU trainer
+  step are unchanged + out-of-scope.
+- Milestone OP-28b flipped [x]. Verdict .verdicts/hexa-0pod/F-OP28B-BPE-FIX.txt. $0 · 0-GPU · 0-pod · no vast.

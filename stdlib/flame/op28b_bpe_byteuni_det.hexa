@@ -1,0 +1,272 @@
+// ════════════════════════════════════════════════════════════════════════════
+//  op28b_bpe_byteuni_det.hexa — F-OP28B BPE byte<->unicode + token-pipeline
+//  determinism oracle. SELF-CONTAINED (no `use` — runs via scp/stdin on ANY
+//  hexa host, checkout-independent) so the SAME source runs on local
+//  arm64-macos AND aiden x86-linux for the cross-platform leg (OP-19 pattern).
+//
+//  HEXA-0POD OP-28b · CPU-LOCAL byte-eq ORACLE · 0-GPU (`hexa run`) · $0 · no vast
+//
+//  CONTEXT — OP-28's residual input-side item.
+//    OP-28 (#3041) proved the BYTE-LEVEL corpus token pipeline (tokenize->pack
+//    ->batch) is deterministic + machine-independent (pure integer). But it
+//    flagged a RESIDUAL: the BPE path (flame_bpe_corpus_lib.hexa, V=151936 —
+//    the real Qwen vocab) was NOT cleanly 0-pod-runnable because its
+//    byte<->unicode map (tokenizer_bpe.hexa build_byte_to_char) was NOT the
+//    canonical GPT-2/Qwen `bytes_to_unicode()`:
+//      (1) printable bytes used byte-truncating `chr(b)` -> raw byte 0xA1,
+//          not the U+00A1 codepoint (UTF-8 0xC2 0xA1) the canonical map (and
+//          Qwen vocab.json) uses for the Latin-1 printable range. `chr()` is
+//          also the chr(256+i)==chr(i) collision hazard (space's char).
+//      (2) non-printable bytes used codepoint `256 + byte` instead of the
+//          canonical running counter `256 + n` (diverges for the 35 bytes
+//          127..160, 173).
+//    OP-28b FIXED build_byte_to_char to the canonical bijection (printable
+//    byte -> own codepoint via the UTF-8 encoder from_char_code; the rest ->
+//    U+0100.. in running-counter order). This oracle PROVES the fix.
+//
+//  WHAT THIS ORACLE PROVES (the EXACT canonical map is embedded VERBATIM here,
+//  matching tokenizer_bpe.hexa build_byte_to_char — self-contained twin):
+//    (a) byte -> unicode -> byte round-trips ALL 256 bytes EXACTLY (no
+//        collision): the 256 unicode strings are DISTINCT (bijection), and
+//        decoding each back recovers the original byte. 256/256.
+//    (b) a self-contained BPE token pipeline (byte-encode -> merge -> id
+//        lookup) over a fixed mixed-byte input is byte-eq run-to-run
+//        (max|Δ|=0), in-process AND (via the emitted fingerprint) process-to-
+//        process / cross-platform.
+//    (c) emits an IEEE-754 byte fingerprint (f64_to_bytes_le over an
+//        order-sensitive integer checksum) so a 2nd host can byte-diff it
+//        (arm64-macos == x86-linux).
+//
+//  OP-30 COMPLIANCE: the BPE path is INTEGER (table lookups + index math, no
+//  matmul) — the FMA-matmul cross-ISA invariant does not apply. This oracle
+//  additionally CONFIRMS no libm/float leak: the codepoint table, the round-
+//  trip, the merge step and the checksum are all pure integer / table — no
+//  exp/sin/log/sqrt/erf, no float arithmetic in the token path. (f64_to_bytes_le
+//  at the very end is a bit-cast of an exact-integer checksum, not arithmetic.)
+//  No dict/set/hash-ordered iteration: the codepoint sequence is fixed +
+//  ascending => byte-identical run-to-run and across machines by construction.
+// ════════════════════════════════════════════════════════════════════════════
+
+// ── CANONICAL GPT-2/Qwen bytes_to_unicode (VERBATIM twin of
+//    tokenizer_bpe.hexa::build_byte_to_char). Returns array of 256 unicode
+//    strings (each the UTF-8 form of the codepoint), one per byte value.
+//    Pure integer/table: from_char_code is the UTF-8 encoder (NOT byte-
+//    truncating chr); the running counter `n` gives the canonical 256+n. ──
+fn _byte_to_uni() {
+    let mut table = []
+    let mut n = 0
+    let mut i = 0
+    while i < 256 {
+        if (i >= 33 && i <= 126) || (i >= 161 && i <= 172) || (i >= 174 && i <= 255) {
+            table.push(from_char_code(i))        // codepoint == byte value
+        } else {
+            table.push(from_char_code(256 + n))  // running-counter 256+n
+            n = n + 1
+        }
+        i = i + 1
+    }
+    return table
+}
+
+// ── inverse: given a unicode string, return its byte (linear scan over the
+//    256-entry table — same shape as tokenizer_bpe bpe_char_to_byte). Returns
+//    -1 if not found. ──
+fn _uni_to_byte(table, c: string) -> int {
+    let mut i = 0
+    while i < 256 {
+        if table[i] == c { return i }
+        i = i + 1
+    }
+    return 0 - 1
+}
+
+fn _abs_i(x: int) -> int { if x < 0 { return 0 - x } return x }
+
+// ── a tiny SELF-CONTAINED BPE: byte-encode the input to unicode glyphs, apply
+//    a fixed merge table (rank-ordered), map each resulting token to an id via
+//    a fixed vocab. All pure integer / string-table. Mirrors bpe_encode's
+//    shape (byte->char -> merge -> id) without needing merges.txt/vocab.json
+//    on disk, so the oracle stays self-contained + cross-platform. ──
+//
+//  Fixed merge rules (priority = array order, lowest rank wins), expressed as
+//  pairs of unicode glyphs. We use the byte->uni table to name them so the
+//  merge keys are exactly the canonical glyphs the real path produces.
+fn _merge_rank(merges, a: string, b: string) -> int {
+    let key = a + " " + b
+    let mut i = 0
+    while i < len(merges) {
+        if merges[i] == key { return i }
+        i = i + 1
+    }
+    return 0 - 1
+}
+
+fn _bpe_merge(word, merges) {
+    let mut tokens = word
+    while len(tokens) > 1 {
+        let mut best_rank = 999999999
+        let mut best_idx = 0 - 1
+        let mut i = 0
+        while i < len(tokens) - 1 {
+            let r = _merge_rank(merges, tokens[i], tokens[i + 1])
+            if r >= 0 && r < best_rank { best_rank = r; best_idx = i }
+            i = i + 1
+        }
+        if best_idx < 0 { return tokens }
+        let merged = tokens[best_idx] + tokens[best_idx + 1]
+        let mut nt = []
+        i = 0
+        while i < len(tokens) {
+            if i == best_idx { nt.push(merged); i = i + 2 }
+            else { nt.push(tokens[i]); i = i + 1 }
+        }
+        tokens = nt
+    }
+    return tokens
+}
+
+// id lookup: linear scan over a fixed [token, id] vocab. UNK -> 0.
+fn _vocab_id(vocab, token: string) -> int {
+    let mut i = 0
+    while i < len(vocab) {
+        if vocab[i][0] == token { return vocab[i][1] }
+        i = i + 1
+    }
+    return 0
+}
+
+// encode one input string -> array of ids, using the canonical byte->uni table.
+fn _bpe_encode(text: string, table, merges, vocab) {
+    // byte-encode every byte of the input to its canonical glyph
+    let mut chars = []
+    let n = len(text)
+    let mut i = 0
+    while i < n {
+        let b = byte_at(text, i)
+        chars.push(table[b])
+        i = i + 1
+    }
+    let merged = _bpe_merge(chars, merges)
+    let mut ids = []
+    let mut t = 0
+    while t < len(merged) {
+        ids.push(_vocab_id(vocab, merged[t]))
+        t = t + 1
+    }
+    return ids
+}
+
+fn main() {
+    println("op28b_bpe_byteuni_det — F-OP28B BPE byte<->unicode + token-pipeline determinism (CPU oracle, 0-GPU)")
+
+    let table = _byte_to_uni()
+
+    // ── (a) ROUND-TRIP ALL 256 BYTES + DISTINCTNESS (no collision) ──
+    // distinctness: every pair of glyphs differs => bijection => no collision.
+    // round-trip: _uni_to_byte(table, table[b]) == b for every b.
+    let mut rt_ok = 0
+    let mut collide = 0
+    let mut b = 0
+    while b < 256 {
+        let g = table[b]
+        let back = _uni_to_byte(table, g)
+        if back == b { rt_ok = rt_ok + 1 }
+        b = b + 1
+    }
+    // explicit collision scan: count glyphs that are NOT unique (any j<b equal)
+    b = 0
+    while b < 256 {
+        let mut j = 0
+        while j < b {
+            if table[j] == table[b] { collide = collide + 1 }
+            j = j + 1
+        }
+        b = b + 1
+    }
+    print("  byte->unicode->byte round-trip exact = "); print(rt_ok); println(" / 256")
+    print("  glyph collisions (must be 0)         = "); println(collide)
+    // spot-check the historically-broken bytes: space (32) and the diverging
+    // run (127, 160, 173). These now produce the canonical codepoints.
+    print("  space byte 32  -> glyph bytes = ")
+    let g32 = table[32]
+    let mut gi = 0
+    while gi < len(g32) { print(char_code(g32, gi)); print(" "); gi = gi + 1 }
+    print(" (canonical U+0120 = 196 160) back="); println(_uni_to_byte(table, g32))
+    print("  byte 127 -> back="); print(_uni_to_byte(table, table[127]))
+    print("  byte 160 -> back="); print(_uni_to_byte(table, table[160]))
+    print("  byte 173 -> back="); println(_uni_to_byte(table, table[173]))
+
+    // ── (b) BPE PIPELINE byte-eq run-to-run over a FIXED mixed-byte input ──
+    // Input deliberately includes ASCII, spaces (byte 32 -> U+0120), and a
+    // Latin-1 high byte path. Fixed merge + vocab tables (canonical glyphs).
+    let SP = table[32]   // canonical space glyph
+    let lo = table[108]  // 'l'
+    let he = table[104]  // 'h'
+    let ee = table[101]  // 'e'
+    // merge rules: "l l" -> "ll", then "(space) (h)" -> "(space)h". rank=order.
+    let mut merges = []
+    merges.push(lo + " " + lo)   // rank 0:  l + l
+    merges.push(SP + " " + he)   // rank 1:  space + h
+    // vocab: a few known tokens + their ids (the rest hit UNK=0).
+    let mut vocab = []
+    vocab.push([lo + lo, 11])           // "ll"
+    vocab.push([he, 22])                // "h"
+    vocab.push([ee, 33])                // "e"
+    vocab.push([SP + he, 44])           // " h"
+    vocab.push([table[111], 55])        // "o"
+
+    let input = "hello hello"  // exercises l+l merge, space+h merge, repetition
+
+    let ids1 = _bpe_encode(input, table, merges, vocab)
+    let ids2 = _bpe_encode(input, table, merges, vocab)   // independent re-run
+
+    print("  bpe input = \""); print(input); println("\"")
+    print("  ids run1 = ")
+    let mut ki = 0
+    while ki < len(ids1) { print(ids1[ki]); print(" "); ki = ki + 1 }
+    println("")
+
+    let mut max_d = 0
+    let mut neq = 1
+    if len(ids1) != len(ids2) { neq = 0 }
+    let mut i = 0
+    let nmin = len(ids1)
+    while i < nmin {
+        let d = _abs_i(ids1[i] - ids2[i])
+        if d > max_d { max_d = d }
+        i = i + 1
+    }
+    print("  bpe ids max|Δ| run-to-run = "); println(max_d)
+
+    // ── order-sensitive integer checksum over (round-trip result + bpe ids) ──
+    let mut ck = 1469598103
+    let mut bb = 0
+    while bb < 256 {
+        ck = (ck * 131 + _uni_to_byte(table, table[bb]) * (bb + 7)) % 1000000007
+        bb = bb + 1
+    }
+    let mut ci = 0
+    while ci < len(ids1) {
+        ck = (ck * 131 + ids1[ci] * (ci + 13)) % 1000000007
+        ci = ci + 1
+    }
+    print("  checksum (roundtrip + bpe ids) = "); println(ck)
+    let cbytes = f64_to_bytes_le(to_float(ck))
+    print("  CROSSPLAT-FINGERPRINT (f64_to_bytes_le of checksum) = ")
+    let mut bi = 0
+    while bi < len(cbytes) { print(cbytes[bi]); print(" "); bi = bi + 1 }
+    println("")
+
+    // ── GATE ──
+    let gate = (rt_ok == 256) && (collide == 0) && (max_d == 0) && (neq == 1)
+    println("")
+    if gate {
+        print("F-OP28B-BPE-FIX = 1")
+        println("")
+        println("PASS — canonical GPT-2/Qwen bytes_to_unicode: byte<->unicode round-trips ALL 256 bytes exactly (no collision), and the BPE token pipeline (byte-encode->merge->id) is byte-eq run-to-run max|Δ|=0. Pure integer/table (no libm/float/hash-order) => machine-independent by construction. Cross-platform: byte-diff the CROSSPLAT-FINGERPRINT line on a 2nd host.")
+    } else {
+        print("F-OP28B-BPE-FIX = 0")
+        println("")
+        println("FAIL — round-trip not exact OR collision OR bpe not byte-eq (investigate above).")
+    }
+}

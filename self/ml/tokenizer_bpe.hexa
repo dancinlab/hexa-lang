@@ -37,18 +37,47 @@ struct BPETokenizer {
 //  unicode range 256+.
 // ═══════════════════════════════════════════════════════════════
 
-// Build the byte-to-char mapping table
-// Returns array of 256 strings, one per byte value
+// Build the byte-to-char mapping table — the CANONICAL GPT-2/Qwen
+// `bytes_to_unicode()`: a 256-entry bijection byte -> unicode codepoint.
+//
+//   printable byte b  (b in 33..126 | 161..172 | 174..255) -> codepoint b
+//   every OTHER byte (the "non-printable" set, in ascending byte order)
+//                                                  -> codepoint 256 + n,
+//   where n is a RUNNING COUNTER incremented once per non-printable byte.
+//
+// ⚠ FIX (OP-28b, 2026-06): the previous table had TWO defects that broke the
+// real-Qwen byte<->unicode round-trip (the limitation flagged in OP-28):
+//   (1) printable bytes used `chr(b)`, which emits a RAW byte. For the Latin-1
+//       printable range (161..172, 174..255) the canonical map uses the
+//       unicode CODEPOINT U+00A1.. (UTF-8 `0xC2 0xA1`..), NOT the raw byte
+//       0xA1 — so token strings never matched Qwen's vocab.json entries.
+//       chr(b) is ALSO the chr()-truncation hazard from the old header note
+//       (chr(256+i) would have collapsed to chr(i), colliding space's char).
+//   (2) non-printable bytes used codepoint `256 + b` instead of the canonical
+//       running counter `256 + n`; the two agree only for bytes 0..32 and
+//       DIVERGE for every byte >= 127 (35 bytes: 127..160, 173) — so those
+//       glyphs were wrong vs the real vocab.
+// Both are cured by encoding the CODEPOINT (always via `from_char_code`, the
+// UTF-8 encoder — NOT byte-truncating `chr`) with the running-counter formula.
+// Pure integer / table build: no libm, no float, no hash-ordered dict — the
+// codepoint sequence is fixed and ascending, so the table is byte-identical
+// run-to-run and across machines (OP-28 determinism discipline).
+// Returns array of 256 strings, one per byte value.
 fn build_byte_to_char() {
     let mut table = []
+    let mut n = 0           // running counter for the non-printable set
     let mut i = 0
     while i < 256 {
-        // Printable ASCII range: 33..126, 161..172, 174..255
+        // Canonical "printable" set: 33..126, 161..172, 174..255.
         if (i >= 33 && i <= 126) || (i >= 161 && i <= 172) || (i >= 174 && i <= 255) {
-            table.push(chr(i))
+            // Codepoint == byte value. from_char_code (UTF-8 encoder) emits
+            // the 1-byte form for ASCII and the 2-byte form for U+00A1..U+00FF.
+            table.push(from_char_code(i))
         } else {
-            // Non-printable bytes get mapped to 256+ range
-            table.push(from_char_code(256 + i))
+            // Non-printable byte: codepoint 256 + n (running counter), giving
+            // the canonical U+0100.. glyphs (e.g. space byte 32 -> U+0120).
+            table.push(from_char_code(256 + n))
+            n = n + 1
         }
         i = i + 1
     }

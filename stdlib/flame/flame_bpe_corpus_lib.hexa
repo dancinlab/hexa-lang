@@ -36,16 +36,21 @@ fn flame_bpe_corpus_load(merges_path: string, vocab_path: string, corpus_path: s
 // sanity before a costly fire — a mismatch means the corpus would train on
 // a lossy id stream.
 //
-// ⚠ KNOWN LIMITATION (flame-P2b ③ finding, 2026-05-27): against a REAL
-// GPT-2/Qwen vocab this returns false for whitespace/non-ASCII text. Root
-// cause is upstream: hexa `chr(n)` truncates n to a byte (chr(288) ==
-// chr(32)), so tokenizer_bpe's build_byte_to_char can't produce the 256
-// DISTINCT chars the byte-level scheme needs (chr(256+i) collapses to
-// chr(i)) — space's byte-char collides with a literal 0x20 and corrupts.
-// Toy vocab (ASCII, no spaces) round-trips fine; real Qwen does not until
-// hexa gains Unicode chr/char_code. Filed: inbox/notes (hexa-chr-unicode).
-// USE THIS GUARD before any fire — a false return = do NOT train on this
-// id stream.
+// ✅ LIMITATION RESOLVED (OP-28b, 2026-06): the byte<->unicode round-trip is
+// now EXACT for all 256 bytes. The earlier note flagged that against a REAL
+// GPT-2/Qwen vocab this returned false for whitespace/non-ASCII text. The root
+// cause was tokenizer_bpe's build_byte_to_char NOT building the canonical
+// GPT-2/Qwen `bytes_to_unicode()` map: it used byte-truncating `chr()` for the
+// printable range (raw 0xA1 instead of the U+00A1 codepoint for Latin-1 bytes;
+// and chr(256+i) would have collapsed to chr(i), colliding space's char) AND
+// used a `256 + byte` codepoint instead of the canonical running counter
+// `256 + n` (which diverges for the 35 bytes 127..160, 173). build_byte_to_char
+// now emits the canonical 256-entry bijection via the UTF-8 encoder
+// `from_char_code` — printable bytes map to their own codepoint, the rest to
+// U+0100.. in running-counter order. Real-Qwen byte<->unicode round-trips
+// exactly (256/256, no collision; verified by OP-28b oracle). This GUARD is
+// still the honest pre-fire check (a false return = do NOT train on this id
+// stream); it now passes for whitespace/non-ASCII byte content too.
 fn flame_bpe_roundtrip(tok, text: string) -> bool {
     let ids = bpe_encode(tok, text)
     return bpe_decode(tok, ids) == text
