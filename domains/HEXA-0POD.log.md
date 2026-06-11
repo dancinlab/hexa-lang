@@ -1518,3 +1518,24 @@ NOT claimed. $0, no vast/pool/pod. Verdict .verdicts/hexa-0pod/F-OP21-HOPPER-WAR
   recorded F-OP19D + the OP-19f static gate; musl is not a CI platform).
 - Milestone OP-34 flipped [x]. Verdict .verdicts/hexa-0pod/F-OP34-FOLD-CI-GATE.txt. $0 · 0-GPU · 0-pod ·
   no vast · no foreign-pod touch · no .tape edits.
+
+## 2026-06-12 OP-33b — dead scheduled_lr/cosine_lr legacy path removed (round-10 branch ③, $0, 0-pod)
+- DEADNESS RE-VERIFIED (independent of F-OP33): `hexa run` probes for cosine_lr AND warmup_lr both fail —
+  verbatim `error: use of undeclared identifier 'cosine_lr'` / `'warmup_lr'` in the generated C. Root cause
+  split: self/env.hexa env_new() builtin roster still REGISTERED the names, so hexat emitted
+  `hexa_call4(cosine_lr, ...)` into a runtime that no longer defines the symbol.
+- CALLER SWEEP: zero live callers. 4 example files referenced the names (test_stdlib ×2 scheduled_lr ·
+  test_lr_batch warmup/cosine ×6 · anima_mega_demo scheduled_lr · anima_convergence_proof warmup∘cosine) —
+  all baseline-broken (tool/examples_baseline.json exit_code=-1, never-passed) on OTHER dead legacy-ML
+  builtins too. self/ ga_/se_/su_ variants are local fns (different names — untouched).
+- EXECUTED (per job 2b — repoint then remove): stdlib/optim.hexa scheduled_lr REMOVED + one-line pointer to
+  opt_lr_warmup_cosine (stdlib/flame/optim_lib.hexa, d5_cos, F-OP33). 4 examples repointed via
+  `use "../stdlib/flame/optim_lib"`; floor_frac mapping 0.1 / 0.02 / 1.0 (warmup-only degenerate).
+  self/env.hexa: warmup_lr/cosine_lr DEREGISTERED from the builtin roster.
+- POST-CHECKS GREEN: scheduled_lr probe now fails clean (`use of undeclared identifier 'scheduled_lr'` —
+  no longer emitted); repointed examples show ZERO LR-name errors (residual = pre-existing dead family:
+  slice/zeros/mean/cross_entropy/phase_lr/batch_* — out of scope, honest); OP-33 oracle re-run PASS
+  (F-OP33-LR-SCHEDULE = 1); canonical probe warm 0.0005 / mid 0.000628142.
+- HONEST: adam/safe_update in stdlib/optim.hexa wrap adam_step/grad_clip_norm — equally dead, NOT sanctioned
+  in OP-33b; follow-up candidate. Milestone OP-33b flipped [x].
+  Verdict .verdicts/hexa-0pod/F-OP33B-DEAD-LR-CLEANUP.txt. $0 · 0-GPU · 0-pod · no vast · no .tape edits.

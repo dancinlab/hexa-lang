@@ -1,14 +1,18 @@
 // ══════════════════════════════════════════════════════════
 // LR 스케줄링 + 배치 연산 + gradient accumulation
 // Anima 학습 인프라 완성
+// LR schedule = opt_lr_warmup_cosine (stdlib/flame/optim_lib.hexa,
+// deterministic d5_cos, F-OP33); floor_frac=1.0 degenerates to warmup-only.
 // ══════════════════════════════════════════════════════════
+
+use "../stdlib/flame/optim_lib"
 
 // ═══ [1] Warmup LR ═══
 println("[1] Warmup LR (base=0.001, warmup=100):")
 let i = 0
 while i <= 100 {
     if i % 25 == 0 {
-        let lr = warmup_lr(0.001, i, 100)
+        let lr = opt_lr_warmup_cosine(0.001, 1.0, i, 1000, 100)
         println("    step", i, "→ lr=", lr)
     }
     i = i + 1
@@ -19,7 +23,7 @@ println("[2] Cosine LR (base=0.001, total=1000):")
 let steps = [0, 250, 500, 750, 1000]
 let j = 0
 while j < 5 {
-    let lr = cosine_lr(0.001, steps[j], 1000, 0.0001)
+    let lr = opt_lr_warmup_cosine(0.001, 0.1, steps[j], 1000, 0)
     println("    step", steps[j], "→ lr=", round(lr * 1000000) / 1000000)
     j = j + 1
 }
@@ -77,9 +81,9 @@ let grad_buf = zeros(4)
 let accum = 4
 
 while t < total_steps {
-    // Phase-aware LR with warmup
+    // Phase-aware LR with warmup (floor_frac=1.0 → warmup ramp then constant base)
     let base_lr = phase_lr(0.001, t, total_steps, 3)
-    let lr = warmup_lr(base_lr, t, warmup)
+    let lr = opt_lr_warmup_cosine(base_lr, 1.0, t, total_steps, warmup)
 
     // Fake gradient
     let grads = mat_scale(W_train, 0.1)
@@ -101,14 +105,14 @@ while t < total_steps {
 
 // ═══ @test ═══
 @test fn test_warmup_zero_at_start() {
-    assert(warmup_lr(0.001, 0, 100) == 0.0, "lr should be 0 at step 0")
+    assert(opt_lr_warmup_cosine(0.001, 1.0, 0, 1000, 100) == 0.0, "lr should be 0 at step 0")
 }
 @test fn test_warmup_full_at_end() {
-    assert(warmup_lr(0.001, 100, 100) == 0.001, "lr should be base at warmup end")
+    assert(opt_lr_warmup_cosine(0.001, 1.0, 100, 1000, 100) == 0.001, "lr should be base at warmup end")
 }
 @test fn test_cosine_decreases() {
-    let lr0 = cosine_lr(0.001, 0, 1000)
-    let lr500 = cosine_lr(0.001, 500, 1000)
+    let lr0 = opt_lr_warmup_cosine(0.001, 0.1, 0, 1000, 0)
+    let lr500 = opt_lr_warmup_cosine(0.001, 0.1, 500, 1000, 0)
     assert(lr0 > lr500, "cosine lr should decrease")
 }
 @test fn test_batch_norm_centered() {
