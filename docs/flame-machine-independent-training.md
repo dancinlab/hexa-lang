@@ -126,6 +126,11 @@ matmul as an inline ascending dot product folds to `1401117690` on **both** ISAs
 (The CLMConvMoE step was *accidentally* T4-safe — its conv/GEMM contractions are
 already inline ascending loops, never `farr_matmul`; OP-29 is what made the
 requirement explicit and general. F-OP29-2ND-ARCH.)
+T4 has a measured **boundary**: exact-product operands (binary `{0,1}` spikes /
+one-hot / masks) are FMA-immune even through the fused kernel (DIAG-B
+`1881150137` identical on both ISAs vs DIAG-A rate-coded divergent) — see the
+boundary subsection in [`flame-determinism-contract.md`](flame-determinism-contract.md)
++ F-OP32-4TH-ARCH; the inline-ascending default is unchanged.
 
 ## 3. Evidence
 
