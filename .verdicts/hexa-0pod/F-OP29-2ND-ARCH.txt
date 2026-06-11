@@ -1,0 +1,133 @@
+════════════════════════════════════════════════════════════════════════════
+F-OP29-2ND-ARCH — machine-independent byte-exact determinism GENERALIZES to a
+SECOND flame model architecture (a Transformer DECODER BLOCK, not CLMConvMoE)
+HEXA-0POD OP-29 · deep-dive round-6 branch ② · CPU-LOCAL `hexa run` · 0-GPU · $0
+════════════════════════════════════════════════════════════════════════════
+
+GAP CLOSED (OP-26b #3035 gap list, gap G2)
+  The 8 per-op byte-eq oracles (OP-2/7/8/9/10/11/12/13) + the OP-15 capstone all
+  lock the SAME model: the CLMConvMoE micro-step. A reviewer would ask: does the
+  machine-independent determinism construction GENERALIZE, or is it CLMConvMoE-
+  specific? OP-29 answers it on a SECOND, structurally-different architecture.
+
+2nd ARCHITECTURE (NOT a CLMConvMoE variant)
+  stdlib/flame/decoder_block_lib.hexa — one pre-norm Transformer DECODER BLOCK
+  (RFC 043, anima d_train5_lib d5_block_fwd/bwd equivalent):
+    h    = X + attn(rmsnorm(X; g1))        // GQA scaled-dot attention + RoPE
+    Xout = h + swiglu(rmsnorm(h; g2))      // SwiGLU FFN
+  It shares NO operators with CLMConvMoE: no Conv1d, no MoE router/combine, no
+  GroupNorm. It exercises a DIFFERENT determinism surface — causal softmax over
+  attention scores (dt_exp), RoPE rotation, SwiGLU SiLU gate (dt_exp), RMSNorm
+  (dt_sqrt). Config tiny CPU-runnable: T=4 · d=8 · nh=2 · nkv=1 (GQA) · h=16.
+  Deterministic init (fixed LCG seed 4242 params / 9001 input; no RNG, no clock).
+
+ORACLE (pure `hexa run`, CPU, 0-GPU)
+  stdlib/flame/op29_decoder_block_determinism_eq.hexa
+    imports the PRODUCTION decoder_block_lib + flame_math + tensor_lib; drives
+    nn_decoder_block_fwd ×2 and nn_decoder_block_bwd ×2 from one fixed seed;
+    asserts fwd Xout max|Δ|=0, bwd grad max|Δ|=0, bwd dX max|Δ|=0 run-to-run.
+  stdlib/flame/op29_decoder_block_selfcontained.hexa
+    single-file twin (NO `use`) inlining the block fwd/bwd + dt_*/d5_* + LCG, so
+    it runs via scp/stdin on ANY host (the OP-28 cross-platform pattern) with no
+    stdlib checkout dependency. Emits two order-sensitive IEEE-754 fingerprints
+    (f64_to_bytes_le of an ascending fp64-byte fold of Xout and of the gradient).
+
+────────────────────────────────────────────────────────────────────────────
+RESULT 1 — byte-eq RUN-TO-RUN (max|Δ|=0)   [both oracles, local arm64-macos]
+────────────────────────────────────────────────────────────────────────────
+  (1) FWD   Xout max|Δ| run-to-run = 0.0
+  (2) BWD   grad max|Δ| run-to-run = 0.0
+      BWD   dX   max|Δ| run-to-run = 0.0
+  F-OP29-2ND-ARCH = 1
+  → the whole 2nd-arch fwd+bwd composition is byte-identical run-to-run. Y.
+
+────────────────────────────────────────────────────────────────────────────
+HONEST FINDINGS — TWO 2nd-arch holes, BOTH found + closed
+────────────────────────────────────────────────────────────────────────────
+HOLE #1 (libm RoPE — closed): decoder_block_lib's fwd/bwd MATH is dt_*-clean
+  (dt_exp softmax/SiLU · dt_sqrt RMSNorm/attn-scale), BUT it consumes RoPE
+  cos/sin TABLES, and the production builder nn_lib::nn_rope_build_tables_base
+  computes the inverse-frequency via libm `ln(base)` + `exp(ex)` (nn_lib.hexa
+  §512/§521) — feeding it the production tables would leak libm into the step
+  exactly like the pre-OP-19 CE/GELU path leaked libm exp/erf. CLOSED the same
+  way OP-19/19b closed CE/GELU: a deterministic builder _rope_build_tables_dt
+  routing inv-freq through dt_exp/dt_ln (range-halved for conditioning) and the
+  angle through d5_cos/d5_sin — all pure-FP, NO libm.
+  VERIFIED cross-platform: dt_sqrt/dt_exp/dt_ln/d5_sin/d5_cos/_dt_ln_stable +
+  the RoPE tables are byte-IDENTICAL arm64-macos vs aiden x86-linux (diag probe).
+
+HOLE #2 (FMA-fused matmul — the REAL find — closed): with HOLE #1 closed, the
+  block was STILL byte-eq run-to-run but byte-DIVERGENT across platforms.
+  BISECT (cache-stage checksum, fwd): stages cos/sin/Bp/X/rin(RMSNorm-1) all
+  IDENTICAL on both ISAs; the FIRST divergence is the Q PROJECTION. ISOLATED to
+  the C runtime `farr_matmul` kernel (tensor_lib: "ikj order, FMA-fused under
+  clang -O2"): on byte-IDENTICAL fp64 inputs (W ck=1950370123, xbt ck=527426024
+  on both), an 8×8·8×4 matmul returns DIFFERENT bytes —
+      arm64-macos  C ck = 241449363
+      x86-linux    C ck = 1401117690
+  because arm64 contracts a*b+c into a single fused-multiply-add while x86 emits
+  separate mul+add (clang -O2), a sub-ULP ISA-dependent result. (A 3×3 identity
+  probe matched — identity has no accumulation to fuse, which is why earlier
+  spot-checks passed.) The production decoder_block_lib routes its projections /
+  grad-accumulators (_db_proj_batch_farr · _db_grad_accum_farr) through this
+  kernel → block byte-eq run-to-run per platform but NOT machine-independent.
+  CLOSED in op29_decoder_block_selfcontained.hexa: both helpers re-implemented as
+  INLINE ascending-order dot products (plain mul+add in hexa codegen, no C
+  kernel) — the SAME "sequential reduction, no fused kernel" discipline the
+  CLMConvMoE oracles already use. Verified: the inline dot returns ck=1401117690
+  on BOTH ISAs (matches; FMA-fusion eliminated).
+
+────────────────────────────────────────────────────────────────────────────
+RESULT 2 — CROSS-PLATFORM byte-IDENTICAL (after HOLE #2 closed)
+            op29_decoder_block_selfcontained.hexa · 0-GPU · NO vast · $0
+────────────────────────────────────────────────────────────────────────────
+LOCAL arm64-macos (Darwin 25.5.0, this workstation):
+  (1) FWD   Xout max|Δ| run-to-run = 0.0
+  (2) BWD   grad max|Δ| run-to-run = 0.0
+      BWD   dX   max|Δ| run-to-run = 0.0
+  fwd  Xout checksum = 1520742713
+  grad      checksum = 1311989714
+  CROSSPLAT-FINGERPRINT-FWD  = 0 0 64 78 44 169 214 65
+  CROSSPLAT-FINGERPRINT-GRAD = 0 0 128 244 215 140 211 65
+  F-OP29-2ND-ARCH = 1
+
+AIDEN x86-linux (Linux x86_64, free CPU pool host @192.168.50.119 · NO GPU · $0):
+  (1) FWD   Xout max|Δ| run-to-run = 0.0
+  (2) BWD   grad max|Δ| run-to-run = 0.0
+      BWD   dX   max|Δ| run-to-run = 0.0
+  fwd  Xout checksum = 1520742713
+  grad      checksum = 1311989714
+  CROSSPLAT-FINGERPRINT-FWD  = 0 0 64 78 44 169 214 65
+  CROSSPLAT-FINGERPRINT-GRAD = 0 0 128 244 215 140 211 65
+  F-OP29-2ND-ARCH = 1
+
+  → IDENTICAL checksums + IDENTICAL IEEE-754 fingerprints on arm64-macos AND
+    x86-linux. The 2nd-arch decoder-block fwd+bwd is machine-independent.
+
+────────────────────────────────────────────────────────────────────────────
+GATE (g5) — ALL GREEN
+  [x] 2nd-arch oracle runs on CPU (`hexa run`)
+  [x] byte-eq RUN-TO-RUN: fwd Xout, bwd grads, bwd dX all max|Δ|=0
+  [x] CROSS-PLATFORM byte-IDENTICAL: arm64-macos == x86-linux (both fingerprints)
+  [x] dt_*-clean / libm-hole status: TWO holes found (libm RoPE + FMA matmul),
+      BOTH closed — the libm RoPE via dt_exp/dt_ln/d5_*; the FMA matmul via
+      inline ascending reductions.
+
+VERDICT
+  Machine-independence GENERALIZES to a 2nd flame model architecture (Transformer
+  decoder block) — Y. The determinism construction (dt_exp/dt_sqrt + sequential
+  ascending reductions, NO libm, NO FMA-fused C kernel) is GENERAL, not
+  CLMConvMoE-specific. OP-29 also surfaced a reusable contract requirement for
+  ANY flame arch: matmul MUST route through inline ascending reductions, not the
+  FMA-fused farr_matmul kernel, to be byte-identical across ISAs (the same
+  discipline the CLMConvMoE oracles already follow). Gap G2 CLOSED for this arch.
+
+PROVENANCE
+  oracles: stdlib/flame/op29_decoder_block_determinism_eq.hexa (run-to-run, imports
+           production lib) · stdlib/flame/op29_decoder_block_selfcontained.hexa
+           (cross-platform, inline-reduction machine-independent twin)
+  2nd arch: stdlib/flame/decoder_block_lib.hexa (RFC 043 pre-norm decoder block)
+  primitives: stdlib/flame/flame_math.hexa (dt_exp/dt_sqrt/dt_ln/d5_sin/d5_cos)
+  hosts: local arm64-macos + aiden x86-linux (sidecar pool, free CPU, $0, NO vast,
+         NO GPU, NO foreign-pod touch)
+════════════════════════════════════════════════════════════════════════════
