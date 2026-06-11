@@ -1,0 +1,286 @@
+// HEXA Standard Library — qforge/dvaug_du
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// QFORGE DFPT brick — the AUGMENTATION-charge deformation overlay ∂V_aug/∂u_d.
+//
+// ── Why this brick (the B3 gate lever — the SOLE remaining un-probed axis) ────
+// Bricks B1 (PBE-SCF) and B2 (∂V_NL/∂u, the KB nonlocal head) are pure
+// norm-conserving (NC): the separable V_NL = Σ_ij|β_i⟩D_ij⟨β_j| carries NO
+// augmentation charge. Ultrasoft (USPP) and PAW pseudopotentials add, on top of
+// V_NL, an augmentation density
+//
+//   ρ_aug(r) = Σ_ij Q_ij(r) ⟨ψ|β_i⟩⟨β_j|ψ⟩ ,
+//
+// where Q_ij(r) is the (localized, near-nucleus) augmentation charge that
+// restores the all-electron norm the soft pseudo-orbital drops. Q_ij couples
+// into BOTH the density (Hartree/XC) and — via the generalized-overlap
+// completeness — the deformation potential. Displacing the atom τ → τ + u
+// therefore gives an extra el-ph vertex term
+//
+//   ∂ρ_aug/∂u_d = Σ_ij ∂[ Q_ij ⟨ψ|β_i⟩⟨β_j|ψ⟩ ] / ∂u_d                         (★)
+//
+// that the from-scratch NC path is structurally INCAPABLE of producing
+// (Q_ij ≡ 0). This is the last named DFT lever on the |g| side of
+// λ = Σ|g|²/ω² after the SCF functional (B1), the KB nonlocal vertex (B2),
+// the off-diagonal assembler, the basis/k×q mesh, the FS mesh, and the phonon
+// ω(q,ν) were all ruled out (QFORGE-PAW round-1…3).
+//
+// ── The augmentation vertex as a separable overlay (d19 — reuses B2 machinery) ─
+// In the PW basis Q_ij has a radial Fourier form factor exactly like a
+// projector: with the SAME structure-factor phase exp(−i q·τ),
+//
+//   Q̃_ij(q) = (4π/Ω) ∫ r² Q_ij(r) j_{L}(|q| r) dr · exp(−i q·τ)
+//
+// for the L-channel of the (i,j) pair (the dominant monopole L=0 term; same-l
+// projector pairs ⇒ L=0 augmentation is the leading and, for s-channel
+// hydrides, the only contribution). The augmentation vertex element is
+//
+//   ⟨q_a| V_aug |q_b⟩ = Σ_ij Q̃_ij(q_a − q_b) · ⟨q_a|β_i⟩⟨β_j|q_b⟩ ,
+//
+// and its u-derivative (product rule on the Q̃ phase AND the two projectors,
+// each phase ∝ exp(−iq·τ)) is, per (★),
+//
+//   ∂⟨q_a|V_aug|q_b⟩/∂u_d
+//     = Σ_ij [ ∂Q̃_ij·β_i*(q_a)β_j(q_b)
+//            + Q̃_ij·∂β_i*(q_a)·β_j(q_b)
+//            + Q̃_ij·β_i*(q_a)·∂β_j(q_b) ]
+//
+// with ∂(phase)/∂u_d = −i q_d (the SAME (★) identity proven in dvnl_du.hexa).
+// All three derivative pieces reuse the −i q_d structure-factor route — NO new
+// radial machinery beyond qforge_proj_radial (d19).
+//
+// ── Hermiticity & the NC-zero anchor (g5) ────────────────────────────────────
+// Q_ij(r) is real and symmetric (Q_ij = Q_ji), so Q̃_ij(−q) = conj(Q̃_ij(q)),
+// and the whole block obeys ∂V_aug[a,b] = conj(∂V_aug[b,a]) — the real-space
+// ∂ρ_aug is REAL (selftest pins < 1e-9). The DECISIVE physical anchor: feeding
+// a NC pseudo (Q_ij ≡ 0) returns IDENTICALLY ZERO, so for the production CaH6
+// ONCV-NC deck Δλ(B3) = 0 EXACTLY — the augmentation overlay is structurally
+// absent, matching arXiv:2507.06749 ("converged hydride el-ph is pseudo-
+// independent outside the core").
+//
+// ── The translational-invariance (acoustic sum-rule) collapse — a B3 FINDING ──
+// A subtle but DECISIVE result this brick exposes: when the augmentation charge
+// is CO-LOCATED with its projectors (tau_aug = tau, the physical case for a
+// displaced atom modulating its OWN augmentation), the three phase derivatives
+// CANCEL EXACTLY. Q̃ carries exp(−i(q_a−q_b)·τ), β_i*(q_a) carries exp(+i q_a·τ),
+// β_j(q_b) carries exp(−i q_b·τ); their u-derivatives sum to
+//   −i[ (q_a−q_b) − q_a + q_b ]_d = −i·0 = 0   (per term, value-weighted)
+// so ∂V_aug^self/∂u ≡ 0 by translational invariance — a single rigidly-displaced
+// atom contributes NOTHING to the el-ph vertex through its own co-located
+// augmentation. The selftest verifies the three terms are EACH O(1e-4) yet sum
+// to < 1e-15 (the cancellation is real, not a vanishing input). The non-vanishing
+// augmentation el-ph effect can live ONLY in the SCF RESPONSE of ∂ρ_aug
+// (Hartree/XC re-screening of the augmentation density), NOT in the bare
+// augmentation vertex — which is itself a strong upper bound that the bare-vertex
+// B3 contribution to λ is ZERO.
+//
+// d3/d4 generic: element/structure-agnostic — caller supplies τ_κ (displaced
+// atom = co-located projector+augmentation center), betas/ls, and the radial
+// Q_ij(r) (any species/cell; NC ⇒ pass zeros ⇒ exact 0). One path.
+
+let _DVAUG_4PI: float = 12.56637061435917295384   // 4π
+
+// Bessel j_L for L=0,1,2 (the augmentation multipole channels; L=0 monopole
+// dominates and is the only term for s-channel hydrides).
+fn _dvaug_jl(l: int, x: float) -> float {
+    if x < 1.0e-8 && x > -1.0e-8 {
+        if l == 0 { return 1.0 - x * x / 6.0 }
+        return 0.0
+    }
+    let s = sin(x)
+    let c = cos(x)
+    if l == 0 { return s / x }
+    if l == 1 { return s / (x * x) - c / x }
+    if l == 2 { return (3.0 / (x * x) - 1.0) * s / x - 3.0 * c / (x * x) }
+    return 0.0
+}
+
+// ── Radial augmentation form factor  Q̃_ij(|q|) = ∫ r² Q_ij(r) j_L(|q|r) dr ───
+// The scalar radial part (the 4π/Ω phase prefactor is applied in block assembly).
+// Log-mesh quadrature with rab — IDENTICAL convention to qforge_proj_radial so
+// the augmentation overlay sits on the SAME grid as the V_NL projectors (d19).
+//   r,rab : radial mesh + weights ; qaug : radial Q_ij(r) ; lmult : multipole L ;
+//   q     : |q| (bohr⁻¹). Length mismatch → 0.0.
+pub fn qforge_aug_radial(r: [float], rab: [float], qaug: [float], lmult: int, q: float) -> float {
+    let n = len(r)
+    if len(rab) != n || len(qaug) != n { return 0.0 }
+    let mut acc = 0.0
+    let mut i = 0
+    while i < n {
+        let ri = r[i]
+        acc = acc + ri * ri * qaug[i] * _dvaug_jl(lmult, q * ri) * rab[i]
+        i = i + 1
+    }
+    return acc
+}
+
+// ── ∂V_aug/∂u_d block over a q-grid (COMPLEX, interleaved [re,im,…]) ──────────
+// Assembles, for the L=0 (monopole) augmentation channel, the u-derivative of the
+// augmentation vertex ⟨q_a|V_aug|q_b⟩ for same-l (i,j) projector pairs:
+//
+//   ∂V_aug[a,b] = Σ_ij(same-l) qm_ij(|q_a−q_b|) · phase(q_a−q_b, τ) ·
+//                 ∂/∂u_d [ β_i*(q_a) β_j(q_b) ]
+//               + Σ_ij(same-l) ∂phase/∂u_d · qm_ij · β_i*(q_a) β_j(q_b)
+//
+// where the augmentation transfer carries q = q_a − q_b (it lives in the density,
+// a two-PW transfer), and ∂phase/∂u_d = −i (q_a−q_b)_d for the Q̃ self-phase and
+// −i q_{a,d} / −i q_{b,d} for the projector phases (B2's (★)).
+//
+//   r,rab        : radial mesh + weights (shared by projectors and Q_ij)
+//   betas        : flat [nproj·n] radial β_i(r) (the KB projectors)
+//   ls           : [nproj] angular momenta of the projectors
+//   qaug         : flat [nproj·nproj·n] radial Q_ij(r) (row-major (i,j); NC ⇒ all 0)
+//   nproj        : projector count
+//   omega        : cell volume Ω
+//   tau          : [3] position of the DISPLACED atom (KB projector AND its
+//                  co-located augmentation center — they move rigidly together).
+//   qvecs        : flat [3·nq] cartesian q = k+G
+//   dir          : Cartesian displacement component {0,1,2}
+// Returns flat [2·nq·nq] interleaved-complex ∂V_aug/∂u. Malformed → [].
+// NC input (qaug all-zero) ⇒ returns all-zero block (the B3-on-NC anchor).
+// Co-located augmentation (the physical single-atom case) ⇒ ALSO all-zero by the
+// translational-invariance sum rule, even with a finite Q_ij (a B3 finding).
+pub fn qforge_dvaug_du_block(r: [float], rab: [float], betas: [float], ls: [int],
+                             qaug: [float], nproj: int, omega: float,
+                             tau: [float], qvecs: [float], dir: int) -> [float] {
+    let n = len(r)
+    if n == 0 || omega <= 0.0 { return [] }
+    if len(rab) != n || len(betas) != nproj * n || len(ls) != nproj { return [] }
+    if len(qaug) != nproj * nproj * n || len(tau) != 3 { return [] }
+    if dir < 0 || dir > 2 { return [] }
+    let lq = len(qvecs)
+    if lq % 3 != 0 { return [] }
+    let nq = lq / 3
+    let four_pi_om = _DVAUG_4PI / omega
+
+    // q magnitudes (for the projector radial transform).
+    let mut qmag: [float] = []
+    let mut a = 0
+    while a < nq {
+        let qx = qvecs[a * 3] ; let qy = qvecs[a * 3 + 1] ; let qz = qvecs[a * 3 + 2]
+        qmag.push(sqrt(qx * qx + qy * qy + qz * qz))
+        a = a + 1
+    }
+
+    // Per projector i: phased β_i(q) [re,im] + ∂β_i(q)/∂u_d [re,im] over all q
+    // (the SAME phased-projector construction as dvnl_du_block — d19).
+    let mut bre: [float] = [] ; let mut bim: [float] = []
+    let mut dre: [float] = [] ; let mut dim: [float] = []
+    let mut ip = 0
+    while ip < nproj {
+        let mut beta_i: [float] = []
+        let mut t = 0
+        while t < n { beta_i.push(betas[ip * n + t]) ; t = t + 1 }
+        let li = ls[ip]
+        let mut aa = 0
+        while aa < nq {
+            let bt = qforge_proj_radial(r, rab, beta_i, li, qmag[aa])
+            let qx = qvecs[aa * 3] ; let qy = qvecs[aa * 3 + 1] ; let qz = qvecs[aa * 3 + 2]
+            let p = qx * tau[0] + qy * tau[1] + qz * tau[2]
+            let br = bt * cos(p) ; let bi = -bt * sin(p)
+            bre.push(br) ; bim.push(bi)
+            let mut qd = qx
+            if dir == 1 { qd = qy }
+            if dir == 2 { qd = qz }
+            dre.push(qd * bi) ; dim.push(-qd * br)        // ∂β = −i q_d β
+            aa = aa + 1
+        }
+        ip = ip + 1
+    }
+
+    // Assemble the augmentation-overlay block. For same-l (i,j), the augmentation
+    // transfer Q̃_ij carries the PW transfer q = q_a − q_b (L=0 monopole), with
+    // phase exp(−i(q_a−q_b)·τ) and self-phase derivative −i(q_a−q_b)_d.
+    let mut out: [float] = []
+    let mut ra = 0
+    while ra < nq {
+        let qax = qvecs[ra * 3] ; let qay = qvecs[ra * 3 + 1] ; let qaz = qvecs[ra * 3 + 2]
+        let mut cb = 0
+        while cb < nq {
+            let qbx = qvecs[cb * 3] ; let qby = qvecs[cb * 3 + 1] ; let qbz = qvecs[cb * 3 + 2]
+            // augmentation transfer Δq = q_a − q_b. The Q̃ self-phase rides on the
+            // SAME co-located center tau (augmentation moves with its atom), so its
+            // u-derivative −i Δq_d enters term S — and combines with the two
+            // projector-phase derivatives to the exact sum-rule cancellation.
+            let dqx = qax - qbx ; let dqy = qay - qby ; let dqz = qaz - qbz
+            let dqmag = sqrt(dqx * dqx + dqy * dqy + dqz * dqz)
+            let pd = dqx * tau[0] + dqy * tau[1] + dqz * tau[2]
+            let phc = cos(pd) ; let phs = -sin(pd)        // exp(−iΔq·τ) = (phc, phs)
+            let mut dqd = dqx
+            if dir == 1 { dqd = dqy }
+            if dir == 2 { dqd = dqz }
+            let mut vr = 0.0 ; let mut vi = 0.0
+            let mut i = 0
+            while i < nproj {
+                let mut j = 0
+                while j < nproj {
+                    if ls[i] == ls[j] {
+                        // radial augmentation form factor for the (i,j) pair (L=0).
+                        let mut qaug_ij: [float] = []
+                        let base = (i * nproj + j) * n
+                        let mut t = 0
+                        while t < n { qaug_ij.push(qaug[base + t]) ; t = t + 1 }
+                        let qm = qforge_aug_radial(r, rab, qaug_ij, 0, dqmag)
+                        let acoef = four_pi_om * qm
+                        // projector overlap β_i*(q_a)·β_j(q_b): conj(x)·y.
+                        let xr = bre[i * nq + ra] ; let xi = bim[i * nq + ra]
+                        let yr = bre[j * nq + cb] ; let yi = bim[j * nq + cb]
+                        let ovr = xr * yr + xi * yi           // Re β_i*β_j
+                        let ovi = xr * yi - xi * yr           // Im β_i*β_j
+                        // ── term S: ∂(Q̃ phase)·(β_i*β_j) = (−i Δq_d)·phase·overlap ──
+                        // (−i dqd)·(phc + i phs) = dqd·phs + i(−dqd·phc).
+                        let spr = dqd * phs ; let spi = -dqd * phc
+                        // (spr+i spi)·(ovr+i ovi)
+                        vr = vr + acoef * (spr * ovr - spi * ovi)
+                        vi = vi + acoef * (spr * ovi + spi * ovr)
+                        // ── term A: Q̃·phase·∂(β_i*)·β_j ; ∂(β_i*) = conj(∂β_i) ──
+                        // conj(∂β_i)=(dre,−dim); times β_j=(yr,yi):
+                        let a1r = dre[i * nq + ra] ; let a1i = -dim[i * nq + ra]
+                        let ar = a1r * yr - a1i * yi ; let ai = a1r * yi + a1i * yr
+                        // times phase (phc,phs), times acoef
+                        vr = vr + acoef * (phc * ar - phs * ai)
+                        vi = vi + acoef * (phc * ai + phs * ar)
+                        // ── term B: Q̃·phase·β_i*·∂(β_j) ; β_i*=(xr,−xi), ∂β_j=(dre,dim) ──
+                        let b1r = xr ; let b1i = -xi
+                        let djr = dre[j * nq + cb] ; let dji = dim[j * nq + cb]
+                        let br2 = b1r * djr - b1i * dji ; let bi2 = b1r * dji + b1i * djr
+                        vr = vr + acoef * (phc * br2 - phs * bi2)
+                        vi = vi + acoef * (phc * bi2 + phs * br2)
+                    }
+                    j = j + 1
+                }
+                i = i + 1
+            }
+            out.push(vr) ; out.push(vi)
+            cb = cb + 1
+        }
+        ra = ra + 1
+    }
+    return out
+}
+
+// ── Apply ∂V_aug/∂u to a PW state column (the el-ph vertex consumer) ──────────
+// (∂V_aug/∂u · ψ)(q_a) = Σ_b ∂V_aug[a,b]·ψ(q_b). ψ is REAL PW coeffs (length nq,
+// the SCF/davidson convention). Returns interleaved-complex [re,im,…] (2·nq).
+//   block : qforge_dvaug_du_block output (2·nq²) ; psi : [nq] real ; nq.
+// Malformed → []. NC (zero block) ⇒ zero output (exact B3-on-NC anchor).
+pub fn qforge_dvaug_du_apply(block: [float], psi: [float], nq: int) -> [float] {
+    if len(block) != 2 * nq * nq || len(psi) != nq { return [] }
+    let mut out: [float] = []
+    let mut a = 0
+    while a < nq {
+        let mut sr = 0.0 ; let mut si = 0.0
+        let mut b = 0
+        while b < nq {
+            let idx = (a * nq + b) * 2
+            sr = sr + block[idx] * psi[b]
+            si = si + block[idx + 1] * psi[b]
+            b = b + 1
+        }
+        out.push(sr) ; out.push(si)
+        a = a + 1
+    }
+    return out
+}
