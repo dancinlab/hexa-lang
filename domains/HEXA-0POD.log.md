@@ -1,5 +1,29 @@
 # HEXA-0POD — log
 
+## 2026-06-11 — OP-31 DONE: machine-independence on a 3rd flame arch (MLP) + OP-30 cross-ISA-matmul invariant DIRECTLY DEMONSTRATED ($0 · 0-pod)
+- Generalizes OP-29's G2 from 2 archs to THREE. 3rd arch = a plain feed-forward MLP (Linear→GELU→Linear→GELU→Linear),
+  structurally DISTINCT from CLMConvMoE (OP-15: conv+MoE+GroupNorm) AND the decoder block (OP-29: attention+RoPE+
+  SwiGLU+RMSNorm). Every MLP layer is a pure dense GEMM → the purest stress of the OP-30 cross-ISA matmul invariant.
+- 3rd-arch model = PRODUCTION nn_lib MLP primitives (nn_linear_fwd + nn_gelu_fwd + nn_linear_bwd + nn_gelu_bwd).
+- ORACLES: stdlib/flame/op31_mlp_determinism_eq.hexa (run-to-run, imports the prod lib) +
+  stdlib/flame/op31_mlp_selfcontained.hexa (cross-platform inline-reduction twin, NO `use`, scp-runnable, + an
+  in-band OP-30 FMA diagnostic that computes layer-1 BOTH via the inline-ascending dot AND via the FMA-fused C kernel).
+- byte-eq RUN-TO-RUN: fwd out · bwd grads · bwd dx all max|Δ|=0 on BOTH oracles, BOTH platforms (local arm64-macos +
+  aiden x86-linux).
+- CROSS-PLATFORM byte-IDENTICAL (the real OP-30 test): local arm64-macos vs aiden x86-linux (free CPU pool
+  @192.168.50.119, $0, NO vast/NO GPU) emit IDENTICAL checksums (fwd 1585504437 / grad 926871122) + IDENTICAL IEEE-754
+  fingerprints FWD `0 0 64 45 56 160 215 65` · GRAD `0 0 0 41 119 159 203 65` on the inline-ascending det path.
+- OP-30 INVARIANT DIRECTLY DEMONSTRATED (not just asserted): the production nn_linear_fwd routes through
+  forge_dispatch_matmul → FMA-fused farr_matmul (tensor_lib L58 "ikj order, FMA-fused under clang -O2") = a REAL hole.
+  The twin's in-band diagnostic shows that exact kernel's L1 checksum byte-DIVERGES arm64 2039553633 vs x86 124945498
+  on byte-IDENTICAL fp64 inputs, WHILE the inline-ascending rewrite of the SAME matmul stays byte-identical (fwd ck
+  1585504437 on both). The invariant is the live difference between those two on this arch.
+- HOLE CLOSED inline-ascending (_mlp_linear_fwd = plain mul+add, no C kernel — the OP-29/CLMConvMoE discipline);
+  nn_linear_bwd was already inline-clean. libm-CLEAN (GELU via dt_erf/dt_exp; MLP has no RMSNorm → _nn_sqrt libm not on
+  this path). Machine-independence GENERALIZES to 3 structurally-distinct archs → Y.
+- Milestone OP-31 flipped [x]. Verdict .verdicts/hexa-0pod/F-OP31-3RD-ARCH.txt. aiden temp files cleaned (leak-0). $0 ·
+  0-GPU · 0-pod · no vast · foreign pod NOT touched.
+
 ## 2026-06-11 — OP-19f DONE: musl ctor-ABI regression gate (static POSIX-environ guard; locks OP-19e) ($0 · 0-pod)
 - Closes OP-26b gap G6 ("musl ctor-ABI fix CI-gate, LOW"). A LOW-BLAST-RADIUS gate that regression-locks the
   OP-19e (#3029) musl env-capture fix so the `(argc,argv,envp)` constructor-args ABI it removed can't silently
