@@ -10,6 +10,21 @@ loop targets what the consumer card + code can carry.
 
 ## milestones (loop self-feeds; add as discovered)
 
+<!-- ANCHOR:OP-34-FOLD-CI-GATE (unique anchor — deep-dive round-9 branch ④: the cross-platform oracles (OP-19 dt_exp / OP-19b dt_erf folds) exist on main but NOTHING ran them in CI — a regression (libm reintroduced on a deterministic site, canonical fold order broken, codegen FP-semantics change) would land silently. Wire the fold checks into CI as a low-blast-radius regression gate on the 3 CI platforms = the same matrix as faithful-nobaseline) -->
+- [x] **OP-34 — machine-independence fold CI regression gate: dt_exp/dt_erf golden folds asserted per-platform** —
+  GREEN ($0, 0-GPU, 0-pod, NO vast). WIRING: the 3 faithful-nobaseline jobs (darwin-arm64 · linux-x86_64 ·
+  linux-arm64) already build a working ./hexa via the shared release path → the fold gate is APPENDED there
+  (cheapest honest wiring: zero new builds/jobs; `hexa run` works on the seeds-removed checkout via the
+  HEXA_PREBUILT_RUNTIME=build/runtime.a .c=0 seam). SSOT script tool/fold_ci_gate.sh (OP-5b/19f gate
+  discipline — thin YAML wrappers) runs the two SELF-CONTAINED oracles op19_crossplatform_selfcontained.hexa +
+  op19b_crossplatform_erf.hexa and asserts the 3 deterministic folds == the recorded 4-environment goldens:
+  dt_exp CEBWD 7679248634312321699 · dt_erf GELUFWD 4548590605583584556 · dt_erf GELUBWD 4249661408190172843
+  (LIBM lines intentionally NOT asserted — platform-dependent by construction). TEETH proven locally: altered
+  golden → DRIFT line + exit 1; reverted → PASS exit 0. LOW-BLAST: only a real fold drift (or the oracle
+  failing to run on a release platform) can fail it — no repo-wide scan, no new trigger surface. musl stays
+  covered by F-OP19D (recorded) + the OP-19f static gate (honest limit — musl is not a CI platform).
+  <5 s/platform. Verdict .verdicts/hexa-0pod/F-OP34-FOLD-CI-GATE.txt.
+
 <!-- ANCHOR:OP-30C-FMA-BOUNDARY (unique anchor — deep-dive round-9 branch ③: OP-32's DIAG-B finding (binary {0,1}-operand matmuls are FMA-IMMUNE: fused≡unfused because a·b is exact when b∈{0,1}) formalized as the PRECISE boundary condition of the OP-30 cross-ISA-matmul invariant in docs/flame-determinism-contract.md — the boundary lived only in the F-OP32 verdict, not as a first-class discoverable part of the contract) -->
 - [x] **OP-30c — FMA-immunity boundary (exact-product operands) formalized in the cross-ISA invariant (docs-only)** —
   GREEN (docs-only, $0, 0-pod, NO GPU/vast). docs/flame-determinism-contract.md gains "#### boundary:
