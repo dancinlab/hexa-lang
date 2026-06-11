@@ -64,7 +64,25 @@ loop targets what the consumer card + code can carry.
   Verdict .verdicts/hexa-0pod/F-OP28B-BPE-FIX.txt.
 
 <!-- ANCHOR:OP-28C-VOCAB-STAGING (unique anchor — OP-28b's honest remainder: its oracle proved the fixed byte-encoder end-to-end but did NOT run against a real on-disk Qwen vocab.json (used a canonical-glyph self-contained merge/vocab — a staging gap, not a code defect). OP-28c closes that staging gap 0-pod: stage/verify the BPE tokenizer against a REAL on-disk Qwen-style vocab through the PRODUCTION load path (bpe_load: load_merges + load_vocab json_parse -> id lookup) at real-vocab scale — round-trip exact + byte-eq run-to-run + deterministic load + cross-platform arm64-macos==x86-linux; 0-pod, no GPU, no vast) -->
-- [ ] **OP-28c — BPE real-scale vocab staging: production load path round-trip + byte-eq + cross-platform (closes OP-28b remainder)**
+- [x] **OP-28c — BPE real-scale vocab staging: production load path round-trip + byte-eq + cross-platform (closes OP-28b remainder)** —
+  GREEN. Staging approach = (a) REAL Qwen vocab (no synthetic fallback needed): a real Qwen2.5
+  tokenizer already on this machine (edge/ckpt/storyboard-grpo vocab.json 151643 entries +
+  merges.txt 151387 rules — read-only, never committed; 151936 = embedding rows incl. special
+  tokens in tokenizer.json, NOT vocab.json). Oracle stdlib/flame/op28c_bpe_realvocab_staging.hexa
+  uses the PRODUCTION modules (bpe_load: load_merges + load_vocab json_parse -> id maps; plus
+  flame_bpe_corpus_load) — candidate-path + env override + honest SKIP-if-absent. RESULT: parse
+  spot-checks 7/7 vs real-vocab ids incl. the OP-28b-repaired byte glyphs (byte 127 -> 221,
+  160 -> 254, 173 -> 255, 'Ġhello' -> 23811); round-trip exact 6/6 multilingual (ASCII,
+  space-heavy, Latin-1, KO, ZH/JA-no-spaces, mixed); ids byte-eq run-to-run AND across two
+  independent fresh loads max|Δ|=0; FULL 151643-entry id->token table identical across fresh
+  json_parse loads (no hash-order leak into observable ids); flame corpus-entry leg green;
+  CROSS-PLATFORM local arm64-macos == aiden x86-linux byte-IDENTICAL DET block (1895 B, checksum
+  757635534, fingerprint `0 0 0 231 76 148 198 65` on BOTH). FINDING (staging trap, not a code
+  defect): a STALE installed hexa resolves `use "self/ml/tokenizer_bpe"` of a stdlib/flame-resident
+  file against the INSTALL's pre-OP-28b self/ tree — first run silently reproduced the exact
+  pre-fix failure; cure = run a repo-root copy (documented in the oracle header). Production load
+  path showed NO defect at real scale. $0, no vast, no GPU.
+  Verdict .verdicts/hexa-0pod/F-OP28C-VOCAB-STAGING.txt.
 
 <!-- ANCHOR:OP-31-3RD-ARCH (unique anchor — OP-29 proved machine-independence on a 2nd flame arch (decoder block); OP-31 generalizes to a THIRD structurally-distinct arch — a plain feed-forward MLP (nn_lib nn_linear_fwd + GELU, NO attention/RoPE/conv/MoE/norm) — and verifies the OP-30 cross-ISA-matmul invariant (inline ascending reduction, NOT FMA-fused farr_matmul) holds. The production nn_linear_fwd routes through forge_dispatch_matmul → FMA-fused farr_matmul (tensor_lib L58 "ikj order, FMA-fused under clang -O2") = a REAL OP-30 hole; close it inline-ascending like OP-29) -->
 - [x] **OP-31 — machine-independence on a 3rd flame arch + OP-30 cross-ISA-matmul invariant verified (or violation found+closed)** —

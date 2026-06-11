@@ -1,5 +1,32 @@
 # HEXA-0POD — log
 
+## 2026-06-12 — OP-28c DONE: BPE real-scale vocab staging — production load path vs a REAL on-disk Qwen2.5 vocab, round-trip + byte-eq + cross-platform (closes OP-28b remainder) ($0 · 0-pod)
+- Deep-dive round-8 branch ③: OP-28b proved the fixed byte-encoder end-to-end but only against a canonical-glyph
+  self-contained merge/vocab — its HONEST REMAINDER was the missing real-on-disk-vocab staging. OP-28c closes it.
+- STAGING = (a) REAL Qwen vocab: edge/ckpt/storyboard-grpo vocab.json (151643 entries, raw-UTF-8 keys, 2.78MB) +
+  merges.txt (151387 rules) — stock Qwen2.5 tokenizer, read-only, NEVER committed (oracle = candidate paths + env
+  override + honest SKIP-if-absent). 151936 = embedding rows incl. tokenizer.json special tokens, not vocab.json.
+- ORACLE stdlib/flame/op28c_bpe_realvocab_staging.hexa — PRODUCTION modules (`use self/ml/tokenizer_bpe` +
+  `use stdlib/flame/flame_bpe_corpus_lib`), NOT a self-contained twin: bpe_load TWICE (independent json_parse) +
+  flame_bpe_corpus_load over a staged multilingual corpus; all loads before the OP28C-DET-BEGIN marker (bpe_load
+  prints a wall-clock ms line), byte-diff = the 1895-byte DET block.
+- RESULT (GATE=1 both platforms): spot ids 7/7 vs real vocab incl. OP-28b-repaired glyphs (127->221 · 160->254 ·
+  173->255 · Ġhello->23811); round-trip exact 6/6 (ASCII · space-heavy · Latin-1 · KO · ZH/JA-no-space · mixed —
+  the chr-collision classes); max|Δ|=0 run-to-run AND fresh-load-vs-fresh-load; FULL 151643-entry id->token table
+  identical across loads (dict_keys hash-order does NOT leak into observable ids); flame corpus-entry leg green;
+  CROSS-PLATFORM local arm64-macos == aiden x86-linux (free pool CPU, $0) DET block byte-IDENTICAL — checksum
+  757635534, fingerprint `0 0 0 231 76 148 198 65` on BOTH. aiden staged via scp (/tmp/op28c-qwen + 3-file module
+  tree), cleaned after.
+- FINDING (staging trap, NOT a load-path defect): STALE-INSTALL `use`-RESOLUTION — the Jun-1 ~/.hx hexa resolves
+  `use "self/ml/tokenizer_bpe"` of a stdlib/flame-RESIDENT file to the INSTALL's own self/ tree (pre-OP-28b map);
+  first run silently reproduced the EXACT pre-fix failure (U+017F glyph, UNK ids, round-trip 2/6) despite fixed
+  repo source. Diagnosed by elimination (raw-UTF-8 keys on disk verified · json_parse OK at 151643-key scale ·
+  build_byte_to_char returning the OLD table). CURE = run a repo-root COPY (source-dir-relative resolution picks
+  the repo's fixed modules); relative `use "../../self/..."` is NOT a fix (inner lib use re-splices the stale copy
+  -> duplicate-def compile error). Documented in the oracle header + verdict.
+- Production load path at real scale: NO defect (json_parse 2.7MB/151643 raw-UTF-8 keys, glyph bijection, merge
+  ranks, id maps all clean). Verdict .verdicts/hexa-0pod/F-OP28C-VOCAB-STAGING.txt.
+
 ## 2026-06-12 — OP-32 DONE: machine-independence on a 4th flame arch (spiking LIF recurrent + local plasticity) + OP-30 compliance + NEW binary-spike FMA-immunity finding ($0 · 0-pod)
 - Deep-dive round-8 branch ②: generalizes OP-15/29/31's machine-independence from 3 archs to FOUR. 4th arch = a spiking
   LIF RECURRENT network with local STDP plasticity (production spiking_lib: flame_event_threshold + flame_refractory_step
