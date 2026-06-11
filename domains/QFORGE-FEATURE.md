@@ -4,6 +4,25 @@
 
 ## milestones
 
+- [x] UNIFIED dense off-diag V_scr(G_a−G_b) vertex assembler — the migration-gate
+      ARCHITECTURAL residual CLOSED (the three off-diag routes unified into ONE
+      normalization-consistent dense vertex). A==B==C is a THEOREM, not a fit:
+        (A) dense Σ_{Ga,Gb}ψ*ΔV(ΔG)ψ · (B) apply-col = COMPOSE · (C) cube ∫ψ*ΔV(r)ψ
+      DIAGNOSIS — the ~10-order route gap = NORMALIZATION+PHASE (NOT physics): the cube
+      route dropped (1) the PW-norm ×Ntot/√Ω AND (2) the bra-conjugate −iG phase
+      (ψ_m*(r), nonzero off-diagonal at Γ); compose works in G-space so avoids both.
+      g5: stdlib/qforge/elph_offdiag_integrated_selftest.hexa — A==B==C machine-precision PASS
+      real CaH6 (NPW=64 conv, Anderson-screened, 24-mode ω, N(E_F)=19.95, nactive=10):
+        λ_unified = 1.1545 == λ_compose = 1.1545  (route A=B residual 3.30e-7 ≤1%)
+        λ_diag-floor = 1.08916 → λ_dense = 1.1545  (off-diag RAISES; Σ|g|² lift ×1.68)
+        Hermiticity residual = 1.39e-15 · rel-ε vs QE 4.376 = 0.736175  (VERBATIM, NOT tuned)
+      VERDICT (d6/@L5 HONEST) — ARCHITECTURE CLOSED, MAGNITUDE RESIDUAL: the assembler
+      is unified + consistent, but λ stays 1.1545 (off-diag structure is small ×1.06).
+      The 3.8× QE gap is the vertex-MAGNITUDE / Γ-only FS BZ axis, NOT the assembler —
+      hybrid (rel-ε 1.65e-7) remains the QE-grade production path; gate HELD.
+      cost $0 (mini 0-pod; summer GPU BUSY @89% fep → mini fallback).
+      verdict: .verdicts/qforge-offdiag-integrated/VERDICT.md
+      fixture: stdlib/qforge/fixtures/cah6_realcell_offdiag_integrated_xval.hexa
 - [x] #27 — NVPTX el-ph hot kernel pilot (α²F BZ-sum) — GPU PARITY HELD on sm_120
       kernel  : stdlib/qforge/nvptx_a2f_kernel.hexa (@gpu_kernel qforge_a2f_bzsum,
                 bin-per-thread BZ double-delta, #1215 exp, underflow-guarded)
