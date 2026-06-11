@@ -1,0 +1,21 @@
+── QFORGE 통합 dense off-diag V_scr(G_a−G_b) vertex g5 게이트 ──
+PASS (A) const ΔV: g00_dense == V̄ (0.7)
+PASS (A) const ΔV: g01_dense == 0 (orthonormal off-diag) (0.0)
+PASS (A) const ΔV: dense==diag on diagonal (0.7)
+PASS (B) route A (dense) == route B (apply=compose) (-0.082)
+PASS (C) route A (dense) == route C (cube, full complex ψ_m*) (-0.082)
+PASS (C) route C imaginary part ≈ 0 (Hermitian/real at Γ) (5.55112e-17)
+PASS (D) dense matrix is 2×2 (true)
+PASS (D) off-diag lifts Σ|g|² (lift>1) (true)
+     [D] Σ|g|²_dense/Σ|g|²_diag lift = 1.23803
+PASS (E) Hermitian vertex (herm_residual≈0) (0.0)
+PASS (F) dense samples built (4 blocks) (true)
+PASS (F) dense λ finite + positive (true)
+     [F] dense-path λ (2-band anchor, bare) = 3955.64
+PASS (F) stronger off-diag → larger λ (monotone) (true)
+     [F] λ(×2 off-diag) = 5176.62 > 3955.64
+PASS (G) cols samples built (4 blocks) (true)
+PASS (G) cols-path λ == dense-matrix λ (route A=B end-to-end) (3955.64)
+PASS (G) diagonal floor λ ≤ full λ (off-diag adds coupling) (true)
+     [G] λ_full(cols)=3955.64  λ_diag-floor=3616.37
+qforge_elph_offdiag_integrated_selftest PASS
