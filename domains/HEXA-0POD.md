@@ -10,6 +10,9 @@ loop targets what the consumer card + code can carry.
 
 ## milestones (loop self-feeds; add as discovered)
 
+<!-- ANCHOR:OP-29-2ND-ARCH (unique anchor — OP-26b gap G2 = a 2nd architecture beyond CLMConvMoE: the 8 oracles + OP-15 capstone all lock the CLMConvMoE step; prove the machine-independent byte-exact determinism construction (dt_exp/dt_sqrt + sequential reductions + ascending accumulation) GENERALIZES to a SECOND flame model arch — a full pre-norm Transformer decoder block (GQA attention + RoPE + SwiGLU + RMSNorm), stdlib/flame/decoder_block_lib) -->
+- [ ] **OP-29 — machine-independence generalizes to a 2nd flame model arch (G2 closed, or a 2nd-arch libm hole found+closed)**
+
 <!-- ANCHOR:OP-28-CORPUS-LOADER-DET (unique anchor — the 0-pod-feasible slice of gap G1 (real-corpus end-to-end): the trainer STEP is GPU-build-gated but the INPUT side — the data loader / token pipeline (tokenize->pack->batch) producing (ids,targets) — runs on CPU and IS 0-pod-verifiable; byte-eq oracle proving it deterministic + machine-independent, so the real-corpus INPUT is proven reproducible before the GPU step runs) -->
 - [x] **OP-28 — real-corpus token-pipeline determinism oracle (0-pod slice of gap G1; input side proven, GPU step still gated)** —
   GREEN. 0-pod slice of OP-26b gap G1 (real-corpus end-to-end, GPU-build-gated): the trainer STEP needs the GPU,

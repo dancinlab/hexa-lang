@@ -1,0 +1,23 @@
+// @raw117_exempt
+// ════════════════════════════════════════════════════════════════════════
+// stdlib/flame/op29_decoder_block_determinism_eq.hexa
+// HEXA-0POD OP-29 · 2nd-ARCH machine-independence oracle · 0-GPU (`hexa run`)
+//
+// WIP SKELETON (committed first per STORM discipline) — checks filled in
+// subsequent commits.
+//
+// GOAL (gap G2): prove the machine-independent byte-exact determinism that
+// the 8 CLMConvMoE oracles + OP-15 capstone lock GENERALIZES to a SECOND
+// flame model architecture — a full pre-norm Transformer DECODER BLOCK
+// (GQA attention + RoPE + SwiGLU + RMSNorm), stdlib/flame/decoder_block_lib.
+// ════════════════════════════════════════════════════════════════════════
+
+use "stdlib/flame/flame_math"
+use "stdlib/flame/tensor_lib"
+use "stdlib/flame/decoder_block_lib"
+
+fn _abs(x: float) -> float { if x < 0.0 { return 0.0 - x } return x }
+
+// ── entrypoint (skeleton) ────────────────────────────────────────────────
+println("=== HEXA-0POD OP-29 · decoder-block (2nd arch) machine-indep oracle (WIP) ===")
+println("SKELETON — checks pending")
