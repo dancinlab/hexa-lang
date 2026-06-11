@@ -1,0 +1,18 @@
+════════════════════════════════════════════════════════════════════════════════
+ F-OP30B-CONTRACT-FIX — stale "GELU erf still-open libm hole" line corrected
+ HEXA-0POD OP-30b · docs-only · 0-pod · NO GPU · NO vast · $0
+════════════════════════════════════════════════════════════════════════════════
+
+STATUS: WIP SKELETON (storm protocol — pushed before the fix lands; finalized in a
+follow-up commit on this branch).
+
+GOAL
+  OP-30 (#3047) formalized the cross-ISA matmul invariant in
+  docs/flame-determinism-contract.md but flagged (out-of-scope) a STALE line:
+  the step-phase-map closing parenthetical still calls the GELU erf
+  "a still-open libm hole — see §1 residual". OP-19b (#3008, F-OP19B-DET-ERF)
+  CLOSED that hole via dt_erf, so the line is factually wrong AND contradicts
+  the doc's own §1 / per-phase table / what-breaks checklist. OP-30b corrects it.
+
+(remaining sections — THE STALE LINE / THE CORRECTION / OTHER STALE CLAIMS /
+CONSISTENCY CONFIRMATION — filled on completion.)
