@@ -207,6 +207,7 @@ fn clm_fwd_full(tokens: int,
     let meanN = t_zeros(1)
     _gn_fwd(y, noG, noB, yn, meanN, invN, xhatN, T, d, 1)
     nn_conv1d_fwd(yn, roW, roB, out_logits, T, d, V, 1, 1)
+    return   // explicit — older codegen wraps a trailing user-fn call in a return (summer toolchain)
 }
 
 // CE gradient seed (verbatim from clm_step.hexa).
@@ -281,10 +282,12 @@ fn clm_bwd(dlogits: int, tokens: int,
     let mut zi = 0
     while zi < V * d { t_set(dembed, zi, 0.0); zi = zi + 1 }
     nn_embedding_bwd_scatter(dxe, tokens, dembed, T, d)
+    return   // explicit — older codegen wraps a trailing user-fn call in a return (summer toolchain)
 }
 
 fn _adam(W: int, gW: int, m: int, v: int, n: int, t: int) {
     opt_adamw_step(W, gW, m, v, n, 0.05, 0.9, 0.999, 0.00000001, 0.0, t)
+    return   // explicit — older codegen wraps a trailing user-fn call in a return (summer toolchain)
 }
 
 // ── stateful multi-step harness ──────────────────────────────────────────────

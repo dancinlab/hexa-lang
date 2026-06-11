@@ -1,0 +1,562 @@
+// ════════════════════════════════════════════════════════════════════════════════
+//  op35_ckpt_xplat_selfcontained.hexa — F-OP35 CROSS-PLATFORM checkpoint oracle.
+//
+//  HEXA-0POD OP-35 (6th determinism surface), the SELF-CONTAINED twin (NO `use` —
+//  the OP-28/29/33 pool pattern: pool hosts' older hexa toolchains miscompile
+//  cross-module imports, so the cross-platform leg inlines everything verbatim).
+//
+//  WHAT THE XPLAT LEG PROVES (file-level, `cmp` byte-identical):
+//    (1) FORMAT PORTABILITY  — a checkpoint WRITTEN on arm64-macos, LOADED on
+//        x86_64-linux and RE-SERIALIZED there, is byte-identical to the original
+//        (mode `echo`: load→save, NO arithmetic — pure serialization surface).
+//    (2) RESUME PORTABILITY  — restore-on-x86 + resume == the uninterrupted run
+//        on arm, bit-for-bit (modes `make`/`resume` + `cmp` of the final-state
+//        files). The step here is MACHINE-INDEPENDENT by construction: pure-hexa
+//        explicit ascending loops + dt_exp/dt_erf/dt_ln/dt_sqrt Taylor/Newton
+//        (NO farr_matmul — the C-runtime FMA-fused kernel is the documented
+//        OP-30/32 cross-ISA divergence surface; NO adamw_step C builtin — AdamW
+//        is inlined in pure hexa with the RFC 034 formula, pinned fold order).
+//    (3) ROUND-TRIP ON BOTH PLATFORMS — adversarial IEEE-754 values (denormals,
+//        -0.0, ±inf, qNaN payload, sNaN pattern) serialize→deserialize
+//        float_to_bits-identical (default mode, run per host).
+//
+//  MODEL (tiny machine-independent micro-LM, NOT the production CLMConvMoE —
+//  the production resume gate is op35_ckpt_resume_eq.hexa run locally; THIS file
+//  isolates the checkpoint+resume surface on a step that is itself cross-platform
+//  byte-exact, so any xplat diff is attributable to the CHECKPOINT):
+//      embed[V·d] → a = W1·x + b1 (explicit loops) → h = GELU(a) (dt_erf) →
+//      logits = W2·h + b2 → all-pos CE (dt_exp/dt_ln) → explicit bwd →
+//      pure-hexa AdamW (dt_sqrt). T=4, d=8, V=16, 5 params, fixed LCG seeds.
+//      4 steps total, checkpoint after step 2.
+//
+//  MODES (argv):
+//      (none)                     : same-host full gate — uninterrupted vs
+//                                   save→restore-FRESH→resume bit-eq + roundtrip
+//      make   <ckpt.fck> <final.fck> : steps 1..2 → save ckpt; steps 3..4 on the
+//                                   SAME state (save is read-only) → final state
+//      resume <ckpt.fck> <out.fck>   : restore FRESH → steps 3..4 → final state
+//      echo   <in.fck>  <out.fck>    : load → re-serialize (no arithmetic)
+//
+//  Format: "FCK\x01" v1 (stdlib/flame/ckpt_lib.hexa — primitives inlined below,
+//  byte-identical layout). Verdict: .verdicts/hexa-0pod/F-OP35-CHECKPOINT.txt
+// ════════════════════════════════════════════════════════════════════════════════
+
+// ── flame_math dt_* (inlined verbatim — OP-29 self-contained pattern) ──────────
+fn dt_sqrt(x: float) -> float {
+    if x <= 0.0 { return 0.0 }
+    let mut g = if x > 1.0 { x } else { 1.0 }
+    let mut i = 0
+    while i < 24 {
+        g = 0.5 * (g + x / g)
+        i = i + 1
+    }
+    return g
+}
+
+fn dt_exp(x: float) -> float {
+    let mut r = 0
+    let mut xr = x
+    while (if xr > 0.0 { xr } else { 0.0 - xr }) > 0.25 {
+        xr = xr / 2.0
+        r = r + 1
+    }
+    let mut term = 1.0
+    let mut acc = 1.0
+    let mut k = 1
+    while k < 12 {
+        term = term * xr / to_float(k)
+        acc = acc + term
+        k = k + 1
+    }
+    let mut s = 0
+    while s < r { acc = acc * acc; s = s + 1 }
+    return acc
+}
+
+fn dt_erf(x: float) -> float {
+    let mut sign = 1.0
+    let mut z = x
+    if z < 0.0 { sign = 0.0 - 1.0; z = 0.0 - z }
+    let t = 1.0 / (1.0 + 0.3275911 * z)
+    let a1 = 0.254829592
+    let a2 = 0.0 - 0.284496736
+    let a3 = 1.421413741
+    let a4 = 0.0 - 1.453152027
+    let a5 = 1.061405429
+    let poly = ((((a5 * t + a4) * t + a3) * t + a2) * t + a1) * t
+    return sign * (1.0 - poly * dt_exp(0.0 - z * z))
+}
+
+fn dt_ln(x: float) -> float {
+    let u = (x - 1.0) / (x + 1.0)
+    let u2 = u * u
+    let mut termp = u
+    let mut acc = 0.0
+    let mut k = 0
+    while k < 24 {
+        acc = acc + termp / to_float(2 * k + 1)
+        termp = termp * u2
+        k = k + 1
+    }
+    return 2.0 * acc
+}
+
+// ── LCG fill (inlined from tensor_lib) ──────────────────────────────────────────
+fn _lcg_next(state: int) -> int {
+    let s = state * 6364136223846793005 + 1442695040888963407
+    let m = s % 2147483647
+    if m < 0 { return 0 - m }
+    return m
+}
+fn _lcg_unit(v: int) -> float {
+    let f = (to_float(v) / 2147483647.0)
+    return f * 2.0 - 1.0
+}
+fn fill_lcg(t: int, n: int, seed: int, scale: float) {
+    let mut st = seed
+    let mut i = 0
+    while i < n {
+        st = _lcg_next(st)
+        let _ = farr_set(t, i, _lcg_unit(st) * scale)
+        i = i + 1
+    }
+}
+
+// ── ckpt primitives (inlined from ckpt_lib.hexa — byte-identical FCK\x01 v1) ───
+fn ck2_push_u32(buf, n: int) {
+    buf.push(n & 0xFF); buf.push((n / 0x100) & 0xFF)
+    buf.push((n / 0x10000) & 0xFF); buf.push((n / 0x1000000) & 0xFF)
+    return
+}
+fn ck2_rd_u32(rb, off: int) -> int {
+    return rb[off] + rb[off+1]*0x100 + rb[off+2]*0x10000 + rb[off+3]*0x1000000
+}
+fn ck2_push_f64(buf, f: float) {
+    let b = f64_to_bytes_le(f)
+    let mut i = 0
+    while i < 8 { buf.push(b[i]); i = i + 1 }
+    return
+}
+fn ck2_begin(buf, t_step: int, n_params: int) {
+    buf.push(70); buf.push(67); buf.push(75); buf.push(1)   // "FCK\x01"
+    ck2_push_u32(buf, t_step)
+    ck2_push_u32(buf, n_params)
+    return
+}
+fn ck2_save_param(buf, W: int, m: int, v: int, n: int) {
+    ck2_push_u32(buf, n)
+    let mut i = 0
+    while i < n { ck2_push_f64(buf, farr_get(W, i)); i = i + 1 }
+    let mut j = 0
+    while j < n { ck2_push_f64(buf, farr_get(m, j)); j = j + 1 }
+    let mut k = 0
+    while k < n { ck2_push_f64(buf, farr_get(v, k)); k = k + 1 }
+    return
+}
+fn ck2_magic_ok(rb) -> int {
+    if len(rb) < 12 { return 0 }
+    if rb[0] == 70 && rb[1] == 67 && rb[2] == 75 && rb[3] == 1 { return 1 }
+    return 0
+}
+fn ck2_step(rb) -> int { return ck2_rd_u32(rb, 4) }
+fn ck2_nparams(rb) -> int { return ck2_rd_u32(rb, 8) }
+fn ck2_body_off() -> int { return 12 }
+fn ck2_param_len(rb, off: int) -> int { return ck2_rd_u32(rb, off) }
+fn ck2_load_param(rb, off: int, W_out: int, m_out: int, v_out: int) -> int {
+    let n = ck2_rd_u32(rb, off)
+    let mut p = off + 4
+    let mut i = 0
+    while i < n { let _ = farr_set(W_out, i, bytes_to_f64_le(rb, p)); p = p + 8; i = i + 1 }
+    let mut j = 0
+    while j < n { let _ = farr_set(m_out, j, bytes_to_f64_le(rb, p)); p = p + 8; j = j + 1 }
+    let mut k = 0
+    while k < n { let _ = farr_set(v_out, k, bytes_to_f64_le(rb, p)); p = p + 8; k = k + 1 }
+    return p
+}
+
+// ── pure-hexa AdamW (RFC 034 formula, pinned fold order, dt_sqrt — NO C builtin) ─
+fn _powt(b: float, t: int) -> float {
+    let mut acc = 1.0
+    let mut i = 0
+    while i < t { acc = acc * b; i = i + 1 }
+    return acc
+}
+fn xp_adamw(W: int, gW: int, m: int, v: int, n: int,
+            lr: float, b1: float, b2: float, eps: float, wd: float, t: int) {
+    let bc1 = 1.0 - _powt(b1, t)
+    let bc2 = 1.0 - _powt(b2, t)
+    let mut i = 0
+    while i < n {
+        let gi = farr_get(gW, i)
+        let mi = b1 * farr_get(m, i) + (1.0 - b1) * gi
+        let vi = b2 * farr_get(v, i) + (1.0 - b2) * (gi * gi)
+        let _ = farr_set(m, i, mi)
+        let _ = farr_set(v, i, vi)
+        let mh = mi / bc1
+        let vh = vi / bc2
+        let w = farr_get(W, i)
+        let _ = farr_set(W, i, w - lr * (mh / (dt_sqrt(vh) + eps) + wd * w))
+        i = i + 1
+    }
+    return
+}
+
+// ── tiny machine-independent micro-LM (explicit ascending loops, no matmul) ────
+// params: 0 embed[V·d]  1 W1[d·d]  2 b1[d]  3 W2[V·d]  4 b2[V]
+fn xp_T() -> int { return 4 }
+fn xp_d() -> int { return 8 }
+fn xp_V() -> int { return 16 }
+fn xp_NP() -> int { return 5 }
+fn xp_size(s: int) -> int {
+    let d = xp_d(); let V = xp_V()
+    let sizes = [V * d, d * d, d, V * d, V]
+    return sizes[s]
+}
+fn _h(p: int, s: int) -> int { return to_int(farr_get(p, s)) }
+
+fn xp_alloc(Wp: int, Mp: int, Vp: int) {
+    let mut s = 0
+    while s < xp_NP() {
+        let n = xp_size(s)
+        let _ = farr_set(Wp, s, to_float(farr_zeros(n)))
+        let _ = farr_set(Mp, s, to_float(farr_zeros(n)))
+        let _ = farr_set(Vp, s, to_float(farr_zeros(n)))
+        s = s + 1
+    }
+    return
+}
+fn xp_init(Wp: int) {
+    let seeds  = [11, 22, 33, 44, 55]
+    let scales = [0.3, 0.25, 0.1, 0.25, 0.1]
+    let mut s = 0
+    while s < xp_NP() {
+        fill_lcg(_h(Wp, s), xp_size(s), seeds[s], scales[s])
+        s = s + 1
+    }
+    return
+}
+
+fn _gelu(x: float) -> float {
+    return x * (0.5 * (1.0 + dt_erf(x * 0.70710678118654752440)))
+}
+fn _gelu_grad(x: float) -> float {
+    let cdf = 0.5 * (1.0 + dt_erf(x * 0.70710678118654752440))
+    let pdf = 0.39894228040143267794 * dt_exp(0.0 - 0.5 * x * x)
+    return cdf + x * pdf
+}
+
+// one fwd→loss→bwd→AdamW step on the persistent 5-param state; AdamW 1-based t.
+fn xp_step(Wp: int, Mp: int, Vp: int, t: int) -> float {
+    let T = xp_T(); let d = xp_d(); let V = xp_V()
+    let toks = [3, 14, 9, 6]
+    let tgts = [14, 9, 6, 7]
+    let embed = _h(Wp, 0); let W1 = _h(Wp, 1); let b1 = _h(Wp, 2)
+    let W2 = _h(Wp, 3); let b2 = _h(Wp, 4)
+
+    let x = farr_zeros(T * d); let a = farr_zeros(T * d); let hh = farr_zeros(T * d)
+    let logits = farr_zeros(T * V); let dlogits = farr_zeros(T * V)
+    let dembed = farr_zeros(V * d); let dW1 = farr_zeros(d * d); let db1 = farr_zeros(d)
+    let dW2 = farr_zeros(V * d); let db2 = farr_zeros(V)
+
+    // ── fwd (ascending loops, pinned order) ──
+    let mut tt = 0
+    while tt < T {
+        let tok = toks[tt]
+        let mut i = 0
+        while i < d { let _ = farr_set(x, tt * d + i, farr_get(embed, tok * d + i)); i = i + 1 }
+        let mut j = 0
+        while j < d {
+            let mut acc = farr_get(b1, j)
+            let mut i2 = 0
+            while i2 < d { acc = acc + farr_get(W1, j * d + i2) * farr_get(x, tt * d + i2); i2 = i2 + 1 }
+            let _ = farr_set(a, tt * d + j, acc)
+            let _ = farr_set(hh, tt * d + j, _gelu(acc))
+            j = j + 1
+        }
+        let mut vv = 0
+        while vv < V {
+            let mut acc2 = farr_get(b2, vv)
+            let mut j2 = 0
+            while j2 < d { acc2 = acc2 + farr_get(W2, vv * d + j2) * farr_get(hh, tt * d + j2); j2 = j2 + 1 }
+            let _ = farr_set(logits, tt * V + vv, acc2)
+            vv = vv + 1
+        }
+        tt = tt + 1
+    }
+
+    // ── all-position CE loss (nn_ce_loss_allpos algorithm, dt_exp/dt_ln) ──
+    let mut total = 0.0
+    let mut tl = 0
+    while tl < T {
+        let base = tl * V
+        let mut mx = farr_get(logits, base)
+        let mut i3 = 1
+        while i3 < V { if farr_get(logits, base + i3) > mx { mx = farr_get(logits, base + i3) }; i3 = i3 + 1 }
+        let mut tot = 0.0
+        let mut i4 = 0
+        while i4 < V { tot = tot + dt_exp(farr_get(logits, base + i4) - mx); i4 = i4 + 1 }
+        let p_t = dt_exp(farr_get(logits, base + tgts[tl]) - mx) / tot
+        let pt_safe = if p_t < 0.000001 { 0.000001 } else { p_t }
+        total = total + (0.0 - dt_ln(pt_safe))
+        tl = tl + 1
+    }
+    let loss = total / to_float(T)
+
+    // ── CE grad seed (clm_ce_grad algorithm) ──
+    let mut tg = 0
+    while tg < T {
+        let base = tg * V
+        let mut mx2 = farr_get(logits, base)
+        let mut i5 = 1
+        while i5 < V { if farr_get(logits, base + i5) > mx2 { mx2 = farr_get(logits, base + i5) }; i5 = i5 + 1 }
+        let mut sm = 0.0
+        let mut i6 = 0
+        while i6 < V { sm = sm + dt_exp(farr_get(logits, base + i6) - mx2); i6 = i6 + 1 }
+        let invT = 1.0 / to_float(T)
+        let mut v7 = 0
+        while v7 < V {
+            let p = dt_exp(farr_get(logits, base + v7) - mx2) / sm
+            let _ = farr_set(dlogits, base + v7, p * invT)
+            v7 = v7 + 1
+        }
+        let tgt = tgts[tg]
+        let _ = farr_set(dlogits, base + tgt, farr_get(dlogits, base + tgt) - invT)
+        tg = tg + 1
+    }
+
+    // ── bwd (explicit, ascending) ──
+    let mut tb = 0
+    while tb < T {
+        let tok = toks[tb]
+        let dh = farr_zeros(d)
+        let mut vv2 = 0
+        while vv2 < V {
+            let dl = farr_get(dlogits, tb * V + vv2)
+            let _ = farr_set(db2, vv2, farr_get(db2, vv2) + dl)
+            let mut j3 = 0
+            while j3 < d {
+                let _ = farr_set(dW2, vv2 * d + j3, farr_get(dW2, vv2 * d + j3) + dl * farr_get(hh, tb * d + j3))
+                let _ = farr_set(dh, j3, farr_get(dh, j3) + dl * farr_get(W2, vv2 * d + j3))
+                j3 = j3 + 1
+            }
+            vv2 = vv2 + 1
+        }
+        let mut j4 = 0
+        while j4 < d {
+            let da = farr_get(dh, j4) * _gelu_grad(farr_get(a, tb * d + j4))
+            let _ = farr_set(db1, j4, farr_get(db1, j4) + da)
+            let mut i7 = 0
+            while i7 < d {
+                let _ = farr_set(dW1, j4 * d + i7, farr_get(dW1, j4 * d + i7) + da * farr_get(x, tb * d + i7))
+                let _ = farr_set(dembed, tok * d + i7, farr_get(dembed, tok * d + i7) + da * farr_get(W1, j4 * d + i7))
+                i7 = i7 + 1
+            }
+            j4 = j4 + 1
+        }
+        let _ = farr_free(dh)
+        tb = tb + 1
+    }
+
+    // ── pure-hexa AdamW over the 5 params (canonical order) ──
+    let G = [dembed, dW1, db1, dW2, db2]
+    let mut s = 0
+    while s < xp_NP() {
+        xp_adamw(_h(Wp, s), G[s], _h(Mp, s), _h(Vp, s), xp_size(s),
+                 0.05, 0.9, 0.999, 0.00000001, 0.0, t)
+        s = s + 1
+    }
+    let _ = farr_free(x); let _ = farr_free(a); let _ = farr_free(hh)
+    let _ = farr_free(logits); let _ = farr_free(dlogits)
+    let _ = farr_free(dembed); let _ = farr_free(dW1); let _ = farr_free(db1)
+    let _ = farr_free(dW2); let _ = farr_free(db2)
+    return loss
+}
+
+fn xp_state_to_bytes(Wp: int, Mp: int, Vp: int, t_applied: int) {
+    let buf = []
+    ck2_begin(buf, t_applied, xp_NP())
+    let mut s = 0
+    while s < xp_NP() {
+        ck2_save_param(buf, _h(Wp, s), _h(Mp, s), _h(Vp, s), xp_size(s))
+        s = s + 1
+    }
+    return buf
+}
+fn xp_bytes_to_state(rb, Wp: int, Mp: int, Vp: int) -> int {
+    if ck2_magic_ok(rb) == 0 { return 0 - 1 }
+    if ck2_nparams(rb) != xp_NP() { return 0 - 1 }
+    xp_alloc(Wp, Mp, Vp)
+    let mut off = ck2_body_off()
+    let mut s = 0
+    while s < xp_NP() {
+        if ck2_param_len(rb, off) != xp_size(s) { return 0 - 1 }
+        off = ck2_load_param(rb, off, _h(Wp, s), _h(Mp, s), _h(Vp, s))
+        s = s + 1
+    }
+    return ck2_step(rb)
+}
+
+fn xp_bit_mismatch(WpA: int, MpA: int, VpA: int, WpB: int, MpB: int, VpB: int) -> int {
+    let mut bad = 0
+    let packsA = [WpA, MpA, VpA]; let packsB = [WpB, MpB, VpB]
+    let mut k = 0
+    while k < 3 {
+        let mut s = 0
+        while s < xp_NP() {
+            let aH = _h(packsA[k], s); let bH = _h(packsB[k], s)
+            let n = xp_size(s)
+            let mut i = 0
+            while i < n {
+                if float_to_bits(farr_get(aH, i)) != float_to_bits(farr_get(bH, i)) { bad = bad + 1 }
+                i = i + 1
+            }
+            s = s + 1
+        }
+        k = k + 1
+    }
+    return bad
+}
+
+// adversarial IEEE-754 round-trip through the ckpt path (same set as the main
+// oracle: ±0, denormal min/max, min normal, max double, ±inf, qNaN, NaN
+// payload, sNaN-pattern + inexact fractions).
+fn xp_roundtrip() -> int {
+    let bits = [0, 0-9223372036854775807-1, 1, 4503599627370495, 4503599627370496,
+                9218868437227405311, 9218868437227405312, 0-4503599627370497,
+                9221120237041090560, 9221120237041090799, 9218868437227405313]
+    let n = len(bits)
+    let W = farr_zeros(n); let M = farr_zeros(n); let Vt = farr_zeros(n)
+    let mut i = 0
+    while i < n {
+        let _ = farr_set(W, i, bits_to_float(bits[i]))
+        let _ = farr_set(M, i, bits_to_float(bits[(i + 3) - (((i + 3) / n) * n)]))
+        let _ = farr_set(Vt, i, 1.0 / 3.0 + to_float(i))
+        i = i + 1
+    }
+    let buf = []
+    ck2_begin(buf, 7, 1)
+    ck2_save_param(buf, W, M, Vt, n)
+    let path = "/tmp/op35_xplat_roundtrip.fck"
+    write_bytes(path, buf)
+    let rb = read_file_bytes(path)
+    if ck2_magic_ok(rb) == 0 { return 0 }
+    if ck2_step(rb) != 7 { return 0 }
+    let W2 = farr_zeros(n); let M2 = farr_zeros(n); let V2 = farr_zeros(n)
+    let _ = ck2_load_param(rb, ck2_body_off(), W2, M2, V2)
+    let mut bad = 0
+    let mut j = 0
+    while j < n {
+        if float_to_bits(farr_get(W, j)) != float_to_bits(farr_get(W2, j)) { bad = bad + 1 }
+        if float_to_bits(farr_get(M, j)) != float_to_bits(farr_get(M2, j)) { bad = bad + 1 }
+        if float_to_bits(farr_get(Vt, j)) != float_to_bits(farr_get(V2, j)) { bad = bad + 1 }
+        j = j + 1
+    }
+    print("  roundtrip adversarial: "); print(n * 3); print(" elems, bit-mismatch = "); println(bad)
+    if bad == 0 { return 1 }
+    return 0
+}
+
+fn main() {
+    let argv = args()
+    let N = 4
+    let kk = 2
+    let NP = xp_NP()
+
+    // ── make <ckpt.fck> <final.fck> ──
+    if len(argv) >= 4 && argv[1] == "make" {
+        let Wp = farr_zeros(NP); let Mp = farr_zeros(NP); let Vp = farr_zeros(NP)
+        xp_alloc(Wp, Mp, Vp); xp_init(Wp)
+        let mut t = 1
+        while t <= N {
+            let l = xp_step(Wp, Mp, Vp, t)
+            print("  step "); print(t); print(" loss bits = "); println(float_to_bits(l))
+            if t == kk {
+                let cb = xp_state_to_bytes(Wp, Mp, Vp, kk)
+                write_bytes(argv[2], cb)
+                print("  CKPT@k="); print(kk); print(" -> "); print(argv[2])
+                print(" ("); print(len(cb)); println(" bytes)")
+            }
+            t = t + 1
+        }
+        let fb = xp_state_to_bytes(Wp, Mp, Vp, N)
+        write_bytes(argv[3], fb)
+        print("FINAL-UNINTERRUPTED "); print(argv[3]); print(" ("); print(len(fb)); println(" bytes)")
+        return
+    }
+
+    // ── resume <ckpt.fck> <out.fck> ──
+    if len(argv) >= 4 && argv[1] == "resume" {
+        let rb = read_file_bytes(argv[2])
+        let Wp = farr_zeros(NP); let Mp = farr_zeros(NP); let Vp = farr_zeros(NP)
+        let tk = xp_bytes_to_state(rb, Wp, Mp, Vp)
+        if tk < 0 { println("FAIL — malformed checkpoint"); return }
+        print("  restored t="); println(tk)
+        let mut t = tk + 1
+        while t <= N {
+            let l = xp_step(Wp, Mp, Vp, t)
+            print("  step "); print(t); print(" loss bits = "); println(float_to_bits(l))
+            t = t + 1
+        }
+        let fb = xp_state_to_bytes(Wp, Mp, Vp, N)
+        write_bytes(argv[3], fb)
+        print("RESUMED-FINAL "); print(argv[3]); print(" ("); print(len(fb)); println(" bytes)")
+        return
+    }
+
+    // ── echo <in.fck> <out.fck> — load → re-serialize, NO arithmetic ──
+    if len(argv) >= 4 && argv[1] == "echo" {
+        let rb = read_file_bytes(argv[2])
+        let Wp = farr_zeros(NP); let Mp = farr_zeros(NP); let Vp = farr_zeros(NP)
+        let tk = xp_bytes_to_state(rb, Wp, Mp, Vp)
+        if tk < 0 { println("FAIL — malformed checkpoint"); return }
+        let fb = xp_state_to_bytes(Wp, Mp, Vp, tk)
+        write_bytes(argv[3], fb)
+        print("ECHO "); print(argv[3]); print(" ("); print(len(fb)); println(" bytes)")
+        return
+    }
+
+    // ── default: same-host full gate ──
+    println("op35_ckpt_xplat_selfcontained — F-OP35 cross-platform checkpoint oracle (self-contained)")
+
+    // uninterrupted
+    let WA = farr_zeros(NP); let MA = farr_zeros(NP); let VA = farr_zeros(NP)
+    xp_alloc(WA, MA, VA); xp_init(WA)
+    let lbA = farr_zeros(N + 1)
+    let mut tA = 1
+    while tA <= N {
+        let l = xp_step(WA, MA, VA, tA)
+        let _ = farr_set(lbA, tA, l)
+        print("  step "); print(tA); print(" loss bits = "); println(float_to_bits(l))
+        tA = tA + 1
+    }
+
+    // save@kk → restore FRESH → resume
+    let WB = farr_zeros(NP); let MB = farr_zeros(NP); let VB = farr_zeros(NP)
+    xp_alloc(WB, MB, VB); xp_init(WB)
+    let mut tB = 1
+    while tB <= kk { let _ = xp_step(WB, MB, VB, tB); tB = tB + 1 }
+    let cb = xp_state_to_bytes(WB, MB, VB, kk)
+    let path = "/tmp/op35_xplat_local.fck"
+    write_bytes(path, cb)
+    let rb = read_file_bytes(path)
+    let WR = farr_zeros(NP); let MR = farr_zeros(NP); let VR = farr_zeros(NP)
+    let tk = xp_bytes_to_state(rb, WR, MR, VR)
+    if tk != kk { println("F-OP35-XPLAT-LOCAL = 0"); println("FAIL — restore returned wrong t"); return }
+    let mut lr_ok = 1
+    let mut tR = tk + 1
+    while tR <= N {
+        let l = xp_step(WR, MR, VR, tR)
+        if float_to_bits(l) != float_to_bits(farr_get(lbA, tR)) { lr_ok = 0 }
+        tR = tR + 1
+    }
+    let bad = xp_bit_mismatch(WA, MA, VA, WR, MR, VR)
+    print("  resume bit-mismatch (W,m,v) = "); println(bad)
+    let rt = xp_roundtrip()
+    let ok = if bad == 0 && lr_ok == 1 && rt == 1 { 1 } else { 0 }
+    println("F-OP35-XPLAT-LOCAL = " + to_string(ok))
+    if ok == 1 {
+        println("PASS - same-host save->restore->resume bit-eq + adversarial roundtrip exact (self-contained)")
+        return
+    }
+    println("FAIL")
+}

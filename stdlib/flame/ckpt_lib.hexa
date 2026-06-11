@@ -56,6 +56,7 @@ use "stdlib/flame/tensor_lib"
 fn _ck_push_u32(buf, n: int) {
     buf.push(n & 0xFF); buf.push((n / 0x100) & 0xFF)
     buf.push((n / 0x10000) & 0xFF); buf.push((n / 0x1000000) & 0xFF)
+    return   // explicit — older codegen wraps a trailing call in a return (summer toolchain)
 }
 fn _ck_rd_u32(rb, off: int) -> int {
     return rb[off] + rb[off+1]*0x100 + rb[off+2]*0x10000 + rb[off+3]*0x1000000
@@ -71,6 +72,7 @@ pub fn ckpt_begin(buf, t_step: int, n_params: int) {
     buf.push(70); buf.push(67); buf.push(75); buf.push(1)   // "FCK\x01"
     _ck_push_u32(buf, t_step)
     _ck_push_u32(buf, n_params)
+    return   // explicit — older codegen wraps a trailing user-fn call in a return (summer toolchain)
 }
 
 // ckpt_save_param — append ONE parameter's full training state:
