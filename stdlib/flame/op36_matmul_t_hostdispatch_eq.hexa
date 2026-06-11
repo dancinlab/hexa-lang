@@ -1,0 +1,81 @@
+// ════════════════════════════════════════════════════════════════════════════
+//  op36_matmul_t_hostdispatch_eq.hexa — F-OP36 matmul_t HOST-dispatch byte-eq ORACLE.
+//
+//  HEXA-0POD OP-36 (dispatch CPU-fallback systematic audit, HOLE-1): the
+//  forge_dispatch_matmul_t builtin (OP-2 transpose-elim, runtime.h L1036)
+//  documents a "no-CUDA → byte-eq host A^T@B oracle" whose SSOT is
+//  self/runtime.c — but the frozen seed (151c52c8…) predates OP-2, so the
+//  symbol was UNDEFINED on every CPU-only host (live repro: the probe failed
+//  to compile/link). OP-36 adds the host body via the tracked
+//  tool/restore_frozen_seeds marker-guarded append (the OP-16/18/32b channel):
+//  materialize A^T (exact element copies, no rounding) and delegate to the
+//  SAME frozen hexa_farr_matmul ikj kernel the prior (im2col_t +
+//  forge_dispatch_matmul OP_N) path bottoms out in — byte-eq BY CONSTRUCTION.
+//
+//  THIS oracle proves that construction END-TO-END through the real builtin
+//  seam: A/B the NEW path forge_dispatch_matmul_t(A, M, K, B, N) against the
+//  OLD path forge_dispatch_matmul(At, K, M, B, N) on a hexa-side materialized
+//  At[k·M+m] = A[m·K+k] — the exact transposed-gather value identity
+//  clm_prod_transpose_elim_eq.hexa proved for the trainer's dW GEMM (that
+//  oracle locks the pure-host ORDER algebra; this one locks the DISPATCH
+//  SYMBOL host body the frozen seed was missing).
+//
+//  F-OP36-MATMUL-T-HOSTDISPATCH-EQ :
+//      forge_dispatch_matmul_t(A,M,K,B,N) == forge_dispatch_matmul(A^T,K,M,B,N)
+//      element-by-element, max|Δ| = 0 (BYTE-eq, tol used only to report).
+//
+//  $0 — CPU `hexa run`, no GPU / no vast / no pod (the 0-pod lane).
+// ════════════════════════════════════════════════════════════════════════════
+
+use "stdlib/flame/tensor_lib"
+
+fn _mt_abs(x: float) -> float { if x < 0.0 { return 0.0 - x } return x }
+
+fn _mt_maxdev(a: int, b: int, n: int) -> float {
+    let mut m = 0.0
+    let mut i = 0
+    while i < n { let d = _mt_abs(t_get(a, i) - t_get(b, i)); if d > m { m = d }; i = i + 1 }
+    return m
+}
+
+fn main() {
+    println("op36_matmul_t — HOLE-1 host body: forge_dispatch_matmul_t A/B vs materialized-transpose matmul")
+    // odd, non-square, N%4 != 0 shapes — exercises the ikj unroll tail too
+    let M = 23; let K = 17; let N = 11
+
+    let a = t_zeros(M * K); t_fill_lcg(a, M * K, 5, 0.7)
+    let b = t_zeros(M * N); t_fill_lcg(b, M * N, 11, 0.3)
+
+    // NEW path: the OP-36 host body (A^T@B, contraction over M)
+    let c_new = forge_dispatch_matmul_t(a, M, K, b, N)
+    if c_new < 0 { println("F-OP36-MATMUL-T-HOSTDISPATCH-EQ = 0"); println("FAIL — matmul_t rc < 0"); return }
+
+    // OLD path: hexa-side materialized A^T fed to the plain dispatcher
+    // (the prior im2col_t + OP_N arithmetic, term-by-term)
+    let at = t_zeros(K * M)
+    let mut m = 0
+    while m < M {
+        let mut k = 0
+        while k < K { t_set(at, k * M + m, t_get(a, m * K + k)); k = k + 1 }
+        m = m + 1
+    }
+    let c_old = forge_dispatch_matmul(at, K, M, b, N)
+    if c_old < 0 { println("F-OP36-MATMUL-T-HOSTDISPATCH-EQ = 0"); println("FAIL — reference matmul rc < 0"); return }
+
+    let d = _mt_maxdev(c_new, c_old, K * N)
+    print("  max|Δ| matmul_t-vs-transposed-matmul = "); println(to_string(d))
+
+    // non-triviality guard: the product must actually be non-zero work
+    let mut nz = 0
+    let mut i = 0
+    while i < K * N { if _mt_abs(t_get(c_new, i)) > 0.000001 { nz = nz + 1 }; i = i + 1 }
+    print("  nonzero outputs = "); print(to_string(to_float(nz))); print(" / "); println(to_string(to_float(K * N)))
+
+    if d == 0.0 && nz > 0 {
+        println("F-OP36-MATMUL-T-HOSTDISPATCH-EQ = 1")
+        println("PASS — forge_dispatch_matmul_t == materialized-A^T forge_dispatch_matmul, BYTE-eq (max|Δ|=0)")
+        return
+    }
+    println("F-OP36-MATMUL-T-HOSTDISPATCH-EQ = 0")
+    println("FAIL")
+}
