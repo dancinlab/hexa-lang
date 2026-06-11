@@ -1,0 +1,56 @@
+name: musl-ctor-abi-gate
+
+# ── OP-19f: musl env-capture ctor-ABI regression gate (0-GPU) ───────────────
+#
+# Locks in the OP-19e (#3029) fix. OP-19e rewrote the priority-101 env-capture
+# constructor that tool/restore_frozen_seeds injects into the restored
+# self/runtime.c to read the POSIX `extern char **environ` global (every libc,
+# incl. musl) instead of the glibc/Darwin-only constructor-args ABI
+# `hxlcl_capture_environ(int argc,char**argv,char**envp){ hxlcl_environ = envp; }`.
+# musl runs constructors with NO args, so the args form derefs a garbage pointer
+# -> SIGSEGV before main(). This gate FAILS only if that musl-unsafe args-ABI
+# capture form re-lands in the patch (or the POSIX-environ form disappears).
+#
+# STATIC GUARD (honest): CI does NOT run under musl, so this is a source-pattern
+# check, not a runtime musl test — it locks the exact source pattern the musl
+# SIGSEGV depends on, the cheapest effective regression guard.
+#
+# LOW BLAST RADIUS — guards ONLY the env-capture constructor:
+#   * The script tool/musl_ctor_abi_gate.sh inspects a single file
+#     (tool/restore_frozen_seeds) and, within it, ONLY the awk-emitted C lines of
+#     the env-capture patch (`print "..."`, excluding `//` comments). The
+#     explanatory comments that spell out the OLD bad (argc,argv,envp) signature
+#     are structurally exempt and can never trip the gate.
+#   * Purely lexical (grep) — no compiler, CUDA, or musl toolchain. It never
+#     scans the runtime, so it cannot false-fail on unrelated code.
+#   * The script is the SSOT (also runnable locally / in a pre-commit hook);
+#     this workflow is a thin CI wrapper. The gate passes on the current clean
+#     tree, so it introduces no false-positive CI break.
+#
+# 0-GPU: pure static pattern check, no kernel run.
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'tool/restore_frozen_seeds'
+      - 'tool/musl_ctor_abi_gate.sh'
+      - '.github/workflows/musl-ctor-abi-gate.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  musl-ctor-abi:
+    name: musl env-capture ctor-ABI guard (OP-19e POSIX-environ form)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Run musl ctor-ABI regression gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          sh tool/musl_ctor_abi_gate.sh
