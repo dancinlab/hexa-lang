@@ -176,6 +176,7 @@ tolerance) unless noted.
 | **LOSS fwd** — mean NLL | F-OP11-CE-SOFTMAX-ORACLE | `L = (1/T) Σ_t −ln(softmax[tgt_t])`; exp = **`dt_exp`**, ln = **`dt_ln`** (Taylor, NOT libm, NOT `_moe_exp`); per-row max-sub ON; denom **v-ascending**; `p_t` clamped ≥ 1e-6; loss summed **t-ascending**; mean = total/T | swap exp/ln impl, tree-reduce the denom, drop max-sub or the ≥1e-6 clamp, or reorder the t-sum |
 | **BWD dW** — backward weight-gradient GEMM (transpose-elim) | F-OP2-TRAINER-WIRE | `im2col + matmul_t` dW == `im2col_t + matmul` dW; contract over the **same t/m dimension, same ascending order** (`xcolT[j,t] == xcol[t,j]`) | reorder the contraction; on GPU the cuBLAS OP_T Dgemm is an fp-accum-order variant of OP_N (rel-RMS ~1e-14, the documented identical-tolerance lane — not a regression) |
 | **OPTIMIZER** — AdamW decoupled-wd update | F-OP12-ADAMW-UPDATE-ORACLE | SSOT `_hx_farr_adamw_step_cpu`: `v = β2·v + ((1−β2)·g)·g` (**left-assoc**, NOT `(1−β2)·(g·g)`); `m̂ = m/c1` **before** `v̂ = v/c2`; `denom = √v̂ + ε` (**ε outside √**, `_adamw_sqrt` 24-iter Newton held constant); `W' = (W − lr·wd·W) − lr·(m̂/denom)` (two separate subtractions, decoupled-wd first); `c1,c2 = 1−βᵗ` by repeated-mul (not `pow`) | refold `(1−β2)·g·g` to `(1−β2)·(g·g)` (diverges ≤8.88e-16), reorder the bias-correction divides, move ε inside √, or swap the sqrt impl |
+| **SCHEDULE** — per-step LR (warmup + cosine decay) | F-OP33-LR-SCHEDULE | `opt_lr_warmup_cosine` (optim_lib): cos = **`d5_cos`** (mod-2π reduce + 14-term Taylor, the F-OP29 RoPE primitive — NOT libm `cos`); π = `d5_pi()`; fold order pinned (`prog` single-divide → `0.5·(1+c)` → `floor+(1−floor)·cosf` → `base·(...)`; warmup ramp `base·(t/warmup)`). Any per-step schedule arithmetic (lr/wd/beta/temperature ramps) must use `dt_*`/`d5_*` primitives | a libm-`cos` schedule — MEASURED divergent Darwin vs glibc: **10/500 steps differ 1–4 ULP** (t=121 180 367 381 387 391 394 407 414 433 at the OP-23b config), each handing AdamW a different lr → weights diverge from the first such step; or refolding the pinned fold order |
 
 ### the one known non-zero spot — B>1 conv seam
 
@@ -221,6 +222,9 @@ just not *identical* to a segmented conv at the window seams. A true
    [OPTIMIZER]  AdamW: v=β2·v+((1−β2)·g)·g (left-assoc),     F-OP12
                 m̂/c1 before v̂/c2, √v̂+ε (ε outside √),
                 W'=(W−lr·wd·W)−lr·(m̂/denom)
+          ▲
+   [SCHEDULE]  lr(t) = opt_lr_warmup_cosine (d5_cos, NOT      F-OP33
+               libm cos), feeds the AdamW lr scalar per step
 ```
 
 Two exp impls live in this diagram: **`_moe_exp`** (MoE) and **`dt_exp`** (loss
@@ -257,6 +261,12 @@ A non-exhaustive checklist — any of these silently breaks `max|Δ| = 0`:
   mul+add → `241449363` vs `1401117690` on the same fp64 inputs). Use an inline
   ascending-order dot product instead — see the **cross-ISA invariant** in §1.
   (F-OP29.)
+- **A libm-`cos` (or any libm-transcendental) LR/WD/beta/temperature SCHEDULE.**
+  Per-step schedule arithmetic must use the `dt_*`/`d5_*` primitives — the
+  canonical scheduler is `opt_lr_warmup_cosine` (optim_lib, `d5_cos`). libm `cos`
+  in a warmup+cosine schedule is MEASURED divergent Darwin-arm64 vs glibc-x86:
+  10/500 steps differ 1–4 ULP → a different lr enters AdamW on each platform →
+  weights diverge from the first such step. (F-OP33.)
 
 ## adding a new oracle
 

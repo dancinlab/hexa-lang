@@ -1,5 +1,32 @@
 # HEXA-0POD — log
 
+## 2026-06-12 — OP-33 DONE: LR-scheduler determinism surface (5th surface) — audit + deterministic warmup+cosine scheduler (d5_cos) + N=500 oracle; libm-cos divergence DEMONSTRATED 10/500 steps Darwin vs glibc ($0 · 0-pod)
+- Deep-dive round-9 branch ②: the step path is libm-free (F-OP19/19b/29) but the LR SCHEDULE is a separate
+  per-step float surface feeding lr into AdamW; cosine decay needs cos() = the F-OP19 hole class. OP-23b's
+  harness computed its schedule once host-side ("computed in double and passed identically to both lanes") —
+  sidestepping the production cross-platform question.
+- AUDIT: NO production scheduler in stdlib/flame (all trainers take fixed lr → surface USER-SIDE); legacy
+  stdlib/optim.hexa scheduled_lr wraps cosine_lr/warmup_lr builtins that no longer build (probe FAILS — dead
+  code, documented not revived); self/ml ga_warmup_cosine_lr = crude 5-term-Taylor self-dialect, not flame; no
+  other schedule-class arithmetic (wd/beta/temperature all fixed scalars). libm cos IS live (`cos(1.0)` runs).
+- LOCK (case b — new primitive): pub fn opt_lr_warmup_cosine(base_lr, floor_frac, t, n_steps, warmup) in
+  stdlib/flame/optim_lib.hexa — the OP-23b lr_at() formula with cos = d5_cos (F-OP29 RoPE primitive, mod-2π
+  reduce + 14-term Taylor), π = d5_pi(), fold order PINNED in a CANONICAL ORDER header block.
+- ORACLE stdlib/flame/op33_lr_schedule_determinism_eq.hexa (self-contained, OP-28/29 scp pattern): N=500
+  warmup=50 base=1e-3 floor=0.05. RUN-TO-RUN max|Δ|=0 both hosts; process-to-process 44889-byte output
+  byte-eq; CROSS-PLATFORM (local arm64-macos vs summer x86_64-linux glibc) d5 lane 0/500 byte-diff, checksum
+  598834071 fingerprint `0 0 128 203 189 216 193 65` BOTH → machine-independent.
+- THE DEMO (hole REAL, not latent): the libm-cos twin lane (identical fold order, only cos differs) DIVERGES
+  cross-platform at 10/500 steps (t=121 180 367 381 387 391 394 407 414 433), each 1–4 ULP in the low mantissa
+  byte (checksums 849024739 local vs 990987107 summer) → a libm-cos schedule hands AdamW a different lr per
+  platform at ~2% of steps. Swap cost on-host: 189–192/500 steps differ ≤3.18e-19 (~ULPs) — the F-OP19
+  "matches-libm → matches-everywhere" trade.
+- Contract doc: SCHEDULE per-phase row + what-breaks bullet + step-phase-map [SCHEDULE] node (F-OP33).
+- OPS: aiden DOWN (ssh timeout) → x86 leg on summer; summer toolchain repaired host-locally (stale
+  mixed-generation gitignored runtime.c/runtime_core.c + missing HEXA_PREBUILT_RUNTIME runtime.a → scp'd the
+  local consistent generated pair, rebuilt runtime.o/runtime.a, used committed build/hexat_linux; no repo edit).
+- Verdict .verdicts/hexa-0pod/F-OP33-LR-SCHEDULE.txt · branch domain/hexa-0pod-op33.
+
 ## 2026-06-12 — OP-28c DONE: BPE real-scale vocab staging — production load path vs a REAL on-disk Qwen2.5 vocab, round-trip + byte-eq + cross-platform (closes OP-28b remainder) ($0 · 0-pod)
 - Deep-dive round-8 branch ③: OP-28b proved the fixed byte-encoder end-to-end but only against a canonical-glyph
   self-contained merge/vocab — its HONEST REMAINDER was the missing real-on-disk-vocab staging. OP-28c closes it.

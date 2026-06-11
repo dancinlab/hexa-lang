@@ -10,6 +10,24 @@ loop targets what the consumer card + code can carry.
 
 ## milestones (loop self-feeds; add as discovered)
 
+<!-- ANCHOR:OP-33-LR-SCHEDULE (unique anchor — deep-dive round-9 branch ②: the 5th determinism surface = the LR-SCHEDULER arithmetic (warmup + cosine decay). The step path is libm-free (F-OP19/19b/29) but the schedule is a separate per-step float surface feeding lr into AdamW; the cosine needs cos() and libm cos is the same not-correctly-rounded cross-platform hole class F-OP19 closed for exp. OP-23b's harness computed its schedule once host-side and passed it to both lanes — sidestepping the production question) -->
+- [x] **OP-33 — LR-scheduler determinism surface: audit + deterministic schedule (d5_cos) + oracle (5th surface)** —
+  GREEN ($0, CPU `hexa run` + pool x86-linux; NO GPU/vast/pod). AUDIT: NO production LR scheduler existed in
+  stdlib/flame (every trainer takes fixed lr — the surface was USER-SIDE); legacy stdlib/optim.hexa scheduled_lr
+  wraps cosine_lr/warmup_lr builtins that NO LONGER BUILD (dead); no other schedule-class float arithmetic on the
+  training loop (wd/betas fixed); libm cos IS a live builtin → the hole class was real for any user schedule.
+  LOCK (case b): pub fn opt_lr_warmup_cosine (stdlib/flame/optim_lib.hexa) — linear warmup + cosine decay with
+  cos = d5_cos (the F-OP29 RoPE 14-term-Taylor primitive), π = d5_pi(), fold order PINNED; the OP-23b lr_at()
+  formula made machine-independent. ORACLE stdlib/flame/op33_lr_schedule_determinism_eq.hexa (self-contained
+  OP-28/29 pattern): N=500 schedule byte-eq RUN-TO-RUN max|Δ|=0 + process-to-process full-output byte-eq +
+  CROSS-PLATFORM d5 lane 0/500 byte-diff (arm64-macos vs summer x86-linux glibc, fingerprint
+  `0 0 128 203 189 216 193 65` both) — AND the libm-cos twin lane MEASURED DIVERGENT: 10/500 steps differ
+  1–4 ULP (t=121 180 367 381 387 391 394 407 414 433) Darwin vs glibc → REAL-AND-CLOSED (not latent; the
+  F-OP19 exp pattern, now cos). Swap cost ~ULPs (max|Δ| 3.18e-19 vs libm on-host). Contract doc: SCHEDULE row +
+  what-breaks entry + step-phase-map node (cite F-OP33). aiden was DOWN (ssh timeout) — x86 leg ran on summer
+  (toolchain repaired host-locally: consistent generated runtime.c pair + prebuilt hexat_linux + runtime.a).
+  Verdict .verdicts/hexa-0pod/F-OP33-LR-SCHEDULE.txt.
+
 <!-- ANCHOR:OP-26C-READINESS-V2 (unique anchor — OP-26b (#3035) wrote docs/flame-machine-independent-SUBMISSION-READINESS.md against the round-5 evidence (1 arch · 4 env · gap G2 open · G1 input-side unproven). Rounds 6-8 grew the evidence: G2 CLOSED ×3-over (OP-29 decoder block #3045 · OP-31 MLP #3048 · OP-32 spiking LIF+STDP #3052 = 4 archs total), the G1 input slice fully proven (OP-28 byte-level #3041 · OP-28b BPE fix #3049 · OP-28c REAL Qwen vocab 151643 entries #3053) + pre-gated into the turnkey kit (OP-24d #3050), and NEW findings landed (OP-30 #3047 3-layer determinism model + cross-ISA FMA-matmul invariant; OP-32 binary-spike FMA-immunity boundary; OP-30b #3051 contract consistency). OP-26c refreshes the readiness doc to the current state: 4-arch claim, refreshed gap list, new evidence rows, sharpened FMA novelty, honest limits; docs-only, NO /paper scaffold per g84) -->
 - [x] **OP-26c — SUBMISSION-READINESS updated: 4-arch G2 closed, real-vocab input, FMA novelty (docs-only, g84)** —
   GREEN (docs-only, $0, NO GPU/vast/pod). docs/flame-machine-independent-SUBMISSION-READINESS.md refreshed (v2)
