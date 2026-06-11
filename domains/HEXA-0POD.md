@@ -10,6 +10,9 @@ loop targets what the consumer card + code can carry.
 
 ## milestones (loop self-feeds; add as discovered)
 
+<!-- ANCHOR:OP-26C-READINESS-V2 (unique anchor — OP-26b (#3035) wrote docs/flame-machine-independent-SUBMISSION-READINESS.md against the round-5 evidence (1 arch · 4 env · gap G2 open · G1 input-side unproven). Rounds 6-8 grew the evidence: G2 CLOSED ×3-over (OP-29 decoder block #3045 · OP-31 MLP #3048 · OP-32 spiking LIF+STDP #3052 = 4 archs total), the G1 input slice fully proven (OP-28 byte-level #3041 · OP-28b BPE fix #3049 · OP-28c REAL Qwen vocab 151643 entries #3053) + pre-gated into the turnkey kit (OP-24d #3050), and NEW findings landed (OP-30 #3047 3-layer determinism model + cross-ISA FMA-matmul invariant; OP-32 binary-spike FMA-immunity boundary; OP-30b #3051 contract consistency). OP-26c refreshes the readiness doc to the current state: 4-arch claim, refreshed gap list, new evidence rows, sharpened FMA novelty, honest limits; docs-only, NO /paper scaffold per g84) -->
+- [ ] **OP-26c — SUBMISSION-READINESS updated: 4-arch G2 closed, real-vocab input, FMA novelty (docs-only, g84)**
+
 <!-- ANCHOR:OP-30B-CONTRACT-FIX (unique anchor — OP-30 (#3047) formalized the cross-ISA matmul invariant in docs/flame-determinism-contract.md but flagged OUT-OF-SCOPE a STALE pre-OP-19b line in the step-phase-map section still calling the GELU erf "a still-open libm hole" + pointing at a "§1 residual" that no longer exists; OP-19b (#3008, F-OP19B-DET-ERF) CLOSED that hole via dt_erf (A&S 7.1.26 branchless on dt_exp, byte-identical cross-platform), so the line is factually wrong and contradicts the doc's own §1 + per-phase table + what-breaks list. OP-30b corrects it; docs-only, 0-pod) -->
 - [x] **OP-30b — fix stale "GELU erf still-open" line in the determinism contract (OP-19b closed it via dt_erf)** —
   GREEN (docs-only). The step-phase-map closing parenthetical in docs/flame-determinism-contract.md still read
