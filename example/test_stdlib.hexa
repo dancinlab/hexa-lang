@@ -5,6 +5,7 @@
 import "../stdlib/nn.hexa"
 import "../stdlib/optim.hexa"
 import "../stdlib/consciousness.hexa"
+use "../stdlib/flame/optim_lib"
 
 let PSI_ALPHA = 0.014
 let PSI_COUPLING = 0.015317
@@ -22,8 +23,8 @@ println("[1] MLP2:", logits, "pred:", argmax(logits))
 let loss = hex_loss(logits, 1, 0.5, PSI_ALPHA)
 println("[2] Hexad loss:", round(loss * 1000) / 1000)
 
-// [3] optim: scheduled LR
-let lr = scheduled_lr(0.001, 50, 1000, 100)
+// [3] optim: warmup+cosine LR (canonical deterministic scheduler, F-OP33)
+let lr = opt_lr_warmup_cosine(0.001, 0.1, 50, 1000, 100)
 println("[3] LR(step=50):", lr)
 
 // [4] optim: safe Adam update
@@ -57,7 +58,7 @@ let pred = mlp2(input, mW1, mb1, mW2, mb2, 4, 8, 4)
 let cs2 = cons_step(h, adj, chaos, 4, 4)
 let phi = cs2[3]
 let final_loss = hex_loss(pred, 2, phi, PSI_ALPHA)
-let lr2 = scheduled_lr(0.001, 10, 100, 20)
+let lr2 = opt_lr_warmup_cosine(0.001, 0.1, 10, 100, 20)
 
 println("    pred:", argmax(pred), "loss:", round(final_loss * 1000) / 1000, "Φ:", round(phi * 100000) / 100000, "lr:", lr2)
 

@@ -9,6 +9,8 @@ println("║  Anima Micro-Model Convergence Proof     ║")
 println("║  12 attrs | 85 builtins | 49 breakthroughs║")
 println("╚══════════════════════════════════════════╝")
 
+use "../stdlib/flame/optim_lib"
+
 // ── Task: XOR 학습 (비선형 분류) ──
 // Input: [x1, x2], Target: XOR(x1, x2)
 let X = [0.0, 0.0, 0.0, 1.0, 1.0, 0.0, 1.0, 1.0]  // 4 samples × 2 dim
@@ -46,9 +48,9 @@ while epoch < 200 {
     let total_loss = 0.0
     let correct = 0
 
-    // LR schedule: warmup 20 + cosine decay
+    // LR schedule: warmup 20 + cosine decay (canonical deterministic scheduler, F-OP33)
     let base_lr = 0.05
-    let lr = warmup_lr(cosine_lr(base_lr, epoch, 200, 0.001), epoch, 20)
+    let lr = opt_lr_warmup_cosine(base_lr, 0.02, epoch, 200, 20)
 
     // ── Gradient accumulation over 4 samples ──
     let grad_W1 = zeros(8)

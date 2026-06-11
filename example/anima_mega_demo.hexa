@@ -6,6 +6,7 @@
 import "../stdlib/nn.hexa"
 import "../stdlib/optim.hexa"
 import "../stdlib/consciousness.hexa"
+use "../stdlib/flame/optim_lib"
 
 let PSI_COUPLING = 0.015317
 let PSI_ALPHA = 0.014
@@ -37,7 +38,7 @@ let best_loss = 999.0
 println("\n── Training ──")
 let epoch = 0
 while epoch < 20 {
-    let lr = scheduled_lr(0.03, epoch, 20, 3)
+    let lr = opt_lr_warmup_cosine(0.03, 0.1, epoch, 20, 3)
     let total_loss = 0.0
     let correct = 0
 
