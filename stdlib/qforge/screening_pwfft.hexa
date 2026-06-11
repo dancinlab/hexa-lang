@@ -103,6 +103,34 @@ let mut PWFFT_LOCAL: bool = false   // local-ALDA mode (vs uniform-gas scalar fa
 let mut PWFFT_OMEGA: float = 0.0    // cell volume Ω (bohr³) — ρ(r) physical normalization
 let mut PWFFT_XCMODE: int = 1       // 0=Hartree-only · 1=+LDA-x · 2=+LDA-x+PW92-c
 let mut PWFFT_LOCAL_XC: int = 0     // witness: #folds that used the local-ALDA kernel
+// ── THOMAS-FERMI screened Coulomb regularization (the Dyson-gain bound, d2/d6) ───
+//   The bare Hartree kernel V_H(G)=4π/|G|² DIVERGES as |G|→0. On the converged CaH6
+//   cell the small-|G| coefficients drive an UNBOUNDED dielectric feedback gain → the
+//   Dyson fixed point x*=(I−L)⁻¹·bare has an eigenvalue of L near/above 1 in the
+//   metallic channel → ‖ΔV_scr‖/‖ΔV_bare‖ blows to 3.5e7 and the Anderson line-search
+//   can never reduce ‖f‖ below tol (conv=false — the #2786 honest-negative symptom).
+//   The PHYSICAL cure is the STATIC RPA (Thomas-Fermi) screened Coulomb: a metal's
+//   conduction electrons screen the long-range Coulomb tail, replacing
+//       v_c(G) = 4π/|G|²   →   v_TF(G) = 4π/(|G|² + k_TF²)
+//   with the Thomas-Fermi wavevector k_TF² = 4·k_F/π (Hartree a.u.), k_F=(3π²ρ̄)^{1/3}.
+//   This is EXACTLY the long-wavelength limit of the RPA dielectric ε(G)=1+k_TF²/|G|²
+//   (test-charge screening): v_TF = v_c/ε. It BOUNDS the |G|→0 kernel at 4π/k_TF²
+//   (finite), so the Dyson gain ‖L‖ stays < 1 and the fixed point is physical (ratio
+//   O(0.1-2)). k_TF² is DATA (derived from ρ̄=nelec/Ω, NOT tuned) — d4 generic, d6.
+//   When DISABLED (PWFFT_KTF2≤0) the bare 4π/|G|² kernel is used verbatim (no change).
+let mut PWFFT_KTF2: float = 0.0     // Thomas-Fermi k_TF² (bohr⁻²); ≤0 → bare Coulomb
+pub fn qpwfft_enable_tf(ktf2: float) { if ktf2 > 0.0 { PWFFT_KTF2 = ktf2 } }
+pub fn qpwfft_disable_tf() { PWFFT_KTF2 = 0.0 }
+pub fn qpwfft_ktf2() -> float { return PWFFT_KTF2 }
+
+// ── k_TF² from the mean density ρ̄ — the derived (NOT tuned) TF wavevector ────────
+//   k_F = (3π²ρ̄)^{1/3} (Fermi wavevector of a uniform gas at density ρ̄, spin-deg);
+//   k_TF² = 4 k_F / π (Thomas-Fermi, Hartree atomic units). ρ̄=nelec/Ω. ρ̄≤0 → 0.
+pub fn qpwfft_ktf2_from_density(rho_bar: float) -> float {
+    if rho_bar <= 0.0 { return 0.0 }
+    let kf = pow(3.0 * PWFFT_PI * PWFFT_PI * rho_bar, 1.0 / 3.0)
+    return 4.0 * kf / PWFFT_PI
+}
 pub fn qpwfft_local_xc_folds() -> int { return PWFFT_LOCAL_XC }
 pub fn qpwfft_is_local() -> bool { return PWFFT_LOCAL }
 
@@ -405,7 +433,9 @@ pub fn qpwfft_dvscr_from_dpsi(psis: [[float]], dpsi: [[float]]) -> [float] {
                 if g2 < 1.0e-12 {
                     vh_re.push(0.0) ; vh_im.push(0.0)            // G=0 gauge
                 } else {
-                    let f = PWFFT_4PI / g2
+                    // TF-screened Coulomb v_TF(G)=4π/(|G|²+k_TF²) when enabled (bounds the
+                    // |G|→0 metallic Dyson gain → physical ratio); bare 4π/|G|² otherwise.
+                    let f = PWFFT_4PI / (g2 + PWFFT_KTF2)
                     vh_re.push(f * spec[lin * 2]) ; vh_im.push(f * spec[lin * 2 + 1])
                 }
                 iz = iz + 1
