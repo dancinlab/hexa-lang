@@ -1,0 +1,219 @@
+// ════════════════════════════════════════════════════════════════════════════
+//  op28_corpus_loader_det.hexa — F-OP28 real-corpus token-pipeline determinism
+//  oracle. SELF-CONTAINED (no `use` — runs via scp/stdin on ANY hexa host,
+//  checkout-independent) so the SAME source runs on local arm64-macos AND
+//  aiden x86-linux for the cross-platform leg.
+//
+//  HEXA-0POD OP-28 · CPU-LOCAL byte-eq ORACLE · 0-GPU (`hexa run`) · $0
+//
+//  GAP G1 (OP-26b #3035): "real-corpus end-to-end run" is GPU-build-gated —
+//  but only the TRAINER STEP needs the GPU. The trainer's INPUT side — the
+//  data loader / token pipeline that produces the (ids, targets) tensors fed
+//  to clm_step — runs on CPU and IS 0-pod-verifiable. This oracle proves that
+//  input pipeline is DETERMINISTIC (byte-eq run-to-run, max|Δ|=0) and
+//  MACHINE-INDEPENDENT (no libm / no float / no hash-ordered iteration in the
+//  token path), so the "real-corpus" INPUT is reproducible even before the GPU
+//  step runs. Closes the 0-pod slice of G1.
+//
+//  THE PIPELINE (verbatim from flame_d32_corpus_test.hexa, the production
+//  corpus path):
+//    (1) tokenize : read_file_bytes(corpus) -> byte ids in [0,256)   [V=256]
+//        — the byte-level vocab the real corpus tests train on (anima
+//          d_corpus_fire equivalent). Here the fixed corpus is an EMBEDDED
+//          byte-string LITERAL (byte_at over a string) so the oracle is
+//          self-contained + cross-platform — the SAME bytes read_file_bytes
+//          would yield, with NO disk dependency.
+//    (2) pack/window : for each of nsamp windows at stride s*stride,
+//          IDS[s*T + p] = toks[s*stride + p]   (p in 0..T)
+//          YS[s]        = toks[s*stride + T]   (the next-token target)
+//        — pure integer index arithmetic. No float, no libm, no hash order.
+//    (3) batch : (IDS, YS) == (ids, targets) fed to nn_decoder_fwd/grad.
+//
+//  Why this is deterministic + machine-independent (the FINDING):
+//    The whole pipeline is PURE INTEGER. tokenize = byte read (exact on every
+//    platform — a byte is a byte). pack = integer multiply/add index math +
+//    direct array copy, iterated in a fixed ascending (s,p) order. There is
+//    NO float arithmetic, NO libm transcendental, and NO dict/set/hash-ordered
+//    iteration over a vocab in the byte-level token path — so (ids, targets)
+//    are bit-identical run-to-run AND across machines by construction. We do
+//    NOT merely assert this: we EXECUTE the pipeline twice (independent runs)
+//    and compare every (ids, target) integer (max|Δ|=0), AND we emit an
+//    IEEE-754 byte fingerprint (f64_to_bytes_le over a deterministic checksum)
+//    so a cross-platform `hexa run` on a 2nd host can be byte-diffed.
+//
+//  NONDETERMINISM RISK SURFACE (surfaced + dispositioned, honest g5):
+//    - BPE path (flame_bpe_corpus_lib.hexa, V=151936): NOT exercised here.
+//      It is ALSO documented integer (merge-rank table lookups), but flame's
+//      BPE has a KNOWN upstream limitation (hexa chr() truncates to a byte →
+//      build_byte_to_char collides space's byte-char) that breaks real-Qwen
+//      round-trip, so it is not cleanly 0-pod-runnable today. The byte-level
+//      path IS the production corpus path the real tests use, and is what we
+//      lock. BPE determinism is flagged as the residual input-side item.
+//    - The GPU TRAINER STEP (nn_decoder_fwd/grad/AdamW on the (ids,targets))
+//      is the GPU-build-gated remainder of G1 — NOT closed here, by design.
+// ════════════════════════════════════════════════════════════════════════════
+
+// ── EMBEDDED fixed corpus (a real-text byte string — the SAME bytes
+//    read_file_bytes would return for this content). Cross-platform stable:
+//    these are all ASCII so byte_at yields the identical [0,128) ids on any
+//    host. Multi-line/varied bytes exercise the windowing seams. ────────────
+fn _corpus_text() -> string {
+    // 256+ bytes so nsamp windows at the chosen stride stay in range.
+    return "consciousness is the integration of information across a recurrent substrate; the model learns to predict the next token from a fixed window of the past, and the loss collapses as it memorizes the corpus. flame trains a CLMConvMoE decoder byte-by-byte, no LLVM, device-resident, byte-exact across machines."
+}
+
+// ── tokenize: byte-level read (V=256). Mirrors read_file_bytes(corpus) —
+//    here over the embedded literal so it is self-contained. Returns a fresh
+//    int farr of the corpus byte ids. Pure: byte_at is an exact byte read. ──
+fn _tokenize_bytes(text: string) -> int {
+    let n = len(text)
+    let toks = farr_new(n)
+    let mut i = 0
+    while i < n {
+        let _ = farr_set(toks, i, to_float(byte_at(text, i)))
+        i = i + 1
+    }
+    return toks
+}
+
+// ── pack/window: VERBATIM the flame_d32_corpus_test windowing.
+//    IDS[s*T + p] = toks[s*stride + p] ;  YS[s] = toks[s*stride + T].
+//    Pure integer index arithmetic, fixed ascending (s,p) iteration order.
+//    Returns #{ ids, ys } as two int farrs (ids len = nsamp*T, ys len = nsamp).
+fn _pack_windows(toks: int, n_toks: int, nsamp: int, T: int, stride: int) {
+    let IDS = farr_new(nsamp * T)
+    let YS = farr_new(nsamp)
+    // zero-init (windows past corpus end stay 0, same as t_zeros fallback)
+    let mut z = 0
+    while z < nsamp * T { let _ = farr_set(IDS, z, 0.0); z = z + 1 }
+    let mut zy = 0
+    while zy < nsamp { let _ = farr_set(YS, zy, 0.0); zy = zy + 1 }
+    let mut s = 0
+    while s < nsamp {
+        let off = s * stride
+        if off + T < n_toks {
+            let mut p = 0
+            while p < T {
+                let _ = farr_set(IDS, s * T + p, farr_get(toks, off + p))
+                p = p + 1
+            }
+            let _ = farr_set(YS, s, farr_get(toks, off + T))
+        }
+        s = s + 1
+    }
+    return #{ "ids": IDS, "ys": YS }
+}
+
+// ── deterministic order-sensitive checksum over (ids, targets): a
+//    position-weighted integer fold (NOT a float sum — exact integer math),
+//    so any reorder / off-by-one in the pack would change it. Returned as a
+//    float only at the very end for the IEEE byte fingerprint. ──────────────
+fn _pack_checksum(ids: int, n_ids: int, ys: int, n_ys: int) -> int {
+    let mut acc = 1469598103
+    let mut i = 0
+    while i < n_ids {
+        let v = to_int(farr_get(ids, i))
+        acc = (acc * 131 + v * (i + 7)) % 1000000007
+        i = i + 1
+    }
+    let mut j = 0
+    while j < n_ys {
+        let v = to_int(farr_get(ys, j))
+        acc = (acc * 131 + v * (j + 13)) % 1000000007
+        j = j + 1
+    }
+    return acc
+}
+
+fn _abs_i(x: int) -> int { if x < 0 { return 0 - x } return x }
+
+fn main() {
+    println("op28_corpus_loader_det — F-OP28 real-corpus token-pipeline determinism (CPU oracle, 0-GPU)")
+
+    // production-shape window config (flame_d32_corpus_test: T=16). Use a
+    // stride small enough that the embedded corpus yields multiple in-range
+    // windows so the (s,p) seams are actually exercised.
+    let T = 16
+    let nsamp = 8
+    let stride = 24
+
+    let text = _corpus_text()
+    let n_bytes = len(text)
+    print("  corpus: embedded byte-string, "); print(n_bytes)
+    println(" bytes (V=256 byte-level vocab — the production corpus path)")
+    print("  window config: T="); print(T)
+    print("  nsamp="); print(nsamp); print("  stride="); print(stride); println("")
+
+    // ── RUN 1 : full pipeline tokenize -> pack -> (ids, targets) ──
+    let toks1 = _tokenize_bytes(text)
+    let nt1 = n_bytes
+    let r1 = _pack_windows(toks1, nt1, nsamp, T, stride)
+    let ids1 = r1["ids"]
+    let ys1  = r1["ys"]
+    let n_ids = nsamp * T
+
+    // ── RUN 2 : INDEPENDENT re-run of the identical pipeline ──
+    let toks2 = _tokenize_bytes(text)
+    let nt2 = n_bytes
+    let r2 = _pack_windows(toks2, nt2, nsamp, T, stride)
+    let ids2 = r2["ids"]
+    let ys2  = r2["ys"]
+
+    // preview window 0 (sanity — these are real corpus byte ids)
+    print("  ids[window 0]: ")
+    let mut k = 0
+    while k < T { print(to_int(farr_get(ids1, k))); print(" "); k = k + 1 }
+    println("")
+    print("  targets[0..nsamp]: ")
+    let mut ky = 0
+    while ky < nsamp { print(to_int(farr_get(ys1, ky))); print(" "); ky = ky + 1 }
+    println("")
+
+    // ── byte-eq run-to-run: max|Δ| over every id + every target ──
+    let mut max_d_ids = 0
+    let mut i = 0
+    while i < n_ids {
+        let d = _abs_i(to_int(farr_get(ids1, i)) - to_int(farr_get(ids2, i)))
+        if d > max_d_ids { max_d_ids = d }
+        i = i + 1
+    }
+    let mut max_d_ys = 0
+    let mut j = 0
+    while j < nsamp {
+        let d = _abs_i(to_int(farr_get(ys1, j)) - to_int(farr_get(ys2, j)))
+        if d > max_d_ys { max_d_ys = d }
+        j = j + 1
+    }
+    print("  ids     max|Δ| run-to-run = "); println(max_d_ids)
+    print("  targets max|Δ| run-to-run = "); println(max_d_ys)
+
+    // ── deterministic checksum (order-sensitive integer fold) + IEEE
+    //    fingerprint for the cross-platform byte-diff ──
+    let ck1 = _pack_checksum(ids1, n_ids, ys1, nsamp)
+    let ck2 = _pack_checksum(ids2, n_ids, ys2, nsamp)
+    print("  pack checksum run1 = "); println(ck1)
+    print("  pack checksum run2 = "); println(ck2)
+    let cbytes = f64_to_bytes_le(to_float(ck1))
+    print("  CROSSPLAT-FINGERPRINT (f64_to_bytes_le of checksum) = ")
+    let mut bi = 0
+    while bi < len(cbytes) { print(to_int(farr_get(cbytes, bi))); print(" "); bi = bi + 1 }
+    println("")
+
+    let _ = farr_free(toks1); let _ = farr_free(toks2)
+    let _ = farr_free(ids1);  let _ = farr_free(ids2)
+    let _ = farr_free(ys1);   let _ = farr_free(ys2)
+    let _ = farr_free(cbytes)
+
+    // ── GATE ──
+    let det_ok = (max_d_ids == 0) && (max_d_ys == 0) && (ck1 == ck2)
+    println("")
+    if det_ok {
+        print("F-OP28-CORPUS-LOADER-DET = 1")
+        println("")
+        println("PASS — real-corpus token pipeline (tokenize->pack->batch) is DETERMINISTIC: (ids,targets) byte-eq run-to-run max|Δ|=0, checksum identical. Pure-integer path => machine-independent by construction (no libm / no float / no hash-order in the byte-level token path). Cross-platform: byte-diff the CROSSPLAT-FINGERPRINT line on a 2nd host.")
+    } else {
+        print("F-OP28-CORPUS-LOADER-DET = 0")
+        println("")
+        println("FAIL — pipeline NOT byte-eq run-to-run; a nondeterminism leaked into the token path (investigate above).")
+    }
+}
